@@ -74,6 +74,7 @@ pub mod healthspell;
 pub mod inbound;
 pub mod itemwire;
 pub mod magics;
+pub mod map_mode;
 pub mod mapdoor;
 pub mod merchant;
 pub mod mongen;
@@ -1017,6 +1018,16 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
     let (shutdown_done_tx, mut shutdown_done_rx) =
         tokio::sync::mpsc::unbounded_channel::<ShutdownSaveSummary>();
+    // **SS_SERVERINFO 上报**（`AuthenticationService.cs:113-116` + `SystemProcessor.cs:54-68`，
+    // 10s 分支在 `:63-67`）：连上 IDS 时由 ids 链路报一次（`DataSocketConnect`），之后由
+    // sim 线程按 `GetTickCount()-SendOnlineHumTime > 10000` 的严格门投递给 ids 链路发出。
+    // `online_count` 由 sim 线程每 tick 写（`WorldEngine.OnlinePlayObject` 的等价物）。
+    let ids_online = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let (ids_out_tx, ids_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // 进 sim 线程的句柄（move 闭包内 clone 会连原值一起 move 走，故先在闭包外克隆）。
+    let sim_ids_online = std::sync::Arc::clone(&ids_online);
+    let sim_ids_out = ids_out_tx.clone();
+    let ids_server_name = cfg.server_name.clone();
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1203,6 +1214,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 shutdown_rx,
                 shutdown_done_tx,
                 Some(db),
+                sim_ids_online,
+                sim_ids_out,
+                cfg.payment_mode,
             )
         })
         .context("起 sim 线程失败")?;
@@ -1232,7 +1246,22 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let ids_addr = cfg.ids_addr.clone();
         let ids_port = cfg.ids_port;
         let kick_tx = ev_tx.clone();
-        tokio::spawn(async move { ids::run_ids_link(ids_addr, ids_port, store, kick_tx).await });
+        let ids_payment_mode = cfg.payment_mode;
+        let ids_count = std::sync::Arc::clone(&ids_online);
+        tokio::spawn(async move {
+            let mut outbox = ids_out_rx;
+            ids::run_ids_link(
+                ids_addr,
+                ids_port,
+                store,
+                kick_tx,
+                ids_server_name,
+                ids_payment_mode,
+                ids_count,
+                &mut outbox,
+            )
+            .await;
+        });
     }
 
     let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
@@ -2037,7 +2066,12 @@ fn run_party_goto_label(
             // （START 在当前 oracle 源码下不可达，STOP 只写 false；仍接线避免假实现）。
             player.bo_inc_game_gold = sg.p22.bo_inc_game_gold;
             player.bo_dec_game_gold = sg.p22.bo_dec_game_gold;
+            // **A-10/T-86**：`SETOFFLINE` 的 `OffLineFlag`/`KickOffLineTick`（同一个 `PlayObject`）。
+            player.off_line_flag = sg.off_line_flag;
+            player.kick_off_line_tick = sg.kick_off_line_tick;
         }
+        // `HUtil32.GetTickCount()`：宿主注入域（与 P31 `host_now` 同源）。
+        player.tick = now_ms() as i32;
         if let Some(says) = host.goto_label("QFunction", &mut player, label, false) {
             says_len = says.len();
             if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 说词") {
@@ -2063,6 +2097,9 @@ fn run_party_goto_label(
             // **PL-4 / P22**：脚本写回（未命中动作时是 seed 的等值回写）。
             sg.p22.bo_inc_game_gold = player.bo_inc_game_gold;
             sg.p22.bo_dec_game_gold = player.bo_dec_game_gold;
+            // **A-10/T-86**：`SETOFFLINE` 两字段写回（四字段已在上方 P31 块内写回）。
+            sg.off_line_flag = player.off_line_flag;
+            sg.kick_off_line_tick = player.kick_off_line_tick;
         }
         if let Some(e) = world.entities.get_mut(actor) {
             e.kill_mon_exp_rate = player.kill_mon_exp_rate;
@@ -2281,7 +2318,8 @@ fn drain_slave_mutiny_downlink(
 ///
 /// **未做**（逐项登记在 `inbound` 模块头「未做清单」）：`SM_ABILITY/SUBABILITY` 帧体、`RM_BUTCH`/
 /// `RM_POWERHIT` 附近广播、`GetGoodTick` 直发字节、`SM_MENU_OK`/`SysMsg` 文案、密码态持久化、
-/// 地图 `MinMap` 字段、商人注册表/配方体。
+/// 商人注册表/配方体。（`Envir.MinMap` 已接线：`CM_WANTMINIMAP` 经 [`inbound::session_min_map`]
+/// 按会话 `map_id` 还原 oracle 的 `Envirnoment.MinMap`。）
 #[allow(clippy::too_many_arguments)]
 fn handle_inbound_cmd(
     cmd: &CommandMessage,
@@ -2293,6 +2331,7 @@ fn handle_inbound_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
+    minimap: Option<&mir2_envir::minimap::MiniMapRegistry>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     cfg: &GroundCfg,
     displays: &downlink::DisplayTable,
@@ -2323,8 +2362,11 @@ fn handle_inbound_cmd(
             );
         }
         messages::CM_WANTMINIMAP => {
-            // `Envir.MinMap`（`MapManager.cs:92` 的消费点）未接线 ⇒ 传 0（FAIL 支）；登记。
-            let f = inbound::client_get_min_map(0);
+            // `Envir.MinMap`（`MapManager.cs:92-95` 在图创建时写、`Envirnoment.cs:60` 初值 0）：
+            // 本仓没有 `Envirnoment` 结构，读时按 `会话 map_id → MapName → MiniMapList` 等价还原
+            // （[`inbound::session_min_map`]）；取不到 ⇒ 0 ⇒ FAIL 支。
+            let min_map = inbound::session_min_map(world, chr_name, registry, minimap);
+            let f = inbound::client_get_min_map(min_map);
             emit_def_frames(gates, gate_idx, socket, &[f], "CM_WANTMINIMAP");
         }
         messages::CM_OPENDOOR => {
@@ -4092,6 +4134,8 @@ fn handle_click_npc_cmd(
             npc_vars,
             session,
             sell_off_sessions.entry(chr_name.to_string()).or_default(),
+            // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+            now_ms() as i32,
             &mut rng,
         );
         world.rng = rng;
@@ -4878,6 +4922,8 @@ fn handle_shop_cmd(
                 npc_vars,
                 session,
                 sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                now_ms() as i32,
                 &mut rng,
             );
             world.rng = rng;
@@ -4926,6 +4972,8 @@ fn handle_shop_cmd(
                     npc_vars,
                     session,
                     sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                    // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                    now_ms() as i32,
                     &mut rng,
                 );
                 world.rng = rng;
@@ -5330,6 +5378,8 @@ fn handle_shop_cmd(
                     npc_vars,
                     session,
                     sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                    // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                    now_ms() as i32,
                     &mut rng,
                 );
                 world.rng = rng;
@@ -5645,6 +5695,10 @@ fn npc_player_from_session<'r>(
     p.credit_point = i32::from(sg.equip.credit_point);
     p.re_level = i32::from(sg.equip.re_level);
     p.vars = vars.clone();
+    // `SETMPAMODE` 的 `MapMgr.FindMap` 门（`map_names`）与 `sys_msg` 色词：都来自
+    // `SystemShare`（宿主一次灌入 `NpcVars`，每个脚本快照只读复制）。
+    p.map_names = vars.map_names.clone();
+    p.sys_msg_cfg = vars.sys_msg;
     // `PlayObject.MyGuild?.GuildName`（`$GUILDNAME`；`None` = 无行会 ⇒ 整条说词 "无"）。
     p.vars.guild_name = sg.guild.guild_name.clone();
     // `$USERWEAPON`（`Merchant.GetVariableText`）：`UseItems[ItemLocation.Weapon=1]` 的模板名。
@@ -5667,7 +5721,34 @@ fn npc_player_from_session<'r>(
     for (i, v) in sg.mnm_val.iter().enumerate() {
         p.mnmval.insert(i, *v);
     }
+    // **A-10/T-86（`SETOFFLINE`）**：`AutoGetExp*` 四字段与 `OffLineFlag`/`KickOffLineTick`
+    // 都是**同一个** `PlayObject` 的字段（`ExecutionProcessingSys.cs:2723-2728`）⇒ 与 P31
+    // 同法：脚本前从会话 seed、脚本后写回（[`write_back_player_offline`]）。商家脚本若未命中
+    // `SETOFFLINE`/`SETAUTOGETEXP`，这条 round-trip 必须恒等，不能把会话里已有的挂机配置清零。
+    p.auto_get_exp_in_safe_zone = sg.auto_get_exp_in_safe_zone;
+    p.auto_get_exp_envir = sg.auto_get_exp_envir.clone();
+    p.auto_get_exp_time = sg.auto_get_exp_time;
+    p.auto_get_exp_point = sg.auto_get_exp_point;
+    p.off_line_flag = sg.off_line_flag;
+    p.kick_off_line_tick = sg.kick_off_line_tick;
     p
+}
+
+/// 脚本跑完把 `NpcPlayer` 的**挂机面**写回会话——oracle `ActionOfOffLine`
+/// （`ExecutionProcessingSys.cs:2723-2728`）写的是 `PlayObject` 自己的
+/// `AutoGetExpInSafeZone/Envir/Time/Point` + `OffLineFlag/KickOffLineTick`；
+/// 本仓 `NpcPlayer` 是每次脚本调用重建的快照 ⇒ 与 P31/`SETAUTOGETEXP` 同法对账。
+///
+/// `AutoGetExpEnvir` 名变了就清 `auto_get_exp_envir_map_id` 缓存（P31 段下次重新解析）。
+/// `@Login`/组队两路是**等值的内联版**（源码锚用例 `p31_production_wiring_anchors` 钉住那两段必须仍在）。
+fn write_back_player_offline(p: &game_svr::npc::NpcPlayer<'_>, sg: &mut SessionGround) {
+    sg.auto_get_exp_in_safe_zone = p.auto_get_exp_in_safe_zone;
+    sg.auto_get_exp_envir = p.auto_get_exp_envir.clone();
+    sg.auto_get_exp_envir_map_id = None;
+    sg.auto_get_exp_time = p.auto_get_exp_time;
+    sg.auto_get_exp_point = p.auto_get_exp_point;
+    sg.off_line_flag = p.off_line_flag;
+    sg.kick_off_line_tick = p.kick_off_line_tick;
 }
 
 /// 脚本跑完后把 `NpcPlayer.MNMval`（见 [`npc_player_from_session`] 的映射说明）写回会话，
@@ -5956,6 +6037,10 @@ fn run_merchant_goto(
     npc_vars: &game_svr::npc::NpcVars,
     session: &mut ShopSession,
     sell_off: &mut game_svr::selloff::SellOffState,
+    // `HUtil32.GetTickCount()`（脚本动作时间基准；`SETOFFLINE` 的
+    // `KickOffLineTick = tick + nKick*60*1000`，`ExecutionProcessingSys.cs:2728`）。
+    // 生产 = `now_ms() as i32`（与 P31 的 `host_now` 同域），**不是** `world.clock_ms`。
+    now_tick: i32,
     rng: &mut mir2_shared::rng::RandomNumber,
 ) -> (
     Vec<game_svr::npc::SayMsg>,
@@ -5974,6 +6059,8 @@ fn run_merchant_goto(
         let mut rngf = |v: i32| rng.random_below(v);
         let mut player =
             npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
+        // `HUtil32.GetTickCount()`：oracle 是同一个 `PlayObject` 的运行时时钟。
+        player.tick = now_tick;
         player.script_index = session.script_index;
         player.last_npc = session.last_npc;
         // oracle 的同一个 `PlayObject` 字段：脚本跑前 seed（`OPENYBDEAL` 读 `SaleDeal`，
@@ -5986,6 +6073,13 @@ fn run_merchant_goto(
         session.last_npc = player.last_npc;
         write_back_player_mnmval(&player, sg);
         write_back_player_gold_deal(&player, sg, session, sell_off);
+        // **A-10/T-86**：`SETOFFLINE` 的六字段写回（与 P31 四字段同一位置；未命中动作时等值）。
+        write_back_player_offline(&player, sg);
+        // **A-21/T-85（SETMPAMODE）**：脚本动作只记录、宿主落库（同一 tick 的 P25 之前）。
+        // oracle 是同一个 `Envirnoment.Flag`；本宿主按「命令处理完 → 落库 → 消费」等价。
+        session
+            .pending_map_modes
+            .extend(std::mem::take(&mut player.map_mode_writes));
         let use_slots = write_back_player_use_items(&player, sg, &use_before);
         (
             says,
@@ -6037,6 +6131,8 @@ struct FixedNpcScriptCtx<'a> {
     chr_name: &'a str,
     /// `PlayObject.Envir.MapName`（`$MAPNAME` 与 `GetVariableText` 的读源；本骨架用 map_id 文本）。
     map_text: &'a str,
+    /// `HUtil32.GetTickCount()`（宿主 `now_ms() as i32`）：脚本动作的时间基准。
+    now_tick: i32,
 }
 
 impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
@@ -6065,6 +6161,7 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
             self.npc_vars,
             ss,
             self.sell_off,
+            self.now_tick,
             self.rng,
         )
     }
@@ -6108,8 +6205,27 @@ fn emit_npc_says(
 /// 说词（`RM_MERCHANTSAY` 优先级 1）先于本组（`RM_GAMEGOLDCHANGED` = 8084&0xFF = 148），
 /// 与现有「先 `emit_npc_says` 再脚本帧」的调用序一致。
 ///
-/// 目前只有 `RM_GAMEGOLDCHANGED` 有映射（[`game_svr::pickwire::script_frame`]）；其余 ident
-/// （如 `RM_PLAYDICE`）仍按既有口径丢弃（T-142 残余）。
+/// 映射面：`RM_GOLDCHANGED`/`RM_GAMEGOLDCHANGED`/`RM_SYSMESSAGE`/`RM_PLAYDICE` 走
+/// [`game_svr::pickwire::script_frame`]；**`RM_MENU_OK` 在本函数内直接落 wire**（T-193）。
+///
+/// T-193（卡 `openmir2-ya52-menu-ok-missing`）：脚本 `MESSAGEBOX` 走
+/// `ActionOfMessageBox`（`ExecutionProcessingSys.cs:3416-3419`）⇒
+/// `SendMsg(RM_MENU_OK, 0, ActorId, 0, 0, GetLineVariableText(sParam1))` ⇒
+/// `PlayObject.Message.cs:1952-1953` 的 `SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, Msg)`
+/// ⇒ wire `SM_MENU_OK(767)`，`Recog = 玩家 ActorId`（`MsgQueue` 的 `nParam1`），尾 =
+/// `EDCode.EncodeString(Msg)`。此前 `script_frame` 无该 ident 的映射 ⇒ 整帧被丢弃，
+/// 赌场 `[@ya52]` 的 `#ELSEACT MESSAGEBOX` 支在 Rust 上「什么都不发」（C# 2/2 发 767、Rust 0/2）。
+///
+/// **生效面仅限本函数的 4 个调用点**：`CM_CLICKNPC(@main)`、1011 标签（固定 NPC 与商人
+/// 共用同一 `handle_shop_cmd` 调用点）、1011 `@back`、修理 `~@repair`（`CM_USERREPAIRITEM`）。
+/// **不覆盖**（仍整帧丢弃 767，见 T-193）：
+/// `@Login`/QManage（`NpcHost::run_login`）、QFunction（`run_party_goto_label`，
+/// `Market_Def/QFunction-0.txt` 有 5 处 `MESSAGEBOX`）、**`GuildOfficial`（本部署可达）**
+/// （`guild_official::queue_script_output` 直接调 `pickwire::script_frame`；`Npcs.txt` 首行
+/// 「比奇国王 1 0122」代码列 1 = GuildOfficial，脚本有 6 处 `MESSAGEBOX`）。
+/// 若要一次覆盖，应把映射下沉进 `pickwire::script_frame`（owner 已另开卡）。
+///
+/// 其余未映射 ident（如 `RM_MERCHANTDLGCLOSE`）仍按既有口径丢弃（逐项登记，不静默）。
 fn emit_script_frames(
     tx: &mpsc::UnboundedSender<SimToGate>,
     socket: i32,
@@ -6127,20 +6243,45 @@ fn emit_script_frames(
     let mut ordered: Vec<&game_svr::npc::SendMsg> = frames.iter().collect();
     ordered.sort_by_key(|f| f.ident as u8);
     for f in ordered {
-        let Some(body) = game_svr::pickwire::script_frame(
-            f,
-            npc_actor_id,
-            sg.state.gold,
-            sg.game_gold,
-            sg.game_point,
-            sg.soft_version_date,
-        ) else {
+        // `RM_MENU_OK`：`SM_MENU_OK(767)` 的 `Recog` 是 `processMsg.nParam1`
+        // （= `ActionOfMessageBox` 写的 `playerActor.ActorId`，不是 NPC），`Param/Tag/Series`
+        // 全 0，尾 = `EncodeString(GetLineVariableText(sParam1))`。
+        let body = if f.ident == i32::from(mir2_protocol::messages::RM_MENU_OK) {
+            Some(menu_ok_wire(f))
+        } else {
+            game_svr::pickwire::script_frame(
+                f,
+                npc_actor_id,
+                // `SM_SYSMESSAGE` 的 `Recog` = 收帧玩家自己（`BaseObject.SysMsg` 的 `this.ActorId`）。
+                sg.actor_id,
+                sg.state.gold,
+                sg.game_gold,
+                sg.game_point,
+                sg.soft_version_date,
+            )
+        };
+        let Some(body) = body else {
             continue;
         };
         let _ = tx.send(SimToGate::SendFrame { socket, body });
         sent += 1;
     }
     sent
+}
+
+/// `RM_MENU_OK` ⇒ `SM_MENU_OK(767)` 的 wire 帧（T-193）。
+///
+/// 口径（`PlayObject.Message.cs:1952-1953` + `PlayObject.Socket.cs:27-40`）：
+/// `SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, processMsg.Msg)`；
+/// `SendDefMessage` 在 `Msg` 为空时只发 12B 头、不挂尾（`string.IsNullOrEmpty` 支）。
+/// `Msg` 是脚本动作的 `GetLineVariableText(sParam1)` 产物（UTF-16），线上按 cp936 编码后
+/// 再 `EDCode.EncodeString` —— 与 `SM_SYSMESSAGE`/`SM_PLAYDICE` 的尾同一口径
+/// （`mir2_script::cp936::encode_gb2312_dotnet`）。
+#[must_use]
+fn menu_ok_wire(f: &game_svr::npc::SendMsg) -> Vec<u8> {
+    let msg = f.msg.as_deref().unwrap_or("");
+    let bytes = mir2_script::cp936::encode_gb2312_dotnet(msg);
+    smframe::sm_menu_ok(f.n_param1, &bytes)
 }
 
 /// `CM_EAT`(1006) 的派发（issue `8d07694d` 的 ②）。
@@ -14464,6 +14605,13 @@ struct ShopSession {
     /// `NpcPlayer::set_play_dice_label`）；读点/清点 = `LableIsCanJmp` 第三支
     /// （`PlayObject.Base.cs:2824-2828`：命中即清 `string.Empty`，一次性）。跨对话调用保持。
     play_dice_label: Option<String>,
+    /// `SETMPAMODE`（`ActionOfSetMapMode`）在本次脚本里产生的**待落地图 Flag 写**。
+    ///
+    /// oracle 在动作里当场写 `envir.Flag`；本宿主的脚本快照（[`game_svr::npc::NpcPlayer`]）
+    /// 拿不到 `&mut mir2_envir::MapRegistry` ⇒ 由 [`run_merchant_goto`] 在脚本跑完后收进这里，
+    /// 再在 `sim_loop` 的 [`flush_map_mode_writes`] 落库（位于 P25 消费点之前，等价性见
+    /// `map_mode` 模块头）。跨调用**不保留**：落库后即清空。
+    pending_map_modes: Vec<game_svr::map_mode::MapModeWrite>,
 }
 
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
@@ -14599,6 +14747,16 @@ struct SessionGround {
     auto_get_exp_envir_map_id: Option<usize>,
     /// `PlayObject.AutoGetExpInSafeZone`（`:808`）：true ⇒ P31 还要 `InSafeZone()`。
     auto_get_exp_in_safe_zone: bool,
+    /// `PlayObject.OffLineFlag`（`PlayObject.cs:306`；未初始化自动属性 ⇒ false）：
+    /// `ActionOfOffLine`（`ExecutionProcessingSys.cs:2727`）的唯一生产写点（卡 A-10/T-86）。
+    /// 脚本跑前的 seed / 跑后的写回见 `@Login`、组队、商人三路；**读侧**（收发抑制
+    /// `PlayObject.Socket.cs:54/83/107`、到时踢号 `PlayObject.Message.cs:235-238`、离词
+    /// `PlayObject.Chat.cs:31`）仍按 T-100 未接线——本卡只保证字段落真值。
+    off_line_flag: bool,
+    /// `PlayObject.KickOffLineTick`（`PlayObject.cs:302`；ctor 0）：`ExecutionProcessingSys.cs:2728`
+    /// 的 `GetTickCount() + nKickOffLine * 60 * 1000`（i32 回绕域）。**基准 = 脚本宿主时钟**
+    /// （`now_ms() as i32`，与 P31 的 `host_now` 同域）⇒ 未来接 T-100 的踢号门必须用同一域比较。
+    kick_off_line_tick: i32,
     /// **G2**：`PlayObject` 的行会会话字段（`MyGuild` / `GuildRankNo` / `GuildRankName` /
     /// `AllowGuild` / `BanGuildChat`）。管理器 `GuildManager` 才是真源，这里是每连接缓存；
     /// 生命周期与 `SessionGround` 相同（进世界建、断线删）。**不要**放到 `Entity` 上。
@@ -14863,8 +15021,9 @@ struct EnterConfig {
     /// 读失败 ⇒ 不放置。放置在 sim 线程起世界后（`game_svr::guardlist::place_guards`）。
     guards: Option<Vec<mir2_envir::guardlist::GuardInfo>>,
     /// **R0-2（内容装载红名单）**：`Envir/MiniMap.txt` 解析出的地图名→小地图索引表
-    /// （主线程装载，`game_svr::contentload::load_minimap_file`）。消费点（`CM_WANTMINIMAP`
-    /// → `SM_READMINIMAP_OK/FAIL` + `Envirnoment.MinMap`）属 R1 入站红名单，未实现 ⇒ 暂只登记。
+    /// （主线程装载，`game_svr::contentload::load_minimap_file`）。消费点：`CM_WANTMINIMAP`
+    /// → `inbound::session_min_map`（会话 `map_id` → `MapName` → 本表 = oracle `Envirnoment.MinMap`）
+    /// → `SM_READMINIMAP_OK/FAIL`（`handle_inbound_cmd` 接线）。
     minimap: Option<mir2_envir::minimap::MiniMapRegistry>,
     /// **R0-3**：`Envir/MakeItem.txt` 解析出的合成配方表（`load_make_item_file`）。消费点
     /// （`CM_USERMAKEDRUGITEM` → `Merchant.ClientMakeDrugCheckNeedItem`）属 R1 ⇒ 暂只登记。
@@ -15662,6 +15821,48 @@ fn drain_player_need_recheck_with_magic(
             });
         }
     }
+}
+
+/// **A-21/T-85**：把 `SETMPAMODE`（`ActionOfSetMapMode`）收集到的地图 Flag 写落进注册表。
+///
+/// oracle 的 `Envirnoment.Flag` 是运行时状态（`SystemShare.MapMgr.FindMap(name).Flag`），
+/// 脚本动作当场写；本仓把它建模为 [`mir2_envir::MapRegistry`] 的条目（`set_flag`）⇒ 落库后
+/// **所有既有 `flag_of` 读者**（P22 `DECGAMEGOLD`、P25 `DECHP/INCHP`、安全区、行会战图门…）
+/// 立即看到新值。
+///
+/// 调用点：`sim_loop` 在玩家命令处理完之后、`drain_player_game_gold`/`drain_player_map_hp`
+/// 之前（oracle 的消费点在同一 `Run()` 的后段）。跨会话按**键排序**落库，保证确定性；
+/// 同一 tick 内多个会话写同一张图时后写覆盖先写（与 oracle「按命令到达序」在本骨架的
+/// 单线程命令序一致）。
+///
+/// 无注册表（`None`）⇒ 清空队列不落库（oracle `MapMgr` 为空时 `FindMap` 恒 null ⇒ 整支不执行）。
+fn flush_map_mode_writes(
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    registry: Option<&mut mir2_envir::MapRegistry>,
+) -> usize {
+    let mut names: Vec<String> = shop_sessions
+        .iter()
+        .filter(|(_, s)| !s.pending_map_modes.is_empty())
+        .map(|(k, _)| k.clone())
+        .collect();
+    names.sort();
+    let Some(reg) = registry else {
+        for name in names {
+            if let Some(s) = shop_sessions.get_mut(&name) {
+                s.pending_map_modes.clear();
+            }
+        }
+        return 0;
+    };
+    let mut applied = 0usize;
+    for name in names {
+        let Some(s) = shop_sessions.get_mut(&name) else {
+            continue;
+        };
+        let writes = std::mem::take(&mut s.pending_map_modes);
+        applied += game_svr::map_mode::flush_map_mode_writes(&writes, reg);
+    }
+    applied
 }
 
 /// **PL-3 / P25**：地图 `DECHP`/`INCHP`（`PlayObject.Message.cs:569-594`）。
@@ -16783,10 +16984,20 @@ fn rewrite_enter_position(
     (map_name, map_id, x, y, die_in_fight3_zone)
 }
 
+/// **T-6 判据点**：上报门的起算基准。
+///
+/// oracle `SystemProcessor.Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算
+/// `SendOnlineHumTime` ⇒ 基准 = 启动时刻 = **时钟注入之后**的 `world.clock_ms`。生产代码只经
+/// 本函数建门：把它改成 `OnlineHumGate::new(0)` ⇒
+/// `startup_online_hum_gate_uses_injected_world_clock` 必红（注入量级下会提前首发）。
+fn startup_online_hum_gate(world_clock_ms: i64) -> game_svr::ids::OnlineHumGate {
+    game_svr::ids::OnlineHumGate::new(world_clock_ms)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
-    registry: Option<mir2_envir::MapRegistry>,
+    mut registry: Option<mir2_envir::MapRegistry>,
     mut enter_cfg: EnterConfig,
     notice: Vec<u8>,
     colors: MsgColors,
@@ -16795,6 +17006,9 @@ fn sim_loop(
     shutdown_rx: std::sync::mpsc::Receiver<()>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     mut db: Option<DbWiring>,
+    ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    ids_out: tokio::sync::mpsc::UnboundedSender<String>,
+    payment_mode: u8,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -16803,12 +17017,24 @@ fn sim_loop(
     // **I-6**：`GuildChief/GuildMemberRank` 的生产源是 `String.conf [Guild]`（`StringConf.cs:30-35`），
     // 不是 `GuildCastleConfig`；不覆盖会静默回落 `掌门人/行会成员`（W3-m8/m9）。
     // 说词变量的配置基线（`NormNpc.GetVariableText` 的 `SystemShare.Config` 半边）。
-    let npc_vars_base = npc_vars_from(
+    let mut npc_vars_base = npc_vars_from(
         enter_cfg.game_conf.as_ref(),
         &enter_cfg.server_name,
         enter_cfg.upgrade_weapon_price,
         enter_cfg.shop.human_max_gold,
     );
+    // **A-21/T-85**：脚本 `SETMPAMODE` 的两处 `SystemShare` 取值——
+    // ① `MapMgr` 已装载地图名表（`map_exists` = `FindMap(name) != null`）；
+    // ② `SysMsg` 的 `SM_SYSMESSAGE` 色词（`[Setup] *MsgFColor/BColor`）。
+    if let Some(reg) = registry.as_ref() {
+        npc_vars_base.map_names = reg.map_names();
+    }
+    npc_vars_base.sys_msg = game_svr::npc::SysMsgCfg {
+        red: (colors.red_f, colors.red_b),
+        green: (colors.green_f, colors.green_b),
+        blue: (colors.blue_f, colors.blue_b),
+        ..game_svr::npc::SysMsgCfg::default()
+    };
     let mut guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
     guild_cfg.guild_chief = enter_cfg.string_conf.guild_chief().to_string();
     guild_cfg.guild_member_rank = enter_cfg.string_conf.guild_member_rank().to_string();
@@ -16874,6 +17100,11 @@ fn sim_loop(
             world.clock_ms
         );
     }
+    // `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime`（`SystemProcessor.cs:63-67`）：与
+    // `RunTimeTick`（10s）**各自独立**的另一个 10s 门。oracle 在 `Startup` 用 `GetTickCount()`
+    // 起算（`SystemProcessor.cs:22-27`）⇒ 基准 = **启动时刻**。必须放在时钟注入**之后**取
+    // `world.clock_ms`：注入后起点是 epoch 量级，基准若写死 0 会 `-0 > 10000` ⇒ 连上即多发一帧。
+    let mut online_hum_gate = startup_online_hum_gate(world.clock_ms);
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -17390,13 +17621,14 @@ fn sim_loop(
     let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
         std::collections::HashMap::new();
     // **R0-2/R0-3/R0-4 内容装载红名单**：主线程装载的注册表随 `EnterConfig` 到 sim 线程。
-    // 消费点：MiniMap 下发帧（`CM_WANTMINIMAP`）**仍未实现** ⇒ 只「取用 + 登记」（保留读数，
-    // 不静默丢字段）；制药合成（`CM_USERMAKEDRUGITEM`，WB 片）与滚动公告（`LineNotice`，T3·③）
-    // **已接线**（见下）。
-    if let Some(mm) = enter_cfg.minimap.take() {
+    // 消费点：MiniMap 下发帧（`CM_WANTMINIMAP`）**已接线**（`handle_inbound_cmd` →
+    // `inbound::session_min_map` → `SM_READMINIMAP_OK/FAIL`）；制药合成（`CM_USERMAKEDRUGITEM`，
+    // WB 片）与滚动公告（`LineNotice`，T3·③）亦已接线（见下）。
+    let minimap = enter_cfg.minimap.take();
+    if let Some(mm) = minimap.as_ref() {
         glog!(
             "INF",
-            "MiniMap 注册表就绪：{} 条（下发帧 CM_WANTMINIMAP 未实现 ⇒ 登记）",
+            "MiniMap 注册表就绪：{} 条（下发帧 CM_WANTMINIMAP：会话 map_id → MapName → 本表 ⇒ Envir.MinMap）",
             mm.len()
         );
     }
@@ -17852,6 +18084,7 @@ fn sim_loop(
                             sell_off,
                             chr_name: &chr_name,
                             map_text: &map_text,
+                            now_tick,
                         };
                         guild_official::handle_select(
                             cmd.recog,
@@ -18085,6 +18318,7 @@ fn sim_loop(
                             &mut ground_sessions,
                             &gates,
                             registry.as_ref(),
+                            minimap.as_ref(),
                             &mut pwd_sessions,
                             &enter_cfg.ground,
                             &displays,
@@ -18948,6 +19182,10 @@ fn sim_loop(
                                                                 d.is_master,
                                                                 d.allow_guild_re_call,
                                                                 d.group_rcall_time,
+                                                                // `AttatckMode`（`WorldServer.cs:1148`）
+                                                                // 与 `ReLevel`（`:1133`）同由 `GetHumData` 装入。
+                                                                d.attatck_mode,
+                                                                d.re_level,
                                                             ),
                                                             state: game_svr::ground::GroundState {
                                                                 item_list: bag_items_from(
@@ -19040,6 +19278,8 @@ fn sim_loop(
                                                             auto_get_exp_envir: None,
                                                             auto_get_exp_envir_map_id: None,
                                                             auto_get_exp_in_safe_zone: false,
+                                                            off_line_flag: false,
+                                                            kick_off_line_tick: 0,
                                                             guild: guild_session.clone(),
                                                         },
                                                     );
@@ -19232,7 +19472,16 @@ fn sim_loop(
                                                                         sg.p22.bo_inc_game_gold;
                                                                     player.bo_dec_game_gold =
                                                                         sg.p22.bo_dec_game_gold;
+                                                                    // **A-10/T-86**：`SETOFFLINE`
+                                                                    // 的两字段（同一个 `PlayObject`）。
+                                                                    player.off_line_flag =
+                                                                        sg.off_line_flag;
+                                                                    player.kick_off_line_tick =
+                                                                        sg.kick_off_line_tick;
                                                                 }
+                                                                // `HUtil32.GetTickCount()` 的宿主值
+                                                                //（与 P31 `host_now` 同源）。
+                                                                player.tick = now_ms() as i32;
                                                                 if let Some(says) =
                                                                     host.run_login(&mut player)
                                                                 {
@@ -19287,6 +19536,12 @@ fn sim_loop(
                                                                         player.bo_inc_game_gold;
                                                                     sg.p22.bo_dec_game_gold =
                                                                         player.bo_dec_game_gold;
+                                                                    // **A-10/T-86**：两字段写回
+                                                                    //（四字段已在上方 P31 块内写回）。
+                                                                    sg.off_line_flag =
+                                                                        player.off_line_flag;
+                                                                    sg.kick_off_line_tick =
+                                                                        player.kick_off_line_tick;
                                                                 }
                                                                 if let Some(e) = world.entities.get_mut(id) {
                                                                     e.kill_mon_exp_rate =
@@ -19440,6 +19695,32 @@ fn sim_loop(
         // `CastleMgr.Save()`（`SaveCastleList` → 升序逐城 `SaveConfig` → `SaveAttackSabukWall`）。
         // 与下面 10s 的 `ProcessGameRun` 门**独立**；oracle 在同一 tick 里先 ShowOnline 后
         // ProcessGameRun ⇒ 本块放在 10s 块之前。
+        // `WorldEngine.OnlinePlayObject`（`WorldServer.cs:98/190-193` = `PlayObjectList.Count`）：
+        // `MakeGhost` 后对象仍留在 `PlayObjectList`，直到 RunTick 门到点才 Remove
+        // （`WorldServer.cs:635/709`）⇒ **不能排除 ghost**。与既有宿主口径一致：MonGen 两条门
+        // 与 `crates/world/src/monai.rs` 的 `MakeGhost` 门都数 `race == Play`（不含 ghost），
+        // 否则幽灵/断线窗口里本段会比 oracle 小 1..N（reviewer-1 m-2）。
+        let online_play_objects = world
+            .entities
+            .iter()
+            .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
+            .count() as i32;
+        ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
+        // `SystemProcessor.ShowOnline`（`:54-68`，10s 分支在 `:63-67`）：严格 `>`，
+        // 到点上报一次当前在线数（`SendOnlineHumCountMsg`，`AuthenticationService.cs:113-116`）。
+        // 第 3 段恒 0（`M2Share.ServerIndex` 从不赋值），第 5 段取 `[Server] PayMentMode`
+        // （缺省 1，`GameSvrConf.cs:1253`）——都由 `serverinfo_frame` 决定。
+        if let Some(frame) = game_svr::ids::periodic_serverinfo(
+            &mut online_hum_gate,
+            world.clock_ms,
+            &enter_cfg.server_name,
+            online_play_objects,
+            payment_mode,
+        ) {
+            if ids_out.send(frame).is_err() {
+                glog!("WRN", "IDS 上报通道已关闭，SS_SERVERINFO 丢弃");
+            }
+        }
         let castle_due = castle_gates.tick(world.clock_ms, enter_cfg.console_show_user_count_time);
         if let Some(store) = castle_store.as_ref() {
             if castle_due.save {
@@ -19698,6 +19979,9 @@ fn sim_loop(
         // **PL-4 / P22**：`PlayObject.Message.cs:442-529`（P21 之后、P24/P25 之前）。
         // 内容不可达 ⇒ 生产 0 抽数；一旦触发 `MoveToHome`，`merchant`/`space_move` 两组的
         // 相对次序变为「玩家 Run 段末尾」（设计件 §4.4，属 R 窗口证据）。
+        // **A-21/T-85**：本 tick 各条命令里 `SETMPAMODE` 收集到的地图 Flag 写先落库，
+        // 再进 P22/P25 的消费点（oracle 是脚本动作当场写、同 tick 后段消费）。
+        flush_map_mode_writes(&mut shop_sessions, registry.as_mut());
         drain_player_game_gold(
             &mut world,
             &mut ground_sessions,
@@ -22553,6 +22837,197 @@ mod tests {
         assert!(npc_hit > mer_turn && mer_hit > npc_hit);
     }
 
+    /// **判据（卡 `openmir2-castle-merchant-fixedhide-hit`，tier=R）**：城堡商人
+    /// `FixedHideMode` 解除支（`Merchant.cs:152-157`，`SendRefMsg(RM_HIT,…)` 在 `:156`）是
+    /// **确定性**发点——与 `tools/conformance/rules.json` 里 ident 14 的 `ignore` 理由
+    /// （RNG 支，`Merchant.cs:138-140`）不同类。本用例走生产链路：
+    /// `World::merchant_tick` → `crates/world/src/merchant.rs::merchant_run`（`:143-160`）→
+    /// `TickRecord::merchant_hits` → [`drain_npc_merchant_hits`] → [`downlink::hit_frame`]。
+    ///
+    /// 断言：
+    /// ① `UnderWar false→true` 那一步：`merchant_hits` **为空**（只有 `RM_DISAPPEAR`，不发 `SM_HIT`）；
+    /// ② `true→false` 那一步：**恰好一条** `SM_HIT(14)`，头 = `(Recog=商人 ActorId,
+    ///    Param=CurrX, Tag=CurrY, Series=Dir)`、**无尾**（12B）；
+    /// ③ 战中稳态 + RNG 受击（`Merchant.cs:140`）：`SendRefMsg` 的 `ObMode || FixedHideMode`
+    ///    头门（`BaseObject.Message.cs:390-394`）⇒ **只自送、客户端零帧**；
+    /// ④ 战后解除本身是可见帧（1 条，与 ② 同形）；随后状态不再变化 ⇒ **零帧**
+    ///    （这条支不得变成噪声源）。
+    ///
+    /// 牙（红检）：① 删 `merchant_run` 的 `outcome.unhide_hit = true` ⇒ ② 帧数归零 ⇒ 红；
+    /// ② 把补发挪到「进入战中」⇒ ① 多一条、② 归零 ⇒ 红。
+    #[test]
+    fn castle_merchant_unhide_hit_is_one_sm_hit_with_merchant_coords() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut world = mir2_world::World::new(100, 100);
+        // 种子：前两次 `Run` 的 RNG 支都不受击——否则会混入 `RM_HIT` 噪声，①/② 的条数断言失效。
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let spawn = MerchantSpawn {
+            name: "沙巴克商人".to_string(),
+            x: 10,
+            y: 11,
+            map_id: 0,
+            state: MerchantState::new(
+                "沙巴克商人".to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                true, // `CastleMerchant`（`LocalDB.cs:461-464`）
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![spawn],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 1);
+        assert!(failed.is_empty());
+        let mer_id = world.merchant_ids_sorted()[0];
+        assert!(
+            world.set_merchant_castle_index(mer_id, Some(0)),
+            "Castle != null（`Merchant.cs:143` 第二合取项）"
+        );
+        // `SendRefMsg(RM_HIT, Dir, …)` ⇒ `Series` 取实体当前 `Dir`。
+        world.entities.get_mut(mer_id).unwrap().ai.dir = 5;
+        let (online, gates, mut rx) = aoi_observer_fixture(p);
+
+        let set_war = |world: &mut mir2_world::World, war: bool| {
+            let st = world
+                .entities
+                .get_mut(mer_id)
+                .and_then(|e| e.merchant.as_mut())
+                .expect("商人状态在");
+            st.castle_under_war = war; // `Castle.UnderWar` 快照
+            st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
+        };
+
+        // ① `UnderWar false→true`：只有 `RM_DISAPPEAR`，不发 `SM_HIT`。
+        set_war(&mut world, true);
+        let enter = world.merchant_tick();
+        assert!(enter.hits.is_empty(), "进入战中不得发 RM_HIT");
+        assert!(world.entities.get(mer_id).unwrap().fixed_hide_mode);
+        let rec = mir2_world::TickRecord {
+            merchant_hits: enter.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            0,
+            "进入战中 ⇒ 零条 SM_HIT"
+        );
+
+        // ② `UnderWar true→false`：恰好一条 `SM_HIT(14)`。
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let leave = world.merchant_tick();
+        assert_eq!(leave.hits, vec![mer_id], "解除时恰好一条 RM_HIT");
+        assert!(!world.entities.get(mer_id).unwrap().fixed_hide_mode);
+        let rec = mir2_world::TickRecord {
+            merchant_hits: leave.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            1
+        );
+        let mut raws = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            raws.push(body);
+        }
+        assert_eq!(raws.len(), 1, "唯一在线玩家收到恰好一条帧");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&raws[0]).expect("SM_HIT 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_HIT);
+        assert_eq!(cm.recog, mer_id, "Recog = 发帧商人 ActorId");
+        assert_eq!(cm.param, 10, "Param = CurrX");
+        assert_eq!(cm.tag, 11, "Tag = CurrY");
+        assert_eq!(cm.series, 5, "Series = Dir（不含 Light）");
+        assert_eq!(raws[0].len(), 12, "无尾（SendSocket 单参）");
+
+        // ③ 战中稳态 + RNG 受击：`Merchant.cs:140` 的 `RM_HIT` 在 `FixedHideMode` 下只自送
+        //    （`BaseObject.Message.cs:390-394`）⇒ 客户端零帧。
+        set_war(&mut world, true);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        assert!(
+            world.merchant_tick().hits.is_empty(),
+            "重新进入战中：RM_DISAPPEAR 不算 SM_HIT"
+        );
+        assert!(world.entities.get(mer_id).unwrap().fixed_hide_mode);
+        // 换一个「首次抽数即命中受击支」的流（`Run` 从流的头部开抽，无 ctor 链）。
+        let hit_seed = (1..500)
+            .find(|s| {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(*s);
+                r.random_below(50) != 0 && r.random_below(50) == 0
+            })
+            .expect("存在受击种子");
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(hit_seed);
+        set_war(&mut world, true); // 仅重置 `Run` 门（状态仍为战中）
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let hidden_tick = world.merchant_tick();
+        assert!(
+            hidden_tick.hits.is_empty(),
+            "战中稳态下发 SM_HIT ⇒ 客户端多一帧"
+        );
+        assert_eq!(
+            hidden_tick.hits_self_only,
+            vec![mer_id],
+            "受击支确实命中，但只自送"
+        );
+        let rec = mir2_world::TickRecord {
+            merchant_hits: hidden_tick.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            0,
+            "自送帧不得到客户端"
+        );
+        assert!(rx.try_recv().is_err(), "战中稳态无帧");
+
+        // ④ 战后解除（可见）：这次转换本身是一条 `SM_HIT`（与 ② 同形，`:155` 先清零再发）。
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let unhide_again = world.merchant_tick();
+        assert_eq!(unhide_again.hits, vec![mer_id], "解除支恒为可见帧");
+        assert!(!world.entities.get(mer_id).unwrap().fixed_hide_mode);
+
+        // ⑤ 战后稳态（状态与随机支都不动）⇒ 零帧。战后商人**可见**，RNG 受击支一旦抽中就是
+        //    合法可见帧 ⇒ 这里换回一条「两次抽数都不命中」的流，断言才只钉「稳态不多发」。
+        let quiet_seed = (1..500)
+            .find(|s| {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(*s);
+                r.random_below(50) != 0 && r.random_below(50) != 0
+            })
+            .expect("存在安静种子");
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(quiet_seed);
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let steady = world.merchant_tick();
+        assert!(steady.hits.is_empty(), "战后稳态零帧");
+        let rec = mir2_world::TickRecord {
+            merchant_hits: steady.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            0
+        );
+        assert!(rx.try_recv().is_err(), "稳态无帧");
+    }
+
     /// **接线牙**：`drain_run_downlinks_with_magic` 里两个 drain 调用必须仍在且未被注释
     /// （口径同 `drain_deal_tick_production_call_is_wired_in_sim_loop`）。
     ///
@@ -23672,6 +24147,8 @@ mod tests {
             auto_get_exp_envir: None,
             auto_get_exp_envir_map_id: None,
             auto_get_exp_in_safe_zone: false,
+            off_line_flag: false,
+            kick_off_line_tick: 0,
             guild: guild_cmd::GuildSession::default(),
         }
     }
@@ -24113,6 +24590,439 @@ mod tests {
             "② 第三支只能放行一次（第二次被拒 ⇒ `GotoLable` 被 boExtJmp 挡下 ⇒ 零帧）"
         );
         assert_eq!(rig.game_gold(), 160, "② 被拒 ⇒ 脚本不执行，元宝不变");
+    }
+
+    /// 把部署脚本 `E:/MirServer/M2GameSvr/Envir/Market_Def/赌博NPC/赌场-B013.txt` 的
+    /// `[@ya52]` 段（第 203-215 行）按 **GBK 原文** 写盘，再走生产解析器
+    /// （`ScriptParsers::load_script_file`，`boFlag=true` = `Merchant.LoadScriptFile`）。
+    ///
+    /// `[@main]`/`[@ya5]` 只保留**可跳转链**（与 `tools/probe/scenarios/dice_chain*.json` 的
+    /// `@ya5 → @ya52` 同形）；`[@ya52]` 段逐字照抄部署件：
+    ///
+    /// ```text
+    /// [@ya52]
+    /// #IF
+    /// CHECKitem 筹码包 1
+    /// #ACT
+    /// take 筹码包 1
+    /// movr d0 6
+    /// inc d0 1
+    /// playdice 1 @cube52
+    /// #SAY
+    /// 正在投骰子…………
+    /// #ELSEACT
+    /// MESSAGEBOX 请打开商铺兑换[筹码]后再来！
+    /// break
+    /// ```
+    fn ya52_book(tag: &str, merchant_id: i32) -> game_svr::npc::MerchantScriptBook {
+        const SRC: &str = r#"[@main]
+<押1个筹码包/@ya5>\
+[@ya5]
+<大/@ya51>  <小/@ya52>\
+[@ya52]
+#IF
+CHECKitem 筹码包 1
+#ACT
+take 筹码包 1
+movr d0 6
+inc d0 1
+playdice 1 @cube52
+#SAY
+正在投骰子…………
+#ELSEACT
+MESSAGEBOX 请打开商铺兑换[筹码]后再来！
+break
+"#;
+        let crlf = SRC.replace('\n', "\r\n");
+        let bytes = encoding_rs::GBK.encode(&crlf).0.into_owned();
+        let root = std::env::temp_dir().join(format!("gs-ya52-{tag}-{}", std::process::id()));
+        let dir = root.join("Envir").join("Market_Def");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("赌场-B013.txt"), bytes).unwrap();
+        let parsers = mir2_script::ScriptParsers::new();
+        let mut rename = |_min: i32, _max: i32| 1;
+        let outcome = parsers
+            .load_script_file(
+                &mir2_script::LocalFs,
+                &root.join("Envir"),
+                "Market_Def",
+                "赌场-B013",
+                true,
+                &mut rename,
+            )
+            .expect("解析不得 panic")
+            .expect("脚本必须存在");
+        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            outcome.errors.is_empty(),
+            "夹具脚本不得有解析错误：{:?}",
+            outcome.errors
+        );
+        let mut book = game_svr::npc::MerchantScriptBook::new(30);
+        book.insert(game_svr::npc::MerchantNpc {
+            def: game_svr::npc::NpcDef {
+                chr_name: "赌场老板".to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("赌场-B013".to_string()),
+                is_hide: false,
+                is_quest: false,
+                scripts: outcome.scripts,
+                loaded: true,
+                actor_id: merchant_id,
+            },
+            price_rate: 100,
+            castle: None,
+            map_name: "0".to_string(),
+            curr_x: 11,
+            curr_y: 10,
+        });
+        book
+    }
+
+    /// `[@ya52]` 段的**生产链路**夹具：真实 GBK 脚本 → 解析器 → 商人脚本表。
+    fn ya52_rig(tag: &str) -> T142Rig {
+        let mut rig = T142Rig::new(Vec::new());
+        rig.book = ya52_book(tag, rig.merchant_id);
+        rig
+    }
+
+    /// 跑 `@main → @ya5 → @ya52`（与 dice_chain 场景同形）并返回最后一步的下行帧。
+    fn ya52_run(rig: &mut T142Rig) -> Vec<Vec<u8>> {
+        rig.dlg_select("@main");
+        let _ = rig.drain();
+        rig.dlg_select("@ya5");
+        let _ = rig.drain();
+        rig.dlg_select("@ya52");
+        rig.drain()
+    }
+
+    fn idents(frames: &[Vec<u8>]) -> Vec<(u16, u16, u16, i32)> {
+        frames.iter().map(|b| hdr(b.as_slice())).collect()
+    }
+
+    /// **T-193（卡 `openmir2-ya52-menu-ok-missing`）**：部署脚本 `[@ya52]` 的
+    /// `CHECKitem` 不满足 ⇒ `#ELSEACT MESSAGEBOX ...` 必须下发**恰好一条** `SM_MENU_OK(767)`，
+    /// 帧字节与 C# 真机金标准逐字节一致。
+    ///
+    /// oracle 推演（逐步）：
+    /// 1. `ConditionOfCheckItem`（`ConditionProcessingSys.cs:4043-4056`）：
+    ///    `playerActor.QuestCheckItem("筹码包")` 得 `n1C=0`，`0 < nParam2(1)` ⇒ `success=false`；
+    /// 2. `ScriptEngine.GotoLable`（`ScriptEngine.cs:38-129`）条件假 ⇒ 走 `ElseActionList`；
+    /// 3. `ActionOfMessageBox`（`ExecutionProcessingSys.cs:3416-3419`）：
+    ///    `playerActor.SendMsg(normNpc, RM_MENU_OK, 0, playerActor.ActorId, 0, 0, text)`；
+    /// 4. `PlayObject.Message.cs:1952-1953`：
+    ///    `SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, processMsg.Msg)`
+    ///    ⇒ `Recog` = **玩家** `ActorId`（`nParam1`）、`Param/Tag/Series` = 0、
+    ///    尾 = `EDCode.EncodeString(GetLineVariableText(sParam1))`（cp936 原文）；
+    /// 5. 动作循环在此 **return**：`GotoLableQuestActionProcess`
+    ///    （`ScriptEngine.cs:887-895`）对**首个已注册动作**执行后立即 `return`
+    ///    ⇒ `#ELSEACT` 里的 `break` **不可达**；可观测等价：
+    ///    `ElseSayMsg` 为空 ⇒ 一样零 643。
+    ///
+    /// 真机金标准：`E:/tmp/conformance/runs/w24-csharp-dice-r1|r2/frames.ndjson` 的 `seq=35`
+    /// （C# 2/2；同一场景 Rust 修复前 0/2）：`ident=767 / param=0 / tag=0 / series=0`、
+    /// body 38 B、`body_sha256=e6d73c8e334a42ce701972b50e16e74624516dc309e321fd0b40ad30046cf15c`、
+    /// `Recog` 为玩家 `ActorId`（r1=1833593529、r2=1882717309）。
+    ///
+    /// 牙（先备份 sha256，改完还原并核对）：
+    /// ① 删 `emit_script_frames` 的 `RM_MENU_OK` 支（回到 `pickwire::script_frame` 的
+    ///    `_ => None`）⇒ 本用例红（0 条 767）；
+    /// ② 把它提成「无条件发」⇒ [`ya52_checkitem_satisfied_sends_no_menu_ok`] 红。
+    #[test]
+    fn ya52_elseact_messagebox_emits_exactly_one_sm_menu_ok() {
+        let mut rig = ya52_rig("pos");
+        let frames = ya52_run(&mut rig);
+        let menu: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_MENU_OK)
+            .collect();
+        assert_eq!(
+            menu.len(),
+            1,
+            "命中 @ya52 的 ELSEACT ⇒ 恰好一条 SM_MENU_OK；实得 {:?}",
+            idents(&frames)
+        );
+        let hero = rig.sessions["hero"].actor_id;
+        assert_eq!(
+            hdr(menu[0].as_slice()),
+            (mir2_protocol::messages::SM_MENU_OK, 0, 0, hero),
+            "767 的 Recog=玩家 ActorId，Param/Tag=0"
+        );
+        assert_eq!(
+            u16::from_le_bytes([menu[0][10], menu[0][11]]),
+            0,
+            "Series 必须为 0（`SendDefMessage` 第 5 参）"
+        );
+        // 尾 = `EDCode.EncodeString(GBK 原文)`：与真机 C# 抓包逐字节相同。
+        const GOLDEN_BODY: &str =
+            "574f5445524342485554665054427a4e43437371434f6a584f7952405358715a54404b4a3d3f";
+        let body_hex: String = menu[0][12..].iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            body_hex, GOLDEN_BODY,
+            "767 尾必须与真机 C#（w24-csharp-dice-r1/r2 seq=35）逐字节相同"
+        );
+        // 尾部来源自证：消息原文的 cp936 字节 = 部署件 `赌场-B013.txt` 第 214 行
+        // `MESSAGEBOX ` 之后的 28 B。
+        const MSG_GBK: &[u8] = &[
+            0xc7, 0xeb, 0xb4, 0xf2, 0xbf, 0xaa, 0xc9, 0xcc, 0xc6, 0xcc, 0xb6, 0xd2, 0xbb, 0xbb,
+            0x5b, 0xb3, 0xef, 0xc2, 0xeb, 0x5d, 0xba, 0xf3, 0xd4, 0xd9, 0xc0, 0xb4, 0xa3, 0xa1,
+        ];
+        assert_eq!(
+            menu[0][12..],
+            mir2_protocol::edcode::encode(MSG_GBK)[..],
+            "尾 = EDCode(请打开商铺兑换[筹码]后再来！) 的 cp936 原文"
+        );
+    }
+
+    /// **T-193 反例（防「无条件发」）**：`CHECKitem 筹码包 1` **满足** ⇒ 走 `#ACT` 支 ⇒ **零** `SM_MENU_OK(767)`；
+    /// 且 `#SAY`「正在投骰子…………」与 `take` 都真的发生（证明脚本确实进了段，不是零执行）。
+    ///
+    /// 注：C# `GotoLableQuestActionProcess` 对同一 `ActionList` **只执行第一个已注册动作**
+    /// （`ScriptEngine.cs`；Rust `Engine::run_actions` 1:1）⇒ 本例只跑 `take`，
+    /// `playdice` 不会到达（行为等价，不是本卡缺口）。
+    #[test]
+    fn ya52_checkitem_satisfied_sends_no_menu_ok() {
+        let mut rig = ya52_rig("neg");
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "筹码包".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem::new(4201, 1));
+        let frames = ya52_run(&mut rig);
+        assert!(
+            idents(&frames)
+                .iter()
+                .all(|h| h.0 != mir2_protocol::messages::SM_MENU_OK),
+            "CHECKitem 满足 ⇒ 不得发 767（否则就是「无条件发」）；实得 {:?}",
+            idents(&frames)
+        );
+        assert_eq!(
+            idents(&frames)
+                .iter()
+                .filter(|h| h.0 == mir2_protocol::messages::SM_MERCHANTSAY)
+                .count(),
+            1,
+            "#ACT 支必须真的执行（#SAY「正在投骰子…………」⇒ 恰好一条 SM_MERCHANTSAY）；实得 {:?}",
+            idents(&frames)
+        );
+        assert!(
+            rig.sessions["hero"].state.item_list.is_empty(),
+            "`take 筹码包 1` 必须把物品从会话背包摘掉"
+        );
+    }
+
+    /// `SETOFFLINE 时间 点数 踢号分钟`（`n_cmd_code = 337` = `ExecutionCode.OffLine`）：
+    /// 三段参数都走 `sParam1..3`（`ScriptParsers.cs:554`）。
+    fn setoffline_act(p1: &str, p2: &str, p3: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 337,
+            s_param1: p1.to_string(),
+            s_param2: p2.to_string(),
+            s_param3: p3.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **A-10/T-86（`SETOFFLINE`）生产入口**：`CM_MERCHANTDLGSELECT` → `run_merchant_goto`
+    /// → `ActionOfOffLine`（code 337）→ `NpcPlayer::set_offline` → 会话写回，六字段逐项断言。
+    ///
+    /// oracle 锚（`ExecutionProcessingSys.cs:2723-2728`）：`AutoGetExpInSafeZone = true`、
+    /// `AutoGetExpEnvir = playerActor.Envir`、`AutoGetExpTime = nTime * 1000`、
+    /// `AutoGetExpPoint = nPoint`、`OffLineFlag = true`、
+    /// `KickOffLineTick = HUtil32.GetTickCount() + nKickOffLine * 60 * 1000`。
+    /// 宿主侧 `GetTickCount()` = `now_ms() as i32`（**与 P31 `host_now = now_ms()` 同域**）；
+    /// 墙钟不可被夹具注入 ⇒ 用调用前后的两次取钟把基准钉在区间内。
+    ///
+    /// 牙①：删 `run_merchant_goto` 的 `write_back_player_offline` 调用 ⇒ 六条断言全红
+    /// （会话仍是 false/None/0/0/0/0）。
+    /// 牙②：删 `NpcPlayer::envir_map_name` / `tick_count` 覆写 ⇒ `envir` / `kick` 断言红。
+    #[test]
+    fn setoffline_writes_six_session_fields_through_production_path() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "挂机",
+            vec![setoffline_act("3", "700", "15")],
+        )]);
+        let lo = now_ms() as i32;
+        rig.dlg_select("@main");
+        let hi = now_ms() as i32;
+        let _ = rig.drain();
+        let sg = &rig.sessions["hero"];
+        assert!(sg.auto_get_exp_in_safe_zone, "InSafeZone = true（:2723）");
+        assert_eq!(
+            sg.auto_get_exp_envir.as_deref(),
+            Some("0"),
+            "Envir = playerActor.Envir 的地图名（:2724）"
+        );
+        assert_eq!(sg.auto_get_exp_time, 3_000, "nTime * 1000（:2725）");
+        assert_eq!(sg.auto_get_exp_point, 700, "nPoint（:2726）");
+        assert!(sg.off_line_flag, "OffLineFlag = true（:2727）");
+        let base = sg.kick_off_line_tick.wrapping_sub(15 * 60_000);
+        assert!(
+            (lo..=hi).contains(&base),
+            "KickOffLineTick = host_tick + nKick*60*1000（:2728）：base={base} not in [{lo},{hi}]"
+        );
+    }
+
+    /// **M-1（商人路径 round-trip 恒等）**：`OffLineFlag`/`KickOffLineTick` 与 P31 四字段是
+    /// oracle **同一个** `PlayObject` 的字段（`ExecutionProcessingSys.cs:2723-2728`）⇒ 商人
+    /// `GotoLable` 未命中 `SETOFFLINE` 时，会话里已有的挂机面必须原样存活（脚本没写就不变）。
+    ///
+    /// 牙：删 `npc_player_from_session` 的挂机面 seed ⇒ 快照的缺省值
+    /// （false/None/0/0/false/0）被写回 ⇒ 六条断言全红。
+    #[test]
+    fn merchant_goto_preserves_hang_state_round_trip() {
+        let mut rig = T142Rig::new(vec![t142_record("@main", "欢迎", Vec::new())]);
+        {
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.auto_get_exp_in_safe_zone = true;
+            sg.auto_get_exp_envir = Some("0".to_string());
+            sg.auto_get_exp_time = 7_000;
+            sg.auto_get_exp_point = 900;
+            sg.off_line_flag = true;
+            sg.kick_off_line_tick = 42;
+        }
+        rig.dlg_select("@main");
+        let _ = rig.drain();
+        let sg = &rig.sessions["hero"];
+        assert!(sg.auto_get_exp_in_safe_zone);
+        assert_eq!(sg.auto_get_exp_envir.as_deref(), Some("0"));
+        assert_eq!(sg.auto_get_exp_time, 7_000);
+        assert_eq!(sg.auto_get_exp_point, 900);
+        assert!(sg.off_line_flag, "挂机标志不得被商人脚本清零");
+        assert_eq!(sg.kick_off_line_tick, 42, "踢号时限不得被商人脚本清零");
+    }
+
+    /// `SETMPAMODE`（`ExecutionCode.SetMapMode = 216`；`sParam1..4` = 地图/分支/参数1/参数2）。
+    fn setmapamode_act(map: &str, mode: &str, p1: &str, p2: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 216,
+            s_param1: map.to_string(),
+            s_param2: mode.to_string(),
+            s_param3: p1.to_string(),
+            s_param4: p2.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// `SENDMSG`（`ExecutionCode.SendMsg = 31`，`ActionOfLineMsg`）：`nParam1` = 分支号、
+    /// `sParam2` = 文本（`ScriptParsers.cs:554`）。
+    fn sendmsg_act(branch: i32, msg: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 31,
+            n_param1: branch,
+            s_param2: msg.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **A-21/T-85（`SETMPAMODE DECHP`）生产入口**：`CM_MERCHANTDLGSELECT` → `run_merchant_goto`
+    /// → `ActionOfSetMapMode`（code 216）→ `NpcPlayer::set_map_mode` 记录 → 宿主
+    /// `flush_map_mode_writes` 落 `Envir.Flag` → P25 `drain_player_map_hp` 消费；同一条脚本里的
+    /// `SENDMSG 5` 顺带钉住 `NpcPlayer::sys_msg` 的 `SM_SYSMESSAGE` **逐字节**。
+    ///
+    /// oracle 锚：
+    /// - `ExecutionProcessingSys.cs:4429-4434`：`FindMap(sParam1) == null || sMapMode` 空 ⇒
+    ///   `ScriptActionError`、**不写任何 Flag**；
+    /// - `:4585-4596`：`DECHP` 在 `sParam3`/`sParam4` **都非空**时置
+    ///   `boDECHP=true/nDECHPTIME=StrToInt(sParam3)/nDECHPPOINT=StrToInt(sParam4)`，否则只
+    ///   `boDECHP=false`；
+    /// - `PlayObject.Message.cs:569-578`：`boDECHP` 且 `now - DecHpTick > nDECHPTIME*1000`
+    ///   ⇒ `HP -= nDECHPPOINT`（HP 不足则 0）+ `HealthSpellChanged()`；
+    /// - `BaseObject.cs:1678` + `PlayObject.Message.cs:1715-1718`：`SysMsg(_, Red, Say)` ⇒
+    ///   `SM_SYSMESSAGE(100)`、`Recog` = 玩家 `ActorId`、`Param = MakeWord(RedMsgFColor,
+    ///   RedMsgBColor)`、`Series = 1`、尾 = `EncodeString`。
+    ///
+    /// 牙（删任一处 ⇒ 本用例红）：
+    /// ① 删 `actions.rs` 的 `"ActionOfSetMapMode"` 支 ⇒ 无写队列 ⇒ `applied == 0`；
+    /// ② 删 `map_mode::apply_set_map_mode` 的 `DECHP` 支 ⇒ `boDECHP` 仍 false（HP 不减）；
+    /// ③ 删 `NpcPlayer::sys_msg` 覆写 ⇒ 帧列表为空；
+    /// ④ 删 `pickwire::script_frame` 的 `RM_SYSMESSAGE` 支 ⇒ 帧被丢（T-142 ④ 口径）；
+    /// ⑤ 删 `run_merchant_goto` 的 `pending_map_modes.extend` ⇒ 队列不达宿主。
+    #[test]
+    fn a21_setmpamode_dechp_lands_flag_frame_and_p25_consumes() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![
+                setmapamode_act("A", "DECHP", "1", "10"),
+                sendmsg_act(5, "中毒了"),
+            ],
+        )]);
+        // `SystemShare.MapMgr` 的已装载图名表（`FindMap("A") != null` 门）+ 色词（缺省 oracle）。
+        rig.npc_vars.map_names = vec!["A".to_string()];
+        rig.npc_vars.sys_msg = game_svr::npc::SysMsgCfg::default();
+        // 玩家 HP/MaxHP = 100/100，`DecHpTick` ctor = 0（进图后首次调用立即触发）。
+        let hero = rig.sessions["hero"].actor_id;
+        {
+            let e = rig.world.entities.get_mut(hero).unwrap();
+            e.hp = 100;
+            e.max_hp = 100;
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 100;
+            sg.dec_hp_tick = 0;
+        }
+
+        rig.dlg_select("@main");
+
+        // ① 帧：仅 `SENDMSG 5` 的一条 `SM_SYSMESSAGE`（`SETMPAMODE` 本身零帧）。
+        let frames = rig.drain();
+        let want = crate::smframe::sm_sysmessage(
+            hero,
+            0xFF,
+            0x38,
+            &mir2_script::cp936::encode_gb2312_dotnet("中毒了"),
+        );
+        assert_eq!(
+            frames,
+            vec![want],
+            "SENDMSG 5 的红字必须逐字节 = SM_SYSMESSAGE(Recog=ActorId, Param=0x38FF, Series=1)"
+        );
+
+        // ② 落库：`flush_map_mode_writes` 把脚本队列写进注册表（= oracle 的 Envir.Flag）。
+        let (mut registry, _dir) = pl3_registry("");
+        let applied = flush_map_mode_writes(&mut rig.shop_sessions, Some(&mut registry));
+        assert_eq!(applied, 1, "一条 SETMPAMODE 写必须落库");
+        let flag = registry.flag_of(0).expect("图 A = id 0");
+        assert!(
+            flag.bo_dechp,
+            "DECHP 两参数都非空 ⇒ boDECHP = true（:4587）"
+        );
+        assert_eq!(
+            flag.n_dechptime, 1,
+            "nDECHPTIME = StrToInt(sParam3)（:4588）"
+        );
+        assert_eq!(
+            flag.n_dechppoint, 10,
+            "nDECHPPOINT = StrToInt(sParam4)（:4589）"
+        );
+
+        // ③ 消费：P25 在 `now - DecHpTick > nDECHPTIME*1000` 时扣血并出 53。
+        let mut run_frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut rig.world,
+            &mut rig.sessions,
+            &rig.online,
+            Some(&registry),
+            1001,
+            &mut run_frames,
+        );
+        assert_eq!(
+            rig.world.entities.get(hero).unwrap().hp,
+            90,
+            "HP -= nDECHPPOINT（:572-574）"
+        );
+        assert_eq!(rig.sessions["hero"].state.wabil.hp, 90, "53 投影同步");
     }
 
     /// `take`/`give` 的 **`nParam2`** 口径（`ScriptParsers.cs:554`：动作的件数在 **sParam2** ⇒
@@ -24929,6 +25839,8 @@ mod tests {
             auto_get_exp_envir: None,
             auto_get_exp_envir_map_id: None,
             auto_get_exp_in_safe_zone: false,
+            off_line_flag: false,
+            kick_off_line_tick: 0,
             guild: guild_cmd::GuildSession::default(),
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
@@ -27116,6 +28028,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27324,6 +28238,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27501,6 +28417,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27656,6 +28574,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27828,6 +28748,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -29898,6 +30820,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -30241,6 +31165,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -31473,6 +32399,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -35449,6 +36377,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -35632,6 +36562,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -35777,6 +36709,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -37274,6 +38208,7 @@ mod tests {
             &mut sessions,
             &gates,
             None,
+            None,
             &mut pwd_sessions,
             &cfg,
             &displays,
@@ -37318,6 +38253,7 @@ mod tests {
             &mut world,
             &mut sessions,
             &gates,
+            None,
             None,
             &mut pwd_sessions,
             &cfg,
@@ -38501,6 +39437,171 @@ mod tests {
         );
     }
 
+    /// **`CM_WANTMINIMAP(1033)` 生产入口端到端**（卡 `openmir2-minimap-consumer-wire`，tier=L）：
+    /// 会话当前 `map_id` → `MapRegistry::name_of` → `MiniMapRegistry::get` = oracle
+    /// `Envirnoment.MinMap`（`MapManager.cs:92-95`）→ `ClientGetMinMap`
+    /// （`PlayObject.Operate.cs:1204-1214`）⇒ `SM_READMINIMAP_OK(710, recog 0, param MinMap, 0, 0)`。
+    ///
+    /// 逐字节断言 12B 命令头（无尾）：`Recog=0, Ident=710(0x02C6), Param=7, Tag=0, Series=0`。
+    /// 第二支（注册表里没有该图）⇒ `SM_READMINIMAP_FAIL(711, 0, 0, 0, 0)`。
+    ///
+    /// **牙**：删掉 `handle_inbound_cmd` 的 `CM_WANTMINIMAP` 臂 ⇒ 一支帧都没有 ⇒ 本例必红；
+    /// 把 `session_min_map` 写死 0（旧接线）⇒ 第一支出 711 ⇒ 本例必红。
+    #[test]
+    fn cm_wantminimap_emits_ok_with_session_map_minmap() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // ① Envir 注册表：`MapInfo.txt` 逻辑名 `map` ↔ `0.map`（20×20 全 0 格）⇒ map_id 0。
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "gs-minimap-want-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        let (w, h) = (20_i16, 20_i16);
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&w.to_le_bytes());
+        bytes[2..4].copy_from_slice(&h.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES
+                + usize::try_from(w).unwrap()
+                    * usize::try_from(h).unwrap()
+                    * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let registry = mir2_envir::MapRegistry::from_entries(
+            mir2_envir::MapLoader::new(base.clone(), "Map", "Envir"),
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "map".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        assert_eq!(registry.name_of(0), Some("map"));
+
+        // ② `MiniMap.txt`：`map 7` ⇒ `MiniMapList["map"] = 7`。
+        let (minimap, dups) = mir2_envir::load_minimap("map 7\n");
+        assert!(dups.is_empty());
+        assert_eq!(minimap.get("map"), Some(7));
+
+        // ③ 世界：hero 进 0 号图（map_id 0）。
+        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 5, 5), 0)
+            .unwrap();
+        assert_eq!(world.session("hero").unwrap().map_id, 0);
+
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".into(),
+            chr_name: "hero".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: hero,
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        let displays = downlink::DisplayTable::new();
+        let cmd = CommandMessage {
+            recog: 0,
+            ident: messages::CM_WANTMINIMAP,
+            param: 0,
+            tag: 0,
+            series: 0,
+        };
+
+        // ① OK 支：`Envir.MinMap = 7 > 0` ⇒ SM_READMINIMAP_OK(710), Param = 7。
+        handle_inbound_cmd(
+            &cmd,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            Some(&registry),
+            Some(&minimap),
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "收 1033 ⇒ 恰好一帧 SM_READMINIMAP_*");
+        assert_eq!(
+            frames[0],
+            vec![0, 0, 0, 0, 0xC6, 0x02, 0x07, 0x00, 0, 0, 0, 0],
+            "SM_READMINIMAP_OK：Recog=0, Ident=710, Param=MinMap=7, Tag=0, Series=0"
+        );
+
+        // ② FAIL 支：同一会话，但 `MiniMap.txt` 里没有该图名 ⇒ `Envir.MinMap` 保持初值 0。
+        let (other_minimap, _) = mir2_envir::load_minimap("somewhere 9\n");
+        handle_inbound_cmd(
+            &cmd,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            Some(&registry),
+            Some(&other_minimap),
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            frames[0],
+            vec![0, 0, 0, 0, 0xC7, 0x02, 0, 0, 0, 0, 0, 0],
+            "SM_READMINIMAP_FAIL(711, 0, 0, 0, 0)"
+        );
+
+        // ③ 无 `MiniMap.txt`（注册表 None）⇒ 同上 FAIL 支。
+        handle_inbound_cmd(
+            &cmd,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            Some(&registry),
+            None,
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(u16::from_le_bytes([frames[0][4], frames[0][5]]), 711);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// **接线批 A 端到端（SM_PASSWORD）**：`CM_PASSWORD` 命中 `ProcessClientPassword` 的重设支
     /// （`IsSetStoragePwd=true` + 4-7 位密码）⇒ 出 `SM_PASSWORD(5009)`，且状态迁到 `IsReConfigPwd`。
     ///
@@ -38563,6 +39664,7 @@ mod tests {
             &mut world,
             &mut sessions,
             &gates,
+            None,
             None,
             &mut pwd_sessions,
             &cfg,
@@ -38646,6 +39748,7 @@ mod tests {
             &mut world,
             &mut sessions,
             &gates,
+            None,
             None,
             &mut pwd_sessions,
             &cfg,
@@ -54274,6 +55377,7 @@ mod tests {",
                 sell_off: &mut self.sell_off,
                 chr_name: "hero",
                 map_text: "0",
+                now_tick,
             };
             guild_official::handle_select(
                 self.npc_id,
@@ -56090,5 +57194,29 @@ mod castle_shift_order_tests {
             5,
             "第 13 抽 = R6[12] = 5（恰 12 抽）"
         );
+    }
+}
+
+#[cfg(test)]
+mod serverinfo_gate_tests {
+    use super::startup_online_hum_gate;
+
+    /// **T-6**：上报门基准必须是**注入之后**的世界时钟（`SystemProcessor.cs:22-27` 的
+    /// `SendOnlineHumTime = GetTickCount()`）。基准若写成 0，注入量级（epoch）下首个 tick 就
+    /// `clock_ms - 0 > 10000` ⇒ 连上后立刻多发一帧。
+    ///
+    /// 牙：`startup_online_hum_gate` 改成 `OnlineHumGate::new(0)` ⇒ 本用例必红。
+    #[test]
+    fn startup_online_hum_gate_uses_injected_world_clock() {
+        let origin = 1_700_000_000_000i64; // `MIR2_CLOCK_MS` 注入后的起点量级
+        let mut gate = startup_online_hum_gate(origin);
+        assert_eq!(
+            gate.baseline(),
+            origin,
+            "基准 = 注入后的 world.clock_ms（不是 0）"
+        );
+        assert!(!gate.tick(origin), "注入量级下不得提前首发");
+        assert!(!gate.tick(origin + 10_000), "严格 >：正好 10000ms 不发");
+        assert!(gate.tick(origin + 10_001), "超过 10000ms 发一次");
     }
 }

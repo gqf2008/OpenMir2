@@ -17,6 +17,9 @@ use mir2_protocol::internal::{ServerDataMessage, ServerDataType};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+// 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
+mod support;
+
 /// 起一个"假 LoginSrv"：接受一条连接，把收到的第一条 Data 帧原样回给同一 SocketId。
 /// 返回 (端口, 收到的帧 Vec)。
 async fn fake_login_srv() -> (u16, tokio::task::JoinHandle<Vec<ServerDataMessage>>) {
@@ -79,11 +82,6 @@ async fn fake_srv_accept_enter_then_close() -> u16 {
     port
 }
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 /// 写一份指向 (srv=假 LoginSrv, gate=指定端口) 的 config.conf，返回目录。
 fn write_conf(gate_port: u16, srv_port: u16) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lg-relay-{}-{}", std::process::id(), gate_port));
@@ -101,16 +99,16 @@ fn write_conf(gate_port: u16, srv_port: u16) -> std::path::PathBuf {
 #[tokio::test]
 async fn relays_frames_and_swallows_heartbeat() {
     let (srv_port, srv_task) = fake_login_srv().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf(gate_port, srv_port);
     let conf = dir.join("config.conf");
 
     // 起网关（本测试编译出的二进制）
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-gate"))
-        .arg(&conf)
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+    let log = dir.join("gate.log");
+    let mut child = spawn_gate_logged(&conf, &log);
+    // 就绪门（fail-closed）：网关 bind 成功（`登录网关[...]已启动...`）才发流量；
+    // 未起来 ⇒ panic 并带网关全文日志（不再「先 connect 再赌」）。
+    wait_gate_listening(&log, gate_port).await;
 
     // 等端口就绪（不 sleep 猜，直接轮询连得上）
     let mut client = None;
@@ -239,15 +237,15 @@ async fn connect_retry(gate_port: u16) -> TcpStream {
 #[tokio::test]
 async fn idle_session_times_out_with_oracle_frame_then_close() {
     let (srv_port, srv_task) = fake_login_srv().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
     let conf = dir.join("config.conf");
 
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-gate"))
-        .arg(&conf)
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+    let log = dir.join("gate.log");
+    let mut child = spawn_gate_logged(&conf, &log);
+    // 就绪门（fail-closed）：网关 bind 成功（`登录网关[...]已启动...`）才发流量；
+    // 未起来 ⇒ panic 并带网关全文日志（不再「先 connect 再赌」）。
+    wait_gate_listening(&log, gate_port).await;
 
     let t0 = tokio::time::Instant::now();
     let mut client = connect_retry(gate_port).await;
@@ -312,15 +310,15 @@ async fn idle_session_times_out_with_oracle_frame_then_close() {
 #[tokio::test]
 async fn downstream_disconnect_suppresses_idle_timeout_frame() {
     let srv_port = fake_srv_accept_enter_then_close().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
     let conf = dir.join("config.conf");
 
-    let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-gate"))
-        .arg(&conf)
-        .kill_on_drop(true)
-        .spawn()
-        .unwrap();
+    let log = dir.join("gate.log");
+    let mut child = spawn_gate_logged(&conf, &log);
+    // 就绪门（fail-closed）：网关 bind 成功（`登录网关[...]已启动...`）才发流量；
+    // 未起来 ⇒ panic 并带网关全文日志（不再「先 connect 再赌」）。
+    wait_gate_listening(&log, gate_port).await;
 
     let t0 = tokio::time::Instant::now();
     let mut client = connect_retry(gate_port).await;
@@ -362,6 +360,12 @@ fn spawn_gate_logged(conf: &std::path::Path, log: &std::path::Path) -> tokio::pr
         .unwrap()
 }
 
+/// 就绪门（fail-closed）：等网关日志出现 `登录网关[...:{gate_port}]已启动...`
+/// —— 该行在 `TcpListener::bind` 成功之后才打印；没等到 ⇒ panic 并带全文日志。
+async fn wait_gate_listening(log: &std::path::Path, gate_port: u16) {
+    support::gate_ready(log, gate_port, Duration::from_secs(15)).await;
+}
+
 /// 轮询日志文件直到出现 `needle`（不 sleep 猜固定时长）。
 async fn wait_for_log(path: &std::path::Path, needle: &str, within: Duration) -> String {
     let deadline = tokio::time::Instant::now() + within;
@@ -391,12 +395,13 @@ async fn wait_for_log(path: &std::path::Path, needle: &str, within: Duration) ->
 #[tokio::test]
 async fn new_client_after_downstream_death_is_not_admitted() {
     let srv_port = fake_srv_close_immediately().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf(gate_port, srv_port);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
 
     let mut child = spawn_gate_logged(&conf, &log);
+    wait_gate_listening(&log, gate_port).await;
     // 该日志在 `DownstreamAlive=false` **之后**打 ⇒ 看到它就代表后续连接必走未就绪分支。
     wait_for_log(
         &log,

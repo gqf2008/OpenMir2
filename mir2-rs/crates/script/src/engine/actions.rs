@@ -614,6 +614,21 @@ impl Engine<'_, '_> {
                     n_point,
                 );
             }
+            "ActionOfSetMapMode" => {
+                // `ExecutionProcessingSys.cs:4423-4435`：`FindMap(sParam1)` 落空或 `sParam2` 空
+                // ⇒ `ScriptActionError`（本支不写任何 Flag）；否则按 `sMapMode` 分支写
+                // `envir.Flag.*`（十馀支，如 `DECHP` 需 `sParam3`/`sParam4` 都非空才置
+                // `boDECHP/nDECHPTIME/nDECHPPOINT`，否则 `boDECHP = false`）。
+                let s_map = info.s_param1.clone();
+                let s_mode = info.s_param2.clone();
+                if !self.player.map_exists(&s_map) || s_mode.is_empty() {
+                    self.script_action_error("SetMapMode", info);
+                    return;
+                }
+                let p1 = info.s_param3.clone();
+                let p2 = info.s_param4.clone();
+                self.player.set_map_mode(&s_map, &s_mode, &p1, &p2);
+            }
             "ActionOfOffLine" => {
                 let n_time = mir2_shared::hutil32::str_to_int(&info.s_param1, 5);
                 let n_point = mir2_shared::hutil32::str_to_int(&info.s_param2, 500);

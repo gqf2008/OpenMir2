@@ -40,12 +40,10 @@ use sqlx::MySqlPool;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
-const ACCOUNT: &str = "mir2test6k";
+// 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
+mod support;
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("取空闲端口失败");
-    l.local_addr().expect("取本地地址失败").port()
-}
+const ACCOUNT: &str = "mir2test6k";
 
 fn scratch_db() -> String {
     format!("mir2_dbsrv6k_mktlive_{}", std::process::id())
@@ -153,16 +151,6 @@ async fn fake_login_srv() -> (u16, Arc<AtomicBool>) {
         }
     });
     (port, accepted)
-}
-
-async fn wait_listen(port: u16) {
-    for _ in 0..120 {
-        if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
-            return;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    panic!("等端口 {port} 监听超时");
 }
 
 async fn wait_session_link(flag: &AtomicBool) {
@@ -368,13 +356,19 @@ async fn rust_dbsrv_5700_market_faces_csharp_behaviour() {
 
     let dir = fixture_dir("market");
     let (ids_port, accepted) = fake_login_srv().await;
-    let server_port = free_port();
-    let market_port = free_port();
-    let gate_port = free_port();
+    let server_port = support::next_port();
+    let market_port = support::next_port();
+    let gate_port = support::next_port();
     write_conf(&dir, gate_port, server_port, ids_port, market_port, &db);
 
     let dbsrv = start_rust_dbsrv(&dir);
-    wait_listen(market_port).await;
+    // 就绪门（fail-closed）：5700 面 bind 成功才继续；未起来 ⇒ panic 并带全文日志。
+    support::gate_ready(
+        &dir.join("dbsrv.out.log"),
+        market_port,
+        Duration::from_secs(15),
+    )
+    .await;
     wait_session_link(&accepted).await;
 
     let mut sock = TcpStream::connect(("127.0.0.1", market_port))

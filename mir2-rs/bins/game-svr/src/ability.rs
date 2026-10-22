@@ -269,12 +269,6 @@ impl StdItemCatalog {
         self.item_names = names;
     }
 
-    /// 当前自定义名片表（空 = 未装载）。
-    #[must_use]
-    pub fn item_names(&self) -> &[mir2_data::lists::ItemName] {
-        &self.item_names
-    }
-
     /// `GameItemSystem.CopyToUserItemFromName` 的名字查找（`src/M2Server/Items/GameItemSystem.cs:113-140`）：
     /// 在 `StdItemList` 里取**首个** `Name` 相等（`OrdinalIgnoreCase`）的模板，返回其 `Index`（1-based）。
     ///

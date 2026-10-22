@@ -173,6 +173,35 @@ pub fn client_get_min_map(min_map: i16) -> DefFrame {
     }
 }
 
+/// `Envirnoment.MinMap` 的等价取值（`ClientGetMinMap` 的输入）。
+///
+/// oracle：`Envirnoment.MinMap` 是**地图字段**，在地图创建时由
+/// `MapManager.cs:92-95`（= `GameSrv/Maps/MapManager.cs`）写入：
+/// `if (M2Share.MiniMapList.TryGetValue(envirnoment.MapName, out short minMap)) envirnoment.MinMap = minMap;`
+/// 初值 0（`Envirnoment.cs:60`）。
+///
+/// 本仓没有 `Envirnoment` 结构 ⇒ 读时等价还原同一条链：
+/// 会话当前 `map_id`（`World` 会话）→ `MapRegistry::name_of`（= `MapManager.cs:84` 的 `MapName`）
+/// → `MiniMapRegistry::get`（`MiniMapList.TryGetValue`，OrdinalIgnoreCase）。
+///
+/// 任一环缺失（无会话 / 无 Envir 注册表 / 地图名不在 `MiniMap.txt`）⇒ `0`
+///（= oracle 字段初值，`Envirnoment.cs:60`；`ClientGetMinMap` 据此走 FAIL 支）。
+#[must_use]
+pub fn session_min_map(
+    world: &mir2_world::World,
+    chr_name: &str,
+    registry: Option<&mir2_envir::MapRegistry>,
+    minimap: Option<&mir2_envir::minimap::MiniMapRegistry>,
+) -> i16 {
+    let Some(map_name) = world
+        .session(chr_name)
+        .and_then(|s| registry.and_then(|r| r.name_of(s.map_id)))
+    else {
+        return 0;
+    };
+    minimap.and_then(|m| m.get(map_name)).unwrap_or(0)
+}
+
 // ─────────────────────────── CM_OPENDOOR(1002) ───────────────────────────
 
 /// `ClientOpenDoor`（`PlayObject.Operate.cs:363-374`）的决策结果。
@@ -551,6 +580,7 @@ pub fn client_butch(i: &ButchInputs) -> ButchOutcome {
 /// 3. `MakeMessage`（`Messages.cs:846`）形参序 `(msg, recog, param, tag, series)`
 ///    ⇒ **`recog=ActorId, param=CurrX, tag=CurrY, series=Dir`**。
 #[must_use]
+#[cfg(test)]
 pub fn sm_butch(actor_id: i32, dir: i32, curr_x: i32, curr_y: i32) -> Option<DefFrame> {
     if actor_id != 0 {
         Some(DefFrame {
@@ -593,6 +623,7 @@ pub enum MakeDrugOutcome {
 
 /// `CM_USERMAKEDRUGITEM(1034)`：`PlayObject.Message.cs:972-974` → `ClientMakeDrugItem(nParam1, Msg)`。
 #[must_use]
+#[cfg(test)]
 pub fn client_make_drug_item(i: &MakeDrugInputs) -> MakeDrugOutcome {
     if !i.merchant_found || !i.merchant_is_make_drug {
         return MakeDrugOutcome::NoMerchant;

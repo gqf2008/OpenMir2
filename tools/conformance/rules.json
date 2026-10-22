@@ -33,10 +33,25 @@
   ],
   "rules": [
     {
-      "ident": [10, 41],
+      "ident": 10,
       "action": "compare",
-      "reason": "10=SM_TURN、41=SM_FEATURECHANGED 是真实协议帧（Messages.cs:161/202；downlink.rs 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」且有逐字节黄金断言），默认必须逐字节比较，不得当心跳剔除。确需忽略时只能用显式 --ignore-idents（CLI 会登记为 cli_ignore）",
+      "head_mask": ["series"],
+      "reason": "SM_TURN 是真实协议帧（Messages.cs:161），body/param/tag 仍逐字节比；掩的是 **整个 series word = MakeWord(Dir, Light)**（低字节 Dir、高字节 Light），不是只掩 Dir；且对**所有 actor**（自己/怪物/NPC）的 SM_TURN 一律生效——这是本规则的已知代价（reviewer-2 F3）。依据：2026-10-23 双栈窗口（docs/window-529-dualrun-20261023.md）两侧同一条固定商人的出现帧（param=8 tag=10 body 逐字节相同）series 为 518(0x0206)/516(0x0204) —— Light 相同(2)、Dir 6 vs 4。原因是 oracle 固定 NPC 的 Dir 只会被 `GuildOfficial.Run`(1/40)/`Merchant.Run`(1/50) 的 `TurnTo(RandomByte(8))` 改写（GuildOfficial.cs:41-49 / Merchant.cs:132-141），而 oracle 的随机源是 `new Random()` 墙钟播种（src/OpenMir2/RandomNumber.cs:35），跨进程不可复现；Rust 侧 `MIR2_RNG_SEED=42` 注入也换不回同一流位置（两侧在客户端登录前的 tick 数不同）。series 的**公式**（MakeWord(Dir,Light)）与字节形态已由 downlink 金标准用例钉死（turn_pair_rebuilds_golden_sm_turn_and_featurechanged / npc_turn_pair_nameless_matches_capture_series）。**覆盖缺口要说清（reviewer-2 F7 订正）**：玩家「原地转身」这一条的 Dir 因本掩码**不再有任何帧级判据**——`SM_WALK(11)`/`SM_RUN(13)`（注意 12 是 `SM_SITDOWN`，`Messages.cs:166-167`）在规则表里**尚未登记**，一旦出现会判 UNCLASSIFIED(rc 2)，所以「走位方向由它们兜」在当前规则集下**不成立**；真要做这个兜底，必须先给 11/13 登记 `action=compare` 的规则（另开卡）。当前该字段只有 downlink 金标准用例（编码形态）与场景级用例覆盖。怪物的 SM_TURN Dir 同样被掩。接受这个代价的前提是：本场景里触发它的只有固定 NPC 的随机支。不得用本掩码去掉整帧或掩 body",
+      "tier": "R",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 41,
+      "action": "compare",
+      "reason": "41=SM_FEATURECHANGED 是真实协议帧（Messages.cs:202；downlink.rs 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」且有逐字节黄金断言），默认必须逐字节比较，不得当心跳剔除。确需忽略时只能用显式 --ignore-idents（CLI 会登记为 cli_ignore）",
       "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 14,
+      "action": "ignore",
+      "reason": "SM_HIT：固定 NPC / 商人的受击帧。**两个发点，性质不同**：① 随机支——`GuildOfficial.Run` 的 `Random(30)==0`（src/GameSrv/Npc/GuildOfficial.cs:47 → :49）、`Merchant.Run` 的第二个 `Random(50)==0`（Merchant.cs:138 → :140），oracle 随机源是墙钟播种的 `new Random()`（src/OpenMir2/RandomNumber.cs:35）⇒ **跨进程不可复现**；② **确定性支**——城堡商人 `FixedHideMode` 解除时补发一条（Merchant.cs:152-157，`SendRefMsg(RM_HIT,…)` 在 :156），这一条**不由本规则覆盖、也未被任何帧级判据覆盖**（reviewer-2 F2），须由「城堡商人在战中/战后切换」的场景或构造级用例单独判（已开卡追踪）。**本规则的边界**：`ignore` 在按序对齐前整帧剔除 ⇒ 形态（Recog/Param/Tag/Series）与收件人集合**不由本规则比较**，它们只由单元用例钉死（downlink::hit_frame 黄金用例 npc_hit_frame_is_sm_hit_with_dir_series_and_no_tail + T-154 F1 的 npc_hit_frames_only_for_world_branch_and_never_to_npc）；若 Rust 从确定性路径多发了 14，本规则会把它一并剔掉——这是已知残余风险，缓解手段是上面那条构造级覆盖 + PENDING 状态下的 UNDECIDABLE 兜底（真正剔帧时 compare_runs.py 判不可判）。原始现象：2026-10-23 双栈窗口里 Rust（seed=42）在登录后 0.8s 发了一条 recog=被观察商人、Series=Dir 的 14，oracle 同场景 0 条（两侧 rest 帧逐字节相同）。",
+      "tier": "R",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
@@ -143,10 +158,11 @@
     },
     {
       "ident": 100,
-      "action": "compare",
-      "reason": "SM_SYSMESSAGE 系统提示：body 是 GBK 文本。首跑 4 条实测（docs/conformance-first-dual-run-20261023.md §2.2）=「欢迎进入记忆传奇…www.aresm2.com」「禁止使用任何外挂…」「唯一客服QQ：79311185…」「[攻击模式: 全体攻击]」，均为静态文案，不含墙钟/时间戳 ⇒ body 逐字节比、param(65499)/series(1) 照常比。若后续场景的文案出现墙钟/时间戳，只按字段登记窄掩码（mask_body_ranges 或 head_mask=head 字段），不得整帧 ignore",
+      "action": "multiset_by_tick",
+      "tick_tolerance_ms": 0,
+      "reason": "SM_SYSMESSAGE 系统提示：body 是 GBK 静态文案。首跑 4 条实测（docs/conformance-first-dual-run-20261023.md §2.2）=「欢迎进入记忆传奇…www.aresm2.com」「禁止使用任何外挂…」「唯一客服QQ：79311185…」「[攻击模式: 全体攻击]」，均不含墙钟/时间戳。**为什么这条按多重集、且只给它**：这些提示是登录流程里同一 tick 的多次 `SysMsg(...)` 依次投递的（src/M2Server/Player/PlayObject.cs:1347-1372 的攻击模式提示 / StartChangeAttackModeHelp(:1369) / StartNoticeMsg(:1372)；统一经 src/M2Server/Actor/BaseObject.cs:1588 SysMsg → SendMsg(RM_SYSMESSAGE) 入队），而 actor 发件队列是 `System.Collections.Generic.PriorityQueue<SendMessage, byte>`，入队优先级就是 `(byte)wIdent`（src/M2Server/Actor/BaseObject.Message.cs:94 `MsgQueue.Enqueue(sendMessage, (byte)wIdent)`；RM_SYSMESSAGE=100 见 src/OpenMir2/Messages.cs:215）。.NET 的 PriorityQueue **不保证同优先级元素的出队顺序**（equal-priority dequeue order is undefined）⇒ 同一 tick 内多条 100 的线缆先后顺序跨进程不确定（实测：同一 C# 栈同场景复跑 3 次出现 2 种顺序，body 多重集 6/6 相同；Rust 侧 6/6 稳定）。这些提示彼此**无因果序**：客户端只是依次显示，后一条不依赖前一条。**不得扩散**：10/41/14 是真实协议帧（10+41 是「转身+外观变化」的一组两帧、14 是受击帧），帧序本身有因果/配对含义，必须逐帧比。**本机制的边界**：只放松「同一 ident、且在两侧帧流里都**连续**的一段」（块 = 同 ident 连续段；被别的 ident 隔开的段**绝不跨段合并**，保证与 10/41/14 等的因果序不被抹掉）内的先后顺序；帧**不剔除**，仍按 (param,tag,series,body_hex,phase) 多重集逐项比——集合不同即 rc 1 并给出缺失/多余的具体帧；顺序不同但集合相同 ⇒ rc 0 且报告登记 masked_order（不是静默 PASS）。**t_ms 只作证据、不作判定边界**：它是全局掩码的墙钟字段（不是协议内容），同一批提示在两侧可能差 1ms；若按 t_ms 相等硬切块，会把「两侧帧集完全相同」误判成缺帧（reviewer-2 I-3）。因此 tick_tolerance_ms 只用于在 masked_order 里标注两侧 tick 窗口（oracle_windows/rust_windows + tick_split）；缺 t_ms 则直接判不了（rc 2）。若后续场景的文案出现墙钟/时间戳，仍按字段登记窄掩码（mask_body_ranges 或 head_mask），不得整帧 ignore。",
       "tier": "L",
-      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-26)"
     },
     {
       "ident": 520,
@@ -172,8 +188,9 @@
     },
     {
       "ident": 530,
-      "action": "compare",
-      "reason": "SM_SELECTSERVER_OK：body = SelGate 的 `ip/port/session` 文本（首跑两侧都是 `127.0.0.1/17100/2`，逐字节相同 ⇒ 地址/端口必须比、不做掩码）；recog = 剩余游戏时间秒数或 SessionID（C# src/LoginSrv/Services/ClientSession.cs:516/520），跨运行/跨会话必然不同 ⇒ 只靠全局 recog 掩码；param/tag/series 照常比",
+      "action": "mask_body_ranges",
+      "ranges": [[20, null]],
+      "reason": "SM_SELECTSERVER_OK：body = `SelGateIp/SelGatePort/SessionID` 文本，线上是 **EDCode 编码后的线缆字节**（C# src/LoginSrv/Services/ClientSession.cs:520 `EDCode.EncodeString(sSelGateIp + \"/\" + nSelGatePort + \"/\" + userInfo.SessionID)`）。**区间掩码的偏移是线缆空间，不是明文空间**——明文 `127.0.0.1/17100/N`（17B）编码成 23B，映射实测为 `明文[i] → 线缆[4*(i//3) + i%3]`：明文 9(`/`)→12、10..14(端口 `17100`)→13/14/16/17/18、15(`/`)→20、16(SessionID)→21。⇒ 只掩 **线缆 [20, null)**，它恰好是明文的「最后一个 `/` + SessionID」（+ 尾组余字节），ip 与端口的每个数字仍逐字节比。**历史坑（reviewer-2 F1）**：本规则最初写 `[[16,null]]`（明文偏移直接套到线缆上）= 实际掩掉端口的后三位，17100→17200/17150/17101 全部假绿；selftest 当时用未编码 ASCII 夹具，所以没咬到——现已改成用 EDCode 真编码的夹具，并加了「端口任一位改动必红」的牙。区间掩码只在两侧 body 等长时生效，长度一变即退回整段逐字节 diff。recog 另走全局掩码（pay mode>0 时是剩余秒数、否则 SessionID，ClientSession.cs:514/518）；param/tag/series 照常比",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },

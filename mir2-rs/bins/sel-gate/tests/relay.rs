@@ -18,6 +18,9 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::oneshot;
 
+// 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
+mod support;
+
 /// 起一个"假 DBSrv"：接受一条连接，把收到的第一条 Data 帧原样回给同一 SocketId。
 /// 返回 (端口, 收到的帧 Vec)。
 async fn fake_login_srv() -> (
@@ -88,11 +91,6 @@ async fn fake_srv_accept_enter_then_close() -> (u16, oneshot::Receiver<()>) {
     (port, accepted_rx)
 }
 
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
-}
-
 /// 写一份指向 (srv=假 DBSrv, gate=指定端口) 的 config.conf，返回目录。
 fn write_conf(gate_port: u16, srv_port: u16) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lg-relay-{}-{}", std::process::id(), gate_port));
@@ -110,13 +108,13 @@ fn write_conf(gate_port: u16, srv_port: u16) -> std::path::PathBuf {
 #[tokio::test]
 async fn relays_frames_and_swallows_heartbeat() {
     let (srv_port, srv_task, _srv_accepted) = fake_login_srv().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf(gate_port, srv_port);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
 
     // 起网关并等下行链路安装完成（否则 Enter 可能被“未就绪”丢弃）。
-    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    let mut child = spawn_gate_ready(&conf, &log, gate_port, srv_port).await;
 
     // 等端口就绪（不 sleep 猜，直接轮询连得上）
     let mut client = None;
@@ -247,14 +245,14 @@ async fn connect_retry(gate_port: u16) -> TcpStream {
 #[tokio::test]
 async fn idle_timeout_sends_frame_but_keeps_socket_open() {
     let (srv_port, srv_task, _srv_accepted) = fake_login_srv().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
 
     // 先等下行链路安装完成：若客户端先接入，`RestSessionArray()` 会摘掉它的
     // `SocketId`（oracle 行为），本用例就永远等不到超时帧。
-    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    let mut child = spawn_gate_ready(&conf, &log, gate_port, srv_port).await;
     let t0 = tokio::time::Instant::now();
     let mut client = connect_retry(gate_port).await;
 
@@ -319,13 +317,13 @@ async fn idle_timeout_sends_frame_but_keeps_socket_open() {
 #[tokio::test]
 async fn downstream_disconnect_suppresses_idle_timeout_frame() {
     let (srv_port, _srv_accepted) = fake_srv_accept_enter_then_close().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
 
     // 先等下行链路**安装完成**再接入客户端（否则 Enter 未发出，假 DBSrv 不会断开）。
-    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    let mut child = spawn_gate_ready(&conf, &log, gate_port, srv_port).await;
     let t0 = tokio::time::Instant::now();
     let mut client = connect_retry(gate_port).await;
 
@@ -357,13 +355,13 @@ async fn downstream_reconnect_keeps_session_out_of_idle_timeout() {
     let (accepted2_tx, accepted2_rx) = oneshot::channel();
     let (srv_port, srv_task) =
         fake_srv_drop_then_echo(accepted1_tx, enter_sid_tx, accepted2_tx).await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf_with_timeout(gate_port, srv_port, 10_000);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
 
     // 先等下行链路安装完成，客户端才能建会话（否则命中「获取服务器实例失败。」分支）。
-    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    let mut child = spawn_gate_ready(&conf, &log, gate_port, srv_port).await;
     let mut client = connect_retry(gate_port).await;
 
     // 假 DBSrv 读到 Enter 后立即断开 ⇒ oracle `RestSessionArray` 把该会话踢出超时集合。
@@ -428,9 +426,13 @@ fn spawn_gate_logged(conf: &std::path::Path, log: &std::path::Path) -> tokio::pr
 async fn spawn_gate_ready(
     conf: &std::path::Path,
     log: &std::path::Path,
+    gate_port: u16,
     srv_port: u16,
 ) -> tokio::process::Child {
     let child = spawn_gate_logged(conf, log);
+    // 就绪门（fail-closed）：网关 bind 成功（`角色网关[...]已启动...`）才继续；
+    // 未起来 ⇒ panic 并带网关全文日志（不再「先 connect 再赌」）。
+    wait_gate_listening(log, gate_port).await;
     wait_for_log(
         log,
         &format!("数据库服务器[127.0.0.1:{srv_port}]链接成功."),
@@ -438,6 +440,12 @@ async fn spawn_gate_ready(
     )
     .await;
     child
+}
+
+/// 就绪门（fail-closed）：等网关日志出现 `角色网关[...:{gate_port}]已启动...`
+/// —— 该行在 `TcpListener::bind` 成功之后才打印；没等到 ⇒ panic 并带全文日志。
+async fn wait_gate_listening(log: &std::path::Path, gate_port: u16) {
+    support::gate_ready(log, gate_port, Duration::from_secs(15)).await;
 }
 
 /// 轮询日志文件直到出现 `needle`（不 sleep 猜固定时长）。
@@ -556,12 +564,12 @@ async fn reconnects_after_downstream_drop_and_keeps_sessions() {
     let (accepted2_tx, accepted2_rx) = oneshot::channel();
     let (srv_port, srv_task) =
         fake_srv_drop_then_echo(accepted1_tx, enter_sid_tx, accepted2_tx).await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf(gate_port, srv_port);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
     // 等下行链路安装完成再接入客户端（否则 Enter 会被“未就绪”丢弃，假 DBSrv 收不到）。
-    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    let mut child = spawn_gate_ready(&conf, &log, gate_port, srv_port).await;
     let mut client = connect_retry(gate_port).await;
     let enter_sid = tokio::time::timeout(Duration::from_secs(5), enter_sid_rx)
         .await
@@ -689,9 +697,9 @@ async fn reconnects_after_downstream_drop_and_keeps_sessions() {
 /// 牙：恢复启动 fail-loud（连接失败即 `?` 退出）⇒ 本用例红。
 #[tokio::test]
 async fn startup_without_dbsrv_retries_and_never_exits() {
-    let srv_port = free_port();
+    let srv_port = support::next_port();
     let gate_port = loop {
-        let candidate = free_port();
+        let candidate = support::next_port();
         if candidate != srv_port {
             break candidate;
         }
@@ -700,6 +708,7 @@ async fn startup_without_dbsrv_retries_and_never_exits() {
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
     let mut child = spawn_gate_logged(&conf, &log);
+    wait_gate_listening(&log, gate_port).await;
 
     // 首次连接失败只记错误、不退出（oracle `ClientThread.Start` 的 catch）。
     let text = wait_for_log(
@@ -775,12 +784,20 @@ async fn sends_keepalive_every_ten_seconds() {
         }
         times
     });
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf(gate_port, srv_port);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
     let mut child = spawn_gate_logged(&conf, &log);
-    accepted_rx.await.expect("下行连接未建立");
+    // 就绪门（fail-closed）：网关先 bind 成功，再等下行的 `accepted`（后者保留原有 10s 超时）。
+    wait_gate_listening(&log, gate_port).await;
+    // 显式超时：并发负载下 `free_port` 可能抢到刚被他人占用的端口 ⇒ gate 起不来，
+    // 无超时的 `accepted_rx.await` 会让整个门禁**永久挂起**（比 flake 更糟）。10s 足够
+    // 覆盖正常启动，超时即失败并给出可诊断信息。
+    tokio::time::timeout(Duration::from_secs(10), accepted_rx)
+        .await
+        .expect("下行连接未建立（10s 超时：free_port 抢端口或 gate 未启动）")
+        .expect("下行连接未建立");
 
     let times = tokio::time::timeout(Duration::from_secs(25), srv)
         .await
@@ -812,12 +829,12 @@ async fn sends_keepalive_every_ten_seconds() {
 #[tokio::test]
 async fn churn_never_hits_cap_and_sids_are_unique() {
     let (srv_port, srv_task, _accepted) = fake_login_srv().await;
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let dir = write_conf(gate_port, srv_port);
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
 
-    let mut child = spawn_gate_ready(&conf, &log, srv_port).await;
+    let mut child = spawn_gate_ready(&conf, &log, gate_port, srv_port).await;
     for round in 0..8u8 {
         let mut client = connect_retry(gate_port).await;
         let frame = format!("#1CHURN{round}!");

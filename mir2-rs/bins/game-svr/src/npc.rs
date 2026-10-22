@@ -67,6 +67,11 @@ pub fn merchant_say_gbk(chr_name: &str, msg: &str) -> Vec<u8> {
     encoding_rs::GBK.encode(&text).0.into_owned()
 }
 
+/// `MsgType.Cust`（`src/Modules/SystemModule/Enums/MsgType.cs`：`System,Notice,Hint,Say,Castle,Cust,...` ⇒ 5）。
+///
+/// 只用于 `BaseObject.SysMsg` 的 default 支判定（`BaseObject.cs:1670-1680`）。
+const MSG_TYPE_CUST: i32 = 5;
+
 /// 一条待下发的 `RM_MERCHANTSAY`（`ScriptEngine.cs:991/996` 的两个入队点）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SayMsg {
@@ -196,6 +201,47 @@ pub struct NpcVars {
     pub high_mc_info: Option<String>,
     pub high_sc_info: Option<String>,
     pub high_online_info: Option<String>,
+    /// `SystemShare.MapMgr` 已装载地图的逻辑名表（脚本 `SETMPAMODE` 的
+    /// `MapMgr.FindMap(sMapName) != null` 门；宿主从 [`mir2_envir::MapRegistry`] 灌入）。
+    /// 缺省空 ⇒ `map_exists` 恒 `false`（与「无注册表」同口径）。
+    pub map_names: Vec<String>,
+    /// `SystemShare.Config.{Red,Green,Blue}CustMsgF/BColor`（`BaseObject.SysMsg` 的
+    /// `SM_SYSMESSAGE` 色词；见 [`SysMsgCfg`]）。
+    pub sys_msg: SysMsgCfg,
+}
+
+/// `BaseObject.SysMsg`（`BaseObject.cs:1588-1686`，**非 `MsgType.Notice` 支**）用的色词。
+///
+/// oracle 取值源 = `SystemShare.Config`（`GameSvrConf.cs:1536-1548` 的 ctor 缺省；
+/// `ServerConf.cs:329-343` 的 `[Setup] *MsgFColor/BColor` 覆盖）。本仓由宿主按 `[Setup]`
+/// 灌入；缺省 = oracle 缺省。
+///
+/// **未建模**：`MsgType.Notice` 的 `[`/`<`/`{` 三支（`RM_MOVEMESSAGE`/`RM_SYSMESSAGE` 彩色公告 +
+/// `ShowPreFixMsg`/`LineNoticePreFix` 前缀）。脚本引擎（`ExecutionProcessingSys.cs` /
+/// `ConditionProcessingSys.cs`）**没有任何 `MsgType.Notice` 调用点**（grep 0 命中）⇒ 该支对脚本
+/// 不可达；宿主另有 `line_notice` 模块承载公告下行。`MsgType.Cust` 同样不在脚本调用面上
+/// （保留 [`SysMsgCfg::cust`] 只为逐支对齐）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SysMsgCfg {
+    /// `RedMsgFColor/RedMsgBColor`（oracle 缺省 `0xFF/0x38`）。
+    pub red: (u8, u8),
+    /// `GreenMsgFColor/GreenMsgBColor`（缺省 `0xDB/0xFF`）。
+    pub green: (u8, u8),
+    /// `BlueMsgFColor/BlueMsgBColor`（缺省 `0xFF/0xFC`）。
+    pub blue: (u8, u8),
+    /// `CustMsgFColor/CustMsgBColor`（缺省 `0xFC/0xFF`）。
+    pub cust: (u8, u8),
+}
+
+impl Default for SysMsgCfg {
+    fn default() -> Self {
+        Self {
+            red: (0xFF, 0x38),
+            green: (0xDB, 0xFF),
+            blue: (0xFF, 0xFC),
+            cust: (0xFC, 0xFF),
+        }
+    }
 }
 
 impl Default for NpcVars {
@@ -219,6 +265,8 @@ impl Default for NpcVars {
             high_mc_info: None,
             high_sc_info: None,
             high_online_info: None,
+            map_names: Vec::new(),
+            sys_msg: SysMsgCfg::default(),
         }
     }
 }
@@ -441,6 +489,7 @@ impl NpcHost {
     }
 
     /// `@StdModeFunc<N>`（`PlayObject.Base.cs:1075` 用 `SystemShare.FunctionNPC`，即 `QFunction`）。
+    #[cfg(test)]
     pub fn run_std_mode_func(
         &self,
         ani_count: i32,
@@ -611,6 +660,18 @@ pub struct NpcPlayer<'r> {
     pub auto_get_exp_envir: Option<String>,
     /// `PlayObject.AutoGetExpInSafeZone`（`PlayObject.cs:808`；ctor false）。
     pub auto_get_exp_in_safe_zone: bool,
+    /// `PlayObject.OffLineFlag`（`PlayObject.cs:306`；**未初始化自动属性 ⇒ ctor 默认 false**）。
+    /// 脚本 `SETOFFLINE`（`ExecutionProcessingSys.cs:2727`）置 `true`。
+    pub off_line_flag: bool,
+    /// `PlayObject.KickOffLineTick`（`PlayObject.cs:302`；ctor 默认 0）。
+    /// `SETOFFLINE` 写 `GetTickCount() + nKickOffLine * 60 * 1000`（`ExecutionProcessingSys.cs:2728`）。
+    pub kick_off_line_tick: i32,
+    /// `HUtil32.GetTickCount()`（oracle `Environment.TickCount`，`int` 毫秒）的宿主注入值：
+    /// 脚本动作 `SETOFFLINE`（`ExecutionProcessingSys.cs:2728`）/ `TIMERECALL`（`:2138`）/
+    /// `DELAYCALL`（`:3754`）的时间基准，经 `ScriptPlayer::tick_count()` 读取。
+    /// 宿主构造快照时注入 `now_ms() as i32`（**与 P31 的 `host_now = now_ms()` 同域**；
+    /// 不是 `world.clock_ms`——后者未注入时钟时从 0 起）。缺省 0 = 未注入（用例可直接赋值）。
+    pub tick: i32,
     /// `PlayObject.BoIncGameGold`（`PlayObject.cs:772`；ctor false）：脚本 192
     /// `AUTOADDGAMEGOLD` 的 STOP 写点（START 在当前 oracle 源码下不可达，见 `actions.rs`）。
     /// 宿主 `SessionGround.p22` 是唯一真源：脚本跑前 seed、跑后写回。
@@ -651,6 +712,18 @@ pub struct NpcPlayer<'r> {
     /// [`crate::ground::drop_item_down_give`]——oracle 的掉落路径在本 oracle 树上恒失败
     /// （`T-19`），但计数与 RNG 抽数必须补齐。
     pub full_bag_drops: Vec<String>,
+    /// `SystemShare.MapMgr` 已装载地图的逻辑名表（`map_exists` = `FindMap(name) != null`）。
+    /// 宿主经 [`NpcVars::map_names`] 灌入；缺省空 ⇒ 恒 `false`（`SETMPAMODE` 因此走
+    /// `ScriptActionError` 支，与「注册表未装载」同口径）。
+    pub map_names: Vec<String>,
+    /// `SystemShare.Config.*MsgFColor/BColor`（`sys_msg` 的 `SM_SYSMESSAGE` 色词）。
+    pub sys_msg_cfg: SysMsgCfg,
+    /// `SETMPAMODE` 的待落写队列（[`crate::map_mode::MapModeWrite`]）。
+    ///
+    /// oracle 在 `ActionOfSetMapMode`（`ExecutionProcessingSys.cs:4423-4881`）里**当场**写
+    /// `envir.Flag`；脚本执行期 `NpcPlayer` 拿不到 `&mut MapRegistry` ⇒ 先记录，宿主在命令
+    /// 处理完之后、P25 消费点之前落库（等价性论证见 `map_mode` 模块头）。
+    pub map_mode_writes: Vec<crate::map_mode::MapModeWrite>,
 }
 
 impl NpcPlayer<'_> {
@@ -692,12 +765,18 @@ impl NpcPlayer<'_> {
             kill_mon_exp_rate_time: 0,
             power_rate: 100,
             power_rate_time: 0,
-            // P31：`PlayObject.cs:1009-1012` 的 ctor 初值（Tick 不在本适配器里建模，
-            // 宿主 `SessionGround` 持有；这里只有脚本可写的四个字段）。
+            // P31：`PlayObject.cs:1009-1012` 的 ctor 初值（`AutoGetExpTick` 由宿主
+            // `SessionGround` 持有；这里只有脚本可写的四个字段）。
             auto_get_exp_time: 0,
             auto_get_exp_point: 0,
             auto_get_exp_envir: None,
             auto_get_exp_in_safe_zone: false,
+            // `PlayObject.cs:302/306`：`KickOffLineTick` ctor 默认 0、`OffLineFlag` 是未初始化
+            // 自动属性（默认 false）——`SETOFFLINE` 之前两者都不该被写成别的值。
+            off_line_flag: false,
+            kick_off_line_tick: 0,
+            // `HUtil32.GetTickCount()` 由宿主注入（`ScriptPlayer::tick_count()`）；用例缺省 0。
+            tick: 0,
             // `PlayObject.cs:965/970` 的 ctor 初值。
             bo_inc_game_gold: false,
             bo_dec_game_gold: false,
@@ -709,6 +788,9 @@ impl NpcPlayer<'_> {
             use_items: vec![None; crate::ability::USE_ITEMS_LEN],
             catalog: None,
             full_bag_drops: Vec::new(),
+            map_names: Vec::new(),
+            sys_msg_cfg: SysMsgCfg::default(),
+            map_mode_writes: Vec::new(),
         }
     }
 }
@@ -1207,6 +1289,99 @@ impl ScriptPlayer for NpcPlayer<'_> {
         self.auto_get_exp_time = time_ms;
         self.auto_get_exp_point = point;
     }
+    fn set_offline(&mut self, envir_map: Option<&str>, time_ms: i32, point: i32, kick_tick: i32) {
+        // `ExecutionProcessingSys.cs:2723-2728`（`ActionOfOffLine`）：
+        // `AutoGetExpInSafeZone = true`（**恒 true，不看任何入参**）；
+        // `AutoGetExpEnvir = playerActor.Envir`（宿主传当前地图名）；
+        // `AutoGetExpTime = nTime * 1000` / `AutoGetExpPoint = nPoint`（调用点已乘）；
+        // `OffLineFlag = true`；`KickOffLineTick = GetTickCount() + nKickOffLine * 60 * 1000`
+        // （调用点已加）。写入次序与 oracle 一致（四个 AutoGetExp 字段在前，两个离线字段在后）。
+        self.auto_get_exp_in_safe_zone = true;
+        self.auto_get_exp_envir = envir_map.map(str::to_string);
+        self.auto_get_exp_time = time_ms;
+        self.auto_get_exp_point = point;
+        self.off_line_flag = true;
+        self.kick_off_line_tick = kick_tick;
+    }
+    /// `playerActor.Envir` 的地图名（`AutoGetExpEnvir` / `ISONMAP` 的取值源）。
+    ///
+    /// oracle 存的是 `IEnvirnoment` 引用：`ActionOfOffLine` 的
+    /// `playerActor.AutoGetExpEnvir = playerActor.Envir`（`ExecutionProcessingSys.cs:2724`）
+    /// 与 `ConditionOfIosnMap` 的 `playerActor.Envir == envir`（`ConditionProcessingSys.cs:1051`）
+    /// 读的都是**同一个**当前图引用。本适配器把引用压平成地图名
+    /// （`map_name` = 宿主 `SessionGround`/`World` 快照里的当前图，见 `npc_player_from*`）。
+    /// `None` = `Envir == null`（不在任何地图）。
+    fn envir_map_name(&self) -> Option<String> {
+        if self.map_name.is_empty() {
+            None
+        } else {
+            Some(self.map_name.clone())
+        }
+    }
+    /// `HUtil32.GetTickCount()`：宿主注入的 [`NpcPlayer::tick`]（毫秒，`int` 域）。
+    fn tick_count(&self) -> i32 {
+        self.tick
+    }
+    /// `SystemShare.MapMgr.FindMap(sMap) != null`（`ActionOfSetMapMode` 的第一道门，
+    /// `ExecutionProcessingSys.cs:4429-4434`）。oracle 的 `FindMap` 按 ASCII 大小写不敏感
+    /// （`MapRegistry::id_of` 的 `normalize_name` 同口径）。
+    fn map_exists(&self, map: &str) -> bool {
+        self.map_names.iter().any(|n| n.eq_ignore_ascii_case(map))
+    }
+
+    /// `ActionOfSetMapMode`（`ExecutionProcessingSys.cs:4423-4881`）的**记录侧**：
+    /// 只把四参数原样入队，分支表由宿主 [`crate::map_mode::apply_set_map_mode`] 落库
+    /// （脚本执行期拿不到 `&mut MapRegistry`；等价性见 `map_mode` 模块头）。
+    ///
+    /// 引擎已在调用本钩子前用 `map_exists` 过 `FindMap` 门与 `sMapMode` 非空门
+    /// （`actions.rs` 的 `"ActionOfSetMapMode"` 支）；本钩子不再重复判定。
+    fn set_map_mode(&mut self, map_name: &str, mode: &str, param1: &str, param2: &str) {
+        self.map_mode_writes.push(crate::map_mode::MapModeWrite {
+            map_name: map_name.to_string(),
+            mode: mode.to_string(),
+            param1: param1.to_string(),
+            param2: param2.to_string(),
+        });
+    }
+
+    /// `BaseObject.SysMsg(msg, color, msgType)`（`BaseObject.cs:1588-1686`）的
+    /// **非 `MsgType.Notice` 支**：
+    ///
+    /// ```text
+    /// switch (msgColor) {
+    ///   case Green: SendMsg(RM_SYSMESSAGE, 0, GreenMsgFColor, GreenMsgBColor, 0, sMsg);
+    ///   case Blue:  SendMsg(RM_SYSMESSAGE, 0, BlueMsgFColor,  BlueMsgBColor,  0, sMsg);
+    ///   default:    msgType == Cust
+    ///                 ? SendMsg(..., CustMsgFColor, CustMsgBColor, 0, sMsg)
+    ///                 : SendMsg(..., RedMsgFColor,  RedMsgBColor,  0, sMsg);
+    /// }
+    /// ```
+    ///
+    /// `msgType` **只**参与 `Cust` 判定（不是 `Cust` 时 Hint/Say/System 的帧完全相同）。
+    /// `Notice` 支（`[`/`<`/`{`）对脚本不可达（脚本引擎 0 处 `MsgType.Notice`），宿主公告
+    /// 下行另有 `line_notice` 模块——见 [`SysMsgCfg`] 的残余说明。
+    fn sys_msg(&mut self, msg: &str, color: i32, msg_type: i32) {
+        let (f, b) = match color {
+            mir2_script::engine::actions::MSG_COLOR_GREEN => self.sys_msg_cfg.green,
+            mir2_script::engine::actions::MSG_COLOR_BLUE => self.sys_msg_cfg.blue,
+            _ => {
+                if msg_type == MSG_TYPE_CUST {
+                    self.sys_msg_cfg.cust
+                } else {
+                    self.sys_msg_cfg.red
+                }
+            }
+        };
+        self.send_msg(
+            i32::from(mir2_protocol::messages::RM_SYSMESSAGE),
+            0,
+            i32::from(f),
+            i32::from(b),
+            0,
+            Some(msg),
+        );
+    }
+
     fn send_msg(
         &mut self,
         ident: i32,
@@ -1713,6 +1888,201 @@ mod tests {
                 p.auto_get_exp_point
             ),
             (false, Some("A".to_string()), 5_000, 20)
+        );
+    }
+
+    /// **A-10 / T-86**：`ScriptPlayer::set_offline`（oracle `ExecutionProcessingSys.cs:2723-2728`
+    /// 的 `ActionOfOffLine`）写 AutoGetExp 四字段 + `OffLineFlag` + `KickOffLineTick`；
+    /// `AutoGetExpInSafeZone` **恒 true**（oracle 硬写 true，不读入参）。
+    ///
+    /// 牙：删掉 `NpcPlayer` 的 `set_offline` 覆写（回落 trait 空默认）⇒ 本用例红。
+    #[test]
+    fn npc_player_set_offline_writes_six_fields() {
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        // ctor 缺省（`PlayObject.cs:302/306/1009-1012`）。
+        assert!(!p.off_line_flag);
+        assert_eq!(p.kick_off_line_tick, 0);
+        assert!(!p.auto_get_exp_in_safe_zone);
+        assert!(p.envir_map_name().is_none(), "未进图 ⇒ Envir == null");
+        assert_eq!(p.tick_count(), 0, "tick 未注入 ⇒ 0");
+        p.set_offline(Some("0"), 5_000, 500, 123_456);
+        assert_eq!(
+            (
+                p.auto_get_exp_in_safe_zone,
+                p.auto_get_exp_envir.clone(),
+                p.auto_get_exp_time,
+                p.auto_get_exp_point
+            ),
+            (true, Some("0".to_string()), 5_000, 500)
+        );
+        assert!(p.off_line_flag);
+        assert_eq!(p.kick_off_line_tick, 123_456);
+        // 再调一次：地图形参 `None` ⇒ `AutoGetExpEnvir = null`（oracle `Envir` 为空）。
+        p.set_offline(None, 1_000, 1, 0);
+        assert!(p.auto_get_exp_envir.is_none());
+        assert_eq!((p.auto_get_exp_time, p.auto_get_exp_point), (1_000, 1));
+        assert!(p.off_line_flag);
+        assert_eq!(p.kick_off_line_tick, 0);
+        // **I-1**：`envir_map_name()` = `playerActor.Envir`（引用压平成当前图名）。
+        p.map_name = "0103".to_string();
+        assert_eq!(p.envir_map_name().as_deref(), Some("0103"));
+        p.map_name.clear();
+        assert!(p.envir_map_name().is_none(), "Envir == null ⇒ None");
+        // **I-3**：`tick_count()` = `HUtil32.GetTickCount()`（宿主注入域）。
+        p.tick = 1_234_567;
+        assert_eq!(p.tick_count(), 1_234_567);
+    }
+
+    /// `SETOFFLINE 时间 点数 踢号分钟`（`n_cmd_code = 337` = `ExecutionCode.OffLine`；
+    /// `ScriptParsers.cs:554` 的三段参数落 `sParam1..3`）。
+    fn offline_act(p1: &str, p2: &str, p3: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 337,
+            s_param1: p1.into(),
+            s_param2: p2.into(),
+            s_param3: p3.into(),
+            ..Default::default()
+        }
+    }
+
+    /// **I-2 生产入口（脚本动作分派）**：`SETOFFLINE 2 300 10` 经
+    /// `MerchantScriptBook::goto_label` → `Engine` → `ActionOfOffLine`（`actions.rs`）→
+    /// `NpcPlayer::set_offline`，**六字段**逐项断言。
+    /// `envir` 来自 `envir_map_name()`（oracle `playerActor.Envir`，`:2724`），
+    /// `tick` 来自宿主注入的 `tick_count()`（oracle `HUtil32.GetTickCount()`，`:2728`）——
+    /// 即 I-1/I-3 的两处接缝本身，不是直接调 `set_offline`。
+    ///
+    /// 牙①：删 `NpcPlayer::set_offline` 覆写 ⇒ 六条断言全红（trait 空默认）。
+    /// 牙②：删 `envir_map_name()` 覆写 ⇒ `envir` 断言红（恒 `None`）。
+    /// 牙③：删 `tick_count()` 覆写 ⇒ `kick_off_line_tick` 断言红（基准退回 0）。
+    #[test]
+    fn action_offline_lands_six_fields_through_script_dispatch() {
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.map_name = "0103".to_string();
+        p.tick = 1_000;
+        let book = book_with_actions(
+            8,
+            "挂机商",
+            &[("@main", "开始挂机", vec![offline_act("2", "300", "10")])],
+        );
+        let says = book.goto_label(8, &mut p, "@main", false);
+        assert!(says.is_some(), "商人脚本已装载");
+        assert!(p.auto_get_exp_in_safe_zone, "InSafeZone = true（:2723）");
+        assert_eq!(
+            p.auto_get_exp_envir.as_deref(),
+            Some("0103"),
+            "Envir = playerActor.Envir（:2724）"
+        );
+        assert_eq!(p.auto_get_exp_time, 2_000, "nTime * 1000（:2725）");
+        assert_eq!(p.auto_get_exp_point, 300, "nPoint（:2726）");
+        assert!(p.off_line_flag, "OffLineFlag = true（:2727）");
+        assert_eq!(
+            p.kick_off_line_tick,
+            1_000 + 10 * 60_000,
+            "GetTickCount() + nKick*60*1000（:2728）"
+        );
+
+        // 空参数 ⇒ oracle 缺省 `5` / `500` / `1440*15`（`ExecutionProcessingSys.cs:2720-2722`）。
+        let mut p2 = NpcPlayer::empty(&mut rng);
+        p2.map_name = "0103".to_string();
+        p2.tick = 1_000;
+        let book = book_with_actions(8, "挂机商", &[("@main", "", vec![offline_act("", "", "")])]);
+        let _ = book.goto_label(8, &mut p2, "@main", false);
+        assert_eq!(
+            (
+                p2.auto_get_exp_time,
+                p2.auto_get_exp_point,
+                p2.kick_off_line_tick
+            ),
+            (5_000, 500, 1_000 + 1_440 * 15 * 60_000),
+            "缺省 5 秒 / 500 点 / 1440*15 分钟"
+        );
+    }
+
+    /// `@main` 带一条 `ISONMAP` 条件（code 190 = `ConditionCode.ISONMAP`）的商人脚本。
+    fn book_with_isonmap(actor_id: i32, chr_name: &str, script_map: &str) -> MerchantScriptBook {
+        let mut book = MerchantScriptBook::new(30);
+        book.insert(MerchantNpc {
+            def: NpcDef {
+                chr_name: chr_name.to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("挂机商-0103".to_string()),
+                is_hide: false,
+                is_quest: false,
+                scripts: vec![ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![SayingRecord {
+                        s_label: "@main".to_string(),
+                        procedure_list: vec![SayingProcedure {
+                            condition_list: vec![mir2_script::QuestConditionInfo {
+                                cmd_code: 190,
+                                s_param1: script_map.to_string(),
+                                ..Default::default()
+                            }],
+                            action_list: Vec::new(),
+                            else_action_list: Vec::new(),
+                            s_say_msg: "挂机中".to_string(),
+                            s_else_say_msg: String::new(),
+                        }],
+                        bo_ext_jmp: false,
+                    }],
+                    quest_count: 0,
+                }],
+                loaded: true,
+                actor_id,
+            },
+            price_rate: 100,
+            castle: None,
+            map_name: "0103".to_string(),
+            curr_x: 9,
+            curr_y: 12,
+        });
+        book
+    }
+
+    /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
+    /// `envir_map_name()` 与 `ActionOfOffLine` 读的是**同一个**当前图 ⇒ 接通覆写后
+    /// ISONMAP 随之生效。oracle `ConditionOfIosnMap`（`ConditionProcessingSys.cs:1032-1055`）：
+    /// `envir = MapMgr.FindMap(sMapName)`；`if (playerActor.Envir == envir) success = true;`
+    /// ⇒ 在图上 true、不在图上 false、`Envir == null` 时 false。
+    ///
+    /// 牙：删 `envir_map_name()` 覆写（回落 `None`）⇒ 中间那条「在图上」断言红。
+    /// 残余（既有未建模，非本片引入）：`map_exists` 缺省 false ⇒ oracle 在真实地图上不会走的
+    /// `ScriptConditionError` 错误支本仓会记录；**判定结果**等价（`None`/异名 ⇒ false）。
+    #[test]
+    fn isonmap_uses_current_map_after_envir_map_name_override() {
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        let book = book_with_isonmap(8, "挂机商", "0103");
+        // 未进图：`Envir == null` ⇒ ISONMAP 不成立。
+        assert!(p.envir_map_name().is_none());
+        let says = book
+            .goto_label(8, &mut p, "@main", false)
+            .expect("脚本存在");
+        assert!(
+            says.iter().all(|s| !s.text.contains("挂机中")),
+            "Envir=null ⇒ ISONMAP 不成立，说词不播：{says:?}"
+        );
+        // 在图上：`playerActor.Envir == FindMap("0103")` ⇒ 成立。
+        p.map_name = "0103".to_string();
+        let says = book
+            .goto_label(8, &mut p, "@main", false)
+            .expect("脚本存在");
+        assert!(
+            says.iter().any(|s| s.text.contains("挂机中")),
+            "Envir == 当前图 ⇒ ISONMAP 成立：{says:?}"
+        );
+        // 换到别的图：引用不同 ⇒ 不成立。
+        p.map_name = "0".to_string();
+        let says = book
+            .goto_label(8, &mut p, "@main", false)
+            .expect("脚本存在");
+        assert!(
+            says.iter().all(|s| !s.text.contains("挂机中")),
+            "Envir != 脚本图 ⇒ ISONMAP 不成立：{says:?}"
         );
     }
 

@@ -25,7 +25,6 @@
 //! | [`client_buy_sell_off_item`] | `PlayObject.Sale.cs:281-385`（**成交**） |
 //! | [`get_sell_off_gold`] | `PlayObject.Sale.cs:387-429`（出售者取款） |
 //! | [`sell_off_cancel`] / [`client_cancel_sell_off`] | `PlayObject.Sale.cs:431-438/516-591` |
-//! | [`select_sell_date`] | `PlayObject.Sale.cs:440-473`（**无活调用点**，见「未建模」） |
 //! | [`sell_off_in_time`] | `PlayObject.Sale.cs:475-514` |
 //! | [`client_sell_off_end`] | `PlayObject.Sale.cs:516-591`（**上架**） |
 //! | [`get_back_sell_off_items`] | `PlayObject.Sale.cs:602-617`（退回） |
@@ -75,8 +74,6 @@
 //!   `crate::bag`（与 [`crate::trade`] 同口径 ⇒ 帧值可能与 oracle 不同，登记）。
 //! - `DropItemDown`（`Base.cs:529`）：oracle 因 `MapItem.ItemId` 恒 0 而**恒落地失败**（`T-19`/`T-25`）
 //!   ⇒ 本模块的 [`drop_item_down`] 只「消耗」物品、不产帧（1:1 的可见面）。
-//! - [`select_sell_date`]：oracle 的两个调用点（`NormNpc.cs:465/1388`）**都被注释** ⇒ 无活调用点；
-//!   本模块实现其纯逻辑但不接线（`dSellDateTime` 的本地时区格式化口径登记）。
 //! - `GetSellOffGlod()` 的登录调用点（`PlayObject.cs:1486`）：`SaleDeal` 在 Rust 无 setter
 //!   （脚本 `OPENYBDEAL`/`ActionOfOpenSaleDeal` 未移植，见 `crates/script/src/handlers.rs:250`）
 //!   ⇒ 恒 `false` ⇒ 该函数恒 no-op，登录路径**不接线**（行为等价：都不动）。见证据 README 登记。
@@ -1003,6 +1000,7 @@ pub fn client_sell_off_end(
 ///
 /// 注意 oracle 先 `UpdateSellOffInfo(0)`（可能移除 `flag==2` 条目）再改当前条目 ⇒ 本函数用
 /// 移除下标平移当前下标（等价于 oracle 的对象引用）。
+#[cfg(test)]
 pub fn get_sell_off_gold(me: &mut SellOffSide<'_>, book: &mut SellOffBook) -> Vec<SellOffEvent> {
     let mut em = Emitter::new();
     let Some(mut i) = book
@@ -1101,44 +1099,6 @@ pub fn open_deal_off_form(
         },
     );
     em.finish()
-}
-
-/// `SelectSellDate()`（`PlayObject.Sale.cs:440-473`）的纯逻辑。
-///
-/// **无活调用点**（`NormNpc.cs:465/1388` 的 `ReplaceVariableText` 调用均被注释）⇒ 本仓库不接线。
-/// `dSellDateTime` 用注入的 `sell_datetime_ms`，按 oracle `ToString("yyyy年mm月dd日 hh时ss分")`
-/// 的本地时区口径**未**实现（登记）。
-#[must_use]
-pub fn select_sell_date(me: &SellOffSide<'_>, book: &SellOffBook, game_gold_name: &str) -> String {
-    if !me.state.sale_deal {
-        return format!("您未开通{game_gold_name}寄售服务,请先开通!!!\\ \\<返回/@main>");
-    }
-    for e in &book.entries {
-        if e.deal_chr_name.eq_ignore_ascii_case(&me.name) && e.flag == 2 {
-            return format!(
-                "最后一笔出售记录:\\   {},\\  您与{}交易成功,获得了{}个{}。\\ \\<返回/@main>",
-                format_sell_date(e.sell_datetime_ms),
-                e.buy_chr_name,
-                e.sell_gold,
-                game_gold_name
-            );
-        }
-        if e.buy_chr_name.eq_ignore_ascii_case(&me.name) && (e.flag == 1 || e.flag == 2) {
-            return format!(
-                "最后一笔购买记录:\\   {},\\  您与{}交易成功,支付了{}个{}。\\ \\<返回/@main>",
-                format_sell_date(e.sell_datetime_ms),
-                e.deal_chr_name,
-                e.sell_gold,
-                game_gold_name
-            );
-        }
-    }
-    "您未进行任何寄售交易!!!\\ \\<返回/@main>".to_string()
-}
-
-/// `dSellDateTime.ToString("yyyy年mm月dd日 hh时ss分")` 的占位（本地时区口径未实现，登记）。
-fn format_sell_date(_ms: i64) -> String {
-    String::new()
 }
 
 /// 把一条 [`SellOffEvent`] 编成 `(收件人 ActorId, GM_DATA body)`（纯函数，无 I/O）。

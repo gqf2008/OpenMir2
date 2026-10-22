@@ -352,6 +352,30 @@ impl MapRegistry {
         self.loaded.get(map_id).map(|e| &e.flag)
     }
 
+    /// 运行时改写 `map_id` 的 `Envirnoment.Flag`（oracle `envir.Flag.* = …`）。
+    ///
+    /// oracle 的 `Envirnoment.Flag` 是**运行时状态**（`ActionOfSetMapMode` 等脚本动作直接写
+    /// `SystemShare.MapMgr.FindMap(name).Flag`），与本注册表里装载出来的配置同源。Rust 侧
+    /// 以「注册表条目即 `Envirnoment.Flag`」建模 ⇒ 脚本改 Flag 落在这里，所有既有
+    /// `flag_of` 读者（P25 DECHP/INCHP、安全区、行会战图门…）随即可见，无需逐个改读源。
+    ///
+    /// 越界 `map_id` 返回 `false`（对应 oracle `FindMap` 落空时整支不执行）。
+    pub fn set_flag(&mut self, map_id: usize, flag: MapInfoFlag) -> bool {
+        match self.loaded.get_mut(map_id) {
+            Some(e) => {
+                e.flag = flag;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 已装载地图的逻辑名表（按 `map_id` 升序；脚本 `SETMPAMODE` 的 `FindMap` 判定面）。
+    #[must_use]
+    pub fn map_names(&self) -> Vec<String> {
+        self.loaded.iter().map(|e| e.map_name.clone()).collect()
+    }
+
     /// `map_id` → `Envirnoment.MapDesc`（帧 54 的尾巴）。
     #[must_use]
     pub fn map_desc_of(&self, map_id: usize) -> Option<&str> {
