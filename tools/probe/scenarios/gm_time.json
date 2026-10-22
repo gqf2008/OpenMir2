@@ -1,0 +1,8 @@
+{
+  "name": "gm_time",
+  "description": "进世界后发 @时间（CM_SAY 3030，体按 GBK + EDCode 编码）-> 等 SM_SYSMESSAGE(100)",
+  "steps": [
+    {"send": {"ident": 3030, "recog": 0, "param": 0, "tag": 0, "series": 0, "text": "@时间"}},
+    {"wait_for": 100, "timeout_ms": 3000}
+  ]
+}

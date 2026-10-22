@@ -1,0 +1,8 @@
+{
+  "name": "login_only",
+  "description": "登录 -> 选服 -> 选角 -> 进世界 -> 等 15 帧（必须含 SM_LOGON(50)/SM_ABILITY(52)/SM_SENDNOTICE(658)）-> 正常断开",
+  "steps": [
+    {"wait_frames": {"count": 15, "idents": [50, 52, 658], "timeout_ms": 8000},
+     "note": "计数是 gamegate 连接累计帧数（含进世界前已收到的帧）"}
+  ]
+}
