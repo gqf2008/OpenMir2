@@ -192,3 +192,36 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 **§12 补记（05:27–05:30）**：把 `@chouma` 的等待放宽到 15s 后，C# 这一跑**又没有** 643/14——选完之后只有 `10,41` 与一条 `53`（t≈18.5s）。
 ⇒ 庄家 `@chouma` 支的**应答本身不稳定**（一次是 643+14，一次只有 53），在弄清 oracle 该支的真实应答前，
 `@kaiz/@chouma` 都不适合当判据；`dice_chain_auto.json` 暂留作探索用场景，不进首批。
+
+## 13. 批次内出现过的 ident 词表（`mir2-rs/crates/protocol/src/messages.rs`）
+
+| ident | 名称 | 出现位置 |
+|---:|---|---|
+| 10 | `SM_TURN` | 进世界/NPC 出现 |
+| 14 | `SM_HIT` | NPC 交互（间歇） |
+| 41 | `SM_FEATURECHANGED` | 紧随 10 |
+| 42 | `SM_USERNAME` | 进世界 |
+| 46 | `SM_DAYCHANGING` | 进世界 |
+| 50 | `SM_LOGON` | 进世界握手 |
+| 51 | `SM_NEWMAP` | 登录 |
+| 52 | `SM_ABILITY` | 登录（54/78 布局） |
+| 53 | `SM_HEALTHSPELLCHANGED` | 吃 `@chouma` 后那一跑 |
+| 54 | `SM_MAPDESCRIPTION` | 进世界 |
+| 100 | `SM_SYSMESSAGE` | 公告/GM 回包 |
+| 213 | `SM_ATTACKMODE` | 进世界 |
+| 520 | `SM_QUERYCHR` | 选人 |
+| 525 | `SM_STARTPLAY` | 选人（带 GameGate 地址） |
+| 529 | `SM_PASSOK_SELECTSERVER` | 选服 |
+| 530 | `SM_SELECTSERVER_OK` | 选服（带 SelGate 地址） |
+| 643 | `SM_MERCHANTSAY` | NPC 对话 |
+| 654 | `SM_CHANGELIGHT` | 进世界 |
+| 657 | `SM_CHARSTATUSCHANGED` | 进世界 |
+| 658 | `SM_SENDNOTICE` | 登录公告 |
+| 752 | `SM_SUBABILITY` | 进世界 |
+| 766 | `SM_AREASTATE` | 进世界 |
+| 811 | `SM_ADJUST_BONUS` | 进世界 |
+| 1106 | `SM_VERSION_FAIL` | 进世界（两侧一致出现） |
+| 5008 | `SM_GAMEGOLDNAME` | 登录 |
+| 11029 | `SM_SERVERCONFIG` | 登录 |
+
+> 规则表当前只覆盖 23 个 ident，上表里 `14/42/213/213/1106/5008/11029/654` 等多条仍是 UNCLASSIFIED 或靠 `--allow-unclassified` 兜底。
