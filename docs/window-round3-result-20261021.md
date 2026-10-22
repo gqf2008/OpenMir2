@@ -170,9 +170,11 @@ body_len 为 owner 已裁决的 D-9，已 whitelist）。`judge_login` 另提示
   夹具门行为符合预期。
 - 手工点击：西侧格 `(464,295)` → 服务端 `CM_CLICKNPC 到达 Click 点 npc=119（@main 说词 1 条）`；
   客户端显示赌场 @main 对话框（开始-下注 / 筹码-兑现 / 返回土城），截图 `E:/tmp/window/r7/shot-dice5.png`。
-- **问题 1（真缺陷）**：对话框里 `<$GAMEGOLD>` **原样显示**，没有替换成玩家元宝数。脚本原文
-  `赌场-B013.txt:5` 是 `您当前的元宝为:<$GAMEGOLD>个`，oracle `GetLineVariableText` 会替换
-  `$GAMEGOLD`；本仓商人说词路径未做该变量替换。
+- **问题 1（~~真缺陷~~ → 2026-10-22 复核撤销：oracle 行为，非缺陷）**：对话框里 `<$GAMEGOLD>`
+  **原样显示**。当时判为「未做变量替换」，复核后确认这正是 oracle 语义：`NormNpc.GetLineVariableText`
+  （`NormNpc.cs:245-273`）丢掉 `ArrestStringEx` 的剩余串 ⇒ 扫描不前进，首个 `<...>` 是链接
+  （本页首 token `<开-始-下-注/@kaiz>`）时后面变量一律原样。详见
+  `docs/say-variable-expansion-reversal-20261022.md`；本仓 `line_variable_text` 保持该字面循环。
 - **问题 2（未达成）**：点击「开始-下注」链接后客户端**没有**发 `CM_MERCHANTDLGSELECT(1011)`
   服务端无记录，掷骰流程无法进入；需继续定位（像素命中或客户端对链接文本的识别，与说词文本的
   空格/编码呈现有关）。
