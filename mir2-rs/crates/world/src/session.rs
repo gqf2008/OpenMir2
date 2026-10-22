@@ -238,9 +238,11 @@ impl World {
     ///
     /// 已进图时返回 `Err`（防重复进图把实体登记两次）。
     ///
-    /// **搜索基准**：本重载把「`PlayObject` 构造时刻」取为**进图时刻**（`clock_ms`），
+    /// **构造基准**：本重载把「`PlayObject` 构造时刻」取为**进图时刻**（`clock_ms`），
     /// 只用于测试/没有独立构造阶段的调用方；生产登录路径必须用 [`World::enter_map_at`]
-    /// 传入 DB 回包那一刻的构造基准（见下）。
+    /// 传入 DB 回包那一刻的构造基准（见下）。受此基准影响的三个计时器：
+    /// `verify_tick`（30s，`BaseObject.cs:444`）、`ai.search_tick`（1000ms，`PlayObject.cs:901`）、
+    /// `check_dup_obj_tick`（3s，`PlayObject.cs:913`）——三者都是 ctor 写一次、进图/切图不重置。
     pub fn enter_map(
         &mut self,
         chr_name: &str,
@@ -268,7 +270,14 @@ impl World {
     /// 确定性：`ctor_tick` 是调用方传入的**单个**整数时钟值；本函数不额外读时钟、不抽 RNG、
     /// 不改变 tick 内顺序（同一调用点、同一状态迁移）。
     ///
-    /// 红检：把 `entity.ai.search_tick = ctor_tick` 改回 `self.clock_ms` ⇒
+    /// 同组两个计时器同基准（卡 `openmir2-verify-tick-base`）：`VerifyTick`（`BaseObject.cs:444`）
+    /// 与 `CheckDupObjTick`（`PlayObject.cs:913`）也在各自 ctor 写一次，`UserLogon`/`AddToMap`
+    /// 不重置；全仓写点另只有 `BaseObject.Base.cs:225` / `PlayObject.Message.cs:265` 的「命中后再置 now」。
+    /// ⇒ 三者的首个门都从 **ctor 时刻**起算，本函数统一写 `ctor_tick`。
+    ///
+    /// 红检：把 `entity.verify_tick` / `entity.check_dup_obj_tick` 改回 `self.clock_ms` ⇒
+    /// `verify_and_dup_ticks_base_is_playobject_ctor_not_map_entry` 必红；把
+    /// `entity.ai.search_tick = ctor_tick` 改回 `self.clock_ms` ⇒
     /// `first_scan_base_is_playobject_ctor_not_map_entry` 必红。
     pub fn enter_map_at(
         &mut self,
@@ -290,15 +299,18 @@ impl World {
             entity.id = self.entities.alloc_id();
         }
         entity.map_id = map_id;
-        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：ctor 等价物拿不到 `World` 时钟
-        // ⇒ 落图时刻重盖（同 `poisoning_tick` 的口径）。
-        entity.verify_tick = self.clock_ms;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：30s 的 `VerifyMapTime` 门同样从
+        // **对象构造时刻**起算（`ctor_tick`）——全仓写点只有该 ctor 与 `BaseObject.Base.cs:225`
+        // 的「命中后再置 now」，`UserLogon`/`AddToMap` 都不重置。**不要**改成 `self.clock_ms`。
+        entity.verify_tick = ctor_tick;
         // `PlayObject.cs:901` ctor `SearchTick = GetTickCount()`：玩家 `SearchViewRange` 的
         // 1000ms 节拍从**对象构造时刻**起算（`ctor_tick`，由调用方给出；oracle 的 ctor 早于
         // `UserLogon`/`AddToMap`，且 `AddToMap` 不重置它）。**不要**改成 `self.clock_ms`。
         entity.ai.search_tick = ctor_tick;
-        // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`：重叠推挤的 3s 门从落图时刻起算。
-        entity.check_dup_obj_tick = self.clock_ms;
+        // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`：重叠推挤的 3s 门也从
+        // **对象构造时刻**起算（`ctor_tick`）——全仓写点只有该 ctor 与 `PlayObject.Message.cs:265`
+        // 的「命中后再置 now」，`UserLogon`/`AddToMap` 都不重置。**不要**改成 `self.clock_ms`。
+        entity.check_dup_obj_tick = ctor_tick;
         let id = self.entities.insert(entity);
         let (x, y) = {
             let e = self.entities.get(id).expect("刚插入");

@@ -8769,6 +8769,80 @@ mod tests {
         );
     }
 
+    /// **卡 `openmir2-verify-tick-base`**：`verify_tick`（30s）与 `check_dup_obj_tick`（3s）的
+    /// 基准同样是 `PlayObject`/`BaseObject` **ctor 时刻**，不是进图时刻（与 `SearchTick` 同组）。
+    ///
+    /// oracle 事实（全仓写点清点）：
+    /// - `VerifyTick = GetTickCount()` 只在 ctor `src/M2Server/Actor/BaseObject.cs:444` 写一次；
+    ///   第二个写点是命中后的 `BaseObject.Base.cs:225`；读点 `:223` `(now - VerifyTick) > 30*1000`。
+    ///   `UserLogon`/`AddToMap` 均不重置。
+    /// - `CheckDupObjTick = GetTickCount()` 只在 ctor `src/M2Server/Player/PlayObject.cs:913` 写一次；
+    ///   第二个写点是命中后的 `PlayObject.Message.cs:265`；读点 `:263` `> 3000`。
+    ///   `UserLogon`/`AddToMap` 均不重置。
+    ///
+    /// 构造：ctor = 0、进图 = 800ms（模拟登录等待环 T-73 把进图推后）⇒ 首个 `VerifyMapTime`
+    /// 必须落在 30200（不是进图 + 30000 = 30800），首个重叠检查落在 3200（不是 3800）。
+    ///
+    /// 红检：把 [`World::enter_map_at`] 的 `entity.verify_tick` / `entity.check_dup_obj_tick`
+    /// 改回 `self.clock_ms` ⇒ 本用例两条门断言必红。
+    #[test]
+    fn verify_and_dup_ticks_base_is_playobject_ctor_not_map_entry() {
+        let mut w = World::new(32, 32);
+        w.open_session("p");
+        let mut p_ent = Entity::new(0, "p", 10, 10);
+        p_ent.race = ACTOR_RACE_PLAY;
+        // `new PlayObject()` 等价点 = ctor 0ms；登录等待环把进图推到 800ms。
+        w.clock_ms = 800;
+        let p = w.enter_map_at("p", p_ent, 0, 0).expect("进图");
+
+        {
+            let e = w.entities.get(p).unwrap();
+            assert_eq!(
+                e.verify_tick, 0,
+                "VerifyTick 必须取 ctor 基准（BaseObject.cs:444），不得被进图时刻重盖"
+            );
+            assert_eq!(
+                e.check_dup_obj_tick, 0,
+                "CheckDupObjTick 必须取 ctor 基准（PlayObject.cs:913），不得被进图时刻重盖"
+            );
+        }
+
+        // 30s 门：`now - ctor == 30000` 不满足严格大于 ⇒ 不刷新。
+        w.clock_ms = 30_000;
+        assert!(
+            !w.verify_map_time(p),
+            "恰 30000ms 不得刷新（BaseObject.Base.cs:223 严格 >）"
+        );
+        // ctor + 30200：首刷。若基准是进图 800ms，此处 now - 800 = 29400 ⇒ 不会刷新。
+        w.clock_ms = 30_200;
+        assert!(
+            w.verify_map_time(p),
+            "首个 VerifyMapTime 必须落在 ctor+30200（不是进图+30000=30800）"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().verify_tick,
+            30_200,
+            "命中后 VerifyTick = now（BaseObject.Base.cs:225）"
+        );
+
+        // 3s 门：`now - ctor == 3000` 不满足严格大于 ⇒ 不检查。
+        w.clock_ms = 3_000;
+        w.check_dup_obj();
+        assert_eq!(
+            w.entities.get(p).unwrap().check_dup_obj_tick,
+            0,
+            "恰 3000ms 不得检查（PlayObject.Message.cs:263 严格 >）"
+        );
+        // ctor + 3200：首次检查。若基准是进图 800ms，此处 now - 800 = 2400 ⇒ 仍不检查。
+        w.clock_ms = 3_200;
+        w.check_dup_obj();
+        assert_eq!(
+            w.entities.get(p).unwrap().check_dup_obj_tick,
+            3_200,
+            "首个重叠检查必须落在 ctor+3200（不是进图+3000=3800）"
+        );
+    }
+
     /// `spawn_monster_precomputed`（M3④-实现 B 第 ③ 片的新 API）：掉落/朝向/构造抽已在回调里
     /// 按 oracle 次序预算完，本方法**不再取任何随机数**；构造抽结果随实体落库。
     ///
