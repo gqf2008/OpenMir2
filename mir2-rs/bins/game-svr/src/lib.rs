@@ -13592,6 +13592,12 @@ fn broadcast_healthspellchanged(
     let Some(src) = world.entities.get(actor_id) else {
         return;
     };
+    // `BaseObject.Message.cs:394-397`：`ObMode || FixedHideMode` 时 `SendRefMsg` 退化为
+    // `SendMsg(self)`（只给自己）。源的自见副本已由调用方（玩家的 `HealthSpellSlots` 自见帧）
+    // 计入；怪/NPC 源不是 Play ⇒ 零帧。此处不得再向 ±`range` 观察者广播。
+    if src.ob_mode || src.fixed_hide_mode {
+        return;
+    }
     let (sx, sy, smap) = (src.x, src.y, src.map_id);
     for e in online {
         let Some(t) = world.entities.get(e.actor_id) else {
@@ -21158,6 +21164,16 @@ mod tests {
             game_svr::smframe::sm_healthspellchanged_frame(mon_id, 42, 7, 100),
             "逐字节"
         );
+
+        // `ObMode || FixedHideMode` ⇒ oracle `SendRefMsg` 退化为 `SendMsg(self)`
+        // （`BaseObject.Message.cs:394-397`）；怪不是 Play ⇒ 观察者零帧。
+        world.entities.get_mut(mon_id).unwrap().fixed_hide_mode = true;
+        drain_show_hp_health_changes(&rec, &world, &online, &gates, 12);
+        let mut hidden = 0usize;
+        while let Ok(SimToGate::SendFrame { .. }) = rx0.try_recv() {
+            hidden += 1;
+        }
+        assert_eq!(hidden, 0, "FixedHideMode ⇒ 不给观察者广播");
     }
 
     /// **卡 `openmir2-monster-showhp-53-broadcast`**：毒伤段（`ActorBuffSystem.cs:255`）对
