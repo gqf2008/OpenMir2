@@ -1,4 +1,4 @@
-using OpenMir2.Common;
+﻿using OpenMir2.Common;
 
 namespace SelGate.Conf
 {
@@ -67,6 +67,8 @@ namespace SelGate.Conf
             GateConfig.DenyTabsChar = ReadWriteBool("Switch", "DenyTabsChar", GateConfig.DenyTabsChar);
             //GateConfig.m_tBlockIPMethod = TBlockIPMethod(ReadWriteInteger("Method", "BlockIPMethod", Integer(GateConfig.m_tBlockIPMethod)));
 
+            // T-172：监听端口可配置（缺省 7100 ⇒ 现有部署行为不变）。
+            GateShare.GatePort = ReadWriteInteger("SelGate", "ListenPort", GateShare.GatePort);
             GateConfig.GateCount = ReadWriteInteger("SelGate", "Count", GateConfig.GateCount);
             for (int i = 0; i < GateConfig.GateCount; i++)
             {

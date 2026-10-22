@@ -1,4 +1,4 @@
-using OpenMir2;
+﻿using OpenMir2;
 using OpenMir2.Common;
 using SelGate.Services;
 using System;
@@ -10,9 +10,15 @@ namespace SelGate
     {
         public static string GateAddr = "*";
         /// <summary>
-        /// 角色网关端口
+        /// 角色网关端口。
         /// </summary>
-        public const int GatePort = 7100;
+        /// <remarks>
+        /// **T-172（owner 2026-10-23 批准）**：由 <c>const</c> 改为可配置的静态字段，
+        /// 值由 <c>Config.ini</c> 的 <c>[SelGate] ListenPort</c> 覆盖（缺省仍 7100 ⇒ 现有部署逐字节不变）。
+        /// 动机：C# 真值栈要与 Rust 栈**同时**跑协议对拍，而 7100 写死导致两套 SelGate 无法并存；
+        /// 只改监听端口，不改任何协议/行为。见 <c>mir2-rs/tests/parity/whitelist.md</c> T-172。
+        /// </remarks>
+        public static int GatePort = 7100;
         /// <summary>
         ///  网关游戏服务器之间检测超时时间长度
         /// </summary>
