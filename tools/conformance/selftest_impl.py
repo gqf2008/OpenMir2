@@ -16,7 +16,10 @@
   9. 10/41 是真实协议帧（SM_TURN / SM_FEATURECHANGED），默认 compare，不再当心跳剔除；
  10. 首跑缺口补齐的 7 条规则（100/520/525/529/530/654/657）逐个「相同 ⇒ 0、改一个字节 ⇒ 1
      且定位」；520 的 recog（=nChrCount）被取回比较、530 的 recog 走掩码而 body 不掩；
- 11. 52 线缆 (54,78)/(78,78) 的归一比较与写坏必红。
+ 11. 52 线缆 (54,78)/(78,78) 的归一比较与写坏必红；
+ 12. multiset_by_tick（同 ident 同 tick 的多重集比较）：顺序颠倒 ⇒ 0 且登记 masked_order；
+     少一条 ⇒ 1 且给出缺失帧；集合相同/内容互换 ⇒ 0；多塞一条 41 ⇒ 1（不吞非多重集 ident）；
+     跨 t_ms 的重排不合并且容差可配；缺 t_ms ⇒ 2；tick_tolerance_ms 坏值 ⇒ 2。
 
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
@@ -180,6 +183,7 @@ class Selftest(object):
         self.t_no_rules(o, r)
         self.t_body_ranges()
         self.t_rule_validation(o, r)
+        self.t_multiset_by_tick(o, r)
         self.t_db()
         return self.finish()
 
@@ -288,8 +292,9 @@ class Selftest(object):
     # -- 首次双栈对拍暴露的 8 条规则缺口（100/520/525/529/530/654/657 + 52 线缆布局对）--
     # 530 = SM_SELECTSERVER_OK：body 末段是 LoginSrv 进程内 SessionID（跨进程必然不同）
     # ⇒ action=mask_body_ranges（只掩偏移 16..end，ip/端口仍逐字节比）；其余 6 条 compare。
-    NEW_IDENTS = ((100, "compare"), (520, "compare"), (525, "compare"), (529, "compare"),
-                  (530, "mask_body_ranges"), (654, "compare"), (657, "compare"))
+    NEW_IDENTS = ((100, "multiset_by_tick"), (520, "compare"), (525, "compare"),
+                  (529, "compare"), (530, "mask_body_ranges"), (654, "compare"),
+                  (657, "compare"))
 
     def t_new_idents_rules(self):
         rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
@@ -317,7 +322,7 @@ class Selftest(object):
         """每个新 ident 都真的参与判定：相同 ⇒ 0；改一个字节 ⇒ 1 且定位到该 ident。"""
         base_o = json.loads(json.dumps(o))
         base_r = json.loads(json.dumps(r))
-        for ident, _action in self.NEW_IDENTS:
+        for ident, action in self.NEW_IDENTS:
             body = bytes([0x41 + (ident % 26)]) * 4  # 合成非空 body：只验规则参与判定
             heads = dict(phase="new", conn="x", recog=3, param=11, tag=22, series=33)
             fo = self.frame(ident, body, seq=900, t_ms=7, **heads)
@@ -336,11 +341,21 @@ class Selftest(object):
             mut["body_sha256"] = _sha(mutated)
             rd2 = self.write_run("t21-r2-%d" % ident, base_r + [mut])
             rc2, rep2 = self.compare(od, rd2)
-            self.check("ident=%d 改一个字节 => rc 1 且定位到 offset=%d" % (ident, len(body) - 1),
-                       rc2 == 1 and any(d.get("ident") == ident
-                                        and d.get("offset") == len(body) - 1
-                                        for d in (rep2 or {}).get("diffs", [])),
-                       (rc2, (rep2 or {}).get("diffs")))
+            if action == "multiset_by_tick":
+                # 改 body ⇒ 多重集身份变了：必须 rc 1，并以「缺失/多余」定位到该帧
+                self.check("ident=%d 改一个字节 => rc 1 且按多重集定位缺失/多余帧" % ident,
+                           rc2 == 1 and any(d.get("ident") == ident
+                                            and d.get("kind") in ("multiset_missing",
+                                                                  "multiset_extra")
+                                            for d in (rep2 or {}).get("diffs", [])),
+                           (rc2, (rep2 or {}).get("diffs")))
+            else:
+                self.check("ident=%d 改一个字节 => rc 1 且定位到 offset=%d"
+                           % (ident, len(body) - 1),
+                           rc2 == 1 and any(d.get("ident") == ident
+                                            and d.get("offset") == len(body) - 1
+                                            for d in (rep2 or {}).get("diffs", [])),
+                           (rc2, (rep2 or {}).get("diffs")))
         # 520 的 recog 必须被比（nChrCount）；530 的 recog 必须仍被全局掩码（会话/游戏时长）
         fo520 = self.frame(520, b"NAME/1/0/0/30/", phase="selgate", seq=500, t_ms=1, conn="o",
                            recog=1, param=0, tag=1, series=0)
@@ -717,6 +732,136 @@ class Selftest(object):
         rc2, rep2 = self.compare(od, rd, ["--rules", rp2])
         self.check("规则缺 tier => rc 2", rc2 == 2,
                    (rc2, (rep2 or {}).get("undecidable")))
+        # multiset_by_tick 的坏规则必须 fail-closed（rc 2，不带着错规则去比）
+        badtol = json.loads(json.dumps(self.builtin_rules))
+        for rl in badtol["rules"]:
+            if rl.get("ident") == 100:
+                rl["tick_tolerance_ms"] = -1
+        rp3 = self.rules_file("t14-badtol.json", badtol)
+        rc3, rep3 = self.compare(od, rd, ["--rules", rp3])
+        self.check("multiset_by_tick 的 tick_tolerance_ms<0 => rc 2 (InputError)",
+                   rc3 == 2 and any(u.get("source") == "input"
+                                    for u in (rep3 or {}).get("undecidable", [])),
+                   (rc3, (rep3 or {}).get("undecidable")))
+        misplace = json.loads(json.dumps(self.builtin_rules))
+        for rl in misplace["rules"]:
+            if rl.get("ident") == 46:
+                rl["tick_tolerance_ms"] = 5
+        rp4 = self.rules_file("t14-misplace-tol.json", misplace)
+        rc4, rep4 = self.compare(od, rd, ["--rules", rp4])
+        self.check("tick_tolerance_ms 用在非 multiset 动作 => rc 2 (InputError)",
+                   rc4 == 2 and any(u.get("source") == "input"
+                                    for u in (rep4 or {}).get("undecidable", [])),
+                   (rc4, (rep4 or {}).get("undecidable")))
+
+    # -- multiset_by_tick：同 ident 同 tick 的多重集比较（对拍降噪 v2）--
+    BODIES_100 = (b"welcome-static", b"anti-cheat-static",
+                  b"service-qq-static", b"attack-mode-static")
+
+    def ms_frames(self, conn, t0, order, seq0=100):
+        """造一段 ident=100 的登录系统提示（同一 t_ms = 同一 tick 窗口）。"""
+        return [self.frame(100, body, phase="gamegate", seq=seq0 + k, conn=conn,
+                           t_ms=t0, recog=5555, param=65499, tag=0, series=1)
+                for k, body in enumerate(order)]
+
+    def t_multiset_by_tick(self, o, r):
+        A, B, C = self.BODIES_100[:3]
+        rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
+        multi = sorted(i for i, rl in rs.by_ident.items()
+                       if rl["action"] == "multiset_by_tick")
+        self.check("内置规则表只有 ident=100 用 multiset_by_tick（不扩散到 10/41/14）",
+                   multi == [100], multi)
+        self.check("ident=100 的 tick_tolerance_ms=0（默认窗口 = 同一 t_ms）",
+                   rs.by_ident[100].get("tick_tolerance_ms") == 0,
+                   rs.by_ident[100].get("tick_tolerance_ms"))
+
+        def run_case(tag, oframes, rframes, extra=()):
+            od = self.write_run("t24-%s-o" % tag, oframes)
+            rd = self.write_run("t24-%s-r" % tag, rframes)
+            return self.compare(od, rd, list(extra))
+
+        # ① 同 tick 两条 100 顺序颠倒 => rc 0 且登记 masked_order
+        rc, rep = run_case("order", self.ms_frames("o", 1000, [A, B]),
+                           self.ms_frames("r", 1000, [B, A]))
+        self.check("multiset ① 同 tick 两条 100 顺序颠倒 => rc 0", rc == 0,
+                   (rc, (rep or {}).get("diffs"), (rep or {}).get("undecidable")))
+        mo = (rep or {}).get("masked_order") or []
+        self.check("multiset ① 顺序颠倒 => 登记 masked_order（ident=100，非静默 PASS）",
+                   len(mo) == 1 and mo[0].get("ident") == 100
+                   and mo[0].get("kind") == "masked_order"
+                   and mo[0]["oracle_order"][0]["body_prefix_hex"] == A[:16].hex()
+                   and mo[0]["rust_order"][0]["body_prefix_hex"] == B[:16].hex(),
+                   mo)
+
+        # ② 同 tick 少一条 100 => rc 1（缺失帧具体到 body 前 16B）
+        rc, rep = run_case("missing", self.ms_frames("o", 1000, [A, B]),
+                           self.ms_frames("r", 1000, [A]))
+        md = [d for d in (rep or {}).get("diffs", [])
+              if d.get("kind") == "multiset_missing"]
+        self.check("multiset ② 同 tick 少一条 100 => rc 1", rc == 1,
+                   (rc, (rep or {}).get("diffs")))
+        self.check("multiset ② 缺失帧给出 ident/关键字段/body 前 16 字节",
+                   len(md) == 1 and md[0].get("ident") == 100
+                   and md[0]["frame"].get("param") == 65499
+                   and md[0]["frame"].get("series") == 1
+                   and md[0]["frame"].get("body_prefix_hex") == B[:16].hex()
+                   and md[0].get("count") == 1,
+                   md)
+
+        # ③ 三条 100 内容互换/轮换（集合相同、位置不同）=> rc 0 且登记 masked_order
+        rc, rep = run_case("rotate", self.ms_frames("o", 1000, [A, B, C]),
+                           self.ms_frames("r", 1000, [B, C, A]))
+        self.check("multiset ③ 两条 100 内容互换/轮换（集合相同）=> rc 0", rc == 0,
+                   (rc, (rep or {}).get("diffs")))
+        self.check("multiset ③ 轮换仍登记 masked_order",
+                   len((rep or {}).get("masked_order") or []) == 1,
+                   (rep or {}).get("masked_order"))
+
+        # ④ 塞一条多余的 41 => rc 1（机制不会吞非多重集 ident）
+        rf = self.ms_frames("r", 1000, [A, B])
+        rf.insert(1, self.frame(41, b"", phase="gamegate", seq=999, conn="r",
+                                t_ms=1000, recog=5555, param=0, tag=0, series=0))
+        rc, rep = run_case("extra41", self.ms_frames("o", 1000, [A, B]), rf)
+        blob = json.dumps((rep or {}).get("diffs", []), ensure_ascii=True)
+        self.check("multiset ④ 多塞一条 41 => rc 1（非多重集 ident 不被吞）",
+                   rc == 1 and "41" in blob, (rc, (rep or {}).get("diffs")))
+
+        # ⑤ 同 tick 条数相同但一条 body 不同 => rc 1，缺失+多余各有具体帧
+        rc, rep = run_case("changed", self.ms_frames("o", 1000, [A, B]),
+                           self.ms_frames("r", 1000, [A, b"tampered-static"]))
+        kinds = sorted({d.get("kind") for d in (rep or {}).get("diffs", [])
+                        if d.get("ident") == 100})
+        self.check("multiset ⑤ 同 tick 一条 body 不同 => rc 1 且缺失/多余各一条",
+                   rc == 1 and kinds == ["multiset_extra", "multiset_missing"], kinds)
+
+        # ⑥ tick 窗口：tol=0 时不同 t_ms 的两条 100 不合并（跨 tick 重排不该被抹）
+        def wf(conn, seq, t, body):
+            return self.frame(100, body, phase="gamegate", seq=seq, conn=conn,
+                              t_ms=t, recog=5, param=65499, tag=0, series=1)
+        o6 = [wf("o", 1, 1000, A), wf("o", 2, 1000, B)]
+        r6 = [wf("r", 3, 1000, B), wf("r", 4, 1003, A)]
+        rc, rep = run_case("window", o6, r6)
+        self.check("multiset ⑥ tol=0 时跨 t_ms(1000 vs 1003) 的重排不合并 => rc 1",
+                   rc == 1, (rc, (rep or {}).get("diffs")))
+        rules = json.loads(json.dumps(self.builtin_rules))
+        for rl in rules["rules"]:
+            if rl.get("ident") == 100:
+                rl["tick_tolerance_ms"] = 5
+        rp = self.rules_file("t24-rules-tol5.json", rules)
+        rc2, rep2 = run_case("window5", o6, r6, ["--rules", rp])
+        self.check("multiset ⑥ 容差 5ms 时同窗口重排 => rc 0 且登记 masked_order",
+                   rc2 == 0 and len((rep2 or {}).get("masked_order") or []) == 1,
+                   (rc2, (rep2 or {}).get("masked_order"), (rep2 or {}).get("diffs")))
+
+        # ⑦ 缺 t_ms 划不了 tick 窗口 => fail-closed（rc 2）
+        o7 = self.ms_frames("o", 1000, [A, B])
+        for fr in o7:
+            fr.pop("t_ms", None)
+        rc, rep = run_case("notick", o7, self.ms_frames("r", 1000, [A, B]))
+        self.check("multiset ⑦ 缺 t_ms 划不了 tick 窗口 => rc 2 (multiset_tick_missing)",
+                   rc == 2 and any(u.get("kind") == "multiset_tick_missing"
+                                   for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
 
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)

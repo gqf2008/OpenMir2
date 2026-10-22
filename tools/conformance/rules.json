@@ -158,10 +158,11 @@
     },
     {
       "ident": 100,
-      "action": "compare",
-      "reason": "SM_SYSMESSAGE 系统提示：body 是 GBK 文本。首跑 4 条实测（docs/conformance-first-dual-run-20261023.md §2.2）=「欢迎进入记忆传奇…www.aresm2.com」「禁止使用任何外挂…」「唯一客服QQ：79311185…」「[攻击模式: 全体攻击]」，均为静态文案，不含墙钟/时间戳 ⇒ body 逐字节比、param(65499)/series(1) 照常比。若后续场景的文案出现墙钟/时间戳，只按字段登记窄掩码（mask_body_ranges 或 head_mask=head 字段），不得整帧 ignore",
+      "action": "multiset_by_tick",
+      "tick_tolerance_ms": 0,
+      "reason": "SM_SYSMESSAGE 系统提示：body 是 GBK 静态文案。首跑 4 条实测（docs/conformance-first-dual-run-20261023.md §2.2）=「欢迎进入记忆传奇…www.aresm2.com」「禁止使用任何外挂…」「唯一客服QQ：79311185…」「[攻击模式: 全体攻击]」，均不含墙钟/时间戳。**为什么这条按多重集、且只给它**：这些提示是登录流程里同一 tick 的多次 `SysMsg(...)` 依次投递的（src/M2Server/Player/PlayObject.cs:1347-1372 的攻击模式提示 / StartChangeAttackModeHelp(:1369) / StartNoticeMsg(:1372)；统一经 src/M2Server/Actor/BaseObject.cs:1588 SysMsg → SendMsg(RM_SYSMESSAGE) 入队），而 actor 发件队列是 `System.Collections.Generic.PriorityQueue<SendMessage, byte>`，入队优先级就是 `(byte)wIdent`（src/M2Server/Actor/BaseObject.Message.cs:94 `MsgQueue.Enqueue(sendMessage, (byte)wIdent)`；RM_SYSMESSAGE=100 见 src/OpenMir2/Messages.cs:215）。.NET 的 PriorityQueue **不保证同优先级元素的出队顺序**（equal-priority dequeue order is undefined）⇒ 同一 tick 内多条 100 的线缆先后顺序跨进程不确定（实测：同一 C# 栈同场景复跑 3 次出现 2 种顺序，body 多重集 6/6 相同；Rust 侧 6/6 稳定）。这些提示彼此**无因果序**：客户端只是依次显示，后一条不依赖前一条。**不得扩散**：10/41/14 是真实协议帧（10+41 是「转身+外观变化」的一组两帧、14 是受击帧），帧序本身有因果/配对含义，必须逐帧比。**本机制的边界**：只放松「同一 ident、同一 tick 窗口（tick_tolerance_ms=0，即同一 t_ms；窗口可配，本场景实测两侧各自四条 100 的 t_ms 完全相同）、且在原帧流里连续」的这几帧先后顺序；帧**不剔除**，仍按 (param,tag,series,body_hex) 多重集逐项比——集合不同即 rc 1 并给出缺失/多余的具体帧；顺序不同但集合相同 ⇒ rc 0 且报告登记 masked_order（不是静默 PASS）。若后续场景的文案出现墙钟/时间戳，仍按字段登记窄掩码（mask_body_ranges 或 head_mask），不得整帧 ignore。",
       "tier": "L",
-      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-26)"
     },
     {
       "ident": 520,

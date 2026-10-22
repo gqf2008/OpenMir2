@@ -36,6 +36,11 @@
      所以先按 ABILITY_WIRE_LENS（54→40、78→58，encoded_len 关系）做 EDCode 归一：
      语义不一致 ⇒ 差异；同长度同布局退回逐字节比（归一过的在明文空间比）；
      未知长度对 ⇒ 无法判定（fail-closed）。
+   * `multiset_by_tick`：同一 ident、同一 tick 窗口（`tick_tolerance_ms`，默认 0 = 同一
+     t_ms）内**连续**的若干帧按 `(param,tag,series,body_hex)` 多重集比。顺序不同但集合
+     相同 ⇒ rc 0，并**显式登记 `masked_order`**（不是静默 PASS）；集合不同 ⇒ rc 1，逐条
+     给出缺失/多余的具体帧（ident + param/tag/series + body 前 16 字节）。只允许用于
+     无因果序的帧（当前仅 ident 100），绝不推广到出现帧对/攻击序列。
 4) 规则覆盖：某 ident 在两侧任何一帧里出现、规则表却没有它的条目 ⇒ **UNCLASSIFIED ⇒ 退出码 2**
    （显式 `--ignore-idents` 点名的 ident 视为已分类：剔除即处置）。
    只有 `--allow-unclassified 1,2,3` 显式点名才放行，且报告里仍然逐个登记。
@@ -59,6 +64,7 @@
 """
 import argparse
 import hashlib
+from collections import Counter
 import importlib.util
 import json
 import os
@@ -72,7 +78,8 @@ DB_INLINE_FORMAT = "dbsnap-inline/1"
 
 HEAD_FIELDS = ("recog", "param", "tag", "series")
 STREAM_FIELDS = ("phase", "seq", "t_ms", "conn") + HEAD_FIELDS
-ACTIONS = ("compare", "mask_fields", "mask_body_ranges", "ignore", "ability_layout")
+ACTIONS = ("compare", "mask_fields", "mask_body_ranges", "ignore", "ability_layout",
+           "multiset_by_tick")
 TIERS = ("R", "L")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -253,6 +260,15 @@ class RuleSet(object):
                         raise InputError("%s 的 range end 必须是 > start 的整数或 null" % where)
                     norm.append([start, end])
                 expanded["ranges"] = norm
+            elif action == "multiset_by_tick":
+                tol = rule.get("tick_tolerance_ms", 0)
+                if not is_int(tol) or tol < 0:
+                    raise InputError("%s（multiset_by_tick）的 tick_tolerance_ms 必须是非负整数"
+                                     "（实际 %r）" % (where, tol))
+                expanded["tick_tolerance_ms"] = tol
+            if action != "multiset_by_tick" and "tick_tolerance_ms" in rule:
+                raise InputError("%s 的 tick_tolerance_ms 只允许用于 action=multiset_by_tick"
+                                 % where)
             if "head_mask" in rule:
                 expanded["head_mask"] = self._fields_list(rule["head_mask"], HEAD_FIELDS, where)
             if "head_compare" in rule:
@@ -435,6 +451,48 @@ def first_diff_offset(a, b):
 
 def count_diff_bytes(a, b):
     return sum(1 for x, y in zip(a, b) if x != y) + abs(len(a) - len(b))
+
+
+# ---------------------------------------------------------------------------
+# multiset_by_tick：同 ident、同 tick 窗口的帧按多重集比（不按位置）
+# ---------------------------------------------------------------------------
+# 语义：同一 ident、同一 tick 窗口（tick_tolerance_ms，默认 0 = 同一 t_ms）内、
+# 且在原帧流里**连续**的若干帧，按 (param,tag,series,body_hex) 排序后逐项比。
+#   * 顺序不同但多重集相同 ⇒ rc 0，**显式登记 masked_order**（不是静默 PASS）；
+#   * 多重集不同 ⇒ rc 1，逐条给出「缺失/多余」的帧（ident + 关键字段 + body 前 16B）。
+# 边界：不跨过别的帧重排（被隔开的两段各自成组），所以与别的 ident 的因果序不受影响。
+def _ord_token(v):
+    """把头部取值映射成可全序比较的 token（int/str/None 混在一列也不会比较崩）。"""
+    if v is None:
+        return (0, 0, "")
+    if is_int(v):
+        return (1, v, "")
+    if isinstance(v, str):
+        return (2, 0, v)
+    return (3, 0, repr(v))
+
+
+def _multiset_body_token(fr):
+    if fr["body"] is not None:
+        return "hex:" + fr["body"].hex()
+    if fr["body_sha256"]:
+        return "sha256:" + fr["body_sha256"]
+    return "absent:"
+
+
+def multiset_key(fr):
+    """多重集身份 = (param,tag,series,body)。排序与计数都用它；**不得省略 body**。"""
+    return (_ord_token(fr.get("param")), _ord_token(fr.get("tag")),
+            _ord_token(fr.get("series")), _multiset_body_token(fr))
+
+
+def _frame_brief(fr):
+    body = fr["body"]
+    return {"ident": fr["ident"], "frame_index": fr["index"], "seq": fr.get("seq"),
+            "param": fr.get("param"), "tag": fr.get("tag"), "series": fr.get("series"),
+            "body_len": len(body) if body is not None else None,
+            "body_sha256": fr.get("body_sha256"),
+            "body_prefix_hex": body[:16].hex() if body is not None else None}
 
 
 # 52 SM_ABILITY 的已知布局对：布局表（tools/loginfixture/capture_login_compare.py 的
@@ -679,6 +737,128 @@ def compare_bodies(fr_o, fr_r, rule, diffs, whitelisted, undecidable, masked_ran
                       "detail": "body 逐字节不同（首处 offset=%d）" % off})
 
 
+def _build_blocks(frames, rules):
+    """把一侧（已按 ignore 规则剔除后的）帧流切成对齐块。
+
+    * 普通 ident：每帧一个 single 块（与原逐帧对齐完全一致）；
+    * action=multiset_by_tick 的 ident：**连续**同 ident、且 t_ms 落在同一 tick 窗口
+      （|t_ms - 首帧| <= tick_tolerance_ms）的帧合成一个 multiset 块。
+      只有连续段才合并：被别的帧隔开的两段不跨段重排，避免把因果序一起抹掉。
+    """
+    blocks = []
+    i = 0
+    n = len(frames)
+    while i < n:
+        fr = frames[i]
+        rule = rules.by_ident.get(fr["ident"])
+        if not rule or rule.get("action") != "multiset_by_tick":
+            blocks.append({"kind": "single", "ident": fr["ident"], "frames": [fr],
+                           "rule": None, "tick_missing": False})
+            i += 1
+            continue
+        tol = rule.get("tick_tolerance_ms", 0)
+        tick_missing = not is_int(fr.get("t_ms"))
+        anchor = fr.get("t_ms")
+        run = [fr]
+        j = i + 1
+        while j < n and not tick_missing:
+            nxt = frames[j]
+            if nxt["ident"] != fr["ident"] or not is_int(nxt.get("t_ms")):
+                break
+            if abs(nxt["t_ms"] - anchor) > tol:
+                break
+            run.append(nxt)
+            j += 1
+        blocks.append({"kind": "multiset", "ident": fr["ident"], "frames": run,
+                       "rule": rule, "tick_missing": tick_missing})
+        i = j
+    return blocks
+
+
+def _compare_multiset_block(ob, rb, head_compare, diffs, whitelisted, undecidable,
+                            masked_ranges_note, masked_order):
+    """按多重集比一个 multiset 块。返回实际配成对比较的帧数。"""
+    ident = ob["ident"]
+    rule = ob["rule"] or {}
+    ofr, rfr = ob["frames"], rb["frames"]
+    if ob.get("tick_missing") or rb.get("tick_missing"):
+        bad = ofr[0] if ob.get("tick_missing") else rfr[0]
+        undecidable.append({"source": "frame", "frame_index": bad["index"], "ident": ident,
+                            "kind": "multiset_tick_missing",
+                            "detail": "ident %d 的 multiset_by_tick 需要 t_ms 划 tick 窗口，"
+                                      "但该侧缺 t_ms ⇒ 判不了" % ident})
+        return 0
+
+    o_keys = [multiset_key(f) for f in ofr]
+    r_keys = [multiset_key(f) for f in rfr]
+    o_cnt, r_cnt = Counter(o_keys), Counter(r_keys)
+    o_first, r_first = {}, {}
+    for f, k in zip(ofr, o_keys):
+        o_first.setdefault(k, f)
+    for f, k in zip(rfr, r_keys):
+        r_first.setdefault(k, f)
+
+    set_diff = 0
+    for key in sorted(set(o_cnt) | set(r_cnt)):
+        delta = o_cnt.get(key, 0) - r_cnt.get(key, 0)
+        if delta > 0:
+            brief = _frame_brief(o_first[key])
+            diffs.append({"source": "frame", "frame_index": brief["frame_index"],
+                          "ident": ident, "field": "multiset", "kind": "multiset_missing",
+                          "side": "oracle", "absent_on": "rust", "count": delta,
+                          "frame": brief,
+                          "detail": "rust 侧缺失 %d 帧（同 ident/tick 多重集）："
+                                    "param=%r tag=%r series=%r body_len=%r body_prefix=%s"
+                                    % (delta, brief["param"], brief["tag"], brief["series"],
+                                       brief["body_len"], brief["body_prefix_hex"])})
+            set_diff += delta
+        elif delta < 0:
+            brief = _frame_brief(r_first[key])
+            diffs.append({"source": "frame", "frame_index": brief["frame_index"],
+                          "ident": ident, "field": "multiset", "kind": "multiset_extra",
+                          "side": "rust", "absent_on": "oracle", "count": -delta,
+                          "frame": brief,
+                          "detail": "rust 侧多余 %d 帧（同 ident/tick 多重集）："
+                                    "param=%r tag=%r series=%r body_len=%r body_prefix=%s"
+                                    % (-delta, brief["param"], brief["tag"], brief["series"],
+                                       brief["body_len"], brief["body_prefix_hex"])})
+            set_diff += -delta
+
+    # 集合相同、只是顺序不同 ⇒ 显式登记 masked_order（不是静默 PASS）。
+    if set_diff == 0 and o_keys != r_keys:
+        masked_order.append({
+            "source": "frame", "ident": ident, "kind": "masked_order",
+            "oracle_frame_indices": [f["index"] for f in ofr],
+            "rust_frame_indices": [f["index"] for f in rfr],
+            "oracle_order": [_frame_brief(f) for f in ofr],
+            "rust_order": [_frame_brief(f) for f in rfr],
+            "tick_tolerance_ms": rule.get("tick_tolerance_ms", 0),
+            "reason": rule.get("reason", ""), "tier": rule.get("tier", ""),
+            "approved_by": rule.get("approved_by", ""),
+            "detail": "ident %d 同 tick 的 %d 帧两侧顺序不同、多重集相同 ⇒ 按多重集判等"
+                      "（已登记，不是静默通过）" % (ident, len(ofr))})
+
+    # 多重集相同的配对帧仍逐帧走头部/body 比较（排序不得跳过任何判定）。
+    osorted = sorted(ofr, key=multiset_key)
+    rsorted = sorted(rfr, key=multiset_key)
+    matched = 0
+    i = j = 0
+    while i < len(osorted) and j < len(rsorted):
+        ok, rk = multiset_key(osorted[i]), multiset_key(rsorted[j])
+        if ok == rk:
+            head_compare(osorted[i], rsorted[j])
+            compare_bodies(osorted[i], rsorted[j], rule, diffs, whitelisted, undecidable,
+                           masked_ranges_note)
+            matched += 1
+            i += 1
+            j += 1
+        elif ok < rk:
+            i += 1
+        else:
+            j += 1
+    return matched
+
+
 def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     diffs = []
     whitelisted = []
@@ -750,22 +930,44 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
                               "oracle": ov, "rust": rv,
                               "detail": "头部字段不同"})
 
-    n = min(len(o_kept), len(r_kept))
+    o_blocks = _build_blocks(o_kept, rules)
+    r_blocks = _build_blocks(r_kept, rules)
+    masked_order = []
+    compared_frames = 0
+    n = min(len(o_blocks), len(r_blocks))
     for i in range(n):
-        of, rf = o_kept[i], r_kept[i]
-        if of["ident"] != rf["ident"]:
-            diffs.append({"source": "frame", "frame_index": i,
-                          "ident": of["ident"],
-                          "field": "ident", "kind": "ident",
-                          "oracle": of["ident"], "rust": rf["ident"],
-                          "detail": "按序对齐后 ident 不同（帧错位/一侧多帧）"})
+        ob, rb = o_blocks[i], r_blocks[i]
+        if (ob["kind"] == "multiset" and rb["kind"] == "multiset"
+                and ob["ident"] == rb["ident"]):
+            compared_frames += _compare_multiset_block(ob, rb, head_compare, diffs,
+                                                       whitelisted, undecidable,
+                                                       masked_ranges_note, masked_order)
             continue
-        head_compare(of, rf)
-        compare_bodies(of, rf, rules.by_ident.get(of["ident"]),
-                       diffs, whitelisted, undecidable, masked_ranges_note)
+        if ob["kind"] == "single" and rb["kind"] == "single":
+            of, rf = ob["frames"][0], rb["frames"][0]
+            if of["ident"] != rf["ident"]:
+                diffs.append({"source": "frame", "frame_index": of["index"],
+                              "ident": of["ident"],
+                              "field": "ident", "kind": "ident",
+                              "oracle": of["ident"], "rust": rf["ident"],
+                              "detail": "按序对齐后 ident 不同（帧错位/一侧多帧）"})
+                continue
+            head_compare(of, rf)
+            compare_bodies(of, rf, rules.by_ident.get(of["ident"]),
+                           diffs, whitelisted, undecidable, masked_ranges_note)
+            compared_frames += 1
+            continue
+        diffs.append({"source": "frame", "frame_index": ob["frames"][0]["index"],
+                      "ident": ob["ident"], "field": "ident", "kind": "block_ident",
+                      "oracle": ("multiset:%d" % ob["ident"])
+                                if ob["kind"] == "multiset" else ob["ident"],
+                      "rust": ("multiset:%d" % rb["ident"])
+                              if rb["kind"] == "multiset" else rb["ident"],
+                      "detail": "对齐块不一致（一侧是 multiset 块、另一侧不是，或 ident 不同）"})
 
-    if len(o_kept) != len(r_kept):
-        tail = o_kept[n:] if len(o_kept) > n else r_kept[n:]
+    if len(o_blocks) != len(r_blocks):
+        tail_blocks = o_blocks[n:] if len(o_blocks) > n else r_blocks[n:]
+        tail = [fr for b in tail_blocks for fr in b["frames"]]
         diffs.append({"source": "frame", "frame_index": n, "ident": None,
                       "field": "frame_count", "kind": "frame_count",
                       "oracle": len(o_kept), "rust": len(r_kept),
@@ -783,8 +985,9 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
         "kept_frames": {"oracle": len(o_kept), "rust": len(r_kept)},
         "present_idents": present,
         "unclassified": unclassified,
-        "compared_frames": n,
+        "compared_frames": compared_frames,
         "masked_ranges": masked_ranges_note,
+        "masked_order": masked_order,
     }
 
 
@@ -981,6 +1184,7 @@ def empty_report():
         "whitelisted": [],
         "undecidable": [],
         "missing_fields": [],
+        "masked_order": [],
         "db": None,
         "verdict": "UNDECIDABLE",
         "exit_code": 2,
@@ -1096,6 +1300,7 @@ def compare_main(args):
     report["whitelisted"] = cmp["whitelisted"]
     report["missing_fields"] = cmp["missing_fields"]
     report["masked_ranges"] = cmp["masked_ranges"]
+    report["masked_order"] = cmp["masked_order"]
     undecidable.extend(cmp["undecidable"])
     for p in o_stream.problems + r_stream.problems:
         undecidable.append({"source": "input", **p})
@@ -1222,6 +1427,10 @@ def human_summary(report):
         lines.append("whitelisted: %d 条" % len(wl))
         for (kind, field, ident), n in sorted(agg.items(), key=lambda x: str(x[0])):
             lines.append("  %s ident=%s field=%s x%d" % (kind, ident, field, n))
+    mo = report.get("masked_order") or []
+    if mo:
+        lines.append("masked_order: %d 组（同 ident 同 tick 多重集：顺序不同、集合相同，已登记）"
+                      % len(mo))
     und = report.get("undecidable") or []
     if und:
         lines.append("UNDECIDABLE: %d" % len(und))
