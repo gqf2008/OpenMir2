@@ -13140,6 +13140,32 @@ fn drain_stamina(
         // `sg` 的借用在此前已结束（NLL），这里可以重新借 `sessions`。
         drain_close_health_for(world, online, sessions, gates, actor_id);
     }
+    // **C4 复核**：`:219` 的门在 oracle 里对**每个** `BaseObject.Run` 都跑（含怪物：
+    // `WorldServer.MonGen.cs:315` 的 `monster.Run()`），而上循环只覆盖玩家会话 ⇒ 再扫一遍
+    // **非会话实体**（槽位序）。玩家已在上面清位 ⇒ `drain_close_health_for` 的门幂等跳过。
+    drain_close_health_residual(world, online, sessions, gates);
+}
+
+/// **C4**：非会话实体（怪物/NPC）的 `ShowHp` 到期残余扫描（`BaseObject.Base.cs:219-222`）。
+///
+/// oracle 的 `ShowHp` 门在 `BaseObject.Run` 里对所有 actor 生效：`SKILL_SHOWHP` 的目标可以是怪
+/// （`World::cast_show_hp_spell` 无 race 门、`make_open_health` 会置怪物的 `show_hp=true`，
+/// 宿主 `drain_b3` 也给怪物发 1100）。`drain_stamina` 的会话循环只覆盖玩家 ⇒ 本函数按
+/// `EntityStore` 的**槽位序**（显式索引，不是 Query/哈希序）对全实体再判一次门；
+/// 已处理的玩家 `show_hp` 已清 ⇒ 无帧、无状态改动（幂等）。
+///
+/// 帧面由 [`drain_close_health_for`] 出（±12 玩家，`Recog` = 到期者）。
+fn drain_close_health_residual(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    // 先收集 id，避免迭代中可变借 `world`。
+    let all_ids: Vec<i32> = world.entities.iter().map(|e| e.id).collect();
+    for actor_id in all_ids {
+        drain_close_health_for(world, online, sessions, gates, actor_id);
+    }
 }
 
 /// oracle `WorldServer.ProcessPlayObjectData`（`WorldServer.cs:698`）的周期存档判定：
@@ -13558,12 +13584,16 @@ fn drain_pk_flag_downlink(
 /// 收件人 = `SendRefMsg` 的 ±12 玩家集合（含到期者自己，`hear_targets` 已含 ObMode/FixedHideMode
 /// 自收支），优先级 `(byte)RM_CLOSEHEALTH = 171`。
 ///
-/// **调用点（C1 复核修正）**：由 [`drain_stamina`] 在**每个 actor 的 P7/P8 段之后、下一 actor 之前**
-/// 逐个调用，而不是整 tick 一次全扫。oracle 的顺序是每个 `PlayObject.Run()` 自己的
-/// 填充(`:36-68`) → 负值扣血(`:110-115`) → ShowHp 门(`:219`) → 钳制(`:230-245`) ⇒ 按 actor 交错；
-/// 宿主把该 actor 的全部 `SM_HEALTHSPELLCHANGED(53)` 发完之后再出 1101，满足
-/// ① 53 先于 1101（优先级 68 < 171）、② `ShowHp` 广播支仍按**清位前**的会话态计数
-/// （`drain_stamina` 的 `let show_hp = sg.show_hp` 读在清位之前）⇒ 观察者与自身都不少 53。
+/// **调用点（C1/C4 复核修正）**：
+/// 1. [`drain_stamina`] 的玩家会话循环里，**每个 actor 的 P7/P8 段之后、下一 actor 之前**逐个调用；
+/// 2. 循环之后再由 [`drain_close_health_residual`] 按槽位序扫**非会话实体**（怪物/NPC 也可能被
+///    心灵启示置 `show_hp`，`WorldServer.MonGen.cs:315` 的 `monster.Run()` 同样跑 `:219` 门）。
+///
+/// oracle 的顺序是每个 `BaseObject.Run()` 自己的填充(`:36-68`) → 负值扣血(`:110-115`) →
+/// ShowHp 门(`:219`) → 钳制(`:230-245`) ⇒ 按 actor 交错；宿主把该 actor 的全部
+/// `SM_HEALTHSPELLCHANGED(53)` 发完之后再出 1101，满足 ① 53 先于 1101（优先级 68 < 171）、
+/// ② `ShowHp` 广播支仍按**清位前**的会话态计数（`drain_stamina` 的 `let show_hp = sg.show_hp`
+/// 读在清位之前）⇒ 观察者与自身都不少 53。非会话实体没有 53，只有 1101。
 ///
 /// **相位差（登记，T-89 族）**：oracle 的 `SendRefMsg(RM_CLOSEHEALTH)` 只入各收件人的
 /// `MsgQueue`，下一 `Run()`（≈200ms）才 `Operate` 出 1101；本宿主同 tick 直发 ⇒ 相对 oracle
@@ -44643,7 +44673,7 @@ mod tests {
     ///    ⇒ header-only，`Recog` = 到期者（`BaseObject.Message.cs:98/:153` 置 `ActorId=baseObject.ActorId`）。
     ///
     /// 牙（改坏必红）：
-    /// - 删 `drain_close_health` 里的 `push_broadcast` ⇒ 911/912 的 1101 计数 0≠1；
+    /// - 删 `drain_close_health_for` 里的 `push_broadcast` ⇒ 911/912 的 1101 计数 0≠1；
     /// - 删 `show_hp = false` ⇒ 同一时钟再调一次仍匹配 ⇒ 第二条 1101（第二段断言 0≠1）；
     /// - `^=` 改成 `|=`/清位 ⇒ `char_status_ex` 的 OPENHEATH 位断言红；
     /// - `get_char_status` 挪到 XOR 之前 ⇒ `char_status` 仍带 OPENHEATH ⇒ 断言红；
@@ -44831,18 +44861,76 @@ mod tests {
         );
     }
 
-    /// **`openmir2-sm-closehealth-wire` 的发射点牙（删调用必红）**：`drain_close_health_for`
-    /// 的生产调用必须仍在 `drain_stamina` 体内（C1 复核后：逐 actor、在该 actor 的 P7/P8 帧之后）。
+    /// **C4 复核牙：怪物目标的 `1100 → 到期 → 1101`**。
+    ///
+    /// oracle：`SKILL_SHOWHP` 的目标可以是怪（`MagicManager.cs:431-442` 无 race 门），
+    /// `MakeOpenHealth` 给怪置 `ShowHp=true`，`BaseObject.Run` 的 `:219` 门对怪同样跑
+    /// （`WorldServer.MonGen.cs:315` 的 `monster.Run()`）⇒ 到期出 `SM_CLOSEHEALTH(1101)`，
+    /// `Recog` = 怪物 actor id。
+    ///
+    /// 构造：玩家会话（HP 满、无 53）+ 一只 race=80 的怪，`ShowHp=true` 且同 tick 到期。
+    ///
+    /// 牙（改坏必红）：删掉 `drain_stamina` 末尾的 `drain_close_health_residual` 调用（只留会话
+    /// 循环）⇒ 怪物永远收不到 1101、`show_hp`/OPENHEATH 位不复位 ⇒ 本用例红。
+    #[test]
+    fn closehealth_monster_target_gets_1101_on_expiry() {
+        const SM_1101: u16 = mir2_protocol::messages::SM_CLOSEHEALTH;
+
+        let (mut world, mut sessions, online, gates, mut rx, _player) =
+            clamp_fixture(100, 0, 100, 0);
+        world.clock_ms = 100_000;
+        let mut mon = mir2_world::Entity::new(0, "mon".to_string(), 3, 3);
+        mon.race = 80; // 非 Play（怪物族）
+        mon.hp = 40;
+        mon.max_hp = 40;
+        let mon_id = world.add_entity(mon);
+        {
+            let e = world.entities.get_mut(mon_id).unwrap();
+            e.show_hp = true;
+            e.show_hp_tick = 95_000;
+            e.show_hp_interval = 4_000; // 100_000 - 95_000 = 5_000 > 4_000 ⇒ 到期
+            e.char_status_ex |= mir2_world::entity::POISON_OPENHEATH;
+        }
+
+        drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 0, 0, &[]);
+
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            frames.push(body);
+        }
+        let hits: Vec<&Vec<u8>> = frames.iter().filter(|b| sf_ident(b) == SM_1101).collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "怪物到期恰一条 1101（发给 ±12 观察者：玩家 918）"
+        );
+        let cm = CommandMessage::from_bytes(hits[0]).expect("1101 body 至少 12B");
+        assert_eq!(cm.recog, mon_id, "1101 的 Recog = 到期怪物");
+        let e = world.entities.get(mon_id).unwrap();
+        assert!(!e.show_hp, "怪物 ShowHp 复位");
+        assert_eq!(
+            e.char_status_ex & mir2_world::entity::POISON_OPENHEATH,
+            0,
+            "怪物 OPENHEATH 位 XOR 掉"
+        );
+    }
+
+    /// **`openmir2-sm-closehealth-wire` 的发射点牙（删调用必红）**：`drain_stamina` 末尾的
+    /// **非会话实体残余扫描**必须仍在。C4 复核：只靠会话循环会漏掉怪物/NPC 的 `ShowHp` 到期
+    /// （`BaseObject.Base.cs:219` 对每个 `BaseObject.Run` 都跑，含 `WorldServer.MonGen.cs:315`
+    /// 的 `monster.Run()`）。
+    ///
     /// 照 `drain_deal_tick_production_call_is_wired_in_sim_loop` 的口径按**整行精确形状**匹配
-    /// （定义行 `fn drain_close_health_for(` 与测试里的多行调用都不命中；`//` 前缀会改 trim 结果）。
+    /// （`//` 前缀会改 trim 结果 ⇒ 被注释掉的行不命中）。
     ///
     /// 牙：删掉该调用（或注释掉）⇒ 命中 0；复制出第二个调用点 ⇒ 命中 2；把调用挪出
-    /// `drain_stamina` 体（比如挪回 sim_loop）⇒ 位置断言红。三者都必红。
+    /// `drain_stamina` 体 ⇒ 位置断言红。行为侧另有
+    /// `closehealth_monster_target_gets_1101_on_expiry` 兜底。
     #[test]
-    fn drain_close_health_call_is_wired_inside_drain_stamina() {
+    fn drain_close_health_residual_call_is_wired_inside_drain_stamina() {
         let src = include_str!("lib.rs");
         let lines: Vec<&str> = src.lines().collect();
-        const CALL: &str = "drain_close_health_for(world, online, sessions, gates, actor_id);";
+        const CALL: &str = "drain_close_health_residual(world, online, sessions, gates);";
         let hits: Vec<usize> = lines
             .iter()
             .enumerate()
@@ -44852,7 +44940,7 @@ mod tests {
         assert_eq!(
             hits.len(),
             1,
-            "`drain_close_health_for(...)` 的生产调用行必须恰一条（0 = 被删/被注释/改坏；>1 = 重复调用点）；命中 {hits:?}"
+            "非会话残余扫描的生产调用行必须恰一条（0 = 被删/被注释/改坏；>1 = 重复）；命中 {hits:?}"
         );
         let call = hits[0];
         let start = lines

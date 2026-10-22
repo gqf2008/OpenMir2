@@ -57,7 +57,7 @@
 //! | [`sm_breakweapon`] | 1102 | `CheckWeaponUpgrade` 的 `SendRefMsg(RM_BREAKWEAPON)`（武器耐久归零） | 编码器 + 构造用例在；`grep RM_BREAKWEAPON` 生产点零命中 | **登记 T-174**：生产链 = 耐久扣减 ⇒ R，随 `SM_LAMPCHANGEDURA` 同窗口跑 |
 //! | [`sm_changeface`] | 1104 | `ElfWarriorMonster` 的 `MakeClone` 支（ELF 分裂出分身时 `SendRefMsg(RM_CHANGEFACE)`） | 编码器 + 构造用例在；本仓无该支生产点 | **登记 T-175**：上游 `ElfWarrior` 分裂支未移植 |
 //! | [`sm_closedoor`] | 614 | `RM_DOORCLOSE`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**：与 `sm_opendoor_ok` 同因，oracle 结构性不可达 |
-//! | [`sm_closehealth`] | 1101 | `BreakOpenHealth`（`ShowHp` 超时或死亡时 `SendRefMsg(RM_CLOSEHEALTH)`） | 宿主已镜像 `sg.show_hp`；1101 发射点**已接线**（`lib.rs::drain_close_health`） | **已接线**（卡 `openmir2-sm-closehealth-wire`，2026-10-23）：Leader 放行 `lib.rs`；生产入口 12B 字节用例 + 调用点牙见卡片；残差见 T-79 ③ |
+//! | [`sm_closehealth`] | 1101 | `BreakOpenHealth`（`BaseObject.Base.cs:219-222` 的 `ShowHp` 到期门；死亡路径不调它）⇒ `SendRefMsg(RM_CLOSEHEALTH)` | 宿主已镜像 `sg.show_hp`；1101 发射点**已接线**（`lib.rs::drain_close_health_for`：玩家在 `drain_stamina` 内逐 actor、怪物/NPC 由 `drain_close_health_residual` 补扫） | **已接线**（卡 `openmir2-sm-closehealth-wire`，2026-10-23）：Leader 放行 `lib.rs`；12B 字节 / 怪物到期 / 帧序用例 + 调用点牙见卡片；相位差见 T-79 ③ |
 //! | [`sm_hideevent`] | 805 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_HIDEEVENT)`） | `World::run_map_events` 只跑 fire-burn + dig-out 两支，未建模 `VisibleEvents` 差集 | **登记 T-178**：MapEvent 可见性未建模 |
 //! | [`sm_itemshow`] | 610 | `Envir.AddItemToMap` 成功支的 `SendRefMsg(RM_ITEMSHOW)` | `MapItem.ItemId == 0` 恒真 ⇒ oracle 不可达（T-19/T-25/T-32） | **登记 T-179**：沿用既有 T-32 结论 |
 //! | [`sm_lampchangedura`] | 655 | 右手火把耐久结算的两处 `SendMsg(RM_LAMPCHANGEDURA)` | 编码器在；生产点零命中 | **登记 T-180**：改耐久 ⇒ R，需真机窗口 |
@@ -73,7 +73,7 @@
 //! 且 `mir2-rs/tests/parity/m3/plan-run-gap-batches-20261018.md` 的派工行已标注「`lib.rs` 与
 //! wt-gm3 冲突」⇒ 由卡片 comment 请 Leader 裁定写集，不擅自越界改动。
 //! **2026-10-23 更新**：Leader 已放行 `lib.rs`，`SM_CLOSEHEALTH` 由卡 `openmir2-sm-closehealth-wire`
-//! 接线（`lib.rs::drain_close_health`）；本表保留当时判定作审计记录，残差见 `whitelist.md` T-79 ③ / T-177。
+//! 接线（`lib.rs::drain_close_health_for` + `drain_close_health_residual`）；本表保留当时判定作审计记录，相位差见 `whitelist.md` T-79 ③ / T-177。
 
 use crate::smframe::{
     client_layout_enabled, command_header, gm_data_body, hi_word, lo_word, make_word,
