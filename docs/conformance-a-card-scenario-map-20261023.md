@@ -243,3 +243,41 @@
 4. `CM_DROPITEM(1000)` 暂未建场景：oracle `ClientDropItem(processMsg.Msg, processMsg.nParam1)` 的 body 是**物品名文本**，
    而 DSL 的 `params` 只把 int 代入数字字段，文本必须写字面量 ⇒ 需先定部署里可丢弃的物品名再建，不写猜的名字。
 3. ~~48 张低置信度卡的通道判定待逐卡回读~~ ⇒ 已做（§3.1/§3.2）：19 张按 `window_items` 定；余 27 张的 findings 为评审问题单、不含证据形态 ⇒ 仍低置信度，待 owner/Leader 补窗口清单。
+
+
+## 7. 窗口 run 清单（拿到独占窗口后照此执行）
+
+前置：端口 15000/15500/16000/17100 已释放；两侧从同一基线恢复（`E:/tmp/conformance/restore-baseline.sh`），
+或两侧各自用后缀库（`reset-db.sh r` / `reset-db.sh c`）。
+
+```sh
+# 1) 先跑无参场景 —— 这一跑同时给出下文要用的 ActorId / MakeIndex
+python -I -B tools/probe/mir2_probe.py --login-gate 127.0.0.1:17000   --account test01 --password test01 --server-name 热血传奇 --char-name test01   --scenario tools/probe/scenarios/login_only.json --out E:/tmp/conformance/runs/login_only-<side>-<ts>
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/gm_time.json  --out ...
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/gm_batch.json --out ...
+
+# 2) 用第 1 步 frames.ndjson 里的 ActorId 填 --var，再跑点击/对话族
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/npc_click.json    --var npc_actor=<id> --out ...
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/king_dialog.json  --var king_actor=<id> --out ...
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/king_castle_war.json --var king_actor=<id> --out ...
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/merchant_dialog.json --var merchant_actor=<id> --out ...
+
+# 3) 背包族（MakeIndex / 坐标取自第 1 步 frames 或 DB 后态）
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/bag_equip.json  --var make_index=<n> --var takeon_where=<slot> --out ...
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/eat_item.json   --var make_index=<n> --out ...
+python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/pickup_item.json --var self_x=<x> --var self_y=<y> --out ...
+
+# 4) 逐场景比较（每次两侧各一份产物）
+python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/runs/<scenario>-oracle-<ts>   --rust   E:/tmp/conformance/runs/<scenario>-rust-<ts>   --out    E:/tmp/conformance/runs/<scenario>-report.json
+```
+
+| 场景 | 需要的运行时参数 | 从哪里取 |
+|---|---|---|
+| `login_only` / `gm_time` / `gm_batch` | 无 | — |
+| `npc_click` / `king_dialog` / `king_castle_war` | `npc_actor` / `king_actor` | 第 1 步 `frames.ndjson` 里 NPC 的 `recog`（配 `SM_TURN`/出现帧） |
+| `merchant_dialog` | `merchant_actor` | 同上；商人 `SM_TURN` series 低=4 高=2 |
+| `bag_equip` / `eat_item` | `make_index`、`takeon_where` | 第 1 步的 `SM_BAGITEMS(201)`/DB `characters_bagitem` |
+| `pickup_item` | `self_x` / `self_y` | 进图后的 `SM_...`/DB `characters.MapX|MapY` |
+
+> 每一步都要**两侧各跑一次**（同端口串行），并各自落 `frames.ndjson` + `run.json` + `db_snapshot.json`；
+> `compare_runs.py` 的退出码 0/1/2 才是判定口径（2 = 判不了，不许当绿）。
