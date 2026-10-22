@@ -2037,7 +2037,12 @@ fn run_party_goto_label(
             // （START 在当前 oracle 源码下不可达，STOP 只写 false；仍接线避免假实现）。
             player.bo_inc_game_gold = sg.p22.bo_inc_game_gold;
             player.bo_dec_game_gold = sg.p22.bo_dec_game_gold;
+            // **A-10/T-86**：`SETOFFLINE` 的 `OffLineFlag`/`KickOffLineTick`（同一个 `PlayObject`）。
+            player.off_line_flag = sg.off_line_flag;
+            player.kick_off_line_tick = sg.kick_off_line_tick;
         }
+        // `HUtil32.GetTickCount()`：宿主注入域（与 P31 `host_now` 同源）。
+        player.tick = now_ms() as i32;
         if let Some(says) = host.goto_label("QFunction", &mut player, label, false) {
             says_len = says.len();
             if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 说词") {
@@ -2063,6 +2068,9 @@ fn run_party_goto_label(
             // **PL-4 / P22**：脚本写回（未命中动作时是 seed 的等值回写）。
             sg.p22.bo_inc_game_gold = player.bo_inc_game_gold;
             sg.p22.bo_dec_game_gold = player.bo_dec_game_gold;
+            // **A-10/T-86**：`SETOFFLINE` 两字段写回（四字段已在上方 P31 块内写回）。
+            sg.off_line_flag = player.off_line_flag;
+            sg.kick_off_line_tick = player.kick_off_line_tick;
         }
         if let Some(e) = world.entities.get_mut(actor) {
             e.kill_mon_exp_rate = player.kill_mon_exp_rate;
@@ -4092,6 +4100,8 @@ fn handle_click_npc_cmd(
             npc_vars,
             session,
             sell_off_sessions.entry(chr_name.to_string()).or_default(),
+            // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+            now_ms() as i32,
             &mut rng,
         );
         world.rng = rng;
@@ -4878,6 +4888,8 @@ fn handle_shop_cmd(
                 npc_vars,
                 session,
                 sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                now_ms() as i32,
                 &mut rng,
             );
             world.rng = rng;
@@ -4926,6 +4938,8 @@ fn handle_shop_cmd(
                     npc_vars,
                     session,
                     sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                    // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                    now_ms() as i32,
                     &mut rng,
                 );
                 world.rng = rng;
@@ -5330,6 +5344,8 @@ fn handle_shop_cmd(
                     npc_vars,
                     session,
                     sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                    // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
+                    now_ms() as i32,
                     &mut rng,
                 );
                 world.rng = rng;
@@ -5667,7 +5683,34 @@ fn npc_player_from_session<'r>(
     for (i, v) in sg.mnm_val.iter().enumerate() {
         p.mnmval.insert(i, *v);
     }
+    // **A-10/T-86（`SETOFFLINE`）**：`AutoGetExp*` 四字段与 `OffLineFlag`/`KickOffLineTick`
+    // 都是**同一个** `PlayObject` 的字段（`ExecutionProcessingSys.cs:2723-2728`）⇒ 与 P31
+    // 同法：脚本前从会话 seed、脚本后写回（[`write_back_player_offline`]）。商家脚本若未命中
+    // `SETOFFLINE`/`SETAUTOGETEXP`，这条 round-trip 必须恒等，不能把会话里已有的挂机配置清零。
+    p.auto_get_exp_in_safe_zone = sg.auto_get_exp_in_safe_zone;
+    p.auto_get_exp_envir = sg.auto_get_exp_envir.clone();
+    p.auto_get_exp_time = sg.auto_get_exp_time;
+    p.auto_get_exp_point = sg.auto_get_exp_point;
+    p.off_line_flag = sg.off_line_flag;
+    p.kick_off_line_tick = sg.kick_off_line_tick;
     p
+}
+
+/// 脚本跑完把 `NpcPlayer` 的**挂机面**写回会话——oracle `ActionOfOffLine`
+/// （`ExecutionProcessingSys.cs:2723-2728`）写的是 `PlayObject` 自己的
+/// `AutoGetExpInSafeZone/Envir/Time/Point` + `OffLineFlag/KickOffLineTick`；
+/// 本仓 `NpcPlayer` 是每次脚本调用重建的快照 ⇒ 与 P31/`SETAUTOGETEXP` 同法对账。
+///
+/// `AutoGetExpEnvir` 名变了就清 `auto_get_exp_envir_map_id` 缓存（P31 段下次重新解析）。
+/// `@Login`/组队两路是**等值的内联版**（源码锚用例 `p31_production_wiring_anchors` 钉住那两段必须仍在）。
+fn write_back_player_offline(p: &game_svr::npc::NpcPlayer<'_>, sg: &mut SessionGround) {
+    sg.auto_get_exp_in_safe_zone = p.auto_get_exp_in_safe_zone;
+    sg.auto_get_exp_envir = p.auto_get_exp_envir.clone();
+    sg.auto_get_exp_envir_map_id = None;
+    sg.auto_get_exp_time = p.auto_get_exp_time;
+    sg.auto_get_exp_point = p.auto_get_exp_point;
+    sg.off_line_flag = p.off_line_flag;
+    sg.kick_off_line_tick = p.kick_off_line_tick;
 }
 
 /// 脚本跑完后把 `NpcPlayer.MNMval`（见 [`npc_player_from_session`] 的映射说明）写回会话，
@@ -5956,6 +5999,10 @@ fn run_merchant_goto(
     npc_vars: &game_svr::npc::NpcVars,
     session: &mut ShopSession,
     sell_off: &mut game_svr::selloff::SellOffState,
+    // `HUtil32.GetTickCount()`（脚本动作时间基准；`SETOFFLINE` 的
+    // `KickOffLineTick = tick + nKick*60*1000`，`ExecutionProcessingSys.cs:2728`）。
+    // 生产 = `now_ms() as i32`（与 P31 的 `host_now` 同域），**不是** `world.clock_ms`。
+    now_tick: i32,
     rng: &mut mir2_shared::rng::RandomNumber,
 ) -> (
     Vec<game_svr::npc::SayMsg>,
@@ -5974,6 +6021,8 @@ fn run_merchant_goto(
         let mut rngf = |v: i32| rng.random_below(v);
         let mut player =
             npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
+        // `HUtil32.GetTickCount()`：oracle 是同一个 `PlayObject` 的运行时时钟。
+        player.tick = now_tick;
         player.script_index = session.script_index;
         player.last_npc = session.last_npc;
         // oracle 的同一个 `PlayObject` 字段：脚本跑前 seed（`OPENYBDEAL` 读 `SaleDeal`，
@@ -5986,6 +6035,8 @@ fn run_merchant_goto(
         session.last_npc = player.last_npc;
         write_back_player_mnmval(&player, sg);
         write_back_player_gold_deal(&player, sg, session, sell_off);
+        // **A-10/T-86**：`SETOFFLINE` 的六字段写回（与 P31 四字段同一位置；未命中动作时等值）。
+        write_back_player_offline(&player, sg);
         let use_slots = write_back_player_use_items(&player, sg, &use_before);
         (
             says,
@@ -6037,6 +6088,8 @@ struct FixedNpcScriptCtx<'a> {
     chr_name: &'a str,
     /// `PlayObject.Envir.MapName`（`$MAPNAME` 与 `GetVariableText` 的读源；本骨架用 map_id 文本）。
     map_text: &'a str,
+    /// `HUtil32.GetTickCount()`（宿主 `now_ms() as i32`）：脚本动作的时间基准。
+    now_tick: i32,
 }
 
 impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
@@ -6065,6 +6118,7 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
             self.npc_vars,
             ss,
             self.sell_off,
+            self.now_tick,
             self.rng,
         )
     }
@@ -14599,6 +14653,16 @@ struct SessionGround {
     auto_get_exp_envir_map_id: Option<usize>,
     /// `PlayObject.AutoGetExpInSafeZone`（`:808`）：true ⇒ P31 还要 `InSafeZone()`。
     auto_get_exp_in_safe_zone: bool,
+    /// `PlayObject.OffLineFlag`（`PlayObject.cs:306`；未初始化自动属性 ⇒ false）：
+    /// `ActionOfOffLine`（`ExecutionProcessingSys.cs:2727`）的唯一生产写点（卡 A-10/T-86）。
+    /// 脚本跑前的 seed / 跑后的写回见 `@Login`、组队、商人三路；**读侧**（收发抑制
+    /// `PlayObject.Socket.cs:54/83/107`、到时踢号 `PlayObject.Message.cs:235-238`、离词
+    /// `PlayObject.Chat.cs:31`）仍按 T-100 未接线——本卡只保证字段落真值。
+    off_line_flag: bool,
+    /// `PlayObject.KickOffLineTick`（`PlayObject.cs:302`；ctor 0）：`ExecutionProcessingSys.cs:2728`
+    /// 的 `GetTickCount() + nKickOffLine * 60 * 1000`（i32 回绕域）。**基准 = 脚本宿主时钟**
+    /// （`now_ms() as i32`，与 P31 的 `host_now` 同域）⇒ 未来接 T-100 的踢号门必须用同一域比较。
+    kick_off_line_tick: i32,
     /// **G2**：`PlayObject` 的行会会话字段（`MyGuild` / `GuildRankNo` / `GuildRankName` /
     /// `AllowGuild` / `BanGuildChat`）。管理器 `GuildManager` 才是真源，这里是每连接缓存；
     /// 生命周期与 `SessionGround` 相同（进世界建、断线删）。**不要**放到 `Entity` 上。
@@ -17852,6 +17916,7 @@ fn sim_loop(
                             sell_off,
                             chr_name: &chr_name,
                             map_text: &map_text,
+                            now_tick,
                         };
                         guild_official::handle_select(
                             cmd.recog,
@@ -19040,6 +19105,8 @@ fn sim_loop(
                                                             auto_get_exp_envir: None,
                                                             auto_get_exp_envir_map_id: None,
                                                             auto_get_exp_in_safe_zone: false,
+                                                            off_line_flag: false,
+                                                            kick_off_line_tick: 0,
                                                             guild: guild_session.clone(),
                                                         },
                                                     );
@@ -19232,7 +19299,16 @@ fn sim_loop(
                                                                         sg.p22.bo_inc_game_gold;
                                                                     player.bo_dec_game_gold =
                                                                         sg.p22.bo_dec_game_gold;
+                                                                    // **A-10/T-86**：`SETOFFLINE`
+                                                                    // 的两字段（同一个 `PlayObject`）。
+                                                                    player.off_line_flag =
+                                                                        sg.off_line_flag;
+                                                                    player.kick_off_line_tick =
+                                                                        sg.kick_off_line_tick;
                                                                 }
+                                                                // `HUtil32.GetTickCount()` 的宿主值
+                                                                //（与 P31 `host_now` 同源）。
+                                                                player.tick = now_ms() as i32;
                                                                 if let Some(says) =
                                                                     host.run_login(&mut player)
                                                                 {
@@ -19287,6 +19363,12 @@ fn sim_loop(
                                                                         player.bo_inc_game_gold;
                                                                     sg.p22.bo_dec_game_gold =
                                                                         player.bo_dec_game_gold;
+                                                                    // **A-10/T-86**：两字段写回
+                                                                    //（四字段已在上方 P31 块内写回）。
+                                                                    sg.off_line_flag =
+                                                                        player.off_line_flag;
+                                                                    sg.kick_off_line_tick =
+                                                                        player.kick_off_line_tick;
                                                                 }
                                                                 if let Some(e) = world.entities.get_mut(id) {
                                                                     e.kill_mon_exp_rate =
@@ -23672,6 +23754,8 @@ mod tests {
             auto_get_exp_envir: None,
             auto_get_exp_envir_map_id: None,
             auto_get_exp_in_safe_zone: false,
+            off_line_flag: false,
+            kick_off_line_tick: 0,
             guild: guild_cmd::GuildSession::default(),
         }
     }
@@ -24113,6 +24197,88 @@ mod tests {
             "② 第三支只能放行一次（第二次被拒 ⇒ `GotoLable` 被 boExtJmp 挡下 ⇒ 零帧）"
         );
         assert_eq!(rig.game_gold(), 160, "② 被拒 ⇒ 脚本不执行，元宝不变");
+    }
+
+    /// `SETOFFLINE 时间 点数 踢号分钟`（`n_cmd_code = 337` = `ExecutionCode.OffLine`）：
+    /// 三段参数都走 `sParam1..3`（`ScriptParsers.cs:554`）。
+    fn setoffline_act(p1: &str, p2: &str, p3: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 337,
+            s_param1: p1.to_string(),
+            s_param2: p2.to_string(),
+            s_param3: p3.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **A-10/T-86（`SETOFFLINE`）生产入口**：`CM_MERCHANTDLGSELECT` → `run_merchant_goto`
+    /// → `ActionOfOffLine`（code 337）→ `NpcPlayer::set_offline` → 会话写回，六字段逐项断言。
+    ///
+    /// oracle 锚（`ExecutionProcessingSys.cs:2723-2728`）：`AutoGetExpInSafeZone = true`、
+    /// `AutoGetExpEnvir = playerActor.Envir`、`AutoGetExpTime = nTime * 1000`、
+    /// `AutoGetExpPoint = nPoint`、`OffLineFlag = true`、
+    /// `KickOffLineTick = HUtil32.GetTickCount() + nKickOffLine * 60 * 1000`。
+    /// 宿主侧 `GetTickCount()` = `now_ms() as i32`（**与 P31 `host_now = now_ms()` 同域**）；
+    /// 墙钟不可被夹具注入 ⇒ 用调用前后的两次取钟把基准钉在区间内。
+    ///
+    /// 牙①：删 `run_merchant_goto` 的 `write_back_player_offline` 调用 ⇒ 六条断言全红
+    /// （会话仍是 false/None/0/0/0/0）。
+    /// 牙②：删 `NpcPlayer::envir_map_name` / `tick_count` 覆写 ⇒ `envir` / `kick` 断言红。
+    #[test]
+    fn setoffline_writes_six_session_fields_through_production_path() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "挂机",
+            vec![setoffline_act("3", "700", "15")],
+        )]);
+        let lo = now_ms() as i32;
+        rig.dlg_select("@main");
+        let hi = now_ms() as i32;
+        let _ = rig.drain();
+        let sg = &rig.sessions["hero"];
+        assert!(sg.auto_get_exp_in_safe_zone, "InSafeZone = true（:2723）");
+        assert_eq!(
+            sg.auto_get_exp_envir.as_deref(),
+            Some("0"),
+            "Envir = playerActor.Envir 的地图名（:2724）"
+        );
+        assert_eq!(sg.auto_get_exp_time, 3_000, "nTime * 1000（:2725）");
+        assert_eq!(sg.auto_get_exp_point, 700, "nPoint（:2726）");
+        assert!(sg.off_line_flag, "OffLineFlag = true（:2727）");
+        let base = sg.kick_off_line_tick.wrapping_sub(15 * 60_000);
+        assert!(
+            (lo..=hi).contains(&base),
+            "KickOffLineTick = host_tick + nKick*60*1000（:2728）：base={base} not in [{lo},{hi}]"
+        );
+    }
+
+    /// **M-1（商人路径 round-trip 恒等）**：`OffLineFlag`/`KickOffLineTick` 与 P31 四字段是
+    /// oracle **同一个** `PlayObject` 的字段（`ExecutionProcessingSys.cs:2723-2728`）⇒ 商人
+    /// `GotoLable` 未命中 `SETOFFLINE` 时，会话里已有的挂机面必须原样存活（脚本没写就不变）。
+    ///
+    /// 牙：删 `npc_player_from_session` 的挂机面 seed ⇒ 快照的缺省值
+    /// （false/None/0/0/false/0）被写回 ⇒ 六条断言全红。
+    #[test]
+    fn merchant_goto_preserves_hang_state_round_trip() {
+        let mut rig = T142Rig::new(vec![t142_record("@main", "欢迎", Vec::new())]);
+        {
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.auto_get_exp_in_safe_zone = true;
+            sg.auto_get_exp_envir = Some("0".to_string());
+            sg.auto_get_exp_time = 7_000;
+            sg.auto_get_exp_point = 900;
+            sg.off_line_flag = true;
+            sg.kick_off_line_tick = 42;
+        }
+        rig.dlg_select("@main");
+        let _ = rig.drain();
+        let sg = &rig.sessions["hero"];
+        assert!(sg.auto_get_exp_in_safe_zone);
+        assert_eq!(sg.auto_get_exp_envir.as_deref(), Some("0"));
+        assert_eq!(sg.auto_get_exp_time, 7_000);
+        assert_eq!(sg.auto_get_exp_point, 900);
+        assert!(sg.off_line_flag, "挂机标志不得被商人脚本清零");
+        assert_eq!(sg.kick_off_line_tick, 42, "踢号时限不得被商人脚本清零");
     }
 
     /// `take`/`give` 的 **`nParam2`** 口径（`ScriptParsers.cs:554`：动作的件数在 **sParam2** ⇒
@@ -24929,6 +25095,8 @@ mod tests {
             auto_get_exp_envir: None,
             auto_get_exp_envir_map_id: None,
             auto_get_exp_in_safe_zone: false,
+            off_line_flag: false,
+            kick_off_line_tick: 0,
             guild: guild_cmd::GuildSession::default(),
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
@@ -27116,6 +27284,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27324,6 +27494,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27501,6 +27673,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27656,6 +27830,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -27828,6 +28004,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -29898,6 +30076,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -30241,6 +30421,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -31473,6 +31655,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -35449,6 +35633,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -35632,6 +35818,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -35777,6 +35965,8 @@ mod tests {
                 auto_get_exp_envir: None,
                 auto_get_exp_envir_map_id: None,
                 auto_get_exp_in_safe_zone: false,
+                off_line_flag: false,
+                kick_off_line_tick: 0,
                 guild: guild_cmd::GuildSession::default(),
             },
         );
@@ -54274,6 +54464,7 @@ mod tests {",
                 sell_off: &mut self.sell_off,
                 chr_name: "hero",
                 map_text: "0",
+                now_tick,
             };
             guild_official::handle_select(
                 self.npc_id,
