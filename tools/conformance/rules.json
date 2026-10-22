@@ -33,10 +33,25 @@
   ],
   "rules": [
     {
-      "ident": [10, 41],
+      "ident": 10,
       "action": "compare",
-      "reason": "10=SM_TURN、41=SM_FEATURECHANGED 是真实协议帧（Messages.cs:161/202；downlink.rs 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」且有逐字节黄金断言），默认必须逐字节比较，不得当心跳剔除。确需忽略时只能用显式 --ignore-idents（CLI 会登记为 cli_ignore）",
+      "head_mask": ["series"],
+      "reason": "SM_TURN 是真实协议帧（Messages.cs:161），body/param/tag 仍逐字节比；只有 series=MakeWord(Dir, Light) 的 **Dir 字节**掩码。依据：2026-10-23 双栈窗口（docs/window-529-dualrun-20261023.md）两侧同一条固定商人的出现帧（param=8 tag=10 body 逐字节相同）series 为 518(0x0206)/516(0x0204) —— Light 相同(2)、Dir 6 vs 4。原因是 oracle 固定 NPC 的 Dir 只会被 `GuildOfficial.Run`(1/40)/`Merchant.Run`(1/50) 的 `TurnTo(RandomByte(8))` 改写（GuildOfficial.cs:41-48 / Merchant.cs:132-141），而 oracle 的随机源是 `new Random()` 墙钟播种（src/OpenMir2/RandomNumber.cs:34），跨进程不可复现；Rust 侧 `MIR2_RNG_SEED=42` 注入也换不回同一流位置（两侧在客户端登录前的 tick 数不同）。series 的**公式**（MakeWord(Dir,Light)）与字节形态已由 downlink 金标准用例钉死（turn_pair_rebuilds_golden_sm_turn_and_featurechanged / npc_turn_pair_nameless_matches_capture_series）；**玩家自己**的 Dir 仍由 SM_WALK(SM_RUN) 的 series 在移动场景逐值比较。不得用本掩码去掉整帧或掩 body",
+      "tier": "R",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 41,
+      "action": "compare",
+      "reason": "41=SM_FEATURECHANGED 是真实协议帧（Messages.cs:202；downlink.rs 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」且有逐字节黄金断言），默认必须逐字节比较，不得当心跳剔除。确需忽略时只能用显式 --ignore-idents（CLI 会登记为 cli_ignore）",
       "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 14,
+      "action": "ignore",
+      "reason": "SM_HIT：固定 NPC / 商人的受击帧，只在 oracle 随机支命中时发（`GuildOfficial.Run` 的 `Random(30)==0`、`Merchant.Run` 的第二个 `Random(50)==0`，GuildOfficial.cs:41-48 / Merchant.cs:132-141），而 oracle 随机源是墙钟播种的 `new Random()`（src/OpenMir2/RandomNumber.cs:34）⇒ **跨进程不可复现**：2026-10-23 双栈窗口里 Rust（seed=42 注入）在登录后 0.8s 发了一条 recog=被观察商人、Series=Dir 的 14，oracle 同场景 0 条（两侧 rest 帧逐字节相同）。帧形态本身不由掩码承担：downlink::hit_frame 的逐字节黄金用例（npc_hit_frame_is_sm_hit_with_dir_series_and_no_tail）+ T-154 F1 判据（npc_hit_frames_only_for_world_branch_and_never_to_npc）把「发给谁、什么形态」钉死；本规则只免除「命中次数/时刻」这条跨进程不可判的项。**不得**用本规则掩盖 hit 帧形态或收件人差异：若两侧同时出现 14 帧，仍按 --ignore-idents 之外的通道由用例判",
+      "tier": "R",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
@@ -172,8 +187,9 @@
     },
     {
       "ident": 530,
-      "action": "compare",
-      "reason": "SM_SELECTSERVER_OK：body = SelGate 的 `ip/port/session` 文本（首跑两侧都是 `127.0.0.1/17100/2`，逐字节相同 ⇒ 地址/端口必须比、不做掩码）；recog = 剩余游戏时间秒数或 SessionID（C# src/LoginSrv/Services/ClientSession.cs:516/520），跨运行/跨会话必然不同 ⇒ 只靠全局 recog 掩码；param/tag/series 照常比",
+      "action": "mask_body_ranges",
+      "ranges": [[16, null]],
+      "reason": "SM_SELECTSERVER_OK：body = `SelGateIp/SelGatePort/SessionID` 文本（C# src/LoginSrv/Services/ClientSession.cs:520 `EDCode.EncodeString(sSelGateIp + \"/\" + nSelGatePort + \"/\" + userInfo.SessionID)`）。**ip 与端口逐字节比**（偏移 0..15），只掩最后一个 `/` 之后的 SessionID（偏移 16 到末尾）：它是 LoginSrv 进程内 session 计数器的分配值，两次独立进程运行必然不同（2026-10-23 窗口实测 oracle=3、Rust=2；首跑两侧恰好都是 2）。区间掩码只在两侧 body 等长时生效（compare_runs.py 的 mask_body_ranges 分支），长度一变就退回整段逐字节 diff ⇒ 不会静默吞掉 ip/端口差异。recog 另走全局掩码（pay mode>0 时是剩余秒数、否则 SessionID，ClientSession.cs:514/518）；param/tag/series 照常比",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
