@@ -373,3 +373,30 @@ selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
 
 ⇒ 该场景现在**不是恒失败断言**，而是 oracle 通过、缺陷侧失败的**可用判据**（对应 Leader 另开的
 `@ya52 ELSEACT/CHECKitem 不发 767` 卡，owner `openmir2-worker-31`）。产物：`E:/tmp/conformance/runs/w24-{csharp,rust}-dice767`。
+
+## 23. ya52 修复后复跑（07:10–07:15）：Rust 也 exit=0，剩余差异只有 `52 mp`
+
+依据 Leader 要求，把分支更新到最新 master 并用该树**重建 Rust**：
+
+```sh
+git merge walgit/master  # e4dd64c77（含 ya52 767 修复）→ e3f31606b，0 冲突
+cd mir2-rs && CARGO_TARGET_DIR=E:/tmp/w24-target cargo build --release -p mir2-server   # exit 0
+powershell -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/conformance/rust-root \
+  -LogDir E:/tmp/conformance/rust-logs -PortsProfile E:/tmp/window/r5/root/alt-port-profile.json \
+  -Ports @{ 'db-srv'=@(16000,15100,15700); 'game-gate'=@(17600) } -Seed 42 \
+  -ServerExe E:/tmp/w24-target/release/mir2-server.exe
+```
+
+| 侧 | 结果 | 帧数 | 末步 767 |
+|---|---|---:|---|
+| Rust（master `e4dd64c77` 构建） | **exit=0**（修复前 exit=1） | 33 | ✅ `seq=33 "请打开商铺兑换[筹码]后再来！"` |
+| C#（对照，未变） | exit=0 | 33 | ✅ 同文案 |
+
+`compare_runs.py`：`frames 33/33`、**DIFFS 1**——
+只剩 `idx=15 ident=52 52_semantic:mp oracle=18 rust=17`（§21 的 tick 相位项）；`whitelisted 54 条`。
+且本对里**没有**多余 `14`、没有多发 `10/41`、公告多重集一致 ⇒ 之前那些帧级噪声在本场景下不再出现。
+
+**结论**：
+1. N-2 的判据**稳定**：修复前 Rust exit=1、修复后 exit=0，判据能区分两侧。
+2. 卡 `openmir2-ya52-menu-ok-missing` 的窗口项可以收：修复前/后各一份产物（`w24-rust-dice767` vs `w24-rust-dice-ya52fix`）。
+3. 剩余唯一差异是 `52 mp ±1`（R 级相位项），与本卡无关。
