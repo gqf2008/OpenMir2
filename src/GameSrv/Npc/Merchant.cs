@@ -114,14 +114,14 @@ namespace GameSrv.Npc
             try
             {
                 int dwCurrentTick = HUtil32.GetTickCount();
-                int dwDelayTick = ProcessRefillIndex * 500;
-                if (dwCurrentTick < dwDelayTick)
+                // 回源 MirServer-Delphi/EM2Engine/ObjNpc.pas:1667：oracle 每 30 秒刷一次
+                // （`if (GetTickCount - dwRefillGoodsTick) > 30000`）。这里原先是 5 分钟，
+                // 还额外叠了 `ProcessRefillIndex * 500` 的错峰 —— 两者 oracle 都没有。
+                // 后果：新起的 GameSvr 在 5 分钟内货架恒空，客户端点商人收到 645 空列表
+                // （T15）。错峰一并去掉：30 秒节拍本身就是 oracle 的摊薄方式。
+                if (dwCurrentTick - RefillGoodsTick > 30000)
                 {
-                    dwDelayTick = 0;
-                }
-                if (dwCurrentTick - RefillGoodsTick > 5 * 60 * 1000 + dwDelayTick)
-                {
-                    RefillGoodsTick = dwCurrentTick + dwDelayTick;
+                    RefillGoodsTick = dwCurrentTick;
                     RefillGoods();
                 }
                 if ((dwCurrentTick - ClearExpreUpgradeTick) > 10 * 60 * 1000)
@@ -225,13 +225,15 @@ namespace GameSrv.Npc
                         {
                             IList<UserItem> refillList = GetRefillList(nIndex);
                             int nRefillCount = refillList?.Count ?? 0;
+                            // 这里不能 `return`：oracle 的 RefillGoods（ObjNpc.pas:847-890）
+                            // 一次遍历把所有 goods 条目都刷完。旧移植在补一种商品后直接
+                            // return，14 种商品要 70 分钟才补齐（T15 的第二半根因）。
                             if (goodCout > nRefillCount)
                             {
                                 CheckItemPrice(nIndex);
                                 RefillGoodsItems(ref refillList, goods.ItemName, goods.Count - nRefillCount);
                                 LocalDb.SaveGoodRecord(this, ScriptName + '-' + MapName);
                                 LocalDb.SaveGoodPriceRecord(this, ScriptName + '-' + MapName);
-                                return;
                             }
                             if (goodCout < nRefillCount)
                             {
@@ -1061,6 +1063,11 @@ namespace GameSrv.Npc
             LocalDb.LoadGoodRecord(this, sFile);
             LocalDb.LoadGoodPriceRecord(this, sFile);
             LoadUpgradeList();
+            // 世界初始化时先刷一次货架。oracle 靠 Run 的 30 秒节拍在启动后 30 秒内
+            // 完成首刷（ObjNpc.pas:1667）；这里提前到加载点，消掉「服务端刚起、
+            // 第一个玩家点进来看到空货架」的窗口（T15 的现象）。重复调用是幂等的：
+            // 每条 goods 的 RefillTick 会挡住 RefillTime 分钟内的第二次刷新。
+            RefillGoods();
         }
 
         private void SaveNpcData()
