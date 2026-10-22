@@ -1,0 +1,11 @@
+{
+  "name": "king_castle_war",
+  "description": "点比奇国王 -> 等 643 -> 选 @requestcastlewarA（部署脚本该支回 messagebox「尚未开放」）-> 等 SM_SYSMESSAGE(100)/643",
+  "params": {"king_actor": "REQUIRED"},
+  "steps": [
+    {"click_npc": "king_actor"},
+    {"wait_for": 643, "timeout_ms": 3000},
+    {"dlg_select": "@requestcastlewarA", "note": "label 逐字取自 Npc_Def/比奇国王-0122.txt；该支 @act 为 messagebox 尚未开放"},
+    {"wait_for": [100, 643], "timeout_ms": 3000}
+  ]
+}
