@@ -45,6 +45,17 @@
 `@huit` = `(331..377, y 138..150)`，与 `docs/dice-link-diagnosis-20261022.md` §3 的结论逐像素一致。
 点击 `(75,75)` ⇒ `1011 @kaiz` **一次命中**。
 
+上述步骤已固化成工具 **`tools/client/dlg_links.py`**（PIL+numpy，无其它依赖）：
+
+```sh
+python tools/client/dlg_links.py E:/tmp/window/r9/shot3.png              # JSON：每个 run 的矩形 + 点击点
+python tools/client/dlg_links.py shot.png --say-file say.txt             # 按序贴上 <文本/@参数>
+python tools/client/dlg_links.py --selftest                              # 对 r7 截图断言三个链接矩形
+```
+
+自测即判据：对 `E:/tmp/window/r7/shot-dice5.png` 必须报出 `43..107 / 169..233（y 带顶 68）`
+与 `331..377（y 带顶 148）`，且点击点落在 14 px 命中框内（`SELFTEST GREEN`）。
+
 > 注意：`@ya5` 之后的「大/小」面板是**大对话框**（`atlen>=15`），链接颜色不是黄色（灰白），
 > 像素掩码抓不到；该面板坐标按行距直接取（`※小※` = client `(200,89)`）⇒ 命中 `@ya52`。
 
