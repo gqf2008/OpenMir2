@@ -3917,6 +3917,9 @@ fn handle_click_npc_cmd(
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     npc_vars: &game_svr::npc::NpcVars,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    // `M2Share.GetItemNumber()` 计数器（`GIVE` 新建件的 `MakeIndex`；与商人路径/新手物品
+    // 共用**同一个**会话级计数器，见 [`run_merchant_goto`]）。
+    item_number: &mut i32,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> bool {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
@@ -4008,45 +4011,50 @@ fn handle_click_npc_cmd(
         let mut rng =
             std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
         let mut sent = 0usize;
-        {
-            let mut rngf = |v: i32| rng.random_below(v);
-            let map_text = pmap.to_string();
-            let mut player =
-                npc_player_from_session(&mut rngf, chr_name, sg, &map_text, catalog, npc_vars);
-            player.script_index = session.script_index;
-            player.last_npc = session.last_npc;
-            // `@main` 里也可能出现 `OPENYBDEAL`/`PLAYDICE`：与商人对话路径同一 seed 口径。
-            let sell_off = sell_off_sessions.entry(chr_name.to_string()).or_default();
-            seed_player_gold_deal(&mut player, session, sell_off);
-            let goto = merchant_book.goto_label(npc_actor_id, &mut player, "@main", false);
-            // **T-142 F2**：`@main` 里的 `GAMEGOLD` 动作排队 `RM_GAMEGOLDCHANGED`
-            //（`BaseObject.cs:593-599`）⇒ 与商人 `GotoLable` 同口径在写回后排水。
-            let script_frames = std::mem::take(&mut player.frames);
-            if let Some(says) = goto {
-                // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`
-                // （`ScriptEngine.cs:993`）：**每句说词 Clear 后重建** `CanJmpScriptLableMap`。
-                for say in &says {
-                    session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
-                }
-                if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 说词")
-                {
-                    sent = emit_npc_says(tx, socket, sg.actor_id, &says);
-                }
-            }
-            // `PlayObject.Script` / `LastNpc` 跨调用保持（`ScriptEngine.cs:41-70`）。
-            session.script_index = player.script_index;
-            session.last_npc = player.last_npc;
-            // `MNMval` 是 `$STR(M*)` 与 `<QUERYVAL>` 共用数组（`PlayObject.cs:543`）⇒ 写回会话。
-            write_back_player_mnmval(&player, sg);
-            write_back_player_gold_deal(&player, sg, session, sell_off);
-            if !script_frames.is_empty() {
-                if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 脚本帧")
-                {
-                    emit_script_frames(tx, socket, npc_actor_id, sg, &script_frames);
-                }
+        // **T-160 收口**：`NormNpc.Click` 的 `GotoLable("@main")` 与商人 `GotoLable` 在 oracle 里
+        // 是**同一个** `ScriptEngine.GotoLable`/同一个 `PlayObject` ⇒ 直接复用
+        // [`run_merchant_goto`]：脚本前后对账写回背包/佩戴位/金币/`MNMval`，`GIVE` 件的
+        // `MakeIndex` 走**同一个**会话 `item_number` 计数器。写回在脚本帧排水之前（帧读的是
+        // 写回后的会话值，与商人路径一致）。
+        let map_text = pmap.to_string();
+        let (says, script_frames, use_slots) = run_merchant_goto(
+            merchant_book,
+            npc_actor_id,
+            "@main",
+            false,
+            sg,
+            chr_name,
+            &map_text,
+            catalog,
+            item_number,
+            npc_vars,
+            session,
+            sell_off_sessions.entry(chr_name.to_string()).or_default(),
+            &mut rng,
+        );
+        world.rng = rng;
+        // 佩戴位写回后同步世界实体（`Entity.use_items` 是每 tick 的源，不同步会被覆盖）。
+        for slot in use_slots {
+            sync_use_item_slot_to_entity(world, sg, slot);
+        }
+        for say in &says {
+            // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`
+            // （`ScriptEngine.cs:993`）：**每句说词 Clear 后重建** `CanJmpScriptLableMap`。
+            session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+        }
+        if !says.is_empty() {
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 说词") {
+                sent = emit_npc_says(tx, socket, sg.actor_id, &says);
             }
         }
-        world.rng = rng;
+        // **T-142 F2**：`@main` 里的 `GAMEGOLD` 动作排队 `RM_GAMEGOLDCHANGED`
+        //（`BaseObject.cs:593-599`）⇒ 与商人 `GotoLable` 同口径在写回后排水。
+        if !script_frames.is_empty() {
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 脚本帧")
+            {
+                emit_script_frames(tx, socket, npc_actor_id, sg, &script_frames);
+            }
+        }
         glog!(
             "INF",
             "CM_CLICKNPC：到达 Click 点 ChrName={chr_name} npc={npc_actor_id}（@main 说词 {sent} 条）"
@@ -4182,6 +4190,9 @@ fn dispatch_inbound_p0(
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     npc_vars: &game_svr::npc::NpcVars,
+    // `M2Share.GetItemNumber()` 计数器（`CM_CLICKNPC` 的 `@main` 脚本 `GIVE` 件走它，
+    // 见 [`handle_click_npc_cmd`]）。
+    item_number: &mut i32,
 ) -> bool {
     if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
         // 线缆映射（`WorldServer.cs:793-794`）：`Recog=targetId`、`Param=x`、`Tag=y`。
@@ -4223,6 +4234,7 @@ fn dispatch_inbound_p0(
             sell_off_sessions,
             npc_vars,
             catalog,
+            item_number,
             gates,
         );
         true
@@ -17561,6 +17573,7 @@ fn sim_loop(
                         &mut shop_sessions,
                         &mut sell_off_sessions,
                         &npc_vars_base,
+                        &mut item_number,
                     ) {
                         // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
                         // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
@@ -23663,6 +23676,7 @@ mod tests {
                 &mut self.sell_off_sessions,
                 &self.npc_vars,
                 &self.catalog,
+                &mut self.item_number,
                 &self.gates,
             )
         }
@@ -37162,6 +37176,7 @@ mod tests {
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
+                &mut 0,
                 &gates,
             ),
             "IsCanDeal=false ⇒ 不点"
@@ -37182,6 +37197,7 @@ mod tests {
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
+                &mut 0,
                 &gates,
             ),
             "商人在 ±15 ⇒ 到达 Click 点"
@@ -37206,6 +37222,7 @@ mod tests {
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
+                &mut 0,
                 &gates,
             ),
             "NPC 超 ±15 ⇒ 不点"
@@ -37231,6 +37248,7 @@ mod tests {
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
+                &mut 0,
                 &gates,
             ),
             "限频内 ⇒ 不点"
@@ -37250,6 +37268,7 @@ mod tests {
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &game_svr::ability::StdItemCatalog::new(),
+                &mut 0,
                 &gates,
             ),
             "超出限频窗 ⇒ 可点"
@@ -37329,6 +37348,7 @@ mod tests {
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
+                &mut 0,
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -37368,6 +37388,7 @@ mod tests {
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
+                &mut 0,
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -37436,6 +37457,7 @@ mod tests {
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
+                &mut 0,
             ),
             "CM_QUERYUSERNAME 属 P0 批"
         );
@@ -37475,6 +37497,7 @@ mod tests {
             &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
+            &mut 0,
         ));
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1, "近窗 ⇒ 恰好一帧 SM_USERNAME");
@@ -37552,6 +37575,7 @@ mod tests {
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
+                &mut 0,
             ),
             "CM_QUERYUSERSTATE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -37652,6 +37676,7 @@ mod tests {
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
+                &mut 0,
             ),
             "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
         );
@@ -37704,6 +37729,7 @@ mod tests {
                 &mut HashMap::new(),
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
+                &mut 0,
             ),
             "非 P0 ident ⇒ 返回 false"
         );
@@ -37732,6 +37758,7 @@ mod tests {
             &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
+            &mut 0,
         ));
         assert_eq!(
             sessions.get("hero").unwrap().mns_val[3],
@@ -37766,6 +37793,7 @@ mod tests {
             &mut HashMap::new(),
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
+            &mut 0,
         ));
         let sg = sessions.get("hero").unwrap();
         assert_eq!(sg.mns_val[3], "hello", "CM_QUERYVAL 尾经派发落 MNSval[3]");
@@ -54089,6 +54117,8 @@ mod tests {",
         sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
         npc_vars: game_svr::npc::NpcVars,
         catalog: game_svr::ability::StdItemCatalog,
+        /// `M2Share.GetItemNumber()` 计数器（click 路径的 `GIVE` 件走它）。
+        item_number: i32,
         dir: std::path::PathBuf,
     }
 
@@ -54100,26 +54130,33 @@ mod tests {",
 
     impl T137Rig {
         fn new() -> Self {
+            Self::new_with(
+                ";测试\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                &[
+                    (
+                        "Npc_def/国王-0.txt",
+                        "[@main]\n欢迎来到王宫\\ <申请行会./@@buildguildnow> <打听/@ask>\n\n[@ask]\n#ACT\nGAMEGOLD + 5\n#SAY\n王的答复：<$GAMEGOLD>\\ <返回/@back>\n",
+                    ),
+                    (
+                        "Npc_def/老人-0.txt",
+                        "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#ACT\nGAMEGOLD + 5\n#SAY\n打听结果：<$GAMEGOLD>\\ <返回/@back>\n",
+                    ),
+                ],
+                2,
+            )
+        }
+
+        /// 自定义脚本/`Npcs.txt` 的同构夹具（T-160：同一脚本经两条生产入口驱动）。
+        fn new_with(npcs_txt: &str, scripts: &[(&str, &str)], placed: usize) -> Self {
             use std::sync::atomic::{AtomicU32, Ordering};
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let n = SEQ.fetch_add(1, Ordering::Relaxed);
             let dir = std::env::temp_dir().join(format!("gs-t137-{}-{n}", std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
-            t137_write(
-                &dir,
-                "Npcs.txt",
-                ";测试\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
-            );
-            t137_write(
-                &dir,
-                "Npc_def/国王-0.txt",
-                "[@main]\n欢迎来到王宫\\ <申请行会./@@buildguildnow> <打听/@ask>\n\n[@ask]\n#ACT\nGAMEGOLD + 5\n#SAY\n王的答复：<$GAMEGOLD>\\ <返回/@back>\n",
-            );
-            t137_write(
-                &dir,
-                "Npc_def/老人-0.txt",
-                "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#ACT\nGAMEGOLD + 5\n#SAY\n打听结果：<$GAMEGOLD>\\ <返回/@back>\n",
-            );
+            t137_write(&dir, "Npcs.txt", npcs_txt);
+            for (rel, text) in scripts {
+                t137_write(&dir, rel, text);
+            }
 
             let mut world = mir2_world::World::new(32, 32);
             let hero = world.add_entity({
@@ -54158,7 +54195,7 @@ mod tests {",
                 &mut book,
                 &mut displays,
             );
-            assert_eq!(report.placed, 2, "两个固定 NPC 都必须进世界");
+            assert_eq!(report.placed, placed, "固定 NPC 都必须进世界");
             assert!(
                 report.script_failures.is_empty() && report.script_missing.is_empty(),
                 "两个 Npc_def 脚本都必须装载成功：{:?}/{:?}",
@@ -54210,6 +54247,7 @@ mod tests {",
                 sell_off_sessions: HashMap::new(),
                 npc_vars: game_svr::npc::NpcVars::default(),
                 catalog: game_svr::ability::StdItemCatalog::new(),
+                item_number: 0,
                 dir,
             }
         }
@@ -54228,6 +54266,7 @@ mod tests {",
                 &mut self.sell_off_sessions,
                 &self.npc_vars,
                 &self.catalog,
+                &mut self.item_number,
                 &self.gates,
             )
         }
@@ -54380,6 +54419,146 @@ mod tests {",
             back_says.iter().any(|s| s.contains("老人：你需要什么")),
             "`@back` 必须 GotoLable(ScriptGoBackLable=@main) 并产说词：{back_says:?}"
         );
+    }
+
+    // ===================== T-160：固定 NPC `@main` 的背包/金币写回 =====================
+
+    /// T-160 夹具：`老人`（type 0 固定 NPC）的 `@main` 脚本里同时 `take 木剑 1` 与
+    /// `take 金币 5`——两段 procedure（oracle `GotoLableQuestActionProcess`/`run_actions` 对
+    /// **每个** procedure 只执行**第一个**已注册动作 ⇒ 一个 procedure 一个动作）。
+    ///
+    /// `国王` 只留一条说词：`Npcs.txt` 里两个 NPC 都要装载成功（`placed=2`），脚本失败会让
+    /// `T137Rig::new_with` 的断言先红。
+    fn t160_rig() -> T137Rig {
+        T137Rig::new_with(
+            ";测试\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+            &[
+                (
+                    "Npc_def/国王-0.txt",
+                    "[@main]\n国王：闲人免进\\ <离开/@exit>\n",
+                ),
+                (
+                    "Npc_def/老人-0.txt",
+                    "[@main]\n#ACT\ntake 木剑 1\n#SAY\n老人：拿货\\ <付钱/@pay> <离开/@exit>\n#IF\n#ACT\ntake 金币 5\n\n[@pay]\n#SAY\n老人：付过了\\ <返回/@main>\n",
+                ),
+            ],
+            2,
+        )
+    }
+
+    /// T-160 夹具的会话初值：背包 `[木剑(4201), 木剑(4202)]` + 金币 100。
+    fn t160_prepare(rig: &mut T137Rig) {
+        use game_svr::bag::BagItem;
+        rig.catalog.insert(
+            7,
+            mir2_data::StdItem {
+                name: "木剑".to_string(),
+                dura_max: 10,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let sg = rig.sessions.get_mut("hero").unwrap();
+        sg.state.gold = 100;
+        sg.state.item_list = vec![
+            BagItem {
+                make_index: 4201,
+                index: 7,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            },
+            BagItem {
+                make_index: 4202,
+                index: 7,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            },
+        ];
+    }
+
+    fn t160_bag_make_indexes(rig: &T137Rig) -> Vec<i32> {
+        rig.sessions["hero"]
+            .state
+            .item_list
+            .iter()
+            .map(|it| it.make_index)
+            .collect()
+    }
+
+    /// **卡 `openmir2-click-path-bag-writeback`（T-160 收口，tier R）**：固定 NPC 点击的
+    /// `@main` 脚本动作必须落会话。
+    ///
+    /// oracle：`NormNpc.Click`（`NormNpc.cs:68-73`）→ `ScriptEngine.GotoLable("@main")`；
+    /// `GotoLableTakeItem`（`ScriptEngine.cs:653-683`）直接改**同一个** `PlayObject.ItemList/Gold`
+    /// ⇒ `MakeSaveRcd` 落 `characters_bagitem`/`characters.Gold`。旧实现（T-160）只在商人对话
+    /// 路径对账回写 ⇒ 点固定 NPC 触发的 `take` 不落库。
+    ///
+    /// 牙（真跑见交付记录）：把 `handle_click_npc_cmd` 的 `@main` 改回直调
+    /// `merchant_book.goto_label`（不走 `run_merchant_goto`）⇒ 背包仍 2 件（`[4201, 4202]`）、
+    /// 金币仍 100 ⇒ 本用例两条断言红。
+    #[test]
+    fn t160_click_fixed_npc_main_take_item_and_gold_write_back() {
+        let mut rig = t160_rig();
+        t160_prepare(&mut rig);
+        let elder_id = rig.elder_id;
+        assert!(
+            rig.click(elder_id),
+            "固定 NPC 必须走 `FindNpc` 臂到 `normNpc.Click`（`NormNpc.cs:68-73`）"
+        );
+        assert_eq!(
+            t160_bag_make_indexes(&rig),
+            vec![4201],
+            "`@main` 的 `take 木剑 1` 必须回写会话背包，且照 oracle 从**尾**摘（摘 4202 留 4201）"
+        );
+        assert_eq!(
+            rig.sessions["hero"].state.gold, 95,
+            "`@main` 的 `take 金币 5` 必须回写会话金币（100 - 5）"
+        );
+        let says = T137Rig::says(&rig.drain());
+        assert!(
+            says.iter()
+                .any(|s| s.starts_with("老人/") && s.contains("老人：拿货")),
+            "写回不妨碍 `@main` 说词下发：{says:?}"
+        );
+    }
+
+    /// **T-160 同夹具对照**：同一份 `Npc_def/老人-0.txt`、同一会话初值，经
+    /// ① 固定 NPC 点击（`handle_click_npc_cmd` 的 `@main`）与
+    /// ② 商人 1011（`CM_MERCHANTDLGSELECT("@main")`，`Merchant.UserSelect` 的 `LableIsCanJmp("@main")`
+    /// 恒真）两条**生产入口**驱动 ⇒ 背包剩余 `MakeIndex`、金币、说词三面必须一致。
+    ///
+    /// 牙：删 click 路径的写回（见上一个用例）⇒ ①的背包/金币与②分叉 ⇒ 断言红。
+    #[test]
+    fn t160_click_and_dlg_select_same_script_same_write_back() {
+        let mut click_rig = t160_rig();
+        t160_prepare(&mut click_rig);
+        let elder_id = click_rig.elder_id;
+        assert!(click_rig.click(elder_id), "点击固定 NPC 必须到达 Click 点");
+        let click_says = T137Rig::says(&click_rig.drain());
+
+        let mut dlg_rig = t160_rig();
+        t160_prepare(&mut dlg_rig);
+        let elder_id = dlg_rig.elder_id;
+        dlg_rig.dlg_select(elder_id, "@main");
+        let dlg_says = T137Rig::says(&dlg_rig.drain());
+
+        assert_eq!(
+            t160_bag_make_indexes(&click_rig),
+            t160_bag_make_indexes(&dlg_rig),
+            "两条入口跑同一脚本 ⇒ 背包剩余必须一致"
+        );
+        assert_eq!(
+            t160_bag_make_indexes(&click_rig),
+            vec![4201],
+            "夹具前置：`take 木剑 1` 后只剩 4201"
+        );
+        assert_eq!(
+            click_rig.sessions["hero"].state.gold, dlg_rig.sessions["hero"].state.gold,
+            "两条入口的金币结果必须一致"
+        );
+        assert_eq!(click_rig.sessions["hero"].state.gold, 95);
+        assert_eq!(click_says, dlg_says, "两条入口的 `@main` 说词必须一致");
     }
 
     /// **T-137 复核 F1（回归）**：type 2 `CastleOfficial` 不进 `Npc_def` 脚本。
