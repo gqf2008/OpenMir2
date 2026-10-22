@@ -188,7 +188,7 @@ pub const TRAINING_SKILL_HELP: &str = "命令格式: @增加技能 人物名称 
 pub const UNBIND_USE_ITEM_HELP: &str = "命令格式: @UnBindUseItem ";
 
 // ---- 批次 4 的 SysMsg 正文（`MessageSettings` / `CommandHelp` 原文；`String.ini` 未随部署提供 ⇒ 取
-// ---- `SystemModule/MessageSettings.cs` 的构造默认值，见 T-179）----
+// ---- `SystemModule/MessageSettings.cs` 的构造默认值，见 T-191）----
 pub const USER_FULL_TITLE: &str = "设置服务器最高上线人数。";
 pub const ZEN_FAST_STEP_TITLE: &str = "设置怪物行动速度。";
 pub const ITEM_NAME_OCCUPIED: &str = "此物品，已经设置了其它的名称!!!";
@@ -558,6 +558,11 @@ impl GmSession {
     /// 口径：oracle 的 `DearName/Gender/IsMaster/AllowGuildReCall/GroupRcallTime` 由角色记录
     /// 装入（`WorldServer.cs:279-350` + `PlayObject` 字段），本仓由登录分支从
     /// `record::CharacterData` 传进来（`lib.rs` 一处构造点）。
+    ///
+    /// 另两项同样在登录时从 `GetHumData` 装入：`AttatckMode = humData.AttatckMode`
+    /// （`WorldServer.cs:1148`）、`ReLevel = humData.ReLevel`（`:1133`）——对应
+    /// `record::CharacterData.attatck_mode`/`.re_level`，不装载会让 `@AttackMode` 的
+    /// 连加序列整体偏移、`@转生` 印出的发起者 `ReLevel` 为 0。
     #[must_use]
     pub fn from_character(
         dear_name: &str,
@@ -565,6 +570,8 @@ impl GmSession {
         is_master: bool,
         allow_guild_re_call: bool,
         group_rcall_time: i16,
+        attack_mode: u8,
+        re_level: u8,
     ) -> Self {
         Self {
             dear_name: dear_name.to_string(),
@@ -572,6 +579,8 @@ impl GmSession {
             is_master,
             allow_guild_re_call,
             group_rcall_time,
+            attack_mode,
+            re_level,
             ..Self::default()
         }
     }
@@ -3130,12 +3139,14 @@ const NOTE_GM4_NOOP: &str = "批次 4：oracle 命令体为空/只有权限自�
 // ============================================================================================
 // 批次 4：数值/角色族 44 条（设计件 §4.3 第 72–115 行；tier=R）
 //
-// 本批的统一前提（逐条登记 T-174..T-179，见 `mir2-rs/tests/parity/whitelist.md`）：
+// 本批的统一前提（逐条登记 T-186..T-191，见 `mir2-rs/tests/parity/whitelist.md`）：
 //
-// 1. **目标数值态缺口**：`GmWorld` 只有 `&World` 只读视图，且 `Entity` 不携带
-//    `Gold/GameGold/GamePoint/CreditPoint/Level/Exp/BonusAbil/PkPoint/Luck/...`。凡「目标在线」
-//    之后要读这些值的分支（含 `X的金币已增加{n}.` 里会被 `GoldMax` 夹取的 `n`），一律
-//    `log_note` 登记，**不伪造**（任务书：不得伪造即时落库）。
+// 1. **目标数值态缺口**：`GmWorld` 只有 `&World` 只读视图。`Entity` **确实携带**
+//    `gold/level/exp/pk_point/luck/use_items` 等字段，但玩家 `Entity.gold` 生产无写点（恒 0，
+//    读它＝伪造数值），`level/exp` 可读而本批要写的 `gold/game_gold/...` 无写通道；真值是
+//    `SessionGround` 的 `state.gold`/`game_gold`/`state.item_list`，未暴露给 `GmWorld`。
+//    凡「目标在线」之后要读这些值的分支（含 `X的金币已增加{n}.` 里会被 `GoldMax` 夹取的 `n`），一律
+//    `log_note` 登记，**不伪造**（任务书：不得伪造即时落库；**禁止**读 `Entity.gold`）。
 // 2. **目标侧 SysMsg 缺口**：oracle 里 `mIPlayerActor.SysMsg(...)`（发给**其它角色**）本仓无
 //    通道——`GmResult.msgs` 只承载发起者自己的帧 ⇒ 只出发起者那条，目标那条登记。
 // 3. **可变副作用缺口**：`GmWorld` 无 `&mut World` ⇒ 所有写值（金币/等级/属性/背包/技能/配置）
@@ -3146,16 +3157,16 @@ const NOTE_GM4_NOOP: &str = "批次 4：oracle 命令体为空/只有权限自�
 // ============================================================================================
 
 const NOTE_GM4_TARGET_STATE: &str =
-    "批次 4：目标角色数值态不在 Entity 上（T-174）⇒ 效果与依赖该值的文本未接";
+    "批次 4：目标角色数值态无读取/写回通道（真值在 SessionGround；Entity.gold 恒 0 不可读，T-186）⇒ 效果与依赖该值的文本未接";
 const NOTE_GM4_TARGET_SYSMSG: &str =
-    "批次 4：发给其它角色的 SysMsg 无通道（T-175）⇒ 只出 GM 侧那条";
-const NOTE_GM4_BAG: &str = "批次 4：背包/物品绑定宿主未接（T-176）";
-const NOTE_GM4_MAGIC: &str = "批次 4：魔法库/技能表宿主未接（T-177）";
-const NOTE_GM4_CONFIG: &str = "批次 4：Config 运行期写点未接（T-178）";
+    "批次 4：发给其它角色的 SysMsg 无通道（T-187）⇒ 只出 GM 侧那条";
+const NOTE_GM4_BAG: &str = "批次 4：背包/物品绑定宿主未接（T-188）";
+const NOTE_GM4_MAGIC: &str = "批次 4：魔法库/技能表宿主未接（T-189）";
+const NOTE_GM4_CONFIG: &str = "批次 4：Config 运行期写点未接（T-190）";
 const NOTE_GM4_EXCEPTION: &str =
     "批次 4：oracle 在此抛异常（被 ProcessUserLineMsg 的 catch 吞掉）⇒ 零帧";
 const NOTE_GM4_FRONT_SERVER: &str =
-    "批次 4：FindOtherServerUser（跨服在线表）宿主未接（T-178）⇒ 按「不在线」支";
+    "批次 4：FindOtherServerUser（跨服在线表）宿主未接（T-190）⇒ 按「不在线」支";
 
 /// 两条 SysMsg 的便捷构造（`Vec<GmMsg>` 顺序即发送顺序）。
 fn two_msgs(first: (GmColor, String), second: (GmColor, String)) -> GmResult {
@@ -3215,7 +3226,7 @@ fn add_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
         // 在线支：`Gold + n < GoldMax` 才全额，否则夹取到 `GoldMax - Gold` ⇒ 文本依赖目标 Gold。
         no_frames(NOTE_GM4_TARGET_STATE)
     } else {
-        // `FindOtherServerUser` 命中支发绿字「{name} 现在{n}号服务器上」；跨服表未接（T-178）。
+        // `FindOtherServerUser` 命中支发绿字「{name} 现在{n}号服务器上」；跨服表未接（T-190）。
         noted(
             green(format!("{name} 现在不在线，等其上线时金币将自动增加")),
             NOTE_GM4_FRONT_SERVER,
@@ -3267,10 +3278,11 @@ fn adjust_exp() -> GmResult {
 /// `BindUseItemCommand`（现网 `@Binduseitem`）。
 fn bind_use_item(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     let params = split_params(parameters);
-    if parameters.is_empty() {
-        // `@params == null || @params.Length <= 0` ⇒ 静默返回（零帧）。
-        return GmResult::empty();
-    }
+    // oracle `@params == null || @params.Length <= 0`（`BindUseItemCommand.cs:15`）在真实调用路径下
+    // **永假**：`GameCommand.Handle` 恒传 `parameters.Split(' ')`（`GameCommand.cs:46`），而
+    // `ExtractCommandAndParameters` 对无参命令给 `string.Empty`（`CommandSystem.cs:228-250`），
+    // .NET `"".Split(' ')` = `[""]`（长度 1）⇒ 无参 `@Binduseitem` 继续走下面的门，
+    // 由 `GetUseItemIdx("") = -1` 落到红字 CommandHelp。故**不写**该早退（写了会让无参路径零帧）。
     let name = params.first().copied().unwrap_or("");
     let bind_type = params.get(2).copied().unwrap_or("");
     // `GetUseItemIdx(sItem)` 在 oracle 里是「装备位名称 → 槽位号」的固定表；宿主未接 ⇒ 恒 -1。
@@ -3286,8 +3298,15 @@ fn bind_use_item(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     } else {
         -1
     };
-    if item_idx < 0 || bind < 0 || name.is_empty() || second_utf16_is_question(name) == Some(true) {
+    if item_idx < 0 || bind < 0 || name.is_empty() {
         return red(BIND_USE_ITEM_HELP);
+    }
+    // `sHumanName[1]` 是上面 `||` 链的最后一项（`BindUseItemCommand.cs:42`）：只有前面全假才求值
+    // ⇒ 单 UTF-16 码元名在这里抛 `IndexOutOfRangeException`（外层 catch ⇒ 零帧）。
+    match second_utf16_is_question(name) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return red(BIND_USE_ITEM_HELP),
+        Some(false) => {}
     }
     if !target_online(world, name) {
         return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
@@ -3349,7 +3368,7 @@ fn change_attack_mode(sess: &mut GmSession) -> GmResult {
         5 => ATTACK_MODE_GUILD,
         _ => ATTACK_MODE_RED_WHITE,
     };
-    // `SendDefMessage(SM_ATTACKMODE, mode, ...)` 是第二种帧，`GmResult` 只承载 `SysMsg`（T-175）。
+    // `SendDefMessage(SM_ATTACKMODE, mode, ...)` 是第二种帧，`GmResult` 只承载 `SysMsg`（T-187）。
     noted(green(text), NOTE_GM4_TARGET_SYSMSG)
 }
 
@@ -3668,12 +3687,15 @@ fn game_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     let ctr_raw = params.get(1).copied().unwrap_or("");
     let gold = params.get(2).map_or(0, |s| str_to_int(s, 0));
     let ctr = ctr_raw.chars().next().unwrap_or('1');
-    if name.is_empty()
-        || !matches!(ctr, '=' | '+' | '-')
-        || !(0..=200_000_000).contains(&gold)
-        || second_utf16_is_question(name) == Some(true)
-    {
+    if name.is_empty() || !matches!(ctr, '=' | '+' | '-') || !(0..=200_000_000).contains(&gold) {
         return red(GAME_GOLD_HELP);
+    }
+    // `sHumanName[1] == '?'` 是 oracle `||` 链的**最后一项**（`GameGoldCommand.cs:30`）：前面全假才求值
+    // ⇒ 单 UTF-16 码元名抛 `IndexOutOfRangeException`（外层 catch ⇒ 零帧），不能当成「不是 ?」。
+    match second_utf16_is_question(name) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return red(GAME_GOLD_HELP),
+        Some(false) => {}
     }
     if !target_online(world, name) {
         return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
@@ -3688,23 +3710,28 @@ fn game_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
 fn game_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     let params = split_params(parameters);
     let name = params.first().copied().unwrap_or("");
-    if name.is_empty() {
-        return GmResult::empty();
-    }
     let ctr_raw = params.get(1).copied().unwrap_or("");
     let ctr = ctr_raw.chars().next().unwrap_or('1');
+    // oracle 先做 `Convert.ToUInt16(@params[2])`（`GamePointCommand.cs:24`）再做空名早退：
+    // 空串/负数/超 65535 都抛异常（被外层 catch 吞掉 ⇒ 零帧），**包括**尾随空格产生的空 token。
     let point = match params.get(2).copied() {
-        Some(s) if !s.is_empty() => match s.trim().parse::<u16>() {
+        Some(s) => match s.trim().parse::<u16>() {
             Ok(v) => i32::from(v),
             Err(_) => return no_frames(NOTE_GM4_EXCEPTION),
         },
-        _ => 0,
+        None => 0,
     };
-    if !matches!(ctr, '=' | '+' | '-')
-        || point > 100_000_000
-        || second_utf16_is_question(name) == Some(true)
-    {
+    if name.is_empty() {
+        return GmResult::empty();
+    }
+    if !matches!(ctr, '=' | '+' | '-') || point > 100_000_000 {
         return red(GAME_POINT_HELP);
+    }
+    // `sHumanName[1] == '?'` 是 oracle `||` 链的最后一项（`GamePointCommand.cs:33-34`）。
+    match second_utf16_is_question(name) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return red(GAME_POINT_HELP),
+        Some(false) => {}
     }
     if !target_online(world, name) {
         return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
@@ -5363,6 +5390,56 @@ mod tests {
             texts(&r),
             vec![(GmColor::Red, "张三 现在不在线，或在其它服务器上!!!")]
         );
+    }
+
+    /// I-2：无参 `@Binduseitem` 在 oracle 下**不是**零帧——`ExtractCommandAndParameters`
+    /// 给 `string.Empty`，`Split(' ')` 得 `[""]`（长度 1）⇒ 继续走门，
+    /// `GetUseItemIdx("") = -1` ⇒ 红字 CommandHelp。
+    #[test]
+    fn bind_use_item_empty_params_is_red_help() {
+        let (r, _) = run_gm("@Binduseitem");
+        assert_eq!(texts(&r), vec![(GmColor::Red, BIND_USE_ITEM_HELP)]);
+        // 对照：正常形态仍走同一门（item_idx 恒 -1），证明上面不是「无参特判」。
+        let (r, _) = run_gm("@Binduseitem 张三 项链 帐号");
+        assert_eq!(texts(&r), vec![(GmColor::Red, BIND_USE_ITEM_HELP)]);
+    }
+
+    /// I-3：单 UTF-16 码元名 ⇒ oracle `sHumanName[1]` 抛 `IndexOutOfRangeException`
+    /// （`PlayObject.Chat.cs` 外层 catch 吞掉 ⇒ 零帧），不能当成「不是 ?」落离线红字。
+    /// 求值顺序：先 ctr/数值门，再 `sHumanName[1]`。
+    #[test]
+    fn one_code_unit_name_throws_before_offline_check() {
+        let (r, _) = run_gm("@VV调整元宝 X = 10");
+        assert!(r.msgs.is_empty(), "{:?}", r.msgs);
+        assert!(r.log_note.is_some());
+        let (r, _) = run_gm("@调整泡点 X = 10");
+        assert!(r.msgs.is_empty(), "{:?}", r.msgs);
+        assert!(r.log_note.is_some());
+        // 对照 A：两码元名走到离线红字（零帧来自越界，不是门）。
+        let (r, _) = run_gm("@VV调整元宝 XY = 10");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "XY 现在不在线，或在其它服务器上!!!")]
+        );
+        // 对照 B：前面门先红 ⇒ 即使在单码元名上也不抛越界（求值顺序）。
+        let (r, _) = run_gm("@VV调整元宝 X ! 10");
+        assert_eq!(texts(&r), vec![(GmColor::Red, GAME_GOLD_HELP)]);
+    }
+
+    /// I-4：登录装载 `AttatckMode`（`WorldServer.cs:1148`）与 `ReLevel`（`:1133`）。
+    #[test]
+    fn gm_session_carries_attack_mode_and_re_level() {
+        let mut sess = GmSession::from_character("", 0, false, false, 0, 3, 7);
+        assert_eq!(sess.attack_mode, 3);
+        assert_eq!(sess.re_level, 7);
+        sess.permission = 10;
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        // 从持久值 3 起算：3 → 4 → 5（`@AttackMode` 连加两次）⇒ 行会攻击。
+        let r = execute(&mut sess, &cfg, &world, "@AttackMode");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "[攻击模式: 行会攻击]")]);
+        assert_eq!(sess.attack_mode, 5);
     }
 
     /// 44 条命令全部接上（不再落 `Imp::Unimplemented`），且派发可达。
