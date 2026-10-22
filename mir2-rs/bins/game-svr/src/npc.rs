@@ -617,6 +617,12 @@ pub struct NpcPlayer<'r> {
     /// `PlayObject.KickOffLineTick`（`PlayObject.cs:302`；ctor 默认 0）。
     /// `SETOFFLINE` 写 `GetTickCount() + nKickOffLine * 60 * 1000`（`ExecutionProcessingSys.cs:2728`）。
     pub kick_off_line_tick: i32,
+    /// `HUtil32.GetTickCount()`（oracle `Environment.TickCount`，`int` 毫秒）的宿主注入值：
+    /// 脚本动作 `SETOFFLINE`（`ExecutionProcessingSys.cs:2728`）/ `TIMERECALL`（`:2138`）/
+    /// `DELAYCALL`（`:3754`）的时间基准，经 `ScriptPlayer::tick_count()` 读取。
+    /// 宿主构造快照时注入 `now_ms() as i32`（**与 P31 的 `host_now = now_ms()` 同域**；
+    /// 不是 `world.clock_ms`——后者未注入时钟时从 0 起）。缺省 0 = 未注入（用例可直接赋值）。
+    pub tick: i32,
     /// `PlayObject.BoIncGameGold`（`PlayObject.cs:772`；ctor false）：脚本 192
     /// `AUTOADDGAMEGOLD` 的 STOP 写点（START 在当前 oracle 源码下不可达，见 `actions.rs`）。
     /// 宿主 `SessionGround.p22` 是唯一真源：脚本跑前 seed、跑后写回。
@@ -698,8 +704,8 @@ impl NpcPlayer<'_> {
             kill_mon_exp_rate_time: 0,
             power_rate: 100,
             power_rate_time: 0,
-            // P31：`PlayObject.cs:1009-1012` 的 ctor 初值（Tick 不在本适配器里建模，
-            // 宿主 `SessionGround` 持有；这里只有脚本可写的四个字段）。
+            // P31：`PlayObject.cs:1009-1012` 的 ctor 初值（`AutoGetExpTick` 由宿主
+            // `SessionGround` 持有；这里只有脚本可写的四个字段）。
             auto_get_exp_time: 0,
             auto_get_exp_point: 0,
             auto_get_exp_envir: None,
@@ -708,6 +714,8 @@ impl NpcPlayer<'_> {
             // 自动属性（默认 false）——`SETOFFLINE` 之前两者都不该被写成别的值。
             off_line_flag: false,
             kick_off_line_tick: 0,
+            // `HUtil32.GetTickCount()` 由宿主注入（`ScriptPlayer::tick_count()`）；用例缺省 0。
+            tick: 0,
             // `PlayObject.cs:965/970` 的 ctor 初值。
             bo_inc_game_gold: false,
             bo_dec_game_gold: false,
@@ -1231,6 +1239,25 @@ impl ScriptPlayer for NpcPlayer<'_> {
         self.off_line_flag = true;
         self.kick_off_line_tick = kick_tick;
     }
+    /// `playerActor.Envir` 的地图名（`AutoGetExpEnvir` / `ISONMAP` 的取值源）。
+    ///
+    /// oracle 存的是 `IEnvirnoment` 引用：`ActionOfOffLine` 的
+    /// `playerActor.AutoGetExpEnvir = playerActor.Envir`（`ExecutionProcessingSys.cs:2724`）
+    /// 与 `ConditionOfIosnMap` 的 `playerActor.Envir == envir`（`ConditionProcessingSys.cs:1051`）
+    /// 读的都是**同一个**当前图引用。本适配器把引用压平成地图名
+    /// （`map_name` = 宿主 `SessionGround`/`World` 快照里的当前图，见 `npc_player_from*`）。
+    /// `None` = `Envir == null`（不在任何地图）。
+    fn envir_map_name(&self) -> Option<String> {
+        if self.map_name.is_empty() {
+            None
+        } else {
+            Some(self.map_name.clone())
+        }
+    }
+    /// `HUtil32.GetTickCount()`：宿主注入的 [`NpcPlayer::tick`]（毫秒，`int` 域）。
+    fn tick_count(&self) -> i32 {
+        self.tick
+    }
     fn send_msg(
         &mut self,
         ident: i32,
@@ -1753,6 +1780,8 @@ mod tests {
         assert!(!p.off_line_flag);
         assert_eq!(p.kick_off_line_tick, 0);
         assert!(!p.auto_get_exp_in_safe_zone);
+        assert!(p.envir_map_name().is_none(), "未进图 ⇒ Envir == null");
+        assert_eq!(p.tick_count(), 0, "tick 未注入 ⇒ 0");
         p.set_offline(Some("0"), 5_000, 500, 123_456);
         assert_eq!(
             (
@@ -1771,6 +1800,166 @@ mod tests {
         assert_eq!((p.auto_get_exp_time, p.auto_get_exp_point), (1_000, 1));
         assert!(p.off_line_flag);
         assert_eq!(p.kick_off_line_tick, 0);
+        // **I-1**：`envir_map_name()` = `playerActor.Envir`（引用压平成当前图名）。
+        p.map_name = "0103".to_string();
+        assert_eq!(p.envir_map_name().as_deref(), Some("0103"));
+        p.map_name.clear();
+        assert!(p.envir_map_name().is_none(), "Envir == null ⇒ None");
+        // **I-3**：`tick_count()` = `HUtil32.GetTickCount()`（宿主注入域）。
+        p.tick = 1_234_567;
+        assert_eq!(p.tick_count(), 1_234_567);
+    }
+
+    /// `SETOFFLINE 时间 点数 踢号分钟`（`n_cmd_code = 337` = `ExecutionCode.OffLine`；
+    /// `ScriptParsers.cs:554` 的三段参数落 `sParam1..3`）。
+    fn offline_act(p1: &str, p2: &str, p3: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 337,
+            s_param1: p1.into(),
+            s_param2: p2.into(),
+            s_param3: p3.into(),
+            ..Default::default()
+        }
+    }
+
+    /// **I-2 生产入口（脚本动作分派）**：`SETOFFLINE 2 300 10` 经
+    /// `MerchantScriptBook::goto_label` → `Engine` → `ActionOfOffLine`（`actions.rs`）→
+    /// `NpcPlayer::set_offline`，**六字段**逐项断言。
+    /// `envir` 来自 `envir_map_name()`（oracle `playerActor.Envir`，`:2724`），
+    /// `tick` 来自宿主注入的 `tick_count()`（oracle `HUtil32.GetTickCount()`，`:2728`）——
+    /// 即 I-1/I-3 的两处接缝本身，不是直接调 `set_offline`。
+    ///
+    /// 牙①：删 `NpcPlayer::set_offline` 覆写 ⇒ 六条断言全红（trait 空默认）。
+    /// 牙②：删 `envir_map_name()` 覆写 ⇒ `envir` 断言红（恒 `None`）。
+    /// 牙③：删 `tick_count()` 覆写 ⇒ `kick_off_line_tick` 断言红（基准退回 0）。
+    #[test]
+    fn action_offline_lands_six_fields_through_script_dispatch() {
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.map_name = "0103".to_string();
+        p.tick = 1_000;
+        let book = book_with_actions(
+            8,
+            "挂机商",
+            &[("@main", "开始挂机", vec![offline_act("2", "300", "10")])],
+        );
+        let says = book.goto_label(8, &mut p, "@main", false);
+        assert!(says.is_some(), "商人脚本已装载");
+        assert!(p.auto_get_exp_in_safe_zone, "InSafeZone = true（:2723）");
+        assert_eq!(
+            p.auto_get_exp_envir.as_deref(),
+            Some("0103"),
+            "Envir = playerActor.Envir（:2724）"
+        );
+        assert_eq!(p.auto_get_exp_time, 2_000, "nTime * 1000（:2725）");
+        assert_eq!(p.auto_get_exp_point, 300, "nPoint（:2726）");
+        assert!(p.off_line_flag, "OffLineFlag = true（:2727）");
+        assert_eq!(
+            p.kick_off_line_tick,
+            1_000 + 10 * 60_000,
+            "GetTickCount() + nKick*60*1000（:2728）"
+        );
+
+        // 空参数 ⇒ oracle 缺省 `5` / `500` / `1440*15`（`ExecutionProcessingSys.cs:2720-2722`）。
+        let mut p2 = NpcPlayer::empty(&mut rng);
+        p2.map_name = "0103".to_string();
+        p2.tick = 1_000;
+        let book = book_with_actions(8, "挂机商", &[("@main", "", vec![offline_act("", "", "")])]);
+        let _ = book.goto_label(8, &mut p2, "@main", false);
+        assert_eq!(
+            (
+                p2.auto_get_exp_time,
+                p2.auto_get_exp_point,
+                p2.kick_off_line_tick
+            ),
+            (5_000, 500, 1_000 + 1_440 * 15 * 60_000),
+            "缺省 5 秒 / 500 点 / 1440*15 分钟"
+        );
+    }
+
+    /// `@main` 带一条 `ISONMAP` 条件（code 190 = `ConditionCode.ISONMAP`）的商人脚本。
+    fn book_with_isonmap(actor_id: i32, chr_name: &str, script_map: &str) -> MerchantScriptBook {
+        let mut book = MerchantScriptBook::new(30);
+        book.insert(MerchantNpc {
+            def: NpcDef {
+                chr_name: chr_name.to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("挂机商-0103".to_string()),
+                is_hide: false,
+                is_quest: false,
+                scripts: vec![ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![SayingRecord {
+                        s_label: "@main".to_string(),
+                        procedure_list: vec![SayingProcedure {
+                            condition_list: vec![mir2_script::QuestConditionInfo {
+                                cmd_code: 190,
+                                s_param1: script_map.to_string(),
+                                ..Default::default()
+                            }],
+                            action_list: Vec::new(),
+                            else_action_list: Vec::new(),
+                            s_say_msg: "挂机中".to_string(),
+                            s_else_say_msg: String::new(),
+                        }],
+                        bo_ext_jmp: false,
+                    }],
+                    quest_count: 0,
+                }],
+                loaded: true,
+                actor_id,
+            },
+            price_rate: 100,
+            castle: None,
+            map_name: "0103".to_string(),
+            curr_x: 9,
+            curr_y: 12,
+        });
+        book
+    }
+
+    /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
+    /// `envir_map_name()` 与 `ActionOfOffLine` 读的是**同一个**当前图 ⇒ 接通覆写后
+    /// ISONMAP 随之生效。oracle `ConditionOfIosnMap`（`ConditionProcessingSys.cs:1032-1055`）：
+    /// `envir = MapMgr.FindMap(sMapName)`；`if (playerActor.Envir == envir) success = true;`
+    /// ⇒ 在图上 true、不在图上 false、`Envir == null` 时 false。
+    ///
+    /// 牙：删 `envir_map_name()` 覆写（回落 `None`）⇒ 中间那条「在图上」断言红。
+    /// 残余（既有未建模，非本片引入）：`map_exists` 缺省 false ⇒ oracle 在真实地图上不会走的
+    /// `ScriptConditionError` 错误支本仓会记录；**判定结果**等价（`None`/异名 ⇒ false）。
+    #[test]
+    fn isonmap_uses_current_map_after_envir_map_name_override() {
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        let book = book_with_isonmap(8, "挂机商", "0103");
+        // 未进图：`Envir == null` ⇒ ISONMAP 不成立。
+        assert!(p.envir_map_name().is_none());
+        let says = book
+            .goto_label(8, &mut p, "@main", false)
+            .expect("脚本存在");
+        assert!(
+            says.iter().all(|s| !s.text.contains("挂机中")),
+            "Envir=null ⇒ ISONMAP 不成立，说词不播：{says:?}"
+        );
+        // 在图上：`playerActor.Envir == FindMap("0103")` ⇒ 成立。
+        p.map_name = "0103".to_string();
+        let says = book
+            .goto_label(8, &mut p, "@main", false)
+            .expect("脚本存在");
+        assert!(
+            says.iter().any(|s| s.text.contains("挂机中")),
+            "Envir == 当前图 ⇒ ISONMAP 成立：{says:?}"
+        );
+        // 换到别的图：引用不同 ⇒ 不成立。
+        p.map_name = "0".to_string();
+        let says = book
+            .goto_label(8, &mut p, "@main", false)
+            .expect("脚本存在");
+        assert!(
+            says.iter().all(|s| !s.text.contains("挂机中")),
+            "Envir != 脚本图 ⇒ ISONMAP 不成立：{says:?}"
+        );
     }
 
     // ---- lane marketdef：商人脚本表 / GotoLable 说词 / GetVariableText ----
