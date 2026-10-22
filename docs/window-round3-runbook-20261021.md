@@ -1499,6 +1499,27 @@ python tools/window/alt_port_profile.py selftest --repo-root E:\Users\gxh\Docume
 - `D:\MirClient-run\run-release-alt.cmd`：新增的备用启动命令（原 `run-release.cmd` 未改）。
 - 未启动任何服务端/客户端/代理，未占端口，未写数据库；`E:\MirServer` 零写入（deploy 只读复制）。
 
+### 8.8 抓包窗口的端口错位：game-gate 必须显式 `-Ports`
+
+r8/r9 的抓包窗口把 **game-gate 的客户端监听口**挪到了 `17600`：
+`RunGate/config.conf` 的 `GatePort1=17600`，而 `17200` 留给 `mir2_proxy`（`--map 17200=127.0.0.1:17600`），
+客户端启动参数里的游戏网关端口仍是 `17200`。于是：
+
+- `start_mir2_server.ps1` 的忙检/就绪等待默认按剖面清单等 `17200,17201,17202` ⇒ **RED（缺端口）**并回滚；
+- 实际只起一个网关实例（`[GameGate] Count=1`），`17201/17202` 本就不会监听。
+
+正确用法（r9 实测）：
+
+```powershell
+$ports = @{ 'db-srv' = @(16000,15100,15700); 'game-gate' = @(17600) }
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root E:/tmp/window/r5/root -LogDir E:/tmp/window/r9/logs `
+  -PortsProfile E:/tmp/window/r5/root/alt-port-profile.json -Ports $ports -Seed 42
+```
+
+停栈照旧用 pid 文件（`stop_mir2_server.ps1 -PidFile <LogDir>/mir2-server.pid.json`），
+它按 `stop_order` 反向停，不依赖端口表。
+
 ## 9. 夹具修正：公告轮询与 NPC 点击坐标门（2026-10-22，卡 fixture-harden）
 
 > 根因与证据：`docs/npc-render-diagnosis-20261022.md`（§2.3 公告轮询走位、§2.4 点击变走位、§2.5 客户端身份）。
