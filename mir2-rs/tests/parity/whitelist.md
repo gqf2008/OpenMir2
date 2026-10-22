@@ -701,3 +701,27 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | T-181 | **`SM_QUERYYBSELL`(23021) / `SM_QUERYYBDEAL`(23023) 登记不接线**：oracle 生产点 = 脚本动作 `QUERYYBSELL` / `QUERYYBDEAL`（`src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs` 第 2443/2550 行）：组 `ClientDealOffInfo` → `EDCode.EncodeBuffer` → `SendMsg(RM_QUERYYB*)`，接收支 `PlayObject.Message.cs` 第 2050/2054 行把 `processMsg.Msg` **原样**作尾。本仓 `crates/script/src/codes.rs` 有码表（343/344），但 `crates/script/src/engine/dispatch.rs` 与 `handlers.rs` **无** `QUERYYB*` handler ⇒ 无生产点。 | 上游脚本动作未实现 ⇒ 生产点不存在。编码器字节口径已钉（头 + 尾原样透传，`sm_queryybdeal_and_sell_tail_passthrough`）。窗口项：脚本 handler 落地后补接线片（元宝寄售面板真机）。 | 作者登记（`openmir2-reviewer-5`，卡 `openmir2-orphan-encoder-batch-a`，2026-10-23）；**待独立 principal 复核** |
 | T-182 | **`SM_RECONNECT`(802) 登记不接线**：oracle 两条生产点——`src/M2Server/Player/PlayObject.Base.cs` 的 `TransferPlanesServer`（`SendMsg(RM_RECONNECTION, ..., serveraddr + '/' + gamePort)`，接收支 `PlayObject.Message.cs` 第 1990 行 ⇒ 头 + `EncodeString(Msg)`）与 `src/GameSrv/Word/WorldServer.cs` 的 `SendChangeServer`（直接 `SendDefMessage(SM_RECONNECT, ...)`，需 `GetMultiServerAddrPort`）。路由表由 `src/GameSrv/GameApp.cs` 从 `!servertable.txt` 装载。本仓**无** `!servertable.txt` 装载（`grep -i servertable` 零命中），`ChangeSpaceMove`/`.shr` 序列化未移植（G11 登记）。 | 跨服搬家子系统未移植 ⇒ 生产点不存在；编码器 + 构造用例在（`sm_reconnect_header_all_zero_and_tail`）。窗口项：多服部署才有真值 ⇒ 随 G11 子系统落地补接线片。 | 作者登记（`openmir2-reviewer-5`，卡 `openmir2-orphan-encoder-batch-a`，2026-10-23）；**待独立 principal 复核** |
 | T-183 | **`SM_SKELETON`(33) 登记不接线（沿用既有 deferred）**：oracle 生产点 = `src/M2Server/Player/PlayObject.Operate.cs` 的 `SendRefMsg(RM_SKELETON, Dir, CurrX, CurrY, 0, "")`（尸体转骷髅，第 736 行）。本仓编码器在 `bins/game-svr/src/smframe.rs` 的 `sm_skeleton`（不是 `smframe_ext.rs`），`downlink.rs` 的 `push_death_frames` 文档已把本帧登记为 `deferred`（缺 setter：`Dead` 后转 `Skeleton` 的宿主状态未建模）。 | 无生产点 ⇒ 不出帧；死亡帧面当前按 `SM_DEATH` 发。窗口项：尸体转骷髅计时（`SkeletonTick`）建模后补接线片并真机复跑。 | 作者登记（`openmir2-reviewer-5`，卡 `openmir2-orphan-encoder-batch-a`，2026-10-23）；**待独立 principal 复核** |
+
+## SearchViewRange 首扫基准（卡 `openmir2-searchtick-origin-parity`，2026-10-23，tier=R）
+
+> 实现：`crates/world/src/session.rs` 新增 `World::enter_map_at(..., ctor_tick)`（`enter_map` 保留为
+> 「以进图时刻为构造基准」的重载，供测试/无独立构造阶段的调用方）；`bins/game-svr/src/lib.rs` 在
+> `DBR_LOADHUMANRCD` 回包分支入口取 `login_ctor_tick = world.clock_ms`（= `new PlayObject()` 等价点）
+> 并传给 `enter_map_at`。**今日生产值不变**（该分支内 `ctor_tick == world.clock_ms`）；改的是**基准的
+> 语义归属**——它不再挂在「进图」上，因此将来按 T-73 补出登录等待环（`enter_map` 被推迟）时，
+> 首扫基准不会跟着漂移。
+>
+> oracle 事实（赋值/重置点全清单）：
+> - **唯一 ctor 写点** `src/M2Server/Player/PlayObject.cs:899-901`：`RunTime = 250; SearchTime = 1000;
+>   SearchTick = GetTickCount();`（`new PlayObject()` 在 `WorldServer.cs:234`，紧随 `GetPlayData`）；
+> - **唯一运行期写点** `src/GameSrv/Word/WorldServer.cs:663-667`：`(now - SearchTick) > SearchTime`
+>   ⇒ `SearchTick = now; SearchViewRange(); GameTimeChanged();`（严格大于，250ms `RunTick` 驱动）；
+> - `UserLogon`/`AddToMap`/`EnterAnotherMap`（切图）**都不重置** `SearchTick`（全仓 `SearchTick`
+>   只有上述两处 + 怪物同名字段，后者由各自 ctor 写）。
+>
+> 本仓对齐：基准 = `ctor_tick`（DB 回包那一刻），首个 `SearchViewRange` = `ctor+1200ms`（200ms tick
+> 下第一个 `>1000`），与 oracle 的 `ctor+1000..1250ms`（250ms `RunTick`）同处一个 tick 窗口。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
+| --- | --- | --- | --- |
+| T-184 | **客户端可见的「登录帧→首扫帧」间隔仍由 T-73 决定（不是 SearchTick 基准）**：oracle 的 `RunNotice`→`CM_LOGINNOTICEOK(1018)`→`UserLogon` 会把 ctor 之后的时间**计入** 1000ms 窗口；本仓在 `enter_map_at` 后立即发登录帧（658…46），首扫的**绝对**时刻（ctor+1200ms）与 oracle（ctor+1000..1250ms）同窗，但「登录帧到达 → 首扫帧到达」的间隔恒 ≥1000ms，oracle 侧可短于 1000ms（1018 往返已消耗）。`docs/conformance-first-dual-run-20261023.md` §2.2 的首跑差异（C# 多出 10/41/654/657）即由此产生：探针 `wait_frames(15)` 在 Rust 侧被更早到达的登录帧先满足而结束，未观察到 +1.2s 的首扫帧（采集面已由 master `542b7da78` 的 probe-dwell 修正：等 654/657/100 或 dwell≥1200ms；剩余的是本条的相对间隔）。 | **不新增行为差异**：`SearchTick` 基准已与 oracle 同点（ctor 时刻）；剩余差异归 T-73（登录等待环未建模，选项 a 的既决设计）。`window_required: true` —— 真机双栈窗口需用**持续到首扫之后**的场景（`wait_frames` 计数 ≥ 登录帧数+首扫帧数，或 `sleep` ≥ 2000ms）抓首个 `SM_TURN(10)`/`SM_FEATURECHANGED(41)`，比对两侧到达时刻落在同一 tick 窗口。判据：`world::tests::first_scan_base_is_playobject_ctor_not_map_entry`（ctor=0/进图=800ms ⇒ 首扫 1200ms；改回进图基准即红）、`tests::login_search_base_is_captured_at_playobject_ctor`（生产 source pin；把调用改回 `enter_map` 或把实参换成 `world.clock_ms` 即红）。 | 作者登记（`openmir2-worker-10`，卡 `openmir2-searchtick-origin-parity`，tier=R）；**待独立 principal 复核** |

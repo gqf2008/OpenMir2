@@ -8713,6 +8713,62 @@ mod tests {
         );
     }
 
+    /// **卡 `openmir2-searchtick-origin-parity`**：首扫基准 = `PlayObject` ctor 时刻，**不是**进图时刻。
+    ///
+    /// oracle：`SearchTick` 只在 ctor 写一次（`src/M2Server/Player/PlayObject.cs:901`：
+    /// `SearchTime = 1000; SearchTick = GetTickCount();`）；`UserLogon`/`AddToMap`/切图都不重置；
+    /// 首扫门 `src/GameSrv/Word/WorldServer.cs:663-667`：`(now - SearchTick) > SearchTime` ⇒
+    /// 先 `SearchTick = now` 再 `SearchViewRange()`（严格大于）。
+    ///
+    /// 构造：ctor = 0、进图 = 800ms（模拟登录等待环把进图推后）⇒ 首个 `SearchViewRange` 必须落在
+    /// **1200ms**（200ms tick 下第一个 `> ctor+1000` 的 tick），而不是 2000ms（进图 + 1200ms）。
+    ///
+    /// 红检：把 [`World::enter_map_at`] 的 `entity.ai.search_tick = ctor_tick` 改回
+    /// `self.clock_ms` ⇒ 本用例必红（首次扫描被推到 2000ms）。
+    #[test]
+    fn first_scan_base_is_playobject_ctor_not_map_entry() {
+        let mut w = World::new(32, 32);
+        w.open_session("p");
+        let q = w.add_entity(Entity::new(0, "q", 11, 10));
+        let mut p_ent = Entity::new(0, "p", 10, 10);
+        p_ent.race = ACTOR_RACE_PLAY;
+        // `new PlayObject()` 等价点 = ctor 0ms；登录等待环把进图推到 800ms。
+        w.clock_ms = 800;
+        let p = w.enter_map_at("p", p_ent, 0, 0).expect("进图");
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            0,
+            "SearchTick 必须取 ctor 基准（PlayObject.cs:901），不得被进图时刻重盖"
+        );
+
+        // 1000ms：`now - ctor == 1000` 不满足严格大于 ⇒ 不扫。
+        w.tick();
+        assert_eq!(w.clock_ms, 1000);
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "1000ms 不满足 `> 1000` ⇒ 不得扫描"
+        );
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 0);
+
+        // 1200ms：ctor + 1200 > ctor + 1000 ⇒ 首扫；q 进入视野。
+        w.tick();
+        assert_eq!(w.clock_ms, 1200);
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            1200,
+            "首扫命中后 SearchTick = now（WorldServer.cs:665）"
+        );
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "首扫必须发生在 ctor+1200（不是进图+1200）"
+        );
+    }
+
     /// `spawn_monster_precomputed`（M3④-实现 B 第 ③ 片的新 API）：掉落/朝向/构造抽已在回调里
     /// 按 oracle 次序预算完，本方法**不再取任何随机数**；构造抽结果随实体落库。
     ///

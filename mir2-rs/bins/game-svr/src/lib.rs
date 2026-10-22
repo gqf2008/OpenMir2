@@ -18179,6 +18179,13 @@ fn sim_loop(
                         );
                         // `PlayerDataService.cs:150`：`nIdent == DBR_LOADHUMANRCD && nRecog == 1 && data.Length > 0`
                         if ident == mir2_protocol::messages::DBR_LOADHUMANRCD && recog == 1 {
+                            // **orphan 编码器/搜索基准（卡 `openmir2-searchtick-origin-parity`）**：
+                            // oracle `PlayObject.cs:901` 的 `SearchTick = GetTickCount()` 在
+                            // `new PlayObject()`（`WorldServer.cs:234`，紧跟 `GetPlayData` 之后）写一次，
+                            // 早于 `UserLogon`/`AddToMap`，且落图/切图**不重置**。本宿主在这里
+                            // （角色记录刚到达 = ctor 等价点）取一次构造基准，进图时传给
+                            // `World::enter_map_at`；**不要**再让 `enter_map` 用进图时刻重盖。
+                            let login_ctor_tick = world.clock_ms;
                             let payload = mir2_protocol::edcode::decode(&reply.packet);
                             // 头部窗口维持既有控制流（`parse_player_data_head`）；**全字段**
                             // （`parse_player_data`，`openmir2-m2-record-fields`）额外供给入图帧的
@@ -18379,7 +18386,12 @@ fn sim_loop(
                                         // `PlayObject.DieInFight3Zone`（随后由登录 `MapRandomMove` 消费；
                                         // 该调用点未移植，位仍按 oracle 保存）。
                                         ent.die_in_fight3_zone = die_in_fight3_zone;
-                                        match world.enter_map(&head.chr_name, ent, map_id) {
+                                        match world.enter_map_at(
+                                            &head.chr_name,
+                                            ent,
+                                            map_id,
+                                            login_ctor_tick,
+                                        ) {
                                             Ok(id) => {
                                                 // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
                                                 // 会话/actor 重置——同名角色重新登录时清掉上一会话
@@ -21079,6 +21091,44 @@ mod tests {
             0
         );
         assert!(pending.is_empty(), "掉线会话的延迟段必须作废");
+    }
+
+    /// **卡 `openmir2-searchtick-origin-parity` 接线点保鲜门**：生产登录路径必须
+    /// ① 在 `DBR_LOADHUMANRCD` 回包分支入口取一次 ctor 基准
+    ///    （`let login_ctor_tick = world.clock_ms;` = `new PlayObject()` 等价点，
+    ///    oracle `PlayObject.cs:901` 的 `SearchTick = GetTickCount()`）；
+    /// ② 进图调用 `World::enter_map_at(..., login_ctor_tick)` —— **不得**回退到
+    ///    `World::enter_map` 的「进图时刻」基准（那正是本卡要消掉的漂移）。
+    ///
+    /// 红检：把生产调用改回 `world.enter_map(&head.chr_name, ent, map_id)`，或删掉 ctor 捕获行
+    /// ⇒ 本用例必红。（行为面牙见 `crates/world` 的
+    /// `first_scan_base_is_playobject_ctor_not_map_entry`。）
+    #[test]
+    fn login_search_base_is_captured_at_playobject_ctor() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
+        let capture = prod
+            .find("let login_ctor_tick = world.clock_ms;")
+            .expect("登录分支必须取 ctor 基准（SearchTick 起点 = PlayObject 构造）");
+        let enter = prod
+            .find("world.enter_map_at(")
+            .expect("登录进图必须走 enter_map_at（带 ctor 基准）");
+        assert!(
+            capture < enter,
+            "ctor 基准必须在进图之前捕获（capture={capture}, enter={enter}）"
+        );
+        assert!(
+            prod[enter..].starts_with("world.enter_map_at(\n"),
+            "进图调用点必须是 enter_map_at"
+        );
+        assert!(
+            !prod.contains("world.enter_map(&head.chr_name"),
+            "登录路径不得回退到 enter_map 的进图时刻基准"
+        );
+        assert!(
+            prod.contains("login_ctor_tick,"),
+            "enter_map_at 必须收到 login_ctor_tick"
+        );
     }
 
     /// **lane654 接线点保鲜门**：生产路径必须
@@ -30618,7 +30668,7 @@ mod tests {
         assert_eq!(calls.len(), 1, "登录装载必须恰一处：{calls:?}");
         let enter = prod
             .iter()
-            .position(|l| l.contains("world.enter_map(&head.chr_name"))
+            .position(|l| l.contains("world.enter_map_at("))
             .expect("登录 `enter_map` 行");
         assert!(calls[0] < enter, "装载必须在 `enter_map` 之前");
         assert!(
