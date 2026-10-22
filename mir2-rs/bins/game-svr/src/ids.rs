@@ -14,9 +14,14 @@
 //!
 //! 断线：`DataSocketDisconnect`（`:427-436`）会 **`ClearSession()`（清空整张表）** 并记错误日志——照抄。
 //!
+//! **上报**：`SS_SERVERINFO`（`(103/名字/索引/在线数/付费模式)`）由两处产生（oracle 穷举只有这两处）：
+//! ① 连接事件即报一次当前值（`DataSocketConnect` `:420-425`）；
+//! ② `SystemProcessor.ShowOnline` 的独立 10s 门（`SystemProcessor.cs:63-67`，严格 `>`）。
+//! oracle 这条链路**本身不重连**（它的 `SendSocket` 在 `Offline` 时直接 return、不排队）——
+//! 本仓保留既有的 3s 重试循环，重连时只补发**当前值**一帧，积压的陈旧帧一律丢掉。
+//!
 //! **登记不做**（各需世界/配置，属后续切片）：`SS_KEEPALIVE`(104)/`SS_KICKUSER`(111)/`SS_SERVERLOAD`(113)/
-//! `ISM_ACCOUNTEXPIRED`(114)/`ISM_QUERYPLAYTIME`(116)、连上后上报在线数（`DataSocketConnect` `:420-425`）、
-//! 断线重连（oracle 这里也不重连；重连由别处驱动，未取证）。
+//! `ISM_ACCOUNTEXPIRED`(114)/`ISM_QUERYPLAYTIME`(116)。
 
 /// IDS 链路自己的日志宏（与 main 的 `glog!` 同形，便于两侧日志按前缀过滤）。
 macro_rules! glog_ids {
@@ -173,20 +178,62 @@ fn get_cancel_admission(body: &str, store: &mut AdmissionStore, kicks: &mut Vec<
 /// `AuthenticationService.SendOnlineHumCountMsg`（`:113-116`）的帧体：
 /// `({SS_SERVERINFO}/{ServerName}/{ServerIndex}/{nCount}/{PayMentMode})`
 /// （C# `string.Format("({0}/{1}/{2}/{3}/{4})", …)`，字段全部十进制原样）。
+///
+/// 第 3 段取 `M2Share.ServerIndex`（`src/M2Server/M2Share.cs:29` 的
+/// `public static byte ServerIndex = 0;`）——**全仓无赋值点**（`ServerConf.cs:17` 写的是
+/// `SystemShare.ServerIndex`，另一个字段）⇒ oracle 恒发 `0`。按「行为等价优先于修 bug」
+/// 照搬恒 `0`：不用 `[Server] ServerIndex`（配非 0 会与 oracle 分叉，尤其 99——
+/// login-srv 的在线判定带 `ServerIndex != 99` 门，会把 GameSvr 当 DBSrv 排除 ⇒ 529 退回 `0`）。
 #[must_use]
-pub fn serverinfo_frame(
-    server_name: &str,
-    server_index: i32,
-    online_count: i32,
-    payment_mode: u8,
-) -> String {
-    format!("({SS_SERVERINFO}/{server_name}/{server_index}/{online_count}/{payment_mode})")
+pub fn serverinfo_frame(server_name: &str, online_count: i32, payment_mode: u8) -> String {
+    const ORACLE_SERVER_INDEX: i32 = 0; // `M2Share.ServerIndex`，从不赋值
+    format!("({SS_SERVERINFO}/{server_name}/{ORACLE_SERVER_INDEX}/{online_count}/{payment_mode})")
 }
 
-/// 按 **GBK** 写出一条 `(...)` 帧（oracle `SendSocket` = `HUtil32.GetString` 的逆向）。
+/// `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime` 10s 门（`SystemProcessor.cs:63-67`）。
+///
+/// oracle 在 `Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算 ⇒ 基准是
+/// **启动时刻**、不是 0。本仓注入时钟（`MIR2_CLOCK_MS`）后 `world.clock_ms` 从 epoch 量级
+/// 起算；基准若写死 0，首个 tick 就 `clock_ms - 0 > 10000` ⇒ **连上后立刻多发一帧**
+/// （oracle 要等满 10s）。门本身是**严格 `>`**，间隔 10000ms。
+#[derive(Debug, Clone, Copy)]
+pub struct OnlineHumGate {
+    last: i64,
+}
+
+impl OnlineHumGate {
+    /// 起算基准 = `SystemProcessor.Startup` 的 `SendOnlineHumTime = GetTickCount()`
+    /// ⇒ 传**注入之后的** `world.clock_ms`。
+    #[must_use]
+    pub fn new(start_clock_ms: i64) -> Self {
+        Self {
+            last: start_clock_ms,
+        }
+    }
+
+    /// 到点返回 `true` 并推进基准（oracle `:65-66`：先赋值、再发）。
+    pub fn tick(&mut self, clock_ms: i64) -> bool {
+        if clock_ms - self.last > 10_000 {
+            self.last = clock_ms;
+            true
+        } else {
+            false
+        }
+    }
+}
+
+/// 丢掉断链期积压的上报帧：oracle `SendSocket` 在 `Offline` 时直接 return、**不排队**
+/// （`AuthenticationService.cs:70-79`）⇒ 重连只补发**当前值**一帧。
+fn drain_stale(outbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>) {
+    while outbox.try_recv().is_ok() {}
+}
+
+/// 按 **gb2312(cp936)** 写出一条 `(...)` 帧（oracle `SendSocket` → `HUtil32.GetBytes`
+/// = `Encoding.GetEncoding("gb2312").GetBytes`，`HUtil32.cs:689-692`）。
+/// 用 `cp936` 而非 `encoding_rs::GBK`：与 .NET 的不可映射码点回退逐字节一致（A-14）。
 async fn write_text(half: &mut tokio::net::tcp::OwnedWriteHalf, text: &str) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
-    let (bytes, _, _) = encoding_rs::GBK.encode(text);
+    let bytes = mir2_script::cp936::encode_gb2312_dotnet(text);
     half.write_all(&bytes).await?;
     half.flush().await?;
     Ok(())
@@ -203,7 +250,6 @@ pub async fn run_ids_link(
     store: Arc<Mutex<AdmissionStore>>,
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
     server_name: String,
-    server_index: u8,
     payment_mode: u8,
     online_count: Arc<std::sync::atomic::AtomicI32>,
     outbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
@@ -214,11 +260,12 @@ pub async fn run_ids_link(
                 sock.set_nodelay(true).ok();
                 glog_ids!("INF", "登录服务器[{ids_addr}:{ids_port}]连接成功...");
                 let (mut read_half, mut write_half) = sock.into_split();
-                // `DataSocketConnect`（`AuthenticationService.cs:420-425`）：**连上即报一次**
-                // （重连同样走这里 ⇒ 断线重连后自动重报，oracle 同形）。
+                // `DataSocketConnect`（`AuthenticationService.cs:420-425`）：**连上即报一次当前值**。
+                // 先把断链期积压的陈旧帧丢掉（oracle `SendSocket` 在 Offline 时直接 return、
+                // 不排队；oracle 这条链路本身也不重连）⇒ 重连只补发这一帧当前值，不 flush 旧账。
+                drain_stale(outbox);
                 let frame = serverinfo_frame(
                     &server_name,
-                    i32::from(server_index),
                     online_count.load(std::sync::atomic::Ordering::SeqCst),
                     payment_mode,
                 );
@@ -259,8 +306,11 @@ async fn read_loop(
         let n = tokio::select! {
             r = read_half.read(&mut buf) => r?,
             frame = outbox.recv() => {
-                if let Some(frame) = frame {
-                    write_text(write_half, &frame).await?;
+                match frame {
+                    Some(frame) => write_text(write_half, &frame).await?,
+                    // 投递端已关闭（sim 线程收尾）⇒ 正常结束链路；旧实现的 `continue`
+                    // 会让 select 立刻再次就绪 ⇒ 忙等（N-1）。
+                    None => return Ok(()),
                 }
                 continue;
             }
@@ -375,25 +425,106 @@ mod tests {
 
 #[cfg(test)]
 mod serverinfo_tests {
-    use super::serverinfo_frame;
+    use super::{drain_stale, serverinfo_frame, OnlineHumGate};
+    use std::sync::atomic::AtomicI32;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::AsyncReadExt;
 
-    /// 帧体逐字节钉住：`(103/热血传奇/0/3/0)`，与 oracle
-    /// `string.Format("({0}/{1}/{2}/{3}/{4})", SS_SERVERINFO, ServerName, ServerIndex, nCount, PayMentMode)`
-    /// 同形（字段间 `/`、首尾圆括号、整数十进制）。
+    /// 帧体逐字节钉住：`(103/热血传奇/0/3/1)`，与 oracle
+    /// `string.Format("({0}/{1}/{2}/{3}/{4})", SS_SERVERINFO, ServerName, M2Share.ServerIndex,
+    /// nCount, PayMentMode)` 同形（字段间 `/`、首尾圆括号、整数十进制）。
+    ///
+    /// 第 3 段恒 `0`（`M2Share.ServerIndex` 从不赋值）；第 5 段缺省 `1`
+    /// （`GameSvrConf.cs:1253`）——现网三份 `Server.conf` 都没有该键 ⇒ oracle 发 `…/0/0/1`。
     #[test]
     fn serverinfo_frame_matches_oracle_format() {
-        assert_eq!(
-            serverinfo_frame("热血传奇", 0, 3, 0),
-            "(103/热血传奇/0/3/0)"
-        );
-        assert_eq!(serverinfo_frame("SKY引擎", 7, 0, 3), "(103/SKY引擎/7/0/3)");
+        assert_eq!(serverinfo_frame("热血传奇", 0, 1), "(103/热血传奇/0/0/1)");
+        assert_eq!(serverinfo_frame("SKY引擎", 3, 3), "(103/SKY引擎/0/3/3)");
     }
 
     /// 牙：把分隔符 `/` 改成别的、或漏掉括号，本用例立刻红。
     #[test]
     fn serverinfo_frame_has_brackets_and_slashes() {
-        let f = serverinfo_frame("a", 1, 2, 3);
+        let f = serverinfo_frame("a", 2, 3);
         assert!(f.starts_with('(') && f.ends_with(')'));
         assert_eq!(f.matches('/').count(), 4);
+    }
+
+    /// **I-2①** 生产入口：`run_ids_link` 连上本地 listener 后，**第一帧**就是 gb2312(cp936)
+    /// 的 `(103/热血传奇/0/3/1)`（在线数取 sim 线程原子量、付费模式取配置）。
+    ///
+    /// 牙：① 删掉「连上即报」整段 ⇒ 本用例超时；② 把 `write_text` 的 cp936 换成 UTF-8
+    /// ⇒ 下面的**原始字节**断言必红（UTF-8 编码是 8 个三字节序列）。
+    #[tokio::test]
+    async fn ids_link_reports_serverinfo_on_connect() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("绑定本地 listener");
+        let port = listener.local_addr().expect("local_addr").port();
+        let store = Arc::new(Mutex::new(crate::auth::AdmissionStore::new()));
+        let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let (_out_tx, mut outbox) = tokio::sync::mpsc::unbounded_channel::<String>();
+        let online = Arc::new(AtomicI32::new(3));
+        let link = tokio::spawn(async move {
+            super::run_ids_link(
+                "127.0.0.1".to_string(),
+                port,
+                store,
+                ev_tx,
+                "热血传奇".to_string(),
+                1,
+                online,
+                &mut outbox,
+            )
+            .await;
+        });
+        let (mut sock, _peer) = listener.accept().await.expect("接受连接");
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(std::time::Duration::from_secs(5), sock.read(&mut buf))
+            .await
+            .expect("连上后 5s 内必须收到首帧")
+            .expect("读取首帧");
+        assert_eq!(
+            &buf[..n],
+            b"(103/\xC8\xC8\xD1\xAA\xB4\xAB\xC6\xE6/0/3/1)",
+            "首帧必须是 gb2312 的 (103/热血传奇/0/3/1)"
+        );
+        link.abort();
+    }
+
+    /// **I-2②** `SystemProcessor.ShowOnline` 的 10s 门（`SystemProcessor.cs:63-67`）：
+    /// 严格 `>`，基准取**启动时刻**（oracle `Startup` 的 `GetTickCount()`）。
+    /// `MIR2_CLOCK_MS` 注入后 `world.clock_ms` 从 epoch 量级起算 ⇒ 基准必须同步到该起点，
+    /// 否则首个 tick 就 `clock_ms - 0 > 10000` ⇒ **提前首发**（首条断言即红）。
+    ///
+    /// 牙：基准改回 0、或把 `>` 改成 `>=` ⇒ 前三条断言必红。
+    #[test]
+    fn online_hum_gate_is_strict_10s_from_startup_baseline() {
+        let origin = 1_700_000_000_000i64; // 注入时钟后的起点量级
+        let mut gate = OnlineHumGate::new(origin);
+        assert!(!gate.tick(origin), "起算同一刻不发（注入下不得提前首发）");
+        assert!(!gate.tick(origin + 10_000), "严格 >：正好 10000ms 不发");
+        assert!(gate.tick(origin + 10_001), "超过 10000ms 发一次");
+        assert!(
+            !gate.tick(origin + 10_002),
+            "发完推进基准（oracle :65 先赋值）"
+        );
+        assert!(gate.tick(origin + 20_002), "再等满 10s 后发下一帧");
+    }
+
+    /// **M-1**：断链期积压的陈旧帧在重连前必须丢干净（oracle `SendSocket` 在 `Offline`
+    /// 时直接 return、不排队 ⇒ 重连只补发当前值一帧）。
+    ///
+    /// 牙：删掉 `drain_stale` 调用 ⇒ `try_recv` 仍能取到旧帧 ⇒ 必红。
+    #[test]
+    fn stale_frames_are_dropped_before_reporting_current_value() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+        tx.send("(103/a/0/1/1)".to_string()).expect("入队");
+        tx.send("(103/a/0/2/1)".to_string()).expect("入队");
+        drain_stale(&mut rx);
+        assert!(
+            rx.try_recv().is_err(),
+            "断链期积压必须丢干净（oracle Offline 不排队）"
+        );
     }
 }

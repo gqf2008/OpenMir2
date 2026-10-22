@@ -1017,9 +1017,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
     let (shutdown_done_tx, mut shutdown_done_rx) =
         tokio::sync::mpsc::unbounded_channel::<ShutdownSaveSummary>();
-    // **SS_SERVERINFO 上报**（`AuthenticationService.cs:113-116` + `SystemProcessor.cs:60-71`）：
-    // 连上 IDS 时由 ids 链路报一次（`DataSocketConnect`），之后由 sim 线程按
-    // `GetTickCount()-SendOnlineHumTime > 10000` 的严格门投递给 ids 链路发出。
+    // **SS_SERVERINFO 上报**（`AuthenticationService.cs:113-116` + `SystemProcessor.cs:54-68`，
+    // 10s 分支在 `:63-67`）：连上 IDS 时由 ids 链路报一次（`DataSocketConnect`），之后由
+    // sim 线程按 `GetTickCount()-SendOnlineHumTime > 10000` 的严格门投递给 ids 链路发出。
     // `online_count` 由 sim 线程每 tick 写（`WorldEngine.OnlinePlayObject` 的等价物）。
     let ids_online = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
     let (ids_out_tx, ids_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -1027,7 +1027,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let sim_ids_online = std::sync::Arc::clone(&ids_online);
     let sim_ids_out = ids_out_tx.clone();
     let ids_server_name = cfg.server_name.clone();
-    let ids_server_index = cfg.server_index;
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1256,7 +1255,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 store,
                 kick_tx,
                 ids_server_name,
-                ids_server_index,
                 ids_payment_mode,
                 ids_count,
                 &mut outbox,
@@ -16931,9 +16929,6 @@ fn sim_loop(
     // （严格 `>`，间隔 = `[Setup] ConsoleShowUserCountTime`，缺省 600000ms）与
     // `ProcessGameRun` 的 10s 门**各自独立**；基准都由 `CastleHostGates::new` 同刻起算。
     let mut castle_gates = game_svr::castle::CastleHostGates::new(world.clock_ms);
-    // `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime`（`SystemProcessor.cs:66-71`）：与
-    // `RunTimeTick`（10s）**各自独立**的另一个 10s 门；从 0 起算（oracle 字段缺省 0）。
-    let mut send_online_hum_tick: i64 = 0;
     let mut castle_store: Option<game_svr::castle::CastleStore> = None;
     // 每个在线玩家的 `InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`
     // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
@@ -16980,6 +16975,11 @@ fn sim_loop(
             world.clock_ms
         );
     }
+    // `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime`（`SystemProcessor.cs:63-67`）：与
+    // `RunTimeTick`（10s）**各自独立**的另一个 10s 门。oracle 在 `Startup` 用 `GetTickCount()`
+    // 起算（`SystemProcessor.cs:22-27`）⇒ 基准 = **启动时刻**。必须放在时钟注入**之后**取
+    // `world.clock_ms`：注入后起点是 epoch 量级，基准若写死 0 会 `-0 > 10000` ⇒ 连上即多发一帧。
+    let mut online_hum_gate = game_svr::ids::OnlineHumGate::new(world.clock_ms);
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -19574,12 +19574,13 @@ fn sim_loop(
             .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost)
             .count() as i32;
         ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
-        // `SystemProcessor.ShowOnline`（`:60-71`）：严格 `>`，到点上报一次。
-        if world.clock_ms - send_online_hum_tick > 10_000 {
-            send_online_hum_tick = world.clock_ms;
+        // `SystemProcessor.ShowOnline`（`:54-68`，10s 分支在 `:63-67`）：严格 `>`，
+        // 到点上报一次当前在线数（`SendOnlineHumCountMsg`，`AuthenticationService.cs:113-116`）。
+        // 第 3 段恒 0（`M2Share.ServerIndex` 从不赋值），第 5 段取 `[Server] PayMentMode`
+        // （缺省 1，`GameSvrConf.cs:1253`）——都由 `serverinfo_frame` 决定。
+        if online_hum_gate.tick(world.clock_ms) {
             let frame = game_svr::ids::serverinfo_frame(
                 &enter_cfg.server_name,
-                i32::from(enter_cfg.server_index),
                 online_play_objects,
                 payment_mode,
             );

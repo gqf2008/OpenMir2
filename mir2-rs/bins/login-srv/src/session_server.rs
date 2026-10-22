@@ -125,6 +125,48 @@ pub async fn run_session_listener(share: Arc<Share>, listener: TcpListener) -> R
     }
 }
 
+/// `SS_SERVERINFO` 的解析结果：`(103/服务器名/服务器序号/在线数/付费模式)`。
+///
+/// 发送端是 GameSvr 的 `AuthenticationService.SendOnlineHumCountMsg`（`:113-116`，帧体五段、
+/// 四段字段）；本仓发送侧见 `mir2-rs/bins/game-svr/src/ids.rs` 的 `serverinfo_frame`。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServerInfoReport {
+    /// 服务器名（`SystemShare.Config.ServerName`）。
+    pub server_name: String,
+    /// 服务器序号（oracle 恒 0；99 = DBSrv）。
+    pub server_index: i32,
+    /// 在线人数（`WorldEngine.OnlinePlayObject`）。
+    pub online_count: i32,
+    /// 计费模式（`[Server] PayMentMode`，oracle 缺省 1）。
+    pub payment_mode: i32,
+}
+
+/// 解析 `(103/…)` 里 `103/` 之后的四段（`HUtil32.GetValidStr3` 逐段；缺段照 C# 取空串/0）。
+#[must_use]
+pub fn parse_serverinfo(rest: &str) -> ServerInfoReport {
+    let (server_name, rest) = hutil32::get_valid_str3(rest, &['/']);
+    let (index, rest) = hutil32::get_valid_str3(&rest, &['/']);
+    let (online, rest) = hutil32::get_valid_str3(&rest, &['/']);
+    let (pay, _) = hutil32::get_valid_str3(&rest, &['/']);
+    ServerInfoReport {
+        server_name,
+        server_index: hutil32::str_to_int(&index, 0),
+        online_count: hutil32::str_to_int(&online, 0),
+        payment_mode: hutil32::str_to_int(&pay, 0),
+    }
+}
+
+/// 把 `SS_SERVERINFO` 的解析结果写回在线槽条目（`SocketClientRead` 的 103 分支）。
+///
+/// 单列成函数让「解析结果是否真的落槽」有可执行判据（T-8：删掉任一行 —— 尤其
+/// `server_index` —— 用例必红）。
+fn apply_serverinfo(server: &mut ServerSessionInfo, report: &ServerInfoReport) {
+    server.server_name.clone_from(&report.server_name);
+    server.server_index = report.server_index;
+    server.online_count = report.online_count;
+    server.payment_mode = report.payment_mode;
+}
+
 /// `SessionServer.SocketClientRead`（含 C# 把 `sReviceMsg` 写给**所有**条目的覆盖笔误）。
 #[allow(clippy::too_many_lines)] // 1:1 照搬 C# 的 if/switch 结构，拆开反而难对读
 async fn socket_client_read(share: &Arc<Share>, socket_id: &str, chunk: &str) {
@@ -158,14 +200,8 @@ async fn socket_client_read(share: &Arc<Share>, socket_id: &str, chunk: &str) {
                 close_user(&mut server, &account, session_id, &mut actions);
             }
             messages::SS_SERVERINFO => {
-                let (server_name, rest) = hutil32::get_valid_str3(&rest, &['/']);
-                let (index, rest) = hutil32::get_valid_str3(&rest, &['/']);
-                let (online, rest) = hutil32::get_valid_str3(&rest, &['/']);
-                let (pay, _) = hutil32::get_valid_str3(&rest, &['/']);
-                server.server_name = server_name.clone();
-                server.server_index = hutil32::str_to_int(&index, 0);
-                server.online_count = hutil32::str_to_int(&online, 0);
-                server.payment_mode = hutil32::str_to_int(&pay, 0);
+                let report = parse_serverinfo(&rest);
+                apply_serverinfo(&mut server, &report);
                 server.keepalive_tick = tick();
                 sorted_marker = Some(0);
                 let online_min = get_online_hum_count(share, &server).await;
@@ -177,7 +213,7 @@ async fn socket_client_read(share: &Arc<Share>, socket_id: &str, chunk: &str) {
                     messages::SS_KEEPALIVE,
                     online_min.to_string(),
                 ));
-                ref_server_limit(share, &server, &server_name).await;
+                ref_server_limit(share, &server, &report.server_name).await;
             }
             messages::ISM_GAMETIMEOFTIMECARDUSER => {
                 let (server_name, rest) = hutil32::get_valid_str3(&rest, &['/']);
@@ -767,10 +803,14 @@ pub async fn session_clear_no_payment(share: &Arc<Share>, test_server: bool) {
 #[cfg(test)]
 mod tests {
     use super::{
-        is_server_online, limit_status, resolve_server_status, ServerHandle, ServerStatus,
+        apply_serverinfo, is_server_online, limit_status, parse_serverinfo, resolve_server_status,
+        ServerHandle, ServerInfoReport, ServerStatus,
     };
     use crate::config::LimitServerUserInfo;
+    use crate::gbk;
     use crate::state::ServerSessionInfo;
+    use mir2_protocol::messages;
+    use mir2_shared::hutil32::{self, ArrestWrite};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
@@ -872,5 +912,90 @@ mod tests {
         assert!(!is_server_online(&both, "legend"));
         assert!(!is_server_online(&both, "热血"));
         assert!(!is_server_online(&both, "热血传奇2"));
+    }
+
+    /// **I-2③**：login-srv 侧——生产字节 gb2312 `(103/热血传奇/0/0/1)` → GBK 解码 → `(...)`
+    /// 分帧 → 取消息号 → [`parse_serverinfo`] → [`is_server_online`]（99 门）→
+    /// [`resolve_server_status`] = `Idle`。复用本模块既有 helper 与四档用例，不重复定义。
+    ///
+    /// 牙：`is_server_online` 的 `server_index != 99` 改 `== 99`、或四档阈值改错 ⇒ 必红。
+    #[test]
+    fn serverinfo_report_makes_server_status_idle() {
+        let raw = [
+            b"(103/".as_slice(),
+            &[0xC8, 0xC8, 0xD1, 0xAA, 0xB4, 0xAB, 0xC6, 0xE6],
+            b"/0/0/1)".as_slice(),
+        ]
+        .concat();
+        let text = gbk::decode(&raw);
+        let (write, rest) = hutil32::arrest_string_ex_ref(&text, '(', ')');
+        assert!(rest.is_empty(), "整帧被消费");
+        let ArrestWrite::Value(msg) = write else {
+            panic!("分帧失败")
+        };
+        let (code, body) = hutil32::get_valid_str3(&msg, &['/']);
+        assert_eq!(
+            hutil32::str_to_int(&code, -1),
+            i32::from(messages::SS_SERVERINFO)
+        );
+        assert_eq!(
+            parse_serverinfo(&body),
+            ServerInfoReport {
+                server_name: "热血传奇".to_string(),
+                server_index: 0,
+                online_count: 0,
+                payment_mode: 1, // I-1：oracle 缺省 1（不是 0）
+            }
+        );
+        // 在线判定：GameSvr（index 0）算在线；DBSrv（index 99）不算。
+        let game = srv("热血传奇", 0);
+        let db = srv("热血传奇", 99);
+        assert!(is_server_online(std::slice::from_ref(&game), "热血传奇"));
+        assert!(
+            !is_server_online(std::slice::from_ref(&db), "热血传奇"),
+            "ServerIndex=99 是 DBSrv ⇒ 不算游戏服在线"
+        );
+        // 部署 `UserLimit.txt`：limit_count_max = 10000（`Server.conf`/部署件同口径）。
+        let slots = [Some(lim("热血传奇", 0, 10_000)), None];
+        assert_eq!(resolve_server_status("热血传奇", true, &slots), "Idle");
+        assert_eq!(resolve_server_status("热血传奇", false, &slots), "0");
+        // 四档阈值（max = 10000）：5000 Idle / 8000 General / 9999 Busy / 10000 Full。
+        assert_eq!(
+            resolve_server_status("x", true, &[Some(lim("x", 5_000, 10_000))]),
+            "Idle"
+        );
+        assert_eq!(
+            resolve_server_status("x", true, &[Some(lim("x", 8_000, 10_000))]),
+            "General"
+        );
+        assert_eq!(
+            resolve_server_status("x", true, &[Some(lim("x", 9_999, 10_000))]),
+            "Busy"
+        );
+        assert_eq!(
+            resolve_server_status("x", true, &[Some(lim("x", 10_000, 10_000))]),
+            "Full"
+        );
+        // 尾部空槽（C# NRE 被吞）在未命中时 ⇒ "0"。
+        assert_eq!(resolve_server_status("热血传奇", true, &[None]), "0");
+    }
+
+    /// **T-8**：`SS_SERVERINFO` 的解析结果必须真的**写回在线槽条目**（四列逐项）。
+    ///
+    /// 牙：删掉 [`apply_serverinfo`] 的任一行（尤其 `server_index`）⇒ 本用例必红。
+    #[test]
+    fn serverinfo_report_is_applied_to_online_slot() {
+        let mut slot = srv("旧服", 99);
+        let report = ServerInfoReport {
+            server_name: "热血传奇".to_string(),
+            server_index: 0,
+            online_count: 7,
+            payment_mode: 1,
+        };
+        apply_serverinfo(&mut slot, &report);
+        assert_eq!(slot.server_name, "热血传奇");
+        assert_eq!(slot.server_index, 0, "T-8：server_index 必须写回槽位");
+        assert_eq!(slot.online_count, 7);
+        assert_eq!(slot.payment_mode, 1);
     }
 }
