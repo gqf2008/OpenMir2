@@ -6,6 +6,8 @@
 - 写集：**仅本文件**。不改代码 / 编码器 / 规则表 / `whitelist.md`（结论以「建议条目」形式交后续卡落地）
 - **v2（按 review `fd374560` 返工）**：C-1（`SM_CHANGEFACE` 三态判错）、C-2（事件族未穷举 `MapEvent` 家族）、I-1（编号撞号）、I-2（`SwitchData` 假证据）、I-3（655 字段写反）全部订正；M-1..M-4 一并修。
 
+> **v3（按 review `2b3f2c75`）**：I-6 把「复活条件」由「改内容 + 接一臂 = S」改写为**三步、代价 M**（Rust 世界层的克隆名是硬编码常量 `DRAGON1_NAME`，只改内容会先造成 oracle/Rust 行为差异）；M-5 在 §4.3 相位表补「门」这一段（`MapDoor.DoorId` 同样恒 0，`LoadMapDoor` 在 `StartUp` 前就占住 key 0）；M-6 订正 P2 的注释（monsters 表无 `神兽10` ⇒ 该 MonGen 行是死条目）。
+
 > **v1 的自纠**：v1 把 `SM_CHANGEFACE` 判成「可直接接线」，理由是「世界层已发 `RM_CHANGEFACE` + 宿主缺一臂」。代码观察本身没错，但**把「代码缺口」当成了「现网可出帧」**：现网部署 `Dragon1=神兽`（race 113），ELF 分裂支永远造不出 race-114，所以该帧在**两侧现网都不执行**。v1 的 §3.2 第 3 步与同段第 2 步自相矛盾，且错引 `pet_slave.rs:431` 作正向证据（它恰恰是反证）。v2 已改判为「不可达（部署级）」并撤回 v1 的优先级第 1 名与 B1 批。
 
 ---
@@ -25,7 +27,7 @@
 | 子类 | 帧 | 不可达的根因 | 复活条件 |
 |---|---|---|---|
 | oracle 结构性 | `SM_CLOSEDOOR`/`SM_OPENDOOR_OK`（T-65）、`SM_ITEMSHOW`（T-19/T-25/T-32） | 冻结的 C# 代码里生产者恒不执行（守卫写反 / id 恒 0） | 除非改 oracle 源码（等于放弃逐行等价基准），否则永久 |
-| **现网部署级** | `SM_CHANGEFACE` | 现网 `Dragon1=神兽`（race 113）⇒ `ElfMonster.Run` 的克隆永远是 113，`is ElfWarriorMonster` 恒假 ⇒ 全仓唯一的 `new ElfWarriorMonster()`（`WorldServer.MonGen.cs:666`）永不执行 | 把 `Server.conf` 的 `Dragon1` 改回 `神兽1`（属**内容面改动，须 owner 裁决**）；届时本帧立刻变成「可直接接线（S）」，因为宿主缺口仍在（见 §3.2） |
+| **现网部署级** | `SM_CHANGEFACE` | 现网 `Dragon1=神兽`（race 113）⇒ `ElfMonster.Run` 的克隆永远是 113，`is ElfWarriorMonster` 恒假 ⇒ 全仓唯一的 `new ElfWarriorMonster()`（`WorldServer.MonGen.cs:666`）永不执行 | **三步、代价 M**（不是 S）：① 内容面 `Dragon1=神兽1`（须 owner 裁决）；② `crates/world` 把硬编码 `DRAGON1_NAME`（`monai.rs:3632`）改为随配置（`bins` 注入 `PetSlaveConfig.dragon1`）；③ 补 `bins/game-svr/src/lib.rs:15409` 臂。**只做 ①+③ ⇒ oracle 出 114、Rust 仍出 113，先出现行为差异且 Rust 永不出 1104**（见 §3.2） |
 
 **四条与既有台账不一致的实测结论**（详见 §9）：
 
@@ -142,7 +144,7 @@
 | # | 候选生成路径 | 逐点核对 | 结论 |
 |---|---|---|---|
 | P1 | 怪物表本身 | `sql/mir2_data.sql:372` `神兽1`(147, **Race=114**)，全表 705 行里 race-114 仅此一条 | 行存在（≠ 会被刷新） |
-| P2 | MonGen 直接刷 | 部署 `E:/MirServer/M2GameSvr/Envir/MonGen.txt` 全树 **GBK 精确 token** 搜 `神兽1` = **0 命中**（`:2139` 的 `神兽10` 是另一只怪，属子串误报） | **✘** |
+| P2 | MonGen 直接刷 | 部署 `E:/MirServer/M2GameSvr/Envir/MonGen.txt` 全树 **GBK 精确 token** 搜 `神兽1` = **0 命中**（`:2139` 唯一子串命中是 **`神兽10`**，而 monsters 表**没有** `神兽10`（只有 `神兽`/`神兽0`/`神兽1`/`神兽2`/`神兽3`）⇒ 该 MonGen 行是**死刷怪条目**：`RegenMonsterByName("神兽10")` 查不到怪物定义，恒 null；与 race-114 无关） | **✘** |
 | P3 | 脚本刷怪（`MONSTER`/`RECALLMOB` 等） | 部署 `Envir/**`（`*.txt/*.ini/*.conf`）全树 GBK 精确 token `神兽1` = **0 命中** | **✘** |
 | P4 | 神兽跟随态（113）→攻击态转换 | `ElfMonster.Run`（`ElfMonster.cs:43-83`）`MakeClone(SystemShare.Config.Dragon1, this)`（`:72`）；部署 `Server.conf:130` / `Server1.conf:130` **`Dragon1=神兽`**（113）⇒ 克隆出 113，`if (elfMon is ElfWarriorMonster monster)`（`:76`）**恒假** | **✘** |
 | P5 | 召唤神兽魔法 | `MagMakeSinSuSlave`（`MagicManager.cs:1270-1301`）：默认名 = `Config.Dragon`（= 神兽）；`nExpLevel>4` 支拼 `Dragon + (Level/4+4)`（≥5，永不等于 1）；`DragonArray[i].sMonName` 来自 `[Names] Dragon{0..9}`（部署 `Server.conf:129-138` 全为 `神兽` 或空） | **✘** |
@@ -155,10 +157,15 @@
   - 世界层已建模并已发帧：`crates/world/src/monai.rs:2893` `flush_sculture_spawns` 的 `MakeClone` 支执行 `apply_make_clone` + `elf_monster_appear_now` + `send_ref_msg(RM_DIGDOWN)` + **`send_ref_msg(RM_CHANGEFACE, 0, req.owner_id, child, 0)`（`:2980-2988`，ident 在 `:2983`）**；
   - 分支已 1:1 建模：`elf_warrior_run`（`monai.rs:3815-3880`）复刻 `boChangeFace` 三条件、`> 60s` 严格大于门、名字去 `'1'`、`else { DigDownTick = now }` 作用域陷阱（改坏必红用例 `mb7_elf_warrior_dig_down_tick_not_refreshed_when_change_face_true`）；
   - 宿主 `drain_monster_ref_msgs`（`lib.rs:15409`）**无 `RM_CHANGEFACE` 臂**，落 `:15527` 的 `_ => continue`；
-  - ⇒ 一旦内容面把 `Dragon1` 改回 `神兽1`（或另开生成路径），本帧立刻变成「可直接接线（S）」。
+  - ⇒ 一旦内容面把 `Dragon1` 改回 `神兽1`，**oracle 侧**立刻会克隆出 114；但 **Rust 侧还不会**——世界层的克隆名是硬编码常量，见下面的三步复活条件。
 - **判定**：**不可达（现网部署级）**。与 `SM_ITEMSHOW`/门链的「oracle 结构性」不同：这里 oracle 代码会正常执行，只是**冻结的部署内容**（`Server.conf` 的 `Dragon1` + `MonGen` + `Envir` 脚本）不会触发它。
 - **不接线理由**：接线后现网仍零帧（两侧都不发），收益为 0，却会让人误以为「已支持换形」。真正的动作是**让内容侧先有 race-114**（须 owner 裁决，因为 `Server.conf`/`Envir` 属内容冻结面）。
-- **复活条件（写给将来的卡）**：`Dragon1=神兽1` 或 MonGen/脚本出现 `神兽1` ⇒ 改判「可直接接线（S）」，改动面 = `bins/game-svr/src/lib.rs:15409` 一条臂（`feature/status` 按 `world.entities.get(m.n_param2)` 在排水时取；oracle 处理器是收件人下一 Run 才读）。
+- **复活条件（写给将来的卡）：三步、代价 M（跨 crate），不是 S**。
+  1. **内容面**：把 `Server.conf` / `Server1.conf` 的 `Dragon1` 改回 `神兽1`（内容冻结面 ⇒ **须 owner 裁决**）；
+  2. **`crates/world`**：把硬编码常量 `DRAGON1_NAME`（`monai.rs:3632`，`:3789` 的 `MakeClone` 用它；其注释自述「宿主配置通路不在本车道写集 … 若换了 `Server.conf` 的 `Dragon1`，克隆目标类会随之变化」）改为**随配置** —— `World` 增 `dragon1` 字段（或在 `elf_monster_run` 路径传入 `PetSlaveConfig`），由 `bins` 从 `crates/data/src/pet_slave.rs`（`:112` 字段 / `:241` 解析）注入；**注意** `crates/world/src/slave.rs:252` 的**召唤**路径已消费 `cfg.dragon1`，但**克隆路径没走它**；
+  3. **`bins/game-svr/src/lib.rs:15409`**：补 `RM_CHANGEFACE` 臂（`feature/status` 按 `world.entities.get(m.n_param2)` 在排水时取；oracle 处理器是收件人下一 Run 才读）。
+  - **只做 ①+③ 的后果**：oracle 克隆出 114（`AppearNow` 攻击形态）、Rust 仍克隆 113 ⇒ **先出现怪物行为差异**（race / 形态 / 攻击数值），且 Rust 永不发 1104 ⇒ 双侧 diff 从这里裂开。
+  - **真机锚**：114 出现 + `AppearNow` 攻击形态 + 1104 帧。
 - **tier**：不适用（不接线）。
 
 ### 3.3 `SM_CLOSEDOOR(614)` / 3.7 `SM_OPENDOOR_OK(612)` — 不可达（引 T-65 + 独立复核 + 逐帧面表）
@@ -377,6 +384,8 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 
 ⇒ 启动期**唯一**可能建事件格的是「矿」这一支，而它必然失败；其余三支都在运行期由施法/怪物驱动。
 
+**同一 `CellObjectMgr` 命名空间里的非 `MapEvent` 占用者（v2 补）**：`AddMapDoor`（`Envirnoment.cs:193-215`）对 `CellType.Door` 也执行 `CellObjectMgr.Add(cellObject.CellObjId /* = MapDoor.DoorId = 0 */, mapDoor)`（`:215`）。它不建事件格，但会**抢 key 0**，相位见 §4.3 的 ②。
+
 ### 4.2 `StoneMineEvent` 从不注册（C-2 的核心证明，全静态可复现）
 
 1. `ET_MINE = 2`（`OpenMir2/Grobal2.cs:42`）⇒ `StoneMineEvent` ctor 走 `else` 支（`StoneMineEvent.cs:32-53`）⇒ 调 `envir.AddToMapMineEvent(nX, nY, this)`（55/56/57 才走 `AddMineToEvent`）。
@@ -392,13 +401,17 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 
 | 阶段 | key 0 的持有者 | 依据 |
 |---|---|---|
-| 地图装载（`GameApp.Initialize` → `LoadMapInfo`） | **空**（SafeEvent 不构造、StoneMineEvent 不注册、其它事件未发生） | 4.1 / 4.2 |
-| `StartUp` → `Map.StartMakeStoneThread()`（`Maps.cs:7-13`，**后台线程**） | 扫 D401 每一格 ⇒ 每格一次 `Remove(0)`；**期间若有火墙占了 key 0，会被扫掉** | `Maps.cs:439-443` |
-| 清扫结束 · 第一发任意 `Visible` 事件 | `Add(0, e)` 成功（key 空）⇒ key 0 = 第一个 `FireBurnEvent`/`HolyCurtainEvent`/掘尸事件（`Visible=true`） | `MapEvent.cs:79` + `CellObjectMgr.cs:10-16`（`TryAdd`） |
-| 该事件 `Close()` 之后 | **仍是它**（`Visible=false`）；`DeleteFromMap` 的 `CellObjectMgr.Remove(cellId)` 只在 `CellObjId > 0` 支（`Envirnoment.cs:652-667`），事件 cellId 恒 0 ⇒ key 0 **永不移除** | `MapEvent.cs:109-123` + `Envirnoment.cs:652` |
-| 之后的新事件 | `TryAdd` 恒失败 ⇒ 再也进不了 key 0 | `CellObjectMgr.cs:10` |
+| ① 地图装载（`GameApp.Initialize` → `Map.LoadMapInfo`，`GameApp.cs:124`） | **空**（`SafeEvent` 不构造、`StoneMineEvent` 不注册、事件尚未发生、门还没装载） | 4.1 / 4.2 |
+| ② `InitializeWorld` → `MapMgr.LoadMapDoor()`（`GameApp.cs:226`，在 `StartUp` **之前**） | **首个 `MapDoor`** —— `MapDoor.DoorId` 的 `GetNextIdentity()` 同样被注释（`src/Modules/SystemModule/Data/MapDoor.cs:15`）⇒ 恒 0；`LoadMapDoor`（`MapManager.cs:182-189`）→ `AddDoorToMap`（`Envirnoment.cs:298-305`）→ `AddMapDoor`（`:193-215`，要求 walkable）→ `CellObjectMgr.Add(0, door)`（`:215`）。第一个成功登记的门占住 key 0 | `MapManager.cs:182-189` + `Envirnoment.cs:193-215/298-305` + `MapDoor.cs:15` |
+| ③ `StartedAsync` → `StartUp` → `Map.StartMakeStoneThread()`（`Maps.cs:7-13`，**后台线程**） | 扫 D401 每一格 ⇒ 每格一次 `Remove(0)`：**第一格就把 ② 的门删掉**，此后 key 0 **空**；期间若有火墙占了 key 0，也会被后续格子扫掉 | `Maps.cs:439-443` |
+| ④ 清扫结束 · 第一发任意 `Visible` 事件 | `Add(0, e)` 成功（key 空）⇒ key 0 = 第一个 `FireBurnEvent`/`HolyCurtainEvent`/掘尸事件（`Visible=true`） | `MapEvent.cs:79` + `CellObjectMgr.cs:10-16`（`TryAdd`） |
+| ⑤ 该事件 `Close()` 之后 | **仍是它**（`Visible=false`）；`DeleteFromMap` 的 `CellObjectMgr.Remove(cellId)` 只在 `CellObjId > 0` 支（`Envirnoment.cs:652-667`），事件 cellId 恒 0 ⇒ key 0 **永不移除** | `MapEvent.cs:109-123` + `Envirnoment.cs:652` |
+| ⑥ 之后的新事件 | `TryAdd` 恒失败 ⇒ 再也进不了 key 0 | `CellObjectMgr.cs:10` |
 
-> 订正 v1 的一句话：事件**格子对象**并非「永不移除」——`DeleteFromMap` 对 `CellObjId == 0` 走 `else` 支会把该格 id-0 的 cell 直接 `Remove(nIdx)`（`:676-687`）。永不移除的是 **`CellObjectMgr` 的 key 0**。
+> 订正 v1 的两句话：
+> 1. 事件**格子对象**并非「永不移除」——`DeleteFromMap` 对 `CellObjId == 0` 走 `else` 支会把该格 id-0 的 cell 直接 `Remove(nIdx)`（`:676-687`）。永不移除的是 **`CellObjectMgr` 的 key 0**。
+> 2. v1 写「地图装载后 key 0 为空」**不成立**：`LoadMapDoor` 在 `StartUp` 之前就把 **首个 `MapDoor`** 放进 key 0（`DoorId` 同样恒 0）。稳态结论不变，因为矿清扫的第一格就把它删掉。
+> 3. **门占位期间的强转风险**：若此刻已存在 `CellType.Event` 格（需要「门已装载 + 还没被矿清扫删掉 + 已有人施火墙」三者同时成立），`CellObjectMgr.Get<MapEvent>(0)` 会把 `MapDoor` 强转成 `MapEvent`（`CellObjectMgr.cs:18-22` 的 `(T)cell`）⇒ `InvalidCastException`，被 `SearchViewRange` 的 `catch` 吞掉并 **`KickException()`**（`PlayObject.cs:3288-3293`）。本部署因矿清扫在登录前完成而**不可观察**，列入 §4.5 真机锚。
 
 ### 4.4 由此得到的可判结论
 
@@ -411,8 +424,8 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 ### 4.5 还没证明的部分（如实标注）
 
 - **哪些格子会成为 `CellType.Event`**：取决于火墙 5 格是否 walkable（`AddMapEvent` 要求 `GetCellInfo` 成功）。构造级判据取「施法中心格确定 walkable」即可覆盖。
-- **`GetNextIdentity` 家族第二例**：`StoneMineEvent` 也吃 `Id = 0`（`AddMineToEvent`/`AddToMapMineEvent` 都用 `stoneMineEvent.Id`），只因逻辑不可满足而不显形。建议合并成一条总条目（§10 的 T-201）。
-- **真机锚（建议后续卡做一次）**：(i) 起服后 `CellObjectMgr` key 0 的类型；(ii) 一发火墙后 key 0 的类型与 `Visible`；(iii) 首个事件关闭后是否还有 804。
+- **`GetNextIdentity` 注释家族（全树只有 3 处被注释）**：`MapItem.ItemId`（`MapItem.cs:41`）、`MapEvent.Id`（`MapEvent.cs:62`）、`MapDoor.DoorId`（`MapDoor.cs:15`）—— 恰好就是争 `CellObjectMgr` key 的三种对象；而**活着的**调用只剩 `ActorEntity.ActorId`（`ActorEntity.cs:20`）与 `MapManager.RouteId`（`MapManager.cs:134`），两者都是非零序列，不碰 key 0。`StoneMineEvent` 也吃 `Id = 0`（`AddMineToEvent`/`AddToMapMineEvent` 都用 `stoneMineEvent.Id`），只因逻辑不可满足而不显形。建议合并成一条总条目（§10 的 T-201）。
+- **真机锚（建议后续卡做一次）**：(i) `LoadMapDoor` 之后 key 0 的类型（预期 = 首个 `MapDoor`）；(ii) 矿清扫之后 key 0 是否变空；(iii) 一发火墙后 key 0 的类型与 `Visible`；(iv) 首个事件关闭后是否还有 804；(v) 门占位期间若存在事件格是否触发 `InvalidCastException`/`KickException`（§4.3 第 3 条）。
 
 ---
 
@@ -452,11 +465,11 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 ### 6.1 `SM_CHANGEFACE`：功能在代码里、**不在现网内容里**
 
 - 卡面要求「先有功能才有帧」，且不得混进可直接接线清单。v2 的结论与卡面**同向**，但把「功能有没有」拆成两层，因为它决定将来怎么复活：
-  1. **代码层：有**。`crates/world/src/monai.rs:2893` `flush_sculture_spawns` 的 `MakeClone` 支确已在世界层发 `RM_CHANGEFACE`（`:2980-2988`，ident `:2983`）；`elf_warrior_run`（`:3815-3880`）已 1:1 复刻分裂支。宿主 `drain_monster_ref_msgs`（`lib.rs:15409`）缺臂，落 `:15527` `_ => continue`。
+  1. **代码层：有（但有一处硬编码）**。`crates/world/src/monai.rs:2893` `flush_sculture_spawns` 的 `MakeClone` 支确已在世界层发 `RM_CHANGEFACE`（`:2980-2988`，ident `:2983`）；`elf_warrior_run`（`:3815-3880`）已 1:1 复刻分裂支。宿主 `drain_monster_ref_msgs`（`lib.rs:15409`）缺臂，落 `:15527` `_ => continue`。**注意**：克隆名走的是 `pub const DRAGON1_NAME = "神兽"`（`:3632`），**不随配置变** ⇒ 只改内容不改这里，oracle 会造 114 而 Rust 仍造 113。
   2. **现网内容层：没有**。race-114（`ElfWarriorMonster`）的唯一构造点是 `WorldServer.MonGen.cs:666`，而现网没有任何路径生成 race-114（§3.2 的 P1..P7 七面全 ✘：`Dragon1=神兽`、MonGen/Envir 无 `神兽1` 精确 token、召唤链产出 113、GM perm 0）。
 - ⇒ **现网两侧都不出帧** ⇒ 三态 = **不可达（现网部署级）**，不接线。
 - **与 `SM_SKELETON` 的区别**：SKELETON 是「代码层就没有」（`Animal`/`BodyLeathery`/`Skeleton` + 效果体全缺）；CHANGEFACE 是「代码层都有、内容层不触发」。⇒ 前者要开卡补生产链，后者只需在内容面复活时补一条映射。
-- **给 owner 的一句话**：若要真正支持换形（神兽攻击/跟随两态），需要把 `Server.conf` 的 `Dragon1` 改回 `神兽1`（内容面改动，须 owner 裁决），否则这套代码永远跑不到。
+- **给 owner 的一句话**：若要真正支持换形（神兽攻击/跟随两态），需要三步：①把 `Server.conf` 的 `Dragon1` 改回 `神兽1`（内容面，须 owner 裁决）；②让 `crates/world` 的克隆名随配置（拆掉 `DRAGON1_NAME` 硬编码）；③补宿主臂。**只做①会在 oracle 与 Rust 之间先制造行为差异**，所以①②③要同批。
 
 ### 6.2 `SM_SKELETON`：确实「先有功能才有帧」，功能未实现
 
@@ -480,7 +493,7 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 | 4 | `SM_SKELETON` 33 | **中**（屠宰 `Animal` 实体多次） | `Animal`/`BodyLeathery`/`Skeleton` + 屠宰效果体 | **M + R RNG** | 两次 `Random` 序要做 trace |
 | 5 | `SM_QUERYYBSELL` 23021 / `SM_QUERYYBDEAL` 23023 | **中低**（需脚本 `QUERYYB*` 动作 + 已开通元宝） | 2 个动作体 + `ClientDealOffInfo` 编码 + **字节尾通道** | **L** | 受 `SendMsg.msg: String` 限制 |
 | 6 | `SM_RECONNECT` 802 | **低/无**（G11 未移植；GM 面被 perm 0 锁死） | 多服路由 + 会话迁移（`process_switch_data` 已有） | **XL** | 挂 G11，不单开 |
-| — | `SM_CHANGEFACE` 1104 | **无**（部署级：`Dragon1=神兽`） | 代码齐、宿主缺一臂；**内容不触发** | 复活后为 **S** | 登记 + 复活条件（§6.1）；**不排期** |
+| — | `SM_CHANGEFACE` 1104 | **无**（部署级：`Dragon1=神兽`） | 代码齐但克隆名硬编码（`DRAGON1_NAME`）+ 宿主缺一臂；**内容不触发** | 复活需三步、代价 **M**（见 §3.2） | 登记 + 复活条件（§6.1）；**不排期** |
 | — | `SM_CLOSEDOOR` 614 | **无**（T-65） | — | — | 登记，不动 |
 | — | `SM_OPENDOOR_OK` 612 | **无**（T-65） | — | — | 登记，不动 |
 | — | `SM_ITEMSHOW` 610 | **无**（`ItemId` 恒 0） | — | — | 登记，不动 |
@@ -494,7 +507,7 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 | **B3（屠宰族）** | `SM_SKELETON`（含 `CM_BUTCH` 效果体 + `Animal` 门） | R | 需窗口 | RNG 抽数序（2 次）与 `MeatQuality`/`BodyLeathery` 数值；建议独立卡（写集不同） |
 | **B4（寄售族）** | `SM_QUERYYBSELL` + `SM_QUERYYBDEAL` | R | 需窗口 | 前置：脚本帧的**字节尾通道**（建议先单开一张基础卡） |
 | **B5** | `SM_RECONNECT` | — | — | **不做**；挂 G11 跨服搬家卡，复用 `process_switch_data` |
-| — | `SM_CHANGEFACE` | — | — | **不排批**：等内容面复活（`Dragon1=神兽1`，须 owner 裁决）后再开 S 级小卡 |
+| — | `SM_CHANGEFACE` | — | — | **不排批**：复活需三步同批（①内容 `Dragon1=神兽1` 须 owner 裁决；②`crates/world` 拆 `DRAGON1_NAME` 硬编码；③补宿主臂），代价 **M**；只做①+③ 会先制造行为差异 |
 
 ---
 
@@ -502,7 +515,7 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 
 | 条目 | 既有表述 | 本卡实测 | 建议 |
 |---|---|---|---|
-| **T-175**（`SM_CHANGEFACE`） | 「上游 `ElfWarrior` 分裂支未移植」 | 两半都不准：**世界层已建模并已发 `RM_CHANGEFACE`**（`monai.rs:2893`/`:2980-2988`/`:3815-3880`），但**现网内容造不出 race-114**（`Dragon1=神兽`、MonGen/Envir 无 `神兽1`、召唤链→113、GM perm 0） | 改成「世界层已建模、现网内容不可达、宿主映射缺口在，复活条件 = `Dragon1=神兽1`」；**不接线** |
+| **T-175**（`SM_CHANGEFACE`） | 「上游 `ElfWarrior` 分裂支未移植」 | 两半都不准：**世界层已建模并已发 `RM_CHANGEFACE`**（`monai.rs:2893`/`:2980-2988`/`:3815-3880`），但**现网内容造不出 race-114**（`Dragon1=神兽`、MonGen/Envir 无 `神兽1`、召唤链→113、GM perm 0） | 改成「世界层已建模、现网内容不可达；宿主缺臂 + 克隆名硬编码（`DRAGON1_NAME`），复活需三步（§3.2）、代价 M」；**不接线** |
 | **T-178**（`SM_SHOWEVENT/HIDEEVENT`） | 「`MapEvent` 可见性未建模」 | 成立，且必须补三条硬约束：① `MapEvent.Id` 恒 0 ⇒ 折叠；② `StoneMineEvent` 因 `AddToMapMineEvent` 逻辑不可满足而**从不注册**（`Envirnoment.cs:327/812`）；③ key 0 空 ⇒ 首个 `Visible` 事件占住且**关闭后永不移除** | 增补 §4 为接线**硬判据** |
 | **T-179**（`SM_ITEMSHOW`） | 列 3 个生产者（`BaseObject.cs:570/752`、`PlayObject.cs:3264`） | **漏第 4 个**：`ExecutionProcessingSys.cs:5703`（`ActionOfThrowitem` 金币支） | 补生产者清单；结论不变 |
 | **T-182**（`SM_RECONNECT`） | 「`TransferPlanesServer`/`SendChangeServer` 未移植」 | 漏三点：①`TransferPlanesServer` 唯一调用点已注释（`AppService.cs:179`）；②另有 GM `@Reconnection`（perm 10，现网 perm 0）；③`SendChangeServer` 走 `SendDefMessage` **绕过 RM 泵**；且本仓**已有** `SwitchDataState`/`process_switch_data` 脚手架 | 补齐；结论不变（不接线） |
@@ -522,8 +535,8 @@ v1 只证明了「`Id` 恒 0 ⇒ 折叠」，没证明「key 0 的终态」，�
 - **T-197 `SM_SKELETON` 上游屠宰效果体**：`Operate.cs:720-742`（门 `Death && !Skeleton && Animal`，`Random(16)+5`/`Random(201)+100`/`BodyLeathery`/`Skeleton`）；`Animal` 的全部生产点见 §3.12；AOI 支 `PlayObject.cs:3231` 与 `RM_SKELETON` 支 `Operate.cs:736`。tier=R。
 - **T-198 寄售族脚本动作 + 字节尾通道**：`ExecutionProcessingSys.cs:2443/2550`；阻塞点 = `bins/game-svr/src/npc.rs:109-116` 的 `SendMsg.msg: Option<String>` 载不了 `EDCode.EncodeBuffer` 的任意字节。tier=R。
 - **T-199 `SM_RECONNECT` 三面穷举 + 既有脚手架**：①`TransferPlanesServer` 调用点注释（`AppService.cs:179`）；②`SendChangeServer` 走 `SendDefMessage` 绕过 RM 泵、依赖 `!servertable.txt`；③GM `@Reconnection` perm 10 被现网 perm 0 锁死；④**本仓已有** `SwitchDataState`/`process_switch_data`（`lib.rs:14731/14766`，生产恒 no-op）⇒ G11 卡复用。现网两侧皆不出帧。
-- **T-200 `SM_CHANGEFACE` 现网内容级不可达（订正 T-175）**：代码层齐（`monai.rs:2893`/`:2980-2988`/`:3815-3880`；宿主 `lib.rs:15409` 缺臂）；内容层断（部署 `Server.conf:130`/`Server1.conf:130` `Dragon1=神兽`；MonGen/Envir 无 `神兽1` 精确 token；召唤链 `MagMakeSinSuSlave` 只产 113；GM perm 0）。复活条件 = `Dragon1=神兽1` 后接一条臂（tier=L）。
-- **T-201（合并建议）「`GetNextIdentity` 注释家族」**：`MapItem.ItemId`（T-19/T-25/T-32）与 `MapEvent.Id`（本卡；`StoneMineEvent` 同吃）同源（`ActorMgr.GetNextIdentity()` 调用点被注释）⇒ 合并成一条总条目，附「任何依赖这两个 id 的帧」白名单，避免逐帧重复发现。
+- **T-200 `SM_CHANGEFACE` 现网内容级不可达（订正 T-175）**：代码层齐（`monai.rs:2893`/`:2980-2988`/`:3815-3880`；宿主 `lib.rs:15409` 缺臂）；内容层断（部署 `Server.conf:130`/`Server1.conf:130` `Dragon1=神兽`；MonGen/Envir 无 `神兽1` 精确 token；召唤链 `MagMakeSinSuSlave` 只产 113；GM perm 0）。复活 = **三步、代价 M**：①内容 `Dragon1=神兽1`（须 owner 裁决）②`crates/world` 的 `DRAGON1_NAME` 硬编码改为随配置注入（`slave.rs:252` 已有 `cfg.dragon1` 通路，克隆路径未走）③补宿主臂。**不是一条臂的活**。
+- **T-201（合并建议）「`GetNextIdentity` 注释家族」**：全树只有 **3 处**被注释 —— `MapItem.ItemId`（`MapItem.cs:41`，T-19/T-25/T-32）、`MapEvent.Id`（`MapEvent.cs:62`，本卡；`StoneMineEvent` 同吃）、`MapDoor.DoorId`（`MapDoor.cs:15`，本卡 §4.3）⇒ 恰好是争 `CellObjectMgr` key 的三种对象（前两者恒 0、门也恒 0 ⇒ 互相抢 key 0）。合并成一条总条目，附「任何依赖这两个 id 的帧 + `CellObjectMgr` key 0 的三类占用者（Item/Event/Door）」白名单，避免逐帧重复发现。
 
 ---
 
@@ -554,8 +567,17 @@ sed -n '430,447p' src/GameSrv/Maps/Maps.cs           # 逐格 new + 失败支 Re
 sed -n '7,13p'   src/GameSrv/Maps/Maps.cs            # 后台线程
 grep -n "MINE" /e/MirServer/M2GameSvr/Envir/MapInfo.txt   # 唯一矿图 D401 (line 636)
 
-# ⑤ 不可达证明（id 恒 0 家族）
+# ⑤ key-0 的三个占用者与相位
+grep -rn "GetNextIdentity" src/ --include=*.cs          # ItemId / MapEvent.Id / MapDoor.DoorId 全被注释
+sed -n '8,17p' src/Modules/SystemModule/Data/MapDoor.cs
+sed -n '182,189p' src/GameSrv/Maps/MapManager.cs         # LoadMapDoor
+sed -n '193,215p' src/M2Server/Maps/Envirnoment.cs       # AddMapDoor -> CellObjectMgr.Add(0, door)
+sed -n '222,232p' src/GameSrv/GameApp.cs                 # InitializeWorld -> LoadMapDoor
+sed -n '18,22p' src/M2Server/CellObjectMgr.cs            # Get<T> 的 (T)cell 强转
+
+# ⑤b 不可达证明（id 恒 0 家族）
 grep -rn "\.ItemId *=" src/ --include=*.cs
+grep -o "INSERT INTO \`monsters\` VALUES ([0-9]*, '神兽[^']*'" sql/mir2_data.sql   # 无 神兽10
 grep -n  "//Id = M2Share.ActorMgr.GetNextIdentity" src/Modules/SystemModule/MagicEvent/MapEvent.cs
 sed -n '88,92p' src/M2Server/Maps/Envirnoment.cs
 
