@@ -95,3 +95,31 @@ body_len 为 owner 已裁决的 D-9，已 whitelist）。`judge_login` 另提示
   修好后重跑本场景即可收 T-137 的窗口项。
 - 附带确认：oracle 固定 NPC 的外观轴 = `RaceImg=50`、`Appr=8`，与本仓 `openmir2-superman-normnpc`
   落下的 `race_img=50`、`Appr` 落位一致。
+
+## 7. 第四轮（备用端口 15xxx/17xxx，2026-10-22）
+
+### 7.1 准备
+- 基线 `641d50782`（镜像重建六件 + provenance）；
+- `alt_port_profile.py generate --deploy E:/tmp/window/r5/root --db-mode test ... --client-port 17000`：
+  六角色 conf、路由文件（`AddrTable` 17100 / `ServerInfo` 17200）、`run-release-alt.cmd`；
+- 为抓包把 game-gate 绑定改到 17600（`Count=1`），`ServerInfo` 仍广播 17200，代理 17200→17600；
+- 客户端用**私有运行目录**（`E:/tmp/window/r5/client`，资源用 junction 指回共享目录，`run-release.cmd`
+  拷自 `run-release-alt.cmd`），不再改共享 `D:/MirClient-run` 的启动脚本。
+
+### 7.2 结果
+- 整栈在备用端口全部起来（15000/16000/15100/15700/15500/15600/17000/17100/17600/17200），
+  与外部 C# 栈（5000/7000/7200）**互不干扰**；登录链 `17000→15500`、`17100→15100` 均通。
+- 客户端 `FLOW_OK` 并成功进世界：`进世界 ChrName:winplay0 CurMap:0122 (29,33)`。
+- **固定 NPC 帧已按 oracle 下发**（抓包 `E:/tmp/window/r5/s2c/capture.jsonl`）：
+  - `SM_TURN(10) recog=132 param=29 tag=32 series=518/515/515`（0x0206/0x0203）；
+  - 紧随 `SM_FEATURECHANGED(41) recog=132 param=50 tag=8 series=0`（RaceImg=50、Appr=8）；
+  - 3 对转身中 1 对带名尾、2 对 nameless —— 与 C# oracle 捕获同形（§6）。
+- **仍未达成**：客户端画面未渲染国王精灵，点击 `(512,263)/(512,227)` 仍被判成 `CM_WALK(3011)`，
+  服务端无 `Ident=1010`。协议侧已证明帧正确到达；问题在客户端对角色的注册/坐标映射
+  （客户端显示 `皇宫 29,44` 与服务器 `(29,33)` 存在偏移），需要客户端侧排查或改用「走到 NPC
+  像素再点」的定位法。
+
+### 7.3 收尾
+- 备用端口栈全部停止，15xxx/17xxx 全 DOWN；外部 C# 栈（5000/7000/7200）保持未动；
+- 共享 `D:/MirClient-run/run-release.cmd` 已恢复原文件（sha256 `1ab506be…`）；
+- 证据：`E:/tmp/window/r5/**`。
