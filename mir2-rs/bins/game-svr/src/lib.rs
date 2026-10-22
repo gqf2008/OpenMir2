@@ -1017,6 +1017,16 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let (shutdown_tx, shutdown_rx) = std::sync::mpsc::channel::<()>();
     let (shutdown_done_tx, mut shutdown_done_rx) =
         tokio::sync::mpsc::unbounded_channel::<ShutdownSaveSummary>();
+    // **SS_SERVERINFO 上报**（`AuthenticationService.cs:113-116` + `SystemProcessor.cs:54-68`，
+    // 10s 分支在 `:63-67`）：连上 IDS 时由 ids 链路报一次（`DataSocketConnect`），之后由
+    // sim 线程按 `GetTickCount()-SendOnlineHumTime > 10000` 的严格门投递给 ids 链路发出。
+    // `online_count` 由 sim 线程每 tick 写（`WorldEngine.OnlinePlayObject` 的等价物）。
+    let ids_online = std::sync::Arc::new(std::sync::atomic::AtomicI32::new(0));
+    let (ids_out_tx, ids_out_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+    // 进 sim 线程的句柄（move 闭包内 clone 会连原值一起 move 走，故先在闭包外克隆）。
+    let sim_ids_online = std::sync::Arc::clone(&ids_online);
+    let sim_ids_out = ids_out_tx.clone();
+    let ids_server_name = cfg.server_name.clone();
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1203,6 +1213,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 shutdown_rx,
                 shutdown_done_tx,
                 Some(db),
+                sim_ids_online,
+                sim_ids_out,
+                cfg.payment_mode,
             )
         })
         .context("起 sim 线程失败")?;
@@ -1232,7 +1245,22 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let ids_addr = cfg.ids_addr.clone();
         let ids_port = cfg.ids_port;
         let kick_tx = ev_tx.clone();
-        tokio::spawn(async move { ids::run_ids_link(ids_addr, ids_port, store, kick_tx).await });
+        let ids_payment_mode = cfg.payment_mode;
+        let ids_count = std::sync::Arc::clone(&ids_online);
+        tokio::spawn(async move {
+            let mut outbox = ids_out_rx;
+            ids::run_ids_link(
+                ids_addr,
+                ids_port,
+                store,
+                kick_tx,
+                ids_server_name,
+                ids_payment_mode,
+                ids_count,
+                &mut outbox,
+            )
+            .await;
+        });
     }
 
     let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
@@ -16853,6 +16881,16 @@ fn rewrite_enter_position(
     (map_name, map_id, x, y, die_in_fight3_zone)
 }
 
+/// **T-6 判据点**：上报门的起算基准。
+///
+/// oracle `SystemProcessor.Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算
+/// `SendOnlineHumTime` ⇒ 基准 = 启动时刻 = **时钟注入之后**的 `world.clock_ms`。生产代码只经
+/// 本函数建门：把它改成 `OnlineHumGate::new(0)` ⇒
+/// `startup_online_hum_gate_uses_injected_world_clock` 必红（注入量级下会提前首发）。
+fn startup_online_hum_gate(world_clock_ms: i64) -> game_svr::ids::OnlineHumGate {
+    game_svr::ids::OnlineHumGate::new(world_clock_ms)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     map_sizes: Vec<(i32, i32)>,
@@ -16865,6 +16903,9 @@ fn sim_loop(
     shutdown_rx: std::sync::mpsc::Receiver<()>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     mut db: Option<DbWiring>,
+    ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
+    ids_out: tokio::sync::mpsc::UnboundedSender<String>,
+    payment_mode: u8,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -16944,6 +16985,11 @@ fn sim_loop(
             world.clock_ms
         );
     }
+    // `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime`（`SystemProcessor.cs:63-67`）：与
+    // `RunTimeTick`（10s）**各自独立**的另一个 10s 门。oracle 在 `Startup` 用 `GetTickCount()`
+    // 起算（`SystemProcessor.cs:22-27`）⇒ 基准 = **启动时刻**。必须放在时钟注入**之后**取
+    // `world.clock_ms`：注入后起点是 epoch 量级，基准若写死 0 会 `-0 > 10000` ⇒ 连上即多发一帧。
+    let mut online_hum_gate = startup_online_hum_gate(world.clock_ms);
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -19530,6 +19576,32 @@ fn sim_loop(
         // `CastleMgr.Save()`（`SaveCastleList` → 升序逐城 `SaveConfig` → `SaveAttackSabukWall`）。
         // 与下面 10s 的 `ProcessGameRun` 门**独立**；oracle 在同一 tick 里先 ShowOnline 后
         // ProcessGameRun ⇒ 本块放在 10s 块之前。
+        // `WorldEngine.OnlinePlayObject`（`WorldServer.cs:98/190-193` = `PlayObjectList.Count`）：
+        // `MakeGhost` 后对象仍留在 `PlayObjectList`，直到 RunTick 门到点才 Remove
+        // （`WorldServer.cs:635/709`）⇒ **不能排除 ghost**。与既有宿主口径一致：MonGen 两条门
+        // 与 `crates/world/src/monai.rs` 的 `MakeGhost` 门都数 `race == Play`（不含 ghost），
+        // 否则幽灵/断线窗口里本段会比 oracle 小 1..N（reviewer-1 m-2）。
+        let online_play_objects = world
+            .entities
+            .iter()
+            .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
+            .count() as i32;
+        ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
+        // `SystemProcessor.ShowOnline`（`:54-68`，10s 分支在 `:63-67`）：严格 `>`，
+        // 到点上报一次当前在线数（`SendOnlineHumCountMsg`，`AuthenticationService.cs:113-116`）。
+        // 第 3 段恒 0（`M2Share.ServerIndex` 从不赋值），第 5 段取 `[Server] PayMentMode`
+        // （缺省 1，`GameSvrConf.cs:1253`）——都由 `serverinfo_frame` 决定。
+        if let Some(frame) = game_svr::ids::periodic_serverinfo(
+            &mut online_hum_gate,
+            world.clock_ms,
+            &enter_cfg.server_name,
+            online_play_objects,
+            payment_mode,
+        ) {
+            if ids_out.send(frame).is_err() {
+                glog!("WRN", "IDS 上报通道已关闭，SS_SERVERINFO 丢弃");
+            }
+        }
         let castle_due = castle_gates.tick(world.clock_ms, enter_cfg.console_show_user_count_time);
         if let Some(store) = castle_store.as_ref() {
             if castle_due.save {
@@ -56458,5 +56530,29 @@ mod castle_shift_order_tests {
             5,
             "第 13 抽 = R6[12] = 5（恰 12 抽）"
         );
+    }
+}
+
+#[cfg(test)]
+mod serverinfo_gate_tests {
+    use super::startup_online_hum_gate;
+
+    /// **T-6**：上报门基准必须是**注入之后**的世界时钟（`SystemProcessor.cs:22-27` 的
+    /// `SendOnlineHumTime = GetTickCount()`）。基准若写成 0，注入量级（epoch）下首个 tick 就
+    /// `clock_ms - 0 > 10000` ⇒ 连上后立刻多发一帧。
+    ///
+    /// 牙：`startup_online_hum_gate` 改成 `OnlineHumGate::new(0)` ⇒ 本用例必红。
+    #[test]
+    fn startup_online_hum_gate_uses_injected_world_clock() {
+        let origin = 1_700_000_000_000i64; // `MIR2_CLOCK_MS` 注入后的起点量级
+        let mut gate = startup_online_hum_gate(origin);
+        assert_eq!(
+            gate.baseline(),
+            origin,
+            "基准 = 注入后的 world.clock_ms（不是 0）"
+        );
+        assert!(!gate.tick(origin), "注入量级下不得提前首发");
+        assert!(!gate.tick(origin + 10_000), "严格 >：正好 10000ms 不发");
+        assert!(gate.tick(origin + 10_001), "超过 10000ms 发一次");
     }
 }

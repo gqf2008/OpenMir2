@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 
+/// `[Server] PayMentMode` 的 oracle 缺省值：`GameSvrConf` 构造器 `GameSvrConf.cs:1253`
+/// 置 1，`SystemShare.cs:191` 用它建 `Config`，`ServerConf.cs:22` 的 `ReadWriteByte`
+/// defValue 即该值 ⇒ 缺键与空串都回落 1（`ConfigFile.cs:47-53` / `:126-140`）。
+pub const DEFAULT_PAYMENT_MODE: u8 = 1;
+
 /// 监听端点 + S1 需要的少量参数。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GateConfig {
@@ -29,6 +34,15 @@ pub struct GateConfig {
     ///
     /// oracle 是 `byte`（`SystemShare.ServerIndex`，`SystemShare.cs:45`）⇒ 越界/非整数报错。
     pub server_index: u8,
+    /// `[Server] PayMentMode`——`SS_SERVERINFO` 上报的第 5 段（`AuthenticationService.cs:113-116`）。
+    ///
+    /// **缺省是 1，不是 0**：`ServerConf.cs:22` 的 `ReadWriteByte("Server","PayMentMode",
+    /// SystemShare.Config.PayMentMode)` 的 defValue 取自 `GameSvrConf` 构造器
+    /// （`GameSvrConf.cs:1253` 的 `PayMentMode = 1`；`SystemShare.cs:191` 用它建 `Config`）。
+    /// `ConfigFile.cs:47-53`（缺键 ⇒ 写回 defValue）与 `:126-140`（键在但空串 ⇒ defValue）
+    /// 两条支路都回落 1。现网三份 `Server.conf` 都没有该键 ⇒ oracle 发 `/1`
+    /// （`GameSvrConf.cs:48` 只是字段声明，那行不是缺省来源）。
+    pub payment_mode: u8,
     /// `[Setup] PasswordLockHumanLogin`（`ServerConf.cs:574`；`GameSvrConf.cs:1493` 缺省 false，
     /// 部署 `Server.conf:386` = 0）：`@LockLogin` 的第一道门。
     pub lock_human_login: bool,
@@ -378,6 +392,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
     let mut server_index: Option<u8> = None;
+    let mut payment_mode: Option<u8> = None;
     let mut lock_human_login: Option<bool> = None;
     let mut test_server: Option<bool> = None;
     let mut service_mode: Option<bool> = None;
@@ -559,6 +574,16 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 "TESTSERVER" => test_server = Some(v.eq_ignore_ascii_case("TRUE")),
                 "SERVICEMODE" => service_mode = Some(v == "TRUE"),
                 "WORLDMAPS" => maps = Some(parse_maps(v)?),
+                // `ServerConf.cs:22`：`ReadWriteByte` —— 键存在但值为空串时同缺省（1，
+                // 来源 `GameSvrConf.cs:1253`；`ConfigFile.cs:126-140` 空串回落 defValue）。
+                "PAYMENTMODE" => {
+                    payment_mode = Some(if v.is_empty() {
+                        DEFAULT_PAYMENT_MODE
+                    } else {
+                        v.parse()
+                            .with_context(|| format!("PayMentMode 不是合法字节：{v:?}"))?
+                    });
+                }
                 "SERVERNAME" => server_name = Some(v.to_string()),
                 "IDSADDR" => ids_addr = Some(v.to_string()),
                 "DBADDR" => db_addr = Some(v.to_string()),
@@ -1079,6 +1104,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         check_block,
         // oracle 缺省值（`SystemShare.cs:45` 的 `ServerIndex = 0`）：缺键不算错。
         server_index: server_index.unwrap_or(0),
+        // oracle 缺省 1（`GameSvrConf.cs:1253` 构造器；`ServerConf.cs:22` 的 defValue
+        // 正是它）：缺键不算错。
+        payment_mode: payment_mode.unwrap_or(DEFAULT_PAYMENT_MODE),
         // oracle 缺省 `false`（`GameSvrConf.cs:1493`）：缺键不算错。
         lock_human_login: lock_human_login.unwrap_or(false),
         maps,
@@ -1611,6 +1639,39 @@ GuildMsgBColor=11
             0,
             "F3：空串 => oracle Read<byte> 缺省 0（不得报错）"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **I-1（reviewer-6 `d30fdbd4`）**：`[Server] PayMentMode` 的 oracle 缺省是 **1**，不是 0。
+    /// `GameSvrConf` 构造器 `GameSvrConf.cs:1253` 置 1；`ServerConf.cs:22` 的 `ReadWriteByte`
+    /// defValue 取自它；`ConfigFile.cs:47-53`（缺键）与 `:126-140`（键在但空串）都回落 1。
+    /// 部署三份 `Server.conf` 都没有该键 ⇒ oracle 运行期发 `(103/热血传奇/0/0/1)`。
+    ///
+    /// 牙：把两处缺省改回 0 ⇒ 前两条断言必红（5600 帧第 5 段变成 `/0`，与 oracle 差一字节）。
+    #[test]
+    fn payment_mode_defaults_to_one_like_oracle_constructor() {
+        let dir = std::env::temp_dir().join(format!("gs-paymode-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p = write(&dir, base);
+        assert_eq!(
+            load(&p).unwrap().payment_mode,
+            1,
+            "缺键 ⇒ oracle 缺省 1（GameSvrConf.cs:1253）"
+        );
+        let p2 = write(&dir, &format!("{base}PayMentMode=\n"));
+        assert_eq!(
+            load(&p2).unwrap().payment_mode,
+            1,
+            "空串 ⇒ ConfigFile.cs:126-140 回落 defValue 1"
+        );
+        let p3 = write(&dir, &format!("{base}PayMentMode=3\n"));
+        assert_eq!(
+            load(&p3).unwrap().payment_mode,
+            3,
+            "显式键照读（付费模式 3）"
+        );
+        let p4 = write(&dir, &format!("{base}PayMentMode=300\n"));
+        assert!(load(&p4).is_err(), "PayMentMode 是 byte，300 必须报错");
         std::fs::remove_dir_all(&dir).ok();
     }
 
