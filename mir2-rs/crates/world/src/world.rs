@@ -165,6 +165,13 @@ pub struct TickRecord {
     pub merchant_turns: Vec<(i32, u8)>,
     /// 本 tick 商人 `RM_HIT` 的 id。
     pub merchant_hits: Vec<i32>,
+    /// **卡 `openmir2-castle-merchant-disappear-downlink`**：本 tick 商人
+    /// `RM_DISAPPEAR`（`Merchant.cs:147`）的 `(商人 id, 发帧时刻收件人快照)`。
+    ///
+    /// 收件人在**发帧时刻**由 [`crate::merchant::merchant_run`] 格扫快照（`SendRefMsg` 冷路径，
+    /// ±`SEND_REF_MSG_RANGE`、`Race==Play && !Ghost`）——oracle `:148` 紧接其后就置
+    /// `FixedHideMode = true`，排水时实体已隐藏 ⇒ 宿主不得按当前状态重算收件人。
+    pub merchant_disappears: Vec<(i32, Vec<i32>)>,
     /// 本 tick 商人 `MapRandomMove` 的 id。
     pub merchant_space_moves: Vec<i32>,
     /// 本 tick 被 Ghost 60s 门移除的商人 id。
@@ -4619,6 +4626,7 @@ impl World {
             merchants_run: Vec::new(),
             merchant_turns: Vec::new(),
             merchant_hits: Vec::new(),
+            merchant_disappears: Vec::new(),
             merchant_space_moves: Vec::new(),
             merchant_removed: Vec::new(),
             npcs_run: Vec::new(),
@@ -4854,6 +4862,7 @@ impl World {
             record.merchants_run = m.ran;
             record.merchant_turns = m.turns;
             record.merchant_hits = m.hits;
+            record.merchant_disappears = m.disappears;
             record.merchant_space_moves = m.space_moves;
             record.merchant_removed = m.removed;
         }
