@@ -1,4 +1,8 @@
-# Leader 派工队列（2026-10-23）
+# Leader 派工队列（人读镜像）
+
+> **权威 = walgit 看板**：`walgit collab board` / `walgit collab thread <id>`。
+> 本文件只是给人看的**镜像**，任何派活/认领/状态以签名条目为准；两者不一致时以看板为准。
+
 
 > 依据：`docs/rewrite-remaining-inventory-20261022.md`（185 在飞卡 = A 窗口欠账 152 / B 未接线 22 / D 8 / C 2 / O 1）、
 > `docs/conformance-first-dual-run-20261023.md`（对拍台首跑）、`docs/leader-loop-20261023.md`（Leader 模式）。
@@ -18,9 +22,9 @@
 |---|---|---|---|---|---|
 | 3 | `openmir2-dualrun-triage-enterworld-frames` | 进世界 4 类帧（10/100/654/657）分诊 | `bins/game-svr/src/**` | R | 对拍台（已完成） |
 | 4 | `openmir2-conformance-harness` | 规则首跑后补规则（按 §2.3 暴露逐条） | `tools/conformance/**` | L | #1 复跑 |
-| 5 | `openmir2-gm-commands-design` | GM 第 4 批：数值/落库 44 条 | `bins/game-svr/src/gmcmd.rs` + `lib.rs` | R | 与 #3 串行（都动 game-svr） |
-| 6 | `openmir2-envir-redlist-batch` | 内容加载剩余件（AdminList 等） | `crates/envir/**` | L | 无 |
-| 7 | `openmir2-orphan-encoder-wiring` | 13 个孤儿编码器接生产者 | `bins/game-svr/src/{smframe_ext,pickwire}.rs` | L | 与 #3 串行（同 crate） |
+| 5 | `openmir2-gm-batch-4-numeric` | GM 第 4 批：数值/落库 44 条 | `bins/game-svr/src/gmcmd.rs` | R | 与 #3 串行（都动 game-svr） |
+| 6 | `openmir2-envir-adminlist-consumer` | AdminList 消费点（recon rust=no 剩 2 件之一） | `crates/envir/**` + game-svr | L | 无 |
+| 7 | `openmir2-orphan-encoder-batch-a` | 13 个孤儿编码器逐帧接线/登记 | `bins/game-svr/src/{smframe_ext,pickwire,useitem,sessionwire,mapdoor}.rs` | L | 与 #3 串行（同 crate） |
 | 8 | `openmir2-dualrun-window-burndown` | A 卡→协议场景映射，批量烧窗口欠账 | `tools/probe/scenarios/**`、`docs/` | L | 需先有 #4 的稳定规则表 |
 
 ## 3. 阻塞（需要 owner / 窗口，Leader 只登记不派）
