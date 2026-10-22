@@ -46905,8 +46905,13 @@ mod tests {
     /// 世界侧走生产分派 `monster_class_run`（race 203）；发帧后怪立即 `SpaceMove` 到目标格
     /// ⇒ 排水必须按**发帧时刻**的收件人快照送达（目标/观察者各一条 `SM_SPACEMOVE_HIDE(800)`）。
     ///
+    /// 「观察者」(5,10) 在发帧点 (10,10) 与落点 (13,10) 的 ±12 内**都命中**，单靠它区分不了
+    /// 「快照」与「重算」；故另置**落点专属观察者** (24,10)：|24-10|=14 > 12（发帧点外）、
+    /// |24-13|=11 ≤ 12（落点内）⇒ 按发帧快照 0 帧，按落点重算会多一帧。
+    ///
     /// 牙：删 `RM_SPACEMOVE_FIRE` 支 ⇒ 0 帧（红）；把 ident 改成 `SM_SPACEMOVE_HIDE2(806)` ⇒
-    /// 逐字节断言红；收件人重算/排除 ⇒ 观察者缺失（红）。
+    /// 逐字节断言红；收件人改按**落点重算**（此刻实体已在 (13,10)）⇒ 落点专属观察者 socket 8
+    /// 多收一帧（红）。
     #[test]
     fn t134_spacemove_fire_on_production_drain() {
         use mir2_world::{Entity, ACTOR_RACE_PLAY};
@@ -46928,6 +46933,14 @@ mod tests {
         o.max_hp = 100;
         let oid = world.add_entity(o);
         assert!(world.enter_world(oid));
+        // 落点专属观察者：发帧点 (10,10) ±12 外（|24-10| = 14 > 12），落点 (13,10) ±12 内
+        // （|24-13| = 11 ≤ 12）⇒ 只有「按落点重算」才会被命中。
+        let mut late = Entity::new(0, "落点观察者".to_string(), 24, 10);
+        late.race = ACTOR_RACE_PLAY;
+        late.hp = 100;
+        late.max_hp = 100;
+        let lid = world.add_entity(late);
+        assert!(world.enter_world(lid));
         let mut far = Entity::new(0, "界外".to_string(), 40, 40);
         far.race = ACTOR_RACE_PLAY;
         far.hp = 100;
@@ -46979,6 +46992,14 @@ mod tests {
                 actor_id: oid,
             },
             OnlineEntry {
+                account: "d".to_string(),
+                chr_name: "落点观察者".to_string(),
+                session_id: 4,
+                gate_idx: 0,
+                socket: 8,
+                actor_id: lid,
+            },
+            OnlineEntry {
                 account: "c".to_string(),
                 chr_name: "界外".to_string(),
                 session_id: 3,
@@ -46998,7 +47019,15 @@ mod tests {
             }
         }
         socks.sort_unstable();
-        assert_eq!(socks, vec![5, 6], "±12 内玩家各一条；界外玩家 0 帧");
+        assert_eq!(
+            socks,
+            vec![5, 6],
+            "发帧点 ±12 内玩家各一条；界外与落点专属观察者 0 帧"
+        );
+        assert!(
+            !socks.contains(&8),
+            "落点专属观察者 (24,10) 必须 0 帧：收件人是发帧时刻快照，不按落点重算"
+        );
     }
 
     /// **T-135**：`RM_CHARSTATUSCHANGED` 的宿主排水——`Series` 是**每个收件人自己**的
@@ -47007,8 +47036,14 @@ mod tests {
     /// 世界侧走生产分派 `monster_class_run`（race 210 = `FrostTiger`：`MagMakePrivateTransparent`
     /// 收尾的 `StatusChanged()`）。两名玩家 `hit_speed` 不同（7 / 13）⇒ 两条帧只差 `Series`。
     ///
+    /// `nParam1` 必须让 `LoWord/HiWord` **可区分**，否则「lo/hi 对调」的牙打不响：
+    /// oracle `GetCharStatus() = GetBuffStatus(this) | (CharStatusEx & 0x0000FFFF)`
+    /// （`BaseObject.cs:1492-1502`）⇒ 置 `char_status_ex = 0x0001_0002` 时高 16 位被丢弃
+    /// （`Param = 0x0002`），`Tag` 的非零位只能来自 buff 位（`DefensePower` 榜首 ⇒ bit31
+    /// = `0x8000`）⇒ `status = 0x8000_0002`，`Param/Tag` 两半互异。
+    ///
     /// 牙：把 `hit_speed` 改成常数 0（单 body 广播）⇒ 第二条帧的 `Series` 断言红；删
-    /// 10139 支 ⇒ 0 帧（红）；`LoWord/HiWord(nParam1)` 对调 ⇒ 头断言红。
+    /// 10139 支 ⇒ 0 帧（红）；`LoWord/HiWord(nParam1)` 对调 ⇒ 头断言（`Param=0x0002`）红。
     #[test]
     fn t135_charstatuschanged_per_recipient_hit_speed_on_production_drain() {
         use mir2_world::{Entity, ACTOR_RACE_PLAY};
@@ -47018,6 +47053,10 @@ mod tests {
         tiger.race = 210; // `FrostTiger`
         let tid = world.add_entity(tiger);
         assert!(world.enter_world(tid));
+        // 让 `nParam1` 的上下 16 位互异（见本用例文档）：`CharStatusEx` 只并入低 16 位
+        // （0x0001_0002 ⇒ 低半 0x0002、高半被 `& 0xFFFF` 丢弃）；高半取 buff 首位 bit31。
+        world.entities.get_mut(tid).unwrap().char_status_ex = 0x0001_0002;
+        world.defence_up(tid, 10);
         let mut p1 = Entity::new(0, "甲".to_string(), 11, 10);
         p1.race = ACTOR_RACE_PLAY;
         p1.hit_speed = 7;
@@ -47037,6 +47076,10 @@ mod tests {
 
         assert!(mir2_world::monai::monster_class_run(&mut world, tid).is_some());
         let status = world.entities.get(tid).unwrap().char_status;
+        assert_eq!(
+            status, 0x8000_0002u32 as i32,
+            "CharStatusEx 低半 0x0002 | buff bit31 0x8000_0000"
+        );
         let frame = world
             .pending_monster_ref_msgs
             .iter()
@@ -47102,13 +47145,13 @@ mod tests {
         );
         assert_eq!(
             u16::from_le_bytes([body[6], body[7]]),
-            smframe::lo_word(status),
-            "Param = LoWord(nParam1)"
+            0x0002,
+            "Param = LoWord(nParam1) = CharStatusEx 低半（字面量，防 lo/hi 对调）"
         );
         assert_eq!(
             u16::from_le_bytes([body[8], body[9]]),
-            smframe::hi_word(status),
-            "Tag = HiWord(nParam1)"
+            0x8000,
+            "Tag = HiWord(nParam1) = buff bit31（字面量，防 lo/hi 对调）"
         );
         assert_eq!(
             i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
