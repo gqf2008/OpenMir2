@@ -28,3 +28,13 @@
 ## 判据分级仍然生效
 
 Leader 合并时按 `TIER-POLICY.md`：R 级必须有真机证据或显式 `window_required`；L 级需等价证明 + 抽样冒烟。
+
+## 清理规则（owner 2026-10-23 更正）
+
+**合并后只删分支，不删 worker 的 worktree。**
+
+- 删：本地分支（`git branch -d`）、远端分支（`git push walgit --delete`）、合并后的临时 `*-target` 构建缓存；
+- **保留**：`/e/tmp/wt-*` 等 worker worktree 目录——里面是 `refs/collab` 的签名身份
+  （`<git-dir>/worktrees/<name>/walgit/identity`，一个 worktree = 一个身份 = 一把 Ed25519 私钥）；
+  删掉它等于抹掉该 principal 的身份与可重放性。
+- 新车道优先复用身份匹配的既有 worktree，而不是重建。
