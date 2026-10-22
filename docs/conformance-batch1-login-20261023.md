@@ -361,3 +361,15 @@ selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
    §19/§20 的因果叙述以本条为准（缺陷本身仍成立：C# 2/2 发 767、Rust 0/2 不发）。
 4. **比较器判定修正**：`npc_click_auto` 那对的实际结论是 `UNDECIDABLE (exit 2)`（`ident 643` 未登记），
    不是「DIFFS 2」；同 tick 公告次序差异已在 §10 撤回（§3/§7 已删）。
+
+## 22. N-2 修复后的实跑（06:25–06:28）：场景成为**缺陷探测器**
+
+`dice_chain_auto` 末步断言由 `643` 改为 `767` 后，同窗口两侧各跑一次：
+
+| 侧 | 结果 | 说明 |
+|---|---|---|
+| C# | `exit=0`（33 帧） | 末步等到 `SM_MENU_OK(767)`，断言成立 |
+| Rust | `exit=1`（33 帧，step-failed） | 该支不发任何帧 ⇒ 如实失败 |
+
+⇒ 该场景现在**不是恒失败断言**，而是 oracle 通过、缺陷侧失败的**可用判据**（对应 Leader 另开的
+`@ya52 ELSEACT/CHECKitem 不发 767` 卡，owner `openmir2-worker-31`）。产物：`E:/tmp/conformance/runs/w24-{csharp,rust}-dice767`。
