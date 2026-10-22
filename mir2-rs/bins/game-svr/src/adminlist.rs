@@ -39,9 +39,16 @@ use mir2_envir::MapLoader;
 
 /// `SystemShare.WorldEngine.AdminList` 的宿主读数。
 ///
-/// 把 `GetHumPermission` 的两个 `ref` 出参 + 布尔返回值合成一个结构：`found=false` ⇒ 未命中
-/// （oracle `sIPaddr` 保持调用方传入值——`PlayObject.cs:1185` 的局部 `string.Empty` ⇒ 空串；
-/// `btPermission` = `Config.StartPermission`）；`found=true` ⇒ 等级 + IP 来自该行。
+/// 把 `GetHumPermission` 的两个 `ref` 出参 + 布尔返回值合成一个结构。
+///
+/// `found=true` ⇒ `permission`/`ipaddr` 来自该行（oracle `WorldServer.GetHumPermission` 的
+/// `btPermission = adminInfo.Level; sIPaddr = adminInfo.IPaddr;`）。
+///
+/// `found=false` ⇒ `permission` 保持 `Config.StartPermission`（oracle 在循环**之前**先赋该值）；
+/// `ipaddr` —— oracle 不改写 `ref sIPaddr`，调用方传入值原样返回。**本仓固定给空串**：该调用点
+/// 在 oracle 里整段被注释（`PlayObject` 的 `//if (... ref sIPaddr, ref Permission)`），且
+/// `sIPaddr` 在 `PlayObject.cs` 全文**只出现在那两行注释里、没有声明**（注释块即便取消注释也
+/// 编译不过）⇒「调用方初值」没有可引用的 oracle 事实，空串是本仓的表示选择（登记）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct HumPermission {
     /// `GetHumPermission` 的 `bool` 返回值：是否命中名表。
@@ -95,9 +102,14 @@ impl AdminList {
     /// ```
     ///
     /// `start_permission` = `SystemShare.Config.StartPermission`（未命中时的缺省等级）。
-    /// 名表比较是 `OrdinalIgnoreCase`，落到解析层的 `mir2_data::lists::lookup_admin`
-    /// （`eq_ignore_ascii_case`；对 ASCII 用户名与 oracle 逐字节等价，非 ASCII 名在
-    /// `OrdinalIgnoreCase` 下亦按码位比较、不折叠——两侧同为「只折叠 ASCII」，登记）。
+    ///
+    /// **比较口径（域限定；登记见 `tests/parity/whitelist.md` 的 `T-173`）**：oracle 是
+    /// `string.Compare(a, b, StringComparison.OrdinalIgnoreCase)`，.NET 在 ICC 上做的是
+    /// **Unicode 简单大小写折叠**（实测 .NET 8：`Ä`/`ä`、`Σ`/`σ`、`É`/`é`、全角 `Ａ`/`ａ`
+    /// 均相等）；本仓 `mir2_data::lists::lookup_admin` 用 `eq_ignore_ascii_case`，
+    /// **只折叠 ASCII** ⇒ **仅 ASCII + GBK 汉字语料等价**（汉字无大小写映射；GBK 双字节亦不参与
+    /// ASCII 折叠），**非 ASCII 大小写不折叠，属已登记近似**（`Ä` 与 `ä` 在本仓不等、在 oracle 相等）。
+    /// 差异由 [`tests::lookup_folds_ascii_only`] 显式钉住。
     #[must_use]
     pub fn get_hum_permission(&self, user_name: &str, start_permission: u8) -> HumPermission {
         match mir2_data::lists::lookup_admin(&self.admins, user_name) {
@@ -121,6 +133,12 @@ impl AdminList {
 /// `Ok(None)`（oracle `:22-25` 直接 `return false`，且**不清表**）。读入后走
 /// `mir2_data::lists::load_admin_list_file`（`StringList.LoadFromFile` 口径：BOM 感知 / 无 BOM
 /// 按 cp936，行切分同 `ReadLine`）。
+///
+/// **行切分缺口（引用既有登记，本片不修）**：`ReadLine` 把**孤立 `\r`**（非 CRLF）也当换行，
+/// Rust 侧用 `str::lines()`，不按孤立 CR 切行 ⇒ 含孤立 CR 的文件会少切行。该缺口在解析层
+/// 模块头的「刻意偏离 4」（`crates/data/src/lists.rs` 注释体第 4 条，原文「oracle 的 `\r`
+/// （单独 CR，非 CRLF）行切分未覆盖」，位于该文件 `use` 语句之前）与本表白名单 `T-149`/`T-150`
+/// 均已登记；部署件 `AdminList.txt` 为 `\r\n` ⇒ 不可达。
 ///
 /// # Errors
 /// 读失败（非 `NotFound`）或行级 `CaptureString`（行内前置 `"` ⇒ oracle
@@ -246,6 +264,35 @@ mod tests {
             "未命中 ⇒ Config.StartPermission（部署 = 0）"
         );
         assert_eq!(miss.ipaddr, "", "未命中 ⇒ sIPaddr 保持调用方初值（空串）");
+    }
+
+    /// 口径钉住（登记 `T-173`）：本仓 `eq_ignore_ascii_case` **只折叠 ASCII**，不等价 .NET
+    /// `OrdinalIgnoreCase` 的 Unicode 大小写折叠（`Ä`/`ä`、`Σ`/`σ`、`É`/`é`、全角 `Ａ`/`ａ`
+    /// 在 .NET 8 下相等，在本仓不等）。
+    ///
+    /// 现网语料（ASCII + GBK 汉字）下两者判定相同；本用例把「非 ASCII 分叉」钉成**显式事实**——
+    /// 将来若改成完整 Unicode 折叠，本用例会红 ⇒ 必须同步更新 `T-173`。
+    #[test]
+    fn lookup_folds_ascii_only() {
+        let list = AdminList::new(vec![AdminInfo {
+            level: 10,
+            chr_name: "\u{00C4}rger".to_string(), // `Ärger`
+            ipaddr: "127.0.0.1".to_string(),
+        }]);
+        assert!(
+            !list.get_hum_permission("\u{00E4}rger", 0).found,
+            "Rust 侧只折叠 ASCII：U+00C4 vs U+00E4 不等（.NET OrdinalIgnoreCase 相等，见 T-173）"
+        );
+        // 对照组：ASCII 大小写仍然折叠（oracle 与 Rust 同）。
+        let ascii = AdminList::new(vec![AdminInfo {
+            level: 10,
+            chr_name: "GM01".to_string(),
+            ipaddr: "127.0.0.1".to_string(),
+        }]);
+        assert!(
+            ascii.get_hum_permission("gm01", 0).found,
+            "ASCII 大小写折叠两侧一致"
+        );
     }
 
     /// 部署件实况端到端：唯一行被丢弃 ⇒ 查表恒未命中 ⇒ `Permission` 停在 `StartPermission`。
