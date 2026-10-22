@@ -916,6 +916,10 @@ const fn make_word(low: u16, high: u16) -> u16 {
 
 /// `GetUpgradeStdItem` 的 `_MIN` 口径（`GameItemSystem.cs:892-1069`）：
 /// `MakeWord(LoByte(word), _MIN(255, HiByte(word) + desc))`——**只夹高字节**，低字节原样。
+///
+/// **与 `bins/game-svr/src/bag.rs` 的同名口径逐字同构**；`crates/shared/src/hutil32.rs`
+/// 另有 `make_word_u16`/`hi_byte_u16`/`lo_byte_u16`。本处直接手写以保持零依赖常量语义，
+/// 若将来统一到 shared helper，三处（世界/背包/bag）需同批切换。
 fn add_hi_word(word: u16, add: u8) -> u16 {
     let hi = (i32::from(((word >> 8) & 0xFF) as u8) + i32::from(add)).min(255) as u16;
     make_word(word & 0xFF, hi)
@@ -2722,14 +2726,15 @@ mod tests {
                 dura_max: 5000,
                 ..StdItem::default()
             },
-            // Index 2：首饰 StdMode 22（`DC = MakeWord(1, 2)` ⇒ Hi+Lo = 3）。
+            // Index 2：首饰 StdMode 22（`DC = 0x0201`）。oracle 的 `n` 取**整 16 位字值**
+            // （`HiWord(ushort)` 恒 0、`LoWord(int)` 取整字）⇒ n = 513（旧注释的 "Hi+Lo=3" 是错口径）。
             StdItem {
                 name: "项链".to_string(),
                 std_mode: 22,
                 dc: 0x0201,
                 ..StdItem::default()
             },
-            // Index 3：首饰 StdMode 24（`DC = MakeWord(2, 1)` ⇒ 3 + 1 = 4；`SC = 0x0200` ⇒ 2 + 1 = 3）。
+            // Index 3：首饰 StdMode 24（`DC = 0x0102` ⇒ 258 + 1 = 259；`SC = 0x0200` ⇒ 512 + 1 = 513）。
             StdItem {
                 name: "戒指".to_string(),
                 std_mode: 24,
