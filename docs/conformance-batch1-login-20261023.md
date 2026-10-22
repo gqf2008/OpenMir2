@@ -110,3 +110,16 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 **重要修正**：`SM_HIT(14)` 只出现在 05:04 的 `login_only` run（Rust 单侧多一条），
 本批 05:11 的 `npc_click_auto` 两侧都没有 —— 说明它是**间歇性**的（与首卡「Rust 抓到、C# 未见」的描述一致），
 不能当成每次登录必现的稳定差异；要定位需固定 RNG 种子（`MIR2_RNG_SEED`）后重复采样。
+
+## 8. 追加（05:12–05:14 第四次窗口）：`SM_HIT(14)` 采样 3+3
+
+同一窗口内两侧各连跑 3 次 `login_only`（`--finish close`，避免 softclose 的重连残留）：
+
+| 侧 | 帧数 | `SM_HIT(14)` |
+|---|---|---|
+| C# r1/r2/r3 | 29 / 29 / 29 | **无 / 无 / 无** |
+| Rust r1/r2/r3 | 29 / **30** / 29 | 无 / **有（r2：seq=20, recog=119, param=8, tag=10, series=4）** / 无 |
+
+⇒ `SM_HIT(14)` 在 Rust 侧**间歇出现（本样本 1/3）**，固定 NPC 的 ActorId=119；C# 侧 3/3 无。
+这与卡 `openmir2-npc-hit-frames` 的「Rust 抓到、C# 未见」一致；要定频需固定 RNG 种子后加大样本
+（`start-rust.ps1` 已带 `-Seed 42`，但会话内 RNG 消费序可能随地图/AOI 变化）。
