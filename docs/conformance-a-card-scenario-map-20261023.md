@@ -204,6 +204,17 @@
 **46 张线程可读，其中 19 张的 review 带 `window_items` 原文** ⇒ 已改用原文作依据、通道按原文改判、置信度升 `高`（表中 `win:` 前缀）；
 其余 27 张的 review 只有 `findings`/`work`，**仍保持低置信度**，开工前需读该卡 `review.findings` 或向 Leader 要窗口清单。
 
+
+### 3.2 v1.2：余 27 张回读 `review.findings` 的结果（2026-10-23）
+
+对 §3.1 剩下的 27 张逐张回读 `review.findings`：**22 张有 findings、5 张完全没有**
+（`smframe-minor-gaps` / `sm-merchantsay-recog` / `login-useitems-magic` / `sm-updateitem` / `sm-additem-tail`）。
+
+但 findings 的内容是**评审期问题单**（`C1: world.item_catalog 生产从未填充`、`F1/F2 已在修复轮解决`…），
+且多条卡复用同一段 note，**不含「证据长什么样」的信息** ⇒ 无法据此判定证据通道。
+结论：这 27 张**保持低置信度**，通道需由卡 owner / Leader 补 `window_items` 或窗口清单；
+本表不为它们臆造通道（对应卡上 comment 见 `openmir2-dualrun-window-burndown` 的 `evidence-gap` 条）。
+
 ## 4. 不能对拍 / 暂不可判（逐条原因）
 
 - **G 1 张**：`openmir2-openybdeal-host-wiring` —— 掷骰/寄售面板的可见性依赖客户端面板渲染，协议侧只能验「服务端送了什么帧」，
@@ -228,4 +239,4 @@
    `expand_scenario` 已验：`click_npc` ident=1010 recog=119 → `wait_for [643,100]`）。`merchant_say.json` / `bag_take.json`
    仍需窗口内确定商人 `recog`、说词文本与 take 的消息号后再建（不臆造 ident）；
 2. 规则表缺口（`100/520/525/529/530/654/657` + 52 的 (54,78)）属 `conformance-rules` 车道，本卡只引用不修改；
-3. ~~48 张低置信度卡的通道判定待逐卡回读~~ ⇒ 已做（见 §3.1）：46 张可读 / 19 张有 `window_items`；余 27 张仍待回读 `review.findings`。
+3. ~~48 张低置信度卡的通道判定待逐卡回读~~ ⇒ 已做（§3.1/§3.2）：19 张按 `window_items` 定；余 27 张的 findings 为评审问题单、不含证据形态 ⇒ 仍低置信度，待 owner/Leader 补窗口清单。
