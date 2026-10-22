@@ -680,6 +680,11 @@ impl World {
                     if r.hit {
                         out.hits.push(id);
                     }
+                    // oracle 次序 `:140`（RNG 支）→ `:156`（显隐解除支）⇒ 同一次 `Run` 两条
+                    // `RM_HIT` 就压两条 id（下行按条数出帧）。
+                    if r.unhide_hit {
+                        out.hits.push(id);
+                    }
                     if r.space_moved {
                         out.space_moves.push(id);
                     }
@@ -703,8 +708,13 @@ impl World {
 pub struct MerchantRunOutcome {
     /// `TurnTo(RandomByte(8))` 抽到的朝向（`RM_TURN`）。
     pub turned: Option<u8>,
-    /// 发 `RM_HIT`（`Random(50)==0` 支，或沙巴克战后恢复显形支）。
+    /// 发 `RM_HIT`（**RNG 支**：`Random(50)==0`，`Merchant.cs:138-140`）。
+    ///
+    /// 与 [`Self::unhide_hit`] **独立**：两者可在同一次 `Run` 同时为 `true`（oracle 发两条
+    /// `RM_HIT` ⇒ 两条 `SM_HIT(14)`），调用方按「条数」出帧。
     pub hit: bool,
+    /// 发 `RM_HIT`（**确定性支**：`FixedHideMode` 解除，`Merchant.cs:152-157`，`:156`）。
+    pub unhide_hit: bool,
     /// 发 `RM_DISAPPEAR`（沙巴克战中进入 `FixedHideMode`）。
     pub disappear: bool,
     /// `BoCanMove` 到点 ⇒ `MapRandomMove`（`RM_SPACEMOVE_FIRE`）。
@@ -722,7 +732,8 @@ pub struct MerchantTickOutcome {
     pub ran: Vec<i32>,
     /// `(id, dir)`：本 pass `TurnTo` 的结果（`RM_TURN`）。
     pub turns: Vec<(i32, u8)>,
-    /// 本 pass 发 `RM_HIT` 的商人 id。
+    /// 本 pass 发 `RM_HIT` 的商人 id（**按帧计**：RNG 支 `:140` 与固定显隐解除支 `:156`
+    /// 在同一次 `Run` 各发一条 ⇒ 同一 id 可在本表出现两次，对应两条 `SM_HIT(14)`）。
     pub hits: Vec<i32>,
     /// 本 pass `MapRandomMove` 的商人 id。
     pub space_moves: Vec<i32>,
@@ -1411,6 +1422,8 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     let refill_goods_tick = st.refill_goods_tick;
     let clear_expre_upgrade_tick = st.clear_expre_upgrade_tick;
     let castle_merchant = st.castle_merchant;
+    // `Some(i)` ⇔ oracle `Castle != null`（`Merchant.cs:143` 的第二个合取项）。
+    let castle_bound = st.castle_index.is_some();
     let castle_under_war = st.castle_under_war;
     let can_move = st.can_move;
     let move_time = st.move_time;
@@ -1461,8 +1474,17 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     } else if world.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
         outcome.hit = true;
     }
-    // `Merchant.cs:143-160`：沙巴克战中 ⇒ 进 `FixedHideMode`（`RM_DISAPPEAR`）；否则恢复显形（`RM_HIT`）。
-    if castle_merchant && castle_under_war {
+    // `Merchant.cs:143-160`：`CastleMerchant && Castle != null && Castle.UnderWar` ⇒ 进
+    // `FixedHideMode`（`RM_DISAPPEAR`）；否则恢复显形（`RM_HIT`，`:156`）。
+    //
+    // **`Castle != null` 不可省**：`castle_under_war` 只是 `Castle.UnderWar` 的快照，两者独立；
+    // 缺 `castle_bound` 守卫时「`CastleMerchant=1` + 战中快照 + 未绑定城堡」会多发 `RM_DISAPPEAR`，
+    // 而 oracle 走 else 支。
+    //
+    // **两个 `RM_HIT` 发点必须各自计数**：RNG 支（`:140`）与固定显隐解除支（`:156`）在同一次
+    // `Run` 里可以**同时**命中（oracle 发两条），本函数的调用方按条数出帧 ⇒ 分开记
+    // `hit` / `unhide_hit`，不要合并成一个 bool。
+    if castle_merchant && castle_bound && castle_under_war {
         if world
             .entities
             .get(actor_id)
@@ -1481,7 +1503,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         if let Some(e) = world.entities.get_mut(actor_id) {
             e.fixed_hide_mode = false;
         }
-        outcome.hit = true;
+        outcome.unhide_hit = true;
     }
     // `Merchant.cs:161-166`：`BoCanMove && (now - MoveTick) > MoveTime*1000` ⇒ `MapRandomMove`。
     if can_move && (now - move_tick) > i64::from(move_time) * 1000 {
@@ -1925,6 +1947,199 @@ mod tests {
             assert!(out.hit, "RM_HIT 支取数次序");
         }
         assert_eq!(w.rng.random(), exp.random(), "Run 后两流仍同源");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 城堡商人 `FixedHideMode` 支（卡 `openmir2-castle-merchant-fixedhide-hit`，tier=R）
+    //
+    // oracle `src/GameSrv/Npc/Merchant.cs:143-160`：
+    //   · 战中（`CastleMerchant && Castle != null && Castle.UnderWar`）且 `!FixedHideMode`
+    //     ⇒ `SendRefMsg(RM_DISAPPEAR, …)` + `FixedHideMode = true`（`:145-149`）；
+    //   · 否则（**含 `Castle == null`**）且 `FixedHideMode`
+    //     ⇒ `FixedHideMode = false` + `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")`（`:153-156`）。
+    //
+    // 本支**不抽数**（确定性）⇒ 与 RNG 支（`:132-141`）不同，可构造级逐帧判；它也正是
+    // `tools/conformance/rules.json` 里 ident 14 的 `ignore` 规则**覆盖不到**的那一条。
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    fn castle_spawn(x: i32, y: i32) -> MerchantSpawn {
+        let mut spawn = spawn_at(x, y);
+        spawn.state.castle_merchant = true; // `IsCastle` 列 ≠ 0（`LocalDB.cs:461-464`）
+        spawn
+    }
+
+    fn set_castle_under_war(w: &mut World, id: i32, under_war: bool) {
+        if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+            st.castle_under_war = under_war; // `Castle.UnderWar` 快照（⑧ 接线后由城堡写）
+        }
+    }
+
+    /// 找一个**安静**种子：ctor 4 抽之后的前 `runs` 次 `Run` 都不命中转向支/受击支
+    /// （两支各抽 2 次 ⇒ 逐次复算）。这样显隐支的断言不会被 RNG 帧污染。
+    fn seed_with_quiet_runs(runs: usize) -> i32 {
+        (1..20_000i32)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                let _ = ctor_chain_first_draw(&mut r);
+                (0..runs).all(|_| {
+                    r.random_below(MERCHANT_TURN_RANDOM_MOD) != 0
+                        && r.random_below(MERCHANT_TURN_RANDOM_MOD) != 0
+                })
+            })
+            .expect("存在安静种子")
+    }
+
+    /// 找一个种子：ctor 4 抽 + 前 `run_index` 次 `Run` 之后，第 `run_index + 1` 次 `Run`
+    /// 命中 **RNG 受击支**（第一个 `Random(50) != 0`、第二个 `== 0`）；且前序 `Run` 都**不**受击。
+    fn seed_with_rng_hit_on_run(run_index: usize) -> i32 {
+        (1..20_000i32)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                let _ = ctor_chain_first_draw(&mut r);
+                for _ in 0..run_index {
+                    if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+                        let _ = r.random_byte(MERCHANT_TURN_DIR_MAX);
+                    } else if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+                        return false; // 前序 Run 不得受击（否则「同一次 Run 两条」判据被噪声污染）
+                    }
+                }
+                r.random_below(MERCHANT_TURN_RANDOM_MOD) != 0
+                    && r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0
+            })
+            .expect("存在 RNG 受击种子")
+    }
+
+    /// **判据①（构造级，卡 `openmir2-castle-merchant-fixedhide-hit`）**：`UnderWar` 切换的
+    /// 两向 + 两个稳态。
+    ///
+    /// · `false→true` ⇒ **一条** `RM_DISAPPEAR`（`outcome.disappear`）且 `FixedHideMode` 置位；
+    /// · 战中不变 ⇒ **零帧**；
+    /// · `true→false` ⇒ **恰好一条** `RM_HIT`（确定性支 `outcome.unhide_hit`，RNG 支安静）且标志清 0；
+    /// · 战后不变 ⇒ **零帧**（这条支不得变成噪声源）。
+    ///
+    /// 牙（红检，实测）：① 删 `:156` 对应的 `outcome.unhide_hit = true` ⇒ ④ 必红；
+    /// ② 把补发挪到「进入战中」（`disappear` 与 `unhide_hit` 互换）⇒ ②/④ 必红。
+    #[test]
+    fn castle_merchant_fixed_hide_toggles_on_war_transitions() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(seed_with_quiet_runs(6));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)), "Castle != null");
+
+        // ① 非战中（`UnderWar = false`）稳态：零帧、不隐藏。
+        let out = merchant_run(&mut w, id);
+        assert!(!out.disappear && !out.unhide_hit && !out.hit, "非战中零帧");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+
+        // ② `UnderWar false→true`：恰好一条 `RM_DISAPPEAR` + `FixedHideMode = true`。
+        set_castle_under_war(&mut w, id, true);
+        let out = merchant_run(&mut w, id);
+        assert!(out.disappear, "进入战中 ⇒ RM_DISAPPEAR");
+        assert!(
+            !out.unhide_hit,
+            "进入战中不发 RM_HIT（oracle :145-149 只有 disappear）"
+        );
+        assert!(
+            w.entities.get(id).unwrap().fixed_hide_mode,
+            "FixedHideMode = true"
+        );
+
+        // ③ 战中不变：不重复发（`if (!FixedHideMode)` 守卫）。
+        let out = merchant_run(&mut w, id);
+        assert!(
+            !out.disappear && !out.unhide_hit && !out.hit,
+            "战中稳态零帧"
+        );
+
+        // ④ `UnderWar true→false`：恰好一条 `RM_HIT`（`:156` 确定性支），标志清 0。
+        set_castle_under_war(&mut w, id, false);
+        let out = merchant_run(&mut w, id);
+        assert!(out.unhide_hit, "解除时补发 RM_HIT（Merchant.cs:156）");
+        assert!(!out.hit, "本次 Run 的 RNG 支未命中（安静种子）⇒ 就一条");
+        assert!(!out.disappear, "解除时不发 RM_DISAPPEAR");
+        assert!(
+            !w.entities.get(id).unwrap().fixed_hide_mode,
+            "FixedHideMode = false"
+        );
+
+        // ⑤ 战后稳态：不再补发。
+        let out = merchant_run(&mut w, id);
+        assert!(
+            !out.unhide_hit && !out.disappear && !out.hit,
+            "战后稳态零帧"
+        );
+    }
+
+    /// **判据②（`Castle != null` 守卫，`Merchant.cs:143` 第二合取项）**：
+    /// `CastleMerchant=1` + 战中快照，但 `Castle == null` ⇒ oracle 走 **else** 支：不消失；
+    /// 若此时已 `FixedHideMode`，else 支**仍**补一条 `RM_HIT`（`:153-157` 不判城堡/战中）。
+    /// 非城堡商人（`CastleMerchant=0`）同样不进消失支。
+    ///
+    /// 牙（红检）：把 `castle_bound` 守卫去掉（只留 `castle_merchant && castle_under_war`）⇒
+    /// ① 多发 `RM_DISAPPEAR` ⇒ 必红。
+    #[test]
+    fn castle_merchant_without_castle_never_enters_fixed_hide() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(seed_with_quiet_runs(4));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert_eq!(w.merchant_castle_index(id), None, "Castle == null");
+        set_castle_under_war(&mut w, id, true);
+
+        // ① `Castle == null` ⇒ 不进 `FixedHideMode`（oracle 的 `Castle != null` 为假）。
+        let out = merchant_run(&mut w, id);
+        assert!(!out.disappear, "Castle == null 不得进 FixedHideMode");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+        assert!(!out.unhide_hit, "未隐藏 ⇒ else 支也不补发");
+
+        // ② 已处于 `FixedHideMode`（例如城堡刚解绑）⇒ else 支补一条 `RM_HIT`。
+        if let Some(e) = w.entities.get_mut(id) {
+            e.fixed_hide_mode = true;
+        }
+        let out = merchant_run(&mut w, id);
+        assert!(out.unhide_hit, "else 支解除 ⇒ RM_HIT");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+
+        // ③ 非城堡商人（`CastleMerchant = 0`）+ 战中快照 + 已绑定城堡 ⇒ 仍不进消失支。
+        if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+            st.castle_merchant = false;
+        }
+        assert!(w.set_merchant_castle_index(id, Some(0)));
+        let out = merchant_run(&mut w, id);
+        assert!(!out.disappear, "非城堡商人不得进 FixedHideMode");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+    }
+
+    /// **判据③（两个 `RM_HIT` 发点各自计数）**：RNG 受击支（`:138-140`）与显隐解除支
+    /// （`:152-157`）可以在**同一次 `Run`** 同时命中 ⇒ oracle 发**两条** `RM_HIT`（客户端两条
+    /// `SM_HIT(14)`）⇒ `MerchantTickOutcome.hits` 里同一 id 出现**两次**。合并成一个 bool 会少发一帧。
+    ///
+    /// 牙（红检）：把 `hit` / `unhide_hit` 合回一个字段 ⇒ 本用例的 `vec![id, id]` 变
+    /// `vec![id]` ⇒ 必红。
+    #[test]
+    fn castle_merchant_unhide_hit_coexists_with_rng_hit_as_two_frames() {
+        let mut w = World::new(16, 16);
+        // 第 1 次 `Run`（进入战中）不受击；第 2 次 `Run`（解除）命中 RNG 受击支。
+        w.rng = RandomNumber::with_seed(seed_with_rng_hit_on_run(1));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)));
+        set_castle_under_war(&mut w, id, true);
+        set_run_tick_stale(&mut w, id);
+        let first = w.merchant_tick();
+        assert!(first.hits.is_empty(), "进入战中的 Run 不发 RM_HIT");
+        assert!(w.entities.get(id).unwrap().fixed_hide_mode);
+
+        set_castle_under_war(&mut w, id, false);
+        set_run_tick_stale(&mut w, id);
+        w.clock_ms += MERCHANT_PASS_INTERVAL_MS;
+        let second = w.merchant_tick();
+        assert_eq!(
+            second.hits,
+            vec![id, id],
+            "oracle 次序 :140（RNG）→ :156（解除）⇒ 两条 RM_HIT"
+        );
     }
 
     /// `RefillGoods` 计时：到期命中 `>` 分支 ⇒ 置 `RefillTick` 并（oracle `return`）
