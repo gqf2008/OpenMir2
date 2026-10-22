@@ -34,7 +34,7 @@
 | 9 | `openmir2-script-take-persist` | `bag_equip.json` / `pickup_item.json` / `eat_item.json`（**已建**）+ 库快照 | take 后 `characters_bagitem` 槽位 | r10 已 GREEN，可用对拍固化 |
 | 10 | `openmir2-click-path-bag-writeback` | `npc_click.json` + 库快照 | 点击 → 背包/佩戴/`characters.Gold` | T-160 的 R 窗口项 |
 | 11 | `openmir2-persist-useitems-wiring` | `bag_take.json` + 库快照 | 耐久磨损/破零 roundtrip | 需先有可用物品夹具 |
-| 12 | `openmir2-gm-commands-design`（O 类，非 A） | `gm_time.json`（现有） | 6 条可达 GM 命令的帧面 | Permission 恒 0 ⇒ 需 GM 账号 |
+| 12 | `openmir2-gm-commands-design`（O 类，非 A） | `gm_batch.json`（**已建**，6 条可达命令逐条等 100） | 6 条命令的 `SM_SYSMESSAGE(100)` 逐字节 | Permission 恒 0；`@LockLogin`/`@AddRobotPlay` 有副作用 ⇒ 排最后 |
 
 > 场景文件 6/8/9 为**新增草稿**，本批窗口内先跑 `login_only` 与 `gm_time` 的复现（无需改场景），
 > 再按实际 NPC/商人 `recog` 落 `--var` 跑 6/8/9。
