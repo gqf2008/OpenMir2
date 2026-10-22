@@ -55,8 +55,10 @@
 //! 与设计件 §6 G3 点名的 `UserMoveXY`（现网名 `传送`；§4.3 归「其它」族，本批一并落）。
 //! 共 18 条，全部 `PermissionMin = 10` ⇒ 现网 `Permission` 恒 0，生产路径一律 `权限不够!!!`。
 //!
-//! **移动/RNG 一律不伪造**（设计件 §4.4 第 2 族 + 本卡口径）：`SpaceMove`/`MapRandomMove`/
-//! `GetRecallXy`/`RegenMonsterByName` 在本仓无宿主接线 ⇒ 命令体只保留 oracle 会发的 `SysMsg`
+//! **移动/RNG 一律不伪造**（设计件 §4.4 第 2 族 + 本卡口径）：宿主能力**已经存在**
+//! （`World::base_object_move_player`/`cast_space_move_spell_with`、`space_move_get_rand_xy`、
+//! `guardlist::regen_monster_by_name`、`magic::front_position`），但 GM 派发只有 `&GmWorld`
+//! 内的 `&World` 只读视图，**没有 `&mut World` 通道** ⇒ 命令体只保留 oracle 会发的 `SysMsg`
 //! （这些支多数本来就是**零文本**），移动与抽数副作用逐条 `log_note` 并登记 `whitelist.md`
 //! T-166..T-171。地图存在性/`MapDesc`/`Flag`、在线目标、坐标、行会掌门、攻城区域走
 //! [`GmWorld`] 的 `maps`/`world` 只读视图（宿主已有能力，不另造）。
@@ -1202,9 +1204,11 @@ fn fire_burn(parameters: &str, sess: &GmSession) -> GmResult {
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
 //
 // 口径：全部 `PermissionMin = 10`（现网 `Permission` 恒 0 ⇒ 生产一律 `权限不够!!!`）。
-// 命令体逐行照 oracle；**移动/RNG 一律不伪造**：`SpaceMove`/`MapRandomMove`/`GetRecallXy`/
-// `RegenMonsterByName` 未接 ⇒ 只保留 oracle 会发的 `SysMsg`（多数支本来就是零文本），
-// 并逐条 `log_note` + `whitelist.md` T-166..T-171。
+// 命令体逐行照 oracle；**移动/RNG 一律不伪造**：空间移动/重刷能力已在 `crates/world`
+// （`base_object_move_player`/`cast_space_move_spell_with`/`space_move_get_rand_xy`/
+// `regen_monster_by_name`），缺的是 GM 派发的 `&mut World` 通道（`GetRecallXy` 全仓无）⇒
+// 只保留 oracle 会发的 `SysMsg`（多数支本来就是零文本），并逐条 `log_note` +
+// `whitelist.md` T-166..T-171。
 
 /// `parameters.Split(' ')`（`GameCommand.cs:44`）：**保留空项**，与 `split_whitespace` 不同。
 fn split_params(parameters: &str) -> Vec<&str> {
@@ -1639,14 +1643,18 @@ fn user_move_xy(
             green(format!("无法移动到地图: {map_name} X:{s_x} Y:{s_y}"))
         }
         Some(true) => {
-            let elapsed = (world.now_ms - sess.teleport_tick) / 1000;
-            if elapsed > i64::from(cfg.user_move_time) {
+            // oracle `UserMoveXYCommand.cs:31`：门是**原始毫秒**
+            // （`GetTickCount() - TeleportTick > dwUserMoveTime * 1000`），
+            // 只有红字里的秒数是整秒截断（`:35` 的 `/ 1000`）。先把 elapsed 截成秒再比
+            // ⇒ UserMoveTime*1000+1..999 ms 段 oracle 放行、Rust 拒绝（Important-1）。
+            let elapsed_ms = world.now_ms - sess.teleport_tick;
+            if elapsed_ms > i64::from(cfg.user_move_time) * 1000 {
                 sess.teleport_tick = world.now_ms;
                 no_frames(NOTE_SPACE_MOVE)
             } else {
                 red(format!(
                     "{}秒之后才可以再使用此功能!!!",
-                    i64::from(cfg.user_move_time) - elapsed
+                    i64::from(cfg.user_move_time) - elapsed_ms / 1000
                 ))
             }
         }
@@ -3898,11 +3906,25 @@ mod tests {
         // 允许传送 + 地图无 `NORECALL` ⇒ RecallHuman 未接 ⇒ 零帧 + 留痕。
         sess.group_rcall_time = 0;
         {
+            // 允许标记走**登录生产入口**（`WorldServer.cs:1159` 的 `GetHumData` 装载），
+            // 不手工置位实体字段——手工置位曾掩盖「登录不装载 `AllowGroupReCall`」的缺口
+            // （Important-2）。
+            let flags = crate::record::CharacterData {
+                allow_group_re_call: true,
+                ..crate::record::CharacterData::default()
+            };
             let me = w.entities.get_mut(gm_id).unwrap();
-            me.allow_group_re_call = true;
+            crate::apply_login_record_scalars(me, Some(&flags));
             me.group_members = vec![gm_id, bob_id];
         }
-        w.entities.get_mut(bob_id).unwrap().allow_group_re_call = true;
+        {
+            let flags = crate::record::CharacterData {
+                allow_group_re_call: true,
+                ..crate::record::CharacterData::default()
+            };
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            crate::apply_login_record_scalars(bob, Some(&flags));
+        }
         {
             let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
             let r = execute(&mut sess, &cfg, &view, "@天地合一");
@@ -4038,6 +4060,33 @@ mod tests {
         let r = execute(&mut sess, &cfg, &view_ok, "@传送 5 5");
         assert!(r.msgs.is_empty() && r.log_note.is_some());
         assert_eq!(sess.teleport_tick, 20000);
+        // **毫秒口径边界（Important-1）**：tick=0、now=10500 ⇒ 原始毫秒 `10500 > 10000`
+        // ⇒ oracle 放行（`UserMoveXYCommand.cs:31`）；旧实现先 `/1000` 截成 10 秒 ⇒
+        // `10 > 10` 为假 ⇒ 误发红字且不推进 tick。红检：把门改回秒口径 ⇒ 本断言红。
+        sess.teleport_tick = 0;
+        let view_edge = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm")
+            .with_now(10500);
+        let r = execute(&mut sess, &cfg, &view_edge, "@传送 5 5");
+        assert!(
+            r.msgs.is_empty() && r.log_note.is_some(),
+            "10500ms > UserMoveTime*1000 ⇒ 放行"
+        );
+        assert_eq!(sess.teleport_tick, 10500, "放行支推进 TeleportTick");
+        // 恰好 10000ms：`>` 严格 ⇒ 仍拒；红字秒数 = `10 - 10000/1000` = 0。
+        sess.teleport_tick = 0;
+        let view_eq = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm")
+            .with_now(10000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view_eq, "@传送 5 5")),
+            vec![(GmColor::Red, "0秒之后才可以再使用此功能!!!")]
+        );
+        assert_eq!(sess.teleport_tick, 0, "拒绝支不推进 tick");
         // 地图 `NOPOSITIONMOVE`。
         let view_no = GmWorld::new(&guilds)
             .with_maps(&f_no.registry)
