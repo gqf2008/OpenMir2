@@ -6216,12 +6216,14 @@ fn emit_npc_says(
 /// `EDCode.EncodeString(Msg)`。此前 `script_frame` 无该 ident 的映射 ⇒ 整帧被丢弃，
 /// 赌场 `[@ya52]` 的 `#ELSEACT MESSAGEBOX` 支在 Rust 上「什么都不发」（C# 2/2 发 767、Rust 0/2）。
 ///
-/// **生效面仅限本函数的调用点**（商人的 4 处 `GotoLable`：`CM_CLICKNPC(@main)`、1011 标签、
-/// 1011 `@back`、固定 NPC `GotoLable`）。**不覆盖**（仍整帧丢弃 767，见 T-193）：
+/// **生效面仅限本函数的 4 个调用点**：`CM_CLICKNPC(@main)`、1011 标签（固定 NPC 与商人
+/// 共用同一 `handle_shop_cmd` 调用点）、1011 `@back`、修理 `~@repair`（`CM_USERREPAIRITEM`）。
+/// **不覆盖**（仍整帧丢弃 767，见 T-193）：
 /// `@Login`/QManage（`NpcHost::run_login`）、QFunction（`run_party_goto_label`，
-/// `Market_Def/QFunction-0.txt` 有 5 处 `MESSAGEBOX`）、`GuildOfficial`
-/// （`guild_official::queue_script_output` 直接调 `pickwire::script_frame`）。若要一次覆盖，
-/// 应把映射下沉进 `pickwire::script_frame`。
+/// `Market_Def/QFunction-0.txt` 有 5 处 `MESSAGEBOX`）、**`GuildOfficial`（本部署可达）**
+/// （`guild_official::queue_script_output` 直接调 `pickwire::script_frame`；`Npcs.txt` 首行
+/// 「比奇国王 1 0122」代码列 1 = GuildOfficial，脚本有 6 处 `MESSAGEBOX`）。
+/// 若要一次覆盖，应把映射下沉进 `pickwire::script_frame`（owner 已另开卡）。
 ///
 /// 其余未映射 ident（如 `RM_MERCHANTDLGCLOSE`）仍按既有口径丢弃（逐项登记，不静默）。
 fn emit_script_frames(
