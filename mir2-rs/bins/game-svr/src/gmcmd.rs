@@ -46,6 +46,22 @@
 //! ⇒ 现网 `Permission` 恒 0，生产路径一律停在 `权限不够!!!`；命令体只在测试里用 `permission = 10` 构造。
 //! **oracle 注释掉的逻辑照抄 no-op**（设计件 §4.5 #7）；宿主未接项逐条 `log_note` 并登记
 //! `mir2-rs/tests/parity/whitelist.md` T-161..T-164。
+//!
+//! ## 批次 3（本模块第三批，tier=R）：传送/召唤族 17 条 + `@传送`
+//!
+//! 落地设计件 §4.3 第 11–27 行（`RecallHuman`/`ReGotoHuman`/`Ting`/`SuperTing`/`PositionMove`/
+//! `MapMove`/`MapMoveHuman`/`MoveMobTo`/`RecallMob`/`SignMapMove`/`GroupRecall`/`GuildRecall`/
+//! `MasterRecall`/`DearRecall`/`AllowDearRecall`/`AllowGuildRecall`/`AllowMasterRecall`）
+//! 与设计件 §6 G3 点名的 `UserMoveXY`（现网名 `传送`；§4.3 归「其它」族，本批一并落）。
+//! 共 18 条，全部 `PermissionMin = 10` ⇒ 现网 `Permission` 恒 0，生产路径一律 `权限不够!!!`。
+//!
+//! **移动/RNG 一律不伪造**（设计件 §4.4 第 2 族 + 本卡口径）：宿主能力**已经存在**
+//! （`World::base_object_move_player`/`cast_space_move_spell_with`、`space_move_get_rand_xy`、
+//! `guardlist::regen_monster_by_name`、`magic::front_position`），但 GM 派发只有 `&GmWorld`
+//! 内的 `&World` 只读视图，**没有 `&mut World` 通道** ⇒ 命令体只保留 oracle 会发的 `SysMsg`
+//! （这些支多数本来就是**零文本**），移动与抽数副作用逐条 `log_note` 并登记 `whitelist.md`
+//! T-166..T-171。地图存在性/`MapDesc`/`Flag`、在线目标、坐标、行会掌门、攻城区域走
+//! [`GmWorld`] 的 `maps`/`world` 只读视图（宿主已有能力，不另造）。
 
 use chrono::Local;
 
@@ -82,6 +98,42 @@ pub const DENY_IP_HELP: &str = "命令格式: @+jip IP地址 是否永久封(0,1
 pub const RELOAD_GUILD_HELP: &str = "命令格式: @ReloadGuild 行会名称";
 /// `FireBurnCommand`：`[Command("FireBurn", "", 10)]` ⇒ `Help` 为 null ⇒ 尾随一个空格。
 pub const FIRE_BURN_HELP: &str = "命令格式: @FireBurn ";
+
+// ===== 批次 3（传送/召唤族）的 `Command.CommandHelp` 与 SysMsg 文本常量 =====
+//
+// 口径：`命令格式: @{Name} {Help}`（`CommandAttribute.cs:53`），`Name` 已被 `Command.conf`
+// 覆盖成现网拼写（`CommandSystem.cs:100-107`）；其余文本取 `CommandHelp` 原文，逐字节照抄。
+/// `MapMoveCommand`：`Help = CommandHelp.GameCommandMoveHelpMsg = "地图号"`，现网名 `f`。
+pub const MAP_MOVE_HELP: &str = "命令格式: @f 地图号";
+/// `MapMoveHumanCommand`：`Help = "源地图  目标地图"`（**两个空格**），现网名 `集体传送`。
+pub const MAP_MOVE_HUMAN_HELP: &str = "命令格式: @集体传送 源地图  目标地图";
+/// `PositionMoveCommand`：`Help = "地图号 座标X 座标Y"`，现网名 `ff`。
+pub const POSITION_MOVE_HELP: &str = "命令格式: @ff 地图号 座标X 座标Y";
+/// `RecallHumanCommand`：`Help = CommandHelp.GameCommandPrvMsgHelpMsg = "人物名称"`（未登记 ⇒ 英文名）。
+pub const RECALL_HUMAN_HELP: &str = "命令格式: @RecallHuman 人物名称";
+/// `ReGotoHumanCommand`：`Help = "人物名称"`（未登记 ⇒ 英文名）。
+pub const REGOTO_HUMAN_HELP: &str = "命令格式: @ReGotoHuman 人物名称";
+/// `TingCommand`：`Help = "人物名称"`，现网名 `Tingwa`。
+pub const TING_HELP: &str = "命令格式: @Tingwa 人物名称";
+/// `SuperTingCommand`：`Help = "人物名称 范围(0-10)"`，现网名 `SuperTingwa`。
+pub const SUPER_TING_HELP: &str = "命令格式: @SuperTingwa 人物名称 范围(0-10)";
+/// `RecallMobCommand`：`Help = "怪物名称 数量 等级(0-7) 叛变时间(分钟) 是否自动变色（0、1）固定颜色（1-7）"`，现网名 `bb`。
+pub const RECALL_MOB_HELP: &str =
+    "命令格式: @bb 怪物名称 数量 等级(0-7) 叛变时间(分钟) 是否自动变色（0、1）固定颜色（1-7）";
+/// `MoveMobToCommand`：`Help = "怪物名称 原地图 原X 原Y 新地图 新X 新Y"`（未登记 ⇒ 英文名）。
+pub const MOVE_MOB_TO_HELP: &str = "命令格式: @MoveMobTo 怪物名称 原地图 原X 原Y 新地图 新X 新Y";
+/// `CommandHelp.EnableDearRecall`。
+pub const ENABLE_DEAR_RECALL: &str = "允许夫妻传送!!!";
+/// `CommandHelp.DisableDearRecall`。
+pub const DISABLE_DEAR_RECALL: &str = "禁止夫妻传送!!!";
+/// `CommandHelp.EnableGuildRecall`。
+pub const ENABLE_GUILD_RECALL: &str = "[允许行会合一]";
+/// `CommandHelp.DisableGuildRecall`。
+pub const DISABLE_GUILD_RECALL: &str = "[禁止行会合一]";
+/// `CommandHelp.EnableMasterRecall`。
+pub const ENABLE_MASTER_RECALL: &str = "允许师徒传送!!!";
+/// `CommandHelp.DisableMasterRecall`。
+pub const DISABLE_MASTER_RECALL: &str = "禁止师徒传送!!!";
 
 /// 内建命令名（`CommandSystem.cs:255-307` 的两个嵌套类，**不属于** 185 个命令类）。
 pub const BUILTIN_HELP: &str = "help";
@@ -171,7 +223,46 @@ pub enum Imp {
     /// `FireBurnCommand`（`@FireBurn`）。
     FireBurn,
 
-    /// 未接的 150 条（185 − G1 5 条 − 本批 30 条）：现网全被权限门挡住，命令体留 G4-G6。
+    // ---- 批次 3 · 传送/召唤（17 + `@传送`，设计件 §4.3 第 11–27 行 / §6 G3）----
+    /// `AllowDearRecallCommand`（现网 `@dfsgf567`）。
+    AllowDearRecall,
+    /// `AllowGuildRecallCommand`（现网 `@sadasd`；类名与出厂名都是小写 `Allowguildrecall`）。
+    AllowGuildRecall,
+    /// `AllowMasterRecallCommand`（现网 `@fdgh56j`）。
+    AllowMasterRecall,
+    /// `DearRecallCommond`（现网 `@dsfsdt546`；类名拼写 `Commond` 照抄）。
+    DearRecall,
+    /// `GroupRecallCommand`（现网 `@天地合一`）。
+    GroupRecall,
+    /// `GuildRecallCommand`（现网 `@df56dfs`；成员遍历整段注释 ⇒ no-op）。
+    GuildRecall,
+    /// `MapMoveCommand`（现网 `@f`）。
+    MapMove,
+    /// `MapMoveHumanCommand`（现网 `@集体传送`）。
+    MapMoveHuman,
+    /// `MasterRecallCommand`（现网 `@jkt76`）。
+    MasterRecall,
+    /// `MoveMobToCommand`（现网 `@MoveMobTo`；两个移动支整段注释）。
+    MoveMobTo,
+    /// `PositionMoveCommand`（现网 `@ff`）。
+    PositionMove,
+    /// `RecallHumanCommand`（现网 `@RecallHuman`；判空用 `sHumanName[1]`，与别处 `[0]` 不一致）。
+    RecallHuman,
+    /// `RecallMobCommand`（现网 `@bb`）。
+    RecallMob,
+    /// `ReGotoHumanCommand`（现网 `@ReGotoHuman`）。
+    ReGotoHuman,
+    /// `SignMapMoveCommand`（现网 `@SignMapMove`；体整段注释 ⇒ no-op）。
+    SignMapMove,
+    /// `SuperTingCommand`（现网 `@SuperTingwa`）。
+    SuperTing,
+    /// `TingCommand`（现网 `@Tingwa`）。
+    Ting,
+    /// `UserMoveXyCommand`（现网 `@传送`；§4.3 归「其它」，§6 G3 点名本批）。
+    UserMoveXy,
+
+    /// 未接的 132 条（185 − G1 5 条 − 批次 2/3 30 条 − 本批 18 条）：现网全被权限门挡住，
+    /// 命令体留 G4-G6。
     Unimplemented,
 }
 
@@ -217,6 +308,38 @@ pub struct GmSession {
     pub is_lock_logoned: bool,
     /// `PlayObject.TestSpeedMode`（`BaseObject` 字段，缺省 false；`@TestSpeedMode` 翻转）。
     pub test_speed_mode: bool,
+
+    // ---- 批次 3 · 传送/召唤族（`PlayObject` 同生命周期字段；ctor 缺省见 `Default`）----
+    /// `PlayObject.CanDearRecall`（`@dfsgf567` 翻转）。
+    pub can_dear_recall: bool,
+    /// `PlayObject.AllowGuildReCall`（`@sadasd` 翻转；记录 `characters.AllowGuildReCall` 登录写入）。
+    pub allow_guild_re_call: bool,
+    /// `PlayObject.CanMasterRecall`（`@fdgh56j` 翻转）。
+    pub can_master_recall: bool,
+    /// `PlayObject.RecallSuite`（`PlayObject.cs:510`；唯一写点 `:2530`，`@天地合一` 的门之一）。
+    pub recall_suite: bool,
+    /// `PlayObject.IsMaster`（记录 `is_master`；`@jkt76` 的首门）。
+    pub is_master: bool,
+    /// `PlayObject.GuildMove`（`PlayObject.cs:151`；脚本 `GuildMove` 置位，`@df56dfs` 的门之一）。
+    pub guild_move: bool,
+    /// `PlayObject.Teleport`（装备派生；本仓未建模该派生 ⇒ 缺省 false，见 T-169）。
+    pub teleport: bool,
+    /// `PlayObject.DearName`（记录 `dear_name`；空 = 未婚）。
+    pub dear_name: String,
+    /// `PlayObject.Gender`（记录 `sex`；0 = 男，非 0 = 女——只用于夫妻文案）。
+    pub gender: u8,
+    /// `PlayObject.DearRecallTick`（ms）。
+    pub dear_recall_tick: i64,
+    /// `PlayObject.MasterRecallTick`（ms）。
+    pub master_recall_tick: i64,
+    /// `PlayObject.TeleportTick`（ms）。
+    pub teleport_tick: i64,
+    /// `PlayObject.GroupRcallTick`（ms；ctor 不赋值 ⇒ 0）。
+    pub group_rcall_tick: i64,
+    /// `PlayObject.GroupRcallTime`（秒；记录 `group_rcall_time`，ctor 缺省 0）。
+    pub group_rcall_time: i16,
+    /// `PlayObject.MasterList` 的**在线**徒弟名（本仓无师徒在线表 ⇒ 恒空，T-168）。
+    pub master_list: Vec<String>,
 }
 
 impl Default for GmSession {
@@ -228,6 +351,46 @@ impl Default for GmSession {
             is_lock_logon: true,
             is_lock_logoned: false,
             test_speed_mode: false,
+            can_dear_recall: false,
+            allow_guild_re_call: false,
+            can_master_recall: false,
+            recall_suite: false,
+            is_master: false,
+            guild_move: false,
+            teleport: false,
+            dear_name: String::new(),
+            gender: 0,
+            dear_recall_tick: 0,
+            master_recall_tick: 0,
+            teleport_tick: 0,
+            group_rcall_tick: 0,
+            group_rcall_time: 0,
+            master_list: Vec::new(),
+        }
+    }
+}
+
+impl GmSession {
+    /// 登录期把 `GetHumData` 写进 `PlayObject` 的几项装进会话（其余保持 ctor 缺省）。
+    ///
+    /// 口径：oracle 的 `DearName/Gender/IsMaster/AllowGuildReCall/GroupRcallTime` 由角色记录
+    /// 装入（`WorldServer.cs:279-350` + `PlayObject` 字段），本仓由登录分支从
+    /// `record::CharacterData` 传进来（`lib.rs` 一处构造点）。
+    #[must_use]
+    pub fn from_character(
+        dear_name: &str,
+        gender: u8,
+        is_master: bool,
+        allow_guild_re_call: bool,
+        group_rcall_time: i16,
+    ) -> Self {
+        Self {
+            dear_name: dear_name.to_string(),
+            gender,
+            is_master,
+            allow_guild_re_call,
+            group_rcall_time,
+            ..Self::default()
         }
     }
 }
@@ -254,6 +417,17 @@ pub struct GmConfig {
     /// `File.Exists(SystemShare.GetNoticeFilePath("LineNotice.txt"))`：部署件
     /// `E:/MirServer/M2GameSvr/Notice/linenotice.txt` 存在（Windows 大小写不敏感）⇒ true。
     pub notice_file_exists: bool,
+    /// `SystemShare.Config.GroupRecallTime`（`ServerConf.cs:480` 读 `[Setup] GroupRecallTime`；
+    /// `GameSvrConf.cs:1702` 源码缺省 180）。部署值 = 5。
+    pub group_recall_time: i16,
+    /// `SystemShare.Config.GuildRecallTime`（`ServerConf.cs:479`；源码缺省 180）。部署值 = 600。
+    pub guild_recall_time: i32,
+    /// `SystemShare.Config.dwUserMoveTime`（`UserMoveXY` 冷却，秒）。部署值 = 10。
+    pub user_move_time: i32,
+    /// `[Setup] UserMoveCanDupObj`（`CanWalkOfItem` 的 `boFlag`：true 忽略格上角色）。部署值 = 1。
+    pub user_move_can_dup_obj: bool,
+    /// `[Setup] UserMoveCanOnItem`（`CanWalkOfItem` 的 `boItem`：true 忽略格上物品）。部署值 = 1。
+    pub user_move_can_on_item: bool,
 }
 
 impl Default for GmConfig {
@@ -265,6 +439,11 @@ impl Default for GmConfig {
             function_npc_present: true,
             robot_npc_present: true,
             notice_file_exists: true,
+            group_recall_time: 5,
+            guild_recall_time: 600,
+            user_move_time: 10,
+            user_move_can_dup_obj: true,
+            user_move_can_on_item: true,
         }
     }
 }
@@ -446,12 +625,148 @@ fn str_to_int(s: &str, def: i32) -> i32 {
 
 /// 命令体要读的世界侧只读状态（oracle `SystemShare` 的等价物）。
 ///
-/// 本批只需要一项：`ReloadGuild` 的 `GuildMgr.FindGuild`。
+/// 批次 2/3 只用 `guilds`；批次 3（传送/召唤）再加三项**只读视图**（宿主已有能力，不另造）：
+/// - `maps` = `SystemShare.MapMgr`（`FindMap` / `MapDesc` / `Flag`）；
+/// - `world` = `WorldEngine` 的实体表（`GetPlayObject` / 坐标 / 城堡表）；
+/// - `speaker`/`now_ms` = `PlayerActor.ChrName` 与 `HUtil32.GetTickCount()`。
 #[derive(Clone, Copy)]
 pub struct GmWorld<'a> {
     /// `SystemShare.GuildMgr`；`FindGuild` 是 `GuildName == sGuildName` **精确**比较
     /// （`GuildManager.cs:66-76`，不是 `OrdinalIgnoreCase`）。
     pub guilds: &'a mir2_world::GuildManager,
+    /// `M2Share.MapMgr` 的等价物；`None` = S1 占位世界（无 Envir 注册表）。
+    pub maps: Option<&'a mir2_envir::MapRegistry>,
+    /// `SystemShare.WorldEngine` 的实体表（`GetPlayObject`/坐标/`CastleList`）；`None` = 未接线。
+    pub world: Option<&'a mir2_world::World>,
+    /// 命令发起者 `ChrName`（`@天地合一` 的 `GroupOwner == ActorId` 自比用）。
+    pub speaker: &'a str,
+    /// `HUtil32.GetTickCount()` 的等价物（ms；冷却门的 `now`）。
+    pub now_ms: i64,
+}
+
+impl<'a> GmWorld<'a> {
+    /// 空视图（只带行会表）：测试与「无 Envir / 无世界」的调用方用。
+    #[must_use]
+    pub fn new(guilds: &'a mir2_world::GuildManager) -> Self {
+        Self {
+            guilds,
+            maps: None,
+            world: None,
+            speaker: "",
+            now_ms: 0,
+        }
+    }
+
+    #[must_use]
+    pub fn with_maps(mut self, maps: &'a mir2_envir::MapRegistry) -> Self {
+        self.maps = Some(maps);
+        self
+    }
+
+    #[must_use]
+    pub fn with_world(mut self, world: &'a mir2_world::World) -> Self {
+        self.world = Some(world);
+        self
+    }
+
+    #[must_use]
+    pub fn with_speaker(mut self, speaker: &'a str) -> Self {
+        self.speaker = speaker;
+        self
+    }
+
+    #[must_use]
+    pub fn with_now(mut self, now_ms: i64) -> Self {
+        self.now_ms = now_ms;
+        self
+    }
+
+    /// `WorldEngine.GetPlayObject`（`WorldServer.cs:937-954`）：`PlayObjectList` 顺序扫，
+    /// `ChrName` **OrdinalIgnoreCase** 命中首个、且 `!Ghost`。本仓实体表含怪物 ⇒ 加 `Race == Play` 门。
+    fn play_by_name(&self, name: &str) -> Option<&'a mir2_world::Entity> {
+        let world = self.world?;
+        world.entities.iter().find(|e| {
+            e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost && e.name.eq_ignore_ascii_case(name)
+        })
+    }
+
+    fn entity(&self, id: i32) -> Option<&'a mir2_world::Entity> {
+        self.world?.entities.get(id)
+    }
+
+    fn self_entity(&self) -> Option<&'a mir2_world::Entity> {
+        if self.speaker.is_empty() {
+            return None;
+        }
+        self.play_by_name(self.speaker)
+    }
+
+    fn self_pos(&self) -> Option<(usize, i32, i32)> {
+        let e = self.self_entity()?;
+        Some((e.map_id, e.x, e.y))
+    }
+
+    fn map_name(&self, map_id: usize) -> Option<&'a str> {
+        self.maps?.name_of(map_id)
+    }
+
+    fn flag_of(&self, map_id: usize) -> Option<&'a mir2_envir::MapInfoFlag> {
+        self.maps?.flag_of(map_id)
+    }
+
+    /// `PlayerActor.Envir.Flag`（发起者当前地图的 `Flag`）。
+    fn self_flag(&self) -> Option<&'a mir2_envir::MapInfoFlag> {
+        let e = self.self_entity()?;
+        self.flag_of(e.map_id)
+    }
+
+    /// `Envir.CanWalk(nX, nY, true)`（`Envirnoment.cs:442-451`）：`GetCellInfo` 成功 ⇔
+    /// 界内**且** `Valid`（`boFlag=true` 忽略格上对象）。`None` = 世界图未接线/尺寸不符。
+    fn can_walk(&self, map_id: usize, x: i32, y: i32) -> Option<bool> {
+        let world = self.world?;
+        let grid = world.maps.get(map_id)?;
+        Some(grid.cell_match(x, y) && grid.cell_valid(x, y))
+    }
+
+    /// `Envir.CanWalkOfItem(nX, nY, boFlag, boItem)`（`Envirnoment.cs:502-540`）。
+    ///
+    /// `boFlag=true` 忽略格上角色、`boItem=true` 忽略格上物品（部署两者都是 1 ⇒ 恒 true）。
+    /// `None` = 需要 `FixedHideMode/ObMode/HoldPlace` 等本仓未建模的 actor 状态。
+    fn can_walk_of_item(
+        &self,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        ignore_actor: bool,
+        ignore_item: bool,
+    ) -> Option<bool> {
+        let world = self.world?;
+        let grid = world.maps.get(map_id)?;
+        let (cell, success) = grid.get_cell_info(x, y);
+        if success && cell.valid() && cell.is_available() {
+            for obj in &cell.obj_list {
+                if !ignore_actor && obj.cell_obj_id > 0 && obj.actor_object {
+                    return None;
+                }
+                if !ignore_item && obj.cell_type == mir2_world::CellType::Item {
+                    return Some(false);
+                }
+            }
+        }
+        Some(true)
+    }
+
+    /// `PlayObject.IsGuildMaster()`（`PlayObject.cs:4402-4405`）：`MyGuild != null && GuildRankNo == 1`。
+    /// 本仓行会会话态不在 `GmWorld` ⇒ 用 `GuildMgr` 的成员表等价求：首个含该角色的行会里 `RankNo == 1`。
+    fn is_guild_master(&self, chr_name: &str) -> bool {
+        let Some(guild_name) = self.guilds.member_of_guild(chr_name) else {
+            return false;
+        };
+        self.guilds
+            .find_guild(guild_name)
+            .and_then(|g| g.get_rank_name(chr_name))
+            .is_some_and(|(rank_no, _)| rank_no == 1)
+    }
 }
 
 /// 零帧 + 一条 `log_note`：oracle 抛异常被 `PlayObject.Chat.cs` 的 catch 吞掉，或宿主未接。
@@ -496,6 +811,31 @@ const NOTE_MANAGE: &str =
     "ReloadManage: ManageNPC/FunctionNPC 的 ClearScript+LoadNPCScript 宿主未接，只回 oracle 文本";
 const NOTE_ROBOT_MANAGE: &str =
     "ReloadRobotManage: RobotNPC 的 ClearScript+LoadNPCScript 宿主未接，只回 oracle 文本";
+
+// ---- 传送/召唤族的宿主未接与 oracle 越界登记（whitelist.md T-166..T-171）----
+const NOTE_INDEX_OUT_OF_RANGE: &str =
+    "oracle 下标越界（`sHumanName[1]`/`@params[0..6]`）被 PlayObject.Chat.cs 的 catch 吞掉 ⇒ 零帧";
+const NOTE_NO_WORLD: &str =
+    "GmWorld 未注入在线实体表/世界（S1 占位世界）⇒ 无法判定目标在线、坐标或地图 Flag";
+const NOTE_NO_MAP_REGISTRY: &str =
+    "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
+const NOTE_RECALL_HUMAN: &str =
+    "RecallHuman: GetPlayObject/GetRecallXy/SpaceMove 未接 ⇒ 不移动、不抽 SpaceMoveGetRandXY（oracle 本支零文本）";
+const NOTE_MAP_RANDOM_MOVE: &str =
+    "MapRandomMove/SpaceMove 未接 ⇒ 不移动、不抽 Random(Width-nEgdey-1)/Random(Height-nEgdey-1)（oracle 本支零文本）";
+const NOTE_MAP_RANDOM_MOVE_HOME: &str =
+    "MapRandomMove(HomeMap)/SpaceMove 未接 ⇒ 不移动、不抽 RNG；HomeMap 本仓未建模（oracle 本支零文本）";
+const NOTE_SPACE_MOVE: &str =
+    "SpaceMove 未接 ⇒ 不换图、不抽 SpaceMoveGetRandXY 移位环（oracle 本支零 SysMsg，另有 RM_CLEAROBJECTS/RM_CHANGEMAP/RM_SPACEMOVE_SHOW*）";
+const NOTE_TARGET_CAN_DEAR_RECALL: &str =
+    "DearHuman.CanDearRecall 是对方会话字段，GmWorld 读不到 ⇒ 无法判定召唤/拒绝支（DearRecallTick 已按 oracle 先置）";
+const NOTE_MASTER_RECALL_TARGET: &str =
+    "MasterList[*].CanMasterRecall 是对方会话字段，GmWorld 读不到 ⇒ 无法判定召唤/拒绝支";
+const NOTE_RECALL_MOB_SPAWN: &str =
+    "GetFrontPosition/RegenMonsterByName/SlaveList 未接 ⇒ 不刷宝宝、不写 Master/SlaveExpLevel（oracle 本支零文本）";
+const NOTE_MOVE_MOB_TO: &str =
+    "MoveMobTo: 两个移动支（含 GetMapRangeMonster/SpaceMove）整段注释 ⇒ oracle 本身就是 no-op";
+const NOTE_SIGN_MAP_MOVE: &str = "SignMapMove: oracle 命令体整段注释 ⇒ no-op（零帧）";
 
 // ---------------------------- 封禁名单族（设计件 §4.4 第 5 族）----------------------------
 //
@@ -861,6 +1201,466 @@ fn fire_burn(parameters: &str, sess: &GmSession) -> GmResult {
     no_frames(NOTE_EVENT_MGR)
 }
 
+// ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
+//
+// 口径：全部 `PermissionMin = 10`（现网 `Permission` 恒 0 ⇒ 生产一律 `权限不够!!!`）。
+// 命令体逐行照 oracle；**移动/RNG 一律不伪造**：空间移动/重刷能力已在 `crates/world`
+// （`base_object_move_player`/`cast_space_move_spell_with`/`space_move_get_rand_xy`/
+// `regen_monster_by_name`），缺的是 GM 派发的 `&mut World` 通道（`GetRecallXy` 全仓无）⇒
+// 只保留 oracle 会发的 `SysMsg`（多数支本来就是零文本），并逐条 `log_note` +
+// `whitelist.md` T-166..T-171。
+
+/// `parameters.Split(' ')`（`GameCommand.cs:44`）：**保留空项**，与 `split_whitespace` 不同。
+fn split_params(parameters: &str) -> Vec<&str> {
+    parameters.split(' ').collect()
+}
+
+fn red(text: impl Into<String>) -> GmResult {
+    GmResult::one(GmColor::Red, text.into())
+}
+
+fn green(text: impl Into<String>) -> GmResult {
+    GmResult::one(GmColor::Green, text.into())
+}
+
+/// `!string.IsNullOrEmpty(s) && s[1] == '?'` 的逐 UTF-16 码元等价。
+///
+/// `Some(true)` = 命中 `?`；`Some(false)` = 不命中；`None` = C# `s[1]` 越界
+/// （`IndexOutOfRangeException` 由 `PlayObject.Chat.cs` 外层 catch 吞掉 ⇒ **零帧**）。
+fn second_utf16_is_question(s: &str) -> Option<bool> {
+    if s.is_empty() {
+        return Some(false);
+    }
+    s.encode_utf16().nth(1).map(|u| u == u16::from(b'?'))
+}
+
+/// `HUtil32.StrToInt16`：`short.TryParse`（前后的 .NET 空白近似为 `trim`），失败取 `def`。
+fn str_to_int16(s: &str, def: i16) -> i16 {
+    s.trim().parse::<i16>().unwrap_or(def)
+}
+
+/// `AllowDearRecallCommand`（现网 `@dfsgf567`）：翻转 `CanDearRecall`，Blue。
+fn allow_dear_recall(sess: &mut GmSession) -> GmResult {
+    sess.can_dear_recall = !sess.can_dear_recall;
+    let text = if sess.can_dear_recall {
+        ENABLE_DEAR_RECALL
+    } else {
+        DISABLE_DEAR_RECALL
+    };
+    GmResult::one(GmColor::Blue, text.to_string())
+}
+
+/// `AllowGuildRecallCommand`（现网 `@sadasd`）：翻转 `AllowGuildReCall`，Green（`[允许行会合一]`）。
+fn allow_guild_recall(sess: &mut GmSession) -> GmResult {
+    sess.allow_guild_re_call = !sess.allow_guild_re_call;
+    let text = if sess.allow_guild_re_call {
+        ENABLE_GUILD_RECALL
+    } else {
+        DISABLE_GUILD_RECALL
+    };
+    GmResult::one(GmColor::Green, text.to_string())
+}
+
+/// `AllowMasterRecallCommand`（现网 `@fdgh56j`）：翻转 `CanMasterRecall`，Blue。
+fn allow_master_recall(sess: &mut GmSession) -> GmResult {
+    sess.can_master_recall = !sess.can_master_recall;
+    let text = if sess.can_master_recall {
+        ENABLE_MASTER_RECALL
+    } else {
+        DISABLE_MASTER_RECALL
+    };
+    GmResult::one(GmColor::Blue, text.to_string())
+}
+
+/// `DearRecallCommond`（现网 `@dsfsdt546`）：把配偶召到身边。
+///
+/// 门序照 oracle：未婚 → 地图禁夫妻传送 → 配偶不在线（按 `Gender` 分文案）→ 10s 冷却。
+/// 末端 `DearHuman.CanDearRecall` 是**对方会话**字段，`GmWorld` 读不到 ⇒ 残余（T-167）。
+fn dear_recall(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    if sess.dear_name.is_empty() {
+        return red("你没有结婚!!!");
+    }
+    let Some(flag) = world.self_flag() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    if flag.bo_nodearrecall {
+        return red("本地图禁止夫妻传送!!!");
+    }
+    // `PlayerActor.DearHuman == null`：本仓 `Entity.dear_human` 生产路径无写点（T-167）。
+    let dear = world
+        .self_entity()
+        .and_then(|e| e.dear_human)
+        .and_then(|id| world.entity(id));
+    let Some(dear) = dear else {
+        let text = if sess.gender == 0 {
+            "你的老婆不在线!!!"
+        } else {
+            "你的老公不在线!!!"
+        };
+        return red(text);
+    };
+    if world.now_ms - sess.dear_recall_tick < 10000 {
+        return red("稍等会才能再次使用此功能!!!");
+    }
+    sess.dear_recall_tick = world.now_ms;
+    let _ = dear;
+    no_frames(NOTE_TARGET_CAN_DEAR_RECALL)
+}
+
+/// `GroupRecallCommand`（现网 `@天地合一`）：团长把组员召到身边。
+fn group_recall(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>) -> GmResult {
+    if !sess.recall_suite && sess.permission < 6 {
+        return red("您现在还无法使用此功能!!!");
+    }
+    // `short dwValue = (short)((GetTickCount() - GroupRcallTick) / 1000);`
+    let dw = ((world.now_ms - sess.group_rcall_tick) / 1000) as i16;
+    sess.group_rcall_tick += i64::from(dw) * 1000;
+    if sess.permission >= 6 {
+        sess.group_rcall_time = 0;
+    }
+    if sess.group_rcall_time > dw {
+        sess.group_rcall_time = sess.group_rcall_time.wrapping_sub(dw);
+    } else {
+        sess.group_rcall_time = 0;
+    }
+    if sess.group_rcall_time != 0 {
+        return red(format!(
+            "{} 秒之后才可以再使用此功能!!!",
+            sess.group_rcall_time
+        ));
+    }
+    let Some(me) = world.self_entity() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    let mut msgs = Vec::new();
+    let mut recalled = false;
+    if me.group_owner == me.id {
+        for &member_id in &me.group_members {
+            let Some(member) = world.entity(member_id) else {
+                continue;
+            };
+            if member.allow_group_re_call {
+                if world.flag_of(member.map_id).is_some_and(|f| f.no_re_call) {
+                    msgs.push(GmMsg {
+                        color: GmColor::Red,
+                        text: format!("{} 所在的地图不允许传送。", member.name),
+                    });
+                } else {
+                    recalled = true;
+                }
+            } else {
+                msgs.push(GmMsg {
+                    color: GmColor::Red,
+                    text: format!("{} 不允许天地合一!!!", member.name),
+                });
+            }
+        }
+        sess.group_rcall_tick = world.now_ms;
+        sess.group_rcall_time = cfg.group_recall_time;
+    }
+    GmResult {
+        found: true,
+        parsed: true,
+        msgs,
+        log_note: recalled.then_some(NOTE_RECALL_HUMAN),
+    }
+}
+
+/// `GuildRecallCommand`（现网 `@df56dfs`）：成员遍历在 oracle 里**整段注释** ⇒ 恒「已传送0个成员」。
+fn guild_recall(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>) -> GmResult {
+    if !sess.guild_move && sess.permission < 6 {
+        return red("您现在还无法使用此功能!!!");
+    }
+    if !world.is_guild_master(world.speaker) {
+        return red("行会掌门人才可以使用此功能!!!");
+    }
+    let Some(flag) = world.self_flag() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    if flag.no_guild_re_call {
+        return red("本地图不允许使用此功能!!!");
+    }
+    let Some((map_id, x, y)) = world.self_pos() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    let Some(w) = world.world else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    // `CastleMgr.InCastleWarArea(PlayerActor)`：首个命中的城堡，`UnderWar` ⇒ 拒绝。
+    if w.castles
+        .iter()
+        .find(|c| c.in_castle_war_area(Some(map_id), x, y))
+        .is_some_and(|c| c.under_war)
+    {
+        return red("攻城区域不允许使用此功能!!!");
+    }
+    let dw = ((world.now_ms - sess.group_rcall_tick) / 1000) as i32;
+    sess.group_rcall_tick += i64::from(dw) * 1000;
+    if sess.permission >= 6 {
+        sess.group_rcall_time = 0;
+    }
+    if i32::from(sess.group_rcall_time) > dw {
+        sess.group_rcall_time = sess.group_rcall_time.wrapping_sub(dw as i16);
+    } else {
+        sess.group_rcall_time = 0;
+    }
+    if sess.group_rcall_time > 0 {
+        return red(format!(
+            "{} 秒之后才可以再使用此功能!!!",
+            sess.group_rcall_time
+        ));
+    }
+    sess.group_rcall_tick = world.now_ms;
+    sess.group_rcall_time = cfg.guild_recall_time as i16;
+    green("已传送0个成员，0个成员未被传送。")
+}
+
+/// `MapMoveCommand`（现网 `@f`）：在指定地图随机移动自己。
+fn map_move(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let map = params.first().copied().unwrap_or("");
+    if map.is_empty() {
+        return red(MAP_MOVE_HELP);
+    }
+    let Some(maps) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    if maps.id_of(map).is_none() {
+        return red(format!("{map} 此地图号不存在!!!"));
+    }
+    // `Permission >= PermissionMin || CanMoveMap` 恒真（`CanMoveMap` 的函数体注释，`M2Share.cs:915-927`）。
+    no_frames(NOTE_MAP_RANDOM_MOVE)
+}
+
+/// `MapMoveHumanCommand`（现网 `@集体传送`）：把源地图全部玩家随机移到目标地图。
+fn map_move_human(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let src = params.first().copied().unwrap_or("");
+    let den = params.get(1).copied().unwrap_or("");
+    if den.is_empty() || src.is_empty() || src.starts_with('?') {
+        return red(MAP_MOVE_HUMAN_HELP);
+    }
+    let Some(maps) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    if maps.id_of(src).is_none() {
+        return red(format!("地图{src}不存在!!!"));
+    }
+    if maps.id_of(den).is_none() {
+        return red(format!("地图{den}不存在!!!"));
+    }
+    no_frames(NOTE_MAP_RANDOM_MOVE)
+}
+
+/// `MasterRecallCommand`（现网 `@jkt76`）：师父把在线徒弟召到身边。
+fn master_recall(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    if !sess.is_master {
+        return red("只能师父才能使用此功能!!!");
+    }
+    if sess.master_list.is_empty() {
+        return red("你的徒弟一个都不在线!!!");
+    }
+    if world.now_ms - sess.master_recall_tick < 10000 {
+        return red("稍等一会才能再次使用此功能!!!");
+    }
+    // oracle 只读 MasterRecallTick、**不写**；末端 `CanMasterRecall` 是对方会话字段 ⇒ 残余（T-168）。
+    no_frames(NOTE_MASTER_RECALL_TARGET)
+}
+
+/// `MoveMobToCommand`（现网 `@MoveMobTo`）：两个移动支整段注释 ⇒ 参数合法时 no-op。
+fn move_mob_to(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    // 命令体无条件取 `@params[0..6]`：不足 7 段 ⇒ `IndexOutOfRangeException` 被外层 catch 吞 ⇒ 零帧。
+    if params.len() < 7 {
+        return no_frames(NOTE_INDEX_OUT_OF_RANGE);
+    }
+    let (mon, old_map, new_map) = (params[0], params[1], params[2]);
+    if mon.is_empty() || old_map.is_empty() || new_map.is_empty() || mon.starts_with('?') {
+        return red(MOVE_MOB_TO_HELP);
+    }
+    // `MapMgr.FindMap` 两支都只影响已注释的移动支 ⇒ 帧面恒零。
+    no_frames(NOTE_MOVE_MOB_TO)
+}
+
+/// `PositionMoveCommand`（现网 `@ff`）：移动到指定地图坐标。
+fn position_move(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let map = params.first().copied().unwrap_or("");
+    let s_x = params.get(1).copied().unwrap_or("");
+    let s_y = params.get(2).copied().unwrap_or("");
+    if map.is_empty() || s_x.is_empty() || s_y.is_empty() || map.starts_with('?') {
+        return red(POSITION_MOVE_HELP);
+    }
+    let Some(maps) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let Some(map_id) = maps.id_of(map) else {
+        // `FindMap == null` ⇒ oracle 什么也不做。
+        return GmResult::empty();
+    };
+    let n_x = str_to_int16(s_x, 0);
+    let n_y = str_to_int16(s_y, 0);
+    match world.can_walk(map_id, i32::from(n_x), i32::from(n_y)) {
+        None => no_frames(NOTE_NO_MAP_REGISTRY),
+        Some(true) => no_frames(NOTE_SPACE_MOVE),
+        Some(false) => green(format!("无法移动到地图: {map} X:{s_x} Y:{s_y}")),
+    }
+}
+
+/// `RecallHumanCommand`（现网 `@RecallHuman`）：把指定人物召到身边（判空用 `sHumanName[1]`）。
+fn recall_human(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(RECALL_HUMAN_HELP);
+    }
+    match second_utf16_is_question(name) {
+        None => no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => red(RECALL_HUMAN_HELP),
+        // 离线支的 SysMsg 在 oracle 里被注释；在线支只有移动 ⇒ 帧面恒零。
+        Some(false) => no_frames(NOTE_RECALL_HUMAN),
+    }
+}
+
+/// `RecallMobCommand`（现网 `@bb`）：召唤指定怪物为宠物。
+fn recall_mob(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let mon = params.first().copied().unwrap_or("");
+    if mon.is_empty() || mon.starts_with('?') {
+        return red(RECALL_MOB_HELP);
+    }
+    // `nCount/nLevel/nTick/nAutoChangeColor/nFixColor` 只喂已注释的宝宝字段与刷怪支 ⇒ 帧面恒零。
+    no_frames(NOTE_RECALL_MOB_SPAWN)
+}
+
+/// `ReGotoHumanCommand`（现网 `@ReGotoHuman`）：飞到指定玩家身边。
+fn regoto_human(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(REGOTO_HUMAN_HELP);
+    }
+    match second_utf16_is_question(name) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return red(REGOTO_HUMAN_HELP),
+        Some(false) => {}
+    }
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    if world.play_by_name(name).is_none() {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    no_frames(NOTE_SPACE_MOVE)
+}
+
+/// `SignMapMoveCommand`（现网 `@SignMapMove`）：oracle 体**整段注释** ⇒ no-op。
+fn sign_map_move() -> GmResult {
+    no_frames(NOTE_SIGN_MAP_MOVE)
+}
+
+/// `SuperTingCommand`（现网 `@SuperTingwa`）：随机传送指定玩家与他身边的人。
+fn super_ting(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let range = params.get(1).copied().unwrap_or("");
+    if range.is_empty() || name.is_empty() {
+        return red(SUPER_TING_HELP);
+    }
+    match second_utf16_is_question(name) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return red(SUPER_TING_HELP),
+        Some(false) => {}
+    }
+    // `nRange = HUtil32._MAX(10, HUtil32.StrToInt(sRange, 2))` 只用于已未接的范围扫描。
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    if world.play_by_name(name).is_some() {
+        no_frames(NOTE_MAP_RANDOM_MOVE_HOME)
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `TingCommand`（现网 `@Tingwa`）：把指定人物随机传送。
+fn ting(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(TING_HELP);
+    }
+    match second_utf16_is_question(name) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return red(TING_HELP),
+        Some(false) => {}
+    }
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    if world.play_by_name(name).is_some() {
+        no_frames(NOTE_MAP_RANDOM_MOVE_HOME)
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `UserMoveXyCommand`（现网 `@传送`）：移动地图指定坐标（需要戴传送装备）。
+fn user_move_xy(
+    parameters: &str,
+    sess: &mut GmSession,
+    cfg: &GmConfig,
+    world: &GmWorld<'_>,
+) -> GmResult {
+    let params = split_params(parameters);
+    let s_x = params.first().copied().unwrap_or("");
+    let s_y = params.get(1).copied().unwrap_or("");
+    if !sess.teleport {
+        return red("您现在还无法使用此功能!!!");
+    }
+    let n_x = str_to_int16(s_x, -1);
+    let n_y = str_to_int16(s_y, -1);
+    let Some(flag) = world.self_flag() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    if flag.bo_nopositionmove {
+        return red("此地图禁止使用此命令!!!");
+    }
+    let Some((map_id, _, _)) = world.self_pos() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    let walk = world.can_walk_of_item(
+        map_id,
+        i32::from(n_x),
+        i32::from(n_y),
+        cfg.user_move_can_dup_obj,
+        cfg.user_move_can_on_item,
+    );
+    match walk {
+        None => no_frames(NOTE_NO_WORLD),
+        Some(false) => {
+            let map_name = world.map_name(map_id).unwrap_or("");
+            green(format!("无法移动到地图: {map_name} X:{s_x} Y:{s_y}"))
+        }
+        Some(true) => {
+            // oracle `UserMoveXYCommand.cs:31`：门是**原始毫秒**
+            // （`GetTickCount() - TeleportTick > dwUserMoveTime * 1000`），
+            // 只有红字里的秒数是整秒截断（`:35` 的 `/ 1000`）。先把 elapsed 截成秒再比
+            // ⇒ UserMoveTime*1000+1..999 ms 段 oracle 放行、Rust 拒绝（Important-1）。
+            let elapsed_ms = world.now_ms - sess.teleport_tick;
+            if elapsed_ms > i64::from(cfg.user_move_time) * 1000 {
+                sess.teleport_tick = world.now_ms;
+                no_frames(NOTE_SPACE_MOVE)
+            } else {
+                red(format!(
+                    "{}秒之后才可以再使用此功能!!!",
+                    i64::from(cfg.user_move_time) - elapsed_ms / 1000
+                ))
+            }
+        }
+    }
+}
+
 /// `CommandSystem.Execute(PlayerActor, line)` 的等价物（**不含** `PlayObject.Chat.cs` 的第二条回落帧）。
 ///
 /// 调用方约定：`parsed == false` ⇒ 无帧；`found == false && parsed` ⇒ 先发 [`GmResult::msgs`]，
@@ -948,6 +1748,26 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::UserCmd => user_cmd(),
         Imp::BackStep => back_step(parameters, sess),
         Imp::FireBurn => fire_burn(parameters, sess),
+
+        // ---- 批次 3 · 传送/召唤（17 + `@传送`）----
+        Imp::AllowDearRecall => allow_dear_recall(sess),
+        Imp::AllowGuildRecall => allow_guild_recall(sess),
+        Imp::AllowMasterRecall => allow_master_recall(sess),
+        Imp::DearRecall => dear_recall(sess, world),
+        Imp::GroupRecall => group_recall(sess, cfg, world),
+        Imp::GuildRecall => guild_recall(sess, cfg, world),
+        Imp::MapMove => map_move(parameters, world),
+        Imp::MapMoveHuman => map_move_human(parameters, world),
+        Imp::MasterRecall => master_recall(sess, world),
+        Imp::MoveMobTo => move_mob_to(parameters),
+        Imp::PositionMove => position_move(parameters, world),
+        Imp::RecallHuman => recall_human(parameters),
+        Imp::RecallMob => recall_mob(parameters),
+        Imp::ReGotoHuman => regoto_human(parameters, world),
+        Imp::SignMapMove => sign_map_move(),
+        Imp::SuperTing => super_ting(parameters, world),
+        Imp::Ting => ting(parameters, world),
+        Imp::UserMoveXy => user_move_xy(parameters, sess, cfg, world),
 
         Imp::Unimplemented => GmResult {
             found: true,
@@ -1089,7 +1909,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "bb",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::RecallMob,
     },
     CommandDef {
         name: "Binduseitem",
@@ -1167,13 +1987,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "df56dfs",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::GuildRecall,
     },
     CommandDef {
         name: "dfsgf567",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AllowDearRecall,
     },
     CommandDef {
         name: "DisableFilter",
@@ -1185,7 +2005,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "dsfsdt546",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::DearRecall,
     },
     CommandDef {
         name: "EndContest",
@@ -1197,7 +2017,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "f",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MapMove,
     },
     CommandDef {
         name: "fdgfdg56",
@@ -1209,7 +2029,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "fdgh56j",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::AllowMasterRecall,
     },
     CommandDef {
         name: "fdht7ed",
@@ -1221,7 +2041,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ff",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PositionMove,
     },
     CommandDef {
         name: "FireBurn",
@@ -1311,7 +2131,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "jkt76",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::MasterRecall,
     },
     CommandDef {
         name: "Level0",
@@ -1401,7 +2221,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "MoveMobTo",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MoveMobTo,
     },
     CommandDef {
         name: "NpcScript",
@@ -1431,7 +2251,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "RecallHuman",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::RecallHuman,
     },
     CommandDef {
         name: "ReCallMobEx",
@@ -1455,7 +2275,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ReGotoHuman",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReGotoHuman,
     },
     CommandDef {
         name: "ReloadAbuse",
@@ -1515,7 +2335,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "sadasd",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::AllowGuildRecall,
     },
     CommandDef {
         name: "sadsa54",
@@ -1611,7 +2431,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "SignMapMove",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::SignMapMove,
     },
     CommandDef {
         name: "StartContest",
@@ -1623,7 +2443,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "SuperTingwa",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SuperTing,
     },
     CommandDef {
         name: "TestFire",
@@ -1653,7 +2473,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Tingwa",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::Ting,
     },
     CommandDef {
         name: "Total",
@@ -1719,7 +2539,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "传送",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::UserMoveXy,
     },
     CommandDef {
         name: "伴侣变更",
@@ -1827,7 +2647,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "天地合一",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::GroupRecall,
     },
     CommandDef {
         name: "开始提问",
@@ -2073,7 +2893,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "集体传送",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MapMoveHuman,
     },
 ];
 
@@ -2109,7 +2929,7 @@ mod tests {
     /// 每个用例新建一个空 `GuildManager`（`GmWorld` 的借用源）。
     fn exec(sess: &mut GmSession, cfg: &GmConfig, line: &str) -> GmResult {
         let guilds = mir2_world::GuildManager::new();
-        let world = GmWorld { guilds: &guilds };
+        let world = GmWorld::new(&guilds);
         execute(sess, cfg, &world, line)
     }
 
@@ -2169,7 +2989,7 @@ mod tests {
     #[test]
     fn config_overridden_names_win_and_factory_names_do_not() {
         let sadasd = find("sadasd").expect("@sadasd = AllowGuildRecallCommand 的现网名");
-        assert_eq!(sadasd.imp, Imp::Unimplemented);
+        assert_eq!(sadasd.imp, Imp::AllowGuildRecall);
         assert_eq!(sadasd.perm_min, 10);
         assert!(
             find("AllowGuildRecall").is_none(),
@@ -2387,7 +3207,7 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 本批 30 条命令体全部接上（`Unimplemented` 从 180 降到 150），且每条的命令名 → 实现标签固定。
+    /// 批次 2/3 + 批次 3 的命令体接上（`Unimplemented` 从 180 降到 132），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -2395,16 +3215,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            35,
-            "35 = G1 的 5 条 + 本批 30 条"
+            53,
+            "53 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            150,
-            "185 - 35"
+            132,
+            "185 - 53"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -2588,7 +3408,7 @@ mod tests {
     fn reload_guild_found_uses_exact_name_match() {
         let mut gm = mir2_world::GuildManager::new();
         gm.guilds.push(mir2_world::GuildState::new("血盟"));
-        let world = GmWorld { guilds: &gm };
+        let world = GmWorld::new(&gm);
         let mut sess = GmSession {
             permission: 10,
             ..GmSession::default()
@@ -2600,7 +3420,7 @@ mod tests {
         // 用 ASCII 会名钉住「不是 OrdinalIgnoreCase」。
         let mut gm = mir2_world::GuildManager::new();
         gm.guilds.push(mir2_world::GuildState::new("Blood"));
-        let world = GmWorld { guilds: &gm };
+        let world = GmWorld::new(&gm);
         let r = execute(
             &mut sess,
             &GmConfig::default(),
@@ -2654,5 +3474,642 @@ mod tests {
         let (r, _) = run_gm("@FireBurn 1 0 1");
         assert_eq!(texts(&r), vec![(Red, "命令格式: @FireBurn ")]);
         assert!(FIRE_BURN_HELP.ends_with(' '));
+    }
+
+    // ==================== 批次 3：传送/召唤族（17 + `@传送`）====================
+
+    /// 小地图夹具：20×20 全平地 `.map`（逻辑名 `map`，`map_id = 0`）。
+    ///
+    /// 与 `castle/tests.rs` 的夹具同口径：写临时 `.map` 头 + 全 0 格，再 `MapRegistry::from_entries`。
+    struct MapFixture {
+        base: std::path::PathBuf,
+        registry: mir2_envir::MapRegistry,
+    }
+
+    impl Drop for MapFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    static MAP_FIXTURE_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    fn map_fixture(flags: mir2_envir::MapInfoFlag) -> MapFixture {
+        let base = std::env::temp_dir().join(format!(
+            "gs-gmcmd-{}-{}",
+            std::process::id(),
+            MAP_FIXTURE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let (w, h) = (20_i16, 20_i16);
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&w.to_le_bytes());
+        bytes[2..4].copy_from_slice(&h.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES
+                + usize::try_from(w).unwrap()
+                    * usize::try_from(h).unwrap()
+                    * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let loader = mir2_envir::MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = mir2_envir::MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "map".to_string(),
+                map_file_name: "0".to_string(),
+                desc: "测试地图".to_string(),
+                server_index: 0,
+                flag: flags,
+            }],
+        );
+        assert_eq!(registry.id_of("map"), Some(0));
+        MapFixture { base, registry }
+    }
+
+    /// 20×20 单图世界 + `gm`(5,5) / `bob`(6,6) 两个玩家。
+    fn gm_world() -> mir2_world::World {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
+        w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        w
+    }
+
+    fn gm_session() -> GmSession {
+        GmSession {
+            permission: 10,
+            ..GmSession::default()
+        }
+    }
+
+    /// 批次 3 的 18 条全部接线：表内 `imp` 不是 `Unimplemented`，且 perm 0 一律 `权限不够!!!`。
+    #[test]
+    fn teleport_family_table_wires_eighteen_bodies() {
+        let expected = [
+            ("dfsgf567", Imp::AllowDearRecall),
+            ("sadasd", Imp::AllowGuildRecall),
+            ("fdgh56j", Imp::AllowMasterRecall),
+            ("dsfsdt546", Imp::DearRecall),
+            ("天地合一", Imp::GroupRecall),
+            ("df56dfs", Imp::GuildRecall),
+            ("f", Imp::MapMove),
+            ("集体传送", Imp::MapMoveHuman),
+            ("jkt76", Imp::MasterRecall),
+            ("MoveMobTo", Imp::MoveMobTo),
+            ("ff", Imp::PositionMove),
+            ("RecallHuman", Imp::RecallHuman),
+            ("bb", Imp::RecallMob),
+            ("ReGotoHuman", Imp::ReGotoHuman),
+            ("SignMapMove", Imp::SignMapMove),
+            ("SuperTingwa", Imp::SuperTing),
+            ("Tingwa", Imp::Ting),
+            ("传送", Imp::UserMoveXy),
+        ];
+        for (name, imp) in expected {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 必须在 185 表内"));
+            assert_eq!(def.perm_min, 10, "{name}");
+            assert_eq!(def.imp, imp, "{name}");
+            let (r, _) = run(&format!("@{name}"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, "权限不够!!!")],
+                "{name} 在 perm 0 必须被权限门挡住"
+            );
+        }
+    }
+
+    /// `@dfsgf567`/`@sadasd`/`@fdgh56j`：翻会话开关，颜色与文本照 oracle。
+    #[test]
+    fn allow_recall_commands_toggle_session_flags() {
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        assert!(!sess.can_dear_recall);
+        let r = execute(&mut sess, &cfg, &view, "@dfsgf567");
+        assert_eq!(texts(&r), vec![(GmColor::Blue, "允许夫妻传送!!!")]);
+        assert!(sess.can_dear_recall);
+        let r = execute(&mut sess, &cfg, &view, "@dfsgf567");
+        assert_eq!(texts(&r), vec![(GmColor::Blue, "禁止夫妻传送!!!")]);
+        assert!(!sess.can_dear_recall);
+
+        assert!(!sess.allow_guild_re_call);
+        let r = execute(&mut sess, &cfg, &view, "@sadasd");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "[允许行会合一]")]);
+        let r = execute(&mut sess, &cfg, &view, "@sadasd");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "[禁止行会合一]")]);
+
+        assert!(!sess.can_master_recall);
+        let r = execute(&mut sess, &cfg, &view, "@fdgh56j");
+        assert_eq!(texts(&r), vec![(GmColor::Blue, "允许师徒传送!!!")]);
+        let r = execute(&mut sess, &cfg, &view, "@fdgh56j");
+        assert_eq!(texts(&r), vec![(GmColor::Blue, "禁止师徒传送!!!")]);
+    }
+
+    /// `@dsfsdt546`：未婚 → 地图禁 → 配偶不在线（按 `Gender` 分文案）三道门照 oracle。
+    #[test]
+    fn dear_recall_matches_oracle_branches() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let f_no = map_fixture(mir2_envir::MapInfoFlag {
+            bo_nodearrecall: true,
+            ..mir2_envir::MapInfoFlag::default()
+        });
+        let w = gm_world();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // 未婚（`string.IsNullOrEmpty(DearName)`）⇒ 第一条文案。
+        let view = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@dsfsdt546")),
+            vec![(GmColor::Red, "你没有结婚!!!")]
+        );
+        // 已婚 + 地图 `NODEARRECALL`。
+        sess.dear_name = "spouse".to_string();
+        let view = GmWorld::new(&guilds)
+            .with_maps(&f_no.registry)
+            .with_world(&w)
+            .with_speaker("gm");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@dsfsdt546")),
+            vec![(GmColor::Red, "本地图禁止夫妻传送!!!")]
+        );
+        // `DearHuman == null`：男 ⇒ 老婆、女 ⇒ 老公（部署 `Entity.dear_human` 无写点）。
+        let view = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@dsfsdt546")),
+            vec![(GmColor::Red, "你的老婆不在线!!!")]
+        );
+        sess.gender = 1;
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@dsfsdt546")),
+            vec![(GmColor::Red, "你的老公不在线!!!")]
+        );
+        // 未注入地图/世界 ⇒ 留痕零帧（不伪造「不在线」）。
+        let mut sess2 = gm_session();
+        sess2.dear_name = "spouse".to_string();
+        let bare = GmWorld::new(&guilds).with_speaker("gm");
+        let r = execute(&mut sess2, &cfg, &bare, "@dsfsdt546");
+        assert!(r.msgs.is_empty());
+        assert!(r.log_note.is_some());
+    }
+
+    /// `@ff` / `@f` / `@集体传送`：帮助、地图不存在、可走/不可走、成功零帧。
+    #[test]
+    fn map_and_position_move_texts() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let w = gm_world();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm");
+        // PositionMove：帮助（缺参/`?` 首字符）。
+        for line in ["@ff", "@ff map", "@ff map 1", "@ff ? 1 1"] {
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, line)),
+                vec![(GmColor::Red, POSITION_MOVE_HELP)],
+                "{line}"
+            );
+        }
+        // `FindMap == null` ⇒ 零帧（oracle 什么也不做）。
+        let r = execute(&mut sess, &cfg, &view, "@ff nope 1 1");
+        assert!(r.msgs.is_empty() && r.log_note.is_none(), "{r:?}");
+        // 可走 ⇒ SpaceMove 未接 ⇒ 零帧 + 留痕。
+        let r = execute(&mut sess, &cfg, &view, "@ff map 5 5");
+        assert!(r.msgs.is_empty());
+        assert!(r.log_note.is_some());
+        // 越界 = 不可走 ⇒ Green（正文用**原字符串** X/Y）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ff map 25 25")),
+            vec![(GmColor::Green, "无法移动到地图: map X:25 Y:25")]
+        );
+        // MapMove。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@f")),
+            vec![(GmColor::Red, MAP_MOVE_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@f nope")),
+            vec![(GmColor::Red, "nope 此地图号不存在!!!")]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@f map");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+        // MapMoveHuman：帮助（两个空格）、两张图都要存在。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@集体传送")),
+            vec![(GmColor::Red, MAP_MOVE_HUMAN_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@集体传送 map nope")),
+            vec![(GmColor::Red, "地图nope不存在!!!")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@集体传送 nope map")),
+            vec![(GmColor::Red, "地图nope不存在!!!")]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@集体传送 map map");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+        // 未注入注册表 ⇒ 零帧留痕（不伪造「地图不存在」）。
+        let bare = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &bare, "@f map");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+    }
+
+    /// `@ReGotoHuman` / `@Tingwa` / `@SuperTingwa` / `@RecallHuman`：在线判定、离线文案、`[1]` 越界怪癖。
+    #[test]
+    fn ting_family_online_checks_and_quirks() {
+        let w = gm_world();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let view = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm");
+        for line in [
+            "@ReGotoHuman bob",
+            "@Tingwa bob",
+            "@SuperTingwa bob 5",
+            "@RecallHuman bob",
+        ] {
+            let r = execute(&mut sess, &cfg, &view, line);
+            assert!(r.msgs.is_empty(), "{line} 在线支应零帧");
+            assert!(r.log_note.is_some(), "{line} 必须留痕");
+        }
+        for (line, text) in [
+            (
+                "@ReGotoHuman alice",
+                "alice 现在不在线，或在其它服务器上!!!",
+            ),
+            ("@Tingwa alice", "alice 现在不在线，或在其它服务器上!!!"),
+            (
+                "@SuperTingwa alice 5",
+                "alice 现在不在线，或在其它服务器上!!!",
+            ),
+        ] {
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, line)),
+                vec![(GmColor::Red, text)],
+                "{line}"
+            );
+        }
+        // 帮助与 `?`。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ReGotoHuman")),
+            vec![(GmColor::Red, REGOTO_HUMAN_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ReGotoHuman a?")),
+            vec![(GmColor::Red, REGOTO_HUMAN_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@Tingwa")),
+            vec![(GmColor::Red, TING_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@SuperTingwa bob")),
+            vec![(GmColor::Red, SUPER_TING_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@RecallHuman")),
+            vec![(GmColor::Red, RECALL_HUMAN_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@RecallHuman a?")),
+            vec![(GmColor::Red, RECALL_HUMAN_HELP)]
+        );
+        // 单字符名字：`sHumanName[1]` 越界 ⇒ 零帧（四条命令都有此怪癖）。
+        for line in [
+            "@RecallHuman a",
+            "@ReGotoHuman a",
+            "@Tingwa a",
+            "@SuperTingwa a 5",
+        ] {
+            let r = execute(&mut sess, &cfg, &view, line);
+            assert!(r.msgs.is_empty(), "{line} 单字符必须零帧");
+            assert!(
+                r.log_note.is_some_and(|n| n.contains("越界")),
+                "{line}: {:?}",
+                r.log_note
+            );
+        }
+    }
+
+    /// `@jkt76`：师父门、徒弟列表空、10s 冷却、末端对方字段残余。
+    #[test]
+    fn master_recall_branches() {
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_now(20000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@jkt76")),
+            vec![(GmColor::Red, "只能师父才能使用此功能!!!")]
+        );
+        sess.is_master = true;
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@jkt76")),
+            vec![(GmColor::Red, "你的徒弟一个都不在线!!!")]
+        );
+        sess.master_list = vec!["pupil".to_string()];
+        sess.master_recall_tick = 15000;
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@jkt76")),
+            vec![(GmColor::Red, "稍等一会才能再次使用此功能!!!")]
+        );
+        sess.master_recall_tick = 0;
+        let r = execute(&mut sess, &cfg, &view, "@jkt76");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+        assert_eq!(sess.master_recall_tick, 0, "oracle 只读不写");
+    }
+
+    /// `@bb` / `@MoveMobTo` / `@SignMapMove`：帮助、参数越界、oracle 自身 no-op。
+    #[test]
+    fn recall_mob_move_mob_to_and_sign_map_move_frames() {
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@bb")),
+            vec![(GmColor::Red, RECALL_MOB_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@bb ?")),
+            vec![(GmColor::Red, RECALL_MOB_HELP)]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@bb 鸡 1");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+        // MoveMobTo：不足 7 段 ⇒ oracle 下标越界 ⇒ 零帧。
+        for line in ["@MoveMobTo", "@MoveMobTo 鸡", "@MoveMobTo 鸡 map 1 1 map 2"] {
+            let r = execute(&mut sess, &cfg, &view, line);
+            assert!(r.msgs.is_empty(), "{line} 应零帧");
+            assert!(
+                r.log_note.is_some_and(|n| n.contains("越界")),
+                "{line}: {:?}",
+                r.log_note
+            );
+        }
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &cfg,
+                &view,
+                "@MoveMobTo ? map 1 1 map 2 2"
+            )),
+            vec![(GmColor::Red, MOVE_MOB_TO_HELP)]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@MoveMobTo 鸡 map 1 1 map 2 2");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+        // SignMapMove：oracle 体整段注释 ⇒ no-op。
+        let r = execute(&mut sess, &cfg, &view, "@SignMapMove");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+    }
+
+    /// `@天地合一`：团长自比、成员允许门、冷却与 `GroupRecallTime` 复位。
+    #[test]
+    fn group_recall_member_gate_and_cooldown() {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let gm_id = w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        w.entities.get_mut(gm_id).unwrap().group_owner = gm_id;
+        w.entities.get_mut(gm_id).unwrap().group_members = vec![gm_id];
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        {
+            let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+            // `GroupMembers` 含团长自己；其 `AllowGroupReCall` 缺省 false ⇒ 自报「不允许天地合一」。
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, "@天地合一")),
+                vec![(GmColor::Red, "gm 不允许天地合一!!!")]
+            );
+            assert_eq!(sess.group_rcall_time, 5, "Config.GroupRecallTime 部署值");
+            // oracle：`Permission >= 6` 时先 `GroupRcallTime = 0` ⇒ perm 10 下冷却支
+            // （`> dwValue` 的红字）**不可达**；第二次调用仍走团长支。
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, "@天地合一")),
+                vec![(GmColor::Red, "gm 不允许天地合一!!!")]
+            );
+        }
+        // 允许传送 + 地图无 `NORECALL` ⇒ RecallHuman 未接 ⇒ 零帧 + 留痕。
+        sess.group_rcall_time = 0;
+        {
+            // 允许标记走**登录生产入口**（`WorldServer.cs:1159` 的 `GetHumData` 装载），
+            // 不手工置位实体字段——手工置位曾掩盖「登录不装载 `AllowGroupReCall`」的缺口
+            // （Important-2）。
+            let flags = crate::record::CharacterData {
+                allow_group_re_call: true,
+                ..crate::record::CharacterData::default()
+            };
+            let me = w.entities.get_mut(gm_id).unwrap();
+            crate::apply_login_record_scalars(me, Some(&flags));
+            me.group_members = vec![gm_id, bob_id];
+        }
+        {
+            let flags = crate::record::CharacterData {
+                allow_group_re_call: true,
+                ..crate::record::CharacterData::default()
+            };
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            crate::apply_login_record_scalars(bob, Some(&flags));
+        }
+        {
+            let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+            let r = execute(&mut sess, &cfg, &view, "@天地合一");
+            assert!(r.msgs.is_empty() && r.log_note.is_some());
+        }
+        // 非团长：静默（不置 tick/time）。
+        sess.group_rcall_time = 0;
+        w.entities.get_mut(gm_id).unwrap().group_owner = bob_id;
+        let before = sess.group_rcall_tick;
+        {
+            let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+            let r = execute(&mut sess, &cfg, &view, "@天地合一");
+            assert!(r.msgs.is_empty() && r.log_note.is_none());
+        }
+        assert_eq!(sess.group_rcall_time, 0);
+        assert!(sess.group_rcall_tick >= before);
+    }
+
+    /// `@df56dfs`：掌门门、地图 `NOGUILDRECALL`、攻城区域、成员遍历 no-op、`GuildRecallTime` 冷却。
+    #[test]
+    fn guild_recall_master_map_castle_and_noop_member_loop() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let f_no = map_fixture(mir2_envir::MapInfoFlag {
+            no_guild_re_call: true,
+            ..mir2_envir::MapInfoFlag::default()
+        });
+        let w = gm_world();
+        let mut guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // 无行会 ⇒ 不是掌门。
+        {
+            let view = GmWorld::new(&guilds)
+                .with_maps(&f.registry)
+                .with_world(&w)
+                .with_speaker("gm");
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, "@df56dfs")),
+                vec![(GmColor::Red, "行会掌门人才可以使用此功能!!!")]
+            );
+        }
+        assert!(guilds.add_guild("G1", "gm", &mir2_world::GuildConfig::default()));
+        // 成员遍历在 oracle 里注释 ⇒ 恒 0/0。
+        {
+            let view = GmWorld::new(&guilds)
+                .with_maps(&f.registry)
+                .with_world(&w)
+                .with_speaker("gm");
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, "@df56dfs")),
+                vec![(GmColor::Green, "已传送0个成员，0个成员未被传送。")]
+            );
+            assert_eq!(sess.group_rcall_time, 600, "Config.GuildRecallTime 部署值");
+            // oracle：`Permission >= 6` 时先 `GroupRcallTime = 0` ⇒ perm 10 下冷却红字不可达。
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, "@df56dfs")),
+                vec![(GmColor::Green, "已传送0个成员，0个成员未被传送。")]
+            );
+        }
+        // 地图 `NOGUILDRECALL`。
+        sess.group_rcall_time = 0;
+        let view_no = GmWorld::new(&guilds)
+            .with_maps(&f_no.registry)
+            .with_world(&w)
+            .with_speaker("gm");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view_no, "@df56dfs")),
+            vec![(GmColor::Red, "本地图不允许使用此功能!!!")]
+        );
+        // 攻城区域（首个命中的城堡 `UnderWar`）。
+        let mut w_war = gm_world();
+        let mut castle =
+            mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        castle.castle_map_id = Some(0);
+        castle.home_x = 5;
+        castle.home_y = 5;
+        castle.war_range_x = 100;
+        castle.war_range_y = 100;
+        castle.under_war = true;
+        w_war.castles.push(castle);
+        sess.group_rcall_time = 0;
+        let view_war = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w_war)
+            .with_speaker("gm");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view_war, "@df56dfs")),
+            vec![(GmColor::Red, "攻城区域不允许使用此功能!!!")]
+        );
+    }
+
+    /// `@传送`：传送装备门、地图禁移、`UserMoveTime` 冷却、物品阻挡、成功零帧。
+    #[test]
+    fn user_move_xy_gates_and_texts() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let f_no = map_fixture(mir2_envir::MapInfoFlag {
+            bo_nopositionmove: true,
+            ..mir2_envir::MapInfoFlag::default()
+        });
+        let w = gm_world();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &cfg,
+                &GmWorld::new(&guilds)
+                    .with_maps(&f.registry)
+                    .with_world(&w)
+                    .with_speaker("gm"),
+                "@传送 5 5"
+            )),
+            vec![(GmColor::Red, "您现在还无法使用此功能!!!")]
+        );
+        sess.teleport = true;
+        // 冷却：now=5000、tick=0 ⇒ 10 - 5 = 5。
+        let view = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm")
+            .with_now(5000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@传送 5 5")),
+            vec![(GmColor::Red, "5秒之后才可以再使用此功能!!!")]
+        );
+        // 过冷却 ⇒ SpaceMove 未接 ⇒ 零帧 + 留痕，且 tick 前移。
+        let view_ok = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm")
+            .with_now(20000);
+        let r = execute(&mut sess, &cfg, &view_ok, "@传送 5 5");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+        assert_eq!(sess.teleport_tick, 20000);
+        // **毫秒口径边界（Important-1）**：tick=0、now=10500 ⇒ 原始毫秒 `10500 > 10000`
+        // ⇒ oracle 放行（`UserMoveXYCommand.cs:31`）；旧实现先 `/1000` 截成 10 秒 ⇒
+        // `10 > 10` 为假 ⇒ 误发红字且不推进 tick。红检：把门改回秒口径 ⇒ 本断言红。
+        sess.teleport_tick = 0;
+        let view_edge = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm")
+            .with_now(10500);
+        let r = execute(&mut sess, &cfg, &view_edge, "@传送 5 5");
+        assert!(
+            r.msgs.is_empty() && r.log_note.is_some(),
+            "10500ms > UserMoveTime*1000 ⇒ 放行"
+        );
+        assert_eq!(sess.teleport_tick, 10500, "放行支推进 TeleportTick");
+        // 恰好 10000ms：`>` 严格 ⇒ 仍拒；红字秒数 = `10 - 10000/1000` = 0。
+        sess.teleport_tick = 0;
+        let view_eq = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w)
+            .with_speaker("gm")
+            .with_now(10000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view_eq, "@传送 5 5")),
+            vec![(GmColor::Red, "0秒之后才可以再使用此功能!!!")]
+        );
+        assert_eq!(sess.teleport_tick, 0, "拒绝支不推进 tick");
+        // 地图 `NOPOSITIONMOVE`。
+        let view_no = GmWorld::new(&guilds)
+            .with_maps(&f_no.registry)
+            .with_world(&w)
+            .with_speaker("gm");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view_no, "@传送 5 5")),
+            vec![(GmColor::Red, "此地图禁止使用此命令!!!")]
+        );
+        // 格上物品 + `UserMoveCanOnItem=0` ⇒ Green（正文用当前地图名 + 原字符串坐标）。
+        let mut w_item = gm_world();
+        w_item.maps[0].add_map_object(3, 3, mir2_world::CellType::Item, 999, 0);
+        let cfg_block = GmConfig {
+            user_move_can_on_item: false,
+            ..GmConfig::default()
+        };
+        let view_item = GmWorld::new(&guilds)
+            .with_maps(&f.registry)
+            .with_world(&w_item)
+            .with_speaker("gm");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg_block, &view_item, "@传送 3 3")),
+            vec![(GmColor::Green, "无法移动到地图: map X:3 Y:3")]
+        );
     }
 }

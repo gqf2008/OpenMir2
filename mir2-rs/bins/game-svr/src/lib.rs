@@ -1666,6 +1666,10 @@ fn handle_gm_command(
     };
     let world_view = gmcmd::GmWorld {
         guilds: host.guilds,
+        maps: host.registry,
+        world: Some(host.world),
+        speaker: &speaker.chr_name,
+        now_ms: host.world.clock_ms,
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -11247,6 +11251,20 @@ fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
     e
 }
 
+/// `WorldServer.GetHumData` 的**记录 → `PlayObject` 标量装载**（登录实体构造点唯一入口）。
+///
+/// - `Dir`：oracle 把 `CharacterData.Dir` 直接赋给 `PlayObject`（`WorldServer.cs:1113-1125`
+///   之外的口径）；旧实现不装载 ⇒ `MakeSaveRcd` 只能写回载入值（G-09）。
+/// - `AllowGroupReCall`：`WorldServer.cs:1159`
+///   `playObject.AllowGroupReCall = humData.AllowGroupReCall;`——DB 列（[`record::CharacterData`]
+///   已解析）是**唯一初值来源**，之后只由 `@允许天地合一` 翻转
+///   （`AllowGroupReCallCommand.cs:15`）。旧实现没有生产写点 ⇒ `@天地合一` 的成员允许门恒
+///   false，测试手工置位掩盖了缺口（Important-2）。
+fn apply_login_record_scalars(ent: &mut mir2_world::Entity, data: Option<&record::CharacterData>) {
+    ent.ai.dir = data.map_or(0, |d| d.dir);
+    ent.allow_group_re_call = data.is_some_and(|d| d.allow_group_re_call);
+}
+
 /// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world`）。
 ///
 /// **`openmir2-player-dir-supply`**：`Entity.ai.dir` 是唯一权威（oracle `BaseObject.Dir`），
@@ -18297,10 +18315,13 @@ fn sim_loop(
                                             i32::from(enter_x),
                                             i32::from(enter_y),
                                         );
-                                        // oracle `PlayObject.Dir` 从记录载入（`WorldServer.GetHumData`
-                                        // `:1113-1125` 之外的 `CharacterData.Dir` 直接赋给实体）；
-                                        // 旧实现不装载 ⇒ `MakeSaveRcd` 只能写回载入值（G-09）。
-                                        ent.ai.dir = full.as_ref().map_or(0, |r| r.data.dir);
+                                        // oracle `GetHumData` 的记录 → `PlayObject` 标量装载
+                                        // （`Dir` 与 `WorldServer.cs:1159` 的 `AllowGroupReCall`）；
+                                        // 唯一生产入口，测试不得手工置位。
+                                        apply_login_record_scalars(
+                                            &mut ent,
+                                            full.as_ref().map(|r| &r.data),
+                                        );
                                         // `WorldServer.cs:290`：Fight3Zone 死亡恢复支置位
                                         // `PlayObject.DieInFight3Zone`（随后由登录 `MapRandomMove` 消费；
                                         // 该调用点未移植，位仍按 oracle 保存）。
@@ -18671,7 +18692,16 @@ fn sim_loop(
                                                     ground_sessions.insert(
                                                         head.chr_name.clone(),
                                                         SessionGround {
-                                                            gm: gmcmd::GmSession::default(),
+                                                            // `GetHumData` 写进 `PlayObject` 的
+                                                            // 夫妻/性别/师徒/行会合一/组队传送冷却
+                                                            // （批次 3 传送/召唤族的读点）。
+                                                            gm: gmcmd::GmSession::from_character(
+                                                                d.dear_name.as_deref().unwrap_or(""),
+                                                                d.sex,
+                                                                d.is_master,
+                                                                d.allow_guild_re_call,
+                                                                d.group_rcall_time,
+                                                            ),
                                                             state: game_svr::ground::GroundState {
                                                                 item_list: bag_items_from(
                                                                     d.bag_items.as_deref(),
@@ -30485,6 +30515,63 @@ mod tests {
             max_exp[0],
             exp[0] + 1,
             "两行相邻落在 `apply_ability_to_entity`（生产登录点调用它）"
+        );
+    }
+
+    /// **Important-2（reviewer-3 第 1 轮）**：登录把 DB 列 `AllowGroupReCall` 装进实体。
+    ///
+    /// oracle `WorldServer.cs:1159`：`playObject.AllowGroupReCall = humData.AllowGroupReCall;`
+    /// ——该列是唯一初值来源，之后只由 `@允许天地合一` 翻转（`AllowGroupReCallCommand.cs:15`）。
+    /// 生产入口 = [`apply_login_record_scalars`]（登录实体构造点唯一调用；`sim_loop` 的内联段
+    /// 不在仓内用例里执行，故另用源码锚点钉住接线）。
+    ///
+    /// 红检：删掉登录点的 `apply_login_record_scalars(&mut ent, …)`（或把
+    /// `allow_group_re_call` 写死 false）⇒ 源码锚点/断言必红。
+    #[test]
+    fn login_loads_allow_group_re_call_from_record() {
+        let mut ent = new_player_entity("hero".to_string(), 10, 10);
+        assert!(!ent.allow_group_re_call, "`Entity::new` 缺省 false");
+        let mut rec = record::CharacterData {
+            dir: 3,
+            ..record::CharacterData::default()
+        };
+        apply_login_record_scalars(&mut ent, Some(&rec));
+        assert!(!ent.allow_group_re_call, "DB 列 false ⇒ 实体 false");
+        assert_eq!(ent.ai.dir, 3, "`Dir` 同一入口装载（G-09）");
+        rec.allow_group_re_call = true;
+        apply_login_record_scalars(&mut ent, Some(&rec));
+        assert!(ent.allow_group_re_call, "DB 列 true ⇒ 实体 true");
+        // 无角色记录（`full == None`，oracle 不进 `GetHumData`）⇒ 不置位。
+        let mut ent2 = new_player_entity("hero2".to_string(), 10, 10);
+        ent2.allow_group_re_call = true;
+        apply_login_record_scalars(&mut ent2, None);
+        assert!(!ent2.allow_group_re_call);
+        assert_eq!(ent2.ai.dir, 0);
+
+        // 源码锚点：登录构造点必须**恰一处**调用，且在 `enter_map` 之前。
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let prod = &lines[..tests_start];
+        let calls: Vec<usize> = prod
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == "apply_login_record_scalars(")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(calls.len(), 1, "登录装载必须恰一处：{calls:?}");
+        let enter = prod
+            .iter()
+            .position(|l| l.contains("world.enter_map(&head.chr_name"))
+            .expect("登录 `enter_map` 行");
+        assert!(calls[0] < enter, "装载必须在 `enter_map` 之前");
+        assert!(
+            prod.iter()
+                .all(|l| !l.contains("ent.ai.dir = full.as_ref()")),
+            "旧的嵌入式 `Dir` 赋值必须已并入生产入口"
         );
     }
 
