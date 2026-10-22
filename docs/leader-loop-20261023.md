@@ -68,3 +68,12 @@ Leader 忙不过来时，**空闲 worker 可以互相审查**：唯一硬约束�
 
 复核者曾把 review body 写到通用路径 `/e/tmp/review-body.json`，被并发车道覆盖，导致一条 review **投错线程**（正文是别的卡的）。
 **规则**：任何车道/复核者的临时文件必须带车道唯一前缀（`/e/tmp/<lane>-review-body.json`），禁止使用通用文件名。
+
+## 合并前必须断言当前分支（2026-10-23 事故）
+
+**事故**：一次冲突消解把主检出切到 `name-neg-rebased` 后没有切回，之后 5 次合并（searchtick / closehealth / verif-tick / 文档）都落在该分支，
+而 `git push walgit master` 一直在推**旧 master**（远端停在 `f164ccd2`，直到被 `git ls-remote` 发现）。
+修复：`git checkout master && git merge --ff-only name-neg-rebased && git push walgit master`（`f164ccd2..e0114909e`），内容无丢失。
+
+**规则**：每次 `git merge` 与 `git push walgit master` **之前**先跑
+`git rev-parse --abbrev-ref HEAD` 断言 == `master`；合并后立刻 `git ls-remote walgit refs/heads/master` 与本地 `rev-parse master` 对比，不一致即红灯处理。
