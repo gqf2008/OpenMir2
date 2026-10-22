@@ -1113,7 +1113,33 @@ impl ScriptPlayer for NpcPlayer<'_> {
     /// 对照：脚本**动作参数**走另一支 `ProcessingBase.GetLineVariableText`
     /// （`ProcessingBase.cs:1438-1459`，`tempstr = ArrestStringEx(...)` 才是前进扫描），
     /// 两者不可混用——把本函数改成前进扫描会偏离 oracle（见 whitelist 判据与卡
-    /// `openmir2-say-variable-expansion` 的复核结论）。
+    /// `openmir2-say-variable-expansion` 的复核结论）。动作侧入口是
+    /// [`ScriptPlayer::action_line_variable_text`]（`crates/script/src/engine/mod.rs`）。
+    ///
+    /// **两支的展开器也不是同一张表**（卡 `openmir2-action-line-variable-text` 的复核）：
+    /// 本函数用的 [`NpcPlayer::get_variable_text`] 对应 `NormNpc.GetVariableText`
+    /// （`NormNpc.cs:275-1630` 的大 `switch`）；动作侧调用的是
+    /// `ProcessingBase.GetVariableText`（`ProcessingBase.cs:1463-1660`），它开头是
+    ///
+    /// ```text
+    /// if (HUtil32.IsStringNumber(sVariable)) {          // `IsStringNumber` 的 `||` 缺陷
+    ///     string sIdx = sVariable[1..];                  //   ⇒ 任意非空串都为真（HUtil32.cs:475-478）
+    ///     int nIdx = HUtil32.StrToInt(sIdx, -1);
+    ///     if (nIdx == -1) return;                        // 非纯数字 ⇒ 直接 return
+    ///     GrobalVarProcessingSys.Handler(playerActor, nIdx, sVariable, ref sMsg);
+    ///     return;
+    /// }
+    /// ```
+    ///
+    /// ⇒ `$USERNAME` / `$STR(S1)` / `$SERVERNAME` 这类**命名变量在动作参数里一律不展开**
+    /// （不是本仓的缺陷，是 oracle 的既有行为，照搬不修）；后面的
+    /// `$CMD_*` / `$HUMAN(` / `$GUILD(` / `$GLOBAL(` / `$STR(` 分支**不可达**。
+    /// 唯一可达的展开是 `$<整数>` → `GrobalVarProcessingSys.Handler`
+    /// （`GrobalVarProcessingSys.cs:129-143`，按 `GrobalVarCode.nVAR_*` 表分发），
+    /// 本仓尚未实现该表 ⇒ 目前整条动作路径「什么都不换」（whitelist T-161）。
+    /// 所以 `ScriptPlayer::action_variable_text` 保持**缺省空实现**——**不要**拿本函数顶替它。
+    /// 反证：`ActionOfLineMsg` 专门给 `SENDMSG`/`LINEMSG` 补了 `%s`→玩家名、`%d`→NPC 名
+    /// （`ExecutionProcessingSys.cs:3165-3166`），正因为动作参数里 `<$USERNAME>` 不生效。
     ///
     /// `ArrestStringEx` 失败时 C# 不覆盖 `sVariable`（保留上一次的值）——本实现照搬
     /// （`ArrestWrite::Unchanged`）；最多 101 轮。
@@ -2150,6 +2176,127 @@ mod tests {
             p.line_variable_text("<$USERNAME><返回/@main><$LEVEL>"),
             "张三<返回/@main><$LEVEL>"
         );
+    }
+
+    /// **动作参数展开（`ProcessingBase.GetLineVariableText`）**：同一文本在两条路径下结果不同。
+    ///
+    /// oracle 两支的**循环**不同（动作侧前进、说词侧不前进），**展开器**也不同：
+    /// `ProcessingBase.GetVariableText` 开头的 `IsStringNumber` 的 `||` 缺陷
+    /// （`HUtil32.cs:475-478`）让任意非空串为真 ⇒ 非纯数字变量在 `StrToInt(...,-1)` 处
+    /// **直接 return ⇒ 不展开**（详见 [`ScriptPlayer::action_line_variable_text`] 与
+    /// `line_variable_text` 的文档）。
+    ///
+    /// 牙：把 `action_line_variable_text` 的缺省实现改回 `line_variable_text`
+    ///（或给 `NpcPlayer` 补一个走 `get_variable_text` 的 `action_variable_text` 覆写）
+    /// ⇒ 前两条「原样」断言红。
+    #[test]
+    fn action_line_variable_text_keeps_named_variables_literal() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        p.level = 33;
+        p.game_gold = 4242;
+        p.set_mnmval(9, 88);
+        // ① 同一文本、两条路径、**不同**结果（各钉一条）。
+        assert_eq!(
+            p.line_variable_text("<$USERNAME><$GAMEGOLD>"),
+            "张三4242",
+            "说词路径：`$` 变量逐个展开（隐式前进）"
+        );
+        assert_eq!(
+            p.action_line_variable_text("<$USERNAME><$GAMEGOLD>"),
+            "<$USERNAME><$GAMEGOLD>",
+            "动作路径：ProcessingBase.GetVariableText 不认命名变量"
+        );
+        // ② 链接在前：说词侧卡死（不前进），动作侧能扫过去——但扫到的变量也不展开。
+        const LINK_FIRST: &str = r"<进入/@main>\ \ 玩家:<$USERNAME> 元宝:<$GAMEGOLD>";
+        assert_eq!(p.line_variable_text(LINK_FIRST), LINK_FIRST);
+        assert_eq!(p.action_line_variable_text(LINK_FIRST), LINK_FIRST);
+        // ③ `$STR(...)` 在动作侧同样不可达；说词侧展开。
+        assert_eq!(p.line_variable_text("<$STR(M9)>"), "88");
+        assert_eq!(p.action_line_variable_text("<$STR(M9)>"), "<$STR(M9)>");
+        // ④ `$<整数>` 是动作侧唯一可达分支（GrobalVarProcessingSys）——本仓未实现（T-161）⇒ 原样。
+        assert_eq!(p.action_line_variable_text("<$1>"), "<$1>");
+        // ⑤ 边界：`>` 在位置 0 / 未闭合 ⇒ 原样（与说词版同门）。
+        assert_eq!(p.action_line_variable_text(">abc"), ">abc");
+        assert_eq!(
+            p.action_line_variable_text("没有闭合 <$USERNAME"),
+            "没有闭合 <$USERNAME"
+        );
+    }
+
+    /// **动作参数（生产入口 → GBK → EDCode 尾逐字节）**：`messagebox` 经解析器 →
+    /// `ActionOfMessageBox`（`ExecutionProcessingSys.cs:3418`）→
+    /// `SendMsg(RM_MENU_OK, 0, ActorId, 0, 0, GetLineVariableText(sParam1))`。
+    ///
+    /// 断言：帧字段、文本**原样**（命名变量不展开）、cp936 原文逐字节、
+    /// `SM_MENU_OK(767)` 的 EDCode 尾逐字节。走生产函数（`NpcHost::load` → `run_login` →
+    /// `smframe::sm_menu_ok`），不碰字段。
+    #[test]
+    fn action_parameters_stay_literal_through_messagebox_gbk_and_edcode() {
+        const TEXT: &str = "玩家:<$USERNAME>元宝:<$GAMEGOLD>";
+        // cp936：玩家 = CDE6 BCD2；元宝 = D4AA B1A6；其余 ASCII。
+        const EXPECTED_GBK: &[u8] = &[
+            0xcd, 0xe6, 0xbc, 0xd2, 0x3a, // 玩家:
+            0x3c, 0x24, 0x55, 0x53, 0x45, 0x52, 0x4e, 0x41, 0x4d, 0x45, 0x3e, // <$USERNAME>
+            0xd4, 0xaa, 0xb1, 0xa6, 0x3a, // 元宝:
+            0x3c, 0x24, 0x47, 0x41, 0x4d, 0x45, 0x47, 0x4f, 0x4c, 0x44, 0x3e, // <$GAMEGOLD>
+        ];
+        let root = std::env::temp_dir().join(format!("gs-npc-actvar-{}", std::process::id()));
+        let dir = root.join("Envir").join("MapQuest_def");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 生产 Envir 文件是 cp936：按 GBK 写盘，走 `NpcHost::load` 的真实解码路径。
+        let script = concat!(
+            "[@Login]\r\n",
+            "#ACT\r\n",
+            "messagebox 玩家:<$USERNAME>元宝:<$GAMEGOLD>\r\n",
+        );
+        let script_bytes = encoding_rs::GBK.encode(script).0.into_owned();
+        std::fs::write(dir.join("QManage.txt"), script_bytes).unwrap();
+        let record = QuestNpcRecord {
+            map_name: "0".to_string(),
+            curr_x: 0,
+            curr_y: 0,
+            chr_name: "QManage".to_string(),
+            npc_flag: 0,
+            appr: 0,
+            file_path: "MapQuest_def".to_string(),
+            script_name: None,
+            is_hide: true,
+            is_quest: false,
+        };
+        let mut rename = move |_min: i32, _max: i32| 1;
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        assert!(host.failures.is_empty(), "{:?}", host.failures);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "张三".to_string();
+        player.game_gold = 4242;
+        player.level = 33;
+        let _ = host.run_login(&mut player).expect("QManage 必须可加载");
+        let frame = player
+            .frames
+            .iter()
+            .find(|f| f.ident == mir2_script::engine::actions::RM_MENU_OK)
+            .expect("MESSAGEBOX 必须发 RM_MENU_OK 帧");
+        assert_eq!(frame.w_param, 0);
+        assert_eq!(frame.n_param1, player.actor_id(), "nParam1 = ActorId");
+        assert_eq!(frame.n_param2, 0);
+        assert_eq!(frame.n_param3, 0);
+        assert_eq!(
+            frame.msg.as_deref(),
+            Some(TEXT),
+            "动作参数里命名变量原样（ProcessingBase.GetVariableText 不展开）"
+        );
+        let gbk = encoding_rs::GBK.encode(TEXT).0.into_owned();
+        assert_eq!(gbk, EXPECTED_GBK, "cp936 原文逐字节");
+        let wire = crate::smframe::sm_menu_ok(frame.n_param1, &gbk);
+        assert_eq!(
+            &wire[12..],
+            mir2_protocol::edcode::encode(EXPECTED_GBK).as_slice(),
+            "767 尾 = EDCode.EncodeString(GBK 原文) 逐字节"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// **说词展开（生产入口 → GBK → EDCode 尾逐字节）**：走
