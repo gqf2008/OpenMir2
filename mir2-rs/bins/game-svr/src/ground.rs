@@ -815,6 +815,52 @@ pub fn drop_item_down_p21(
     )
 }
 
+/// `DropItemDown(userItem, 3, false, playerActor.ActorId, 0)`——`GotoLableGiveItem` 的
+/// 满包支（`ScriptEngine.cs:741`）专用。
+///
+/// 与 [`drop_item_down_p21`] 同一核心，但 `itemOfCreat`/`dropCreat` 口径不同：oracle 这一支是
+/// `itemOfCreat = ActorId`、`dropCreat = 0`（`:741`），散布半径固定 3。
+///
+/// 与 P21 一样传 0×0 的 [`GroundMap`]：`MapItem.ItemId` 恒 0（`T-19`）⇒ `put_item` 恒 false
+/// ⇒ **不落地**（物品消失，与 oracle 同形）；`StdMode 45` 的 `GetRandomLook` 抽数仍照发，
+/// `StdMode 40` 的耐久回绕作用在被丢弃的副本上（不可观测）。
+#[must_use]
+pub fn drop_item_down_give(
+    catalog: &dyn ItemCatalog,
+    item: &mut BagItem,
+    std_mode: u8,
+    actor_id: i32,
+    rng: &mut RandomNumber,
+) -> bool {
+    if std_mode == 40 {
+        item.dura = item.dura.wrapping_sub(2000);
+    }
+    if std_mode == 45 {
+        if let Some(tpl) = catalog.get(item.index) {
+            let _looks = i32::from(tpl.looks) + rng.random_below(i32::from(tpl.shape));
+        }
+    }
+    let ctx = DropContext {
+        catalog,
+        actor_id,
+        curr_x: 0,
+        curr_y: 0,
+        now_tick: 0,
+        deal_last_tick: 0,
+        make_index: item.make_index,
+        item_name: "",
+        in_safe_disable_drop: false,
+        in_safe_zone: false,
+        is_can_drop: true,
+        no_throw_item: false,
+        control_drop_item: false,
+        can_drop_price: 0,
+        drop_item_rage: 3,
+    };
+    let mut map = GroundMap::new(0, 0);
+    drop_item_down(&ctx, &mut map, item, actor_id, 0, 3)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

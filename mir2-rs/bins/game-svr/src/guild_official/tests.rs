@@ -37,8 +37,8 @@ impl FixedNpcScript for EmptyScript {
         _npc_actor_id: i32,
         _label: &str,
         _bo_ext_jmp: bool,
-    ) -> (Vec<SayMsg>, Vec<SendMsg>) {
-        (Vec::new(), Vec::new())
+    ) -> (Vec<SayMsg>, Vec<SendMsg>, Vec<usize>) {
+        (Vec::new(), Vec::new(), Vec::new())
     }
 }
 
