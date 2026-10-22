@@ -1068,10 +1068,10 @@ def main(argv=None):
         try:
             data = load_scenario(args.scenario)
             plans, params = expand_scenario(data, parse_vars(args.var))
-            wait_kinds = {"wait_for", "wait_frames"}
+            wait_kinds = {"wait_for", "wait_frames", "wait_idents"}
             if not any(pl.get("kind") in wait_kinds for pl in plans):
                 raise ScenarioError(
-                    "scenario %r has no wait step: at least one wait_for/wait_frames is required "
+                    "scenario %r has no wait step: at least one wait_for/wait_frames/wait_idents is required "
                     "(a send-only scenario proves nothing)" % data.get("name"))
         except ScenarioError as ex:
             print("scenario-error: %s" % ex, file=sys.stderr)
