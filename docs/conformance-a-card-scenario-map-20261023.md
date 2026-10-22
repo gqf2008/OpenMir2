@@ -232,6 +232,9 @@
 - run 产物：`E:/tmp/conformance/runs/<scenario>-<side>-<yyyymmdd-HHMM>/`（`frames.ndjson` + `run.json` + `db_snapshot.json`）
 - 比较报告：同目录 `report.json`（`compare_runs.py` 输出）
 - 归档进仓库：每批收口时把 `report.json` 摘要 + 差异结论写入本目录下的批次报告，原始产物留在 `E:/tmp` 并在报告里索引路径。
+- **中间产物**：本文分类所用的临时文件（`E:/tmp/{a-cards,a-map,window-items,findings}.tsv`、`low-27.txt`、
+  `pull-*.py`、board JSON 转储）已于 2026-10-23 清理；§3.1/§3.2 的口径可由
+  `walgit collab board --format json` + `walgit collab thread <id>` 重新生成，不依赖这些文件。
 
 ## 6. 遗留
 
