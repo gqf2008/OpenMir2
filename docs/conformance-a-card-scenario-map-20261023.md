@@ -281,3 +281,18 @@ python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/run
 
 > 每一步都要**两侧各跑一次**（同端口串行），并各自落 `frames.ndjson` + `run.json` + `db_snapshot.json`；
 > `compare_runs.py` 的退出码 0/1/2 才是判定口径（2 = 判不了，不许当绿）。
+
+## 8. 场景期望帧的静态核对（2026-10-23，`mir2-rs/bins/game-svr`）
+
+11 个场景 `wait_for` 的 ident 在 Rust 侧是否**有发射点**（`grep -c` 计数，只证「代码里存在」，不证行为一致）：
+
+| ident | Rust 发射点 | 用于场景 |
+|---|---:|---|
+| 643 `SM_MERCHANTSAY` | 57 | npc_click / king_dialog / king_castle_war / merchant_dialog |
+| 645 `SM_SENDGOODSLIST` | 2 | merchant_dialog（`@buy`） |
+| 201 `SM_BAGITEMS` / 203 `SM_UPDATEITEM` / 200 `SM_ADDITEM` | 12 / 19 / 87 | bag_equip / eat_item / pickup_item |
+| 635 `SM_EAT_OK` / 636 `SM_EAT_FAIL` | 22 / 21 | eat_item |
+| 100 `SM_SYSMESSAGE` | 127 | 全部对话/GM 场景 |
+
+> 这只是**够不够得着**的核对：所有期望 ident 在 Rust 侧都有发射点，不存在「Rust 根本不发这条帧导致必然超时」的显然缺陷。
+> 是否逐字节一致，仍以窗口内的 `compare_runs.py` 判定为准。
