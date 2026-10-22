@@ -260,12 +260,17 @@ pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
         // `NormNpc()` ctor 置 `SuperMan = true`（`NormNpc.cs:41`）。两者**各有**自有 ctor 常量
         // `ViewRange = 7` / `Light = 4`（`SuperGuard.cs:51-56`、`PetSuperGuard.cs:5-10`）；
         // `PetSuperGuard` 先调 `base()` 再重复置同值，终值相同 ⇒ 本支一并落值。
+        // 可达性：race 11 在部署 `GuardList.txt` 有 33 卫士 + 16 带刀护卫（live）；
+        // race 12 无部署行（MonGen/库均无），本支对其为休眠代码。
         // 对照：`ArcherGuard`（20/112）的 ctor 是 `ViewRange = 12` 且**不覆写** `Light`
         // （继承 `NormNpc` 的 2）⇒ 不共用本支的值。
         11 | 12 => {
             entity.super_man = true;
             entity.view_range = 7;
             entity.light = 4;
+            // `NormNpc()` ctor `StickMode = true`（`NormNpc.cs:45`）：`Entity.stick_mode`
+            // 已被推挤门消费（`cast_hb_fireball_spell` / `cast_firewind_spell` 的 level 门后分支）。
+            entity.stick_mode = true;
         }
         // `CowKingMonster` ctor（`CowKingMonster.cs:17-25`）+ `Initialize()`（`:33-38`）。
         // ctor 的 `RushMode = true`（`:21`）**本批落地**：消费点
@@ -1202,6 +1207,10 @@ mod tests {
             );
             assert_eq!(e.light, 4, "race {race} SuperGuard/PetSuperGuard Light=4");
             assert!(e.super_man, "race {race} 继承 NormNpc SuperMan=true");
+            assert!(
+                e.stick_mode,
+                "race {race} 继承 NormNpc StickMode=true（NormNpc.cs:45）"
+            );
             // 与 ArcherGuard 支互斥：防止把 `ViewRange=12`/`GuardDirection=-1` 误贴到 11/12。
             assert_eq!(e.guard_direction, 0, "race {race} 不走 ArcherGuard ctor");
             assert!(!e.want_ref_msg, "race {race} 不走 ArcherGuard ctor");
@@ -1212,6 +1221,7 @@ mod tests {
             assert_eq!(e.view_range, 12, "race {race} ArcherGuard ViewRange=12");
             assert_eq!(e.light, 0, "race {race} Light 不被 11/12 支污染");
             assert_eq!(e.guard_direction, -1, "race {race} GuardDirection=-1");
+            assert!(!e.stick_mode, "race {race} 不继承 11/12 支的 StickMode");
         }
 
         // 普通怪对照组：`Entity::new` = `BaseObject` 缺省（`ViewRange=5`、`Light=0`）。
