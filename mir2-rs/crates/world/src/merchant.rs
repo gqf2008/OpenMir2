@@ -677,11 +677,21 @@ impl World {
                     if let Some(dir) = r.turned {
                         out.turns.push((id, dir));
                     }
+                    if r.turned_self_only {
+                        // 发帧时刻 `ObMode || FixedHideMode` ⇒ `SendRefMsg` 只自送（客户端零帧）。
+                        // 朝向已写进实体（`TurnTo` 先写 `Dir`），这里只留证据位。
+                        let dir = self.entities.get(id).map_or(0, |e| e.ai.dir);
+                        out.turns_self_only.push((id, dir));
+                    }
                     if r.hit {
                         out.hits.push(id);
                     }
-                    // oracle 次序 `:140`（RNG 支）→ `:156`（显隐解除支）⇒ 同一次 `Run` 两条
-                    // `RM_HIT` 就压两条 id（下行按条数出帧）。
+                    if r.hit_self_only {
+                        out.hits_self_only.push(id);
+                    }
+                    // `:156` 的解除受击（恒可见）。与 `r.hit` 不可同时为真：同一次 `Run` 里
+                    // `:140` 能命中就说明那一刻已在 `FixedHideMode` ⇒ 它落 `hit_self_only`
+                    // （客户端零帧，不进本表）。
                     if r.unhide_hit {
                         out.hits.push(id);
                     }
@@ -706,18 +716,29 @@ impl World {
 /// `Merchant.Run` 的一次结果（供宿主出帧 / 证据；帧面接线属 ⑤-4）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MerchantRunOutcome {
-    /// `TurnTo(RandomByte(8))` 抽到的朝向（`RM_TURN`）。
-    pub turned: Option<u8>,
-    /// 发 `RM_HIT`（**RNG 支**：`Random(50)==0`，`Merchant.cs:138-140`）。
+    /// `TurnTo(RandomByte(8))` 的**客户端可见** `RM_TURN`（朝向）。
     ///
-    /// 与 [`Self::unhide_hit`] **独立**：两者可在同一次 `Run` 同时为 `true`（oracle 发两条
-    /// `RM_HIT` ⇒ 两条 `SM_HIT(14)`），调用方按「条数」出帧。
+    /// `None` 可能是因为没抽中，也可能是因为发帧时刻 `ObMode || FixedHideMode`
+    /// ⇒ 只自送（见 [`Self::turned_self_only`]）。
+    pub turned: Option<u8>,
+    /// 抽中 `TurnTo` 但发帧时刻 `ObMode || FixedHideMode` ⇒ `RM_TURN` **只自送**、客户端零帧
+    /// （`BaseObject.Message.cs:390-394`）。此时 `Dir` 仍照常写入。
+    pub turned_self_only: bool,
+    /// **客户端可见**的 `RM_HIT`：RNG 支（`Random(50)==0`，`Merchant.cs:138-140`）且在发帧时刻
+    /// 不处于 `ObMode || FixedHideMode`。战中商人的该支**恒为自送**（见 [`Self::hit_self_only`]）。
     pub hit: bool,
+    /// 抽中 RNG 受击支但处于 `ObMode || FixedHideMode` ⇒ `RM_HIT` **只自送**、客户端零帧。
+    pub hit_self_only: bool,
     /// 发 `RM_HIT`（**确定性支**：`FixedHideMode` 解除，`Merchant.cs:152-157`，`:156`）。
+    ///
+    /// 该支先 `:155` 清 `FixedHideMode` 再发 ⇒ **恒为客户端可见**（`SendRefMsg` 头门不命中）。
     pub unhide_hit: bool,
     /// 发 `RM_DISAPPEAR`（沙巴克战中进入 `FixedHideMode`）。
     pub disappear: bool,
     /// `BoCanMove` 到点 ⇒ `MapRandomMove`（`RM_SPACEMOVE_FIRE`）。
+    ///
+    /// 这是**移动事实**（与可见性无关：`FixedHideMode` 时商人照样移动）。其 `RefMsg` 同受
+    /// `ObMode || FixedHideMode` 头门约束，且本仓**尚未接线**该下行（见 whitelist T-192 残余）。
     pub space_moved: bool,
     /// 本趟触发了补货（`RefillGoods` 有 due 条目且命中 `>` 分支）。
     pub refilled: bool,
@@ -730,11 +751,20 @@ pub struct MerchantRunOutcome {
 pub struct MerchantTickOutcome {
     /// 本 pass 执行了 `Run()` 的商人 id（按 `MerchantList` 顺序）。
     pub ran: Vec<i32>,
-    /// `(id, dir)`：本 pass `TurnTo` 的结果（`RM_TURN`）。
+    /// `(id, dir)`：本 pass **客户端可见**的 `TurnTo` 结果（`RM_TURN`）。
+    ///
+    /// 发帧时刻 `ObMode || FixedHideMode` 的转身不进本表（`SendRefMsg` 只自送 ⇒ 客户端零帧，
+    /// 见 [`MerchantRunOutcome::turned_self_only`]）。
     pub turns: Vec<(i32, u8)>,
-    /// 本 pass 发 `RM_HIT` 的商人 id（**按帧计**：RNG 支 `:140` 与固定显隐解除支 `:156`
-    /// 在同一次 `Run` 各发一条 ⇒ 同一 id 可在本表出现两次，对应两条 `SM_HIT(14)`）。
+    /// 本 pass **客户端可见**的 `RM_HIT` 商人 id。
+    ///
+    /// 两处来源：RNG 支 `:140` 与固定显隐解除支 `:156`；两者**客户端可见性互斥** ⇒ 同一 id
+    /// 在一次 `Run` 里至多出现一次（战中的 RNG 受击是自送，不在此表）。
     pub hits: Vec<i32>,
+    /// 本 pass 因 `ObMode || FixedHideMode` **只自送**的 `RM_TURN`（`(id, dir)`；客户端零帧，证据用）。
+    pub turns_self_only: Vec<(i32, u8)>,
+    /// 本 pass 因 `ObMode || FixedHideMode` **只自送**的 `RM_HIT`（客户端零帧，证据用）。
+    pub hits_self_only: Vec<i32>,
     /// 本 pass `MapRandomMove` 的商人 id。
     pub space_moves: Vec<i32>,
     /// 本 pass 被 Ghost 60s 门移除的商人 id（oracle `RemoveAt`）。
@@ -1465,14 +1495,34 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         }
     }
     // `Merchant.cs:132-141`：`Random(50)==0` ⇒ `TurnTo(RandomByte(8))`；否则 `Random(50)==0` ⇒ `RM_HIT`。
+    //
+    // **可见性按「发帧时刻」快照**（`BaseObject.Message.cs:390-394`）：
+    // `SendRefMsg` 在 `ObMode || FixedHideMode` 时只 `SendMsg` 给自己（六参 `SendMsg` 只入
+    // `this.MsgQueue`）⇒ **客户端零帧**。这两条 `RefMsg` 都排在 `:143-160` 的显隐切换**之前**：战中
+    // 商人的 `FixedHideMode` 此刻仍为 `true` ⇒ `:140` 的 `RM_HIT` 与 `TurnTo` 的 `RM_TURN` 都只自送。
+    //
+    // 判定必须在此处（发帧前）取，**不能**推迟到宿主排水时再按实体状态过滤：`:155` 会先清
+    // `FixedHideMode` 再发 `:156`，排水时状态已翻回可见 ⇒ 那样会把唯一客户端可见的解除帧一起误杀。
+    let hidden = world
+        .entities
+        .get(actor_id)
+        .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
     if world.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
         let dir = world.rng.random_byte(MERCHANT_TURN_DIR_MAX);
         if let Some(e) = world.entities.get_mut(actor_id) {
-            e.ai.dir = dir;
+            e.ai.dir = dir; // `TurnTo` 先写 `Dir`（写方向与可见性无关）
         }
-        outcome.turned = Some(dir);
+        if hidden {
+            outcome.turned_self_only = true; // `ObMode || FixedHideMode` ⇒ RM_TURN 只自送
+        } else {
+            outcome.turned = Some(dir);
+        }
     } else if world.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
-        outcome.hit = true;
+        if hidden {
+            outcome.hit_self_only = true; // `ObMode || FixedHideMode` ⇒ RM_HIT 只自送
+        } else {
+            outcome.hit = true;
+        }
     }
     // `Merchant.cs:143-160`：`CastleMerchant && Castle != null && Castle.UnderWar` ⇒ 进
     // `FixedHideMode`（`RM_DISAPPEAR`）；否则恢复显形（`RM_HIT`，`:156`）。
@@ -1481,9 +1531,10 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     // 缺 `castle_bound` 守卫时「`CastleMerchant=1` + 战中快照 + 未绑定城堡」会多发 `RM_DISAPPEAR`，
     // 而 oracle 走 else 支。
     //
-    // **两个 `RM_HIT` 发点必须各自计数**：RNG 支（`:140`）与固定显隐解除支（`:156`）在同一次
-    // `Run` 里可以**同时**命中（oracle 发两条），本函数的调用方按条数出帧 ⇒ 分开记
-    // `hit` / `unhide_hit`，不要合并成一个 bool。
+    // **两个 `RM_HIT` 语句不互斥、但客户端可见性互斥**：`CastleMerchant && Castle != null &&
+    // Castle.UnderWar` 且已隐藏 ⇒ `:140` 的 RNG 受击必然是自送（`FixedHideMode == true`），
+    // `:156` 的解除受击先 `:155` 清零再发 ⇒ **唯一客户端可见**的那条。同一次 `Run` 客户端可见的
+    // `SM_HIT(14)` 恒 **1** 条（两者都隐藏时为 0）。
     if castle_merchant && castle_bound && castle_under_war {
         if world
             .entities
@@ -2000,13 +2051,32 @@ mod tests {
                     if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
                         let _ = r.random_byte(MERCHANT_TURN_DIR_MAX);
                     } else if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
-                        return false; // 前序 Run 不得受击（否则「同一次 Run 两条」判据被噪声污染）
+                        return false; // 前序 Run 不得受击（否则受击计数断言被噪声污染）
                     }
                 }
                 r.random_below(MERCHANT_TURN_RANDOM_MOD) != 0
                     && r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0
             })
             .expect("存在 RNG 受击种子")
+    }
+
+    /// 找一个种子：ctor 4 抽 + 前 `run_index` 次 `Run` 之后，第 `run_index + 1` 次 `Run`
+    /// 命中**转向支**（第一个 `Random(50) == 0`）。
+    fn seed_with_turn_on_run(run_index: usize) -> i32 {
+        (1..20_000i32)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                let _ = ctor_chain_first_draw(&mut r);
+                for _ in 0..run_index {
+                    if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+                        let _ = r.random_byte(MERCHANT_TURN_DIR_MAX);
+                    } else {
+                        let _ = r.random_below(MERCHANT_TURN_RANDOM_MOD);
+                    }
+                }
+                r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0
+            })
+            .expect("存在转向种子")
     }
 
     /// **判据①（构造级，卡 `openmir2-castle-merchant-fixedhide-hit`）**：`UnderWar` 切换的
@@ -2111,34 +2181,137 @@ mod tests {
         assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
     }
 
-    /// **判据③（两个 `RM_HIT` 发点各自计数）**：RNG 受击支（`:138-140`）与显隐解除支
-    /// （`:152-157`）可以在**同一次 `Run`** 同时命中 ⇒ oracle 发**两条** `RM_HIT`（客户端两条
-    /// `SM_HIT(14)`）⇒ `MerchantTickOutcome.hits` 里同一 id 出现**两次**。合并成一个 bool 会少发一帧。
+    /// **判据③（`SendRefMsg` 自送头门：战中的 RNG 受击不达客户端）**：
+    /// `BaseObject.Message.cs:390-394` 的 `if (ObMode || FixedHideMode) { SendMsg(自己); return; }`
+    /// ⇒ 发帧时刻已隐藏的 `RM_HIT`/`RM_TURN` **只自送**、客户端零帧。
     ///
-    /// 牙（红检）：把 `hit` / `unhide_hit` 合回一个字段 ⇒ 本用例的 `vec![id, id]` 变
-    /// `vec![id]` ⇒ 必红。
+    /// 同一次 `Run` 里 RNG 受击支（`:140`）与显隐解除支（`:156`）可以**同时抽中**，但客户端可见性
+    /// 互斥：`:140` 那一刻 `FixedHideMode` 必然仍为 `true`（正是它让 `:153` 的解除支成立）⇒ 只自送；
+    /// `:156` 先 `:155` 清零再发 ⇒ **唯一**客户端可见的那条。⇒ `merchant_hits` 恒 `vec![id]`。
+    ///
+    /// 牙（红检）：去掉 `merchant_run` 的 `hidden` 判定（两条支恒记可见）⇒ `hits` 变
+    /// `vec![id, id]` ⇒ 必红。
     #[test]
-    fn castle_merchant_unhide_hit_coexists_with_rng_hit_as_two_frames() {
+    fn castle_merchant_unhide_hit_is_the_only_client_visible_hit() {
         let mut w = World::new(16, 16);
         // 第 1 次 `Run`（进入战中）不受击；第 2 次 `Run`（解除）命中 RNG 受击支。
         w.rng = RandomNumber::with_seed(seed_with_rng_hit_on_run(1));
         w.clock_ms = 100_000;
         let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w.set_merchant_castle_index(id, Some(0)));
+
+        // ① 进入战中（`RM_DISAPPEAR`，无 RM_HIT）。
         set_castle_under_war(&mut w, id, true);
         set_run_tick_stale(&mut w, id);
-        let first = w.merchant_tick();
-        assert!(first.hits.is_empty(), "进入战中的 Run 不发 RM_HIT");
+        assert!(
+            w.merchant_tick().hits.is_empty(),
+            "进入战中的 Run 不发 RM_HIT"
+        );
         assert!(w.entities.get(id).unwrap().fixed_hide_mode);
 
+        // ② 解除：RNG 受击支抽中但此刻仍隐藏 ⇒ 自送；解除支先清零再发 ⇒ 唯一客户端帧。
         set_castle_under_war(&mut w, id, false);
         set_run_tick_stale(&mut w, id);
         w.clock_ms += MERCHANT_PASS_INTERVAL_MS;
         let second = w.merchant_tick();
+        assert_eq!(second.hits, vec![id], "客户端可见 SM_HIT 恰好一条");
+
+        // ③ 同形态的 flags 复核（`merchant_run` 与 tick 是同一条路径，直调看自送位）。
+        let mut w2 = World::new(16, 16);
+        w2.rng = RandomNumber::with_seed(seed_with_rng_hit_on_run(0));
+        w2.clock_ms = 100_000;
+        let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w2.set_merchant_castle_index(id2, Some(0)));
+        if let Some(e) = w2.entities.get_mut(id2) {
+            e.fixed_hide_mode = true; // 战中稳态（解除支的入口状态）
+        }
+        let out = merchant_run(&mut w2, id2);
+        assert!(out.hit_self_only, "战中的 :140 RNG 受击 ⇒ 只自送");
+        assert!(!out.hit, "自送不是客户端帧");
+        assert!(out.unhide_hit, "解除支（:156）先清零再发 ⇒ 客户端可见");
         assert_eq!(
-            second.hits,
-            vec![id, id],
-            "oracle 次序 :140（RNG）→ :156（解除）⇒ 两条 RM_HIT"
+            u8::from(out.hit) + u8::from(out.unhide_hit),
+            1,
+            "同一次 Run 客户端可见的 SM_HIT 恒 1 条"
+        );
+    }
+
+    /// **判据④（战中稳态：自送帧不得漏到客户端）**：`FixedHideMode` 期间每个 `Run` 的
+    /// RNG 受击（`:140`）与 `TurnTo`（`BaseObject.cs:1585` 的 `RM_TURN`）都只自送 ⇒
+    /// `merchant_hits` / `merchant_turns` **恒空**（`hits_self_only`/`turns_self_only` 记实际抽中的
+    /// 自送帧），而 `Dir` 与抽数照常发生。
+    ///
+    /// 牙（红检）：去掉 `merchant_run` 的 `hidden` 判定 ⇒ `hits`/`turns` 各出现一条 ⇒ 必红。
+    #[test]
+    fn hidden_merchant_turn_and_rng_hit_are_self_only() {
+        // ① RNG 受击：`Run` 首次抽数即命中受击支（第一个 `Random(50)!=0`、第二个 `==0`）。
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(seed_with_rng_hit_on_run(0));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)));
+        set_castle_under_war(&mut w, id, true);
+        if let Some(e) = w.entities.get_mut(id) {
+            e.fixed_hide_mode = true; // 战中稳态
+        }
+        set_run_tick_stale(&mut w, id);
+        let out = merchant_run(&mut w, id);
+        assert!(out.hit_self_only, "隐藏中的 RNG 受击只自送");
+        assert!(!out.hit, "客户端零帧");
+        assert!(
+            !out.disappear,
+            "已隐藏 ⇒ `!FixedHideMode` 守卫挡住，不重复发"
+        );
+
+        set_run_tick_stale(&mut w, id);
+        let tick = w.merchant_tick();
+        assert!(tick.hits.is_empty(), "战中稳态 client-visible hits 恒空");
+        assert!(tick.turns.is_empty(), "本 Run 未走转向支");
+
+        // ② 转身：`Run` 首次抽数即命中转向支（`Random(50)==0` ⇒ `RandomByte(8)`），隐藏 ⇒ 只自送。
+        let turn_seed = seed_with_turn_on_run(0);
+        // 期望朝向 = 同种子的独立复算（ctor 4 抽 → 转向支 2 抽）。
+        let mut exp = RandomNumber::with_seed(turn_seed);
+        let _ = ctor_chain_first_draw(&mut exp);
+        let _ = exp.random_below(MERCHANT_TURN_RANDOM_MOD);
+        let want_dir = exp.random_byte(MERCHANT_TURN_DIR_MAX);
+
+        let mut w2 = World::new(16, 16);
+        w2.rng = RandomNumber::with_seed(turn_seed);
+        w2.clock_ms = 100_000;
+        let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w2.set_merchant_castle_index(id2, Some(0)));
+        set_castle_under_war(&mut w2, id2, true);
+        if let Some(e) = w2.entities.get_mut(id2) {
+            e.fixed_hide_mode = true;
+        }
+        set_run_tick_stale(&mut w2, id2);
+        let out2 = merchant_run(&mut w2, id2);
+        assert!(out2.turned_self_only, "隐藏中的 RM_TURN 只自送");
+        assert!(out2.turned.is_none(), "客户端零帧");
+        assert_eq!(
+            w2.entities.get(id2).unwrap().ai.dir,
+            want_dir,
+            "Dir 仍照常写入（TurnTo 先写 Dir；可见性只挡 RefMsg）"
+        );
+
+        // tick 级同口径（另行构造同一形态，让 `Run` 首次抽数再命中转向支）。
+        let mut w3 = World::new(16, 16);
+        w3.rng = RandomNumber::with_seed(turn_seed);
+        w3.clock_ms = 100_000;
+        let id3 = w3.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w3.set_merchant_castle_index(id3, Some(0)));
+        set_castle_under_war(&mut w3, id3, true);
+        if let Some(e) = w3.entities.get_mut(id3) {
+            e.fixed_hide_mode = true;
+        }
+        set_run_tick_stale(&mut w3, id3);
+        let tick2 = w3.merchant_tick();
+        assert!(tick2.turns.is_empty(), "战中稳态 client-visible turns 恒空");
+        assert_eq!(
+            tick2.turns_self_only,
+            vec![(id3, want_dir)],
+            "转向支确实命中，但只自送"
         );
     }
 

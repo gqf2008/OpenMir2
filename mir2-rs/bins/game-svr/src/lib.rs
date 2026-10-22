@@ -22806,7 +22806,10 @@ mod tests {
     /// ① `UnderWar false→true` 那一步：`merchant_hits` **为空**（只有 `RM_DISAPPEAR`，不发 `SM_HIT`）；
     /// ② `true→false` 那一步：**恰好一条** `SM_HIT(14)`，头 = `(Recog=商人 ActorId,
     ///    Param=CurrX, Tag=CurrY, Series=Dir)`、**无尾**（12B）；
-    /// ③ 状态不再变化 ⇒ **零帧**（这条支不得变成噪声源）。
+    /// ③ 战中稳态 + RNG 受击（`Merchant.cs:140`）：`SendRefMsg` 的 `ObMode || FixedHideMode`
+    ///    头门（`BaseObject.Message.cs:390-394`）⇒ **只自送、客户端零帧**；
+    /// ④ 战后解除本身是可见帧（1 条，与 ② 同形）；随后状态不再变化 ⇒ **零帧**
+    ///    （这条支不得变成噪声源）。
     ///
     /// 牙（红检）：① 删 `merchant_run` 的 `outcome.unhide_hit = true` ⇒ ② 帧数归零 ⇒ 红；
     /// ② 把补发挪到「进入战中」⇒ ① 多一条、② 归零 ⇒ 红。
@@ -22912,7 +22915,62 @@ mod tests {
         assert_eq!(cm.series, 5, "Series = Dir（不含 Light）");
         assert_eq!(raws[0].len(), 12, "无尾（SendSocket 单参）");
 
-        // ③ 状态不再变化 ⇒ 零帧。
+        // ③ 战中稳态 + RNG 受击：`Merchant.cs:140` 的 `RM_HIT` 在 `FixedHideMode` 下只自送
+        //    （`BaseObject.Message.cs:390-394`）⇒ 客户端零帧。
+        set_war(&mut world, true);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        assert!(
+            world.merchant_tick().hits.is_empty(),
+            "重新进入战中：RM_DISAPPEAR 不算 SM_HIT"
+        );
+        assert!(world.entities.get(mer_id).unwrap().fixed_hide_mode);
+        // 换一个「首次抽数即命中受击支」的流（`Run` 从流的头部开抽，无 ctor 链）。
+        let hit_seed = (1..500)
+            .find(|s| {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(*s);
+                r.random_below(50) != 0 && r.random_below(50) == 0
+            })
+            .expect("存在受击种子");
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(hit_seed);
+        set_war(&mut world, true); // 仅重置 `Run` 门（状态仍为战中）
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let hidden_tick = world.merchant_tick();
+        assert!(
+            hidden_tick.hits.is_empty(),
+            "战中稳态下发 SM_HIT ⇒ 客户端多一帧"
+        );
+        assert_eq!(
+            hidden_tick.hits_self_only,
+            vec![mer_id],
+            "受击支确实命中，但只自送"
+        );
+        let rec = mir2_world::TickRecord {
+            merchant_hits: hidden_tick.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            0,
+            "自送帧不得到客户端"
+        );
+        assert!(rx.try_recv().is_err(), "战中稳态无帧");
+
+        // ④ 战后解除（可见）：这次转换本身是一条 `SM_HIT`（与 ② 同形，`:155` 先清零再发）。
+        set_war(&mut world, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let unhide_again = world.merchant_tick();
+        assert_eq!(unhide_again.hits, vec![mer_id], "解除支恒为可见帧");
+        assert!(!world.entities.get(mer_id).unwrap().fixed_hide_mode);
+
+        // ⑤ 战后稳态（状态与随机支都不动）⇒ 零帧。战后商人**可见**，RNG 受击支一旦抽中就是
+        //    合法可见帧 ⇒ 这里换回一条「两次抽数都不命中」的流，断言才只钉「稳态不多发」。
+        let quiet_seed = (1..500)
+            .find(|s| {
+                let mut r = mir2_shared::rng::RandomNumber::with_seed(*s);
+                r.random_below(50) != 0 && r.random_below(50) != 0
+            })
+            .expect("存在安静种子");
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(quiet_seed);
         set_war(&mut world, false);
         world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
         let steady = world.merchant_tick();
