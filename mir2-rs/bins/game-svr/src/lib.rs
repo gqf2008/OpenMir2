@@ -1666,6 +1666,10 @@ fn handle_gm_command(
     };
     let world_view = gmcmd::GmWorld {
         guilds: host.guilds,
+        maps: host.registry,
+        world: Some(host.world),
+        speaker: &speaker.chr_name,
+        now_ms: host.world.clock_ms,
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -18658,7 +18662,16 @@ fn sim_loop(
                                                     ground_sessions.insert(
                                                         head.chr_name.clone(),
                                                         SessionGround {
-                                                            gm: gmcmd::GmSession::default(),
+                                                            // `GetHumData` 写进 `PlayObject` 的
+                                                            // 夫妻/性别/师徒/行会合一/组队传送冷却
+                                                            // （批次 3 传送/召唤族的读点）。
+                                                            gm: gmcmd::GmSession::from_character(
+                                                                d.dear_name.as_deref().unwrap_or(""),
+                                                                d.sex,
+                                                                d.is_master,
+                                                                d.allow_guild_re_call,
+                                                                d.group_rcall_time,
+                                                            ),
                                                             state: game_svr::ground::GroundState {
                                                                 item_list: bag_items_from(
                                                                     d.bag_items.as_deref(),
