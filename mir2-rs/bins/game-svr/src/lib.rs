@@ -1782,6 +1782,21 @@ fn handle_gm_command(
         let text = gmcmd::incorrect_msg(sg.gm.permission, line);
         send_self_sysmsg_color(host, speaker, host.colors.red_f, host.colors.red_b, &text);
     }
+    // **非 `SysMsg` 帧**（oracle `SendDefMessage`）：目前只有 `@AttackMode` 的
+    // `SM_ATTACKMODE(213)`（`ChangeAttackModeCommand.cs:65`，排在绿字之后）。wire 编码走既有
+    // `smframe::sm_attackmode`（金标准 #5 逐字节已钉）。
+    for frame in &result.frames {
+        let body = match frame {
+            gmcmd::GmFrame::AttackMode(mode) => smframe::sm_attackmode(*mode),
+        };
+        if let Some(tx) = route_to_gate(host.gates, speaker.gate_idx, speaker.socket, "GM 命令帧")
+        {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: speaker.socket,
+                body,
+            });
+        }
+    }
     glog!(
         "INF",
         "GM 命令 ChrName={} ActorId={} tail={line:?} found={} 帧数={}",
@@ -17888,6 +17903,17 @@ fn sim_loop(
                             socket,
                             tail.as_deref(),
                         );
+                        // **GM 管理态写穿（卡 `openmir2-gm-admin-mode-entity-seam`）**：
+                        // `@1/@2/@3/@Rest/@AttackMode` 在命令体里翻转的是 `GmSession` 镜像
+                        // （oracle `PlayObject` 同名字段的等价物），而引擎（战斗/AOI/怪物 AI）
+                        // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
+                        // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
+                        if let Some(state) = ground_sessions
+                            .get_mut(&chr_name)
+                            .and_then(|sg| sg.gm.pending_entity.take())
+                        {
+                            state.apply(&mut world);
+                        }
                     } else if cmd.ident == game_svr::ground::CM_PICKUP
                         || cmd.ident == game_svr::ground::CM_DROPITEM
                     {
@@ -29158,6 +29184,15 @@ break
             let ctx = TestChatCtx::new();
             let host = ctx.host(&self.online, &self.world, &self.gates, &colors);
             handle_say(&host, &mut self.sessions, "aaa", 901, Some(line));
+            // 与生产 `sim_loop` 的 `CM_SAY` 支同一步：命令体装填的权威写在**同一事件内**
+            // 落到 `Entity`（卡 `openmir2-gm-admin-mode-entity-seam`）。
+            if let Some(state) = self
+                .sessions
+                .get_mut("aaa")
+                .and_then(|sg| sg.gm.pending_entity.take())
+            {
+                state.apply(&mut self.world);
+            }
             let mut out = Vec::new();
             while let Ok(msg) = self.rx.try_recv() {
                 match msg {
@@ -29190,6 +29225,248 @@ break
         let param = u16::from_le_bytes([body[6], body[7]]);
         let text = gbk_decode(&mir2_protocol::edcode::decode(&body[12..]));
         (param, text)
+    }
+
+    /// 帧头 `Ident`（12B 头：[0..4]=Recog、[4..6]=Ident）。
+    fn frame_ident(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    /// 帧头 `Recog`。
+    fn frame_recog(body: &[u8]) -> i32 {
+        i32::from_le_bytes([body[0], body[1], body[2], body[3]])
+    }
+
+    /// **卡 `openmir2-gm-admin-mode-entity-seam`**：给 `GmRig` 补一只「能稳定命中」的怪物。
+    ///
+    /// 命中门是 `attacker.HitPoint < RandomByte(target.SpeedPoint)`（`BaseObject.Attack.cs:37`）；
+    /// 把**目标的** `hit_point` 置 0 即 `target.HitPoint > 0` 不成立 ⇒ 必命中，且不依赖种子。
+    fn add_hitting_monster(rig: &mut GmRig, hp_dc: i32) -> i32 {
+        let mut mob = mir2_world::Entity::new(0, "稻草人", 11, 10);
+        mob.race = mir2_world::ACTOR_RACE_MONSTER;
+        mob.dc = hp_dc;
+        let mob = rig.world.add_entity(mob);
+        rig.world.entities.get_mut(rig.actor).unwrap().hit_point = 0;
+        mob
+    }
+
+    /// `@1`（`ChangeAdminModeCommand`）必须写**权威** `Entity.admin_mode`：
+    /// 怪物的 `IsAttackTarget` 首判 `targetObject.AdminMode`（`BaseObject.Base.cs:384`）⇒ 打不动。
+    ///
+    /// 牙：删 `GmEntityState::apply`（或删 `change_admin_mode` 里的 `stash`）⇒ 管理员支照常掉血 ⇒ 红。
+    #[test]
+    fn gm_admin_mode_blocks_monster_hit_on_entity() {
+        let mut rig = GmRig::new();
+        rig.world.tick(); // `aaa` 落格
+        let mob = add_hitting_monster(&mut rig, 50);
+        rig.world.tick(); // 怪物落格
+
+        // 基线：非管理员 ⇒ 一击掉血（证明后面「不掉血」不是打不中）。
+        rig.world.attack_cmd(mob, rig.actor);
+        rig.world.tick();
+        let hp = rig.world.entities.get(rig.actor).unwrap().hp;
+        assert!(hp < 100, "基线：怪打得到玩家（hp={hp}）");
+
+        let frames = rig.say_gm("@1");
+        assert_eq!(texts_of(&frames), vec!["已进入管理员模式".to_string()]);
+        assert!(
+            rig.world.entities.get(rig.actor).unwrap().admin_mode,
+            "@1 必须写权威 Entity.admin_mode（不是只写 GmSession 镜像）"
+        );
+
+        rig.world.entities.get_mut(rig.actor).unwrap().hp = 100;
+        rig.world.attack_cmd(mob, rig.actor);
+        rig.world.tick();
+        assert_eq!(
+            rig.world.entities.get(rig.actor).unwrap().hp,
+            100,
+            "管理员模式 ⇒ IsAttackTarget 首判返回 false，HP 不掉"
+        );
+    }
+
+    /// `@3`（`ChangeSuperManModeCommand`）必须写**权威** `Entity.super_man`：
+    /// `base.Run` 的回满段（`BaseObject.Base.cs:32-36`）在 `HP == 0 ⇒ Die()` 之前 ⇒ 不掉血、不死。
+    ///
+    /// 牙：删 Entity 写入 ⇒ 无敌支照常掉到 0 并被 `settle_deaths` 判死 ⇒ 红。
+    #[test]
+    fn gm_super_man_refills_entity_and_defers_death() {
+        let mut rig = GmRig::new();
+        rig.world.tick();
+        let mob = add_hitting_monster(&mut rig, 1000);
+        rig.world.tick();
+
+        let frames = rig.say_gm("@3");
+        assert_eq!(texts_of(&frames), vec!["已进入无敌模式".to_string()]);
+        assert!(rig.world.entities.get(rig.actor).unwrap().super_man);
+
+        rig.world.attack_cmd(mob, rig.actor);
+        rig.world.tick();
+        {
+            let e = rig.world.entities.get(rig.actor).unwrap();
+            assert_eq!(e.hp, e.max_hp, "SuperMan ⇒ Run 段回满，HP 不掉");
+            assert!(!e.death, "SuperMan ⇒ 永不死亡（`Die()` 首行早退）");
+        }
+
+        // 对照（反证）：退出无敌后同一只怪 ⇒ 掉到 0 并死亡。
+        let frames = rig.say_gm("@3");
+        assert_eq!(texts_of(&frames), vec!["已退出无敌模式".to_string()]);
+        rig.world.attack_cmd(mob, rig.actor);
+        rig.world.tick();
+        let e = rig.world.entities.get(rig.actor).unwrap();
+        assert_eq!(e.hp, 0, "对照：非无敌 ⇒ 掉血到 0");
+        assert!(e.death, "对照：非无敌 ⇒ settle_deaths 判死");
+    }
+
+    /// `@2`（`ChangeObModeCommand`）必须写**权威** `Entity.ob_mode`：
+    /// AOI 可见性过滤 `!other.ob_mode`（`crates/world/src/aoi.rs:231`，
+    /// oracle `PlayObject.cs:3127`）⇒ 隐身者不再被观察者收进视野。
+    ///
+    /// 牙：删 Entity 写入 ⇒ 观察者第二次扫描仍看得到 ⇒ 红。
+    #[test]
+    fn gm_ob_mode_hides_entity_from_observer_aoi() {
+        let mut rig = GmRig::new();
+        let mut obs = mir2_world::Entity::new(0, "obs", 12, 10);
+        obs.race = mir2_world::ACTOR_RACE_PLAY;
+        let obs = rig.world.add_entity(obs);
+        // 玩家 `SearchTime = 1000`（`PlayObject.cs:900`）⇒ 200ms tick 下第 6 tick 才首扫。
+        for _ in 0..6 {
+            rig.world.tick();
+        }
+        let visible = |rig: &GmRig, id: i32| -> bool {
+            mir2_world::aoi::visible_snapshot(&rig.world.entities, id)
+                .iter()
+                .any(|(t, _)| *t == rig.actor)
+        };
+        assert!(visible(&rig, obs), "基线：观察者看得到隐身前的 GM");
+
+        let frames = rig.say_gm("@2");
+        assert_eq!(texts_of(&frames), vec!["已进入隐身模式".to_string()]);
+        assert!(
+            rig.world.entities.get(rig.actor).unwrap().ob_mode,
+            "@2 必须写权威 Entity.ob_mode"
+        );
+        for _ in 0..6 {
+            rig.world.tick();
+        }
+        assert!(!visible(&rig, obs), "隐身 ⇒ AOI 不把该玩家发给观察者");
+
+        // 对照（反证）：退出隐身后重新可见。
+        let frames = rig.say_gm("@2");
+        assert_eq!(texts_of(&frames), vec!["已退出隐身模式".to_string()]);
+        for _ in 0..6 {
+            rig.world.tick();
+        }
+        assert!(visible(&rig, obs), "对照：退出隐身 ⇒ 重新可见");
+    }
+
+    /// `@Rest`（`ChangeSalveStatusCommand`）必须写**权威** `Entity.slave_relax`：
+    /// 宝宝 `Run` 的 `Master.SlaveRelax` 支（`MonsterObject.cs:334`）⇒ **跳过**
+    /// `GotoTargetXY`/`CrazyMode` 到期（`crates/world/src/monai.rs` 的同一门）。
+    ///
+    /// 引擎入口直接取 `monai::monster_run`（`world.tick` 的 `monster_ai_tick` 对每只怪调的
+    /// 就是这个函数），绕开 AI 开关只影响「谁驱动」，不影响判据。
+    ///
+    /// 牙：删 Entity 写入 ⇒ 宝宝照常到期、清掉 `crazy_mode` ⇒ 红。
+    #[test]
+    fn gm_rest_writes_entity_slave_relax_and_stops_slave_run() {
+        let mut rig = GmRig::new();
+        rig.world.tick();
+        let master = rig.actor;
+        let mut slave = mir2_world::Entity::new(0, "宝宝", 12, 10);
+        slave.race = mir2_world::ACTOR_RACE_MONSTER;
+        slave.master = Some(master);
+        let slave = rig.world.add_entity(slave);
+        rig.world.tick();
+        // `PlayObject.SlaveList.Count > 0` 才发绿字（`ChangeSalveStatusCommand.cs:21`）。
+        rig.world
+            .entities
+            .get_mut(master)
+            .unwrap()
+            .slave_list
+            .push(slave);
+
+        let frames = rig.say_gm("@Rest");
+        assert_eq!(texts_of(&frames), vec!["下属：休息".to_string()]);
+        assert!(
+            rig.world.entities.get(master).unwrap().slave_relax,
+            "@Rest 必须写权威 Entity.slave_relax"
+        );
+
+        // 让「CrazyMode 到期」可观测：未早退时它会被清掉。
+        rig.world.clock_ms = 5_000;
+        let arm = |rig: &mut GmRig| {
+            let e = rig.world.entities.get_mut(slave).unwrap();
+            e.ai.crazy_mode = true;
+            e.ai.crazy_mode_tick = 0;
+            e.ai.crazy_mode_interval = 10;
+            e.ai.walk_wait_locked = false;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 1400;
+            e.ai.target_x = 20;
+            e.ai.target_y = 10;
+        };
+        arm(&mut rig);
+        mir2_world::monai::monster_run(&mut rig.world, slave);
+        assert!(
+            rig.world.entities.get(slave).unwrap().ai.crazy_mode,
+            "SlaveRelax ⇒ 早退（CrazyMode 到期被跳过）"
+        );
+
+        // 对照（反证）：退出休息 ⇒ 同一路径照常到期。
+        let frames = rig.say_gm("@Rest");
+        assert_eq!(texts_of(&frames), vec!["下属：攻击".to_string()]);
+        arm(&mut rig);
+        mir2_world::monai::monster_run(&mut rig.world, slave);
+        assert!(
+            !rig.world.entities.get(slave).unwrap().ai.crazy_mode,
+            "对照：非 SlaveRelax ⇒ CrazyMode 照常到期"
+        );
+    }
+
+    /// `@AttackMode`（`ChangeAttackModeCommand`）两件事同时成立：
+    /// ① 写**权威** `Entity.attack_mode`（战斗 `IsAttackTarget` 按它分派，`combat.rs:611`）；
+    /// ② 发出 `SM_ATTACKMODE(213)`，且帧里的模式 == 刚写进 `Entity` 的同一个值
+    ///    （`ChangeAttackModeCommand.cs:65`，金标准 #5 的既有编码器）。
+    ///
+    /// 牙：删 Entity 写入 ⇒ `Entity.attack_mode` 断言红；删 `frames.push` ⇒ 只剩 1 帧 ⇒ 红。
+    #[test]
+    fn gm_attack_mode_writes_entity_and_emits_213() {
+        let mut rig = GmRig::new();
+        rig.world.tick();
+        assert_eq!(rig.world.entities.get(rig.actor).unwrap().attack_mode, 0);
+
+        let frames = rig.say_gm("@AttackMode");
+        assert_eq!(frames.len(), 2, "绿字 + SM_ATTACKMODE(213)");
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0xFFDB, "Green = MakeWord(219,255)");
+        assert_eq!(text, "[攻击模式: 夫妻攻击]");
+        assert_eq!(
+            frame_ident(&frames[1]),
+            mir2_protocol::messages::SM_ATTACKMODE,
+            "Ident = SM_ATTACKMODE(213)"
+        );
+        // oracle 把新模式放在 `Recog`（`Messages.cs:846-857` 的参序）。
+        let mode = u8::try_from(frame_recog(&frames[1])).expect("模式是 byte");
+        assert_eq!(mode, 2, "0 → 连加两次 = 2（`@AttackMode` 的双加号照抄）");
+        assert_eq!(
+            rig.world.entities.get(rig.actor).unwrap().attack_mode,
+            mode,
+            "权威 Entity.attack_mode == 帧里的模式"
+        );
+        assert_eq!(
+            frames[1],
+            smframe::sm_attackmode(mode),
+            "帧与既有编码器逐字节一致"
+        );
+    }
+
+    /// 帧 → `SysMsg` 正文列表（只用 `SM_SYSMESSAGE` 那些帧）。
+    fn texts_of(frames: &[Vec<u8>]) -> Vec<String> {
+        frames
+            .iter()
+            .filter(|b| frame_ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
+            .map(|b| gbk_decode(&mir2_protocol::edcode::decode(&b[12..])))
+            .collect()
     }
 
     /// `@时间`（`DataCommand`）：`SysMsg(当前日期时间: yyyy-MM-dd HH:mm:ss, Blue, Hint)`

@@ -456,6 +456,69 @@ pub struct GmMsg {
     pub text: String,
 }
 
+/// GM 命令对**权威 `Entity`** 的一次写入（卡 `openmir2-gm-admin-mode-entity-seam`）。
+///
+/// oracle 的这些开关与 `PlayObject` 是**同一份字段**（`BaseObject.cs:145/157/263/267`、
+/// `CharacterObject.cs:44`），引擎各处直接读；本仓把它们拆成了 `GmSession`（镜像，命令体读改写）
+/// 与 `Entity`（权威，引擎读）两份，于是命令只翻转镜像 ⇒ `@1/@2/@3/@Rest/@AttackMode`
+/// 回执发了、战斗/AOI/怪物 AI 却看不到。
+///
+/// 本类型是「把权威值落到实体」的最小差量：每个命令只填自己拥有的字段（`Some`），
+/// 其余保持 `None`（别的命令/别的写点不归它管，避免把陈旧镜像盖回去）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GmEntityState {
+    /// 目标实体 = `GmWorld::self_entity()`（`WorldEngine.GetPlayObject(speaker)`）的 `Entity.id`。
+    pub actor_id: i32,
+    /// `@1` 翻转 `BaseObject.AdminMode`（`ChangeAdminModeCommand.cs:16`）。
+    pub admin_mode: Option<bool>,
+    /// `@2` 翻转 `BaseObject.ObMode`（`ChangeObModeCommand.cs:22`）。
+    pub ob_mode: Option<bool>,
+    /// `@3` 翻转 `BaseObject.SuperMan`（`ChangeSuperManModeCommand.cs:17`）。
+    pub super_man: Option<bool>,
+    /// `@Rest` 翻转 `BaseObject.SlaveRelax`（`ChangeSalveStatusCommand.cs:20`）。
+    pub slave_relax: Option<bool>,
+    /// `@AttackMode` 写回 `PlayObject.AttatckMode`（`ChangeAttackModeCommand.cs:18-40`）。
+    pub attack_mode: Option<u8>,
+}
+
+impl GmEntityState {
+    /// 把权威值落到世界实体。调用点在**命令处理完之后、同一事件内**（宿主 `lib.rs` 的
+    /// `CM_SAY` 支），因此早于本 tick 的 `world.tick()`——与 oracle「命令体直接写
+    /// `PlayObject` 字段」的可观察次序一致（不需要额外一拍）。
+    ///
+    /// 实体不在场（`self_entity()` 为 `None` 时根本不会生成差量）⇒ 本函数兜底为 no-op。
+    pub fn apply(&self, world: &mut mir2_world::World) {
+        let Some(e) = world.entities.get_mut(self.actor_id) else {
+            return;
+        };
+        if let Some(v) = self.admin_mode {
+            e.admin_mode = v;
+        }
+        if let Some(v) = self.ob_mode {
+            e.ob_mode = v;
+        }
+        if let Some(v) = self.super_man {
+            e.super_man = v;
+        }
+        if let Some(v) = self.slave_relax {
+            e.slave_relax = v;
+        }
+        if let Some(v) = self.attack_mode {
+            e.attack_mode = v;
+        }
+    }
+}
+
+/// GM 命令体发出的**非 `SysMsg`** 帧（oracle 里走 `SendDefMessage`/`SendRefMsg` 的那几张）。
+///
+/// 命令体只产出**语义**，wire 编码留给宿主（`bins/game-svr/src/smframe.rs`）——与
+/// [`GmMsg`]「命名字段 + 宿主编码」同一层分工。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GmFrame {
+    /// `SM_ATTACKMODE(213)`：`Recog` = 新模式（`smframe::sm_attackmode`）。
+    AttackMode(u8),
+}
+
 /// 会话内 GM 状态（`PlayObject` 的同生命周期字段；随会话建/删）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GmSession {
@@ -516,6 +579,14 @@ pub struct GmSession {
     pub attack_mode: u8,
     /// `PlayObject.ReLevel`（`@转生` 只写「发起者自己」时的镜像；其余情况保持登录值）。
     pub re_level: u8,
+    /// **待落地的权威 `Entity` 写**（卡 `openmir2-gm-admin-mode-entity-seam`）。
+    ///
+    /// 本结构是 oracle `PlayObject` 字段的**镜像**；引擎（战斗/AOI/怪物 AI）读的是
+    /// `crates/world/src/entity.rs` 的 `Entity` 同名字段。命令体只写镜像 ⇒ 回执发了、
+    /// 行为不变。故 `@1/@2/@3/@Rest/@AttackMode` 在翻转镜像的同时把权威值装进本缓冲，
+    /// 由宿主在**同一事件内**（`lib.rs` 的 `CM_SAY` 支）取走并 [`GmEntityState::apply`]，
+    /// 仍在 `world.tick()` 之前。每次命令都会整体覆盖本字段（不会残留上一次的值）。
+    pub pending_entity: Option<GmEntityState>,
 }
 
 impl Default for GmSession {
@@ -548,6 +619,7 @@ impl Default for GmSession {
             slave_relax: false,
             attack_mode: 0,
             re_level: 0,
+            pending_entity: None,
         }
     }
 }
@@ -582,6 +654,28 @@ impl GmSession {
             attack_mode,
             re_level,
             ..Self::default()
+        }
+    }
+}
+
+impl GmSession {
+    /// 生成「本次命令要落到权威 `Entity`」的**空差量**（只带目标 `actor_id`）。
+    ///
+    /// 调用点在命令翻转镜像之后：`self_entity()` 为空（发起者不在世界实体表）⇒ `None`，
+    /// 即不伪造写入——oracle 里命令对象与 `PlayObject` 是同一引用，不存在这种情形；
+    /// 本仓只有「会话在、实体不在」的边角（未进世界/已 Ghost），此时命令仍回执但不写实体。
+    fn entity_write(&self, world: &GmWorld<'_>) -> Option<GmEntityState> {
+        world.self_entity().map(|e| GmEntityState {
+            actor_id: e.id,
+            ..GmEntityState::default()
+        })
+    }
+
+    /// `@1/@2/@3/@Rest/@AttackMode` 共用：把「翻转/算完之后」的权威值装进待落地差量。
+    fn stash(&mut self, state: Option<GmEntityState>, f: impl FnOnce(&mut GmEntityState)) {
+        if let Some(mut st) = state {
+            f(&mut st);
+            self.pending_entity = Some(st);
         }
     }
 }
@@ -648,6 +742,8 @@ pub struct GmResult {
     pub parsed: bool,
     /// 依序要发的 `SysMsg(_, _, Hint)`。
     pub msgs: Vec<GmMsg>,
+    /// 依序要发的**非 `SysMsg`** 帧（oracle `SendDefMessage`/`SendRefMsg` 面；宿主负责编码/路由）。
+    pub frames: Vec<GmFrame>,
     /// oracle 侧被 `ProcessUserLineMsg` 的 catch 吞掉的路径 / 本批未接的登记（调用方记日志，不静默）。
     pub log_note: Option<&'static str>,
 }
@@ -658,6 +754,7 @@ impl GmResult {
             found: true,
             parsed: true,
             msgs: vec![GmMsg { color, text }],
+            frames: Vec::new(),
             log_note: None,
         }
     }
@@ -667,6 +764,7 @@ impl GmResult {
             found: true,
             parsed: true,
             msgs: Vec::new(),
+            frames: Vec::new(),
             log_note: None,
         }
     }
@@ -744,6 +842,7 @@ fn prv_msg(parameters: &str, sess: &mut GmSession) -> GmResult {
             found: true,
             parsed: true,
             msgs: Vec::new(),
+            frames: Vec::new(),
             log_note: Some(
                 "PrvMsg: sHumanName[1] 越界（oracle 抛 IndexOutOfRangeException，被 catch 吞）",
             ),
@@ -966,6 +1065,7 @@ fn no_frames(note: &'static str) -> GmResult {
         found: true,
         parsed: true,
         msgs: Vec::new(),
+        frames: Vec::new(),
         log_note: Some(note),
     }
 }
@@ -979,6 +1079,7 @@ fn one_note(color: GmColor, text: impl Into<String>, note: &'static str) -> GmRe
             color,
             text: text.into(),
         }],
+        frames: Vec::new(),
         log_note: Some(note),
     }
 }
@@ -1553,6 +1654,7 @@ fn group_recall(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>) -> Gm
         found: true,
         parsed: true,
         msgs,
+        frames: Vec::new(),
         log_note: recalled.then_some(NOTE_RECALL_HUMAN),
     }
 }
@@ -1857,6 +1959,9 @@ fn user_move_xy(
 /// 调用方约定：`parsed == false` ⇒ 无帧；`found == false && parsed` ⇒ 先发 [`GmResult::msgs`]，
 /// 再发 [`incorrect_msg`]。
 pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: &str) -> GmResult {
+    // 「待落地权威写」一次性：先清空，只有**本次**命中的命令体真的翻转了镜像才重新装填。
+    // 否则一条被权限门/未知命令挡下的 `@…` 会把上一条命令的差量顺带落地。
+    sess.pending_entity = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -1871,6 +1976,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
             found: true,
             parsed: true,
             msgs: Vec::new(),
+            frames: Vec::new(),
             log_note: Some("commands: TargetParameterCountException（oracle 无回帧）"),
         };
     }
@@ -1883,6 +1989,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
                 color: GmColor::Red,
                 text: format!("未知命令: {command} {parameters}"),
             }],
+            frames: Vec::new(),
             log_note: None,
         };
     };
@@ -1968,17 +2075,17 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::AdjustExp => adjust_exp(),
         Imp::BindUseItem => bind_use_item(parameters, world),
         Imp::BonuPoint => bonu_point(parameters, world),
-        Imp::ChangeAdminMode => change_admin_mode(sess),
-        Imp::ChangeAttackMode => change_attack_mode(sess),
+        Imp::ChangeAdminMode => change_admin_mode(sess, world),
+        Imp::ChangeAttackMode => change_attack_mode(sess, world),
         Imp::ChangeDearName => change_dear_name(parameters, world),
         Imp::ChangeGender => change_gender(parameters, world),
         Imp::ChangeItemName => change_item_name(parameters),
         Imp::ChangeJob => change_job(parameters, world),
         Imp::ChangeLevel => change_level(parameters),
         Imp::ChangeMasterName => change_master_name(parameters, world),
-        Imp::ChangeObMode => change_ob_mode(sess),
+        Imp::ChangeObMode => change_ob_mode(sess, world),
         Imp::ChangeSalveStatus => change_salve_status(sess, world),
-        Imp::ChangeSuperManMode => change_super_man_mode(sess),
+        Imp::ChangeSuperManMode => change_super_man_mode(sess, world),
         Imp::ChangeUserFull => change_user_full(parameters),
         Imp::ChangeZenFastStep => change_zen_fast_step(parameters),
         Imp::CreditPoint => credit_point(parameters, world),
@@ -2010,6 +2117,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
             found: true,
             parsed: true,
             msgs: Vec::new(),
+            frames: Vec::new(),
             log_note: Some("GM 命令体未实现（G1 + 批次 2/3 之外；现网权限门先挡）"),
         },
     }
@@ -3183,6 +3291,7 @@ fn two_msgs(first: (GmColor, String), second: (GmColor, String)) -> GmResult {
                 text: second.1,
             },
         ],
+        frames: Vec::new(),
         log_note: None,
     }
 }
@@ -3333,17 +3442,16 @@ fn bonu_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
 }
 
 /// `ChangeAdminModeCommand`（现网 `@1`）：翻转 `AdminMode`，绿字。
-fn change_admin_mode(sess: &mut GmSession) -> GmResult {
+fn change_admin_mode(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let pending = sess.entity_write(world);
     sess.admin_mode = !sess.admin_mode;
-    green(if sess.admin_mode {
-        ADMIN_MODE_ON
-    } else {
-        ADMIN_MODE_OFF
-    })
+    let on = sess.admin_mode;
+    sess.stash(pending, |st| st.admin_mode = Some(on));
+    green(if on { ADMIN_MODE_ON } else { ADMIN_MODE_OFF })
 }
 
 /// `ChangeAttackModeCommand`（现网 `@AttackMode`）：oracle 连加两次（照抄），再发 `SM_ATTACKMODE`。
-fn change_attack_mode(sess: &mut GmSession) -> GmResult {
+fn change_attack_mode(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
     const HAM_PKATTACK: u8 = 6;
     let mut mode = sess.attack_mode;
     if mode >= HAM_PKATTACK {
@@ -3358,7 +3466,9 @@ fn change_attack_mode(sess: &mut GmSession) -> GmResult {
     } else {
         mode = 0;
     }
+    let pending = sess.entity_write(world);
     sess.attack_mode = mode;
+    sess.stash(pending, |st| st.attack_mode = Some(mode));
     let text = match mode {
         0 => ATTACK_MODE_ALL,
         1 => ATTACK_MODE_PEACEFUL,
@@ -3368,8 +3478,12 @@ fn change_attack_mode(sess: &mut GmSession) -> GmResult {
         5 => ATTACK_MODE_GUILD,
         _ => ATTACK_MODE_RED_WHITE,
     };
-    // `SendDefMessage(SM_ATTACKMODE, mode, ...)` 是第二种帧，`GmResult` 只承载 `SysMsg`（T-187）。
-    noted(green(text), NOTE_GM4_TARGET_SYSMSG)
+    // 第二张帧 `SendDefMessage(SM_ATTACKMODE, (byte)AttatckMode, 0, 0, 0)`
+    // （`ChangeAttackModeCommand.cs:65`）：**排在 `SysMsg` 之后**（oracle 同序），
+    // 模式值与本命令写进 `Entity` 的权威值同源。
+    let mut result = green(text);
+    result.frames.push(GmFrame::AttackMode(mode));
+    result
 }
 
 /// `ChangeDearNameCommand`（现网 `@伴侣变更`）。
@@ -3489,14 +3603,19 @@ fn change_master_name(parameters: &str, world: &GmWorld<'_>) -> GmResult {
 }
 
 /// `ChangeObModeCommand`（现网 `@2`）：翻转 `ObMode`；进入时先发 `RM_DISAPPEAR`（本仓未接）。
-fn change_ob_mode(sess: &mut GmSession) -> GmResult {
+fn change_ob_mode(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let pending = sess.entity_write(world);
     sess.ob_mode = !sess.ob_mode;
-    let result = green(if sess.ob_mode {
+    let on = sess.ob_mode;
+    sess.stash(pending, |st| st.ob_mode = Some(on));
+    let result = green(if on {
         OBSERVER_MODE_ON
     } else {
         OBSERVER_MODE_OFF
     });
-    if sess.ob_mode {
+    if on {
+        // 进入隐身时 oracle 还先发 `RM_DISAPPEAR`（`ChangeObModeCommand.cs:20`，"解决隐身有影子问题"）；
+        // 本仓该帧仍无通道（T-187），这一项**只登记不实现**——权威 `ObMode` 已写进 `Entity`。
         noted(result, NOTE_GM4_TARGET_SYSMSG)
     } else {
         result
@@ -3506,24 +3625,26 @@ fn change_ob_mode(sess: &mut GmSession) -> GmResult {
 /// `ChangeSalveStatusCommand`（现网 `@Rest`）：`SlaveList == null ⇒ return`，否则翻转 `SlaveRelax`。
 fn change_salve_status(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
     // 本仓 `Entity::slave_list` 是 `Vec`，永不 `null`；`None` 视图按空表处理。
+    let pending = sess.entity_write(world);
     sess.slave_relax = !sess.slave_relax;
+    let on = sess.slave_relax;
+    sess.stash(pending, |st| st.slave_relax = Some(on));
     let has_slaves = world
         .self_entity()
         .is_some_and(|e| !e.slave_list.is_empty());
     if !has_slaves {
         return GmResult::empty();
     }
-    green(if sess.slave_relax {
-        PET_REST
-    } else {
-        PET_ATTACK
-    })
+    green(if on { PET_REST } else { PET_ATTACK })
 }
 
 /// `ChangeSuperManModeCommand`（现网 `@3`）：翻转 `SuperMan`，绿字。
-fn change_super_man_mode(sess: &mut GmSession) -> GmResult {
+fn change_super_man_mode(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let pending = sess.entity_write(world);
     sess.super_man = !sess.super_man;
-    green(if sess.super_man {
+    let on = sess.super_man;
+    sess.stash(pending, |st| st.super_man = Some(on));
+    green(if on {
         SUPERMAN_MODE_ON
     } else {
         SUPERMAN_MODE_OFF
