@@ -21838,6 +21838,167 @@ mod tests {
         }
     }
 
+    /// **判据（卡 `openmir2-npc-hit-frames`）**：`SM_HIT(14)` 必须由世界侧**真产生**的
+    /// `npc_hits`/`merchant_hits` 驱动；收件人集合与 oracle `SendRefMsg`
+    /// （`BaseObject.Message.cs:383-473`）同口径——`RM_HIT` 只发给 `Race == Play`，
+    /// **NPC 自己既不产帧也不收帧**。
+    ///
+    /// 链路：`World::npc_tick` → `mir2-rs/crates/world/src/npc.rs`（`guild_official_run_body`：
+    /// `GuildOfficial.cs:39-53` 的 `Random(40)==0 ⇒ TurnTo(RandomByte(8))`，否则
+    /// `Random(30)==0 ⇒ RM_HIT`）→ `TickRecord::npc_hits` →
+    /// `mir2-rs/bins/game-svr/src/lib.rs`（`drain_npc_merchant_hits`）→ `downlink::hit_frame`。
+    ///
+    /// r5 抓包 `E:/tmp/window/r5/s2c/capture.jsonl` 的 seq 40/53/59
+    /// `SM_HIT(recog=132, param=29, tag=32, series=6)`（比奇国王）正是该分支命中时产出的
+    /// **oracle 合法帧**（`PlayObject.Message.cs:1434-1441`）；C# r3 抓包窗口内没有，只因两侧
+    /// RNG 流不同（C# 生产 `new Random()` 无种子，whitelist D-3/D-7）⇒ 登记 D-13，
+    /// **既不是本仓多发了帧，也不得因此抑制该分支**。
+    ///
+    /// 牙（红检）：① 让 `drain_npc_merchant_hits` 无视 `rec`（例如对本图每个固定 NPC 都发）
+    /// ⇒「空记录 ⇒ 0 帧」断言红；② 去掉 `mir2-rs/bins/game-svr/src/chat.rs` 的
+    /// `hear_targets_at` 里 `race == ACTOR_RACE_PLAY` 过滤 ⇒ 已登记进在线表的 NPC 会收到一条
+    /// ⇒「只有玩家收」断言红。
+    #[test]
+    fn npc_hit_frames_only_for_world_branch_and_never_to_npc() {
+        use mir2_shared::rng::RandomNumber;
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let npcs = vec![
+            mir2_envir::npcs::NpcInfo {
+                chr_name: "比奇国王".to_string(),
+                npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+                map_name: "0".to_string(),
+                x: 11,
+                y: 10,
+                npc_flag: 0,
+                appr: 8,
+            },
+            // 附近的第二只固定 NPC：oracle `SendRefMsg` 的 `RM_HIT` 收件人里**不含**非 Play
+            // 角色（`BaseObject.Message.cs:431-443` 只在 `RM_STRUCK/RM_HEAR/RM_DEATH` 放行）
+            // ⇒ 它一条都不该收到。
+            mir2_envir::npcs::NpcInfo {
+                chr_name: "药店老板".to_string(),
+                npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+                map_name: "0".to_string(),
+                x: 9,
+                y: 10,
+                npc_flag: 0,
+                appr: 8,
+            },
+        ];
+        let envir_root =
+            std::env::temp_dir().join(format!("gs-npc-hit-branch-{}", std::process::id()));
+        let mut book = game_svr::npc::MerchantScriptBook::new(30);
+        let mut displays = downlink::DisplayTable::new();
+        let report = game_svr::npcs::place_fixed_npcs_with_scripts(
+            &mut world,
+            &npcs,
+            |_| Some(0),
+            &envir_root,
+            &mut book,
+            &mut displays,
+        );
+        assert_eq!(report.placed, 2, "固定 NPC 必须挂图成功");
+        // `placed_npcs` 的次序 = 倒序挂图（`place_npcs_recording` 文档），按坐标取而不是按下标。
+        let npc_id = report
+            .placed_npcs
+            .iter()
+            .find(|n| (n.x, n.y) == (11, 10))
+            .expect("比奇国王")
+            .actor_id;
+        let other_npc = report
+            .placed_npcs
+            .iter()
+            .find(|n| (n.x, n.y) == (9, 10))
+            .expect("药店老板")
+            .actor_id;
+        // `Run` 门（`(now - run_tick) > RunTime(250)`）的确定性起点：只让第一只 Run，
+        // 第二只的 `run_tick` 钉在本次 `clock_ms` 上 ⇒ 不参与本次取数（RNG 流不受扰动）。
+        if let Some(n) = world.entities.get_mut(npc_id).and_then(|e| e.npc.as_mut()) {
+            n.run_tick = 0;
+        }
+        if let Some(n) = world
+            .entities
+            .get_mut(other_npc)
+            .and_then(|e| e.npc.as_mut())
+        {
+            n.run_tick = 1_000;
+        }
+
+        let (mut online, gates, mut rx) = aoi_observer_fixture(p);
+        // 把附近的固定 NPC 也塞进在线表（伪造 socket）：oracle `SendRefMsg` 对非 Play 角色
+        // 只放行 `RM_STRUCK/RM_HEAR/RM_DEATH`（`BaseObject.Message.cs:436-443`），`RM_HIT` 不放行。
+        online.push(OnlineEntry {
+            account: "npc".into(),
+            chr_name: "药店老板".into(),
+            session_id: 2,
+            gate_idx: 0,
+            socket: 902,
+            actor_id: other_npc,
+        });
+
+        // ① 本条 tick 世界**没有** hit ⇒ 一刀都不发（防「多发了 oracle 不会发的帧」）。
+        let empty = mir2_world::TickRecord::default();
+        assert!(empty.npc_hits.is_empty() && empty.merchant_hits.is_empty());
+        assert_eq!(
+            drain_npc_merchant_hits(&empty, &world, &displays, &online, &gates),
+            0,
+            "无 npc_hits/merchant_hits ⇒ 必须零 SM_HIT"
+        );
+        assert!(rx.try_recv().is_err(), "空记录不得产生任何下行帧");
+
+        // ② 取一个 `Random(40)!=0 && Random(30)==0` 的种子 ⇒ 生产 `npc_tick` 必须产 hit。
+        let seed = (0..100_000i32)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                r.random_below(40) != 0 && r.random_below(30) == 0
+            })
+            .expect("0..100000 内必有命中种子");
+        world.rng = RandomNumber::with_seed(seed);
+        world.clock_ms = 1_000; // 越过 200ms pass 门与 RunTime(250) 门
+        let out = world.npc_tick();
+        assert_eq!(
+            out.hits,
+            vec![npc_id],
+            "seed={seed}：GuildOfficial.Run 的 RM_HIT 分支"
+        );
+        assert!(out.turns.is_empty(), "同一次 Run 转身/命中互斥");
+
+        let rec = mir2_world::TickRecord {
+            npc_hits: out.hits.clone(),
+            ..Default::default()
+        };
+        assert_eq!(
+            drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates),
+            1,
+            "一次命中 ⇒ 恰一条 SM_HIT"
+        );
+
+        let mut raws: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            raws.push(body);
+        }
+        assert_eq!(raws.len(), 1, "只有玩家收（NPC 不是 RM_HIT 收件人）");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&raws[0]).expect("SM_HIT 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_HIT);
+        assert_eq!(cm.recog, npc_id, "Recog = 发帧 NPC（processMsg.ActorId）");
+        assert_eq!(
+            (cm.param, cm.tag),
+            (11, 10),
+            "param/tag = 发帧时 CurrX/CurrY"
+        );
+        assert_eq!(
+            cm.series,
+            u16::from(world.entities.get(npc_id).unwrap().ai.dir),
+            "Series = BaseObject.Dir（不含 Light）"
+        );
+        assert_eq!(raws[0].len(), 12, "SM_HIT 无尾（SendSocket 单参）");
+    }
+
     /// **判据（既有怪物路径不回归）**：固定 NPC 登记展示表后，同一观察者视野里的怪物仍按
     /// `monster_display` 出帧（`Light=0`、`param=RaceImg=0x0A`、`tag=Appr=0x3344`），
     /// 两条路径互不覆盖。
