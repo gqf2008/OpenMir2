@@ -209,6 +209,7 @@ pub fn load_merchant_spawns(
 /// [`spawn_merchants_with_scripts`]。旧实现自建 `DisplayTable::new()` 后丢弃 ⇒ 走本包装的
 /// 调用方既拿不到登记结果、也拿不到 `Dir = 4` 的初值补齐，展示表登记被静默吞掉。
 #[must_use]
+#[cfg(test)]
 pub fn spawn_merchants(
     world: &mut mir2_world::World,
     spawns: Vec<MerchantSpawn>,

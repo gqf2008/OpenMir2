@@ -92,6 +92,7 @@ pub fn to_spawn(info: &NpcInfo, map_id: usize) -> NpcSpawn {
 /// 返回 `(spawns, dropped_unknown_map)`；`dropped_unknown_map` 是未命中地图被丢的记录
 /// （oracle `Error + RemoveAt`）。
 #[must_use]
+#[cfg(test)]
 pub fn build_npc_spawns(
     npcs: &[NpcInfo],
     resolve_map: impl Fn(&str) -> Option<usize>,
@@ -120,6 +121,7 @@ pub fn build_npc_spawns(
 /// 不保留 `(actor_id, ChrName, MapName)` 记录；需要给 `Npc_def` 脚本装载用的调用点请走
 /// [`place_npcs_recording`]（本函数是它的丢弃包装）。
 #[must_use]
+#[cfg(test)]
 pub fn place_npcs(world: &mut mir2_world::World, spawns: Vec<NpcSpawn>) -> (usize, Vec<String>) {
     let (kept, failed, _) = place_npcs_recording(
         world,

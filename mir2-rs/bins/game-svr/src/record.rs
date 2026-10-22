@@ -877,7 +877,7 @@ pub fn parse_player_data(bytes: &[u8]) -> Option<PlayerRecord> {
 
 /// 把 [`PlayerRecord`] 重新编码回 MemoryPack 字节（与 C# `SerializerUtil.Serialize` 逐字节相同）。
 #[must_use]
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn encode_player_data(rec: &PlayerRecord) -> Vec<u8> {
     let mut w = Writer::default();
     w.u8(2); // LoadPlayerDataPacket 成员数

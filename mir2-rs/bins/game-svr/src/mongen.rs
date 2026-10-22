@@ -876,12 +876,6 @@ impl mir2_world::SpecialSpawner for WorldSpecialSpawner<'_> {
     }
 }
 
-/// `[Server] VentureServer` 的缺省常量（供调用方/测试对照）。
-#[must_use]
-pub fn venture_server_default_is_false() -> bool {
-    !VENTURE_SERVER_DEFAULT.eq_ignore_ascii_case("TRUE")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

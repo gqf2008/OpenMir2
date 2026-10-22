@@ -52,7 +52,6 @@
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
 use mir2_formula::shop::{self, PriceTables, ShopConfig, StdItemSource};
-use mir2_world::merchant::ACTOR_RACE_MERCHANT;
 use mir2_world::merchant::{
     GetBackupgWeaponOutcome, MerchantFlags, MerchantItem, UpgradeWaponOutcome,
 };
@@ -1284,15 +1283,6 @@ fn recalc_weight(catalog: &dyn ItemCatalog, item_list: &[BagItem]) -> u16 {
         }
     }
     w
-}
-
-/// `WorldEngine.FindMerchant(actorId)`（`WorldServer.cs:1425`）的宿主等价物：实体 id = `ActorId`。
-#[must_use]
-pub fn is_merchant(world: &mir2_world::World, actor_id: i32) -> bool {
-    world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.race == ACTOR_RACE_MERCHANT && e.merchant.is_some())
 }
 
 // ───────────────────── 武器升级 NPC 接缝（`@upgradenow` / `@getbackupgnow`） ─────────────────────

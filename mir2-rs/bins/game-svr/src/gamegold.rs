@@ -205,7 +205,7 @@ impl P22GameGold {
     ///
     /// 用于「flag 不因 `MoveToHome` 而变」的构造级判据；宿主在有移动可能时用四个阶段函数
     /// 以便在两次移动之间重取 `Envir.Flag`（见模块头）。
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn auto_tick(
         &mut self,
         game_gold: i32,

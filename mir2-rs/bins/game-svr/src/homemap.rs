@@ -153,7 +153,7 @@ impl HomeFallback {
     /// 仅返回 `(map, CurrX, CurrY)` 的便捷包装（原生产路径）；存档要 `HomeX/HomeY`，生产改调
     /// [`Self::new_human_spawn_with_home`]。本函数保留给单测（抽数账本）。
     #[must_use]
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn new_human_spawn(&self, rng: &mut RandomNumber) -> (String, i16, i16) {
         let (map, _hx, _hy, x, y) = self.new_human_spawn_with_home(rng);
         (map, x, y)

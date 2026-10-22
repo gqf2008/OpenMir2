@@ -44,6 +44,7 @@
 //! **已接（orphan 编码器接线首批）**：私聊 `/`（[`parse_whisper`]/[`whisper_text`]）
 //! ⇒ `SM_WHISPER(103)`，发射点见 `lib.rs::handle_whisper`。
 
+#[cfg(test)]
 use crate::smframe;
 use mir2_world::{World, ACTOR_RACE_PLAY};
 
@@ -202,6 +203,7 @@ pub fn parse_channel(line: &str, has_guild: bool) -> Option<ChannelSay<'_>> {
 
 /// 喊话正文 `"(!)" + ChrName + ": " + sText`（`PlayObject.Chat.cs:192`；GBK 字节拼接）。
 #[must_use]
+#[cfg(test)]
 pub fn cry_text(chr_name: &[u8], say: &[u8]) -> Vec<u8> {
     let mut v = Vec::with_capacity(3 + chr_name.len() + 2 + say.len());
     v.extend_from_slice(b"(!)");
@@ -218,6 +220,7 @@ pub fn cry_text(chr_name: &[u8], say: &[u8]) -> Vec<u8> {
 /// **当前线上路径不投递**（oracle NRE 1:1 搬运，见模块头与 T-118）；保留为将来 bug-fix
 /// 批次的候选实现，语义由单测钉住（不是线上判据）。
 #[must_use]
+#[cfg(test)]
 pub fn cry_hear_frame(chr_name: &[u8], say: &[u8], f_color: u8, b_color: u8) -> Vec<u8> {
     smframe::sm_hear(0, f_color, b_color, &cry_text(chr_name, say))
 }

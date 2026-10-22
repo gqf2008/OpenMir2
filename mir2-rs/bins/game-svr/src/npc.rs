@@ -441,6 +441,7 @@ impl NpcHost {
     }
 
     /// `@StdModeFunc<N>`（`PlayObject.Base.cs:1075` 用 `SystemShare.FunctionNPC`，即 `QFunction`）。
+    #[cfg(test)]
     pub fn run_std_mode_func(
         &self,
         ani_count: i32,
