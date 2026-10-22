@@ -1,7 +1,8 @@
 //! GM `@` 命令面（oracle `src/Modules/GameCommand/**`）：**第一批 = 表驱动派发 + 现网可达 6 条**。
 //!
 //! 设计件：`mir2-rs/tests/parity/m3/design-gm-commands-20261023.md`（§1 分发链 / §2 可达性 / §4.2 判据 /
-//! §6 批次 G1）。本模块只做 G1 的写集，命令体未实现的 180 条留在 `Imp::Unimplemented`，等 G2-G6。
+//! §6 批次 G1）。G1 落地派发链 + 5 条命令体；批次 2/3 再落 30 条（见下）。剩余 150 条留在
+//! `Imp::Unimplemented`，等 G4-G6。
 //!
 //! ## 分发链（逐行照 oracle）
 //!
@@ -37,6 +38,14 @@
 //! 缺 IP 段被丢弃、`StartPermission=0`、部署是 Release ⇒ **现网 `Permission` 恒 0**。185 条里 perm 0
 //! 恰好 5 条，加内建 `@help` 共 6 条可达；其余 180 条一律停在 `权限不够!!!`（Red 255/56）。
 //! [`GmSession::permission`] 因此保持 0（设计件 D-1 建议 (a)：1:1 复刻这个「锁死」）。
+//!
+//! ## 批次 2/3（本模块第二批，tier=L）
+//!
+//! 落地设计件 §4.4 的第 4 族（重载/管理 14 条）、第 5 族（封禁名单 9 条）、第 11 族（桩/测试 8 条，
+//! 其中 `@AddRobotPlay` 已在 G1）。三族共 31 条，除 `@AddRobotPlay` 外全是 `PermissionMin = 10`
+//! ⇒ 现网 `Permission` 恒 0，生产路径一律停在 `权限不够!!!`；命令体只在测试里用 `permission = 10` 构造。
+//! **oracle 注释掉的逻辑照抄 no-op**（设计件 §4.5 #7）；宿主未接项逐条 `log_note` 并登记
+//! `mir2-rs/tests/parity/whitelist.md` T-161..T-164。
 
 use chrono::Local;
 
@@ -52,6 +61,27 @@ pub const PRV_MSG_HELP: &str = "命令格式: @拒绝 人物名称";
 /// `CreateRobotPlayCommand` 的 `Command.CommandHelp`（未登记 ⇒ `Name = AddRobotPlay`，
 /// `Help = "数量 地图 X Y"`）。
 pub const ADD_ROBOT_HELP: &str = "命令格式: @AddRobotPlay 数量 地图 X Y";
+
+// ===== 批次 2/3 的 `Command.CommandHelp` 常量 =====
+//
+// 口径：`命令格式: @{Name} {Help}`（`CommandAttribute.cs` 的 `CommandHelp`），`Name` 已被
+// `command.conf` 覆盖成**现网拼写**（`CommandSystem.cs:100-107`），`Help` 取类属性原文。
+/// `DelDenyAccountLogonCommand`：`[Command("DelDenyAccountLogon", "", "登录帐号", 10)]`，现网名 `-jid`。
+pub const DEL_DENY_ACCOUNT_HELP: &str = "命令格式: @-jid 登录帐号";
+/// `DelDenyChrNameLogonCommand`：Help `人物名称`，现网名 `DelDenyChrNameLogon`。
+pub const DEL_DENY_CHRNAME_HELP: &str = "命令格式: @DelDenyChrNameLogon 人物名称";
+/// `DelDenyIPaddrLogonCommand`：Help `IP地址`，现网名 `-jip`。
+pub const DEL_DENY_IP_HELP: &str = "命令格式: @-jip IP地址";
+/// `DenyAccountLogonCommand`：Help `登录帐号 是否永久封(0,1)`，现网名 `+jid`。
+pub const DENY_ACCOUNT_HELP: &str = "命令格式: @+jid 登录帐号 是否永久封(0,1)";
+/// `DenyChrNameLogonCommand`：Help `人物名称 是否永久封(0,1)`，现网名 `DenyChrNameLogon`。
+pub const DENY_CHRNAME_HELP: &str = "命令格式: @DenyChrNameLogon 人物名称 是否永久封(0,1)";
+/// `DenyIPaddrLogonCommand`：Help `IP地址 是否永久封(0,1)`，现网名 `+jip`。
+pub const DENY_IP_HELP: &str = "命令格式: @+jip IP地址 是否永久封(0,1)";
+/// `ReloadGuildCommand`：`string.Format(GameCommandParamUnKnow, Name, "行会名称")`。
+pub const RELOAD_GUILD_HELP: &str = "命令格式: @ReloadGuild 行会名称";
+/// `FireBurnCommand`：`[Command("FireBurn", "", 10)]` ⇒ `Help` 为 null ⇒ 尾随一个空格。
+pub const FIRE_BURN_HELP: &str = "命令格式: @FireBurn ";
 
 /// 内建命令名（`CommandSystem.cs:255-307` 的两个嵌套类，**不属于** 185 个命令类）。
 pub const BUILTIN_HELP: &str = "help";
@@ -74,7 +104,74 @@ pub enum Imp {
     LockLogin,
     /// `CreateRobotPlayCommand`（现网 `@AddRobotPlay`；加机器人代码整段被注释 ⇒ 只留 `?` 帮助）。
     AddRobotPlay,
-    /// 本批未接的 180 条：现网全被权限门挡住，命令体留 G2-G6。
+
+    // ---- 批次 2/3 · 重载/管理（14，设计件 §4.4 第 4 族）----
+    /// `LoadAdminCommand`（`@LoadAdmin`）。
+    LoadAdmin,
+    /// `NpcScriptCommand`（`@NpcScript`）。
+    NpcScript,
+    /// `ReloadAbuseCommand`（`@ReloadAbuse`；空体）。
+    ReloadAbuse,
+    /// `ReLoadAdminCommand`（`@重读GM`）。
+    ReLoadAdmin,
+    /// `ReloadAllGuildCommand`（`@ReloadGuildAll`）。
+    ReloadAllGuild,
+    /// `ReloadGameItemCommand`（`@ReloadItemDB`）。
+    ReloadItemDb,
+    /// `ReloadGuildCommand`（`@ReloadGuild`）。
+    ReloadGuild,
+    /// `ReloadLineNoticeCommand`（`@重读公告`）。
+    ReloadLineNotice,
+    /// `ReloadMagicDbCommand`（`@ReloadMagicDB`）。
+    ReloadMagicDb,
+    /// `ReloadManageCommand`（`@重读登陆`）。
+    ReloadManage,
+    /// `ReloadMonItemsCommand`（`@重读爆率`）。
+    ReloadMonItems,
+    /// `ReloadNpcCommand`（`@重读商人`；体整段被注释）。
+    ReloadNpc,
+    /// `ReloadRobotCommand`（`@重读机器人脚本`）。
+    ReloadRobot,
+    /// `ReloadRobotManageCommand`（`@重读机器人配置`）。
+    ReloadRobotManage,
+
+    // ---- 批次 2/3 · 封禁名单（9，设计件 §4.4 第 5 族）----
+    /// `DelDenyAccountLogonCommand`（`@-jid`）。
+    DelDenyAccount,
+    /// `DelDenyChrNameLogonCommand`（`@DelDenyChrNameLogon`）。
+    DelDenyChrName,
+    /// `DelDenyIPaddrLogonCommand`（`@-jip`）。
+    DelDenyIp,
+    /// `DenyAccountLogonCommand`（`@+jid`）。
+    DenyAccount,
+    /// `DenyChrNameLogonCommand`（`@DenyChrNameLogon`）。
+    DenyChrName,
+    /// `DenyIPaddrLogonCommand`（`@+jip`；含 `@params[3]` 两参越界怪癖）。
+    DenyIp,
+    /// `ShowDenyAccountLogonCommand`（`@+-jid`）。
+    ShowDenyAccount,
+    /// `ShowDenyChrNameLogonCommand`（`@ShowDenyCharNameLogon`）。
+    ShowDenyChrName,
+    /// `ShowDenyIPaddrLogonCommand`（`@+-jip`）。
+    ShowDenyIp,
+
+    // ---- 批次 2/3 · 桩/测试（7 新增，设计件 §4.4 第 11 族；`@AddRobotPlay` 见上）----
+    /// `TestFireCommand`（`@TestFire`；只往 `EventMgr` 入事件）。
+    TestFire,
+    /// `TestGetBagItemsCommand`（`@TestGetBagItems`）。
+    TestGetBagItems,
+    /// `TestSpeedModeCommand`（`@TestSpeedMode`）。
+    TestSpeedMode,
+    /// `TestStatusCommand`（`@TestStatus`）。
+    TestStatus,
+    /// `UserCmdCommand`（`@UserCmd`；体整段被注释）。
+    UserCmd,
+    /// `BackStepCommand`（`@Backstep`）。
+    BackStep,
+    /// `FireBurnCommand`（`@FireBurn`）。
+    FireBurn,
+
+    /// 未接的 150 条（185 − G1 5 条 − 本批 30 条）：现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
 }
 
@@ -118,6 +215,8 @@ pub struct GmSession {
     pub is_lock_logon: bool,
     /// `PlayObject.IsLockLogoned`（`PlayObject.cs:1027` ctor = false）。
     pub is_lock_logoned: bool,
+    /// `PlayObject.TestSpeedMode`（`BaseObject` 字段，缺省 false；`@TestSpeedMode` 翻转）。
+    pub test_speed_mode: bool,
 }
 
 impl Default for GmSession {
@@ -128,16 +227,46 @@ impl Default for GmSession {
             lock_whisper_list: Vec::new(),
             is_lock_logon: true,
             is_lock_logoned: false,
+            test_speed_mode: false,
         }
     }
 }
 
-/// 命令体要读的配置（`SystemShare.Config` 的等价物）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// 命令体要读的配置（`SystemShare.Config` / `SystemShare` 启动态的等价物）。
+///
+/// 除 `lock_human_login` 外都是批次 2/3 引入的**启动期常量**：oracle 部署的取值在字段注释里
+/// 写明出处，[`Default`] 就取部署值（重载/管理族的分支正是由它们决定）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GmConfig {
     /// `Config.LockHumanLogin`（`ServerConf.cs:574` 读 `[Setup] PasswordLockHumanLogin`；
     /// `GameSvrConf.cs:1493` 缺省 false，部署 = 0）。
     pub lock_human_login: bool,
+    /// `SystemShare.ServerIndex`（`SystemShare.cs:45` 缺省 0）。全仓**无写点**
+    /// （只有 `AppService.cs:211` 读）⇒ 部署恒 0 = 主服 ⇒ `ReloadGuild`/`ReloadGuildAll` 永远走成功支。
+    pub server_index: u8,
+    /// `SystemShare.ManageNPC != null`（`GameApp.cs:85` 启动即 `new Merchant()` ⇒ 部署 true）
+    /// 与 `SystemShare.FunctionNPC != null`（`:87` ⇒ true）。
+    pub manage_npc_present: bool,
+    /// 见 [`GmConfig::manage_npc_present`]（`FunctionNPC`）。
+    pub function_npc_present: bool,
+    /// `SystemShare.RobotNPC != null`（`GameApp.cs:86` ⇒ true）。
+    pub robot_npc_present: bool,
+    /// `File.Exists(SystemShare.GetNoticeFilePath("LineNotice.txt"))`：部署件
+    /// `E:/MirServer/M2GameSvr/Notice/linenotice.txt` 存在（Windows 大小写不敏感）⇒ true。
+    pub notice_file_exists: bool,
+}
+
+impl Default for GmConfig {
+    fn default() -> Self {
+        Self {
+            lock_human_login: false,
+            server_index: 0,
+            manage_npc_present: true,
+            function_npc_present: true,
+            robot_npc_present: true,
+            notice_file_exists: true,
+        }
+    }
 }
 
 /// 一次派发的结果。
@@ -298,11 +427,445 @@ fn add_robot_play(parameters: &str) -> GmResult {
     GmResult::empty()
 }
 
+// ============================================================================================
+// 批次 2/3：重载/管理（14）· 封禁名单（9）· 桩/测试（7 + G1 的 `@AddRobotPlay`）
+//
+// 逐条 1:1 对照 `src/Modules/GameCommand/Commands/*.cs`。**oracle 注释掉的逻辑照抄 no-op**
+// （设计件 §4.5 #7）。本仓没有的宿主（物品库/魔法库/爆率/NPC 脚本/公告/行会/机器人/事件队列）
+// 一律「回 oracle 同一句 `SysMsg` + `log_note` 登记」，**不伪造任何重载动作**（任务书要求）。
+// ============================================================================================
+
+/// `HUtil32.StrToInt`（`HUtil32.cs:359-362`）：`int.TryParse` 失败取缺省值。
+///
+/// `NumberStyles.Integer` = 允许前后空白 + 一个前导符号 + 十进制数字；不接受小数点/十六进制/
+/// 千分位 ⇒ 与 `str::parse::<i32>` 同口径（`+5`/`-5` 都收）。唯一残余是 `trim` 的空白集合
+/// （.NET `char.IsWhiteSpace` vs Unicode `White_Space`；本批参数都是 ASCII，不可观测）。
+fn str_to_int(s: &str, def: i32) -> i32 {
+    s.trim().parse::<i32>().unwrap_or(def)
+}
+
+/// 命令体要读的世界侧只读状态（oracle `SystemShare` 的等价物）。
+///
+/// 本批只需要一项：`ReloadGuild` 的 `GuildMgr.FindGuild`。
+#[derive(Clone, Copy)]
+pub struct GmWorld<'a> {
+    /// `SystemShare.GuildMgr`；`FindGuild` 是 `GuildName == sGuildName` **精确**比较
+    /// （`GuildManager.cs:66-76`，不是 `OrdinalIgnoreCase`）。
+    pub guilds: &'a mir2_world::GuildManager,
+}
+
+/// 零帧 + 一条 `log_note`：oracle 抛异常被 `PlayObject.Chat.cs` 的 catch 吞掉，或宿主未接。
+fn no_frames(note: &'static str) -> GmResult {
+    GmResult {
+        found: true,
+        parsed: true,
+        msgs: Vec::new(),
+        log_note: Some(note),
+    }
+}
+
+/// 单条 `SysMsg` + `log_note`（oracle 文本保持逐字节）。
+fn one_note(color: GmColor, text: impl Into<String>, note: &'static str) -> GmResult {
+    GmResult {
+        found: true,
+        parsed: true,
+        msgs: vec![GmMsg {
+            color,
+            text: text.into(),
+        }],
+        log_note: Some(note),
+    }
+}
+
+// ---------------------------- 宿主未接 / oracle 注释的登记文案 ----------------------------
+const NOTE_EVENT_MGR: &str =
+    "FireBurnEvent+SystemShare.EventMgr 宿主未接 ⇒ 未入事件队列（oracle 帧面同样零帧）";
+const NOTE_CHAR_PUSHED: &str =
+    "CharPushed 宿主未接 ⇒ 未推挤、未发生 RandomByte(nType) 抽数（tier 若接线须按 R 重评）";
+const NOTE_STATUS: &str =
+    "StatusTimeArr/CharStatus/StatusChanged 宿主未接 ⇒ 无状态写入、无状态帧（oracle 帧面另有状态广播）";
+const NOTE_RELOAD_ADMIN: &str =
+    "ReLoadAdmin: WorldEngine.SendServerGroupMsg(213) 宿主未接（单区无 server-group），只回 oracle 文本";
+const NOTE_RELOAD_ALL_GUILD: &str =
+    "ReloadAllGuild: GuildMgr.LoadGuildInfo 宿主未接，只回 oracle 文本（行会不会被重读）";
+const NOTE_RELOAD_GUILD: &str =
+    "ReloadGuild: guild.LoadGuild() 宿主未接，只回 oracle 文本（行会不会被重读）";
+const NOTE_NOTICE: &str =
+    "ReloadLineNotice: LoadLineNotice/LineNoticeList 宿主未接，结果取部署件存在性（Notice/linenotice.txt）";
+const NOTE_MANAGE: &str =
+    "ReloadManage: ManageNPC/FunctionNPC 的 ClearScript+LoadNPCScript 宿主未接，只回 oracle 文本";
+const NOTE_ROBOT_MANAGE: &str =
+    "ReloadRobotManage: RobotNPC 的 ClearScript+LoadNPCScript 宿主未接，只回 oracle 文本";
+
+// ---------------------------- 封禁名单族（设计件 §4.4 第 5 族）----------------------------
+//
+// 三张表的**增/删/查/存循环在 oracle 里全部被注释**（`Deny*Command.cs` 的 for 体、
+// `M2Share.SaveDenyAccountList` 的写盘体、`LoadDenyAccountList`/`LoadDenyChrNameList`/
+// `LoadDenyIPAddrList` 的读入体），所以启动后三表恒空、`boDelete` 恒 false。本仓不建这三张表
+// （宿主未接，`whitelist.md` T-162），文本按 oracle 原文发。
+
+/// `DelDenyAccountLogonCommand`（现网 `@-jid`）。
+fn del_deny_account(parameters: &str) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let account = params.first().copied().unwrap_or("");
+    if account.is_empty() {
+        return GmResult::one(GmColor::Red, DEL_DENY_ACCOUNT_HELP.to_string());
+    }
+    // for 循环体（含命中提示 `已从禁止登录帐号列表中删除。`）整段被注释 ⇒ boDelete 恒 false。
+    GmResult::one(GmColor::Green, format!("{account}没有被禁止登录。"))
+}
+
+/// `DelDenyChrNameLogonCommand`（现网 `@DelDenyChrNameLogon`）。
+fn del_deny_chr_name(parameters: &str) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let chr_name = params.first().copied().unwrap_or("");
+    if chr_name.is_empty() {
+        return GmResult::one(GmColor::Red, DEL_DENY_CHRNAME_HELP.to_string());
+    }
+    GmResult::one(GmColor::Green, format!("{chr_name}没有被禁止登录。"))
+}
+
+/// `DelDenyIPaddrLogonCommand`（现网 `@-jip`）：倒序循环体同样被注释 ⇒ 恒 false。
+fn del_deny_ip(parameters: &str) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let ip = params.first().copied().unwrap_or("");
+    if ip.is_empty() {
+        return GmResult::one(GmColor::Red, DEL_DENY_IP_HELP.to_string());
+    }
+    GmResult::one(GmColor::Green, format!("{ip}没有被禁止登录。"))
+}
+
+/// `DenyAccountLogonCommand`（现网 `@+jid`）：`sFixDeny[0] == '1'` 走「永久」支。
+///
+/// 两支的 `g_DenyAccountList.Add(...)` 都被注释；永久支的 `SaveDenyAccountList()` 函数体
+/// （写文件）也整段被注释 ⇒ **纯文本命令**，无落盘。
+fn deny_account(parameters: &str) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let account = params.first().copied().unwrap_or("");
+    if account.is_empty() {
+        return GmResult::one(GmColor::Red, DENY_ACCOUNT_HELP.to_string());
+    }
+    let fix_deny = params.get(1).copied().unwrap_or("");
+    if fix_deny.starts_with('1') {
+        GmResult::one(GmColor::Green, format!("{account}已加入禁止登录帐号列表"))
+    } else {
+        GmResult::one(
+            GmColor::Green,
+            format!("{account}已加入临时禁止登录帐号列表"),
+        )
+    }
+}
+
+/// `DenyChrNameLogonCommand`（现网 `@DenyChrNameLogon`）。
+fn deny_chr_name(parameters: &str) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let chr_name = params.first().copied().unwrap_or("");
+    if chr_name.is_empty() {
+        return GmResult::one(GmColor::Red, DENY_CHRNAME_HELP.to_string());
+    }
+    let fix_deny = params.get(1).copied().unwrap_or("");
+    if fix_deny.starts_with('1') {
+        GmResult::one(GmColor::Green, format!("{chr_name}已加入禁止人物列表"))
+    } else {
+        GmResult::one(GmColor::Green, format!("{chr_name}已加入临时禁止人物列表"))
+    }
+}
+
+/// `DenyIPaddrLogonCommand`（现网 `@+jip`）。
+///
+/// **oracle 怪癖**（设计件 §4.5 #1）：取出的是 `@params.Length > 1 ? @params[3] : ""` ——
+/// 2 或 3 个参数时 `@params[3]` 越界 ⇒ `IndexOutOfRangeException`，经反射包成
+/// `TargetInvocationException`，被 `PlayObject.ProcessUserLineMsg` 的 catch 吞掉 ⇒ **零帧**。
+/// 注意越界发生在「`sIPaddr` 判空」**之前**，照抄这个次序。
+fn deny_ip(parameters: &str) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let ip = params.first().copied().unwrap_or("");
+    let fix_deny = if params.len() > 1 {
+        if params.len() <= 3 {
+            return no_frames(
+                "DenyIPaddrLogon: @params[3] 越界（oracle IndexOutOfRangeException 被 catch 吞）⇒ 零帧",
+            );
+        }
+        params[3]
+    } else {
+        ""
+    };
+    if ip.is_empty() {
+        return GmResult::one(GmColor::Red, DENY_IP_HELP.to_string());
+    }
+    if fix_deny.starts_with('1') {
+        GmResult::one(GmColor::Green, format!("{ip}已加入禁止登录IP列表"))
+    } else {
+        GmResult::one(GmColor::Green, format!("{ip}已加入临时禁止登录IP列表"))
+    }
+}
+
+/// `ShowDenyAccountLogonCommand`（现网 `@+-jid`）。
+///
+/// `Permission < 6` 静默返回（门是 10 ⇒ 死支）；表恒空 ⇒ 恒回「禁止登录帐号列表为空。」。
+fn show_deny_account(sess: &GmSession) -> GmResult {
+    if sess.permission < 6 {
+        return GmResult::empty();
+    }
+    GmResult::one(GmColor::Green, "禁止登录帐号列表为空。".to_string())
+}
+
+/// `ShowDenyChrNameLogonCommand`（现网 `@ShowDenyCharNameLogon`）：无权限二次校验，表空即提示。
+fn show_deny_chr_name() -> GmResult {
+    GmResult::one(GmColor::Green, "禁止登录角色列表为空。".to_string())
+}
+
+/// `ShowDenyIPaddrLogonCommand`（现网 `@+-jip`）：表空提示**沿用角色文案**
+/// （`禁止登录角色列表为空。`），是 oracle 的复制粘贴怪癖，照抄。
+fn show_deny_ip() -> GmResult {
+    GmResult::one(GmColor::Green, "禁止登录角色列表为空。".to_string())
+}
+
+// ---------------------------- 重载/管理族（设计件 §4.4 第 4 族）----------------------------
+
+/// `LoadAdminCommand`（现网 `@LoadAdmin`）：`LocalDB.LoadAdminList()` 与
+/// `SendServerGroupMsg(213, ...)` **两条都被注释** ⇒ 纯文本。
+/// 体内的 `Permission < 6` 在门 10 之后是死支，1:1 照抄。
+fn load_admin(sess: &GmSession) -> GmResult {
+    if sess.permission < 6 {
+        return GmResult::empty();
+    }
+    GmResult::one(GmColor::Green, "管理员列表重新加载成功...".to_string())
+}
+
+/// `ReLoadAdminCommand`（现网 `@重读GM`）：`LocalDb.LoadAdminList()` 被注释，但
+/// `WorldEngine.SendServerGroupMsg(213, ServerIndex, "")` **是活的** ⇒ 宿主未接残余。
+fn re_load_admin() -> GmResult {
+    one_note(
+        GmColor::Green,
+        "管理员列表重新加载成功...",
+        NOTE_RELOAD_ADMIN,
+    )
+}
+
+/// `ReloadAbuseCommand`（现网 `@ReloadAbuse`）：`Execute` 空体。
+fn reload_abuse() -> GmResult {
+    GmResult::empty()
+}
+
+/// `ReloadAllGuildCommand`（现网 `@ReloadGuildAll`）：主服门 + `GuildMgr.LoadGuildInfo()`，
+/// 成功后回**红字**（oracle 用 `MsgColor.Red`，怪癖照抄）。
+fn reload_all_guild(cfg: &GmConfig) -> GmResult {
+    if cfg.server_index != 0 {
+        return GmResult::one(
+            GmColor::Red,
+            "此命令只能在主游戏服务器上执行!!!".to_string(),
+        );
+    }
+    one_note(GmColor::Red, "重新加载行会信息完成.", NOTE_RELOAD_ALL_GUILD)
+}
+
+/// `ReloadGameItemCommand`（现网 `@ReloadItemDB`）：`LoadItemsDB()` 被注释 ⇒ 纯文本。
+fn reload_item_db() -> GmResult {
+    GmResult::one(GmColor::Green, "物品数据库重新加载完成。".to_string())
+}
+
+/// `ReloadMagicDbCommand`（现网 `@ReloadMagicDB`）：`LoadMagicDB()` 被注释 ⇒ 纯文本。
+fn reload_magic_db() -> GmResult {
+    GmResult::one(GmColor::Green, "魔法数据库重新加载完成。".to_string())
+}
+
+/// `ReloadGuildCommand`（现网 `@ReloadGuild`）：空名 ⇒ 帮助；非主服 ⇒ 拒绝；
+/// `FindGuild` 未命中 ⇒ `未找到行会{name}!!!`；命中 ⇒ `guild.LoadGuild()` + 红字成功。
+fn reload_guild(parameters: &str, cfg: &GmConfig, world: &GmWorld<'_>) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return GmResult::one(GmColor::Red, RELOAD_GUILD_HELP.to_string());
+    }
+    if cfg.server_index != 0 {
+        return GmResult::one(
+            GmColor::Red,
+            "此命令只能在主游戏服务器上执行!!!".to_string(),
+        );
+    }
+    if world.guilds.find_guild(name).is_none() {
+        return GmResult::one(GmColor::Red, format!("未找到行会{name}!!!"));
+    }
+    one_note(
+        GmColor::Red,
+        format!("行会{name}重加载成功..."),
+        NOTE_RELOAD_GUILD,
+    )
+}
+
+/// `ReloadLineNoticeCommand`（现网 `@重读公告`）：`LoadLineNotice(Notice/LineNotice.txt)`
+/// 的返回值选帧。部署件 `M2GameSvr/Notice/linenotice.txt` 存在 ⇒ oracle 走成功支。
+fn reload_line_notice(cfg: &GmConfig) -> GmResult {
+    if cfg.notice_file_exists {
+        one_note(GmColor::Green, "重新加载公告设置信息完成。", NOTE_NOTICE)
+    } else {
+        one_note(GmColor::Red, "重新加载公告设置信息失败!!!", NOTE_NOTICE)
+    }
+}
+
+/// `ReloadManageCommand`（现网 `@重读登陆`）：两条独立提示，**失败支也是 Green**（怪癖）。
+fn reload_manage(cfg: &GmConfig) -> GmResult {
+    let mut r = GmResult::empty();
+    r.msgs.push(GmMsg {
+        color: GmColor::Green,
+        text: if cfg.manage_npc_present {
+            "重新加载登录脚本完成..."
+        } else {
+            "重新加载登录脚本失败..."
+        }
+        .to_string(),
+    });
+    r.msgs.push(GmMsg {
+        color: GmColor::Green,
+        text: if cfg.function_npc_present {
+            "重新加载功能脚本完成..."
+        } else {
+            "重新加载功能脚本失败..."
+        }
+        .to_string(),
+    });
+    r.log_note = Some(NOTE_MANAGE);
+    r
+}
+
+/// `ReloadMonItemsCommand`（现网 `@重读爆率`）：try 体整段被注释 ⇒ 恒成功文本，catch 不可达。
+fn reload_mon_items() -> GmResult {
+    GmResult::one(GmColor::Green, "怪物爆物品列表重加载完成...".to_string())
+}
+
+/// `ReloadNpcCommand`（现网 `@重读商人`）：`sParam` 取出来没用，整段逻辑被注释 ⇒ 零帧零副作用。
+fn reload_npc() -> GmResult {
+    GmResult::empty()
+}
+
+/// `ReloadRobotCommand`（现网 `@重读机器人脚本`）：`RobotMgr.ReLoadRobot()` 被注释 ⇒ 纯文本。
+fn reload_robot() -> GmResult {
+    GmResult::one(GmColor::Green, "重新加载机器人配置完成...".to_string())
+}
+
+/// `ReloadRobotManageCommand`（现网 `@重读机器人配置`）：`RobotNPC != null` 分支。
+fn reload_robot_manage(cfg: &GmConfig) -> GmResult {
+    if cfg.robot_npc_present {
+        one_note(
+            GmColor::Green,
+            "重新加载机器人专用脚本完成...",
+            NOTE_ROBOT_MANAGE,
+        )
+    } else {
+        one_note(
+            GmColor::Green,
+            "重新加载机器人专用脚本失败...",
+            NOTE_ROBOT_MANAGE,
+        )
+    }
+}
+
+/// `NpcScriptCommand`（现网 `@NpcScript`）：`GetPoseCreate()` 的返回**没有任何使用**
+/// （定位/文件读取/逐行回显整段被注释），`sScriptFileName` 恒空 ⇒ `File.Exists("") == false`
+/// ⇒ **零帧**。
+fn npc_script() -> GmResult {
+    no_frames(
+        "NpcScript: 定位与脚本重读整段被注释（sScriptFileName 恒空 ⇒ File.Exists false）⇒ 零帧",
+    )
+}
+
+// ---------------------------- 桩/测试族（设计件 §4.4 第 11 族）----------------------------
+
+/// `TestFireCommand`（现网 `@TestFire`）：绕角色画一圈 `FireBurnEvent` 入 `EventMgr`，
+/// **不发任何 `SysMsg`**。宿主未接 ⇒ 只登记。
+fn test_fire() -> GmResult {
+    no_frames(NOTE_EVENT_MGR)
+}
+
+/// `TestGetBagItemsCommand`（现网 `@TestGetBagItems`）。
+///
+/// 两个怪癖照抄：① `SysMsgGetBagUseItems` 被注释 ⇒ 四个值恒 0；
+/// ② `string.Format("DC:%d SC:%d MC:%d DURA:%d", ...)` 里**没有 `{n}` 占位符** ⇒ 原样回这串字面量。
+fn test_get_bag_items() -> GmResult {
+    GmResult::one(GmColor::Blue, "DC:%d SC:%d MC:%d DURA:%d".to_string())
+}
+
+/// `TestSpeedModeCommand`（现网 `@TestSpeedMode`）：翻转 `TestSpeedMode`，Red。
+fn test_speed_mode(sess: &mut GmSession) -> GmResult {
+    sess.test_speed_mode = !sess.test_speed_mode;
+    let text = if sess.test_speed_mode {
+        "开启速度测试模式"
+    } else {
+        "关闭速度测试模式"
+    };
+    GmResult::one(GmColor::Red, text.to_string())
+}
+
+/// `TestStatusCommand`（现网 `@TestStatus`）。
+///
+/// `PlayerActor.StatusTimeArr[nType] = (ushort)(nTime * 1000)`：`StatusTimeArr` 是
+/// `new ushort[15]`（`BaseObject.cs:394`），`nType` **没有任何范围校验**（校验被注释）⇒
+/// `nType < 0 || nType > 14` 抛 `IndexOutOfRangeException` ⇒ catch 吞 ⇒ **零帧**。
+/// 合法下标才回 `状态编号:{nType} 时间长度: {nTime} 秒`（Green）。
+fn test_status(parameters: &str, sess: &GmSession) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let n_type = str_to_int(params.first().copied().unwrap_or(""), 0);
+    let n_time = str_to_int(params.get(1).copied().unwrap_or(""), 0);
+    if sess.permission < 6 {
+        // 门是 10 ⇒ 死支，照抄。
+        return GmResult::empty();
+    }
+    if !(0..15).contains(&n_type) {
+        return no_frames(
+            "TestStatus: StatusTimeArr[nType] 越界（oracle IndexOutOfRangeException 被 catch 吞）⇒ 零帧",
+        );
+    }
+    one_note(
+        GmColor::Green,
+        format!("状态编号:{n_type} 时间长度: {n_time} 秒"),
+        NOTE_STATUS,
+    )
+}
+
+/// `UserCmdCommand`（现网 `@UserCmd`）：`sLable` 取出来后，`GotoLable` 三段**全部被注释**
+/// ⇒ 零帧零副作用。
+fn user_cmd() -> GmResult {
+    no_frames("UserCmd: FunctionNPC.GotoLable 三段全被注释 ⇒ 零帧")
+}
+
+/// `BackStepCommand`（现网 `@Backstep`）：`byte` 强转 + `_MIN(_, 8)` 后调 `CharPushed`。
+///
+/// `nType == 0` 走 `GetBackDir(Dir)`（**不抽数**）；否则先 `RandomByte(nType)` 再推。
+/// 本仓无该 GM 推挤宿主 ⇒ 不抽数、零帧（`whitelist.md` T-163：若接线，RNG 面按 R 重评）。
+fn back_step(parameters: &str, sess: &GmSession) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    // `(byte)HUtil32.StrToInt(...)`：int → byte 是 **unchecked**（C# 默认上下文）⇒ 截低 8 位。
+    let _n_type = (str_to_int(params.first().copied().unwrap_or(""), 0) as u8).min(8);
+    let _n_count = str_to_int(params.get(1).copied().unwrap_or(""), 0) as u8;
+    if sess.permission < 6 {
+        return GmResult::empty();
+    }
+    no_frames(NOTE_CHAR_PUSHED)
+}
+
+/// `FireBurnCommand`（现网 `@FireBurn`）：任一参数为 0 ⇒ 红字帮助（`Help` 为 null，尾随空格）；
+/// 否则在脚下加 `FireBurnEvent`（宿主未接）⇒ 零帧。
+fn fire_burn(parameters: &str, sess: &GmSession) -> GmResult {
+    let params: Vec<&str> = parameters.split(' ').collect();
+    let n_int = str_to_int(params.first().copied().unwrap_or(""), 0);
+    let n_time = str_to_int(params.get(1).copied().unwrap_or(""), 0);
+    let n_n = str_to_int(params.get(2).copied().unwrap_or(""), 0);
+    if sess.permission < 6 {
+        // 门是 10 ⇒ 死支，照抄（oracle 在参数解析之后、零值检查之前）。
+        return GmResult::empty();
+    }
+    if n_int == 0 || n_time == 0 || n_n == 0 {
+        return GmResult::one(GmColor::Red, FIRE_BURN_HELP.to_string());
+    }
+    no_frames(NOTE_EVENT_MGR)
+}
+
 /// `CommandSystem.Execute(PlayerActor, line)` 的等价物（**不含** `PlayObject.Chat.cs` 的第二条回落帧）。
 ///
 /// 调用方约定：`parsed == false` ⇒ 无帧；`found == false && parsed` ⇒ 先发 [`GmResult::msgs`]，
 /// 再发 [`incorrect_msg`]。
-pub fn execute(sess: &mut GmSession, cfg: &GmConfig, line: &str) -> GmResult {
+pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: &str) -> GmResult {
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -349,11 +912,48 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, line: &str) -> GmResult {
         Imp::AllowMsg => allow_msg(sess),
         Imp::LockLogin => lock_login(sess, cfg),
         Imp::AddRobotPlay => add_robot_play(parameters),
+
+        // ---- 批次 2/3 · 重载/管理（14）----
+        Imp::LoadAdmin => load_admin(sess),
+        Imp::NpcScript => npc_script(),
+        Imp::ReloadAbuse => reload_abuse(),
+        Imp::ReLoadAdmin => re_load_admin(),
+        Imp::ReloadAllGuild => reload_all_guild(cfg),
+        Imp::ReloadItemDb => reload_item_db(),
+        Imp::ReloadGuild => reload_guild(parameters, cfg, world),
+        Imp::ReloadLineNotice => reload_line_notice(cfg),
+        Imp::ReloadMagicDb => reload_magic_db(),
+        Imp::ReloadManage => reload_manage(cfg),
+        Imp::ReloadMonItems => reload_mon_items(),
+        Imp::ReloadNpc => reload_npc(),
+        Imp::ReloadRobot => reload_robot(),
+        Imp::ReloadRobotManage => reload_robot_manage(cfg),
+
+        // ---- 批次 2/3 · 封禁名单（9）----
+        Imp::DelDenyAccount => del_deny_account(parameters),
+        Imp::DelDenyChrName => del_deny_chr_name(parameters),
+        Imp::DelDenyIp => del_deny_ip(parameters),
+        Imp::DenyAccount => deny_account(parameters),
+        Imp::DenyChrName => deny_chr_name(parameters),
+        Imp::DenyIp => deny_ip(parameters),
+        Imp::ShowDenyAccount => show_deny_account(sess),
+        Imp::ShowDenyChrName => show_deny_chr_name(),
+        Imp::ShowDenyIp => show_deny_ip(),
+
+        // ---- 批次 2/3 · 桩/测试（7）----
+        Imp::TestFire => test_fire(),
+        Imp::TestGetBagItems => test_get_bag_items(),
+        Imp::TestSpeedMode => test_speed_mode(sess),
+        Imp::TestStatus => test_status(parameters, sess),
+        Imp::UserCmd => user_cmd(),
+        Imp::BackStep => back_step(parameters, sess),
+        Imp::FireBurn => fire_burn(parameters, sess),
+
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
             msgs: Vec::new(),
-            log_note: Some("GM 命令体未实现（G1 只接现网可达 6 条；现网权限门先挡）"),
+            log_note: Some("GM 命令体未实现（G1 + 批次 2/3 之外；现网权限门先挡）"),
         },
     }
 }
@@ -369,13 +969,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "+-jid",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowDenyAccount,
     },
     CommandDef {
         name: "+-jip",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowDenyIp,
     },
     CommandDef {
         name: "+-jy",
@@ -387,13 +987,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "+jid",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DenyAccount,
     },
     CommandDef {
         name: "+jip",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DenyIp,
     },
     CommandDef {
         name: "+jn",
@@ -411,13 +1011,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "-jid",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelDenyAccount,
     },
     CommandDef {
         name: "-jip",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelDenyIp,
     },
     CommandDef {
         name: "-jy",
@@ -483,7 +1083,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Backstep",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::BackStep,
     },
     CommandDef {
         name: "bb",
@@ -543,7 +1143,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "DelDenyChrNameLogon",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelDenyChrName,
     },
     CommandDef {
         name: "DelGamePoint",
@@ -561,7 +1161,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "DenyChrNameLogon",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DenyChrName,
     },
     CommandDef {
         name: "df56dfs",
@@ -627,7 +1227,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "FireBurn",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::FireBurn,
     },
     CommandDef {
         name: "GameDiaMond",
@@ -723,7 +1323,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "LoadAdmin",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::LoadAdmin,
     },
     CommandDef {
         name: "LockLogin",
@@ -807,7 +1407,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "NpcScript",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::NpcScript,
     },
     CommandDef {
         name: "OffHorse",
@@ -861,31 +1461,31 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ReloadAbuse",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadAbuse,
     },
     CommandDef {
         name: "ReloadGuild",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadGuild,
     },
     CommandDef {
         name: "ReloadGuildAll",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadAllGuild,
     },
     CommandDef {
         name: "ReloadItemDB",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadItemDb,
     },
     CommandDef {
         name: "ReloadMagicDB",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadMagicDb,
     },
     CommandDef {
         name: "Rest",
@@ -969,7 +1569,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ShowDenyCharNameLogon",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowDenyChrName,
     },
     CommandDef {
         name: "ShowEffect",
@@ -1029,25 +1629,25 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "TestFire",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::TestFire,
     },
     CommandDef {
         name: "TestGetBagItems",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::TestGetBagItems,
     },
     CommandDef {
         name: "TestSpeedMode",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::TestSpeedMode,
     },
     CommandDef {
         name: "TestStatus",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::TestStatus,
     },
     CommandDef {
         name: "Tingwa",
@@ -1077,7 +1677,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "UserCmd",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::UserCmd,
     },
     CommandDef {
         name: "vv杀死",
@@ -1431,43 +2031,43 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "重读GM",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReLoadAdmin,
     },
     CommandDef {
         name: "重读公告",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadLineNotice,
     },
     CommandDef {
         name: "重读商人",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadNpc,
     },
     CommandDef {
         name: "重读机器人脚本",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadRobot,
     },
     CommandDef {
         name: "重读机器人配置",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadRobotManage,
     },
     CommandDef {
         name: "重读爆率",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadMonItems,
     },
     CommandDef {
         name: "重读登陆",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReloadManage,
     },
     CommandDef {
         name: "集体传送",
@@ -1482,9 +2082,35 @@ mod tests {
     use super::*;
 
     fn run(line: &str) -> (GmResult, GmSession) {
+        run_with(&GmConfig::default(), line)
+    }
+
+    fn run_with(cfg: &GmConfig, line: &str) -> (GmResult, GmSession) {
         let mut sess = GmSession::default();
-        let r = execute(&mut sess, &GmConfig::default(), line);
+        let r = exec(&mut sess, cfg, line);
         (r, sess)
+    }
+
+    /// 批次 2/3 的命令全是 `PermissionMin = 10`（现网 `Permission` 恒 0 ⇒ 不可达），
+    /// 用例里显式构造 `permission = 10` 才进得了命令体。
+    fn run_gm(line: &str) -> (GmResult, GmSession) {
+        run_gm_with(&GmConfig::default(), line)
+    }
+
+    fn run_gm_with(cfg: &GmConfig, line: &str) -> (GmResult, GmSession) {
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let r = exec(&mut sess, cfg, line);
+        (r, sess)
+    }
+
+    /// 每个用例新建一个空 `GuildManager`（`GmWorld` 的借用源）。
+    fn exec(sess: &mut GmSession, cfg: &GmConfig, line: &str) -> GmResult {
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld { guilds: &guilds };
+        execute(sess, cfg, &world, line)
     }
 
     fn texts(r: &GmResult) -> Vec<(GmColor, &str)> {
@@ -1637,10 +2263,10 @@ mod tests {
     fn allow_msg_toggles_hear_whisper() {
         let mut sess = GmSession::default();
         assert!(sess.hear_whisper);
-        let r = execute(&mut sess, &GmConfig::default(), "@拒绝私聊");
+        let r = exec(&mut sess, &GmConfig::default(), "@拒绝私聊");
         assert_eq!(texts(&r), vec![(GmColor::Green, "[禁止私聊]")]);
         assert!(!sess.hear_whisper);
-        let r = execute(&mut sess, &GmConfig::default(), "@拒绝私聊");
+        let r = exec(&mut sess, &GmConfig::default(), "@拒绝私聊");
         assert_eq!(texts(&r), vec![(GmColor::Green, "[允许私聊]")]);
         assert!(sess.hear_whisper);
     }
@@ -1649,10 +2275,11 @@ mod tests {
     #[test]
     fn lock_login_reads_config_gate() {
         let mut sess = GmSession::default();
-        let r = execute(
+        let r = exec(
             &mut sess,
             &GmConfig {
                 lock_human_login: false,
+                ..GmConfig::default()
             },
             "@LockLogin",
         );
@@ -1662,10 +2289,11 @@ mod tests {
         );
         assert!(sess.is_lock_logon, "配置未开 ⇒ 不翻转");
         // 配置开了但 ctor `IsLockLogon=true`/`IsLockLogoned=false` ⇒ 第二道红字。
-        let r = execute(
+        let r = exec(
             &mut sess,
             &GmConfig {
                 lock_human_login: true,
+                ..GmConfig::default()
             },
             "@LockLogin",
         );
@@ -1676,10 +2304,11 @@ mod tests {
         assert!(sess.is_lock_logon);
         // 已设置锁密码 ⇒ 才翻转。
         sess.is_lock_logoned = true;
-        let r = execute(
+        let r = exec(
             &mut sess,
             &GmConfig {
                 lock_human_login: true,
+                ..GmConfig::default()
             },
             "@LockLogin",
         );
@@ -1737,5 +2366,293 @@ mod tests {
         assert!(r.msgs.is_empty());
         assert!(r.log_note.is_some());
         assert!(find("commands").is_none());
+    }
+
+    // ==================== 批次 2/3（重载/管理 · 封禁名单 · 桩/测试）====================
+
+    /// `HUtil32.StrToInt` = `int.TryParse` 失败取缺省（`NumberStyles.Integer`）。
+    #[test]
+    fn str_to_int_matches_tryparse_integer_style() {
+        assert_eq!(str_to_int("12", 0), 12);
+        assert_eq!(str_to_int(" 7 ", 0), 7);
+        assert_eq!(str_to_int("+3", 0), 3);
+        assert_eq!(str_to_int("-4", 0), -4);
+        // `TryParse` 失败 ⇒ 缺省值（不是 0，缺省由调用方给）。
+        assert_eq!(str_to_int("", 99), 99);
+        assert_eq!(str_to_int("x", 99), 99);
+        assert_eq!(str_to_int("1.5", 99), 99);
+        assert_eq!(str_to_int("0x10", 99), 99);
+        assert_eq!(str_to_int("1 2", 99), 99);
+        // 溢出：`int.TryParse` 失败 ⇒ 缺省（Rust `parse` 同样失败）。
+        assert_eq!(str_to_int("2147483648", 99), 99);
+    }
+
+    /// 本批 30 条命令体全部接上（`Unimplemented` 从 180 降到 150），且每条的命令名 → 实现标签固定。
+    #[test]
+    fn batch2_table_wires_thirty_command_bodies() {
+        assert_eq!(
+            COMMANDS
+                .iter()
+                .filter(|d| d.imp != Imp::Unimplemented)
+                .count(),
+            35,
+            "35 = G1 的 5 条 + 本批 30 条"
+        );
+        assert_eq!(
+            COMMANDS
+                .iter()
+                .filter(|d| d.imp == Imp::Unimplemented)
+                .count(),
+            150,
+            "185 - 35"
+        );
+        let cases: &[(&str, Imp)] = &[
+            ("LoadAdmin", Imp::LoadAdmin),
+            ("NpcScript", Imp::NpcScript),
+            ("ReloadAbuse", Imp::ReloadAbuse),
+            ("重读GM", Imp::ReLoadAdmin),
+            ("ReloadGuildAll", Imp::ReloadAllGuild),
+            ("ReloadItemDB", Imp::ReloadItemDb),
+            ("ReloadGuild", Imp::ReloadGuild),
+            ("重读公告", Imp::ReloadLineNotice),
+            ("ReloadMagicDB", Imp::ReloadMagicDb),
+            ("重读登陆", Imp::ReloadManage),
+            ("重读爆率", Imp::ReloadMonItems),
+            ("重读商人", Imp::ReloadNpc),
+            ("重读机器人脚本", Imp::ReloadRobot),
+            ("重读机器人配置", Imp::ReloadRobotManage),
+            ("-jid", Imp::DelDenyAccount),
+            ("DelDenyChrNameLogon", Imp::DelDenyChrName),
+            ("-jip", Imp::DelDenyIp),
+            ("+jid", Imp::DenyAccount),
+            ("DenyChrNameLogon", Imp::DenyChrName),
+            ("+jip", Imp::DenyIp),
+            ("+-jid", Imp::ShowDenyAccount),
+            ("ShowDenyCharNameLogon", Imp::ShowDenyChrName),
+            ("+-jip", Imp::ShowDenyIp),
+            ("Backstep", Imp::BackStep),
+            ("TestFire", Imp::TestFire),
+            ("TestGetBagItems", Imp::TestGetBagItems),
+            ("TestSpeedMode", Imp::TestSpeedMode),
+            ("TestStatus", Imp::TestStatus),
+            ("UserCmd", Imp::UserCmd),
+            ("FireBurn", Imp::FireBurn),
+        ];
+        assert_eq!(cases.len(), 30);
+        for (name, imp) in cases {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 必须在命令表里"));
+            assert_eq!(def.imp, *imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 现网权限 = 10");
+        }
+    }
+
+    /// 封禁名单 9 条的文本（含「表恒空」与复制粘贴怪癖）。
+    #[test]
+    fn deny_family_texts_match_oracle() {
+        use GmColor::*;
+        let cases: &[(&str, GmColor, &str)] = &[
+            ("@-jid", Red, DEL_DENY_ACCOUNT_HELP),
+            ("@-jid acct", Green, "acct没有被禁止登录。"),
+            ("@DelDenyChrNameLogon", Red, DEL_DENY_CHRNAME_HELP),
+            ("@DelDenyChrNameLogon 张三", Green, "张三没有被禁止登录。"),
+            ("@-jip", Red, DEL_DENY_IP_HELP),
+            ("@-jip 1.2.3.4", Green, "1.2.3.4没有被禁止登录。"),
+            ("@+jid", Red, DENY_ACCOUNT_HELP),
+            ("@+jid acct 1", Green, "acct已加入禁止登录帐号列表"),
+            ("@+jid acct 0", Green, "acct已加入临时禁止登录帐号列表"),
+            ("@+jid acct", Green, "acct已加入临时禁止登录帐号列表"),
+            ("@DenyChrNameLogon", Red, DENY_CHRNAME_HELP),
+            ("@DenyChrNameLogon 张三 1", Green, "张三已加入禁止人物列表"),
+            (
+                "@DenyChrNameLogon 张三 0",
+                Green,
+                "张三已加入临时禁止人物列表",
+            ),
+            ("@+jip", Red, DENY_IP_HELP),
+            ("@+jip 1.2.3.4", Green, "1.2.3.4已加入临时禁止登录IP列表"),
+            // 4 参才轮到 `@params[3]`（2/3 参抛越界，见下一条用例）。
+            ("@+jip 1.2.3.4 a b 1", Green, "1.2.3.4已加入禁止登录IP列表"),
+            (
+                "@+jip 1.2.3.4 a b 0",
+                Green,
+                "1.2.3.4已加入临时禁止登录IP列表",
+            ),
+            // Show 族：三表恒空；`ShowDenyIPaddr` 的表空提示沿用角色文案。
+            ("@+-jid", Green, "禁止登录帐号列表为空。"),
+            ("@ShowDenyCharNameLogon", Green, "禁止登录角色列表为空。"),
+            ("@+-jip", Green, "禁止登录角色列表为空。"),
+        ];
+        for (line, color, text) in cases {
+            let (r, _) = run_gm(line);
+            assert_eq!(texts(&r), vec![(*color, *text)], "{line}");
+            assert!(r.found && r.parsed, "{line}");
+        }
+    }
+
+    /// `@+jip` 的越界怪癖：2/3 个参数 ⇒ `@params[3]` 抛 `IndexOutOfRangeException`（catch 吞）⇒ 零帧。
+    #[test]
+    fn deny_ip_two_or_three_params_throw_like_oracle() {
+        for line in ["@+jip 1.2.3.4 x", "@+jip 1.2.3.4 x y"] {
+            let (r, _) = run_gm(line);
+            assert!(r.found, "{line}");
+            assert!(r.msgs.is_empty(), "{line} 应零帧（越界被 catch 吞）");
+            assert!(r.log_note.is_some(), "{line} 要留痕");
+        }
+        // 1 参不越界：走 `""` 支。
+        let (r, _) = run_gm("@+jip 1.2.3.4");
+        assert_eq!(r.msgs.len(), 1);
+        // 0 参：`@params == [""]` ⇒ 帮助（越界发生在判空之前，但 1 参不越界）。
+        let (r, _) = run_gm("@+jip");
+        assert_eq!(texts(&r), vec![(GmColor::Red, DENY_IP_HELP)]);
+    }
+
+    /// 重载/管理 14 条：文本 + 主服门 + 宿主开关分支。
+    #[test]
+    fn reload_family_texts_and_branches() {
+        use GmColor::*;
+        let cases: &[(&str, GmColor, &str)] = &[
+            // oracle 里 `LoadAdminList`/`SendServerGroupMsg` 均被注释 ⇒ 纯文本。
+            ("@LoadAdmin", Green, "管理员列表重新加载成功..."),
+            ("@重读GM", Green, "管理员列表重新加载成功..."),
+            ("@ReloadGuildAll", Red, "重新加载行会信息完成."),
+            ("@ReloadItemDB", Green, "物品数据库重新加载完成。"),
+            ("@ReloadMagicDB", Green, "魔法数据库重新加载完成。"),
+            ("@ReloadGuild", Red, RELOAD_GUILD_HELP),
+            ("@ReloadGuild 血盟", Red, "未找到行会血盟!!!"),
+            ("@重读公告", Green, "重新加载公告设置信息完成。"),
+            ("@重读爆率", Green, "怪物爆物品列表重加载完成..."),
+            ("@重读机器人脚本", Green, "重新加载机器人配置完成..."),
+            ("@重读机器人配置", Green, "重新加载机器人专用脚本完成..."),
+        ];
+        for (line, color, text) in cases {
+            let (r, _) = run_gm(line);
+            assert_eq!(texts(&r), vec![(*color, *text)], "{line}");
+        }
+        // 零帧两条：`@ReloadAbuse` 空体、`@NpcScript` 整段注释（`File.Exists("")` 恒 false）。
+        for line in ["@ReloadAbuse", "@NpcScript", "@重读商人"] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.msgs.is_empty(), "{line} 应零帧");
+        }
+        // `@重读登陆`：两条 Green，顺序固定（登录脚本 → 功能脚本）。
+        let (r, _) = run_gm("@重读登陆");
+        assert_eq!(
+            texts(&r),
+            vec![
+                (Green, "重新加载登录脚本完成..."),
+                (Green, "重新加载功能脚本完成..."),
+            ]
+        );
+        // 失败支也是 Green（oracle 怪癖）。
+        let cfg = GmConfig {
+            manage_npc_present: false,
+            function_npc_present: false,
+            ..GmConfig::default()
+        };
+        let (r, _) = run_gm_with(&cfg, "@重读登陆");
+        assert_eq!(
+            texts(&r),
+            vec![
+                (Green, "重新加载登录脚本失败..."),
+                (Green, "重新加载功能脚本失败..."),
+            ]
+        );
+        let cfg = GmConfig {
+            robot_npc_present: false,
+            ..GmConfig::default()
+        };
+        let (r, _) = run_gm_with(&cfg, "@重读机器人配置");
+        assert_eq!(texts(&r), vec![(Green, "重新加载机器人专用脚本失败...")]);
+        let cfg = GmConfig {
+            notice_file_exists: false,
+            ..GmConfig::default()
+        };
+        let (r, _) = run_gm_with(&cfg, "@重读公告");
+        assert_eq!(texts(&r), vec![(Red, "重新加载公告设置信息失败!!!")]);
+        // 主服门（部署 `ServerIndex = 0`，测试里构造 1 覆盖拒绝支）。
+        let cfg = GmConfig {
+            server_index: 1,
+            ..GmConfig::default()
+        };
+        for line in ["@ReloadGuildAll", "@ReloadGuild 血盟"] {
+            let (r, _) = run_gm_with(&cfg, line);
+            assert_eq!(
+                texts(&r),
+                vec![(Red, "此命令只能在主游戏服务器上执行!!!")],
+                "{line}"
+            );
+        }
+    }
+
+    /// `@ReloadGuild` 命中支：`FindGuild` 精确匹配 ⇒ `行会{name}重加载成功...`（Red）。
+    #[test]
+    fn reload_guild_found_uses_exact_name_match() {
+        let mut gm = mir2_world::GuildManager::new();
+        gm.guilds.push(mir2_world::GuildState::new("血盟"));
+        let world = GmWorld { guilds: &gm };
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let r = execute(&mut sess, &GmConfig::default(), &world, "@ReloadGuild 血盟");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "行会血盟重加载成功...")]);
+        assert!(r.log_note.is_some(), "LoadGuild 宿主未接要留痕");
+        // 大小写不同 = 不同会名（oracle `GuildName ==` 精确），但这里中文无大小写；
+        // 用 ASCII 会名钉住「不是 OrdinalIgnoreCase」。
+        let mut gm = mir2_world::GuildManager::new();
+        gm.guilds.push(mir2_world::GuildState::new("Blood"));
+        let world = GmWorld { guilds: &gm };
+        let r = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &world,
+            "@ReloadGuild blood",
+        );
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "未找到行会blood!!!")],
+            "FindGuild 是 `==` 精确匹配，不是 OrdinalIgnoreCase"
+        );
+    }
+
+    /// 桩/测试 7 条：文本、翻转、越界零帧、字面量 `%d` 怪癖。
+    #[test]
+    fn stub_family_texts_match_oracle() {
+        use GmColor::*;
+        // `TestGetBagItems`：`string.Format` 无 `{n}` 占位符 ⇒ 原文照发。
+        let (r, _) = run_gm("@TestGetBagItems");
+        assert_eq!(texts(&r), vec![(Blue, "DC:%d SC:%d MC:%d DURA:%d")]);
+        // `TestSpeedMode`：翻转 + Red。
+        let (r, sess) = run_gm("@TestSpeedMode");
+        assert_eq!(texts(&r), vec![(Red, "开启速度测试模式")]);
+        assert!(sess.test_speed_mode);
+        let mut sess = sess;
+        let r = exec(&mut sess, &GmConfig::default(), "@TestSpeedMode");
+        assert_eq!(texts(&r), vec![(Red, "关闭速度测试模式")]);
+        assert!(!sess.test_speed_mode);
+        // `TestStatus`：合法下标回文本；越界（含负数）抛异常被吞 ⇒ 零帧。
+        let (r, _) = run_gm("@TestStatus 3 60");
+        assert_eq!(texts(&r), vec![(Green, "状态编号:3 时间长度: 60 秒")]);
+        let (r, _) = run_gm("@TestStatus 14 -5");
+        assert_eq!(texts(&r), vec![(Green, "状态编号:14 时间长度: -5 秒")]);
+        for line in ["@TestStatus 15 1", "@TestStatus -1 1", "@TestStatus 99 1"] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.msgs.is_empty(), "{line} 应零帧（数组越界）");
+            assert!(r.log_note.is_some());
+        }
+        // 零帧：TestFire / UserCmd / Backstep / FireBurn（有参数）。
+        for line in [
+            "@TestFire 3 1 5 10",
+            "@UserCmd anylabel",
+            "@Backstep 3 5",
+            "@Backstep",
+            "@FireBurn 1 1 1",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.msgs.is_empty(), "{line} 应零帧");
+        }
+        // `FireBurn` 参数有 0 ⇒ 红字帮助，且 Help 为 null ⇒ 正文带尾随空格。
+        let (r, _) = run_gm("@FireBurn 1 0 1");
+        assert_eq!(texts(&r), vec![(Red, "命令格式: @FireBurn ")]);
+        assert!(FIRE_BURN_HELP.ends_with(' '));
     }
 }
