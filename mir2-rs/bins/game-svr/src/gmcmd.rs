@@ -135,6 +135,79 @@ pub const ENABLE_MASTER_RECALL: &str = "允许师徒传送!!!";
 /// `CommandHelp.DisableMasterRecall`。
 pub const DISABLE_MASTER_RECALL: &str = "禁止师徒传送!!!";
 
+// ===== 批次 4（数值/角色族，设计件 §4.3 第 72–115 行，44 条）的 CommandHelp 常量 =====
+//
+// 口径同上：`命令格式: @{现网名} {Help}`（`CommandAttribute.cs:53`）；`Help` 为空时**末尾空格保留**
+// （与 `FIRE_BURN_HELP` 同形）。现网名取 `Command.conf` 覆盖后的值（设计件 §4.3「现网名」列）。
+pub const ADD_GAME_POINT_HELP: &str = "命令格式: @AddGamePoint 人物名称  金币数量";
+pub const ADD_GOLD_HELP: &str = "命令格式: @加钱 人物名称  金币数量";
+pub const ADJUEST_EXP_HELP: &str = "命令格式: @调整经验 物名称 经验值";
+pub const ADJUEST_LEVEL_HELP: &str = "命令格式: @1级 人物名称 等级";
+pub const ADJUST_EXP_HELP: &str = "命令格式: @AdjustExp ";
+pub const BIND_USE_ITEM_HELP: &str = "命令格式: @Binduseitem 人物名称 物品类型 绑定方法";
+pub const BONU_POINT_HELP: &str = "命令格式: @调整属性 人物名称 属性点数(不输入为查看点数)";
+pub const CHANGE_ADMIN_MODE_HELP: &str = "命令格式: @1 ";
+pub const CHANGE_ATTACK_MODE_HELP: &str = "命令格式: @AttackMode ";
+pub const CHANGE_DEAR_NAME_HELP: &str = "命令格式: @伴侣变更 人物名称 配偶名称(如果为 无 则清除)";
+pub const CHANGE_GENDER_HELP: &str = "命令格式: @改变性别 人物名称 性别(男、女)";
+pub const CHANGE_ITEM_NAME_HELP: &str = "命令格式: @ChangeItemName 物品编号 物品ID号 物品名称";
+pub const CHANGE_JOB_HELP: &str = "命令格式: @职业变更  人物名称 职业类型(Warr Wizard Taos)";
+pub const CHANGE_LEVEL_HELP: &str = "命令格式: @Level0 等级(1-65535)";
+pub const CHANGE_MASTER_NAME_HELP: &str =
+    "命令格式: @MasterName 人物名称 师徒名称(如果为 无 则清除)";
+pub const CHANGE_OB_MODE_HELP: &str = "命令格式: @2 ";
+pub const CHANGE_SALVE_STATUS_HELP: &str = "命令格式: @Rest ";
+pub const CHANGE_SUPER_MAN_MODE_HELP: &str = "命令格式: @3 ";
+pub const CHANGE_USER_FULL_HELP: &str = "命令格式: @CHGUSERFULL 人数";
+pub const CHANGE_ZEN_FAST_STEP_HELP: &str = "命令格式: @CHGZENFASTSTEP 速度";
+pub const CREDIT_POINT_HELP: &str = "命令格式: @调整声望 人物名称 控制符(+,-,=) 声望点数(0-255)";
+pub const DEL_BONU_POINT_HELP: &str = "命令格式: @DelBonusPoint 人物名称";
+pub const DELETE_ITEM_HELP: &str = "命令格式: @删除物品 人物名称 物品名称 数量";
+pub const DEL_GAME_GOLD_HELP: &str = "命令格式: @DelGamePoint 人物名称 数量";
+pub const DEL_GOLD_HELP: &str = "命令格式: @减钱 人物名称 数量";
+pub const FREE_PENALTY_HELP: &str = "命令格式: @清除PK 人物名称";
+pub const GAME_DIAMOND_HELP: &str = "命令格式: @GameDiaMond ";
+pub const GAME_GIRD_HELP: &str = "命令格式: @GameGird ";
+pub const GAME_GLORY_HELP: &str = "命令格式: @GameGlory ";
+pub const GAME_GOLD_HELP: &str =
+    "命令格式: @VV调整元宝  人物名称 控制符(+,-,=) 游戏币(1-200000000)";
+pub const GAME_POINT_HELP: &str =
+    "命令格式: @调整泡点 人物名称 控制符(+,-,=) 游戏点数(1-100000000)";
+pub const GET_USER_ITEMS_HELP: &str = "命令格式: @GetUserItems 人物名称 物品名称 数量 类型(0,1,2)";
+pub const HAIR_HELP: &str = "命令格式: @改变发型 人物名称 类型值";
+pub const HUNGER_HELP: &str = "命令格式: @Hunger 人物名称 能量值";
+pub const INC_PK_POINT_HELP: &str = "命令格式: @增加PK 人物名称 PK点数";
+pub const LUCK_POINT_HELP: &str = "命令格式: @LuckyPoint 人物名称 控制符 幸运点数";
+pub const PK_POINT_HELP: &str = "命令格式: @查看PK 人物名称";
+pub const REFINE_WEAPON_HELP: &str = "命令格式: @RefineWeaponwa 攻击力 魔法力 道术 准确度";
+pub const RE_NEW_LEVEL_HELP: &str = "命令格式: @转生 人物名称 点数(为空则查看)";
+pub const REST_BONU_POINT_HELP: &str = "命令格式: @RestBonuPoint 人物名称";
+pub const TRAINING_HELP: &str = "命令格式: @+jn ";
+pub const TRAINING_MAGIC_HELP: &str = "命令格式: @TrainingMagic 人物名称  技能名称 修炼等级(0-3)";
+pub const TRAINING_SKILL_HELP: &str = "命令格式: @增加技能 人物名称  技能名称 修炼等级(0-3)";
+pub const UNBIND_USE_ITEM_HELP: &str = "命令格式: @UnBindUseItem ";
+
+// ---- 批次 4 的 SysMsg 正文（`MessageSettings` / `CommandHelp` 原文；`String.ini` 未随部署提供 ⇒ 取
+// ---- `SystemModule/MessageSettings.cs` 的构造默认值，见 T-179）----
+pub const USER_FULL_TITLE: &str = "设置服务器最高上线人数。";
+pub const ZEN_FAST_STEP_TITLE: &str = "设置怪物行动速度。";
+pub const ITEM_NAME_OCCUPIED: &str = "此物品，已经设置了其它的名称!!!";
+pub const ADMIN_MODE_ON: &str = "已进入管理员模式";
+pub const ADMIN_MODE_OFF: &str = "已退出管理员模式";
+pub const OBSERVER_MODE_ON: &str = "已进入隐身模式";
+pub const OBSERVER_MODE_OFF: &str = "已退出隐身模式";
+pub const SUPERMAN_MODE_ON: &str = "已进入无敌模式";
+pub const SUPERMAN_MODE_OFF: &str = "已退出无敌模式";
+pub const PET_REST: &str = "下属：休息";
+pub const PET_ATTACK: &str = "下属：攻击";
+pub const ATTACK_MODE_ALL: &str = "[攻击模式: 全体攻击]";
+pub const ATTACK_MODE_PEACEFUL: &str = "[攻击模式: 和平攻击]";
+pub const ATTACK_MODE_DEAR: &str = "[攻击模式: 夫妻攻击]";
+pub const ATTACK_MODE_MASTER: &str = "[攻击模式: 师徒攻击]";
+pub const ATTACK_MODE_GROUP: &str = "[攻击模式: 编组攻击]";
+pub const ATTACK_MODE_GUILD: &str = "[攻击模式: 行会攻击]";
+pub const ATTACK_MODE_RED_WHITE: &str = "[攻击模式: 红名攻击]";
+
 /// 内建命令名（`CommandSystem.cs:255-307` 的两个嵌套类，**不属于** 185 个命令类）。
 pub const BUILTIN_HELP: &str = "help";
 pub const BUILTIN_COMMANDS: &str = "commands";
@@ -261,7 +334,97 @@ pub enum Imp {
     /// `UserMoveXyCommand`（现网 `@传送`；§4.3 归「其它」，§6 G3 点名本批）。
     UserMoveXy,
 
-    /// 未接的 132 条（185 − G1 5 条 − 批次 2/3 30 条 − 本批 18 条）：现网全被权限门挡住，
+    // ---- 批次 4 · 数值/角色族（44，设计件 §4.3 第 72–115 行）----
+    /// `AddGameGoldCommand`（现网 `@AddGamePoint`）。
+    AddGameGold,
+    /// `AddGoldCommand`（现网 `@加钱`）。
+    AddGold,
+    /// `AdjuestExpCommand`（现网 `@调整经验`）。
+    AdjuestExp,
+    /// `AdjuestLevelCommand`（现网 `@1级`）。
+    AdjuestLevel,
+    /// `AdjustExpCommand`（现网 `@AdjustExp`；体只有权限自检）。
+    AdjustExp,
+    /// `BindUseItemCommand`（现网 `@Binduseitem`）。
+    BindUseItem,
+    /// `BonuPointCommand`（现网 `@调整属性`）。
+    BonuPoint,
+    /// `ChangeAdminModeCommand`（现网 `@1`）。
+    ChangeAdminMode,
+    /// `ChangeAttackModeCommand`（现网 `@AttackMode`）。
+    ChangeAttackMode,
+    /// `ChangeDearNameCommand`（现网 `@伴侣变更`）。
+    ChangeDearName,
+    /// `ChangeGenderCommand`（现网 `@改变性别`）。
+    ChangeGender,
+    /// `ChangeItemNameCommand`（现网 `@ChangeItemName`）。
+    ChangeItemName,
+    /// `ChangeJobCommand`（现网 `@职业变更`）。
+    ChangeJob,
+    /// `ChangeLevelCommand`（现网 `@Level0`）。
+    ChangeLevel,
+    /// `ChangeMasterNameCommand`（现网 `@MasterName`）。
+    ChangeMasterName,
+    /// `ChangeObModeCommand`（现网 `@2`）。
+    ChangeObMode,
+    /// `ChangeSalveStatusCommand`（现网 `@Rest`）。
+    ChangeSalveStatus,
+    /// `ChangeSuperManModeCommand`（现网 `@3`）。
+    ChangeSuperManMode,
+    /// `ChangeUserFullCommand`（现网 `@CHGUSERFULL`）。
+    ChangeUserFull,
+    /// `ChangeZenFastStepCommand`（现网 `@CHGZENFASTSTEP`）。
+    ChangeZenFastStep,
+    /// `CreditPointCommand`（现网 `@调整声望`）。
+    CreditPoint,
+    /// `DelBonuPointCommand`（现网 `@DelBonusPoint`）。
+    DelBonuPoint,
+    /// `DeleteItemCommand`（现网 `@删除物品`）。
+    DeleteItem,
+    /// `DelGameGoldCommand`（现网 `@DelGamePoint`）。
+    DelGameGold,
+    /// `DelGoldCommand`（现网 `@减钱`）。
+    DelGold,
+    /// `FreePenaltyCommand`（现网 `@清除PK`）。
+    FreePenalty,
+    /// `GameDiaMondCommand`（现网 `@GameDiaMond`；体为空）。
+    GameDiamond,
+    /// `GameGirdCommand`（现网 `@GameGird`；体为空）。
+    GameGird,
+    /// `GameGloryCommand`（现网 `@GameGlory`；体为空）。
+    GameGlory,
+    /// `GameGoldCommand`（现网 `@VV调整元宝`）。
+    GameGold,
+    /// `GamePointCommand`（现网 `@调整泡点`）。
+    GamePoint,
+    /// `GetUserItemsCommand`（现网 `@GetUserItems`）。
+    GetUserItems,
+    /// `HairCommand`（现网 `@改变发型`）。
+    Hair,
+    /// `HungerCommand`（现网 `@Hunger`）。
+    Hunger,
+    /// `IncPkPointCommand`（现网 `@增加PK`）。
+    IncPkPoint,
+    /// `LuckPointCommand`（现网 `@LuckyPoint`）。
+    LuckPoint,
+    /// `PKpointCommand`（现网 `@查看PK`）。
+    PkPoint,
+    /// `RefineWeaponCommand`（现网 `@RefineWeaponwa`）。
+    RefineWeapon,
+    /// `ReNewLevelCommand`（现网 `@转生`）。
+    ReNewLevel,
+    /// `RestBonuPointCommand`（现网 `@RestBonuPoint`）。
+    RestBonuPoint,
+    /// `TrainingCommand`（现网 `@+jn`；体只有权限自检）。
+    Training,
+    /// `TrainingMagicCommand`（现网 `@TrainingMagic`）。
+    TrainingMagic,
+    /// `TrainingSkillCommand`（现网 `@增加技能`）。
+    TrainingSkill,
+    /// `UnBindUseItemCommand`（现网 `@UnBindUseItem`；体整段注释）。
+    UnBindUseItem,
+
+    /// 未接的 88 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条）：现网全被权限门挡住，
     /// 命令体留 G4-G6。
     Unimplemented,
 }
@@ -340,6 +503,19 @@ pub struct GmSession {
     pub group_rcall_time: i16,
     /// `PlayObject.MasterList` 的**在线**徒弟名（本仓无师徒在线表 ⇒ 恒空，T-168）。
     pub master_list: Vec<String>,
+    // ---- 批次 4 · 数值/角色族（`PlayObject` 同生命周期字段）----
+    /// `PlayObject.AdminMode`（`@1` 翻转）。
+    pub admin_mode: bool,
+    /// `PlayObject.ObMode`（`@2` 翻转）。
+    pub ob_mode: bool,
+    /// `PlayObject.SuperMan`（`@3` 翻转）。
+    pub super_man: bool,
+    /// `PlayObject.SlaveRelax`（`@Rest` 翻转）。
+    pub slave_relax: bool,
+    /// `PlayObject.AttatckMode`（`@AttackMode`；`AttackMode` 枚举 0..=6）。
+    pub attack_mode: u8,
+    /// `PlayObject.ReLevel`（`@转生` 只写「发起者自己」时的镜像；其余情况保持登录值）。
+    pub re_level: u8,
 }
 
 impl Default for GmSession {
@@ -366,6 +542,12 @@ impl Default for GmSession {
             group_rcall_tick: 0,
             group_rcall_time: 0,
             master_list: Vec::new(),
+            admin_mode: false,
+            ob_mode: false,
+            super_man: false,
+            slave_relax: false,
+            attack_mode: 0,
+            re_level: 0,
         }
     }
 }
@@ -1769,6 +1951,52 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::Ting => ting(parameters, world),
         Imp::UserMoveXy => user_move_xy(parameters, sess, cfg, world),
 
+        // ---- 批次 4 · 数值/角色族（44）----
+        Imp::AddGameGold => add_game_gold(parameters, world),
+        Imp::AddGold => add_gold(parameters, world),
+        Imp::AdjuestExp => adjuest_exp(parameters, world),
+        Imp::AdjuestLevel => adjuest_level(parameters, world),
+        Imp::AdjustExp => adjust_exp(),
+        Imp::BindUseItem => bind_use_item(parameters, world),
+        Imp::BonuPoint => bonu_point(parameters, world),
+        Imp::ChangeAdminMode => change_admin_mode(sess),
+        Imp::ChangeAttackMode => change_attack_mode(sess),
+        Imp::ChangeDearName => change_dear_name(parameters, world),
+        Imp::ChangeGender => change_gender(parameters, world),
+        Imp::ChangeItemName => change_item_name(parameters),
+        Imp::ChangeJob => change_job(parameters, world),
+        Imp::ChangeLevel => change_level(parameters),
+        Imp::ChangeMasterName => change_master_name(parameters, world),
+        Imp::ChangeObMode => change_ob_mode(sess),
+        Imp::ChangeSalveStatus => change_salve_status(sess, world),
+        Imp::ChangeSuperManMode => change_super_man_mode(sess),
+        Imp::ChangeUserFull => change_user_full(parameters),
+        Imp::ChangeZenFastStep => change_zen_fast_step(parameters),
+        Imp::CreditPoint => credit_point(parameters, world),
+        Imp::DelBonuPoint => del_bonu_point(parameters, world),
+        Imp::DeleteItem => delete_item(parameters, world),
+        Imp::DelGameGold => del_game_gold(parameters, world),
+        Imp::DelGold => del_gold(parameters, world),
+        Imp::FreePenalty => free_penalty(parameters, world),
+        Imp::GameDiamond => game_diamond(),
+        Imp::GameGird => game_gird(),
+        Imp::GameGlory => game_glory(),
+        Imp::GameGold => game_gold(parameters, world),
+        Imp::GamePoint => game_point(parameters, world),
+        Imp::GetUserItems => get_user_items(parameters, world),
+        Imp::Hair => hair(parameters, world),
+        Imp::Hunger => hunger(parameters, world),
+        Imp::IncPkPoint => inc_pk_point(parameters, world),
+        Imp::LuckPoint => luck_point(parameters, world),
+        Imp::PkPoint => pk_point(parameters),
+        Imp::RefineWeapon => refine_weapon(parameters),
+        Imp::ReNewLevel => re_new_level(parameters, sess, world),
+        Imp::RestBonuPoint => rest_bonu_point(parameters, world),
+        Imp::Training => training(),
+        Imp::TrainingMagic => training_magic(parameters, world),
+        Imp::TrainingSkill => training_skill(parameters, world),
+        Imp::UnBindUseItem => unbind_use_item(),
+
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -1819,7 +2047,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "+jn",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::Training,
     },
     CommandDef {
         name: "+jy",
@@ -1849,31 +2077,31 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "1",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeAdminMode,
     },
     CommandDef {
         name: "1级",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AdjuestLevel,
     },
     CommandDef {
         name: "2",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeObMode,
     },
     CommandDef {
         name: "3",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeSuperManMode,
     },
     CommandDef {
         name: "AddGamePoint",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AddGameGold,
     },
     CommandDef {
         name: "AddRobotPlay",
@@ -1885,7 +2113,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "AdjustExp",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AdjustExp,
     },
     CommandDef {
         name: "Announcement",
@@ -1897,7 +2125,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "AttackMode",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeAttackMode,
     },
     CommandDef {
         name: "Backstep",
@@ -1915,25 +2143,25 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Binduseitem",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::BindUseItem,
     },
     CommandDef {
         name: "ChangeItemName",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeItemName,
     },
     CommandDef {
         name: "CHGUSERFULL",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeUserFull,
     },
     CommandDef {
         name: "CHGZENFASTSTEP",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeZenFastStep,
     },
     CommandDef {
         name: "ClearCopyItem",
@@ -1957,7 +2185,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "DelBonusPoint",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelBonuPoint,
     },
     CommandDef {
         name: "DelDenyChrNameLogon",
@@ -1969,7 +2197,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "DelGamePoint",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelGameGold,
     },
     CommandDef {
         name: "DelNpc",
@@ -2053,25 +2281,25 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "GameDiaMond",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::GameDiamond,
     },
     CommandDef {
         name: "GameGird",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::GameGird,
     },
     CommandDef {
         name: "GameGlory",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::GameGlory,
     },
     CommandDef {
         name: "GetUserItems",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::GetUserItems,
     },
     CommandDef {
         name: "gfh678dfg",
@@ -2119,7 +2347,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Hunger",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::Hunger,
     },
     CommandDef {
         name: "IP",
@@ -2137,7 +2365,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Level0",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeLevel,
     },
     CommandDef {
         name: "LoadAdmin",
@@ -2161,7 +2389,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "LuckyPoint",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::LuckPoint,
     },
     CommandDef {
         name: "Map",
@@ -2179,7 +2407,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "MasterName",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeMasterName,
     },
     CommandDef {
         name: "MemberFuncEx",
@@ -2269,7 +2497,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "RefineWeaponwa",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::RefineWeapon,
     },
     CommandDef {
         name: "ReGotoHuman",
@@ -2311,13 +2539,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Rest",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeSalveStatus,
     },
     CommandDef {
         name: "RestBonuPoint",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::RestBonuPoint,
     },
     CommandDef {
         name: "s",
@@ -2485,13 +2713,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "TrainingMagic",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::TrainingMagic,
     },
     CommandDef {
         name: "UnBindUseItem",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::UnBindUseItem,
     },
     CommandDef {
         name: "UserCmd",
@@ -2515,7 +2743,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "VV调整元宝",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::GameGold,
     },
     CommandDef {
         name: "VV踢人",
@@ -2545,7 +2773,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "伴侣变更",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeDearName,
     },
     CommandDef {
         name: "信息",
@@ -2575,7 +2803,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "减钱",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelGold,
     },
     CommandDef {
         name: "创建行会",
@@ -2593,7 +2821,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "删除物品",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DeleteItem,
     },
     CommandDef {
         name: "删除行会",
@@ -2611,7 +2839,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "加钱",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AddGold,
     },
     CommandDef {
         name: "取消禁言",
@@ -2629,13 +2857,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "增加PK",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::IncPkPoint,
     },
     CommandDef {
         name: "增加技能",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::TrainingSkill,
     },
     CommandDef {
         name: "复活",
@@ -2695,13 +2923,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "改变发型",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::Hair,
     },
     CommandDef {
         name: "改变性别",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeGender,
     },
     CommandDef {
         name: "改属性",
@@ -2725,7 +2953,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "查看PK",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PkPoint,
     },
     CommandDef {
         name: "查看周围",
@@ -2761,7 +2989,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "清除PK",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::FreePenalty,
     },
     CommandDef {
         name: "清除仓库密码",
@@ -2803,7 +3031,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "职业变更",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeJob,
     },
     CommandDef {
         name: "联盟",
@@ -2815,31 +3043,31 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "调整声望",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::CreditPoint,
     },
     CommandDef {
         name: "调整属性",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::BonuPoint,
     },
     CommandDef {
         name: "调整泡点",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::GamePoint,
     },
     CommandDef {
         name: "调整经验",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AdjuestExp,
     },
     CommandDef {
         name: "转生",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReNewLevel,
     },
     CommandDef {
         name: "退出门派",
@@ -2896,6 +3124,817 @@ pub const COMMANDS: &[CommandDef] = &[
         imp: Imp::MapMoveHuman,
     },
 ];
+
+const NOTE_GM4_NOOP: &str = "批次 4：oracle 命令体为空/只有权限自检 ⇒ no-op（零帧）";
+
+// ============================================================================================
+// 批次 4：数值/角色族 44 条（设计件 §4.3 第 72–115 行；tier=R）
+//
+// 本批的统一前提（逐条登记 T-174..T-179，见 `mir2-rs/tests/parity/whitelist.md`）：
+//
+// 1. **目标数值态缺口**：`GmWorld` 只有 `&World` 只读视图，且 `Entity` 不携带
+//    `Gold/GameGold/GamePoint/CreditPoint/Level/Exp/BonusAbil/PkPoint/Luck/...`。凡「目标在线」
+//    之后要读这些值的分支（含 `X的金币已增加{n}.` 里会被 `GoldMax` 夹取的 `n`），一律
+//    `log_note` 登记，**不伪造**（任务书：不得伪造即时落库）。
+// 2. **目标侧 SysMsg 缺口**：oracle 里 `mIPlayerActor.SysMsg(...)`（发给**其它角色**）本仓无
+//    通道——`GmResult.msgs` 只承载发起者自己的帧 ⇒ 只出发起者那条，目标那条登记。
+// 3. **可变副作用缺口**：`GmWorld` 无 `&mut World` ⇒ 所有写值（金币/等级/属性/背包/技能/配置）
+//    登记，不留假实现。
+//
+// 与宿主能力无关的部分（参数解析、空参/`?` 前缀/越界/控制符集合/`StrToInt` 缺省值/异常路径）
+// 必须 1:1，逐行照抄对应 `.cs`。
+// ============================================================================================
+
+const NOTE_GM4_TARGET_STATE: &str =
+    "批次 4：目标角色数值态不在 Entity 上（T-174）⇒ 效果与依赖该值的文本未接";
+const NOTE_GM4_TARGET_SYSMSG: &str =
+    "批次 4：发给其它角色的 SysMsg 无通道（T-175）⇒ 只出 GM 侧那条";
+const NOTE_GM4_BAG: &str = "批次 4：背包/物品绑定宿主未接（T-176）";
+const NOTE_GM4_MAGIC: &str = "批次 4：魔法库/技能表宿主未接（T-177）";
+const NOTE_GM4_CONFIG: &str = "批次 4：Config 运行期写点未接（T-178）";
+const NOTE_GM4_EXCEPTION: &str =
+    "批次 4：oracle 在此抛异常（被 ProcessUserLineMsg 的 catch 吞掉）⇒ 零帧";
+const NOTE_GM4_FRONT_SERVER: &str =
+    "批次 4：FindOtherServerUser（跨服在线表）宿主未接（T-178）⇒ 按「不在线」支";
+
+/// 两条 SysMsg 的便捷构造（`Vec<GmMsg>` 顺序即发送顺序）。
+fn two_msgs(first: (GmColor, String), second: (GmColor, String)) -> GmResult {
+    GmResult {
+        found: true,
+        parsed: true,
+        msgs: vec![
+            GmMsg {
+                color: first.0,
+                text: first.1,
+            },
+            GmMsg {
+                color: second.0,
+                text: second.1,
+            },
+        ],
+        log_note: None,
+    }
+}
+
+fn noted(mut result: GmResult, note: &'static str) -> GmResult {
+    result.log_note = Some(note);
+    result
+}
+
+/// 目标是否在线（`WorldEngine.GetPlayObject`）。
+fn target_online(world: &GmWorld<'_>, name: &str) -> bool {
+    world.play_by_name(name).is_some()
+}
+
+/// `AddGameGoldCommand`（现网 `@AddGamePoint`）。
+fn add_game_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let point = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    // oracle 体另有 `Permission < 6 ⇒ return`：`perm_min = 10` 的门先挡，与该判断同效。
+    if name.is_empty() || point <= 0 {
+        return red(ADD_GAME_POINT_HELP);
+    }
+    if target_online(world, name) {
+        // 在线支：「游戏点已增加{n}.」+ GM 侧「{name}的游戏点已增加{n}.」，n 依赖目标 GameGold。
+        no_frames(NOTE_GM4_TARGET_STATE)
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `AddGoldCommand`（现网 `@加钱`）。
+fn add_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let count = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    if name.is_empty() || count <= 0 {
+        return red(ADD_GOLD_HELP);
+    }
+    if target_online(world, name) {
+        // 在线支：`Gold + n < GoldMax` 才全额，否则夹取到 `GoldMax - Gold` ⇒ 文本依赖目标 Gold。
+        no_frames(NOTE_GM4_TARGET_STATE)
+    } else {
+        // `FindOtherServerUser` 命中支发绿字「{name} 现在{n}号服务器上」；跨服表未接（T-178）。
+        noted(
+            green(format!("{name} 现在不在线，等其上线时金币将自动增加")),
+            NOTE_GM4_FRONT_SERVER,
+        )
+    }
+}
+
+/// `AdjuestExpCommand`（现网 `@调整经验`）。
+fn adjuest_exp(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(ADJUEST_EXP_HELP);
+    }
+    if target_online(world, name) {
+        // 文本恒定（Green），但 `Exp` 写值与 `HasLevelUp` 未接。
+        noted(
+            green(format!("{name} 经验调整完成。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `AdjuestLevelCommand`（现网 `@1级`）。
+fn adjuest_level(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(ADJUEST_LEVEL_HELP);
+    }
+    if target_online(world, name) {
+        // 注意 oracle 不读第二个参数来设等级：只 `HasLevelUp(1)`（升级一拍）。
+        noted(
+            green(format!("{name} 等级调整完成。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `AdjustExpCommand`（现网 `@AdjustExp`）：命令体只有 `Permission < 6 ⇒ return` ⇒ 零帧。
+fn adjust_exp() -> GmResult {
+    no_frames(NOTE_GM4_NOOP)
+}
+
+/// `BindUseItemCommand`（现网 `@Binduseitem`）。
+fn bind_use_item(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    if parameters.is_empty() {
+        // `@params == null || @params.Length <= 0` ⇒ 静默返回（零帧）。
+        return GmResult::empty();
+    }
+    let name = params.first().copied().unwrap_or("");
+    let bind_type = params.get(2).copied().unwrap_or("");
+    // `GetUseItemIdx(sItem)` 在 oracle 里是「装备位名称 → 槽位号」的固定表；宿主未接 ⇒ 恒 -1。
+    let item_idx = -1;
+    let bind = if bind_type.eq_ignore_ascii_case("帐号") {
+        0
+    } else if bind_type.eq_ignore_ascii_case("人物") {
+        1
+    } else if bind_type.eq_ignore_ascii_case("IP") {
+        2
+    } else if bind_type.eq_ignore_ascii_case("死亡") {
+        3
+    } else {
+        -1
+    };
+    if item_idx < 0 || bind < 0 || name.is_empty() || second_utf16_is_question(name) == Some(true) {
+        return red(BIND_USE_ITEM_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // 在线支要读目标 `UseItems[nItem]` 与四张绑定表 ⇒ 宿主未接。
+    noted(GmResult::empty(), NOTE_GM4_BAG)
+}
+
+/// `BonuPointCommand`（现网 `@调整属性`）。
+fn bonu_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let count = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    if name.is_empty() {
+        return red(BONU_POINT_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // `count > 0` ⇒ `BonusPoint = nCount` + `RM_ADJUST_BONUS`（零文本）；
+    // `count <= 0` ⇒ 查询支文本要 `BonusPoint` 与九项 `BonusAbil`。两者都要目标数值态。
+    let _ = count;
+    no_frames(NOTE_GM4_TARGET_STATE)
+}
+
+/// `ChangeAdminModeCommand`（现网 `@1`）：翻转 `AdminMode`，绿字。
+fn change_admin_mode(sess: &mut GmSession) -> GmResult {
+    sess.admin_mode = !sess.admin_mode;
+    green(if sess.admin_mode {
+        ADMIN_MODE_ON
+    } else {
+        ADMIN_MODE_OFF
+    })
+}
+
+/// `ChangeAttackModeCommand`（现网 `@AttackMode`）：oracle 连加两次（照抄），再发 `SM_ATTACKMODE`。
+fn change_attack_mode(sess: &mut GmSession) -> GmResult {
+    const HAM_PKATTACK: u8 = 6;
+    let mut mode = sess.attack_mode;
+    if mode >= HAM_PKATTACK {
+        mode = 0;
+    } else if mode < HAM_PKATTACK {
+        mode += 1;
+    } else {
+        mode = 0;
+    }
+    if mode < HAM_PKATTACK {
+        mode += 1;
+    } else {
+        mode = 0;
+    }
+    sess.attack_mode = mode;
+    let text = match mode {
+        0 => ATTACK_MODE_ALL,
+        1 => ATTACK_MODE_PEACEFUL,
+        2 => ATTACK_MODE_DEAR,
+        3 => ATTACK_MODE_MASTER,
+        4 => ATTACK_MODE_GROUP,
+        5 => ATTACK_MODE_GUILD,
+        _ => ATTACK_MODE_RED_WHITE,
+    };
+    // `SendDefMessage(SM_ATTACKMODE, mode, ...)` 是第二种帧，`GmResult` 只承载 `SysMsg`（T-175）。
+    noted(green(text), NOTE_GM4_TARGET_SYSMSG)
+}
+
+/// `ChangeDearNameCommand`（现网 `@伴侣变更`）。
+fn change_dear_name(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let dear = params.get(1).copied().unwrap_or("");
+    if name.is_empty() || dear.is_empty() {
+        return red(CHANGE_DEAR_NAME_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    if dear.eq_ignore_ascii_case("无") {
+        noted(
+            green(format!("{name} 的配偶名清除成功。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        noted(
+            green(format!("{name} 的配偶名更改成功。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    }
+}
+
+/// `ChangeGenderCommand`（现网 `@改变性别`）。
+fn change_gender(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let sex = params.get(1).copied().unwrap_or("");
+    // oracle 是**大小写敏感**的 `==`（`Man`/`WoMan`），不是 OrdinalIgnoreCase。
+    let n_sex = if sex == "Man" || sex == "男" || sex == "0" {
+        0
+    } else if sex == "WoMan" || sex == "女" || sex == "1" {
+        1
+    } else {
+        -1
+    };
+    if name.is_empty() || n_sex == -1 {
+        return red(CHANGE_GENDER_HELP);
+    }
+    if target_online(world, name) {
+        // 「已改变 / 未改变!!!」取决于目标当前 `Gender` ⇒ 宿主不可读。
+        no_frames(NOTE_GM4_TARGET_STATE)
+    } else {
+        red(format!("{name}没有在线!!!"))
+    }
+}
+
+/// `ChangeItemNameCommand`（现网 `@ChangeItemName`）：生效写入整段被注释 ⇒ 恒定红字。
+fn change_item_name(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let make_index = params.first().copied().unwrap_or("");
+    let item_index = params.get(1).copied().unwrap_or("");
+    let item_name = params.get(2).copied().unwrap_or("");
+    if make_index.is_empty() || item_index.is_empty() || item_name.is_empty() {
+        return red(CHANGE_ITEM_NAME_HELP);
+    }
+    let n_make = str_to_int(make_index, -1);
+    let n_item = str_to_int(item_index, -1);
+    if n_make <= 0 || n_item < 0 {
+        return red(CHANGE_ITEM_NAME_HELP);
+    }
+    red(ITEM_NAME_OCCUPIED)
+}
+
+/// `ChangeJobCommand`（现网 `@职业变更`）。
+fn change_job(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let job = params.get(1).copied().unwrap_or("");
+    if name.is_empty() || job.is_empty() {
+        return red(CHANGE_JOB_HELP);
+    }
+    if target_online(world, name) {
+        // 目标侧「职业更改成功。」无通道；职业写值未接。
+        noted(
+            green(format!("{name} 的职业更改成功。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `ChangeLevelCommand`（现网 `@Level0`）：只改自己等级，无可观察帧。
+fn change_level(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    // `nLevel = StrToInt(sParam1, 1)`；等级写值与 `HasLevelUp(1)` 未接（零帧）。
+    let _ = str_to_int(params.first().copied().unwrap_or(""), 1);
+    no_frames(NOTE_GM4_TARGET_STATE)
+}
+
+/// `ChangeMasterNameCommand`（现网 `@MasterName`）。
+fn change_master_name(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let master = params.get(1).copied().unwrap_or("");
+    if name.is_empty() || master.is_empty() {
+        return red(CHANGE_MASTER_NAME_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    if master.eq_ignore_ascii_case("无") {
+        noted(
+            green(format!("{name} 的师徒名清除成功。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        noted(
+            green(format!("{name} 的师徒名更改成功。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    }
+}
+
+/// `ChangeObModeCommand`（现网 `@2`）：翻转 `ObMode`；进入时先发 `RM_DISAPPEAR`（本仓未接）。
+fn change_ob_mode(sess: &mut GmSession) -> GmResult {
+    sess.ob_mode = !sess.ob_mode;
+    let result = green(if sess.ob_mode {
+        OBSERVER_MODE_ON
+    } else {
+        OBSERVER_MODE_OFF
+    });
+    if sess.ob_mode {
+        noted(result, NOTE_GM4_TARGET_SYSMSG)
+    } else {
+        result
+    }
+}
+
+/// `ChangeSalveStatusCommand`（现网 `@Rest`）：`SlaveList == null ⇒ return`，否则翻转 `SlaveRelax`。
+fn change_salve_status(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    // 本仓 `Entity::slave_list` 是 `Vec`，永不 `null`；`None` 视图按空表处理。
+    sess.slave_relax = !sess.slave_relax;
+    let has_slaves = world
+        .self_entity()
+        .is_some_and(|e| !e.slave_list.is_empty());
+    if !has_slaves {
+        return GmResult::empty();
+    }
+    green(if sess.slave_relax {
+        PET_REST
+    } else {
+        PET_ATTACK
+    })
+}
+
+/// `ChangeSuperManModeCommand`（现网 `@3`）：翻转 `SuperMan`，绿字。
+fn change_super_man_mode(sess: &mut GmSession) -> GmResult {
+    sess.super_man = !sess.super_man;
+    green(if sess.super_man {
+        SUPERMAN_MODE_ON
+    } else {
+        SUPERMAN_MODE_OFF
+    })
+}
+
+/// `ChangeUserFullCommand`（现网 `@CHGUSERFULL`）。
+///
+/// **oracle 古怪的门**：`if (IsNullOrEmpty(sUserCount) || nCount < 1 || !IsNullOrEmpty(sUserCount))`
+/// —— 第三个子句与前两个互补 ⇒ 条件**恒真**，命令体永远走「两句红字」，`Config.UserFull` 永不被写。
+/// 照抄（设计件 §4.5 #7：oracle 怪癖原样搬）。
+fn change_user_full(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let user_count = params.first().copied().unwrap_or("");
+    let n_count = str_to_int(user_count, -1);
+    if user_count.is_empty() || n_count < 1 || !user_count.is_empty() {
+        return two_msgs(
+            (GmColor::Red, USER_FULL_TITLE.to_string()),
+            (GmColor::Red, CHANGE_USER_FULL_HELP.to_string()),
+        );
+    }
+    noted(
+        green(format!("服务器上线人数限制: {n_count}")),
+        NOTE_GM4_CONFIG,
+    )
+}
+
+/// `ChangeZenFastStepCommand`（现网 `@CHGZENFASTSTEP`）：同上恒真门。
+fn change_zen_fast_step(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let fast_step = params.first().copied().unwrap_or("");
+    let n_step = str_to_int(fast_step, -1);
+    if fast_step.is_empty() || n_step < 1 || !fast_step.is_empty() {
+        return two_msgs(
+            (GmColor::Red, ZEN_FAST_STEP_TITLE.to_string()),
+            (GmColor::Red, CHANGE_ZEN_FAST_STEP_HELP.to_string()),
+        );
+    }
+    noted(green(format!("怪物行动速度: {n_step}")), NOTE_GM4_CONFIG)
+}
+
+/// `CreditPointCommand`（现网 `@调整声望`）。
+fn credit_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let ctr_raw = params.get(1).copied().unwrap_or("");
+    let point = params.get(2).map_or(0, |s| str_to_int(s, 0));
+    let ctr = ctr_raw.chars().next().unwrap_or('1');
+    if name.is_empty() || !matches!(ctr, '=' | '+' | '-') || point < 0 || name.starts_with('?') {
+        return red(CREDIT_POINT_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // 两条文本都要目标**改动后**的 CreditPoint（byte 截断）⇒ 宿主不可读。
+    no_frames(NOTE_GM4_TARGET_STATE)
+}
+
+/// `DelBonuPointCommand`（现网 `@DelBonusPoint`）。
+fn del_bonu_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(DEL_BONU_POINT_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // 目标侧「分配点数已清除!!!」无通道；`BonusPoint = 0` 未接。
+    noted(
+        green(format!("{name} 的分配点数已清除.")),
+        NOTE_GM4_TARGET_SYSMSG,
+    )
+}
+
+/// `DeleteItemCommand`（现网 `@删除物品`）：遍历目标背包名字匹配删除。
+fn delete_item(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let item = params.get(1).copied().unwrap_or("");
+    if name.is_empty() || item.is_empty() {
+        return red(DELETE_ITEM_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    noted(GmResult::empty(), NOTE_GM4_BAG)
+}
+
+/// `DelGameGoldCommand`（现网 `@DelGamePoint`）。
+fn del_game_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let point = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    if name.is_empty() || point <= 0 {
+        return red(DEL_GAME_GOLD_HELP);
+    }
+    if target_online(world, name) {
+        no_frames(NOTE_GM4_TARGET_STATE)
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `DelGoldCommand`（现网 `@减钱`）。
+fn del_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let count = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    // 第一道门**静默**返回（无 SysMsg）——照抄。
+    if name.is_empty() || count <= 0 {
+        return GmResult::empty();
+    }
+    if target_online(world, name) {
+        no_frames(NOTE_GM4_TARGET_STATE)
+    } else {
+        // 注意与 `@加钱` 的离线文案不同：无空格、且是「减少」。
+        noted(
+            green(format!("{name}现在不在线，等其上线时金币将自动减少")),
+            NOTE_GM4_FRONT_SERVER,
+        )
+    }
+}
+
+/// `FreePenaltyCommand`（现网 `@清除PK`）。
+fn free_penalty(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.starts_with('?') {
+        return red(FREE_PENALTY_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // 目标侧「你的PK值已经被清除...」无通道；`PkPoint = 0` 未接。
+    noted(
+        green(format!("{name}的PK值已经被清除...")),
+        NOTE_GM4_TARGET_SYSMSG,
+    )
+}
+
+/// `GameDiaMondCommand`（现网 `@GameDiaMond`）：`Execute` 体为空 ⇒ 零帧。
+fn game_diamond() -> GmResult {
+    no_frames(NOTE_GM4_NOOP)
+}
+
+/// `GameGirdCommand`（现网 `@GameGird`）：`Execute` 体为空 ⇒ 零帧。
+fn game_gird() -> GmResult {
+    no_frames(NOTE_GM4_NOOP)
+}
+
+/// `GameGloryCommand`（现网 `@GameGlory`）：`Execute` 体为空 ⇒ 零帧。
+fn game_glory() -> GmResult {
+    no_frames(NOTE_GM4_NOOP)
+}
+
+/// `GameGoldCommand`（现网 `@VV调整元宝`）。
+fn game_gold(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let ctr_raw = params.get(1).copied().unwrap_or("");
+    let gold = params.get(2).map_or(0, |s| str_to_int(s, 0));
+    let ctr = ctr_raw.chars().next().unwrap_or('1');
+    if name.is_empty()
+        || !matches!(ctr, '=' | '+' | '-')
+        || !(0..=200_000_000).contains(&gold)
+        || second_utf16_is_question(name) == Some(true)
+    {
+        return red(GAME_GOLD_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    no_frames(NOTE_GM4_TARGET_STATE)
+}
+
+/// `GamePointCommand`（现网 `@调整泡点`）。
+///
+/// 两处 oracle 怪癖照抄：① `Convert.ToUInt16` 解析失败**抛异常**（被外层 catch 吞掉 ⇒ 零帧）；
+/// ② 取值 switch 用 `sCtr[1]`（下标 1）⇒ 控制符只有 1 个字符时**抛越界**（同样零帧）。
+fn game_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return GmResult::empty();
+    }
+    let ctr_raw = params.get(1).copied().unwrap_or("");
+    let ctr = ctr_raw.chars().next().unwrap_or('1');
+    let point = match params.get(2).copied() {
+        Some(s) if !s.is_empty() => match s.trim().parse::<u16>() {
+            Ok(v) => i32::from(v),
+            Err(_) => return no_frames(NOTE_GM4_EXCEPTION),
+        },
+        _ => 0,
+    };
+    if !matches!(ctr, '=' | '+' | '-')
+        || point > 100_000_000
+        || second_utf16_is_question(name) == Some(true)
+    {
+        return red(GAME_POINT_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // `switch (sCtr[1])`：控制符不足 2 个 UTF-16 单元 ⇒ 越界异常 ⇒ 零帧（无 SysMsg）。
+    if ctr_raw.encode_utf16().count() < 2 {
+        return no_frames(NOTE_GM4_EXCEPTION);
+    }
+    no_frames(NOTE_GM4_TARGET_STATE)
+}
+
+/// `GetUserItemsCommand`（现网 `@GetUserItems`）：在目标身上找物品并复制到自己背包。
+fn get_user_items(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let item = params.get(1).copied().unwrap_or("");
+    let count = params.get(2).copied().unwrap_or("");
+    let kind = params.get(3).copied().unwrap_or("");
+    if name.is_empty() || item.is_empty() || count.is_empty() || kind.is_empty() {
+        return red(GET_USER_ITEMS_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    noted(GmResult::empty(), NOTE_GM4_BAG)
+}
+
+/// `HairCommand`（现网 `@改变发型`）。
+fn hair(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let value = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    if name.is_empty() || value < 0 {
+        return red(HAIR_HELP);
+    }
+    if target_online(world, name) {
+        noted(
+            green(format!("{name} 的头发已改变。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
+/// `HungerCommand`（现网 `@Hunger`）。
+fn hunger(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let point = params.get(1).map_or(-1, |s| str_to_int(s, 0));
+    // oracle 体另有 `Permission < 6 ⇒ return`：`perm_min = 10` 的门先挡。
+    if name.is_empty() || point < 0 {
+        return red(HUNGER_HELP);
+    }
+    if target_online(world, name) {
+        // 目标 `RM_MYSTATUS`/`RefMyStatus` 未接，`HungerStatus` 写值未接。
+        noted(
+            green(format!("{name} 的能量值已改变。")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        red(format!("{name}没有在线!!!"))
+    }
+}
+
+/// `IncPkPointCommand`（现网 `@增加PK`）。
+fn inc_pk_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let point = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    if name.is_empty() {
+        return red(INC_PK_POINT_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    if point > 0 {
+        noted(
+            green(format!("{name}的PK值已增加{point}点...")),
+            NOTE_GM4_TARGET_STATE,
+        )
+    } else {
+        noted(
+            green(format!("{name}的PK值已减少{}点...", -point)),
+            NOTE_GM4_TARGET_STATE,
+        )
+    }
+}
+
+/// `LuckPointCommand`（现网 `@LuckyPoint`）。
+fn luck_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let ctr = params.get(1).copied().unwrap_or("");
+    let point = params.get(2).copied().unwrap_or("");
+    if name.is_empty() || name.starts_with('?') {
+        return red(LUCK_POINT_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    if ctr.is_empty() {
+        // 文本要 `BodyLuckLevel`/`BodyLuck`/`Luck` 三项 ⇒ 宿主不可读。
+        return no_frames(NOTE_GM4_TARGET_STATE);
+    }
+    // `=`/`-`/`+` 三支只改值、不发帧。
+    let _ = str_to_int(point, 0);
+    no_frames(NOTE_GM4_TARGET_STATE)
+}
+
+/// `PKpointCommand`（现网 `@查看PK`）。
+///
+/// **oracle 古怪的门**：`if (!IsNullOrEmpty(sHumanName)) { help; return; }` —— 给了名字就恒红字；
+/// 只有**空名字**才往下走，而 `GetPlayObject("")` 必然 `null` ⇒ 恒落「(空名) 现在不在线…」。
+fn pk_point(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if !name.is_empty() {
+        return red(PK_POINT_HELP);
+    }
+    red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+}
+
+/// `RefineWeaponCommand`（现网 `@RefineWeaponwa`）：改自己武器 Desc，无 SysMsg。
+fn refine_weapon(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let dc = params.first().map_or(0, |s| str_to_int(s, 0));
+    let mc = params.get(1).map_or(0, |s| str_to_int(s, 0));
+    let sc = params.get(2).map_or(0, |s| str_to_int(s, 0));
+    let hit = params.get(3).map_or(0, |s| str_to_int(s, 0));
+    let _ = (dc, mc, sc, hit);
+    if dc + mc + sc > 10 {
+        return GmResult::empty();
+    }
+    // `UseItems[Weapon]` 空/Index<=0 ⇒ 静默；否则写 Desc + `SendUpdateItem` + 重算属性（全未接）。
+    no_frames(NOTE_GM4_BAG)
+}
+
+/// `ReNewLevelCommand`（现网 `@转生`）。
+///
+/// oracle 打印的是**发起者**的 `ReLevel`（`PlayerActor.ReLevel`），不是目标的；发起者给自己改转生时
+/// 两值同名同体。本仓用 `GmSession::re_level` 复刻发起者字段。
+fn re_new_level(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let level = params.get(1).copied().unwrap_or("");
+    if name.is_empty() || name.starts_with('?') {
+        return red(RE_NEW_LEVEL_HELP);
+    }
+    let n_level = str_to_int(level, -1);
+    if !target_online(world, name) {
+        return red(format!("{name} 没在线上!!!"));
+    }
+    if (0..=255).contains(&n_level) && name.eq_ignore_ascii_case(world.speaker) {
+        // 只有「给自己改」时发起者字段才真的变化（其余情况 oracle 打印的仍是原值）。
+        sess.re_level = u8::try_from(n_level).unwrap_or(sess.re_level);
+    }
+    noted(
+        green(format!("{name} 的转生等级为 {}", sess.re_level)),
+        NOTE_GM4_TARGET_STATE,
+    )
+}
+
+/// `RestBonuPointCommand`（现网 `@RestBonuPoint`）。
+fn rest_bonu_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(REST_BONU_POINT_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // 目标侧「分配点数已复位!!!」无通道；`BonusPoint`/`BonusAbil` 读写未接。
+    noted(
+        green(format!("{name} 的分配点数已复位.")),
+        NOTE_GM4_TARGET_SYSMSG,
+    )
+}
+
+/// `TrainingCommand`（现网 `@+jn`）：命令体只有 `Permission < 6 ⇒ return` ⇒ 零帧。
+fn training() -> GmResult {
+    no_frames(NOTE_GM4_NOOP)
+}
+
+/// `TrainingMagicCommand`（现网 `@TrainingMagic`）。
+fn training_magic(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let skill = params.get(1).copied().unwrap_or("");
+    let level = params.get(2).map_or(0, |s| str_to_int(s, 0));
+    if name.starts_with('?')
+        || name.is_empty()
+        || skill.is_empty()
+        || level < 0
+        || !(0..=3).contains(&level)
+    {
+        return red(TRAINING_MAGIC_HELP);
+    }
+    if !target_online(world, name) {
+        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    }
+    // `FindMagic` 与目标 `MagicList` 宿主未接 ⇒「技能名称不正确!!!」/「已修炼过!!!」判不出。
+    noted(GmResult::empty(), NOTE_GM4_MAGIC)
+}
+
+/// `TrainingSkillCommand`（现网 `@增加技能`）。
+///
+/// oracle 的循环体只做 `userMagic = MagicList[i]`（`UserMagic` 是引用类型，循环后什么都没改）
+/// ⇒ **零帧、零副作用**；只有离线支有帧。
+fn training_skill(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let skill = params.get(1).copied().unwrap_or("");
+    let level = params.get(2).map_or(0, |s| str_to_int(s, 0));
+    if name.is_empty() || skill.is_empty() || level <= 0 {
+        return red(TRAINING_SKILL_HELP);
+    }
+    if !target_online(world, name) {
+        // 注意：本条离线文案与 `CommandHelp.NowNotOnLineOrOnOtherServer` **不同**
+        // （无「现在」、只有两个 `!`、名字后无空格）。
+        return red(format!("{name}不在线，或在其它服务器上!!"));
+    }
+    no_frames(NOTE_GM4_MAGIC)
+}
+
+/// `UnBindUseItemCommand`（现网 `@UnBindUseItem`）：命令体整段注释 ⇒ 零帧。
+fn unbind_use_item() -> GmResult {
+    no_frames(NOTE_GM4_NOOP)
+}
 
 #[cfg(test)]
 mod tests {
@@ -3207,7 +4246,7 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 的命令体接上（`Unimplemented` 从 180 降到 132），且命令名 → 实现标签固定。
+    /// 批次 2/3 + 批次 3 + 批次 4 的命令体接上（`Unimplemented` 从 180 降到 88），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -3215,16 +4254,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            53,
-            "53 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条"
+            97,
+            "97 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            132,
-            "185 - 53"
+            88,
+            "185 - 97"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -4111,5 +5150,276 @@ mod tests {
             texts(&execute(&mut sess, &cfg_block, &view_item, "@传送 3 3")),
             vec![(GmColor::Green, "无法移动到地图: map X:3 Y:3")]
         );
+    }
+
+    // ===================== 批次 4 · 数值/角色族（44 条） =====================
+
+    /// 牙 ①：`@CHGUSERFULL` 的恒真门 —— 任何输入都只出两句红字，`Config.UserFull` 永不写。
+    /// 若有人「修好」这个条件，本用例立刻红。
+    #[test]
+    fn change_user_full_is_always_the_two_red_messages() {
+        for line in [
+            "@CHGUSERFULL",
+            "@CHGUSERFULL 100",
+            "@CHGUSERFULL 0",
+            "@CHGUSERFULL abc",
+            "@CHGUSERFULL -5",
+        ] {
+            let (r, _) = run_gm(line);
+            assert_eq!(
+                texts(&r),
+                vec![
+                    (GmColor::Red, "设置服务器最高上线人数。"),
+                    (GmColor::Red, "命令格式: @CHGUSERFULL 人数"),
+                ],
+                "line={line}"
+            );
+        }
+    }
+
+    /// 牙 ②：`@查看PK` 的反向门 —— 给名字恒红字帮助；空名才落到「不在线」（且名字位为空 ⇒ 前导空格）。
+    #[test]
+    fn pk_point_inverted_guard() {
+        let (r, _) = run_gm("@查看PK 张三");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: @查看PK 人物名称")]
+        );
+        let (r, _) = run_gm("@查看PK");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, " 现在不在线，或在其它服务器上!!!")]
+        );
+    }
+
+    /// 牙 ③：`@AttackMode` 的双加号（照抄 oracle 连加两次）——序列必须是 2,4,6,1,3,5,0,2。
+    #[test]
+    fn change_attack_mode_double_increment_sequence() {
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let expected = [
+            "[攻击模式: 夫妻攻击]",
+            "[攻击模式: 编组攻击]",
+            "[攻击模式: 红名攻击]",
+            "[攻击模式: 和平攻击]",
+            "[攻击模式: 师徒攻击]",
+            "[攻击模式: 行会攻击]",
+            "[攻击模式: 全体攻击]",
+            "[攻击模式: 夫妻攻击]",
+        ];
+        for want in expected {
+            let r = execute(&mut sess, &cfg, &world, "@AttackMode");
+            assert_eq!(texts(&r), vec![(GmColor::Green, want)]);
+        }
+    }
+
+    /// 牙 ④：空 `Help` 的 help 文本**末尾空格**必须保留（`Command.CommandHelp` 的 `@ {Help}` 拼接）。
+    #[test]
+    fn empty_help_keeps_trailing_space() {
+        let (r, _) = run_gm("@1级");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: @1级 人物名称 等级")]
+        );
+        // 空体的命令**不发**帮助（oracle 体为空）；末尾空格口径由常量本身钉住。
+        let (r, _) = run_gm("@GameDiaMond");
+        assert!(r.msgs.is_empty());
+        assert!(CHANGE_ADMIN_MODE_HELP.ends_with(' '));
+        assert!(GAME_DIAMOND_HELP.ends_with(' '));
+        assert!(TRAINING_HELP.ends_with(' '));
+        let (r, _) = run_gm("@RefineWeaponwa 20 0 0 0");
+        assert!(r.msgs.is_empty(), "dc+mc+sc>10 ⇒ 静默");
+    }
+
+    /// 门禁：`@加钱` 在现网 `Permission = 0` 下不可达（红字），perm 10 才进命令体。
+    #[test]
+    fn add_gold_permission_gate_and_offline_text() {
+        let (r, _) = run("@加钱 张三 100");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
+
+        let (r, _) = run_gm("@加钱");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: @加钱 人物名称  金币数量")]
+        );
+
+        // 空世界 ⇒ `GetPlayObject` 必空 ⇒ 离线支（绿字，与 `@减钱` 文案不同）。
+        let (r, _) = run_gm("@加钱 张三 100");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Green, "张三 现在不在线，等其上线时金币将自动增加")]
+        );
+        let (r, _) = run_gm("@减钱 张三 100");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Green, "张三现在不在线，等其上线时金币将自动减少")]
+        );
+    }
+
+    /// `@减钱` 的第一道门**静默**返回（oracle 此处没有 SysMsg）。
+    #[test]
+    fn del_gold_first_guard_is_silent() {
+        let (r, _) = run_gm("@减钱 张三 0");
+        assert!(r.msgs.is_empty() && r.found);
+        let (r, _) = run_gm("@减钱");
+        assert!(r.msgs.is_empty() && r.found);
+    }
+
+    /// `@ChangeItemName` 的生效写入整段被注释 ⇒ 门过了恒红字。
+    #[test]
+    fn change_item_name_always_occupied() {
+        let (r, _) = run_gm("@ChangeItemName 1 2 木剑");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "此物品，已经设置了其它的名称!!!")]
+        );
+        let (r, _) = run_gm("@ChangeItemName 0 2 木剑");
+        assert_eq!(
+            texts(&r),
+            vec![(
+                GmColor::Red,
+                "命令格式: @ChangeItemName 物品编号 物品ID号 物品名称"
+            )]
+        );
+    }
+
+    /// 三个自翻转开关：`@1`（管理员）/`@2`（隐身）/`@3`（无敌）。
+    #[test]
+    fn session_mode_toggles() {
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &world, "@1")),
+            vec![(GmColor::Green, "已进入管理员模式")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &world, "@1")),
+            vec![(GmColor::Green, "已退出管理员模式")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &world, "@2")),
+            vec![(GmColor::Green, "已进入隐身模式")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &world, "@2")),
+            vec![(GmColor::Green, "已退出隐身模式")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &world, "@3")),
+            vec![(GmColor::Green, "已进入无敌模式")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &world, "@3")),
+            vec![(GmColor::Green, "已退出无敌模式")]
+        );
+    }
+
+    /// `@Rest`：无宝宝 ⇒ 翻转 `SlaveRelax` 但不发帧。
+    #[test]
+    fn change_salve_status_silent_without_slaves() {
+        let (r, sess) = run_gm("@Rest");
+        assert!(r.msgs.is_empty());
+        assert!(sess.slave_relax);
+    }
+
+    /// 离线文案的三处**不一致**必须逐字保留。
+    #[test]
+    fn offline_texts_are_not_uniform() {
+        let (r, _) = run_gm("@改变性别 张三 男");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "张三没有在线!!!")]);
+        let (r, _) = run_gm("@转生 张三");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "张三 没在线上!!!")]);
+        let (r, _) = run_gm("@增加技能 张三 火球术 2");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "张三不在线，或在其它服务器上!!")]
+        );
+        let (r, _) = run_gm("@调整声望 张三 + 10");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "张三 现在不在线，或在其它服务器上!!!")]
+        );
+    }
+
+    /// `@调整泡点` 的两处异常路径 ⇒ 零帧（oracle 抛异常被外层 catch 吞掉）。
+    #[test]
+    fn game_point_exception_paths_are_silent() {
+        let (r, _) = run_gm("@调整泡点 张三 + abc");
+        assert!(r.msgs.is_empty());
+        assert!(r.log_note.is_some());
+        // 控制符只有一个字符 ⇒ `sCtr[1]` 越界（在线支之前先要过 `target_online`，空世界落离线支）
+        let (r, _) = run_gm("@调整泡点 张三 = 10");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "张三 现在不在线，或在其它服务器上!!!")]
+        );
+    }
+
+    /// 44 条命令全部接上（不再落 `Imp::Unimplemented`），且派发可达。
+    #[test]
+    fn batch4_commands_are_wired() {
+        let names = [
+            "AddGamePoint",
+            "加钱",
+            "调整经验",
+            "1级",
+            "AdjustExp",
+            "Binduseitem",
+            "调整属性",
+            "1",
+            "AttackMode",
+            "伴侣变更",
+            "改变性别",
+            "ChangeItemName",
+            "职业变更",
+            "Level0",
+            "MasterName",
+            "2",
+            "Rest",
+            "3",
+            "CHGUSERFULL",
+            "CHGZENFASTSTEP",
+            "调整声望",
+            "DelBonusPoint",
+            "删除物品",
+            "DelGamePoint",
+            "减钱",
+            "清除PK",
+            "GameDiaMond",
+            "GameGird",
+            "GameGlory",
+            "VV调整元宝",
+            "调整泡点",
+            "GetUserItems",
+            "改变发型",
+            "Hunger",
+            "增加PK",
+            "LuckyPoint",
+            "查看PK",
+            "RefineWeaponwa",
+            "转生",
+            "RestBonuPoint",
+            "+jn",
+            "TrainingMagic",
+            "增加技能",
+            "UnBindUseItem",
+        ];
+        for name in names {
+            let def = find(name).unwrap_or_else(|| panic!("命令表缺 {name}"));
+            assert_ne!(def.imp, Imp::Unimplemented, "{name} 仍是大杂烩占位");
+        }
+        // 抽样派发：`@AdjustExp`（体只有权限自检）⇒ 零帧零 note 之外的东西。
+        let (r, _) = run_gm("@AdjustExp");
+        assert!(r.msgs.is_empty() && r.found);
     }
 }
