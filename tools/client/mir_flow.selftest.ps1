@@ -393,6 +393,12 @@ try {
   $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,34", "-ProxyDir", $proxyDir, "-CapturePath", $newCap, "-OutDir", $fixDir)
   Check "fixture F1: -ProxyDir and -CapturePath are mutually exclusive" (
     $r.Code -ne 0 -and $r.Out.Contains("互斥")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-OutDir", $fixDir)
+  Check "fixture: position gate requires evidence source (fail-closed)" (
+    $r.Code -ne 0 -and $r.Out.Contains("ProxyDir")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-ClickNpc", "-OutDir", $fixDir)
+  Check "fixture: ClickNpc without evidence source rejected (no blind click)" (
+    $r.Code -ne 0 -and $r.Out.Contains("ClickNpc")) ($r.Out + " rc=" + $r.Code)
 
   # ---- 12b. 运行中增长（F1）：同一进程内两次 Update-ProxyFrameCache，只消费新增 bytes ----
   $growDir = Join-Path $fixDir "proxy-grow"

@@ -1595,7 +1595,7 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
 ```
 
-新增/更新用例（均真跑，不启动客户端、不占端口；2026-10-22 全绿 `SELFTEST_PASS=87`）：
+新增/更新用例（均真跑，不启动客户端、不占端口；2026-10-22 全绿 `SELFTEST_PASS=89`）：
 
 1. `-FixtureDryRun -NoticePollSim dismiss1|slow|absent|nosignal`：sim 与真机共用
    `Invoke-NoticePollCore`（F4）；`slow` 仍只点 **1** 次且不补点；`absent`/`nosignal` ⇒ 世界区 0 点击；
