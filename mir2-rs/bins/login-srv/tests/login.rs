@@ -20,6 +20,9 @@ use mir2_protocol::messages;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 
+// 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
+mod support;
+
 /// C# 金标准（`oracle_capture.py` 产出）。
 const ORACLE: &str = include_str!("../../../tests/parity/loginsrv/oracle-bytes.json");
 
@@ -54,11 +57,6 @@ fn write_lab(dir: &Path, gate_port: u16, srv_port: u16, dsn: &str) -> PathBuf {
 /// 避免夹具与线上编码口径分叉。
 fn gbk(s: &str) -> Vec<u8> {
     mir2_script::cp936::encode_gb2312_dotnet(s)
-}
-
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    l.local_addr().unwrap().port()
 }
 
 /// 客户端帧 `#1<enc(头)>[<enc(体)>]!`。
@@ -181,11 +179,12 @@ fn oracle_frames(doc: &serde_json::Value, case: &str) -> Vec<String> {
 /// ```
 #[tokio::test]
 #[ignore = "需要本机 MySQL mir2_account；显式 --ignored 运行"]
+#[allow(clippy::too_many_lines)] // 就绪门 + 逐帧 oracle 比对同在一个用例里（与 db-srv live_* 同口径）
 async fn responses_match_csharp_oracle_bytes() {
     let doc: serde_json::Value = serde_json::from_str(ORACLE).unwrap();
     let server_name = gbk("热血传奇");
-    let gate = free_port();
-    let srv = free_port();
+    let gate = support::next_port();
+    let srv = support::next_port();
     let dir = lab_dir("oracle");
     let conf = write_lab(
         &dir,
@@ -193,11 +192,17 @@ async fn responses_match_csharp_oracle_bytes() {
         srv,
         "server=127.0.0.1;uid=root;pwd=;database=mir2_account;",
     );
+    // stdout 落夹具文件：就绪门要读 `账号登陆服务[...]已启动.`（bind 成功之后才打印）。
+    let log = dir.join("logsrv.out.log");
+    let out = std::fs::File::create(&log).unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"))
         .arg(&conf)
+        .stdout(out)
         .kill_on_drop(true)
         .spawn()
         .unwrap();
+    // 就绪门（fail-closed）：gate 面 bind 成功才发流量；未起来 ⇒ panic 并带全文日志。
+    support::gate_ready(&log, gate, Duration::from_secs(20)).await;
     // 等 5500（本例是 gate 端口）就绪：先连一次再关
     let probe = connect_with_retry(gate).await;
     drop(probe);
@@ -340,8 +345,8 @@ async fn mysql_unreachable_exits_nonzero() {
     // 配置齐全，但 DSN 指向一个必不通的端口
     let conf = write_lab(
         &dir,
-        free_port(),
-        free_port(),
+        support::next_port(),
+        support::next_port(),
         "server=127.0.0.1;port=3399;uid=root;pwd=;database=mir2_account;",
     );
     let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"))

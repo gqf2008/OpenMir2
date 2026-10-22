@@ -40,6 +40,9 @@ use mir2_protocol::messages::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
+// 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
+mod support;
+
 /// 账号与两个角色（`mir2_db` 的测试账号，见设计文档 §2；`aaa` 已选中）。
 const ACCOUNT: &str = "mir2test";
 /// 会话号：由伪 LoginSrv 推给 DBSrv，测试自己定（因此不依赖任何登录流程）。
@@ -72,12 +75,6 @@ fn hex(b: &[u8]) -> String {
     s
 }
 
-/// 取一个空闲端口（bind :0 → 取值 → 释放）。
-fn free_port() -> u16 {
-    let l = std::net::TcpListener::bind("127.0.0.1:0").expect("取空闲端口失败");
-    l.local_addr().expect("取本地地址失败").port()
-}
-
 /// 建 temp 目录（含 `AddrTable.txt` / `ServerInfo.txt`，与 C# DBSrv 的部署一致）。
 fn fixture_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("a2-dbsrv-{tag}-{}", std::process::id()));
@@ -108,15 +105,16 @@ fn copy_dir(src: &Path, dst: &Path) {
 /// `appsettings.json` 的 Serilog `MinimumLevel=Information` 滤掉，关掉才能让两侧日志行集逐行对齐）；
 /// ① 的场景用 `true`，以便断言"心跳被应答"（`响应角色网关心跳...` 是 Debug 级，与 C# 同源同文本）。
 fn write_conf(dir: &Path, gate_port: u16, ids_port: u16, show_debug: bool) {
+    // 端口一律走原子候选段（`free_port` 的 TOCTOU 会让并行用例把它们抢走）。
+    let server_port = support::next_port();
+    let market_port = support::next_port();
     let body = format!(
-        "[Setup]\nShowDebug={}\nServerAddr=127.0.0.1\nServerPort={}\nGateAddr=0.0.0.0\nGatePort={gate_port}\n\
+        "[Setup]\nShowDebug={}\nServerAddr=127.0.0.1\nServerPort={server_port}\nGateAddr=0.0.0.0\nGatePort={gate_port}\n\
          ServerName=LegendOfMir2\nDenyChrName=1\nDELMaxLevel=30\nDynamicIPMode=0\n\n\
-         [Server]\nIDSAddr=127.0.0.1\nIDSPort={ids_port}\nMarketAddr=127.0.0.1\nMarketPort={}\n\n\
+         [Server]\nIDSAddr=127.0.0.1\nIDSPort={ids_port}\nMarketAddr=127.0.0.1\nMarketPort={market_port}\n\n\
          [DataBase]\nStoreage=MySQL\nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2_db;\n\n\
          [DBClear]\nInterval=3000\n",
-        u8::from(show_debug),
-        free_port(),
-        free_port()
+        u8::from(show_debug)
     );
     std::fs::write(dir.join("dbsvr.conf"), body).expect("写 dbsvr.conf 失败");
 }
@@ -260,15 +258,42 @@ impl Drop for Proc {
     }
 }
 
-/// 等 `gate_port` 开始监听（最多 10s）。
-async fn wait_listen(port: u16) {
+/// 等 `port` 开始监听（最多 10s）；**fail-closed**：超时即 panic 并带夹具目录子进程日志尾部。
+async fn wait_listen(dir: &Path, port: u16) {
     for _ in 0..100 {
         if TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
             return;
         }
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
-    panic!("等端口 {port} 监听超时（看两侧日志）");
+    panic!(
+        "等端口 {port} 监听超时（夹具目录 {}）；子进程日志：\n{}",
+        dir.display(),
+        child_log_tail(dir)
+    );
+}
+
+/// 夹具目录里两侧子进程日志的尾部（诊断用）。
+fn child_log_tail(dir: &Path) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    for name in [
+        "dbsrv.out.log",
+        "dbsrv.err.log",
+        "selgate.out.log",
+        "selgate.err.log",
+    ] {
+        let Ok(text) = std::fs::read_to_string(dir.join(name)) else {
+            continue;
+        };
+        let tail: Vec<&str> = text.lines().rev().take(200).collect();
+        let _ = writeln!(out, "---- {name} ----");
+        for line in tail.into_iter().rev() {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
 }
 
 /// 等伪 LoginSrv 报告 DBSrv 已连上（最多 15s）。
@@ -456,11 +481,17 @@ async fn exercise_5100_face(port: u16) {
 #[ignore = "需要本机 MySQL(mir2_db)，会起真正的 db-srv 进程"]
 async fn rust_dbsrv_querychr_matches_csharp_golden() {
     let dir = fixture_dir("rust");
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
     write_conf(&dir, gate_port, ids_port, false);
     let dbsrv = start_rust_dbsrv(&dir);
-    wait_listen(gate_port).await;
+    // 就绪门（fail-closed）：5100 面 bind 成功才继续；未起来 ⇒ panic 并带全文日志。
+    support::gate_ready(
+        &dir.join("dbsrv.out.log"),
+        gate_port,
+        Duration::from_secs(15),
+    )
+    .await;
     wait_session_link(&accepted).await;
     exercise_5100_face(gate_port).await;
     dump_child_logs(&dir, "dbsrv");
@@ -484,11 +515,11 @@ async fn csharp_dbsrv_querychr_matches_csharp_golden() {
     // 影子副本：把 C# 产物复制到 temp 再改端口，绝不动原目录
     let dir = fixture_dir("csharp");
     copy_dir(&oracle_dir, &dir);
-    let gate_port = free_port();
+    let gate_port = support::next_port();
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
     write_conf(&dir, gate_port, ids_port, false);
     let dbsrv = start_csharp_dbsrv(&dir);
-    wait_listen(gate_port).await;
+    wait_listen(&dir, gate_port).await;
     wait_session_link(&accepted).await;
     exercise_5100_face(gate_port).await;
     dump_child_logs(&dir, "dbsrv");
@@ -529,21 +560,27 @@ async fn csharp_selgate_to_rust_dbsrv() {
     let (ids_port, accepted) = fake_login_srv(ACCOUNT).await;
     write_conf(&dbsrv_dir, gate_port, ids_port, true);
     let dbsrv = start_rust_dbsrv(&dbsrv_dir);
-    wait_listen(gate_port).await;
+    // 就绪门（fail-closed）：5100 面 bind 成功才继续；未起来 ⇒ panic 并带全文日志。
+    support::gate_ready(
+        &dbsrv_dir.join("dbsrv.out.log"),
+        gate_port,
+        Duration::from_secs(15),
+    )
+    .await;
     wait_session_link(&accepted).await;
 
     // C# SelGate 影子副本：只把监听口换成临时端口、下游指向被测 db-srv
     let sel_dir = fixture_dir("selgate");
     copy_dir(&selgate_dir, &sel_dir);
+    let lsv_port = support::next_port();
     let conf = format!(
         "[SelGate]\nTitle=热血传奇\nCount=1\nServerAddr0=127.0.0.1\nServerPort0={gate_port}\n\
          GatePort0={gate_listen}\n\nShowLogLevel=1\nShowDebugLog=1\nKeepConnectTimeOut=60000\n\
-         LsvServer=127.0.0.1\nLsvServerPort={}\n",
-        free_port()
+         LsvServer=127.0.0.1\nLsvServerPort={lsv_port}\n"
     );
     std::fs::write(sel_dir.join("config.conf"), conf).expect("写 SelGate config.conf 失败");
     let selgate = start_csharp_selgate(&sel_dir);
-    wait_listen(gate_listen).await;
+    wait_listen(&sel_dir, gate_listen).await;
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // 客户端侧：`#1…!` 帧经 C# SelGate 中继到 Rust db-srv
@@ -624,7 +661,10 @@ async fn after_keepalive_roundtrip(s: &mut TcpStream, dbsrv_dir: &Path) {
 
 /// 端口是否空闲（试着绑一次再放开）。
 fn port_is_free(port: u16) -> bool {
-    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+    // 按**实际要 bind 的地址**探测：被测 db-srv / C# SelGate 都绑 `0.0.0.0`，而 Windows 上
+    // `127.0.0.1:port` 的探测可能在一个 `0.0.0.0:port` 监听之下仍成功（SO_EXCLUSIVEADDRUSE 缺省关），
+    // 于是「端口空闲」的前置断言会放行，随后子进程 bind 报 10048（本机实测：部署栈占着 5100 时）。
+    std::net::TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 /// 读一帧服务端下行 `#…!`（含 `!$` 形态）。
