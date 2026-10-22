@@ -314,3 +314,21 @@ selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
 
 **结论**：GM 族**可以**做对拍；当前阻塞只剩「规则表补 52 语义/墙钟文本/530 地址串」与「多余帧口径」。
 `@AddRobotPlay` 两侧都无回包（oracle 代码整段注释），已从 `gm_batch.json` 移出。
+
+## 19. **`SM_HIT(14)` 的来源找到了**：Rust 在脚本 `MESSAGEBOX` 支发了 14，oracle 发 `SM_MENU_OK(767)`
+
+修复双重 EDCode 后跑 `dice_chain_auto`（点庄家 → `@kaiz` → `@ya5`），两侧**各 33 帧**，三条对话 `643`
+（`@main` / `@kaiz` / `@ya5` 面板）**正文完全一致**——对话内容parity 是好的。
+
+差异 5 条，其中最关键是 **idx=32**：
+
+| 侧 | ident | 头 | body |
+|---|---|---|---|
+| C# | **767 `SM_MENU_OK`** | recog=NPC, param=0 | `请打开商铺兑换[筹码]后再来！` |
+| Rust | **14 `SM_HIT`** | recog=119, param=8, tag=10 | 空 |
+
+部署脚本 `赌场-B013.txt` 的 `[@ya5]` 支：`#IF CHECKitem 筹码包 1 … #ELSEACT MESSAGEBOX 请打开商铺兑换[筹码]后再来！`
+⇒ oracle 走 `MESSAGEBOX` → `RM_MENU_OK` → **`SM_MENU_OK(767)`**；Rust 这条支**发的是 `SM_HIT(14)`**。
+这解释了此前所有偶发的 14：**它是 Rust 在 NPC 脚本 MESSAGEBOX/ELSEACT 路径上的错帧**，不是"命中特效"。
+
+其余差异：`52` 的 `mp` 18 vs 17、`SM_TURN(10)` 的 `series` 512 vs 516、同 tick 两条公告次序（§10 已知）。
