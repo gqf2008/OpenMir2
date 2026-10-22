@@ -150,7 +150,7 @@ review `8a59cd6c`（tier=R，request_changes）逐条处置：
 | --- | --- | --- |
 | **F1（blocking）** | 530 的 `[[16,null]]` 用**明文**偏移标定，却作用在 **EDCode 线缆**字节上 ⇒ 实际掩掉端口后三位，`17100→17200/17150/17101` 全部假绿；selftest 因夹具用未编码 ASCII 没咬到 | **已修**：改 `[[20,null]]`（线缆空间），selftest 改用 `lc.encode` 造真线缆字节，并新增「端口改 17200/17150/17101 各必红 + ip 改一位必红」四条牙。**牙验**：把规则改回 `[[16,null]]` ⇒ selftest RED 85/88，恰好这三条端口用例红 |
 | **F2（important）** | ident 14 的 `ignore` 比 reason 描述宽：整帧剔除、形态/收件人不比；且 oracle 还有**确定性**发点 `Merchant.cs:156`（FixedHideMode 解除） | **已把边界写实**（rules.json 的 reason 明写「两个发点性质不同」「形态与收件人不由本规则比较」「确定性支未被覆盖，另开卡」）；确定性支的覆盖登记为残余项 |
-| **F3（important）** | ident 10 掩的是**整个** `MakeWord(Dir,Light)`，对玩家/怪物/NPC 全生效，原文「只掩 Dir / 玩家 Dir 由 SM_WALK 覆盖」过宽 | **已写实**：reason 与 README 均改成「整个 series word，对所有 actor 生效」，并明确「玩家原地转身的 Dir 不再逐值比，走位方向由 SM_WALK(11)/SM_RUN(12) 兜」这一代价 |
+| **F3（important）** | ident 10 掩的是**整个** `MakeWord(Dir,Light)`，对玩家/怪物/NPC 全生效，原文「只掩 Dir / 玩家 Dir 由 SM_WALK 覆盖」过宽 | **已写实**：reason 与 README 均改成「整个 series word，对所有 actor 生效」，并明确「玩家原地转身的 Dir 不再有帧级判据」这一代价（复审 F7 订正：原文写的 `SM_RUN(12)` 其实是 `SM_SITDOWN`，SM_RUN 是 13；且 11/13 尚未登记规则、出现即 UNCLASSIFIED，故「由它们兜底」不成立） |
 | **F4（minor）** | 行号飘移：`new Random()` 在 `RandomNumber.cs:35`；`GuildOfficial.cs` 的 RM_HIT 在 `:49` | 已全部订正（rules.json / README / 本文） |
 | **F5（minor）** | selftest 断言文案过时；本文 §5 的「只掩最后一个 `/` 之后」在线缆上不成立 | 已订正（§5 表格改为线缆空间口径；selftest 文案同步） |
 | **F6（info）** | 最终 PASS **既没触发** 14-ignore 也没触发 10.series 掩码（`ignored` 0/0）⇒ 不能当这两条规则的实机验收 | **接受**：本文不把 PASS 当作 14/10 两条规则的验收；它们的依据是本轮**第一次**运行（30 帧那条）的现象 + 两条规则各自的旁证（Rust 自身两次运行 30/29 帧、Dir 4 vs 6），加上各自的帧形态单元用例 |

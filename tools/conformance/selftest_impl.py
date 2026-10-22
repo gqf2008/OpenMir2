@@ -307,7 +307,7 @@ class Selftest(object):
         self.check("520 的 recog 从全局掩码取回比较（=nChrCount，协议内容）",
                    rs.by_ident[520].get("head_compare") == ["recog"],
                    rs.by_ident[520].get("head_compare"))
-        self.check("529/530/525/100/654/657 不额外掩码头部（只靠全局 recog/t_ms）",
+        self.check("529/530/525/100/654/657 不额外掩码**头部**（只靠全局 recog/t_ms；530 的 body 区间掩码由它自己的规则独立登记）",
                    all(not rs.by_ident[i].get("head_mask")
                        and not rs.by_ident[i].get("head_compare")
                        for i in (100, 525, 529, 530, 654, 657)),
