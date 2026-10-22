@@ -55,3 +55,11 @@ Leader 忙不过来时，**空闲 worker 可以互相审查**：唯一硬约束�
 
 「只删分支」的前提是分支**没有**被保留的 worktree 检出。若该 worktree 仍 checkout 该分支
 （如 `wt-triage2 @ dualrun-triage`），则**分支与 worktree 一起保留**，不得 `git branch -D` 强删。
+
+## 台账纪律（2026-10-23 教训）
+
+- **永远从线程输出里整段复制 oid**，绝不凭前缀补全：凭前缀猜后缀会造成 `parent` 指向不存在的条目（链断裂）。
+  今天因此产生 2 条断链（orphan-encoder、gm-batch-4），均以「更正条目」接回；以后 `parent` 一律用
+  `walgit collab thread <id>` 输出的最后一个 `"oid"` 原值。
+- 并发会话可能在同一张卡上抢写：Leader 每周期的「进度一行」必须核对**同一卡是否有多个 claim**，
+  按「先交付者优先 / 空 worktree 视为未开工」裁决，并把裁决写成签名条目。
