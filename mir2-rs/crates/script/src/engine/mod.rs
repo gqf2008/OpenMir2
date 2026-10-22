@@ -77,6 +77,13 @@ pub trait ScriptPlayer {
     fn dec_gold(&mut self, n: i32);
     /// `IPlayerActor.IncGold`（`GotoLableGiveItem` 的金币分支）。
     fn inc_gold(&mut self, n: i32);
+    /// `playObject.GoldChanged()`（`BaseObject.cs:585-591`）：`Race == Play` 时
+    /// `SendUpdateMsg(RM_GOLDCHANGED, 0,0,0,0, "")`。
+    ///
+    /// oracle 的两个调用点都在脚本动作里（`ScriptEngine.cs:660` 的 `GotoLableTakeItem` 与
+    /// `:697` 的 `GotoLableGiveItem`）——**无论 `DecGold`/`IncGold` 是否成功都发**（返回值被
+    /// 丢弃）。默认空实现：C# flow 夹具的 DispatchProxy 不落该帧。
+    fn gold_changed(&mut self) {}
     /// `IPlayerActor.SpaceMove`（`ActionOfMapMove`）。
     /// 默认空实现：flow 夹具的 C# 侧用 DispatchProxy，`SpaceMove`/`SendRefMsg` 不落日志，
     /// 故默认不产生可观察副作用（与两侧对拍口径一致）；真世界适配层可覆写。
@@ -128,6 +135,13 @@ pub trait ScriptPlayer {
     fn has_worn(&self, location: &str) -> bool;
     /// 把物品交给玩家（`SendAddItem`）
     fn give_item(&mut self, name: &str, count: i32);
+    /// `GotoLableGiveItem` 的**背包满**支（`ScriptEngine.cs:735-741`）：
+    /// `CopyToUserItemFromName(sItemName, ref userItem)` 后
+    /// `DropItemDown(userItem, 3, false, playerActor.ActorId, 0)`。
+    ///
+    /// 默认空实现：C# flow 夹具的 DispatchProxy 对此支不落日志（`DropItemDown` 在 oracle 上
+    /// 又因 `MapItem.ItemId == 0` 恒失败，见 `ground.rs` 的 T-19）⇒ 两侧同形。
+    fn drop_item_on_full_bag(&mut self, _name: &str) {}
     /// 从背包移除物品（`SendDelItems`）；返回实际移除件数
     fn remove_item(&mut self, name: &str, count: i32) -> i32;
     /// `normNpc.GetLineVariableText(playerActor, sMsg)` 的玩家侧部分；缺省实现原样返回
