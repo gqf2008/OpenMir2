@@ -13,6 +13,9 @@ r"""mir2frame.py — Mir2 线缆帧编解码（协议无头对拍台的公共底
     分编与同编字节相同）。
   * 服务端到客户端：'#' <EDCode(12B 头)> <EDCode(体)> '!' 或 '!$'（登录跳）。
   * 心跳：单字节 '*'；不在任何帧内。
+  * 另有**明文动作帧**（不是 EDCode）：'#+GD/<rtime>!' 与 '#=DIG!' / '#+PWR!' 一族
+    短标签（C# SendSocket），由 classify_plain 在 16B 头长度闸**之前**按文法分类；
+    未知明文仍 fail-closed。
 
 EDCode 编码后的字节全部落在 0x3C..0x7B，因此 '!'(0x21)、'#'(0x23)、'*'(0x2A)
 都不可能出现在已编码载荷里 —— 分帧可以安全地按这些字节切。
@@ -35,6 +38,25 @@ HEARTBEAT = b"*"
 HEADER_SIZE = 12
 TAIL_BANG = b"!"
 TAIL_DOLLAR = b"!$"
+
+# ---- 服务端**明文动作帧**（不是 12B 头协议帧，payload 未 EDCode 编码）----
+# 这一类必须**先于** 16B 头长度闸分类：C# oracle 的 rtime 是 `Environment.TickCount`
+# （int，≤10 位十进制），`#+GD/<rtime>!` 的 inner 只有 ≤14B；`=DIG` / `+PWR` 一族更短（3~5B）。
+# 若先过长度闸，这些合法帧会全部变成 FrameError（PRB-1）。
+# 判据是**文法**（固定前缀 + 纯十进制 / 标签全集），不是「EDCode 解不开就当明文」——
+# 其它解析不了的头仍然 fail-closed。
+PLAIN_ACK_TIME_PREFIX = b"+GD/"  # MessageSettings.cs:6 sSTATUS_GOOD = "+GD/{0}"
+PLAIN_ACTION_TAGS = frozenset((
+    # PlayObject.Attack.cs 的 SendSocket(...) 全集（grep 'SendSocket("' src/M2Server/）
+    b"DIG",  # :896  "=DIG"
+    b"PWR",  # :947  "+PWR"
+    b"LNG", b"ULNG",          # :1126/:1131
+    b"WID", b"UWID",          # :1142/:1147（:1158/:1163 同标签）
+    b"FIR", b"UFIR",          # :1181
+    b"CRS", b"UCRS",          # :1224/:1229
+    b"TWN", b"UTWN",          # :1247
+    b"CID", b"UCID",          # :1259/:1264
+))
 
 
 class FrameError(Exception):
@@ -124,6 +146,27 @@ def encode_text(text, encoding="gbk"):
 def decode_text(body, encoding="gbk", errors="replace"):
     """EDCode 解码后的字节 -> 文本（展示用；比较器应比字节而不是比文本）。"""
     return body.decode(encoding, errors)
+
+
+def classify_plain(inner, offset=0):
+    """明文动作帧分类；返回 frame_class，不是明文帧返回 None。
+
+    必须在 16B 头长度闸**之前**调用（见 PLAIN_ACK_TIME_PREFIX 的注释）。
+    前缀对但文法不符（如 ``+GD/abc``）直接 FrameError —— 仍是 fail-closed，
+    只是报错点更准确：它连协议帧都不可能是。（C# 侧 ``+GD/`` 后必是 int。）
+    """
+    if inner.startswith(PLAIN_ACK_TIME_PREFIX):
+        rest = inner[len(PLAIN_ACK_TIME_PREFIX):]
+        if rest[:1] == b"-":  # Environment.TickCount 回绕后可为负
+            rest = rest[1:]
+        if not rest.isdigit():  # bytes.isdigit() 只认 ASCII 0-9，且空串为 False
+            raise FrameError(
+                "frame at offset %d: malformed '+GD/' ack %r (want -?[0-9]+)"
+                % (offset, bytes(inner)[:32]))
+        return "server_ack_time"
+    if inner[:1] in (b"=", b"+") and inner[1:] in PLAIN_ACTION_TAGS:
+        return "server_action_ack"
+    return None
 
 
 def pack_header(recog, ident, param=0, tag=0, series=0):
@@ -302,6 +345,11 @@ class FrameSplitter:
         tail = TAIL_DOLLAR if raw.endswith(TAIL_DOLLAR) else TAIL_BANG
         start = 2 if raw[1:2] == CLIENT_FRAME_TAG else 1
         inner = raw[start:len(raw) - len(tail)]
+        # 明文动作帧先分类，再走长度闸/头解码（顺序反了会把 C# 形状的短 ack 全部拒掉）。
+        plain_class = classify_plain(inner, offset)
+        if plain_class is not None:
+            return Frame(tail, raw, b"", bytes(inner), bytes(inner), offset,
+                         plain=True, frame_class=plain_class)
         head_enc_len = len(encode_bytes(bytes(HEADER_SIZE)))
         if len(inner) < head_enc_len:
             raise FrameError("frame at offset %d: header payload %dB < %dB"
@@ -311,12 +359,6 @@ class FrameSplitter:
             if len(header) != HEADER_SIZE:
                 raise FrameError("decoded header %dB != %dB" % (len(header), HEADER_SIZE))
         except FrameError as ex:
-            # 服务端的动作 ack 是**明文**帧（BotSrv/LoadMetrics.cs:14）：
-            #   '#+GD/<rtime>!'（Modules/SystemModule/MessageSettings.cs sSTATUS_GOOD）
-            # 它不是 12B 头协议帧；显式分类，绝不静默当协议帧。
-            if inner.startswith(b"+GD/") and inner[4:].isdigit():
-                return Frame(tail, raw, b"", bytes(inner), bytes(inner), offset,
-                             plain=True, frame_class="server_ack_time")
             raise FrameError("frame at offset %d: header is not EDCode (%s); raw=%s"
                              % (offset, ex, raw[:48].hex()))
         body = bytes(inner[head_enc_len:]) if len(inner) > head_enc_len else b""
@@ -459,6 +501,41 @@ def _selftest():
         else:
             raise AssertionError("unknown plaintext frame should be fail-closed")
 
+    def t_plain_csharp_shapes():
+        """PRB-1 的牙：C# oracle 形状的短明文 ack 必须分类成功。
+
+        C# 的 rtime 是 Environment.TickCount（int，≤10 位）⇒ '#+GD/<rtime>!' 的 inner
+        ≤14B，**小于** 16B 头长度闸；把明文分类挪回长度闸之后，这里必红。
+        """
+        cases = (
+            (b"#+GD/1792667727!", b"+GD/1792667727", "server_ack_time"),   # C# 10 位
+            (b"#+GD/-123!", b"+GD/-123", "server_ack_time"),               # 负 tick
+            (b"#+GD/0!", b"+GD/0", "server_ack_time"),
+            (b"#+GD/1792667727392!", b"+GD/1792667727392", "server_ack_time"),  # Rust 13 位
+            (b"#=DIG!", b"=DIG", "server_action_ack"),
+            (b"#+PWR!", b"+PWR", "server_action_ack"),
+            (b"#+UFIR!", b"+UFIR", "server_action_ack"),
+            (b"#=DIG!$", b"=DIG", "server_action_ack"),
+        )
+        for raw, want_body, want_class in cases:
+            ev = FrameSplitter().feed(raw)
+            assert len(ev) == 1 and ev[0].kind == "frame", (raw, ev)
+            fr = ev[0].frame
+            assert fr.plain and fr.frame_class == want_class, (raw, fr.frame_class)
+            assert fr.body == want_body, (raw, fr.body)
+            assert fr.ident is None and fr.recog is None, raw
+        # 前缀对但文法坏：仍 fail-closed
+        for bad in (b"#+GD/abc!", b"#+GD/!", b"#+GD/12a!", b"#+GD/+12!"):
+            try:
+                FrameSplitter().feed(bad)
+            except FrameError:
+                continue
+            raise AssertionError("malformed ack accepted: %r" % bad)
+        # 不误伤：协议帧的『体』里出现 +GD/ 明文不影响分类
+        proto = build_s2c_frame(1, 50, body=b"+GD/123")
+        ev = FrameSplitter().feed(proto)
+        assert ev[0].frame.frame_class == "protocol", ev[0].frame
+
     def t_eof():
         sp = FrameSplitter()
         sp.feed(build_s2c_frame(1, 50)[:-1])
@@ -477,6 +554,7 @@ def _selftest():
     check("tamper-red", t_tamper_red)
     check("tamper-printable-red", t_tamper_printable)
     check("plain-ack-classified", t_plain_ack)
+    check("plain-csharp-shapes-red", t_plain_csharp_shapes)
     check("eof-fail-closed", t_eof)
 
     if fails:
@@ -484,7 +562,7 @@ def _selftest():
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2frame selftest: OK (10 checks, incl. 2 tamper teeth)")
+    print("mir2frame selftest: OK (11 checks, incl. 2 tamper teeth)")
     return 0
 
 

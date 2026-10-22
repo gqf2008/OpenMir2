@@ -409,10 +409,16 @@ def plan_step(step, index, params):
         if "text" in val and "raw_hex" in val:
             raise ScenarioError("%s.send got both text and raw_hex" % where)
         out["ident"] = _need_int(val["ident"], where + ".send.ident")
-        out["recog"] = val.get("recog", 0)
-        out["param"] = val.get("param", 0)
-        out["tag"] = val.get("tag", 0)
-        out["series"] = val.get("series", 0)
+        # recog/param/tag/series 与其它动作同口径：先 resolve_param（可写 params 名），
+        # 再在 plan 期做范围校验（recog=i32，其余 u16）。否则要等到发送时 pack_header
+        # 才抛 FrameError，被归类成 frame-parse(2) 而不是 scenario-error(2)。PRB-4。
+        recog = val.get("recog", 0)
+        out["recog"] = _need_int(resolve_param(recog, params, where + ".send.recog"),
+                                 where + ".send.recog", -0x80000000, 0x7FFFFFFF)
+        for name in ("param", "tag", "series"):
+            out[name] = _need_int(
+                resolve_param(val.get(name, 0), params, where + ".send." + name),
+                where + ".send." + name)
         out["body"] = _encode_send_body(val, where + ".send") if ("text" in val or "raw_hex" in val) else b""
     elif action == "say":
         if not isinstance(val, str):
@@ -914,13 +920,25 @@ def main(argv=None):
     if args.selftest:
         return run_selftest()
 
-    run = None
+    # 参数校验先于 Run/Recorder 创建：缺参数时还没有 --out 可落 run.json，
+    # 按 README「退出码」退 2（fail-closed）；绝不能走到 run=None 的 AttributeError
+    #（那是未捕获异常，退出码会变成 1）。PRB-2。
+    try:
+        _check_required(args)
+    except ProbeError as ex:
+        print("mir2_probe: %s" % ex, file=sys.stderr)
+        return 2
+    try:
+        run = Run(args)
+    except OSError as ex:
+        print("mir2_probe: cannot create evidence dir %r: %r" % (args.out, ex),
+              file=sys.stderr)
+        return 2
+
     scenario = None
     params = {}
     error = None
     try:
-        _check_required(args)
-        run = Run(args)
         data = load_scenario(args.scenario)
         plans, params = expand_scenario(data, parse_vars(args.var))
         scenario = {"path": args.scenario, "data": data}
@@ -945,11 +963,7 @@ def main(argv=None):
         run.exit_code, run.exit_reason = 0, "completed"
     except ScenarioError as ex:
         error = str(ex)
-        if run:
-            run.exit_code, run.exit_reason = 2, "scenario-error"
-        else:
-            print("mir2_probe: ScenarioError: %s" % ex, file=sys.stderr)
-            return 2
+        run.exit_code, run.exit_reason = 2, "scenario-error"
     except FrameError as ex:
         error = str(ex)
         run.exit_code, run.exit_reason = 2, "frame-parse"
@@ -968,19 +982,18 @@ def main(argv=None):
         error = "%s: %s" % (type(ex).__name__, ex)
         run.exit_code, run.exit_reason = 2, "internal"
     finally:
-        if run is not None:
-            for c in run.conns:
-                c.close()
-            run.recorder.close()
-            payload = build_run_json(run, args, scenario, params, error)
-            os.makedirs(args.out, exist_ok=True)
-            path = os.path.join(args.out, "run.json")
-            with open(path, "w", encoding="utf-8") as fh:
-                json.dump(payload, fh, ensure_ascii=False, indent=1)
-            print("mir2_probe: exit=%d reason=%s frames=%d out=%s"
-                  % (run.exit_code, run.exit_reason, run.recorder.seq, args.out))
-            if error:
-                print("  error: %s" % error, file=sys.stderr)
+        for c in run.conns:
+            c.close()
+        run.recorder.close()
+        payload = build_run_json(run, args, scenario, params, error)
+        os.makedirs(args.out, exist_ok=True)
+        path = os.path.join(args.out, "run.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, ensure_ascii=False, indent=1)
+        print("mir2_probe: exit=%d reason=%s frames=%d out=%s"
+              % (run.exit_code, run.exit_reason, run.recorder.seq, args.out))
+        if error:
+            print("  error: %s" % error, file=sys.stderr)
     return run.exit_code
 
 
@@ -1046,6 +1059,18 @@ def _selftest_replay_fixture(name, expected_count, required, count_643=0, expect
         assert idents.count(SM_MERCHANTSAY) == count_643, \
             "%s: SM_MERCHANTSAY count %d != %d" % (source, idents.count(SM_MERCHANTSAY), count_643)
 
+    # 明文动作帧必须**被分类**而不是解析失败（PRB-1/PRB-3）：fixture 里的 +GD ack 是
+    # Rust 13 位 epoch-ms 形状；C# 的 <=10 位形状由 mir2frame selftest 的
+    # plain-csharp-shapes-red 牙单独钉住，这里钉住「条数」不许漂。
+    if expected_plain:
+        plains = [f for f in frames if f.frame_class == "server_ack_time"]
+        assert len(plains) == expected_plain, (
+            "%s: server_ack_time count %d != %d" % (source, len(plains), expected_plain))
+        assert all(f.plain and f.ident is None for f in plains), (
+            "%s: server_ack_time frame is not plain" % source)
+        assert all(f.body.startswith(b"+GD/") for f in plains), (
+            "%s: server_ack_time body does not start with +GD/" % source)
+
     import tempfile
     import shutil
     tmp = tempfile.mkdtemp(prefix="mir2probe-selftest-")
@@ -1104,26 +1129,27 @@ def _selftest_scenarios():
         assert os.path.exists(p), "missing scenario %s" % p
     lo = load_scenario(paths["login_only.json"])
     lo_plans, _ = expand_scenario(lo)
-    assert len(lo_plans) == 1 and lo_plans[0]["kind"] == "wait_frames"
-    assert lo_plans[0]["count"] == 15
-    assert set(lo_plans[0]["idents"]) == {SM_LOGON, SM_ABILITY, SM_SENDNOTICE}
+    assert len(lo_plans) == 1 and lo_plans[0]["kind"] == "wait_frames", lo_plans
+    assert lo_plans[0]["count"] == 15, lo_plans[0].get("count")
+    assert set(lo_plans[0]["idents"]) == {SM_LOGON, SM_ABILITY, SM_SENDNOTICE}, lo_plans[0]
 
     gm = load_scenario(paths["gm_time.json"])
     gm_plans, _ = expand_scenario(gm)
-    assert gm_plans[0]["kind"] == "send" and gm_plans[0]["ident"] == CM_SAY
-    assert gm_plans[0]["body"] == encode_text("@时间", "gbk")
-    assert gm_plans[1]["kind"] == "wait_for" and gm_plans[1]["idents"] == [SM_SYSMESSAGE]
+    assert gm_plans[0]["kind"] == "send" and gm_plans[0]["ident"] == CM_SAY, gm_plans[0]
+    assert gm_plans[0]["body"] == encode_text("@时间", "gbk"), gm_plans[0]["body"]
+    assert gm_plans[1]["kind"] == "wait_for", gm_plans[1]
+    assert gm_plans[1]["idents"] == [SM_SYSMESSAGE], gm_plans[1]
 
     dice = load_scenario(paths["dice_chain.json"])
     dice_plans, dice_params = expand_scenario(dice)
     kinds = [p["kind"] for p in dice_plans]
     assert kinds == ["click_npc", "wait_for", "dlg_select", "wait_for",
                      "dlg_select", "wait_for", "dlg_select", "wait_for"], kinds
-    assert dice_plans[0]["recog"] == dice_params["npc_actor"]
+    assert dice_plans[0]["recog"] == dice_params["npc_actor"], dice_plans[0]
     for p in dice_plans[1::2]:
-        assert p["idents"] == [SM_MERCHANTSAY]
+        assert p["idents"] == [SM_MERCHANTSAY], (p["index"], p["idents"])
     for p in dice_plans[2::2]:
-        assert p["_needs_merchant_recog"] is True
+        assert p["_needs_merchant_recog"] is True, (p["index"], p.get("_needs_merchant_recog"))
     bodies = [p["body"] for p in dice_plans[2::2]]
     assert bodies == [encode_text(x, "gbk") for x in ("@kaiz", "@ya5", "@ya52")], bodies
 
@@ -1140,6 +1166,22 @@ def _selftest_scenarios():
         except ScenarioError:
             continue
         raise AssertionError("bad step accepted: %r" % (bad_step,))
+
+    # PRB-4：send 的 recog/param/tag/series 也走 resolve_param，且 plan 期就校验范围，
+    # 错误必须落在 scenario-error(2)，不能拖到发送时变成 frame-parse。
+    sp = plan_step({"send": {"ident": 1010, "recog": "npc_actor",
+                             "param": "one", "tag": 5, "series": "one"}},
+                   0, {"npc_actor": 119, "one": 1})
+    assert (sp["recog"], sp["param"], sp["tag"], sp["series"]) == (119, 1, 5, 1), sp
+    for bad in ({"send": {"ident": 1010, "param": 70000}},
+                {"send": {"ident": 1010, "tag": -1}},
+                {"send": {"ident": 1010, "recog": "no_such_param"}},
+                {"send": {"ident": 1010, "recog": 0x80000000}}):
+        try:
+            plan_step(bad, 0, {})
+        except ScenarioError:
+            continue
+        raise AssertionError("bad send accepted: %r" % (bad,))
     return len(paths)
 
 

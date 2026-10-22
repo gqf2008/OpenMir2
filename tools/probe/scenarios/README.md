@@ -52,7 +52,9 @@ python tools/probe/mir2_probe.py \
 ## 参数
 
 `params` 里可放 int 或字符串；动作里的字符串会按「先查 params、再按十进制 int」解析：
-`{"click_npc": "npc_actor"}`。命令行 `--var npc_actor=456` 覆盖场景默认值。
+`{"click_npc": "npc_actor"}`。`send` 的 `recog`/`param`/`tag`/`series` 同口径
+（`ident` 只收 int）；解析失败或越界（`recog` 为 i32，其余 u16）在**加载期**就报 `scenario-error`，
+不会拖到发送时才变成 `frame-parse`。命令行 `--var npc_actor=456` 覆盖场景默认值。
 换一台实例跑 `dice_chain` 时，actor id 变了就只改 `--var`，文件不动。
 
 ## 驱动器的自动握手（对拍不要关）
@@ -86,8 +88,15 @@ python tools/probe/mir2_probe.py \
 * `server_ack_time`：服务端明文动作 ack `#+GD/<rtime>!`
   （`src/Modules/SystemModule/MessageSettings.cs` 的 `sSTATUS_GOOD`）。它不是协议帧，
   `ident/recog/param/tag/series` 为 `null`，`body_hex` 是 `+GD/<rtime>` 明文。
-  其中的 `rtime` 是服务端时间，**不能逐字节对拍**，比较器应按 `frame_class` 排除或只比前缀。
-  任何**其它**解析不了的头仍然 fail-closed（退出码 2），不会被当成帧吞掉。
+  其中的 `rtime` 是服务端时间（C# 口径 = `Environment.TickCount`，**≤10 位十进制、可为负**；
+  Rust 侧是 13 位 epoch-ms），**不能逐字节对拍**，比较器应按 `frame_class` 排除或只比前缀。
+* `server_action_ack`：`PlayObject.Attack.cs` 的 `SendSocket("=DIG")` / `("+PWR")` 一族短明文
+  （`DIG`/`PWR`/`LNG`/`ULNG`/`WID`/`UWID`/`FIR`/`UFIR`/`CRS`/`UCRS`/`TWN`/`UTWN`/`CID`/`UCID`，
+  前缀 `'='` 或 `'+'`）。同样不是协议帧，`ident/recog/...` 为 `null`，`body_hex` 是明文标签。
+
+明文帧的判据是**文法**（固定前缀 + 纯十进制 / 标签全集），不是「EDCode 解不开就当明文」：
+`+GD/` 后不是 `-?[0-9]+`、或未知的短明文，仍然 fail-closed（退出码 2），不会被当成帧吞掉。
+两者都在 12B 头长度闸**之前**分类 —— C# 的 `#+GD/1792667727!` 内层只有 14B，先过长度闸就会被拒。
 
 ### `run.json`
 
@@ -100,7 +109,8 @@ python tools/probe/mir2_probe.py \
 * `0` 全绿；
 * `1` 链路或场景失败（网关不可达、登录被拒、`wait_for` 超时、角色不存在等）；
 * `2` UNCLASSIFIED：帧解析失败（越界字节/未闭合帧）、规则没覆盖（`531` 改密、
-  `dlg_select` 无 643 锚点）、场景 DSL 非法、内部错误。
+  `dlg_select` 无 643 锚点）、场景 DSL 非法、必需参数缺失（参数校验在建证据目录之前，
+  因此不落 `run.json`，只在 stderr 报缺哪几个参数）、内部错误。
 
 工具是 fail-closed 的：解析不了就退出 2 并写进 `unclassified`，**绝不静默当绿**。
 
