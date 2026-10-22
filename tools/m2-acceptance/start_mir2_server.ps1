@@ -34,8 +34,18 @@
               本脚本不改写任何配置文件，库名仍由各 conf 的 ConnctionString 决定；
               `-Seed` 则与 start_rust_stack.ps1 同口径（game-svr 真消费）。
 
-  -WhatIf：只打印将执行的 COMMAND 行与顺序，不启动任何进程，也**不创建 LogDir / pid 文件**；
-           缺任一配置 => RED + 退出 2。实跑同样在全部前置检查通过后才创建 LogDir。
+  -WhatIf：只打印将执行的 COMMAND 行（含每个角色忙检/就绪等待的端口）与顺序，
+           不启动任何进程，也**不创建 LogDir / pid 文件**；缺任一配置 => RED + 退出 2。
+           实跑同样在全部前置检查通过后才创建 LogDir。
+
+  端口剖面（备用端口窗口）：
+      -PortsProfile <alt-port-profile.json>
+          读 tools/window/alt_port_profile.py 生成的清单里的 `ports_by_role`，
+          用它替换固定表里的忙检/就绪端口（15xxx/17xxx 窗口必须给，否则会误报旧端口忙）。
+      -Ports @{ 'db-srv' = @(16000,15100,15700); ... }
+          直接按角色覆盖端口；与 -PortsProfile 同时给时 -Ports 优先。
+          两者都不给时沿用固定表的旧端口（5000/6000/7000/7200…）。
+
   旧六个 exe 仍然可用且行为不变；本脚本不依赖它们。
 
 .EXAMPLE
@@ -46,6 +56,10 @@
 
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 -Roles db-srv,login-srv,game-svr
+
+.EXAMPLE
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
+    -Root E:\tmp\altport-deploy -PortsProfile E:\tmp\altport-deploy\alt-port-profile.json -WhatIf
 #>
 param(
   [string]$Root = 'E:\MirServer',
@@ -55,6 +69,8 @@ param(
   [string]$DbName = '',
   [string]$LogDir = '',
   [int]$WaitSeconds = 60,
+  [string]$PortsProfile = '',
+  [hashtable]$Ports = $null,
   [switch]$WhatIf
 )
 
@@ -69,6 +85,81 @@ $RoleTable = @(
   [pscustomobject]@{ role = 'sel-gate';   conf = 'SelGate\config.conf';   ports = @(7100);             stop_order = 5 }
   [pscustomobject]@{ role = 'game-gate';  conf = 'RunGate\config.conf';   ports = @(7200, 7201, 7202); stop_order = 6 }
 )
+
+# ---- 端口剖面：-PortsProfile（alt_port_profile.json 的 ports_by_role）/ -Ports 覆盖。----
+# 忙检（实跑）与就绪等待（Wait-RolePorts）都只读 $RoleTable[].ports，因此在这里一次性替换。
+# 未知角色 / 缺角色 / 空端口 / 非 int => fail-closed = 退出 2。
+$portsSource = 'default（旧端口 5000/6000/7000/7100/7200…）'
+$knownRoleNames = @($RoleTable | ForEach-Object { $_.role })
+if (-not [string]::IsNullOrWhiteSpace($PortsProfile)) {
+  if (-not (Test-Path -LiteralPath $PortsProfile -PathType Leaf)) {
+    Write-Output ("RED: -PortsProfile 不存在：{0}" -f $PortsProfile)
+    exit 2
+  }
+  try {
+    $profileDoc = Get-Content -LiteralPath $PortsProfile -Raw -ErrorAction Stop | ConvertFrom-Json
+  } catch {
+    Write-Output ("RED: -PortsProfile 不是合法 JSON：{0}" -f $PortsProfile)
+    exit 2
+  }
+  if ($null -eq $profileDoc -or -not ($profileDoc.PSObject.Properties.Name -contains 'ports_by_role')) {
+    Write-Output ("RED: -PortsProfile 缺 ports_by_role：{0}（需 alt_port_profile.py 生成的清单）" -f $PortsProfile)
+    exit 2
+  }
+  $profileMap = @{}
+  foreach ($prop in $profileDoc.ports_by_role.PSObject.Properties) {
+    $vals = @($prop.Value | ForEach-Object { [int]$_ })
+    if ($vals.Count -eq 0) {
+      Write-Output ("RED: -PortsProfile 角色 {0} 端口为空" -f $prop.Name)
+      exit 2
+    }
+    foreach ($v in $vals) {
+      if ($v -lt 1 -or $v -gt 65535) {
+        Write-Output ("RED: -PortsProfile 角色 {0} 端口非法：{1}" -f $prop.Name, $v)
+        exit 2
+      }
+    }
+    $profileMap[[string]$prop.Name] = $vals
+  }
+  $extra = @($profileMap.Keys | Where-Object { -not ($knownRoleNames -contains $_) })
+  if ($extra.Count -gt 0) {
+    Write-Output ("RED: -PortsProfile 含未知角色：{0}" -f ($extra -join ','))
+    exit 2
+  }
+  foreach ($p in $RoleTable) {
+    if (-not $profileMap.ContainsKey($p.role)) {
+      Write-Output ("RED: -PortsProfile 缺角色 {0}（允许：{1}）" -f $p.role, ($knownRoleNames -join '|'))
+      exit 2
+    }
+    $p.ports = @($profileMap[$p.role])
+  }
+  $portsSource = ("profile:" + $PortsProfile)
+}
+if ($null -ne $Ports) {
+  $portKeys = @($Ports.Keys | ForEach-Object { [string]$_ })
+  $extra = @($portKeys | Where-Object { -not ($knownRoleNames -contains $_) })
+  if ($extra.Count -gt 0) {
+    Write-Output ("RED: -Ports 含未知角色：{0}" -f ($extra -join ','))
+    exit 2
+  }
+  foreach ($p in $RoleTable) {
+    if ($portKeys -contains $p.role) {
+      $vals = @($Ports[$p.role] | ForEach-Object { [int]$_ })
+      if ($vals.Count -eq 0) {
+        Write-Output ("RED: -Ports 角色 {0} 端口为空" -f $p.role)
+        exit 2
+      }
+      foreach ($v in $vals) {
+        if ($v -lt 1 -or $v -gt 65535) {
+          Write-Output ("RED: -Ports 角色 {0} 端口非法：{1}" -f $p.role, $v)
+          exit 2
+        }
+      }
+      $p.ports = $vals
+    }
+  }
+  $portsSource = 'commandline:-Ports'
+}
 
 if ([string]::IsNullOrWhiteSpace($LogDir)) {
   $LogDir = Join-Path $Root 'logs\mir2-server'
@@ -176,6 +267,7 @@ function Save-PidFile {
     generated_at = (Get-Date).ToString('o')
     root         = $Root
     server_exe   = $ServerExe
+    ports_source = $portsSource
     roles        = @($Entries)
   }
   $payload | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $PidFile -Encoding utf8
@@ -256,6 +348,10 @@ if ($dbNameText) { $childEnv['MIR2_DB_NAME'] = $dbNameText }
 Write-Output ("ROOT {0}" -f $Root)
 Write-Output ("SERVER_EXE {0}" -f $ServerExe)
 Write-Output ("LOG_DIR {0}" -f $LogDir)
+Write-Output ("PORTS_SOURCE {0}" -f $portsSource)
+foreach ($p in $RoleTable) {
+  Write-Output ("PORTS {0}: {1}" -f $p.role, (($p.ports) -join ','))
+}
 Write-Output ("SEED: 将向角色注入 MIR2_RNG_SEED={0}（显式 -Seed > 环境变量 > 默认 42，口径同 start_rust_stack.ps1）" -f $seedText)
 if ($dbNameText) {
   Write-Output ("DB_NAME: 将向角色注入 MIR2_DB_NAME={0}（仅环境透传，当前无消费者；库名仍由各配置文件决定）" -f $dbNameText)
@@ -268,7 +364,7 @@ if ($WhatIf) {
   $order = 1
   foreach ($p in $plan) {
     $confPath = Join-Path $Root $p.conf
-    Write-Output ('COMMAND {0} {1}: "{2}" {1} "{3}"' -f $order, $p.role, $ServerExe, $confPath)
+    Write-Output ('COMMAND {0} {1} [ports {2}]: "{3}" {1} "{4}"' -f $order, $p.role, (($p.ports) -join ','), $ServerExe, $confPath)
     $order++
   }
   Write-Output 'MYSQL_EXTERNAL: 3306（外部依赖，不由本脚本启动/停止）'

@@ -1097,13 +1097,22 @@ powershell -NoProfile -ExecutionPolicy Bypass `
 | `-DbName` | 空（回落 `$env:MIR2_DB_NAME`） | 只做环境透传 `MIR2_DB_NAME`；**当前全仓无消费者**（`grep -r MIR2_DB_NAME` 只命中本脚本与本 runbook），仅保留与 `start_rust_stack.ps1` 同形，**不改写任何配置文件**，库名仍由各 conf 决定 |
 | `-LogDir` | `<Root>\logs\mir2-server` | 日志与 pid 文件目录；**只在实跑前置全过后创建**（`-WhatIf`/前置失败不留目录） |
 | `-WaitSeconds` | `60` | 每角色端口就绪等待上限 |
+| `-PortsProfile` | 空 | 指向 `tools/window/alt_port_profile.py` 生成的 `alt-port-profile.json`，读其中 `ports_by_role` 替换忙检/就绪端口（15xxx/17xxx 窗口**必须**给） |
+| `-Ports` | 空 | 直接按角色覆盖端口（`@{ 'game-svr' = @(15000); … }`）；与 `-PortsProfile` 同时给时本项优先 |
 | `-WhatIf` | 关 | 只打印计划，不启动进程、**不创建 LogDir/pid 文件**（无副作用）；缺配置退出 2 |
+
+> **端口剖面**：忙检（实跑前置）与就绪等待都只读 `$RoleTable[].ports`；给了 `-PortsProfile`/`-Ports`
+> 就整体替换成新值，不会再误报旧端口（`:312` 忙检、`:343` 就绪等待的旧实现已随重构消失）。
+> 清单缺角色/含未知角色/端口非 int/越界 ⇒ 退出 **2**；`-WhatIf` 会打印
+> `PORTS_SOURCE …`、每个角色的 `PORTS <role>: …`，以及 `COMMAND … [ports …]`，可据此核对。
 
 **固定启动顺序**（MySQL 是外部依赖，本工具不启动也不停止）：
 
 ```text
 MySQL(3306, 外部) -> db-srv(6000/5100/5700) -> login-srv(5500/5600)
                   -> game-svr(5000) -> login-gate(7000) -> sel-gate(7100) -> game-gate(7200/7201/7202)
+# 备用剖面（-PortsProfile）：db-srv(16000/15100/15700) -> login-srv(15500/15600)
+#   -> game-svr(15000) -> login-gate(17000) -> sel-gate(17100) -> game-gate(17200/17201/17202)
 ```
 
 **停止顺序 = 上面启动顺序的严格反向**（§7.3 按 pid 文件的 `stop_order` 降序执行）。
@@ -1190,7 +1199,7 @@ foreach ($f in @('tools/m2-acceptance/start_mir2_server.ps1','tools/m2-acceptanc
 # 2) 六配置齐备的临时根：-WhatIf ⇒ 恰 6 条 COMMAND（db-srv..game-gate），退出 0，且不创建 LogDir
 #    （临时根 E:/tmp/launcher-selftest-r3 下六个空 conf）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/launcher-selftest-r3 -WhatIf
-# COMMAND 1 db-srv: …  COMMAND 6 game-gate: …
+# COMMAND 1 db-srv [ports 6000,5100,5700]: …  COMMAND 6 game-gate [ports 7200,7201,7202]: …
 # WHATIF: 6 个角色；启动顺序 db-srv -> login-srv -> game-svr -> login-gate -> sel-gate -> game-gate
 # 停止顺序 game-gate -> sel-gate -> login-gate -> game-svr -> login-srv -> db-srv
 # exit=0；事后该临时根只有六个角色目录，无 logs/
@@ -1220,6 +1229,17 @@ powershell … -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/laun
 #   exit=1；pid 文件保留；该 pwsh 进程未被误杀（DECOY_ALIVE）
 # pid 非数字                            ⇒ SKIP + RED + 保留 pid 文件 + exit 1
 # 名字相符的活进程（Force 分支）        ⇒ STOPPED … force + 删除 pid 文件 + exit 0
+
+# 6) 端口剖面（本批新增；-Root 用 §8.3 的 deploy 根）
+powershell … -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root E:/tmp/altport-deploy-check `
+  -PortsProfile E:/tmp/altport-deploy-check/alt-port-profile.json -WhatIf
+# PORTS_SOURCE profile:…/alt-port-profile.json
+# PORTS db-srv: 16000,15100,15700 / login-srv 15500,15600 / game-svr 15000
+# PORTS login-gate 17000 / sel-gate 17100 / game-gate 17200,17201,17202
+# COMMAND 1..6 … [ports …]（exit=0；不建 logs/）
+# 清单缺角色 / 未知角色 / 坏 JSON ⇒ RED + exit 2
+# 实跑忙检取新值：-Roles db-srv -Ports @{ 'db-srv' = @(3306) } ⇒ RED: 目标端口已被监听：db-srv:3306（exit 1，未起进程）
 ```
 
 > **-WhatIf 无副作用（本批修复）**：`LogDir` 只在实跑且全部前置通过后才创建。复核者此前
@@ -1242,25 +1262,32 @@ powershell … -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/laun
 ## 8. 备用端口剖面（15xxx/17xxx）
 
 > **tier=L**：本节只新增离线工具与配方，不改任何角色代码、协议、配置格式或数据；工具不启动进程、
-> 不占端口、不写数据库、不写 `E:\MirServer`。真机窗口本身的 R 级判据不因本节而降级——本节只解决
-> 「开窗必须抢占 5000/7000/7200」这个运维冲突。
+> 不占端口、不写数据库、不写 `E:\MirServer`（deploy 只**复制**角色树）。真机窗口本身的 R 级判据
+> 不因本节而降级——本节只解决「开窗必须抢占 5000/7000/7200」这个运维冲突。
 >
 > 背景：外部 C# 全栈常驻 `5000/5100/5500/5600/5700/6000/7000/7100/7200`。备用剖面把它们整体平移到
-> `15xxx/17xxx`，六份影子 conf 与一个新的客户端启动命令都由脚本生成，源文件只读。
+> `15xxx/17xxx`，六份影子 conf、路由文件与一个新的客户端启动命令都由脚本生成，源文件只读。
+>
+> **两种产出，别混用**：
+> - `generate --out-dir DIR` = **覆盖层**：只写六份 conf + 清单。`DIR` **不是**可独立起栈的 `-Root`，
+>   必须与完整角色部署合并；只拷六份 conf **不会**让链路通（缺路由文件，见 §8.2）。
+> - `generate --deploy DIR --mir-server-root E:\MirServer` = **完整部署根**：先只读复制六个角色树，
+>   再写六份 conf、改写路由文件、把连接串切到测试库；产出可直接
+>   `start_mir2_server.ps1 -Root DIR -PortsProfile DIR\alt-port-profile.json`。
 
 ### 8.1 工具
 
 | 文件 | 作用 |
 |---|---|
 | `tools/window/startup_param.py` | 客户端启动参数（`base64(IV8 + Blowfish-CBC(656B))`）的 `decrypt / encrypt / port / roundtrip`；口令与布局只读引用 `MirClientZig/src/app/boot.zig:280-360`，固定向量逐字节自检 |
-| `tools/window/alt_port_profile.py` | 生成六份影子 conf（`generate`）、打印固定剖面与计划键（`mapping`）、离线自检（`selftest`）；可选生成 `run-release-alt.cmd` |
+| `tools/window/alt_port_profile.py` | `generate`（`--out-dir` 覆盖层 / `--deploy` 完整根，`--db-mode test\|prod`）、`mapping`、`selftest`；可选生成 `run-release-alt.cmd` |
 
 依赖：Python 3.12 + `cryptography`（本机实测 50.0.1，`cryptography.hazmat.decrepit.ciphers.algorithms.Blowfish` 可用）。
 `alt_port_profile.py` 只 import 同目录的 `startup_param.py`，不依赖对端仓代码。
 
 ### 8.2 固定剖面与键名映射
 
-键名/语义**以仓库内 Rust 解析器为准**（实读 `mir2-rs/bins/*/src/config.rs`，不是按直觉猜）：
+键名/语义**以仓库内 Rust 解析器为准**（实读 `mir2-rs/bins/*/src/config.rs` 与 `bins/db-srv/src/route.rs`，不是按直觉猜）：
 
 | 角色 | 影子 conf（输出布局同 §7.2） | 键 | 旧 → 新 | 含义 |
 |---|---|---|---|---|
@@ -1270,8 +1297,8 @@ powershell … -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/laun
 | `db-srv` | 同上 | `[Server] IDSPort` | 5600 → **15600** | 指向 login-srv IDS |
 | `login-srv` | `LoginSrv/logsrv.conf` | `[Server] GatePort` | 5500 → **15500** | LoginGate 下游 |
 | `login-srv` | 同上 | `[Server] ServerPort` | 5600 → **15600** | IDS（game-svr / db-srv 连入） |
-| `login-srv` | 同上 | `[Server] RunPort` | 7200 → **16005** | 遗留键；当前 Rust/C# 解析器都未消费，与 SelGate `LsvServerPort=16005` 对齐 |
-| `login-srv` | 同上 | `[Server] DBSPort` | 6000 → **16000** | 指向 db-srv DataService |
+| `login-srv` | 同上 | `[Server] RunPort` | 7200 → **16005** | **legacy/未消费**：C# 不解析、Rust 不读；保留只为与 SelGate `LsvServerPort=16005` 同形 |
+| `login-srv` | 同上 | `[Server] DBSPort` | 6000 → **16000** | **legacy/未消费**：C# 只读进 `Config.nDBSPort`（全仓无消费者），Rust 不读 |
 | `game-svr` | `M2GameSvr/Server.conf` | `[Server] GatePort` | 5000 → **15000** | GameSvr 监听（GameGate 下游） |
 | `game-svr` | 同上 | `[Server] DBPort` | 6000 → **16000** | 指向 db-srv DataService |
 | `game-svr` | 同上 | `[Server] IDSPort` | 5600 → **15600** | 指向 login-srv IDS |
@@ -1279,12 +1306,44 @@ powershell … -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/laun
 | `login-gate` | 同上 | `[LoginGate] GatePort0` | 7000 → **17000** | **客户端登录入口** |
 | `sel-gate` | `SelGate/config.conf` | `[SelGate] ServerPort0` | 5100 → **15100** | 指向 db-srv |
 | `sel-gate` | 同上 | `[SelGate] GatePort0` | 7100 → **17100** | **客户端选服入口** |
-| `sel-gate` | 同上 | `[SelGate] LsvServerPort` | 16005（不变） | 解析器未消费；保持 16005 |
+| `sel-gate` | 同上 | `[SelGate] LsvServerPort` | 16005（不变） | 解析器未消费；保持 16005（manifest 里是 no-op） |
 | `game-gate` | `RunGate/config.conf` | `[GameGate] ServerPort1..3` | 5000 → **15000** | 三组都指向 game-svr |
 | `game-gate` | 同上 | `[GameGate] GatePort1..3` | 7200/7201/7202 → **17200/17201/17202** | **客户端游戏入口**（保留 `Count=3` 间距） |
 
 其它键（`GateAddr*`、`DBAddr`、`IDSAddr`、`ConnctionString`、`Count`、`[Integer]/[Switch]/[Strings]` 等）逐字节保留。
 `MsgSrvPort=4900`、`LogServerPort=10000` 不在本剖面内（外部服务），保持原值。
+本剖面 manifest 的 `port_map` 是 **21 条**（4+4+3+2+2+6；`LsvServerPort 16005→16005` 是 no-op，不入表）。
+
+**路由文件（只有 `--deploy` 改写；缺一链路不通）**
+
+`--out-dir` 覆盖层**不含**这些文件，所以「只拷六份 conf」时客户端拿不到 GameGate 地址
+（`ServerInfo.txt` 为空路由）甚至 login-srv 直接起不来（缺 `AddrTable.txt`/`UserLimit.txt` 会硬错）。
+
+| 文件 | 语义（Rust 解析器） | deploy 后的值 |
+|---|---|---|
+| `LoginSrv/AddrTable.txt` | `ServerName Title Remote Public Gate[:Port]…`（GB2312）；`get_sel_gate_info` 按 `ServerName+Public` 匹配，客户端收到的 SelGate 地址就是 `Gate` 列 | Remote/Public=`127.0.0.1`；`Gate=127.0.0.1:17100`；ServerName/Title 原字节保留 |
+| `LoginSrv/ServerAddr.txt` | 允许连 IDS 5600 的白名单 | `127.0.0.1` |
+| `LoginSrv/UserLimit.txt` | `ServerName Name LimitCountMax`（缺文件会让选服分支 NRE 静默挂起） | 首列对齐 `AddrTable` 的 ServerName；缺文件时生成 `热血传奇 热血传奇 10000` |
+| `DBSrv/AddrTable.txt` | 允许接入 5100/6000 的服务器 IP 白名单（不在表里直接断连） | `127.0.0.1` |
+| `DBSrv/ServerInfo.txt` | `角色网关IP 游戏网关IP 端口[,端口…]`；`gate_route` 选中行决定客户端去哪个 GameGate | `127.0.0.1 127.0.0.1 17200`；源里出现 7200/7201/7202 时按 17200/17201/17202 平移 |
+
+> `M2GameSvr/!servertable.txt` / `!runaddr.txt` 是 C# GameSvr 的遗留路由文件；**Rust game-svr 不读**
+> （`grep -rn 'servertable\|runaddr' mir2-rs` 无命中），deploy 原样复制、不改写。
+
+**数据库目标（`--db-mode`，默认 `test`）**
+
+`ConnctionString` 的值里 `;` 是字段分隔符（`_kv` 会把它当后缀），所以**不能**用通用键替换；
+工具按行定位 `ConnctionString=`，只替换该行 `database=` token：
+
+| 角色 | conf | 源（prod） | `--db-mode test`（默认） |
+|---|---|---|---|
+| `db-srv` | `DBSrv/dbsvr.conf` | `mir2_db` | `mir2_test_db` |
+| `login-srv` | `LoginSrv/logsrv.conf` | `mir2_account` | `mir2_test_account` |
+| `game-svr` | `M2GameSvr/Server.conf` | `mir2_data` | `mir2_test_data` |
+
+生成后 fail-closed：`test` 模式下任一输出 conf 仍出现 `database=mir2_db;` / `mir2_account;` /
+`mir2_data;` 即 RED 退出 1；工具同时打印 `DB_TARGET <role>: database=… (mode=test|prod)`。
+测试角色 `winplay0` 只在 `mir2_test_db`，窗口请务必用默认 `test`。
 
 ### 8.3 生成（源文件只读）
 
@@ -1293,47 +1352,89 @@ cd <检出>   # 任意检出；--repo-root 必须指向**主检出**（见下）
 # 只读映射（不发任何写操作）
 python tools/window/alt_port_profile.py mapping --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2
 
-# 只打印将写入的映射，不落盘
+# A. 覆盖层（只六份 conf；不是 -Root，需与完整角色部署合并）
 python tools/window/alt_port_profile.py generate `
   --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2 `
   --out-dir E:\tmp\altport-profile -WhatIf
-
-# 实跑：六份影子 conf + 可选客户端命令
 python tools/window/alt_port_profile.py generate `
   --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2 `
-  --out-dir E:\tmp\altport-profile `
-  --client-run-dir D:\MirClient-run
+  --out-dir E:\tmp\altport-profile
+
+# B. 完整部署根（推荐；链路可用）：复制角色树 + 改写路由 + 连接串切测试库
+python tools/window/alt_port_profile.py generate `
+  --deploy E:\tmp\altport-deploy `
+  --mir-server-root E:\MirServer `
+  --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2 `
+  --db-mode test -WhatIf
+# 去掉 -WhatIf 实跑；deploy 根已存在且非空时必须加 --force
+python tools/window/alt_port_profile.py generate `
+  --deploy E:\tmp\altport-deploy `
+  --mir-server-root E:\MirServer `
+  --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2 `
+  --db-mode test --force
 ```
 
 - **`--repo-root` 必须指向主检出**：`src/DBSrv/bin/Release/dbsvr.conf` 与
   `src/LoginSrv/bin/Release/logsrv.conf` 是未跟踪的构建产物，worktree 里没有；工具对 `db-srv/login-srv`
   **只认这两份 Rust 口径配置**（部署根 `DBServer/dbsvr.conf` 缺 `MarketPort`，`LoginSrv/config.conf`
   地址是 `10.10.0.102`，都不适合做默认源）。缺失时报错并提示 `--source db-srv=<path>`。
-- 输出目录布局与 `start_mir2_server.ps1 -Root` 完全一致，可直接：
-  `start_mir2_server.ps1 -Root E:\tmp\altport-profile -WhatIf`。
-- `-WhatIf` **不建目录、不写文件**；实跑才创建 `OutDir`。
+- `--deploy` 复制六个 `--mir-server-root/<角色目录>`（`DBServer/LoginSrv/M2GameSvr/LoginGate/SelGate/RunGate`，
+  源只读），输出目录名按 §7.2 的 `-Root` 布局（`DBSrv/LoginSrv/M2GameSvr/LoginGate/SelGate/RunGate`）。
+  已存在且非空需 `--force`；不会删除未知文件。（`--mirserver` 是 `--mir-server-root` 的别名。）
+- **端到端路由断言**：生成后自动复核覆盖层，打印
+  `ROUTE_VERIFY OK client_login=127.0.0.1:17000 -> selgate=127.0.0.1:17100 -> gamegate=127.0.0.1:17200`
+  （即客户端登录 17000 → 选服被路由到 17100 → 游戏被路由到 17200）。
+- `-WhatIf` **不建目录、不写文件**；实跑才创建输出根。
 - 客户端只写 `D:\MirClient-run\run-release-alt.cmd`（新文件）；`run-release.cmd` 只读，写后工具会
   重新哈希原文件做 fail-closed 断言。已存在 `run-release-alt.cmd` 时需 `--force` 才覆盖。
+- 起栈（launcher 必须带剖面，否则忙检/就绪等待会看旧端口）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass `
+  -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root E:\tmp\altport-deploy `
+  -PortsProfile E:\tmp\altport-deploy\alt-port-profile.json -WhatIf
+# PORTS_SOURCE profile:…；PORTS db-srv: 16000,15100,15700；…
+# COMMAND 1..6（每条带 [ports …]）；exit=0，不建 logs/
+```
+
+实跑把 `-WhatIf` 换成 `-Seed 42` 即可；停栈用 `stop_mir2_server.ps1`（§7.3）。
+`-WhatIf` 不再是唯一支持的模式；手工起栈时六角色顺序与配置路径见 §7.2，
+即 `mir2-server <role> <conf>`（`db-srv → login-srv → game-svr → login-gate → sel-gate → game-gate`，
+停止严格反向），并自行确保 `MIR2_RNG_SEED` 与剖面端口一致。
 
 ### 8.4 编码与差异判据
 
-- 读写走 **latin-1 逐字节**视图（同 `tools/m2-acceptance/db_target_plumb.ps1`）：UTF-8 BOM
-  （`dbsvr.conf` / `Server.conf`）、非 UTF-8 字节（`RunGate/config.conf` 的 `[Strings]` 段实测有
-  `EF BC 3F`，既非合法 UTF-8 也非合法 GBK）、
-  CRLF/LF、段序、注释全部 1:1 保留，只替换目标键的值 token。
+- 读写走 **latin-1 逐字节**视图（同 `tools/m2-acceptance/db_target_plumb.ps1`），只替换目标键的值 token。
+- BOM 实况（2026-10-22 实测）：
+  - `M2GameSvr/Server.conf`：**有 UTF-8 BOM**（LF，3104 行）；
+  - 默认源 `src/DBSrv/bin/Release/dbsvr.conf`、`src/LoginSrv/bin/Release/logsrv.conf`：**无 BOM**（CRLF）；
+  - 部署根 `E:\MirServer\DBServer\dbsvr.conf`：有 BOM，但**不是默认源**（缺 `MarketPort`）；
+  - `RunGate/config.conf` 的 `[Strings]` 段实测有 `EF BC 3F`（既非合法 UTF-8 也非合法 GBK）。
+  BOM/非 UTF-8 字节/CRLF/LF/段序/注释全部 1:1 保留。
 - 每份文件写完后断言：**差异行集合恰为计划键所在行**；差异行只允许值 token 变化（前缀/后缀逐字节相同）；
-  行数不变；目标键读回等于新值。任一不满足即 `RED` 退出 1。
-- 2026-10-22 本机真跑（`generate`）：
+  行数不变；目标键读回等于新值；连接串只允许 `database=` token 变化。任一不满足即 `RED` 退出 1。
+- 2026-10-22 本机真跑（`generate --deploy`，相对默认源的行号）：
 
 ```text
-db-srv      diff_lines=[4,6,14,16]   BOM=False CRLF=24
-login-srv   diff_lines=[7,9,15,19]   BOM=False CRLF=25
-game-svr    diff_lines=[19,21,47]    BOM=True  LF
-login-gate  diff_lines=[9,11]        BOM=False CRLF=31
-sel-gate    diff_lines=[5,6]         BOM=False CRLF=23
-game-gate   diff_lines=[4,5,7,8,10,11] BOM=False CRLF=236
-KEY_VALUES_OK 16 / GAME_GATE_OK 3 endpoints
+db-srv      diff_lines=[4,6,14,16,21]      BOM=False CRLF=24
+login-srv   diff_lines=[7,9,15,19,25]      BOM=False CRLF=25
+game-svr    diff_lines=[3,19,21,47]        BOM=True  LF
+login-gate  diff_lines=[9,11]              BOM=False CRLF=31
+sel-gate    diff_lines=[5,6]               BOM=False CRLF=23
+game-gate   diff_lines=[4,5,7,8,10,11]     BOM=False CRLF=236
+VERIFY db-srv: diff_set=['[DataBase] ConnctionString (database)', '[Server] IDSPort', '[Server] MarketPort', '[Setup] GatePort', '[Setup] ServerPort'] OK
+VERIFY login-srv: diff_set=['[DataBase] ConnctionString (database)', '[Server] DBSPort', '[Server] GatePort', '[Server] RunPort', '[Server] ServerPort'] OK
+VERIFY game-svr: diff_set=['[DataBase] ConnctionString (database)', '[Server] DBPort', '[Server] GatePort', '[Server] IDSPort'] OK
+VERIFY login-gate: diff_set=['[LoginGate] GatePort0', '[LoginGate] ServerPort0'] OK
+VERIFY sel-gate: diff_set=['[SelGate] GatePort0', '[SelGate] ServerPort0'] OK
+VERIFY game-gate: diff_set=['[GameGate] GatePort1', '[GameGate] GatePort2', '[GameGate] GatePort3', '[GameGate] ServerPort1', '[GameGate] ServerPort2', '[GameGate] ServerPort3'] OK
+DB_TARGET db-srv: database=mir2_test_db (mode=test, 源 mir2_db, 测试 mir2_test_db)
+DB_TARGET login-srv: database=mir2_test_account (mode=test, 源 mir2_account, 测试 mir2_test_account)
+DB_TARGET game-svr: database=mir2_test_data (mode=test, 源 mir2_data, 测试 mir2_test_data)
 ```
+
+（`diff_set` 里连接串键显示为 `[DataBase] ConnctionString (database)`，表示只改 `database=` token。）
 
 ### 8.5 客户端启动参数
 
@@ -1348,22 +1449,29 @@ IV_HEX=38bcd80f9a040ef7 ADDR=127.0.0.1 PORT=7000
 
 `alt_port_profile.py` 生成 `run-release-alt.cmd` 时只改 656B 明文里的地址（offset 31 短串）与端口
 （offset 248 i32），其余字段逐字节不变；IV 默认**沿用原参数的前 8 字节**（`--iv random` 可改）。
-写入后重新解密断言：
+写入后重新解密断言，工具实际输出：
 
 ```text
-CLIENT_OK decrypt_addr=127.0.0.1 decrypt_port=17000 param_len=888
-ORIGINAL_CMD_UNCHANGED sha256=1ab506be11ab42c6df445f8ff01d98cf4494d30131a29e10454c078754360d39
+CLIENT D:\MirClient-run\run-release.cmd (127.0.0.1:7000) -> D:\MirClient-run\run-release-alt.cmd (127.0.0.1:17000)
+VERIFY client: decrypt_port=17000 decrypt_addr=127.0.0.1 param_len=888 OK
 ```
+
+（原文件保护是内部断言：写后重新哈希 `run-release.cmd`，变了就 RED；没有单独的 `ORIGINAL_CMD_UNCHANGED` 打印行。）
 
 ### 8.6 离线自检与门禁
 
 ```powershell
 python tools/window/alt_port_profile.py selftest --repo-root E:\Users\gxh\Documents\GitHub\OpenMir2
-# ROUNDTRIP_OK ... / 六份 VERIFY ... OK / CLIENT_OK ... / ALT_PORT_SELFTEST_OK
+# ROUNDTRIP_OK ... / 六份 VERIFY ... OK / DB_TARGET ... / DEPLOY ... /
+# ROUTE_VERIFY OK client_login=127.0.0.1:17000 -> selgate=127.0.0.1:17100 -> gamegate=127.0.0.1:17200 /
+# ROUTE_ASSERT … / DEPLOY_GUARD_OK … / CLIENT_OK decrypt_addr=127.0.0.1 decrypt_port=17000 param_len=888 /
+# ALT_PORT_SELFTEST_OK
 ```
 
-`selftest` 在系统临时目录生成、校验后自动删除，不碰 `E:\MirServer` 与 `D:\MirClient-run` 的原文件。
-本节改动为纯 Python 工具 + 文档，不改 Rust 代码；仍按 AGENTS.md 跑全套本地门禁（2026-10-22 本 worktree 实测）：
+`selftest` 在系统临时目录构造一个小型 `-MirServer`（六角色配置 + 路由文件；真实路由文件存在时优先复制），
+生成完整 deploy 根后校验连接串/路由/覆盖保护，然后自动删除；不碰 `E:\MirServer` 与 `D:\MirClient-run` 的原文件。
+本节改动为纯 Python 工具 + PowerShell 编排 + 文档，不改 Rust 代码；仍按 AGENTS.md 跑全套本地门禁
+（2026-10-22 本 worktree 实测）：
 `cargo fmt` rc=0、`cargo clippy --workspace --all-targets -- -D warnings` rc=0、
 `cargo test --workspace` **2760 passed / 0 failed**、
 `cargo run -p msgcodegen -- --check` 604 条一致、`whitelist_anchor_gate.py check` 331 条 ALL PASS、
@@ -1371,9 +1479,13 @@ python tools/window/alt_port_profile.py selftest --repo-root E:\Users\gxh\Docume
 
 ### 8.7 残留物
 
-- `E:\tmp\altport-profile\`：六份影子 conf + `alt-port-profile.json`（本次证据，保留；不属于仓库）。
+- `E:\tmp\altport-profile\`：**覆盖层**六份影子 conf + `alt-port-profile.json` + `mapping.txt` +
+  `selftest.txt`（本次/上批证据，保留；不属于仓库）。**该根不是可独立起栈的 `-Root`**，必须与完整角色
+  部署合并后才能起栈；要完整根请用 §8.3 的 `--deploy`。
+- `E:\tmp\altport-deploy-check\`：本次返工的完整 deploy 根证据（复制角色树 + 路由文件 + 测试库 conf）；
+  验证后已删除，不在仓库内。
 - `D:\MirClient-run\run-release-alt.cmd`：新增的备用启动命令（原 `run-release.cmd` 未改）。
-- 未启动任何服务端/客户端/代理，未占端口，未写数据库；`E:\MirServer` 零写入。
+- 未启动任何服务端/客户端/代理，未占端口，未写数据库；`E:\MirServer` 零写入（deploy 只读复制）。
 
 ## 附录 A：本文件写作时的只读读数命令（可复现）
 

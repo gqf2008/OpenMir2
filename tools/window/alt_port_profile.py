@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""备用端口剖面（15xxx / 17xxx）：生成六份影子 conf + 一个客户端启动命令。
+"""备用端口剖面（15xxx / 17xxx）：生成六份影子 conf、可选整套部署根与客户端启动命令。
 
 为什么要有这个工具
 ------------------
 真机窗口现在必须占用 5000 / 7000 / 7200（以及 5100 / 5500 / 5600 / 6000 / 7100），
-与外部 C# 全栈直接冲突。本工具把整套链路的端口**整体平移到备用段**，生成六份
-**影子配置**（源文件只读、不覆盖）与一个新的客户端启动命令，后续窗口用影子配置
-起栈即可，不再抢原端口。
+与外部 C# 全栈直接冲突。本工具把整套链路的端口**整体平移到备用段**。
+
+两种模式（都只读源文件，绝不改 `E:\\MirServer` 与 `run-release.cmd`）：
+
+1. **覆盖层（overlay）**：`generate --out-dir DIR` 只写六份影子 conf + 清单。
+   `DIR` 不是可独立起栈的 `-Root`，必须与完整角色部署合并（见 runbook §8.3/§8.7）。
+2. **部署根（deploy）**：`generate --deploy DIR --mir-server-root E:/MirServer`
+   先把六个角色树从 `E:\\MirServer` **只读复制**到 `DIR`，再写六份影子 conf，
+   并改写路由文件（`LoginSrv/{AddrTable,ServerAddr,UserLimit}.txt`、
+   `DBSrv/{AddrTable,ServerInfo}.txt`），使客户端被路由到 17100（SelGate）与
+   17200（GameGate）。产出可直接作为 `start_mir2_server.ps1 -Root DIR`。
 
 固定剖面
 --------
@@ -23,25 +31,47 @@
     [Server] MarketPort=5700、IDSPort=LoginSrv IDS(5600)。
   - `bins/login-srv/src/config.rs`：[Server] GatePort=LoginGate 面(5500)、ServerPort=IDS(5600)；
     `DBSPort` 指向 db-srv DataService（样板 6000）；`RunPort` 是遗留键，样板 7200，统一切到 16005
-    （与 SelGate 的 `LsvServerPort=16005` 对齐；Rust/C# 当前都未消费它，纯保留）。
+    （与 SelGate 的 `LsvServerPort=16005` 对齐）。
+    **`DBSPort` / `RunPort` 都是 legacy/未消费**：C# `ConfigManager` 只把 `DBSPort` 读进
+    `Config.nDBSPort`（全仓无消费者），`RunPort` 连 C# 也不解析；Rust `login-srv` 两者都不读。
+    保留它们只为与现网配置同形。
   - `bins/game-svr/src/config.rs`：[Server] GatePort=监听(5000)、DBPort=db-srv DataService(6000)、
     IDSPort=login-srv IDS(5600)。
   - `bins/login-gate/src/config.rs`：[LoginGate] ServerPort0=LoginSrv(5500)、GatePort0=客户端(7000)。
   - `bins/sel-gate/src/config.rs`：[SelGate] ServerPort0=DBSrv(5100)、GatePort0=客户端(7100)；
     `LsvServerPort` 未被解析器读取（保持 16005 不动）。
   - `bins/game-gate/src/config.rs`：[GameGate] Count 组 ServerPortN=GameSvr(5000)、GatePortN=客户端(7200..)。
+  - `bins/login-srv/src/config.rs`（路由）：
+    `AddrTable.txt` = `ServerName Title Remote Public Gate[:Port]…`（GB2312），
+    客户端收到的 SelGate 地址就是最后一列 `Gate`；
+    `ServerAddr.txt` = 允许连 IDS(5600) 的白名单；`UserLimit.txt` = `ServerName Name LimitCountMax`。
+  - `bins/db-srv/src/route.rs`（路由）：
+    `AddrTable.txt` = 允许接入 5100/6000 的服务器 IP 白名单；
+    `ServerInfo.txt` = `角色网关IP 游戏网关IP 端口[,端口…]`，选中行决定客户端去哪个 GameGate。
+
+数据库目标
+----------
+默认 `--db-mode test`：三条 `ConnctionString=` 按**行级**改写为测试库，
+即 db-srv → `mir2_test_db`、login-srv → `mir2_test_account`、game-svr → `mir2_test_data`。
+注意 `_kv` 会把 `;` 当值后缀，不能做通用键替换；这里只在该行的 `database=` token 上替换。
+生成后 fail-closed 扫描：窗口模式（test）下任一 conf 仍出现生产库名即报错。
+`--db-mode prod` 保留源连接串（非窗口场景），并打印最终目标。
 
 编码口径
 --------
-六个源文件里既有 UTF-8 BOM（`dbsvr.conf` / `Server.conf`），也有含非 UTF-8 字节的序列
-（`RunGate/config.conf` 的 `[Strings]` 段实测有 `EF BC 3F`；既不是合法 UTF-8 也不是合法 GBK）。
+六份 conf 的源文件编码形态各异：`M2GameSvr/Server.conf` 有 UTF-8 BOM；仓库内
+`src/DBSrv/bin/Release/dbsvr.conf` 与 `src/LoginSrv/bin/Release/logsrv.conf` **无 BOM**；
+部署根 `DBServer/dbsvr.conf` 有 BOM，但它**不是默认源**（缺 MarketPort、地址不是本机）。
+`RunGate/config.conf` 的 `[Strings]` 段实测有 `EF BC 3F`（既不是合法 UTF-8 也不是合法 GBK）。
 本工具按 **latin-1 逐字节**读写（等价 `tools/m2-acceptance/db_target_plumb.ps1` 的做法），
 只替换目标键的值 token：BOM、非 UTF-8 字节、CRLF、段序、注释全部 1:1 保留。
 写完后用「差异行集合 == 计划键集合」做 fail-closed 校验。
+路由文件（AddrTable/ServerInfo/ServerAddr/UserLimit）按行重建（地址/端口/白名单语义变化），
+非 ASCII 字节（中文服务器名）原样搬运；每份写后都重新解析断言。
 
 安全边界
 --------
-不启动任何进程、不占端口、不写数据库、不写 `E:\\MirServer`；源文件只读。
+不启动任何进程、不占端口、不写数据库；`E:\\MirServer` 只读（deploy 只复制）。
 客户端部分只读 `run-release.cmd`，只新增 `run-release-alt.cmd`。
 """
 
@@ -53,6 +83,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
@@ -67,14 +98,37 @@ DEFAULT_CLIENT_RUN_DIR = Path("D:/MirClient-run")
 DEFAULT_CLIENT_PORT = 17000
 DEFAULT_CLIENT_ADDR = "127.0.0.1"
 
+# deploy 覆盖层固定路由地址：本机窗口里所有角色/客户端都走回环。
+ROUTE_ADDR = "127.0.0.1"
+SELGATE_PORT = 17100
+GAMEGATE_PORT_MAP: dict[int, int] = {7200: 17200, 7201: 17201, 7202: 17202}
+GAMEGATE_PORTS_DEFAULT = "17200,17201,17202"
+
 # 固定剖面（用于文档/`mapping` 子命令；实际改写值见 ROLE_SPECS）。
 PROFILE: dict[str, str] = {
     "game-svr": "15000（GatePort；GameGate 下游）",
     "db-srv": "16000（ServerPort）/ 15100（GatePort）/ 15700（MarketPort）",
-    "login-srv": "15500（GatePort）/ 15600（ServerPort）/ 16005（RunPort）",
+    "login-srv": "15500（GatePort）/ 15600（ServerPort）/ 16005（RunPort，legacy）",
     "login-gate": "17000（GatePort0；客户端入口）",
     "sel-gate": "17100（GatePort0；客户端入口）",
     "game-gate": "17200 / 17201 / 17202（GatePortN；保留 Count=3 间距）",
+}
+
+# 启动脚本的忙检/就绪等待端口（只列真正 listen 的端口；legacy RunPort 16005 不在内）。
+PORTS_BY_ROLE: dict[str, list[int]] = {
+    "db-srv": [16000, 15100, 15700],
+    "login-srv": [15500, 15600],
+    "game-svr": [15000],
+    "login-gate": [17000],
+    "sel-gate": [17100],
+    "game-gate": [17200, 17201, 17202],
+}
+
+# role -> (源生产库, 测试库)
+DB_TARGETS: dict[str, tuple[str, str]] = {
+    "db-srv": ("mir2_db", "mir2_test_db"),
+    "login-srv": ("mir2_account", "mir2_test_account"),
+    "game-svr": ("mir2_data", "mir2_test_data"),
 }
 
 
@@ -355,6 +409,346 @@ def _verify_output(data: bytes, edits: tuple[Edit, ...], out: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 连接串：行级改写 `database=` token（不能做通用键替换：`;` 是值分隔符）
+# ---------------------------------------------------------------------------
+
+_DB_TOKEN = re.compile(rb"(database=)([A-Za-z0-9_]+)(;)")
+_PROD_DB_SCAN = re.compile(rb"database=(mir2_db|mir2_account|mir2_data)(?=;)")
+
+
+def _conn_string_line(data: bytes, source: Path) -> tuple[int, re.Match[bytes]]:
+    hits: list[tuple[int, re.Match[bytes]]] = []
+    for idx, line in enumerate(_lines(data)):
+        body, _ = _body(line)
+        kv = _kv(body)
+        if kv is None:
+            continue
+        if kv[0].lower() != "connctionstring":
+            continue
+        m = _DB_TOKEN.search(body)
+        if not m:
+            raise ProfileError(
+                f"{source}:{idx + 1} ConnctionString 里找不到 database=…;"
+            )
+        hits.append((idx, m))
+    if len(hits) != 1:
+        raise ProfileError(
+            f"{source}: ConnctionString 行数 {len(hits)}，期望恰 1 行"
+        )
+    return hits[0]
+
+
+def rewrite_conn_string(
+    data: bytes, role: str, mode: str, source: Path
+) -> tuple[bytes, dict[str, Any]]:
+    """把 ConnctionString 的 `database=` token 改成 --db-mode 指定库（只动该 token）。
+
+    `--db-mode prod` 的语义是**保留源连接串**（不反向改写测试库）。
+    """
+    prod, test = DB_TARGETS[role]
+    idx, m = _conn_string_line(data, source)
+    current = m.group(2).decode("latin-1")
+    if current not in (prod, test):
+        raise ProfileError(
+            f"{source}:{idx + 1} database={current} 不在已知目标 "
+            f"({prod}/{test})，源文件已漂移"
+        )
+    if mode == "prod":
+        return data, {
+            "role": role,
+            "section": "DataBase",
+            "key": "ConnctionString",
+            "old": current,
+            "new": current,
+            "line": idx + 1,
+            "mode": mode,
+            "noop": True,
+        }
+    target = test
+    info = {
+        "role": role,
+        "section": "DataBase",
+        "key": "ConnctionString",
+        "old": current,
+        "new": target,
+        "line": idx + 1,
+        "mode": mode,
+        "noop": current == target,
+    }
+    if current == target:
+        return data, info
+
+    lines = _lines(data)
+    line = lines[idx]
+    body, had_cr = _body(line)
+    new_body = body[: m.start(2)] + target.encode("latin-1") + body[m.end(2):]
+    lines[idx] = new_body + (b"\r" if had_cr else b"")
+    new_data = b"\n".join(lines)
+
+    old_lines = _lines(data)
+    changed = {i for i, (a, b) in enumerate(zip(old_lines, lines)) if a != b}
+    if changed != {idx}:
+        raise ProfileError(
+            f"{source}: 连接串改写差异行 {sorted(i + 1 for i in changed)} != {idx + 1}"
+        )
+    ob, _ = _body(old_lines[idx])
+    nb, _ = _body(lines[idx])
+    mo, mn = _DB_TOKEN.search(ob), _DB_TOKEN.search(nb)
+    if mo is None or mn is None:
+        raise ProfileError(f"{source}:{idx + 1} 连接串 token 丢失")
+    if ob[: mo.start(2)] != nb[: mn.start(2)] or ob[mo.end(2):] != nb[mn.end(2):]:
+        raise ProfileError(f"{source}:{idx + 1} database token 之外有字节变化")
+    return new_data, info
+
+
+def assert_no_prod_db(data: bytes, path: Path) -> None:
+    """窗口模式 fail-closed：输出里出现生产库名即报错。"""
+    m = _PROD_DB_SCAN.search(data)
+    if m:
+        raise ProfileError(
+            f"{path}: 窗口模式仍是生产库 database={m.group(1).decode('latin-1')}；"
+            "请用 --db-mode test"
+        )
+
+
+def _verify_db_output(data: bytes, role: str, mode: str, out: Path) -> None:
+    prod, test = DB_TARGETS[role]
+    idx, m = _conn_string_line(data, out)
+    actual = m.group(2).decode("latin-1")
+    if mode == "prod":
+        # prod = 保留源连接串：只要求仍是一个已知目标，不做反向改写。
+        if actual not in (prod, test):
+            raise ProfileError(
+                f"{out}:{idx + 1} database={actual} 不在已知目标（{prod}/{test}）"
+            )
+        return
+    if actual != test:
+        raise ProfileError(
+            f"{out}:{idx + 1} database 期望 {test}，实际 {actual!r}"
+        )
+    assert_no_prod_db(data, out)
+
+
+# ---------------------------------------------------------------------------
+# 路由文件（AddrTable / ServerInfo / ServerAddr / UserLimit）
+# ---------------------------------------------------------------------------
+
+
+def _tokens(line: bytes) -> list[bytes]:
+    return [t for t in re.split(rb"[ \t]+", line.strip()) if t]
+
+
+def rewrite_addr_table(data: bytes, source: Path) -> tuple[bytes, dict[str, Any]]:
+    """LoginSrv/AddrTable.txt：Remote/Public/Gate 全部指向本机 127.0.0.1，
+    SelGate 端口改成 17100。ServerName/Title（含 GBK 字节）原样保留。"""
+    out: list[bytes] = []
+    server_name: bytes | None = None
+    routes = 0
+    for line in _lines(data):
+        body, had_cr = _body(line)
+        stripped = body.strip()
+        if not stripped or stripped.startswith(b";"):
+            out.append(line)
+            continue
+        toks = _tokens(stripped)
+        if len(toks) < 5:
+            raise ProfileError(
+                f"{source}: AddrTable 行列数 {len(toks)} < 5（需 ServerName Title Remote Public Gate）"
+            )
+        name, title = toks[0], toks[1]
+        if server_name is None:
+            server_name = name
+        new = [name, title, ROUTE_ADDR.encode(), ROUTE_ADDR.encode()]
+        for gate in toks[4:]:
+            disabled = gate.startswith(b"*")
+            token = gate[1:] if disabled else gate
+            ip, sep, _port = token.partition(b":")
+            if not sep or not ip:
+                raise ProfileError(
+                    f"{source}: AddrTable gate token 非法：{gate!r}（需 IP:Port）"
+                )
+            prefix = b"*" if disabled else b""
+            new.append(prefix + f"{ROUTE_ADDR}:{SELGATE_PORT}".encode())
+        out.append(b" ".join(new) + (b"\r" if had_cr else b""))
+        routes += 1
+    if routes == 0:
+        raise ProfileError(f"{source}: AddrTable 没有有效路由行（login-srv 起不来）")
+    new_data = b"\n".join(out)
+    _verify_addr_table(new_data, source)
+    return new_data, {
+        "file": "LoginSrv/AddrTable.txt",
+        "source": str(source),
+        "routes": routes,
+        "server_name_hex": (server_name or b"").hex(),
+        "selgate": f"{ROUTE_ADDR}:{SELGATE_PORT}",
+    }
+
+
+def _parse_addr_routes(data: bytes, source: Path) -> list[list[bytes]]:
+    routes: list[list[bytes]] = []
+    for line in _lines(data):
+        body, _ = _body(line)
+        stripped = body.strip()
+        if not stripped or stripped.startswith(b";"):
+            continue
+        toks = _tokens(stripped)
+        if len(toks) < 5:
+            raise ProfileError(f"{source}: AddrTable 行列数 < 5：{stripped!r}")
+        routes.append(toks)
+    return routes
+
+
+def _verify_addr_table(data: bytes, source: Path) -> None:
+    routes = _parse_addr_routes(data, source)
+    if not routes:
+        raise ProfileError(f"{source}: AddrTable 无路由")
+    for toks in routes:
+        if toks[2] != ROUTE_ADDR.encode() or toks[3] != ROUTE_ADDR.encode():
+            raise ProfileError(f"{source}: Remote/Public 未指向 {ROUTE_ADDR}: {toks[2:4]!r}")
+        gates = []
+        for gate in toks[4:]:
+            token = gate[1:] if gate.startswith(b"*") else gate
+            ip, sep, port = token.partition(b":")
+            if not sep or ip.decode("latin-1") != ROUTE_ADDR:
+                raise ProfileError(f"{source}: gate 未指向 {ROUTE_ADDR}：{gate!r}")
+            gates.append(port)
+        if not gates or any(p != str(SELGATE_PORT).encode() for p in gates):
+            raise ProfileError(f"{source}: gate 端口不是 {SELGATE_PORT}：{gates!r}")
+
+
+def rewrite_server_info(data: bytes, source: Path) -> tuple[bytes, dict[str, Any]]:
+    """DBSrv/ServerInfo.txt：`角色网关IP 游戏网关IP 端口[,端口…]` 全部指向本机，
+    GameGate 端口按 7200/7201/7202 → 17200/17201/17202 平移。"""
+    out: list[bytes] = []
+    routes = 0
+    ports_all: list[int] = []
+    for line in _lines(data):
+        body, had_cr = _body(line)
+        stripped = body.strip()
+        if not stripped or stripped.startswith(b";"):
+            out.append(line)
+            continue
+        toks = _tokens(stripped)
+        if len(toks) < 3:
+            raise ProfileError(
+                f"{source}: ServerInfo 行列数 {len(toks)} < 3（需 SelGateIP GameGateIP 端口）"
+            )
+        new_ports: list[str] = []
+        for tok in toks[2:]:
+            for piece in tok.split(b","):
+                try:
+                    old_port = int(piece.decode("ascii"))
+                except ValueError as exc:
+                    raise ProfileError(
+                        f"{source}: ServerInfo 端口非法：{piece!r}"
+                    ) from exc
+                if old_port not in GAMEGATE_PORT_MAP:
+                    raise ProfileError(
+                        f"{source}: ServerInfo 端口 {old_port} 不在剖面映射 "
+                        f"{sorted(GAMEGATE_PORT_MAP)}（源文件已漂移）"
+                    )
+                new_ports.append(str(GAMEGATE_PORT_MAP[old_port]))
+                ports_all.append(GAMEGATE_PORT_MAP[old_port])
+        out.append(
+            b" ".join([ROUTE_ADDR.encode(), ROUTE_ADDR.encode(), ",".join(new_ports).encode()])
+            + (b"\r" if had_cr else b"")
+        )
+        routes += 1
+    if routes == 0:
+        out = [f"{ROUTE_ADDR} {ROUTE_ADDR} {GAMEGATE_PORTS_DEFAULT}".encode(), b""]
+        ports_all = [int(p) for p in GAMEGATE_PORTS_DEFAULT.split(",")]
+        routes = 1
+    new_data = b"\n".join(out)
+    _verify_server_info(new_data, source)
+    return new_data, {
+        "file": "DBSrv/ServerInfo.txt",
+        "source": str(source),
+        "routes": routes,
+        "selgate": ROUTE_ADDR,
+        "gamegate_ports": sorted(set(ports_all)),
+        "generated": routes == 1 and not data.strip(),
+    }
+
+
+def _parse_server_info(data: bytes, source: Path) -> list[list[bytes]]:
+    routes: list[list[bytes]] = []
+    for line in _lines(data):
+        body, _ = _body(line)
+        stripped = body.strip()
+        if not stripped or stripped.startswith(b";"):
+            continue
+        toks = _tokens(stripped)
+        if len(toks) < 3:
+            raise ProfileError(f"{source}: ServerInfo 行列数 < 3：{stripped!r}")
+        routes.append(toks)
+    return routes
+
+
+def _verify_server_info(data: bytes, source: Path) -> None:
+    routes = _parse_server_info(data, source)
+    if not routes:
+        raise ProfileError(f"{source}: ServerInfo 无路由")
+    for toks in routes:
+        if toks[0] != ROUTE_ADDR.encode() or toks[1] != ROUTE_ADDR.encode():
+            raise ProfileError(f"{source}: ServerInfo IP 未指向 {ROUTE_ADDR}: {toks[:2]!r}")
+        ports = [p for tok in toks[2:] for p in tok.split(b",")]
+        if b"17200" not in ports:
+            raise ProfileError(f"{source}: ServerInfo 未路由到 GameGate 17200：{ports!r}")
+
+
+def rewrite_ip_whitelist(data: bytes, source: Path) -> tuple[bytes, dict[str, Any]]:
+    """DBSrv/AddrTable.txt 与 LoginSrv/ServerAddr.txt：本机窗口只需要 127.0.0.1。"""
+    kept = [
+        line.strip()
+        for line in _lines(data)
+        if line.strip() and not line.strip().startswith(b";")
+    ]
+    return (
+        f"{ROUTE_ADDR}\r\n".encode(),
+        {
+            "source": str(source),
+            "old_entries": len(kept),
+            "new": ROUTE_ADDR,
+        },
+    )
+
+
+def rewrite_user_limit(
+    data: bytes | None, server_name: bytes, source: Path
+) -> tuple[bytes, dict[str, Any]]:
+    """LoginSrv/UserLimit.txt：首列必须与 AddrTable 的 ServerName 对齐（缺文件则补默认）。"""
+    if data is None or not data.strip():
+        new_data = server_name + b" " + server_name + b" 10000\r\n"
+        return new_data, {
+            "source": str(source),
+            "generated": True,
+            "server_name_hex": server_name.hex(),
+        }
+    out: list[bytes] = []
+    lines = 0
+    for line in _lines(data):
+        body, had_cr = _body(line)
+        stripped = body.strip()
+        if not stripped or stripped.startswith(b";"):
+            out.append(line)
+            continue
+        toks = _tokens(stripped)
+        if len(toks) < 3:
+            raise ProfileError(
+                f"{source}: UserLimit 行列数 {len(toks)} < 3（需 ServerName Name Limit）"
+            )
+        out.append(b" ".join([server_name] + toks[1:]) + (b"\r" if had_cr else b""))
+        lines += 1
+    if lines == 0:
+        out = [server_name + b" " + server_name + b" 10000", b""]
+    return b"\n".join(out), {
+        "source": str(source),
+        "generated": lines == 0,
+        "server_name_hex": server_name.hex(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # 源文件解析与生成
 # ---------------------------------------------------------------------------
 
@@ -395,9 +789,13 @@ def generate_confs(
     mir_root: Path,
     overrides: dict[str, Path],
     what_if: bool = False,
+    db_mode: str = "test",
 ) -> dict[str, Any]:
+    if db_mode not in ("test", "prod"):
+        raise ProfileError(f"未知 --db-mode：{db_mode}")
     outputs: dict[str, Any] = {}
     port_map: list[dict[str, Any]] = []
+    db_targets: dict[str, Any] = {}
     for spec in ROLE_SPECS:
         source = resolve_source(spec, repo_root, mir_root, overrides)
         data = source.read_bytes()
@@ -423,13 +821,44 @@ def generate_confs(
         else:
             new_data, changed, noops = apply_edits(data, edits, source)
 
+        db_change: dict[str, Any] | None = None
+        if spec.role in DB_TARGETS:
+            new_data, db_info = rewrite_conn_string(new_data, spec.role, db_mode, source)
+            db_targets[spec.role] = db_info
+            if db_info["old"] != db_info["new"]:
+                db_change = {
+                    "section": db_info["section"],
+                    "key": f"{db_info['key']} (database)",
+                    "old": db_info["old"],
+                    "new": db_info["new"],
+                    "line": db_info["line"],
+                    "kind": "db",
+                }
+                changed.append(db_change)
+            else:
+                noops.append(
+                    {
+                        "section": db_info["section"],
+                        "key": f"{db_info['key']} (database)",
+                        "old": db_info["new"],
+                        "new": db_info["new"],
+                    }
+                )
+
         out = out_dir / spec.deploy_dir / spec.filename
         if not what_if:
             out.parent.mkdir(parents=True, exist_ok=True)
             out.write_bytes(new_data)
             _verify_output(new_data, edits, out)
+            if spec.role in DB_TARGETS:
+                _verify_db_output(new_data, spec.role, db_mode, out)
+            elif db_mode == "test":
+                # 六份输出统一兜底：任何 conf 里出现生产库名都 RED。
+                assert_no_prod_db(new_data, out)
 
         for c in changed:
+            if c.get("kind") == "db":
+                continue
             port_map.append(
                 {
                     "role": spec.role,
@@ -444,9 +873,159 @@ def generate_confs(
             "output": str(out),
             "changed": changed,
             "noops": noops,
-            "diff_set": sorted(f"[{c['section']}] {c['key']}" for c in changed),
+            "diff_set": sorted(
+                f"[{c['section']}] {c['key']}" for c in changed
+            ),
         }
-    return {"outputs": outputs, "port_map": port_map}
+    return {"outputs": outputs, "port_map": port_map, "db_targets": db_targets}
+
+
+# ---------------------------------------------------------------------------
+# deploy：复制角色树 + 改写路由文件
+# ---------------------------------------------------------------------------
+
+
+def _count_files(root: Path) -> int:
+    return sum(1 for p in root.rglob("*") if p.is_file())
+
+
+def copy_role_trees(
+    mir_root: Path, deploy_root: Path, force: bool, what_if: bool
+) -> dict[str, Any]:
+    if deploy_root.exists() and any(deploy_root.iterdir()) and not force:
+        raise ProfileError(
+            f"{deploy_root} 已存在且非空；确认覆盖请加 --force（源目录只读，不会被改）"
+        )
+    entries: list[dict[str, Any]] = []
+    for spec in ROLE_SPECS:
+        src = mir_root / spec.mir_dir
+        dst = deploy_root / spec.deploy_dir
+        if not src.is_dir():
+            raise ProfileError(f"--deploy 缺少角色目录：{src}")
+        files = _count_files(src)
+        if not what_if:
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(src, dst, dirs_exist_ok=True)
+        entries.append(
+            {
+                "role": spec.role,
+                "source": str(src),
+                "output": str(dst),
+                "files": files,
+            }
+        )
+    return {"root": str(deploy_root), "roles": entries}
+
+
+def deploy_routes(
+    mir_root: Path, deploy_root: Path, what_if: bool
+) -> dict[str, Any]:
+    db_src = mir_root / "DBServer"
+    lg_src = mir_root / "LoginSrv"
+
+    def read_opt(path: Path) -> bytes | None:
+        return path.read_bytes() if path.is_file() else None
+
+    addr_src = read_opt(lg_src / "AddrTable.txt")
+    if addr_src is None:
+        raise ProfileError(
+            f"deploy 需要一个可用的 LoginSrv/AddrTable.txt：{lg_src / 'AddrTable.txt'} 不存在"
+        )
+    addr_new, addr_info = rewrite_addr_table(addr_src, lg_src / "AddrTable.txt")
+    server_name = bytes.fromhex(addr_info["server_name_hex"])
+
+    info_src = read_opt(db_src / "ServerInfo.txt")
+    info_new, info_info = rewrite_server_info(
+        info_src or b"", db_src / "ServerInfo.txt"
+    )
+    db_addr_src = read_opt(db_src / "AddrTable.txt")
+    db_addr_new, db_addr_info = rewrite_ip_whitelist(
+        db_addr_src or b"", db_src / "AddrTable.txt"
+    )
+    lg_saddr_src = read_opt(lg_src / "ServerAddr.txt")
+    lg_saddr_new, lg_saddr_info = rewrite_ip_whitelist(
+        lg_saddr_src or b"", lg_src / "ServerAddr.txt"
+    )
+    ulimit_src = read_opt(lg_src / "UserLimit.txt")
+    ulimit_new, ulimit_info = rewrite_user_limit(
+        ulimit_src, server_name, lg_src / "UserLimit.txt"
+    )
+
+    files: dict[str, bytes] = {
+        "DBSrv/AddrTable.txt": db_addr_new,
+        "DBSrv/ServerInfo.txt": info_new,
+        "LoginSrv/AddrTable.txt": addr_new,
+        "LoginSrv/ServerAddr.txt": lg_saddr_new,
+        "LoginSrv/UserLimit.txt": ulimit_new,
+    }
+    if not what_if:
+        for rel, payload in files.items():
+            path = deploy_root / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(payload)
+
+    verify = verify_deploy_routes(files)
+    return {
+        "files": {rel: str(deploy_root / rel) for rel in files},
+        "addr_table": addr_info,
+        "server_info": info_info,
+        "db_addr_table": db_addr_info,
+        "server_addr": lg_saddr_info,
+        "user_limit": ulimit_info,
+        "verify": verify,
+    }
+
+
+def verify_deploy_routes(files: dict[str, bytes]) -> dict[str, Any]:
+    """端到端断言：客户端登录 17000 → 选服 17100 → 游戏 17200。"""
+    addr = files["LoginSrv/AddrTable.txt"]
+    info = files["DBSrv/ServerInfo.txt"]
+    db_addr = files["DBSrv/AddrTable.txt"]
+    server_addr = files["LoginSrv/ServerAddr.txt"]
+    _verify_addr_table(addr, Path("LoginSrv/AddrTable.txt"))
+    _verify_server_info(info, Path("DBSrv/ServerInfo.txt"))
+    for name, payload in (
+        ("DBSrv/AddrTable.txt", db_addr),
+        ("LoginSrv/ServerAddr.txt", server_addr),
+    ):
+        entries = [
+            line.strip()
+            for line in _lines(payload)
+            if line.strip() and not line.strip().startswith(b";")
+        ]
+        if entries != [ROUTE_ADDR.encode()]:
+            raise ProfileError(f"{name}: 白名单应恰为 {ROUTE_ADDR}，实际 {entries!r}")
+    return {
+        "client_login": f"{ROUTE_ADDR}:17000",
+        "selgate": f"{ROUTE_ADDR}:{SELGATE_PORT}",
+        "gamegate": f"{ROUTE_ADDR}:17200",
+        "db_whitelist": ROUTE_ADDR,
+        "ids_whitelist": ROUTE_ADDR,
+        "ok": True,
+    }
+
+
+def deploy_stack(
+    deploy_root: Path,
+    repo_root: Path,
+    mir_root: Path,
+    overrides: dict[str, Path],
+    db_mode: str,
+    force: bool,
+    what_if: bool,
+) -> dict[str, Any]:
+    copy_info = copy_role_trees(mir_root, deploy_root, force=force, what_if=what_if)
+    confs = generate_confs(
+        deploy_root, repo_root, mir_root, overrides, what_if=what_if, db_mode=db_mode
+    )
+    routes = deploy_routes(mir_root, deploy_root, what_if=what_if)
+    if not what_if:
+        reread = {
+            rel: (deploy_root / rel).read_bytes()
+            for rel in routes["files"]
+        }
+        routes["verify_after_write"] = verify_deploy_routes(reread)
+    return {"copy": copy_info, "confs": confs, "routes": routes}
 
 
 # ---------------------------------------------------------------------------
@@ -591,18 +1170,77 @@ def _print_mapping(result: dict[str, Any]) -> None:
             for n in info["noops"]:
                 print(f"  [{n['section']}] {n['key']}: 已是 {n['new']}（no-op）")
         print(f"VERIFY {role}: diff_set={info['diff_set']} OK")
+    for role, info in result.get("db_targets", {}).items():
+        prod, test = DB_TARGETS[role]
+        print(
+            f"DB_TARGET {role}: database={info['new']} (mode={info['mode']}, "
+            f"源 {prod}, 测试 {test})"
+        )
+
+
+def _print_routes(routes: dict[str, Any]) -> None:
+    for rel, path in routes["files"].items():
+        print(f"ROUTE {rel} -> {path}")
+    a = routes["addr_table"]
+    print(
+        f"ROUTE LoginSrv/AddrTable.txt: {a['routes']} 条；"
+        f"Remote/Public={ROUTE_ADDR}；client->selgate={a['selgate']}"
+    )
+    s = routes["server_info"]
+    print(
+        f"ROUTE DBSrv/ServerInfo.txt: {s['routes']} 条；"
+        f"selgate={s['selgate']}；gamegate ports={s['gamegate_ports']}"
+    )
+    u = routes["user_limit"]
+    print(f"ROUTE LoginSrv/UserLimit.txt: server_name_hex={u['server_name_hex']}")
+    v = routes.get("verify_after_write") or routes["verify"]
+    print(
+        f"ROUTE_VERIFY OK client_login={v['client_login']} -> selgate={v['selgate']} "
+        f"-> gamegate={v['gamegate']} (db/ids whitelist {v['db_whitelist']})"
+    )
 
 
 def cmd_generate(args: argparse.Namespace) -> int:
     repo_root = Path(args.repo_root).resolve()
     mir_root = Path(args.mir_server_root)
-    out_dir = Path(args.out_dir)
     overrides = _parse_overrides(args.source)
 
-    result = generate_confs(
-        out_dir, repo_root, mir_root, overrides, what_if=args.what_if
-    )
-    _print_mapping(result)
+    deploy_dir = Path(args.deploy) if args.deploy else None
+    if deploy_dir is not None and args.out_dir:
+        raise ProfileError("--deploy 与 --out-dir 互斥（deploy 自带输出根）")
+    if deploy_dir is None and not args.out_dir:
+        raise ProfileError("请给 --out-dir（覆盖层）或 --deploy DIR（完整部署根）")
+    out_dir = deploy_dir or Path(args.out_dir)
+
+    deploy_info: dict[str, Any] | None = None
+    if deploy_dir is not None:
+        deploy_info = deploy_stack(
+            out_dir,
+            repo_root,
+            mir_root,
+            overrides,
+            db_mode=args.db_mode,
+            force=args.force,
+            what_if=args.what_if,
+        )
+        result = deploy_info["confs"]
+        _print_mapping(result)
+        for entry in deploy_info["copy"]["roles"]:
+            print(
+                f"DEPLOY {entry['role']}: {entry['source']} -> {entry['output']} "
+                f"({entry['files']} files，源只读)"
+            )
+        _print_routes(deploy_info["routes"])
+    else:
+        result = generate_confs(
+            out_dir, repo_root, mir_root, overrides,
+            what_if=args.what_if, db_mode=args.db_mode,
+        )
+        _print_mapping(result)
+        print(
+            "OVERLAY: 只生成六份 conf，不是可独立起栈的 -Root；"
+            "需与完整角色部署合并，或用 --deploy 生成完整根"
+        )
 
     client: dict[str, Any] | None = None
     if args.client_run_dir:
@@ -627,12 +1265,18 @@ def cmd_generate(args: argparse.Namespace) -> int:
 
     manifest = {
         "profile": "alt-port-15xxx-17xxx",
+        "mode": "deploy" if deploy_dir is not None else "overlay",
         "mir_server_root": str(mir_root),
         "repo_root": str(repo_root),
         "out_dir": str(out_dir),
+        "db_mode": args.db_mode,
         "port_profile": PROFILE,
+        "ports_by_role": PORTS_BY_ROLE,
+        "db_targets": result["db_targets"],
         "outputs": result["outputs"],
         "port_map": result["port_map"],
+        "deploy": deploy_info,
+        "routes": deploy_info["routes"] if deploy_info else None,
         "client": client,
     }
     if not args.what_if:
@@ -671,6 +1315,114 @@ def cmd_mapping(args: argparse.Namespace) -> int:
                 f"  {spec.role:<11} [{edit.section}] {edit.key}={edit.new}{flag}"
                 f"  (源: {source})"
             )
+        if spec.role in DB_TARGETS:
+            prod, test = DB_TARGETS[spec.role]
+            print(
+                f"  {spec.role:<11} [DataBase] ConnctionString: database={prod} -> {test}"
+                f"（--db-mode test；prod 则不改）  (源: {source})"
+            )
+    print("\n路由文件（--deploy 改写；客户端 17000 -> 17100 -> 17200）：")
+    for rel in (
+        "LoginSrv/AddrTable.txt",
+        "LoginSrv/ServerAddr.txt",
+        "LoginSrv/UserLimit.txt",
+        "DBSrv/AddrTable.txt",
+        "DBSrv/ServerInfo.txt",
+    ):
+        print(f"  {rel} -> {ROUTE_ADDR}（SelGate {SELGATE_PORT} / GameGate 17200）")
+    return 0
+
+
+def _selftest_synthetic_root(tmp: Path, repo_root: Path, mir_root: Path) -> Path:
+    """构造一个小的假 -MirServer：六角色配置 + 路由文件（真实文件可用时优先复制）。"""
+    fake = tmp / "mirserver"
+    for spec in ROLE_SPECS:
+        src = resolve_source(spec, repo_root, mir_root, {})
+        dst = fake / spec.mir_dir / spec.filename
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dst)
+        (fake / spec.mir_dir / "marker.txt").write_text("tree-copy\n", encoding="utf-8")
+    route_pairs = (
+        ("DBServer/AddrTable.txt", b"10.10.0.163\n"),
+        ("DBServer/ServerInfo.txt", b"10.10.0.102 10.10.0.102 7200\n"),
+        (
+            "LoginSrv/AddrTable.txt",
+            "热血传奇 Title1 10.10.0.102 10.10.0.102 10.10.0.102:7100\r\n".encode("gbk"),
+        ),
+        ("LoginSrv/ServerAddr.txt", b"10.10.0.163\r\n"),
+        ("LoginSrv/UserLimit.txt", "热血传奇 热血传奇 10000\r\n".encode("gbk")),
+    )
+    for rel, fallback in route_pairs:
+        src = mir_root / rel
+        dst = fake / rel
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        dst.write_bytes(src.read_bytes() if src.is_file() else fallback)
+    return fake
+
+
+def _selftest_deploy(tmp: Path, repo_root: Path, mir_root: Path) -> int:
+    fake = _selftest_synthetic_root(tmp, repo_root, mir_root)
+    deploy_root = tmp / "deploy"
+    result = deploy_stack(
+        deploy_root, repo_root, fake, {}, db_mode="test", force=False, what_if=False
+    )
+    _print_mapping(result["confs"])
+    for entry in result["copy"]["roles"]:
+        print(
+            f"DEPLOY {entry['role']}: {entry['files']} files "
+            f"({'OK' if (deploy_root / Path(entry['output']).name).is_dir() else 'RED'})"
+        )
+    _print_routes(result["routes"])
+
+    failures: list[str] = []
+    # 1) 六份 conf + 数据库目标 + 生产库 fail-closed
+    if len(result["confs"]["outputs"]) != 6:
+        failures.append(f"conf 只生成 {len(result['confs']['outputs'])} 份")
+    for role, prod_test in DB_TARGETS.items():
+        path = Path(result["confs"]["outputs"][role]["output"])
+        text = path.read_bytes()
+        if f"database={prod_test[1]};".encode() not in text:
+            failures.append(f"{role}: 缺 database={prod_test[1]};")
+        try:
+            assert_no_prod_db(text, path)
+        except ProfileError as exc:
+            failures.append(str(exc))
+    # 2) 路由文件内容断言
+    checks = {
+        "LoginSrv/AddrTable.txt": [
+            (b"127.0.0.1 127.0.0.1", "Remote/Public"),
+            (b"127.0.0.1:17100", "SelGate"),
+            ("热血传奇".encode("gbk"), "服务器名"),
+        ],
+        "DBSrv/ServerInfo.txt": [
+            (b"127.0.0.1 127.0.0.1 17200", "SelGate->GameGate"),
+        ],
+        "LoginSrv/ServerAddr.txt": [(b"127.0.0.1", "IDS whitelist")],
+        "DBSrv/AddrTable.txt": [(b"127.0.0.1", "DB whitelist")],
+        "LoginSrv/UserLimit.txt": [("热血传奇".encode("gbk"), "UserLimit 名")],
+    }
+    for rel, needles in checks.items():
+        payload = (deploy_root / rel).read_bytes()
+        for needle, label in needles:
+            if needle not in payload:
+                failures.append(f"{rel}: 缺 {label} {needle!r}")
+        print(f"ROUTE_ASSERT {rel}: {len(needles)} 条 OK")
+    # 3) 非空根无 --force 必须拒绝
+    try:
+        deploy_stack(
+            deploy_root, repo_root, fake, {}, db_mode="test", force=False, what_if=False
+        )
+        failures.append("非空 deploy 根未加 --force 却通过了")
+    except ProfileError as exc:
+        print(f"DEPLOY_GUARD_OK 非空根拒绝覆盖：{exc}")
+    # 4) 生成根的文件数 > 配置数（证明角色树被复制）
+    marker = deploy_root / "M2GameSvr" / "marker.txt"
+    if not marker.is_file():
+        failures.append("角色树未复制（缺 marker.txt）")
+    if failures:
+        for msg in failures:
+            print(f"RED: {msg}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -689,26 +1441,9 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 
     with tempfile.TemporaryDirectory(prefix="altport-selftest-") as tmp:
         tmp_path = Path(tmp)
-        result = generate_confs(tmp_path / "root", repo_root, mir_root, {})
-        _print_mapping(result)
-        if len(result["outputs"]) != 6:
-            print(f"RED: 只生成 {len(result['outputs'])} 份 conf", file=sys.stderr)
-            return 1
-        if not result["port_map"]:
-            print("RED: port_map 为空", file=sys.stderr)
-            return 1
-
-        # 逐份把输出读回，复核目标键值 + 差异集合。
-        for spec in ROLE_SPECS:
-            info = result["outputs"][spec.role]
-            out = Path(info["output"])
-            data = out.read_bytes()
-            source = Path(info["source"]).read_bytes()
-            edits = spec.planned_edits(source)
-            _verify_output(data, edits, out)
-            if len(_lines(data)) != len(_lines(source)):
-                print(f"RED: {spec.role} 行数变化", file=sys.stderr)
-                return 1
+        rc = _selftest_deploy(tmp_path, repo_root, mir_root)
+        if rc != 0:
+            return rc
 
         client_dir = DEFAULT_CLIENT_RUN_DIR
         if (client_dir / "run-release.cmd").is_file():
@@ -724,7 +1459,8 @@ def cmd_selftest(args: argparse.Namespace) -> int:
                 return 1
             print(
                 f"CLIENT_OK decrypt_addr={client['verify']['decrypted_addr']} "
-                f"decrypt_port={client['verify']['decrypted_port']}"
+                f"decrypt_port={client['verify']['decrypted_port']} "
+                f"param_len={client['verify']['param_len']}"
             )
         else:
             print(f"CLIENT_SKIP 未找到 {client_dir / 'run-release.cmd'}")
@@ -735,13 +1471,14 @@ def cmd_selftest(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="备用端口剖面：生成六份影子 conf（15xxx/17xxx）+ 客户端启动命令"
+        description="备用端口剖面：生成六份影子 conf（15xxx/17xxx）+ 可选整套部署根 + 客户端启动命令"
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     def common(p: argparse.ArgumentParser) -> None:
         p.add_argument(
-            "-MirServerRoot", "--mir-server-root", default=str(DEFAULT_MIR_SERVER_ROOT)
+            "-MirServerRoot", "--mir-server-root", "--mirserver",
+            default=str(DEFAULT_MIR_SERVER_ROOT),
         )
         p.add_argument(
             "-RepoRoot",
@@ -754,20 +1491,31 @@ def build_parser() -> argparse.ArgumentParser:
             help="覆盖某角色的源配置（可重复）",
         )
 
-    p_gen = sub.add_parser("generate", help="生成影子 conf（+ 可选客户端命令）")
+    p_gen = sub.add_parser("generate", help="生成影子 conf / 完整部署根（+ 可选客户端命令）")
     common(p_gen)
     p_gen.add_argument(
-        "-OutDir", "--out-dir", required=True,
-        help="输出根（布局与 start_mir2_server.ps1 -Root 一致）",
+        "-OutDir", "--out-dir", default="",
+        help="覆盖层输出根（只写六份 conf；不是可独立起栈的 -Root）",
+    )
+    p_gen.add_argument(
+        "--deploy", default="", metavar="DIR",
+        help="完整部署根：复制 -MirServerRoot 的六个角色树（源只读）+ 改写路由文件",
+    )
+    p_gen.add_argument(
+        "--db-mode", choices=("test", "prod"), default="test",
+        help="test=连接串改到 mir2_test_*（默认，窗口用）；prod=保留源连接串",
     )
     p_gen.add_argument(
         "-ClientRunDir", "--client-run-dir", default="",
-        help="客户端目录；只写 run-release-alt.cmd",
+        help="客户端目录；只写 run-release-alt.cmd（只读源写后哈希断言）",
     )
     p_gen.add_argument("--client-port", type=int, default=DEFAULT_CLIENT_PORT)
     p_gen.add_argument("--client-addr", default=DEFAULT_CLIENT_ADDR)
     p_gen.add_argument("--iv", choices=("preserve", "random"), default="preserve")
-    p_gen.add_argument("--force", action="store_true", help="允许覆盖已存在的 run-release-alt.cmd")
+    p_gen.add_argument(
+        "--force", action="store_true",
+        help="允许覆盖已存在的 run-release-alt.cmd / 非空 --deploy 根",
+    )
     p_gen.add_argument("-WhatIf", "--what-if", dest="what_if", action="store_true",
                        help="只打印映射，不写任何文件")
     p_gen.add_argument("--json", action="store_true")
@@ -777,7 +1525,7 @@ def build_parser() -> argparse.ArgumentParser:
     common(p_map)
     p_map.set_defaults(func=cmd_mapping)
 
-    p_st = sub.add_parser("selftest", help="roundtrip + 生成/差异/客户端离线自检")
+    p_st = sub.add_parser("selftest", help="roundtrip + 部署/路由/连接串/客户端离线自检")
     common(p_st)
     p_st.set_defaults(func=cmd_selftest)
 
