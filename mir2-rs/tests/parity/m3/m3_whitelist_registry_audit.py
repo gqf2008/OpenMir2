@@ -58,13 +58,15 @@ def parse_entries(text):
     return out
 
 
-def audit_text(text, tokens, classify=None, strict=False, min_num=36):
+def audit_text(text, tokens, classify=None, strict=False, min_num=1):
     """纯函数（便于 selftest 注入）⇒ (entries, report, reds)。
 
     tokens   = [{"key","system","t"}]（夹具 token 表；`t` 可为 None）
     classify = 可选 k->status（"READY"/"PENDING"/...），用于 TOKEN_MISSING 是否判红
-    min_num  = 只审 `T-<min_num>` 及以后的登记（默认 36 = M3 登记块起点；更早的 M1/M2/C6 历史段
-               不属 M3 登记面，其历史重号不产生噪声）
+    min_num  = 只审 `T-<min_num>` 及以后的登记（**默认 1 = 全量**）。历史版本默认 36（只扫 M3
+               登记块起点之后的号），导致 T-4/T-6 这类低号撞号长期漏报（卡
+               `openmir2-whitelist-dup-and-scope`）——「编号全局唯一」是**整张表**的约定，
+               扫描面不许按号段跳过。保留该参数只为临时缩窄排查，不得拿来做日常门。
     """
     entries = [e for e in parse_entries(text) if e["num"] >= min_num]
     by_num = {}
@@ -218,6 +220,18 @@ def cmd_selftest(_args):
     _e4, r4, reds4 = audit_text(good, tokens, classify=lambda k: "READY", strict=False)
     expect("无重号的正常表 ⇒ 非 strict 不判红", r4["duplicates"] == [] and reds4 == [])
 
+    # **全量扫描（卡 `openmir2-whitelist-dup-and-scope`）**：历史缺陷是 `min_num=36` 把
+    # T-1..T-35 整体跳过 ⇒ 低号撞号（真树里的 T-4 / T-6）从不进 duplicates。下面三项
+    # 是「改回按号段跳过 ⇒ 自检必红」的牙。
+    low_dup = "| T-4 | old |\n| T-4 | revised |\n| T-6 | a |\n| T-41 | b |\n"
+    _e5, r5, reds5 = audit_text(low_dup, tokens, strict=False)  # 不传 min_num ⇒ 走默认
+    expect("默认全量扫描（min_num=1，低号段不被跳过）", r5["min_num"] == 1)
+    expect("低号重复 T-4 ⇒ DUPLICATE 点名", r5["duplicates"] == [4])
+    expect("低号重复 T-4 ⇒ 非 strict 也判红（rc≠0）",
+           any("DUPLICATE T-4" in x for x in reds5))
+    _e6, r6, reds6 = audit_text("| T-6 | a |\n| T-41 | b |\n", tokens, strict=False)
+    expect("低号无重复 ⇒ 不误报", r6["duplicates"] == [] and reds6 == [])
+
     # 相邻锚点门（`whitelist_anchor_gate.py`）：挂在旁边 + 在本 selftest 里常跑 ⇒ 借
     # `fixture_chain_gate.SHARED_CHECKS` 对 `whitelist_registry_selftest` 的既有登记，
     # **免改共享注册表**即可让「白名单锚点保鲜门」进入共享管线（在场却坏 ⇒ 恒 RED）。
@@ -244,8 +258,8 @@ def main(argv=None):
     pa.add_argument("--whitelist", default=DEFAULT_WHITELIST)
     pa.add_argument("--strict", action="store_true",
                     help="把 DUPLICATE / TOKEN_MULTI /（READY 的）TOKEN_MISSING 判为 rc=1")
-    pa.add_argument("--min-num", type=int, default=36,
-                    help="只审 T-<n> 及以后（默认 36 = M3 登记块起点）")
+    pa.add_argument("--min-num", type=int, default=1,
+                    help="只审 T-<n> 及以后（默认 1 = 全量扫描；历史默认 36 曾漏报 T-4/T-6 撞号）")
     pa.add_argument("--json", default=None, help="把审计报告写成 JSON")
     pa.set_defaults(func=cmd_audit)
     ps = sub.add_parser("selftest", help="合成文本 + 注入式 classify 的 fail-closed 自检")
