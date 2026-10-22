@@ -48,11 +48,6 @@ use mir2_script::engine::{Engine, ScriptNpc, ScriptPlayer};
 use mir2_script::{LocalFs, ScriptInfo, ScriptParsers};
 use mir2_shared::hutil32::{arrest_string_ex_ref, compare_lstr_prefix, ArrestWrite};
 
-/// `MsgType.Cust`（`src/Modules/SystemModule/Enums/MsgType.cs`：`System,Notice,Hint,Say,Castle,Cust,...` ⇒ 5）。
-///
-/// 只用于 `BaseObject.SysMsg` 的 default 支判定（`BaseObject.cs:1670-1680`）。
-const MSG_TYPE_CUST: i32 = 5;
-
 /// `GotoLableSendMerChantSayMsg`（`ScriptEngine.cs:991/996`）的说词行：`normNpc.ChrName + '/' + sMsg`。
 #[must_use]
 pub fn merchant_say_text(chr_name: &str, msg: &str) -> String {
@@ -71,6 +66,11 @@ pub fn merchant_say_gbk(chr_name: &str, msg: &str) -> Vec<u8> {
     let text = merchant_say_text(chr_name, msg);
     encoding_rs::GBK.encode(&text).0.into_owned()
 }
+
+/// `MsgType.Cust`（`src/Modules/SystemModule/Enums/MsgType.cs`：`System,Notice,Hint,Say,Castle,Cust,...` ⇒ 5）。
+///
+/// 只用于 `BaseObject.SysMsg` 的 default 支判定（`BaseObject.cs:1670-1680`）。
+const MSG_TYPE_CUST: i32 = 5;
 
 /// 一条待下发的 `RM_MERCHANTSAY`（`ScriptEngine.cs:991/996` 的两个入队点）。
 #[derive(Clone, Debug, PartialEq, Eq)]
