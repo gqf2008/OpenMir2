@@ -398,9 +398,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHu
 # 截图定位 〖庄〗（角色在 (8,11)，NPC 在北侧一格；屏幕中心约 (512,259)）
 powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/client/mir_click.ps1 `
   -Shot E:/tmp/window/20261021-r3/<side>/shots/dice-01.png
-# 点 NPC（北格近似 (512,227)；若没开对话，按 48x32 步长在 (512,259) 周围扫 3x3）
+# 点 NPC（北格近似 (512,263)；若没开对话，按 48x32 步长在 (512,259) 周围扫 3x3）
 powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/client/mir_click.ps1 `
-  -LeftClick "512,227"
+  -LeftClick "512,263"
 # 依次点菜单项（坐标以当帧截图为准）：
 #   开-始-下-注  →  押5个筹码包  →  小
 # 每次点击后截图：dice-02.png / dice-03.png / dice-04.png（骰子动画）
@@ -442,7 +442,7 @@ SAY "正在投骰子…………"                   # 客户端截图也应出�
 ```powershell
 python -I -B E:/Users/gxh/Documents/GitHub/OpenMir2/tools/loginfixture/prepare_safe_login.py `
   --db mir2_test_db --char winplay0 --map 0122 --x 29 --y 33 --level 30 --hp 500 --max-hp 500 --yes-apply
-# 登录（-LeaveClientRunning），截图，点北侧 (512,227)
+# 登录（-LeaveClientRunning），截图，点北侧 (512,263)
 ```
 
 期望：**恰一条** `SM_MERCHANTSAY(643)`：
@@ -512,7 +512,7 @@ using System; using System.Runtime.InteropServices;
 public class K { [DllImport("user32.dll")] public static extern void keybd_event(byte b, byte s, uint f, IntPtr e); }
 "@
 [K]::keybd_event(0x10,0,0,[IntPtr]::Zero)          # Shift down
-powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/client/mir_click.ps1 -LeftClick "512,227"
+powershell -NoProfile -ExecutionPolicy Bypass -File E:/Users/gxh/Documents/GitHub/OpenMir2/tools/client/mir_click.ps1 -LeftClick "512,263"
 [K]::keybd_event(0x10,0,2,[IntPtr]::Zero)          # Shift up
 # 重复 20 次
 ```
@@ -899,15 +899,22 @@ if ($bad.Count -ne 0) { throw "RED: $($bad.Count) 帧 raw_hex 不以 23 开头 /
 
 | 场景 | 摆位（`prepare_safe_login.py`） | 点击 |
 |---|---|---|
-| 骰子 `〖庄〗` | `--map B013 --x 8 --y 11` | 北侧 `(512,227)`；菜单按截图点 |
-| 比奇国王 | `--map 0122 --x 29 --y 33` | 北侧 `(512,227)` |
-| 老人 | `--map 3 --x 669 --y 339` | 北侧 `(512,227)` |
-| type 2 负例 | `--map 0150 --x 7 --y 17` | 北侧 `(512,227)` |
+| 骰子 `〖庄〗` | `--map B013 --x 8 --y 11` | 北侧 `(512,263)`；菜单按截图点 |
+| 比奇国王 | `--map 0122 --x 29 --y 33` | 北侧 `(512,263)` |
+| 老人 | `--map 3 --x 669 --y 339` | 北侧 `(512,263)` |
+| type 2 负例 | `--map 0150 --x 7 --y 17` | 北侧 `(512,263)` |
 | 守卫 SuperMan | `--map 0 --x 281 --y 667` | 北侧；`-AttackClicks 20` |
-| 商人攻击（条件） | `--map B013 --x 8 --y 11` | Shift+左键 `(512,227)`（§2.5） |
+| 商人攻击（条件） | `--map B013 --x 8 --y 11` | Shift+左键 `(512,263)`（§2.5） |
 
-点击坐标是**客户端客户区坐标**，屏幕中心约 `(512,259)`；北侧一格按 `48x32` 步长近似
-`(512,227)`。若未命中（对话没开/没出帧），用 `mir_click.ps1 -Shot` 截图后在 NPC 精灵上点，
+点击坐标是**客户端客户区坐标**。按冻结客户端 `CXYfromMouseXY`
+（`PlayScn.pas:2951-2958`；`ShiftYOffset≈304`、`UNITY=32`）的逆映射：
+
+- `(512,263)` ⇒ `round((263-304)/32) = -1` ⇒ **北侧一格**（角色 `(29,33)` 时即国王 `(29,32)`）；
+- `(512,227)` ⇒ `round((227-304)/32) = -2` ⇒ **北侧两格**（y=31），是空地 —— 点下去只会 `CM_WALK`。
+
+本文件旧版把 `(512,227)` 记作「北侧一格」，是换算错误（2026-10-22 诊断
+`docs/npc-render-diagnosis-20261022.md` §2.4 订正）。上表已统一改为 `(512,263)`。
+若未命中（对话没开/没出帧），用 `mir_click.ps1 -Shot` 截图后在 NPC 精灵上点，
 或按 48x32 在中心周围扫 3x3（每次点击后等 600ms，看 capture 是否出现 `CM_CLICKNPC(3012)`）。
 
 ---
@@ -1486,6 +1493,82 @@ python tools/window/alt_port_profile.py selftest --repo-root E:\Users\gxh\Docume
   验证后已删除，不在仓库内。
 - `D:\MirClient-run\run-release-alt.cmd`：新增的备用启动命令（原 `run-release.cmd` 未改）。
 - 未启动任何服务端/客户端/代理，未占端口，未写数据库；`E:\MirServer` 零写入（deploy 只读复制）。
+
+## 9. 夹具修正：公告轮询与 NPC 点击坐标门（2026-10-22，卡 fixture-harden）
+
+> 根因与证据：`docs/npc-render-diagnosis-20261022.md`（§2.3 公告轮询走位、§2.4 点击变走位、§2.5 客户端身份）。
+> 本节只描述**夹具**改了什么、以后怎么跑；服务器/客户端行为零改动（tier=L：纯工具/文档）。
+
+### 9.1 事故回顾（一句话）
+
+第四轮窗口「国王没渲染」不是服务端缺帧，而是 `mir_flow.ps1` 的 `notice_poll` 在固定点 `(522,525)`
+**盲点 12 次**：公告（`SM_SENDNOTICE 658`）只吃第一次，其余 11 次落在世界区，每次都重设
+`g_nTargetX/Y`，角色从 `(29,33)` 自动走到 `(29,44)` 并落库，国王 `(29,32)` 出视窗。
+
+### 9.2 `mir_flow.ps1` 新行为
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 公告点击 | 固定点盲点 12 次（1.2s 间隔） | `-NoticePollClicks` 默认 **1**，>1 直接 fail-closed 拒绝 |
+| 等公告 | 无（从进图就开始点） | `Stage notice_wait` + 截图；有 `-CapturePath` 时等 `s2c SM_SENDNOTICE(658)`，否则固定 `-NoticeWaitSec`（默认 4s） |
+| 校验 | 无 | 有 `-CapturePath` 时等 `c2s CM_LOGINNOTICEOK(1018)`；超时 ⇒ `NOTICE_POLL RED` + 中止（fail-closed） |
+| 点后鼠标 | 留在世界区继续盲点 | `Move-Mouse` 到 `-NoticeParkPoint`（默认 `522,760`，底部面板区；**只移动不点击**） |
+| 公告未出现 | 照点（风险） | 有 capture 且超时未见 658 ⇒ `NOTICE_POLL RED` + 中止，一次也不点世界区 |
+
+### 9.3 坐标门（点 NPC / 任何世界区点击之前）
+
+新增参数：
+
+- `-ExpectPos "X,Y"`：进入世界后、任何世界区点击之前断言角色格；
+- `-CapturePath <capture.jsonl>`：取证来源（c2s `CM_WALK(3011)` 的 `recog = X|Y<<16`，
+  或 s2c `SM_LOGON(50)`/`SM_NEWMAP(51)` 的 `param/tag`；取 `ts_ms` 最新一条）；
+- `-ClickNpc`：点一次固定 NPC；未给 `-ExpectPos` 时按比奇国王场景默认 `29,33`。
+
+行为：坐标不等于期望、或 capture 里没有任何自身坐标证据 ⇒ 打印 `POSITION_GATE RED …` 并**中止**
+（不继续盲点）。`-ClickNpc` 未给 `-CapturePath` 时**直接拒绝启动客户端**。
+
+```powershell
+# 示例：进图 → 过坐标门 → 点国王（角色必须真的在 (29,33)）
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
+  -Account winplay0 -Password winplay0 -RunDir D:\MirClient-run `
+  -OutDir E:/tmp/window/r6/flow -SkipTalk -WalkClicks 0 -SkipLogout -SkipReenter -LeaveClientRunning `
+  -CapturePath E:/tmp/window/r6/s2c/capture.jsonl -ExpectPos "29,33" -ClickNpc
+```
+
+### 9.4 NPC 点击坐标
+
+- 默认 `-NpcClick "512,263"`：角色 `(29,33)` ⇒ 该点对应 NPC `(29,32)`；
+- 旧值 `(512,227)` 换算成 y=31（**两格北的空地**），已在 §3.9 表中统一订正。
+
+### 9.5 manifest 记客户端身份（本轮误判的直接原因）
+
+- `mir_flow.ps1` 启动客户端前写 `<OutDir>/manifest.json`：
+  `client_exe` / `client_exe_sha256` / `client_exe_mtime` / `client_exe_size`（另记 `run_dir`、`launcher`）；
+- `tools/m2-acceptance/export_s2c.ps1` 新增 `-ClientExe` / `-RunDir`（或环境变量 `MIR2_CLIENT_EXE`），
+  在切帧后把同名字段合并进 `$OutDir/manifest.json`；找不到时记 `null` 并 WARN。
+- 注：本机 Windows PowerShell 5.1 **没有 `Get-FileHash`**（实测 `CommandNotFoundException`），
+  两处取证都用 .NET `SHA256` 实现，避免静默退化成 null。
+- 实测（2026-10-22，假 proxy 目录真跑 `export_s2c.ps1`）：
+  `client_exe=D:\MirClient-run\MirClinet.exe`、
+  `client_exe_sha256=c3cb8f73d8872c5ad3e53f0f55a96d03139fb49397ebcacb4b3573c3e1c07996`、
+  `client_exe_size=6561280` —— 与诊断文档 §2.5 的同哈希/同大小一致（坐实 r5 跑的是冻结 Delphi 客户端）。
+
+### 9.6 离线自检（不启客户端）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
+```
+
+新增用例（均真跑，不启动客户端、不占端口）：
+
+1. `-FixtureDryRun -NoticePollSim dismiss1|slow|absent`：模拟公告轮询控制流。
+   `slow`（公告要 3 次才消失）仍只点 **1** 次且不补点 ⇒ 证明点击上限生效；`absent` ⇒ 世界区 0 点击；
+2. `-NoticePollClicks 2` ⇒ 启动前 fail-closed 拒绝；
+3. `-FixtureDryRun -ExpectPos 29,33 -CapturePath <假 capture>`：
+   实际 `(29,33)` ⇒ `POSITION_GATE GREEN`；实际 `(29,44)` ⇒ `POSITION_GATE RED` + 非零退出；
+   空 capture ⇒ 无证据 fail-closed；缺 `-CapturePath` ⇒ fail-closed；
+4. 源码断言：12 次盲点循环已删除、`-NoticePollClicks = 1`、`-NpcClick = "512,263"`、
+   无代码级 `512,227`、manifest 含 `client_exe_sha256`（`mir_flow` 与 `export_s2c` 两处）。
 
 ## 附录 A：本文件写作时的只读读数命令（可复现）
 

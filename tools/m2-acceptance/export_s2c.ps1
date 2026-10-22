@@ -15,6 +15,12 @@
     4. 自洽：`cargo run -p replay --offline -- --no-coverage <capture.jsonl>`
        （既有 replay 门禁：每条 raw_hex decode→encode 逐字节 + ident/param/tag/series 字段对拍；这是"别新写一套"的对账工具）
 
+  客户端身份：
+    卡 fixture-harden（root cause：docs/npc-render-diagnosis-20261022.md §2.5/§5）要求 manifest 记
+    `client_exe` + `client_exe_sha256` + `client_exe_mtime` + `client_exe_size`。脚本在切帧后把这些字段
+    合并进 `$OutDir/manifest.json`（-ClientExe 显式给；或 -RunDir 下找 MirClinet.exe/MirClientZig.exe；
+    或环境变量 MIR2_CLIENT_EXE）。找不到时字段记 null 并 WARN，不静默假装知道。
+
   红/绿：
     GREEN  = 三步都 0 退出（导出 + replay 自洽）；
     PREREQ = 缺 dump 目录 / 缺 chunks.ndjson / 缺 dotnet ⇒ 退出码 2，不静默通过；
@@ -28,6 +34,8 @@ param(
   [string]$ProxyDir = "",
   [string]$OutDir = "",
   [string]$GoldenExportExe = "",   # 可选：预构建的 GoldenExport.exe；不给则 dotnet run
+  [string]$ClientExe = "",         # 可选：客户端 exe 全路径（写进 manifest.json 的 client_exe* 字段）
+  [string]$RunDir = "",            # 可选：客户端运行目录（自动找 MirClinet.exe / MirClientZig.exe）
   [switch]$SkipReplay
 )
 
@@ -57,6 +65,47 @@ $Capture = Join-Path $OutDir "capture.jsonl"
 Write-Output "--- 1) segment_frames（切帧） ---"
 python (Join-Path $Tools "capture\segment_frames.py") --session $ProxyDir --out $OutDir
 if ($LASTEXITCODE -ne 0) { Write-Output "RED: segment_frames 失败"; exit 1 }
+
+# ---- 客户端身份取证（卡 fixture-harden）----
+# 本轮误判的直接原因：manifest 只记了 proxy/端口映射，没记跑的到底是哪台客户端
+# （r5 实际是冻结 Delphi MirClinet.exe，报障却写成 MirClientZig）。
+$clientPath = $ClientExe
+if ([string]::IsNullOrEmpty($clientPath) -and -not [string]::IsNullOrEmpty($RunDir)) {
+  foreach ($cand in @((Join-Path $RunDir "MirClinet.exe"), (Join-Path $RunDir "MirClientZig.exe"))) {
+    if (Test-Path -LiteralPath $cand) { $clientPath = $cand; break }
+  }
+}
+if ([string]::IsNullOrEmpty($clientPath) -and $env:MIR2_CLIENT_EXE) { $clientPath = $env:MIR2_CLIENT_EXE }
+$clientFields = [ordered]@{
+  client_exe = $null; client_exe_sha256 = $null; client_exe_mtime = $null; client_exe_size = $null
+}
+if (-not [string]::IsNullOrEmpty($clientPath) -and (Test-Path -LiteralPath $clientPath)) {
+  $fi = Get-Item -LiteralPath $clientPath
+  # 不用 Get-FileHash：本机 Windows PowerShell 5.1 没有该 cmdlet（实测 CommandNotFoundException）。
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $fs = [IO.File]::OpenRead($fi.FullName)
+    try { $hashBytes = $sha.ComputeHash($fs) } finally { $fs.Dispose() }
+  } finally { $sha.Dispose() }
+  $clientFields.client_exe = $fi.FullName
+  $clientFields.client_exe_sha256 = (([BitConverter]::ToString($hashBytes) -replace "-", "").ToLowerInvariant())
+  $clientFields.client_exe_mtime = $fi.LastWriteTimeUtc.ToString("o")
+  $clientFields.client_exe_size = [long]$fi.Length
+} else {
+  Write-Output "WARN: 未给 -ClientExe/-RunDir/MIR2_CLIENT_EXE，manifest 的 client_exe* 记为 null（本轮误判的直接原因就是缺这几个字段）"
+}
+$Manifest = Join-Path $OutDir "manifest.json"
+if (Test-Path -LiteralPath $Manifest) {
+  $man = [IO.File]::ReadAllText($Manifest, [Text.Encoding]::UTF8) | ConvertFrom-Json
+  foreach ($k in @($clientFields.Keys)) {
+    if ($null -ne $man.PSObject.Properties[$k]) { $man.$k = $clientFields[$k] }
+    else { $man | Add-Member -NotePropertyName $k -NotePropertyValue $clientFields[$k] }
+  }
+  [IO.File]::WriteAllText($Manifest, (($man | ConvertTo-Json -Depth 100) + "`n"), (New-Object Text.UTF8Encoding($false)))
+  Write-Output ("MANIFEST_CLIENT " + $Manifest + " client_exe=" + $clientFields.client_exe)
+} else {
+  Write-Output ("WARN: " + $Manifest + " 不存在（segment_frames 未产出 manifest），客户端字段未记录")
+}
 
 Write-Output "--- 2) GoldenExport（解码成 capture.jsonl） ---"
 # A-9：必须用**当前派生**的分段布局表，否则多段帧（如 SM_ADJUST_BONUS）的 body_len/body_sha256

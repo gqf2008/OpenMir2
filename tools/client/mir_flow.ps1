@@ -129,7 +129,22 @@ param(
   # **别用 `tools/botload/run_bots.ps1` 常驻**——它判据达成后会杀 BotSrv（见
   # tools/m2-acceptance/README.md §2.1）；直接跑 `src/BotSrv/bin/Release/BotSrv.exe`。
   [int]$SeeOthersWaitSec = 0,
-  [string]$SeeOthersShot = "m2-04-see-others.png"
+  [string]$SeeOthersShot = "m2-04-see-others.png",
+  # ---- 夹具加固（卡 fixture-harden；tier=L）：公告轮询 / 坐标门 / NPC 点击 ----
+  # 根因见 docs/npc-render-diagnosis-20261022.md §2.3：旧 notice_poll 在固定点 (522,525) 盲点 12 次，
+  # 公告只吃第一次，其余 11 次落在世界区（每次都重设 g_nTargetX/Y）⇒ 角色从 (29,33) 自动走到 (29,44)
+  # 并落库，国王 (29,32) 出视窗。修法：公告只点一次、点完把鼠标移出世界区、任何世界区点击前先过坐标门。
+  [int]$NoticePollClicks = 1,        # 公告「确定」按钮点击次数：**上限 1**（>1 直接 fail-closed 拒绝）
+  [string]$NoticeButton = "522,525",  # 公告确定按钮（客户端坐标；沿用旧脚本实测值）
+  [string]$NoticeParkPoint = "522,760",  # 点完公告后鼠标停这里（底部面板区，不是世界区；只移动不点击）
+  [int]$NoticeWaitSec = 4,           # 等公告出现：有 -CapturePath 时按 s2c SM_SENDNOTICE(658) 判定，否则固定等待
+  [int]$NoticeVerifySec = 6,         # 等 c2s CM_LOGINNOTICEOK(1018)（仅 -CapturePath 模式校验）
+  [string]$CapturePath = "",         # 可选 capture.jsonl（mir2_proxy/GoldenExport 产物）：公告判定 + 1018 校验 + 坐标门取证
+  [string]$ExpectPos = "",           # "X,Y"：进入世界后、任何世界区点击前断言角色格；不一致 ⇒ POSITION_GATE RED + 中止
+  [switch]$ClickNpc,                 # 进世界后点一次固定 NPC（坐标 -NpcClick）；必须先过坐标门（需要 -CapturePath）
+  [string]$NpcClick = "512,263",     # 角色 (29,33) 时该点对应 NPC(29,32)；旧值 (512,227) 实际对应 y=31（两格北，空地）
+  [switch]$FixtureDryRun,            # 离线自检：不启动客户端；-NoticePollSim / -ExpectPos 两条路径（供 mir_flow.selftest.ps1）
+  [string]$NoticePollSim = ""        # dismiss1 | slow | absent：模拟公告轮询控制流（与 -FixtureDryRun 联用）
 )
 
 $ErrorActionPreference = "Stop"
@@ -340,6 +355,126 @@ function Read-TurnCaptureFrames([string]$path, [long]$minTs, [long]$maxTs) {
     [void]$frames.Add($r)
   }
   return ,$frames.ToArray()
+}
+
+# ==== 夹具加固：capture 取证 / 公告轮询 / 坐标门 / 客户端身份 ==================
+# 纯读文件 + 纯计算；离线（-FixtureDryRun）与真机流程共用同一套口径。
+# 自身坐标证据（capture.jsonl，字段口径同 GoldenExport）：
+#   · c2s CM_WALK(3011)：recog = X | (Y<<16)（低字 X、高字 Y）= 该步**终点格**（走完即所在格）
+#   · s2c SM_LOGON(50) / SM_NEWMAP(51)：param = X、tag = Y（进图位置）
+# 取 ts_ms 最新的一条作为「角色当前格」；一条都没有 ⇒ 不可断言（调用方必须 fail-closed）。
+
+function Get-SelfCellEvidence([string]$path) {
+  if (-not (Test-Path -LiteralPath $path)) { throw "capture.jsonl 不存在：$path" }
+  $full = (Resolve-Path -LiteralPath $path).Path
+  $best = $null
+  foreach ($line in [IO.File]::ReadLines($full)) {
+    if ($line -notmatch '"kind"\s*:\s*"frame"') { continue }
+    if ($line -notmatch '"ident"\s*:\s*(3011|50|51)(?!\d)') { continue }
+    try { $r = $line | ConvertFrom-Json } catch { continue }
+    if ($null -eq $r -or $null -eq $r.PSObject.Properties["ident"] -or $null -eq $r.ident) { continue }
+    $ident = [int]$r.ident
+    $dir = ""
+    if ($null -ne $r.PSObject.Properties["dir"]) { $dir = [string]$r.dir }
+    $x = $null; $y = $null; $src = ""
+    if ($dir -eq "c2s" -and $ident -eq 3011) {
+      if ($null -eq $r.PSObject.Properties["recog"] -or $null -eq $r.recog) { continue }
+      $x = Get-TurnLoWord ([long]$r.recog); $y = Get-TurnHiWord ([long]$r.recog); $src = "c2s CM_WALK(3011)"
+    } elseif ($dir -eq "s2c" -and ($ident -eq 50 -or $ident -eq 51)) {
+      if ($null -eq $r.PSObject.Properties["param"] -or $null -eq $r.param) { continue }
+      if ($null -eq $r.PSObject.Properties["tag"] -or $null -eq $r.tag) { continue }
+      $x = [int]$r.param; $y = [int]$r.tag
+      if ($ident -eq 50) { $src = "s2c SM_LOGON(50)" } else { $src = "s2c SM_NEWMAP(51)" }
+    } else { continue }
+    $ts = [long]0
+    if ($null -ne $r.PSObject.Properties["ts_ms"] -and $null -ne $r.ts_ms) { $ts = [long]$r.ts_ms }
+    if ($null -eq $best -or $ts -ge [long]$best.ts_ms) {
+      $best = [pscustomobject][ordered]@{ X = [int]$x; Y = [int]$y; ts_ms = $ts; source = $src; seq = $r.seq }
+    }
+  }
+  return $best
+}
+
+function Test-PositionGate([string]$path, [string]$expect) {
+  # "X,Y" ⇒ 断言角色格。不一致 / 无证据 ⇒ Ok=$false（fail-closed，调用方必须中止）。
+  $parts = $expect.Split(",")
+  if ($parts.Count -ne 2 -or -not (Test-TurnIntLiteral $parts[0].Trim()) -or -not (Test-TurnIntLiteral $parts[1].Trim())) {
+    return [pscustomobject]@{ Ok = $false; Detail = ("-ExpectPos 须为 'X,Y'（两个整数），当前：'" + $expect + "'") }
+  }
+  $ex = [int]$parts[0]; $ey = [int]$parts[1]
+  $ev = Get-SelfCellEvidence $path
+  if ($null -eq $ev) {
+    return [pscustomobject]@{ Ok = $false; Detail = ("capture 中没有自身坐标证据（c2s CM_WALK(3011) / s2c SM_LOGON(50)/SM_NEWMAP(51)）；expect=" + $ex + "," + $ey) }
+  }
+  $ok = ([int]$ev.X -eq $ex -and [int]$ev.Y -eq $ey)
+  $detail = ("actual=" + $ev.X + "," + $ev.Y + " expect=" + $ex + "," + $ey +
+             " source='" + $ev.source + "' seq=" + $ev.seq + " ts_ms=" + $ev.ts_ms)
+  return [pscustomobject]@{ Ok = $ok; ActualX = [int]$ev.X; ActualY = [int]$ev.Y; ExpectX = $ex; ExpectY = $ey; Detail = $detail }
+}
+
+function Wait-CaptureFrame([string]$path, [string]$dir, [int]$ident, [int]$timeoutSec) {
+  # 轮询（capture 可能仍在增长）直到出现 dir/ident 的帧；超时返回 $null。先用正则预筛，避免整场 JSON 解析。
+  $deadline = (Get-Date).AddSeconds([Math]::Max(0, $timeoutSec))
+  $dirPat = '"dir"\s*:\s*"' + [regex]::Escape($dir) + '"'
+  $identPat = '"ident"\s*:\s*' + $ident + '(?!\d)'
+  while ($true) {
+    if (Test-Path -LiteralPath $path) {
+      $full = (Resolve-Path -LiteralPath $path).Path
+      foreach ($line in [IO.File]::ReadLines($full)) {
+        if ($line -notmatch $dirPat) { continue }
+        if ($line -notmatch $identPat) { continue }
+        try { return ($line | ConvertFrom-Json) } catch { continue }
+      }
+    }
+    if ((Get-Date) -ge $deadline) { return $null }
+    Start-Sleep -Milliseconds 250
+  }
+}
+
+function Invoke-NoticePollSim([string]$mode, [int]$maxClicks) {
+  # 离线模拟 notice_poll 的控制流（不碰客户端）：返回 Clicks / WorldClicks / Parked / Dismissed / Reason。
+  #   dismiss1：公告可见 ⇒ 点 1 次即消失（正常路径）
+  #   slow    ：公告要 3 次才消失 ⇒ 上限 1 只允许点 1 次，**不补点**（证明点击次数上限生效）
+  #   absent  ：公告始终不出现 ⇒ 一次也不点世界区（超时后只把鼠标移出世界区）
+  if ($mode -eq "dismiss1") {
+    $c = 0
+    if ($maxClicks -ge 1) { $c++ }
+    return [pscustomobject][ordered]@{ Clicks = $c; WorldClicks = 0; Parked = $true; Dismissed = ($c -ge 1); Reason = "notice_clicked_once" }
+  }
+  if ($mode -eq "slow") {
+    $c = 0
+    if ($maxClicks -ge 1) { $c++ }
+    return [pscustomobject][ordered]@{ Clicks = $c; WorldClicks = 0; Parked = $true; Dismissed = $false; Reason = "click_cap_reached" }
+  }
+  if ($mode -eq "absent") {
+    return [pscustomobject][ordered]@{ Clicks = 0; WorldClicks = 0; Parked = $true; Dismissed = $false; Reason = "no_notice_timeout" }
+  }
+  throw ("-NoticePollSim 只支持 dismiss1 | slow | absent，当前：'" + $mode + "'")
+}
+
+function Get-Sha256Hex([string]$path) {
+  # 不用 Get-FileHash：本机 Windows PowerShell 5.1 的 Microsoft.PowerShell.Utility 里没有该 cmdlet
+  # （实测 CommandNotFoundException），直接用 .NET 实现，避免取证静默退化成 null。
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  try {
+    $fs = [IO.File]::OpenRead($path)
+    try { $bytes = $sha.ComputeHash($fs) } finally { $fs.Dispose() }
+  } finally { $sha.Dispose() }
+  return ([BitConverter]::ToString($bytes) -replace "-", "").ToLowerInvariant()
+}
+
+function Get-ClientProvenance([string]$exePath) {
+  # 客户端身份取证（本轮误判的直接原因：manifest 只记了 proxy/端口，没记客户端二进制）。
+  if ($exePath -eq "" -or -not (Test-Path -LiteralPath $exePath)) {
+    return [pscustomobject][ordered]@{ path = $null; sha256 = $null; mtime = $null; size = $null }
+  }
+  $fi = Get-Item -LiteralPath $exePath
+  return [pscustomobject][ordered]@{
+    path = $fi.FullName
+    sha256 = (Get-Sha256Hex $fi.FullName)
+    mtime = $fi.LastWriteTimeUtc.ToString("o")
+    size = [long]$fi.Length
+  }
 }
 
 function Get-TurnCalibrationMapFromLedger($ledger) {
@@ -606,6 +741,21 @@ if ($AttackTurnMap -ne "" -and $AttackTurn -eq "") {
 if ($AttackTurnMap -ne "" -and $AttackTurnCalibrate -ne "") {
   throw "-AttackTurnMap 与 -AttackTurnCalibrate 互斥"
 }
+# ---- 夹具加固参数门（fail-closed；都在启动客户端之前）----
+if ($NoticePollClicks -lt 0 -or $NoticePollClicks -gt 1) {
+  throw ("-NoticePollClicks 只允许 0 或 1（上限 1）：重复盲点世界区会把角色走掉（docs/npc-render-diagnosis-20261022.md §2.3）")
+}
+if ($NoticeWaitSec -lt 0) { throw "-NoticeWaitSec 不能为负" }
+if ($NoticeVerifySec -lt 0) { throw "-NoticeVerifySec 不能为负" }
+if ($ExpectPos -ne "") {
+  $ep = $ExpectPos.Split(",")
+  if ($ep.Count -ne 2 -or -not (Test-TurnIntLiteral $ep[0].Trim()) -or -not (Test-TurnIntLiteral $ep[1].Trim())) {
+    throw ("-ExpectPos 须为 'X,Y'（两个整数），当前：'" + $ExpectPos + "'")
+  }
+}
+if ($ClickNpc -and $CapturePath -eq "") {
+  throw "-ClickNpc 需要 -CapturePath：坐标门没有取证就不得盲点世界区（fail-closed）"
+}
 $turnMapTable = $null
 if ($AttackTurnMap -ne "") { $turnMapTable = Read-TurnCalibrationMap $AttackTurnMap }
 
@@ -648,6 +798,38 @@ if ($AttackTurnDryRun) {
     exit 0
   }
   throw "-AttackTurnDryRun 需要 -AttackTurn 或 -AttackTurnCalibrate"
+}
+
+# ---- 离线夹具自检：不启动客户端（卡 fixture-harden；mir_flow.selftest.ps1 调用）----
+if ($FixtureDryRun) {
+  $did = $false
+  if ($NoticePollSim -ne "") {
+    $sim = Invoke-NoticePollSim $NoticePollSim $NoticePollClicks
+    Write-Output ("NOTICE_POLL_SIM mode=" + $NoticePollSim + " clicks=" + $sim.Clicks +
+      " world_clicks=" + $sim.WorldClicks + " parked=" + $sim.Parked +
+      " dismissed=" + $sim.Dismissed + " reason=" + $sim.Reason +
+      " cap=" + $NoticePollClicks)
+    $did = $true
+  }
+  if ($ExpectPos -ne "") {
+    if ($CapturePath -eq "") {
+      Write-Output "POSITION_GATE RED missing -CapturePath（坐标门取证缺失）"
+      throw "-FixtureDryRun -ExpectPos 需要 -CapturePath（坐标门取证）"
+    }
+    $gate = Test-PositionGate $CapturePath $ExpectPos
+    if ($gate.Ok) {
+      Write-Output ("POSITION_GATE GREEN " + $gate.Detail)
+    } else {
+      Write-Output ("POSITION_GATE RED " + $gate.Detail)
+      exit 1
+    }
+    $did = $true
+  }
+  if (-not $did) {
+    throw "-FixtureDryRun 需要 -NoticePollSim 或 -ExpectPos（离线夹具自检）"
+  }
+  Write-Output "FIXTURE_DRY_RUN_OK"
+  exit 0
 }
 
 $src = @"
@@ -699,6 +881,33 @@ function Stage([string]$name) {
 
 # ---- 启动客户端 ----
 Stage "start"
+# ---- 客户端身份取证（卡 fixture-harden）----
+# 本轮误判的直接原因：抓包 manifest 只记了 proxy/端口映射，没记跑的到底是哪台客户端
+# （r5 实际是冻结 Delphi MirClinet.exe，报障却写成 MirClientZig）。这里在启动前把
+# client_exe / sha256 / mtime / size 落到 <OutDir>/manifest.json，事后可复核。
+$clientCandidates = @((Join-Path $RunDir "MirClinet.exe"), (Join-Path $RunDir "MirClientZig.exe"))
+$clientExe = $clientCandidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+if (-not $clientExe) { $clientExe = "" }
+$clientProv = Get-ClientProvenance $clientExe
+$clientManifest = [ordered]@{
+  schema = "openmir2.mirflow-manifest/1"
+  created_utc = [DateTimeOffset]::UtcNow.ToString("o")
+  run_dir = $RunDir
+  launcher = (Join-Path $RunDir "run-release.cmd")
+  client_exe = $clientProv.path
+  client_exe_sha256 = $clientProv.sha256
+  client_exe_mtime = $clientProv.mtime
+  client_exe_size = $clientProv.size
+}
+[IO.File]::WriteAllText((Join-Path $OutDir "manifest.json"),
+  (($clientManifest | ConvertTo-Json -Depth 6) + "`r`n"), (New-Object Text.UTF8Encoding($false)))
+if ($null -eq $clientProv.path) {
+  Write-Output ("CLIENT_EXE_MISSING 在 " + $RunDir + " 未找到 MirClinet.exe / MirClientZig.exe；manifest 记为 null")
+} else {
+  Write-Output ("CLIENT_EXE=" + $clientProv.path)
+  Write-Output ("CLIENT_SHA256=" + $clientProv.sha256)
+  Write-Output ("CLIENT_MTIME=" + $clientProv.mtime)
+}
 Get-Process MirClinet -ErrorAction SilentlyContinue | Stop-Process -Force
 Start-Sleep -Seconds 2
 if ($HookOut -ne "") { $env:MIR2_HOOK_OUT = $HookOut }   # 必须在 Start-Process 之前：子进程继承
@@ -770,6 +979,17 @@ function Send-RightClick([int]$x, [int]$y) {
   Start-Sleep -Milliseconds 90
   [void][MirFlow]::PostMessage($script:hwnd, 0x0205, [IntPtr]0, $lp)   # rbuttonup
   Start-Sleep -Milliseconds 220
+}
+
+function Move-Mouse([int]$x, [int]$y) {
+  # 只移动鼠标（SetCursorPos + WM_MOUSEMOVE），**不按下任何键**。
+  # 用途：点完公告后把指针停到面板区（-NoticeParkPoint），避免后续误点把 g_nTargetX/Y 落到世界格。
+  [void][MirFlow]::SetCursorPos(($pt.X + $x), ($pt.Y + $y))
+  [void][MirFlow]::SetForegroundWindow($script:hwnd)
+  Start-Sleep -Milliseconds 120
+  $lp = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+  [void][MirFlow]::PostMessage($script:hwnd, 0x0200, [IntPtr]0, $lp)
+  Start-Sleep -Milliseconds 80
 }
 
 function Send-RealClick([int]$x, [int]$y) {
@@ -904,23 +1124,85 @@ if ($CreateChar) {
 Stage "enter_game"
 Send-Click $CharSlotX 550
 Send-Click 517 552
-# 进图后服务端会推「公告」模态框（SM_SENDNOTICE 658），客户端点掉后回 CM_LOGINNOTICEOK(1018)，
-# 服务端才继续下发世界数据。**窗口只有 10 秒**：PlayObject.RunNotice 里
-# `(GetTickCount - WaitLoginNoticeOkTick) > 10*1000 ⇒ BoEmergencyClose`，
-# 超时角色会被踢、世界数据永远不来（症状=黑屏 + 只收到 445B 公告）。
-# 因此这里不能"等 13 秒再点一次"，要**从进图就开始高频点确定**，覆盖公告出现的时刻。
-Stage "notice_poll"
-$noticeClicked = $false
-for ($i = 0; $i -lt 12; $i++) {
-  Send-Click 522 525 1
-  Start-Sleep -Milliseconds 1200
-  if ($i -eq 2) { Shot "05_ingame.png" }
-  if ($i -ge 6 -and -not $noticeClicked) { $noticeClicked = $true; Shot "05b_after_notice.png" }
+# ---- 公告轮询（卡 fixture-harden 修正）----
+# 旧实现：在固定点 (522,525) 盲点 12 次（每 1.2s）。公告只吃**第一次**，其余 11 次落在世界区，
+# 每次都把 g_nTargetX/Y 重设到鼠标格 ⇒ 角色自动走位（r5 实测 (29,33)→(29,44)）并落库，
+# 国王 (29,32) 出视窗（docs/npc-render-diagnosis-20261022.md §2.3）。
+# 新实现：等公告 → **只点一次** → 校验 CM_LOGINNOTICEOK(1018)（仅 -CapturePath）→
+#   把鼠标移到面板区（-NoticeParkPoint，只移动不点击）；公告未出现时超时也不点世界区。
+# 服务端窗口仍只有 10 秒（PlayObject.RunNotice：>10s ⇒ BoEmergencyClose），
+# 所以等待取值要小于它：默认 NoticeWaitSec=4 + NoticeVerifySec=6。
+Stage "notice_wait"
+$noticeNb = $NoticeButton.Split(",") | ForEach-Object { [int]$_ }
+$noticePark = $NoticeParkPoint.Split(",") | ForEach-Object { [int]$_ }
+$noticeSeen = $null
+if ($CapturePath -ne "") {
+  $noticeSeen = Wait-CaptureFrame $CapturePath "s2c" 658 $NoticeWaitSec
+} else {
+  # 无 capture 时无法判定公告是否已出现：按 oracle「进图即推 SM_SENDNOTICE」的既有事实，
+  # 固定等待后单击一次（**绝不循环补点**；补点就是本轮事故的成因）。
+  Start-Sleep -Seconds $NoticeWaitSec
 }
-if (-not $noticeClicked) { Shot "05b_after_notice.png" }
+Shot "05_ingame.png"
+if ($CapturePath -ne "" -and $null -eq $noticeSeen) {
+  # 有取证却看不到公告：不能拿世界区当公告按钮盲点（那就是本轮事故），直接中止（fail-closed）。
+  Write-Output ("NOTICE_POLL RED：" + $NoticeWaitSec + "s 内未见 s2c SM_SENDNOTICE(658)（fail-closed：一次也不点世界区）")
+  throw "NOTICE_POLL RED: 公告未出现（-CapturePath 中无 SM_SENDNOTICE 658，不点世界区）"
+} else {
+  Stage "notice_poll"
+  if ($NoticePollClicks -gt 0) {
+    Send-Click $noticeNb[0] $noticeNb[1] 1
+  }
+  Move-Mouse $noticePark[0] $noticePark[1]
+  if ($CapturePath -ne "") {
+    $noticeOk = Wait-CaptureFrame $CapturePath "c2s" 1018 $NoticeVerifySec
+    if ($null -eq $noticeOk) {
+      Write-Output ("NOTICE_POLL RED：单击后 " + $NoticeVerifySec + "s 内未见 c2s CM_LOGINNOTICEOK(1018)（公告可能没被点掉；服务端 10s 会踢人）")
+      throw "NOTICE_POLL RED: CM_LOGINNOTICEOK(1018) 未出网（fail-closed：不再点世界区）"
+    }
+    Write-Output ("NOTICE_POLL OK clicks=" + $NoticePollClicks + " dismissed=1018 mode=capture")
+  } else {
+    Write-Output ("NOTICE_POLL UNVERIFIED clicks=" + $NoticePollClicks + " mode=no_capture（无 -CapturePath，无法校验 1018）")
+  }
+  Shot "05b_after_notice.png"
+}
 Stage "ingame"
 Start-Sleep -Seconds 2
 Shot "05c_ingame_ready.png"
+
+# ---- 坐标门（卡 fixture-harden）：任何世界区点击之前先断言角色格 ----
+# 依据：docs/npc-render-diagnosis-20261022.md §2.3/§2.4。角色一旦被夹具走远，
+# 所有屏幕点都会换算到空地 ⇒ CM_WALK（而不是 CM_CLICKNPC），且国王出视窗。
+# 取证：-CapturePath 里 ts_ms 最新的一条「c2s CM_WALK(3011) recog=X|Y<<16」或
+#       「s2c SM_LOGON(50)/SM_NEWMAP(51) param=X tag=Y」。不一致 / 无证据 ⇒ RED + 中止。
+# -ClickNpc 未显式给 -ExpectPos 时按比奇国王场景默认 (29,33)（NPC 在 (29,32)）。
+$gateExpect = $ExpectPos
+if ($gateExpect -eq "" -and $ClickNpc) { $gateExpect = "29,33" }
+if ($gateExpect -ne "") {
+  if ($CapturePath -eq "") {
+    Write-Output ("POSITION_GATE RED missing -CapturePath（expect=" + $gateExpect + "，无取证不得继续世界区点击）")
+    throw "POSITION_GATE RED: -ExpectPos 需要 -CapturePath（fail-closed）"
+  }
+  $gate = Test-PositionGate $CapturePath $gateExpect
+  if (-not $gate.Ok) {
+    Write-Output ("POSITION_GATE RED " + $gate.Detail)
+    throw ("POSITION_GATE RED: 角色坐标与期望不符，中止（不继续盲点世界区）。" + $gate.Detail)
+  }
+  Write-Output ("POSITION_GATE GREEN " + $gate.Detail)
+}
+
+# ---- 固定 NPC 点击（可选；先过坐标门）----
+# 默认 (512,263)：角色在 (29,33) 时 CXYfromMouseXY 逆映射 ⇒ 格 (29,32)（比奇国王所在格）。
+# 旧值 (512,227) 换算成 (29,31)，是**两格北的空地**，点下去只会 CM_WALK —— 本轮「点国王变走位」的一部分。
+if ($ClickNpc) {
+  Stage "npc_click"
+  $npcPx = $NpcClick.Split(",") | ForEach-Object { [int]$_ }
+  Write-Output ("NPC_CLICK x=" + $npcPx[0] + " y=" + $npcPx[1] + " expect=" + $gateExpect)
+  Send-Click $npcPx[0] $npcPx[1] 1
+  Start-Sleep -Seconds 2
+  Shot "05d_npc_click.png"
+  Move-Mouse $noticePark[0] $noticePark[1]
+}
 
 # ---- 说话（M2 验收② `m2-03-talk`）：聊天框输入并回车，本角色文本出现在聊天框后 ----
 # 回车是 toggle（收起=打开 / 打开=发送并收起）：先成对按两次保证「收起」，再按一次打开，

@@ -201,6 +201,71 @@ try {
   Check "source: legacy right-click literal intact" $hasRight
   Check "source: legacy left-click literal intact" $hasClick
   Check "source: new mapping gated by turnMapTable" ($src.Contains('if ($turnCell -and $turnMapTable)'))
+
+  # ---- 9. 夹具加固（卡 fixture-harden）：notice_poll 点击次数上限 = 1 ----
+  # 事故：旧实现 for ($i=0; $i -lt 12) 在 (522,525) 盲点，公告只吃第一次，其余 11 次走位。
+  # 这里既做源码/参数断言，也跑 -FixtureDryRun 的模拟控制流（不启动客户端）。
+  $fixDir = New-TestDir "fixture"
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "dismiss1", "-OutDir", $fixDir)
+  Check "fixture: notice dismiss1 => clicks=1 world_clicks=0" (
+    $r.Code -eq 0 -and $r.Out.Contains("NOTICE_POLL_SIM mode=dismiss1 clicks=1 world_clicks=0") -and
+    $r.Out.Contains("cap=1")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "slow", "-OutDir", $fixDir)
+  Check "fixture: notice needing 3 clicks still clicks only 1 (cap)" (
+    $r.Code -eq 0 -and $r.Out.Contains("NOTICE_POLL_SIM mode=slow clicks=1 world_clicks=0") -and
+    $r.Out.Contains("dismissed=False") -and $r.Out.Contains("reason=click_cap_reached")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "absent", "-OutDir", $fixDir)
+  Check "fixture: notice absent => 0 clicks into world" (
+    $r.Code -eq 0 -and $r.Out.Contains("NOTICE_POLL_SIM mode=absent clicks=0 world_clicks=0") -and
+    $r.Out.Contains("reason=no_notice_timeout")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "dismiss1", "-NoticePollClicks", "2", "-OutDir", $fixDir)
+  Check "fixture: NoticePollClicks>1 rejected before client (fail-closed)" (
+    $r.Code -ne 0 -and $r.Out.Contains("NoticePollClicks")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-NoticePollSim", "bogus", "-OutDir", $fixDir)
+  Check "fixture: unknown notice sim mode fails closed" ($r.Code -ne 0) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 10. 夹具加固：坐标门 fail-closed（假 capture 文件；不启动客户端）----
+  function New-FixtureCapture([int]$x, [int]$y) {
+    $p = Join-Path $fixDir ("capture-" + $x + "-" + $y + ".jsonl")
+    $logon = [ordered]@{ kind = "frame"; dir = "s2c"; ts_ms = 1000; ident = 50; recog = 268; param = $x; tag = $y; series = 0 }
+    $walk = [ordered]@{ kind = "frame"; dir = "c2s"; ts_ms = 5000; ident = 3011; tag = 4
+                        recog = [long](($x -band 0xFFFF) -bor (($y -band 0xFFFF) -shl 16)) }
+    $lines = @(($logon | ConvertTo-Json -Compress), ($walk | ConvertTo-Json -Compress))
+    [IO.File]::WriteAllText($p, (($lines -join "`r`n") + "`r`n"), (New-Object Text.UTF8Encoding($false)))
+    return $p
+  }
+  $okCap = New-FixtureCapture 29 33
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-CapturePath", $okCap, "-OutDir", $fixDir)
+  Check "fixture: position gate GREEN when actual==expect" (
+    $r.Code -eq 0 -and $r.Out.Contains("POSITION_GATE GREEN actual=29,33 expect=29,33")) ($r.Out + " rc=" + $r.Code)
+  $badCap = New-FixtureCapture 29 44
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-CapturePath", $badCap, "-OutDir", $fixDir)
+  Check "fixture: position gate RED + abort when actual!=expect" (
+    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED actual=29,44 expect=29,33")) ($r.Out + " rc=" + $r.Code)
+  $noCap = Join-Path $fixDir "capture-empty.jsonl"
+  [IO.File]::WriteAllText($noCap, "", (New-Object Text.UTF8Encoding($false)))
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-CapturePath", $noCap, "-OutDir", $fixDir)
+  Check "fixture: position gate fail-closed with no evidence" (
+    $r.Code -ne 0 -and $r.Out.Contains("POSITION_GATE RED")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-FixtureDryRun", "-ExpectPos", "29,33", "-OutDir", $fixDir)
+  Check "fixture: position gate requires -CapturePath (fail-closed)" (
+    $r.Code -ne 0 -and $r.Out.Contains("CapturePath")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-ClickNpc", "-OutDir", $fixDir)
+  Check "fixture: ClickNpc without -CapturePath rejected (no blind click)" (
+    $r.Code -ne 0 -and $r.Out.Contains("ClickNpc")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 11. 夹具加固：源码断言（盲点循环已删 / NPC 默认坐标 / manifest 客户端字段）----
+  $src2 = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
+  Check "source: 12x blind notice loop removed" (-not ($src2 -match 'for \(\$i = 0; \$i -lt 12; \$i\+\+\)')) $null
+  Check "source: NoticePollClicks default = 1" ($src2.Contains('$NoticePollClicks = 1')) $null
+  Check "source: NPC click default 512,263" ($src2.Contains('$NpcClick = "512,263"')) $null
+  Check "source: no code click at 512,227 (comment-only mention allowed)" (
+    -not ($src2 -match 'Send-Click\s+512\s+227') -and -not $src2.Contains('$NpcClick = "512,227"')) $null
+  Check "source: mir_flow manifest records client sha256" (
+    $src2.Contains('client_exe_sha256') -and $src2.Contains('Get-ClientProvenance')) $null
+  $exportSrc = [IO.File]::ReadAllText((Join-Path $here "..\m2-acceptance\export_s2c.ps1"), [Text.Encoding]::UTF8)
+  Check "source: export_s2c records client_exe_sha256 in manifest" (
+    $exportSrc.Contains('client_exe_sha256') -and $exportSrc.Contains('MANIFEST_CLIENT')) $null
 }
 finally {
   foreach ($d in $script:testDirs) {
