@@ -1068,6 +1068,11 @@ def main(argv=None):
         try:
             data = load_scenario(args.scenario)
             plans, params = expand_scenario(data, parse_vars(args.var))
+            wait_kinds = {"wait_for", "wait_frames"}
+            if not any(pl.get("kind") in wait_kinds for pl in plans):
+                raise ScenarioError(
+                    "scenario %r has no wait step: at least one wait_for/wait_frames is required "
+                    "(a send-only scenario proves nothing)" % data.get("name"))
         except ScenarioError as ex:
             print("scenario-error: %s" % ex, file=sys.stderr)
             return 2
@@ -1401,6 +1406,13 @@ def _selftest_scenario_required():
             json.dump(lit, fh, ensure_ascii=False)
         plans, _ = expand_scenario(load_scenario(path), {"@时间": "不该命中"})
         assert plans[0]["body"] == "@时间".encode("gbk"), plans[0]["body"]
+        # 3b) 只有 send、没有任何 wait 的场景必须被 --check-scenario 拒绝（N-5）
+        sendonly = {"name": "sendonly", "steps": [{"send": {"ident": CM_SAY, "text": "x"}}]}
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(sendonly, fh, ensure_ascii=False)
+        data2 = load_scenario(path)
+        plans2, _ = expand_scenario(data2)
+        assert [pl["kind"] for pl in plans2] == ["send"], plans2
         # 4) required 形状非法 / 未知顶层键仍 fail-closed
         for bad in (dict(base, required="make_index"), dict(base, required=[1]),
                     dict(base, bogus=1)):

@@ -43,14 +43,15 @@ Rust(30): 529 530 520 525 658 51 50 41 213 11029 42 766 54 5008 1106 52 752 811 
 
 1. **Rust 多一条 `SM_HIT(14)`**（idx 19，紧跟在 46 之后、10 之前）。去掉这条后**两侧 ident 序列完全相同（29 = 29）**。
    对应卡 `openmir2-npc-hit-frames`（「固定 NPC 的 SM_HIT(14) 诊断——Rust 抓到、C# 未见」）：本批次用无头对拍复现了该现象。
-2. **两条系统公告顺序颠倒**（ident 100）：
+2. ~~**两条系统公告顺序颠倒**（ident 100）：~~**（作废，见 §10：两侧同 tick 次序都不固定）**
    | 位次 | C# | Rust |
    |---|---|---|
    | 26 | 「禁止使用任何外挂、加速、辅助、脱机…」 | 「唯一客服QQ：79311185 唯一担保QQ：79311185」 |
    | 27 | 「唯一客服QQ…」 | 「禁止使用任何外挂…」 |
    ⇒ 内容两边都在，**发送次序相反**（时序差，R 级口径）。
-3. **`SM_ABILITY(52)` body 长度 54 vs 78**（C# 54 / Rust 78）：与首跑一致的布局对 (54,78)，
-   规则表白名单仍是 `{40,58}` ⇒ 属规则缺口（`conformance-rules` 车道），不等于行为差异。
+3. **`SM_ABILITY(52)` body 长度 54 vs 78**（C# 54 / Rust 78）：比较器按布局语义逐字段比，
+   **login 段三者语义相等**（3 对 login run 的 `52_semantic` 无差异）；仅长会话里出现 `mp` ±1（见 §21）。
+   ~~「(54,78) 是规则缺口」的说法作废。~~
 
 ## 4. 比较器判定
 
@@ -60,7 +61,7 @@ Rust(30): 529 530 520 525 658 51 50 41 213 11029 42 766 54 5008 1106 52 752 811 
 
 ## 5. 后续
 
-- `rules.json` 需补 ident 14（以及首跑已知的 100/520/525/529/530/654/657、52 的 (54,78)）——归 `conformance-rules` 车道，本卡只提供证据。
+- `rules.json` 需补 ident 14/643 等未覆盖号（`--allow-unclassified` 只作临时兜底）——归 `conformance-rules` 车道，本卡只提供证据。
 - 公告顺序差异需单独立卡或以 `comment` 挂到相关卡（R 级：时序）。
 - 下一批：同窗口跑 `gm_time` / `gm_batch`（无需 `--var`），再按首次 run 的 `recog` 填 `--var` 跑 NPC/商人/背包族。
 
@@ -103,8 +104,8 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 | `SM_MERCHANTSAY(643)` | 有 | 有 |
 | `SM_HIT(14)` | 无 | **无**（本批两侧都没有） |
 
-`compare_runs.py`：`frames 30/30`、**DIFFS 2**——
-`idx=26/27 ident=100 body_len 72↔55`，即 §3 第 2 条的**系统公告顺序颠倒**再次出现（内容对调、长度互换）。
+`compare_runs.py`：`frames 30/30`，**VERDICT = UNDECIDABLE (exit 2)**——原因是 `ident 643` 在规则表里无条目
+（`coverage/unclassified_ident`）。~~此前的「DIFFS 2 = 公告顺序颠倒」是误读：该结论已在 §10 撤回。~~
 其余 `whitelisted: 46 条`（recog/t_ms 掩码、52 布局）。
 
 **重要修正**：`SM_HIT(14)` 只出现在 05:04 的 `login_only` run（Rust 单侧多一条），
@@ -169,7 +170,7 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 两个"多余帧"现象**两侧都有**：Rust 偶发多一条 `SM_HIT(14)`（4/13），C# 偶发多一对 `SM_TURN(10)+SM_FEATURECHANGED(41)`（1/3，npc r1）。
 
 **对比较器/规则表的建议**（属 `tools/conformance` 与规则车道，本卡不擅自改）：
-1. `52` 需登记 (54,78) 布局对（首跑已提，仍未入表）；
+1. ~~`52` 需登记 (54,78) 布局对~~（作废：布局比后 login 段语义相等，见 §21）；
 2. 同一批次内的多条 `100` 改按多重集比，或显式登记「同 tick 公告次序不定」；
 3. NPC 交互附近的偶发 `14` / `10+41` 需要一条显式规则（容忍或按种子复现），否则单跑必 flaky。
 
@@ -204,7 +205,7 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 | 46 | `SM_DAYCHANGING` | 进世界 |
 | 50 | `SM_LOGON` | 进世界握手 |
 | 51 | `SM_NEWMAP` | 登录 |
-| 52 | `SM_ABILITY` | 登录（54/78 布局） |
+| 52 | `SM_ABILITY` | 登录（长度 54/78，语义按布局比） |
 | 53 | `SM_HEALTHSPELLCHANGED` | 吃 `@chouma` 后那一跑 |
 | 54 | `SM_MAPDESCRIPTION` | 进世界 |
 | 100 | `SM_SYSMESSAGE` | 公告/GM 回包 |
@@ -315,7 +316,7 @@ selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
 **结论**：GM 族**可以**做对拍；当前阻塞只剩「规则表补 52 语义/墙钟文本/530 地址串」与「多余帧口径」。
 `@AddRobotPlay` 两侧都无回包（oracle 代码整段注释），已从 `gm_batch.json` 移出。
 
-## 19. **`SM_HIT(14)` 的来源找到了**：Rust 在脚本 `MESSAGEBOX` 支发了 14，oracle 发 `SM_MENU_OK(767)`
+## 19. ~~**`SM_HIT(14)` 的来源找到了**：Rust 在脚本 `MESSAGEBOX` 支发了 14~~（**归因已更正，见 §21 第 3 条**）
 
 修复双重 EDCode 后跑 `dice_chain_auto`（点庄家 → `@kaiz` → `@ya5`），两侧**各 33 帧**，三条对话 `643`
 （`@main` / `@kaiz` / `@ya5` 面板）**正文完全一致**——对话内容parity 是好的。
@@ -333,7 +334,7 @@ selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
 
 其余差异：`52` 的 `mp` 18 vs 17、`SM_TURN(10)` 的 `series` 512 vs 516、同 tick 两条公告次序（§10 已知）。
 
-## 20. 复现验证（05:57–06:01）：C# 稳定发 767；Rust 从不发 767，代之以 14 或 10/41
+## 20. 复现验证（05:57–06:01）：C# 稳定发 767、Rust 从不发（**原因见 §21 第 3 条**：@ya52 的 ELSEACT 支不发任何帧）
 
 同一 `dice_chain_auto` 两侧各再跑两次：
 
@@ -347,3 +348,16 @@ selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
 ⇒ **C# 2/2 稳定发 `SM_MENU_OK(767)`；Rust 0/2 从不发 767**，取而代之的是偶发的 `SM_HIT(14)` 或 `10/41`。
 即 Rust 侧该 `MESSAGEBOX` 分支的应答**根本没实现**（或落到错误的"转身/受击"路径），
 而不只是"多发一条 14"。这比 §19 的单次观测更强，直接给出修复面：脚本 `MESSAGEBOX` ⇒ `RM_MENU_OK` ⇒ `SM_MENU_OK(767)`。
+
+## 21. 复审更正汇总（依据 Leader `leader-ruling-on-review-fe7d6daa`）
+
+1. **`52` 不是规则缺口**：比较器按布局语义比，3 对 login run 的 `52_semantic` **无差异**（54/78 只是长度不同）；
+   `mp` ±1 只出现在 gm/dice 这类长会话（C# 18 / Rust 17），更像回蓝 tick 相位差，归 R 级窗口项复采样。§3/§11 已改。
+2. **`SM_TURN(10)` 的 `series`**：剔除 14 后仍观察到两侧不等——本批实测 **C# 512 / 514**、**Rust 516**（gm_batch、dice 各一次）；
+   Leader 另有一例 **517 vs 516**。⇒ 记作「series 两侧不一致（值随场景/时间浮动）」，不作为 §11 之外的独立结论。
+3. **`SM_HIT(14)` 的归因更正**：Rust 的脚本 `MESSAGEBOX` 分支**已实现**（`npc.rs:2228-2293`，有单测）；
+   且 `login_only`（完全没有 NPC 对话）里也出现过 14 ⇒ **14 是背景噪声，不是 767 的替代帧**。
+   真实差异是：**Rust 对 `@ya52` 的 `#IF CHECKitem` / `#ELSEACT` 分支什么都不发**（C# 发 `SM_MENU_OK(767)`+文案）。
+   §19/§20 的因果叙述以本条为准（缺陷本身仍成立：C# 2/2 发 767、Rust 0/2 不发）。
+4. **比较器判定修正**：`npc_click_auto` 那对的实际结论是 `UNDECIDABLE (exit 2)`（`ident 643` 未登记），
+   不是「DIFFS 2」；同 tick 公告次序差异已在 §10 撤回（§3/§7 已删）。

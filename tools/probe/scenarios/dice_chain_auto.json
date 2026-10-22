@@ -1,10 +1,10 @@
 {
   "name": "dice_chain_auto",
-  "description": "点首个非自己 SM_TURN 的庄家（auto:last_turn）-> @kaiz -> @ya5 -> @ya52，各等 643；无需 --var",
+  "description": "点庄家（auto）-> @kaiz -> @ya5 -> @ya52；@ya52 走 MESSAGEBOX 支，等 SM_MENU_OK(767)（Rust 侧预期失败=缺功能）",
   "steps": [
     {
       "click_npc": "auto:last_turn",
-      "note": "庄家 ActorId 每会话不同，用 auto"
+      "note": "庄家 ActorId 每会话不同，用 auto（取最近一条非 self 的 SM_TURN）"
     },
     {
       "wait_for": 643,
@@ -28,8 +28,9 @@
       "dlg_select": "@ya52"
     },
     {
-      "wait_for": 643,
-      "timeout_ms": 3000
+      "wait_for": 767,
+      "timeout_ms": 3000,
+      "note": "@ya52 支 #ELSEACT MESSAGEBOX ⇒ C# 回 SM_MENU_OK(767)；Rust 该支不发（缺功能），此处如实失败"
     }
   ]
 }
