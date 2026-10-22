@@ -611,6 +611,12 @@ pub struct NpcPlayer<'r> {
     pub auto_get_exp_envir: Option<String>,
     /// `PlayObject.AutoGetExpInSafeZone`（`PlayObject.cs:808`；ctor false）。
     pub auto_get_exp_in_safe_zone: bool,
+    /// `PlayObject.OffLineFlag`（`PlayObject.cs:306`；**未初始化自动属性 ⇒ ctor 默认 false**）。
+    /// 脚本 `SETOFFLINE`（`ExecutionProcessingSys.cs:2727`）置 `true`。
+    pub off_line_flag: bool,
+    /// `PlayObject.KickOffLineTick`（`PlayObject.cs:302`；ctor 默认 0）。
+    /// `SETOFFLINE` 写 `GetTickCount() + nKickOffLine * 60 * 1000`（`ExecutionProcessingSys.cs:2728`）。
+    pub kick_off_line_tick: i32,
     /// `PlayObject.BoIncGameGold`（`PlayObject.cs:772`；ctor false）：脚本 192
     /// `AUTOADDGAMEGOLD` 的 STOP 写点（START 在当前 oracle 源码下不可达，见 `actions.rs`）。
     /// 宿主 `SessionGround.p22` 是唯一真源：脚本跑前 seed、跑后写回。
@@ -698,6 +704,10 @@ impl NpcPlayer<'_> {
             auto_get_exp_point: 0,
             auto_get_exp_envir: None,
             auto_get_exp_in_safe_zone: false,
+            // `PlayObject.cs:302/306`：`KickOffLineTick` ctor 默认 0、`OffLineFlag` 是未初始化
+            // 自动属性（默认 false）——`SETOFFLINE` 之前两者都不该被写成别的值。
+            off_line_flag: false,
+            kick_off_line_tick: 0,
             // `PlayObject.cs:965/970` 的 ctor 初值。
             bo_inc_game_gold: false,
             bo_dec_game_gold: false,
@@ -1207,6 +1217,20 @@ impl ScriptPlayer for NpcPlayer<'_> {
         self.auto_get_exp_time = time_ms;
         self.auto_get_exp_point = point;
     }
+    fn set_offline(&mut self, envir_map: Option<&str>, time_ms: i32, point: i32, kick_tick: i32) {
+        // `ExecutionProcessingSys.cs:2723-2728`（`ActionOfOffLine`）：
+        // `AutoGetExpInSafeZone = true`（**恒 true，不看任何入参**）；
+        // `AutoGetExpEnvir = playerActor.Envir`（宿主传当前地图名）；
+        // `AutoGetExpTime = nTime * 1000` / `AutoGetExpPoint = nPoint`（调用点已乘）；
+        // `OffLineFlag = true`；`KickOffLineTick = GetTickCount() + nKickOffLine * 60 * 1000`
+        // （调用点已加）。写入次序与 oracle 一致（四个 AutoGetExp 字段在前，两个离线字段在后）。
+        self.auto_get_exp_in_safe_zone = true;
+        self.auto_get_exp_envir = envir_map.map(str::to_string);
+        self.auto_get_exp_time = time_ms;
+        self.auto_get_exp_point = point;
+        self.off_line_flag = true;
+        self.kick_off_line_tick = kick_tick;
+    }
     fn send_msg(
         &mut self,
         ident: i32,
@@ -1714,6 +1738,39 @@ mod tests {
             ),
             (false, Some("A".to_string()), 5_000, 20)
         );
+    }
+
+    /// **A-10 / T-86**：`ScriptPlayer::set_offline`（oracle `ExecutionProcessingSys.cs:2723-2728`
+    /// 的 `ActionOfOffLine`）写 AutoGetExp 四字段 + `OffLineFlag` + `KickOffLineTick`；
+    /// `AutoGetExpInSafeZone` **恒 true**（oracle 硬写 true，不读入参）。
+    ///
+    /// 牙：删掉 `NpcPlayer` 的 `set_offline` 覆写（回落 trait 空默认）⇒ 本用例红。
+    #[test]
+    fn npc_player_set_offline_writes_six_fields() {
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        // ctor 缺省（`PlayObject.cs:302/306/1009-1012`）。
+        assert!(!p.off_line_flag);
+        assert_eq!(p.kick_off_line_tick, 0);
+        assert!(!p.auto_get_exp_in_safe_zone);
+        p.set_offline(Some("0"), 5_000, 500, 123_456);
+        assert_eq!(
+            (
+                p.auto_get_exp_in_safe_zone,
+                p.auto_get_exp_envir.clone(),
+                p.auto_get_exp_time,
+                p.auto_get_exp_point
+            ),
+            (true, Some("0".to_string()), 5_000, 500)
+        );
+        assert!(p.off_line_flag);
+        assert_eq!(p.kick_off_line_tick, 123_456);
+        // 再调一次：地图形参 `None` ⇒ `AutoGetExpEnvir = null`（oracle `Envir` 为空）。
+        p.set_offline(None, 1_000, 1, 0);
+        assert!(p.auto_get_exp_envir.is_none());
+        assert_eq!((p.auto_get_exp_time, p.auto_get_exp_point), (1_000, 1));
+        assert!(p.off_line_flag);
+        assert_eq!(p.kick_off_line_tick, 0);
     }
 
     // ---- lane marketdef：商人脚本表 / GotoLable 说词 / GetVariableText ----
