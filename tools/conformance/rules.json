@@ -140,6 +140,56 @@
       "reason": "SM_ATTACKMODE 攻击模式逐项比",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 100,
+      "action": "compare",
+      "reason": "SM_SYSMESSAGE 系统提示：body 是 GBK 文本。首跑 4 条实测（docs/conformance-first-dual-run-20261023.md §2.2）=「欢迎进入记忆传奇…www.aresm2.com」「禁止使用任何外挂…」「唯一客服QQ：79311185…」「[攻击模式: 全体攻击]」，均为静态文案，不含墙钟/时间戳 ⇒ body 逐字节比、param(65499)/series(1) 照常比。若后续场景的文案出现墙钟/时间戳，只按字段登记窄掩码（mask_body_ranges 或 head_mask=head 字段），不得整帧 ignore",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 520,
+      "action": "compare",
+      "head_compare": ["recog"],
+      "reason": "SM_QUERYCHR 角色列表：body = 每角色 `名字/等级/性别/职业/…` 文本，逐字节比。该帧的 recog 不是 ActorId 而是 nChrCount（C# src/DBSrv/Services/Impl/UserService.cs:488 `MakeMessage(SM_QUERYCHR, nChrCount, 0, 1, 0)`；Rust mir2-rs/bins/db-srv/src/handler.rs:365 同形），属协议内容 ⇒ 用 head_compare 从全局 recog 掩码里取回逐值比较；tag=1/series=0 照常比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 525,
+      "action": "compare",
+      "reason": "SM_STARTPLAY：body = GameGate 的 ip/port 文本（首跑两侧都是 `127.0.0.1/17200`，同端口方案下应逐字节相同 ⇒ 地址/端口必须比、不做掩码）；recog/param/tag/series 全 0（C# src/DBSrv/Services/Impl/UserService.cs:719 `MakeMessage(SM_STARTPLAY, 0, 0, 0, 0)`），recog 只走全局会话掩码",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 529,
+      "action": "compare",
+      "reason": "SM_PASSOK_SELECTSERVER：body = `服务器名/服务器状态/` 文本。首跑已暴露真差异 C#「热血传奇/Idle/」vs Rust「热血传奇/0/」（docs/conformance-first-dual-run-20261023.md §2.1，另卡修 `Idle` vs `0`）；本规则让该差异继续以 body 差异被定位，**绝不用掩码盖掉**。series = 服务器列表条数（C# src/LoginSrv/Services/ClientSession.cs:271 `MakeMessage(SM_PASSOK_SELECTSERVER, 0, 0, 0, ServerNameList.Count)`）照常比；recog 走全局掩码",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 530,
+      "action": "compare",
+      "reason": "SM_SELECTSERVER_OK：body = SelGate 的 `ip/port/session` 文本（首跑两侧都是 `127.0.0.1/17100/2`，逐字节相同 ⇒ 地址/端口必须比、不做掩码）；recog = 剩余游戏时间秒数或 SessionID（C# src/LoginSrv/Services/ClientSession.cs:516/520），跨运行/跨会话必然不同 ⇒ 只靠全局 recog 掩码；param/tag/series 照常比",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 654,
+      "action": "compare",
+      "reason": "SM_CHANGELIGHT：无 body（header-only）；recog=ActorId 走全局掩码；param=Light、tag=nClientKey（首跑 500）、series=0（C# src/M2Server/Player/PlayObject.Message.cs:1840 `SendDefMessage(SM_CHANGELIGHT, processMsg.ActorId, baseObject.Light, (short)Config.nClientKey, 0)`；Rust mir2-rs/bins/game-svr/src/enter.rs:711 同形）。Light 由装备光源/游戏内昼夜决定 ⇒ 本轮先 compare（同一库基线、不跨昼夜切换时应逐字节相同）。若下一轮真机出现 param 差异，按 46/50/51 的样式登记 head_mask=[param] 并补依据，不得整帧 ignore",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 657,
+      "action": "compare",
+      "reason": "SM_CHARSTATUSCHANGED：无 body（header-only）；recog=ActorId 走全局掩码；param/tag = nParam1 的低/高字（状态位）、series=HitSpeed（C# src/M2Server/Player/PlayObject.Message.cs:1846 `SendDefMessage(SM_CHARSTATUSCHANGED, processMsg.ActorId, LoWord(nParam1), HiWord(nParam1), HitSpeed)`）。HitSpeed 由属性重算派生，同一库基线两次运行应相同 ⇒ 先 compare；若下一轮出现差异，登记窄掩码（head_mask 里逐个字段）并写明来源",
+      "tier": "L",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     }
   ],
   "db": {

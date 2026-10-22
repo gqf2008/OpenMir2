@@ -6,13 +6,17 @@
   1. 全等 ⇒ 退出码 0；
   2. 改一个字节 ⇒ 1，且报告定位到 ident + 字节偏移；
   3. 规则没覆盖的 ident ⇒ 2（UNCLASSIFIED），显式 --allow-unclassified 才放行；
-  4. 40/58 布局按语义字段比、同长度按字节比；
+  4. 40/58 布局按语义字段比、同长度按字节比；驱动器线缆长度对 (54,78) 先 EDCode
+     归一成 (40,58) 再比，未登记长度对 ⇒ 2（fail-closed）；
   5. 头部掩码、body 区间掩码、显式剔除（--ignore-idents）不会顺带吞掉真差异（「改坏必红」的牙）；
   6. 缺 body / 产物自相矛盾 / JSON 坏行 / 规则缺失 ⇒ 2（fail-closed）；
   7. 库快照逐列 diff（内联格式 + 跨库前缀归一）与「只有一侧有快照」⇒ 2；
   8. 两侧 0 帧（empty_run）/ 两侧都缺同一头部字段 / PENDING 的 ignore 真剔了帧 ⇒ 2，
      只有显式 --allow-empty / --allow-missing-fields 才降级放行；
-  9. 10/41 是真实协议帧（SM_TURN / SM_FEATURECHANGED），默认 compare，不再当心跳剔除。
+  9. 10/41 是真实协议帧（SM_TURN / SM_FEATURECHANGED），默认 compare，不再当心跳剔除；
+ 10. 首跑缺口补齐的 7 条规则（100/520/525/529/530/654/657）逐个「相同 ⇒ 0、改一个字节 ⇒ 1
+     且定位」；520 的 recog（=nChrCount）被取回比较、530 的 recog 走掩码而 body 不掩；
+ 11. 52 线缆 (54,78)/(78,78) 的归一比较与写坏必红。
 
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
@@ -158,6 +162,10 @@ class Selftest(object):
         self.t_unclassified(o, r)
         self.t_missing_rule(o, r)
         self.t_ability_semantics(o, r)
+        self.t_new_idents_rules()
+        self.t_new_idents_diff(o, r)
+        self.t_ability_wire(o, r)
+        self.t_ability_unknown_pair(o, r)
         self.t_head_mask(o, r)
         self.t_ignore(o, r)
         self.t_real_frames_10_41(o, r)
@@ -273,6 +281,178 @@ class Selftest(object):
         self.check("52 语义差异定位到字段 hp（含两侧偏移）",
                    diff is not None and "oracle_offset" in diff and "rust_offset" in diff,
                    diff)
+
+    # -- 首次双栈对拍暴露的 8 条规则缺口（100/520/525/529/530/654/657 + 52 线缆布局对）--
+    NEW_IDENTS = (100, 520, 525, 529, 530, 654, 657)
+
+    def t_new_idents_rules(self):
+        rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
+        for ident in self.NEW_IDENTS:
+            rule = rs.by_ident.get(ident)
+            self.check("内置规则表覆盖 ident=%d（action=compare）" % ident,
+                       rule is not None and rule["action"] == "compare",
+                       rule and rule.get("action"))
+            meta = rule or {}
+            self.check("ident=%d 规则带 reason/tier/approved_by=PENDING" % ident,
+                       all(str(meta.get(k, "")).strip()
+                           for k in ("reason", "tier", "approved_by"))
+                       and str(meta.get("approved_by", "")).upper().startswith("PENDING"),
+                       {k: meta.get(k) for k in ("tier", "approved_by")})
+        self.check("520 的 recog 从全局掩码取回比较（=nChrCount，协议内容）",
+                   rs.by_ident[520].get("head_compare") == ["recog"],
+                   rs.by_ident[520].get("head_compare"))
+        self.check("529/530/525/100/654/657 不额外掩码头部（只靠全局 recog/t_ms）",
+                   all(not rs.by_ident[i].get("head_mask")
+                       and not rs.by_ident[i].get("head_compare")
+                       for i in (100, 525, 529, 530, 654, 657)),
+                   [(i, rs.by_ident[i].get("head_mask")) for i in (100, 525, 529, 530, 654, 657)])
+
+    def t_new_idents_diff(self, o, r):
+        """每个新 ident 都真的参与判定：相同 ⇒ 0；改一个字节 ⇒ 1 且定位到该 ident。"""
+        base_o = json.loads(json.dumps(o))
+        base_r = json.loads(json.dumps(r))
+        for ident in self.NEW_IDENTS:
+            body = bytes([0x41 + (ident % 26)]) * 4  # 合成非空 body：只验规则参与判定
+            heads = dict(phase="new", conn="x", recog=3, param=11, tag=22, series=33)
+            fo = self.frame(ident, body, seq=900, t_ms=7, **heads)
+            fr = self.frame(ident, body, seq=901, t_ms=8, **heads)
+            od = self.write_run("t21-o-%d" % ident, base_o + [fo])
+            rd = self.write_run("t21-r-%d" % ident, base_r + [fr])
+            rc, rep = self.compare(od, rd)
+            self.check("ident=%d 两侧相同 => rc 0（规则已覆盖，不判 UNCLASSIFIED）" % ident,
+                       rc == 0,
+                       (rc, (rep or {}).get("undecidable"),
+                        (rep or {}).get("coverage", {}).get("unclassified_idents")))
+            mut = json.loads(json.dumps(fr))
+            mutated = body[:-1] + bytes([body[-1] ^ 0xFF])
+            mut["body_hex"] = mutated.hex()
+            mut["body_len"] = len(mutated)
+            mut["body_sha256"] = _sha(mutated)
+            rd2 = self.write_run("t21-r2-%d" % ident, base_r + [mut])
+            rc2, rep2 = self.compare(od, rd2)
+            self.check("ident=%d 改一个字节 => rc 1 且定位到 offset=%d" % (ident, len(body) - 1),
+                       rc2 == 1 and any(d.get("ident") == ident
+                                        and d.get("offset") == len(body) - 1
+                                        for d in (rep2 or {}).get("diffs", [])),
+                       (rc2, (rep2 or {}).get("diffs")))
+        # 520 的 recog 必须被比（nChrCount）；530 的 recog 必须仍被全局掩码（会话/游戏时长）
+        fo520 = self.frame(520, b"NAME/1/0/0/30/", phase="selgate", seq=500, t_ms=1, conn="o",
+                           recog=1, param=0, tag=1, series=0)
+        fr520 = self.frame(520, b"NAME/1/0/0/30/", phase="selgate", seq=501, t_ms=2, conn="r",
+                           recog=2, param=0, tag=1, series=0)
+        od = self.write_run("t21-o-520r", [fo520])
+        rd = self.write_run("t21-r-520r", [fr520])
+        rc, rep = self.compare(od, rd)
+        self.check("520 的 recog(nChrCount) 不同 => rc 1（head_compare 生效）",
+                   rc == 1 and any(d.get("ident") == 520 and d.get("field") == "recog"
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        fo530 = self.frame(530, b"127.0.0.1/17100/2", phase="login", seq=600, t_ms=1, conn="o",
+                           recog=2, param=0, tag=0, series=0)
+        fr530 = self.frame(530, b"127.0.0.1/17100/2", phase="login", seq=601, t_ms=2, conn="r",
+                           recog=9, param=0, tag=0, series=0)
+        od = self.write_run("t21-o-530r", [fo530])
+        rd = self.write_run("t21-r-530r", [fr530])
+        rc, rep = self.compare(od, rd)
+        self.check("530 的 recog 走全局掩码 => rc 0 且登记 masked_head",
+                   rc == 0 and any(w.get("ident") == 530 and w.get("field") == "recog"
+                                   and w.get("kind") == "masked_head"
+                                   for w in (rep or {}).get("whitelisted", [])),
+                   (rc, (rep or {}).get("whitelisted")))
+        # 530 的 body（SelGate 地址/端口）绝不能被掩码：改一字节必红
+        fr530b = json.loads(json.dumps(fo530))
+        b = bytes.fromhex(fr530b["body_hex"])[:-1] + b"9"
+        fr530b["body_hex"] = b.hex(); fr530b["body_len"] = len(b); fr530b["body_sha256"] = _sha(b)
+        rd = self.write_run("t21-r-530b", [fr530b])
+        od = self.write_run("t21-o-530b", [fo530])
+        rc, rep = self.compare(od, rd)
+        self.check("530 的 body（ip/port）改一字节 => rc 1（地址/端口不掩码）",
+                   rc == 1 and any(d.get("ident") == 530 and d.get("kind") == "body"
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+
+    def t_ability_wire(self, o, r):
+        """首次真机对拍实测的 52 线缆长度对 (54, 78)：EDCode 归一后按 40/58 语义比。"""
+        lc = self.lc
+        wire40 = lc.encode(self.ability_body(40))
+        wire58 = lc.encode(self.ability_body(58))
+        self.check("selftest 前置：encoded_len(40)=54 / encoded_len(58)=78",
+                   len(wire40) == 54 and len(wire58) == 78, (len(wire40), len(wire58)))
+
+        def with_wire(frames, body):
+            out = json.loads(json.dumps(frames))
+            for fr in out:
+                if fr["ident"] == 52:
+                    fr["body_hex"] = body.hex()
+                    fr["body_len"] = len(body)
+                    fr["body_sha256"] = _sha(body)
+            return out
+
+        o2 = with_wire(o, wire40)
+        r2 = with_wire(r, wire58)
+        od = self.write_run("t22-o", o2)
+        rd = self.write_run("t22-r", r2)
+        rc, rep = self.compare(od, rd)
+        self.check("52 线缆 (54,78) => EDCode 归一后语义全等 => rc 0",
+                   rc == 0, (rc, (rep or {}).get("undecidable")))
+        wl = [w for w in (rep or {}).get("whitelisted", [])
+              if w.get("kind") == "ability_layout"]
+        self.check("52 线缆布局差登记 ability_layout（wire 54/78 + wire_normalized）",
+                   bool(wl) and wl[0].get("wire_normalized") is True
+                   and wl[0].get("oracle_wire_len") == 54
+                   and wl[0].get("rust_wire_len") == 78
+                   and wl[0].get("oracle_len") == 40 and wl[0].get("rust_len") == 58,
+                   wl)
+        # 牙：线缆形态下改 hp 一个语义字段，必须在明文空间定位
+        r3 = with_wire(r, lc.encode(self.ability_body(58, hp=9999)))
+        rd3 = self.write_run("t22-r3", r3)
+        rc3, rep3 = self.compare(od, rd3)
+        self.check("52 线缆改 hp => rc 1 且字段 52_semantic:hp（space=plain）",
+                   rc3 == 1 and any(d.get("field") == "52_semantic:hp"
+                                    and d.get("space") == "plain"
+                                    for d in (rep3 or {}).get("diffs", [])),
+                   (rc3, (rep3 or {}).get("diffs")))
+        # 牙：两侧同一明文布局（58/58）时按明文逐字节比；改一字节必须红，偏移在明文空间
+        o58 = with_wire(o, wire58)
+        r58 = with_wire(r, wire58)
+        od58 = self.write_run("t22-o58", o58)
+        rd58 = self.write_run("t22-r58", r58)
+        rc5, rep5 = self.compare(od58, rd58)
+        self.check("52 两侧同为 58B 线缆（78,78）=> 明文逐字节相等 => rc 0 且登记 wire 归一",
+                   rc5 == 0 and any(w.get("kind") == "ability_layout_wire"
+                                    for w in (rep5 or {}).get("whitelisted", [])),
+                   (rc5, (rep5 or {}).get("whitelisted"), (rep5 or {}).get("undecidable")))
+        bad58 = bytearray(self.ability_body(58))
+        bad58[46] ^= 0xFF  # weight 低字节
+        r4 = with_wire(r, lc.encode(bytes(bad58)))
+        rd4 = self.write_run("t22-r4", r4)
+        rc4, rep4 = self.compare(od58, rd4)
+        self.check("52 线缆归一后同布局改一字节 => rc 1 且偏移=46（明文空间，按字节比）",
+                   rc4 == 1 and any(d.get("ident") == 52 and d.get("kind") == "body"
+                                    and d.get("offset") == 46 and d.get("space") == "plain"
+                                    for d in (rep4 or {}).get("diffs", [])),
+                   (rc4, (rep4 or {}).get("diffs")))
+
+    def t_ability_unknown_pair(self, o, r):
+        """未登记的 52 长度对 => rc 2（fail-closed，新对必须附来源再登记）。"""
+        def with_body(frames, body):
+            out = json.loads(json.dumps(frames))
+            for fr in out:
+                if fr["ident"] == 52:
+                    fr["body_hex"] = body.hex()
+                    fr["body_len"] = len(body)
+                    fr["body_sha256"] = _sha(body)
+            return out
+
+        o2 = with_body(o, b"\x00" * 41)
+        r2 = with_body(r, b"\x00" * 41)
+        od = self.write_run("t23-o", o2)
+        rd = self.write_run("t23-r", r2)
+        rc, rep = self.compare(od, rd)
+        self.check("52 未登记长度对(41,41) => rc 2 (ability_layout_unknown)",
+                   rc == 2 and any(u.get("kind") == "ability_layout_unknown"
+                                   for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
 
     def t_head_mask(self, o, r):
         r2 = json.loads(json.dumps(r))
