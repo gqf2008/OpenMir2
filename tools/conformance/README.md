@@ -123,10 +123,14 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
    **默认掩码** recog（会话 ActorId）、t_ms（墙钟）、conn（会话标签）、seq（本地序号）；
    `phase` 默认比较。所有掩码差异都进 `whitelisted`（带 reason/tier/approved_by），绝不静默。
 4. body 默认逐字节比较；差异记录 `ident + frame_index + offset`、首处不同字节与不同字节数。
-5. `multiset_by_tick` 的 ident：同一 tick 窗口（`tick_tolerance_ms`，默认 0 = 同一 `t_ms`）内
-   **连续**的帧按 `(param,tag,series,body_hex)` 排序后逐项比。顺序不同但集合相同 ⇒ rc 0，
-   并在报告顶层 `masked_order` 里逐组登记两侧原始顺序（不是静默 PASS）；集合不同 ⇒ rc 1，
-   逐条给出缺失/多余的具体帧（`ident + param/tag/series + body 前 16 字节 + body_sha256`）。
+5. `multiset_by_tick` 的 ident：**同 ident 连续段**（被别的 ident 隔开不合并）内的帧按
+   `(param,tag,series,body_hex,phase)` 排序后逐项比。顺序不同但集合相同 ⇒ rc 0，并在报告顶层
+   `masked_order` 里逐组登记两侧原始顺序（不是静默 PASS）；集合不同 ⇒ rc 1，逐条给出缺失/
+   多余的具体帧（`ident + param/tag/series/phase + body 前 16 字节 + body_sha256`）。
+   **`t_ms` 不是判定边界**：它是全局掩码的墙钟字段，按它硬切块会把「两侧帧集完全相同、只是
+   差 1ms」误判成缺帧（reviewer-2 I-3）；`tick_tolerance_ms` 只用于在 `masked_order` 里标注
+   两侧 tick 窗口（`oracle_windows`/`rust_windows` + `tick_split`）。任一侧任一帧缺 `t_ms`
+   ⇒ rc 2（`multiset_tick_missing`，点名 side/frame_index/seq）。
 
 ### 规则动作
 
@@ -135,7 +139,7 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 | `compare` | 头部按全局掩码 + 本条覆盖后比较；body 逐字节比 |
 | `mask_fields` | `fields` 里的头部字段不比（如 46 的 param/tag = 墙钟小时位）；body 仍逐字节比 |
 | `mask_body_ranges` | body 的 `[start,end)` 区间（`end:null` = 到末尾）不比；长度必须相等，否则 body_len 差异。区间内若确有不同，仍登记 `mask_body_ranges` |
-| `multiset_by_tick` | 同一 ident、同一 tick 窗口（`tick_tolerance_ms`，默认 0）内**连续**的帧按 `(param,tag,series,body_hex)` 多重集比（排序后逐项）。顺序不同但集合相同 ⇒ rc 0 并登记 `masked_order`；集合不同 ⇒ rc 1 并给出缺失/多余的具体帧。**只允许用于无因果序的帧**（当前仅 ident 100） |
+| `multiset_by_tick` | **同 ident 连续段**（被别的 ident 隔开不合并）内的帧按 `(param,tag,series,body_hex,phase)` 多重集比（排序后逐项）。顺序不同但集合相同 ⇒ rc 0 并登记 `masked_order`；集合不同 ⇒ rc 1 并给出缺失/多余的具体帧。`tick_tolerance_ms` 只用于标注 tick 窗口（`tick_split`），`t_ms` 不作判定边界；任一帧缺 `t_ms` ⇒ rc 2。**只允许用于无因果序的帧**（当前仅 ident 100） |
 | `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；PENDING 复核的 ignore 真剔了帧 ⇒ UNDECIDABLE |
 | `ability_layout` | 52 SM_ABILITY：`{40,58}` 明文布局对按 18 个语义字段逐项比（布局表从 `tools/loginfixture/capture_login_compare.py` 导入，**不抄第二份**）；线缆字节先按 `54→40 / 78→58` 归一（EDCode，见下）；同长度同布局退回逐字节（归一过的在明文空间比）；未登记长度对 ⇒ UNDECIDABLE |
 
@@ -236,8 +240,16 @@ Rust 偶尔多出 `SM_HIT(14)`）不能用「再跑一次直到 PASS」当判定
    ```sh
    python -I -B -c "import json,collections,sys; c=collections.Counter(); [c.update([json.loads(l)['ident']]) for l in open(sys.argv[1],encoding='utf-8') if l.strip()]; print(dict(sorted(c.items())))" <side>/frames.ndjson
    ```
-4. **取运行**：只在「主帧序列相同」的运行之间比（主帧序列 = 该场景各步骤应出现的不同 ident 序列；
-   顺序抖动只允许发生在已登记 `multiset_by_tick` 的 ident 上）。N 次里若某侧出现 ≥2 种主帧序列，
+   **证据落盘格式（固定文件名，便于复审逐项重放）**：
+   * 每个 run 目录写 `hist.json`：
+     `{"side":"oracle","run":"r1","ident_counts":{"50":1,"100":4},"frame_order":[50,51,...,100]}`；
+   * 场景目录写 `matrix.json`：
+     `{"runs":{"oracle":["r1","r2","r3"],"rust":["r1","r2","r3"]},"matrix":[{"oracle":"r1","rust":"r2","exit_code":0,"verdict":"PASS"},...]}`。
+   直方图、帧序、配对矩阵三者缺一不算跑完。
+4. **取运行与配对范围**：只在「主帧序列相同」的运行之间比（主帧序列 = 该场景各步骤应出现的
+   不同 ident 序列；顺序抖动只允许发生在已登记 `multiset_by_tick` 的 ident 上）。配对范围是
+   两侧 N 次运行的**全交叉 N×N**（不是只取第一对/最后一对代表）：矩阵里每个格子的
+   PASS/FAIL/UNDECIDABLE 与退出码都要贴进 `matrix.json`。N 次里若某侧出现 ≥2 种主帧序列，
    先判该侧不稳定并按第 5 条处置，**不得挑一次好看的当结果**。
 5. **判定**：
    * 某侧**稳定**多发/少发某一对帧（N 次里该 ident 计数始终多/少）⇒ **判缺陷**；确要用规则表登记，
@@ -247,8 +259,9 @@ Rust 偶尔多出 `SM_HIT(14)`）不能用「再跑一次直到 PASS」当判定
    * 只有**两侧 N 次 ident 直方图一致、且每个已登记多重集 ident 的 body 多重集相同**，
      才算该场景的帧集稳定。
 6. **禁止**：把「重跑到绿」写成通过、只贴最后一次绿的报告、用 `--ignore-idents` 掩盖稳定多发帧。
-   已登记的 `multiset_by_tick`（当前只有 ident 100）只放宽**同一 tick 内同 ident 的先后顺序**，
-   报告逐组登记在 `masked_order`；它**不会**让多发/少发帧变成 PASS。
+   已登记的 `multiset_by_tick`（当前只有 ident 100）只放宽**同 ident 连续段内**的先后顺序
+   （被别的 ident 隔开的段不合并），报告逐组登记在 `masked_order`；它**不会**让多发/少发帧
+   变成 PASS，也不会跨过别的 ident 重排。
 
 ## 库快照
 
@@ -293,11 +306,12 @@ Rust 偶尔多出 `SM_HIT(14)`）不能用「再跑一次直到 PASS」当判定
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，**103 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**113 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
 10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
-帧数不同；缺 body；产物自相矛盾；库逐列 diff、跨库前缀、单侧缺快照、`--require-db`。
+块数不同（`block_align`；两侧帧数相同也不谎报帧数差）；缺 body；产物自相矛盾；
+库逐列 diff、跨库前缀、单侧缺快照、`--require-db`。
 
 首跑补规则后新增的断言（防止「加了规则却不判」）：
 
@@ -313,11 +327,19 @@ python -I -B tools/conformance/compare_runs.py selftest
   两侧同为 58B 线缆 ⇒ 明文逐字节比、改一字节 ⇒ 1（偏移 46）；
 * 52 未登记长度对（41,41）⇒ 2（`ability_layout_unknown`，fail-closed）。
 * `multiset_by_tick`（对拍降噪 v2）：内置表**只有 ident=100** 用它（不扩散）且
-  `tick_tolerance_ms=0`；同 tick 两条 100 顺序颠倒 ⇒ 0 且 `masked_order` 登记；
+  `tick_tolerance_ms=0`；两条 100 顺序颠倒 ⇒ 0 且 `masked_order` 登记；
   少一条 100 ⇒ 1 且缺失帧带 param/series/body 前 16 字节；三条 100 轮换（集合相同）⇒ 0；
-  多塞一条 41 ⇒ 1（机制不吞非多重集 ident）；同 tick 一条 body 改掉 ⇒ 1 且缺失+多余各一条；
-  tol=0 时跨 `t_ms`（1000 vs 1003）重排不合并 ⇒ 1，容差 5ms 时同窗口重排 ⇒ 0 且登记；
-  缺 `t_ms` ⇒ 2（`multiset_tick_missing`）；`tick_tolerance_ms<0` 或用在非 multiset 动作 ⇒ 2。
+  多塞一条 41 ⇒ 1（机制不吞非多重集 ident）；一条 body 改掉 ⇒ 1 且缺失+多余各一条。
+  **reviewer-2 复审补的牙**：
+  * I-1 `[100A,42,100B]` vs `[100B,42,100A]` ⇒ 1 且 `masked_order` 为空（绝不跨别的 ident 合并）；
+    对照同序 ⇒ 0；
+  * I-2 运行中的**后续帧**缺 `t_ms` ⇒ 2，并点名 `side`/`frame_index`/`seq`；整侧缺 ⇒ 2；
+  * I-3 同帧集 + 1ms 抖动（`t=1000/1001`）+ 顺序不同 ⇒ 0（不误报缺帧），`masked_order` 里
+    `tick_split=true`、两侧窗口 1 vs 2；容差 5ms ⇒ `tick_split=false`；同序 + 1ms 抖动 ⇒ 0 无 diff；
+  * I-3① 块数不同但帧数相同 ⇒ `block_align`（`oracle_frames==rust_frames==2`），绝不输出
+    「帧数 2 vs 2 不同」；
+  * M-1 重复 body、phase 不同、顺序互换 ⇒ 0 + `masked_order`（phase 已进键）；phase 真不同 ⇒ 1；
+  * `tick_tolerance_ms<0` 或用在非 multiset 动作 ⇒ 2。
 
 **牙**：每条「改坏必红」都断言具体退出码与定位字段/偏移；比较器若退化成「永远 0」，
 自检会以 RED 收场。
@@ -343,7 +365,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 
 | ident | 消息 | action | 判据（细节见 `rules.json` 的 reason） |
 | --- | --- | --- | --- |
-| 100 | `SM_SYSMESSAGE` | multiset_by_tick | body 是 GBK 静态文案（首跑 4 条实测无墙钟/时间戳）。同一 tick 内连续的多条 100 按 `(param,tag,series,body_hex)` 多重集比：C# 的 actor 发件队列是 `PriorityQueue<SendMessage,byte>`、入队优先级 `(byte)wIdent`（`BaseObject.Message.cs:94`），同优先级出队顺序未定义 ⇒ 顺序跨进程不稳；集合不同仍 rc 1 并给出缺失/多余帧。**只给它，不扩散到 10/41/14** |
+| 100 | `SM_SYSMESSAGE` | multiset_by_tick | body 是 GBK 静态文案（首跑 4 条实测无墙钟/时间戳）。**同 ident 连续段**内的多条 100 按 `(param,tag,series,body_hex,phase)` 多重集比：C# 的 actor 发件队列是 `PriorityQueue<SendMessage,byte>`、入队优先级 `(byte)wIdent`（`BaseObject.Message.cs:94`），同优先级出队顺序未定义 ⇒ 顺序跨进程不稳。`t_ms` 是全局掩码的墙钟字段，**不作判定边界**（只标注 `tick_split`）；被别的 ident 隔开的段绝不合并；集合不同仍 rc 1 并给出缺失/多余帧。**只给它，不扩散到 10/41/14** |
 | 520 | `SM_QUERYCHR` | compare + `head_compare:[recog]` | body=角色列表文本；recog=nChrCount（协议内容）⇒ 从全局掩码取回比较 |
 | 525 | `SM_STARTPLAY` | compare | body=GameGate ip/port（同端口方案下必须逐字节相同） |
 | 529 | `SM_PASSOK_SELECTSERVER` | compare | body=服务器名/状态；**保留**首跑真差异（`Idle` vs `0`）继续可定位，不掩码 |
@@ -365,5 +387,5 @@ python -I -B tools/conformance/compare_runs.py selftest
   不得整帧 ignore。
 * `529` 的 `Idle` vs `0`、以及「C# 多出 10/100/654/657」是**真实行为差异**
   （`docs/conformance-first-dual-run-20261023.md` §2.1/§2.2），不是规则缺口：规则补齐后重跑，
-  它们仍会以 `body_len` / `frame_count` 差异出现，直到服务端行为被另卡修好。
+  它们仍会以 `body_len` / `block_align` / `multiset_missing`/`multiset_extra` 等差异出现，直到服务端行为被另卡修好。
 * 全部规则 `approved_by` 均为 `PENDING owner/coordinator review`，尚未获批准。
