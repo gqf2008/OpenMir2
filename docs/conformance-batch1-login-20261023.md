@@ -235,3 +235,20 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 - ⇒ `bag_equip` / `eat_item` / `pickup_item` 三个场景**暂时无法产出证据**；需要先确认 oracle 里背包查询的
   真实回包号与前置条件（是否必须 NPC 仓库会话 / 是否走 `SM_SENDUSEITEMS(621)` 路径）。
 - 附带观察：本跑 C# 也出现了 `SM_HIT(14)`，与 §12 的「两侧都会发」一致。
+
+## 15. 本批证据 → A 卡对照（供验收判定）
+
+| A 卡 | 本批证据 | 结论 |
+|---|---|---|
+| `openmir2-login-654-order` | 两侧 `654` 各 1 条、位次一致（21/22 对齐） | **有证据** |
+| `openmir2-login-charstatus-657` | 两侧 `657` 各 2 条、邻居一致 | **有证据** |
+| `openmir2-login-frame-order-52-752` | `752` 各 1 条位次一致；`52` body 54 vs 78 | 帧序有证据；`52` 布局待规则 |
+| `openmir2-login-numeric-gaps` | 除 `52`/同 tick `100` 外逐字节相同（6 对 run） | **有证据** |
+| `openmir2-npc-def-loading` | 点庄家两侧各得 `643`，正文逐字相同 | **有证据** |
+| `openmir2-npcs-fixed-loading` | NPC `10+41` 出现帧两侧均有（C# 偶发多一对） | **有证据（含偶发差）** |
+| `openmir2-npc-hit-frames` | `SM_HIT(14)` 两侧都发，**series C#=0 / Rust=4** | **有证据（差异已定位到字段）** |
+| `openmir2-openybdeal-host-wiring` | `@kaiz`/`@chouma` 应答迟到且不稳定 | 受阻（需 oracle 应答口径） |
+| `openmir2-script-take-persist` / `persist-useitems-wiring` / `click-path-bag-writeback` | 22+ run 无 `SM_BAGITEMS(201)` | 受阻（需 oracle 回包口径） |
+| `openmir2-gm-commands-design` | `CM_SAY` 两侧均无回包 | 受阻（需确认回包号/前置） |
+
+前 7 张卡的证据已可直接引用；后三组需要 Leader 回口径（`5511ea0d` gm、`25220260` bag、`2840f903` dice）。
