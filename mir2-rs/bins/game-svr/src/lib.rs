@@ -6037,8 +6037,12 @@ fn emit_script_frames(
     frames: &[game_svr::npc::SendMsg],
 ) -> usize {
     let mut sent = 0usize;
-    // `MsgQueue` 出队序 = `((byte)wIdent, 入队序)`（`BaseObject.Message.cs:180`）⇒ 稳定按
-    // `ident as u8` 排序：`RM_GOLDCHANGED`(10136&0xFF=56) 先于 `RM_GAMEGOLDCHANGED`(8084&0xFF=148)。
+    // oracle `MsgQueue` = `PriorityQueue<SendMessage, byte>`，优先级 = `(byte)wIdent`
+    // （`ActorEntity.cs:16`、`BaseObject.Message.cs:181`）⇒ 按 `ident as u8` 升序：
+    // `RM_GAMEGOLDCHANGED`(8084&0xFF=148) 先于 `RM_GOLDCHANGED`(10136&0xFF=152)。
+    // **同一优先级内只是近似 FIFO**：.NET `PriorityQueue` 对相等优先级不保证稳定，
+    // 本仓 `sort_by_key` 是稳定排序 ⇒ 退化为「入队序」。两者仅在同 ident 有多帧时才可能
+    // 分叉；本路径每 ident 至多一帧（`SendUpdateMsg` 先合并同 ident 旧条目）。
     let mut ordered: Vec<&game_svr::npc::SendMsg> = frames.iter().collect();
     ordered.sort_by_key(|f| f.ident as u8);
     for f in ordered {
@@ -23996,7 +24000,9 @@ mod tests {
     /// `ScriptEngine.cs:748-790` 对 `[RING]` 先 Ringl 后 Ringr，命中即 `Index = 0`）。
     /// 本仓 `NpcPlayer` 此前未覆写 `use_items_*`（trait 默认 no-op）⇒ 引擎 Takew 生产恒 no-op。
     ///
-    /// 牙：删 `run_merchant_goto` 里的 `write_back_player_use_items` 调用 ⇒ 佩戴位仍是 9。
+    /// 牙①：删 `run_merchant_goto` 里的 `write_back_player_use_items` 调用 ⇒ 佩戴位仍是 9。
+    /// 牙②：删 `handle_shop_cmd` 里的 `for slot in use_slots { sync_use_item_slot_to_entity(..) }`
+    /// ⇒ 世界实体槽停在默认零槽（`make_index=0`/`dura_max=0`）⇒ 实体断言红。
     #[test]
     fn takew_unequips_and_persists_through_production_path() {
         use game_svr::bag::BagItem;
@@ -24031,15 +24037,23 @@ mod tests {
             "只跑 @main（无 TAKEW）⇒ 佩戴位原样"
         );
         rig.dlg_select("@ya57");
+        let s = rig.sessions["hero"].use_items[7]
+            .as_ref()
+            .expect("TAKEW 后会话仍保留该槽对象（oracle 只清 Index）");
         assert_eq!(
-            rig.sessions["hero"].use_items[7].as_ref().map(|i| i.index),
-            Some(0),
-            "TAKEW [RING] 必须把 Ringl 的 Index 置 0 并写回会话（落 hum_items）"
+            (s.index, s.make_index, s.dura_max),
+            (0, 7001, 5000),
+            "TAKEW [RING] 只把 Index 置 0，会话仍保留 MakeIndex/DuraMax（落 hum_items）"
         );
         let e = rig.world.entities.get(1).expect("hero 实体");
         assert_eq!(
-            e.use_items[7].index, 0,
-            "世界实体槽必须同步（否则下一 tick 的实体→会话回写会撤掉 TAKEW）"
+            (
+                e.use_items[7].index,
+                e.use_items[7].make_index,
+                e.use_items[7].dura_max
+            ),
+            (0, 7001, 5000),
+            "世界实体槽必须同步成同一件（只清 Index）——默认零槽的 make_index/dura_max 均为 0"
         );
     }
 

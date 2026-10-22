@@ -1001,15 +1001,16 @@ impl ScriptPlayer for NpcPlayer<'_> {
     /// `PlayObject.DecGold`（`PlayObject.Base.cs:754-763`）：`Gold >= nGold` 才扣，否则**不动**。
     /// oracle 返回 `bool`（调用点 `GotoLableTakeItem` 丢弃返回值），本 trait 无返回值。
     fn dec_gold(&mut self, n: i32) {
+        // C# 是无检查 int 减法（溢出回绕）⇒ 赋值也用 `wrapping_sub`，debug 构建不 panic。
         if self.gold >= n {
-            self.gold -= n;
+            self.gold = self.gold.wrapping_sub(n);
         }
     }
     /// `PlayObject.IncGold`（`PlayObject.Base.cs:168-175`）：`Gold + tGold <= HumanMaxGold` 才加。
     fn inc_gold(&mut self, n: i32) {
         // C# 是无检查 int 加法（溢出回绕）⇒ 用 `wrapping_add` 复刻，不 panic。
         if self.gold.wrapping_add(n) <= self.human_max_gold {
-            self.gold += n;
+            self.gold = self.gold.wrapping_add(n);
         }
     }
     /// `BaseObject.GoldChanged`（`BaseObject.cs:585-591`）：`Race == ActorRace.Play` ⇒
