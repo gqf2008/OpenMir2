@@ -68,9 +68,10 @@
 //!   oracle 对这些 StdMode 有**成功**路径（StdMode 3 的 Shape 13 **无条件**返回 true；其余为条件成功），
 //!   成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|1|2` 与 **31 的 `AniCount != 0`**
 //!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）。
-//! - **StdMode 31 / AniCount == 0（解包）**：oracle 在 `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）时
-//!   解包出 6 件（`UnbindList`）；本接缝未实现 ⇒ 容量够时是已证差异（T-17），容量不足时两侧一致地不吃。
-//!   `StdMode=5`（`case` 名单外）才是两侧一致地不吃。
+//! - **StdMode 31 / AniCount == 0（解包）**：已实现（卡 `openmir2-unbindlist-consumer`）——
+//!   `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）时移除本件并解包 6 件
+//!   （`UnbindList` 按 `StdItem.Shape` 查名；未命中 ⇒ 空串 ⇒ 0 件）。`StdMode=5`（`case` 名单外）
+//!   才是两侧一致地不吃。
 //! - **StdMode 1 只补到 `HungerStatus` + `RefMyStatus` 的发帧**：oracle `RefMyStatus()` 里的
 //!   `RecalcAbilitys()` **整链**（由装备/buff 算 `WAbil`）只用 `ability::recalc_abilitys` 的最小等价物
 //!   顶上（`ctx.recalc`）；它**尚未**覆盖 `PlayObject.RecalcAbilitys` 的套装/`ExtraAbil`/`GetCharStatus`
@@ -82,7 +83,8 @@
 //! - `ClientUseItems` 的 `sItemName` 形参在 oracle 里**未被使用**（只按 `MakeIndex` 找），已照搬。
 
 use crate::ability::{recalc_abilitys, Ability, ItemCatalog, RecalcInputs};
-use crate::bag::{BagItem, Frame};
+use crate::bag::{BagItem, Frame, MAX_BAG_ITEM};
+use crate::unbindlist::UnbindList;
 
 /// `CM_EAT`（`src/OpenMir2/Messages.cs` 的 `CM_EAT = 1006`；
 /// `PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(nParam1, Msg)`）。
@@ -172,8 +174,12 @@ pub struct UseItemContext<'a> {
     /// `PlayObject.Envir.Flag.boNODRUG`（地图禁药；`EatItems` 的首个守卫）。
     pub no_drug: bool,
     /// `SystemShare.FunctionNPC != null`（`PlayObject.Base.cs:1072` `UseStdModeFunItem` 的**唯一**判据）。
-    /// StdMode 31 的 `AniCount != 0` 分支用它；`AniCount == 0` 的解包分支未实现（T-17）。
+    /// StdMode 31 的 `AniCount != 0` 分支用它。
     pub function_npc_present: bool,
+    /// `M2Share.UnbindList`（`M2Share.cs:85`）：`StdMode 31 / AniCount == 0` 解包时按
+    /// `StdItem.Shape` 查物品名（`ClientUseItemsGetUnbindItemName`，`PlayObject.Operate.cs:578-580`；
+    /// **未命中 = 空串**）。空表 = 未装载 ⇒ `CopyToUserItemFromName("")` 恒 false ⇒ 解包 0 件。
+    pub unbind: &'a UnbindList,
     /// `Config.RedMsgFColor`（禁药 `SysMsg(Red)` 的前景色）。
     pub red_msg_fcolor: u16,
     /// `Config.RedMsgBColor`（禁药 `SysMsg(Red)` 的背景色）。
@@ -245,9 +251,16 @@ pub struct UseItemOutcome {
     pub immediate_frames: Vec<Frame>,
     /// 进 `MsgQueue` 的延时通知（保序）。
     pub notices: Vec<QueuedNotice>,
+    /// `ClientUseItemsGetUnBindItems`（`PlayObject.Operate.cs:582-599`）新建的**解包物品**（生成序）。
+    ///
+    /// oracle 对每件调 `SendAddItem(userItem)`（`PlayObject.Base.cs:198-228`，**立即帧**
+    /// `SM_ADDITEM(200)`，尾 = `EDCode.EncodeBuffer(ClientItem)`），发生在尾部的
+    /// `SendDefMessage(SM_EAT_OK)` **之前** ⇒ 接线层必须先下发本列、再下发 `immediate_frames`。
+    /// 空 = 本次没有解包（`StdMode != 31` / `AniCount != 0` / 容量门失败 / 空名或名字查不到模板）。
+    pub added_items: Vec<BagItem>,
 }
 
-/// `ClientUseItems`（`PlayObject.Operate.cs:601`）的纯函数等价物——**本片只覆盖 StdMode 0**。
+/// `ClientUseItems`（`PlayObject.Operate.cs:601`）的纯函数等价物（StdMode 0/1/2 + 31 的两支）。
 ///
 /// `item_list` 原地变更（吃掉则移除命中的那一件），`state` 原地变更（`WAbil`/`IncHealth`/`IncSpell`/
 /// `UserUnLockDurg`）。返回的 `immediate_frames`/`notices` 由接线层按各自通道下发。
@@ -255,10 +268,14 @@ pub fn use_item(
     ctx: &UseItemContext<'_>,
     state: &mut UseItemActorState,
     item_list: &mut Vec<BagItem>,
+    // `M2Share.GetItemNumber()`（`M2Share.cs:547`）：`CopyToUserItemFromName` 每建一件就取一次
+    // 新 `MakeIndex`。与宿主 `GIVE`/新手物品**共用同一个会话计数器**。
+    item_number: &mut i32,
 ) -> UseItemOutcome {
     let mut eaten = false;
     let mut removed_index: Option<usize> = None;
     let mut notices: Vec<QueuedNotice> = Vec::new();
+    let mut added_items: Vec<BagItem> = Vec::new();
 
     if ctx.can_use_item {
         if !ctx.dead {
@@ -356,9 +373,40 @@ pub fn use_item(
                             //     `if (SystemShare.FunctionNPC != null) { GotoLable("@StdModeFunc"+AniCount); return true; }`
                             //     ——`GotoLable` 的脚本派发本身不在本接缝作用域（登记 T-17），但**是否吃掉**
                             //     只取决于 `FunctionNPC` 是否存在，这条已 1:1。
-                            //   - `AniCount == 0` ⇒ 解包（`ClientUseItemsGetUnBindItems`，`UnbindList` 出 6 件）：
-                            //     未实现；容量不足时两侧一致地不吃，容量足够时是已证差异（T-17）。
-                            31 if tpl.ani_count != 0 && ctx.function_npc_present => {
+                            //   - `AniCount == 0` ⇒ 解包（`:658-666`）：
+                            //     `if (ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem)` 才吃（容量门取**移除前**的 Count）；
+                            //     `ClientUseItemsGetUnBindItems(ClientUseItemsGetUnbindItemName(stdItem.Shape), 6)`
+                            //     逐件 `CopyToUserItemFromName`，**失败即 break**（未命中 Shape ⇒ 空名 ⇒ 0 件）。
+                            31 if tpl.ani_count != 0 => {
+                                // `UseStdModeFunItem`：只有 `FunctionNPC != null` 才吃掉。
+                                eaten = ctx.function_npc_present;
+                            }
+                            // 容量门在**移除本件之前**取 `ItemList.Count`（`PlayObject.Operate.cs:659`）：
+                            // `Count + 6 - 1 <= 46`；不满足 ⇒ 落到 `_ => {}`（不吃、`SM_EAT_FAIL`）。
+                            31 if item_list.len() + 6 - 1 <= MAX_BAG_ITEM => {
+                                // `ClientUseItemsGetUnbindItemName(stdItem.Shape)`：未命中 ⇒ 空串。
+                                let name = ctx
+                                    .unbind
+                                    .get_unbind_item_name(i32::from(tpl.shape))
+                                    .to_string();
+                                for _ in 0..6 {
+                                    // `CopyToUserItemFromName`（`GameItemSystem.cs:113-140`）：
+                                    // 空名 ⇒ false；名字查不到模板 ⇒ false ⇒ break（不再继续建件）。
+                                    let Some(index) = ctx.catalog.find_by_name(&name) else {
+                                        break;
+                                    };
+                                    let Some(tpl_unbind) = ctx.catalog.get(index) else {
+                                        break;
+                                    };
+                                    *item_number += 1;
+                                    added_items.push(BagItem {
+                                        make_index: *item_number,
+                                        index,
+                                        dura: tpl_unbind.dura_max,
+                                        dura_max: tpl_unbind.dura_max,
+                                        desc: [0; 14],
+                                    });
+                                }
                                 eaten = true;
                             }
                             // StdMode 3/4（ExtraAbil/GetExp、书）未实现 ⇒ 与 oracle 在未禁药形态下的
@@ -368,6 +416,10 @@ pub fn use_item(
                         if eaten {
                             item_list.remove(i);
                             removed_index = Some(i);
+                            // oracle `:661-663`：先 `Dispose(userItem) + ItemList.RemoveAt(i)`，
+                            // 再由 `ClientUseItemsGetUnBindItems` 逐件 `ItemList.Add`。
+                            // 追加放在移除**之后**，下标语义与重量重算（`WeightChanged()`，`:676`）同源。
+                            item_list.extend(added_items.iter().cloned());
                         }
                     }
                 }
@@ -409,6 +461,7 @@ pub fn use_item(
         removed_index,
         immediate_frames,
         notices,
+        added_items,
     }
 }
 
@@ -574,6 +627,15 @@ mod tests {
 
     /// 构造一条与探针同口径的 `RecalcAbilitys` 输入：`Abil` = 用例的 `wabil_before`（探针里
     /// `po.Abil = wabilPre`）、无装备、`bag` = 当前背包 `Index` 列表、无 buff。
+    /// 测试用**空解包表**（`M2Share.UnbindList` 空 = 未装载 / 无该 Shape）。
+    ///
+    /// 夹具 `eat_vectors.json` 的 StdMode 31 用例只有两条：`AniCount != 0`（走 FunctionNPC 门）
+    /// 与 `eat_fail_stdmode31_unbind_bag_full`（42 件 ⇒ 容量门 `42+6-1 > 46` 不通过）——
+    /// 两者都不会读表，空表与 oracle 探针（未装载 UnbindList）同口径。
+    fn no_unbind() -> UnbindList {
+        UnbindList::default()
+    }
+
     fn recalc_inputs_default<'a>(abil: &'a Ability, bag: &'a [u16]) -> RecalcInputs<'a> {
         const BONUS: NakedAbility = NakedAbility {
             dc: 0,
@@ -615,6 +677,7 @@ mod tests {
             let abil = ability(&case["wabil_before"]);
             let bag: Vec<u16> = item_list.iter().map(|it| it.index).collect();
             let recalc = recalc_inputs_default(&abil, &bag);
+            let unbind = no_unbind();
             let ctx = UseItemContext {
                 catalog: &cat,
                 can_use_item: c["can_use_item"].as_bool().unwrap(),
@@ -623,6 +686,7 @@ mod tests {
                 make_index: i32v(&case["request"]["make_index"]),
                 no_drug: c["no_drug"].as_bool().unwrap(),
                 function_npc_present: c["function_npc_present"].as_bool().unwrap(),
+                unbind: &unbind,
                 red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
                 red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
                 recalc: Some(recalc),
@@ -635,7 +699,8 @@ mod tests {
                 hunger_status: i32v(&case["hunger_status_before"]),
             };
 
-            let out = use_item(&ctx, &mut state, &mut item_list);
+            let mut item_number = 0;
+            let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
             let expect = &case["expect"];
 
             assert_eq!(
@@ -710,6 +775,7 @@ mod tests {
             hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
+        let unbind = no_unbind();
         let ctx = UseItemContext {
             catalog: &cat,
             can_use_item: true,
@@ -718,11 +784,13 @@ mod tests {
             make_index: 1,
             no_drug: false,
             function_npc_present: false,
+            unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
         };
-        let out = use_item(&ctx, &mut state, &mut item_list);
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(out.eaten);
         assert_eq!(state.wabil.hp, 55, "101/100*5 = 5.05 ⇒ +5");
         assert_eq!(state.wabil.mp, 46, "55/100*10 = 5.5 ⇒ +6（半数远离零）");
@@ -749,6 +817,7 @@ mod tests {
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
+        let unbind = no_unbind();
         let ctx = UseItemContext {
             catalog: &cat,
             can_use_item: false,
@@ -757,11 +826,13 @@ mod tests {
             make_index: 1,
             no_drug: false,
             function_npc_present: false,
+            unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
         };
-        let out = use_item(&ctx, &mut state, &mut item_list);
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(!out.eaten);
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert_eq!(out.notices.len(), 1);
@@ -798,6 +869,7 @@ mod tests {
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
+        let unbind = no_unbind();
         let ctx = UseItemContext {
             catalog: &cat,
             can_use_item: true,
@@ -806,11 +878,13 @@ mod tests {
             make_index: 1,
             no_drug: false,
             function_npc_present: false,
+            unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
         };
-        let out = use_item(&ctx, &mut state, &mut item_list);
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(!out.eaten);
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert!(out.notices.is_empty());
@@ -829,6 +903,7 @@ mod tests {
             .iter()
             .find(|c| c["name"] == "eat_ok_stdmode2_noop")
             .expect("夹具必须含 eat_ok_stdmode2_noop");
+        let unbind = no_unbind();
         let ctx = UseItemContext {
             catalog: &cat,
             can_use_item: true,
@@ -837,6 +912,7 @@ mod tests {
             make_index: 1,
             no_drug: false,
             function_npc_present: false,
+            unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
@@ -849,7 +925,8 @@ mod tests {
             hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
-        let out = use_item(&ctx, &mut state, &mut item_list);
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(out.eaten, "StdMode 2 必吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
         assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
@@ -873,6 +950,7 @@ mod tests {
             .find(|c| c["name"] == "eat_fail_nodrug_no_consume")
             .expect("夹具必须含 eat_fail_nodrug_no_consume");
         let c = &case["ctx"];
+        let unbind = no_unbind();
         let ctx = UseItemContext {
             catalog: &cat,
             can_use_item: true,
@@ -881,6 +959,7 @@ mod tests {
             make_index: 1,
             no_drug: c["no_drug"].as_bool().unwrap(),
             function_npc_present: false,
+            unbind: &unbind,
             red_msg_fcolor: u16v(&c["red_msg_fcolor"]),
             red_msg_bcolor: u16v(&c["red_msg_bcolor"]),
             recalc: None,
@@ -894,7 +973,8 @@ mod tests {
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
-        let out = use_item(&ctx, &mut state, &mut item_list);
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(!out.eaten, "禁药地图不许吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert_eq!(out.notices.len(), 1, "禁药只排一条 SysMsg");
@@ -929,6 +1009,7 @@ mod tests {
             hunger_status: 0,
         };
         let mut item_list = bag_items(&case["item_list_before"]);
+        let unbind = no_unbind();
         let ctx = UseItemContext {
             catalog: &cat,
             can_use_item: true,
@@ -937,11 +1018,13 @@ mod tests {
             make_index: 1,
             no_drug: false,
             function_npc_present: true,
+            unbind: &unbind,
             red_msg_fcolor: 255,
             red_msg_bcolor: 56,
             recalc: None,
         };
-        let out = use_item(&ctx, &mut state, &mut item_list);
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(out.eaten, "FunctionNPC 存在 ⇒ StdMode 31/AniCount!=0 必吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
         assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
@@ -957,14 +1040,273 @@ mod tests {
         };
         let mut item_list = bag_items(&case["item_list_before"]);
         let before = item_list.clone();
+        let unbind = no_unbind();
         let ctx = UseItemContext {
             function_npc_present: false,
+            unbind: &unbind,
             ..ctx
         };
-        let out = use_item(&ctx, &mut state, &mut item_list);
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(!out.eaten, "FunctionNPC 缺失 ⇒ 不吃");
         assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
         assert!(out.notices.is_empty());
         assert_eq!(item_list, before, "拒绝时不许动背包");
+    }
+
+    /// **卡 `openmir2-unbindlist-consumer`（StdMode 31 / AniCount == 0 解包）**：
+    /// `UnbindList` 命中 ⇒ 吃掉捆装包并按 `CopyToUserItemFromName` 生成 **6 件**
+    /// （`PlayObject.Operate.cs:658-666` / `:582-599`）：`MakeIndex` 逐件取自会话计数器、
+    /// `Dura = DuraMax = tpl.DuraMax`；重量按**解包后**的背包重算（`WeightChanged()`，`:676`）。
+    ///
+    /// 牙：删 `31 =>` 解包臂（回落 `_ => {}`）⇒ `eaten` 为 false、背包不变 ⇒ 必红。
+    #[test]
+    fn unbind_stdmode31_creates_six_items_and_reweights() {
+        let mut catalog = StdItemCatalog::new();
+        catalog.insert(
+            50,
+            StdItem {
+                name: "捆装包".into(),
+                std_mode: 31,
+                shape: 5,
+                weight: 1,
+                ani_count: 0,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            60,
+            StdItem {
+                name: "解包物".into(),
+                std_mode: 0,
+                weight: 2,
+                dura_max: 7,
+                ..Default::default()
+            },
+        );
+        let mut unbind = UnbindList::default();
+        unbind.map.insert(5, "解包物".to_string());
+        let ctx = UseItemContext {
+            catalog: &catalog,
+            can_use_item: true,
+            dead: false,
+            actor_id: 7,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: false,
+            unbind: &unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let mut state = UseItemActorState::default();
+        let mut item_list = vec![BagItem {
+            make_index: 1,
+            index: 50,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let mut item_number = 100;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        assert!(out.eaten, "容量门通过 ⇒ 吃掉捆装包");
+        assert_eq!(out.removed_index, Some(0));
+        assert_eq!(
+            out.added_items.len(),
+            6,
+            "`ClientUseItemsGetUnBindItems(name, 6)`"
+        );
+        assert_eq!(
+            out.added_items
+                .iter()
+                .map(|i| i.make_index)
+                .collect::<Vec<_>>(),
+            vec![101, 102, 103, 104, 105, 106],
+            "`CopyToUserItemFromName` 每件取一次 `GetItemNumber()`"
+        );
+        assert!(
+            out.added_items
+                .iter()
+                .all(|i| i.index == 60 && i.dura == 7 && i.dura_max == 7),
+            "`Index = 表内位置+1`、`Dura = DuraMax = tpl.DuraMax`"
+        );
+        assert_eq!(item_number, 106, "会话计数器被 6 件各消费一次");
+        assert_eq!(item_list.len(), 6, "移除 1 件 + 生成 6 件");
+        assert!(item_list.iter().all(|i| i.index == 60));
+        assert_eq!(state.wabil.weight, 12, "重量按解包后的背包重算（6 × 2）");
+        assert_eq!(
+            out.immediate_frames,
+            vec![Frame {
+                ident: SM_EAT_OK,
+                recog: 0,
+                param: 0,
+                tag: 0,
+                series: 0,
+            }]
+        );
+        assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
+    }
+
+    /// **未命中 Shape ⇒ 空串、0 件**（`ClientUseItemsGetUnbindItemName` 返回 `string.Empty`，
+    /// `CopyToUserItemFromName("")` 恒 false ⇒ break）：**捆装包照吃、`SM_EAT_OK` 照发**，
+    /// 背包净少 1 件、无新增（不是「什么都不发生」——oracle 的 `eatSuccess = true` 在解包调用之后）。
+    ///
+    /// 牙：把 `eaten = true` 挪进「added > 0」的条件里 ⇒ 本用例 `eaten` 断言红。
+    #[test]
+    fn unbind_missing_shape_eats_pack_but_creates_nothing() {
+        let mut catalog = StdItemCatalog::new();
+        catalog.insert(
+            50,
+            StdItem {
+                name: "捆装包".into(),
+                std_mode: 31,
+                shape: 5,
+                weight: 1,
+                ani_count: 0,
+                ..Default::default()
+            },
+        );
+        let unbind = UnbindList::default();
+        let ctx = UseItemContext {
+            catalog: &catalog,
+            can_use_item: true,
+            dead: false,
+            actor_id: 7,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: false,
+            unbind: &unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let mut state = UseItemActorState::default();
+        let mut item_list = vec![BagItem {
+            make_index: 1,
+            index: 50,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        assert!(out.eaten, "解包调用不改变 eatSuccess（Operate.cs:665）");
+        assert!(out.added_items.is_empty(), "空名 ⇒ 0 件");
+        assert!(item_list.is_empty(), "捆装包被吃掉");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
+        assert_eq!(item_number, 0, "没建件 ⇒ 计数器不动");
+
+        // 另一半：Shape 命中但**名字查不到模板** ⇒ 同样 0 件、照吃。
+        let mut unbind2 = UnbindList::default();
+        unbind2.map.insert(5, "不存在的物品".to_string());
+        let ctx2 = UseItemContext {
+            unbind: &unbind2,
+            ..ctx
+        };
+        let mut item_list2 = vec![BagItem {
+            make_index: 1,
+            index: 50,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let out2 = use_item(&ctx2, &mut state, &mut item_list2, &mut item_number);
+        assert!(out2.eaten);
+        assert!(out2.added_items.is_empty());
+        assert!(item_list2.is_empty());
+    }
+
+    /// **容量门取「移除前」的 `ItemList.Count`**（`PlayObject.Operate.cs:659`）：
+    /// `Count + 6 - 1 <= 46` ⇔ `Count <= 41`。42 件 ⇒ 不吃（`SM_EAT_FAIL`，背包不动）；
+    /// 41 件 ⇒ 吃，移除 1 + 新增 6。
+    ///
+    /// 牙：把容量门改成 `item_list.len() + 6 <= MAX_BAG_ITEM`（少减 1）⇒ 41 件那半变不吃 ⇒ 红。
+    #[test]
+    fn unbind_capacity_gate_uses_pre_removal_count() {
+        let mut catalog = StdItemCatalog::new();
+        catalog.insert(
+            50,
+            StdItem {
+                name: "捆装包".into(),
+                std_mode: 31,
+                shape: 5,
+                weight: 1,
+                ani_count: 0,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            60,
+            StdItem {
+                name: "解包物".into(),
+                std_mode: 0,
+                weight: 1,
+                dura_max: 7,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            70,
+            StdItem {
+                name: "填充".into(),
+                std_mode: 0,
+                weight: 1,
+                ..Default::default()
+            },
+        );
+        let mut unbind = UnbindList::default();
+        unbind.map.insert(5, "解包物".to_string());
+        let ctx = UseItemContext {
+            catalog: &catalog,
+            can_use_item: true,
+            dead: false,
+            actor_id: 7,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: false,
+            unbind: &unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let pack = BagItem {
+            make_index: 1,
+            index: 50,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        let filler = |i: i32| BagItem {
+            make_index: 100 + i,
+            index: 70,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        let mut state = UseItemActorState::default();
+        let mut item_number = 0;
+
+        // 42 件：42 + 6 - 1 = 47 > 46 ⇒ 容量门不通过。
+        let mut full: Vec<BagItem> = vec![pack.clone()];
+        full.extend((0..41).map(filler));
+        let before = full.clone();
+        let out = use_item(&ctx, &mut state, &mut full, &mut item_number);
+        assert!(
+            !out.eaten,
+            "42 件超容量 ⇒ 不吃（与夹具 unbind_bag_full 同口径）"
+        );
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_FAIL);
+        assert!(out.added_items.is_empty());
+        assert_eq!(full, before, "拒绝时不许动背包");
+        assert_eq!(item_number, 0);
+
+        // 41 件：41 + 6 - 1 = 46 ≤ 46 ⇒ 通过。
+        let mut fits: Vec<BagItem> = vec![pack];
+        fits.extend((0..40).map(filler));
+        let out = use_item(&ctx, &mut state, &mut fits, &mut item_number);
+        assert!(out.eaten, "41 件正好 46 ≤ MaxBagItem ⇒ 解包");
+        assert_eq!(out.added_items.len(), 6);
+        assert_eq!(fits.len(), 46, "移除 1 + 新增 6 ⇒ 46 件");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
     }
 }
