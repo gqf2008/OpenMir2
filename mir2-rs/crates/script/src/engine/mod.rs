@@ -148,6 +148,26 @@ pub trait ScriptPlayer {
     fn line_variable_text(&mut self, msg: &str) -> String {
         msg.to_string()
     }
+    /// `ProcessingBase.GetLineVariableText(playerActor, sMsg)`（`ProcessingBase.cs:1438-1459`）：
+    /// **动作 / 条件参数**文本展开。缺省实现按 oracle 逐行（循环骨架见
+    /// [`expand_action_line_variable_text`]）。
+    ///
+    /// **与说词版 [`Self::line_variable_text`] 是两支，不可混用**：
+    /// - 说词（`NormNpc.cs:245-273`）**丢弃** `ArrestStringEx` 的剩余串 ⇒ 扫描**不前进**；
+    /// - 本支把返回的剩余串赋回 `tempstr` ⇒ 扫描**前进**（首个非 `$` token 不再挡路）。
+    ///
+    /// 展开规则交给 [`Self::action_variable_text`]（缺省不认任何变量）；注意 oracle 这一侧的
+    /// `GetVariableText` 与说词侧的 `NormNpc.GetVariableText` **不是同一张表**，实现方不得
+    /// 拿说词展开器顶替（`bins/game-svr/src/npc.rs` 的 `NpcPlayer::line_variable_text` 文档
+    /// 「两支的展开器也不是同一张表」一节有逐行证据）。
+    fn action_line_variable_text(&mut self, msg: &str) -> String {
+        expand_action_line_variable_text(msg, |variable, s_msg| {
+            self.action_variable_text(variable, s_msg)
+        })
+    }
+    /// `ProcessingBase.GetVariableText(playerActor, ref sMsg, sVariable)` 的玩家侧部分。
+    /// 缺省空实现（与 [`Self::line_variable_text`] 的缺省同形：不认任何变量）。
+    fn action_variable_text(&mut self, _variable: &str, _msg: &mut String) {}
 
     // ---- B2/M4 条件批次新增（`ConditionProcessingSys`）----
     // 说明：世界服务尚未接入的取值一律以「世界缺省」返回（0 / 空 / false / None），
@@ -712,6 +732,60 @@ pub trait ScriptNpc {
     }
     /// `normNpc.SendSayMsg(msg)`（`ActionOfLineMsg` 的 nParam1=4 分支）
     fn send_say_msg(&mut self, _msg: &str) {}
+}
+
+/// `ProcessingBase.GetLineVariableText(playerActor, sMsg)` 的**循环骨架**
+/// （`src/Modules/ScriptEngine/ProcessingBase.cs:1438-1459`）：
+///
+/// ```text
+/// tempstr = sMsg;
+/// while (tempstr.IndexOf('>') > 0) {                              // `<= 0` ⇒ 无 `>` / `>` 在位置 0 即止
+///     tempstr = HUtil32.ArrestStringEx(tempstr, "<", ">", ref sText);   // **前进**（返回值赋回）
+///     if (sText != "" && sText[0] == '$') GetVariableText(playerActor, ref sMsg, sText);
+///     if (++nC >= 101) break;
+/// }
+/// return sMsg;
+/// ```
+///
+/// 要点（照搬，不修）：
+/// - 替换只写 `sMsg`（`ref` 实参），**不写** `tempstr` ⇒ 后续 token 仍按**原文**定位，
+///   因此同一变量出现两次时，`ReplaceVariableText`/`CombineStr` 的「只换第一处」仍逐个生效；
+/// - 循环门是 `IndexOf('>') <= 0`，与说词版的 `< 1` **等价**；
+/// - `ArrestStringEx` 失败时 C# 不覆盖 `sText`（保留上一轮的值）⇒ 本函数同样保留；
+/// - 最多 101 轮（含首个非 `$` token 时也不会死循环：每轮 `tempstr` 都前进）。
+///
+/// `expand(variable, &mut s_msg)` 对应该行的 `GetVariableText(playerActor, ref sMsg, sVariable)`。
+/// 抽成自由函数只为可测（见下方 `action_line_variable_text_tests` 用闭包钉死「前进扫描」）；
+/// 生产路径由 [`ScriptPlayer::action_line_variable_text`] 的缺省实现调用。
+pub fn expand_action_line_variable_text<F>(msg: &str, mut expand: F) -> String
+where
+    F: FnMut(&str, &mut String),
+{
+    let mut s_msg = msg.to_string();
+    let mut tempstr = msg.to_string();
+    let mut s_text = String::new();
+    let mut n_c = 0i32;
+    loop {
+        // `tempstr.IndexOf('>') <= 0`：没有 `>` 或 `>` 在位置 0 ⇒ 立即中止。
+        if tempstr.find('>').is_none_or(|p| p == 0) {
+            break;
+        }
+        let (write, rest) = mir2_shared::hutil32::arrest_string_ex_ref(&tempstr, '<', '>');
+        // **前进**：把 `ArrestStringEx` 的返回值赋回 `tempstr`（说词版在这里丢弃它）。
+        tempstr = rest;
+        match write {
+            mir2_shared::hutil32::ArrestWrite::Value(v) => s_text = v,
+            mir2_shared::hutil32::ArrestWrite::Unchanged => {}
+        }
+        if !s_text.is_empty() && s_text.starts_with('$') {
+            expand(&s_text, &mut s_msg);
+        }
+        n_c += 1;
+        if n_c >= 101 {
+            break;
+        }
+    }
+    s_msg
 }
 
 /// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2829`）的 1:1 移植——**按序**三支，
@@ -1491,5 +1565,104 @@ mod default_hooks_tests {
         // `None` 与 `Some("")` 不等价（后者见 `engine_tests` 的显式覆盖）。
         let mut p = NoopPlayer;
         assert!(!lable_is_can_jmp(&mut p, &[], ""));
+    }
+}
+
+/// 动作/条件参数文本展开（`ProcessingBase.GetLineVariableText`）的循环判据。
+///
+/// 生产说词路径是 `NpcPlayer::line_variable_text`（不前进），其字节行为由
+/// `bins/game-svr/src/npc.rs` 的 `line_variable_text_stops_at_first_non_variable_token` /
+/// `say_variables_expand_through_merchant_goto_gbk_and_edcode` 钉住；本模块只钉
+/// **动作侧循环**与说词循环在**同一文本**上看到的 token 序列不同。
+#[cfg(test)]
+mod action_line_variable_text_tests {
+    use super::*;
+
+    /// 说词循环（`NormNpc.cs:245-273`）的**测试用对照**：只记录「看到了哪些变量」，
+    /// 不展开。用于证明两支扫描的差异来自循环而非展开器。
+    fn say_scan(msg: &str) -> Vec<String> {
+        let mut seen = Vec::new();
+        let mut s = msg.to_string();
+        let mut variable = String::new();
+        let mut count = 0i32;
+        loop {
+            if s.find('>').is_none_or(|p| p < 1) {
+                break;
+            }
+            match mir2_shared::hutil32::arrest_string_ex_ref(&s, '<', '>') {
+                (mir2_shared::hutil32::ArrestWrite::Value(v), _) => variable = v,
+                (mir2_shared::hutil32::ArrestWrite::Unchanged, _) => {}
+            }
+            if !variable.is_empty() && variable.starts_with('$') {
+                seen.push(variable.clone());
+                // 说词侧唯一的推进来源：`ReplaceVariableText` 把首个 token 顶掉（只换第一处）。
+                let token = format!("<{variable}>");
+                if let Some(pos) = s.find(&token) {
+                    s.replace_range(pos..pos + token.len(), "*");
+                }
+            }
+            count += 1;
+            if count >= 101 {
+                break;
+            }
+        }
+        seen
+    }
+
+    fn action_scan(msg: &str) -> Vec<String> {
+        let mut seen = Vec::new();
+        let _ = expand_action_line_variable_text(msg, |v, _| seen.push(v.to_string()));
+        seen
+    }
+
+    /// **前进 vs 不前进**：同一文本，动作侧看到全部 `$` token，说词侧卡在首个链接上。
+    ///
+    /// 牙：把 `expand_action_line_variable_text` 里的 `tempstr = rest;` 删掉（退回说词写法）
+    /// ⇒ 本用例第一条断言红（`[]` ≠ `["$USERNAME", "$GAMEGOLD"]`）。
+    #[test]
+    fn action_scan_advances_past_link_while_say_scan_stalls() {
+        let text = r"<进入/@main>\ \ 玩家:<$USERNAME> 元宝:<$GAMEGOLD>";
+        assert_eq!(action_scan(text), vec!["$USERNAME", "$GAMEGOLD"]);
+        assert!(
+            say_scan(text).is_empty(),
+            "说词循环卡在首 token（101 轮空转）"
+        );
+        // 变量开头的文本：两支都前进（说词侧靠「替换顶掉首 token」隐式前进）。
+        let text2 = "<$USERNAME>|<$GAMEGOLD>";
+        assert_eq!(action_scan(text2), vec!["$USERNAME", "$GAMEGOLD"]);
+        assert_eq!(say_scan(text2), vec!["$USERNAME", "$GAMEGOLD"]);
+    }
+
+    /// 替换写 `sMsg`、**不写** `tempstr` ⇒ 后续 token 仍按原文定位；同一变量出现两次时
+    /// 展开器（`ReplaceVariableText`/`CombineStr` 只换第一处）逐个命中。
+    #[test]
+    fn action_scan_replaces_into_s_msg_only() {
+        let out = expand_action_line_variable_text("<$X>|<$X>", |_v, msg| {
+            *msg = msg.replacen("<$X>", "7", 1);
+        });
+        assert_eq!(out, "7|7");
+    }
+
+    /// `ArrestStringEx` 的边界口径与说词版同形（`ArrestWrite` 三态），但**循环门等价**：
+    /// `IndexOf('>') <= 0` ⇒ 无 `>` / `>` 在位置 0 立即中止。
+    #[test]
+    fn action_scan_edge_cases() {
+        // `>` 在位置 0：即使后面有变量也不回调。
+        assert!(action_scan(">a<$X>").is_empty());
+        // 无 `>` / 未闭合：原样。
+        assert_eq!(
+            expand_action_line_variable_text("<$X", |_, _| panic!("不得回调")),
+            "<$X"
+        );
+        // 非 `$` token 不回调，但**不阻挡**后续扫描（与说词版的关键差别）。
+        assert_eq!(action_scan("<a><$X>"), vec!["$X"]);
+        // 首 `<` 在 `>` 之后：本轮 `ArrestStringEx` 未命中闭合 ⇒ `tempstr` 缩短后继续。
+        assert_eq!(action_scan("a>b<$X>"), vec!["$X"]);
+        // 空串 / 无 token：恒等。
+        assert_eq!(
+            expand_action_line_variable_text("", |_, _| panic!("不得回调")),
+            ""
+        );
+        assert_eq!(action_scan("纯文本"), Vec::<String>::new());
     }
 }

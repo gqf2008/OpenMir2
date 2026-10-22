@@ -107,7 +107,7 @@ impl Engine<'_, '_> {
                 //  else GetValValue(…, ref s01);`（C# 在长度 1 时会越界；此处按不命中处理）
                 let mut s01 = info.s_param1.clone();
                 if s01.starts_with("<$") {
-                    s01 = self.player.line_variable_text(&info.s_param1);
+                    s01 = self.player.action_line_variable_text(&info.s_param1);
                 } else if let Some(v) = self.get_val_value_string(&info.s_param1) {
                     s01 = v;
                 }
@@ -386,7 +386,7 @@ impl Engine<'_, '_> {
     /// `ConditionOfIosnMap`（code 190，`ISONMAP`）：地图名支持变量展开；地图不存在则报错。
     fn cond_is_on_map(&mut self, info: &QuestConditionInfo, result: &mut bool) {
         *result = false;
-        let name = self.player.line_variable_text(&info.s_param1);
+        let name = self.player.action_line_variable_text(&info.s_param1);
         if !self.player.map_exists(&name) {
             self.script_condition_error("ISONMAP", info);
         }
@@ -817,7 +817,7 @@ impl Engine<'_, '_> {
                 };
             }
             s_var = format!("<${}>", trimmed);
-            s_value = self.player.line_variable_text(&s_var);
+            s_value = self.player.action_line_variable_text(&s_var);
             if s_value == s_var {
                 s_value = s_var_name.clone();
                 n_value = mir2_shared::hutil32::str_to_int(&s_var_name, 0);

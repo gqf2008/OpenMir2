@@ -100,7 +100,7 @@ impl Engine<'_, '_> {
                 //                     GetLineVariableText(playerActor, sParam1))
                 //   ⇒ (wIdent, wParam, nParam1, nParam2, nParam3) = (10309, 0, ActorId, 0, 0)
                 let actor_id = self.player.actor_id();
-                let text = self.player.line_variable_text(&info.s_param1);
+                let text = self.player.action_line_variable_text(&info.s_param1);
                 self.player
                     .send_msg(RM_MENU_OK, 0, actor_id, 0, 0, Some(&text));
             }
@@ -186,7 +186,7 @@ impl Engine<'_, '_> {
             // ---- B2/M4 动作批次（2026-10-11）----
             "ActionOfLineMsg" => {
                 // C# `ActionOfLineMsg`：文本先 `%s`→玩家名、`%d`→NPC 名，再按 nParam1 分发
-                let mut s_msg = self.player.line_variable_text(&info.s_param2);
+                let mut s_msg = self.player.action_line_variable_text(&info.s_param2);
                 let chr_name = self.player.chr_name();
                 let npc_name = self.npc.chr_name();
                 s_msg = s_msg.replace("%s", &chr_name);
@@ -530,7 +530,7 @@ impl Engine<'_, '_> {
                 let tick = self.player.tick_count();
                 let delay = info.n_param1.max(1);
                 // C#：先按行变量文本取数，取不到（==0）再走 `GetValValue`
-                let text = self.player.line_variable_text(&info.s_param1);
+                let text = self.player.action_line_variable_text(&info.s_param1);
                 let mut m_delay = mir2_shared::hutil32::str_to_int(&text, 0);
                 if m_delay == 0 {
                     if let Some(v) = self.get_val_value_int(&info.s_param1) {
@@ -848,7 +848,7 @@ impl Engine<'_, '_> {
                 let n_game_gold = match self.get_val_value_int(&info.s_param1) {
                     Some(v) => v,
                     None => {
-                        let text = self.player.line_variable_text(&info.s_param1);
+                        let text = self.player.action_line_variable_text(&info.s_param1);
                         mir2_shared::hutil32::str_to_int(&text, 0)
                     }
                 };
@@ -1689,7 +1689,8 @@ impl Engine<'_, '_> {
     /// `MUL` 一侧取值：先 `StrToInt(GetLineVariableText(x), -1)`，再按编号槽位取；
     /// `report_missing` 为真时，槽位未命中/越界都记 `ScriptActionError(Mul)`。
     fn mul_read(&mut self, text: &str, report_missing: bool, info: &QuestActionInfo) -> i32 {
-        let direct = mir2_shared::hutil32::str_to_int(&self.player.line_variable_text(text), -1);
+        let direct =
+            mir2_shared::hutil32::str_to_int(&self.player.action_line_variable_text(text), -1);
         if direct >= 0 {
             return direct;
         }
@@ -1771,7 +1772,7 @@ impl Engine<'_, '_> {
     fn action_of_load_var(&mut self, info: &QuestActionInfo) {
         let s_type = info.s_param1.clone();
         let s_var_name = info.s_param2.clone();
-        let file = trim_var_file(self.player.line_variable_text(&info.s_param3));
+        let file = trim_var_file(self.player.action_line_variable_text(&info.s_param3));
         let Some(path) = self.envir_file_path(&file) else {
             self.script_action_error("LoadVar", info);
             return;
@@ -1810,7 +1811,7 @@ impl Engine<'_, '_> {
     fn action_of_save_var(&mut self, info: &QuestActionInfo) {
         let s_type = info.s_param1.clone();
         let s_var_name = info.s_param2.clone();
-        let file = trim_var_file(self.player.line_variable_text(&info.s_param3));
+        let file = trim_var_file(self.player.action_line_variable_text(&info.s_param3));
         let Some(path) = self.envir_file_path(&file) else {
             self.script_action_error("SaveVar", info);
             return;
