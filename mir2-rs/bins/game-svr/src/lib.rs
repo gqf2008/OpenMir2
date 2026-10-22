@@ -6205,8 +6205,25 @@ fn emit_npc_says(
 /// 说词（`RM_MERCHANTSAY` 优先级 1）先于本组（`RM_GAMEGOLDCHANGED` = 8084&0xFF = 148），
 /// 与现有「先 `emit_npc_says` 再脚本帧」的调用序一致。
 ///
-/// 目前只有 `RM_GAMEGOLDCHANGED` 有映射（[`game_svr::pickwire::script_frame`]）；其余 ident
-/// （如 `RM_PLAYDICE`）仍按既有口径丢弃（T-142 残余）。
+/// 映射面：`RM_GOLDCHANGED`/`RM_GAMEGOLDCHANGED`/`RM_SYSMESSAGE`/`RM_PLAYDICE` 走
+/// [`game_svr::pickwire::script_frame`]；**`RM_MENU_OK` 在本函数内直接落 wire**（T-193）。
+///
+/// T-193（卡 `openmir2-ya52-menu-ok-missing`）：脚本 `MESSAGEBOX` 走
+/// `ActionOfMessageBox`（`ExecutionProcessingSys.cs:3416-3419`）⇒
+/// `SendMsg(RM_MENU_OK, 0, ActorId, 0, 0, GetLineVariableText(sParam1))` ⇒
+/// `PlayObject.Message.cs:1952-1953` 的 `SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, Msg)`
+/// ⇒ wire `SM_MENU_OK(767)`，`Recog = 玩家 ActorId`（`MsgQueue` 的 `nParam1`），尾 =
+/// `EDCode.EncodeString(Msg)`。此前 `script_frame` 无该 ident 的映射 ⇒ 整帧被丢弃，
+/// 赌场 `[@ya52]` 的 `#ELSEACT MESSAGEBOX` 支在 Rust 上「什么都不发」（C# 2/2 发 767、Rust 0/2）。
+///
+/// **生效面仅限本函数的调用点**（商人的 4 处 `GotoLable`：`CM_CLICKNPC(@main)`、1011 标签、
+/// 1011 `@back`、固定 NPC `GotoLable`）。**不覆盖**（仍整帧丢弃 767，见 T-193）：
+/// `@Login`/QManage（`NpcHost::run_login`）、QFunction（`run_party_goto_label`，
+/// `Market_Def/QFunction-0.txt` 有 5 处 `MESSAGEBOX`）、`GuildOfficial`
+/// （`guild_official::queue_script_output` 直接调 `pickwire::script_frame`）。若要一次覆盖，
+/// 应把映射下沉进 `pickwire::script_frame`。
+///
+/// 其余未映射 ident（如 `RM_MERCHANTDLGCLOSE`）仍按既有口径丢弃（逐项登记，不静默）。
 fn emit_script_frames(
     tx: &mpsc::UnboundedSender<SimToGate>,
     socket: i32,
@@ -6224,22 +6241,45 @@ fn emit_script_frames(
     let mut ordered: Vec<&game_svr::npc::SendMsg> = frames.iter().collect();
     ordered.sort_by_key(|f| f.ident as u8);
     for f in ordered {
-        let Some(body) = game_svr::pickwire::script_frame(
-            f,
-            npc_actor_id,
-            // `SM_SYSMESSAGE` 的 `Recog` = 收帧玩家自己（`BaseObject.SysMsg` 的 `this.ActorId`）。
-            sg.actor_id,
-            sg.state.gold,
-            sg.game_gold,
-            sg.game_point,
-            sg.soft_version_date,
-        ) else {
+        // `RM_MENU_OK`：`SM_MENU_OK(767)` 的 `Recog` 是 `processMsg.nParam1`
+        // （= `ActionOfMessageBox` 写的 `playerActor.ActorId`，不是 NPC），`Param/Tag/Series`
+        // 全 0，尾 = `EncodeString(GetLineVariableText(sParam1))`。
+        let body = if f.ident == i32::from(mir2_protocol::messages::RM_MENU_OK) {
+            Some(menu_ok_wire(f))
+        } else {
+            game_svr::pickwire::script_frame(
+                f,
+                npc_actor_id,
+                // `SM_SYSMESSAGE` 的 `Recog` = 收帧玩家自己（`BaseObject.SysMsg` 的 `this.ActorId`）。
+                sg.actor_id,
+                sg.state.gold,
+                sg.game_gold,
+                sg.game_point,
+                sg.soft_version_date,
+            )
+        };
+        let Some(body) = body else {
             continue;
         };
         let _ = tx.send(SimToGate::SendFrame { socket, body });
         sent += 1;
     }
     sent
+}
+
+/// `RM_MENU_OK` ⇒ `SM_MENU_OK(767)` 的 wire 帧（T-193）。
+///
+/// 口径（`PlayObject.Message.cs:1952-1953` + `PlayObject.Socket.cs:27-40`）：
+/// `SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, processMsg.Msg)`；
+/// `SendDefMessage` 在 `Msg` 为空时只发 12B 头、不挂尾（`string.IsNullOrEmpty` 支）。
+/// `Msg` 是脚本动作的 `GetLineVariableText(sParam1)` 产物（UTF-16），线上按 cp936 编码后
+/// 再 `EDCode.EncodeString` —— 与 `SM_SYSMESSAGE`/`SM_PLAYDICE` 的尾同一口径
+/// （`mir2_script::cp936::encode_gb2312_dotnet`）。
+#[must_use]
+fn menu_ok_wire(f: &game_svr::npc::SendMsg) -> Vec<u8> {
+    let msg = f.msg.as_deref().unwrap_or("");
+    let bytes = mir2_script::cp936::encode_gb2312_dotnet(msg);
+    smframe::sm_menu_ok(f.n_param1, &bytes)
 }
 
 /// `CM_EAT`(1006) 的派发（issue `8d07694d` 的 ②）。
@@ -24548,6 +24588,234 @@ mod tests {
             "② 第三支只能放行一次（第二次被拒 ⇒ `GotoLable` 被 boExtJmp 挡下 ⇒ 零帧）"
         );
         assert_eq!(rig.game_gold(), 160, "② 被拒 ⇒ 脚本不执行，元宝不变");
+    }
+
+    /// 把部署脚本 `E:/MirServer/M2GameSvr/Envir/Market_Def/赌博NPC/赌场-B013.txt` 的
+    /// `[@ya52]` 段（第 203-215 行）按 **GBK 原文** 写盘，再走生产解析器
+    /// （`ScriptParsers::load_script_file`，`boFlag=true` = `Merchant.LoadScriptFile`）。
+    ///
+    /// `[@main]`/`[@ya5]` 只保留**可跳转链**（与 `tools/probe/scenarios/dice_chain*.json` 的
+    /// `@ya5 → @ya52` 同形）；`[@ya52]` 段逐字照抄部署件：
+    ///
+    /// ```text
+    /// [@ya52]
+    /// #IF
+    /// CHECKitem 筹码包 1
+    /// #ACT
+    /// take 筹码包 1
+    /// movr d0 6
+    /// inc d0 1
+    /// playdice 1 @cube52
+    /// #SAY
+    /// 正在投骰子…………
+    /// #ELSEACT
+    /// MESSAGEBOX 请打开商铺兑换[筹码]后再来！
+    /// break
+    /// ```
+    fn ya52_book(tag: &str, merchant_id: i32) -> game_svr::npc::MerchantScriptBook {
+        const SRC: &str = r#"[@main]
+<押1个筹码包/@ya5>\
+[@ya5]
+<大/@ya51>  <小/@ya52>\
+[@ya52]
+#IF
+CHECKitem 筹码包 1
+#ACT
+take 筹码包 1
+movr d0 6
+inc d0 1
+playdice 1 @cube52
+#SAY
+正在投骰子…………
+#ELSEACT
+MESSAGEBOX 请打开商铺兑换[筹码]后再来！
+break
+"#;
+        let crlf = SRC.replace('\n', "\r\n");
+        let bytes = encoding_rs::GBK.encode(&crlf).0.into_owned();
+        let root = std::env::temp_dir().join(format!("gs-ya52-{tag}-{}", std::process::id()));
+        let dir = root.join("Envir").join("Market_Def");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("赌场-B013.txt"), bytes).unwrap();
+        let parsers = mir2_script::ScriptParsers::new();
+        let mut rename = |_min: i32, _max: i32| 1;
+        let outcome = parsers
+            .load_script_file(
+                &mir2_script::LocalFs,
+                &root.join("Envir"),
+                "Market_Def",
+                "赌场-B013",
+                true,
+                &mut rename,
+            )
+            .expect("解析不得 panic")
+            .expect("脚本必须存在");
+        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            outcome.errors.is_empty(),
+            "夹具脚本不得有解析错误：{:?}",
+            outcome.errors
+        );
+        let mut book = game_svr::npc::MerchantScriptBook::new(30);
+        book.insert(game_svr::npc::MerchantNpc {
+            def: game_svr::npc::NpcDef {
+                chr_name: "赌场老板".to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("赌场-B013".to_string()),
+                is_hide: false,
+                is_quest: false,
+                scripts: outcome.scripts,
+                loaded: true,
+                actor_id: merchant_id,
+            },
+            price_rate: 100,
+            castle: None,
+            map_name: "0".to_string(),
+            curr_x: 11,
+            curr_y: 10,
+        });
+        book
+    }
+
+    /// `[@ya52]` 段的**生产链路**夹具：真实 GBK 脚本 → 解析器 → 商人脚本表。
+    fn ya52_rig(tag: &str) -> T142Rig {
+        let mut rig = T142Rig::new(Vec::new());
+        rig.book = ya52_book(tag, rig.merchant_id);
+        rig
+    }
+
+    /// 跑 `@main → @ya5 → @ya52`（与 dice_chain 场景同形）并返回最后一步的下行帧。
+    fn ya52_run(rig: &mut T142Rig) -> Vec<Vec<u8>> {
+        rig.dlg_select("@main");
+        let _ = rig.drain();
+        rig.dlg_select("@ya5");
+        let _ = rig.drain();
+        rig.dlg_select("@ya52");
+        rig.drain()
+    }
+
+    fn idents(frames: &[Vec<u8>]) -> Vec<(u16, u16, u16, i32)> {
+        frames.iter().map(|b| hdr(b.as_slice())).collect()
+    }
+
+    /// **T-193（卡 `openmir2-ya52-menu-ok-missing`）**：部署脚本 `[@ya52]` 的
+    /// `CHECKitem` 不满足 ⇒ `#ELSEACT MESSAGEBOX ...` 必须下发**恰好一条** `SM_MENU_OK(767)`，
+    /// 帧字节与 C# 真机金标准逐字节一致。
+    ///
+    /// oracle 推演（逐步）：
+    /// 1. `ConditionOfCheckItem`（`ConditionProcessingSys.cs:4043-4056`）：
+    ///    `playerActor.QuestCheckItem("筹码包")` 得 `n1C=0`，`0 < nParam2(1)` ⇒ `success=false`；
+    /// 2. `ScriptEngine.GotoLable`（`ScriptEngine.cs:38-129`）条件假 ⇒ 走 `ElseActionList`；
+    /// 3. `ActionOfMessageBox`（`ExecutionProcessingSys.cs:3416-3419`）：
+    ///    `playerActor.SendMsg(normNpc, RM_MENU_OK, 0, playerActor.ActorId, 0, 0, text)`；
+    /// 4. `PlayObject.Message.cs:1952-1953`：
+    ///    `SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, processMsg.Msg)`
+    ///    ⇒ `Recog` = **玩家** `ActorId`（`nParam1`）、`Param/Tag/Series` = 0、
+    ///    尾 = `EDCode.EncodeString(GetLineVariableText(sParam1))`（cp936 原文）；
+    /// 5. 动作循环在此 **return**：`GotoLableQuestActionProcess`
+    ///    （`ScriptEngine.cs:887-895`）对**首个已注册动作**执行后立即 `return`
+    ///    ⇒ `#ELSEACT` 里的 `break` **不可达**；可观测等价：
+    ///    `ElseSayMsg` 为空 ⇒ 一样零 643。
+    ///
+    /// 真机金标准：`E:/tmp/conformance/runs/w24-csharp-dice-r1|r2/frames.ndjson` 的 `seq=35`
+    /// （C# 2/2；同一场景 Rust 修复前 0/2）：`ident=767 / param=0 / tag=0 / series=0`、
+    /// body 38 B、`body_sha256=e6d73c8e334a42ce701972b50e16e74624516dc309e321fd0b40ad30046cf15c`、
+    /// `Recog` 为玩家 `ActorId`（r1=1833593529、r2=1882717309）。
+    ///
+    /// 牙（先备份 sha256，改完还原并核对）：
+    /// ① 删 `emit_script_frames` 的 `RM_MENU_OK` 支（回到 `pickwire::script_frame` 的
+    ///    `_ => None`）⇒ 本用例红（0 条 767）；
+    /// ② 把它提成「无条件发」⇒ [`ya52_checkitem_satisfied_sends_no_menu_ok`] 红。
+    #[test]
+    fn ya52_elseact_messagebox_emits_exactly_one_sm_menu_ok() {
+        let mut rig = ya52_rig("pos");
+        let frames = ya52_run(&mut rig);
+        let menu: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_MENU_OK)
+            .collect();
+        assert_eq!(
+            menu.len(),
+            1,
+            "命中 @ya52 的 ELSEACT ⇒ 恰好一条 SM_MENU_OK；实得 {:?}",
+            idents(&frames)
+        );
+        let hero = rig.sessions["hero"].actor_id;
+        assert_eq!(
+            hdr(menu[0].as_slice()),
+            (mir2_protocol::messages::SM_MENU_OK, 0, 0, hero),
+            "767 的 Recog=玩家 ActorId，Param/Tag=0"
+        );
+        assert_eq!(
+            u16::from_le_bytes([menu[0][10], menu[0][11]]),
+            0,
+            "Series 必须为 0（`SendDefMessage` 第 5 参）"
+        );
+        // 尾 = `EDCode.EncodeString(GBK 原文)`：与真机 C# 抓包逐字节相同。
+        const GOLDEN_BODY: &str =
+            "574f5445524342485554665054427a4e43437371434f6a584f7952405358715a54404b4a3d3f";
+        let body_hex: String = menu[0][12..].iter().map(|b| format!("{b:02x}")).collect();
+        assert_eq!(
+            body_hex, GOLDEN_BODY,
+            "767 尾必须与真机 C#（w24-csharp-dice-r1/r2 seq=35）逐字节相同"
+        );
+        // 尾部来源自证：消息原文的 cp936 字节 = 部署件 `赌场-B013.txt` 第 214 行
+        // `MESSAGEBOX ` 之后的 28 B。
+        const MSG_GBK: &[u8] = &[
+            0xc7, 0xeb, 0xb4, 0xf2, 0xbf, 0xaa, 0xc9, 0xcc, 0xc6, 0xcc, 0xb6, 0xd2, 0xbb, 0xbb,
+            0x5b, 0xb3, 0xef, 0xc2, 0xeb, 0x5d, 0xba, 0xf3, 0xd4, 0xd9, 0xc0, 0xb4, 0xa3, 0xa1,
+        ];
+        assert_eq!(
+            menu[0][12..],
+            mir2_protocol::edcode::encode(MSG_GBK)[..],
+            "尾 = EDCode(请打开商铺兑换[筹码]后再来！) 的 cp936 原文"
+        );
+    }
+
+    /// **T-193 反例（防「无条件发」）**：`CHECKitem 筹码包 1` **满足** ⇒ 走 `#ACT` 支 ⇒ **零** `SM_MENU_OK(767)`；
+    /// 且 `#SAY`「正在投骰子…………」与 `take` 都真的发生（证明脚本确实进了段，不是零执行）。
+    ///
+    /// 注：C# `GotoLableQuestActionProcess` 对同一 `ActionList` **只执行第一个已注册动作**
+    /// （`ScriptEngine.cs`；Rust `Engine::run_actions` 1:1）⇒ 本例只跑 `take`，
+    /// `playdice` 不会到达（行为等价，不是本卡缺口）。
+    #[test]
+    fn ya52_checkitem_satisfied_sends_no_menu_ok() {
+        let mut rig = ya52_rig("neg");
+        rig.catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "筹码包".to_string(),
+                dura_max: 5000,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem::new(4201, 1));
+        let frames = ya52_run(&mut rig);
+        assert!(
+            idents(&frames)
+                .iter()
+                .all(|h| h.0 != mir2_protocol::messages::SM_MENU_OK),
+            "CHECKitem 满足 ⇒ 不得发 767（否则就是「无条件发」）；实得 {:?}",
+            idents(&frames)
+        );
+        assert_eq!(
+            idents(&frames)
+                .iter()
+                .filter(|h| h.0 == mir2_protocol::messages::SM_MERCHANTSAY)
+                .count(),
+            1,
+            "#ACT 支必须真的执行（#SAY「正在投骰子…………」⇒ 恰好一条 SM_MERCHANTSAY）；实得 {:?}",
+            idents(&frames)
+        );
+        assert!(
+            rig.sessions["hero"].state.item_list.is_empty(),
+            "`take 筹码包 1` 必须把物品从会话背包摘掉"
+        );
     }
 
     /// `SETOFFLINE 时间 点数 踢号分钟`（`n_cmd_code = 337` = `ExecutionCode.OffLine`）：
