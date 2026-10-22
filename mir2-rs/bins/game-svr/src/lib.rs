@@ -96,6 +96,7 @@ pub mod smframe;
 pub mod smframe_ext;
 pub mod stamina;
 pub mod trade;
+pub mod unbindlist;
 pub mod useitem;
 
 use std::sync::Arc;
@@ -904,6 +905,33 @@ async fn run_inner(args: &[String]) -> Result<()> {
             None
         }
     };
+    // **UnbindList 消费点（卡 `openmir2-unbindlist-consumer`）**：`LocalDb.LoadUnbindList`
+    // （`DB/LocalDB.cs:872-915`；装载点 `GameApp.cs:173-179`：先 "正在加载捆装物品信息..."，
+    // 失败打印 "加载捆装物品信息失败!!! Code: {nCode}" 并 `return`（终止起服），成功打印
+    // "加载捆装物品信息成功..."）。消费点 = `CM_EAT` 的 StdMode 31 / AniCount == 0 解包
+    // （`PlayObject.Operate.cs:657-666`）。
+    // 失败口径差异（登记）：oracle 终止起服；本宿主按其它名单装载同款记 ERR 后以**空表**继续
+    // （部署件 `UnbindList.txt` 无非法行 ⇒ 该支不可达）。
+    let unbind_list = match game_svr::unbindlist::load_unbind_list_file(&envir_loader) {
+        Ok(Some(list)) => {
+            glog!("INF", "加载捆装物品信息成功...[{}]", list.len());
+            list
+        }
+        Ok(None) => {
+            glog!(
+                "INF",
+                "无 Envir/UnbindList.txt ⇒ 解包表为空（oracle File.Exists 门）"
+            );
+            game_svr::unbindlist::UnbindList::default()
+        }
+        Err(e) => {
+            glog!(
+                "ERR",
+                "{e} ⇒ 解包表为空（oracle GameApp.cs:175-179 终止起服；宿主登记后继续）"
+            );
+            game_svr::unbindlist::UnbindList::default()
+        }
+    };
     // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
     // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
     let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
@@ -1122,6 +1150,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     minimap,
                     make_items,
                     admin_list,
+                    unbind_list,
                     line_notice,
                     line_notice_cfg: line_notice::LineNoticeCfg {
                         interval_ms: i64::from(cfg.show_line_notice_time),
@@ -6142,6 +6171,10 @@ fn handle_eat_cmd(
     world: &mir2_world::World,
     colors: &MsgColors,
     registry: Option<&mir2_envir::MapRegistry>,
+    // `M2Share.UnbindList`（`M2Share.cs:85`）：StdMode 31 解包按 `StdItem.Shape` 查物品名。
+    unbind_list: &game_svr::unbindlist::UnbindList,
+    // `M2Share.GetItemNumber()` 会话计数器：解包 6 件的 `MakeIndex` 与 `GIVE`/新手物品共用。
+    item_number: &mut i32,
 ) {
     // `ClientUseItems(int nItemIdx, string sItemName)` 的 `sItemName` 在 oracle 里未被使用。
     let _ = tail;
@@ -6209,14 +6242,16 @@ fn handle_eat_cmd(
         // `ClientUseItems(processMsg.nParam1, ...)`：`make_index` 取自 12B 头 `Recog`。
         make_index: recog,
         no_drug,
-        // `SystemShare.FunctionNPC` 未建模（StdMode 31 分支）⇒ false（登记）；
-        // `StdMode 31` 的 `AniCount == 0`（解包）也未接（T-17）。
+        // `SystemShare.FunctionNPC` 未建模（StdMode 31 的 `AniCount != 0` 分支）⇒ false（登记）；
+        // `AniCount == 0` 的解包分支已接（卡 `openmir2-unbindlist-consumer`）。
         function_npc_present: false,
+        // `M2Share.UnbindList`：解包按 `StdItem.Shape` 查名（未命中 ⇒ 空串 ⇒ 0 件）。
+        unbind: unbind_list,
         red_msg_fcolor: u16::from(colors.red_f),
         red_msg_bcolor: u16::from(colors.red_b),
         recalc: Some(recalc),
     };
-    let out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list);
+    let out = game_svr::useitem::use_item(&ctx, &mut state, &mut item_list, item_number);
     glog!(
         "INF",
         "CM_EAT 结果：ChrName={chr_name} make_index={recog} eaten={} immediate={} notices={}",
@@ -6235,6 +6270,24 @@ fn handle_eat_cmd(
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "用药回帧") else {
         return;
     };
+    let mut sent = 0usize;
+    // **解包件的立即帧** `SendAddItem`（`PlayObject.Base.cs:198-228`）：`SM_ADDITEM(200)`、
+    // `Recog = ActorId`、尾 = `EDCode.EncodeBuffer(ClientItem)`。oracle 在
+    // `ClientUseItemsGetUnBindItems` 里逐件直发，位置在尾部 `SendDefMessage(SM_EAT_OK)` **之前**
+    // ⇒ 线上顺序 = 6×`SM_ADDITEM` → `SM_EAT_OK` → 消息泵通知（`SM_WEIGHTCHANGED`）。
+    for item in &out.added_items {
+        match game_svr::trade::send_add_item_body(actor_id, item, catalog) {
+            Some(body) => {
+                let _ = tx.send(SimToGate::SendFrame { socket, body });
+                sent += 1;
+            }
+            None => glog!(
+                "WRN",
+                "CM_EAT：解包件模板缺失 ⇒ SM_ADDITEM 未编码（Index={}）",
+                item.index
+            ),
+        }
+    }
     // 立即帧（`SendDefMessage`）：`SM_EAT_OK(635)`/`SM_EAT_FAIL(636)`，header-only。
     for f in &out.immediate_frames {
         let body = game_svr::smframe::gm_data_body(
@@ -6242,6 +6295,7 @@ fn handle_eat_cmd(
             &[],
         );
         let _ = tx.send(SimToGate::SendFrame { socket, body });
+        sent += 1;
     }
     // 延时通知（`SendMsg(RM_*)` ⇒ `SM_*`）。
     let wire = game_svr::pickwire::WireSession {
@@ -6252,7 +6306,6 @@ fn handle_eat_cmd(
         sys_msg: None,
         hunger_status: sg.hunger_status,
     };
-    let mut sent = out.immediate_frames.len();
     for n in &out.notices {
         match game_svr::pickwire::notice_frame(n, &wire) {
             Some(body) => {
@@ -14825,6 +14878,10 @@ struct EnterConfig {
     /// 被注释（`PlayObject.cs:1188-1194`）⇒ 本表与 oracle 同形「装进来、不参与判定」；
     /// 查表半 [`adminlist::AdminList::get_hum_permission`] 已备但**不接**生产路径。
     admin_list: Option<game_svr::adminlist::AdminList>,
+    /// **UnbindList 消费点（卡 `openmir2-unbindlist-consumer`）**：`M2Share.UnbindList`
+    /// （`M2Share.cs:85`）的装载结果（主线程 `game_svr::unbindlist::load_unbind_list_file`），
+    /// 随 `EnterConfig` 到 sim 线程；`CM_EAT` 的 StdMode 31 解包按 `StdItem.Shape` 查名。
+    unbind_list: game_svr::unbindlist::UnbindList,
     /// **R0-4**：`Notice/LineNotice.txt` 解析出的逐行滚动公告（`notice::load_line_notice`）。
     /// 消费点 = `WorldServer.cs:669-696` 的逐玩家定时公告（**世界 tick 扩容首批（T3）· ③** 已接线）。
     line_notice: Vec<String>,
@@ -14956,6 +15013,7 @@ impl EnterConfig {
             minimap: None,
             make_items: None,
             admin_list: None,
+            unbind_list: game_svr::unbindlist::UnbindList::default(),
             line_notice: Vec::new(),
             line_notice_cfg: line_notice::LineNoticeCfg {
                 interval_ms: 300_000,
@@ -17345,6 +17403,9 @@ fn sim_loop(
     // **AdminList（卡 `openmir2-envir-adminlist-consumer`）**：装载结果随 `EnterConfig` 到 sim 线程，
     // 与 oracle `WorldEngine.AdminList` 同形「装进来、不参与判定」——`GetHumPermission` 的唯一调用点
     // 在 `PlayObject.cs:1188-1194` 被注释 ⇒ 本表**不接**任何 `Permission` 写点（接上须另开 `D-*`）。
+    // **UnbindList（卡 `openmir2-unbindlist-consumer`）**：`M2Share.UnbindList` 的 Rust 承载。
+    // `CM_EAT` 的 StdMode 31 解包按 `StdItem.Shape` 查名（`PlayObject.Operate.cs:578-580`）。
+    let unbind_list = std::mem::take(&mut enter_cfg.unbind_list);
     if let Some(al) = enter_cfg.admin_list.take() {
         glog!(
             "INF",
@@ -17724,6 +17785,8 @@ fn sim_loop(
                             &world,
                             &colors,
                             registry.as_ref(),
+                            &unbind_list,
+                            &mut item_number,
                         );
                     } else if cmd.ident == mir2_protocol::messages::CM_QUERYBAGITEMS {
                         // `CM_QUERYBAGITEMS(81)`：`PlayObject.Message.cs:784` → `ClientQueryBagItems()`。
@@ -29867,6 +29930,8 @@ mod tests {
         };
 
         // `recog` = `make_index`；`param`/`tag` 故意错位（4242）—— 读数位置错就必红。
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
         handle_eat_cmd(
             make_index,
             4242,
@@ -29881,6 +29946,8 @@ mod tests {
             &world,
             &colors,
             None,
+            &unbind,
+            &mut item_number,
         );
 
         let mut frames: Vec<(i32, u16)> = Vec::new();
@@ -29904,6 +29971,165 @@ mod tests {
         );
         assert_eq!(sg.state.wabil.hp, 15, "HP 5 + AC 10 未到上限 20 ⇒ 15");
         assert_eq!(sg.state.wabil.max_hp, 20);
+    }
+
+    /// **卡 `openmir2-unbindlist-consumer`（tier R）生产入口**：`CM_EAT` 吃 `StdMode 31 / AniCount 0`
+    /// 的捆装包 ⇒ `UnbindList[Shape]` 命中 ⇒ 移除捆装包 + **6 件**进会话背包；线上顺序
+    /// `SM_ADDITEM ×6`（逐字节 = `SendAddItem` 的 `EDCode.EncodeBuffer(ClientItem)` 尾）
+    /// → `SM_EAT_OK` → `SM_WEIGHTCHANGED`。
+    ///
+    /// oracle 锚：`PlayObject.Operate.cs:657-666`（容量门 + 解包调用）、`:582-599`
+    /// （`ClientUseItemsGetUnBindItems`：逐件 `CopyToUserItemFromName` + `SendAddItem`）、
+    /// `:578-580`（`UnbindList` 查名，未命中空串）、`:676`（`WeightChanged()`）。
+    ///
+    /// 牙①：删 `handle_eat_cmd` 的 `out.added_items` 发射循环 ⇒ 6 条 `SM_ADDITEM` 全丢 ⇒ 红；
+    /// 牙②：把 `ctx.unbind` 换成 `&UnbindList::default()`（空表）⇒ 0 件 ⇒ 红。
+    #[test]
+    fn eat_stdmode31_unbind_dispatches_six_additem_frames() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            50,
+            mir2_data::StdItem {
+                name: "捆装包".into(),
+                std_mode: 31,
+                shape: 5,
+                weight: 1,
+                ani_count: 0,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            60,
+            mir2_data::StdItem {
+                name: "解包物".into(),
+                std_mode: 0,
+                weight: 2,
+                dura_max: 7,
+                ..Default::default()
+            },
+        );
+        let mut unbind = game_svr::unbindlist::UnbindList::default();
+        unbind.map.insert(5, "解包物".to_string());
+
+        let world = mir2_world::World::new(32, 32);
+        let make_index = 29_033_300;
+        let mut sg = test_session_ground(7);
+        sg.state.item_list = vec![game_svr::bag::BagItem {
+            make_index,
+            index: 50,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let mut item_number = 400;
+        handle_eat_cmd(
+            make_index,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+            &colors,
+            None,
+            &unbind,
+            &mut item_number,
+        );
+
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            bodies.push(body);
+        }
+        let heads: Vec<(i32, u16)> = bodies
+            .iter()
+            .map(|b| {
+                let cm = CommandMessage::from_bytes(b).expect("SM_* body 至少 12B");
+                (cm.recog, cm.ident)
+            })
+            .collect();
+        let mut want: Vec<(i32, u16)> = (0..6)
+            .map(|_| (7, mir2_protocol::messages::SM_ADDITEM))
+            .collect();
+        want.push((0, game_svr::useitem::SM_EAT_OK));
+        // `SM_WEIGHTCHANGED` 的 `Recog` = 当下 `WAbil.Weight`（`PlayObject.Base.cs` 的
+        // `MakeMessage(SM_WEIGHTCHANGED, Weight, LoWord(WearWeight), HiWord(HandWeight), 0)`）。
+        want.push((12, mir2_protocol::messages::SM_WEIGHTCHANGED));
+        assert_eq!(
+            heads, want,
+            "SM_ADDITEM(200,Recog=ActorId)×6 → SM_EAT_OK(635) → SM_WEIGHTCHANGED(622)"
+        );
+
+        // 逐字节：每条 SM_ADDITEM 的尾 = `EDCode.EncodeBuffer(ClientItem)`（`CopyToUserItemFromName`
+        // 建出的件：Index 60、Dura = DuraMax = 7、MakeIndex 取自会话计数器 401..406）。
+        for (k, body) in bodies.iter().take(6).enumerate() {
+            let expect_item = game_svr::bag::BagItem {
+                make_index: 401 + i32::try_from(k).unwrap(),
+                index: 60,
+                dura: 7,
+                dura_max: 7,
+                desc: [0; 14],
+            };
+            let expect = game_svr::trade::send_add_item_body(7, &expect_item, &catalog)
+                .expect("模板在目录里 ⇒ 必有尾");
+            assert_eq!(body, &expect, "第 {k} 件 SM_ADDITEM 必须逐字节相同");
+        }
+
+        let sg = &sessions["hero"];
+        assert_eq!(sg.state.item_list.len(), 6, "捆装包移除 + 6 件解包物");
+        assert_eq!(
+            sg.state
+                .item_list
+                .iter()
+                .map(|i| (i.make_index, i.index, i.dura))
+                .collect::<Vec<_>>(),
+            vec![
+                (401, 60, 7),
+                (402, 60, 7),
+                (403, 60, 7),
+                (404, 60, 7),
+                (405, 60, 7),
+                (406, 60, 7)
+            ],
+            "背包写回：`MakeIndex` 逐件 +1、`Index/Dura` 照模板"
+        );
+        assert_eq!(item_number, 406, "会话计数器被 6 件各消费一次");
+        assert_eq!(sg.state.wabil.weight, 12, "`WeightChanged()`：6 × weight 2");
     }
 
     /// **T-28（卡 `openmir2-m3-recovery-tick`）进程级判据**：吃下 `StdMode 0` 的池药后，
@@ -30058,6 +30284,8 @@ mod tests {
         };
 
         // 1) 吃药：池药形态只叠加 `IncHealth = 0 + 20`，尾只有 `SM_EAT_OK` + `RM_WEIGHTCHANGED`。
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
         handle_eat_cmd(
             make_index,
             0,
@@ -30072,6 +30300,8 @@ mod tests {
             &world,
             &colors,
             None,
+            &unbind,
+            &mut item_number,
         );
         let mut eat_frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
