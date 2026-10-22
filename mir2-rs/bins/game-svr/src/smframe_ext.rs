@@ -46,6 +46,32 @@
 //! | [`sm_sendusermakedrugitemlist`] | 712 | `:1876` | 头 + `EncodeString(Msg)` |
 //! | [`sm_showevent`] | 804 | `:1999` | 头 + `Encode(ShortMessage 4B)` |
 //! | [`sm_whisper`] | 103 | `:1709` | 头 + `EncodeString(Msg)` |
+//!
+//! ## 接线判定：13 个「有编码器、无生产发射点」的帧（卡 `openmir2-orphan-encoder-batch-a`，2026-10-23）
+//!
+//! 判据：① 本仓生产者缺失 ⇒ 接上；② oracle 同场景也不发 ⇒ 登记；③ 生产者已存在但未调用 ⇒ 接线。
+//! 逐帧结论（oracle 生产点 → 本仓现状 → 判定）：
+//!
+//! | 帧 | 常量 | oracle 生产点 | 本仓现状 | 判定 |
+//! |---|---|---|---|---|
+//! | [`sm_breakweapon`] | 1102 | `CheckWeaponUpgrade` 的 `SendRefMsg(RM_BREAKWEAPON)`（武器耐久归零） | 编码器 + 构造用例在；`grep RM_BREAKWEAPON` 生产点零命中 | **登记 T-174**：生产链 = 耐久扣减 ⇒ R，随 `SM_LAMPCHANGEDURA` 同窗口跑 |
+//! | [`sm_changeface`] | 1104 | `ElfWarriorMonster` 的 `MakeClone` 支（ELF 分裂出分身时 `SendRefMsg(RM_CHANGEFACE)`） | 编码器 + 构造用例在；本仓无该支生产点 | **登记 T-175**：上游 `ElfWarrior` 分裂支未移植 |
+//! | [`sm_closedoor`] | 614 | `RM_DOORCLOSE`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**：与 `sm_opendoor_ok` 同因，oracle 结构性不可达 |
+//! | [`sm_closehealth`] | 1101 | `BreakOpenHealth`（`ShowHp` 超时或死亡时 `SendRefMsg(RM_CLOSEHEALTH)`） | 宿主已镜像 `sg.show_hp`；缺 1101 发射点 | **可接线**：发射点在 `lib.rs` 的 RM 泵（本卡写集外，见 T-177 与卡片 comment） |
+//! | [`sm_hideevent`] | 805 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_HIDEEVENT)`） | `World::run_map_events` 只跑 fire-burn，未建模可见事件差集 | **登记 T-178**：MapEvent 可见性未建模 |
+//! | [`sm_itemshow`] | 610 | `Envir.AddItemToMap` 成功支的 `SendRefMsg(RM_ITEMSHOW)` | `MapItem.ItemId == 0` 恒真 ⇒ oracle 不可达（T-19/T-25/T-32） | **登记 T-179**：沿用既有 T-32 结论 |
+//! | [`sm_lampchangedura`] | 655 | 右手火把耐久结算的两处 `SendMsg(RM_LAMPCHANGEDURA)` | 编码器在；生产点零命中 | **登记 T-180**：改耐久 ⇒ R，需真机窗口 |
+//! | [`sm_opendoor_ok`] | 612 | `RM_DOOROPEN`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**（与 `sm_closedoor` 同条） |
+//! | [`sm_queryybdeal`] | 23023 | 脚本动作 `QUERYYBDEAL` 的 `SendMsg(RM_QUERYYBDEAL)` 尾 = `EDCode.EncodeBuffer` | `crates/script` 无 `QUERYYB*` handler | **登记 T-181**：上游脚本动作未实现 |
+//! | [`sm_queryybsell`] | 23021 | 脚本动作 `QUERYYBSELL`（同上形状） | 同上 | **登记 T-181**（与 `sm_queryybdeal` 同条） |
+//! | [`sm_reconnect`] | 802 | `PlayObject` 的 `TransferPlanesServer` / `WorldServer` 的 `SendChangeServer`（读 `!servertable.txt` 的路由表） | 本仓无 `!servertable.txt` 装载，`ChangeSpaceMove` 未移植（G11） | **登记 T-182**：跨服搬家子系统未移植 |
+//! | [`sm_showevent`] | 804 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_SHOWEVENT)`） | 同 `sm_hideevent` | **登记 T-178**（与 `sm_hideevent` 同条） |
+//! | `sm_skeleton`（`smframe.rs`） | 27 | `PlayObject` 的 `SendRefMsg(RM_SKELETON)`（尸体转骷髅） | 已登记 `deferred`（`downlink.rs`），缺 setter | **登记 T-183**：沿用既有 deferred 结论 |
+//!
+//! 汇总：**12 条登记 / 1 条可接线**（`SM_CLOSEHEALTH`）。可接线项的发射点在 `lib.rs` 的 RM 泵，
+//! 不在本卡写集（`smframe_ext/pickwire/useitem/sessionwire/mapdoor.rs` + `whitelist.md`）内，
+//! 且 `mir2-rs/tests/parity/m3/plan-run-gap-batches-20261018.md` 的派工行已标注「`lib.rs` 与
+//! wt-gm3 冲突」⇒ 由卡片 comment 请 Leader 裁定写集，不擅自越界改动。
 
 use crate::smframe::{
     client_layout_enabled, command_header, gm_data_body, hi_word, lo_word, make_word,
