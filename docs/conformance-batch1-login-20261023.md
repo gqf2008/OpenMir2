@@ -270,3 +270,23 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 （见卡 `openmir2-npc-def-loading`）③ EDCode 编码后的 label 在服务端解码后是否与脚本标签完全一致。
 
 结论：庄家族（`openmir2-openybdeal-host-wiring`）在弄清 label 语义前**无法产出证据**。
+
+## 17. **根因找到**：驱动器对 c2s body 做了两次 EDCode（05:45–05:52）
+
+`plan_step` 里 `send.text` / `say` / `dlg_select` 的 body 先被 `encode_text(...)`（= GBK+EDCode）编码，
+随后 `build_c2s_frame` 又把 **12B 头 + body 整体** 再 EDCode 一次 ⇒ 线上是**双重编码**；
+服务端 `EDCode.DeCodeString(msgBuff[12..^1])` 只解一次，于是 label/说词变成乱码 ⇒ 静默忽略。
+
+这解释了此前所有「无回包」现象：
+- `CM_CLICKNPC(1010)`（空 body）→ **正常**，643 弹窗一直能拿到；
+- `CM_SAY(3030)` / `CM_MERCHANTDLGSELECT(1011)`（带 body）→ **全部无回应**（GM、`@kaiz`/`@chouma`）；
+- 因此 §6（gm 无回包）、§16（label 未被接受）**结论作废，是驱动器 bug，不是 server 行为差异**。
+
+**修复**（commit 见下）：body 一律回到**原始 GBK 字节**，EDCode 只在 `build_c2s_frame` 做一次；
+selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
+
+**修复后实测（C# 侧）**：
+- `gm_time`：exit=0，收到 `SM_SYSMESSAGE(100) 当前日期时间: 2026-10-23 05:49:33` ✅
+- `dice_chain_auto`：从原来的 **steps[3] 超时**推进到 **steps[7]**——`@kaiz→643`、`@ya5→643` 都通了；
+  最后一步 `@ya52` 无 643，是因为脚本该支 `CHECKitem 筹码包 1` 不满足 ⇒ 走 `MESSAGEBOX 请打开商铺兑换[筹码]`，
+  **属内容前置，不是 bug**。

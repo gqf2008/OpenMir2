@@ -417,13 +417,13 @@ def _encode_send_body(val, where, params=None):
         text = text if isinstance(text, str) else str(text)
         if not text:
             raise ScenarioError("%s.text_from: param %r is empty" % (where, name))
-        return encode_text(text, "gbk")
+        return text.encode("gbk")   # 原始 GBK；EDCode 由 build_c2s_frame 统一做（别再预编码）
     if "text" in val:
         text = val["text"]
         if not isinstance(text, str):
             raise ScenarioError("%s.text must be a string" % where)
         # 字面量：不与 params 做任何替换（要参数化文本请用 text_from）
-        return encode_text(text, "gbk")
+        return text.encode("gbk")   # 原始 GBK；EDCode 由 build_c2s_frame 统一做
     raw = val["raw_hex"]
     if not isinstance(raw, str):
         raise ScenarioError("%s.raw_hex must be a hex string" % where)
@@ -479,7 +479,7 @@ def plan_step(step, index, params):
         if not isinstance(val, str):
             raise ScenarioError("%s.say must be a string" % where)
         out.update(ident=CM_SAY, recog=0, param=0, tag=0, series=0,
-                   body=encode_text(val, "gbk"))
+                   body=val.encode("gbk"))
     elif action == "click_npc":
         if val == "auto:last_turn":
             out.update(ident=CM_CLICKNPC, recog=0, param=0, tag=0, series=0, body=b"",
@@ -497,7 +497,7 @@ def plan_step(step, index, params):
         if not isinstance(label, str) or not label:
             raise ScenarioError("%s.dlg_select label must be a non-empty string" % where)
         out.update(ident=CM_MERCHANTDLGSELECT, recog=recog, param=0, tag=0, series=0,
-                   body=encode_text(label, "gbk"), _needs_merchant_recog=(recog is None))
+                   body=label.encode("gbk"), _needs_merchant_recog=(recog is None))
     elif action == "wait_for":
         if isinstance(val, int) and not isinstance(val, bool):
             idents = [_need_int(val, where + ".wait_for")]
@@ -1293,7 +1293,7 @@ def _selftest_scenarios():
     gm = load_scenario(paths["gm_time.json"])
     gm_plans, _ = expand_scenario(gm)
     assert gm_plans[0]["kind"] == "send" and gm_plans[0]["ident"] == CM_SAY, gm_plans[0]
-    assert gm_plans[0]["body"] == encode_text("@时间", "gbk"), gm_plans[0]["body"]
+    assert gm_plans[0]["body"] == "@时间".encode("gbk"), gm_plans[0]["body"]
     assert gm_plans[1]["kind"] == "wait_for", gm_plans[1]
     assert gm_plans[1]["idents"] == [SM_SYSMESSAGE], gm_plans[1]
 
@@ -1308,7 +1308,7 @@ def _selftest_scenarios():
     for p in dice_plans[2::2]:
         assert p["_needs_merchant_recog"] is True, (p["index"], p.get("_needs_merchant_recog"))
     bodies = [p["body"] for p in dice_plans[2::2]]
-    assert bodies == [encode_text(x, "gbk") for x in ("@kaiz", "@ya5", "@ya52")], bodies
+    assert bodies == [x.encode("gbk") for x in ("@kaiz", "@ya5", "@ya52")], bodies
 
     # fail-closed 负向：未知键 / text+raw_hex 同给 / 坏 hex / 解析不了的助记
     for bad_step in (
@@ -1393,14 +1393,14 @@ def _selftest_scenario_required():
         # 2) 给全 ⇒ 展开成功，text_from 解析成参数值（GBK+EDCode）
         plans, _ = expand_scenario(data, {"make_index": 42, "item_name": "屠龙"})
         assert plans[0]["recog"] == 42, plans[0]
-        assert plans[0]["body"] == encode_text("屠龙", "gbk"), plans[0]["body"]
+        assert plans[0]["body"] == "屠龙".encode("gbk"), plans[0]["body"]
         assert plans[1]["idents"] == [SM_TAKEON_OK, SM_TAKEON_FAIL], plans[1]
         # 3) text 不是 params 名时保持字面量
         lit = dict(base, required=[], steps=[{"send": {"ident": CM_SAY, "text": "@时间"}}])
         with open(path, "w", encoding="utf-8") as fh:
             json.dump(lit, fh, ensure_ascii=False)
         plans, _ = expand_scenario(load_scenario(path), {"@时间": "不该命中"})
-        assert plans[0]["body"] == encode_text("@时间", "gbk"), plans[0]["body"]
+        assert plans[0]["body"] == "@时间".encode("gbk"), plans[0]["body"]
         # 4) required 形状非法 / 未知顶层键仍 fail-closed
         for bad in (dict(base, required="make_index"), dict(base, required=[1]),
                     dict(base, bogus=1)):
