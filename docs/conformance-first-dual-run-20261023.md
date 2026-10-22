@@ -4,6 +4,8 @@
 - 工具：`tools/probe/mir2_probe.py`（驱动器）+ `tools/conformance/compare_runs.py`（比较器），
   均经独立复核 approve（selftest 11+6 / 44 项）。
 - 场景：`tools/probe/scenarios/login_only.json`（登录→选服→选角→进世界→等 15 帧后断开）。
+  **round2 起改为 `wait_idents` 等 `50/52/658/654/657/100` 全部到齐（另有 `--dwell-ms` 默认 1200ms 兜底）**，
+  见卡 `openmir2-probe-dwell-after-enterworld`：原来的固定帧数会在延迟段帧到达前小退。
 
 ## 1. 环境（两栈串行、**同一组端口**）
 

@@ -978,8 +978,9 @@ def build_argparser():
     ap.add_argument("--drain-ms", type=int, default=300,
                     help="收尾（CM_SOFTCLOSE 之后）的额外收帧窗口（默认 300）")
     ap.add_argument("--dwell-ms", type=int, default=DEFAULT_DWELL_MS,
-                    help="进世界后的延迟段收帧窗口下限（毫秒，默认 %d）；"
-                         "0 = 旧行为（只 pump --between-ms，会丢延迟段帧）"
+                    help="进世界后的延迟段收帧窗口下限（毫秒，默认 %d，必须 >= 0）；"
+                         "0 = 旧行为（只 pump --between-ms，会丢延迟段帧）；"
+                         "负值 fail-closed（退出 2）"
                          % DEFAULT_DWELL_MS)
     ap.add_argument("--game-gate", help="覆盖 SM_STARTPLAY 给的 GameGate 地址 HOST:PORT")
     ap.add_argument("--client-version", type=int, default=CLIENT_VERSION_NUMBER,
@@ -1001,6 +1002,8 @@ def _check_required(args):
             missing.append("--" + name.replace("_", "-"))
     if missing:
         raise ProbeError("missing required argument(s): %s" % ", ".join(missing))
+    if getattr(args, "dwell_ms", 0) < 0:
+        raise ProbeError("--dwell-ms must be >= 0 (0 = 旧行为), got %d" % args.dwell_ms)
 
 
 def main(argv=None):
@@ -1358,6 +1361,13 @@ def _selftest_dwell():
         assert parsed.dwell_ms == DEFAULT_DWELL_MS == 1200, parsed.dwell_ms
         parsed0 = build_argparser().parse_args(base + ["--dwell-ms", "0"])
         assert parsed0.dwell_ms == 0, parsed0.dwell_ms
+        neg = build_argparser().parse_args(base + ["--dwell-ms", "-1"])
+        try:
+            _check_required(neg)
+        except ProbeError:
+            pass
+        else:
+            raise AssertionError("negative --dwell-ms accepted (must fail-closed, rc=2)")
 
         # 正例：dwell=300ms => 150ms 后才到的延迟段帧（654/657/100）收齐
         args = argparse.Namespace(out=tmp, no_auto_handshake=False, timeout_ms=8000)
@@ -1391,6 +1401,8 @@ def _selftest_dwell():
             assert ("missing [%d]" % SM_STARTPLAY) in str(ex), str(ex)
         else:
             raise AssertionError("wait_idents accepted a missing ident")
+        assert run.steps[-1]["kind"] == "wait_idents", run.steps[-1]
+        assert run.steps[-1]["missing_idents"] == [SM_STARTPLAY], run.steps[-1]
         payload = build_run_json(run, args, None, {}, None)
         assert payload["dwell"]["requested_ms"] == 300, payload.get("dwell")
         assert SM_CHANGELIGHT in payload["dwell"]["idents_after"], payload.get("dwell")
@@ -1509,6 +1521,11 @@ def _selftest_conn_semantics():
         assert missing == [], missing
         missing, waited = conn.wait_idents([SM_STARTPLAY], 30)
         assert missing == [SM_STARTPLAY] and waited >= 30, (missing, waited)
+        # 部分命中：不能把「任一命中」当成功 —— missing 必须保留差集，且必须等满 timeout
+        # （把 wait_idents 退化成 any-match 则这里必红：missing 变 [] 或 waited 变 ~0）
+        missing, waited = conn.wait_idents([SM_SENDNOTICE, SM_STARTPLAY], 30)
+        assert missing == [SM_STARTPLAY], missing
+        assert waited >= 30, waited
         run.recorder.close()
         rows = [json.loads(line) for line in open(run.recorder.path, encoding="utf-8")]
         assert len(rows) == 4 and rows[0]["frame_class"] == "protocol"

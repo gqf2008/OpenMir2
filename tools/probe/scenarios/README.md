@@ -54,6 +54,7 @@ python tools/probe/mir2_probe.py \
   `PLAYER_SEARCH_TIME`），dwell 不足会在延迟段帧（`10/41/654/657/100…`）到达之前
   `CM_SOFTCLOSE` 小退，对拍时被误判成「对侧独有」。`--dwell-ms 0` = 旧行为（只
   `pump --between-ms`），**只用于复现旧问题**，对拍不要用。
+  `--dwell-ms` 必须 ≥ 0；负值在参数校验期 fail-closed（退出码 2，不落 `run.json`）。
 * 步骤间默认间隔 `--between-ms`（默认 200ms）；单步可用 `delay_ms` 覆盖。等待本身用 `timeout_ms`。
 
 ## 参数
@@ -109,7 +110,8 @@ python tools/probe/mir2_probe.py \
 
 `argv`（`--password` 已打码）、`env`、起止墙钟、`chain`（登录四步的 ident/网关地址/session/角色列表/
 `SM_LOGON` 的 actor id 与落点）、`dwell`（进世界后延迟段：请求/实际时长、窗口前后见过的 ident、
-新到的 ident）、`steps`（每条步骤的发送帧十六进制与等待结果）、`auto`（自动握手）、
+新到的 ident；**加性字段**，`schema_version` 仍为 1，旧比较器忽略）、`steps`（每条步骤的发送帧
+十六进制与等待结果）、`auto`（自动握手）、
 `frames_total` / `frames_by_conn` / `ident_hist`、`unclassified`、`exit`。
 
 ## 退出码
