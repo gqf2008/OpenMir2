@@ -609,14 +609,26 @@ async fn add_cert_user(share: &Arc<Share>, user: &mut UserInfo) {
 
 /// `ClientSession.GetServerListInfo`（`ServerName/状态/`，状态取 `ServerStatus` 的**枚举名**）。
 async fn get_server_list_info(share: &Arc<Share>) -> String {
-    let mut out = String::new();
+    let mut entries: Vec<(&str, &'static str)> = Vec::new();
     for name in &share.cfg.server_names {
         if !name.is_empty() {
-            out.push_str(name);
-            out.push('/');
-            out.push_str(get_server_status(share, name).await);
-            out.push('/');
+            entries.push((name.as_str(), get_server_status(share, name).await));
         }
+    }
+    render_server_list(&entries)
+}
+
+/// 逐条拼 `名字/状态/`；空名按 C# `IsNullOrEmpty` 跳过（`ClientSession.cs:851-862`）。
+fn render_server_list(entries: &[(&str, &str)]) -> String {
+    let mut out = String::new();
+    for (name, status) in entries {
+        if name.is_empty() {
+            continue;
+        }
+        out.push_str(name);
+        out.push('/');
+        out.push_str(status);
+        out.push('/');
     }
     out
 }
@@ -1222,6 +1234,19 @@ mod tests {
         assert!(ordinal_ignore_case_eq("中文", "中文"));
         assert!(!ordinal_ignore_case_eq("abc", "abcd"));
         assert!(!ordinal_ignore_case_eq("pass", "pas"));
+    }
+
+    /// 529 服务器列表拼接：`名字/状态/`，空名跳过；GBK 字节逐字节断言。
+    #[test]
+    fn server_list_concat_matches_oracle_bytes() {
+        let entries = [("热血传奇", "Idle"), ("传奇2", "Full"), ("", "Idle")];
+        let text = render_server_list(&entries);
+        assert_eq!(text, "热血传奇/Idle/传奇2/Full/");
+        assert_eq!(
+            gbk::encode(&text),
+            b"\xc8\xc8\xd1\xaa\xb4\xab\xc6\xe6/Idle/\xb4\xab\xc6\xe62/Full/".to_vec()
+        );
+        assert!(render_server_list(&[]).is_empty());
     }
 
     /// `WriteAsciiString` 的三个分支（截断 / 填充 / 空串）。
