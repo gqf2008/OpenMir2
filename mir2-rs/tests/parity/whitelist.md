@@ -663,3 +663,21 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | T-170 | **批次 3 的五个配置值取部署值硬编码进 `GmConfig::default()`**：`GroupRecallTime=5`/`GuildRecallTime=600`/`UserMoveTime=10`/`UserMoveCanDupObj=1`/`UserMoveCanOnItem=1`（`E:/MirServer/M2GameSvr/Server.conf [Setup]`），**未**从 `ServerConf` 接线；生产 perm 0 ⇒ 不可达，改动这些键不会跟随。 | `tier=L`；`tier_why`：纯配置常量，无 RNG/时序/落库；当前部署值与硬编码一致。窗口项：若上述键被改，需重跑 `@天地合一`/`@df56dfs`/`@传送` 的冷却与 `CanWalkOfItem` 分支。 | 作者登记（`openmir2-worker-4`，卡 `openmir2-gm-commands-design`，本批 tier=L）；**待独立 principal 复核** |
 | T-171 | **地图/在线目标/掌门/`HomeMap` 的口径近似**：① `MapMgr.FindMap` 用 `MapRegistry::id_of`（`to_ascii_lowercase`）——oracle `_mapList` 是 `Dictionary(StringComparer.OrdinalIgnoreCase)`（`MapManager.cs:10`）⇒ **ASCII 集合下等价**（`to_ascii_lowercase` 不折叠非 ASCII，`OrdinalIgnoreCase` 会折叠；现网地图名均为 ASCII）；② `WorldEngine.GetPlayObject` 以 `world.entities` 的 `race==Play && !ghost && ChrName OrdinalIgnoreCase` 首个近似，**未**建模 `IsPasswordLocked && ObMode && AdminMode` 门（`WorldServer.cs:947`）；③ `IsGuildMaster` 用 `GuildMgr.member_of_guild` + 首个行会的 `RankNo==1` 近似 oracle 会话态 `MyGuild/GuildRankNo`；④ `MapRandomMove(HomeMap)` 的 `HomeMap` 在实体上未建模（角色记录有 `home_map`）。 | `tier=L`；`tier_why`：纯判定口径，无 RNG/落库；①在 ASCII 集合下等价（`OrdinalIgnoreCase`），②③④ 在生产 perm 0 下不可达。窗口项：若开 `SETPERMISSION` 窗口，补「密码锁+ObMode+AdminMode 玩家」的 `GetPlayObject` 用例、`HomeMap` 的 `@Tingwa` 用例与多行会成员的 `IsGuildMaster` 用例。 | 作者登记（`openmir2-worker-4`，卡 `openmir2-gm-commands-design`，本批 tier=L）；**待独立 principal 复核** |
 | T-172 | **C# SelGate 监听端口可配置（owner 2026-10-23 批准的 oracle 源改动）**：`src/SelGate/GateShare.cs:21` 的 `public const int GatePort = 7100` 改为 `public static int GatePort = 7100`，并由 `src/SelGate/Conf/ConfigManager.cs:71` 的 `ReadWriteInteger("SelGate","ListenPort", GateShare.GatePort)` 覆盖。**动机**：无头协议对拍要与 Rust 栈**同时**跑两套 C# 真值栈，7100 写死导致端口独占；**行为不变**——缺省仍 7100，部署件 `E:/MirServer/SelGate` 未重铺，线上逐字节不受影响。**判据**：① `dotnet build src/SelGate/SelGate.csproj -c Release` 0 error；② 私有 root 配 `ListenPort=27100` 后监听 27100、默认部署仍监听 7100；③ 协议/帧面无任何改动（只改 bind 端口来源）。 | `tier=L`；`tier_why`：只改配置读取来源，不改协议/时序/RNG/落库；判据 = 编译 + 端口监听实测 + 代码对照。**待 owner 复核**（已获口头批准，需在本行留痕） |
+
+## AdminList 消费点（卡 `openmir2-envir-adminlist-consumer`，2026-10-23，tier=L）
+
+> 实现：`bins/game-svr/src/adminlist.rs`（宿主装载半 + `GetHumPermission` 查表半；解析复用
+> `crates/data/src/lists.rs` 的 `LoadAdminList` 逐行 1:1）+ `bins/game-svr/src/lib.rs` 启动期装载并
+> 登记 `EnterConfig::admin_list`（随 `EnterConfig` 到 sim 线程，与 `WorldEngine.AdminList` 同形）。
+> oracle 事实：**装载活、读取死**——`LocalDb.LoadAdminList`（装载点 `GameApp.cs:209`）无条件读入
+> `WorldEngine.AdminList`，但唯一读者 `WorldServer.GetHumPermission` 的唯一调用点在
+> `src/M2Server/Player/PlayObject.cs:1188-1194` 整段被注释（`sIPaddr` 在该文件里只出现在这两行注释、
+> **无声明** ⇒ 该块即便取消注释也编译不过）⇒ 本片**不接**任何 `Permission` 写点（接上须另开 `D-*`）。
+> 判据：`adminlist::tests::{admin_list_missing_is_none, admin_list_empty_file_is_empty_table,
+> admin_list_deployed_single_line_without_ip_is_dropped, admin_list_normal_lines_parse_fields,
+> get_hum_permission_hits_and_misses, lookup_folds_ascii_only, deployed_file_never_grants_permission}`
+> 与 `tests/parity/coverage/recon_gates.py content`（`AdminList.txt`：`rust=yes` / `implemented`）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
+| --- | --- | --- | --- |
+| T-173 | **名单名比较口径：`eq_ignore_ascii_case`（只折叠 ASCII）vs .NET `StringComparison.OrdinalIgnoreCase`（Unicode 简单大小写折叠）**。oracle `WorldServer.GetHumPermission` 用 `string.Compare(adminInfo.ChrName, sUserName, StringComparison.OrdinalIgnoreCase)`；本仓 `crates/data/src/lists.rs` 的 `lookup_admin` 用 `eq_ignore_ascii_case`，`bins/game-svr/src/adminlist.rs` 的 `AdminList::get_hum_permission` 直接复用它。复核实测 .NET 8：`Ä`/`ä`、`Σ`/`σ`、`É`/`é`、全角 `Ａ`/`ａ` 在 `OrdinalIgnoreCase` 下**相等**，而 Rust 侧**不等** ⇒ 非 ASCII 大小写分叉。 | **域限定口径：仅 ASCII + GBK 汉字语料等价**。① AdminList 的 `ChrName` 来自 GBK 部署件，字符集 = ASCII 字母数字 + GBK 汉字；汉字无大小写映射、GBK 双字节高位不参与 ASCII 折叠 ⇒ 该域内两侧判定相同；② 该查表在生产路径**零调用点**（见上：`PlayObject` 的调用整段被注释）⇒ 当前不可达；只有将来开 `D-*` 接 `Permission` 写点、且角色名含非 ASCII 大小写字母（如 `Ä`/`ä`）时才可能观测到差异。**判据**：`adminlist::tests::lookup_folds_ascii_only` 把「非 ASCII 不折叠」钉成显式事实（改成完整 Unicode 折叠即红 ⇒ 须同步更新本条）、`get_hum_permission_hits_and_misses` 钉 ASCII 折叠两侧一致；构造级，`tier=L`（不触 RNG/时序/落库/战斗数值）。**修法/回退**：若要 oracle 等价，改用 Unicode simple case folding（逐字符 fold 后比较）并重跑本条与 `lookup_admin_is_ordinal_ignore_case`。 | 作者登记（`openmir2-worker-4`，卡 `openmir2-envir-adminlist-consumer`，tier=L）；**待独立 principal 复核**（复核 R6-1 指出原注释把两口径误写成同一结论，已改域限定口径） |
