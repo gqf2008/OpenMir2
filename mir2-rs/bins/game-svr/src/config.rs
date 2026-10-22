@@ -29,6 +29,9 @@ pub struct GateConfig {
     ///
     /// oracle 是 `byte`（`SystemShare.ServerIndex`，`SystemShare.cs:45`）⇒ 越界/非整数报错。
     pub server_index: u8,
+    /// `[Setup] PasswordLockHumanLogin`（`ServerConf.cs:574`；`GameSvrConf.cs:1493` 缺省 false，
+    /// 部署 `Server.conf:386` = 0）：`@LockLogin` 的第一道门。
+    pub lock_human_login: bool,
     /// `[Server] TestServer`（`ServerConf.cs:23`：`ReadWriteString("Server","TestServer","FALSE")`
     /// 与 `"TRUE"` 做 **OrdinalIgnoreCase** 比较）。登录 `UserLogon` 的第三条 `SysMsg`
     /// （`StartNoticeMsg`，`PlayObject.cs:1372`）与 `PayMent=3` 覆盖都看它
@@ -375,6 +378,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
     let mut server_index: Option<u8> = None;
+    let mut lock_human_login: Option<bool> = None;
     let mut test_server: Option<bool> = None;
     let mut service_mode: Option<bool> = None;
     let mut maps: Option<Vec<(i32, i32)>> = None;
@@ -512,6 +516,14 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 v.parse()
                     .with_context(|| format!("PKFlagTime 不是合法整数：{v:?}"))?,
             );
+        }
+        // `ServerConf.cs:574`：`ReadWriteBool("Setup", "PasswordLockHumanLogin", false)`。
+        // 放在 `"SETUP"` match 之前的原因同 `PKFlagTime`（避免给共享大 match 加臂）。
+        // `ConfigFile.ReadBool`（`ConfigFile.cs:188-204`）的判定：大写后命中 是/YES/1/TRUE ⇒ true，
+        // **其余任何值一律 false**（不报错）；空值回落缺省 false。
+        if section == "SETUP" && k == "PASSWORDLOCKHUMANLOGIN" {
+            let up = v.to_uppercase();
+            lock_human_login = Some(up == "是" || up == "YES" || up == "1" || up == "TRUE");
         }
         match section.as_str() {
             // 网关链路真正需要的键（本切片读这些）。
@@ -1067,6 +1079,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         check_block,
         // oracle 缺省值（`SystemShare.cs:45` 的 `ServerIndex = 0`）：缺键不算错。
         server_index: server_index.unwrap_or(0),
+        // oracle 缺省 `false`（`GameSvrConf.cs:1493`）：缺键不算错。
+        lock_human_login: lock_human_login.unwrap_or(false),
         maps,
         // oracle 缺省 `FALSE`（`ServerConf.cs:23/27`）：缺键不算错。
         test_server: test_server.unwrap_or(false),

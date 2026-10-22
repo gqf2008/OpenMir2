@@ -66,6 +66,7 @@ pub mod contentload;
 pub mod ctor_fold;
 pub mod downlink;
 pub mod feature;
+pub mod gmcmd;
 pub mod ground;
 pub mod guardlist;
 pub mod healthspell;
@@ -578,6 +579,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
         hear_b: cfg.hear_msg_b_color,
         whisper_f: cfg.whisper_msg_f_color,
         whisper_b: cfg.whisper_msg_b_color,
+        green_f: cfg.green_msg_f_color,
+        green_b: cfg.green_msg_b_color,
+        blue_f: cfg.blue_msg_f_color,
+        blue_b: cfg.blue_msg_b_color,
     };
     // 物品模板表（帧 50/41 的 `UseItems[Dress/Weapon].StdItem.Shape` 输入）：oracle 在 `GameApp.Initialize`
     // 直连 MySQL 读 `stditems`（`MySqlDB.LoadItemsDB`，不经 DBSvr）；加载失败 ⇒ 空表
@@ -986,6 +991,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     string_conf,
                     show_rank_level_name,
                     server_index: cfg.server_index,
+                    lock_human_login: cfg.lock_human_login,
                     guild_castle_cfg,
                     catalog: item_catalog,
                     world_item_catalog: item_table,
@@ -1343,6 +1349,8 @@ struct ChatHost<'a> {
     party_cfg: &'a mir2_world::PartyConfig,
     strings: &'a strings::StringConf,
     colors: &'a MsgColors,
+    /// `@` 命令体要读的配置（`SystemShare.Config` 半边；部署 `PasswordLockHumanLogin=0`）。
+    gm_cfg: gmcmd::GmConfig,
     /// `[Setup] CanShoutMsgLevel`。
     can_shout_level: i32,
     /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
@@ -1395,8 +1403,14 @@ fn handle_say(
         handle_channel_say(host, sessions, speaker, line);
         return;
     }
+    // `@` 命令（oracle `PlayObject.Chat.cs:363-400`）：命中即整条 `CM_SAY` 结束，**不**回落喊话；
+    // 未命中 ⇒ `CommandSystem.Execute` 先发一条 `未知命令: …`，回落再补一条（见 [`gmcmd`]）。
+    if line.starts_with('@') {
+        handle_gm_command(host, sessions, speaker, line);
+        return;
+    }
     if !chat::is_plain_say(line) {
-        // `@` 命令系统（`ProcessUserLineMsg` 的 `@` 支）仍未接：照旧丢弃并记日志（不静默）。
+        // 非 `@` 的非普通说话（当前只有首字符 `/`/`!` 两支之外的空白/异常行）：照旧丢弃并记日志。
         glog!(
             "DBG",
             "CM_SAY：非普通说话（@命令），本切片未接 ⇒ 丢弃 ChrName={} tail={line:?}",
@@ -1625,6 +1639,82 @@ fn send_self_sysmsg(host: &ChatHost<'_>, speaker: &OnlineEntry, msg: &str) {
         "说话提示 ChrName:{} → tail={msg:?}",
         speaker.chr_name
     );
+}
+
+/// `@` 命令的落地（oracle `PlayObject.Chat.cs:368-400` + `CommandSystem.cs:125-196`）。
+///
+/// 帧：每条 `SysMsg(text, color, Hint)` ⇒ `SM_SYSMESSAGE(100)`、`Series=1`、`Recog` = 说话者自己的
+/// `ActorId`、`Param = MakeWord(F,B)`；Red 取 `[Setup] RedMsgFColor/BColor`（255/56）、Green 219/255、
+/// Blue 251/252（部署值）。
+///
+/// 回落：`Execute` 未命中（未知命令）⇒ 事件 `GmResult::msgs` 里已有第一条 `未知命令: …`，
+/// 本函数再补 `PlayObject.Chat.cs:400` 的第二条 [`gmcmd::incorrect_msg`]。命中即 `return`，
+/// 与 oracle「`Execute` 返回 true 就不再看回落」同形。
+fn handle_gm_command(
+    host: &ChatHost<'_>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    speaker: &OnlineEntry,
+    line: &str,
+) {
+    let Some(sg) = sessions.get_mut(&speaker.chr_name) else {
+        glog!(
+            "WRN",
+            "GM 命令：ChrName={} 无会话态（未进世界）⇒ 丢弃 tail={line:?}",
+            speaker.chr_name
+        );
+        return;
+    };
+    let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, line);
+    if let Some(note) = result.log_note {
+        glog!(
+            "DBG",
+            "GM 命令 ChrName={} tail={line:?}：{note}",
+            speaker.chr_name
+        );
+    }
+    for msg in &result.msgs {
+        let (f, b) = match msg.color {
+            gmcmd::GmColor::Red => (host.colors.red_f, host.colors.red_b),
+            gmcmd::GmColor::Green => (host.colors.green_f, host.colors.green_b),
+            gmcmd::GmColor::Blue => (host.colors.blue_f, host.colors.blue_b),
+        };
+        send_self_sysmsg_color(host, speaker, f, b, &msg.text);
+    }
+    if !result.found && result.parsed {
+        let text = gmcmd::incorrect_msg(sg.gm.permission, line);
+        send_self_sysmsg_color(host, speaker, host.colors.red_f, host.colors.red_b, &text);
+    }
+    glog!(
+        "INF",
+        "GM 命令 ChrName={} ActorId={} tail={line:?} found={} 帧数={}",
+        speaker.chr_name,
+        speaker.actor_id,
+        result.found,
+        result.msgs.len() + usize::from(!result.found && result.parsed)
+    );
+}
+
+/// `SysMsg(msg, color, Hint)` 的通用红/绿/蓝版（[`send_self_sysmsg`] 是它的 Red 特化）。
+fn send_self_sysmsg_color(
+    host: &ChatHost<'_>,
+    speaker: &OnlineEntry,
+    f_color: u8,
+    b_color: u8,
+    msg: &str,
+) {
+    let body = smframe::sm_sysmessage(
+        speaker.actor_id,
+        u16::from(f_color),
+        u16::from(b_color),
+        &gbk_encode(msg),
+    );
+    if let Some(tx) = route_to_gate(host.gates, speaker.gate_idx, speaker.socket, "GM 命令回帧")
+    {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: speaker.socket,
+            body,
+        });
+    }
 }
 
 /// **orphan 编码器接线首批**：`/目标名 正文` 私聊 ⇒ `SM_WHISPER(103)`
@@ -13586,6 +13676,14 @@ struct MsgColors {
     hear_b: u8,
     whisper_f: u8,
     whisper_b: u8,
+    /// `[Setup] GreenMsgFColor/GreenMsgBColor`（oracle 缺省 0xDB/0xFF，部署 219/255）：
+    /// `BaseObject.SysMsg(_, MsgColor.Green, Hint)` 的 `SM_SYSMESSAGE` 色词（`@` 命令族）。
+    green_f: u8,
+    green_b: u8,
+    /// `[Setup] BlueMsgFColor/BlueMsgBColor`（oracle 缺省 0xFF/0xFC，部署 251/252）：
+    /// `@时间` 的 `SysMsg(_, MsgColor.Blue, Hint)` 色词。
+    blue_f: u8,
+    blue_b: u8,
 }
 
 /// 账号级顶号的**即时部分**（oracle `TCPNetChannel.KickUser`，`TCPNetChannel.cs:226-284`）：
@@ -13835,6 +13933,9 @@ struct ShopSession {
 /// 进世界时从 `CharacterData` 建立、断线/小退时移除（`CharacterData` 在其他路径上用完即弃，
 /// 本结构把 `ground::*` 要读写的字段留下来）。
 struct SessionGround {
+    /// `@` 命令面的会话态（`PlayObject.Permission/HearWhisper/LockWhisperList/IsLockLogon/IsLockLogoned`；
+    /// 见 [`gmcmd::GmSession`]）。与 `PlayObject` 同生命周期：进世界建、离场删。
+    gm: gmcmd::GmSession,
     /// `ground::GroundState`（`PlayObject.ItemList` + `Gold` + `WAbil`）。
     state: game_svr::ground::GroundState,
     /// `PlayObject.StorageItemList` + `IsCanGetBackItem`（仓库会话态，[`storage`]；
@@ -14089,6 +14190,9 @@ struct EnterConfig {
     /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
     /// `characters.ServerIndex`（`WorldServer.cs:1236`）。
     server_index: u8,
+    /// `[Setup] PasswordLockHumanLogin`（`Config.LockHumanLogin`，`ServerConf.cs:574`；
+    /// `GameSvrConf.cs:1493` 缺省 false、部署 = 0）：`@LockLogin` 的第一道门。
+    lock_human_login: bool,
     /// **G2**：同一份 `Server.conf` 的行会/城堡配置（`mir2_data::guild_castle::GuildCastleConfig::load`）。
     ///
     /// G2 只用其中的行会键映射成 `mir2_world::GuildConfig`（简报 §8）；G3 直接复用它建 `GuildStore`
@@ -14268,6 +14372,7 @@ impl EnterConfig {
             string_conf,
             show_rank_level_name: false,
             server_index: 0,
+            lock_human_login: false,
             guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig::default(),
             guild_store: None,
             guild_sections: mir2_data::guild::GuildFileSections::oracle_defaults(),
@@ -16967,6 +17072,9 @@ fn sim_loop(
                             party_cfg: &party_cfg,
                             strings: &enter_cfg.string_conf,
                             colors: &colors,
+                            gm_cfg: gmcmd::GmConfig {
+                                lock_human_login: enter_cfg.lock_human_login,
+                            },
                             can_shout_level: enter_cfg.can_shout_msg_level,
                             registry: registry.as_ref(),
                         };
@@ -18241,6 +18349,7 @@ fn sim_loop(
                                                     ground_sessions.insert(
                                                         head.chr_name.clone(),
                                                         SessionGround {
+                                                            gm: gmcmd::GmSession::default(),
                                                             state: game_svr::ground::GroundState {
                                                                 item_list: bag_items_from(
                                                                     d.bag_items.as_deref(),
@@ -22875,6 +22984,7 @@ mod tests {
     /// 测试用的最小 `SessionGround`（攻击/受击用例只需 `wabil` 与 `per_*`）。
     pub(crate) fn test_session_ground(actor_id: i32) -> SessionGround {
         SessionGround {
+            gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: Vec::new(),
                 gold: 0,
@@ -23174,6 +23284,10 @@ mod tests {
                     hear_b: 255,
                     whisper_f: 0,
                     whisper_b: 0,
+                    green_f: 0xDB,
+                    green_b: 0xFF,
+                    blue_f: 0xFF,
+                    blue_b: 0xFC,
                 },
                 item_number: 0,
             }
@@ -23715,6 +23829,7 @@ mod tests {
         use_items[game_svr::ability::SLOT_NECKLACE] = Some(necklace);
         use_items[game_svr::ability::SLOT_HELMET] = Some(helmet);
         let sg = SessionGround {
+            gm: gmcmd::GmSession::default(),
             state: game_svr::ground::GroundState {
                 item_list: vec![weapon],
                 gold: 649,
@@ -25905,6 +26020,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
                     gold: 0,
@@ -25989,6 +26105,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let catalog = game_svr::ability::StdItemCatalog::new();
 
@@ -26099,6 +26219,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
                     gold: 123,
@@ -26284,6 +26405,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
                     gold: 0,
@@ -26434,6 +26556,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
                         make_index: 60001,
@@ -26609,6 +26732,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
                     gold: 123,
@@ -26996,10 +27120,206 @@ mod tests {
                 party_cfg: &self.party_cfg,
                 strings: &self.strings,
                 colors,
+                gm_cfg: gmcmd::GmConfig::default(),
                 can_shout_level: self.can_shout_level,
                 registry: None,
             }
         }
+    }
+
+    /// **GM 命令第一批（G1）**：`@` 命令面的**生产入口**夹具（`handle_say` ⇒ [`gmcmd`]）。
+    ///
+    /// 一个说话者（`aaa` / socket 901 / gate 0）+ 一条网关通道；颜色取部署值
+    /// （Red 255/56、Green 219/255、Blue 251/252，`M2GameSvr/Server.conf:600-605`）。
+    struct GmRig {
+        gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        world: mir2_world::World,
+        online: OnlineRegistry,
+        sessions: std::collections::HashMap<String, SessionGround>,
+        actor: i32,
+    }
+
+    impl GmRig {
+        fn new() -> Self {
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates = std::collections::HashMap::new();
+            gates.insert(0, tx);
+            let mut world = mir2_world::World::new(64, 64);
+            let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let actor = world.add_entity(e);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(&mut online, entry("a", "aaa", 1, 0, 901, actor));
+            let mut sessions = std::collections::HashMap::new();
+            sessions.insert("aaa".to_string(), test_session_ground(actor));
+            Self {
+                gates,
+                rx,
+                world,
+                online,
+                sessions,
+                actor,
+            }
+        }
+
+        /// 走**生产入口** [`handle_say`]（不是直接调 `gmcmd::execute`），收集本 tick 发出的帧。
+        fn say(&mut self, line: &str) -> Vec<Vec<u8>> {
+            let colors = MsgColors {
+                red_f: 255,
+                red_b: 56,
+                hear_f: 0,
+                hear_b: 255,
+                whisper_f: 0,
+                whisper_b: 0,
+                green_f: 219,
+                green_b: 255,
+                blue_f: 251,
+                blue_b: 252,
+            };
+            let ctx = TestChatCtx::new();
+            let host = ctx.host(&self.online, &self.world, &self.gates, &colors);
+            handle_say(&host, &mut self.sessions, "aaa", 901, Some(line));
+            let mut out = Vec::new();
+            while let Ok(msg) = self.rx.try_recv() {
+                match msg {
+                    SimToGate::SendFrame { socket, body } => {
+                        assert_eq!(socket, 901);
+                        out.push(body);
+                    }
+                    other => panic!("GM 命令不应产生非帧消息: {other:?}"),
+                }
+            }
+            out
+        }
+    }
+
+    /// `SM_SYSMESSAGE(100)` 的 `(Param, 正文)`；同时钉 `Ident`/`Series`/`Recog`。
+    fn sysmsg_of(rig: &GmRig, body: &[u8]) -> (u16, String) {
+        assert!(body.len() > 12, "12B 头 + 尾");
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            rig.actor,
+            "Recog = 说话者自己的 ActorId"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            "Ident = SM_SYSMESSAGE(100)"
+        );
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 0, "Tag=0");
+        assert_eq!(u16::from_le_bytes([body[10], body[11]]), 1, "Series=1");
+        let param = u16::from_le_bytes([body[6], body[7]]);
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&body[12..]));
+        (param, text)
+    }
+
+    /// `@时间`（`DataCommand`）：`SysMsg(当前日期时间: yyyy-MM-dd HH:mm:ss, Blue, Hint)`
+    /// ⇒ 1 帧 `SM_SYSMESSAGE`、`Param=MakeWord(251,252)`。
+    #[test]
+    fn gm_date_through_handle_say_is_blue() {
+        let mut rig = GmRig::new();
+        let frames = rig.say("@时间");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0xFCFB, "Blue = MakeWord(251,252)");
+        let stamp = text.strip_prefix("当前日期时间: ").expect("前缀固定");
+        assert_eq!(stamp.len(), 19, "yyyy-MM-dd HH:mm:ss");
+    }
+
+    /// `@拒绝`（`PrvMsgCommand`）：只加不删；单字符名触 oracle 越界（零帧）。
+    /// `@拒绝私聊`（`AllowMsgCommand`）：翻转 `HearWhisper`，Green `[禁止私聊]`/`[允许私聊]`。
+    #[test]
+    fn gm_prv_msg_and_allow_msg_through_handle_say() {
+        let mut rig = GmRig::new();
+        let frames = rig.say("@拒绝 zhangsan");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0xFFDB, "Green = MakeWord(219,255)");
+        assert_eq!(text, "zhangsan 已被加入禁止私聊列表...");
+        assert_eq!(
+            rig.sessions["aaa"].gm.lock_whisper_list,
+            vec!["zhangsan".to_string()]
+        );
+        // oracle 去重分支被注释 ⇒ 重复调用再进一条（只加不删）。
+        let _ = rig.say("@拒绝 zhangsan");
+        assert_eq!(rig.sessions["aaa"].gm.lock_whisper_list.len(), 2);
+        // 单字符名 ⇒ `sHumanName[1]` 越界被 catch 吞 ⇒ 零帧。
+        assert!(rig.say("@拒绝 a").is_empty());
+        // `@拒绝私聊`：ctor `HearWhisper=true` ⇒ 第一次翻到 false。
+        let frames = rig.say("@拒绝私聊");
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0xFFDB);
+        assert_eq!(text, "[禁止私聊]");
+        assert!(!rig.sessions["aaa"].gm.hear_whisper);
+        let frames = rig.say("@拒绝私聊");
+        assert_eq!(sysmsg_of(&rig, &frames[0]).1, "[允许私聊]");
+        assert!(rig.sessions["aaa"].gm.hear_whisper);
+    }
+
+    /// `@LockLogin`：部署 `PasswordLockHumanLogin=0` ⇒ 恒一条红字、`IsLockLogon` 不变。
+    /// `@AddRobotPlay`：`?` 出帮助；其余参数零帧零副作用。
+    #[test]
+    fn gm_lock_login_and_add_robot_play_through_handle_say() {
+        let mut rig = GmRig::new();
+        let frames = rig.say("@LockLogin");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0x38FF, "Red = MakeWord(255,56)");
+        assert_eq!(text, "本服务器还没有启用登录锁功能!!!");
+        assert!(rig.sessions["aaa"].gm.is_lock_logon);
+        let frames = rig.say("@AddRobotPlay ?");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0x38FF);
+        assert_eq!(text, "命令格式: @AddRobotPlay 数量 地图 X Y");
+        assert!(rig.say("@AddRobotPlay 5 0 100 100").is_empty());
+    }
+
+    /// `@help`（内建，不过权限门）+ 180 条非 0 权限命令一律 `权限不够!!!`。
+    ///
+    /// `@sadasd`/`@df56dfs`/`@允许天地合一` 在这里同时咬住「`Command.conf` 名字覆盖」：
+    /// 若表里写成出厂名（`Allowguildrecall` 等），这些行会落成**未知命令两条帧** ⇒ 本用例红。
+    #[test]
+    fn gm_help_and_permission_gate_through_handle_say() {
+        let mut rig = GmRig::new();
+        let frames = rig.say("@help");
+        assert_eq!(frames.len(), 1);
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0x38FF);
+        assert_eq!(text, "usage: help <command>");
+        for line in [
+            "@交易",
+            "@天地合一",
+            "@sadasd",
+            "@df56dfs",
+            "@允许天地合一",
+            "@加入门派",
+        ] {
+            let frames = rig.say(line);
+            assert_eq!(frames.len(), 1, "{line} 应只回一条（命中命令表）");
+            let (param, text) = sysmsg_of(&rig, &frames[0]);
+            assert_eq!(param, 0x38FF, "{line}");
+            assert_eq!(text, "权限不够!!!", "{line}");
+        }
+    }
+
+    /// 未知命令恒两条帧（`CommandSystem.cs:185-194` + `PlayObject.Chat.cs:400`），且**不**当普通说话广播。
+    #[test]
+    fn gm_unknown_command_yields_two_frames() {
+        let mut rig = GmRig::new();
+        let frames = rig.say("@nosuchcmd x");
+        assert_eq!(frames.len(), 2, "未知命令恒两条");
+        let (param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(param, 0x38FF);
+        assert_eq!(text, "未知命令: nosuchcmd x");
+        let (param, text) = sysmsg_of(&rig, &frames[1]);
+        assert_eq!(param, 0x38FF);
+        assert_eq!(text, "@此命令不正确，或没有足够的权限!!!");
+        // `@` 单独 ⇒ 命令名空串，仍是两条（正文 `未知命令:  ` 两个空格）。
+        let frames = rig.say("@");
+        assert_eq!(frames.len(), 2);
+        assert_eq!(sysmsg_of(&rig, &frames[0]).1, "未知命令:  ");
     }
 
     /// 在线登记在**进世界成功**时落坐标，断线/踢旧时被 `online_take` 拿走（名字精确匹配）。
@@ -27055,6 +27375,10 @@ mod tests {
             hear_b: 0xFF,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         for (name, id) in [("aaa", a), ("bbb", b), ("ccc", c)] {
@@ -27146,6 +27470,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0xFC,
             whisper_b: 0xFF,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("aaa".to_string(), test_session_ground(a));
@@ -27233,6 +27561,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         for (name, id) in [("aaa", a), ("bbb", b), ("ccc", outsider)] {
@@ -27314,6 +27646,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sa = test_session_ground(a);
@@ -27407,6 +27743,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sg = test_session_ground(a);
         sg.equip.abil.level = 40;
@@ -27473,6 +27813,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         for (name, id) in [
@@ -27533,6 +27877,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sg = test_session_ground(a);
         sg.equip.abil.level = 40;
@@ -27624,6 +27972,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sg = test_session_ground(a);
         sg.equip.abil.level = 34; // == CanShoutMsgLevel ⇒ 拒
@@ -27668,9 +28020,10 @@ mod tests {
         );
     }
 
-    /// **判据⑦**：`@` 命令仍走脚本支（本切片未接）——**不得**产生任何聊天帧。
+    /// **判据⑦（G1 起）**：`@` 行走命令派发（[`gmcmd`]）——**不得**产生聊天帧（`SM_HEAR`）；
+    /// 未命中命令表 ⇒ 恰好两条 `SM_SYSMESSAGE`（`未知命令: …` + `@此命令不正确…`）。
     ///
-    /// 牙：把 `@` 行落进喊话/普通说话 ⇒ 必红。
+    /// 牙：把 `@` 行落进喊话/普通说话 ⇒ 会多一条 `SM_HEAR`，本用例必红。
     #[test]
     fn at_command_line_produces_no_chat_frame() {
         use std::collections::HashMap;
@@ -27692,13 +28045,40 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("aaa".into(), test_session_ground(a));
         let ctx = TestChatCtx::new();
         let host = ctx.host(&online, &world, &gates, &colors);
         handle_say(&host, &mut sessions, "aaa", 901, Some("@move 1 1"));
-        assert!(rx0.try_recv().is_err(), "`@` 命令不得被当成聊天广播");
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            frames.push(body);
+        }
+        assert_eq!(
+            frames.len(),
+            2,
+            "未知命令 = CommandSystem 一条 + Chat 回落一条（oracle 恒两条）"
+        );
+        for body in &frames {
+            assert_eq!(
+                u16::from_le_bytes([body[4], body[5]]),
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                "`@` 命令不得被当成聊天广播（必须是 SM_SYSMESSAGE，不是 SM_HEAR）"
+            );
+        }
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&frames[0][12..])),
+            "未知命令: move 1 1"
+        );
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&frames[1][12..])),
+            "@此命令不正确，或没有足够的权限!!!"
+        );
     }
 
     /// **判据⑧**：单个 `!`——oracle `sData[1]` 下标越界被 `ProcessSayMsg` 的 catch 吞掉
@@ -27727,6 +28107,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sg = test_session_ground(a);
         sg.equip.abil.level = 40;
@@ -27766,6 +28150,10 @@ mod tests {
             hear_b: 0,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut sg = test_session_ground(a);
         sg.equip.abil.level = 40;
@@ -27817,6 +28205,10 @@ mod tests {
                 hear_b: 0xFF,
                 whisper_f: 0,
                 whisper_b: 0,
+                green_f: 0xDB,
+                green_b: 0xFF,
+                blue_f: 0xFF,
+                blue_b: 0xFC,
             },
             "acct1",
             424242,
@@ -28011,6 +28403,10 @@ mod tests {
                 hear_b: 0xFF,
                 whisper_f: 0,
                 whisper_b: 0,
+                green_f: 0xDB,
+                green_b: 0xFF,
+                blue_f: 0xFF,
+                blue_b: 0xFC,
             },
             "acct1",
             0,
@@ -28194,6 +28590,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
                         make_index,
@@ -28282,6 +28679,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
 
         // `recog` = `make_index`；`param`/`tag` 故意错位（4242）—— 读数位置错就必红。
@@ -28368,6 +28769,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
                         make_index,
@@ -28468,6 +28870,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
 
         // 1) 吃药：池药形态只叠加 `IncHealth = 0 + 20`，尾只有 `SM_EAT_OK` + `RM_WEIGHTCHANGED`。
@@ -29548,6 +29954,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: list,
                     gold: 0,
@@ -33523,6 +33930,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
                     gold: 0,
@@ -33607,6 +34015,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let catalog = game_svr::ability::StdItemCatalog::new();
 
@@ -33701,6 +34113,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: Vec::new(),
                     gold: 123,
@@ -33838,6 +34251,7 @@ mod tests {
         sessions.insert(
             "hero".into(),
             SessionGround {
+                gm: gmcmd::GmSession::default(),
                 state: game_svr::ground::GroundState {
                     item_list: vec![game_svr::bag::BagItem {
                         make_index: 60001,
@@ -33929,6 +34343,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let mut catalog = game_svr::ability::StdItemCatalog::new();
         catalog.insert(
@@ -34659,6 +35077,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
 
         // —— 情形 A：`Dealing=true` ⇒ 两条命令都零帧、零副作用。
@@ -34877,6 +35299,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
 
@@ -35174,6 +35600,10 @@ mod tests {
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
 
@@ -51485,6 +51915,10 @@ mod tests {",
             hear_b: 255,
             whisper_f: 0,
             whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
         };
         let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
 
@@ -52896,6 +53330,10 @@ mod tests {",
                     hear_b: 255,
                     whisper_f: 0,
                     whisper_b: 0,
+                    green_f: 0xDB,
+                    green_b: 0xFF,
+                    blue_f: 0xFF,
+                    blue_b: 0xFC,
                 },
                 None,
                 &mut item_number,

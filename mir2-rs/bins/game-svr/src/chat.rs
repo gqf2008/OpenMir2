@@ -56,8 +56,8 @@ pub const CM_SAY: u16 = 3030;
 pub const SEND_REF_MSG_RANGE: i32 = 12;
 
 /// `PlayObject.ProcessUserLineMsg` 的"不以 `@` 开头"这一支。**当前分流**在 `lib.rs::handle_say`：
-/// 先 `/`（[`parse_whisper`]）、再 `!`（[`parse_channel`]），剩下的非空、非 `@` 行才是普通说话；
-/// `@` 命令系统仍未接（宿主记 DBG 并丢弃），空行直接忽略。
+/// 先 `@`（[`crate::gmcmd`]，命令面**已接**：命中即整条 `CM_SAY` 结束）、再 `/`（[`parse_whisper`]）、
+/// 再 `!`（[`parse_channel`]），剩下的非空行才是普通说话；空行直接忽略。
 #[must_use]
 pub fn is_plain_say(line: &str) -> bool {
     !line.is_empty() && !line.starts_with('@') && !line.starts_with('/') && !line.starts_with('!')
