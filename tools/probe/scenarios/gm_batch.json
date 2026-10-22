@@ -1,18 +1,47 @@
 {
   "name": "gm_batch",
-  "description": "现网可达 6 条 GM 命令（@时间 / @拒绝 <名> / @拒绝私聊 / @help / @LockLogin / @AddRobotPlay）各发一次，逐条等 SM_SYSMESSAGE(100)；顺序把有副作用的 @LockLogin 与 @AddRobotPlay 放最后",
+  "description": "现网可达 GM 命令逐条取证：@时间 / @拒绝 <名> / @拒绝私聊 / @help / @LockLogin（各等 SM_SYSMESSAGE(100)）。@AddRobotPlay 实测两侧都无回包，已移出本场景单独记录",
   "steps": [
-    {"say": "@时间", "note": "DataCommand（gmcmd.rs DataTime）"},
-    {"wait_for": 100, "timeout_ms": 3000},
-    {"say": "@拒绝 test02", "note": "PrvMsgCommand：按人物名加锁（只加不删，PlayObject.LockWhisperList）"},
-    {"wait_for": 100, "timeout_ms": 3000},
-    {"say": "@拒绝私聊", "note": "AllowMsgCommand 开关"},
-    {"wait_for": 100, "timeout_ms": 3000},
-    {"say": "@help", "note": "内建帮助"},
-    {"wait_for": 100, "timeout_ms": 3000},
-    {"say": "@AddRobotPlay 1 0 330 270", "note": "CreateRobotPlayCommand：oracle 加机器人代码整段被注释 ⇒ 只回 '?' 帮助"},
-    {"wait_for": 100, "timeout_ms": 3000},
-    {"say": "@LockLogin", "note": "LockLoginCommand：有全局副作用，放最后"},
-    {"wait_for": 100, "timeout_ms": 3000}
+    {
+      "say": "@时间",
+      "note": "DataCommand（gmcmd.rs DataTime）"
+    },
+    {
+      "wait_for": 100,
+      "timeout_ms": 3000
+    },
+    {
+      "say": "@拒绝 test02",
+      "note": "PrvMsgCommand：按人物名加锁（只加不删，PlayObject.LockWhisperList）"
+    },
+    {
+      "wait_for": 100,
+      "timeout_ms": 3000
+    },
+    {
+      "say": "@拒绝私聊",
+      "note": "AllowMsgCommand 开关"
+    },
+    {
+      "wait_for": 100,
+      "timeout_ms": 3000
+    },
+    {
+      "say": "@help",
+      "note": "内建帮助"
+    },
+    {
+      "wait_for": 100,
+      "timeout_ms": 3000
+    },
+    {
+      "say": "@LockLogin",
+      "note": "LockLoginCommand：有全局副作用，放最后"
+    },
+    {
+      "wait_for": 100,
+      "timeout_ms": 3000,
+      "note": "@LockLogin 的回包（本服务器未启用登录锁时回「本服务器还没有启用登录锁功能!!!」）"
+    }
   ]
 }
