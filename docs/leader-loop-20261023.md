@@ -77,3 +77,10 @@ Leader 忙不过来时，**空闲 worker 可以互相审查**：唯一硬约束�
 
 **规则**：每次 `git merge` 与 `git push walgit master` **之前**先跑
 `git rev-parse --abbrev-ref HEAD` 断言 == `master`；合并后立刻 `git ls-remote walgit refs/heads/master` 与本地 `rev-parse master` 对比，不一致即红灯处理。
+
+## 门禁优先级：Leader 合并门禁优先（2026-10-23）
+
+多条 Rust 车道同时跑测试时，「同一时刻只跑一个门禁」会让**合并门禁被饿死**（实测排队 25 分钟未启动）。
+**规则**：Leader 的合并门禁**抢占优先**——直接开跑，不等车道；若因此撞到已知的两条 flake
+（`game-gate relay::gm_checkclient_is_sent_every_keepalive_period`、`relay::bad_login…`），
+**单跑复验通过即视为绿**，并在 merge_result 里如实注明「并发负载下 flake，单跑绿」。
