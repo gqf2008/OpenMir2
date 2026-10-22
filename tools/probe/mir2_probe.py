@@ -76,6 +76,7 @@ CM_LOGINNOTICEOK = 1018
 CM_SAY = 3030
 
 SM_LOGON = 50
+SM_TURN = 10
 SM_ABILITY = 52
 SM_SYSMESSAGE = 100
 SM_QUERYCHR = 520
@@ -480,8 +481,12 @@ def plan_step(step, index, params):
         out.update(ident=CM_SAY, recog=0, param=0, tag=0, series=0,
                    body=encode_text(val, "gbk"))
     elif action == "click_npc":
-        out.update(ident=CM_CLICKNPC, recog=resolve_param(val, params, where + ".click_npc"),
-                   param=0, tag=0, series=0, body=b"")
+        if val == "auto:last_turn":
+            out.update(ident=CM_CLICKNPC, recog=0, param=0, tag=0, series=0, body=b"",
+                       _auto_recog="last_turn")
+        else:
+            out.update(ident=CM_CLICKNPC, recog=resolve_param(val, params, where + ".click_npc"),
+                       param=0, tag=0, series=0, body=b"")
     elif action == "dlg_select":
         if isinstance(val, str):
             label, recog = val, None
@@ -593,7 +598,7 @@ class Run:
         self.chain = {}
         self.frames_by_conn = {}
         self.ident_hist = {}
-        self.state = {"last_merchant_recog": None, "self_actor": None}
+        self.state = {"last_merchant_recog": None, "self_actor": None, "last_turn_recog": None}
         self.gamegate = None
         self.conns = []
         self.dwell = None
@@ -604,6 +609,9 @@ class Run:
             return
         if frame.ident == SM_MERCHANTSAY:
             self.state["last_merchant_recog"] = frame.recog
+        if frame.ident == SM_TURN and frame.recog != self.state.get("self_actor"):
+            # 进世界后首个「非自己」的 actor（固定 NPC/怪）：click_npc 的 "auto:last_turn" 用它
+            self.state["last_turn_recog"] = frame.recog
         if self.args.no_auto_handshake:
             return
         if frame.ident == SM_SENDNOTICE:
@@ -636,6 +644,12 @@ class Run:
             return
         if kind == "send" or kind in ("say", "click_npc", "dlg_select"):
             recog = plan.get("recog")
+            if kind == "click_npc" and plan.get("_auto_recog") == "last_turn":
+                recog = self.state.get("last_turn_recog")
+                if recog is None:
+                    raise ScenarioError(
+                        "steps[%d].click_npc: no non-self SM_TURN(10) seen yet; "
+                        "cannot infer NPC recog (fail-closed)" % idx)
             if kind == "dlg_select" and plan.get("_needs_merchant_recog"):
                 recog = self.state["last_merchant_recog"]
                 if recog is None:

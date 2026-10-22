@@ -81,3 +81,32 @@ Rust(30): 529 530 520 525 658 51 50 41 213 11029 42 766 54 5008 1106 52 752 811 
   疑与 `CM_SOFTCLOSE` 的 BoReconnection 语义（玩家留在世界里等重连）叠加有关；改用 `--finish close` 未改变结果。
 - 结论：**gm 族当前不可作对拍证据**，先要解决「进世界后 `CM_SAY` 何时/怎样才被处理」；
   首批应缩到 `login_only`（已跑通）与点击/背包族，gm 族另行排查。
+
+## 7. 追加（05:09–05:12 第三次窗口）：点击族跑通，`SM_HIT(14)` 不可复现、`100` 顺序差可复现
+
+**问题与解法**：C# 的 ActorId 每会话不同（本批 2123442500，前一会话见过别的值），跨 run 复用必然点空。
+驱动器新增 `click_npc: "auto:last_turn"`：取进世界后**首个非自己的 `SM_TURN(10)`** 的 recog，
+没有就 fail-closed。据此新增 `tools/probe/scenarios/npc_click_auto.json`（无需 `--var`）。
+
+```sh
+# C#
+python -I -B tools/probe/mir2_probe.py --login-gate 127.0.0.1:17000 --account winplay0 --password winplay0 \
+  --server-name 热血传奇 --char-name winplay0 --scenario tools/probe/scenarios/npc_click_auto.json \
+  --out E:/tmp/conformance/runs/w24-csharp-npc_auto --timeout-ms 20000 --finish close      # exit=0 frames=30
+# Rust（同参数 + --game-gate 127.0.0.1:17600）
+python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rust-npc_auto    # exit=0 frames=30
+```
+
+| 项 | C# | Rust |
+|---|---|---|
+| 帧数 | 30 | 30 |
+| `SM_MERCHANTSAY(643)` | 有 | 有 |
+| `SM_HIT(14)` | 无 | **无**（本批两侧都没有） |
+
+`compare_runs.py`：`frames 30/30`、**DIFFS 2**——
+`idx=26/27 ident=100 body_len 72↔55`，即 §3 第 2 条的**系统公告顺序颠倒**再次出现（内容对调、长度互换）。
+其余 `whitelisted: 46 条`（recog/t_ms 掩码、52 布局）。
+
+**重要修正**：`SM_HIT(14)` 只出现在 05:04 的 `login_only` run（Rust 单侧多一条），
+本批 05:11 的 `npc_click_auto` 两侧都没有 —— 说明它是**间歇性**的（与首卡「Rust 抓到、C# 未见」的描述一致），
+不能当成每次登录必现的稳定差异；要定位需固定 RNG 种子（`MIR2_RNG_SEED`）后重复采样。
