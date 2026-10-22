@@ -23,8 +23,12 @@ r"""mir2_probe.py — 无头协议对拍台的**驱动器**（模拟客户端）
      收到 SM_SENDNOTICE(658) -> 回 CM_LOGINNOTICEOK(1018)；
      收到 SM_LOGON(50)        -> 发 CM_QUERYBAGITEMS(81, recog=1)。
      心跳：服务端单字节 '*'，回 '*'。
-  7. 执行场景步骤（scenarios/README.md 的 DSL），全程落 ``frames.ndjson``。
-  8. 收尾：默认发 CM_SOFTCLOSE(1009)（= BotSrv 的小退形状），再 drain 后断开。
+  7. 进世界后先做**延迟段 dwell**（``--dwell-ms``，默认 1200ms，0 = 旧行为）：
+     Rust 首个 SearchViewRange 在 enter_map+1000ms（crates/world/src/entity.rs 的
+     PLAYER_SEARCH_TIME），dwell 不足会在延迟段帧（10/41/654/657/100…）到达之前
+     CM_SOFTCLOSE 小退，对拍时被误判成「对侧独有」。
+  8. 执行场景步骤（scenarios/README.md 的 DSL），全程落 ``frames.ndjson``。
+  9. 收尾：默认发 CM_SOFTCLOSE(1009)（= BotSrv 的小退形状），再 drain 后断开。
 
 确定性约定（对拍必须逐字节一致）：
   * ``CM_LOGINNOTICEOK`` 的 ``recog`` 在 BotSrv 里取客户端 tick（1284 行），本驱动器固定 0。
@@ -83,9 +87,14 @@ SM_NEEDUPDATE_ACCOUNT = 531
 SM_SENDNOTICE = 658
 SM_MERCHANTSAY = 643
 SM_OUTOFCONNECTION = 528
+SM_CHANGELIGHT = 654          # src/OpenMir2/Messages.cs（延迟段帧）
+SM_CHARSTATUSCHANGED = 657    # src/OpenMir2/Messages.cs（延迟段帧）
 
 CLIENT_VERSION_NUMBER = 1200409180  # src/OpenMir2/Grobal2.cs
 HEARTBEAT = b"*"
+# 进世界后的延迟段 dwell 默认值：Rust 首个 SearchViewRange 在 enter_map+1000ms
+# （crates/world/src/entity.rs PLAYER_SEARCH_TIME），留 200ms 余量。
+DEFAULT_DWELL_MS = 1200
 
 
 class ProbeError(Exception):
@@ -300,12 +309,29 @@ class Conn:
                 return False
             self.pump(min(100, int(remain * 1000)))
 
+    def wait_idents(self, idents, timeout_ms):
+        """等 idents **全部**出现过（累计口径，含等待前已收到的帧）；超时返回差集。
+
+        返回 (missing, waited_ms)：missing 为空 = 全部到齐。与 wait_for 的区别：
+        wait_for 只认本步开始之后的第一条（任一命中），本方法不设 seq 下界、要求全到。
+        """
+        required = set(idents)
+        t0 = time.time()
+        deadline = t0 + timeout_ms / 1000.0
+        while True:
+            missing = sorted(required - {fr.ident for _, fr in self.frames})
+            now = time.time()
+            if not missing or now >= deadline:
+                return missing, int((now - t0) * 1000)
+            self.pump(min(100, max(1, int((deadline - now) * 1000))))
+
 
 # ==========================================================================
 # 场景 DSL
 # ==========================================================================
 STEP_META_KEYS = {"timeout_ms", "note", "delay_ms"}
-ACTION_KEYS = {"send", "wait_for", "wait_frames", "sleep", "say", "click_npc", "dlg_select"}
+ACTION_KEYS = {"send", "wait_for", "wait_frames", "wait_idents", "sleep",
+               "say", "click_npc", "dlg_select"}
 
 
 def _need_int(value, where, lo=0, hi=0xFFFF):
@@ -458,6 +484,16 @@ def plan_step(step, index, params):
         if "timeout_ms" in val:
             out["timeout_ms"] = _need_int(val["timeout_ms"],
                                           where + ".wait_frames.timeout_ms", 0, 3600000)
+    elif action == "wait_idents":
+        _need_keys(val, where + ".wait_idents", required=("idents",),
+                   optional=("timeout_ms",))
+        ids = val["idents"]
+        if not isinstance(ids, list) or not ids:
+            raise ScenarioError("%s.wait_idents.idents must be a non-empty list" % where)
+        out["idents"] = [_need_int(x, where + ".wait_idents.idents[]") for x in ids]
+        if "timeout_ms" in val:
+            out["timeout_ms"] = _need_int(val["timeout_ms"],
+                                          where + ".wait_idents.timeout_ms", 0, 3600000)
     elif action == "sleep":
         if isinstance(val, int) and not isinstance(val, bool):
             out["ms"] = _need_int(val, where + ".sleep", 0, 3600000)
@@ -527,6 +563,7 @@ class Run:
         self.state = {"last_merchant_recog": None, "self_actor": None}
         self.gamegate = None
         self.conns = []
+        self.dwell = None
 
     # ---- 自动握手（全在 GameGate 相位） ----
     def on_frame(self, conn, frame, seq):
@@ -611,6 +648,23 @@ class Run:
                                   "(have %d frames)"
                                   % (idx, plan["count"], plan["idents"], timeout,
                                      len(conn.frames)))
+            return
+        if kind == "wait_idents":
+            timeout = plan["timeout_ms"] if plan["timeout_ms"] is not None else default_timeout
+            t_start = now_ms()
+            missing, waited = conn.wait_idents(plan["idents"], timeout)
+            seen = sorted({fr.ident for _, fr in conn.frames})
+            rec = {"index": idx, "kind": "wait_idents", "idents": plan["idents"],
+                   "timeout_ms": timeout, "t_ms": t_start - self.t0_ms,
+                   "waited_ms": waited, "seen_idents": seen,
+                   "missing_idents": missing, "matched": not missing,
+                   "note": plan.get("note", "")}
+            self.steps.append(rec)
+            if missing:
+                raise StepFailure(
+                    "steps[%d]: timeout waiting for ident(s) %s after %.0fms "
+                    "(missing %s; seen %s)"
+                    % (idx, plan["idents"], timeout, missing, seen))
             return
         raise ScenarioError("steps[%d]: unhandled action %r" % (idx, kind))
 
@@ -784,8 +838,39 @@ def do_enter_world(run, args, gamegate_addr, char_name, session):
         "series": fr.series, "body_hex": fr.body.hex(),
     }
     run.state["self_actor"] = fr.recog
-    conn.pump(args.between_ms)  # 让紧随其后的 51/52/658 有机会进来（不强制）
+    run.dwell = dwell_after_enter(conn,
+                                  getattr(args, "dwell_ms", DEFAULT_DWELL_MS),
+                                  getattr(args, "between_ms", 0))
     return conn
+
+
+def dwell_after_enter(conn, dwell_ms, legacy_pump_ms=0):
+    """进世界后的延迟段 dwell，返回落 run.json 的记录。
+
+    ``dwell_ms > 0``：至少 ``dwell_ms`` 的收帧窗口（纯墙钟下限，不看 ident）；
+    ``dwell_ms == 0``：旧行为 —— 只 ``pump(legacy_pump_ms)``（= ``--between-ms``）。
+    为什么需要：Rust 首个 SearchViewRange 在 enter_map+1000ms
+    （crates/world/src/entity.rs 的 PLAYER_SEARCH_TIME），进世界后立刻小退会把
+    整段延迟帧（10/41/654/657/100…）丢掉，对拍时被误判成对侧独有。
+    """
+    requested = max(0, int(dwell_ms or 0))
+    legacy = 0 if requested > 0 else max(0, int(legacy_pump_ms or 0))
+    before = sorted({fr.ident for _, fr in conn.frames})
+    t_start = now_ms()
+    if requested > 0:
+        conn.pump(requested)
+    elif legacy > 0:
+        conn.pump(legacy)
+    after = sorted({fr.ident for _, fr in conn.frames})
+    return {
+        "requested_ms": requested,
+        "legacy_pump_ms": legacy,
+        "actual_ms": now_ms() - t_start,
+        "idents_before": before,
+        "idents_after": after,
+        "new_idents": sorted(set(after) - set(before)),
+        "frames_total": len(conn.frames),
+    }
 
 
 def do_finish(run, args, conn):
@@ -826,6 +911,7 @@ def build_run_json(run, args, scenario, params, error):
             "params": params or {},
         },
         "chain": run.chain,
+        "dwell": run.dwell,
         "steps": run.steps,
         "auto": run.auto,
         "frames_total": frames_total,
@@ -890,7 +976,12 @@ def build_argparser():
     ap.add_argument("--between-ms", type=int, default=200,
                     help="场景步骤之间的默认间隔（默认 200）")
     ap.add_argument("--drain-ms", type=int, default=300,
-                    help="收尾/进世界后的额外收帧窗口（默认 300）")
+                    help="收尾（CM_SOFTCLOSE 之后）的额外收帧窗口（默认 300）")
+    ap.add_argument("--dwell-ms", type=int, default=DEFAULT_DWELL_MS,
+                    help="进世界后的延迟段收帧窗口下限（毫秒，默认 %d，必须 >= 0）；"
+                         "0 = 旧行为（只 pump --between-ms，会丢延迟段帧）；"
+                         "负值 fail-closed（退出 2）"
+                         % DEFAULT_DWELL_MS)
     ap.add_argument("--game-gate", help="覆盖 SM_STARTPLAY 给的 GameGate 地址 HOST:PORT")
     ap.add_argument("--client-version", type=int, default=CLIENT_VERSION_NUMBER,
                     help="GameGate 登录串里的客户端版本号（默认 Grobal2.ClientVersionNumber）")
@@ -911,6 +1002,8 @@ def _check_required(args):
             missing.append("--" + name.replace("_", "-"))
     if missing:
         raise ProbeError("missing required argument(s): %s" % ", ".join(missing))
+    if getattr(args, "dwell_ms", 0) < 0:
+        raise ProbeError("--dwell-ms must be >= 0 (0 = 旧行为), got %d" % args.dwell_ms)
 
 
 def main(argv=None):
@@ -1129,9 +1222,11 @@ def _selftest_scenarios():
         assert os.path.exists(p), "missing scenario %s" % p
     lo = load_scenario(paths["login_only.json"])
     lo_plans, _ = expand_scenario(lo)
-    assert len(lo_plans) == 1 and lo_plans[0]["kind"] == "wait_frames", lo_plans
-    assert lo_plans[0]["count"] == 15, lo_plans[0].get("count")
-    assert set(lo_plans[0]["idents"]) == {SM_LOGON, SM_ABILITY, SM_SENDNOTICE}, lo_plans[0]
+    assert len(lo_plans) == 1 and lo_plans[0]["kind"] == "wait_idents", lo_plans
+    # 牙：等待集合必须含延迟段帧 654/657/100（退回「固定帧数就小退」这条会红）。
+    assert set(lo_plans[0]["idents"]) == {
+        SM_LOGON, SM_ABILITY, SM_SENDNOTICE,
+        SM_CHANGELIGHT, SM_CHARSTATUSCHANGED, SM_SYSMESSAGE}, lo_plans[0]
 
     gm = load_scenario(paths["gm_time.json"])
     gm_plans, _ = expand_scenario(gm)
@@ -1160,6 +1255,9 @@ def _selftest_scenarios():
         {"send": {"ident": 3030, "raw_hex": "zz"}},
         {"click_npc": "no_such_param"},
         {"wait_frames": {"count": 1, "extra": 2}},
+        {"wait_idents": {"idents": []}},
+        {"wait_idents": {"idents": [SM_CHANGELIGHT], "bogus": 1}},
+        {"wait_idents": {"idents": [70000]}},
     ):
         try:
             plan_step(bad_step, 0, {})
@@ -1204,6 +1302,132 @@ def _selftest_helpers():
     assert masked_argv(["p", "--password=s3cret"]) == ["p", "--password=***"]
 
 
+class _TimedSock:
+    """selftest 用：按墙钟延迟吐出预录字节（不占端口、不连网）。
+
+    chunks = [(delay_s, bytes)]，delay_s 相对本 sock 创建时刻；未到期抛 socket.timeout，
+    让 Conn.pump 的超时轮询继续（与真 socket 的 50ms 轮询同形状）。
+    """
+
+    def __init__(self, chunks):
+        self.t0 = time.monotonic()
+        self.chunks = [(float(d), bytes(b)) for d, b in chunks]
+        self.sent = []
+
+    def recv(self, n):
+        now = time.monotonic()
+        if not self.chunks:
+            time.sleep(0.001)
+            raise socket.timeout()
+        due, data = self.chunks[0]
+        if now < self.t0 + due:
+            time.sleep(min(self.t0 + due - now, 0.05))
+            raise socket.timeout()
+        self.chunks.pop(0)
+        if len(data) > n:
+            self.chunks.insert(0, (0.0, data[n:]))
+            data = data[:n]
+        return data
+
+    def sendall(self, data):
+        self.sent.append(bytes(data))
+
+    def close(self):
+        pass
+
+
+def _delayed_frames():
+    """进世界握手段（early=SM_LOGON）与延迟段（late=10/654/657/100）。"""
+    early = build_s2c_frame(6930, SM_LOGON, 5, 9, 0, bytes(16))
+    late = b"".join(build_s2c_frame(*f) for f in (
+        (119, 10, 8, 10, 0, b"2\x00\x0c\x00\x00\x00\x00\x00"),
+        (0, SM_CHANGELIGHT, 0, 0, 0, b""),
+        (0, SM_CHARSTATUSCHANGED, 1, 0, 0, b""),
+        (6930, SM_SYSMESSAGE, 0, 0, 0, encode_text("welcome")),
+    ))
+    return early, late
+
+
+def _selftest_dwell():
+    """dwell 默认值 + 正例 + 牙：dwell>0 收齐延迟段帧，dwell=0（旧行为）丢帧。"""
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mir2probe-dwell-")
+    try:
+        early, late = _delayed_frames()
+        base = ["--login-gate", "h:1", "--account", "a", "--password", "p",
+                "--server-name", "s", "--scenario", "x", "--out", tmp]
+        parsed = build_argparser().parse_args(base)
+        assert parsed.dwell_ms == DEFAULT_DWELL_MS == 1200, parsed.dwell_ms
+        parsed0 = build_argparser().parse_args(base + ["--dwell-ms", "0"])
+        assert parsed0.dwell_ms == 0, parsed0.dwell_ms
+        neg = build_argparser().parse_args(base + ["--dwell-ms", "-1"])
+        try:
+            _check_required(neg)
+        except ProbeError:
+            pass
+        else:
+            raise AssertionError("negative --dwell-ms accepted (must fail-closed, rc=2)")
+
+        # 正例：dwell=300ms => 150ms 后才到的延迟段帧（654/657/100）收齐
+        args = argparse.Namespace(out=tmp, no_auto_handshake=False, timeout_ms=8000)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _TimedSock([(0.0, early), (0.15, late)])
+        conn.pump(20)  # 进世界握手：只到 SM_LOGON
+        before = {f.ident for _, f in conn.frames}
+        assert SM_LOGON in before and SM_CHANGELIGHT not in before, before
+        rec = dwell_after_enter(conn, 300, 200)
+        assert rec["requested_ms"] == 300 and rec["legacy_pump_ms"] == 0, rec
+        assert rec["actual_ms"] >= 300, rec
+        want = {SM_CHANGELIGHT, SM_CHARSTATUSCHANGED, SM_SYSMESSAGE}
+        assert want <= set(rec["idents_after"]), rec
+        assert want <= set(rec["new_idents"]), rec
+        run.dwell = rec
+        # 执行路径：到齐 => 步骤记录 matched；缺 ident => StepFailure（退出码 1 的路径）
+        plan = plan_step({"wait_idents": {"idents": [SM_CHANGELIGHT, SM_SYSMESSAGE],
+                                          "timeout_ms": 100}}, 0, {})
+        run.execute_step(conn, plan)
+        step = run.steps[-1]
+        assert step["kind"] == "wait_idents" and step["matched"], step
+        assert step["missing_idents"] == [], step
+        assert {SM_CHANGELIGHT, SM_SYSMESSAGE} <= set(step["seen_idents"]), step
+        plan_bad = plan_step({"wait_idents": {"idents": [SM_STARTPLAY],
+                                              "timeout_ms": 10}}, 1, {})
+        try:
+            run.execute_step(conn, plan_bad)
+        except StepFailure as ex:
+            assert ("missing [%d]" % SM_STARTPLAY) in str(ex), str(ex)
+        else:
+            raise AssertionError("wait_idents accepted a missing ident")
+        assert run.steps[-1]["kind"] == "wait_idents", run.steps[-1]
+        assert run.steps[-1]["missing_idents"] == [SM_STARTPLAY], run.steps[-1]
+        payload = build_run_json(run, args, None, {}, None)
+        assert payload["dwell"]["requested_ms"] == 300, payload.get("dwell")
+        assert SM_CHANGELIGHT in payload["dwell"]["idents_after"], payload.get("dwell")
+
+        # 牙（反例）：dwell=0 且无 legacy pump => 同一串延迟段帧收不到。
+        # 与上面的默认值断言合起来钉住「dwell 必须 > 0」：把 --dwell-ms 默认改回 0、
+        # 或让 dwell_after_enter 不再 pump，默认值断言/正例即红（已实测 tooth1 红）。
+        tmp0 = os.path.join(tmp, "dwell0")
+        os.makedirs(tmp0, exist_ok=True)
+        args0 = argparse.Namespace(out=tmp0, no_auto_handshake=False, timeout_ms=8000)
+        run0 = Run(args0)
+        conn0 = Conn("gamegate", run0.recorder, on_frame=run0.on_frame)
+        conn0.phase = "gamegate"
+        conn0.sock = _TimedSock([(0.0, early), (0.15, late)])
+        conn0.pump(20)
+        rec0 = dwell_after_enter(conn0, 0, 0)
+        seen0 = set(rec0["idents_after"])
+        assert rec0["requested_ms"] == 0, rec0
+        assert SM_CHANGELIGHT not in seen0 and SM_SYSMESSAGE not in seen0, seen0
+        assert rec0["actual_ms"] < 300, rec0
+        return "dwell 300ms 收齐 654/657/100；dwell=0 丢帧（牙），默认 %dms" % DEFAULT_DWELL_MS
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_selftest():
     fails = []
 
@@ -1226,12 +1450,13 @@ def run_selftest():
     check("scenario-dsl", _selftest_scenarios)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
+    check("dwell-after-enter", _selftest_dwell)
     if fails:
         print("mir2_probe selftest: FAIL")
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (6 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (7 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
     return 0
 
 
@@ -1291,6 +1516,16 @@ def _selftest_conn_semantics():
         # wait_frames 是累计口径（含等待前已收的帧）
         assert conn.wait_frames(4, [SM_SENDNOTICE, SM_LOGON], 50) is True
         assert conn.wait_frames(5, [SM_SENDNOTICE], 50) is False
+        # wait_idents 累计口径且要求全到：已收的立即满足，缺的按 timeout 返回差集
+        missing, _ = conn.wait_idents([SM_SENDNOTICE, SM_SYSMESSAGE], 50)
+        assert missing == [], missing
+        missing, waited = conn.wait_idents([SM_STARTPLAY], 30)
+        assert missing == [SM_STARTPLAY] and waited >= 30, (missing, waited)
+        # 部分命中：不能把「任一命中」当成功 —— missing 必须保留差集，且必须等满 timeout
+        # （把 wait_idents 退化成 any-match 则这里必红：missing 变 [] 或 waited 变 ~0）
+        missing, waited = conn.wait_idents([SM_SENDNOTICE, SM_STARTPLAY], 30)
+        assert missing == [SM_STARTPLAY], missing
+        assert waited >= 30, waited
         run.recorder.close()
         rows = [json.loads(line) for line in open(run.recorder.path, encoding="utf-8")]
         assert len(rows) == 4 and rows[0]["frame_class"] == "protocol"
