@@ -63,3 +63,21 @@ Rust(30): 529 530 520 525 658 51 50 41 213 11029 42 766 54 5008 1106 52 752 811 
 - `rules.json` 需补 ident 14（以及首跑已知的 100/520/525/529/530/654/657、52 的 (54,78)）——归 `conformance-rules` 车道，本卡只提供证据。
 - 公告顺序差异需单独立卡或以 `comment` 挂到相关卡（R 级：时序）。
 - 下一批：同窗口跑 `gm_time` / `gm_batch`（无需 `--var`），再按首次 run 的 `recog` 填 `--var` 跑 NPC/商人/背包族。
+
+## 6. 追加（05:06–05:09 第二次窗口）：`gm_time` 两侧都收不到回包
+
+同一窗口内改跑 `gm_time`（`CM_SAY(3030)` 发 `@时间`，等 `SM_SYSMESSAGE(100)`）：
+
+| 侧 | 尝试 | 帧数 | 结果 |
+|---|---|---:|---|
+| C# | 默认（softclose） | 30 | `steps[1]: timeout waiting for ident(s) [100] after 3000ms` |
+| C# | 前置 `sleep 1500` | 30 | 同上 |
+| C# | `--finish close` | 30 | 同上 |
+| Rust | `--finish close` | 31 | 同上 |
+| Rust | 前置 `sleep 1500` + `--finish close` | 32 | 同上 |
+
+- `CM_SAY` 确实发出（`run.json.chain.sends` 里 t≈529ms 有 ident=3030），两栈都**没有任何 100 回包**。
+- C# GameSrv 日志在连跑之间反复出现 `角色数据保存中,稍后重新读取. Account:winplay0`，
+  疑与 `CM_SOFTCLOSE` 的 BoReconnection 语义（玩家留在世界里等重连）叠加有关；改用 `--finish close` 未改变结果。
+- 结论：**gm 族当前不可作对拍证据**，先要解决「进世界后 `CM_SAY` 何时/怎样才被处理」；
+  首批应缩到 `login_only`（已跑通）与点击/背包族，gm 族另行排查。
