@@ -250,9 +250,13 @@
 前置：端口 15000/15500/16000/17100 已释放；两侧从同一基线恢复（`E:/tmp/conformance/restore-baseline.sh`），
 或两侧各自用后缀库（`reset-db.sh r` / `reset-db.sh c`）。
 
+> **实际参数取自首跑产物**（`E:/tmp/conformance/runs/{csharp,rust}/login/run.json`）：账号/角色 = `winplay0`，
+> 服务器名 = `热血传奇`，LoginGate = `127.0.0.1:17000`；**密码在 argv 里被掩码成 `***`**，跑前须向首跑执行者确认。
+> 另：首跑 Rust 侧显式加了 `--game-gate 127.0.0.1:17600`（C# 侧没有），复跑时两侧要不要都加、加什么值，按当时的栈配置定。
+
 ```sh
 # 1) 先跑无参场景 —— 这一跑同时给出下文要用的 ActorId / MakeIndex
-python -I -B tools/probe/mir2_probe.py --login-gate 127.0.0.1:17000   --account test01 --password test01 --server-name 热血传奇 --char-name test01   --scenario tools/probe/scenarios/login_only.json --out E:/tmp/conformance/runs/login_only-<side>-<ts>
+python -I -B tools/probe/mir2_probe.py --login-gate 127.0.0.1:17000   --account winplay0 --password *** --server-name 热血传奇 --char-name winplay0   --scenario tools/probe/scenarios/login_only.json --out E:/tmp/conformance/runs/login_only-<side>-<ts>
 python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/gm_time.json  --out ...
 python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/gm_batch.json --out ...
 
