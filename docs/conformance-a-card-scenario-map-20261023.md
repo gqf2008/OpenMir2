@@ -299,5 +299,9 @@ python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/run
 | 635 `SM_EAT_OK` / 636 `SM_EAT_FAIL` | 22 / 21 | eat_item |
 | 100 `SM_SYSMESSAGE` | 127 | 全部对话/GM 场景 |
 
+> **NPC 菜单用 1011 是合法的**：oracle `ClientMerchantDlgSelect` 走 `FindMerchant(nParam1) ?? FindNpc(nParam1)`
+> （`PlayObject.Operate.cs:120`），因此比奇国王这类普通 NPC 也用 `CM_MERCHANTDLGSELECT(1011)` 选菜单；
+> `nParam1` 即 NPC 的 ActorId，正好等于驱动器 `dlg_select` 缺省取「最近一条 `SM_MERCHANTSAY(643)` 的 recog」。
+>
 > 这只是**够不够得着**的核对：所有期望 ident 在 Rust 侧都有发射点，不存在「Rust 根本不发这条帧导致必然超时」的显然缺陷。
 > 是否逐字节一致，仍以窗口内的 `compare_runs.py` 判定为准。
