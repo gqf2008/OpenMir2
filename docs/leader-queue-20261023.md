@@ -9,7 +9,7 @@
 - **A 窗口欠账 152**（三档见 `docs/window-debt-reclass-20261023.md`：① 现有场景可覆盖 ~60 / ② 只差新场景 43 / ③ 只能 GUI 或离线 49）
 - **B 未接线 14**（recon dispatch 实测：入站 `CM_ADJUST_BONUS`；出站 12 孤儿编码器 + `SM_DONATE_FAIL`）
 - **终点四条件**：见 `docs/leader-goal-20261023.md` §1；机判脚本卡 `openmir2-goal-gate`（待做）
-- **门禁基线**：140 suites / 2903 passed / 0 failed / 62 ignored；anchor 388 ALL PASS；registry 149 无重复
+- **门禁基线**（master `0119e47b9`）：140 suites / 2916 passed / 0 failed / 62 ignored；anchor **394** ALL PASS；registry **150** 无重复
 
 ## 1. 合并纪律（本轮踩过的坑，逐条都有代价）
 
@@ -18,6 +18,11 @@
 3. **只合被审 head**：approve 覆盖 `X` 时 `git merge --no-ff X`，别合分支 tip（tip 可能已前进）。
 4. **whitelist 编号是全局资源**：合并前 `grep -n 'T-1[89][0-9]' mir2-rs/tests/parity/whitelist.md` 确认空号（已用到 T-192）。
 5. **同文件同一时刻只许一条车道**：`lib.rs` / `whitelist.md` / `tools/conformance/**` 是三大热点。
+6. **派活前必须重读该卡线程**，不要只信 board 快照：board 是聚合视图、有滞后，而认领是逐卡签名条目。
+   2026-10-23 实测过两次撞车——派出去的 worker 到场时发现另一条会话已在 22 秒前 `card_claim`。
+   撞了按「先认领者持有」处理：后到者停手、保留 worktree（身份）、清掉未提交改动、线程留让渡 comment；
+   并把后到者顺手探到的**范围清点**作为 Leader comment 回灌给卡主（常常比卡面引用的旧行号更准）。
+7. **whitelist 编号先 grep 再用**：本日已用到 T-193，且 T-193 已被 ya52 卡预定；新卡从 T-194 起。
 
 ## 2. 正在跑（每次巡检更新）
 
