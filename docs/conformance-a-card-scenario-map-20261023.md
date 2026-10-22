@@ -308,3 +308,31 @@ python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/run
 >
 > 这只是**够不够得着**的核对：所有期望 ident 在 Rust 侧都有发射点，不存在「Rust 根本不发这条帧导致必然超时」的显然缺陷。
 > 是否逐字节一致，仍以窗口内的 `compare_runs.py` 判定为准。
+
+## 9. 场景覆盖矩阵（95 张协议帧面卡，2026-10-23）
+口径：按卡名 + `work`/`window_items` 关键词机械归类（**不是**逐卡评审结论），用于回答「现有 11 个场景覆盖了谁、还缺哪一族」。
+| 场景族 | 卡数 | 现有场景 | 说明 |
+|---|---:|---|---|
+| login_only（登录/网关） | 10 | 有 | `login_only.json` |
+| npc_click / king_*（固定 NPC/守卫/显示） | 14 | 有 | `npc_click.json`、`king_dialog.json`、`king_castle_war.json` |
+| merchant_dialog（商人/说词） | 3 | 有 | `merchant_dialog.json` |
+| bag_equip/eat_item/pickup_item（背包族） | 10 | 有 | `bag_equip.json`、`eat_item.json`、`pickup_item.json` |
+| GAP 战斗/受击 | 18 | **缺** | 需 `CM_HIT(3014)`→`SM_HIT(14)`/`SM_STRUCK(31)` 场景 + 同屏怪夹具 |
+| GAP 移动/AOI | 12 | **缺** | 需走位/推挤/AOI 相位场景（`SM_WALK`/`SM_TURN` 序列） |
+| GAP 未归类 | 13 | **缺** | 名字不足以定族，须逐卡回读 |
+| GAP 技能/buff | 7 | **缺** | 需魔法/`SM_MAGICFIRE(638)`/buff 生命周期场景 |
+| GAP 行会/城堡 | 4 | **缺** | 需行会 NPC（`T138` 已有 `king_castle_war` 相邻支）+ 城堡实体夹具 |
+| GAP RNG/时钟 | 3 | **缺** | 需 `MIR2_RNG_SEED` 双侧流水账本（属 R 级夹具族） |
+| GAP 聊天 | 1 | **缺** | 需频道场景（`CM_SAY` 已可发，收件人集需断言） |
+
+覆盖：**37 / 95**（login 10 + NPC 14 + 商人 3 + 背包 10）；**缺口 58 张**，按族拆分如下。
+
+- **GAP 战斗/受击（18）**：`monster-ref-drains`、`monster-walk-frames`、`mb7-monsters`、`mb2-monsters`、`mb5-monsters`、`monster-attack-hit-frame`、`monster-attack-cadence-lead`、`attacktarget-overrides` 等 18 张
+- **GAP 移动/AOI（12）**：`run-gap-mb4`、`run-gap-checkdupobj`、`movetomovingobject-quirk`、`aoi-verify-maptime`、`enter-map-cell-rejected-vs-oracle`、`enter-shift-loop`、`map-random-move-shift-loop`、`recall-slave-shift-live` 等 12 张
+- **GAP 未归类（13）**：`action-line-variable-text`、`weapon-upgrade-values`、`run-gap-pl2`、`run-gap-pl3`、`player-dir-supply`、`rm-delaypushed`、`smframe-minor-gaps`、`run-gap-mb3` 等 13 张
+- **GAP 技能/buff（7）**：`magic-8-21-wiring`、`rm-delaymagic-six-ids`、`spell-shared-tail`、`spell-mp-wrapper`、`default-arm-spell-surface`、`buff-producer-wiring`、`buff-system`
+- **GAP 行会/城堡（4）**：`t138-request-castle-war`、`castle-war-area-impl`、`castle-entities`、`guild-g2-dispatch`
+- **GAP RNG/时钟（3）**：`ctor-barrier-a-draw`、`world-tick-expansion`、`window-collector-preflight`
+- **GAP 聊天（1）**：`chat-channels`
+
+> 缺口族里，**战斗/受击**与**移动/AOI** 合计 30 张，是下一批场景最该补的两族；它们需要同屏怪/多对象夹具，单靠现有 `login_only` 起的单人场景覆盖不到。
