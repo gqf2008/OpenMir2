@@ -196,12 +196,28 @@ pub struct TickRecord {
     /// （`BaseObject.Base.cs:230-245`，30s `VerifyTick` 门内、`VerifyMapTime` 之后）
     /// 触发的**玩家** `HealthSpellChanged()`：`(actor_id, hp_after, mp_after)`，保序。
     ///
-    /// 宿主据此出 `SM_HEALTHSPELLCHANGED(53)`（oracle 只对 `Race == Play` 发帧）。
+    /// 宿主据此出 `SM_HEALTHSPELLCHANGED(53)` 的**第一支**（`Race == Play` 的 `SendUpdateMsg`；
+    /// 第二支 `ShowHp` 没有 race 门，见 [`TickRecord::show_hp_health_changes`]）。
     /// `(actor_id, hp_after, mp_after, hp_clamped, mp_clamped)`：两个 flag 分别对应 oracle
     /// 的 `if (WAbil.HP > WAbil.MaxHP)` / `if (WAbil.MP > WAbil.MaxMP)` 分支——宿主按 flag
     /// 把**该字段**写成 `Max-1`（P8 钳制在 P7 填充/扣血之后），未被钳制的字段保留 P7 终值。
     /// 该段不消费 RNG ⇒ 五批 trace 不变。
     pub verify_health_changes: Vec<(i32, u16, u16, bool, bool)>,
+    /// **卡 `openmir2-monster-showhp-53-broadcast`**：本 tick **非 Play** 实体（怪物/NPC/守卫）
+    /// 的 `HealthSpellChanged()` **第二支**（`BaseObject.cs:706-708`
+    /// `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)`）每次调用记
+    /// `(actor_id, hp_after, mp_after)`，保序。
+    ///
+    /// oracle 的第二支**没有 race 门**：`ShowHp == true`（心灵启示 28 的
+    /// `MakeOpenHealth`，`BaseObject.cs:944-950`）时，怪/NPC 的恢复
+    /// （`BaseObject.Base.cs:55/:68`）、负体力扣血（`:109`）、魔法受击
+    /// （`BaseObject.cs:628`）、毒伤（`ActorBuffSystem.cs:255`）与超上限钳制
+    /// （`BaseObject.Base.cs:230-245`）都会向 ±`SendRefMsgRange`(12) 的玩家广播 53。
+    ///
+    /// 本字段**只装非会话实体**：玩家路径由宿主会话 `WAbil`/`HealthSpellSlots` 出帧
+    /// （`SendUpdateMsg` 自见 + 第二支自发副本），装进来会重复。宿主按每条一次
+    /// `SendRefMsg` 向观察者发同一字节的 53（载荷 = 该 actor 的 `HP/MP/MaxHP`）。
+    pub show_hp_health_changes: Vec<(i32, u16, u16)>,
     /// **Lane B（城堡实体挂图）**：本 tick 门/墙状态机（race 110/111 的 `Run` + 门死亡掩码）
     /// 产生的结构事件，保序。`SetMapXyFlag` 已同步作用到 `MapGrid`；`Ref*` 已转成
     /// `MonsterRefMsg`（`RM_DIGUP/DIGDOWN/TURN/ALIVE`）由宿主排水出帧。
@@ -345,9 +361,13 @@ pub struct MagStruckOutcome {
     /// `StruckDamage` 后的实际扣血（`nDamage > 0` 才非 0）。
     pub damage: i32,
     pub hp_after: u16,
+    /// `StruckDamage` 后的 `WAbil.MP`（53 的 `Tag`）。
+    pub mp_after: u16,
     pub max_hp: u16,
-    /// 目标 `Race == ActorRace.Play`（决定 53 帧是否发）。
+    /// 目标 `Race == ActorRace.Play`（第一支 `SendUpdateMsg` 的判据）。
     pub is_player: bool,
+    /// 目标当时的 `ShowHp`（第二支 `SendRefMsg` 的判据；**无 race 门**）。
+    pub show_hp: bool,
     /// 受击怪物自消息链是否产生 `RM_CHANGENAMECOLOR`（`!ObMode && !FixedHideMode`）。
     pub name_color: bool,
     /// `GetChrColor`（656 的 Param）。
@@ -1004,8 +1024,13 @@ pub struct World {
     /// 玩家 `HealthSpellChanged()`（`(actor_id, hp_after, mp_after, hp_clamped, mp_clamped)`，保序）。
     ///
     /// 累积到 [`World::tick_tail`] 末尾转抄进 [`TickRecord::verify_health_changes`]（宿主出 53）。
-    /// 只记 `Race == Play`（oracle 的 `HealthSpellChanged` 仅对 Play 发帧，`BaseObject.cs:700-703`）。
+    /// 只记 `Race == Play` 的**第一支**（`SendUpdateMsg`）；非 Play 的 `ShowHp` 第二支进
+    /// [`World::pending_show_hp_health_changes`]。
     pub(crate) pending_verify_health_changes: Vec<(i32, u16, u16, bool, bool)>,
+    /// **卡 `openmir2-monster-showhp-53-broadcast`**：非 Play 实体 `HealthSpellChanged()`
+    /// 第二支（`ShowHp`）的 53 事件 `(actor_id, hp_after, mp_after)`，保序。
+    /// 每次 [`World::tick_head`] 清空，结束时转抄进 [`TickRecord::show_hp_health_changes`]。
+    pub(crate) pending_show_hp_health_changes: Vec<(i32, u16, u16)>,
     /// 判据③：tick 必须始终跑在同一个线程上
     owner_thread: Option<ThreadId>,
     /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
@@ -1197,6 +1222,7 @@ impl World {
             tail_phase_log: Vec::new(),
             player_hiter_snapshot: Vec::new(),
             pending_verify_health_changes: Vec::new(),
+            pending_show_hp_health_changes: Vec::new(),
             owner_thread: None,
             clock_runner,
             item_number: ItemNumberCounter::default(),
@@ -2659,8 +2685,12 @@ impl World {
                     caster_id: msg.caster_id,
                     damage: 0,
                     hp_after,
+                    mp_after: t.mp,
                     max_hp,
                     is_player: false,
+                    // `CloneMonster.Operate` 恒 `return false` ⇒ 不执行
+                    // `StruckDamage`/`HealthSpellChanged`，ShowHp 支不得出帧。
+                    show_hp: false,
                     name_color: false,
                     chr_color: 0,
                 });
@@ -2730,6 +2760,8 @@ impl World {
                 }
             }
             let (hp_after, max_hp) = (t.hp, t.max_hp);
+            let mp_after = t.mp;
+            let show_hp = t.show_hp;
             let is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
             if let Some(e) = self.entities.get_mut(msg.target_id) {
                 *e = t;
@@ -2739,8 +2771,10 @@ impl World {
                 caster_id: msg.caster_id,
                 damage,
                 hp_after,
+                mp_after,
                 max_hp,
                 is_player,
+                show_hp,
                 name_color,
                 chr_color,
             });
@@ -4638,6 +4672,7 @@ impl World {
             buff_health_changes: Vec::new(),
             run_state_expiries: Vec::new(),
             verify_health_changes: Vec::new(),
+            show_hp_health_changes: Vec::new(),
             castle_structures: Vec::new(),
         };
 
@@ -4756,6 +4791,7 @@ impl World {
         // 供宿主段里的 P32 读（读清理前的值，含「命中者 30s 未过期 / 命中者是非玩家」两态）。
         // 快照点在命令 FIFO 之后（同一 Run 的攻击命令可写 `LastHiter`，与 oracle 消息泵同相位）。
         self.pending_verify_health_changes.clear();
+        self.pending_show_hp_health_changes.clear();
         self.tail_phase_log.clear();
         self.player_hiter_snapshot.clear();
         for e in self.entities.iter() {
@@ -4870,6 +4906,11 @@ impl World {
         // 只有三处门全部通过才取数（`crate::run_gap::dup_push_dir`）；事件进 `record.pushes`。
         record.pushes.extend(self.check_dup_obj());
 
+        // **卡 `openmir2-monster-showhp-53-broadcast`**：把非 Play 实体的 `ShowHp` 53 事件
+        // （怪物 AI 恢复/魔击/守卫、NPC/商人 VerifyTick 钳制）转抄进本 tick 记录。
+        record
+            .show_hp_health_changes
+            .append(&mut self.pending_show_hp_health_changes);
         // 宿主段（P21 → P22 → [P24] → P25 → P26 → P27 → P31 → P32；oracle 行号见
         // [`World::tick`] 文档）在 [`World::tick_head`] 与 [`World::tick_tail`] 之间由
         // `bins/game-svr` 驱动。直接调用 [`World::tick`] 时该段为空。
@@ -5098,7 +5139,9 @@ impl World {
     ///
     /// 照抄点：① 两分支独立判、改的是 `MaxHP-1` / `MaxMP-1`（不是 `MaxHP`）；② `ushort` 减法在
     /// C# 先提升为 int 再截断 ⇒ 用 `wrapping_sub(1)`（`MaxHP == 0` 时得到 65535，不 panic）；
-    /// ③ `HealthSpellChanged()` 只对 `Race == Play` 发帧（`BaseObject.cs:700-703`），非玩家只改值。
+    /// ③ `HealthSpellChanged()` 的第一支只对 `Race == Play` 发帧（`BaseObject.cs:700-703`）；
+    ///    第二支 `if (ShowHp)` **没有 race 门** ⇒ 非 Play 实体在 `ShowHp` 时同样广播 53
+    ///    （进 [`World::pending_show_hp_health_changes`]）。
     ///
     /// 调用点：仅 [`World::verify_map_time`]（30s 门内、`VerifyMapTime` 之后）。不消费 RNG。
     fn clamp_overflow_abilitys(&mut self, actor_id: i32) {
@@ -5116,11 +5159,23 @@ impl World {
             mp_clamped = true;
         }
         let is_play = e.race == crate::entity::ACTOR_RACE_PLAY;
+        let show_hp = e.show_hp;
+        let (id, hp, mp) = (e.id, e.hp, e.mp);
         if (hp_clamped || mp_clamped) && is_play {
-            let (id, hp, mp) = (e.id, e.hp, e.mp);
             self.pending_verify_health_changes
                 .push((id, hp, mp, hp_clamped, mp_clamped));
+        } else if (hp_clamped || mp_clamped) && show_hp {
+            // `BaseObject.cs:706-708` 第二支：`ShowHp` 无 race 门 ⇒ ±12 广播 53。
+            self.record_show_hp_health_change(id, hp, mp);
         }
+    }
+
+    /// 记一次**非 Play** 实体的 `HealthSpellChanged()` 第二支（`BaseObject.cs:706-708`）。
+    ///
+    /// 只应在 `show_hp == true` 时调用（调用方负责门）；每条对应一次
+    /// `SendRefMsg(RM_HEALTHSPELLCHANGED)`，由宿主转成观察者的 `SM_HEALTHSPELLCHANGED(53)`。
+    pub(crate) fn record_show_hp_health_change(&mut self, actor_id: i32, hp: u16, mp: u16) {
+        self.pending_show_hp_health_changes.push((actor_id, hp, mp));
     }
 
     /// `PlayObject.Run` 的烈火/双龙到期段（`PlayObject.Message.cs:54-64`），按玩家槽位顺序。

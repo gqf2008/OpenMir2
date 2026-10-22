@@ -4871,8 +4871,11 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
 /// - 恢复段 `:39-66`：`(now - AutoRecoveryTick) / 20` 折成 `HealthTick/SpellTick`；
 ///   `HP < MaxHP` 且 `HealthTick >= HealthFillTime` ⇒ `HP += MaxHP / 75 + 1`（截断到 `MaxHP`）；
 ///   `MP < MaxMP` 且 `SpellTick >= SpellFillTime` ⇒ `MP += MaxMP / 18 + 1`；到点后两个 tick 归零。
-///   怪物的 `HealthSpellChanged()` 只对 `Race == ActorRace.Play` 发帧（`BaseObject.cs:700-703`）
-///   ⇒ **怪侧无帧面**（不产生任何 `SM_*`）。
+///   怪物/守卫的 `HealthSpellChanged()`：第一支 `Race == Play` 不发；**第二支
+///   `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)` 没有 race 门**（`BaseObject.cs:706-708`）
+///   ⇒ 带 `ShowHp`（心灵启示 28）的怪/NPC 会向 ±12 玩家广播 `SM_HEALTHSPELLCHANGED(53)`。
+///   本函数把每次 `HealthSpellChanged()` 调用记进
+///   [`World::record_show_hp_health_change`]（仅 `show_hp == true` 时），宿主出帧。
 /// - 体力点段 `:105-110`：`HealthTick < -HealthFillTime && HP > 1` ⇒ `HP -= 1; HealthTick += HealthFillTime`。
 ///   普通怪的 `HealthTick` 只增不减⇒该支对怪物不可达；照抄是为了同一份 `BaseObject.Run` 语义
 ///   （将来玩家/消费点接进来时不需要再改）。
@@ -5012,6 +5015,10 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
     let mut hp = e.hp;
     let mut mp = e.mp;
     let (max_hp, max_mp) = (e.max_hp, e.max_mp);
+    // `BaseObject.cs:706-708` 的 `ShowHp` 门：恢复/体力点段每次 `HealthSpellChanged()`
+    // 都会向 ±12 玩家广播 53（`SendRefMsg`，无 race 门）。按调用次数累计。
+    let show_hp = e.show_hp;
+    let mut health_spell_calls = 0u8;
     // `BaseObject.Base.cs:47-55`：`WAbil.MaxHP / 75 + 1`，`(HP + n) < MaxHP` 否则截断到 `MaxHP`。
     // 加/比在 `int` 上进行（oracle 的 `ushort + ushort` 被提升为 `int`，不会在 65536 处回绕）；
     // 落回 `u16` 时 `sum < max_hp <= 65535`，强转安全。
@@ -5023,6 +5030,8 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         } else {
             max_hp
         };
+        // `BaseObject.Base.cs:55` 的 `HealthSpellChanged()`。
+        health_spell_calls = health_spell_calls.saturating_add(1);
     }
     // `BaseObject.Base.cs:57-65`：`WAbil.MaxMP / 18 + 1`（同 HP 支在 `int` 上计算）。
     if mp < max_mp && spell_tick >= spell_fill_time {
@@ -5033,6 +5042,8 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         } else {
             max_mp
         };
+        // `BaseObject.Base.cs:68` 的 `HealthSpellChanged()`。
+        health_spell_calls = health_spell_calls.saturating_add(1);
     }
     // `BaseObject.Base.cs:66-69` 的归零两行（照 oracle 次序：先判恢复、再归零）。
     if health_tick >= health_fill_time {
@@ -5045,6 +5056,8 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
     if health_tick < -health_fill_time && hp > 1 {
         hp -= 1;
         health_tick += health_fill_time;
+        // `BaseObject.Base.cs:109` 的 `HealthSpellChanged()`。
+        health_spell_calls = health_spell_calls.saturating_add(1);
     }
     if let Some(e) = world.entities.get_mut(actor_id) {
         e.health_tick = health_tick;
@@ -5052,6 +5065,13 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         e.hp = hp;
         e.mp = mp;
         e.auto_recovery_tick = now;
+    }
+    // `ShowHp` 第二支（`BaseObject.cs:706-708`）：每次 `HealthSpellChanged()` 一次
+    // `SendRefMsg`（不去重）⇒ 逐次记录，宿主逐条广播。
+    if show_hp && health_spell_calls > 0 {
+        for _ in 0..health_spell_calls {
+            world.record_show_hp_health_change(actor_id, hp, mp);
+        }
     }
     target_cret_cleanup(world, actor_id, now);
     // `BaseObject.Base.cs:223-228`：`(now - VerifyTick) > 30s` ⇒ `Envir.VerifyMapTime(...)`
@@ -7564,6 +7584,79 @@ mod tests {
         let e = world.entities.get(id).unwrap();
         assert_eq!(e.mp, 2, "回蓝量 = MaxMP/18 + 1");
         assert_eq!(e.spell_tick, 0, "到点后 SpellTick 归零");
+    }
+
+    /// **卡 `openmir2-monster-showhp-53-broadcast`**：`HealthSpellChanged()` 的第二支
+    /// `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)`（`BaseObject.cs:706-708`）**没有 race 门**
+    /// ⇒ 带 `ShowHp` 的怪/NPC 在恢复段每次调用都要记一条 53 广播事件。
+    ///
+    /// 红检：删掉 `base_object_run_monster` 里的 `record_show_hp_health_change` 循环
+    /// ⇒ 第一条断言红；去掉 `show_hp` 门（无条件记）⇒ 第二条断言红。
+    #[test]
+    fn show_hp_monster_recovery_records_53_broadcast_events() {
+        let mut world = World::new(32, 32);
+        world.set_recovery_fill_times(300, 800);
+        let mut e = Entity::new(0, "半兽人", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 10;
+        e.max_hp = 75;
+        e.mp = 0;
+        e.max_mp = 18;
+        e.health_tick = 0;
+        e.spell_tick = 0;
+        e.auto_recovery_tick = 0;
+        e.show_hp = true;
+        let id = world.add_entity(e);
+        // 6000ms ⇒ recovery_tick = 300 ⇒ HP 支命中；SpellTick = 300 < 800 ⇒ MP 支不命中。
+        world.clock_ms = 6_000;
+        base_object_run_monster(&mut world, id);
+        assert_eq!(
+            world.pending_show_hp_health_changes,
+            vec![(id, 12, 0)],
+            "ShowHp=true ⇒ HP 恢复一次记一条（HP=12、MP 未变）"
+        );
+
+        // 同一 Run 内 HP/MP 两支都命中 ⇒ 两次 `HealthSpellChanged()` ⇒ 两条（`SendRefMsg` 不去重）。
+        world.pending_show_hp_health_changes.clear();
+        let mut e = Entity::new(1, "半兽人2", 11, 11);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 10;
+        e.max_hp = 75;
+        e.mp = 0;
+        e.max_mp = 18;
+        e.spell_tick = 795;
+        e.auto_recovery_tick = 0;
+        e.show_hp = true;
+        let id2 = world.add_entity(e);
+        world.clock_ms = 6_100; // SpellTick = 795 + 305 = 1100 >= 800
+        base_object_run_monster(&mut world, id2);
+        let hp2 = world.entities.get(id2).unwrap().hp;
+        let mp2 = world.entities.get(id2).unwrap().mp;
+        assert_eq!(
+            world.pending_show_hp_health_changes.len(),
+            2,
+            "HP+MP 各一次 HealthSpellChanged ⇒ 两条广播事件"
+        );
+        assert_eq!(
+            world.pending_show_hp_health_changes,
+            vec![(id2, hp2, mp2), (id2, hp2, mp2)],
+            "两条都带同一 Run 的终态 HP/MP"
+        );
+
+        // ShowHp=false ⇒ 第二支不发（第一条 `Race==Play` 也不命中怪物）。
+        world.pending_show_hp_health_changes.clear();
+        let mut e = Entity::new(2, "半兽人3", 12, 12);
+        e.race = ACTOR_RACE_MONSTER;
+        e.hp = 10;
+        e.max_hp = 75;
+        e.auto_recovery_tick = 0;
+        let id3 = world.add_entity(e);
+        world.clock_ms = 12_000;
+        base_object_run_monster(&mut world, id3);
+        assert!(
+            world.pending_show_hp_health_changes.is_empty(),
+            "ShowHp=false ⇒ 怪侧零 53 广播事件"
+        );
     }
 
     /// 体力点段（`BaseObject.Base.cs:105-110`）：`HealthTick < -HealthFillTime && HP > 1`

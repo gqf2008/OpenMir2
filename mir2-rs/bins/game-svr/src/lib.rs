@@ -7922,6 +7922,14 @@ fn drain_mag_struck_b2(
                     buf.push_broadcast(world, online, o.target_id, true, P_HEALTH, &body);
                 }
             }
+        } else if o.show_hp {
+            // **卡 `openmir2-monster-showhp-53-broadcast`**：`BaseObject.cs:706-708` 的第二支
+            // `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)` **没有 race 门** ⇒ 带 ShowHp 的
+            // 怪/NPC 受魔法攻击后同样向 ±`SendRefMsgRange` 玩家广播 53；载荷 = 该实体
+            // 当时的 `HP/MP/MaxHP`（`PlayObject.Message.cs:1736-1739` 在出队时读 `WAbil`）。
+            let body =
+                smframe::sm_healthspellchanged_frame(o.target_id, o.hp_after, o.mp_after, o.max_hp);
+            buf.push_broadcast(world, online, o.target_id, true, P_HEALTH, &body);
         }
         let Some(d) = displays.get(o.target_id) else {
             // 无展示表 ⇒ 造不出 `SM_STRUCK` 的 `Feature/Status`（保守跳过；怪物生产路径已登记）。
@@ -12297,6 +12305,18 @@ fn drain_buff_downlink(
     }
     for (actor_id, hp, mp) in &rec.buff_health_changes {
         let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            // **卡 `openmir2-monster-showhp-53-broadcast`**：毒伤段的 `HealthSpellChanged()`
+            // 对怪/NPC 同样走 `ShowHp` 第二支（`BaseObject.cs:706-708`，无 race 门）⇒
+            // 非会话实体在 `show_hp` 时也向 ±`range` 玩家广播 53（`hp/mp` 取记录值，
+            // `MaxHP` 取实体当前值 = oracle 出队时的 `WAbil.MaxHP`）。
+            if let Some(e) = world.entities.get(*actor_id) {
+                if e.show_hp {
+                    let body = game_svr::smframe::sm_healthspellchanged_frame(
+                        *actor_id, *hp, *mp, e.max_hp,
+                    );
+                    broadcast_healthspellchanged(world, online, gates, *actor_id, &body, range);
+                }
+            }
             continue;
         };
         let name = entry.chr_name.clone();
@@ -12325,6 +12345,36 @@ fn drain_buff_downlink(
         if show_hp {
             broadcast_healthspellchanged(world, online, gates, *actor_id, &body, range);
         }
+    }
+}
+
+/// **卡 `openmir2-monster-showhp-53-broadcast`**：本 tick **非 Play** 实体（怪物/NPC/守卫）的
+/// `HealthSpellChanged()` **第二支**（`BaseObject.cs:706-708`
+/// `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)`）⇒ 向 ±`SendRefMsgRange` 玩家广播
+/// `SM_HEALTHSPELLCHANGED(53)`。
+///
+/// 来源（世界侧 [`mir2_world::TickRecord::show_hp_health_changes`] 按调用序记录）：
+/// - 怪物/守卫 `base.Run()` 的 HP/MP 恢复（`BaseObject.Base.cs:55/:68`）与负体力扣血（`:109`）；
+/// - `VerifyMapTime` 段的 HP/MP 超上限钳制（`:230-245`）。
+/// - 魔法受击（`BaseObject.cs:628`）与毒伤（`ActorBuffSystem.cs:255`）分别在
+///   [`drain_mag_struck_b2`] / [`drain_buff_downlink`] 出帧。
+///
+/// 收件人 = `SendRefMsg` 的 ±`range` 玩家；源自己（怪/NPC）不是 Play ⇒ **没有自发副本**，
+/// 与玩家路径（`SendUpdateMsg` 自见 + 第二支自发）区分。载荷逐字段 =
+/// `Recog/ActorId`、`Param/HP`、`Tag/MP`、`Series/MaxHP`（`PlayObject.Message.cs:1737`）。
+fn drain_show_hp_health_changes(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    range: i32,
+) {
+    for (actor_id, hp, mp) in &rec.show_hp_health_changes {
+        let Some(e) = world.entities.get(*actor_id) else {
+            continue;
+        };
+        let body = game_svr::smframe::sm_healthspellchanged_frame(*actor_id, *hp, *mp, e.max_hp);
+        broadcast_healthspellchanged(world, online, gates, *actor_id, &body, range);
     }
 }
 
@@ -19912,6 +19962,9 @@ fn sim_loop(
             &gates,
             enter_cfg.ref_msg_range,
         );
+        // **卡 `openmir2-monster-showhp-53-broadcast`**：怪/NPC 的 `ShowHp` 恢复/钳制 53
+        // （魔法受击与毒伤已分别在 `drain_mag_struck_b2`/`drain_buff_downlink` 出帧）。
+        drain_show_hp_health_changes(&rec, &world, &online, &gates, enter_cfg.ref_msg_range);
         // **接线批 A**：TransMap 簇（`SM_CLEAROBJECTS(633)`/`SM_CHANGEMAP(634)`/[`SM_SPACEMOVE_SHOW(801)`]）。
         // oracle 在 `SpaceMove`/`EnterAnotherMap` 内**同步**发；本宿主在世界侧落地后由本段 drain。
         drain_map_change(&mut world, &online, &gates, &displays, registry.as_ref());
@@ -20951,6 +21004,226 @@ mod tests {
             displays.get(hero).unwrap().status,
             status,
             "drain 应把新 CharStatus 写进展示表"
+        );
+    }
+
+    /// **卡 `openmir2-monster-showhp-53-broadcast`（生产入口）**：`ShowHp` 怪物受魔法攻击 ⇒
+    /// `HealthSpellChanged()` 第二支（`BaseObject.cs:706-708`，**无 race 门**）
+    /// ⇒ ±12 观察者各收一条 `SM_HEALTHSPELLCHANGED(53)`，载荷逐字节 =
+    /// `Recog=怪物ActorId / Param=HP / Tag=MP / Series=MaxHP`。
+    ///
+    /// 红检：删掉 `drain_mag_struck_b2` 的 `else if o.show_hp` 支 ⇒ 第一条断言红；
+    /// 用玩家会话 WAbil 拼帧（混用口径）⇒ 逐字节断言红。
+    #[test]
+    fn monster_show_hp_mag_struck_broadcasts_53_to_observer() {
+        use mir2_protocol::frame::CommandMessage;
+
+        let mut world = mir2_world::World::new(32, 32);
+        let obs = world.add_entity(new_player_entity("p".to_string(), 10, 11));
+        let mut mon = mir2_world::Entity::new(0, "怪".to_string(), 10, 10);
+        mon.race = 80;
+        mon.hp = 100;
+        mon.max_hp = 100;
+        mon.mp = 30;
+        mon.max_mp = 30;
+        mon.mac = 0;
+        mon.show_hp = true;
+        let mon_id = world.add_entity(mon);
+
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "ua".into(),
+            chr_name: "p".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: obs,
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let displays = downlink::DisplayTable::new();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+
+        // `RM_MAGSTRUCK` 已到点（`deliver_self_delay_msgs` 的产物）：直接入队，驱动交付段。
+        world
+            .pending_mag_struck
+            .push(mir2_world::world::PendingMagStruck {
+                target_id: mon_id,
+                caster_id: obs,
+                power: 10,
+                mine: false,
+                order: 1,
+            });
+        let mut buf = SpellFrameBuf::new();
+        drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
+        buf.flush(&online, &gates);
+
+        let hp_after = world.entities.get(mon_id).unwrap().hp;
+        let mp_after = world.entities.get(mon_id).unwrap().mp;
+        assert!(hp_after < 100, "MSD 必须造成伤害，否则 53 不触发");
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            bodies.push(body);
+        }
+        assert_eq!(
+            bodies.len(),
+            1,
+            "观察者恰收一条 53（怪物无连接、无 31/656 展示表）"
+        );
+        let cm = CommandMessage::from_bytes(&bodies[0]).expect("53 头 12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+        assert_eq!(cm.recog, mon_id, "Recog = 发帧怪物 ActorId");
+        assert_eq!(cm.param, hp_after, "Param = 怪物 WAbil.HP");
+        assert_eq!(cm.tag, mp_after, "Tag = 怪物 WAbil.MP");
+        assert_eq!(cm.series, 100, "Series = 怪物 WAbil.MaxHP");
+        assert_eq!(
+            bodies[0],
+            game_svr::smframe::sm_healthspellchanged_frame(mon_id, hp_after, mp_after, 100),
+            "整帧逐字节（不与玩家的会话 WAbil 口径混用）"
+        );
+
+        // ShowHp=false ⇒ 第二支不发（第一支 `Race==Play` 也不命中怪物）⇒ 零帧。
+        world.entities.get_mut(mon_id).unwrap().show_hp = false;
+        world
+            .pending_mag_struck
+            .push(mir2_world::world::PendingMagStruck {
+                target_id: mon_id,
+                caster_id: obs,
+                power: 10,
+                mine: false,
+                order: 2,
+            });
+        let mut buf = SpellFrameBuf::new();
+        drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
+        buf.flush(&online, &gates);
+        let mut extra = 0usize;
+        while let Ok(SimToGate::SendFrame { .. }) = rx0.try_recv() {
+            extra += 1;
+        }
+        assert_eq!(extra, 0, "ShowHp=false ⇒ 怪侧零帧");
+    }
+
+    /// **卡 `openmir2-monster-showhp-53-broadcast`**：非会话实体的恢复/钳制 53 事件
+    /// （`TickRecord::show_hp_health_changes`）⇒ ±`range` 玩家各收一条逐字节 53。
+    ///
+    /// 红检：删掉 `drain_show_hp_health_changes` 的广播调用 ⇒ 零帧断言红。
+    #[test]
+    fn drain_show_hp_health_changes_broadcasts_exact_53_bytes() {
+        use mir2_protocol::frame::CommandMessage;
+
+        let mut world = mir2_world::World::new(32, 32);
+        let obs = world.add_entity(new_player_entity("p".to_string(), 10, 12));
+        let mut mon = mir2_world::Entity::new(0, "怪".to_string(), 10, 10);
+        mon.race = 80;
+        mon.hp = 42;
+        mon.max_hp = 100;
+        mon.mp = 7;
+        mon.show_hp = true;
+        let mon_id = world.add_entity(mon);
+
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "ua".into(),
+            chr_name: "p".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: obs,
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut rec = mir2_world::TickRecord::default();
+        rec.show_hp_health_changes.push((mon_id, 42, 7));
+        drain_show_hp_health_changes(&rec, &world, &online, &gates, 12);
+
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            bodies.push(body);
+        }
+        assert_eq!(bodies.len(), 1, "观察者恰一条（怪不是 Play ⇒ 无自发副本）");
+        let cm = CommandMessage::from_bytes(&bodies[0]).expect("53 头 12B");
+        assert_eq!(
+            (cm.ident, cm.recog, cm.param, cm.tag, cm.series),
+            (
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mon_id,
+                42,
+                7,
+                100
+            )
+        );
+        assert_eq!(
+            bodies[0],
+            game_svr::smframe::sm_healthspellchanged_frame(mon_id, 42, 7, 100),
+            "逐字节"
+        );
+    }
+
+    /// **卡 `openmir2-monster-showhp-53-broadcast`**：毒伤段（`ActorBuffSystem.cs:255`）对
+    /// `ShowHp` 怪物同样走第二支 ⇒ 观察者收到 53（非会话实体的 `buff_health_changes`）。
+    ///
+    /// 红检：把 `drain_buff_downlink` 的 `else` 支改回无条件 `continue` ⇒ 零帧断言红。
+    #[test]
+    fn monster_buff_dot_show_hp_broadcasts_53() {
+        use mir2_protocol::frame::CommandMessage;
+
+        let mut world = mir2_world::World::new(32, 32);
+        let obs = world.add_entity(new_player_entity("p".to_string(), 11, 11));
+        let mut mon = mir2_world::Entity::new(0, "怪".to_string(), 10, 10);
+        mon.race = 80;
+        mon.hp = 30;
+        mon.max_hp = 100;
+        mon.mp = 5;
+        mon.show_hp = true;
+        let mon_id = world.add_entity(mon);
+
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "ua".into(),
+            chr_name: "p".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: obs,
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut displays = downlink::DisplayTable::new();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+
+        let mut rec = mir2_world::TickRecord::default();
+        rec.buff_health_changes.push((mon_id, 30, 5));
+        drain_buff_downlink(
+            &rec,
+            &world,
+            &mut displays,
+            &online,
+            &mut sessions,
+            &gates,
+            12,
+        );
+
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            bodies.push(body);
+        }
+        assert_eq!(bodies.len(), 1, "观察者恰一条 53");
+        let cm = CommandMessage::from_bytes(&bodies[0]).expect("53 头 12B");
+        assert_eq!(
+            (cm.ident, cm.recog, cm.param, cm.tag, cm.series),
+            (
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                mon_id,
+                30,
+                5,
+                100
+            )
+        );
+        assert_eq!(
+            bodies[0],
+            game_svr::smframe::sm_healthspellchanged_frame(mon_id, 30, 5, 100),
+            "逐字节"
         );
     }
 
