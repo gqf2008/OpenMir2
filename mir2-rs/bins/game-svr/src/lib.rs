@@ -58,6 +58,7 @@ mod users;
 // 仍留在同一 lib 里，是因为 bin 侧改为薄包装（`main.rs` 只有 `process::exit(game_svr::run())`）。
 
 pub mod ability;
+pub mod adminlist;
 pub mod attackwire;
 pub mod bag;
 pub mod castle;
@@ -872,6 +873,37 @@ async fn run_inner(args: &[String]) -> Result<()> {
     } else {
         glog!("INF", "公告提示信息加载成功...[{}]", line_notice.len());
     }
+    // **AdminList 消费点（卡 `openmir2-envir-adminlist-consumer`）**：`LocalDb.LoadAdminList`
+    // （`DB/LocalDB.cs:16-96`；装载点 `GameApp.cs:209`，紧随 `:210` 的 "管理员列表加载成功..."）。
+    // **真机事实照抄**：oracle 把它装进 `WorldEngine.AdminList`，唯一读者 `GetHumPermission`
+    // （`WorldServer.cs:1021-1037`）的调用点在 `PlayObject.cs:1188-1194` **被注释** ⇒ 表装进来
+    // 但**不参与任何判定**（`Permission` 恒 0，见 `gmcmd.rs`）。本块只做装载 + 登记；
+    // `game_svr::adminlist::AdminList::get_hum_permission` 查表半已备而**不接**
+    // （接上就是发明 oracle 没有的行为，须另开 `D-*` 偏差卡）。
+    let admin_list = match game_svr::adminlist::load_admin_list_file(&envir_loader) {
+        Ok(Some(list)) => {
+            glog!(
+                "INF",
+                "管理员列表加载成功...[{}]（现网 GetHumPermission 无调用点 ⇒ 不参与权限判定）",
+                list.len()
+            );
+            Some(list)
+        }
+        Ok(None) => {
+            glog!(
+                "INF",
+                "无 Envir/AdminList.txt ⇒ 管理员列表为空（oracle File.Exists 门）"
+            );
+            None
+        }
+        Err(e) => {
+            glog!(
+                "WRN",
+                "加载 Envir/AdminList.txt 失败（{e}）⇒ 管理员列表为空（oracle 调用点无 try/catch ⇒ 宿主登记）"
+            );
+            None
+        }
+    };
     // **M3⑨-实现 2 第②片**：`Server.conf` 的宝宝配置（`PetSlaveConfig::from_ini`，
     // ① 已交付但未接生产路径）。`DoSpell` 召唤面用它选型。读不到 ⇒ oracle 初值（登记）。
     let pet_cfg = match game_svr::slave::pet_slave_config_from_conf(&conf) {
@@ -1089,6 +1121,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     guards,
                     minimap,
                     make_items,
+                    admin_list,
                     line_notice,
                     line_notice_cfg: line_notice::LineNoticeCfg {
                         interval_ms: i64::from(cfg.show_line_notice_time),
@@ -14664,6 +14697,15 @@ struct EnterConfig {
     /// **R0-3**：`Envir/MakeItem.txt` 解析出的合成配方表（`load_make_item_file`）。消费点
     /// （`CM_USERMAKEDRUGITEM` → `Merchant.ClientMakeDrugCheckNeedItem`）属 R1 ⇒ 暂只登记。
     make_items: Option<mir2_envir::makeitem::MakeItemRegistry>,
+    /// **AdminList 消费点（卡 `openmir2-envir-adminlist-consumer`）**：`Envir/AdminList.txt`
+    /// 解析出的管理员行（主线程装载，`game_svr::adminlist::load_admin_list_file`）；
+    /// 对应 oracle `SystemShare.WorldEngine.AdminList`（`WorldServer.cs:38`，装载点
+    /// `GameApp.cs:209`）。
+    ///
+    /// **现网无生效消费点**：唯一读者 `GetHumPermission`（`WorldServer.cs:1021-1037`）的调用点
+    /// 被注释（`PlayObject.cs:1188-1194`）⇒ 本表与 oracle 同形「装进来、不参与判定」；
+    /// 查表半 [`adminlist::AdminList::get_hum_permission`] 已备但**不接**生产路径。
+    admin_list: Option<game_svr::adminlist::AdminList>,
     /// **R0-4**：`Notice/LineNotice.txt` 解析出的逐行滚动公告（`notice::load_line_notice`）。
     /// 消费点 = `WorldServer.cs:669-696` 的逐玩家定时公告（**世界 tick 扩容首批（T3）· ③** 已接线）。
     line_notice: Vec<String>,
@@ -14794,6 +14836,7 @@ impl EnterConfig {
             guards: None,
             minimap: None,
             make_items: None,
+            admin_list: None,
             line_notice: Vec::new(),
             line_notice_cfg: line_notice::LineNoticeCfg {
                 interval_ms: 300_000,
@@ -17178,6 +17221,16 @@ fn sim_loop(
             "INF",
             "MiniMap 注册表就绪：{} 条（下发帧 CM_WANTMINIMAP 未实现 ⇒ 登记）",
             mm.len()
+        );
+    }
+    // **AdminList（卡 `openmir2-envir-adminlist-consumer`）**：装载结果随 `EnterConfig` 到 sim 线程，
+    // 与 oracle `WorldEngine.AdminList` 同形「装进来、不参与判定」——`GetHumPermission` 的唯一调用点
+    // 在 `PlayObject.cs:1188-1194` 被注释 ⇒ 本表**不接**任何 `Permission` 写点（接上须另开 `D-*`）。
+    if let Some(al) = enter_cfg.admin_list.take() {
+        glog!(
+            "INF",
+            "AdminList 注册表就绪：{} 条（GetHumPermission 生产调用点被注释 ⇒ 不参与权限判定）",
+            al.len()
         );
     }
     // 制药片 WB：`CM_USERMAKEDRUGITEM` 已接线（`handle_shop_cmd`）⇒ 注册表**保留**给 sim 循环的
