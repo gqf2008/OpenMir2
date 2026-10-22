@@ -289,11 +289,13 @@ python -I -B tools/conformance/compare_runs.py selftest
 **跨进程不可复现的两条**（2026-10-23 双栈窗口登记，见 `rules.json` 的 reason）：
 
 * `14`（固定 NPC 受击帧）——oracle 只在 `Random(30)==0` / `Random(50)==0` 命中时发，
-  随机源是墙钟播种的 `new Random()`（`src/OpenMir2/RandomNumber.cs:34`）⇒ 用 `ignore`；
+  随机源是墙钟播种的 `new Random()`（`src/OpenMir2/RandomNumber.cs:35`）⇒ 用 `ignore`；
   帧形态与收件人由 `downlink::hit_frame` 黄金用例钉死，不靠本规则。
-* `10`（SM_TURN）的 `series` 低字节 = 固定 NPC 的 `Dir`，同样由随机支 `TurnTo(RandomByte(8))`
-  改写 ⇒ 只掩 `series`，body/param/tag 仍逐字节比；玩家自己的 Dir 由移动场景的 `SM_WALK`
-  `series` 逐值比较。
+* `10`（SM_TURN）的 `series` = `MakeWord(Dir, Light)` **整个 word**（对所有 actor 生效），固定 NPC 的
+  `Dir` 由随机支 `TurnTo(RandomByte(8))` 改写 ⇒ 掩 `series`，body/param/tag 仍逐字节比。
+  代价：玩家「原地转身」的 Dir 不再逐值比（走位方向仍由 `SM_WALK(11)`/`SM_RUN(12)` 的 `series` 兜）。
+* `530` 的 `mask_body_ranges` 偏移是 **EDCode 线缆空间**不是明文空间（见 rules.json 的映射表）；
+  selftest 必须用 `lc.encode` 造线缆字节，否则「掩错位置还全绿」这类缺陷咬不到。
 
 首跑缺口补齐的 7 条（每条都给 reason + tier + approved_by=PENDING，全走评审）：
 

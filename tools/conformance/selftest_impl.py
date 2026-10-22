@@ -353,9 +353,12 @@ class Selftest(object):
                    rc == 1 and any(d.get("ident") == 520 and d.get("field") == "recog"
                                    for d in (rep or {}).get("diffs", [])),
                    (rc, (rep or {}).get("diffs")))
-        fo530 = self.frame(530, b"127.0.0.1/17100/2", phase="login", seq=600, t_ms=1, conn="o",
+        # 530 的 body 在线上是 **EDCode 编码后的线缆字节**，夹具必须同形——否则「掩码偏移是线缆空间」
+        # 这件事根本咬不到（reviewer-2 F1：早先用未编码 ASCII，`[[16,null]]` 掩掉了端口后三位还全绿）。
+        wire530 = self.lc.encode(b"127.0.0.1/17100/2")
+        fo530 = self.frame(530, wire530, phase="login", seq=600, t_ms=1, conn="o",
                            recog=2, param=0, tag=0, series=0)
-        fr530 = self.frame(530, b"127.0.0.1/17100/2", phase="login", seq=601, t_ms=2, conn="r",
+        fr530 = self.frame(530, wire530, phase="login", seq=601, t_ms=2, conn="r",
                            recog=9, param=0, tag=0, series=0)
         od = self.write_run("t21-o-530r", [fo530])
         rd = self.write_run("t21-r-530r", [fr530])
@@ -365,28 +368,37 @@ class Selftest(object):
                                    and w.get("kind") == "masked_head"
                                    for w in (rep or {}).get("whitelisted", [])),
                    (rc, (rep or {}).get("whitelisted")))
-        # 530 的 body 末段 SessionID 走 [16,end) 掩码 ⇒ 只有它不同时必须 rc 0 且登记；
-        # ip/端口（偏移 0..15）仍逐字节比 ⇒ 改那里必红。两条互为咬。
-        fr530b = json.loads(json.dumps(fo530))
-        b = bytes.fromhex(fr530b["body_hex"])[:-1] + b"9"      # 只改 SessionID
-        fr530b["body_hex"] = b.hex(); fr530b["body_len"] = len(b); fr530b["body_sha256"] = _sha(b)
-        rd = self.write_run("t21-r-530b", [fr530b])
-        od = self.write_run("t21-o-530b", [fo530])
-        rc, rep = self.compare(od, rd)
+        # 530 的**线缆** [20,end) = 明文「最后一个 `/` + SessionID」（+ 尾组余字节）⇒ 只有 SessionID
+        # 不同时必须 rc 0 且登记；明文 ip/端口的每个数字在线缆上更靠前，改任一位必红。两条互为咬。
+        def _wire(plain):
+            return self.lc.encode(plain)
+
+        def _cmp_530(tag, oracle_bytes, rust_bytes):
+            fo = self.frame(530, oracle_bytes, phase="login", seq=602, t_ms=1, conn="o",
+                            recog=2, param=0, tag=0, series=0)
+            fr = self.frame(530, rust_bytes, phase="login", seq=603, t_ms=2, conn="r",
+                            recog=9, param=0, tag=0, series=0)
+            od = self.write_run("t21-o-%s" % tag, [fo])
+            rd = self.write_run("t21-r-%s" % tag, [fr])
+            return self.compare(od, rd)
+
+        rc, rep = _cmp_530("530sid", _wire(b"127.0.0.1/17100/2"), _wire(b"127.0.0.1/17100/9"))
         self.check("530 的 SessionID 不同 => rc 0 且登记 mask_body_ranges（末段是进程内计数）",
                    rc == 0 and any(w.get("ident") == 530
                                    and w.get("kind") == "mask_body_ranges"
                                    for w in (rep or {}).get("whitelisted", [])),
                    (rc, (rep or {}).get("whitelisted"), (rep or {}).get("diffs")))
-        fr530c = json.loads(json.dumps(fo530))
-        b = bytearray(bytes.fromhex(fr530c["body_hex"]))
-        b[10] = b[10] ^ 0x01                                    # 改端口第一位（偏移 10）
-        b = bytes(b)
-        fr530c["body_hex"] = b.hex(); fr530c["body_len"] = len(b); fr530c["body_sha256"] = _sha(b)
-        rd = self.write_run("t21-r-530c", [fr530c])
-        od = self.write_run("t21-o-530c", [fo530])
-        rc, rep = self.compare(od, rd)
-        self.check("530 的端口字节改一位 => rc 1（掩码不得吞掉 ip/端口）",
+        # 端口：逐位咬（第 1/3/5 位各改一次）+ ip 改一位。旧规则 [[16,null]] 会让前三条假绿。
+        port_muts = (b"17200", b"17150", b"17101")
+        for i, pm in enumerate(port_muts):
+            rc, rep = _cmp_530("530port%d" % i, _wire(b"127.0.0.1/17100/2"),
+                               _wire(b"127.0.0.1/" + pm + b"/2"))
+            self.check("530 的端口改 %s => rc 1（线缆掩码不得吞掉端口）" % pm.decode(),
+                       rc == 1 and any(d.get("ident") == 530 and d.get("kind") == "body"
+                                       for d in (rep or {}).get("diffs", [])),
+                       (rc, (rep or {}).get("diffs")))
+        rc, rep = _cmp_530("530ip", _wire(b"127.0.0.1/17100/2"), _wire(b"127.0.0.2/17100/2"))
+        self.check("530 的 ip 改一位 => rc 1（掩码不得吞掉 ip）",
                    rc == 1 and any(d.get("ident") == 530 and d.get("kind") == "body"
                                    for d in (rep or {}).get("diffs", [])),
                    (rc, (rep or {}).get("diffs")))
