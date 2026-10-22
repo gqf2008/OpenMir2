@@ -780,7 +780,13 @@ async fn sends_keepalive_every_ten_seconds() {
     let conf = dir.join("config.conf");
     let log = dir.join("gate.log");
     let mut child = spawn_gate_logged(&conf, &log);
-    accepted_rx.await.expect("下行连接未建立");
+    // 显式超时：并发负载下 `free_port` 可能抢到刚被他人占用的端口 ⇒ gate 起不来，
+    // 无超时的 `accepted_rx.await` 会让整个门禁**永久挂起**（比 flake 更糟）。10s 足够
+    // 覆盖正常启动，超时即失败并给出可诊断信息。
+    tokio::time::timeout(Duration::from_secs(10), accepted_rx)
+        .await
+        .expect("下行连接未建立（10s 超时：free_port 抢端口或 gate 未启动）")
+        .expect("下行连接未建立");
 
     let times = tokio::time::timeout(Duration::from_secs(25), srv)
         .await
