@@ -146,11 +146,17 @@ pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
 pub fn script_frame(
     s: &SendMsg,
     npc_actor_id: i32,
+    // `BaseObject.Gold`（`SM_GOLDCHANGED` 的 `Recog`）——排水时的当下值。
+    gold: i32,
     game_gold: i32,
     game_point: i32,
     soft_version_date: i32,
 ) -> Option<Vec<u8>> {
     match s.ident {
+        // `BaseObject.GoldChanged`（`BaseObject.cs:585-591`）⇒
+        // `SM_GOLDCHANGED(653)`：`SendDefMessage(SM_GOLDCHANGED, Gold, LoWord(GameGold),
+        // HiWord(GameGold), 0)`（`PlayObject.Message.cs:1833-1835`）。
+        RM_GOLDCHANGED => Some(smframe::sm_goldchanged(gold, game_gold)),
         RM_SCRIPT_GAMEGOLDCHANGED => {
             if soft_version_date == 0 {
                 return None;
@@ -642,7 +648,7 @@ mod tests {
             n_param3: 0x090a_0b0c,
             msg: Some("@cube82\u{E7C8}".to_string()),
         };
-        let got = script_frame(&s, 4242, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
+        let got = script_frame(&s, 4242, 0, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
         let want = crate::smframe_ext::sm_playdice(
             4242,
             1,

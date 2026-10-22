@@ -171,6 +171,10 @@ pub struct NpcVars {
     pub game_point_name: String,
     /// `SystemShare.Config.UpgradeWeaponPrice`（缺省 `10000`；`$UPGRADEWEAPONFEE`）。
     pub upgrade_weapon_price: i32,
+    /// `SystemShare.Config.HumanMaxGold`（`GameSvrConf.cs:1451` 缺省 `10000000`）——
+    /// `PlayObject.IncGold`（`PlayObject.Base.cs:168-175`）的上限。脚本 `GIVE 金币` 与
+    /// 拾取/交易共用同一个配置项；本字段是脚本侧 `NpcPlayer` 快照的取值源。
+    pub human_max_gold: i32,
     /// `Merchant.PriceRate`（`$PRICERATE`）。
     pub price_rate: i32,
     /// `NormNpc.Castle`（`$OWNERGUILD/$LORD/$CASTLENAME/...`）。
@@ -201,6 +205,7 @@ impl Default for NpcVars {
             game_gold_name: "元宝".to_string(),
             game_point_name: "游戏点".to_string(),
             upgrade_weapon_price: 10_000,
+            human_max_gold: 10_000_000,
             price_rate: 100,
             castle: None,
             user_weapon: None,
@@ -628,6 +633,24 @@ pub struct NpcPlayer<'r> {
     /// `PlayDiceLabel = string.Empty`，一次性）。`None` = C# `null`（永不匹配任何非 null 标签）。
     /// 生产侧跨调用保持于宿主 `ShopSession::play_dice_label`。
     pub play_dice_label: Option<String>,
+    /// `SystemShare.Config.HumanMaxGold`（`IncGold` 上限，`PlayObject.Base.cs:168-175`）。
+    /// 由 [`NpcVars::human_max_gold`] 注入（`SystemShare.Config` 的同源值）。
+    pub human_max_gold: i32,
+    /// `playerActor.UseItems`（13 槽；`None` = oracle 的 `null` 槽）——`TAKEW` 的读/写面。
+    ///
+    /// oracle 里 `GotoLableTakeWItem`（`ScriptEngine.cs:748-790`）直接改**同一个**
+    /// `PlayObject.UseItems`，`MakeSaveRcd` 落 `hum_items`；本仓 `NpcPlayer` 是每次调用重建的
+    /// 快照 ⇒ 由宿主在脚本前 seed、脚本后按槽位对账写回 `SessionGround.use_items`。
+    pub use_items: Vec<Option<crate::bag::BagItem>>,
+    /// 模板目录（`SystemShare.ItemSystem`）：`GetStdItemName(UseItems[i].Index)` 与
+    /// `GIVE` 满包支的 `CopyToUserItemFromName` 都要按 Index 查名/查模板。
+    /// `None` = 用例/无目录（对应 oracle 空 `StdItemList`）。
+    pub catalog: Option<&'r dyn crate::ability::ItemCatalog>,
+    /// `GotoLableGiveItem` 满包支被路由到 `DropItemDown` 的件名（按脚本执行序）。
+    /// 宿主在写回阶段逐件 `CopyToUserItemFromName`（消费 `MakeIndex`）并走
+    /// [`crate::ground::drop_item_down_give`]——oracle 的掉落路径在本 oracle 树上恒失败
+    /// （`T-19`），但计数与 RNG 抽数必须补齐。
+    pub full_bag_drops: Vec<String>,
 }
 
 impl NpcPlayer<'_> {
@@ -682,6 +705,10 @@ impl NpcPlayer<'_> {
             // PlayDiceLabel=null（`:588`）——ctor 里没有对两者赋值。
             sale_deal: false,
             play_dice_label: None,
+            human_max_gold: 10_000_000,
+            use_items: vec![None; crate::ability::USE_ITEMS_LEN],
+            catalog: None,
+            full_bag_drops: Vec::new(),
         }
     }
 }
@@ -971,11 +998,32 @@ impl ScriptPlayer for NpcPlayer<'_> {
     fn gold(&self) -> i32 {
         self.gold
     }
+    /// `PlayObject.DecGold`（`PlayObject.Base.cs:754-763`）：`Gold >= nGold` 才扣，否则**不动**。
+    /// oracle 返回 `bool`（调用点 `GotoLableTakeItem` 丢弃返回值），本 trait 无返回值。
     fn dec_gold(&mut self, n: i32) {
-        self.gold -= n;
+        // C# 是无检查 int 减法（溢出回绕）⇒ 赋值也用 `wrapping_sub`，debug 构建不 panic。
+        if self.gold >= n {
+            self.gold = self.gold.wrapping_sub(n);
+        }
     }
+    /// `PlayObject.IncGold`（`PlayObject.Base.cs:168-175`）：`Gold + tGold <= HumanMaxGold` 才加。
     fn inc_gold(&mut self, n: i32) {
-        self.gold += n;
+        // C# 是无检查 int 加法（溢出回绕）⇒ 用 `wrapping_add` 复刻，不 panic。
+        if self.gold.wrapping_add(n) <= self.human_max_gold {
+            self.gold = self.gold.wrapping_add(n);
+        }
+    }
+    /// `BaseObject.GoldChanged`（`BaseObject.cs:585-591`）：`Race == ActorRace.Play` ⇒
+    /// `SendUpdateMsg(RM_GOLDCHANGED, 0, 0, 0, 0, "")`。本适配器只承载玩家 ⇒ 恒发。
+    ///
+    /// `SendUpdateMsg`（`BaseObject.Message.cs:283-303`）先丢掉队列里**同 ident** 的旧条目
+    /// 再入队（`GameGoldChanged` 同口径）；消息泵翻成
+    /// `SendDefMessage(SM_GOLDCHANGED, Gold, LoWord(GameGold), HiWord(GameGold), 0)`
+    /// （`PlayObject.Message.cs:1833-1835`），取值是**排水时**的 `Gold` ⇒ 宿主在写回之后排水。
+    fn gold_changed(&mut self) {
+        let ident = i32::from(mir2_protocol::messages::RM_GOLDCHANGED);
+        self.frames.retain(|f| f.ident != ident);
+        self.send_msg(ident, 0, 0, 0, 0, Some(""));
     }
     fn actor_id(&self) -> i32 {
         self.actor_id
@@ -1243,39 +1291,91 @@ impl ScriptPlayer for NpcPlayer<'_> {
         // `SetQuestUnitOpenStatus`（`PlayObject.cs:4037`）：位语义在实现侧。
         self.quest_unit_open.set(index, value);
     }
+    /// `ScriptEngine.cs:669` 的 `string.Compare(..., OrdinalIgnoreCase)`：模板名比较
+    /// **不区分大小写**（脚本名与模板名大小写不一致时引擎层也必须摘件）。
     fn item_count(&self, name: &str) -> i32 {
         self.items
             .iter()
-            .filter(|(n, _)| n == name)
+            .filter(|(n, _)| n.eq_ignore_ascii_case(name))
             .map(|(_, c)| *c)
             .sum()
     }
     fn slave_count(&self) -> i32 {
         self.slaves
     }
+    /// `PlayObject.ItemList.Count`（`IsEnoughBag` 的 `< MaxBagItem` 判定，`PlayObject.Base.cs:183`）。
+    /// `items` 按**件**计（`give_item` 逐件 push，`(name, n)` 形态只来自显式构造）。
     fn bag_count(&self) -> i32 {
-        i32::try_from(self.items.len()).unwrap_or(i32::MAX)
+        self.items.iter().map(|(_, c)| *c).sum()
     }
     fn has_worn(&self, location: &str) -> bool {
         self.worn.get(location).copied().unwrap_or(false)
     }
-    fn give_item(&mut self, name: &str, count: i32) {
-        self.items.push((name.to_string(), count));
+    /// `playerActor.UseItems.Length`（`PlayObject.UseItems = new UserItem[13]`）。
+    fn use_items_len(&self) -> i32 {
+        i32::try_from(self.use_items.len()).unwrap_or(0)
     }
+    fn use_item_index(&self, i: i32) -> i32 {
+        usize::try_from(i)
+            .ok()
+            .and_then(|i| self.use_items.get(i))
+            .and_then(Option::as_ref)
+            .map_or(0, |it| i32::from(it.index))
+    }
+    /// `UseItems[i].Index = v`（`GotoLableTakeWItem` 的摘除：`Index = 0`，其余字段不动）。
+    fn set_use_item_index(&mut self, i: i32, v: i32) {
+        let Ok(idx) = usize::try_from(i) else {
+            return;
+        };
+        if let Some(Some(it)) = self.use_items.get_mut(idx) {
+            it.index = u16::try_from(v).unwrap_or(0);
+        }
+    }
+    /// `SystemShare.ItemSystem.GetStdItemName(UseItems[i].Index)`。
+    fn use_item_std_name(&self, i: i32) -> String {
+        let Ok(idx) = usize::try_from(i) else {
+            return String::new();
+        };
+        let Some(it) = self.use_items.get(idx).and_then(Option::as_ref) else {
+            return String::new();
+        };
+        self.catalog
+            .and_then(|c| c.name(it.index))
+            .map_or_else(String::new, str::to_string)
+    }
+    /// `playerActor.SendDelItems(UseItems[i])`（`ScriptEngine.cs:755` 等，摘佩戴位前的线上帧）。
+    ///
+    /// **登记**：`SendDelItems` 的 `RM_DELITEM` → `SM_DELITEM` 线上帧在本宿主未建模
+    /// （与 `take`/`give` 的 `SendDelItems`/`SendAddItem` 同一残余，见 `T-157`）；
+    /// 持久化面不受影响（`UseItems` 槽在写回后落 `hum_items`）。
+    fn send_del_use_item(&mut self, _i: i32) {}
+    /// `GotoLableGiveItem` 的入包支：`ItemList.Add(userItem)`——**每件一个 `UserItem`**
+    /// （`ItemList.Count` 按件增长，`IsEnoughBag` 的判定依赖它）。
+    fn give_item(&mut self, name: &str, count: i32) {
+        for _ in 0..count.max(0) {
+            self.items.push((name.to_string(), 1));
+        }
+    }
+    /// `GotoLableGiveItem` 的满包支：`CopyToUserItemFromName` + `DropItemDown`，**不进背包**。
+    /// 记录件名，由宿主写回阶段补齐 `MakeIndex` 计数与掉落路径（见字段注释）。
+    fn drop_item_on_full_bag(&mut self, name: &str) {
+        self.full_bag_drops.push(name.to_string());
+    }
+    /// `GotoLableTakeItem`（`ScriptEngine.cs:653-683`）的摘件：按名从**尾往前**摘，最多 `count` 件。
+    /// 名比较 `OrdinalIgnoreCase`（`:669`）。
     fn remove_item(&mut self, name: &str, count: i32) -> i32 {
         let mut removed = 0;
-        let mut i = 0;
-        while i < self.items.len() && removed < count {
-            if self.items[i].0 == name {
+        let mut i = self.items.len();
+        while i > 0 && removed < count {
+            i -= 1;
+            if self.items[i].0.eq_ignore_ascii_case(name) {
                 let take = self.items[i].1.min(count - removed);
                 self.items[i].1 -= take;
                 removed += take;
                 if self.items[i].1 == 0 {
                     self.items.remove(i);
-                    continue;
                 }
             }
-            i += 1;
         }
         removed
     }

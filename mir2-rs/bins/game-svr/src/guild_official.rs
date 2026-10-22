@@ -346,9 +346,10 @@ fn flush(
 /// 固定 NPC 的脚本入口（宿主注入）：`M2Share.ScriptEngine.GotoLable(PlayObject, ActorId, sLabel, boExtJmp)`
 /// 的等价物（`ScriptEngine.cs:38-129`）。
 ///
-/// 返回 `(说词, 脚本帧)`；`SessionGround`/`ShopSession` 的 seed/写回由实现方完成
-/// （oracle 里它们本就是同一个 `PlayObject` 的字段）。`None` 语义（`ActorMgr.Get(actorId) == null`
-/// ⇒ 无说词）在实现方折叠成空 `Vec`。
+/// 返回 `(说词, 脚本帧, 改动的 UseItems 槽)`；`SessionGround`/`ShopSession` 的 seed/写回由实现方
+/// 完成（oracle 里它们本就是同一个 `PlayObject` 的字段）。第三项供调用方把 `TAKEW` 改过的佩戴位
+/// 同步到世界实体（`Entity.use_items` 是每 tick 回写会话的权威源）。`None` 语义
+/// （`ActorMgr.Get(actorId) == null` ⇒ 无说词）在实现方折叠成空 `Vec`。
 pub(crate) trait FixedNpcScript {
     fn goto_label(
         &mut self,
@@ -357,7 +358,11 @@ pub(crate) trait FixedNpcScript {
         npc_actor_id: i32,
         label: &str,
         bo_ext_jmp: bool,
-    ) -> (Vec<game_svr::npc::SayMsg>, Vec<game_svr::npc::SendMsg>);
+    ) -> (
+        Vec<game_svr::npc::SayMsg>,
+        Vec<game_svr::npc::SendMsg>,
+        Vec<usize>,
+    );
 }
 
 /// `RM_MERCHANTSAY` 在 `MsgQueue` 里的优先级 = `(byte)11009 = 1`（`BaseObject.Message.cs:180`）；
@@ -398,6 +403,7 @@ fn queue_script_output(
         let Some(body) = game_svr::pickwire::script_frame(
             f,
             npc_actor_id,
+            sg.state.gold,
             sg.game_gold,
             sg.game_point,
             sg.soft_version_date,
@@ -530,10 +536,14 @@ pub(crate) fn handle_select(
     // `M2Share.ScriptEngine.GotoLable(PlayObject, ActorId, sLabel, !boCanJmp)`（`GuildOfficial.cs:70`）
     // —— **统一入口**：先跑 `Npc_def` 脚本（T-137），再按 `!boCanJmp` return（说词照出：
     // `GotoLable` 的 `boExtJmp && !sayingRecord.boExtJmp ⇒ return` 由引擎判定）。
-    let (says, script_frames) = {
+    let (says, script_frames, use_slots) = {
         let ss = shop_sessions.entry(chr_name.to_string()).or_default();
         script.goto_label(sg, ss, npc_actor_id, label, !can_jmp)
     };
+    // `TAKEW` 摘下的佩戴位：会话已写回，实体同步（否则下一 tick 的实体→会话回写会撤掉）。
+    for slot in use_slots {
+        crate::sync_use_item_slot_to_entity(world, sg, slot);
+    }
     // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`（`ScriptEngine.cs:993`）：
     // 每句说词 Clear 后重建 `CanJmpScriptLableMap`（与商人 1011 路径同口径）。
     {
@@ -725,10 +735,13 @@ pub(crate) fn handle_select(
             }
             None => LABEL_MAIN.to_string(),
         };
-        let (says, script_frames) = {
+        let (says, script_frames, use_slots) = {
             let ss = shop_sessions.entry(chr_name.to_string()).or_default();
             script.goto_label(sg, ss, npc_actor_id, &back, false)
         };
+        for slot in use_slots {
+            crate::sync_use_item_slot_to_entity(world, sg, slot);
+        }
         {
             let ss = shop_sessions.entry(chr_name.to_string()).or_default();
             for say in &says {

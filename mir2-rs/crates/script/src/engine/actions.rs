@@ -136,15 +136,28 @@ impl Engine<'_, '_> {
             }
             "ActionOfGiveItem" => {
                 // C# `GotoLableGiveItem(sParam1, nParam2)`：金币名 → IncGold(nParam2)；
-                // 否则 nParam2 夹到 1..=50 后逐件入包（此处用 give_item 一次性交付，夹具日志口径同为 additem）。
+                // 否则 nParam2 夹到 1..=50 后逐件交付（`SendAddItem` 每件一次）。
                 if info.s_param1.eq_ignore_ascii_case(GOLD_NAME) {
                     self.player.inc_gold(info.n_param2);
+                    // `ScriptEngine.cs:696-697`：`IncGold` 后**无条件** `GoldChanged()`。
+                    self.player.gold_changed();
                 } else {
                     let mut n = info.n_param2;
                     if !(1..=50).contains(&n) {
                         n = 1;
                     }
-                    self.player.give_item(&info.s_param1, n);
+                    // `GotoLableGiveItem`（`ScriptEngine.cs:710-741`）**逐件**循环：
+                    // `IsEnoughBag()` 为真 ⇒ `CopyToUserItemFromName` + `ItemList.Add`；
+                    // 为假 ⇒ 仍 `CopyToUserItemFromName`，但改走
+                    // `DropItemDown(userItem, 3, false, ActorId, 0)`（落地/丢弃），**不进背包**。
+                    let name = info.s_param1.clone();
+                    for _ in 0..n {
+                        if self.player.is_enough_bag() {
+                            self.player.give_item(&name, 1);
+                        } else {
+                            self.player.drop_item_on_full_bag(&name);
+                        }
+                    }
                 }
             }
             "ActionOfSet" => {
@@ -976,6 +989,9 @@ impl Engine<'_, '_> {
                 // 金币名 → DecGold(nParam2)；否则按名从背包移除 nParam2 件。
                 if info.s_param1.eq_ignore_ascii_case(GOLD_NAME) {
                     self.player.dec_gold(info.n_param2);
+                    // `ScriptEngine.cs:659-660`：`DecGold` 后**无条件** `GoldChanged()`
+                    // （金币不足、`DecGold` 返回 false 时也发）。
+                    self.player.gold_changed();
                 } else {
                     self.player.remove_item(&info.s_param1, info.n_param2);
                 }
