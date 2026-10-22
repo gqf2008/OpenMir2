@@ -213,6 +213,7 @@ impl EquipState {
 
     /// 从"槽位 → 物品"列表建状态（`None` 槽保持空）。
     #[must_use]
+    #[cfg(test)]
     pub fn from_slots(slots: Vec<Option<BagItem>>, item_list: Vec<BagItem>) -> Self {
         let mut use_items = vec![None; USE_ITEMS_LEN];
         for (i, it) in slots.into_iter().enumerate().take(USE_ITEMS_LEN) {

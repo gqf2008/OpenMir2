@@ -22,7 +22,6 @@
 //! | [`deal_change_gold`] | `PlayObject.Operate.cs:1049-1083`（`ClientChangeDealGold`） |
 //! | [`deal_end`] | `PlayObject.Operate.cs:1085-1203`（`ClientDealEnd`：时间门 / 双向锁定 / 容量四检 / 结算） |
 //! | [`deal_cancel`] | `PlayObject.Base.cs:730-746`（`DealCancel`，递归）+ `:833-845`（`GetBackDealItems`） |
-//! | [`deal_cancel_a`] | `PlayObject.Base.cs:748-752`（`DealCancelA`，`Abil.HP = WAbil.HP` + `DealCancel`） |
 //!
 //! # 帧面口径（立即 / 排队两桶）
 //!
@@ -52,8 +51,8 @@
 //!   与 `CustomItemSystem.GetItemName` 自定义名：与 `T-24` 同源（`SM_ADDITEM` 展示层缺口），
 //!   本模块对 `Desc[13]==0`（非自定义名）的物品逐字节一致，其余登记。
 //! - `DealCancelA` 的 `Abil.HP = WAbil.HP`（`Base.cs:750`）：本仓 `Abil.HP`（基础能力）从不参与
-//!   任何可观测路径（`WAbil.HP` 才是真 HP，落在 `crates/world` 的 `Entity::hp`）⇒ 该赋值是
-//!   **无可观测差异**；[`deal_cancel_a`] 走与 [`deal_cancel`] 相同的取消路径。
+//!   任何可观测路径（`WAbil.HP` 才是真 HP，落在 `crates/world` 的 `Entity::hp`）⇒ **无可观测差异**；
+//!   取消路径统一走 [`deal_cancel`]。
 
 use crate::ability::{Ability, ItemCatalog};
 use crate::bag::{item_display_name, BagItem, MAX_BAG_ITEM};
@@ -762,18 +761,6 @@ pub fn deal_cancel(
     let mut em = Emitter::new();
     deal_cancel_em(me, other, cfg, now, &mut em);
     em.finish()
-}
-
-/// `DealCancelA()`（`PlayObject.Base.cs:748-752`）：`Abil.HP = WAbil.HP` + `DealCancel()`。
-///
-/// `Abil.HP` 在本仓不参与可观测路径（见模块头）⇒ 与 [`deal_cancel`] 同路径。
-pub fn deal_cancel_a(
-    me: &mut DealSide<'_>,
-    other: &mut DealSide<'_>,
-    cfg: &DealConfig,
-    now: i64,
-) -> Vec<DealEvent> {
-    deal_cancel(me, other, cfg, now)
 }
 
 /// oracle 容量四检里的 `Grobal2.MaxBagItem - ItemList.Count`（`PlayObject.Operate.cs:1101`/`:1111`）。

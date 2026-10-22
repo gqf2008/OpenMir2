@@ -580,6 +580,7 @@ pub fn client_butch(i: &ButchInputs) -> ButchOutcome {
 /// 3. `MakeMessage`（`Messages.cs:846`）形参序 `(msg, recog, param, tag, series)`
 ///    ⇒ **`recog=ActorId, param=CurrX, tag=CurrY, series=Dir`**。
 #[must_use]
+#[cfg(test)]
 pub fn sm_butch(actor_id: i32, dir: i32, curr_x: i32, curr_y: i32) -> Option<DefFrame> {
     if actor_id != 0 {
         Some(DefFrame {
@@ -622,6 +623,7 @@ pub enum MakeDrugOutcome {
 
 /// `CM_USERMAKEDRUGITEM(1034)`：`PlayObject.Message.cs:972-974` → `ClientMakeDrugItem(nParam1, Msg)`。
 #[must_use]
+#[cfg(test)]
 pub fn client_make_drug_item(i: &MakeDrugInputs) -> MakeDrugOutcome {
     if !i.merchant_found || !i.merchant_is_make_drug {
         return MakeDrugOutcome::NoMerchant;
