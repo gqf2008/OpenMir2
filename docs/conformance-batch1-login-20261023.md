@@ -400,3 +400,13 @@ powershell -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/conforma
 1. N-2 的判据**稳定**：修复前 Rust exit=1、修复后 exit=0，判据能区分两侧。
 2. 卡 `openmir2-ya52-menu-ok-missing` 的窗口项可以收：修复前/后各一份产物（`w24-rust-dice767` vs `w24-rust-dice-ya52fix`）。
 3. 剩余唯一差异是 `52 mp ±1`（R 级相位项），与本卡无关。
+
+## 24. 残留物清单（收尾 DoD）
+
+| 路径 | 内容 | 处置 |
+|---|---|---|
+| `E:/tmp/w24-target/`（1.4G） | 为复跑 ya52 修复而从 master 重建的 cargo target | **本卡合并后可删**；重跑 §23 才需要 |
+| `E:/tmp/conformance/runs/w24-*`（本卡约 30 个目录） | 各批产物（frames.ndjson / run.json / report） | 证据，报告逐节引用；随卡关闭归档或保留 |
+| `E:/tmp/conformance/rust-logs/mir2-server.pid.json` | Rust 栈 pid 文件 | 栈已按 `stop_mir2_server.ps1` 停止（PORT_DOWN 全绿） |
+| `E:/tmp/*.json` 临时场景（@chouma/@kaiz/bag_query 等） | 探索用 | **已删**（其结论已写进 §12/§14/§16） |
+| 进程/端口 | — | 已核：conformance 进程 0、10 个端口 0 监听 |
