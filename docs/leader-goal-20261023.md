@@ -46,3 +46,127 @@ cron 是**会话内**的（7 天自动过期，会话结束即消失）。换会
 - **GUI-only 证据**：渲染/点击几何/输入法类卡无法用协议对拍替代，需真机窗口。
 - **C# 真值栈**：私有 root `E:/tmp/conformance/csharp-root`（15xxx/17xxx、`mir2_test_*`）可与 peer 的默认端口栈并存；对拍时与 Rust 串行、同端口。
 - **whitelist 待复核**：T-161..T-173 需 owner 逐条复核留痕。
+
+---
+
+## 5. 机判用法（`tools/goal/goal_gate.py`）
+
+§1 的四条终点条件已落成**一条只读、零副作用、可复算**命令。任何人都能用它把
+「目标是否达成」从人读变成可复现的三态表；**它不修东西、不改仓库、不起栈、不连库、不占端口**。
+
+### 5.1 三条命令
+
+```sh
+# 快速模式（默认）：跳过 cargo test 与 parse-stats 构建，约 20–40s
+python tools/goal/goal_gate.py
+
+# 机器可读（stdout 只有 JSON，适合巡检/cron/CI 读）
+python tools/goal/goal_gate.py --json
+
+# 完整模式：= --tests --script，四条件全部实测（cargo test 很慢，见 5.3）
+python tools/goal/goal_gate.py --full
+```
+
+可选开关：
+
+| 开关 | 作用 |
+| --- | --- |
+| `--tests` / `--skip-tests` | 跑 / 显式跳过 `cargo test --workspace`（快速模式默认跳过） |
+| `--script` / `--skip-script` | 构建并跑 parse-stats / 显式跳过（快速模式默认跳过） |
+| `--full` | `--tests --script` 的简写 |
+| `--script-bin <path>` | 用**预编译**的 `mir2-script-tool` 二进制复算条件1（跳过 cargo 构建，仍读实时输出） |
+| `--envir <dir>` | 脚本语料目录，默认 `E:/MirServer/M2GameSvr/Envir` |
+| `--repo <dir>` | 仓库根，默认脚本所在仓库 |
+| `--timeout N` / `--test-timeout N` | 单命令超时（默认 1800s）/ cargo test 超时（默认 7200s） |
+| `selftest` | 合成输入自检（30 条断言，含 2 颗牙） |
+
+退出码：`0` 四条全 PASS；`1` 有 FAIL；`2` 无 FAIL 但有「需人工」；`3` 脚本自身错误（参数/路径）。
+
+### 5.2 三态怎么看
+
+| 状态 | 含义 | 处置 |
+| --- | --- | --- |
+| **PASS** | 判据**机判成立**，有实测输出作证据（不是「看起来一样」） | 无需动作 |
+| **FAIL** | 判据**机判不成立**；表格下方的「缺口明细」逐条点名（卡 id / 消息名 / 门禁项） | 派卡或转 `needs-human` |
+| **需人工** | 脚本**无法机判**：缺输入（未跑 `--tests`/`--script`）、证据链不可信（未验签、board 缺失、弱关联 `T-*`）、命令超时 | **不许**当成 PASS；要么补跑完整模式，要么人判并留痕 |
+
+判定顺序：**任一 FAIL ⇒ 总体 FAIL**；否则任一「需人工」⇒ 总体「需人工」；全 PASS 才 PASS。
+**「查不到」永远是「需人工」，绝不默认 PASS**。
+
+### 5.3 四条件各自怎么算（复算口径）
+
+1. **脚本派发 100%（数字来源已查明，不硬编码）**
+   来源 = `docs/rewrite-remaining-inventory-20261022.md` §1.2 的 parse-stats 覆盖行。脚本执行：
+
+   ```sh
+   cd mir2-rs && cargo run --release --locked -p mir2-script-tool -- \
+     parse-stats E:/MirServer/M2GameSvr/Envir --json <临时文件> --require-implemented
+   ```
+
+   然后只解析 stdout 的 `语料派发目标覆盖：已实现 N 个（M 次调用）；未实现 K 个` 一行：
+   `K == 0 且 rc == 0` ⇒ PASS；`K > 0` ⇒ FAIL；抽不到该行 / 超时 / rc≠0 但行显示 0 ⇒ 需人工。
+   **N 从不写死**（每次实测，当前为 106/11829，但脚本不依赖这个数）。临时 json 落在系统临时目录并删除。
+
+2. **R 卡证据**：`walgit collab board --format json` 枚举卡片（取 board 的卡列表/状态/未验签计数），
+   条目正文（`tier`/`window_required`/`merge_result`）由只读 git 对象（`refs/collab/meta/snapshot`
+   折叠区 + `refs/collab/inbox/*` tail）按 `git cat-file --batch` 一次读出。每张 `tier=R` 的卡按
+   **已合并 → window_required → whitelist T-* → 三者皆无** 首命中定态；「皆无」进 FAIL 清单并给卡 id。
+   * `whitelist T-*` 只认**登记行点名了本卡**（强关联）；线程里顺带提到 T-*、但登记行没点名本卡 ⇒「需人工（弱关联）」，不冒认。
+   * board 未列出的卡 / board 报未验签条目 ⇒「需人工」，不猜。
+   * 判定 tier 时把散文式 tier（如 `R（战斗数值/时序/持久化面）…`）归一为 R；线程里**任一** issue
+     标了 R 就按 R 卡处理（偏向保守：宁可多查一张，不漏一张）。
+
+3. **B 类清零**：跑 `cd mir2-rs && python -I -B tests/parity/coverage/recon_gates.py dispatch --repo .. --json <临时文件>`，
+   取 `status == "tracked"` 的行（当前 15），逐条判：条目名出现在某条 `T-*` 登记行 ⇒「有 T-* 登记」；
+   否则其 `card` 在 board 里存在 ⇒「有卡」；都没有 ⇒ FAIL。`--json` 只写临时目录、读完即删。
+
+4. **门禁恒绿**：逐项跑并在 `--json` 里留 rc/耗时——`cargo fmt --all -- --check`、
+   `cargo clippy --workspace --all-targets --locked -- -D warnings`、
+   `cargo run --locked -p msgcodegen -- --check`、
+   `python -I -B tests/parity/m3/whitelist_anchor_gate.py check`、
+   `python -I -B tests/parity/m3/m3_whitelist_registry_audit.py audit`，
+   加上 `git ls-remote walgit refs/heads/master` 与本地 `master` 的 sha 比对。
+   `cargo test --workspace --locked` **只在 `--tests`/`--full` 时跑**；跳过时条件4 =「需人工」，不冒充 PASS。
+
+### 5.4 `--skip-tests` 与完整模式的区别（务必分清）
+
+| | 快速（默认 / `--skip-tests`） | 完整（`--full` 或 `--tests --script`） |
+| --- | --- | --- |
+| fmt / clippy / msgcodegen / anchor / registry / master 比对 | 跑 | 跑 |
+| `cargo test --workspace` | **跳过** ⇒ 条件4 「需人工」 | 跑（数千用例；暖缓存实测约 5 分钟，冷缓存更久） |
+| parse-stats 覆盖率 | **跳过** ⇒ 条件1 「需人工」 | 跑（首次 `--release` 构建较慢；可用 `--script-bin` 复用已有二进制） |
+| 适用 | 巡检、每次合并前快手 | **宣告终点 `DONE` 前必须跑一次**（四条都要有实测结论） |
+
+> 换句话说：**快速模式永远不可能给出总体 PASS**（条件1、4 至少各有一处「需人工」）。
+> 这是刻意的：没跑过的门不许算绿。要看到真正的「四条全绿」，请用完整模式。
+
+### 5.5 前置条件与已知边界
+
+* **协作视图新鲜度由调用方负责**：脚本**不 `git fetch`**（fetch 会写 refs，违反零副作用）。
+  跑条件2 前先同步本地视图：
+
+  ```sh
+  git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*' '+refs/collab/meta/*:refs/collab/meta/*'
+  ```
+
+  视图为空 ⇒ 条件2/3 输出「需人工」并提示这条命令，不会空表 PASS。
+* **工作区/二进制**：cargo 命令在 `mir2-rs/` 下执行，构建产物落 `target/`（gitignored）；全程 `--locked`，
+  不改 `Cargo.lock`。parse-stats 需要 `E:/MirServer/M2GameSvr/Envir`（不存在则「需人工」并说明）。
+* **board 未列出的卡**：本仓看板只显示命中列谓词的线程；索引里有 `tier=R`、board 却不显示 ⇒「需人工」
+  （本地视图未同步，或线程条目链/状态异常），并列入缺口明细。
+* **whitelist 重复编号**：脚本只告警不判死（登记号唯一性归 `m3_whitelist_registry_audit.py`，且该门当前 `scope=T-36+`）；
+  发现重复时以「提示」列出，供 owner 复核。
+* **JSON 结构**：`{schema, generated_ts, repo, envir, mode, conditions[4]{id,name,state,label,detail,evidence},
+  overall, overall_label, fail_items[], need_items[], warnings[]}`；`state ∈ {pass, fail, need_human}`。
+
+### 5.6 自检与牙
+
+```sh
+python tools/goal/goal_gate.py selftest --verbose
+# selftest：30 条断言，30 通过，0 失败
+```
+
+覆盖四条件各自的 PASS / FAIL / 需人工 分支（含覆盖行解析、散文式 tier、弱关联 T 不冒认、
+未验签、board 缺失、master 漂移、ls-remote 不可用、状态优先级），并内置**两颗牙**：
+把「忽略未实现计数」或「把三者皆无判成 PASS」的退化判定喂给断言 ⇒ selftest 必红。
+改动判定逻辑后先跑 selftest 再跑快速模式。
