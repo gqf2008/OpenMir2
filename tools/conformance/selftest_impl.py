@@ -196,9 +196,12 @@ class Selftest(object):
         self.check("baseline: recog/conn/t_ms/seq 掩码差异被显式登记",
                    "masked_head" in kinds, sorted(kinds))
         frames_rep = (rep or {}).get("frames") or {}
-        self.check("baseline: 默认没有 ignore 规则（10/41 参与比较）",
-                   frames_rep.get("ignored_ident_rules") == []
-                   and frames_rep.get("ignored", {}).get("oracle", {}).get("count", 0) == 0,
+        # 默认表里唯一的 ignore 是 ident 14（固定 NPC 受击帧 = 随机支，跨进程不可复现，
+        # 见 rules.json 的 reason）；本用例不含 14 ⇒ 不得有任何帧被 ignore 规则剔掉。
+        self.check("baseline: 默认表只有 ident=14 是 ignore，且本用例 0 帧被剔（10/41 仍参与比较）",
+                   frames_rep.get("ignored_ident_rules") == [14]
+                   and frames_rep.get("ignored", {}).get("oracle", {}).get("count", 0) == 0
+                   and frames_rep.get("ignored", {}).get("rust", {}).get("count", 0) == 0,
                    frames_rep)
 
     def t_byte_diff(self, o, r):
@@ -283,14 +286,17 @@ class Selftest(object):
                    diff)
 
     # -- 首次双栈对拍暴露的 8 条规则缺口（100/520/525/529/530/654/657 + 52 线缆布局对）--
-    NEW_IDENTS = (100, 520, 525, 529, 530, 654, 657)
+    # 530 = SM_SELECTSERVER_OK：body 末段是 LoginSrv 进程内 SessionID（跨进程必然不同）
+    # ⇒ action=mask_body_ranges（只掩偏移 16..end，ip/端口仍逐字节比）；其余 6 条 compare。
+    NEW_IDENTS = ((100, "compare"), (520, "compare"), (525, "compare"), (529, "compare"),
+                  (530, "mask_body_ranges"), (654, "compare"), (657, "compare"))
 
     def t_new_idents_rules(self):
         rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
-        for ident in self.NEW_IDENTS:
+        for ident, want_action in self.NEW_IDENTS:
             rule = rs.by_ident.get(ident)
-            self.check("内置规则表覆盖 ident=%d（action=compare）" % ident,
-                       rule is not None and rule["action"] == "compare",
+            self.check("内置规则表覆盖 ident=%d（action=%s）" % (ident, want_action),
+                       rule is not None and rule["action"] == want_action,
                        rule and rule.get("action"))
             meta = rule or {}
             self.check("ident=%d 规则带 reason/tier/approved_by=PENDING" % ident,
@@ -311,7 +317,7 @@ class Selftest(object):
         """每个新 ident 都真的参与判定：相同 ⇒ 0；改一个字节 ⇒ 1 且定位到该 ident。"""
         base_o = json.loads(json.dumps(o))
         base_r = json.loads(json.dumps(r))
-        for ident in self.NEW_IDENTS:
+        for ident, _action in self.NEW_IDENTS:
             body = bytes([0x41 + (ident % 26)]) * 4  # 合成非空 body：只验规则参与判定
             heads = dict(phase="new", conn="x", recog=3, param=11, tag=22, series=33)
             fo = self.frame(ident, body, seq=900, t_ms=7, **heads)
@@ -347,9 +353,12 @@ class Selftest(object):
                    rc == 1 and any(d.get("ident") == 520 and d.get("field") == "recog"
                                    for d in (rep or {}).get("diffs", [])),
                    (rc, (rep or {}).get("diffs")))
-        fo530 = self.frame(530, b"127.0.0.1/17100/2", phase="login", seq=600, t_ms=1, conn="o",
+        # 530 的 body 在线上是 **EDCode 编码后的线缆字节**，夹具必须同形——否则「掩码偏移是线缆空间」
+        # 这件事根本咬不到（reviewer-2 F1：早先用未编码 ASCII，`[[16,null]]` 掩掉了端口后三位还全绿）。
+        wire530 = self.lc.encode(b"127.0.0.1/17100/2")
+        fo530 = self.frame(530, wire530, phase="login", seq=600, t_ms=1, conn="o",
                            recog=2, param=0, tag=0, series=0)
-        fr530 = self.frame(530, b"127.0.0.1/17100/2", phase="login", seq=601, t_ms=2, conn="r",
+        fr530 = self.frame(530, wire530, phase="login", seq=601, t_ms=2, conn="r",
                            recog=9, param=0, tag=0, series=0)
         od = self.write_run("t21-o-530r", [fo530])
         rd = self.write_run("t21-r-530r", [fr530])
@@ -359,14 +368,37 @@ class Selftest(object):
                                    and w.get("kind") == "masked_head"
                                    for w in (rep or {}).get("whitelisted", [])),
                    (rc, (rep or {}).get("whitelisted")))
-        # 530 的 body（SelGate 地址/端口）绝不能被掩码：改一字节必红
-        fr530b = json.loads(json.dumps(fo530))
-        b = bytes.fromhex(fr530b["body_hex"])[:-1] + b"9"
-        fr530b["body_hex"] = b.hex(); fr530b["body_len"] = len(b); fr530b["body_sha256"] = _sha(b)
-        rd = self.write_run("t21-r-530b", [fr530b])
-        od = self.write_run("t21-o-530b", [fo530])
-        rc, rep = self.compare(od, rd)
-        self.check("530 的 body（ip/port）改一字节 => rc 1（地址/端口不掩码）",
+        # 530 的**线缆** [20,end) = 明文「最后一个 `/` + SessionID」（+ 尾组余字节）⇒ 只有 SessionID
+        # 不同时必须 rc 0 且登记；明文 ip/端口的每个数字在线缆上更靠前，改任一位必红。两条互为咬。
+        def _wire(plain):
+            return self.lc.encode(plain)
+
+        def _cmp_530(tag, oracle_bytes, rust_bytes):
+            fo = self.frame(530, oracle_bytes, phase="login", seq=602, t_ms=1, conn="o",
+                            recog=2, param=0, tag=0, series=0)
+            fr = self.frame(530, rust_bytes, phase="login", seq=603, t_ms=2, conn="r",
+                            recog=9, param=0, tag=0, series=0)
+            od = self.write_run("t21-o-%s" % tag, [fo])
+            rd = self.write_run("t21-r-%s" % tag, [fr])
+            return self.compare(od, rd)
+
+        rc, rep = _cmp_530("530sid", _wire(b"127.0.0.1/17100/2"), _wire(b"127.0.0.1/17100/9"))
+        self.check("530 的 SessionID 不同 => rc 0 且登记 mask_body_ranges（末段是进程内计数）",
+                   rc == 0 and any(w.get("ident") == 530
+                                   and w.get("kind") == "mask_body_ranges"
+                                   for w in (rep or {}).get("whitelisted", [])),
+                   (rc, (rep or {}).get("whitelisted"), (rep or {}).get("diffs")))
+        # 端口：逐位咬（第 1/3/5 位各改一次）+ ip 改一位。旧规则 [[16,null]] 会让前三条假绿。
+        port_muts = (b"17200", b"17150", b"17101")
+        for i, pm in enumerate(port_muts):
+            rc, rep = _cmp_530("530port%d" % i, _wire(b"127.0.0.1/17100/2"),
+                               _wire(b"127.0.0.1/" + pm + b"/2"))
+            self.check("530 的端口改 %s => rc 1（线缆掩码不得吞掉端口）" % pm.decode(),
+                       rc == 1 and any(d.get("ident") == 530 and d.get("kind") == "body"
+                                       for d in (rep or {}).get("diffs", [])),
+                       (rc, (rep or {}).get("diffs")))
+        rc, rep = _cmp_530("530ip", _wire(b"127.0.0.1/17100/2"), _wire(b"127.0.0.2/17100/2"))
+        self.check("530 的 ip 改一位 => rc 1（掩码不得吞掉 ip）",
                    rc == 1 and any(d.get("ident") == 530 and d.get("kind") == "body"
                                    for d in (rep or {}).get("diffs", [])),
                    (rc, (rep or {}).get("diffs")))

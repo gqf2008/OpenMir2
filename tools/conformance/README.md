@@ -258,18 +258,21 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，**84 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**85 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
-10/41 默认参与比较、PENDING ignore 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
+10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
 帧数不同；缺 body；产物自相矛盾；库逐列 diff、跨库前缀、单侧缺快照、`--require-db`。
 
 首跑补规则后新增的断言（防止「加了规则却不判」）：
 
-* 7 条新 ident（100/520/525/529/530/654/657）逐条：规则存在且 `action=compare`、
+* 7 条新 ident（100/520/525/529/530/654/657）逐条：规则存在且 `action` 符合预期
+  （530 = `mask_body_ranges`，其余 = `compare`）、
   带 `reason/tier/approved_by=PENDING`；两侧相同 ⇒ 0；**改一个字节 ⇒ 1 且定位到该 ident+offset**；
 * 520 的 `recog`（=nChrCount）不同 ⇒ 1（`head_compare` 真的取回了比较）；
-  530 的 `recog` 不同 ⇒ 0 且登记 `masked_head`（会话/游戏时长，故意掩）；530 的 body（ip/port）改一字节 ⇒ 1；
+  530 的 `recog` 不同 ⇒ 0 且登记 `masked_head`（会话/游戏时长，故意掩）；
+  530 的 body 末段（SessionID，偏移 16..end）不同 ⇒ 0 且登记 `mask_body_ranges`；
+  530 的 body 端口字节改一位 ⇒ 1（掩码不得吞掉 ip/端口）；
 * 52 **线缆 (54,78)**：归一后语义全等 ⇒ 0 且登记 `ability_layout`（含 `wire_normalized`
   与 `oracle_wire_len=54 / rust_wire_len=78`）；线缆形态改 hp ⇒ 1（`space=plain`）；
   两侧同为 58B 线缆 ⇒ 明文逐字节比、改一字节 ⇒ 1（偏移 46）；
@@ -280,8 +283,19 @@ python -I -B tools/conformance/compare_runs.py selftest
 
 ## 当前规则覆盖
 
-已覆盖 ident：`10, 41, 42, 46, 50, 51, 52, 54, 100, 213, 520, 525, 529, 530, 654, 657,
-658, 752, 766, 811, 1106, 5008, 11029`。
+已覆盖 ident：`10, 14, 41, 42, 46, 50, 51, 52, 54, 100, 213, 520, 525, 529, 530, 654,
+657, 658, 752, 766, 811, 1106, 5008, 11029`。
+
+**跨进程不可复现的两条**（2026-10-23 双栈窗口登记，见 `rules.json` 的 reason）：
+
+* `14`（固定 NPC 受击帧）——oracle 只在 `Random(30)==0` / `Random(50)==0` 命中时发，
+  随机源是墙钟播种的 `new Random()`（`src/OpenMir2/RandomNumber.cs:35`）⇒ 用 `ignore`；
+  帧形态与收件人由 `downlink::hit_frame` 黄金用例钉死，不靠本规则。
+* `10`（SM_TURN）的 `series` = `MakeWord(Dir, Light)` **整个 word**（对所有 actor 生效），固定 NPC 的
+  `Dir` 由随机支 `TurnTo(RandomByte(8))` 改写 ⇒ 掩 `series`，body/param/tag 仍逐字节比。
+  代价：玩家「原地转身」的 Dir 不再逐值比（走位方向仍由 `SM_WALK(11)`/`SM_RUN(12)` 的 `series` 兜）。
+* `530` 的 `mask_body_ranges` 偏移是 **EDCode 线缆空间**不是明文空间（见 rules.json 的映射表）；
+  selftest 必须用 `lc.encode` 造线缆字节，否则「掩错位置还全绿」这类缺陷咬不到。
 
 首跑缺口补齐的 7 条（每条都给 reason + tier + approved_by=PENDING，全走评审）：
 
