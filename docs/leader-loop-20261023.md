@@ -45,3 +45,13 @@ Leader 合并时按 `TIER-POLICY.md`：R 级必须有真机证据或显式 `wind
 - **主检出** `.git/walgit/identity` 已由 reviewer-5 重绑为 `openmir2-orchestrator`（Leader），旧文件备份 `.git/walgit/identity.bak-reviewer5`；此后从主检出默认签名 = Leader。
 - 每个车道：worktree 身份 = 执行者 principal；Leader 只签 orchestrator；review 只能由 reviewer-3 / reviewer-6 出；合并只删分支、保留 worktree。
 - 定规前由 reviewer-5 代签的 card_claim（`openmir2-gm-batch-4-numeric`、`openmir2-dualrun-triage-enterworld-frames`）保留留痕但不作认领依据，进复核前须由实际车道用自己的 principal 重发 status。
+
+## 交叉审查（owner 2026-10-23 追加）
+
+Leader 忙不过来时，**空闲 worker 可以互相审查**：唯一硬约束是「复核者 principal ≠ 作者」，
+且复核者必须钉住 head、自跑门禁与牙、给完整 findings。专职 reviewer（reviewer-3 / reviewer-6）不再是唯一来源。
+
+## 分支清理的例外
+
+「只删分支」的前提是分支**没有**被保留的 worktree 检出。若该 worktree 仍 checkout 该分支
+（如 `wt-triage2 @ dualrun-triage`），则**分支与 worktree 一起保留**，不得 `git branch -D` 强删。
