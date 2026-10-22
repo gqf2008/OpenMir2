@@ -2252,7 +2252,8 @@ fn drain_slave_mutiny_downlink(
 ///
 /// **未做**（逐项登记在 `inbound` 模块头「未做清单」）：`SM_ABILITY/SUBABILITY` 帧体、`RM_BUTCH`/
 /// `RM_POWERHIT` 附近广播、`GetGoodTick` 直发字节、`SM_MENU_OK`/`SysMsg` 文案、密码态持久化、
-/// 地图 `MinMap` 字段、商人注册表/配方体。
+/// 商人注册表/配方体。（`Envir.MinMap` 已接线：`CM_WANTMINIMAP` 经 [`inbound::session_min_map`]
+/// 按会话 `map_id` 还原 oracle 的 `Envirnoment.MinMap`。）
 #[allow(clippy::too_many_arguments)]
 fn handle_inbound_cmd(
     cmd: &CommandMessage,
@@ -2264,6 +2265,7 @@ fn handle_inbound_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
+    minimap: Option<&mir2_envir::minimap::MiniMapRegistry>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     cfg: &GroundCfg,
     displays: &downlink::DisplayTable,
@@ -2294,8 +2296,11 @@ fn handle_inbound_cmd(
             );
         }
         messages::CM_WANTMINIMAP => {
-            // `Envir.MinMap`（`MapManager.cs:92` 的消费点）未接线 ⇒ 传 0（FAIL 支）；登记。
-            let f = inbound::client_get_min_map(0);
+            // `Envir.MinMap`（`MapManager.cs:92-95` 在图创建时写、`Envirnoment.cs:60` 初值 0）：
+            // 本仓没有 `Envirnoment` 结构，读时按 `会话 map_id → MapName → MiniMapList` 等价还原
+            // （[`inbound::session_min_map`]）；取不到 ⇒ 0 ⇒ FAIL 支。
+            let min_map = inbound::session_min_map(world, chr_name, registry, minimap);
+            let f = inbound::client_get_min_map(min_map);
             emit_def_frames(gates, gate_idx, socket, &[f], "CM_WANTMINIMAP");
         }
         messages::CM_OPENDOOR => {
@@ -14691,8 +14696,9 @@ struct EnterConfig {
     /// 读失败 ⇒ 不放置。放置在 sim 线程起世界后（`game_svr::guardlist::place_guards`）。
     guards: Option<Vec<mir2_envir::guardlist::GuardInfo>>,
     /// **R0-2（内容装载红名单）**：`Envir/MiniMap.txt` 解析出的地图名→小地图索引表
-    /// （主线程装载，`game_svr::contentload::load_minimap_file`）。消费点（`CM_WANTMINIMAP`
-    /// → `SM_READMINIMAP_OK/FAIL` + `Envirnoment.MinMap`）属 R1 入站红名单，未实现 ⇒ 暂只登记。
+    /// （主线程装载，`game_svr::contentload::load_minimap_file`）。消费点：`CM_WANTMINIMAP`
+    /// → `inbound::session_min_map`（会话 `map_id` → `MapName` → 本表 = oracle `Envirnoment.MinMap`）
+    /// → `SM_READMINIMAP_OK/FAIL`（`handle_inbound_cmd` 接线）。
     minimap: Option<mir2_envir::minimap::MiniMapRegistry>,
     /// **R0-3**：`Envir/MakeItem.txt` 解析出的合成配方表（`load_make_item_file`）。消费点
     /// （`CM_USERMAKEDRUGITEM` → `Merchant.ClientMakeDrugCheckNeedItem`）属 R1 ⇒ 暂只登记。
@@ -17213,13 +17219,14 @@ fn sim_loop(
     let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
         std::collections::HashMap::new();
     // **R0-2/R0-3/R0-4 内容装载红名单**：主线程装载的注册表随 `EnterConfig` 到 sim 线程。
-    // 消费点：MiniMap 下发帧（`CM_WANTMINIMAP`）**仍未实现** ⇒ 只「取用 + 登记」（保留读数，
-    // 不静默丢字段）；制药合成（`CM_USERMAKEDRUGITEM`，WB 片）与滚动公告（`LineNotice`，T3·③）
-    // **已接线**（见下）。
-    if let Some(mm) = enter_cfg.minimap.take() {
+    // 消费点：MiniMap 下发帧（`CM_WANTMINIMAP`）**已接线**（`handle_inbound_cmd` →
+    // `inbound::session_min_map` → `SM_READMINIMAP_OK/FAIL`）；制药合成（`CM_USERMAKEDRUGITEM`，
+    // WB 片）与滚动公告（`LineNotice`，T3·③）亦已接线（见下）。
+    let minimap = enter_cfg.minimap.take();
+    if let Some(mm) = minimap.as_ref() {
         glog!(
             "INF",
-            "MiniMap 注册表就绪：{} 条（下发帧 CM_WANTMINIMAP 未实现 ⇒ 登记）",
+            "MiniMap 注册表就绪：{} 条（下发帧 CM_WANTMINIMAP：会话 map_id → MapName → 本表 ⇒ Envir.MinMap）",
             mm.len()
         );
     }
@@ -17903,6 +17910,7 @@ fn sim_loop(
                             &mut ground_sessions,
                             &gates,
                             registry.as_ref(),
+                            minimap.as_ref(),
                             &mut pwd_sessions,
                             &enter_cfg.ground,
                             &displays,
@@ -36875,6 +36883,7 @@ mod tests {
             &mut sessions,
             &gates,
             None,
+            None,
             &mut pwd_sessions,
             &cfg,
             &displays,
@@ -36919,6 +36928,7 @@ mod tests {
             &mut world,
             &mut sessions,
             &gates,
+            None,
             None,
             &mut pwd_sessions,
             &cfg,
@@ -38102,6 +38112,171 @@ mod tests {
         );
     }
 
+    /// **`CM_WANTMINIMAP(1033)` 生产入口端到端**（卡 `openmir2-minimap-consumer-wire`，tier=L）：
+    /// 会话当前 `map_id` → `MapRegistry::name_of` → `MiniMapRegistry::get` = oracle
+    /// `Envirnoment.MinMap`（`MapManager.cs:92-95`）→ `ClientGetMinMap`
+    /// （`PlayObject.Operate.cs:1204-1214`）⇒ `SM_READMINIMAP_OK(710, recog 0, param MinMap, 0, 0)`。
+    ///
+    /// 逐字节断言 12B 命令头（无尾）：`Recog=0, Ident=710(0x02C6), Param=7, Tag=0, Series=0`。
+    /// 第二支（注册表里没有该图）⇒ `SM_READMINIMAP_FAIL(711, 0, 0, 0, 0)`。
+    ///
+    /// **牙**：删掉 `handle_inbound_cmd` 的 `CM_WANTMINIMAP` 臂 ⇒ 一支帧都没有 ⇒ 本例必红；
+    /// 把 `session_min_map` 写死 0（旧接线）⇒ 第一支出 711 ⇒ 本例必红。
+    #[test]
+    fn cm_wantminimap_emits_ok_with_session_map_minmap() {
+        use mir2_protocol::messages;
+        use std::collections::HashMap;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        // ① Envir 注册表：`MapInfo.txt` 逻辑名 `map` ↔ `0.map`（20×20 全 0 格）⇒ map_id 0。
+        static COUNTER: AtomicU32 = AtomicU32::new(0);
+        let base = std::env::temp_dir().join(format!(
+            "gs-minimap-want-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&base);
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        let (w, h) = (20_i16, 20_i16);
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&w.to_le_bytes());
+        bytes[2..4].copy_from_slice(&h.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES
+                + usize::try_from(w).unwrap()
+                    * usize::try_from(h).unwrap()
+                    * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let registry = mir2_envir::MapRegistry::from_entries(
+            mir2_envir::MapLoader::new(base.clone(), "Map", "Envir"),
+            vec![mir2_envir::MapInfoEntry {
+                map_name: "map".to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        assert_eq!(registry.name_of(0), Some("map"));
+
+        // ② `MiniMap.txt`：`map 7` ⇒ `MiniMapList["map"] = 7`。
+        let (minimap, dups) = mir2_envir::load_minimap("map 7\n");
+        assert!(dups.is_empty());
+        assert_eq!(minimap.get("map"), Some(7));
+
+        // ③ 世界：hero 进 0 号图（map_id 0）。
+        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 5, 5), 0)
+            .unwrap();
+        assert_eq!(world.session("hero").unwrap().map_id, 0);
+
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".into(),
+            chr_name: "hero".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: hero,
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        let displays = downlink::DisplayTable::new();
+        let cmd = CommandMessage {
+            recog: 0,
+            ident: messages::CM_WANTMINIMAP,
+            param: 0,
+            tag: 0,
+            series: 0,
+        };
+
+        // ① OK 支：`Envir.MinMap = 7 > 0` ⇒ SM_READMINIMAP_OK(710), Param = 7。
+        handle_inbound_cmd(
+            &cmd,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            Some(&registry),
+            Some(&minimap),
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "收 1033 ⇒ 恰好一帧 SM_READMINIMAP_*");
+        assert_eq!(
+            frames[0],
+            vec![0, 0, 0, 0, 0xC6, 0x02, 0x07, 0x00, 0, 0, 0, 0],
+            "SM_READMINIMAP_OK：Recog=0, Ident=710, Param=MinMap=7, Tag=0, Series=0"
+        );
+
+        // ② FAIL 支：同一会话，但 `MiniMap.txt` 里没有该图名 ⇒ `Envir.MinMap` 保持初值 0。
+        let (other_minimap, _) = mir2_envir::load_minimap("somewhere 9\n");
+        handle_inbound_cmd(
+            &cmd,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            Some(&registry),
+            Some(&other_minimap),
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            frames[0],
+            vec![0, 0, 0, 0, 0xC7, 0x02, 0, 0, 0, 0, 0, 0],
+            "SM_READMINIMAP_FAIL(711, 0, 0, 0, 0)"
+        );
+
+        // ③ 无 `MiniMap.txt`（注册表 None）⇒ 同上 FAIL 支。
+        handle_inbound_cmd(
+            &cmd,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            Some(&registry),
+            None,
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(u16::from_le_bytes([frames[0][4], frames[0][5]]), 711);
+
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// **接线批 A 端到端（SM_PASSWORD）**：`CM_PASSWORD` 命中 `ProcessClientPassword` 的重设支
     /// （`IsSetStoragePwd=true` + 4-7 位密码）⇒ 出 `SM_PASSWORD(5009)`，且状态迁到 `IsReConfigPwd`。
     ///
@@ -38164,6 +38339,7 @@ mod tests {
             &mut world,
             &mut sessions,
             &gates,
+            None,
             None,
             &mut pwd_sessions,
             &cfg,
@@ -38247,6 +38423,7 @@ mod tests {
             &mut world,
             &mut sessions,
             &gates,
+            None,
             None,
             &mut pwd_sessions,
             &cfg,
