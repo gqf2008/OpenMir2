@@ -251,12 +251,13 @@
 或两侧各自用后缀库（`reset-db.sh r` / `reset-db.sh c`）。
 
 > **实际参数取自首跑产物**（`E:/tmp/conformance/runs/{csharp,rust}/login/run.json`）：账号/角色 = `winplay0`，
-> 服务器名 = `热血传奇`，LoginGate = `127.0.0.1:17000`；**密码在 argv 里被掩码成 `***`**，跑前须向首跑执行者确认。
+> 服务器名 = `热血传奇`，LoginGate = `127.0.0.1:17000`。**密码**：`run.json` 里被掩码成 `***`，但
+> `mir2_test_account.account` 的 `PassWord` 列在测试库里是**明文**（值 = 账号名），跑前自取，不写进本文件。
 > 另：首跑 Rust 侧显式加了 `--game-gate 127.0.0.1:17600`（C# 侧没有），复跑时两侧要不要都加、加什么值，按当时的栈配置定。
 
 ```sh
 # 1) 先跑无参场景 —— 这一跑同时给出下文要用的 ActorId / MakeIndex
-python -I -B tools/probe/mir2_probe.py --login-gate 127.0.0.1:17000   --account winplay0 --password *** --server-name 热血传奇 --char-name winplay0   --scenario tools/probe/scenarios/login_only.json --out E:/tmp/conformance/runs/login_only-<side>-<ts>
+python -I -B tools/probe/mir2_probe.py --login-gate 127.0.0.1:17000   --account winplay0 --password "$(见下)" --server-name 热血传奇 --char-name winplay0   --scenario tools/probe/scenarios/login_only.json --out E:/tmp/conformance/runs/login_only-<side>-<ts>
 python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/gm_time.json  --out ...
 python -I -B tools/probe/mir2_probe.py ... --scenario tools/probe/scenarios/gm_batch.json --out ...
 
@@ -281,7 +282,7 @@ python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/run
 | `npc_click` / `king_dialog` / `king_castle_war` | `npc_actor` / `king_actor` | 第 1 步 `frames.ndjson` 里 NPC 的 `recog`（配 `SM_TURN`/出现帧） |
 | `merchant_dialog` | `merchant_actor` | 同上；商人 `SM_TURN` series 低=4 高=2 |
 | `bag_equip` / `eat_item` | `make_index`、`takeon_where` | 第 1 步的 `SM_BAGITEMS(201)`/DB `characters_bagitem` |
-| `pickup_item` | `self_x` / `self_y` | 进图后的 `SM_...`/DB `characters.MapX|MapY` |
+| `pickup_item` | `self_x` / `self_y` | 进图后的帧/DB；测试库 `characters` 里 `winplay0` 在 `B013` 的 `CX=7, CY=12` |
 
 > 每一步都要**两侧各跑一次**（同端口串行），并各自落 `frames.ndjson` + `run.json` + `db_snapshot.json`；
 > `compare_runs.py` 的退出码 0/1/2 才是判定口径（2 = 判不了，不许当绿）。
