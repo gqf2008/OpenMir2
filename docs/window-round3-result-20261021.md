@@ -142,3 +142,22 @@ body_len 为 owner 已裁决的 D-9，已 whitelist）。`judge_login` 另提示
      属冻结面，须先走白名单/owner 裁决，不在本窗口范围）。
   2. 客户端不渲染的判定仍待 C# 对照；替代路径是读 `MirClientZig` 的角色注册代码（收到
      `SM_TURN/SM_FEATURECHANGED` 后未建 actor 的原因），或在 7100/7200 空闲时用默认端口做 C# 对照。
+
+## 8. 第五轮（r6，2026-10-22）：固定 NPC 菜单 **GREEN**
+
+- 基线 `229d52cd9`（镜像重建六件 + provenance）；备用端口栈（15000/16000/15100/15700/
+  15500/15600/17000/17100/17600 + 代理 17200）；私有客户端目录（`run-release-alt.cmd`，冻结
+  Delphi 客户端 sha256 `c3cb8f73…`）。
+- 夹具：新 `mir_flow` 的 `-ProxyDir` live 证据 + `-ExpectPos 29,33` 坐标门 + `-ClickNpc`
+  （默认 `512,263`）；测试库重置后摆位 `0122 (29,33)`。
+- 结果（证据 `E:/tmp/window/r6/**`）：
+  - 服务端日志：`CM_CLICKNPC：到达 Click 点 ChrName=winplay0 npc=132（@main 说词 1 条）`，
+    客户端发出 `Ident=1010`；
+  - 抓包：`SM_MERCHANTSAY(643) recog=132` 1 条（GBK 正文以「比奇国王/…」开头），
+    `SM_TURN(10) recog=132 param=29 tag=32 series=0x0206` 与 `SM_FEATURECHANGED(41) param=50 tag=8`；
+  - 客户端截图 `flow/05d_npc_click.png`：对话框显示「我是比齐皇管理员，掌管着许多事物…」与
+    菜单项（请求创建行会 / 申请行会战 / 查看行会战事 / 申请攻城战事）；
+  - `manifest.json` 记录 `client_exe=…/MirClinet.exe`、sha256 `c3cb8f73…`。
+- **判定**：T-137 的窗口项（点击固定 NPC 出 `@main` 菜单）**GREEN**。此前的「未渲染」确认为
+  夹具（公告盲点把角色走离视窗）所致，非服务端/客户端缺陷。
+- 收尾：栈全部停止，15xxx/17xxx 全 DOWN；外部 C# 栈未动。
