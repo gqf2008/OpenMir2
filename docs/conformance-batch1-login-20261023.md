@@ -123,3 +123,13 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 ⇒ `SM_HIT(14)` 在 Rust 侧**间歇出现（本样本 1/3）**，固定 NPC 的 ActorId=119；C# 侧 3/3 无。
 这与卡 `openmir2-npc-hit-frames` 的「Rust 抓到、C# 未见」一致；要定频需固定 RNG 种子后加大样本
 （`start-rust.ps1` 已带 `-Seed 42`，但会话内 RNG 消费序可能随地图/AOI 变化）。
+
+## 9. 追加（05:14–05:17 第五次窗口）：庄家对话（`@kaiz`）两侧同样无后续 643；`SM_HIT(14)` 再 +1
+
+- 首个非自己 actor 解出来是**赌场庄家**（643 正文：`〖庄〗… ※<开-始-下-注/@kaiz>※ ※<筹码兑现/@chouma>※`），
+  于是新增 `dice_chain_auto.json`（`auto:last_turn` + `@kaiz`/`@ya5`/`@ya52` 链）。
+- 两侧都在 `steps[3]`（选 `@kaiz` 后等 643）超时：**C# 30 帧 / Rust 31 帧**，行为一致——
+  选「开始下注」后服务端没有第二条 643，说明该面板不是用 643 开，等待目标需改（属 `openmir2-openybdeal-host-wiring` 的窗口项）。
+- `compare`：`frames 30/31`、DIFFS 3 = 两条 `100` 顺序 + `frame_count`（Rust 多一条 **`SM_HIT(14)`**，seq=31，recog=119，出现在 643 之后）。
+- `SM_HIT(14)` 累计样本：Rust **3/7**（login 05:04、login-r2、dice），C# **0/7**；值恒为 `recog=119 param=8 tag=10 series=4`，
+  且总是紧跟该 NPC 的交互帧，像是 NPC 转身/受击的副作用帧。

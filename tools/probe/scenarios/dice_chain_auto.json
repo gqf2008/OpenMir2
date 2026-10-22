@@ -1,0 +1,35 @@
+{
+  "name": "dice_chain_auto",
+  "description": "点首个非自己 SM_TURN 的庄家（auto:last_turn）-> @kaiz -> @ya5 -> @ya52，各等 643；无需 --var",
+  "steps": [
+    {
+      "click_npc": "auto:last_turn",
+      "note": "庄家 ActorId 每会话不同，用 auto"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@kaiz"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@ya5"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@ya52"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    }
+  ]
+}
