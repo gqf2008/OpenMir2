@@ -240,4 +240,6 @@
    运行时数据（NPC/商人 `ActorId`、`MakeIndex`、自身坐标）一律 `params: "REQUIRED"`，缺 `--var` 即加载期 fail-closed，绝不猜；
 
 2. 规则表缺口（`100/520/525/529/530/654/657` + 52 的 (54,78)）属 `conformance-rules` 车道，本卡只引用不修改；
+4. `CM_DROPITEM(1000)` 暂未建场景：oracle `ClientDropItem(processMsg.Msg, processMsg.nParam1)` 的 body 是**物品名文本**，
+   而 DSL 的 `params` 只把 int 代入数字字段，文本必须写字面量 ⇒ 需先定部署里可丢弃的物品名再建，不写猜的名字。
 3. ~~48 张低置信度卡的通道判定待逐卡回读~~ ⇒ 已做（§3.1/§3.2）：19 张按 `window_items` 定；余 27 张的 findings 为评审问题单、不含证据形态 ⇒ 仍低置信度，待 owner/Leader 补窗口清单。
