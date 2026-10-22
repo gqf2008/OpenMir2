@@ -1,14 +1,15 @@
 # OpenMir2 重写剩余量清单（可复现盘点）
 
-- 采集时间：2026-10-22T14:34Z（本机 22:34 +08:00）
-- 采集点：worktree `/e/tmp/wt-inventory`，HEAD **`0e7da10b8c6b83e6199fa0b10c609174da67f011`**（`git log --oneline -1` ⇒ `0e7da10b8 Merge branch 'action-line-var' …`）
-- 分支：`inventory-20261022`（从 master `0e7da10b8` 起）
+- 采集时间：第 1 轮 2026-10-22T14:34Z；**第 2 轮复核 2026-10-22T14:46Z（本文件当前版本）**
+- 采集点：worktree `/e/tmp/wt-inventory`；第 1 轮 HEAD `0e7da10b8`；**第 2 轮已 `git merge master`，HEAD `24e9a5fab4647c3b12d02d1a7c62e12b462667ab`（= master `b0dde46a9` + 本文件第 1 轮提交的合并树）**
+- 分支：`inventory-20261022`（第 2 轮在 `24e9a5fab` 上复核；master 已含 `click-bag-writeback` 合并 `b0dde46a9`）
+- 复核输入：reviewer-14 第 1 轮 `request_changes`（review oid `1d3bc1e1`，tier=L）；逐条处置见 §9
 - 只读面：`src/**`、`sql/**`、`E:/MirServer/**`；未起进程、未占端口、未写 DB
 - 口径：**每个数字后面给「命令 → 输出摘要」**；估算一律标 `估算`，不计入结论。
 
 > **一句话结论**：脚本引擎在**部署语料**上已 100% 覆盖（106/106 个派发目标、0 未实现）；真正的剩余量集中在
 > **① 185 张 in-progress 卡里 152 张是 R 级真机窗口欠账**、**② GM 命令 185 条里 150 条命令体未实现**、
-> **③ 协议出站 14 帧有编码器但无生产发射点**、**④ 2 个内容件的消费点/装载缺口（UnbindList、AdminList）**。
+> **③ 协议出站 13 帧有编码器但无生产发射点（另 1 帧 `SM_DONATE_FAIL` 连编码器都没有）**、**④ 2 个内容件的消费点/装载缺口（UnbindList、AdminList）**。
 
 ---
 
@@ -21,7 +22,7 @@
 | GM 命令（185 条表 + 内建 2） | 187 | 37（35 + 2 内建） | 150 | §2 |
 | 协议派发（入站 + 出站） | 191 | 170 | 17 tracked + 3 n/a-unreachable | §4.1 |
 | 内容加载调用点 | 40 | 11 implemented + 24 n/a | 5 tracked（其中 `rust=no` 2） | §4.1 |
-| 协作卡（in-progress） | 185 | — | A 152 / B 22 / D 8 / C 1 / O 2 | §3 |
+| 协作卡（in-progress） | 185 | — | A 152 / B 22（+3 条无卡面）/ D 8 / C 2 / O 1 | §3 |
 
 ---
 
@@ -155,32 +156,11 @@ awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -o "imp: Imp
 | 未实现命令体 | **150** | 同上 |
 | perm 0（现网可达） | **5** | `perm_min: 0` ⇒ `AddRobotPlay`/`LockLogin`/`拒绝`/`拒绝私聊`/`时间`；加内建 `@help` = 6 |
 
-### 2.2 设计文档 6 个批次的落地情况
-
-设计件 `tests/parity/m3/design-gm-commands-20261023.md` §6 定义 G1–G6。**当前 master 的实际落地顺序是
-G1 + 一个跨族切片（批次 2/3）**，而不是按 G2→G6 顺序：
-
-| 批次 | 设计内容 | 状态 | 条数 | 证据 |
-|---|---|---|---:|---|
-| **G1** | 派发骨架 + 现网可达 6 条（表内 5 + 内建 `@help`；`@commands` 走异常语义） | **已实现** | **5 + 2 内建** | `Imp::{Date,PrvMsg,AllowMsg,LockLogin,AddRobotPlay}`；`GmSession::permission` 恒 0 |
-| （批次 2/3） | 重载/管理 14 + 封禁名单 9 + 桩/测试 7（`@AddRobotPlay` 已在 G1） | **已实现（乱序切片）** | **30**（三族共 31，含 G1 的 `@AddRobotPlay`） | `Imp::Load*/Reload*/Deny*/Test*` = 14+9+7 |
-| G2 | 会话开关族 | 未开工 | 设计显式列 12 条，**跨 4 个族**（见下注） | 全部仍 `Unimplemented` |
-| G3 | 传送/召唤族 | 未开工 | 设计显式列 8 条；所属族共 **17** 条 | 族表「传送/召唤 17 / 已实现 0」 |
-| G4 | 数值/落库族 | 未开工 | **44**（=「数值/角色」族） | 族表 |
-| G5 | 行会/城堡/赛事 | 未开工 | **16** | 族表 |
-| G6 | 桩/死键/红字 | **桩/测试族已全部实现**；`@@!` 红字/`@commands` 语义待定 | 族内剩 **0** | 族表「桩/测试 8 / 已实现 8」 |
-| **合计** | | | 5 + 30 + 150 = 185（+2 内建） | |
-
-> **批次计数的不确定性（见 §6-①）**：设计 §6 只给 G2/G3 的**示例命令名**（各 12/8 条），
-> 未给 G2–G6 的**互斥全集**。G2 的 12 条跨「其它(7)/传送(1)/数值(2)/查询(2)」，与 G3/G4 的族计数重叠，
-> 因此 **G2–G6 无法在文档现有信息下做互斥分解**；能精确复算的只有
-> `G1=5`、`已实现批次2/3=30`、`剩余=150`。
-
-### 2.3 按 §4.3 的 12 族分解（精确、互斥）
+### 2.2 按 §4.3 的 12 族分解（精确、互斥）
 
 ```sh
 # 解析 §4.3 表（185 行）× gmcmd.rs 的 (name, imp) 做 join；族取表格第 3 列。
-# 复算脚本见 §7「复现脚本」join.awk。
+# 复算脚本见 §8「复现脚本」join.awk。
 # 输出摘要（每族 total/done/remain）：
 ```
 
@@ -210,22 +190,25 @@ G1 + 一个跨族切片（批次 2/3）**，而不是按 G2→G6 顺序：
 ### 3.1 总览
 
 ```sh
-walgit collab board --format json > /tmp/board.json
-python -c "import json;d=json.load(open('/tmp/board.json'));print({c['name']:len(c['cards']) for c in d['columns']})"
-# {'待认领': 0, '进行中': 185, '待审': 0, '需要人': 0, '受阻': 0, '已完成': 153}
+walgit collab board --format json > E:/tmp/board-r2.json
+python -c "import json;d=json.load(open('E:/tmp/board-r2.json',encoding='utf-8'));print({c['name']:len(c['cards']) for c in d['columns']})"
+# {'待认领': 1, '进行中': 185, '待审': 0, '需要人': 0, '受阻': 0, '已完成': 153}
 ```
 
-**in-progress = 185 张**。分类规则（本文档口径，脚本见 §7）：
+**in-progress = 185 张**；`待认领 = 1` 是本次审计卡 `openmir2-rewrite-inventory` 自身，不进入分类。
+分类口径（**人工逐卡指派**；集合硬编码在 `/e/tmp/audit-inv-20261022/finalcls.py`，**不是**从 `work` 文本正则自动生成）：
 
-- **A 真机窗口欠账（R 级缺证据）**：已合并且最新 status 明示窗口/真机/`tier=R` 欠账 ⇒ **152**
-- **B 代码未开工/接线未做**：最新 status 明示 `实现未开`/`第②片`/`接线`/`另开卡` ⇒ **22**
+- **A 真机窗口欠账（R 级缺证据）**：已合并且最新 status 明示窗口/真机/`tier=R` 欠账 ⇒ **152**（第 2 轮：移出 `rng-consumer-structure-parity`、移入已合的 `click-path-bag-writeback`）
+- **B 代码未开工/接线未做**：最新 status 明示 `实现未开`/`第②片`/`接线`/`另开卡` ⇒ **22**（另有 3 条**无卡可派**的代码面 B-补，见 §3.2.1，不计入 22）
 - **D needs-human**：最新 status 明示 owner 裁决/排期/删除授权 ⇒ **8**
-- **C 已合但卡未关（纯书务）**：明示「无待窗口项」且无其它剩余 ⇒ **1**
-- **O 在飞/待审**（不属四类，单列）⇒ **2**
+- **C 已合但卡未关（书务/已声明收口）**：**2**（`gate-gmclose-race`、`rng-consumer-structure-parity`）
+- **O 在飞/待审**（不属四类，单列）⇒ **1**（`gm-commands-design`；批次 3 在 `wt-gm3` 未提交）
 
-> 说明：本仓库 R 级策略要求「R 卡 merge 后也不 closed」，因此 A 与 C 的边界是「是否还有窗口/真机证据欠账」；
-> 卡片的「阻塞原因」取自 board JSON 的 `work` 字段（= 该卡最新一条 `status` 的 `work`），未再逐卡拉线程正文；
-> 若某卡最后一条是 `comment` 而非 `status`，此处仍显示最近一次 `status` 的摘要。
+> 口径（对应 reviewer-14 Minor）：
+> 1. board 的 `需要人` 列实测 **0**；本文 D=8 是**按 `work` 文本中「owner 裁决/排期/授权」推断**的，不是 board 列计数。
+> 2. `work` = 该卡最新一次 `status` 的快照，可能 stale；与源码冲突时以 §5 对账为准。
+> 3. `rng-consumer-structure-parity` 的 `work` 先写「三项余量已全部收口」、尾部又列 R 级真机窗口；按复核意见归 **C**，窗口尾巴保留在 C 表「备注」列，不当作 A 类欠账。
+> 4. `click-path-bag-writeback` 已有 master 合并 `b0dde46a9`（见其 `work`），故从「在飞」改归 **A**（T-160 明示真机落库对拍待窗口）。
 
 ### 3.2–3.6 逐卡清单
 
@@ -328,64 +311,63 @@ python -c "import json;d=json.load(open('/tmp/board.json'));print({c['name']:len
 | 93 | `openmir2-login-notice-clienttick` | openmir2-orchestrator@main/master | 余量：① 真机窗口（含 `SoftVersionDateEx==0` 两侧构造） |
 | 94 | `openmir2-spell-mp-wrapper` | openmir2-orchestrator@main/master | 余量：① 真机窗口（失败回帧 + MP/53/尾时序） |
 | 95 | `openmir2-enter-map-cell-rejected-vs-oracle` | openmir2-orchestrator@main/master | 余量：① 真机窗口（切图失败路径 |
-| 96 | `openmir2-rng-consumer-structure-parity` | openmir2-orchestrator@main/master | **三项余量已全部收口**（① 方案 C ② :342 登记 ③ 同表机判） |
-| 97 | `openmir2-enter-shift-loop` | openmir2-orchestrator@main/master | 余量：① 真机窗口（墙格出生登录：RNG 流水 + 落点 |
-| 98 | `openmir2-map-random-move-shift-loop` | openmir2-orchestrator@main/master | 余量：① 真机窗口（商人到点移动：RNG 流水 + 落点） |
-| 99 | `openmir2-recall-slave-shift-live` | openmir2-orchestrator@main/master | 余量：① 真机窗口（W0 §2e：两侧 RNG 账本 `VERDICT IDENTICAL` + 回召落点同坐标） |
-| 100 | `openmir2-mapcell-attributes-loading` | openmir2-orchestrator@main/master | 余量：① 真机窗口（**必核**：route added=1649、刷怪位置与 RNG 流水、进图/落格/AOI/CanWalk(true)/snap） |
-| 101 | `openmir2-mapcell-consumer-teeth` | openmir2-orchestrator@main/master | 余量：① 真机窗口核「走位/推/冲刺帧面 + NPC/商人出现帧」（W0 runbook §W0-6 已列 |
-| 102 | `openmir2-mongen-terrain-loop-live` | openmir2-orchestrator@main/master | 余量：真机窗口核「两侧出生坐标逐点一致 + RNG 流水」（W0 runbook §W0-6/§W0-8 已列，依赖 mapcell 装载 |
-| 103 | `openmir2-ctor-barrier-a-draw` | openmir2-orchestrator@main/master | 余量：① 真机窗口（**默认流水已变，须重取基线** |
-| 104 | `openmir2-ctor-draws-fold` | openmir2-orchestrator@main/master | 余量：① 屏障 A 的 1 抽（ServerConf.cs:114 ItemNumber += Random(10000)）——补上后段②/段③ 与 oracle 等距，须另立片 |
-| 105 | `openmir2-snap-cell-fidelity` | openmir2-orchestrator@main/master | 余量：① 真机窗口项 |
-| 106 | `openmir2-default-arm-spell-surface` | openmir2-orchestrator@main/master | 余量：① 真机逐帧对拍（窗口项） |
-| 107 | `openmir2-buff-producer-wiring` | openmir2-orchestrator@main/master | 余量=真机窗口项 + 新开片：四块 snap 改用忠实镜像 `cetin_near_xy`（复验新发现的格子层差异）+ 补窗口宽度上界牙 |
-| 108 | `openmir2-buff-system` | openmir2-coordinator@main/master | 余量=真机窗口项 + A-5 生产接线批 |
-| 109 | `openmir2-world-tick-expansion` | openmir2-coordinator@main/master | 余量=真机窗口项（RNG 流水/时钟/公告节拍） |
-| 110 | `openmir2-transmap-maptrigger` | openmir2-coordinator@main/master | 余量=真机窗口项 |
-| 111 | `openmir2-maptrigger-monster-and-door` | openmir2-coordinator@main/master | 余量=真机窗口项 W-R1-a/b/c |
-| 112 | `openmir2-orphan-encoder-wiring` | openmir2-coordinator@main/master | 余量=真机窗口项 |
-| 113 | `openmir2-window-collector-preflight` | openmir2-coordinator@main/master | 余量=真机窗口项：两侧种子交叉断言 / C# site 列 / 前置门生产路径不误拦 |
-| 114 | `openmir2-outbound-encoders-red-batch` | openmir2-coordinator@main/master | 按 tier=R **不 closed**——待窗口项：制药抽数流水 + 帧序 + MYSTATUS 派生落库 |
-| 115 | `openmir2-m3-monster-active-seek` | openmir2-worker-22@land/worktree-redlist-monai9 | 余量：真机 W0/W9 对拍 + 登记未建模面（覆写 Run 的子类、SuperGuard/ArcherGuard 自有 pvp 扫描） |
-| 116 | `openmir2-m3-drop-exp-wiring` | openmir2-worker-22@land/worktree-redlist-x2 | 余量：真机 100 杀两相窗口（依赖 T-59 rng-scene 已落）+ quest 真机窗口 |
-| 117 | `openmir2-m3-rng-scene-driver` | openmir2-worker-22@land/worktree-redlist-x1 | 余量：真机两侧账本对拍（W9 窗）+ BotSrv real wiring（进 0137/pin 怪/dump，属 W9 窗项） |
-| 118 | `openmir2-npcs-fixed-loading` | openmir2-worker-22@land/worktree-redlist-t1-npcs | 剩余 DoD = 真机两侧 NPC 出现帧一致（并入联调窗，与 ③a/GuardList 同窗） |
-| 119 | `openmir2-m3-quest-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑥（master 未动）：仍 BLOCKED，三重阻断与 r2 相同：①markers 前缀口径（卡 openmir2-m3-fixture-marker-prefix-bug 未认领）②C# k=0 frame 事件 JSON 截… |
-| 120 | `openmir2-guardlist-guards-loading` | openmir2-worker-22@guardlist/worktree-guardlist-loading | 剩余 DoD = 真机两侧项：③a 反向点出现帧一致（C# 侧现 1 对、修复后应两侧同）+ MIR2_RNG_SEED 双侧 site/order 对拍——并入下次联调窗口（与 ③b/③a 复跑同窗） |
-| 121 | `openmir2-m3-drop-exp-fixture-botsrv` | openmir2-worker-11@m2-svr/worktree-m3-drop-exp-fixture-botsrv | **保持 in-progress（离线夹具片，不 closed）**：本 approve 只覆盖离线夹具/接线/登记片，卡级真机 DoD③⑤ = 真机两侧 100 杀同序列 diff=0 + drop_exp_purity_gate 实测（阻塞 = owner -Go 独占窗口 + shared 承… |
-| 122 | `openmir2-m3-hero-pet-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑨（master 未动）：PREREQ（静态） |
-| 123 | `openmir2-m3-fixture-chain-gate` | openmir2-worker-5@m3cs/worktree-m3-chain-gate-o1o2-closeout | review do_not_close=true）**：剩余 DoD = 卡级真机两侧同序列 diff=0（各 READY 夹具 run_*.ps1 -SelfCheckNoStack + 共享管线自检需世界侧实现 + openmir2-m3-clock-injection + owner 独占窗口… |
-| 124 | `openmir2-m3-rng-trace-scene-groups` | openmir2-worker-4@m3bag/wip/m3bag-anchor-teeth | **保持 in-progress（不 closed，review do_not_close 明示）**：本 approve 只覆盖离线证据/门片，卡级 R 真机 DoD（同场景含怪两相 trace + groupdiff --fold --strict 的 site/order diff=0）仍 n… |
-| 125 | `openmir2-m3-pet-slave-masterdie-wire` | openmir2-worker-20@m3hp/worktree-m3-selloff-dealoffform-recog | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = ① 真机两侧 run_hero_pet_pair.ps1 主人死 step 同序列 diff=0（含叛变站点帧序/字节 + RNG 抽数 site/order）② 混合队列场景未建模 not_verifie… |
-| 126 | `openmir2-m3-pet-slave-amulet-delitem-frame` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-amulet-delitem | **按卡级剩余 DoD 保持 in-progress（不 closed）**：剩余 = ① 真机 run_hero_pet_pair.ps1 护身符扣光 step 两侧同序列 diff=0（owner 独占窗口，review not_verified）② unimplemented 登记：SendD… |
-| 127 | `openmir2-m3-party-trade-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑦（master 未动）：PREREQ（静态） |
-| 128 | `openmir2-m3-pet-slave-clone46` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-clone46 | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 make_clone step 同序列 diff=0（待真机判据（窗口）），按 review not_verified 保留 |
-| 129 | `openmir2-m3-shop-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-shop-frame-json-parse | **保持 in-progress（不 closed）**：本片虽为 L 级（window_required=false），但卡级真机 DoD②③（真机两侧同序列 run_npc_shop_pair.ps1 + npc_shop_diff.py 字段级 diff=0）仍待世界侧（⑤-2/⑤-4/⑤-5… |
-| 130 | `openmir2-m3-selloff-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-selloff-fixture-botsrv | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑩-1/⑩-2 落地 + 独占窗口） |
-| 131 | `openmir2-m3-fixture-marker-prefix-bug` | openmir2-worker-5@m3cs/worktree-m3-marker-guard-registration | **保持 in-progress（夹具/离线片，不 closed）**：剩余 DoD = 卡级 ① 真机两侧同序列 diff=0（阻塞 = 承接卡/driver + owner 独占窗口，按 review not_verified 登记） |
-| 132 | `openmir2-m3-drop-exp-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核④（master 未动）：PREREQ（静态） |
-| 133 | `openmir2-m3-pet-slave-lifecycle` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-abilitys | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 同序列 diff=0（召唤/诱惑/叛变/幽灵各站点，归 openmir2-m3-hero-pet-align + owner 独占窗口），按 revie… |
-| 134 | `openmir2-m3-hero-pet-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-hero-pet-fixture-minors | **不 closed（保持 in-progress）**：剩余 DoD②③ = 真机两侧 run_hero_pet_pair.ps1 同序列 diff=0（需 ⑨-2/⑨-3 世界侧 + openmir2-m3-clock-injection + owner 独占窗口），按 review not_v… |
-| 135 | `openmir2-m3-guild-castle-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-guild-castle-anchor | **夹具卡 ⇒ 保持 in-progress（不 closed）**：剩余 DoD②③ = 真机两侧 run_guild_castle_pair.ps1 同序列 diff=0（需 ⑧-3..⑧-9 实现卡 + openmir2-m3-clock-injection + owner 独占窗口），按 r… |
-| 136 | `openmir2-m3-selloff-goldsales-load-wire` | openmir2-worker-20@m3hp/worktree-m3-selloff-goldsales-load-wire | **不 closed（DoD 未全达，保守）**：剩余 = 真机两侧同序列对拍 run_selloff_pair.ps1 + selloff_diff.py + goldsales 快照 diff=0（等独占窗口，归 openmir2-m3-mail-auction-align） |
-| 137 | `openmir2-m3-shop-dealing-gate` | openmir2-worker-11@m2-svr/worktree-m3-shop-dealing-gate | **不 closed（review OA-1 明示：本 approve 只覆盖 Dealing 前置门一片，卡级 DoD 真机两相未闭环）**：剩余 DoD = 真机端到端（交易中发 CM_USERBUYITEM/CM_USERGETDETAILITEM 观察零帧 + characters/gold… |
-| 138 | `openmir2-m3-shop-dialog-wiring` | openmir2-worker-11@m2-svr/shop-wire-host | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = 真机两侧 run_npc_shop_pair.ps1 同序列 diff=0（详情 652 / 仓库 700-707 帧序与字节 + characters_storageitem 槽位 diff=0）与 DB… |
-| 139 | `openmir2-m3-quest-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-quest-fixture-botsrv | 剩余 DoD②③ = 真机两侧同序列 diff=0（-Side rust preflight 仍 PREREQ，等 ⑥-3 落地 + 独占窗口） |
-| 140 | `openmir2-m3-quest-persist-observability` | openmir2-worker-21@m3pt/worktree-m3-quest-persist-observability | run_pair.ps1 + scoped_diff.py --canonical）需独占窗口，按 not_verified 登记 |
-| 141 | `openmir2-m3-mail-auction-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑩（master 未动）：PREREQ（静态） |
-| 142 | `openmir2-m3-party-deal-capacity-int` | openmir2-worker-21@m3pt/worktree-m3-party-deal-capacity-int | **按 tier=L 但卡级真机 DoD 未达 ⇒ 不 closed（保持 in-progress，review note 明示「不因本片收卡」）**：剩余 DoD = 真机两侧同序列 diff=0（归 openmir2-m3-party-trade-align + 独占窗口，not_verifie… |
-| 143 | `openmir2-m3-clock-injection` | openmir2-worker-11@m2-svr/m3-clock-inject-host | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = ① C# 影子 hook 半（HUtil32.GetTickCount/DateTime.Now 不可替换字段，待 owner 在 Mono.Cecil IL patch / 影子源码重建 / 不改 ora… |
-| 144 | `openmir2-m3-pet-slave-summon` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-m3-rc-eol | 合并检查点（role=merge, openmir2-coordinator）：⑨-2 M-3 收口片（本片 = 仓库卫生离线片：mir2-rs/.gitattributes 追加 `*.rc text eol=lf`，零 .rs，非窗口）已合入 master bdc508ef1（approve o… |
-| 145 | `openmir2-m3-party-gainexp-npe` | openmir2-worker-21@m3pt/worktree-m3-party-gainexp-npe | **按 tier=R 不 closed**：剩余 DoD = 真机两侧同序列 diff=0（归 openmir2-m3-party-trade-align + 独占窗口），按 not_verified 登记 |
-| 146 | `openmir2-m3-shop-scenario-authority` | openmir2-worker-5@m3cs/worktree-m3-shop-scenario-authority | **剩余 DoD = 真机**：run_npc_shop_pair.ps1 在独占窗口跑两侧同序列 diff=0（等 ⑤-4 第②片仓库存档面 + ⑤-5 / NPC 入视野），离线判据本体已完整 |
-| 147 | `openmir2-m3-fixture-matrix` | openmir2-worker-5@m3cs/worktree-m3-fixture-matrix | **剩余 = 真机 DoD**：READY 夹具需 -Side rust preflight 前置落地 + 独占窗口跑两侧同序列 diff=0 |
-| 148 | `openmir2-m3-guild-castle-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑧（master 未动）：PREREQ（静态） |
-| 149 | `openmir2-m3-npc-shop-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑤（master d4d5b89c 未动，与 r1/r2 相同）：仍 BLOCKED，与 r2 逐条相同 |
-| 150 | `openmir2-m3-scoped-diff-ability` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）真机加深复跑 ②③F-2（360 击）：attack_diff 仍 GREEN diff=0（360/157/203/6576） |
-| 151 | `openmir2-m3-party-trade-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-party-trade-fixture-botsrv | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑦-2/⑦-3 落地 + 独占窗口） |
-| 152 | `openmir2-m3-final-acceptance` | openmir2-worker-5@m3cs/worktree-m3-final-acceptance | **剩余**：DoD② 300 假人 24h 长跑（**等独占窗口** |
-
+| 96 | `openmir2-enter-shift-loop` | openmir2-orchestrator@main/master | 余量：① 真机窗口（墙格出生登录：RNG 流水 + 落点 |
+| 97 | `openmir2-map-random-move-shift-loop` | openmir2-orchestrator@main/master | 余量：① 真机窗口（商人到点移动：RNG 流水 + 落点） |
+| 98 | `openmir2-recall-slave-shift-live` | openmir2-orchestrator@main/master | 余量：① 真机窗口（W0 §2e：两侧 RNG 账本 `VERDICT IDENTICAL` + 回召落点同坐标） |
+| 99 | `openmir2-mapcell-attributes-loading` | openmir2-orchestrator@main/master | 余量：① 真机窗口（**必核**：route added=1649、刷怪位置与 RNG 流水、进图/落格/AOI/CanWalk(true)/snap） |
+| 100 | `openmir2-mapcell-consumer-teeth` | openmir2-orchestrator@main/master | 余量：① 真机窗口核「走位/推/冲刺帧面 + NPC/商人出现帧」（W0 runbook §W0-6 已列 |
+| 101 | `openmir2-mongen-terrain-loop-live` | openmir2-orchestrator@main/master | 余量：真机窗口核「两侧出生坐标逐点一致 + RNG 流水」（W0 runbook §W0-6/§W0-8 已列，依赖 mapcell 装载 |
+| 102 | `openmir2-ctor-barrier-a-draw` | openmir2-orchestrator@main/master | 余量：① 真机窗口（**默认流水已变，须重取基线** |
+| 103 | `openmir2-ctor-draws-fold` | openmir2-orchestrator@main/master | 余量：① 屏障 A 的 1 抽（ServerConf.cs:114 ItemNumber += Random(10000)）——补上后段②/段③ 与 oracle 等距，须另立片 |
+| 104 | `openmir2-snap-cell-fidelity` | openmir2-orchestrator@main/master | 余量：① 真机窗口项 |
+| 105 | `openmir2-default-arm-spell-surface` | openmir2-orchestrator@main/master | 余量：① 真机逐帧对拍（窗口项） |
+| 106 | `openmir2-buff-producer-wiring` | openmir2-orchestrator@main/master | 余量=真机窗口项 + 新开片：四块 snap 改用忠实镜像 `cetin_near_xy`（复验新发现的格子层差异）+ 补窗口宽度上界牙 |
+| 107 | `openmir2-buff-system` | openmir2-coordinator@main/master | 余量=真机窗口项 + A-5 生产接线批 |
+| 108 | `openmir2-world-tick-expansion` | openmir2-coordinator@main/master | 余量=真机窗口项（RNG 流水/时钟/公告节拍） |
+| 109 | `openmir2-transmap-maptrigger` | openmir2-coordinator@main/master | 余量=真机窗口项 |
+| 110 | `openmir2-maptrigger-monster-and-door` | openmir2-coordinator@main/master | 余量=真机窗口项 W-R1-a/b/c |
+| 111 | `openmir2-orphan-encoder-wiring` | openmir2-coordinator@main/master | 余量=真机窗口项 |
+| 112 | `openmir2-window-collector-preflight` | openmir2-coordinator@main/master | 余量=真机窗口项：两侧种子交叉断言 / C# site 列 / 前置门生产路径不误拦 |
+| 113 | `openmir2-outbound-encoders-red-batch` | openmir2-coordinator@main/master | 按 tier=R **不 closed**——待窗口项：制药抽数流水 + 帧序 + MYSTATUS 派生落库 |
+| 114 | `openmir2-m3-monster-active-seek` | openmir2-worker-22@land/worktree-redlist-monai9 | 余量：真机 W0/W9 对拍 + 登记未建模面（覆写 Run 的子类、SuperGuard/ArcherGuard 自有 pvp 扫描） |
+| 115 | `openmir2-m3-drop-exp-wiring` | openmir2-worker-22@land/worktree-redlist-x2 | 余量：真机 100 杀两相窗口（依赖 T-59 rng-scene 已落）+ quest 真机窗口 |
+| 116 | `openmir2-m3-rng-scene-driver` | openmir2-worker-22@land/worktree-redlist-x1 | 余量：真机两侧账本对拍（W9 窗）+ BotSrv real wiring（进 0137/pin 怪/dump，属 W9 窗项） |
+| 117 | `openmir2-npcs-fixed-loading` | openmir2-worker-22@land/worktree-redlist-t1-npcs | 剩余 DoD = 真机两侧 NPC 出现帧一致（并入联调窗，与 ③a/GuardList 同窗） |
+| 118 | `openmir2-m3-quest-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑥（master 未动）：仍 BLOCKED，三重阻断与 r2 相同：①markers 前缀口径（卡 openmir2-m3-fixture-marker-prefix-bug 未认领）②C# k=0 frame 事件 JSON 截… |
+| 119 | `openmir2-guardlist-guards-loading` | openmir2-worker-22@guardlist/worktree-guardlist-loading | 剩余 DoD = 真机两侧项：③a 反向点出现帧一致（C# 侧现 1 对、修复后应两侧同）+ MIR2_RNG_SEED 双侧 site/order 对拍——并入下次联调窗口（与 ③b/③a 复跑同窗） |
+| 120 | `openmir2-m3-drop-exp-fixture-botsrv` | openmir2-worker-11@m2-svr/worktree-m3-drop-exp-fixture-botsrv | **保持 in-progress（离线夹具片，不 closed）**：本 approve 只覆盖离线夹具/接线/登记片，卡级真机 DoD③⑤ = 真机两侧 100 杀同序列 diff=0 + drop_exp_purity_gate 实测（阻塞 = owner -Go 独占窗口 + shared 承… |
+| 121 | `openmir2-m3-hero-pet-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑨（master 未动）：PREREQ（静态） |
+| 122 | `openmir2-m3-fixture-chain-gate` | openmir2-worker-5@m3cs/worktree-m3-chain-gate-o1o2-closeout | review do_not_close=true）**：剩余 DoD = 卡级真机两侧同序列 diff=0（各 READY 夹具 run_*.ps1 -SelfCheckNoStack + 共享管线自检需世界侧实现 + openmir2-m3-clock-injection + owner 独占窗口… |
+| 123 | `openmir2-m3-rng-trace-scene-groups` | openmir2-worker-4@m3bag/wip/m3bag-anchor-teeth | **保持 in-progress（不 closed，review do_not_close 明示）**：本 approve 只覆盖离线证据/门片，卡级 R 真机 DoD（同场景含怪两相 trace + groupdiff --fold --strict 的 site/order diff=0）仍 n… |
+| 124 | `openmir2-m3-pet-slave-masterdie-wire` | openmir2-worker-20@m3hp/worktree-m3-selloff-dealoffform-recog | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = ① 真机两侧 run_hero_pet_pair.ps1 主人死 step 同序列 diff=0（含叛变站点帧序/字节 + RNG 抽数 site/order）② 混合队列场景未建模 not_verifie… |
+| 125 | `openmir2-m3-pet-slave-amulet-delitem-frame` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-amulet-delitem | **按卡级剩余 DoD 保持 in-progress（不 closed）**：剩余 = ① 真机 run_hero_pet_pair.ps1 护身符扣光 step 两侧同序列 diff=0（owner 独占窗口，review not_verified）② unimplemented 登记：SendD… |
+| 126 | `openmir2-m3-party-trade-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑦（master 未动）：PREREQ（静态） |
+| 127 | `openmir2-m3-pet-slave-clone46` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-clone46 | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 make_clone step 同序列 diff=0（待真机判据（窗口）），按 review not_verified 保留 |
+| 128 | `openmir2-m3-shop-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-shop-frame-json-parse | **保持 in-progress（不 closed）**：本片虽为 L 级（window_required=false），但卡级真机 DoD②③（真机两侧同序列 run_npc_shop_pair.ps1 + npc_shop_diff.py 字段级 diff=0）仍待世界侧（⑤-2/⑤-4/⑤-5… |
+| 129 | `openmir2-m3-selloff-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-selloff-fixture-botsrv | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑩-1/⑩-2 落地 + 独占窗口） |
+| 130 | `openmir2-m3-fixture-marker-prefix-bug` | openmir2-worker-5@m3cs/worktree-m3-marker-guard-registration | **保持 in-progress（夹具/离线片，不 closed）**：剩余 DoD = 卡级 ① 真机两侧同序列 diff=0（阻塞 = 承接卡/driver + owner 独占窗口，按 review not_verified 登记） |
+| 131 | `openmir2-m3-drop-exp-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核④（master 未动）：PREREQ（静态） |
+| 132 | `openmir2-m3-pet-slave-lifecycle` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-abilitys | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 同序列 diff=0（召唤/诱惑/叛变/幽灵各站点，归 openmir2-m3-hero-pet-align + owner 独占窗口），按 revie… |
+| 133 | `openmir2-m3-hero-pet-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-hero-pet-fixture-minors | **不 closed（保持 in-progress）**：剩余 DoD②③ = 真机两侧 run_hero_pet_pair.ps1 同序列 diff=0（需 ⑨-2/⑨-3 世界侧 + openmir2-m3-clock-injection + owner 独占窗口），按 review not_v… |
+| 134 | `openmir2-m3-guild-castle-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-guild-castle-anchor | **夹具卡 ⇒ 保持 in-progress（不 closed）**：剩余 DoD②③ = 真机两侧 run_guild_castle_pair.ps1 同序列 diff=0（需 ⑧-3..⑧-9 实现卡 + openmir2-m3-clock-injection + owner 独占窗口），按 r… |
+| 135 | `openmir2-m3-selloff-goldsales-load-wire` | openmir2-worker-20@m3hp/worktree-m3-selloff-goldsales-load-wire | **不 closed（DoD 未全达，保守）**：剩余 = 真机两侧同序列对拍 run_selloff_pair.ps1 + selloff_diff.py + goldsales 快照 diff=0（等独占窗口，归 openmir2-m3-mail-auction-align） |
+| 136 | `openmir2-m3-shop-dealing-gate` | openmir2-worker-11@m2-svr/worktree-m3-shop-dealing-gate | **不 closed（review OA-1 明示：本 approve 只覆盖 Dealing 前置门一片，卡级 DoD 真机两相未闭环）**：剩余 DoD = 真机端到端（交易中发 CM_USERBUYITEM/CM_USERGETDETAILITEM 观察零帧 + characters/gold… |
+| 137 | `openmir2-m3-shop-dialog-wiring` | openmir2-worker-11@m2-svr/shop-wire-host | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = 真机两侧 run_npc_shop_pair.ps1 同序列 diff=0（详情 652 / 仓库 700-707 帧序与字节 + characters_storageitem 槽位 diff=0）与 DB… |
+| 138 | `openmir2-m3-quest-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-quest-fixture-botsrv | 剩余 DoD②③ = 真机两侧同序列 diff=0（-Side rust preflight 仍 PREREQ，等 ⑥-3 落地 + 独占窗口） |
+| 139 | `openmir2-m3-quest-persist-observability` | openmir2-worker-21@m3pt/worktree-m3-quest-persist-observability | run_pair.ps1 + scoped_diff.py --canonical）需独占窗口，按 not_verified 登记 |
+| 140 | `openmir2-m3-mail-auction-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑩（master 未动）：PREREQ（静态） |
+| 141 | `openmir2-m3-party-deal-capacity-int` | openmir2-worker-21@m3pt/worktree-m3-party-deal-capacity-int | **按 tier=L 但卡级真机 DoD 未达 ⇒ 不 closed（保持 in-progress，review note 明示「不因本片收卡」）**：剩余 DoD = 真机两侧同序列 diff=0（归 openmir2-m3-party-trade-align + 独占窗口，not_verifie… |
+| 142 | `openmir2-m3-clock-injection` | openmir2-worker-11@m2-svr/m3-clock-inject-host | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = ① C# 影子 hook 半（HUtil32.GetTickCount/DateTime.Now 不可替换字段，待 owner 在 Mono.Cecil IL patch / 影子源码重建 / 不改 ora… |
+| 143 | `openmir2-m3-pet-slave-summon` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-m3-rc-eol | 合并检查点（role=merge, openmir2-coordinator）：⑨-2 M-3 收口片（本片 = 仓库卫生离线片：mir2-rs/.gitattributes 追加 `*.rc text eol=lf`，零 .rs，非窗口）已合入 master bdc508ef1（approve o… |
+| 144 | `openmir2-m3-party-gainexp-npe` | openmir2-worker-21@m3pt/worktree-m3-party-gainexp-npe | **按 tier=R 不 closed**：剩余 DoD = 真机两侧同序列 diff=0（归 openmir2-m3-party-trade-align + 独占窗口），按 not_verified 登记 |
+| 145 | `openmir2-m3-shop-scenario-authority` | openmir2-worker-5@m3cs/worktree-m3-shop-scenario-authority | **剩余 DoD = 真机**：run_npc_shop_pair.ps1 在独占窗口跑两侧同序列 diff=0（等 ⑤-4 第②片仓库存档面 + ⑤-5 / NPC 入视野），离线判据本体已完整 |
+| 146 | `openmir2-m3-fixture-matrix` | openmir2-worker-5@m3cs/worktree-m3-fixture-matrix | **剩余 = 真机 DoD**：READY 夹具需 -Side rust preflight 前置落地 + 独占窗口跑两侧同序列 diff=0 |
+| 147 | `openmir2-m3-guild-castle-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑧（master 未动）：PREREQ（静态） |
+| 148 | `openmir2-m3-npc-shop-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑤（master d4d5b89c 未动，与 r1/r2 相同）：仍 BLOCKED，与 r2 逐条相同 |
+| 149 | `openmir2-m3-scoped-diff-ability` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）真机加深复跑 ②③F-2（360 击）：attack_diff 仍 GREEN diff=0（360/157/203/6576） |
+| 150 | `openmir2-m3-party-trade-fixture-botsrv` | openmir2-worker-5@m3cs/worktree-m3-party-trade-fixture-botsrv | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑦-2/⑦-3 落地 + 独占窗口） |
+| 151 | `openmir2-m3-final-acceptance` | openmir2-worker-5@m3cs/worktree-m3-final-acceptance | **剩余**：DoD② 300 假人 24h 长跑（**等独占窗口** |
+| 152 | `openmir2-click-path-bag-writeback` | openmir2-worker-5@wt-clickbag/click-bag-writeback | 余量=真机落库对拍（T-160：`characters_bagitem`/`hum_items`/`characters.Gold`）；master 合并 `b0dde46a9`，按 R 不 closed |
 ### B. 代码未开工/接线未做
 
 | card id | owner/worktree | 阻塞原因（来自最新 status 的 work） |
@@ -413,6 +395,14 @@ python -c "import json;d=json.load(open('/tmp/board.json'));print({c['name']:len
 | `openmir2-m3-castle-siege-state` | openmir2-worker-5@m3cs/worktree-m3-castle-siege-state | tier=L 但**不 closed**：剩余 DoD = 第②片 bins/game-svr 接线（tick 驱动 UserCastle::run + CastleEvent 落帧/落盘 SaveAttackSabukWall，等 owner 对 bins 串行序裁决，作者 comment f26… |
 | `openmir2-m3-party-attribution` | openmir2-worker-21@m3pt/worktree-m3-party-attribution | tier=R ⇒ 不 closed：剩余 DoD = 真机两侧同序列 diff=0（run_party_trade_pair.ps1 + 独占窗口，归 openmir2-m3-party-trade-align），按 not_verified 登记 |
 
+#### 3.2.1 B-补：无卡可派的代码面（来自 m3 A 表；**不计入 22 张卡**）
+
+| 面 | 索引 | 现状（HEAD `24e9a5fab`，逐文件复核） | 处置 |
+|---|---|---|---|
+| `SETOFFLINE` 的 `AutoGetExp*` 四字段 | m3 A-10 / T-86 | `crates/script/src/engine/mod.rs:603` 的 `ScriptPlayer::set_offline` 是**空默认实现**；`bins/game-svr/src/npc.rs:967` 的 `impl ScriptPlayer for NpcPlayer` **未覆写**；`crates/script/src/engine/actions.rs:617-623` 的 `ActionOfOffLine` 调它 ⇒ 四字段 + `OffLineFlag`/`KickOffLineTick` 均不写 | 无卡；tier=R（PL-2 复验 F6）。建议并入 PL-2/PL-3 后续片或新卡 |
+| `SETMPAMODE DECHP` / `sys_msg` | m3 A-21 / T-85 | `crates/script/src/handlers.rs:211` 注册 `(216, "ActionOfSetMapMode")`，但 `engine/actions.rs` **无实现分支**；`engine/mod.rs:384` 的 `ScriptPlayer::sys_msg` 空默认，`NpcPlayer`（`npc.rs:967`）未覆写；`HungerDecPower` 无消费者 | 无卡；tier=R（内容启用后）。建议随 `openmir2-run-gap-pl3` 后续片 |
+| `Market_Def` 商人脚本装载/说词 | m3 A-08 / T-47③ / T-145 残余 | `shop.rs:36-38` 明写宿主**未装载** `Merchant.LoadScriptFile`；`MerchantScriptBook` 已存在并用于 `Npc_def` 点击路径，但 `Market_Def` 的 `~@repair`/say 链路仍按「脚本未装载 ⇒ 无后续帧」登记 | 无实现卡；建议新卡 `openmir2-merchant-script-load`（本文 §6 top5 #4） |
+
 ### D. needs-human（owner 裁决/排期）
 
 | card id | owner/worktree | 阻塞原因（来自最新 status 的 work） |
@@ -426,18 +416,18 @@ python -c "import json;d=json.load(open('/tmp/board.json'));print({c['name']:len
 | `openmir2-m5-convergence-drills` | openmir2-worker-22@m5tools/worktree-m5-stage0-tools | 阶段0（零窗口 L 级工具）已合入 master 2f0b102c5ec98bffd0f5a6121cf64f4bc7cb4219：①load_report --mem-tail-sec+峰值-均值（CLI 缝两向牙）②新 error_curve.py（19/19 牙，桶界/窗口牙 |
 | `openmir2-world-bevy-migration` | openmir2-worker-14@wbevy/worktree-world-bevy | 再动 `crates/world` 会与 M2 验收 / `m3bag` 的接缝争写集）⇒ **解冻条件 = M2 验收通过，或 owner 重新裁决** |
 
-### C. 已合但卡未关（书务）
+### C. 已合但卡未关（书务/已声明收口）
 
-| card id | owner/worktree | 阻塞原因（来自最新 status 的 work） |
-|---|---|---|
-| `openmir2-gate-gmclose-race` | openmir2-orchestrator@main/master | 无待窗口项 |
+| card id | owner/worktree | 阻塞原因（来自最新 status 的 work） | 备注 |
+|---|---|---|---|
+| `openmir2-gate-gmclose-race` | openmir2-orchestrator@main/master | 无待窗口项 | — |
+| `openmir2-rng-consumer-structure-parity` | openmir2-orchestrator@main/master | **三项余量已全部收口**（① 方案 C ② :342 登记 ③ 同表机判） | work 尾部仍列 R 级真机窗口：两侧构造段 `seq=1..69` + 魔法场景账本 `VERDICT IDENTICAL`；按复核意见归 C，窗口尾巴留此备查 |
 
 ### O. 在飞/待审（不计入四类）
 
 | card id | owner/worktree | 阻塞原因（来自最新 status 的 work） |
 |---|---|---|
-| `openmir2-gm-commands-design` | openmir2-worker-4@wt-gm3/gm-batch-3 | 批次 3/3 传送/召唤族 17 条 + @传送：命令体逐行照 oracle，移动/RNG 未接项登记 T-166..T-171 |
-| `openmir2-click-path-bag-writeback` | openmir2-worker-5@wt-clickbag/click-bag-writeback | 固定 NPC 点击 @main 复用 run_merchant_goto：背包/佩戴位/金币写回（T-160） |
+| `openmir2-gm-commands-design` | openmir2-worker-4@wt-gm3/gm-batch-3 | 批次 3/3 传送/召唤族 17 条 + @传送：命令体逐行照 oracle，移动/RNG 未接项登记 T-166..T-171；head `bdf4e0ab0`，`wt-gm3` 尚有未提交修改（`gmcmd.rs`/`lib.rs`/`whitelist.md`） |
 ---
 
 ## 4. 模块面：已存在但入口未接线
@@ -466,7 +456,7 @@ summary: {"n/a-oracle-noop": 9, "n/a-db": 5, "tracked": 5, "implemented": 11,
 |---|---|---|
 | `UnbindList.txt` | **no** | loader 在 `crates/data/src/lists.rs`，**game-svr 消费点未接**（StdMode 31 解包，白名单 T-17） |
 | `AdminList.txt` | **no** | loader 在 `crates/data/src/lists.rs`，**无生产消费者**；oracle 的 `GetHumPermission` 被注释 ⇒ 与「permission 恒 0」裁决一致（D-1） |
-| `MiniMap.txt` | yes | 已加载；但 `CM_WANTMINIMAP` 消费点仍传 `0`（见 §5-①） |
+| `MiniMap.txt` | yes | 已加载；但 `CM_WANTMINIMAP` 消费点仍传 `0`（见 §6 top5 #3） |
 | `LineNotice.txt` | yes | `line_notice` 生产接线已存在 |
 | `Robot.txt` | yes | 已加载 |
 
@@ -480,24 +470,29 @@ outbound: implemented 101 / tracked 14 / n/a-unreachable 3   （共 118）
 
 - **入站 tracked 3**：`CM_ADJUST_BONUS`、`CM_OPENDOOR`、`CM_WANTMINIMAP`。
   三者都不是「无分支」：`inbound.rs` 已有 handler，但 `lib.rs` 生产分支分别存在
-  「BonusPoint 未挂会话态」「门表恒 false / 结构性 no-op」「MinMap 传 0」的接线缺口（见 §5）。
-- **出站 tracked 14**（编码器已有、生产发射点 = 0，`grep SM_X bins/game-svr/src` 只命中 `smframe_ext.rs` 定义）：
+  「BonusPoint 未挂会话态」「门表恒 false / 结构性 no-op」「MinMap 传 0」的接线缺口（见 §6）。
+- **出站 tracked 14 = 13 个「有编码器、无生产发射点」+ 1 个 `SM_DONATE_FAIL`（连编码器都没有）**：
 
 ```
+13 帧（编码器定义：smframe_ext.rs 12 个 + smframe.rs 的 sm_skeleton）：
 SM_BREAKWEAPON, SM_CHANGEFACE, SM_CLOSEDOOR, SM_CLOSEHEALTH, SM_HIDEEVENT,
 SM_ITEMSHOW, SM_LAMPCHANGEDURA, SM_OPENDOOR_OK, SM_QUERYYBDEAL, SM_QUERYYBSELL,
-SM_RECONNECT, SM_SHOWEVENT, SM_SKELETON, SM_DONATE_FAIL
+SM_RECONNECT, SM_SHOWEVENT, SM_SKELETON
+
+另 1 帧：SM_DONATE_FAIL —— `grep -rn 'sm_donate_fail' bins/game-svr/src` = 0；
+recon 门把它归卡 `openmir2-m3-guild-state`（不是 orphan-encoder-wiring）。
 ```
 
 > 卡 `openmir2-orphan-encoder-wiring` 的最新 status 写「片103 落地；余量=真机窗口项」，
-> 但**当前 HEAD 的派发门仍判 14 帧 `rust=no`**——以门为准，这 14 帧没有生产发射点。
+> 但**当前 HEAD 的派发门仍判 13 帧 `rust=no`**——以门为准，这 13 帧没有生产发射点。
+> `SM_DONATE_FAIL` 与它们不同源（无编码器；oracle 失败支属行会/城堡链路），不得并进同一批。
 
 ### 4.2 名字级可达性扫描（`pub fn` 调用点是否落在生产路径）
 
 用同一个 `production_live_functions` 对 `bins/game-svr/src` 的全部 `pub fn` 做反查：
 
 ```sh
-# 见 §7 livefns.py；结果：
+# 见 §8.3 livefns.py；结果：
 live fns 2638 spans 3873
 pub fns in bins defs 842 unique 724
 unreachable pub fns defs 63 unique 58
@@ -508,7 +503,7 @@ unreachable pub fns defs 63 unique 58
 | 类别 | 数量 | 模块 / 函数 | 判定 |
 |---|---:|---|---|
 | 测试支撑（预期） | 13 | `testsupport.rs`：`setup_db/open_db/insert_character/...` | 非生产，忽略 |
-| 编码器（与 §4.1 出站缺口同源） | 25 | `smframe_ext.rs` 15、`smframe.rs` 9、`guild_frames.rs::sm_guild_break_ally_ok_770` | 确有缺口；以派发门 14 条 tracked 为准 |
+| 编码器（多数与 §4.1 出站缺口**不同源**） | 25 | `smframe_ext.rs` 15、`smframe.rs` 9、`guild_frames.rs::sm_guild_break_ally_ok_770` | **仅 13 个**对应派发门 tracked；其余 12 个是旧 helper/内部帧（`sm_makedrug_fail`/`sm_makedrug_success`/`sm_sendusermakedrugitemlist` 3；`smframe.rs` 的 `client_movefail_layout_enabled`/`frames`/`sm_horserun`/`sm_movefail`/`sm_movefail_client`/`sm_movefail_frame`/`sm_run`/`sm_walk` 8；`sm_guild_break_ally_ok_770` 1），**不算缺口** |
 | 其它需人工复核 | 20 | `config::default_path`、`chat::{cry_text,cry_hear_frame}`、`inbound::{client_make_drug_item,sm_butch}`、`npcs::{build_npc_spawns,place_npcs}`、`selloff::{get_sell_off_gold,select_sell_date}`、`ability::item_names`、`bag::from_slots`、`castle::parse_castle_date`、`gamegold::auto_tick`、`homemap::new_human_spawn`、`merchant::spawn_merchants`、`mongen::venture_server_default_is_false`、`npc::run_std_mode_func`、`record::encode_player_data`、`shop::is_merchant`、`trade::deal_cancel_a` | **名字级过近似**：闭包/trait 对象/同名方法会误报。已抽查 `chat::cry_*` 是**故意的**（oracle `CryCry` NRE，T-118，零帧），`place_npcs`/`spawn_merchants` 的生产入口走 `*_with_scripts` 变体 ⇒ 多数非真缺口 |
 
 `crates/` 同口径：204 个 def / 201 个 unique 名字从 bins `main` 不可达；**不建议直接当缺口清单**——
@@ -517,7 +512,7 @@ unreachable pub fns defs 63 unique 58
 
 ### 4.3 模块面结论
 
-- **真正可执行的接线缺口只有两类**：协议出站 14 帧 + 内容消费 2 件（UnbindList、AdminList）。
+- **真正可执行的接线缺口只有两类**：协议出站 13 帧（+1 帧 `SM_DONATE_FAIL` 缺编码器）+ 内容消费 2 件（UnbindList、AdminList）。
 - 入站 3 条 tracked 是「handler 已有、生产参数未挂」的**小接线**，不是重写缺口。
 - 模块文件本身没有「文件存在但 `mod` 未声明」的孤儿：`find bins/game-svr/src -name '*.rs'` 与
   `lib.rs` 的 `mod` 声明逐一对账，仅 `castle/tests.rs`、`guild_official/tests.rs`、`guild_runtime/tests.rs`
@@ -525,38 +520,102 @@ unreachable pub fns defs 63 unique 58
 
 ---
 
-## 5. 下一批 top5（可立刻派）
+## 5. 与既有盘点对账（reviewer-14 Important-1）
 
-排序依据：**现网可见行为 / 风险 / 与在跑车道写集冲突**。
-当前活跃 worktree（board `worktree` 字段）：`wt-gm3`（worker-4，`gmcmd.rs`）、`wt-takepersist`（worker-5）、
-`wt-clickbag`（worker-5）、`m3cs`（worker-5，shop/castle）、`m3hp`（worker-20，selloff/pet）、
-`m3pt`（worker-21，party/quest）、`window`（svc-1，无代码）、`m5tools`（worker-22）、`wbevy`（worker-14，已 park）。
-**`lib.rs` 是几乎所有车道的共享热点**，以下单元都要求一个短 `lib.rs` 串行窗口。
+- 对账时点：HEAD `24e9a5fab`（master `b0dde46a9`）；board 快照 2026-10-22T14:46Z（`E:/tmp/board-r2.json`）。
+- 方法：四份件按标题截段后用 `openmir2-[a-z0-9-]+` 抽 id，再与 board 的列名 join；本文 §3 的四类集合用同一方法反查。可复现命令见 §8.4。
+- 结论：**同一批卡在不同件里的计数口径不同，但 id 可全部映射到本文四类，无 unmapped。**
 
-| # | 单元（卡 id / 建议新卡） | 写集 | tier | 判据 | 预计阻塞点 |
-|---:|---|---|---|---|---|
-| 1 | `openmir2-minimap-consumer-wire` | `bins/game-svr/src/contentload.rs`、`inbound.rs`、`lib.rs`（1 个分支） | **L** | ① 构造级：`Envir.MinMap>0` ⇒ `SM_READMINIMAP_OK(710)` 且 `param=MinMap`；`=0` ⇒ `SM_READMINIMAP_FAIL`；② 抽样冒烟：进图后发 `CM_WANTMINIMAP(1033)` 收到 OK；③ 牙：把传参改回 0 ⇒ FAIL 帧用例红 | `lib.rs` 写集排队；`contentload.rs` 与 MiniMap loader 的 `MapRegistry` 只读接口需确认 |
-| 2 | `openmir2-adjust-bonus-wire` | `bins/game-svr/src/lib.rs`、`ability.rs`、`inbound.rs` | **R** | ① 逐字段：`BonusPoint=n` 后 `SM_ABILITY(52)`/`SM_SUBABILITY(752)` 两帧；② `bonus_abil_changed=false`（oracle 恒 `+=0`）；③ 真机字段级 diff（窗口）；④ 牙：`nPoint+0==BonusPoint` 取反 ⇒ 用例红 | 会话态 `BonusPoint` 需新增字段并接存档；R 窗口；`lib.rs` 冲突 |
-| 3 | `openmir2-unbindlist-consumer` | `bins/game-svr/src/useitem.rs`、`bag.rs`、`lib.rs`（调用点）；`crates/data/src/lists.rs` 只读 | **R** | ① StdMode 31 + `AniCount==0` ⇒ 解包 6 件，背包逐槽字段 diff；② 容量不足分支与 oracle 同（不吃）；③ 真机窗口；④ 牙：把解包改回 no-op ⇒ T-17 用例红 | R 窗口；`useitem.rs` 当前无活跃车道（好）；需 `UnbindList` 装载文本 |
-| 4 | `openmir2-orphan-encoder-batch-a` | `bins/game-svr/src/smframe_ext.rs` + 各生产者：`pickwire.rs`/`useitem.rs`/`sessionwire.rs`/`mapdoor.rs`（按帧拆子补丁） | **L（帧接线）/ R（耐久类）** | ① 每条：oracle 触发点逐行对照 + 帧字节（GBK）；② 抽样冒烟：至少 1 条端到端（建议 `SM_RECONNECT`）；③ 牙：撤掉发射点 ⇒ 该帧门 RED；④ `SM_BREAKWEAPON`/`SM_LAMPCHANGEDURA` 改耐久 ⇒ 升 R 走窗口 | 部分帧的生产者本身未实现（`SM_CHANGEFACE`/`SM_SKELETON`/`SM_DONATE_FAIL`）；`SM_ITEMSHOW` 已被 `m3-drop-exp-wiring` 占用；`SM_QUERYYB*` 与 `m3hp` 车道冲突 |
-| 5 | `openmir2-gm-batch-4-numeric`（G4 数值/角色 44 条） | **仅** `bins/game-svr/src/gmcmd.rs`（+ 数值写回复用 `ability.rs`/`bag.rs`/`dbclient.rs` 只读） | **R** | ① 44 条命令逐条：权限门 10 + 目标在线/离线两分支帧；② 字段级 diff（钱/经验/属性/负重）；③ 真机窗口（permission 需临时抬到 10，见 design W-3）；④ 牙：离线分支文本、`@加钱` 数值、`@GameGold` 帧 | **`gmcmd.rs` 与在跑 `wt-gm3`（gm-batch-3）直接冲突，必须等其合并后串行**；现网 permission=0 ⇒ 只能构造级/窗口验证 |
+### 5.1 四份件的口径 → HEAD 实测
 
-> 为什么不是「M3 第②片 bins 接线」：那 9 张卡（⑧-3/⑧-4/⑧-5/⑧-6/⑧-7/⑧-8/⑧-9、⑦-4、⑩-1）
-> 都卡在 **owner 对 `bins/game-svr` 串行序的裁决**（D 类），不是可立即派的写集。
+| 既有件 | 原口径 | HEAD 实测（2026-10-22，board + 只读源码） | 映射 / 处置 |
+|---|---|---|---|
+| `docs/m3-remaining-inventory-20261022.md`（基线 `c83a9ae24`） | A 22 条 / B 60 行覆盖 69 卡 / C 20 条 / D 14 条 | B 表抽出 **74 个 id**（69 卡 + 5 个表后注记引用）**全部 `进行中`，closed=0**；join = 本文 A 65 / B 3 / D 4 / C 2。A 表 22 条中：A-04 已合 `d2302986f`、A-12..A-16（MB-5..MB-9）已合 `2fa927175`/`bfd5d1e2c`/`6f31f6079`/`189932857`、A-17（SM_WALK）已合 `759320894`；A-11（MB-2）仍在飞；A-08/A-10/A-21 仍无实现卡。 | A 表逐条见 §5.2；B 表全部落在本文 A/B/C/D，无新增；A 表 6 条（A-12..A-17）从「未开工」改判「已合待 R 窗口」（条目数不变，状态变）。 |
+| `docs/r-card-evidence-status-20261021.md`（基线 `ce61cdca4`） | 11 张有真机证据 / 60 张无 | 表 1 的 11 张：**10 张 `进行中` + 1 张 `已完成`**（`openmir2-login-magic-211-empty-slots`，此后已 closed）；表 2 的 60 张：**全部 `进行中`，closed=0**；join = 本文 A 56 / D 3 / C 1。 | 「60 张无证据」成立；「11 张都未 closed」**不成立**（1 张已 closed）。`657×2` 仍开放（T-147 / `openmir2-login-charstatus-657`，A 类）。 |
+| `mir2-rs/tests/parity/M3-report.md` §1 + `docs/Rust重写设计文档.md` §17.5 | 3 covered / 2 partial / 1 `oracle_absent` / 5 `not_covered`（11 子行，⑩ 邮件+拍卖合一项） | **不变**：covered = 背包/装备、战斗、技能（对应卡均 closed）；partial = NPC/商店⑤、拍卖 SellOff⑩b；`oracle_absent` = 邮件⑩a（T-36）；`not_covered` = 掉落经验④、任务⑥、组队交易⑦、公会攻城⑧、英雄宠物⑨。这些卡在本文 A/B/D 里均仍开放。 | §2 的 24h 长跑仍 `not_run`（卡 `openmir2-m3-final-acceptance`，本文 A #151）；开窗前置见 §5.3。 |
+| `mir2-rs/tests/parity/m3/plan-run-gap-batches-20261018.md` | 34 个专用怪 `Run` 覆写（13 真机可达 + 18 数据不可达 + 3 在飞不重复排）；玩家 `Run` 8 段（P07/P21/P22/P25/P26/P27/P31/P32）→ PL-1..PL-4；跨批前置 PR-1..PR-5 | 玩家：PL-1..PL-4 **已全部合入**（`83beb2a2e`/`41eb7fa54`/`886741b00`/`bd5dc1bc3`，均按 R 等窗口）；怪物：MB-1/3/4 已合（`a1e387a77`/`f4c16f674`/`8b2ccbe55`），MB-2 在飞（`openmir2-run-gap-mb2`），MB-5..MB-9 已合（见上）；A-10/A-21 是 PL-2/PL-3 明确留下的未实现项。 | 规划件里「未开工」的 MB-5..MB-9 / PL-1..PL-4 状态已 stale；条目本身无遗漏。PR-1（自延时队列）等前置已随 MB-3/PL-1 落地。 |
+
+### 5.2 m3 A 表 22 条逐条映射
+
+| # | 面（m3 件原文要点） | 本文落点 | HEAD 状态 |
+|---|---|---|---|
+| A-01 | 行会 NPC 标签 `@@buildguildnow`/`@@guildwar`/`@requestcastlewarnow` | A `openmir2-guild-official-npc` | 开放（已合 `8761bd68c`；R 窗口 + T-137） |
+| A-02 | 城堡 NPC 标签 UserSelect | B `openmir2-castle-official-design` | 开放（设计卡） |
+| A-03 | 城堡税 / 成员价接线 | B `openmir2-castle-tax-item-design` | 开放（设计卡） |
+| A-04 | `account_protection` 13 列 | A `openmir2-account-protection-13` | 开放（已合 `d2302986f`；R 窗口） |
+| A-05 | 脚本 `OPENYBDEAL` | B `openmir2-script-playdice-openybdeal` | 开放（bins 接线） |
+| A-06 | GM `@` 命令面 | §2 GM 族表 + O `openmir2-gm-commands-design` | 开放（150/185 未实现；批次 3/3 在飞） |
+| A-07 | `SS_205/206/207/211/212` 跨服广播 | B `openmir2-castle-pure`（T-113 / D-08） | 开放（单服不可达；owner 裁决） |
+| A-08 | `Market_Def` 商人脚本装载 | **B-补（§3.2.1）/ §6 top5 #4** | 开放（无实现卡） |
+| A-09 | `GetUpgradeStdItem` Desc 差量 / 自定义名 | A `openmir2-weapon-upgrade-values` | 开放（已合 `229d52cd9`；R 窗口） |
+| A-10 | `SETOFFLINE` 的 `AutoGetExp*` 四字段 | **B-补（§3.2.1）** | 开放（无卡；`set_offline` 空默认） |
+| A-11 | MB-2（4 怪 `Run`） | B `openmir2-run-gap-mb2` | 开放（在飞） |
+| A-12 | MB-5（5 怪 `Run`） | A `openmir2-mb5-monsters` | 开放（已合 `2fa927175`） |
+| A-13 | MB-6（4 怪 `Run`） | A `openmir2-mb2-monsters` | 开放（已合 `bfd5d1e2c`） |
+| A-14 | MB-7（3 怪 `Run`） | A `openmir2-mb7-monsters` | 开放（已合 `6f31f6079`） |
+| A-15 | MB-8（5 怪 `Run`） | A `openmir2-mb8-9-monsters` | 开放（已合 `189932857`） |
+| A-16 | MB-9（`FireballMonster` 全链） | A `openmir2-mb8-9-monsters` | 开放（同上） |
+| A-17 | 怪物 AI 移动 `SM_WALK` 不下发 | A `openmir2-monster-walk-frames` | 开放（已合 `759320894`；T-146 残余） |
+| A-18 | 编码 E-3..E-8 | A `openmir2-encoding-core-e1-e2`（callsites 卡已 closed） | 部分收口：`openmir2-encoding-callsites` **已完成**；E-7 的 R 窗口仍在 |
+| A-19 | LB-10 持久化证据 | A `openmir2-dbsrv-fault-paths` | 开放（已合 `de71cc01d`；LB-08/09/10 窗口） |
+| A-20 | M3 系统级夹具/驱动 | A `openmir2-m3-drop-exp-align` / `-quest-align` / `-guild-castle-align` / `-hero-pet-align` / `-final-acceptance` | 开放（HEAD 上 `run_drop_exp_pair.ps1`/`run_quest_pair.ps1`/`run_guild_castle_pair.ps1`/`run_hero_pet_pair.ps1` **均在仓内**；等窗口） |
+| A-21 | `SETMPAMODE DECHP` / `sys_msg` | **B-补（§3.2.1）** | 开放（无卡；`ActionOfSetMapMode` 无实现分支） |
+| A-22 | `CastleMgr.Run/Save` 持久化排水 | B `openmir2-castle-pure` | 开放（已合 `4a0590e90`；接线 + W1-W3） |
+
+### 5.3 开窗前置（R6/R7/R8 三红 + E1–E4 授权）
+
+所有 A 类（152 张）与 r-card 的 71 张共用同一组机器前置；`docs/m3-remaining-inventory-20261022.md` §0.2/「下一次开窗」记录 2026-10-22 **三红**：
+
+- **R6**：窗口镜像 `f3675f69aa` 落后基线 `c83a9ae24` 的 **93 件**生产路径（guard 实跑读数）。
+- **R7**：`E:/tmp/m2svr-window-target` 与 `window-provenance.json` 不存在（未在当前镜像重编六件并重录 provenance）。
+- **R8**：九端口全部 LISTENING（3306 亦 UP）⇒ 无独占窗口。
+- **本审计未重跑 guard**（纪律：不起进程 / 不占端口），以上为引用该件的只读读数；开窗前必须按 `docs/window-run-sheet-20261021.md` 重跑。
+
+授权边界 **E1–E4 均待 owner 裁决**（`docs/window-run-sheet-20261021.md §E`）：
+
+- **E1** 写库边界：E1-a 克隆 `mir2_test_*`（只能行数/关键值断言）；E1-b 生产库 + 书面授权（才可字段级 diff）。
+- **E2** 内容改动：影子 Envir / GuildBase / MonGen / 非 TestServer。
+- **E3** MySQL 停/起（故障注入；仅 G6 需要）。
+- **E4** C# DBSrv/LoginSrv 身份不在六件 provenance 内（E4-a 用主检出构建 / E4-b 全 Rust 对照，但失去 C# oracle）。
+- RNG 账本/W9 另需 **O1–O7**（`docs/window-owner-decisions-20261018.md §5`）。
+
+⇒ 本文 §6 的 top5 中 #2/#5（落库/数值）与 #1 的耐久帧属 R，**开窗前只能做构造级/离线片**。
+
+### 5.4 计数口径差异（避免混用）
+
+- m3 A/B/C/D 是**面 / 行**口径（22 / 60 / 20 / 14），本文 §3 是**卡**口径（A 152 / B 22 / D 8 / C 2 / O 1）；两者不可相加。
+- m3 D 14 是 **owner 待裁决项**（含 E1–E4、O1–O7、D-08、bins 串行序等）；本文 D 8 是从卡 `work` 文本推断的 **needs-human 卡**。交集 3 张（`gategate-keepalive`/`m5-convergence-drills`/`npc-ctor-draws`），不是同一集合。
 
 ---
 
-## 6. 最不确定的 3 个数字（建议复核者重点核）
+## 6. 下一批 top5（可立刻派）
 
-1. **GM 的 G2–G6 批次剩余条数**（§2.2）。设计件 §6 只给示例命令名，不给互斥全集；
-   G2 的 12 条跨 4 个族，与 G3/G4/G5 的族计数重叠。可精确复算的只有 `G1=5`、`批次2/3=30`、`剩余=150`；
-   任何「G2=12 / G3=8 / …」的分解都至少有 **±10 条**的口径差。**族表（§2.3）才是精确口径。**
-2. **卡 backlog 的 A/B/D/C/O 分类**（§3）。分类来自 board JSON 的 `work` 自由文本，不是结构化字段；
-   边界卡至少 4 张：`openmir2-script-take-persist`（窗口 vs 夹具）、`openmir2-openybdeal-host-wiring`
-   （真机 + 残余代码）、`openmir2-gm-commands-design`（在飞 vs 已合）、
+排序依据：**现网可见行为 / 风险 / 写集冲突**。**当前唯一在跑的代码车道 = `wt-gm3`**（`openmir2-worker-4`，`gm-batch-3`，工作区有未提交修改 `gmcmd.rs` + `lib.rs` + `whitelist.md`）。其它 worktree 实测（`git worktree list`）：`wt-clickbag` 在已合并 commit `cddd3e0dd`（干净，等清理）、`OpenMir2-wt-goods` 在 `lane/server-goods` @ `4eb774463`（干净，未合 master；master 有同题 `fb2824b6b` 但 oid 不同）、`m2svr-window-origin` 是窗口镜像（detached，非车道）。**旧稿把 board 历史 `worktree` 字段当在跑清单，已更正。**
+
+> **共同阻塞**：下 5 条全部要改 `bins/game-svr/src/lib.rs`（RM→SM 泵 / 入站分支 / `handle_shop_cmd`），而 `lib.rs` 正被 `wt-gm3` 占用；因此 **top5 只能串行排在 `wt-gm3` 合并之后**，没有一条能与它并行。`whitelist.md` 与 `smframe_ext.rs` 亦为共享热点。
+
+| # | 单元（卡 id / 建议新卡） | 写集（已逐文件核实） | tier | 判据 | 与在跑车道冲突 |
+|---:|---|---|---|---|---|
+| 1 | `openmir2-orphan-encoder-batch-a`（**只含 13 个有编码器帧**；剔除 `SM_DONATE_FAIL`） | `smframe_ext.rs`（12 编码器）+ `smframe.rs`（`sm_skeleton`）+ `lib.rs`（RM→SM 发射泵）+ 生产者 `pickwire.rs`/`useitem.rs`/`sessionwire.rs`/`mapdoor.rs`/`ground.rs`；`whitelist.md`（若登记 T-*） | L（帧接线）/ R（`SM_BREAKWEAPON`、`SM_LAMPCHANGEDURA` 改耐久） | ① 每条：oracle 触发点逐行对照 + 帧字节（GBK）；② 抽样冒烟：至少 1 条端到端（建议 `SM_RECONNECT`）；③ 牙：撤发射点 ⇒ 该帧门 RED；④ 耐久两帧改走 R 窗口 | **lib.rs + whitelist.md 与 wt-gm3 冲突**。另：`SM_CHANGEFACE`/`SM_SKELETON` 的生产者本身未实现（上游功能缺口），应先拆子片或明确「只做编码器+构造用例」 |
+| 2 | `openmir2-unbindlist-consumer` | `useitem.rs`（StdMode 31）、`bag.rs`、`lib.rs`（调用点）；`crates/data/src/lists.rs` **只读** | **R** | ① StdMode 31 + `AniCount==0` ⇒ 解包 6 件，背包逐槽字段 diff；② 容量不足分支与 oracle 同（不吃）；③ 真机窗口；④ 牙：把解包改回 no-op ⇒ T-17 用例红 | **lib.rs 与 wt-gm3 冲突**；`useitem.rs`/`bag.rs` 无其它车道 |
+| 3 | `openmir2-minimap-consumer-wire` | `lib.rs:2259`（`CM_WANTMINIMAP` 分支）+ `contentload.rs`（loader 已在）+ `inbound.rs`（`client_get_min_map` 已有） | **L** | ① 构造级：`Envir.MinMap>0` ⇒ `SM_READMINIMAP_OK(710)` 且 `param=MinMap`；`=0` ⇒ `SM_READMINIMAP_FAIL`；② 抽样冒烟：进图后发 `CM_WANTMINIMAP(1033)` 收到 OK；③ 牙：把传参改回 0 ⇒ FAIL 帧用例红 | **lib.rs 与 wt-gm3 冲突**；`contentload.rs`/`inbound.rs` 无其它车道 |
+| 4 | `openmir2-merchant-script-load`（A-08 / T-47③；**原稿漏列**） | `shop.rs`（`~@repair`/say 链路）+ `lib.rs`（`handle_shop_cmd`）+ `merchant.rs`/`npcs.rs`（`MerchantScriptBook` 已存在）+ `main.rs`（`Market_Def` 装载序） | L（说词/标签）/ R（修理/买卖写金币与背包） | ① 商人 `Market_Def` 装载数与 oracle 同；② `~@repair` 命中 ⇒ `SM_MERCHANTSAY(643)` 出队序；③ 牙：删装载 ⇒ say 用例红；④ 买卖/修理落库走 R 窗口 | **lib.rs 与 wt-gm3 冲突**；`shop.rs`/`merchant.rs` 无其它车道 |
+| 5 | `openmir2-adjust-bonus-wire` | `lib.rs:2275`（`CM_ADJUST_BONUS` 现传 `bonus_point=0`）+ `inbound.rs` + `record.rs`/`ability.rs`；`crates/storage` 的 `PlayerData.bonus_point`（`playerdata.rs:641`）**已存在** | **R** | ① 逐字段：`BonusPoint=n` 后 `SM_ABILITY(52)`/`SM_SUBABILITY(752)` 两帧；② `bonus_abil_changed=false`（oracle 恒 `+=0`）；③ 真机字段级 diff（窗口）；④ 牙：`nPoint+0==BonusPoint` 取反 ⇒ 用例红 | **lib.rs 与 wt-gm3 冲突**。**接口冻结线**：`crates/storage`/`crates/protocol` 若需改字段或编码，必须先按 §12.4 通知受影响线；当前 `bonus_point` 已存在，预计只读，不改 schema |
+
+> 明确的**不派**：`openmir2-gm-batch-4-numeric` 与 `wt-gm3` 的 `gmcmd.rs` 直接冲突，且批次 3 尚未合并；等 `wt-gm3` 收口后再排。
+
+---
+
+## 7. 最不确定的 2 个数字（建议复核者重点核）
+
+> 原第 1 项「GM G2–G6 批次分解」已按复核意见与 §2.2 整节一起删除；GM 侧精确口径只看 §2.2 的 12 族表（185/35/150）。
+
+1. **卡 backlog 的 A/B/D/C/O 分类**（§3）。分类是**人工逐卡指派**（集合在 `/e/tmp/audit-inv-20261022/finalcls.py`），
+   依据是 `work` 自由文本，不是结构化字段；边界卡至少 4 张：`openmir2-script-take-persist`（窗口 vs 夹具）、
+   `openmir2-openybdeal-host-wiring`（真机 + 残余代码）、`openmir2-gm-commands-design`（在飞 vs 已合）、
    `openmir2-inbound-dispatch-red-batch`/`openmir2-envir-redlist-batch`（剩余接线 vs 可收口）。
    预计 **±5 张**（A↔B 或 A↔C 漂移）。
-3. **`crates/` 的 201 个「不可达 pub fn」**（§4.2）。名字级调用图是**过近似**，
+2. **`crates/` 的 201 个「不可达 pub fn」**（§4.2）。名字级调用图是**过近似**，
    trait object / 闭包 / 同名方法会把已接线函数判成不可达（已证例：`chat::cry_*` 是故意零帧、
    `place_npcs` 走 `*_with_scripts` 变体）。`bins/` 的 58 个更可信；`crates/` 的 201 个只能当 triage 候选，
    直接当缺口会**高估**。
@@ -567,15 +626,16 @@ unreachable pub fns defs 63 unique 58
 
 ---
 
-## 7. 复现脚本与残留物
+## 8. 复现脚本与残留物
 
-### 7.1 GM 族 × 实现状态 join（§2.3）
+### 8.1 GM 族 × 实现状态 join（§2.2）
 
 ```sh
+cd /e/tmp/wt-inventory/mir2-rs
 # 1) 从设计件截出 §4.3 表（342..533 行）
-sed -n '342,533p' tests/parity/m3/design-gm-commands-20261023.md > /tmp/table43.md
+sed -n '342,533p' tests/parity/m3/design-gm-commands-20261023.md > E:/tmp/table43.md
 # 2) join.awk（FS="|"；gmcmd.rs 取 name/imp，table 取第 3 列族 + 第 5 列现网名）
-cat > /tmp/join.awk <<'AWK'
+cat > E:/tmp/join.awk <<'AWK'
 BEGIN{FS="|"}
 FILENAME ~ /gmcmd\.rs$/ {
   if ($0 ~ /name: "/) { n=$0; sub(/.*name: "/,"",n); sub(/".*/,"",n); name=n }
@@ -588,32 +648,35 @@ FILENAME ~ /table43/ {
   print "FAM\t" nm "\t" fam
 }
 AWK
-awk -f /tmp/join.awk bins/game-svr/src/gmcmd.rs /tmp/table43.md > /tmp/pairs.tsv
+awk -f E:/tmp/join.awk bins/game-svr/src/gmcmd.rs E:/tmp/table43.md > E:/tmp/pairs.tsv
 # 3) 族统计
 awk -F'\t' '$1=="FAM"{fam[$2]=$3} $1=="IMP"{imp[$2]=$3}
 END{for(n in fam){k=fam[n];t[k]++; if(imp[n]=="Unimplemented")r[k]++;else d[k]++}
-for(k in t) printf "%-16s total=%3d done=%3d remain=%3d\n",k,t[k],d[k],r[k]}' /tmp/pairs.tsv | sort
+for(k in t) printf "%-16s total=%3d done=%3d remain=%3d\n",k,t[k],d[k],r[k]}' E:/tmp/pairs.tsv | sort
 # 校验：FAM 185 行、IMP 185 行、名字集合双向零差集（comm -3 为空）
 ```
 
-### 7.2 卡分类（§3）
+### 8.2 卡分类（§3）
 
 ```sh
-walgit collab board --format json > /tmp/board.json
+walgit collab board --format json > E:/tmp/board-r2.json
 python - <<'PY'
-import json,csv
-d=json.load(open('/tmp/board.json',encoding='utf-8'))
+import json
+d=json.load(open('E:/tmp/board-r2.json',encoding='utf-8'))
 rows=[[c['id'],c.get('owner'),c.get('worktree'),c.get('branch'),c.get('work')]
       for col in d['columns'] for c in col['cards'] if col['name']=='进行中']
 print(len(rows))  # 185
+print({c['name']:len(c['cards']) for c in d['columns']})
 PY
-# 分类集合（A/B/D/C/O）见本文件 §3.1 的规则；脚本 /e/tmp/audit-inv-20261022/{classify,finalcls}.py
+# 分类：人工逐卡指派，集合硬编码在 /e/tmp/audit-inv-20261022/finalcls.py
+# 第 2 轮修正：rng-consumer-structure-parity 从 A 移到 C；click-path-bag-writeback 从 O 移到 A。
+# 复核：脚本输出的 A/B/C/D/O 行数与本文 §3.1 一致（152/22/8/2/1）。
 ```
 
-### 7.3 生产可达性（§4.2）
+### 8.3 生产可达性（§4.2）
 
 ```sh
-cd mir2-rs
+cd /e/tmp/wt-inventory/mir2-rs
 python - <<'PY'
 import sys
 sys.path.insert(0,'tests/parity/coverage')
@@ -623,16 +686,56 @@ corpus=rg.RustCorpus(rg.rust_source_dirs(repo, exclude=rg.DISPATCH_EXCLUDE))
 live,spans=rg.production_live_functions(corpus)
 print('live',len(live),'spans',len(spans))
 PY
-# 输出：live 2638 spans 3873
+# 输出：live 2638 spans 3873（HEAD 24e9a5fab 复跑，与第 1 轮相同）
 ```
 
-### 7.4 残留物清单
+### 8.4 与既有盘点对账（§5，第 2 轮新增）
+
+```sh
+cd /e/tmp/wt-inventory
+python - <<'PY'
+import re,json
+board=json.load(open('E:/tmp/board-r2.json',encoding='utf-8'))
+status={c['id']:col['name'] for col in board['columns'] for c in col['cards']}
+def load(fn,s,e):
+    t=open(fn,encoding='utf-8').read(); i=t.find(s); j=t.find(e,i)
+    return set(re.findall(r'openmir2-[a-z0-9][a-z0-9-]+',t[i:j]))
+m3='docs/m3-remaining-inventory-20261022.md'
+r='docs/r-card-evidence-status-20261021.md'
+MB=load(m3,'## B 表','## C 表'); T1=load(r,'## 表 1','## 表 2'); T2=load(r,'## 表 2','## 表 3')
+from collections import Counter
+for name,S in [('m3-B',MB),('r-表1',T1),('r-表2',T2)]:
+    print(name,len(S),Counter(status.get(x,'MISSING') for x in S))
+PY
+# 第 2 轮输出：m3-B 74 全进行中；r-表1 13 = 12 进行中 + 1 已完成；r-表2 60 全进行中。
+# 映射到本文四类：m3-B = A 65/B 3/D 4/C 2；r-表1 = A 12 + 1 closed；r-表2 = A 56/D 3/C 1。
+```
+
+### 8.5 残留物清单
 
 | 路径 | 内容 | 处置 |
 |---|---|---|
-| `/e/tmp/audit-inv-20261022/` | 盘点中间物：`board.json`、`cards.tsv`、`cardtables.md`、`pairs.tsv`、`parsestats.{json,txt}`、`recon-*.json/txt`、`join.awk`、`classify*.py`、`livefns*.py`、`prod/` | 保留供复核；可随时删除，不含仓库内产物 |
+| `/e/tmp/audit-inv-20261022/` | 第 1 轮盘点中间物：`board.json`、`cards.tsv`、`cardtables.md`、`pairs.tsv`、`parsestats.{json,txt}`、`recon-*.json/txt`、`join.awk`、`classify*.py`、`livefns*.py`、`prod/` | 保留供复核；可随时删除，不含仓库内产物 |
+| `E:/tmp/board-r2.json`、`E:/tmp/recon-{content,dispatch}-r2.json`、`E:/tmp/livefns-r2.txt`、`E:/tmp/parsestats-r2.{json,txt}`、`E:/tmp/{sec5,sec6,tail,test-hd}.md`、`E:/tmp/inv-round1-backup.md` | 第 2 轮复核中间物（board 快照、两门重跑、livefns、parse-stats、本文件分段稿/备份） | 保留供复核；可随时删除 |
 | `/e/tmp/wt-inventory-target/` | `mir2-script-tool` 的 release 构建产物 | 保留（构建缓存）；未提交 |
 | 仓库内 | **仅** `docs/rewrite-remaining-inventory-20261022.md` 一个文件 | 本卡唯一写集 |
 
 - 未启动任何服务端/客户端进程；`E:/MirServer` 只读访问（`parse-stats` 读 639 个脚本、`recon_gates` 读部署件）。
 - 未修改 `src/**`、`sql/**`、`mir2-rs/**` 中任何代码；未写 DB。
+
+---
+
+## 9. reviewer-14 第 1 轮处置记录（`1d3bc1e1`，tier=L）
+
+| 编号 | 结论 | 本轮处置 |
+|---|---|---|
+| Important-1 | 缺「与既有盘点对账」 | 新增 §5：四份件逐一映射、HEAD closed/open、m3 A 表 22 条逐条落点、开窗前置 R6/R7/R8 + E1–E4。 |
+| Important-2 | 开放 whitelist 未对账 | 本表逐条核对 20 个 T-*：**全部仍为开放登记（无退役行）**——T-161/162/163（GM 批次 2/3，L）、T-157（script take 增量帧）、T-165（动作参数 `$<int>` 表）、T-85/T-86（PL-3/PL-2）、T-21/T-23/T-30/T-51/T-53/T-55/T-93/T-98/T-117/T-137/T-142/T-145/T-147 均为对应卡的未实现/待窗口登记。 |
+| Important-3 | A-10/A-21 未进 B 类 | 新增 §3.2.1「B-补：无卡可派的代码面」，列 A-10（`set_offline` 空默认）、A-21（`ActionOfSetMapMode` 无分支/`sys_msg` 空默认），并补 A-08（原稿漏列）。 |
+| Important-4 | §4.1 SM_DONATE_FAIL 无编码器；§4.2「25 同源」只对上 13 | §4.1 拆成 13 帧（有编码器）+ 1 帧（`SM_DONATE_FAIL`，无编码器，卡 `m3-guild-state`）；§4.2 明写 25 个里仅 13 个对应 tracked，其余 12 个不是缺口。 |
+| Important-5 | §5「活跃 worktree」取自 board 历史字段；top5 #4 冲突不成立 | §6 改为 `git worktree list` 实测（唯一在跑 `wt-gm3`；`wt-clickbag` 已合并、`OpenMir2-wt-goods` 干净/parked）；**原 top5 #4（现 §6 #1 orphan-encoder）**删除「`m3-drop-exp-wiring`/`m3hp` 冲突」表述，只保留 lib.rs 冲突。 |
+| Important-6 | top5 #5 写集只写 gmcmd.rs 不成立 | **原 top5 #5（GM batch-4）已不采纳**；本轮 §6 无 GM 单元。证据保留：GM 批次 2 `ed5988d23` 改 `gmcmd.rs` + `lib.rs`(+205) + `whitelist.md`、批次 3 `bdf4e0ab0` 改 `gmcmd.rs` + `lib.rs`(+15) + `whitelist.md` ⇒「仅 gmcmd.rs」的说法不成立。 |
+| Minor-1 | finalcls.py 是硬编码；A #96 应归 C | §3.1 明写「人工逐卡指派、非正则」；`rng-consumer-structure-parity` 移入 C，A 计数保持 152（移出 1、移入 `click-path-bag-writeback` 1）。 |
+| Minor-2 | board「需要人」实测 0；D=8 是推断 | §3.1 口径第 1 条明写。 |
+| Minor-3 | §2.2 G2–G6 分解不可互斥，建议整节删除 | 已删除原 §2.2；族表升为 §2.2，§7 原第 1 项一并删除。 |
+| 复核者 top5 | orphan-encoder-batch-a / unbindlist / minimap / merchant-script-load / adjust-bonus | **全部采纳**（§6 五条按此排序），并逐条重核写集：五条均与 `wt-gm3` 的 `lib.rs` 冲突，须串行等其合并；`SM_DONATE_FAIL` 已从 #1 剔除。 |
