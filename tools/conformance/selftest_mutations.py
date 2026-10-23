@@ -275,6 +275,12 @@ TEETH = [
             summary["placement"]["sides"][side] = res["placement"]''',
        '''        if False and res.get("placement"):
             summary["placement"]["sides"][side] = res["placement"]''')]),
+    ("B1", "BLOCKED 硬门被摘掉（只校验了 scenario_blocked、不判调用点）",
+     "BL-1 --dry-run 命中 blocked",
+     [('''    if blocked:
+        summary["blocked"] = {"reason": blocked["reason"],''',
+       '''    if False and blocked:
+        summary["blocked"] = {"reason": blocked["reason"],''')]),
 ]
 
 
