@@ -5859,6 +5859,44 @@ mod tests {
         assert_eq!(texts(&r), vec![(GmColor::Red, SHUTUP_RELEASE_HELP)]);
     }
 
+    /// **F3（review `01007b5ee8`）**：帮助文本的**线上 GBK 字节**逐字节断言（与兄弟卡
+    /// `shutup_sends_exactly_one_red_sysmsg_bytes` 同口径）。
+    ///
+    /// `SysMsg` 在线上按 GB2312/GBK 编码（`HUtil32.GetString` 语义）；UTF-8 文本相同不能
+    /// 证明线上字节相同（例如「格」在 GBK 是 `B8F1`，UTF-8 是 `E6 A0 BC`）。牙：把常量里的
+    /// 「式」改成同音异形字 ⇒ 本用例红。
+    #[test]
+    fn shutup_release_help_is_gbk_bytes_on_the_wire() {
+        let (r, _) = run_gm("@取消禁言 zhangsan");
+        assert!(r.found && r.parsed, "命中命令体，不走未知命令回落");
+        assert_eq!(r.msgs.len(), 1, "恰好一条 SysMsg");
+        assert_eq!(r.msgs[0].color, GmColor::Red);
+        assert_eq!(r.msgs[0].text, SHUTUP_RELEASE_HELP);
+        assert!(r.frames.is_empty(), "本命令只发 SysMsg，无其它帧");
+        assert!(r.log_note.is_none(), "正常支没有吞异常/未接项");
+        // 线上编码：逐字符 GBK 双字节 + 三个 ASCII（': '、'@'、' '）。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, // 命
+                0xc1, 0xee, // 令
+                0xb8, 0xf1, // 格
+                0xca, 0xbd, // 式
+                0x3a, 0x20, // ": "
+                0x40, // '@'
+                0xc8, 0xa1, // 取
+                0xcf, 0xfb, // 消
+                0xbd, 0xfb, // 禁
+                0xd1, 0xd4, // 言
+                0x20, // ' '
+                0xc8, 0xcb, // 人
+                0xce, 0xef, // 物
+                0xc3, 0xfb, // 名
+                0xb3, 0xc6, // 称
+            ]
+        );
+    }
+
     /// 权限门先于命令体（`GameCommand.cs:37-40`）：`Permission < 10` ⇒ 红字 `权限不够!!!`，
     /// 连帮助文本都不出。
     #[test]
