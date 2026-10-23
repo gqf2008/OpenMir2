@@ -78,9 +78,18 @@
 //!      `Recog = ActorId`、`Series = 1`；其余 0 条。
 //! 2. **延时通知** `notices`：`SendMsg`/`SendUpdateMsg` 只入 `MsgQueue`
 //!    （`PriorityQueue<SendMessage,byte>`，优先级 = `(byte)wIdent`，**低值先出**）。
-//!    本接缝**按 oracle 的 `MsgQueue` 出队序**产出，即按 `ident as u8` 升序稳定排序
+//!    本接缝**按 oracle 的 `MsgQueue` 出队序**产出，即按 `ident as u8` 升序
 //!    （拾取：`RM_WEIGHTCHANGED=10115`(131) 先于 `RM_ITEMHIDE=8085`(149)——
-//!    **与入队序相反**，别按代码顺序写）。同一次动作里 ident 互不相同 ⇒ 顺序确定。
+//!    **与入队序相反**，别按代码顺序写）。
+//!
+//!    **同 ident 多帧在本接缝不可达**（卡 `openmir2-frame-drain-order-audit` 的枚举证据：
+//!    [`pick_up`] 的 `notices` 只在三条**互斥且立即返回**的分支里产生
+//!    ⇒ 可达集合只有 `{RM_SYSMESSAGE}`(252) / `{RM_GOLDCHANGED}`(152) /
+//!    `{RM_ITEMHIDE}`(149) + `{RM_WEIGHTCHANGED}`(131)；[`drop_item`] 只有
+//!    `{RM_MENU_OK}`(69) / `{RM_WEIGHTCHANGED}`(131)。逐集合内优先级字节两两不同
+//!    ⇒ 稳定排序与四叉堆出队序**逐条相同**。`update()`（`SendUpdateMsg`）已按同 ident 去重，
+//!    也是同 ident 不重复的来源之一）。若将来新加第二条同 ident 的 `SendMsg`，必须改用
+//!    `NetPriorityQueue`。
 //!
 //! ⚠️ 金币成功分支的 `SendRefMsg(RM_ITEMHIDE,…)` 是**广播给附近玩家**（`BaseObject.Message.cs:383`），
 //! 生产形态（`FixedHideMode=false`）下**不含自己** ⇒ 不是 self notice；本接缝把它留给接线层
@@ -401,7 +410,11 @@ fn update(notices: &mut Vec<QueuedNotice>, ident: i32) {
     notices.push(plain(ident));
 }
 
-/// 按 oracle `MsgQueue` 的**出队序**（优先级 = `(byte)wIdent`，低值先出）稳定排序。
+/// 按 oracle `MsgQueue` 的**出队序**（优先级 = `(byte)wIdent`，低值先出）排序。
+///
+/// 这里用稳定排序是**安全的**，但理由不是「同优先级保入队序」（oracle 的四叉堆**不**保入队序），
+/// 而是**同 ident 多帧在本接缝不可达**：本文件所有 `notices` 的可达组合里优先级字节两两不同
+/// （枚举见模块头）⇒ 稳定排序与堆出队序逐条相同。新增同 ident 的 `SendMsg` 前先看模块头。
 fn dequeue_order(mut notices: Vec<QueuedNotice>) -> Vec<QueuedNotice> {
     notices.sort_by_key(|n| (n.ident as u8) as u16);
     notices

@@ -8259,9 +8259,13 @@ fn spell_tail_bo_train(magic_id: u16) -> Option<bool> {
 /// 直接发帧、不建模该队列；B2 的帧集合跨多个优先级（53=68 / 638=136 / 656=154 / 31=167 /
 /// 1103=174 / 640=255），直接按调用序发会把 `1103` 发到 `638` 之前（与 oracle 相反）。
 ///
-/// 因此 B2 单次施法的**全部**尾/交付帧先入本缓冲，`flush` 时按优先级**稳定**排序后发。
-/// **同优先级内部**按入队序（oracle 是 4 叉堆序，合同 §1.6 允许「只断言同优先级集合 +
-/// 不同优先级相对序」，登记为 `not_verified`）。
+/// 因此 B2 单次施法的**全部**尾/交付帧先入本缓冲，`flush` 时按 oracle `MsgQueue` 的**四叉最小堆
+/// 出队序**发：按**收件人分组**（oracle 每条 `PlayObject` 一条队列，跨收件人混堆会改变本会话的
+/// sift），每组按入队序灌 [`game_svr::msgqueue::NetPriorityQueue`] 再出队。
+///
+/// **同 ident 多帧是常态**（卡 `openmir2-frame-drain-order-audit`）：一次施法多条 `RM_STRUCK_MAG`
+/// ⇒ 同一观察者收到多条 `SM_STRUCK(31)`（同优先级 167），多条命中怪 ⇒ 多条 `SM_CHANGENAMECOLOR(656)`
+/// （154）。稳定排序会给 `[0,1,2]`/`[0,1,2,3]`，oracle 的 4 叉堆给 `[0,2,1]`/`[0,3,2,1]`。
 struct SpellFrameBuf {
     /// `(socket, priority, body)`。
     frames: Vec<(i32, u8, Vec<u8>)>,
@@ -8305,23 +8309,137 @@ impl SpellFrameBuf {
         }
     }
 
-    /// 按优先级稳定排序后逐条经门回送。
+    /// 按**每个收件人各自的** `MsgQueue` 四叉堆出队序逐条经门回送。
+    ///
+    /// 分组序 = 首次入队序（跨收件人的相对序本就不可观测：oracle 是每人一条队列）。
+    /// 用 [`game_svr::msgqueue::NetPriorityQueue`]，不在这里手写堆。
     fn flush(
         self,
         online: &OnlineRegistry,
         gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     ) {
-        let mut frames = self.frames;
-        frames.sort_by_key(|f| f.1);
-        for (socket, _priority, body) in frames {
-            let Some(entry) = online.iter().find(|e| e.socket == socket) else {
-                continue;
-            };
-            let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "B2 帧") else {
-                continue;
-            };
-            let _ = tx.send(SimToGate::SendFrame { socket, body });
+        let frames = self.frames;
+        let mut recipients: Vec<i32> = Vec::new();
+        for (socket, _, _) in &frames {
+            if !recipients.contains(socket) {
+                recipients.push(*socket);
+            }
         }
+        for socket in recipients {
+            let mut heap: game_svr::msgqueue::NetPriorityQueue<&(i32, u8, Vec<u8>)> =
+                game_svr::msgqueue::NetPriorityQueue::new();
+            for f in frames.iter().filter(|f| f.0 == socket) {
+                heap.enqueue(f, f.1);
+            }
+            while let Some((socket, _priority, body)) = heap.dequeue() {
+                let Some(entry) = online.iter().find(|e| e.socket == *socket) else {
+                    continue;
+                };
+                let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "B2 帧") else {
+                    continue;
+                };
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: *socket,
+                    body: body.clone(),
+                });
+            }
+        }
+    }
+}
+
+/// 卡 `openmir2-frame-drain-order-audit` 的构造级判据：`SpellFrameBuf::flush` 必须给**每个收件人**
+/// 各自的 .NET 四叉堆出队序（不是稳定排序），且不同收件人**不得**混进同一个堆。
+#[cfg(test)]
+mod spell_frame_buf_tests {
+    use super::*;
+
+    type Rig = (
+        OnlineRegistry,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    );
+
+    fn rig() -> Rig {
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "甲".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: 901,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "乙".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 912,
+                actor_id: 902,
+            },
+        ];
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0u8, tx);
+        (online, gates, rx)
+    }
+
+    fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = ev {
+                out.push((socket, body));
+            }
+        }
+        out
+    }
+
+    /// **同 ident（同优先级）3 条出队 `[0,2,1]`、4 条 `[0,3,2,1]`**（oracle .NET 8 四叉堆）。
+    ///
+    /// 牙（改坏必红）：把 `flush` 换回 `frames.sort_by_key(|f| f.1)` 稳定排序 ⇒ 得 `[0,1,2]`/
+    /// `[0,1,2,3]`，断言红。
+    #[test]
+    fn same_priority_frames_follow_dotnet_heap_order() {
+        for (n, want) in [(3usize, vec![0u8, 2, 1]), (4, vec![0, 3, 2, 1])] {
+            let (online, gates, mut rx) = rig();
+            let mut buf = SpellFrameBuf::new();
+            for i in 0..n {
+                // 同 ident 167（`RM_STRUCK_MAG`）；body 第 0 字节 = 序号，便于断序。
+                buf.push_socket(911, 167, vec![u8::try_from(i).unwrap()]);
+            }
+            buf.flush(&online, &gates);
+            let got: Vec<u8> = drain(&mut rx).into_iter().map(|(_, b)| b[0]).collect();
+            assert_eq!(got, want, "n={n}：同优先级出队序必须是四叉堆序");
+        }
+    }
+
+    /// **跨收件人不得混堆**：`[A0,B1,A2,B3]` 交替入队 ⇒ 混堆会让 B 出 `[B3,B1]`；
+    /// 分组（= oracle 每人一条 `MsgQueue`）出 `[B1,B3]`。
+    #[test]
+    fn recipients_get_independent_heaps() {
+        let (online, gates, mut rx) = rig();
+        let mut buf = SpellFrameBuf::new();
+        for (socket, tag) in [(911i32, 0u8), (912, 1), (911, 2), (912, 3)] {
+            buf.push_socket(socket, 167, vec![tag]);
+        }
+        buf.flush(&online, &gates);
+        let frames = drain(&mut rx);
+        let a: Vec<u8> = frames
+            .iter()
+            .filter(|(s, _)| *s == 911)
+            .map(|(_, b)| b[0])
+            .collect();
+        let b: Vec<u8> = frames
+            .iter()
+            .filter(|(s, _)| *s == 912)
+            .map(|(_, b)| b[0])
+            .collect();
+        assert_eq!(
+            a,
+            vec![0, 2],
+            "A 的两条按 A 自己的堆序（2 条等优先级 = 入队序）"
+        );
+        assert_eq!(b, vec![1, 3], "B 的两条按 B 自己的堆序（混堆会得 [3,1]）");
     }
 }
 
@@ -10188,7 +10306,7 @@ fn handle_spell_cmd_with_magic(
     //
     // 位置：全部效果体块之后、P1 兜底尾之前；本块内**恰调一次** `finish_spell_tail`。
     // 帧面：oracle 每对象 `MsgQueue` 按 `(byte)RM_ident` 升序出队 ⇒ 本块把尾/交付帧收进
-    // [`SpellFrameBuf`] 后按优先级稳定排序再发（53=68 → 638=136 → 656=154 → 31=167 →
+    // [`SpellFrameBuf`] 后按每收件人各自的 `MsgQueue` 四叉堆出队序再发（53=68 → 638=136 → 656=154 → 31=167 →
     // 1103=174 → 640=255）。`SM_SPELL(17)` 已在本函数开头的无条件广播发出（最早）。
     if default_arm
         && !magic::is_warr_skill(i32::from(req.magic_id))
@@ -10352,7 +10470,7 @@ fn handle_spell_cmd_with_magic(
     //
     // 帧序（oracle 每收件人 `PriorityQueue<SendMessage, byte>`，优先级 `(byte)RM_*` 数值升序）：
     // SELF = `53(68) → 638(136) → 642(141) → 657(155)`；OBS = `17(24) → 638(136) → [657(155)]`。
-    // ⇒ 本块把六条臂的 **638/642/657** 全部收进 [`SpellFrameBuf`]，`flush` 时按优先级稳定排序
+    // ⇒ 本块把六条臂的 **638/642/657** 全部收进 [`SpellFrameBuf`]，`flush` 时按每收件人的四叉堆出队序
     // （642 由护身符消耗产出、657 由 18 的 `StatusChanged` 产出，都**不得**直发）。
     // 16 的 656(154)、28 的 1100(170)、640(255) 属于同 tick 的延时投递，由
     // [`drain_b3_self_deliveries`] 的同一套缓冲排序。
@@ -10663,7 +10781,7 @@ fn handle_spell_cmd_with_magic(
                         );
                     }
                 }
-                // 按 `(byte)RM_*` 稳定升序统一出帧：638(136) → 642(141) → 657(155)。
+                // 按每收件人 `MsgQueue` 的四叉堆出队序统一出帧：638(136) → 642(141) → 657(155)。
                 buf.flush(online, gates);
             }
         } else {
@@ -11124,7 +11242,7 @@ fn handle_spell_cmd_with_magic(
     //
     // 位置：所有既有效果体块之后、P1 兜底尾之前（互斥的 `matches!` 集合）。`SM_SPELL(17)` 已在本函数
     // 开头无条件广播；MP 包装层的 53 已**延后**到本块（见 MP 包装层的 `deferred_health` 分支），
-    // 因此本块把 53/638/642/52/100 收进 [`SpellFrameBuf`]，按 `(byte)RM_*` 稳定排序后统一出队。
+    // 因此本块把 53/638/642/52/100 收进 [`SpellFrameBuf`]，按每收件人 `MsgQueue` 的四叉堆出队序统一出队。
     //
     // 逐收件人出队序（合同 §2.5）：caster9/10/22 = `17 → 53 → 638 →（+1s）640`；
     // caster22 安全区失败 = `17 → 53 → 638 → 100`（无 640）；
@@ -11434,7 +11552,7 @@ fn handle_spell_cmd_with_magic(
                         }
                     }
                 }
-                // 按 `(byte)RM_*` 稳定升序统一出帧（53=68 → 52=67 反而先于 53）：
+                // 按每收件人 `MsgQueue` 的四叉堆出队序统一出帧（52=67 先于 53=68）：
                 // 52(67) → 53(68) → 638(136) → 639(137) → 642(141) → 100(252)。
                 buf.flush(online, gates);
             }
@@ -23637,11 +23755,13 @@ mod tests {
         use mir2_world::{Entity, PartyConfig};
         use std::collections::HashMap;
 
-        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        // 收 **(socket, body)**：oracle 的 `MsgQueue` 是**每人一条**，跨收件人的相对序不可观测
+        // ⇒ 断言按 socket 分组（卡 `openmir2-frame-drain-order-audit`）。
+        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
             let mut out = Vec::new();
             while let Ok(ev) = rx.try_recv() {
                 match ev {
-                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    SimToGate::SendFrame { socket, body } => out.push((socket, body)),
                     other => panic!("组队路径不得发 SendFrame 以外的命令，实得 {other:?}"),
                 }
             }
@@ -23702,10 +23822,10 @@ mod tests {
         let t_mode = drain(&mut rx0);
         assert_eq!(t_mode.len(), 1, "T 只收到一条 SM_GROUPMODECHANGED");
         assert_eq!(
-            ident(&t_mode[0]),
+            ident(&t_mode[0].1),
             mir2_protocol::messages::SM_GROUPMODECHANGED
         );
-        assert_eq!(u16::from_le_bytes([t_mode[0][6], t_mode[0][7]]), 1);
+        assert_eq!(u16::from_le_bytes([t_mode[0].1[6], t_mode[0].1[7]]), 1);
 
         // ② L 建组（T 已在 AllowGroup）
         handle_party_cmd(
@@ -23724,24 +23844,52 @@ mod tests {
             &game_svr::ability::StdItemCatalog::new(),
         );
         let frames = drain(&mut rx0);
-        // 事件表的**全局次序**（两 socket 共用一条 channel）：立即帧先、排队帧后；
         // 667 两条（L/T 各一），join 说词四条（join(L) 给 L/T，join(T) 给 L/T）。
-        let idents: Vec<u16> = frames.iter().map(|b| ident(b)).collect();
+        // **逐收件人**断言：oracle 每人一条 `MsgQueue`，跨收件人的平坦序不是契约
+        // （卡 `openmir2-frame-drain-order-audit` 起排队桶按收件人分组建堆）。
+        fn per_socket(frames: &[(i32, Vec<u8>)], want: i32) -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, _)| *s == want)
+                .map(|(_, b)| ident(b))
+                .collect()
+        }
         assert_eq!(
-            idents,
+            per_socket(&frames, 5),
             vec![
                 mir2_protocol::messages::SM_CREATEGROUP_OK,
                 mir2_protocol::messages::SM_GROUPMEMBERS,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "L：立即 660/667 先，排队 100 后（join(L)、join(T) 各一条）"
+        );
+        assert_eq!(
+            per_socket(&frames, 6),
+            vec![
                 mir2_protocol::messages::SM_GROUPMEMBERS,
                 mir2_protocol::messages::SM_SYSMESSAGE,
                 mir2_protocol::messages::SM_SYSMESSAGE,
-                mir2_protocol::messages::SM_SYSMESSAGE,
-                mir2_protocol::messages::SM_SYSMESSAGE,
-            ]
+            ],
+            "T：667 + join(L)/join(T) 说词各一条"
         );
+        let mut all: Vec<u16> = frames.iter().map(|(_, b)| ident(b)).collect();
+        all.sort_unstable();
+        let mut want_all = vec![
+            mir2_protocol::messages::SM_CREATEGROUP_OK,
+            mir2_protocol::messages::SM_GROUPMEMBERS,
+            mir2_protocol::messages::SM_GROUPMEMBERS,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+        ];
+        want_all.sort_unstable();
+        assert_eq!(all, want_all, "帧集合不变（只是逐收件人排序）");
         // 667 尾 = EncodeString("L/T/")
         let gm = frames
             .iter()
+            .map(|(_, b)| b)
             .find(|b| ident(b) == mir2_protocol::messages::SM_GROUPMEMBERS)
             .unwrap();
         assert_eq!(
@@ -23752,6 +23900,7 @@ mod tests {
         // 100 的颜色：Param = MakeWord(0xC4, 0xFF) = 0xFFC4，series=1
         let sm = frames
             .iter()
+            .map(|(_, b)| b)
             .find(|b| ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
             .unwrap();
         assert_eq!(u16::from_le_bytes([sm[6], sm[7]]), 0xFFC4, "组队色 Param");
@@ -23774,21 +23923,31 @@ mod tests {
             &game_svr::ability::StdItemCatalog::new(),
         );
         let frames = drain(&mut rx0);
-        // 全局事件次序：GCANCEL(L,立即), DELMEM_OK(L), GCANCEL(T,排队156),
-        // SYSMESSAGE(T 退出→L), SYSMESSAGE(T 退出→T), SYSMESSAGE(解散→L)。
-        let idents: Vec<u16> = frames.iter().map(|b| ident(b)).collect();
+        // 逐收件人：L = GCANCEL(立即) → DELMEM_OK(立即) → SYS(T 退出→L) → SYS(解散→L)；
+        // T = GCANCEL(排队 156) → SYS(T 退出→T)。跨收件人的平坦序不是契约。
         assert_eq!(
-            idents,
+            per_socket(&frames, 5),
             vec![
                 mir2_protocol::messages::SM_GROUPCANCEL,
                 mir2_protocol::messages::SM_GROUPDELMEM_OK,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "L 的四条"
+        );
+        assert_eq!(
+            per_socket(&frames, 6),
+            vec![
                 mir2_protocol::messages::SM_GROUPCANCEL,
                 mir2_protocol::messages::SM_SYSMESSAGE,
-                mir2_protocol::messages::SM_SYSMESSAGE,
-                mir2_protocol::messages::SM_SYSMESSAGE,
-            ]
+            ],
+            "T 的两条"
         );
-        let delok = &frames[1];
+        let delok = frames
+            .iter()
+            .map(|(_, b)| b)
+            .find(|b| ident(b) == mir2_protocol::messages::SM_GROUPDELMEM_OK)
+            .expect("L 必须收到 SM_GROUPDELMEM_OK");
         assert_eq!(recog(delok), 0, "SM_GROUPDELMEM_OK 的 Recog=0");
         assert_eq!(
             mir2_protocol::edcode::decode(&delok[12..]),
@@ -24081,20 +24240,21 @@ mod tests {
         drain_party_death_events(&rec, &online, &gates);
 
         // 2 人组：T 死 ⇒ `CancelGroup()`（`Count <= 1`）⇒ 组散。
-        // 全局序：GCANCEL(L,立即) → GCANCEL(T,排队 156) → SYS(T 退出→L/T,253) → SYS(解散→L,253)。
+        // 帧**集合**：GCANCEL(L,立即) + GCANCEL(T,排队 156) + SYS(T 退出→L/T,253) + SYS(解散→L,253)。
+        // 跨收件人的**平坦序不是契约**（oracle 每人一条 `MsgQueue`；本仓按收件人分组建堆后，
+        // 两 socket 在宿主 channel 里的先后随分组序变化）⇒ 这里断言集合、次序按下面的逐 socket 断言。
         let frames = drain(&mut rx0);
-        let idents: Vec<u16> = frames.iter().map(|(_, b)| ident(b)).collect();
-        assert_eq!(
-            idents,
-            vec![
-                mir2_protocol::messages::SM_GROUPCANCEL,
-                mir2_protocol::messages::SM_GROUPCANCEL,
-                mir2_protocol::messages::SM_SYSMESSAGE,
-                mir2_protocol::messages::SM_SYSMESSAGE,
-                mir2_protocol::messages::SM_SYSMESSAGE,
-            ],
-            "死亡退组帧序不符（实际 {idents:?}）"
-        );
+        let mut idents: Vec<u16> = frames.iter().map(|(_, b)| ident(b)).collect();
+        idents.sort_unstable();
+        let mut want = vec![
+            mir2_protocol::messages::SM_GROUPCANCEL,
+            mir2_protocol::messages::SM_GROUPCANCEL,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+        ];
+        want.sort_unstable();
+        assert_eq!(idents, want, "死亡退组帧集合不符");
         // 死亡者 T（socket 6）仍在线 ⇒ 它自己的 GCANCEL + 退出说词必须照发。
         let t_frames: Vec<u16> = frames
             .iter()
@@ -48443,13 +48603,17 @@ SendRefMsgRange=15
             let i53 = p1_seq.iter().position(|x| *x == SM_53).unwrap();
             let i638 = p1_seq.iter().position(|x| *x == SM_638).unwrap();
             assert!(i53 < i638, "受击玩家 53 先于 638；实得 {p1_seq:?}");
-            // 31 的 Recog = 受击者，顺序 = 枚举序 M1/M2/P1/M3（同优先级按入队序）。
+            // 31 的 Recog = 受击者；顺序 = oracle `MsgQueue`（每人一条）的 **.NET 8 四叉堆出队序**，
+            // 不是入队序（卡 `openmir2-frame-drain-order-audit`）。观察者 912 的入队序 =
+            // `638(136)` → 逐目标（M1/M2/P1/M3）`31(167)` + 命中怪的 `656(154)`；按四叉堆出队后
+            // 四条同优先级 31 的相对序 = **P1,M2,M3,M1**（`[0,3,2,1]` 类 sift 的结果，已用
+            // `NetPriorityQueue` 逐位复核）。旧期望 M1,M2,P1,M3 是稳定排序的退化产物。
             let struck: Vec<i32> = b2_seq(&frames, 912)
                 .into_iter()
                 .filter(|(id, _)| *id == SM_31)
                 .map(|(_, r)| r)
                 .collect();
-            assert_eq!(struck, vec![m1, m2, p1, m3]);
+            assert_eq!(struck, vec![p1, m2, m3, m1]);
         }
         // ② nDamage==0 变体：M3 MAC=0x0014 ⇒ 只有 R(1000)+MSD，无 31/656、无 R(300)。
         {
@@ -48511,13 +48675,17 @@ SendRefMsgRange=15
         let cmd = mir2_protocol::frame::CommandMessage::from_bytes(sf_first(&frames, 911, SM_638))
             .unwrap();
         assert_eq!((cmd.param, cmd.tag), (12, 12), "共享尾用点击坐标");
-        // 31 的顺序 = 以施法者 (10,10) 为中心的 x→y：M2(8,8) → M1(11,11) → M3(12,8) → P1(12,12)。
+        // 31 的**入队序** = 以施法者 (10,10) 为中心的 x→y：M2(8,8) → M1(11,11) → M3(12,8) → P1(12,12)。
+        // **出队序** = oracle `MsgQueue`（每人一条）的 .NET 8 四叉堆：施法者 911 的批次 =
+        // `638(136)` → 逐目标 `31(167)` + 命中怪 `656(154)` ⇒ 四条同优先级 31 出队
+        // **M3,M1,M2,P1**（不是入队序；卡 `openmir2-frame-drain-order-audit`，已用
+        // `NetPriorityQueue` 逐位复核）。
         let struck: Vec<i32> = b2_seq(&frames, 911)
             .into_iter()
             .filter(|(id, _)| *id == mir2_protocol::messages::SM_STRUCK)
             .map(|(_, r)| r)
             .collect();
-        assert_eq!(struck, vec![m2, m1, m3, p1]);
+        assert_eq!(struck, vec![m3, m1, m2, p1]);
     }
 
     /// **B2-33/47 半径来源**：33 读 `SnowWindRange`、47 读 `FireBoomRage`（二者缺省都是 1，
@@ -51296,7 +51464,7 @@ SendRefMsgRange=15
         assert_eq!(
             b4_seq(&frames, 911),
             vec![SM_53, SM_638, SM_642, SM_642, SM_642],
-            "每成功目标一条 642（同优先级保持枚举序）"
+            "每成功目标一条 642（三条同 ident，出队序 = 四叉堆 sift 序，**不是**目标枚举序；             本断言只比 ident 序列，故与枚举序无关）"
         );
         assert_eq!(b4_seq(&frames, 912), vec![SM_17, SM_638]);
         let poisons = rig.delay_msgs(mir2_world::slave::RM_POISON);

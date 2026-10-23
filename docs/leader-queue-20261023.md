@@ -127,8 +127,13 @@ restore 基线 -> 起 C# 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
 若 out 里已有上次产物，开跑前整体归档到 `<out>/_stale-<ts>-<pid>/`，失败时也**无条件**写本次的
 fallback `report.json`（`format=card-window-report/1`, `verdict=UNDECIDABLE`, 带 `run_id`）。
 
-`--post-comment` 的 body 含 `verdict`、帧数、两侧二进制 sha256、场景 sha256、证据路径与时间戳；
-**只发 `kind=comment`，不写 `status`**，因此看板列不变。
+`--post-comment` 的 body 顶层只有一个**三态** `verdict`（compare FAIL => `FAIL`；无结论或证据
+缺件 => `UNDECIDABLE`；完整且 PASS 才 `PASS`），并带 `verdict_reason` / `blockers` / `exit_code` /
+`report_kind` / `finalize_ok`；compare 的事实（`verdict` / `rc` / **帧数** / `db_state` / `diffs` /
+`undecidable` / `whitelisted`）在**嵌套 `compare`** 里，顶层**没有** `report_verdict` / `frames`
+——只扫顶层 `PASS` 的读者不会把缺件运行误读成「窗口通过」。body 另含两侧二进制 sha256、场景
+sha256、证据路径与时间戳。comment 在 report.json / README.txt / card-window.json 全部写完之后
+才发；**只发 `kind=comment`，不写 `status`**，因此看板列不变。
 
 ### 5.3 fail-closed 口径（退出码 0 = PASS，其余一律 2）
 

@@ -454,6 +454,21 @@ pub fn use_item(
     // oracle `MsgQueue` 是 `PriorityQueue<SendMessage,byte>`（优先级 = `(byte)wIdent`）⇒ 消息泵按
     // **优先级升序**下发；夹具的 `notices` 就是出队序。这里按同一键排序，保证跨档时
     // （先入队的 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS` 反而晚于 `RM_WEIGHTCHANGED`）与 oracle 一致。
+    //
+    // **同 ident 多帧在本接缝不可达**（卡 `openmir2-frame-drain-order-audit` 的枚举证据）：本函数
+    // 的 `notices` 只在五条互斥分支里产生 ——
+    //   ① 禁药 `RM_SYSMESSAGE`(252)（`no_drug` 且 StdMode 0..=3；`eaten=false`，与成功支互斥）；
+    //   ② `RM_HEALTHSPELLCHANGED`(68)（StdMode 0 的 shape 1 固定量 / shape 3 百分比，两支**互斥**，
+    //      且各自 `IncHealthSpell` 成功才入队 ⇒ 至多一条）；
+    //   ③ `RM_CHARSTATUSCHANGED`(155) + `RM_MYSTATUS`(166)（StdMode 1 的状态跳档支，成对出现，
+    //      且该支不产 68）；
+    //   ④ `RM_MENU_OK`(69)（`can_use_item==false` 的 else 支）；
+    //   ⑤ `RM_WEIGHTCHANGED`(131)（`eaten` 支）。
+    // 每个可达组合内优先级字节两两不同 ⇒ 稳定排序与四叉堆出序逐条相同。可达组合共五个：
+    //   `{252}`（禁药）/ `{68,131}`（StdMode 0 shape 1 或 3 补血补魔成功）/ `{155,166,131}`
+    //   （StdMode 1 状态跳档）/ **`{131}`**（纯 `WeightChanged`：StdMode 2、StdMode 31 解包成功、
+    //   以及 StdMode 0 的 shape 非 1/3 的 default 支）/ `{69}`（`can_use_item==false`）。
+    // 新增同 ident 的 `SendMsg` 前必须先改成 `NetPriorityQueue`。
     notices.sort_by_key(|n| n.ident as u8);
 
     UseItemOutcome {
