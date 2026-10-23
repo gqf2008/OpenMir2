@@ -105,6 +105,16 @@
 ③ worktree 里有没有未提交进展。起 finisher 用**原 worktree 的原 principal**（身份在 git-dir 里）。
 若原车道复活：**首交付为准**，立刻停 finisher 并核对远端 head 没被交叉污染。
 
+**⚠️ 2026-10-23 20:3x 实例（这次真的误判了，幸而 finisher 自己发现并撤了）**：
+`openmir2-script-sendmsg-host` 车道转录 mtime 停在 20:07:35，我据此判死（22 分钟 > 20 分钟）并起了 finisher；
+实际那条车道 **20:30:18 又提交了 `74555d3ce`（10 文件 1358 行）并正在 rebase 到新 master + 并发跑四个 cargo**。
+finisher 到场看到活进程后拒绝接手，才没把 rebase 打断。
+⇒ **判死三查缺一不得判死**，且必须在**判死那一刻**重跑（不是几分钟前的快照）：
+1. `Get-Process cargo,rustc` —— **只要有进程在跑就不许判死**（这条最强，优先级高于 mtime）；
+2. worktree 里 `git log -1 --format=%ci` 与 `git status --porcelain` 的**文件 mtime**（提交可能刚发生）；
+3. transcript mtime **仅作辅助**，阈值 **40–45 分钟**，不是 20。
+`--out-dir` 指向该 worktree 的 target 也说明车道活着（`Get-CimInstance Win32_Process` 可看命令行）。
+
 ## 5. 窗口批处理：一条命令收 R 卡窗口项（`tools/conformance/card_window.py`）
 
 **这一节取代** `tools/conformance/README.md` 里「8 个参数拼 `run_dual.sh`」的写法
