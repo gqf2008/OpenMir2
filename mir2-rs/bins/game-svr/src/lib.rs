@@ -15628,6 +15628,30 @@ fn prepare_closed_guild(
     return true;
 }
 
+/// **卡 `openmir2-gm-impl-kick`**：把 GM 命令体登记的**踢人目标**（[`gmcmd::GmSession::pending_kick`]）
+/// 并入本 tick 的 `kick_pending`。
+///
+/// oracle 是命令体**直接**置目标的 `PlayObject.BoKickFlag/BoEmergencyClose`
+/// （`KickHumanCommand.cs:26-31`）；本仓命令体纯、`GmWorld` 只读 ⇒ 命令体只写会话缓冲，
+/// 由宿主在此收口，落地仍走 [`drain_kicks`]（先 `SM_OUTOFCONNECTION(528)` 再 `KickUser` +
+/// 存档 + `MakeGhost`，`PlayObject.Message.cs:367-378`）。返回本次并入的条数（诊断用）。
+fn collect_gm_kick_pending(
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    kick_pending: &mut Vec<String>,
+) -> usize {
+    let mut added = 0usize;
+    for sg in ground_sessions.values_mut() {
+        let Some(target) = sg.gm.pending_kick.take() else {
+            continue;
+        };
+        if !kick_pending.iter().any(|n| n == &target) {
+            kick_pending.push(target);
+            added += 1;
+        }
+    }
+    added
+}
+
 #[allow(clippy::too_many_arguments)]
 fn drain_kicks(
     world: &mut mir2_world::World,
@@ -21614,6 +21638,12 @@ fn sim_loop(
         //
         // M3⑦-实现 3：掉线/顶号中断交易（oracle `DealCancelA`，`WorldServer.cs:712`）——
         // 必须在 `drain_*` 移除会话/存档之前跑，否则交易栏物品会随会话丢弃。
+        // **卡 `openmir2-gm-impl-kick`**：`@VV踢人` 的待落地目标并入本 tick 的 `kick_pending`
+        // （与「重复进世界踢旧」同一支；必须在下面 deal-cancel / `drain_kicks` 之前）。
+        let gm_kicks = collect_gm_kick_pending(&mut ground_sessions, &mut kick_pending);
+        if gm_kicks > 0 {
+            glog!("INF", "GM 踢人落地：本 tick 并入 {gm_kicks} 个目标");
+        }
         for chr in kick_pending.clone() {
             deal_cancel_between(
                 &chr,
@@ -32685,6 +32715,154 @@ break
         );
         assert!(kick_pending.is_empty(), "待踢名单必须被消费掉（幂等）");
         assert!(world.session("ghost").is_none());
+    }
+
+    /// **卡 `openmir2-gm-impl-kick`**：GM 命令登记的踢人目标在宿主 tick 内并入 `kick_pending`，
+    /// 并沿既有 `drain_kicks` 落地（先 `SM_OUTOFCONNECTION(528)`、再 `KickUser` + 清槽）。
+    ///
+    /// 牙：把 `collect_gm_kick_pending` 的 `pending_kick.take()` 换成只读 ⇒ 本用例红（目标不收口）。
+    #[test]
+    fn gm_pending_kick_is_collected_and_landed_with_sm_outofconnection() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let victim = world.add_entity(mir2_world::Entity::new(0, "victim", 5, 5));
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(victim);
+        sg.gm.pending_kick = Some("victim".to_string());
+        sessions.insert("victim".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "victim", 1, 0, 901, victim));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut kick_pending: Vec<String> = Vec::new();
+        assert_eq!(
+            collect_gm_kick_pending(&mut sessions, &mut kick_pending),
+            1,
+            "会话缓冲里的目标必须并入本 tick 的 kick_pending"
+        );
+        assert_eq!(kick_pending, vec!["victim".to_string()]);
+        assert!(
+            sessions["victim"].gm.pending_kick.is_none(),
+            "缓冲必须被取走（一次性）"
+        );
+        // 幂等：再收一次不得重复入列。
+        assert_eq!(collect_gm_kick_pending(&mut sessions, &mut kick_pending), 0);
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut HashMap::new(),
+            &mut sessions,
+            None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
+        );
+        assert!(kick_pending.is_empty(), "待踢名单被消费");
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(frames.len(), 1, "只有一条帧：SM_OUTOFCONNECTION");
+        assert_eq!(
+            CommandMessage::from_bytes(&frames[0])
+                .expect("12B 头")
+                .ident,
+            mir2_protocol::messages::SM_OUTOFCONNECTION,
+            "`BoKickFlag` 支先发 528（`PlayObject.Message.cs:376-377`）"
+        );
+        assert!(
+            online.iter().all(|e| e.chr_name != "victim"),
+            "目标已离开在线登记（MakeGhost 的宿主等价物）"
+        );
+    }
+
+    /// **卡 `openmir2-gm-impl-kick`（复审 important-1）**：命令行目标的大小写与实体规范名不同
+    /// （`@VV踢人 ViCtIm` → 实体 `victim`）时，命令体必须登记**实体规范名** ⇒ 宿主
+    /// `online_take`（`e.chr_name == chr` 精确匹配）才找得到并落地 528。
+    ///
+    /// 牙：把 `kick_human` 改回 `Some(name.to_string())`（存输入串）⇒ 本用例红：`collect` 入列
+    /// `ViCtIm`，`drain_kicks` 在在线表里找不到 `ViCtIm` ⇒ 只留 WRN、无 528。
+    #[test]
+    fn gm_pending_kick_canonicalizes_mixed_case_target_and_lands_528() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut ev = mir2_world::Entity::new(0, "victim", 5, 5);
+        ev.race = mir2_world::ACTOR_RACE_PLAY;
+        let victim = world.add_entity(ev);
+        let mut eg = mir2_world::Entity::new(0, "gm", 5, 5);
+        eg.race = mir2_world::ACTOR_RACE_PLAY;
+        let gm_actor = world.add_entity(eg);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(gm_actor);
+        sg.gm.permission = 10; // `[Permission] Kick=10`（脚本 GMEXECUTE 抬到 10 后的会话态）
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        {
+            let view = gmcmd::GmWorld::new(&guilds)
+                .with_world(&world)
+                .with_speaker("gm");
+            let r = gmcmd::execute(&mut sg.gm, &cfg, &view, "@VV踢人 ViCtIm");
+            assert!(r.msgs.is_empty(), "命中目标 ⇒ 命令无回帧");
+        }
+        assert_eq!(
+            sg.gm.pending_kick.as_deref(),
+            Some("victim"),
+            "命令体必须存实体规范名（存输入串 `ViCtIm` 会让宿主精确匹配落空）"
+        );
+        sessions.insert("gm".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "victim", 1, 0, 901, victim));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut kick_pending: Vec<String> = Vec::new();
+        assert_eq!(collect_gm_kick_pending(&mut sessions, &mut kick_pending), 1);
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut HashMap::new(),
+            &mut sessions,
+            None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
+        );
+        let frames = drain_frames(&mut rx0);
+        assert_eq!(
+            frames.len(),
+            1,
+            "混合大小写目标也必须落地 528（不是只留 WRN）"
+        );
+        assert_eq!(
+            CommandMessage::from_bytes(&frames[0])
+                .expect("12B 头")
+                .ident,
+            mir2_protocol::messages::SM_OUTOFCONNECTION,
+        );
+        assert!(
+            online.iter().all(|e| e.chr_name != "victim"),
+            "目标已离开在线登记"
+        );
     }
 
     fn entry(account: &str, chr: &str, sid: i32, gate: i32, sock: i32, actor: i32) -> OnlineEntry {
