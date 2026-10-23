@@ -17,7 +17,7 @@
 | 已有物 | 位置 | 与 B 片的关系 |
 |---|---|---|
 | `GuildManager`（`AddGuild`/`DelGuild`/`FindGuild`/`MemberOfGuild`/`LoadGuildInfo`/`Run`） | `mir2-rs/crates/world/src/guild.rs:23`（oracle `GuildManager.cs:19-167`） | ①③⑥ 的行会可写态基础 |
-| `UserCastle::get_castle_n1` | `mir2-rs/crates/world/src/castle.rs:29`（oracle `UserCastle.cs:646`，`ChangeSabukLordCommand.cs:39`） | ⑤ 城堡归属改写 |
+| `UserCastle::get_castle_n1` | `mir2-rs/crates/world/src/castle.rs:29`（oracle `UserCastle.cs:646` 的桩；真正写 `OwnGuild` 的是 `GetCastle(GuildInfo)`，`UserCastle.cs:539-556`） | **仅供参考**：`ChangeSabukLordCommand.cs:39` 经 `IUserCastle.GetCastle(IGuild)` 调到的是 `:646` 的 `throw`（T-38）⇒ **不是本命令的可达路径**；row⑤ 因此是零帧 no-op |
 | `GuildServerEvent`（`SS_206`/`SS_207` 只落事件、不产客户端帧） | `mir2-rs/bins/game-svr/src/guild_cmd.rs:46`（注释段） | 跨服消息在**单区**的既有替身 |
 | `SwitchDataState`/`process_switch_data` 脚手架（生产恒 no-op） | `mir2-rs/bins/game-svr/src/lib.rs:14731/14766` | G11 的搬家面已有壳（见 `docs/orphan-encoder-trigger-audit-20261023.md:36`） |
 | `gm_registry` 6 条 handler 记录（perm=10） | `mir2-rs/tests/parity/coverage/gm_registry.json`（`ShowSbkGold` @3064、`AddGuild` @3526、`DelGuild` @3568…） | 表项已在；**命令体未实现** |
@@ -78,7 +78,7 @@ else                          PlanesClient.Instance.SendSocket(nCode + "/" + nSe
 | ② | `DelGuild` | `DelGuildCommand.cs:11` / `:15-40`：`:22` 主服守卫、`:32` `GuildMgr.DelGuild`、**`:34` `SendServerGroupMsg(SS_206, ServerIndex, gname)`** | `SM_SYSMESSAGE(100)`：`只能在主服务器上才可以使用此命令删除行会!!!` / `没找到X这个行会!!!` | `DelGuild` 前置 `BackupGuildFile()` + `SaveGuildList()`（`GuildManager.cs:34-52`）⇒ `GuildBase/GuildList.txt` 与备份；**无 MySQL 表** | 同 ①，码换 206；另需 `RankList.Count > 1` 的拒删行为（`GuildManager.cs:41-44`） |
 | ③ | `EndGuild` | `EndGuildCommand.cs:11` / `:14-39`：`:19` `GuildRankNo > 1` 门、`:21` `IsMember`+`DelMember`、**`:23` `SendServerGroupMsg(SS_207, ServerIndex, guildName)`**、`:24-27` 会话态清写与两帧 | `SM_SYSMESSAGE(100)`：`行会掌门人不能这样退出行会!!!` / `你都没加入行会!!!` / `你已经退出行会。`；`SM_CHANGEGUILDNAME(750)`（`RefRankInfo(0,"")`）；`SM_USERNAME(42)`（`RefShowName`） | `DelMember` → `GuildInfo.SaveGuildInfoFile()`（`GuildInfo.cs:480/588`）⇒ `GuildBase/<行会>.txt`；**无 MySQL 表** | ① `SendServerGroupMsg(207)` ② 玩家会话行会字段可写（`MyGuild`/`GuildRankNo`/`GuildRankName`，Rust `GuildSession` 已有骨架）③ 帧序：750 → 42 → 100（`guild_cmd.rs` 已记录同口径）④ 接收端 207 空实现 |
 | ④ | `ForcedWallconquestWar` | `ForcedWallconquestWarCommand.cs:11` / `:15-52`：`:30` `UnderWar = !UnderWar`、`:33-36` `ShowOverMsg=false`/`WarDate=Now`/`StartCastleWarTick`/`StartWallconquestWar()`、**`:37` `SS_212`**、`:39` `SendBroadCastMsg("[X 攻城战已经开始]", System)`、**`:40` `SS_204`**、`:41` `MainDoorControl(true)`（=**关**主门）；`:45` 停战支 `StopWallconquestWar()` | `SM_SYSMESSAGE(100)` 全服广播（`:39`）；主门被关：`SM_DIGDOWN(21)`（`CastleDoor.Close` → `RM_DIGDOWN` → `PlayObject.Message.cs:1902`）；`城堡名` 不存在 ⇒ 100 红字；停战支穿 `StopWallconquestWar` 的 `ChangePkStatus(false)`（`UserCastle.cs:587`） | 城堡 `Castle/<n>/SabukW.txt` 的 `[Setup]`（`UnderWar`/`WarDate`）随 `UserCastle.Save()`（`:448`）落盘；**无 MySQL 表** | ① `SS_212` + `SS_204` 通道 ② 城堡战状态可写（`UnderWar`/`WarDate`/`StartCastleWarTick`）③ 城门 actor 可操作（`MainDoorControl(true)`=关）④ 全服广播面（`SendBroadCastMsg` → 100）⑤ 接收端 212 空实现（**不重载城堡**） |
-| ⑤ | `ChangeSabukLord` | `ChangeSabukLordCommand.cs:11` / `:15-51`：**`:23` `bool boFlag = @params.Length > 2 && bool.Parse(@params[2]);`**、`:29` `CastleMgr.Find`、`:35` `FindGuild`、`:39` `castle.GetCastle(guild)`、**`:42` `SS_211`**（仅 `boFlag`）、`:44` 绿字 | `SM_SYSMESSAGE(100)`：`X 所属行会已经更改为 Y`（成功）/ `行会 Y还没建立!!!` / 城堡不存在红字 | `GetCastle` 改写城堡 `OwnGuild`（`UserCastle.cs:539/644`）⇒ `Castle/<n>/SabukW.txt` 的 `[Setup] OwnGuild`（随 `Save()`） | ① `SS_211` 通道 ② 城堡归属可写 ③ 接收端 211：oracle 是 **throw**，单区不可达 ⇒ G11 必须保证单区不触发该分支（或 1:1 保留 throw 且不加调用者） |
+| ⑤ | `ChangeSabukLord` | `ChangeSabukLordCommand.cs:11` / `:15-51`：**`:23` `bool boFlag = @params.Length > 2 && bool.Parse(@params[2]);`**、`:29` `IUserCastle castle = CastleMgr.Find(...)`、`:30-33` 城堡不存在红字、`:35` `IGuild guild = FindGuild(...)`、`:46-49` 行会不存在红字、**`:39` `castle.GetCastle(guild)` → `IUserCastle.GetCastle(IGuild)`（`IUserCastle.cs:130`）→ `UserCastle.cs:644-647` 的 `throw new NotImplementedException()`（:646，**T-38**，`whitelist.md:326`）**、`:42` `SS_211`（仅 `boFlag`，**永不执行**）、`:44` 绿字（**永不执行**） | **仅无效名时**一条 `SM_SYSMESSAGE(100)` 红字（`:30-33` 城堡不存在 / `:46-49` 行会还没建立 / `:24-28` 缺参 Help）；**有效城堡 + 有效行会 ⇒ 零帧**（`:39` 抛、`PlayObject.Chat.cs:402` 的 catch 吞） | **无**：`:39` 在 `GetCastle` 就抛 ⇒ `OwnGuild` **不被改写**、`Castle/<n>/SabukW.txt` 不变；`:42`/`:44` 永远到不了 | **不依赖 SS_211、不依赖城堡归属可写**（两者在 1:1 下永不可达）。G11 只需保证：Rust 侧**照抄 T-38 的桩**（`GetCastle(IGuild)` 不得被实现成"改归属"），且单区不引入 211 的调用者 |
 | ⑥ | `ShowSbkGold` | `ShowSbkGoldCommand.cs:11` / `:15-68`：`:24` `?` 前缀拒参、`:31-37` 无城堡名 ⇒ `CastleMgr.GetCastleGoldInfo` 逐条绿字、`:45-51` 参数校验（`=-+`、`0..1e8`）、`:52-63` 改 `castle.TotalGold`、`:64-67` 负数归零 | `SM_SYSMESSAGE(100)`：`CommandHelp`/`参数错误`/城堡不存在；成功 = **仅绿字列表**，无其它帧 | `TotalGold` 只在内存，随 `UserCastle.Save()` → `SaveConfigFile` 落 `SabukW.txt`；**无 MySQL 表、无 SS 消息** | **不发任何 SS**：唯一依赖是城堡可写态（`TotalGold` + `GetCastleGoldInfo`）与城堡周期保存 —— G11 只需保证"城堡不是只读快照" |
 
 > **没有一条写 MySQL**：这 6 条的"落库面"全是 **Envir 文件**（`GuildBase/*` 与 `Castle/<n>/SabukW.txt`）。父卡/卡面写"落库"时按文件口径理解，别去找 `guild` 表。
@@ -94,8 +94,13 @@ bool boFlag = @params.Length > 2 && bool.Parse(@params[2]);
 ```
 
 - **`@params.Length > 2` 是短路守卫** ⇒ 参数不足 3 个时**不会** `IndexOutOfRange`，也**不会**进 `bool.Parse`，`boFlag=false`。
-- **2 参时命令照常继续执行**：`castle.GetCastle(guild)`（`:39`）**会改写城堡归属**（`OwnGuild`），`:44` 照发绿字；
-  唯一差别是 `:42` 的 `if (boFlag)` 不成立 ⇒ **不发 `SS_211`**。与 §3 row⑤ 同一口径——**不要**写成「零状态变化」。
+- **但 2 参与 3 参的执行结果相同**：`castle` 是 `IUserCastle`（`:29`）、`guild` 是 `IGuild`（`:35`，`GuildManager.FindGuild` 返回 `IGuild`，`GuildManager.cs:66`）
+  ⇒ `:39` 的 `castle.GetCastle(guild)` 绑定到 **`IUserCastle.GetCastle(IGuild)`**（`IUserCastle.cs:130`），
+  其实现 `UserCastle.GetCastle(IGuild)`（`UserCastle.cs:644-647`）是 **`throw new NotImplementedException()`（`:646`，
+  T-38 的 10 个桩之一，`whitelist.md:326` 点名 646）**；真正写 `OwnGuild` 的 `GetCastle(GuildInfo)`（`:539-556`）
+  经接口 + `IGuild` **到不了**（C# 静态重载决议，无隐式转换）。
+- ⇒ **有效城堡 + 有效行会 ⇒ 命令在 `:39` 就抛、被 `PlayObject.Chat.cs:402` 的 `catch` 吞 ⇒ 零帧、零状态变化**；
+  `:42` 的 `SS_211` 与 `:44` 的绿字**永远到不了**（`OwnGuild` **不会**被改写）。只有城堡/行会名无效时才会**先**发红字 `100`（`:30-33` / `:46-49`，早于 `:39`）。
 - **`FormatException` 只在一种情况发生**：命令与参数先经 `ExtractCommandAndParameters`（`CommandSystem.cs:228-252`）——
   `:230` `line = line.Trim()`、`:249` `parameters = line[(line.IndexOf(' ') + 1)..].Trim()`——之后 `GameCommand.Handle`
   才 `parameters.Split(' ')`（`GameCommand.cs:46`）。
@@ -103,12 +108,15 @@ bool boFlag = @params.Length > 2 && bool.Parse(@params[2]);
   **第三段非空且不是 `true`/`false`**（如 `Gmexecute ChangeSabukLord 沙巴克 行会 abc` 的 `abc`）⇒ `bool.Parse` 抛 `FormatException`；
   **第三段缺失或为空** ⇒ `Length > 2` 为假，短路，不抛。
 - 异常被**外层吞掉**：`PlayObject.ProcessUserLineMsg`（`src/M2Server/Player/PlayObject.Chat.cs:229`）里
-  `CommandSystem.Execute(this, sData)`（`:368`）位于 `try`（`:233`）之内，`catch (Exception e)`（`:402`）只记日志；
+  `CommandSystem.Execute(this, sData)`（`:368`）位于 `try`（`:234`）之内，`catch (Exception e)`（`:402`）只记日志；
   `ActionOfGmExecute` 本身只有 `try/finally`（`ExecutionProcessingSys.cs:4939-4949`，**无 catch**）。
-  ⇒ 只有在真正抛 `FormatException` 时才是「不产任何帧、不改状态」。
-- **照抄口径**：① 保留 `Length > 2 &&` 短路（2 参：不抛、`boFlag=false`，但**仍改城堡归属**、不发 `SS_211`）；
-  ② 第三段非空且非 `true`/`false` ⇒ 抛 `FormatException` 并被 GM 入口吞（零帧、零状态变化）；
-  ③ 不要"顺手修成 `TryParse`"。
+  ⇒ **两条零帧路径**：① 第三段非空非 bool 的 `FormatException`（`:23` 在任何名字检查之前，所以与名字是否有效无关）；
+  ② **有效城堡 + 有效行会**的 `NotImplementedException`（`:39`，T-38）——两者都被同一个 `catch` 吞。
+- **照抄口径（正确的 1:1 一句话）**：**无效名 ⇒ 对应红字 `100`；有效城堡+行会 ⇒ 静默 no-op（T-38 抛被吞）；
+  任何情况都不发 `SS_211`、不发绿字、不改 `OwnGuild`。**
+  ① 保留 `Length > 2 &&` 短路（2 参：不抛、`boFlag=false`，但执行结果与 3 参相同）；
+  ② 第三段非空且非 `true`/`false` ⇒ `FormatException` 被吞（零帧）；
+  ③ `GetCastle(IGuild)` **必须照抄成桩/抛**（T-38），不许实现成改归属；④ 不要"顺手修成 `TryParse`"或"补上 GetCastle"。
 
 ### 4.2 `GuildRecall` 的 `(short)dwValue` 强转
 
@@ -133,8 +141,8 @@ else PlayerActor.GroupRcallTime = 0;                                            
 ## 6. G11 就绪后的验收清单（给下一个 worker）
 
 1. 逐条对拍：权限不足 ⇒ 恰好一条 `100`（`权限不够!!!`）且零其它帧（6 条一致）。
-2. 权限满足：按 §3 的帧序断言（③ 的 750→42→100；④ 的 100 广播 + `21` 关门；⑤ 的 100 绿字）。
-3. **server-group 可观测**：① ② ③ ④ ⑤ 必须各自产生**一次**对应码（205/206/207/212+204/211）的发送记录；⑥ **零次**。
+2. 权限满足：按 §3 的帧序断言（③ 的 750→42→100；④ 的 100 广播 + `21` 关门；**⑤ 有效名 ⇒ 零帧，仅无效名 ⇒ 一条红字 100**）。
+3. **server-group 可观测**：① ② ③ ④ 必须各自产生**一次**对应码（205/206/207/212+204）的发送记录；**⑤ 与 ⑥ 必须为零次**（⑤ 的 `SS_211` 在 1:1 口径下永不可达，见 §3 row⑤）。
    建议落点：现有 `GuildServerEvent`（`guild_cmd.rs`）扩一个 `SendServerGroup` 变体，或单独的 `server_group` 观测 channel。
 4. 落盘断言：行会 `GuildBase/GuildList.txt` 与 `Castle/<n>/SabukW.txt` 的**行级 diff**（主服才写；分服分支必须"拒绝执行"）。
 5. 两个怪癖的牙：⑤ 第三段写 `abc` ⇒ **零帧、零状态变化、不 panic**（异常被吞）；④ `MainDoorControl(true)` 必须是**关**门方向。
@@ -143,6 +151,6 @@ else PlayerActor.GroupRcallTime = 0;                                            
 ## 7. 未核 / 留给 G11 的问题
 
 - `SS_*` 的实际线上编解码（`PlanesServer.DecodeSocStr` 的 `(...)` 包裹与 `\` 分隔，`PlanesServer.cs:63-90`）在本仓 Rust 侧**没有对应实现** —— G11 若只做"发送可观测"，需要明确是否也要复刻接收端解析。
-- **本部署是否启动 `PlanesService`**：`PlanesService.Start()`（`src/Modules/PlanesSystem/PlanesService.cs:7-19`）在 `ServerIndex==0` 时调
+- **本部署是否启动 `PlanesService`**：`PlanesService.Start()`（`src/Modules/PlanesSystem/PlanesService.cs:8-20`）在 `ServerIndex==0` 时调
   `PlanesServer.Instance.StartPlanesServer()`，否则初始化并启动 `PlanesClient`。本卡**未核**它的调用点是否在服务启动路径上；
   若本部署不启动，则"发送"等价于**写到无人接收的 socket**，这一点必须写进 G11 的验收口径。
