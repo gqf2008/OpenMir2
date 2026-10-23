@@ -171,6 +171,8 @@ python tools/probe/mir2_probe.py \
 
 > `upgrade_retrieve` 是**唯一一条武器升级 NPC 链**（R2）：`placement` 到盟重省 map 3 (320,328) → `click_npc` 沙巴克铁匠 → `@upgrade`/`@confirmupgrade`/`@upgradenow` 提交 → `sleep 660000` 过取回时效门 → `@main`/`@getbackupgnow` 取回（`Merchant.cs:529-590 / 594-759`）。四个容易踩的点：① **不能站铁匠邻格**——`MonGen.txt:51/58/59` 在 (325,311)/(336,321)/(339,313) 刷了 ArcherGuard（`GuardUnit.IsProperTarget` 对普通玩家 return true），11 分钟等待里必被射杀；② 取回要过 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），Permission 恒 0 ⇒ 只能等，**窗口 profile 必须把 `timeout_ms` 抬到 ≥ 720000**（`card_window.py:1786` 的进程超时 = `timeout_ms/1000+120` 秒）；③ 提交/取回的成功硬门是**唯一 ident** `709`/`200`（`wait_idents`），`643` 只作成败判别（否则 643 会把失败分支蒙混过去）；④ 本场景要求背包 < 46 件（部署脚本没有 `~@getbackupgnow_bagfull` 标签 ⇒ 包满支零帧，等不到）。逐条 oracle 出处、夹具前置与登记缺口见 `docs/upgrade-retrieve-scenario-20261023.md`。
 
+> **R6 `castle_zone` 没有场景文件（2026-10-23 可达性登记）**：城堡战/城堡区在部署里**单会话探针不可达**——`@requestcastlewarnow` 的申请链命中 `UserCastle.AddAttackerInfo(IGuild)` 的 `throw new NotImplementedException()`（`UserCastle.cs:670-673`，白名单 **T-38**）；GM 的 `@ForcedWallconquestWar` 卡在 `PermissionMin=10`（部署是 Release）；`UnderWar` 只在墙钟 `StartCastlewarTime=20` 那一小时开（`Server.conf:380`）且 `Castle/0/AttackSabukWall.txt` 为空 ⇒ `766 SM_AREASTATE` 的 bit4（`RefUserState` 的 `|=4`，`PlayObject.Base.cs:281-284`）永远点不亮。依赖它的 4 张 R 卡（castle-guard-target / castle-war-area-impl / castle-merchant-fixedhide-hit / castle-merchant-disappear-downlink）窗口**当前不可跑**；可达性表、`766` 置位链与夹具规格见 `docs/castle-zone-unreachable-20261023.md`。
+
 ## 驱动器的自动握手（对拍不要关）
 
 照 `src/BotSrv/Player/RobotPlayer.Operate.cs`：
