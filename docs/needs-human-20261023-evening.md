@@ -8,7 +8,7 @@
 
 - **欠账规模**：**173 张** R 卡欠真机窗口（口径已订正并由 reviewer 复算：114 里含 70 closed + 23 tier=L，真欠账 21，另 149 措辞不在 grep 里 + 3 快照后合入）。分批见 `docs/window-batch-plan-20261023.md`：第 1 批 **52 可闭环**、第 2 批 4、第 3 批 81、不可协议对拍 35。
 - **本循环禁止起栈**（`硬约束：不起服务端/客户端/代理、不占端口`）⇒ 窗口只能由**有栈权限的执行者**跑。
-- **开跑前三件已就绪/在办**：① 账本 `--post-comment` **已解禁**（compare 诊断值有逐值断言）；② 参数发现已接线（`move_walk` 解锁、`eat_item` **仍阻塞**于 `openmir2-discovery-bagitems-201`）；③ **角色预置位**工具在办（`openmir2-window-character-placement`）——**没有它，多数 NPC 点击窗口会以超时静默失败**。
+- **开跑前三件已就绪/在办**：① 账本 `--post-comment` **已解禁**（compare 诊断值有逐值断言）；② 参数发现已接线（`move_walk` 解锁、`eat_item` **仍阻塞**——**2026-10-24 订正**：原写「阻塞于 `openmir2-discovery-bagitems-201`」，该卡已合入 master `f79f2d2a`（只解规则层）；现阻塞点：夹具工具已合入 `bb4317a01`（卡 `openmir2-window-inventory-fixture`，不 closed：`window_required=true`，真库读写回未跑），但 master 的 `eat_item` 场景**尚未声明** `inventory` ⇒ 仍不可跑）；③ **角色预置位**工具在办（`openmir2-window-character-placement`）——**没有它，多数 NPC 点击窗口会以超时静默失败**。
 - **需要人做**：给一次独占栈窗口，并先跑**两道真窗口门禁**（`openmir2-window-gate-two-runs`：`pickup_item` 验两次登录、`npc_click` 验 actor id 跨会话稳定）。
 
 ## 2. 35 张「不可协议对拍」需要裁决

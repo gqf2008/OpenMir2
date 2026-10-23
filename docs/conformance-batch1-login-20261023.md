@@ -396,7 +396,8 @@ powershell -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/conforma
 python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/runs/w24-csharp-dice-ya52fix   --rust   E:/tmp/conformance/runs/w24-rust-dice-ya52fix   --allow-unclassified 643,767 --out /e/tmp/conformance/runs/w24-dice-ya52fix-report.json
 ```
 
-> **规则表尚未登记 `643`/`767`**（属 `conformance-rules` 车道）：不加 `--allow-unclassified 643,767` 时比较器判
+> **（2026-10-24 订正：`643`/`767` 已随 master `776e72e7c` 登记进 `rules.json`，下面这句「尚未登记」已过期；命令里的 `--allow-unclassified 643,767` 保留仍可复跑，结论不变。）**
+> 原文：**规则表尚未登记 `643`/`767`**（属 `conformance-rules` 车道）：不加 `--allow-unclassified 643,767` 时比较器判
 > `UNDECIDABLE(exit 2)`；加了之后结论如下（`FAIL(exit 1)`，唯一差即下面的 `52 mp`）。
 
 `compare_runs.py`：`frames 33/33`、**DIFFS 1**——

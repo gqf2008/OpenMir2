@@ -119,7 +119,7 @@ python -I tools/goal/goal_gate.py --json
    `whitelist_t`、bucket 少算 1（44→34 而不是 35）。已把引文里的跨卡引用改成不带前缀的写法，复算回到 44−9=35。
 2. **`T-*` 行是「窗口证据未采」的登记，不是行为豁免**：每行都写「真机窗口待采 + 场景现状」，
    没有把 R 卡的窗口项写成「无害」。
-3. **`T-223..T-226` 在别的 worktree 的 journal 里已被占用**（本仓 `T-RESERVATIONS.md` 尚未合并那些行）；
+3. **`T-223..T-226` 在别的 worktree 的 journal 里已被占用**（本仓 `T-RESERVATIONS.md` 尚未合并那些行；**2026-10-24 订正**：`T-225`/`T-226` 现已在 master 的 `T-RESERVATIONS.md`，`T-223`/`T-224` 仍不在——判不了，缺 journal 原文）；
    `next_t.py` 通过共享 journal + 远端新鲜度检查正确跳到 **T-227**，未与之撞号。
 4. 本批未改任何 `approved_by`、未动任何卡片 status（只对 1 张无窗口判据卡发了 comment）。
 5. 后续批次仍是同一张卡（`openmir2-r-window-registry-batch`）：剩余 B2 约 26 张 + 三者皆无 3 张，

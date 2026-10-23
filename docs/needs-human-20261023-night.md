@@ -49,6 +49,8 @@
 
 ## 5. 两条 Rust 侧接线缺口（不是 owner 的事，列在此以便排期）
 
+> **2026-10-24 现态（卡 `openmir2-docs-state-drift-sweep`）**：本节**动作侧**已被取代——643 的 `@upgradenow`/`@getbackupgnow` 命令动作已接线（`openmir2-upgrade-npc`，`lib.rs:5809` 起 Lane A；`upgrade_retrieve` dry-run rc=0），642 已接（master `8dcb8c8ca`，卡 `openmir2-attack-weapon-wear-642`，T-266）。**但 643 的结果说词仍缺**：`GotoLable(~@upgradenow_ok/_fail/_ing)` 仍只 `glog!`（`lib.rs:5919-5924` / `:5960-5965`），T-95④/T-145④ 仍登记 ⇒ **不得读成「643 已经没问题」**。历史正文保留不重写。
+
 - `@upgradenow` / `@getbackupgnow` 只 `glog` 不执行（`lib.rs:5849-5855` / `5890-5895`）
   ⇒ `upgrade_retrieve` 场景的窗口在修复前会「Rust 缺 643」。 〔2026-10-24 订正：**只订正「动作」半边**——`@upgradenow`/`@getbackupgnow` 的命令动作已接线（`lib.rs:5809` 起 Lane A；今日 `card_window --dry-run --scenario upgrade_retrieve.json` rc=0）；**但升级/取回的结果说词 `GotoLable(~@upgradenow_ok/_fail/_ing)` 仍只登记不执行**（`mir2-rs/bins/game-svr/src/lib.rs:5919-5924` / `:5960-5965` 仅 `glog!`）⇒ **643 仍会缺**（见 `docs/upgrade-retrieve-scenario-20261023.md:32-35`、whitelist T-145④/T-95④）。**结论：动作缺口已关；结果说词 643 仍缺。**〕
 - `DoDamageWeapon` / `SM_DURACHANGE(642)` 未接（`combat.rs:1151-1153` 抽了 `Random(5)` 但 `:1266` 丢弃）
@@ -71,7 +73,7 @@
   B 片由 `openmir2-gm-batch-5b-cross-server` 承接（blocked-by G11）、C 片部署 0 命中登记不实现。
 
 **你开窗时的执行依据**换成了 `docs/window-batch-plan-20261023.md`（卡 `openmir2-window-batch-plan-refresh`
-在更新它）：它会给出「现在就能跑」与「现在跑也没用」两份清单——**后者比前者更重要**，
+更新它；**2026-10-24 订正**：该刷新已合入 master `ccf74b2b4`）：它会给出「现在就能跑」与「现在跑也没用」两份清单——**后者比前者更重要**，
 因为 BLOCKED/不可达的场景即使跑绿也不能当证据（`combat_strike` R3 13 张、`castle_zone` 4 张、
 `spell_cast` R5 8 张（已解封，但 Rust 魔法未接仍不可跑）、`equip_struck_save` 1 张、`upgrade_retrieve` 4 张）。
 

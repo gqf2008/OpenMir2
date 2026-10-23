@@ -156,7 +156,7 @@
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
-| 1 | `openmir2-delmagic-addmagic-chain` | in-progress | 登录后 characters_magic 行消失/新增与 212/210 真机字节与序；会话内戴上 115 即发 210 / 打碎治愈戒指即发 212（共 3 项） | bag_equip | SM_BAGITEMS(201) 发现规则**已落地**（`openmir2-discovery-bagitems-201`，构造级 `check-all` rc=0）；**剩余前置** = 非空背包的录制/夹具（背包预置尚未接进 `card_window.py`） |
+| 1 | `openmir2-delmagic-addmagic-chain` | in-progress | 登录后 characters_magic 行消失/新增与 212/210 真机字节与序；会话内戴上 115 即发 210 / 打碎治愈戒指即发 212（共 3 项） | bag_equip | SM_BAGITEMS(201) 发现规则**已落地**（`openmir2-discovery-bagitems-201`，构造级 `check-all` rc=0）；**剩余前置** = 非空背包的录制/夹具（**2026-10-24 订正**：背包预置已随 `bb4317a01` 接进 `card_window.py`；剩的是本场景未写 `inventory` 声明） |
 | 2 | `openmir2-unbindlist-consumer` | in-progress | 真机客户端：吃一个 StdMode31/AniCount0 捆装包 ⇒ 客户端依次收到 6 条 SM_ADDITEM(200)（Recog=…；断线存档：hum_items（等价存档）含解包出的 6 件（MakeIndex 逐件递增、Dura=DuraMax=tpl.DuraMax、…（共 3 项） | eat_item | 规则同 `bag_equip`（已落地，构造级）；另需 StdMode31/AniCount0 捆装包夹具 |
 
 ### 3 · 第 3 批 · 需新帧 / 新场景 / 新夹具（含前置未清的夹具卡）（81 张）
@@ -174,7 +174,7 @@
 | 9 | `openmir2-m3-selloff-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑩-1/⑩-2 落地 + 独占窗口） | run_selloff_pair.ps1（前置未清） | 等 ⑩-1/⑩-2 |
 | 10 | `openmir2-m3-shop-scenario-authority` | in-progress | 剩余 DoD = 真机**：run_npc_shop_pair.ps1 在独占窗口跑两侧同序列 diff=0（等 ⑤-4 第②片仓库存档面 + ⑤-5 / NPC 入视野），离线判据本体已完… | run_npc_shop_pair.ps1（前置未清） | 等 ⑤-4 第②片 + ⑤-5/NPC 入视野 |
 | 11 | `openmir2-m3-castle-gold-tax` | in-progress | 剩余 DoD = ① 真机两侧「同一 10min SaveTick 时间门 → TodayIncome/TotalGold 落盘」diff=0（依赖 ⑧-1 C# GetTickCount… | 新：10min Save 文件 + 时钟注入 | 前置 ⑧-1 C# GetTickCount 注入 + 商人税 4 调用点接线 |
-| 12 | `openmir2-m3-monster-ai-tick` | needs-review | 主动索敌（新卡，W0 前置）+ Animal RNG + 守卫静止 + 真机对拍。未 merge、未自签 review | 新：主动索敌观察（W0 前置） | 未合入当前 head（needs-review）；W0 前置 + Animal RNG |
+| 12 | `openmir2-m3-monster-ai-tick` | in-progress | 主动索敌（新卡，W0 前置）+ Animal RNG + 守卫静止 + 真机对拍。**2026-10-24 订正：已合入 master（最新 merge `711bdb149`，tier=R 不 closed）；原文「needs-review / 未 merge」已过期** | 新：主动索敌观察（W0 前置） | 已合（`711bdb149`）；W0 前置 + Animal RNG |
 | 13 | `openmir2-outbound-encoders-red-batch` | in-progress | 时序/RNG 面真机对拍（W0 窗或系统对拍窗）；帧序/时序真机对拍（654 的入队相对序必须真机定）；制药链的抽数流水（`Merchant.ClientMakeDrugItem` 的 Ra… | 新：R2 upgrade_retrieve | 制药链 Random 流水 + 帧相对序 + MYSTATUS 落库 |
 | 14 | `openmir2-maptrigger-monster-and-door` | in-progress | W-R1-a：pin 一张「怪物路线上的 route 格」真图，两侧同驱怪物走位 ⇒ 判据=两侧怪物坐标均停在走前格（无位移帧）；W-R1-b：pin 一张「门 + ±1 相邻 route… | 新：怪物走 route / 门格 | W-R1-a/b/c 三臂 |
 | 15 | `openmir2-buff-system` | in-progress | ① 三条怪癖的真机表现（`break` 跳 for(j) 的 SysMsg 与递减；递减节奏 50ms vs 1s 两读法——**设计件标为待窗口 A-R2 裁定**；怪物 buff 永不到… | 新：R5 spell_cast + DoT trace | 毒伤逐次 MIR2_RNG_LOG；buff 递减节奏待 A-R2 裁定 |
@@ -430,14 +430,14 @@ print("A", len(A), "A∩P", len(A & set(pop)), "A−P", len(A - set(pop)), "P−
 
 ## 7. 2026-10-24 刷新：哪些现在能跑、哪些跑了也没用（卡 `openmir2-window-batch-plan-refresh`）
 
-**快照戳**：`walgit/master = 38ffb0bfe`（2026-10-24）。本节所有「现算」数字都可用下面两条命令复现；引用别处数字的，均标注来源。
+**快照戳**：`walgit/master = 38ffb0bfe`（2026-10-24）。**状态漂移清扫（2026-10-24，卡 `openmir2-docs-state-drift-sweep`）**：本节的「在办 / 未合 / 未 merge」已按 master `2e3b8500a` 逐条复核（交付前 rebase 到 `bb4317a01`：其间新合入窗口判据审计与背包夹具 `openmir2-window-inventory-fixture`，相关行已同步订正），过期处就地订正并保留原说法（见 `docs/docs-state-drift-sweep-20261024.md`）。本节所有「现算」数字都可用下面两条命令复现；引用别处数字的，均标注来源。
 
 **返工说明**：本版按 review `06be4d03`（request_changes）订正 6 项：`equip_struck_save` 归回「跑也没用」（A-1）、inventory 夹具与 `preflight.py` 标为「在办（未合）」（A-2/A-3）、把 `rules.json` 的比较器语义与 Rust 生产侧出帧拆开（A-4）、`upgrade_retrieve` 的「能跑」理由改追 T-95 接缝（A-4）、补升级夹具三项前置（A-5）、换行噪声不再扩大（A-6，见 §7.6）。
 
 ```sh
 python -I tools/goal/goal_gate.py --json
-# 注意：tools/conformance/preflight.py 尚未合入 master（见 §7.1「在办」行），本树无此文件；
-# 合并前开窗自查按 §7.5 的手工清单执行。
+# 注意（2026-10-24 订正）：原文「tools/conformance/preflight.py 尚未合入 master」已过期——preflight 已随 master 2e3b8500a 合入；开窗前可直接跑：python -I tools/conformance/preflight.py --profile alt
+# 下面 §7.5 的手工清单保留，作为 preflight 失败时的回退。
 ```
 
 ### 7.1 三类事实（今晚合入，改变批次可行性）
@@ -447,15 +447,15 @@ python -I tools/goal/goal_gate.py --json
 | **新规则已合（只影响比较器）** | 7 条被 `recog` 掩码吞掉的规则、`202/203/642/709` 补登记、`SM_STRUCK(31)` 窄掩码 | `b42f20a8` / `6c2da8bf` / `57302d3df`；`tools/conformance/rules.json` 现含 ident 31/201/202/203/642/709（本条为**实测算**：脚本 enumerate 42 条规则） |
 | **新场景已合** | `upgrade_retrieve`、`equip_struck_save`、`spell_cast`、`combat_strike`、`combat_hit`（改 blocked） | `tools/probe/scenarios/` 现 **20** 个场景（实测算）；其中 **2** 个声明 `blocked`（`combat_hit` / `combat_strike`；`spell_cast` 已由卡 `openmir2-spell-cast-unblock` 解封，见 7.3） |
 | **新夹具/工具已合** | `characters_magic` 预置、BLOCKED 硬门、`-WhatIf` sha/构建类型 | `512d9ecf5`（magic）、`8dac04eb0`（blocked 门）、`821492abf`（whatif）；本行只说明夹具代码已合，**场景层是否解锁见 7.3 `spell_cast` 行** |
-| **在办（未合，不得计入「现在就能跑」）** | 背包 `inventory` 预置；`tools/conformance/preflight.py` | inventory：卡 `openmir2-window-inventory-fixture`（分支 `card/openmir2-window-inventory-fixture`，head `515eb2804`，**非 master 祖先**；被审 head 的 `tools/conformance/card_window.py` 无 inventory 支持，grep 0 命中）。preflight：卡 `openmir2-window-preflight-script`（分支 `card/openmir2-window-preflight-script`，head `deea8d3d0`，**非 master 祖先**；被审 head 内 `git ls-tree` 0 命中） |
+| **2026-10-24 订正：两项均已合入（原文「在办（未合）」已过期）** | 背包 `inventory` 预置（`bb4317a01`）；`preflight.py`（`2e3b8500a`） | inventory：卡 `openmir2-window-inventory-fixture` 已合入 master `bb4317a01`（merge_result `66be47452`；卡**不 closed**——reviewer-6 记 `window_required=true`，真库写入/读回未跑）；`tools/conformance/card_window.py` 已支持 `inventory`（grep 80 命中），但 `bag_equip`/`eat_item` 场景**尚未声明** `inventory`。preflight：**已合入 master `2e3b8500a`**（卡 `openmir2-window-preflight-script` closed，approve reviewer-5 `f13a28be`；2026-10-24 订正——原文「head `deea8d3d0` 非 master 祖先、`git ls-tree` 0 命中」已过期） |
 
 > **概念边界（review A-4）**：`tools/conformance/rules.json` 是**比较器掩码规则**——它只决定 `compare_runs` 能否/如何判某个 ident 的帧，**不等于 Rust 生产侧会出这条帧**。一条场景判定「能跑」必须有两条独立依据：① 场景不在自身 `blocked` 列表；② 判据涉及的关键帧在 Rust 生产侧有实现点（或场景 `required` 可发现）。`rules.json` 里有 ident，只满足「比较器能判」，不满足 ②。
 
 ### 7.2 旧批次（§3.1P / 1F / 2A / 2B / 3 / 4）怎么变
 
-- **2A（需新发现规则）**：规则已合只解锁**比较器**，不解锁 Rust 出帧。依赖 `202/203/709` 且 Rust 实现点已接的条目（如 `upgrade_retrieve`）可移入「现在能跑」；依赖 `642` 的 `equip_struck_save` **仍不可跑**——Rust 攻击方武器磨损未接（`crates/world/src/combat.rs:1149` 自述「本骨架无武器耐久面」；whitelist T-199 / T-247 明写 642 未接），场景末步 `wait_idents [642]` 是硬门。
-- **2B（需 `SM_BAGITEMS(201)` 规则）**：规则已在 `rules.json`（ident 201），但**背包 `inventory` 夹具未合**（`openmir2-window-inventory-fixture`，head `515eb2804`）⇒ `bag_equip` / `eat_item` 仍不可跑，直到该卡合并并在 `card_window.py` 里能声明 `inventory`。
-- **3（需新帧/新场景/新夹具）**：`upgrade_retrieve` 可跑，理由是 **Rust 升级接缝已接**（卡 `openmir2-upgrade-npc`，T-95）：`bins/game-svr/src/shop.rs:1346 upgrade_request_for` → `bins/game-svr/src/lib.rs:5741` → `crates/world/src/merchant.rs:1348 merchant_upgrade_wapon_begin`；**不是**因为 `rules.json` 有 202/203/709。`equip_struck_save` 仍不可跑（缺 642，见 7.3）；`spell_cast` **已解封**（卡 `openmir2-spell-cast-unblock` 删去 `blocked`；夹具改由 profile `magic` 段声明，dry-run 取证须带 `--profile`），但 Rust 侧魔法落点 + 第二观察者仍未接 ⇒ 真机仍跑不了（见 7.3）。
+- **2A（需新发现规则）**：规则已合只解锁**比较器**，不解锁 Rust 出帧。依赖 `202/203/709` 且 Rust 实现点已接的条目（如 `upgrade_retrieve`）可移入「现在能跑」；**依赖 `642` 的 `equip_struck_save` 已接线**（2026-10-24 订正：卡 `openmir2-attack-weapon-wear-642` 合入 master `8dcb8c8ca`，T-266；`card_window --dry-run --scenario equip_struck_save.json` rc=0）⇒ 已移入 §7.4。
+- **2B（需 `SM_BAGITEMS(201)` 规则）**：规则已在 `rules.json`（ident 201），背包 `inventory` 夹具**已合入 `bb4317a01`**（工具侧 `card_window.py` 支持 `inventory` 声明）——**2026-10-24 订正：原文写「夹具未合」已过期**；但 master 的 `bag_equip`/`eat_item` 场景**尚未写 `inventory` 声明**，且夹具卡 acceptance ④（真库写入·读回）未跑、保持 `window_required=true` ⇒ 二者仍不可跑，直到场景侧补声明（现无承接卡，建议开卡或在场景卡里补）。
+- **3（需新帧/新场景/新夹具）**：`upgrade_retrieve` 可跑，理由是 **Rust 升级接缝已接**（卡 `openmir2-upgrade-npc`，T-95）：`bins/game-svr/src/shop.rs:1346 upgrade_request_for` → `bins/game-svr/src/lib.rs:5741` → `crates/world/src/merchant.rs:1348 merchant_upgrade_wapon_begin`；**不是**因为 `rules.json` 有 202/203/709。`equip_struck_save` **已随 `8dcb8c8ca` 接线（T-266）并移入 §7.4「现在就能跑」**（2026-10-24 订正——原句「仍不可跑（缺 642，见 7.3）」已由该 commit 变假；真机窗口仍未授权）；`spell_cast` **已解封**（卡 `openmir2-spell-cast-unblock` 删去 `blocked`；夹具改由 profile `magic` 段声明，dry-run 取证须带 `--profile`），但 Rust 侧魔法落点 + 第二观察者仍未接 ⇒ 真机仍跑不了（见 7.3）。
 - **1P/1F**：不受影响；但注意 `combat_hit` 已从「可跑」移入「跑也没用」（7.3）。
 - **4（不可协议对拍 35 张）**：本卡不改其口径；其中多会话收件人集合类仍等 `openmir2-multi-session-probe` slice-2。
 
@@ -466,22 +466,21 @@ python -I tools/goal/goal_gate.py --json
 | `combat_hit` | **`blocked`**（本卡 `f56a391db` 合入）：攻击者收不到自己的 `SM_HIT(14)` | 引用 5 行 T（`T-242/249/251/253/255`，实测算） | 同屏第二会话或同格怪物夹具 |
 | `combat_strike` | **`blocked`**（`2a69cd6e0`）：无满足条件的配装，且 DSL 无 recog 过滤 | 引用 **13** 张（源：`docs/window-debt-reclass-20261023.md` §R3，经 `docs/goal-snapshot-late-20261023.md:245` 转引） | `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装，或 `wait_for` 的 recog 过滤 |
 | `spell_cast` | **已解封（非 `blocked`）**：卡 `openmir2-spell-cast-unblock` 删去 `blocked` | 引用 **8** 张（源：卡 `openmir2-scenario-spell-cast` issue 的 R5 口径） | **Rust 侧魔法落点 + 第二观察者未接 ⇒ 真机仍跑不了**；`characters_magic` 夹具已在 `512d9ecf5`、改由 profile `magic` 段声明（dry-run 取证须带 `--profile`） |
-| `equip_struck_save` | **不可跑（非 `blocked` 字段，是硬门必超时）** | 引用 **1** 行（`T-247`）；相邻登记 `T-199` | **Rust 接 642 攻击方武器磨损**：`AttackSuccess` 的 `DoDamageWeapon` 与 `RM_DURACHANGE(10125)` 未接（T-199 / T-142 末段）；`crates/world/src/combat.rs:1149` 自述「本骨架无武器耐久面」；场景自身 description 写「现在跑两侧会在『Rust 缺 642』上红」，末步 `wait_idents [642]` 是硬门 ⇒ 必超时。另需商店 NPC「卫家店」(map 0103, 19,18) 摆位与铁器店 `placement` |
 | `castle_zone`（R6） | **不可达登记，仓库内无该场景文件**（实测算：`tools/probe/scenarios/` 无 castle_zone） | 引用 **4** 张（源：`docs/goal-snapshot-late-20261023.md:246`、`docs/castle-zone-unreachable-20261023.md`） | 双行会 DB + 私有根 `AttackSabukWall.txt` + 20 点开战钟点 + 多会话探针 |
 
-> **不再在「跑也没用」里的只剩 `upgrade_retrieve`**：理由**不是** `rules.json` 补了 202/203/709，而是 Rust 升级接缝已接（T-95，`openmir2-upgrade-npc`，见 7.2）。旧「开窗必 UNDECIDABLE」结论的过期，应记在「Rust 接缝落地」上（旧口径见 `docs/runbook-tool-consistency-audit-20261023.md` §3.1）。
-> `equip_struck_save` **没有**移出「跑也没用」；上一版把它列入「现在就能跑」是错误分类，本版已订正。
+> **不再在「跑也没用」里的现在有 `upgrade_retrieve` 与 `equip_struck_save`**：前者因 Rust 升级接缝已接（T-95，`openmir2-upgrade-npc`，见 7.2），后者因 642 攻击方武器磨损已接（`8dcb8c8ca`，T-266；2026-10-24 订正）。
+> **2026-10-24 订正**：`equip_struck_save` 已随 master `8dcb8c8ca`（T-266）接线并移入 §7.4「现在就能跑」；本条原句（「没有移出」）的结论作废，旧说法只作历史对照。
 
 ### 7.4 「现在就能跑」最小清单（现算）
 
-删掉 2 个 `blocked` 后，仓库内可用场景外壳 **18** 个（20 − 2）；castle_zone **不在**这 20 个文件里（它是不可达登记，见 7.3）。这 18 个里再扣除 **4 个依赖未合卡/未接线的场景**（`bag_equip` / `eat_item` 依赖未合的 inventory 夹具；`equip_struck_save` 依赖未接的 Rust 642；`spell_cast` 依赖未接的 Rust 魔法落点 + 第二观察者）⇒ **现在就能跑 = 14 个**。其中带 `required` 的场景由 `card_window` 先做 discovery（两侧各自推导、推不出即 fail-closed）。下表「引用 T 行」是 `whitelist.md` 里**点名该场景行数**的现算值：
-
+**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **10 行 / 15 个场景**。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中只剩 `combat_hit` / `combat_strike` 两个 `blocked`）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item`（场景未声明 `inventory`）与 `spell_cast`（缺 Rust 魔法落点 + 第二观察者）仍在 §7.4 末尾「仍不可跑」。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
 | 场景 | `required` | 引用 T 行（现算） | 跑前还需 |
 |---|---|---:|---|
 | `login_only` | — | 14 | 角色预置位（场景可声明 `placement`） |
 | `pickup_item` | `self_x/self_y`（SM_LOGON 推导） | 0（被 T-211 等泛引用） | 同格地物 |
 | `move_walk` | `move_x/move_y/move_xy`（`computed.pack`，本日已支持） | 0 | 空格目标格 |
 | `upgrade_retrieve` | `merchant_actor`（643 推导） | 0 | 商店 NPC 摆位（沙巴克铁匠 (332,317) 西南邻格 (320,328)）；**武器在手、金币 ≥ 10000、背包有黑铁矿**（三项缺一，第 9 步 `wait_idents 709` 必红；场景 note 原文） |
+| `equip_struck_save` | — | 1（`T-247`） | 商店 NPC「卫家店」摆位（map 0103, 19,18）+ 铁器店 `placement`；642 已接线（`8dcb8c8ca`，T-266），**真机窗口未授权**；破零支会发两条 642（`202 → 642(0) → 642(0)`） |
 | `dice_chain` / `dice_chain_auto` | — / — | 3 / 2 | 赌场 NPC |
 | `npc_click` / `npc_click_auto` | `npc_actor` | 1 / 0 | 场景 `placement` |
 | `king_dialog` / `merchant_dialog` / `npc_script_chain` | `king_actor` / `merchant_actor` / `npc_actor` | 0 / 1 / 1 | 场景 `placement` |
@@ -492,19 +491,18 @@ python -I tools/goal/goal_gate.py --json
 
 | 场景 | 引用 T 行（现算） | 依赖（卡 / 分支 / head） | 说明 |
 |---|---:|---|---|
-| `bag_equip` / `eat_item` | 3 / 1 | 卡 `openmir2-window-inventory-fixture`，分支 `card/openmir2-window-inventory-fixture`，head `515eb2804`（**未合**） | 背包 `inventory` 声明尚未进 master；`card_window.py` 当前无 inventory 支持（grep 0 命中）⇒ 场景无法按声明预置背包 |
-| `equip_struck_save` | 1（`T-247`） | Rust 642 攻击方武器磨损（T-199；T-142 末段） | 场景未 `blocked`，但末步 `wait_idents [642]` 必超时（见 7.3） |
+| `bag_equip` / `eat_item` | 3 / 1 | 卡 `openmir2-window-inventory-fixture` **已合入 `bb4317a01`**（卡不 closed：`window_required=true`，真库写入/读回未跑；2026-10-24 订正） | `card_window.py` 已支持 `inventory`，但**这两个场景尚未声明** ⇒ 仍按手工 DB 夹具跑，或先在场景里补 `inventory` |
 | `spell_cast` | 5 | Rust 侧魔法落点 + 第二观察者（见 7.3） | 场景已解封，但 Rust 生产侧缺魔法帧 ⇒ 真机必超时；夹具改由 profile `magic` 段声明（dry-run 取证须带 `--profile`） |
 
 ### 7.5 判据口径（写给开窗的 owner）
 
 - 「能跑」= 场景不被自身 `blocked` 拒 + `required` 可发现 + 两侧栈起得来 + **该场景依赖的夹具/工具已在 master**；依赖未合卡片的一律不算，哪怕场景文件已合。
-- 开窗前自查（`preflight.py` **尚未合入**，合并前用本节手工清单）：
+- 开窗前自查（`preflight.py` **已合入 master `2e3b8500a`**；2026-10-24 订正——原文写「尚未合入，用手工清单」已过期，手工清单仅作回退）：
   1. `python -I tools/goal/goal_gate.py --json` 看条件与 merge 卫生；
-  2. `git ls-tree -r --name-only HEAD` 确认所跑场景依赖的文件在树内（例如 `tools/conformance/preflight.py` 现在**应查不到**）；
+  2. `git ls-tree -r --name-only HEAD` 确认所跑场景依赖的文件在树内（`tools/conformance/preflight.py` 自 master `2e3b8500a` 起**应查得到**——2026-10-24 订正，原文写「应查不到」）；
   3. `python -I -c` 读 `tools/probe/scenarios/<scene>.json` 的 `blocked` 与 `placement`；
   4. 核对 §7.4 的「跑前还需」三项升级夹具（武器/金币/黑铁矿）与商店 NPC 摆位；
-  5. `preflight.py` 合并（`openmir2-window-preflight-script`，head `deea8d3d0`）后恢复命令 `python -I tools/conformance/preflight.py --profile alt`。
+  5. `preflight.py` **已合入**（`openmir2-window-preflight-script` → master `2e3b8500a`，2026-10-24 订正）：直接跑 `python -I tools/conformance/preflight.py --profile alt`（`--selftest` 13 项；`--allow-debug` 为显式降级）。
 - 107/178/173 这类历史量**不要再用**：本节所有动态量以 `goal_gate --json` 现取为准（快照戳：`38ffb0bfe`）。
 
 ### 7.6 返工对照（review `06be4d03`）

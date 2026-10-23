@@ -90,7 +90,7 @@ gm_registry.py build && gate && selftest                GREEN（14 teeth）
 
 | 编号 | 级别 | 处置 |
 |---|---|---|
-| F1 | important | T-212 窗口项改「当前不可复跑」+ 写明两处前置（前置卡未合入、AdminList 无 IP 段 ⇒ 无 perm=10 玩家）与放行条件（`mir2-rs/tests/parity/whitelist.md`，本节上条同源）。 |
+| F1 | important | T-212 窗口项改「当前不可复跑」+ 写明两处前置（前置卡未合入、AdminList 无 IP 段 ⇒ 无 perm=10 玩家）与放行条件（`mir2-rs/tests/parity/whitelist.md`，本节上条同源）。**2026-10-24 订正**：前置卡 `openmir2-gm-script-exec-seams` 已合入 master `7bbb5ea7`，whitelist T-212 行已由 Leader 改为「前置已齐、待排期」；「前置卡未合入」只描述返工时点。 |
 | F2 | minor | `gm_registry.py build` 重算源码指纹：`gm_registry.json` 只改 1 行 `sources.rust_table.sha256`（`769de74093cc…` → 当前 `gmcmd.rs` 实测值），`gate`/`selftest` 仍 GREEN（14 teeth）。 |
 | F3 | minor | 新增 `shutup_release_help_is_gbk_bytes_on_the_wire`：对 `命令格式: @取消禁言 人物名称` 做**线上 GBK 逐字节**断言（`crate::downlink::gbk`，28 字节；UTF-8 相同不能替代）。牙：改常量字 ⇒ 本用例红。 |
 

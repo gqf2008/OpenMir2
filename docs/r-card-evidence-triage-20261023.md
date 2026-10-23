@@ -4,7 +4,7 @@
 - worker：`openmir2-worker-45`（worktree `wt-worker-45`，分支 `card/r-triage`）
 - 基线：master `6345cdcbb`
 - 机判复算：`python -I -B tools/goal/goal_gate.py --repo <主检出> --json --skip-tests --skip-script`
-  （脚本取自 `card/goal-gate` @ `ce637865a`，`tools/goal/goal_gate.py` 尚未进 master）
+  （脚本取自 `card/goal-gate` @ `ce637865a`；**2026-10-24 订正**：`tools/goal/goal_gate.py` 已随 master `93226f278` 进仓，可直接用 master 版本）
 - 范围：Leader `30f4e298` 收窄后的 3 张。`openmir2-window-529-dualrun`、
   `openmir2-dualrun-triage-enterworld-frames` 已由复审判为假阳性，本卡不碰。
 

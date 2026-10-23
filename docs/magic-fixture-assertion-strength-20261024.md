@@ -112,5 +112,5 @@ FAIL MG-7 写入语句钉到表名+列清单：…（实际 "/* magic */ INSERT 
 ## 5. 边界与残留
 
 - 未改 `src/**`、`rules.json`、`scenarios/*.json`；未起栈/未连库/未占端口。
-- 未合并、未自签 review、未删 worktree。
+- 未合并、未自签 review、未删 worktree。**2026-10-24 订正**：本卡已合入 master `51a450c20`（approve reviewer-3 `d2685535`，closed）；上句为交卡时状态。
 - 残留：`E:/tmp/worker66-scratch/`（备份、变异输出；仓库外）。

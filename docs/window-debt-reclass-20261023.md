@@ -18,7 +18,7 @@
 
 ## 1. 依赖与前置（读表前必看）
 
-1. **对照文档与本表引用的 15 个场景文件，当前在分支 `card/openmir2-dualrun-window-burndown` 上，尚未进 master `be9c5ac6b`。**
+1. **对照文档与本表引用的 15 个场景文件，当前在分支 `card/openmir2-dualrun-window-burndown` 上，尚未进 master `be9c5ac6b`。** **2026-10-24 订正**：该分支已合入 master `33b40970`（L 卡 closed），master 的 `tools/probe/scenarios/` 现有 20 个场景 JSON（含本表全部 15 个）；下面「master 只有 3 个」与「派工前提」一段已过期，仅作历史。
    master 的 `tools/probe/scenarios/` 只有 `login_only.json` / `gm_time.json` / `dice_chain.json` 三个；
    `npc_click(_auto)` / `merchant_dialog` / `bag_equip` / `eat_item` / `pickup_item` / `king_dialog` / `king_castle_war` /
    `gm_batch` / `dice_chain_auto` / `combat_hit` / `move_walk` 都在该分支。核验：

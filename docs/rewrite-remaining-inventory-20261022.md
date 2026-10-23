@@ -540,8 +540,8 @@ outbound: implemented 102 / tracked 13 / n/a-unreachable 3       （共 118）
 | `SM_HIDEEVENT(805)` / `SM_SHOWEVENT(804)` | 需补上游（`VisibleEvents` 差集 + `MapEvent.Id==0` 折叠） | T-178；**无卡（待建）**；审计建议 T-196（未登记） |
 | `SM_LAMPCHANGEDURA(655)` | 需补上游（`UseLamp`；线上字段 `Recog=Dura`） | T-180；**无卡（待建）**；审计建议 T-194（未登记） |
 | `SM_QUERYYBDEAL(23023)` / `SM_QUERYYBSELL(23021)` | 需补上游（脚本动作 343/344 + 字节尾通道） | T-181；**无卡（待建）**；审计建议 T-198（未登记） |
-| `SM_RECONNECT(802)` | 需补上游（G11 跨服搬家；GM 面 perm 0 锁死） | T-182；**无卡（待建）**；审计建议 T-199（未登记） |
-| `SM_SKELETON(33)` | 需补上游（屠宰效果体 `Skeleton`/`BodyLeathery`） | T-183；**无卡（待建）**；审计建议 T-197（未登记） |
+| `SM_RECONNECT(802)` | 需补上游（G11 跨服搬家；GM 面 perm 0 锁死） | T-182；**2026-10-24 订正：已有卡 `openmir2-sm-reconnect-wiring`，已合入 master `283a27460`（R 卡保持 in-progress）**；审计建议 T-199（未登记） |
+| `SM_SKELETON(33)` | 需补上游（屠宰效果体 `Skeleton`/`BodyLeathery`） | T-183；**2026-10-24 订正：已有卡 `openmir2-sm-skeleton-wiring`（in-progress）**；审计建议 T-197（未登记） |
 | `SM_CLOSEDOOR(614)` / `SM_OPENDOOR_OK(612)` | **不可达（oracle 结构性）** | T-176 + T-65（门守卫写反；`75fa9a2d6`） |
 | `SM_ITEMSHOW(610)` | **不可达（oracle 结构性）** | T-179 + T-19/T-25/T-32（`MapItem.ItemId` 恒 0） |
 | `SM_CHANGEFACE(1104)` | **不可达（现网部署级）** | T-175（旧措辞）；审计建议订正为 T-200（未登记），复活=三步、代价 M |
@@ -749,7 +749,7 @@ PY
    本文表格固定用 274（code 口径）并在 §0 脚注写明唯一名 241。
 
 > 仍在等窗口、但数字本身可复算的不确定性：`docs/window-debt-reclass` 的 ①/②/③ 分类依赖 `tools/probe/scenarios/`
-> 的 15 个场景文件——其中 12 个当前在分支 `card/openmir2-dualrun-window-burndown`，**尚未进 master**（该文件 §1 明示）。
+> 的 15 个场景文件——其中 12 个当前在分支 `card/openmir2-dualrun-window-burndown`，**尚未进 master**（该文件 §1 明示）。**2026-10-24 订正**：该分支已合入 master `33b40970`，`tools/probe/scenarios/` 现有 20 个场景 JSON（含上述 15 个），本条与「① 实际只有 3 个」的推论均已过期。
 > 若窗口基线不含该分支，① 的「现有场景」实际只有 3 个，这是开窗前必须确认的前置。
 
 ---
