@@ -316,7 +316,7 @@ Rust 偶尔多出 `SM_HIT(14)`）不能用「再跑一次直到 PASS」当判定
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，**113 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**189 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
 10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
@@ -336,6 +336,12 @@ python -I -B tools/conformance/compare_runs.py selftest
   与 `oracle_wire_len=54 / rust_wire_len=78`）；线缆形态改 hp ⇒ 1（`space=plain`）；
   两侧同为 58B 线缆 ⇒ 明文逐字节比、改一字节 ⇒ 1（偏移 46）；
 * 52 未登记长度对（41,41）⇒ 2（`ability_layout_unknown`，fail-closed）。
+* `SM_STRUCK(31)`（卡 openmir2-conformance-rule-sm-struck-31）：`head_mask:[param]` 只掩
+  **受击者当前 HP**（伤害的结果）、`head_compare:[recog]` 把**受击者 ActorId** 从全局掩码取回比较；
+  tag（MaxHP）/series（本次伤害 nDmg）/body（`EDCode(MessageBodyWL{Feature,Status,攻击者,Mag?})`）
+  全部逐字节比。仅 param 不同 ⇒ 0 且登记 `masked_head(param)`；tag/recog/series/body 任一不同 ⇒ 1
+  （`field` 逐一断言）。**牙**：去掉 31 规则 ⇒ 用例① 变 2（`unclassified_idents` 含 31）；
+  把规则放宽成整帧 `ignore` ⇒ 用例②(tag) 被吞成 0（证明真规则的 1 来自逐字段比较，不是偶然）。
 * `multiset_by_tick`（对拍降噪 v2）：内置表**只有 ident=100** 用它（不扩散）且
   `tick_tolerance_ms=0`；两条 100 顺序颠倒 ⇒ 0 且 `masked_order` 登记；
   少一条 100 ⇒ 1 且缺失帧带 param/series/body 前 16 字节；三条 100 轮换（集合相同）⇒ 0；
@@ -356,8 +362,8 @@ python -I -B tools/conformance/compare_runs.py selftest
 
 ## 当前规则覆盖
 
-已覆盖 ident（37 条）：`10, 11, 13, 14, 41, 42, 46, 50, 51, 52, 54, 100, 200, 201, 213, 520,
-525, 529, 530, 615, 616, 635, 636, 643, 644, 645, 654, 657, 658, 752, 763, 766, 767, 811,
+已覆盖 ident（38 条）：`10, 11, 13, 14, 31, 41, 42, 46, 50, 51, 52, 54, 100, 200, 201, 213,
+520, 525, 529, 530, 615, 616, 635, 636, 643, 644, 645, 654, 657, 658, 752, 763, 766, 767, 811,
 1106, 5008, 11029`。
 
 **跨进程不可复现的两条**（2026-10-23 双栈窗口登记，见 `rules.json` 的 reason）：

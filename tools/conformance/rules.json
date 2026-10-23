@@ -55,6 +55,19 @@
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
+      "ident": 31,
+      "action": "compare",
+      "head_mask": [
+        "param"
+      ],
+      "head_compare": [
+        "recog"
+      ],
+      "tier": "L",
+      "reason": "SM_STRUCK(31) 是真实协议帧（src/OpenMir2/Messages.cs:197）。下行点 src/M2Server/Player/PlayObject.Message.cs:1601（本卡已复核）：`MakeMessage(SM_STRUCK, processMsg.ActorId, baseObject.WAbil.HP, baseObject.WAbil.MaxHP, processMsg.wParam)`。字段口径：recog=**受击者 ActorId**（同文件 :774-777 `baseObject = ActorMgr.Get(processMsg.ActorId)`；SendRefMsg 广播时以受击者自身为 sender ⇒ processMsg.ActorId 即受击者）；param=**受击者当前 HP**（伤害的结果，随伤害变化 ⇒ 本规则只掩这一项）；tag=**MaxHP**；series=processMsg.wParam=本次伤害值 nDmg（**不是方向/动作**；发点见 src/M2Server/Actor/BaseObject.Attack.cs:63/81、src/M2Server/Player/PlayObject.Base.cs:1479/1500）；body=EDCode(MessageBodyWL{Param1=GetFeature, Param2=CharStatus, Tag1=nParam3=攻击者 ActorId, Tag2=RM_STRUCK_MAG?1:0}，同文件 :1602-1613) ⇒ 默认逐字节比、不掩。**掩码结构**：`head_mask:[param]` 只掩 HP；`head_compare:[recog]` 把受击者 ActorId 从全局 recog 掩码里取回逐值比较（本卡验收：Recog 不同必须 FAIL）；tag/series/body 全部照常逐字节比。**不得整帧 ignore**：那会同时吞掉 ActorId 与 MaxHP 的真实差异（本卡 forbidden）。**已知代价（R3 真机窗口须知悉）**：两侧 ActorId 命名空间不同（C# 的 recog 来自 HUtil32.Sequence() 随机正数、Rust 来自 EcsStore::alloc_id 自增；docs/window-run-sheet-20261021.md:732、docs/conformance-batch1-login-20261023.md:88），且 body 的 Tag1=攻击者 ActorId ⇒ 若真机首跑两侧 ActorId 分配不同，本规则会以 recog/body 差异报红。本卡 tier=L 不做真机窗口；届时是否把 recog 改回全局掩码（body 仍须显式登记）属 owner/reviewer 裁决，绝不允许整帧 ignore。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-68)"
+    },
+    {
       "ident": 46,
       "action": "mask_fields",
       "fields": ["param", "tag"],

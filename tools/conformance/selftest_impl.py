@@ -171,6 +171,8 @@ class Selftest(object):
         self.t_new_idents_diff(o, r)
         self.t_batch2_rules()
         self.t_batch2_diff()
+        self.t_struck31_rules()
+        self.t_struck31_diff()
         self.t_ability_wire(o, r)
         self.t_ability_unknown_pair(o, r)
         self.t_head_mask(o, r)
@@ -668,6 +670,125 @@ class Selftest(object):
         rc, rep = self.compare(od, rd, ["--rules", path2])
         self.check("忽略牙：同一条 14 改回 compare => rc 1（多出的帧立刻暴露）",
                    rc == 1, (rc, (rep or {}).get("diffs")))
+
+    # ------------------------------------------------------------------
+    # 批次 3（卡 openmir2-conformance-rule-sm-struck-31）：SM_STRUCK(31)
+    # recog=受击者 ActorId / param=受击者当前 HP（伤害的结果）/ tag=MaxHP /
+    # series=本次伤害 nDmg / body=EDCode(MessageBodyWL{Feature,Status,攻击者,Mag?})。
+    # 只在 param 上做窄掩码；recog 从全局掩码取回比较；tag/series/body 逐字节比。
+    # ------------------------------------------------------------------
+    STRUCK31_BODY = bytes([12, 14, 15, 7])  # MessageBodyWL 线缆字节的合成替身
+
+    def _struck31(self, side, seq, body=None, **over):
+        heads = dict(recog=500, param=37, tag=40, series=12)
+        heads.update(over)
+        return self.frame(31, self.STRUCK31_BODY if body is None else body,
+                          phase="combat", seq=seq,
+                          t_ms=1000 if side == "o" else 1001,
+                          conn="o" if side == "o" else "r", **heads)
+
+    def t_struck31_rules(self):
+        rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
+        rule = rs.by_ident.get(31)
+        self.check("SM_STRUCK(31) 已登记且 action=compare",
+                   rule is not None and rule["action"] == "compare",
+                   rule and rule.get("action"))
+        rule = rule or {}
+        self.check("31 只掩 param(HP)，并把 recog(受击者 ActorId) 从全局掩码取回比较",
+                   rule.get("head_mask") == ["param"]
+                   and rule.get("head_compare") == ["recog"],
+                   (rule.get("head_mask"), rule.get("head_compare")))
+        self.check("31 的 reason/tier/approved_by=PENDING 齐全",
+                   all(str(rule.get(k, "")).strip() for k in ("reason", "tier", "approved_by"))
+                   and str(rule.get("approved_by", "")).upper().startswith("PENDING"),
+                   {k: rule.get(k) for k in ("tier", "approved_by")})
+        masks = rs.mask_for(31)
+        self.check("31 的有效掩码 = {param + 全局 t_ms/conn/seq}（recog/tag/series 不掩）",
+                   set(masks) == {"param", "t_ms", "conn", "seq"},
+                   sorted(masks))
+
+    def t_struck31_diff(self):
+        # ① 仅 param(HP) 不同 => rc 0，且差异显式登记 masked_head(param)
+        rc, rep = self._one_pair("31-hp", self._struck31("o", 820),
+                                 self._struck31("r", 821, param=29))
+        self.check("31 仅 param(HP) 不同 => rc 0 且登记 masked_head(param)",
+                   rc == 0 and any(w.get("ident") == 31 and w.get("field") == "param"
+                                   and w.get("kind") == "masked_head"
+                                   for w in (rep or {}).get("whitelisted", [])),
+                   (rc, (rep or {}).get("whitelisted"), (rep or {}).get("diffs")))
+        # ② tag(MaxHP) 不同 => FAIL（窄掩码不外溢）
+        rc, rep = self._one_pair("31-maxhp", self._struck31("o", 822),
+                                 self._struck31("r", 823, tag=41))
+        self.check("31 的 tag(MaxHP) 不同 => rc 1 且定位 field=tag",
+                   rc == 1 and any(d.get("ident") == 31 and d.get("field") == "tag"
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        # ③ recog(受击者 ActorId) 不同 => FAIL（head_compare 真的取回了比较）
+        rc, rep = self._one_pair("31-actor", self._struck31("o", 824),
+                                 self._struck31("r", 825, recog=501))
+        self.check("31 的 recog(受击者 ActorId) 不同 => rc 1 且定位 field=recog",
+                   rc == 1 and any(d.get("ident") == 31 and d.get("field") == "recog"
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        # ④ series(伤害) 与 body 仍逐字节比（掩码只覆盖 param，不外溢）
+        rc, rep = self._one_pair("31-dmg", self._struck31("o", 826),
+                                 self._struck31("r", 827, series=13))
+        self.check("31 的 series(伤害) 不同 => rc 1 且定位 field=series",
+                   rc == 1 and any(d.get("ident") == 31 and d.get("field") == "series"
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        body_mut = self.STRUCK31_BODY[:-1] + bytes([self.STRUCK31_BODY[-1] ^ 0xFF])
+        rc, rep = self._one_pair("31-body", self._struck31("o", 828),
+                                 self._struck31("r", 829, body=body_mut))
+        self.check("31 的 body 改一个字节 => rc 1 且定位 offset",
+                   rc == 1 and any(d.get("ident") == 31 and d.get("offset") is not None
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+
+        # 牙①：去掉 ident=31 规则 => 用例① 必须变 rc 2（UNCLASSIFIED），证明 rc 0 不是
+        # 「没规则也放行」；点名 unclassified=31。
+        no31 = json.loads(json.dumps(self.builtin_rules))
+        no31["rules"] = [r for r in no31["rules"] if r.get("ident") != 31]
+        path_no31 = self.rules_file("rules-no31.json", no31)
+        rc, rep = self._one_pair("31-tooth-norule", self._struck31("o", 830),
+                                 self._struck31("r", 831, param=29),
+                                 rules_path=path_no31)
+        self.check("牙①：去掉 31 规则 => 用例① 变 rc 2 且 coverage.unclassified_idents 含 31",
+                   rc == 2 and 31 in ((rep or {}).get("coverage") or {})
+                   .get("unclassified_idents", []),
+                   (rc, (rep or {}).get("coverage"), (rep or {}).get("undecidable")))
+
+        # 牙②：把规则放宽成「整帧 ignore」=> 用例② 的 tag 差异被吞成 rc 0（真规则的 rc 1
+        # 来自逐字段比较，不是偶然）；同时两侧各剔 1 帧。
+        ign = json.loads(json.dumps(self.builtin_rules))
+        for r in ign["rules"]:
+            if r.get("ident") == 31:
+                r.pop("head_mask", None)
+                r.pop("head_compare", None)
+                r["action"] = "ignore"
+                r["approved_by"] = "selftest tooth: approved (non-pending)"
+                r["reason"] = "selftest 变异：只掩 param → 整帧 ignore（证明 ignore 会吞掉 tag 差异）"
+        path_ign = self.rules_file("rules-31-ignore.json", ign)
+
+        def tail41(side, seq):
+            return self.frame(41, b"", phase="combat", seq=seq,
+                              t_ms=1000 if side == "o" else 1001,
+                              conn="o" if side == "o" else "r",
+                              recog=500, param=0, tag=0, series=0)
+
+        od = self.write_run("t22-o-31-tooth-ignore",
+                            [self._struck31("o", 832), tail41("o", 834)])
+        rd = self.write_run("t22-r-31-tooth-ignore",
+                            [self._struck31("r", 833, tag=41), tail41("r", 835)])
+        rc, rep = self.compare(od, rd, ["--rules", path_ign])
+        ign_report = ((rep or {}).get("frames") or {}).get("ignored") or {}
+        self.check("牙②：31 放宽成整帧 ignore => 用例②(tag) 被吞成 rc 0（两侧各剔 1 帧）",
+                   rc == 0
+                   and (ign_report.get("oracle") or {}).get("count") == 1
+                   and (ign_report.get("rust") or {}).get("count") == 1
+                   and not any(d.get("ident") == 31 for d in (rep or {}).get("diffs", [])),
+                   (rc, ign_report, (rep or {}).get("diffs"),
+                    (rep or {}).get("undecidable")))
 
     def t_ability_wire(self, o, r):
         """首次真机对拍实测的 52 线缆长度对 (54, 78)：EDCode 归一后按 40/58 语义比。"""
