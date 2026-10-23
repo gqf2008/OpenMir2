@@ -517,7 +517,9 @@ pub fn sm_sendusermakedrugitemlist(n_param1: i32, n_param2: i32, msg: &[u8]) -> 
 /// `MakeMessage(SM_SHOWEVENT, nParam1, wParam, nParam2, nParam3)` + 尾 `EDCode.EncodePacket(ShortMessage)`。
 ///
 /// **已接线（卡 `openmir2-map-event-frames`，T-205）**：生产发射点同 `sm_hideevent`（`VisibleEvents`
-/// 差集的 `Show` 支）；宿主 `drain_aoi_events` 出帧，`nParam1 = EventType`、`wParam = Id = 0`（折叠）、
+/// 差集的 `Show` 支）；宿主 `drain_aoi_events` 出帧。发点 `SendMsg(RM_SHOWEVENT, wParam=(short)EventType, nParam1=Id, …)`
+/// （`PlayObject.cs:3284`；签名 `BaseObject.Message.cs:34`）⇒ 处理器 `MakeMessage(SM_SHOWEVENT, nParam1, wParam, …)`
+/// ⇒ **Recog = nParam1 = Id = 0（折叠）、Param = wParam = EventType = ET_FIRE(5)**（`Grobal2.cs:48`）、
 /// `nParam2 = MakeLong(nX, EventParam)`、`nParam3 = nY`。
 ///
 /// oracle 组 `ShortMessage shortMessage = { Ident = HUtil32.HiWord(nParam2), wMsg = 0 }`（`:2002-2005`）；

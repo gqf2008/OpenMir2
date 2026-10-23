@@ -1039,6 +1039,16 @@ pub struct World {
     /// `Closed` 的事件留在表里但不再 `Run`（oracle 移到 `ClosedEvents`，语义等价）。
     /// 缺省空表 ⇒ 既有 golden 逐字节不变。
     pub fire_burn_events: Vec<FireBurnEvent>,
+    /// **卡 `openmir2-map-event-frames`（review `39262b65` F3）**：折叠对象（key 0 的第一条
+    /// registered 事件）的共享 `MapEvent.nX/nY`（`MapEvent.cs:17-18`）。
+    ///
+    /// oracle 里 `nX/nY` 是**共享对象字段**：ctor 写注册格（`MapEvent.cs:70-71`），此后唯一写点是
+    /// `UpdateVisibleEvent` 的**首见支**（`PlayObject.cs:5483-5484`，每个观察者首见都覆写同一份；
+    /// 已在列表的早退支**不写**，`:5471-5473`）；`RM_HIDEEVENT` 读的是**发送时刻的共享值**
+    /// （`:3278`）⇒ 双观察者首见格不同时，先见者离场的 805 坐标 = **后写者的格**。804 的坐标在
+    /// 同一趟扫描内写读无间隔（早退支不覆写）⇒ 观察者条目里的 add 时刻快照与之恒相等
+    /// （`VisibleEvent.x/y` 只服务 804）。缺省 (0,0)——首见支必然先于任何 805 读而覆写。
+    pub event_sight: (i32, i32),
     /// **MB-1**：`EventMgr.Events` 里 `ET_DIGOUTZOMBI` 事件的最小表（插入序）。
     ///
     /// 只由 `DigOutZombi.Turned` 写入（5 分钟 `ContinueTime`），由 [`World::run_map_events`]
@@ -1283,6 +1293,7 @@ impl World {
             ],
             pending_sculture_spawns: Vec::new(),
             fire_burn_events: Vec::new(),
+            event_sight: (0, 0),
             dig_out_events: Vec::new(),
             event_registered: false,
             self_delay_msgs: crate::slave::SelfDelayQueue::new(),
@@ -3638,12 +3649,18 @@ impl World {
         continue_ms: i32,
     ) {
         let now = self.clock_ms;
+        // review `39262b65` F2：oracle `ET_FIRE = 5`（`src/OpenMir2/Grobal2.cs:48`；
+        // `MagicManager.cs:1074-1089` 四处全传 `ET_FIRE`）。基线误写 1（= `ET_DIGOUTZOMBI` 的号，
+        // `Grobal2.cs:41`）——本卡把它送上 804 线（`wParam`/`Param` 字节）⇒ 一并订正。
+        // （NEEDHOLE 联锁核实：`route_enter`/`step_with_route` 的门读 `dig_out_event_at`
+        // = `dig_out_events` 表 + `event_type == 1`（world.rs `dig_out_event_at`），火墙在
+        // `fire_burn_events` 另表 ⇒ 基线的 1 并不构成 NEEDHOLE 误触发，但仍是 oracle 偏离。）
         self.fire_burn_events.push(FireBurnEvent {
             owner_id: Some(owner_id),
             map_id,
             x,
             y,
-            event_type: 1, // `Grobal2.ET_FIRE`
+            event_type: 5, // `Grobal2.ET_FIRE`（`src/OpenMir2/Grobal2.cs:48`）
             damage,
             open_start_ms: now,
             continue_ms,
@@ -3664,6 +3681,18 @@ impl World {
         if added {
             if let Some(evt) = self.fire_burn_events.last_mut() {
                 evt.registered = true;
+            }
+            // 折叠对象 = 第一条 registered 事件（`CellObjectMgr.TryAdd(0, …)` 第一条胜）；
+            // 其 ctor 的 `nX/nY` = 注册格（`MapEvent.cs:69-70`）。之后只由
+            // `UpdateVisibleEvent` 的首见支覆写。
+            if self
+                .fire_burn_events
+                .iter()
+                .filter(|e| e.registered)
+                .count()
+                == 1
+            {
+                self.event_sight = (x, y);
             }
             self.event_registered = true;
         }
@@ -5324,11 +5353,15 @@ impl World {
                         .is_some_and(|e| e.race == crate::entity::ACTOR_RACE_PLAY)
                     {
                         let events = &self.fire_burn_events;
+                        // review `39262b65` F3：`nX/nY` 是折叠共享对象字段—— sight 镜像随扫描
+                        // 首见支覆写，805 读发送时刻共享值。
+                        let sight = &mut self.event_sight;
                         for (idx, x, y) in crate::aoi::search_view_range_events(
                             &map[map_id],
                             entities,
                             *id,
                             events,
+                            sight,
                         ) {
                             record.event_hides.push((*id, idx, x, y));
                         }

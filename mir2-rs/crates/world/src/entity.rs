@@ -115,7 +115,9 @@ pub struct VisibleBaseObject {
 pub struct VisibleEvent {
     /// 折叠到的唯一事件：`fire_burn_events` 里**第一条** `registered == true` 的下标。
     pub event: usize,
-    /// 观察者首次看到该事件时扫描到的**格子**坐标（`mapEvent.nX/nY`，`PlayObject.cs:5483-5484`）。
+    /// **add 时刻共享 sight 的快照**（review `39262b65` F3）：oracle 首见支写共享对象的
+    /// `nX/nY`（`PlayObject.cs:5483-5484`），同趟扫描内早退支不覆写 ⇒ 804 在扫描后读共享值
+    /// 与该快照恒相等。**805 不读这里**——读发送时刻共享值（`World::event_sight`，`aoi` 收尾支）。
     pub x: i32,
     pub y: i32,
     pub flag: VisibleFlag,

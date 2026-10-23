@@ -12338,9 +12338,14 @@ fn drain_aoi_events(
             else {
                 continue;
             };
+            // review `39262b65` F1：`MakeMessage(SM_SHOWEVENT, nParam1, wParam, nParam2, nParam3)`
+            // （处理器 `PlayObject.Message.cs:2003`；`Messages.cs:846` recog=第 2 参）⇒
+            // **Recog = nParam1 = Id = 0（折叠）、Param = wParam = EventType**——发点
+            // `SendMsg(RM_SHOWEVENT, wParam=(short)EventType, nParam1=Id, …)`
+            // （`PlayObject.cs:3284`；签名 `BaseObject.Message.cs:34`）。
             let _ = tx.send(SimToGate::SendFrame {
                 socket: entry.socket,
-                body: smframe_ext::sm_showevent(ev.event_type, 0, n_param2, visible.y),
+                body: smframe_ext::sm_showevent(0, ev.event_type, n_param2, visible.y),
             });
             sent += 1;
         }
@@ -24881,10 +24886,13 @@ mod tests {
     }
 
     /// **判据①（tier=R）**：观察者进入含 `Visible` 事件的格 ⇒ 下一轮扫描恰 **1 条**
-    /// `SM_SHOWEVENT(804)`。字段（oracle `PlayObject.cs:3284` + `Message.cs:1995-2006`）：
-    /// `Recog = EventType = ET_FIRE(1)`、`Param = Id = 0`（**折叠**）、
-    /// `Tag = LoWord(MakeLong(nX, EventParam)) = nX = 10`、`Series = nY = 10`，
-    /// 尾 `ShortMessage{Ident = HiWord(nParam2) = EventParam = 0, wMsg = 0}`。
+    /// `SM_SHOWEVENT(804)`。字段（发点 `PlayObject.cs:3284`
+    /// `SendMsg(RM_SHOWEVENT, wParam=(short)EventType, nParam1=Id, MakeLong(nX,EventParam), nY)`，
+    /// 签名 `BaseObject.Message.cs:34`；处理器 `PlayObject.Message.cs:2003`
+    /// `MakeMessage(SM_SHOWEVENT, nParam1, wParam, nParam2, nParam3)`，`Messages.cs:846`
+    /// recog=第 2 参）：**`Recog = nParam1 = Id = 0`（折叠）、`Param = wParam =
+    /// EventType = ET_FIRE(5)`（`Grobal2.cs:48`）**、`Tag = LoWord(nParam2) = nX = 10`、
+    /// `Series = nY = 10`，尾 `ShortMessage{Ident = HiWord(nParam2) = EventParam = 0, wMsg = 0}`。
     #[test]
     fn map_event_enter_sends_one_showevent() {
         let (world, p, rec) = map_event_fixture(60_000);
@@ -24908,8 +24916,14 @@ mod tests {
             mir2_protocol::messages::SM_SHOWEVENT,
             "Ident = 804"
         );
-        assert_eq!(cm.recog, 1, "Recog = EventType = ET_FIRE");
-        assert_eq!(cm.param, 0, "Param = mapEvent.Id = 0（Id==0 折叠）");
+        assert_eq!(
+            cm.recog, 0,
+            "Recog = nParam1 = mapEvent.Id = 0（Id==0 折叠）"
+        );
+        assert_eq!(
+            cm.param, 5,
+            "Param = wParam = EventType = ET_FIRE（Grobal2.cs:48）"
+        );
         assert_eq!(cm.tag, 10, "Tag = LoWord(MakeLong(nX=10, EventParam=0))");
         assert_eq!(cm.series, 10, "Series = nY");
         assert_eq!(
@@ -25020,6 +25034,72 @@ mod tests {
             "发帧循环读到的旗标是 Invisible ⇒ 0 条 804"
         );
         assert!(rx0.try_recv().is_err(), "零帧");
+    }
+
+    /// **F3（review `39262b65`，tier=R）**：`nX/nY` 是折叠**共享对象**的字段——双观察者首见格
+    /// 不同时，先见者离场的 805 坐标 = **后见者覆写后的共享值**（oracle `:5483-5484` 首见支覆写
+    /// 同一份、`:3278` 发送读共享值），不是本观察者条目里的 add 时刻快照。
+    ///
+    /// 场景：事件格 (10,10) 与 (12,10)；A(11,10) 首见 (10,10)、B(24,10) 首见 (12,10)（B 视距
+    /// 恰好只够到 (12,10)）⇒ 共享 sight = (12,10)。A 走到 (11,23)（离两格均 13 > 12）⇒ A 的
+    /// 805 = Tag 12 / Series 10。按观察者各存快照的旧实现会发 (10,10) ⇒ 本用例红。
+    #[test]
+    fn map_event_hideevent_coords_are_shared_sight() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("a");
+        world.open_session("b");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 11, 10), 0)
+            .expect("a 进图");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 24, 10), 0)
+            .expect("b 进图");
+        world.add_fire_burn_event(a, 0, 10, 10, 5, 60_000);
+        world.add_fire_burn_event(a, 0, 12, 10, 5, 60_000);
+        let _rec1 = tick_until_next_player_scan(&mut world); // 1200：A 首见 (10,10)、B 首见 (12,10)
+        assert_eq!(world.event_sight, (12, 10), "后见者覆写共享 sight");
+        for _ in 0..13 {
+            world.walk(a, 0, 1); // a → (11,23)：Chebyshev 到两格均 13 > 12
+        }
+        let rec2 = tick_until_next_player_scan(&mut world); // 2400：A 离场
+        assert!(
+            world.entities.get(a).unwrap().visible_events.is_empty(),
+            "A 离场 ⇒ 条目移除"
+        );
+        assert_eq!(
+            rec2.event_hides,
+            vec![(a, 0, 12, 10)],
+            "805 坐标 = 共享 sight（B 的首见格），不是 A 的首见格 (10,10)"
+        );
+        let online: OnlineRegistry = vec![
+            entry("ua", "a", 1, 0, 901, a),
+            entry("ub", "b", 2, 0, 902, b),
+        ];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        assert_eq!(
+            drain_aoi_events(&world, &rec2, &online, &gates),
+            1,
+            "只有 A 一条 805（B 仍在视野内 ⇒ Invisible 不出帧）"
+        );
+        let mut to_a = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            }
+        }
+        assert_eq!(to_a.len(), 1);
+        let cm = CommandMessage::from_bytes(&to_a[0]).expect("12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_HIDEEVENT,
+            "Ident = 805"
+        );
+        assert_eq!(cm.recog, 0, "Recog = nParam1 = Id = 0");
+        assert_eq!(cm.param, 0, "Param = wParam = Id = 0（折叠）");
+        assert_eq!(cm.tag, 12, "Tag = 共享 nX = B 的首见格 (12,10)");
+        assert_eq!(cm.series, 10, "Series = 共享 nY");
     }
 
     /// **退化语义（oracle 审计 §4.3-⑤ / §4.4(c)）**：第一个事件 `Close()` 后 key 0 仍被它
