@@ -2246,9 +2246,13 @@ fn kick_human(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> Gm
     if world.world.is_none() {
         return no_frames(NOTE_NO_WORLD);
     }
-    if world.play_by_name(name).is_some() {
+    if let Some(entity) = world.play_by_name(name) {
         // `:26-31`：置 `BoKickFlag`/`BoEmergencyClose`，**无回执**（oracle 不发任何 SysMsg）。
-        sess.pending_kick = Some(name.to_string());
+        //
+        // 复审 important-1：登记的必须是**实体规范名**。宿主 `online_take` 用
+        // `e.chr_name == chr` 精确匹配，而 `GetPlayObject` 是 OrdinalIgnoreCase ⇒ 若存命令行
+        // 输入的大小写（如 `ViCtIm`），命令说命中、宿主却在在线表里找不到（只留 WRN、不发 528）。
+        sess.pending_kick = Some(entity.name.clone());
         no_frames(NOTE_KICK_HUMAN_PENDING)
     } else {
         // `:32-38`：`NowNotOnLineOrOnOtherServer`（与 `@VV调整元宝` 同一条文案）。
@@ -5973,11 +5977,36 @@ mod tests {
             texts(&r),
             vec![(GmColor::Red, "nobody 现在不在线，或在其它服务器上!!!")]
         );
+        // 线上编码（`gbk_encode`）后的字节逐字节锚定（复审 minor）：ASCII + GBK 双字节。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0x6e, 0x6f, 0x62, 0x6f, 0x64, 0x79, 0x20, // "nobody "
+                0xcf, 0xd6, // 现
+                0xd4, 0xda, // 在
+                0xb2, 0xbb, // 不
+                0xd4, 0xda, // 在
+                0xcf, 0xdf, // 线
+                0xa3, 0xac, // ，
+                0xbb, 0xf2, // 或
+                0xd4, 0xda, // 在
+                0xc6, 0xe4, // 其
+                0xcb, 0xfc, // 它
+                0xb7, 0xfe, // 服
+                0xce, 0xf1, // 务
+                0xc6, 0xf7, // 器
+                0xc9, 0xcf, // 上
+                0x21, 0x21, 0x21, // !!!
+            ],
+            "SysMsg 文本的 GBK 字节逐字节等价"
+        );
         assert!(sess.pending_kick.is_none(), "未命中不得登记目标");
         // 大小写不敏感（`GetPlayObject` 的 `OrdinalIgnoreCase`）⇒ 命中 ⇒ 零帧 + 登记。
         let r = execute(&mut sess, &cfg, &view, "@VV踢人 VICTIM");
         assert!(r.msgs.is_empty(), "命中目标 ⇒ 命令无回帧");
-        assert_eq!(sess.pending_kick.as_deref(), Some("VICTIM"));
+        // 复审 important-1：登记的是实体规范名（`victim`），不是输入串（`VICTIM`）——
+        // 宿主 `online_take` 精确匹配，存输入串会「说命中但踢不到」。
+        assert_eq!(sess.pending_kick.as_deref(), Some("victim"));
     }
 
     /// 命中 ⇒ 零帧 + `pending_kick` = 目标名；`Ghost` 玩家按 oracle 口径**不算在线**
