@@ -44,6 +44,13 @@
    卡片合并后把该行状态改 `已落地`，放弃/换号改成 `已释放`（**别删行**；换号用 `--force-new`）。
    自检 / 牙齿：`... selftest`（18 项，含解析器 cross-check）、`... teeth`（5 颗：②①③④⓪ 各一，逐字节还原 + sha256）。
 
+10. **返工单必须发给「作者车道」，绝不能发给审查者**（2026-10-23 真发生：`openmir2-sm-skeleton-wiring`
+    的 request_changes 被投给了 reviewer-14 的 agent，审查者当场拒收）。理由：reviewer 一旦动手改代码，
+    这张卡就**没有合法审查人**了（作者自审不算数），而「让 reviewer 转任作者」还要改 owner、换分支、
+    另点复审者，代价远高于重发一条消息。**Reviewer 拒收返工单是正确行为，不是不配合**——它同时应把
+    「修法与牙」写进 review body，让作者照单执行。派单前核对：这条卡最近一条 `patch` 的 actor 是谁，
+    消息就发给谁的 agent。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
