@@ -22,7 +22,7 @@ use crate::buff::{
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
 };
 use crate::combat::{
-    attack_dir_grouped_poison, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
+    attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
 use crate::entity::{Entity, EntityStore};
@@ -217,7 +217,7 @@ pub struct TickRecord {
     /// **卡 `openmir2-attack-weapon-wear-642`（tier=R）**：本 tick `PlayObject.AttackSuccess`
     /// （`PlayObject.Attack.cs:225-229`）的武器耐久磨损，按攻击结算序。
     ///
-    /// 生产点：[`World::attack_once`] → [`crate::combat::attack_dir_grouped_poison`] 的
+    /// 生产点：[`World::attack_once`] → [`crate::combat::attack_dir_grouped_poison_ws`] 的
     /// [`crate::combat::attack_success_weapon_wear`]（只对**玩家攻方**、且本次攻击**有目标**；
     /// 空挥走 `attack_swing` ⇒ 不结算）。宿主按 [`WeaponWearEvent::frames`] 的发帧序出
     /// `SM_DELITEM(202)`（`SendDelItems` 直发）与 `SM_DURACHANGE(642)`。
@@ -1193,6 +1193,13 @@ pub struct World {
     /// `bins/game-svr` 在攻击派发前用 [`World::set_attack_poison`] 灌入）。**缺省空表** ⇒ 无任何
     /// actor 有麻痹态 ⇒ [`World::attack_once`] 的毒门短路（不抽），既有 golden 逐字节不变。
     pub attack_poison: HashMap<i32, AttackPoisonState>,
+    /// `AddAbil.WeaponStrong`（`AddAbility.cs:72`）——攻击成功磨损量的减项，按 actor id 挂世界侧。
+    ///
+    /// 来源：`AddAbility::weapon_strong`（`StdMode 5/6/24/26` 且 `SpecialPwr ∈ 1..=10` 的**赋值**，
+    /// `PlayObject.cs:4424-4426` / `:4563-4566`）；宿主在攻击派发前用
+    /// [`World::set_attack_weapon_strong`] 灌入。**缺省空表 ⇒ 0**（oracle 新角色默认），
+    /// 既有 golden 与不含该属性的部署逐字节不变。
+    pub attack_weapon_strong: HashMap<i32, u16>,
 }
 
 /// [`World::cast_space_move_spell`] 的可观测结果（魔号 21 `MagSaceMove` `MagicManager.cs:876-891`）。
@@ -1374,6 +1381,7 @@ impl World {
             by_map_scratch: Vec::new(),
             pending_ai_attacks: Vec::new(),
             attack_poison: HashMap::new(),
+            attack_weapon_strong: HashMap::new(),
         };
         // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
         // （缺省未设 ⇒ `None`，`isolate_attack` 保持 `false`，一字不改）。读 env 的 fail-closed
@@ -1542,7 +1550,7 @@ impl World {
     ///
     /// **消费方（A-5 接线 + MB-5 专用怪 Run 覆写后的口径订正）**：本仓生产入口有两条：
     /// ① **玩家攻击路径**——`PlayObject.Attack.cs:223` 的麻痹戒指命中（宿主 `bins/game-svr` 的
-    /// `handle_hit_cmd` → `World::attack_once` 的 `attack_dir_grouped_poison` 那一次
+    /// `handle_hit_cmd` → `World::attack_once` 的 `attack_dir_grouped_poison_ws` 那一次
     /// `make_posion(STONE, AttackPosionTime, 0)`）；
     /// ② **专用怪 `Run` 覆写**（MB-5，`crates/world/src/monai.rs`）：`GreenMonster`(208)/
     /// `RedMonster`(209) 的 [`crate::monai::monster_class_run`] ⇒ `green_red_monster_run` 在
@@ -1627,6 +1635,15 @@ impl World {
     /// 与 [`World::attack_poison`] 表、[`crate::combat::attack_dir_grouped_poison`] 同源。
     pub fn set_attack_poison(&mut self, actor_id: i32, state: crate::combat::AttackPoisonState) {
         self.attack_poison.insert(actor_id, state);
+    }
+
+    /// 灌 `AddAbil.WeaponStrong`（见 [`World::attack_weapon_strong`]）。0 ⇒ 删表项（等价缺省）。
+    pub fn set_attack_weapon_strong(&mut self, actor_id: i32, weapon_strong: u16) {
+        if weapon_strong == 0 {
+            self.attack_weapon_strong.remove(&actor_id);
+        } else {
+            self.attack_weapon_strong.insert(actor_id, weapon_strong);
+        }
     }
 
     /// **P3-B4**：灌入 `MabMabe`/施毒术配置（`Server.conf` 的 `[Setup]`）。
@@ -6981,7 +6998,16 @@ impl World {
         } else {
             None
         };
-        let (outcome, poisoned, weapon_wear) = attack_dir_grouped_poison(
+        // 卡 `openmir2-ability-weaponstrong`：`AddAbil.WeaponStrong` 由宿主在派发前灌入；缺省 0。
+        // 作为 [crate::combat::attack_dir_grouped_poison_ws] 的**末位实参**传入——`_ws` 只在原函数
+        // 参数行加参、函数体不移动 ⇒ 毒门 `random_below` 仍在 `combat.rs:1260`（RNG 账本合同，
+        // review `f3be880d1` 修法 (a)）。
+        let weapon_strong = self
+            .attack_weapon_strong
+            .get(&actor_id)
+            .copied()
+            .unwrap_or(0);
+        let (outcome, poisoned, weapon_wear) = attack_dir_grouped_poison_ws(
             self.attack_rng(),
             &mut attacker,
             &mut target,
@@ -6989,6 +7015,7 @@ impl World {
             &cfg,
             &attacker_group_members,
             poison,
+            weapon_strong,
         );
         let now = self.clock_ms;
         if let Some(e) = self.entities.get_mut(target_id) {

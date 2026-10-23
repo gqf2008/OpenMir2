@@ -9288,6 +9288,9 @@ fn handle_hit_cmd(
         // 守方条目带 `UnParalysis`/`AntiPoison`。buff 关闭（`buff_enabled` false）时 `attack_once`
         // 不读该表 ⇒ 既有 golden 逐字节不变。
         set_actor_poison_state(world, sessions, catalog, actor_id);
+        // 卡 `openmir2-ability-weaponstrong`：`AddAbil.WeaponStrong` 决定磨损量减项
+        // （`PlayObject.Attack.cs:225`）；攻击派发前按当前装备重算并灌入。
+        set_actor_weapon_strong(world, sessions, catalog, actor_id);
         set_actor_poison_state(world, sessions, catalog, tid);
         world.attack_cmd(actor_id, tid);
     } else {
@@ -12943,6 +12946,25 @@ fn set_actor_poison_state(
             un_paralysis: false,
             anti_poison: 0,
         },
+    );
+}
+
+/// 灌 `AddAbil.WeaponStrong`（见 [`mir2_world::World::set_attack_weapon_strong`]）。
+fn set_actor_weapon_strong(
+    world: &mut mir2_world::World,
+    sessions: &std::collections::HashMap<String, SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    actor_id: i32,
+) {
+    let Some(name) = world.entities.get(actor_id).map(|e| e.name.clone()) else {
+        return;
+    };
+    let Some(sg) = sessions.get(&name) else {
+        return;
+    };
+    world.set_attack_weapon_strong(
+        actor_id,
+        game_svr::ability::weapon_strong_of(&sg.use_items, catalog),
     );
 }
 
@@ -67065,6 +67087,113 @@ mod weapon_durability_downlink_tests {
             world.entities.get(p).unwrap().use_items[1].index,
             10,
             "武器未碎"
+        );
+    }
+}
+
+/// **卡 `openmir2-ability-weaponstrong`（tier=R）**：`WeaponStrong` 的数值口径（`AttackSuccess` 的
+/// `(ushort)(Random(5) + 2 - AddAbil.WeaponStrong)`，`PlayObject.Attack.cs:225`）。
+#[cfg(test)]
+mod weapon_strong_numeric_tests {
+    use mir2_shared::rng::RandomNumber;
+
+    fn weapon_entity(dura: u16) -> mir2_world::Entity {
+        let mut e = mir2_world::Entity::new(1, "p", 10, 10);
+        e.race = mir2_world::entity::ACTOR_RACE_PLAY;
+        e.use_items[mir2_world::world::ITEM_LOCATION_WEAPON] = mir2_world::entity::UseItemSlot {
+            make_index: 7,
+            index: 10,
+            dura,
+            dura_max: 10_000,
+            desc: [0u8; 14],
+        };
+        e
+    }
+
+    /// `WS=0` 与 `WS=k` 的磨损量差恰为 `k`（同种子 ⇒ 同一次 `Random(5)`）；`WS > Random(5)+2` 时
+    /// 按 C# 的 `ushort` 回绕（不 panic、不 saturating）；`WS == Random(5)+2` ⇒ damage 0 ⇒ 不结算。
+    #[test]
+    fn weapon_strong_numeric_matrix_matches_oracle() {
+        // ws = 0：拿到 raw = Random(5)+2
+        let mut e0 = weapon_entity(5_000);
+        let mut rng0 = RandomNumber::with_seed(42);
+        let out0 =
+            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng0, &mut e0, 0)
+                .expect("有武器 + damage>0 ⇒ 结算");
+        let dura0 = match out0.frames.first() {
+            Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
+            other => panic!("首个帧应为 DuraChange: {other:?}"),
+        };
+        let raw = 5_000u16.wrapping_sub(dura0);
+        assert!(
+            (2..=6).contains(&raw),
+            "raw = Random(5)+2 ∈ 2..=6，实测 {raw}"
+        );
+
+        // ws = 3：磨损量 = raw - 3（raw>=2 ⇒ 可能为负 ⇒ ushort 回绕）
+        let mut e3 = weapon_entity(5_000);
+        let mut rng3 = RandomNumber::with_seed(42);
+        let out3 =
+            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng3, &mut e3, 3)
+                .expect("damage != 0 ⇒ 结算");
+        let expect3 = 5_000u16.wrapping_sub(raw.wrapping_sub(3));
+        let got3 = match out3.frames.first() {
+            Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
+            other => panic!("首个帧应为 DuraChange: {other:?}"),
+        };
+        assert_eq!(got3, expect3, "磨损量 = (ushort)(raw - 3)");
+
+        // ws = 9 > raw：C# `(ushort)` 回绕成 ~65527..65531 ⇒ 耐久反向回绕，不 panic
+        let mut e9 = weapon_entity(5_000);
+        let mut rng9 = RandomNumber::with_seed(42);
+        let out9 =
+            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng9, &mut e9, 9)
+                .expect("回绕后 damage != 0 ⇒ 仍结算");
+        let expect9 = 5_000u16.wrapping_sub(raw.wrapping_sub(9));
+        let got9 = match out9.frames.first() {
+            Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
+            other => panic!("首个帧应为 DuraChange: {other:?}"),
+        };
+        assert_eq!(
+            got9, expect9,
+            "`(ushort)(raw - 9)` 回绕后扣耐久（不 panic、不 saturating）"
+        );
+
+        // ws = raw ⇒ damage 恰 0 ⇒ 不结算、零帧
+        let mut e0b = weapon_entity(5_000);
+        let mut rng0b = RandomNumber::with_seed(42);
+        assert!(
+            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng0b, &mut e0b, raw)
+                .is_none(),
+            "`WS == Random(5)+2` ⇒ nWeaponDamage == 0 ⇒ 不扣、不发帧"
+        );
+        assert_eq!(
+            e0b.use_items[mir2_world::world::ITEM_LOCATION_WEAPON].dura,
+            5_000
+        );
+    }
+}
+
+/// **接线牙**：`handle_hit_cmd` 必须在攻击派发前恰一次灌 `AddAbil.WeaponStrong`。
+#[cfg(test)]
+mod weapon_strong_wiring_tests {
+    #[test]
+    fn weapon_strong_is_injected_before_attack_dispatch() {
+        let src = include_str!("lib.rs");
+        let hits = src
+            .lines()
+            .filter(|l| l.trim() == "set_actor_weapon_strong(world, sessions, catalog, actor_id);")
+            .count();
+        assert_eq!(hits, 1, "生产调用必须恰一条（0 = 被删/改坏；>1 = 重复）");
+        let hit = src
+            .find("set_actor_weapon_strong(world, sessions, catalog, actor_id);")
+            .expect("调用行");
+        let atk = src
+            .find("world.attack_cmd(actor_id, tid);")
+            .expect("攻击派发行");
+        assert!(
+            hit < atk,
+            "必须在 world.attack_cmd 之前灌入（hit={hit} atk={atk}）"
         );
     }
 }

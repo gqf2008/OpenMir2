@@ -1218,7 +1218,6 @@ pub struct AttackPoisonState {
 }
 
 /// [`attack_dir_grouped`] 的**中毒门感知**版本（本片 `buff-producer-wiring` 新增）。
-///
 /// 与 [`attack_dir_grouped`] 的差别**只在末尾的取数插入位置**：oracle `AttackSuccess` 里
 /// `:221-224` 的麻痹中毒门（`Random(target.AntiPoison + Config.AttackPosionRate) == 0` ⇒
 /// `targetObject.MakePosion(PoisonState.STONE, Config.AttackPosionTime, 0)`）**先于** `:225` 的
@@ -1227,10 +1226,10 @@ pub struct AttackPoisonState {
 /// **短路口径照 oracle**：`!targetObject.UnParalysis && Paralysis && (Random(...) == 0)`——
 /// `UnParalysis` 或 `!Paralysis` 时**不抽**（C# 的 `&&` 短路）；只有两项都过才抽一次。`poison`
 /// 传 `None`（buff 关 / 无该 actor 的运行态）⇒ 与 [`attack_dir_grouped`] **逐取数等价**（不抽）。
-///
 /// 只对**玩家攻方**（`AttackPowerMode::Player`）生效——`AttackSuccess` 是 `PlayObject` 的私有方法，
 /// 怪物/召唤物的 `BaseObject` 攻击路径不调它（见 [`attack_dir`] 注释）。
-pub fn attack_dir_grouped_poison(
+#[allow(clippy::too_many_arguments)] // 8 个实参 = oracle `AttackSuccess` 的同名/同序概念 + `weapon_strong`
+pub fn attack_dir_grouped_poison_ws(
     rng: &mut impl RandomSource,
     attacker: &mut Entity,
     target: &mut Entity,
@@ -1238,6 +1237,7 @@ pub fn attack_dir_grouped_poison(
     config: &CombatConfig,
     attacker_group_members: &[i32],
     poison: Option<AttackPoisonState>,
+    weapon_strong: u16,
 ) -> (AttackOutcome, bool, Option<WeaponWearOutcome>) {
     let (mut poisoned, mut weapon_wear) = (false, None);
     let mode = AttackPowerMode::for_attacker(attacker);
@@ -1263,9 +1263,39 @@ pub fn attack_dir_grouped_poison(
             }
         }
         // `AttackSuccess(..., targetObject)`：目标非空 ⇒ 抽 `Random(5)`（`PlayObject.Attack.cs:225`）。
-        weapon_wear = attack_success_weapon_wear(rng, attacker);
+        weapon_wear = attack_success_weapon_wear_with_strong(rng, attacker, weapon_strong);
     }
     (outcome, poisoned, weapon_wear)
+}
+
+/// [`attack_dir_grouped_poison_ws`] 的**薄包装**：`WeaponStrong` 缺省 0（与建模前逐取数/逐字节等价）。
+///
+/// 卡 `openmir2-ability-weaponstrong`（tier=R）：带 `WeaponStrong` 的实现**原地**改名为 `_ws` 并在
+/// 参数行末尾加 `weapon_strong`，使函数体（含毒门 `random_below` 的物理行）**不移动**——RNG 账本
+/// canonical 站点（`attack_rng_ledger.py` 现读源码钉住的 `combat.rs:1260`）因此逐字节不变。
+/// 生产路径走 [`crate::world::World::attack_once`] → `_ws`（宿主经
+/// [`crate::world::World::set_attack_weapon_strong`] 灌入）；本包装只保留历史签名给
+/// [`attack_dir_grouped`] 与无 `WeaponStrong` 的调用方。
+#[must_use]
+pub fn attack_dir_grouped_poison(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+    target: &mut Entity,
+    last_hitter: Option<LastHitter>,
+    config: &CombatConfig,
+    attacker_group_members: &[i32],
+    poison: Option<AttackPoisonState>,
+) -> (AttackOutcome, bool, Option<WeaponWearOutcome>) {
+    attack_dir_grouped_poison_ws(
+        rng,
+        attacker,
+        target,
+        last_hitter,
+        config,
+        attacker_group_members,
+        poison,
+        0,
+    )
 }
 
 /// 无目标挥砍（`PlayObject.AttackDir(targetObject = null)`）的**唯一**取数：攻击力。
@@ -1816,6 +1846,38 @@ mod tests {
         assert!(!paralysis_from_ring_shapes([None, Some(0)]));
         assert!(!paralysis_from_ring_shapes([None, None]));
         // 红检（变异牙）：把 `s == RING_MAKESTONE_ITEM` 改成恒 `true` ⇒ 上面两条 `!` 断言必红。
+    }
+
+    /// **卡 `openmir2-ability-weaponstrong`**：带 `WeaponStrong` 的入口**不改变抽取次数与顺序**——
+    /// 同种子下与旧入口的 `random_below` 入参序列逐项相同；数值只影响磨损结果。
+    #[test]
+    fn weapon_strong_does_not_change_rng_draws() {
+        use crate::entity::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+        let cfg = CombatConfig::default();
+        let mk = || {
+            let mut a = Entity::new(1, "a", 0, 0);
+            a.race = ACTOR_RACE_PLAY;
+            a.dc = 20;
+            a.luck = 0;
+            a.power_rate = 100;
+            let mut t = Entity::new(2, "t", 0, 0);
+            t.race = ACTOR_RACE_MONSTER;
+            t.hit_point = 0;
+            t.speed_point = 10;
+            t.hp = 100;
+            t.max_hp = 100;
+            (a, t)
+        };
+        let (mut a1, mut t1) = mk();
+        let mut base = CountingRng::new(7);
+        let _ = attack_dir_grouped_poison_ws(&mut base, &mut a1, &mut t1, None, &cfg, &[], None, 0);
+        let (mut a2, mut t2) = mk();
+        let mut ws = CountingRng::new(7);
+        let _ = attack_dir_grouped_poison_ws(&mut ws, &mut a2, &mut t2, None, &cfg, &[], None, 9);
+        assert_eq!(
+            base.below, ws.below,
+            "抽取入参序列必须逐项相同（同位置、同次数）"
+        );
     }
 
     /// **A-5**：中毒门的抽取**插在** `AttackSuccess` 的 `Random(5)` **之前**（oracle `:221` < `:225`），
