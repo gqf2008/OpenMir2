@@ -36,8 +36,10 @@
   只写了 `tier=R`、**没写 `window_required`** ⇒ `goal_gate` 把它归入「三者皆无」⇒ 条件② 从 `need_human` 掉成 `fail`；
   交付后 Leader 用签名 comment `c7f43850`（`verified=true`，`body.window_required=true`）补登记，条件② 才修回 `need_human`。
   `goal_gate` 扫**任意 kind** 的 `body.window_required`，一条 comment 即可消除「三者皆无」。
-  快照：`master=55a8e7fca`，`generated_ts=1792791605`；R 卡 197 张、`window_required=123`（其中未合并 2）、
+  快照：`master=55a8e7fca`，`generated_ts=1792791977`；R 卡 198 张、`window_required=123`（其中未合并 2）、
   `merged 未 closed 但已凭登记 PASS=172`、`whitelist_t_rows=255`。
+  （R 卡计数与「未开工/未合并」随 collab 看板漂移：本卡窗口内新开出 `openmir2-weaponstrong-dura-zero-skip`
+  （open/待认领，不计缺口），使 R 卡 197→198、未开工 0→1；复算一律以命令现取为准。）
 - 工具已就绪：`preflight.py` 已合入 master（最新 commit `deea8d3d0`，`git merge-base --is-ancestor deea8d3d0 master` 为真）；
   `docs/window-batch-plan-20261023.md` §7.1 里「preflight 在办（未合）」**已过期**。
 - 场景：`tools/probe/scenarios/` 现 20 个，2 个仍 `blocked`（`combat_hit` / `combat_strike`）；
@@ -58,7 +60,7 @@
 1. owner 授权（或指派车道）开窗；2. 开窗前 60 秒自查必须 rc=0；3. 逐场景产物归档 + 独立 reviewer 复核；
 4. R 级卡窗口后**仍不 closed**（保持 `in-progress` 并在 `work` 写明窗口项）——这是 AGENTS.md 的硬规则。
 
-### 1.5 条件② 原文（本卡在 `55a8e7fca` 实跑，`generated_ts=1792791605`；逐字复制，未删节）
+### 1.5 条件② 原文（本卡在 `55a8e7fca` 实跑，`generated_ts=1792791977`；逐字复制，未删节）
 
 ```sh
 python -I -B tools/goal/goal_gate.py --json
@@ -68,16 +70,17 @@ python -I -B tools/goal/goal_gate.py --json
 overall = need_human（需人工）
 conditions[1].id = 2
 conditions[1].state = need_human
-conditions[1].detail = R 卡 197 张：已完成 11 / window_required 123（其中未合并 2） /
+conditions[1].detail = R 卡 198 张：已完成 11 / window_required 123（其中未合并 2） /
   whitelist 48 / 已裁定登记 3 / comment 证据 0 / 三者皆无 0 /
-  merged 未 closed 且无登记(需人工) 5 / 未开工或未合并 0（不计缺口）/ 其它需人工 5；
+  merged 未 closed 且无登记(需人工) 5 / 未开工或未合并 1（不计缺口）/ 其它需人工 5；
   需人工 10 张（按 last_status_ts 最旧优先，见 JSON need_items）；
   merged 未 closed 但已凭登记 PASS：172 张（卫生清单，见 evidence.merged_open_hygiene；登记型 PASS ≠ 已有真机证据）
 fail_items = []          # FAIL 卡 0
 conditions[1].evidence.whitelist_t_rows = 255
 ```
 
-- 「**未开工或未合并 0（不计缺口）**」与「**其它需人工 5**」是两行：前者**不计入**「需人工 10 张」（10 = 5 + 5）。
+- 「**未开工或未合并 1（不计缺口）**」与「**其它需人工 5**」是两行：前者**不计入**「需人工 10 张」（10 = 5 + 5）；
+  这 1 张是本次快照窗口内新开的 `openmir2-weaponstrong-dura-zero-skip`（`board_status=open`，无 patch/merge_result）。
 - `openmir2-ability-weaponstrong` 在 `evidence.r_cards` 里是
   `state=pass / category=window_required / merged=true / window_required=true / strong_t=["T-266"] / weak_t=["T-141","T-267"] / board_status=in-progress`
   ——**不是 FAIL**（已随 `d38acf25b` 合入，R 卡等窗口）。它当初被修回 PASS 靠的是 Leader 的签名 comment `c7f43850`（`body.window_required=true`）。
