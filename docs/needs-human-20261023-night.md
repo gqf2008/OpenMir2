@@ -20,8 +20,9 @@
   2. `castle_zone` 覆盖的 **4 张**：申请链 `NotImplementedException`（T-38）、GM 入口 perm 10、
      `AttackSabukWall.txt` 空 Δ；解封需 owner 裁决「`StartCastlewarTime` / DB 双行会 /
      私有根 `AttackSabukWall.txt` / 多会话探针」三项。
-  3. `spell_cast` 覆盖的 **R5 8 张**：缺 `characters_magic` 夹具（卡 `openmir2-window-magic-fixture` 在办）
-     **且** Rust 侧魔法实现未完成。
+  3. `spell_cast` 覆盖的 **R5 8 张**：`characters_magic` 夹具已随 `512d9ecf5` 落地、改由 profile `magic`
+     段声明（卡 `openmir2-window-magic-fixture` 不再是阻塞项）；场景已解封（卡 `openmir2-spell-cast-unblock`），
+     但 Rust 侧魔法实现仍未完成 ⇒ 真机跑不了。
 
 ## 2. `rules.json` 的 43 条 `PENDING`（`approved_by` 只能 owner/coordinator 签）
 
@@ -71,7 +72,7 @@
 **你开窗时的执行依据**换成了 `docs/window-batch-plan-20261023.md`（卡 `openmir2-window-batch-plan-refresh`
 在更新它）：它会给出「现在就能跑」与「现在跑也没用」两份清单——**后者比前者更重要**，
 因为 BLOCKED/不可达的场景即使跑绿也不能当证据（`combat_strike` R3 13 张、`castle_zone` 4 张、
-`spell_cast` R5 8 张、`equip_struck_save` 1 张、`upgrade_retrieve` 4 张）。
+`spell_cast` R5 8 张（已解封，但 Rust 魔法未接仍不可跑）、`equip_struck_save` 1 张、`upgrade_retrieve` 4 张）。
 
 §1–§6 的六项 owner 决策**仍然有效**，其中 §1（窗口授权）与 §2（43 条规则 PENDING + ident 14 裁定）
 是唯一还挡在条件② 前面的两件事。
