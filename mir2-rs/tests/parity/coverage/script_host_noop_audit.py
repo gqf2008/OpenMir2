@@ -47,7 +47,7 @@ SUBCARDS = {
     'openmir2-script-action-var-text',
     'openmir2-script-envir-root-host',
     'openmir2-script-dyn-var-host',
-    'openmir2-script-user-account-host',
+    'openmir2-script-user-account',
 }
 VERDICTS = {'safe', 'needs_card', 'covered'}
 SAFE_KINDS = {'overridden', 'equivalent', 'approximation'}

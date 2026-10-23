@@ -42,8 +42,8 @@
    "group": "dyn_vars"
   },
   {
-   "id": "openmir2-script-user-account-host",
-   "oid": "9bdc52f0c3009401ecdc6b890690868636c7826f",
+   "id": "openmir2-script-user-account",
+   "oid": "8b3f7041d5e34474874a0047430d4adede9f3964",
    "group": "user_account"
   }
  ],
@@ -661,7 +661,7 @@
    "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
    "mod_line": 249,
    "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:249",
-   "subcard": "openmir2-script-user-account-host"
+   "subcard": "openmir2-script-user-account"
   },
   {
    "name": "dyn_var_set",

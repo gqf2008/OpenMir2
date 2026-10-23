@@ -37,7 +37,7 @@
 | `openmir2-script-action-var-text` | `46efbcb26f7e783b1631e6e0165d333f62e210aa` | `action_line_variable_text` / `action_variable_text` | 1260 |
 | `openmir2-script-envir-root-host` | `8b8be5e4b088d39ff8744ed1f0c5a0e944ad845b` | `envir_root`（`ScriptNpc`） | 607 |
 | `openmir2-script-dyn-var-host` | `04a461726bf9255ba87fa2d673e9f79a46ae0efc` | `dyn_var_get` / `dyn_var_set` / `dyn_var_insert` | 894 |
-| `openmir2-script-user-account-host` | `9bdc52f0c3009401ecdc6b890690868636c7826f` | `user_account` | 476 |
+| `openmir2-script-user-account` | `8b3f7041d5e34474874a0047430d4adede9f3964` | `user_account`（orchestrator 派工；初始重复卡 `openmir2-script-user-account-host` 已 blocked 作废） | 476 |
 
 > 注：`action_line_variable_text` 的 1260 是「调用该宿主的动作/条件句柄行数」；其中**本方法 direct 命令集合内文本真含 `<$`** 的只有 **396** 行（§1.2 有复算口径）——变量展开缺省实现只在后者上产生可见差异。`envir_root`/`dyn_var_*` 的计数是**间接**（经 `check_string_list` / `get_mov_data_dynamic_var_value` 等 helper）触达。子卡表的计数是**组内各方法有效可达之和**（同一命令在多个方法上被重复计入，不是并集大小）。
 
@@ -113,7 +113,7 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | 1 | `action_line_variable_text` | player | 按 oracle 骨架展开（回调 action_variable_text） | ProcessingBase.cs:1237 | 1260 | **否** | 需开卡（P1） → `openmir2-script-action-var-text` |
 | 2 | `envir_root` | npc | 恒 None | ProcessingBase.cs:1829 | 607 | **否** | 需开卡（P1） → `openmir2-script-envir-root-host` |
 | 3 | `dyn_var_get` | player | 恒 None | ProcessingBase.cs:898 | 486 | **否** | 需开卡（P1） → `openmir2-script-dyn-var-host` |
-| 4 | `user_account` | player | 恒空串 | ProcessingBase.cs:248 | 476 | **否** | 需开卡（P1） → `openmir2-script-user-account-host` |
+| 4 | `user_account` | player | 恒空串 | ProcessingBase.cs:248 | 476 | **否** | 需开卡（P1） → `openmir2-script-user-account` |
 | 5 | `dyn_var_set` | player | 恒 false | ProcessingBase.cs:921 | 352 | **否** | 需开卡（P1） → `openmir2-script-dyn-var-host` |
 | 6 | `config_show_script_action_msg` | player | 恒 false | Processings/ExecutionProcessingSys.cs:2655 | 175 | **否** | 需开卡（P1） |
 | 7 | `find_magic` | player | 恒 None | Processings/ExecutionProcessingSys.cs:2641 | 165 | **否** | 需开卡（P1） |
@@ -295,7 +295,7 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | `envir_root` | 恒 None | oracle 侧根目录由宿主注入（`GetEnvirFilePath`），恒非 None。Rust 恒 None（`HostNpc` 未覆写）⇒ 文件列表类条件/动作全失效。 | 需开卡 P1 → `openmir2-script-envir-root-host` |
 | `path` | 恒空串 | oracle 侧同名字段的读写写法见 `string sListFileName = SystemShare.GetEnvirFilePath(normNpc.Path, questConditionInfo.sParam1);`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒空串，部署可达 489 行。 | 安全（已覆写） |
 | `dyn_var_get` | 恒 None | oracle 取 `DynamicVarMap`（`$HUMAN/$GLOBAL/$ACCOUNT`）：变量声明过则非 None。Rust 恒 None ⇒ 动态变量永读不到（`CALCVAR` 68 / `VAR` 24 / `LOADVAR` 24 等）。 | 需开卡 P1 → `openmir2-script-dyn-var-host` |
-| `user_account` | 恒空串 | oracle 取 `playerActor.UserAccount`，任何真实玩家都非空。Rust 恒空 ⇒ `CHECKACCOUNTLIST`(238) 恒 false、`DELACCOUNTLIST`(238) 删不到行；**真实玩家确实会走到**。 | 需开卡 P1 → `openmir2-script-user-account-host` |
+| `user_account` | 恒空串 | oracle 取 `playerActor.UserAccount`，任何真实玩家都非空。Rust 恒空 ⇒ `CHECKACCOUNTLIST`(238) 恒 false、`DELACCOUNTLIST`(238) 删不到行；**真实玩家确实会走到**。 | 需开卡 P1 → `openmir2-script-user-account` |
 | `global_a_val` | 恒空串 | oracle 侧同名字段的读写写法见 `sValue = SystemShare.Config.GlobalAVal[n100 - 700];`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒空串，部署可达 450 行。 | 安全（已覆写） |
 | `globa_dy_mval` | 恒 0 | oracle 侧同名字段的读写写法见 `nValue = SystemShare.Config.GlobaDyMval[n100 - 400];`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒 0，部署可达 436 行。 | 安全（已覆写） |
 | `global_val` | 恒 0 | oracle 侧同名字段的读写写法见 `nValue = SystemShare.Config.GlobalVal[n100 - 100];`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒 0，部署可达 436 行。 | 安全（已覆写） |
@@ -405,7 +405,7 @@ RED（期望）: 牙③：sys_msg 的 evidence.line 改成 1（impl 块外） �
 ```
 
 > 三颗牙都在 `selftest` 内用**内存副本**跑，跑完校验真实台账 sha256 与运行前一致：
-> `a8d95cc786d68bd8b8a869ea67858ed2f4c1f1391fd932275abaae827594805d`（前后同值 = 还原证明；`selftest` 自身 rc=0）。
+> `6fb73e09b07c33cddc7bd70755697419233b01a0f73eb8c277bbf337d25c4c39`（前后同值 = 还原证明；`selftest` 自身 rc=0）。
 
 **行号纪律**：本版 `npc.rs` / `mod.rs` 行号钉在合并树 `7b0e5955`；门按**符号**核（impl 块成员 + mod.rs 内 `fn` 声明），所以别的分支改这两个热文件后**不会误红**，只会在 `check` 里打 `WARN: 行号已漂移`。需要逐行严格时跑 `check --strict-lines`。oracle（`src/**`，冻结面）仍逐行精确核。
 
@@ -443,6 +443,6 @@ RED（期望）: 牙③：sys_msg 的 evidence.line 改成 1（impl 块外） �
 |---|---|---|
 | F-1 自检门在合并树上 RED 51 处（全是 evidence 行号，npc.rs 因 frame-drain +23 行漂移） | important | **同时做了 (a)+(b)**：① 把台账与文档行号**重钉到合并树 `7b0e5955`**（`check --strict-lines` rc=0）；② 把门改成**按符号核**——`evidence` 记录 `{file, impl, method, line}`，只要求「方法在该 impl 块内 + 行号落在块范围内」，`mod.rs` 同理只要求存在 `fn <name>`。别的分支再改热文件只会打 `WARN: 行号已漂移`，不再误红。行号基线写进台账 `line_baseline` / `line_policy`。 |
 | F-2 「534 行影响面」不可复算且混入不走本路径的命令 | minor | 撤换为复审口径：本方法 direct 集合内「命令行且含 `<$`」**396**（SENDMSG 378 + CHECKONLINE 14 + MESSAGEBOX 4）；全树「命令行且含 `<$`」**538**；全树含 `<$` 的所有行 **694**。并注明 `GMEXECUTE` 不调 `GetLineVariableText`。子卡上的旧数已用签名 comment 订正（`fe909fbf`）。 |
-| F-3 `user_account`(P1/476) 无子卡，envir-root 卡引用的「另一子卡」不存在 | minor | 新开 `openmir2-script-user-account-host`（issue oid `9bdc52f0c3009401ecdc6b890690868636c7826f`），并在 envir-root 卡签名 comment 里交叉链接（`4dc44bea`）。台账 / 本文子卡表同步为 **4 张**。 |
+| F-3 `user_account`(P1/476) 无子卡，envir-root 卡引用的「另一子卡」不存在 | minor | 先新开 `openmir2-script-user-account-host`，随后发现 orchestrator 在 28 秒后已派出 `openmir2-script-user-account`（oid `8b3f7041d5e34474874a0047430d4adede9f3964`，同时覆盖 user_account 与 envir_root）⇒ 把重复卡置 `blocked` 作废并在两处留痕，台账 / 本文子卡表指向**canonical 卡**。envir-root 卡已签名 comment 交叉链接（`4dc44bea`）。 |
 | F-4 `use_item_std_item_present` 标「语义等价」易被读成等价 | minor | 新增 `safe_kind` 三分类（overridden / equivalent / approximation）；该行改标 **既有近似**，理由写明 `Index>0` 与 `GetStdItem(...)!=null` 的差异与残余归属。§2.3 增加专门注记。 |
 | F-5（info）全量性/计数/覆写一致性复核通过 | info | 无动作。 |
