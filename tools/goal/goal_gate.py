@@ -666,11 +666,14 @@ def r_category(ev):
     if ev.get("unverified"):
         return "unverified"
     adj = ev.get("adjudicated")
-    if adj:
-        # 复核裁定优先于历史条目：最新 approve 说 true ⇒ window_required；说 false+理由 ⇒ 已裁定不需窗口
-        return "window_required" if adj.get("kind") == "window_required" else "adjudicated"
-    if ev.get("window_required"):
-        return "window_required"
+    if adj and adj.get("kind") != "window_required":
+        # 复核裁定说 false+理由 ⇒ 已裁定不需窗口
+        return "adjudicated"
+    # `window_required` 登记（历史的或 approve 裁定的）若**尚未合并**，单列一类：
+    # 窗口在合并前根本跑不了，混进 window_required 会让「窗口欠账」失真（卡
+    # `openmir2-goal-gate-unmerged-window-bucket`）。**仍然是 PASS**，只拆计数。
+    if (ev.get("window_required") or (adj and adj.get("kind") == "window_required")):
+        return "window_required_unmerged" if not ev.get("merged") else "window_required"
     if ev.get("strong_t"):
         return "whitelist_t"
     if ev.get("evidence_entries"):
@@ -705,6 +708,9 @@ def classify_r_evidence(ev):
         if ev.get("evidence_entries"):
             why += "；comment/review 内有 VERDICT=PASS"
         return PASS, why
+    if category == "window_required_unmerged":
+        return PASS, ("有 window_required 登记但**尚未合并**（窗口在合并前跑不了，单列计数；"
+                      "登记本身有效，仍算 PASS）")
     if category == "window_required":
         return PASS, "有 window_required=true 登记"
     if category == "whitelist_t":
@@ -756,10 +762,11 @@ def judge_r_cards(evidence_list):
         state = NEED
     else:
         state = PASS
-    detail = ("R 卡 %d 张：已完成 %d / window_required %d / whitelist %d / 已裁定登记 %d / "
-              "comment 证据 %d / 三者皆无 %d / merged 未 closed 且无登记(需人工) %d / "
-              "未开工或未合并 %d（不计缺口）/ 其它需人工 %d" % (
+    detail = ("R 卡 %d 张：已完成 %d / window_required %d（其中未合并 %d） / whitelist %d / "
+              "已裁定登记 %d / comment 证据 %d / 三者皆无 %d / "
+              "merged 未 closed 且无登记(需人工) %d / 未开工或未合并 %d（不计缺口）/ 其它需人工 %d" % (
                   len(per_card), counts.get("closed", 0), counts.get("window_required", 0),
+                  counts.get("window_required_unmerged", 0),
                   counts.get("whitelist_t", 0), counts.get("adjudicated", 0),
                   counts.get("comment_evidence", 0), counts.get("none", 0),
                   counts.get("merged_not_closed", 0), counts.get("not_merged", 0),

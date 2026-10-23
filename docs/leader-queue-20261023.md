@@ -129,7 +129,13 @@
     ⇒ **第 4 查**：`walgit collab thread <card>` 看**该卡线程**最近 N 条 entry 的 `actor`+`ts`；
     若同 principal 在**最近 10 分钟内**有过写入（尤其是 comment/patch），视为在干活，**不派**。
     三查看的是 git 层，第 4 查看的是**协作层**——两层都要查。
-    **连带口径（与第 16 条一起读）**：`git author` 是共享工作副本配置（`OpenMir2-wt-cronclaim` 的
+    **追加操作（2026-10-24 01:2x，一晚四次同卡双写换来的）**：`shutup-release` 返工误派、`sweep` 同 principal 双车道、
+    `script-user-account` 双修、`window-batch-plan-refresh` 双返工——**四次里有三次是「原车道在我派活之后才动手」**。
+    ⇒ **派返工/接管前，先在该卡线程发一条签名「接管声明」**（写明：本卡由 `<principal>` 接管、原车道请停写、
+    已有改动请让渡或说明），**再开工**。这条声明不是仪式：它让原车道在下一次读线程时**必然看到**，从而收敛。
+    同理，**合并前先看线程有没有第二条并行分支**，别把两版都合进去。
+
+    连带口径（与第 16 条一起读）：`git author` 是共享工作副本配置（`OpenMir2-wt-cronclaim` 的
     `user.name` 就是 `openmir2-worker-66`，谁提交都显示 worker-66），所以**author ≠ 签名者不等于代签**；
     但「同一 principal 两条车道并发写同一张卡」本身就是污染，与 author 字段无关，必须重交付、重签。
     干净的交付 = **一号一车一 worktree**：签名 principal、worktree 的 `walgit/identity`、提交所在 worktree 三者一致。
@@ -141,6 +147,9 @@
     ⇒ **同一个 worktree 可以复用，但 agent 不要复用**：每张新卡 `Agent(...)` 起新实例（新实例会重新读卡面与 worktree 状态）；
     resume（`SendMessage`）只用于**同一张卡的返工**，且返工超过 2 轮就换新实例并把「已确认的结论」写进 brief。
     同理：**给 agent 的 brief 里不要塞整段历史**，只给结论 + 文件路径。
+    **实测阈值（2026-10-24 01:2x，一晚三例）**：`worker-69`、`reviewer-5`（两次）都因 1,060k+ tokens 爆掉；
+    共同点是**每个实例都被塞了 2–4 张卡**。⇒ **一个实例只做一张卡**（review 也一样：一次一条 review，别打包 2–3 张）；
+    需要清积压时**并行起多个新实例**，不要往一个实例里塞。
 
 ## 2. 正在跑（每次巡检更新）
 

@@ -16,7 +16,25 @@
   （订正：原文写「尚未加值断言 / 仍在飞行」，那是 16:45 之前的状态）。
   参数发现已接进 `card_window.py`（卡 `openmir2-window-discovery-wiring` 已合入 `e72fb9728`）；规则表另见 §4.5。
 
-## 0.5 开窗前 60 秒自查清单（复制粘贴；每步给「期望」与「失败含义」）
+## 0.5 开窗前 60 秒自查（**一条命令**；手工步骤保留为退路）
+
+```sh
+python -I -B tools/conformance/preflight.py --profile alt
+```
+
+输出每步一行 `[OK]/[FAIL] <step>: <细节>`，最后 `PREFLIGHT PASS`（rc=0）或 `PREFLIGHT FAIL`（rc=2）；**FAIL 行直接写了修复建议**。五步含义（与卡 `openmir2-window-preflight-script` 一致）：
+
+| 步骤 | 查什么 | 失败时该做什么 |
+|---|---|---|
+| `docs` | runbook 有 `probe_timeout_ms`、无 profile 的 `"timeout_ms"`（旧键会被**静默忽略**）；scenarios/README 同样提到 `probe_timeout_ms` | 按第 0 步改回 `probe_timeout_ms` |
+| `binary` | 委托 `start_mir2_server.ps1 -WhatIf`，解析 `SERVER_EXE/SHA256/BUILD`；必须是 `Release` 且打印的 sha 与本地重算一致 | `cargo build --release -p mir2-server`（确要用 debug 才加 `--allow-debug`，并在证据里写明） |
+| `ports` | 从 profile 的 `sides[*].ports` 逐个 connect 探测（**不写死端口表**），要求全空 | 先停上一轮栈（`preflight` 会点名端口） |
+| `profile` | `probe_timeout_ms` 为正整数；开了 `require_pid_binaries` 的侧必须有 `pid_file` | 补 profile 键 |
+| 可选 | `--with-dry-run` / `--with-selftest` 才委托 `card_window` 对应动作（默认不跑） | 同原命令 |
+
+> 只读：不起栈、不连库、端口只做 connect 探测。`--selftest` 用桩验证五个失败分支（rc=2 且点名）。
+
+### 退路：手工步骤（命令不可用时照旧做）
 
 > 五步顺序：**核二进制 sha → 核端口 → 核 profile 键 → `--dry-run` → `--selftest`**；外加第 0 步（文档口径）与第 4.5 步（idents 登记）。
 > 任一步与期望不符 ⇒ **不要开窗**（一轮窗口 ≈ 240G + 数十分钟）。
@@ -213,8 +231,30 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 - **已在目标位 ⇒ 不发 UPDATE**（`action=noop`），不会白写库。
 - 证据：`<out>/<side>/placement.json`（声明值、前后值、其余列指纹、SQL），README/card-window.json 里也有。
 - **不连库也能验**：`--dry-run` 会做离线内容校验（图存在、坐标在界内且可走）并打印预置命令。
-- **仍不支持背包夹具**：「背包里必须已有某个 MakeIndex/物品」这类前置仍走手工 DB 夹具，
-  由卡 `openmir2-discovery-bagitems-201` 承接（本工具预留了同一处声明点，落地时直接接）。
+- **背包夹具：声明即可**（2026-10-23 起，卡 `openmir2-window-inventory-fixture`）：场景顶层写 `inventory`，
+  工具在 restore 之后、起栈之前把它写进**本侧测试库**；见 §1.6。
+
+## 1.6 背包夹具：**声明即可**（工具已支持，2026-10-23 起）
+
+「背包里必须已有某个 MakeIndex / 物品」这类前置**不再手工改库**：在场景 JSON 顶层写
+
+```json
+"inventory": [
+  {"index": 100, "make_index": 5001, "position": 3, "std_mode": 0, "ani_count": 0, "dura": 0, "dura_max": 0}
+]
+```
+
+- 必填 `index`（物品模板号）/ `make_index` / `position`（0..45 槽位）；`std_mode` / `ani_count` 声明时
+  **必须与 `mir2_data.stditems` 模板一致**（不符 ⇒ 该侧 rc=2，防止「以为是药水结果造出武器」）；
+- `position` 与 `make_index` 在同一声明里都必须唯一；未知键/类型错 ⇒ fail-closed；
+- 写入列只有 `ChrName/LoginID/Index/MakeIndex/Position/Dura/DuraMax`；其余列出问题另判；
+  **声明的槽位必须原本为空**（槽位已被占用 ⇒ rc=2：DELETE+INSERT 会把该行其它列重置成默认值，
+  工具不替你做这件事）；
+- 预置时机：每侧 `restore` 之后、起栈之前；两侧共用**同一份声明** ⇒ `make_index` 天然一致；
+- 证据：`<out>/<side>/inventory.json`（声明、前后行数/指纹、SQL、rc）。
+
+> 与 `placement` 同一处声明风格；不起栈的离线校验：`--dry-run` 会打印预置命令并做**离线内容校验**
+> （槽位/键/std_mode），不合规直接 rc=2，不会起栈。
 
 ## 1.6 二进制与 sha256 的开窗前核对（卡 `openmir2-start-server-whatif-sha`，2026-10-23 晚）
 
@@ -414,7 +454,7 @@ body  : EDCode.EncodeBuffer(ClientItem) + '/'  × ItemList.Count        // 逐�
 
 **局限（真机前必读）**：
 1. **待真实录制验证**：现有录制无 201 ⇒ 规则只有构造级证据；真机需要一个**非空背包**的 discovery run
-   （背包夹具仍走手工 DB 或后续卡，`card_window.py` 本期未接背包预置）。
+   （背包夹具：场景声明 `inventory` 即可，`card_window.py` 已接，见 §1.6）。
 2. **跨侧一致性**：`make_index` **不在** `card_window.py` 的 `SESSION_SCOPED_VARS` 里 ⇒ 两侧 `MakeIndex`
    不同会被判 `value_mismatch` rc=2。两侧库由同一基线克隆且 `characters_bagitem.MakeIndex` 是从库读回的
    （`PlayDataStorage.Query.cs:404-425`）时两侧相同；若某侧在会话里**新造**物品（GM/掉落）则两侧必然不同，
