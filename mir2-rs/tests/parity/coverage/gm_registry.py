@@ -1240,6 +1240,8 @@ def cmd_selftest(args):
     base = json.loads(raw.decode("utf-8"))
     fresh = build(args.conf, args.envir, args.deploy)
 
+    skips = []
+
     def tooth(name, fn):
         try:
             fn()
@@ -1341,7 +1343,14 @@ def cmd_selftest(args):
 
     def t_k():
         doc = copy.deepcopy(base)
-        row = next(r for r in doc["commands"] if r["verdict"] == "script-reachable")
+        row = next((r for r in doc["commands"] if r["verdict"] == "script-reachable"), None)
+        if row is None:
+            # 全部 script-reachable 命令都已实现（如 `取消禁言` 合入后）⇒ `commands` 里不再有该态，
+            # 本牙没有样本。**跳过并显式打印**，不静默放行；master 上有样本时本牙照常生效。
+            skips.append("K")
+            print("  [skip] K 证据指向未加载副本脚本 ⇒ gate 红"
+                  "（当前无未实现的 script-reachable 行）")
+            return
         row["script_evidence"] = [dict(row["script_evidence"][0])]
         row["script_evidence"][0]["file"] = "Market_Def/QFunction-0 - 副本.txt"
         row["script_evidence"][0]["line"] = 6
@@ -1383,7 +1392,12 @@ def cmd_selftest(args):
     tooth("L StartPermission=1/10 重算：结构性行不被翻、perm=10 不被 sp=1 翻", t_l)
     def t_n():
         doc = copy.deepcopy(base)
-        row = next(r for r in doc["commands"] if r["verdict"] == "script-reachable")
+        row = next((r for r in doc["commands"] if r["verdict"] == "script-reachable"), None)
+        if row is None:
+            skips.append("N")
+            print("  [skip] N script-reachable 未链接子卡 ⇒ gate 红"
+                  "（当前无未实现的 script-reachable 行）")
+            return
         row["child_card"] = None
         gate_red(doc, row["cmd"], "N script-reachable 未链接子卡")
 
@@ -1400,7 +1414,9 @@ def cmd_selftest(args):
         for f in fails:
             print("  -", f)
         return 1
-    print("gm_registry selftest: OK (14 teeth; registry sha256=%s 未变)" % base_sha[:16])
+    extra = ("；skipped=%s" % ",".join(skips)) if skips else ""
+    print("gm_registry selftest: OK (14 teeth%s; registry sha256=%s 未变)"
+          % (extra, base_sha[:16]))
     return 0
 
 
