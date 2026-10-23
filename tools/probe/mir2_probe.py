@@ -396,8 +396,18 @@ def session_label(session, hop):
 
 
 def within_radius(distance, radius=RADIUS_CELLS):
-    """`±N 格` 判定（含边界）。用例把「第 k 格」的距离与期望收件人一起给出。"""
+    """一维 `±N` 判定（含边界）。
+
+    **注意（复审 M-1）**：oracle 的可见范围是**正方形**（`|dx|<=N && |dy|<=N`，
+    `BaseObject.Message.cs:399-405`），不是欧氏半径；判「某格是否在视野内」请用
+    [`within_square`]，不要把欧氏距离喂给本函数（(12,12) 的欧氏距离 16.97 会被误判为外）。
+    """
     return abs(int(distance)) <= int(radius)
+
+
+def within_square(dx, dy, radius=RADIUS_CELLS):
+    """oracle 视野判定：`|dx| <= N && |dy| <= N`（端点在内；正方形，不是欧氏圆）。"""
+    return abs(int(dx)) <= int(radius) and abs(int(dy)) <= int(radius)
 
 
 def _row_matches(row, pred):
@@ -416,11 +426,14 @@ def _row_matches(row, pred):
     return True
 
 
-def recipients(rows, pred, sessions=None):
+def recipients(rows, pred, sessions=None, statuses=None):
     """命中谓词的帧**分别由哪些会话收到**（会话名有序集合）。
 
-    `sessions` 给了就只计这些会话（调用方用 `online_sessions` 把离线/断开的剔除）。
+    `sessions` 给了就只计这些会话；`statuses`（`{name: online|offline|closed}`）给了就
+    只计 `online`（复审 I-1：连接状态必须能进判定，不能只靠帧是否存在）。
     """
+    if sessions is None and statuses is not None:
+        sessions = online_sessions(statuses)
     allowed = set(sessions) if sessions is not None else None
     got = set()
     for row in rows:
@@ -459,6 +472,22 @@ def assert_recipients(expected, actual):
             "收件人集合不符：missing=%r extra=%r（expected=%r actual=%r）"
             % (missing, extra, sorted(want), sorted(got))
         )
+
+
+def assert_recipients_with_status(statuses, expected, actual):
+    """带连接状态的收件人断言（复审 I-1 的默认口径）。
+
+    1. `expected` 里只保留 `online` 会话（非 online 的不计）；
+    2. `actual` 里若出现非 online 会话收到帧 ⇒ 直接报「已断/未连会话仍收帧」（不许静默）。
+    """
+    live = online_sessions(statuses)
+    want = sorted(set(expected) & set(live))
+    dead_received = sorted(set(actual) - set(live))
+    if dead_received:
+        raise AssertionError(
+            "非 online 会话收到帧：%r（statuses=%r）" % (dead_received, statuses)
+        )
+    assert_recipients(want, actual)
 
 
 def online_sessions(statuses):
@@ -1778,6 +1807,26 @@ def _selftest_multi_session():
     assert within_radius(12) and within_radius(-12)
     assert not within_radius(12, radius=11) and within_radius(11, radius=11)
 
+    # ⑥ 复审 I-1：`statuses` 进判定——非 online 会话不参与
+    st = {"s1": "online", "s2": "offline", "s3": "closed"}
+    assert recipients(rows3, pred, statuses=st) == ["s1"], "statuses 给了 ⇒ 只计 online"
+    # ⑦ 复审 I-1：带状态的断言口径
+    assert_recipients_with_status(st, ["s1", "s2"], ["s1"])  # s2 offline 不计入 expected
+    try:
+        assert_recipients_with_status(st, ["s1"], ["s1", "s2"])  # s2 已 offline 却收到帧
+    except AssertionError as ex:
+        assert "非 online 会话收到帧" in str(ex), str(ex)
+    else:
+        raise AssertionError("已断会话收到帧必须报错（I-1）")
+    # 牙（I-1）：不带状态的旧断言会放过「expected 里的 offline 会话」——新断言不会
+    try:
+        assert_recipients(["s1", "s2"], ["s1"])
+    except AssertionError:
+        pass
+    # ⑧ 复审 M-1：视野是正方形（端点在内），不是欧氏半径
+    assert within_square(12, 12) and within_square(-12, 12)
+    assert not within_square(13, 0) and not within_square(0, -13)
+    assert within_radius(12) and not within_radius(13)
     # 单会话回归：旧标签不含 `.` ⇒ 归 "main"
     rows_main = [row(1, "gamegate", 657), row(2, "selgate", 657)]
     assert recipients(rows_main, pred) == ["main"]
