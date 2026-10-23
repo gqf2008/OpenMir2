@@ -293,6 +293,10 @@ impl StdItemCatalog {
 /// `PlayObject.cs:4424-4426` / `:4563-4566`）：对已装备物品逐件复用
 /// [`apply_item_parameters`] 的赋值规则（`StdMode 5/6/24/26` + `SpecialPwr ∈ 1..=10`，**赋值不累加**），
 /// 只读回 [`AddAbility::weapon_strong`]。
+///
+/// **`Dura == 0` 的槽不参与**：oracle 的装备循环在 `ApplyItemParameters` 之前就
+/// `if (UseItems[i].Dura == 0) { …; continue; }`（`PlayObject.cs:2105-2120`，只计重量），
+/// 故 [`weapon_strong_of`] 必须在同一层整槽跳过（与 [`recalc_abilitys_with_prior`] 主循环同口径）。
 #[must_use]
 pub fn weapon_strong_of(
     use_items: &[Option<crate::bag::BagItem>],
@@ -301,6 +305,11 @@ pub fn weapon_strong_of(
     let mut add = AddAbility::default();
     for it in use_items.iter().flatten() {
         if it.index == 0 {
+            continue;
+        }
+        // `PlayObject.cs:2105-2120`：oracle 在 `ApplyItemParameters` **之前**对 `Dura == 0`
+        // 的槽整槽 `continue`（只计重量，不做任何属性累加）⇒ `AddAbil.WeaponStrong` 不贡献。
+        if it.dura == 0 {
             continue;
         }
         let Some(tpl) = ItemCatalog::get(catalog, it.index) else {
@@ -1871,13 +1880,15 @@ mod tests {
         catalog.insert(10, mk_tpl(5, 3));
         catalog.insert(20, mk_tpl(6, 0));
         catalog.insert(30, mk_tpl(24, 2));
+        // `Dura > 0`：oracle 对 `Dura == 0` 的槽整槽跳过（`PlayObject.cs:2105-2120`），
+        // 本用例只验 `Desc[7]` 覆盖口径，必须落在会被计入的分支上。
         let mk_item = |index: u16, d7: u8| {
             let mut desc = [0u8; 14];
             desc[7] = d7;
             Some(crate::bag::BagItem {
                 make_index: 1,
                 index,
-                dura: 0,
+                dura: 1,
                 dura_max: 0,
                 desc,
             })
@@ -1906,6 +1917,77 @@ mod tests {
             weapon_strong_of(&[mk_item(30, 5)], &catalog),
             2,
             "StdMode 24 不走 Desc[7]"
+        );
+    }
+
+    /// 卡 `openmir2-weaponstrong-dura-zero-skip` ①：`Dura > 0` 且 `SpecialPwr = k`
+    /// ⇒ `weapon_strong == k`（与既有口径一致，防回归）。
+    #[test]
+    fn weapon_strong_of_counts_slot_when_dura_positive() {
+        let mut catalog = StdItemCatalog::new();
+        catalog.insert(
+            10,
+            StdItem {
+                std_mode: 5,
+                special_pwr: 4,
+                ..Default::default()
+            },
+        );
+        let item = crate::bag::BagItem {
+            make_index: 1,
+            index: 10,
+            dura: 1,
+            dura_max: 100,
+            desc: [0; 14],
+        };
+        assert_eq!(
+            weapon_strong_of(&[Some(item)], &catalog),
+            4,
+            "Dura>0 ⇒ 计入 AddAbil.WeaponStrong（未命中 PlayObject.cs:2105 的跳过）"
+        );
+    }
+
+    /// 卡 `openmir2-weaponstrong-dura-zero-skip` ②：`Dura == 0` 且 `SpecialPwr = k`
+    /// ⇒ **不贡献**（0）。oracle `PlayObject.cs:2105-2120` 在 `ApplyItemParameters` 之前
+    /// 整槽 `continue`；本仓必须同层同口径，否则 `AddAbil.WeaponStrong` 分叉。
+    #[test]
+    fn weapon_strong_of_skips_slot_when_dura_zero() {
+        let mut catalog = StdItemCatalog::new();
+        catalog.insert(
+            10,
+            StdItem {
+                std_mode: 5,
+                special_pwr: 4,
+                ..Default::default()
+            },
+        );
+        // `Index > 0 & Dura == 0` 在 Rust 里可直接构造（DB/异常档案/夹具同一形态）。
+        let item = crate::bag::BagItem {
+            make_index: 1,
+            index: 10,
+            dura: 0,
+            dura_max: 100,
+            desc: [0; 14],
+        };
+        assert_eq!(
+            weapon_strong_of(&[Some(item)], &catalog),
+            0,
+            "Dura==0 ⇒ 整槽跳过，模板 SpecialPwr 不贡献"
+        );
+        // `Desc[7]` 覆盖支同样不能越过该跳过：即便 `Desc[7]=7` 也不贡献。
+        let mut desc = [0u8; 14];
+        desc[7] = 7;
+        let upgraded = crate::bag::BagItem {
+            make_index: 2,
+            index: 10,
+            dura: 0,
+            dura_max: 100,
+            desc,
+        };
+        assert_eq!(
+            weapon_strong_of(&[Some(upgraded)], &catalog),
+            0,
+            "Dura==0 ⇒ Desc[7] 覆盖支也不贡献"
         );
     }
 
