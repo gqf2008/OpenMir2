@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "ed57cadbdf6dbead7bacad49009b64b8089565f91c50beeea7d5eac361c42380"
+   "sha256": "bfbee942795ff6ad07e199ce5d232ae02439c90d791dc89675e30d5129d0f3bc"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1934,6 +1934,22 @@
    "third_state": false
   },
   {
+   "cmd": "MobFireBurn",
+   "file": "Market_Def/QFunction-0.txt",
+   "line": 156,
+   "label": "@stdmodefunc15",
+   "rust_imp": "MobFireBurn",
+   "third_state": false
+  },
+  {
+   "cmd": "MobFireBurn",
+   "file": "Market_Def/QFunction-0.txt",
+   "line": 163,
+   "label": "@stdmodefunc16",
+   "rust_imp": "MobFireBurn",
+   "third_state": false
+  },
+  {
    "cmd": "ShowEffect",
    "file": "Market_Def/QFunction-0.txt",
    "line": 170,
@@ -2776,48 +2792,6 @@
    "perm_attr": 10,
    "field": "MobCount",
    "field_line": 158
-  },
-  {
-   "cmd": "MobFireBurn",
-   "cmd_name": "MobFireBurn",
-   "child_card": "openmir2-gm-impl-mobfireburn",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/MobFireBurnCommand.cs:13",
-   "perm_min": 10,
-   "perm_source": "cs[Command] 属性",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/QFunction-0.txt",
-     "line": 156,
-     "label": "@stdmodefunc15",
-     "section": "act",
-     "script_arg": "MOBFIREBURN",
-     "raw": "Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0",
-     "label_path": "Market_Def/QFunction-0.txt:@stdmodefunc15 <- engine GotoLable root",
-     "load_origin": "LocalDB.QFunctionNpc.cs:196"
-    },
-    {
-     "file": "Market_Def/QFunction-0.txt",
-     "line": 163,
-     "label": "@stdmodefunc16",
-     "section": "act",
-     "script_arg": "MOBFIREBURN",
-     "raw": "Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 4 600 0",
-     "label_path": "Market_Def/QFunction-0.txt:@stdmodefunc16 <- engine GotoLable root",
-     "load_origin": "LocalDB.QFunctionNpc.cs:196"
-    }
-   ],
-   "handler_class": "MobFireBurnCommand",
-   "attr_name": "MobFireBurn",
-   "handler_exec_line": 17,
-   "name_source": "cs[Command] 属性",
-   "register_command": false,
-   "perm_attr": 10,
-   "field": null,
-   "field_line": null
   },
   {
    "cmd": "MobNpc",
@@ -4221,20 +4195,20 @@
   }
  ],
  "summary": {
-  "total": 84,
+  "total": 83,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 4
+   "script-reachable": 3
   },
   "reachable": 0,
-  "script_reachable": 4,
+  "script_reachable": 3,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 101,
-   "Unimplemented": 84
+   "Implemented": 102,
+   "Unimplemented": 83
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4260,7 +4234,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 80,
+  "complete_implemented": 81,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
