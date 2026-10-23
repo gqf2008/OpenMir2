@@ -70,15 +70,15 @@
 ```
 cargo fmt --all -- --check                                        rc=0
 cargo clippy --workspace --all-targets -- -D warnings             rc=0
-cargo test --workspace                                            141 suites / 3109 passed / 0 failed
+cargo test --workspace                                            141 suites / 3118 passed / 0 failed
 cargo run -p msgcodegen -- --check                                604 条一致，rc=0
 script_host_noop_audit.py check --strict-lines                    GREEN（168 行：safe 65 / needs_card 99 / covered 4）
 script_host_noop_audit.py selftest                                GREEN
-whitelist_anchor_gate.py check                                    ALL PASS（546 条锚）
+whitelist_anchor_gate.py check                                    ALL PASS（558 条锚）
 m3_whitelist_registry_audit.py audit                              GREEN
-t_reservation_gate.py check                                       GREEN（rows=221 whitelist=221）
+t_reservation_gate.py check                                       GREEN（rows=251 whitelist=251）
 mir2_probe.py --selftest                                          OK（9 checks）
-conflict_marker_gate.py                                           0 markers / 7409 files，rc=0
+conflict_marker_gate.py                                           0 markers / 7423 files，rc=0
 ```
 
 牙 C 的还原 sha256：`mir2-rs/bins/game-svr/src/lib.rs` = `908f35e85a021227c3e48af5013ce83d0a17f71f4ae0edf5ec428c0a8214a1e8`（= 提交树 `git show <head>:…`）。
