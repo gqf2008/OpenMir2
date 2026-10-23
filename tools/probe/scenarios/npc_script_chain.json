@@ -5,13 +5,13 @@
   "placement": {"map": "0122", "x": 29, "y": 33, "note": "比奇国王 0122 (29,32) 的南邻格（Npcs.txt: 比奇国王 1 0122 29 32）"},
   "steps": [
     {"click_npc": "npc_actor",
-     "note": "recog=国王 ActorId，由 param_discovery 从 SM_MERCHANTSAY(643).recog 发现，不许写死。oracle: CM_CLICKNPC(1010) -> PlayObject Click -> NormNpc.Click（src/M2Server/Npc/NormNpc.cs:68-73，清 ScriptCurrLable/ScriptGoBackLable 后 GotoLable(@main)）"},
+     "note": "recog=国王 ActorId，由 param_discovery 从 SM_MERCHANTSAY(643).recog 发现，不许写死。oracle: CM_CLICKNPC(1010) -> PlayObject Click -> NormNpc.Click（src/M2Server/Npc/NormNpc.cs:68-74，清 ScriptCurrLable/ScriptGoBackLable 后 GotoLable(@main)）"},
     {"wait_for": 643, "timeout_ms": 3000,
      "note": "[@main] 说词面板。oracle: NormNpc.SendMsgToUser（src/M2Server/Npc/NormNpc.cs:1613-1616）RM_MERCHANTSAY -> SM_MERCHANTSAY(643)；ScriptEngine.GotoLableSendMerChantSayMsg（src/Modules/ScriptEngine/ScriptEngine.cs:987-993）；正文含 <请求创建行会./@@buildguildnow> 等 5 项（checkitem 祈福项链 1 为假走 #elsesay 支）"},
     {"dlg_select": "@@buildguildnow",
-     "note": "菜单选择回包 = CM_MERCHANTDLGSELECT(1011)（src/OpenMir2/Messages.cs:63），recog=643.recog（驱动器自动取最近一条 643）、body=标签原文。oracle: PlayObject.Operate.cs:114-128 ClientMerchantDlgSelect -> GuildOfficial.UserSelect（src/GameSrv/Npc/GuildOfficial.cs:55-90）；@@ 前缀是 ScriptFlagConst.sBUILDGUILDNOW 的字面值（src/Modules/SystemModule/Const/ScriptFlagConst.cs:68）"},
+     "note": "菜单选择回包 = CM_MERCHANTDLGSELECT(1011)（src/OpenMir2/Messages.cs:63），recog=643.recog（驱动器自动取最近一条 643）、body=标签原文。oracle: PlayObject.Operate.cs:114-128 ClientMerchantDlgSelect -> GuildOfficial.UserSelect（src/GameSrv/Npc/GuildOfficial.cs:55-104）；@@ 前缀是 ScriptFlagConst.sBUILDGUILDNOW 的字面值（src/Modules/SystemModule/Const/ScriptFlagConst.cs:68）"},
     {"wait_for": 763, "timeout_ms": 3000,
-     "note": "建会失败支：ReQuestBuildGuild（src/GameSrv/Npc/GuildOfficial.cs:112-178）空行会名/无沃玛号角/金币不足 => result<0，末尾 SendMsg(RM_BUILDGUILD_FAIL, result)（:173-176）=> SM_BUILDGUILD_FAIL(763)，param=失败码（-4 空名 / -3 缺物品 / -2 缺费用 / -1 已有行会）。注意不是 643：[@main] 里没有 [@@buildguildnow] 标签，GotoLable 零帧"},
+     "note": "建会失败支：ReQuestBuildGuild（src/GameSrv/Npc/GuildOfficial.cs:112-172）空行会名/无沃玛号角/金币不足 => result<0，末尾 SendMsg(RM_BUILDGUILD_FAIL, result)（:167-170）=> SM_BUILDGUILD_FAIL(763)，param=失败码（-4 空名 / -3 缺物品 / -2 缺费用 / -1 已有行会）。注意不是 643：[@main] 里没有 [@@buildguildnow] 标签，GotoLable 零帧"},
     {"dlg_select": "@buildguildexp",
      "note": "标签逐字取自部署件 E:/tmp/conformance/csharp-root/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt 的 <如何建立行会./@buildguildexp>"},
     {"wait_for": 643, "timeout_ms": 3000,
@@ -23,10 +23,10 @@
     {"dlg_select": "@requestcastlewarA",
      "note": "进入带 <关闭/@exit> 的子菜单（标签逐字取自同一部署脚本）；前缀 @requestcastlewar 的 ReQuestCastleWar 分支只匹配 '@requestcastlewarnow'（GuildOfficial.cs:82 HUtil32.CompareLStr），本标签不触发它"},
     {"wait_for": 643, "timeout_ms": 3000,
-     "note": "[@requestcastlewarA] 说词；这一步的关键副作用是把 @exit 放进 CanJmpScriptLableMap（GetScriptLabel 从发出去的说词里抽 <文本/标签>，PlayObject.Base.cs:2778-2812）"},
+     "note": "[@requestcastlewarA] 说词；这一步的关键副作用是把 @exit 放进 CanJmpScriptLableMap（GetScriptLabel 从发出去的说词里抽 <文本/标签>，PlayObject.Base.cs:2775-2811）"},
     {"dlg_select": "@exit",
      "note": "@exit 只有在上一句说词含该链接时才可跳（LableIsCanJmp 门控）；否则 GuildOfficial.UserSelect 会 GotoLable 后直接 return，是零帧而不是 644——所以这一步必须紧跟在 @requestcastlewarA 的 643 之后"},
     {"wait_for": 644, "timeout_ms": 3000,
-     "note": "GuildOfficial.cs:84 SendMsg(this, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0) => SM_MERCHANTDLGCLOSE(644)（src/OpenMir2/Messages.cs:306）。注意 [@exit] 标签在国王脚本里不存在，644 只来自这个分支"}
+     "note": "GuildOfficial.cs:86-89 SendMsg(this, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0) => SM_MERCHANTDLGCLOSE(644)（src/OpenMir2/Messages.cs:306）。注意 [@exit] 标签在国王脚本里不存在，644 只来自这个分支"}
   ]
 }

@@ -23,7 +23,7 @@
 |---:|---|---|---|
 | 1 | `CM_CLICKNPC(1010)` recog=NPC actor | — | `PlayObject` 的 `CM_CLICKNPC` 臂 → `NormNpc.Click`（`src/M2Server/Npc/NormNpc.cs:68-74`）：清 `ScriptGotoCount/ScriptGoBackLable/ScriptCurrLable` 后 `GotoLable(@main, false)` |
 | 2 | wait | `643` | `NormNpc.SendMsgToUser`（`NormNpc.cs:1613-1616`）`RM_MERCHANTSAY` → `SM_MERCHANTSAY(643)`；说词正文由 `ScriptEngine.GotoLable`（`src/Modules/ScriptEngine/ScriptEngine.cs:38-129`）拼出，发送在 `GotoLableSendMerChantSayMsg`（`:987-993`） |
-| 3 | `CM_MERCHANTDLGSELECT(1011)` recog=643.recog、body=`@@buildguildnow` | `763` | `PlayObject.Message.cs:888-890` → `ClientMerchantDlgSelect`（`src/M2Server/Player/PlayObject.Operate.cs:114-128`，`npc.UserSelect(sMsg.Trim())`）→ `GuildOfficial.UserSelect`（`src/GameSrv/Npc/GuildOfficial.cs:55-95`）。`@@buildguildnow` 是 `ScriptFlagConst.sBUILDGUILDNOW` 的字面值（`src/Modules/SystemModule/Const/ScriptFlagConst.cs:68`）⇒ `ReQuestBuildGuild`（`GuildOfficial.cs:112-178`）。空行会名/无沃玛号角/金币不足 ⇒ `result<0` ⇒ `SendMsg(RM_BUILDGUILD_FAIL, result)`（`:167-170`）⇒ `SM_BUILDGUILD_FAIL(763)`，**param = 失败码**（-4 空名 / -3 缺物品 / -2 缺费用 / -1 已有行会）。**不是 643**：`[@main]` 里没有 `[@@buildguildnow]` 标签，`GotoLable` 零帧 |
+| 3 | `CM_MERCHANTDLGSELECT(1011)` recog=643.recog、body=`@@buildguildnow` | `763` | `PlayObject.Message.cs:888-890` → `ClientMerchantDlgSelect`（`src/M2Server/Player/PlayObject.Operate.cs:114-128`，`npc.UserSelect(sMsg.Trim())`）→ `GuildOfficial.UserSelect`（`src/GameSrv/Npc/GuildOfficial.cs:55-104`）。`@@buildguildnow` 是 `ScriptFlagConst.sBUILDGUILDNOW` 的字面值（`src/Modules/SystemModule/Const/ScriptFlagConst.cs:68`）⇒ `ReQuestBuildGuild`（`GuildOfficial.cs:112-172`）。空行会名/无沃玛号角/金币不足 ⇒ `result<0` ⇒ `SendMsg(RM_BUILDGUILD_FAIL, result)`（`:167-170`）⇒ `SM_BUILDGUILD_FAIL(763)`，**param = 失败码**（-4 空名 / -3 缺物品 / -2 缺费用 / -1 已有行会）。**不是 643**：`[@main]` 里没有 `[@@buildguildnow]` 标签，`GotoLable` 零帧 |
 | 4 | `dlg_select @buildguildexp` | `643` | 标签逐字取自部署件 `Envir/Npc_Def/比奇国王-0122.txt` 的 `<如何建立行会./@buildguildexp>`；`[@buildguildexp]` 是纯说词（无 `#IF`），末尾 `<返回/@main>` |
 | 5 | `dlg_select @main` | `643` | 回退腿：`LableIsCanJmp` 对 `@main` **硬编码 true**（`src/M2Server/Player/PlayObject.Base.cs:2816-2819`），不依赖上一句说词里的链接 |
 | 6 | `dlg_select @requestcastlewarA` | `643` | 部署脚本 `[@requestcastlewarA]` 说词含 `<关闭/@exit>`；前缀分支 `CompareLStr(sLabel, sREQUESTCASTLEWAR)` 只匹配 `@requestcastlewarnow`（`GuildOfficial.cs:82`），本标签不触发 `ReQuestCastleWar` |
@@ -56,7 +56,7 @@ if (!boCanJmp) { return; }                                  // :66-69 —— 分
 ```
 
 `LableIsCanJmp`（`PlayObject.Base.cs:2814-2830`）只放行三类：`@main`、**上一句说词里出现过的标签**
-（`GetScriptLabel` 从 `GotoLableSendMerChantSayMsg` 发出去的说词里抽 `<文本/标签>`，`PlayObject.Base.cs:2778-2812`）、
+（`GetScriptLabel` 从 `GotoLableSendMerChantSayMsg` 发出去的说词里抽 `<文本/标签>`，`PlayObject.Base.cs:2775-2811`）、
 以及当次的 `PlayDiceLabel`。部署件里**没有任何 `<文本/@back>` 链接**（`@back2` 是另一个标签）：
 
 ```sh
