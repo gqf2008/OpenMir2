@@ -285,5 +285,5 @@ R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `
   `pack.lo`/`pack.hi` 可写任意可推导变量（**允许引用其它 `computed`**，按不动点求解；成环、缺字段、
   与 `derived_from/delta` 混用都 fail-closed）。`mir2_probe` 仍不读 `computed`——真跑时值由
   `--var` 传入，`card_window` 用发现值填。
-* `combat_hit.json` 的 `target_xy` 仍由调用方给（目标格是操作者选的外生坐标，没有可推导基准）。
+* `combat_hit.json` 的 `hit_xy` 同样用 `computed.pack {lo: self_x, hi: self_y}`：**CM_HIT 的 Recog 是攻击者自己的坐标**（`PlayObject.Attack.cs:883` 只在 `nX==CurrX && nY==CurrY` 时执行），方向在 `tag`。但该场景**已登记 BLOCKED**（攻击者收不到自己的 `SM_HIT(14)`，见卡 `openmir2-scenario-combat-hit-waitfix`）。
 * 详细逐文件复核表、oracle 行号与影响面：`docs/scenario-recog-packing-20261023.md`。

@@ -1,26 +1,36 @@
 {
   "name": "combat_hit",
-  "description": "朝指定格子砍一刀：CM_HIT(3014) 的 **X/Y 都打包在 recog**（`recog = (target_y<<16) | target_x`；服务端取 LoWord=X、HiWord=Y），`param` 服务端根本不读（恒 0），`tag` = 方向 -> 只等 SM_HIT(14)",
+  "description": "朝自己所在格砍一刀：CM_HIT(3014) 的 **X/Y 是攻击者自己的坐标**（`ClientHitXY` 只在 `nX==CurrX && nY==CurrY` 时执行，`PlayObject.Attack.cs:883`；同 `CM_TURN` 的 `MakeLong(X,Y)` 口径，`RobotPlayer.cs:358`），打包进 `recog`（`(self_y<<16)|self_x`），`tag`=方向。**攻击者在成功路径上收不到任何 SM 帧**（RM_HIT→SM_HIT 有 self 过滤 `PlayObject.Message.cs:1433-1437`；RM_TURN 同样过滤 `:1528`）⇒ 本场景登记为 BLOCKED，不参与窗口批次。",
+  "blocked": {
+    "reason": "成功路径上攻击者收不到任何 SM 帧：SM_HIT(14)/SM_TURN(10) 都有 `ActorId != ActorId` 的 self 过滤，成功时只回 socket 字符串（STATUS_GOOD/+PWR）不是 SM 帧；`wait_for` 只能是永不满足的等待 ⇒ 会让窗口恒超时并产生假绿/假红。本场景要断言「自己砍中」必须有第二个会话（旁观者收 SM_HIT）或怪物受击夹具，二者都不在本卡写集内。",
+    "missing_fixture": "同屏第二会话（旁观者）或同格怪物夹具，用来观测 SM_HIT/SM_STRUCK"
+  },
   "required": [
-    "target_x",
-    "target_y",
-    "target_xy",
+    "hit_xy",
     "hit_dir"
   ],
+  "computed": {
+    "hit_xy": {
+      "pack": {
+        "lo": "self_x",
+        "hi": "self_y"
+      }
+    }
+  },
   "steps": [
     {
       "send": {
         "ident": 3014,
-        "recog": "target_xy",
+        "recog": "hit_xy",
         "param": 0,
         "tag": "hit_dir"
       },
-      "note": "oracle：`src/GameSrv/Word/WorldServer.cs:831-851` 把 CM_HORSERUN/CM_TURN/CM_WALK/CM_SITDOWN/CM_RUN/CM_HIT/CM_HEAVYHIT/…/CM_FIREHIT 归同一 case 组，两支都只读 `LoWord(Recog)`/`HiWord(Recog)`（`:846` SendActionMsg / `:850` SendMsg），**`defMsg.Param` 未被读**；`src/M2Server/Player/PlayObject.Message.cs:1230` `ClientHitXY(wIdent, nParam1=LoWord(Recog)=X, nParam2=HiWord(Recog)=Y, (byte)wParam=Tag=Dir)`。⇒ 线上必须发 `recog=(y<<16)|x`，`param` 留 0；`target_xy` 由调用方按该公式打包（`param_discovery` 不做位运算，见 docs/scenario-recog-packing-20261023.md）"
+      "note": "oracle：`WorldServer.cs:831-851` 动作族只取 `LoWord/HiWord(Recog)`；`PlayObject.Message.cs:1230` → `ClientHitXY(wIdent, nParam1, nParam2, (byte)wParam)`；`PlayObject.Attack.cs:883` 要求 `nX==CurrX && nY==CurrY` ⇒ Recog 必须是**自己的坐标**，方向在 Tag。`hit_xy` 由 `computed.pack {lo: self_x, hi: self_y}` 推出。"
     },
     {
       "wait_for": 14,
       "timeout_ms": 3000,
-      "note": "只认 SM_HIT(14)：100 是通用系统提示，证明不了命中；本方客户端看不到被击者 HP 变化，故不加 HP 断言（如需 HP 差需第二客户端）"
+      "note": "**保留但不跑**：本场景已声明 BLOCKED（攻击者收不到自己的 SM_HIT），`card_window` 在起栈前就会 rc=2；该 wait 只是形状合法性的载体。解锁需第二会话/怪物夹具（见 blocked.missing_fixture）。"
     }
   ]
 }
