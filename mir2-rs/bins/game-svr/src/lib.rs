@@ -2028,6 +2028,7 @@ fn handle_party_cmd(
     catalog: &dyn game_svr::ability::ItemCatalog,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
     gm: Option<&ScriptGmEnv<'_>>,
+    npc_vars: &game_svr::npc::NpcVars,
 ) {
     let Some(sender) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -2068,6 +2069,7 @@ fn handle_party_cmd(
                 catalog,
                 gates,
                 gm,
+                npc_vars,
             );
             continue;
         }
@@ -2115,6 +2117,7 @@ fn run_party_goto_label(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
     gm: Option<&ScriptGmEnv<'_>>,
+    npc_vars: &game_svr::npc::NpcVars,
 ) {
     let Some(host) = npc_host else {
         return;
@@ -2178,6 +2181,7 @@ fn run_party_goto_label(
             catalog,
             group_owner,
             &group_member_jobs,
+            npc_vars,
         );
         // **PL-3 / P27**：脚本 197/198 的读写源是 `PlayObject` 自身 ⇒ 从世界实体快照
         // `KillMonExpRate/KillMonExpRateTime/PowerRate/PowerRateTime`，执行后写回。
@@ -5990,6 +5994,7 @@ fn npc_player_from<'r, 'g>(
     catalog: &dyn game_svr::ability::ItemCatalog,
     group_owner: i32,
     group_member_jobs: &[i32],
+    vars: &game_svr::npc::NpcVars,
 ) -> game_svr::npc::NpcPlayer<'r, 'g> {
     let mut p = game_svr::npc::NpcPlayer::empty(rng);
     p.chr_name = chr_name.to_string();
@@ -6015,6 +6020,12 @@ fn npc_player_from<'r, 'g>(
         arr[..n].copy_from_slice(&qf[..n]);
         p.quest_flag = mir2_script::engine::quest_state::QuestBitmap::from_bytes(arr);
     }
+    // **卡 `openmir2-script-dyn-var-host`（review I-1）**：非商人漏斗（`@Login` / QFunction）
+    // 也必须拿到**共享**的 `NpcVars`——`session_dyn_vars`/`global_dyn_vars` 是 `Rc` 共享表，
+    // 否则 `VAR`/`CALCVAR` 的写入随本次快照析构即丢（部署 `QManage.txt [@Login]` 直接踩中）。
+    p.vars = vars.clone();
+    p.map_names = vars.map_names.clone();
+    p.sys_msg_cfg = vars.sys_msg;
     p
 }
 
@@ -20063,6 +20074,7 @@ fn sim_loop(
                             npc_host.as_ref(),
                             &enter_cfg.catalog,
                             Some(&script_gm),
+                            &npc_vars_base,
                         );
                     } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
                         // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
@@ -21325,6 +21337,7 @@ fn sim_loop(
                                                                     &enter_cfg.catalog,
                                                                     group_owner,
                                                                     &group_member_jobs,
+                                                                &npc_vars_base,
                                                                 );
                                                                 // **PL-3 / P27**：脚本 197/198 的
                                                                 // 读写源（见 `run_party_goto_label` 同段）。
@@ -24375,6 +24388,7 @@ mod tests {
             None,
             &game_svr::ability::StdItemCatalog::new(),
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let t_mode = drain(&mut rx0);
         assert_eq!(t_mode.len(), 1, "T 只收到一条 SM_GROUPMODECHANGED");
@@ -24400,6 +24414,7 @@ mod tests {
             None,
             &game_svr::ability::StdItemCatalog::new(),
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let frames = drain(&mut rx0);
         // 667 两条（L/T 各一），join 说词四条（join(L) 给 L/T，join(T) 给 L/T）。
@@ -24480,6 +24495,7 @@ mod tests {
             None,
             &game_svr::ability::StdItemCatalog::new(),
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let frames = drain(&mut rx0);
         // 逐收件人：L = GCANCEL(立即) → DELMEM_OK(立即) → SYS(T 退出→L) → SYS(解散→L)；
@@ -24637,6 +24653,7 @@ mod tests {
             Some(&host),
             &catalog,
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let _ = drain(&mut rx0);
         handle_party_cmd(
@@ -24654,6 +24671,7 @@ mod tests {
             Some(&host),
             &catalog,
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let frames = drain(&mut rx0);
         let idents: Vec<u16> = frames.iter().map(|b| ident(b)).collect();
@@ -24767,6 +24785,7 @@ mod tests {
             None,
             &game_svr::ability::StdItemCatalog::new(),
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let _ = drain(&mut rx0);
         handle_party_cmd(
@@ -24784,6 +24803,7 @@ mod tests {
             None,
             &game_svr::ability::StdItemCatalog::new(),
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let _ = drain(&mut rx0);
         assert_eq!(
@@ -29422,6 +29442,7 @@ break
             &catalog,
             77,
             &[0, 1, 2],
+            &game_svr::npc::NpcVars::default(),
         );
         assert_eq!(p.chr_name, "hero");
         assert_eq!(p.actor_id, 5);
@@ -29434,6 +29455,87 @@ break
         assert!(
             p.items.is_empty(),
             "空目录 ⇒ `GetStdItem == null` 分支：不入包（不造名）"
+        );
+    }
+
+    /// **卡 `openmir2-script-dyn-var-host`（review I-1）**：**非商人漏斗**（`@Login` /
+    /// QFunction 走 `npc_player_from`）必须拿到**共享**的 `NpcVars`。
+    ///
+    /// 生产故障面：部署 `Envir/MapQuest_def/QManage.txt [@Login]` 的
+    /// `VAR INTEGER HUMAN 时长` + `LOADVAR HUMAN 时长 ..\QuestDiary\代练系统\代练数据.txt`
+    /// 写在 `@Login` 的快照里；后续 `QuestDiary/代练系统/代练.txt` 的
+    /// `CALCVAR HUMAN 时长 + 180` 读的是同一张 `PlayObject.DynamicVarMap`。
+    /// 修复前 `npc_player_from` 不设 `p.vars` ⇒ 每个快照 `NpcVars::default()`，写入即丢。
+    ///
+    /// 牙：删 `npc_player_from` 里的 `p.vars = vars.clone();` ⇒ 本用例红（读到 `None`）。
+    #[test]
+    fn npc_player_from_shares_dyn_var_tables() {
+        use game_svr::npc::NpcVars;
+        use mir2_script::engine::vars::{DynVar, DynVarKind};
+        use mir2_script::engine::ScriptPlayer;
+
+        let base = NpcVars::default();
+        // `@Login` 侧先写（模拟 `VAR INTEGER HUMAN 时长` + `LOADVAR`）。
+        {
+            let mut tbl = base.session_dyn_vars.borrow_mut();
+            let store = tbl.entry("HERO".to_string()).or_default();
+            assert!(store.insert("时长", DynVar::Integer(0)));
+        }
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let mut rngf = |v: i32| rng.random_below(v);
+        let mut p = npc_player_from(
+            &mut rngf,
+            "hero",
+            9,
+            "0",
+            1,
+            0,
+            None,
+            None,
+            &catalog,
+            0,
+            &[],
+            &base,
+        );
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "时长"),
+            Some(DynVar::Integer(0)),
+            "@Login 写的 VAR 必须能读回（否则漏斗表是按调用即弃）"
+        );
+        // 后续脚本（CALCVAR + 180）写回共享表。
+        assert!(p.dyn_var_set(DynVarKind::Human, "时长", DynVar::Integer(180)));
+        assert_eq!(
+            base.session_dyn_vars.borrow()["HERO"].get("时长"),
+            Some(DynVar::Integer(180)),
+            "写回必须落在共享 `NpcVars`（@Login → 后续脚本不断链）"
+        );
+        // GLOBAL 服务器级：另一个角色的快照看得到。
+        assert!(p.dyn_var_insert(DynVarKind::Global, "g", DynVar::Integer(1)));
+        let mut rng2 = mir2_shared::rng::RandomNumber::with_seed(8);
+        let mut rngf2 = |v: i32| rng2.random_below(v);
+        let q = npc_player_from(
+            &mut rngf2,
+            "other",
+            10,
+            "0",
+            1,
+            0,
+            None,
+            None,
+            &catalog,
+            0,
+            &[],
+            &base,
+        );
+        assert_eq!(
+            q.dyn_var_get(DynVarKind::Global, "G"),
+            Some(DynVar::Integer(1))
+        );
+        assert_eq!(
+            q.dyn_var_get(DynVarKind::Human, "时长"),
+            None,
+            "HUMAN 按角色隔离"
         );
     }
 
@@ -61075,6 +61177,7 @@ GMEXECUTE 禁言 self 20
             &catalog,
             &gates,
             Some(&env),
+            &game_svr::npc::NpcVars::default(),
         );
         let mut frames: Vec<Vec<u8>> = Vec::new();
         while let Ok(ev) = rx0.try_recv() {
@@ -61199,6 +61302,7 @@ GMEXECUTE 禁言 self 20
             &catalog,
             &gates,
             None,
+            &game_svr::npc::NpcVars::default(),
         );
         let frames: Vec<Vec<u8>> = {
             let mut out = Vec::new();

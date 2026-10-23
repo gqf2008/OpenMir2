@@ -2392,6 +2392,48 @@ mod tests {
         assert_eq!(other.dyn_var_get(DynVarKind::Human, "m1"), None);
     }
 
+    /// **卡 `openmir2-script-dyn-var-host`（review M-1）**：同账号两个角色的 HUMAN/ACCOUNT
+    /// 表互不可见（oracle 各自一个 `PlayObject`，隔离靠「每人一张表」）；同角色内键按
+    /// `OrdinalIgnoreCase` 折叠命中同一格。
+    ///
+    /// 牙：把 `DynVarStore::key` 的 `to_uppercase()` 换成 `name.to_string()` ⇒ 本条
+    /// 的 `M1` 断言与上面那条用例的 `M1` 断言一起红。
+    #[test]
+    fn dyn_var_human_table_is_per_character_and_case_folded() {
+        use mir2_script::engine::vars::{DynVar, DynVarKind};
+        let mut rng = |_v: i32| 0;
+        let mut a = NpcPlayer::empty(&mut rng);
+        a.chr_name = "hero".to_string();
+        assert!(a.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(10)));
+        assert!(a.dyn_var_insert(DynVarKind::Human, "时长", DynVar::Integer(7)));
+        // 同角色：大小写折叠 + ACCOUNT 与 HUMAN 同表。
+        assert_eq!(
+            a.dyn_var_get(DynVarKind::Human, "M1"),
+            Some(DynVar::Integer(10))
+        );
+        assert_eq!(
+            a.dyn_var_get(DynVarKind::Account, "M1"),
+            Some(DynVar::Integer(10))
+        );
+        // 同账号的另一角色（共享同一 `NpcVars` 克隆）：两向都互不可见。
+        let mut rng2 = |_v: i32| 0;
+        let mut b = NpcPlayer::empty(&mut rng2);
+        b.chr_name = "alt".to_string();
+        b.vars = a.vars.clone();
+        assert_eq!(b.dyn_var_get(DynVarKind::Human, "m1"), None);
+        assert_eq!(b.dyn_var_get(DynVarKind::Human, "时长"), None);
+        assert!(b.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(99)));
+        assert_eq!(
+            a.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(10)),
+            "同名变量在不同角色的表里各自独立"
+        );
+        assert_eq!(
+            b.dyn_var_get(DynVarKind::Human, "M1"),
+            Some(DynVar::Integer(99))
+        );
+    }
+
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
     /// `envir_map_name()` 与 `ActionOfOffLine` 读的是**同一个**当前图 ⇒ 接通覆写后
     /// ISONMAP 随之生效。oracle `ConditionOfIosnMap`（`ConditionProcessingSys.cs:1032-1055`）：

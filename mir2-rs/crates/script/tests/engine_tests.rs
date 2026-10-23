@@ -2357,6 +2357,57 @@ fn var_dynamic_var_declare_calc_and_check_var() {
     assert!(!engine.check_conditions(&[cond6(139, ["HUMAN", "不存在", ">=", "1", "", ""])]));
 }
 
+/// **卡 `openmir2-script-dyn-var-host`（review I-3）**：`CALCVAR <type> <var> / 0`。
+///
+/// oracle `ActionOfCalcVar`（`ExecutionProcessingSys.cs:3870-3871`）的
+/// `dynamicVar.Internet / nVarValue` 抛 `DivideByZeroException`，被 `BaseObject.Operate`
+/// 的 `catch (Exception)`（`BaseObject.Base.cs:771-775`）吞掉并记日志 ⇒ **动作中止、
+/// 变量不变、服务器继续**。Rust `wrapping_div(0)` 会 panic（生产派发链无 `catch_unwind`）
+/// ⇒ 引擎改为等价守卫：报 `CalcVar` 动作错误并返回（不写回）。
+///
+/// 注：oracle 的 `IsStringNumber` 恒真 ⇒ `sParam4` 永不展开，任何非数字第 4 参
+/// （如 `<$STR(M1)>`）都会 `StrToInt→0` ⇒ 除数 0 不是奇例。
+///
+/// 牙：删 `action_of_calc_var` 的 `n_var_value == 0` 守卫 ⇒ 本用例 panic 红。
+#[test]
+fn var_calcvar_div_by_zero_reports_error_without_panic() {
+    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(237, &["Integer", "HUMAN", "t"], &[]),
+    );
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(240, &["HUMAN", "t", "=", "7"], &[]),
+    );
+    let e = run_act(
+        &mut npc,
+        &mut player,
+        act_full(240, &["HUMAN", "t", "/", "0"], &[]),
+    );
+    assert!(
+        first_script_error(&e).contains("脚本命令:CalcVar"),
+        "除零必须报 CalcVar 动作错误（oracle 的异常被 catch 后记日志）：{e:?}"
+    );
+    assert_eq!(
+        player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "t"),
+        Some(mir2_script::engine::DynVar::Integer(7)),
+        "除零支不写回（oracle 在异常点中止）"
+    );
+    // 非零除数仍按 unchecked wrap 走。
+    let _ = run_act(
+        &mut npc,
+        &mut player,
+        act_full(240, &["HUMAN", "t", "/", "2"], &[]),
+    );
+    assert_eq!(
+        player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "t"),
+        Some(mir2_script::engine::DynVar::Integer(3))
+    );
+}
+
 #[test]
 fn var_loadvar_and_savevar_file_io() {
     let dir = std::env::temp_dir().join("openmir2_b2_loadvar");

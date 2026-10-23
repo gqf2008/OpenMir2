@@ -1905,7 +1905,21 @@ impl Engine<'_, '_> {
                     '+' => x.wrapping_add(n_var_value),
                     '-' => x.wrapping_sub(n_var_value),
                     '*' => x.wrapping_mul(n_var_value),
-                    '/' => x.wrapping_div(n_var_value),
+                    '/' => {
+                        // oracle `dynamicVar.Internet / nVarValue`（`ExecutionProcessingSys.cs:3870-3871`）
+                        // 在除数为 0 时抛 `DivideByZeroException`，被 `BaseObject.Operate` 的
+                        // `catch (Exception)`（`BaseObject.Base.cs:771-775`）吞掉并记日志
+                        // ⇒ 动作中止、变量**不写回**、服务器继续。
+                        // Rust `wrapping_div(0)` 直接 panic，而生产派发链没有 `catch_unwind`
+                        // ⇒ 必须显式等价：报动作错误并返回（不写回）。
+                        // 注意 oracle 的 `IsStringNumber` 恒真 ⇒ `sParam4` 不展开，任何非数字
+                        // 第 4 参（如 `<$STR(M1)>`）都会 `StrToInt→0` ⇒ 除数 0 不是奇例。
+                        if n_var_value == 0 {
+                            self.script_action_error("CalcVar", info);
+                            return;
+                        }
+                        x.wrapping_div(n_var_value)
+                    }
                     _ => x,
                 };
                 self.player
