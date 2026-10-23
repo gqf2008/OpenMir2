@@ -1546,7 +1546,10 @@ fn fire_burn(parameters: &str, sess: &GmSession) -> GmResult {
 /// - `:23-28` 取六个原始串（地图/坐标 X/Y/光环效果/持续时间/未知）；
 /// - `:29-33` `IsNullOrEmpty(sMap) || sMap != "" && sMap[1] == '?'`：空地图 ⇒ 红字帮助；
 ///   **单码元地图名 ⇒ `sMap[1]` 抛 `IndexOutOfRangeException`，被 `PlayObject.Chat.cs:402-406`
-///   吞掉 ⇒ 零帧**（部署脚本 `<$CURRENTMAP>` 展开成 `0`/`3` 这类单字符名 ⇒ 现网恒走这条）；
+///   吞掉 ⇒ 零帧**（构造级分支；**部署形态不走这条**：`ActionOfGmExecute` 直接拼
+///   `sParam1..6`、不调 `GetLineVariableText`，`<$…>` 在动作参数里原样（T-165）⇒ 实参是
+///   `<$CURRENTMAP>`（13 码元，`sMap[1]` 是 `$`，不越界），`StrToInt("<$CURRENTX>", -1) = -1`
+///   ⇒ 落 `:43` 的 `nX < 0` 帮助支）；
 ///   第 2 个 UTF-16 码元是 `?` ⇒ 红字帮助；
 /// - `:34-38` `(short)StrToInt(sX,-1)` / `(short)sY` / `(byte)sType` / `int sTime` / `int sPoint`；
 /// - `:39-42` `nPoint < 0 ⇒ 1`（⇒ `:43` 的 `nPoint < 0` 恒假）；`(byte)` 的 `nType < 0` 也恒假；
@@ -5972,6 +5975,17 @@ mod tests {
             vec![(GmColor::Red, "命令格式: MobFireBurn      ")],
             "六个空槽 ⇒ 六个尾随空格"
         );
+        // GBK 字节断言（复审 minor）：`命令格式` 8 字节 + `: MobFireBurn` + 6 个尾随空格。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, 0x3a,
+                0x20, // 命令格式:␠
+                0x4d, 0x6f, 0x62, 0x46, 0x69, 0x72, 0x65, 0x42, 0x75, 0x72,
+                0x6e, // MobFireBurn
+                0x20, 0x20, 0x20, 0x20, 0x20, 0x20, // 六个尾随空格
+            ]
+        );
         // 第 2 个 UTF-16 码元是 `?` ⇒ 帮助（原始串原样回填）。
         let (r, _) = run_gm("@MobFireBurn m? 10 10 5 600 0");
         assert_eq!(
@@ -5980,11 +5994,13 @@ mod tests {
         );
     }
 
-    /// **部署形态**：`Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0`，
-    /// `<$CURRENTMAP>` 展开成 `0`/`3` 这类**单字符**地图名 ⇒ oracle `:29` 的 `sMap[1]`
-    /// 抛 `IndexOutOfRangeException`，被 `PlayObject.Chat.cs` 的 catch 吞掉 ⇒ **零帧**。
+    /// **构造级分支**（不是部署形态）：单码元地图名 ⇒ oracle `:29` 的 `sMap[1]` 抛
+    /// `IndexOutOfRangeException`，被 `PlayObject.Chat.cs` 的 catch 吞掉 ⇒ **零帧**。
+    ///
+    /// 复审 important-1：部署脚本传的是 `<$CURRENTMAP>` **字面量**（`ActionOfGmExecute` 不展开
+    /// 动作参数，T-165），不是 `0`/`3` 这类单字符名 ⇒ 现网**不走**这条；部署形态见下一条用例。
     #[test]
-    fn mob_fire_burn_single_char_map_is_zero_frames() {
+    fn mob_fire_burn_single_char_map_is_zero_frames_construct_only() {
         for line in [
             "@MobFireBurn 3 329 329 3 60 0",
             "@MOBFIREBURN 0 330 330 5 600 0",
@@ -5995,6 +6011,46 @@ mod tests {
             assert!(r.frames.is_empty());
             assert_eq!(r.log_note, Some(NOTE_INDEX_OUT_OF_RANGE), "{line}");
         }
+    }
+
+    /// **部署形态**（复审 important-1）：`Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX>
+    /// <$CURRENTY> 5 600 0`。`ActionOfGmExecute` 直接拼 `sParam1..6`、不调
+    /// `GetLineVariableText`（`ExecutionProcessingSys.cs:4933`；T-165 同源）⇒ 实参是字面量：
+    /// `sMap` = `<$CURRENTMAP>`（13 码元，`sMap[1] == '$'`，不越界）；
+    /// `StrToInt("<$CURRENTX>", -1) = -1` ⇒ 命中 `:43` 的 `nX < 0` ⇒ **一条红字帮助**
+    /// （回填六个原始串，含 `<$…>` 字面量），不是「零帧」。
+    #[test]
+    fn mob_fire_burn_deployment_literals_report_help() {
+        let line = "@MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0";
+        let (r, _) = run_gm(line);
+        assert!(r.found && r.parsed, "命中命令体");
+        assert_eq!(
+            texts(&r),
+            vec![(
+                GmColor::Red,
+                "命令格式: MobFireBurn <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0"
+            )],
+            "部署字面量 ⇒ 一条红字帮助（不是零帧）"
+        );
+        assert!(r.frames.is_empty(), "帮助支没有其它帧");
+        // 线上 GBK 字节：帮助模板 + 六个字面量**原样**（`<$…>` 不被展开）。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, 0x3a,
+                0x20, // 命令格式:␠
+                0x4d, 0x6f, 0x62, 0x46, 0x69, 0x72, 0x65, 0x42, 0x75, 0x72,
+                0x6e, // MobFireBurn
+                0x20, 0x3c, 0x24, 0x43, 0x55, 0x52, 0x52, 0x45, 0x4e, 0x54, 0x4d, 0x41, 0x50,
+                0x3e, // <$CURRENTMAP>
+                0x20, 0x3c, 0x24, 0x43, 0x55, 0x52, 0x52, 0x45, 0x4e, 0x54, 0x58, 0x3e,
+                // <$CURRENTX>
+                0x20, 0x3c, 0x24, 0x43, 0x55, 0x52, 0x52, 0x45, 0x4e, 0x54, 0x59, 0x3e,
+                // <$CURRENTY>
+                0x20, 0x35, 0x20, 0x36, 0x30, 0x30, 0x20, 0x30, // ␠5␠600␠0
+            ],
+            "部署形态帮助文本的 GBK 字节逐字节等价"
+        );
     }
 
     /// 数值校验：`(short)`/`(byte)` unchecked 截断后任一 < 0 ⇒ 帮助（回填**原始串**）。
@@ -6053,6 +6109,16 @@ mod tests {
             vec![(GmColor::Red, "地图MobFireBurn 不存在")],
             "模板只有 {{0}} ⇒ 地图名不入文案（oracle 原样）"
         );
+        // GBK 字节断言（复审 minor）：`地图` 4 字节 + 命令名 + ` 不存在`。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xb5, 0xd8, 0xcd, 0xbc, // 地图
+                0x4d, 0x6f, 0x62, 0x46, 0x69, 0x72, 0x65, 0x42, 0x75, 0x72,
+                0x6e, // MobFireBurn
+                0x20, 0xb2, 0xbb, 0xb4, 0xe6, 0xd4, 0xda, // ␠不存在
+            ]
+        );
         // 未接地图注册表 ⇒ 登记零帧（不伪造「地图不存在」）。
         let bare = GmWorld::new(&guilds);
         let r = execute(&mut sess, &cfg, &bare, "@MobFireBurn map 5 5 5 600 0");
@@ -6062,19 +6128,17 @@ mod tests {
 
     /// 脚本路（部署 `Market_Def/QFunction-0.txt:156/163` 的 `@StdModeFunc15/16`：
     /// `Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0`）经
-    /// `NpcPlayer` 的 GMEXECUTE 跳线执行 ⇒ 单字符地图名 ⇒ **零帧** + 越界登记。
+    /// `NpcPlayer` 的 GMEXECUTE 跳线执行 ⇒ 实参是**字面量**（T-165）⇒ **一条红字帮助**。
     #[test]
-    fn mob_fire_burn_script_gmexecute_path_is_zero_frames() {
+    fn mob_fire_burn_script_gmexecute_path_reports_help() {
         use mir2_script::engine::ScriptPlayer;
         let guilds = mir2_world::GuildManager::new();
         let view = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let mut sess = GmSession::default();
-        // `ActionOfGmExecute` 同形：`@<cmd> <p1..p6>`，六参全给。
-        let s_data = format!(
-            "@{} {} {} {} {} {} {}",
-            "MOBFIREBURN", "0", "330", "330", "5", "600", "0"
-        );
+        // `ActionOfGmExecute` 同形：`@<cmd> <p1..p6>`，六参全给；部署实参是**字面量**
+        // `<$CURRENTMAP>/<$CURRENTX>/<$CURRENTY>`（GMEXECUTE 不展开动作参数，T-165）。
+        let s_data = "@MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0";
         let mut rng = |_v: i32| 0;
         {
             let mut player = crate::npc::NpcPlayer::empty(&mut rng);
@@ -6088,11 +6152,19 @@ mod tests {
             player.set_permission(10);
             player.process_user_line_msg(&s_data);
             player.set_permission(0);
-            assert!(player.frames.is_empty(), "单字符地图名 ⇒ 脚本侧零帧");
+            assert_eq!(
+                player.frames.len(),
+                1,
+                "部署字面量 ⇒ 脚本侧一条红字帮助（复审 important-1：不是零帧）"
+            );
+            assert_eq!(
+                player.frames[0].msg.as_deref(),
+                Some("命令格式: MobFireBurn <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0")
+            );
             assert!(player.gm_direct_frames.is_empty());
             assert!(
-                player.gm_notes.iter().any(|n| n.contains("下标越界")),
-                "越界路径必须登记：{:?}",
+                player.gm_notes.is_empty(),
+                "帮助支不登记越界：{:?}",
                 player.gm_notes
             );
         }
