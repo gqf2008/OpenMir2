@@ -7927,6 +7927,11 @@ fn drain_mag_struck_b2(
             // `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)` **没有 race 门** ⇒ 带 ShowHp 的
             // 怪/NPC 受魔法攻击后同样向 ±`SendRefMsgRange` 玩家广播 53；载荷 = 该实体
             // 当时的 `HP/MP/MaxHP`（`PlayObject.Message.cs:1736-1739` 在出队时读 `WAbil`）。
+            // **R3-4 处置（登记）**：本支经 `push_broadcast`/`hear_targets` 固定
+            // `chat::SEND_REF_MSG_RANGE=12`；oracle 读配置 `SendRefMsgRange`（GameSvrConf
+            // 缺省 12）。收口随 master `card/srmr-config`（`0e4b733da`，14 个生产广播消费点
+            // 改读生效值）——本分支基线在其之前、保持常量口径，合并后自动跟随配置化；
+            // 真机窗口若用非 12 配置，须以生效值复验 ±range 边界。
             let body =
                 smframe::sm_healthspellchanged_frame(o.target_id, o.hp_after, o.mp_after, o.max_hp);
             buf.push_broadcast(world, online, o.target_id, true, P_HEALTH, &body);
@@ -13177,6 +13182,20 @@ fn drain_stamina(
         };
         let actor_id = sg.actor_id;
         let death = world.entities.get(actor_id).is_some_and(|e| e.death);
+        // **卡 `openmir2-monster-showhp-53-broadcast` R3-1**：oracle 的 `SuperMan` 回满
+        // （`BaseObject.Base.cs:32-36`）写的是**同一份 `WAbil`** ⇒ 之后 `:44` 的
+        // `HP < MaxHP` 恢复门恒假 ⇒ 零 53。本宿主两层：世界 tick 的
+        // `Entity::run_super_man_refill` 只回满 `Entity.hp/mp`，会话投影 `sg.state.wabil`
+        // 还停在 P21 同步时的旧实体值 ⇒ 门误开 ⇒ `Entity.hp` 被旧投影打回（复现 100→2）
+        // 并多一条 53。先做一次 Entity→投影同步，让下面 `stamina_tick` 的门读到与 oracle
+        // 同一份 WAbil 的终值。（残余登记：G-A 的 `drain_recovery` 仍读会话投影；SuperMan
+        // 玩家生产不可达——本宿主无 GM 态，见 `stamina.rs` 模块头登记。）
+        if world.entities.get(actor_id).is_some_and(|e| e.super_man) {
+            if let Some(e) = world.entities.get(actor_id) {
+                sg.state.wabil.hp = e.hp;
+                sg.state.wabil.mp = e.mp;
+            }
+        }
         // `runs` = 每个命中过 `HealthSpellChanged()` 的 Run 一条终态快照 + 本 Run 调用次数。
         let mut runs: Vec<(u16, u16, u8)> = Vec::new();
         let (_changed_runs, last_run_changed) = game_svr::stamina::stamina_tick(
@@ -13592,10 +13611,21 @@ fn broadcast_healthspellchanged(
     let Some(src) = world.entities.get(actor_id) else {
         return;
     };
-    // `BaseObject.Message.cs:394-397`：`ObMode || FixedHideMode` 时 `SendRefMsg` 退化为
-    // `SendMsg(self)`（只给自己）。源的自见副本已由调用方（玩家的 `HealthSpellSlots` 自见帧）
-    // 计入；怪/NPC 源不是 Play ⇒ 零帧。此处不得再向 ±`range` 观察者广播。
+    // `BaseObject.Message.cs:390-393`：`ObMode || FixedHideMode` 时 `SendRefMsg` 退化为
+    // `SendMsg(self)`（只给源自己；自投重载 `:34-96` 对非机器人恒 `boSend=true` ⇒ 源**再收
+    // 1 条**）。调用方的自见帧只计入 `SendUpdateMsg` 那份，这里补退化自投的一份：
+    // Play 源在 online ⇒ 自见 +1（review `fbfc7614` R3-1 探针实测此前缺）；怪/NPC 源不在
+    // online ⇒ 零帧。隐身态都不得再向 ±`range` 观察者广播。
     if src.ob_mode || src.fixed_hide_mode {
+        if let Some(entry) = online.iter().find(|e| e.actor_id == actor_id) {
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "隐身源退化自投")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body: body.to_vec(),
+                });
+            }
+        }
         return;
     }
     let (sx, sy, smap) = (src.x, src.y, src.map_id);
@@ -13756,7 +13786,9 @@ fn drain_pk_flag_downlink(
 /// ShowHp 门(`:219`) → 钳制(`:230-245`) ⇒ 按 actor 交错；宿主把该 actor 的全部
 /// `SM_HEALTHSPELLCHANGED(53)` 发完之后再出 1101，满足 ① 53 先于 1101（优先级 68 < 171）、
 /// ② `ShowHp` 广播支仍按**清位前**的会话态计数（`drain_stamina` 的 `let show_hp = sg.show_hp`
-/// 读在清位之前）⇒ 观察者与自身都不少 53。非会话实体没有 53，只有 1101。
+/// 读在清位之前）⇒ 观察者与自身都不少 53。53 由 ShowHp 支出帧、1101 由 close-health 支
+/// 出帧，相对序 68<171；非会话实体（怪/NPC）在 `ShowHp` 时同样有 53（卡
+/// `openmir2-monster-showhp-53-broadcast` 的恢复/魔击/毒伤/钳制支），不再是「只有 1101」。
 ///
 /// **相位差（登记，T-89 族）**：oracle 的 `SendRefMsg(RM_CLOSEHEALTH)` 只入各收件人的
 /// `MsgQueue`，下一 `Run()`（≈200ms）才 `Operate` 出 1101；本宿主同 tick 直发 ⇒ 相对 oracle
@@ -21240,6 +21272,146 @@ mod tests {
             bodies[0],
             game_svr::smframe::sm_healthspellchanged_frame(mon_id, 30, 5, 100),
             "逐字节"
+        );
+    }
+
+    /// **卡 `openmir2-monster-showhp-53-broadcast` R3-1（review 复现序列，tier=R）**：
+    /// `super_man` 回满只写 `Entity`、不进会话 `WAbil` 投影 ⇒ `drain_stamina` 用旧投影过
+    /// `HP < MaxHP` 门（`BaseObject.Base.cs:44`）⇒ `Entity.hp` 被**打回**（复现 100→2）且多一条
+    /// 53=[(2,0,100)]。oracle 的回满（`:32-36`）写**同一份 `WAbil`** ⇒ 门恒假 ⇒ 零 53。
+    /// 生产相位：P21 同步（投影 = 旧实体值 0/0/100）→ 世界 tick 回满实体（super_man ⇒ 100）
+    /// → `drain_stamina`。
+    ///
+    /// 红检：删掉 `drain_stamina` 的 super_man Entity→投影同步 ⇒ 本用例必红
+    /// （`Entity.hp`==2、恰一条 53 (2,0,100)）。
+    #[test]
+    fn drain_stamina_super_man_refill_keeps_entity_hp_and_emits_no_53() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let hid = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .expect("hero 进世界");
+        {
+            let e = world.entities.get_mut(hid).unwrap();
+            // oracle `ChangeSuperManModeCommand`（permission 10）置位后的玩家实体：
+            // 世界 tick 的 `run_super_man_refill` 已回满（HP=MP=Max）。
+            e.super_man = true;
+            e.hp = 100;
+            e.max_hp = 100;
+            e.mp = 100;
+            e.max_mp = 100;
+            e.show_hp = true; // 心灵启示窗口内（恢复段的 ShowHp 广播面）
+            e.show_hp_tick = world.clock_ms; // `:219` 到期门不在本用例命中 ⇒ 无 1101 噪声
+        }
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hid);
+        // P21 同步留下的**旧投影**：同步时实体还是 0/0（回满发生在其后的世界 tick）。
+        sg.state.wabil.hp = 0;
+        sg.state.wabil.mp = 0;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 100;
+        sg.show_hp = true;
+        // HealthTick 已到点 ⇒ 旧投影下 `HP < MaxHP` 门会误开（同步后恒假）。
+        sg.stamina.health_tick = 400;
+        sg.stamina.replay_cursor = now_ms() - 60;
+        sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hid,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
+
+        assert_eq!(
+            world.entities.get(hid).unwrap().hp,
+            100,
+            "回满不得被旧投影打回（oracle 回满写同一份 WAbil ⇒ 门恒假，Entity.hp 保持 100）"
+        );
+        assert_eq!(sessions["hero"].state.wabil.hp, 100, "投影与实体同值");
+        assert!(
+            rx0.try_recv().is_err(),
+            "回满后 `HP < MaxHP` 门恒假 ⇒ 零 53（复现：旧投影 ⇒ 1 条 (2,0,100)）"
+        );
+    }
+
+    /// **卡 `openmir2-monster-showhp-53-broadcast` R3-2**：±12 广播面的边界机器判据。
+    /// `broadcast_healthspellchanged` 是自带 ±range 的手写循环（不走 `chat::hear_targets`，
+    /// 后者的 12/13 边界由 chat.rs 用例钉住）：oracle `SendRefMsg` 收件人 = **闭区间**
+    /// `|dx| <= range && |dy| <= range`（`BaseObject.Message.cs:404-434`）⇒ dx=12 收、
+    /// dx=13 不收、跨图不收。
+    ///
+    /// 红检：把收件人判定的 `> range` 改成 `>= range`（±12→±11）⇒ dx=12 断言必红。
+    #[test]
+    fn broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out() {
+        use mir2_protocol::frame::CommandMessage;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40), (40, 40)]);
+        let mut mon = mir2_world::Entity::new(0, "怪".to_string(), 10, 10);
+        mon.race = 80;
+        mon.show_hp = true;
+        let mon_id = world.add_entity(mon);
+        let mut mk = |name: &str, x: i32, y: i32, map_id: usize, socket: i32| {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.map_id = map_id;
+            let id = world.add_entity(e);
+            (id, socket)
+        };
+        let (at12, s1) = mk("edge12", 22, 10, 0, 901); // dx=12 ⇒ 闭区间内，收
+        let (at13, s2) = mk("out13", 23, 10, 0, 902); // dx=13 ⇒ 不收
+        let (xmap, s3) = mk("xmap", 22, 10, 1, 903); // 跨图同距 ⇒ 不收
+        let mut online: OnlineRegistry = Vec::new();
+        for (i, (id, socket)) in [(at12, s1), (at13, s2), (xmap, s3)].into_iter().enumerate() {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("ua{i}"),
+                    chr_name: format!("p{i}"),
+                    session_id: i as i32 + 1,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let body = game_svr::smframe::sm_healthspellchanged_frame(mon_id, 42, 7, 100);
+        broadcast_healthspellchanged(&world, &online, &gates, mon_id, &body, 12);
+
+        let mut got: Vec<(i32, i32, u16)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("53 头 12B");
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
+            got.push((socket, cm.recog, cm.param));
+        }
+        assert_eq!(
+            got,
+            vec![(901, mon_id, 42)],
+            "dx=12 收（闭区间）、dx=13 不收、跨图同距不收"
         );
     }
 
