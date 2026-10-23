@@ -36,6 +36,8 @@ python -I -B tools/conformance/preflight.py --profile alt
 
 ### 退路：手工步骤（命令不可用时照旧做）
 
+> **窗口项怎么写**：补 `window_required` 判据时按 `docs/window-criteria-template.md` 的六字段写（前置 / 可复跑命令 / 期望 / 判据 / 掩码 / 负责人与状态）；自查一段 status 文本缺哪几项：`python -I -B tools/goal/window_criteria_lint.py --text <文件>`（**只告警，退出码恒 0，不参与门禁**）。
+
 > 五步顺序：**核二进制 sha → 核端口 → 核 profile 键 → `--dry-run` → `--selftest`**；外加第 0 步（文档口径）与第 4.5 步（idents 登记）。
 > 任一步与期望不符 ⇒ **不要开窗**（一轮窗口 ≈ 240G + 数十分钟）。
 
