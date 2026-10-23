@@ -681,6 +681,8 @@ pub struct NpcGm<'r> {
 pub struct NpcPlayer<'r, 'g> {
     pub actor_id: i32,
     pub chr_name: String,
+    /// `playerActor.UserAccount`（`PlayObject` 字段；`CHECKACCOUNTLIST`/`DELACCOUNTLIST` 的读源）。
+    pub user_account: String,
     pub map_name: String,
     pub level: i32,
     /// `playerActor.Gold`
@@ -843,6 +845,7 @@ impl NpcPlayer<'_, '_> {
         NpcPlayer {
             actor_id: 0,
             chr_name: String::new(),
+            user_account: String::new(),
             map_name: String::new(),
             level: 1,
             gold: 0,
@@ -1261,6 +1264,11 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             }
             mir2_script::engine::vars::DynVarKind::Guild => false,
         }
+    }
+
+    /// `playerActor.UserAccount`（卡 `openmir2-script-user-account`）。
+    fn user_account(&self) -> String {
+        self.user_account.clone()
     }
     fn abil_exp(&self) -> i32 {
         self.abil_exp
@@ -2818,6 +2826,142 @@ Other
             b.dyn_var_get(DynVarKind::Human, "M1"),
             Some(DynVar::Integer(99))
         );
+    }
+
+    /// **卡 `openmir2-script-user-account`**：`NpcPlayer::user_account` 覆写返回注入的账号名
+    /// （缺省空串给其它实现方；不 Trim/不改大小写）。牙：删覆写 ⇒ 注入段红。
+    #[test]
+    fn npc_player_user_account_reads_injected_account() {
+        use mir2_script::engine::ScriptPlayer;
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        assert_eq!(player.user_account(), "", "缺省空串（接线前行为）");
+        player.user_account = "ua".to_string();
+        assert_eq!(player.user_account(), "ua", "注入后原样返回");
+    }
+
+    /// **端到端（依赖 T-220 的 `envir_root`）**：`CHECKACCOUNTLIST`(77) 与 `DELACCOUNTLIST`(50)
+    /// 经 `HostNpc::envir_root` 解析 `..\` 前缀后命中/写盘（oracle `check_string_list` 的
+    /// Trim + OrdinalIgnoreCase 口径；`del_from_string_list` 的 CRLF 重写）。
+    #[test]
+    fn npc_player_user_account_check_and_del_account_list_end_to_end() {
+        let root = std::env::temp_dir().join(format!("gs-acct-e2e-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        let list = envir.join("AccountList.txt");
+        // 初始内容 = "  UA  \r\nother\r\n"
+        let seed: Vec<u8> = vec![
+            32, 32, 85, 65, 32, 32, 13, 10, 111, 116, 104, 101, 114, 13, 10,
+        ];
+        std::fs::write(&list, &seed).unwrap();
+        let cond_def = NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: String::new(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: vec![mir2_script::QuestConditionInfo {
+                            cmd_code: 77, // `CHECKACCOUNTLIST`
+                            s_param1: r"..\AccountList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "hit".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "miss".to_string(),
+                            ..Default::default()
+                        }],
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let host = NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![cond_def],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let run = |acct: &str| {
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "hero".to_string();
+            player.user_account = acct.to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
+        };
+        // 名单是 "  UA  "；账号 "ua" ⇒ Trim + 忽略大小写 ⇒ 命中；两点前缀被剥离。
+        assert_eq!(run("ua"), vec!["hit".to_string()]);
+        assert_eq!(run("nobody"), vec!["miss".to_string()]);
+        assert_eq!(run(""), vec!["miss".to_string()], "空账号 ⇒ 恒假");
+        // `DELACCOUNTLIST`(50)：删掉账号行，逐字节重写为 other + CRLF。
+        let del_def = NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: String::new(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 50, // `DELACCOUNTLIST`
+                            s_param1: r"..\AccountList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: Vec::new(),
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let del_host = NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![del_def],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        player.user_account = "UA".to_string();
+        let _ = del_host.goto_label("QFunction", &mut player, "@main", false);
+        assert_eq!(
+            std::fs::read(&list).expect("名单仍在"),
+            vec![111, 116, 104, 101, 114, 13, 10],
+            "DELACCOUNTLIST 后逐字节 = other + CRLF"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
