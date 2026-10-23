@@ -395,8 +395,9 @@ const PRI_MERCHANTSAY: u8 = pri(messages::RM_MERCHANTSAY);
 /// 把 `GotoLable` 的说词与脚本帧放进本 handler 的出帧队列。
 ///
 /// oracle 里两者都是**入队**消息（`SendPriorityMsg`/`SendMsg` ⇒ 脚本 `SendMsg`），handler 结束后
-/// 由 `MsgQueue` 按 `(byte)wIdent` 出队；[`flush`] 的 `(priority, seq)` 排序即同口径
-/// （说词 0/1 先于 `RM_GAMEGOLDCHANGED` 148 等脚本帧）。
+/// 由 `MsgQueue` 按 `(byte)wIdent` 出队；[`flush`] 按**收件人分组**、每组按入队序灌
+/// [`game_svr::msgqueue::NetPriorityQueue`] 再出队，即同口径
+/// （说词 0/1 先于 `RM_GAMEGOLDCHANGED` 148 等脚本帧；同优先级按四叉堆 sift 序，**不是** FIFO）。
 fn queue_script_output(
     queue: &mut Vec<QueuedFrame>,
     says: &[game_svr::npc::SayMsg],

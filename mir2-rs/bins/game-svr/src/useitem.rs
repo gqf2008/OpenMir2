@@ -456,11 +456,16 @@ pub fn use_item(
     // （先入队的 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS` 反而晚于 `RM_WEIGHTCHANGED`）与 oracle 一致。
     //
     // **同 ident 多帧在本接缝不可达**（卡 `openmir2-frame-drain-order-audit` 的枚举证据）：本函数
-    // 的 `notices` 只在四条互斥分支里产生 —— 禁药 `RM_SYSMESSAGE`(252)（`eaten=false`，与成功支
-    // 互斥）/ `RM_CHARSTATUSCHANGED`(155) + `RM_MYSTATUS`(166)（StdMode 1 的状态跳档支，成对）/
-    // `RM_MENU_OK`(69)（`can_use_item==false` 的 else 支）/ `RM_WEIGHTCHANGED`(131)（`eaten` 支）。
-    // 每个可达组合内优先级字节两两不同 ⇒ 稳定排序与四叉堆出队序逐条相同。新增同 ident 的
-    // `SendMsg` 前必须先改成 `NetPriorityQueue`。
+    // 的 `notices` 只在五条互斥分支里产生 ——
+    //   ① 禁药 `RM_SYSMESSAGE`(252)（`no_drug` 且 StdMode 0..=3；`eaten=false`，与成功支互斥）；
+    //   ② `RM_HEALTHSPELLCHANGED`(68)（StdMode 0 的 shape 1 固定量 / shape 3 百分比，两支**互斥**，
+    //      且各自 `IncHealthSpell` 成功才入队 ⇒ 至多一条）；
+    //   ③ `RM_CHARSTATUSCHANGED`(155) + `RM_MYSTATUS`(166)（StdMode 1 的状态跳档支，成对出现，
+    //      且该支不产 68）；
+    //   ④ `RM_MENU_OK`(69)（`can_use_item==false` 的 else 支）；
+    //   ⑤ `RM_WEIGHTCHANGED`(131)（`eaten` 支）。
+    // 每个可达组合（{252} / {68,131} / {155,166,131} / {69}）内优先级字节两两不同 ⇒ 稳定排序与
+    // 四叉堆出序逐条相同。新增同 ident 的 `SendMsg` 前必须先改成 `NetPriorityQueue`。
     notices.sort_by_key(|n| n.ident as u8);
 
     UseItemOutcome {
