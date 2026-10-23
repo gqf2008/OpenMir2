@@ -303,6 +303,21 @@ TEETH = [
     ("INV3", "其它槽位行数不变判定被摘掉（count 比较 → if False:）",
      "⑫ 其它槽位行数变了",
      [('''        if after["count"] != before["count"]:''', '''        if False:''')]),
+    # --- 背包夹具 F5 的覆盖缺口（卡 openmir2-card-window-teeth-mg7）---------------------
+    # F5 复现：四处独立变异后 --selftest 仍 GREEN 216/216。下面四颗牙各自锁一个
+    # 「只断言函数、不断言调用点/分支」的缺口，每颗都必须命中各自的 ⑬/⑭/⑮/⑯ 判据组。
+    ("INV4", "背包物品模板不存在判定被摘掉（if not tpl: → if False:）",
+     "⑬ 物品模板不存在",
+     [('''            if not tpl:''', '''            if False:''')]),
+    ("INV5", "背包 make_index<=0 门被摘掉（if mk <= 0: → if False:）",
+     "⑭ make_index<=0",
+     [('''        if mk <= 0:''', '''        if False:''')]),
+    ("INV6", "check_inventory_rows 调用点被摘掉（→ pass）",
+     "⑮ 写后行数",
+     [('''        check_inventory_rows(items, written)''', '''        pass''')]),
+    ("INV7", "run_side 的背包夹具 rc 判定被摘掉（if ires.get(\"rc\") != 0: → if False:）",
+     "⑯ run_side 背包夹具失败",
+     [('''            if ires.get("rc") != 0:''', '''            if False:''')]),
 ]
 
 
