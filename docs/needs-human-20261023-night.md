@@ -50,7 +50,7 @@
 ## 5. 两条 Rust 侧接线缺口（不是 owner 的事，列在此以便排期）
 
 - `@upgradenow` / `@getbackupgnow` 只 `glog` 不执行（`lib.rs:5849-5855` / `5890-5895`）
-  ⇒ `upgrade_retrieve` 场景的窗口在修复前会「Rust 缺 643」。 〔2026-10-24 订正：**只订正「动作」半边**——`@upgradenow`/`@getbackupgnow` 的命令动作已接线（`lib.rs:5809` 起 Lane A；今日 `card_window --dry-run --scenario upgrade_retrieve.json` rc=0）；**但升级/取回的结果说词 `GotoLable(~@upgradenow_ok/_fail/_ing)` 仍只登记不执行**（`mir2-rs/bins/game-svr/src/lib.rs:5919-5924` / `:5960-5965` 仅 `glog!`）⇒ **643 仍会缺**（见 `docs/upgrade-retrieve-scenario-20261023.md:32-35`、whitelist T-145④/T-95④）。本条**不写「已过期」**。〕
+  ⇒ `upgrade_retrieve` 场景的窗口在修复前会「Rust 缺 643」。 〔2026-10-24 订正：**只订正「动作」半边**——`@upgradenow`/`@getbackupgnow` 的命令动作已接线（`lib.rs:5809` 起 Lane A；今日 `card_window --dry-run --scenario upgrade_retrieve.json` rc=0）；**但升级/取回的结果说词 `GotoLable(~@upgradenow_ok/_fail/_ing)` 仍只登记不执行**（`mir2-rs/bins/game-svr/src/lib.rs:5919-5924` / `:5960-5965` 仅 `glog!`）⇒ **643 仍会缺**（见 `docs/upgrade-retrieve-scenario-20261023.md:32-35`、whitelist T-145④/T-95④）。**结论：动作缺口已关；结果说词 643 仍缺。**〕
 - `DoDamageWeapon` / `SM_DURACHANGE(642)` 未接（`combat.rs:1151-1153` 抽了 `Random(5)` 但 `:1266` 丢弃）
   ⇒ `equip_struck_save` 场景的窗口会「Rust 缺 642」。 〔2026-10-24 订正：**已过期**——卡 `openmir2-attack-weapon-wear-642` 已合入 master `8dcb8c8ca`（攻击成功磨损 + 642；破零支 202→642(0)→再一条 642(0)）；今日 `card_window --dry-run --scenario equip_struck_save.json` **rc=0**；真机窗口仍未跑。〕
 - 这两条都已在对应卡的 status/docs 登记「**修复前不得据此判 Rust 失败**」。
