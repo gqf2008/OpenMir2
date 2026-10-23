@@ -447,7 +447,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 5. 还原后 sha256 == 变异前；**不一致 => 整体 rc≠0**（N-3）。
 
 ```sh
-python -I -B tools/conformance/selftest_mutations.py            # 跑全部 25 颗
+python -I -B tools/conformance/selftest_mutations.py            # 跑全部 30 颗
 python -I -B tools/conformance/selftest_mutations.py --list     # 只列牙（含每颗的 expect）
 python -I -B tools/conformance/selftest_mutations.py --only T1,E2
 python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自身 fail-closed
@@ -458,7 +458,9 @@ T5 F-1 旧提示 / T6 H-1 写产物提前 / T7 H-2 固定 `_stale-fixed` / T8 N-
 看不到 README 写失败（等价于先写账本再发 comment）/ T9 N-1 comment verdict 固定 PASS /
 T10 Y1 `finalize_ok` 丢掉 `json_ok` 那一半 / T11 D-1 证据缺件不降级 / T12 D-1 compare FAIL
 被压成 UNDECIDABLE / T13 M-1 FAIL 分支 `verdict_reason` 写成 ok / T14–T16 M-2 嵌套 `compare`
-分别删掉 whitelisted / db_state / undecidable（字段集合断言）；额外牙 E1 fallback run_id
+分别删掉 whitelisted / db_state / undecidable（字段集合断言）/ T17–T20 **P-1 诊断值**变异
+（db_state 写错、diffs 与 db_state 互换、diffs 固定 999、undecidable 固定 -1，断言一律从
+本次 report.json 实读）/ T21 F-1 side doc `ok` 的两处兜底都丢掉（discovery probe 失败仍 ok=True）；额外牙 E1 fallback run_id
 常量、E2 放宽未知库判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README、
 E6 忽略 card-window.json 失败标志、E7 comment body 不带 exit_code；发现接线牙 D1 probe
 命令丢掉 `--var`（值推出来了却没传给场景）、D2 发现失败时静默用空值继续跑。
