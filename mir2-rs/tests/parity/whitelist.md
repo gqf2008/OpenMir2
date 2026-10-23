@@ -812,13 +812,13 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 
 实现（`mir2-rs/bins/game-svr/src/lib.rs` 的 `handle_inbound_cmd` 1043 支 + `inbound.rs::client_adjust_bonus`）：
 命令 → **会话 `PlayObject.BonusPoint`** 门（`WorldServer.cs:1131` 由记录装入）→ `RecalcAbilitys()`
-→ 线上 `52 SM_ABILITY → 752 SM_SUBABILITY → 657 SM_CHARSTATUSCHANGED ×2`（合法支）／一条红字
+→ 线上 **`752 SM_SUBABILITY(62) → 52 SM_ABILITY(67) → 657 SM_CHARSTATUSCHANGED(155)`，各 1 条**（合法支；657 只 1 条 = `SendUpdateMsg` 头-only 去重，见复审 `124fe49e` I-1/I-2）／一条红字
 `SysMsg`（非法支，`252`）；`BonusPoint` 随 `MakeSaveRcd` 写回（`WorldServer.cs:1285`）。
-判据：`adjust_bonus_valid_equal_point_emits_52_752_and_two_657`、
+判据：`adjust_bonus_valid_equal_point_emits_752_52_and_one_657`、
 `adjust_bonus_mismatched_point_emits_only_red_sysmsg`、
 `adjust_bonus_recalc_matches_oracle_pinned_ability`（等级 1 战士 + 木剑/蜡烛的字面量口径）。
-牙（实测）：派发臂把 `sg.bonus_point` 换回常量 0 ⇒ ①② 红；`client_adjust_bonus` 的 `==` 写反 ⇒ ①②③④ 红。
+牙（实测）：派发臂把 `sg.bonus_point` 换回常量 0 ⇒ ①② 红；`client_adjust_bonus` 的 `==` 写反 ⇒ ①②③ 红；把出队序改回源码序 `52→752` 或把 657 改回 2 条 ⇒ ①（复审证伪牙，已实测）。
 
 | 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
 | --- | --- | --- | --- |
-| T-201 | **`CM_ADJUST_BONUS` 成功支的两处残余**：① `RecalcAbilitys()` 的 210/212 尾段（`FlameRing/RecoveryRing` 的 `Del/AddItemSkill`）传 `magic = None`；② 657 的**近邻**广播已接（`broadcast_charstatuschanged_except_self`，半径 `SendRefMsgRange`），但 `SendRefMsg` 的 500ms `VisibleHumanList` 缓存未建模（与 T-154 ④ / D-13 同源，收件人每帧现算）。 | ① 本支**不改装备/属性输入** ⇒ 两次 `RecalcAbilitys` 的戒指命中集相同、`audit` 幂等 ⇒ 无可观测事件（与 T-95 ⑨ 同口径）；只有「重算前 `MagicList` 与已戴戒指不一致」的旧档/数据修复场景才分叉。② 缓存只影响 ±12 格边界玩家在 500ms 内的收件人集合，且本支 `CharStatus`/`HitSpeed` 均不变（载荷与上一帧相同）。另：`RM_CHANGELIGHT(153)`（`PlayObject.cs:2882-2885`）本支不发——装备/等级不变 ⇒ `Light` 不变，oracle 同样不发（等价，非缺口）。 | `tier=R`；`tier_why`：改动是玩家可见的帧面 + 属性重算（R 级），且 `BonusPoint` 是落库列。**`window_required: true`** 窗口项：双栈（C#/Rust）同一角色发 `CM_ADJUST_BONUS`（`nPoint == BonusPoint` 与 `≠` 两支），逐帧比 `52/752/657×2/252` 的字节与条数，并核对（重登后）`characters.BonusPoint` 与 `characters_bonusability` 前后态；带火球/治愈戒指的角色再跑一次以证 ① 的幂等。 | 作者登记（`openmir2-worker-44`，卡 `openmir2-cm-adjust-bonus`，tier=R）；**待独立 principal 复核** |
+| T-201 | **`CM_ADJUST_BONUS` 成功支的两处残余**：① `RecalcAbilitys()` 的 210/212 尾段（`FlameRing/RecoveryRing` 的 `Del/AddItemSkill`）传 `magic = None`；② 657 的**近邻**广播已接（`broadcast_charstatuschanged_except_self`，半径 `SendRefMsgRange`），但 `SendRefMsg` 的 500ms `VisibleHumanList` 缓存未建模（与 T-154 ④ / D-13 同源，收件人每帧现算）。 | ① 本支**不改装备/属性输入** ⇒ 两次 `RecalcAbilitys` 的戒指命中集相同、`audit` 幂等 ⇒ 无可观测事件（与 T-95 ⑨ 同口径）；只有「重算前 `MagicList` 与已戴戒指不一致」的旧档/数据修复场景才分叉。② 缓存只影响 ±12 格边界玩家在 500ms 内的收件人集合，且本支 `CharStatus`/`HitSpeed` 均不变（载荷与上一帧相同）。另：`RM_CHANGELIGHT(153)`（`PlayObject.cs:2882-2885`）本支不发——装备/等级不变 ⇒ `Light` 不变，oracle 同样不发（等价，非缺口）。 | `tier=R`；`tier_why`：改动是玩家可见的帧面 + 属性重算（R 级），且 `BonusPoint` 是落库列。**`window_required: true`** 窗口项：双栈（C#/Rust）同一角色发 `CM_ADJUST_BONUS`（`nPoint == BonusPoint` 与 `≠` 两支），逐帧比 `752/52/657/252` 的**字节、条数与次序**，并核对（重登后）`characters.BonusPoint` 与 `characters_bonusability` 前后态；带火球/治愈戒指的角色再跑一次以证 ① 的幂等。 | 作者登记（`openmir2-worker-44`，卡 `openmir2-cm-adjust-bonus`，tier=R）；**待独立 principal 复核** |

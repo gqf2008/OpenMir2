@@ -2535,39 +2535,63 @@ fn handle_inbound_cmd(
             let Some(tx) = route_to_gate(gates, gate_idx, socket, "CM_ADJUST_BONUS 回帧") else {
                 return;
             };
-            // 线上序 = `(byte)RM_*` 升序（`BaseObject.Message.cs:26-95` 的优先级出队）：
-            // `RM_ABILITY(19)` → `RM_SUBABILITY(62)` → `RM_CHARSTATUSCHANGED(155)`×2
-            // （`StatusChanged()` 的 `SendRefMsg` 回环 + `SendUpdateMsg`，`PlayObject.cs:2874-2876`）。
-            let _ = tx.send(SimToGate::SendFrame {
-                socket,
-                body: game_svr::smframe::sm_ability(
-                    sg.state.gold,
-                    sg.equip.job,
-                    sg.game_gold,
-                    &ability_tail(&sg.state.wabil, frames_ctx.client_layout),
-                ),
-            });
+            // **线上序 = 优先级升序，不是源码序**（`BaseObject.Message.cs:181` 的
+            // `MsgQueue.Enqueue(msg, (byte)wIdent)` + `TryDequeue` 的最小堆）：
+            //   `RM_SUBABILITY=10302 ⇒ 62 < RM_ABILITY=10051 ⇒ 67 < RM_CHARSTATUSCHANGED=10139 ⇒ 155`
+            // ⇒ `752 → 52 → 657`。（复审 `124fe49e52cde4cd97acc550912fdba2924468ca` I-1：旧注释把
+            // `RM_ABILITY` 手算成 19 是错的；登录路径看到的 `52 → 752` 走 `SendPriorityMsg(High=0)`，
+            // 是另一条路，不能类推到本支。）
+            //
+            // **657 只 1 条**（I-2）：`RecalcAbilitys()` 尾段先 `StatusChanged()`（`SendRefMsg`）把
+            // 657 入队，紧接着 `SendUpdateMsg(RM_CHARSTATUSCHANGED, …)` 做**头-only 去重**
+            // （`BaseObject.Message.cs:283-303`）——本支此刻队列里唯一的待出队项就是刚入的那条 657
+            // ⇒ 删掉再入 1 条（净 1 条）。登录时能见 2 条是因为当时队首有 `654=153` 之类 blocker。
+            // 队列语义直接用 [`game_svr::msgqueue`]（与 `healthspell.rs` 同一实现）。
+            let prio = |ident: u16| (ident & 0xFF) as u8;
+            let mut queue = game_svr::msgqueue::NetPriorityQueue::new();
+            queue.enqueue(
+                mir2_protocol::messages::RM_CHARSTATUSCHANGED,
+                prio(mir2_protocol::messages::RM_CHARSTATUSCHANGED),
+            );
+            game_svr::msgqueue::send_update_msg(
+                &mut queue,
+                mir2_protocol::messages::RM_CHARSTATUSCHANGED,
+            );
+            queue.enqueue(
+                mir2_protocol::messages::RM_ABILITY,
+                prio(mir2_protocol::messages::RM_ABILITY),
+            );
+            queue.enqueue(
+                mir2_protocol::messages::RM_SUBABILITY,
+                prio(mir2_protocol::messages::RM_SUBABILITY),
+            );
+            // 帧体按 ident 备好，出队序即线上序。
+            let frame_ability = game_svr::smframe::sm_ability(
+                sg.state.gold,
+                sg.equip.job,
+                sg.game_gold,
+                &ability_tail(&sg.state.wabil, frames_ctx.client_layout),
+            );
             let sb = sg.sub.to_frame_bytes();
-            let _ = tx.send(SimToGate::SendFrame {
-                socket,
-                body: game_svr::smframe::sm_subability(
-                    sb[0],
-                    u8::try_from(sb[1]).unwrap_or(0),
-                    u8::try_from(sb[2]).unwrap_or(0),
-                    u8::try_from(sb[3]).unwrap_or(0),
-                    u8::try_from(sb[4]).unwrap_or(0),
-                    u8::try_from(sb[5]).unwrap_or(0),
-                    u8::try_from(sb[6]).unwrap_or(0),
-                ),
-            });
-            // 两条 657 的字节相同（载荷同源：`(ActorId, LoWord(CharStatus), HiWord(CharStatus),
-            // this.HitSpeed)`，T-147 ②）。
-            let f657 = game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, sg.hit_speed);
-            let _ = tx.send(SimToGate::SendFrame {
-                socket,
-                body: f657.clone(),
-            });
-            let _ = tx.send(SimToGate::SendFrame { socket, body: f657 });
+            let frame_subability = game_svr::smframe::sm_subability(
+                sb[0],
+                u8::try_from(sb[1]).unwrap_or(0),
+                u8::try_from(sb[2]).unwrap_or(0),
+                u8::try_from(sb[3]).unwrap_or(0),
+                u8::try_from(sb[4]).unwrap_or(0),
+                u8::try_from(sb[5]).unwrap_or(0),
+                u8::try_from(sb[6]).unwrap_or(0),
+            );
+            let frame_657 =
+                game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, sg.hit_speed);
+            while let Some(ident) = queue.dequeue() {
+                let body = match ident {
+                    mir2_protocol::messages::RM_ABILITY => frame_ability.clone(),
+                    mir2_protocol::messages::RM_SUBABILITY => frame_subability.clone(),
+                    _ => frame_657.clone(),
+                };
+                let _ = tx.send(SimToGate::SendFrame { socket, body });
+            }
             // `StatusChanged()` 的 `SendRefMsg` 还给 ±`SendRefMsgRange` 格内**其他**玩家各一条 657
             // （自己那两条已在上方按发送序放入同一批）。
             broadcast_charstatuschanged_except_self(
@@ -3545,7 +3569,7 @@ fn handle_bag_cmd_with_magic(
     // oracle `FeatureChanged()`（`PlayObject.Operate.cs:459`/`:548` ⇒ `BaseObject.cs:1509`
     // → `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), 0,0)`）：
     // 成功换装后向**周围 `SendRefMsgRange` 格内同图**的玩家（**含自己**）广播 `SM_FEATURECHANGED`。
-    // `RM_FEATURECHANGED=10116` 的队列优先级 `(byte)10116=68` 排在 `RM_ABILITY(19)`/`RM_SUBABILITY(62)`
+    // `RM_FEATURECHANGED=10116` 的队列优先级 `(byte)10116=132` 排在 `RM_ABILITY(67)`/`RM_SUBABILITY(62)`
     // 之后 ⇒ 线上顺序 = `SM_ADDITEM → OK/FAIL → 52 → 752 → 41`（与 oracle 消息泵一致）。
     if out.recalc {
         let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg
@@ -40983,13 +41007,17 @@ break
     }
 
     /// **`CM_ADJUST_BONUS` ①（合法支）**：`nPoint == BonusPoint` ⇒ `BonusPoint = nPoint`（**等值**，
-    /// 门是 `nPoint + 0 == BonusPoint`）、真跑 `RecalcAbilitys()`、线上 `52 → 752 → 657 → 657`
-    /// （`(byte)RM_*` 升序：19 / 62 / 155 / 155）。
+    /// 门是 `nPoint + 0 == BonusPoint`）、真跑 `RecalcAbilitys()`、线上
+    /// **`752 → 52 → 657`（各 1 条）**——优先级 `RM_SUBABILITY=62 < RM_ABILITY=67 <
+    /// RM_CHARSTATUSCHANGED=155`；657 之所以只 1 条是 `SendUpdateMsg` 的**头-only 去重**
+    /// （`BaseObject.Message.cs:283-303`）删掉了 `StatusChanged()` 刚入的那条。
+    ///
+    /// 红检（复审 `124fe49e` I-1/I-2 的证伪牙）：改成「源码序 52→752」或「657×2」⇒ 本用例红。
     ///
     /// **牙 1「撤会话态」**：把派发臂的 `sg.bonus_point` 换回常量 0（旧缺陷）⇒ 本用例
     /// （`BonusPoint=3`、`nPoint=3`）落到非法支 ⇒ 帧面与属性断言全红。
     #[test]
-    fn adjust_bonus_valid_equal_point_emits_52_752_and_two_657() {
+    fn adjust_bonus_valid_equal_point_emits_752_52_and_one_657() {
         let mut fix = AdjustBonusFix::new(3);
         let (wabil0, sub0, hit0) = {
             let sg = &fix.sessions["hero"];
@@ -41000,12 +41028,11 @@ break
         assert_eq!(
             ids,
             vec![
-                mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
-                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "oracle 出队序：RM_ABILITY(19) → RM_SUBABILITY(62) → RM_CHARSTATUSCHANGED(155)×2"
+            "oracle 出队序：RM_SUBABILITY(62) → RM_ABILITY(67) → RM_CHARSTATUSCHANGED(155)，657 仅 1 条"
         );
         // `BonusPoint = nPoint`（等值赋值 ⇒ 会话值不变；`BonusAbil.* += 0` 同理，BUG-REPLICA 3）。
         assert_eq!(fix.sessions["hero"].bonus_point, 3);
@@ -41025,8 +41052,9 @@ break
             "Series = 重算后的 HitSpeed"
         );
         assert_eq!(
-            frames[2], frames[3],
-            "两条 657 字节相同（载荷同源，T-147 ②）"
+            frames.len(),
+            3,
+            "657 必须只有 1 条（SendUpdateMsg 头-only 去重；登录的 2 条是另一种队列形态）"
         );
         // 实体侧（战斗权威值）与 52 的载荷同源。
         let e = fix.world.entities.get(fix.actor).unwrap();
@@ -41094,7 +41122,7 @@ break
     fn adjust_bonus_recalc_matches_oracle_pinned_ability() {
         let mut fix = AdjustBonusFix::new(0);
         let frames = fix.send(0);
-        assert_eq!(frames.len(), 4, "合法支出 52/752/657/657");
+        assert_eq!(frames.len(), 3, "合法支出 752/52/657");
         let w = &fix.sessions["hero"].state.wabil;
         assert_eq!(
             (
@@ -41114,13 +41142,13 @@ break
             "oracle 口径：等级 1 战士裸装 + 木剑"
         );
         assert_eq!(
-            frames[0],
+            frames[1],
             game_svr::smframe::sm_ability(0, 0, 0, &record::encode_ability(w)),
             "52 帧尾 = Encode(40B TAbility)，载荷逐字段来自 RecalcAbilitys"
         );
         let sb = fix.sessions["hero"].sub.to_frame_bytes();
         assert_eq!(
-            frames[1],
+            frames[0],
             game_svr::smframe::sm_subability(
                 sb[0],
                 u8::try_from(sb[1]).unwrap_or(0),
