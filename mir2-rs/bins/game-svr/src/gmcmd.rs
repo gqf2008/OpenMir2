@@ -445,6 +445,10 @@ pub enum Imp {
     /// `ShutupCommand`（现网 `@禁言`；`DenySayMsgList` 写入整段被注释 ⇒ 只发一条 SysMsg）。
     Shutup,
 
+    /// `KickHumanCommand`（现网 `@VV踢人`）：置目标的 `BoKickFlag/BoEmergencyClose`；
+    /// 目标离线 ⇒ 一条 Red/Hint；空名 ⇒ **静默 return**（零帧）。
+    KickHuman,
+
     /// 未接的 87 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 1 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
@@ -608,6 +612,13 @@ pub struct GmSession {
     /// 由宿主在**同一事件内**（`lib.rs` 的 `CM_SAY` 支）取走并 [`GmEntityState::apply`]，
     /// 仍在 `world.tick()` 之前。每次命令都会整体覆盖本字段（不会残留上一次的值）。
     pub pending_entity: Option<GmEntityState>,
+    /// **待落地的踢人目标**（卡 `openmir2-gm-impl-kick`，`KickHumanCommand.cs:26-31`）。
+    ///
+    /// oracle 命令体直接写**目标** `PlayObject.BoKickFlag/BoEmergencyClose`；本仓命令体是纯函数、
+    /// `GmWorld` 只读 ⇒ 命令体把目标 `ChrName` 装进本缓冲（与 [`GmSession::pending_entity`] 同法），
+    /// 宿主（`lib.rs` 的 sim 循环）在 `drain_kicks` 之前收口：该支先发
+    /// `SM_OUTOFCONNECTION(528)` 再 `KickUser` + 存档 + `MakeGhost`（`PlayObject.Message.cs:367-378`）。
+    pub pending_kick: Option<String>,
 }
 
 impl Default for GmSession {
@@ -641,6 +652,7 @@ impl Default for GmSession {
             attack_mode: 0,
             re_level: 0,
             pending_entity: None,
+            pending_kick: None,
         }
     }
 }
@@ -1144,6 +1156,14 @@ const NOTE_INDEX_OUT_OF_RANGE: &str =
     "oracle 下标越界（`sHumanName[1]`/`@params[0..6]`）被 PlayObject.Chat.cs 的 catch 吞掉 ⇒ 零帧";
 const NOTE_NO_WORLD: &str =
     "GmWorld 未注入在线实体表/世界（S1 占位世界）⇒ 无法判定目标在线、坐标或地图 Flag";
+
+/// `KickHumanCommand.cs:21-24`：空名 **静默 return**（oracle 无任何帧，连帮助文本都不发）。
+const NOTE_KICK_HUMAN_EMPTY_NAME: &str = "KickHuman：空名字 ⇒ oracle 静默 return（零帧）";
+
+/// `KickHumanCommand.cs:26-31`：命中 ⇒ 只置目标 `BoKickFlag/BoEmergencyClose`，命令本身零回帧；
+/// 踢的落地（`SM_OUTOFCONNECTION(528)` + `MakeGhost`）由宿主 `drain_kicks` 在 tick 内收口。
+const NOTE_KICK_HUMAN_PENDING: &str =
+    "KickHuman：已置目标 BoKickFlag/BoEmergencyClose（命令无回帧，宿主 drain_kicks 落地）";
 const NOTE_NO_MAP_REGISTRY: &str =
     "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
 const NOTE_RECALL_HUMAN: &str =
@@ -1997,6 +2017,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     // 「待落地权威写」一次性：先清空，只有**本次**命中的命令体真的翻转了镜像才重新装填。
     // 否则一条被权限门/未知命令挡下的 `@…` 会把上一条命令的差量顺带落地。
     sess.pending_entity = None;
+    sess.pending_kick = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -2150,6 +2171,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
 
         // ---- 批次 5 · 脚本可达族（`GMEXECUTE` 抬权可达，tier=R）----
         Imp::Shutup => shutup(parameters),
+        Imp::KickHuman => kick_human(parameters, sess, world),
 
         Imp::Unimplemented => GmResult {
             found: true,
@@ -2194,6 +2216,44 @@ fn shutup(parameters: &str) -> GmResult {
     // `(uint)HUtil32.StrToInt(sTime, 5)`：int → uint 的 unchecked 回转用 `as`。
     let dw_time = str_to_int(time, 5) as u32;
     red(format!("{human} 已被禁言{dw_time}分钟"))
+}
+
+/// `KickHumanCommand.Execute`（`src/Modules/GameCommand/Commands/KickHumanCommand.cs:10-40`，
+/// 现网 `@VV踢人`，`Command.conf` 的 `[Command] Kick=VV踢人` / `[Permission] Kick=10`）。
+///
+/// **实际执行行**：
+/// - `:16` `if (@params == null) return;`——`GameCommand.Handle` 的 `case 2` 传
+///   `parameters.Split(' ')`（不返回 null）⇒ 死分支；
+/// - `:20` `sHumName = @params.Length > 0 ? @params[0] : ""`；
+/// - `:21-24` `string.IsNullOrEmpty(sHumName)` ⇒ **静默 return**（无帮助文本、无帧）；
+/// - `:25` `WorldEngine.GetPlayObject(sHumName)`（`WorldServer.cs:937-954`：`ChrName`
+///   OrdinalIgnoreCase 命中首个、且 `!Ghost`）；
+/// - `:26-31` 命中 ⇒ `mIPlayerActor.BoKickFlag = true; BoEmergencyClose = true;`
+///   （两行 `m_boPlayOffLine/m_boNotOnlineAddExp` 被注释）；
+/// - `:32-38` 未命中 ⇒ `SysMsg("{0} 现在不在线，或在其它服务器上!!!", Red, Hint)`。
+///
+/// 落地：`BoKickFlag` 支由宿主 `drain_kicks` 收口（`PlayObject.Message.cs:367-378`：先
+/// `SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)`、再 `MakeGhost()`）；命令体只把目标名字装进
+/// [`GmSession::pending_kick`]（与 `pending_entity` 同法：命令体纯、宿主落账）。
+fn kick_human(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    // `:21-24`：空名 ⇒ 静默 return（oracle 这里**没有**任何 SysMsg，连帮助文本都不发）。
+    if name.is_empty() {
+        return no_frames(NOTE_KICK_HUMAN_EMPTY_NAME);
+    }
+    // `WorldEngine.GetPlayObject` 需要实体表；未接世界时按既有口径登记（不伪造「不在线」）。
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    if world.play_by_name(name).is_some() {
+        // `:26-31`：置 `BoKickFlag`/`BoEmergencyClose`，**无回执**（oracle 不发任何 SysMsg）。
+        sess.pending_kick = Some(name.to_string());
+        no_frames(NOTE_KICK_HUMAN_PENDING)
+    } else {
+        // `:32-38`：`NowNotOnLineOrOnOtherServer`（与 `@VV调整元宝` 同一条文案）。
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
 }
 
 // 卡 `openmir2-gm-script-host-seam`（T-210）订正：原先这里还有一个 `execute_script_line`，
@@ -2946,7 +3006,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "VV踢人",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::KickHuman,
     },
     CommandDef {
         name: "who",
@@ -4474,7 +4534,8 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5 的命令体接上（`Unimplemented` 从 180 降到 87），且命令名 → 实现标签固定。
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-kick` 的 `VV踢人`）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 86），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4482,15 +4543,15 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            98,
-            "98 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言）1 条"
+            99,
+            "99 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + VV踢人 1）2 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            87,
+            86,
             "185 - 98"
         );
         let cases: &[(&str, Imp)] = &[
@@ -5870,5 +5931,124 @@ mod tests {
             assert!(player.gm_direct_frames.is_empty(), "`@禁言` 无直发帧");
         }
         assert_eq!(sess.permission, 0, "抬权是临时的，执行完必须还原");
+    }
+
+    /// 卡 `openmir2-gm-impl-kick`：表项（现网名 `VV踢人` = `Command.conf` 的 `[Command] Kick`）。
+    #[test]
+    fn kick_human_is_wired_in_the_command_table() {
+        let def = find("VV踢人").expect("@VV踢人 在 185 行表里");
+        assert_eq!(def.imp, Imp::KickHuman);
+        assert_eq!(def.perm_min, 10, "`[Permission] Kick=10`");
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
+    /// 空名字 ⇒ oracle `:21-24` **静默 return**（零帧、无帮助文本），且不得留下踢人目标。
+    #[test]
+    fn kick_human_empty_name_is_silent_zero_frames() {
+        for line in ["@VV踢人", "@VV踢人  "] {
+            let (r, sess) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: 静默 return ⇒ 零帧");
+            assert!(r.frames.is_empty());
+            assert!(sess.pending_kick.is_none(), "{line}: 不得登记踢人目标");
+        }
+    }
+
+    /// 目标不在线 ⇒ 一条 Red/Hint `"{name} 现在不在线，或在其它服务器上!!!"`（`:32-38`）。
+    #[test]
+    fn kick_human_offline_target_reports_not_online() {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(e);
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 nobody");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "nobody 现在不在线，或在其它服务器上!!!")]
+        );
+        assert!(sess.pending_kick.is_none(), "未命中不得登记目标");
+        // 大小写不敏感（`GetPlayObject` 的 `OrdinalIgnoreCase`）⇒ 命中 ⇒ 零帧 + 登记。
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 VICTIM");
+        assert!(r.msgs.is_empty(), "命中目标 ⇒ 命令无回帧");
+        assert_eq!(sess.pending_kick.as_deref(), Some("VICTIM"));
+    }
+
+    /// 命中 ⇒ 零帧 + `pending_kick` = 目标名；`Ghost` 玩家按 oracle 口径**不算在线**
+    /// （`GetPlayObject` 的 `!Ghost` 门）。
+    #[test]
+    fn kick_human_online_target_sets_pending_kick_without_frames() {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        for (name, ghost) in [("alive", false), ("gone", true)] {
+            let mut e = mir2_world::Entity::new(0, name, 5, 5);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.ghost = ghost;
+            w.add_entity(e);
+        }
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 alive");
+        assert!(r.msgs.is_empty(), "命中 ⇒ 无回帧");
+        assert!(r.frames.is_empty());
+        assert_eq!(sess.pending_kick.as_deref(), Some("alive"));
+        // Ghost ⇒ `GetPlayObject` 返回 null ⇒ 走「不在线」支。
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 gone");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "gone 现在不在线，或在其它服务器上!!!")]
+        );
+        assert!(sess.pending_kick.is_none());
+    }
+
+    /// 未注入世界 ⇒ 登记零帧（不伪造「不在线」），与 `@dsfsdt546` 等同一口径。
+    #[test]
+    fn kick_human_without_world_is_registered_no_world() {
+        let (r, sess) = run_gm("@VV踢人 victim");
+        assert!(r.msgs.is_empty());
+        assert_eq!(r.log_note, Some(NOTE_NO_WORLD));
+        assert!(sess.pending_kick.is_none());
+    }
+
+    /// 脚本路（部署 `Market_Def/功能NPC/桃源-N109.txt:49` 的 `Gmexecute VV踢人 <名>`）：
+    /// 经 `NpcPlayer` 的 GMEXECUTE 跳线执行后，目标名落在**会话**缓冲上（宿主 tick 内收口）。
+    #[test]
+    fn kick_human_script_gmexecute_path_sets_pending_kick() {
+        use mir2_script::engine::ScriptPlayer;
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(e);
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds).with_world(&w);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        // `ActionOfGmExecute` 同形：`@<cmd> <p1..p6>`，尾随空参产生 3 个空格。
+        let s_data = format!("@{} {} {} {} {} {}", "VV踢人", "victim", "", "", "", "");
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world: view,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(&s_data);
+            player.set_permission(0);
+            assert!(player.frames.is_empty(), "命中目标 ⇒ 脚本侧零帧");
+            assert!(player.gm_direct_frames.is_empty());
+        }
+        assert_eq!(sess.pending_kick.as_deref(), Some("victim"));
+        assert_eq!(sess.permission, 0, "抬权临时生效并还原");
     }
 }

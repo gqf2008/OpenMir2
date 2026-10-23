@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "e5e3ab25608a48bc3930a14d90397994840fb910fd0e000ad16a4f87426cd696"
+   "sha256": "dc8548f05dc83fbbbddeea945a014dbb36b1f5adc193e8c4b29b5c45fc57f404"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1766,6 +1766,22 @@
  ],
  "script_reachable_but_implemented": [
   {
+   "cmd": "VV踢人",
+   "file": "Market_Def/功能NPC/桃源-N109.txt",
+   "line": 49,
+   "label": "@01",
+   "rust_imp": "KickHuman",
+   "third_state": false
+  },
+  {
+   "cmd": "VV踢人",
+   "file": "QuestDiary/月卡/月卡系统.txt",
+   "line": 28,
+   "label": "@踢人",
+   "rust_imp": "KickHuman",
+   "third_state": false
+  },
+  {
    "cmd": "禁言",
    "file": "QuestDiary/游戏登陆/登陆脚本.txt",
    "line": 16,
@@ -3472,48 +3488,6 @@
    "field_line": 322
   },
   {
-   "cmd": "VV踢人",
-   "cmd_name": "VV踢人",
-   "child_card": "openmir2-gm-impl-kick",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/KickHumanCommand.cs:10",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].Kick",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/功能NPC/桃源-N109.txt",
-     "line": 49,
-     "label": "@01",
-     "section": "act",
-     "script_arg": "VV踢人",
-     "raw": "GMEXECUTE VV踢人 <$STR(S6)>",
-     "label_path": "Market_Def/功能NPC/桃源-N109.txt:@01 <- Market_Def/功能NPC/桃源-N109.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:138"
-    },
-    {
-     "file": "QuestDiary/月卡/月卡系统.txt",
-     "line": 28,
-     "label": "@踢人",
-     "section": "act",
-     "script_arg": "VV踢人",
-     "raw": "GMEXECUTE VV踢人 <$USERNAME>",
-     "label_path": "QuestDiary/月卡/月卡系统.txt:@踢人 <- QuestDiary/月卡/月卡系统.txt:@月卡 <- MapQuest_def/QManage.txt:@login <- engine GotoLable root",
-     "load_origin": "#CALL MapQuest_def/QManage.txt:36"
-    }
-   ],
-   "handler_class": "KickHumanCommand",
-   "attr_name": "KickHuman",
-   "handler_exec_line": 14,
-   "name_source": "conf[Command].Kick",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "Kick",
-   "field_line": 164
-  },
-  {
    "cmd": "who",
    "cmd_name": "who",
    "child_card": null,
@@ -4401,20 +4375,20 @@
   }
  ],
  "summary": {
-  "total": 87,
+  "total": 86,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 7
+   "script-reachable": 6
   },
   "reachable": 0,
-  "script_reachable": 7,
+  "script_reachable": 6,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 98,
-   "Unimplemented": 87
+   "Implemented": 99,
+   "Unimplemented": 86
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4440,7 +4414,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 77,
+  "complete_implemented": 78,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
