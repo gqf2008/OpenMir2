@@ -46,3 +46,190 @@ cron 是**会话内**的（7 天自动过期，会话结束即消失）。换会
 - **GUI-only 证据**：渲染/点击几何/输入法类卡无法用协议对拍替代，需真机窗口。
 - **C# 真值栈**：私有 root `E:/tmp/conformance/csharp-root`（15xxx/17xxx、`mir2_test_*`）可与 peer 的默认端口栈并存；对拍时与 Rust 串行、同端口。
 - **whitelist 待复核**：T-161..T-173 需 owner 逐条复核留痕。
+
+---
+
+## 5. 机判用法（`tools/goal/goal_gate.py`）
+
+§1 的四条终点条件已落成**一条只读、零副作用、可复算**命令。任何人都能用它把
+「目标是否达成」从人读变成可复现的三态表；**它不修东西、不改仓库、不起栈、不连库、不占端口**。
+
+### 5.1 三条命令
+
+```sh
+# 快速模式（默认）：跳过 cargo test 与 parse-stats 构建；暖缓存约 20–40s（冷构建约 1m44s）
+python tools/goal/goal_gate.py
+
+# 机器可读（stdout 只有 JSON，适合巡检/cron/CI 读）
+python tools/goal/goal_gate.py --json
+
+# 完整模式：= --tests --script，四条件全部实测（cargo test 很慢，见 5.3）
+python tools/goal/goal_gate.py --full
+```
+
+可选开关：
+
+| 开关 | 作用 |
+| --- | --- |
+| `--tests` / `--skip-tests` | 跑 / 显式跳过 `cargo test --workspace`（快速模式默认跳过） |
+| `--script` / `--skip-script` | 构建并跑 parse-stats / 显式跳过（快速模式默认跳过） |
+| `--full` | `--tests --script` 的简写 |
+| `--script-bin <path>` | 用**预编译**的 `mir2-script-tool` 二进制复算条件1（跳过 cargo 构建，仍读实时输出） |
+| `--envir <dir>` | 脚本语料目录，默认 `E:/MirServer/M2GameSvr/Envir` |
+| `--repo <dir>` | 仓库根，默认脚本所在仓库 |
+| `--timeout N` / `--test-timeout N` | 单命令超时（默认 1800s）/ cargo test 超时（默认 7200s） |
+| `--allow-verdict-grep` | 条件2 采信 comment/review 里的 `VERDICT=PASS` 文本标记（默认关闭） |
+| `selftest` | 合成输入自检（64 条断言，含 6 颗牙） |
+
+退出码：`0` 四条全 PASS；`1` 有 FAIL；`2` 无 FAIL 但有「需人工」；`3` 脚本自身错误（参数/路径）。
+
+### 5.2 三态怎么看
+
+| 状态 | 含义 | 处置 |
+| --- | --- | --- |
+| **PASS** | 判据**机判成立**，有实测输出作证据（不是「看起来一样」） | 无需动作 |
+| **FAIL** | 判据**机判不成立**；表格下方的「缺口明细」逐条点名（卡 id / 消息名 / 门禁项） | 派卡或转 `needs-human` |
+| **需人工** | 脚本**无法机判**：缺输入（未跑 `--tests`/`--script`）、证据链不可信（未验签、board 缺失、弱关联 `T-*`）、命令超时 | **不许**当成 PASS；要么补跑完整模式，要么人判并留痕 |
+
+判定顺序：**任一 FAIL ⇒ 总体 FAIL**；否则任一「需人工」⇒ 总体「需人工」；全 PASS 才 PASS。
+**「查不到」永远是「需人工」，绝不默认 PASS**。
+
+### 5.3 四条件各自怎么算（复算口径）
+
+1. **脚本派发 100%（数字来源已查明，不硬编码）**
+   来源 = `docs/rewrite-remaining-inventory-20261022.md` §1.2 的 parse-stats 覆盖行。脚本执行：
+
+   ```sh
+   cd mir2-rs && cargo run --release --locked -p mir2-script-tool -- \
+     parse-stats E:/MirServer/M2GameSvr/Envir --json <临时文件> --require-implemented
+   ```
+
+   然后解析两段 stdout：
+   * 覆盖行 `语料派发目标覆盖：已实现 N 个（M 次调用）；未实现 K 个`：
+     `K == 0 且 rc == 0` ⇒ PASS；`K > 0` ⇒ FAIL；**`K == 0 但 rc != 0` ⇒ FAIL**
+     （`--require-implemented` 与覆盖行是同一判据的两条腿，rc 非 0 不许当 PASS）。
+   * 语料完整性计数 `文件/加载/缺失/异常` 与 `解码异常文件`：缺文件或解码异常会让
+     **参与统计的目标变少**，此时即使打印「未实现 0 个」也不算数 ⇒ 「需人工」。
+   * 抽不到覆盖行 / 超时 / 语料目录不存在 ⇒「需人工」。
+
+   **数字从不写死**：detail 打印 `目标 N/（N+K）（去重派发目标）；调用 M 次`，
+   「106/106」= 已实现目标/语料用到的目标总数；「106/11829」= 目标数/调用次数，两者分母不同。
+
+2. **R 卡证据**：`walgit collab board --format json` 提供卡片列表/状态列/未验签计数；
+   条目正文（`tier`/`window_required`/`merge_result`/comment）由只读 git 对象
+   （`refs/collab/meta/snapshot` 折叠区 + `refs/collab/inbox/*` tail）按 `git cat-file --batch` 一次读出。
+   **R 卡枚举 = 任一条目的 `body.tier` 归一为 R**（不只 issue：86/161 张卡的 tier 只写在
+   review/patch/status 里，只认 issue 会形成「新 R 卡漏写 tier ⇒ 不进 R 总体」的假 PASS 路径）。
+   每张 R 卡按下列**优先级**定态：
+
+   | 序 | 判据 | 状态 |
+   |---|---|---|
+   | 1 | board 未列出该卡 | 需人工（视图未同步/线程状态异常） |
+   | 2 | board 报未验签条目 | 需人工 |
+   | 3 | **board 列 = 已完成 / status = closed** | **PASS（已合并；不要求线程有 merge_result）** |
+   | 3.5 | **未开工/未合并**：无 merge_result、无 patch、无 review、无 comment，且 board 未 closed | **未合并**（不计 PASS 也不计 FAIL，只列清单） |
+   | 4 | **已裁定登记**：最新一条带 `window_required` 的 approve review 说 `true` ⇒ window_required；说 `false` 且**专用字段 `why_not_window`/`window_waiver` 非空**（或 `tier_why` 命中免窗口短语白名单且否决词均被否定）⇒ 已裁定不需窗口 | PASS |
+   | 5 | `window_required=true`（无复核裁定时，作者/状态里的登记） | PASS |
+   | 6 | whitelist `T-*` 登记行**点名本卡** | PASS（弱关联不算） |
+   | 7 | comment/review 内有 `VERDICT=PASS`（**仅 `--allow-verdict-grep` 时**） | PASS（默认关闭） |
+   | 8 | 线程有 `merge_result merged=true` 但 board 非 closed，**且以上登记都没有** | **需人工**（可能已重开且新工作无证据） |
+   | 9 | 线程提到 `T-*` 但登记行未点名本卡 | 需人工（弱关联） |
+   | 10 | 以上皆无 | **FAIL（三者皆无，列卡 id）** |
+
+   * **条件②只约束「已开工/已合并」的卡**（I-5）：一张刚建、线程里只有 issue + claim 的卡既不需要证据
+     也不需要登记，判成 FAIL 是假阳性。机器代理：`merge_result` / board closed / `patch` / `review` / `comment` 任一存在 ⇒ 判证据；
+     只有 issue + claim（或只有 status）的新卡归 `not_merged`（不计 PASS/FAIL，控制台单列前 20 条）。
+     该代理同时覆盖「Leader 直接合入但没有 merge_result 条目」的记账缺口卡。
+   * **「已裁定登记」必须排在 merged 之前**：否则任何 merged 的卡都会进需人工，把「有显式登记」
+     误报成缺口（H-1）。review 的结论字段 `decision` 与 `verdict` 两种写法都认；同一卡多次 review
+     的 `window_required` 会不一致 ⇒ **取最新一条带该字段的 approve**，不能对历史做 `any(false)`。
+   * **「不需要窗口」必须有免窗口语义，不能只看「理由非空」**（I-1 实证：`tier_why` =「时序/竞态…」
+     描述的是改动性质，却被当成免窗口）：专用字段 `why_not_window` / `window_waiver` 优先；回退
+     `tier_why` 时必须命中白名单短语（`不需要窗口/无需窗口/不占窗口/不可能只在真机暴露/零 .rs/
+     零生产代码/纯文档/纯夹具/纯仓库卫生/生产不可达/等价即放行` 等），且 `时序/竞态/RNG/落库/
+     战斗数值/数值/持久化/随机/tick` 若出现即否决（除非处于「不触/无/零/未」等否定语境）。
+   * **merged 但 board 非 closed 且已凭登记 PASS** 的卡进 `evidence.merged_open_hygiene`（卫生清单，
+     带 `last_status_ts`），**不算条件2 缺口**，供 owner 确认是否重开；张数同时打印在条件2 的 detail 里。
+   * **登记型 PASS ≠ 已有真机证据**：`window_required=true` 只代表「登记 + 明确理由」，不等于真机窗口
+     已跑（本轮约 95 张此类卡仍欠窗口）。条件② 绿只说明「没有无证据无登记的卡」，不得解读为「R 面已验」。
+   * `need_items` 每项带 `last_status_ts`（线程内 `status` 条目的最大 ts），**按升序（最旧先）**排；
+     控制台按条件各列前 20 条（条件2 即最旧的 20 张），其余见 `--json`。FAIL 项顺序不动。
+
+   * `VERDICT=PASS` 是文本子串匹配，可能被「计划/预期」误命中 ⇒ **默认不采信**，要显式加
+     `--allow-verdict-grep`（当前 0 张卡依赖它）。
+   * `whitelist.md` 同一编号出现多行时**取并集**（卡集合合并、行文本拼接），不让覆盖写吃掉卡↔T 关联。
+   * 卡 id 匹配会排掉 `refs/collab/meta/principals/*` 里的 principal 名（`openmir2-worker-5` 等不是卡）。
+   * 判定 tier 时把散文式 tier（如 `R（战斗数值/时序/持久化面）…`）归一为 R；线程里**任一**条目
+     标了 R 就按 R 卡处理（偏向保守：宁可多查一张，不漏一张）。
+
+3. **B 类清零**：跑 `cd mir2-rs && python -I -B tests/parity/coverage/recon_gates.py dispatch --repo .. --json <临时文件>`，
+   取 `status == "tracked"` 的行，逐条判：条目名出现在某条 `T-*` 登记行 ⇒「有 T-* 登记」；
+   否则其 `card` 在 board 里存在 ⇒「有卡」；都没有 ⇒ FAIL。判定顺序（fail-closed **且不判死终点**）：
+   1. rows 为空 / 非 list ⇒ 需人工；
+   2. 行缺 `status`（schema 漂移）⇒ 需人工；
+   3. 缺 `counts.tracked` 或与实际 tracked 行数不一致 ⇒ 需人工；
+   4. **`counts.tracked == 0` 且行集非空 ⇒ PASS（B 类清零）**——否则条件3 永远无法在 DONE 时转 PASS；
+   5. 否则按条目判定。
+
+   「查不到」与「确认清零」必须分开：recon 给不出结构 ⇒ 需人工；recon 明确 `tracked=0` 且计数自洽 ⇒ PASS。
+
+4. **门禁恒绿**：逐项跑并在 `--json` 里留 rc/耗时——`cargo fmt --all -- --check`、
+   `cargo clippy --workspace --all-targets --locked -- -D warnings`、
+   `cargo run --locked -p msgcodegen -- --check`、
+   `python -I -B tests/parity/m3/whitelist_anchor_gate.py check`、
+   `python -I -B tests/parity/m3/m3_whitelist_registry_audit.py audit`，
+   加上 `git ls-remote walgit refs/heads/master` 与本地 `master` 的 sha 比对。
+   `cargo test --workspace --locked` **只在 `--tests`/`--full` 时跑**；跳过时条件4 =「需人工」，不冒充 PASS。
+
+### 5.4 `--skip-tests` 与完整模式的区别（务必分清）
+
+| | 快速（默认 / `--skip-tests`） | 完整（`--full` 或 `--tests --script`） |
+| --- | --- | --- |
+| fmt / clippy / msgcodegen / anchor / registry / master 比对 | 跑 | 跑 |
+| `cargo test --workspace` | **跳过** ⇒ 条件4 「需人工」 | 跑（数千用例；冷 target 实测 433.5s，全量 `--full` 约 10.5 分钟） |
+| parse-stats 覆盖率 | **跳过** ⇒ 条件1 「需人工」 | 跑（首次 `--release` 构建较慢；可用 `--script-bin` 复用已有二进制） |
+| 适用 | 巡检、每次合并前快手 | **宣告终点 `DONE` 前必须跑一次**（四条都要有实测结论） |
+
+> 换句话说：**快速模式永远不可能给出总体 PASS**（条件1、4 至少各有一处「需人工」）。
+> 这是刻意的：没跑过的门不许算绿。要看到真正的「四条全绿」，请用完整模式。
+
+### 5.5 前置条件与已知边界
+
+* **协作视图新鲜度由调用方负责**：脚本**不 `git fetch`**（fetch 会写 refs，违反零副作用）。
+  跑条件2 前先同步本地视图：
+
+  ```sh
+  git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*' '+refs/collab/meta/*:refs/collab/meta/*'
+  ```
+
+  视图为空 ⇒ 条件2/3 输出「需人工」并提示这条命令，不会空表 PASS。
+* **工作区/二进制**：cargo 命令在 `mir2-rs/` 下执行，构建产物落 `target/`（gitignored）；全程 `--locked`，
+  不改 `Cargo.lock`。parse-stats 需要 `E:/MirServer/M2GameSvr/Envir`（不存在则「需人工」并说明）。
+* **board 未列出的卡**：本仓看板只显示命中列谓词的线程；索引里有 `tier=R`、board 却不显示 ⇒「需人工」
+  （本地视图未同步，或线程条目链/状态异常），并列入缺口明细。
+* **merged 但 board 未 closed**：若已有显式登记（window_required / whitelist / 已裁定）⇒ PASS，并进
+  `evidence.merged_open_hygiene` 卫生清单（带 `last_status_ts`），**不算条件2 缺口**；
+* **未开工/未合并的卡**（无 `merge_result`/`patch`/`review`/`comment`）归 `not_merged`：**不计 FAIL 也不计 PASS**，
+  控制台单列「未开工/在飞」前 20 条，全量在 `--json` 的 `not_merged_items`；
+  没有任何登记的才判「需人工」，供 owner 确认「是否已重开且新工作有证据」。
+* **whitelist 重复编号**：`build_whitelist` 取并集（不会丢卡↔T 关联），但仍以「提示」列出重复号，
+  登记号唯一性归 `m3_whitelist_registry_audit.py`（该门当前 `scope=T-36+`，T-4/T-6 这类低号重复覆盖不到）。
+* **代理的认知边界**：若某卡代码已合但线程零痕迹（无 `merge_result`/`patch`/`review`/`comment`），任何代理都发现不了它——
+  本门看不到这种卡。当前无此例，但记为已知盲区（勿当成「已覆盖」）。
+* **JSON 结构**：`{schema, generated_ts, repo, envir, mode, conditions[4]{id,name,state,label,detail,evidence},
+  overall, overall_label, fail_items[], need_items[], warnings[]}`；`state ∈ {pass, fail, need_human}`；
+  条件2 的 `evidence.r_cards[]` 含每卡 `category/board_column/merged/window_required/strong_t/weak_t/comment_evidence`。
+
+### 5.6 自检与牙
+
+```sh
+python tools/goal/goal_gate.py selftest --verbose
+# selftest：64 条断言，64 通过，0 失败
+```
+
+覆盖四条件各自的 PASS / FAIL / 需人工 分支（含覆盖行解析、语料完整性计数、**rc=1 但未实现 0 ⇒ FAIL**
+的 fail-closed 耦合、任一条目 tier 枚举、board 已完成、已裁定登记（decision/verdict 两种写法、取最新 approve）、
+merged 未 closed、VERDICT 子串默认不认、need_items 按 last_status_ts 升序、弱关联 T 不冒认、未验签、
+board 缺失、master 漂移、ls-remote 不可用、tracked 空/schema 漂移/counts 不一致、**tracked=0 且行集非空 ⇒ PASS**、
+**approve+false+tier_why=「时序/竞态」⇒ 需人工**、**否定不跨中文逗号/转折词（「不涉及时序，但涉及 RNG」⇒ 拒）**、顿号列表仍被统辖（「不触 RNG、时序、落库」⇒ 放行）、专用 `why_not_window` 优先、未开工卡 ⇒ 未合并、状态优先级），并内置**六颗牙**：忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS、
+把 tracked=0 一律判需人工（H-3 旧口径）、把未开工卡判成 FAIL（I-5）—— 任一退化都会被断言判红。改判定逻辑后先跑 selftest 再跑快速模式。
