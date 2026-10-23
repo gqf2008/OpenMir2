@@ -1,7 +1,7 @@
 # 脚本 `GMEXECUTE` 宿主跳线：商人 / 点击 / QFunction / 组队四路（T-211）
 
 - 卡：`openmir2-gm-script-exec-seams`（tier=R；承 T-210 `openmir2-gm-script-host-seam` 的 `@Login`-only 范围）
-- 分支：`card/openmir2-gm-script-exec-seams`；base = T-210 head `a4b87fee5`（前置卡未合并，**合并顺序：先 T-210**）
+- 分支：`card/openmir2-gm-script-exec-seams`；base = T-210 head `a4b87fee5`（T-210 已在 master，合并顺序要求已满足）；返工时已**真实 merge 当前 master `49983de07`**（B-1 复核）
 - 作者：`openmir2-worker-24`；worktree `OpenMir2-wt-cronclaim`
 
 ## 1. 目标
@@ -91,17 +91,40 @@ T-210 把 `NpcPlayer` 的 `permission`/`set_permission`/`process_user_line_msg` 
 | D | `function_npc_present` 固定 `false`（oracle `FunctionNPC == null`） | stdmode 用例红（不吃、无 SysMsg） |
 | E | `FixedNpcScriptCtx::goto_label` 的 `ScriptGmParts::with` 换成 `None` | 固定 NPC 用例红 |
 
-## 6. 门禁
+复核（`openmir2-worker-66`，合并树 head `0b7fe61d4`，`lib.rs` 基线
+`sha256=6c156b61e2bb8a3a966ad06e80d369bdc6217f3218dbb7d217d9e6d210c359bd`）：
+
+| 牙 | 实跑 | 结果 | 还原后 sha256 |
+| --- | --- | --- | --- |
+| A | `cargo test -p game-svr --lib -- gmexecute` | merchant / click / 固定 NPC 三条 `FAILED`（rc=101），party / stdmode 仍 `ok` | `6c156b61…` 逐字节一致 |
+| D | `cargo test -p game-svr --lib -- eat_stdmode31_anicount` | `FAILED`，断言原文 `@StdModeFunc15 的 GMEXECUTE ⇒ 恰好一条 SM_SYSMESSAGE；实得 [636]`（rc=101） | `6c156b61…` 逐字节一致 |
+
+## 6. 门禁（真实合并树：master `49983de07` + 本 head）
 
 ```
-cargo fmt --all -- --check                     OK
-cargo clippy --workspace --all-targets -- -D warnings   OK
-cargo test --workspace                         （见卡面结果）
-cargo run -p msgcodegen -- --check             （见卡面结果）
-python -I -B tests/parity/m3/whitelist_anchor_gate.py check     506 条锚 ALL PASS
-python -I -B tests/parity/m3/m3_whitelist_registry_audit.py audit   GREEN
-python -I -B tools/whitelist/t_reservation_gate.py              （见卡面结果）
+cargo fmt --all -- --check                                  rc=0
+cargo clippy --workspace --all-targets --locked -- -D warnings   rc=0
+cargo test --workspace --locked                             rc=0（141 suites / 3051 passed / 0 failed / 62 ignored）
+cargo test -p mir2-world --test no_parallel --locked        rc=0（5 passed）
+cargo run --locked -p msgcodegen -- --check                 rc=0（604 条）
+python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check   ALL PASS（511 条锚）
+python -I -B mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit   GREEN（200）
+python -I -B tools/whitelist/t_reservation_gate.py check    GREEN（200 行 / 200 号）
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py gate   GREEN（87）
 ```
+
+> 首轮曾复用 reviewer-6 的 `CARGO_TARGET_DIR=/e/tmp/gmexec-merge-target`，其中测试二进制内嵌了已删除
+> worktree `E:	mp\wt-gmexec-merge` 的 `CARGO_MANIFEST_DIR` ⇒ 3 条 db-srv vector 用例、3 条
+> `no_parallel` 与 msgcodegen 报「路径不存在」（正是队列纪律第 11 条的第三种环境噪声）。
+> 换全新唯一目录 `E:/tmp/gmexec-merge-target-w66` 重跑后全绿；源码未变（`lib.rs` sha256 前后一致）。
+
+**B-1 合并副作用复核**（reviewer-6 blocking）：分支不再「取回 48a98bdb」，而是把
+`docs/leader-queue-20261023.md` 直接取**当前 master 版本**（commit `84dfb8085`）。
+真实 `git merge refs/remotes/walgit/master`（不是 merge-tree）后：
+
+- `grep -c '^12\. \*\*并行车道的真正代价' docs/leader-queue-20261023.md` = **1**（修前 = 2）；
+- `git diff refs/remotes/walgit/master -- docs/leader-queue-20261023.md` 行数 = **0**；
+- `git diff --stat refs/remotes/walgit/master..HEAD` 只剩本卡 6 个文件（leader-queue 不再出现）。
 
 ## 7. 残余（已登记，不静默）
 
@@ -159,3 +182,5 @@ python -I -B tools/whitelist/t_reservation_gate.py              （见卡面结�
 
 - `E:/tmp/w24_seams_edit1.py`、`E:/tmp/w24_fix_calls.py`（一次性改树脚本，保留供复核）
 - `E:/tmp/w24-seams.sha`（牙的 sha256 基线）
+- `E:/tmp/gm-tooth.py`（返工复核牙 A/D 的改树/还原脚本，不入库）
+- `E:/tmp/gmexec-merge-target-w66/`（返工门禁用的构建缓存，可删；另 reviewer 的共享 `E:/tmp/gmexec-merge-target/` 是首轮噪声源，建议清理）
