@@ -30,6 +30,24 @@ python tools/probe/mir2_probe.py \
   物品名、自身坐标）一律走这里，**不要**在 `params` 里放 `"REQUIRED"` 之类的哨兵值。
 * 离线校验：`python -I -B tools/probe/mir2_probe.py --check-scenario --scenario <file.json> [--var k=v ...]`
   —— 只加载+展开，不连网；rc=0 通过、rc=2 场景错误。
+
+  形状之外还做**语义校验**（`check_scenario()`；缺一条就不算「能真跑」，全部 fail-closed rc=2）：
+
+  1. **R2 每个 `wait_for` 之前必须已有发帧步骤**（`send`/`say`/`click_npc`/`dlg_select`）——
+     否则它等的回包没人产生。删掉场景中间的 `send` 会在这里红。
+  2. **R1 至少一个发帧步或累计观察步**（`wait_idents`/`wait_frames`）——全是 `sleep`
+     的场景既不发帧也不观察，什么也证不了。纯观察场景（如 `login_only`）靠驱动器的
+     登录链 + 自动握手已经发帧，所以它合法。
+  3. **R3 ident 必须存在于协议常量表**：`send.ident` 与 `wait_for` / `wait_frames.idents` /
+     `wait_idents.idents` 都必须能在 `mir2-rs/crates/protocol/src/messages.rs` 的 `CM_*`/`SM_*`
+     里找到（该表由 `msgcodegen` 与 C# `Messages.cs` 对拍）。表外 ident（如 `wait_for: 4095`）
+     = 永远发不出 / 等不到，不会「跑起来才发现」。
+  4. **R4 变量引用必须已声明**：`send.recog/param/tag/series`、`send.text_from`、`click_npc`、
+     `dlg_select.recog` 里的变量名必须在场景的 `required` / `params` / `computed` 里；
+     `--var` 是给**已声明**变量覆值的通道，不是声明通道（拿 `--var` 喂一个拼错的名字仍然红）。
+  5. **W 至少一个等待步骤**（原有的 N-5 规则，已并入 `check_scenario()`）。
+
+  这几条只在 `--check-scenario` 生效；真跑路径不变（仍按原口径加载并执行步骤）。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
 
 ## `placement`：角色必须位于 map/x/y（由 `card_window.py` 应用）
@@ -52,7 +70,7 @@ python tools/probe/mir2_probe.py \
 | `send` | 对象：必填 `ident`；可选 `recog`/`param`/`tag`/`series`；`text` / `raw_hex` / `text_from` **三选一** | 12B 头 + 体，按 `#1<EDCode>!` 发出 |
 | `say` | 字符串 | `CM_SAY(3030)`，`recog=0`，文本按 GBK+EDCode |
 | `click_npc` | int 或 `params` 名 | `CM_CLICKNPC(1010)`，`recog=<NPC actor id>` |
-| `dlg_select` | 字符串 label，或 `{"label": "...", "recog": N}` | `CM_MERCHANTDLGSELECT(1011)`；`recog` 缺省取**最近一条 `SM_MERCHANTSAY(643)` 的 recog** |
+| `dlg_select` | 字符串 label，或 `{"label": "...", "recog": N}` | `CM_MERCHANTDLGSELECT(1011)`；`recog` 缺省取**最近一条 `SM_MERCHANTSAY(643)` 的 recog**，也可写 `params` 名（加载期解析，与 `send.recog` 同口径） |
 | `wait_for` | int 或非空 int 数组 | 等**下一步开始之后**到达的第一条匹配 ident |
 | `wait_frames` | `{"count": N, "idents": [...], "timeout_ms": M}` | 等 gamegate 连接**累计**帧数 ≥ N 且 idents 都出现过 |
 | `wait_idents` | `{"idents": [...], "timeout_ms": M}` | 等 idents **全部**在 gamegate 连接上出现过（累计口径；`timeout_ms` 不满足即步骤失败） |
@@ -196,6 +214,9 @@ python tools/probe/mir2_probe.py --selftest
 
 `--selftest` 用 `../fixtures/r9/` 的离线 s2c 抓包跑「切帧 -> 解析 -> 落 ndjson」全链路，
 不连网、不起进程；含「改坏必红」的负向用例（载荷字节改成越界值必须报错）。
+当前共 **9 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R4：
+删 `send` 步 / `wait_for` 写表外 ident / 引用未声明变量 / `wait_for` 先于 `send` / 全 `sleep`），
+并断言 `login_only`、`dice_chain` 仍绿（防误伤）。
 
 ## fixtures 来源
 

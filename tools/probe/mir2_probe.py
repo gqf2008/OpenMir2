@@ -50,6 +50,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -531,6 +532,11 @@ def plan_step(step, index, params):
             recog = val.get("recog")
         if not isinstance(label, str) or not label:
             raise ScenarioError("%s.dlg_select label must be a non-empty string" % where)
+        # recog 与 send.recog 同口径（PRB-4）：可以写 params 名，加载期就解析并校验 i32 范围；
+        # 否则要等到发送时才抛 FrameError，被归类成 frame-parse(2) 而不是 scenario-error(2)。
+        if recog is not None:
+            recog = _need_int(resolve_param(recog, params, where + ".dlg_select.recog"),
+                              where + ".dlg_select.recog", -0x80000000, 0x7FFFFFFF)
         out.update(ident=CM_MERCHANTDLGSELECT, recog=recog, param=0, tag=0, series=0,
                    body=label.encode("gbk"), _needs_merchant_recog=(recog is None))
     elif action == "wait_for":
@@ -584,6 +590,168 @@ def expand_scenario(data, params_override=None):
             % (data.get("name"), ", ".join("%s=<value>" % n for n in missing)))
     plans = [plan_step(s, i, params) for i, s in enumerate(data["steps"])]
     return plans, params
+
+
+# ==========================================================================
+# 场景语义校验（--check-scenario 的「牙」）
+# ==========================================================================
+# 背景：load_scenario + expand_scenario 只做**形状**校验（键名/类型/范围/required 变量/
+# text_from 是否存在）。它对「这个场景能不能真跑」无能为力：删掉中间的 send 步（等一个
+# 永远不会来的回包）、把 wait_for 写成协议表里不存在的 ident，曾经都是 rc=0 —— 审查者
+# 无法拿工具本身证伪场景。check_scenario() 补上这层语义校验。
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+MESSAGES_RS_REL = "mir2-rs/crates/protocol/src/messages.rs"
+MESSAGES_RS = os.path.join(REPO_ROOT, *MESSAGES_RS_REL.split("/"))
+
+# 发帧动作：在 GameGate 连接上真的写出 c2s 帧（say/click_npc/dlg_select 分别展开成
+# CM_SAY / CM_CLICKNPC / CM_MERCHANTDLGSELECT）。`send` 只是其中最通用的一个。
+SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select"})
+# 累计观察动作：等的是「累计出现过」而不是「本步之后的第一条回包」——驱动器的登录链
+# （CM_IDPASSWORD/SELECTSERVER/QUERYCHR/SELCHR + GameGate 登录）与自动握手
+# （CM_LOGINNOTICEOK / CM_QUERYBAGITEMS）本来就会发帧，所以纯观察场景（login_only）合法。
+CUMULATIVE_WAIT_KINDS = frozenset({"wait_idents", "wait_frames"})
+WAIT_KINDS = frozenset({"wait_for"}) | CUMULATIVE_WAIT_KINDS
+
+_MSG_CONST_RE = re.compile(r"pub const (CM|SM)_([A-Z0-9_]+): u16 = (\d+);")
+
+
+def load_message_constants(path=None):
+    """解析 `mir2-rs/crates/protocol/src/messages.rs` -> {"CM": {ident: 名}, "SM": {...}}。
+
+    不写死一张私有表：这张表由 `cargo run -p msgcodegen -- --check` 与 C# `Messages.cs`
+    对拍，是「ident 是否真实存在」的唯一事实源。同值别名（如 CM_IDPASSWORD/CM_PASSWORD）
+    与跨命名空间同值（CM_QUERYCHR == SM_SYSMESSAGE == 100）都合法，先出现的名字胜出。
+    fail-closed：文件缺失或一条常量都解析不到 => ScenarioError。
+    """
+    path = path or MESSAGES_RS
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as ex:
+        raise ScenarioError("cannot read protocol constant table %s: %s" % (path, ex))
+    out = {"CM": {}, "SM": {}}
+    for m in _MSG_CONST_RE.finditer(text):
+        out[m.group(1)].setdefault(int(m.group(3)), "%s_%s" % (m.group(1), m.group(2)))
+    if not out["CM"] or not out["SM"]:
+        raise ScenarioError("protocol constant table %s parsed %d CM / %d SM constants "
+                            "(parser drift?)" % (path, len(out["CM"]), len(out["SM"])))
+    return out
+
+
+def _var_refs(data):
+    """收集场景里**按变量名**引用的字段：[(where, name)]。
+
+    与 plan_step 的解析点一一对应（send 的 recog/param/tag/series、click_npc、
+    dlg_select.recog、send.text_from）。纯数字字面量（含 "0" 这种字符串）不算变量引用；
+    click_npc 的 "auto:last_turn" 是动作级哨兵，也不是变量。
+    """
+    refs = []
+    for i, step in enumerate(data.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        where = "steps[%d]" % i
+        send = step.get("send")
+        if isinstance(send, dict):
+            for key in ("recog", "param", "tag", "series"):
+                v = send.get(key)
+                if isinstance(v, str):
+                    refs.append((where + ".send." + key, v))
+            v = send.get("text_from")
+            if isinstance(v, str):
+                refs.append((where + ".send.text_from", v))
+        v = step.get("click_npc")
+        if isinstance(v, str) and v != "auto:last_turn":
+            refs.append((where + ".click_npc", v))
+        v = step.get("dlg_select")
+        if isinstance(v, dict) and isinstance(v.get("recog"), str):
+            refs.append((where + ".dlg_select.recog", v["recog"]))
+    return refs
+
+
+def _is_int_literal(text):
+    try:
+        int(text, 10)
+        return True
+    except ValueError:
+        return False
+
+
+def check_scenario(data, plans, messages=None):
+    """`--check-scenario` 的语义校验（形状之外）。非法即抛 ScenarioError。
+
+    已有形状校验（load_scenario/expand_scenario）：键名/类型/范围、恰好一个动作键、
+    required 变量是否给全、text_from 是否在 params 里。本函数补「这场景真跑得起来吗」：
+
+      R2 每个 wait_for 之前必须已有发帧步骤（否则它等的回包没人产生）；
+      R1 场景至少要有一个能发帧（send/say/click_npc/dlg_select）或能累计观察
+         （wait_idents/wait_frames）的步骤 —— 全是 sleep 的场景什么也证不了；
+      R3 所有 send/wait_* 的 ident 必须存在于协议常量表（表外 ident = 永远发不出/等不到）；
+      R4 变量引用必须能在场景声明的 required/params/computed 里找到（不许引用未声明变量）；
+      W  至少要有一个等待步骤（原 main 里的 N-5 规则，收进来一起判）。
+
+    R4 的「声明」口径刻意**不含 `--var`**：`--var` 是给已声明变量覆值的通道（README），
+    不是声明通道 —— 否则把一个拼错的变量名用 `--var` 一喂，校验就绿了。
+    """
+    name = data.get("name")
+    if messages is None:
+        messages = load_message_constants()
+    known = set(messages["CM"]) | set(messages["SM"])
+    declared = (set((data.get("params") or {}).keys())
+                | set(data.get("required") or [])
+                | set((data.get("computed") or {}).keys()))
+
+    # R2：wait_for 之前必须已有发帧步骤。先判这一步，坏样例拿到最具体的诊断。
+    first_send = None
+    for p in plans:
+        if p["kind"] in SEND_KINDS:
+            if first_send is None:
+                first_send = p["index"]
+        elif p["kind"] == "wait_for" and first_send is None:
+            raise ScenarioError(
+                "steps[%d].wait_for %s: no send step precedes it — nothing in this scenario can "
+                "produce that response (a scenario that only waits proves nothing; add a "
+                "send/say/click_npc/dlg_select before it)" % (p["index"], p["idents"]))
+
+    kinds = [p["kind"] for p in plans]
+
+    # R1：至少一个发帧或累计观察步骤。
+    if not any(k in SEND_KINDS or k in CUMULATIVE_WAIT_KINDS for k in kinds):
+        raise ScenarioError(
+            "scenario %r has no send step (%s) and no cumulative wait step (%s): "
+            "steps contain only %s, so it neither triggers nor observes any frame"
+            % (name, "/".join(sorted(SEND_KINDS)), "/".join(sorted(CUMULATIVE_WAIT_KINDS)),
+               "/".join(sorted(set(kinds)))))
+
+    # R3：ident 必须存在于协议常量表。
+    for p in plans:
+        if p["kind"] == "send":
+            if p["ident"] not in known:
+                raise ScenarioError(
+                    "steps[%d].send.ident %d is not a CM_*/SM_* constant in %s"
+                    % (p["index"], p["ident"], MESSAGES_RS_REL))
+        elif p["kind"] in WAIT_KINDS:
+            for ident in p["idents"]:
+                if ident not in known:
+                    raise ScenarioError(
+                        "steps[%d].%s ident %d is not a CM_*/SM_* constant in %s "
+                        "(typo? this wait can never match)"
+                        % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
+
+    # R4：变量引用必须在场景里声明过。
+    for where, ref in _var_refs(data):
+        if _is_int_literal(ref):
+            continue
+        if ref not in declared:
+            raise ScenarioError(
+                "%s references undeclared variable %r: declare it in required/params/computed "
+                "(--var only overrides a declared name, it does not declare one)" % (where, ref))
+
+    # W：必须有等待步骤（N-5：只发不等证明不了任何东西）。
+    if not any(k in WAIT_KINDS for k in kinds):
+        raise ScenarioError(
+            "scenario %r has no wait step: at least one wait_for/wait_frames/wait_idents is required "
+            "(a send-only scenario proves nothing)" % name)
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -1103,11 +1271,7 @@ def main(argv=None):
         try:
             data = load_scenario(args.scenario)
             plans, params = expand_scenario(data, parse_vars(args.var))
-            wait_kinds = {"wait_for", "wait_frames", "wait_idents"}
-            if not any(pl.get("kind") in wait_kinds for pl in plans):
-                raise ScenarioError(
-                    "scenario %r has no wait step: at least one wait_for/wait_frames/wait_idents is required "
-                    "(a send-only scenario proves nothing)" % data.get("name"))
+            check_scenario(data, plans)
         except ScenarioError as ex:
             print("scenario-error: %s" % ex, file=sys.stderr)
             return 2
@@ -1467,6 +1631,75 @@ def _selftest_scenario_required():
             os.unlink(path)
         except OSError:
             pass
+
+
+def _selftest_scenario_validation():
+    """`--check-scenario` 的语义牙：R1/R2/R3/R4，外加「纯观察场景不误伤」。
+
+    卡面要求的三条坏样例：① 删 send 步 ② wait_for 写成表外的 4095 ③ 引用未声明变量；
+    另加 ④ wait_for 排在 send 之前、⑤ 全 sleep 场景，以及 login_only/dice_chain 仍绿的断言。
+    """
+    messages = load_message_constants()
+    base = {
+        "name": "selftest_validation",
+        "required": ["target_x", "target_y", "hit_dir"],
+        "steps": [
+            {"send": {"ident": 3014, "recog": "target_x",
+                      "param": "target_y", "tag": "hit_dir"}},
+            {"wait_for": 14},
+        ],
+    }
+    ok_vars = {"target_x": 30, "target_y": 32, "hit_dir": 4}
+
+    def clone(obj):
+        return json.loads(json.dumps(obj))
+
+    def expect_red(mut, needle):
+        d = clone(base)
+        mut(d)
+        try:
+            plans, _ = expand_scenario(d, dict(ok_vars))
+        except ScenarioError as ex:
+            msg = str(ex)
+        else:
+            try:
+                check_scenario(d, plans, messages)
+            except ScenarioError as ex:
+                msg = str(ex)
+            else:
+                raise AssertionError("bad scenario accepted (tooth broken): %r" % (needle,))
+        assert needle in msg, (needle, msg)
+        return msg
+
+    # 好样例（与 combat_hit 同形）必须绿
+    check_scenario(clone(base), expand_scenario(clone(base), dict(ok_vars))[0], messages)
+
+    # ① 删掉 send 步 ⇒ wait_for 之前没有发帧步骤（R2 点名）
+    expect_red(lambda d: d.__setitem__("steps", [s for s in d["steps"] if "send" not in s]),
+               "no send step precedes")
+    # ② wait_for 写成协议表里不存在的 ident ⇒ R3 点名 4095
+    expect_red(lambda d: d["steps"][1].__setitem__("wait_for", 4095),
+               "ident 4095 is not a CM_*/SM_* constant")
+    # ③ 引用未声明变量（拼错）⇒ 加载期就红
+    expect_red(lambda d: d["steps"][0]["send"].__setitem__("recog", "no_such_var"),
+               "no_such_var")
+    # ③b 只在 --var 里出现、场景从未声明 ⇒ R4 仍然红（--var 是覆值通道，不是声明通道）
+    expect_red(lambda d: d.__setitem__("required", ["target_y", "hit_dir"]),
+               "undeclared variable 'target_x'")
+    # ④ wait_for 排在 send 之前 ⇒ R2
+    expect_red(lambda d: d.__setitem__("steps", [d["steps"][1], d["steps"][0]]),
+               "no send step precedes")
+    # ⑤ 全是 sleep ⇒ R1（既不发帧也不观察）
+    expect_red(lambda d: d.__setitem__("steps", [{"sleep": 1}, {"sleep": 2}]),
+               "has no send step")
+
+    # 防误伤：login_only（纯累计观察）与 dice_chain（params 默认值）必须绿
+    for name in ("login_only.json", "dice_chain.json"):
+        d = load_scenario(os.path.join(SCENARIO_DIR, name))
+        check_scenario(d, expand_scenario(d)[0], messages)
+    return "R1/R2/R3/R4 五颗牙 + 纯观察场景不误伤"
+
+
 class _TimedSock:
     """selftest 用：按墙钟延迟吐出预录字节（不占端口、不连网）。
 
@@ -1614,6 +1847,7 @@ def run_selftest():
     check("tamper-red", _selftest_tamper)
     check("scenario-dsl", _selftest_scenarios)
     check("scenario-required", _selftest_scenario_required)
+    check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
     check("dwell-after-enter", _selftest_dwell)
@@ -1622,7 +1856,7 @@ def run_selftest():
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (8 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (9 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
     return 0
 
 
