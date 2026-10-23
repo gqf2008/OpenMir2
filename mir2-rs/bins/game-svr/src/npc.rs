@@ -2384,6 +2384,76 @@ Other
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// **M-1（review `51132242`）**：`ADDNAMELIST`（action 45）经宿主 `envir_root` **真写盘**。
+    ///
+    /// oracle：`ActionOfAddNameList`/`ActionOfDelNameList` 共用落盘体（`del_from_string_list`：
+    /// 逐行 Trim + `OrdinalIgnoreCase` 找首个命中、删该行、CRLF 重写）；路径经 `envir_file_path`
+    /// ⇒ 两点前缀同样被剥离。内容用**字节数组**写死，避免源码转义干扰。
+    #[test]
+    fn host_npc_envir_root_name_list_action_writes_to_disk() {
+        let root = std::env::temp_dir().join(format!("gs-envir-write-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        let list = envir.join("WriteList.txt");
+        // 初始内容 = "HERO\r\nother\r\n"
+        let seed: Vec<u8> = vec![72, 69, 82, 79, 13, 10, 111, 116, 104, 101, 114, 13, 10];
+        std::fs::write(&list, &seed).unwrap();
+        let def = NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: String::new(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 45, // `ADDNAMELIST`
+                            s_param1: r"..\WriteList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: Vec::new(),
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let host = NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![def],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        let _ = host.goto_label("QFunction", &mut player, "@main", false);
+        // 命中行被删、其余行 + CRLF 逐字节保持（两点前缀先被剥离）。
+        assert_eq!(
+            std::fs::read(&list).expect("名单文件仍在"),
+            vec![111, 116, 104, 101, 114, 13, 10],
+            "两点前缀剥离后命中 hero 行，重写为 other + CRLF"
+        );
+        // 第二遍：名字已不在 ⇒ 早退、文件不变（幂等）。
+        let mut player2 = NpcPlayer::empty(&mut rng);
+        player2.chr_name = "hero".to_string();
+        let _ = host.goto_label("QFunction", &mut player2, "@main", false);
+        assert_eq!(
+            std::fs::read(&list).unwrap(),
+            vec![111, 116, 104, 101, 114, 13, 10]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
     /// `envir_map_name()` 与 `ActionOfOffLine` 读的是**同一个**当前图 ⇒ 接通覆写后
     /// ISONMAP 随之生效。oracle `ConditionOfIosnMap`（`ConditionProcessingSys.cs:1032-1055`）：
