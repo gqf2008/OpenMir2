@@ -115,6 +115,10 @@ python -I -B tools/whitelist/t_reservation_gate.py              （见卡面结�
    （`handle_say`）被调用。本卡新接的商人/点击/QFunction/组队/固定 NPC 路脚本若执行这类命令，
    pending 会滞留到下一次聊天命令才被应用（相位错）。本卡 8 条 script-reachable 命令里没有管理态命令，
    部署脚本也未在脚本路调用它们 ⇒ **当前不可达**，属未来 GMEXECUTE 命令的登记项（reviewer-6 M-3）。
+5. **`mem::take` 的 GM 会话态无 RAII 守卫**（reviewer-6 M-1，可选加固，**本卡不改代码**）：
+   正常/早退路径逐条核过不会丢；panic 会停在 `GmSession::default()`，但 bins/game-svr 无
+   `catch_unwind`，panic 终结 sim 线程 ⇒ 不存在「会话存活但 GM 态卡死」的可观测面。
+   若未来加 `catch_unwind`，须同步补 Drop 守卫（与 T-210 的 `PermissionGuard` 对称）。
 
 > **固定 NPC 路（`Npc_Def/`，如「改属性」的 `比奇国王-0122`）已接**：`handle_select` 同时持
 > `&mut world`/`&mut guilds`，故 `FixedNpcScript::goto_label` 增加两个只读形参由 handler
