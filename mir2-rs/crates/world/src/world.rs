@@ -4908,6 +4908,18 @@ impl World {
             ),
         }
 
+        // 0. **玩家 `BaseObject.Run` 的 `SuperMan` 回满段**（`BaseObject.Base.cs:32-36`：
+        //    `if (SuperMan) { HP = MaxHP; MP = MaxMP; }`）——oracle 在 `HP == 0 ⇒ Die()`
+        //    （`:70-73`，= 下面的玩家死亡结算）**之前**。非玩家侧的同段已在各自 `Run`
+        //    （[`Entity::run_super_man_refill`] 于 `base_object_run_monster` / NPC / 商人）调用；
+        //    玩家此前**没有**调用点 ⇒ `Entity.super_man = true`（`@3`）只挡死、不回血。
+        //    本段无写入者时是纯 no-op（`super_man` 默认 false）⇒ 既有 golden 逐字节不变。
+        for e in self.entities.iter_mut() {
+            if e.race == crate::entity::ACTOR_RACE_PLAY && e.super_man {
+                e.run_super_man_refill();
+            }
+        }
+
         // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
         self.tail_phase_log.push(TailPhase::Die);
         self.settle_deaths(record, true);
