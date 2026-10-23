@@ -107,6 +107,11 @@ pub const RELOAD_GUILD_HELP: &str = "命令格式: @ReloadGuild 行会名称";
 /// `FireBurnCommand`：`[Command("FireBurn", "", 10)]` ⇒ `Help` 为 null ⇒ 尾随一个空格。
 pub const FIRE_BURN_HELP: &str = "命令格式: @FireBurn ";
 
+/// `MobFireBurnCommand` 的帮助文本模板：`CommandHelp.GameCommandMobFireBurnHelpMsg` =
+/// `"命令格式: {0} {1} {2} {3} {4} {5} {6}"`（`CommandHelp.cs:104`），实参 = `Command.Name`
+/// + 六个原始串。注意**没有 `@` 前缀**、分隔符是**单个**空格，空槽位 ⇒ 连续/尾随空格照原样。
+pub const MOB_FIRE_BURN_NAME: &str = "MobFireBurn";
+
 // ===== 批次 3（传送/召唤族）的 `Command.CommandHelp` 与 SysMsg 文本常量 =====
 //
 // 口径：`命令格式: @{Name} {Help}`（`CommandAttribute.cs:53`），`Name` 已被 `Command.conf`
@@ -312,6 +317,10 @@ pub enum Imp {
     BackStep,
     /// `FireBurnCommand`（`@FireBurn`）。
     FireBurn,
+
+    /// `MobFireBurnCommand`（现网 `@MobFireBurn`）：六参校验 + `MapMgr.FindMap`；
+    /// 地图命中 ⇒ `FireBurnEvent` 入 `EventMgr`（宿主未接 ⇒ 零帧）；未命中 ⇒ 红字。
+    MobFireBurn,
 
     // ---- 批次 3 · 传送/召唤（17 + `@传送`，设计件 §4.3 第 11–27 行 / §6 G3）----
     /// `AllowDearRecallCommand`（现网 `@dfsgf567`）。
@@ -1528,6 +1537,71 @@ fn fire_burn(parameters: &str, sess: &GmSession) -> GmResult {
     no_frames(NOTE_EVENT_MGR)
 }
 
+/// `MobFireBurnCommand.Execute`（`src/Modules/GameCommand/Commands/MobFireBurnCommand.cs:17-60`，
+/// 现网 `@MobFireBurn`；`Command.conf` **没有** `[Command] MobFireBurn` 覆盖 ⇒ 注册名保持英文
+/// `MobFireBurn`，部署脚本写 `MOBFIREBURN` 靠 `CommandMaps` 的 `OrdinalIgnoreCase` 命中）。
+///
+/// **实际执行行**：
+/// - `:19` `if (@params == null) return;`——`case 2` 传 `Split(' ')`（不返回 null）⇒ 死分支；
+/// - `:23-28` 取六个原始串（地图/坐标 X/Y/光环效果/持续时间/未知）；
+/// - `:29-33` `IsNullOrEmpty(sMap) || sMap != "" && sMap[1] == '?'`：空地图 ⇒ 红字帮助；
+///   **单码元地图名 ⇒ `sMap[1]` 抛 `IndexOutOfRangeException`，被 `PlayObject.Chat.cs:402-406`
+///   吞掉 ⇒ 零帧**（部署脚本 `<$CURRENTMAP>` 展开成 `0`/`3` 这类单字符名 ⇒ 现网恒走这条）；
+///   第 2 个 UTF-16 码元是 `?` ⇒ 红字帮助；
+/// - `:34-38` `(short)StrToInt(sX,-1)` / `(short)sY` / `(byte)sType` / `int sTime` / `int sPoint`；
+/// - `:39-42` `nPoint < 0 ⇒ 1`（⇒ `:43` 的 `nPoint < 0` 恒假）；`(byte)` 的 `nType < 0` 也恒假；
+/// - `:43-48` 其余非法 ⇒ 红字帮助（模板 7 槽，空槽 ⇒ 连续/尾随空格）；
+/// - `:49-58` `MapMgr.FindMap`：命中 ⇒ 临时改 `PlayerActor.Envir`、`FireBurnEvent` 入
+///   `EventMgr`、还原 `Envir`，**不发帧**（宿主未接 ⇒ 与 `@FireBurn` 同一支 [`NOTE_EVENT_MGR`]）；
+/// - `:59` 未命中 ⇒ `string.Format("地图{0} 不存在", Command.Name, sMap)`——模板**只有一个**
+///   占位符 ⇒ 实参 `sMap` 被丢弃，文案是 `地图MobFireBurn 不存在`（**BUG-REPLICA**，照抄）。
+fn mob_fire_burn(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let s_map = params.first().copied().unwrap_or("");
+    let s_x = params.get(1).copied().unwrap_or("");
+    let s_y = params.get(2).copied().unwrap_or("");
+    let s_type = params.get(3).copied().unwrap_or("");
+    let s_time = params.get(4).copied().unwrap_or("");
+    let s_point = params.get(5).copied().unwrap_or("");
+    let help = || {
+        red(format!(
+            "命令格式: {MOB_FIRE_BURN_NAME} {s_map} {s_x} {s_y} {s_type} {s_time} {s_point}"
+        ))
+    };
+    // `:29`：`IsNullOrEmpty(sMap)` ⇒ 帮助（此支不求值 `sMap[1]`）。
+    if s_map.is_empty() {
+        return help();
+    }
+    match second_utf16_is_question(s_map) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return help(),
+        Some(false) => {}
+    }
+    // `:34-38`：C# 的 `(short)`/`(byte)` 是 **unchecked** 截断 ⇒ Rust `as`。
+    let n_x = str_to_int(s_x, -1) as i16;
+    let n_y = str_to_int(s_y, -1) as i16;
+    let n_type = str_to_int(s_type, -1) as u8;
+    let n_time = str_to_int(s_time, -1);
+    let n_point = str_to_int(s_point, -1);
+    let n_point = if n_point < 0 { 1 } else { n_point };
+    // `nType < 0`（byte 恒 ≥ 0）与 `nPoint < 0`（上一行已抬到 1）是死条件，照抄时省略。
+    let _ = (n_type, n_point);
+    if n_x < 0 || n_y < 0 || n_time < 0 {
+        return help();
+    }
+    // `:49` `MapMgr.FindMap(sMap)`：未接地图注册表时按既有口径登记（不伪造「地图不存在」）。
+    let Some(maps) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    if maps.map_by_name(s_map).is_some() {
+        // `:52-57`：`FireBurnEvent(PlayerActor, nX, nY, nType, nTime*1000, nPoint)` 入
+        // `SystemShare.EventMgr`（临时改/还原 `PlayerActor.Envir`）。宿主未接事件队列 ⇒ 零帧。
+        return no_frames(NOTE_EVENT_MGR);
+    }
+    // `:59`：模板只有 `{0}` ⇒ `Command.Name` 被填、`sMap` 被忽略 ⇒ 文案是命令名（BUG-REPLICA）。
+    red(format!("地图{MOB_FIRE_BURN_NAME} 不存在"))
+}
+
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
 //
 // 口径：全部 `PermissionMin = 10`（现网 `Permission` 恒 0 ⇒ 生产一律 `权限不够!!!`）。
@@ -2081,6 +2155,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::UserCmd => user_cmd(),
         Imp::BackStep => back_step(parameters, sess),
         Imp::FireBurn => fire_burn(parameters, sess),
+        Imp::MobFireBurn => mob_fire_burn(parameters, world),
 
         // ---- 批次 3 · 传送/召唤（17 + `@传送`）----
         Imp::AllowDearRecall => allow_dear_recall(sess),
@@ -2628,7 +2703,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "MobFireBurn",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MobFireBurn,
     },
     CommandDef {
         name: "MobNpc",
@@ -4474,7 +4549,8 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5 的命令体接上（`Unimplemented` 从 180 降到 87），且命令名 → 实现标签固定。
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 86），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4482,15 +4558,15 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            98,
-            "98 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言）1 条"
+            99,
+            "99 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + MobFireBurn 1）2 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            87,
+            86,
             "185 - 98"
         );
         let cases: &[(&str, Imp)] = &[
@@ -5870,5 +5946,156 @@ mod tests {
             assert!(player.gm_direct_frames.is_empty(), "`@禁言` 无直发帧");
         }
         assert_eq!(sess.permission, 0, "抬权是临时的，执行完必须还原");
+    }
+
+    /// 卡 `openmir2-gm-impl-mobfireburn`：表项（`Command.conf` 无覆盖 ⇒ 注册名英文
+    /// `MobFireBurn`；部署脚本写 `MOBFIREBURN` 靠 `OrdinalIgnoreCase` 命中）。
+    #[test]
+    fn mob_fire_burn_is_wired_in_the_command_table() {
+        let def = find("MOBFIREBURN").expect("@MobFireBurn 在 185 行表里（大小写不敏感）");
+        assert_eq!(def.name, "MobFireBurn");
+        assert_eq!(def.imp, Imp::MobFireBurn);
+        assert_eq!(def.perm_min, 10);
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
+    /// 帮助文本逐字节：`"命令格式: {0} {1} {2} {3} {4} {5} {6}"` 的七个槽 —— **没有 `@` 前缀**、
+    /// 单空格分隔、空槽照原样（缺省全空 ⇒ 6 个尾随空格）。
+    #[test]
+    fn mob_fire_burn_empty_map_reports_help_with_trailing_slots() {
+        let (r, _) = run_gm("@MobFireBurn");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn      ")],
+            "六个空槽 ⇒ 六个尾随空格"
+        );
+        // 第 2 个 UTF-16 码元是 `?` ⇒ 帮助（原始串原样回填）。
+        let (r, _) = run_gm("@MobFireBurn m? 10 10 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn m? 10 10 5 600 0")]
+        );
+    }
+
+    /// **部署形态**：`Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0`，
+    /// `<$CURRENTMAP>` 展开成 `0`/`3` 这类**单字符**地图名 ⇒ oracle `:29` 的 `sMap[1]`
+    /// 抛 `IndexOutOfRangeException`，被 `PlayObject.Chat.cs` 的 catch 吞掉 ⇒ **零帧**。
+    #[test]
+    fn mob_fire_burn_single_char_map_is_zero_frames() {
+        for line in [
+            "@MobFireBurn 3 329 329 3 60 0",
+            "@MOBFIREBURN 0 330 330 5 600 0",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: `sMap[1]` 越界 ⇒ 零帧");
+            assert!(r.frames.is_empty());
+            assert_eq!(r.log_note, Some(NOTE_INDEX_OUT_OF_RANGE), "{line}");
+        }
+    }
+
+    /// 数值校验：`(short)`/`(byte)` unchecked 截断后任一 < 0 ⇒ 帮助（回填**原始串**）。
+    #[test]
+    fn mob_fire_burn_bad_coords_report_help() {
+        // 非数字 X ⇒ `StrToInt(..., -1)` = -1 ⇒ 帮助。
+        let (r, _) = run_gm("@MobFireBurn map abc 10 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn map abc 10 5 600 0")]
+        );
+        // `(short)` 截断：40000 ⇒ -25536 ⇒ 负 ⇒ 帮助（C# unchecked 口径）。
+        let (r, _) = run_gm("@MobFireBurn map 40000 10 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn map 40000 10 5 600 0")]
+        );
+        // `(byte)` 截断：`sType` 非数字 ⇒ (byte)-1 = 255 ⇒ **不**触发 `nType < 0`（死条件）。
+        // 时间非数字 ⇒ -1 ⇒ 帮助。
+        let (r, _) = run_gm("@MobFireBurn map 10 10 zzz bad 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn map 10 10 zzz bad 0")]
+        );
+    }
+
+    /// 地图命中 ⇒ `FireBurnEvent` 入 `EventMgr`（宿主未接）⇒ **零帧** + 登记；缺省 `nPoint`
+    /// 为负 ⇒ 抬到 1 后仍合法（`nPoint < 0` 是死条件）。
+    #[test]
+    fn mob_fire_burn_existing_map_registers_event_and_stays_silent() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_maps(&f.registry);
+        for line in ["@MobFireBurn map 5 5 5 600 0", "@MobFireBurn map 5 5 5 600"] {
+            let r = execute(&mut sess, &cfg, &view, line);
+            assert!(r.msgs.is_empty(), "{line}: 命中地图 ⇒ 零帧");
+            assert!(r.frames.is_empty());
+            assert_eq!(r.log_note, Some(NOTE_EVENT_MGR), "{line}");
+        }
+    }
+
+    /// 地图不存在 ⇒ `string.Format("地图{0} 不存在", Command.Name, sMap)` 的**单占位符怪癖**
+    /// ⇒ 文案填的是**命令名**、地图名被丢弃（BUG-REPLICA）。
+    #[test]
+    fn mob_fire_burn_map_not_found_prints_command_name() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_maps(&f.registry);
+        let r = execute(&mut sess, &cfg, &view, "@MobFireBurn nowhere 5 5 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "地图MobFireBurn 不存在")],
+            "模板只有 {{0}} ⇒ 地图名不入文案（oracle 原样）"
+        );
+        // 未接地图注册表 ⇒ 登记零帧（不伪造「地图不存在」）。
+        let bare = GmWorld::new(&guilds);
+        let r = execute(&mut sess, &cfg, &bare, "@MobFireBurn map 5 5 5 600 0");
+        assert!(r.msgs.is_empty());
+        assert_eq!(r.log_note, Some(NOTE_NO_MAP_REGISTRY));
+    }
+
+    /// 脚本路（部署 `Market_Def/QFunction-0.txt:156/163` 的 `@StdModeFunc15/16`：
+    /// `Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0`）经
+    /// `NpcPlayer` 的 GMEXECUTE 跳线执行 ⇒ 单字符地图名 ⇒ **零帧** + 越界登记。
+    #[test]
+    fn mob_fire_burn_script_gmexecute_path_is_zero_frames() {
+        use mir2_script::engine::ScriptPlayer;
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        // `ActionOfGmExecute` 同形：`@<cmd> <p1..p6>`，六参全给。
+        let s_data = format!(
+            "@{} {} {} {} {} {} {}",
+            "MOBFIREBURN", "0", "330", "330", "5", "600", "0"
+        );
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world: view,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(&s_data);
+            player.set_permission(0);
+            assert!(player.frames.is_empty(), "单字符地图名 ⇒ 脚本侧零帧");
+            assert!(player.gm_direct_frames.is_empty());
+            assert!(
+                player.gm_notes.iter().any(|n| n.contains("下标越界")),
+                "越界路径必须登记：{:?}",
+                player.gm_notes
+            );
+        }
+        assert_eq!(sess.permission, 0, "抬权临时生效并还原");
     }
 }
