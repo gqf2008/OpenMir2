@@ -23,13 +23,26 @@ python tools/probe/mir2_probe.py \
 }
 ```
 
-* 顶层只允许 `name` / `description` / `params` / `required` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* 顶层只允许 `name` / `description` / `params` / `required` / `placement` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
 * `required`（可选）是**必填变量名列表**：`expand_scenario` 在合并完 `--var` 后逐名检查，缺任何一个即
   `scenario-error`（退出码 2），消息点名缺哪个变量。运行期才知道的值（NPC/商人 `ActorId`、`MakeIndex`、
   物品名、自身坐标）一律走这里，**不要**在 `params` 里放 `"REQUIRED"` 之类的哨兵值。
 * 离线校验：`python -I -B tools/probe/mir2_probe.py --check-scenario --scenario <file.json> [--var k=v ...]`
   —— 只加载+展开，不连网；rc=0 通过、rc=2 场景错误。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
+
+## `placement`：角色必须位于 map/x/y（由 `card_window.py` 应用）
+
+```json
+"placement": {"map": "0122", "x": 30, "y": 32, "note": "比奇国王 (29,32) 的邻格"}
+```
+
+* 本驱动器**只校验形状**（`map` 1..10 字符、`x`/`y` 为 0..65535 的整数），**不做预置位**：
+  声明存在时会在 stderr 打印一条提醒。**别以为直接跑 `mir2_probe.py` 就落到了目标位** ——
+  预置位由 `tools/conformance/card_window.py` 在**每侧 restore 之后、起栈之前**改测试库的
+  `characters.MapName/CX/CY` 完成（C# = `mir2_test_db`、Rust = `mir2_test_db_r`），
+  完成不了直接 rc=2，不会让 probe 去超时。详见 `docs/window-runbook-20261023.md` §1.5。
+* 坐标要选**阻挡格之外**的空格（通常取目标 NPC 的邻格）：落在墙格时 oracle 登录会随机挪位。
 
 ## 步骤动作
 

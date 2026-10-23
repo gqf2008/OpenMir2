@@ -31,11 +31,44 @@
 3. **库基线复位**：C# 侧 `restore-baseline.sh`（`mir2_test_*`），Rust 侧 `restore-baseline-r.sh`（`mir2_test_*_r`）。**两套库不同名**，拿 `--db test` 给 Rust 侧拍快照会拍到 C# 的库 ⇒ 假差异。
 4. **一次只跑一栈**：C# 与 Rust 用同一组备用端口，串行起停。
 
+## 1.5 角色预置位：**声明即可**（工具已支持，2026-10-23 起）
+
+以前这是操作者的手工步骤（`UPDATE characters SET MapName/CX/CY`），现在**不要再手工改库**：
+在场景顶层声明需求，`card_window.py` 会在**每侧 restore 之后、起栈之前**自动完成。
+
+```json
+{
+  "name": "npc_click_king",
+  "placement": {"map": "0122", "x": 30, "y": 32, "note": "比奇国王 0122 (29,32) 的邻格"},
+  "steps": ["..."]
+}
+```
+
+- **为什么必须预置**：新角色出生点 = StartPoint `0 289 618`，而第 1 批依赖的四个 NPC 都不在图 0
+  （`0122` 比奇国王 `(29,32)`、`GA2` `(13,27)`、`N109` `(38,43)`、`0150` `(16,8)`）；探针不发跨图移动
+  ⇒ **漏了只会 click 超时、不报错**。
+- **两侧各改各的库**：C# = `mir2_test_db`、Rust = `mir2_test_db_r`（`db.characters_db`）。
+  拿错库会直接 rc=2（按该侧 `Server.conf` 的 `[DataBase] database=mir2_test_data*` 交叉核对）。
+- **只改 `MapName`/`CX`/`CY`**：预置前后对**其余列做 MD5 指纹对比**，其它列变了即 rc=2
+  （防 `characters_ablity.Weight` 那类连带写坏）。
+- **fail-closed（rc=2 并点名，绝不让 probe 去超时）**：
+  - 图不在 `<envir_root>/Envir/MapInfo.txt`，或该图的服务器号 ≠ 本侧 `[Server] ServerIndex`；
+  - 坐标超出 `.map` 宽高，或**落在阻挡格**（oracle 登录期 `CanWalk(x,y,true)` 为假会随机挪 5 次再回
+    HomeMap ⇒ 角色悄悄挪位，你只会看到点不到 NPC）；
+  - 角色行不唯一 / `HomeMap` 为空 / `Deleted=1` / 表缺列；
+  - 改完读回与目标不符。
+- **已在目标位 ⇒ 不发 UPDATE**（`action=noop`），不会白写库。
+- 证据：`<out>/<side>/placement.json`（声明值、前后值、其余列指纹、SQL），README/card-window.json 里也有。
+- **不连库也能验**：`--dry-run` 会做离线内容校验（图存在、坐标在界内且可走）并打印预置命令。
+- **仍不支持背包夹具**：「背包里必须已有某个 MakeIndex/物品」这类前置仍走手工 DB 夹具，
+  由卡 `openmir2-discovery-bagitems-201` 承接（本工具预留了同一处声明点，落地时直接接）。
+
 ## 2. 跑的时候
 
 - `card_window.py --card <卡 id> --scenario <场景> --out <目录> --profile alt`；R 卡窗口**必须** `--post-comment` 记账（在解禁之后）。
 - **参数发现**：9 个场景声明了 `required`（`npc_actor`/`merchant_actor`/`make_index`/自身坐标…）。两侧**各自发现各自的值**，某侧推不出 ⇒ fail-closed，不许拿一侧的值跑另一侧。
 - **手动步骤不要漏**：`login_only.json` 这类**不含发客户端命令的步骤**。若卡面要求「客户端直呼 `@禁言 <名> 1`」之类的探针，必须由操作者在真实客户端手动输入，脚本不会替你做。漏了不会报错，只会让这条判据看起来没红。
+  **角色预置位不再是手动步骤**：场景声明 `placement` 即可（见 §1.5），`card_window.py` 在起栈前自动改库并在 `placement.json` 留证；预置不成就 rc=2，不会带着错位去跑。
 
 ## 3. 读结果（最容易错的地方）
 

@@ -403,6 +403,24 @@ python -I -B tools/conformance/compare_runs.py selftest
   绝不用默认值/空值填空**。每侧 `<out>/<side>/discovered.json`、汇总 `<out>/discovered.json`
   （`format=param-discovery/1` / `discovered/1`，含值、推导来源、缺失清单、两侧一致性）。
   `run_dual.sh` 不改（0 字节 diff），接线只在 `card_window.py`。
+* **角色预置位（placement，卡 `openmir2-window-character-placement`）**：场景**顶层**
+  `"placement": {"map": "0122", "x": 30, "y": 32}` 表示「本场景要求角色位于 map/x/y」。
+  工具在**每侧 restore 之后、起栈之前**改该侧**测试库**（`sides.<side>.db.characters_db`，
+  C# = `mir2_test_db` / Rust = `mir2_test_db_r`）`characters` 的这一行。选 DB 预置而不是
+  「走到目标」/GM `@move`：新角色出生在图 `0`、目标 NPC 都不在图 0，探针不发跨图移动，
+  `@move` 的 Permission 恒 0 且多图 `NORECALL`/`NOPOSITIONMOVE`；DB 预置是唯一确定性、
+  起栈前（无竞态）、且只碰测试库的做法。
+  预置**只写** `MapName`/`CX`/`CY`，预置前后对**其余列做 MD5 指纹对比**（其它列变了即 rc=2）。
+  校验全部 fail-closed：图必须在 `<envir_root>/Envir/MapInfo.txt` 且服务器号 = 该侧
+  `[Server] ServerIndex`；坐标必须在 `.map` 宽高内且**不是阻挡格**（与 oracle 登录期
+  `Envirnoment.CanWalk(x,y,true)` 同判据——为假时 oracle 会随机挪 5 次再回 `HomeMap`，
+  探针只会点不到 NPC 而不报错）；角色行唯一、`HomeMap` 非空、`Deleted!=1`、表列齐全；
+  角色库必须与该侧 `Server.conf` 的 `[DataBase] database=mir2_test_data*` **配对**。
+  已在目标位 => **不发 UPDATE**（`action=noop`）。每侧证据落 `<out>/<side>/placement.json`。
+  `envir_root` 缺省由该侧 `binaries[0]` 的目录推出；MySQL 客户端由 profile `db_client`
+  （或按侧的 `sides.<side>.db_client`）给出，口令只认环境变量 `CONFORMANCE_DB_PASSWORD`。
+  **背包夹具不在本能力范围内**（要「背包里已有 MakeIndex/物品」的卡见
+  `openmir2-discovery-bagitems-201`）。
 * **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
   ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
   收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +
@@ -447,7 +465,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 5. 还原后 sha256 == 变异前；**不一致 => 整体 rc≠0**（N-3）。
 
 ```sh
-python -I -B tools/conformance/selftest_mutations.py            # 跑全部 30 颗
+python -I -B tools/conformance/selftest_mutations.py            # 跑全部 35 颗
 python -I -B tools/conformance/selftest_mutations.py --list     # 只列牙（含每颗的 expect）
 python -I -B tools/conformance/selftest_mutations.py --only T1,E2
 python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自身 fail-closed
@@ -463,4 +481,7 @@ T10 Y1 `finalize_ok` 丢掉 `json_ok` 那一半 / T11 D-1 证据缺件不降级 
 本次 report.json 实读）/ T21 F-1 side doc `ok` 的两处兜底都丢掉（discovery probe 失败仍 ok=True）；额外牙 E1 fallback run_id
 常量、E2 放宽未知库判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README、
 E6 忽略 card-window.json 失败标志、E7 comment body 不带 exit_code；发现接线牙 D1 probe
-命令丢掉 `--var`（值推出来了却没传给场景）、D2 发现失败时静默用空值继续跑。
+命令丢掉 `--var`（值推出来了却没传给场景）、D2 发现失败时静默用空值继续跑；
+预置位牙 P1 跳过预置阶段（不调 `run_placement`）/ P2 摘掉可走性校验 /
+P3 不再核对「只改了需要的列」/ P4 摘掉两侧库配对校验 / P5 预置证据不进 summary
+（README 的 placement 段退化成 `(not run)`）。
