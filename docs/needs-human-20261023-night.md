@@ -49,7 +49,7 @@
 
 ## 5. 两条 Rust 侧接线缺口（不是 owner 的事，列在此以便排期）
 
-> **2026-10-24 现态（卡 `openmir2-docs-state-drift-sweep`）**：本节两条缺口**均已被取代**——643 见 `openmir2-upgrade-npc`（`lib.rs:5809` 起 Lane A 已接线，`upgrade_retrieve` dry-run rc=0）；642 见 master `8dcb8c8ca`（卡 `openmir2-attack-weapon-wear-642`，T-266）。历史正文保留不重写。
+> **2026-10-24 现态（卡 `openmir2-docs-state-drift-sweep`）**：本节**动作侧**已被取代——643 的 `@upgradenow`/`@getbackupgnow` 命令动作已接线（`openmir2-upgrade-npc`，`lib.rs:5809` 起 Lane A；`upgrade_retrieve` dry-run rc=0），642 已接（master `8dcb8c8ca`，卡 `openmir2-attack-weapon-wear-642`，T-266）。**但 643 的结果说词仍缺**：`GotoLable(~@upgradenow_ok/_fail/_ing)` 仍只 `glog!`（`lib.rs:5919-5924` / `:5960-5965`），T-95④/T-145④ 仍登记 ⇒ **不得读成「643 已经没问题」**。历史正文保留不重写。
 
 - `@upgradenow` / `@getbackupgnow` 只 `glog` 不执行（`lib.rs:5849-5855` / `5890-5895`）
   ⇒ `upgrade_retrieve` 场景的窗口在修复前会「Rust 缺 643」。 〔2026-10-24 订正：**只订正「动作」半边**——`@upgradenow`/`@getbackupgnow` 的命令动作已接线（`lib.rs:5809` 起 Lane A；今日 `card_window --dry-run --scenario upgrade_retrieve.json` rc=0）；**但升级/取回的结果说词 `GotoLable(~@upgradenow_ok/_fail/_ing)` 仍只登记不执行**（`mir2-rs/bins/game-svr/src/lib.rs:5919-5924` / `:5960-5965` 仅 `glog!`）⇒ **643 仍会缺**（见 `docs/upgrade-retrieve-scenario-20261023.md:32-35`、whitelist T-145④/T-95④）。**结论：动作缺口已关；结果说词 643 仍缺。**〕
