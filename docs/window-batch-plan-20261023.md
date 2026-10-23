@@ -118,7 +118,7 @@
 | 31 | `openmir2-script-take-persist` | in-progress | r9 原夹具复跑：角色 winplay0（PlayerId=6228），characters_bagitem Position=0 Make…；take 超额：gold=100 跑 `take 金币 200`，DB characters.Gold 必须仍 100（共 8 项） | dice_chain + db_snapshot | @main→@kaiz→@ya5→@ya52 链正是 dice_chain；比 characters_bagitem/Gold/useitems |
 | 32 | `openmir2-click-path-bag-writeback` | in-progress | 真机：固定 NPC 点击（CM_CLICKNPC）触发 @main 的 `take <物品> N` 后断线，DBSvr 落库 charact…；真机：同上触发 `take 金币 N` ⇒ characters.Gold 与 oracle 一致（100→95 类）（共 4 项） | npc_click + db_snapshot | 点击 @main take/give 后断线，落库行/列比对 |
 | 33 | `openmir2-gm-commands-design` | in-progress | 真机 SETPERMISSION=10 + 戴传送装备（T-169 前置）跑 @传送：两次调用间隔卡在 UserMoveTime*1000+…；两号（DB characters.AllowGroupReCall 分别为 1 / 0）进世界后跑 @天地合一：=1 成员必须过允许门，=0…（共 4 项） | gm_batch | 5 条现网可达命令；@传送 等需 SETPERMISSION=10，归第 3 批 |
-| 34 | `openmir2-login-529-status-text` | in-progress | 【依赖 SS_SERVERINFO 卡】真机 529 逐字节对拍当前不可能达成：Rust GameSvr 连上 login-srv 后不上报…；后果：Rust login-srv 的 servers 槽 server_name 恒空 ⇒ is_server_online=false…（共 4 项） | login_only | 前置 openmir2-gamesvr-serverinfo-report（SS_SERVERINFO）落地后才可能 PASS |
+| 34 | `openmir2-login-529-status-text` | in-progress | 【依赖 SS_SERVERINFO 卡】真机 529 逐字节对拍当前不可能达成：Rust GameSvr 连上 login-srv 后不上报…；后果：Rust login-srv 的 servers 槽 server_name 恒空 ⇒ is_server_online=false…（共 4 项） | login_only | 前置 gamesvr-serverinfo-report 已合入 master 185a6c8cb（SS_SERVERINFO 上报已接）；本卡窗口=用当前二进制复跑 login_only 比 529 body |
 | 35 | `openmir2-searchtick-origin-parity` | in-progress | 双栈真机同时刻：用持续到首扫之后的场景（wait_frames ≥ 登录帧数+首扫帧数，或 sleep ≥2000ms）跑 tools/co…；口径收窄（本次复核结论）：生产 ctor 与进图同刻 ⇒ 本 patch 不引入首扫时刻回归；上述窗口项实质是 T-73/T-184 的相对… | login_only（--dwell-ms ≥2000） | 抓首 SM_TURN/41 与 654/657×2 的到达 tick 窗口 |
 | 36 | `openmir2-verify-tick-base` | in-progress | 登录等待环（RunNotice→CM_LOGINNOTICEOK→UserLogon）建模后，用双栈核对首个 VerifyMapTime（B…；口径收窄：今日生产路径 ctor_tick==clock_ms（代码级可证，见 same_instant_conclusion）⇒ 本 pa… | login_only | 判据实质待 T-73 登录等待环建模；今日生产路径无可观测差异 |
 | 37 | `openmir2-gamesvr-serverinfo-report` | in-progress | 【必跑】双栈 529 逐字节：Rust 栈 ident=529 的 body_hex 必须逐字节 = 545479513e404342564…；【建议】5600 上行抓包：核对 (103/<服务名>/0/<在线数>/1)——第 3 段恒 0（M2Share.ServerIndex 无…（共 3 项） | login_only | 必跑 ident 529 逐字节（body_hex 对照） |
@@ -297,11 +297,13 @@
 | 5 | `openmir2-sm-skeleton-wiring` | 「收件人集合（±12 格 Race==Play && !Ghost，12 格边界各放静止号）」 | （不可对拍） | **单客户端验不到**：12 格边界要放静止号，至少 4 个额外会话。⇒ 不可协议对拍。 |
 | 6 | `openmir2-monster-ref-drains` | 「真机四类帧逐字节与收件人集合」「SendRefMsg 500ms 缓存支未建模的收件人差异」 | （不可对拍） | **单客户端验不到**收件人集合；且 race 203/206/210/215 需先出现在部署数据。⇒ 不可协议对拍。 |
 | 7 | `openmir2-cm-adjust-bonus` | 「真机对拍 752→52→657→252 的字节、条数与次序（安静队列前提）」 | （第 3 批）新 adjust-bonus 场景 | **9 个场景都不触发 RM_ADJUST_BONUS**（没有 GM/脚本动作源）；`gm_batch` 也不含。需新场景。 |
-| 8 | `openmir2-login-529-status-text` | 「先开 game-svr 卡接上 SS_SERVERINFO 上报，再复跑对拍台 login_only 的 529」 | login_only | **能**（场景对），但**今天必 FAIL**：前置 `gamesvr-serverinfo-report` 未落地前 Rust 529 恒 `热血传奇/0/`。已在行内标前置。 |
+| 8 | `openmir2-login-529-status-text` | 「先开 game-svr 卡接上 SS_SERVERINFO 上报，再复跑对拍台 login_only 的 529」 | login_only | **能**。前置 `gamesvr-serverinfo-report` 已合入 master `185a6c8cb`（SS_SERVERINFO 上报已接），当前二进制应已能采到 529；窗口只需复跑 login_only 比 body_sha256。 |
 | 9 | `openmir2-frame-drain-order-audit` | 「施法多条 SM_STRUCK(31) 序、交易 4 条红字(252)、寄售多条 MENU_OK(767)、组队散组、npc 说词」 | （第 3 批）5 个新场景 | **不能**：5 条判据分别要施法/交易/寄售/组队/多实例 NPC 五类主动操作，9 个场景一个都不覆盖。 |
 | 10 | `openmir2-gm-script-host-seam` | 「新角色登录帧 + 手动在客户端直呼 @禁言 <名> 1 双侧对拍 权限不够!!!（探针不能靠 login_only 自动跑）」 | login_only + 手动步骤 | **部分能**：login_only 负责新角色登录段；@禁言 必须操作者手输（runbook §2 已要求）。若漏手动步骤不会报错，只会看起来没红——已在行内标注。 |
 
 **抽样结论**：10 张里 4 张（脚本链/点击路径/529/GM 手动）确实能用所选场景验到，6 张按原判据**单客户端或单场景验不到**，已分别改判第 3 批或不可对拍。特别地，凡是原文出现「收件人集合」「±12」「两个在线成员」「两号同时在线」的卡，一律不进第 1/2 批——这是本次复核最有价值的一条筛选规则。
+
+> 抽样还发现 **卡面结论过时** 两类：(a) `login-529` 称 SS_SERVERINFO 未接，实际已合 master `185a6c8cb`；(b) `m3-party-trade/guild-castle/hero-pet/drop-exp/mail-auction/quest-align` 称夹具或 Rust 常量不存在，实际 `run_*_pair.ps1` 与 `party.rs`/`selloff.rs`/`quest_state.rs` 已在 058c3ad25。行内已按当前 master 订正；**窗口开跑前仍应重跑一次前置检查**，不要照抄卡片旧结论。
 
 ## 5. 缺口登记（不改场景、不改工具，只登记）
 
@@ -330,7 +332,7 @@
 |---|---:|---|
 | R1 `npc_script_chain`（多步标签链） | 9 | `action-line-variable-text`、`npc-def-loading`、`guild-official-npc`、`run-gap-pl2/pl3/pl4`、`pickwire-remaining-frames`、`setoffline-field-writeback`、`setmapmode-dechp` |
 | R2 `upgrade_retrieve` | 4 | `weapon-upgrade-values`、`upgrade-npc`、`a09-upgrade-item`、`outbound-encoders-red-batch` |
-| R3 `combat_strike` | 13+ | `merchant-race-bias`、`superman-normnpc`、`mb8-9-monsters`、`monster-attack-hit-frame`、`run-gap-pl1/mb1/mb3/mb4`、`attacktarget-overrides`、`proper-target-unfolded`、`rm-refmessage-delay-layer`、`weapon-durability-frames` 等 |
+| R3 `combat_strike` | 12+ | `merchant-race-bias`、`superman-normnpc`、`mb8-9-monsters`、`monster-attack-hit-frame`、`run-gap-pl1/mb1/mb3/mb4`、`attacktarget-overrides`、`proper-target-unfolded`、`rm-refmessage-delay-layer`、`weapon-durability-frames` 等 |
 | R4 `world_observe` | 8+ | `npc-hit-frames`、`monster-walk-frames`、`mb2/mb5/mb7-monsters`、`run-gap-monster-state-expiry`、`run-gap-corpse-ghost-revive`、`monster-view-throttle` |
 | R5 `spell_cast` | 6+ | `magic-8-21-wiring`、`spell-mp-wrapper`、`spell-shared-tail`、`healthspell-emission-model`、`default-arm-spell-surface`、`recall-slave-shift-live` |
 | R6 `castle_zone` | 4 | `castle-war-area-impl`、`castle-guard-target`、`castle-merchant-fixedhide-hit`、`castle-merchant-disappear-downlink` |
