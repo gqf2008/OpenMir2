@@ -454,6 +454,13 @@ pub fn use_item(
     // oracle `MsgQueue` 是 `PriorityQueue<SendMessage,byte>`（优先级 = `(byte)wIdent`）⇒ 消息泵按
     // **优先级升序**下发；夹具的 `notices` 就是出队序。这里按同一键排序，保证跨档时
     // （先入队的 `RM_CHARSTATUSCHANGED`/`RM_MYSTATUS` 反而晚于 `RM_WEIGHTCHANGED`）与 oracle 一致。
+    //
+    // **同 ident 多帧在本接缝不可达**（卡 `openmir2-frame-drain-order-audit` 的枚举证据）：本函数
+    // 的 `notices` 只在四条互斥分支里产生 —— 禁药 `RM_SYSMESSAGE`(252)（`eaten=false`，与成功支
+    // 互斥）/ `RM_CHARSTATUSCHANGED`(155) + `RM_MYSTATUS`(166)（StdMode 1 的状态跳档支，成对）/
+    // `RM_MENU_OK`(69)（`can_use_item==false` 的 else 支）/ `RM_WEIGHTCHANGED`(131)（`eaten` 支）。
+    // 每个可达组合内优先级字节两两不同 ⇒ 稳定排序与四叉堆出队序逐条相同。新增同 ident 的
+    // `SendMsg` 前必须先改成 `NetPriorityQueue`。
     notices.sort_by_key(|n| n.ident as u8);
 
     UseItemOutcome {
