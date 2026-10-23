@@ -973,7 +973,7 @@ def _row_diff(want, got, limit=25):
     for a, b in zip(want, got):
         for k in sorted(set(a) | set(b)):
             if a.get(k) != b.get(k):
-                diffs.append("%s.%s: 登记=%r 源码=%r" % (a.get("cmd"), k, a.get(k), b.get(k)))
+                diffs.append("%s.%s: 登记=%r 源码=%r" % (a.get("cmd"), k, b.get(k), a.get(k)))
                 if len(diffs) >= limit:
                     return diffs
     if len(want) != len(got):
@@ -1250,11 +1250,15 @@ def cmd_selftest(args):
         except AssertionError as ex:
             fails.append("%s: %s" % (name, ex))
 
-    def gate_red(doc, needle, what):
+    def gate_red(doc, needle, what, needle2=None):
         probs = check_registry(doc, args.conf, args.envir, args.deploy, recomputed=fresh)
         assert probs, "%s 后 gate 未红" % what
-        assert any(needle in p for p in probs), \
+        hits = [p for p in probs if needle in p]
+        assert hits, \
             "%s 后 gate 红了但不是预期原因（needle=%r，前 6 条=%r）" % (what, needle, probs[:6])
+        if needle2 is not None:
+            assert any(needle2 in p for p in hits), \
+                "%s 后 gate 红了但诊断里没点名 %r（前 6 条=%r）" % (what, needle2, probs[:6])
 
     def row_with_handler(doc):
         return next((r for r in doc["commands"] if r.get("handler")), None)
@@ -1280,7 +1284,8 @@ def cmd_selftest(args):
         row = doc["commands"][0]
         other = next(r for r in doc["commands"] if r["cmd"] != row["cmd"])
         row["cmd"] = other["cmd"]
-        gate_red(doc, "", "C 改 cmd 名")
+        # 真阳：门禁红必须点名「这条被改名后的行」与源码不一致（不是任何问题都算过）
+        gate_red(doc, ".cmd:", "C 改 cmd 名", needle2=other["cmd"])
 
     def t_d():
         doc = copy.deepcopy(base)
