@@ -182,14 +182,14 @@ git show <commit>:<path> > /tmp/x && sha256sum /tmp/x <path>
   最好的一对 **joint 24%**；根因是伤害扣 `[AC, 2AC-1]` 随机护甲，必伤害要 `DC_min > 2*AC-1` 且 `HitPoint ≥ SPEED-1`。
   另有第二条：目标是**敌对守卫**，它打玩家也让玩家收 `SM_STRUCK(31)` 且 `recog=self`，而 `wait_for` 只按 ident 匹配 ⇒ **跑绿 ≠ 玩家命中**（四处封口写死「窗口批次不得消费本场景任何 PASS」）。
   硬门：21:55:34 已随 `2a69cd6e0` 合入（`combat_strike.json` 加顶层 `blocked`，`card_window --dry-run` rc=2；`openmir2-reviewer-3` @ `ee95abd52a` approve），
-  更早一步的通用硬门 `8dac04eb0`（21:47:52）同样由 reviewer-3 @ `5fd9edfdda` approve ⇒ BLOCKED 从「流程级封口」升级为「工具级 rc=2」。**21:44 快照时该卡仍是 in-progress。**
+  更早一步的通用硬门 `8dac04eb0`（21:47:52）同样由 reviewer-3 @ `5fd9edfdda` approve ⇒ BLOCKED 从「流程级封口」升级为「工具级 rc=2」。**21:44 快照时上述三项均尚未合入 master**（合入时间见 §7.6）。
 - **`upgrade_retrieve` 脚本路可达、但 Rust 侧未接线**：唯一可用脚本路是 `UPGRADEITEMEX`（**34 行**；`TAKECHECKITEM`/`UPGRADEITEM`/`CHECKUPGRADEITEMS`/`RANDOMUPGRADEITEM` 全 0）。
   两个门：① **取回有 600000ms 时效门** —— `[Setup] UPgradeWeaponGetBackTime=600000`（部署 `Server.conf:331`；oracle 默认 `60*60*1000` = `GameSvrConf.cs:1421`，读键 `ServerConf.cs:230`，判点 `Merchant.cs:608`；**600000 是部署值不是源码字面量**）；
   ② Rust 侧 `@upgradenow`/`@getbackupgnow` **未执行**（`mir2-rs/bins/game-svr/src/lib.rs:5849-5855` / `:5890-5895` 只 `glog`「GotoLable 未执行（Market_Def 商人脚本未装载）」；`shop.rs` 成功支无 643、失败支零帧）⇒ **修好前不得拿本场景判 Rust 失败**。
 - **`equip_struck_save`：原「零刷怪」前提已被证伪，且已在 21:50 返工出新 placement**（`reviewer-6` @ `46ddb64bce`，blocking）：
   旧 placement `map 0 (288,610)` 被 `MonGen.txt:112/113/124/125`（Range=50、Count=50，箱体覆盖玩家格）击穿，期望约 **12 只怪**进 AOI，且刷怪位置按墙钟不可复现。
-  返工（status @ 21:50:11）改为 `map 0103 铁器店 (19,19)`、目标 `卫家店`，并逐条证明 0103 在 `MonGen.txt` **零行**、三份部署件 `cmp` 相同 ⇒ 视野内确定零怪。
-  **状态带戳写**：21:50 时为 needs-review；**21:56:53 已随 `121a6b48b` 合入 master**（tier=L，`openmir2-reviewer-6` @ `8ed0da421f` approve；`merge_result` `cf27a7bc9d`），此后 card 为 closed。
+  返工（status `4cfd0ec103` @ 21:49:54）改为 `map 0103 铁器店 (19,19)`、目标 `卫家店`，并逐条证明 0103 在 `MonGen.txt` **零行**、三份部署件 `cmp` 相同 ⇒ 视野内确定零怪。
+  **状态带戳写**：21:49:54 时为 needs-review；**21:56:53 已随 `121a6b48b` 合入 master**（tier=L，`openmir2-reviewer-6` @ `8ed0da421f` approve；`merge_result` `cf27a7bc9d`），此后 card 为 closed。
 - **35 张不可协议对拍**：口径同 `docs/window-batch-plan-20261023.md` §1，今晚未变（未重算）。
 
 ### 7.5 复核时发现的口径不一致（供下一批订正）
