@@ -2357,54 +2357,83 @@ fn var_dynamic_var_declare_calc_and_check_var() {
     assert!(!engine.check_conditions(&[cond6(139, ["HUMAN", "不存在", ">=", "1", "", ""])]));
 }
 
-/// **卡 `openmir2-script-dyn-var-host`（review I-3）**：`CALCVAR <type> <var> / 0`。
+/// **卡 `openmir2-script-dyn-var-host`（review `24132993` I-3 / `3836d717` I-1）**：
+/// `CALCVAR <type> <var> / 0` 必须**中止整条 GotoLable**。
 ///
-/// oracle `ActionOfCalcVar`（`ExecutionProcessingSys.cs:3870-3871`）的
-/// `dynamicVar.Internet / nVarValue` 抛 `DivideByZeroException`，被 `BaseObject.Operate`
-/// 的 `catch (Exception)`（`BaseObject.Base.cs:771-775`）吞掉并记日志 ⇒ **动作中止、
-/// 变量不变、服务器继续**。Rust `wrapping_div(0)` 会 panic（生产派发链无 `catch_unwind`）
-/// ⇒ 引擎改为等价守卫：报 `CalcVar` 动作错误并返回（不写回）。
+/// oracle：`ActionOfCalcVar`（`ExecutionProcessingSys.cs:3870-3871`）的
+/// `dynamicVar.Internet / 0` 抛 `DivideByZeroException`，它**穿出** `GotoLable`
+/// （`:38-130` 无 try/catch）⇒ **剩余 procedure、剩余 action、最终 `sSendMsg` 说词都不执行**；
+/// 随后被 `BaseObject.Operate` 的 `catch (Exception)`（`BaseObject.Base.cs:771-775`）
+/// 吞掉并记日志 ⇒ 服务器继续、变量不变。
+///
+/// Rust 等价模型 = 仓库既有的「C# 异常 ⇒ 中止整条 label」：`script_action_error` +
+/// `abort_goto = true`（同 [`auto_get_exp_index_out_of_range_aborts_whole_goto_label`]）。
 ///
 /// 注：oracle 的 `IsStringNumber` 恒真 ⇒ `sParam4` 永不展开，任何非数字第 4 参
 /// （如 `<$STR(M1)>`）都会 `StrToInt→0` ⇒ 除数 0 不是奇例。
 ///
-/// 牙：删 `action_of_calc_var` 的 `n_var_value == 0` 守卫 ⇒ 本用例 panic 红。
+/// 牙：删 `action_of_calc_var` 除零支的 `self.abort_goto = true;` ⇒ 后续 procedure 的
+/// `close` 会执行、两段说词会发 ⇒ 本用例的 `msgs`/`says` 断言红（实测 `msgs=[(10127,None)]`、
+/// `says=[("第一段第二段", false)]`）。
 #[test]
-fn var_calcvar_div_by_zero_reports_error_without_panic() {
-    let (mut npc, mut player) = setup("[@main]\n#SAY\nx\n");
-    let _ = run_act(
-        &mut npc,
-        &mut player,
-        act_full(237, &["Integer", "HUMAN", "t"], &[]),
+fn var_calcvar_div_by_zero_aborts_whole_goto_label() {
+    let (mut npc, mut player) = setup(
+        "[@main]
+#IF
+checkgold 0
+#ACT
+var Integer HUMAN t
+#IF
+checkgold 0
+#ACT
+calcvar HUMAN t = 7
+#SAY
+第一段
+#IF
+checkgold 0
+#ACT
+calcvar HUMAN t / 0
+#IF
+checkgold 0
+#ACT
+close
+#SAY
+第二段
+[@ok]
+#IF
+checkgold 0
+#ACT
+calcvar HUMAN t / 2
+",
     );
-    let _ = run_act(
-        &mut npc,
-        &mut player,
-        act_full(240, &["HUMAN", "t", "=", "7"], &[]),
-    );
-    let e = run_act(
-        &mut npc,
-        &mut player,
-        act_full(240, &["HUMAN", "t", "/", "0"], &[]),
-    );
+    let errors = run(&mut npc, &mut player, "@main");
     assert!(
-        first_script_error(&e).contains("脚本命令:CalcVar"),
-        "除零必须报 CalcVar 动作错误（oracle 的异常被 catch 后记日志）：{e:?}"
+        script_errors(&errors)
+            .iter()
+            .any(|e| e.contains("脚本命令:CalcVar")),
+        "oracle 的异常在 catch 处记日志 ⇒ 必须有 CalcVar 动作错误：{errors:?}"
     );
     assert_eq!(
         player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "t"),
         Some(mir2_script::engine::DynVar::Integer(7)),
         "除零支不写回（oracle 在异常点中止）"
     );
-    // 非零除数仍按 unchecked wrap 走。
-    let _ = run_act(
-        &mut npc,
-        &mut player,
-        act_full(240, &["HUMAN", "t", "/", "2"], &[]),
+    assert!(
+        player.msgs.is_empty(),
+        "整条 GotoLable 中止 ⇒ 后续 procedure 的 close 不得执行: {:?}",
+        player.msgs
     );
+    assert!(
+        npc.says.is_empty(),
+        "整条 GotoLable 中止 ⇒ 两段说词都不发: {:?}",
+        npc.says
+    );
+    // 非零除数仍按 unchecked wrap 走（另一条 label，不受上面中止影响）。
+    let _ = run(&mut npc, &mut player, "@ok");
     assert_eq!(
         player.dyn_var_get(mir2_script::engine::DynVarKind::Human, "t"),
-        Some(mir2_script::engine::DynVar::Integer(3))
+        Some(mir2_script::engine::DynVar::Integer(3)),
+        "7 / 2 = 3"
     );
 }
 

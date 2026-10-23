@@ -47,16 +47,18 @@
    登出即销毁 ⇒ **同角色重登后仍见到上一会话的变量**。本返工**不接登出清账**（会话销毁点不在本卡
    写集内且涉及世界生命周期），改为**窗口必跑项**：见 §6 W-2。
 2. `$GUILD` 行会表未建模（`None`/`false`）。
-3. `CALCVAR / 0`：oracle 抛 `DivideByZeroException` 被 `BaseObject.Operate` 的 catch 吞掉 ⇒ 动作中止、
-   变量不变、服务器继续。Rust `wrapping_div(0)` 会 panic（生产派发无 `catch_unwind`）⇒ 引擎加等价守卫
-   （报 `CalcVar` 动作错误 + 不写回，见 `actions.rs` 的 `action_of_calc_var`）。
+3. `CALCVAR / 0`：oracle 抛 `DivideByZeroException`，它**穿出** `GotoLable`（`:38-130` 无 try/catch）
+   ⇒ 剩余 procedure / 剩余 action / 最终 `sSendMsg` 说词**都不执行**；随后被 `BaseObject.Operate` 的
+   catch 吞掉并记日志，服务器继续。Rust `wrapping_div(0)` 会 panic（生产派发无 `catch_unwind`）⇒ 引擎用
+   仓库既有的「C# 异常 ⇒ 中止整条 label」模型等价：`script_action_error("CalcVar") + abort_goto = true`
+   （同 `auto_get_exp_index_out_of_range_aborts_whole_goto_label`）。
 4. `SAVEVAR` 不落盘（与 oracle 一致，非缺口）。
 5. `to_uppercase()` 与 `OrdinalIgnoreCase` 对 ASCII/CJK 变量名等价；Unicode 特殊边界（`ß`→`SS`、
    土耳其 `ı`）理论可差，脚本变量名实为 ASCII/CJK，风险低（登记）。
 
 ## 5. 用例与牙
 
-用例（6 条）：
+用例（7 条）：
 
 | 用例 | 位置 | 覆盖 |
 | --- | --- | --- |
@@ -64,7 +66,8 @@
 | `dyn_var_human_table_is_per_character_and_case_folded` | `npc.rs` | 同账号双角色互不可见（两向）、大小写折叠、HUMAN↔ACCOUNT 同格 |
 | `npc_player_from_shares_dyn_var_tables` | `lib.rs` | **漏斗级**：`@Login` 式预写 → `npc_player_from` 读回 → 写回共享表 → 另一角色看 GLOBAL 不看 HUMAN |
 | `npc_player_snapshot_maps_record_fields` | `lib.rs` | 既有（不回归） |
-| `var_calcvar_div_by_zero_reports_error_without_panic` | `engine_tests.rs` | `CALCVAR / 0` ⇒ 报错、变量不变、不 panic；`/ 2` 正常 |
+| `var_calcvar_div_by_zero_aborts_whole_goto_label` | `engine_tests.rs` | `CALCVAR / 0` ⇒ 报 `CalcVar` 错误 + **整条 label 中止**（后续 `close` 不执行、两段说词不发、变量不变、不 panic）；`/ 2` 正常 |
+| `npc_player_from_copies_server_level_map_names_and_sys_msg` | `lib.rs` | **O-1**：`map_names`/`sys_msg_cfg` 从共享 `NpcVars` 进快照（`SETMPAMODE` 的 `FindMap` 门 + `SysMsg` 色词） |
 | `var_dynamic_var_declare_calc_and_check_var` / `var_loadvar_and_savevar_file_io` | `engine_tests.rs` | 既有引擎侧 VAR/CALCVAR/LOADVAR |
 
 牙（3 颗，均逐字节还原并核对提交树 sha256）：

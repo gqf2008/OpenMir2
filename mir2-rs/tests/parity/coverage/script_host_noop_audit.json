@@ -2,7 +2,7 @@
   "card": "openmir2-script-host-noop-audit",
   "author": "openmir2-worker-63",
   "base_oid": "14864309e",
-  "line_baseline": "1d13e246（master）∪ card/openmir2-script-dyn-var-host 合并树；npc.rs 行号按该树重钉",
+  "line_baseline": "2fc2dadd（master）∪ card/openmir2-script-dyn-var-host 合并树；npc.rs 行号按该树重钉",
   "line_policy": "npc.rs / mod.rs 行号仅作文档参考；自检门按**符号**校验（impl 块内方法成员、mod.rs 内 fn 声明、行号只需落在该 impl 块范围内）。oracle（src/**，冻结面）仍按 file:line 精确核行。",
   "tier": "L",
   "oracle_root": "src/ (C# 参照实现)",

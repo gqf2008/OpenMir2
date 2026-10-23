@@ -29539,6 +29539,57 @@ break
         );
     }
 
+    /// **卡 `openmir2-script-dyn-var-host`（review `3836d717` O-1）**：`npc_player_from` 除
+    /// `p.vars` 外还把 `map_names` 与 `sys_msg_cfg` 从共享 `NpcVars` 接进快照 ——
+    /// `@Login` / QFunction 的 `SETMPAMODE` 的 `FindMap` 门与 `SysMsg` 色词因此使用
+    /// 真实配置值（oracle `SystemShare.MapMgr` / `SystemShare.Config.*MsgColor` 语义）。
+    ///
+    /// 牙：删 `p.map_names = vars.map_names.clone();` 或 `p.sys_msg_cfg = vars.sys_msg;`
+    /// ⇒ 对应断言红。
+    #[test]
+    fn npc_player_from_copies_server_level_map_names_and_sys_msg() {
+        use game_svr::npc::{NpcVars, SysMsgCfg};
+        use mir2_script::engine::ScriptPlayer;
+
+        let base = NpcVars {
+            map_names: vec!["0150".to_string(), "GA0".to_string()],
+            sys_msg: SysMsgCfg {
+                red: (1, 2),
+                green: (3, 4),
+                blue: (5, 6),
+                ..SysMsgCfg::default()
+            },
+            ..NpcVars::default()
+        };
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let mut rngf = |v: i32| rng.random_below(v);
+        let p = npc_player_from(
+            &mut rngf,
+            "hero",
+            9,
+            "0",
+            1,
+            0,
+            None,
+            None,
+            &catalog,
+            0,
+            &[],
+            &base,
+        );
+        assert_eq!(p.map_names, vec!["0150".to_string(), "GA0".to_string()]);
+        assert!(
+            p.map_exists("0150"),
+            "`SETMPAMODE` 的 `FindMap` 门必须看到真实地图表"
+        );
+        assert!(!p.map_exists("0103"));
+        assert_eq!(
+            p.sys_msg_cfg, base.sys_msg,
+            "`SysMsg` 色词来自共享 `npc_vars_base`"
+        );
+    }
+
     /// oracle 全字段角色记录（`stage6` 向量，`tests/fixtures/player_data_full_oracle.txt`）——存档用例的底稿。
     fn stage6_record() -> record::PlayerRecord {
         let path = concat!(
