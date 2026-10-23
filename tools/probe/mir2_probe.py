@@ -381,8 +381,11 @@ def load_scenario(path):
         raise ScenarioError("cannot read scenario %s: %s" % (path, ex))
     except ValueError as ex:
         raise ScenarioError("scenario %s is not valid JSON: %s" % (path, ex))
+    # `computed` 是给 tools/probe/param_discovery.py 的**声明性注记**（场景声明 + 已推导量的算术），
+    # 不是步骤 DSL：probe 不读它，无新 step 类型、不改 send/wait 语义。放行只是为了让带声明的场景
+    # 仍能被 --check-scenario / 真跑加载（否则会被下面的 unknown key 拒绝）。
     _need_keys(data, "scenario", required=("name", "steps"),
-               optional=("description", "params", "required"))
+               optional=("description", "params", "required", "computed"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}

@@ -1,6 +1,7 @@
 # 对拍台「参数发现」设计（卡 `openmir2-window-param-discovery`）
 
-- 状态：**已落 `tools/probe/param_discovery.py`**（2026-10-23 返工版，worker-64）。接线（`card_window.py --discover` 等）
+- 状态：**已落 `tools/probe/param_discovery.py`**（2026-10-23 返工版，worker-64；
+  同日按卡 `openmir2-window-discovery-rules` 扩到 6 条规则 + `computed` 第三类，见 §2.3/§2.4）。接线（`card_window.py --discover` 等）
   不在本卡写集，另开卡 `openmir2-window-discovery-wiring`。
 - 红线（卡 acceptance）：推导不出就 fail-closed（`scenario-error`，rc=2），**绝不**用默认值/猜值；不改任何场景的 `required` 声明。
 - 口径纪律（返工后）：**「推导」与「规则」严格分栏**。规则 = 部署经验假设，必须显式标注并写清代价；推导 = 帧语义 + oracle 出处。
@@ -17,10 +18,10 @@
 | `self_x` / `self_y` | **推导** | `SM_LOGON(50)` 的 `param` / `tag` | `src/M2Server/Player/PlayObject.cs:1128-1131` `SendLogon()` 的 `Messages.MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, HUtil32.MakeWord(Dir, Light))`（param=CurrX、tag=CurrY、recog=ActorId）。实测一致性（`50 recog=191 param=7 tag=12` ↔ DB `characters` `B013 CX=7 CY=12`）只作**佐证**，不是出处 |
 | `merchant_actor` | **推导** | `SM_MERCHANTSAY(643)` 的 `recog` | 643 是 NPC **应答点击**才发出的说词面板：`NormNpc.Click → GotoLable(@main) → RM_MERCHANTSAY`（`src/M2Server/Npc/NormNpc.cs:68-73,1615`；`src/M2Server/Player/PlayObject.Message.cs:1721-1724`）。点击入口 `PlayObject.Base.cs:674-695 ClientClickNpc` = `FindMerchant(actorId) ?? FindNpc(actorId)` |
 | `npc_actor` | **推导**（有 643 时）/ 退化为**规则** | 优先 `SM_MERCHANTSAY(643).recog`；无 643 时 `SM_TURN(10)` 首个 `recog != 自身` | 643 同上一行（实证：该 actor 应答了点击）。退化规则唯一依据是 `PlayObject.Message.cs:1542` `MakeMessage(SM_TURN, ActorId, …)`——那只说明「这个 actor 转了身」，**不说明它是什么**。代价见下方「规则代价」 |
-| `king_actor` | **不可推导** | 帧里没有「该 actor 是国王」的信息 | fail-closed（若国王 NPC 进视野，`npc_actor` 的 643/规则可能先取到它，但本模块不拿它冒充 `king_actor`） |
+| `king_actor` | **推导**（同商人） | `SM_MERCHANTSAY(643)` 的 `recog` | 与 `merchant_actor` 同一实证：643 是**对该次点击的应答**（`NormNpc.cs:68-73,1615`；`PlayObject.Message.cs:1721-1724`）。**代价**：643 不区分国王/商人 ⇒ 发现 run 必须点国王；点错则 `king_dialog` 的 `dlg_select @@buildguildnow` 响亮失败（部署假设，见 §2.3） |
 | `make_index` / `item_name` | **不可推导（本版）** | 需 `SM_BAGITEMS(201)` 的包体 | 现网 22+ 个 run **无 201** ⇒ `bag_equip` / `eat_item` **恒红直到有 201 录制**。本版**不实现** 201 规则（无录制就无法验证解析），另卡 |
-| `move_x` / `move_y` | **不可推导** | 已录帧里没有 `SM_SPACEMOVE/SM_WALK`，也没有自身 `SM_TURN` | fail-closed；需新帧或新场景 |
-| `target_x` / `target_y` | **不可推导** | 帧里没有目标格坐标 | fail-closed；需新帧或新场景 |
+| `move_x` / `move_y` | **计算**（`kind=computed`） | 场景 `computed` 声明（`derived_from` + `delta`）+ 已推导量 | 目标格是**操作者的选择**而非帧事实（已录帧里没有 `SM_WALK/SM_RUN`）⇒ 由「已推导量 + 场景显式 delta」确定性算出，**不是猜**；oracle `PlayObject.Attack.cs:1365-1428 ClientWalkXY(wIdent, nX, nY)`（`PlayObject.Message.cs:1059-1060`：nParam1=X、nParam2=Y，**绝对**目标格）。见 §2.3 |
+| `target_x` / `target_y` | **不可推导** | 目标是**实体**：帧里没有目标格坐标 | fail-closed；**需新帧/新场景**（缺一帧「AOI 出现/实体位置 + 对象类型」）。唯一近似来源 `SM_TURN(10).param/tag` 是**转身者自己**的坐标（`BaseObject.cs:1375`），且不区分怪物/NPC ⇒ 不许冒充 |
 | `takeon_where` / `hit_dir` | **不可推导** | 无来源帧 | fail-closed（可由操作者 `--var` 显式给） |
 
 ### 2.1 `merchant_actor` 为什么必须换掉 `SM_TURN` 规则（返工 blocking-1）
@@ -50,6 +51,51 @@
 实测 `w24-csharp-npc_click` 的 `run.json` 即 `exit.code=1 step-failed`），不存在静默通过。
 `dice_chain` 的 `params.npc_actor=119` 硬编码猜值属**另一个问题**（见 §6.2），本卡不改场景 JSON。
 
+### 2.3 第三类：`computed`（场景声明 + 已推导量的算术）
+
+`move_x`/`move_y` 的语义是**可算不必发现**：`CM_WALK(3011)` 的 `recog`/`param` 是**绝对目标格**，而目标格是
+操作者的选择，不是帧里的事实。硬造一个「目标格规则」等于猜；但由「已推导量 + 场景显式声明的 delta」算出来是
+**确定性的**，可以两侧各自复算并比对。
+
+场景 JSON 顶层新增可选键 `computed`：
+
+```json
+"required": ["move_x", "move_y"],
+"computed": {
+  "move_x": {"derived_from": "self_x", "delta": 1},
+  "move_y": {"derived_from": "self_y", "delta": 0}
+}
+```
+
+判据形态（`validate_computed`，全部 fail-closed）：
+
+| 情形 | 结果 |
+|---|---|
+| 声明合法，基准量推得出 | `value = base + delta`，`kind="computed"`，`source={kind, computed_from, delta, base_value, base_source}` |
+| 缺 `delta` / `delta` 不是 int（`bool` 不算）/ 出现未知键 | `DiscoveryError` ⇒ 该场景 `cls=error`、rc=2（**场景坏掉**，不是「缺变量」） |
+| 键不在 `required` 里 | 同上（声明了却不用 = 场景坏掉） |
+| `derived_from` 指向另一个 `computed` 变量 | 同上（不支持链式，避免环） |
+| 基准量推不出（如没有 `SM_LOGON`） | 该变量**连锁 fail-closed**：进 `missing`，`cls=missing`，rc=2；**绝不拿 0 顶替** |
+| 没有 `computed` 声明（单变量推导入口 / 旧接线） | 该类变量照旧 `missing`，**绝不猜 delta** |
+
+**与 `derived`/`rule` 分开计数**：`check_all` 的分类优先级 `rule > computed > derived`，
+`computed` 行**不计入**「发现能力已验证」，`SUMMARY` 里单独一栏。
+
+**`mir2_probe` 的可见性**：`computed` 是**声明性注记**，不是步骤 DSL——`mir2_probe` 不读它，无新 step 类型、
+不改 send/wait 语义；只是把它加进顶层可选键，否则带声明的场景会被 `unknown key(s)` 拒绝
+（`mir2_probe.load_scenario` 的 `_need_keys(optional=…)`）。实测：加声明后 `--check-scenario` rc=0。
+
+### 2.4 `king_actor` 实测结论
+
+国王对话与商人同路：`NormNpc.Click → GotoLable(@main) → RM_MERCHANTSAY`，帧是同一个 `SM_MERCHANTSAY(643)`，
+`recog` 是**应答本次点击的 actor**。实测录制 `w24-csharp-npc_auto` 可以推出 `king_actor`（值 = 643 的 `recog`），
+因此加规则 `RULES["king_actor"]`（`kind="derived"`，与 `merchant_actor` 同一实证口径）。
+
+**代价（必须登记）**：643 **不区分国王/商人**，所以「这个 actor 是国王」来自**发现 run 点了国王**这一部署假设。
+发现阶段的默认场景是 `npc_click_auto`（点「最近一条非自己的 `SM_TURN`」）——跑 `king_dialog`/`king_castle_war`
+的发现 run 必须确保点中的是国王（必要时用 `--discovery-scenario` 指定专门场景）。
+点错的后果是**响亮失败**：`dlg_select @@buildguildnow` 在非国王 NPC 上不存在该 label。
+
 ## 3. 发现阶段流程（已落 `tools/probe/param_discovery.py`）
 
 ```text
@@ -70,7 +116,7 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
   `kind`/`source` 是复审能否核「两侧点的是不是同一类目标」的关键——接线卡必须原样落盘，不许只落 value。
 - 输入健壮性：坏行 / 非 JSON 对象 / 字段非整数 ⇒ `DiscoveryError`，打印 `file:lineno` 并 **rc=2**（不是 traceback、不是 rc=1）。
 
-## 4. 构造级用例与牙（`selftest`：13 用例 + 6 颗牙，全离线）
+## 4. 构造级用例与牙（`selftest`：17 用例 + 8 颗牙，全离线）
 
 用例：
 
@@ -86,7 +132,11 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
 10. `--allow-missing`：只放行 `missing`；`error` 行仍 rc=2；`--allow-missing=N` 与实际 missing 数不符也 rc=2；
 11. 坏行 ⇒ 干净 rc=2（`DiscoveryError`）；
 12. 单场景推导路径的空判据：空 `--var` 列表 / 只有分隔符 ⇒ rc=2（「一个变量都没要求」不算通过）；空 frames + 有 required ⇒ rc=2；
-13. 场景分类的 `rule` 分栏（见牙⑥）。
+13. 场景分类的 `rule` 分栏（见牙⑥）；
+14. `computed` 正例：`move_x = self_x + 1`、`move_y = self_y + 0` 的值/`kind`/`source`（含 `base_source` 追到 `SM_LOGON`）与 `--var` 渲染；
+15. `computed` 未声明 `delta` ⇒ `DiscoveryError`（`derive` 与 `check-all` 双路径，后者 `cls=error`）；
+16. 基准量推不出 ⇒ `computed` **连锁 fail-closed**（`missing`，不是 `error`，也不拿 0 顶替）；
+17. `computed` 行的 `cls` 必须是 `computed`（不混算成 `derived`）；边界声明（不在 `required`/未知键/`bool` delta/链式）一律场景坏掉。
 
 牙（逐字节还原 + sha256 见 §6.3）：
 
@@ -103,6 +153,9 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
   把 `_load_scenario` 退回裸 `json.load` ⇒ 红（traceback / 按字符拆 missing）。
 - ⑥ **推导与规则分栏（reviewer A-1）**：无 643 时 `npc_actor` 走 `SM_TURN` 规则 ⇒ `cls=rule`；有 643 ⇒ `cls=derived`。
   把 `kind == "rule"` 判定改坏 ⇒ 红。
+- ⑦ **computed delta 方向**：`self_x=7`，`delta=+1` ⇒ 8、`delta=-2` ⇒ 5；同时断言 ≠ `base-delta`（6/9）。
+  把 `base + delta` 改成 `base - delta` ⇒ 红。
+- ⑧ **computed 混算成 derived**：`check_all` 的分类改成不看 `kind`、一律 `CLS_DERIVED` ⇒ 红（`computed` 会被计入「发现能力已验证」）。
 
 ## 5. 与 `card_window.py` 的接线（卡 `openmir2-window-discovery-wiring`，已落地）
 
