@@ -177,7 +177,7 @@ python tools/probe/mir2_probe.py \
 > 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
 > `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
 
-> `upgrade_retrieve` 是**唯一一条武器升级 NPC 链**（R2）：`placement` 到盟重省 map 3 (320,328) → `click_npc` 沙巴克铁匠 → `@upgrade`/`@confirmupgrade`/`@upgradenow` 提交 → `sleep 660000` 过取回时效门 → `@main`/`@getbackupgnow` 取回（`Merchant.cs:529-590 / 594-759`）。四个容易踩的点：① **不能站铁匠邻格**——`MonGen.txt:51/58/59` 在 (325,311)/(336,321)/(339,313) 刷了 ArcherGuard（`GuardUnit.IsProperTarget` 对普通玩家 return true），11 分钟等待里必被射杀；② 取回要过 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），Permission 恒 0 ⇒ 只能等，**窗口 profile 必须把 `timeout_ms` 抬到 ≥ 720000**（`card_window.py:1786` 的进程超时 = `timeout_ms/1000+120` 秒）；③ 提交/取回的成功硬门是**唯一 ident** `709`/`200`（`wait_idents`），`643` 只作成败判别（否则 643 会把失败分支蒙混过去）；④ 本场景要求背包 < 46 件（部署脚本没有 `~@getbackupgnow_bagfull` 标签 ⇒ 包满支零帧，等不到）。逐条 oracle 出处、夹具前置与登记缺口见 `docs/upgrade-retrieve-scenario-20261023.md`。
+> `upgrade_retrieve` 是**唯一一条武器升级 NPC 链**（R2）：`placement` 到盟重省 map 3 (320,328) → `click_npc` 沙巴克铁匠 → `@upgrade`/`@confirmupgrade`/`@upgradenow` 提交 → `sleep 660000` 过取回时效门 → `@main`/`@getbackupgnow` 取回（`Merchant.cs:529-590 / 594-759`）。四个容易踩的点：① **placement (320,328) 的理由与刷怪无关**——`MonGen.txt:51/58/59` 那三行的怪名是 `弓箭护卫`，**不在 `monsters` 表** ⇒ 根本不刷（`GetMonRace=-1`、`if (monGen.Race > 0)` 跳过）；选它的理由是「`.map` 可走 + 到铁匠 (12,11) 在 `CM_CLICKNPC` 15 格门内 + x=332 最大使 discovery 的 `last_turn` 落在铁匠」；② 取回要过 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），Permission 恒 0 ⇒ 只能等，**窗口 profile 必须把 `probe_timeout_ms` 抬到 ≥ 720000**（`card_window.py:1949` 的进程超时 = `max(180, probe_timeout_ms/1000+120)` 秒）；**写错键名（例如 `timeout_ms`）会被静默忽略**（profile 顶层无未知键校验），probe 仍在 180 秒被杀 ⇒ 白跑一轮；也可以用 CLI `--timeout-ms 720000`；③ 提交/取回的成功硬门是**唯一 ident** `709`/`200`（`wait_idents`），`643` 只作成败判别（否则 643 会把失败分支蒙混过去）；④ 本场景要求背包 < 46 件（部署脚本没有 `~@getbackupgnow_bagfull` 标签 ⇒ 包满支零帧，等不到）。逐条 oracle 出处、夹具前置与登记缺口见 `docs/upgrade-retrieve-scenario-20261023.md`。
 
 > `equip_struck_save` 是**唯一一条装备耐久变化**场景（R7）：`placement` 到铁器店 map 0103 (19,19) → `CM_TURN(3010)` 定朝向 Up → `sleep 400` → `CM_HIT(3014)` → `wait_for [642,203]` → `wait_idents [642]`。**选「攻击方武器磨损」而不是「受击方扣耐久」**：`AttackSuccess`（`PlayObject.Attack.cs:215`）只在 `targetObject==null` 时逃逸（`:217-220`），有目标即无条件抽 `Random(5)+2-WeaponStrong`（`:225-229`）——**命中/躲闪/伤害 0 都扣**；受击方要先被打中（概率路径，正是 combat_strike 的坑）。目标 = map 0103 的商店 NPC「卫家店」（`MerChant.txt:26`，坐标 (19,18)）：`GetMovingObject` 返回格内任何 `ActorObject`（`Envirnoment.cs:1203-1239`），且玩家侧的 `IsAttackTarget` 对 NPC 返回 false（`PlayObject.Attack.cs:627-753`：默认 `HAM_ALL` 下只有 `Race<NPC || Race>PeaceNpc` 才可打）⇒ 不掉血、不还手、不触发 `StruckTime`。**平台必须是「零刷怪」的图**：`MonGen.txt` 里 map 0103 **一行都没有**（部署件与两侧窗口 Envir 的 `MonGen.txt` 逐字节相同）⇒ 没有刷怪箱覆盖；此前选 map 0 (288,610) 是错的——`MonGen.txt:112/113/124/125` 的 鹿/稻草人 `Range=50` 箱体覆盖它，`GenMonRate=10` 下每行刷 50 只，稻草人 Race=83 `SlowAtMonster` 会主动攻击。**`642` 才是磨损帧**（`Recog=Dura/Param=槽/Tag,Series=DuraMax`；破零先 `202` 再 `642(Recog=0)`）；**`203` 普通磨损不发**，只在 `CheckWeaponUpgrade` 成功支（武器 `Desc[10]>0`）⇒ 集合里带它只为换夹具不恒超时，硬门只认 642。注意 **Rust 侧这条耐磨帧还没接**（T-199 相邻登记 + `wear_durability` 无事件通道）⇒ 现在跑会在「Rust 缺 642」上红，不是场景问题。逐条 oracle 出处、零怪证明表、存档侧判据与登记见 `docs/equip-struck-save-scenario-20261023.md`。
 
@@ -276,8 +276,21 @@ R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `
 这些命令的 **X/Y 都打包在 `recog` 里**：`recog = (y << 16) | x`（`LoWord=X`、`HiWord=Y`），
 **`param` 服务端完全不读**（`src/GameSrv/Word/WorldServer.cs:831-851`，两支都只取 `LoWord/HiWord(Recog)`）。
 
-* `combat_hit.json` 用 `target_xy`、`move_walk.json` 用 `move_xy` 承载打包值；`target_x/target_y`、`move_x/move_y`
-  保留为「意图/推导量」，调用方按公式算好打包值再用 `--var` 传入。
-* 本 DSL **没有位运算表达方式**（取值只有 int / params 名；`computed` 只是给 `param_discovery` 的注记）⇒
-  这两条场景在 `card_window` 里会因 `*_xy` 推不出而 fail-closed（不再是静默打错坐标）。
+* `combat_hit.json` 用 `hit_xy`（改前叫 `target_xy`，已随卡 `openmir2-scenario-combat-hit-waitfix` 订正）、`move_walk.json` 用 `move_xy` 承载打包值；`target_x/target_y`、`move_x/move_y`
+  保留为「意图/推导量」。
+* **打包可以用 `computed.pack` 声明**（卡 `openmir2-probe-computed-pack`）：`param_discovery` 会算出
+  `值 = (hi<<16)|lo`，`card_window` 的自动发现据此直接拿到 `*_xy`：
+
+  ```json
+  "computed": {
+    "move_x": {"derived_from": "self_x", "delta": 1},
+    "move_y": {"derived_from": "self_y", "delta": 0},
+    "move_xy": {"pack": {"lo": "move_x", "hi": "move_y"}}
+  }
+  ```
+
+  `pack.lo`/`pack.hi` 可写任意可推导变量（**允许引用其它 `computed`**，按不动点求解；成环、缺字段、
+  与 `derived_from/delta` 混用都 fail-closed）。`mir2_probe` 仍不读 `computed`——真跑时值由
+  `--var` 传入，`card_window` 用发现值填。
+* `combat_hit.json` 的 `hit_xy` 同样用 `computed.pack {lo: self_x, hi: self_y}`：**CM_HIT 的 Recog 是攻击者自己的坐标**（`PlayObject.Attack.cs:883` 只在 `nX==CurrX && nY==CurrY` 时执行），方向在 `tag`。但该场景**已登记 BLOCKED**：self 过滤只挡住**自己动作的回声**（等不到自己砍出的 14），而打中怪物会收到以怪物为 ActorId 的 `SM_STRUCK(31)`、「怪打人」也会发 14 ⇒ 真正的问题是**无夹具不保证目标 + wait 无法归因**，不是「收不到任何 SM 帧」（见卡 `openmir2-scenario-combat-hit-waitfix` 与 `combat_strike` 的 blocked 口径）。
 * 详细逐文件复核表、oracle 行号与影响面：`docs/scenario-recog-packing-20261023.md`。

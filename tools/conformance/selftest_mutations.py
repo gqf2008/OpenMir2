@@ -281,6 +281,16 @@ TEETH = [
         summary["blocked"] = {"reason": blocked["reason"],''',
        '''    if False and blocked:
         summary["blocked"] = {"reason": blocked["reason"],''')]),
+    # --- 魔法夹具 MG-7 的断言强度（卡 openmir2-magic-fixture-assertion-strength）------
+    # 锁的是「断言钉到目标表/列清单」这一层：只钉 VALUES 时，下面两种回归都还是绿的。
+    ("MAG1", "MG-7 只钉 VALUES（INSERT 目标表改错仍绿）",
+     "MG-7 写入语句钉到表名+列清单",
+     [('''"/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `Level`, "''',
+       '''"/* magic */ INSERT INTO `%s`.`characters_magic_BOGUS` (`PlayerId`, `MagicId`, `Level`, "''')]),
+    ("MAG2", "MG-7 只钉 VALUES（INSERT 列名改错仍绿）",
+     "MG-7 写入语句钉到表名+列清单",
+     [('''"/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `Level`, "''',
+       '''"/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `LevelX`, "''')]),
 ]
 
 

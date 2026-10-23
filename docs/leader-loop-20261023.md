@@ -84,3 +84,54 @@ Leader 忙不过来时，**空闲 worker 可以互相审查**：唯一硬约束�
 **规则**：Leader 的合并门禁**抢占优先**——直接开跑，不等车道；若因此撞到已知的两条 flake
 （`game-gate relay::gm_checkclient_is_sent_every_keepalive_period`、`relay::bad_login…`），
 **单跑复验通过即视为绿**，并在 merge_result 里如实注明「并发负载下 flake，单跑绿」。
+
+---
+
+# 深夜补充（2026-10-23 23:4x，master `512d9ecf5`）
+
+> 本节是**会话重启后最先读的一段**：它记录本日晚场新增的协作规则、当前状态快照、
+> 以及「不要重蹈的六类坑」。动态数字一律带快照戳。
+
+## A. 当前状态（截至 `512d9ecf5` @ 23:4x）
+
+| 项 | 值 | 复算命令 |
+| --- | --- | --- |
+| 四条件 | ① pass（`--full`）② **fail** ③ pass ④ pass（`--full`） | `python -I tools/goal/goal_gate.py --json`（`--full` 含 cargo test） |
+| 条件② R 卡 192 | 已完成 10 / `window_required` 121 / whitelist 25→35（批 3 已合）/ 已裁定 3 / **三者皆无 1** / merged 未 closed 且无登记 **17**（批 4 在跑）/ 其它需人工 5 | 同上 |
+| 唯一 FAIL 卡 | `openmir2-gm-batch-5-guild-castle`（A 片 6 条已派 `openmir2-gm-batch-5a-guild-impl`） | 同上 |
+| 窗口 | runbook §0.5 有 60 秒自查清单；`preflight.py` 卡在待认领；**真窗口需 owner 授权** | `docs/window-runbook-20261023.md` |
+| 需 owner 决策 | 6 项 | `docs/needs-human-20261023-night.md` |
+
+## B. 今晚新增的六条纪律（都是踩坑换来的，全文见 `docs/leader-queue-20261023.md`）
+
+| # | 一句话 | 触发实例 |
+| --- | --- | --- |
+| 14 | 派活前查「同 principal 是否已有活人」 | 把 shutup-release 返工派给正在忙的 worker-24 |
+| 15 | **牙只认退出码**，自检必须在 rc 判定路径之前 | inventory/rust-binary 两张卡的自检放在 `if fail_n: return 1` 之后 |
+| 16 | `git author` ≠ collab principal（共享 config 噪声） | 大量提交作者显示 worker-39/66，签名者是别人 |
+| 17 | **mutation runner 就地改写 tracked 文件**，绝不在即将提交的树上跑 | `selftest_mutations` 留下 live mutation，合并已 staged |
+| 18 | **reviewer 的 worktree 只能用于 review**（一 worktree = 一身份） | worker 卡被 reviewer-5 认领并签在 `wt-reviewer-5` |
+| 19 | 派同身份 agent 前加**协作层第 4 查**（该卡线程最近 10 分钟有无同 principal 写入） | 我派的 worker-24 与外部车道在 cronclaim 撞车，线程分叉 |
+
+## C. 六类「假绿/假红」（`docs/session-summary-20261023.md` 已扩到 9 类，这里只列今晚新增的三类）
+
+1. **自检在 rc 判定之后** ⇒ 实现整段旁路仍 GREEN rc=0；
+2. **新校验判错因果** ⇒ R6 把「越界 tag」当「必然超时」，实际两侧都是先取目标后写 nDir（降级 WARN）；
+3. **工具弄脏树** ⇒ mutation runner / stale 二进制 / 共享 `CARGO_TARGET_DIR` 内嵌旧 `MANIFEST_DIR`。
+
+另有两类是**数据层**的：**7 条规则被全局 `recog` 掩码吞掉语义字段**（`213`/`766` 曾「什么都不比」）、
+**`rules.json` 缺 202/203/642/709** ⇒ 已合场景的窗口必然 UNDECIDABLE。
+
+## D. 重启后的前三步
+
+1. `git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*'` + `walgit collab board`（**看板是权威，本文只是镜像**）；
+2. 读本文件 A/B/C 三节 + `docs/needs-human-20261023-night.md`；
+3. 按「合并 > 派活 > 拆卡」继续；**待认领 0 且无卡可派时**，下一批仍是
+   `openmir2-r-window-registry-batch`（第 4 批起，≤10 张/批，名单每次现取）。
+
+## E. 明确不要做的事
+
+- 不要**凭记忆**引用行号/数字：今晚已发现多处抄错（`lib.rs` pose_dir 实为 `:8828` 而非 8836、
+  `GMEXECUTE` 去重是 16 名不是 5 名、`332,317` 不是 `332,318`）——一律现取。
+- 不要把「不可跑」当「欠窗口」记账（两者混在一起会让窗口排期整体失真）。
+- 不要在 `OpenMir2-wt-cronclaim` 或任何 reviewer worktree 里派 agent（纪律 18/19）。

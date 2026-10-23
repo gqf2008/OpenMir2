@@ -374,6 +374,146 @@ def resolve_param(value, params, where):
     raise ScenarioError("%s must be int or params name, got %r" % (where, value))
 
 
+# ---- 多会话：会话标注与收件人集合断言（卡 openmir2-multi-session-probe）-----------------
+#
+# 口径（卡上设计 comment bec70baf）：
+# - 帧行 `conn` 列沿用旧值；多会话时标签为 `<session>.<hop>`（`s1.gamegate`/`s2.selgate`…），
+#   单会话旧标签（`gamegate`/`selgate`/`login`）**不含 `.`** ⇒ `session_of` 归 `"main"`。
+#   因此 `frames.ndjson` 旧字段逐字节不变，`compare_runs.py` 口径零改动。
+# - 断言只吃「帧行 + 谓词」：不推算坐标、不假设 AOI；±N 边界由用例把期望集合直接给出。
+
+RADIUS_CELLS = 12  # `SendRefMsgRange` 的 ±12（`SendRefMsg` 广播面；用例把期望集合喂进来）
+
+
+def session_of(conn_label):
+    """`<session>.<hop>` ⇒ 会话名；无 `.` 的旧标签 ⇒ `"main"`（单会话）。"""
+    head, sep, _tail = (conn_label or "").partition(".")
+    return head if sep else "main"
+
+
+def session_label(session, hop):
+    """多会话标签：`<session>.<hop>`（`hop` ∈ login/selgate/gamegate）。"""
+    return "%s.%s" % (session, hop)
+
+
+def within_radius(distance, radius=RADIUS_CELLS):
+    """一维 `±N` 判定（含边界）。
+
+    **注意（复审 M-1）**：oracle 的可见范围是**正方形**（`|dx|<=N && |dy|<=N`，
+    `BaseObject.Message.cs:399-405`），不是欧氏半径；判「某格是否在视野内」请用
+    [`within_square`]，不要把欧氏距离喂给本函数（(12,12) 的欧氏距离 16.97 会被误判为外）。
+    """
+    return abs(int(distance)) <= int(radius)
+
+
+def within_square(dx, dy, radius=RADIUS_CELLS):
+    """oracle 视野判定：`|dx| <= N && |dy| <= N`（端点在内；正方形，不是欧氏圆）。"""
+    return abs(int(dx)) <= int(radius) and abs(int(dy)) <= int(radius)
+
+
+def _row_matches(row, pred):
+    for key in ("ident", "param", "tag", "series"):
+        if key in pred and row.get(key) != pred[key]:
+            return False
+    if "body_text_contains" in pred:
+        if pred["body_text_contains"] not in (row.get("body_text") or ""):
+            return False
+    t_from = pred.get("t_from")
+    if t_from is not None and row.get("t_ms", 0) < t_from:
+        return False
+    t_to = pred.get("t_to")
+    if t_to is not None and row.get("t_ms", 0) > t_to:
+        return False
+    return True
+
+
+def recipients(rows, pred, sessions=None, statuses=None):
+    """命中谓词的帧**分别由哪些会话收到**（会话名有序集合）。
+
+    `sessions` 给了就只计这些会话；`statuses`（`{name: online|offline|closed}`）给了就
+    只计 `online`（复审 I-1：连接状态必须能进判定，不能只靠帧是否存在）。
+    """
+    if sessions is not None and statuses is not None:
+        raise ValueError(
+            "recipients: sessions 与 statuses 只能给一个（同时给会让 statuses 被静默忽略）")
+    if sessions is None and statuses is not None:
+        sessions = online_sessions(statuses)
+    allowed = set(sessions) if sessions is not None else None
+    got = set()
+    for row in rows:
+        if not _row_matches(row, pred):
+            continue
+        name = session_of(row.get("conn", ""))
+        # 复审 `bc2a5f2b` I-1：给了 statuses 就必须覆盖**所有**出现过的会话；否则未登记
+        # 会话的帧会被静默过滤掉，「非 online 会话收到帧」永远观测不到。
+        if statuses is not None and name not in statuses:
+            raise ValueError(
+                "recipients: 帧里的会话 %r 不在 statuses 里（%r）——无法判定 online 与否，"
+                "拒绝静默剔除" % (name, sorted(statuses)))
+        if allowed is not None and name not in allowed:
+            continue
+        got.add(name)
+    return sorted(got)
+
+
+def recipient_first_seqs(rows, pred, sessions=None):
+    """每个会话**首帧**的 `seq`（用于「三会话都收到且次序一致」类判据）。"""
+    allowed = set(sessions) if sessions is not None else None
+    out = {}
+    for row in rows:
+        if not _row_matches(row, pred):
+            continue
+        name = session_of(row.get("conn", ""))
+        if allowed is not None and name not in allowed:
+            continue
+        seq = row.get("seq")
+        if name not in out or (seq is not None and seq < out[name]):
+            out[name] = seq
+    return out
+
+
+def assert_recipients(expected, actual):
+    """收件人集合断言：`missing`/`extra` 两列都报，绝不「有人收到就算过」。"""
+    want, got = set(expected), set(actual)
+    missing = sorted(want - got)
+    extra = sorted(got - want)
+    if missing or extra:
+        raise AssertionError(
+            "收件人集合不符：missing=%r extra=%r（expected=%r actual=%r）"
+            % (missing, extra, sorted(want), sorted(got))
+        )
+
+
+def assert_recipients_with_status(statuses, expected, actual):
+    """带连接状态的收件人断言（复审 I-1 的默认口径）。
+
+    1. `expected` 里只保留 `online` 会话（非 online 的不计）；
+    2. `actual` 里若出现非 online 会话收到帧 ⇒ 直接报「已断/未连会话仍收帧」（不许静默）。
+    """
+    unknown_expected = sorted(set(expected) - set(statuses))
+    if unknown_expected:
+        raise AssertionError(
+            "expected 里有未登记连接状态的会话：%r（statuses 必须覆盖所有参与判定的会话，"
+            "禁止静默从判据里删掉）" % unknown_expected)
+    unknown_actual = sorted(set(actual) - set(statuses))
+    if unknown_actual:
+        raise AssertionError(
+            "actual 里有未登记连接状态的会话：%r（来源不明，拒绝采信）" % unknown_actual)
+    live = online_sessions(statuses)
+    want = sorted(set(expected) & set(live))
+    dead_received = sorted(set(actual) - set(live))
+    if dead_received:
+        raise AssertionError(
+            "非 online 会话收到帧：%r（statuses=%r）" % (dead_received, statuses)
+        )
+    assert_recipients(want, actual)
+
+
+def online_sessions(statuses):
+    """`{name: "online"|"offline"|"closed"}` ⇒ 参与判定的会话（只有 `online` 计入）。"""
+    return sorted(name for name, st in statuses.items() if st == "online")
+
+
 def load_scenario(path):
     try:
         with open(path, "r", encoding="utf-8") as fh:
@@ -2252,6 +2392,7 @@ def run_selftest():
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
+    check("multi-session", _selftest_multi_session)
     check("dwell-after-enter", _selftest_dwell)
     if fails:
         print("mir2_probe selftest: FAIL")
@@ -2284,6 +2425,117 @@ class _FakeSock:
 
     def close(self):
         pass
+
+
+def _selftest_multi_session():
+    """卡 openmir2-multi-session-probe：会话标注 + 收件人集合断言（5 用例 + 2 牙）。
+
+    帧行用手搓的最小集合（字段与 `Recorder.write_frame` 同形），不连服务端。
+    """
+    def row(seq, conn, ident, t_ms=0, body_text=""):
+        return {"seq": seq, "t_ms": t_ms, "conn": conn, "ident": ident,
+                "param": 0, "tag": 0, "series": 0, "body_text": body_text}
+
+    pred = {"ident": 657}  # SM_CHARSTATUSCHANGED（广播类）
+
+    # ① 两会话都在同图两格内 ⇒ 都收到
+    rows = [row(1, session_label("s1", "gamegate"), 657), row(2, session_label("s2", "gamegate"), 657)]
+    assert_recipients(["s1", "s2"], recipients(rows, pred))
+
+    # ② 一格超出 ±12 ⇒ 只近的收到（远的那条帧根本不存在）；期望含远者必须报 missing
+    rows_far = [row(1, session_label("s1", "gamegate"), 657)]
+    assert_recipients(["s1"], recipients(rows_far, pred))
+    try:
+        assert_recipients(["s1", "s2"], recipients(rows_far, pred))
+    except AssertionError as ex:
+        assert "missing=['s2']" in str(ex), str(ex)
+    else:
+        raise AssertionError("超界一格时不该把远会话算进收件人")
+
+    # ③ 三会话同格 ⇒ 三个都收到且首帧次序一致
+    rows3 = [row(1, session_label("s1", "gamegate"), 657),
+             row(2, session_label("s2", "gamegate"), 657),
+             row(3, session_label("s3", "gamegate"), 657)]
+    assert_recipients(["s1", "s2", "s3"], recipients(rows3, pred))
+    seqs = recipient_first_seqs(rows3, pred)
+    assert seqs == {"s1": 1, "s2": 2, "s3": 3}, seqs
+
+    # ④ 一个会话不在线 ⇒ 不参与判定
+    online = online_sessions({"s1": "online", "s2": "online", "s3": "offline"})
+    assert online == ["s1", "s2"], online
+    assert_recipients(["s1", "s2"], recipients(rows3, pred, sessions=online))
+
+    # ⑤ 会话断开后不再收：断线会话从**参与判定的集合**里剔除（不是靠帧恰好不存在）
+    rows5 = [row(1, session_label("s1", "gamegate"), 657, t_ms=10),
+             row(2, session_label("s2", "gamegate"), 657, t_ms=20),
+             row(3, session_label("s1", "gamegate"), 657, t_ms=150),
+             row(4, session_label("s2", "gamegate"), 657, t_ms=500)]
+    after = dict(pred, t_from=100)
+    alive = online_sessions({"s1": "online", "s2": "closed"})
+    assert alive == ["s1"], alive
+    assert_recipients(["s1"], recipients(rows5, after, sessions=alive))
+    # 反证：若把已断开的 s2 也算进来，它的 500ms 帧会污染期望 ⇒ 必须被集合剔除挡住
+    assert_recipients(["s1", "s2"], recipients(rows5, after))
+
+    # 牙①：把断言放宽成「有人收到就算过」⇒ ② 的 missing 抓不到 ⇒ 必须红
+    def _lax(expected, actual):
+        if not actual:
+            raise AssertionError("没人收到")
+    try:
+        _lax(["s1", "s2"], recipients(rows_far, pred))
+    except AssertionError:
+        raise AssertionError("牙①失效：放宽断言反而报错")
+    # 放宽版放过了「缺 s2」——严格版必须拒绝（上面 ② 已证），这里再钉一次差异
+    assert_recipients(["s1"], recipients(rows_far, pred))
+
+    # 牙②：±12 改 ±11 ⇒ 第 12 格的会话被判成收不到（期望集合随之变化）
+    assert within_radius(12) and within_radius(-12)
+    assert not within_radius(12, radius=11) and within_radius(11, radius=11)
+
+    # ⑥ 复审 I-1：`statuses` 进判定——非 online 会话不参与
+    st = {"s1": "online", "s2": "offline", "s3": "closed"}
+    assert recipients(rows3, pred, statuses=st) == ["s1"], "statuses 给了 ⇒ 只计 online"
+    # ⑦ 复审 I-1：带状态的断言口径
+    assert_recipients_with_status(st, ["s1", "s2"], ["s1"])  # s2 offline 不计入 expected
+    try:
+        assert_recipients_with_status(st, ["s1"], ["s1", "s2"])  # s2 已 offline 却收到帧
+    except AssertionError as ex:
+        assert "非 online 会话收到帧" in str(ex), str(ex)
+    else:
+        raise AssertionError("已断会话收到帧必须报错（I-1）")
+    # 牙（I-1）：不带状态的旧断言会放过「expected 里的 offline 会话」——新断言不会
+    try:
+        assert_recipients(["s1", "s2"], ["s1"])
+    except AssertionError:
+        pass
+    # ⑧ 复审 M-1：视野是正方形（端点在内），不是欧氏半径
+    assert within_square(12, 12) and within_square(-12, 12)
+    assert not within_square(13, 0) and not within_square(0, -13)
+    assert within_radius(12) and not within_radius(13)
+    # ⑨ 复审 `bc2a5f2b` I-1：expected 里的未登记会话必须报错（不是静默剔除）
+    try:
+        assert_recipients_with_status(st, ["s1", "s9"], ["s1"])
+    except AssertionError as ex:
+        assert "未登记连接状态" in str(ex) and "s9" in str(ex), str(ex)
+    else:
+        raise AssertionError("expected 里拼错/未登记的会话被静默剔除（I-1 假绿）")
+    # ⑩ sessions 与 statuses 同时给 ⇒ 报错（不许静默让 statuses 失效）
+    try:
+        recipients(rows3, pred, sessions=["s2"], statuses={"s1": "online"})
+    except ValueError as ex:
+        assert "只能给一个" in str(ex), str(ex)
+    else:
+        raise AssertionError("sessions+statuses 同时给被静默接受（M-1 分叉）")
+    # ⑪ statuses 未覆盖帧里出现过的会话 ⇒ 报错（不许静默过滤）
+    try:
+        recipients(rows3, pred, statuses={"s1": "online"})
+    except ValueError as ex:
+        assert "不在 statuses 里" in str(ex), str(ex)
+    else:
+        raise AssertionError("未登记会话的帧被静默剔除")
+    # 单会话回归：旧标签不含 `.` ⇒ 归 "main"
+    rows_main = [row(1, "gamegate", 657), row(2, "selgate", 657)]
+    assert recipients(rows_main, pred) == ["main"]
 
 
 def _selftest_conn_semantics():

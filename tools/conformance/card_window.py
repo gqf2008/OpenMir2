@@ -684,6 +684,9 @@ def load_profile(value):
     for side in SIDES:
         validate_db_client(sides[side].get("db_client"),
                            "profile.sides.%s.db_client" % side)
+    # 魔法夹具声明（卡 `openmir2-window-magic-fixture`）：加载期 fail-closed。
+    for side in SIDES:
+        profile_magic(prof, side)
     return prof
 
 
@@ -1789,6 +1792,310 @@ def run_placement(runner, side, prof, sc, placement, env):
         res["rc"] = 2
         return res
 
+# ---------------------------------------------------------------------------
+# 魔法夹具（magic）：restore 之后、起栈之前把「角色必须会的魔法」写进该侧测试库
+# `characters_magic`（卡 `openmir2-window-magic-fixture`）。
+#
+# 为什么是 DB 预置：`spell_cast` 场景的 `blocked.missing_fixture` 指出缺这一行 ⇒
+# `GetMagicInfo` 为空 ⇒ 施法只回 `SM_MOVEFAIL(28)`，**永远等不到 638/639**。
+# 技能不是脚本动作、GM 权限恒 0 ⇒ 与预置位/背包同一选型：只在 restore 之后、
+# 起栈之前改**测试库**。
+#
+# 声明形态（profile 顶层，应用到两侧；`sides.<side>.magic` 可覆盖本侧）：
+#   "magic": [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
+# - 四列必填；`magic_id` 1..65535、`level` 0..3、`use_key` 单个 ASCII 可见字符、
+#   `curr_train` >= 0；未知键/类型错/越界 => 加载期 ConfigError（rc=2）。
+# - **跨栈不同的字段不进判据**：`PlayerId`（= 本侧 `characters.Id`）与行 `Id` 各侧自己定位，
+#   读回只比 `MagicId/Level/UseKey/CurrTrain`。
+# ---------------------------------------------------------------------------
+MAGIC_REQUIRED_KEYS = ("magic_id", "level", "use_key", "curr_train")
+MAGIC_OPTIONAL_KEYS = ("note",)
+MAGIC_ID_MAX = 0xFFFF
+MAGIC_LEVEL_MAX = 3
+
+
+def _validate_magic_list(magic, where):
+    """形状+schema 校验（fail-closed）：非法即 ConfigError。"""
+    if not isinstance(magic, list) or not magic:
+        raise ConfigError("%s 必须是非空数组" % where)
+    out = []
+    seen = set()
+    for i, item in enumerate(magic):
+        w = "%s[%d]" % (where, i)
+        if not isinstance(item, dict):
+            raise ConfigError("%s 必须是对象" % w)
+        bad = set(item) - set(MAGIC_REQUIRED_KEYS) - set(MAGIC_OPTIONAL_KEYS)
+        if bad:
+            raise ConfigError("%s 有未知键 %s（fail-closed）" % (w, sorted(bad)))
+        missing = [k for k in MAGIC_REQUIRED_KEYS if k not in item]
+        if missing:
+            raise ConfigError("%s 缺必填键 %s" % (w, missing))
+        mid = item["magic_id"]
+        if not isinstance(mid, int) or isinstance(mid, bool):
+            raise ConfigError("%s.magic_id 必须是整数（实际 %r）" % (w, mid))
+        if mid < 1 or mid > MAGIC_ID_MAX:
+            raise ConfigError("%s.magic_id=%r 越界（1..%d）" % (w, mid, MAGIC_ID_MAX))
+        lv = item["level"]
+        if not isinstance(lv, int) or isinstance(lv, bool):
+            raise ConfigError("%s.level 必须是整数（实际 %r）" % (w, lv))
+        if lv < 0 or lv > MAGIC_LEVEL_MAX:
+            raise ConfigError("%s.level=%r 越界（0..%d）" % (w, lv, MAGIC_LEVEL_MAX))
+        key = item["use_key"]
+        if (not isinstance(key, str) or len(key) != 1
+                or not (0x21 <= ord(key) <= 0x7E)):
+            raise ConfigError("%s.use_key 必须是单个 ASCII 可见字符（实际 %r）" % (w, key))
+        tr = item["curr_train"]
+        if not isinstance(tr, int) or isinstance(tr, bool):
+            raise ConfigError("%s.curr_train 必须是整数（实际 %r）" % (w, tr))
+        if tr < 0:
+            raise ConfigError("%s.curr_train=%r 必须 >= 0" % (w, tr))
+        if mid in seen:
+            raise ConfigError("%s.magic_id=%d 与前面的条目重复（同一魔法只能声明一次）"
+                              % (w, mid))
+        seen.add(mid)
+        if item.get("note") is not None and not isinstance(item["note"], str):
+            raise ConfigError("%s.note 必须是字符串" % w)
+        out.append({"magic_id": mid, "level": lv, "use_key": key, "curr_train": tr,
+                    "note": item.get("note") or ""})
+    return out
+
+
+def profile_magic(prof, side=None):
+    """读 profile 的魔法声明：顶层 `magic` 应用于两侧；`sides.<side>.magic` 覆盖本侧。
+
+    没有声明 => None；形状非法 => ConfigError（加载期 fail-closed）。
+    """
+    sides = prof.get("sides") or {}
+    if side is not None:
+        sc = sides.get(side) or {}
+        if "magic" in sc:
+            return _validate_magic_list(sc["magic"], "profile.sides.%s.magic" % side)
+    if "magic" not in prof:
+        return None
+    return _validate_magic_list(prof["magic"], "profile.magic")
+
+
+def _magic_char_sql(db, chr_name, login_id, has_deleted):
+    tail = ", `Deleted`" if has_deleted else ""
+    return ("/* magic */ SELECT COUNT(*), COALESCE(MIN(`Id`), 0)%s FROM `%s`.`characters` "
+            "WHERE `ChrName` = %s AND `LoginID` = %s;\n"
+            % (tail, db, _sql_quote(chr_name), _sql_quote(login_id)))
+
+
+def _magic_dup_sql(db, player_id, ids):
+    return ("/* magic */ SELECT `MagicId`, COUNT(*) FROM `%s`.`characters_magic` "
+            "WHERE `PlayerId` = %d AND `MagicId` IN (%s) GROUP BY `MagicId` "
+            "HAVING COUNT(*) > 1;\n"
+            % (db, int(player_id), ", ".join(str(int(x)) for x in ids)))
+
+
+def _magic_rows_sql(db, player_id, ids):
+    return ("/* magic */ SELECT `MagicId`, `Level`, `UseKey`, `CurrTrain` FROM `%s`.`characters_magic` "
+            "WHERE `PlayerId` = %d AND `MagicId` IN (%s) ORDER BY `MagicId`;\n"
+            % (db, int(player_id), ", ".join(str(int(x)) for x in ids)))
+
+
+def _magic_fingerprint_sql(db, player_id, ids):
+    return ("/* magic */ SELECT COUNT(*), COALESCE(MIN(MD5(CONCAT_WS(CHAR(31), `MagicId`, `Level`, "
+            "`UseKey`, `CurrTrain`))), '') FROM `%s`.`characters_magic` "
+            "WHERE `PlayerId` = %d AND `MagicId` NOT IN (%s);\n"
+            % (db, int(player_id), ", ".join(str(int(x)) for x in ids)))
+
+
+def _magic_write_sql(db, player_id, m, exists):
+    if exists:
+        return ("/* magic */ UPDATE `%s`.`characters_magic` SET `Level` = %d, `UseKey` = %s, "
+                "`CurrTrain` = %d WHERE `PlayerId` = %d AND `MagicId` = %d;\n"
+                % (db, int(m["level"]), _sql_quote(m["use_key"]), int(m["curr_train"]),
+                   int(player_id), int(m["magic_id"])))
+    return ("/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `Level`, "
+            "`UseKey`, `CurrTrain`) VALUES (%d, %d, %d, %s, %d);\n"
+            % (db, int(player_id), int(m["magic_id"]), int(m["level"]),
+               _sql_quote(m["use_key"]), int(m["curr_train"])))
+
+
+def _parse_magic_rows(out):
+    """解析 `MagicId/Level/UseKey/CurrTrain` 的 SELECT 输出（mysql --batch TSV）。"""
+    rows = {}
+    for ln in (out or "").splitlines():
+        parts = ln.split("\t")
+        if len(parts) < 4 or not parts[0].strip():
+            continue
+        try:
+            rows[int(parts[0])] = {"level": int(parts[1]), "use_key": parts[2],
+                                   "curr_train": int(parts[3])}
+        except ValueError:
+            raise ConfigError("characters_magic 返回无法解析：%r" % (ln,))
+    return rows
+
+
+def _magic_snapshot(magic, rows):
+    """证据/判据用的只读快照：只含声明字段（不含 PlayerId/Id 这类跨栈不同值）。"""
+    out = []
+    for m in magic:
+        found = rows.get(m["magic_id"])
+        out.append({"magic_id": m["magic_id"],
+                    "declared": {k: m[k] for k in ("level", "use_key", "curr_train")},
+                    "found": found})
+    return out
+
+
+def run_magic(runner, side, prof, sc, magic, env, timeout=120):
+    """在一侧预置魔法：restore 之后、起栈之前。返回证据 dict（rc=0 才算完成）。
+
+    fail-closed：角色不存在/多行/已删除、同一 MagicId 多行、写后读回不符、其它魔法行
+    指纹变化 ⇒ rc=2 并点名，**绝不让 probe 去超时**。
+    """
+    res = {
+        "side": side,
+        "source": "profile",
+        "declared": [dict(m) for m in magic],
+        "db": None,
+        "db_pairing": None,
+        "player_id": None,
+        "before": None,
+        "after": None,
+        "action": None,
+        "sql": {"character": None, "select": None, "write": None, "verify": None},
+        "rc": None,
+        "error": None,
+    }
+    try:
+        envir_root = placement_envir_root(side, sc)
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        res["db_pairing"] = _check_db_pairing(side, envir_root, db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        res["error"] = "魔法夹具前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    if not chr_name or not login_id:
+        res["error"] = ("魔法夹具需要 profile 的 char_name/account（定位 characters 行）；"
+                        "当前 char_name=%r account=%r" % (chr_name, login_id))
+        res["rc"] = 2
+        return res
+    argv = _mysql_argv(client)
+
+    def sql(tag, text):
+        rc, out, err = runner.run(side, tag, argv, env=env, timeout=timeout,
+                                  stdin_text=text, capture=True)
+        if rc != 0:
+            raise ConfigError("%s 执行失败（mysql rc=%s）：%s"
+                              % (tag, rc, (err or out or "").strip()[:400]))
+        return out
+
+    try:
+        cols_out = sql("magic.columns", "/* magic */ SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+        columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
+        missing = [c for c in ("Id", "ChrName", "LoginID") if c not in columns]
+        if missing:
+            raise ConfigError("%s.characters 缺列 %s：表结构与预期不符" % (db, missing))
+        char_sql = _magic_char_sql(db, chr_name, login_id, "Deleted" in columns)
+        res["sql"]["character"] = char_sql.strip()
+        parts = (sql("magic.character", char_sql) or "").strip().split("\t")
+        try:
+            count = int(parts[0])
+            player_id = int(parts[1])
+            deleted = int(parts[2]) if len(parts) > 2 else 0
+        except (ValueError, IndexError):
+            raise ConfigError("magic.character 返回无法解析：%r" % (parts,))
+        if count == 0:
+            raise ConfigError("角色不存在：%s.characters 无 ChrName=%r LoginID=%r 的行"
+                              % (db, chr_name, login_id))
+        if count > 1:
+            raise ConfigError("角色行不唯一：ChrName=%r LoginID=%r 命中 %d 行"
+                              % (chr_name, login_id, count))
+        if deleted:
+            raise ConfigError("角色已删除（Deleted=%d）：ChrName=%r" % (deleted, chr_name))
+        res["player_id"] = player_id
+        ids = [m["magic_id"] for m in magic]
+        dup_out = sql("magic.duplicate", _magic_dup_sql(db, player_id, ids))
+        if (dup_out or "").strip():
+            raise ConfigError("同一角色同一 MagicId 有多行（%s）——夹具不替你合并历史脏数据"
+                              % dup_out.strip().replace("\n", "; "))
+        rows_sql = _magic_rows_sql(db, player_id, ids)
+        res["sql"]["select"] = rows_sql.strip()
+        before = _parse_magic_rows(sql("magic.read", rows_sql))
+        res["before"] = _magic_snapshot(magic, before)
+        fp_sql = _magic_fingerprint_sql(db, player_id, ids)
+        fp_before = (sql("magic.fingerprint", fp_sql) or "").strip()
+        writes = []
+        for m in magic:
+            cur = before.get(m["magic_id"])
+            exists = cur is not None
+            if exists and all(cur[k] == m[k] for k in ("level", "use_key", "curr_train")):
+                continue
+            text = _magic_write_sql(db, player_id, m, exists)
+            writes.append(text.strip())
+            sql("magic.write", text)
+        res["sql"]["write"] = "\n".join(writes) if writes else None
+        res["action"] = "written" if writes else "noop"
+        res["sql"]["verify"] = rows_sql.strip()
+        after = _parse_magic_rows(sql("magic.verify", rows_sql))
+        res["after"] = _magic_snapshot(magic, after)
+        for m in magic:
+            got = after.get(m["magic_id"])
+            want = {k: m[k] for k in ("level", "use_key", "curr_train")}
+            if got != want:
+                raise ConfigError(
+                    "魔法夹具读回不符：MagicId=%d 期望 %r 实际 %r"
+                    % (m["magic_id"], want, got))
+        fp_after = (sql("magic.fingerprint", fp_sql) or "").strip()
+        if fp_after != fp_before:
+            raise ConfigError(
+                "魔法夹具连带改了**未声明的魔法行**（其它行的行数/MD5 指纹变了：%r -> %r）"
+                % (fp_before or "<空>", fp_after or "<空>"))
+        res["rc"] = 0
+        return res
+    except ConfigError as e:
+        res["error"] = "魔法夹具失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def preview_magic(runner, side, prof, sc, magic, ctx):
+    """`--dry-run` 用：离线校验声明与库配对，打印将要执行的命令（不连库/不改库）。"""
+    out = {"side": side, "declared": [dict(m) for m in magic], "rc": None,
+           "error": None, "commands": [], "offline_check": None}
+    try:
+        envir_root = placement_envir_root(side, sc)
+        db = placement_characters_db(side, sc)
+        pairing = _check_db_pairing(side, envir_root, db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        out["error"] = "魔法夹具前置校验失败（真跑会 rc=2）：%s" % e
+        out["rc"] = 2
+        return out, True
+    ids = [m["magic_id"] for m in magic]
+    id_list = ", ".join(str(x) for x in ids)
+    out["offline_check"] = {"envir_root": envir_root, "db": db, "db_pairing": pairing,
+                            "magic_ids": ids}
+    argv = _redact_argv(_mysql_argv(client))
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    out["commands"] = [
+        {"argv": argv,
+         "stdin": "SELECT COUNT(*), MIN(`Id`), `Deleted` FROM `%s`.`characters` "
+                  "WHERE ChrName=%r AND LoginID=%r;" % (db, chr_name, login_id)},
+        {"argv": argv,
+         "stdin": "SELECT `MagicId`,`Level`,`UseKey`,`CurrTrain` FROM "
+                  "`%s`.`characters_magic` WHERE `PlayerId`=<id> AND `MagicId` IN (%s);"
+                  % (db, id_list)},
+        {"argv": argv,
+         "stdin": "INSERT/UPDATE `%s`.`characters_magic`（声明 %d 条：%s）"
+                  % (db, len(ids), id_list)},
+        {"argv": argv,
+         "stdin": "SELECT ... （读回校验：声明的 MagicId/Level/UseKey/CurrTrain + "
+                  "未声明魔法行的行数/MD5 指纹）"},
+    ]
+    runner.log("[%s] 魔法夹具（dry-run 不连库）：db=%s magic_ids=%s"
+               % (side, db, id_list))
+    out["rc"] = 0
+    return out, False
+
 
 def preview_placement(runner, side, prof, sc, placement, ctx):
     """`--dry-run` 用：只做离线内容校验 + 打印将要执行的命令（不连库/不改库）。"""
@@ -1839,6 +2146,7 @@ def run_side(runner, side, prof, ctx, password, placement=None):
         "label": sc.get("label") or side,
         "restore_rc": None,
         "placement": None,
+        "magic": None,
         "ports": {"checked": list(sc.get("ports") or []), "busy": []},
         "stack_rc": None,
         "ready": {"ports": list(sc.get("ready_ports") or []), "missing": [],
@@ -1890,6 +2198,25 @@ def run_side(runner, side, prof, ctx, password, placement=None):
             res["placement"] = pres
             if pres.get("rc") != 0:
                 res["error"] = pres.get("error") or "角色预置位失败"
+                return res
+
+        # 1c) 魔法夹具（profile 声明了才跑）：restore（与预置位）之后、起栈之前。
+        try:
+            magic_decl = profile_magic(prof, side)
+        except ConfigError as e:
+            res["error"] = "魔法夹具声明非法：%s" % e
+            return res
+        if magic_decl:
+            mres = run_magic(runner, side, prof, sc, magic_decl, env)
+            try:
+                write_json_file(os.path.join(side_dir, "magic.json"), mres)
+            except OSError as e:
+                mres["error"] = ((mres.get("error") or "") + "；写 magic.json 失败：%s"
+                                 % e).strip("；")
+                mres["rc"] = 2
+            res["magic"] = mres
+            if mres.get("rc") != 0:
+                res["error"] = mres.get("error") or "魔法夹具失败"
                 return res
 
         # 2) 起栈前端口检查（有人占 => rc=2 并点名 pid；不启动栈）
@@ -2416,6 +2743,14 @@ def execute(cfg):
                      "characters 的 MapName/CX/CY 改到位；完成不了 rc=2（不让 probe 超时）"
                      if placement else None),
         },
+        "magic": {
+            "enabled": any(profile_magic(prof, s) for s in SIDES),
+            "declared": profile_magic(prof),
+            "sides": {},
+            "note": ("profile.magic => 每侧 restore（与预置位）之后、起栈之前把该侧测试库 "
+                     "characters_magic 写到位；完成不了 rc=2（不让 probe 超时）"
+                     if profile_magic(prof) else None),
+        },
         "discovery": {
             "enabled": needs_discovery,
             "forced": discover,
@@ -2534,6 +2869,24 @@ def execute(cfg):
                     preview_failed = True
                     side_failed = True
             if not side_failed:
+                try:
+                    magic_side = profile_magic(prof, side)
+                except ConfigError as e:
+                    runner.log("[%s] 魔法夹具声明非法 ⇒ 真跑 rc=2：%s" % (side, e))
+                    summary["notes"].append("魔法夹具声明非法：%s" % e)
+                    preview_failed = True
+                    side_failed = True
+                    magic_side = None
+                if magic_side:
+                    mprev, mfailed = preview_magic(runner, side, prof, sc, magic_side,
+                                                   ctx)
+                    summary["magic"]["sides"][side] = mprev
+                    if mfailed:
+                        runner.log("[%s] 魔法夹具不可行 ⇒ 真跑 rc=2（不起栈、不跑场景）：%s"
+                                   % (side, mprev.get("error")))
+                        preview_failed = True
+                        side_failed = True
+            if not side_failed:
                 runner.log("[%s] 端口预检：%s" % (side, sc.get("ports") or []))
                 runner.log("[%s] 就绪等待：%s（timeout %ss）"
                            % (side, sc.get("ready_ports") or [],
@@ -2632,6 +2985,8 @@ def execute(cfg):
         if res.get("placement"):
             # README/card-window.json 的 placement 段读这份（与 discovery 同口径）
             summary["placement"]["sides"][side] = res["placement"]
+        if res.get("magic"):
+            summary["magic"]["sides"][side] = res["magic"]
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -2858,6 +3213,81 @@ def main():
         # 状态落 `<log>.placement-<side>`，模拟「库里的那一行」；环境变量可以造各种失败。
         import re as _re
         sql_text = sys.stdin.read()
+        if "/* magic */" in sql_text:
+            # 魔法夹具桩（卡 openmir2-window-magic-fixture）：状态落 `<log>.magic-<side>`。
+            mstate = log + ".magic-" + side
+            ms = {"char_id": 6228, "char_count": 1, "deleted": 0,
+                  "rows": {}, "fp": "fp-magic-before"}
+            init = os.environ.get("STUB_MAGIC_INIT")
+            if init:
+                ms["rows"] = json.loads(init)
+            if os.path.exists(mstate):
+                try:
+                    with open(mstate, encoding="utf-8") as f:
+                        ms = json.load(f)
+                except (OSError, ValueError):
+                    pass
+            ms["char_count"] = int(os.environ.get("STUB_MAGIC_CHAR_COUNT",
+                                                  ms.get("char_count", 1)))
+            ms["deleted"] = int(os.environ.get("STUB_MAGIC_DELETED", ms.get("deleted", 0)))
+
+            def _msave():
+                with open(mstate, "w", encoding="utf-8") as f:
+                    json.dump(ms, f, sort_keys=True)
+
+            # 查询对象是 `characters`（不是 `characters_magic`）：必须回 characters
+            # 表列，run_magic 要用 Id/ChrName/LoginID/Deleted。留一行日志标记，
+            # 供 selftest 证明本分支真的被走到（卡 openmir2-magic-fixture-selftest-gaps）。
+            if "SHOW COLUMNS" in sql_text:
+                with open(log, "a", encoding="utf-8") as lf:
+                    lf.write("magic-columns %s\n" % side)
+                print("\n".join("%s\tint(11)\tYES\t\tNULL\t" % c for c in
+                                ["Id", "ServerIndex", "LoginID", "ChrName", "MapName",
+                                 "CX", "CY", "Level", "HomeMap", "Deleted"]))
+                return 0
+            if "INSERT INTO" in sql_text or "UPDATE " in sql_text:
+                if os.environ.get("STUB_MAGIC_NOWRITE") != side:
+                    mi = _re.search(r"VALUES \((\d+), (\d+), (\d+), '([^']*)', (\d+)\)",
+                                    sql_text)
+                    mu = _re.search(r"`PlayerId` = (\d+) AND `MagicId` = (\d+)", sql_text)
+                    mset = _re.search(
+                        r"`Level` = (\d+), `UseKey` = '([^']*)', `CurrTrain` = (\d+)",
+                        sql_text)
+                    if mi:
+                        ms["rows"][mi.group(2)] = {"level": int(mi.group(3)),
+                                                   "use_key": mi.group(4),
+                                                   "curr_train": int(mi.group(5))}
+                    elif mu and mset:
+                        ms["rows"][mu.group(2)] = {"level": int(mset.group(1)),
+                                                   "use_key": mset.group(2),
+                                                   "curr_train": int(mset.group(3))}
+                    if os.environ.get("STUB_MAGIC_CORRUPT") == side:
+                        ms["fp"] = "fp-magic-corrupt"
+                _msave()
+                print("1")
+                return 0
+            if "GROUP BY" in sql_text:
+                if os.environ.get("STUB_MAGIC_DUP") == side:
+                    print("1	2")
+                return 0
+            if "NOT IN" in sql_text:
+                print("%s	%s" % (ms.get("other_count", 0),
+                                   ms.get("fp", "fp-magic-before")))
+                return 0
+            if "IN (" in sql_text:
+                mm = _re.search(r"IN \(([0-9, ]+)\)", sql_text)
+                ids = [x.strip() for x in mm.group(1).split(",")] if mm else []
+                for mid in ids:
+                    row = ms["rows"].get(mid)
+                    if row:
+                        print("%s	%s	%s	%s" % (mid, row["level"], row["use_key"],
+                                                     row["curr_train"]))
+                return 0
+            if ms["char_count"] <= 0:
+                print("0	0	0")
+            else:
+                print("%d	%d	%d" % (ms["char_count"], ms["char_id"], ms["deleted"]))
+            return 0
         state_path = log + ".placement-" + side
         st = {"map": "0", "x": 289, "y": 618, "fp": "fp-before"}
         init = os.environ.get("STUB_PLACEMENT_INIT")
@@ -4467,6 +4897,165 @@ def selftest():
             and any(c["step"] == "stack" for c in s_bok["commands"]),
             "BL-4 无 blocked => 仍 rc=0 并照常预览（不误伤，实际 %s/%s）"
             % (s_bok["exit_code"], s_bok["verdict"]))
+
+        # 21) 魔法夹具（卡 `openmir2-window-magic-fixture`）：profile 声明 => 每侧 restore 之后、
+        #     起栈之前写 `characters_magic`；完成不了 rc=2 且不起栈。检查在 rc 判定之前。
+        def magic_prof(magic, **kw):
+            kw.setdefault("envir_roots", deploy)
+            p = _selftest_profile(tmp, stub, log, **kw)
+            p["magic"] = magic
+            return p
+
+        MAGIC_OK = [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
+        MAGIC_PRE = '{"1": {"level": 0, "use_key": "1", "curr_train": 0}}'
+
+        def reset_magic_state():
+            fresh_log()
+            for s in SIDES:
+                try:
+                    os.remove(log + ".magic-" + s)
+                except OSError:
+                    pass
+
+        # MG-1 已学且一致 => 不写库（action=noop），命令序列里没有 magic.write
+        reset_magic_state()
+        prof_m1 = magic_prof(MAGIC_OK)
+        for s in SIDES:
+            prof_m1["sides"][s]["env"] = {"STUB_MAGIC_INIT": MAGIC_PRE}
+        out_m1 = os.path.join(tmp, "run-magic-noop")
+        s_m1 = execute(base_cfg(out_m1, prof_m1, scenario=scen_unblocked))
+        cs_m1 = (s_m1["sides"].get("csharp") or {}).get("magic") or {}
+        rs_m1 = (s_m1["sides"].get("rust") or {}).get("magic") or {}
+        chk(s_m1["exit_code"] == 0 and cs_m1.get("action") == "noop"
+            and rs_m1.get("action") == "noop",
+            "MG-1 已学且一致 => 两侧都不写库（csharp=%r rust=%r，rc=%s）"
+            % (cs_m1.get("action"), rs_m1.get("action"), s_m1["exit_code"]))
+        chk("magic.write" not in [c["step"] for c in s_m1["commands"]],
+            "MG-1 已学且一致 => 命令序列里没有 magic.write（%s）"
+            % [c["step"] for c in s_m1["commands"]][:10])
+
+        # MG-2 未学 => 按声明 INSERT，且发生在 restore 之后、起栈之前；读回等于声明
+        reset_magic_state()
+        out_m2 = os.path.join(tmp, "run-magic-insert")
+        s_m2 = execute(base_cfg(out_m2, magic_prof(MAGIC_OK), scenario=scen_unblocked))
+        cs_m2 = (s_m2["sides"].get("csharp") or {}).get("magic") or {}
+        steps_m2 = [(c["side"], c["step"]) for c in s_m2["commands"]
+                    if c["side"] == "csharp"]
+        chk(s_m2["exit_code"] == 0 and s_m2["verdict"] == "PASS"
+            and cs_m2.get("action") == "written",
+            "MG-2 未学 => 预置后 rc=0/PASS（action=%r，实际 %s/%s）"
+            % (cs_m2.get("action"), s_m2["exit_code"], s_m2["verdict"]))
+        names_m2 = [x[1] for x in steps_m2]
+        chk("restore" in names_m2 and "magic.write" in names_m2
+            and "stack" in names_m2
+            and names_m2.index("restore") < names_m2.index("magic.write") < names_m2.index("stack"),
+            "MG-2 预置发生在 restore 之后、起栈之前（%s）" % names_m2[:10])
+        chk((cs_m2.get("after") or [{}])[0].get("found")
+            == {"level": 0, "use_key": "1", "curr_train": 0}
+            and cs_m2.get("player_id") == 6228,
+            "MG-2 读回 = 声明（MagicId/Level/UseKey/CurrTrain），PlayerId 各侧自取（%s）"
+            % ((cs_m2.get("after") or [{}])[0].get("found"),))
+        try:
+            with open(os.path.join(out_m2, "csharp", "magic.json"), encoding="utf-8") as f:
+                mj = json.load(f)
+            magic_json_ok = mj.get("action") == "written" and mj.get("sql", {}).get("write")
+        except (OSError, ValueError):
+            magic_json_ok = False
+        chk(magic_json_ok, "MG-2 每侧落 magic.json（含 SQL 与前后值）")
+
+        # MG-3 非法声明 => 加载期 ConfigError（rc=2 口径），一步都不执行
+        fresh_log()
+        err_m3 = ""
+        try:
+            execute(base_cfg(os.path.join(tmp, "run-magic-bad"),
+                             magic_prof([{"magic_id": 0, "level": 0,
+                                          "use_key": "1", "curr_train": 0}]),
+                             scenario=scen_unblocked))
+        except ConfigError as e:
+            err_m3 = str(e)
+        chk("profile.magic[0].magic_id" in err_m3 and not os.path.exists(log),
+            "MG-3 非法声明（magic_id=0）=> ConfigError 且一步都没执行（%r）" % err_m3[:90])
+
+        # MG-4 写后读回不符 => rc=2，且不起栈（不让 probe 去超时）
+        reset_magic_state()
+        prof_m4 = magic_prof(MAGIC_OK)
+        for s in SIDES:
+            prof_m4["sides"][s]["env"] = {"STUB_MAGIC_NOWRITE": s}
+        out_m4 = os.path.join(tmp, "run-magic-readback")
+        s_m4 = execute(base_cfg(out_m4, prof_m4, scenario=scen_unblocked))
+        err_m4 = (s_m4["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_m4["exit_code"] == 2 and "读回不符" in err_m4,
+            "MG-4 读回不符 => rc=2 并点名（%r）" % err_m4[:110])
+        chk("stack" not in [c["step"] for c in s_m4["commands"]],
+            "MG-4 预置失败 => 不起栈、不跑场景（%s）"
+            % [c["step"] for c in s_m4["commands"]][:10])
+
+        # MG-5 角色不存在 => rc=2 并点名
+        reset_magic_state()
+        prof_m5 = magic_prof(MAGIC_OK)
+        for s in SIDES:
+            prof_m5["sides"][s]["env"] = {"STUB_MAGIC_CHAR_COUNT": "0"}
+        s_m5 = execute(base_cfg(os.path.join(tmp, "run-magic-nochar"), prof_m5,
+                                scenario=scen_unblocked))
+        err_m5 = (s_m5["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_m5["exit_code"] == 2 and "角色不存在" in err_m5,
+            "MG-5 角色不存在 => rc=2 并点名（%r）" % err_m5[:110])
+
+        # MG-6 --dry-run：只预览、不连库（没有 magic.character 等 DB 步骤）
+        reset_magic_state()
+        s_m6 = execute(base_cfg(os.path.join(tmp, "run-magic-dry"),
+                                magic_prof(MAGIC_OK), scenario=scen_unblocked,
+                                dry_run=True))
+        mprev = ((s_m6.get("magic") or {}).get("sides") or {}).get("csharp") or {}
+        chk(s_m6["exit_code"] == 0 and mprev.get("offline_check")
+            and not [c for c in s_m6["commands"] if c["step"].startswith("magic.")],
+            "MG-6 --dry-run 只预览魔法夹具、不连库（steps=%s）"
+            % [c["step"] for c in s_m6["commands"]][:10])
+
+        # MG-7 sides.<side>.magic 覆盖：顶层 magic=1 + sides.csharp.magic=2
+        #     => csharp 声明/写入 MagicId=2，rust 保持顶层 MagicId=1。
+        reset_magic_state()
+        OVERRIDE = [{"magic_id": 2, "level": 1, "use_key": "2", "curr_train": 3}]
+        prof_m7 = magic_prof(MAGIC_OK)
+        prof_m7["sides"]["csharp"]["magic"] = OVERRIDE
+        for s in SIDES:
+            prof_m7["sides"][s]["env"] = {"STUB_MAGIC_INIT": MAGIC_PRE}
+        out_m7 = os.path.join(tmp, "run-magic-override")
+        s_m7 = execute(base_cfg(out_m7, prof_m7, scenario=scen_unblocked))
+        cs_m7 = (s_m7["sides"].get("csharp") or {}).get("magic") or {}
+        rs_m7 = (s_m7["sides"].get("rust") or {}).get("magic") or {}
+        chk(s_m7["exit_code"] == 0
+            and [m.get("magic_id") for m in (cs_m7.get("declared") or [])] == [2]
+            and [m.get("magic_id") for m in (rs_m7.get("declared") or [])] == [1],
+            "MG-7 sides.csharp.magic 覆盖顶层 => declared 两侧不同（csharp=%r rust=%r，rc=%s）"
+            % ([m.get("magic_id") for m in (cs_m7.get("declared") or [])],
+               [m.get("magic_id") for m in (rs_m7.get("declared") or [])],
+               s_m7["exit_code"]))
+        chk(cs_m7.get("action") == "written"
+            and "VALUES (6228, 2," in ((cs_m7.get("sql") or {}).get("write") or "")
+            and rs_m7.get("action") == "noop"
+            and (rs_m7.get("sql") or {}).get("write") is None,
+            "MG-7 写入按侧分派：csharp 写 MagicId=2、rust 不写（cs=%r rs=%r）"
+            % (cs_m7.get("action"), rs_m7.get("action")))
+        # 断言强度（卡 openmir2-magic-fixture-assertion-strength）：只钉 VALUES 抓不到
+        # 「写错表/写错列」——必须钉住目标表与完整列清单（与 characters_magic DDL 一致）。
+        write_stmt_m7 = ((cs_m7.get("sql") or {}).get("write") or "")
+        chk(re.search(
+                r"INSERT INTO `[^`]+`\.`characters_magic` \(`PlayerId`, `MagicId`, "
+                r"`Level`, `UseKey`, `CurrTrain`\) VALUES \(6228, 2, 1, '2', 3\);",
+                write_stmt_m7) is not None,
+            "MG-7 写入语句钉到表名+列清单：INSERT INTO …`characters_magic`"
+            "(PlayerId, MagicId, Level, UseKey, CurrTrain)（实际 %r）" % write_stmt_m7)
+        cs_after_m7 = (cs_m7.get("after") or [{}])[0]
+        rs_after_m7 = (rs_m7.get("after") or [{}])[0]
+        chk(cs_after_m7.get("magic_id") == 2
+            and (cs_after_m7.get("found") or {}).get("level") == 1
+            and rs_after_m7.get("magic_id") == 1
+            and (rs_after_m7.get("found") or {}).get("level") == 0,
+            "MG-7 读回：csharp=MagicId2/level1、rust=MagicId1/level0（%r / %r）"
+            % (cs_after_m7, rs_after_m7))
+        chk("magic-columns csharp" in read_log() and "magic-columns rust" in read_log(),
+            "MG-7 两侧 SHOW COLUMNS 都走 magic 桩（日志 magic-columns 标记）")
 
     finally:
         holder.close()
