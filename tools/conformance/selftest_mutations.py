@@ -87,6 +87,7 @@ TEETH = [
      [('''    # H-1：先定稿 verdict/exit_code，再写产物——write_artifacts 在 README 写失败时置 rc=2，
     # 绝不能被后面的 `0 if ok else 2` 覆盖回 0（否则 PASS 运行缺 README 还报绿）。
     ok = (summary["verdict"] == "PASS" and summary.get("compare_rc") == 0
+          and discovery_evidence_ok
           and all((summary["sides"].get(s) or {}).get("rc") == 0 for s in SIDES))
     summary["exit_code"] = 0 if ok else 2
 
@@ -95,6 +96,7 @@ TEETH = [
        '''    artifacts_ok = write_artifacts(out_dir, summary)
 
     ok = (summary["verdict"] == "PASS" and summary.get("compare_rc") == 0
+          and discovery_evidence_ok
           and all((summary["sides"].get(s) or {}).get("rc") == 0 for s in SIDES))
     summary["exit_code"] = 0 if ok else 2'''),
       ('''    finalize_ok = artifacts_ok and json_ok
@@ -156,8 +158,10 @@ TEETH = [
 ''', '''''')]),
     ("E1", "额外牙：fallback report 的 run_id 写成常量",
      "仍落本次 fallback report",
-     [('''        "run_id": summary.get("run_id"),''',
-       '''        "run_id": "fixed",''')]),
+     [('''        "format": "card-window-report/1",
+        "run_id": summary.get("run_id"),''',
+       '''        "format": "card-window-report/1",
+        "run_id": "fixed",''')]),
     ("E2", "额外牙：allow_production_db 放行未知库名（放宽安全判定）",
      "F-1 显式声明未知库",
      [('''    if unknown:''',
@@ -199,6 +203,21 @@ TEETH = [
      "N-1 README 写失败 => comment verdict=UNDECIDABLE",
      [('''            "exit_code": summary["exit_code"],
 ''', '''''')]),
+    ("D1", "发现接线：probe 命令丢掉 --var（值推出来了却没传给场景）",
+     "DISC-1 csharp 的 probe 命令带本侧发现的 --var",
+     [(('''            vars_argv = param_discovery.render_vars(values)
+            res["vars"] = vars_argv'''),
+       ('''            vars_argv = []
+            res["vars"] = vars_argv'''))]),
+    ("D2", "发现失败时静默用空值继续跑（fail-closed 被绕过）",
+     "DISC-4 推导失败 => rc=2",
+     [(('''            if missing:
+                res["error"] = ("参数发现失败：缺 %s（推导不出就 fail-closed，"
+                                "不拿空值/默认值跑场景）" % ", ".join(missing))
+                return res'''),
+       ('''            if missing:
+                values = {}
+                missing = []'''))]),
 ]
 
 
