@@ -76,8 +76,10 @@
 //!   钳前的值，再由上面第 3 条（`2809-2816`）钳一次，终值相同。
 //! - **buff**（`M2Share.ActorBuffSystem`）、**技能对 HitPoint 的加成**（`MagicList`）：未实现。
 //! - `ApplyItemParametersByJob`（`PlayObject.cs:4889`，只对龙装 Shape 生效）：未实现。
-//! - `HitSpeed`/`Luck`/`Slowdown`/`Poison`/`WeaponStrong`/`UndeadPower`：不影响 `WAbil`/`SubAbility`，
-//!   未纳入 `AddAbility`。
+//! - `HitSpeed`/`Luck`/`Slowdown`/`Poison`/`UndeadPower`：不影响 `WAbil`/`SubAbility`，未纳入
+//!   `AddAbility`。**`WeaponStrong` 已建模**（卡 `openmir2-ability-weaponstrong`）：oracle 在
+//!   `ApplyItemParameters` 的 `StdMode 5/6`（`PlayObject.cs:4424-4426`）与 `24/26`（`:4563-4566`）
+//!   两支里按 `SpecialPwr ∈ 1..=10` **赋值**（不是累加）⇒ 见 [`AddAbility::weapon_strong`]。
 
 use std::collections::HashMap;
 
@@ -287,6 +289,37 @@ impl StdItemCatalog {
     }
 }
 
+/// `AddAbil.WeaponStrong` 的**装备口径**（`RecalcAbilitys` 的 `ApplyItemParameters`，
+/// `PlayObject.cs:4424-4426` / `:4563-4566`）：对已装备物品逐件复用
+/// [`apply_item_parameters`] 的赋值规则（`StdMode 5/6/24/26` + `SpecialPwr ∈ 1..=10`，**赋值不累加**），
+/// 只读回 [`AddAbility::weapon_strong`]。
+#[must_use]
+pub fn weapon_strong_of(
+    use_items: &[Option<crate::bag::BagItem>],
+    catalog: &dyn ItemCatalog,
+) -> u16 {
+    let mut add = AddAbility::default();
+    for it in use_items.iter().flatten() {
+        if it.index == 0 {
+            continue;
+        }
+        let Some(tpl) = ItemCatalog::get(catalog, it.index) else {
+            continue;
+        };
+        apply_item_parameters(&mut add, tpl);
+        // `GetUpgradeStdItem` 的升级差量（`GameItemSystem.cs:745-750`，仅 StdMode 5/6）：
+        // `if (Desc[7] ∈ 1..=10) { if (clientItem.Item.SpecialPwr >= 0) SpecialPwr = Desc[7]; }`
+        // ⇒ 随机升级武器用 `Desc[7]` 覆盖模板 `SpecialPwr`，再做 1..=10 的赋值。
+        if matches!(tpl.std_mode, 5 | 6) {
+            let d7 = it.desc[7];
+            if (1..=10).contains(&d7) && tpl.special_pwr >= 0 {
+                add.weapon_strong = d7;
+            }
+        }
+    }
+    u16::from(add.weapon_strong)
+}
+
 impl ItemCatalog for StdItemCatalog {
     fn get(&self, index: u16) -> Option<&StdItem> {
         self.items.get(&index)
@@ -358,6 +391,18 @@ pub struct AddAbility {
     /// `AddAbil.HitSpeed`（`PlayObject.RecalcAbilitys` 尾部 `HitSpeed = AddAbil.HitSpeed`，
     /// `PlayObject.cs:2899`）。来源 = `ApplyItemParameters` 的各 `StdMode` 支。
     pub hit_speed: u16,
+    /// `AddAbil.WeaponStrong`（`AddAbility.cs:72`，oracle 是 `byte`）——攻击成功时武器磨损量的
+    /// 减项：`nWeaponDamage = (ushort)(Random(5) + 2 - AddAbil.WeaponStrong)`（`PlayObject.Attack.cs:225`）。
+    ///
+    /// 赋值口径（**赋值不是累加**，后写覆盖）：`ApplyItemParameters` 的 `StdMode 5/6` 支
+    /// `if (SpecialPwr >= 1 && SpecialPwr <= 10) AddAbil.WeaponStrong = (byte)SpecialPwr`
+    /// （`PlayObject.cs:4424-4426`），`24/26` 支同式（`:4563-4566`）；其余 `StdMode` 不写。
+    ///
+    /// **有效物品口径**：oracle 读的是 `GetUpgradeStdItem` 后的 `clientItem.Item.SpecialPwr`
+    /// （升级武器可由 `Desc[7]` 覆盖，`GameItemSystem.cs:744-750`，仅 `StdMode 5/6` 且模板
+    /// `SpecialPwr >= 0`）。本仓**装备口径** [`weapon_strong_of`] 已按同门口径消费 `Desc[7]`；
+    /// [`apply_item_parameters`] 本身仍只拿模板（直接传模板的调用方拿到的是模板值）。
+    pub weapon_strong: u8,
 }
 
 /// `752 SM_SUBABILITY` 的 7 个字段（类型照 oracle：`AntiMagic/PoisonRecover/HealthRecover/SpellRecover`
@@ -820,13 +865,19 @@ fn bag_weight(catalog: &dyn ItemCatalog, bag: &[u16]) -> u16 {
 
 /// `PlayObject.ApplyItemParameters`（`PlayObject.cs:4407`）的本片子集：把有效物品的属性累加进 `AddAbil`。
 ///
-/// 只累加影响 `WAbil`/`SubAbility` 的字段（`HitSpeed`/`Luck`/`Slowdown`/`Poison`/`WeaponStrong` 略）。
+/// 累加影响 `WAbil`/`SubAbility` 的字段与 `HitSpeed`；`WeaponStrong` 按 oracle 的**赋值**语义
+/// 落 [`AddAbility::weapon_strong`]（`StdMode 5/6/24/26` + `SpecialPwr ∈ 1..=10`）；`Luck`/`Slowdown`/
+/// `Poison`/`UndeadPower` 仍略。
 pub fn apply_item_parameters(add: &mut AddAbility, item: &StdItem) {
     match item.std_mode {
         5 | 6 => {
             add.hit = add.hit.wrapping_add(u16::from(hi_byte(item.ac)));
             // `PlayObject.cs:4419` `AddAbil.HitSpeed += RealAttackSpeed(HiByte(Item.MAC))`。
             add_hit_speed(add, real_attack_speed(i32::from(hi_byte(item.mac))));
+            // `PlayObject.cs:4424-4426`：`SpecialPwr ∈ 1..=10` ⇒ **赋值**（后写覆盖）。
+            if (1..=10).contains(&item.special_pwr) {
+                add.weapon_strong = item.special_pwr as u8;
+            }
         }
         10 | 11 => {
             add.ac = word_add_raw(add.ac, item.ac);
@@ -890,6 +941,10 @@ pub fn apply_item_parameters(add: &mut AddAbility, item: &StdItem) {
         24 => {
             add.hit = add.hit.wrapping_add(u16::from(hi_byte(item.ac)));
             add.speed = add.speed.wrapping_add(u16::from(hi_byte(item.mac)));
+            // `PlayObject.cs:4563-4566`（`case 24: case 26:` 公共前置）：同式赋值。
+            if (1..=10).contains(&item.special_pwr) {
+                add.weapon_strong = item.special_pwr as u8;
+            }
         }
         26 => {
             add.ac = word_add_raw(add.ac, item.ac);
@@ -897,6 +952,10 @@ pub fn apply_item_parameters(add: &mut AddAbility, item: &StdItem) {
             add.hit = add.hit.wrapping_add(u16::from(item.accurate));
             add.speed = add.speed.wrapping_add(u16::from(item.agility));
             add.mp = add.mp.wrapping_add(item.mp_add as u16);
+            // `PlayObject.cs:4563-4566`（`case 24: case 26:` 公共前置）：同式赋值。
+            if (1..=10).contains(&item.special_pwr) {
+                add.weapon_strong = item.special_pwr as u8;
+            }
         }
         52 => {
             add.ac = word_add_raw(add.ac, item.ac);
@@ -1798,5 +1857,95 @@ mod tests {
         slots[SLOT_RING_L] = Some(ItemInstance { index: 1, dura: 1 });
         slots[SLOT_RING_R] = Some(ItemInstance { index: 2, dura: 1 });
         assert_eq!(run(&slots), (true, true), "两枚戒指同时命中");
+    }
+    /// **Desc[7] 升级差量**（`GameItemSystem.cs:745-750`，仅 StdMode 5/6）：`Desc[7] ∈ 1..=10`
+    /// 且模板 `SpecialPwr >= 0` 时覆盖模板值；`24/26` 不受 Desc[7] 影响（oracle 无该支）。
+    #[test]
+    fn weapon_strong_of_consumes_upgrade_desc7_for_weapons() {
+        let mut catalog = StdItemCatalog::new();
+        let mk_tpl = |std_mode: u8, special_pwr: i8| StdItem {
+            std_mode,
+            special_pwr,
+            ..Default::default()
+        };
+        catalog.insert(10, mk_tpl(5, 3));
+        catalog.insert(20, mk_tpl(6, 0));
+        catalog.insert(30, mk_tpl(24, 2));
+        let mk_item = |index: u16, d7: u8| {
+            let mut desc = [0u8; 14];
+            desc[7] = d7;
+            Some(crate::bag::BagItem {
+                make_index: 1,
+                index,
+                dura: 0,
+                dura_max: 0,
+                desc,
+            })
+        };
+        assert_eq!(
+            weapon_strong_of(&[mk_item(10, 0)], &catalog),
+            3,
+            "无升级 ⇒ 模板值"
+        );
+        assert_eq!(
+            weapon_strong_of(&[mk_item(10, 5)], &catalog),
+            5,
+            "Desc[7]=5 覆盖模板 3"
+        );
+        assert_eq!(
+            weapon_strong_of(&[mk_item(20, 7)], &catalog),
+            7,
+            "模板 0 且 Desc[7] 命中 ⇒ 7"
+        );
+        assert_eq!(
+            weapon_strong_of(&[mk_item(10, 11)], &catalog),
+            3,
+            "Desc[7] 越界 ⇒ 不覆盖"
+        );
+        assert_eq!(
+            weapon_strong_of(&[mk_item(30, 5)], &catalog),
+            2,
+            "StdMode 24 不走 Desc[7]"
+        );
+    }
+
+    /// 卡 `openmir2-ability-weaponstrong`：`AddAbil.WeaponStrong` 的赋值口径
+    /// （`StdMode 5/6/24/26` + `SpecialPwr ∈ 1..=10`，**赋值不累加**；其余 StdMode 不写）。
+    ///
+    /// 部署数据（`mir2_data.stditems`，2026-10-24 实测）：`Source<>0` 217 行，其中
+    /// `StdMode ∈ {5,6,24,26} AND Source ∈ 1..=10` **38 行** ⇒ 这条路径**可达**，不是死代码。
+    #[test]
+    fn weapon_strong_follows_item_mode_matrix_and_last_write_wins() {
+        let mk = |std_mode: u8, special_pwr: i8| StdItem {
+            std_mode,
+            special_pwr,
+            ..Default::default()
+        };
+        let mut add = AddAbility::default();
+        apply_item_parameters(&mut add, &mk(5, 3));
+        assert_eq!(
+            add.weapon_strong, 3,
+            "StdMode 5 + SpecialPwr 3 ⇒ 赋值（PlayObject.cs:4424-4426）"
+        );
+        apply_item_parameters(&mut add, &mk(10, 7));
+        assert_eq!(add.weapon_strong, 3, "StdMode 10 不写 WeaponStrong");
+        apply_item_parameters(&mut add, &mk(6, 2));
+        assert_eq!(add.weapon_strong, 2, "StdMode 6 同支覆盖");
+        apply_item_parameters(&mut add, &mk(26, 9));
+        assert_eq!(
+            add.weapon_strong, 9,
+            "StdMode 26 覆盖（PlayObject.cs:4563-4566）"
+        );
+        apply_item_parameters(&mut add, &mk(24, 0));
+        assert_eq!(add.weapon_strong, 9, "SpecialPwr 0 不在 1..=10 ⇒ 不写");
+        apply_item_parameters(&mut add, &mk(24, 11));
+        assert_eq!(add.weapon_strong, 9, "SpecialPwr 11 越界 ⇒ 不写");
+        apply_item_parameters(&mut add, &mk(24, 1));
+        assert_eq!(add.weapon_strong, 1, "后写覆盖（赋值不累加）");
+        apply_item_parameters(&mut add, &mk(5, -5));
+        assert_eq!(
+            add.weapon_strong, 1,
+            "负 SpecialPwr（部署 8 把武器 -1..-8）不写"
+        );
     }
 }
