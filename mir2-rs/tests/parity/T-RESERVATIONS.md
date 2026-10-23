@@ -300,3 +300,4 @@
 | T-262 | openmir2-db-error-reply | 2026-10-23T15:28:30Z | 在用 |
 | T-264 | openmir2-r-window-registry-closeout | 2026-10-23T15:47:13Z | 在用 |
 | T-263 | openmir2-gm-batch-5a-guild-impl | 2026-10-23T15:31:08Z | 在用 |
+| T-266 | openmir2-attack-weapon-wear-642 | 2026-10-23T18:21:35Z | 在用 |

@@ -23,7 +23,7 @@ use crate::buff::{
 };
 use crate::combat::{
     attack_dir_grouped_poison, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
-    AttackPoisonState, AttackPowerMode, CombatConfig,
+    AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
 use crate::entity::{Entity, EntityStore};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
@@ -214,6 +214,14 @@ pub struct TickRecord {
     /// 升级成功分支（`:4130`）⇒ `SendUpdateItem` + `RM_ABILITY/RM_SUBABILITY`（本卡不扩范围）。
     /// 宿主据 [`WeaponUpgradeOutcome::Broke`] 出 `SM_BREAKWEAPON(1102)`。
     pub weapon_breaks: Vec<WeaponUpgradeEvent>,
+    /// **卡 `openmir2-attack-weapon-wear-642`（tier=R）**：本 tick `PlayObject.AttackSuccess`
+    /// （`PlayObject.Attack.cs:225-229`）的武器耐久磨损，按攻击结算序。
+    ///
+    /// 生产点：[`World::attack_once`] → [`crate::combat::attack_dir_grouped_poison`] 的
+    /// [`crate::combat::attack_success_weapon_wear`]（只对**玩家攻方**、且本次攻击**有目标**；
+    /// 空挥走 `attack_swing` ⇒ 不结算）。宿主按 [`WeaponWearEvent::frames`] 的发帧序出
+    /// `SM_DELITEM(202)`（`SendDelItems` 直发）与 `SM_DURACHANGE(642)`。
+    pub weapon_wears: Vec<WeaponWearEvent>,
     /// 本 tick 的死亡结算：`(死者 id, 掉落物品数, 金币, 经验归属者, 获得经验)`
     /// —— 归属者取 C# `ExpHitter`（不是 `LastHiter`），见 `Entity::exp_hitter`
     pub deaths: Vec<(i32, usize, i32, Option<i32>, i32)>,
@@ -961,6 +969,9 @@ pub struct World {
     /// 本 tick `attack_once` 里 `CheckWeaponUpgrade` 产生的待抄事件（见
     /// [`TickRecord::weapon_breaks`]）；tick 末尾转抄进记录。
     pub(crate) pending_weapon_breaks: Vec<WeaponUpgradeEvent>,
+    /// 本 tick `attack_once` 里 `AttackSuccess` 产生的武器磨损待抄事件（见
+    /// [`TickRecord::weapon_wears`]）；tick 末尾转抄进记录。
+    pub(crate) pending_weapon_wears: Vec<WeaponWearEvent>,
     /// 上一趟 `CheckPkStatus` 的 sim 时钟（oracle `DecLightItemDrugTick`）。
     ///
     /// **T-78 修复（惰性初始化）**：oracle 在玩家构造时用 `GetTickCount()` 初始化该游标
@@ -1314,6 +1325,7 @@ impl World {
             lamp_tick: 0,
             lamp_tick_initialized: false,
             pending_weapon_breaks: Vec::new(),
+            pending_weapon_wears: Vec::new(),
             health_fill_time: 300,
             spell_fill_time: 800,
             make_ghost_time: 3 * 60 * 1000,
@@ -4996,6 +5008,7 @@ impl World {
             event_hides: Vec::new(),
             attacks: Vec::new(),
             weapon_breaks: Vec::new(),
+            weapon_wears: Vec::new(),
             deaths: Vec::new(),
             death_use_item_drops: Vec::new(),
             exp_awards: Vec::new(),
@@ -5228,6 +5241,9 @@ impl World {
         // **卡 `openmir2-weapon-durability-frames`**：命令 FIFO（`CM_HIT` ⇒ `Command::Attack`）
         // 与怪物 AI 两条攻击路径里的 `CheckWeaponUpgrade` 结算，按发生序转抄进本 tick 记录。
         record.weapon_breaks.append(&mut self.pending_weapon_breaks);
+        // **卡 `openmir2-attack-weapon-wear-642`**：同两条攻击路径（命令 FIFO / 怪物 AI）里的
+        // `AttackSuccess` 武器磨损（`DoDamageWeapon`），按同一发生序转抄。
+        record.weapon_wears.append(&mut self.pending_weapon_wears);
 
         // **世界 tick 扩容首批（T3）· ① NPC Run**：固定 NPC tick（oracle `MerchantProcessor` 的
         // `ProcessNpcs()`，200ms 线程单线程等价物）。
@@ -6965,7 +6981,7 @@ impl World {
         } else {
             None
         };
-        let (outcome, poisoned) = attack_dir_grouped_poison(
+        let (outcome, poisoned, weapon_wear) = attack_dir_grouped_poison(
             self.attack_rng(),
             &mut attacker,
             &mut target,
@@ -7043,6 +7059,19 @@ impl World {
             }
             self.pending_weapon_breaks
                 .push(WeaponUpgradeEvent { actor_id, outcome });
+        }
+        // **卡 `openmir2-attack-weapon-wear-642`**：`AttackSuccess` 的武器耐久磨损
+        // （`PlayObject.Attack.cs:225-229` → `DoDamageWeapon`）改的是 oracle 的同一个
+        // `UseItems[Weapon]` 对象；本仓攻方是副本 ⇒ 这里**必须**无条件写回（与上面
+        // `weapon_outcome` 的条件式写回不同：没有升级 `Desc[10]` 的普通武器也照样磨损）。
+        if let Some(wear) = weapon_wear {
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.use_items = attacker.use_items;
+            }
+            self.pending_weapon_wears.push(WeaponWearEvent {
+                actor_id,
+                frames: wear.frames,
+            });
         }
         Some(outcome)
     }

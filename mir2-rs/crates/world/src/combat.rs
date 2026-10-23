@@ -1146,7 +1146,7 @@ pub fn struck_damage_apply(
 ///   以上技能熟练度支都要求对应 `MagicArr` 槽非 null（本骨架无 `MagicArr` / `UserMagic[]` 面）
 ///   ⇒ **未建模**，维持登记。
 ///
-/// 返回值 = `nWeaponDamage`（本骨架无武器耐久面，值不使用；只保取数次数与顺序）。
+/// 返回值 = 未扣 `WeaponStrong` 的裸值；消费点见 [`attack_success_weapon_wear`]（不二次抽数）。
 #[must_use]
 pub fn attack_success_weapon_damage(rng: &mut impl RandomSource) -> u16 {
     (rng.random_below(5) + 2) as u16
@@ -1222,7 +1222,7 @@ pub struct AttackPoisonState {
 /// 与 [`attack_dir_grouped`] 的差别**只在末尾的取数插入位置**：oracle `AttackSuccess` 里
 /// `:221-224` 的麻痹中毒门（`Random(target.AntiPoison + Config.AttackPosionRate) == 0` ⇒
 /// `targetObject.MakePosion(PoisonState.STONE, Config.AttackPosionTime, 0)`）**先于** `:225` 的
-/// `Random(5)`。本函数按此序插入一次抽取并把「是否中毒」回给调用方（用于 `World::make_posion`）。
+/// `Random(5)`。本函数按此序插入抽取，回「是否中毒」与武器磨损（[`WeaponWearOutcome`]）。
 ///
 /// **短路口径照 oracle**：`!targetObject.UnParalysis && Paralysis && (Random(...) == 0)`——
 /// `UnParalysis` 或 `!Paralysis` 时**不抽**（C# 的 `&&` 短路）；只有两项都过才抽一次。`poison`
@@ -1238,7 +1238,8 @@ pub fn attack_dir_grouped_poison(
     config: &CombatConfig,
     attacker_group_members: &[i32],
     poison: Option<AttackPoisonState>,
-) -> (AttackOutcome, bool) {
+) -> (AttackOutcome, bool, Option<WeaponWearOutcome>) {
+    let (mut poisoned, mut weapon_wear) = (false, None);
     let mode = AttackPowerMode::for_attacker(attacker);
     let outcome = attack_with_grouped(
         rng,
@@ -1249,7 +1250,6 @@ pub fn attack_dir_grouped_poison(
         mode,
         attacker_group_members,
     );
-    let mut poisoned = false;
     if matches!(mode, AttackPowerMode::Player { .. }) {
         // `if (!targetObject.UnParalysis && Paralysis && (Random(targetObject.AntiPoison +
         //  SystemShare.Config.AttackPosionRate) == 0))`（`PlayObject.Attack.cs:221`）——
@@ -1263,9 +1263,9 @@ pub fn attack_dir_grouped_poison(
             }
         }
         // `AttackSuccess(..., targetObject)`：目标非空 ⇒ 抽 `Random(5)`（`PlayObject.Attack.cs:225`）。
-        let _ = attack_success_weapon_damage(rng);
+        weapon_wear = attack_success_weapon_wear(rng, attacker);
     }
-    (outcome, poisoned)
+    (outcome, poisoned, weapon_wear)
 }
 
 /// 无目标挥砍（`PlayObject.AttackDir(targetObject = null)`）的**唯一**取数：攻击力。
@@ -1606,6 +1606,151 @@ pub(crate) fn atk_power(
     }
 }
 
+// ---- 卡 `openmir2-attack-weapon-wear-642`：`AttackSuccess` 的武器耐久磨损 ------------------
+
+/// `AttackSuccess` 武器磨损的**下行帧**（按 oracle 的发帧序排列）。
+///
+/// 两条发点（`PlayObject.Attack.cs:1436-1470` 的 `DoDamageWeapon`）：
+/// - `SendDelItems(UseItems[Weapon])`（`PlayObject.Base.cs:1648-1665`）——`SendSocket` **直发**
+///   （不经消息队列）⇒ `SM_DELITEM(202)`，因此**先于**队列里的 `RM_DURACHANGE`；
+/// - `SendMsg(RM_DURACHANGE, ItemLocation.Weapon, Dura, DuraMax, 0)`（`:1460` / `:1468`）——
+///   进**自己**的优先级队列（`(byte)RM_DURACHANGE = 141`），由 `PlayObject.Message.cs:1803-1804`
+///   `SendDefMessage(SM_DURACHANGE, nParam1, wParam, LoWord(nParam2), HiWord(nParam2))` 出
+///   `SM_DURACHANGE(642)`：`Recog = Dura`、`Param = 槽位`、`Tag/Series = DuraMax`。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WeaponWearFrame {
+    /// `SendDelItems`（⇒ 202）：载荷是**破零瞬间**的槽快照（`Dura = 0`、`Index` 仍 > 0，
+    /// `DuraMax`/`Desc`/`MakeIndex` 保留——`SendDelItems` 先于 `Index = 0` 执行）。
+    DelItem { slot: UseItemSlot },
+    /// `RM_DURACHANGE`（⇒ 642）。
+    DuraChange { dura: u16, dura_max: u16, slot: u8 },
+}
+
+/// 一次 [`do_damage_weapon`] 的结算结果：**按发帧序**的帧序列（空 = 本次一帧不发）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct WeaponWearOutcome {
+    pub frames: Vec<WeaponWearFrame>,
+}
+
+/// 本 tick 的一次 `AttackSuccess` 武器磨损事件（按攻击结算序）。
+///
+/// `actor_id` = **攻击者**（`SendDelItems`/`SendMsg(this)` 都只投自己）；`frames` = 按其发帧序的
+/// 下行帧（见 [`WeaponWearFrame`]）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeaponWearEvent {
+    pub actor_id: i32,
+    pub frames: Vec<WeaponWearFrame>,
+}
+
+/// `(ushort)(M2Share.RandomNumber.Random(5) + 2 - AddAbil.WeaponStrong)`（`PlayObject.Attack.cs:225`）
+/// 的 **unchecked `ushort` 强转**语义。
+///
+/// 工程未开 `CheckForOverflowUnderflow`（`Directory.Build.targets` 未置 checked）⇒ 结果为负时
+/// 回绕成**大正数**：`Random(5)+2 < WeaponStrong` 时 `nWeaponDamage` 极大，`DoDamageWeapon`
+/// 于是按回绕后的值扣耐久（`Dura` 反而变大、且不破零）。
+///
+/// **不得**改成 `saturating_sub`：那会静默改掉 oracle 的分支（`nWeaponDamage == 0` ⇒ 不扣）。
+#[must_use]
+pub fn weapon_damage_with_strong(n_weapon_damage: u16, weapon_strong: u16) -> u16 {
+    n_weapon_damage.wrapping_sub(weapon_strong)
+}
+
+/// `PlayObject.DoDamageWeapon(ushort nWeaponDamage)`（`PlayObject.Attack.cs:1436-1470`）的逐行等价物：
+/// 扣武器耐久、破零清 `Index`，并给出按 oracle **发帧序**排列的下行帧。
+///
+/// 逐字复刻三处易错语义（**不是**「减到 0 就停」）：
+///   1. `ushort nDura; nDura -= nWeaponDamage;` 是 **unchecked ushort 回绕**（同
+///      [`wear_durability`]）⇒ `Dura < nWeaponDamage` 时结果是大正数，**不破零**；
+///   2. `if (nDura <= 0)` 对 `ushort` 等价 `nDura == 0` ⇒ 只有**恰好扣到 0** 才破零；
+///   3. 破零支发过一条 `RM_DURACHANGE` 之后**仍会**过尾部桶位检查
+///      （`Math.Abs(nDura / 1.03) != nDuraPoint`，`nDuraPoint` 是**扣之前**的 `Round(Dura/1.03)`）
+///      ⇒ 旧 `Dura` 不为 0 时同一击会**再发一条**同载荷的 642（连 oracle 的重复帧怪癖一起搬）。
+///
+/// 收件人：`SendDelItems` 与 `SendMsg(this)` 都只投**攻击者自己**。
+pub fn do_damage_weapon(weapon: &mut UseItemSlot, n_weapon_damage: u16) -> WeaponWearOutcome {
+    let mut frames = Vec::new();
+    // `if (UseItems[ItemLocation.Weapon] == null || UseItems[ItemLocation.Weapon].Index <= 0) return;`
+    // （`:1438-1441`）——`:226` 已判过一次，本函数照 oracle 再判一次。
+    if weapon.index == 0 {
+        return WeaponWearOutcome { frames };
+    }
+    // `int nDuraPoint = HUtil32.Round(nDura / 1.03);`（`:1446`）——**扣之前**的桶位。
+    let n_dura_point = hutil::round(f64::from(weapon.dura) / 1.03);
+    // `nDura -= nWeaponDamage;`（`:1447`）—— ushort 回绕减。
+    let n_dura = weapon.dura.wrapping_sub(n_weapon_damage);
+    if n_dura == 0 {
+        // 破零支（`:1449-1461`）：`Dura = 0` → `SendDelItems` → `Index = 0` → `RM_DURACHANGE(0)`。
+        weapon.dura = 0;
+        frames.push(WeaponWearFrame::DelItem { slot: *weapon });
+        weapon.index = 0;
+        frames.push(WeaponWearFrame::DuraChange {
+            dura: 0,
+            dura_max: weapon.dura_max,
+            slot: crate::world::ITEM_LOCATION_WEAPON as u8,
+        });
+    } else {
+        weapon.dura = n_dura;
+    }
+    // `if (Math.Abs((nDura / 1.03)) != nDuraPoint) SendMsg(RM_DURACHANGE, …)`（`:1466-1469`）——
+    // **两侧精度不对称，逐字照抄**：LHS 是**未取整**的 `double`（`nDura` 是 `ushort`，`/1.03`
+    // 提升为 `double`；`nDura` 非负 ⇒ `Math.Abs` 是空操作），RHS `nDuraPoint` 是 `int`
+    // （隐式提升为 `double` 后**精确**比较）。⇒ 只要这次磨损真的发生（`n_dura >= 1`），LHS 几乎
+    // 恒为非整数 ⇒ 恒不等 ⇒ **必再发一条** `RM_DURACHANGE`；破零支局部 `nDura` 已置 0，故
+    // `nDuraPoint != 0`（旧 `Dura >= 1`）时同样再发一条。
+    //
+    // **不得**把两侧都 `Round`（那是「语义修正」而非 oracle）：`d = 1` 时会有 1909 个 `before`
+    // 值与 oracle 分歧（例 `before=52, d=1`：`51 / 1.03 = 49.514…`，而 `Round(52/1.03) = 50`
+    // ⇒ **oracle 发、都 Round 的版本不发**）。见用例
+    // `do_damage_weapon_tail_gate_is_unrounded_double_vs_int`（reviewer-6 `5ae805d9` I-1）。
+    if f64::from(weapon.dura) / 1.03 != f64::from(n_dura_point) {
+        frames.push(WeaponWearFrame::DuraChange {
+            dura: weapon.dura,
+            dura_max: weapon.dura_max,
+            slot: crate::world::ITEM_LOCATION_WEAPON as u8,
+        });
+    }
+    WeaponWearOutcome { frames }
+}
+
+/// `AttackSuccess` 的武器磨损结算，**生产口径**：`weapon_strong = 0`。
+///
+/// **登记 `T-266`**：oracle 的 `AddAbil.WeaponStrong`（`PlayObject.cs:4426/4566`，=
+/// `clientItem.Item.SpecialPwr`，StdMode 5/6/24/26 且 `SpecialPwr ∈ 1..=10`）在本骨架的 ability
+/// 层**未建模**（`bins/game-svr/src/ability.rs:79` 已登记），故生产路径传 0；`SpecialPwr = 0`
+/// 的武器（现网绝大多数）逐次等价。算术本身用 [`attack_success_weapon_wear_with_strong`] 钉住。
+///
+/// 取数：**只**调 [`attack_success_weapon_damage`] 一次（`PlayObject.Attack.cs:225`），
+/// 之后全是纯数值/写槽 ⇒ 不增加、不移动任何取数。
+#[must_use]
+pub fn attack_success_weapon_wear(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+) -> Option<WeaponWearOutcome> {
+    attack_success_weapon_wear_with_strong(rng, attacker, 0)
+}
+
+/// [`attack_success_weapon_wear`] 的**带 `WeaponStrong`** 版本（`(ushort)(Random(5) + 2 - WeaponStrong)`）。
+///
+/// 逐行：`:225` 抽一次 → `:226` 门 `(nWeaponDamage > 0) && (UseItems[Weapon] != null) &&
+/// (UseItems[Weapon].Index > 0)` → `DoDamageWeapon(nWeaponDamage)`。
+/// 门不过（`nWeaponDamage == 0` 或武器槽空）⇒ `None`，**不写槽、不发帧**。
+#[must_use]
+pub fn attack_success_weapon_wear_with_strong(
+    rng: &mut impl RandomSource,
+    attacker: &mut Entity,
+    weapon_strong: u16,
+) -> Option<WeaponWearOutcome> {
+    let n_weapon_damage =
+        weapon_damage_with_strong(attack_success_weapon_damage(rng), weapon_strong);
+    if n_weapon_damage > 0 && attacker.use_items[crate::world::ITEM_LOCATION_WEAPON].index > 0 {
+        return Some(do_damage_weapon(
+            &mut attacker.use_items[crate::world::ITEM_LOCATION_WEAPON],
+            n_weapon_damage,
+        ));
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1707,7 +1852,7 @@ mod tests {
         };
 
         let mut rng_open = CountingRng::new(7);
-        let (_, poisoned) = attack_dir_grouped_poison(
+        let (_, poisoned, _) = attack_dir_grouped_poison(
             &mut rng_open,
             &mut mk_attacker(),
             &mut mk_target(),
@@ -1748,7 +1893,7 @@ mod tests {
 
         // `paralysis=false` ⇒ 短路，逐取数等价（与 `None` 完全一致）。
         let mut rng_shut = CountingRng::new(7);
-        let (_, p2) = attack_dir_grouped_poison(
+        let (_, p2, _) = attack_dir_grouped_poison(
             &mut rng_shut,
             &mut mk_attacker(),
             &mut mk_target(),
@@ -1768,7 +1913,7 @@ mod tests {
 
         // `un_paralysis=true`（守方免疫）⇒ 短路。
         let mut rng_imm = CountingRng::new(7);
-        let (_, p3) = attack_dir_grouped_poison(
+        let (_, p3, _) = attack_dir_grouped_poison(
             &mut rng_imm,
             &mut mk_attacker(),
             &mut mk_target(),
@@ -1947,5 +2092,209 @@ mod tests {
         let ea = win_exp(&mut a, 280, &need, &cfg, None).0;
         let eb = win_exp(&mut b, 280, &need, &cfg, None).0;
         assert_eq!((ea, eb), (280, 560));
+    }
+
+    // ================= 卡 `openmir2-attack-weapon-wear-642`：武器耐久磨损 =================
+
+    fn wear_slot(dura: u16) -> UseItemSlot {
+        UseItemSlot {
+            make_index: 7,
+            index: 22,
+            dura,
+            dura_max: 9000,
+            desc: [0; 14],
+        }
+    }
+
+    /// 扣减支 + 尾部桶位检查：`Dura 5000 → 4995`，`Round(5000/1.03)=4854` vs
+    /// `Round(4995/1.03)=4850` 变化 ⇒ **恰一条** `RM_DURACHANGE`（`Recog=4995`、`Tag=DuraMax`）。
+    ///
+    /// 牙：删掉 `do_damage_weapon` 的 `weapon.dura = n_dura` ⇒ 第 1 断言必红。
+    #[test]
+    fn do_damage_weapon_deducts_and_emits_642_when_bucket_changes() {
+        let mut slot = wear_slot(5000);
+        let out = do_damage_weapon(&mut slot, 5);
+        assert_eq!(slot.dura, 4995, "`nDura -= nWeaponDamage`");
+        assert_eq!(slot.index, 22, "未破零 ⇒ `Index` 不动");
+        assert_eq!(
+            out.frames,
+            vec![WeaponWearFrame::DuraChange {
+                dura: 4995,
+                dura_max: 9000,
+                slot: 1,
+            }],
+            "桶位变化 ⇒ 恰一条 642（oracle `:1465-1469`）"
+        );
+    }
+
+    /// 尾桶门是**逐字** oracle：`Math.Abs((nDura / 1.03)) != nDuraPoint` 两侧精度**不对称**
+    /// （LHS 未取整 `double`、RHS `int`）⇒ 只要磨损真的发生（`n_dura >= 1`）就**必再发一条** 642。
+    ///
+    /// 本用例钉的是「两侧都 Round」这个**错实现**会漏掉的最小反例：`Dura 52 - 1 = 51`——
+    /// `Round(52/1.03)=Round(50.485)=50`、`Round(51/1.03)=Round(49.515)=50` ⇒ 都 Round 会判相等、
+    /// **漏发**；oracle 的 LHS `51 / 1.03 = 49.514…` ≠ `50` ⇒ **发**。
+    /// （reviewer-6 `5ae805d9` I-1 穷举：`d = 1` 有 1909 个 `before` 值与「都 Round」分歧；
+    /// `d ∈ 2..=6` 当前生产 0 处分歧 —— 所以这是个会在 `WeaponStrong` 接线后立刻可观测的逐字门。）
+    #[test]
+    fn do_damage_weapon_tail_gate_is_unrounded_double_vs_int() {
+        let mut slot = wear_slot(52);
+        let out = do_damage_weapon(&mut slot, 1);
+        assert_eq!(slot.dura, 51, "耐久照扣");
+        assert_eq!(
+            out.frames,
+            vec![WeaponWearFrame::DuraChange {
+                dura: 51,
+                dura_max: 9000,
+                slot: 1,
+            }],
+            "oracle 的尾桶门几乎恒真 ⇒ `d = 1` 也发一条 642"
+        );
+    }
+
+    /// 破零支（`Dura == nWeaponDamage` ⇒ `nDura == 0`）：`SendDelItems` 的槽快照先于 `Index = 0`，
+    /// 随后一条 642（`Recog = 0`），且尾部桶位检查（`Round(5/1.03)=5 != 0`）**再发一条**同载荷 642
+    /// —— oracle 的重复帧怪癖一起搬。`DuraMax`/`Desc`/`MakeIndex` 保留（`SendDelItems` 还要读）。
+    ///
+    /// 牙：把 `weapon.index = 0` 删掉 ⇒ `Index` 断言必红；把 DelItem 的 push 移到 `Index=0` 之后
+    /// ⇒ 快照 `index` 断言必红。
+    #[test]
+    fn do_damage_weapon_break_emits_delitem_then_two_642() {
+        let mut slot = wear_slot(5);
+        slot.desc = [7; 14];
+        let out = do_damage_weapon(&mut slot, 5);
+        assert_eq!(slot.dura, 0, "破零清 Dura");
+        assert_eq!(slot.index, 0, "破零清 Index（`PlayObject.Attack.cs:1459`）");
+        assert_eq!(slot.dura_max, 9000, "oracle 不清 DuraMax");
+        assert_eq!(slot.desc, [7; 14], "oracle 不清 Desc");
+        assert_eq!(
+            out.frames,
+            vec![
+                WeaponWearFrame::DelItem {
+                    slot: UseItemSlot {
+                        make_index: 7,
+                        index: 22,
+                        dura: 0,
+                        dura_max: 9000,
+                        desc: [7; 14],
+                    },
+                },
+                WeaponWearFrame::DuraChange {
+                    dura: 0,
+                    dura_max: 9000,
+                    slot: 1,
+                },
+                WeaponWearFrame::DuraChange {
+                    dura: 0,
+                    dura_max: 9000,
+                    slot: 1,
+                },
+            ],
+            "帧序 = 202（直发）→ 642(0) → 642(0)（尾部桶位检查再发一条）"
+        );
+    }
+
+    /// `WeaponStrong > 磨损量` ⇒ `(ushort)(Random(5)+2-WeaponStrong)` **回绕成大正数**，
+    /// `DoDamageWeapon` 按回绕后的值扣耐久（`Dura` 反而变大），**不 panic、不 saturating**。
+    #[test]
+    fn weapon_strong_greater_than_wear_wraps_like_unchecked_ushort() {
+        let seed = 11;
+        let mut probe = RandomNumber::with_seed(seed);
+        let raw = attack_success_weapon_damage(&mut probe); // `Random(5)+2` ∈ 2..=6
+        let n = raw.wrapping_sub(9); // `(ushort)(raw - 9)`：负 ⇒ 回绕
+        assert!(n > 60_000, "回绕成大正数（实得 {n}）");
+        assert_ne!(n, 0, "不得为 0 ⇒ 不落 `nWeaponDamage == 0` 的门");
+
+        let mut hero = Entity::new(1, "a", 0, 0);
+        hero.use_items[crate::world::ITEM_LOCATION_WEAPON] = wear_slot(500);
+        let mut rng = RandomNumber::with_seed(seed);
+        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero, 9)
+            .expect("n > 0 且武器已装备 ⇒ 必结算");
+        // oracle：`ushort nDura = 500; nDura -= n;` ⇒ 回绕。
+        let expected = 500u16.wrapping_sub(n);
+        assert_eq!(
+            hero.use_items[crate::world::ITEM_LOCATION_WEAPON].dura,
+            expected,
+            "按回绕后的 nWeaponDamage 扣耐久（不 saturating、不 panic）"
+        );
+        assert_eq!(
+            hero.use_items[crate::world::ITEM_LOCATION_WEAPON].index,
+            22,
+            "非 0 ⇒ 不破零"
+        );
+        assert_eq!(out.frames.len(), 1, "桶位变化 ⇒ 一条 642");
+    }
+
+    /// `nWeaponDamage == 0`（`WeaponStrong` 恰等于 `Random(5)+2`）⇒ 门不过：**仍抽一次**
+    /// `Random(5)`，但不写槽、不发帧（oracle `:226` 的 `nWeaponDamage > 0`）。
+    #[test]
+    fn zero_weapon_damage_still_draws_but_does_not_wear() {
+        let mut rng = CountingRng::new(11);
+        let mut probe = RandomNumber::with_seed(11);
+        let raw = attack_success_weapon_damage(&mut probe);
+        let mut hero = Entity::new(1, "a", 0, 0);
+        hero.use_items[crate::world::ITEM_LOCATION_WEAPON] = wear_slot(500);
+        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero, raw);
+        assert!(out.is_none(), "`nWeaponDamage == 0` ⇒ 不结算");
+        assert_eq!(rng.below, vec![5], "仍恰抽一次 `Random(5)`（取数账本不变）");
+        assert_eq!(
+            hero.use_items[crate::world::ITEM_LOCATION_WEAPON].dura,
+            500,
+            "不写槽"
+        );
+    }
+
+    /// **无目标对照（零抽）**：空挥只有攻击力两抽（`Luck <= 0`），**没有** `Random(5)`；
+    /// 有目标的一次攻击则恰多一次 `Random(5)`（`AttackSuccess`，`PlayObject.Attack.cs:225`）。
+    #[test]
+    fn swing_draws_no_weapon_dice_but_targeted_attack_draws_exactly_one() {
+        let mut hero = Entity::new(1, "a", 0, 0);
+        hero.race = ACTOR_RACE_PLAY;
+        hero.dc = 20;
+        hero.luck = 0;
+        hero.power_rate = 100;
+        hero.use_items[crate::world::ITEM_LOCATION_WEAPON] = wear_slot(500);
+        let mut swing_rng = CountingRng::new(7);
+        let _ = swing_power(
+            &mut swing_rng,
+            hero.dc,
+            AttackPowerMode::for_attacker(&hero),
+        );
+        assert!(
+            !swing_rng.below.contains(&5),
+            "空挥（`AttackSuccess(…, null)` 立刻 return）不得有 `Random(5)`；实得 {:?}",
+            swing_rng.below
+        );
+
+        let mut target = Entity::new(2, "t", 0, 0);
+        target.race = ACTOR_RACE_MONSTER;
+        target.hit_point = 0; // 命中门不抽
+        target.speed_point = 10;
+        target.hp = 100;
+        target.max_hp = 100;
+        let mut atk_rng = CountingRng::new(7);
+        let mut attacker = hero.clone();
+        let (_, _, wear) = attack_dir_grouped_poison(
+            &mut atk_rng,
+            &mut attacker,
+            &mut target,
+            None,
+            &CombatConfig::default(),
+            &[],
+            None,
+        );
+        assert_eq!(
+            atk_rng.below.iter().filter(|v| **v == 5).count(),
+            1,
+            "有目标 ⇒ 恰一次 `Random(5)`；流水 = {:?}",
+            atk_rng.below
+        );
+        assert!(
+            wear.is_some_and(|w| !w.frames.is_empty()),
+            "500 耐久扣 2..=6 ⇒ 桶位变化 ⇒ 有 642 帧"
+        );
+        assert!(
+            attacker.use_items[crate::world::ITEM_LOCATION_WEAPON].dura < 500,
+            "耐久已扣"
+        );
     }
 }
