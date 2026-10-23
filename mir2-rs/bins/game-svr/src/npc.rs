@@ -2628,6 +2628,97 @@ Other
         std::fs::remove_dir_all(&root).ok();
     }
 
+    /// **I-1 回归（review `40109056`）**：`ADDUSERDATE`(335) 的**部署形态**不得写盘。
+    ///
+    /// oracle `ExecutionProcessingSys.cs:5842-5846`：先 `sListFileName = normNpc.Path + sParam1`，
+    /// 之后才调**单参** `SystemShare.GetEnvirFilePath(sListFileName)`。
+    /// 部署 `Market_Def/QFunction-0.txt:82/84`（`[@StdModeFunc11]` 月卡充值）传
+    /// `..\QuestDiary\月卡\月卡记录.txt` ⇒ 拼成 `Market_Def..\QuestDiary\…`，不以 `..` 开头
+    /// ⇒ 单参口径**不剥前缀** ⇒ 指向 `<Envir>/Market_Def../…`（Win32 去尾点后
+    /// `<Envir>/Market_Def/QuestDiary/…`，该目录不存在）⇒ `File.Exists` false、
+    /// `SaveToFile` 抛异常被 catch ⇒ **不写盘**。
+    ///
+    /// 回归含义：若把本动作改回**两参** `envir_file_path_with_dir(npc.path(), s_param1)`
+    /// （review I-1 描述的错误实现），`..` 前缀会被剥离并写到真实文件
+    /// `<Envir>/QuestDiary/月卡/月卡记录.txt` ⇒ 本用例第一条断言必红。
+    ///
+    /// 正向对照：`npc.path()` 为空时 `rel = s_param1` ⇒ 动作仍能正常写盘（没有被过度禁用）。
+    #[test]
+    fn host_npc_envir_root_add_use_date_list_deployment_form_does_not_write() {
+        let root = std::env::temp_dir().join(format!("gs-envir-addusedate-{}", std::process::id()));
+        let envir = root.join("Envir");
+        let diary = envir.join("QuestDiary").join("月卡");
+        std::fs::create_dir_all(&diary).unwrap();
+        // 部署里该文件存在且为 0 字节（`ls -l Envir/QuestDiary/月卡/月卡记录.txt`）。
+        let target = diary.join("月卡记录.txt");
+        let seed: Vec<u8> = Vec::new();
+        std::fs::write(&target, &seed).unwrap();
+        let makes = |file_path: &str, param: &str| NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: file_path.to_string(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 335, // `ADDUSERDATE`（`codes.rs:567`）
+                            s_param1: param.to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: Vec::new(),
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let run = |def: NpcDef| {
+            let host = NpcHost {
+                envir_root: envir.clone(),
+                defs: vec![def],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "hero".to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+        };
+        // ① 部署形态（含 `..\`）：oracle 拼接后不以 `..` 开头 ⇒ 不剥 ⇒ 目标文件必须逐字节不变。
+        run(makes("Market_Def", r"..\QuestDiary\月卡\月卡记录.txt"));
+        assert_eq!(
+            std::fs::read(&target).expect("部署形态的目标文件仍在"),
+            seed,
+            "oracle 先拼 Market_Def.. 再接 … 再单参 ⇒ 不剥前缀 ⇒ 不写盘"
+        );
+        // ② 非 `..` 形态：oracle 无分隔符拼接 ⇒ `<Envir>/Market_DefQuestDiary/…` 不存在 ⇒ 同样不写盘。
+        run(makes("Market_Def", r"QuestDiary\月卡\月卡记录.txt"));
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            seed,
+            "无分隔符拼接路径不存在 ⇒ 不写盘"
+        );
+        // ③ 正向对照：NPC 路径为空 ⇒ `rel = s_param1` ⇒ 正常追加一行（动作仍能写盘）。
+        run(makes("", "UserDate.txt"));
+        let written = std::fs::read(envir.join("UserDate.txt")).expect("空 NPC 路径应写盘");
+        assert!(
+            written.starts_with(b"hero    "),
+            "写入应为 `hero    <date>` + CRLF，实际 {:?}",
+            written
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// **卡 `openmir2-script-dyn-var-host`**：`NpcPlayer` 的 `dyn_var_get/set/insert` 覆写。
     ///
     /// oracle 口径（`ProcessingBase.cs:1020-1045` + `PlayObject.cs:1023`）：

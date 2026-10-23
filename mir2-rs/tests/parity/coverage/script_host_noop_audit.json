@@ -372,8 +372,8 @@
       "group": "envir_root",
       "priority": "P1",
       "side_effect": "读（文件系统根）",
-      "consequence": "覆写后 `CHECKNAMELIST`/`CHECKACCOUNTLIST`/`ADDNAMELIST`/`DELNAMELIST`/`ADDUSERDATE` 等文件类命令按 Envir 根解析路径并真实读写；两参站点（`CHECKNAMEDATELIST`、`ADDUSERDATE`）按 `GetEnvirFilePath(dirPath, filePath)` 的口径处理 `..` 前缀（忽略 NPC 路径）。",
-      "reason": "卡 `openmir2-script-envir-root-host` 交付：`HostNpc::envir_root` 返回注入的 Envir 根（`npc.rs` 的 `ScriptNpc for HostNpc` 覆写），两参口径 helper 见 `envir_file_path_with_dir`。",
+      "consequence": "覆写后 `CHECKNAMELIST`/`CHECKACCOUNTLIST`/`ADDNAMELIST`/`DELNAMELIST`/`ADDUSERDATE` 等文件类命令按 Envir 根解析路径并真实读写；**两参口径只用于 `CHECKNAMEDATELIST`**（`GetEnvirFilePath(dirPath, filePath)`，`..` 前缀忽略 NPC 路径）；`ADDUSERDATE`/`DELUSERDATE` 与 `ADDNAMELIST` 等相同——先拼 `npc.path()+sParam1` 再走**单参**（oracle `ExecutionProcessingSys.cs:5842-5846`），部署 `..\\` 形态拼成 `Market_Def..\\…` 不以 `..` 开头 ⇒ 两侧都不剥前缀、都不写盘（review `40109056` I-1）。",
+      "reason": "卡 `openmir2-script-envir-root-host` 交付：`HostNpc::envir_root` 返回注入的 Envir 根（`npc.rs` 的 `ScriptNpc for HostNpc` 覆写）；两参 helper `envir_file_path_with_dir` 只服务 `cond_check_name_date_list`。",
       "safe_kind": "overridden",
       "evidence": {
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
