@@ -66,7 +66,7 @@
 //! | [`sm_queryybsell`] | 23021 | 脚本动作 `QUERYYBSELL`（同上形状） | 同上 | **登记 T-181**（与 `sm_queryybdeal` 同条） |
 //! | [`sm_reconnect`] | 802 | `WorldServer.SendChangeServer`（`WorldServer.cs:1066-1075`，读 `!servertable.txt` 路由表）：登录跨服分支 + 换服门 100ms 轮询；RM 泵支由 `RM_RECONNECTION` 落帧 | `!servertable.txt` 装载、`GetMultiServerAddrPort`/`SendChangeServer` 已接；`ChangeSpaceMove` 与 `.shr` 序列化仍未移植（G11） | **已接线**（卡 `openmir2-sm-reconnect-wiring`，T-202）：`lib.rs::try_cross_server_redirect`/`switch_data_send_change_server`/`drain_reconnects`；软关链不共享帧（同条登记） |
 //! | [`sm_showevent`] | 804 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_SHOWEVENT)`） | 同 `sm_hideevent` | **已接线**（T-205，与 `sm_hideevent` 同条） |
-//! | `sm_skeleton`（`smframe.rs`） | 33 | `PlayObject` 的 `SendRefMsg(RM_SKELETON)`（尸体转骷髅） | 已登记 `deferred`（`downlink.rs`），缺 setter | **登记 T-183**：沿用既有 deferred 结论 |
+//! | `sm_skeleton`（`smframe.rs`） | 33 | `PlayObject.Operate.cs:736` 的屠宰效果体（`BodyLeathery` 归零 + race ∈ [50,80) ⇒ `Skeleton=true` 后以尸体为发送者 `SendRefMsg(RM_SKELETON)`） | **已接线**：`crates/world` 的 `AnimalState.body_leathery/skeleton` + `World::butch_effect_now` → `TickRecord::skeletons` → `bins/game-svr/src/lib.rs::drain_skeleton_downlink`（卡 `openmir2-sm-skeleton-wiring`，T-206） | **已接线**（原 T-183 收口；AOI 出现帧的第二生产点 `PlayObject.cs:3229-3236` 仍未接，登记 T-206） |
 //!
 //! 汇总：**12 条登记 / 1 条可接线**（`SM_CLOSEHEALTH`）。可接线项的发射点在 `lib.rs` 的 RM 泵，
 //! 不在本卡写集（`smframe_ext/pickwire/useitem/sessionwire/mapdoor.rs` + `whitelist.md`）内，

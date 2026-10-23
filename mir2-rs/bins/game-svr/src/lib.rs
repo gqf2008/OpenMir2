@@ -2733,10 +2733,17 @@ fn handle_inbound_cmd(
             let actor_id = sessions.get(chr_name).map_or(0, |s| s.actor_id);
             let (curr_x, curr_y) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
             let bt_dir = u8::try_from(cmd.series).unwrap_or(0);
+            // `CM_BUTCH` 的 12B 头：`MakeMessage(CM_BUTCH, actorid, x, y, dir)`
+            // （`src/BotSrv/Player/RobotPlayer.cs:4766`，`SendButchAnimal`）⇒
+            // `recog` = **目标尸体** ActorId、`param/tag` = nX/nY、`series` = btDir。
+            let n_x = i32::from(cmd.param);
+            let n_y = i32::from(cmd.tag);
+            let target_id = cmd.recog;
+            let (valid_object, target_butcherable) =
+                butch_target_gates(world, actor_id, target_id, n_x, n_y);
             let out = inbound::client_butch(&inbound::ButchInputs {
-                // `CM_BUTCH` 客户端 `MakeMessage(ident, charId, x, y, dir)` ⇒ nX=param, nY=tag, dir=series。
-                n_x: i32::from(cmd.param),
-                n_y: i32::from(cmd.tag),
+                n_x,
+                n_y,
                 bt_dir,
                 curr_x,
                 curr_y,
@@ -2744,9 +2751,8 @@ fn handle_inbound_cmd(
                 now_tick: world.clock_ms as i32,
                 turn_tick: 0,
                 turn_interval_time: 600,
-                // `IsValidObject`/动物实体未建模 ⇒ 恒 false（登记）。
-                valid_object: false,
-                target_butcherable: false,
+                valid_object,
+                target_butcherable,
             });
             // **出站接线片 W2 / 批 B 生产者**：过限速门后 `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`
             // 恒发（`PlayObject.Operate.cs:749`）。`Dir = btDir` 仅在 `|Δ|<=2` 成立时
@@ -2763,11 +2769,24 @@ fn handle_inbound_cmd(
                 }
                 let cur_dir = actor_dir(world, displays, actor_id);
                 let dir = if out.dir_updated { bt_dir } else { cur_dir };
+                // **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：oracle 的效果体（`:718-745`）
+                // 在 `SendRefMsg(RM_BUTCH)`（`:749`）**之前**执行 ⇒ 同 FIFO 先入效果体命令。
+                // 门（`|Δ|<=2` / `IsValidObject` / `Death && !Skeleton && Animal`）在
+                // `World::butch_effect_now` 里按**tick 时刻的活状态**重查（不采信本处快照），
+                // 门不过 ⇒ 零抽数。
+                if out.butchered && target_id != 0 {
+                    world.enqueue(mir2_world::Command::ButchEffect {
+                        actor_id,
+                        target_id,
+                        n_x,
+                        n_y,
+                    });
+                }
                 world.enqueue(mir2_world::Command::Butch { actor_id, dir });
             }
             glog!(
                 "INF",
-                "CM_BUTCH：ChrName={chr_name} result={} dir_updated={} butchered={} send_butch={}（RM_BUTCH 附近广播 + 肉品质 RNG 效果体，登记）",
+                "CM_BUTCH：ChrName={chr_name} target={target_id} valid_object={valid_object} butcherable={target_butcherable} result={} dir_updated={} butchered={} send_butch={}",
                 out.result,
                 out.dir_updated,
                 out.butchered,
@@ -12818,6 +12837,56 @@ fn drain_login_tail(
     sent
 }
 
+/// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：`CM_BUTCH` 的两道目标门
+/// （`PlayObject.Operate.cs:718` / `:720`），返回 `(valid_object, target_butcherable)`。
+///
+/// - `valid_object` = `Envir.IsValidObject(nX, nY, 2, baseObject)`（`Envirnoment.cs:1254-1275`）：
+///   实参是**玩家自己的图**，且 oracle 的双层循环变量 `nXx/nYy` **未被使用**（恒查
+///   `GetCellInfo(nX, nY)`）⇒ 等价于「该格 `cellSuccess && IsAvailable`（`MapCellInfo.cs:30`：
+///   `ObjList.Count > 0`）**且** 该格 `ObjList` 里有 `actor_object && cell_obj_id == 目标` 的成员」。
+///   **不是**「目标坐标 == (nX,nY)」——已 `make_ghost`/`DisappearA` 摘格的尸体坐标不变但不在
+///   格内，oracle 会判假（review `8c4da05a` F2）。目标不存在 ⇒ false（oracle 里 `ActorMgr.Get`
+///   返回 null 后 `IsValidObject` 会解引用 null，客户端必发有效 id；本仓按 false 处理，不猜）。
+/// - `target_butcherable` = `Death && !Skeleton && Animal`（`:720`）；`Animal` 的运行时等价物 =
+///   显式位 `ai.animal` 或 [`mir2_world::is_animal_race`]（ctor 继承补 105/106/114/132），
+///   **不是** `combat::race_is_animal`（那只服务 `SKILL_TAMMING` 门，会漏掉这 4 个 race ⇒
+///   本仓零抽数而 oracle 抽 2 次，推移世界 RNG 流；review `8c4da05a` F1）。
+///
+/// 注意：本函数只做**宿主侧入队门**（决定是否入队效果体命令）；权威判据在
+/// `World::butch_effect_now` 里按 tick 时刻的活状态**重查**（同一套门，含 `|Δ|<=2`）。
+fn butch_target_gates(
+    world: &mir2_world::World,
+    actor_id: i32,
+    target_id: i32,
+    n_x: i32,
+    n_y: i32,
+) -> (bool, bool) {
+    let player_map = world
+        .entities
+        .get(actor_id)
+        .map_or(usize::MAX, |e| e.map_id);
+    // ⚠️ **本函数不是权威判据**：它只决定「宿主是否入队 `Command::ButchEffect`」。
+    // 权威门在 `World::butch_effect_now`（同一套判据 + `|Δ|<=2`，且门不过 ⇒ **零抽数**）。
+    // 因此这里的 `valid_object` 若误放行，最多多入队一条命令，世界侧会拒绝且不动 RNG 流
+    // （review `48eae6ce` minor 1）。
+    let Some(target) = world.entities.get(target_id) else {
+        return (false, false);
+    };
+    let valid_object = world.maps.get(player_map).is_some_and(|m| {
+        let (cell, cell_success) = m.get_cell_info(n_x, n_y);
+        cell_success
+            && cell.is_available()
+            && cell
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == target_id)
+    });
+    let target_butcherable = target.death
+        && !target.ai.skeleton
+        && (target.ai.animal || mir2_world::is_animal_race(target.race));
+    (valid_object, target_butcherable)
+}
+
 /// **出站接线片 W2**：把世界 tick 的 `RM_PUSH`/`RM_RUSH`/`RM_RUSHKUNG`/`RM_BUTCH` 事件
 /// （`TickRecord::{pushes,rushes,butches}`）翻成 `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/
 /// `SM_BUTCH(637)` 并广播。
@@ -12871,6 +12940,55 @@ fn drain_action_downlink(
     }
     for ev in &rec.butches {
         let body = downlink::butch_frame(ev);
+        broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[body]);
+    }
+}
+
+/// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：本 tick 屠宰效果体产出的
+/// `RM_SKELETON`（`PlayObject.Operate.cs:736`）⇒ `SM_SKELETON(33)`。
+///
+/// oracle 链：`ClientGetButchItem` 的效果体把 `BodyLeathery` 打到 0（`byte` 回绕 ⇒ 只有
+/// **恰好归零**）且 `Race ∈ [Animal(50), Monster(80))` 时置 `Skeleton = true`，随后
+/// **以尸体自己为发送者** `SendRefMsg(RM_SKELETON, Dir, CurrX, CurrY, 0, "")`
+/// ⇒ 收件人 = ±`SendRefMsgRange` 格内 `Race==Play && !Ghost`（尸体必非玩家 ⇒ 不含自己），
+/// 观察者处理器（`PlayObject.Message.cs:1655-1660`）：
+/// `MakeMessage(SM_SKELETON, ActorId /*=尸体*/, nParam1 /*=X*/, nParam2 /*=Y*/, wParam /*=Dir*/)`
+/// `+ EDCode.EncodePacket(CharDesc{Feature=GetFeature(this), Status=CharStatus})`。
+///
+/// 帧面复用既有编码器 [`game_svr::smframe::sm_skeleton`]（`smframe.rs:2012`，构造用例
+/// `sm_skeleton_frame` 已钉逐字节）；尾 = [`downlink::char_desc`]，特征/状态取**展示表**里
+/// **尸体自己**的登记（怪物在 `WorldMonsterSink::spawn_monster` 已登记，见 `mongen.rs`）。
+///
+/// 顺序：`(byte)RM_SKELETON(10024)=40` < `(byte)RM_BUTCH(10119)=55`，oracle `PriorityQueue`
+/// 最小先出（`BaseObject.Message.cs:182`；`PriorityQueue<T,P>` 的 `Dequeue` 取最小优先值）
+/// ⇒ 本排水**必须**排在 [`drain_action_downlink`]（`SM_BUTCH`）之前。
+///
+/// 红检（实测）：把 `sim_loop` 里的调用行注释掉 ⇒ 接线用例红；把本函数改成发
+/// `SM_DEATH(32)` ⇒ 帧 ident 断言红。
+fn drain_skeleton_downlink(
+    rec: &mir2_world::TickRecord,
+    world: &mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for ev in &rec.skeletons {
+        let Some(d) = displays.get(ev.actor_id) else {
+            glog!(
+                "WRN",
+                "骨架帧：actor={} 无展示表 ⇒ 跳过 SM_SKELETON(33)（登记）",
+                ev.actor_id
+            );
+            continue;
+        };
+        let desc = downlink::char_desc(d.feature, d.status);
+        let body = game_svr::smframe::sm_skeleton(
+            ev.actor_id,
+            wire_coord(ev.x),
+            wire_coord(ev.y),
+            ev.dir,
+            &desc,
+        );
         broadcast_ref_msg_with_self(world, online, gates, ev.actor_id, &[body]);
     }
 }
@@ -21221,6 +21339,11 @@ fn sim_loop(
         // **出站接线片 W2**：本 tick 的推挤/冲刺/宰杀动作帧（`RM_PUSH`/`RM_RUSH`/`RM_RUSHKUNG`/`RM_BUTCH`
         // ⇒ `SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/`SM_BUTCH(637)`）。同属「本 tick 动作段」，
         // 先于 AOI 出现帧/战斗下行（oracle 在 `CharPushed`/`DoMotaebo`/`ClientGetButchItem` 内即时发）。
+        //
+        // **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：屠宰效果体的 `SM_SKELETON(33)` 必须排在
+        // `SM_BUTCH(637)` 之前 —— oracle 的 `PriorityQueue` 按 `(byte)ident` 最小先出
+        // （`(byte)RM_SKELETON(10024)=40` < `(byte)RM_BUTCH(10119)=55`，`BaseObject.Message.cs:182`）。
+        drain_skeleton_downlink(&rec, &world, &displays, &online, &gates);
         drain_action_downlink(&rec, &world, &displays, &online, &gates);
         // **车道 B1（buff 系统）**：本 tick 的 buff 状态帧（`SM_CHARSTATUSCHANGED(657)`）与
         // 毒伤帧（`SM_HEALTHSPELLCHANGED(53)`）。同属「本 tick 帧面」，紧随动作下行。
@@ -41031,6 +41154,150 @@ SendRefMsgRange=15
             "③ 非制药商人 ⇒ 零出帧（ClientMakeDrugItem 的 IsMakeDrug 门）"
         );
         assert_eq!(sessions.get("hero").unwrap().state.gold, 900, "③ 不得扣金");
+    }
+
+    /// **F3（review `8c4da05a`，important）**：`SM_SKELETON` 的核心接线——`CM_BUTCH` 进 ⇒
+    /// `Command::ButchEffect` 入队 ⇒ 世界 tick 结算 ⇒ `SM_SKELETON(33)` 先于 `SM_BUTCH(637)`。
+    ///
+    /// 此前 11 条用例都手工 `enqueue`/直调，把 `if out.butchered` 改成 `if false && …` 仍全绿；
+    /// 本用例走 `handle_inbound_cmd` 的真派发面，四值互异（`recog`=尸体 id、`param`=12、`tag`=9、
+    /// `series`=4 ⇒ **`|Δx|==2` 恰在闭边界**）：
+    /// - `recog` 错（如取 `actor_id`）⇒ 目标查不到 ⇒ 无骨架；
+    /// - `param`/`tag` 互换 ⇒ `IsValidObject` 的 (nX,nY) 不符 ⇒ 无骨架；
+    /// - `series` 错 ⇒ 实体 `ai.dir` / `ButchEvent.dir` 断言红。
+    ///
+    /// 红检（实测）：`target_id: cmd.recog` → `target_id: actor_id` ⇒ 本用例红（`skeletons.len()==0`）。
+    #[test]
+    fn cm_butch_e2e_enqueues_butch_effect_and_sends_skeleton() {
+        const SEED: i32 = 20_261_023;
+        let mut world = mir2_world::World::new(32, 32);
+        let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.want_ref_msg = true;
+            e
+        });
+        // 尸体在 (12,9)：`param=12`、`tag=9`、`series=4`、`recog`=尸体——四值互异且 |Δx|=2。
+        let mut corpse = mir2_world::Entity::new(0, "corpse", 12, 9);
+        corpse.race = 53; // AnimalWolf：`Animal=true` 且 race ∈ [50,80) ⇒ 可出骨架
+        corpse.death = true;
+        corpse.ai.dir = 5;
+        let t = world.add_entity(corpse);
+        let n10 =
+            u8::try_from(mir2_shared::rng::RandomNumber::with_seed(SEED).random_below(16) + 5)
+                .unwrap();
+        world.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        // 先让 `Enter` 落格（`IsValidObject` 读 ObjList 成员关系），再不抽数地重设种子。
+        world.tick();
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            t,
+            downlink::ActorDisplay::new(5, 0, 0x0A_1234, 0, 0, 255, b"corpse".to_vec()),
+        );
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, Vec::new()),
+        );
+
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: t,
+                ident: mir2_protocol::messages::CM_BUTCH,
+                param: 12,
+                tag: 9,
+                series: 4,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            None,
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+        );
+        assert_eq!(
+            world.entities.get(hero).unwrap().ai.dir,
+            4,
+            "`Dir = btDir`（`Operate.cs:747`）必须落进实体"
+        );
+
+        let rec = world.tick();
+        assert_eq!(
+            rec.skeletons.len(),
+            1,
+            "CM_BUTCH ⇒ out.butchered ⇒ Command::ButchEffect 入队并在 tick 结算（F3 核心接线）"
+        );
+        let ev = rec.skeletons[0];
+        assert_eq!(
+            (ev.actor_id, ev.dir, ev.x, ev.y),
+            (t, 5, 12, 9),
+            "骨架事件四字段全取尸体（recog/x/y/dir 任一映射错 ⇒ 红）"
+        );
+        assert_eq!(
+            rec.butches.len(),
+            1,
+            "同一 CM_BUTCH 也发 RM_BUTCH（`:749`）"
+        );
+        let be = rec.butches[0];
+        assert_eq!((be.actor_id, be.dir), (hero, 4));
+        assert_eq!((be.x, be.y), (10, 10), "RM_BUTCH 位置 = 屠宰者 CurrX/CurrY");
+        {
+            let e = world.entities.get(t).unwrap();
+            assert!(e.ai.skeleton, "尸体状态置位");
+            assert_eq!(e.ai.body_leathery, 50, "归零后复位 50");
+        }
+
+        drain_skeleton_downlink(&rec, &world, &displays, &online, &gates);
+        drain_action_downlink(&rec, &world, &displays, &online, &gates);
+        let frames = drain_frames(&mut rx0);
+        let idents: Vec<u16> = frames
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert_eq!(
+            idents,
+            vec![33, 637],
+            "同一 CM_BUTCH：SM_SKELETON(33) 必须先于 SM_BUTCH(637)"
+        );
+        let expected =
+            game_svr::smframe::sm_skeleton(t, 12, 9, 5, &downlink::char_desc(0x0A_1234, 0));
+        assert_eq!(frames[0], expected, "必须走既有编码器（逐字节）");
     }
 
     /// **批 B 生产者（plan §4「W2 五帧的发射点」）：`CM_BUTCH` → `Command::Butch` → `SM_BUTCH(637)`** 端到端。
@@ -61832,6 +62099,336 @@ mod weapon_durability_downlink_tests {
             world.entities.get(p).unwrap().use_items[1].index,
             10,
             "武器未碎"
+        );
+    }
+}
+
+/// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：`SM_SKELETON(33)` 的帧面与生产接线判据。
+///
+/// 生产链：`CM_BUTCH` 门面（`butch_target_gates` + `inbound::client_butch`）⇒ `Command::ButchEffect`
+/// ⇒ `World::butch_effect_now`（`PlayObject.Operate.cs:716-745`，两次 RNG 抽）⇒
+/// `TickRecord::skeletons` ⇒ [`drain_skeleton_downlink`] ⇒ 既有编码器 `smframe::sm_skeleton`。
+#[cfg(test)]
+mod sm_skeleton_downlink_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn entry(account: &str, chr: &str, sid: i32, gate: i32, sock: i32, actor: i32) -> OnlineEntry {
+        OnlineEntry {
+            account: account.to_string(),
+            chr_name: chr.to_string(),
+            session_id: sid,
+            gate_idx: gate,
+            socket: sock,
+            actor_id: actor,
+        }
+    }
+
+    fn take(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            out.push((socket, body));
+        }
+        out
+    }
+
+    fn gates_with(
+        tx: mpsc::UnboundedSender<SimToGate>,
+    ) -> HashMap<u8, mpsc::UnboundedSender<SimToGate>> {
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        gates
+    }
+
+    /// 「屠宰者 p(10,10) + 近处 q(11,11) + 远处 r(50,50) + 尸体 t(11,10)」。
+    ///
+    /// 返回 `(world, p, q, r, t, n10)`，`n10` = 固定种子的第 1 抽（`Random(16)+5`）。
+    fn rig(seed: i32, race: u8, death: bool) -> (mir2_world::World, i32, i32, i32, i32, u8) {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        world.open_session("q");
+        let q = world
+            .enter_map("q", new_player_entity("q".to_string(), 11, 11), 0)
+            .expect("玩家 q 进图");
+        world.open_session("r");
+        let r = world
+            .enter_map("r", new_player_entity("r".to_string(), 50, 50), 0)
+            .expect("远处玩家 r 进图");
+        let mut corpse = mir2_world::Entity::new(0, "corpse", 11, 10);
+        corpse.race = race;
+        corpse.death = death;
+        corpse.ai.dir = 5;
+        let t = world.add_entity(corpse);
+        // `IsValidObject` 读格子的 `ObjList` 成员关系 ⇒ 先让 `Enter` 命令落地（tick 不抽数）。
+        world.tick();
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let n10 =
+            u8::try_from(mir2_shared::rng::RandomNumber::with_seed(seed).random_below(16) + 5)
+                .unwrap();
+        (world, p, q, r, t, n10)
+    }
+
+    fn displays_with(t: i32, dir: u8) -> downlink::DisplayTable {
+        let mut displays = downlink::DisplayTable::new();
+        // `GetFeature()` = `MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`；本用例直接给
+        // 一个可辨识的 feature，验证尾直接从展示表取（不猜）。
+        displays.set(
+            t,
+            downlink::ActorDisplay::new(dir, 0, 0x0A_1234, 0, 0, 255, b"corpse".to_vec()),
+        );
+        displays
+    }
+
+    fn ident_of(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    /// 判据①（帧面）：屠宰成功（`BodyLeathery` 恰好归零 + race 53）⇒ **恰好一条**
+    /// `SM_SKELETON(33)` 给 ±12 格内每个玩家，`Recog` = **尸体**、`Param/Tag` = 尸体坐标、
+    /// `Series` = 尸体 `Dir`，尾 = 8B `Encode(CharDesc{Feature, Status})`；
+    /// 12 格外的 r 零帧；同 tick 的 `SM_BUTCH(637)` 必须排在其后。
+    #[test]
+    fn butch_success_sends_one_sm_skeleton_with_corpse_fields() {
+        const SEED: i32 = 20_261_023;
+        let (mut world, p, q, _r, t, n10) = rig(SEED, 53, true);
+        world.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        let displays = displays_with(t, 5);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
+        online_set(&mut online, entry("aq", "q", 1, 0, 902, q));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+
+        world.enqueue(mir2_world::Command::ButchEffect {
+            actor_id: p,
+            target_id: t,
+            n_x: 11,
+            n_y: 10,
+        });
+        world.enqueue(mir2_world::Command::Butch {
+            actor_id: p,
+            dir: 3,
+        });
+        let rec = world.tick();
+        assert_eq!(rec.skeletons.len(), 1, "一次归零 ⇒ 恰一条骨架事件");
+
+        // 生产顺序：先骨架（优先级 40），后宰杀（55）。
+        drain_skeleton_downlink(&rec, &world, &displays, &online, &gates);
+        drain_action_downlink(&rec, &world, &displays, &online, &gates);
+        let frames = take(&mut rx);
+
+        let skel: Vec<&(i32, Vec<u8>)> = frames
+            .iter()
+            .filter(|(_, b)| b.len() >= 14 && ident_of(b) == 33)
+            .collect();
+        assert_eq!(
+            skel.len(),
+            2,
+            "±12 格内 p/q 各一条（同图 r 在 12 格外 ⇒ 零帧）"
+        );
+        let sockets: Vec<i32> = skel.iter().map(|f| f.0).collect();
+        assert!(sockets.contains(&901) && sockets.contains(&902));
+        let expected =
+            game_svr::smframe::sm_skeleton(t, 11, 10, 5, &downlink::char_desc(0x0A_1234, 0));
+        for (_, body) in &skel {
+            assert_eq!(
+                *body, expected,
+                "必须走既有编码器 `smframe::sm_skeleton`（头 = 尸体 id/坐标/Dir + 8B CharDesc）"
+            );
+            assert!(
+                body.len() > 12,
+                "RM_SKELETON 支带 `EncodePacket(CharDesc)` 尾（不是 header-only）"
+            );
+        }
+        // `SM_BUTCH(637)` 在本轮帧序列里晚于骨架帧（两者都必须存在——不得空过）。
+        let first_butch = frames
+            .iter()
+            .position(|(_, b)| b.len() >= 6 && ident_of(b) == 637)
+            .expect("本轮必须有一条 SM_BUTCH(637)（同一 CM_BUTCH 的 `:749`）");
+        let last_skel = frames
+            .iter()
+            .rposition(|(_, b)| b.len() >= 6 && ident_of(b) == 33)
+            .expect("本轮必须有一条 SM_SKELETON(33)");
+        assert!(
+            last_skel < first_butch,
+            "骨架帧必须先于 SM_BUTCH（优先级 40 < 55）"
+        );
+        let e = world.entities.get(t).unwrap();
+        assert!(e.ai.skeleton, "状态置位");
+        assert_eq!(e.ai.body_leathery, 50, "复位 50");
+    }
+
+    /// 判据②（另一支）：`BodyLeathery` 未归零 ⇒ **零骨架帧**，但数值照样扣减。
+    #[test]
+    fn butch_miss_branch_sends_zero_skeleton_frames() {
+        const SEED: i32 = 4_242;
+        let (mut world, p, _q, _r, t, n10) = rig(SEED, 53, true);
+        world.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 10;
+        let displays = displays_with(t, 5);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+        world.enqueue(mir2_world::Command::ButchEffect {
+            actor_id: p,
+            target_id: t,
+            n_x: 11,
+            n_y: 10,
+        });
+        let rec = world.tick();
+        assert!(rec.skeletons.is_empty(), "未归零 ⇒ 无骨架事件");
+        drain_skeleton_downlink(&rec, &world, &displays, &online, &gates);
+        assert!(take(&mut rx).is_empty(), "零帧");
+        assert!(!world.entities.get(t).unwrap().ai.skeleton);
+    }
+
+    /// 判据③（不满足前置 ⇒ 零帧）：目标未死/非动物/目标格不符，全部零骨架帧。
+    #[test]
+    fn butch_gate_failures_send_zero_skeleton_frames() {
+        const SEED: i32 = 1_234_567;
+        let cases: Vec<(&str, u8, bool, i32, i32)> = vec![
+            ("目标未死", 53, false, 11, 10),
+            ("非动物 race 83", 83, true, 11, 10),
+            ("目标格不符", 53, true, 10, 11),
+        ];
+        for (why, race, death, n_x, n_y) in cases {
+            let (mut world, p, _q, _r, t, n10) = rig(SEED, race, death);
+            world.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+            let displays = displays_with(t, 5);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
+            let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+            let gates = gates_with(tx);
+            world.enqueue(mir2_world::Command::ButchEffect {
+                actor_id: p,
+                target_id: t,
+                n_x,
+                n_y,
+            });
+            let rec = world.tick();
+            assert!(rec.skeletons.is_empty(), "{why} ⇒ 无骨架事件");
+            drain_skeleton_downlink(&rec, &world, &displays, &online, &gates);
+            assert!(take(&mut rx).is_empty(), "{why} ⇒ 零帧");
+        }
+
+        // 已骨架（`Skeleton = true`）⇒ 门关（走命令路径：世界 tick 里重查同一门）。
+        let (mut world, p, _q, _r, t, n10) = rig(SEED, 53, true);
+        {
+            let e = world.entities.get_mut(t).unwrap();
+            e.ai.skeleton = true;
+            e.ai.body_leathery = n10;
+        }
+        world.enqueue(mir2_world::Command::ButchEffect {
+            actor_id: p,
+            target_id: t,
+            n_x: 11,
+            n_y: 10,
+        });
+        let rec = world.tick();
+        assert!(rec.skeletons.is_empty(), "已骨架 ⇒ 不再结算");
+    }
+
+    /// 宿主侧目标门 [`butch_target_gates`] 的逐条判据（`IsValidObject` + `Death&&!Skeleton&&Animal`）。
+    #[test]
+    fn butch_target_gates_match_oracle() {
+        let (mut world, p, _q, _r, t, _n10) = rig(1, 53, true);
+        assert_eq!(
+            butch_target_gates(&world, p, t, 11, 10),
+            (true, true),
+            "死动物 + 目标格 ⇒ 双门开"
+        );
+        assert_eq!(
+            butch_target_gates(&world, p, t, 10, 10),
+            (false, true),
+            "目标不在 (nX,nY) ⇒ IsValidObject 假（oracle 的循环变量没被使用）"
+        );
+        world.entities.get_mut(t).unwrap().death = false;
+        assert_eq!(
+            butch_target_gates(&world, p, t, 11, 10),
+            (true, false),
+            "未死 ⇒ 效果体门关"
+        );
+        world.entities.get_mut(t).unwrap().race = 83;
+        world.entities.get_mut(t).unwrap().death = true;
+        assert_eq!(
+            butch_target_gates(&world, p, t, 11, 10),
+            (true, false),
+            "race 83 非动物 ⇒ 效果体门关"
+        );
+        // **复审 `48eae6ce` important**：宿主闸口必须用 `is_animal_race`（ctor 继承），
+        // 不是 `combat::race_is_animal`——后者会让 105/106/114/132 在宿主就判定「非动物」
+        // ⇒ **不入队效果体** ⇒ oracle 抽 2 次、本仓零抽（部署 252 行楔蛾 = race 105）。
+        // 这几档是宿主侧 F1 的唯一判据：把谓词改回 `race_is_animal` ⇒ 本用例红。
+        for animal_race in [105_u8, 106, 114, 132] {
+            world.entities.get_mut(t).unwrap().race = animal_race;
+            world.entities.get_mut(t).unwrap().death = true;
+            assert_eq!(
+                butch_target_gates(&world, p, t, 11, 10),
+                (true, true),
+                "race {animal_race} 由 ctor 继承 Animal=true ⇒ 效果体门必须开（F1 宿主侧判据）"
+            );
+        }
+        // 显式 `Animal = false` 的派生（118/119）不得被继承进来。
+        for non_animal in [118_u8, 119] {
+            world.entities.get_mut(t).unwrap().race = non_animal;
+            assert_eq!(
+                butch_target_gates(&world, p, t, 11, 10),
+                (true, false),
+                "race {non_animal} 显式 Animal=false ⇒ 门关"
+            );
+        }
+        assert_eq!(
+            butch_target_gates(&world, p, 9999, 11, 10),
+            (false, false),
+            "目标不存在 ⇒ 双门关"
+        );
+    }
+
+    /// **接线牙**：`sim_loop` 里必须恰有一条 `drain_skeleton_downlink` 生产调用，且紧排在
+    /// `drain_action_downlink`（`SM_BUTCH`）之前（oracle 队内优先级 40 < 55）。
+    ///
+    /// 红检（实测）：注释掉该调用行 ⇒ 本用例必红（0 命中）。
+    #[test]
+    fn drain_skeleton_downlink_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        const CALL: &str = "drain_skeleton_downlink(&rec, &world, &displays, &online, &gates);";
+        // 只在 `fn sim_loop(` 到它内部的第一条 `drain_action_downlink` 之间找——测试模块里也有
+        // 直接调用（`cm_butch_e2e_*` 等），不能算生产调用行。
+        let sim_start = lines
+            .iter()
+            .position(|l| l.starts_with("fn sim_loop("))
+            .expect("`fn sim_loop(` 定义行");
+        let butch = lines
+            .iter()
+            .enumerate()
+            .skip(sim_start)
+            .find(|(_, l)| {
+                l.trim() == "drain_action_downlink(&rec, &world, &displays, &online, &gates);"
+            })
+            .map(|(i, _)| i)
+            .expect("`drain_action_downlink` 生产调用行");
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| (sim_start..butch).contains(i) && l.trim() == CALL)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "sim_loop 内（`drain_action_downlink` 之前）必须恰一条生产调用行（0 = 被删/被注释/改坏；>1 = 重复）；命中 {hits:?}"
+        );
+        assert!(
+            hits[0] > sim_start && hits[0] < butch,
+            "必须落在 `sim_loop` 内、`drain_action_downlink` 之前（call={} sim={sim_start} butch={butch}）",
+            hits[0]
         );
     }
 }

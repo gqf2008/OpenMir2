@@ -39,7 +39,7 @@ pub mod space_move;
 pub mod special_monster;
 pub mod world;
 
-pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame};
+pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame, SkeletonEvent};
 pub use aoi::{
     search_view_range, search_view_range_death, search_view_range_events,
     search_view_range_with_updates, update_monster_visible, update_visible_event,
