@@ -1899,6 +1899,28 @@ fn apply_pending_gm_clear_bag(
     Some((target, body))
 }
 
+/// **卡 `openmir2-gm-impl-clearbag`（复审 blocking）**：把所有会话里残留的清包目标收口
+/// （每 tick 兜底）。生产脚本路（`GMEXECUTE 清理垃圾 self`）的 709 由 sim 循环统一路由；
+/// 返回 `(目标 ChrName, SM_DELITEMS(709) 帧体)`。
+fn collect_gm_clear_bag_pending(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> Vec<(String, Vec<u8>)> {
+    let mut names: Vec<String> = sessions
+        .iter()
+        .filter(|(_, sg)| sg.gm.pending_clear_bag.is_some())
+        .map(|(n, _)| n.clone())
+        .collect();
+    names.sort(); // `HashMap` 迭代序不是契约
+    let mut out = Vec::new();
+    for name in names {
+        if let Some(item) = apply_pending_gm_clear_bag(sessions, &name, catalog) {
+            out.push(item);
+        }
+    }
+    out
+}
+
 /// `SysMsg(msg, color, Hint)` 的通用红/绿/蓝版（[`send_self_sysmsg`] 是它的 Red 特化）。
 fn send_self_sysmsg_color(
     host: &ChatHost<'_>,
@@ -21714,6 +21736,22 @@ fn sim_loop(
             &enter_cfg.guild_msg_cfg,
             i32::from(enter_cfg.server_index),
         );
+        // **卡 `openmir2-gm-impl-clearbag`（复审 blocking）**：`@清理垃圾` 的待写缓冲
+        // **每 tick 收口**（原先只在 `CM_SAY` 支 ⇒ 脚本路从不落地、且会残留到下次聊天）。
+        // 清的是**目标**的背包、709 发给**目标**（oracle 命令体内当场发）。
+        for (target, body) in collect_gm_clear_bag_pending(&mut ground_sessions, &enter_cfg.catalog)
+        {
+            if let Some(e) = online.iter().find(|e| e.chr_name == target) {
+                if let Some(tx) =
+                    route_to_gate(&gates, e.gate_idx, e.socket, "GM 清理垃圾 SM_DELITEMS")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: e.socket,
+                        body,
+                    });
+                }
+            }
+        }
         // 账号级顶号落地（`BoSoftClose` 支）：提示帧已即时发出，这里只离开世界 + 清槽。
         // 同一 tick 后段落地（oracle ≥1 tick）——见 docs §4 的 O-1 登记。
         drain_soft_close(
@@ -33266,6 +33304,236 @@ break
         // 空背包 ⇒ 零帧（oracle `delList` 保持 null）。
         sessions.get_mut("gm").unwrap().gm.pending_clear_bag = Some("victim".into());
         assert!(apply_pending_gm_clear_bag(&mut sessions, "gm", &catalog).is_none());
+    }
+
+    /// **卡 `openmir2-gm-impl-clearbag`（复审 important-2）**：命令行目标大小写与实体规范名不同
+    /// （`@清理垃圾 ViCtIm` → `victim`）时，命令体存**实体规范名** ⇒ 宿主按精确 `chr_name`
+    /// 找得到目标、清包并发 709。
+    ///
+    /// 牙：把 `clear_bag_item` 改回 `Some(name.to_string())` ⇒ 本用例红（收集器找不到 `ViCtIm`）。
+    #[test]
+    fn gm_clear_bag_mixed_case_target_lands_709() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut ev = mir2_world::Entity::new(0, "victim", 5, 5);
+        ev.race = mir2_world::ACTOR_RACE_PLAY;
+        world.add_entity(ev);
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        let mut sess = gmcmd::GmSession {
+            permission: 10,
+            ..Default::default()
+        };
+        let view = gmcmd::GmWorld::new(&guilds)
+            .with_world(&world)
+            .with_speaker("gm");
+        let r = gmcmd::execute(&mut sess, &cfg, &view, "@清理垃圾 ViCtIm");
+        assert!(r.msgs.is_empty(), "命中 ⇒ 命令本身零帧");
+        assert_eq!(
+            sess.pending_clear_bag.as_deref(),
+            Some("victim"),
+            "必须存实体规范名（存 `ViCtIm` 会让宿主精确匹配落空、静默不清包）"
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut gm = test_session_ground(7);
+        gm.gm = sess;
+        sessions.insert("gm".into(), gm);
+        let mut victim = test_session_ground(8);
+        victim.state.item_list = vec![game_svr::bag::BagItem {
+            make_index: 42,
+            index: 1,
+            dura: 1,
+            dura_max: 1,
+            desc: [0; 14],
+        }];
+        sessions.insert("victim".into(), victim);
+        let out = collect_gm_clear_bag_pending(&mut sessions, &catalog);
+        assert_eq!(out.len(), 1, "混合大小写目标也必须收口");
+        let (target, body) = &out[0];
+        assert_eq!(target, "victim");
+        assert!(
+            sessions["victim"].state.item_list.is_empty(),
+            "目标背包已清"
+        );
+        let cm = CommandMessage::from_bytes(body).expect("12B 头");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_DELITEMS);
+        assert_eq!(cm.series, 1, "Series = 件数");
+    }
+
+    /// **卡 `openmir2-gm-impl-clearbag`（复审 blocking）**：本卡唯一生产路是脚本
+    /// `GMEXECUTE 清理垃圾 self`（`桃源-N109.txt:87`）。脚本桥只把命令写进会话缓冲，
+    /// **sim 循环每 tick 的收集器**负责清包 + 发 709——此前只在 `CM_SAY` 支落地 ⇒ 脚本路
+    /// 从不生效且残留到下次聊天。
+    ///
+    /// 牙：删掉 sim 循环里的 `collect_gm_clear_bag_pending` 调用 ⇒ 本用例红。
+    #[test]
+    fn guild_official_qf_clearbag_self_lands_through_tick_collector() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut f = GuildNpcFixture::new();
+        f.set_npc_type(1);
+        f.inject_npc_def_script(concat!(
+            "[@QF]\r\n",
+            "#ACT\r\n",
+            "GMEXECUTE 清理垃圾 self\r\n",
+        ));
+        f.add_catalog_item(1, "木剑");
+        f.set_item(1, 42, 5);
+        f.shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = vec!["@QF".to_string()];
+        let cfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        f.call_with_gm(
+            "@QF",
+            Some(ScriptGmParts {
+                maps: None,
+                cfg: &cfg,
+                pwd_sessions: &pwd,
+            }),
+        );
+        assert_eq!(
+            f.sessions["hero"].gm.pending_clear_bag.as_deref(),
+            Some("hero"),
+            "`self` 由脚本动作折成 ChrName（`ActionOfGmExecute`）"
+        );
+        let drained = f.drain();
+        assert!(
+            !drained
+                .iter()
+                .any(|(_, b)| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_DELITEMS),
+            "脚本桥不发 709（清理是宿主收口的事）"
+        );
+        // sim_loop 同一步：每 tick 收口。
+        let out = collect_gm_clear_bag_pending(&mut f.sessions, &f.catalog);
+        assert_eq!(out.len(), 1, "脚本路的 pending 必须被 tick 收口");
+        let (target, body) = &out[0];
+        assert_eq!(target, "hero");
+        assert!(
+            f.sessions["hero"].state.item_list.is_empty(),
+            "目标背包已清"
+        );
+        let cm = CommandMessage::from_bytes(body).expect("12B 头");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_DELITEMS);
+        assert_eq!(cm.series, 1, "Series = 件数");
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&body[12..])),
+            "木剑/42/",
+            "倒序 `名/makeindex/` 尾"
+        );
+    }
+
+    /// **卡 `openmir2-gm-impl-clearbag`（复审 important-1）**：部署
+    /// `假人上线NPC-jiaren.txt:19` 是 `GMEXECUTE 清理垃圾 <$USERNAME>` ⇒ 动作参数不展开
+    /// （T-165）⇒ 真机是**一条「`<$USERNAME>` 现在不在线…」，零 709、零清包**。
+    #[test]
+    fn guild_official_clearbag_literal_username_reports_not_online() {
+        use std::collections::HashMap;
+        let mut f = GuildNpcFixture::new();
+        f.set_npc_type(1);
+        f.inject_npc_def_script(concat!(
+            "[@QF]\r\n",
+            "#ACT\r\n",
+            "GMEXECUTE 清理垃圾 <$USERNAME>\r\n",
+        ));
+        f.add_catalog_item(1, "木剑");
+        f.set_item(1, 42, 5);
+        f.shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = vec!["@QF".to_string()];
+        let cfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        f.call_with_gm(
+            "@QF",
+            Some(ScriptGmParts {
+                maps: None,
+                cfg: &cfg,
+                pwd_sessions: &pwd,
+            }),
+        );
+        assert!(
+            f.sessions["hero"].gm.pending_clear_bag.is_none(),
+            "字面量查不到人 ⇒ 不得登记清包目标"
+        );
+        let frames = f.drain();
+        let sys: Vec<&Vec<u8>> = frames
+            .iter()
+            .map(|(_, b)| b)
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_SYSMESSAGE)
+            .collect();
+        assert_eq!(sys.len(), 1, "恰好一条红字");
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..])),
+            "<$USERNAME> 现在不在线，或在其它服务器上!!!"
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|(_, b)| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_DELITEMS),
+            "零 709"
+        );
+        assert_eq!(
+            f.sessions["hero"].state.item_list.len(),
+            1,
+            "零清包（背包原样）"
+        );
+    }
+
+    /// **卡 `openmir2-gm-impl-clearbag`（复审 blocking）· 生产接线点保鲜**：`sim_loop` 必须
+    /// **恰好一处**调用 [`collect_gm_clear_bag_pending`]，且在 world tick 之前（脚本路才落地）。
+    ///
+    /// 牙：删掉该调用（或挪到 tick 之后）⇒ 本用例红。
+    #[test]
+    fn gm_clear_bag_apply_production_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        let tick = lines
+            .iter()
+            .enumerate()
+            .find(|(i, l)| {
+                *i > sim_loop && l.trim() == "let mut rec = tick_world_head_with_specials("
+            })
+            .map(|(i, _)| i)
+            .expect("`sim_loop` 的 world tick 入口行");
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| {
+                *i > sim_loop && *i < tests_start && l.contains("collect_gm_clear_bag_pending(")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "`sim_loop` 必须恰好一处调用 `collect_gm_clear_bag_pending`（实际 {:?}）",
+            hits
+        );
+        assert!(
+            hits[0] < tick,
+            "清包收口必须在 world tick 之前（实际 {} vs tick {}）",
+            hits[0],
+            tick
+        );
     }
 
     /// **F-2（review `2c5cb955`）· 生产接线点保鲜**：`sim_loop` 的 `CM_SAY` 支必须恰好一处

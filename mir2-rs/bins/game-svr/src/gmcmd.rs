@@ -1581,11 +1581,15 @@ fn clear_bag_item(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -
     if world.world.is_none() {
         return no_frames(NOTE_NO_WORLD);
     }
-    if world.play_by_name(name).is_none() {
-        return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
+    if let Some(entity) = world.play_by_name(name) {
+        // 复审 important-2：存**实体规范名**。`play_by_name` 是 OrdinalIgnoreCase（与 oracle
+        // `GetPlayObject` 同口径），但宿主清包 / 709 路由都按 `chr_name` **精确**匹配 ⇒ 存命令行
+        // 输入的大小写会「命令说命中、宿主找不到目标」（静默不清包且 pending 被消费丢失）。
+        sess.pending_clear_bag = Some(entity.name.clone());
+        no_frames(NOTE_CLEAR_BAG_PENDING)
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
     }
-    sess.pending_clear_bag = Some(name.to_string());
-    no_frames(NOTE_CLEAR_BAG_PENDING)
 }
 
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
@@ -5963,14 +5967,27 @@ mod tests {
         assert_eq!(def.params, 2);
     }
 
-    /// `:20-24`：空名 / 首字符 `?` ⇒ 红字帮助（`命令格式: @清理垃圾 人物名称`）。
+    /// `:20-24`：空名 / 首字符 `?` ⇒ 红字帮助（**字面量**把关，不拿 `CLEAR_BAG_HELP` 自证）
+    /// + GBK 字节（复审 minor）。
     #[test]
     fn clear_bag_item_reports_help_for_empty_or_question() {
+        let help = "命令格式: @清理垃圾 人物名称";
         for line in ["@清理垃圾", "@清理垃圾 ?", "@清理垃圾 ?abc"] {
             let (r, sess) = run_gm(line);
-            assert_eq!(texts(&r), vec![(GmColor::Red, CLEAR_BAG_HELP)], "{line}");
+            assert_eq!(texts(&r), vec![(GmColor::Red, help)], "{line}");
             assert!(sess.pending_clear_bag.is_none(), "{line}");
         }
+        let (r, _) = run_gm("@清理垃圾");
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, 0x3a, 0x20,
+                0x40, // 命令格式:␠@
+                0xc7, 0xe5, 0xc0, 0xed, 0xc0, 0xac, 0xbb, 0xf8, // 清理垃圾
+                0x20, 0xc8, 0xcb, 0xce, 0xef, 0xc3, 0xfb, 0xb3, 0xc6, // ␠人物名称
+            ],
+            "帮助文本的 GBK 字节逐字节等价"
+        );
     }
 
     /// `:25-30`：目标不在线 ⇒ 一条 Red「…现在不在线，或在其它服务器上!!!」。
@@ -5990,10 +6007,30 @@ mod tests {
             vec![(GmColor::Red, "nobody 现在不在线，或在其它服务器上!!!")]
         );
         assert!(sess.pending_clear_bag.is_none());
-        // 命中 ⇒ 零帧 + 登记目标（大小写不敏感）。
+        // 线上 GBK 字节（复审 minor）：ASCII 名 + GBK 文案。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0x6e, 0x6f, 0x62, 0x6f, 0x64, 0x79, 0x20, // "nobody "
+                0xcf, 0xd6, 0xd4, 0xda, 0xb2, 0xbb, 0xd4, 0xda, 0xcf, 0xdf, // 现在不在线
+                0xa3, 0xac, 0xbb, 0xf2, 0xd4, 0xda, 0xc6, 0xe4, 0xcb, 0xfc, // ，或在其它
+                0xb7, 0xfe, 0xce, 0xf1, 0xc6, 0xf7, 0xc9, 0xcf, // 服务器上
+                0x21, 0x21, 0x21, // !!!
+            ]
+        );
+        // 命中 ⇒ 零帧 + 登记**实体规范名**（复审 important-2：宿主精确匹配）。
         let r = execute(&mut sess, &cfg, &view, "@清理垃圾 VICTIM");
         assert!(r.msgs.is_empty(), "命中 ⇒ 命令本身零帧");
-        assert_eq!(sess.pending_clear_bag.as_deref(), Some("VICTIM"));
+        assert_eq!(sess.pending_clear_bag.as_deref(), Some("victim"));
+        // **部署形态**（`假人上线NPC-jiaren.txt:19`）：`GMEXECUTE 清理垃圾 <$USERNAME>` 的
+        // 参数**不展开**（T-165）⇒ 按字面量查不到人 ⇒ 一条红字、零 709、零清包。
+        let r = execute(&mut sess, &cfg, &view, "@清理垃圾 <$USERNAME>");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "<$USERNAME> 现在不在线，或在其它服务器上!!!")],
+            "部署字面量形态 ⇒ 不在线支（不是清包）"
+        );
+        assert!(sess.pending_clear_bag.is_none());
     }
 
     /// 卡 `openmir2-gm-impl-showeffect`：表项（`Command.conf` 无覆盖 ⇒ 注册名保持英文
