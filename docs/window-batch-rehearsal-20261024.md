@@ -155,7 +155,7 @@ python -I -B tools/conformance/card_window.py --dry-run \
 
 ### 3.3 其他 rc=2（都点明原因）
 
-- `--check-scenario` 的 10 个 `2 → 0`：全部是**缺 `required` 变量**（工具原文 `refusing to send guessed values`），补 §1.3 来源的 `--var` 后 rc=0；`card_window` 会先跑 discovery 注入。**不是场景损坏**。
+- `--check-scenario` 的 10 个 `2 → 0`（`bag_equip`/`eat_item`/`king_castle_war`/`king_dialog`/`merchant_dialog`/`move_walk`/`npc_click`/`npc_script_chain`/`pickup_item`/`upgrade_retrieve`）：全部是**缺 `required` 变量**（工具原文 `refusing to send guessed values`），补 §1.3 来源的 `--var` 后 rc=0；`card_window` 会先跑 discovery 注入。**承接卡 = `openmir2-window-param-discovery`（已合、已 closed；`param_discovery.py` 的来源表见 §1.3）**。**不是场景损坏**。
 - `combat_hit` / `combat_strike`：`card_window` 原文 `scenario is BLOCKED: …` + `VERDICT: BLOCKED`，rc=2，且**不预览命令序列**（设计如此）。
 
 ---
