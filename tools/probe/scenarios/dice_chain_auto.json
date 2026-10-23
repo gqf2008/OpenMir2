@@ -1,6 +1,6 @@
 {
   "name": "dice_chain_auto",
-  "description": "点庄家（auto）-> @kaiz -> @ya5 -> @ya52；@ya52 走 MESSAGEBOX 支，等 SM_MENU_OK(767)（Rust 侧预期失败=缺功能）",
+  "description": "点庄家（auto）-> @kaiz -> @ya5 -> @ya52；@ya52 走 MESSAGEBOX 支，等 SM_MENU_OK(767)（master e4dd64c77 已实现，修复前 Rust 不发）",
   "steps": [
     {
       "click_npc": "auto:last_turn",

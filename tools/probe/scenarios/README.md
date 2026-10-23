@@ -73,6 +73,9 @@ python tools/probe/mir2_probe.py \
 不会拖到发送时才变成 `frame-parse`。命令行 `--var npc_actor=456` 覆盖场景默认值。
 换一台实例跑 `dice_chain` 时，actor id 变了就只改 `--var`，文件不动。
 
+> **改了 `scenarios/*.json` 就必须重跑 `python -I -B tools/probe/mir2_probe.py --selftest`**：selftest 的
+> `scenario-dsl` 用例直接读这些场景文件（dice_chain 的步数/idents/体都是断言），只跑 `--check-scenario` 抓不到回归。
+
 > `dice_chain` 末步是**分支相关**断言：`@ya52` 持筹码包走 `#ACT` 回 `643`，无筹码包走 `#ELSEACT MESSAGEBOX` 回 `SM_MENU_OK(767)`，
 > 因此该步等 `[643, 767]`——单等 `643` 会变成"无包账号必然超时"的恒失败断言。
 

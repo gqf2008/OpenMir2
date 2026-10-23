@@ -88,6 +88,7 @@ SM_SELECTSERVER_OK = 530
 SM_NEEDUPDATE_ACCOUNT = 531
 SM_SENDNOTICE = 658
 SM_MERCHANTSAY = 643
+SM_MENU_OK = 767
 SM_TAKEON_OK = 615
 SM_TAKEON_FAIL = 616
 SM_OUTOFCONNECTION = 528
@@ -1308,8 +1309,10 @@ def _selftest_scenarios():
     assert kinds == ["click_npc", "wait_for", "dlg_select", "wait_for",
                      "dlg_select", "wait_for", "dlg_select", "wait_for"], kinds
     assert dice_plans[0]["recog"] == dice_params["npc_actor"], dice_plans[0]
-    for p in dice_plans[1::2]:
+    # 末步是分支相关：持筹码包回 643、无包 #ELSEACT MESSAGEBOX 回 767（R-3）
+    for p in dice_plans[1:-1:2]:
         assert p["idents"] == [SM_MERCHANTSAY], (p["index"], p["idents"])
+    assert dice_plans[-1]["idents"] == [SM_MERCHANTSAY, SM_MENU_OK], dice_plans[-1]
     for p in dice_plans[2::2]:
         assert p["_needs_merchant_recog"] is True, (p["index"], p.get("_needs_merchant_recog"))
     bodies = [p["body"] for p in dice_plans[2::2]]
