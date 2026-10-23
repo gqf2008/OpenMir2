@@ -75,13 +75,14 @@ gm_registry.py build && gate && selftest                GREEN（14 teeth）
   `GMEXECUTE 取消禁言 self` 触发 ⇒ 两侧各恰好一条 `SM_SYSMESSAGE(100)`、正文
   `命令格式: @取消禁言 人物名称`、色词 `MakeWord(255,56)`；对照 `取消禁言 <名> 1` ⇒ 两侧零帧；
   名单后态两侧均无变化。窗口未跑前本卡不得 `closed`（T-212）。
-- 该窗口需要前置卡 `openmir2-gm-script-exec-seams`（商人路 GMEXECUTE 跳线，head
-  `c0a55368f`，本 worker 的上一张卡，needs-review）先合并，否则 Rust 侧商人脚本路径零帧。
-- **F1（review `01007b5ee8`）已订正**：T-212 的窗口单元格原写「可复跑」，现改为「当前不可复跑」
-  并写明两处前置缺口：① `c0a55368f` 不是 master 祖先（桥未合入）；② 部署件 `Envir/AdminList.txt`
-  只有 `*<TAB>阿瑞斯乐园`（无 IP 段）⇒ `LoadAdminList` 整行 `continue`，真机无 perm=10 玩家，
-  玩家侧恒被 `权限不够!!!` 挡。放行条件 = 合前置卡 + 带非空 IP 段的 AdminList 测试部署。
-- 窗口统一由 owner 排；本卡未起栈、未占端口、未连库。
+- 前置卡 `openmir2-gm-script-exec-seams` **已合入 master `7bbb5ea7`**（`c0a55368f` 现亦为 master 祖先）
+  ⇒ 脚本路 `GMEXECUTE` 抬权桥在位、窗口可复跑；未跑只是 R 窗口未排期。
+- **F1（review `01007b5ee8`）已订正 · 再订正（Leader 复核）**：T-212 窗口项现为
+  「前置已齐、待排期」——前置卡已合入 master `7bbb5ea7`；真实剩余 = R 窗口未排期 + 部署无 perm=10
+  账号（`Envir/adminlist.txt` 唯一行缺 IP 段被 `LocalDB.cs:80-82` 整行 `continue`，`StartPermission=0`）
+  ⇒ 唯一能打到命令体的是脚本路 `GMEXECUTE`。部署落点（Leader 独立核过）：`Merchant.txt:137` →
+  `Market_Def/功能NPC/比武-GA2.txt` `[@main]`:2 → `[@AA]`:39 三段 `#if CheckJob` 的 `#act` 首行
+  `gmexecute 取消禁言 self`（`CM_CLICKNPC` 同图 + `|dx|,|dy| ≤ 15`）。
 
 ## 5b. 复审返工（review `01007b5ee8`）
 
