@@ -69,6 +69,21 @@ oracle 证据：
 
 ## 5. 牙
 
+```
+# 正确写法（提交后树 5aac39325，sha256=ed722696dc33d83de2e36e414983819cc7b3ce21e03a95a8871b5048eddd78de）
+combat_hit.json  ident=3014 recog=2097182(0x20001E) param=0 tag=2 => server(X,Y)=(30,32)
+move_walk.json   ident=3011 recog=2097183(0x20001F) param=0 tag=0 => server(X,Y)=(31,32)
+
+# 牙：把 combat_hit 改回 recog=target_x, param=target_y
+combat_hit.json  ident=3014 recog=30(0x1E) param=32 tag=2 => server(X,Y)=(30,0)   ← Y 恒 0（错）
+
+# git checkout -- tools/probe/scenarios/combat_hit.json
+sha256sum = ed722696dc33d83de2e36e414983819cc7b3ce21e03a95a8871b5048eddd78de   ← 与提交后树一致
+combat_hit.json  ident=3014 recog=2097182(0x20001E) param=0 tag=2 => server(X,Y)=(30,32)
+```
+
+（脚本 `E:/tmp/w24_recog_tooth.py`：用 probe 自己的 `load_scenario`/`expand_scenario` 打印展开后的线上字段，只读。）
+
 见 §7 实测：把 `combat_hit.json` 改回 `recog=target_x, param=target_y` ⇒ 用 probe 的 `expand_scenario`
 打印出来的展开值从 `recog=2097182 (0x20001E = y32/x30), param=0` 变成 `recog=30, param=32`
 （服务端看到的目标 = `(30, 0)`），`card_window --dry-run` 的 `--var` 序列也随之变化；逐字节还原后 `sha256sum` 一致。
