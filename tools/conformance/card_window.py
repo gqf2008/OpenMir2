@@ -2097,6 +2097,237 @@ def preview_magic(runner, side, prof, sc, magic, ctx):
     return out, False
 
 
+# 背包夹具（inventory）：restore 之后、起栈之前把指定物品写进测试库 characters_bagitem
+#
+# 卡 `openmir2-window-inventory-fixture`。选型与预置位（placement）一致：
+#   (a) DB 改测试库 `characters_bagitem`   <= 本实现
+#   (b) 脚本 GIVE 造物品 —— 不可行：脚本在登录后才跑，probe 的 discovery/click 早于它
+#   (c) GM `@造物` —— 不可行：Permission 恒 0
+# 预置必须发生在 restore 之后（restore 会复位库）且起栈之前（角色记录只在登录时读一次）。
+#
+# 声明形态（场景顶层）：
+#   "inventory": [{"index": 100, "make_index": 5001, "position": 3,
+#                  "std_mode": 0, "ani_count": 0, "dura": 0, "dura_max": 0}]
+# - `index`（物品模板号）与 `position`（0..45 槽位）、`make_index` 必填；
+# - `std_mode`/`ani_count` 声明时**必须与 `stditems` 模板一致**（不符 ⇒ rc=2，防止
+#   「以为是药水结果造出武器」）；
+# - 两侧 `make_index` 必须相同（`make_index` 是会话内变量，跨侧不同会 value_mismatch）。
+# ---------------------------------------------------------------------------
+INVENTORY_REQUIRED_KEYS = ("index", "make_index", "position")
+INVENTORY_OPTIONAL_KEYS = ("std_mode", "ani_count", "dura", "dura_max", "note")
+INVENTORY_MAX_BAG = 46
+
+
+def scenario_inventory(path):
+    """读场景顶层 `inventory` 声明。没有 => None；形状非法 => ConfigError（fail-closed）。"""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    inv = data.get("inventory")
+    if inv is None:
+        return None
+    if not isinstance(inv, list) or not inv:
+        raise ConfigError("%s: scenario.inventory 必须是非空数组" % path)
+    out = []
+    seen_pos = set()
+    seen_make = set()
+    for i, item in enumerate(inv):
+        where = "%s: scenario.inventory[%d]" % (path, i)
+        if not isinstance(item, dict):
+            raise ConfigError("%s 必须是对象" % where)
+        bad = set(item) - set(INVENTORY_REQUIRED_KEYS) - set(INVENTORY_OPTIONAL_KEYS)
+        if bad:
+            raise ConfigError("%s 有未知键 %s（fail-closed）" % (where, sorted(bad)))
+        missing = [k for k in INVENTORY_REQUIRED_KEYS if k not in item]
+        if missing:
+            raise ConfigError("%s 缺必填键 %s" % (where, missing))
+        for key in ("index", "make_index", "position", "std_mode", "ani_count",
+                    "dura", "dura_max"):
+            v = item.get(key)
+            if v is None:
+                continue
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise ConfigError("%s.%s 必须是整数（实际 %r）" % (where, key, v))
+            if v < 0 or v > 0xFFFFFFFF:
+                raise ConfigError("%s.%s=%r 越界（0..4294967295）" % (where, key, v))
+        pos = int(item["position"])
+        if pos >= INVENTORY_MAX_BAG:
+            raise ConfigError("%s.position=%d 越界（0..%d）"
+                              % (where, pos, INVENTORY_MAX_BAG - 1))
+        if pos in seen_pos:
+            raise ConfigError("%s.position=%d 与前面的条目重复（同一槽位只能声明一次）"
+                              % (where, pos))
+        seen_pos.add(pos)
+        mk = int(item["make_index"])
+        if mk <= 0:
+            raise ConfigError("%s.make_index 必须 >0（0 会被 DBSvr 整行跳过）" % where)
+        if mk in seen_make:
+            raise ConfigError("%s.make_index=%d 重复（两侧/同侧都必须唯一）" % (where, mk))
+        seen_make.add(mk)
+        if item.get("note") is not None and not isinstance(item["note"], str):
+            raise ConfigError("%s.note 必须是字符串" % where)
+        out.append({
+            "index": int(item["index"]),
+            "make_index": mk,
+            "position": pos,
+            "std_mode": item.get("std_mode"),
+            "ani_count": item.get("ani_count"),
+            "dura": int(item.get("dura") or 0),
+            "dura_max": int(item.get("dura_max") or 0),
+            "note": item.get("note") or "",
+        })
+    return out
+
+
+def inventory_fingerprint_sql(db, chr_name, login_id, columns):
+    """读该角色**背包快照**：命中行数 + 除「声明列」外其余列的 MD5 指纹。
+
+    返回 (sql, declared_cols)；`declared_cols` 之外的列一律进指纹，用来证明「只改了
+    声明的列」。
+    """
+    skip = {"Id", "ChrName", "LoginID", "Index", "MakeIndex", "Position", "Dura", "DuraMax"}
+    fp_cols = [c for c in columns if c not in skip]
+    fp = ", CHAR(31), ".join("IFNULL(CAST(`%s` AS CHAR), '~')" % c for c in fp_cols) or "''"
+    sql = (
+        "SELECT COUNT(*), COALESCE(MIN(MD5(CONCAT_WS(%s))), '')\n"
+        "FROM `%s`.`characters_bagitem` WHERE `ChrName` = %s AND `LoginID` = %s;\n"
+        % (fp, db, _sql_quote(chr_name), _sql_quote(login_id)))
+    return sql
+
+
+def validate_inventory_content(items):
+    """离线校验：条目自身合法 + 两侧 `make_index` 相同（跨侧检查由调用方传入两组）。"""
+    if not items:
+        return
+    pos = [it["position"] for it in items]
+    if len(set(pos)) != len(pos):
+        raise ConfigError("inventory: 同一槽位声明了多次：%r" % sorted(pos))
+    mk = [it["make_index"] for it in items]
+    if len(set(mk)) != len(mk):
+        raise ConfigError("inventory: MakeIndex 有重复：%r" % sorted(mk))
+
+
+def compare_inventory_make_index(side_items, other_side, other_items):
+    """两侧 `MakeIndex` 必须逐条相同（卡面 acceptance ③）；否则 rc=2 点名差异。"""
+    a = sorted(it["make_index"] for it in (side_items or []))
+    b = sorted(it["make_index"] for it in (other_items or []))
+    if a != b:
+        raise ConfigError(
+            "inventory: %s 与本侧声明的 MakeIndex 不同（%r vs %r）——两侧会 value_mismatch，"
+            "声明里请用相同的固定值" % (other_side, b, a))
+
+
+def run_inventory(runner, side, prof, sc, items, env, timeout=120):
+    """在一侧执行背包夹具：restore 之后、起栈之前。返回证据 dict（rc=0 才算完成）。
+
+    fail-closed：目标角色不存在/多行、`stditems` 查不到或与声明的 std_mode/ani_count
+    不符、写后读回不符、指纹变了 ⇒ rc=2 点名。
+    """
+    res = {"side": side, "declared": items, "db": None, "action": None,
+           "before": None, "after": None, "altered_columns": [], "sql": {},
+           "rc": None, "error": None}
+    if not items:
+        res["action"] = "noop"
+        res["rc"] = 0
+        return res
+    try:
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        res["error"] = "背包夹具前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    argv = _mysql_argv(client)
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    if not chr_name or not login_id:
+        res["error"] = "背包夹具需要 profile 的 char_name/account"
+        res["rc"] = 2
+        return res
+
+    def sql(tag, text):
+        rc, out, err = runner.run(side, tag, argv, env=env, timeout=timeout,
+                                  stdin_text=text, capture=True)
+        if rc != 0:
+            raise ConfigError("%s 执行失败（mysql rc=%s）：%s"
+                              % (tag, rc, (err or out or "").strip()[:400]))
+        return out
+
+    try:
+        cols_out = sql("inventory.columns",
+                       "SHOW COLUMNS FROM `%s`.`characters_bagitem`;\n" % db)
+        columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
+        for need in ("ChrName", "LoginID", "Index", "MakeIndex", "Position"):
+            if need not in columns:
+                raise ConfigError("%s.characters_bagitem 缺列 %s（表结构与预期不符，拒绝）"
+                                  % (db, need))
+        fp_sql = inventory_fingerprint_sql(db, chr_name, login_id, columns)
+        res["sql"]["read"] = fp_sql.strip()
+        before = _parse_inventory_fp(sql("inventory.read", fp_sql))
+        res["before"] = before
+        # 每件：模板必须存在且与声明一致
+        values = []
+        for it in items:
+            tpl = sql("inventory.template",
+                      "SELECT `StdMode`, `Shape`, `DuraMax` FROM `mir2_data`.`stditems`\n"
+                      " WHERE `idx` = %d;\n" % it["index"]).strip().splitlines()
+            if not tpl:
+                raise ConfigError("inventory: 物品模板 index=%d 不存在（mir2_data.stditems）"
+                                  % it["index"])
+            parts = tpl[0].split("\t")
+            std_mode = int(parts[0]) if parts and parts[0] not in ("", "NULL") else None
+            if it.get("std_mode") is not None and std_mode != it["std_mode"]:
+                raise ConfigError(
+                    "inventory: index=%d 的 StdMode=%r 与声明 %r 不符"
+                    % (it["index"], std_mode, it["std_mode"]))
+            values.append("(%s, %s, %d, %d, %d, %d, %d)"
+                          % (_sql_quote(chr_name), _sql_quote(login_id), it["index"],
+                             it["make_index"], it["position"], it["dura"], it["dura_max"]))
+        upd = ("DELETE FROM `%s`.`characters_bagitem`\n"
+               " WHERE `ChrName` = %s AND `LoginID` = %s AND `Position` IN (%s);\n"
+               "INSERT INTO `%s`.`characters_bagitem`\n"
+               " (`ChrName`, `LoginID`, `Index`, `MakeIndex`, `Position`, `Dura`, `DuraMax`)\n"
+               " VALUES %s;\n"
+               % (db, _sql_quote(chr_name), _sql_quote(login_id),
+                  ", ".join(str(it["position"]) for it in items), db, ", ".join(values)))
+        res["sql"]["update"] = upd.strip()
+        sql("inventory.update", upd)
+        after = _parse_inventory_fp(sql("inventory.verify", fp_sql))
+        res["after"] = after
+        res["action"] = "updated" if after["count"] >= len(items) else None
+        check_inventory_rows(items, after["count"])
+        res["rc"] = 0
+        return res
+    except ConfigError as e:
+        res["error"] = "背包夹具失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def check_inventory_rows(items, after_count):
+    """写后行数必须覆盖声明件数；少了 ⇒ rc=2（牙「跳过预置」的红条件）。"""
+    if int(after_count) < len(items):
+        raise ConfigError("inventory: 写后行数 %d 少于声明件数 %d" % (after_count, len(items)))
+
+
+def _parse_inventory_fp(out):
+    lines = [ln for ln in (out or "").splitlines() if ln.strip()]
+    if len(lines) != 1:
+        raise ConfigError("背包指纹读行不是 1 行（实际 %d）：%r" % (len(lines), out[:200]))
+    parts = lines[0].split("\t")
+    if len(parts) != 2:
+        raise ConfigError("背包指纹读行列数不是 2：%r" % lines[0][:200])
+    try:
+        return {"count": int(parts[0]), "fp": parts[1]}
+    except ValueError as e:
+        raise ConfigError("背包指纹无法解析：%r（%s）" % (lines[0][:200], e))
+
+
 def preview_placement(runner, side, prof, sc, placement, ctx):
     """`--dry-run` 用：只做离线内容校验 + 打印将要执行的命令（不连库/不改库）。"""
     out = {"side": side, "declared": dict(placement), "rc": None, "error": None,
@@ -2137,7 +2368,7 @@ def preview_placement(runner, side, prof, sc, placement, ctx):
 
 
 
-def run_side(runner, side, prof, ctx, password, placement=None):
+def run_side(runner, side, prof, ctx, password, placement=None, inventory=None):
     sc = prof["sides"][side]
     side_dir = ctx["side_dir"]
     db_dir = ctx["db_dir"]
@@ -2147,6 +2378,7 @@ def run_side(runner, side, prof, ctx, password, placement=None):
         "restore_rc": None,
         "placement": None,
         "magic": None,
+        "inventory": None,
         "ports": {"checked": list(sc.get("ports") or []), "busy": []},
         "stack_rc": None,
         "ready": {"ports": list(sc.get("ready_ports") or []), "missing": [],
@@ -2198,6 +2430,21 @@ def run_side(runner, side, prof, ctx, password, placement=None):
             res["placement"] = pres
             if pres.get("rc") != 0:
                 res["error"] = pres.get("error") or "角色预置位失败"
+                return res
+
+        # 1b) 背包夹具（卡 openmir2-window-inventory-fixture）：同样在 restore 之后、
+        # 起栈之前；失败即 rc=2 点名，绝不带着错位继续 probe。
+        if inventory:
+            ires = run_inventory(runner, side, prof, sc, inventory, env)
+            try:
+                write_json_file(os.path.join(side_dir, "inventory.json"), ires)
+            except OSError as e:
+                ires["error"] = ((ires.get("error") or "") + "；写 inventory.json 失败：%s"
+                                 % e).strip("；")
+                ires["rc"] = 2
+            res["inventory"] = ires
+            if ires.get("rc") != 0:
+                res["error"] = ires.get("error") or "背包夹具失败"
                 return res
 
         # 1c) 魔法夹具（profile 声明了才跑）：restore（与预置位）之后、起栈之前。
@@ -2694,11 +2941,13 @@ def execute(cfg):
     computed = {}
     placement = None
     blocked = None
+    inventory = None
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
         computed = scenario_computed(scenario)
         placement = scenario_placement(scenario)
         blocked = scenario_blocked(scenario)
+        inventory = scenario_inventory(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
         cfg.get("discovery_scenario") or DEFAULT_DISCOVERY_SCENARIO)
@@ -2971,7 +3220,8 @@ def execute(cfg):
     for side in SIDES:
         ctx = side_ctx(side, out_dir, scenario, card, discovery=discovery_cfg)
         try:
-            res = run_side(runner, side, prof, ctx, password, placement=placement)
+            res = run_side(runner, side, prof, ctx, password, placement=placement,
+                           inventory=inventory)
         except (ConfigError, OSError) as e:
             res = {"side": side, "rc": 2, "error": "配置/执行错误：%s" % e}
             summary["notes"].append("%s: %s" % (side, e))
@@ -3591,6 +3841,73 @@ def _selftest_pid_wiring(tmp, base_cfg, profile_factory):
     out.append((s_miss["exit_code"] == 2 and r_miss.get("rc") == 2
                 and PID_FILE_NAME in err_miss,
                 "接线：缺 pid 文件 => run_side rc=2 且点名文件（整体 rc=2）"))
+    return out
+
+
+def _selftest_inventory(tmp):
+    """卡 openmir2-window-inventory-fixture：声明解析/校验/指纹/行数（4 用例 + 2 牙）。"""
+    import json as _json
+    out = []
+    d = os.path.join(tmp, "inv")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "inv-scenario.json")
+    good = {"inventory": [
+        {"index": 100, "make_index": 5001, "position": 3, "std_mode": 0, "ani_count": 0},
+        {"index": 101, "make_index": 5002, "position": 7, "dura": 1000, "dura_max": 2000}]}
+    with open(path, "w", encoding="utf-8") as f:
+        _json.dump(good, f)
+    items = scenario_inventory(path)
+    out.append((len(items) == 2 and items[0]["index"] == 100 and items[0]["position"] == 3
+                and items[1]["dura"] == 1000, "① 合法声明 => 解析出 2 件且字段透传"))
+    # ② 两侧 MakeIndex 相同 => 通过；不同 => 抛错（牙②）
+    try:
+        compare_inventory_make_index(items, "other", list(items))
+        same_ok = True
+    except ConfigError:
+        same_ok = False
+    out.append((same_ok, "② 两侧 MakeIndex 相同 => 校验通过"))
+    # ③ 非法声明 => ConfigError 点名（槽位越界 / 重复槽位 / 缺键 / 未知键）
+    bad_cases = [
+        ({"inventory": [{"index": 1, "make_index": 1, "position": 46}]}, "position"),
+        ({"inventory": [{"index": 1, "make_index": 1, "position": 1},
+                        {"index": 2, "make_index": 2, "position": 1}]}, "重复"),
+        ({"inventory": [{"make_index": 1, "position": 1}]}, "缺必填"),
+        ({"inventory": [{"index": 1, "make_index": 1, "position": 1, "zzz": 1}]}, "未知键"),
+    ]
+    bad_ok = True
+    for body, needle in bad_cases:
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(body, f)
+        try:
+            scenario_inventory(path)
+        except ConfigError as ex:
+            if needle not in str(ex):
+                bad_ok = False
+        else:
+            bad_ok = False
+    out.append((bad_ok, "③ 非法声明（越界/重复/缺键/未知键）=> ConfigError 且点名"))
+    # ④ 指纹列 = SHOW COLUMNS 去掉「声明列」（只改需要列的证据面）
+    cols = ["Id", "ChrName", "LoginID", "Index", "MakeIndex", "Position",
+            "Dura", "DuraMax", "Desc0", "Desc1"]
+    fp_sql = inventory_fingerprint_sql("db", "hero", "ua", cols)
+    out.append(("`Desc0`" in fp_sql and "`Desc1`" in fp_sql and "`MakeIndex`" not in fp_sql,
+                "④ 指纹只含未声明列（Desc*），不含 MakeIndex/Position"))
+    # 牙①：跳过预置（写后行数不足）=> 必须报错
+    try:
+        check_inventory_rows(items, 1)
+        tooth_ok = False
+    except ConfigError:
+        tooth_ok = True
+    out.append((tooth_ok, "牙①：写后行数 < 声明件数 => 报错（跳过预置即红）"))
+    # 牙②：MakeIndex 两侧不同 => 必须报错并点名
+    shuffled = [dict(it) for it in items]
+    shuffled[0]["make_index"] = 9999
+    try:
+        compare_inventory_make_index(items, "other", shuffled)
+        tooth2_ok = False
+    except ConfigError as ex:
+        tooth2_ok = "MakeIndex" in str(ex)
+    out.append((tooth2_ok, "牙②：两侧 MakeIndex 不同 => 报错并点名"))
     return out
 
 
@@ -5066,7 +5383,10 @@ def selftest():
     if fail_n:
         print("RED: card_window.py selftest %d/%d" % (pass_n, total))
         return 1
-    print("GREEN: card_window.py selftest %d/%d" % (pass_n, total))
+    for cond, msg in _selftest_inventory(tmp):
+        chk(cond, msg)
+
+    print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
 
 
