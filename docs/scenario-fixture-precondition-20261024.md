@@ -1,6 +1,7 @@
 # 场景夹具前置（`requires`）：封死 dry-run 假绿通道
 
 卡：`openmir2-scenario-fixture-precondition`（tier=L，issue `cd35ac9684`）。
+分支：`card/scenario-fixture-precondition`，base = `walgit/master 01d4f5877`（head 见卡上 `patch` 条目）。
 写集授权：`tools/probe/mir2_probe.py` 的扩写由 coordinator 的签名 comment `ffd9a859`
 （`write_set_authorization`，范围见下）授权。
 
@@ -87,13 +88,18 @@ rc=2
 | 门禁 | 命令 | 结果 |
 |---|---|---|
 | 卡窗口自检 | `python -I -B tools/conformance/card_window.py --selftest` | GREEN 226/226 |
-| 变异牙 | `python -I -B tools/conformance/selftest_mutations.py` | 48/48 全红 + 逐字节还原 |
+| 既有 222 条不变 | 交付树 vs master `01d4f5877` 的 `PASS` 行逐行比对 | 222/222 齐全；差异仅临时目录/pid/run_id/墙钟等**本质非确定**子串 |
+| 变异牙 | `python -I -B tools/conformance/selftest_mutations.py` | **48/48 全红**（expect 锁定判据组）+ 逐字节还原 sha256 一致 |
 | probe 自检 | `python -I -B tools/probe/mir2_probe.py --selftest` | OK（10 checks） |
 | 场景加载 | 3 个未声明 `requires` 的既有场景（`login_only`/`gm_time`/`dice_chain`）`--check-scenario` | 输出与扩写前逐字节相同 |
-| 真实场景 | `--dry-run --scenario spell_cast.json`（alt） | rc=2，点名缺 `magic` |
-| T 预约表 | `python -I -B tools/whitelist/t_reservation_gate.py check` | GREEN（rows=252 / whitelist=252） |
-| 冲突标记 | `python -I tools/hygiene/conflict_marker_gate.py` | OK（0 markers / 7436 files） |
-| 合并树 | `git merge-tree --write-tree refs/remotes/walgit/master HEAD` | rc=0 |
+| 真实场景 | `--dry-run --scenario spell_cast.json`（alt） | rc=2，点名缺 `magic`（原文见 §2） |
+| T 预约表 | `python -I -B tools/whitelist/t_reservation_gate.py check` | GREEN（rows=253 / whitelist=253） |
+| 冲突标记 | `python -I tools/hygiene/conflict_marker_gate.py` | OK（0 markers / 7438 files） |
+| 合并树 | `git merge-tree --write-tree refs/remotes/walgit/master HEAD` | rc=0（merge-base `01d4f5877`） |
+
+> 变异牙首轮全量 47/48：`E2` 的 `old` 串 `if unknown:` 因本卡在 `scenario_requires` 里引入同名判断而命中 2 次。
+> 把本地变量改名（`bad_values`）后重跑 **48/48 全红**——这正是 harness「每处必须恰好命中 1 次」要抓的
+> 文本碰撞，不是行为回归。
 
 ## 7. 残留 / 未做
 
