@@ -468,6 +468,20 @@ python -I -B tools/conformance/compare_runs.py selftest
   （或按侧的 `sides.<side>.db_client`）给出，口令只认环境变量 `CONFORMANCE_DB_PASSWORD`。
   **背包夹具不在本能力范围内**（要「背包里已有 MakeIndex/物品」的卡见
   `openmir2-discovery-bagitems-201`）。
+* **Rust 侧 `binaries` 指向真正执行的 `mir2-rs/target/{release,debug}/mir2-server.exe`**（卡
+  `openmir2-window-rust-binary-evidence`）：`rust-root/M2GameSvr/GameSrv.exe` 是同目录 `.dll`
+  的 .NET 程序集，从不是被跑的那个文件。`alt` / `rust-default` 的 Rust 侧登记内置解析
+  （release 优先、缺失退 debug 并在 `binary_profile` 注明；解析出的文件**不存在 ⇒ rc=2**
+  并提示 `cargo build -p mir2-server --release`；profile 也可用 `server_exe` 显式覆盖）。
+  起栈后还会读 pid 文件的 `roles[].exe` 与登记对账，**不一致或缺文件 ⇒ rc=2 并点名**。
+  * **pid 文件路径只认 profile 的 `pid_file`**（`{side_dir}` 占位可用），代码里不写死部署
+    绝对路径；开了 `require_pid_binaries` 却缺 `pid_file` ⇒ 加载期 ConfigError。
+    **下一次真窗口（`alt`）读的是 `E:/tmp/conformance/rust-logs/mir2-server.pid.json`**
+    ——那是 `E:/tmp/conformance/start-rust.ps1` 的 `-LogDir`，不是 `<out>/rust/`。
+  * pid 文件由 `start_mir2_server.ps1` 用 Windows PowerShell 5 的
+    `Set-Content -Encoding utf8` 写出，**带 UTF-8 BOM**；`card_window.py` 用
+    `encoding="utf-8-sig"` 读（否则真窗口会稳定 rc=2）。
+
 * **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
   ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
   收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +
