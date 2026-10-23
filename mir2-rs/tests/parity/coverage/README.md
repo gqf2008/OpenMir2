@@ -156,33 +156,105 @@ python mir2-rs/tests/parity/coverage/recon_gates.py dispatch   # 出表；RED �
 
 ## GM 命令可达性登记（`gm_registry.py` / `gm_registry.json`）
 
-卡：`openmir2-gm-reachability-registry`。目的：把「88 条未实现 GM 命令」从一句「GM 不可达」变成
-**逐条可复算的静态证据**（命令名 → C# 处理类 `file:line` → `PermissionMin` 实值 → 三态判定）。
+卡：`openmir2-gm-reachability-registry`（返工件，reviewer-1 `ad13dc87` 的 B1/B2/I1/I2/I3/M1/M2）。
+目的：把「88 条未实现 GM 命令」从一句「GM 不可达」变成**逐条可复算、能与源码逐字段对上的静态证据**。
 
 ```sh
-python -I -B mir2-rs/tests/parity/coverage/gm_registry.py build     # 生成/刷新 gm_registry.json
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py build     # 生成/刷新 gm_registry.json（utf-8 + LF，可逐字节复现）
 python -I -B mir2-rs/tests/parity/coverage/gm_registry.py gate      # 门禁（红=1 / 绿=0 / 判不了=2）
 python -I -B mir2-rs/tests/parity/coverage/gm_registry.py summary   # 一条命令复算汇总
-python -I -B mir2-rs/tests/parity/coverage/gm_registry.py selftest  # 三颗牙
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py selftest  # 13 颗牙（逐颗校验登记表 sha256 未变）
 ```
 
-**判据**（写死在工具里，不靠人工结论）：
+**四种判定**（写死在工具里，不靠人工结论）：
 
-- `perm_min == 0` ⇒ `reachable`，**必须开实现卡**（禁止登记成不可达）；
-- `perm_min > 0` ∧ 现网 `StartPermission=0`（`Server.conf:365`）∧ `GetHumPermission` 被注释
-  （`PlayObject.cs:1188-1194`）∧ `AdminList.txt` 无有效 IP 段 ⇒ `unreachable`；
-- `GameCommands.cs` 声明了 `CmdName` 但无 `[RegisterCommand]` 处理类，或 conf 有名字而 `GameCommands.cs`
-  无该 `CmdName` ⇒ **结构性不可达**（现网无命令体），`handler=null` 属预期，门禁允许但要求 verdict 自洽。
+| verdict | 判据 | 处置 |
+|---|---|---|
+| `reachable` | `perm_min == 0`（玩家自然可达） | **必须开实现卡**，禁止登记成不可达 |
+| `script-reachable` | `0 < perm_min ≤ 10` ∧ 部署脚本存在**可达**的 `GMEXECUTE <cmd>` 调用 | **必须开实现卡** |
+| `unreachable` | `perm_min > 0` ∧ 部署脚本里没有该命令的可达调用 | 与现网等价，不实现 |
+| `structural-unreachable` | 解析不出任何命令体（无字段/无 `[Command]` 类） | 必须能证明；有 handler 却登记成它 ⇒ 红 |
+| `undetermined` | 任一必需数据源缺失 / 解析歧义 | 门禁红（fail-closed） |
 
-**数据源**（三方交叉，缺一即 `undetermined`→门禁红）：`gmcmd.rs` 的 `COMMANDS`（现网名/perm/imp）、
-`GameCommands.cs`（`PerMissionMin` 默认值 + `[RegisterCommand]`）、部署 `Command.conf`
-（`[Command]` 改名 + `[Permission]` 覆盖；缺省 `E:/MirServer/M2GameSvr/Command.conf`，可用 `--conf` 指定，
-文件不存在时在 `sources.command_conf.state=absent` 显式登记）。
-优先级：`conf[Permission]` > `GameCommands.cs` > `[Command]` 属性 `minUserLevel`。
+`script-reachable` 的依据（B1）：脚本动作 `GMEXECUTE`（`ExecutionCode.cs:464` /
+`ExecutionProcessingSys.cs:4925-4947`）先把 `playerActor.Permission = 10`，再 `ProcessUserLineMsg("@<cmd> …")`，
+落到 `CommandSystem.Execute` → `GameCommand.Handle`（`GameCommand.cs:37`）的**同一条权限门** ⇒ 只要命令被
+部署脚本真实调用、且所在 label 可达，Release 现网就可达（`perm_min ≤ 10`）。
 
-**门禁判红口径**：handler 文件不存在 / 行号越界 / 该行不含 `[Command(` / `perm_min==0` 却登记为
-`unreachable` / `perm_min>0` 却登记为 `reachable` / 出现 `undetermined`。
+**数据源（五方交叉）**
 
-> 改了 `gmcmd.rs`、`GameCommands.cs`、`Commands/*.cs` 或部署 `Command.conf` 后，都要重跑 `build` + `gate`；
-> `selftest` 的三颗牙保证判据不是写死的：① 把 `perm_min=0` 改判 `unreachable` ⇒ 红；
-> ② handler 行号越界 ⇒ 红；③ 把 `StartPermission` 假设改成 1 重算 ⇒ 全部翻为 reachable。
+1. `mir2-rs/bins/game-svr/src/gmcmd.rs` 的 `COMMANDS`（现网最终名 / perm / imp）；
+2. `src/Modules/GameCommand/GameCommands.cs`：字段构造默认名 + `PerMissionMin` + `[RegisterCommand(typeof(T))]`；
+3. `src/Modules/GameCommand/Conf/GameCmdConf.cs`：`commands.<Field>.CmdName = ReadWriteString("Command","<Key>",…)`
+   —— **`<Key>` 是字段键，不是 CmdName**（`StorageLock`/`Flag`/`SuperMake`/`SpiritStart`/`Map`/`MapInfo`…），
+   按出现顺序叠加、缺键回落上一层（`Level` 有两条：先 `Level` 后 `Level0`，后写覆盖）；
+4. `src/Modules/GameCommand/Commands/*.cs`：每个类的 `[Command(...)]` 行（handler file:line）；
+5. 部署 `Envir`（GBK）：按 oracle 的**加载规则**求已加载脚本集合 + **label 可达性** + `GMEXECUTE` 实参。
+
+**命令名 / handler 的推导顺序**（复刻 `CommandSystem.cs:41-117`）：
+
+```
+customCommandMap: 键 = 字段的 [RegisterCommand] 类 T 的 [Command] 属性名
+                  值 = GameCmd{ CmdName = conf[Command][字段键] ?? 构造默认,
+                               PerMissionMin = conf[Permission][权限键] ?? 构造默认 }
+RegisterCommandGroups: 遍历 Commands 程序集里所有带 [Command] 的类；属性名命中 customCommandMap ⇒
+                       最终名/权限被上述值覆盖；未命中 ⇒ 用类属性名/属性权限
+```
+
+> **自校验**：推导出的 185 条名字与权限必须与 `gmcmd.rs` 的 `COMMANDS` **完全一致**（`crosscheck.ok`），
+> 不一致 ⇒ 门禁红。这是「取数口径对不对」的机器判据 —— `Map` ↔ `MapInfo` 正是被这条钉住的
+> （`Map → MapInfoCommand.cs:8`、`MapInfo → ShowMapInfoCommand.cs:6`）。
+
+**部署脚本的加载集合**（不比 oracle 宽松，也不凭名字猜）：
+
+- 根：`Market_Def/QFunction-0.txt`（`LocalDB.QFunctionNpc`）、`MapQuest_def/QManage.txt`（`QMangeNpc`）、
+  `Robot_def/RobotManage.txt`（`RobotNpc`）、`MerChant.txt` 每行（`Market_Def/<col0>-<col1>.txt`）、
+  `Npcs.txt` 里 code=1 的 Quest NPC（`Npc_def/<名>-<地图>.txt`）；
+- 边：`#CALL [路径] @label` 传递闭包（路径按 Windows 大小写不敏感解析，落在 `QuestDiary/` 下）；
+- **未加载的文件不计证据**（例如 `Market_Def/QFunction-0 - 副本.txt`：没有任何引用 ⇒ 42 行 GMEXECUTE 是死副本）。
+
+**label 可达性**（证据只认「会真的执行到」的 label）：
+
+- 根 = C# 里所有 `GotoLable(...)` 的字面量标签与 `ScriptFlagConst` 常量（含 `@main` 点击根、`@StdModeFunc<n>`
+  / `@OnTimer<n>` / `@KillPlay*` 前缀根）——由工具扫 `src/` 现算，不写死；
+- 边 = label 体内的 NPC 超链接 `<…/@x>`、`#ACT` 行里的 label 实参（`goto` / `DelayCall` / `DelayGoto` /
+  `QUERYVALUE` …）、`#CALL`（跨文件）；
+- 既不是根、也没有任何入边的 label ⇒ 它的 `#ACT` 永不执行，**其 GMEXECUTE 不算证据**，
+  并逐条登记进 `dead_gmexecute_labels`（附 `incoming=0` 的穷举说明）。
+
+**部署面（I1，必须显式）**：oracle = `E:/MirServer/M2GameSvr`，**Release**：
+
+- `!deployed-from.json` 的 `build_dir` 以 `\bin\Release` 结尾；
+- `GameSrv.dll` / `CommandSystem.dll` **不含** UTF-16LE 串「当前运行调试模式」
+  （`GameCommand.cs:33-36` 的 `#if DEBUG` 分支才会写）。
+
+> **若把 Debug 构建当对拍面（如 `E:/MirServer/Mir200/GameSvr.dll`，含该 UTF-16LE 串）**：
+> `#if DEBUG` 会把每个调用者的 `Permission` 直接置 10 ⇒ 所有 `perm_min ≤ 10` 的命令对普通玩家全部可达，
+> **本表全部 `unreachable` 结论立即失效（全部改判 `reachable`）**。工具把这一条写进
+> `deployment.debug_caveat`，`gate` 要求它非空。
+
+**门禁判红口径**（校验「与源码一致」，不只是自洽）：
+
+- `format` 必须是 `gm-registry/2`；登记表必须是本工具的规范序列化（utf-8 + LF + indent=1）；
+- **与 `build()` 的结果逐字段比对**（handler / perm_min / perm_source / verdict / script_evidence / summary 全字段）——
+  A 在界指错命令、B perm 10→8、C 改 cmd 名、D `register_command=true`+`handler=null`、E `perm=null`+`unreachable`
+  这五类「自洽但错」的登记全部当场变红；
+- handler 文件存在 / 行号在界 / 该行含 `[Command(` / **从该行解析出的类的注册名必须等于本行 `cmd`**（挡「在界指错命令」）；
+- `register_command=true ⇒ handler 非空`；`perm_min=null ⇒ verdict=undetermined`；`perm_min==0 ⇒ verdict=reachable`；
+- `script-reachable ⇒ 证据非空`，且每条证据的 `file:line` 必须是**已加载**脚本里的 `GMEXECUTE` 行、实参解析到本命令；
+- `unreachable ⇒ 本次源码扫描里没有该命令的可达脚本调用`；`structural-unreachable ⇒ 命令表里确实解析不出 handler`；
+- `crosscheck.ok` 必须为真（推导表 vs `gmcmd.rs`）；`deployment.oracle.build` 与 `debug_caveat` 必须显式。
+
+**13 颗牙**（`selftest`，每颗跑完都校验登记表 sha256 不变）：
+
+```
+A 在界指错命令   B perm 10→8      C 改 cmd 名      D register_command=true + handler=null
+E perm=null+unreachable            F perm_min=0 却判 unreachable
+G handler 行号越界                 H script-reachable 无证据
+I 伪造脚本证据（非 GMEXECUTE 行）  J 把 conf 键当 CmdName（B2 原缺陷）
+K 证据指向未加载的副本脚本         L StartPermission=1/10 重算（结构性行不被翻、perm=10 不被 sp=1 翻）
+M Map / MapInfo handler 未对调
+```
+
+> 改了 `gmcmd.rs`、`GameCommands.cs`、`GameCmdConf.cs`、`Commands/*.cs`、部署 `Command.conf` **或部署 Envir 脚本**
+> 之后，都要重跑 `build` + `gate` + `selftest`。
