@@ -37,6 +37,8 @@
   * `binaries` 是**必需**项（两侧各至少一条非空路径，加载期校验）：缺省/空列表 => ConfigError，
     杜绝「PASS 产物里没有任何二进制 sha256」。二进制文件缺失时提前收尾，但**产物集仍然完整**
     （report.json + README.txt + card-window.json + card-window.log），不写半套证据。
+  * **先定稿 verdict/exit_code，再写产物**：README.txt / card-window.json 写失败 =>
+    exit=2（verdict 仍如实记录，但绝不因为写产物失败而报绿）。
   * **不碰 MySQL 服务本身**：停栈命令先做归一化（去 `.exe`、折叠大小写/空白）再按效果判定 ——
     任何 mysql/mysqld 提及、或服务控制族（Stop-Service/spsv/net stop/sc stop）直接拒绝。
   * 默认拒绝生产库：把 db 规格（preset / tables / allow_db / databases / command 的
@@ -1144,7 +1146,11 @@ def write_artifacts(out_dir, summary):
 
 
 def write_summary_json(out_dir, summary):
-    """最后写 card-window.json（包含 comment 结果）；写失败不影响退出码语义。"""
+    """最后写 card-window.json（包含 comment 结果）；返回是否写成。
+
+    H-1：card-window.json 也是卡面承诺的产物之一，写失败必须让调用方置 rc=2，
+    不能再静默吞掉（否则「完整产物集」的承诺与实际退出码不一致）。
+    """
     try:
         summary_path = os.path.join(out_dir, "card-window.json")
         with open(summary_path, "w", encoding="utf-8", newline="\n") as f:
@@ -1152,8 +1158,10 @@ def write_summary_json(out_dir, summary):
             f.write("\n")
         summary["artifacts"]["card-window.json"] = {"path": summary_path,
                                                     "sha256": sha256_file(summary_path)}
-    except OSError:
-        pass
+        return True
+    except OSError as e:
+        summary["notes"].append("写 card-window.json 失败：%s" % e)
+        return False
 
 
 def execute(cfg):
@@ -1307,7 +1315,8 @@ def execute(cfg):
         # F-4 选「完整产物集」：report.json + README.txt + card-window.json + card-window.log 全落，
         # 不写半套证据（--post-comment 仍只在真正跑完编排时才发）。
         write_artifacts(out_dir, summary)
-        write_summary_json(out_dir, summary)
+        if not write_summary_json(out_dir, summary):
+            summary["exit_code"] = 2
         return summary
 
     sides_ok = True
@@ -1374,12 +1383,14 @@ def execute(cfg):
     summary["finished_at"] = iso_now()
     summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
 
-    # 归档：report.json + 两侧产物 sha256 + README.txt（与缺二进制分支共用同一实现）
-    write_artifacts(out_dir, summary)
-
+    # H-1：先定稿 verdict/exit_code，再写产物——write_artifacts 在 README 写失败时置 rc=2，
+    # 绝不能被后面的 `0 if ok else 2` 覆盖回 0（否则 PASS 运行缺 README 还报绿）。
     ok = (summary["verdict"] == "PASS" and summary.get("compare_rc") == 0
           and all((summary["sides"].get(s) or {}).get("rc") == 0 for s in SIDES))
     summary["exit_code"] = 0 if ok else 2
+
+    # 归档：report.json + 两侧产物 sha256 + README.txt（与缺二进制分支共用同一实现）
+    write_artifacts(out_dir, summary)
 
     # --post-comment：只发 comment，绝不改卡状态
     if cfg.get("post_comment") and card:
@@ -1421,8 +1432,9 @@ def execute(cfg):
             summary["notes"].append("--post-comment 失败：%s" % detail)
             summary["exit_code"] = 2
 
-    # 摘要最后写（包含 comment 结果），失败不影响退出码语义
-    write_summary_json(out_dir, summary)
+    # 摘要最后写（包含 comment 结果）；写失败 => 产物不完整 => rc=2（H-1）
+    if not write_summary_json(out_dir, summary):
+        summary["exit_code"] = 2
     return summary
 
 
@@ -1635,8 +1647,11 @@ def selftest():
         missing = [r for r in layout
                    if not os.path.exists(os.path.join(out, r.replace("/", os.sep)))]
         chk(not missing, "产物布局齐全（缺 %s）" % missing)
-        with open(os.path.join(out, "README.txt"), encoding="utf-8") as f:
-            readme = f.read()
+        try:
+            with open(os.path.join(out, "README.txt"), encoding="utf-8") as f:
+                readme = f.read()
+        except OSError:
+            readme = ""
         chk("scenario_sha256:" in readme and "started_at:" in readme
             and "command line (full):" in readme and "sha256=" in readme,
             "README 含场景 sha256/时间戳/命令全文/二进制 sha256")
@@ -1888,6 +1903,31 @@ def selftest():
         chk((s_second.get("artifacts") or {}).get("report.json", {}).get("sha256") != old_sha,
             "I-1 归档的 report sha256 指向本次文件（不是旧 PASS）")
 
+        # H-2：第三次复用同一 out => 两个 _stale-* 各自独立，第一次的 PASS 存档不被覆盖
+        s_third = execute(base_cfg(out_reuse, _selftest_profile(tmp, stub, log)))
+        stale_names = sorted(d for d in os.listdir(out_reuse) if d.startswith("_stale-"))
+        stale_dirs = [os.path.join(out_reuse, d) for d in stale_names]
+        third_stale = s_third.get("stale_archive") or ""
+        pass_copy = [d for d in stale_dirs
+                     if os.path.exists(os.path.join(d, "report.json"))
+                     and sha256_file(os.path.join(d, "report.json")) == old_sha]
+        fallback_copy = []
+        for d in stale_dirs:
+            try:
+                with open(os.path.join(d, "report.json"), encoding="utf-8-sig") as f:
+                    r = json.load(f)
+            except (OSError, ValueError):
+                continue
+            if (r.get("reason") == "orchestration_incomplete"
+                    and r.get("run_id") == second_rid):
+                fallback_copy.append(d)
+        chk(s_third["exit_code"] == 0 and len(stale_dirs) == 2,
+            "H-2 第三次运行 => 两个 _stale-* 各自独立（%s）" % stale_names)
+        chk(third_stale in stale_dirs and bool(pass_copy) and bool(fallback_copy)
+            and pass_copy[0] != fallback_copy[0],
+            "H-2 归档不互相覆盖：第一次 PASS 与第二次 fallback 各在一处（%s）"
+            % [os.path.basename(d) for d in stale_dirs])
+
         # 13b) F-4：缺二进制提前收尾也必须产出**完整产物集**（report.json + README.txt +
         #      card-window.json + card-window.log），不写半套证据；文档写明选了「完整产物集」。
         fresh_log()
@@ -1919,6 +1959,49 @@ def selftest():
             "F-4 缺二进制 => 摘要登记 README/card-window.json 的 sha256")
         chk("stop csharp" not in read_log() and "stack csharp" not in read_log(),
             "F-4 缺二进制 => 一步都没执行（不擅自起栈）")
+
+        # 13c) H-1：正常 PASS 路径上 README 写失败 => exit=2（写产物失败不能被 PASS 覆盖回 0）
+        orig_write_readme = globals()["write_readme"]
+
+        def boom_readme(path, summary):
+            raise OSError("simulated disk full")
+
+        globals()["write_readme"] = boom_readme
+        try:
+            fresh_log()
+            out_h1 = os.path.join(tmp, "run-h1")
+            s_h1 = execute(base_cfg(out_h1, _selftest_profile(tmp, stub, log)))
+        finally:
+            globals()["write_readme"] = orig_write_readme
+        chk(s_h1["exit_code"] == 2 and s_h1["verdict"] == "PASS",
+            "H-1 PASS 路径 README 写失败 => exit=2（实际 %s/%s）"
+            % (s_h1["exit_code"], s_h1["verdict"]))
+        chk(any("写 README.txt 失败" in n for n in (s_h1.get("notes") or []))
+            and not os.path.exists(os.path.join(out_h1, "README.txt")),
+            "H-1 README 缺失被记为失败证据（notes 有记录、文件确实不在）")
+        fresh_log()
+        out_h1ok = os.path.join(tmp, "run-h1-ok")
+        s_h1ok = execute(base_cfg(out_h1ok, _selftest_profile(tmp, stub, log)))
+        chk(s_h1ok["exit_code"] == 0
+            and os.path.exists(os.path.join(out_h1ok, "README.txt")),
+            "H-1 对照组：README 正常写入 => exit=0 且文件存在")
+
+        # 13d) H-1b：card-window.json 写失败 => rc=2（不再静默吞掉）
+        probe_summary = {"notes": [], "artifacts": {}, "exit_code": 0}
+        wsj_ok = write_summary_json(os.path.join(tmp, "no-such-dir"), probe_summary)
+        chk(wsj_ok is False
+            and any("card-window.json 失败" in n for n in probe_summary["notes"]),
+            "H-1b write_summary_json 写失败 => 返回 False 并记 note")
+        orig_wsj = globals()["write_summary_json"]
+        globals()["write_summary_json"] = lambda out_dir, summary: False
+        try:
+            fresh_log()
+            out_h1w = os.path.join(tmp, "run-h1w")
+            s_h1w = execute(base_cfg(out_h1w, _selftest_profile(tmp, stub, log)))
+        finally:
+            globals()["write_summary_json"] = orig_wsj
+        chk(s_h1w["exit_code"] == 2,
+            "H-1b card-window.json 写失败 => 调用方 rc=2（实际 %s）" % s_h1w["exit_code"])
 
         # 14) I-2：停栈禁词按效果归一（net.exe stop MySQL / spsv / Stop-Service 全拒）
         for label, bad_stop in (
