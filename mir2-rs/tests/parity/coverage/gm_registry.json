@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "3832ebef1efce90c2b210c2c5fe937d231b988b46c763a7c9785af322601e453"
+   "sha256": "e5e3ab25608a48bc3930a14d90397994840fb910fd0e000ad16a4f87426cd696"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1764,7 +1764,16 @@
    "verdict": "登记为 unknown_script_commands（oracle 侧即 no-op），不开实现卡。"
   }
  ],
- "script_reachable_but_implemented": [],
+ "script_reachable_but_implemented": [
+  {
+   "cmd": "禁言",
+   "file": "QuestDiary/游戏登陆/登陆脚本.txt",
+   "line": 16,
+   "label": "@登陆设置",
+   "rust_imp": "Shutup",
+   "third_state": false
+  }
+ ],
  "commands": [
   {
    "cmd": "+-jy",
@@ -4349,38 +4358,6 @@
    "field_line": 76
   },
   {
-   "cmd": "禁言",
-   "cmd_name": "禁言",
-   "child_card": "openmir2-gm-impl-shutup",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ShutupCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].Shutup",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（1 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "QuestDiary/游戏登陆/登陆脚本.txt",
-     "line": 16,
-     "label": "@登陆设置",
-     "section": "act",
-     "script_arg": "禁言",
-     "raw": "Gmexecute 禁言 self 10000",
-     "label_path": "QuestDiary/游戏登陆/登陆脚本.txt:@登陆设置 <- MapQuest_def/QManage.txt:@login <- engine GotoLable root",
-     "load_origin": "#CALL MapQuest_def/QManage.txt:37"
-    }
-   ],
-   "handler_class": "ShutupCommand",
-   "attr_name": "Shutup",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].Shutup",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ShutUp",
-   "field_line": 172
-  },
-  {
    "cmd": "联盟",
    "cmd_name": "联盟",
    "child_card": null,
@@ -4424,20 +4401,20 @@
   }
  ],
  "summary": {
-  "total": 88,
+  "total": 87,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 8
+   "script-reachable": 7
   },
   "reachable": 0,
-  "script_reachable": 8,
+  "script_reachable": 7,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 97,
-   "Unimplemented": 88
+   "Implemented": 98,
+   "Unimplemented": 87
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4463,7 +4440,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 76,
+  "complete_implemented": 77,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
