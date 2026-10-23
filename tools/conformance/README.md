@@ -389,3 +389,23 @@ python -I -B tools/conformance/compare_runs.py selftest
   （`docs/conformance-first-dual-run-20261023.md` §2.1/§2.2），不是规则缺口：规则补齐后重跑，
   它们仍会以 `body_len` / `block_align` / `multiset_missing`/`multiset_extra` 等差异出现，直到服务端行为被另卡修好。
 * 全部规则 `approved_by` 均为 `PENDING owner/coordinator review`，尚未获批准。
+
+## `card_window.py`（窗口批处理）的 fail-closed 口径
+
+一条命令跑完双栈窗口（用法见 `docs/leader-queue-20261023.md` §5）；`run_dual.sh` 仍是底层
+语义参照，本工具只调用 `mir2_probe.py` / `compare_runs.py` / `dbsnap.py`，不改它们。
+
+* **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
+  ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
+  收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +
+  `card-window.log`，且 `verdict=UNDECIDABLE` / `exit=2` / `report.json.reason=missing_binaries`。
+  **本工具明确选择「完整产物集」而不是「fail-closed 不写部分产物」**——窗口证据的价值在于
+  事后谁都能复查，写半套反而让复查者以为产物丢了。
+* **无法判定为测试库的库名是永久拒绝**：在 `db.databases` 里再声明一次也不放行，
+  `--allow-production-db` 与 `--dry-run` 同样不放行；补救办法只有一个——把库名换成
+  `preset=test` 或 `mir2_test_*` 一类。旧提示让人「在 db.databases 里显式声明」，但照做
+  之后仍被拒（review F-1），该提示已改为「永久拒绝 + 请换库」。
+* **停栈失败挂在调用点**：起过栈而停栈没跑成（`stop_rc=None`）或 `rc!=0` 一律判本侧失败
+  （rc=2）；不只是 `stop_ok()` 辅助函数有判据，`run_side` 的 finally 调用点也有集成断言
+  （monkeypatch `Runner.run` 让 stop 返回 `None`/非 0）。
+* `--selftest` 离线覆盖上述每条，不连网、不连库、不起真栈、不占 15xxx/17xxx。

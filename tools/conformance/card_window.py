@@ -34,12 +34,17 @@
     停栈没跑成（stop_rc=None）或 rc!=0 一律判失败**，绝不当成功。
   * `stack` / `stop` / `restore` / `db.command` / `probe` 必须是**非空字符串数组**（加载期校验；
     字符串 / [] / null 直接 ConfigError），避免停栈 argv 非法被静默当成「已停」。
+  * `binaries` 是**必需**项（两侧各至少一条非空路径，加载期校验）：缺省/空列表 => ConfigError，
+    杜绝「PASS 产物里没有任何二进制 sha256」。二进制文件缺失时提前收尾，但**产物集仍然完整**
+    （report.json + README.txt + card-window.json + card-window.log），不写半套证据。
   * **不碰 MySQL 服务本身**：停栈命令先做归一化（去 `.exe`、折叠大小写/空白）再按效果判定 ——
     任何 mysql/mysqld 提及、或服务控制族（Stop-Service/spsv/net stop/sc stop）直接拒绝。
   * 默认拒绝生产库：把 db 规格（preset / tables / allow_db / databases / command 的
     --db/--table、以及 env 里的 `database=`）**展开成最终库名集合**再判定
     （`prod` 预设 / mir2_db / mir2_account / mir2_data / Mir2 均算生产库；无法判定为测试库的
-    未知库名同样保守拒绝）。只有显式 --allow-production-db 才放行。
+    未知库名是**永久拒绝**：`db.databases` 再声明一次也不放行，`--allow-production-db` 与
+    `--dry-run` 同样不放行，请换用 `preset=test` / `mir2_test_*` 命名）。
+    只有显式 --allow-production-db 才放行生产库本身。
   * 真跑 **--out 必填**（不允许把证据静默写进 cwd）；out 里若已有上次运行的产物，开跑前整体
     归档到 `_stale-<ts>-<pid>/`，并**无条件**写本次的 report.json（compare 报告或 fallback），
     杜绝旧 PASS 冒充本次证据。
@@ -51,7 +56,7 @@ profile：
     必须显式 --allow-production-db，且只有 owner 授权的窗口才允许（见 docs 说明）。
   * `--profile <路径.json>` 也可直接加载自定义 profile（format = card-window-profile/1）。
     自定义 db 快照命令（`db.command`）必须同时用 `db.databases` 声明它读的库名
-    （静态安全判定；无法判定为测试库的库名会被拒绝）。
+    （静态安全判定；无法判定为测试库的库名会被**永久拒绝**，声明了也不放行）。
 
 用法：
   CONFORMANCE_PASSWORD=... python -I -B tools/conformance/card_window.py \
@@ -441,7 +446,9 @@ def load_profile(value):
         if db.get("command") is not None and not (
                 db.get("databases") or db.get("preset") or db.get("tables")):
             raise ConfigError("profile.sides.%s.db.command 必须同时声明 databases"
-                              "（静态安全判定用；否则无法确认它读的是测试库）" % side)
+                              "（静态安全判定用；否则无法确认它读的是测试库。"
+                              "所声明的库名还必须是 preset=test / mir2_test_* 一类的测试库）"
+                              % side)
         for key in ("ports", "ready_ports"):
             v = sc.get(key, [])
             if not isinstance(v, list):
@@ -449,9 +456,12 @@ def load_profile(value):
             for p in v:
                 if not isinstance(p, int) or isinstance(p, bool) or not (0 < p < 65536):
                     raise ConfigError("profile.sides.%s.%s 含非法端口 %r" % (side, key, p))
-        bins = sc.get("binaries", [])
-        if not isinstance(bins, list) or any(not isinstance(x, str) or not x for x in bins):
-            raise ConfigError("profile.sides.%s.binaries 必须是非空字符串数组" % side)
+        bins = sc.get("binaries")
+        if not isinstance(bins, list) or not bins or any(
+                not isinstance(x, str) or not x for x in bins):
+            raise ConfigError(
+                "profile.sides.%s.binaries 必须是**非空**字符串数组：窗口证据要求两侧二进制 sha256，"
+                "空列表/缺省会让 PASS 报告里没有任何二进制指纹" % side)
         env = sc.get("env")
         if env is not None:
             if not isinstance(env, dict) or any(
@@ -601,8 +611,9 @@ def check_profile_safety(prof, allow_production_db, dry_run=False):
     if unknown:
         raise ConfigError(
             "profile 的库规格无法静态判定为测试库（保守拒绝）：%s；"
-            "请在 db.databases 里显式声明测试库名（或改用 preset=test / mir2_test_*）"
-            % ", ".join(unknown))
+            "这些库名是**永久拒绝**——在 db.databases 里再声明一次同样不放行，"
+            "--allow-production-db 与 --dry-run 也不放行。"
+            "请换用 preset=test 或 mir2_test_* 命名的测试库" % ", ".join(unknown))
     text = _any_argv_text(prof)
     hits = sorted(set(m.group(0) for m in PROD_DB_RE.finditer(text))
                   | set(m.group(0) for m in PROD_LOGIN_RE.finditer(text)))
@@ -1103,6 +1114,48 @@ def write_fallback_report(out_dir, summary, reason):
     return path
 
 
+ARTIFACT_FILES = ("report.json", "csharp/frames.ndjson", "csharp/run.json",
+                  "csharp/db/manifest.json", "rust/frames.ndjson", "rust/run.json",
+                  "rust/db/manifest.json")
+
+
+def write_artifacts(out_dir, summary):
+    """登记 report.json / 两侧产物 sha256 并写 README.txt。
+
+    F-4：所有收尾分支（含「缺二进制」提前收尾）共用这一步，保证产物集完整，
+    绝不留下「只有 report.json + log」的半套证据。
+    """
+    artifacts = {}
+    for rel in ARTIFACT_FILES:
+        p = os.path.join(out_dir, rel.replace("/", os.sep))
+        if os.path.exists(p):
+            artifacts[rel] = {"path": p, "sha256": sha256_file(p)}
+        else:
+            artifacts[rel] = {"path": p, "sha256": None}
+    summary["artifacts"] = artifacts
+    readme_path = os.path.join(out_dir, "README.txt")
+    try:
+        write_readme(readme_path, summary)
+        summary["artifacts"]["README.txt"] = {"path": readme_path,
+                                              "sha256": sha256_file(readme_path)}
+    except OSError as e:
+        summary["notes"].append("写 README.txt 失败：%s" % e)
+        summary["exit_code"] = 2
+
+
+def write_summary_json(out_dir, summary):
+    """最后写 card-window.json（包含 comment 结果）；写失败不影响退出码语义。"""
+    try:
+        summary_path = os.path.join(out_dir, "card-window.json")
+        with open(summary_path, "w", encoding="utf-8", newline="\n") as f:
+            json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
+            f.write("\n")
+        summary["artifacts"]["card-window.json"] = {"path": summary_path,
+                                                    "sha256": sha256_file(summary_path)}
+    except OSError:
+        pass
+
+
 def execute(cfg):
     """cfg: dict(card, scenario, out, profile, password, post_comment, dry_run,
                  allow_production_db, rules, timeout_ms, ...) -> summary"""
@@ -1241,13 +1294,20 @@ def execute(cfg):
                     if not b["exists"]]
     if missing_bins:
         summary["notes"].append("缺两侧二进制 => 不跑（证据不完整）：%s" % ", ".join(missing_bins))
+        summary["verdict"] = "UNDECIDABLE"
+        summary["exit_code"] = 2
         try:
             write_fallback_report(out_dir, summary, "missing_binaries")
             summary["report_kind"] = "fallback"
         except OSError as e:
             summary["notes"].append("写 fallback report.json 失败：%s" % e)
+        summary["commands"] = runner.commands
         summary["finished_at"] = iso_now()
         summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
+        # F-4 选「完整产物集」：report.json + README.txt + card-window.json + card-window.log 全落，
+        # 不写半套证据（--post-comment 仍只在真正跑完编排时才发）。
+        write_artifacts(out_dir, summary)
+        write_summary_json(out_dir, summary)
         return summary
 
     sides_ok = True
@@ -1314,30 +1374,12 @@ def execute(cfg):
     summary["finished_at"] = iso_now()
     summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
 
-    # 归档：report.json + 两侧产物 sha256
-    artifacts = {}
-    for rel in ("report.json", "csharp/frames.ndjson", "csharp/run.json",
-                "csharp/db/manifest.json", "rust/frames.ndjson", "rust/run.json",
-                "rust/db/manifest.json"):
-        p = os.path.join(out_dir, rel.replace("/", os.sep))
-        if os.path.exists(p):
-            artifacts[rel] = {"path": p, "sha256": sha256_file(p)}
-        else:
-            artifacts[rel] = {"path": p, "sha256": None}
-    summary["artifacts"] = artifacts
+    # 归档：report.json + 两侧产物 sha256 + README.txt（与缺二进制分支共用同一实现）
+    write_artifacts(out_dir, summary)
 
     ok = (summary["verdict"] == "PASS" and summary.get("compare_rc") == 0
           and all((summary["sides"].get(s) or {}).get("rc") == 0 for s in SIDES))
     summary["exit_code"] = 0 if ok else 2
-
-    readme_path = os.path.join(out_dir, "README.txt")
-    try:
-        write_readme(readme_path, summary)
-        summary["artifacts"]["README.txt"] = {"path": readme_path,
-                                              "sha256": sha256_file(readme_path)}
-    except OSError as e:
-        summary["notes"].append("写 README.txt 失败：%s" % e)
-        summary["exit_code"] = 2
 
     # --post-comment：只发 comment，绝不改卡状态
     if cfg.get("post_comment") and card:
@@ -1380,15 +1422,7 @@ def execute(cfg):
             summary["exit_code"] = 2
 
     # 摘要最后写（包含 comment 结果），失败不影响退出码语义
-    try:
-        summary_path = os.path.join(out_dir, "card-window.json")
-        with open(summary_path, "w", encoding="utf-8", newline="\n") as f:
-            json.dump(summary, f, ensure_ascii=False, indent=2, sort_keys=True)
-            f.write("\n")
-        summary["artifacts"]["card-window.json"] = {"path": summary_path,
-                                                    "sha256": sha256_file(summary_path)}
-    except OSError:
-        pass
+    write_summary_json(out_dir, summary)
     return summary
 
 
@@ -1772,6 +1806,49 @@ def selftest():
             and stop_ok(False, None),
             "B-1 兜底：起过栈时 stop_rc=None/非 0 一律判失败")
 
+        # 12b) F-2（核心）：停栈兜底必须挂在 **run_side 调用点**（finally），不能只测 stop_ok()。
+        #      做法：monkeypatch Runner.run，只让 step=stop 返回 None / 非 0，其余步骤照常走桩；
+        #      再走完整 execute（真调用 run_side），断言该侧 rc=2、工具 rc=2。
+        #      牙：把 finally 的判断改回旧式 `res["rc"]==0 and stop_rc not in (0,None)`
+        #      ⇒ stop_rc=None 不再判失败 ⇒ 本组必红（这正是上一轮 62/62 全绿的盲区）。
+        orig_runner_run = Runner.run
+        stop_state = {"value": "orig"}
+
+        def patched_runner_run(self, side, step, argv, env=None, timeout=600):
+            if step == "stop" and stop_state["value"] != "orig":
+                safe = _redact_argv(argv)
+                self.commands.append({"side": side, "step": step, "argv": safe})
+                self.steps.append("%s:%s" % (side, step))
+                self.log("== %s/%s :: %s" % (side, step, _join_argv(safe)))
+                self.log("   %s/%s rc=%s" % (side, step, stop_state["value"]))
+                return stop_state["value"]
+            return orig_runner_run(self, side, step, argv, env=env, timeout=timeout)
+
+        Runner.run = patched_runner_run
+        try:
+            for label, stop_rc in (("None", None), ("rc=9", 9)):
+                stop_state["value"] = stop_rc
+                fresh_log()
+                tag = "none" if stop_rc is None else "rc9"
+                out_stop = os.path.join(tmp, "run-stop-" + tag)
+                s_stop = execute(base_cfg(out_stop, _selftest_profile(tmp, stub, log)))
+                cs = s_stop["sides"].get("csharp") or {}
+                rep_stop = read_report(os.path.join(out_stop, "report.json")) or {}
+                chk(s_stop["exit_code"] == 2,
+                    "F-2 stop_rc=%s => 工具 rc=2（实际 %s）" % (label, s_stop["exit_code"]))
+                chk(cs.get("rc") == 2,
+                    "F-2 stop_rc=%s => run_side 调用点判失败 rc=2（实际 %s）"
+                    % (label, cs.get("rc")))
+                chk("停栈未成功" in (cs.get("error") or ""),
+                    "F-2 stop_rc=%s => 错误写明停栈未成功（%r）"
+                    % (label, (cs.get("error") or "")[:80]))
+                chk(rep_stop.get("reason") == "orchestration_incomplete"
+                    and rep_stop.get("run_id") == s_stop.get("run_id"),
+                    "F-2 stop_rc=%s => 仍落本次 fallback report（不吞证据）" % label)
+        finally:
+            Runner.run = orig_runner_run
+            stop_state["value"] = "orig"
+
         # 13) I-1：同一 out 先 PASS 后失败 => 本次 report 是 fallback，旧 PASS 进 _stale-*
         fresh_log()
         out_reuse = os.path.join(tmp, "run-reuse")
@@ -1788,13 +1865,57 @@ def selftest():
         chk(s_second["exit_code"] == 2 and new_rep.get("verdict") == "UNDECIDABLE"
             and new_rep.get("format") == "card-window-report/1",
             "I-1 第二次失败 => report.json 是本次 fallback UNDECIDABLE（不冒充旧 PASS）")
-        chk(new_rep.get("run_id") == s_second.get("run_id"),
-            "I-1 fallback report 的 run_id 属于本次")
+        first_rid = s_first.get("run_id")
+        second_rid = s_second.get("run_id")
+        stale_summary = {}
+        try:
+            with open(os.path.join(stale_dir, "card-window.json"),
+                      encoding="utf-8-sig") as f:
+                stale_summary = json.load(f)
+        except (OSError, ValueError):
+            stale_summary = {}
+        chk(bool(first_rid) and bool(second_rid) and first_rid != second_rid,
+            "F-5 两次运行 run_id 必须不同（%r / %r）" % (first_rid, second_rid))
+        chk(new_rep.get("run_id") == second_rid and new_rep.get("run_id") != first_rid,
+            "F-5 fallback report 的 run_id = 本次（且不是上次）")
+        chk(stale_summary.get("run_id") == first_rid
+            and stale_summary.get("run_id") != second_rid,
+            "F-5 _stale-* 里上次运行的 card-window.json run_id = 上次（不是本次，%r）"
+            % stale_summary.get("run_id"))
         chk(bool(stale_dir) and (stale_rep or {}).get("verdict") == "PASS"
             and sha256_file(os.path.join(stale_dir, "report.json")) == old_sha,
             "I-1 旧 PASS report 已原样归档到 _stale-*")
         chk((s_second.get("artifacts") or {}).get("report.json", {}).get("sha256") != old_sha,
             "I-1 归档的 report sha256 指向本次文件（不是旧 PASS）")
+
+        # 13b) F-4：缺二进制提前收尾也必须产出**完整产物集**（report.json + README.txt +
+        #      card-window.json + card-window.log），不写半套证据；文档写明选了「完整产物集」。
+        fresh_log()
+        out_nobin = os.path.join(tmp, "run-nobin")
+        p_nobin = _selftest_profile(tmp, stub, log)
+        missing_bin = os.path.join(tmp, "no-such-binary.exe")
+        p_nobin["sides"]["rust"]["binaries"] = [missing_bin]
+        s_nobin = execute(base_cfg(out_nobin, p_nobin))
+        nobin_files = ["report.json", "README.txt", "card-window.json", "card-window.log"]
+        missing_out = [f for f in nobin_files
+                       if not os.path.exists(os.path.join(out_nobin, f))]
+        nobin_rep = read_report(os.path.join(out_nobin, "report.json")) or {}
+        chk(s_nobin["exit_code"] == 2 and s_nobin["verdict"] == "UNDECIDABLE",
+            "F-4 缺二进制 => rc=2/UNDECIDABLE（实际 %s/%s）"
+            % (s_nobin["exit_code"], s_nobin["verdict"]))
+        chk(not missing_out, "F-4 缺二进制分支产物集完整（缺 %s）" % missing_out)
+        chk(nobin_rep.get("reason") == "missing_binaries"
+            and nobin_rep.get("run_id") == s_nobin.get("run_id"),
+            "F-4 缺二进制 => fallback report 写明 missing_binaries 且 run_id 属于本次")
+        with open(os.path.join(out_nobin, "README.txt"), encoding="utf-8") as f:
+            nobin_readme = f.read()
+        chk(missing_bin in nobin_readme and "UNDECIDABLE" in nobin_readme,
+            "F-4 缺二进制 => README 点名缺失二进制并写明 verdict")
+        chk(bool((s_nobin.get("artifacts") or {}).get("README.txt", {}).get("sha256"))
+            and bool((s_nobin.get("artifacts") or {}).get("card-window.json", {}).get("sha256")),
+            "F-4 缺二进制 => 摘要登记 README/card-window.json 的 sha256")
+        chk("stop csharp" not in read_log() and "stack csharp" not in read_log(),
+            "F-4 缺二进制 => 一步都没执行（不擅自起栈）")
 
         # 14) I-2：停栈禁词按效果归一（net.exe stop MySQL / spsv / Stop-Service 全拒）
         for label, bad_stop in (
@@ -1845,6 +1966,43 @@ def selftest():
         except ConfigError:
             i3_ok = False
         chk(i3_ok, "I-3 内置 alt（preset=test + mir2_test_*_r）仍放行")
+
+        # 15b) F-3：binaries 是窗口证据的必需项（空列表/缺省 => 加载期 ConfigError，不许 PASS）
+        for label, mutate in (
+                ("binaries=[]", lambda p: p["sides"]["csharp"].__setitem__("binaries", [])),
+                ("缺 binaries", lambda p: p["sides"]["rust"].pop("binaries", None))):
+            fresh_log()
+            p_f3 = _selftest_profile(tmp, stub, log)
+            mutate(p_f3)
+            f3_refused = False
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-f3"), p_f3))
+            except ConfigError as e:
+                f3_refused = "binaries" in str(e)
+            chk(f3_refused, "F-3 %s => 加载期 ConfigError（不判 PASS）" % label)
+            chk(not os.path.exists(log), "F-3 %s => 一步都没执行" % label)
+        prof_f3ok = load_profile(_selftest_profile(tmp, stub, log))
+        both_bins = {s: bin_info(prof_f3ok["sides"][s]) for s in SIDES}
+        chk(all(both_bins[s] and both_bins[s][0]["sha256"] == sha256_file(stub)
+                for s in SIDES),
+            "F-3 正常两侧 => 加载通过且两侧二进制 sha256 都算得出")
+
+        # 15c) F-1：未知库名是**永久拒绝**——在 db.databases 里显式声明也不放行
+        #      （--allow-production-db / --dry-run 同样），提示不再教人做无用功。
+        p_f1 = _selftest_profile(tmp, stub, log)
+        p_f1["sides"]["csharp"]["db"] = {"command": ["x", "--db", "mystery_db"],
+                                         "databases": ["mystery_db"]}
+        f1_msg = ""
+        try:
+            check_profile_safety(load_profile(p_f1), True, dry_run=True)
+        except ConfigError as e:
+            f1_msg = str(e)
+        chk("mystery_db" in f1_msg and "永久拒绝" in f1_msg,
+            "F-1 显式声明未知库 + allow-production-db + dry-run => 仍拒绝（%r）"
+            % f1_msg[:100])
+        chk("在 db.databases 里显式声明" not in f1_msg
+            and "mir2_test_*" in f1_msg,
+            "F-1 提示不再教「在 db.databases 里显式声明」，改为指名换库")
 
         # 16) I-4：真跑缺 --out => rc=2，且不往 cwd 写任何证据
         old_cwd = os.getcwd()
