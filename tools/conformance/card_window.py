@@ -28,12 +28,21 @@
 安全口径（fail-closed；退出码 0 = PASS，其余一律 2）：
   * **起每一侧栈之前**检查该侧端口占用；被占 => rc=2 并点名占用 pid（不启动栈）。
   * 起栈命令返回 0 之后再**轮询就绪端口**；栈没起来（端口不监听）=> rc=2，绝不算对拍通过。
-  * probe 跑完检查 frames.ndjson / run.json 存在且非空；0 帧 => rc=2。
+  * probe 跑完检查 frames.ndjson 非空；run.json 必须非空且 `exit.code == probe rc == 0`；0 帧 => rc=2。
   * 库快照失败 / 缺 manifest => rc=2（库判据不可缺）。
-  * 停栈在 finally 里执行：无论恢复/起栈/probe/抓库哪一步失败都会尝试停栈。
-  * **不碰 MySQL 服务本身**：停栈命令若含 mysqld / Stop-Service / net stop / mysqladmin 直接拒绝。
-  * 默认拒绝指向生产库（mir2_db / mir2_account / mir2_data / database=Mir2）的配置；
-    只有显式 --allow-production-db 才放行（内容冻结，窗口只跑测试库）。
+  * 停栈在 finally 里执行：无论恢复/起栈/probe/抓库哪一步失败都会尝试停栈；**起过栈而
+    停栈没跑成（stop_rc=None）或 rc!=0 一律判失败**，绝不当成功。
+  * `stack` / `stop` / `restore` / `db.command` / `probe` 必须是**非空字符串数组**（加载期校验；
+    字符串 / [] / null 直接 ConfigError），避免停栈 argv 非法被静默当成「已停」。
+  * **不碰 MySQL 服务本身**：停栈命令先做归一化（去 `.exe`、折叠大小写/空白）再按效果判定 ——
+    任何 mysql/mysqld 提及、或服务控制族（Stop-Service/spsv/net stop/sc stop）直接拒绝。
+  * 默认拒绝生产库：把 db 规格（preset / tables / allow_db / databases / command 的
+    --db/--table、以及 env 里的 `database=`）**展开成最终库名集合**再判定
+    （`prod` 预设 / mir2_db / mir2_account / mir2_data / Mir2 均算生产库；无法判定为测试库的
+    未知库名同样保守拒绝）。只有显式 --allow-production-db 才放行。
+  * 真跑 **--out 必填**（不允许把证据静默写进 cwd）；out 里若已有上次运行的产物，开跑前整体
+    归档到 `_stale-<ts>-<pid>/`，并**无条件**写本次的 report.json（compare 报告或 fallback），
+    杜绝旧 PASS 冒充本次证据。
 
 profile：
   * 内置 `alt`（默认）= 2026-10-23 双栈窗口所用的备用端口剖面
@@ -41,6 +50,8 @@ profile：
   * 内置 `csharp-default` = C# 默认端口栈（E:/MirServer，**生产库**）。默认拒绝运行，
     必须显式 --allow-production-db，且只有 owner 授权的窗口才允许（见 docs 说明）。
   * `--profile <路径.json>` 也可直接加载自定义 profile（format = card-window-profile/1）。
+    自定义 db 快照命令（`db.command`）必须同时用 `db.databases` 声明它读的库名
+    （静态安全判定；无法判定为测试库的库名会被拒绝）。
 
 用法：
   CONFORMANCE_PASSWORD=... python -I -B tools/conformance/card_window.py \
@@ -74,6 +85,7 @@ import sys
 import tempfile
 import time
 import traceback
+import uuid
 
 TOOL = "tools/conformance/card_window.py"
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -196,7 +208,6 @@ BUILTIN_PROFILES = {
 
 PROD_DB_RE = re.compile(r"(?<![A-Za-z0-9_])mir2_(db|account|data)(?![A-Za-z0-9_])", re.I)
 PROD_LOGIN_RE = re.compile(r"database\s*=\s*Mir2(?![A-Za-z0-9_])", re.I)
-STOP_FORBIDDEN = ("mysqld", "stop-service", "net stop", "mysqladmin", "restart-service")
 
 
 class ConfigError(Exception):
@@ -359,6 +370,19 @@ def wait_ready(ports, timeout_s):
 # ---------------------------------------------------------------------------
 # profile
 # ---------------------------------------------------------------------------
+def validate_cmd_argv(value, where):
+    """命令必须是**非空字符串数组**。加载期就拒，避免停栈时才发现 argv 非法。"""
+    if not isinstance(value, list):
+        raise ConfigError("%s 必须是 argv 字符串数组（实际 %s）；不接受字符串/null"
+                          % (where, type(value).__name__))
+    if not value:
+        raise ConfigError("%s 不能是空数组（会导致该步静默不执行）" % where)
+    for a in value:
+        if not isinstance(a, str) or not a:
+            raise ConfigError("%s 的元素必须是非空字符串（实际 %r）" % (where, a))
+    return value
+
+
 def load_profile(value):
     if isinstance(value, dict):
         prof = copy.deepcopy(value)
@@ -390,11 +414,49 @@ def load_profile(value):
         for key in ("stack", "stop", "restore"):
             if key not in sc:
                 raise ConfigError("profile.sides.%s 缺 %r 命令" % (side, key))
-        if "db" not in sc:
+            validate_cmd_argv(sc[key], "profile.sides.%s.%s" % (side, key))
+        if sc.get("probe") is not None:
+            validate_cmd_argv(sc["probe"], "profile.sides.%s.probe" % side)
+        extra = sc.get("probe_extra")
+        if extra is not None:
+            if not isinstance(extra, list) or any(not isinstance(x, str) for x in extra):
+                raise ConfigError("profile.sides.%s.probe_extra 必须是字符串数组" % side)
+        db = sc.get("db")
+        if not isinstance(db, dict):
             raise ConfigError("profile.sides.%s 缺 db 配置（preset / tables / command）" % side)
-        for key in ("ports", "ready_ports", "binaries"):
-            if not isinstance(sc.get(key, []), list):
+        if db.get("command") is not None:
+            validate_cmd_argv(db["command"], "profile.sides.%s.db.command" % side)
+        if db.get("preset") is not None:
+            if not isinstance(db["preset"], str) or not db["preset"]:
+                raise ConfigError("profile.sides.%s.db.preset 必须是非空字符串" % side)
+        for key in ("tables", "allow_db", "databases"):
+            v = db.get(key)
+            if v is not None:
+                if not isinstance(v, list) or any(not isinstance(x, str) or not x for x in v):
+                    raise ConfigError("profile.sides.%s.db.%s 必须是非空字符串数组"
+                                      % (side, key))
+        if db.get("command") is None and not (db.get("preset") or db.get("tables")):
+            raise ConfigError("profile.sides.%s.db 需要 preset / tables（或 command + databases）"
+                              % side)
+        if db.get("command") is not None and not (
+                db.get("databases") or db.get("preset") or db.get("tables")):
+            raise ConfigError("profile.sides.%s.db.command 必须同时声明 databases"
+                              "（静态安全判定用；否则无法确认它读的是测试库）" % side)
+        for key in ("ports", "ready_ports"):
+            v = sc.get(key, [])
+            if not isinstance(v, list):
                 raise ConfigError("profile.sides.%s.%s 必须是数组" % (side, key))
+            for p in v:
+                if not isinstance(p, int) or isinstance(p, bool) or not (0 < p < 65536):
+                    raise ConfigError("profile.sides.%s.%s 含非法端口 %r" % (side, key, p))
+        bins = sc.get("binaries", [])
+        if not isinstance(bins, list) or any(not isinstance(x, str) or not x for x in bins):
+            raise ConfigError("profile.sides.%s.binaries 必须是非空字符串数组" % side)
+        env = sc.get("env")
+        if env is not None:
+            if not isinstance(env, dict) or any(
+                    not isinstance(k, str) or not isinstance(v, str) for k, v in env.items()):
+                raise ConfigError("profile.sides.%s.env 必须是字符串到字符串的对象" % side)
     return prof
 
 
@@ -419,6 +481,76 @@ def apply_overrides(prof, cfg):
     return prof
 
 
+PROD_DB_NAMES = frozenset({"mir2_db", "mir2_account", "mir2_data", "mir2"})
+DB_IN_CONN_RE = re.compile(r"database\s*=\s*([A-Za-z0-9_]+)", re.I)
+SERVICE_CONTROL_RE = re.compile(
+    r"\b(stop-service|spsv|restart-service|rssv|suspend-service|resume-service|"
+    r"set-service|new-service)\b"
+    r"|\bnet1?\s+stop\b|\bsc\s+stop\b", re.I)
+
+
+def classify_db_name(name):
+    """结构性判定库名类别：'prod' / 'test' / 'unknown'（不看原始命令文本）。"""
+    n = str(name or "").strip().strip("`'\"")
+    if not n:
+        return "unknown"
+    low = n.casefold()
+    if low in ("prod", "production"):
+        return "prod"
+    if low == "test":
+        return "test"
+    if low in PROD_DB_NAMES:
+        return "prod"
+    if low.startswith("mir2_test_") or "_test" in low:
+        return "test"
+    if low.endswith(("_r", "_oracle", "_rust")):
+        return "test"
+    return "unknown"
+
+
+def _norm_stop_text(argv):
+    txt = " ".join(str(x) for x in argv).lower()
+    txt = re.sub(r"\.exe\b", "", txt)
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+def _collect_db_specs(prof):
+    """把 profile 里所有可能决定「读哪个库」的值展开成 (库名, 来源) 列表。
+
+    覆盖：db.preset / db.tables / db.allow_db / db.databases / db.command 的
+    --db/--database/--table/--allow-db，以及 sides.*.env 里 `database=<name>` 的连接串。
+    """
+    specs = []
+    for side in SIDES:
+        sc = prof["sides"][side]
+        db = sc.get("db") or {}
+        if db.get("preset") is not None:
+            specs.append((str(db["preset"]), "sides.%s.db.preset" % side))
+        for key in ("tables", "allow_db", "databases"):
+            for v in db.get(key) or []:
+                name = str(v)
+                if key == "tables" and "." in name:
+                    name = name.split(".", 1)[0]
+                specs.append((name, "sides.%s.db.%s" % (side, key)))
+        cmd = db.get("command")
+        if isinstance(cmd, list):
+            for i, a in enumerate(cmd):
+                if a in ("--db", "--database", "--allow-db") and i + 1 < len(cmd):
+                    specs.append((str(cmd[i + 1]), "sides.%s.db.command %s" % (side, a)))
+                elif a.startswith("--db=") or a.startswith("--database="):
+                    specs.append((a.split("=", 1)[1], "sides.%s.db.command %s" % (side, a)))
+                elif a == "--table" and i + 1 < len(cmd):
+                    specs.append((str(cmd[i + 1]).split(".", 1)[0],
+                                  "sides.%s.db.command --table" % side))
+                elif a.startswith("--table="):
+                    specs.append((a.split("=", 1)[1].split(".", 1)[0],
+                                  "sides.%s.db.command --table" % side))
+        for k, v in (sc.get("env") or {}).items():
+            for m in DB_IN_CONN_RE.finditer(str(v)):
+                specs.append((m.group(1), "sides.%s.env.%s" % (side, k)))
+    return specs
+
+
 def _any_argv_text(prof):
     texts = []
     for side in SIDES:
@@ -430,32 +562,53 @@ def _any_argv_text(prof):
         db = sc.get("db") or {}
         if isinstance(db.get("command"), list):
             texts.append(" ".join(str(x) for x in db["command"]))
-        for t in db.get("tables") or []:
-            texts.append(str(t))
-        for d in db.get("allow_db") or []:
-            texts.append(str(d))
+        for key in ("tables", "allow_db", "databases"):
+            for t in db.get(key) or []:
+                texts.append(str(t))
         texts.append(str(db.get("preset") or ""))
+        for k, v in (sc.get("env") or {}).items():
+            texts.append("%s=%s" % (k, v))
     texts.append(" ".join(str(x) for x in prof.get("compare_extra") or []))
     return "\n".join(texts)
 
 
 def check_profile_safety(prof, allow_production_db, dry_run=False):
-    """(a) 停栈命令不许碰 mysqld； (b) 默认拒绝生产库。失败 => ConfigError。"""
+    """(a) 停栈不许碰 MySQL； (b) 生产库默认拒绝（结构性判定）。失败 => ConfigError。"""
     warnings = []
+    # I-2：按「效果」判，而不是字面子串。归一化（去 .exe / 折叠空白/大小写）后，
+    # 任何 mysql/mysqld 提及、或服务控制族（Stop-Service/spsv/net stop/sc stop）一律拒。
     for side in SIDES:
-        stop_argv = prof["sides"][side].get("stop")
-        if isinstance(stop_argv, list):
-            low = " ".join(str(x) for x in stop_argv).lower()
-            for bad in STOP_FORBIDDEN:
-                if bad in low:
-                    raise ConfigError(
-                        "profile.sides.%s.stop 含 %r：停栈命令不允许操作 MySQL 服务本身"
-                        "（只停游戏栈；MySQL 由 owner 保持运行）" % (side, bad))
+        txt = _norm_stop_text(prof["sides"][side]["stop"])
+        if "mysql" in txt:
+            raise ConfigError(
+                "profile.sides.%s.stop 提到 MySQL/mysqld：停栈命令不允许操作 MySQL 服务本身"
+                "（只停游戏栈；MySQL 由 owner 保持运行）" % side)
+        if SERVICE_CONTROL_RE.search(txt):
+            raise ConfigError(
+                "profile.sides.%s.stop 使用服务控制（Stop-Service/spsv/net stop/sc stop 等）："
+                "可能误停 MySQL；停栈只允许按进程名/pid 停游戏栈" % side)
+
+    # I-3：先把 db 规格「展开」成最终库名集合再判定，不看原始文本是否含字面量。
+    prod_hits, unknown = [], []
+    for name, src in _collect_db_specs(prof):
+        kind = classify_db_name(name)
+        if kind == "prod":
+            prod_hits.append("%s(%s)" % (name, src))
+        elif kind == "unknown":
+            unknown.append("%s(%s)" % (name, src))
+    if prod_hits:
+        warnings.append("db 规格展开后命中生产库：%s" % ", ".join(prod_hits))
+    if unknown:
+        raise ConfigError(
+            "profile 的库规格无法静态判定为测试库（保守拒绝）：%s；"
+            "请在 db.databases 里显式声明测试库名（或改用 preset=test / mir2_test_*）"
+            % ", ".join(unknown))
     text = _any_argv_text(prof)
     hits = sorted(set(m.group(0) for m in PROD_DB_RE.finditer(text))
                   | set(m.group(0) for m in PROD_LOGIN_RE.finditer(text)))
-    if (hits or prof.get("production_db")) and not allow_production_db:
-        detail = ("命中 %s" % ", ".join(hits)) if hits else "profile 标记 production_db=true"
+    prod_all = prod_hits + hits
+    if (prod_all or prof.get("production_db")) and not allow_production_db:
+        detail = ("命中 %s" % ", ".join(prod_all)) if prod_all else "profile 标记 production_db=true"
         if dry_run:
             warnings.append("dry-run 未实际访问生产库，但 profile 指向生产库（%s）；"
                             "真跑会被拒绝，除非 --allow-production-db" % detail)
@@ -463,8 +616,8 @@ def check_profile_safety(prof, allow_production_db, dry_run=False):
             raise ConfigError(
                 "拒绝在窗口里碰生产库（%s）：内容冻结，窗口只跑测试库。"
                 "确需 owner 授权的生产窗口时才可加 --allow-production-db。" % detail)
-    if hits and allow_production_db:
-        warnings.append("已显式放行生产库：%s" % ", ".join(hits))
+    if prod_all and allow_production_db:
+        warnings.append("已显式放行生产库：%s" % ", ".join(prod_all))
     return warnings
 
 
@@ -589,6 +742,37 @@ def frame_count(path):
     return n
 
 
+def check_run_json(path, probe_rc):
+    """M-1：run.json 必须非空、可解析，且 exit.code 与 probe rc 一致（且为 0）。"""
+    if not os.path.exists(path):
+        return "probe 未落 run.json：%s" % path
+    try:
+        if os.path.getsize(path) == 0:
+            return "run.json 为空：%s" % path
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        return "run.json 不可解析：%s（%s）" % (path, e)
+    code = (data.get("exit") or {}).get("code") if isinstance(data, dict) else None
+    if not isinstance(code, int):
+        return "run.json 缺 exit.code：%s" % path
+    if code != probe_rc:
+        return "run.json exit.code=%s 与 probe rc=%s 不一致" % (code, probe_rc)
+    if code != 0:
+        return "run.json exit.code=%s（probe 侧未完成）" % code
+    return None
+
+
+def stop_ok(attempted, stop_rc):
+    """停栈成功判据：没起过栈 => 无需停；起过栈 => 必须真的执行且 rc=0。
+
+    stop_rc=None 表示「停栈命令没跑成」（argv 非法/启动失败），**绝不当成功**。
+    """
+    if not attempted:
+        return True
+    return stop_rc == 0
+
+
 def run_side(runner, side, prof, ctx, password):
     sc = prof["sides"][side]
     side_dir = ctx["side_dir"]
@@ -689,8 +873,9 @@ def run_side(runner, side, prof, ctx, password):
         if res["frames"] == 0:
             res["error"] = "probe 产出 0 帧（frames.ndjson 为空）：不能算对拍通过"
             return res
-        if not os.path.exists(os.path.join(side_dir, "run.json")):
-            res["error"] = "probe 未落 run.json：%s" % os.path.join(side_dir, "run.json")
+        run_err = check_run_json(os.path.join(side_dir, "run.json"), res["probe_rc"])
+        if run_err:
+            res["error"] = run_err
             return res
         if res["db_rc"] != 0:
             return res
@@ -704,10 +889,14 @@ def run_side(runner, side, prof, ctx, password):
                 res["stop_rc"] = runner.run(side, "stop", stop_argv, env=env, timeout=180)
             except (ConfigError, OSError) as e:
                 res["stop_rc"] = None
-                res["error"] = (res["error"] or "") + "；停栈命令失败：%s" % e
-        if res["rc"] == 0 and res["stop_rc"] not in (0, None):
-            res["rc"] = 2
-            res["error"] = "停栈失败（rc=%s）：端口可能仍被占用" % res["stop_rc"]
+                msg = "停栈命令无法执行：%s" % e
+                res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
+        if not stop_ok(stack_attempted, res["stop_rc"]):
+            msg = ("停栈未成功（stack_attempted=%s stop_rc=%s）：端口可能仍被占用"
+                   % (stack_attempted, res["stop_rc"]))
+            res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
+            if res["rc"] == 0:
+                res["rc"] = 2
 
 
 def run_compare(runner, out_dir, prof, rules):
@@ -749,9 +938,13 @@ def write_readme(path, summary):
     lines.append("====================")
     lines.append("card: %s" % summary.get("card"))
     lines.append("tool: %s" % summary.get("tool"))
+    lines.append("run_id: %s" % summary.get("run_id"))
     lines.append("profile: %s" % summary.get("profile"))
     if summary.get("profile_description"):
         lines.append("profile_description: %s" % summary["profile_description"])
+    lines.append("report_kind: %s" % summary.get("report_kind"))
+    if summary.get("stale_archive"):
+        lines.append("stale_archive: %s" % summary["stale_archive"])
     lines.append("scenario: %s" % summary.get("scenario"))
     lines.append("scenario_sha256: %s" % summary.get("scenario_sha256"))
     lines.append("started_at: %s" % summary.get("started_at"))
@@ -869,6 +1062,47 @@ def post_comment(card, body, repo):
 # ---------------------------------------------------------------------------
 # 主流程
 # ---------------------------------------------------------------------------
+def archive_existing_out(out_dir):
+    """把 out 里上一次运行的产物整体挪进 _stale-<ts>-<pid>/。
+
+    保证本次运行结束后目录里的 report.json（或 fallback）**只可能属于本次**，
+    不会把上一次的 PASS 报告当成本次证据归档。
+    """
+    entries = sorted(e for e in os.listdir(out_dir) if not e.startswith("_stale-"))
+    if not entries:
+        return None
+    ts = time.strftime("%Y%m%dT%H%M%S")
+    dest = os.path.join(out_dir, "_stale-%s-%d" % (ts, os.getpid()))
+    n = 1
+    while os.path.exists(dest):
+        dest = os.path.join(out_dir, "_stale-%s-%d-%d" % (ts, os.getpid(), n))
+        n += 1
+    os.makedirs(dest)
+    for e in entries:
+        os.replace(os.path.join(out_dir, e), os.path.join(dest, e))
+    return dest
+
+
+def write_fallback_report(out_dir, summary, reason):
+    """编排失败/compare 没出报告时，**无条件**写本次的失败 report.json。"""
+    doc = {
+        "tool": TOOL,
+        "format": "card-window-report/1",
+        "run_id": summary.get("run_id"),
+        "verdict": "UNDECIDABLE",
+        "exit_code": 2,
+        "compare": None,
+        "compare_rc": summary.get("compare_rc"),
+        "reason": reason,
+        "notes": summary.get("notes"),
+    }
+    path = os.path.join(out_dir, "report.json")
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        json.dump(doc, f, ensure_ascii=False, indent=2, sort_keys=True)
+        f.write("\n")
+    return path
+
+
 def execute(cfg):
     """cfg: dict(card, scenario, out, profile, password, post_comment, dry_run,
                  allow_production_db, rules, timeout_ms, ...) -> summary"""
@@ -877,7 +1111,11 @@ def execute(cfg):
     prof = apply_overrides(prof, cfg)
     warnings = check_profile_safety(prof, bool(cfg.get("allow_production_db")), dry_run)
 
-    out_dir = os.path.abspath(cfg.get("out") or ".")
+    raw_out = cfg.get("out")
+    if raw_out:
+        out_dir = os.path.abspath(raw_out)
+    else:
+        out_dir = "<out>" if dry_run else ""
     scenario = os.path.abspath(cfg.get("scenario") or "")
     card = cfg.get("card") or ""
     rules = os.path.abspath(cfg.get("rules") or DEFAULT_RULES)
@@ -887,12 +1125,15 @@ def execute(cfg):
     summary = {
         "format": FORMAT,
         "tool": TOOL,
+        "run_id": uuid.uuid4().hex,
         "card": card,
         "profile": prof.get("name") or "custom",
         "profile_description": prof.get("description"),
         "scenario": scenario,
         "scenario_sha256": None,
         "out": out_dir,
+        "stale_archive": None,
+        "report_kind": None,
         "started_at": started_at,
         "finished_at": None,
         "duration_s": None,
@@ -933,6 +1174,10 @@ def execute(cfg):
     if dry_run:
         runner = Runner(out_dir, None, dry_run=True)
     else:
+        if not raw_out:
+            summary["notes"].append(
+                "缺 --out：真跑必须显式给产物目录（不允许把整套证据静默写进 cwd）")
+            return summary
         if not card:
             summary["notes"].append("缺 --card")
             return summary
@@ -947,13 +1192,19 @@ def execute(cfg):
             return summary
         try:
             os.makedirs(out_dir, exist_ok=True)
+            # I-1：上一次运行的产物整体归档，保证本次 report.json 不会冒充旧证据
+            stale = archive_existing_out(out_dir)
+            summary["stale_archive"] = stale
+            if stale:
+                summary["notes"].append(
+                    "out 原有内容已归档到 %s（本次 report.json 只属于本次运行）" % stale)
             log_path = os.path.join(out_dir, "card-window.log")
             with open(log_path, "w", encoding="utf-8", newline="\n") as f:
-                f.write("%s card_window: start card=%s profile=%s scenario=%s\n"
-                        % (time.strftime("%H:%M:%S"), card, prof.get("name") or "custom",
-                           scenario))
+                f.write("%s card_window: start run_id=%s card=%s profile=%s scenario=%s\n"
+                        % (time.strftime("%H:%M:%S"), summary["run_id"], card,
+                           prof.get("name") or "custom", scenario))
         except OSError as e:
-            summary["notes"].append("建不了产物目录 %s：%s" % (out_dir, e))
+            summary["notes"].append("建不了/清理不了产物目录 %s：%s" % (out_dir, e))
             return summary
         runner = Runner(out_dir, log_path, dry_run=False)
 
@@ -990,6 +1241,11 @@ def execute(cfg):
                     if not b["exists"]]
     if missing_bins:
         summary["notes"].append("缺两侧二进制 => 不跑（证据不完整）：%s" % ", ".join(missing_bins))
+        try:
+            write_fallback_report(out_dir, summary, "missing_binaries")
+            summary["report_kind"] = "fallback"
+        except OSError as e:
+            summary["notes"].append("写 fallback report.json 失败：%s" % e)
         summary["finished_at"] = iso_now()
         summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
         return summary
@@ -1002,6 +1258,10 @@ def execute(cfg):
         except (ConfigError, OSError) as e:
             res = {"side": side, "rc": 2, "error": "配置/执行错误：%s" % e}
             summary["notes"].append("%s: %s" % (side, e))
+        except Exception as e:  # 未预期异常也要落失败报告，不能留下半截证据
+            res = {"side": side, "rc": 2, "error": "内部错误：%s: %s"
+                   % (type(e).__name__, e)}
+            summary["notes"].append("%s: 内部错误 %s: %s" % (side, type(e).__name__, e))
         summary["sides"][side] = res
         if res.get("rc") != 0:
             sides_ok = False
@@ -1020,7 +1280,13 @@ def execute(cfg):
         if rep is None:
             summary["verdict"] = "UNDECIDABLE"
             summary["notes"].append("compare 未产出 report.json")
+            try:
+                write_fallback_report(out_dir, summary, "compare_no_report")
+                summary["report_kind"] = "fallback"
+            except OSError as e:
+                summary["notes"].append("写 fallback report.json 失败：%s" % e)
         else:
+            summary["report_kind"] = "compare"
             summary["verdict"] = rep.get("verdict") or "UNDECIDABLE"
             fr = rep.get("frames") or {}
             summary["frames"] = {"oracle_total": fr.get("oracle_total"),
@@ -1035,25 +1301,14 @@ def execute(cfg):
                 summary["notes"].append("compare verdict=%s（见 report.json）"
                                         % summary["verdict"])
     else:
-        # 编排没跑完：写一份 fallback report.json（显式标注不是比较报告），绝不留空白
-        fallback = {
-            "tool": TOOL,
-            "format": "card-window-report/1",
-            "verdict": "UNDECIDABLE",
-            "exit_code": 2,
-            "compare": None,
-            "reason": "orchestration_incomplete",
-            "notes": summary["notes"],
-        }
-        path = os.path.join(out_dir, "report.json")
-        try:
-            if not os.path.exists(path):
-                with open(path, "w", encoding="utf-8", newline="\n") as f:
-                    json.dump(fallback, f, ensure_ascii=False, indent=2, sort_keys=True)
-                    f.write("\n")
-        except OSError:
-            pass
+        # 编排没跑完：**无条件**覆盖成本次的 fallback report.json（显式标注不是比较报告）。
+        # out 开跑前已归档旧产物，这里绝不会留下上一次的 report.json。
         summary["verdict"] = "UNDECIDABLE"
+        try:
+            write_fallback_report(out_dir, summary, "orchestration_incomplete")
+            summary["report_kind"] = "fallback"
+        except OSError as e:
+            summary["notes"].append("写 fallback report.json 失败：%s" % e)
 
     summary["commands"] = runner.commands
     summary["finished_at"] = iso_now()
@@ -1088,6 +1343,7 @@ def execute(cfg):
     if cfg.get("post_comment") and card:
         body = {
             "tool": TOOL,
+            "run_id": summary["run_id"],
             "card": card,
             "profile": summary["profile"],
             "verdict": summary["verdict"],
@@ -1150,11 +1406,17 @@ def main():
     rest = sys.argv[4:]
     out = None
     mutate = False
+    run_exit = 0
+    runjson_empty = False
     for i, a in enumerate(rest):
         if a == "--out" and i + 1 < len(rest):
             out = rest[i + 1]
         if a == "--mutate":
             mutate = True
+        if a == "--stub-exit-code" and i + 1 < len(rest):
+            run_exit = int(rest[i + 1])
+        if a == "--stub-runjson-empty":
+            runjson_empty = True
     with open(log, "a", encoding="utf-8") as f:
         f.write("%s %s\n" % (mode, side))
         f.flush()
@@ -1181,8 +1443,12 @@ def main():
         with open(os.path.join(out, "frames.ndjson"), "w", encoding="utf-8", newline="\n") as f:
             f.write(json.dumps(rec, sort_keys=True) + "\n")
         with open(os.path.join(out, "run.json"), "w", encoding="utf-8", newline="\n") as f:
-            json.dump({"argv": sys.argv, "started_at": "stub", "ended_at": "stub",
-                       "steps": []}, f, sort_keys=True)
+            if runjson_empty:
+                f.write("")
+            else:
+                json.dump({"argv": sys.argv, "started_at": "stub", "ended_at": "stub",
+                           "steps": [],
+                           "exit": {"code": run_exit, "reason": "stub"}}, f, sort_keys=True)
         return 0
     if mode == "db":
         d = rest[0]
@@ -1217,7 +1483,8 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
             "stop": [py, stub, "stop", name, log],
             "restore": [py, stub, "restore", name, log],
             "probe": [py, stub, "probe", name, log],
-            "db": {"command": [py, stub, "db", name, log, "{db_dir}"]},
+            "db": {"command": [py, stub, "db", name, log, "{db_dir}"],
+                   "databases": ["mir2_test_db"]},
             "ports": [],
             "ready_ports": [],
             "probe_extra": [],
@@ -1487,6 +1754,126 @@ def selftest():
             and (s_cf.get("comment") or {}).get("posted") is False,
             "--post-comment 失败 => rc=2（不静默丢回执）")
 
+        # 12) B-1：停栈 argv 非法（字符串 / [] / null）=> 加载期 ConfigError（绝不当成功）
+        for label, bad_stop in (("字符串", "powershell -File stop-rust.ps1"),
+                                ("空数组", []),
+                                ("null", None)):
+            fresh_log()
+            p_b1 = _selftest_profile(tmp, stub, log)
+            p_b1["sides"]["rust"]["stop"] = bad_stop
+            b1_refused = False
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-badstop"), p_b1))
+            except ConfigError:
+                b1_refused = True
+            chk(b1_refused, "B-1 停栈 argv=%s => 加载期 ConfigError（不假绿）" % label)
+            chk(not os.path.exists(log), "B-1 停栈 argv=%s => 一步都没执行" % label)
+        chk(not stop_ok(True, None) and not stop_ok(True, 4) and stop_ok(True, 0)
+            and stop_ok(False, None),
+            "B-1 兜底：起过栈时 stop_rc=None/非 0 一律判失败")
+
+        # 13) I-1：同一 out 先 PASS 后失败 => 本次 report 是 fallback，旧 PASS 进 _stale-*
+        fresh_log()
+        out_reuse = os.path.join(tmp, "run-reuse")
+        s_first = execute(base_cfg(out_reuse, _selftest_profile(tmp, stub, log)))
+        old_report = os.path.join(out_reuse, "report.json")
+        old_sha = sha256_file(old_report)
+        old_verdict = (read_report(old_report) or {}).get("verdict")
+        s_second = execute(base_cfg(
+            out_reuse, _selftest_profile(tmp, stub, log, stack_fail="csharp")))
+        new_rep = read_report(os.path.join(out_reuse, "report.json")) or {}
+        stale_dir = s_second.get("stale_archive") or ""
+        stale_rep = read_report(os.path.join(stale_dir, "report.json")) if stale_dir else None
+        chk(s_first["exit_code"] == 0 and old_verdict == "PASS", "I-1 前置：第一次 PASS")
+        chk(s_second["exit_code"] == 2 and new_rep.get("verdict") == "UNDECIDABLE"
+            and new_rep.get("format") == "card-window-report/1",
+            "I-1 第二次失败 => report.json 是本次 fallback UNDECIDABLE（不冒充旧 PASS）")
+        chk(new_rep.get("run_id") == s_second.get("run_id"),
+            "I-1 fallback report 的 run_id 属于本次")
+        chk(bool(stale_dir) and (stale_rep or {}).get("verdict") == "PASS"
+            and sha256_file(os.path.join(stale_dir, "report.json")) == old_sha,
+            "I-1 旧 PASS report 已原样归档到 _stale-*")
+        chk((s_second.get("artifacts") or {}).get("report.json", {}).get("sha256") != old_sha,
+            "I-1 归档的 report sha256 指向本次文件（不是旧 PASS）")
+
+        # 14) I-2：停栈禁词按效果归一（net.exe stop MySQL / spsv / Stop-Service 全拒）
+        for label, bad_stop in (
+                ("net.exe stop MySQL", ["net.exe", "stop", "MySQL"]),
+                ("spsv MySQL", ["powershell", "-Command", "spsv", "-Name", "MySQL"]),
+                ("Stop-Service *", ["powershell", "-Command", "Stop-Service", "*"]),
+                ("taskkill mysqld.exe", ["taskkill", "/F", "/IM", "mysqld.exe"])):
+            p_i2 = _selftest_profile(tmp, stub, log)
+            p_i2["sides"]["csharp"]["stop"] = bad_stop
+            i2_refused = False
+            try:
+                check_profile_safety(load_profile(p_i2), False)
+            except ConfigError:
+                i2_refused = True
+            chk(i2_refused, "I-2 停栈 %s => 拒绝（.exe 归一 + 服务控制族）" % label)
+        i2_ok = True
+        try:
+            check_profile_safety(load_profile(_selftest_profile(tmp, stub, log)), False)
+        except ConfigError:
+            i2_ok = False
+        chk(i2_ok, "I-2 正常 Stop-Process 停栈仍放行")
+
+        # 15) I-3：生产库按展开后的库名集合判定（preset=prod / --db prod / env / 未知库）
+        def _set_db(p, spec):
+            p["sides"]["csharp"]["db"] = spec
+
+        i3_cases = [
+            ("db.preset=prod", lambda p: _set_db(p, {"preset": "prod"})),
+            ("db.command --db prod", lambda p: _set_db(
+                p, {"command": ["x", "--db", "prod"], "databases": ["mir2_test_db"]})),
+            ("env database=Mir2", lambda p: p["sides"]["csharp"].__setitem__(
+                "env", {"MIR2_CONN": "server=127.0.0.1;database=Mir2"})),
+            ("未知 preset", lambda p: _set_db(p, {"preset": "mystery_db"})),
+            ("db.command 未声明 databases", lambda p: _set_db(p, {"command": ["x"]})),
+        ]
+        for label, mutate in i3_cases:
+            p_i3 = _selftest_profile(tmp, stub, log)
+            mutate(p_i3)
+            i3_refused = False
+            try:
+                check_profile_safety(load_profile(p_i3), False)
+            except ConfigError:
+                i3_refused = True
+            chk(i3_refused, "I-3 %s => 拒绝（结构性判定）" % label)
+        i3_ok = True
+        try:
+            check_profile_safety(load_profile("alt"), False)
+        except ConfigError:
+            i3_ok = False
+        chk(i3_ok, "I-3 内置 alt（preset=test + mir2_test_*_r）仍放行")
+
+        # 16) I-4：真跑缺 --out => rc=2，且不往 cwd 写任何证据
+        old_cwd = os.getcwd()
+        os.chdir(tmp)
+        try:
+            s_noout = execute(base_cfg(None, _selftest_profile(tmp, stub, log)))
+            cwd_leak = any(os.path.exists(os.path.join(tmp, f)) for f in
+                           ("report.json", "card-window.json", "README.txt", "card-window.log"))
+        finally:
+            os.chdir(old_cwd)
+        chk(s_noout["exit_code"] == 2
+            and any("--out" in n for n in s_noout["notes"]),
+            "I-4 真跑缺 --out => rc=2")
+        chk(not cwd_leak, "I-4 缺 --out 不往 cwd 写证据")
+
+        # 17) M-1：run.json 必须非空且 exit.code == probe rc（0）
+        p_m1 = _selftest_profile(tmp, stub, log)
+        p_m1["sides"]["csharp"]["probe_extra"] = ["--stub-exit-code", "3"]
+        s_m1 = execute(base_cfg(os.path.join(tmp, "run-m1"), p_m1))
+        err_m1 = (s_m1["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_m1["exit_code"] == 2 and "exit.code" in err_m1,
+            "M-1 run.json exit.code=3 与 probe rc=0 不一致 => rc=2")
+        p_m1b = _selftest_profile(tmp, stub, log)
+        p_m1b["sides"]["csharp"]["probe_extra"] = ["--stub-runjson-empty"]
+        s_m1b = execute(base_cfg(os.path.join(tmp, "run-m1b"), p_m1b))
+        err_m1b = (s_m1b["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_m1b["exit_code"] == 2 and "run.json 为空" in err_m1b,
+            "M-1 空 run.json => rc=2")
+
     finally:
         holder.close()
         import shutil
@@ -1510,7 +1897,7 @@ def build_parser():
                     "停栈 -> compare -> 归档（语义同 run_dual.sh，run_dual.sh 不改）。")
     ap.add_argument("--card", help="卡片 id（--post-comment 时必填；写入 README/摘要）")
     ap.add_argument("--scenario", help="场景 JSON（tools/probe/scenarios/*.json）")
-    ap.add_argument("--out", help="产物目录")
+    ap.add_argument("--out", help="产物目录（真跑必填；--dry-run 可省）")
     ap.add_argument("--profile", default="alt",
                     help="profile：alt（默认）| csharp-default | <profile.json 路径>")
     ap.add_argument("--post-comment", action="store_true",

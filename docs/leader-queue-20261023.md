@@ -92,7 +92,10 @@ restore 基线 -> 起 C# 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
 | --- | --- |
 | `alt`（默认） | 2026-10-23 双栈窗口的备用端口剖面：`E:/tmp/conformance` 私有根、同一组 15xxx/17xxx 端口、测试库 `mir2_test_*` / `mir2_test_*_r` |
 | `csharp-default` | C# 默认端口栈（`E:/MirServer`，端口 5000/5100/5500/5600/5700/6000/7000/7100/7200）。它指向**生产库**（`mir2_db`/`mir2_data`/`Mir2`），**默认拒绝运行**；只有 owner 授权的生产窗口才加 `--allow-production-db` |
-| `<路径>.json` | 自定义 profile（`format = card-window-profile/1`）：两侧 `stack/stop/restore/db/ports/ready_ports/binaries/probe_extra` 全在文件里 |
+| `<路径>.json` | 自定义 profile（`format = card-window-profile/1`）：两侧 `stack/stop/restore/db/ports/ready_ports/binaries/probe_extra` 全在文件里。自定义 `db.command` 必须同时用 `db.databases` 声明它读的库名（静态安全判定用） |
+
+`stack` / `stop` / `restore` / `db.command` / `probe` 必须是**非空字符串数组**（写字符串 / `[]` / `null`
+在加载期就 rc=2）——停栈 argv 非法绝不能被当成「已停」。
 
 账号/服务器名/角色名可用 `--account`、`--server-name`、`--char-name` 覆盖，或走
 `CONFORMANCE_ACCOUNT` / `CONFORMANCE_SERVER_NAME` / `CONFORMANCE_CHAR_NAME`；密码**只**认
@@ -109,6 +112,10 @@ restore 基线 -> 起 C# 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
 <out>/README.txt             # 人读：两侧二进制 sha256、场景 sha256、命令全文、时间戳、verdict
 ```
 
+`<out>/report.json` 只可能属于**本次**运行：真跑要求显式 `--out`（省略 => rc=2，绝不写进 cwd）；
+若 out 里已有上次产物，开跑前整体归档到 `<out>/_stale-<ts>-<pid>/`，失败时也**无条件**写本次的
+fallback `report.json`（`format=card-window-report/1`, `verdict=UNDECIDABLE`, 带 `run_id`）。
+
 `--post-comment` 的 body 含 `verdict`、帧数、两侧二进制 sha256、场景 sha256、证据路径与时间戳；
 **只发 `kind=comment`，不写 `status`**，因此看板列不变。
 
@@ -116,9 +123,14 @@ restore 基线 -> 起 C# 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
 
 - **起每一侧栈之前**检查该侧端口；被占 => rc=2 并点名 `端口(pid N)`，**不启动栈**。
 - 起栈命令 rc=0 之后仍**轮询就绪端口**；端口不监听 => rc=2（**栈没起来绝不等于对拍通过**）。
-- `frames.ndjson` / `run.json` 缺失或 0 帧 => rc=2；库快照失败或缺 `manifest.json` => rc=2。
+- `frames.ndjson` 为空 / 0 帧 => rc=2；`run.json` 必须非空且 `exit.code == probe rc == 0`；库快照失败或缺 `manifest.json` => rc=2。
 - **停栈在 finally 执行**：恢复/起栈/probe/抓库任一步失败都会尝试停栈；A 侧没跑完不起 B 侧。
-- **不碰 MySQL 服务本身**：停栈命令含 `mysqld` / `Stop-Service` / `net stop` / `mysqladmin` 直接拒绝。
+  **起过栈但停栈没跑成（`stop_rc=None`）或 rc!=0 一律 rc=2**，绝不当成功。
+- **不碰 MySQL 服务本身**：停栈命令先归一化（去 `.exe`、折叠大小写/空白）再按效果判 —— 任何
+  mysql/mysqld 提及、或服务控制族（`Stop-Service`/`spsv`/`net stop`/`sc stop`）直接拒绝。
+- **生产库默认拒绝（结构性判定）**：把 `preset` / `tables` / `allow_db` / `databases` / `db.command`
+  的 `--db`/`--table` / env 的 `database=` **展开成最终库名**再判；`prod` 预设、`mir2_db`、
+  `mir2_account`、`mir2_data`、`Mir2` 均算生产库；无法判定为测试库的未知库名同样保守拒绝。
 - compare 的 FAIL(1) / UNDECIDABLE(2) 都映射成工具 rc=2；真实 `compare_rc` 记在 `report.json` 与 `card-window.json`。
 
 ### 5.4 不真的开窗也能验
@@ -127,6 +139,7 @@ restore 基线 -> 起 C# 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
 # 只打印完整命令序列：不起栈、不建目录、不需要密码
 python -I -B tools/conformance/card_window.py --card X --scenario S --out O --dry-run
 
-# 离线自检（桩命令 + 合成 frames；35 条断言，含端口占用/起栈失败/就绪失败/差分牙）
+# 离线自检（桩命令 + 合成 frames；62 条断言，含端口占用/起栈失败/就绪失败/差分/停栈 argv 非法/
+# stale out/生产库 preset/net.exe 停 MySQL/缺 --out/run.json exit.code 牙）
 python -I -B tools/conformance/card_window.py --selftest
 ```
