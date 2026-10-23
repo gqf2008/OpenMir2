@@ -392,6 +392,9 @@ impl MerchantScriptBook {
             curr_x,
             curr_y,
             self.goto_count_limit,
+            // 商人脚本表未持有 Envir 根 ⇒ 文件列表类条件按「文件不存在」（与接线前行为一致；
+            // 商人路径的注入另开卡，见 T-220 登记）。
+            None,
             player,
             label,
             bo_ext_jmp,
@@ -519,6 +522,7 @@ impl NpcHost {
             0,
             0,
             self.goto_count_limit,
+            Some(self.envir_root.as_path()),
             player,
             label,
             bo_ext_jmp,
@@ -556,6 +560,9 @@ struct HostNpc<'a> {
     map_name: String,
     curr_x: i32,
     curr_y: i32,
+    /// Envir 根（`NpcHost::envir_root` 注入；文件列表类条件/动作用它拼绝对路径）。
+    /// 空串/未注入 ⇒ `None`（`check_string_list` 按「文件不存在」处理并记错误）。
+    envir_root: Option<String>,
 }
 
 /// 跑一次 `ScriptEngine.GotoLable` 并收说词（[`NpcHost`] 与 [`MerchantScriptBook`] 共用）。
@@ -567,6 +574,8 @@ fn run_goto_label(
     curr_x: i32,
     curr_y: i32,
     goto_count_limit: i32,
+    // `SystemShare.GetEnvirFilePath` 的根（宿主注入；`None` ⇒ 文件列表类按「文件不存在」）。
+    envir_root: Option<&std::path::Path>,
     player: &mut NpcPlayer<'_, '_>,
     label: &str,
     bo_ext_jmp: bool,
@@ -579,6 +588,9 @@ fn run_goto_label(
         map_name: map_name.to_string(),
         curr_x,
         curr_y,
+        envir_root: envir_root
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().into_owned()),
     };
     {
         let mut engine = Engine::new(&mut npc, player);
@@ -590,6 +602,13 @@ fn run_goto_label(
 impl ScriptNpc for HostNpc<'_> {
     fn actor_id(&self) -> i32 {
         self.actor_id
+    }
+
+    /// `SystemShare.GetEnvirFilePath` 的根（卡 `openmir2-script-envir-root-host`）：
+    /// `NpcHost.envir_root` 由宿主注入 ⇒ `CHECKNAMELIST`/`ADDNAMELIST` 等文件列表类条件/动作
+    /// 才能按 oracle 拼出 `Path.Combine(BasePath, EnvirDir, rel)`；未注入 ⇒ 缺省 `None`。
+    fn envir_root(&self) -> Option<String> {
+        self.envir_root.clone()
     }
     fn chr_name(&self) -> String {
         self.def.chr_name.clone()
@@ -662,6 +681,8 @@ pub struct NpcGm<'r> {
 pub struct NpcPlayer<'r, 'g> {
     pub actor_id: i32,
     pub chr_name: String,
+    /// `playerActor.UserAccount`（`PlayObject` 字段；`CHECKACCOUNTLIST`/`DELACCOUNTLIST` 的读源）。
+    pub user_account: String,
     pub map_name: String,
     pub level: i32,
     /// `playerActor.Gold`
@@ -824,6 +845,7 @@ impl NpcPlayer<'_, '_> {
         NpcPlayer {
             actor_id: 0,
             chr_name: String::new(),
+            user_account: String::new(),
             map_name: String::new(),
             level: 1,
             gold: 0,
@@ -1242,6 +1264,11 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             }
             mir2_script::engine::vars::DynVarKind::Guild => false,
         }
+    }
+
+    /// `playerActor.UserAccount`（卡 `openmir2-script-user-account`）。
+    fn user_account(&self) -> String {
+        self.user_account.clone()
     }
     fn abil_exp(&self) -> i32 {
         self.abil_exp
@@ -2425,6 +2452,281 @@ mod tests {
         book
     }
 
+    /// **卡 `openmir2-script-envir-root-host`**：`HostNpc::envir_root` 覆写后，
+    /// `CHECKNAMELIST`（condition 36 → `ProcessingBase.GotoLableCheckStringList`）按 Envir 根
+    /// 拼路径读名单（`Trim()` + 忽略大小写）；未注入根 ⇒ 按「文件不存在」恒假（接线前行为）。
+    ///
+    /// 牙：删掉 `HostNpc` 的 `ScriptNpc` 覆写里的 `fn envir_root`（即 `HostNpc::envir_root`）⇒ 第一段由 hit 变 miss ⇒ 红。
+    #[test]
+    fn host_npc_envir_root_enables_check_name_list() {
+        let root = std::env::temp_dir().join(format!("gs-envir-root-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        // 名单：首尾空白 + 大小写混写 ⇒ oracle `Trim()` 后 OrdinalIgnoreCase 命中。
+        std::fs::write(
+            envir.join("TestList.txt"),
+            "  Hero  
+Other
+",
+        )
+        .unwrap();
+        let makes = || NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: "Market_Def".to_string(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: vec![mir2_script::QuestConditionInfo {
+                            cmd_code: 36, // `CHECKNAMELIST`（`codes.rs:56`）
+                            s_param1: "TestList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31, // `SENDMSG`
+                            n_param1: 5,
+                            s_param2: "hit".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "miss".to_string(),
+                            ..Default::default()
+                        }],
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let run_dotted = |envir_root: std::path::PathBuf, chr: &str| {
+            let mut def = makes();
+            def.scripts[0].record_list[0].procedure_list[0].condition_list[0].s_param1 =
+                r"..\TestList.txt".to_string();
+            let host = NpcHost {
+                envir_root,
+                defs: vec![def],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = chr.to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
+        };
+        let run = |envir_root: std::path::PathBuf, chr: &str| {
+            let host = NpcHost {
+                envir_root,
+                defs: vec![makes()],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = chr.to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
+        };
+        // 注入 Envir 根：命中（Trim + 忽略大小写）。
+        assert_eq!(run(envir.clone(), "HERO"), vec!["hit".to_string()]);
+        // **I-1 回归（review `51132242`）**：部署形态 `..\…` 前缀必须被剥离（oracle
+        // `SystemShare.cs:1989-1992` 丢弃前 3 字符）⇒ 同一份名单照样命中；不剥离时
+        // `envir/../TestList.txt` 落在 Envir 之外 ⇒ miss。
+        assert_eq!(
+            run_dotted(envir.clone(), "HERO"),
+            vec!["hit".to_string()],
+            "两字符前缀 (..) 必须剥离后再拼 Envir 根"
+        );
+        // 未命中 ⇒ else 支。
+        assert_eq!(run(envir.clone(), "Nobody"), vec!["miss".to_string()]);
+        // 未注入根（空 PathBuf）⇒ 按「文件不存在」⇒ 恒假（接线前行为，也是牙的红条件）。
+        assert_eq!(
+            run(std::path::PathBuf::new(), "HERO"),
+            vec!["miss".to_string()]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **M-1（review `51132242`）**：`ADDNAMELIST`（action 45）经宿主 `envir_root` **真写盘**。
+    ///
+    /// oracle：`ActionOfAddNameList`/`ActionOfDelNameList` 共用落盘体（`del_from_string_list`：
+    /// 逐行 Trim + `OrdinalIgnoreCase` 找首个命中、删该行、CRLF 重写）；路径经 `envir_file_path`
+    /// ⇒ 两点前缀同样被剥离。内容用**字节数组**写死，避免源码转义干扰。
+    #[test]
+    fn host_npc_envir_root_name_list_action_writes_to_disk() {
+        let root = std::env::temp_dir().join(format!("gs-envir-write-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        let list = envir.join("WriteList.txt");
+        // 初始内容 = "HERO\r\nother\r\n"
+        let seed: Vec<u8> = vec![72, 69, 82, 79, 13, 10, 111, 116, 104, 101, 114, 13, 10];
+        std::fs::write(&list, &seed).unwrap();
+        let def = NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: String::new(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 45, // `ADDNAMELIST`
+                            s_param1: r"..\WriteList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: Vec::new(),
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let host = NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![def],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        let _ = host.goto_label("QFunction", &mut player, "@main", false);
+        // 命中行被删、其余行 + CRLF 逐字节保持（两点前缀先被剥离）。
+        assert_eq!(
+            std::fs::read(&list).expect("名单文件仍在"),
+            vec![111, 116, 104, 101, 114, 13, 10],
+            "两点前缀剥离后命中 hero 行，重写为 other + CRLF"
+        );
+        // 第二遍：名字已不在 ⇒ 早退、文件不变（幂等）。
+        let mut player2 = NpcPlayer::empty(&mut rng);
+        player2.chr_name = "hero".to_string();
+        let _ = host.goto_label("QFunction", &mut player2, "@main", false);
+        assert_eq!(
+            std::fs::read(&list).unwrap(),
+            vec![111, 116, 104, 101, 114, 13, 10]
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **I-1 回归（review `40109056`）**：`ADDUSERDATE`(335) 的**部署形态**不得写盘。
+    ///
+    /// oracle `ExecutionProcessingSys.cs:5842-5846`：先 `sListFileName = normNpc.Path + sParam1`，
+    /// 之后才调**单参** `SystemShare.GetEnvirFilePath(sListFileName)`。
+    /// 部署 `Market_Def/QFunction-0.txt:82/84`（`[@StdModeFunc11]` 月卡充值）传
+    /// `..\QuestDiary\月卡\月卡记录.txt` ⇒ 拼成 `Market_Def..\QuestDiary\…`，不以 `..` 开头
+    /// ⇒ 单参口径**不剥前缀** ⇒ 指向 `<Envir>/Market_Def../…`（Win32 去尾点后
+    /// `<Envir>/Market_Def/QuestDiary/…`，该目录不存在）⇒ `File.Exists` false、
+    /// `SaveToFile` 抛异常被 catch ⇒ **不写盘**。
+    ///
+    /// 回归含义：若把本动作改回**两参** `envir_file_path_with_dir(npc.path(), s_param1)`
+    /// （review I-1 描述的错误实现），`..` 前缀会被剥离并写到真实文件
+    /// `<Envir>/QuestDiary/月卡/月卡记录.txt` ⇒ 本用例第一条断言必红。
+    ///
+    /// 正向对照：`npc.path()` 为空时 `rel = s_param1` ⇒ 动作仍能正常写盘（没有被过度禁用）。
+    #[test]
+    fn host_npc_envir_root_add_use_date_list_deployment_form_does_not_write() {
+        let root = std::env::temp_dir().join(format!("gs-envir-addusedate-{}", std::process::id()));
+        let envir = root.join("Envir");
+        let diary = envir.join("QuestDiary").join("月卡");
+        std::fs::create_dir_all(&diary).unwrap();
+        // 部署里该文件存在且为 0 字节（`ls -l Envir/QuestDiary/月卡/月卡记录.txt`）。
+        let target = diary.join("月卡记录.txt");
+        let seed: Vec<u8> = Vec::new();
+        std::fs::write(&target, &seed).unwrap();
+        let makes = |file_path: &str, param: &str| NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: file_path.to_string(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 335, // `ADDUSERDATE`（`codes.rs:567`）
+                            s_param1: param.to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: Vec::new(),
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let run = |def: NpcDef| {
+            let host = NpcHost {
+                envir_root: envir.clone(),
+                defs: vec![def],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "hero".to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+        };
+        // ① 部署形态（含 `..\`）：oracle 拼接后不以 `..` 开头 ⇒ 不剥 ⇒ 目标文件必须逐字节不变。
+        run(makes("Market_Def", r"..\QuestDiary\月卡\月卡记录.txt"));
+        assert_eq!(
+            std::fs::read(&target).expect("部署形态的目标文件仍在"),
+            seed,
+            "oracle 先拼 Market_Def.. 再接 … 再单参 ⇒ 不剥前缀 ⇒ 不写盘"
+        );
+        // ② 非 `..` 形态：oracle 无分隔符拼接 ⇒ `<Envir>/Market_DefQuestDiary/…` 不存在 ⇒ 同样不写盘。
+        run(makes("Market_Def", r"QuestDiary\月卡\月卡记录.txt"));
+        assert_eq!(
+            std::fs::read(&target).unwrap(),
+            seed,
+            "无分隔符拼接路径不存在 ⇒ 不写盘"
+        );
+        // ③ 正向对照：NPC 路径为空 ⇒ `rel = s_param1` ⇒ 正常追加一行（动作仍能写盘）。
+        run(makes("", "UserDate.txt"));
+        let written = std::fs::read(envir.join("UserDate.txt")).expect("空 NPC 路径应写盘");
+        assert!(
+            written.starts_with(b"hero    "),
+            "写入应为 `hero    <date>` + CRLF，实际 {:?}",
+            written
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
     /// **卡 `openmir2-script-dyn-var-host`**：`NpcPlayer` 的 `dyn_var_get/set/insert` 覆写。
     ///
     /// oracle 口径（`ProcessingBase.cs:1020-1045` + `PlayObject.cs:1023`）：
@@ -2524,6 +2826,142 @@ mod tests {
             b.dyn_var_get(DynVarKind::Human, "M1"),
             Some(DynVar::Integer(99))
         );
+    }
+
+    /// **卡 `openmir2-script-user-account`**：`NpcPlayer::user_account` 覆写返回注入的账号名
+    /// （缺省空串给其它实现方；不 Trim/不改大小写）。牙：删覆写 ⇒ 注入段红。
+    #[test]
+    fn npc_player_user_account_reads_injected_account() {
+        use mir2_script::engine::ScriptPlayer;
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        assert_eq!(player.user_account(), "", "缺省空串（接线前行为）");
+        player.user_account = "ua".to_string();
+        assert_eq!(player.user_account(), "ua", "注入后原样返回");
+    }
+
+    /// **端到端（依赖 T-220 的 `envir_root`）**：`CHECKACCOUNTLIST`(77) 与 `DELACCOUNTLIST`(50)
+    /// 经 `HostNpc::envir_root` 解析 `..\` 前缀后命中/写盘（oracle `check_string_list` 的
+    /// Trim + OrdinalIgnoreCase 口径；`del_from_string_list` 的 CRLF 重写）。
+    #[test]
+    fn npc_player_user_account_check_and_del_account_list_end_to_end() {
+        let root = std::env::temp_dir().join(format!("gs-acct-e2e-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        let list = envir.join("AccountList.txt");
+        // 初始内容 = "  UA  \r\nother\r\n"
+        let seed: Vec<u8> = vec![
+            32, 32, 85, 65, 32, 32, 13, 10, 111, 116, 104, 101, 114, 13, 10,
+        ];
+        std::fs::write(&list, &seed).unwrap();
+        let cond_def = NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: String::new(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: vec![mir2_script::QuestConditionInfo {
+                            cmd_code: 77, // `CHECKACCOUNTLIST`
+                            s_param1: r"..\AccountList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "hit".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "miss".to_string(),
+                            ..Default::default()
+                        }],
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let host = NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![cond_def],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let run = |acct: &str| {
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "hero".to_string();
+            player.user_account = acct.to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
+        };
+        // 名单是 "  UA  "；账号 "ua" ⇒ Trim + 忽略大小写 ⇒ 命中；两点前缀被剥离。
+        assert_eq!(run("ua"), vec!["hit".to_string()]);
+        assert_eq!(run("nobody"), vec!["miss".to_string()]);
+        assert_eq!(run(""), vec!["miss".to_string()], "空账号 ⇒ 恒假");
+        // `DELACCOUNTLIST`(50)：删掉账号行，逐字节重写为 other + CRLF。
+        let del_def = NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: String::new(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: Vec::new(),
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 50, // `DELACCOUNTLIST`
+                            s_param1: r"..\AccountList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: Vec::new(),
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let del_host = NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![del_def],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        player.user_account = "UA".to_string();
+        let _ = del_host.goto_label("QFunction", &mut player, "@main", false);
+        assert_eq!(
+            std::fs::read(&list).expect("名单仍在"),
+            vec![111, 116, 104, 101, 114, 13, 10],
+            "DELACCOUNTLIST 后逐字节 = other + CRLF"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
@@ -3835,5 +4273,179 @@ mod tests {
         assert!(player.frames.is_empty());
         assert!(player.gm_notes.is_empty());
         assert!(player.gm_direct_frames.is_empty());
+    }
+    /// **I-3（review `ac78b56a`）**：`CHECKNAMEDATELIST` 的两参 `GetEnvirFilePath` 口径。
+    ///
+    /// oracle `ConditionProcessingSys.cs:642` 调 `SystemShare.GetEnvirFilePath(normNpc.Path, sParam1)`
+    /// （`M2Share.cs:1979-1982`）：`sParam1` 以 `..` 开头 ⇒ **忽略 NPC 路径**、剥前 3 字符后拼 Envir 根；
+    /// 否则才拼 `Envir/<npc.Path>/<sParam1>`。部署形态 `..\QuestDiary\月卡\月卡记录.txt` 来自
+    /// `MapQuest_def/QManage.txt` 的 `#CALL` 链（QManage = HostNpc 漏斗）。
+    ///
+    /// 牙：把同一份名单只放在「先拼再单参」会指向的 `Envir/MapQuest_def../…` ⇒ 必须 miss。
+    #[test]
+    fn host_npc_envir_root_check_name_date_list_uses_two_arg_envir_path() {
+        let root = std::env::temp_dir().join(format!("gs-envir-2arg-{}", std::process::id()));
+        let envir = root.join("Envir");
+        let good = envir.join("QuestDiary").join("月卡");
+        std::fs::create_dir_all(&good).unwrap();
+        let file = good.join("月卡记录.txt");
+        std::fs::write(
+            &file,
+            mir2_script::textfile::encode_gb2312("hero\t2020-01-01\r\n"),
+        )
+        .unwrap();
+        let makes = || NpcDef {
+            chr_name: "QManage".to_string(),
+            file_path: "MapQuest_def".to_string(),
+            script_name: Some("QManage".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: vec![mir2_script::QuestConditionInfo {
+                            cmd_code: 144, // `CHECKNAMEDATELIST` / `CHECKUSERDATE`
+                            s_param1: r"..\QuestDiary\月卡\月卡记录.txt".to_string(),
+                            s_param2: ">".to_string(),
+                            s_param3: "30".to_string(),
+                            s_param4: "p0".to_string(),
+                            s_param5: "p1".to_string(),
+                            ..Default::default()
+                        }],
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "hit".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "miss".to_string(),
+                            ..Default::default()
+                        }],
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let run = |envir_root: std::path::PathBuf| {
+            let host = NpcHost {
+                envir_root,
+                defs: vec![makes()],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "hero".to_string();
+            let _ = host.goto_label("QManage", &mut player, "@main", false);
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            run(envir.clone()),
+            vec!["hit".to_string()],
+            "两参口径：.. 前缀忽略 NPC 路径"
+        );
+        // 牙（正向即牙）：旧写法「先拼 MapQuest_def..\… 再单参」不以两个点开头 ⇒ 不剥离
+        // ⇒ 指向不存在的路径 ⇒ 本断言在修复前必红。这里再补一条「文件不在 ⇒ miss」的对照。
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(
+            run(envir.clone()),
+            vec!["miss".to_string()],
+            "文件不在 ⇒ miss（fail-closed，不猜）"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **M-1 回归（review `ac78b56a`）**：商人 `MerchantScriptBook` 不注入 Envir 根
+    /// （`goto_label` 传 `None`）⇒ `CHECKNAMELIST` 按「文件不存在」恒假、且**不写盘**。
+    ///
+    /// 与 `HostNpc` 漏斗（有注入）相对照，钉住两条漏斗的差异不被后续改动抹平。
+    #[test]
+    fn merchant_script_book_without_envir_root_keeps_check_name_list_false() {
+        let root = std::env::temp_dir().join(format!("gs-merchant-none-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        let list = envir.join("MerchantList.txt");
+        let mut book = MerchantScriptBook::new(30);
+        book.insert(MerchantNpc {
+            def: NpcDef {
+                chr_name: "商人".to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("挂机商-0103".to_string()),
+                is_hide: false,
+                is_quest: false,
+                loaded: true,
+                actor_id: 4242,
+                scripts: vec![mir2_script::ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![mir2_script::SayingRecord {
+                        s_label: "@main".to_string(),
+                        procedure_list: vec![mir2_script::SayingProcedure {
+                            condition_list: vec![mir2_script::QuestConditionInfo {
+                                cmd_code: 36, // `CHECKNAMELIST`
+                                s_param1: r"..\MerchantList.txt".to_string(),
+                                ..Default::default()
+                            }],
+                            action_list: vec![mir2_script::QuestActionInfo {
+                                n_cmd_code: 31,
+                                n_param1: 5,
+                                s_param2: "hit".to_string(),
+                                ..Default::default()
+                            }],
+                            else_action_list: vec![mir2_script::QuestActionInfo {
+                                n_cmd_code: 31,
+                                n_param1: 5,
+                                s_param2: "miss".to_string(),
+                                ..Default::default()
+                            }],
+                            s_say_msg: String::new(),
+                            s_else_say_msg: String::new(),
+                        }],
+                        bo_ext_jmp: false,
+                    }],
+                    quest_count: 0,
+                }],
+            },
+            price_rate: 100,
+            castle: None,
+            map_name: "0103".to_string(),
+            curr_x: 9,
+            curr_y: 12,
+        });
+        // 名单**存在且命中**——但商人漏斗没有 Envir 根 ⇒ 恒 miss。
+        std::fs::write(&list, "hero\r\n").unwrap();
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        let _ = book
+            .goto_label(4242, &mut player, "@main", false)
+            .expect("商人脚本在表里");
+        let msgs: Vec<String> = player.frames.iter().filter_map(|f| f.msg.clone()).collect();
+        assert_eq!(
+            msgs,
+            vec!["miss".to_string()],
+            "无 Envir 根 ⇒ CHECKNAMELIST 恒假"
+        );
+        assert_eq!(
+            std::fs::read(&list).unwrap(),
+            b"hero\r\n".to_vec(),
+            "不写盘"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 }

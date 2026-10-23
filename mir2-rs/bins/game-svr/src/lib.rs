@@ -2428,6 +2428,11 @@ fn run_party_goto_label(
             player.kick_off_line_tick = sg.kick_off_line_tick;
             // **A-26/T-207**：`Abil.Exp`（脚本 `CHANGEEXP` 的读写面）。
             player.abil_exp = sg.equip.abil.exp;
+            // **卡 `openmir2-script-user-account`（review 0ef0464d F1）**：账号的唯一来源 = 会话
+            //（登录时由角色记录装入 `SessionGround.account`）。组队漏斗此前用 `npc_player_from`
+            // 建 player 却没设账号 ⇒ 组队标签里的 `CHECKACCOUNTLIST`/`DELACCOUNTLIST` 拿到空串；
+            // oracle 用的是同一个 `PlayObject.UserAccount`（与 @Login / 商人 / QFunction 同源）。
+            player.user_account = sg.account.clone();
         }
         // `HUtil32.GetTickCount()`：宿主注入域（与 P31 `host_now` 同源）。
         player.tick = now_ms() as i32;
@@ -6354,6 +6359,10 @@ fn npc_player_from_session<'r, 'g>(
     let mut p = game_svr::npc::NpcPlayer::empty(rng);
     p.chr_name = chr_name.to_string();
     p.actor_id = sg.actor_id;
+    // **卡 `openmir2-script-user-account`**：账号的唯一来源 = 会话（登录时从角色记录装入）⇒
+    // 商人 / 组队 / QFunction(`@StdModeFunc*`) / 固定 NPC 四条漏斗口径一致
+    //（oracle 是同一个 `PlayObject.UserAccount`）。
+    p.user_account = sg.account.clone();
     p.map_name = map_name.to_string();
     p.level = i32::from(sg.equip.abil.level);
     p.gold = sg.state.gold;
@@ -16383,6 +16392,12 @@ struct SessionGround {
     storage: storage::StorageState,
     /// `BaseObject.ActorId`（`SM_SYSMESSAGE` 的 `Recog`）。
     actor_id: i32,
+    /// `PlayObject.UserAccount`（oracle 登录时从角色记录 `humData.Account` 装入、整会话不变；
+    /// `CHECKACCOUNTLIST`/`DELACCOUNTLIST` 的唯一读源）。卡 `openmir2-script-user-account`。
+    ///
+    /// **唯一生产写点** = [`session_ground_from_login`]（`sim_loop` 进世界块调它；来源 =
+    /// `LoadDBInfo.Account`，与 [`OnlineEntry`]/`SavedHuman` 同源）。不要在别处手工种值。
+    account: String,
     /// `BaseObject.GameGold`（`SM_GOLDCHANGED` 的 LoWord/HiWord）。
     game_gold: i32,
     /// **PL-4 / P22**：`PlayObject.BoDecGameGold…IncGameGoldTick`（`PlayObject.cs:763-776`；
@@ -19064,6 +19079,155 @@ fn startup_online_hum_gate(world_clock_ms: i64) -> game_svr::ids::OnlineHumGate 
     game_svr::ids::OnlineHumGate::new(world_clock_ms)
 }
 
+/// **`openmir2-script-user-account`（review `57209946` critical）**：`SessionGround` 的
+/// **唯一生产构造点**（`sim_loop` 进世界块只经本函数建会话态）。
+///
+/// 把构造参数集中在这里，是为了让「登录账号装入」与其它字段共处**同一条**生产路径、可被
+/// 进程内用例直达：账号来源 = `LoadDBInfo.Account`（与 `OnlineEntry.account`/`SavedHuman.account`
+/// 同源），装进 `SessionGround.account` 后四个脚本漏斗（组队/商人/固定 NPC/QFunction）才拿得到
+/// oracle 的 `PlayObject.UserAccount`。若这里漏装（旧实现写 `String::new()`），
+/// `CHECKACCOUNTLIST` 在**生产**里恒 false，而手工种字段的 e2e 仍会绿。
+///
+/// 牙：把本函数的 `account:` 一行改回 `String::new()` ⇒
+/// `production_enter_session_ground_account_hits_check_account_list` 必红。
+struct SessionGroundInputs<'a> {
+    /// 登录账号（`LoadDBInfo.Account`，`sim_loop` 的取档应答同源）。
+    login_account: &'a str,
+    /// 角色记录（`GetHumData` 的 `CharacterData`）。
+    record: &'a record::CharacterData,
+    /// `RecalcAbilitys()` 的输出（与帧 52/752 同一份）。
+    recalc: &'a game_svr::ability::RecalcOutput,
+    /// `RecalcAbilitys()` 的输入（`BonusAbil`/`UseItems`/装备输入）。
+    ability: &'a enter::AbilityInputs<'a>,
+    /// `PlayObject.UseItems`（会话槽）。
+    use_items: Vec<Option<game_svr::bag::BagItem>>,
+    /// 行会话（`MyGuild`/`GuildRankNo`）。
+    guild_session: &'a guild_cmd::GuildSession,
+    /// `LoadDBInfo.SoftVersionDate`（`PlayObject.SoftVersionDateEx`）。
+    soft_version_date: i32,
+    /// 实体 id（= `PlayObject.ActorId`）。
+    actor_id: i32,
+    /// `[Setup] ServerIndex`（`EnterConfig.server_index`）。
+    server_index: u8,
+    /// `String.conf` 的 `CanotPickUpItem`（GBK 原文，`SM_SYSMESSAGE`）。
+    canot_pick_up_item: &'a str,
+    /// 构造时刻（oracle 各 ctor 的 `GetTickCount()`）。
+    now: i64,
+}
+
+fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
+    let d = i.record;
+    let out = i.recalc;
+    let a = i.ability;
+    SessionGround {
+        // `GetHumData` 写进 `PlayObject` 的
+        // 夫妻/性别/师徒/行会合一/组队传送冷却
+        // （批次 3 传送/召唤族的读点）。
+        gm: gmcmd::GmSession::from_character(
+            d.dear_name.as_deref().unwrap_or(""),
+            d.sex,
+            d.is_master,
+            d.allow_guild_re_call,
+            d.group_rcall_time,
+            // `AttatckMode`（`WorldServer.cs:1148`）
+            // 与 `ReLevel`（`:1133`）同由 `GetHumData` 装入。
+            d.attatck_mode,
+            d.re_level,
+        ),
+        state: game_svr::ground::GroundState {
+            item_list: bag_items_from(d.bag_items.as_deref()),
+            gold: d.gold,
+            wabil: out.wabil.clone(),
+        },
+        // `WorldServer.cs:1213-1227`：读档进仓库会话态。
+        storage: storage::load_from_record(d.storage_items.as_deref()),
+        actor_id: i.actor_id,
+        account: i.login_account.to_string(),
+        game_gold: d.game_gold,
+        p22: gamegold::P22GameGold::new(i.now),
+        // `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
+        // `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）。
+        soft_version_date: i.soft_version_date,
+        // `PlayObject.ClientTick`（`PlayObject.cs:810`）：进世界初值 0，
+        // 只由 `CM_LOGINNOTICEOK(1018)` 写（`PlayObject.cs:1112`）。
+        client_tick: 0,
+        // `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
+        game_point: d.game_point,
+        // `WorldServer.cs:1131`：`playObject.BonusPoint = humData.BonusPoint`。
+        bonus_point: d.bonus_point,
+        sys_msg: Some(enter::gbk(i.canot_pick_up_item)),
+        // `PlayObject.UseItems`（13 槽，保位）。
+        use_items: i.use_items,
+        // `RecalcAbilitys` 的 **prior**：登录时首次重算的
+        // `SubAbility`（后续装备/卸下重算在此之上累加，T-18）。
+        sub: out.sub,
+        hit_speed: out.hit_speed,
+        equip: EquipInputs {
+            job: d.job,
+            gender: d.sex,
+            hair: d.hair,
+            re_level: d.re_level,
+            credit_point: u16::from(d.credit_point),
+            abil: a.abil.clone(),
+            bonus_abil: a.bonus_abil.clone(),
+            bonus_tick_hit: a.bonus_tick_hit,
+            bonus_tick_speed: a.bonus_tick_speed,
+            // `PlayObject.Initialize()` 的 `AddBodyLuck(0)`
+            // （`PlayObject.cs:1060`）：从落库的 `BodyLuck` 重算 `BodyLuckLevel`。
+            body_luck: d.body_luck,
+            body_luck_level: body_luck_level_of(d.body_luck),
+        },
+        recovery: recovery_from_record(d, i.now),
+        // 体力/魔力点（`BaseObject.cs:445-448`：HealthTick/SpellTick=0、
+        // AutoRecoveryTick=GetTickCount()）。
+        stamina: game_svr::stamina::Stamina::new(i.now),
+        // `ShowHp` 由技能「心灵启示」置位（未移植）⇒ 初生 false。
+        show_hp: false,
+        abil_see_heal_gauge: false,
+        // `UserUnLockDurg` 不在角色记录里（会话初生 false；
+        // 与 `CM_EAT` 的 Shape 2 同一状态变）：登记为未建模。
+        user_unlock_durg: false,
+        hunger_status: d.hunger_status,
+        // `PlayObject.cs:783-784`：两 tick 无 ctor 赋值 ⇒ 0
+        //（进图后第一次 Run 立即过门）。
+        dec_hp_tick: 0,
+        inc_hp_tick: 0,
+        // `PlayObject.cs:887`：ctor 取钟 ⇒ 1s 后才触发。
+        dec_hunger_point_tick: i.now,
+        query_bag_items_tick: None,
+        bo_reconnection: false,
+        shout_msg_tick: 0,
+        bo_soft_close: false,
+        bo_emergency_close: false,
+        is_can_deal: true,
+        click_npc_time: None,
+        goto_npc_label: String::new(),
+        val_type: 0,
+        val_label: 0,
+        val_npc_type: 0,
+        mns_val: vec![String::new(); 100],
+        mnm_val: vec![0; 100],
+        // `PlayObject.SaveRcdTick`（`PlayObject.cs:886`）：
+        // 进世界时起算。oracle 在 `new PlayObject()` 里取
+        // `GetTickCount()`（每次登入都新建对象，`WorldServer.cs:234`），
+        // 与本宿主「`SessionGround` 随进世界建」同生命周期。
+        save_rcd_tick: i.now,
+        server_index: i.server_index,
+        switch_state: SwitchDataState::default(),
+        // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
+        // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
+        auto_get_exp_tick: i.now,
+        auto_get_exp_time: 0,
+        auto_get_exp_point: 0,
+        auto_get_exp_envir: None,
+        auto_get_exp_envir_map_id: None,
+        auto_get_exp_in_safe_zone: false,
+        off_line_flag: false,
+        kick_off_line_tick: 0,
+        guild: i.guild_session.clone(),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
@@ -21447,118 +21611,21 @@ fn sim_loop(
                                                     }
                                                     ground_sessions.insert(
                                                         head.chr_name.clone(),
-                                                        SessionGround {
-                                                            // `GetHumData` 写进 `PlayObject` 的
-                                                            // 夫妻/性别/师徒/行会合一/组队传送冷却
-                                                            // （批次 3 传送/召唤族的读点）。
-                                                            gm: gmcmd::GmSession::from_character(
-                                                                d.dear_name.as_deref().unwrap_or(""),
-                                                                d.sex,
-                                                                d.is_master,
-                                                                d.allow_guild_re_call,
-                                                                d.group_rcall_time,
-                                                                // `AttatckMode`（`WorldServer.cs:1148`）
-                                                                // 与 `ReLevel`（`:1133`）同由 `GetHumData` 装入。
-                                                                d.attatck_mode,
-                                                                d.re_level,
-                                                            ),
-                                                            state: game_svr::ground::GroundState {
-                                                                item_list: bag_items_from(
-                                                                    d.bag_items.as_deref(),
-                                                                ),
-                                                                gold: d.gold,
-                                                                wabil: out.wabil,
-                                                            },
-                                                            // `WorldServer.cs:1213-1227`：读档进仓库会话态。
-                                                            storage: storage::load_from_record(
-                                                                d.storage_items.as_deref(),
-                                                            ),
-                                                            actor_id: id,
-                                                            game_gold: d.game_gold,
-                                                            p22: gamegold::P22GameGold::new(now_ms()),
-                                                            // `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
-                                                            // `SendGoldInfo` 的 `== 0 ⇒ 不发` 门（`PlayObject.Base.cs:930`）。
-                                                            soft_version_date,
-                                                            // `PlayObject.ClientTick`（`PlayObject.cs:810`）：进世界初值 0，
-                                                            // 只由 `CM_LOGINNOTICEOK(1018)` 写（`PlayObject.cs:1112`）。
-                                                            client_tick: 0,
-                                                            // `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
-                                                            game_point: data.map_or(0, |d| d.game_point),
-                                                            // `WorldServer.cs:1131`：`playObject.BonusPoint = humData.BonusPoint`。
-                                                            bonus_point: d.bonus_point,
-                                                            sys_msg: Some(enter::gbk(
-                                                                enter_cfg.string_conf.canot_pick_up_item(),
-                                                            )),
-                                                            // `PlayObject.UseItems`（13 槽，保位）。
+                                                        session_ground_from_login(SessionGroundInputs {
+                                                            login_account: &account,
+                                                            record: d,
+                                                            recalc: &out,
+                                                            ability: a,
                                                             use_items: session_use_items,
-                                                            // `RecalcAbilitys` 的 **prior**：登录时首次重算的
-                                                            // `SubAbility`（后续装备/卸下重算在此之上累加，T-18）。
-                                                            sub: out.sub,
-                                                            hit_speed: out.hit_speed,
-                                                            equip: EquipInputs {
-                                                                job: d.job,
-                                                                gender: d.sex,
-                                                                hair: d.hair,
-                                                                re_level: d.re_level,
-                                                                credit_point: u16::from(d.credit_point),
-                                                                abil: a.abil.clone(),
-                                                                bonus_abil: a.bonus_abil.clone(),
-                                                                bonus_tick_hit: a.bonus_tick_hit,
-                                                                bonus_tick_speed: a.bonus_tick_speed,
-                                                                // `PlayObject.Initialize()` 的 `AddBodyLuck(0)`
-                                                                // （`PlayObject.cs:1060`）：从落库的 `BodyLuck` 重算 `BodyLuckLevel`。
-                                                                body_luck: d.body_luck,
-                                                                body_luck_level: body_luck_level_of(d.body_luck),
-                                                            },
-                                                            recovery: recovery_from_record(d, now_ms()),
-                                                            // 体力/魔力点（`BaseObject.cs:445-448`：HealthTick/SpellTick=0、
-                                                            // AutoRecoveryTick=GetTickCount()）。
-                                                            stamina: game_svr::stamina::Stamina::new(now_ms()),
-                                                            // `ShowHp` 由技能「心灵启示」置位（未移植）⇒ 初生 false。
-                                                            show_hp: false,
-                                                            abil_see_heal_gauge: false,
-                                                            // `UserUnLockDurg` 不在角色记录里（会话初生 false；
-                                                            // 与 `CM_EAT` 的 Shape 2 同一状态变）：登记为未建模。
-                                                            user_unlock_durg: false,
-                                                            hunger_status: d.hunger_status,
-                                                            // `PlayObject.cs:783-784`：两 tick 无 ctor 赋值 ⇒ 0
-                                                            //（进图后第一次 Run 立即过门）。
-                                                            dec_hp_tick: 0,
-                                                            inc_hp_tick: 0,
-                                                            // `PlayObject.cs:887`：ctor 取钟 ⇒ 1s 后才触发。
-                                                            dec_hunger_point_tick: now_ms(),
-                                                            query_bag_items_tick: None,
-                                                            bo_reconnection: false,
-                                                            shout_msg_tick: 0,
-                                                            bo_soft_close: false,
-                                                            bo_emergency_close: false,
-                                                            is_can_deal: true,
-                                                            click_npc_time: None,
-                                                            goto_npc_label: String::new(),
-                                                            val_type: 0,
-                                                            val_label: 0,
-                                                            val_npc_type: 0,
-                                                            mns_val: vec![String::new(); 100],
-                                                            mnm_val: vec![0; 100],
-                                                            // `PlayObject.SaveRcdTick`（`PlayObject.cs:886`）：
-                                                            // 进世界时起算。oracle 在 `new PlayObject()` 里取
-                                                            // `GetTickCount()`（每次登入都新建对象，`WorldServer.cs:234`），
-                                                            // 与本宿主「`SessionGround` 随进世界建」同生命周期。
-                                                            save_rcd_tick: now_ms(),
+                                                            guild_session: &guild_session,
+                                                            soft_version_date,
+                                                            actor_id: id,
                                                             server_index: enter_cfg.server_index,
-                                                            switch_state: SwitchDataState::default(),
-                                                            // **PL-2 / P31**：`AutoGetExpTick` ctor = `GetTickCount()`（`PlayObject.cs:1009`）；
-                                                            // 登录复位 = 本 ctor（宿主进世界时建会话）；换图复位见 `:3796`。不落库、死亡不清。
-                                                            auto_get_exp_tick: now_ms(),
-                                                            auto_get_exp_time: 0,
-                                                            auto_get_exp_point: 0,
-                                                            auto_get_exp_envir: None,
-                                                            auto_get_exp_envir_map_id: None,
-                                                            auto_get_exp_in_safe_zone: false,
-                                                            off_line_flag: false,
-                                                            kick_off_line_tick: 0,
-                                                            guild: guild_session.clone(),
-                                                        },
+                                                            canot_pick_up_item: enter_cfg
+                                                                .string_conf
+                                                                .canot_pick_up_item(),
+                                                            now: now_ms(),
+                                                        }),
                                                     );
                                                     // 存档用：留下原始记录 + 进图逻辑名（断线/`MakeGhost` 时用它合成）。
                                                     // 新角色的 `Abil/HomeMap/坐标` 已在上面按 oracle 落进 `full`。
@@ -21768,6 +21835,9 @@ fn sim_loop(
                                                                 player.abil_exp = data
                                                                     .and_then(|d| d.abil.as_ref())
                                                                     .map_or(0, |a| a.exp);
+                                                                // **卡 `openmir2-script-user-account`**：
+                                                                // `playerActor.UserAccount`（`CHECKACCOUNTLIST` 读源）。
+                                                                player.user_account = head.account.clone();
                                                                 // `HUtil32.GetTickCount()` 的宿主值
                                                                 //（与 P31 `host_now` 同源）。
                                                                 player.tick = now_ms() as i32;
@@ -27753,6 +27823,7 @@ mod tests {
             },
             storage: storage::StorageState::new(),
             actor_id,
+            account: String::new(),
             game_gold: 0,
             p22: gamegold::P22GameGold::default(),
             soft_version_date: 0,
@@ -27843,6 +27914,27 @@ mod tests {
             write_back_player_mnmval(&p, &mut sg);
         }
         assert_eq!(sg.mnm_val[9], 78, "脚本写回的 MNMval 必须回到会话");
+    }
+
+    /// **I-1（review `dd9f3223`）**：`user_account` 的唯一来源 = **会话**（登录时从角色记录
+    /// `humData.Account` 装入）。商人 / 组队 / 固定 NPC / QFunction `@StdModeFunc*` 四条漏斗都经
+    /// [`npc_player_from_session`] 取到同一个值（oracle 是同一个 `PlayObject.UserAccount`）。
+    ///
+    /// 牙：删掉 `p.user_account = sg.account.clone()` ⇒ 本用例红（`""` vs `"ua"`）。
+    #[test]
+    fn npc_player_from_session_injects_session_account_for_all_funnels() {
+        use mir2_script::engine::ScriptPlayer as _;
+        let mut sg = test_session_ground(7);
+        sg.account = "ua".to_string();
+        let vars = npc_vars_from(None, "SKY引擎", 10_000, 10_000_000);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut rng = |_v: i32| 0;
+        let p = npc_player_from_session(&mut rng, "hero", &sg, "0", &catalog, &vars);
+        assert_eq!(p.user_account(), "ua", "会话账号必须进 NpcPlayer");
+        // 未注入账号的会话 ⇒ 空串（fail-closed，不猜）。
+        let sg2 = test_session_ground(7);
+        let p2 = npc_player_from_session(&mut rng, "hero", &sg2, "0", &catalog, &vars);
+        assert_eq!(p2.user_account(), "", "缺省空串");
     }
 
     /// **T-142 宿主会话接线**：`SaleDeal` / `PlayDiceLabel` / `GameGold` 在 oracle 里是
@@ -30086,6 +30178,7 @@ break
             },
             storage: storage::StorageState::new(),
             actor_id: 1,
+            account: String::new(),
             game_gold: 77,
             p22: gamegold::P22GameGold::default(),
             soft_version_date: 0,
@@ -32280,6 +32373,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: p,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -32482,6 +32576,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -32671,6 +32766,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -32831,6 +32927,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -33004,6 +33101,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hero,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -36565,6 +36663,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 7,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -36919,6 +37018,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hid,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -38158,6 +38258,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 7,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -42137,6 +42238,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hero,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -42323,6 +42425,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -42471,6 +42574,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hero,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -60454,51 +60558,90 @@ SendRefMsgRange=15
             .map(|(i, _)| i)
             .expect("sim_loop 之后的下一顶层函数");
         let body = &lines[start..end];
-        let seq = |want: &[&str]| -> usize {
+        fn count_seq(body: &[&str], want: &[&str]) -> usize {
             body.windows(want.len())
                 .filter(|w| w.iter().zip(want).all(|(l, x)| l.trim() == *x))
                 .count()
-        };
+        }
         // ① sim_loop 的生产调用点（实参形状与其它调用点不同 ⇒ 唯一命中）。
         assert_eq!(
-            seq(&[
-                "drain_player_auto_get_exp(",
-                "&mut world,",
-                "&mut ground_sessions,",
-                "&online,",
-                "registry.as_ref(),",
-                "host_now,",
-                "&mut rec,",
-                ");",
-            ]),
+            count_seq(
+                body,
+                &[
+                    "drain_player_auto_get_exp(",
+                    "&mut world,",
+                    "&mut ground_sessions,",
+                    "&online,",
+                    "registry.as_ref(),",
+                    "host_now,",
+                    "&mut rec,",
+                    ");",
+                ]
+            ),
             1,
             "sim_loop 里 P31 的 drain_player_auto_get_exp(...) 生产调用行必须仍在且未被注释"
         );
         // ② 生产 ctor（`PlayObject.cs:1009-1012`）。
+        //
+        // **卡 `openmir2-script-user-account`（review `57209946`）**：构造已抽到唯一生产构造点
+        // `session_ground_from_login`（账号装入必须可被进程内用例直达）⇒ 本锚拆成两段：
+        //   ②a 构造器函数体的四字段初值（`AutoGetExpTick = i.now`）；
+        //   ②b `sim_loop` 调用块把 `now: now_ms()` 传进去（ctor 取钟语义不变）。
+        let ctor_start = lines
+            .iter()
+            .position(|l| {
+                l.trim()
+                    == "fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {"
+            })
+            .expect("`fn session_ground_from_login(` 定义行");
+        let ctor_end = lines
+            .iter()
+            .enumerate()
+            .skip(ctor_start + 1)
+            .find(|(_, l)| l.starts_with("fn "))
+            .map(|(i, _)| i)
+            .expect("session_ground_from_login 之后的下一顶层函数");
+        let ctor_body = &lines[ctor_start..ctor_end];
         assert_eq!(
-            seq(&[
-                "auto_get_exp_tick: now_ms(),",
-                "auto_get_exp_time: 0,",
-                "auto_get_exp_point: 0,",
-                "auto_get_exp_envir: None,",
-                "auto_get_exp_envir_map_id: None,",
-                "auto_get_exp_in_safe_zone: false,",
-            ]),
+            count_seq(
+                ctor_body,
+                &[
+                    "auto_get_exp_tick: i.now,",
+                    "auto_get_exp_time: 0,",
+                    "auto_get_exp_point: 0,",
+                    "auto_get_exp_envir: None,",
+                    "auto_get_exp_envir_map_id: None,",
+                    "auto_get_exp_in_safe_zone: false,",
+                ]
+            ),
             1,
-            "sim_loop 的 SessionGround 生产 ctor 必须把 AutoGetExpTick 初始化为 now_ms()"
+            "SessionGround 生产 ctor 必须把 AutoGetExpTick 初始化为 ctor 时刻"
+        );
+        assert_eq!(
+            count_seq(body, &["session_ground_from_login(SessionGroundInputs {"]),
+            1,
+            "sim_loop 必须经唯一生产构造点 session_ground_from_login 建会话态"
+        );
+        assert_eq!(
+            count_seq(body, &["now: now_ms(),"]),
+            1,
+            "sim_loop 必须把 now_ms() 传进 SessionGround 生产 ctor（AutoGetExpTick 等取钟）"
         );
         // ③ `@Login` seed。
         assert_eq!(
-            seq(&[
-                "player.auto_get_exp_in_safe_zone =",
-                "sg.auto_get_exp_in_safe_zone;",
-                "player.auto_get_exp_envir =",
-                "sg.auto_get_exp_envir.clone();",
-                "player.auto_get_exp_time =",
-                "sg.auto_get_exp_time;",
-                "player.auto_get_exp_point =",
-                "sg.auto_get_exp_point;",
-            ]),
+            count_seq(
+                body,
+                &[
+                    "player.auto_get_exp_in_safe_zone =",
+                    "sg.auto_get_exp_in_safe_zone;",
+                    "player.auto_get_exp_envir =",
+                    "sg.auto_get_exp_envir.clone();",
+                    "player.auto_get_exp_time =",
+                    "sg.auto_get_exp_time;",
+                    "player.auto_get_exp_point =",
+                    "sg.auto_get_exp_point;",
+                ]
+            ),
             1,
             "sim_loop 的 `@Login` 前 seed 块必须仍在（脚本可写字段从宿主会话 seed）"
         );
@@ -60508,42 +60651,51 @@ SendRefMsgRange=15
         // `&mut SessionGround.gm`/`&World`，带桥的 `NpcPlayer<'r, 'g>` 不能跨到写回块 ⇒ 写回源
         // 改为块内取出的 `LoginScriptWriteBack`（`wb`）。字段集合与写回次序不变。
         assert_eq!(
-            seq(&[
-                "sg.auto_get_exp_in_safe_zone = wb.auto_get_exp_in_safe_zone;",
-                "sg.auto_get_exp_envir = wb.auto_get_exp_envir.clone();",
-                "sg.auto_get_exp_envir_map_id = None;",
-                "sg.auto_get_exp_time = wb.auto_get_exp_time;",
-                "sg.auto_get_exp_point = wb.auto_get_exp_point;",
-            ]),
+            count_seq(
+                body,
+                &[
+                    "sg.auto_get_exp_in_safe_zone = wb.auto_get_exp_in_safe_zone;",
+                    "sg.auto_get_exp_envir = wb.auto_get_exp_envir.clone();",
+                    "sg.auto_get_exp_envir_map_id = None;",
+                    "sg.auto_get_exp_time = wb.auto_get_exp_time;",
+                    "sg.auto_get_exp_point = wb.auto_get_exp_point;",
+                ]
+            ),
             1,
             "sim_loop 的 `@Login` 后写回块必须仍在（清 envir 缓存 + 四字段写回）"
         );
         // ④b 写回快照必须仍从 `NpcPlayer` 取 P31 四字段（删 capture ⇒ ④ 的 `wb.*` 无从产生）。
         assert_eq!(
-            seq(&[
-                "auto_get_exp_in_safe_zone: player",
-                ".auto_get_exp_in_safe_zone,",
-                "auto_get_exp_envir: player",
-                ".auto_get_exp_envir",
-                ".clone(),",
-                "auto_get_exp_time: player",
-                ".auto_get_exp_time,",
-                "auto_get_exp_point: player",
-                ".auto_get_exp_point,",
-            ]),
+            count_seq(
+                body,
+                &[
+                    "auto_get_exp_in_safe_zone: player",
+                    ".auto_get_exp_in_safe_zone,",
+                    "auto_get_exp_envir: player",
+                    ".auto_get_exp_envir",
+                    ".clone(),",
+                    "auto_get_exp_time: player",
+                    ".auto_get_exp_time,",
+                    "auto_get_exp_point: player",
+                    ".auto_get_exp_point,",
+                ]
+            ),
             1,
             "`LoginScriptWriteBack` 必须仍从 `NpcPlayer` 取 P31 四字段"
         );
         // ④c GM 跳线（T-210）：`@Login` 必须仍装配桥 + 密码状态机拦截位。
         assert_eq!(
-            seq(&[
-                "Some(game_svr::npc::NpcGm {",
-                "sess: &mut sg.gm,",
-                "cfg: &gm_cfg,",
-                "world: gm_world,",
-                "pwd_busy,",
-                "});",
-            ]),
+            count_seq(
+                body,
+                &[
+                    "Some(game_svr::npc::NpcGm {",
+                    "sess: &mut sg.gm,",
+                    "cfg: &gm_cfg,",
+                    "world: gm_world,",
+                    "pwd_busy,",
+                    "});",
+                ]
+            ),
             1,
             "`@Login` 必须仍装配 GM 跳线（脚本 `GMEXECUTE` 的宿主入口）"
         );
@@ -60551,7 +60703,7 @@ SendRefMsgRange=15
         //     写回 helper 本身有行为用例（`login_changexp_persists_into_character_record` 直调），
         //     但「sim_loop 真的调它」只能靠源码锚点保鲜——删掉这一行，行为用例仍绿（已实测）。
         assert_eq!(
-            seq(&[
+            count_seq(body, &[
                 "write_back_login_player_abil_exp(",
                 "saves.get_mut(&head.chr_name),",
                 "ground_sessions",
@@ -60564,7 +60716,7 @@ SendRefMsgRange=15
         );
         // ④e `SM_WINEXP.Recog` 取 `wb.abil_exp`（脚本后快照），不是会话旧值。
         assert_eq!(
-            seq(&[
+            count_seq(body, &[
                 "(wb.gold, wb.game_gold, wb.game_point),",
                 "wb.abil_exp,",
                 "&login_frames,",
@@ -62499,6 +62651,210 @@ GMEXECUTE 禁言 self 20
             "组队创建提示",
             "尾 = cp936 原文经 EDCode"
         );
+    }
+
+    /// 组队漏斗的 `CHECKACCOUNTLIST` 夹具：`QFunction-0.txt` 的 `[@GroupCreate]` 按
+    /// `AccountList.txt`（名单 `  UA  `，`check_string_list` 的 Trim + OrdinalIgnoreCase）
+    /// 决定 `MESSAGEBOX HIT` / `ELSESAY MISS`。返回 `(临时根目录, NpcHost)`。
+    fn party_account_list_fixture(tag: &str) -> (std::path::PathBuf, game_svr::npc::NpcHost) {
+        let root = std::env::temp_dir().join(format!("gs-ua-{tag}-{}", std::process::id()));
+        let envir = root.join("Envir");
+        let dir = envir.join("Market_Def");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(envir.join("AccountList.txt"), b"  UA  \r\nother\r\n").unwrap();
+        let script = concat!(
+            "[@GroupCreate]\r\n",
+            "#IF\r\n",
+            "CHECKACCOUNTLIST ..\\AccountList.txt\r\n",
+            "#ACT\r\n",
+            "MESSAGEBOX HIT\r\n",
+            "#ELSESAY\r\n",
+            "MISS\r\n",
+        );
+        std::fs::write(
+            dir.join("QFunction-0.txt"),
+            encoding_rs::GBK.encode(script).0,
+        )
+        .unwrap();
+        let parsers = mir2_script::ScriptParsers::new();
+        let mut rename = |_min: i32, _max: i32| 1;
+        let outcome = parsers
+            .load_script_file(
+                &mir2_script::LocalFs,
+                &envir,
+                "Market_Def",
+                "QFunction-0",
+                false,
+                &mut rename,
+            )
+            .expect("解析不得 panic")
+            .expect("脚本必须存在");
+        assert!(
+            outcome.errors.is_empty(),
+            "夹具脚本不得有解析错误：{:?}",
+            outcome.errors
+        );
+        let host = game_svr::npc::NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QFunction".into(),
+                // 夹具脚本由生产解析器读入，但 `check_string_list` 的 rel = `npc.path() + s_param1`；
+                // 这里 `path()` 必须是空（与 npc.rs 的同族用例一致），否则 `..\` 不会被剥离。
+                file_path: String::new(),
+                script_name: Some("QFunction-0".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: outcome.scripts,
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        (root, host)
+    }
+
+    /// 经**生产构造器** [`session_ground_from_login`] 建会话态（`sim_loop` 进世界块的唯一构造点）。
+    ///
+    /// 显式**不**手工写 `sg.account`：账号只由 `login_account` 经生产路径装入（oracle
+    /// `PlayObject.UserAccount`）。返回的会话可直接喂脚本漏斗。
+    fn production_session_ground(login_account: &str, actor_id: i32) -> SessionGround {
+        let rec = stage6_record();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let ability_inputs = enter::AbilityInputs {
+            catalog: &catalog,
+            abil: rec.data.abil.as_ref().expect("stage6 必须有 Abil"),
+            bonus_abil: rec
+                .data
+                .bonus_abil
+                .as_ref()
+                .expect("stage6 必须有 BonusAbil"),
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: rec.data.hum_items.as_deref(),
+            bag_items: rec.data.bag_items.as_deref(),
+            magics: rec.data.magic.as_deref(),
+            magic_table: None,
+            gold: rec.data.gold,
+            client_ability_layout: false,
+        };
+        let recalc = enter::recalc_for_session(&ability_inputs, rec.data.job);
+        let guild_session = guild_cmd::GuildSession::default();
+        session_ground_from_login(SessionGroundInputs {
+            login_account,
+            record: &rec.data,
+            recalc: &recalc,
+            ability: &ability_inputs,
+            use_items: use_items_from(rec.data.hum_items.as_deref()),
+            guild_session: &guild_session,
+            soft_version_date: 0,
+            actor_id,
+            server_index: rec.data.server_index,
+            canot_pick_up_item: "",
+            now: 1_000,
+        })
+    }
+
+    /// 跑一次 `@GroupCreate`（组队漏斗 `run_party_goto_label`），返回 `SM_MENU_OK(767)` 条数。
+    /// 会话态由 [`production_session_ground`] 建（**不**手工种账号）。
+    fn run_party_group_create(host: &game_svr::npc::NpcHost, login_account: &str) -> usize {
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::new(32, 32);
+        let actor = world.add_entity(mir2_world::Entity::new(1, "L", 10, 10));
+        let sg = production_session_ground(login_account, actor);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: login_account.into(),
+            chr_name: "L".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: actor,
+        }];
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "L".into(),
+            SavedHuman {
+                account: login_account.into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("L".into(), sg);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        run_party_goto_label(
+            "@GroupCreate",
+            "L",
+            5,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            Some(host),
+            &catalog,
+            &gates,
+            None,
+            &game_svr::npc::NpcVars::default(),
+        );
+        let mut n = 0usize;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if gnp_ident(body.as_slice()) == mir2_protocol::messages::SM_MENU_OK {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// **卡 `openmir2-script-user-account`（review 0ef0464d F1）**：组队漏斗
+    /// （`run_party_goto_label`）必须把**会话账号**注入 `NpcPlayer.user_account`，
+    /// 与 @Login / 商人 / QFunction 三个漏斗同源（oracle 用的是同一个 `PlayObject.UserAccount`）。
+    ///
+    /// 夹具：`QFunction-0.txt` 的 `[@GroupCreate]` 用 `CHECKACCOUNTLIST ..\AccountList.txt`
+    /// 决定 `MESSAGEBOX HIT` / `ELSESAY MISS`；名单是 `  UA  `（`check_string_list` 的 Trim +
+    /// OrdinalIgnoreCase）。会话账号 `ua` ⇒ **恰好一条** `SM_MENU_OK(767)`；`nobody` ⇒ **零条**。
+    ///
+    /// 牙：删掉 `player.user_account = sg.account.clone();` ⇒ `ua` 支也变 0 条 ⇒ 本用例红。
+    #[test]
+    fn party_funnel_injects_session_user_account_for_check_account_list() {
+        let (root, host) = party_account_list_fixture("party");
+        assert_eq!(
+            run_party_group_create(&host, "ua"),
+            1,
+            "会话账号 ua 命中 CHECKACCOUNTLIST ⇒ 恰好一条 SM_MENU_OK（组队漏斗必须注入会话账号）"
+        );
+        assert_eq!(
+            run_party_group_create(&host, "nobody"),
+            0,
+            "会话账号不匹配 ⇒ 走 ELSESAY，不得有 SM_MENU_OK"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **卡 `openmir2-script-user-account`（review `57209946` critical）**：`SessionGround.account`
+    /// 必须在**生产 enter 路径**（`sim_loop` 进世界块 → [`session_ground_from_login`]）由登录账号
+    /// 装入，而不是 `String::new()`。
+    ///
+    /// 本用例**不手工写 `sg.account`**：从生产构造器建会话 → 组队漏斗 → `CHECKACCOUNTLIST` 命中。
+    /// 旧实现（生产构造点写 `String::new()`）在生产里账号恒空、`CHECKACCOUNTLIST` 恒 false；
+    /// 手工种字段的 e2e 之所以绿，是因为它绕过了构造点——本用例把这条缝钉死。
+    ///
+    /// 牙：把 `session_ground_from_login` 的 `account:` 一行改回 `String::new()` ⇒ 本用例红
+    /// （`ua` 支 0 条 vs 期望 1 条）。
+    #[test]
+    fn production_enter_session_ground_account_hits_check_account_list() {
+        let (root, host) = party_account_list_fixture("prod");
+        assert_eq!(
+            run_party_group_create(&host, "ua"),
+            1,
+            "生产 enter 路径装入的账号必须命中 CHECKACCOUNTLIST ⇒ 恰好一条 SM_MENU_OK"
+        );
+        let sg = production_session_ground("ua", 1);
+        assert_eq!(sg.account, "ua", "生产构造点必须从登录账号装入");
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// **T-194 判据 I-1（@Login 漏斗，生产入口）**：`NpcHost::run_login` 跑 QManage 的

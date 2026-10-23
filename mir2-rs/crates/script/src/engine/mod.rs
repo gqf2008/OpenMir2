@@ -1355,17 +1355,19 @@ impl<'n, 'p> Engine<'n, 'p> {
     /// 文件不存在时 C# 记 `LogService.Error("file not found => " + path)`（进 `err` 流）；
     /// 无 Envir 根（host 未注入）时按同一口径报"文件找不到"。
     pub(crate) fn check_string_list(&mut self, text: &str, rel: &str) -> bool {
-        let abs = match self.npc.envir_root() {
-            Some(root) => {
-                let mut p = std::path::PathBuf::from(root);
-                for part in rel.replace('\\', "/").split('/') {
-                    if !part.is_empty() {
-                        p.push(part);
-                    }
-                }
-                p
+        // **I-1（review `51132242`）**：oracle `SystemShare.GetEnvirFilePath`
+        // （`SystemShare.cs:1989-1992`）对以 `..` 开头的 filePath **丢弃前 3 个字符**
+        // （两点 + 分隔符），再 `Path.Combine(BasePath, EnvirDir, rest)`；部署里
+        // `CHECKNAMELIST` 站点 100% 是两点前缀形态 ⇒ 不剥离会把 `..` 当普通段 push 出
+        // Envir 根、恒「文件不存在」。与 `envir_file_path` 的既有口径一致。
+        // 复用 `envir_file_path`（单参口径），不再内联第二份剥离逻辑（review `ac78b56a` I-2(b)）。
+        let abs = match self.envir_file_path(rel) {
+            Some(p) => p,
+            None => {
+                let text = format!("file not found => {}", rel);
+                self.errors.push(EngineError::ScriptError { text });
+                return false;
             }
-            None => std::path::PathBuf::from(rel),
         };
         let bytes = match std::fs::read(&abs) {
             Ok(b) => b,
