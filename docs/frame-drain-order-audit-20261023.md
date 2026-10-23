@@ -27,7 +27,7 @@
 
 | # | 文件:位置（本 patch 后） | 排序键 / 机制 | 堆？ | 同 ident 多帧可达？ | 证据 / 结论 |
 |---|---|---|---|---|---|
-| 1 | `crates/world/src/msgqueue.rs`（`NetPriorityQueue` 本体；`bins/game-svr/src/msgqueue.rs` 变为再导出） | `u8` 优先级，四叉堆 | ✅ 本体 | — | `ties_dequeue_in_four_ary_heap_order` 钉 `[0,2,1]` / `[0,3,2,1]` |
+| 1 | `crates/world/src/msgqueue.rs`（`NetPriorityQueue` 本体；`bins/game-svr/src/msgqueue.rs` 变为再导出） | `u8` 优先级，四叉堆 | ✅ 本体 | — | `bins/game-svr/src/msgqueue.rs` 的 `ties_dequeue_in_four_ary_heap_order` 钉 `[0,2,1]` / `[0,3,2,1]`（同一份实现） |
 | 2 | `lib.rs` `SpellFrameBuf::flush`（B2/B3/B4/B5 全部效果体块共用） | `(socket, priority, body)`，**每收件人**各自建堆 | ✅ **本卡修**（原 `frames.sort_by_key(|f| f.1)` 稳定排序） | **可达** | 一次施法多目标 ⇒ 同一观察者多条 `SM_STRUCK(31)`（167）/ 多条 `SM_CHANGENAMECOLOR(656)`（154）。构造判据 `spell_p3b2_lightflower_center_self_and_undead_division`（911 收 4 条 31）、`spell_p3b2_fireboom_delivery_ledger_and_frames`（912 收 4 条 31） |
 | 3 | `lib.rs` `emit_script_frames_raw` | `&SendMsg`，单收件人（本人） | ✅ 已有（pickwire） | **可达**（`RM_DURACHANGE` 每件装备一条） | 三处入口共用：商人 `emit_script_frames` / `emit_login_script_frames` / `run_party_goto_label`；判据 `script_drain_orders_same_priority_by_dotnet_heap` |
 | 4 | `lib.rs` `drain_slave_mutiny_downlink` | `MutinyFrame`，按观察者分组 | ✅ 已有 | **可达**（N 只宝宝 × 色/名） | 观察者 `MsgQueue` 每只宝宝 `RefNameColor(); RefShowName();` |
@@ -89,8 +89,8 @@
 
 | 模块 | 用例 | 钉住 |
 |---|---|---|
-| `msgqueue`（world） | `ties_dequeue_in_four_ary_heap_order` | 3 条 `[0,2,1]`、4 条 `[0,3,2,1]` |
-| `msgqueue`（game-svr） | `protocol_constants_match_world_literals` | `(byte)RM_*` 字面量与协议常量一致 |
+| `msgqueue`（`bins/game-svr`，实现来自 `crates/world`） | `ties_dequeue_in_four_ary_heap_order` | 3 条 `[0,2,1]`、4 条 `[0,3,2,1]`（堆本体；原 4 条 dotnet 对照用例随模块迁到 `crates/world/src/msgqueue.rs`） |
+| `msgqueue`（`bins/game-svr`） | `protocol_constants_match_world_literals` | `(byte)RM_*` 字面量与协议常量一致 |
 | `lib.rs` `SpellFrameBuf` | `same_priority_frames_follow_dotnet_heap_order` | 3/4 条同 ident（167） |
 | `lib.rs` `SpellFrameBuf` | `recipients_get_independent_heaps` | `[A0,B1,A2,B3]` 不混堆 |
 | `npc.rs` | `dequeue_order_same_priority_follows_four_ary_heap` | 3/4 条同组说词 |
@@ -158,8 +158,9 @@
 | 本 head | 141 | 3025 | 0 | 62 |
 | 差 | **0** | **+12** | 0 | 0 |
 
-`+12` 全部是**新增判据**，逐条对得上：`crates/world/src/msgqueue.rs` +1（`ties_dequeue_in_four_ary_heap_order`；
-原有 4 个用例是**随模块迁移**，不增不减）、`bins/game-svr/src/msgqueue.rs` +2（再导出模块的两个新用例；
-原 4 个迁走后净 -4+4=0，另加 2）、`lib.rs` +2、`npc.rs` +1、`trade.rs` +2、`selloff.rs` +2、`party.rs` +3。
-**suite 数不变**（无 crate/测试目标增减；`msgqueue` 只是从 `game-svr` 的 `lib` 内模块迁到
-`mir2-world` 的 `lib` 内模块，仍是同两个 lib 测试目标）。
+`+12` 全部是**新增判据**，逐条对得上（用两份日志的 `test <名字> ... ok` 行集合求差，`REMOVED 0`）：
+`bins/game-svr/src/msgqueue.rs` +2（`ties_dequeue_in_four_ary_heap_order`、`protocol_constants_match_world_literals`；
+原有 4 个 dotnet 对照用例**随模块迁到** `crates/world/src/msgqueue.rs`，是同一批用例、名字不变 ⇒ 不增不减）、
+`lib.rs` +2、`npc.rs` +1、`trade.rs` +2、`selloff.rs` +2、`party.rs` +3。
+**suite 数不变**（141 = 141）：没有 crate / 测试目标增减；`msgqueue` 只是从 `game-svr` 的 `lib` 内模块
+迁到 `mir2-world` 的 `lib` 内模块，仍是同两个 lib 测试目标。
