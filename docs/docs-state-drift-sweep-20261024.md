@@ -1,7 +1,7 @@
 # 文档「状态词」漂移清扫（`openmir2-docs-state-drift-sweep`）
 
 - 卡：`openmir2-docs-state-drift-sweep`（tier=L）；分支 `card/openmir2-docs-state-drift-sweep`；写集 `docs/`。
-- **扫描时点**：`walgit/master = 2e3b8500a`（2026-10-24）；**交付前 rebase 到 `bb4317a01`**——其间新合入窗口判据审计（`5a6ed54c1`）与背包夹具 `openmir2-window-inventory-fixture`（`bb4317a01`），相关行已同步订正（§1 #16/#19 与 §3），其余判定不受影响。本报告与所有订正都以这个 commit 为判据；**本报告自己也会过期**，引用前先带上这个戳。
+- **扫描时点**：`walgit/master = 2e3b8500a`（2026-10-24）；**交付 head 基于 `01d4f5877`**（rebase 链：`5a6ed54c1` 窗口判据审计 → `bb4317a01` 背包夹具 → `a112e59b5` recog 打包 → 最新 master）；每次 rebase 后相关行已同步订正（§1 #16/#19 与 §3），其余判定不受影响。本报告与所有订正都以这个 commit 为判据；**本报告自己也会过期**，引用前先带上这个戳。
 - 起因：今晚至少三次「文档写着未合/在办，实际已合」，而 `docs/window-batch-plan-20261023.md` 正是 owner 开窗时的执行依据。
 
 ## 0. 扫描口径（可复算）
@@ -21,11 +21,11 @@
    - **仍准确** ⇒ 不动，本报告 §3 记「已核，仍准确」；
    - **判不了** ⇒ 写「判不了 + 缺什么」（§4），**不写成已核**。
 
-**命中统计**：67 个文件里 **35 个**含状态词，共 **123 行**命中；其中 **19 个文件 / 33 个「2026-10-24 订正」标记**判为过期并已订正（**本报告自身不计**），其余归 §3/§4。计数可复算：`git diff walgit/master..HEAD -- docs/ ':!docs/docs-state-drift-sweep-20261024.md' | grep "^+" | grep -c "2026-10-24 订正"` ⇒ **33**。
+**命中统计**：67 个文件里 **35 个**含状态词，共 **123 行**命中；其中 **18 个文件 / 32 个「2026-10-24 订正」标记行**（同一行内出现 **33** 次——`window-batch-plan` 的「在办」行含 2 个）判为过期并已订正（**本报告自身不计**），其余归 §3/§4。计数可复算（**base 相对**）：`base=$(git merge-base walgit/master HEAD); git diff $base..HEAD -- docs/ ':!docs/docs-state-drift-sweep-20261024.md' | grep "^+" | grep -c "2026-10-24 订正"` ⇒ **32**（出现次数用 `grep -o … | wc -l` ⇒ 33）。
 
 > 说明：多数命中是**交卡时自述**（「未合并、未自签 review」）、**分类名**（`未开工/未合并` 桶）、**引用原文**（脚本说词「尚未开放」）或**带戳快照**——这些不算漂移，见 §3。
 
-## 1. 订正清单（22 行对应 19 个文件 / 33 个订正标记；#19 已撤回，见下表说明）
+## 1. 订正清单（22 行对应 18 个文件 / 32 个订正标记行；#10、#19 已撤回，见下表说明）
 
 每条格式：**位置** ⇒ 原说法 → 订正（判据 commit）。
 
@@ -40,13 +40,13 @@
 | 7 | `magic-fixture-assertion-strength-20261024.md:115` | 「**未合并**…」 | 已合 `51a450c20`（approve reviewer-3 `d2685535`，closed） |
 | 8 | `magic-fixture-selftest-gaps-20261023.md:89` | 「**未合并**…」 | 已合 `e115339e3`（approve reviewer-6 `7a9b847a`，closed） |
 | 9 | `needs-human-20261023-evening.md:11` | `eat_item`「仍阻塞于 `openmir2-discovery-bagitems-201`」 | 该卡已合 `f79f2d2a`（**只解规则层**）；夹具工具随后合入 `bb4317a01`（卡 `openmir2-window-inventory-fixture`，不 closed：`window_required=true`），但 `eat_item` 场景**尚未声明** `inventory` ⇒ 仍不可跑 |
-| 10 | `needs-human-20261023-night.md:23` | `spell_cast` R5 缺 `characters_magic` 夹具（magic-fixture 卡**在办**） | 夹具已合 `512d9ecf5`（该卡 closed）；仍差 Rust 侧魔法实现 + 第二观察者 |
+| 10 | `needs-human-20261023-night.md:23` | `spell_cast` R5 缺 `characters_magic` 夹具（magic-fixture 卡**在办**） | **已撤回**：master（`7bb48239a` 起）已自带正确文本「夹具随 `512d9ecf5` 落地、改由 profile `magic` 段声明；场景已解封（`openmir2-spell-cast-unblock`），Rust 魔法未完成 ⇒ 真机跑不了」；本卡取 master 侧，不再保留旧注 |
 | 11 | `needs-human-20261023-night.md:~70` | batch-plan「卡 `openmir2-window-batch-plan-refresh` **在更新它**」 | 刷新已合 `ccf74b2b4` |
 | 12 | `r-card-evidence-triage-20261023.md:7` | 「`tools/goal/goal_gate.py` **尚未进 master**」 | 已随 `93226f278` 进仓 |
 | 13 | `r-card-ledger-sweep-20261023.md:17/170/235/245` | U 类「未合并/等返工」**1 张**；该卡「无 merge_result」 | `openmir2-monster-showhp-53-broadcast` 已合 `65a8af8d6`（approve reviewer-2 `593ae8bf`，tier=R 保持 in-progress）⇒ U 桶现为 **0**（4 处同步订正） |
 | 14 | `r-window-registry-batch-1-20261023.md:122` | 「`T-223..T-226`…本仓 `T-RESERVATIONS.md` **尚未合并那些行**」 | `T-225`/`T-226` 已在 master 的 `T-RESERVATIONS.md`；`T-223`/`T-224` 仍不在（见 §4 判不了） |
 | 15 | `rewrite-remaining-inventory-20261022.md:539-544/752` | `SM_RECONNECT`/`SM_SKELETON`「**无卡（待建）**」；12 个场景文件「**尚未进 master**」 | 卡 `openmir2-sm-reconnect-wiring` 已合 `283a27460`（R 卡 in-progress）；卡 `openmir2-sm-skeleton-wiring` 在办。场景分支 `card/openmir2-dualrun-window-burndown` 已合 `33b40970`，master `tools/probe/scenarios/` 现 **20** 个场景 JSON（3 处） |
-| 16 | `window-batch-plan-20261023.md:433/439/440/450×3/457/495/503/506` | §7「preflight.py **尚未合入 master**」「inventory 夹具 head `515eb2804`」等 | preflight 已合 `2e3b8500a`（卡 closed，approve reviewer-5 `f13a28be`）⇒ 命令恢复为 `python -I tools/conformance/preflight.py --profile alt`；inventory 夹具随后合入 `bb4317a01`（`card_window.py` 已支持 `inventory`，但 `bag_equip`/`eat_item` 场景未声明）——「跑不了」的结论不变、理由从「工具没合」改成「场景没声明」（10 处） |
+| 16 | `window-batch-plan-20261023.md:433/439/440/450×3/457/495/503/506` | §7「preflight.py **尚未合入 master**」「inventory 夹具 head `515eb2804`」等 | preflight 已合 `2e3b8500a`（卡 closed，approve reviewer-5 `f13a28be`）⇒ 命令恢复为 `python -I tools/conformance/preflight.py --profile alt`；inventory 夹具随后合入 `bb4317a01`（`card_window.py` 已支持 `inventory`，但 `bag_equip`/`eat_item` 场景未声明）——「跑不了」的结论不变、理由从「工具没合」改成「场景没声明」（`window-batch-plan` 内 9 个标记行 + 1 处不带标记的 §7 题注订正） |
 | 17 | `window-batch-plan-20261023.md:177` | `openmir2-m3-monster-ai-tick`「**needs-review**、未 merge」 | 已合入 master（最新 merge `711bdb149`，tier=R 不 closed） |
 | 18 | `window-debt-reclass-20261023.md:21` | 15 个场景文件「**尚未进 master** `be9c5ac6b`」 | 已合 `33b40970`；「① 现有场景实际只有 3 个」的推论随之失效 |
 | 19 | `window-runbook-20261023.md:234` | 背包夹具「由卡 `openmir2-discovery-bagitems-201` 承接」 | **已撤回**：rebase 到 `bb4317a01` 时该段已被背包夹具卡整段重写为「声明即可」（§1.6），本卡取 master 版本；原订正不再适用 |
@@ -55,7 +55,7 @@
 | 21 | `window-runbook-20261023.md:126/128` | 「`-WhatIf` 只打印路径、不打印 sha256（`:349`）」 | 脚本已打印 `SERVER_EXE`/`SERVER_EXE_SHA256`/`SERVER_EXE_BUILD` 三行（`start_mir2_server.ps1:381`）；两处已订正（review F4 漏项） |
 | 22 | `upgrade-retrieve-scenario-20261023.md:298` | 「背包夹具不支持」 | 工具随 `bb4317a01` 支持 `inventory` 声明；本场景缺的是**声明**，且夹具卡真库读写回未跑（review F2 漏项） |
 
-> 表内 22 行对应 **19 个文件 / 33 个订正标记**（`window-batch-plan` **9**、`r-card-ledger-sweep` 4、`rewrite-remaining-inventory` 3、`needs-human-20261023-night` 2，其余 15 个文件各 1；本报告自身不计）。**#19（runbook:234）已撤回**：rebase 到 `bb4317a01` 时该段已被背包夹具卡整段重写为「声明即可」，本卡取 master 版本。
+> 表内 22 行对应 **18 个文件 / 32 个订正标记行**（`window-batch-plan` **9**、`r-card-ledger-sweep` 4、`rewrite-remaining-inventory` 3，其余 15 个文件各 1；本报告自身不计；#10/#19 已撤回不计）。**#19（runbook:234）已撤回**：rebase 到 `bb4317a01` 时该段已被背包夹具卡整段重写为「声明即可」，本卡取 master 版本。
 
 ## 2. 三个卡面点名实例的结论
 
@@ -70,7 +70,7 @@
 | 文档（命中数） | 为什么仍准确（判据） |
 |---|---|
 | `castle-zone-unreachable` :5/:60/:132（3 处除 #1 外） | 城堡区**仍不可跑**：`T-38` 申请链 `NotImplementedException`、`StartCastlewarTime=20` 整点门、`AttackSabukWall.txt` 空；`git ls-tree master tools/probe/scenarios/` **无** `castle_zone` 文件 |
-| `combat-hit-waitfix`:72 | `combat_hit.json` 在 master 仍含 `blocked`（实读 20 个场景 JSON，只有 `combat_hit`/`combat_strike`/`spell_cast` 带 `blocked`） |
+| `combat-hit-waitfix`:72 | `combat_hit.json` 在 master 仍含 `blocked`（实读 20 个场景 JSON：只有 `combat_hit`/`combat_strike` 带 `blocked`；`spell_cast` 已由 `openmir2-spell-cast-unblock`（`7bb48239a`）解封） |
 | `combat-strike`:417 | T3（删攻击步）缺口仍在：卡 `openmir2-probe-scenario-validation-gaps` 已 closed，但 T3 仍登记为残留 `R2-producer-map` |
 | `goal-snapshot-late`（其余 10 处） | §1 是**带戳快照**且被「后续更新（`5e6b4e12`）」显式覆盖；§4 的「不可跑 22 张」口径在该戳上自洽 |
 | `r-window-registry-batch-1`（其余 10 处） | 基线戳 `74f0fbb0d` + `generated_ts` 前后对比；批次数字是历史快照 |
@@ -130,6 +130,6 @@ walgit collab thread <卡> --repo .
 ## 6. 残留与边界
 
 - 写集仅 `docs/`：**未改** `whitelist.md`、`T-RESERVATIONS.md`、工具、场景、任何卡片状态。
-- 本卡**不修**判据本身：例如 `window-batch-plan` 里「现在就能跑 = 14 个」的场景计数（preflight 合入不改变场景集，因此仍成立），以及 §7.3 `spell_cast`/`combat_strike`/`combat_hit` 仍 `blocked` 的结论，均原样保留。
+- 本卡**不修**判据本身：例如 `window-batch-plan` 里「现在就能跑 = 14 个」的场景计数（preflight 合入不改变场景集，因此仍成立），以及 §7.3 的结论均原样保留——**`combat_strike`/`combat_hit` 仍 `blocked`；`spell_cast` 已解封（`7bb48239a`），但仍缺 Rust 魔法落点 + 第二观察者 ⇒ 真机仍跑不了，且 dry-run 取证须带 `--profile`（`magic` 段声明）**。
 - 本报告**是快照**：master 一旦再动，§1 的「现在的事实」会再次过期；下一轮按 §5 重跑即可，不要直接引用 §1 的 commit 而不核 master。
 - 临时物：`E:/tmp/tonight-docs.txt`、`E:/tmp/master-files.txt`、`E:/tmp/drift_scan.py`、`E:/tmp/drift-scan.txt`（扫描原始命中 123 行）、`E:/tmp/drift_edits.py`、`E:/tmp/drift_edits2.py`、`E:/tmp/board.txt`、`E:/tmp/cards.txt`（479 张卡清单）——均为复核证据，保留；无进程、无库改动。
