@@ -37,6 +37,12 @@
   -WhatIf：只打印将执行的 COMMAND 行（含每个角色忙检/就绪等待的端口）与顺序，
            不启动任何进程，也**不创建 LogDir / pid 文件**；缺任一配置 => RED + 退出 2。
            实跑同样在全部前置检查通过后才创建 LogDir。
+           **开窗前核对（卡 openmir2-start-server-whatif-sha）**：输出固定含三行
+             SERVER_EXE <绝对路径>
+             SERVER_EXE_SHA256 <小写 hex；文件不存在时 MISSING>
+             SERVER_EXE_BUILD  Release | Debug-Fallback | Explicit
+           release 二进制不存在时**不再静默**：打印 WARNING 并选 debug（Debug-Fallback），
+           加 -RequireRelease 则直接 RED + 退出 2。根解析只用 $PSScriptRoot，不依赖 cwd。
 
   端口剖面（备用端口窗口）：
       -PortsProfile <alt-port-profile.json>
@@ -71,7 +77,8 @@ param(
   [int]$WaitSeconds = 60,
   [string]$PortsProfile = '',
   [hashtable]$Ports = $null,
-  [switch]$WhatIf
+  [switch]$WhatIf,
+  [switch]$RequireRelease
 )
 
 $ErrorActionPreference = 'Stop'
@@ -283,11 +290,35 @@ function Get-PidFileEntries {
 }
 
 # ---- ServerExe 默认值：优先 release，其次 debug（均相对本仓库的 mir2-rs/target）。----
+# 卡 openmir2-start-server-whatif-sha：-WhatIf 必须能核对 sha256；release 缺失**不许静默**。
+# 根解析只认 $PSScriptRoot（不依赖 cwd）：在 worktree 里跑就指向**该 worktree** 的 target。
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
-if ([string]::IsNullOrWhiteSpace($ServerExe)) {
-  $releaseExe = Join-Path $RepoRoot 'mir2-rs\target\release\mir2-server.exe'
-  $debugExe   = Join-Path $RepoRoot 'mir2-rs\target\debug\mir2-server.exe'
-  $ServerExe = if (Test-Path -LiteralPath $releaseExe) { $releaseExe } else { $debugExe }
+$exeWasExplicit = -not [string]::IsNullOrWhiteSpace($ServerExe)
+$releaseExe = Join-Path $RepoRoot 'mir2-rs\target\release\mir2-server.exe'
+$debugExe   = Join-Path $RepoRoot 'mir2-rs\target\debug\mir2-server.exe'
+if ($exeWasExplicit) {
+  $ServerExe = [System.IO.Path]::GetFullPath($ServerExe)
+  $BuildType = 'Explicit'
+} elseif (Test-Path -LiteralPath $releaseExe) {
+  $ServerExe = $releaseExe
+  $BuildType = 'Release'
+} else {
+  $ServerExe = $debugExe
+  $BuildType = 'Debug-Fallback'
+}
+$ServerExeExists = Test-Path -LiteralPath $ServerExe -PathType Leaf
+# 本机 PowerShell 5.1 上 Get-FileHash 不可用（实测 CommandNotFound）⇒ 用 .NET SHA256，任何 PS 版本都可跑。
+$ServerExeSha256 = 'MISSING'
+if ($ServerExeExists) {
+  $sha256 = [System.Security.Cryptography.SHA256]::Create()
+  $fs = $null
+  try {
+    $fs = [System.IO.File]::OpenRead($ServerExe)
+    $ServerExeSha256 = ([System.BitConverter]::ToString($sha256.ComputeHash($fs)) -replace '-', '').ToLowerInvariant()
+  } finally {
+    if ($fs) { $fs.Dispose() }
+    $sha256.Dispose()
+  }
 }
 
 # ---- 角色选择（按固定表顺序；未知角色 fail-closed = 退出 2）。----
@@ -347,6 +378,18 @@ if ($dbNameText) { $childEnv['MIR2_DB_NAME'] = $dbNameText }
 
 Write-Output ("ROOT {0}" -f $Root)
 Write-Output ("SERVER_EXE {0}" -f $ServerExe)
+Write-Output ("SERVER_EXE_SHA256 {0}" -f $ServerExeSha256)
+Write-Output ("SERVER_EXE_BUILD {0}" -f $BuildType)
+if ($BuildType -eq 'Debug-Fallback') {
+  Write-Output ("WARNING: release 二进制不存在（{0}），将使用 DEBUG：{1} —— 本次窗口证据会记 debug 构建；先 cargo build --release -p mir2-server，或加 -RequireRelease 让它直接失败。" -f $releaseExe, $ServerExe)
+}
+if (-not $ServerExeExists) {
+  Write-Output ("WARNING: SERVER_EXE 不存在：{0}（sha256 无法计算）" -f $ServerExe)
+}
+if ($RequireRelease -and $BuildType -ne 'Release') {
+  Write-Output ("RED: -RequireRelease 要求 release 构建，实际 {0}：{1}" -f $BuildType, $ServerExe)
+  exit 2
+}
 Write-Output ("LOG_DIR {0}" -f $LogDir)
 Write-Output ("PORTS_SOURCE {0}" -f $portsSource)
 foreach ($p in $RoleTable) {
@@ -361,6 +404,10 @@ if ($dbNameText) {
 
 # ---- -WhatIf：只打印计划，不启动任何进程。----
 if ($WhatIf) {
+  if (-not $ServerExeExists) {
+    Write-Output ("RED: ServerExe 不存在：{0}（-WhatIf 无法核对 sha256；先构建 mir2-server 或用 -ServerExe 指定）" -f $ServerExe)
+    exit 2
+  }
   $order = 1
   foreach ($p in $plan) {
     $confPath = Join-Path $Root $p.conf
