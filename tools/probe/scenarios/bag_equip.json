@@ -1,0 +1,27 @@
+{
+  "name": "bag_equip",
+  "description": "把背包里指定 MakeIndex 的装备穿上：CM_TAKEONITEM(1003) recog=MakeIndex param=where body=物品名 -> 等 SM_TAKEON_OK(615)/SM_TAKEON_FAIL(616)（注意：MakeIndex 每会话不同 ⇒ 本场景 C2S 字节无法跨栈相同，比较时只判 S2C；C2S 仅比 ident+长度）",
+  "required": [
+    "make_index",
+    "takeon_where",
+    "item_name"
+  ],
+  "steps": [
+    {
+      "send": {
+        "ident": 1003,
+        "recog": "make_index",
+        "param": "takeon_where",
+        "text_from": "item_name"
+      },
+      "note": "oracle ClientTakeOnItems 同时按 MakeIndex 与 GetItemName 匹配（缺名 = no-op）；body 为物品名 GBK+EDCode"
+    },
+    {
+      "wait_for": [
+        615,
+        616
+      ],
+      "timeout_ms": 3000
+    }
+  ]
+}

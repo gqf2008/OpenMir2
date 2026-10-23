@@ -69,12 +69,14 @@ CM_SELCHR = 103
 CM_SELECTSERVER = 104
 CM_CLICKNPC = 1010
 CM_MERCHANTDLGSELECT = 1011
+CM_TAKEONITEM = 1003
 CM_SOFTCLOSE = 1009
 CM_IDPASSWORD = 2001
 CM_LOGINNOTICEOK = 1018
 CM_SAY = 3030
 
 SM_LOGON = 50
+SM_TURN = 10
 SM_ABILITY = 52
 SM_SYSMESSAGE = 100
 SM_QUERYCHR = 520
@@ -86,6 +88,9 @@ SM_SELECTSERVER_OK = 530
 SM_NEEDUPDATE_ACCOUNT = 531
 SM_SENDNOTICE = 658
 SM_MERCHANTSAY = 643
+SM_MENU_OK = 767
+SM_TAKEON_OK = 615
+SM_TAKEON_FAIL = 616
 SM_OUTOFCONNECTION = 528
 SM_CHANGELIGHT = 654          # src/OpenMir2/Messages.cs（延迟段帧）
 SM_CHARSTATUSCHANGED = 657    # src/OpenMir2/Messages.cs（延迟段帧）
@@ -377,7 +382,7 @@ def load_scenario(path):
     except ValueError as ex:
         raise ScenarioError("scenario %s is not valid JSON: %s" % (path, ex))
     _need_keys(data, "scenario", required=("name", "steps"),
-               optional=("description", "params"))
+               optional=("description", "params", "required"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -385,15 +390,41 @@ def load_scenario(path):
         raise ScenarioError("scenario.params must be an object")
     if not isinstance(data["steps"], list) or not data["steps"]:
         raise ScenarioError("scenario.steps must be a non-empty list")
+    req = data.get("required")
+    if req is not None:
+        if not isinstance(req, list):
+            raise ScenarioError("scenario.required must be a list of var names")
+        for name in req:
+            if not isinstance(name, str) or not name:
+                raise ScenarioError("scenario.required[] must be non-empty strings, got %r" % (name,))
+        dup = sorted({n for n in req if req.count(n) > 1})
+        if dup:
+            raise ScenarioError("scenario.required has duplicates: %s" % dup)
     return data
 
 
-def _encode_send_body(val, where):
+def _encode_send_body(val, where, params=None):
+    given = [k for k in ("text", "raw_hex", "text_from") if k in val]
+    if len(given) != 1:
+        raise ScenarioError("%s needs exactly one of text/raw_hex/text_from, got %s"
+                            % (where, sorted(given)))
+    if "text_from" in val:
+        name = val["text_from"]
+        if not isinstance(name, str) or not name:
+            raise ScenarioError("%s.text_from must be a non-empty param name" % where)
+        if not params or name not in params:
+            raise ScenarioError("%s.text_from: param %r is not defined (fail-closed)" % (where, name))
+        text = params[name]
+        text = text if isinstance(text, str) else str(text)
+        if not text:
+            raise ScenarioError("%s.text_from: param %r is empty" % (where, name))
+        return text.encode("gbk")   # 原始 GBK；EDCode 由 build_c2s_frame 统一做（别再预编码）
     if "text" in val:
         text = val["text"]
         if not isinstance(text, str):
             raise ScenarioError("%s.text must be a string" % where)
-        return encode_text(text, "gbk")
+        # 字面量：不与 params 做任何替换（要参数化文本请用 text_from）
+        return text.encode("gbk")   # 原始 GBK；EDCode 由 build_c2s_frame 统一做
     raw = val["raw_hex"]
     if not isinstance(raw, str):
         raise ScenarioError("%s.raw_hex must be a hex string" % where)
@@ -431,9 +462,7 @@ def plan_step(step, index, params):
     val = step[action]
     if action == "send":
         _need_keys(val, where + ".send", required=("ident",),
-                   optional=("recog", "param", "tag", "series", "text", "raw_hex"))
-        if "text" in val and "raw_hex" in val:
-            raise ScenarioError("%s.send got both text and raw_hex" % where)
+                   optional=("recog", "param", "tag", "series", "text", "raw_hex", "text_from"))
         out["ident"] = _need_int(val["ident"], where + ".send.ident")
         # recog/param/tag/series 与其它动作同口径：先 resolve_param（可写 params 名），
         # 再在 plan 期做范围校验（recog=i32，其余 u16）。否则要等到发送时 pack_header
@@ -445,15 +474,20 @@ def plan_step(step, index, params):
             out[name] = _need_int(
                 resolve_param(val.get(name, 0), params, where + ".send." + name),
                 where + ".send." + name)
-        out["body"] = _encode_send_body(val, where + ".send") if ("text" in val or "raw_hex" in val) else b""
+        out["body"] = (_encode_send_body(val, where + ".send", params)
+                       if ("text" in val or "raw_hex" in val or "text_from" in val) else b"")
     elif action == "say":
         if not isinstance(val, str):
             raise ScenarioError("%s.say must be a string" % where)
         out.update(ident=CM_SAY, recog=0, param=0, tag=0, series=0,
-                   body=encode_text(val, "gbk"))
+                   body=val.encode("gbk"))
     elif action == "click_npc":
-        out.update(ident=CM_CLICKNPC, recog=resolve_param(val, params, where + ".click_npc"),
-                   param=0, tag=0, series=0, body=b"")
+        if val == "auto:last_turn":
+            out.update(ident=CM_CLICKNPC, recog=0, param=0, tag=0, series=0, body=b"",
+                       _auto_recog="last_turn")
+        else:
+            out.update(ident=CM_CLICKNPC, recog=resolve_param(val, params, where + ".click_npc"),
+                       param=0, tag=0, series=0, body=b"")
     elif action == "dlg_select":
         if isinstance(val, str):
             label, recog = val, None
@@ -464,7 +498,7 @@ def plan_step(step, index, params):
         if not isinstance(label, str) or not label:
             raise ScenarioError("%s.dlg_select label must be a non-empty string" % where)
         out.update(ident=CM_MERCHANTDLGSELECT, recog=recog, param=0, tag=0, series=0,
-                   body=encode_text(label, "gbk"), _needs_merchant_recog=(recog is None))
+                   body=label.encode("gbk"), _needs_merchant_recog=(recog is None))
     elif action == "wait_for":
         if isinstance(val, int) and not isinstance(val, bool):
             idents = [_need_int(val, where + ".wait_for")]
@@ -509,6 +543,11 @@ def expand_scenario(data, params_override=None):
     if params_override:
         for k, v in params_override.items():
             params[k] = v
+    missing = [n for n in (data.get("required") or []) if n not in params]
+    if missing:
+        raise ScenarioError(
+            "scenario %r requires --var %s (declared in \"required\"); refusing to send guessed values"
+            % (data.get("name"), ", ".join("%s=<value>" % n for n in missing)))
     plans = [plan_step(s, i, params) for i, s in enumerate(data["steps"])]
     return plans, params
 
@@ -560,7 +599,7 @@ class Run:
         self.chain = {}
         self.frames_by_conn = {}
         self.ident_hist = {}
-        self.state = {"last_merchant_recog": None, "self_actor": None}
+        self.state = {"last_merchant_recog": None, "self_actor": None, "last_turn_recog": None}
         self.gamegate = None
         self.conns = []
         self.dwell = None
@@ -571,6 +610,9 @@ class Run:
             return
         if frame.ident == SM_MERCHANTSAY:
             self.state["last_merchant_recog"] = frame.recog
+        if frame.ident == SM_TURN and frame.recog != self.state.get("self_actor"):
+            # 进世界后首个「非自己」的 actor（固定 NPC/怪）：click_npc 的 "auto:last_turn" 用它
+            self.state["last_turn_recog"] = frame.recog
         if self.args.no_auto_handshake:
             return
         if frame.ident == SM_SENDNOTICE:
@@ -603,6 +645,12 @@ class Run:
             return
         if kind == "send" or kind in ("say", "click_npc", "dlg_select"):
             recog = plan.get("recog")
+            if kind == "click_npc" and plan.get("_auto_recog") == "last_turn":
+                recog = self.state.get("last_turn_recog")
+                if recog is None:
+                    raise ScenarioError(
+                        "steps[%d].click_npc: no non-self SM_TURN(10) seen yet; "
+                        "cannot infer NPC recog (fail-closed)" % idx)
             if kind == "dlg_select" and plan.get("_needs_merchant_recog"):
                 recog = self.state["last_merchant_recog"]
                 if recog is None:
@@ -991,6 +1039,8 @@ def build_argparser():
                     help="不按 BotSrv 自动回 1018/81（调试用；对拍不要开）")
     ap.add_argument("--finish", choices=("softclose", "close", "none"), default="softclose",
                     help="收尾方式（默认 softclose = CM_SOFTCLOSE 后断开）")
+    ap.add_argument("--check-scenario", action="store_true",
+                    help="只加载+展开场景做校验（不连网）：rc=0 通过 / rc=2 场景错误")
     ap.add_argument("--selftest", action="store_true", help="离线自测（不连网）")
     return ap
 
@@ -1012,6 +1062,24 @@ def main(argv=None):
     args._argv = raw_argv
     if args.selftest:
         return run_selftest()
+    if args.check_scenario:
+        if not args.scenario:
+            print("mir2_probe: --check-scenario needs --scenario", file=sys.stderr)
+            return 2
+        try:
+            data = load_scenario(args.scenario)
+            plans, params = expand_scenario(data, parse_vars(args.var))
+            wait_kinds = {"wait_for", "wait_frames", "wait_idents"}
+            if not any(pl.get("kind") in wait_kinds for pl in plans):
+                raise ScenarioError(
+                    "scenario %r has no wait step: at least one wait_for/wait_frames/wait_idents is required "
+                    "(a send-only scenario proves nothing)" % data.get("name"))
+        except ScenarioError as ex:
+            print("scenario-error: %s" % ex, file=sys.stderr)
+            return 2
+        print("scenario OK: %s (%d steps, params=%s)"
+              % (data["name"], len(plans), ",".join("%s=%s" % (k, v) for k, v in sorted(params.items())) or "-"))
+        return 0
 
     # 参数校验先于 Run/Recorder 创建：缺参数时还没有 --out 可落 run.json，
     # 按 README「退出码」退 2（fail-closed）；绝不能走到 run=None 的 AttributeError
@@ -1231,7 +1299,7 @@ def _selftest_scenarios():
     gm = load_scenario(paths["gm_time.json"])
     gm_plans, _ = expand_scenario(gm)
     assert gm_plans[0]["kind"] == "send" and gm_plans[0]["ident"] == CM_SAY, gm_plans[0]
-    assert gm_plans[0]["body"] == encode_text("@时间", "gbk"), gm_plans[0]["body"]
+    assert gm_plans[0]["body"] == "@时间".encode("gbk"), gm_plans[0]["body"]
     assert gm_plans[1]["kind"] == "wait_for", gm_plans[1]
     assert gm_plans[1]["idents"] == [SM_SYSMESSAGE], gm_plans[1]
 
@@ -1241,12 +1309,14 @@ def _selftest_scenarios():
     assert kinds == ["click_npc", "wait_for", "dlg_select", "wait_for",
                      "dlg_select", "wait_for", "dlg_select", "wait_for"], kinds
     assert dice_plans[0]["recog"] == dice_params["npc_actor"], dice_plans[0]
-    for p in dice_plans[1::2]:
+    # 末步是分支相关：持筹码包回 643、无包 #ELSEACT MESSAGEBOX 回 767（R-3）
+    for p in dice_plans[1:-1:2]:
         assert p["idents"] == [SM_MERCHANTSAY], (p["index"], p["idents"])
+    assert dice_plans[-1]["idents"] == [SM_MERCHANTSAY, SM_MENU_OK], dice_plans[-1]
     for p in dice_plans[2::2]:
         assert p["_needs_merchant_recog"] is True, (p["index"], p.get("_needs_merchant_recog"))
     bodies = [p["body"] for p in dice_plans[2::2]]
-    assert bodies == [encode_text(x, "gbk") for x in ("@kaiz", "@ya5", "@ya52")], bodies
+    assert bodies == [x.encode("gbk") for x in ("@kaiz", "@ya5", "@ya52")], bodies
 
     # fail-closed 负向：未知键 / text+raw_hex 同给 / 坏 hex / 解析不了的助记
     for bad_step in (
@@ -1302,6 +1372,67 @@ def _selftest_helpers():
     assert masked_argv(["p", "--password=s3cret"]) == ["p", "--password=***"]
 
 
+def _selftest_scenario_required():
+    """`required` 元数据 + `send.text` 走 params 的口径（F1/F2 的回归）。"""
+    import tempfile
+    base = {
+        "name": "selftest_required",
+        "description": "required 元数据 + send.text params",
+        "required": ["make_index", "item_name"],
+        "steps": [
+            {"send": {"ident": CM_TAKEONITEM, "recog": "make_index", "param": 1, "text_from": "item_name"}},
+            {"wait_for": [SM_TAKEON_OK, SM_TAKEON_FAIL]},
+        ],
+    }
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(base, fh, ensure_ascii=False)
+        data = load_scenario(path)
+        # 1) 缺 required ⇒ 加载期即报错（与 CLI rc=2 同一条路径），并点名缺的是哪个变量
+        try:
+            expand_scenario(data, {})
+        except ScenarioError as ex:
+            assert "--var make_index" in str(ex), str(ex)
+            assert "item_name" in str(ex), str(ex)
+        else:
+            raise AssertionError("expand_scenario accepted missing required vars")
+        # 2) 给全 ⇒ 展开成功，text_from 解析成参数值（GBK+EDCode）
+        plans, _ = expand_scenario(data, {"make_index": 42, "item_name": "屠龙"})
+        assert plans[0]["recog"] == 42, plans[0]
+        assert plans[0]["body"] == "屠龙".encode("gbk"), plans[0]["body"]
+        assert plans[1]["idents"] == [SM_TAKEON_OK, SM_TAKEON_FAIL], plans[1]
+        # 3) text 不是 params 名时保持字面量
+        lit = dict(base, required=[], steps=[{"send": {"ident": CM_SAY, "text": "@时间"}}])
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(lit, fh, ensure_ascii=False)
+        plans, _ = expand_scenario(load_scenario(path), {"@时间": "不该命中"})
+        assert plans[0]["body"] == "@时间".encode("gbk"), plans[0]["body"]
+        # 3b) 只有 send、没有任何 wait 的场景必须被 --check-scenario 拒绝（N-5）
+        sendonly = {"name": "sendonly", "steps": [{"send": {"ident": CM_SAY, "text": "x"}}]}
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(sendonly, fh, ensure_ascii=False)
+        data2 = load_scenario(path)
+        plans2, _ = expand_scenario(data2)
+        assert [pl["kind"] for pl in plans2] == ["send"], plans2
+        # 4) required 形状非法 / 未知顶层键仍 fail-closed
+        for bad in (dict(base, required="make_index"), dict(base, required=[1]),
+                    dict(base, bogus=1)):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(bad, fh, ensure_ascii=False)
+            try:
+                load_scenario(path)
+            except ScenarioError:
+                pass
+            else:
+                raise AssertionError("load_scenario accepted bad scenario: %r" % sorted(bad))
+        return "required/text-params 4 项"
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
 class _TimedSock:
     """selftest 用：按墙钟延迟吐出预录字节（不占端口、不连网）。
 
@@ -1448,6 +1579,7 @@ def run_selftest():
         expected_plain=6))
     check("tamper-red", _selftest_tamper)
     check("scenario-dsl", _selftest_scenarios)
+    check("scenario-required", _selftest_scenario_required)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
     check("dwell-after-enter", _selftest_dwell)
@@ -1456,7 +1588,7 @@ def run_selftest():
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (7 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (8 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
     return 0
 
 

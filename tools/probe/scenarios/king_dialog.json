@@ -1,0 +1,11 @@
+{
+  "name": "king_dialog",
+  "description": "点比奇国王 -> 等 SM_MERCHANTSAY(643) -> 选 @@buildguildnow -> 等 643/100",
+  "required": ["king_actor"],
+  "steps": [
+    {"click_npc": "king_actor", "note": "recog=国王 ActorId"},
+    {"wait_for": 643, "timeout_ms": 3000, "note": "[@main] 说词面板（含 <请求创建行会./@@buildguildnow>）"},
+    {"dlg_select": "@@buildguildnow", "note": "label 逐字取自 Npc_Def/比奇国王-0122.txt；@@ 是 oracle 的双 @ 语义"},
+    {"wait_for": [643, 100], "timeout_ms": 3000}
+  ]
+}

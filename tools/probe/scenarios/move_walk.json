@@ -1,0 +1,10 @@
+{
+  "name": "move_walk",
+  "description": "走到相邻格：CM_WALK(3011) recog=目标X param=目标Y -> 等 SM_WALK(11)/SM_RUN(13)/SM_TURN(10)/SM_SYSMESSAGE(100)",
+  "required": ["move_x", "move_y"],
+  "steps": [
+    {"send": {"ident": 3011, "recog": "move_x", "param": "move_y"},
+     "note": "oracle: PlayObject.Attack.cs ClientWalkXY(wIdent, nX=nParam1, nY=nParam2)"},
+    {"wait_for": [11, 13, 10, 100], "timeout_ms": 3000, "note": "走成功看 SM_WALK；被挡则本节可能超时（fail-loud）"}
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "npc_click_auto",
+  "description": "进世界后点「最近一条非自己的 SM_TURN actor」（固定 NPC），等 SM_MERCHANTSAY(643)/SM_SYSMESSAGE(100)；无需 --var（C# 的 ActorId 每会话不同，不能跨 run 复用）",
+  "steps": [
+    {
+      "click_npc": "auto:last_turn",
+      "note": "recog 由驱动器从「最近一条」非 self 的 SM_TURN(10) 取出；没有则 fail-closed"
+    },
+    {
+      "wait_for": [
+        643,
+        100
+      ],
+      "timeout_ms": 5000
+    }
+  ]
+}

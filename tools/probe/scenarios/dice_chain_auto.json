@@ -1,0 +1,36 @@
+{
+  "name": "dice_chain_auto",
+  "description": "点庄家（auto）-> @kaiz -> @ya5 -> @ya52；@ya52 走 MESSAGEBOX 支，等 SM_MENU_OK(767)（master e4dd64c77 已实现，修复前 Rust 不发）",
+  "steps": [
+    {
+      "click_npc": "auto:last_turn",
+      "note": "庄家 ActorId 每会话不同，用 auto（取最近一条非 self 的 SM_TURN）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@kaiz"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@ya5"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@ya52"
+    },
+    {
+      "wait_for": 767,
+      "timeout_ms": 3000,
+      "note": "@ya52 支 #ELSEACT MESSAGEBOX ⇒ oracle 回 SM_MENU_OK(767)；Rust 修复前不发（exit=1）、master e4dd64c77 修复后同样回 767（§23），本步作为该缺陷的判据"
+    }
+  ]
+}

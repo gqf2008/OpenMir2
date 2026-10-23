@@ -1,16 +1,42 @@
 {
   "name": "dice_chain",
-  "description": "r9 人工窗口的赌场骰子链：点 NPC（CM_CLICKNPC 1010）-> @kaiz -> 643 -> @ya5 -> 643 -> @ya52 -> 643（三步 CM_MERCHANTDLGSELECT 1011）",
-  "params": {"npc_actor": 119},
+  "description": "r9 人工窗口的赌场骰子链：点 NPC（CM_CLICKNPC 1010）-> @kaiz -> 643 -> @ya5 -> 643 -> @ya52 -> 643 或 767（有筹码包回 643，无则 MESSAGEBOX 回 767；三步 CM_MERCHANTDLGSELECT 1011）",
+  "params": {
+    "npc_actor": 119
+  },
   "steps": [
-    {"click_npc": "npc_actor",
-     "note": "npc_actor 默认 119 = r9 抓包里赌场 NPC 的 actor id；换实例用 --var npc_actor=N"},
-    {"wait_for": 643, "timeout_ms": 3000},
-    {"dlg_select": "@kaiz"},
-    {"wait_for": 643, "timeout_ms": 3000},
-    {"dlg_select": "@ya5"},
-    {"wait_for": 643, "timeout_ms": 3000},
-    {"dlg_select": "@ya52"},
-    {"wait_for": 643, "timeout_ms": 3000}
+    {
+      "click_npc": "npc_actor",
+      "note": "npc_actor 默认 119 = r9 抓包里赌场 NPC 的 actor id；换实例用 --var npc_actor=N"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@kaiz"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@ya5"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000
+    },
+    {
+      "dlg_select": "@ya52"
+    },
+    {
+      "wait_for": [
+        643,
+        767
+      ],
+      "timeout_ms": 3000,
+      "note": "@ya52 是分支相关：持有筹码包走 #ACT（take+playdice+#SAY「正在投骰子」）回 643；无筹码包走 #ELSEACT MESSAGEBOX 回 SM_MENU_OK(767)。两支持有其一都算通过，故等 [643,767]"
+    }
   ]
 }
