@@ -256,3 +256,4 @@
 | T-218 | openmir2-gm-impl-clearbag | 2026-10-23T09:12:30Z | 在用 |
 | T-219 | openmir2-gm-impl-startquest | 2026-10-23T09:19:34Z | 在用 |
 | T-222 | openmir2-script-dyn-var-host | 2026-10-23T09:56:25Z | 在用 |
+| T-223 | openmir2-script-user-account | 2026-10-23T11:00:00Z | 在用 |

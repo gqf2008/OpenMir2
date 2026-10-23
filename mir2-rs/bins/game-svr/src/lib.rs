@@ -6354,6 +6354,10 @@ fn npc_player_from_session<'r, 'g>(
     let mut p = game_svr::npc::NpcPlayer::empty(rng);
     p.chr_name = chr_name.to_string();
     p.actor_id = sg.actor_id;
+    // **卡 `openmir2-script-user-account`**：账号的唯一来源 = 会话（登录时从角色记录装入）⇒
+    // 商人 / 组队 / QFunction(`@StdModeFunc*`) / 固定 NPC 四条漏斗口径一致
+    //（oracle 是同一个 `PlayObject.UserAccount`）。
+    p.user_account = sg.account.clone();
     p.map_name = map_name.to_string();
     p.level = i32::from(sg.equip.abil.level);
     p.gold = sg.state.gold;
@@ -16383,6 +16387,9 @@ struct SessionGround {
     storage: storage::StorageState,
     /// `BaseObject.ActorId`（`SM_SYSMESSAGE` 的 `Recog`）。
     actor_id: i32,
+    /// `PlayObject.UserAccount`（oracle 登录时从角色记录 `humData.Account` 装入、整会话不变；
+    /// `CHECKACCOUNTLIST`/`DELACCOUNTLIST` 的唯一读源）。卡 `openmir2-script-user-account`。
+    account: String,
     /// `BaseObject.GameGold`（`SM_GOLDCHANGED` 的 LoWord/HiWord）。
     game_gold: i32,
     /// **PL-4 / P22**：`PlayObject.BoDecGameGold…IncGameGoldTick`（`PlayObject.cs:763-776`；
@@ -21474,6 +21481,7 @@ fn sim_loop(
                                                                 d.storage_items.as_deref(),
                                                             ),
                                                             actor_id: id,
+                                                            account: String::new(),
                                                             game_gold: d.game_gold,
                                                             p22: gamegold::P22GameGold::new(now_ms()),
                                                             // `PlayObject.SoftVersionDateEx`（= `LoadDBInfo.SoftVersionDate`）：
@@ -21768,6 +21776,9 @@ fn sim_loop(
                                                                 player.abil_exp = data
                                                                     .and_then(|d| d.abil.as_ref())
                                                                     .map_or(0, |a| a.exp);
+                                                                // **卡 `openmir2-script-user-account`**：
+                                                                // `playerActor.UserAccount`（`CHECKACCOUNTLIST` 读源）。
+                                                                player.user_account = head.account.clone();
                                                                 // `HUtil32.GetTickCount()` 的宿主值
                                                                 //（与 P31 `host_now` 同源）。
                                                                 player.tick = now_ms() as i32;
@@ -27753,6 +27764,7 @@ mod tests {
             },
             storage: storage::StorageState::new(),
             actor_id,
+            account: String::new(),
             game_gold: 0,
             p22: gamegold::P22GameGold::default(),
             soft_version_date: 0,
@@ -27843,6 +27855,27 @@ mod tests {
             write_back_player_mnmval(&p, &mut sg);
         }
         assert_eq!(sg.mnm_val[9], 78, "脚本写回的 MNMval 必须回到会话");
+    }
+
+    /// **I-1（review `dd9f3223`）**：`user_account` 的唯一来源 = **会话**（登录时从角色记录
+    /// `humData.Account` 装入）。商人 / 组队 / 固定 NPC / QFunction `@StdModeFunc*` 四条漏斗都经
+    /// [`npc_player_from_session`] 取到同一个值（oracle 是同一个 `PlayObject.UserAccount`）。
+    ///
+    /// 牙：删掉 `p.user_account = sg.account.clone()` ⇒ 本用例红（`""` vs `"ua"`）。
+    #[test]
+    fn npc_player_from_session_injects_session_account_for_all_funnels() {
+        use mir2_script::engine::ScriptPlayer as _;
+        let mut sg = test_session_ground(7);
+        sg.account = "ua".to_string();
+        let vars = npc_vars_from(None, "SKY引擎", 10_000, 10_000_000);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let mut rng = |_v: i32| 0;
+        let p = npc_player_from_session(&mut rng, "hero", &sg, "0", &catalog, &vars);
+        assert_eq!(p.user_account(), "ua", "会话账号必须进 NpcPlayer");
+        // 未注入账号的会话 ⇒ 空串（fail-closed，不猜）。
+        let sg2 = test_session_ground(7);
+        let p2 = npc_player_from_session(&mut rng, "hero", &sg2, "0", &catalog, &vars);
+        assert_eq!(p2.user_account(), "", "缺省空串");
     }
 
     /// **T-142 宿主会话接线**：`SaleDeal` / `PlayDiceLabel` / `GameGold` 在 oracle 里是
@@ -30086,6 +30119,7 @@ break
             },
             storage: storage::StorageState::new(),
             actor_id: 1,
+            account: String::new(),
             game_gold: 77,
             p22: gamegold::P22GameGold::default(),
             soft_version_date: 0,
@@ -32280,6 +32314,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: p,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -32482,6 +32517,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -32671,6 +32707,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -32831,6 +32868,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -33004,6 +33042,7 @@ break
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hero,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -36565,6 +36604,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 7,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -36919,6 +36959,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hid,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -38158,6 +38199,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 7,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -42137,6 +42179,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hero,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -42323,6 +42366,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: 42,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
@@ -42471,6 +42515,7 @@ SendRefMsgRange=15
                 },
                 storage: storage::StorageState::new(),
                 actor_id: hero,
+                account: String::new(),
                 game_gold: 0,
                 p22: gamegold::P22GameGold::default(),
                 soft_version_date: 0,
