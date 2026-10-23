@@ -11,7 +11,7 @@
     {"dlg_select": "@@buildguildnow",
      "note": "菜单选择回包 = CM_MERCHANTDLGSELECT(1011)（src/OpenMir2/Messages.cs:63），recog=643.recog（驱动器自动取最近一条 643）、body=标签原文。oracle: PlayObject.Operate.cs:114-128 ClientMerchantDlgSelect -> GuildOfficial.UserSelect（src/GameSrv/Npc/GuildOfficial.cs:55-104）；@@ 前缀是 ScriptFlagConst.sBUILDGUILDNOW 的字面值（src/Modules/SystemModule/Const/ScriptFlagConst.cs:68）"},
     {"wait_for": 763, "timeout_ms": 3000,
-     "note": "建会失败支：ReQuestBuildGuild（src/GameSrv/Npc/GuildOfficial.cs:112-172）空行会名/无沃玛号角/金币不足 => result<0，末尾 SendMsg(RM_BUILDGUILD_FAIL, result)（:167-170）=> SM_BUILDGUILD_FAIL(763)，param=失败码（-4 空名 / -3 缺物品 / -2 缺费用 / -1 已有行会）。注意不是 643：[@main] 里没有 [@@buildguildnow] 标签，GotoLable 零帧"},
+     "note": "建会失败支：ReQuestBuildGuild（src/GameSrv/Npc/GuildOfficial.cs:112-172）空行会名/无沃玛号角/金币不足 => result<0，末尾 SendMsg(RM_BUILDGUILD_FAIL, result)（:167-170）=> SM_BUILDGUILD_FAIL(763)：**Recog=失败码、Param=0**——7 参重载 SendMsg(this, wIdent, wParam=0, nParam1=result, nParam2=0, nParam3=0)（src/M2Server/Actor/BaseObject.Message.cs:98）把 result 放进 nParam1，泵 SendDefMessage(SM_BUILDGUILD_FAIL, processMsg.nParam1, 0, 0, 0)（src/M2Server/Player/PlayObject.Message.cs:1940-1942）的第 2 参就是 nRecog（src/M2Server/Player/PlayObject.Socket.cs:17）。失败码随账号状态变：无行会+金币够+无沃玛号角=-3、金币不够=-2、已有行会=-1、其余兜底-4；**永不为 0**（成功支不可达）。另注意 rules.json 的 global 掩码默认掩掉 recog，消费窗口要给 763 加 head_compare:[recog] 才比得到这个码，见 docs §6。注意不是 643：[@main] 里没有 [@@buildguildnow] 标签，GotoLable 零帧"},
     {"dlg_select": "@buildguildexp",
      "note": "标签逐字取自部署件 E:/tmp/conformance/csharp-root/M2GameSvr/Envir/Npc_Def/比奇国王-0122.txt 的 <如何建立行会./@buildguildexp>"},
     {"wait_for": 643, "timeout_ms": 3000,
