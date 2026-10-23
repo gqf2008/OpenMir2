@@ -232,4 +232,5 @@
 | T-191 | historical-pre-reservation | 2026-10-23T00:00:00Z | 已落地 |
 | T-192 | historical-pre-reservation | 2026-10-23T00:00:00Z | 已落地 |
 | T-193 | historical-pre-reservation | 2026-10-23T00:00:00Z | 已落地 |
+| T-194 | openmir2-menu-ok-unify | 2026-10-23T08:25:00Z | 已落地 |
 | T-195 | historical-pre-reservation | 2026-10-23T00:00:00Z | 已落地 |
