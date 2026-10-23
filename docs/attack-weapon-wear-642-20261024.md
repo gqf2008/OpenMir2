@@ -173,7 +173,7 @@ python -I -B mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py diff \
    head `f5a2e485b`，**未合入**）已加 `AddAbility::weapon_strong`（`ability.rs:373` 字段，`:847/914/925`
    在 StdMode 5/6/24/26 且 `SpecialPwr ∈ 1..=10` 时赋值）。**待该卡合入后接线，届时复用其字段**：
    把攻方 `AddAbility.weapon_strong` 作为 [`attack_success_weapon_wear_with_strong`] 的实参即可
-   （本卡的 `weapon_wear` 通道与用例已就位）。
+   （本卡的 `weapon_wear` 通道与用例已就位）。〔2026-10-24 订正：该后继卡已合入 master（merge `d38acf25b`，返工后分支 head `4c301e877`；文中旧 head `f5a2e485b` 已随 rebase 弃用），所述接线已落地——`lib.rs:12965` 灌 `set_attack_weapon_strong`、`combat.rs:1266` 消费。〕
    **分叉面（补充登记，reviewer-6 `5ae805d9` I-2）**：
    - **(a) 模板 `SpecialPwr`**：部署 `stditems` 里 `StdMode ∈ {5,6,24,26} ∧ Source ∈ 1..=10` 共 **38 条**
      （`Source → StdItem.SpecialPwr`：`src/GameSrv/DB/MySqlDB.cs:36`；Rust 同源
