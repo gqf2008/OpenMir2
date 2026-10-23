@@ -213,6 +213,15 @@ pub struct GateConfig {
     /// `ServerConf.cs:156` 的 `ReadWriteInteger("Setup", "PKFlagTime", …)`）——
     /// `PlayObject.CheckPkStatus`（`PlayObject.cs:4357-4364`）的 `PvpFlag` 过期门。
     pub pk_flag_time: i32,
+    /// `[Setup] UpgradeWeaponMaxPoint`（`GameSvrConf.cs:1419` 缺省 `20`；
+    /// `ServerConf.cs:233` 的 `ReadWriteByte`，**部署件 = 7**）——
+    /// `PlayObject.CheckWeaponUpgradeStatus`（`PlayObject.cs:4148`）的破碎门：
+    /// `Desc[0]+Desc[1]+Desc[2] < 上限` 才走升级支，否则 `Index = 0`（碎）。
+    pub upgrade_weapon_max_point: i32,
+    /// `[Setup] DecLampDura`（`GameSvrConf.cs:1504` 缺省 `true`；
+    /// `ServerConf.cs:281` 的 `ReadWriteBool`，部署件 = `1`）——
+    /// `PlayObject.UseLamp`（`PlayObject.Message.cs:2247`）「右手火把每周期 `Dura - 1`」开关。
+    pub dec_lamp_dura: bool,
     /// `[Setup] MabMabeHitRandRate`（`GameSvrConf.cs:1778` 缺省 100）—— P3-B4 的 50 第三道成功率门。
     pub mab_mabe_hit_rand_rate: i32,
     /// `[Setup] MabMabeHitMinLvLimit`（`GameSvrConf.cs:1779` 缺省 10）。
@@ -442,6 +451,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut elec_blizzard_range: Option<u8> = None;
     let mut mag_turn_undead_level: Option<i32> = None;
     let mut pk_flag_time: Option<i32> = None;
+    let mut upgrade_weapon_max_point: Option<i32> = None;
+    let mut dec_lamp_dura: Option<bool> = None;
     let mut mab_mabe_hit_rand_rate: Option<i32> = None;
     let mut mab_mabe_hit_min_lv_limit: Option<i32> = None;
     let mut mab_mabe_hit_sucess_rate: Option<i32> = None;
@@ -531,6 +542,20 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 v.parse()
                     .with_context(|| format!("PKFlagTime 不是合法整数：{v:?}"))?,
             );
+        }
+        // 卡 `openmir2-weapon-durability-frames`：`ServerConf.cs:233` 的 `ReadWriteByte`
+        // （部署件 `Server.conf:293` = 7）。空值 ⇒ 保持 `None` ⇒ 回落 oracle 缺省 20。
+        if section == "SETUP" && k == "UPGRADEWEAPONMAXPOINT" && !v.is_empty() {
+            upgrade_weapon_max_point = Some(
+                v.parse()
+                    .with_context(|| format!("UpgradeWeaponMaxPoint 不是合法整数：{v:?}"))?,
+            );
+        }
+        // `ServerConf.cs:281` 的 `ReadWriteBool`（部署件 `Server.conf:395` = 1）；判定口径同
+        // `PasswordLockHumanLogin`（`ConfigFile.ReadBool`：是/YES/1/TRUE ⇒ true，其余 false）。
+        if section == "SETUP" && k == "DECLAMPDURA" {
+            let up = v.to_uppercase();
+            dec_lamp_dura = Some(up == "是" || up == "YES" || up == "1" || up == "TRUE");
         }
         // `ServerConf.cs:574`：`ReadWriteBool("Setup", "PasswordLockHumanLogin", false)`。
         // 放在 `"SETUP"` match 之前的原因同 `PKFlagTime`（避免给共享大 match 加臂）。
@@ -1175,6 +1200,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         mag_turn_undead_level: mag_turn_undead_level.unwrap_or(50),
         // oracle 缺省值（`GameSvrConf.cs:1395`）：`PKFlagTime = 60 * 1000`。
         pk_flag_time: pk_flag_time.unwrap_or(60 * 1000),
+        // oracle 缺省值（`GameSvrConf.cs:1419`）：`UpgradeWeaponMaxPoint = 20`。
+        upgrade_weapon_max_point: upgrade_weapon_max_point.unwrap_or(20),
+        // oracle 缺省值（`GameSvrConf.cs:1504`）：`DecLampDura = true`。
+        dec_lamp_dura: dec_lamp_dura.unwrap_or(true),
         // oracle 缺省值（`GameSvrConf.cs:1763/1778-1781`）。
         mab_mabe_hit_rand_rate: mab_mabe_hit_rand_rate.unwrap_or(100),
         mab_mabe_hit_min_lv_limit: mab_mabe_hit_min_lv_limit.unwrap_or(10),
@@ -1403,6 +1432,28 @@ mod tests {
         let c = load(&p).unwrap();
         assert_eq!(c.mag_turn_undead_level, 50, "空值 ⇒ 缺省 50");
         assert_eq!(c.pk_flag_time, 60_000, "空值 ⇒ 缺省 60s");
+        // **卡 `openmir2-weapon-durability-frames`**：`UpgradeWeaponMaxPoint` / `DecLampDura`。
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}UpgradeWeaponMaxPoint=7{nl}DecLampDura=1{nl}"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(
+            c.upgrade_weapon_max_point, 7,
+            "部署件值必须取文件值（不是缺省 20）"
+        );
+        assert!(c.dec_lamp_dura);
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}UpgradeWeaponMaxPoint={nl}DecLampDura=0{nl}"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.upgrade_weapon_max_point, 20, "空值 ⇒ oracle 缺省 20");
+        assert!(!c.dec_lamp_dura, "0 ⇒ false");
+        let p = write(&dir, &format!("{base}[Setup]{nl}ShowRankLevelName=1{nl}"));
+        let c = load(&p).unwrap();
+        assert_eq!(c.upgrade_weapon_max_point, 20, "缺键 ⇒ 缺省 20");
+        assert!(c.dec_lamp_dura, "缺键 ⇒ 缺省 true");
         std::fs::remove_dir_all(&dir).ok();
     }
 

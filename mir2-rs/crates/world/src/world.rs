@@ -129,6 +129,53 @@ pub struct CastleStructureAt {
     pub event: crate::castle::StructureEvent,
 }
 
+/// `ItemLocation.Weapon`（`src/OpenMir2/Enums/ItemLocation.cs:11`）：`UseItems` 的武器位。
+pub const ITEM_LOCATION_WEAPON: usize = 1;
+/// `ItemLocation.RighThand`（`src/OpenMir2/Enums/ItemLocation.cs:16`）：`UseItems` 的右手位
+/// （火把/蜡烛，`UseLamp` 的结算槽）。
+pub const ITEM_LOCATION_RIGHTHAND: usize = 2;
+/// `ItemAttr.WeaponUpgrade`（`src/OpenMir2/Packets/ClientPackets/ClientUserItem.cs:11`）。
+pub const ITEM_ATTR_WEAPON_UPGRADE: usize = 10;
+/// `EfftypeConst.EFFECTIVE_HIGHLEVEL`（`src/M2Server/Actor/ActorConst.cs:43`）——
+/// `GetMyLight()` 的等级基线门（`PlayObject.cs:5404-5425`）。
+pub const EFFECTIVE_HIGHLEVEL: u8 = 50;
+
+/// `UseLamp()` 的一次 `RM_LAMPCHANGEDURA` 自投递（`PlayObject.Message.cs:2265` / `:2274`）。
+///
+/// `Recog` 的线上口径（v2 订正）：处理器 `PlayObject.Message.cs:1843` 写的是
+/// `SendDefMessage(SM_LAMPCHANGEDURA, processMsg.nParam1, 0, 0, 0)`，而
+/// `SendDefMessage(short wIdent, int nRecog, int nParam, int nTag, int nSeries)`
+/// （`PlayObject.Socket.cs:17`）的第 2 实参就是 **`Recog`** ⇒ **`Recog = Dura`、`Param = 0`**。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LampDuraChange {
+    /// 收件人（`SendMsg` 只投自己，`BaseObject.Message.cs:152-183`）。
+    pub actor_id: i32,
+    /// 线上 `Recog`：燃尽支 = `0`（`:2265`）；千位变化支 = 当前 `Dura`（`:2274`）。
+    pub recog: i32,
+}
+
+/// `CheckWeaponUpgrade` 的两个分支（`src/M2Server/Player/PlayObject.cs:4110-4144`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeaponUpgradeOutcome {
+    /// `UseItems[Weapon].Index == 0`（`:4118`）⇒ `SendRefMsg(RM_BREAKWEAPON)`（`:4121`）。
+    Broke,
+    /// 升级成功（`:4130`）⇒ `SendUpdateItem` + `RM_ABILITY/RM_SUBABILITY`（本卡不扩范围）。
+    Refined,
+}
+
+/// 一次武器升级结算事件（见 [`TickRecord::weapon_breaks`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeaponUpgradeEvent {
+    pub actor_id: i32,
+    pub outcome: WeaponUpgradeOutcome,
+}
+
+/// `HUtil32.Round(double)`（`System.Math.Round(x, MidpointRounding.AwayFromZero)`）——值域非负。
+#[must_use]
+fn hutil_round(v: f64) -> i32 {
+    v.round() as i32
+}
+
 /// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TickRecord {
@@ -140,6 +187,15 @@ pub struct TickRecord {
     pub aoi_order: Vec<i32>,
     /// 本 tick 的攻击结算（对拍用）
     pub attacks: Vec<(i32, i32, AttackOutcome)>,
+    /// **卡 `openmir2-weapon-durability-frames`（tier=R）**：本 tick `CheckWeaponUpgrade`
+    /// （`src/M2Server/Player/PlayObject.cs:4110`）的结算结果，按攻击结算序。
+    ///
+    /// 生产点：`PlayObject.Attack.cs:25-31` 的 `AttackDir`——门是
+    /// `UseItems[Weapon].Index > 0 && Desc[WeaponUpgrade] > 0` **且 `attackTarget != null`**
+    /// （空挥不算）。`Index == 0` 分支（`:4118-4121`）⇒ `SendRefMsg(RM_BREAKWEAPON)`；
+    /// 升级成功分支（`:4130`）⇒ `SendUpdateItem` + `RM_ABILITY/RM_SUBABILITY`（本卡不扩范围）。
+    /// 宿主据 [`WeaponUpgradeOutcome::Broke`] 出 `SM_BREAKWEAPON(1102)`。
+    pub weapon_breaks: Vec<WeaponUpgradeEvent>,
     /// 本 tick 的死亡结算：`(死者 id, 掉落物品数, 金币, 经验归属者, 获得经验)`
     /// —— 归属者取 C# `ExpHitter`（不是 `LastHiter`），见 `Entity::exp_hitter`
     pub deaths: Vec<(i32, usize, i32, Option<i32>, i32)>,
@@ -832,6 +888,23 @@ pub struct World {
     /// oracle 里 `CheckPkStatus()` 挂在玩家 `Run()` 的该周期块内（`PlayObject.Message.cs:257-262`）。
     /// 本骨架按同一周期在 [`World::check_pk_status`] 内节流。
     pub dec_light_item_drug_time_ms: i64,
+    /// `SystemShare.Config.DecLampDura`（`GameSvrConf.cs:1504` 缺省 `true`；
+    /// `ServerConf.cs:281` 读 `[Setup] DecLampDura`，部署件 = 1）——
+    /// [`World::use_lamps`] 里「右手火把每周期 `Dura - 1`」的开关
+    /// （`PlayObject.Message.cs:2247-2254`）。
+    pub dec_lamp_dura: bool,
+    /// `SystemShare.Config.UpgradeWeaponMaxPoint`（`GameSvrConf.cs:1419` 缺省 `20`；
+    /// `ServerConf.cs:233` 读 `[Setup] UpgradeWeaponMaxPoint`，**部署件 = 7**）——
+    /// `CheckWeaponUpgradeStatus`（`PlayObject.cs:4148`）的破碎门。
+    pub upgrade_weapon_max_point: i32,
+    /// 上一趟 [`World::use_lamps`] 的 sim 时钟（oracle `DecLightItemDrugTick`，与
+    /// `CheckPkStatus` 共用同一字段；本仓两趟分别节流，宿主相邻调用 ⇒ 同步推进）。
+    pub lamp_tick: i64,
+    /// [`World::lamp_tick`] 是否已按首次调用时钟惰性初始化（与 T-78 同口径）。
+    lamp_tick_initialized: bool,
+    /// 本 tick `attack_once` 里 `CheckWeaponUpgrade` 产生的待抄事件（见
+    /// [`TickRecord::weapon_breaks`]）；tick 末尾转抄进记录。
+    pub(crate) pending_weapon_breaks: Vec<WeaponUpgradeEvent>,
     /// 上一趟 `CheckPkStatus` 的 sim 时钟（oracle `DecLightItemDrugTick`）。
     ///
     /// **T-78 修复（惰性初始化）**：oracle 在玩家构造时用 `GetTickCount()` 初始化该游标
@@ -1165,6 +1238,11 @@ impl World {
             dec_light_item_drug_time_ms: 500,
             pk_check_tick: 0,
             pk_check_tick_initialized: false,
+            dec_lamp_dura: true,
+            upgrade_weapon_max_point: 20,
+            lamp_tick: 0,
+            lamp_tick_initialized: false,
+            pending_weapon_breaks: Vec::new(),
             health_fill_time: 300,
             spell_fill_time: 800,
             make_ghost_time: 3 * 60 * 1000,
@@ -1490,6 +1568,193 @@ impl World {
     pub fn set_pk_flag_config(&mut self, pk_flag_time_ms: i64, dec_light_item_drug_time_ms: i64) {
         self.pk_flag_time_ms = pk_flag_time_ms;
         self.dec_light_item_drug_time_ms = dec_light_item_drug_time_ms;
+    }
+
+    /// **卡 `openmir2-weapon-durability-frames`**：灌入 `[Setup] DecLampDura` /
+    /// `UpgradeWeaponMaxPoint`（`ServerConf.cs:281/233`；部署件 = `1` / `7`）。
+    ///
+    /// 缺省（oracle `GameSvrConf.cs:1504/1419`）= `true` / `20`；合成 golden 路径不调用本函数
+    /// ⇒ 世界保持构造缺省，既有对拍逐字节不变。
+    pub fn set_weapon_durability_config(
+        &mut self,
+        dec_lamp_dura: bool,
+        upgrade_weapon_max_point: i32,
+    ) {
+        self.dec_lamp_dura = dec_lamp_dura;
+        self.upgrade_weapon_max_point = upgrade_weapon_max_point;
+    }
+
+    /// `PlayObject.GetMyLight()`（`PlayObject.cs:5404-5425`）：
+    /// 基线 = `Level >= EFFECTIVE_HIGHLEVEL ? 1 : 0`；遍历 13 个装备槽，
+    /// `Index > 0 && Dura > 0` 的模板 `StdItem.Light` 取最大值。
+    ///
+    /// **注意**：本仓物品目录是 1-based 顺序表（`items[i] ⇒ Index = i + 1`，
+    /// [`World::std_item_by_idx`]），与宿主 `ItemCatalog::get(index)` 同口径。
+    #[must_use]
+    pub fn my_light_of(&self, actor_id: i32) -> Option<u8> {
+        let e = self.entities.get(actor_id)?;
+        let mut light = if e.level >= EFFECTIVE_HIGHLEVEL { 1 } else { 0 };
+        for slot in &e.use_items {
+            if slot.index > 0 && slot.dura > 0 {
+                if let Some(std) = self.std_item_by_idx(usize::from(slot.index)) {
+                    if light < std.light {
+                        light = std.light;
+                    }
+                }
+            }
+        }
+        Some(light)
+    }
+
+    /// `PlayObject.UseLamp()`（`PlayObject.Message.cs:2233-2278`）的全世界等价物，
+    /// 按 `DecLightItemDrugTime` 周期（缺省 500ms）对**每个玩家**跑一次。
+    ///
+    /// 触发链（oracle）：`PlayObject.Run` 的周期块（`:257-262`）
+    /// `if ((GetTickCount() - DecLightItemDrugTick) > Config.DecLightItemDrugTime)
+    ///  { DecLightItemDrugTick += 周期; UseLamp(); CheckPkStatus(); }`
+    /// ⇒ 本方法对应 `UseLamp()`，[`World::check_pk_status`] 对应 `CheckPkStatus()`。
+    /// 两趟各自节流（oracle 共用一个游标），宿主在**同一处相邻调用** ⇒ 周期同步推进。
+    ///
+    /// 逐行口径（连 oracle 的 ushort 回绕一起搬）：
+    /// - `UseItems[RighThand].Index == 0` ⇒ 直接返回（`:2240`）；
+    /// - 模板缺失或 `SpecialPwr != 0` ⇒ 直接返回（`:2243-2246`，只有火把/蜡烛 `SpecialPwr==0`）；
+    /// - `nOldDura = Round(Dura / 1000.0)`；`nDura = DecLampDura ? (ushort)(Dura - 1) : Dura`
+    ///   ——`Dura == 0` 时 `(ushort)(0 - 1)` **回绕成 65535**（`:2249`），**不破零**；
+    /// - `nDura <= 0`（对 `ushort` 等价于 `== 0`）：`Dura = 0`、`SendDelItems`（Play）、
+    ///   `Index = 0`、`Light = GetMyLight()`、`RM_CHANGELIGHT`、**655（`Recog = 0`）**、
+    ///   `RecalcAbilitys()`（`:2260-2272`）；
+    /// - 否则 `Dura = nDura`（`:2276`）；
+    /// - **末尾无条件** `if (nOldDura != Round(nDura / 1000.0))` ⇒ **655（`Recog = 当前 Dura`）**
+    ///   （`:2274`）。燃尽只在 `Dura ∈ {0, 1}` 时发生 ⇒ `nOldDura` 恒 `0`，与 `Round(0)` 相等
+    ///   ⇒ 该支不会与燃尽支重复发帧（同一次调用最多一条 655）。
+    ///
+    /// **本卡未接的伴随帧（登记）**：`SendDelItems`（709）与 `RM_CHANGELIGHT`（654）；
+    /// `RecalcAbilitys` 的宿主侧重算。两侧状态（`Dura` / `Index` / `Light`）已逐行落地。
+    pub fn use_lamps(&mut self) -> Vec<LampDuraChange> {
+        if !self.lamp_tick_initialized {
+            self.lamp_tick = self.clock_ms;
+            self.lamp_tick_initialized = true;
+        }
+        if self.clock_ms - self.lamp_tick <= self.dec_light_item_drug_time_ms {
+            return Vec::new();
+        }
+        self.lamp_tick += self.dec_light_item_drug_time_ms;
+        let mut out = Vec::new();
+        for id in self.entities.ids_sorted() {
+            if self
+                .entities
+                .get(id)
+                .is_some_and(|e| e.race == crate::entity::ACTOR_RACE_PLAY)
+            {
+                self.use_lamp(id, &mut out);
+            }
+        }
+        out
+    }
+
+    /// 单个玩家的 `UseLamp()`（见 [`World::use_lamps`]）。
+    fn use_lamp(&mut self, actor_id: i32, out: &mut Vec<LampDuraChange>) {
+        let Some(slot) = self
+            .entities
+            .get(actor_id)
+            .map(|e| e.use_items[ITEM_LOCATION_RIGHTHAND])
+        else {
+            return;
+        };
+        if slot.index == 0 {
+            return;
+        }
+        let Some(std) = self.std_item_by_idx(usize::from(slot.index)) else {
+            return;
+        };
+        if std.special_pwr != 0 {
+            return;
+        }
+        let old_dura = hutil_round(f64::from(slot.dura) / 1000.0);
+        let n_dura: u16 = if self.dec_lamp_dura {
+            // **unchecked ushort 回绕**照 oracle（`PlayObject.Message.cs:2249`）。
+            slot.dura.wrapping_sub(1)
+        } else {
+            slot.dura
+        };
+        if n_dura == 0 {
+            // 燃尽支（`:2260-2272`）。`SendDelItems` 只对 `Race == Play`；本函数的调用面
+            // 恒为玩家（`use_lamps` 的 `Race` 门），`709` 未接（登记）。
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.use_items[ITEM_LOCATION_RIGHTHAND].dura = 0;
+                // oracle 先 `SendDelItems(UseItems[RighThand])` 再 `Index = 0`；
+                // `SendDelItems` 读的是清位**前**的槽（709 未接 ⇒ 只落状态）。
+                e.use_items[ITEM_LOCATION_RIGHTHAND].index = 0;
+            }
+            // `Light = GetMyLight()`（`:2263`，在 `Index = 0` 之后算）。
+            if let Some(light) = self.my_light_of(actor_id) {
+                if let Some(e) = self.entities.get_mut(actor_id) {
+                    e.light = light;
+                }
+            }
+            out.push(LampDuraChange { actor_id, recog: 0 });
+        } else if let Some(e) = self.entities.get_mut(actor_id) {
+            e.use_items[ITEM_LOCATION_RIGHTHAND].dura = n_dura;
+        }
+        // 千位变化支（`:2274`）：比较的是局部 `nDura`，发的是落槽后的 `Dura`。
+        if old_dura != hutil_round(f64::from(n_dura) / 1000.0) {
+            let dura = self
+                .entities
+                .get(actor_id)
+                .map_or(0, |e| e.use_items[ITEM_LOCATION_RIGHTHAND].dura);
+            out.push(LampDuraChange {
+                actor_id,
+                recog: i32::from(dura),
+            });
+        }
+    }
+
+    /// `PlayObject.CheckWeaponUpgrade` + `CheckWeaponUpgradeStatus`
+    /// （`PlayObject.cs:4110-4172`）的结算（在武器槽上原地作用）。
+    ///
+    /// 门（`AttackDir`，`PlayObject.Attack.cs:25-31`）：`Index > 0 && Desc[10] > 0`
+    /// **且 `attackTarget != null`**——调用面 [`World::attack_once`] 保证有目标；
+    /// 空挥 [`World::attack_swing`] 不调本函数。
+    ///
+    /// `CheckWeaponUpgradeStatus` 逐行：
+    /// - `Desc[0]+Desc[1]+Desc[2] < UpgradeWeaponMaxPoint`：`Desc[10]==1 ⇒ Index = 0`（碎）；
+    ///   `Desc[10] ∈ 10..=13 ⇒ Desc[0] += Desc[10]-9`；`20..=23 ⇒ Desc[1] += Desc[10]-19`；
+    ///   `30..=33 ⇒ Desc[2] += Desc[10]-29`（C# `(byte)(...)` ⇒ 模 256 回绕）；
+    /// - 否则（和 ≥ 上限）⇒ `Index = 0`（碎）；
+    /// - **无论哪支**末尾 `Desc[10] = 0`（一次性消耗）。
+    #[must_use]
+    fn check_weapon_upgrade_status(
+        &self,
+        weapon: &mut crate::entity::UseItemSlot,
+    ) -> Option<WeaponUpgradeOutcome> {
+        if weapon.index == 0 || weapon.desc[ITEM_ATTR_WEAPON_UPGRADE] == 0 {
+            return None;
+        }
+        let upgrade = weapon.desc[ITEM_ATTR_WEAPON_UPGRADE];
+        let status =
+            i32::from(weapon.desc[0]) + i32::from(weapon.desc[1]) + i32::from(weapon.desc[2]);
+        if status < self.upgrade_weapon_max_point {
+            if upgrade == 1 {
+                weapon.index = 0;
+            }
+            if (10..=13).contains(&upgrade) {
+                weapon.desc[0] = weapon.desc[0].wrapping_add(upgrade - 9);
+            }
+            if (20..=23).contains(&upgrade) {
+                weapon.desc[1] = weapon.desc[1].wrapping_add(upgrade - 19);
+            }
+            if (30..=33).contains(&upgrade) {
+                weapon.desc[2] = weapon.desc[2].wrapping_add(upgrade - 29);
+            }
+        } else {
+            weapon.index = 0;
+        }
+        weapon.desc[ITEM_ATTR_WEAPON_UPGRADE] = 0;
+        Some(if weapon.index == 0 {
+            WeaponUpgradeOutcome::Broke
+        } else {
+            WeaponUpgradeOutcome::Refined
+        })
     }
 
     /// `PlayObject.CheckPkStatus()`（`PlayObject.cs:4357-4364`）的**全世界**等价物。
@@ -4620,6 +4885,7 @@ impl World {
             processed: Vec::new(),
             aoi_order: Vec::new(),
             attacks: Vec::new(),
+            weapon_breaks: Vec::new(),
             deaths: Vec::new(),
             death_use_item_drops: Vec::new(),
             exp_awards: Vec::new(),
@@ -4834,6 +5100,9 @@ impl World {
         // 命令的攻击**同一份**记录，宿主 `drain_combat_downlink` ① 据它出 `SM_STRUCK`。
         // 关闭 AI 时 `pending_ai_attacks` 恒空 ⇒ 既有 golden 逐字节不变。
         record.attacks.append(&mut self.pending_ai_attacks);
+        // **卡 `openmir2-weapon-durability-frames`**：命令 FIFO（`CM_HIT` ⇒ `Command::Attack`）
+        // 与怪物 AI 两条攻击路径里的 `CheckWeaponUpgrade` 结算，按发生序转抄进本 tick 记录。
+        record.weapon_breaks.append(&mut self.pending_weapon_breaks);
 
         // **世界 tick 扩容首批（T3）· ① NPC Run**：固定 NPC tick（oracle `MerchantProcessor` 的
         // `ProcessNpcs()`，200ms 线程单线程等价物）。
@@ -6448,6 +6717,17 @@ impl World {
         // 取出双方属性做结算（避免同时可变借用），再写回
         let mut attacker = self.entities.get(actor_id)?.clone();
         let mut target = self.entities.get(target_id)?.clone();
+        // **卡 `openmir2-weapon-durability-frames`（tier=R）**：`AttackDir` 在算攻击力**之前**
+        // 先跑 `CheckWeaponUpgrade()`（`PlayObject.Attack.cs:25-31`，门：武器 `Index>0 &&
+        // Desc[10]>0` 且 `attackTarget != null`——本函数按构造恒有目标；空挥走
+        // [`World::attack_swing`]，**不**结算）。它不抽 RNG ⇒ 取数账本不变；但会改
+        // `UseItems[Weapon]`（碎 / 强化）⇒ 攻击结算后必须写回实体（oracle 改的是同一对象）。
+        let weapon_outcome: Option<WeaponUpgradeOutcome> =
+            if attacker.race == crate::entity::ACTOR_RACE_PLAY {
+                self.check_weapon_upgrade_status(&mut attacker.use_items[ITEM_LOCATION_WEAPON])
+            } else {
+                None
+            };
         // `StruckDamage` 的倍率取目标**当下存着**的 `LastHiter`（= 上一次命中者：本次命中者要等
         // 目标下一轮 `Run()` 处理 `RM_STRUCK` 才登记）。默认倍率 10 时数值不可分辨，非默认配置下
         // 才有差异 ⇒ 必须照 oracle 取，别改成本次攻击者。
@@ -6563,6 +6843,15 @@ impl World {
                 cfg.attack_poison_time,
                 0,
             );
+        }
+        // 武器升级结算的回写（`UseItems[Weapon]` 是 oracle 的同一个对象；本仓攻方是副本）。
+        // 只回写 `use_items`：其余攻方字段在 oracle 里也不由 `AttackDir` 改。
+        if let Some(outcome) = weapon_outcome {
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.use_items = attacker.use_items;
+            }
+            self.pending_weapon_breaks
+                .push(WeaponUpgradeEvent { actor_id, outcome });
         }
         Some(outcome)
     }
@@ -11411,6 +11700,314 @@ mod castle_wire_tests {
         assert!(
             rec.castle_structures.is_empty(),
             "WallStructure.Die 无子类段 ⇒ 不发结构事件"
+        );
+    }
+}
+
+/// **卡 `openmir2-weapon-durability-frames`（tier=R）**：武器耐久族上游生产者的构造级判据。
+///
+/// 对照表（oracle 触发链，文件:行）：
+///
+/// - `SM_LAMPCHANGEDURA(655)`：`PlayObject.Run` 周期块（`PlayObject.Message.cs:257-262`）⇒
+///   `UseLamp()`（`:2233-2278`）⇒ `SendMsg(RM_LAMPCHANGEDURA, 0, {0|Dura}, 0, 0)`（`:2265`/`:2274`）
+///   ⇒ 处理器 `:1843` `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0, 0, 0)` ⇒
+///   **`Recog = Dura`、`Param = 0`**（`PlayObject.Socket.cs:17` 的第 2 实参是 `nRecog`）。
+///
+/// - `SM_BREAKWEAPON(1102)`：`AttackDir`（`PlayObject.Attack.cs:25-31`，门 `attackTarget != null`
+///   与武器 `Index>0 && Desc[10]>0`）⇒ `CheckWeaponUpgrade`（`PlayObject.cs:4110`）⇒
+///   `Index == 0` 支 `SendRefMsg(RM_BREAKWEAPON)`（`:4121`）⇒ 处理器 `:2015-2017`。
+#[cfg(test)]
+mod weapon_durability_tests {
+    use super::*;
+    use crate::entity::UseItemSlot;
+
+    fn slot(index: u16, dura: u16, desc: [u8; 14]) -> UseItemSlot {
+        UseItemSlot {
+            make_index: 1,
+            index,
+            dura,
+            dura_max: 10_000,
+            desc,
+        }
+    }
+
+    fn player(w: &mut World, name: &str, x: i32, y: i32) -> i32 {
+        let mut e = Entity::new(0, name, x, y);
+        e.race = crate::entity::ACTOR_RACE_PLAY;
+        w.add_entity(e)
+    }
+
+    fn lamp_world(dura: u16, special_pwr: i8, catalog_item: bool) -> (World, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        if catalog_item {
+            w.set_item_catalog(vec![mir2_data::StdItem {
+                name: "蜡烛".to_string(),
+                special_pwr,
+                light: 3,
+                ..Default::default()
+            }]);
+        }
+        w.set_weapon_durability_config(true, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        w.entities.get_mut(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND] = slot(1, dura, [0; 14]);
+        (w, p)
+    }
+
+    fn lamp_after_500ms(w: &mut World) -> Vec<LampDuraChange> {
+        let first = w.use_lamps();
+        assert!(
+            first.is_empty(),
+            "首调只初始化 `DecLightItemDrugTick` 游标（T-78 口径）"
+        );
+        w.clock_ms += 501;
+        w.use_lamps()
+    }
+
+    /// 判据 ①（帧内容）：`Dura 1500 → 1499` 跨过 `Round(Dura/1000)` 的千位边界
+    /// （`Round(1.5) = 2` → `Round(1.499) = 1`）⇒ **恰好一条** 655，`Recog = 新 Dura`。
+    #[test]
+    fn lamp_crossing_thousand_boundary_emits_one_frame_with_durability_as_recog() {
+        let (mut w, p) = lamp_world(1500, 0, true);
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 1499
+            }],
+            "`:2274` ⇒ Recog = 新 Dura（不是 Param）"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1499
+        );
+    }
+
+    /// 判据 ①（反面）：不跨千位 ⇒ 耐久照减、**零帧**（`:2274` 的门不成立）。
+    #[test]
+    fn lamp_within_same_thousand_bucket_emits_zero_frames() {
+        let (mut w, p) = lamp_world(2600, 0, true);
+        assert!(lamp_after_500ms(&mut w).is_empty());
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            2599
+        );
+    }
+
+    /// 判据 ②（燃尽）：`Dura == 1` ⇒ `nDura == 0` ⇒ `Dura = 0`、`Index = 0`（槽被清）、
+    /// `Light` 重算、恰好一条 655 且 `Recog = 0`（`:2265`）。
+    #[test]
+    fn lamp_burnout_clears_slot_and_emits_recog_zero() {
+        let (mut w, p) = lamp_world(1, 0, true);
+        // 燃尽前 `Light` 由装备模板给（`StdItem.Light = 3`）。
+        assert_eq!(w.my_light_of(p), Some(3));
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 0
+            }],
+            "燃尽支 Recog = 0，且不与千位支重复"
+        );
+        let e = w.entities.get(p).unwrap();
+        assert_eq!(
+            (
+                e.use_items[ITEM_LOCATION_RIGHTHAND].index,
+                e.use_items[ITEM_LOCATION_RIGHTHAND].dura
+            ),
+            (0, 0),
+            "`:2262-2265`：Dura=0 + Index=0（MakeIndex/DuraMax/Desc 保留）"
+        );
+        assert_eq!(
+            e.light, 0,
+            "`Light = GetMyLight()`（Index 已清 ⇒ 模板不再计光）"
+        );
+    }
+
+    /// **oracle 怪癖（连 bug 一起搬）**：`Dura == 0` 时 `(ushort)(Dura - 1)` **回绕成 65535**
+    /// （`:2249`）⇒ `nDura <= 0` 不成立 ⇒ 槽被写成 65535 并发一条 `Recog = 65535` 的 655。
+    #[test]
+    fn lamp_zero_durability_wraps_to_65535_like_oracle() {
+        let (mut w, p) = lamp_world(0, 0, true);
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 65535
+            }]
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            65535
+        );
+    }
+
+    /// 判据 ③（负例）：`SpecialPwr != 0`（非火把/蜡烛）或模板缺失 ⇒ 完全不动、零帧。
+    #[test]
+    fn lamp_non_lamp_item_or_missing_template_is_untouched() {
+        let (mut w, p) = lamp_world(1500, 1, true);
+        assert!(lamp_after_500ms(&mut w).is_empty());
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1500
+        );
+
+        let (mut w2, p2) = lamp_world(1500, 0, false);
+        assert!(lamp_after_500ms(&mut w2).is_empty());
+        assert_eq!(
+            w2.entities.get(p2).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1500
+        );
+    }
+
+    /// 判据 ③（负例）：非玩家实体不跑 `UseLamp`（oracle 只在 `PlayObject.Run` 里调）。
+    #[test]
+    fn lamp_never_runs_for_non_players() {
+        let (mut w, id) = lamp_world(1500, 0, true);
+        w.entities.get_mut(id).unwrap().race = 80;
+        assert!(lamp_after_500ms(&mut w).is_empty());
+        assert_eq!(
+            w.entities.get(id).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1500
+        );
+    }
+
+    fn weapon_world(desc: [u8; 14]) -> (World, i32, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        // 部署件 `Server.conf:293 UpgradeWeaponMaxPoint=7`。
+        w.set_weapon_durability_config(true, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        w.entities.get_mut(p).unwrap().use_items[ITEM_LOCATION_WEAPON] = slot(10, 5000, desc);
+        let mut m = Entity::new(0, "foe", 11, 10);
+        m.race = 80;
+        let mid = w.add_entity(m);
+        (w, p, mid)
+    }
+
+    fn attack_once(w: &mut World, p: i32, mid: i32) -> TickRecord {
+        w.attack_cmd(p, mid);
+        w.tick()
+    }
+
+    /// 判据 ②（升级成功支）：`Desc[10] = 13` 且 `Desc[0..2]` 和 < 上限 ⇒ `Desc[0] += 4`、
+    /// `Desc[10] = 0`、`Index` 不变；**不发** `RM_BREAKWEAPON`（`Refined` 事件）。
+    #[test]
+    fn weapon_upgrade_success_adds_desc_and_clears_marker() {
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
+        let (mut w, p, mid) = weapon_world(desc);
+        let rec = attack_once(&mut w, p, mid);
+        assert_eq!(
+            rec.weapon_breaks,
+            vec![WeaponUpgradeEvent {
+                actor_id: p,
+                outcome: WeaponUpgradeOutcome::Refined
+            }]
+        );
+        let wslot = w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON];
+        assert_eq!(wslot.desc[0], 4, "`Desc[0] + Desc[10] - 9`（`:4153`）");
+        assert_eq!(wslot.desc[ITEM_ATTR_WEAPON_UPGRADE], 0, "末尾无条件清标记");
+        assert_eq!(wslot.index, 10, "成功支不清 Index");
+    }
+
+    /// 判据 ②（破碎支 A）：和 ≥ 上限 ⇒ `Index = 0` ⇒ `Broke`（`SM_BREAKWEAPON` 的生产事件）。
+    #[test]
+    fn weapon_sum_at_cap_breaks_and_emits_broke_event() {
+        let mut desc = [0u8; 14];
+        desc[0] = 7;
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 10;
+        let (mut w, p, mid) = weapon_world(desc);
+        let rec = attack_once(&mut w, p, mid);
+        assert_eq!(
+            rec.weapon_breaks,
+            vec![WeaponUpgradeEvent {
+                actor_id: p,
+                outcome: WeaponUpgradeOutcome::Broke
+            }]
+        );
+        let wslot = w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON];
+        assert_eq!(
+            wslot.index, 0,
+            "`:4168` 和 ≥ 上限 ⇒ Index = 0（槽对象保留）"
+        );
+        assert_eq!(wslot.desc[ITEM_ATTR_WEAPON_UPGRADE], 0);
+        assert_eq!(wslot.make_index, 1, "MakeIndex 保留（oracle 只清 Index）");
+    }
+
+    /// 判据 ②（破碎支 B）：`Desc[10] == 1` ⇒ 必碎（`:4150-4152`）。
+    #[test]
+    fn weapon_marker_one_always_breaks() {
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 1;
+        let (mut w, p, mid) = weapon_world(desc);
+        let rec = attack_once(&mut w, p, mid);
+        assert_eq!(
+            rec.weapon_breaks,
+            vec![WeaponUpgradeEvent {
+                actor_id: p,
+                outcome: WeaponUpgradeOutcome::Broke
+            }]
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON].index,
+            0
+        );
+    }
+
+    /// 判据 ③（负例）：无武器 / 无升级标记 ⇒ 零事件。
+    #[test]
+    fn no_weapon_or_no_marker_produces_no_event() {
+        let (mut w, p, mid) = weapon_world([0u8; 14]);
+        let rec = attack_once(&mut w, p, mid);
+        assert!(
+            rec.weapon_breaks.is_empty(),
+            "Desc[10]==0 ⇒ 不进 CheckWeaponUpgrade"
+        );
+
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
+        let (mut w2, p2, mid2) = weapon_world(desc);
+        w2.entities.get_mut(p2).unwrap().use_items[ITEM_LOCATION_WEAPON].index = 0;
+        let rec2 = attack_once(&mut w2, p2, mid2);
+        assert!(rec2.weapon_breaks.is_empty(), "Index==0 ⇒ 无武器，不结算");
+    }
+
+    /// 判据 ③（门）：**空挥**（`attackTarget == null`）不跑 `CheckWeaponUpgrade`
+    /// （`PlayObject.Attack.cs:27-31` 的 `if (attackTarget != null)`）⇒ 零事件、武器不动。
+    #[test]
+    fn attack_swing_without_target_does_not_check_weapon_upgrade() {
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 1;
+        let (mut w, p, _mid) = weapon_world(desc);
+        assert!(w.attack_swing(p).is_some(), "空挥照抽攻击力（既有口径）");
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON].index,
+            10,
+            "无目标 ⇒ 升级结算不跑（武器不碎）"
+        );
+        let rec = w.tick();
+        assert!(rec.weapon_breaks.is_empty());
+    }
+
+    /// 周期门：500ms 内重复调用 ⇒ 只结算一次（`DecLightItemDrugTime`，`:257-262`）。
+    #[test]
+    fn lamp_cycle_is_throttled_to_dec_light_item_drug_time() {
+        let (mut w, p) = lamp_world(1500, 0, true);
+        assert!(w.use_lamps().is_empty(), "首调初始化游标");
+        w.clock_ms += 501;
+        assert_eq!(w.use_lamps().len(), 1);
+        assert!(w.use_lamps().is_empty(), "同一周期内不重复结算");
+        w.clock_ms += 500;
+        assert!(w.use_lamps().is_empty(), "严格 `>` 门：恰 500ms 不算");
+        w.clock_ms += 1;
+        assert!(w.use_lamps().is_empty(), "1499 → 1498 不跨千位 ⇒ 零帧");
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1498
         );
     }
 }
