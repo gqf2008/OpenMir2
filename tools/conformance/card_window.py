@@ -3945,25 +3945,29 @@ def _selftest_inventory(tmp):
 
     # ---- 生产接线 / 失败面（review `c866f358` I-3 / M-1）：用假 runner 跑 run_inventory 本体 ----
     class _FakeRunner:
-        def __init__(self, std_mode="0", update_rc=0, verify_fp="-"):
+        def __init__(self, std_mode="0", update_rc=0, verify_fp="-",
+                     occupied=0, before_count=0, after_count=0):
             self.std_mode = std_mode
             self.update_rc = update_rc
             self.verify_fp = verify_fp
+            self.occupied = occupied
+            self.before_count = before_count
+            self.after_count = after_count
 
         def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None, capture=True):
             if tag == "inventory.columns":
                 return 0, ("ChrName\nLoginID\nIndex\nMakeIndex\nPosition"
                            "\nDura\nDuraMax\nDesc0\n"), ""
             if tag == "inventory.occupancy":
-                return 0, "0\n", ""
+                return 0, "%d\n" % self.occupied, ""
             if tag == "inventory.template":
                 return 0, "%s\t0\t0\n" % self.std_mode, ""
             if tag == "inventory.read":
-                return 0, "0\t-\n", ""
+                return 0, "%d\t-\n" % self.before_count, ""
             if tag == "inventory.update":
                 return self.update_rc, "", ("boom" if self.update_rc else "")
             if tag == "inventory.verify":
-                return 0, "0\t%s\n" % self.verify_fp, ""
+                return 0, "%d\t%s\n" % (self.after_count, self.verify_fp), ""
             if tag == "inventory.verify_rows":
                 return 0, "1\n", ""
             return 1, "", "unexpected tag %s" % tag
@@ -3991,9 +3995,29 @@ def _selftest_inventory(tmp):
         bad_fp = run_inventory(_FakeRunner(verify_fp="deadbeef"), "csharp", prof, sc, one, {})
         out.append((bad_fp["rc"] == 2 and bad_fp["altered_columns"],
                     "⑧ 其它槽位指纹变了 => rc=2 且记 altered_columns"))
+        bad_occ = run_inventory(_FakeRunner(occupied=1), "csharp", prof, sc, one, {})
+        out.append((bad_occ["rc"] == 2 and "已有" in (bad_occ["error"] or ""),
+                    "⑪ 声明槽位已被占用 => rc=2（%r）" % (bad_occ["error"] or "")[:90]))
+        bad_cnt = run_inventory(_FakeRunner(after_count=1), "csharp", prof, sc, one, {})
+        out.append((bad_cnt["rc"] == 2 and "行数变了" in (bad_cnt["error"] or ""),
+                    "⑫ 其它槽位行数变了 => rc=2（%r）" % (bad_cnt["error"] or "")[:90]))
     finally:
         globals()["_check_db_pairing"] = orig_pair
         globals()["placement_envir_root"] = orig_root
+
+    # ⑩ 库配对的真实判定（不 stub _check_db_pairing）：部署 `_r`、profile 拿 C# 库 => rc=2
+    bad_root = os.path.join(tmp, "inv-bad-envir")
+    os.makedirs(bad_root, exist_ok=True)
+    with open(os.path.join(bad_root, "Server.conf"), "w", encoding="utf-8",
+              newline="\n") as f:
+        f.write("[DataBase]\nDbType=MySQL\n"
+                "ConnctionString=server=127.0.0.1;uid=root;pwd=;"
+                "database=mir2_test_data_r;\n")
+    bad_sc = {"envir_root": bad_root, "db": {"characters_db": "mir2_test_db"}}
+    pair_bad = run_inventory(_FakeRunner(), "csharp", prof, bad_sc, one, {})
+    out.append((pair_bad["rc"] == 2 and "不配对" in (pair_bad["error"] or ""),
+                "⑩ 库配对不匹配（部署 _r / profile C# 库）=> rc=2（%r）"
+                % (pair_bad["error"] or "")[:90]))
 
     # ⑨ 生产接线顺序：run_side 必须调用 run_inventory，且排在 stack 之前（防旁路/挪位）
     import inspect

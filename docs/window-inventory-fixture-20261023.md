@@ -1,5 +1,9 @@
 # 窗口背包夹具（`inventory`）——返工与机判证据（T-2xx 卡 `openmir2-window-inventory-fixture`）
 
+> **2026-10-24 返工（接管 `openmir2-worker-66`）**：本文件记录的是返工前的 head；当前交付 head 已 rebase 到 master，
+> `--selftest` **216/216**、`selftest_mutations` **41/41**（返工前 35；rebased master 38 + 3 颗 INV 牙）。三条 fail-closed 的用例/牙见
+> `docs/window-inventory-fixture-rework-20261024.md`；下方计数为历史值，未改动。
+
 - 卡：`openmir2-window-inventory-fixture`（tier=L）；分支 `card/openmir2-window-inventory-fixture`
 - 复审：`c866f358`（reviewer-5，request_changes）——本文件逐条对应其 findings
 
