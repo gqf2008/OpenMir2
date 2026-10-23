@@ -76,6 +76,17 @@
     当天 `npc.rs` 被 frame-drain / gm-host-seam / CHANGEEXP 连续改，evidence 行号漂移 9~53 处；**strict 绿才说明台账与代码同步**。
     **不要给 WARN 设阈值**（会引入新的假红）；也不要让 strict 常年红（会训练大家忽略门）。
 
+14. **派活前先查「同 principal 是否已有活人在干」**（2026-10-23 20:2x 实测）：我按「返工给作者」把
+    `openmir2-gm-impl-shutup-release` 派给 `openmir2-worker-24`（`OpenMir2-wt-cronclaim`），到场才发现
+    **同一个 principal 已被另一个会话的 agent 占用**——那边正在 `git merge`（`MERGE_HEAD` 存在、4 文件 UU）、
+    跑 `cargo test/clippy/check`，且 90 秒前刚发过签名 comment。
+    代价：两条车道抢一个身份，其中一条必须空跑；更糟的是**同身份的两个人互相不能审对方的卡**
+    （合并规则只数「不同的、非作者」的 approve），一旦后到者接手，这张卡就没有合法审查人了。
+    ⇒ **派活前三查**：① `Get-Process cargo,rustc` 与该 worktree 的最近提交时间；② 该线程最后 2 条 entry 的
+    `actor`+`ts`（90 秒内有签名写入 ⇒ 有人在场）；③ `git -C <wt> status` 有没有 `MERGE_HEAD`/未提交改动。
+    命中任一条 ⇒ **不要派**，改派到**另一个**空闲 principal（换身份 = 换 worktree），或让它跑完再由
+    不同 principal 复审。**「返工给作者」这条（第 10 条）的前提是那个作者身份此刻空闲**。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
