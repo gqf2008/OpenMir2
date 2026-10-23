@@ -2428,6 +2428,11 @@ fn run_party_goto_label(
             player.kick_off_line_tick = sg.kick_off_line_tick;
             // **A-26/T-207**：`Abil.Exp`（脚本 `CHANGEEXP` 的读写面）。
             player.abil_exp = sg.equip.abil.exp;
+            // **卡 `openmir2-script-user-account`（review 0ef0464d F1）**：账号的唯一来源 = 会话
+            //（登录时由角色记录装入 `SessionGround.account`）。组队漏斗此前用 `npc_player_from`
+            // 建 player 却没设账号 ⇒ 组队标签里的 `CHECKACCOUNTLIST`/`DELACCOUNTLIST` 拿到空串；
+            // oracle 用的是同一个 `PlayObject.UserAccount`（与 @Login / 商人 / QFunction 同源）。
+            player.user_account = sg.account.clone();
         }
         // `HUtil32.GetTickCount()`：宿主注入域（与 P31 `host_now` 同源）。
         player.tick = now_ms() as i32;
@@ -62544,6 +62549,136 @@ GMEXECUTE 禁言 self 20
             "组队创建提示",
             "尾 = cp936 原文经 EDCode"
         );
+    }
+
+    /// **卡 `openmir2-script-user-account`（review 0ef0464d F1）**：组队漏斗
+    /// （`run_party_goto_label`）必须把**会话账号**注入 `NpcPlayer.user_account`，
+    /// 与 @Login / 商人 / QFunction 三个漏斗同源（oracle 用的是同一个 `PlayObject.UserAccount`）。
+    ///
+    /// 夹具：`QFunction-0.txt` 的 `[@GroupCreate]` 用 `CHECKACCOUNTLIST ..\AccountList.txt`
+    /// 决定 `MESSAGEBOX HIT` / `ELSESAY MISS`；名单是 `  UA  `（`check_string_list` 的 Trim +
+    /// OrdinalIgnoreCase）。会话账号 `ua` ⇒ **恰好一条** `SM_MENU_OK(767)`；`nobody` ⇒ **零条**。
+    ///
+    /// 牙：删掉 `player.user_account = sg.account.clone();` ⇒ `ua` 支也变 0 条 ⇒ 本用例红。
+    #[test]
+    fn party_funnel_injects_session_user_account_for_check_account_list() {
+        let root = std::env::temp_dir().join(format!("gs-ua-party-{}", std::process::id()));
+        let envir = root.join("Envir");
+        let dir = envir.join("Market_Def");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(envir.join("AccountList.txt"), b"  UA  \r\nother\r\n").unwrap();
+        let script = concat!(
+            "[@GroupCreate]\r\n",
+            "#IF\r\n",
+            "CHECKACCOUNTLIST ..\\AccountList.txt\r\n",
+            "#ACT\r\n",
+            "MESSAGEBOX HIT\r\n",
+            "#ELSESAY\r\n",
+            "MISS\r\n",
+        );
+        std::fs::write(
+            dir.join("QFunction-0.txt"),
+            encoding_rs::GBK.encode(script).0,
+        )
+        .unwrap();
+        let parsers = mir2_script::ScriptParsers::new();
+        let mut rename = |_min: i32, _max: i32| 1;
+        let outcome = parsers
+            .load_script_file(
+                &mir2_script::LocalFs,
+                &envir,
+                "Market_Def",
+                "QFunction-0",
+                false,
+                &mut rename,
+            )
+            .expect("解析不得 panic")
+            .expect("脚本必须存在");
+        assert!(
+            outcome.errors.is_empty(),
+            "夹具脚本不得有解析错误：{:?}",
+            outcome.errors
+        );
+        let host = game_svr::npc::NpcHost {
+            envir_root: envir.clone(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QFunction".into(),
+                // 夹具脚本由生产解析器读入，但 `check_string_list` 的 rel = `npc.path() + s_param1`；
+                // 这里 `path()` 必须是空（与 npc.rs 的同族用例一致），否则 `..\` 不会被剥离。
+                file_path: String::new(),
+                script_name: Some("QFunction-0".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: outcome.scripts,
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let run = |account: &str| -> usize {
+            let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let mut world = mir2_world::World::new(32, 32);
+            let l = world.add_entity(mir2_world::Entity::new(1, "L", 10, 10));
+            let online: OnlineRegistry = vec![OnlineEntry {
+                account: account.into(),
+                chr_name: "L".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: l,
+            }];
+            let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+            saves.insert(
+                "L".into(),
+                SavedHuman {
+                    account: account.into(),
+                    record: record::PlayerRecord::default(),
+                    enter_map: "0".into(),
+                },
+            );
+            let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+            let mut sg = test_session_ground(l);
+            sg.account = account.to_string();
+            ground_sessions.insert("L".into(), sg);
+            let catalog = game_svr::ability::StdItemCatalog::new();
+            run_party_goto_label(
+                "@GroupCreate",
+                "L",
+                5,
+                &online,
+                &mut world,
+                &mut saves,
+                &mut ground_sessions,
+                Some(&host),
+                &catalog,
+                &gates,
+                None,
+                &game_svr::npc::NpcVars::default(),
+            );
+            let mut n = 0usize;
+            while let Ok(ev) = rx0.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = ev {
+                    if gnp_ident(body.as_slice()) == mir2_protocol::messages::SM_MENU_OK {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        assert_eq!(
+            run("ua"),
+            1,
+            "会话账号 ua 命中 CHECKACCOUNTLIST ⇒ 恰好一条 SM_MENU_OK（组队漏斗必须注入会话账号）"
+        );
+        assert_eq!(
+            run("nobody"),
+            0,
+            "会话账号不匹配 ⇒ 走 ELSESAY，不得有 SM_MENU_OK"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// **T-194 判据 I-1（@Login 漏斗，生产入口）**：`NpcHost::run_login` 跑 QManage 的
