@@ -34,11 +34,15 @@ python -I -B tools/probe/param_discovery.py check-all <frames> [dir] --allow-mis
 
 - 默认：**任一**行非 0（`missing` 或 `error`）⇒ rc=2；
 - `--allow-missing`：只放行本模块自己的 `missing` 行（不可推导已登记）；`error` 行（场景本身坏了）**仍 rc=2**；
-- `--allow-missing=N`：放行的同时钉住 `missing` 行数必须恰好为 N，否则 rc=2（防止多坏了几条还悄悄放行）。
+- `--allow-missing=N`：放行的同时钉住 `missing` 行数必须恰好为 N，否则 rc=2（防止多坏了几条还悄悄放行）；
+- **零场景判红**：`scenarios_dir` 不存在/不是目录、或目录里一个 `.json` 都没有 ⇒ rc=2（「检查了零个场景」绝不当绿）；
+- **场景文件坏掉**（坏 JSON / 顶层非对象 / `required` 不是非空字符串数组 / `params` 非对象）⇒ 该行
+  `cls=error`、`scenario-load: …`、整体 rc=2，`--allow-missing` 也不放行。
 
-每行带分类（`cls`）：`derived`（required 全部由本模块推导）/ `no_required`（场景无需变量）/
-`params_default`（**绿来自场景 params 硬编码默认值，不是发现值**）/ `missing`（本模块 fail-closed）/
-`error`（场景校验失败）。
+每行带分类（`cls`）：`derived`（required 全部由本模块**推导**，唯一算「发现能力已验证」）/
+`rule`（required 里有变量来自退化**规则**，即部署假设，**不计入**发现能力）/
+`no_required`（场景无需变量）/ `params_default`（**绿来自场景 params 硬编码默认值，不是发现值**）/
+`missing`（本模块 fail-closed）/ `error`（场景校验或加载失败）。
 """
 import json
 import os
@@ -204,30 +208,68 @@ def render_vars(values):
     return out
 
 
-#: 分类；`params_default` = 绿来自场景 params 硬编码默认值，**不是**发现值。
+#: 分类；`params_default` = 绿来自场景 params 硬编码默认值，**不是**发现值；
+#: `rule` = required 里有变量来自退化规则（部署假设），**不计入**「发现能力已验证」。
 CLS_DERIVED = "derived"
+CLS_RULE = "rule"
 CLS_NO_REQUIRED = "no_required"
 CLS_PARAMS_DEFAULT = "params_default"
 CLS_MISSING = "missing"
 CLS_ERROR = "error"
 
 
+def _load_scenario(path):
+    """读并校验场景文件；坏 JSON / 非对象 / required 不是非空字符串数组 ⇒ DiscoveryError。
+
+    场景文件是 CLI 可指定的输入（可传自定义 scenarios_dir），与 frames 坏行同口径：
+    必须是干净的 rc=2，不许 traceback / rc=1，也不许把 `required: "npc_actor"` 按字符拆开。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as ex:
+        raise DiscoveryError("%s: cannot load scenario: %s" % (path, ex))
+    if not isinstance(doc, dict):
+        raise DiscoveryError("%s: scenario must be a JSON object, got %s"
+                             % (path, type(doc).__name__))
+    required = doc.get("required")
+    if required is not None:
+        if not isinstance(required, list) or not all(
+                isinstance(item, str) and item for item in required):
+            raise DiscoveryError("%s: scenario.required must be a list of non-empty strings, got %r"
+                                 % (path, required))
+    params = doc.get("params")
+    if params is not None and not isinstance(params, dict):
+        raise DiscoveryError("%s: scenario.params must be an object, got %r" % (path, params))
+    return doc
+
+
 def check_all(frames_path, scenarios_dir):
     """对每个场景：从 frames 推导它的 required ⇒ 拼 --var 跑 `mir2_probe --check-scenario`。
 
     返回 [(scenario, rc, detail, cls)]；rc 口径：0=通过 / 2=发现不出必需变量或场景校验失败。
+
+    fail-closed 两处：`scenarios_dir` 不是目录 ⇒ DiscoveryError（rc=2）；
+    单个场景文件坏掉 ⇒ 该行 cls=error（整体 rc=2，`--allow-missing` 也不放行）。
+    「一个场景都没检查」绝不当绿——由 check_all_main 对空 rows 判 rc=2。
     """
     import glob
     import subprocess
 
+    if not os.path.isdir(scenarios_dir):
+        raise DiscoveryError("%s: scenarios dir does not exist or is not a directory"
+                             % scenarios_dir)
     frames = load_frames(frames_path)
     here = os.path.dirname(os.path.abspath(__file__))
     probe = os.path.join(here, "mir2_probe.py")
     rows = []
     for path in sorted(glob.glob(os.path.join(scenarios_dir, "*.json"))):
-        with open(path, "r", encoding="utf-8") as fh:
-            scenario = json.load(fh)
         name = os.path.basename(path)
+        try:
+            scenario = _load_scenario(path)
+        except DiscoveryError as ex:
+            rows.append((name, 2, "scenario-load: %s" % ex, CLS_ERROR))
+            continue
         required = scenario.get("required") or []
         params = scenario.get("params") or {}
         values, missing = derive(frames, required)
@@ -242,7 +284,9 @@ def check_all(frames_path, scenarios_dir):
         detail = detail[-1] if detail else ""
         if proc.returncode == 0:
             if required:
-                cls = CLS_DERIVED
+                # 推导与规则分栏：只要有变量来自退化规则，这一行就不算「发现能力已验证」
+                cls = CLS_RULE if any(v["kind"] == "rule" for v in values.values()) \
+                    else CLS_DERIVED
             elif params:
                 cls = CLS_PARAMS_DEFAULT
             else:
@@ -294,16 +338,26 @@ def check_all_main(args):
         return 2
     scen = parsed[1] if len(parsed) > 1 else os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "scenarios")
-    rows = check_all(parsed[0], scen)
+    try:
+        rows = check_all(parsed[0], scen)
+    except DiscoveryError as ex:
+        print("param_discovery: %s" % ex, file=sys.stderr)
+        return 2
+    if not rows:
+        # 「一个场景都没检查」绝不当绿（与 goal_gate 缺 counts、recon 唯一 tracked 同族）
+        print("param_discovery: no scenarios found under %s — 零场景判绿是 fail-open，rc=2"
+              % scen, file=sys.stderr)
+        return 2
     for name, rc, detail, cls in rows:
         print("%-28s rc=%d  %-14s %s" % (name, rc, cls, detail[:100]))
     bad = [r for r in rows if r[1] != 0]
     missing = [r for r in rows if r[3] == CLS_MISSING]
     errors = [r for r in rows if r[3] == CLS_ERROR]
-    print("SUMMARY scenarios=%d ok=%d rc2=%d derived=%d no_required=%d params_default=%d "
-          "missing=%d error=%d"
+    print("SUMMARY scenarios=%d ok=%d rc2=%d derived=%d rule=%d no_required=%d "
+          "params_default=%d missing=%d error=%d"
           % (len(rows), len(rows) - len(bad), len(bad),
              sum(1 for r in rows if r[3] == CLS_DERIVED),
+             sum(1 for r in rows if r[3] == CLS_RULE),
              sum(1 for r in rows if r[3] == CLS_NO_REQUIRED),
              sum(1 for r in rows if r[3] == CLS_PARAMS_DEFAULT),
              len(missing), len(errors)))
@@ -354,6 +408,15 @@ def _tmp_check_all(scenarios, frames=None):
         with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
             json.dump(doc, fh)
     return dict((r[0], r) for r in check_all(frames_path, tmp))
+
+
+def _quiet_check_all_main(argv):
+    """跑 check_all_main 但不刷屏（用例/牙只关心 rc）。"""
+    import contextlib
+    import io
+    with contextlib.redirect_stdout(io.StringIO()), \
+            contextlib.redirect_stderr(io.StringIO()):
+        return check_all_main(argv)
 
 
 def selftest():
@@ -458,13 +521,9 @@ def selftest():
             with open(os.path.join(scen, name), "w", encoding="utf-8") as fh:
                 json.dump(doc, fh)
         base = [frames_path, scen]                       # check_all_main 的参数不含 "check-all"
-        import contextlib
-        import io
 
         def quiet(argv):
-            with contextlib.redirect_stdout(io.StringIO()), \
-                    contextlib.redirect_stderr(io.StringIO()):
-                return check_all_main(argv)
+            return _quiet_check_all_main(argv)
 
         assert quiet(base) == 2, "默认必须 fail-closed"
         assert quiet(base + ["--allow-missing"]) == 2, "error 行不许被放行"
@@ -523,6 +582,96 @@ def selftest():
         assert rows["merchantish.json"][1] == 2, rows["merchantish.json"]
         assert rows["merchantish.json"][3] == CLS_MISSING, rows["merchantish.json"]
 
+    def c12():
+        # 单场景推导路径的空判据 fail-open：一个变量都没要求 ⇒ rc=2（不许「什么都没推」判绿）。
+        # 空 frames ✅ 已由「required 全部 missing ⇒ rc=2」兜住；这条补的是 required 本身为空。
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="pd-novars-")
+        frames_path = os.path.join(tmp, "frames.ndjson")
+        with open(frames_path, "w", encoding="utf-8") as fh:
+            for frame in _fixture():
+                print(json.dumps(frame), file=fh)
+        import contextlib
+        import io
+
+        def quiet(argv):
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                return main(argv)
+
+        assert quiet([frames_path, ""]) == 2, "空 --var 列表必须 rc=2"
+        assert quiet([frames_path, " , "]) == 2, "只有分隔符/空白的 --var 列表必须 rc=2"
+        # 空 frames + 有 required ⇒ missing ⇒ rc=2（回归：这条以前也是对的）
+        empty = os.path.join(tmp, "empty.ndjson")
+        open(empty, "w").close()
+        assert quiet([empty, "self_x"]) == 2, "空 frames + required 必须 rc=2"
+
+    def tooth4():
+        # 牙④（reviewer C-1）：零场景判绿是 fail-open。
+        # 变异：删掉 check_all_main 里 `if not rows: return 2` 与 check_all 的 isdir 检查 ⇒ 红。
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="pd-zeroscen-")
+        frames_path = os.path.join(tmp, "frames.ndjson")
+        with open(frames_path, "w", encoding="utf-8") as fh:
+            for frame in _fixture():
+                print(json.dumps(frame), file=fh)
+        empty_dir = os.path.join(tmp, "empty-scenarios")
+        os.makedirs(empty_dir)
+        missing_dir = os.path.join(tmp, "no-such-dir")
+        assert _quiet_check_all_main([frames_path, empty_dir]) == 2, "空目录（零场景）必须 rc=2"
+        assert _quiet_check_all_main([frames_path, missing_dir]) == 2, "不存在的目录必须 rc=2"
+        assert _quiet_check_all_main([frames_path, empty_dir, "--allow-missing"]) == 2, \
+            "--allow-missing 也不许放行零场景"
+        assert _quiet_check_all_main([frames_path, missing_dir, "--allow-missing=0"]) == 2, \
+            "--allow-missing=0 也不许放行零场景"
+
+    def tooth5():
+        # 牙⑤（reviewer C-2）：场景文件坏掉必须干净落 cls=error / rc=2。
+        # 变异：去掉 _load_scenario 的 try/except 与类型校验 ⇒ traceback rc=1 / detail 被按字符拆开 ⇒ 红。
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="pd-badscen-")
+        frames_path = os.path.join(tmp, "frames.ndjson")
+        with open(frames_path, "w", encoding="utf-8") as fh:
+            for frame in _fixture():
+                print(json.dumps(frame), file=fh)
+        scen = os.path.join(tmp, "scen")
+        os.makedirs(scen)
+        cases = {
+            "badjson.json": '{"name": "x", "steps": [\n',
+            "array.json": '[1, 2, 3]\n',
+            "reqstr.json": '{"name": "x", "required": "npc_actor", '
+                           '"steps": [{"wait_for": 643, "timeout_ms": 10}]}\n',
+            "reqint.json": '{"name": "x", "required": [123], '
+                           '"steps": [{"wait_for": 643, "timeout_ms": 10}]}\n',
+        }
+        for name, text in cases.items():
+            with open(os.path.join(scen, name), "w", encoding="utf-8") as fh:
+                fh.write(text)
+        rows = dict((r[0], r) for r in check_all(frames_path, scen))
+        for name in cases:
+            assert name in rows, rows
+            assert rows[name][1] == 2, (name, rows[name])
+            assert rows[name][3] == CLS_ERROR, (name, rows[name])
+            assert rows[name][2].startswith("scenario-load:"), (name, rows[name])
+        assert _quiet_check_all_main([frames_path, scen]) == 2, "坏场景整体必须 rc=2"
+        assert _quiet_check_all_main([frames_path, scen, "--allow-missing"]) == 2, \
+            "--allow-missing 不许放行 error 行"
+
+    def tooth6():
+        # 牙⑥（reviewer A-1）：required 里有任一变量来自退化规则 ⇒ cls=rule，不计入 derived。
+        # 变异：check_all 里一律 cls=CLS_DERIVED ⇒ 本断言红。
+        rows = _tmp_check_all({
+            "npcish.json": {"name": "npcish", "required": ["npc_actor"],
+                            "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+        }, frames=_fixture())                        # 无 643 ⇒ npc_actor 走 SM_TURN 规则
+        assert rows["npcish.json"][1] == 0, rows["npcish.json"]
+        assert rows["npcish.json"][3] == CLS_RULE, rows["npcish.json"]
+        rows = _tmp_check_all({                      # 有 643 ⇒ npc_actor 走推导
+            "npcish.json": {"name": "npcish", "required": ["npc_actor"],
+                            "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+        }, frames=_fixture(merchant_say=True))
+        assert rows["npcish.json"][3] == CLS_DERIVED, rows["npcish.json"]
+
     case("① 643+自身 ⇒ 值与来源正确（含 --var 渲染）", c1)
     case("② 缺 NPC ⇒ fail-closed", c2)
     case("③ 缺自身坐标 ⇒ fail-closed", c3)
@@ -534,15 +683,19 @@ def selftest():
     case("⑨ check-all 分类：params 默认值不算发现绿", c9)
     case("⑩ --allow-missing：只放行 missing，error 与钉数不符仍 rc=2", c10)
     case("⑪ 坏行 ⇒ 干净 rc=2（DiscoveryError）", c11)
+    case("⑫ 单场景推导：空 --var 列表 / 空 frames ⇒ rc=2（空判据不算通过）", c12)
     case("牙① self_x 错取 tag ⇒ 值与真值不同", tooth1)
     case("牙② check-all 静默吞 missing（if missing:→if False:）⇒ 行为断言红", tooth2)
     case("牙③ 第三方 actor 无 643 ⇒ merchant_actor fail-closed", tooth3)
+    case("牙④ 零场景（缺目录/空目录/--allow-missing）⇒ rc=2", tooth4)
+    case("牙⑤ 场景文件坏掉（坏 JSON/数组/required 非字符串数组）⇒ cls=error rc=2", tooth5)
+    case("牙⑥ required 含退化规则变量 ⇒ cls=rule（不计 derived）", tooth6)
     if fails:
         print("param_discovery selftest: FAIL")
         for item in fails:
             print("  -", item)
         return 1
-    print("param_discovery selftest: OK (11 cases + 3 teeth)")
+    print("param_discovery selftest: OK (13 cases + 6 teeth)")
     return 0
 
 
@@ -562,6 +715,11 @@ def main(argv=None):
             return 2
         frames = load_frames(argv[0])
         required = [x.strip() for x in argv[1].split(",") if x.strip()]
+        if not required:
+            # 空判据不算通过：一个变量都没要求 ⇒ 无从「发现」，退回 usage 口径 rc=2
+            sys.stderr.write("param_discovery: no variables requested (empty --var list) — "
+                             "空判据不算通过\n")
+            return 2
         values, missing = derive(frames, required)
         print(json.dumps({"values": values, "missing": missing,
                           "reasons": dict((v, REASONS.get(v) or UNDERIVABLE.get(v)

@@ -70,7 +70,7 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
   `kind`/`source` 是复审能否核「两侧点的是不是同一类目标」的关键——接线卡必须原样落盘，不许只落 value。
 - 输入健壮性：坏行 / 非 JSON 对象 / 字段非整数 ⇒ `DiscoveryError`，打印 `file:lineno` 并 **rc=2**（不是 traceback、不是 rc=1）。
 
-## 4. 构造级用例与牙（`selftest`：11 用例 + 3 颗牙，全离线）
+## 4. 构造级用例与牙（`selftest`：13 用例 + 6 颗牙，全离线）
 
 用例：
 
@@ -84,9 +84,11 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
 8. `check-all` 接线口径：可推导场景 rc=0（`cls=derived`）/ 缺变量场景 rc=2 且 detail 由**本模块**报 `missing:`（`cls=missing`）；
 9. 分类诚实：只有 `params` 默认值的场景（`dice_chain` 形态）算 `params_default`，**不计入**「发现能力已验证」；
 10. `--allow-missing`：只放行 `missing`；`error` 行仍 rc=2；`--allow-missing=N` 与实际 missing 数不符也 rc=2；
-11. 坏行 ⇒ 干净 rc=2（`DiscoveryError`）。
+11. 坏行 ⇒ 干净 rc=2（`DiscoveryError`）；
+12. 单场景推导路径的空判据：空 `--var` 列表 / 只有分隔符 ⇒ rc=2（「一个变量都没要求」不算通过）；空 frames + 有 required ⇒ rc=2；
+13. 场景分类的 `rule` 分栏（见牙⑥）。
 
-牙（逐字节还原 + sha256 见 §6.4）：
+牙（逐字节还原 + sha256 见 §6.3）：
 
 - ① `self_x` 错取 `tag` ⇒ 值从 7 变 12，与用例①断言冲突 ⇒ 红；
 - ② **`check_all` 行为断言**：断言缺变量行 `cls == "missing"` 且 detail 以 `missing:` 开头。
@@ -94,6 +96,13 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
   （旧版这颗牙只断言 `derive()` 的 `missing`，是**空牙**：变异后 selftest 仍全绿。）
 - ③ **reviewer blocking-1 回归牙**：只有第三方 actor 转身、**无 643** 的帧 ⇒ `merchant_actor` 必须 missing、
   `check-all` 该场景 rc=2（旧规则此处 rc=0 且值 777）。
+- ④ **零场景 fail-open（reviewer C-1）**：`scenarios_dir` 不存在 / 空目录 / 加 `--allow-missing` / `--allow-missing=0`
+  ⇒ 一律 rc=2。删掉 `check_all` 的 `isdir` 检查与 `check_all_main` 的 `if not rows: return 2` ⇒ 红。
+- ⑤ **场景文件坏掉（reviewer C-2）**：坏 JSON / 顶层数组 / `required` 是字符串 / `required: [123]`
+  ⇒ 每行 `cls=error`、detail 以 `scenario-load:` 开头、整体 rc=2（`--allow-missing` 也不放行）。
+  把 `_load_scenario` 退回裸 `json.load` ⇒ 红（traceback / 按字符拆 missing）。
+- ⑥ **推导与规则分栏（reviewer A-1）**：无 643 时 `npc_actor` 走 `SM_TURN` 规则 ⇒ `cls=rule`；有 643 ⇒ `cls=derived`。
+  把 `kind == "rule"` 判定改坏 ⇒ 红。
 
 ## 5. 与 `card_window.py` 的接线（另卡 `openmir2-window-discovery-wiring`，不在本卡写集）
 
@@ -121,10 +130,10 @@ king_dialog.json             rc=2  missing        missing: king_actor
 login_only.json              rc=0  no_required    scenario OK: login_only (1 steps, params=-)
 merchant_dialog.json         rc=2  missing        missing: merchant_actor
 move_walk.json               rc=2  missing        missing: move_x,move_y
-npc_click.json               rc=0  derived        scenario OK: npc_click (2 steps, params=npc_actor=119)
+npc_click.json               rc=0  rule           scenario OK: npc_click (2 steps, params=npc_actor=119)
 npc_click_auto.json          rc=0  no_required    scenario OK: npc_click_auto (2 steps, params=-)
 pickup_item.json             rc=0  derived        scenario OK: pickup_item (2 steps, params=self_x=7,self_y=12)
-SUMMARY scenarios=15 ok=8 rc2=7 derived=2 no_required=5 params_default=1 missing=7 error=0
+SUMMARY scenarios=15 ok=8 rc2=7 derived=1 rule=1 no_required=5 params_default=1 missing=7 error=0
 rc=2（默认 fail-closed）；`--allow-missing=7` ⇒ rc=0
 ```
 
@@ -132,7 +141,7 @@ rc=2（默认 fail-closed）；`--allow-missing=7` ⇒ rc=0
 $ python -I -B tools/probe/param_discovery.py check-all E:/tmp/conformance/runs/w24-rust-npc_auto/frames.ndjson
 param_discovery: 6 scenario(s) fail-closed on missing vars （登记后可 --allow-missing=N 放行）
 merchant_dialog.json         rc=0  derived        scenario OK: merchant_dialog (4 steps, params=merchant_actor=119)
-SUMMARY scenarios=15 ok=9 rc2=6 derived=3 no_required=5 params_default=1 missing=6 error=0
+SUMMARY scenarios=15 ok=9 rc2=6 derived=3 rule=0 no_required=5 params_default=1 missing=6 error=0
 rc=2（默认）；`--allow-missing=6` ⇒ rc=0
 ```
 
@@ -143,7 +152,8 @@ rc=2（默认）；`--allow-missing=6` ⇒ rc=0
 
 | cls | 含义 | 登录期 / 点击 run |
 |---|---|---|
-| `derived` | required 全部由本模块推导（**唯一**算「发现能力已验证」的绿） | 2 / 3 |
+| `derived` | required 全部由本模块**推导**（帧语义，**唯一**算「发现能力已验证」的绿） | 1 / 3 |
+| `rule` | required 里有变量来自退化**规则**（`SM_TURN` 部署假设，`kind=rule`）⇒ **不计入**发现能力 | 1 / 0 |
 | `no_required` | 场景本就不需要变量 | 5 / 5 |
 | `params_default` | **绿来自场景 `params` 硬编码默认值，不是发现值** | 1 / 1（`dice_chain`） |
 | `missing` | 本模块 fail-closed（不可推导，已登记） | 7 / 6 |
@@ -162,9 +172,12 @@ rc=2（默认）；`--allow-missing=6` ⇒ rc=0
 | ① | `RULES["self_x"].field`: `param` → `tag` | FAIL rc=1 | ① / ⑦ / 牙① |
 | ② | `check_all` 的 `if missing:` → `if False:`（reviewer 的变异 M2） | FAIL rc=1 | ⑧ / ⑩ / 牙②（`cls=error`，detail 变 `scenario-error:`）/ 牙③ |
 | ③ | `if var == "npc_actor"` → `if var in ("npc_actor","merchant_actor")`（退回旧规则） | FAIL rc=1 | 牙③（`merchant_actor=777`、`missing=[]` 被抓） |
+| ④ | 删掉 `check_all` 的 `isdir` 检查 + `check_all_main` 的 `if not rows: return 2`（reviewer C-1） | FAIL rc=1 | 牙④（空目录/缺目录返回 0） |
+| ⑤ | `_load_scenario` 退回裸 `json.load`（reviewer C-2） | FAIL rc=1（`AttributeError: 'list' object has no attribute 'get'`） | 牙⑤（顶层数组/非字符串 required 不再落 `cls=error`） |
+| ⑥ | `v["kind"] == "rule"` → `"ruleX"`（reviewer A-1） | FAIL rc=1 | 牙⑥（规则绿被算成 `derived`） |
 
-还原后 `python -I -B tools/probe/param_discovery.py selftest` ⇒ `OK (11 cases + 3 teeth)` rc=0；
-`sha256sum tools/probe/param_discovery.py` = `46ecb7f0e4958c08fa80dcb2007c84c609ca359a8f73d3e582048d82324e0c58`，
+还原后 `python -I -B tools/probe/param_discovery.py selftest` ⇒ `OK (13 cases + 6 teeth)` rc=0；
+`sha256sum tools/probe/param_discovery.py` = `87291f3686057930ce4beed1778833f6979bfb566a1215c5aaa74bad9c7f55ce`，
 与提交树 blob 逐字节一致（`git show HEAD:tools/probe/param_discovery.py | sha256sum` 复核）。
 
 ### 6.4 与旧版的差异清单（返工）
@@ -179,6 +192,29 @@ rc=2（默认）；`--allow-missing=6` ⇒ rc=0
 | 6 | 坏行 | traceback / rc=1 | `DiscoveryError`，`file:lineno` + rc=2 |
 | 7 | `check-all` 门禁 | 任一 fail-closed ⇒ 恒 rc=2，无法机判 | `--allow-missing[=N]`（默认仍 rc=2；`error` 行永不放行；钉住的 N 不符也 rc=2） |
 | 8 | 输出 | `{value, source(字符串), seq, ident}` | `{value, kind, rule, oracle, source:{ident, field, seq}}`（`kind` 区分推导/规则） |
+| 9 | 零场景（reviewer C-1） | 缺目录 / 空目录 ⇒ `rows=[]` ⇒ **rc=0**（「检查了零个场景」判绿，fail-open） | `scenarios_dir` 不是目录 ⇒ `DiscoveryError`；`rows` 为空 ⇒ 点名 + rc=2；`--allow-missing`/`=0` 也不放行 |
+| 10 | 场景文件坏掉（reviewer C-2） | 坏 JSON / 顶层数组 / `required:[123]` ⇒ traceback **rc=1**；`required:"npc_actor"` ⇒ 按字符拆成 `missing: n,p,c,…` | `_load_scenario` 统一校验 ⇒ 该行 `cls=error`、`scenario-load: …`、整体 rc=2 |
+| 11 | `rule` 分栏（reviewer A-1） | 登录期 `npc_click` 的规则绿被算进 `derived=2`，与 §6.2 自己的定义矛盾 | 新增 `cls=rule` / `rule` 计数；登录期 `derived=1 rule=1`，点击期 `derived=3 rule=0` |
+
+### 6.5 空判据 / 空输入审计（reviewer 提醒的同族形状）
+
+「空集合判绿」是本轮反复堵的病根（goal_gate 缺 `counts` 键、recon 唯一 `tracked`、`--post-comment` 假 PASS）。
+逐条清点本工具的入口，结论：
+
+| 入口 | 空输入 | 行为 | 兜底 |
+|---|---|---|---|
+| `check-all` 目录不存在 / 不是目录 | `rows=[]` | **rc=2**（`scenarios dir does not exist or is not a directory`） | 牙④ |
+| `check-all` 目录存在但 0 个 `.json` | `rows=[]` | **rc=2**（`no scenarios found under …`） | 牙④ |
+| `check-all --allow-missing`（不带 N） | 同上 | **rc=2**（先判空，再谈放行） | 牙④ |
+| `check-all --allow-missing=0` | 同上 | **rc=2**（先判空：零场景永远红，`=0` 不能把它变绿） | 牙④ |
+| `check-all` 场景文件坏 | 该行无法校验 | 该行 `cls=error` ⇒ 整体 **rc=2** | 牙⑤ |
+| 单场景 `derive`：空/空白 `--var` 列表 | 一个变量都没要求 | **rc=2**（「空判据不算通过」） | 用例⑫ |
+| 单场景 `derive`：空 `frames` + 非空 required | 全部 missing | **rc=2** | 用例⑫（回归） |
+| frames 坏行 / 行非对象 / 字段非整数 | 输入坏 | `DiscoveryError` + `file:lineno` ⇒ **rc=2** | 用例⑪ |
+| required 含规则表外的变量名 | 推不出 | 记 missing ⇒ **rc=2**（不猜） | 用例②③ |
+
+仍存在但**不是** fail-open 的一处：`check-all` 只匹配 `*.json`——若场景文件改成别的扩展名，
+表现为 `scenarios=0` ⇒ **rc=2（红）**，不会静默判绿。
 
 ## 7. 验收口径改判（Leader 裁决 `ed60a40f`）
 
@@ -192,8 +228,13 @@ acceptance[6]「15 个场景全绿」**不可达**，改判为「**可推导的�
 据此，机判口径：
 
 ```sh
-# 登录期收帧：2 derived（npc_click/pickup_item）+ 5 no_required 绿；7 条已登记 fail-closed
+# 登录期收帧：1 derived（pickup_item）+ 1 rule（npc_click 的 npc_actor 走 SM_TURN 退化规则）
+#             + 5 no_required；7 条已登记 fail-closed
 python -I -B tools/probe/param_discovery.py check-all <login frames> --allow-missing=7   # rc=0
-# 点击收帧：3 derived（多 merchant_dialog）+ 5 no_required；6 条已登记 fail-closed
+# 点击收帧：3 derived（pickup_item / npc_click / merchant_dialog，全部来自 643+SM_LOGON 帧语义）
+#           + 5 no_required；6 条已登记 fail-closed
 python -I -B tools/probe/param_discovery.py check-all <click frames>  --allow-missing=6   # rc=0
 ```
+
+「发现能力已验证」只认 `derived`（`rule` / `params_default` / `no_required` 都不算）；
+规范 discovery run 必须**点一次 NPC 收 643**，这样 `merchant_actor`/`npc_actor` 才是推导而非规则。
