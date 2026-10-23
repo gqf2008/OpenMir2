@@ -47,10 +47,15 @@ python tools/probe/mir2_probe.py \
   2. **R1 至少一个发帧步或累计观察步**（`wait_idents`/`wait_frames`）——全是 `sleep`
      的场景既不发帧也不观察，什么也证不了。纯观察场景（如 `login_only`）靠驱动器的
      登录链 + 自动握手已经发帧，所以它合法。
-  3. **R3 ident 必须存在于协议常量表**：`send.ident` 与 `wait_for` / `wait_frames.idents` /
-     `wait_idents.idents` 都必须能在 `mir2-rs/crates/protocol/src/messages.rs` 的 `CM_*`/`SM_*`
-     里找到（该表由 `msgcodegen` 与 C# `Messages.cs` 对拍）。表外 ident（如 `wait_for: 4095`）
-     = 永远发不出 / 等不到，不会「跑起来才发现」。
+  3. **R3 ident 必须存在于协议常量表，且方向必须对**：发帧动作（`send`/`say`/`click_npc`/
+     `dlg_select`，C2S）必须是 **`CM_*`**；观察动作（`wait_for` / `wait_frames.idents` /
+     `wait_idents.idents`，等的是 S2C）必须是 **`SM_*`**。方向反了与表外 ident 一样 = 永远发不出 /
+     等不到（例：`send ident 4 is SM_41, expected CM_*`；`wait_for ident 80 is CM_QUERYUSERNAME,
+     expected SM_*`），`--check-scenario` 直接 rc=2。表由 `mir2-rs/crates/protocol/src/messages.rs`
+     解析（`msgcodegen` 与 C# `Messages.cs` 对拍），跨服 `ISM_*` **不进表**。
+     **已知并集歧义**：`42/100/101/102/103/104` 这 6 个号在 CM 与 SM 两个命名空间里各有名字
+     （如 `100 = CM_QUERYCHR = SM_SYSMESSAGE`），方向无法由号判定 ⇒ 两个方向都放行；
+     清单与处理见 `docs/probe-ident-direction-20261023.md`。
   4. **R4 变量引用必须已声明**：`send.recog/param/tag/series`、`send.text_from`、`click_npc`、
      `dlg_select.recog` 里的变量名必须在场景的 `required` / `params` / `computed` 里；
      `--var` 是给**已声明**变量覆值的通道，不是声明通道（拿 `--var` 喂一个拼错的名字仍然红）。
