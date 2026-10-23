@@ -56,6 +56,25 @@ fn make_long(low: u16, high: u16) -> i32 {
     (low as i32) | ((high as i32) << 16)
 }
 
+/// `ExecutionProcessingSys.cs:4939-4946` 的
+/// `try { Permission = 10; ProcessUserLineMsg(sData); } finally { Permission = btOldPermission; }`
+/// 的 Rust 等价物。
+///
+/// **为什么不是一个「执行完再赋值还原」**：oracle 的还原在 `finally` 里——异常路径也必须还原。
+/// 顺序赋值只在正常出口执行；本守卫在 `Drop` 里还原 ⇒ 正常出口、提前返回、panic 展开三条路径
+/// 都覆盖（`actions::tests` 的 panic 用例钉住展开支）。
+struct PermissionGuard<'a> {
+    player: &'a mut dyn crate::engine::ScriptPlayer,
+    /// `btOldPermission`（`ExecutionProcessingSys.cs:4938`）——**进入前**的 `Permission`，不是 0。
+    old: i32,
+}
+
+impl Drop for PermissionGuard<'_> {
+    fn drop(&mut self) {
+        self.player.set_permission(self.old);
+    }
+}
+
 /// `ItemLocation`（`src/OpenMir2/Enums/ItemLocation.cs`）——佩戴位号即 `UseItems` 下标。
 mod item_location {
     pub const DRESS: i32 = 0;
@@ -659,10 +678,18 @@ impl Engine<'_, '_> {
                     info.s_param5,
                     info.s_param6
                 );
+                // oracle `ExecutionProcessingSys.cs:4938`：`btOldPermission` 取**进入前**的
+                // `Permission`（不是常量 0）；`:4939-4947` 的 `try/finally` 由 [`PermissionGuard`]
+                // 的 `Drop` 表达 —— 抬权只在这一处（脚本动作 = oracle 同址）；宿主的
+                // `process_user_line_msg` 跳线（`bins/game-svr/src/npc.rs` 的 `NpcPlayer`）**不再抬权**。
                 let old_permission = self.player.permission();
                 self.player.set_permission(10);
-                self.player.process_user_line_msg(&s_data);
-                self.player.set_permission(old_permission);
+                let guard = PermissionGuard {
+                    player: &mut *self.player,
+                    old: old_permission,
+                };
+                guard.player.process_user_line_msg(&s_data);
+                drop(guard);
             }
             "ActionOfRepairAllItem" => {
                 let mut has_item = false;
@@ -2487,4 +2514,202 @@ fn conf_split_key_val(line: &str) -> Option<(String, String)> {
         line[..pos].trim().to_lowercase(),
         line[pos + 1..].trim().to_string(),
     ))
+}
+
+#[cfg(test)]
+mod permission_guard_tests {
+    //! `ActionOfGmExecute` 的 `try/finally`（`ExecutionProcessingSys.cs:4939-4947`）等价物判据。
+    //!
+    //! 用例**驱动真实的动作派发**（`Engine::run_action`），不是单独 new 一个守卫——
+    //! 这样「动作里是否真的用了守卫」也被钉住（牙 #2：把守卫换成顺序赋值 ⇒ panic 用例红）。
+
+    use super::*;
+    use crate::engine::{ScriptNpc, ScriptPlayer};
+
+    struct PanicPlayer {
+        permission: i32,
+        chr_name: String,
+        /// `process_user_line_msg` 是否模拟命令体内部异常（C# 的 try/catch 面）。
+        panic_on_line: bool,
+    }
+
+    impl ScriptPlayer for PanicPlayer {
+        fn last_npc(&self) -> i32 {
+            0
+        }
+        fn set_last_npc(&mut self, _actor_id: i32) {}
+        fn script_index(&self) -> Option<usize> {
+            None
+        }
+        fn set_script_index(&mut self, _idx: Option<usize>) {}
+        fn script_goto_count(&self) -> i32 {
+            0
+        }
+        fn set_script_goto_count(&mut self, _v: i32) {}
+        fn quest_flag_status(&self, _flag: i16) -> u8 {
+            0
+        }
+        fn gold(&self) -> i32 {
+            0
+        }
+        fn dec_gold(&mut self, _n: i32) {}
+        fn inc_gold(&mut self, _n: i32) {}
+        fn actor_id(&self) -> i32 {
+            0
+        }
+        fn level(&self) -> i32 {
+            0
+        }
+        fn random(&mut self, _value: i32) -> i32 {
+            0
+        }
+        fn send_msg(
+            &mut self,
+            _ident: i32,
+            _w_param: i32,
+            _n_param1: i32,
+            _n_param2: i32,
+            _n_param3: i32,
+            _msg: Option<&str>,
+        ) {
+        }
+        fn mn_val(&self, _n: usize) -> i32 {
+            0
+        }
+        fn set_mn_val(&mut self, _n: usize, _v: i32) {}
+        fn mdy_val(&self, _n: usize) -> i32 {
+            0
+        }
+        fn mnmval(&self, _n: usize) -> i32 {
+            0
+        }
+        fn mn_integer(&self, _n: usize) -> i32 {
+            0
+        }
+        fn ms_string(&self, _n: usize) -> String {
+            String::new()
+        }
+        fn set_quest_unit_status(&mut self, _index: i32, _value: i32) {}
+        fn set_quest_flag_status(&mut self, _flag: i32, _value: i32) {}
+        fn set_quest_unit_open_status(&mut self, _index: i32, _value: i32) {}
+        fn item_count(&self, _name: &str) -> i32 {
+            0
+        }
+        fn slave_count(&self) -> i32 {
+            0
+        }
+        fn bag_count(&self) -> i32 {
+            0
+        }
+        fn has_worn(&self, _location: &str) -> bool {
+            false
+        }
+        fn give_item(&mut self, _name: &str, _count: i32) {}
+        fn remove_item(&mut self, _name: &str, _count: i32) -> i32 {
+            0
+        }
+
+        fn chr_name(&self) -> String {
+            self.chr_name.clone()
+        }
+        fn permission(&self) -> i32 {
+            self.permission
+        }
+        fn set_permission(&mut self, v: i32) {
+            self.permission = v;
+        }
+        fn process_user_line_msg(&mut self, line: &str) {
+            assert_eq!(
+                self.permission, 10,
+                "进命令体时必须已抬到 10（line={line:?}）"
+            );
+            if self.panic_on_line {
+                panic!(
+                    "命令体内部异常（oracle 里会被 ProcessUserLineMsg 的 catch 吞；此处模拟展开）"
+                );
+            }
+        }
+    }
+
+    struct NpcStub {
+        scripts: Vec<crate::model::ScriptInfo>,
+    }
+
+    impl ScriptNpc for NpcStub {
+        fn actor_id(&self) -> i32 {
+            0
+        }
+        fn chr_name(&self) -> String {
+            "QManage".to_string()
+        }
+        fn map_name(&self) -> String {
+            String::new()
+        }
+        fn curr_x(&self) -> i32 {
+            0
+        }
+        fn curr_y(&self) -> i32 {
+            0
+        }
+        fn script_list(&self) -> &Vec<crate::model::ScriptInfo> {
+            &self.scripts
+        }
+        fn send_say(&mut self, _msg: &str, _priority: bool) {}
+        fn script_goto_count_limit(&self) -> i32 {
+            40
+        }
+    }
+
+    fn gmexecute_info() -> QuestActionInfo {
+        QuestActionInfo {
+            n_cmd_code: 229,
+            s_param1: "禁言".to_string(),
+            s_param2: "self".to_string(),
+            s_param3: "10000".to_string(),
+            ..QuestActionInfo::default()
+        }
+    }
+
+    fn run_action_once(player: &mut PanicPlayer) {
+        let mut npc = NpcStub {
+            scripts: Vec::new(),
+        };
+        let mut engine = Engine::new(&mut npc, player);
+        let mut success = false;
+        engine.run_action(229, &gmexecute_info(), &mut success);
+    }
+
+    /// **异常安全**：命令体 panic 展开时 `Permission` 也必须还原到**进入前的值**。
+    ///
+    /// 牙 #2：把 `PermissionGuard` 换成「执行后顺序赋值」⇒ 本用例红（panic 越过赋值，
+    /// 权限停在 10）。
+    #[test]
+    fn gmexecute_action_restores_permission_on_panic() {
+        let mut player = PanicPlayer {
+            permission: 3,
+            chr_name: "新人".to_string(),
+            panic_on_line: true,
+        };
+        // 静音 panic 输出（只影响本进程 stderr，不改变判定）。
+        let hook = std::panic::take_hook();
+        std::panic::set_hook(Box::new(|_| {}));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_action_once(&mut player);
+        }));
+        std::panic::set_hook(hook);
+        assert!(result.is_err(), "panic 必须向外传播（catch 只在本用例里）");
+        assert_eq!(player.permission, 3, "展开路径也要还原到进入前的 3");
+    }
+
+    /// **正常出口**同样由 `Drop` 统一还原（不依赖调用点补赋值）：`Permission` 回到进入值。
+    #[test]
+    fn gmexecute_action_restores_permission_on_normal_exit() {
+        let mut player = PanicPlayer {
+            permission: 7,
+            chr_name: "新人".to_string(),
+            panic_on_line: false,
+        };
+        run_action_once(&mut player);
+        assert_eq!(player.permission, 7, "还原到进入前的 7（不是常量 0）");
+    }
 }

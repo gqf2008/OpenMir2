@@ -41,6 +41,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
+use crate::gmcmd;
 use mir2_envir::mapquest::QuestNpcRecord;
 use mir2_script::engine::quest_state::QuestBitmap;
 use mir2_script::engine::vars::get_val_name_no;
@@ -333,7 +334,7 @@ impl MerchantScriptBook {
     pub fn goto_label(
         &self,
         actor_id: i32,
-        player: &mut NpcPlayer<'_>,
+        player: &mut NpcPlayer<'_, '_>,
         label: &str,
         bo_ext_jmp: bool,
     ) -> Option<Vec<SayMsg>> {
@@ -463,7 +464,7 @@ impl NpcHost {
     pub fn goto_label(
         &self,
         chr_name: &str,
-        player: &mut NpcPlayer<'_>,
+        player: &mut NpcPlayer<'_, '_>,
         label: &str,
         bo_ext_jmp: bool,
     ) -> Option<Vec<SayMsg>> {
@@ -484,7 +485,7 @@ impl NpcHost {
     }
 
     /// `@Login`（`PlayObject.cs:1440` 用 `SystemShare.ManageNPC`，即 `QManage`）。
-    pub fn run_login(&self, player: &mut NpcPlayer<'_>) -> Option<Vec<SayMsg>> {
+    pub fn run_login(&self, player: &mut NpcPlayer<'_, '_>) -> Option<Vec<SayMsg>> {
         self.goto_label("QManage", player, "@Login", false)
     }
 
@@ -493,7 +494,7 @@ impl NpcHost {
     pub fn run_std_mode_func(
         &self,
         ani_count: i32,
-        player: &mut NpcPlayer<'_>,
+        player: &mut NpcPlayer<'_, '_>,
     ) -> Option<Vec<SayMsg>> {
         self.goto_label(
             "QFunction",
@@ -525,7 +526,7 @@ fn run_goto_label(
     curr_x: i32,
     curr_y: i32,
     goto_count_limit: i32,
-    player: &mut NpcPlayer<'_>,
+    player: &mut NpcPlayer<'_, '_>,
     label: &str,
     bo_ext_jmp: bool,
 ) -> Vec<SayMsg> {
@@ -582,11 +583,42 @@ impl ScriptNpc for HostNpc<'_> {
     }
 }
 
+/// `PlayObject.Permission` / `PlayObject.ProcessUserLineMsg(line)` 的**宿主跳线**
+/// （卡 `openmir2-gm-script-host-seam`，whitelist T-210）。
+///
+/// oracle 里这两步都是**同一个 `PlayObject`** 的成员（`PlayObject.cs:58` 的 `Permission`；
+/// `PlayObject.Chat.cs:229-406` 的 `ProcessUserLineMsg`）——脚本动作
+/// `ActionOfGmExecute`（`ExecutionProcessingSys.cs:4925-4947`）只是调用方：
+/// `Permission = 10` ⇒ `ProcessUserLineMsg("@<cmd> …")` ⇒ `finally` 还原。
+///
+/// 本仓的 [`NpcPlayer`] 是每次脚本调用重建的**快照**，`Permission` 的权威在宿主
+/// `SessionGround.gm`（[`gmcmd::GmSession::permission`]）⇒ 有桥时 `permission()`/`set_permission()`
+/// 直接读写那份；无桥（其它构造点/用例）退回快照自带字段，且 `process_user_line_msg` 保持
+/// `ScriptPlayer` 缺省 no-op 语义。
+///
+/// **抬权只有一处**：脚本动作 `crates/script/src/engine/actions.rs` 的 `PermissionGuard`
+/// （oracle 同址）。本桥**不再抬权**——旧门面 `gmcmd::execute_script_line` 自己再抬一次的那份
+/// 已随本卡删除，避免同一次执行抬/还两次。
+pub struct NpcGm<'r> {
+    /// `PlayObject` 的命令会话态（`Permission` 等）。
+    pub sess: &'r mut gmcmd::GmSession,
+    /// `SystemShare.Config` 的 GM 半边（`GmConfig`；与 `ChatHost.gm_cfg` 同源）。
+    pub cfg: &'r gmcmd::GmConfig,
+    /// 命令体要读的世界视图（行会/地图/实体表/时钟）。`Copy`，按值持有。
+    pub world: gmcmd::GmWorld<'r>,
+    /// 该会话此刻是否在**仓库/登录密码状态机**里（`PlayObject.Chat.cs:241-362` 的四支）。
+    ///
+    /// 宿主从会话层 `inbound::PwdSession`（`CM_PASSWORD` 驱动）算出来注入。oracle 在 `@` 分支
+    /// **之前**判密码态：命中时整条线被密码支吃掉 ⇒ 命令体不执行。跳线据此拒绝执行，
+    /// 不把 oracle 的拦截绕过去（reviewer-3 在 review `841be8bf` 点名的 M-1）。
+    pub pwd_busy: bool,
+}
+
 /// `IPlayerActor` 的宿主适配（第①片：字段由调用方填充；默认值与 C# flow 夹具一致）。
 ///
 /// 生产路径（第②片）在进世界时用 `SessionGround`/`World` 的快照填这些字段，运行后把
 /// 变更（金币/物品/任务位/`LastNpc`/`Script`/`ScriptGotoCount`）写回；红检/用例直接用字段。
-pub struct NpcPlayer<'r> {
+pub struct NpcPlayer<'r, 'g> {
     pub actor_id: i32,
     pub chr_name: String,
     pub map_name: String,
@@ -724,11 +756,25 @@ pub struct NpcPlayer<'r> {
     /// `envir.Flag`；脚本执行期 `NpcPlayer` 拿不到 `&mut MapRegistry` ⇒ 先记录，宿主在命令
     /// 处理完之后、P25 消费点之前落库（等价性论证见 `map_mode` 模块头）。
     pub map_mode_writes: Vec<crate::map_mode::MapModeWrite>,
+    /// `PlayObject.Permission`（`PlayObject.cs:58`，`byte`；宿主缺省 0）。
+    ///
+    /// **只在无 [`Self::gm`] 桥时**是本快照的存储；有桥时读写都落到 `GmSession.permission`
+    /// （同一次脚本执行里的唯一真源，见 [`NpcGm`]）。
+    pub permission: i32,
+    /// `ProcessUserLineMsg`/`Permission` 的宿主跳线；`None` ⇒ 与 `ScriptPlayer` 缺省 no-op 同口径。
+    pub gm: Option<NpcGm<'g>>,
+    /// `SendDefMessage`（**不**经 `MsgQueue` 的直发帧，oracle 语义：命令体执行时立即下发）。
+    ///
+    /// 目前唯一来源是 `gmcmd::GmFrame::AttackMode`（`ChangeAttackModeCommand.cs:65`）；宿主在
+    /// 脚本返回后、排 `MsgQueue` 投影（[`Self::frames`]）**之前**下发，保持 oracle 的先后。
+    pub gm_direct_frames: Vec<gmcmd::GmFrame>,
+    /// 跳线里被 oracle `try/catch` 吞掉/本仓未接的路径登记（宿主记 DBG，不静默丢弃）。
+    pub gm_notes: Vec<&'static str>,
 }
 
-impl NpcPlayer<'_> {
+impl NpcPlayer<'_, '_> {
     /// 空会话（用例/第②片快照的起点）。
-    pub fn empty<'r>(rng: &'r mut dyn FnMut(i32) -> i32) -> NpcPlayer<'r> {
+    pub fn empty<'r, 'g>(rng: &'r mut dyn FnMut(i32) -> i32) -> NpcPlayer<'r, 'g> {
         NpcPlayer {
             actor_id: 0,
             chr_name: String::new(),
@@ -791,6 +837,12 @@ impl NpcPlayer<'_> {
             map_names: Vec::new(),
             sys_msg_cfg: SysMsgCfg::default(),
             map_mode_writes: Vec::new(),
+            // `PlayObject.Permission` 的 ctor 缺省（`PlayObject.cs:58` 未初始化 ⇒ 0）；
+            // 跳线未接 = 缺省 no-op（与 `ScriptPlayer` 缺省一致）。
+            permission: 0,
+            gm: None,
+            gm_direct_frames: Vec::new(),
+            gm_notes: Vec::new(),
         }
     }
 }
@@ -815,7 +867,7 @@ fn replace_variable_text(msg: &str, token: &str, text: &str) -> String {
     out
 }
 
-impl NpcPlayer<'_> {
+impl NpcPlayer<'_, '_> {
     /// `NormNpc.GetVariableText` + `Merchant.GetVariableText` 的 1:1 移植（说词侧）。
     ///
     /// 口径（逐条对应 oracle）：
@@ -1046,7 +1098,20 @@ impl NpcPlayer<'_> {
     }
 }
 
-impl ScriptPlayer for NpcPlayer<'_> {
+/// `BaseObject.SysMsg(msg, color, Hint)` ⇒ `SendMsg(RM_SYSMESSAGE, 0, FColor, BColor, 0, msg)`
+/// （`BaseObject.cs:1666-1686`）——与 [`NpcPlayer`] 的 `sys_msg` 同一入队形状。
+fn push_sys_msg(frames: &mut Vec<SendMsg>, f: u8, b: u8, text: String) {
+    frames.push(SendMsg {
+        ident: i32::from(mir2_protocol::messages::RM_SYSMESSAGE),
+        w_param: 0,
+        n_param1: i32::from(f),
+        n_param2: i32::from(b),
+        n_param3: 0,
+        msg: Some(text),
+    });
+}
+
+impl ScriptPlayer for NpcPlayer<'_, '_> {
     fn last_npc(&self) -> i32 {
         self.last_npc
     }
@@ -1112,6 +1177,85 @@ impl ScriptPlayer for NpcPlayer<'_> {
     }
     fn chr_name(&self) -> String {
         self.chr_name.clone()
+    }
+    /// `playerActor.Permission`（`PlayObject.cs:58`，`byte`）。
+    ///
+    /// 有 [`Self::gm`] 桥时读 `GmSession.permission`（宿主的唯一真源）；否则读快照字段。
+    fn permission(&self) -> i32 {
+        match &self.gm {
+            Some(g) => i32::from(g.sess.permission),
+            None => self.permission,
+        }
+    }
+    /// `playerActor.Permission = v`：C# 字段是 `byte` ⇒ 赋值按 `unchecked` 截断低 8 位。
+    ///
+    /// **不在这里抬权**：抬权是脚本动作 `ActionOfGmExecute` 的事（oracle 同址，
+    /// `ExecutionProcessingSys.cs:4938-4947`，由 `actions.rs` 的 `PermissionGuard` 还原）。
+    fn set_permission(&mut self, v: i32) {
+        match &mut self.gm {
+            Some(g) => g.sess.permission = v as u8,
+            None => self.permission = v,
+        }
+    }
+    /// `playerActor.ProcessUserLineMsg(line)`（`PlayObject.Chat.cs:229-406`）的宿主跳线。
+    ///
+    /// oracle 的分支顺序与落位：
+    /// - `:241-362` 仓库/登录密码状态机（`IsSetStoragePwd`/`IsReConfigPwd`/
+    ///   `IsUnLockPwd||IsUnLockStoragePwd`/`IsCheckOldPwd`）——命中即整条线被吃掉，**不到 `@` 支**；
+    /// - `:363-367` 非 `@` ⇒ `ProcessSayMsg(sData)`；
+    /// - `:368-370` `@` ⇒ `CommandSystem.Execute(this, sData)`，命中即返回；
+    /// - `:372-400` 未命中 ⇒ `@{sCMD}此命令不正确，或没有足够的权限!!!`（Red/Hint）；
+    /// - `:402-406` 整段 `try/catch`：命令体异常被吞（零帧，设计件 §4.5）。
+    ///
+    /// **拦截层的落位**：密码状态机在本仓属于**会话层**（`inbound::process_client_password`，
+    /// `CM_PASSWORD` 驱动）⇒ 宿主把「该会话正在密码流里」注入 [`NpcGm::pwd_busy`]，本跳线据此
+    /// **拒绝执行**（与 oracle「命令体执行不到」同口径）。绝不因为走脚本跳线而绕过它。
+    ///
+    /// 未接线（`gm == None`）⇒ 保持 `ScriptPlayer` 缺省 no-op（其它实现方/用例不受影响）。
+    fn process_user_line_msg(&mut self, line: &str) {
+        // 拆字段借用：`gm` 要 `&mut`，而结果落到 `frames`/`gm_*`（互不重叠的字段）。
+        let NpcPlayer {
+            gm,
+            frames,
+            sys_msg_cfg,
+            gm_direct_frames,
+            gm_notes,
+            ..
+        } = self;
+        let Some(bridge) = gm.as_mut() else {
+            return;
+        };
+        if bridge.pwd_busy {
+            gm_notes.push("ProcessUserLineMsg：会话在密码状态机（Chat.cs:241-362）⇒ 命令体不执行");
+            return;
+        }
+        if !line.starts_with('@') {
+            gm_notes
+                .push("ProcessUserLineMsg：非 `@` 行（Chat.cs:363-367 的 ProcessSayMsg 支未接）");
+            return;
+        }
+        let result = crate::gmcmd::execute(bridge.sess, bridge.cfg, &bridge.world, line);
+        if let Some(note) = result.log_note {
+            gm_notes.push(note);
+        }
+        // `CommandSystem.Execute` 的输出回帧（`CommandSystem.cs:191-194`）：`SysMsg(_, Red, Hint)`。
+        for msg in &result.msgs {
+            let (f, b) = match msg.color {
+                crate::gmcmd::GmColor::Red => sys_msg_cfg.red,
+                crate::gmcmd::GmColor::Green => sys_msg_cfg.green,
+                crate::gmcmd::GmColor::Blue => sys_msg_cfg.blue,
+            };
+            push_sys_msg(frames, f, b, msg.text.clone());
+        }
+        // `PlayObject.Chat.cs:372-400` 的未知命令回落（第二条帧，Red/Hint）。`Permission` 读的是
+        // **执行当下**的值（oracle 的 `finally` 还没跑，仍是抬权后的 10）。
+        if !result.found && result.parsed {
+            let text = crate::gmcmd::incorrect_msg(bridge.sess.permission, line);
+            let (f, b) = sys_msg_cfg.red;
+            push_sys_msg(frames, f, b, text);
+        }
+        // `SendDefMessage`（直发，不经 `MsgQueue`）：宿主在排脚本帧之前下发。
+        gm_direct_frames.extend(result.frames);
     }
     /// `playerActor.GameGold = v`（`BaseObject.GameGold`）：唯一生产写点
     /// `ActionOfOpenSaleDeal` 成功扣费（`ExecutionProcessingSys.cs:2345`）；`GAMEGOLD`
@@ -1585,7 +1729,7 @@ impl ScriptPlayer for NpcPlayer<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mir2_script::{SayingProcedure, SayingRecord};
+    use mir2_script::{QuestActionInfo, SayingProcedure, SayingRecord};
 
     fn script_with(label: &str, say: &str) -> ScriptInfo {
         ScriptInfo {
@@ -2827,5 +2971,245 @@ mod tests {
             "MOV/INC/DEC 写入的 $STR 槽必须在 #SAY 里取到"
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    // ─────────── 卡 `openmir2-gm-script-host-seam`（T-210）：GMEXECUTE 宿主跳线 ───────────
+
+    /// `GMEXECUTE`（`ExecutionCode.GmExecute = 229`）的动作记录。
+    fn gmexec_action(param1: &str, param2: &str, param3: &str) -> QuestActionInfo {
+        QuestActionInfo {
+            n_cmd_code: 229,
+            s_param1: param1.to_string(),
+            s_param2: param2.to_string(),
+            s_param3: param3.to_string(),
+            ..QuestActionInfo::default()
+        }
+    }
+
+    fn script_with_actions(label: &str, actions: Vec<QuestActionInfo>) -> ScriptInfo {
+        ScriptInfo {
+            is_quest: false,
+            quest_info: Default::default(),
+            record_list: vec![SayingRecord {
+                s_label: label.to_string(),
+                procedure_list: vec![SayingProcedure {
+                    condition_list: Vec::new(),
+                    action_list: actions,
+                    else_action_list: Vec::new(),
+                    s_say_msg: String::new(),
+                    s_else_say_msg: String::new(),
+                }],
+                bo_ext_jmp: false,
+            }],
+            quest_count: 0,
+        }
+    }
+
+    fn def_with_actions(chr_name: &str, label: &str, actions: Vec<QuestActionInfo>) -> NpcDef {
+        NpcDef {
+            chr_name: chr_name.to_string(),
+            file_path: "MapQuest_def".to_string(),
+            script_name: None,
+            is_hide: true,
+            is_quest: false,
+            scripts: vec![script_with_actions(label, actions)],
+            loaded: true,
+            actor_id: 1,
+        }
+    }
+
+    /// `RM_SYSMESSAGE` 投影的 `(正文, FColor, BColor)`（按入队序）。
+    fn sys_frames(frames: &[SendMsg]) -> Vec<(&str, i32, i32)> {
+        frames
+            .iter()
+            .filter(|f| f.ident == i32::from(mir2_protocol::messages::RM_SYSMESSAGE))
+            .map(|f| (f.msg.as_deref().unwrap_or(""), f.n_param1, f.n_param2))
+            .collect()
+    }
+
+    /// 跑一次 `@Login`：脚本里只有一条 `GMEXECUTE` 动作，宿主按生产同法装 GM 跳线。
+    ///
+    /// 返回 `(脚本帧, 执行后的会话 Permission, 跳线登记, 直发帧)`。
+    fn run_login_gm(
+        chr_name: &str,
+        entering_permission: u8,
+        action: QuestActionInfo,
+    ) -> (Vec<SendMsg>, u8, Vec<&'static str>, Vec<gmcmd::GmFrame>) {
+        let host = host_with(vec![def_with_actions("QManage", "@Login", vec![action])]);
+        let guilds = mir2_world::GuildManager::new();
+        let world = gmcmd::GmWorld::new(&guilds);
+        let cfg = gmcmd::GmConfig::default();
+        let mut sess = gmcmd::GmSession {
+            permission: entering_permission,
+            ..gmcmd::GmSession::default()
+        };
+        let mut rng = no_rng();
+        let (frames, notes, direct) = {
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = chr_name.to_string();
+            player.gm = Some(NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world,
+                pwd_busy: false,
+            });
+            let _ = host.run_login(&mut player).expect("QManage 必须可解析");
+            (
+                std::mem::take(&mut player.frames),
+                std::mem::take(&mut player.gm_notes),
+                std::mem::take(&mut player.gm_direct_frames),
+            )
+        };
+        (frames, sess.permission, notes, direct)
+    }
+
+    /// ① 抬权后命令真执行（载体 = 已实现的 `@禁言`）：**恰好一条** SysMsg，正文逐字节。
+    ///
+    /// oracle 链：`ExecutionProcessingSys.cs:4938-4947`（抬权 + `ProcessUserLineMsg` + finally）
+    /// ⇒ `PlayObject.Chat.cs:368` ⇒ `CommandSystem.Execute` ⇒ 权限门 ⇒ `ShutupCommand.Execute:56`。
+    /// 牙 #1：删掉 `actions.rs` 的 `set_permission(10)` ⇒ 本用例变 `权限不够!!!` 必红。
+    #[test]
+    fn gmexecute_seam_shutup_self_emits_exactly_one_sysmsg() {
+        // `sParam2 = Self`（OrdinalIgnoreCase）⇒ 角色名「新人」，与部署 `@Login` 的调用同形。
+        let (frames, permission, notes, direct) =
+            run_login_gm("新人", 0, gmexec_action("禁言", "self", "10000"));
+        assert_eq!(
+            sys_frames(&frames),
+            vec![("新人 已被禁言10000分钟", 0xFF, 0x38)],
+            "恰好一条 Red/Hint SysMsg，正文逐字节（含脚本里写的 10000 分钟）"
+        );
+        assert!(notes.is_empty(), "正常路径不得有登记：{notes:?}");
+        assert!(direct.is_empty(), "`@禁言` 无 `SendDefMessage` 直发帧");
+        assert_eq!(permission, 0, "抬权必须还回进入前的值");
+    }
+
+    /// ⑤ 目标解析：`self`（→ 角色名）与显式名字两条路。
+    #[test]
+    fn gmexecute_seam_target_resolution_self_and_explicit_name() {
+        // `self`：`sParam2` 按 `OrdinalIgnoreCase` 折成 `ChrName`。
+        let (via_self, ..) = run_login_gm("新人", 0, gmexec_action("禁言", "Self", "30"));
+        assert_eq!(
+            sys_frames(&via_self),
+            vec![("新人 已被禁言30分钟", 0xFF, 0x38)]
+        );
+        // 显式名字：原样进命令行（`@禁言 张三 30`），不回填角色名。
+        let (via_name, ..) = run_login_gm("新人", 0, gmexec_action("禁言", "张三", "30"));
+        assert_eq!(
+            sys_frames(&via_name),
+            vec![("张三 已被禁言30分钟", 0xFF, 0x38)]
+        );
+    }
+
+    /// ② `finally` 还原：进入前的值 **7** ⇒ 执行后仍是 7（不是 0）。
+    ///
+    /// oracle `:4938` 是 `byte btOldPermission = playerActor.Permission`——还原的是**进入前的值**。
+    #[test]
+    fn gmexecute_seam_restores_entering_permission_seven() {
+        let (frames, permission, ..) = run_login_gm("新人", 7, gmexec_action("禁言", "self", "5"));
+        assert_eq!(
+            sys_frames(&frames),
+            vec![("新人 已被禁言5分钟", 0xFF, 0x38)]
+        );
+        assert_eq!(permission, 7, "还原到进入前的 7，不是常量 0");
+    }
+
+    /// ② 第二个进入值 **10** ⇒ 执行后仍是 10（幂等：抬权不把 10 变成别的）。
+    #[test]
+    fn gmexecute_seam_restores_entering_permission_ten() {
+        let (frames, permission, ..) = run_login_gm("新人", 10, gmexec_action("禁言", "self", "5"));
+        assert_eq!(
+            sys_frames(&frames),
+            vec![("新人 已被禁言5分钟", 0xFF, 0x38)]
+        );
+        assert_eq!(permission, 10);
+    }
+
+    /// ④ 未抬权时同一命令仍是 `权限不够!!!`：抬权只发生在 `GMEXECUTE` 动作里，不泄漏成全局。
+    ///
+    /// 直接调跳线（不经动作，`Permission` 保持进入值 0）⇒ `GameCommand.cs:37-39` 的权限门。
+    #[test]
+    fn gmexecute_seam_without_lift_is_permission_too_low() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = gmcmd::GmWorld::new(&guilds);
+        let cfg = gmcmd::GmConfig::default();
+        let mut sess = gmcmd::GmSession::default();
+        let mut rng = no_rng();
+        let (frames, permission) = {
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world,
+                pwd_busy: false,
+            });
+            player.process_user_line_msg("@禁言 新人 30");
+            (std::mem::take(&mut player.frames), player.permission())
+        };
+        assert_eq!(
+            sys_frames(&frames),
+            vec![("权限不够!!!", 0xFF, 0x38)],
+            "未抬权 ⇒ 命令体零贡献，只有权限门那一条"
+        );
+        assert_eq!(permission, 0);
+        assert_eq!(sess.permission, 0, "跳线不写权限");
+    }
+
+    /// ③ 命令内部出错（未知命令的回落支）仍然还原：两条 Red（`未知命令:` + 回落）。
+    ///
+    /// oracle `PlayObject.Chat.cs:368-400`：`CommandSystem.Execute` 返回 false ⇒ 第二条
+    /// `@{sCMD}此命令不正确，或没有足够的权限!!!`。异常/失败路径也必须走 `finally`。
+    #[test]
+    fn gmexecute_seam_unknown_command_still_restores_permission() {
+        let (frames, permission, ..) =
+            run_login_gm("新人", 3, gmexec_action("NoSuchCmd", "x", "1"));
+        let texts: Vec<&str> = sys_frames(&frames).into_iter().map(|(t, ..)| t).collect();
+        assert_eq!(
+            texts,
+            vec![
+                "未知命令: NoSuchCmd x 1",
+                "@@NoSuchCmd此命令不正确，或没有足够的权限!!!"
+            ],
+            "两个字段都逐字节（`CommandSystem.cs:185-188` + `Chat.cs:400`）"
+        );
+        assert_eq!(permission, 3, "失败路径同样还原到进入前的 3");
+    }
+
+    /// 拦截层：会话在密码状态机里时，跳线**不执行**命令体（oracle `Chat.cs:241-362` 先于 `@` 支）。
+    #[test]
+    fn gmexecute_seam_is_blocked_by_password_state_machine() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = gmcmd::GmWorld::new(&guilds);
+        let cfg = gmcmd::GmConfig::default();
+        let mut sess = gmcmd::GmSession::default();
+        let mut rng = no_rng();
+        {
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world,
+                pwd_busy: true,
+            });
+            player.permission = 10;
+            player.process_user_line_msg("@禁言 新人 30");
+            assert!(player.frames.is_empty(), "命令体不得执行（无任何帧）");
+            assert_eq!(player.gm_notes.len(), 1, "登记被密码支吃掉的路径");
+        }
+        assert_eq!(sess.permission, 0);
+    }
+
+    /// 未接线（`gm == None`）⇒ 保持 `ScriptPlayer` 缺省 no-op（其它构造点/用例零影响）。
+    #[test]
+    fn gmexecute_seam_without_bridge_is_noop() {
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.set_permission(4);
+        assert_eq!(player.permission(), 4, "无桥时读写快照字段");
+        player.process_user_line_msg("@禁言 新人 30");
+        assert!(player.frames.is_empty());
+        assert!(player.gm_notes.is_empty());
+        assert!(player.gm_direct_frames.is_empty());
     }
 }

@@ -39,11 +39,19 @@
 //! 恰好 5 条，加内建 `@help` 共 6 条可达；其余 180 条一律停在 `权限不够!!!`（Red 255/56）。
 //! [`GmSession::permission`] 因此保持 0（设计件 D-1 建议 (a)：1:1 复刻这个「锁死」）。
 //!
+//! **脚本可达（`GMEXECUTE`）**：脚本动作 `ActionOfGmExecute` 先把 `Permission` 临时置 10、
+//! 执行 `ProcessUserLineMsg`、再 `finally` 还原（`ExecutionProcessingSys.cs:4938-4947`，抬权
+//! 唯一地址 = `crates/script/src/engine/actions.rs` 的 `PermissionGuard`）。宿主跳线由
+//! `npc::NpcPlayer` 覆写 `set_permission`/`process_user_line_msg` 接上（卡
+//! `openmir2-gm-script-host-seam`，T-210）⇒ `0 < PermissionMin ≤ 10` 的命令**经脚本**可达
+//! （`coverage/gm_registry.py` 的第 4 态 `script-reachable`）；客户端直呼仍恒 0。
+//!
 //! ## 批次 2/3（本模块第二批，tier=L）
 //!
 //! 落地设计件 §4.4 的第 4 族（重载/管理 14 条）、第 5 族（封禁名单 9 条）、第 11 族（桩/测试 8 条，
 //! 其中 `@AddRobotPlay` 已在 G1）。三族共 31 条，除 `@AddRobotPlay` 外全是 `PermissionMin = 10`
-//! ⇒ 现网 `Permission` 恒 0，生产路径一律停在 `权限不够!!!`；命令体只在测试里用 `permission = 10` 构造。
+//! ⇒ **客户端直呼**恒停在 `权限不够!!!`（脚本 `GMEXECUTE` 抬权后可达，见上「脚本可达」）；
+//! 用例里直接构造 `permission = 10` 进命令体。
 //! **oracle 注释掉的逻辑照抄 no-op**（设计件 §4.5 #7）；宿主未接项逐条 `log_note` 并登记
 //! `mir2-rs/tests/parity/whitelist.md` T-161..T-164。
 //!
@@ -2188,27 +2196,12 @@ fn shutup(parameters: &str) -> GmResult {
     red(format!("{human} 已被禁言{dw_time}分钟"))
 }
 
-/// `ActionOfGmExecute`（`ExecutionProcessingSys.cs:4925-4947`）的抬权语义：
-/// `Permission = 10` ⇒ 执行 `@<cmd> …` ⇒ **还原**旧权限（oracle `try/finally`）。
-///
-/// **生产接线点未接**：oracle 的落点是 `playerActor.ProcessUserLineMsg(sData)`；本仓 game-svr
-/// 的 `ScriptPlayer` 适配器（`npc::NpcPlayer`）目前**未覆写** `process_user_line_msg` /
-/// `set_permission`（`crates/script/src/engine/mod.rs:185-190/547-549` 的缺省 no-op）⇒
-/// 脚本里的 `GMEXECUTE` 暂时到不了本函数。本卡把「命令体 + 抬权语义」落成可复跑的门面，
-/// 适配器接线是跨 8 张 `openmir2-gm-impl-*` 卡的共享缝隙（见卡上 comment 与
-/// `whitelist.md` T-209 的窗口项）。
-pub fn execute_script_line(
-    sess: &mut GmSession,
-    cfg: &GmConfig,
-    world: &GmWorld<'_>,
-    line: &str,
-) -> GmResult {
-    let old = sess.permission;
-    sess.permission = 10;
-    let result = execute(sess, cfg, world, line);
-    sess.permission = old;
-    result
-}
+// 卡 `openmir2-gm-script-host-seam`（T-210）订正：原先这里还有一个 `execute_script_line`，
+// 自己把 `sess.permission` 抬到 10 再还原——那是**第二份**抬权语义（oracle 的抬权在脚本动作
+// `ActionOfGmExecute`，`ExecutionProcessingSys.cs:4938-4947`，不在命令派发层）。跳线接通后
+// 两条路径会在同一次执行里抬/还两次 ⇒ 本卡**删除**该门面，抬权只保留
+// `crates/script/src/engine/actions.rs` 的 `PermissionGuard`（oracle 同址、`Drop` 还原）。
+// 脚本侧入口现在是宿主 `npc::NpcPlayer::process_user_line_msg`（直接调 [`execute`]）。
 
 /// 生效命令表：185 行 = `src/Modules/GameCommand/Commands/` 下的 185 个 `GameCommand` 子类
 /// （**不含**内建 `help`/`commands`）。`name`/`perm_min` 已按部署 `Command.conf` 叠加
@@ -5831,13 +5824,13 @@ mod tests {
     /// `"@{sParam1} {sParam2} {sParam3} {sParam4} {sParam5} {sParam6}"`（`sParam2=Self` ⇒ 角色名，
     /// 尾部三个空参 ⇒ 三个尾随空格），再把 `Permission` 临时置 10 执行、随后还原。
     ///
-    /// **能构造的部分**在此逐字节钉住（抬权前被门挡住、抬权后一条回执、权限还原）。
-    /// **构造不了的部分**：game-svr 的 `ScriptPlayer` 适配器 `NpcPlayer` 未覆写
-    /// `process_user_line_msg`/`set_permission`（`crates/script/src/engine/mod.rs:547-549`
-    /// 缺省 no-op），所以从 `@Login` 脚本到本条命令的**生产跳线**尚不存在——这是跨 8 张
-    /// `openmir2-gm-impl-*` 卡共享的缝隙，已作为本卡 R 窗口项/comment 登记（T-209）。
+    /// 本用例走**宿主跳线**（`npc::NpcPlayer` 覆写的 `set_permission`/`process_user_line_msg`，
+    /// 卡 `openmir2-gm-script-host-seam`）：不抬权 ⇒ 权限门；抬权 ⇒ 恰好一条回执（逐字节 +
+    /// Red/Hint 色词）；执行后 `Permission` 还原。`@Login` 经真脚本引擎的端到端用例在
+    /// `npc.rs` 的 `gmexecute_*` 组（含 `finally` 还原与目标解析）。
     #[test]
-    fn shutup_script_gmexecute_path_raises_permission_then_restores() {
+    fn shutup_script_gmexecute_path_through_npc_player_seam() {
+        use mir2_script::engine::ScriptPlayer;
         let guilds = mir2_world::GuildManager::new();
         let world = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
@@ -5849,14 +5842,33 @@ mod tests {
         // 不抬权：落到权限门（这正是牙 #2 的反证：删掉抬权 ⇒ 这里变成 `权限不够!!!`）。
         let gated = execute(&mut sess, &cfg, &world, &s_data);
         assert_eq!(texts(&gated), vec![(GmColor::Red, PERMISSION_TOO_LOW)]);
-        // 抬权（oracle `try/finally`）：恰好一条回执，执行后权限还原。
-        let lifted = execute_script_line(&mut sess, &cfg, &world, &s_data);
-        assert_eq!(
-            texts(&lifted),
-            vec![(GmColor::Red, "新人 已被禁言10000分钟")],
-            "脚本里写的时长是 10000（分钟），原样进文本"
-        );
-        assert!(lifted.frames.is_empty());
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world,
+                pwd_busy: false,
+            });
+            // `ActionOfGmExecute` 的抬权（oracle 同址；等价的两步）。
+            player.set_permission(10);
+            player.process_user_line_msg(&s_data);
+            player.set_permission(0);
+            assert_eq!(player.frames.len(), 1, "恰好一条 SysMsg");
+            assert_eq!(
+                player.frames[0].msg.as_deref(),
+                Some("新人 已被禁言10000分钟"),
+                "脚本里写的时长是 10000（分钟），原样进文本"
+            );
+            assert_eq!(
+                (player.frames[0].n_param1, player.frames[0].n_param2),
+                (0xFF, 0x38),
+                "Red/Hint 的部署色词（`RedMsgFColor/RedMsgBColor`）"
+            );
+            assert!(player.gm_direct_frames.is_empty(), "`@禁言` 无直发帧");
+        }
         assert_eq!(sess.permission, 0, "抬权是临时的，执行完必须还原");
     }
 }
