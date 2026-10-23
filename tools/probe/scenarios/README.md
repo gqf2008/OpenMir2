@@ -128,6 +128,8 @@ python tools/probe/mir2_probe.py \
 > 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
 > `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
 
+> `upgrade_retrieve` 是**唯一一条武器升级 NPC 链**（R2）：`placement` 到盟重省 map 3 (320,328) → `click_npc` 沙巴克铁匠 → `@upgrade`/`@confirmupgrade`/`@upgradenow` 提交 → `sleep 660000` 过取回时效门 → `@main`/`@getbackupgnow` 取回（`Merchant.cs:529-590 / 594-759`）。四个容易踩的点：① **不能站铁匠邻格**——`MonGen.txt:51/58/59` 在 (325,311)/(336,321)/(339,313) 刷了 ArcherGuard（`GuardUnit.IsProperTarget` 对普通玩家 return true），11 分钟等待里必被射杀；② 取回要过 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），Permission 恒 0 ⇒ 只能等，**窗口 profile 必须把 `timeout_ms` 抬到 ≥ 720000**（`card_window.py:1786` 的进程超时 = `timeout_ms/1000+120` 秒）；③ 提交/取回的成功硬门是**唯一 ident** `709`/`200`（`wait_idents`），`643` 只作成败判别（否则 643 会把失败分支蒙混过去）；④ 本场景要求背包 < 46 件（部署脚本没有 `~@getbackupgnow_bagfull` 标签 ⇒ 包满支零帧，等不到）。逐条 oracle 出处、夹具前置与登记缺口见 `docs/upgrade-retrieve-scenario-20261023.md`。
+
 ## 驱动器的自动握手（对拍不要关）
 
 照 `src/BotSrv/Player/RobotPlayer.Operate.cs`：
