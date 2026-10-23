@@ -51,3 +51,16 @@ cargo clippy --workspace --all-targets -- -D warnings  ⇒ rc=0
 
 ⇒ 那条红是**当时多个已死 agent 的 cargo 进程争锁/半途被杀**造成的，**master 本身是绿的**。
 教训：`goal_gate` 跑门禁前应先确认无并发 cargo（或加 `--locked`/独立 target），否则会把资源竞争误报成代码缺陷。
+
+## 更新（11:52）：配额已恢复，四条车道已全部续跑
+
+11:52 探针 agent 返回「可用」⇒ 11:28 的 429 是**短暂**的（不是真的等 14:01）。已按本手册的恢复顺序把四条中断车道全部 resume：
+
+| agent | 卡 | 续跑指令 |
+|---|---|---|
+| reviewer-3 | weapon-durability | 直接把已完成的复审结论发线程（不重跑检查） |
+| reviewer-10 | burndown | 续做 767 复跑或如实说明跳过，优先发结论 |
+| reviewer-6 | sm-reconnect | 复审 I-1 金种子三路法 |
+| worker-52 | showhp53 | 补 R3-1a 用例（~15 行） |
+
+**结论修正**：配额打满时先做**探针**（一个只回一句话的小 agent，成本 ~27k tokens）判断是否真的不可用，比等满 2.5 小时划算。
