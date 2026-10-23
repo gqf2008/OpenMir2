@@ -214,7 +214,8 @@ pub struct GateConfig {
     /// `PlayObject.CheckPkStatus`（`PlayObject.cs:4357-4364`）的 `PvpFlag` 过期门。
     pub pk_flag_time: i32,
     /// `[Setup] UpgradeWeaponMaxPoint`（`GameSvrConf.cs:1419` 缺省 `20`；
-    /// `ServerConf.cs:233` 的 `ReadWriteByte`，**部署件 = 7**）——
+    /// `ServerConf.cs:233` 的 `ReadWriteByte`，**oracle 字段是 `byte`**（`GameSvrConf.cs:271`），
+    /// **部署件 = 7**）——
     /// `PlayObject.CheckWeaponUpgradeStatus`（`PlayObject.cs:4148`）的破碎门：
     /// `Desc[0]+Desc[1]+Desc[2] < 上限` 才走升级支，否则 `Index = 0`（碎）。
     pub upgrade_weapon_max_point: i32,
@@ -546,14 +547,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // 卡 `openmir2-weapon-durability-frames`：`ServerConf.cs:233` 的 `ReadWriteByte`
         // （部署件 `Server.conf:293` = 7）。空值 ⇒ 保持 `None` ⇒ 回落 oracle 缺省 20。
         if section == "SETUP" && k == "UPGRADEWEAPONMAXPOINT" && !v.is_empty() {
-            upgrade_weapon_max_point = Some(
-                v.parse()
-                    .with_context(|| format!("UpgradeWeaponMaxPoint 不是合法整数：{v:?}"))?,
-            );
+            // oracle `ReadWriteByte`（`ServerConf.cs:233`）⇒ `Convert.ChangeType(str, typeof(byte))`
+            // （`ConfigFile.cs:135`）：**byte 值域 `0..=255`**，越界/非整数在 oracle 侧读取异常
+            // ⇒ 本侧同样报错（不静默夹取）。空串在上面的 `!v.is_empty()` 已回落缺省 20。
+            upgrade_weapon_max_point = Some(i32::from(v.parse::<u8>().with_context(|| {
+                format!("UpgradeWeaponMaxPoint 不是合法 byte（0..=255）：{v:?}")
+            })?));
         }
         // `ServerConf.cs:281` 的 `ReadWriteBool`（部署件 `Server.conf:395` = 1）；判定口径同
         // `PasswordLockHumanLogin`（`ConfigFile.ReadBool`：是/YES/1/TRUE ⇒ true，其余 false）。
-        if section == "SETUP" && k == "DECLAMPDURA" {
+        // **空值 == 缺键**：`ReadBool`（`ConfigFile.cs:188-204`）对空串返回 `defValue`（这里是
+        // `true`）⇒ 必须保持 `None` 回落缺省，不能当成 `false`。
+        if section == "SETUP" && k == "DECLAMPDURA" && !v.is_empty() {
             let up = v.to_uppercase();
             dec_lamp_dura = Some(up == "是" || up == "YES" || up == "1" || up == "TRUE");
         }
@@ -1445,10 +1450,31 @@ mod tests {
         assert!(c.dec_lamp_dura);
         let p = write(
             &dir,
-            &format!("{base}[Setup]{nl}UpgradeWeaponMaxPoint={nl}DecLampDura=0{nl}"),
+            &format!("{base}[Setup]{nl}UpgradeWeaponMaxPoint={nl}DecLampDura={nl}"),
         );
         let c = load(&p).unwrap();
         assert_eq!(c.upgrade_weapon_max_point, 20, "空值 ⇒ oracle 缺省 20");
+        assert!(
+            c.dec_lamp_dura,
+            "空值 ⇒ oracle 缺省 true（ReadBool 空串回缺省）"
+        );
+        // **M-2**：oracle 是 `byte`（`ReadWriteByte`）⇒ 越界必须报错，不静默接受。
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}UpgradeWeaponMaxPoint=300{nl}"),
+        );
+        assert!(load(&p).is_err(), "300 超出 byte ⇒ 配置错误");
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}UpgradeWeaponMaxPoint=-1{nl}"),
+        );
+        assert!(load(&p).is_err(), "-1 超出 byte ⇒ 配置错误");
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]{nl}UpgradeWeaponMaxPoint=255{nl}DecLampDura=0{nl}"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.upgrade_weapon_max_point, 255, "byte 上界可接受");
         assert!(!c.dec_lamp_dura, "0 ⇒ false");
         let p = write(&dir, &format!("{base}[Setup]{nl}ShowRankLevelName=1{nl}"));
         let c = load(&p).unwrap();

@@ -1618,15 +1618,19 @@ impl World {
     /// 逐行口径（连 oracle 的 ushort 回绕一起搬）：
     /// - `UseItems[RighThand].Index == 0` ⇒ 直接返回（`:2240`）；
     /// - 模板缺失或 `SpecialPwr != 0` ⇒ 直接返回（`:2243-2246`，只有火把/蜡烛 `SpecialPwr==0`）；
-    /// - `nOldDura = Round(Dura / 1000.0)`；`nDura = DecLampDura ? (ushort)(Dura - 1) : Dura`
+    /// - `nOldDura = Round((ushort)(Dura / 1000.0))`（**左侧先截断、再 Round**，`:2245`；Round 对
+    ///   整数是恒等 ⇒ 等价 `Dura / 1000` 的整数除法）；`nDura = DecLampDura ? (ushort)(Dura - 1) : Dura`
     ///   ——`Dura == 0` 时 `(ushort)(0 - 1)` **回绕成 65535**（`:2249`），**不破零**；
     /// - `nDura <= 0`（对 `ushort` 等价于 `== 0`）：`Dura = 0`、`SendDelItems`（Play）、
     ///   `Index = 0`、`Light = GetMyLight()`、`RM_CHANGELIGHT`、**655（`Recog = 0`）**、
     ///   `RecalcAbilitys()`（`:2260-2272`）；
     /// - 否则 `Dura = nDura`（`:2276`）；
-    /// - **末尾无条件** `if (nOldDura != Round(nDura / 1000.0))` ⇒ **655（`Recog = 当前 Dura`）**
-    ///   （`:2274`）。燃尽只在 `Dura ∈ {0, 1}` 时发生 ⇒ `nOldDura` 恒 `0`，与 `Round(0)` 相等
-    ///   ⇒ 该支不会与燃尽支重复发帧（同一次调用最多一条 655）。
+    /// - **末尾无条件** `if (nOldDura != HUtil32.Round(nDura / 1000.0))` ⇒ **655（`Recog = 当前 Dura`）**
+    ///   （`:2272-2275`）。左值截断、右值四舍五入 ⇒ 帧只在 `trunc(D/1000) != round((D-1)/1000)`
+    ///   时发（`D % 1000 ∈ 501..=999`；`DecLampDura=false` 时是 `trunc(D/1000) != round(D/1000)`，
+    ///   即 `D % 1000 ∈ 500..=999` 时即使耐久未变也每周期发一条——oracle 既有行为）。
+    ///   燃尽只在 `Dura ∈ {0, 1}` 时发生 ⇒ `nOldDura` 恒 `0`，与 `Round(0)` 相等 ⇒ 该支不会与燃尽支
+    ///   重复发帧（同一次调用最多一条 655）。
     ///
     /// **本卡未接的伴随帧（登记）**：`SendDelItems`（709）与 `RM_CHANGELIGHT`（654）；
     /// `RecalcAbilitys` 的宿主侧重算。两侧状态（`Dura` / `Index` / `Light`）已逐行落地。
@@ -1670,7 +1674,13 @@ impl World {
         if std.special_pwr != 0 {
             return;
         }
-        let old_dura = hutil_round(f64::from(slot.dura) / 1000.0);
+        // **oracle 口径（`PlayObject.Message.cs:2245`）**：
+        // `int nOldDura = HUtil32.Round((ushort)(UseItems[RighThand].Dura / 1000.0));`
+        // ——`(ushort)` 先把 `Dura / 1000.0` **截断**（等价 u16 整数除法），`Round` 对整数是恒等；
+        // **只有新值侧**（`:2272`）才是 `HUtil32.Round(nDura / 1000.0)`（AwayFromZero）。
+        // 两侧口径不同是 oracle 既有行为（连 bug 一起搬）：`Dura % 1000 >= 500` 时左值比「四舍五入」
+        // 小 1，发射点整体偏移——照抄，不许「修正」。
+        let old_dura = i32::from(slot.dura / 1000);
         let n_dura: u16 = if self.dec_lamp_dura {
             // **unchecked ushort 回绕**照 oracle（`PlayObject.Message.cs:2249`）。
             slot.dura.wrapping_sub(1)
@@ -11709,8 +11719,10 @@ mod castle_wire_tests {
 /// 对照表（oracle 触发链，文件:行）：
 ///
 /// - `SM_LAMPCHANGEDURA(655)`：`PlayObject.Run` 周期块（`PlayObject.Message.cs:257-262`）⇒
-///   `UseLamp()`（`:2233-2278`）⇒ `SendMsg(RM_LAMPCHANGEDURA, 0, {0|Dura}, 0, 0)`（`:2265`/`:2274`）
-///   ⇒ 处理器 `:1843` `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0, 0, 0)` ⇒
+///   `UseLamp()`（`:2233-2278`）⇒ `SendMsg(RM_LAMPCHANGEDURA, 0, {0|Dura}, 0, 0)`（`:2265`/`:2274`）；
+///   千位门 = `Round((ushort)(Dura / 1000.0))`（**左值先截断**，`:2245`）
+///   vs `Round(nDura / 1000.0)`（右值四舍五入，`:2272`）⇒ 处理器 `:1843`
+///   `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0, 0, 0)` ⇒
 ///   **`Recog = Dura`、`Param = 0`**（`PlayObject.Socket.cs:17` 的第 2 实参是 `nRecog`）。
 ///
 /// - `SM_BREAKWEAPON(1102)`：`AttackDir`（`PlayObject.Attack.cs:25-31`，门 `attackTarget != null`
@@ -11764,34 +11776,98 @@ mod weapon_durability_tests {
         w.use_lamps()
     }
 
-    /// 判据 ①（帧内容）：`Dura 1500 → 1499` 跨过 `Round(Dura/1000)` 的千位边界
-    /// （`Round(1.5) = 2` → `Round(1.499) = 1`）⇒ **恰好一条** 655，`Recog = 新 Dura`。
+    /// **C-1 钉（oracle「先截断、后取整」口径）**：`PlayObject.Message.cs:2245` 的
+    /// `int nOldDura = HUtil32.Round((ushort)(UseItems[RighThand].Dura / 1000.0));`
+    /// —— 左值 **先 `(ushort)` 截断**（等价 `Dura / 1000` 整数除法），而新值侧 `:2272` 才是
+    /// `HUtil32.Round(nDura / 1000.0)`（AwayFromZero）。两侧口径不同 ⇒ 帧只在
+    /// `trunc(D/1000) != round((D-1)/1000)` 时发（`D % 1000 ∈ 501..=999`）。
+    ///
+    /// 表里的 1500 与 2600 正是旧实现（两侧都四舍五入）错位的两个方向：1500 **多发**、
+    /// 2600 **漏发**。
     #[test]
-    fn lamp_crossing_thousand_boundary_emits_one_frame_with_durability_as_recog() {
-        let (mut w, p) = lamp_world(1500, 0, true);
+    fn lamp_thousand_boundary_table_matches_oracle_truncation() {
+        // (本次 UseLamp 前的 Dura, 期望的 655 `Recog`；`None` = 零帧）
+        let cases: [(u16, Option<i32>); 8] = [
+            (9999, Some(9998)), // old=trunc(9.999)=9, new=round(9.998)=10 ⇒ 发
+            (9500, None),       // old=9, new=round(9.499)=9 ⇒ 零
+            (9501, Some(9500)), // old=9, new=round(9.5)=10 ⇒ 发
+            (1501, Some(1500)), // old=1, new=round(1.5)=2 ⇒ 发
+            (1500, None),       // old=1, new=round(1.499)=1 ⇒ 零（旧错口径：多发 Recog=1499）
+            (1499, None),       // old=1, new=round(1.498)=1 ⇒ 零
+            (2600, Some(2599)), // old=2, new=round(2.599)=3 ⇒ 发（旧错口径：漏发）
+            (2500, None),       // old=2, new=round(2.499)=2 ⇒ 零
+        ];
+        for (dura, want) in cases {
+            let (mut w, p) = lamp_world(dura, 0, true);
+            let out = lamp_after_500ms(&mut w);
+            let got: Vec<i32> = out.iter().map(|d| d.recog).collect();
+            match want {
+                Some(recog) => assert_eq!(
+                    got,
+                    vec![recog],
+                    "Dura={dura} ⇒ 恰好一条 655 且 Recog = 新 Dura（oracle: old=trunc, new=round）"
+                ),
+                None => assert!(
+                    got.is_empty(),
+                    "Dura={dura} ⇒ 零帧（oracle: old=trunc 与 new=round 相等）；实收 {got:?}"
+                ),
+            }
+            assert!(out.iter().all(|d| d.actor_id == p));
+            assert_eq!(
+                w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+                dura - 1,
+                "耐久照减（发不发帧与扣不扣耐久是两件事）"
+            );
+        }
+    }
+
+    /// 判据 ①（帧内容）：真实跨界点 `Dura 1501 → 1500` ⇒ **恰好一条** 655，`Recog = 新 Dura`。
+    #[test]
+    fn lamp_frame_recog_is_the_new_durability() {
+        let (mut w, p) = lamp_world(1501, 0, true);
         let out = lamp_after_500ms(&mut w);
         assert_eq!(
             out,
             vec![LampDuraChange {
                 actor_id: p,
-                recog: 1499
+                recog: 1500
             }],
             "`:2274` ⇒ Recog = 新 Dura（不是 Param）"
         );
         assert_eq!(
             w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
-            1499
+            1500
         );
     }
 
-    /// 判据 ①（反面）：不跨千位 ⇒ 耐久照减、**零帧**（`:2274` 的门不成立）。
+    /// `DecLampDura = false`：耐久**不扣**，但 oracle 的两侧口径仍不同（左截断、右四舍五入）
+    /// ⇒ `D % 1000 ∈ 500..=999` 时**每周期都发**一条 `Recog = 当前 Dura`（oracle 既有行为）。
     #[test]
-    fn lamp_within_same_thousand_bucket_emits_zero_frames() {
-        let (mut w, p) = lamp_world(2600, 0, true);
-        assert!(lamp_after_500ms(&mut w).is_empty());
+    fn lamp_dec_lamp_dura_false_still_emits_when_rounding_differs() {
+        // 1500：trunc(1.5)=1 vs round(1.5)=2 ⇒ 发，且 Dura 不变。
+        let (mut w, p) = lamp_world(1500, 0, true);
+        w.set_weapon_durability_config(false, 7);
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 1500
+            }],
+            "耐久未变但两侧取整口径不同 ⇒ 仍发一条（oracle 既有怪癖）"
+        );
         assert_eq!(
             w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
-            2599
+            1500
+        );
+
+        // 1499：trunc(1.499)=1 vs round(1.499)=1 ⇒ 零帧。
+        let (mut w2, p2) = lamp_world(1499, 0, true);
+        w2.set_weapon_durability_config(false, 7);
+        assert!(lamp_after_500ms(&mut w2).is_empty());
+        assert_eq!(
+            w2.entities.get(p2).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1499
         );
     }
 
@@ -11848,18 +11924,18 @@ mod weapon_durability_tests {
     /// 判据 ③（负例）：`SpecialPwr != 0`（非火把/蜡烛）或模板缺失 ⇒ 完全不动、零帧。
     #[test]
     fn lamp_non_lamp_item_or_missing_template_is_untouched() {
-        let (mut w, p) = lamp_world(1500, 1, true);
+        let (mut w, p) = lamp_world(1501, 1, true);
         assert!(lamp_after_500ms(&mut w).is_empty());
         assert_eq!(
             w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
-            1500
+            1501
         );
 
-        let (mut w2, p2) = lamp_world(1500, 0, false);
+        let (mut w2, p2) = lamp_world(1501, 0, false);
         assert!(lamp_after_500ms(&mut w2).is_empty());
         assert_eq!(
             w2.entities.get(p2).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
-            1500
+            1501
         );
     }
 
@@ -11996,18 +12072,21 @@ mod weapon_durability_tests {
     /// 周期门：500ms 内重复调用 ⇒ 只结算一次（`DecLightItemDrugTime`，`:257-262`）。
     #[test]
     fn lamp_cycle_is_throttled_to_dec_light_item_drug_time() {
-        let (mut w, p) = lamp_world(1500, 0, true);
+        let (mut w, p) = lamp_world(1501, 0, true);
         assert!(w.use_lamps().is_empty(), "首调初始化游标");
         w.clock_ms += 501;
-        assert_eq!(w.use_lamps().len(), 1);
+        assert_eq!(w.use_lamps().len(), 1, "1501 → 1500 跨界 ⇒ 一条 655");
         assert!(w.use_lamps().is_empty(), "同一周期内不重复结算");
         w.clock_ms += 500;
         assert!(w.use_lamps().is_empty(), "严格 `>` 门：恰 500ms 不算");
         w.clock_ms += 1;
-        assert!(w.use_lamps().is_empty(), "1499 → 1498 不跨千位 ⇒ 零帧");
+        assert!(
+            w.use_lamps().is_empty(),
+            "1500 → 1499：trunc(1.5)=1 与 round(1.499)=1 相等 ⇒ 零帧"
+        );
         assert_eq!(
             w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
-            1498
+            1499
         );
     }
 }

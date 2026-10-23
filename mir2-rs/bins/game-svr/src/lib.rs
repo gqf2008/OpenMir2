@@ -13984,7 +13984,7 @@ fn push_name_color_self(
 ///
 /// | 帧 | 上游生产者 | 发射点 | 处理器（→ `Recog`/`Param`） |
 /// |---|---|---|---|
-/// | `SM_LAMPCHANGEDURA(655)` | `PlayObject.Run` 的 `DecLightItemDrugTime` 周期块（`PlayObject.Message.cs:257-262`）⇒ `UseLamp()`（`:2233-2278`）；右手槽耐久 `-1`（`DecLampDura`） | 燃尽 `SendMsg(RM_LAMPCHANGEDURA, 0, 0, 0, 0)`（`:2265`）；跨千位 `SendMsg(RM_LAMPCHANGEDURA, 0, UseItems[RighThand].Dura, 0, 0)`（`:2274`） | `:1843` `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0, 0, 0)` ⇒ **`Recog = Dura`、`Param = 0`** |
+/// | `SM_LAMPCHANGEDURA(655)` | `PlayObject.Run` 的 `DecLightItemDrugTime` 周期块（`PlayObject.Message.cs:257-262`）⇒ `UseLamp()`（`:2233-2278`）；右手槽耐久 `-1`（`DecLampDura`）；千位门 = `Round((ushort)(Dura / 1000.0))`（**左值先截断**，`:2245`）vs `Round(nDura / 1000.0)`（右值四舍五入，`:2272`） | 燃尽 `SendMsg(RM_LAMPCHANGEDURA, 0, 0, 0, 0)`（`:2265`）；跨千位 `SendMsg(RM_LAMPCHANGEDURA, 0, UseItems[RighThand].Dura, 0, 0)`（`:2274`） | `:1843` `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0, 0, 0)` ⇒ **`Recog = Dura`、`Param = 0`** |
 /// | `SM_BREAKWEAPON(1102)` | `AttackDir`（`PlayObject.Attack.cs:25-31`；门 = 武器 `Index>0 && Desc[10]>0` **且 `attackTarget != null`**）⇒ `CheckWeaponUpgrade`（`PlayObject.cs:4110`）⇒ `Index==0` | `SendRefMsg(RM_BREAKWEAPON, 0, 0, 0, 0, "")`（`:4121`） | `PlayObject.Message.cs:2015-2017` ⇒ `Recog = 断武器者 ActorId`、其余 0 |
 ///
 /// # 世界侧
@@ -22887,7 +22887,6 @@ mod tests {
     fn fixed_npc_display_frames_through_production_aoi() {
         let mut world = mir2_world::World::new(100, 100);
         world.open_session("p");
-        world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
@@ -22968,7 +22967,6 @@ mod tests {
         use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
 
         let mut world = mir2_world::World::new(100, 100);
-        world.open_session("p");
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -23057,7 +23055,6 @@ mod tests {
         use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
 
         let mut world = mir2_world::World::new(100, 100);
-        world.open_session("p");
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -23231,7 +23228,6 @@ mod tests {
         // 种子：前两次 `Run` 的 RNG 支都不受击——否则会混入 `RM_HIT` 噪声，①/② 的条数断言失效。
         world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
         world.clock_ms = 100_000;
-        world.open_session("p");
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -23428,11 +23424,9 @@ mod tests {
         let mut world = mir2_world::World::new(100, 100);
         world.clock_ms = 100_000;
         world.open_session("p");
-        world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家 p 进图");
-        world.open_session("q");
         world.open_session("q");
         let q = world
             .enter_map("q", new_player_entity("q".to_string(), 50, 50), 0)
@@ -23656,7 +23650,6 @@ mod tests {
         world.rng = mir2_shared::rng::RandomNumber::with_seed(11);
         world.clock_ms = 100_000;
         world.open_session("p");
-        world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家 p 进图");
@@ -23810,7 +23803,6 @@ mod tests {
 
         let mut world = mir2_world::World::new(100, 100);
         world.open_session("p");
-        world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
@@ -23960,7 +23952,6 @@ mod tests {
     fn monster_display_path_not_regressed_next_to_npc() {
         let mut world = mir2_world::World::new(100, 100);
         world.open_session("p");
-        world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
@@ -24072,7 +24063,6 @@ mod tests {
     #[test]
     fn player_aoi_window_covers_view_range_12() {
         let mut world = mir2_world::World::new(100, 100);
-        world.open_session("p");
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -24241,7 +24231,6 @@ mod tests {
         use std::collections::HashMap;
 
         let mut world = mir2_world::World::new(100, 100);
-        world.open_session("p");
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -50570,7 +50559,6 @@ break
         world.enable_monster_ai();
         let guard = spawn_static_guard(&mut world, 281, 661, 5);
         world.open_session("p");
-        world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 291, 666), 0)
             .expect("玩家进图");
@@ -50646,7 +50634,6 @@ break
         let mut world = mir2_world::World::new(700, 700);
         world.enable_monster_ai();
         let guard = spawn_static_guard(&mut world, 281, 661, 5);
-        world.open_session("p");
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 291, 666), 0)
@@ -50803,7 +50790,6 @@ break
     #[test]
     fn world_aoi_diag_nearest_excludes_dead_ghost_and_expired() {
         let mut world = mir2_world::World::new(100, 100);
-        world.open_session("p");
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -58274,11 +58260,9 @@ mod tests {",
         let (mut world, id, mut online, gates, mut rx0, mut pending) = login_657_fixture();
         world.open_session("q");
         world.open_session("r");
-        world.open_session("q");
         let q = world
             .enter_map("q", new_player_entity("q".to_string(), 12, 10), 0)
             .expect("近邻进图");
-        world.open_session("r");
         let r = world
             .enter_map("r", new_player_entity("r".to_string(), 30, 30), 0)
             .expect("远邻进图");
@@ -58919,7 +58903,8 @@ mod weapon_durability_downlink_tests {
         );
     }
 
-    /// 判据 ①（帧面）：`Dura 1500 → 1499` ⇒ **恰好一条** `SM_LAMPCHANGEDURA(655)`，
+    /// 判据 ①（帧面）：`Dura 1501 → 1500`（oracle 口径 `trunc(1.501)=1 != round(1.5)=2`）⇒
+    /// **恰好一条** `SM_LAMPCHANGEDURA(655)`，
     /// `Recog = 新 Dura`、`Param/Tag/Series = 0`、12B 无尾；**只投自己**（同图另一玩家零帧）。
     #[test]
     fn lamp_durability_frame_is_one_655_with_durability_as_recog() {
@@ -58942,7 +58927,7 @@ mod weapon_durability_downlink_tests {
         world.entities.get_mut(p).unwrap().use_items[2] = mir2_world::entity::UseItemSlot {
             make_index: 1,
             index: 1,
-            dura: 1500,
+            dura: 1501,
             dura_max: 10_000,
             desc: [0u8; 14],
         };
@@ -58968,13 +58953,13 @@ mod weapon_durability_downlink_tests {
         assert_eq!(m.ident, 655);
         assert_eq!(
             (m.recog, m.param, m.tag, m.series),
-            (1499, 0, 0, 0),
+            (1500, 0, 0, 0),
             "线上字段 = `Recog: Dura`、`Param: 0`（`PlayObject.Socket.cs:17` 第 2 实参是 nRecog）"
         );
         assert_eq!(frames[0].1.len(), 12, "header-only，无尾");
         assert_eq!(
             frames[0].1,
-            smframe_ext::sm_lampchangedura(1499),
+            smframe_ext::sm_lampchangedura(1500),
             "必须走既有编码器（逐字节）"
         );
     }
