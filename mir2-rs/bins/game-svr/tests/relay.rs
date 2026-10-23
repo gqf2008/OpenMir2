@@ -22,6 +22,14 @@ use tokio::net::TcpStream;
 
 mod support;
 
+/// 「读配置失败即退出」子进程的退出上界（卡 `openmir2-test-waits-bounded-2`）。
+///
+/// 依据：本机实测 `missing_config_exits_nonzero` 子进程 **0.03s**（读配置即报错退出）；
+/// 取 **10s** = 实测的 ~333× 余量，与同仓 `game-svr/tests/relay.rs::missing_worldmaps_and_envir_exits_nonzero`
+/// 已用的 10s 同值（留的是慢机/CI 冷启动余量，不是「够不着的大数」）。
+/// 到界即 kill 进程树并 reap（见 `support::output_bounded`），不会挂死门禁。
+const MISSING_CONFIG_BOUND: Duration = Duration::from_secs(10);
+
 /// 十六进制串 → 字节（把**oracle 实测字节**原样钉进用例）。
 fn hex(s: &str) -> Vec<u8> {
     (0..s.len())
@@ -64,15 +72,38 @@ fn frame(ident: u8, socket: i32, session_id: u16, session_index: i32, body: &[u8
     v
 }
 
+/// 单次 socket 读的上界（卡 `openmir2-test-waits-bounded-2`）。
+///
+/// 依据：本机绿跑里 `GM_OPEN` → `GM_SERVERUSERINDEX` 的 localhost 往返远小于 1ms（同文件 `:161`
+/// 的 5s 外层超时从未触发），取 10s = 与同文件
+/// `missing_worldmaps_and_envir_exits_nonzero` 的子进程退出上界同值。**头/体各一次上界**，
+/// 覆盖所有直接 `recv_frame(..).await` 的裸读（本文件实测 13 处）。
+const FRAME_READ_BOUND: Duration = Duration::from_secs(10);
+
 async fn recv_frame(sock: &mut TcpStream) -> Option<(ServerMessage, Vec<u8>)> {
     let mut head = [0u8; ServerMessage::SIZE];
-    if sock.read_exact(&mut head).await.is_err() {
-        return None;
+    match tokio::time::timeout(FRAME_READ_BOUND, sock.read_exact(&mut head)).await {
+        Ok(Ok(_)) => {}
+        Ok(Err(_)) => return None, // 对端关闭（EOF）：照旧返回 None
+        Err(_) => panic!(
+            "期望读到 1 个帧头（{}B）：{FRAME_READ_BOUND:?} 内未读满（实得完整帧 0；超时时丢弃已读的部分字节），对端 {:?} 僵死 / 未回包？",
+            ServerMessage::SIZE,
+            sock
+        ),
     }
     let msg = ServerMessage::from_bytes(&head)?;
     let mut body = vec![0u8; msg.body_len()];
-    if !body.is_empty() && sock.read_exact(&mut body).await.is_err() {
-        return None;
+    if !body.is_empty() {
+        match tokio::time::timeout(FRAME_READ_BOUND, sock.read_exact(&mut body)).await {
+            Ok(Ok(_)) => {}
+            Ok(Err(_)) => return None,
+            Err(_) => panic!(
+                "期望读到 {}B 帧体（ident={}）：{FRAME_READ_BOUND:?} 内未读满（对端 {:?} 半帧僵死？）",
+                body.len(),
+                msg.ident,
+                sock
+            ),
+        }
     }
     Some((msg, body))
 }
@@ -263,16 +294,68 @@ async fn missing_config_exits_nonzero() {
     std::fs::create_dir_all(&dir).unwrap();
     let conf = dir.join("Server.conf");
     std::fs::write(&conf, "[Server]\nGateAddr=127.0.0.1\n").unwrap(); // 缺 GatePort/CheckBlock/WorldMaps
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
-        .arg(&conf)
-        .output()
-        .await
-        .unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"));
+    cmd.arg(&conf);
+    let out =
+        support::output_bounded(&mut cmd, "game-svr 缺配置非零退出", MISSING_CONFIG_BOUND).await;
     assert!(!out.status.success(), "缺配置必须非零退出（M1④）");
     let err =
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
     assert!(err.contains("缺键"), "错误信息应指明缺键，实得：{err}");
     std::fs::remove_dir_all(&dir).ok();
+}
+
+/// **超时路径不留残留**（卡 `openmir2-test-waits-bounded-2` 判据 ③）：一个**不会自己退出**的
+/// 子进程（真 `game-svr` 起栈监听）必须被上界兜住：kill 进程树、reap、端口释放。
+///
+/// 上界取 3s 是**故意**的：正常起栈到 bind 在本机 <1s（`Child::spawn` 的就绪门给 15s；
+/// `gm_open_gets_server_user_index_one_based` 单条实测 **0.11s** 完成「起栈 + 往返 + 杀掉」），
+/// 3s 足够穿过 bind 阶段，从而「kill 后端口不可连」是有意义的断言；这不是生产等待上界
+/// （各调用点按实测取 10s / 90s，见 `MISSING_CONFIG_BOUND` 与 `login-srv` 的 `MYSQL_EXIT_BOUND`）。
+/// 牙：去掉 `try_output_bounded` 的 kill/reap ⇒ 端口一直可连 ⇒ 本用例红。
+#[tokio::test]
+async fn output_timeout_kills_child_and_releases_port() {
+    let port = support::next_port();
+    let dir = support::unique_temp_dir("gs-timeout-kill");
+    let _guard = support::TempDirGuard(dir.clone());
+    write_conf(
+        &dir,
+        port,
+        12288,
+        support::next_port(),
+        support::next_port(),
+        "64x64",
+    );
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"));
+    cmd.arg(dir.join("Server.conf"));
+    let started = std::time::Instant::now();
+    let diag = support::try_output_bounded(&mut cmd, Duration::from_secs(3))
+        .await
+        .expect_err("常驻的 game-svr 不可能在 3s 内退出 ⇒ 必须有界失败");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed >= Duration::from_secs(3) && elapsed < Duration::from_secs(15),
+        "必须在 3s 上界处快速失败（不是挂起）；实得 {elapsed:?}；诊断：{diag}"
+    );
+    assert!(
+        diag.contains("已 kill 进程树"),
+        "诊断必须说明已 kill 子进程；实得：{diag}"
+    );
+    // 进程被 kill ⇒ 端口必须在有界时间内不再可连（显式证明「不留端口」）。
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_err()
+        {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "game-svr 已被 kill，但端口 {port} 仍可连 ⇒ 子进程/端口残留"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 /// 合成一张全 `Walk` 的 `.map`（52B 头写 W/H，随后每格 12B）。

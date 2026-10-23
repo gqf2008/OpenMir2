@@ -21,6 +21,14 @@ use tokio::sync::oneshot;
 // 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
 mod support;
 
+/// 「读配置失败即退出」子进程的退出上界（卡 `openmir2-test-waits-bounded-2`）。
+///
+/// 依据：本机实测 `missing_config_exits_nonzero` 子进程 **0.03s**（读配置即报错退出）；
+/// 取 **10s** = 实测的 ~333× 余量，与同仓 `game-svr/tests/relay.rs::missing_worldmaps_and_envir_exits_nonzero`
+/// 已用的 10s 同值（留的是慢机/CI 冷启动余量，不是「够不着的大数」）。
+/// 到界即 kill 进程树并 reap（见 `support::output_bounded`），不会挂死门禁。
+const MISSING_CONFIG_BOUND: Duration = Duration::from_secs(10);
+
 /// 起一个"假 DBSrv"：接受一条连接，把收到的第一条 Data 帧原样回给同一 SocketId。
 /// 返回 (端口, 收到的帧 Vec)。
 async fn fake_login_srv() -> (
@@ -196,11 +204,10 @@ async fn missing_config_exits_nonzero() {
     std::fs::create_dir_all(&dir).unwrap();
     let conf = dir.join("config.conf");
     std::fs::write(&conf, "[SelGate]\nServerAddr0=127.0.0.1\n").unwrap(); // 缺端口等键
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_sel-gate"))
-        .arg(&conf)
-        .output()
-        .await
-        .unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_sel-gate"));
+    cmd.arg(&conf);
+    let out =
+        support::output_bounded(&mut cmd, "sel-gate 缺配置非零退出", MISSING_CONFIG_BOUND).await;
     assert!(!out.status.success(), "缺配置必须非零退出（M1④）");
     let err =
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);

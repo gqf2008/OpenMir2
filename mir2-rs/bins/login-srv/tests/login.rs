@@ -23,6 +23,16 @@ use tokio::net::TcpStream;
 // 无竞态端口 / 就绪门（`next_port()` 与 `game-svr/tests/support/mod.rs` 逐行同口径）。
 mod support;
 
+/// 「缺配置 / 缺 AddrTable」子进程的退出上界。依据：本机实测 **0.05s**（读配置即报错退出）；
+/// 取 10s = 实测的 ~200× 余量。
+const QUICK_EXIT_BOUND: Duration = Duration::from_secs(10);
+
+/// 「连不上 MySQL」子进程的退出上界。依据：本机实测 **30.10s** ——
+/// `login-srv` 对必不通的 DSN（`127.0.0.1:3399`）先耗尽 MySQL 连接超时才打印「SQL 连接失败」并退出
+/// （本机基线 `login.rs` target 4 条用例合计 **30.22s**，该条占绝大部分）；取 **90s** = 3× 实测，
+/// 只为兜住「连接器卡死」，不改变正常路径的耗时。
+const MYSQL_EXIT_BOUND: Duration = Duration::from_secs(90);
+
 /// C# 金标准（`oracle_capture.py` 产出）。
 const ORACLE: &str = include_str!("../../../tests/parity/loginsrv/oracle-bytes.json");
 
@@ -298,11 +308,9 @@ async fn responses_match_csharp_oracle_bytes() {
 async fn missing_config_exits_nonzero() {
     let dir = lab_dir("noconf");
     std::fs::write(dir.join("logsrv.conf"), "[Server]\nGatePort=0\n").unwrap();
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"))
-        .arg(dir.join("logsrv.conf"))
-        .output()
-        .await
-        .unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    cmd.arg(dir.join("logsrv.conf"));
+    let out = support::output_bounded(&mut cmd, "login-srv 缺配置非零退出", QUICK_EXIT_BOUND).await;
     assert!(!out.status.success(), "缺配置必须非零退出（M1④）");
     let text =
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
@@ -319,11 +327,14 @@ async fn missing_config_exits_nonzero() {
     )
     .unwrap();
     std::fs::write(dir2.join("UserLimit.txt"), gbk("热血传奇 g 10000\n")).unwrap();
-    let out2 = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"))
-        .arg(&conf2)
-        .output()
-        .await
-        .unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    cmd.arg(&conf2);
+    let out2 = support::output_bounded(
+        &mut cmd,
+        "login-srv 缺 AddrTable 非零退出",
+        QUICK_EXIT_BOUND,
+    )
+    .await;
     assert!(
         !out2.status.success(),
         "缺 AddrTable 必须非零退出（A-11/M1④）"
@@ -349,11 +360,14 @@ async fn mysql_unreachable_exits_nonzero() {
         support::next_port(),
         "server=127.0.0.1;port=3399;uid=root;pwd=;database=mir2_account;",
     );
-    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"))
-        .arg(&conf)
-        .output()
-        .await
-        .unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    cmd.arg(&conf);
+    let out = support::output_bounded(
+        &mut cmd,
+        "login-srv 连不上 MySQL 非零退出",
+        MYSQL_EXIT_BOUND,
+    )
+    .await;
     assert!(!out.status.success(), "连不上 MySQL 必须非零退出（M1④）");
     let text =
         String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
