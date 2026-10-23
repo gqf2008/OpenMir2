@@ -106,7 +106,7 @@ python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py check --str
 python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py selftest              GREEN（台账 sha256 前后一致 `2047afa2…`）
 python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check        ALL PASS 558 条
 python -I -B mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit  GREEN（无重复编号；夹具 token 唯一）
-python -I -B mir2-rs/tests/parity/gm/gm_registry.py gate                   GREEN 74 条
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py gate            GREEN 74 条
 python -I tools/whitelist/t_reservation_gate.py check                      GREEN（rows=251 / whitelist=251 / max=T-264 / malformed=0）
 ```
 
@@ -165,7 +165,7 @@ python -I -B tools/probe/mir2_probe.py --login-gate <csharp-gate-host:port> \
 
 ## 7. 交付头
 
-- head：`见线程 `patch` 条目（本文件与代码同一提交；其 `head` 即交付头）`
+- head：见线程 `patch` 条目（本文件与代码同一提交；其中 `refs.head` 即交付头）
 - 真实 merge-base（`git merge-base refs/remotes/walgit/master HEAD`）：`19009c6a0`
 - `npc.rs`（`git show <head>:mir2-rs/bins/game-svr/src/npc.rs`）：`c1f7ab01ce1258e43ae1c61d4b76b1612311ab84e2364c36575c1335d828668f`
 - `actions.rs`（`git show <head>:mir2-rs/crates/script/src/engine/actions.rs`）：`346de17549e9bf95d5aee4ebd7f2bf7ec203136b97d8e79f5f4d1d7a8278f4c2`
