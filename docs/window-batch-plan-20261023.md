@@ -447,14 +447,14 @@ python -I tools/goal/goal_gate.py --json
 | **新规则已合（只影响比较器）** | 7 条被 `recog` 掩码吞掉的规则、`202/203/642/709` 补登记、`SM_STRUCK(31)` 窄掩码 | `b42f20a8` / `6c2da8bf` / `57302d3df`；`tools/conformance/rules.json` 现含 ident 31/201/202/203/642/709（本条为**实测算**：脚本 enumerate 42 条规则） |
 | **新场景已合** | `upgrade_retrieve`、`equip_struck_save`、`spell_cast`、`combat_strike`、`combat_hit`（改 blocked） | `tools/probe/scenarios/` 现 **20** 个场景（实测算）；其中 **2** 个声明 `blocked`（`combat_hit` / `combat_strike`；`spell_cast` 已由卡 `openmir2-spell-cast-unblock` 解封，见 7.4） |
 | **新夹具/工具已合** | `characters_magic` 预置、BLOCKED 硬门、`-WhatIf` sha/构建类型 | `512d9ecf5`（magic）、`8dac04eb0`（blocked 门）、`821492abf`（whatif）；本行只说明夹具代码已合，**场景层是否解锁见 7.4 `spell_cast` 行** |
-| **2026-10-24 订正：两项均已合入（原文「在办（未合）」已过期）** | 背包 `inventory` 预置（`bb4317a01`）；`preflight.py`（`2e3b8500a`） | inventory：卡 `openmir2-window-inventory-fixture` 已合入 master `bb4317a01`（merge_result `66be47452`；卡**不 closed**——reviewer-6 记 `window_required=true`，真库写入/读回未跑）；`tools/conformance/card_window.py` 已支持 `inventory`（grep 80 命中），但 `bag_equip`/`eat_item` 场景**尚未声明** `inventory`。preflight：**已合入 master `2e3b8500a`**（卡 `openmir2-window-preflight-script` closed，approve reviewer-5 `f13a28be`；2026-10-24 订正——原文「head `deea8d3d0` 非 master 祖先、`git ls-tree` 0 命中」已过期） |
+| **2026-10-24 订正：两项均已合入（原文「在办（未合）」已过期）** | 背包 `inventory` 预置（`bb4317a01`）；`preflight.py`（`2e3b8500a`） | inventory：卡 `openmir2-window-inventory-fixture` 已合入 master `bb4317a01`（merge_result `66be47452`；卡**不 closed**——reviewer-6 记 `window_required=true`，真库写入/读回未跑）；`tools/conformance/card_window.py` 已支持 `inventory`（grep 80 命中），但 `bag_equip`/`eat_item` 场景的 `inventory` 声明已随 `c4b66ddb1` 接通（`cb097a11f`）⇒ 两者已移入 §7.4（原文「尚未声明」已过期；真机窗口仍未跑）。preflight：**已合入 master `2e3b8500a`**（卡 `openmir2-window-preflight-script` closed，approve reviewer-5 `f13a28be`；2026-10-24 订正——原文「head `deea8d3d0` 非 master 祖先、`git ls-tree` 0 命中」已过期） |
 
 > **概念边界（review A-4）**：`tools/conformance/rules.json` 是**比较器掩码规则**——它只决定 `compare_runs` 能否/如何判某个 ident 的帧，**不等于 Rust 生产侧会出这条帧**。一条场景判定「能跑」必须有两条独立依据：① 场景不在自身 `blocked` 列表；② 判据涉及的关键帧在 Rust 生产侧有实现点（或场景 `required` 可发现）。`rules.json` 里有 ident，只满足「比较器能判」，不满足 ②。
 
 ### 7.2 旧批次（§3.1P / 1F / 2A / 2B / 3 / 4）怎么变
 
 - **2A（需新发现规则）**：规则已合只解锁**比较器**，不解锁 Rust 出帧。依赖 `202/203/709` 且 Rust 实现点已接的条目（如 `upgrade_retrieve`）可移入「现在能跑」；**依赖 `642` 的 `equip_struck_save` 已接线**（2026-10-24 订正：卡 `openmir2-attack-weapon-wear-642` 合入 master `8dcb8c8ca`，T-266；`card_window --dry-run --scenario equip_struck_save.json` rc=0）⇒ 已移入 §7.4。
-- **2B（需 `SM_BAGITEMS(201)` 规则）**：规则已在 `rules.json`（ident 201），背包 `inventory` 夹具**已合入 `bb4317a01`**（工具侧 `card_window.py` 支持 `inventory` 声明）——**2026-10-24 订正：原文写「夹具未合」已过期**；但 master 的 `bag_equip`/`eat_item` 场景**尚未写 `inventory` 声明**，且夹具卡 acceptance ④（真库写入·读回）未跑、保持 `window_required=true` ⇒ 二者仍不可跑，直到场景侧补声明（现无承接卡，建议开卡或在场景卡里补）。
+- **2B（需 `SM_BAGITEMS(201)` 规则）**：规则已在 `rules.json`（ident 201），背包 `inventory` 夹具**已合入 `bb4317a01`**（工具侧 `card_window.py` 支持 `inventory` 声明）——**2026-10-24 订正：原文写「夹具未合」已过期**；master 的 `bag_equip`/`eat_item` **场景级 `inventory` 声明已随 `c4b66ddb1` 接通**（`cb097a11f`）⇒ **二者已移入 §7.4「现在就能跑」**（前置=场景自描述 `inventory`；profile 顶层 `inventory` 仍被静默忽略）；夹具卡 acceptance ④（真库写入·读回）未跑、保持 `window_required=true` ⇒ **真机窗口仍未跑**。
 - **3（需新帧/新场景/新夹具）**：`upgrade_retrieve` 可跑，理由是 **Rust 升级接缝已接**（卡 `openmir2-upgrade-npc`，T-95）：`bins/game-svr/src/shop.rs:1346 upgrade_request_for` → `bins/game-svr/src/lib.rs:5741` → `crates/world/src/merchant.rs:1348 merchant_upgrade_wapon_begin`；**不是**因为 `rules.json` 有 202/203/709。`equip_struck_save` **已随 `8dcb8c8ca` 接线（T-266）并移入 §7.4「现在就能跑」**（2026-10-24 订正——原句「仍不可跑（缺 642，见 7.3）」已由该 commit 变假；真机窗口仍未授权）；`spell_cast` **已解封并移入 §7.4「现在就能跑」**（卡 `openmir2-spell-cast-unblock` 删去 `blocked`；夹具改由 profile `magic` 段声明，dry-run 取证须带 `--profile`）。2026-10-24 订正：原句「Rust 侧魔法落点 + 第二观察者仍未接 ⇒ 真机仍跑不了」已由卡 `openmir2-spell-cast-window-blockers`（`65d6e7134`）逐条否证——关键帧 638/639 的 Rust 生产链完整、判据不需要第二观察者；真挡项是比较器缺 53/638/639 规则，已由 `openmir2-spell-frame-compare-rules`（`89a3d02fd`）补齐（补前 UNDECIDABLE rc=2 → 补后 PASS rc=0）。**真机窗口仍未跑**。
 - **1P/1F**：不受影响；但注意 `combat_hit` 已从「可跑」移入「跑也没用」（7.3）。
 - **4（不可协议对拍 35 张）**：本卡不改其口径；其中多会话收件人集合类仍等 `openmir2-multi-session-probe` slice-2。
@@ -472,7 +472,7 @@ python -I tools/goal/goal_gate.py --json
 
 ### 7.4 「现在就能跑」最小清单（现算）
 
-**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **11 行 / 16 个场景**。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中只剩 `combat_hit` / `combat_strike` 两个 `blocked`）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item`（场景未声明 `inventory`）仍在 §7.4 末尾「仍不可跑」。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
+**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **12 行 / 18 个场景**。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中只剩 `combat_hit` / `combat_strike` 两个 `blocked`）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item` 已由「场景自描述 `inventory`」（工具侧 `bb4317a01`、场景侧 `c4b66ddb1` 接通）移入本表，前置见行内（**profile 顶层 `inventory` 会被静默忽略，声明只能写在场景 JSON 里**）。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
 | 场景 | `required` | 引用 T 行（现算） | 跑前还需 |
 |---|---|---:|---|
 | `login_only` | — | 14 | 角色预置位（场景可声明 `placement`） |
@@ -480,6 +480,7 @@ python -I tools/goal/goal_gate.py --json
 | `move_walk` | `move_x/move_y/move_xy`（`computed.pack`，本日已支持） | 0 | 空格目标格 |
 | `upgrade_retrieve` | `merchant_actor`（643 推导） | 0 | 商店 NPC 摆位（沙巴克铁匠 (332,317) 西南邻格 (320,328)）；**武器在手、金币 ≥ 10000、背包有黑铁矿**（三项缺一，第 9 步 `wait_idents 709` 必红；场景 note 原文） |
 | `equip_struck_save` | — | 1（`T-247`） | 商店 NPC「卫家店」摆位（map 0103, 19,18）+ 铁器店 `placement`；642 已接线（`8dcb8c8ca`，T-266），**真机窗口未授权**；破零支会发两条 642（`202 → 642(0) → 642(0)`） |
+| `bag_equip` / `eat_item` | `make_index` / `takeon_where` / `item_name`（bag）；`make_index` / `item_name`（eat） | 3 / 1 | **场景自描述 `inventory`**（bag：木剑 `make_index=5001` @ `position=40`；eat：金创药(小量) `make_index=5002` @ `position=41`；场景声明随 `c4b66ddb1` 合入，工具侧 `bb4317a01`），`--dry-run` 两侧各 1 行预览、rc=0（2026-10-24 实测）；**前置只能写场景 JSON 的 `inventory`——profile 顶层 `inventory` 会被静默忽略**；夹具卡 acceptance ④（真库写入·读回）未跑，**真机窗口仍未跑** |
 | `dice_chain` / `dice_chain_auto` | — / — | 3 / 2 | 赌场 NPC |
 | `npc_click` / `npc_click_auto` | `npc_actor` | 1 / 0 | 场景 `placement` |
 | `king_dialog` / `merchant_dialog` / `npc_script_chain` | `king_actor` / `merchant_actor` / `npc_actor` | 0 / 1 / 1 | 场景 `placement` |
@@ -487,11 +488,7 @@ python -I tools/goal/goal_gate.py --json
 | `gm_time` / `gm_batch` | — | 0 / 0 | 无 |
 | `spell_cast` | —（无参数发现） | 5 | profile 需 `magic` 段（场景 `requires:["magic"]`，缺段加载期 rc=2）**且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT=0`（值是字符串 `"0"`；否则 53 body Rust 16 vs C# 0 ⇒ `body_len` fail-closed）；两段可抄写法见 `tools/probe/scenarios/README.md`「窗口 profile 前置：`spell_cast` 必须 pin D-9」与同文件「`requires`」节；**真机窗口仍未跑** |
 
-**仍不可跑（依赖在办/未接，等合并或接线后再移入上表）**：
-
-| 场景 | 引用 T 行（现算） | 依赖（卡 / 分支 / head） | 说明 |
-|---|---:|---|---|
-| `bag_equip` / `eat_item` | 3 / 1 | 卡 `openmir2-window-inventory-fixture` **已合入 `bb4317a01`**（卡不 closed：`window_required=true`，真库写入/读回未跑；2026-10-24 订正） | `card_window.py` 已支持 `inventory`，但**这两个场景尚未声明** ⇒ 仍按手工 DB 夹具跑，或先在场景里补 `inventory` |
+**仍不可跑**：**无**（上表 18 个场景全部可跑；`bag_equip`/`eat_item` 已于 2026-10-24 移入上表）。两个 `blocked` 场景 `combat_hit` / `combat_strike` 见 §7.3「跑也没用」；`castle_zone` 为不可达登记（仓库内无该场景文件，见 §7.3）。
 
 ### 7.5 判据口径（写给开窗的 owner）
 
