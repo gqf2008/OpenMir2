@@ -97,6 +97,15 @@
     **权威身份是 `refs/collab/*` 的签名条目**（每个 worktree 一把 Ed25519，见 §0），git author 只是工作副本的配置噪声。
     引用证据时写「签名条目 actor + oid」，不要把 git author 当作者；也不要因此判定审计链断裂。
 
+17. **mutation runner 就地改写 tracked 文件——绝不能跑在「即将提交的树」上**（2026-10-23 21:4x 实测）：
+    我在主检出对合并树跑 `selftest_mutations.py`，它在 `card_window.py` 里留了一条 **live mutation**
+    （`verdict_reason: "compare_fail" → "ok"`）、而合并**已 staged** ⇒ 那一刻提交就会把这条变异一起提交。
+    发现方式：`git status` 出现 `MM`（staged + unstaged 同时改同一文件）、`git diff` 看到一行语义反转。
+    ⇒ **规则**：① mutation/牙 一律在 **worktree 副本**上跑（`E:/tmp/<lane>-teeth`），不在主检出跑；
+    ② 每次提交前 `git diff` 必须为空（`MM` 就是警报）；③ 若 runner 被中断，**先 `git checkout -- <file>`
+    还原**，再比 `sha256sum <file>` 与 `git show :<file> | sha256sum` 一致才提交。
+    与第 11 条同族：门禁工具本身会弄脏树（stale 二进制是另一例）。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
