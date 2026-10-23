@@ -104,12 +104,43 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
 - ⑥ **推导与规则分栏（reviewer A-1）**：无 643 时 `npc_actor` 走 `SM_TURN` 规则 ⇒ `cls=rule`；有 643 ⇒ `cls=derived`。
   把 `kind == "rule"` 判定改坏 ⇒ 红。
 
-## 5. 与 `card_window.py` 的接线（另卡 `openmir2-window-discovery-wiring`，不在本卡写集）
+## 5. 与 `card_window.py` 的接线（卡 `openmir2-window-discovery-wiring`，已落地）
 
-- `card_window.py` 增加 `--discover`：先跑 discovery，再把派生值拼进每个场景的 `--var`；
-- `run_dual.sh` 两侧各自 discovery（不共享 ActorId），各自落 `discovered.json`；
-- **discovery 场景必须点击一次**（`click_npc: "auto:last_turn"`）+ 收 643，否则 `merchant_actor` 永远 fail-closed；
-- 接线完成后，`--check-scenario` 的结果必须能用 `check-all ... --allow-missing=N` 机判（N = 不可推导清单长度）。
+`card_window.py` 的发现阶段（每个场景的编排顺序）：
+
+```text
+restore -> 起栈 -> 等就绪 -> discover（每侧各自一次 probe run）
+        -> 从**本侧** discovery 帧推导 required -> 拼 --var -> probe（真正的场景）-> 抓库 -> 停栈
+```
+
+- **触发**：场景声明了 `required` 就**自动**启用；`--discover` 可对无 required 的场景强制开
+  （只多一份发现证据，不会生成 `--var`）。不声明 required 的场景**不跑** discovery（不增加窗口成本）。
+- **discovery 场景**：默认 `tools/probe/scenarios/npc_click_auto.json`（`click_npc: "auto:last_turn"`
+  + 等 643/100），可用 `--discovery-scenario` 覆盖。**必须点击一次 NPC**：登录期收帧没有 643，
+  `merchant_actor` 会永远 fail-closed（§2.1 代价 2）。发现 run 的产物落 `<out>/<side>/discovery/`，
+  与真正场景的 `frames.ndjson` 分开，**不污染比较输入**。
+- **两侧各自发现**：每侧跑自己的 discovery、从本侧帧推导、用本侧的值拼 `--var`；
+  ActorId 每会话不同属于正常（比较器掩码 `recog`），两侧**绝不共享**推导结果。
+- **证据**：每侧 `<out>/<side>/discovered.json`（`format=param-discovery/1`：`values{value,kind,rule,
+  oracle,source{ident,field,seq}}` / `argv` / `missing` / `missing_reasons` / `frames_sha256` /
+  `discovery_probe_argv`），两侧汇总 `<out>/discovered.json`（`format=discovered/1`：`sides` /
+  `complete` / `consistent` / `checks[]`）。两份都进 `artifacts` 的 sha256 清单与 README。
+- **fail-closed**（任一 => 该次 rc=2）：
+  1. 推导失败：该侧**点名缺哪个变量**（`missing_reasons` 复用本模块 `REASONS`/`UNDERIVABLE`），
+     该侧**不跑场景**、不抓库（命令序列到 `stop` 为止）；
+  2. discovery probe 本身失败 / 帧坏行（`DiscoveryError`）：同样 rc=2；
+  3. 跨侧不一致（`cross_side_consistency`）：同一变量两侧 `kind` 不同（一侧 `derived`、
+     另一侧落到 `rule` 部署假设）**或**非会话变量（`self_x/self_y` 等）取值不同 => rc=2。
+     会话作用域变量 `king_actor/merchant_actor/npc_actor` 取值不同**允许**，在 `checks` 里记
+     `differs_expected(session_scoped)`。
+- **离线预览**：`--dry-run` 会打印 `discover` + 带 `--var` 的 `probe` 命令序列。加
+  `--discovery-frames '<已录 frames>'`（支持 `{side}` 占位符）用回放推导**真实值**；回放推不出
+  => 预览 rc=2 且不打印场景命令。不给 `--discovery-frames` 时值渲染成
+  `<discovered:NAME>` 占位符（只预览接线，**绝不发明数值**）。
+- **`run_dual.sh` 不改**（0 字节 diff）：它是底层语义参照，窗口批处理统一走 `card_window.py`；
+  接线不在 shell 里做，避免同一逻辑两套实现。
+- 不可推导的 6 个场景（`make_index/item_name`、`target_*`、`move_*`、`king_actor`）仍然
+  fail-closed 并点名变量——等 201 录制/新场景另卡，本接线不改变 §7 的改判口径。
 
 ## 6. 返工实测账目（2026-10-23，worker-64，master `14864309e`）
 
