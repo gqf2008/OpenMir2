@@ -3,9 +3,10 @@
 - 卡片：`openmir2-scenario-spell-cast`（tier=L）
 - 交付物：`tools/probe/scenarios/spell_cast.json` + `tools/probe/scenarios/README.md` 段 + 本文
 - 状态：**夹具已解 / 场景可 dry-run / 真机窗口待授权**（卡 `openmir2-spell-cast-unblock`，
-  pin = master `bb4317a01`）。`characters_magic` 夹具由卡 `openmir2-window-magic-fixture`
-  （master `512d9ecf5`）提供，**通过 profile 的 `magic` 段声明**（§7）；profile 不声明时仍
-  fail-closed 必红（设计意图：夹具缺失必须显式红，不许假绿）。真机双栈对拍**尚未跑**。
+  base = master `a112e59b5`）。`characters_magic` 夹具由卡 `openmir2-window-magic-fixture`
+  （master `512d9ecf5`）提供，**通过 profile 的 `magic` 段声明**（§7）。⚠️ profile 不声明 magic 时：
+  **真跑**会在 `wait_for 638/639` 上超时红（不会出假 PASS），但 **dry-run 会 rc=0 且静默跳过夹具
+  （假绿）**——取证必须带 `--profile`（见 §7 顶部警告）。真机双栈对拍**尚未跑**。
 
 ---
 
@@ -159,10 +160,19 @@ case Messages.RM_SPELL:
 `MonGen.txt` 无 `0122` 行（零刷怪）、`GuardList.txt` 的卫士全在 map 0、`MerChant.txt` 无 `0122` 行
 ⇒ 两次施法之间不会被敌对目标打断（对照 `upgrade_retrieve` 踩过的 ArcherGuard 坑）。
 
-## 7. 夹具（profile `magic` 段；缺声明则场景 fail-closed）
+## 7. 夹具（profile `magic` 段；缺声明则 dry-run 假绿、真跑必红）
+
+> ⚠️ **必读：默认 `alt` profile 下的 dry-run rc=0 是「假绿」。** 本场景需要 `characters_magic` 夹具，
+> 而夹具**只**由 profile 的 `magic` 段声明；内置 `alt` profile 没有 `magic` 段时，`card_window`
+> **不会 fail-closed**（`profile_magic` 在 profile 无 `magic` 键时 `return None`，dry-run 的 magic
+> 段整段跳过）⇒ **rc=0 但根本不会预置 `characters_magic`**。真跑仍会在 `wait_for 638/639` 上超时红，
+> 所以**不会出假 PASS**，但 dry-run 绿会被误读成「场景可跑」，可能白占窗口。
+> ⇒ **任何取证 / 排窗口前必须带 `--profile <声明了 magic 段的 profile.json>`。**
+> 工具级 fail-closed（场景显式声明所需夹具 `requires`，profile 未提供时 rc=2 并点名）由承接卡
+> **`openmir2-scenario-fixture-precondition`** 落地；该卡合并前请按本条手工把关。
 
 **状态（2026-10-24，卡 `openmir2-spell-cast-unblock`）：夹具已解。** 夹具实现随卡
-`openmir2-window-magic-fixture` 合入 master `512d9ecf5`（本文 pin = master `bb4317a01`）：
+`openmir2-window-magic-fixture` 合入 master `512d9ecf5`（本文 base = master `a112e59b5`）：
 `tools/conformance/card_window.py` 的 `profile_magic`（:1863）、`run_magic`（:1943）、
 `preview_magic`（:2059）；声明形状在加载期 fail-closed 校验（`_validate_magic_list`，:1817，
 `check_profile` 对两侧各调一次，:687-689）。
@@ -179,8 +189,11 @@ case Messages.RM_SPELL:
 - `use_key` 必须是单个 ASCII 可见字符（本场景 `"1"`）；`level` 0..3；`magic_id` 1..65535。
 
 **预置确实在起栈之前**：真跑 `restore → placement → magic → 端口检查 → stack`
-（`card_window.py:2181` restore、`:2191` placement、`:2208-2219` magic、`:2229` 端口、`:2241` stack）；
-`--dry-run` 同一顺序（`:2864` placement、`:2881` magic、`:2897` stack）。`run_magic` 写的是各侧
+（`card_window.py:2449` restore、`:2457` placement（`run_placement` 调用）、`:2486-2498` magic（`run_magic`
+调用 `:2491`）、`:2504` 端口（`check_ports_free`）、`:2514` stack）；`--dry-run` 同一顺序（`:3147` placement、
+`:3163-3166` magic、`:3173` 端口、`:3177` stack）。以上行号为**返工 head 实测** —— `card_window.py`
+不在本卡写集、未被本卡改动（sha256 `6a7294a1…bdf3106`，与 base `a112e59b5` 同），可逐行 `sed -n` 复核。
+`run_magic` 写的是各侧
 **测试库**（`mir2_test_db` / `mir2_test_db_r`）的 `characters_magic`，写后读回校验
 `MagicId/Level/UseKey/CurrTrain`，并校验未声明行的行数/MD5 指纹不变。
 
@@ -203,22 +216,38 @@ VALUES (6228, 1, 0, '1', 0);
   即便放开，Rust 侧 `gmcmd::training_magic` 的落库路径与 oracle 是否逐字节一致也**未验**，
   那会把「夹具问题」变成「GM 命令 parity 问题」，判据更糊。
 
-**内置 `alt` profile 没有 `magic` 段**（pin `bb4317a01` 的 `BUILTIN_PROFILES["alt"]`，
-`card_window.py:287-355`）：要看到 magic 预置步骤，必须用
+**内置 `alt` profile 没有 `magic` 段**（base `a112e59b5` 的 `BUILTIN_PROFILES["alt"]`，
+`card_window.py:288-336`）：要看到 magic 预置步骤，必须用
 `--profile <声明了 magic 的 profile.json>`。本卡证据用的 profile 是
 `E:/tmp/spellcast-profile.json`（= 内置 alt + 上面的 `magic` 段；临时物，见 §9-6）。
 **只写 `spell_cast.json` 不能让 magic 预置出现** —— 场景文件不承载夹具，夹具声明在 profile。
 
 ### 7.1 离线证据（本卡实跑，2026-10-24）
 
+**两条并列命令、输出不同，别混读**（`--dry-run` 不建 `--out` 目录、不连库）：
+
 ```text
-$ python -I -B tools/conformance/card_window.py --selftest
-GREEN: card_window.py selftest 216/216          # MG-1..MG-7 全 PASS
+# ① 默认内置 alt profile：rc=0，但【没有】「魔法夹具」行 —— 假绿，只证明命令能跑
+$ python -I -B tools/conformance/card_window.py --dry-run \
+    --scenario tools/probe/scenarios/spell_cast.json \
+    --card openmir2-spell-cast-unblock --out E:/tmp/spellcast-dry
+[csharp] restore: bash E:/tmp/conformance/restore-baseline.sh
+[csharp] 预置位（dry-run 不连库）：map=0122 x=29 y=33 db=mir2_test_db 图=0122.map 51x55 可走
+[csharp] 端口预检：[15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17200, 17201, 17202]
+[csharp] 就绪等待：[15000, 17000, 17100, 17200]（timeout 120s）
+[csharp] stack: powershell ... start-csharp3.ps1
+[rust]   restore: bash E:/tmp/conformance/restore-baseline-r.sh
+[rust]   预置位（dry-run 不连库）：map=0122 x=29 y=33 db=mir2_test_db_r 图=0122.map 51x55 可走
+[rust]   端口预检：[15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17600]
+[rust]   就绪等待：[15000, 17000, 17100, 17600]（timeout 120s）
+[rust]   stack: powershell ... start-rust.ps1
+# rc=0；⚠️ 没有「魔法夹具」行 —— 这就是假绿
 
-$ python -I -B tools/probe/mir2_probe.py --check-scenario     --scenario tools/probe/scenarios/spell_cast.json
-scenario OK: spell_cast (5 steps, params=far_pos=2752541,magic_id=1,near_pos=1835037,self_pos=2162717)   # rc=0
-
-$ python -I -B tools/conformance/card_window.py --dry-run     --scenario tools/probe/scenarios/spell_cast.json     --card openmir2-spell-cast-unblock --out E:/tmp/spellcast-dry
+# ② 带声明 magic 段的 profile：rc=0，两侧各一条【魔法夹具】行 —— 本卡取证用的是这条
+$ python -I -B tools/conformance/card_window.py --dry-run \
+    --scenario tools/probe/scenarios/spell_cast.json \
+    --profile E:/tmp/spellcast-profile.json \
+    --card openmir2-spell-cast-unblock --out E:/tmp/spellcast-dry
 [csharp] restore: bash E:/tmp/conformance/restore-baseline.sh
 [csharp] 预置位（dry-run 不连库）：map=0122 x=29 y=33 db=mir2_test_db 图=0122.map 51x55 可走
 [csharp] 魔法夹具（dry-run 不连库）：db=mir2_test_db magic_ids=1
@@ -229,27 +258,45 @@ $ python -I -B tools/conformance/card_window.py --dry-run     --scenario tools/p
 [rust]   魔法夹具（dry-run 不连库）：db=mir2_test_db_r magic_ids=1
 [rust]   端口预检：[15000, ...]
 [rust]   stack: powershell ... start-rust.ps1
-VERDICT: DRY-RUN ...                             # rc=0
+# rc=0；两侧「魔法夹具」行都在
 ```
 
-注意：上面 `魔法夹具` 两行来自 `--profile E:/tmp/spellcast-profile.json`；用默认 `alt`
-profile 跑同一条命令也是 **rc=0**，但**不会**打印这两行（alt 没声明 `magic`，夹具被静默跳过）。
-这不是 bug，是「夹具只由 profile 声明」的直接后果；文档必须把这一点写死，否则别人照命令跑会以为
-夹具没生效。
+两条命令共用的离线门禁：
 
-### 7.2 Rust 侧 638/639 的现有用例（pin = master `bb4317a01`，五个用例实跑全绿）
+```text
+$ python -I -B tools/conformance/card_window.py --selftest
+GREEN: card_window.py selftest 216/216          # MG-1..MG-7 全 PASS
+
+$ python -I -B tools/probe/mir2_probe.py --check-scenario --scenario tools/probe/scenarios/spell_cast.json
+scenario OK: spell_cast (5 steps, params=far_pos=2752541,magic_id=1,near_pos=1835037,self_pos=2162717)   # rc=0
+```
+
+⇒ **① 的 rc=0 不能当夹具证据**：它只是 §7 顶部说的假绿通道。只有 ② 的输出（两侧「魔法夹具」行，
+位于「预置位」之后、「端口预检/stack」之前，与真跑同序）才算「夹具预置成立」。
+实跑记录（2026-10-24）：① `rc=0`、`grep -c 魔法夹具` = **0**；② `rc=0`、`grep -c 魔法夹具` = **2**。
+
+### 7.2 Rust 侧 638/639 的现有用例（base = master `a112e59b5`；五个用例实跑全绿）
 
 | 覆盖 | 用例（`cargo test -p game-svr --lib '<名>'`） | 断言行（`mir2-rs/bins/game-svr/src/lib.rs`） |
 |---|---|---|
-| 成功支 638（魔号 1、无目标、零抽） | `tests::spell_cmd_version_gate_double_zero_then_1018_recovers`（:50493） | 调用 `:50566-50584`（`tag=1`、`param=series=0` ⇒ target=0）；帧面 `:50589-50603` 断言自己+观察者各 1 条 `SM_MAGICFIRE`；`:50606-50608` 零抽 |
-| 成功支 638（魔号 1/5、带目标） | `tests::spell_p3b1_fireball_family_draw_order_and_frames`（:49719） | `:49742` 观察者恰 1 条、`:49747` 自己恰 1 条；`:49759-49765` ActorId/坐标 |
-| 距离门失败 639 | `tests::spell_cmd_distance_gate_failure_emits_exactly_one_639`（:47726） | `:47736-47737` 恰 1 帧、`:47741` 发给自己、`:47744-47745` ident=639 且逐字节、`:47766-47770` 零抽 |
-| 距离门失败 639（P1 魔号集） | `tests::spell_tail_p1_out_of_range_sends_only_639`（:49447） | 越界 ⇒ 只 639、无尾帧 |
-| `SM_SPELL` 自身不可见 | `tests::spell_frame_never_reaches_caster_connection`（:46848） | 施法者那条连接收不到自己的 17 |
+| 成功支 638（魔号 1、无目标、零抽） | `tests::spell_cmd_version_gate_double_zero_then_1018_recovers`（:50493） | 调用 `:50572-50594`（1018 后成功支；`tag=1`、`param=series=0` ⇒ target=0；双 0 分支调用在 `:50514-50536`）；帧面 `:50596-50604` 断言自己+观察者各 1 条 `SM_MAGICFIRE`（双 0 分支的 639 断言在 `:50538-50546`）；`:50605-50609` 零抽 |
+| 成功支 638（魔号 1/5、带目标） | `tests::spell_p3b1_fireball_family_draw_order_and_frames`（:49719） | 观察者恰 1 条 `:49737-49743`、自己恰 1 条 `:49744-49748`；ActorId/坐标 `:49758-49762`；6 抽 `:49763-49768` |
+| 距离门失败 639 | `tests::spell_cmd_distance_gate_failure_emits_exactly_one_639`（:47726） | 恰 1 帧 `:47735-47739`、发给自己 `:47741`、ident=639 `:47742-47746`、逐字节 `:47747-47751`、无 `SM_SPELL` `:47752-47757`、零抽 `:47765-47771` |
+| 距离门失败 639（P1 魔号集） | `tests::spell_tail_p1_out_of_range_sends_only_639`（:49447） | 越界 ⇒ 只 639、无 `SM_MAGICFIRE`/`SM_MAGIC_LVEXP` `:49456-49473`；零抽 `:49474` |
+| `SM_SPELL` 自身不可见 | `tests::spell_frame_never_reaches_caster_connection`（:46848） | 施法者那条连接收不到自己的 17 `:46852-46857`（仍收 `+GD` ack `:46858-46862`）；观察者恰 1 条 `:46863-46867` |
 
 `spell_cmd_distance_gate_failure_emits_exactly_one_639` 用的魔号是 14/8 而非 1：**距离门在
 `switch (MagicId)` 之前**（`MagicManager.cs:155` 早于 `:171` 的 switch），对魔号无依赖；
 魔号 1 的可用性由上面两行 638 用例覆盖。
+
+### 7.3 与 `docs/window-criteria-backfill-20261024.md` 的对账（review M-2）
+
+该文件**不在 master**，只存在于未合并分支 `card/window-criteria-backfill`（最新 head `d888dc393`），
+其 buff-system / spell_cast 相关行仍写「场景 BLOCKED / dry-run rc=2」。本卡写集不能直接改它，
+故把**逐行 old → new 替换**发到该卡的签名 comment：
+**`93639ec12325cf2e56df56d20b3eb348e5f9c46f`**
+（12 条替换：行 63 / 70 / 263-266 / 268-269 / 271 / 274 / 275 / 276-277 / 278 / 326 / 336 / 374-376；
+行 48 的通用规则无需改）。该线 rebase 时按 comment 内的 old 文本精确匹配即可，行号漂移不影响。
 
 ## 8. 牙（mutation，全部实跑）
 
@@ -268,8 +315,10 @@ profile 跑同一条命令也是 **rc=0**，但**不会**打印这两行（alt �
 
 ## 9. 残留与登记
 
-1. **夹具契约**（§7）：profile 未声明 `magic` 段时两发都只回 `SM_MOVEFAIL(28)`，本场景 fail-closed 必红；
-   夹具已随 `openmir2-window-magic-fixture` 落地，**声明位置是 profile 不是场景**。
+1. **夹具契约**（§7）：profile 未声明 `magic` 段时两发都只回 `SM_MOVEFAIL(28)`，**真跑**必红；
+   但 **dry-run 不会 fail-closed（rc=0 且静默跳过夹具 = 假绿）**，取证必须带 `--profile`。
+   夹具已随 `openmir2-window-magic-fixture` 落地，**声明位置是 profile 不是场景**；
+   工具级 fail-closed（`requires` 声明）归承接卡 `openmir2-scenario-fixture-precondition`。
 2. **`SM_SPELL(17)` 自己不可见**（§5）：要验需第二条连接 ⇒ `openmir2-multi-session-probe`。
 3. **R2-producer-map 缺口**（M2）：删单个 `send` 不红，归 `openmir2-probe-scenario-validation-gaps`。
 4. **RNG 盲区**：本场景零抽数，**不能**作为伤害/命中/技能升级（640）的对拍输入；
@@ -278,6 +327,8 @@ profile 跑同一条命令也是 **rc=0**，但**不会**打印这两行（alt �
 5. **蓝门下界**：耗蓝 2 点/发，靠「基线角色 MP ≥ 4」这个未显式断言的假设。若后续换更弱的夹具角色，
    第一发会在蓝门（`PlayObject.Base.cs:1515`）就挂、且**同样回 639** —— 与距离门那一支同帧不同因，
    届时需在场景 `note` 里补一条 MP 断言（当前无 DSL 表达，登记）。
-6. **临时物（本卡）**：`E:/tmp/spellcast-profile.json`（= 内置 alt + `magic` 段，
-   仅用于 dry-run 取证，可删）、`/tmp/dryrun-default.txt` / `/tmp/dryrun-magic.txt`（dry-run stdout）。
-   `--dry-run` 不建 `E:/tmp/spellcast-dry`（该目录本卡跑完仍不存在）。
+6. **临时物（本卡）**：`E:/tmp/spellcast-profile.json`（= 内置 alt + `magic` 段，仅用于 dry-run 取证，可删）、
+   `E:/tmp/rework69/dry-default.txt` / `E:/tmp/rework69/dry-magic.txt`（返工期两条 dry-run 的 stdout，
+   `grep -c 魔法夹具` 分别为 0 / 2）、`E:/tmp/rework69/backfill-comment.json`（M-2 comment 原文）、
+   `E:/tmp/rework69/backfill.md`（`card/window-criteria-backfill` head `d888dc393` 上该文件副本）、
+   `E:/tmp/rework69/edit_doc.py`（本次文档替换脚本）。`--dry-run` 不建 `E:/tmp/spellcast-dry`（跑完仍不存在）。
