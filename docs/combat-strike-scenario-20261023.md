@@ -20,8 +20,9 @@
    场景里写着 **BLOCKED**，不许当窗口输入。规格见 §6.4。
 4. **假绿封口（本轮新增）**：目标 `恶魔弓箭手` 是**敌对守卫**，玩家挨打也会收到 `SM_STRUCK(31)`（**`recog=self`**），
    而 `wait_for` 只按 ident 匹配（`mir2_probe.py:291-303`）⇒ **跑绿也证明不了「玩家主动一击命中」**。
-   DSL 无 recog 过滤，故按 reviewer 选项 ③ fail-closed：`description` / `steps[3].note` / README / 本文 §7.0
-   四处写死「窗口批次不得消费本场景的任何 PASS」。
+   DSL 无 recog 过滤。**该封口现已升级为技术级硬门**：场景顶层带 `blocked`（卡 `openmir2-combat-strike-blocked-marker` 补），
+   `card_window.py` 见到即 rc=2（不建 out/不起栈/不预览命令）；`description` / `steps[3].note` / README / 本文 §7.0
+   的人读约定降为解释。
 5. **F2 如实登记**：卡面「删掉攻击步 ⇒ 应红」本卡做不到（实测 rc=0），同族的
    「`wait_for` 不存在 ident」「`placement.y` 与 `self_pos` 不同源」也都 rc=0。三条已转
    **`openmir2-probe-scenario-validation-gaps`**，本卡**不**写成 PASS、不改工具（不在写集）。
@@ -394,8 +395,10 @@ nDamage = max(0, nPower - nArmor)
    现有 DSL 没有别的表达手段（`ACTION_KEYS` 里没有任何 recog 过滤，`mir2_probe.py:338-339`）。
 
 ⇒ **本卡的选择是 fail-closed（reviewer 选项 ③）**：
-**场景 `description` / `steps[3].note` / `tools/probe/scenarios/README.md` / 本文 §7.0 四处都写明
-「跑绿 ≠ 玩家命中」；窗口批次不得消费本场景的任何 PASS。**
+**场景 `description` / `steps[3].note` / `tools/probe/scenarios/README.md` / 本文 §7.0 四处都写明「跑绿 ≠ 玩家命中」；
+并且已在工具层强制：场景顶层 `blocked`（卡 `openmir2-combat-strike-blocked-marker` 补）⇒ `card_window.py`
+一律 rc=2、不建 out/不起栈（schema 见 `docs/probe-scenario-blocked-gate-20261023.md`）；
+原先「窗口批次不得消费本场景的任何 PASS」的人读约定降为解释。**
 要真正消除这个歧义，DSL 必须能给 `wait_for` 加 `recog` 过滤（→ 见 §10 的 `openmir2-probe-scenario-validation-gaps`）。
 附带：`winplay0`（HP 16）会被 50-120 的箭一箭打死，可能在 `CM_TURN`/`CM_HIT` 之前就死 ⇒ 场景结果更不确定。
 
@@ -416,7 +419,8 @@ nDamage = max(0, nPower - nArmor)
    会把场景静默变成恒超时。两者都已转 **`openmir2-probe-scenario-validation-gaps`**。
 2. **场景真能跑出 `SM_STRUCK(31)`**：不能 —— 缺 §6.4 的夹具。所以本场景**不是可用的窗口输入**。
 3. **「跑绿」等价于「玩家主动一击命中」**：**不等价**（§7.0 假绿封口）。`wait_for` 只认 ident，
-   守卫打玩家也会产生 `recog=self` 的 31。窗口批次不得消费本场景的任何 PASS。
+   守卫打玩家也会产生 `recog=self` 的 31。**该封口已由场景顶层 `blocked` 在工具层强制（`card_window` rc=2）**，
+   人读约定降为解释。
 4. 帧级对拍结论（`SM_STRUCK` 头的 HP/伤害逐字节）：本卡零真机证据，属后续窗口批次。
 5. Rust/C# 在 `SM_STRUCK` 生成链上的等价性：本卡不判。
 

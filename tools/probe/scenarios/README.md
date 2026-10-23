@@ -23,7 +23,8 @@ python tools/probe/mir2_probe.py \
 }
 ```
 
-* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `blocked` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+  （`blocked` = 场景被封存：形状合法、`--check-scenario` 仍 rc=0，但 `card_window.py` 见到即 rc=2、不建 out/不起栈；schema 见 `docs/probe-scenario-blocked-gate-20261023.md`。）
   （`computed` 是给 `param_discovery` 的**声明性注记**，probe 不读它；见 `move_walk.json`。）
 * `required`（可选）是**必填变量名列表**：`expand_scenario` 在合并完 `--var` 后逐名检查，缺任何一个即
   `scenario-error`（退出码 2），消息点名缺哪个变量。运行期才知道的值（NPC/商人 `ActorId`、`MakeIndex`、
@@ -164,7 +165,9 @@ python tools/probe/mir2_probe.py \
 > 基线角色没有一档同时满足（最好的一对 joint 只有 24%，精确矩阵见文档 §6）。
 > ⇒ 现在跑必然 `wait_for` 超时。**另外这是敌对守卫**（`GuardUnit.cs:120-124` + `ArcherGuard.cs:39-81`），
 > 玩家挨打也会收到 `SM_STRUCK(31)` 且 `recog=self`，而 `wait_for` 只按 ident 匹配（`mir2_probe.py:291-303`）
-> ⇒ **即使跑绿也证明不了「玩家主动一击命中」，窗口批次不得消费本场景的任何 PASS**（fail-closed，见文档 §7.0；
+> ⇒ **即使跑绿也证明不了「玩家主动一击命中」**。**该封口已在工具层强制**：场景顶层带 `blocked`
+> （`combat_strike.json` 已补；schema 见 `docs/probe-scenario-blocked-gate-20261023.md`），`card_window.py`
+> 见到即 rc=2、不建 out/不起栈；原先「窗口批次不得消费本场景的任何 PASS」的人读约定降为解释。
 > 根治需 `wait_for` 支持 recog 过滤，归 `openmir2-probe-scenario-validation-gaps`）。
 > 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
 > `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
