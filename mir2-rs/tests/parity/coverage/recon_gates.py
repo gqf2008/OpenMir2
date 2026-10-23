@@ -2637,41 +2637,57 @@ def cmd_mutate(args):
         "SM_FLYAXE",
         "SM_LIGHTING",
         "SM_ALIVE",
+        # ---- 2026-10-23 补登（卡 `openmir2-recon-mutate-m8` 的基线复核）：下列 7 条在红名单 v2 §3
+        #      冻结时确属 blocked，但其**各自的卡落地后已接上生产发射点**，而本表未同步 ⇒ M6c 双向
+        #      不变式在 master `f7a32c2fd` 上恒红 `blocked 有发射点:…`（与 M8 同类的「登记过时」，
+        #      非判据缺陷）。按门规（blocked **严格**无发射点）移入 wired。每条的证据行 = 门自身的
+        #      `outbound_emit_at` 在真语料上命中的**生产调用点**（非编码器定义体、非 `#[cfg(test)]`）。
+        # SM_SKELETON(33)（V2-03）：卡 SM_SKELETON(1105) 屠宰效果体 body_leathery/skeleton 上游
+        #      （`bd3b5d0f9`，合入 `f7a32c2fd`）；发射点 `bins/game-svr/src/lib.rs:12985`
+        #      `game_svr::smframe::sm_skeleton(…)`。
+        "SM_SKELETON",
+        # SM_CLOSEHEALTH(1101)（V2-06）：卡 SM_CLOSEHEALTH 发射点（`22d79bf1f`）——
+        #      BreakOpenHealth → RM 泵 → 1101；发射点 `bins/game-svr/src/lib.rs:14657`
+        #      `smframe_ext::sm_closehealth(…)`（1100 早已随 B3 魔号 28 在 wired）。
+        "SM_CLOSEHEALTH",
+        # SM_BREAKWEAPON(1102)（V2-08）/ SM_LAMPCHANGEDURA(655)（V2-09）：武器耐久族上游
+        #      `UseLamp` + `CheckWeaponUpgrade`（`d99d4badc`，合入 `018da45be`）；发射点
+        #      `bins/game-svr/src/lib.rs:14551`（breakweapon）/ `:14534`（lampchangedura）。
+        "SM_BREAKWEAPON",
+        "SM_LAMPCHANGEDURA",
+        # SM_HIDEEVENT(805)/SM_SHOWEVENT(804)（V2-11）：地图事件可见性接线（`91a48709f`，合入
+        #      `fc9a409c7`，T-205）；发射点 `bins/game-svr/src/lib.rs:12386` / `:12437`。
+        "SM_HIDEEVENT",
+        "SM_SHOWEVENT",
+        # SM_RECONNECT(802)（V2-14）：SM_RECONNECT 上游生产者接线（`8e6d6d680`，合入 `283a27460`，
+        #      T-202）；发射点 `bins/game-svr/src/lib.rs:15877` `smframe_ext::sm_reconnect(…)`。
+        "SM_RECONNECT",
     }
-    # 仍 blocked（编码器已落地、生产路径无发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
+    # 仍 blocked（编码器已落地、生产路径**无**发射点）；各自 blocked_by 与出处（红名单 v2 §3 finding）：
     #   · 传送簇（切图/TransMap：HIDE 侧随切图簇；对照 SHOW(801)/SHOW2(807) 经
     #     sessionwire::map_change_frames 已接）—— HIDE2(806) 已随魔号 21 `MagSaceMove`
     #     接线（`MagicManager.cs:881`）、HIDE(800) 已随 PL-4 的 `MoveToHome`
     #     （`PlayObject.Base.cs:2308`）接线，两者均在 `_wired_now`。
-    #   · 怪物模型/形态簇（Entity 缺 skeleton 等形态字段 ⇒ 怪物动作帧发不出）
-    #     —— SM_SKELETON(33)（V2-03；MB-2 后仅剩它）。
-    #        （SM_ALIVE(27)/SM_FLYAXE(22)/SM_LIGHTING(23) 已随 MB-2 移入 `_wired_now`；
-    #          SM_DIGUP(20)/SM_DIGDOWN(21) 已在 MB-1 移入。）
-    #   · buff / 状态效果簇（HP 量条 + 状态位 + 武器破碎 + 照明耐久；随 world-tick-expansion buff 批）
-    #     —— SM_CLOSEHEALTH(1101)（V2-06；1100 已随 B3 魔号 28 移入 `_wired_now`，
-    #        SM_INSTANCEHEALGUAGE(1103) 已随 B2 治疗族移入）/
-    #        SM_CHARSTATUSCHANGED(657)（V2-07）/ SM_BREAKWEAPON(1102)（V2-08）/ SM_LAMPCHANGEDURA(655)（V2-09）。
-    #   · NPC Run / 脚本事件簇（脚本/事件驱动的机关显隐；world-tick-expansion NPC Run 批）
-    #     —— SM_HIDEEVENT(805)/SM_SHOWEVENT(804)（V2-11）。
-    #     （SM_MOVEMESSAGE(99)（V2-10）原列本簇；片107 接线滚动公告后已移入 `_wired_now`，见上——
-    #      本注释块曾与集合成员矛盾，2026-10-17 订正为一致。）
     #   · 门与事件系统（门显隐 612/614；随门系统进 MapGrid，见门设计件）—— SM_OPENDOOR_OK(612)/SM_CLOSEDOOR(614)（V2-11）。
     #   · 商人脚本簇（商人/公务员/元宝寄售对话）—— SM_QUERYYBDEAL(23023)/SM_QUERYYBSELL(23021)（V2-13）。
     #     （SM_MERCHANTDLGCLOSE(644) 原列本簇；卡 `openmir2-guild-official-npc` 接线 @exit 后已移入
     #      `_wired_now`，见上。）
     #     （SM_716(716) 原列本簇；卡 `openmir2-spell-shared-tail-p3b4` 接线 42 的 `RM_10205`
     #      后已移入 `_wired_now`，见上。）
-    #   · 重连 / 换脸 / 地面物品簇（杂项）—— SM_RECONNECT(802)/SM_CHANGEFACE(1104)/SM_ITEMSHOW(610)（V2-14）。
+    #   · 换脸 / 地面物品簇（杂项）—— SM_CHANGEFACE(1104)/SM_ITEMSHOW(610)（V2-14）。
     #     （SM_PLAYDICE(8001) 原列本簇；卡 `openmir2-openybdeal-host-wiring` 接线脚本帧排水后
     #      已移入 `_wired_now`，见上。）
     #     （SM_MAGICFIRE_FAIL(639) 原列本簇；卡 `openmir2-spell-mp-wrapper` 接线后已移入
     #      `_wired_now`，见上。）
-    _blocked = {"SM_SKELETON",
-                "SM_CLOSEHEALTH", "SM_BREAKWEAPON",
-                "SM_LAMPCHANGEDURA", "SM_QUERYYBDEAL",
-                "SM_QUERYYBSELL", "SM_RECONNECT", "SM_CHANGEFACE",
-                "SM_ITEMSHOW", "SM_HIDEEVENT", "SM_SHOWEVENT", "SM_OPENDOOR_OK",
-                "SM_CLOSEDOOR"}
+    #     （SM_RECONNECT(802) 原列本簇；卡 SM_RECONNECT 上游生产者接线（`8e6d6d680`）后已移入
+    #      `_wired_now`，见上。）
+    #     （SM_MOVEMESSAGE(99)（V2-10）原列脚本事件簇；片107 接线滚动公告后已移入 `_wired_now`。）
+    #   **2026-10-23 收缩**：怪物模型/形态簇（SM_SKELETON）、buff/状态效果簇（SM_CLOSEHEALTH/
+    #   SM_BREAKWEAPON/SM_LAMPCHANGEDURA；657 早已 wired）、NPC Run/脚本事件簇（SM_HIDEEVENT/
+    #   SM_SHOWEVENT）、重连簇（SM_RECONNECT）七条均已接生产发射点 ⇒ 移入 `_wired_now`（证据行见上）。
+    #   **判据未放宽**：blocked 仍严格要求「无生产发射点」，只是登记追上实现。
+    _blocked = {"SM_QUERYYBDEAL", "SM_QUERYYBSELL", "SM_CHANGEFACE",
+                "SM_ITEMSHOW", "SM_OPENDOOR_OK", "SM_CLOSEDOOR"}
 
     # `_wired_no_producer`：**注释面**（不参与 blocked 断言；**自失效断言**，非人工免检）——列出
     #   「发射点已就位、但**触发该帧的生产者缺位**」的 wired 帧。与 `blocked` **正交**：blocked =
@@ -2777,17 +2793,20 @@ def cmd_mutate(args):
     # 多向牙：任一方向被改坏必红（构造变异，逐条实测）。
     add("M6c 牙① SM_DISAPPEAR 挪回 blocked ⇒ 必红（它有生产发射点）",
         bool(_m6c_failures(_wired_now - {"SM_DISAPPEAR"}, _blocked | {"SM_DISAPPEAR"})))
-    add("M6c 牙② SM_SKELETON 挪进 wired_now ⇒ 必红（它无生产发射点）",
-        bool(_m6c_failures(_wired_now | {"SM_SKELETON"}, _blocked - {"SM_SKELETON"})))
-    add("M6c 牙③ SM_SKELETON 从两集合皆删 ⇒ 并集守恒必红（漏搬一防）",
-        bool(_m6c_failures(_wired_now, _blocked - {"SM_SKELETON"})))
+    # 牙用的「真·无发射点」夹具取 `SM_ITEMSHOW`（仍在 `_blocked`、`outbound_emit_at` 确为 None）；
+    # 2026-10-23 前这里用 SM_SKELETON，它已随卡 SM_SKELETON(1105) 接线移入 `_wired_now`，
+    # 再拿它当「无发射点」夹具就会把「有发点」当成「没有」而让牙假绿/假红。
+    add("M6c 牙② SM_ITEMSHOW 挪进 wired_now ⇒ 必红（它无生产发射点）",
+        bool(_m6c_failures(_wired_now | {"SM_ITEMSHOW"}, _blocked - {"SM_ITEMSHOW"})))
+    add("M6c 牙③ SM_ITEMSHOW 从两集合皆删 ⇒ 并集守恒必红（漏搬一防）",
+        bool(_m6c_failures(_wired_now, _blocked - {"SM_ITEMSHOW"})))
     add("M6c 牙④ SM_CHARSTATUSCHANGED 放回 blocked（并从 wired 移除）⇒ 必红（它有发射点；证 blocked 仍严格）",
         bool(_m6c_failures(_wired_now - {"SM_CHARSTATUSCHANGED"},
                            _blocked | {"SM_CHARSTATUSCHANGED"})))
-    add("M6c 牙⑤ 注释面放进无发射点的 SM_SKELETON ⇒ 必红（不在 wired ⇒ 不得借此豁免 blocked）",
+    add("M6c 牙⑤ 注释面放进无发射点的 SM_ITEMSHOW ⇒ 必红（不在 wired ⇒ 不得借此豁免 blocked）",
         bool(_m6c_failures(_wired_now, _blocked,
                            dict(_wired_no_producer,
-                                SM_SKELETON={"apis": ["make_posion"], "root": "r", "evidence": "x.rs:1"}))))
+                                SM_ITEMSHOW={"apis": ["make_posion"], "root": "r", "evidence": "x.rs:1"}))))
     add("M6c 牙⑥ 注释面证据置空 ⇒ 必红（证据形状检查）",
         bool(_m6c_failures(_wired_now, _blocked,
                            dict(_wired_no_producer,
@@ -2996,13 +3015,40 @@ def cmd_mutate(args):
         shutil.rmtree(_tmp_m7, ignore_errors=True)
 
     # M8 —— content 门 `card` 列（对抗复核 J1-②）：撤卡造 RED ⇒ 不再显示未生效 spec 卡；有卡 ⇒ tracked 且显示卡。
-    _spec_m8 = dict(kind="envir", file="AdminList.txt", anchor="x", card="openmir2-envir-redlist-batch")
-    _cards_m8 = json.loads(json.dumps(cards))
-    _cards_m8["assignments"].pop("content:AdminList.txt", None)
-    _row_m8 = _make_content_row(repo, Path(args.envir_dir), Path(args.notice_dir), corpus,
-                                _cards_m8, _spec_m8, "GameApp.cs:209")
-    _row_m8b = _make_content_row(repo, Path(args.envir_dir), Path(args.notice_dir), corpus,
-                                 cards, _spec_m8, "GameApp.cs:209")
+    #
+    # **2026-10-23 订正（卡 `openmir2-recon-mutate-m8`，tier=L）**：本用例原先把**真语料**里的
+    # `AdminList.txt` 当作「尚未实现」的夹具（spec 不带 `probe_ident` ⇒ rust 走
+    # `content_rust_implemented`）。卡 `55fd7bee0`（接 AdminList.txt 消费点：装载活/读取死）落地后，
+    # `bins/game-svr/src/adminlist.rs` 已是**被 bins 接线的活装载** ⇒ rust=yes ⇒ 两行都成
+    # `implemented`，两条断言自那时起恒 FAIL（基线 `65a8af8d6` 上即如此，与任何新卡无关）。
+    #
+    # **判定：用例过时，判据本身无缺陷。** 本用例守护的是 `content_card_display` 的两条渲染规则
+    # ——（a）RED 行**不得**把 CONTENT_MAP 的**建议卡**显示成生效卡，只能标 `(!)spec卡未生效:<id>`；
+    # （b）有效卡存在时 status=tracked 且 card 列显示该卡。这两条规则与「某个真实内容件此刻是否
+    # 已实现」**正交**；原写法把「实现进度」写成了夹具前提，于是每次内容件落地都会假红一次
+    # （M8 不是第一次：它只是第一个被实现进度踩中的）。
+    # ⇒ 改为**自持夹具**：临时部署目录 + 一个语料里不可能出现的 `probe_ident`（rust 恒 False），
+    # 让 RED/tracked 由夹具决定而不由仓库实现进度决定。真语料上的 status 派生另有 M3/M5
+    # （读侧方向）与 selftest 组2（同形判据）覆盖，本用例不重复承担。
+    _M8_ABSENT_PROBE = "__recon_mutate_m8_absent_probe__"
+    _tmp_m8 = Path(tempfile.mkdtemp(prefix="recon-cardcol-mut-"))
+    try:
+        _env8 = _tmp_m8 / "Envir"
+        _env8.mkdir()
+        (_env8 / "AdminList.txt").write_text("a" + NL, encoding="utf-8")
+        _spec_m8 = dict(kind="envir", file="AdminList.txt", anchor="x",
+                        probe_ident=_M8_ABSENT_PROBE, card="openmir2-envir-redlist-batch")
+        _cards_m8 = json.loads(json.dumps(cards))
+        _cards_m8["assignments"].pop("content:AdminList.txt", None)
+        _row_m8 = _make_content_row(repo, _env8, _tmp_m8, corpus,
+                                    _cards_m8, _spec_m8, "GameApp.cs:209")
+        _row_m8b = _make_content_row(repo, _env8, _tmp_m8, corpus,
+                                     cards, _spec_m8, "GameApp.cs:209")
+    finally:
+        shutil.rmtree(_tmp_m8, ignore_errors=True)
+    # 夹具前提本身也机判（防「探针 ident 哪天被真语料占用」让两条断言静默失去方向）。
+    add("M8 前置：夹具探针 ident 不在真实语料里（rust 恒 no，与实现进度正交）",
+        corpus.present(_M8_ABSENT_PROBE) is False)
     add("M8 撤卡 ⇒ RED 行 card 列不显示未生效的 spec 卡（改前会原样显示 openmir2-envir-redlist-batch）",
         _row_m8["status"] == "RED" and _row_m8["card"] != _spec_m8["card"]
         and "(!)spec卡未生效:" in str(_row_m8["card"]))

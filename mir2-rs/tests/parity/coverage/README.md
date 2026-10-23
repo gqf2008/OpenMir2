@@ -146,6 +146,29 @@ python tests/parity/coverage/recon_gates.py mutate             # 变异实测（
      ⇒ 无编码器必 **RED**；仅 const+case 的 `RM_ZZDEAD2` ⇒ `n/a-unreachable`。
 5. **M5 内容门收紧**：真 oracle + 只把 `"GuardList.txt"` 写进未用常量、无装载调用 ⇒ `GuardList.txt`
    必 **RED**（旧「文件名串出现」口径会 `implemented` 假绿）；补一条 `fn load_guard_list` ⇒ `implemented`。
+6. **M6/M7/M8**：出站「生产发射点 + 调用值未丢弃」（M6/M6c/M6d）、入站「生产派发点」（M7）、
+   内容门 `card` 列（M8，对抗复核 J1-②）。
+
+### 登记类子项必须随卡同步（2026-10-23 教训）
+
+`mutate` 里有三处**登记**而非判据：M6c 的真语料 `_wired_now` / `_blocked` 集合、M8 的夹具前提、
+以及 `cards.json` 的指派。它们描述「此刻仓库的事实」，**每张接线卡落地时都必须同步**，否则
+`mutate` 会因**登记过时**而红——红的是登记，不是判据。
+
+卡 `openmir2-recon-mutate-m8`（tier=L）修的就是这一类：
+
+- **M8 夹具自持**（用例过时）：M8 守护 `content_card_display` 的两条渲染规则——RED 行**不得**把
+  `CONTENT_MAP` 的建议卡显示成生效卡（只标 `(!)spec卡未生效:<id>`）；有生效卡时 status=`tracked`
+  且 `card` 列显示该卡。2026-10-23 前它把真语料里的 `AdminList.txt` 当作「未实现」夹具；卡
+  `55fd7bee0`（AdminList 装载活/读取死）落地后它是**活装载** ⇒ 两行都变 `implemented`，两条断言
+  自**基线 `65a8af8d6` 起即恒 FAIL**（与任何新卡无关）。现改为自持夹具：临时部署目录 + 语料里
+  不可能出现的 `probe_ident`（rust 恒 `no`），RED/tracked 由夹具决定，不再随实现进度假红。
+- **M6c 集合追平**（登记过时）：`SM_SKELETON`/`SM_CLOSEHEALTH`/`SM_BREAKWEAPON`/
+  `SM_LAMPCHANGEDURA`/`SM_HIDEEVENT`/`SM_SHOWEVENT`/`SM_RECONNECT` 七条在各自卡落地后**已有生产
+  发射点**，却仍留在 `_blocked` ⇒ M6c 双向不变式在 master `f7a32c2fd` 上恒红。已按门规移入
+  `_wired_now`（证据行 = 门自己 `outbound_emit_at` 命中的生产调用点，见源码注释）。
+  **判据未放宽**：`blocked` 仍严格要求「无生产发射点」；牙②/③/⑤ 的「无发射点」夹具改取
+  `SM_ITEMSHOW`（仍在 blocked 且确无发点）。
 
 ## 接入本地门禁
 
