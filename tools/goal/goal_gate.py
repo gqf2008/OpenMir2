@@ -59,7 +59,14 @@ COVERAGE_RE = re.compile(
     r"语料派发目标覆盖[：:]\s*已实现\s*(\d+)\s*个[（(]\s*(\d+)\s*次调用[）)]\s*[；;]\s*未实现\s*(\d+)\s*个"
 )
 
-CARD_ID_RE = re.compile(r"openmir2-[A-Za-z0-9][A-Za-z0-9._-]*")
+CARD_ID_RE = re.compile(r"openmir2-[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?")
+# 卡号「归属」写法：紧跟「卡」/「卡片」的 id（可带冒号/空格/反引号）；行内其它 id 视为**引用**。
+CARD_OWNER_RE = re.compile(r"卡(?:片)? *[:：]? *`?(" + CARD_ID_RE.pattern + r")`?")
+# 引用线索：出现在「卡」前 REF_CUE_WINDOW 个字符内 ⇒ 不是本行卡（见/承接/原卡/已由/立卡…）。
+# 「作者登记（`principal`，`card`, tier=R）」也是归属写法（老行不写「卡」字）。
+CARD_REGISTER_GROUP_RE = re.compile(r"(?:作者登记|登记)\s*（([^）]*)）")
+REF_CUES = ("见", "原", "已由", "承接", "立卡", "引用", "占用", "详见", "另见")
+REF_CUE_WINDOW = 6
 T_ID_RE = re.compile(r"\bT-\d+\b")
 
 
@@ -339,15 +346,102 @@ def load_principals(repo: Path, timeout=120):
     return names
 
 
+def split_table_cells(line):
+    """按「未被反斜杠转义、且不在 `代码段` 内」的竖线切列（markdown 表格）。
+
+    whitelist 的单元格里大量出现 `` `a|b` `` 形式的代码段与反斜杠竖线转义；
+    直接 str.split('|') 会把一行切成 8~13 列，是「列结构」判定的噪声源。
+    """
+    text = line.strip()
+    if text.startswith("|"):
+        text = text[1:]
+    if text.endswith("|"):
+        text = text[:-1]
+    cells, cur, escaped, in_code = [], [], False, False
+    for ch in text:
+        if escaped:
+            cur.append(ch)
+            escaped = False
+            continue
+        if ch == chr(92):
+            cur.append(ch)
+            escaped = True
+            continue
+        if ch == "`":
+            in_code = not in_code
+            cur.append(ch)
+            continue
+        if ch == "|" and not in_code:
+            cells.append("".join(cur).strip())
+            cur = []
+            continue
+        cur.append(ch)
+    cells.append("".join(cur).strip())
+    return cells
+
+
+def _ref_cued(text, pos):
+    """pos 处的「卡」是否被引用线索修饰（见卡/承接卡/原卡/已由卡…）。"""
+    head = text[max(0, pos - REF_CUE_WINDOW):pos]
+    return any(cue in head for cue in REF_CUES)
+
+
+def _owner_cards(cells, exclude_ids):
+    """结构化取本行的**归属卡**（一行多卡 ⇒ 全部计入），不整行扫。
+
+    规则（两条合取，逐条可复算）：
+      1) 任何列里形如「卡 `openmir2-…`」的 id，且「卡」前 REF_CUE_WINDOW 字符内没有引用线索；
+      2) 第二列（改动说明列）里出现的 id（很多老行只写 id 不写「卡」字）。
+    其它位置的裸 id（审查列里的登记人/被引用卡）一律**不关联**，记进 row["refs"] 供人核。
+    """
+    owners = set()
+    for idx, cell in enumerate(cells):
+        if idx == 0:  # 第 0 列是 T-* 编号
+            continue
+        for match in CARD_OWNER_RE.finditer(cell):
+            if _ref_cued(cell, match.start()):
+                continue
+            cid = match.group(1)
+            if cid in exclude_ids:
+                continue
+            owners.add(cid)
+    for idx, cell in enumerate(cells):
+        if idx == 0:
+            continue
+        for grp in CARD_REGISTER_GROUP_RE.finditer(cell):
+            for match in CARD_ID_RE.finditer(grp.group(1)):
+                cid = match.group(0)
+                if cid in exclude_ids:
+                    continue
+                owners.add(cid)
+    if len(cells) > 1:
+        for match in CARD_ID_RE.finditer(cells[1]):
+            if _ref_cued(cells[1], match.start()):
+                continue
+            cid = match.group(0)
+            if cid in exclude_ids:
+                continue
+            owners.add(cid)
+    return owners
+
+
 def build_whitelist(path: Path, exclude_ids=None):
-    """解析 whitelist.md 的 T-* 行。
+    """解析 whitelist.md 的 T-* 行（结构化关联，卡号只从固定列/「卡 `X`」写法取）。
 
     同一 T-* 编号出现多行（历史遗留重复号）时**并集**：卡集合取并、行文本拼接，
     避免后写覆盖把前一行的卡↔T 强关联吃掉（T-4/T-6 重复行的真实损害）。
     `exclude_ids` 用于排掉 principal 名（openmir2-worker-5 等），它们不是卡 id。
+
+    关联口径（卡 `openmir2-goal-gate-card-association`）：
+      * 归属卡 = 「卡 `X`」写法（未被见/承接/原卡/已由/立卡/引用/占用/详见/另见修饰）∪ 第二列里的 id；
+      * 一行多卡 ⇒ 全部计入；
+      * 行内其它 id 只进 `refs`（不关联，防「行内引用别的卡」误关联）；
+      * 无法结构化关联的行 / 列数 != 4 的行 ⇒ 进 `warnings` **点名**，不再静默整行扫描。
     """
     exclude_ids = set(exclude_ids or ())
-    info = {"path": str(path), "rows": {}, "card_to_t": {}, "duplicates": [], "error": None}
+    info = {"path": str(path), "rows": {}, "card_to_t": {}, "duplicates": [],
+            "warnings": [], "refs": {}, "unassociated": [], "bad_columns": [],
+            "error": None}
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -358,15 +452,28 @@ def build_whitelist(path: Path, exclude_ids=None):
         if not match:
             continue
         t_id = match.group(1)
-        cards = {c for c in CARD_ID_RE.findall(line) if c not in exclude_ids}
+        cells = split_table_cells(line)
+        if len(cells) != 4:
+            info["bad_columns"].append(t_id)
+            info["warnings"].append(
+                "whitelist 行 %s 列数=%d（期望 4）：%s" % (t_id, len(cells), line[:80]))
+        cards = _owner_cards(cells, exclude_ids)
+        all_ids = {c for c in CARD_ID_RE.findall(line) if c not in exclude_ids}
+        info["refs"][t_id] = sorted(all_ids - cards)
+        if not cards:
+            info["unassociated"].append(t_id)
+            info["warnings"].append(
+                "whitelist 行 %s 无法结构化关联卡号（既无『卡 `openmir2-…`』也不在第二列）：%s"
+                % (t_id, line[:80]))
         row = info["rows"].get(t_id)
         if row is None:
-            info["rows"][t_id] = {"line": line, "cards": set(cards), "lines": [line]}
+            info["rows"][t_id] = {"line": line, "cards": set(cards),
+                                  "refs": info["refs"][t_id], "lines": [line]}
         else:
             info["duplicates"].append(t_id)
             row["cards"].update(cards)
             row["lines"].append(line)
-            row["line"] = row["line"] + "\n" + line
+            row["line"] = row["line"] + chr(10) + line
     for t_id, row in info["rows"].items():
         for card in row["cards"]:
             info["card_to_t"].setdefault(card, set()).add(t_id)
@@ -967,6 +1074,12 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         warnings.append("whitelist.md 读取失败：%s" % whitelist["error"])
     if whitelist["duplicates"]:
         warnings.append("whitelist.md 有重复 T-* 编号：%s" % ", ".join(sorted(set(whitelist["duplicates"]))))
+    if whitelist["bad_columns"]:
+        warnings.append("whitelist.md 有 %d 行列数≠4（格式异常，按已解析列处理）：%s" % (
+            len(whitelist["bad_columns"]), ", ".join(sorted(set(whitelist["bad_columns"]), key=_t_sort_key))))
+    if whitelist["unassociated"]:
+        warnings.append("whitelist.md 有 %d 行无法结构化关联卡号（不计入任何卡，需人工补『卡 `openmir2-…`』）：%s" % (
+            len(whitelist["unassociated"]), ", ".join(sorted(set(whitelist["unassociated"]), key=_t_sort_key))))
 
     # ---- 条件2
     r_cards = collect_r_cards(index) if index else []
@@ -1082,6 +1195,11 @@ SYNTH_WHITELIST = "\n".join([
     "| T-3 | 卡 `openmir2-card-gamma` 的差异 | 无害 | reviewer |",
     "| T-9 | 卡 `openmir2-card-alpha` 的甲行 | 无害 | reviewer |",
     "| T-9 | 卡 `openmir2-card-beta` 的乙行 | 无害 | reviewer |",
+    # 卡 openmir2-goal-gate-card-association 的三颗牙用夹具：
+    "| T-10 | 卡 `openmir2-card-alpha`；同批还有卡 `openmir2-card-delta` | 无害 | reviewer |",
+    "| T-11 | 卡 `openmir2-card-kappa` 的差异；原由卡 `openmir2-card-zeta` 占用，详见卡 `openmir2-card-eta` | 无害 | reviewer |",
+    "| T-12 | 没有卡号的一行 | 无害 |",
+    "| T-13 | 改 `x`（卡 `openmir2-card-iota`） | 无害 | 审 | 多余列 |",
 ])
 
 
@@ -1208,14 +1326,34 @@ def selftest(verbose=False):
         wl_path.write_text(SYNTH_WHITELIST, encoding="utf-8")
         wl = build_whitelist(wl_path)
 
-        check("whitelist 解析出 4 个 T 行", lambda: (len(wl["rows"]) == 4, str(len(wl["rows"]))))
-        check("whitelist 重复号 T-9 并集（卡不丢）", lambda: (
-            wl["card_to_t"].get("openmir2-card-alpha") == {"T-1", "T-9"}
+        check("whitelist 解析出 8 个 T 行", lambda: (len(wl["rows"]) == 8, str(len(wl["rows"]))))
+        check("whitelist 重复号 T-9 并集（卡不丢；T-10 的一行两卡也并入 alpha）", lambda: (
+            wl["card_to_t"].get("openmir2-card-alpha") == {"T-1", "T-9", "T-10"}
             and wl["card_to_t"].get("openmir2-card-beta") == {"T-9"}
             and wl["duplicates"] == ["T-9"], str(wl["card_to_t"])))
         check("whitelist exclude_ids 排掉 principal 名", lambda: (
             "openmir2-card-alpha" not in build_whitelist(
                 wl_path, exclude_ids={"openmir2-card-alpha"})["card_to_t"], "excluded"))
+
+        # ---- 卡 openmir2-goal-gate-card-association：结构化关联的三颗牙 ----
+        check("牙① 一行两卡 ⇒ 两张都计入（T-10）", lambda: (
+            wl["card_to_t"].get("openmir2-card-alpha", set()) >= {"T-1", "T-9", "T-10"}
+            and wl["card_to_t"].get("openmir2-card-delta") == {"T-10"},
+            str({k: sorted(v) for k, v in wl["card_to_t"].items() if k.endswith(("alpha", "delta"))})))
+        check("牙② 行内引用别的卡 ⇒ 不关联（zeta/eta）", lambda: (
+            "openmir2-card-zeta" not in wl["card_to_t"]
+            and "openmir2-card-eta" not in wl["card_to_t"]
+            and wl["refs"].get("T-11") == ["openmir2-card-eta", "openmir2-card-zeta"],
+            str(wl["refs"].get("T-11"))))
+        check("牙③ 无卡号/格式异常 ⇒ 进 unassociated/bad_columns 并点名", lambda: (
+            "T-12" in wl["unassociated"] and "T-13" in wl["bad_columns"]
+            and any("T-12" in w for w in wl["warnings"])
+            and any("T-13" in w for w in wl["warnings"])
+            and "openmir2-card-iota" in wl["card_to_t"],
+            str(wl["warnings"])))
+        check("结构化后 gamma 仍只关联 T-3（引用不串卡）", lambda: (
+            wl["card_to_t"].get("openmir2-card-gamma") == {"T-3"},
+            str(wl["card_to_t"].get("openmir2-card-gamma"))))
 
         check("J-1 否定不跨转折：『不涉及时序，但涉及 RNG』=> 拒", lambda: (
             _waiver_ok("纯逻辑，不涉及时序，但涉及 RNG") is False, "cross-conjunction RNG"))
