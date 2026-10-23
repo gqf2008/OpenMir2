@@ -432,6 +432,9 @@ def recipients(rows, pred, sessions=None, statuses=None):
     `sessions` 给了就只计这些会话；`statuses`（`{name: online|offline|closed}`）给了就
     只计 `online`（复审 I-1：连接状态必须能进判定，不能只靠帧是否存在）。
     """
+    if sessions is not None and statuses is not None:
+        raise ValueError(
+            "recipients: sessions 与 statuses 只能给一个（同时给会让 statuses 被静默忽略）")
     if sessions is None and statuses is not None:
         sessions = online_sessions(statuses)
     allowed = set(sessions) if sessions is not None else None
@@ -440,6 +443,12 @@ def recipients(rows, pred, sessions=None, statuses=None):
         if not _row_matches(row, pred):
             continue
         name = session_of(row.get("conn", ""))
+        # 复审 `bc2a5f2b` I-1：给了 statuses 就必须覆盖**所有**出现过的会话；否则未登记
+        # 会话的帧会被静默过滤掉，「非 online 会话收到帧」永远观测不到。
+        if statuses is not None and name not in statuses:
+            raise ValueError(
+                "recipients: 帧里的会话 %r 不在 statuses 里（%r）——无法判定 online 与否，"
+                "拒绝静默剔除" % (name, sorted(statuses)))
         if allowed is not None and name not in allowed:
             continue
         got.add(name)
@@ -480,6 +489,15 @@ def assert_recipients_with_status(statuses, expected, actual):
     1. `expected` 里只保留 `online` 会话（非 online 的不计）；
     2. `actual` 里若出现非 online 会话收到帧 ⇒ 直接报「已断/未连会话仍收帧」（不许静默）。
     """
+    unknown_expected = sorted(set(expected) - set(statuses))
+    if unknown_expected:
+        raise AssertionError(
+            "expected 里有未登记连接状态的会话：%r（statuses 必须覆盖所有参与判定的会话，"
+            "禁止静默从判据里删掉）" % unknown_expected)
+    unknown_actual = sorted(set(actual) - set(statuses))
+    if unknown_actual:
+        raise AssertionError(
+            "actual 里有未登记连接状态的会话：%r（来源不明，拒绝采信）" % unknown_actual)
     live = online_sessions(statuses)
     want = sorted(set(expected) & set(live))
     dead_received = sorted(set(actual) - set(live))
@@ -1827,6 +1845,27 @@ def _selftest_multi_session():
     assert within_square(12, 12) and within_square(-12, 12)
     assert not within_square(13, 0) and not within_square(0, -13)
     assert within_radius(12) and not within_radius(13)
+    # ⑨ 复审 `bc2a5f2b` I-1：expected 里的未登记会话必须报错（不是静默剔除）
+    try:
+        assert_recipients_with_status(st, ["s1", "s9"], ["s1"])
+    except AssertionError as ex:
+        assert "未登记连接状态" in str(ex) and "s9" in str(ex), str(ex)
+    else:
+        raise AssertionError("expected 里拼错/未登记的会话被静默剔除（I-1 假绿）")
+    # ⑩ sessions 与 statuses 同时给 ⇒ 报错（不许静默让 statuses 失效）
+    try:
+        recipients(rows3, pred, sessions=["s2"], statuses={"s1": "online"})
+    except ValueError as ex:
+        assert "只能给一个" in str(ex), str(ex)
+    else:
+        raise AssertionError("sessions+statuses 同时给被静默接受（M-1 分叉）")
+    # ⑪ statuses 未覆盖帧里出现过的会话 ⇒ 报错（不许静默过滤）
+    try:
+        recipients(rows3, pred, statuses={"s1": "online"})
+    except ValueError as ex:
+        assert "不在 statuses 里" in str(ex), str(ex)
+    else:
+        raise AssertionError("未登记会话的帧被静默剔除")
     # 单会话回归：旧标签不含 `.` ⇒ 归 "main"
     rows_main = [row(1, "gamegate", 657), row(2, "selgate", 657)]
     assert recipients(rows_main, pred) == ["main"]
