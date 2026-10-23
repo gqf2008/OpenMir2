@@ -5037,6 +5037,15 @@ def selftest():
             and (rs_m7.get("sql") or {}).get("write") is None,
             "MG-7 写入按侧分派：csharp 写 MagicId=2、rust 不写（cs=%r rs=%r）"
             % (cs_m7.get("action"), rs_m7.get("action")))
+        # 断言强度（卡 openmir2-magic-fixture-assertion-strength）：只钉 VALUES 抓不到
+        # 「写错表/写错列」——必须钉住目标表与完整列清单（与 characters_magic DDL 一致）。
+        write_stmt_m7 = ((cs_m7.get("sql") or {}).get("write") or "")
+        chk(re.search(
+                r"INSERT INTO `[^`]+`\.`characters_magic` \(`PlayerId`, `MagicId`, "
+                r"`Level`, `UseKey`, `CurrTrain`\) VALUES \(6228, 2, 1, '2', 3\);",
+                write_stmt_m7) is not None,
+            "MG-7 写入语句钉到表名+列清单：INSERT INTO …`characters_magic`"
+            "(PlayerId, MagicId, Level, UseKey, CurrTrain)（实际 %r）" % write_stmt_m7)
         cs_after_m7 = (cs_m7.get("after") or [{}])[0]
         rs_after_m7 = (rs_m7.get("after") or [{}])[0]
         chk(cs_after_m7.get("magic_id") == 2
