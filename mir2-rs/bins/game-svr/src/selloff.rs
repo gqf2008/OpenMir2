@@ -36,7 +36,7 @@
 //! （`SendSocket(SM_ADDITEM)`，`Series=1`）；其余全部走 `SendMsg`/`SendUpdateMsg`
 //! 入 `MsgQueue`（优先级 = `(byte)wIdent`），在**同一** `Run()` 内按优先级**升序**出队，
 //! 出队时 `RM_*` 映射成 `SM_*` 再 `SendSocket`。⇒ 线上序 = 立即帧（调用序）→ 排队帧
-//! （优先级升序，同优先级 FIFO）。
+//! （优先级升序；同优先级按 .NET 8 四叉堆 sift 序，**不是** FIFO）。
 //!
 //! 排队帧优先级字节：`RM_SELLOFFADDITEM_OK(23004)⇒220` / `RM_SellOffADDITEM_FAIL(23006)⇒222` /
 //! `RM_SELLOFFDELITEM_OK(23009)⇒225` / `RM_SELLOFFDELITEM_FAIL(23011)⇒227` /
@@ -298,10 +298,21 @@ pub enum SellOffFrame {
     },
 }
 
+/// 排队帧的收件人（oracle `MsgQueue` 的归属者 = 该 `PlayObject`）。
+fn sell_off_frame_target(frame: &SellOffFrame) -> i32 {
+    match frame {
+        SellOffFrame::Def { target, .. }
+        | SellOffFrame::MenuOk { target, .. }
+        | SellOffFrame::SysMsg { target, .. }
+        | SellOffFrame::GameGoldChanged { target, .. }
+        | SellOffFrame::WeightChanged { target, .. } => *target,
+    }
+}
+
 /// 一条排队帧：`(优先级字节, 去重 key, 出队后的 SM 形态)`。
 type QueuedFrame = (u8, Option<(i32, u16)>, SellOffFrame);
 
-/// 「立即帧 + 排队帧」两桶。`finish` = 立即（插入序）++ 排队（优先级升序，稳定）。
+/// 「立即帧 + 排队帧」两桶。`finish` = 立即（插入序）++ 排队（**每收件人各自的四叉堆出队序**）。
 #[derive(Default)]
 struct Emitter {
     immediate: Vec<SellOffEvent>,
@@ -318,7 +329,7 @@ impl Emitter {
         self.immediate.push(ev);
     }
 
-    /// `SendMsg`：入队（同优先级 FIFO）。
+    /// `SendMsg`：入队（排队桶在 [`Emitter::finish`] 里按每人一条 `MsgQueue` 的四叉堆出队）。
     fn later(&mut self, priority: u8, body: SellOffFrame) {
         self.queued.push((priority, None, body));
     }
@@ -329,19 +340,41 @@ impl Emitter {
         self.queued.push((priority, Some((target, key)), body));
     }
 
-    fn finish(mut self) -> Vec<SellOffEvent> {
-        // `sort_by_key` 稳定 ⇒ 同优先级保持入队序。
-        self.queued.sort_by_key(|(p, _, _)| *p);
+    /// 排队桶按 **oracle `MsgQueue`（每人一条队列）的四叉最小堆出队序**落成线性序。
+    ///
+    /// - 先**按收件人分组**（分组序 = 首次入队序）：`MsgQueue` 是 `PlayObject` 的实例字段
+    ///   （`ActorEntity.cs:16`），跨收件人混堆会改变本会话的 sift；
+    /// - 每组按入队序灌 [`game_svr::msgqueue::NetPriorityQueue`] 再出队，**不是**稳定排序
+    ///   （同优先级 3 条出队 `[0,2,1]`、4 条 `[0,3,2,1]`）。
+    ///
+    /// 同 ident 多帧**可达**：`client_cancel_sell_off_ing` 每取消一条寄售各发一条
+    /// `menu_ok`（`RM_MENU_OK`，优先级 69，同一 `me.id`）；`client_buy_sell_off_item` 的
+    /// 每颗金刚石各发一条 `blue_msg`（`RM_SYSMESSAGE`，252，同一 `me.id`）。
+    fn finish(self) -> Vec<SellOffEvent> {
         let mut out = self.immediate;
-        out.extend(
-            self.queued
-                .into_iter()
-                .map(|(priority, key, body)| SellOffEvent::Queued {
+        let mut buckets: Vec<(i32, Vec<QueuedFrame>)> = Vec::new();
+        for q in self.queued {
+            let target = sell_off_frame_target(&q.2);
+            match buckets.iter_mut().find(|(t, _)| *t == target) {
+                Some((_, v)) => v.push(q),
+                None => buckets.push((target, vec![q])),
+            }
+        }
+        for (_, queue) in buckets {
+            let mut heap: game_svr::msgqueue::NetPriorityQueue<QueuedFrame> =
+                game_svr::msgqueue::NetPriorityQueue::new();
+            for q in queue {
+                let priority = q.0;
+                heap.enqueue(q, priority);
+            }
+            while let Some((priority, key, body)) = heap.dequeue() {
+                out.push(SellOffEvent::Queued {
                     priority,
                     key,
                     body,
-                }),
-        );
+                });
+            }
+        }
         out
     }
 }
@@ -1177,6 +1210,71 @@ mod tests {
     use super::*;
     use crate::ability::StdItemCatalog;
     use mir2_data::StdItem;
+
+    fn menu_ok_ev(target: i32, text: &str) -> SellOffFrame {
+        SellOffFrame::MenuOk {
+            target,
+            recog: target,
+            text: text.to_string(),
+        }
+    }
+
+    fn menu_texts(evs: &[SellOffEvent]) -> Vec<String> {
+        evs.iter()
+            .map(|e| match e {
+                SellOffEvent::Queued { body, .. } => match body {
+                    SellOffFrame::MenuOk { text, .. } => text.clone(),
+                    other => panic!("只应产 MenuOk，实得 {other:?}"),
+                },
+                other => panic!("只应产 Queued，实得 {other:?}"),
+            })
+            .collect()
+    }
+
+    /// **卡 `openmir2-frame-drain-order-audit` 判据**：排队桶出队 = oracle `MsgQueue`（每人一条）
+    /// 的 .NET 8 四叉堆序 ⇒ 同优先级 3 条 `[0,2,1]`、4 条 `[0,3,2,1]`。
+    ///
+    /// 可达性：`client_cancel_sell_off_ing` 每取消一条寄售各发一条 `menu_ok`（`RM_MENU_OK`，69）
+    /// 给同一 `me.id`；`client_buy_sell_off_item` 的每颗金刚石各发一条 `blue_msg`
+    /// （`RM_SYSMESSAGE`，252）给同一 `me.id`。
+    ///
+    /// 牙（改坏必红）：`Emitter::finish` 改回 `self.queued.sort_by_key(|(p, _, _)| *p)` ⇒
+    /// 得 `[s0,s1,s2]`/`[s0,s1,s2,s3]`，断言红。
+    #[test]
+    fn emitter_finish_same_priority_follows_four_ary_heap() {
+        for (n, want) in [
+            (3usize, vec!["s0", "s2", "s1"]),
+            (4, vec!["s0", "s3", "s2", "s1"]),
+        ] {
+            let mut em = Emitter::new();
+            for i in 0..n {
+                em.later(PRIO_RM_MENU_OK, menu_ok_ev(901, &format!("s{i}")));
+            }
+            assert_eq!(menu_texts(&em.finish()), want, "n={n}");
+        }
+    }
+
+    /// **跨收件人不得混堆**：oracle 每人一条 `MsgQueue`。`[A0,B1,A2,B3]` 交替入队 ⇒ 混堆会让 B
+    /// 出 `[B3,B1]`，分组（本实现）出 `[B1,B3]`。
+    #[test]
+    fn emitter_finish_keeps_recipients_in_separate_heaps() {
+        let mut em = Emitter::new();
+        for (target, text) in [(901, "a0"), (902, "b1"), (901, "a2"), (902, "b3")] {
+            em.later(PRIO_RM_MENU_OK, menu_ok_ev(target, text));
+        }
+        let evs = em.finish();
+        let pick = |want_target: i32| -> Vec<String> {
+            evs.iter()
+                .filter(|e| match e {
+                    SellOffEvent::Queued { body, .. } => sell_off_frame_target(body) == want_target,
+                    _ => false,
+                })
+                .flat_map(|e| menu_texts(std::slice::from_ref(e)))
+                .collect()
+        };
+        assert_eq!(pick(901), vec!["a0", "a2"]);
+        assert_eq!(pick(902), vec!["b1", "b3"], "混堆会得 [b3,b1]");
+    }
 
     struct P {
         id: i32,

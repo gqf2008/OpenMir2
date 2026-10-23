@@ -1843,6 +1843,11 @@ def selftest():
         chk("report_verdict" not in captured and "compare_rc" not in captured
             and "frames" not in captured and "diffs" not in captured,
             "D-1 顶层不再有 report_verdict/compare_rc/frames/diffs（收进嵌套 compare）")
+        chk(set((captured.get("compare") or {}).keys())
+            == {"verdict", "rc", "frames", "db_state", "diffs", "undecidable",
+                "whitelisted"},
+            "M-2 嵌套 compare 字段集合完整（%s）"
+            % sorted((captured.get("compare") or {}).keys()))
         chk("status" not in captured
             and captured.get("card") == "openmir2-card-window-tool-selftest",
             "comment body 不含 status（绝不改卡状态），card 正确")
@@ -2170,13 +2175,15 @@ def selftest():
         finally:
             globals()["post_comment"] = orig_post_f
         chk(captured_f.get("verdict") == "FAIL"
+            and captured_f.get("verdict_reason") == "compare_fail"
             and (captured_f.get("compare") or {}).get("verdict") == "FAIL"
             and (captured_f.get("compare") or {}).get("rc") == 1
             and captured_f.get("exit_code") == 2
             and "compare_fail" in (captured_f.get("blockers") or []),
-            "D-1 compare FAIL => comment verdict=FAIL + compare.rc=1 + blockers 含 compare_fail"
-            "（实际 %r/%r）" % (captured_f.get("verdict"),
-                               (captured_f.get("compare") or {}).get("verdict")))
+            "D-1 compare FAIL => comment verdict=FAIL + verdict_reason=compare_fail"
+            " + compare.rc=1 + blockers 含 compare_fail（实际 %r/%r/%r）"
+            % (captured_f.get("verdict"), captured_f.get("verdict_reason"),
+               (captured_f.get("compare") or {}).get("verdict")))
         chk(s_f["exit_code"] == 2, "D-1 compare FAIL => 工具 rc=2")
 
         # 14) I-2：停栈禁词按效果归一（net.exe stop MySQL / spsv / Stop-Service 全拒）

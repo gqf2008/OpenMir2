@@ -193,7 +193,29 @@ pub enum PartyEvent {
     },
 }
 
-/// 「立即帧 + 排队帧」两桶（见模块头）。`finish` = 立即（插入序）++ 排队（优先级升序，稳定）。
+impl PartyEvent {
+    /// 事件收件人 `ActorId`（oracle `MsgQueue` 的归属者 = 该 `PlayObject`）。
+    ///
+    /// 排队桶按它**分组建堆**：oracle 每人一条 `PriorityQueue`，跨收件人混堆会改变本会话的 sift。
+    #[must_use]
+    pub fn target(&self) -> i32 {
+        match self {
+            PartyEvent::GroupModeChanged { target, .. }
+            | PartyEvent::CreateGroupOk { target }
+            | PartyEvent::CreateGroupFail { target, .. }
+            | PartyEvent::AddMemberOk { target }
+            | PartyEvent::AddMemberFail { target, .. }
+            | PartyEvent::DelMemberOk { target, .. }
+            | PartyEvent::DelMemberFail { target, .. }
+            | PartyEvent::GroupMembers { target, .. }
+            | PartyEvent::GroupCancel { target }
+            | PartyEvent::SysMessage { target, .. }
+            | PartyEvent::GotoLabel { target, .. } => *target,
+        }
+    }
+}
+
+/// 「立即帧 + 排队帧」两桶（见模块头）。`finish` = 立即（插入序）++ 排队（**每收件人各自的四叉堆出队序**）。
 #[derive(Default)]
 struct Emitter {
     immediate: Vec<PartyEvent>,
@@ -213,11 +235,38 @@ impl Emitter {
         self.queued.push((priority, ev));
     }
 
-    fn finish(mut self) -> Vec<PartyEvent> {
-        // `sort_by_key` 稳定 ⇒ 同优先级保持入队序（oracle `GetMessage` 对同优先级 FIFO）。
-        self.queued.sort_by_key(|(p, _)| *p);
+    /// 排队桶按 **oracle `MsgQueue`（每人一条队列）的四叉最小堆出队序**落成线性序。
+    ///
+    /// - 先**按收件人分组**（分组序 = 首次入队序）：`MsgQueue` 是 `PlayObject` 的实例字段
+    ///   （`ActorEntity.cs:16`），跨收件人混堆会改变本会话的 sift；
+    /// - 每组按入队序灌 [`crate::msgqueue::NetPriorityQueue`]（与宿主**同一份**实现）再出队。
+    ///   **同优先级不是入队序**：3 条出队 `[0,2,1]`、4 条 `[0,3,2,1]`（dotnet 实跑）。
+    ///
+    /// 同 ident 多帧**可达**：团长死亡散组（`party_del_member_em` 的 `owner == target` 支）从尾到头
+    /// 逐成员 `LeaveGroup()`，每次 `SendGroupText` 给**仍在组内**的每个成员各一条 `RM_GROUPMESSAGE`
+    /// （253）⇒ 同一成员一次收多条。卡 `openmir2-frame-drain-order-audit`（此前是 `sort_by_key`
+    /// 稳定排序 = 退化为入队序）。
+    fn finish(self) -> Vec<PartyEvent> {
         let mut out = self.immediate;
-        out.extend(self.queued.into_iter().map(|(_, ev)| ev));
+        let mut buckets: Vec<(i32, Vec<(u8, PartyEvent)>)> = Vec::new();
+        for q in self.queued {
+            let target = q.1.target();
+            match buckets.iter_mut().find(|(t, _)| *t == target) {
+                Some((_, v)) => v.push(q),
+                None => buckets.push((target, vec![q])),
+            }
+        }
+        for (_, queue) in buckets {
+            let mut heap: crate::msgqueue::NetPriorityQueue<(u8, PartyEvent)> =
+                crate::msgqueue::NetPriorityQueue::new();
+            for q in queue {
+                let priority = q.0;
+                heap.enqueue(q, priority);
+            }
+            while let Some((_, ev)) = heap.dequeue() {
+                out.push(ev);
+            }
+        }
         out
     }
 }
@@ -759,3 +808,90 @@ impl World {
 /// 空实现占位：提醒 [`Entity`] 的组队字段是 `crates/world` 的权威状态（host 不另存一份）。
 #[allow(dead_code)]
 fn _party_entity_fields_are_authoritative(_e: &Entity) {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sys_msg(target: i32, text: &str) -> PartyEvent {
+        PartyEvent::SysMessage {
+            target,
+            recog: target,
+            f_color: 0,
+            b_color: 0,
+            text: text.to_string(),
+        }
+    }
+
+    fn texts(evs: &[PartyEvent]) -> Vec<String> {
+        evs.iter()
+            .map(|e| match e {
+                PartyEvent::SysMessage { text, .. } => text.clone(),
+                other => panic!("只应产 SysMessage，实得 {other:?}"),
+            })
+            .collect()
+    }
+
+    /// **卡 `openmir2-frame-drain-order-audit` 判据**：排队桶出队 = oracle `MsgQueue`（每人一条）
+    /// 的 .NET 8 四叉堆序 ⇒ 同优先级 3 条 `[0,2,1]`、4 条 `[0,3,2,1]`。
+    ///
+    /// 可达性：团长死亡散组（`party_del_member_em` 的 `owner == target` 支）从尾到头逐成员
+    /// `LeaveGroup()`，每次 `SendGroupText` 给**仍在组内**的每个成员各一条 `RM_GROUPMESSAGE`
+    /// （253）⇒ 同一成员一次收多条。
+    ///
+    /// 牙（改坏必红）：`Emitter::finish` 改回 `self.queued.sort_by_key(|(p, _)| *p)` ⇒
+    /// 得 `[s0,s1,s2]`/`[s0,s1,s2,s3]`，断言红。
+    #[test]
+    fn emitter_finish_same_priority_follows_four_ary_heap() {
+        for (n, want) in [
+            (3usize, vec!["s0", "s2", "s1"]),
+            (4, vec!["s0", "s3", "s2", "s1"]),
+        ] {
+            let mut em = Emitter::new();
+            for i in 0..n {
+                em.later(PRIO_RM_GROUPMESSAGE, sys_msg(901, &format!("s{i}")));
+            }
+            assert_eq!(texts(&em.finish()), want, "n={n}");
+        }
+    }
+
+    /// **跨收件人不得混堆**：oracle 每人一条 `MsgQueue`。`[A0,B1,A2,B3]` 交替入队 ⇒ 混堆会让 B
+    /// 出 `[B3,B1]`，分组（本实现）出 `[B1,B3]`。
+    #[test]
+    fn emitter_finish_keeps_recipients_in_separate_heaps() {
+        let mut em = Emitter::new();
+        for (target, text) in [(901, "a0"), (902, "b1"), (901, "a2"), (902, "b3")] {
+            em.later(PRIO_RM_GROUPMESSAGE, sys_msg(target, text));
+        }
+        let evs = em.finish();
+        let pick = |want: i32| -> Vec<String> {
+            texts(
+                &evs.iter()
+                    .filter(|e| e.target() == want)
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(pick(901), vec!["a0", "a2"]);
+        assert_eq!(pick(902), vec!["b1", "b3"], "混堆会得 [b3,b1]");
+    }
+
+    /// 分组不改变**立即桶**次序（立即帧按源码调用序，见模块头）。
+    #[test]
+    fn emitter_finish_keeps_immediate_order() {
+        let mut em = Emitter::new();
+        em.now(PartyEvent::CreateGroupOk { target: 901 });
+        em.now(PartyEvent::AddMemberOk { target: 902 });
+        em.later(
+            PRIO_RM_MERCHANTSAY,
+            PartyEvent::GotoLabel {
+                target: 901,
+                label: "@GroupCreate",
+            },
+        );
+        let evs = em.finish();
+        assert!(matches!(evs[0], PartyEvent::CreateGroupOk { target: 901 }));
+        assert!(matches!(evs[1], PartyEvent::AddMemberOk { target: 902 }));
+        assert!(matches!(evs[2], PartyEvent::GotoLabel { target: 901, .. }));
+    }
+}
