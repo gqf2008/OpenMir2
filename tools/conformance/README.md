@@ -316,7 +316,7 @@ Rust 偶尔多出 `SM_HIT(14)`）不能用「再跑一次直到 PASS」当判定
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，**189 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**198 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
 10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
@@ -336,12 +336,18 @@ python -I -B tools/conformance/compare_runs.py selftest
   与 `oracle_wire_len=54 / rust_wire_len=78`）；线缆形态改 hp ⇒ 1（`space=plain`）；
   两侧同为 58B 线缆 ⇒ 明文逐字节比、改一字节 ⇒ 1（偏移 46）；
 * 52 未登记长度对（41,41）⇒ 2（`ability_layout_unknown`，fail-closed）。
-* `SM_STRUCK(31)`（卡 openmir2-conformance-rule-sm-struck-31）：`head_mask:[param]` 只掩
-  **受击者当前 HP**（伤害的结果）、`head_compare:[recog]` 把**受击者 ActorId** 从全局掩码取回比较；
-  tag（MaxHP）/series（本次伤害 nDmg）/body（`EDCode(MessageBodyWL{Feature,Status,攻击者,Mag?})`）
-  全部逐字节比。仅 param 不同 ⇒ 0 且登记 `masked_head(param)`；tag/recog/series/body 任一不同 ⇒ 1
-  （`field` 逐一断言）。**牙**：去掉 31 规则 ⇒ 用例① 变 2（`unclassified_idents` 含 31）；
-  把规则放宽成整帧 `ignore` ⇒ 用例②(tag) 被吞成 0（证明真规则的 1 来自逐字段比较，不是偶然）。
+* `SM_STRUCK(31)`（卡 openmir2-conformance-rule-sm-struck-31；review 926d1b67 返工）：
+  `action=mask_body_ranges`，只有两处窄掩——① `head_mask:[param]` 只掩**受击者当前 HP**（伤害的结果）；
+  **局限**：series=nDmg 已逐值比，RNG 对拍成立时 param 冗余，**受击前 HP 的前置偏差本规则不判**；
+  ② body `ranges:[[10,16]]`（**线缆空间**）掩 **Tag1=攻击者 ActorId** 的 EDCode 足迹（16B 明文⇒22B
+  线缆；Tag1=明文[8..11] ⇒ 线缆 {10..15}；连带走线缆[11] 里 CharStatus 明文[6]/[7] 的 bits 2,3，
+  属已登记的过掩边界）。**recog 走全局 ActorId 掩码**（会话作用域标识，实测 C# 255025409 / Rust 275）；
+  tag（MaxHP）/series（本次伤害）/body 未掩区全部逐字节比。断言：仅 param ⇒ 0+`masked_head`；
+  recog ⇒ 0+`masked_head`；tag / series / Param1(Feature) / Tag2(Mag) / CharStatus 未掩位 ⇒ 1；
+  Tag1 与 CharStatus 明文[6] bits2,3 ⇒ 0+`mask_body_ranges`。**牙 4 颗**：① 去掉 31 规则 ⇒ 2
+  （`unclassified_idents`=[31]）；② 整帧 `ignore` ⇒ tag 被吞成 0；③ 把 recog 加回 `head_compare`
+  ⇒ 同一对变 1 field=recog（对照真规则为 0，证明是掩码生效而非比较器失明）；④ body ranges 放宽成
+  `[[0,null]]` ⇒ Feature 差异被吞成 0（窄区间不外溢）。
 * `multiset_by_tick`（对拍降噪 v2）：内置表**只有 ident=100** 用它（不扩散）且
   `tick_tolerance_ms=0`；两条 100 顺序颠倒 ⇒ 0 且 `masked_order` 登记；
   少一条 100 ⇒ 1 且缺失帧带 param/series/body 前 16 字节；三条 100 轮换（集合相同）⇒ 0；
