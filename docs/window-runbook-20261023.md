@@ -106,6 +106,17 @@
 > 规则扩到 5 条 + computed 后实测为 **12 个**（`SUMMARY ... ok=12 rc2=3 derived=3 rule=2 computed=1
 > no_required=5 params_default=1 missing=3 error=0`）。复审 `1e9f6315` 指出 king 记 derived 与本文件的分栏定义冲突，已改判 **rule**（`derived` 5→3、`rule` 0→2），`king_*` 不再计入「发现能力已验证」。
 
+## 4.6 脚本动作参数里的 `<$…>` **不会被展开**（2026-10-23 晚实测，写窗口项前必读）
+
+oracle 的 `ActionOfGmExecute`（以及多数脚本动作）**直接拼 `sParam1..6`，不调 `GetLineVariableText`** ⇒
+脚本里写 `Gmexecute 踢人 <$STR(S6)>` 时，命令收到的是**字面量 `<$STR(S6)>`**，不是展开值。
+
+当天三张 GM 卡的窗口判据全部建立在这个错误前提上，已全部打回重写。**写任何 GM/脚本动作窗口项前，先算出"命令实际收到什么"**：
+- 若部署调用点传的是 `<$STR(Sn)>` / `<$USERNAME>` ⇒ 真机看到的是**检测失败**（如「<$STR(S6)> 现在不在线」红字），不是成功分支；
+- 只有调用点传**字面量**（如 `Gmexecute 改属性 78`）时，命令才拿到真值。
+
+同理：`SENDMSG` 的文本走的是 `GetLineVariableText`（**会**展开命名变量？**不会**——`IsStringNumber` 的 `||` 缺陷让命名变量分支全是死代码，见 whitelist B-9；只有数字码 `<$N>` 可达）。
+
 ## 5. 跑完
 
 - 写 `--post-comment`（解禁后）+ 卡的 `status` 里写明：哪几个窗口项已验、证据路径、两侧二进制 sha256、以及**没验到的项和原因**。
