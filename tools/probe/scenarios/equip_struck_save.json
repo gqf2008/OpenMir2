@@ -1,14 +1,14 @@
 {
   "name": "equip_struck_save",
-  "description": "R7 装备耐久变化场景（openmir2-persist-useitems-wiring 的窗口前置）：placement 到比奇省 map 0 (288,610)，目标是正上方格 (288,609) 的**商店 NPC**「边界杂货店」（MerChant.txt:38）——CM_TURN(3010) 定朝向 Up → CM_HIT(3014) → 等 SM_DURACHANGE(642)（并覆盖 SM_UPDATEITEM(203) 这一第二种表现）。选「攻击方武器扣耐久」这条路的理由：oracle 的 AttackSuccess 在**有目标**时无条件抽 Random(5)+2 并调 DoDamageWeapon（PlayObject.Attack.cs:215-229），**命中/躲闪/伤害为 0 都照扣**，只有 targetObject==null 才 early-return；而「受击方扣耐久」要先被打中（BaseObject.Attack.cs:44-50 的躲闪门），是概率路径（combat_strike 的 BLOCKED 教训）。目标选不动、不还手的商店 NPC（GetMovingObject 返回格内任何 ActorObject，Envirnoment.cs:1203-1233），避免被反击打断（StruckTime 期内 CheckActionStatus 会拒掉所有操作）。注意：**Rust 侧尚未接这条磨损帧**（T-199 的相邻登记：AttackSuccess 的 DoDamageWeapon 与 RM_DURACHANGE 未接；受击方 wear_durability 只改世界状态、无事件通道）⇒ 现在跑两侧会在「Rust 缺 642」上红，不是场景问题。逐条 file:line、存档侧判据与登记见 docs/equip-struck-save-scenario-20261023.md",
+  "description": "R7 装备耐久变化场景（openmir2-persist-useitems-wiring 的窗口前置）：placement 到**铁器店 map 0103 (19,19)**，目标是正上方格 (19,18) 的商店 NPC「卫家店」（MerChant.txt:26）——CM_TURN(3010) 定朝向 Up → sleep 400 → CM_HIT(3014) → 等 SM_DURACHANGE(642)（并覆盖 SM_UPDATEITEM(203)），硬门只认 642。选「攻击方武器扣耐久」：oracle 的 AttackSuccess（PlayObject.Attack.cs:215-229）只在 targetObject==null 时 early-return，有目标就**无条件**抽 Random(5)+2-WeaponStrong 并调 DoDamageWeapon，**命中/躲闪/伤害 0 都照扣**；而「受击方扣耐久」要先被打中（概率路径，combat_strike 的 BLOCKED 教训）。**为什么是 map 0103**：该图在 MonGen.txt 里**一行刷怪配置都没有**（部署件与两侧窗口 Envir 的 MonGen.txt 逐字节相同）⇒ 不存在任何刷怪箱，玩家视野内**确定零怪**；上一版选的 map 0 (288,610) 被 MonGen.txt:112/113/124/125 的 鹿/稻草人 Range=50 箱体覆盖（GenMonRate=10 ⇒ 每行 50 只），稻草人 Race=83 SlowAtMonster 会主动攻击 ⇒ 已废弃。目标选商店 NPC 还有两点好处：GetMovingObject 返回格内任何 ActorObject（Envirnoment.cs:1203-1239），且玩家侧 IsAttackTarget 对 NPC 返回 false（PlayObject.Attack.cs:627-753，默认 HAM_ALL 下只有 Race<NPC||Race>PeaceNpc 才可打）⇒ 目标不掉血、不还手、不产生 SM_STRUCK 噪声。注意：**Rust 侧尚未接这条磨损帧**（T-199 相邻登记：AttackSuccess 的 DoDamageWeapon 与 RM_DURACHANGE 未接；受击方 wear_durability 只改世界状态、无事件通道）⇒ 现在跑两侧会在「Rust 缺 642」上红，不是场景问题。逐条 file:line、零怪证明表、存档侧判据与登记见 docs/equip-struck-save-scenario-20261023.md",
   "params": {
-    "self_pos": 39977248
+    "self_pos": 1245203
   },
   "placement": {
-    "map": "0",
-    "x": 288,
-    "y": 610,
-    "note": "比奇省 map 0；目标商店 NPC「边界杂货店」在 (288,609)（E:/MirServer/Mir200/Envir/MerChant.txt:38，GBK：`比奇城/万能 0 288 609 边界杂货店 0 3 0`，脚本 Market_Def/比奇城/万能-0.txt）。本格是它的正南邻格（Dir=Up 的前方格 = (x, y-1)，BaseObject.cs:977-990）。选它而不是怪物：① 不还手 ⇒ 不会触发 StruckTime 操作门（CheckActionStatus 开头，PlayObject.Base.cs:2662-2675）把 CM_HIT 拒掉；② 不动 ⇒ 前方格一定有目标（GetPoseCreate → GetMovingObject，BaseObject.cs:1253-1262 / Envirnoment.cs:1203-1233）；③ 周边 MonGen 半径 15 内**零刷怪**（脚本核对：map 0 的弓箭护卫最近一只在 y≈487-514，直线 95 格开外）；0.map 该格 bk=4/fr=0 可走"
+    "map": "0103",
+    "x": 19,
+    "y": 19,
+    "note": "铁器店 map 0103（MapInfo.txt:293 `[0103 铁器店] FIGHT`，服务器号 0）；目标商店 NPC「卫家店」在 (19,18)（E:/MirServer/Mir200/Envir/MerChant.txt:26，GBK：`比奇城/卫家店 0103 19 18 卫家店 0 1 0`，脚本 Market_Def/比奇城/卫家店-0103.txt）。本格是它的正南邻格（Dir=Up 的前方格 = (x, y-1)，BaseObject.cs:977-990）。**零怪证明**：MonGen.txt 里 map 0103 零行（部署件与两侧窗口 Envir 逐字节相同，cmp 已验）⇒ 没有刷怪箱（刷怪位置 = X-Range+Random(2*Range+1)，WorldServer.MonGen.cs:825-826/849-850；每行实际只数 = Count/(GenMonRate/10)，GenMonRate 部署 = 10（Server.conf:780）⇒ = Count，WorldServer.MonGen.cs:232）；map 0103 也没有 loadgen 子文件、没有脚本 MONGEN/MONGENEX、MapQuest/MapEvent 无该图条目；MerChant/Npcs 里 map 0103 只有这一个 actor ⇒ 视野内确定零怪、零主动攻击。0103.map 该格 bk=0/fr=3722（fr 无 bit15）可走"
   },
   "steps": [
     {
@@ -17,11 +17,11 @@
         "recog": "self_pos",
         "tag": 0
       },
-      "note": "CM_TURN(3010)（src/OpenMir2/Messages.cs:120）先定朝向。线上字段口径（src/GameSrv/Word/WorldServer.cs:831-844）：CM_TURN/CM_HIT 走 `SendMsg(playObject, Ident, Tag, LoWord(Recog), HiWord(Recog), 0)` ⇒ nParam1=LoWord(Recog)=X、nParam2=HiWord(Recog)=Y、wParam=Tag=Dir（Param 对这两条 ident 不读）。ClientChangeDir（src/M2Server/Player/PlayObject.Operate.cs:310-334）只在 nX==CurrX && nY==CurrY 时 Dir=nDir。self_pos = MakeLong(X=288,Y=610) = (610<<16)|288 = 39977248，与 placement 同源（改 placement 必须同步改它）。Dir=0=Up（src/OpenMir2/Enums/Direction.cs:5），Up 的前方格是 (x, y-1)（src/M2Server/Actor/BaseObject.cs:977-990）。**必须先转身**：CM_HIT 取目标走 GetPoseCreate() 的**状态化 Dir**（BaseObject.cs:1253-1262），报文 tag 只影响动作帧"
+      "note": "CM_TURN(3010)（src/OpenMir2/Messages.cs:120）先定朝向。线上字段口径（src/GameSrv/Word/WorldServer.cs:831-844）：CM_TURN/CM_HIT 走 `SendMsg(playObject, Ident, Tag, LoWord(Recog), HiWord(Recog), 0)` ⇒ nParam1=LoWord(Recog)=X、nParam2=HiWord(Recog)=Y、wParam=Tag=Dir（Param 对这两条 ident 不读）。ClientChangeDir（src/M2Server/Player/PlayObject.Operate.cs:310-334）只在 nX==CurrX && nY==CurrY 时 Dir=nDir。self_pos = MakeLong(X=19,Y=19) = (19<<16)|19 = 1245203，与 placement 同源（改 placement 必须同步改它）。Dir=0=Up（src/OpenMir2/Enums/Direction.cs:5），Up 的前方格是 (x, y-1)（src/M2Server/Actor/BaseObject.cs:977-990）。**必须先转身**：CM_HIT 取目标走 GetPoseCreate() 的**状态化 Dir**（BaseObject.cs:1253-1262），报文 tag 只影响动作帧"
     },
     {
       "sleep": 400,
-      "note": "间隔守门：CheckActionStatus（src/M2Server/Player/PlayObject.Base.cs:2662-2750）对两次**不同**操作要求 ≥ ActionIntervalTime（部署 Server.conf:330 = 300ms）；再加驱动器默认 --between-ms 200ms ⇒ 本条 400ms 富余。另注：被击后的 StruckTime 窗口内所有操作都会被拒（同函数 :2670-2678）——这正是目标选「不还手的商店 NPC」的原因"
+      "note": "间隔守门：CheckActionStatus（src/M2Server/Player/PlayObject.Base.cs:2662-2763）对两次**不同**操作要求 ≥ ActionIntervalTime（部署 Server.conf:330 = 300ms）；再加驱动器默认 --between-ms 200ms ⇒ 本条 400ms 富余。StruckTime 操作门（同函数 :2671-2680）在本场景不会被触发：map 0103 零怪、目标 NPC 不还手（IsAttackTarget 对 NPC 为 false）"
     },
     {
       "send": {
@@ -29,7 +29,7 @@
         "recog": "self_pos",
         "tag": 0
       },
-      "note": "CM_HIT(3014)（Messages.cs:136）。ClientHitXY（src/M2Server/Player/PlayObject.Attack.cs:823-960）：IsCanHit（登录置 true，src/M2Server/Player/PlayObject.cs:959）/ 非死亡非麻痹 / 攻击间隔门 / nX==CurrX&&nY==CurrY ⇒ AttackDir(null, 0, nDir)（:922）⇒ attackTarget = GetPoseCreate()（BaseObject.cs:1253-1262 → Envirnoment.GetMovingObject，Envirnoment.cs:1203-1233：返回格内**任何** ActorObject；商店 NPC 的 CellObject 也置 ActorObject=true，见 Envirnoment.cs:285）。**武器磨损不看命中**：AttackDir 结束后无条件调 AttackSuccess（PlayObject.Attack.cs:76 → :215），后者仅当 targetObject==null 才 early-return（:217-220），随后**无条件**抽 Random(5) 得 nWeaponDamage=Random(5)+2-AddAbil.WeaponStrong（:225），nWeaponDamage>0 且有武器就 DoDamageWeapon（:226-229）。命中判定/躲闪在更早的 _Attack（src/M2Server/Actor/BaseObject.Attack.cs:33-68）里，**不影响**这次磨损"
+      "note": "CM_HIT(3014)（Messages.cs:136）。ClientHitXY（src/M2Server/Player/PlayObject.Attack.cs:823-968）：IsCanHit（登录置 true，src/M2Server/Player/PlayObject.cs:959）/ 非死亡非麻痹 / 攻击间隔门 / nX==CurrX&&nY==CurrY（:883）⇒ AttackDir(null, 0, nDir)（:910）⇒ attackTarget = GetPoseCreate()（BaseObject.cs:1253-1262 → Envirnoment.GetMovingObject，Envirnoment.cs:1203-1239：返回格内**任何** ActorObject；商店 NPC 的 CellObject 也置 ActorObject=true，见 Envirnoment.cs:285）。**武器磨损不看命中**：AttackDir 结束后无条件调 AttackSuccess（PlayObject.Attack.cs:77 → :215），后者仅当 targetObject==null 才 early-return（:217-220），随后**无条件**抽 Random(5) 得 nWeaponDamage=Random(5)+2-AddAbil.WeaponStrong（:225），nWeaponDamage>0 且有武器就 DoDamageWeapon（:226-229）。命中/躲闪/伤害为 0 都在更早的 _Attack（src/M2Server/Actor/BaseObject.Attack.cs:33-68）里结算，**不影响**这次磨损。对商店 NPC：PlayObject.IsProperTarget（PlayObject.cs:1924）→ IsAttackTarget 覆写（PlayObject.Attack.cs:627-753）在默认 HAM_ALL 下要求 `Race < ActorRace.NPC(10) || Race > ActorRace.PeaceNpc(15)`，NPC 的 Race=10（NormNpc.cs:42）⇒ false ⇒ _Attack 的 nPower=0、NPC 不掉血"
     },
     {
       "wait_for": [
@@ -37,7 +37,7 @@
         203
       ],
       "timeout_ms": 3000,
-      "note": "两种表现，各自条件写死：① **642 = 装备耐久变化**（RM_DURACHANGE → SM_DURACHANGE，Messages.cs:303；处理器 src/M2Server/Player/PlayObject.Message.cs:1803-1805 把 `SendMsg(RM_DURACHANGE, wParam=槽, nParam1=Dura, nParam2=DuraMax)` 拆成 `Recog=Dura / Param=槽 / Tag=LoWord(DuraMax) / Series=HiWord(DuraMax)`）。本步的 642 来自 DoDamageWeapon（src/M2Server/Player/PlayObject.Attack.cs:1436-1470）：扣前 `Round(Dura/1.03)` 与扣后 `Round(Dura/1.03)` 不同就发（:1458-1466）；Dura 扣到 ≤0 时先 SendDelItems（→ SM_DELITEM(202)）再把槽 Index 清零、发一条 Recog=0 的 642（:1444-1457）。② **203 = 物品属性更新**（SM_UPDATEITEM，Messages.cs:223；SendUpdateItem src/M2Server/Player/PlayObject.Base.cs:1668-1688），**普通磨损不发**——攻击路径里唯一发它的是 CheckWeaponUpgrade 成功支（src/M2Server/Player/PlayObject.cs:4110-4138，要求武器 `Desc[WeaponUpgrade] > 0`，即升级 NPC 取回过的武器）。本场景夹具是**未升级武器**（Desc[10]==0）⇒ 该来的是 642；把 203 也放进集合只为「若夹具换成升级武器（CheckWeaponUpgrade 先发 203，随后磨损照发 642）也不至于恒超时」，二者不互相替代"
+      "note": "两种表现，各自条件写死：① **642 = 装备耐久变化**（RM_DURACHANGE → SM_DURACHANGE，Messages.cs:303；处理器 src/M2Server/Player/PlayObject.Message.cs:1803-1805 把 `SendMsg(RM_DURACHANGE, wParam=槽, nParam1=Dura, nParam2=DuraMax)` 拆成 `Recog=Dura / Param=槽 / Tag=LoWord(DuraMax) / Series=HiWord(DuraMax)`）。本步的 642 来自 DoDamageWeapon（src/M2Server/Player/PlayObject.Attack.cs:1436-1470）：`nDuraPoint = Round(Dura/1.03)`（int），扣完后判 `if (Math.Abs(nDura/1.03) != nDuraPoint)`（:1466）——**左边是未取整的 double、右边是取整过的 int**，两者只在「扣后 Dura/1.03 恰好等于整数」时相等（测度零）⇒ **几乎必发**一条（不是「两边都 Round 再比」）。Dura 扣到 ≤0 时先 SendDelItems（→ SM_DELITEM(202)）再把槽 Index 清零、发一条 Recog=0 的 642（:1444-1457）。② **203 = 物品属性更新**（SM_UPDATEITEM，Messages.cs:223；SendUpdateItem src/M2Server/Player/PlayObject.Base.cs:1668-1686），**普通磨损不发**——攻击路径里唯一发它的是 CheckWeaponUpgrade 成功支（src/M2Server/Player/PlayObject.cs:4110-4138，要求武器 `Desc[WeaponUpgrade] > 0`，即升级 NPC 取回过的武器）。本场景夹具是**未升级武器**（Desc[10]==0）⇒ 该来的是 642；把 203 也放进集合只为「若夹具换成升级武器（CheckWeaponUpgrade 先发 203，随后磨损照发 642）也不至于恒超时」，二者不互相替代"
     },
     {
       "wait_idents": {
@@ -46,7 +46,7 @@
         ],
         "timeout_ms": 3000
       },
-      "note": "成功硬门：642 必须真的到。没装备武器 ⇒ DoDamageWeapon early-return（PlayObject.Attack.cs:1438-1441）；身前格没目标 ⇒ AttackSuccess early-return（:217-220）⇒ 两条都零 642 ⇒ 本步红（不会拿 203 蒙混过去）。破零支（Dura ≤ nWeaponDamage）会先来 202 再来 Recog=0 的 642，仍满足本步；三条帧的先后（202 → 642）由比较器判"
+      "note": "成功硬门：642 必须真的到。没装备武器 ⇒ DoDamageWeapon early-return（PlayObject.Attack.cs:1438-1441）；身前格没目标 ⇒ AttackSuccess early-return（:217-220）；武器有效 SpecialPwr（AddAbil.WeaponStrong，PlayObject.cs:4424-4426）≠0 且 Random(5)+2 ≤ WeaponStrong ⇒ nWeaponDamage ≤0 被 :226 挡掉——三条都零 642 ⇒ 本步红（不会拿 203 蒙混过去）。破零支（Dura ≤ 2 才保证一击破零：nWeaponDamage 最小 2）会先来 202 再来 Recog=0 的 642，仍满足本步；帧先后由比较器判"
     }
   ]
 }
