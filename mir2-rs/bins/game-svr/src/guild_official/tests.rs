@@ -37,6 +37,8 @@ impl FixedNpcScript for EmptyScript {
         _npc_actor_id: i32,
         _label: &str,
         _bo_ext_jmp: bool,
+        _world: &mir2_world::World,
+        _guilds: &mir2_world::GuildManager,
     ) -> (Vec<SayMsg>, Vec<SendMsg>, Vec<usize>) {
         (Vec::new(), Vec::new(), Vec::new())
     }

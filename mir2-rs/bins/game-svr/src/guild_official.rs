@@ -372,6 +372,7 @@ fn flush(
 /// 同步到世界实体（`Entity.use_items` 是每 tick 回写会话的权威源）。`None` 语义
 /// （`ActorMgr.Get(actorId) == null` ⇒ 无说词）在实现方折叠成空 `Vec`。
 pub(crate) trait FixedNpcScript {
+    #[allow(clippy::too_many_arguments)]
     fn goto_label(
         &mut self,
         sg: &mut SessionGround,
@@ -379,6 +380,11 @@ pub(crate) trait FixedNpcScript {
         npc_actor_id: i32,
         label: &str,
         bo_ext_jmp: bool,
+        // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 跳线要的宿主视图两件
+        //（`GmWorld.guilds` / `GmWorld.world`）。本 handler 自己持有 `&mut`，只能在调用点
+        // 重借一次只读交给脚本 ⇒ 由 trait 传入，而不是塞进 `script` 的构造参数。
+        world: &mir2_world::World,
+        guilds: &mir2_world::GuildManager,
     ) -> (
         Vec<game_svr::npc::SayMsg>,
         Vec<game_svr::npc::SendMsg>,
@@ -564,7 +570,7 @@ pub(crate) fn handle_select(
     // `GotoLable` 的 `boExtJmp && !sayingRecord.boExtJmp ⇒ return` 由引擎判定）。
     let (says, script_frames, use_slots) = {
         let ss = shop_sessions.entry(chr_name.to_string()).or_default();
-        script.goto_label(sg, ss, npc_actor_id, label, !can_jmp)
+        script.goto_label(sg, ss, npc_actor_id, label, !can_jmp, &*world, &*guilds)
     };
     // `TAKEW` 摘下的佩戴位：会话已写回，实体同步（否则下一 tick 的实体→会话回写会撤掉）。
     for slot in use_slots {
@@ -763,7 +769,7 @@ pub(crate) fn handle_select(
         };
         let (says, script_frames, use_slots) = {
             let ss = shop_sessions.entry(chr_name.to_string()).or_default();
-            script.goto_label(sg, ss, npc_actor_id, &back, false)
+            script.goto_label(sg, ss, npc_actor_id, &back, false, &*world, &*guilds)
         };
         for slot in use_slots {
             crate::sync_use_item_slot_to_entity(world, sg, slot);
