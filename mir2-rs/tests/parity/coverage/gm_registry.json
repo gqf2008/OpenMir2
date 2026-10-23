@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "5c25d2d58ba1632c8c084ac875db8aff87646f6586b629880c0e546dacd1ff11"
+   "sha256": "d28b6c60ebadf643b8f6a15fc2da613fccda0bfc03c3051039ba9b0a5d48ce29"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",

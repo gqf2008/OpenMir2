@@ -2644,7 +2644,7 @@ fn show_effect() -> GmResult {
 ///   恒真分支求值：第二段不是 `true`/`false`（`""`、`1`、`yes`…）⇒ `FormatException`
 ///   冒泡出 `Execute`（`MethodInfo.Invoke` 的 `TargetInvocationException` 由
 ///   `PlayObject.Chat.cs:402-406` 的整段 catch 吞掉）⇒ **零帧**；
-/// - `:21` `if (string.IsNullOrEmpty(sHumanName) || !string.IsNullOrEmpty(sHumanName))`——
+/// - `:20` `if (string.IsNullOrEmpty(sHumanName) || !string.IsNullOrEmpty(sHumanName))`——
 ///   `A || !A` **恒真** ⇒ 无条件 `SysMsg(Command.CommandHelp, Red, Hint)` 后 `return`；
 ///   `Command.CommandHelp` = `$"命令格式: @{Name} {Help}"`（`CommandAttribute.cs:56-58`），
 ///   `Name` 被部署 `Command.conf` 覆盖为 `取消禁言`、`Help` = `人物名称`；

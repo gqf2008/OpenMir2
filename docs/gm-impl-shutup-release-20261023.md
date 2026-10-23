@@ -1,5 +1,7 @@
 # GM `@取消禁言`（`ShutupReleaseCommand`）实现（T-212）
 
+> **快照戳**：最终 head `071c14414`（2026-10-24，合并 master 批次 5A 后）。本文所有「实测」数字均以该 head 为准；引用较早 head 的数字都注明了来源。
+
 - 卡：`openmir2-gm-impl-shutup-release`（tier=R；父卡 `openmir2-gm-reachability-registry` 的 `script-reachable` 项）
 - 分支：`card/openmir2-gm-impl-shutup-release`，base master `619de1ce9`
 - 作者：`openmir2-worker-24`；worktree `OpenMir2-wt-cronclaim`
@@ -28,7 +30,7 @@
 - `取消禁言` 表项 `Imp::Unimplemented → Imp::ShutupRelease`（`perm_min 10` = `[Permission] ReleaseShutup=10`，`params 2`）；
 - `shutup_release()`：`split_params`（`Split(' ')` 保留空段）→ 第二段存在时 `parse_csharp_bool`（`Trim` 后只认 `true`/`false`，大小写不敏感）失败即 `no_frames(NOTE_SHUTUP_RELEASE_BOOL_PARSE)` → 否则 `red(SHUTUP_RELEASE_HELP)`；
 - 常量 `SHUTUP_RELEASE_HELP = "命令格式: @取消禁言 人物名称"`；
-- `gm_registry.json` 重算：`Implemented 98 → 99`、`Unimplemented 87 → 86`，`script_reachable_but_implemented` 新增 3 条 `比武-GA2.txt:43/68/106`；既有计数用例同步更新。
+- `gm_registry.json` 重算：本卡首次交付时 `Implemented 98 → 99`、`Unimplemented 87 → 86`；**最终 head `071c14414` 合并 master 批次 5A 后为 `Implemented 111 / Unimplemented 74`**（`gm_registry.py gate` 实测 74 条 GREEN）；`script_reachable_but_implemented` 新增 3 条 `比武-GA2.txt:43/68/106`；既有计数用例同步更新。
 
 ## 3. 用例（5）与牙（2）
 
@@ -55,11 +57,11 @@
 ```
 cargo fmt --all -- --check                              OK
 cargo clippy --workspace --all-targets -- -D warnings   OK
-cargo test --workspace                                  141 个测试二进制 / 3101 passed / 0 FAILED（rc=0；第二次合并 master 后重跑）
+cargo test --workspace                                  141 个测试二进制 / 3101 passed / 0 FAILED（rc=0；**合并 master 批次 5A 之前**的实测；批次 5A 合并后未重跑全量，`game-svr --lib` 1378 passed 为最终 head 实测）
 cargo run -p msgcodegen -- --check                      604 条一致
-whitelist_anchor_gate.py check                          507 条锚 ALL PASS（含 T-212）
+whitelist_anchor_gate.py check                          548 条锚 ALL PASS（最终 head 071c14414 实测）
 m3_whitelist_registry_audit.py audit                    GREEN
-t_reservation_gate.py check                             GREEN
+t_reservation_gate.py check                             GREEN（预约表 248 / whitelist 248，最终 head 实测）
 gm_registry.py build && gate && selftest                GREEN（14 teeth）
 ```
 
