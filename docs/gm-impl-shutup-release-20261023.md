@@ -55,7 +55,7 @@
 ```
 cargo fmt --all -- --check                              OK
 cargo clippy --workspace --all-targets -- -D warnings   OK
-cargo test --workspace                                  141 个测试二进制 / 3047 passed / 0 FAILED（rc=0）
+cargo test --workspace                                  141 个测试二进制 / 3068 passed / 0 FAILED（rc=0；合并 master 后重跑）
 cargo run -p msgcodegen -- --check                      604 条一致
 whitelist_anchor_gate.py check                          507 条锚 ALL PASS（含 T-212）
 m3_whitelist_registry_audit.py audit                    GREEN
@@ -90,6 +90,14 @@ gm_registry.py build && gate && selftest                GREEN（14 teeth）
 | F1 | important | T-212 窗口项改「当前不可复跑」+ 写明两处前置（前置卡未合入、AdminList 无 IP 段 ⇒ 无 perm=10 玩家）与放行条件（`mir2-rs/tests/parity/whitelist.md`，本节上条同源）。 |
 | F2 | minor | `gm_registry.py build` 重算源码指纹：`gm_registry.json` 只改 1 行 `sources.rust_table.sha256`（`769de74093cc…` → 当前 `gmcmd.rs` 实测值），`gate`/`selftest` 仍 GREEN（14 teeth）。 |
 | F3 | minor | 新增 `shutup_release_help_is_gbk_bytes_on_the_wire`：对 `命令格式: @取消禁言 人物名称` 做**线上 GBK 逐字节**断言（`crate::downlink::gbk`，28 字节；UTF-8 相同不能替代）。牙：改常量字 ⇒ 本用例红。 |
+
+## 5c. 合并 master（`75b4a4d79`）
+
+- master 已并入 `ShowEffect`/`StartQuest` 等批 5 卡；`gmcmd.rs` 冲突以 **master 为基底重放本卡增量**解决
+  （常量 / 枚举 / 派发臂 / `shutup_release`+`parse_csharp_bool` / 表项 / 6 用例），并删除 master 里
+  同名的「`取消禁言` → `Imp::Unimplemented`」旧表项（否则表 186 行、`find` 命中旧项 ⇒ 零帧）。
+- 计数：`Implemented 101 / Unimplemented 84`（master 100 + 本卡 1）；`gm_registry.py build` 重新生成指纹。
+- `whitelist.md` / `T-RESERVATIONS.md`：保留 master 全部行 + 重插 T-212 行（含 F1 订正）。
 
 ## 6. 残留物清单
 
