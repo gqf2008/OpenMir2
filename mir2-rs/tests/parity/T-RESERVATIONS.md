@@ -266,3 +266,11 @@
 | T-233 | openmir2-magic-8-21-wiring | 2026-10-23T14:45:37Z | 在用 |
 | T-234 | openmir2-spell-mp-wrapper | 2026-10-23T14:45:38Z | 在用 |
 | T-235 | openmir2-aoi-verify-maptime | 2026-10-23T14:45:39Z | 在用 |
+| T-236 | openmir2-player-searchviewrange-cadence | 2026-10-23T14:59:59Z | 在用 |
+| T-237 | openmir2-run-gap-player-run-quantification | 2026-10-23T14:59:59Z | 在用 |
+| T-238 | openmir2-run-gap-monster-state-expiry | 2026-10-23T15:00:00Z | 在用 |
+| T-239 | openmir2-run-gap-corpse-ghost-revive | 2026-10-23T15:00:01Z | 在用 |
+| T-240 | openmir2-movetomovingobject-quirk | 2026-10-23T15:00:03Z | 在用 |
+| T-241 | openmir2-run-gap-monster-master-follow | 2026-10-23T15:00:04Z | 在用 |
+| T-242 | openmir2-run-gap-monster-specials | 2026-10-23T15:00:05Z | 在用 |
+| T-243 | openmir2-run-gap-pr1-head-blocking | 2026-10-23T15:00:06Z | 在用 |
