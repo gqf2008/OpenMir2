@@ -27652,6 +27652,123 @@ break
         rig.catalog = catalog;
     }
 
+    /// `MOV`（`ExecutionCode.Mov = 23`）：`s_param1` = 目标变量名、`s_param2` = 取值文本。
+    /// 走 `GetMovDataType` 的 4 号支（`s_param1` 是槽位名、`s_param2` 是 `<...>`）
+    /// ⇒ `GetMovDataHumanInfoValue` 读 `$EXP`。
+    fn mov_act(target: &str, value: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 23,
+            s_param1: target.to_string(),
+            s_param2: value.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **A-26/T-207 ④**：`$EXP` 的**脚本读侧**（`ProcessingBase.cs:35-566` 的 switch）必须读
+    /// 同一个 `Abil.Exp` ⇒ 脚本里 `MOV P0 <$EXP>` 之后的说词 `<$STR(P0)>` 展开成 seed+增量。
+    ///
+    /// 用例路径：一条 label 两个 procedure —— ①`MOV P0 <$EXP>`；②说词 `<$STR(P0)>`。
+    /// `Engine::goto_label` 把说词**累积**到所有 procedure 跑完后才 `line_variable_text` 展开
+    /// （`crates/script/src/engine/mod.rs` 的尾段）⇒ 展开时 `P0` 已是脚本读到的值。
+    ///
+    /// 牙：把 `NpcPlayer::abil_exp` 改回缺省 `0`（或删 `npc_player_from_session` 的 seed）
+    /// ⇒ 说词变成 `exp=0`，本用例红。
+    #[test]
+    fn changexp_exp_variable_reads_seeded_total_into_say_text() {
+        let rec = mir2_script::SayingRecord {
+            s_label: "@main".to_string(),
+            procedure_list: vec![
+                mir2_script::SayingProcedure {
+                    condition_list: Vec::new(),
+                    action_list: vec![mov_act("P0", "<$EXP>")],
+                    else_action_list: Vec::new(),
+                    s_say_msg: "exp=".to_string(),
+                    s_else_say_msg: String::new(),
+                },
+                mir2_script::SayingProcedure {
+                    condition_list: Vec::new(),
+                    action_list: Vec::new(),
+                    else_action_list: Vec::new(),
+                    s_say_msg: "<$STR(P0)>".to_string(),
+                    s_else_say_msg: String::new(),
+                },
+            ],
+            bo_ext_jmp: false,
+        };
+        let mut rig = T142Rig::new(vec![rec]);
+        {
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.equip.abil.exp = 500;
+            sg.state.wabil.exp = 500;
+        }
+        rig.dlg_select("@main");
+        let frames = rig.drain();
+        let says: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_MERCHANTSAY)
+            .collect();
+        assert_eq!(
+            says.len(),
+            1,
+            "累积说词只落一条 RM_MERCHANTSAY；实得 {:?}",
+            idents(&frames)
+        );
+        let (_, _, _, recog) = hdr(says[0].as_slice());
+        assert_eq!(
+            recog, rig.merchant_id,
+            "非 priority 说词的 Recog = NPC ActorId"
+        );
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&says[0][12..]));
+        assert_eq!(
+            text, "寄售商/exp=500",
+            "`<$EXP>` 必须读到 seed 的 Abil.Exp（缺省会展开成 0/原样）"
+        );
+    }
+
+    /// **A-26/T-207 ⑤**：存档**字段级**——脚本改完经验后 `MakeSaveRcd` 的
+    /// `data.abil.exp` 必须是写回后的总量（`build_save_record` 取 `base = &sg.equip.abil`
+    /// 再 `exp: base.exp`），且经线上存档体编码/解码往返后仍是同一值。
+    ///
+    /// 牙：把 `write_back_player_abil_exp` 改成只写 `sg.state.wabil.exp`（漏 `equip.abil`）
+    /// ⇒ 存档仍取 seed 500，本用例红（`SM_WINEXP` 那条用例的会话断言看不出来这一路）。
+    #[test]
+    fn changexp_writes_into_save_record_abil_exp() {
+        use mir2_storage::MemPack;
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![changexp_act("+", "1000")],
+        )]);
+        {
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.equip.abil.exp = 500;
+            sg.state.wabil.exp = 500;
+        }
+        rig.dlg_select("@main");
+        let _ = rig.drain();
+        let saved = SavedHuman {
+            account: "ua".to_string(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".to_string(),
+        };
+        let rec = build_save_record(&saved, "hero", &rig.world, &rig.sessions["hero"], None);
+        assert_eq!(
+            rec.data.abil.as_ref().expect("存档必须有 Abil").exp,
+            1500,
+            "保存记录的 data.abil.exp 必须取写回后的 equip.abil.exp"
+        );
+        let parsed = mir2_storage::SaveCharacterData::from_bytes(
+            &record::encode_save_character_data(&saved.account, "hero", &rec),
+        )
+        .expect("DBSvr 侧必须能解存档体");
+        let d = parsed.character_data.unwrap().data.unwrap();
+        assert_eq!(
+            d.abil.as_ref().expect("解码后必须有 Abil").exp,
+            1500,
+            "存档体逐字段往返后 exp 仍是写回值"
+        );
+    }
+
     /// `SETMPAMODE`（`ExecutionCode.SetMapMode = 216`；`sParam1..4` = 地图/分支/参数1/参数2）。
     fn setmapamode_act(map: &str, mode: &str, p1: &str, p2: &str) -> mir2_script::QuestActionInfo {
         mir2_script::QuestActionInfo {
