@@ -27,6 +27,7 @@ python -I -B tools/probe/param_discovery.py <frames.ndjson> npc_actor,self_x
 输出是 JSON：`{"values": {var: {value, source, seq, ident}}, "missing": [...]}`；`missing` 非空时退出码 2。
 """
 import json
+import os
 import sys
 
 SM_TURN = 10
@@ -187,14 +188,62 @@ def selftest():
     case("⑥ 同夹具两次跑同结果（确定性）", c6)
     case("⑦ 混合：可推导的给、不可推导的逐个点名", c7)
     case("牙① self_x 错取 tag ⇒ 值与真值不同", tooth1)
+    def c8():
+        # check-all 的接线口径：可推导场景 rc=0、不可推导场景 rc=2 并点名
+        import tempfile
+        tmp = tempfile.mkdtemp(prefix="pd-checkall-")
+        frames_path = os.path.join(tmp, "frames.ndjson")
+        with open(frames_path, "w", encoding="utf-8") as fh:
+            for f in _fixture():
+                print(json.dumps(f), file=fh)
+        ok_scen = {"name": "ok_scen", "required": ["self_x"],
+                   "steps": [{"wait_for": 50, "timeout_ms": 10}]}
+        bad_scen = {"name": "bad_scen", "required": ["make_index"],
+                    "steps": [{"wait_for": 50, "timeout_ms": 10}]}
+        for name, doc in (("ok.json", ok_scen), ("bad.json", bad_scen)):
+            with open(os.path.join(tmp, name), "w", encoding="utf-8") as fh:
+                json.dump(doc, fh)
+        rows = dict((n, rc) for n, rc, _ in check_all(frames_path, tmp))
+        assert rows["ok.json"] == 0, rows
+        assert rows["bad.json"] == 2, rows
+
+    case("⑧ check-all：可推导 rc=0 / 不可推导 rc=2", c8)
     case("牙② 静默空集合 ⇒ 用例红", tooth2)
     if fails:
         print("param_discovery selftest: FAIL")
         for f in fails:
             print("  -", f)
         return 1
-    print("param_discovery selftest: OK (7 cases + 2 teeth)")
+    print("param_discovery selftest: OK (8 cases + 2 teeth)")
     return 0
+
+
+def check_all(frames_path, scenarios_dir):
+    """对每个场景：从 frames 推导它的 required ⇒ 拼 --var 跑 --check-scenario。
+
+    返回 [(scenario, rc, detail)]；rc 口径：0=通过 / 2=发现不出必需变量或场景校验失败。
+    """
+    import glob
+    import os
+    import subprocess
+    frames = load_frames(frames_path)
+    here = os.path.dirname(os.path.abspath(__file__))
+    probe = os.path.join(here, "mir2_probe.py")
+    rows = []
+    for path in sorted(glob.glob(os.path.join(scenarios_dir, "*.json"))):
+        with open(path, "r", encoding="utf-8") as fh:
+            scenario = json.load(fh)
+        required = scenario.get("required") or []
+        values, missing = derive(frames, required)
+        if missing:
+            rows.append((os.path.basename(path), 2, "missing: %s" % ",".join(missing)))
+            continue
+        cmd = [sys.executable, "-I", "-B", probe, "--check-scenario", "--scenario", path]
+        cmd += render_vars(values)
+        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        detail = (proc.stdout or proc.stderr or "").strip().splitlines()
+        rows.append((os.path.basename(path), proc.returncode, detail[-1] if detail else ""))
+    return rows
 
 
 def main(argv=None):
@@ -204,6 +253,18 @@ def main(argv=None):
         return 2
     if argv[0] == "selftest":
         return selftest()
+    if argv[0] == "check-all":
+        if len(argv) < 2:
+            print("usage: param_discovery.py check-all <frames.ndjson> [scenarios_dir]", file=sys.stderr)
+            return 2
+        scen = argv[2] if len(argv) > 2 else os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "scenarios")
+        rows = check_all(argv[1], scen)
+        bad = [r for r in rows if r[1] != 0]
+        for name, rc, detail in rows:
+            print("%-28s rc=%d  %s" % (name, rc, detail[:100]))
+        print("SUMMARY scenarios=%d ok=%d rc2=%d" % (len(rows), len(rows) - len(bad), len(bad)))
+        return 0 if not bad else 2
     if len(argv) < 2:
         sys.stderr.write("usage: param_discovery.py selftest | <frames.ndjson> <var1,var2,...>\n")
         return 2
