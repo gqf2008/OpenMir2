@@ -60,14 +60,14 @@
 | `openmir2-weapon-upgrade-values` | A-(i) | `tools/probe/scenarios/upgrade_retrieve.json` | check rc=0 + card_window dry-run **rc=0** |
 | `openmir2-encoding-core-e1-e2` | A-(iii) | `crates/encoding/tests/cp936_vectors.rs` 等（纯离线） | `cargo test` **8/8 + 7/7 + 4/4 rc=0** |
 | `openmir2-world-tick-expansion` | A-(i)+(iii) | `login_only.json` + `MIR2_RNG_LOG`；构造级 `npc_tick`/`refresh_game_time`/`line_notice` | check/dry-run **rc=0**；cargo **2/2 + 2/2 + 15/15** |
-| `openmir2-buff-system` | A-(iii)；场景 **BLOCKED** | `spell_cast.json`（自带 **BLOCKED-FIXTURE**）+ `buff::tests` | check rc=0；dry-run **rc=2 BLOCKED**；cargo **16/16** |
+| `openmir2-buff-system` | A-(i)+(iii) | `spell_cast.json`（夹具经 profile `magic` 段声明）+ `buff::tests` | check rc=0；dry-run **rc=0（须带声明 magic 的 `--profile`；默认 alt 是假绿）**；cargo **16/16** |
 | `openmir2-outbound-encoders-red-batch` | A-(i)+(iii) | `upgrade_retrieve.json`（R2）+ `cm_make_drug_gates`；制药链无场景 | dry-run **rc=0**；cargo **1/1** |
 | `openmir2-weapon-durability-frames` | A-(iii)；**无场景文件** | T-199 精确期望 + `weapon_durability_tests`；**655/1102 真机场景待建** | cargo **13/13 + 4/4 rc=0** |
 | `openmir2-mb7-monsters` | A-(iii) | T-143/T-144 + `mb7` 构造级用例；**真机场景待建** | cargo **6/6 rc=0** |
 | `openmir2-castle-guard-target` | A-(iii) | T-96 + `proper_target` 构造级用例；**R6 castle_zone 场景待建** | cargo **5/5 + 1/1 + 1/1 rc=0** |
 
 > **载体纠偏（review R5）**：`openmir2-weapon-durability-frames` **没有场景文件**（`ls tools/probe/scenarios/ | grep -i durability` = 0），
-> 载体是 T-199 + 构造级 cargo；`openmir2-buff-system` 的 `spell_cast.json` 存在但 `card_window --dry-run` 判 `BLOCKED`（rc=2，缺 `characters_magic`），
+> 载体是 T-199 + 构造级 cargo；`openmir2-buff-system` 的 `spell_cast.json` **已解封**（卡 `openmir2-spell-cast-unblock` 删去 `blocked`），
 > 故只算构造级；`openmir2-m3-drop-exp-wiring` 在批次计划里没有同名行，§1F 对应的是 `openmir2-m3-drop-exp-align`（`docs/window-batch-plan-20261023.md:134`）。
 > 规则按「离线载体」而非「是否有场景文件」重写，每张的载体类型与 blocked 状态都已落到表里，可逐张复算。
 
@@ -260,22 +260,23 @@
 ### 4.8 `openmir2-buff-system`（审计 #20，行 128）
 
 - **W-1 三条怪癖；W-2 毒伤 DoT 流水；W-3 `CharStatus` 位序；W-4 魔法盾 MP + `LastHiter` 守卫**
-- **① 前置/夹具**：`spell_cast.json` **已声明 BLOCKED**（缺 `characters_magic` 夹具：两侧测试库各加
-  `(PlayerId=6228, MagicId=1, Level=0, UseKey='1', CurrTrain=0)`；建议新卡 `openmir2-window-magic-fixture`）；
-  且 W-1 的「递减 50ms vs 1s 两读法」**待窗口 A-R2 裁定**。`characters_magic` 夹具本身已在 `512d9ecf5`；
-  场景封口由卡 `openmir2-spell-cast-unblock` 处理（head `923a98a5c` **待审**，本文件不预设合并结果）。
+- **① 前置/夹具**：`spell_cast.json` **已解封**（卡 `openmir2-spell-cast-unblock` 删去 `blocked`）——夹具不再写死在场景里，
+  改由 **profile `magic` 段**声明：两侧测试库各写 `(PlayerId=6228, MagicId=1, Level=0, UseKey='1', CurrTrain=0)`
+  （`card_window.py` 的 `profile_magic`/`run_magic`，master `512d9ecf5` 起）。**默认内置 `alt` profile 无 `magic` 段 ⇒
+  dry-run rc=0 但静默跳过夹具（假绿）；取证必须带 `--profile <声明了 magic 的 profile.json>`。** 工具级 fail-closed
+  （场景显式声明 `requires`）由承接卡 `openmir2-scenario-fixture-precondition` 落地。且 W-1 的「递减 50ms vs 1s 两读法」**待窗口 A-R2 裁定**。
 - **② 可复跑命令**：
   - ✅ `python -I -B tools/probe/mir2_probe.py --check-scenario --scenario tools/probe/scenarios/spell_cast.json`（形状合法 rc=0）
-  - ✅ `python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/scenarios/spell_cast.json` → **rc=2 BLOCKED**
+  - ✅ `python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/scenarios/spell_cast.json --profile <声明了 magic 段的 profile.json>` → **rc=0，且两侧各打印「魔法夹具（dry-run 不连库）」**；不带 `--profile` 也是 rc=0 但**没有**该行（假绿，见 §7 顶部警告）
   - ✅ `cargo test -p mir2-world buff::tests`
-  - 真机（**不可执行**）：场景封存，**不写可跑命令**。
+  - 真机（**不可执行**）：窗口未授权（场景本身已可 dry-run）。
 - **③ 期望**：① `break` 跳 `for(j)` 的 SysMsg 与递减、怪物 buff 永不到期（两读法待 A-R2）；② 毒伤 DoT 逐次 `MIR2_RNG_LOG`；
   ③ 走/跑/转向/受击/死亡帧尾 `Status` 位序跨帧一致；④ 魔法盾 MP 抵扣与 `LastHiter` 守卫分支。
-- **④ 判据**：**判不了**——① 判据未定（A-R2 未裁决）、场景封存（dry-run rc=2 BLOCKED）；只有构造级可判。
-- **⑤ 不可比**：A-R2 未裁决前不比对递减节奏；缺 `characters_magic` 前任何施法帧（637/638/639/17）都不比。
+- **④ 判据**：**判不了**——① 判据未定（A-R2 未裁决）、真机窗口未授权；离线侧已可 dry-run（须 `--profile`）；只有构造级 + 离线 rc 可判。
+- **⑤ 不可比**：A-R2 未裁决前不比对递减节奏；窗口未授权前任何施法帧（637/638/639/17）都不比（`characters_magic` 夹具本身已可用）。
 - **⑥ 负责人/状态**：owner `openmir2-coordinator`；本批 **构造级已跑通过（16/16, rc=0）**；
-  **窗口判据判不了**（判据未定 + 夹具缺失）；blocked_by = 窗口 A-R2 裁定 + `openmir2-window-magic-fixture`。
-- **实跑证据**：check rc=0；dry-run `VERDICT: BLOCKED … exit=2`；`buff::tests` 16 passed。
+  **窗口判据判不了**（判据未定 + 窗口未授权）；blocked_by = 窗口 A-R2 裁定 + `openmir2-spell-cast`（R 卡）窗口。
+- **实跑证据**：check rc=0；dry-run（带声明 magic 的 `--profile`）**rc=0**；`buff::tests` 16 passed。
 
 ### 4.9 `openmir2-castle-guard-target`（审计 #27，行 135）
 
@@ -323,7 +324,7 @@
 | encoding-core-e1-e2 | BOM 两路 + 非 ASCII 字节 | cargo 8/8 + 7/7 + 4/4 | **W-2 不需窗口**；W-1 未跑 |
 | world-tick-expansion | 账本 + 46 + 公告节拍 + ghost 60s | check/dry-run rc=0；cargo 2/2+2/2+15/15 | 离线/构造级可判；真机未跑 |
 | mb7-monsters | race 113/114/134 帧集合 + T-143 | cargo 6/6 | 构造级可判；**真机判不了**（数据不可达/场景待建） |
-| buff-system | 三怪癖/DoT/位序/魔法盾 | check rc=0；dry-run **rc=2 BLOCKED**；cargo 16/16 | **判不了**（A-R2 未定 + 夹具缺） |
+| buff-system | 三怪癖/DoT/位序/魔法盾 | check rc=0；dry-run **rc=0（须 `--profile`）**；cargo 16/16 | **判不了**（A-R2 未定 + 窗口未授权） |
 | castle-guard-target | 三态目标集合 + Struck 合法性 | cargo 5/5+1/1+1/1 | 构造级可判；**真机判不了**（场景待建 + W-2 另卡） |
 | outbound-encoders-red-batch | 654 相对序 + 制药链流水/帧序/落库 | dry-run rc=0；cargo 1/1 | 部分可判；**制药链判不了**（场景待建） |
 
@@ -333,7 +334,7 @@
   `weapon-upgrade-values`、`weapon-durability-frames`、`encoding-core-e1-e2`、`world-tick-expansion`；
 - **部分可机判 3 张**（构造级可判、真机面判不了）：`mb7-monsters`（部署数据不可达 + 场景待建）、
   `castle-guard-target`（场景待建 + W-2 另卡）、`outbound-encoders-red-batch`（制药链无场景；654/202/200 部分可判）；
-- **判不了 1 张**：`buff-system`（窗口 A-R2 未裁 + 场景 BLOCKED，只有构造级 16/16）。
+- **判不了 1 张**：`buff-system`（窗口 A-R2 未裁 + 窗口未授权，只有构造级 16/16 + 离线 dry-run）。
 
 > 上一版把 mb7/castle-guard 的「真机半」重复计入最后两档、且 encoding 的 W-1/W-2 跨档（review R3），已改为互斥分桶；
 > 「判不了也算完成」的口径不变。mb7/castle-guard/outbound 的真机残缺只在「部分可机判」一档计入一次。
@@ -372,8 +373,8 @@
 | R5 | A 组定义改为「离线载体（场景/RunPair/构造级 cargo）且今日 rc=0」，blocked 场景只算构造级；10 张逐张标载体类型；`drop-exp-wiring` 注明 batch-plan 对应行是 `m3-drop-exp-align`。 | 本文 §2 规则 + 表 + 「载体纠偏」注 |
 
 > batch-plan 漂移（review「另发现」）：`docs/window-batch-plan-20261023.md` §7.1/§7.2/§7.3 的 `spell_cast` 行改为
-> 「夹具已在 `512d9ecf5`；场景封口由卡 `openmir2-spell-cast-unblock` 处理（head `923a98a5c` 待审）」，
-> **不预设合并结果**；未改 `tools/probe/**`。
+> 「夹具已在 `512d9ecf5`；场景**已解封**（卡 `openmir2-spell-cast-unblock`，`blocked` 已删），dry-run 须带声明 `magic` 的 `--profile`」，
+> 未改 `tools/probe/**`。
 >
 > 模板同步：返工期 master 合入 `a30a6fa79`（`docs/window-criteria-template.md` + 只告警的
 > `tools/goal/window_criteria_lint.py`）。本文件的 ①–⑥ 与模板 §1 同名同义，**未改判据口径**；

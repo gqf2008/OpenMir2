@@ -73,7 +73,7 @@ oracle 证据（动作族字段位置）：
 | `gm_time.json` | 3030 `CM_SAY` | 全 0 | `WorldServer.cs:853-854` 只取文本，参数全 0 | **对** | 不动 |
 | `move_walk.json` | 3011 `CM_WALK` | `recog=move_xy`（`computed.pack {lo:move_x, hi:move_y}`）、`param=0` | 动作族只读 `LoWord/HiWord(Recog)`；`ClientWalkXY` 的 `nX/nY` 是**目标格绝对坐标**（`PlayObject.Attack.cs:1365`；`PlayObject.Message.cs:1060`） | **对**（原 `recog=move_x, param=move_y` 错：Y 恒 0） | 不动 |
 | `pickup_item.json` | 1001 `CM_PICKUP` | `recog=0, param=self_x, tag=self_y` | `default`（`:856-857`）⇒ `nParam2=Param`、`nParam3=Tag`；`PlayObject.Message.cs:811-815` 要求 `CurrX==nParam2 && CurrY==nParam3` | **对** | 不动 |
-| `spell_cast.json` | 3017 `CM_SPELL` | `recog=near_pos/far_pos`（`MakeLong` 目标 X,Y）、`param=0`、`series=0`、`tag=magic_id` | 独立 case（`WorldServer.cs:783-793`）：`LoWord/HiWord(Recog)` = **目标格**，`MakeLong(Param,Series)` = 目标 ActorId；`PlayObject.Message.cs:1339-1341` | **对**（`CM_SPELL` 的目标格口径与 `CM_HIT` 的自身格口径**不同**，别混用） | 不动（BLOCKED-FIXTURE：缺 `characters_magic` 夹具） |
+| `spell_cast.json` | 3017 `CM_SPELL` | `recog=near_pos/far_pos`（`MakeLong` 目标 X,Y）、`param=0`、`series=0`、`tag=magic_id` | 独立 case（`WorldServer.cs:783-793`）：`LoWord/HiWord(Recog)` = **目标格**，`MakeLong(Param,Series)` = 目标 ActorId；`PlayObject.Message.cs:1339-1341` | **对**（`CM_SPELL` 的目标格口径与 `CM_HIT` 的自身格口径**不同**，别混用） | 不动（场景已解封：卡 `openmir2-spell-cast-unblock` 删去 `blocked`，夹具改由 profile `magic` 段声明；本行 recog 口径不变） |
 
 > **表后注记的适用范围（R2 订正）**：返工快照上含 `"recog"` 的 9 个文件就是上表 9 行；其余 11 个场景
 > （`dice_chain*`、`king_*`、`merchant_dialog`、`npc_click*`、`npc_script_chain`、`login_only`、`gm_batch`、

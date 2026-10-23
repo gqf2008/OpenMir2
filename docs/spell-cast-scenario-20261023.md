@@ -289,14 +289,16 @@ scenario OK: spell_cast (5 steps, params=far_pos=2752541,magic_id=1,near_pos=183
 `switch (MagicId)` 之前**（`MagicManager.cs:155` 早于 `:171` 的 switch），对魔号无依赖；
 魔号 1 的可用性由上面两行 638 用例覆盖。
 
-### 7.3 与 `docs/window-criteria-backfill-20261024.md` 的对账（review M-2）
+### 7.3 与 `docs/window-criteria-backfill-20261024.md` 的对账（review M-2 → N-1，**已落地**）
 
-该文件**不在 master**，只存在于未合并分支 `card/window-criteria-backfill`（最新 head `d888dc393`），
-其 buff-system / spell_cast 相关行仍写「场景 BLOCKED / dry-run rc=2」。本卡写集不能直接改它，
-故把**逐行 old → new 替换**发到该卡的签名 comment：
-**`93639ec12325cf2e56df56d20b3eb348e5f9c46f`**
-（12 条替换：行 63 / 70 / 263-266 / 268-269 / 271 / 274 / 275 / 276-277 / 278 / 326 / 336 / 374-376；
-行 48 的通用规则无需改）。该线 rebase 时按 comment 内的 old 文本精确匹配即可，行号漂移不影响。
+`docs/window-criteria-backfill-20261024.md` **已在 master**（卡 `openmir2-window-criteria-backfill`
+经合并提交 `059a03900` 入主干，其分支 ref 已删）。本卡 rebase 到 master `196439400` 后，把 comment
+**`93639ec12325cf2e56df56d20b3eb348e5f9c46f`** 的 12 条 old → new **逐字替换直接落进**
+`docs/window-criteria-backfill-20261024.md`（行 63 / 70 / 263-266 / 268-269 / 271 / 274 / 275 /
+276-277 / 278 / 326 / 336 / 374-376；行 48 的通用规则保留不改）——即落进**本卡返工 head**
+（`patch` 的 `head` 字段，父 = master `196439400`），随本卡合入 master。替换后该文件全文自洽：
+场景**已解封**、真机仍**待窗口**、取证**必须带声明 `magic` 的 `--profile`**。
+（`E:/tmp/rework69/backfill.md` 只是上一轮对照用的历史副本，不再是待采纳来源。）
 
 ## 8. 牙（mutation，全部实跑）
 
@@ -330,5 +332,5 @@ scenario OK: spell_cast (5 steps, params=far_pos=2752541,magic_id=1,near_pos=183
 6. **临时物（本卡）**：`E:/tmp/spellcast-profile.json`（= 内置 alt + `magic` 段，仅用于 dry-run 取证，可删）、
    `E:/tmp/rework69/dry-default.txt` / `E:/tmp/rework69/dry-magic.txt`（返工期两条 dry-run 的 stdout，
    `grep -c 魔法夹具` 分别为 0 / 2）、`E:/tmp/rework69/backfill-comment.json`（M-2 comment 原文）、
-   `E:/tmp/rework69/backfill.md`（`card/window-criteria-backfill` head `d888dc393` 上该文件副本）、
+   `E:/tmp/rework69/backfill.md`（**历史副本**：上一轮对照用的 `d888dc393` 文件快照；该文件已随 master `059a03900` 入主干，并被本卡订正）、
    `E:/tmp/rework69/edit_doc.py`（本次文档替换脚本）。`--dry-run` 不建 `E:/tmp/spellcast-dry`（跑完仍不存在）。
