@@ -5,6 +5,18 @@
     "make_index",
     "item_name"
   ],
+  "inventory": [
+      {
+          "index": 3,
+          "make_index": 5002,
+          "position": 41,
+          "std_mode": 0,
+          "ani_count": 102,
+          "dura": 1,
+          "dura_max": 1,
+          "note": "金创药(小量)（StdMode0，可食用）——与 --var make_index=5002 配套"
+      }
+  ],
   "steps": [
     {
       "send": {

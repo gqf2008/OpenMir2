@@ -23,7 +23,7 @@ python tools/probe/mir2_probe.py \
 }
 ```
 
-* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `blocked` / `requires` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `blocked` / `requires` / `inventory` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
   （`blocked` = 场景被封存：形状合法、`--check-scenario` 仍 rc=0，但 `card_window.py` 见到即 rc=2、不建 out/不起栈；schema 见 `docs/probe-scenario-blocked-gate-20261023.md`。）
   （`computed` 是给 `param_discovery` 的**声明性注记**，probe 不读它；见 `move_walk.json`。）
   （`requires` = **夹具前置声明**（可选字符串数组，目前只认 `"magic"`）：加载期由 `card_window.py` 核
@@ -80,6 +80,33 @@ python tools/probe/mir2_probe.py \
   上面 R1–R5 是硬判据（rc=2），R6 是警告（rc 不变）；这些都只在 `--check-scenario` 生效。另：本卡把 `dlg_select.recog` 也改成了**加载期解析**
   （`resolve_param` + i32 范围，与 `send.recog` 同口径/PRB-4），这条落在 `plan_step`，真跑也受益。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
+
+## `inventory`：背包夹具（由 `card_window.py` 在起栈前预置）
+
+> 卡 `openmir2-inventory-fixture-reachability`。**场景自描述**：物品、槽位、MakeIndex 全写在场景里，
+> 不需要 profile 段；写入由 `card_window.py` 在每侧 `restore` 之后、起栈之前完成（两侧共用同一份声明）。
+
+```json
+"inventory": [
+  {"index": 207, "make_index": 5001, "position": 40,
+   "std_mode": 5, "ani_count": 0, "dura": 4000, "dura_max": 4000,
+   "note": "木剑（StdMode5，可装备）"}
+]
+```
+
+- **必填**：`index`（物品模板号）、`make_index`（**>0**，DBSvr 会整行跳过 0）、`position`（0..45 槽位）。
+- **可选**：`std_mode` / `ani_count`（声明时必须与 `mir2_data.stditems` 模板一致，不符 ⇒ 该侧 rc=2）、
+  `dura` / `dura_max` / `note`。
+- **fail-closed（加载期，`mir2_probe` 与 `card_window` 同口径）**：非空数组、项为对象、未知键、
+  非整数/bool（`note` 必须是字符串）、`position` 越界或重复、`make_index<=0` 或重复 ⇒ rc=2 并点名。
+- **运行期 fail-closed（`card_window`，只能真跑）**：目标角色不存在/多行、模板不存在、
+  `std_mode`/`ani_count` 与模板不符、声明槽位原本非空、写后行数/指纹不符 ⇒ rc=2 点名。
+  **`--dry-run` 只做离线前置（`envir_root` / 库名与库配对 / 客户端参数）**：它不查模板、角色、槽位或行数，
+  所以 dry-run rc=0 只证明「声明形状合法且能打印预览行」，**不能**证明夹具真能用。
+- **dry-run**：两侧各打一行「背包夹具（dry-run 不连库）：db=… 声明 N 件 positions=… make_index=… 角色=…」；
+  没有这一行就说明该场景**没有** inventory 声明（不是夹具已就绪）。
+- **与 `required` 的关系**：`inventory` 只保证「背包里有这件物品」；C2S 用的 `make_index`/`item_name`
+  仍须由 `--var`（或 discovery）给出，两者要对得上（`bag_equip` 用 5001、`eat_item` 用 5002）。
 
 ## `requires`：夹具前置（由 `card_window.py` 在加载期强制）
 
@@ -336,7 +363,7 @@ python tools/probe/mir2_probe.py --selftest
 
 `--selftest` 用 `../fixtures/r9/` 的离线 s2c 抓包跑「切帧 -> 解析 -> 落 ndjson」全链路，
 不连网、不起进程；含「改坏必红」的负向用例（载荷字节改成越界值必须报错）。
-当前共 **11 checks**；`wait-recog-filter` 用**合成帧流**（同 ident、`recog`=自己 vs 他人）断言：
+当前共 **13 checks**；`wait-recog-filter` 用**合成帧流**（同 ident、`recog`=自己 vs 他人）断言：
 带 `recog_is=self/other` / 精确 `recog` 时只认匹配来源，**不带过滤时两者都算命中**（旧语义兼容），
 并覆盖三种等待动作、加载期互斥/非法值/未知键 rc=2、运行期未知自身 ActorId 的 fail-closed。
 其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
