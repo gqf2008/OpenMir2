@@ -15467,6 +15467,100 @@ fn drain_weapon_durability(
     sent
 }
 
+/// **卡 `openmir2-attack-weapon-wear-642`（tier=R）**：`PlayObject.AttackSuccess` 的**武器耐久磨损**
+/// 下行（`DoDamageWeapon`，`PlayObject.Attack.cs:1436-1470`）。
+///
+/// # oracle 触发链（文件:行）
+///
+/// - 抽数：`AttackSuccess` 对**有目标**的每次攻击无条件抽 `Random(5)`（`:225`；
+///   躲闪/伤害 0 都抽）；该次抽数**已在** [`mir2_world::combat::attack_dir_grouped_poison`] 里
+///   发生（本函数**不抽数**，只用世界给出的结果）；
+/// - 扣耐久/破零/发帧：`DoDamageWeapon`（`:1436-1470`）——`Dura -= nWeaponDamage`（ushort 回绕）；
+///   `nDura == 0` 支：`Dura = 0` → `SendDelItems` → `Index = 0` → `SendMsg(RM_DURACHANGE, …)`；
+///   两支共同的尾部桶位检查（`:1465-1469`）可再发一条 `RM_DURACHANGE`；
+/// - `SendDelItems`（`PlayObject.Base.cs:1648-1665`）走 `SendSocket` **直发** ⇒ `SM_DELITEM(202)`；
+///   `SendMsg(this, RM_DURACHANGE)` 走**自己**的优先级队列（`(byte)RM_DURACHANGE = 141`）⇒
+///   `PlayObject.Message.cs:1803-1804` 出 `SM_DURACHANGE(642)`：`Recog = Dura`、`Param = 槽位`、
+///   `Tag/Series = DuraMax`。
+///
+/// # 帧序 / 收件人
+///
+/// - 同一击里 **202 先于 642**（直发 vs 队列；本函数先 `send` 202，再把 642 放进
+///   [`SpellFrameBuf`] 末了 flush）；
+/// - 两者都**只投攻击者自己**（`SendDelItems`/`SendMsg(this)`），同图其它玩家零帧。
+///
+/// 帧序列完全由世界侧 [`mir2_world::combat::WeaponWearFrame`] 给出（含破零支的重复 642 怪癖），
+/// 本函数不重算 oracle 的分支。
+fn drain_attack_weapon_wear(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> usize {
+    let mut buf = SpellFrameBuf::new();
+    let mut sent = 0usize;
+    for ev in &rec.weapon_wears {
+        let Some(me) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
+            continue;
+        };
+        for frame in &ev.frames {
+            match frame {
+                mir2_world::combat::WeaponWearFrame::DelItem { slot } => {
+                    let Some(body) = weapon_broken_body(ev.actor_id, slot, catalog) else {
+                        continue;
+                    };
+                    // `SendSocket` 直发（不经消息队列）⇒ 先于紧随其后的 642。
+                    let Some(tx) = route_to_gate(gates, me.gate_idx, me.socket, "武器破零 202")
+                    else {
+                        continue;
+                    };
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: me.socket,
+                        body,
+                    });
+                    sent += 1;
+                }
+                mir2_world::combat::WeaponWearFrame::DuraChange {
+                    dura,
+                    dura_max,
+                    slot,
+                } => {
+                    // `SendMsg(this, RM_DURACHANGE)` ⇒ 自己队列，优先级 `(byte)RM_DURACHANGE = 141`。
+                    let body = game_svr::smframe::sm_durachange(*dura, *slot, *dura_max);
+                    buf.push_socket(
+                        me.socket,
+                        (mir2_protocol::messages::RM_DURACHANGE & 0xFF) as u8,
+                        body,
+                    );
+                    sent += 1;
+                }
+            }
+        }
+    }
+    buf.flush(online, gates);
+    sent
+}
+
+/// `SendDelItems(UserItem)`（`PlayObject.Base.cs:1648-1665`）的帧体 = `SM_DELITEM(202)`：
+/// 载荷是**破零瞬间**的槽快照（`Dura = 0`，`Index/DuraMax/Desc/MakeIndex` 保留）。
+///
+/// 与护身符扣光支共用 [`game_svr::slave::deleted_amulet_body`]（oracle 同一个 `SendDelItems`；
+/// 含 `StdMode == 50` 的 `" #"+Dura` 名尾怪癖）。`GetStdItem(Index) == null` ⇒ 无帧（oracle 同）。
+fn weapon_broken_body(
+    actor_id: i32,
+    slot: &mir2_world::entity::UseItemSlot,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> Option<Vec<u8>> {
+    let item = game_svr::bag::BagItem {
+        make_index: slot.make_index,
+        index: slot.index,
+        dura: 0,
+        dura_max: slot.dura_max,
+        desc: slot.desc,
+    };
+    game_svr::slave::deleted_amulet_body(actor_id, &item, catalog)
+}
+
 /// **P3 收尾残余**：`PlayObject.CheckPkStatus()`（`PlayObject.cs:4357-4364`）的宿主出帧。
 ///
 /// 世界侧 [`mir2_world::World::check_pk_status`] 按 `DecLightItemDrugTime` 周期（缺省 500ms）
@@ -22590,6 +22684,11 @@ fn sim_loop(
         // **卡 `openmir2-weapon-durability-frames`**：`UseLamp` / `CheckWeaponUpgrade` 的两条帧
         // （655 / 1102）。位于 `CheckPkStatus` 之前：oracle 同一周期块里 `UseLamp()` 先于
         // `CheckPkStatus()`（`PlayObject.Message.cs:257-262`）。
+        // **卡 `openmir2-attack-weapon-wear-642`**：本 tick `AttackSuccess` 的武器磨损下行
+        // （202 直发 + 642 入队，只投攻击者自己）。与武器耐久族相邻：同属「武器状态」帧，
+        // oracle 都在攻击/Run 段内即时或入队发出。
+        let _attack_weapon_wear =
+            drain_attack_weapon_wear(&rec, &online, &gates, &enter_cfg.catalog);
         let _weapon_durability = drain_weapon_durability(&rec, &mut world, &online, &gates);
         drain_pk_flag_downlink(&mut world, &online, &gates);
         // **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()`→`DelMember`）帧——在本 tick 的
@@ -65484,5 +65583,304 @@ mod sm_skeleton_downlink_tests {
             "必须落在 `sim_loop` 内、`drain_action_downlink` 之前（call={} sim={sim_start} butch={butch}）",
             hits[0]
         );
+    }
+}
+
+/// **卡 `openmir2-attack-weapon-wear-642`（tier=R）**：`drain_attack_weapon_wear` 的帧面判据。
+///
+/// 生产链：`World::attack_once` → `combat::attack_dir_grouped_poison` →
+/// `combat::attack_success_weapon_wear`（`DoDamageWeapon`，`PlayObject.Attack.cs:225-229`）
+/// → `TickRecord::weapon_wears` → 本排水 → `SM_DELITEM(202)`（直发）与 `SM_DURACHANGE(642)`。
+#[cfg(test)]
+mod attack_weapon_wear_tests {
+    use super::*;
+    use mir2_protocol::frame::CommandMessage;
+    use std::collections::HashMap;
+
+    fn online_entry(chr: &str, sock: i32, actor: i32) -> OnlineEntry {
+        OnlineEntry {
+            account: chr.to_string(),
+            chr_name: chr.to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: sock,
+            actor_id: actor,
+        }
+    }
+
+    fn take(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            out.push((socket, body));
+        }
+        out
+    }
+
+    fn cm(body: &[u8]) -> CommandMessage {
+        CommandMessage::from_bytes(body).expect("12B 命令头")
+    }
+
+    fn gates_with(
+        tx: mpsc::UnboundedSender<SimToGate>,
+    ) -> HashMap<u8, mpsc::UnboundedSender<SimToGate>> {
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        gates
+    }
+
+    fn catalog_with_weapon(index: u16) -> game_svr::ability::StdItemCatalog {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            index,
+            mir2_data::StdItem {
+                name: "炼狱".to_string(),
+                std_mode: 5,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        catalog
+    }
+
+    fn weapon_slot(dura: u16, dura_max: u16) -> mir2_world::entity::UseItemSlot {
+        mir2_world::entity::UseItemSlot {
+            make_index: 7,
+            index: 10,
+            dura,
+            dura_max,
+            desc: [3; 14],
+        }
+    }
+
+    /// 判据 ①：**有目标**的一次攻击 ⇒ 攻击者武器耐久减少，且**恰一条** `SM_DURACHANGE(642)`
+    /// 只投攻击者自己：`Recog = Dura`、`Param = 槽位(1)`、`Tag = DuraMax`、`Series = 0`，12B 无尾。
+    ///
+    /// 牙（实测）：删掉 `attack_success_weapon_wear` 的 `do_damage_weapon` 调用 ⇒
+    /// `rec.weapon_wears` 空 ⇒ 本用例必红。
+    #[test]
+    fn attack_success_wears_weapon_and_sends_one_642_to_attacker_only() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        world.open_session("q");
+        let q = world
+            .enter_map("q", new_player_entity("q".to_string(), 11, 10), 0)
+            .expect("玩家 q 进图（同图旁观者）");
+        let mut foe = mir2_world::Entity::new(0, "foe", 10, 11);
+        foe.race = 80;
+        foe.hp = 1000;
+        foe.max_hp = 1000;
+        let foe = world.add_entity(foe);
+        world.entities.get_mut(p).unwrap().use_items[1] = weapon_slot(5000, 9000);
+
+        world.attack_cmd(p, foe);
+        let rec = world.tick();
+        assert_eq!(rec.weapon_wears.len(), 1, "有目标 ⇒ 恰一次武器磨损结算");
+        let dura_after = world.entities.get(p).unwrap().use_items[1].dura;
+        assert!(
+            (4994..=4998).contains(&dura_after),
+            "扣 `Random(5)+2`（2..=6），实得 {dura_after}"
+        );
+        assert_eq!(
+            world.entities.get(p).unwrap().use_items[1].index,
+            10,
+            "未破零 ⇒ Index 不动"
+        );
+        let ev = &rec.weapon_wears[0];
+        assert_eq!(ev.actor_id, p, "事件挂在攻击者身上");
+        assert_eq!(
+            ev.frames,
+            vec![mir2_world::combat::WeaponWearFrame::DuraChange {
+                dura: dura_after,
+                dura_max: 9000,
+                slot: 1,
+            }],
+            "任何 2..=6 的磨损都会跨 1/1.03 桶位 ⇒ 恰一条 642"
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, online_entry("p", 901, p));
+        online_set(&mut online, online_entry("q", 902, q));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+        let catalog = catalog_with_weapon(10);
+
+        let sent = drain_attack_weapon_wear(&rec, &online, &gates, &catalog);
+        let frames = take(&mut rx);
+        assert_eq!(sent, 1);
+        assert_eq!(frames.len(), 1, "同图旁观者 q 零帧（`SendMsg(this)`）");
+        assert_eq!(frames[0].0, 901, "只投攻击者自己");
+        let m = cm(&frames[0].1);
+        assert_eq!(m.ident, mir2_protocol::messages::SM_DURACHANGE);
+        assert_eq!(
+            (m.recog, m.param, m.tag, m.series),
+            (i32::from(dura_after), 1, 9000, 0),
+            "`SM_DURACHANGE`：Recog=Dura、Param=槽位、Tag/Series=DuraMax"
+        );
+        assert_eq!(frames[0].1.len(), 12, "header-only，无尾");
+        assert_eq!(
+            frames[0].1,
+            game_svr::smframe::sm_durachange(dura_after, 1, 9000),
+            "必须走既有编码器（逐字节）"
+        );
+    }
+
+    /// **接线牙**：`sim_loop` 里必须恰有一条 `drain_attack_weapon_wear` 生产调用，且位于
+    /// `drain_weapon_durability` 之前（同属武器状态帧族）。
+    ///
+    /// 红检（实测）：把该调用行注释掉 ⇒ 本用例必红（0 命中）。
+    #[test]
+    fn drain_attack_weapon_wear_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        // 只在 `fn sim_loop(` 到它内部第一条 `drain_weapon_durability` 之间找——本卡用例里也有
+        // 直接调用 `drain_attack_weapon_wear`，不能算生产调用行。
+        let sim_start = lines
+            .iter()
+            .position(|l| l.starts_with("fn sim_loop("))
+            .expect("`fn sim_loop(` 定义行");
+        let lamp = lines
+            .iter()
+            .enumerate()
+            .skip(sim_start)
+            .find(|(_, l)| {
+                l.trim() == "let _weapon_durability = drain_weapon_durability(&rec, &mut world, &online, &gates);"
+            })
+            .map(|(i, _)| i)
+            .expect("`drain_weapon_durability` 生产调用行");
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| {
+                (sim_start..lamp).contains(i)
+                    && l.trim().starts_with("drain_attack_weapon_wear(&rec")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "`sim_loop` 内（`drain_weapon_durability` 之前）必须恰一条生产调用行（0 = 被删/被注释/改坏；>1 = 重复）；命中 {hits:?}"
+        );
+    }
+
+    /// 判据 ②（对照）：`targetObject == null`（空挥）⇒ **零抽 `Random(5)`、零帧**，耐久不变。
+    ///
+    /// 空挥走 `World::attack_swing`（`PlayObject.Attack.cs:25` 的 `GetPoseCreate() == null`
+    /// 支），`AttackSuccess(…, null)` 在 `:216-218` 立刻 return。
+    ///
+    /// 世界侧的取数对照由
+    /// `combat::tests::swing_draws_no_weapon_dice_but_targeted_attack_draws_exactly_one` 钉住
+    /// （空挥流水里不得出现 `Random(5)`）。
+    #[test]
+    fn swing_without_target_wears_nothing_and_sends_no_frame() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        world.entities.get_mut(p).unwrap().use_items[1] = weapon_slot(5000, 9000);
+
+        let _ = world.attack_swing(p);
+        let rec = world.tick();
+        assert!(rec.weapon_wears.is_empty(), "无目标 ⇒ 零结算事件");
+        assert_eq!(
+            world.entities.get(p).unwrap().use_items[1].dura,
+            5000,
+            "无目标 ⇒ 零磨损"
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, online_entry("p", 901, p));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+        let catalog = catalog_with_weapon(10);
+        let sent = drain_attack_weapon_wear(&rec, &online, &gates, &catalog);
+        assert_eq!(sent, 0);
+        assert!(take(&mut rx).is_empty(), "零帧");
+    }
+
+    /// 判据 ③：破零 ⇒ **202 先于** `642(Recog=0)`，`Index` 清零；尾部桶位检查再发一条 642(0)。
+    ///
+    /// 帧由生产同一函数 `do_damage_weapon`（世界侧）产出，本用例只验宿主编码/次序。
+    #[test]
+    fn broken_weapon_sends_202_before_642_recog_zero() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+
+        // `Dura == nWeaponDamage == 5` ⇒ `nDura == 0` ⇒ 破零支。
+        let mut slot = weapon_slot(5, 9000);
+        let wear = mir2_world::combat::do_damage_weapon(&mut slot, 5);
+        assert_eq!(slot.index, 0, "破零清 Index（世界侧）");
+        assert_eq!(slot.dura, 0);
+
+        let rec = mir2_world::TickRecord {
+            weapon_wears: vec![mir2_world::combat::WeaponWearEvent {
+                actor_id: p,
+                frames: wear.frames,
+            }],
+            ..mir2_world::TickRecord::default()
+        };
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, online_entry("p", 901, p));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+        let catalog = catalog_with_weapon(10);
+
+        let sent = drain_attack_weapon_wear(&rec, &online, &gates, &catalog);
+        let frames = take(&mut rx);
+        assert_eq!(sent, 3, "202 + 642(0) + 642(0)（尾部桶位检查的重复帧）");
+        assert_eq!(frames.len(), 3);
+        assert!(frames.iter().all(|f| f.0 == 901), "全部只投攻击者自己");
+        assert_eq!(cm(&frames[0].1).ident, mir2_protocol::messages::SM_DELITEM);
+        assert_eq!(
+            cm(&frames[1].1).ident,
+            mir2_protocol::messages::SM_DURACHANGE
+        );
+        assert_eq!(
+            cm(&frames[2].1).ident,
+            mir2_protocol::messages::SM_DURACHANGE
+        );
+        for f in &frames[1..] {
+            let m = cm(&f.1);
+            assert_eq!(m.recog, 0, "破零后 Dura = 0 ⇒ Recog = 0");
+            assert_eq!((m.param, m.tag, m.series), (1, 9000, 0));
+        }
+
+        // 202 的载荷 = `SendDelItems` 的 `ClientItem`（`Dura = 0`、`Index/DuraMax/Desc/MakeIndex` 保留）
+        let body = &frames[0].1;
+        assert_eq!(
+            &body[..12],
+            &game_svr::smframe::command_header(p, mir2_protocol::messages::SM_DELITEM, 0, 0, 1)[..],
+            "`MakeMessage(SM_DELITEM, ActorId, 0, 0, 1)`"
+        );
+        let tail = mir2_protocol::edcode::decode(&body[12..]);
+        assert_eq!(tail.len(), 124, "ClientItem 定长 124B");
+        assert_eq!(
+            u16::from_le_bytes([tail[104], tail[105]]),
+            0,
+            "ClientItem.Dura = 0（先置 0 再 SendDelItems）"
+        );
+        assert_eq!(
+            u16::from_le_bytes([tail[106], tail[107]]),
+            9000,
+            "DuraMax 保留"
+        );
+        assert_eq!(
+            i32::from_le_bytes([tail[100], tail[101], tail[102], tail[103]]),
+            7,
+            "MakeIndex 保留"
+        );
+        assert_eq!(tail[15], 5, "StdMode 取模板");
+        // `ClientItem.Desc` 在 oracle 里恒 14 个 0（`ClientItem.cs:14-18`，全仓无赋值点）
+        // ⇒ 线上尾部与 `UserItem.Desc` 无关（`itemwire.rs` 尾段注释）。
+        assert_eq!(tail[108..122], [0u8; 14], "ClientItem.Desc 恒 0");
     }
 }
