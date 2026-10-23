@@ -1945,7 +1945,7 @@ def _selftest_scenario_validation():
                                                   {"wait_for": 100}]}
     assert stderr_of(say_scen) == "", "非攻击族 ident 不该有方向警告"
 
-    # M3：R6 取表 fail-closed 的四种 drift 都要在 selftest 里被钉住
+    # M3：R6 取表 fail-closed 的五种 drift 都要在 selftest 里被钉住
     _NL = "\n"
     dir_consts = "".join("const DIR_X%d: u8 = %d;\n" % (i, i) for i in range(8))
     good_aw = ("pub const HIT_IDENTS: [u16; 1] = [\n    messages::CM_HIT,\n];\n" + dir_consts)
@@ -1980,7 +1980,7 @@ def _selftest_scenario_validation():
     for name in ("login_only.json", "dice_chain.json"):
         d = load_scenario(os.path.join(SCENARIO_DIR, name))
         check_scenario(d, expand_scenario(d)[0], None, messages)
-    return "R1-R5 硬牙 + R6 方向 WARN + 取表 drift 四例 + 不误伤"
+    return "R1-R5 硬牙 + R6 方向 WARN + 取表 drift 五例 + 不误伤"
 
 
 class _TimedSock:

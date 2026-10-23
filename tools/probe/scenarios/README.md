@@ -33,8 +33,16 @@ python tools/probe/mir2_probe.py \
 
   形状之外还做**语义校验**（`check_scenario()`；缺一条就不算「能真跑」，全部 fail-closed rc=2）：
 
-  1. **R2 每个 `wait_for` 之前必须已有发帧步骤**（`send`/`say`/`click_npc`/`dlg_select`）——
-     否则它等的回包没人产生。删掉场景中间的 `send` 会在这里红。
+  1. **R2 每个 `wait_for` 之前必须已有发帧步骤**（`send`/`say`/`click_npc`/`dlg_select`）。
+     **真实覆盖口径（别误读——这条不是「删掉攻击步会红」的牙）**：R2 只保证「`wait_for` 之前
+     **存在过**某个发帧步」，**不保证 producer 与 consumer 的对应关系**。只有 `wait_for` 之前
+     **一个发帧步都没有**（例如把场景里的 **send 全部删掉**）才 rc=2；删掉**多个 send 中的某一个**
+     （包括攻击步，如 `combat_strike` 的 `CM_HIT(3014)`、前面还留着 `CM_TURN`）**仍可能 rc=0**。
+     要让「删掉攻击步」变红需要 **producer→consumer 映射**，而那是猜出来的因果：`SM_STRUCK(31)`
+     既可能来自 `CM_HIT` 一族，也可能来自**挨打**（见 `docs/combat-strike-scenario-20261023.md`
+     的 BLOCKED 分析：玩家挨守卫一箭也收 `SM_STRUCK`、`recog=self`）—— 硬映射会把合法场景判死。
+     该能力**不在本卡范围**，已在卡 `openmir2-probe-scenario-validation-gaps` 上登记为残留
+     **R2-producer-map**（建议开卡的描述见该卡 status）。
   2. **R1 至少一个发帧步或累计观察步**（`wait_idents`/`wait_frames`）——全是 `sleep`
      的场景既不发帧也不观察，什么也证不了。纯观察场景（如 `login_only`）靠驱动器的
      登录链 + 自动握手已经发帧，所以它合法。
@@ -232,7 +240,7 @@ python tools/probe/mir2_probe.py --selftest
 当前共 **9 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
 删 `send` 步 / `wait_for` 写表外 ident / `send.ident` 表外 / 引用未声明变量 / `wait_for` 先于 `send` /
 全 `sleep` / 注释掉的常量不得进表 / `placement` 与 `self_pos`·`self_x`·`self_y` 不一致 / 间接 params 名不假红 /
-R6 取表四种 drift / 攻击族越界方向只 WARN 不判死），并断言 `login_only`、`dice_chain` 与非攻击族 `tag` 不被误伤。
+R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `login_only`、`dice_chain` 与非攻击族 `tag` 不被误伤。
 
 ## fixtures 来源
 
