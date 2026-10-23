@@ -30246,6 +30246,76 @@ SendRefMsgRange=15
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// **I-1（review `d8519c00`）接线点保鲜门**：`[Setup] SendRefMsgRange` 的**生产安装行**
+    /// ——`sim_loop` 启动处的 `chat::install_send_ref_msg_range(enter_cfg.ref_msg_range)`——
+    /// 必须仍在且**未被注释**，且其配置来源 `EnterConfig` 的装配行
+    /// `ref_msg_range: i32::from(cfg.send_ref_msg_range)`（`run_inner` 构造 `EnterConfig` 处）
+    /// 不得被删/改回常量。
+    ///
+    /// 背景（复审自造牙，实测）：把 `sim_loop` 里的安装行注释掉，全测试套件**无一变红**
+    /// （`sim_loop` 需真机/DB 才能驱到，进程内用例无法直达其函数体）⇒ 本卡要消灭的
+    /// 「改配置静默分叉」在「安装行被删」这条路径上仍成立。本用例用 [`include_str!`]
+    /// 把本文件源码嵌入，对该调用点、其位置（`sim_loop` 体内、首个消费点之前）与
+    /// 装配行形状做锚点保鲜断言（口径同 `login_tail_production_call_is_wired_after_aoi` /
+    /// `drain_deal_tick_production_call_is_wired_in_sim_loop`）。**非行为覆盖**——行为面
+    /// 由 `say_recipients_follow_configured_send_ref_msg_range` 与集成进程
+    /// `tests/sendrefmsg_range_config.rs` 承担。
+    ///
+    /// 红检（**实测**）：把安装行用 `//` 注释 ⇒ 本用例红（调用行 trim 不再相等）；
+    /// 把装配行改回字面量 `12` ⇒ 红（trim 行缺失）；复原 ⇒ 绿。
+    #[test]
+    fn sendrefmsg_range_install_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        // ① 生产安装行（trim 恰等 ⇒ `//`/`/*` 注释、改实参都会脱靶）。
+        let install: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                l.trim() == "chat::install_send_ref_msg_range(enter_cfg.ref_msg_range);"
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            install.len(),
+            1,
+            "sim_loop 的 SendRefMsgRange 生产安装行必须恰 1 处且未被注释"
+        );
+        // ② 位置：必须在 `sim_loop` 函数体内（签名之后）、首个配置消费点 `npc_vars_from` 之前。
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim_start().starts_with("fn sim_loop("))
+            .expect("sim_loop 定义");
+        let first_consumer = lines
+            .iter()
+            .position(|l| l.contains("let mut npc_vars_base = npc_vars_from("))
+            .expect("sim_loop 内首个配置消费点");
+        assert!(
+            sim_loop < install[0] && install[0] < first_consumer,
+            "安装行必须落在 sim_loop 启动段（签名之后、首个配置消费点之前），实得 {}（sim_loop={} consumer={}）",
+            install[0] + 1,
+            sim_loop + 1,
+            first_consumer + 1
+        );
+        // ③ 配置来源装配行（`EnterConfig.ref_msg_range` ← `[Setup] SendRefMsgRange`）。
+        //    `ShopCfg.send_ref_msg_range` 的行 trim 后带 `send_` 前缀 ⇒ 不会误命中。
+        let wired: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == "ref_msg_range: i32::from(cfg.send_ref_msg_range),")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            wired.len(),
+            1,
+            "EnterConfig.ref_msg_range 必须从 cfg.send_ref_msg_range 装配（恰 1 处、未改回常量）"
+        );
+        assert!(
+            wired[0] < sim_loop,
+            "装配行应属于 run_inner 构造 EnterConfig（在 sim_loop 定义之前）"
+        );
+    }
+
     /// **orphan 编码器接线首批**：`/目标名 正文` 私聊 ⇒ `SM_WHISPER(103)`
     /// （oracle `PlayObject.Chat.cs:57` 的非 GM 支）。
     ///
