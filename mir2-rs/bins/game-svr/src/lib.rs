@@ -7720,6 +7720,65 @@ fn emit_login_script_frames(
     )
 }
 
+/// `@Login`/QManage 生产排水点（卡 `openmir2-sendmsg-login-qmanage-cases`，T-267）。
+///
+/// 两半，次序与 oracle 一致：
+/// 1. **本例玩家**的脚本帧 ⇒ [`emit_login_script_frames`]（`NpcPlayer.frames` =
+///    `PlayObject.MsgQueue` 的脚本侧投影，含 `SENDMSG 0-4` 里他自己那一份）；
+/// 2. **其余在线玩家**的 `SENDMSG 0-3`（`world_broadcasts`）⇒ [`fan_out_world_sysmessage`]
+///    （`WorldServer.SendBroadCastMsg` ⇒ 每个 `!Ghost` 玩家一条 `SM_SYSMESSAGE`，
+///    `Recog` = 收件人自己）。
+///
+/// 返回 `(本例玩家脚本帧数, 其余玩家广播帧数)`。
+///
+/// **为什么两半都在本函数**：oracle 的 `@Login` 脚本（`PlayObject.cs:1440`）与
+/// `SENDMSG` 的全世界广播共用**同一次**脚本执行 ⇒ 单测必须在同一个生产函数上断言两半，
+/// 否则「把扇出实参换成 `&[]`」这类牙抓不到（与 `run_std_mode_func_script` 同口径）。
+///
+/// **QManage 是隐藏 NPC**（`NpcHost::goto_label` 的 `ActorId = 0`、`Envir == null`）⇒
+/// 本路**不扇** `SM_HEAR`（`SENDMSG 4` 的 `SendSayMsg` 本就零帧，见 T-224 偏差④）。
+#[allow(clippy::too_many_arguments)]
+fn drain_login_script_batch(
+    tx: &mpsc::UnboundedSender<SimToGate>,
+    socket: i32,
+    player_actor_id: i32,
+    chr_name: &str,
+    ground_sessions: &std::collections::HashMap<String, SessionGround>,
+    fallback: (i32, i32, i32),
+    exp: i32,
+    frames: &[game_svr::npc::SendMsg],
+    // `SENDMSG 0-3` 的其余玩家扇出正文（本例玩家自己那份已在 `frames` 里）。
+    broadcasts: &[String],
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    // `SystemShare.Config.RedMsgFColor/BColor`（= 脚本侧 `SysMsg(_, MsgColor.Red, …)` 的 `Param`）。
+    red: (u8, u8),
+) -> (usize, usize) {
+    let n = emit_login_script_frames(
+        tx,
+        socket,
+        player_actor_id,
+        chr_name,
+        ground_sessions,
+        fallback,
+        exp,
+        frames,
+    );
+    // 复用既有扇出（**不另写一份**）：`fan_out_world_sysmessage` 跳过 `player_actor_id`，
+    // 只发其余 `!Ghost` 在线玩家，逐收件人各一个 `NetPriorityQueue`。
+    let fanned = fan_out_world_sysmessage(
+        online,
+        world,
+        gates,
+        player_actor_id,
+        broadcasts,
+        red.0,
+        red.1,
+    );
+    (n, fanned)
+}
+
 /// `CM_EAT`(1006) 的派发（issue `8d07694d` 的 ②）。
 ///
 /// oracle 链：`PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(processMsg.nParam1, Msg)`
@@ -22237,7 +22296,14 @@ fn sim_loop(
                                                                 // `player.gm` 借住 `&mut ground_sessions[..].gm` 与 `&world`
                                                                 // ⇒ 把「建快照 + 跑 @Login」收进独立块；块尾 `player`
                                                                 // 析构即释放借用，后面的脚本帧排水 / 写回才能再借同一张表。
-                                                                let (login_says, login_frames, gm_direct, gm_notes, wb) = {
+                                                                let (
+                                                                    login_says,
+                                                                    login_frames,
+                                                                    gm_direct,
+                                                                    gm_notes,
+                                                                    login_broadcasts,
+                                                                    wb,
+                                                                ) = {
                                                                 let mut player = npc_player_from(
                                                                     &mut rngf,
                                                                     &head.chr_name,
@@ -22397,6 +22463,13 @@ fn sim_loop(
                                                                         &mut player.gm_direct_frames,
                                                                     ),
                                                                     std::mem::take(&mut player.gm_notes),
+                                                                    // 卡 `openmir2-sendmsg-login-qmanage-cases`：
+                                                                    // `SENDMSG 0-3` 的**其余玩家**扇出正文
+                                                                    // （`WorldServer.SendBroadCastMsg`）。本例玩家
+                                                                    // 自己那一份已在 `player.frames` 里。
+                                                                    std::mem::take(
+                                                                        &mut player.world_broadcasts,
+                                                                    ),
                                                                     wb,
                                                                 )
                                                                 };
@@ -22463,12 +22536,18 @@ fn sim_loop(
                                                                 // 出队序：说词优先级 0/1 恒先于
                                                                 // 脚本帧（最小 `RM_PLAYDICE` 4）。
                                                                 //
-                                                                // 抽成生产函数 [`emit_login_script_frames`]：
+                                                                // 抽成生产函数 [`drain_login_script_batch`]（内部复用
+                                                                // [`emit_login_script_frames`] 的脚本帧排水）：
                                                                 // 单测直接在**同一函数**上断言 767 的存在与
                                                                 // 同批出队序（删本调用或删函数体内的排水 ⇒
                                                                 // `login_messagebox_...` / `login_frame_batch_...`
                                                                 // 两用例必红）。
-                                                                let n = emit_login_script_frames(
+                                                                //
+                                                                // **卡 `openmir2-sendmsg-login-qmanage-cases`**：
+                                                                // `SENDMSG 0-3` 的其余玩家扇出也在这个生产函数里
+                                                                // （复用 [`fan_out_world_sysmessage`]；牙=把它的正
+                                                                // 文实参换成 `&[]` ⇒ `login_sendmsg_*` 用例必红）。
+                                                                let (n, fanned) = drain_login_script_batch(
                                                                     tx,
                                                                     socket,
                                                                     id,
@@ -22477,11 +22556,26 @@ fn sim_loop(
                                                                     (wb.gold, wb.game_gold, wb.game_point),
                                                                     wb.abil_exp,
                                                                     &login_frames,
+                                                                    &login_broadcasts,
+                                                                    &online,
+                                                                    &world,
+                                                                    &gates,
+                                                                    (
+                                                                        npc_vars_base.sys_msg.red.0,
+                                                                        npc_vars_base.sys_msg.red.1,
+                                                                    ),
                                                                 );
                                                                 if n > 0 {
                                                                     glog!(
                                                                         "INF",
                                                                         "@Login ChrName={} 脚本帧 {n} 条",
+                                                                        head.chr_name
+                                                                    );
+                                                                }
+                                                                if fanned > 0 {
+                                                                    glog!(
+                                                                        "INF",
+                                                                        "@Login ChrName={} 全服广播 {fanned} 帧",
                                                                         head.chr_name
                                                                     );
                                                                 }
@@ -65918,6 +66012,322 @@ GMEXECUTE 禁言 self 20
         assert!(
             sessions["hero"].state.item_list.is_empty(),
             "StdMode31/AniCount14 礼炮包必须被吃掉"
+        );
+    }
+
+    // ================== 卡 `openmir2-sendmsg-login-qmanage-cases`：`@Login`/QManage 排水 ==================
+    //
+    // 枚举结论（部署语料，命令见 `docs/sendmsg-login-qmanage-20261024.md` §2）：
+    // - `@Login` 的 `#CALL` 链（`月卡系统.txt` / `登陆脚本.txt`）里 **0 条 case 0-4**（全是 case5/6/7
+    //   的自见 `SysMsg`）⇒ 本路今日**无部署可达**的全服广播；接线是「任何脚本内容都不该被静默丢弃」，
+    //   用例按**构造级**（与 T-194 的 MESSAGEBOX 同法）。
+    // - `@PlayDie` **oracle 层不可达**：`PlayObject.Die()`（`PlayObject.cs:1969-1998`）从不
+    //   `GotoLable("@PlayDie")`，`ScriptFlagConst.SPLAYDIE`/`NPLAYDIE` 全仓无消费点 ⇒ 部署
+    //   `Market_Def/QFunction-0.txt:46-56` 的 4 条 `SendMsg 1` 与经 `DelayCall` 才到的
+    //   `[@假人上线A]:62` 的 `SENDMSG 0` 都是死分支（**不实现**，登记 T-267）。
+    //   用例只证明「若将来有触发点，QFunction 排水会照常扇出」。
+
+    /// 从 GBK 脚本建 `QManage` 宿主（真解析器，不手搓动作结构）。
+    fn qmanage_host_for(script: &str, tag: &str) -> game_svr::npc::NpcHost {
+        let root =
+            std::env::temp_dir().join(format!("gs-sendmsg-login-{tag}-{}", std::process::id()));
+        let dir = root.join("Envir").join("MapQuest_def");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("QManage.txt");
+        std::fs::write(&file, encoding_rs::GBK.encode(script).0).unwrap();
+        let parsers = mir2_script::ScriptParsers::new();
+        let mut rename = |_min: i32, _max: i32| 1;
+        let outcome = parsers
+            .load_script_file(
+                &mir2_script::LocalFs,
+                &root.join("Envir"),
+                "MapQuest_def",
+                "QManage",
+                false,
+                &mut rename,
+            )
+            .expect("解析不得 panic")
+            .expect("脚本必须存在");
+        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            outcome.errors.is_empty(),
+            "夹具脚本不得有解析错误：{:?}",
+            outcome.errors
+        );
+        game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QManage".into(),
+                file_path: "MapQuest_def".into(),
+                script_name: Some("QManage".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: outcome.scripts,
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        }
+    }
+
+    /// 一个 32×32 世界 + 三个在线登记：`hero`（触发者）、`other`（普通收件人）、
+    /// `ghost`（`Entity.ghost = true`，必须被 `if (!playObject.Ghost)` 排除）。
+    /// 返回 `(world, 在线表, [hero, other, ghost])`。
+    fn login_sendmsg_world() -> (mir2_world::World, OnlineRegistry, [i32; 3]) {
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
+        let other = world.add_entity(mir2_world::Entity::new(0, "other", 12, 10));
+        let ghost = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "ghost", 13, 10);
+            e.ghost = true;
+            e
+        });
+        let mut online: OnlineRegistry = Vec::new();
+        for (i, (chr, actor_id)) in [("hero", hero), ("other", other), ("ghost", ghost)]
+            .into_iter()
+            .enumerate()
+        {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("acc-{chr}"),
+                    chr_name: chr.to_string(),
+                    session_id: i as i32 + 1,
+                    gate_idx: 0,
+                    socket: 901 + i as i32,
+                    actor_id,
+                },
+            );
+        }
+        (world, online, [hero, other, ghost])
+    }
+
+    /// **`@Login`（QManage `[@Login]`）生产排水：case0 扇出给另一个在线玩家**
+    /// （卡 `openmir2-sendmsg-login-qmanage-cases`，T-267）。
+    ///
+    /// 走 `NpcHost::run_login`（真解析器 + GBK 语料）→ [`drain_login_script_batch`]（`sim_loop`
+    /// 进世界块调的就是它）⇒ 触发者自己那一份经 `frames` 排水（`Recog` = 自己），**其余在线玩家**
+    /// 各一条 `SM_SYSMESSAGE`（`Recog` = **各自的** ActorId）；`Ghost` 收件人零帧。
+    ///
+    /// 牙（改坏必红）：把 `drain_login_script_batch` 里 `fan_out_world_sysmessage` 的正文实参
+    /// 换成 `&[]` ⇒ `fanned == 0`、`other` 零帧，本用例红。
+    #[test]
+    fn login_sendmsg_case0_fans_out_to_other_online_player() {
+        let host = qmanage_host_for(
+            concat!("[@Login]\r\n", "#ACT\r\n", "SENDMSG 0 全服公告\r\n"),
+            "case0",
+        );
+        let (world, online, [hero, other, _ghost]) = login_sendmsg_world();
+        let mut rngf = |_v: i32| 0;
+        let mut player = game_svr::npc::NpcPlayer::empty(&mut rngf);
+        player.actor_id = hero;
+        player.chr_name = "hero".into();
+        let _ = host.run_login(&mut player).expect("QManage 必须可加载");
+        assert_eq!(
+            player.world_broadcasts,
+            vec!["全服公告".to_string()],
+            "`SENDMSG 0` 必须同时记进其余玩家扇出正文（本例玩家那份在 `frames`）"
+        );
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx.clone());
+        let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let (n, fanned) = drain_login_script_batch(
+            &tx,
+            901,
+            hero,
+            "hero",
+            &ground_sessions,
+            (player.gold, player.game_gold, player.game_point),
+            player.abil_exp,
+            &player.frames,
+            &player.world_broadcasts,
+            &online,
+            &world,
+            &gates,
+            game_svr::npc::NpcVars::default().sys_msg.red,
+        );
+        assert_eq!(n, 1, "触发者自己那份脚本帧");
+        assert_eq!(fanned, 1, "其余在线玩家恰 1 帧（Ghost 被排除）");
+        assert_eq!(
+            sendmsg_drain(&mut rx),
+            vec![
+                (901, sendmsg_sysmessage(hero, "全服公告")),
+                (902, sendmsg_sysmessage(other, "全服公告")),
+            ],
+            "case0：触发者与另一在线玩家各一条 `SM_SYSMESSAGE`，Recog 各取自己；Ghost 零帧"
+        );
+    }
+
+    /// **QManage 生产排水：case2（`[QManage]` 前缀）扇出，case7（自见蓝字）不外泄**
+    /// （卡 `openmir2-sendmsg-login-qmanage-cases`，T-267）。
+    ///
+    /// 这是部署语料的真实形状：`QManage.txt [@Login]` 与它的 `#CALL` 链里只有 case5/6/7
+    /// （自见 `SysMsg`），**没有** case 0-4 ⇒ 本用例把两侧都钉住：case7 只能进触发者自己的帧表，
+    /// 不许出现在别人的队列里；case2 必须按 `SendBroadCastMsg` 扇出。
+    ///
+    /// 牙（改坏必红）：把 `actions.rs` 的 case2 前缀 `[{npc_name}]` 改成 `[{chr_name}]` ⇒ 正文断言红。
+    #[test]
+    fn qmanage_login_drain_fans_out_case2_and_keeps_case7_self_only() {
+        let host = qmanage_host_for(
+            concat!(
+                "[@Login]\r\n",
+                "#IF\r\n",
+                "CHECKLEVELEX > 0\r\n",
+                "#ACT\r\n",
+                "SENDMSG 2 本店开张\r\n",
+                "#IF\r\n",
+                "CHECKLEVELEX > 0\r\n",
+                "#ACT\r\n",
+                "SENDMSG 7 仅自己可见\r\n",
+            ),
+            "case2_7",
+        );
+        let (world, online, [hero, other, _ghost]) = login_sendmsg_world();
+        let mut rngf = |_v: i32| 0;
+        let mut player = game_svr::npc::NpcPlayer::empty(&mut rngf);
+        player.actor_id = hero;
+        player.chr_name = "hero".into();
+        let _ = host.run_login(&mut player).expect("QManage 必须可加载");
+        assert_eq!(
+            player.world_broadcasts,
+            vec!["[QManage]本店开张".to_string()],
+            "只有 case2 进扇出清单（case7 是自见 `SysMsg`）"
+        );
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx.clone());
+        let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let (n, fanned) = drain_login_script_batch(
+            &tx,
+            901,
+            hero,
+            "hero",
+            &ground_sessions,
+            (player.gold, player.game_gold, player.game_point),
+            player.abil_exp,
+            &player.frames,
+            &player.world_broadcasts,
+            &online,
+            &world,
+            &gates,
+            game_svr::npc::NpcVars::default().sys_msg.red,
+        );
+        assert_eq!(n, 2, "触发者自己有两条脚本帧（case2 + case7）");
+        assert_eq!(fanned, 1, "只有 case2 扇出");
+        let frames = sendmsg_drain(&mut rx);
+        assert_eq!(
+            frames,
+            vec![
+                // 触发者：两条同 ident（252）按四叉堆 `[0,1]` 出队 = 动作序。
+                (901, sendmsg_sysmessage(hero, "[QManage]本店开张")),
+                (
+                    901,
+                    crate::smframe::sm_sysmessage(
+                        hero,
+                        0xFF,
+                        0xFC,
+                        &mir2_script::cp936::encode_gb2312_dotnet("仅自己可见"),
+                    ),
+                ),
+                // 其余在线玩家：只收到 case2。
+                (902, sendmsg_sysmessage(other, "[QManage]本店开张")),
+            ],
+            "case2 扇出到 other；case7 只进触发者帧表（蓝字 0xFF/0xFC）"
+        );
+    }
+
+    /// **`@PlayDie` 构造级：case1 的 `"(*) "` 前缀经 QFunction 生产排水扇出**
+    /// （卡 `openmir2-sendmsg-login-qmanage-cases`，T-267）。
+    ///
+    /// **部署不可达（登记）**：oracle `PlayObject.Die()`（`PlayObject.cs:1969-1998`）只做退组 +
+    /// `RM_MASTERDIEMUTINY`，**从不** `FunctionNPC.GotoLable("@PlayDie")`
+    /// （`ScriptFlagConst.SPLAYDIE`/`NPLAYDIE` 无消费点）⇒ `Market_Def/QFunction-0.txt:46-56`
+    /// 的 4 条 `SendMsg 1` 与 `[@假人上线A]:62` 的 `SENDMSG 0` 都是死分支，**不实现**。
+    /// 本用例用**构造脚本**证明「若有触发点，QFunction 排水会照常扇出」（`run_party_goto_label`
+    /// 是本仓唯一的通用 `FunctionNPC.GotoLable` 脚本宿主接缝）。
+    #[test]
+    fn playdie_constructed_case1_fans_out_through_qfunction_drain() {
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QFunction".into(),
+                file_path: "Market_Def".into(),
+                script_name: Some("QFunction-0".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: vec![mir2_script::ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![t142_record(
+                        "@PlayDie",
+                        "",
+                        vec![sendmsg_act(1, "兄弟走好")],
+                    )],
+                    quest_count: 0,
+                }],
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let (mut world, online, [hero, other, _ghost]) = login_sendmsg_world();
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "hero".into(),
+            SavedHuman {
+                account: "acc-hero".into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        run_party_goto_label(
+            "@PlayDie",
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            Some(&host),
+            &catalog,
+            &gates,
+            None,
+            &game_svr::npc::NpcVars::default(),
+        );
+        let frames = sendmsg_drain(&mut rx);
+        // 跨收件人的到达序不可观测（oracle 每个 `PlayObject` 一条 `MsgQueue`）⇒ 按 socket 分组，
+        // 组内保序（= 该收件人队列的出队序）。
+        let by_socket = |socket: i32| -> Vec<Vec<u8>> {
+            frames
+                .iter()
+                .filter(|(s, _)| *s == socket)
+                .map(|(_, b)| b.clone())
+                .collect()
+        };
+        assert_eq!(
+            by_socket(901),
+            vec![sendmsg_sysmessage(hero, "(*) 兄弟走好")],
+            "触发者自己那一份（脚本帧排水），Recog = 自己"
+        );
+        assert_eq!(
+            by_socket(902),
+            vec![sendmsg_sysmessage(other, "(*) 兄弟走好")],
+            "构造级 @PlayDie：case1 前缀 `(*) ` 逐字节，另一在线玩家也收到且 Recog = 自己"
+        );
+        assert!(
+            by_socket(903).is_empty(),
+            "Ghost 收件人零帧（`if (!playObject.Ghost)`）"
         );
     }
 }
