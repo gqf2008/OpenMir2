@@ -134,6 +134,14 @@
     但「同一 principal 两条车道并发写同一张卡」本身就是污染，与 author 字段无关，必须重交付、重签。
     干净的交付 = **一号一车一 worktree**：签名 principal、worktree 的 `walgit/identity`、提交所在 worktree 三者一致。
 
+20. **长命 agent 会耗尽上下文——每张卡起新 agent，不要 resume 一个跑了很多卡的 agent**（2026-10-24 01:0x）：
+    `openmir2-worker-69` 的 agent 今晚连做了 6+ 张卡（场景、登记批、GM 5A、夹具、审计），
+    最后在派第 7 张时**因上下文超限（请求 1,060,113 tokens > 1,048,576）直接失败**，
+    且失败前没有任何提交——白跑一次派单。
+    ⇒ **同一个 worktree 可以复用，但 agent 不要复用**：每张新卡 `Agent(...)` 起新实例（新实例会重新读卡面与 worktree 状态）；
+    resume（`SendMessage`）只用于**同一张卡的返工**，且返工超过 2 轮就换新实例并把「已确认的结论」写进 brief。
+    同理：**给 agent 的 brief 里不要塞整段历史**，只给结论 + 文件路径。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
