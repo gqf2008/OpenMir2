@@ -844,7 +844,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("DropItemRage 不是合法字节：{v:?}"))?,
                     );
                 }
-                // `GameSvrConf.SendRefMsgRange` 是 `byte`（`GameSvrConf.cs:499`）；`Server.conf` 现网未写。
+                // `GameSvrConf.SendRefMsgRange` 是 `byte`（`GameSvrConf.cs:499`）；部署 `Server.conf:394` 写 12。
                 "SENDREFMSGRANGE" => {
                     send_ref_msg_range = Some(
                         v.parse()
@@ -1523,7 +1523,7 @@ mod tests {
             "[Setup] SaveHumanRcdTime 实值（毫秒）"
         );
 
-        // 缺键 ⇒ oracle 缺省（`SendRefMsgRange` 缺省 12，`GameSvrConf.cs:1503`）。
+        // 缺键 ⇒ oracle 缺省（`SendRefMsgRange` 缺省 12，`GameSvrConf.cs:1503` 构造体 —— **不是 15**）。
         let p2 = write(&dir, base);
         let c2 = load(&p2).unwrap();
         assert_eq!(c2.human_max_gold, 10_000_000);
@@ -1548,7 +1548,14 @@ mod tests {
             c2.kill_by_monst_drop_use_item,
             "缺键 ⇒ KillByMonstDropUseItem 缺省 true"
         );
-        assert_eq!(c2.send_ref_msg_range, 12, "缺键 ⇒ SendRefMsgRange 缺省 12");
+        assert_eq!(
+            c2.send_ref_msg_range, 12,
+            "缺键 ⇒ SendRefMsgRange 缺省 12（oracle `GameSvrConf.cs:1503` 构造体；**不是 15**）"
+        );
+        assert_ne!(
+            c2.send_ref_msg_range, 15,
+            "缺键不得回落到 15（仓内无此 oracle 依据）"
+        );
         assert_eq!(
             c2.save_human_rcd_time, 600_000,
             "缺键 ⇒ SaveHumanRcdTime 缺省 10*60*1000（GameSvrConf.cs:1484）"
