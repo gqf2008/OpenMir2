@@ -82,13 +82,20 @@ DB_INLINE_FORMAT = "dbsnap-inline/1"
 HEAD_FIELDS = ("recog", "param", "tag", "series")
 STREAM_FIELDS = ("phase", "seq", "t_ms", "conn") + HEAD_FIELDS
 ACTIONS = ("compare", "mask_fields", "mask_body_ranges", "ignore", "ability_layout",
-           "multiset_by_tick")
+           "multiset_by_tick", "bagitems_records")
+#: SM_ADDITEM(200)/SM_BAGITEMS(201) 的包体 = 逐条 `ClientItem`（定长 124B）+ '/' 分隔。
+#: 布局见 `src/OpenMir2/Packets/ClientPackets/ClientItem.cs` WritePacket：
+#: Name@0（1B 长度+14B 定长）、StdMode@15、AniCount@18、MakeIndex@100(i32 LE)、Dura@104、DuraMax@106。
+BAG_RECORD_LEN = 124
+BAG_RECORD_FIELDS = {"MakeIndex": (100, 104)}
+BAG_DEFAULT_MASKS = ("MakeIndex",)
 TIERS = ("R", "L")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 DEFAULT_RULES = os.path.join(HERE, "rules.json")
 LOGIN_COMPARE = os.path.join(REPO_ROOT, "tools", "loginfixture", "capture_login_compare.py")
+MIR2FRAME = os.path.join(REPO_ROOT, "tools", "probe", "mir2frame.py")
 DBSNAP_PAIR = os.path.join(REPO_ROOT, "tools", "db-parity", "dbsnap_pair.py")
 
 # dbsnap_pair 的差异记录里，哪些 kind 属于「结构/输入问题（无法判定）」而不是「两侧取值不同」。
@@ -263,6 +270,15 @@ class RuleSet(object):
                         raise InputError("%s 的 range end 必须是 > start 的整数或 null" % where)
                     norm.append([start, end])
                 expanded["ranges"] = norm
+            elif action == "bagitems_records":
+                names = rule.get("record_mask", list(BAG_DEFAULT_MASKS))
+                if not isinstance(names, list) or not names:
+                    raise InputError("%s（bagitems_records）的 record_mask 必须是非空数组" % where)
+                for nm in names:
+                    if nm not in BAG_RECORD_FIELDS:
+                        raise InputError("%s 的 record_mask 只允许 %s（实际 %r）"
+                                         % (where, sorted(BAG_RECORD_FIELDS), nm))
+                expanded["record_mask"] = list(names)
             elif action == "multiset_by_tick":
                 tol = rule.get("tick_tolerance_ms", 0)
                 if not is_int(tol) or tol < 0:
@@ -637,6 +653,92 @@ def _compare_ability(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable):
     return True
 
 
+def _decode_bag_records(body, mod):
+    """`ClientItem` 包体 -> ([124B 记录], None) 或 (None, 原因)。坏数据一律判不了（不猜）。"""
+    segs = body.split(b"/")
+    if segs and segs[-1] == b"":
+        segs.pop()                                  # oracle 每条记录后都追加 '/'
+    records = []
+    for i, seg in enumerate(segs):
+        if not seg:
+            return None, "空段（'/' 连写）@slot %d" % i
+        try:
+            raw = mod.decode_bytes(seg, strict=True)
+        except Exception as ex:                     # noqa: BLE001 - FrameError 等一律 fail-closed
+            return None, "slot %d EDCode 解码失败：%s" % (i, ex)
+        if len(raw) != BAG_RECORD_LEN:
+            return None, "slot %d 解码后 %d 字节，期望 %d" % (i, len(raw), BAG_RECORD_LEN)
+        records.append(raw)
+    return records, None
+
+
+def _compare_bagitems(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable):
+    """客户端物品记录级比较（SM_ADDITEM(200)/SM_BAGITEMS(201)）。
+
+    口径：**逐条 124B 记录**比；只有 `record_mask` 登记过的字段（默认 MakeIndex）允许不同，
+    其余每个字节都必须相同。被掩的字段差异**显式登记**进 whitelisted（不是静默放行）；
+    任何解码失败 ⇒ undecidable（绝不按通过处理）。
+    """
+    try:
+        mod = load_module("mir2frame", MIR2FRAME)
+    except Undecidable as ex:
+        undecidable.append({"source": "frame", "frame_index": idx, "ident": ident,
+                            "kind": "bagitems_decoder_unavailable",
+                            "detail": "EDCode 解码器不可用 ⇒ 物品记录判不了：%s" % ex})
+        return
+    o_records, o_err = _decode_bag_records(ob, mod)
+    r_records, r_err = _decode_bag_records(rb, mod)
+    if o_err or r_err:
+        undecidable.append({"source": "frame", "frame_index": idx, "ident": ident,
+                            "kind": "bagitems_decode",
+                            "oracle_error": o_err, "rust_error": r_err,
+                            "detail": "物品记录无法解码 ⇒ 判不了（不按通过处理）"})
+        return
+    if len(o_records) != len(r_records):
+        diffs.append({"source": "frame", "frame_index": idx, "ident": ident,
+                      "field": "body", "kind": "bagitems_count",
+                      "oracle": len(o_records), "rust": len(r_records),
+                      "detail": "物品记录条数不同"})
+        return
+    masks = [(name, BAG_RECORD_FIELDS[name])
+             for name in rule.get("record_mask", list(BAG_DEFAULT_MASKS))]
+    masked_slots = 0
+    first_masked = None
+    for i, (o_rec, r_rec) in enumerate(zip(o_records, r_records)):
+        if o_rec == r_rec:
+            continue
+        off = None
+        for j in range(BAG_RECORD_LEN):
+            if any(start <= j < end for _, (start, end) in masks):
+                continue
+            if o_rec[j] != r_rec[j]:
+                off = j
+                break
+        if off is not None:
+            diffs.append({"source": "frame", "frame_index": idx, "ident": ident,
+                          "field": "body", "kind": "bagitems_record", "slot": i,
+                          "offset": off,
+                          "oracle_byte": o_rec[off], "rust_byte": r_rec[off],
+                          "detail": "物品记录 slot=%d 在 offset=%d 不同（掩码字段之外）"
+                                    % (i, off)})
+            return
+        masked_slots += 1
+        for name, (start, end) in masks:
+            if o_rec[start:end] != r_rec[start:end] and first_masked is None:
+                first_masked = {"slot": i, "field": name,
+                                "oracle": o_rec[start:end].hex(),
+                                "rust": r_rec[start:end].hex()}
+    if masked_slots:
+        whitelisted.append({"source": "frame", "frame_index": idx, "ident": ident,
+                            "field": "body", "kind": "bagitems_masked_field",
+                            "slots": masked_slots,
+                            "fields": sorted({name for name, _ in masks}),
+                            "first": first_masked,
+                            "reason": rule.get("reason", ""),
+                            "tier": rule.get("tier", ""),
+                            "approved_by": rule.get("approved_by", "")})
+
+
 def compare_bodies(fr_o, fr_r, rule, diffs, whitelisted, undecidable, masked_ranges_note):
     """按 action 比 body；所有分支都必须给出明确结论。"""
     ident = fr_o["ident"]
@@ -687,6 +789,10 @@ def compare_bodies(fr_o, fr_r, rule, diffs, whitelisted, undecidable, masked_ran
     if action == "ability_layout":
         if _compare_ability(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable):
             return
+
+    if action == "bagitems_records":
+        _compare_bagitems(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable)
+        return
 
     if action == "mask_body_ranges" and len(ob) == len(rb):
         ranges = (rule or {}).get("ranges", [])

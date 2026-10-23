@@ -23,13 +23,27 @@ python tools/probe/mir2_probe.py \
 }
 ```
 
-* 顶层只允许 `name` / `description` / `params` / `required` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+  （`computed` 是给 `param_discovery` 的**声明性注记**，probe 不读它；见 `move_walk.json`。）
 * `required`（可选）是**必填变量名列表**：`expand_scenario` 在合并完 `--var` 后逐名检查，缺任何一个即
   `scenario-error`（退出码 2），消息点名缺哪个变量。运行期才知道的值（NPC/商人 `ActorId`、`MakeIndex`、
   物品名、自身坐标）一律走这里，**不要**在 `params` 里放 `"REQUIRED"` 之类的哨兵值。
 * 离线校验：`python -I -B tools/probe/mir2_probe.py --check-scenario --scenario <file.json> [--var k=v ...]`
   —— 只加载+展开，不连网；rc=0 通过、rc=2 场景错误。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
+
+## `placement`：角色必须位于 map/x/y（由 `card_window.py` 应用）
+
+```json
+"placement": {"map": "0122", "x": 30, "y": 32, "note": "比奇国王 (29,32) 的邻格"}
+```
+
+* 本驱动器**只校验形状**（`map` 1..10 字符、`x`/`y` 为 0..65535 的整数），**不做预置位**：
+  声明存在时会在 stderr 打印一条提醒。**别以为直接跑 `mir2_probe.py` 就落到了目标位** ——
+  预置位由 `tools/conformance/card_window.py` 在**每侧 restore 之后、起栈之前**改测试库的
+  `characters.MapName/CX/CY` 完成（C# = `mir2_test_db`、Rust = `mir2_test_db_r`），
+  完成不了直接 rc=2，不会让 probe 去超时。详见 `docs/window-runbook-20261023.md` §1.5。
+* 坐标要选**阻挡格之外**的空格（通常取目标 NPC 的邻格）：落在墙格时 oracle 登录会随机挪位。
 
 ## 步骤动作
 
@@ -81,6 +95,12 @@ python tools/probe/mir2_probe.py \
 
 > `dice_chain` 末步是**分支相关**断言：`@ya52` 持筹码包走 `#ACT` 回 `643`，无筹码包走 `#ELSEACT MESSAGEBOX` 回 `SM_MENU_OK(767)`，
 > 因此该步等 `[643, 767]`——单等 `643` 会变成"无包账号必然超时"的恒失败断言。
+
+> `npc_script_chain` 是**多步标签链**（R1）：点比奇国王(0122) 后连发 5 次 `dlg_select`
+> （`@@buildguildnow` → `@buildguildexp` → `@main` → `@requestcastlewarA` → `@exit`），
+> 断言 `643 → 763 → 643 → 643 → 643 → 644`。`required: ["npc_actor"]` 走 643.recog 发现；
+> 链里没有 `@ask`（部署件无此标签）也没有 `@back`（无 `<.../@back>` 链接 ⇒ `LableIsCanJmp` 门控下零帧），
+> 逐条 oracle 出处与理由见 `docs/npc-script-chain-scenario-20261023.md`。
 
 ## 驱动器的自动握手（对拍不要关）
 

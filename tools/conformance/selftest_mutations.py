@@ -156,6 +156,35 @@ TEETH = [
      "M-2 嵌套 compare 字段集合完整",
      [('''                "undecidable": summary["undecidable"],
 ''', '''''')]),
+    ("T17", "P-1 db_state 写错（诊断值与 report.json 不一致）",
+     "P-1 PASS db_state",
+     [('''                "db_state": summary["db_state"],''',
+       '''                "db_state": "bogus",''')]),
+    ("T18", "P-1 diffs 与 db_state 互换（值错位）",
+     "P-1 PASS diffs",
+     [('''                "db_state": summary["db_state"],
+                "diffs": summary["diffs"],''',
+       '''                "db_state": summary["diffs"],
+                "diffs": summary["db_state"],''')]),
+    ("T19", "P-1 diffs 固定 999（硬编码假值）",
+     "P-1 PASS diffs",
+     [('''                "diffs": summary["diffs"],''',
+       '''                "diffs": 999,''')]),
+    ("T20", "P-1 undecidable 固定 -1（硬编码假值）",
+     "P-1 PASS undecidable",
+     [('''                "undecidable": summary["undecidable"],''',
+       '''                "undecidable": -1,''')]),
+    ("T21", "F-1 side doc ok 的两处兜底都丢掉（回到复审缺陷：probe 失败仍 ok=True）",
+     "F-1 discovery probe 失败",
+     [('''        "ok": (probe_rc == 0 and not missing),''',
+       '''        "ok": not missing,'''),
+      ('''            if derr:
+                doc["error"] = derr
+                doc["ok"] = False
+''',
+       '''            if derr:
+                doc["error"] = derr
+''')]),
     ("E1", "额外牙：fallback report 的 run_id 写成常量",
      "仍落本次 fallback report",
      [('''        "format": "card-window-report/1",
@@ -218,6 +247,34 @@ TEETH = [
        ('''            if missing:
                 values = {}
                 missing = []'''))]),
+    # --- 角色预置位（卡 openmir2-window-character-placement）---------------------
+    # 这四颗牙锁的都是「调用点」：预置阶段被跳过 / 校验被摘掉时，selftest 必须落在
+    # PL-* 判据上变红（而不是被别的兜底断言顺带抓到）。
+    ("P1", "预置阶段被跳过（run_side 不再调用 run_placement）",
+     "PL-1 已就位 => 不执行 UPDATE",
+     [('''        if placement:
+            pres = run_placement(runner, side, prof, sc, placement, env)''',
+       '''        if False and placement:
+            pres = run_placement(runner, side, prof, sc, placement, env)''')]),
+    ("P2", "预置位的可走性校验被摘掉（落在墙格也照样改库）",
+     "PL-8 目标格是墙",
+     [('''    if not cell["walkable"]:''',
+       '''    if False and not cell["walkable"]:''')]),
+    ("P3", "预置位不再核对「只改了需要的列」（连带写坏其它列也放行）",
+     "PL-10 预置连带改坏其它列",
+     [('''        if after["fp"] != before["fp"]:''',
+       '''        if False and after["fp"] != before["fp"]:''')]),
+    ("P4", "两侧库配对校验被摘掉（拿 C# 的库给 Rust 侧预置）",
+     "PL-12 角色库与该侧部署不配对",
+     [('''    if chars_db != expected:''',
+       '''    if False and chars_db != expected:''')]),
+    ("P5", "预置证据没进 summary（README 的 placement 段退化成 (not run)）",
+     "PL-5 README 的 placement 段",
+     [('''        if res.get("placement"):
+            # README/card-window.json 的 placement 段读这份（与 discovery 同口径）
+            summary["placement"]["sides"][side] = res["placement"]''',
+       '''        if False and res.get("placement"):
+            summary["placement"]["sides"][side] = res["placement"]''')]),
 ]
 
 

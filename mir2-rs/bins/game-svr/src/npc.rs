@@ -190,8 +190,20 @@ pub struct CastleVars {
 /// oracle 的变量表一半来自 `SystemShare.Config`（服务器名、货币名、升级费…），一半来自
 /// NPC 自身（`PriceRate`、`Castle`）；本结构把这些在说词展开前一次性喂给 [`NpcPlayer`]。
 /// 缺省值 = oracle `GameSvrConf` ctor（`GameSvrConf.cs:1233/1320/1321/1420`）。
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct NpcVars {
+    /// `$GLOBAL` 动态变量表（oracle `SystemShare.DynamicVarList`：**服务器级、跨玩家共享**）。
+    ///
+    /// `Rc<RefCell<…>>` ⇒ `NpcVars::clone()`（`lib.rs` 的 `p.vars = vars.clone()`）仍指向同一张表；
+    /// 单线程世界由 `no_parallel` 守卫，`RefCell` 只用来提供 `&mut`（卡 `openmir2-script-dyn-var-host`）。
+    pub global_dyn_vars: std::rc::Rc<std::cell::RefCell<crate::DynVarStore>>,
+    /// `$HUMAN`/`$ACCOUNT` 的**按角色**动态变量表（oracle `PlayObject.DynamicVarMap`，两者同表）。
+    ///
+    /// 键 = `ChrName` 大写折叠；`Rc<RefCell<…>>` ⇒ `NpcVars::clone()` 仍指向同一张宿主表，
+    /// 脚本漏斗无需改签名即可读写。**偏差**：oracle 生命周期 = `PlayObject`（登出即销毁），
+    /// 本仓为进程级 ⇒ 登出清账点未接（T-222 登记）。
+    pub session_dyn_vars:
+        std::rc::Rc<std::cell::RefCell<std::collections::BTreeMap<String, crate::DynVarStore>>>,
     /// `SystemShare.Config.ServerName`（缺省 `SKY引擎`）。
     pub server_name: String,
     /// `SystemShare.Config.GameGoldName`（缺省 `元宝`）。
@@ -271,6 +283,12 @@ impl Default for SysMsgCfg {
 impl Default for NpcVars {
     fn default() -> Self {
         Self {
+            global_dyn_vars: std::rc::Rc::new(std::cell::RefCell::new(
+                crate::DynVarStore::default(),
+            )),
+            session_dyn_vars: std::rc::Rc::new(std::cell::RefCell::new(
+                std::collections::BTreeMap::new(),
+            )),
             server_name: "SKY引擎".to_string(),
             game_gold_name: "元宝".to_string(),
             game_point_name: "游戏点".to_string(),
@@ -656,6 +674,11 @@ pub struct NpcPlayer<'r, 'g> {
     pub credit_point: i32,
     /// `playerActor.ReLevel`（`$RELEVEL`）。
     pub re_level: i32,
+    /// `playerActor.Abil.Exp`（`$EXP` 与 `SM_WINEXP.Recog` 的读源，T-207）。
+    ///
+    /// `NpcPlayer` 是每次调用重建的快照 ⇒ 宿主在脚本前 seed（`sg.equip.abil.exp`）、
+    /// 脚本后写回 `sg.state.wabil.exp` 与 `sg.equip.abil.exp`（oracle `playerActor.Abil = abil`）。
+    pub abil_exp: i32,
     /// 说词变量展开的非玩家取值（`NormNpc.GetVariableText` 的 `SystemShare.Config`/NPC 侧）。
     pub vars: NpcVars,
     /// `PlayObject.LastNpc`
@@ -808,6 +831,7 @@ impl NpcPlayer<'_, '_> {
             game_point: 0,
             credit_point: 0,
             re_level: 0,
+            abil_exp: 0,
             vars: NpcVars::default(),
             last_npc: 0,
             script_index: None,
@@ -1135,6 +1159,77 @@ fn push_sys_msg(frames: &mut Vec<SendMsg>, f: u8, b: u8, text: String) {
 }
 
 impl ScriptPlayer for NpcPlayer<'_, '_> {
+    /// `playerActor.Abil.Exp`（`ExecutionProcessingSys.cs:2859-2861` 的 `+` 支读/写同一字段）。
+    /// `GetDynamicVarMap` 的 HUMAN/Account 支（oracle 两者同表）；GLOBAL/GUILD 未接。
+    fn dyn_var_get(
+        &self,
+        kind: mir2_script::engine::vars::DynVarKind,
+        name: &str,
+    ) -> Option<mir2_script::engine::vars::DynVar> {
+        match kind {
+            mir2_script::engine::vars::DynVarKind::Human
+            | mir2_script::engine::vars::DynVarKind::Account => {
+                let key = self.chr_name.to_uppercase();
+                self.vars.session_dyn_vars.borrow().get(&key)?.get(name)
+            }
+            mir2_script::engine::vars::DynVarKind::Global => {
+                self.vars.global_dyn_vars.borrow().get(name)
+            }
+            mir2_script::engine::vars::DynVarKind::Guild => None,
+        }
+    }
+    fn dyn_var_set(
+        &mut self,
+        kind: mir2_script::engine::vars::DynVarKind,
+        name: &str,
+        v: mir2_script::engine::vars::DynVar,
+    ) -> bool {
+        match kind {
+            mir2_script::engine::vars::DynVarKind::Human
+            | mir2_script::engine::vars::DynVarKind::Account => {
+                let key = self.chr_name.to_uppercase();
+                self.vars
+                    .session_dyn_vars
+                    .borrow_mut()
+                    .entry(key)
+                    .or_default()
+                    .set(name, v)
+            }
+            mir2_script::engine::vars::DynVarKind::Global => {
+                self.vars.global_dyn_vars.borrow_mut().set(name, v)
+            }
+            mir2_script::engine::vars::DynVarKind::Guild => false,
+        }
+    }
+    fn dyn_var_insert(
+        &mut self,
+        kind: mir2_script::engine::vars::DynVarKind,
+        name: &str,
+        v: mir2_script::engine::vars::DynVar,
+    ) -> bool {
+        match kind {
+            mir2_script::engine::vars::DynVarKind::Human
+            | mir2_script::engine::vars::DynVarKind::Account => {
+                let key = self.chr_name.to_uppercase();
+                self.vars
+                    .session_dyn_vars
+                    .borrow_mut()
+                    .entry(key)
+                    .or_default()
+                    .insert(name, v)
+            }
+            mir2_script::engine::vars::DynVarKind::Global => {
+                self.vars.global_dyn_vars.borrow_mut().insert(name, v)
+            }
+            mir2_script::engine::vars::DynVarKind::Guild => false,
+        }
+    }
+    fn abil_exp(&self) -> i32 {
+        self.abil_exp
+    }
+    fn set_abil_exp(&mut self, v: i32) {
+        self.abil_exp = v;
+    }
     fn last_npc(&self) -> i32 {
         self.last_npc
     }
@@ -2236,6 +2331,107 @@ mod tests {
             curr_y: 12,
         });
         book
+    }
+
+    /// **卡 `openmir2-script-dyn-var-host`**：`NpcPlayer` 的 `dyn_var_get/set/insert` 覆写。
+    ///
+    /// oracle 口径（`ProcessingBase.cs:1020-1045` + `PlayObject.cs:1023`）：
+    /// ① `$HUMAN` 与 `$ACCOUNT` **共用一张** `DynamicVarMap`（`OrdinalIgnoreCase`）；
+    /// ② `VAR` = 不存在才插入；③ `SetMovDataDynamicVarValue` = 存在且**类型相同**才写回。
+    ///
+    /// 牙：删 `dyn_var_get` 覆写（回缺省 `None`）⇒ 本用例红（实测 left None vs right Some(5)）。
+    #[test]
+    fn npc_player_dynamic_var_map_matches_oracle_semantics() {
+        use mir2_script::engine::vars::{DynVar, DynVarKind};
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "hero".to_string();
+        assert!(p.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(5)));
+        assert!(!p.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(9)));
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(5))
+        );
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Account, "m1"),
+            Some(DynVar::Integer(5))
+        );
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "M1"),
+            Some(DynVar::Integer(5))
+        );
+        assert!(p.dyn_var_set(DynVarKind::Human, "m1", DynVar::Integer(42)));
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(42))
+        );
+        assert!(!p.dyn_var_set(DynVarKind::Human, "m1", DynVar::Str("x".into())));
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(42))
+        );
+        assert!(!p.dyn_var_set(DynVarKind::Human, "nope", DynVar::Integer(1)));
+        assert_eq!(p.dyn_var_get(DynVarKind::Human, "nope"), None);
+        // GLOBAL：**服务器级**（oracle `SystemShare.DynamicVarList`）⇒ 克隆 `NpcVars` 的两个玩家同表。
+        assert_eq!(p.dyn_var_get(DynVarKind::Global, "g"), None);
+        assert!(p.dyn_var_insert(DynVarKind::Global, "g", DynVar::Integer(1)));
+        let mut rng2 = |_v: i32| 0;
+        let mut q = NpcPlayer::empty(&mut rng2);
+        q.vars = p.vars.clone();
+        assert_eq!(
+            q.dyn_var_get(DynVarKind::Global, "G"),
+            Some(DynVar::Integer(1)),
+            "GLOBAL 表跨玩家共享（`NpcVars` 克隆共享同一 `Rc`），且大小写不敏感"
+        );
+        assert!(!q.dyn_var_insert(DynVarKind::Global, "g", DynVar::Integer(2)));
+        // 另一个角色看不到 hero 的 HUMAN 表（按角色寻址）。
+        let mut rng3 = |_v: i32| 0;
+        let mut other = NpcPlayer::empty(&mut rng3);
+        other.chr_name = "someone".to_string();
+        other.vars = p.vars.clone();
+        assert_eq!(other.dyn_var_get(DynVarKind::Human, "m1"), None);
+    }
+
+    /// **卡 `openmir2-script-dyn-var-host`（review M-1）**：同账号两个角色的 HUMAN/ACCOUNT
+    /// 表互不可见（oracle 各自一个 `PlayObject`，隔离靠「每人一张表」）；同角色内键按
+    /// `OrdinalIgnoreCase` 折叠命中同一格。
+    ///
+    /// 牙：把 `DynVarStore::key` 的 `to_uppercase()` 换成 `name.to_string()` ⇒ 本条
+    /// 的 `M1` 断言与上面那条用例的 `M1` 断言一起红。
+    #[test]
+    fn dyn_var_human_table_is_per_character_and_case_folded() {
+        use mir2_script::engine::vars::{DynVar, DynVarKind};
+        let mut rng = |_v: i32| 0;
+        let mut a = NpcPlayer::empty(&mut rng);
+        a.chr_name = "hero".to_string();
+        assert!(a.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(10)));
+        assert!(a.dyn_var_insert(DynVarKind::Human, "时长", DynVar::Integer(7)));
+        // 同角色：大小写折叠 + ACCOUNT 与 HUMAN 同表。
+        assert_eq!(
+            a.dyn_var_get(DynVarKind::Human, "M1"),
+            Some(DynVar::Integer(10))
+        );
+        assert_eq!(
+            a.dyn_var_get(DynVarKind::Account, "M1"),
+            Some(DynVar::Integer(10))
+        );
+        // 同账号的另一角色（共享同一 `NpcVars` 克隆）：两向都互不可见。
+        let mut rng2 = |_v: i32| 0;
+        let mut b = NpcPlayer::empty(&mut rng2);
+        b.chr_name = "alt".to_string();
+        b.vars = a.vars.clone();
+        assert_eq!(b.dyn_var_get(DynVarKind::Human, "m1"), None);
+        assert_eq!(b.dyn_var_get(DynVarKind::Human, "时长"), None);
+        assert!(b.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(99)));
+        assert_eq!(
+            a.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(10)),
+            "同名变量在不同角色的表里各自独立"
+        );
+        assert_eq!(
+            b.dyn_var_get(DynVarKind::Human, "M1"),
+            Some(DynVar::Integer(99))
+        );
     }
 
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的

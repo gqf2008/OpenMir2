@@ -323,6 +323,10 @@ pub enum Imp {
     /// `FireBurnCommand`（`@FireBurn`）。
     FireBurn,
 
+    /// `StartQuestCommand`（现网 `@开始提问`）：`SendQuestMsg` 被注释 ⇒ 非空名零帧；
+    /// 空名 ⇒ 红字帮助。
+    StartQuest,
+
     // ---- 批次 3 · 传送/召唤（17 + `@传送`，设计件 §4.3 第 11–27 行 / §6 G3）----
     /// `AllowDearRecallCommand`（现网 `@dfsgf567`）。
     AllowDearRecall,
@@ -455,12 +459,16 @@ pub enum Imp {
     /// `ShutupCommand`（现网 `@禁言`；`DenySayMsgList` 写入整段被注释 ⇒ 只发一条 SysMsg）。
     Shutup,
 
+    /// `ShowEffectCommand`（现网 `@ShowEffect`，`Command.conf` 无覆盖 ⇒ 英文名）：oracle 命令体
+    /// **整段被注释** ⇒ 任何参数都零帧、零副作用（最小 no-op 实现）。
+    ShowEffect,
+
     /// `ShutupReleaseCommand`（现网 `@取消禁言`）：`IsNullOrEmpty(x) || !IsNullOrEmpty(x)` 恒真
     /// ⇒ 永远只回帮助文本；名单移除整段被注释；第二参非 `true`/`false` ⇒ `bool.Parse` 抛
     /// `FormatException` 被 `PlayObject.Chat.cs:402-406` 吞掉 ⇒ 零帧。
     ShutupRelease,
 
-    /// 未接的 87 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 1 条）：
+    /// 未接的 84 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 4 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
 }
@@ -1159,6 +1167,17 @@ const NOTE_INDEX_OUT_OF_RANGE: &str =
     "oracle 下标越界（`sHumanName[1]`/`@params[0..6]`）被 PlayObject.Chat.cs 的 catch 吞掉 ⇒ 零帧";
 const NOTE_NO_WORLD: &str =
     "GmWorld 未注入在线实体表/世界（S1 占位世界）⇒ 无法判定目标在线、坐标或地图 Flag";
+
+/// `ShowEffectCommand.cs:20-70`：命令体**整段被注释** ⇒ 任何参数都零帧、零副作用。
+const NOTE_SHOW_EFFECT_ALL_COMMENTED: &str =
+    "ShowEffect：oracle 命令体 20-70 行整段注释 ⇒ 零帧、零副作用（最小 no-op）";
+/// `StartQuestCommand` 的帮助文本：`Command.CommandHelp` = `命令格式: @开始提问 问答名称`
+/// （`Name` 被 `Command.conf` 的 `[Command] StartQuest=开始提问` 覆盖，`Help` = 「问答名称」）。
+pub const START_QUEST_HELP: &str = "命令格式: @开始提问 问答名称";
+
+/// `StartQuestCommand.cs:22`：`SendQuestMsg` 已被注释 ⇒ 非空名零帧、零副作用。
+const NOTE_START_QUEST_MSG_COMMENTED: &str =
+    "StartQuest：oracle :22 的 WorldEngine.SendQuestMsg 被注释 ⇒ 零帧、零副作用";
 const NOTE_NO_MAP_REGISTRY: &str =
     "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
 const NOTE_RECALL_HUMAN: &str =
@@ -1541,6 +1560,24 @@ fn fire_burn(parameters: &str, sess: &GmSession) -> GmResult {
         return GmResult::one(GmColor::Red, FIRE_BURN_HELP.to_string());
     }
     no_frames(NOTE_EVENT_MGR)
+}
+
+/// `StartQuestCommand.Execute`（`src/Modules/GameCommand/Commands/StartQuestCommand.cs:10-23`，
+/// 现网 `@开始提问`，`Command.conf` 的 `[Command] StartQuest=开始提问` / `[Permission] StartQuest=10`）。
+///
+/// **实际执行行**：
+/// - `:12-15` `@params == null` 死分支；
+/// - `:16` `sQuestName = @params[0]`（缺参 = 空串）；
+/// - `:17-21` 空名 ⇒ 红字 `Command.CommandHelp`（`命令格式: @开始提问 问答名称`）；
+/// - `:22` `SystemShare.WorldEngine.SendQuestMsg(sQuestName);` **整行被注释** ⇒ 非空名
+///   **零帧、零副作用**（照抄空实现并登记，不臆造问题系统）。
+fn start_quest(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(START_QUEST_HELP);
+    }
+    no_frames(NOTE_START_QUEST_MSG_COMMENTED)
 }
 
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
@@ -2096,6 +2133,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::UserCmd => user_cmd(),
         Imp::BackStep => back_step(parameters, sess),
         Imp::FireBurn => fire_burn(parameters, sess),
+        Imp::StartQuest => start_quest(parameters),
 
         // ---- 批次 3 · 传送/召唤（17 + `@传送`）----
         Imp::AllowDearRecall => allow_dear_recall(sess),
@@ -2166,6 +2204,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         // ---- 批次 5 · 脚本可达族（`GMEXECUTE` 抬权可达，tier=R）----
         Imp::Shutup => shutup(parameters),
         Imp::ShutupRelease => shutup_release(parameters),
+        Imp::ShowEffect => show_effect(),
 
         Imp::Unimplemented => GmResult {
             found: true,
@@ -2210,6 +2249,23 @@ fn shutup(parameters: &str) -> GmResult {
     // `(uint)HUtil32.StrToInt(sTime, 5)`：int → uint 的 unchecked 回转用 `as`。
     let dw_time = str_to_int(time, 5) as u32;
     red(format!("{human} 已被禁言{dw_time}分钟"))
+}
+
+/// `ShowEffectCommand.Execute`（`src/Modules/GameCommand/Commands/ShowEffectCommand.cs:12-71`，
+/// 现网 `@ShowEffect`；`Command.conf` 里**没有** `[Command] ShowEffect` 覆盖 ⇒ 注册名保持英文
+/// `ShowEffect`，查表 `OrdinalIgnoreCase` ⇒ 部署脚本的 `Gmexecute showeffect <n>` 能命中）。
+///
+/// **实际执行行**：
+/// - `:14-17` `if (@params == null) return;`——`GameCommand.Handle` 的 `case 2` 传
+///   `parameters.Split(' ')`（不返回 null）⇒ 死分支；
+/// - `:18/:19` 取 `sEffect`/`sTime`，**两者之后都没被使用**；
+/// - `:20-70` 的参数校验、79-85 烟花（`TFlowerEvent`）、87/89/90 的 `RM_MYSHOW`、
+///   `EventManager.AddEvent` **全部被注释** ⇒ 函数体落下即返回。
+///
+/// ⇒ online 行为 = **任何参数都零帧、零副作用**（BUG-REPLICA / 空实现，不修）；按卡面要求只落
+/// 「逐字节等价」的最小 no-op 并登记，不臆造烟花特效或 `RM_MYSHOW` 帧。
+fn show_effect() -> GmResult {
+    no_frames(NOTE_SHOW_EFFECT_ALL_COMMENTED)
 }
 
 /// `ShutupReleaseCommand.Execute`（`src/Modules/GameCommand/Commands/ShutupReleaseCommand.cs:12-49`，
@@ -2887,7 +2943,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ShowEffect",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowEffect,
     },
     CommandDef {
         name: "showflag",
@@ -3145,7 +3201,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "开始提问",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::StartQuest,
     },
     CommandDef {
         name: "开始攻城",
@@ -4541,7 +4597,8 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-shutup-release` 的 `取消禁言`）
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`
+    /// 与卡 `openmir2-gm-impl-startquest` 的 `StartQuest`）
     /// 的命令体接上（`Unimplemented` 从 180 降到 86），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
@@ -4550,16 +4607,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            99,
-            "99 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + 取消禁言 1）2 条"
+            101,
+            "101 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + 取消禁言 1 + ShowEffect 1 + StartQuest 1）4 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            86,
-            "185 - 98"
+            84,
+            "185 - 101"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -5786,137 +5843,10 @@ mod tests {
         );
     }
 
-    /// 卡 `openmir2-gm-impl-shutup-release`：表项（名字被 `Command.conf` 覆盖为 `取消禁言`）。
-    #[test]
-    fn shutup_release_is_wired_in_the_command_table() {
-        let def = find("取消禁言").expect("@取消禁言 在 185 行表里");
-        assert_eq!(def.imp, Imp::ShutupRelease);
-        assert_eq!(def.perm_min, 10, "`[Permission] ReleaseShutup=10`");
-        assert_eq!(
-            def.params, 2,
-            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
-        );
-        // `Command.CommandHelp` = `命令格式: @{Name} {Help}`；`Name` 被 `[Command] ReleaseShutup`
-        // 覆盖为 `取消禁言`（`Command.conf:67`），`Help` = `CommandHelp.cs:41` 的「人物名称」。
-        assert_eq!(SHUTUP_RELEASE_HELP, "命令格式: @取消禁言 人物名称");
-    }
-
-    /// 恒真分支：无论带不带名字、`boAll` 是 `true` 还是 `false`，都**只回同一条**帮助文本。
-    ///
-    /// oracle `ShutupReleaseCommand.cs:20` 的 `IsNullOrEmpty(x) || !IsNullOrEmpty(x)` 恒真；
-    /// `:22-55` 对 `DenySayMsgList` 的操作整段被注释 ⇒ `boAll` 只被注释代码引用。
-    #[test]
-    fn shutup_release_always_returns_the_same_help_text() {
-        for line in [
-            "@取消禁言",
-            "@取消禁言 zhangsan",
-            "@取消禁言 zhangsan true",
-            "@取消禁言 zhangsan false",
-            // 只有 ASCII 空格分段（`Split(' ')`）：制表符留在**同一段**里 ⇒ 没有第二参，
-            // 不触发 `bool.Parse` ⇒ 同样落帮助文本。
-            "@取消禁言 zhangsan	true",
-        ] {
-            let (r, _) = run_gm(line);
-            assert!(r.found && r.parsed, "{line}: 命中命令体");
-            // 与字面量比对（不用常量比常量）：文本一旦被改写，本用例必须红。
-            assert_eq!(
-                texts(&r),
-                vec![(GmColor::Red, "命令格式: @取消禁言 人物名称")],
-                "{line}: 恒真分支 ⇒ 恰好一条 Red/Hint 帮助文本"
-            );
-            assert!(r.frames.is_empty(), "{line}: 本命令只发 SysMsg");
-            assert!(r.log_note.is_none(), "{line}: 正常路径不得有登记");
-        }
-    }
-
-    /// 第二段不是 `true`/`false` ⇒ `bool.Parse` 抛 `FormatException`，被
-    /// `PlayObject.Chat.cs:402-406` 的 catch 吞掉 ⇒ **零帧**（`found` 仍为 true，不走回落）。
-    ///
-    /// 含「内部连续空格」情形：`parse_command` 只 Trim 两端 ⇒ `params[1]` 是空串 ⇒ 同样抛。
-    #[test]
-    fn shutup_release_bool_parse_failure_is_zero_frames() {
-        for line in [
-            "@取消禁言 zhangsan yes",
-            "@取消禁言 zhangsan 1",
-            "@取消禁言 zhangsan TRUE2",
-            "@取消禁言 zhangsan  true",
-        ] {
-            let (r, _) = run_gm(line);
-            assert!(
-                r.found && r.parsed,
-                "{line}: 命令已命中（只是命令体抛异常）"
-            );
-            assert!(r.msgs.is_empty(), "{line}: 异常被 catch 吞掉 ⇒ 零帧");
-            assert!(r.frames.is_empty(), "{line}: 无其它帧");
-            assert_eq!(
-                r.log_note,
-                Some(NOTE_SHUTUP_RELEASE_BOOL_PARSE),
-                "{line}: 吞异常路径必须登记"
-            );
-        }
-        // 对照：空白被 `bool.Parse` 的 `Trim()` 吃掉的 ` true ` 仍是合法值 ⇒ 帮助文本。
-        let (r, _) = run_gm("@取消禁言 zhangsan 	true ");
-        assert_eq!(texts(&r), vec![(GmColor::Red, SHUTUP_RELEASE_HELP)]);
-    }
-
-    /// **F3（review `01007b5ee8`）**：帮助文本的**线上 GBK 字节**逐字节断言（与兄弟卡
-    /// `shutup_sends_exactly_one_red_sysmsg_bytes` 同口径）。
-    ///
-    /// `SysMsg` 在线上按 GB2312/GBK 编码（`HUtil32.GetString` 语义）；UTF-8 文本相同不能
-    /// 证明线上字节相同（例如「格」在 GBK 是 `B8F1`，UTF-8 是 `E6 A0 BC`）。牙：把常量里的
-    /// 「式」改成同音异形字 ⇒ 本用例红。
-    #[test]
-    fn shutup_release_help_is_gbk_bytes_on_the_wire() {
-        let (r, _) = run_gm("@取消禁言 zhangsan");
-        assert!(r.found && r.parsed, "命中命令体，不走未知命令回落");
-        assert_eq!(r.msgs.len(), 1, "恰好一条 SysMsg");
-        assert_eq!(r.msgs[0].color, GmColor::Red);
-        assert_eq!(r.msgs[0].text, SHUTUP_RELEASE_HELP);
-        assert!(r.frames.is_empty(), "本命令只发 SysMsg，无其它帧");
-        assert!(r.log_note.is_none(), "正常支没有吞异常/未接项");
-        // 线上编码：逐字符 GBK 双字节 + 三个 ASCII（': '、'@'、' '）。
-        assert_eq!(
-            crate::downlink::gbk(&r.msgs[0].text),
-            vec![
-                0xc3, 0xfc, // 命
-                0xc1, 0xee, // 令
-                0xb8, 0xf1, // 格
-                0xca, 0xbd, // 式
-                0x3a, 0x20, // ": "
-                0x40, // '@'
-                0xc8, 0xa1, // 取
-                0xcf, 0xfb, // 消
-                0xbd, 0xfb, // 禁
-                0xd1, 0xd4, // 言
-                0x20, // ' '
-                0xc8, 0xcb, // 人
-                0xce, 0xef, // 物
-                0xc3, 0xfb, // 名
-                0xb3, 0xc6, // 称
-            ]
-        );
-    }
-
-    /// 权限门先于命令体（`GameCommand.cs:37-40`）：`Permission < 10` ⇒ 红字 `权限不够!!!`，
-    /// 连帮助文本都不出。
-    #[test]
-    fn shutup_release_permission_gate_blocks_body() {
-        let mut sess = GmSession {
-            permission: 9,
-            ..GmSession::default()
-        };
-        let cfg = GmConfig::default();
-        let r = exec(&mut sess, &cfg, "@取消禁言 zhangsan");
-        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
-        sess.permission = 10;
-        let r = exec(&mut sess, &cfg, "@取消禁言 zhangsan");
-        assert_eq!(texts(&r), vec![(GmColor::Red, SHUTUP_RELEASE_HELP)]);
-    }
-
     /// ① 正常触发：**恰好一条** Red SysMsg，文本逐字节（UTF-8 断言 + 线上 GBK 字节断言）。
     ///
     /// oracle `ShutupCommand.cs:56`：`SysMsg(string.Format(GameCommandShutupHumanMsg,
-    /// sHumanName, dwTime), MsgColor.Red, MsgType.Hint)`；`:28-43` 的 `DenySayMsgList`
+    /// sHumanName, dwTime), MsgColor.Red, MsgType.Hint)`；`:33-50` 的 `DenySayMsgList`
     /// 写入整段被注释 ⇒ 没有任何其它副作用。
     #[test]
     fn shutup_sends_exactly_one_red_sysmsg_bytes() {
@@ -6067,6 +5997,221 @@ mod tests {
         assert_eq!(sess.permission, 0, "抬权是临时的，执行完必须还原");
     }
 
+    /// 卡 `openmir2-gm-impl-showeffect`：表项（`Command.conf` 无覆盖 ⇒ 注册名保持英文
+    /// `ShowEffect`；部署脚本写 `showeffect` 靠 `OrdinalIgnoreCase` 命中）。
+    #[test]
+    fn show_effect_is_wired_in_the_command_table() {
+        let def = find("showeffect").expect("@ShowEffect 在 185 行表里（大小写不敏感）");
+        assert_eq!(def.name, "ShowEffect");
+        assert_eq!(def.imp, Imp::ShowEffect);
+        assert_eq!(def.perm_min, 10);
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
+    /// oracle 命令体 `:20-70` **整段被注释** ⇒ 任何参数（含部署脚本的 78/79/80）都零帧、
+    /// 零副作用；`found` 仍为 true（不走未知命令回落）。
+    #[test]
+    fn show_effect_is_zero_frames_for_every_parameter() {
+        for line in [
+            "@ShowEffect",
+            "@ShowEffect 78",
+            "@ShowEffect 78 4000",
+            "@showeffect 87",
+            "@ShowEffect abc def ghi",
+        ] {
+            let (r, sess) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: 零帧");
+            assert!(r.frames.is_empty(), "{line}: 无直发帧");
+            assert_eq!(
+                r.log_note,
+                Some(NOTE_SHOW_EFFECT_ALL_COMMENTED),
+                "{line}: 空实现必须登记"
+            );
+            assert_eq!(sess.permission, 10, "{line}: 命令体不得改权限（无副作用）");
+        }
+    }
+
+    /// 权限门先于命令体：`Permission < 10` ⇒ 一条红字 `权限不够!!!`。
+    #[test]
+    fn show_effect_permission_gate_blocks_body() {
+        let mut sess = GmSession {
+            permission: 9,
+            ..GmSession::default()
+        };
+        let cfg = GmConfig::default();
+        let r = exec(&mut sess, &cfg, "@ShowEffect 78");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
+        sess.permission = 10;
+        let r = exec(&mut sess, &cfg, "@ShowEffect 78");
+        assert!(r.msgs.is_empty(), "抬权后仍是空实现");
+    }
+
+    /// 部署脚本路（`Market_Def/QFunction-0.txt` 的 `@StdModeFunc14`：
+    /// `Gmexecute showeffect 78/79/80`）经 `NpcPlayer` 的 GMEXECUTE 跳线执行 ⇒ **零帧**
+    /// （oracle 命令体整段注释；此前这段是 `Imp::Unimplemented`，现在仍是零帧但已登记）。
+    #[test]
+    fn show_effect_script_gmexecute_path_is_zero_frames() {
+        use mir2_script::engine::ScriptPlayer;
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        let s_data = format!("@{} {} {} {} {} {}", "showeffect", "78", "", "", "", "");
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world: view,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(&s_data);
+            player.set_permission(0);
+            assert!(player.frames.is_empty(), "空实现 ⇒ 脚本侧零帧");
+            assert!(player.gm_direct_frames.is_empty());
+            assert!(
+                player.gm_notes.iter().any(|n| n.contains("整段注释")),
+                "空实现路径必须登记：{:?}",
+                player.gm_notes
+            );
+        }
+        assert_eq!(sess.permission, 0, "抬权临时生效并还原");
+    }
+
+    /// 卡 `openmir2-gm-impl-shutup-release`：表项（名字被 `Command.conf` 覆盖为 `取消禁言`）。
+    #[test]
+    fn shutup_release_is_wired_in_the_command_table() {
+        let def = find("取消禁言").expect("@取消禁言 在 185 行表里");
+        assert_eq!(def.imp, Imp::ShutupRelease);
+        assert_eq!(def.perm_min, 10, "`[Permission] ReleaseShutup=10`");
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+        // `Command.CommandHelp` = `命令格式: @{Name} {Help}`；`Name` 被 `[Command] ReleaseShutup`
+        // 覆盖为 `取消禁言`（`Command.conf:67`），`Help` = `CommandHelp.cs:41` 的「人物名称」。
+        assert_eq!(SHUTUP_RELEASE_HELP, "命令格式: @取消禁言 人物名称");
+    }
+
+    /// 恒真分支：无论带不带名字、`boAll` 是 `true` 还是 `false`，都**只回同一条**帮助文本。
+    ///
+    /// oracle `ShutupReleaseCommand.cs:20` 的 `IsNullOrEmpty(x) || !IsNullOrEmpty(x)` 恒真；
+    /// `:22-55` 对 `DenySayMsgList` 的操作整段被注释 ⇒ `boAll` 只被注释代码引用。
+    #[test]
+    fn shutup_release_always_returns_the_same_help_text() {
+        for line in [
+            "@取消禁言",
+            "@取消禁言 zhangsan",
+            "@取消禁言 zhangsan true",
+            "@取消禁言 zhangsan false",
+            // 只有 ASCII 空格分段（`Split(' ')`）：制表符留在**同一段**里 ⇒ 没有第二参，
+            // 不触发 `bool.Parse` ⇒ 同样落帮助文本。
+            "@取消禁言 zhangsan	true",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            // 与字面量比对（不用常量比常量）：文本一旦被改写，本用例必须红。
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, "命令格式: @取消禁言 人物名称")],
+                "{line}: 恒真分支 ⇒ 恰好一条 Red/Hint 帮助文本"
+            );
+            assert!(r.frames.is_empty(), "{line}: 本命令只发 SysMsg");
+            assert!(r.log_note.is_none(), "{line}: 正常路径不得有登记");
+        }
+    }
+
+    /// 第二段不是 `true`/`false` ⇒ `bool.Parse` 抛 `FormatException`，被
+    /// `PlayObject.Chat.cs:402-406` 的 catch 吞掉 ⇒ **零帧**（`found` 仍为 true，不走回落）。
+    ///
+    /// 含「内部连续空格」情形：`parse_command` 只 Trim 两端 ⇒ `params[1]` 是空串 ⇒ 同样抛。
+    #[test]
+    fn shutup_release_bool_parse_failure_is_zero_frames() {
+        for line in [
+            "@取消禁言 zhangsan yes",
+            "@取消禁言 zhangsan 1",
+            "@取消禁言 zhangsan TRUE2",
+            "@取消禁言 zhangsan  true",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(
+                r.found && r.parsed,
+                "{line}: 命令已命中（只是命令体抛异常）"
+            );
+            assert!(r.msgs.is_empty(), "{line}: 异常被 catch 吞掉 ⇒ 零帧");
+            assert!(r.frames.is_empty(), "{line}: 无其它帧");
+            assert_eq!(
+                r.log_note,
+                Some(NOTE_SHUTUP_RELEASE_BOOL_PARSE),
+                "{line}: 吞异常路径必须登记"
+            );
+        }
+        // 对照：空白被 `bool.Parse` 的 `Trim()` 吃掉的 ` true ` 仍是合法值 ⇒ 帮助文本。
+        let (r, _) = run_gm("@取消禁言 zhangsan 	true ");
+        assert_eq!(texts(&r), vec![(GmColor::Red, SHUTUP_RELEASE_HELP)]);
+    }
+
+    /// **F3（review `01007b5ee8`）**：帮助文本的**线上 GBK 字节**逐字节断言（与兄弟卡
+    /// `shutup_sends_exactly_one_red_sysmsg_bytes` 同口径）。
+    ///
+    /// `SysMsg` 在线上按 GB2312/GBK 编码（`HUtil32.GetString` 语义）；UTF-8 文本相同不能
+    /// 证明线上字节相同（例如「格」在 GBK 是 `B8F1`，UTF-8 是 `E6 A0 BC`）。牙：把常量里的
+    /// 「式」改成同音异形字 ⇒ 本用例红。
+    #[test]
+    fn shutup_release_help_is_gbk_bytes_on_the_wire() {
+        let (r, _) = run_gm("@取消禁言 zhangsan");
+        assert!(r.found && r.parsed, "命中命令体，不走未知命令回落");
+        assert_eq!(r.msgs.len(), 1, "恰好一条 SysMsg");
+        assert_eq!(r.msgs[0].color, GmColor::Red);
+        assert_eq!(r.msgs[0].text, SHUTUP_RELEASE_HELP);
+        assert!(r.frames.is_empty(), "本命令只发 SysMsg，无其它帧");
+        assert!(r.log_note.is_none(), "正常支没有吞异常/未接项");
+        // 线上编码：逐字符 GBK 双字节 + 三个 ASCII（': '、'@'、' '）。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, // 命
+                0xc1, 0xee, // 令
+                0xb8, 0xf1, // 格
+                0xca, 0xbd, // 式
+                0x3a, 0x20, // ": "
+                0x40, // '@'
+                0xc8, 0xa1, // 取
+                0xcf, 0xfb, // 消
+                0xbd, 0xfb, // 禁
+                0xd1, 0xd4, // 言
+                0x20, // ' '
+                0xc8, 0xcb, // 人
+                0xce, 0xef, // 物
+                0xc3, 0xfb, // 名
+                0xb3, 0xc6, // 称
+            ]
+        );
+    }
+
+    /// 权限门先于命令体（`GameCommand.cs:37-40`）：`Permission < 10` ⇒ 红字 `权限不够!!!`，
+    /// 连帮助文本都不出。
+    #[test]
+    fn shutup_release_permission_gate_blocks_body() {
+        let mut sess = GmSession {
+            permission: 9,
+            ..GmSession::default()
+        };
+        let cfg = GmConfig::default();
+        let r = exec(&mut sess, &cfg, "@取消禁言 zhangsan");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
+        sess.permission = 10;
+        let r = exec(&mut sess, &cfg, "@取消禁言 zhangsan");
+        assert_eq!(texts(&r), vec![(GmColor::Red, SHUTUP_RELEASE_HELP)]);
+    }
+
     /// 卡 `openmir2-gm-impl-shutup-release`：部署脚本路（`Market_Def/功能NPC/比武-GA2.txt:43`
     /// 的 `Gmexecute 取消禁言 self`）经 `NpcPlayer` 的 GMEXECUTE 跳线抬权执行后，
     /// 唯一可观测帧 = 帮助文本（oracle `ShutupReleaseCommand.cs:20` 的恒真分支）。
@@ -6132,5 +6277,54 @@ mod tests {
             );
         }
         assert_eq!(sess.permission, 0, "抬权临时生效并还原");
+    }
+
+    /// 卡 `openmir2-gm-impl-startquest`：表项（现网名 `开始提问` = `conf[Command].StartQuest`）。
+    #[test]
+    fn start_quest_is_wired_in_the_command_table() {
+        let def = find("开始提问").expect("@开始提问 在 185 行表里");
+        assert_eq!(def.imp, Imp::StartQuest);
+        assert_eq!(def.perm_min, 10, "`[Permission] StartQuest=10`");
+        assert_eq!(def.params, 2);
+        assert_eq!(START_QUEST_HELP, "命令格式: @开始提问 问答名称");
+    }
+
+    /// `:17-21` 空名 ⇒ 红字帮助；`:22` 的 `SendQuestMsg` 被注释 ⇒ 非空名零帧 + 登记。
+    #[test]
+    fn start_quest_help_and_commented_noop() {
+        for line in ["@开始提问", "@开始提问  "] {
+            let (r, _) = run_gm(line);
+            assert_eq!(texts(&r), vec![(GmColor::Red, START_QUEST_HELP)], "{line}");
+        }
+        // GBK 线上字节：帮助文案必须逐字节等同 oracle（「文本相等」不等于「线上字节相等」；
+        // 同族用例见 `@禁言`）。28 字节 = 命令格式(8) + ": @"(3) + 开始提问(8) + ' '(1) + 问答名称(8)。
+        let (r, _) = run_gm("@开始提问");
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, // 命令格式
+                0x3a, 0x20, 0x40, // ": @"
+                0xbf, 0xaa, 0xca, 0xbc, 0xcc, 0xe1, 0xce, 0xca, // 开始提问
+                0x20, // ' '
+                0xce, 0xca, 0xb4, 0xf0, 0xc3, 0xfb, 0xb3, 0xc6, // 问答名称
+            ]
+        );
+        for line in ["@开始提问 quiz", "@开始提问 第一题 extra"] {
+            let (r, sess) = run_gm(line);
+            assert!(
+                r.msgs.is_empty(),
+                "{line}: 非空名 ⇒ 零帧（SendQuestMsg 被注释）"
+            );
+            assert!(r.frames.is_empty());
+            assert_eq!(r.log_note, Some(NOTE_START_QUEST_MSG_COMMENTED), "{line}");
+            assert_eq!(sess.permission, 10, "{line}: 无副作用");
+        }
+        let mut sess = GmSession {
+            permission: 9,
+            ..GmSession::default()
+        };
+        let cfg = GmConfig::default();
+        let r = exec(&mut sess, &cfg, "@开始提问 quiz");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
     }
 }
