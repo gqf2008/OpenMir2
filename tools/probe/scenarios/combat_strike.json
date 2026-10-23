@@ -1,0 +1,16 @@
+{
+  "name": "combat_strike",
+  "description": "主动发起一次普通攻击（CM_HIT 3014）并等到命中帧 SM_STRUCK(31)：预置到 D402(138,108)，先 CM_TURN(3010) 把**状态化朝向**转成正上，再朝正上方格 (138,107) 的固定刷怪点「僵尸2」砍一刀。目标不走发现：param_discovery 没有 target_* 规则，坐标由 placement + MonGen.txt:325 钉死（Range=0/数量=1）",
+  "params": {"self_pos": 7078026},
+  "placement": {"map": "D402", "x": 138, "y": 108, "note": "废矿区东部 (D402) 僵尸2 固定刷怪点 (138,107) 的正南邻格；MonGen.txt:325 =『D402 138 107 僵尸2 0 1 10』（Range 0 / 数量 1 / 10 分钟重生）；该格 .map 可走（card_window read_map_cell walkable=true）"},
+  "steps": [
+    {"send": {"ident": 3010, "recog": "self_pos", "tag": 0},
+     "note": "CM_TURN(3010) 先定朝向。线上字段口径（WorldServer.cs:831-844）：`SendMsg(playObject, Ident, Tag, LoWord(Recog), HiWord(Recog), 0)` ⇒ nParam1=LoWord(Recog)=X、nParam2=HiWord(Recog)=Y、wParam=Tag=Dir；`Param` 对这几条 ident 不读。ClientChangeDir（PlayObject.Operate.cs:310-339）只在 nX==CurrX && nY==CurrY 时 **Dir=nDir**。为什么必须单独转身：CM_HIT 取目标走 GetPoseCreate()（PlayObject.Attack.cs:26 → BaseObject.cs:1253-1261 → GetFrontPosition BaseObject.cs:977-1030 用**状态化 Dir**），而 `Dir=nDir`（BaseObject.Attack.cs:12）是在取目标之后的 PlayObject.Attack.cs:75 才执行 ⇒ 本击的 tag 只影响动作帧，救不了朝向。self_pos = MakeLong(X=138,Y=108) = (108<<16)|138 = 7078026，与 placement 同源"},
+    {"sleep": 400,
+     "note": "间隔守门：CheckActionStatus（PlayObject.Base.cs:2680-2760）在 boControlActionInterval=true、ActionIntervalTime=350ms（GameSvrConf.cs:1815/1820）下要求两次**不同**操作（OldIdent 从 CM_TURN 换成 CM_HIT）之间有 ≥350ms；再加上驱动器默认 --between-ms 200ms，本条给 400ms 富余"},
+    {"send": {"ident": 3014, "recog": "self_pos", "tag": 0},
+     "note": "CM_HIT(3014)（crates/protocol/src/messages.rs:111；oracle src/OpenMir2/Messages.cs:136）。服务端 PlayObject.Message.cs:1221-1230 把 9 条攻击 ident 统一交给 ClientHitXY(wIdent, nParam1, nParam2, (byte)wParam, LateDelivery, ref delayTime)。成功门在 PlayObject.Attack.cs:883 `nX == CurrX && nY == CurrY` —— 所以 recog 必须是**自己**的坐标（不是目标坐标），打的是 GetPoseCreate() 拿到的**正上方格**。tag=0 = Direction.Up（BaseObject.cs:984-988 GetFrontPosition 对上格是 y-1）"},
+    {"wait_for": 31, "timeout_ms": 3000,
+     "note": "只等 SM_STRUCK(31)（messages.rs:192 / OpenMir2/Messages.cs:197）。因果链：ClientHitXY 成功（PlayObject.Attack.cs:883-886）⇒ AttackDir(null,0,Dir)（:909-911）⇒ PlayObject.Attack.cs:26 取到正上方的僵尸2 ⇒ BaseObject.Attack.cs:30-65 `_Attack`：命中门（:39-43，`targetObject.HitPoint > 0` 且 `HitPoint < RandomByte(SpeedPoint)` 才置 0）⇒ 伤害（:53 GetHitStruckDamage 扣目标 AC）⇒ :57 `SendStruckDelayMsg(RM_REFMESSAGE,…,200)` ⇒ 受击者 BaseObject.Base.cs:701-706 的 RM_REFMESSAGE 收到后 SendRefMsg(RM_STRUCK) 广播给视野内玩家 ⇒ 本方 PlayObject.Message.cs:1562-1628 的 RM_STRUCK 支再回 SM_STRUCK(31)。**本方看不到自己的 SM_HIT**：RM_HIT 支在 PlayObject.Message.cs:1433-1437 有 `if (processMsg.ActorId != ActorId)` 过滤，自己那一击的动作帧只发给观察者（Rust 侧同口径，见 game-svr lib.rs 的 hit_cmd_dispatches_ack_action_frame_and_world_attack 用例）。失败支（打空/未命中）**没有任何 s2c 协议帧**，只有明文 `+GD/<rtime>` 服务端 ack（PlayObject.Message.cs:1232-1234 `SendSocket(M2Share.GetGoodTick)`，M2Share.cs:205；probe 记为 frame_class=server_ack_time、ident=null，wait_for 匹配不到）——见 docs/combat-strike-scenario-20261023.md §5"}
+  ]
+}

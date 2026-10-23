@@ -102,6 +102,20 @@ python tools/probe/mir2_probe.py \
 > 链里没有 `@ask`（部署件无此标签）也没有 `@back`（无 `<.../@back>` 链接 ⇒ `LableIsCanJmp` 门控下零帧），
 > 逐条 oracle 出处与理由见 `docs/npc-script-chain-scenario-20261023.md`。
 
+> `combat_strike` 是**唯一一条主动发起攻击**的场景（R3）：`placement` 到 D402(138,108) →
+> `CM_TURN(3010)` 定状态化朝向 → `CM_HIT(3014)` → `wait_for 31`（`SM_STRUCK`）。
+> 三个容易写错的点，逐条 oracle 出处见 `docs/combat-strike-scenario-20261023.md`：
+> ① **`CM_TURN`/`CM_HIT` 的 X/Y 打包在 `recog` 里**（`WorldServer.cs:831-844`：
+> `nParam1=LoWord(Recog)`、`nParam2=HiWord(Recog)`、`wParam=Tag=Dir`，`param` 不被读）
+> ⇒ `recog` 必须写 `(Y<<16)|X`，不是「X 放 recog、Y 放 param」；
+> ② **必须先 `CM_TURN` 定朝向**——`CM_HIT` 取目标走 `GetPoseCreate()` 的**状态化 `Dir`**，
+> 报文里的 `tag` 只管动作帧（`PlayObject.Attack.cs:26` 早于 `BaseObject.Attack.cs:12` 的 `Dir=nDir`）；
+> ③ **本方看不到自己的 `SM_HIT(14)`**（`PlayObject.Message.cs:1433-1437` 自我过滤），
+> 命中只能等受击者的 `SM_STRUCK(31)`。
+> 两条已登记的缺口（不是「已解决」）：**「没打中」支零协议帧**（只有明文 `+GD` ack、`ident=null`，
+> `wait_for` 匹配不到 ⇒ 现有 DSL 表达不了，扩展建议见文档 §5.3）；**默认夹具 `winplay0` 是 1 级法师
+> （DC 0-1、HitPoint 5），打不穿任何确定性刷怪点的 AC ⇒ 真跑必须换角色（推荐 `gm01`）**，见文档 §6。
+
 ## 驱动器的自动握手（对拍不要关）
 
 照 `src/BotSrv/Player/RobotPlayer.Operate.cs`：
