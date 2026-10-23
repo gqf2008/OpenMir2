@@ -791,6 +791,9 @@ pub struct NpcPlayer<'r, 'g> {
     pub permission: i32,
     /// `ProcessUserLineMsg`/`Permission` 的宿主跳线；`None` ⇒ 与 `ScriptPlayer` 缺省 no-op 同口径。
     pub gm: Option<NpcGm<'g>>,
+    /// `PlayObject.DynamicVarMap` 的宿主存储（卡 `openmir2-script-dyn-var-host`）；
+    /// `None` ⇒ `dyn_var_*` 保持缺省 no-op。由调用方在脚本前挂上（与会话级表的借用方式同 GM 桥）。
+    pub dyn_vars: Option<&'r mut crate::DynVarStore>,
     /// `SendDefMessage`（**不**经 `MsgQueue` 的直发帧，oracle 语义：命令体执行时立即下发）。
     ///
     /// 目前唯一来源是 `gmcmd::GmFrame::AttackMode`（`ChangeAttackModeCommand.cs:65`）；宿主在
@@ -870,6 +873,7 @@ impl NpcPlayer<'_, '_> {
             // 跳线未接 = 缺省 no-op（与 `ScriptPlayer` 缺省一致）。
             permission: 0,
             gm: None,
+            dyn_vars: None,
             gm_direct_frames: Vec::new(),
             gm_notes: Vec::new(),
         }
@@ -1142,6 +1146,47 @@ fn push_sys_msg(frames: &mut Vec<SendMsg>, f: u8, b: u8, text: String) {
 
 impl ScriptPlayer for NpcPlayer<'_, '_> {
     /// `playerActor.Abil.Exp`（`ExecutionProcessingSys.cs:2859-2861` 的 `+` 支读/写同一字段）。
+    /// `GetDynamicVarMap` 的 HUMAN/Account 支（oracle 两者同表）；GLOBAL/GUILD 未接。
+    fn dyn_var_get(
+        &self,
+        kind: mir2_script::engine::vars::DynVarKind,
+        name: &str,
+    ) -> Option<mir2_script::engine::vars::DynVar> {
+        match kind {
+            mir2_script::engine::vars::DynVarKind::Human
+            | mir2_script::engine::vars::DynVarKind::Account => self.dyn_vars.as_ref()?.get(name),
+            mir2_script::engine::vars::DynVarKind::Global
+            | mir2_script::engine::vars::DynVarKind::Guild => None,
+        }
+    }
+    fn dyn_var_set(
+        &mut self,
+        kind: mir2_script::engine::vars::DynVarKind,
+        name: &str,
+        v: mir2_script::engine::vars::DynVar,
+    ) -> bool {
+        match kind {
+            mir2_script::engine::vars::DynVarKind::Human
+            | mir2_script::engine::vars::DynVarKind::Account => {
+                self.dyn_vars.as_mut().is_some_and(|s| s.set(name, v))
+            }
+            _ => false,
+        }
+    }
+    fn dyn_var_insert(
+        &mut self,
+        kind: mir2_script::engine::vars::DynVarKind,
+        name: &str,
+        v: mir2_script::engine::vars::DynVar,
+    ) -> bool {
+        match kind {
+            mir2_script::engine::vars::DynVarKind::Human
+            | mir2_script::engine::vars::DynVarKind::Account => {
+                self.dyn_vars.as_mut().is_some_and(|s| s.insert(name, v))
+            }
+            _ => false,
+        }
+    }
     fn abil_exp(&self) -> i32 {
         self.abil_exp
     }
@@ -2249,6 +2294,52 @@ mod tests {
             curr_y: 12,
         });
         book
+    }
+
+    /// **卡 `openmir2-script-dyn-var-host`**：`NpcPlayer` 的 `dyn_var_get/set/insert` 覆写。
+    ///
+    /// oracle 口径（`ProcessingBase.cs:1020-1045` + `PlayObject.cs:1023`）：
+    /// ① `$HUMAN` 与 `$ACCOUNT` **共用一张** `DynamicVarMap`（`OrdinalIgnoreCase`）；
+    /// ② `VAR` = 不存在才插入；③ `SetMovDataDynamicVarValue` = 存在且**类型相同**才写回。
+    ///
+    /// 牙：删 `dyn_var_get` 覆写（回缺省 `None`）⇒ 本用例红（实测 left None vs right Some(5)）。
+    #[test]
+    fn npc_player_dynamic_var_map_matches_oracle_semantics() {
+        use mir2_script::engine::vars::{DynVar, DynVarKind};
+        let mut store = crate::DynVarStore::default();
+        let mut rng = |_v: i32| 0;
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.dyn_vars = Some(&mut store);
+        assert!(p.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(5)));
+        assert!(!p.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(9)));
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(5))
+        );
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Account, "m1"),
+            Some(DynVar::Integer(5))
+        );
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "M1"),
+            Some(DynVar::Integer(5))
+        );
+        assert!(p.dyn_var_set(DynVarKind::Human, "m1", DynVar::Integer(42)));
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(42))
+        );
+        assert!(!p.dyn_var_set(DynVarKind::Human, "m1", DynVar::Str("x".into())));
+        assert_eq!(
+            p.dyn_var_get(DynVarKind::Human, "m1"),
+            Some(DynVar::Integer(42))
+        );
+        assert!(!p.dyn_var_set(DynVarKind::Human, "nope", DynVar::Integer(1)));
+        assert_eq!(p.dyn_var_get(DynVarKind::Human, "nope"), None);
+        assert_eq!(p.dyn_var_get(DynVarKind::Global, "g"), None);
+        assert!(!p.dyn_var_insert(DynVarKind::Global, "g", DynVar::Integer(1)));
+        p.dyn_vars = None;
+        assert_eq!(p.dyn_var_get(DynVarKind::Human, "m1"), None);
     }
 
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的

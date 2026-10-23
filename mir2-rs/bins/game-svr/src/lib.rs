@@ -1845,6 +1845,56 @@ fn handle_gm_command(
 /// `GmRig::say`——**同一份实现**，不复制。
 ///
 /// 返回是否真的落了写（诊断用；`false` = 本条命令没有实体差量，如未知命令/无实体）。
+/// `PlayObject.DynamicVarMap`（`Dictionary<string, DynamicVar>(StringComparer.OrdinalIgnoreCase)`，
+/// `PlayObject.cs:1023`）的宿主侧存储（卡 `openmir2-script-dyn-var-host`）。
+///
+/// **一张表承载 `$HUMAN` 与 `$ACCOUNT`**：oracle `ProcessingBase.cs:1020-1045` 的
+/// `GetDynamicVarMap` 对 `HUMAN` 与 `Account` 返回的都是 `playerActor.DynamicVarMap`
+/// （卡面「各自独立表」的措辞与 oracle 不符，已挂 comment `8ddb8ef7`，按 §1 行为等价实现）。
+/// `$GLOBAL` 是**服务器级** `SystemShare.DynamicVarList`，本片未接（宿主级表另接线，见 T-222 登记）。
+///
+/// 键按 `OrdinalIgnoreCase` 折叠（`to_uppercase`）；`BTreeMap` 只为确定性，语义上只做点查。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct DynVarStore {
+    table: std::collections::BTreeMap<String, mir2_script::engine::DynVar>,
+}
+
+impl DynVarStore {
+    fn key(name: &str) -> String {
+        name.to_uppercase()
+    }
+
+    /// `TryGetValue`。
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<mir2_script::engine::DynVar> {
+        self.table.get(&Self::key(name)).cloned()
+    }
+
+    /// `VAR` 声明：不存在才新增（已存在 ⇒ `false`）。
+    pub fn insert(&mut self, name: &str, v: mir2_script::engine::DynVar) -> bool {
+        use std::collections::btree_map::Entry;
+        match self.table.entry(Self::key(name)) {
+            Entry::Vacant(e) => {
+                e.insert(v);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
+    }
+
+    /// `SetMovDataDynamicVarValue`：**存在且类型相同**才写回（否则 `false`，调用方据此报错）。
+    pub fn set(&mut self, name: &str, v: mir2_script::engine::DynVar) -> bool {
+        match self.table.get_mut(&Self::key(name)) {
+            Some(slot) if std::mem::discriminant(slot) == std::mem::discriminant(&v) => {
+                *slot = v;
+                true
+            }
+            _ => false,
+        }
+    }
+
+}
+
 fn apply_pending_gm_entity(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
