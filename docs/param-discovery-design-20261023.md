@@ -21,7 +21,11 @@
 | `target_x` / `target_y` | **不可** | 帧里没有目标格坐标 | 同上；**默认 fail-closed** |
 | `takeon_where` / `hit_dir` | **不可** | 无来源帧 | fail-closed（可由操作者 `--var` 显式给） |
 
-## 3. 发现阶段流程（拟）
+## 3. 发现阶段流程（**已落 `tools/probe/param_discovery.py`**，2026-10-23）
+
+> 落点说明：`tools/conformance/` 与 `openmir2-card-window-tool` 同写集、仍被占；本模块落在 `tools/probe/`（write_set 内、零重叠），
+> `card_window.py --discover` 的接线留到那张卡合并后再做。模块自检：`python -I -B tools/probe/param_discovery.py selftest`
+> ⇒ **7 用例 + 2 颗牙全过**。
 
 ```
 discovery run（固定场景：login_only + 一次「不点击」的进世界收帧）
