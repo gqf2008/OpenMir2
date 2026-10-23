@@ -71,6 +71,10 @@
   某 src 文件**同时**命中：①文件名字面量 ②装载标记（`load…(` 调用 / `fn load…` 定义），或镜像模块路径
   （文件 stem = 内容件模块名且含函数定义）。⇒ 注释-only、纯报错串不再算实现。
 「豁免清单」= `cards.json` 的 `known_unreachable` / `known_false`（人工登记的死支/门误报，与自动可达性互为兜底）。
+**登记证据门**（卡 `openmir2-recon-unreachable-registry`）：每条豁免必须是结构化条目
+  `{id, reason, evidence: "path:line", t: "T-<n>" | determination: "文档/线程:行"}`，且 `evidence` 指向的
+  文件必须在**仓库里真实存在**、行号不越界（`exemption_problem`）；否则该登记**不生效**（落回 tracked/RED）
+  并印 `REGISTRY_EVIDENCE_RED` + rc=1 ⇒ 不允许「用一句散文把条目藏起来」。旧式纯字符串条目按未豁免处理。
 
 退出码：0 = 无 RED（缺口全部「已实现或已卡」）；1 = 存在 RED；2 = 用法/环境错误或前置缺失
 （PREREQ_RED：部署目录不存在/不可读/不是目录 ⇒ 印 `PREREQ_MISSING` + `RESULT: PREREQ_RED`，**拒跑而不
@@ -467,6 +471,7 @@ def resolve_cards(cards: dict, repo: Path, board_lookup=None):
     if board is None:
         cards["_valid_cards"] = known
         cards["_missing_cards"] = []
+        validate_exemption_registry(cards, repo)
         return cards
     valid = [c for c in known if c in board]
     missing = [c for c in known if c not in board]
@@ -476,6 +481,7 @@ def resolve_cards(cards: dict, repo: Path, board_lookup=None):
             missing.append(cid)
     cards["_valid_cards"] = valid
     cards["_missing_cards"] = missing
+    validate_exemption_registry(cards, repo)
     return cards
 
 
@@ -501,10 +507,97 @@ def card_for(cards: dict, key: str):
     return None
 
 
-def is_exempted(cards: dict, key: str) -> bool:
-    """人工豁免登记：key 在 `known_unreachable` / `known_false` 里 ⇒ 不判 RED。"""
+# ---------------------------------------------------------------------------
+# 人工豁免登记的证据门（卡 `openmir2-recon-unreachable-registry`，tier=L）
+# ---------------------------------------------------------------------------
+# 每条 `known_unreachable` / `known_false` 必须是**结构化条目**：
+#   {"id": "outbound:SM_X", "reason": "…", "evidence": "path/to/oracle.cs:NNN",
+#    "t": "T-65", "refs": ["T-176"], "determination": "文档:行 或 线程 id+oid"}
+# 判红口径（与「用一句散文把条目藏起来」对着干）：
+#   ① 不是对象 / 缺 id|reason|evidence / 缺可追溯判定（`t`=T-<n> 或 `determination`）⇒ 红；
+#   ② `evidence` 不是 `file:line` 形态 ⇒ 红；
+#   ③ `evidence` 指向的文件在仓库里不存在，或行号越界 ⇒ 红。
+# 登记项判红 ⇒ 该 key **不生效**（落回 tracked/RED）+ `emit_exemption_registry_problems`
+# 印 `REGISTRY_EVIDENCE_RED` 且命令 rc=1。
+RE_REGISTRY_T = re.compile(r"^T-\d+$")
+
+
+def exemption_entries(cards: dict):
+    """逐条吐出 (key, entry, bucket)。旧式纯字符串条目 entry=None（会被证据门判红）。"""
     for bucket in ("known_unreachable", "known_false"):
-        if key in set(cards.get(bucket, []) or []):
+        for item in cards.get(bucket, []) or []:
+            if isinstance(item, dict):
+                yield str(item.get("id") or ""), item, bucket
+            else:
+                yield str(item), None, bucket
+
+
+def exemption_problem(repo: Path, entry) -> "str|None":
+    """登记项证据门：返回问题描述；None = 通过。"""
+    if not isinstance(entry, dict):
+        return '登记不是结构化条目（须为 {id, reason, evidence: "path:line", t|determination} 对象）'
+    for field in ("id", "reason", "evidence"):
+        val = entry.get(field)
+        if not isinstance(val, str) or not val.strip():
+            return "缺字段 %s" % field
+    t = entry.get("t")
+    det = entry.get("determination")
+    if not ((isinstance(t, str) and RE_REGISTRY_T.match(t.strip()))
+            or (isinstance(det, str) and det.strip())):
+        return "缺可追溯判定出处（t=T-<n> 或 determination=文档/线程:行）"
+    ev = entry["evidence"].strip()
+    if not RE_EVIDENCE_LINE.fullmatch(ev):
+        return "evidence 不是 `file:line` 形态：%r" % ev
+    rel, line_s = ev.rsplit(":", 1)
+    path = repo / rel.replace(BS, "/")
+    if not path.is_file():
+        return "evidence 文件在仓库里不存在：%s" % rel
+    try:
+        total = len(path.read_text(encoding="utf-8", errors="replace").splitlines())
+    except OSError as exc:
+        return "evidence 文件不可读：%s（%s）" % (rel, exc)
+    line_no = int(line_s)
+    if not (1 <= line_no <= total):
+        return "evidence 行号越界：%s（文件仅 %d 行）" % (ev, total)
+    return None
+
+
+def validate_exemption_registry(cards: dict, repo: Path) -> dict:
+    """对 known_unreachable/known_false 跑证据门；结果写回内存 cards（不改持久化文件）。
+
+    `_valid_exemptions` = 通过证据门的 key 列表（`is_exempted` 只认它）；
+    `_exemption_problems` = [(bucket, key, problem)]（`emit_exemption_registry_problems` 印红）。
+    """
+    valid, problems = set(), []
+    for key, entry, bucket in exemption_entries(cards):
+        prob = exemption_problem(repo, entry)
+        if prob is None:
+            valid.add(key)
+        else:
+            problems.append((bucket, key, prob))
+    cards["_valid_exemptions"] = sorted(valid)   # list（非 set）⇒ `cmd_mutate` 的 json 往返可用
+    cards["_exemption_problems"] = problems
+    return cards
+
+
+def emit_exemption_registry_problems(cards: dict) -> int:
+    """印登记证据门红点；存在不合规登记 ⇒ 返回 1（计入 RED）。"""
+    problems = cards.get("_exemption_problems", []) or []
+    for bucket, key, prob in problems:
+        print("REGISTRY_EVIDENCE_RED: %s [%s] %s ⇒ 该登记不生效（按未豁免处理）" % (key, bucket, prob))
+    return 1 if problems else 0
+
+
+def is_exempted(cards: dict, key: str) -> bool:
+    """人工豁免登记：key 在 `known_unreachable` / `known_false` 里**且通过证据门** ⇒ 不判 RED。
+
+    `_valid_exemptions` 缺失（单元级 selftest 夹具，未经 `resolve_cards`）⇒ 按原始 key 判定。
+    """
+    valid = cards.get("_valid_exemptions")
+    if valid is not None:
+        return key in valid
+    for k, _entry, _bucket in exemption_entries(cards):
+        if k == key:
             return True
     return False
 
@@ -1428,6 +1521,7 @@ def cmd_content(args):
         return prereq_rc
     cards = resolve_cards(load_cards(Path(args.cards)), repo)
     card_rc = emit_card_prereq(cards)
+    reg_rc = emit_exemption_registry_problems(cards)
     rows = build_content_rows(repo, envir_dir, notice_dir, cards)
     counts, reds = summarize(rows)
     print("== 内容加载对账门（§4-1）==")
@@ -1440,8 +1534,9 @@ def cmd_content(args):
     print("summary:", json.dumps(counts, ensure_ascii=False))
     if args.json:
         emit_json(args.json, dict(kind="content", counts=counts, rows=rows,
-                                  missing_cards=cards.get("_missing_cards", [])))
-    return 1 if (reds or card_rc) else 0
+                                  missing_cards=cards.get("_missing_cards", []),
+                                  exemption_problems=cards.get("_exemption_problems", [])))
+    return 1 if (reds or card_rc or reg_rc) else 0
 
 
 def cmd_dispatch(args):
@@ -1451,6 +1546,7 @@ def cmd_dispatch(args):
         return prereq_rc
     cards = resolve_cards(load_cards(Path(args.cards)), repo)
     card_rc = emit_card_prereq(cards)
+    reg_rc = emit_exemption_registry_problems(cards)
     rows, cm, rm_groups, sm_all, rm_producers = build_dispatch_rows(repo, cards)
     counts, reds = summarize(rows)
     print("== 协议派发对账门（§4-2）==")
@@ -1472,8 +1568,9 @@ def cmd_dispatch(args):
         emit_json(args.json, dict(kind="dispatch", counts=counts, rows=rows,
                                   rm_to_sm={k: sorted(v) for k, v in rm_groups.items()},
                                   rm_producers=sorted(rm_producers),
-                                  missing_cards=cards.get("_missing_cards", [])))
-    return 1 if (reds or card_rc) else 0
+                                  missing_cards=cards.get("_missing_cards", []),
+                                  exemption_problems=cards.get("_exemption_problems", [])))
+    return 1 if (reds or card_rc or reg_rc) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -2125,6 +2222,64 @@ def selftest():
     resolve_cards(_cards_none, Path("."), board_lookup=lambda r: None)
     check("对照（片D1-③）：看板不可用 ⇒ 不判缺卡（_missing_cards 空、_board_probed=False）",
           _cards_none["_missing_cards"] == [] and _cards_none["_board_probed"] is False)
+
+    # ---- 卡 openmir2-recon-unreachable-registry：豁免登记**证据门**（防「一句散文把条目藏起来」）----
+    _tmp_reg = Path(tempfile.mkdtemp(prefix="recon-reg-"))
+    try:
+        (_tmp_reg / "src").mkdir()
+        (_tmp_reg / "src/Oracle.cs").write_text("line1" + NL + "line2" + NL + "line3" + NL, encoding="utf-8")
+        _reg_good = {"id": "outbound:SM_REG_OK", "reason": "r",
+                     "evidence": "src/Oracle.cs:2", "t": "T-65"}
+        _c_good = {"known_cards": [], "assignments": {}, "known_unreachable": [_reg_good]}
+        validate_exemption_registry(_c_good, _tmp_reg)
+        check("teeth（登记证据门）：合规登记（evidence 文件存在且行号在界内）⇒ 通过且豁免生效",
+              _c_good["_exemption_problems"] == []
+              and dispatch_item_status("outbound", "SM_REG_OK", False, _c_good,
+                                       reachable=True) == "n/a-unreachable")
+        _c_badpath = {"known_cards": [], "assignments": {},
+                      "known_unreachable": [dict(_reg_good, id="outbound:SM_REG_NOPATH",
+                                                 evidence="src/Nope.cs:2")]}
+        validate_exemption_registry(_c_badpath, _tmp_reg)
+        check("teeth（登记证据门）：evidence 指向不存在文件 ⇒ 判红且不生效（落回 RED）",
+              len(_c_badpath["_exemption_problems"]) == 1
+              and dispatch_item_status("outbound", "SM_REG_NOPATH", False, _c_badpath,
+                                       reachable=True) == "RED")
+        _c_badline = {"known_cards": [], "assignments": {},
+                      "known_unreachable": [dict(_reg_good, id="outbound:SM_REG_RANGE",
+                                                 evidence="src/Oracle.cs:99")]}
+        validate_exemption_registry(_c_badline, _tmp_reg)
+        check("teeth（登记证据门）：evidence 行号越界 ⇒ 判红且不生效",
+              len(_c_badline["_exemption_problems"]) == 1
+              and "越界" in _c_badline["_exemption_problems"][0][2]
+              and dispatch_item_status("outbound", "SM_REG_RANGE", False, _c_badline,
+                                       reachable=True) == "RED")
+        _c_plain = {"known_cards": [], "assignments": {},
+                    "known_unreachable": ["outbound:SM_REG_PLAIN"]}
+        validate_exemption_registry(_c_plain, _tmp_reg)
+        check("teeth（登记证据门）：旧式纯字符串条目（无证据）⇒ 判红且不生效",
+              len(_c_plain["_exemption_problems"]) == 1
+              and dispatch_item_status("outbound", "SM_REG_PLAIN", False, _c_plain,
+                                       reachable=True) == "RED")
+        _c_notdet = {"known_cards": [], "assignments": {},
+                     "known_unreachable": [{"id": "outbound:SM_REG_NODET", "reason": "r",
+                                            "evidence": "src/Oracle.cs:1"}]}
+        validate_exemption_registry(_c_notdet, _tmp_reg)
+        check("teeth（登记证据门）：有 evidence 但无 t/determination（不可追溯）⇒ 判红",
+              len(_c_notdet["_exemption_problems"]) == 1
+              and "判定出处" in _c_notdet["_exemption_problems"][0][2])
+        _buf_reg = io.StringIO()
+        with contextlib.redirect_stdout(_buf_reg):
+            _reg_rc = emit_exemption_registry_problems(_c_badpath)
+        check("teeth（登记证据门）：不合规登记 ⇒ emit 返回 1 且印 REGISTRY_EVIDENCE_RED + 点名 key",
+              _reg_rc == 1 and "REGISTRY_EVIDENCE_RED" in _buf_reg.getvalue()
+              and "outbound:SM_REG_NOPATH" in _buf_reg.getvalue())
+        _buf_ok = io.StringIO()
+        with contextlib.redirect_stdout(_buf_ok):
+            _reg_rc_ok = emit_exemption_registry_problems(_c_good)
+        check("对照（登记证据门）：全部合规 ⇒ emit 返回 0 且不印红",
+              _reg_rc_ok == 0 and "REGISTRY_EVIDENCE_RED" not in _buf_ok.getvalue())
+    finally:
+        shutil.rmtree(_tmp_reg, ignore_errors=True)
 
     print("== recon_gates selftest ==")
     for l in lines:

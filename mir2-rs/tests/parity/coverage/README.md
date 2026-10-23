@@ -11,7 +11,7 @@
 | 文件 | 作用 |
 | --- | --- |
 | `recon_gates.py` | 门本体（`content` / `dispatch` / `selftest` / `mutate` 四子命令，纯标准库，Python 3.8+）。 |
-| `cards.json` | 卡登记：`known_cards`（看板上存在的卡 id，含少数在途实施卡）+ `assignments`（缺口 key → 卡 id）+ `known_unreachable`/`known_false`（人工豁免登记）+ `assignment_roles`（出站 36 帧 triage 三分类归属）。 |
+| `cards.json` | 卡登记：`known_cards`（看板上存在的卡 id，含少数在途实施卡）+ `assignments`（缺口 key → 卡 id）+ `known_unreachable`/`known_false`（人工豁免登记，**逐条带证据**，见下「豁免登记的证据门」）+ `assignment_roles`（出站 36 帧 triage 三分类归属）。 |
 
 ## 判红口径（缺一即不红）
 
@@ -21,7 +21,7 @@
 「无卡」= `cards.json` 的 `assignments` 未给该缺口指派一个存在于 `known_cards` 的卡 id。
 「Rust 实现」= 派发：去注释/字符串字面量后出现该标识符；内容：**真装载调用**（见下）。
 「可达」（派发·出站） = 触发该 SM 帧的**任一** `RM_*` 在 `src/**/*.cs` 里有**生产者用法**（任何非「仅 `const` 定义 / `case` 标签」的出现，含经动态形参 / 间接发送；见下）。
-「豁免」= 缺口的 key 在 `cards.json` 的 `known_unreachable` / `known_false` 里（人工登记，与自动可达性互为兜底）。
+「豁免」= 缺口的 key 在 `cards.json` 的 `known_unreachable` / `known_false` 里**且该条目通过证据门**（人工登记，与自动可达性互为兜底）。
 空部署文件（0B/空目录）按 `n/a-empty` 处理——oracle 的 `File.Exists` 门后读 0 行，与「不加载」行为无差
 （对齐 §1 备注：`MapEvent.txt`/`DisableMoveMap.txt` 空文件本部署无差）。
 
@@ -50,6 +50,15 @@
   由 14 收敛到 4**（`SM_41`/`SM_43`/`SM_PASSWORDSTATUS` 三条 C 类 + `SM_DONATE_FAIL`；后者 `RM_DONATE_FAIL`
   同样仅 const+case，但 `SM_DONATE_FAIL` 已立卡 ⇒ `status=tracked`），**门 `n/a-unreachable` 计数归位为 3**，
   10 条全转可达。复现对照：对同一 commit 跑本补丁前后的 `dispatch --json` 比 `reach` 列；或跑 `mutate` 的 M4c。
+- **2026-10-23 更新（卡 `openmir2-recon-unreachable-registry`）**：上段的「3」是片118 时的**自动判据**计数。
+  该卡把已审计的登记项逐条带证据并入豁免表后，`dispatch` 实测
+  `summary = {"implemented": 178, "tracked": 1, "n/a-unreachable": 11, "n/a-oracle-noop": 1}`，
+  `tracked` 仅剩 `SM_SKELETON`（由卡 `openmir2-sm-skeleton-wiring` 实现中）。登记面：
+  `known_unreachable` = 3 条 RM 死支 + `CM_OPENDOOR`/`SM_OPENDOOR_OK`/`SM_CLOSEDOOR`(T-65/T-176)
+  + `SM_ITEMSHOW`(T-19/25/32/179) + `SM_CHANGEFACE`(T-175) + `SM_QUERYYBDEAL`/`SM_QUERYYBSELL`
+  （部署级：Envir 从不派发脚本动作 343/344）；`known_false` = `SM_DONATE_FAIL`（非缺陷）。
+  注意 `SM_QUERYYBDEAL`/`SM_QUERYYBSELL` 的自动可达性仍判 **可达**（`src/**` 有生产者），
+  其不可达性来自**部署内容**（四棵 Envir 树 grep 0 命中）⇒ 只能人工登记，门无法自动推出。
 
 ### 出站「证据 = 编码器生产调用点」判据 + 调用值未丢弃（片118）
 
@@ -144,9 +153,29 @@ python mir2-rs/tests/parity/coverage/recon_gates.py dispatch   # 出表；RED �
 - 缺口**要么实现要么立卡**：实现后门自动转 `implemented`；立卡后在 `cards.json` 加一行
   `assignments["<kind>:<name>"] = "<card-id>"`（`<card-id>` 须在 `known_cards` 里）。
 - oracle **死支**（触发 `RM_*` 全仓每一处出现都只是 `const` 定义 + `case` 标签）⇒ 门自动判
-  `n/a-unreachable`；如需人工钉住一道已知死支/门误报，可在 `known_unreachable`/`known_false` 登记该
-  key（与自动判据互为兜底）。注意可达判据**保守**：动态形参 / 间接发送一律按可达处理，宁可多判可达
-  （造出可处置的 RED），也不静默豁免真可达帧。
+  `n/a-unreachable`；如需人工钉住一道已知死支/门误报（含**部署级不可达**：冻结内容永远不会触发），
+  在 `known_unreachable`/`known_false` 登记该 key（与自动判据互为兜底）。注意可达判据**保守**：动态
+  形参 / 间接发送一律按可达处理，宁可多判可达（造出可处置的 RED），也不静默豁免真可达帧。
+- **豁免登记的证据门**（卡 `openmir2-recon-unreachable-registry`）：每条豁免必须是**结构化条目**，
+  而不是一句散文：
+
+  ```json
+  {"id": "outbound:SM_CLOSEDOOR",
+   "reason": "oracle 为什么永不发这一帧（结构性 / 部署级）",
+   "evidence": "src/GameSrv/Word/WorldServer.cs:1479",
+   "t": "T-65", "refs": ["T-176"]}
+  ```
+
+  机判规则（`exemption_problem`，`dispatch`/`content` 均生效）：
+
+  1. 必须是对象且 `id`/`reason`/`evidence` 非空；缺字段 ⇒ 该登记**判红且不生效**；
+  2. 必须有可追溯判定出处：`t` 形如 `T-<n>`，**或** `determination` 指向既有判定（`文档:行` 或线程 id+oid）；
+  3. `evidence` 必须是 `file:line`，且该文件**在仓库里真实存在**、`line` 在 `1..文件行数` 内
+     （`evidence` 只认仓库内路径；部署侧（`E:/MirServer/**`）的计数写进 `reason`，不写进 `evidence`）。
+
+  违反 1–3 任一 ⇒ 印 `REGISTRY_EVIDENCE_RED: <key> [<bucket>] <原因> ⇒ 该登记不生效（按未豁免处理）`
+  且命令 **rc=1**；该 key 同时**不再享受豁免**（落回 `tracked`/`RED`）。旧式纯字符串条目一律按未豁免
+  处理（迁移时补 `{id,reason,evidence,t|determination}`）。
 - 出站 36 帧 triage 三分类（A 真缺编码器 / B 有编码器缺发射点 / C 门误报-oracle 死支）逐条落
   `assignment_roles`；A/B 指向承接卡、C 进 `known_unreachable`。
 - 数值随实现推进**递减**：`tracked`/`RED` 计数是进度表（`docs/移植计划重审-20261015.md` §4-6）。

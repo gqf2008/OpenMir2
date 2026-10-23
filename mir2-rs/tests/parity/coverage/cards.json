@@ -1,5 +1,5 @@
 {
-  "_doc": "对账门卡登记（coverage-recon-gates）。known_cards = 活看板上存在的卡 id（**门在加载时用 `walgit collab ls` 校验存在性**：缺失卡 ⇒ PREREQ_CARD_MISSING + 该卡所辖缺口按未立卡处理 = RED；看板不可用时只印 WARN）；assignments = 缺口 key → 卡 id。缺口 key 形如 content:<file> / inbound:<CM_x> / outbound:<SM_x>。缺口若既未实现又不在 assignments（或指向不存在/看板无此卡）⇒ RED。known_unreachable/known_false = 人工豁免登记（与门自动 RM 可达性判据互为兜底）。known_oracle_noop = oracle 侧整体 no-op 的加载点/派发臂（逐条带 `file:line` 证据；空/无行号证据不生效）。known_dead_consumer = Rust 装载点已接二进制但消费点延后（逐条带证据）。assignment_roles = 出站 36 帧 triage 三分类（A 真缺编码器 / B 有编码器缺发射点 / C 门误报-oracle 死支）逐条归属。",
+  "_doc": "对账门卡登记（coverage-recon-gates）。known_cards = 活看板上存在的卡 id（**门在加载时用 `walgit collab ls` 校验存在性**：缺失卡 ⇒ PREREQ_CARD_MISSING + 该卡所辖缺口按未立卡处理 = RED；看板不可用时只印 WARN）；assignments = 缺口 key → 卡 id。缺口 key 形如 content:<file> / inbound:<CM_x> / outbound:<SM_x>。缺口若既未实现又不在 assignments（或指向不存在/看板无此卡）⇒ RED。known_unreachable/known_false = 人工豁免登记（与门自动 RM 可达性判据互为兜底）；每条须为**结构化条目** {\"id\",\"reason\",\"evidence\":\"path:line\",\"t\":\"T-<n>\"|\"determination\":\"文档:行\"}，evidence 必须是仓库内真实存在且行号不越界的 file:line，否则该登记判红（REGISTRY_EVIDENCE_RED）+ rc=1 且不生效（卡 openmir2-recon-unreachable-registry）。known_oracle_noop = oracle 侧整体 no-op 的加载点/派发臂（逐条带 `file:line` 证据；空/无行号证据不生效）。known_dead_consumer = Rust 装载点已接二进制但消费点延后（逐条带证据）。assignment_roles = 出站 36 帧 triage 三分类（A 真缺编码器 / B 有编码器缺发射点 / C 门误报-oracle 死支）逐条归属。",
   "_regen": "walgit collab ls（取卡 id 全集）；本文件的 assignments 随红名单卡（R0/R1/R2）维护，批次落库后对应项自动转 implemented、assignments 可清理。",
   "known_cards": [
     "openmir2-coverage-recon-gates",
@@ -29,7 +29,6 @@
     "inbound:CM_QUERYUSERSTATE": "openmir2-inbound-dispatch-red-batch",
     "inbound:CM_QUERYVAL": "openmir2-inbound-dispatch-red-batch",
     "inbound:CM_QUERYUSERSET": "openmir2-inbound-dispatch-red-batch",
-    "inbound:CM_OPENDOOR": "openmir2-inbound-dispatch-red-batch",
     "inbound:CM_CLICKNPC": "openmir2-inbound-dispatch-red-batch",
     "inbound:CM_DROPGOLD": "openmir2-inbound-dispatch-red-batch",
     "inbound:CM_BUTCH": "openmir2-inbound-dispatch-red-batch",
@@ -63,25 +62,18 @@
     "outbound:SM_BUILDGUILD_OK": "openmir2-m3-guild-state",
     "outbound:SM_BUILDGUILD_FAIL": "openmir2-m3-guild-state",
     "outbound:SM_DONATE_OK": "openmir2-m3-guild-state",
-    "outbound:SM_DONATE_FAIL": "openmir2-m3-guild-state",
     "outbound:SM_716": "openmir2-orphan-encoder-wiring",
     "outbound:SM_BREAKWEAPON": "openmir2-orphan-encoder-wiring",
-    "outbound:SM_CHANGEFACE": "openmir2-orphan-encoder-wiring",
     "outbound:SM_CHARSTATUSCHANGED": "openmir2-orphan-encoder-wiring",
-    "outbound:SM_CLOSEDOOR": "openmir2-orphan-encoder-wiring",
     "outbound:SM_CLOSEHEALTH": "openmir2-orphan-encoder-wiring",
     "outbound:SM_HIDEEVENT": "openmir2-orphan-encoder-wiring",
     "outbound:SM_INSTANCEHEALGUAGE": "openmir2-orphan-encoder-wiring",
-    "outbound:SM_ITEMSHOW": "openmir2-orphan-encoder-wiring",
     "outbound:SM_LAMPCHANGEDURA": "openmir2-orphan-encoder-wiring",
     "outbound:SM_MAGICFIRE_FAIL": "openmir2-orphan-encoder-wiring",
     "outbound:SM_MERCHANTDLGCLOSE": "openmir2-orphan-encoder-wiring",
     "outbound:SM_MOVEMESSAGE": "openmir2-orphan-encoder-wiring",
-    "outbound:SM_OPENDOOR_OK": "openmir2-orphan-encoder-wiring",
     "outbound:SM_OPENHEALTH": "openmir2-orphan-encoder-wiring",
     "outbound:SM_PLAYDICE": "openmir2-orphan-encoder-wiring",
-    "outbound:SM_QUERYYBDEAL": "openmir2-orphan-encoder-wiring",
-    "outbound:SM_QUERYYBSELL": "openmir2-orphan-encoder-wiring",
     "outbound:SM_RECONNECT": "openmir2-orphan-encoder-wiring",
     "outbound:SM_SHOWEVENT": "openmir2-orphan-encoder-wiring",
     "outbound:SM_WHISPER": "openmir2-orphan-encoder-wiring",
@@ -105,11 +97,89 @@
     "content:LineNotice.txt": "mir2-rs/bins/game-svr/src/main.rs:7436（std::mem::take(line_notice)+glog；滚动公告未接）"
   },
   "known_unreachable": [
-    "outbound:SM_41",
-    "outbound:SM_43",
-    "outbound:SM_PASSWORDSTATUS"
+    {
+      "id": "outbound:SM_41",
+      "reason": "门自动可达性实测：RM_41 全仓每一处出现都只有 const 定义（本行）与 case 标签（PlayObject.Message.cs:1503），无任何发送点 ⇒ oracle 死支，该帧永不发出。",
+      "evidence": "src/OpenMir2/Messages.cs:706",
+      "determination": "cards.json `_triage`（wave3 triage C 类：RM_41/RM_43/RM_PASSWORDSTATUS 全 src/** 无 Send* 发送点）"
+    },
+    {
+      "id": "outbound:SM_43",
+      "reason": "门自动可达性实测：RM_43 全仓每一处出现都只有 const 定义（本行）与 case 标签（PlayObject.Message.cs:1517），无任何发送点 ⇒ oracle 死支，该帧永不发出。",
+      "evidence": "src/OpenMir2/Messages.cs:708",
+      "determination": "cards.json `_triage`（wave3 triage C 类）"
+    },
+    {
+      "id": "outbound:SM_PASSWORDSTATUS",
+      "reason": "门自动可达性实测：RM_PASSWORDSTATUS 全仓每一处出现都只有 const 定义（本行）与 case 标签（PlayObject.Message.cs:2042），无任何发送点 ⇒ oracle 死支，该帧永不发出。",
+      "evidence": "src/OpenMir2/Messages.cs:704",
+      "determination": "cards.json `_triage`（wave3 triage C 类）"
+    },
+    {
+      "id": "inbound:CM_OPENDOOR",
+      "reason": "oracle 结构性 no-op：ClientOpenDoor 守卫写反——门存在即 return（本行），无门时 WorldServer.OpenDoor 的 envir.GetDoor(...) 必失败（WorldServer.cs:1469）⇒ CM_OPENDOOR 永不开任何门。Rust 生产 1:1 照搬 client_open_door(false)（inbound.rs BUG-REPLICA 1）⇒ 零效果 = 逐字节等价；不许「修好」成真开门。",
+      "evidence": "src/M2Server/Player/PlayObject.Operate.cs:366",
+      "t": "T-65"
+    },
+    {
+      "id": "outbound:SM_OPENDOOR_OK",
+      "reason": "RM_DOOROPEN 唯一生产点 = WorldEngine.OpenDoor → SendDoorStatus（本行），而 OpenDoor 全仓唯一调用点 ClientOpenDoor 守卫写反早退（PlayObject.Operate.cs:366）⇒ 该支永不执行 ⇒ 612 零出帧。oracle 结构性不可达，引 T-65/T-176。",
+      "evidence": "src/GameSrv/Word/WorldServer.cs:1473",
+      "t": "T-65",
+      "refs": [
+        "T-176"
+      ]
+    },
+    {
+      "id": "outbound:SM_CLOSEDOOR",
+      "reason": "door.Status.Opened 全仓唯一置 true 点 = OpenDoor（WorldServer.cs:1471），其唯一调用者 ClientOpenDoor 守卫写反早退（PlayObject.Operate.cs:366）⇒ Opened 恒 false ⇒ CloseDoor 首行 if (!door.Status.Opened) return（本行）恒早退、ProcessMapDoor 恒不关门 ⇒ RM_DOORCLOSE 零生产。oracle 结构性不可达，引 T-65/T-176。",
+      "evidence": "src/GameSrv/Word/WorldServer.cs:1479",
+      "t": "T-65",
+      "refs": [
+        "T-176"
+      ]
+    },
+    {
+      "id": "outbound:SM_ITEMSHOW",
+      "reason": "4 个生产点（BaseObject.cs:570/:752、PlayObject.cs:3264、ExecutionProcessingSys.cs:5703）全部以 Envir.AddItemToMap(...)==true 为前置；AddItemToMap 首行 if (mapItem.ItemId == 0) return false（Envirnoment.cs:90），而全仓唯一 MapItem.ItemId 赋值点被注释（本行；grep -rn \".ItemId\\s*=\" src/ --include=*.cs 仅此一条且为注释）⇒ ItemId 恒 0 ⇒ 地面物恒不落地 ⇒ 610 零生产。oracle 结构性不可达，引 T-19/T-25/T-32/T-179；Rust 侧不落地同 T-32。",
+      "evidence": "src/Modules/SystemModule/Data/MapItem.cs:41",
+      "t": "T-19",
+      "refs": [
+        "T-25",
+        "T-32",
+        "T-179"
+      ]
+    },
+    {
+      "id": "outbound:SM_CHANGEFACE",
+      "reason": "唯一生产点 = ElfWarriorMonster.Run 的 ELF 分裂支（本行 SendRefMsg(RM_CHANGEFACE,…)），前置 = ChrName 尾字符 '1'（ElfWarriorMonster.cs:141）且自身 race=114（Race.cs:63）。部署 Dragon1=神兽（race 113，四棵 Server.conf 均 :130）⇒ 克隆恒 113、is ElfWarriorMonster 恒假；四棵 Envir 树逐文件（GBK 解码）实测「神兽1」精确 token = 0（对照：「神兽」21 处、MonGen 仅「神兽10」1 处且该怪为死条目）⇒ 现网造不出 race-114 ⇒ 1104 零出帧。部署级不可达，引 T-175。",
+      "evidence": "src/M2Server/Monster/Monsters/ElfWarriorMonster.cs:149",
+      "t": "T-175"
+    },
+    {
+      "id": "outbound:SM_QUERYYBSELL",
+      "reason": "唯一生产点 = ActionOfQuerySaleSell（本行 SendMsg(RM_QUERYYBSELL,…)）；该动作只能经脚本动作 QUERYYBSELL=343（ExecutionCode.cs:723）派发——脚本行由 Envir 文件解析（ScriptParsers.cs:511 nCmdCode=code；:596 GetEnvirFilePath）→ 注册表 ExecutionProcessingSys.cs:126 → Execute(:178)。四棵 Envir 树逐文件实测 QUERYYBSELL/QUERYYBDEAL/OPENYBDEAL 文本命中 = 0（仅 .dll 二进制含枚举字面量）⇒ 部署内容从不派发 343 ⇒ RM_QUERYYBSELL 零生产，Rust 不实现 = 行为等价（同类既有判定见 A-05）。",
+      "evidence": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2443",
+      "determination": "docs/m3-remaining-inventory-20261022.md:39（A-05：部署 Envir/ 无 OPENYBDEAL/dealybme（grep 0）⇒ 当前内容不可达）"
+    },
+    {
+      "id": "outbound:SM_QUERYYBDEAL",
+      "reason": "唯一生产点 = ActionOfQueryTrustDeal（本行 SendMsg(RM_QUERYYBDEAL,…)）；该动作只能经脚本动作 QUERYYBDEAL=344（ExecutionCode.cs:728）派发——脚本行由 Envir 文件解析（ScriptParsers.cs:511 nCmdCode=code；:596 GetEnvirFilePath）→ 注册表 ExecutionProcessingSys.cs:127 → Execute(:178)。四棵 Envir 树逐文件实测 QUERYYBSELL/QUERYYBDEAL/OPENYBDEAL 文本命中 = 0（仅 .dll 二进制含枚举字面量）⇒ 部署内容从不派发 344 ⇒ RM_QUERYYBDEAL 零生产，Rust 不实现 = 行为等价（同类既有判定见 A-05）。",
+      "evidence": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2550",
+      "determination": "docs/m3-remaining-inventory-20261022.md:39（A-05：部署 Envir/ 无 OPENYBDEAL/dealybme（grep 0）⇒ 当前内容不可达）"
+    }
   ],
-  "known_false": [],
+  "known_false": [
+    {
+      "id": "outbound:SM_DONATE_FAIL",
+      "reason": "非缺陷（门误报）：RM_DONATE_FAIL 全仓每一处出现都只有 const 定义（Messages.cs:624）与 case 标签（本行），零生产者 ⇒ 765 永不发出；原判定见 docs/rewrite-remaining-inventory-20261022.md:548「非缺陷（oracle RM_DONATE_FAIL 零生产者），卡 openmir2-sm-donate-fail-encoder closed」。",
+      "evidence": "src/M2Server/Player/PlayObject.Message.cs:1946",
+      "determination": "docs/rewrite-remaining-inventory-20261022.md:548；卡 openmir2-m3-guild-state 曾持有该缺口",
+      "refs": [
+        "openmir2-m3-guild-state"
+      ]
+    }
+  ],
   "assignment_roles": {
     "outbound:SM_716": "A",
     "outbound:SM_BREAKWEAPON": "A",
