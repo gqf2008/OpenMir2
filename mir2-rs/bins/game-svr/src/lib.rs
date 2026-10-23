@@ -1977,6 +1977,8 @@ fn handle_party_cmd(
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     npc_host: Option<&game_svr::npc::NpcHost>,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
+    gm: Option<&ScriptGmEnv<'_>>,
 ) {
     let Some(sender) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -2016,6 +2018,7 @@ fn handle_party_cmd(
                 npc_host,
                 catalog,
                 gates,
+                gm,
             );
             continue;
         }
@@ -2061,6 +2064,8 @@ fn run_party_goto_label(
     npc_host: Option<&game_svr::npc::NpcHost>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
+    gm: Option<&ScriptGmEnv<'_>>,
 ) {
     let Some(host) = npc_host else {
         return;
@@ -2100,6 +2105,14 @@ fn run_party_goto_label(
     let (group_owner, group_member_jobs) = world.party_script_group_snapshot(actor);
     // 脚本取数走**同一条** `world.rng`（临时移出后归位，与 `@Login`/`step_mon_gen` 同法）。
     let mut rng = std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+    // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线的会话 GM 态**移出**一次（理由见
+    // [`run_merchant_goto`]：NLL 对结构体字段不做流敏，直接借 `&mut sg.gm` 会让后面的
+    // 写回借不到 `ground_sessions`）；无会话（已断线）⇒ 无桥，保持缺省 no-op。
+    let mut gm_sess = gm.and_then(|_| {
+        ground_sessions
+            .get_mut(chr_name)
+            .map(|sg| std::mem::replace(&mut sg.gm, gmcmd::GmSession::default()))
+    });
     let mut says_len = 0usize;
     let mut sent = 0usize;
     {
@@ -2142,6 +2155,11 @@ fn run_party_goto_label(
         }
         // `HUtil32.GetTickCount()`：宿主注入域（与 P31 `host_now` 同源）。
         player.tick = now_ms() as i32;
+        // **卡 `openmir2-gm-script-exec-seams`**：组队路同样装 GM 跳线（QFunction 脚本里
+        // 可能写 `GMEXECUTE`）。
+        if let (Some(env), Some(sess)) = (gm, gm_sess.as_mut()) {
+            player.gm = Some(env.bridge(sess, world, chr_name, actor));
+        }
         if let Some(says) = host.goto_label("QFunction", &mut player, label, false) {
             says_len = says.len();
             if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 说词") {
@@ -2212,11 +2230,25 @@ fn run_party_goto_label(
             sg.off_line_flag = player.off_line_flag;
             sg.kick_off_line_tick = player.kick_off_line_tick;
         }
+        // 先把四个标量取出：`player` 的**最后一次使用**在此结束，`player.gm` 里 `&World`
+        // 的借用随之结束，下面才能 `world.entities.get_mut`（NLL 对类型里的残留借用不做流敏）。
+        let (r_kill, r_kill_t, r_power, r_power_t) = (
+            player.kill_mon_exp_rate,
+            player.kill_mon_exp_rate_time,
+            player.power_rate,
+            player.power_rate_time,
+        );
         if let Some(e) = world.entities.get_mut(actor) {
-            e.kill_mon_exp_rate = player.kill_mon_exp_rate;
-            e.kill_mon_exp_rate_time = player.kill_mon_exp_rate_time;
-            e.power_rate = player.power_rate;
-            e.power_rate_time = player.power_rate_time;
+            e.kill_mon_exp_rate = r_kill;
+            e.kill_mon_exp_rate_time = r_kill_t;
+            e.power_rate = r_power;
+            e.power_rate_time = r_power_t;
+        }
+        // `player` 的最后一次使用已过 ⇒ 原样放回会话 GM 态。
+        if let Some(s) = gm_sess {
+            if let Some(sg) = ground_sessions.get_mut(chr_name) {
+                sg.gm = s;
+            }
         }
     }
     world.rng = rng;
@@ -19555,6 +19587,18 @@ fn sim_loop(
                     ) {
                         // `openmir2-m3-party-group-state`：4 条组队 `CM_*` 派发
                         // （oracle `PlayObject.Message.cs:914-935`）。
+                        // **卡 `openmir2-gm-script-exec-seams`**：组队 `GotoLable` 的 GM 跳线视图
+                        //（与 `@Login`/商人路同源）。
+                        let gm_cfg = gmcmd::GmConfig {
+                            lock_human_login: enter_cfg.lock_human_login,
+                            ..gmcmd::GmConfig::default()
+                        };
+                        let script_gm = ScriptGmEnv {
+                            guilds: &guilds,
+                            maps: registry.as_ref(),
+                            cfg: &gm_cfg,
+                            pwd_sessions: &pwd_sessions,
+                        };
                         handle_party_cmd(
                             cmd.ident,
                             cmd.param,
@@ -19569,6 +19613,7 @@ fn sim_loop(
                             &mut ground_sessions,
                             npc_host.as_ref(),
                             &enter_cfg.catalog,
+                            Some(&script_gm),
                         );
                     } else if game_svr::attackwire::is_hit_ident(cmd.ident) {
                         // `openmir2-m3-attack-magic-wiring`（第一片）：9 条 `CM_*HIT` 派发
@@ -23859,6 +23904,7 @@ mod tests {
             &mut std::collections::HashMap::new(),
             None,
             &game_svr::ability::StdItemCatalog::new(),
+            None,
         );
         let t_mode = drain(&mut rx0);
         assert_eq!(t_mode.len(), 1, "T 只收到一条 SM_GROUPMODECHANGED");
@@ -23883,6 +23929,7 @@ mod tests {
             &mut std::collections::HashMap::new(),
             None,
             &game_svr::ability::StdItemCatalog::new(),
+            None,
         );
         let frames = drain(&mut rx0);
         // 事件表的**全局次序**（两 socket 共用一条 channel）：立即帧先、排队帧后；
@@ -23933,6 +23980,7 @@ mod tests {
             &mut std::collections::HashMap::new(),
             None,
             &game_svr::ability::StdItemCatalog::new(),
+            None,
         );
         let frames = drain(&mut rx0);
         // 全局事件次序：GCANCEL(L,立即), DELMEM_OK(L), GCANCEL(T,排队156),
@@ -24079,6 +24127,7 @@ mod tests {
             &mut ground_sessions,
             Some(&host),
             &catalog,
+            None,
         );
         let _ = drain(&mut rx0);
         handle_party_cmd(
@@ -24095,6 +24144,7 @@ mod tests {
             &mut ground_sessions,
             Some(&host),
             &catalog,
+            None,
         );
         let frames = drain(&mut rx0);
         let idents: Vec<u16> = frames.iter().map(|b| ident(b)).collect();
@@ -24207,6 +24257,7 @@ mod tests {
             &mut std::collections::HashMap::new(),
             None,
             &game_svr::ability::StdItemCatalog::new(),
+            None,
         );
         let _ = drain(&mut rx0);
         handle_party_cmd(
@@ -24223,6 +24274,7 @@ mod tests {
             &mut std::collections::HashMap::new(),
             None,
             &game_svr::ability::StdItemCatalog::new(),
+            None,
         );
         let _ = drain(&mut rx0);
         assert_eq!(
@@ -59791,6 +59843,112 @@ mod tests {",
         );
     }
 
+    /// **卡 `openmir2-gm-script-exec-seams`（组队路）**：`run_party_goto_label` 跑的 QFunction
+    /// 脚本里写 `GMEXECUTE 禁言 self 60` 必须出帧（oracle `FunctionNPC.GotoLable`），且会话 GM 态
+    /// （`Permission 5`）在脚本结束后**原样放回**（移出/放回等价于同一个 `PlayObject`）。
+    ///
+    /// 牙：删 `run_party_goto_label` 的装桥块 ⇒ 0 条 SysMsg；删块尾 `sg.gm = s` 的放回 ⇒
+    /// 会话 GM 态变默认值、Permission 5 丢（断言红）。
+    #[test]
+    fn party_goto_label_gmexecute_emits_sysmsg_and_restores_session() {
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QFunction".into(),
+                file_path: "Market_Def".into(),
+                script_name: Some("QFunction-0".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: vec![mir2_script::ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![t142_record(
+                        "@GroupCreate",
+                        "",
+                        vec![gmexec_act("禁言", "self", "60")],
+                    )],
+                    quest_count: 0,
+                }],
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::new(32, 32);
+        let l = world.add_entity(mir2_world::Entity::new(1, "Hero", 10, 10));
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".into(),
+            chr_name: "Hero".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: l,
+        }];
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "Hero".into(),
+            SavedHuman {
+                account: "a".into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "0".into(),
+            },
+        );
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("Hero".into(), test_session_ground(l));
+        ground_sessions.get_mut("Hero").unwrap().gm.permission = 5;
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &cfg,
+            pwd_sessions: &pwd,
+        };
+        run_party_goto_label(
+            "@GroupCreate",
+            "Hero",
+            5,
+            &online,
+            &mut world,
+            &mut saves,
+            &mut ground_sessions,
+            Some(&host),
+            &catalog,
+            &gates,
+            Some(&env),
+        );
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                frames.push(body);
+            }
+        }
+        let sys: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_SYSMESSAGE)
+            .collect();
+        assert_eq!(
+            sys.len(),
+            1,
+            "组队 QFunction 的 GMEXECUTE ⇒ 恰好一条 SM_SYSMESSAGE；实得 {:?}",
+            frames.iter().map(|b| hdr(b.as_slice()).0).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..])),
+            "Hero 已被禁言60分钟"
+        );
+        assert_eq!(
+            ground_sessions["Hero"].gm.permission, 5,
+            "会话 GM 态必须原样放回（Permission 5）"
+        );
+    }
+
     /// **T-194 判据 ②**：QFunction 漏斗（`run_party_goto_label`）—— 脚本 `MESSAGEBOX`
     /// ⇒ **一条** `SM_MENU_OK(767)`，`Recog` = 玩家 ActorId。
     ///
@@ -59884,6 +60042,7 @@ mod tests {",
             Some(&host),
             &catalog,
             &gates,
+            None,
         );
         let frames: Vec<Vec<u8>> = {
             let mut out = Vec::new();
