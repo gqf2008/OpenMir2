@@ -165,7 +165,6 @@ CS_EXEC_RE = re.compile(r"^\s*public\s+void\s+Execute\s*\(")
 LABEL_RE = re.compile(r"^\[([^\]]+)\]\s*$")
 GMEXECUTE_RE = re.compile(r"^\s*gmexecute\b(.*)$", re.I)
 CALL_RE = re.compile(r"#CALL\s*\[([^\]]+)\]\s*@?(\S*)", re.I)
-JUMP_RE = re.compile(r"^\s*(?:goto|delaygoto\s+\d+|delaycall\s+\d+)\s+@?(\S+)", re.I)
 HYPERLINK_RE = re.compile(r"/(@[^\s<>/\\,()]+)")
 
 
@@ -474,8 +473,9 @@ def engine_label_roots():
                     if val:
                         exact.add(val.lower())
                         refs.append("%s:%d" % (relpath(path), i))
-    # NPC 点击入口（NormNpc.cs:73）无条件可达
-    exact.add("@main")
+    # `@main` 是 NPC 点击入口（NormNpc.cs:73），但只对**可点击的 Merchant/NormNpc 脚本**成立；
+    # QFunction/QManage/RobotManage 是 IsHide 的功能 NPC，没有点击入口，故不在这里加根，
+    # 由 label_graph 按文件是否 NPC 脚本决定（loaded[rel]["npc"]）。
     return {"exact": exact, "prefix": prefix, "sources": sorted(set(refs))}
 
 
@@ -609,15 +609,17 @@ def label_graph(envir, loaded, roots):
         for lab, _ in secs:
             all_labels.add((rel, lab))
 
-    def is_engine_root(lab):
+    def is_engine_root(rel, lab):
         if lab in roots["exact"]:
+            return True
+        if lab == "@main" and loaded.get(rel, {}).get("npc"):
             return True
         return any(lab.startswith(p) for p in roots["prefix"])
 
     queue = []
     for rel, secs in sections.items():
         for lab, _ in secs:
-            if is_engine_root(lab):
+            if is_engine_root(rel, lab):
                 queue.append(((rel, lab), "engine GotoLable root"))
 
     while queue:
