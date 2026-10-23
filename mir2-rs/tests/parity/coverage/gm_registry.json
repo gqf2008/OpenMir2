@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "3b193700e909813eaef238ffbec843d6cc911c28f19c4c55cbdc57a444f62bc2"
+   "sha256": "db3de4c0224a87f6600ac1a62fc95487ea5a266ae5325852eee6ab6408ce8213"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -2014,11 +2014,27 @@
    "third_state": false
   },
   {
+   "cmd": "清理垃圾",
+   "file": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt",
+   "line": 19,
+   "label": "@main",
+   "rust_imp": "ClearBagItem",
+   "third_state": false
+  },
+  {
    "cmd": "VV踢人",
    "file": "Market_Def/功能NPC/桃源-N109.txt",
    "line": 49,
    "label": "@01",
    "rust_imp": "KickHuman",
+   "third_state": false
+  },
+  {
+   "cmd": "清理垃圾",
+   "file": "Market_Def/功能NPC/桃源-N109.txt",
+   "line": 87,
+   "label": "@06",
+   "rust_imp": "ClearBagItem",
    "third_state": false
   },
   {
@@ -3953,48 +3969,6 @@
    "field_line": 304
   },
   {
-   "cmd": "清理垃圾",
-   "cmd_name": "清理垃圾",
-   "child_card": "openmir2-gm-impl-clearbag",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ClearBagItemCommand.cs:9",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].ClearBag",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt",
-     "line": 19,
-     "label": "@main",
-     "section": "act",
-     "script_arg": "清理垃圾",
-     "raw": "GMEXECUTE 清理垃圾 <$USERNAME>",
-     "label_path": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:1"
-    },
-    {
-     "file": "Market_Def/功能NPC/桃源-N109.txt",
-     "line": 87,
-     "label": "@06",
-     "section": "act",
-     "script_arg": "清理垃圾",
-     "raw": "GMEXECUTE 清理垃圾 self",
-     "label_path": "Market_Def/功能NPC/桃源-N109.txt:@06 <- Market_Def/功能NPC/桃源-N109.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:138"
-    }
-   ],
-   "handler_class": "ClearBagItemCommand",
-   "attr_name": "ClearBagItem",
-   "handler_exec_line": 13,
-   "name_source": "conf[Command].ClearBag",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ClearBag",
-   "field_line": 356
-  },
-  {
    "cmd": "清除仓库密码",
    "cmd_name": "清除仓库密码",
    "child_card": null,
@@ -4143,20 +4117,20 @@
   }
  ],
  "summary": {
-  "total": 82,
+  "total": 81,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 2
+   "script-reachable": 1
   },
   "reachable": 0,
-  "script_reachable": 2,
+  "script_reachable": 1,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 103,
-   "Unimplemented": 82
+   "Implemented": 104,
+   "Unimplemented": 81
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4182,7 +4156,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 82,
+  "complete_implemented": 83,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,

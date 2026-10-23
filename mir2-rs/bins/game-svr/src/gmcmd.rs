@@ -327,6 +327,9 @@ pub enum Imp {
     /// `SmakeItemCommand`（现网 `@改属性`）：原地改佩戴位属性（`Desc[n]` / `Dura` / `DuraMax`）+
     /// `RecalcAbilitys()` + `SendUpdateItem()`；空槽 ⇒ 一条红字。
     SmakeItem,
+    /// `ClearBagItemCommand`（现网 `@清理垃圾`）：清空目标 `ItemList` 并给**目标**发
+    /// `SM_DELITEMS(709)`（`名/makeindex/` 串，`Series` = 件数）；空列表 ⇒ 零帧。
+    ClearBagItem,
 
     // ---- 批次 3 · 传送/召唤（17 + `@传送`，设计件 §4.3 第 11–27 行 / §6 G3）----
     /// `AllowDearRecallCommand`（现网 `@dfsgf567`）。
@@ -468,7 +471,7 @@ pub enum Imp {
     /// 目标离线 ⇒ 一条 Red/Hint；空名 ⇒ **静默 return**（零帧）。
     KickHuman,
 
-    /// 未接的 82 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 6 条）：
+    /// 未接的 81 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 7 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
 }
@@ -662,6 +665,10 @@ pub struct GmSession {
     /// 「改完后的整槽」装进本缓冲（与 `pending_entity` 同法），宿主在同一事件内落地
     /// （写会话 `use_items` + 实体 `UseItems`、重算 WAbil、发 `SM_UPDATEITEM(203)`）。
     pub pending_use_item: Option<GmUseItemWrite>,
+    /// **待落地的清包目标**（卡 `openmir2-gm-impl-clearbag`，`ClearBagItemCommand.cs:31-52`）：
+    /// 目标 `ChrName`。oracle 命令体直接清目标 `ItemList` 并给目标发 `RM_SENDDELITEMLIST`；
+    /// 本仓命令体纯 ⇒ 只登记目标，宿主收口（空包 ⇒ 不发帧，与 oracle 同）。
+    pub pending_clear_bag: Option<String>,
 }
 
 impl Default for GmSession {
@@ -697,6 +704,7 @@ impl Default for GmSession {
             pending_entity: None,
             pending_kick: None,
             pending_use_item: None,
+            pending_clear_bag: None,
         }
     }
 }
@@ -1216,6 +1224,14 @@ const NOTE_SMAKE_RANGE: &str = "SmakeItem：nWhere/nValueType/nValue 越界 ⇒ 
 /// 只放行 `0..=15`。照抄时省略，登记在此。
 const NOTE_SMAKE_ABSORB_DEAD: &str =
     "SmakeItem：nValueType==16 吸伤支被 :26 的 0..=15 守卫挡住（死支）";
+/// `ClearBagItemCommand` 的帮助文本：`Command.CommandHelp` = `命令格式: @清理垃圾 人物名称`
+/// （`Name` 被 `Command.conf` 的 `[Command] ClearBag=清理垃圾` 覆盖，`Help` = 「人物名称」）。
+pub const CLEAR_BAG_HELP: &str = "命令格式: @清理垃圾 人物名称";
+
+/// `ClearBagItemCommand.cs:47-52`：命中且目标背包非空 ⇒ 宿主清包 + 给**目标**发
+/// `SM_DELITEMS(709)`（`Recog=0`、`Series`=件数、尾 = `EncodeString("名/makeindex/…")`）。
+const NOTE_CLEAR_BAG_PENDING: &str =
+    "ClearBagItem：已登记清包目标（空包 ⇒ 不发帧，与 oracle 同；非空由宿主清包并发 709）";
 
 /// `ShowEffectCommand.cs:20-70`：命令体**整段被注释** ⇒ 任何参数都零帧、零副作用。
 const NOTE_SHOW_EFFECT_ALL_COMMENTED: &str =
@@ -1782,6 +1798,44 @@ fn smake_item(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> Gm
     )
 }
 
+/// `ClearBagItemCommand.Execute`（`src/Modules/GameCommand/Commands/ClearBagItemCommand.cs:13-54`，
+/// 现网 `@清理垃圾`，`Command.conf` 的 `[Command] ClearBag=清理垃圾` / `[Permission] ClearBag=10`）。
+///
+/// **实际执行行**：
+/// - `:15-18` `@params == null` 死分支；
+/// - `:19` `sHumanName = @params[0]`（缺参 = 空串）；
+/// - `:20-24` `IsNullOrEmpty(sHumanName) || … && sHumanName[0] == '?'`（下标 **0**，不越界）
+///   ⇒ 红字 `Command.CommandHelp`（`命令格式: @清理垃圾 人物名称`）；
+/// - `:25-30` `GetPlayObject` 未命中 ⇒ 红字 `"{0} 现在不在线，或在其它服务器上!!!"`；
+/// - `:31-46` 目标 `ItemList.Count > 0` ⇒ **倒序**收集 `DeleteItem{ItemName, MakeIndex}` 并逐件
+///   `RemoveAt`，最后 `Clear()`；
+/// - `:47-52` 列表非空 ⇒ `ActorMgr.AddOhter(Sequence(), delList)` + 目标
+///   `SendMsg(RM_SENDDELITEMLIST, 0, objectId, 0, 0)` ⇒ 泵（`PlayObject.Message.cs:1870-1874`）
+///   `SendDelItemList`：`MakeMessage(SM_DELITEMS, 0, 0, 0, Count)` + `EncodeString("名/make/…")`。
+///   **空背包 ⇒ 完全静默**（`delList` 保持 null）。
+///
+/// 落地：命令体只登记目标 `ChrName`（宿主看得到会话背包，空包判断与清包/发帧都在宿主
+/// `apply_pending_gm_clear_bag`）。
+fn clear_bag_item(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() || name.starts_with('?') {
+        return red(CLEAR_BAG_HELP);
+    }
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    if let Some(entity) = world.play_by_name(name) {
+        // 复审 important-2：存**实体规范名**。`play_by_name` 是 OrdinalIgnoreCase（与 oracle
+        // `GetPlayObject` 同口径），但宿主清包 / 709 路由都按 `chr_name` **精确**匹配 ⇒ 存命令行
+        // 输入的大小写会「命令说命中、宿主找不到目标」（静默不清包且 pending 被消费丢失）。
+        sess.pending_clear_bag = Some(entity.name.clone());
+        no_frames(NOTE_CLEAR_BAG_PENDING)
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
+}
+
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
 //
 // 口径：全部 `PermissionMin = 10`（现网 `Permission` 恒 0 ⇒ 生产一律 `权限不够!!!`）。
@@ -2253,6 +2307,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_entity = None;
     sess.pending_kick = None;
     sess.pending_use_item = None;
+    sess.pending_clear_bag = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -2340,6 +2395,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::StartQuest => start_quest(parameters),
         Imp::MobFireBurn => mob_fire_burn(parameters, world),
         Imp::SmakeItem => smake_item(parameters, sess, world),
+        Imp::ClearBagItem => clear_bag_item(parameters, sess, world),
 
         // ---- 批次 3 · 传送/召唤（17 + `@传送`）----
         Imp::AllowDearRecall => allow_dear_recall(sess),
@@ -3501,7 +3557,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "清理垃圾",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ClearBagItem,
     },
     CommandDef {
         name: "清除PK",
@@ -4797,8 +4853,9 @@ mod tests {
 
     /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`、
     /// 卡 `openmir2-gm-impl-startquest` 的 `StartQuest`、卡 `openmir2-gm-impl-kick` 的 `VV踢人`、
-    /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 82），且命令名 → 实现标签固定。
+    /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`、
+    /// 卡 `openmir2-gm-impl-clearbag` 的 `ClearBagItem`）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 81），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4806,16 +4863,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            103,
-            "103 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1）6 条"
+            104,
+            "104 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1）7 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            82,
-            "185 - 103"
+            81,
+            "185 - 104"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -6206,6 +6263,81 @@ mod tests {
             def.params, 2,
             "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
         );
+    }
+
+    /// 卡 `openmir2-gm-impl-clearbag`：表项（现网名 `清理垃圾` = `conf[Command].ClearBag`）。
+    #[test]
+    fn clear_bag_item_is_wired_in_the_command_table() {
+        let def = find("清理垃圾").expect("@清理垃圾 在 185 行表里");
+        assert_eq!(def.imp, Imp::ClearBagItem);
+        assert_eq!(def.perm_min, 10, "`[Permission] ClearBag=10`");
+        assert_eq!(def.params, 2);
+    }
+
+    /// `:20-24`：空名 / 首字符 `?` ⇒ 红字帮助（**字面量**把关，不拿 `CLEAR_BAG_HELP` 自证）
+    /// + GBK 字节（复审 minor）。
+    #[test]
+    fn clear_bag_item_reports_help_for_empty_or_question() {
+        let help = "命令格式: @清理垃圾 人物名称";
+        for line in ["@清理垃圾", "@清理垃圾 ?", "@清理垃圾 ?abc"] {
+            let (r, sess) = run_gm(line);
+            assert_eq!(texts(&r), vec![(GmColor::Red, help)], "{line}");
+            assert!(sess.pending_clear_bag.is_none(), "{line}");
+        }
+        let (r, _) = run_gm("@清理垃圾");
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, 0x3a, 0x20,
+                0x40, // 命令格式:␠@
+                0xc7, 0xe5, 0xc0, 0xed, 0xc0, 0xac, 0xbb, 0xf8, // 清理垃圾
+                0x20, 0xc8, 0xcb, 0xce, 0xef, 0xc3, 0xfb, 0xb3, 0xc6, // ␠人物名称
+            ],
+            "帮助文本的 GBK 字节逐字节等价"
+        );
+    }
+
+    /// `:25-30`：目标不在线 ⇒ 一条 Red「…现在不在线，或在其它服务器上!!!」。
+    #[test]
+    fn clear_bag_item_offline_target_reports_not_online() {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(e);
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@清理垃圾 nobody");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "nobody 现在不在线，或在其它服务器上!!!")]
+        );
+        assert!(sess.pending_clear_bag.is_none());
+        // 线上 GBK 字节（复审 minor）：ASCII 名 + GBK 文案。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0x6e, 0x6f, 0x62, 0x6f, 0x64, 0x79, 0x20, // "nobody "
+                0xcf, 0xd6, 0xd4, 0xda, 0xb2, 0xbb, 0xd4, 0xda, 0xcf, 0xdf, // 现在不在线
+                0xa3, 0xac, 0xbb, 0xf2, 0xd4, 0xda, 0xc6, 0xe4, 0xcb, 0xfc, // ，或在其它
+                0xb7, 0xfe, 0xce, 0xf1, 0xc6, 0xf7, 0xc9, 0xcf, // 服务器上
+                0x21, 0x21, 0x21, // !!!
+            ]
+        );
+        // 命中 ⇒ 零帧 + 登记**实体规范名**（复审 important-2：宿主精确匹配）。
+        let r = execute(&mut sess, &cfg, &view, "@清理垃圾 VICTIM");
+        assert!(r.msgs.is_empty(), "命中 ⇒ 命令本身零帧");
+        assert_eq!(sess.pending_clear_bag.as_deref(), Some("victim"));
+        // **部署形态**（`假人上线NPC-jiaren.txt:19`）：`GMEXECUTE 清理垃圾 <$USERNAME>` 的
+        // 参数**不展开**（T-165）⇒ 按字面量查不到人 ⇒ 一条红字、零 709、零清包。
+        let r = execute(&mut sess, &cfg, &view, "@清理垃圾 <$USERNAME>");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "<$USERNAME> 现在不在线，或在其它服务器上!!!")],
+            "部署字面量形态 ⇒ 不在线支（不是清包）"
+        );
+        assert!(sess.pending_clear_bag.is_none());
     }
 
     /// 卡 `openmir2-gm-impl-showeffect`：表项（`Command.conf` 无覆盖 ⇒ 注册名保持英文
