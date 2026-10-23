@@ -914,6 +914,25 @@ fn replace_variable_text(msg: &str, token: &str, text: &str) -> String {
     out
 }
 
+/// `GrobalVarProcessingSys.CombineStr`（`GrobalVarProcessingSys.cs:1811-1827`）：
+/// `sMsg.IndexOf(sStr)` 命中**第一处**后把该处换成 `sText`，未命中返回原串。
+///
+/// oracle 的 `IndexOf(string)` 是 **culture-sensitive**；本函数的 token 只由
+/// `<` / `$` / ASCII 数字 / `+` / `-` / 空白组成，文化规则不改变命中位置
+/// ⇒ 用 ordinal 的 [`str::find`]（逐字节等价）。注意 `sStr == ""` 时 C#
+/// `IndexOf("")` 返回 0 ⇒ 结果是 `sText + sMsg`；Rust 的 `find("")` 同样返回 `Some(0)`，
+/// 两侧同形（本路径的 token 由 `format!("<{variable}>")` 生成，永不空）。
+fn combine_str(msg: &str, token: &str, text: &str) -> String {
+    let Some(pos) = msg.find(token) else {
+        return msg.to_string();
+    };
+    let mut out = String::with_capacity(msg.len() + text.len());
+    out.push_str(&msg[..pos]);
+    out.push_str(text);
+    out.push_str(&msg[pos + token.len()..]);
+    out
+}
+
 impl NpcPlayer<'_, '_> {
     /// `NormNpc.GetVariableText` + `Merchant.GetVariableText` 的 1:1 移植（说词侧）。
     ///
@@ -1508,6 +1527,79 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             }
         }
         s
+    }
+    /// `ProcessingBase.GetVariableText(playerActor, ref sMsg, sVariable)` 的宿主实现
+    /// （`ProcessingBase.cs:1463-1631`）——**动作 / 条件参数**的展开器。
+    /// 逐分支的 oracle 对照见 `docs/script-action-var-text-audit-20261023.md`。
+    ///
+    /// ## 1. 可达性：命名变量在动作参数里**本来就不展开**
+    ///
+    /// ```text
+    /// :1468  if (HUtil32.IsStringNumber(sVariable)) {        // `!IsNullOrEmpty || regex`
+    /// :1470      string sIdx = sVariable[1..];                //   缺陷 ⇒ 任意非空串恒真（B-9）
+    /// :1471      int nIdx = HUtil32.StrToInt(sIdx, -1);       //   ⇒ 一定进这一支
+    /// :1472      if (nIdx == -1) return;                      // 非纯整数 ⇒ 原样返回
+    /// :1475      GrobalVarProcessingSys.Handler(...);         // 唯一可达的展开
+    /// ```
+    ///
+    /// `IsStringNumber` = `!string.IsNullOrEmpty(str) || ValidationNumber().IsMatch(str)`
+    /// （`HUtil32.cs:475-478`，whitelist B-9）⇒ 任意非空串为真；调用方
+    /// `GetLineVariableText` 只在 `sText[0] == '$'` 时才进来（`:1449-1453`）⇒
+    /// **只有 `$` 后整体是整数**（`$1` / `$22` / `$01` / `$+22`）能走到 Handler。
+    /// `$USERNAME` / `$STR(S1)` / `$HUMAN(X)` / `$125/S1` 全部在 `:1474` 直接 return
+    /// （文本原样上线）——这是 oracle 的既有行为，不是本仓的缺口：
+    /// 真机窗口已确认 C# 系统广播里命名变量原样（`openmir2-action-line-variable-text`），
+    /// 这也是 `ActionOfLineMsg` 要补 `%s`/`%d` 的原因（`ExecutionProcessingSys.cs:3165-3166`）。
+    /// ⇒ 参数里那段 `$CMD_*` / `$HUMAN(` / `$GUILD(` / `$GLOBAL(` / `$STR(`
+    /// （`:1479-1630`，含 `IntegerList` / `m_StringList` / `DynamicVarMap`）是**死代码**；
+    /// 在这里实现它们会让「C# 原样 / Rust 展开」分叉，**禁止**。
+    ///
+    /// ## 2. `GrobalVarProcessingSys.Handler` 的逐码覆盖
+    ///
+    /// 注册表（`GrobalVarProcessingSys.cs:20-135`）里能真正改动文本的，只有
+    /// 「handler 用 `$"<{sVariable}>"` 拼 token」的那批；其余 handler 拼的是**硬编码符号
+    /// token**（`"<$GAMEGOLD>"` 等，永远匹配不到 `<$46>`），或函数体为空（`CMD_*` 全被
+    /// 注释、`GetUserCount` 空体）⇒ 照搬 = **不替换**。本宿主覆盖：
+    ///
+    /// | 码 | oracle handler | 本宿主取值源 |
+    /// | --- | --- | --- |
+    /// | 1 | `GetServerName`（`:203-207`） | `SystemShare.Config.ServerName` → `vars.server_name` |
+    /// | 22 | `GetUserName`（`:234-240`） | `playerActor.ChrName` → `chr_name()` |
+    /// | 26 | `GetLevel`（`:767-772`） | `playerActor.Abil.Level` → `level()` |
+    ///
+    /// 判定可展开、但**数据面不在本宿主** ⇒ 保持原样并登记 whitelist **T-213**：
+    /// `<$3>`(sWebSite) / `<$21>`(`DateTime.Now`，无注入时钟) / `<$23>`(`Envir.MapDesc`) /
+    /// `<$25>`(GuildRankName) / `<$27..30>`(WAbil.HP/MP/MaxHP/MaxMP——`ScriptPlayer` 缺省回 0，
+    /// 接上会把 0 发给玩家，比原样更糟) / `<$48>`/`<$49>`(LogonTime) / `<$67..70>`(行会四点) /
+    /// `<$75>`/`<$77>`(`playerActor.Castle`——**不是** `NpcVars::castle` 承载的
+    /// `NormNpc.Castle`，两个对象) / `<$80>`/`<$81>`/`<$82>`/`<$84>`(攻城列表与城堡日期字段)。
+    ///
+    /// 部署等价：`E:/MirServer/Mir200/Envir` 全树 `grep -rEoh '<\$[0-9]+>'` = **0** 行
+    /// （与 T-165 计数一致）⇒ 当前内容下本方法无可观测差异。
+    ///
+    /// **牙**：把本覆写删掉（回落 `crates/script` 的缺省空实现）⇒ 数字码用例全红；
+    /// 把 `_ => return` 改成写成空串 ⇒ 「未接线/未注册码原样」用例红。
+    fn action_variable_text(&mut self, variable: &str, s_msg: &mut String) {
+        // `:1470-1472`：`sVariable[1..]` + `StrToInt(..., -1)`；非纯整数 ⇒ 原样返回。
+        // 调用方只在 `sText[0] == '$'` 时进来（`:1449-1453`），故 `strip_prefix` 的
+        // `None` 支不可达（照搬 oracle：`sVariable[1..]` 无条件截首字符）。
+        let Some(rest) = variable.strip_prefix('$') else {
+            return;
+        };
+        // C# `int.TryParse`（`NumberStyles.Integer`）容忍首尾空白与 `+`/`-` 号。
+        let Ok(n_idx) = rest.trim().parse::<i32>() else {
+            return;
+        };
+        // `:1475` `GrobalVarProcessingSys.Handler` —— 只列**真能换文本**的码（见上表）。
+        let text = match n_idx {
+            1 => self.vars.server_name.clone(),
+            22 => self.chr_name(),
+            26 => self.level().to_string(),
+            _ => return,
+        };
+        // 各 handler 的 token 形状 = `CombineStr(sMsg, $"<{sVariable}>", sText)`
+        // （`:203` / `:234` / `:767`）：大小写敏感、只换第一处。
+        *s_msg = combine_str(s_msg, &format!("<{variable}>"), &text);
     }
     fn group_owner(&self) -> i32 {
         self.group_owner
@@ -2976,14 +3068,255 @@ mod tests {
         // ③ `$STR(...)` 在动作侧同样不可达；说词侧展开。
         assert_eq!(p.line_variable_text("<$STR(M9)>"), "88");
         assert_eq!(p.action_line_variable_text("<$STR(M9)>"), "<$STR(M9)>");
-        // ④ `$<整数>` 是动作侧唯一可达分支（GrobalVarProcessingSys）——本仓未实现（T-161）⇒ 原样。
-        assert_eq!(p.action_line_variable_text("<$1>"), "<$1>");
+        // ④ `$<整数>` 是动作侧唯一可达分支（`GrobalVarProcessingSys`）。能换文本的码里
+        //    本宿主只接了 1/22/26（见 `action_variable_text` 文档表）；
+        //    `<$46>` 的 handler 拼的是**硬编码** `<$GAMEGOLD>` token
+        //    （`GrobalVarProcessingSys.cs:1066-1070`）⇒ oracle 对 `<$46>` 同样不替换。
+        //    展开侧的用例见下方 `action_variable_text_*` 系列。
+        assert_eq!(p.action_line_variable_text("<$46>"), "<$46>");
         // ⑤ 边界：`>` 在位置 0 / 未闭合 ⇒ 原样（与说词版同门）。
         assert_eq!(p.action_line_variable_text(">abc"), ">abc");
         assert_eq!(
             p.action_line_variable_text("没有闭合 <$USERNAME"),
             "没有闭合 <$USERNAME"
         );
+    }
+
+    /// **动作参数展开 · 数字码（`ProcessingBase.GetVariableText` → `GrobalVarProcessingSys`）**。
+    ///
+    /// 每个变量类各一条，断言**展开后的字节**（`as_bytes()`），不只看「有没有调函数」：
+    /// - `<$1>` → `SystemShare.Config.ServerName`（`GrobalVarProcessingSys.cs:203-207`）
+    /// - `<$22>` → `playerActor.ChrName`（`:234-240`）
+    /// - `<$26>` → `playerActor.Abil.Level`（`:767-772`）
+    ///
+    /// 牙：删 `NpcPlayer::action_variable_text` 覆写（回落 `crates/script` 缺省空实现）
+    /// ⇒ 三条断言全红（原样返回）。
+    #[test]
+    fn action_variable_text_expands_numeric_codes_bytewise() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        p.level = 33;
+        // 码 1：缺省 `ServerName` = `SKY引擎`（`GameSvrConf` ctor 缺省，NpcVars::default）。
+        assert_eq!(
+            p.action_line_variable_text("<$1>").as_bytes(),
+            "SKY引擎".as_bytes()
+        );
+        assert_eq!(
+            p.action_line_variable_text("服务器:<$1>。").as_bytes(),
+            "服务器:SKY引擎。".as_bytes()
+        );
+        // 码 22：玩家名。
+        assert_eq!(
+            p.action_line_variable_text("<$22>").as_bytes(),
+            "张三".as_bytes()
+        );
+        // 码 26：等级（`Abil.Level`）。
+        assert_eq!(
+            p.action_line_variable_text("等级<$26>").as_bytes(),
+            "等级33".as_bytes()
+        );
+    }
+
+    /// **动作参数展开 · 前进扫描 + 重复变量**：动作侧的循环把 `ArrestStringEx` 的剩余串
+    /// 赋回 `tempstr`（`ProcessingBase.cs:1450`）⇒ 首个非 `$` token 不挡路；同一变量出现
+    /// 两次时 `CombineStr` 每次只换「当前第一处」⇒ 两处都展开。
+    ///
+    /// 牙：把 `expand_action_line_variable_text` 的 `tempstr = rest;` 删掉（退回说词写法）
+    /// ⇒ 第一条（链接在前）红。
+    #[test]
+    fn action_variable_text_repeated_values_expand_and_scan_advances() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        p.level = 33;
+        assert_eq!(
+            p.action_line_variable_text("<进入/@main><$22>").as_bytes(),
+            "<进入/@main>张三".as_bytes(),
+            "前进扫描：链接在前不影响后面的变量"
+        );
+        assert_eq!(
+            p.action_line_variable_text("<$22>|<$22>").as_bytes(),
+            "张三|张三".as_bytes(),
+            "同一变量两次出现：CombineStr 逐次换当前第一处"
+        );
+        assert_eq!(
+            p.action_line_variable_text("<$22>-<$26>").as_bytes(),
+            "张三-33".as_bytes()
+        );
+        assert_eq!(
+            p.action_line_variable_text("<$1><$1>").as_bytes(),
+            "SKY引擎SKY引擎".as_bytes()
+        );
+    }
+
+    /// **动作参数展开 · 未接线 / 未注册的数字码一律原样**（不是静默空串）。
+    ///
+    /// - `<$27>` 已注册但数据面未接（`WAbil.HP`；`ScriptPlayer` 缺省 0，接上会发 0）；
+    /// - `<$46>` 已注册但 handler 拼的是硬编码 `<$GAMEGOLD>`（`:1066-1070`）⇒ oracle 不换；
+    /// - `<$9999>` 未注册（`Handler` 的 `ContainsKey` 不命中）；
+    /// - `<$125>` 是 `GetGrobalVarStr`，但 `sVariable[1..]` 后按 `/` 切出的 `sID` = `""`
+    ///   ⇒ `GetValNameNo("") < 0` ⇒ 什么都不换（`:145-186`）；
+    /// - `<$125/S1>` 在 `StrToInt` 处就失败（`:1471-1474`）。
+    ///
+    /// 牙：把 `action_variable_text` 的 `_ => return` 改成「把 token 换成空串」⇒ 全红。
+    #[test]
+    fn action_variable_text_leaves_unwired_and_unknown_codes_literal() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        for text in [
+            "<$27>",
+            "<$46>",
+            "<$9999>",
+            "<$125>",
+            "<$125/S1>",
+            "<$0>",
+            "<$-5>",
+        ] {
+            assert_eq!(
+                p.action_line_variable_text(text).as_bytes(),
+                text.as_bytes(),
+                "{text} 必须原样（T-213）"
+            );
+        }
+    }
+
+    /// **动作参数展开 · 命名 / 表达式变量原样**（oracle 的 `IsStringNumber` 缺陷）。
+    ///
+    /// `$USERNAME` / `$GAMEGOLD` / `$STR(S1)` / `$HUMAN(X)` / `$GLOBAL(Y)` / `$ACCOUNT`
+    /// 全部在 `ProcessingBase.cs:1474` 直接 return ⇒ **不展开**；说词侧同一文本会展开
+    /// （对照断言在 `action_line_variable_text_keeps_named_variables_literal`）。
+    ///
+    /// 牙：把 `action_variable_text` 改成调 `get_variable_text`（说词展开器）⇒ 这里全红。
+    #[test]
+    fn action_variable_text_leaves_named_and_expression_variables_literal() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        p.game_gold = 4242;
+        p.set_mnmval(9, 88);
+        for text in [
+            "<$USERNAME>",
+            "<$GAMEGOLD>",
+            "<$STR(S1)>",
+            "<$HUMAN(HP)>",
+            "<$GLOBAL(X)>",
+            "<$GUILD(G)>",
+            "<$ACCOUNT>",
+            "<$CMD_ATTACKMODE>",
+            "<$USERNAME><$GAMEGOLD>",
+        ] {
+            assert_eq!(
+                p.action_line_variable_text(text).as_bytes(),
+                text.as_bytes(),
+                "{text} 在动作参数里必须原样（非本仓缺口）"
+            );
+        }
+    }
+
+    /// **动作参数展开 · 数字解析口径 = C# `int.TryParse`（`NumberStyles.Integer`）**：
+    /// 容忍前导 `0`、`+` 号与首尾空白；带尾巴 / 空 / 只有符号 ⇒ `StrToInt(...,-1)` ⇒ 原样。
+    #[test]
+    fn action_variable_text_parses_numbers_like_str_to_int() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.chr_name = "张三".to_string();
+        assert_eq!(
+            p.action_line_variable_text("<$022>").as_bytes(),
+            "张三".as_bytes(),
+            "前导零：StrToInt(\"022\") = 22，token 仍是 `<$022>`"
+        );
+        assert_eq!(
+            p.action_line_variable_text("<$+22>").as_bytes(),
+            "张三".as_bytes()
+        );
+        assert_eq!(
+            p.action_line_variable_text("<$ 22 >").as_bytes(),
+            "张三".as_bytes()
+        );
+        for text in ["<$22x>", "<$>", "<$->", "<$1.5>"] {
+            assert_eq!(
+                p.action_line_variable_text(text).as_bytes(),
+                text.as_bytes(),
+                "{text}：StrToInt 失败 ⇒ 原样"
+            );
+        }
+    }
+
+    /// **动作参数（生产入口 → GBK → EDCode 尾逐字节）· 数字码展开**：
+    /// `messagebox 服务器:<$1>玩家:<$22>等级:<$26>元宝:<$46>` 经解析器 →
+    /// （脚本参数按空白切分 ⇒ 用例文本**不含空格**，否则只有第一个 token 进 sParam1）→
+    /// `ActionOfMessageBox`（`ExecutionProcessingSys.cs:3418`）→
+    /// `SendMsg(RM_MENU_OK, 0, ActorId, 0, 0, GetLineVariableText(sParam1))`。
+    ///
+    /// 断言：帧字段、展开后的文本、cp936 原文逐字节、`SM_MENU_OK(767)` 的 EDCode 尾逐字节。
+    /// 注意 `<$46>` **原样**（handler 拼硬编码 `<$GAMEGOLD>` token）——与 oracle 同形。
+    #[test]
+    fn action_variables_expand_through_messagebox_gbk_and_edcode() {
+        const EXPANDED: &str = "服务器:SKY引擎玩家:张三等级:33元宝:<$46>";
+        // cp936（硬编码，不用被测编码器自证）：
+        // 服务器=B7FE CEF1 C6F7 / 引擎=D2FD C7E6 / 玩家=CDE6 BCD2 / 张三=D5C5 C8FD
+        // 等级=B5C8 BCB6 / 元宝=D4AA B1A6
+        const EXPECTED_GBK: &[u8] = &[
+            0xb7, 0xfe, 0xce, 0xf1, 0xc6, 0xf7, 0x3a, // 服务器:
+            0x53, 0x4b, 0x59, 0xd2, 0xfd, 0xc7, 0xe6, // SKY引擎
+            0xcd, 0xe6, 0xbc, 0xd2, 0x3a, // 玩家:
+            0xd5, 0xc5, 0xc8, 0xfd, // 张三
+            0xb5, 0xc8, 0xbc, 0xb6, 0x3a, 0x33, 0x33, // 等级:33
+            0xd4, 0xaa, 0xb1, 0xa6, 0x3a, // 元宝:
+            0x3c, 0x24, 0x34, 0x36, 0x3e, // <$46>
+        ];
+        let root = std::env::temp_dir().join(format!("gs-npc-actvar-num-{}", std::process::id()));
+        let dir = root.join("Envir").join("MapQuest_def");
+        std::fs::create_dir_all(&dir).unwrap();
+        // 生产 Envir 文件是 cp936：按 GBK 写盘，走 `NpcHost::load` 的真实解码路径。
+        let script = concat!(
+            "[@Login]\r\n",
+            "#ACT\r\n",
+            "messagebox 服务器:<$1>玩家:<$22>等级:<$26>元宝:<$46>\r\n",
+        );
+        let script_bytes = encoding_rs::GBK.encode(script).0.into_owned();
+        std::fs::write(dir.join("QManage.txt"), script_bytes).unwrap();
+        let record = QuestNpcRecord {
+            map_name: "0".to_string(),
+            curr_x: 0,
+            curr_y: 0,
+            chr_name: "QManage".to_string(),
+            npc_flag: 0,
+            appr: 0,
+            file_path: "MapQuest_def".to_string(),
+            script_name: None,
+            is_hide: true,
+            is_quest: false,
+        };
+        let mut rename = move |_min: i32, _max: i32| 1;
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        assert!(host.failures.is_empty(), "{:?}", host.failures);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "张三".to_string();
+        player.level = 33;
+        let _ = host.run_login(&mut player).expect("QManage 必须可加载");
+        let frame = player
+            .frames
+            .iter()
+            .find(|f| f.ident == mir2_script::engine::actions::RM_MENU_OK)
+            .expect("MESSAGEBOX 必须发 RM_MENU_OK 帧");
+        assert_eq!(
+            frame.msg.as_deref(),
+            Some(EXPANDED),
+            "数字码在动作参数里展开；未接线的 `<$46>` 原样"
+        );
+        let gbk = encoding_rs::GBK.encode(EXPANDED).0.into_owned();
+        assert_eq!(gbk, EXPECTED_GBK, "cp936 展开后文本逐字节");
+        let wire = crate::smframe::sm_menu_ok(frame.n_param1, &gbk);
+        assert_eq!(
+            &wire[12..],
+            mir2_protocol::edcode::encode(EXPECTED_GBK).as_slice(),
+            "767 尾 = EDCode.EncodeString(GBK 展开后文本) 逐字节"
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// **动作参数（生产入口 → GBK → EDCode 尾逐字节）**：`messagebox` 经解析器 →
