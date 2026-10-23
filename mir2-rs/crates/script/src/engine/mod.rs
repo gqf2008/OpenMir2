@@ -383,7 +383,18 @@ pub trait ScriptPlayer {
     /// `playerActor.SysMsg(msg, color, msgType)`（`MsgColor` / `MsgType` 取值见本模块常量）
     fn sys_msg(&mut self, _msg: &str, _color: i32, _msg_type: i32) {}
     /// `SystemShare.WorldEngine.SendBroadCastMsg(msg, msgType)`（`MsgType` 取值见本模块常量：
-    /// LINE MSG 0-3 为 `System`、其余广播为 `Say`；世界适配层据此选择广播类型）
+    /// LINE MSG 0-3 为 `System`、其余广播为 `Say`；世界适配层据此选择广播类型）。
+    ///
+    /// oracle 落点 `WorldServer.cs:1738-1765`：`ShowPreFixMsg` 时按 `msgType` 拼前缀
+    /// （`System` ⇒ `SysMsgPreFix`）→ `EnableChatServer` 为真时**什么也不发** →
+    /// 否则 `PlayObjectList` 里每个 `!Ghost` 的玩家各来一发
+    /// `SysMsg(sMsg, MsgColor.Red, msgType)`（⇒ `SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor,
+    /// RedMsgBColor, 0, sMsg)`，见 `BaseObject.cs:1666-1686`）。
+    ///
+    /// 本仓宿主（[`crate::engine::ScriptPlayer`] 的实现方）把「本例玩家自己」的那一份压进
+    /// 自己的帧表（与其它脚本帧共用同一次 `NetPriorityQueue` 排水，入队序 = 动作序），
+    /// 其余在线玩家的那一份由宿主在排水点按**各自的** `NetPriorityQueue` 扇出。
+    /// 缺省 no-op（其它实现方仍可用缺省）。
     fn world_broadcast(&mut self, _msg: &str, _msg_type: i32) {}
     /// `playerActor.SendGroupText(msg)`
     fn send_group_text(&mut self, _msg: &str) {}
@@ -718,6 +729,21 @@ pub trait ScriptPlayer {
     fn pose_goto_label(&mut self, _label: &str) {}
 }
 
+/// `NormNpc.SendSayMsg` 的返回侧（卡 `openmir2-script-sendmsg-host`）。
+///
+/// oracle 的 `ProcessSayMsg`（`BaseObject.Base.cs:475-478`）自己组帧并投递；本仓把
+/// 「组文本 + 取色词」留在宿主侧、把「压进 `playerActor` 的帧表」放在引擎侧（见
+/// [`ScriptNpc::send_say_msg`]），因此需要一个把两者串起来的载体。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HearSay {
+    /// `sChrName + ':' + sMsg`（`sChrName` = `Race == Play ? ChrName : FilterShowName(ChrName)`）。
+    pub text: String,
+    /// `SystemShare.Config.btHearMsgFColor`（`SendRefMsg` 的 `wParam`）。
+    pub f_color: i32,
+    /// `SystemShare.Config.btHearMsgBColor`（`SendRefMsg` 的 `nParam1`）。
+    pub b_color: i32,
+}
+
 /// NPC 侧。
 pub trait ScriptNpc {
     fn actor_id(&self) -> i32;
@@ -738,8 +764,25 @@ pub trait ScriptNpc {
     fn envir_root(&self) -> Option<String> {
         None
     }
-    /// `normNpc.SendSayMsg(msg)`（`ActionOfLineMsg` 的 nParam1=4 分支）
-    fn send_say_msg(&mut self, _msg: &str) {}
+    /// `normNpc.SendSayMsg(msg)`（`ActionOfLineMsg` 的 nParam1=4 分支）。
+    ///
+    /// oracle：`NormNpc.cs:76-79` ⇒ `BaseObject.Base.cs:475-478` 的 `ProcessSayMsg`：
+    /// ```text
+    /// sChrName = Race == Play ? ChrName : M2Share.FilterShowName(ChrName);
+    /// SendRefMsg(RM_HEAR, 0, btHearMsgFColor, btHearMsgBColor, 0, sChrName + ':' + sMsg);
+    /// ```
+    /// `SendRefMsg`（`BaseObject.Message.cs:383-440`）以 **NPC** 为中心 ±`SendRefMsgRange` 格扫格，
+    /// 对 `!Ghost && Race == Play` 的 actor 各入一发（**含发话者视距内的本例玩家**）；
+    /// `Envir == null`（隐藏 NPC `QManage`/`QFunction`）时首行记 Error 后 return ⇒ **零帧**。
+    ///
+    /// 本仓拆两步：**宿主**返回组好的线缆文本 + 色词，引擎把 `RM_HEAR` 帧压进
+    /// `playerActor` 自己的帧表（[`ScriptPlayer::send_msg`]）⇒ 本例玩家的那一发与其它脚本帧
+    /// 共用同一次 `NetPriorityQueue` 排水（入队序 = 动作序）；其余视距内玩家由宿主在排水点扇出。
+    ///
+    /// `None` = 缺省 no-op（未接宿主）/ `Envir == null`（隐藏 NPC ⇒ 与 oracle 同为零帧）。
+    fn send_say_msg(&mut self, _msg: &str) -> Option<HearSay> {
+        None
+    }
 }
 
 /// `ProcessingBase.GetLineVariableText(playerActor, sMsg)` 的**循环骨架**

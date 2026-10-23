@@ -210,6 +210,25 @@ pub fn script_frame(
                 &bytes,
             ))
         }
+        // `RM_HEAR`（11001）⇒ `SM_HEAR(40)`（`PlayObject.Message.cs:1705-1707`）：
+        //   `MakeMessage(SM_HEAR, processMsg.ActorId, MakeWord(nParam1, nParam2), 0, 1)`
+        //   + 尾 `EncodeString(processMsg.Msg)`。
+        //
+        // 脚本发点 = `ActionOfLineMsg` case 4（`normNpc.SendSayMsg` ⇒ `ProcessSayMsg` ⇒
+        // `SendRefMsg(RM_HEAR, 0, btHearMsgFColor, btHearMsgBColor, 0, sChrName + ':' + sMsg)`，
+        // `BaseObject.Base.cs:475-478`）——`SendRefMsg` 以 **NPC** 为源 ⇒ `ActorId = normNpc.ActorId`
+        // （本函数的 `npc_actor_id`），`Param = MakeWord(F, B)` 取自帧自带的 `n_param1/n_param2`
+        // （`world_broadcast`/`hear` 在脚本期就写死 `btHearMsgFColor/BColor`）。
+        i if i == mir2_protocol::messages::RM_HEAR as i32 => {
+            let msg = s.msg.as_deref().unwrap_or("");
+            let bytes = mir2_script::cp936::encode_gb2312_dotnet(msg);
+            Some(smframe::sm_hear(
+                npc_actor_id,
+                u8::try_from(s.n_param1).unwrap_or(0),
+                u8::try_from(s.n_param2).unwrap_or(0),
+                &bytes,
+            ))
+        }
         RM_SCRIPT_PLAYDICE => {
             let msg = s.msg.as_deref().unwrap_or("");
             // 线上尾 = `EDCode.EncodeString(processMsg.Msg)`；`Msg` 在线上是 cp936 字节

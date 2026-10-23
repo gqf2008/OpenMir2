@@ -22,6 +22,11 @@ pub const RM_DURACHANGE: i32 = 10125;
 pub const RM_PLAYDICE: i32 = 10500;
 /// `Messages.RM_MERCHANTSAY`（`Messages.cs:651`）。
 pub const RM_MERCHANTSAY: i32 = 11009;
+/// `Messages.RM_HEAR`（`Messages.cs`，= 11001）。
+///
+/// 脚本侧唯一发点 = `ActionOfLineMsg` 的 case 4（`normNpc.SendSayMsg`）——引擎把宿主返回
+/// 的 [`crate::engine::HearSay`] 压成这一条帧，排水时映射成 `SM_HEAR(40)`。
+pub const RM_HEAR: i32 = 11001;
 pub const RM_WINEXP: i32 = 8075;
 pub const RM_ADJUST_BONUS: i32 = 8078;
 pub const RM_SPACEMOVE_FIRE: i32 = 8062;
@@ -34,6 +39,11 @@ pub const MSG_COLOR_BLUE: i32 = 2;
 pub const MSG_TYPE_SYSTEM: i32 = 0;
 pub const MSG_TYPE_HINT: i32 = 2;
 pub const MSG_TYPE_SAY: i32 = 3;
+/// `MsgType.Castle`（枚举第 5 项之前的一项；`Castle` = 4）。
+pub const MSG_TYPE_CASTLE: i32 = 4;
+/// `MsgType.Cust`（枚举序：System=0, Notice=1, Hint=2, Say=3, Castle=4, Cust=5,
+/// GameManger=6, Mon=7）。`SysMsg` 的非 `Notice` 支按它选 Cust 色词。
+pub const MSG_TYPE_CUST: i32 = 5;
 
 /// `ItemLocation.Charm`（`src/OpenMir2/Enums/ItemLocation.cs`）。
 pub const ITEM_LOCATION_CHARM: i32 = 12;
@@ -222,7 +232,26 @@ impl Engine<'_, '_> {
                     3 => self
                         .player
                         .world_broadcast(&format!("[{chr_name}]{s_msg}"), MSG_TYPE_SYSTEM),
-                    4 => self.npc.send_say_msg(&s_msg),
+                    // C# `normNpc.SendSayMsg(sMsg)`（`ExecutionProcessingSys.cs:3182`）⇒
+                    // `ProcessSayMsg` ⇒ 逐收件人 `SendRefMsg(RM_HEAR, 0, btHearMsgFColor,
+                    // btHearMsgBColor, 0, sChrName + ':' + sMsg)`（`BaseObject.Base.cs:475-478`）。
+                    //
+                    // 宿主回「线缆文本 + 色词」；本例玩家自己的那一发**压进他自己的帧表**
+                    // （入队序 = 动作序，排水仍走 `NetPriorityQueue`），视距内其余玩家由宿主
+                    // 在排水点扇出。宿主返回 `None`（缺省 no-op / 隐藏 NPC `Envir == null`）
+                    // ⇒ 零帧，与 oracle 同。
+                    4 => {
+                        if let Some(say) = self.npc.send_say_msg(&s_msg) {
+                            self.player.send_msg(
+                                RM_HEAR,
+                                0,
+                                say.f_color,
+                                say.b_color,
+                                0,
+                                Some(&say.text),
+                            );
+                        }
+                    }
                     5 => self.player.sys_msg(&s_msg, MSG_COLOR_RED, MSG_TYPE_SAY),
                     6 => self.player.sys_msg(&s_msg, MSG_COLOR_GREEN, MSG_TYPE_SAY),
                     7 => self.player.sys_msg(&s_msg, MSG_COLOR_BLUE, MSG_TYPE_SAY),

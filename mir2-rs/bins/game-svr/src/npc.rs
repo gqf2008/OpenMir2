@@ -241,9 +241,43 @@ pub struct NpcVars {
     /// `MapMgr.FindMap(sMapName) != null` 门；宿主从 [`mir2_envir::MapRegistry`] 灌入）。
     /// 缺省空 ⇒ `map_exists` 恒 `false`（与「无注册表」同口径）。
     pub map_names: Vec<String>,
+    /// `SendBroadCastMsg` 的 `SystemShare.Config` 半边（`ShowPreFixMsg`/`SysMsgPreFix`）：
+    /// 脚本 `SENDMSG 0-3`（`world_broadcast`）在**全部收件人**的正文前拼的那段前缀。
+    pub broadcast: BroadcastCfg,
     /// `SystemShare.Config.{Red,Green,Blue}CustMsgF/BColor`（`BaseObject.SysMsg` 的
     /// `SM_SYSMESSAGE` 色词；见 [`SysMsgCfg`]）。
     pub sys_msg: SysMsgCfg,
+}
+
+/// `WorldServer.SendBroadCastMsg`（`WorldServer.cs:1738-1765`）读的 `SystemShare.Config` 半边。
+///
+/// **`EnableChatServer`（`GameSvrConf.cs:110`，ctor `:1279` = false）不建模**：该字段在本 oracle
+/// 树上**没有任何配置读点**（`grep -rn EnableChatServer src/ --include=*.cs` 只有字段声明与 ctor
+/// 赋值）⇒ 恒 `false` ⇒ `SendBroadCastMsg` 的 `else` 支（逐玩家 `SysMsg`）恒走，省略等价
+/// （与 `FrnEngn.IsFull()` 恒 false 的 O-4 登记同口径）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BroadcastCfg {
+    /// `SystemShare.Config.ShowPreFixMsg`（`ServerConf.cs:529` 的 `[Setup] ShowPreFixMsg`；
+    /// 现网 `Server.conf:778` = `0` ⇒ 前缀支不可达）。
+    pub show_prefix_msg: bool,
+    /// `SystemShare.Config.SysMsgPreFix`（`String.conf:67` 的 `[String] SysMsgPreFix`；
+    /// oracle 源码缺省 `〖系统〗`，见 `GameSvrConf.cs:1842`）。
+    ///
+    /// **登记**：本仓 `String.conf [String]` 装载器（`enter.rs::MessageSettings`）尚未解析该键
+    /// ⇒ 生产取源码缺省；现网值为 `系统：`，但 `ShowPreFixMsg=0` 使该差异**不可达**
+    /// （与 `line_notice` 的 `LineNoticePreFix` 同一登记口径）。
+    pub sys_msg_prefix: String,
+}
+
+impl Default for BroadcastCfg {
+    fn default() -> Self {
+        Self {
+            // `GameSvrConf.cs:1751` 的 ctor 缺省。
+            show_prefix_msg: false,
+            // `GameSvrConf.cs:1842` 的 ctor 缺省。
+            sys_msg_prefix: "〖系统〗".to_string(),
+        }
+    }
 }
 
 /// `BaseObject.SysMsg`（`BaseObject.cs:1588-1686`，**非 `MsgType.Notice` 支**）用的色词。
@@ -267,6 +301,10 @@ pub struct SysMsgCfg {
     pub blue: (u8, u8),
     /// `CustMsgFColor/CustMsgBColor`（缺省 `0xFC/0xFF`）。
     pub cust: (u8, u8),
+    /// `HearMsgFColor/HearMsgBColor`（`BaseObject.Base.cs:478` 的 `btHearMsgFColor/BColor`；
+    /// oracle 缺省 `0x00/0xFF`，现网 `Server.conf:592/593` = `0/255`）——
+    /// 脚本 `SENDMSG 4`（`normNpc.SendSayMsg` ⇒ `SendRefMsg(RM_HEAR, …)`）的 `Param` 色词。
+    pub hear: (u8, u8),
 }
 
 impl Default for SysMsgCfg {
@@ -276,6 +314,7 @@ impl Default for SysMsgCfg {
             green: (0xDB, 0xFF),
             blue: (0xFF, 0xFC),
             cust: (0xFC, 0xFF),
+            hear: (0x00, 0xFF),
         }
     }
 }
@@ -308,6 +347,7 @@ impl Default for NpcVars {
             high_sc_info: None,
             high_online_info: None,
             map_names: Vec::new(),
+            broadcast: BroadcastCfg::default(),
             sys_msg: SysMsgCfg::default(),
         }
     }
@@ -398,6 +438,8 @@ impl MerchantScriptBook {
             player,
             label,
             bo_ext_jmp,
+            // 商人/固定 NPC 挂在世界里 ⇒ `Envir != null`。
+            true,
         ))
     }
 }
@@ -526,6 +568,8 @@ impl NpcHost {
             player,
             label,
             bo_ext_jmp,
+            // 隐藏 NPC 不经地图：`Envir == null`。
+            false,
         ))
     }
 
@@ -554,6 +598,12 @@ impl NpcHost {
 struct HostNpc<'a> {
     def: &'a NpcDef,
     says: Vec<SayMsg>,
+    /// `SystemShare.Config.btHearMsgFColor/BColor`（`SENDMSG 4` 的 `SendRefMsg(RM_HEAR, …)`
+    /// 色词；由 [`run_goto_label`] 从 `NpcPlayer.sys_msg_cfg.hear` 抄入——oracle 读的是全局
+    /// `SystemShare.Config`，两侧同源）。
+    hear: (u8, u8),
+    /// `normNpc.Envir != null`（`BaseObject.Message.cs:385-389` 的 `SendRefMsg` 首门）。
+    has_envir: bool,
     goto_count_limit: i32,
     /// `BaseObject.ActorId`（隐藏 NPC 0；商人 = 世界实体 id）。
     actor_id: i32,
@@ -579,10 +629,15 @@ fn run_goto_label(
     player: &mut NpcPlayer<'_, '_>,
     label: &str,
     bo_ext_jmp: bool,
+    // `normNpc.Envir != null`：商人/固定 NPC（挂在 `world.entities` 上）为真；隐藏 NPC
+    // （`QManage`/`QFunction`，不经地图）为假 ⇒ `SendRefMsg` 首行 return（零帧）。
+    has_envir: bool,
 ) -> Vec<SayMsg> {
     let mut npc = HostNpc {
         def,
         says: Vec::new(),
+        hear: player.sys_msg_cfg.hear,
+        has_envir,
         goto_count_limit,
         actor_id,
         map_name: map_name.to_string(),
@@ -640,6 +695,37 @@ impl ScriptNpc for HostNpc<'_> {
     }
     fn path(&self) -> String {
         self.def.file_path.clone()
+    }
+
+    /// `NormNpc.SendSayMsg(msg)`（`NormNpc.cs:76-79` ⇒ `BaseObject.Base.cs:475-478`）：
+    ///
+    /// ```text
+    /// sChrName = Race == Play ? ChrName : M2Share.FilterShowName(ChrName);
+    /// SendRefMsg(RM_HEAR, 0, Config.btHearMsgFColor, Config.btHearMsgBColor, 0, sChrName + ':' + sMsg);
+    /// ```
+    ///
+    /// **`Envir == null` ⇒ 零帧**：`SendRefMsg` 首行 `if (Envir == null) { LogService.Error(...);
+    /// return; }`（`BaseObject.Message.cs:385-389`）。隐藏 NPC（`QManage`/`QFunction`，本宿主
+    /// 的 [`NpcHost::goto_label`] 传 `map_name = "0"`、`actor_id = 0`）就落这一支 ⇒ 返回 `None`。
+    /// 商人/固定 NPC 都挂在 `world.entities` 上（`normNpc.Envir != null`）⇒ 返回 `Some`。
+    ///
+    /// 本函数**只组文本**（`FilterShowName(ChrName) + ':' + msg`）+ 带出色词；投递由引擎压进
+    /// 本例玩家的帧表、由宿主在排水点扇出给 ±`SendRefMsgRange` 内的其余 `Race == Play` 玩家
+    /// （`SendRefMsg` 的格子扫描，含视距内的本例玩家）。
+    fn send_say_msg(&mut self, msg: &str) -> Option<mir2_script::engine::HearSay> {
+        // 隐藏 NPC：`Envir == null` ⇒ oracle 记 Error 后 return（`BaseObject.Message.cs:385-389`）。
+        // 判别口径 = `has_envir`（由 [`run_goto_label`] 的调用方给出：`MerchantScriptBook`
+        // 的商人在 `world.entities` 上 ⇒ true；`NpcHost` 的 `QManage`/`QFunction` 不经地图 ⇒ false）。
+        // **不能用 `map_name == "0"` 判**：`"0"` 是合法地图名（地图 id 0），部署 `0.map` 就存在。
+        if !self.has_envir {
+            return None;
+        }
+        let chr_name = crate::downlink::filter_show_name(&self.def.chr_name);
+        Some(mir2_script::engine::HearSay {
+            text: format!("{chr_name}:{msg}"),
+            f_color: i32::from(self.hear.0),
+            b_color: i32::from(self.hear.1),
+        })
     }
 }
 
@@ -817,6 +903,15 @@ pub struct NpcPlayer<'r, 'g> {
     pub map_names: Vec<String>,
     /// `SystemShare.Config.*MsgFColor/BColor`（`sys_msg` 的 `SM_SYSMESSAGE` 色词）。
     pub sys_msg_cfg: SysMsgCfg,
+    /// `SendBroadCastMsg` 的 `ShowPreFixMsg`/`SysMsgPreFix`（前缀在**全部收件人**的正文前拼）。
+    pub broadcast_cfg: BroadcastCfg,
+    /// `SystemShare.WorldEngine.SendBroadCastMsg` 的**扇出清单**（`SENDMSG 0-3` 的正文，已拼前缀）。
+    ///
+    /// 本例玩家自己的那一份**不在这里**——它已作为 `RM_SYSMESSAGE` 帧压进 [`Self::frames`]
+    /// （入队序 = 动作序，与其它脚本帧共用同一次 `NetPriorityQueue` 排水）。本表只给宿主在排水点
+    /// 扇出给**其余** `!Ghost` 在线玩家（每个收件人各建一个 `NetPriorityQueue` 出队，
+    /// 同 ident 多帧的四叉堆序与 oracle 的 `MsgQueue` 一致）。
+    pub world_broadcasts: Vec<String>,
     /// `SETMPAMODE` 的待落写队列（[`crate::map_mode::MapModeWrite`]）。
     ///
     /// oracle 在 `ActionOfSetMapMode`（`ExecutionProcessingSys.cs:4423-4881`）里**当场**写
@@ -905,6 +1000,8 @@ impl NpcPlayer<'_, '_> {
             full_bag_drops: Vec::new(),
             map_names: Vec::new(),
             sys_msg_cfg: SysMsgCfg::default(),
+            broadcast_cfg: BroadcastCfg::default(),
+            world_broadcasts: Vec::new(),
             map_mode_writes: Vec::new(),
             // `PlayObject.Permission` 的 ctor 缺省（`PlayObject.cs:58` 未初始化 ⇒ 0）；
             // 跳线未接 = 缺省 no-op（与 `ScriptPlayer` 缺省一致）。
@@ -1761,6 +1858,47 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             0,
             Some(msg),
         );
+    }
+
+    /// `SystemShare.WorldEngine.SendBroadCastMsg(msg, msgType)`（`WorldServer.cs:1738-1765`）。
+    ///
+    /// 逐段照 oracle：
+    /// 1. `if (Config.ShowPreFixMsg)` ⇒ 按 `msgType` 拼前缀。脚本可达的只有 `MsgType.System`
+    ///    （`ActionOfLineMsg` case 0-3）——拼 `SysMsgPreFix`；`MsgType.Say`（`ActionOfMarry`
+    ///    等）在 oracle 的 switch 里**没有分支** ⇒ 不拼。其余 `Mon/Hint/GameManger/Cust/Castle`
+    ///    的前缀配置源（`*MsgPreFix`）未建模，**脚本侧不可达**（登记）。
+    /// 2. `if (Config.EnableChatServer)` ⇒ 唯一分支体是注释掉的跨服调用 ⇒ **零帧**；该字段在本
+    ///    oracle 树上无配置读点、恒 false（见 [`BroadcastCfg`]）⇒ 恒走 else 支。
+    /// 3. `else` ⇒ `for (PlayObjectList)` 里每个 `!Ghost` 的玩家 `SysMsg(sMsg, MsgColor.Red,
+    ///    msgType)`。`SysMsg` 的非 `Notice` 支（`BaseObject.cs:1666-1686`）：`Cust` 用 Cust 色词、
+    ///    其余一律 `RedMsgFColor/RedMsgBColor`。
+    ///
+    /// **本例玩家自己**那一份在本函数内直接压进 [`Self::frames`]（`RM_SYSMESSAGE`）——
+    /// 这样它与同一次脚本执行里的其它帧共用同一个 `NetPriorityQueue` 出队（入队序 = 动作序），
+    /// 与 oracle「同一条 `PlayObject.MsgQueue`」同口径。其余在线玩家的那一份记进
+    /// [`Self::world_broadcasts`]，由宿主在排水点逐收件人各建一个 `NetPriorityQueue` 扇出
+    /// （`SM_SYSMESSAGE` 的 `Recog` = **收件人自己**的 `ActorId`）。
+    fn world_broadcast(&mut self, msg: &str, msg_type: i32) {
+        use mir2_script::engine::actions::{MSG_TYPE_CUST, MSG_TYPE_SYSTEM};
+        let text = if self.broadcast_cfg.show_prefix_msg && msg_type == MSG_TYPE_SYSTEM {
+            format!("{}{}", self.broadcast_cfg.sys_msg_prefix, msg)
+        } else {
+            msg.to_string()
+        };
+        let (f, b) = if msg_type == MSG_TYPE_CUST {
+            self.sys_msg_cfg.cust
+        } else {
+            self.sys_msg_cfg.red
+        };
+        self.send_msg(
+            i32::from(mir2_protocol::messages::RM_SYSMESSAGE),
+            0,
+            i32::from(f),
+            i32::from(b),
+            0,
+            Some(&text),
+        );
+        self.world_broadcasts.push(text);
     }
 
     fn send_msg(

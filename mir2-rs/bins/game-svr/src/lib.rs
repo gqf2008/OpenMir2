@@ -2388,6 +2388,9 @@ fn run_party_goto_label(
     // 脚本帧延后到 `player` 的最后一次使用之后（类型里的 `&World` 借用结束）⇒
     // 才能先落 `@改属性` 的 203、再排水（复审 important-2 的次序）。
     let mut party_script: Option<(i32, i32, i32, i32, i32, Vec<game_svr::npc::SendMsg>)> = None;
+    // 卡 `openmir2-script-sendmsg-host`：QFunction 的 `SENDMSG 0-3` 扇出正文（与
+    // `party_script` 同批延后——`player` 的借用结束后才扇出）。
+    let mut party_broadcasts: Vec<String> = Vec::new();
     {
         let mut rngf = |v: i32| rng.random_below(v);
         let mut player = npc_player_from(
@@ -2473,6 +2476,10 @@ fn run_party_goto_label(
                     );
                 // QFunction 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
                 // 延后到 `player` 借用结束之后排水（见 `party_script` 声明处）。
+                //
+                // 卡 `openmir2-script-sendmsg-host`：`SENDMSG 0-3` 的全服扇出正文与脚本帧一起
+                // 延后（本例玩家自己那份在 `frames` 里，其余玩家在 `party_broadcasts` 里）。
+                party_broadcasts = std::mem::take(&mut player.world_broadcasts);
                 party_script = Some((
                     f_gold,
                     f_game_gold,
@@ -2540,6 +2547,19 @@ fn run_party_goto_label(
                 let _ = tx.send(SimToGate::SendFrame { socket, body });
             }
         }
+    }
+    // 卡 `openmir2-script-sendmsg-host`：`SENDMSG 0-3` 的全服扇出
+    //（QFunction 是隐藏 NPC => 没有 `SENDMSG 4`）；本例玩家自己那份在 `frames` 里。
+    if !party_broadcasts.is_empty() {
+        fan_out_world_sysmessage(
+            online,
+            &*world,
+            gates,
+            actor,
+            &party_broadcasts,
+            npc_vars.sys_msg.red.0,
+            npc_vars.sys_msg.red.1,
+        );
     }
     if let Some((f_gold, f_game_gold, f_game_point, f_svd, f_exp, frames)) = party_script {
         if !frames.is_empty() {
@@ -4729,6 +4749,7 @@ fn handle_click_npc_cmd(
         // `MakeIndex` 走**同一个**会话 `item_number` 计数器。写回在脚本帧排水之前（帧读的是
         // 写回后的会话值，与商人路径一致）。
         let map_text = pmap.to_string();
+        let mut script_broadcasts: Vec<String> = Vec::new();
         let (says, script_frames, use_slots) = run_merchant_goto(
             merchant_book,
             npc_actor_id,
@@ -4748,6 +4769,7 @@ fn handle_click_npc_cmd(
             // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
             Some(&*world),
             gm,
+            &mut script_broadcasts,
         );
         world.rng = rng;
         // 佩戴位写回后同步世界实体（`Entity.use_items` 是每 tick 的源，不同步会被覆盖）。
@@ -4777,11 +4799,25 @@ fn handle_click_npc_cmd(
         }
         // **T-142 F2**：`@main` 里的 `GAMEGOLD` 动作排队 `RM_GAMEGOLDCHANGED`
         //（`BaseObject.cs:593-599`）⇒ 与商人 `GotoLable` 同口径在写回后排水。
-        if !script_frames.is_empty() {
-            if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 脚本帧")
-            {
-                emit_script_frames(tx, socket, npc_actor_id, sg, &script_frames);
-            }
+        // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出
+        //（`SENDMSG 0-3` 全服 `SM_SYSMESSAGE`、`SENDMSG 4` NPC ±12 格 `SM_HEAR`）。
+        if !script_frames.is_empty() || !script_broadcasts.is_empty() {
+            let tx = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 脚本帧");
+            let (n, _) = drain_script_frames_with_host(
+                tx,
+                socket,
+                npc_actor_id,
+                sg,
+                &script_frames,
+                &script_broadcasts,
+                &*world,
+                online,
+                gates,
+                sg.actor_id,
+                Some(npc_actor_id),
+                npc_vars.sys_msg.red,
+            );
+            sent += n;
         }
         glog!(
             "INF",
@@ -5537,6 +5573,7 @@ fn handle_shop_cmd(
             let map_text = pmap.to_string();
             let mut rng =
                 std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+            let mut script_broadcasts: Vec<String> = Vec::new();
             let (says, script_frames, use_slots) = run_merchant_goto(
                 merchant_book,
                 merchant_id,
@@ -5556,6 +5593,7 @@ fn handle_shop_cmd(
                 // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
                 Some(&*world),
                 gm,
+                &mut script_broadcasts,
             );
             world.rng = rng;
             for slot in use_slots {
@@ -5580,10 +5618,23 @@ fn handle_shop_cmd(
                     emit_npc_says(tx, socket, actor_id, &says);
                 }
             }
-            if !script_frames.is_empty() {
-                if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 1011 脚本帧") {
-                    emit_script_frames(tx, socket, merchant_id, sg, &script_frames);
-                }
+            // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
+            if !script_frames.is_empty() || !script_broadcasts.is_empty() {
+                let tx = route_to_gate(gates, gate_idx, socket, "商人 1011 脚本帧");
+                drain_script_frames_with_host(
+                    tx,
+                    socket,
+                    merchant_id,
+                    sg,
+                    &script_frames,
+                    &script_broadcasts,
+                    &*world,
+                    online,
+                    gates,
+                    sg.actor_id,
+                    Some(merchant_id),
+                    npc_vars.sys_msg.red,
+                );
             }
             if !bo_can_jmp {
                 glog!(
@@ -5601,6 +5652,7 @@ fn handle_shop_cmd(
                 };
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+                let mut script_broadcasts: Vec<String> = Vec::new();
                 let (says, script_frames, use_slots) = run_merchant_goto(
                     merchant_book,
                     merchant_id,
@@ -5620,6 +5672,7 @@ fn handle_shop_cmd(
                     // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
                     Some(&*world),
                     gm,
+                    &mut script_broadcasts,
                 );
                 world.rng = rng;
                 for slot in use_slots {
@@ -5645,11 +5698,23 @@ fn handle_shop_cmd(
                         emit_npc_says(tx, socket, actor_id, &says);
                     }
                 }
-                if !script_frames.is_empty() {
-                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 @back 脚本帧")
-                    {
-                        emit_script_frames(tx, socket, merchant_id, sg, &script_frames);
-                    }
+                // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
+                if !script_frames.is_empty() || !script_broadcasts.is_empty() {
+                    let tx = route_to_gate(gates, gate_idx, socket, "商人 @back 脚本帧");
+                    drain_script_frames_with_host(
+                        tx,
+                        socket,
+                        merchant_id,
+                        sg,
+                        &script_frames,
+                        &script_broadcasts,
+                        &*world,
+                        online,
+                        gates,
+                        sg.actor_id,
+                        Some(merchant_id),
+                        npc_vars.sys_msg.red,
+                    );
                 }
             }
             if is_fixed_npc {
@@ -6021,6 +6086,7 @@ fn handle_shop_cmd(
                 let map_text = pmap.to_string();
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+                let mut script_broadcasts: Vec<String> = Vec::new();
                 let (says, script_frames, use_slots) = run_merchant_goto(
                     merchant_book,
                     merchant_id,
@@ -6040,6 +6106,7 @@ fn handle_shop_cmd(
                     // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
                     Some(&*world),
                     gm,
+                    &mut script_broadcasts,
                 );
                 world.rng = rng;
                 for slot in use_slots {
@@ -6074,11 +6141,23 @@ fn handle_shop_cmd(
                         "CM_USERREPAIRITEM：GotoLable({g}) 无说词（脚本无该标签/未装载）ChrName={chr_name}"
                     );
                 }
-                if !script_frames.is_empty() {
-                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理脚本帧")
-                    {
-                        emit_script_frames(tx, socket, merchant_id, sg, &script_frames);
-                    }
+                // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
+                if !script_frames.is_empty() || !script_broadcasts.is_empty() {
+                    let tx = route_to_gate(gates, gate_idx, socket, "商人修理脚本帧");
+                    drain_script_frames_with_host(
+                        tx,
+                        socket,
+                        merchant_id,
+                        sg,
+                        &script_frames,
+                        &script_broadcasts,
+                        &*world,
+                        online,
+                        gates,
+                        sg.actor_id,
+                        Some(merchant_id),
+                        npc_vars.sys_msg.red,
+                    );
                 }
             }
         }
@@ -6318,6 +6397,7 @@ fn npc_player_from<'r, 'g>(
     p.vars = vars.clone();
     p.map_names = vars.map_names.clone();
     p.sys_msg_cfg = vars.sys_msg;
+    p.broadcast_cfg = vars.broadcast.clone();
     p
 }
 
@@ -6383,6 +6463,7 @@ fn npc_player_from_session<'r, 'g>(
     // `SystemShare`（宿主一次灌入 `NpcVars`，每个脚本快照只读复制）。
     p.map_names = vars.map_names.clone();
     p.sys_msg_cfg = vars.sys_msg;
+    p.broadcast_cfg = vars.broadcast.clone();
     // `PlayObject.MyGuild?.GuildName`（`$GUILDNAME`；`None` = 无行会 ⇒ 整条说词 "无"）。
     p.vars.guild_name = sg.guild.guild_name.clone();
     // `$USERWEAPON`（`Merchant.GetVariableText`）：`UseItems[ItemLocation.Weapon=1]` 的模板名。
@@ -6871,6 +6952,12 @@ fn merchant_base_user_select(session: &mut ShopSession, label: &str) {
 ///
 /// **登记（未接）**：`SETMPAMODE` 的 `pending_map_modes` 是 `ShopSession` 的队列，QFunction
 /// 路没有会话载体 ⇒ 本路脚本里的 `SETMPAMODE` 只记在快照里、不落 `Envir.Flag`。
+///
+/// **`SENDMSG 0-3` 的全服扇出**（卡 `openmir2-script-sendmsg-host`，review `8a3c22d8` I-1）：
+/// QFunction 是隐藏 NPC（`Envir == null`），`SENDMSG 4` 的 `SendSayMsg` 本就零帧 ⇒ 本排水点
+/// **只**扇 [`fan_out_world_sysmessage`]（不扇 `SM_HEAR`）。部署可达性：`Market_Def/QFunction-0.txt`
+/// 的 `[@StdModeFunc14]` 有无条件 `SENDMSG 0 …燃放礼炮…`，经 [`handle_eat_cmd`] 的
+/// `std_mode == 31 && ani_count != 0` 触发。
 #[allow(clippy::too_many_arguments)]
 fn run_std_mode_func_script(
     ani_count: i32,
@@ -6885,6 +6972,9 @@ fn run_std_mode_func_script(
     npc_vars: &game_svr::npc::NpcVars,
     item_number: &mut i32,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    online: &OnlineRegistry,
+    // `SystemShare.Config.RedMsgFColor/BColor`（全服广播帧的 `Param`）。
+    red: (u8, u8),
     now_tick: i32,
     gm: Option<&ScriptGmEnv<'_>>,
 ) {
@@ -6895,7 +6985,7 @@ fn run_std_mode_func_script(
     // 会话 GM 态移出一次（理由见 [`run_merchant_goto`]）。
     let mut gm_sess = gm.map(|_| std::mem::take(&mut sg.gm));
     let label = format!("@StdModeFunc{ani_count}");
-    let (says, frames, direct, notes, bag_after, drops, use_slots) = {
+    let (says, frames, direct, notes, bag_after, drops, use_slots, broadcasts) = {
         let mut rngf = |v: i32| rng.random_below(v);
         let mut player =
             npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
@@ -6922,6 +7012,9 @@ fn run_std_mode_func_script(
             player.items.clone(),
             std::mem::take(&mut player.full_bag_drops),
             use_slots,
+            // `WorldServer.SendBroadCastMsg`（`WorldServer.cs:1738-1765`）的**其余玩家**收件
+            // 正文（本例玩家自己那份已在 `frames` 里）：脚本里出现的顺序即 oracle 的入队序。
+            std::mem::take(&mut player.world_broadcasts),
         );
         // `player` 的最后一次使用已过 ⇒ 原样放回会话 GM 态。
         if let Some(s) = gm_sess {
@@ -6991,12 +7084,21 @@ fn run_std_mode_func_script(
             );
         }
     }
+    // 脚本 `SENDMSG 0-3`（`WorldServer.SendBroadCastMsg`）的**其余**在线玩家扇出：本例玩家自己
+    // 那一份已随上面的 `frames` 按 `NetPriorityQueue` 排过水，这里只发别的收件人
+    // （卡 `openmir2-script-sendmsg-host` 返工 I-1：本排水点原先只取 `player.frames`，
+    // `world_broadcasts` 随 `player` 丢弃 ⇒ QFunction 路触发者收到、其余玩家 0 帧）。
+    // QFunction 是**隐藏 NPC**（`Envir == null`）⇒ `SENDMSG 4` 的 `SendSayMsg` 本就零帧，
+    // 本路不扇 `SM_HEAR`（与本路 `frames` 里不会出现 `RM_HEAR` 一致）。
+    let fanned =
+        fan_out_world_sysmessage(online, world, gates, sg.actor_id, &broadcasts, red.0, red.1);
     glog!(
         "INF",
-        "QFunction {label} 已执行 ChrName={chr_name} 说词 {} 条 / 脚本帧 {} 条 / 佩戴改动 {} 槽",
+        "QFunction {label} 已执行 ChrName={chr_name} 说词 {} 条 / 脚本帧 {} 条 / 佩戴改动 {} 槽 / 全服广播 {} 帧",
         says.len(),
         frames.len(),
-        use_slots.len()
+        use_slots.len(),
+        fanned
     );
     // `use_slots` 的世界实体同步由调用方做（它持有 `&mut World`）。
 }
@@ -7030,6 +7132,10 @@ fn run_merchant_goto(
     // `world` 与 `gm` 都给了才装桥；否则保持 `ScriptPlayer` 缺省 no-op（无桥用例）。
     world: Option<&mir2_world::World>,
     gm: Option<&ScriptGmEnv<'_>>,
+    // `SENDMSG 0-3`（`WorldServer.SendBroadCastMsg`）的扇出正文（卡 `openmir2-script-sendmsg-host`）。
+    // 本例玩家自己那一份已在 `NpcPlayer.frames` 里（`RM_SYSMESSAGE`），本表只装**其余**玩家要收的
+    // 那几份（已拼 `SysMsgPreFix` 前缀）⇒ 调用方排水后按 [`fan_out_world_sysmessage`] 扇出。
+    broadcasts: &mut Vec<String>,
 ) -> (
     Vec<game_svr::npc::SayMsg>,
     Vec<game_svr::npc::SendMsg>,
@@ -7082,6 +7188,9 @@ fn run_merchant_goto(
             .pending_map_modes
             .extend(std::mem::take(&mut player.map_mode_writes));
         let use_slots = write_back_player_use_items(&player, sg, &use_before);
+        // `WorldServer.SendBroadCastMsg`（`WorldServer.cs:1738-1765`）的扇出清单：脚本里出现的
+        // 顺序即 oracle 的入队序（每个收件人各按自己的 `MsgQueue` 出队）。
+        broadcasts.append(&mut player.world_broadcasts);
         let out = (
             says,
             std::mem::take(&mut player.frames),
@@ -7142,6 +7251,9 @@ struct FixedNpcScriptCtx<'a> {
     /// 脚本 `GMEXECUTE` 宿主跳线视图的**零件**（`None` = 未接线）；`guilds`/`world` 由
     /// [`guild_official::FixedNpcScript::goto_label`] 的形参即时重借（卡 `openmir2-gm-script-exec-seams`）。
     gm: Option<ScriptGmParts<'a>>,
+    /// 本侧 `GotoLable` 期间 `SendBroadCastMsg`（`SENDMSG 0-3`）记下的正文（同 [`run_merchant_goto`]
+    /// 的 `broadcasts` 形参）；由 [`guild_official::FixedNpcScript::take_script_broadcasts`] 取走。
+    broadcasts: Vec<String>,
 }
 
 impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
@@ -7178,7 +7290,12 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
             self.rng,
             Some(world),
             env.as_ref(),
+            &mut self.broadcasts,
         )
+    }
+
+    fn take_script_broadcasts(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.broadcasts)
     }
 }
 
@@ -7256,6 +7373,246 @@ fn emit_script_frames(
         sg.state.wabil.exp,
         frames,
     )
+}
+
+/// `WorldServer.SendBroadCastMsg`（`WorldServer.cs:1738-1765`）的**宿主侧扇出**
+/// （卡 `openmir2-script-sendmsg-host`）。
+///
+/// oracle 逐段：
+/// ```text
+/// if (Config.ShowPreFixMsg) switch (msgType) { System => SysMsgPreFix + sMsg; ... }  // 前缀在脚本侧拼
+/// if (Config.EnableChatServer) { /* 跨服调用已注释 => 零帧 */ }
+/// else for (PlayObjectList) if (!playObject.Ghost)
+///         playObject.SysMsg(sMsg, MsgColor.Red, msgType);   // => RM_SYSMESSAGE
+/// ```
+/// 本例玩家自己那一份已由 `NpcPlayer::world_broadcast` 压进他的帧表并随
+/// [`emit_script_frames`] 排过水 => 本函数**跳过** `caller_actor_id`，只发其余 `!Ghost` 在线玩家。
+///
+/// **排水序（本卡的关键）**：`SendMsg` 入的是**每个 `PlayObject` 自己的** `MsgQueue`
+/// （`PriorityQueue<SendMessage, byte>`，优先级 = `(byte)wIdent`）=> 本函数**逐收件人**各建一个
+/// [`game_svr::msgqueue::NetPriorityQueue`] 并按入队序灌堆再出队。本路径的 ident 恒为
+/// `RM_SYSMESSAGE`（`& 0xFF = 252`）=> 多条同 ident 的出队序由四叉堆 sift 决定
+/// （3 条 `[0,2,1]`、4 条 `[0,3,2,1]`），**不是**入队序、也不是稳定排序
+/// （卡 `openmir2-frame-drain-order-audit` 的结论 + `crates/world/src/msgqueue.rs`）。
+///
+/// 未建模（登记）：收件人队列里**同时**还有别的系统投来的帧时的跨源合并——与本仓既有各排水点
+/// 同口径（每个排水点只排本次事件产出的帧）。
+fn fan_out_world_sysmessage(
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    caller_actor_id: i32,
+    texts: &[String],
+    // `RedMsgFColor/RedMsgBColor`（`SysMsg(msg, MsgColor.Red, msgType)` 且 `msgType != Cust`）。
+    f_color: u8,
+    b_color: u8,
+) -> usize {
+    if texts.is_empty() {
+        return 0;
+    }
+    let priority = (mir2_protocol::messages::RM_SYSMESSAGE & 0xFF) as u8;
+    let mut sent = 0usize;
+    for e in online.iter() {
+        // 本例玩家自己的那一份已随他的 `frames` 排过水（见函数文档）。
+        if e.actor_id == caller_actor_id {
+            continue;
+        }
+        // `if (!playObject.Ghost)`：`PlayObjectList` 只含**在世界里**的 PlayObject
+        // => 世界实体表里没有该 id / 已 Ghost 都不发。
+        match world.entities.get(e.actor_id) {
+            Some(ent) if !ent.ghost => {}
+            _ => continue,
+        }
+        let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "全服广播 SM_SYSMESSAGE")
+        else {
+            continue;
+        };
+        // **每个收件人一个独立堆**（oracle 每个 PlayObject 一条 MsgQueue）。
+        let mut queue: game_svr::msgqueue::NetPriorityQueue<usize> =
+            game_svr::msgqueue::NetPriorityQueue::new();
+        for i in 0..texts.len() {
+            queue.enqueue(i, priority);
+        }
+        while let Some(i) = queue.dequeue() {
+            let bytes = mir2_script::cp936::encode_gb2312_dotnet(&texts[i]);
+            let body = smframe::sm_sysmessage(
+                // `SysMsg` 的 `SendMsg` 以 `this.ActorId` 入 `MsgQueue` => `Recog` = **收件人自己**。
+                e.actor_id,
+                u16::from(f_color),
+                u16::from(b_color),
+                &bytes,
+            );
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body,
+            });
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// 从脚本帧表里摘出 `SENDMSG 4` 的帧（`RM_HEAR`，**唯一**发点 = `ActionOfLineMsg` case 4）。
+///
+/// 返回 `(线缆文本, F 色, B 色)`（= `sChrName + ':' + sMsg` 与 `btHearMsgFColor/BColor`）。
+fn script_hear_says(frames: &[game_svr::npc::SendMsg]) -> Vec<(String, u8, u8)> {
+    frames
+        .iter()
+        .filter(|f| f.ident == i32::from(mir2_protocol::messages::RM_HEAR))
+        .map(|f| {
+            (
+                f.msg.clone().unwrap_or_default(),
+                u8::try_from(f.n_param1).unwrap_or(0),
+                u8::try_from(f.n_param2).unwrap_or(0),
+            )
+        })
+        .collect()
+}
+
+/// `SendRefMsg`（`BaseObject.Message.cs:383-440`）的收件人集合是否含**本例玩家**：
+/// 同图、`|dx| <= range && |dy| <= range`（oracle 的方格扫描，`<=` 不是 `<`）、且玩家 `!Ghost`。
+///
+/// NPC 侧 `Envir == null`（隐藏 NPC）由 `ScriptNpc::send_say_msg` 返回 `None` 直接挡住，
+/// 到不了这里。
+fn caller_within_hear_range(
+    world: &mir2_world::World,
+    caller_actor_id: i32,
+    npc_actor_id: i32,
+    range: i32,
+) -> bool {
+    let (Some(p), Some(n)) = (
+        world.entities.get(caller_actor_id),
+        world.entities.get(npc_actor_id),
+    ) else {
+        return false;
+    };
+    !p.ghost && p.map_id == n.map_id && (p.x - n.x).abs() <= range && (p.y - n.y).abs() <= range
+}
+
+/// `SendRefMsg(RM_HEAR, ...)`（`SENDMSG 4`）的**宿主侧扇出**：把 NPC 的说词发给
+/// +/-`SendRefMsgRange` 内、`Race == Play && !Ghost` 的玩家（`BaseObject.Message.cs:436-443`：
+/// 非 `Play` 目标只在 `RM_STRUCK/RM_HEAR/RM_DEATH` 放行——本仓只给玩家投递，怪物无 socket）。
+///
+/// 本例玩家自己那一份已在 `NpcPlayer.frames` 里随脚本帧排过水 => 本函数**跳过** `caller_actor_id`
+/// （若他不在视距内，oracle 也不会给他入队——那一条由调用方从帧表里摘掉，
+/// 见 [`caller_within_hear_range`]）。
+///
+/// 排水序：同 [`fan_out_world_sysmessage`]——逐收件人各一个 `NetPriorityQueue`，
+/// 本路径 ident 恒为 `RM_HEAR`（`& 0xFF = 249`）=> 同 ident 多帧按四叉堆 sift 出队。
+fn fan_out_npc_hear(
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    caller_actor_id: i32,
+    npc_actor_id: i32,
+    says: &[(String, u8, u8)],
+) -> usize {
+    if says.is_empty() {
+        return 0;
+    }
+    let targets = chat::hear_targets(world, npc_actor_id, chat::send_ref_msg_range());
+    let priority = (mir2_protocol::messages::RM_HEAR & 0xFF) as u8;
+    let mut sent = 0usize;
+    for target_id in targets {
+        if target_id == caller_actor_id {
+            continue;
+        }
+        let Some(e) = online.iter().find(|e| e.actor_id == target_id) else {
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "NPC 喊话 SM_HEAR") else {
+            continue;
+        };
+        let mut queue: game_svr::msgqueue::NetPriorityQueue<usize> =
+            game_svr::msgqueue::NetPriorityQueue::new();
+        for i in 0..says.len() {
+            queue.enqueue(i, priority);
+        }
+        while let Some(i) = queue.dequeue() {
+            let bytes = mir2_script::cp936::encode_gb2312_dotnet(&says[i].0);
+            // `SendRefMsg` 以 **NPC** 为源 => `ActorId = normNpc.ActorId`（`Recog`）；
+            // `Param = MakeWord(btHearMsgFColor, btHearMsgBColor)`（`PlayObject.Message.cs:1705-1707`）。
+            let body = smframe::sm_hear(npc_actor_id, says[i].1, says[i].2, &bytes);
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body,
+            });
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// 脚本排水点的一次性收尾：先按 `NetPriorityQueue` 排本次脚本帧（[`emit_script_frames`]），
+/// 再扇出 `SENDMSG 0-3`（全服 `SM_SYSMESSAGE`）与 `SENDMSG 4`（NPC +/-12 格 `SM_HEAR`）。
+///
+/// `npc_pos` = 执行本脚本的 NPC 的**世界实体 id**；`None`（隐藏 NPC / 无实体）=> 不扇 `SM_HEAR`
+/// （隐藏 NPC 的 `SendSayMsg` 本就零帧）。返回 `(脚本帧数, 扇出帧数)`。
+///
+/// `hear_in_range` = 本例玩家是否在 NPC 的 `SendRefMsg` 方格内：为 `false` 时从他的帧表里
+/// 摘掉 `RM_HEAR`（oracle 不会给他入队）。
+#[allow(clippy::too_many_arguments)]
+fn drain_script_frames_with_host(
+    // 本例玩家自己的回帧通道（`None` = 该网关线不可达，只做世界侧扇出）。
+    tx: Option<&mpsc::UnboundedSender<SimToGate>>,
+    socket: i32,
+    npc_actor_id: i32,
+    sg: &SessionGround,
+    frames: &[game_svr::npc::SendMsg],
+    broadcasts: &[String],
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    caller_actor_id: i32,
+    npc_pos: Option<i32>,
+    // `SystemShare.Config.RedMsgFColor/BColor`（广播帧的 `Param`；由调用方从 `NpcVars.sys_msg` 取）。
+    red: (u8, u8),
+) -> (usize, usize) {
+    let owned;
+    let frames = match npc_pos {
+        // 本例玩家不在 NPC 的 `SendRefMsg` 方格内 => oracle 不会给他入 `RM_HEAR`
+        // （`BaseObject.Message.cs:399-440` 的方格扫描）。
+        Some(npc_id)
+            if !caller_within_hear_range(
+                world,
+                caller_actor_id,
+                npc_id,
+                chat::send_ref_msg_range(),
+            ) =>
+        {
+            owned = frames
+                .iter()
+                .filter(|f| f.ident != i32::from(mir2_protocol::messages::RM_HEAR))
+                .cloned()
+                .collect::<Vec<_>>();
+            &owned[..]
+        }
+        _ => frames,
+    };
+    let sent = tx.map_or(0, |tx| {
+        emit_script_frames(tx, socket, npc_actor_id, sg, frames)
+    });
+    let mut fanned = 0usize;
+    fanned += fan_out_world_sysmessage(
+        online,
+        world,
+        gates,
+        caller_actor_id,
+        broadcasts,
+        red.0,
+        red.1,
+    );
+    if let Some(npc_id) = npc_pos {
+        fanned += fan_out_npc_hear(
+            online,
+            world,
+            gates,
+            caller_actor_id,
+            npc_id,
+            &script_hear_says(frames),
+        );
+    }
+    (sent, fanned)
 }
 
 /// 脚本帧排水的**标量版**——[`emit_script_frames`] 与 `run_party_goto_label`（QFunction）、
@@ -7453,6 +7810,9 @@ fn handle_eat_cmd(
             npc_vars,
             item_number,
             gates,
+            // `SENDMSG 0-3` 的全服扇出清单（收件人取 `online`，色词取 `RedMsgFColor/BColor`）。
+            online,
+            (colors.red_f, colors.red_b),
             now_ms() as i32,
             gm,
         );
@@ -19279,7 +19639,17 @@ fn sim_loop(
         red: (colors.red_f, colors.red_b),
         green: (colors.green_f, colors.green_b),
         blue: (colors.blue_f, colors.blue_b),
+        // `[Setup] HearMsgFColor/BColor`（`BaseObject.Base.cs:478`；现网 0/255）——
+        // 脚本 `SENDMSG 4`（`normNpc.SendSayMsg` ⇒ `SendRefMsg(RM_HEAR, …)`）的 `Param` 色词。
+        hear: (colors.hear_f, colors.hear_b),
         ..game_svr::npc::SysMsgCfg::default()
+    };
+    // `SendBroadCastMsg`（`WorldServer.cs:1740-1761`）的前缀半边：
+    // `ShowPreFixMsg` 取 `[Setup]` 的同一开关（与 `line_notice` 同源）；
+    // `SysMsgPreFix` 的 `String.conf` 键未接线 ⇒ 取 oracle 源码缺省（见 `BroadcastCfg` 文档）。
+    npc_vars_base.broadcast = game_svr::npc::BroadcastCfg {
+        show_prefix_msg: enter_cfg.line_notice_cfg.show_pre_fix_msg,
+        sys_msg_prefix: game_svr::npc::BroadcastCfg::default().sys_msg_prefix,
     };
     let mut guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
     guild_cfg.guild_chief = enter_cfg.string_conf.guild_chief().to_string();
@@ -20464,6 +20834,8 @@ fn sim_loop(
                                 cfg: &gm_cfg,
                                 pwd_sessions: &pwd_sessions,
                             }),
+                            // `SENDMSG 0-3` 的全服扇出正文（`handle_select` 排水后取走并扇出）。
+                            broadcasts: Vec::new(),
                         };
                         guild_official::handle_select(
                             cmd.recog,
@@ -62193,6 +62565,8 @@ mod tests {",
                 now_tick,
                 // 卡 `openmir2-gm-script-exec-seams`：固定 NPC 路的 GM 跳线零件。
                 gm,
+                // 卡 `openmir2-script-sendmsg-host`：`SENDMSG 0-3` 扇出正文（本夹具不读）。
+                broadcasts: Vec::new(),
             };
             guild_official::handle_select(
                 self.npc_id,
@@ -64995,6 +65369,457 @@ GMEXECUTE 禁言 self 20
                 "T-203 登记行必须保留关键结论标记 `{marker}`（被误改即登记失效）"
             );
         }
+    }
+
+    // ================== 卡 `openmir2-script-sendmsg-host`：`SENDMSG 0..4` 的宿主实现 ==================
+    //
+    // 全部走**完整生产路径**：`CM_MERCHANTDLGSELECT` → `handle_shop_cmd` → `run_merchant_goto`
+    // → `Engine` → `ActionOfLineMsg`（`crates/script/src/engine/actions.rs`）→
+    // `NpcPlayer::world_broadcast` / `HostNpc::send_say_msg` → 排水点
+    // [`drain_script_frames_with_host`]（脚本帧 + 全服 `SM_SYSMESSAGE` + NPC ±12 格 `SM_HEAR`）。
+    //
+    // oracle 锚：
+    // - `ExecutionProcessingSys.cs:3163-3200`（`ActionOfLineMsg`：case0 `SendBroadCastMsg(sMsg,
+    //   System)`、case1 前缀 `"(*) "`、case2 `[npcName]`、case3 `[chrName]`、case4
+    //   `normNpc.SendSayMsg(sMsg)`；文本先 `%s`→玩家名、`%d`→NPC 名）；
+    // - `WorldServer.cs:1738-1765`（逐 `!Ghost` 玩家 `SysMsg(sMsg, Red, System)`）；
+    // - `BaseObject.cs:1666-1686` + `PlayObject.Message.cs:1715-1718`（⇒ `SM_SYSMESSAGE(100)`、
+    //   `Recog` = 收件人自己、`Param = MakeWord(RedMsgFColor, RedMsgBColor)`、`Series = 1`、
+    //   尾 = `EncodeString`）；
+    // - `BaseObject.Base.cs:475-478` + `PlayObject.Message.cs:1705-1707`（⇒ `SM_HEAR(40)`、
+    //   `Recog` = **NPC** 的 `ActorId`、`Param = MakeWord(HearMsgFColor, HearMsgBColor)`）。
+
+    fn sendmsg_rig(acts: Vec<mir2_script::QuestActionInfo>) -> T142Rig {
+        T142Rig::new(vec![t142_record("@main", "", acts)])
+    }
+
+    /// 再挂一个在线玩家（同图、给定坐标）；返回其 `ActorId`。
+    fn sendmsg_add_player(rig: &mut T142Rig, name: &str, socket: i32, pos: (i32, i32)) -> i32 {
+        let id = rig.world.add_entity({
+            let mut e = mir2_world::Entity::new(0, name, pos.0, pos.1);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        online_set(
+            &mut rig.online,
+            OnlineEntry {
+                account: format!("acc-{name}"),
+                chr_name: name.to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket,
+                actor_id: id,
+            },
+        );
+        id
+    }
+
+    /// 按 **socket** 归集本批下发帧（`SimToGate::SendFrame`），保序（= 线上到达序）。
+    fn sendmsg_drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(m) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = m {
+                out.push((socket, body));
+            }
+        }
+        out
+    }
+
+    /// `SM_SYSMESSAGE(100)`（红字：`SysMsg(_, MsgColor.Red, System)` 的非 `Cust` 支）。
+    fn sendmsg_sysmessage(recog: i32, text: &str) -> Vec<u8> {
+        crate::smframe::sm_sysmessage(
+            recog,
+            0xFF,
+            0x38,
+            &mir2_script::cp936::encode_gb2312_dotnet(text),
+        )
+    }
+
+    /// `SM_HEAR(40)`（`SENDMSG 4` ⇒ `ProcessSayMsg` ⇒ `SendRefMsg(RM_HEAR, …)`）。
+    fn sendmsg_hear(recog: i32, text: &str) -> Vec<u8> {
+        crate::smframe::sm_hear(
+            recog,
+            0x00,
+            0xFF,
+            &mir2_script::cp936::encode_gb2312_dotnet(text),
+        )
+    }
+
+    fn hero_actor(rig: &T142Rig) -> i32 {
+        rig.online
+            .iter()
+            .find(|e| e.chr_name == "hero")
+            .expect("hero 在线")
+            .actor_id
+    }
+
+    /// **case 0**：`SendBroadCastMsg(sMsg, System)` ⇒ 全服每个 `!Ghost` 玩家各一条
+    /// `SM_SYSMESSAGE`，`Recog` = **收件人自己**（不是本例玩家）。
+    ///
+    /// 牙（改坏必红）：把 `NpcPlayer::world_broadcast` 覆写删掉（回到 `ScriptPlayer` 缺省
+    /// no-op）⇒ 本例玩家与 other 都零帧。
+    #[test]
+    fn sendmsg_case0_world_broadcast_reaches_every_online_player() {
+        let mut rig = sendmsg_rig(vec![sendmsg_act(0, "全服公告")]);
+        let other = sendmsg_add_player(&mut rig, "other", 902, (12, 10));
+        let hero = hero_actor(&rig);
+        rig.dlg_select("@main");
+        assert_eq!(
+            sendmsg_drain(&mut rig.rx),
+            vec![
+                (901, sendmsg_sysmessage(hero, "全服公告")),
+                (902, sendmsg_sysmessage(other, "全服公告")),
+            ],
+            "case0：本例玩家 + 其余在线玩家各一条，Recog 各取自己"
+        );
+    }
+
+    /// **case 1**：前缀 `"(*) "`（`ExecutionProcessingSys.cs:3172-3173`），逐字节。
+    ///
+    /// 牙（改坏必红）：把 `actions.rs` 里 case1 的 `format!("(*) {s_msg}")` 改成 `format!("{s_msg}")`
+    /// 或改成一个别的空格数 ⇒ 本用例红。
+    #[test]
+    fn sendmsg_case1_prefix_is_star_paren_space_byte_exact() {
+        let mut rig = sendmsg_rig(vec![sendmsg_act(1, "全体注意")]);
+        let other = sendmsg_add_player(&mut rig, "other", 902, (12, 10));
+        let hero = hero_actor(&rig);
+        rig.dlg_select("@main");
+        assert_eq!(
+            sendmsg_drain(&mut rig.rx),
+            vec![
+                (901, sendmsg_sysmessage(hero, "(*) 全体注意")),
+                (902, sendmsg_sysmessage(other, "(*) 全体注意")),
+            ],
+            "case1：前缀必须是 ASCII `(*) `（`*` `)` 空格），不许多也不许少"
+        );
+    }
+
+    /// **case 2**：`'[' + normNpc.ChrName + ']'`（`:3175-3176`）——用 NPC 名（商人脚本的
+    /// `def.chr_name` = `寄售商`）。
+    #[test]
+    fn sendmsg_case2_prefix_is_npc_name_in_brackets() {
+        let mut rig = sendmsg_rig(vec![sendmsg_act(2, "本店开张")]);
+        let other = sendmsg_add_player(&mut rig, "other", 902, (12, 10));
+        let hero = hero_actor(&rig);
+        rig.dlg_select("@main");
+        assert_eq!(
+            sendmsg_drain(&mut rig.rx),
+            vec![
+                (901, sendmsg_sysmessage(hero, "[寄售商]本店开张")),
+                (902, sendmsg_sysmessage(other, "[寄售商]本店开张")),
+            ],
+            "case2：前缀 = `[` + normNpc.ChrName + `]`（不是玩家名）"
+        );
+    }
+
+    /// **case 3**：`'[' + playerActor.ChrName + ']'`（`:3178-3179`）——用**玩家**名。
+    #[test]
+    fn sendmsg_case3_prefix_is_player_name_in_brackets() {
+        let mut rig = sendmsg_rig(vec![sendmsg_act(3, "我来了")]);
+        let other = sendmsg_add_player(&mut rig, "other", 902, (12, 10));
+        let hero = hero_actor(&rig);
+        rig.dlg_select("@main");
+        assert_eq!(
+            sendmsg_drain(&mut rig.rx),
+            vec![
+                (901, sendmsg_sysmessage(hero, "[hero]我来了")),
+                (902, sendmsg_sysmessage(other, "[hero]我来了")),
+            ],
+            "case3：前缀 = `[` + playerActor.ChrName + `]`"
+        );
+    }
+
+    /// **case 4**：`normNpc.SendSayMsg(sMsg)` ⇒ `SendRefMsg(RM_HEAR, 0, F, B, 0,
+    /// FilterShowName(ChrName) + ':' + sMsg)` ⇒ `SM_HEAR(40)`、`Recog` = **NPC** 的 `ActorId`、
+    /// `Param = MakeWord(HearMsgFColor=0, HearMsgBColor=255)`；收件人 = ±`SendRefMsgRange`(12)
+    /// 方格内 `Race == Play && !Ghost`（含本例玩家），**视距外的玩家零帧**。
+    ///
+    /// 牙（改坏必红）：把 `HostNpc::send_say_msg` 覆写删掉（缺省 `None`）⇒ 本例玩家与 near 都零帧。
+    #[test]
+    fn sendmsg_case4_npc_say_is_sm_hear_around_npc_only() {
+        let mut rig = sendmsg_rig(vec![sendmsg_act(4, "欢迎光临")]);
+        // 商人 (11,10)：near 在 |dy|=10 格内；far 在 |dy|=20 格外。
+        let _near = sendmsg_add_player(&mut rig, "near", 902, (11, 20));
+        let _far = sendmsg_add_player(&mut rig, "far", 903, (11, 30));
+        let merchant = rig.merchant_id;
+        rig.dlg_select("@main");
+        let frames = sendmsg_drain(&mut rig.rx);
+        assert_eq!(
+            frames,
+            vec![
+                // 本例玩家（10,10，`|dx|=1, |dy|=0` ⇒ 在方格内）：从他自己的帧表排水。
+                (901, sendmsg_hear(merchant, "寄售商:欢迎光临")),
+                // 视距内其余玩家：宿主扇出，`Recog` 同样 = NPC 的 ActorId。
+                (902, sendmsg_hear(merchant, "寄售商:欢迎光临")),
+            ],
+            "case4：±12 格内的玩家各一条 SM_HEAR（Recog=NPC），方格外的 far 零帧"
+        );
+    }
+
+    /// **`%s` / `%d` 替换**（`ExecutionProcessingSys.cs:3165-3167`）：`%s` → 玩家名、
+    /// `%d` → NPC 名，**先替换再按 case 拼前缀**（同一文本里的多处也全替换——C# `string.Replace`
+    /// 是全局替换）。
+    #[test]
+    fn sendmsg_text_replaces_percent_s_and_percent_d() {
+        let mut rig = sendmsg_rig(vec![sendmsg_act(0, "%s 在 %d 处，%s 再来")]);
+        let hero = hero_actor(&rig);
+        rig.dlg_select("@main");
+        assert_eq!(
+            sendmsg_drain(&mut rig.rx),
+            vec![(
+                901,
+                sendmsg_sysmessage(hero, "hero 在 寄售商 处，hero 再来")
+            )],
+            "`%s` → ChrName、`%d` → normNpc.ChrName（多出全替换）"
+        );
+    }
+
+    /// **同 ident 多帧的排水序**（卡 `openmir2-frame-drain-order-audit` 的结论）：
+    /// 同一脚本里 3 条 `SENDMSG 0` 都进**同一个** `NetPriorityQueue`（优先级 = `RM_SYSMESSAGE &
+    /// 0xFF = 252`）⇒ 出队序是 .NET 四叉堆 sift 的 `[0,2,1]`（`a, c, b`），**不是**入队序。
+    ///
+    /// 牙（改坏必红）：把 `emit_script_frames_raw` 的堆换成 `sort_by_key`/FIFO ⇒ 本用例红
+    /// （会得到 `a, b, c`）。
+    #[test]
+    fn sendmsg_same_ident_frames_dequeue_in_four_ary_heap_order() {
+        let mut rig = sendmsg_rig(vec![
+            sendmsg_act(0, "a"),
+            sendmsg_act(0, "b"),
+            sendmsg_act(0, "c"),
+        ]);
+        let other = sendmsg_add_player(&mut rig, "other", 902, (12, 10));
+        let hero = hero_actor(&rig);
+        rig.dlg_select("@main");
+        let frames = sendmsg_drain(&mut rig.rx);
+        let herd = |recog: i32, socket: i32| {
+            vec![
+                (socket, sendmsg_sysmessage(recog, "a")),
+                (socket, sendmsg_sysmessage(recog, "c")),
+                (socket, sendmsg_sysmessage(recog, "b")),
+            ]
+        };
+        let mut want = herd(hero, 901);
+        want.extend(herd(other, 902));
+        assert_eq!(
+            frames, want,
+            "3 条同 ident（252）出队 = [0,2,1]（a,c,b）：本例玩家先（脚本帧排水），其余玩家后（扇出）"
+        );
+    }
+
+    /// **隐藏 NPC 的 `SendSayMsg` 零帧**（`BaseObject.Message.cs:385-389` 的 `Envir == null`
+    /// 首行 return）：`QManage`/`QFunction` 不经地图（`NpcHost::goto_label` 传
+    /// `actor_id = 0`、`has_envir = false`）⇒ 脚本里的 `SENDMSG 4` 一条帧都不产。
+    ///
+    /// 牙（改坏必红）：把 `HostNpc::send_say_msg` 的 `if !self.has_envir { return None }` 删掉
+    /// ⇒ 本用例红（隐藏 NPC 会凭空产出 `RM_HEAR`）。
+    #[test]
+    fn sendmsg_case4_hidden_npc_emits_nothing() {
+        let mut rngf = |_v: i32| 0;
+        let mut player = game_svr::npc::NpcPlayer::empty(&mut rngf);
+        player.chr_name = "hero".to_string();
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::from("."),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QManage".to_string(),
+                file_path: "MapQuest_def".to_string(),
+                script_name: None,
+                is_hide: true,
+                is_quest: false,
+                scripts: vec![mir2_script::ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![t142_record(
+                        "@main",
+                        "",
+                        vec![sendmsg_act(4, "隐藏 NPC 不该有帧")],
+                    )],
+                    quest_count: 0,
+                }],
+                loaded: true,
+                actor_id: 0,
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 30,
+        };
+        let says = host
+            .goto_label("QManage", &mut player, "@main", false)
+            .expect("QManage 已在表里");
+        assert!(says.is_empty(), "`SENDMSG 4` 不是说词");
+        assert!(
+            player.frames.is_empty(),
+            "隐藏 NPC（`Envir == null`）⇒ `SendSayMsg` 零帧（oracle 记 Error 后 return）"
+        );
+        assert!(
+            player.world_broadcasts.is_empty(),
+            "`SENDMSG 4` 不进广播清单"
+        );
+    }
+
+    /// **返工 I-1（review `8a3c22d8`）**：`@StdModeFunc*` 排水点必须把 `world_broadcasts`
+    /// 扇出给**其余**在线玩家。
+    ///
+    /// 部署可达：`Market_Def/QFunction-0.txt:107` 的 `[@StdModeFunc14]` 的 `#ACT` 是**无条件**
+    /// `SENDMSG 0 [%s]在…处燃放礼炮…`；经 `handle_eat_cmd` 的 `std_mode == 31 && ani_count != 0`
+    /// （`PlayObject.Base.cs:1072` `UseStdModeFunItem`）触发。oracle 同一句走
+    /// `SendBroadCastMsg` ⇒ `PlayObjectList` 里每个 `!Ghost` 玩家各一发
+    /// （`WorldServer.cs:1738-1765`）；改前本排水点只取 `player.frames`，其余玩家 **0 帧**。
+    ///
+    /// 牙（改坏必红）：把 `run_std_mode_func_script` 里的 `fan_out_world_sysmessage(...)` 调用
+    /// 注释掉 ⇒ `other` 零帧、本用例红。
+    #[test]
+    fn sendmsg_stdmodefunc14_broadcast_reaches_other_online_player() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            310,
+            mir2_data::StdItem {
+                name: "礼炮".into(),
+                std_mode: 31,
+                ani_count: 14,
+                shape: 0,
+                ..Default::default()
+            },
+        );
+        // `[@StdModeFunc14]`：部署件里就是一条无条件 `SENDMSG 0`（`%s` 先替换成玩家名）。
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QFunction".into(),
+                file_path: "Market_Def".into(),
+                script_name: Some("QFunction-0".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: vec![mir2_script::ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![t142_record(
+                        "@StdModeFunc14",
+                        "",
+                        vec![sendmsg_act(0, "[%s]燃放礼炮")],
+                    )],
+                    quest_count: 0,
+                }],
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let make_index = 77;
+        let mut world = mir2_world::World::new(32, 32);
+        // 第二个在线玩家（同图、`!Ghost`）：`SendBroadCastMsg` 的收件人集合里必须有他。
+        let other = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "other", 12, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let hero = 7;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.state.item_list = vec![game_svr::bag::BagItem {
+            make_index,
+            index: 310,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "other".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: other,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        handle_eat_cmd(
+            make_index,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            None,
+            &unbind,
+            &mut item_number,
+            Some(&host),
+            &game_svr::npc::NpcVars::default(),
+            None,
+        );
+        let frames = sendmsg_drain(&mut rx0);
+        let sys_of = |socket: i32| -> Vec<&Vec<u8>> {
+            frames
+                .iter()
+                .filter(|(s, b)| {
+                    *s == socket
+                        && mir2_protocol::frame::CommandMessage::from_bytes(b)
+                            .is_some_and(|m| m.ident == mir2_protocol::messages::SM_SYSMESSAGE)
+                })
+                .map(|(_, b)| b)
+                .collect()
+        };
+        // 触发者自己那一份（`NpcPlayer.frames` 经脚本帧排水，Recog = 自己）。
+        let hero_sys = sys_of(901);
+        assert_eq!(hero_sys.len(), 1, "触发者恰一条 SM_SYSMESSAGE");
+        assert_eq!(
+            *hero_sys[0],
+            sendmsg_sysmessage(hero, "[hero]燃放礼炮"),
+            "触发者收到的字节（`%s` = hero）"
+        );
+        // **I-1 的判据**：另一个在线玩家也必须收到（改前此处置空）。
+        let other_sys = sys_of(902);
+        assert_eq!(
+            other_sys.len(),
+            1,
+            "其余在线玩家也须收到全服广播，`Recog` = 收件人自己"
+        );
+        assert_eq!(
+            *other_sys[0],
+            sendmsg_sysmessage(other, "[hero]燃放礼炮"),
+            "另一收件人的字节与触发者一致（同一 `WorldServer.SendBroadCastMsg` 正文）"
+        );
+        // 脚本先跑、物品随后被吃掉（`UseStdModeFunItem` 恒真）。
+        assert!(
+            sessions["hero"].state.item_list.is_empty(),
+            "StdMode31/AniCount14 礼炮包必须被吃掉"
+        );
     }
 }
 
