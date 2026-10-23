@@ -27,8 +27,15 @@ FIELDS = [
     ("mask", "⑤ 掩码/不可比字段",
      re.compile(r"掩码|mask|不可比|rules\.json|无掩码", re.I)),
     ("owner_status", "⑥ 负责人与状态",
-     re.compile(r"负责人|owner|未跑|已跑|window_required|状态[：:]", re.I)),
+     # 只认「窗口执行人 + 该判据运行状态」；裸 owner / status 是结构化生命周期字段，
+     # 卡片 entry 的 body JSON 里恒有，算命中会让这一项永远查不出缺失。
+     re.compile(r"负责人|执行人|未跑|已跑|window_required", re.I)),
 ]
+
+
+#: 六个字段的键，**硬编码**：selftest 拿它做基准。若从 FIELDS 里删掉任何一项，
+#: 这里不会跟着缩水，selftest 立刻变红（自指集合会让「漏检一个字段」测不出来）。
+EXPECTED_KEYS = ("precondition", "command", "expectation", "criterion", "mask", "owner_status")
 
 
 def lint(text):
@@ -62,18 +69,30 @@ def selftest():
     )
     bad = ("节拍门经定量核查无差异；余量=按评审口径的 HP 受控重采样（真机窗口），并入窗口项")
     checks = []
+    # ⓪ FIELDS 必须恰好覆盖六个期望字段（删除或改名都会在此变红）
+    field_keys = tuple(key for key, _label, _pat in FIELDS)
+    checks.append((field_keys == EXPECTED_KEYS,
+                   "⓪ FIELDS 恰好六个字段（期望 %r；实际 %r）"
+                   % (EXPECTED_KEYS, field_keys)))
     m_good = lint(good)
     checks.append((not m_good, "① 合格样例 ⇒ 0 warning（实际缺 %r）" % (m_good,)))
+    # ② 用**对硬编码集合的精确相等**：六个字段少检任何一个（哪怕整条从 FIELDS 删掉）都立刻变红。
+    all_keys = set(EXPECTED_KEYS)
     m_bad = lint(bad)
     keys = {k for k, _l in m_bad}
-    checks.append(("command" in keys and "criterion" in keys and len(m_bad) >= 3,
-                   "② 不合格样例 ⇒ 点名缺 command/criterion 且 ≥3 项（实际 %r）"
-                   % (sorted(keys),)))
+    checks.append((keys == all_keys and len(m_bad) == len(all_keys),
+                   "② 不合格样例 ⇒ 报满六个字段（期望 %r；实际 %r）"
+                   % (sorted(all_keys), sorted(keys))))
     # 只少一项时必须只报那一项
     partial = good.replace("⑤ 掩码：SM_TURN(10) 的 series 按 rules.json ident 10 掩掉。\n", "")
     m_part = lint(partial)
     checks.append(([k for k, _l in m_part] == ["mask"],
                    "③ 抽掉掩码一行 ⇒ 只报 ⑤（实际 %r）" % ([k for k, _l in m_part],)))
+    # ④ 全空文本 ⇒ 同样报满六个字段（与 ② 互补：样例文本被误改也挡得住）
+    m_empty = lint("")
+    keys_empty = {k for k, _l in m_empty}
+    checks.append((keys_empty == all_keys and len(m_empty) == len(all_keys),
+                   "④ 全空文本 ⇒ 报满六个字段（实际 %r）" % (sorted(keys_empty),)))
     failed = [msg for ok, msg in checks if not ok]
     for ok, msg in checks:
         print("  [%s] %s" % ("ok" if ok else "FAIL", msg))
