@@ -40,3 +40,14 @@ model sent to the API: glm-5.3-flash
   后续应按「每小时 agent 数上限」节流，或把纯记账/纯文档工作留给 Leader 自己做（不消耗子代理配额）。
 - **「验证做完但结论没发」是最贵的失败态**：复审的牙测试要跑全量 `cargo test`（5–15 分钟），
   建议复审流程改为「先发一版结论，再补细节」，避免整段验证白费。
+
+## 附：条件④ 的「clippy 红」是资源竞争的假红（已澄清）
+
+中断后 `goal_gate.py` 快速模式报 `条件4 clippy rc=101（8.6s）`。在无并发 cargo 的情况下重跑：
+
+```
+cargo clippy --workspace --all-targets -- -D warnings  ⇒ rc=0
+```
+
+⇒ 那条红是**当时多个已死 agent 的 cargo 进程争锁/半途被杀**造成的，**master 本身是绿的**。
+教训：`goal_gate` 跑门禁前应先确认无并发 cargo（或加 `--locked`/独立 target），否则会把资源竞争误报成代码缺陷。
