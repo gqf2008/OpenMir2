@@ -29,7 +29,7 @@ oracle 证据：
 
 | 文件 | ident | 当前写法（改前） | oracle 口径 | 结论 | 处置 |
 |---|---|---|---|---|---|
-| `combat_hit.json` | 3014 `CM_HIT` | `recog=target_x, param=target_y` | 动作族：X/Y 都来自 `recog`；`param` 不读（`WorldServer.cs:831-851`；`PlayObject.Message.cs:1230`） | **错**：Y 恒为 `HiWord(recog)=0` ⇒ 目标落在 `(x, 0)` | 改为 `recog=target_xy`、`param=0`；`target_xy=(target_y<<16)|target_x` 由调用方传入 |
+| `combat_hit.json` | 3014 `CM_HIT` | `recog=target_x, param=target_y` | 动作族：X/Y 都来自 `recog`；`param` 不读（`WorldServer.cs:831-851`；`PlayObject.Message.cs:1230`） | **错**：Y 恒为 `HiWord(recog)=0` ⇒ 目标落在 `(x, 0)` | 改为 `recog=hit_xy`、`param=0`；**`hit_xy=(self_y<<16)|self_x`**（卡 `openmir2-scenario-combat-hit-waitfix` 订正：`ClientHitXY` 要求 `nX==CurrX && nY==CurrY`，`PlayObject.Attack.cs:883`）；该场景随后登记 BLOCKED（攻击者收不到自己的 `SM_HIT`） |
 | `move_walk.json` | 3011 `CM_WALK` | `recog=move_x, param=move_y` | 同上（同 case 组；`PlayObject.Message.cs:1060`） | **错**（同一模式） | 改为 `recog=move_xy`、`param=0`；`move_xy=(move_y<<16)|move_x` |
 | `bag_equip.json` | 1003 `CM_TAKEONITEM` | `recog=make_index, param=takeon_where` | 该命令走 `WorldServer.cs:796-812` 组：`SendMsg(…, Series, Recog, Param, Tag)` ⇒ `nParam1=Recog`、`nParam2=Param`；`PlayObject.Message.cs:820-821` `ClientTakeOnItems((byte)nParam2=where, nParam1=MakeIndex)` | **对** | 不动 |
 | `eat_item.json` | 1006 `CM_EAT` | `recog=make_index` | 不在 switch ⇒ `default`（`WorldServer.cs:856-857`）：`nParam1=Recog`；`PlayObject.Message.cs:826-827` `ClientUseItems(nParam1, Msg)` | **对** | 不动 |
