@@ -284,3 +284,4 @@
 | T-251 | openmir2-rm-refmessage-delay-layer | 2026-10-23T15:16:57Z | 在用 |
 | T-252 | openmir2-active-seek-race-missing | 2026-10-23T15:16:59Z | 在用 |
 | T-253 | openmir2-proper-target-unfolded | 2026-10-23T15:17:00Z | 在用 |
+| T-263 | openmir2-gm-batch-5a-guild-impl | 2026-10-23T15:31:08Z | 在用 |
