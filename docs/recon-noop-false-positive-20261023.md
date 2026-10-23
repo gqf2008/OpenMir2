@@ -137,15 +137,17 @@ inbound::client_butch(&inbound::ButchInputs {
 
 ## 6. 牙（逐字节还原 + sha256 从提交后树取）
 
-判据文件提交后 `sha256 = 9355112dcd39dbc9d16bad8cb627b9c858a9f2e123542de578cc2d6c577fc179`。
+判据文件提交后 `sha256 = a4918df9f471a12bbefd519ff08145c72afb0835c453cdfa1b81a063dec5403e`
+（round-2；round-1 为 `9355112d…fc179`）。
 
 | 牙 | 变异 | 结果（红） | 还原后 sha256 |
 | --- | --- | --- | --- |
 | ① 判据改回改前 | 形态 (b) 换回字符级正则 `client_x\([^)]*?(false\|true\|\d+)` | `CM_BUTCH` 重新 `noop`/`tracked`，summary `{"implemented":178,"tracked":1,…}`；`selftest` 2 FAIL（结构体字段值 / 嵌套调用被误判） | 一致 |
 | ② 真 no-op 判成 False | `if any(RE_BARE_LITERAL_ARG.fullmatch(a) …)` → `if False and …` | `selftest` 3 FAIL（`CM_ZZDEAD2/3/4` 真 no-op 被判 False） | 一致 |
-| ③ 真实现判成 no-op | 同一行改为 `if True:`（只要调 `client_*` 即 no-op） | `selftest` 4 FAIL（`CM_ZZLIVE` 动态臂 + `CM_ZZLIVE2/3/4` 真实现被判 no-op） | 一致 |
+| ③ 真实现判成 no-op | 同一行改为 `if True:`（只要调 `client_*` 即 no-op） | `selftest` 5 FAIL（`CM_ZZLIVE` 动态臂 + `CM_ZZLIVE2/3/4` 真实现被判 no-op，另连带 B-1 夹具臂被误判） | 一致 |
+| ④ B-1 契约：删掉 `counts.setdefault("tracked", 0)` | 移除两行补键 | `dispatch --json` 的 counts **无 `tracked` 键**；`selftest` 3 FAIL（JSON 契约 / stdout 同口径 / `judge_b_tracked ⇒ PASS`） | 一致 |
 
-还原方式：用提交前的字节快照整体写回，逐次比对 `sha256`（三颗均 `OK`，最终树 = 提交树）。
+还原方式：用提交前的字节快照整体写回，逐次比对 `sha256`（四颗均 `OK`，最终树 = 提交树）。
 
 ## 7. 门禁
 
