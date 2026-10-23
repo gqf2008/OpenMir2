@@ -296,48 +296,67 @@ pub(crate) fn show_name_frame(actor_id: i32, display: &downlink::ActorDisplay) -
     smframe::sm_username(actor_id, display.name_color, &display.show_name)
 }
 
-/// 一条按 `(优先级, 入队序)` 排序的出帧。
+/// 一条待下发的出帧（`priority` = `(byte)wIdent`，即 oracle `MsgQueue` 的入队优先级）。
 struct QueuedFrame {
     priority: u8,
-    seq: usize,
     actor_id: i32,
     body: Vec<u8>,
 }
 
 fn push_frame(queue: &mut Vec<QueuedFrame>, priority: u8, actor_id: i32, body: Vec<u8>) {
-    let seq = queue.len();
     queue.push(QueuedFrame {
         priority,
-        seq,
         actor_id,
         body,
     });
 }
 
-/// 把排好序的帧逐条路由到 `[GateIdx, Socket]`。
+/// 把待下发的帧按 oracle `MsgQueue` 出队序逐条路由到 `[GateIdx, Socket]`。
+///
+/// 出队序 = oracle `MsgQueue`（`PriorityQueue<SendMessage, byte>`，`ActorEntity.cs:16`）的
+/// **四叉最小堆出队序**：优先级字节升序，**同优先级不是入队序**
+/// （3 条 `[0,2,1]`、4 条 `[0,3,2,1]`；dotnet 真跑 = 本仓 [`game_svr::msgqueue::NetPriorityQueue`]）。
+/// ⇒ 按**入队序**（`push_frame` 的调用序）灌堆再出队，不做稳定排序。
 fn flush(
     queue: &mut [QueuedFrame],
     online: &OnlineRegistry,
     gates: &HashMap<u8, UnboundedSender<SimToGate>>,
 ) -> usize {
-    queue.sort_by_key(|f| (f.priority, f.seq));
-    let mut sent = 0usize;
+    // oracle 的 `MsgQueue` 是**每个 `PlayObject` 一条**（`ActorEntity.cs:16` 的实例字段）⇒
+    // 先把帧按收件人分组（分组序 = 首次入队序；跨会话的出队序本就不可观测），**每组各自**按
+    // 入队序灌 `NetPriorityQueue` 再出队。不能把不同收件人的帧混进同一个堆：混堆时堆内
+    // 其它会话的元素会改变本会话的 sift 结果（实测 `guild_official_war_declares_…` 的 42 序会翻）。
+    let mut recipients: Vec<i32> = Vec::new();
     for f in queue.iter() {
-        let Some(t) = online.iter().find(|e| e.actor_id == f.actor_id) else {
-            glog!(
-                "WRN",
-                "行会 NPC 回帧：ActorId={} 不在在线登记表 ⇒ 丢弃 pri={}",
-                f.actor_id,
-                f.priority
-            );
-            continue;
-        };
-        if let Some(tx) = crate::route_to_gate(gates, t.gate_idx, t.socket, "行会 NPC 回帧") {
-            let _ = tx.send(SimToGate::SendFrame {
-                socket: t.socket,
-                body: f.body.clone(),
-            });
-            sent += 1;
+        if !recipients.contains(&f.actor_id) {
+            recipients.push(f.actor_id);
+        }
+    }
+    let mut sent = 0usize;
+    for actor_id in recipients {
+        let mut heap: game_svr::msgqueue::NetPriorityQueue<&QueuedFrame> =
+            game_svr::msgqueue::NetPriorityQueue::new();
+        for f in queue.iter().filter(|f| f.actor_id == actor_id) {
+            heap.enqueue(f, f.priority);
+        }
+        while let Some(f) = heap.dequeue() {
+            let Some(t) = online.iter().find(|e| e.actor_id == f.actor_id) else {
+                glog!(
+                    "WRN",
+                    "行会 NPC 回帧：ActorId={} 不在在线登记表 ⇒ 丢弃 pri={}",
+                    f.actor_id,
+                    f.priority
+                );
+                continue;
+            };
+            if let Some(tx) = crate::route_to_gate(gates, t.gate_idx, t.socket, "行会 NPC 回帧")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: t.socket,
+                    body: f.body.clone(),
+                });
+                sent += 1;
+            }
         }
     }
     sent

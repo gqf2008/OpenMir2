@@ -254,11 +254,17 @@ pub fn script_frame(
         // 脚本发点 `ExecutionProcessingSys.cs:3945`（`ActionOfRepairAllItem`）：
         //   `SendMsg(normNpc, RM_DURACHANGE, (short)i, Dura, DuraMax, 0)`。
         // `Dura`/`DuraMax` 在 oracle 是 `ushort`，`MakeMessage` 再把 Param/Tag/Series 截成 16 位
-        // ⇒ 按低 16 位取值（槽位 `i` = `ItemLocation`，实语料 0..12）。
+        // ⇒ 取低 16 位（用掩码 + `as`，不用 `try_from(...).unwrap_or(0)`：掩码后必成功，那个
+        // `unwrap_or` 是死码）。
+        //
+        // **口径差（登记，实语料不可达）**：槽位在 oracle 走 `(ushort)param`（16 位），本支经
+        // `smframe::sm_durachange(slot: u8)` 只保留低 8 位。发点 `ActionOfRepairAllItem` 的槽位 =
+        // `ItemLocation`（0..12）⇒ 差不出；要 1:1 需把该签名改成 `u16`，那会牵动 `smframe.rs`
+        // 与 lib.rs 的 9 处既有调用点（他线写集）⇒ 本片不扩面，记为口径差。
         RM_SCRIPT_DURACHANGE => Some(smframe::sm_durachange(
-            u16::try_from(s.n_param1 & 0xFFFF).unwrap_or(0),
-            u8::try_from(s.w_param & 0xFF).unwrap_or(0),
-            u16::try_from(s.n_param2 & 0xFFFF).unwrap_or(0),
+            (s.n_param1 & 0xFFFF) as u16,
+            (s.w_param & 0xFF) as u8,
+            (s.n_param2 & 0xFFFF) as u16,
         )),
         // `RM_MERCHANTDLGCLOSE`（10127）⇒ `SM_MERCHANTDLGCLOSE(644)`
         // （`PlayObject.Message.cs:1806-1808`）：`SendDefMessage(SM_MERCHANTDLGCLOSE,

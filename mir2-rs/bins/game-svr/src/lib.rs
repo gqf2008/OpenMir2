@@ -6509,15 +6509,22 @@ fn emit_script_frames_raw(
     frames: &[game_svr::npc::SendMsg],
 ) -> usize {
     let mut sent = 0usize;
-    // oracle `MsgQueue` = `PriorityQueue<SendMessage, byte>`，优先级 = `(byte)wIdent`
-    // （`ActorEntity.cs:16`、`BaseObject.Message.cs:181`）⇒ 按 `ident as u8` 升序：
-    // `RM_GAMEGOLDCHANGED`(8084&0xFF=148) 先于 `RM_GOLDCHANGED`(10136&0xFF=152)。
-    // **同一优先级内只是近似 FIFO**：.NET `PriorityQueue` 对相等优先级不保证稳定，
-    // 本仓 `sort_by_key` 是稳定排序 ⇒ 退化为「入队序」。两者仅在同 ident 有多帧时才可能
-    // 分叉；本路径每 ident 至多一帧（`SendUpdateMsg` 先合并同 ident 旧条目）。
-    let mut ordered: Vec<&game_svr::npc::SendMsg> = frames.iter().collect();
-    ordered.sort_by_key(|f| f.ident as u8);
-    for f in ordered {
+    // oracle `MsgQueue` = `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`），入队优先级 =
+    // `(byte)wIdent`（`BaseObject.Message.cs:181`）。.NET 的 `PriorityQueue` 是**四叉最小堆**
+    // ⇒ 出队序 = 优先级字节升序，**但同优先级不是入队序**（sift 决定）：
+    // 3 条同优先级实测出队 `[0,2,1]`、4 条 `[0,3,2,1]`（dotnet 真跑 + 本仓
+    // [`game_svr::msgqueue::NetPriorityQueue`] 逐位复刻一致；reviewer-5 I-1）。
+    // 故这里按**入队序**灌堆再出队，**不是**稳定排序（`sort_by_key` 会给 `[0,1,2]`）。
+    //
+    // 同 ident 多帧在本路径是**常态**：`ActionOfRepairAllItem`（`ExecutionProcessingSys.cs:3937-3948`）
+    // 对每件装备各发一条 `RM_DURACHANGE`（优先级 141），走的是 `SendMsg`（**不合并**）；
+    // 只有 `SendUpdateMsg`（`BaseObject.Message.cs:283-305`）才会先删同 ident 旧条目。
+    let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::npc::SendMsg> =
+        game_svr::msgqueue::NetPriorityQueue::new();
+    for f in frames {
+        queue.enqueue(f, f.ident as u8);
+    }
+    while let Some(f) = queue.dequeue() {
         let Some(body) = game_svr::pickwire::script_frame(
             f,
             npc_actor_id,
@@ -59423,6 +59430,55 @@ mod tests {",
         assert_eq!(out[2].len(), 12, "SM_MERCHANTDLGCLOSE header-only");
     }
 
+    /// **I-1（reviewer-5）出队序 = oracle `MsgQueue` 的四叉堆序，不是入队序**：
+    /// 同优先级（`RM_DURACHANGE` ⇒ `(byte)10125` = **141**）多条时，出队序是 sift 结果——
+    /// 3 条 `[0,2,1]`、4 条 `[0,3,2,1]`（dotnet 实跑 = 本仓
+    /// [`game_svr::msgqueue::NetPriorityQueue`] 逐位复刻；oracle `MsgQueue` =
+    /// `PriorityQueue<SendMessage, byte>`，`ActorEntity.cs:16`）。
+    ///
+    /// 可达面：`ActionOfRepairAllItem`（`ExecutionProcessingSys.cs:3937-3948` /
+    /// `crates/script/src/engine/actions.rs:667-687`）对**每件装备**各发一条 `RM_DURACHANGE`
+    /// （`SendMsg` 不合并；只有 `SendUpdateMsg` 合并）⇒ ≥3 件装备是常态；部署 `Envir` 有 5 处
+    /// `RepairAll`。
+    ///
+    /// 红检：把 [`emit_script_frames_raw`] 改回 `ordered.sort_by_key(|f| f.ident as u8)` 稳定排序
+    /// ⇒ 实得 `[0,1,2]` / `[0,1,2,3]`，本用例红。
+    #[test]
+    fn script_drain_orders_same_priority_by_dotnet_heap() {
+        for (n, want) in [(3usize, vec![0u16, 2, 1]), (4usize, vec![0, 3, 2, 1])] {
+            let sg = test_session_ground(9001);
+            let frames: Vec<game_svr::npc::SendMsg> = (0..n)
+                .map(|i| game_svr::npc::SendMsg {
+                    ident: mir2_protocol::messages::RM_DURACHANGE as i32,
+                    w_param: i as i32,         // 槽位（入队序 0,1,2,…）
+                    n_param1: 1000 + i as i32, // Dura（跟着槽位走，便于交叉核对）
+                    n_param2: 2000,            // DuraMax
+                    n_param3: 0,
+                    msg: None,
+                })
+                .collect();
+            let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+            let sent = emit_script_frames(&tx, 901, 4242, &sg, &frames);
+            assert_eq!(sent, n, "每件装备一条 SM_DURACHANGE");
+            let mut slots = Vec::new();
+            let mut duras = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = ev {
+                    assert_eq!(gnp_ident(&body), mir2_protocol::messages::SM_DURACHANGE);
+                    slots.push(gnp_param(&body));
+                    duras.push(gnp_recog(&body));
+                }
+            }
+            assert_eq!(
+                slots, want,
+                "n={n}：同优先级出队槽位序必须是 oracle 四叉堆序（稳定排序会给 [0,1,..]）"
+            );
+            // 槽位与 Dura 同步置换 ⇒ 证明是**帧整体**换序，不是只换了 Param。
+            let want_dura: Vec<i32> = want.iter().map(|s| 1000 + i32::from(*s)).collect();
+            assert_eq!(duras, want_dura, "n={n}：Recog(Dura) 必须随槽位一起换序");
+        }
+    }
+
     fn gnp_on(frames: &[(i32, Vec<u8>)], socket: i32) -> Vec<Vec<u8>> {
         frames
             .iter()
@@ -59702,24 +59758,30 @@ mod tests {",
         assert_eq!(
             gnp_idents(&hero),
             vec![653, 42, 42, 104, 104],
-            "宣战帧序：653(152) → 42×2(165) → 104×2(255)"
+            "宣战帧序：653(152) → 42×2(165) → 104×2(255)（优先级字节升序；**段内是堆序**）"
         );
         assert_eq!(gnp_recog(&hero[0]), 70_000, "653 Recog = 100,000-30,000");
-        assert_eq!(gnp_recog(&hero[1]), 1, "42#1 Recog = hero");
+        // **段内序 = oracle `MsgQueue` 的四叉堆出队序，不是入队序**（I-1 / T-207）：
+        // hero 队列的入队序 = `[653, 104(持续), 104(开始), 42(hero), 42(boss)]`
+        //（`GuildOfficial.cs:184-188` 先 `DecGold`→653，`GuildInfo.cs:1020-1044` 再
+        //  `SendGuildMsg` ×2 → 104，最后 `RefMemberName()` → 42）⇒ 堆出队 =
+        // `[653, 42(boss), 42(hero), 104(开始), 104(持续)]`（本仓 `NetPriorityQueue` 与
+        // dotnet 实跑逐位一致）。旧期望 `[hero, boss] / [持续, 开始]` 是稳定排序的产物，非 oracle。
         assert_eq!(
-            gnp_recog(&hero[2]),
+            gnp_recog(&hero[1]),
             3,
-            "42#2 Recog = boss（目标会 RefMemberName）"
+            "42#1 Recog = boss（堆序先出后入队的那条）"
         );
+        assert_eq!(gnp_recog(&hero[2]), 1, "42#2 Recog = hero");
         assert_eq!(
             gnp_tail_text(&hero[3]),
-            "***B行会战争将持续三个小时。",
-            "第一层命中克隆的文案"
+            "***B行会战争开始(三个小时)",
+            "104#1 = 第二条入队的文案（堆序）"
         );
         assert_eq!(
             gnp_tail_text(&hero[4]),
-            "***B行会战争开始(三个小时)",
-            "同一函数内又追加副本的文案（N2 照搬）"
+            "***B行会战争将持续三个小时。",
+            "104#2 = 第一条入队的文案（堆序）"
         );
         assert_eq!(f.hero_session_mut().state.gold, 70_000);
         let a = f.guilds.find_guild("A").unwrap();
