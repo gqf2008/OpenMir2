@@ -2327,6 +2327,22 @@ Other
                 quest_count: 0,
             }],
         };
+        let run_dotted = |envir_root: std::path::PathBuf, chr: &str| {
+            let mut def = makes();
+            def.scripts[0].record_list[0].procedure_list[0].condition_list[0].s_param1 =
+                r"..\TestList.txt".to_string();
+            let host = NpcHost {
+                envir_root,
+                defs: vec![def],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = chr.to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+            player.frames.iter().filter_map(|f| f.msg.clone()).collect::<Vec<_>>()
+        };
         let run = |envir_root: std::path::PathBuf, chr: &str| {
             let host = NpcHost {
                 envir_root,
@@ -2346,6 +2362,14 @@ Other
         };
         // 注入 Envir 根：命中（Trim + 忽略大小写）。
         assert_eq!(run(envir.clone(), "HERO"), vec!["hit".to_string()]);
+        // **I-1 回归（review `51132242`）**：部署形态 `..\…` 前缀必须被剥离（oracle
+        // `SystemShare.cs:1989-1992` 丢弃前 3 字符）⇒ 同一份名单照样命中；不剥离时
+        // `envir/../TestList.txt` 落在 Envir 之外 ⇒ miss。
+        assert_eq!(
+            run_dotted(envir.clone(), "HERO"),
+            vec!["hit".to_string()],
+            "两字符前缀 (..) 必须剥离后再拼 Envir 根"
+        );
         // 未命中 ⇒ else 支。
         assert_eq!(run(envir.clone(), "Nobody"), vec!["miss".to_string()]);
         // 未注入根（空 PathBuf）⇒ 按「文件不存在」⇒ 恒假（接线前行为，也是牙的红条件）。
