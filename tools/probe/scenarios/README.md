@@ -95,6 +95,12 @@ python tools/probe/mir2_probe.py \
 > `dice_chain` 末步是**分支相关**断言：`@ya52` 持筹码包走 `#ACT` 回 `643`，无筹码包走 `#ELSEACT MESSAGEBOX` 回 `SM_MENU_OK(767)`，
 > 因此该步等 `[643, 767]`——单等 `643` 会变成"无包账号必然超时"的恒失败断言。
 
+> `npc_script_chain` 是**多步标签链**（R1）：点比奇国王(0122) 后连发 5 次 `dlg_select`
+> （`@@buildguildnow` → `@buildguildexp` → `@main` → `@requestcastlewarA` → `@exit`），
+> 断言 `643 → 763 → 643 → 643 → 643 → 644`。`required: ["npc_actor"]` 走 643.recog 发现；
+> 链里没有 `@ask`（部署件无此标签）也没有 `@back`（无 `<.../@back>` 链接 ⇒ `LableIsCanJmp` 门控下零帧），
+> 逐条 oracle 出处与理由见 `docs/npc-script-chain-scenario-20261023.md`。
+
 ## 驱动器的自动握手（对拍不要关）
 
 照 `src/BotSrv/Player/RobotPlayer.Operate.cs`：
