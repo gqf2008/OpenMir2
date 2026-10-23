@@ -2172,6 +2172,48 @@ def run_magic(runner, side, prof, sc, magic, env, timeout=120):
         return res
 
 
+def preview_inventory(runner, side, prof, sc, items, ctx):
+    """`--dry-run` 用：背包夹具的离线校验 + 命令预览（卡 `openmir2-inventory-fixture-reachability`）。
+
+    与 [`preview_magic`] 同口径：只做离线内容校验（库名/库配对/客户端参数），**不连库、不改库**；
+    前置不成立 ⇒ 返回 failed=True（真跑会 rc=2 并点名）。预览行写「声明 N 件 / 槽位 / MakeIndex」
+    ——此前 dry-run 对 inventory **一行不打**（rc=0 但 0 行 = 假绿）。
+    """
+    out = {"side": side, "declared": [dict(i) for i in items], "rc": None,
+           "error": None, "commands": [], "offline_check": None}
+    try:
+        envir_root = placement_envir_root(side, sc)
+        db = placement_characters_db(side, sc)
+        pairing = _check_db_pairing(side, envir_root, db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        out["error"] = "背包夹具前置校验失败（真跑会 rc=2）：%s" % e
+        out["rc"] = 2
+        return out, True
+    positions = sorted(int(i["position"]) for i in items)
+    makes = sorted(int(i["make_index"]) for i in items)
+    chr_name = str(prof.get("char_name") or "")
+    argv = _redact_argv(_mysql_argv(client))
+    out["offline_check"] = {"envir_root": envir_root, "db": db, "db_pairing": pairing,
+                            "positions": positions, "make_index": makes,
+                            "char_name": chr_name}
+    out["commands"] = [
+        {"argv": argv,
+         "stdin": "SELECT COUNT(*) FROM `%s`.`characters` WHERE ChrName=%r;"
+                  % (db, chr_name)},
+        {"argv": argv,
+         "stdin": "INSERT/UPDATE `%s`.`characters_bagitem`（声明 %d 件：positions=%s "
+                  "make_index=%s）" % (db, len(items), positions, makes)},
+        {"argv": argv,
+         "stdin": "SELECT ...（读回校验：声明槽位行数 + 未声明槽位行数/MD5 指纹）"},
+    ]
+    runner.log("[%s] 背包夹具（dry-run 不连库）：db=%s 声明 %d 件 positions=%s "
+               "make_index=%s 角色=%s"
+               % (side, db, len(items), positions, makes, chr_name))
+    out["rc"] = 0
+    return out, False
+
+
 def preview_magic(runner, side, prof, sc, magic, ctx):
     """`--dry-run` 用：离线校验声明与库配对，打印将要执行的命令（不连库/不改库）。"""
     out = {"side": side, "declared": [dict(m) for m in magic], "rc": None,
@@ -2232,6 +2274,89 @@ def preview_magic(runner, side, prof, sc, magic, ctx):
 INVENTORY_REQUIRED_KEYS = ("index", "make_index", "position")
 INVENTORY_OPTIONAL_KEYS = ("std_mode", "ani_count", "dura", "dura_max", "note")
 INVENTORY_MAX_BAG = 46
+
+
+def _selftest_inventory_reachability(tmp):
+    """卡 `openmir2-inventory-fixture-reachability`：让 inventory 夹具**真的可达**的三条断言。
+
+    ① 仓库里的 `bag_equip` / `eat_item` 已经带 `inventory` 声明且能解析；
+    ② `run_inventory` 在 dry-run 下**打印预览行**并 rc=0（此前 rc=0 但 0 行 = 假绿）；
+    ③ `mir2_probe --check-scenario` 接受带 `inventory` 的场景（此前 unknown key ⇒ rc=2，场景无法带声明）。
+    """
+    import json as _json
+    out = []
+    here = os.path.dirname(os.path.abspath(__file__))
+    scen_dir = os.path.join(here, "..", "probe", "scenarios")
+    decl = {}
+    for name in ("bag_equip", "eat_item"):
+        try:
+            decl[name] = scenario_inventory(os.path.join(scen_dir, name + ".json"))
+        except ConfigError:
+            decl[name] = None
+    out.append((bool(decl.get("bag_equip")) and bool(decl.get("eat_item")),
+                "① bag_equip/eat_item 均声明 inventory 且可解析"))
+
+    class _DryRunner:
+        dry_run = True
+        def __init__(self):
+            self.lines = []
+            self.sides = []
+        def log(self, text):
+            self.lines.append(text)
+        def run(self, *a, **k):
+            self.sides.append(a[1] if len(a) > 1 else "?")
+            return 0, "", ""
+
+    logs = []
+    ok_dry = True
+    prof = {"char_name": "hero", "account": "ua",
+            "sides": {"csharp": {}, "rust": {}},
+            "db_client": {"mysql": ["mysql"]}}
+    try:
+        cur = {"db": {"characters_db": "mir2_test_db"}, "envir_root": None}
+        old_root, old_pair = placement_envir_root, _check_db_pairing
+        globals()["placement_envir_root"] = lambda side, sc: None
+        globals()["_check_db_pairing"] = lambda *a, **k: "selftest"
+        try:
+            for side in ("csharp", "rust"):
+                dr = _DryRunner()
+                res = run_inventory(dr, side, prof, cur, decl["bag_equip"], {})
+                logs.extend(dr.lines)
+                if res.get("rc") != 0 or res.get("action") != "dry-run":
+                    ok_dry = False
+        finally:
+            globals()["placement_envir_root"] = old_root
+            globals()["_check_db_pairing"] = old_pair
+    except Exception:
+        ok_dry = False
+    out.append((ok_dry and any("背包夹具（dry-run 不连库）" in l for l in logs),
+                "② dry-run 两侧打印「背包夹具（dry-run 不连库）」预览且 rc=0"))
+
+    # ③ probe 加载放行：临时场景带 inventory + 必需 --var ⇒ rc=0
+    import subprocess, sys as _sys, tempfile
+    probe = os.path.join(here, "..", "probe", "mir2_probe.py")
+    body = {"name": "selftest_inv_load", "required": ["make_index", "takeon_where",
+                                                      "item_name"],
+            "inventory": [{"index": 207, "make_index": 5001, "position": 40, "std_mode": 5}],
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}]}
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(body, f)
+        r = subprocess.run([_sys.executable, "-I", "-B", probe, "--check-scenario",
+                            "--scenario", path, "--var", "make_index=5001",
+                            "--var", "takeon_where=1", "--var", "item_name=x"],
+                           capture_output=True, text=True)
+        out.append((r.returncode == 0, "③ mir2_probe --check-scenario 接受 inventory 声明（rc=%s）"
+                    % r.returncode))
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+    return out
 
 
 def scenario_inventory(path):
@@ -2371,6 +2496,21 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
     if not chr_name or not login_id:
         res["error"] = "背包夹具需要 profile 的 char_name/account"
         res["rc"] = 2
+        return res
+    if getattr(runner, "dry_run", False):
+        # 卡 `openmir2-inventory-fixture-reachability`：dry-run 必须**看得到预览行**——
+        # 此前 `run_inventory` 只在真跑分支里打日志，`--dry-run` 下 0 行（rc=0 假绿）。
+        positions = sorted(int(i["position"]) for i in items)
+        makes = sorted(int(i["make_index"]) for i in items)
+        res["action"] = "dry-run"
+        res["sql"] = {
+            "declare": "INSERT/UPDATE `%s`.`characters_bagitem`（声明 %d 件：positions=%s "
+                       "make_index=%s）" % (db, len(items), positions, makes),
+        }
+        runner.log("[%s] 背包夹具（dry-run 不连库）：db=%s 声明 %d 件 positions=%s "
+                   "make_index=%s 角色=%s"
+                   % (side, db, len(items), positions, makes, chr_name))
+        res["rc"] = 0
         return res
 
     def sql(tag, text):
@@ -3294,6 +3434,14 @@ def execute(cfg):
                 if failed:
                     runner.log("[%s] 预置位不可行 ⇒ 真跑 rc=2（不起栈、不跑场景）：%s"
                                % (side, pres.get("error")))
+                    preview_failed = True
+                    side_failed = True
+            if not side_failed and inventory:
+                iprev, ifailed = preview_inventory(runner, side, prof, sc, inventory, ctx)
+                summary.setdefault("inventory", {}).setdefault("sides", {})[side] = iprev
+                if ifailed:
+                    runner.log("[%s] 背包夹具不可行 ⇒ 真跑 rc=2（不起栈、不跑场景）：%s"
+                               % (side, iprev.get("error")))
                     preview_failed = True
                     side_failed = True
             if not side_failed:
@@ -5871,6 +6019,8 @@ def selftest():
         # 18m) 背包夹具（INV-1..）：4 用例 + 2 牙 + 生产接线/失败面——**必须走 chk**，
         # 也就是排在 rc 判定之前；此前这段放在 `if fail_n: return 1` 之后 ⇒ 牙永不判红（review `c866f358` B-1）。
         for cond, msg in _selftest_inventory(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_inventory_reachability(tmp):
             chk(cond, msg)
 
         # ⑰ execute 读 res["inventory"]（卡 openmir2-card-window-teeth-mg7）：

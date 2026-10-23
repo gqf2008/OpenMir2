@@ -544,7 +544,7 @@ def load_scenario(path):
     # 仍能被 --check-scenario / 真跑加载（否则会被下面的 unknown key 拒绝）。
     _need_keys(data, "scenario", required=("name", "steps"),
                optional=("description", "params", "required", "computed",
-                         "placement", "blocked", "requires"))
+                         "placement", "blocked", "requires", "inventory"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -565,6 +565,7 @@ def load_scenario(path):
     _check_placement(data.get("placement"))
     _check_blocked(data.get("blocked"))
     _check_requires(data.get("requires"))
+    _check_inventory(data.get("inventory"))
     return data
 
 
@@ -654,6 +655,54 @@ def _check_requires(rq):
         raise ScenarioError("scenario.requires has unknown fixture(s): %s "
                             "(only %s is implemented; fail-closed)"
                             % (unknown, list(REQUIRES_KNOWN)))
+
+
+def _check_inventory(inv):
+    """`scenario.inventory` 的**形状**校验（卡 `openmir2-inventory-fixture-reachability`）。
+
+    语义：场景**自描述**背包夹具（要哪些物品、放哪个槽），内容全在场景里，不需要 profile 段；
+    真正写入由 `tools/conformance/card_window.py` 的 `run_inventory` 在 restore 之后、起栈之前做
+    （缺 `db.characters_db`/`char_name`/模板不存在/槽位被占 ⇒ 那边 rc=2 点名）。
+
+    本驱动器只校验形状（与 `placement`/`blocked` 同口径 fail-closed）。
+    """
+    if inv is None:
+        return
+    required = ("index", "make_index", "position")
+    optional = ("std_mode", "ani_count", "dura", "dura_max", "note")
+    if not isinstance(inv, list) or not inv:
+        raise ScenarioError("scenario.inventory must be a non-empty array, got %r" % (inv,))
+    seen_pos, seen_make = set(), set()
+    for i, item in enumerate(inv):
+        where = "scenario.inventory[%d]" % i
+        if not isinstance(item, dict):
+            raise ScenarioError("%s must be an object, got %r" % (where, item))
+        bad = set(item) - set(required) - set(optional)
+        if bad:
+            raise ScenarioError("%s has unknown key(s): %s" % (where, sorted(bad)))
+        missing = [k for k in required if k not in item]
+        if missing:
+            raise ScenarioError("%s missing required key(s): %s" % (where, missing))
+        for key in required + optional:
+            v = item.get(key)
+            if v is None or key == "note":
+                continue
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise ScenarioError("%s.%s must be an int, got %r" % (where, key, v))
+            if v < 0 or v > 0xFFFFFFFF:
+                raise ScenarioError("%s.%s out of range: %r" % (where, key, v))
+        pos = int(item["position"])
+        if pos > 45:
+            raise ScenarioError("%s.position=%d out of range (0..45)" % (where, pos))
+        if pos in seen_pos:
+            raise ScenarioError("%s.position=%d duplicated" % (where, pos))
+        seen_pos.add(pos)
+        mk = int(item["make_index"])
+        if mk <= 0:
+            raise ScenarioError("%s.make_index must be > 0 (DBSvr skips 0)" % where)
+        if mk in seen_make:
+            raise ScenarioError("%s.make_index=%d duplicated" % (where, mk))
+        seen_make.add(mk)
 
 
 def _encode_send_body(val, where, params=None):
@@ -2135,6 +2184,56 @@ def _selftest_scenario_requires():
             pass
 
 
+def _selftest_scenario_inventory():
+    """`scenario.inventory` 形状校验（卡 `openmir2-inventory-fixture-reachability`）：
+    合法声明放行；坏声明（缺键/未知键/槽位越界/重复槽位/重复 MakeIndex/非数组）⇒ ScenarioError。
+    """
+    import tempfile
+    good = {
+        "name": "selftest_inventory",
+        "inventory": [{"index": 207, "make_index": 5001, "position": 40, "std_mode": 5},
+                      {"index": 3, "make_index": 5002, "position": 41, "dura": 1}],
+        "steps": [{"send": {"ident": CM_SAY, "text": "@时间"}},
+                  {"wait_for": SM_SYSMESSAGE}],
+    }
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        def _load(doc):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh, ensure_ascii=False)
+            return load_scenario(path)
+
+        assert len(_load(good)["inventory"]) == 2
+        bad_cases = [
+            ({"inventory": []}, "non-empty array"),
+            ({"inventory": {"index": 1}}, "non-empty array"),
+            ({"inventory": [{"index": 1, "position": 1}]}, "missing required"),
+            ({"inventory": [{"index": 1, "make_index": 1, "position": 1, "zzz": 2}]},
+             "unknown key"),
+            ({"inventory": [{"index": 1, "make_index": 1, "position": 46}]}, "out of range"),
+            ({"inventory": [{"index": 1, "make_index": 1, "position": 1},
+                            {"index": 2, "make_index": 2, "position": 1}]}, "duplicated"),
+            ({"inventory": [{"index": 1, "make_index": 0, "position": 1}]}, "make_index"),
+            ({"inventory": [{"index": 1, "make_index": 5, "position": 1},
+                            {"index": 2, "make_index": 5, "position": 2}]}, "duplicated"),
+        ]
+        for body, needle in bad_cases:
+            err = None
+            try:
+                _load(dict(good, **body))
+            except ScenarioError as ex:
+                err = str(ex)
+            assert err is not None, "load_scenario accepted bad inventory: %r" % (body,)
+            assert needle in err, (needle, err)
+        return "inventory 形状 8 项"
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _write_tmp_rs(text):
     """selftest 用：写一个临时 .rs 文件（假 messages.rs / attackwire.rs），返回路径。"""
     import tempfile
@@ -2681,6 +2780,7 @@ def run_selftest():
     check("scenario-dsl", _selftest_scenarios)
     check("scenario-required", _selftest_scenario_required)
     check("scenario-requires", _selftest_scenario_requires)
+    check("scenario-inventory", _selftest_scenario_inventory)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
