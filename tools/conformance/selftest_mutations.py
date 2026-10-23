@@ -112,28 +112,12 @@ TEETH = [
     os.makedirs(dest)''',
        '''    dest = os.path.join(out_dir, "_stale-fixed")
     os.makedirs(dest, exist_ok=True)''')]),
-    ("T8", "N-1 comment 挪回产物写之前（先写账本再发现缺件）",
+    ("T8", "N-1 comment 判定看不到 README 写失败（等价于先写账本再发 comment）",
      "N-1 README 写失败 => comment verdict=UNDECIDABLE",
-     [('''    # 归档：report.json + 两侧产物 sha256 + README.txt（与缺二进制分支共用同一实现）
-    artifacts_ok = write_artifacts(out_dir, summary)
-
-    # N-1：comment 必须在**全部产物写完之后**发。card-window.json 先落一版（此时还没有
-    # comment 回执），这样「最终化失败」能被 comment 如实记账，而不是先写账本再发现缺件。
-    json_ok = write_summary_json(out_dir, summary)
-    finalize_ok = artifacts_ok and json_ok
-    if not finalize_ok:
-        summary["exit_code"] = 2''',
-       '''    finalize_ok = True'''),
-      ('''    # 摘要把 comment 回执追加进去（第二版）。这一版**只追加回执、不再新增证据**：
-    # comment 判定所依据的产物（report.json / README.txt / card-window.json 首版）在
-    # comment 之前已全部落盘（N-1）。回执写失败仍 => rc=2 + note。
-    if not write_summary_json(out_dir, summary):
-        summary["exit_code"] = 2
-    return summary''',
-       '''    artifacts_ok = write_artifacts(out_dir, summary)
-    if not write_summary_json(out_dir, summary) or not artifacts_ok:
-        summary["exit_code"] = 2
-    return summary''')]),
+     [('''    artifacts_ok = write_artifacts(out_dir, summary)''',
+       '''    write_artifacts(out_dir, summary)
+    artifacts_ok = True
+    summary["exit_code"] = 0''')]),
     ("T9", "N-1 comment 的 verdict 固定写 PASS（伪造账本）",
      "N-1 README 写失败 => comment verdict=UNDECIDABLE",
      [('''            "verdict": comment_verdict,''',
@@ -185,7 +169,11 @@ TEETH = [
     finalize_ok = artifacts_ok and json_ok
     if not finalize_ok:
         summary["exit_code"] = 2''',
-       '''    finalize_ok = artifacts_ok'''),
+       '''    write_summary_json(out_dir, summary)
+    json_ok = True
+    finalize_ok = artifacts_ok and json_ok
+    if not finalize_ok:
+        summary["exit_code"] = 2'''),
       ('''    if not write_summary_json(out_dir, summary):
         summary["exit_code"] = 2
     return summary''',
