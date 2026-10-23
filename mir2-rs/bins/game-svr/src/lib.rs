@@ -1892,7 +1892,6 @@ impl DynVarStore {
             _ => false,
         }
     }
-
 }
 
 fn apply_pending_gm_entity(
