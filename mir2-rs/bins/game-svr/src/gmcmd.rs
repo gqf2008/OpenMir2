@@ -187,6 +187,15 @@ pub const TRAINING_MAGIC_HELP: &str = "命令格式: @TrainingMagic 人物名称
 pub const TRAINING_SKILL_HELP: &str = "命令格式: @增加技能 人物名称  技能名称 修炼等级(0-3)";
 pub const UNBIND_USE_ITEM_HELP: &str = "命令格式: @UnBindUseItem ";
 
+// ---- 批次 5 · 脚本可达族（卡 `openmir2-gm-impl-*`；`GMEXECUTE` 抬权可达，tier=R）----
+/// `ShutupCommand` 的参数校验回执：`string.Format(CommandHelp.GameCommandParamUnKnow,
+/// Command.Name, CommandHelp.GameCommandShutupHelpMsg)`。
+///
+/// `CommandHelp.cs:28` 的 `GameCommandShutupHelpMsg = "人物名称  时间长度(分钟)"`（**两个**空格，
+/// GBK 线上编码时同样保留两个 0x20）；`Name` 被部署 `Command.conf` 覆盖为 `禁言`
+/// （`conf[Command].Shutup=禁言`）。
+pub const SHUTUP_HELP: &str = "命令格式: @禁言 人物名称  时间长度(分钟)";
+
 // ---- 批次 4 的 SysMsg 正文（`MessageSettings` / `CommandHelp` 原文；`String.ini` 未随部署提供 ⇒ 取
 // ---- `SystemModule/MessageSettings.cs` 的构造默认值，见 T-191）----
 pub const USER_FULL_TITLE: &str = "设置服务器最高上线人数。";
@@ -424,8 +433,12 @@ pub enum Imp {
     /// `UnBindUseItemCommand`（现网 `@UnBindUseItem`；体整段注释）。
     UnBindUseItem,
 
-    /// 未接的 88 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条）：现网全被权限门挡住，
-    /// 命令体留 G4-G6。
+    // ---- 批次 5 · 脚本可达族（卡 `openmir2-gm-impl-shutup`，tier=R）----
+    /// `ShutupCommand`（现网 `@禁言`；`DenySayMsgList` 写入整段被注释 ⇒ 只发一条 SysMsg）。
+    Shutup,
+
+    /// 未接的 87 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 1 条）：
+    /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
 }
 
@@ -2127,6 +2140,9 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::TrainingSkill => training_skill(parameters, world),
         Imp::UnBindUseItem => unbind_use_item(),
 
+        // ---- 批次 5 · 脚本可达族（`GMEXECUTE` 抬权可达，tier=R）----
+        Imp::Shutup => shutup(parameters),
+
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -2135,6 +2151,63 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
             log_note: Some("GM 命令体未实现（G1 + 批次 2/3 之外；现网权限门先挡）"),
         },
     }
+}
+
+/// `ShutupCommand.Execute`（`ShutupCommand.cs:15-57`，现网 `@禁言`）。
+///
+/// **实际执行行**（逐行核过 `src/Modules/GameCommand/Commands/ShutupCommand.cs`）：
+/// - `:21-22` 取 `sHumanName`/`sTime`（缺参补空串）；
+/// - `:23-28` 参数校验：`sTime` 空 **或** `sHumanName` 空 **或** `sHumanName[1] == '?'`
+///   ⇒ `命令格式: @禁言 人物名称  时间长度(分钟)`（Red/Hint）并 `return`。注意 C# `||`
+///   **短路**：`sTime` 为空时根本不访问 `sHumanName[1]`；`sHumanName` 只有一个 UTF-16 码元
+///   时 `sHumanName[1]` 抛 `IndexOutOfRangeException`，被 `PlayObject.Chat.cs:402-406` 的
+///   catch 吞掉 ⇒ **零帧**；
+/// - `:29` `dwTime = (uint)HUtil32.StrToInt(sTime, 5)`（`int.TryParse` 失败取 5；负值按
+///   `unchecked` 回转成 uint，例如 `-1` ⇒ `4294967295`）；
+/// - `:30-55` `EnterCriticalSection/LeaveCriticalSection(DenySayMsgList)` 之间的
+///   **整段 `ContainsKey`/`Add`/`GetIndex` 逻辑（`:33-50`）被注释** ⇒ 不改任何状态、
+///   不加任何禁言名单、不落库；
+/// - `:56` 唯一实际副作用：`SysMsg("{0} 已被禁言{1}分钟", Red, Hint)`——**发给调用者**
+///   （`PlayerActor`），不是目标玩家。
+fn shutup(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let human = params.first().copied().unwrap_or("");
+    let time = params.get(1).copied().unwrap_or("");
+    // C# `||` 短路：`sTime` 空 ⇒ 直接回执，不访问 `sHumanName[1]`。
+    if time.is_empty() || human.is_empty() {
+        return red(SHUTUP_HELP);
+    }
+    // `!string.IsNullOrEmpty(sHumanName) && sHumanName[1] == '?'`（UTF-16 下标）。
+    match second_utf16_is_question(human) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return red(SHUTUP_HELP),
+        Some(false) => {}
+    }
+    // `(uint)HUtil32.StrToInt(sTime, 5)`：int → uint 的 unchecked 回转用 `as`。
+    let dw_time = str_to_int(time, 5) as u32;
+    red(format!("{human} 已被禁言{dw_time}分钟"))
+}
+
+/// `ActionOfGmExecute`（`ExecutionProcessingSys.cs:4925-4947`）的抬权语义：
+/// `Permission = 10` ⇒ 执行 `@<cmd> …` ⇒ **还原**旧权限（oracle `try/finally`）。
+///
+/// **生产接线点未接**：oracle 的落点是 `playerActor.ProcessUserLineMsg(sData)`；本仓 game-svr
+/// 的 `ScriptPlayer` 适配器（`npc::NpcPlayer`）目前**未覆写** `process_user_line_msg` /
+/// `set_permission`（`crates/script/src/engine/mod.rs:185-190/547-549` 的缺省 no-op）⇒
+/// 脚本里的 `GMEXECUTE` 暂时到不了本函数。本卡把「命令体 + 抬权语义」落成可复跑的门面，
+/// 适配器接线是跨 8 张 `openmir2-gm-impl-*` 卡的共享缝隙（见卡上 comment 与
+/// `whitelist.md` T-209 的窗口项）。
+pub fn execute_script_line(
+    sess: &mut GmSession,
+    cfg: &GmConfig,
+    world: &GmWorld<'_>,
+    line: &str,
+) -> GmResult {
+    let old = sess.permission;
+    sess.permission = 10;
+    let result = execute(sess, cfg, world, line);
+    sess.permission = old;
+    result
 }
 
 /// 生效命令表：185 行 = `src/Modules/GameCommand/Commands/` 下的 185 个 `GameCommand` 子类
@@ -3156,7 +3229,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "禁言",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::Shutup,
     },
     CommandDef {
         name: "职业变更",
@@ -4408,7 +4481,7 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 的命令体接上（`Unimplemented` 从 180 降到 88），且命令名 → 实现标签固定。
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5 的命令体接上（`Unimplemented` 从 180 降到 87），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4416,16 +4489,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            97,
-            "97 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条"
+            98,
+            "98 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言）1 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            88,
-            "185 - 97"
+            87,
+            "185 - 98"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -5633,5 +5706,157 @@ mod tests {
         // 抽样派发：`@AdjustExp`（体只有权限自检）⇒ 零帧零 note 之外的东西。
         let (r, _) = run_gm("@AdjustExp");
         assert!(r.msgs.is_empty() && r.found);
+    }
+
+    // ==================== 批次 5 · 脚本可达族（`@禁言`，卡 openmir2-gm-impl-shutup，tier=R）=========
+
+    /// 命令表：`禁言` = `ShutupCommand`，`PermissionMin=10`，`Execute` 形参 2。
+    #[test]
+    fn shutup_is_wired_in_the_command_table() {
+        let def = find("禁言").expect("@禁言 在 185 行表里");
+        assert_eq!(def.imp, Imp::Shutup);
+        assert_eq!(def.perm_min, 10);
+        assert_eq!(def.params, 2);
+        // 帮助文本逐字节：`人物名称` 与 `时间长度(分钟)` 之间是**两个** ASCII 空格
+        // （`CommandHelp.cs:28`），现网名 `禁言`（`conf[Command].Shutup`）。
+        assert_eq!(
+            SHUTUP_HELP, "命令格式: @禁言 人物名称  时间长度(分钟)",
+            "`GameCommandParamUnKnow` + `GameCommandShutupHelpMsg` 的拼装产物"
+        );
+    }
+
+    /// ① 正常触发：**恰好一条** Red SysMsg，文本逐字节（UTF-8 断言 + 线上 GBK 字节断言）。
+    ///
+    /// oracle `ShutupCommand.cs:56`：`SysMsg(string.Format(GameCommandShutupHumanMsg,
+    /// sHumanName, dwTime), MsgColor.Red, MsgType.Hint)`；`:33-50` 的 `DenySayMsgList`
+    /// 写入整段被注释 ⇒ 没有任何其它副作用。
+    #[test]
+    fn shutup_sends_exactly_one_red_sysmsg_bytes() {
+        let (r, _) = run_gm("@禁言 zhangsan 30");
+        assert!(r.found && r.parsed, "命中命令体，不走未知命令回落");
+        assert_eq!(r.msgs.len(), 1, "恰好一条 SysMsg（不能多帧）");
+        assert_eq!(r.msgs[0].color, GmColor::Red);
+        assert_eq!(r.msgs[0].text, "zhangsan 已被禁言30分钟");
+        assert!(r.frames.is_empty(), "本命令只发 SysMsg，无其它帧");
+        assert!(r.log_note.is_none(), "正常支没有吞异常/未接项");
+        // 线上编码（`gbk_encode`）后的字节：ASCII 段 + GBK 双字节字符。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0x7a, 0x68, 0x61, 0x6e, 0x67, 0x73, 0x61, 0x6e, // "zhangsan"
+                0x20, // ' '
+                0xd2, 0xd1, // 已
+                0xb1, 0xbb, // 被
+                0xbd, 0xfb, // 禁
+                0xd1, 0xd4, // 言
+                0x33, 0x30, // "30"
+                0xb7, 0xd6, // 分
+                0xd6, 0xd3, // 钟
+            ]
+        );
+    }
+
+    /// ② 参数校验与越界怪癖（`ShutupCommand.cs:21-29`）。
+    ///
+    /// 顺序：`sTime` 空 或 `sHumanName` 空 或 `sHumanName[1] == '?'` ⇒ 帮助；C# `||` 短路
+    /// ⇒ `sTime` 空时**不会**触发 `sHumanName[1]` 的越界异常。
+    #[test]
+    fn shutup_param_validation_and_single_char_name_quirk() {
+        // 缺时间 / 缺名字。
+        assert_eq!(
+            texts(&run_gm("@禁言 zhangsan").0),
+            vec![(GmColor::Red, SHUTUP_HELP)]
+        );
+        assert_eq!(texts(&run_gm("@禁言").0), vec![(GmColor::Red, SHUTUP_HELP)]);
+        // `String.Split(' ')` 保留空段 ⇒ 双空格把 `sTime` 变成空串（不是取后面的 30）。
+        assert_eq!(
+            texts(&run_gm("@禁言 zhangsan  30").0),
+            vec![(GmColor::Red, SHUTUP_HELP)]
+        );
+        // 第 2 个 UTF-16 码元是 '?' ⇒ 帮助。
+        assert_eq!(
+            texts(&run_gm("@禁言 x? 30").0),
+            vec![(GmColor::Red, SHUTUP_HELP)]
+        );
+        // 单字符名字 + 非空时间 ⇒ `sHumanName[1]` 越界，被 `ProcessUserLineMsg` 的 catch
+        // 吞掉 ⇒ 零帧（`ShutupCommand.cs:24` 的 `sHumanName[1]`，不是 `[0]`）。
+        let (r, _) = run_gm("@禁言 x 30");
+        assert!(r.found, "命令已命中（异常发生在命令体内部）");
+        assert!(r.msgs.is_empty(), "越界 ⇒ 零帧");
+        assert!(r.frames.is_empty());
+        assert_eq!(r.log_note, Some(NOTE_INDEX_OUT_OF_RANGE));
+        // 但 `sTime` 为空时短路 ⇒ 不碰 `sHumanName[1]`，正常回执。
+        assert_eq!(
+            texts(&run_gm("@禁言 x").0),
+            vec![(GmColor::Red, SHUTUP_HELP)]
+        );
+        // 时间不可解析 ⇒ `StrToInt` 缺省 5。
+        assert_eq!(
+            texts(&run_gm("@禁言 zhangsan abc").0),
+            vec![(GmColor::Red, "zhangsan 已被禁言5分钟")]
+        );
+        // 负值经 `(uint)` unchecked 回转（-1 ⇒ 4294967295），再按 uint 十进制格式化。
+        assert_eq!(
+            texts(&run_gm("@禁言 zhangsan -1").0),
+            vec![(GmColor::Red, "zhangsan 已被禁言4294967295分钟")]
+        );
+        // 多余的参数被忽略（只看 `@params[0]`/`[1]`）。
+        assert_eq!(
+            texts(&run_gm("@禁言 zhangsan 30 extra").0),
+            vec![(GmColor::Red, "zhangsan 已被禁言30分钟")]
+        );
+    }
+
+    /// ③ 权限门不过：命令体**零贡献**，只有 `CommandSystem.Execute` 的通用 `权限不够!!!`。
+    ///
+    /// 口径说明：oracle `GameCommand.Handle:37-40` 返回 `GameCommandPermissionTooLow`，由
+    /// `CommandSystem.cs:180-195` 作为**一条** Red SysMsg 下发——这不是命令体的帧，所以
+    /// 「零帧」应读作「命令体零帧、零副作用」；这里按 oracle 真实帧面断言恰好这一条。
+    #[test]
+    fn shutup_permission_gate_blocks_body() {
+        let (r, sess) = run("@禁言 zhangsan 30");
+        assert!(r.found && r.parsed);
+        assert_eq!(texts(&r), vec![(GmColor::Red, PERMISSION_TOO_LOW)]);
+        assert!(r.frames.is_empty());
+        assert!(r.log_note.is_none());
+        assert_eq!(sess.permission, 0, "被挡下时权限不变");
+        // 命令体文本不得出现（没有「已被禁言」回执）。
+        assert!(r.msgs.iter().all(|m| !m.text.contains("已被禁言")));
+    }
+
+    /// ④ 新角色登录路径：`Gmexecute 禁言 self 10000`（`QuestDiary/游戏登陆/登陆脚本.txt:16`
+    /// ← `MapQuest_def/QManage.txt:37` #CALL ← `PlayObject.cs:1440` 的 `@Login`，`#IF ISNEWHUMAN`）。
+    ///
+    /// `ActionOfGmExecute`（`ExecutionProcessingSys.cs:4925-4947`）拼出
+    /// `"@{sParam1} {sParam2} {sParam3} {sParam4} {sParam5} {sParam6}"`（`sParam2=Self` ⇒ 角色名，
+    /// 尾部三个空参 ⇒ 三个尾随空格），再把 `Permission` 临时置 10 执行、随后还原。
+    ///
+    /// **能构造的部分**在此逐字节钉住（抬权前被门挡住、抬权后一条回执、权限还原）。
+    /// **构造不了的部分**：game-svr 的 `ScriptPlayer` 适配器 `NpcPlayer` 未覆写
+    /// `process_user_line_msg`/`set_permission`（`crates/script/src/engine/mod.rs:547-549`
+    /// 缺省 no-op），所以从 `@Login` 脚本到本条命令的**生产跳线**尚不存在——这是跨 8 张
+    /// `openmir2-gm-impl-*` 卡共享的缝隙，已作为本卡 R 窗口项/comment 登记（T-209）。
+    #[test]
+    fn shutup_script_gmexecute_path_raises_permission_then_restores() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        assert_eq!(sess.permission, 0, "现网 Permission 的来源被锁死为 0");
+        // 与 `ActionOfGmExecute` 同形的 sData（尾随 3 个空格由空参产生）。
+        let s_data = format!("@{} {} {} {} {} {}", "禁言", "新人", "10000", "", "", "");
+        assert_eq!(s_data, "@禁言 新人 10000   ");
+        // 不抬权：落到权限门（这正是牙 #2 的反证：删掉抬权 ⇒ 这里变成 `权限不够!!!`）。
+        let gated = execute(&mut sess, &cfg, &world, &s_data);
+        assert_eq!(texts(&gated), vec![(GmColor::Red, PERMISSION_TOO_LOW)]);
+        // 抬权（oracle `try/finally`）：恰好一条回执，执行后权限还原。
+        let lifted = execute_script_line(&mut sess, &cfg, &world, &s_data);
+        assert_eq!(
+            texts(&lifted),
+            vec![(GmColor::Red, "新人 已被禁言10000分钟")],
+            "脚本里写的时长是 10000（分钟），原样进文本"
+        );
+        assert!(lifted.frames.is_empty());
+        assert_eq!(sess.permission, 0, "抬权是临时的，执行完必须还原");
     }
 }
