@@ -79,7 +79,7 @@ python tools/goal/goal_gate.py --full
 | `--repo <dir>` | 仓库根，默认脚本所在仓库 |
 | `--timeout N` / `--test-timeout N` | 单命令超时（默认 1800s）/ cargo test 超时（默认 7200s） |
 | `--allow-verdict-grep` | 条件2 采信 comment/review 里的 `VERDICT=PASS` 文本标记（默认关闭） |
-| `selftest` | 合成输入自检（60 条断言，含 6 颗牙） |
+| `selftest` | 合成输入自检（64 条断言，含 6 颗牙） |
 
 退出码：`0` 四条全 PASS；`1` 有 FAIL；`2` 无 FAIL 但有「需人工」；`3` 脚本自身错误（参数/路径）。
 
@@ -214,6 +214,8 @@ python tools/goal/goal_gate.py --full
   没有任何登记的才判「需人工」，供 owner 确认「是否已重开且新工作有证据」。
 * **whitelist 重复编号**：`build_whitelist` 取并集（不会丢卡↔T 关联），但仍以「提示」列出重复号，
   登记号唯一性归 `m3_whitelist_registry_audit.py`（该门当前 `scope=T-36+`，T-4/T-6 这类低号重复覆盖不到）。
+* **代理的认知边界**：若某卡代码已合但线程零痕迹（无 `merge_result`/`patch`/`review`/`comment`），任何代理都发现不了它——
+  本门看不到这种卡。当前无此例，但记为已知盲区（勿当成「已覆盖」）。
 * **JSON 结构**：`{schema, generated_ts, repo, envir, mode, conditions[4]{id,name,state,label,detail,evidence},
   overall, overall_label, fail_items[], need_items[], warnings[]}`；`state ∈ {pass, fail, need_human}`；
   条件2 的 `evidence.r_cards[]` 含每卡 `category/board_column/merged/window_required/strong_t/weak_t/comment_evidence`。
@@ -222,12 +224,12 @@ python tools/goal/goal_gate.py --full
 
 ```sh
 python tools/goal/goal_gate.py selftest --verbose
-# selftest：60 条断言，60 通过，0 失败
+# selftest：64 条断言，64 通过，0 失败
 ```
 
 覆盖四条件各自的 PASS / FAIL / 需人工 分支（含覆盖行解析、语料完整性计数、**rc=1 但未实现 0 ⇒ FAIL**
 的 fail-closed 耦合、任一条目 tier 枚举、board 已完成、已裁定登记（decision/verdict 两种写法、取最新 approve）、
 merged 未 closed、VERDICT 子串默认不认、need_items 按 last_status_ts 升序、弱关联 T 不冒认、未验签、
 board 缺失、master 漂移、ls-remote 不可用、tracked 空/schema 漂移/counts 不一致、**tracked=0 且行集非空 ⇒ PASS**、
-**approve+false+tier_why=「时序/竞态」⇒ 需人工**、专用 `why_not_window` 优先、未开工卡 ⇒ 未合并、状态优先级），并内置**六颗牙**：忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS、
+**approve+false+tier_why=「时序/竞态」⇒ 需人工**、**否定不跨中文逗号/转折词（「不涉及时序，但涉及 RNG」⇒ 拒）**、顿号列表仍被统辖（「不触 RNG、时序、落库」⇒ 放行）、专用 `why_not_window` 优先、未开工卡 ⇒ 未合并、状态优先级），并内置**六颗牙**：忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS、
 把 tracked=0 一律判需人工（H-3 旧口径）、把未开工卡判成 FAIL（I-5）—— 任一退化都会被断言判红。改判定逻辑后先跑 selftest 再跑快速模式。

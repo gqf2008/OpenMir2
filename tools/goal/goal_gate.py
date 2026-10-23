@@ -425,11 +425,14 @@ VETO_TERMS = ("时序", "竞态", "RNG", "落库", "战斗数值", "数值", "�
 NEG_CUES = ("不触", "不涉及", "不涉", "不含", "不包括", "不改变", "不影响", "无", "零", "未", "非", "免", "勿")
 
 
+# J-1：子句切分含中文逗号与转折词；顿号（、）不切，以保留「不触 RNG、时序、落库」的统辖列表
+CLAUSE_SPLIT_RE = re.compile(r"[，,。；;\n]|但是|然而|不过|可是|但")
+
 def _waiver_ok(text):
-    """tier_why 回退是否构成「不需要窗口」的说明：命中白名单短语且否决词均处于否定语境。"""
+    """tier_why 回退是否构成「不需要窗口」：命中白名单短语，且否决词在同一子句内未被否定。"""
     if not text or not any(phrase in text for phrase in WAIVER_PHRASES):
         return False
-    for clause in re.split(r"[。；;\n]", text):
+    for clause in CLAUSE_SPLIT_RE.split(text):
         for term in VETO_TERMS:
             start = 0
             while True:
@@ -1213,6 +1216,15 @@ def selftest(verbose=False):
         check("whitelist exclude_ids 排掉 principal 名", lambda: (
             "openmir2-card-alpha" not in build_whitelist(
                 wl_path, exclude_ids={"openmir2-card-alpha"})["card_to_t"], "excluded"))
+
+        check("J-1 否定不跨转折：『不涉及时序，但涉及 RNG』=> 拒", lambda: (
+            _waiver_ok("纯逻辑，不涉及时序，但涉及 RNG") is False, "cross-conjunction RNG"))
+        check("J-1 否定不跨转折：『不涉及时序，但涉及落库』=> 拒", lambda: (
+            _waiver_ok("纯逻辑片，不涉及时序，但涉及落库") is False, "cross-conjunction 落库"))
+        check("J-1 否定不跨逗号：『无卡，涉及时序』=> 拒", lambda: (
+            _waiver_ok("纯逻辑，无卡，涉及时序") is False, "comma scope"))
+        check("J-1 顿号列表仍被否定统辖：『不触 RNG、时序、落库』=> 放行", lambda: (
+            _waiver_ok("零 .rs，不触 RNG、时序、落库") is True, "list governed"))
 
         ok_stdout = ("文件: 639 加载: 639 缺失: 0 异常: 0\n"
                      "解析错误: 427；解码异常文件: 0\n"
