@@ -48,13 +48,13 @@
 
 ---
 
-## 7. 晚场（20:00–21:45）
+## 7. 晚场（20:00 起；主账快照 21:44；21:44 之后的后续见 §7.6）
 
-> **快照戳**：合并账 `git log --oneline --merges 6665e1178..HEAD` **现取**于 master **`1893470a0`** @ **2026-10-23 21:44:09 +0800**；
+> **快照戳**：合并账 `git log --oneline --merges --first-parent 6665e1178..HEAD` **现取**于 master **`1893470a0`** @ **2026-10-23 21:44:09 +0800**；
 > 线程/看板取自 `git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*' '+refs/collab/meta/*:refs/collab/meta/*'` @ **21:47 +0800**（7176 条签名条目）。
 > 身份一律写**签名条目 `actor` + entry `oid`**；`git log` 的 author 是共享工作副本的配置噪声，**不作为作者依据**（纪律 16，`docs/leader-queue-20261023.md:95-98`）。
 
-### 7.1 晚场合并账（8 条，`git log --oneline --merges 6665e1178..HEAD` 现取）
+### 7.1 晚场合并账（8 条，`git log --oneline --merges --first-parent 6665e1178..HEAD` 现取）
 
 | # | merge oid（时间） | 一句话 | tier | 审查：签名 actor @ review oid（verdict） |
 |---|---|---|---|---|
@@ -71,6 +71,7 @@
 `04366adc8` 20:31 车道死活判据、`a9beb4c44` 20:53 纪律 15/16、`1893470a0` 21:44 纪律 17。
 
 > 计数口径：`git log --oneline --merges --first-parent 6665e1178..HEAD` = **8**；同区间 `--no-merges` = **31**（含被合并分支内部提交，不逐条列）。
+> **`--first-parent` 不能省**：同一条命令去掉它，在 `1893470a0` 上是 **20 条**（多出 `54e358127`/`6d3b2b8ab`/`e0bb7eed8` 等被合并分支内部的合并），与表里的 8 条对不上。
 > `f7a9deee1` 是**一次整合树合并**、四条 `merge_result` 记账，不是四次合并。
 
 ### 7.2 三类新教训（卡 / 命令 / 真实 rc / 修法）
@@ -135,16 +136,19 @@
 | 4 | 判据前提错 | 判据里的每个 `file:line` 用 `sed -n 'Np'` 取出的行与描述不符；或判据依赖的键在**部署件**里 `grep` 0 命中 | GMEXECUTE 不展开 `<$…>`、`..\` 未剥离、`tracked>0 ≠ FAIL` |
 | 5 | 证据哈希不是从提交树取 | 工作区文件的 sha256 ≠ `git show <commit>:<path>` 的 sha256（工作区可能带未提交改动） | 4 次 |
 | 6 | 行号漂移误红/漏红 | `--strict-lines` rc≠0；默认档 WARN 行数 > 0 且当日改过该文件 | `npc.rs` 当日 9~53 处漂移 |
-| 7 | **自检调用点在 rc 判定之后**（新） | `grep -n "if fail_n" <tool>.py` 的行号 **小于** 新增 `_selftest_*()` 调用点行号；或「把新检查改成必失败 ⇒ rc 仍 0」 | inventory-fixture / rust-binary-evidence（§7.2 A） |
+| 7 | **自检调用点在 rc 判定之后**（新） | **主信号（可靠，用它）**：把任一新检查改成必失败（如 `return [(False,"SYNTHETIC-FAIL")]`）再跑 `--selftest`，**rc 仍 0** ⇒ 假绿。**辅助（必须锚定）**：只取**行首非注释**的 `if fail_n:` 行号，与**新增那条** `_selftest_*` 调用行号比大小；直接 `grep "if fail_n"` 会先命中注释行，把正确代码误判成假绿 | inventory-fixture / rust-binary-evidence（§7.2 A） |
 | 8 | **新校验自己判错因果**（新） | 新规则上线后**既有**门禁/夹具由绿变红（被检输入本身合法）；或把规则文案的因果链逐跳 `sed -n` 核 oracle，任一跳方向相反 | R6「越界方向必然超时」假红（§7.2 B） |
 | 9 | **门禁工具就地改写 tracked 文件**（新） | `git status --porcelain` 出现 **`MM`**；或 `git diff --name-only` 非空而你并没有改那个文件；提交前 `git diff` 必须为空 | `selftest_mutations.py` 跑在主检出（§7.2 C） |
 
 **一页速查（贴到下一批的开工清单）**：
 
 ```sh
-# 7：新增自检在不在 rc 路径上（把行号比大小）
-grep -n 'if fail_n' tools/conformance/card_window.py             # 判定行
-grep -n '_selftest_[a-z_]*(tmp' tools/conformance/card_window.py # 调用行必须更小
+# 7：新增自检在不在 rc 路径上
+#  主信号（可靠）：把某条新检查改成必失败，rc 仍 0 ⇒ 假绿（只变文本不变 rc 的牙是假牙）
+#  辅助：行号只认「行首锚定」的代码行；注释里也写着 "if fail_n"，裸 grep 会先把正确代码判死
+grep -nE '^[[:space:]]*if fail_n:' tools/conformance/card_window.py        # 判定行（121a6b48b 上为 4477）
+grep -nE '^[[:space:]]*for cond, msg in _selftest_[a-z_]+\(tmp' tools/conformance/card_window.py  # 新增调用行（121a6b48b 上为 4388）
+# 调用行 < 判定行 = 正确。注：裸 `grep -n 'if fail_n'` 在两行里先命中 :4386（注释），比大小会误判。
 
 # 9：工具有没有弄脏树（提交前必须干净）
 git status --porcelain        # 见 MM / 意外 M ⇒ 停；git diff 必须为空
@@ -177,20 +181,40 @@ git show <commit>:<path> > /tmp/x && sha256sum /tmp/x <path>
 - **`combat_strike` = BLOCKED-FIXTURE**（合并 `302038193`，`merge_result` `c09caecd` @ 21:09）：全库 **7338 角色 × 95409 件装备 × 5 个确定性目标无可行配对**，
   最好的一对 **joint 24%**；根因是伤害扣 `[AC, 2AC-1]` 随机护甲，必伤害要 `DC_min > 2*AC-1` 且 `HitPoint ≥ SPEED-1`。
   另有第二条：目标是**敌对守卫**，它打玩家也让玩家收 `SM_STRUCK(31)` 且 `recog=self`，而 `wait_for` 只按 ident 匹配 ⇒ **跑绿 ≠ 玩家命中**（四处封口写死「窗口批次不得消费本场景任何 PASS」）。
-  正在补硬门：新卡 `openmir2-combat-strike-blocked-marker`（in-progress @ 21:52，给 JSON 加顶层 `blocked`，让 `card_window --dry-run` rc=2）。
+  硬门：21:55:34 已随 `2a69cd6e0` 合入（`combat_strike.json` 加顶层 `blocked`，`card_window --dry-run` rc=2；`openmir2-reviewer-3` @ `ee95abd52a` approve），
+  更早一步的通用硬门 `8dac04eb0`（21:47:52）同样由 reviewer-3 @ `5fd9edfdda` approve ⇒ BLOCKED 从「流程级封口」升级为「工具级 rc=2」。**21:44 快照时该卡仍是 in-progress。**
 - **`upgrade_retrieve` 脚本路可达、但 Rust 侧未接线**：唯一可用脚本路是 `UPGRADEITEMEX`（**34 行**；`TAKECHECKITEM`/`UPGRADEITEM`/`CHECKUPGRADEITEMS`/`RANDOMUPGRADEITEM` 全 0）。
   两个门：① **取回有 600000ms 时效门** —— `[Setup] UPgradeWeaponGetBackTime=600000`（部署 `Server.conf:331`；oracle 默认 `60*60*1000` = `GameSvrConf.cs:1421`，读键 `ServerConf.cs:230`，判点 `Merchant.cs:608`；**600000 是部署值不是源码字面量**）；
   ② Rust 侧 `@upgradenow`/`@getbackupgnow` **未执行**（`mir2-rs/bins/game-svr/src/lib.rs:5849-5855` / `:5890-5895` 只 `glog`「GotoLable 未执行（Market_Def 商人脚本未装载）」；`shop.rs` 成功支无 643、失败支零帧）⇒ **修好前不得拿本场景判 Rust 失败**。
 - **`equip_struck_save`：原「零刷怪」前提已被证伪，且已在 21:50 返工出新 placement**（`reviewer-6` @ `46ddb64bce`，blocking）：
   旧 placement `map 0 (288,610)` 被 `MonGen.txt:112/113/124/125`（Range=50、Count=50，箱体覆盖玩家格）击穿，期望约 **12 只怪**进 AOI，且刷怪位置按墙钟不可复现。
-  返工（status @ 21:50）改为 `map 0103 铁器店 (19,19)`、目标 `卫家店`，并逐条证明 0103 在 `MonGen.txt` **零行**、三份部署件 `cmp` 相同 ⇒ 视野内确定零怪；现为 **needs-review（待审），不再是「待重选」**。
+  返工（status @ 21:50:11）改为 `map 0103 铁器店 (19,19)`、目标 `卫家店`，并逐条证明 0103 在 `MonGen.txt` **零行**、三份部署件 `cmp` 相同 ⇒ 视野内确定零怪。
+  **状态带戳写**：21:50 时为 needs-review；**21:56:53 已随 `121a6b48b` 合入 master**（tier=L，`openmir2-reviewer-6` @ `8ed0da421f` approve；`merge_result` `cf27a7bc9d`），此后 card 为 closed。
 - **35 张不可协议对拍**：口径同 `docs/window-batch-plan-20261023.md` §1，今晚未变（未重算）。
 
 ### 7.5 复核时发现的口径不一致（供下一批订正）
 
-1. **`equip_struck_save` 的现状已过期**：派单说法是「待重选 placement」，实际 21:50 已出新 placement 并进 needs-review（见 §7.4）。
-2. **Rust 行号漂移**：卡面与 review 文案写 `bins/game-svr/src/lib.rs:8836-8848`，实测在 `302038193` 与 `1893470a0` 上都是 `pose_dir` **8828**、`e.ai.dir = dir` **8840**、`front_target` **8846**
-   ⇒ 正确引用是 **8828–8846**。同一旧行号还抄在代码注释里（`tools/probe/mir2_probe.py:856`），属清单第 6 类（行号漂移），建议引用时用**锚文本**（`let pose_dir = …`）而不是行号。
+1. **`equip_struck_save` 的派单说法过期两次**：派单写「待重选 placement」，实际 21:50 已出新 placement（进 needs-review），21:56:53 又随 `121a6b48b` 合入（见 §7.4/§7.6）。→ **凡涉及卡片状态，一律写「截至 `<commit>` @ `<时间>`」，不要写「现为」**。
+2. **Rust 行号是「抄错」，不是「漂移」**：卡面与 review 写的 `bins/game-svr/src/lib.rs:8836-8848` 在**被审的任何一个 commit 上都不成立** ——
+   `let pose_dir` 实测 `6665e1178`=**8533**、`a7cd30f37`=**8473**、`f7a9deee1`=**8828**、`1c9753803`=**8828**、`1893470a0`=**8828**（同一个文件在三次合并里被前后移动，只有 8828 这一段成立过）。
+   正确引用是 **8828–8846**（`pose_dir`=8828 / `(fx,fy)`=8834 / `e.ai.dir = dir`=8840 / `front_target`=8846，在 `302038193`、`1893470a0`、`121a6b48b` 三点一致）。
+   同一错行号还抄在两处注释里：**`1893470a0` 的 `tools/probe/mir2_probe.py:856` 与 `:1914`**（到 `121a6b48b` 已变成 **`:889` 与 `:1951`**）⇒ 引注释位置时**必须带 commit**，或直接用**锚文本**（`let pose_dir = …`）代替行号。
 3. **「600000ms」不是 oracle 常量**：C# 默认是 `60*60*1000`（`GameSvrConf.cs:1421`），600000 来自部署 `Server.conf:331`。写窗口判据时不要写成「oracle 硬编码 10 分钟」。
 4. **R 卡精确总数查不到**：理由见 §7.4（review schema 混杂）；**不要**把 173 或 178 当成实时真值。
 5. **审查人身份**：`57495e25f` 的审查人是 `openmir2-worker-66`（worker 角色而非 `reviewer-*` 池），与作者 `openmir2-worker-70` 不同 principal ⇒ 满足「审查必须不同 principal」，但命名上不是 reviewer 身份，引用时照实写。
+
+### 7.6 主账快照之后的合并（21:44 → 21:57，截至 master `121a6b48b`）
+
+§7.1 的主账冻结在 `1893470a0`（21:44:09）。此后 first-parent 上又落了 3 条合并，均 tier=L：
+
+| merge oid（时间） | 一句话 | 审查：actor @ review oid（verdict） | merge_result |
+|---|---|---|---|
+| `8dac04eb0` 21:47:52 | BLOCKED 场景的**技术级**硬门（`card/window-blocked-hard-gate`） | `openmir2-reviewer-3` @ `5fd9edfdda`（approve） | `7374e76512` |
+| `2a69cd6e0` 21:55:34 | `combat_strike.json` 补顶层 `blocked`，BLOCKED 硬门真正生效（`--dry-run` rc=2） | `openmir2-reviewer-3` @ `ee95abd52a`（approve） | `a8320b6a0a` |
+| `121a6b48b` 21:56:53 | R7 `equip_struck_save` 场景合入（map 0103 铁器店 (19,19) 零刷怪 placement） | `openmir2-reviewer-6` @ `8ed0da421f`（approve） | `cf27a7bc9d` |
+
+对 §7.4 的影响（**只陈述与 commit 绑定的事实**）：
+
+- `equip_struck_save` 在 `121a6b48b` 之后**已合并**，不再「待审」；其窗口判据仍归 R7 真机窗口。
+- `combat_strike` 的 BLOCKED 由「流程级封口」升级为「工具级 rc=2（`blocked` 字段）」，但**仍是 BLOCKED-FIXTURE**，欠账不因硬门而减少。
+- 计数核对：`git log --oneline --merges 1893470a0..walgit/master` 与加 `--first-parent` 都 = **3**（前一段窗口里多出来的都是被合并分支**内部**的合并，本段没有）。
