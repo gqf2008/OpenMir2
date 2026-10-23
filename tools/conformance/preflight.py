@@ -44,6 +44,15 @@ SIDE_KEYS = ("pid_file", "require_pid_binaries")
 _TID = re.compile(r'"timeout_ms"\s*:')
 
 
+def _rel(path):
+    """相对仓库的展示路径；**跨盘**（仓库在 E:、TEMP 在 C:）时 relpath 会抛 ValueError
+    （review 368ab3a2 blocking），退回绝对路径即可。"""
+    try:
+        return os.path.relpath(path, REPO)
+    except ValueError:
+        return str(path)
+
+
 class StepFail(Exception):
     """单步失败：消息即 fix 建议之前的原因。"""
 
@@ -60,19 +69,19 @@ def check_docs(runbook=RUNBOOK, readme=SCEN_README):
         text = fh.read()
     if "probe_timeout_ms" not in text:
         problems.append("%s 缺 `probe_timeout_ms`（profile 键被静默忽略的老写法？）"
-                        % os.path.relpath(runbook, REPO))
+                        % _rel(runbook))
     if _TID.search(text):
         problems.append("%s 里又出现 profile 的 `\"timeout_ms\"`（会被**静默忽略**，probe 仍按 180s 被杀）"
-                        % os.path.relpath(runbook, REPO))
+                        % _rel(runbook))
     with open(readme, encoding="utf-8") as fh:
         text = fh.read()
     if "probe_timeout_ms" not in text:
         problems.append("%s 缺 `probe_timeout_ms`（步骤级 `timeout_ms` 与 profile 键是两回事）"
-                        % os.path.relpath(readme, REPO))
+                        % _rel(readme))
     if problems:
         raise StepFail("；".join(problems) + " ⇒ 按 runbook §0.5 第 0 步改回 `probe_timeout_ms`")
     return "%s + %s 口径 OK（DOC-KEYS）" % (
-        os.path.relpath(runbook, REPO), os.path.relpath(readme, REPO))
+        _rel(runbook), _rel(readme))
 
 
 # ---------------------------------------------------------------------------
@@ -100,21 +109,28 @@ def parse_whatif(stdout):
     return exe, sha, build
 
 
+def _run_ps(argv):
+    """默认 runner：起 powershell 跑 `-WhatIf`，返回 (rc, stdout, stderr)。"""
+    proc = subprocess.run(argv, capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
 def check_binary(script=BIN_SCRIPT, root="E:/tmp/conformance/rust-root",
                  log_dir="E:/tmp/conformance/rust-logs", ports_profile=None,
-                 require_release=True):
+                 require_release=True, runner=None):
+    """`runner` 只为 `--selftest` 注入桩：签名 (argv) -> (rc, stdout, stderr)。"""
     if not os.path.isfile(script):
         raise StepFail("找不到 %s ⇒ 确认在正确的检出里跑（该脚本按自身 $PSScriptRoot 解析 target/）"
-                       % os.path.relpath(script, REPO))
+                       % _rel(script))
     argv = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script,
             "-Root", root, "-LogDir", log_dir, "-WhatIf"]
     if ports_profile:
         argv += ["-PortsProfile", ports_profile]
-    proc = subprocess.run(argv, capture_output=True, text=True)
-    exe, sha, build = parse_whatif(proc.stdout)
-    if proc.returncode != 0:
+    rc, out, err = (runner or _run_ps)(argv)
+    exe, sha, build = parse_whatif(out)
+    if rc != 0:
         raise StepFail("start_mir2_server.ps1 -WhatIf rc=%d：%s"
-                       % (proc.returncode, (proc.stderr or proc.stdout).strip()[:300]))
+                       % (rc, (err or out).strip()[:300]))
     if not exe or build is None:
         raise StepFail("-WhatIf 输出缺 SERVER_EXE/SERVER_EXE_BUILD 行（脚本变了？）")
     if build != "Release":
@@ -310,36 +326,52 @@ def selftest():
     with open(exe, "wb") as fh:
         fh.write(b"stub-binary")
     sha = _sha256(exe)
-    # 直接对 parse_whatif + 判定逻辑做桩（不依赖 powershell）
-    def eval_binary(stdout, rc=0, require_release=True):
-        exe2, sha2, build = parse_whatif(stdout)
-        if rc != 0:
-            raise StepFail("rc=%d" % rc)
-        if build != "Release" and require_release:
-            raise StepFail("SERVER_EXE_BUILD=%s" % build)
-        if sha2 in (None, "", "MISSING"):
-            raise StepFail("sha256 MISSING")
-        if _sha256(exe2) != sha2.lower():
-            raise StepFail("打印的 sha256 与本地重算不一致")
-        return "ok"
+    # **真测被测函数**（review 368ab3a2 F2）：用 stub runner 调 `check_binary` 本体，
+    # 而不是在测试里重写一遍判定——删掉 `check_binary` 的 Release 硬门/sha 比对，这里必须红。
+    ps_stub = os.path.join(tmp, "start_mir2_server.ps1")
+    with open(ps_stub, "w", encoding="utf-8") as fh:
+        fh.write("# stub\n")
 
-    good_out = "SERVER_EXE         %s\nSERVER_EXE_SHA256  %s\nSERVER_EXE_BUILD   Release\n" % (exe, sha)
-    debug_out = "SERVER_EXE         %s\nSERVER_EXE_SHA256  %s\nSERVER_EXE_BUILD   Debug-Fallback\n" % (exe, sha)
+    def stub_runner(stdout, rc=0):
+        def run(_argv):
+            return rc, stdout, ""
+        return run
+
+    good_out = ("SERVER_EXE         %s\nSERVER_EXE_SHA256  %s\nSERVER_EXE_BUILD   Release\n"
+                % (exe, sha))
+    debug_out = ("SERVER_EXE         %s\nSERVER_EXE_SHA256  %s\nSERVER_EXE_BUILD   Debug-Fallback\n"
+                 % (exe, sha))
+
+    def run_bin(stdout, rc=0, require_release=True):
+        return check_binary(script=ps_stub, root="r", log_dir="l", ports_profile=None,
+                            require_release=require_release,
+                            runner=stub_runner(stdout, rc))
+
     try:
-        eval_binary(good_out)
-        chk(True, "②a Release + sha 一致 ⇒ 通过")
+        run_bin(good_out)
+        chk(True, "②a Release + sha 一致 ⇒ 通过（调 check_binary 本体）")
     except StepFail as ex:
         chk(False, "②a Release + sha 一致 ⇒ 通过（%s）" % ex)
     try:
-        eval_binary(debug_out)
+        run_bin(debug_out)
         chk(False, "②b Debug-Fallback 必须红")
     except StepFail as ex:
         chk("Debug-Fallback" in str(ex), "②b Debug-Fallback 必须红并点名（%s）" % str(ex)[:60])
     try:
-        eval_binary(good_out.replace(sha, "0" * 64))
+        run_bin(debug_out, require_release=False)
+        chk(True, "②b' --allow-debug 显式降级 ⇒ 不抛（策略开关生效）")
+    except StepFail as ex:
+        chk(False, "②b' --allow-debug 显式降级 ⇒ 不抛（%s）" % ex)
+    try:
+        run_bin(good_out.replace(sha, "0" * 64))
         chk(False, "②c 打印 sha 与本地重算不符必须红")
     except StepFail as ex:
         chk("sha256" in str(ex), "②c 打印 sha 与本地重算不符必须红（%s）" % str(ex)[:60])
+    try:
+        run_bin(good_out, rc=2)
+        chk(False, "②d -WhatIf rc≠0 必须红")
+    except StepFail as ex:
+        chk("rc=2" in str(ex), "②d -WhatIf rc≠0 必须红（%s）" % str(ex)[:60])
 
     # ③ 端口
     prof_ports = {"sides": {"a": {"ports": [15000, 17000]}, "b": {"ports": [17000, 17600]}}}
