@@ -449,6 +449,10 @@ pub enum Imp {
     /// `ShutupCommand`（现网 `@禁言`；`DenySayMsgList` 写入整段被注释 ⇒ 只发一条 SysMsg）。
     Shutup,
 
+    /// `ShowEffectCommand`（现网 `@ShowEffect`，`Command.conf` 无覆盖 ⇒ 英文名）：oracle 命令体
+    /// **整段被注释** ⇒ 任何参数都零帧、零副作用（最小 no-op 实现）。
+    ShowEffect,
+
     /// 未接的 87 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 1 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
@@ -1189,6 +1193,10 @@ const NOTE_SMAKE_RANGE: &str = "SmakeItem：nWhere/nValueType/nValue 越界 ⇒ 
 /// 只放行 `0..=15`。照抄时省略，登记在此。
 const NOTE_SMAKE_ABSORB_DEAD: &str =
     "SmakeItem：nValueType==16 吸伤支被 :26 的 0..=15 守卫挡住（死支）";
+
+/// `ShowEffectCommand.cs:20-70`：命令体**整段被注释** ⇒ 任何参数都零帧、零副作用。
+const NOTE_SHOW_EFFECT_ALL_COMMENTED: &str =
+    "ShowEffect：oracle 命令体 20-70 行整段注释 ⇒ 零帧、零副作用（最小 no-op）";
 const NOTE_NO_MAP_REGISTRY: &str =
     "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
 const NOTE_RECALL_HUMAN: &str =
@@ -2274,6 +2282,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
 
         // ---- 批次 5 · 脚本可达族（`GMEXECUTE` 抬权可达，tier=R）----
         Imp::Shutup => shutup(parameters),
+        Imp::ShowEffect => show_effect(),
 
         Imp::Unimplemented => GmResult {
             found: true,
@@ -2318,6 +2327,23 @@ fn shutup(parameters: &str) -> GmResult {
     // `(uint)HUtil32.StrToInt(sTime, 5)`：int → uint 的 unchecked 回转用 `as`。
     let dw_time = str_to_int(time, 5) as u32;
     red(format!("{human} 已被禁言{dw_time}分钟"))
+}
+
+/// `ShowEffectCommand.Execute`（`src/Modules/GameCommand/Commands/ShowEffectCommand.cs:12-71`，
+/// 现网 `@ShowEffect`；`Command.conf` 里**没有** `[Command] ShowEffect` 覆盖 ⇒ 注册名保持英文
+/// `ShowEffect`，查表 `OrdinalIgnoreCase` ⇒ 部署脚本的 `Gmexecute showeffect <n>` 能命中）。
+///
+/// **实际执行行**：
+/// - `:14-17` `if (@params == null) return;`——`GameCommand.Handle` 的 `case 2` 传
+///   `parameters.Split(' ')`（不返回 null）⇒ 死分支；
+/// - `:18/:19` 取 `sEffect`/`sTime`，**两者之后都没被使用**；
+/// - `:20-70` 的参数校验、79-85 烟花（`TFlowerEvent`）、87/89/90 的 `RM_MYSHOW`、
+///   `EventManager.AddEvent` **全部被注释** ⇒ 函数体落下即返回。
+///
+/// ⇒ online 行为 = **任何参数都零帧、零副作用**（BUG-REPLICA / 空实现，不修）；按卡面要求只落
+/// 「逐字节等价」的最小 no-op 并登记，不臆造烟花特效或 `RM_MYSHOW` 帧。
+fn show_effect() -> GmResult {
+    no_frames(NOTE_SHOW_EFFECT_ALL_COMMENTED)
 }
 
 // 卡 `openmir2-gm-script-host-seam`（T-210）订正：原先这里还有一个 `execute_script_line`，
@@ -2944,7 +2970,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ShowEffect",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowEffect,
     },
     CommandDef {
         name: "showflag",
@@ -4598,7 +4624,8 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-smake` 的 `SmakeItem`）
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-smake` 的 `SmakeItem`
+    /// 与卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`）
     /// 的命令体接上（`Unimplemented` 从 180 降到 86），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
@@ -4607,16 +4634,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            99,
-            "99 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + SmakeItem 1）2 条"
+            100,
+            "100 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + SmakeItem 1 + ShowEffect 1）3 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            86,
-            "185 - 98"
+            85,
+            "185 - 100"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -6009,6 +6036,20 @@ mod tests {
         );
     }
 
+    /// 卡 `openmir2-gm-impl-showeffect`：表项（`Command.conf` 无覆盖 ⇒ 注册名保持英文
+    /// `ShowEffect`；部署脚本写 `showeffect` 靠 `OrdinalIgnoreCase` 命中）。
+    #[test]
+    fn show_effect_is_wired_in_the_command_table() {
+        let def = find("showeffect").expect("@ShowEffect 在 185 行表里（大小写不敏感）");
+        assert_eq!(def.name, "ShowEffect");
+        assert_eq!(def.imp, Imp::ShowEffect);
+        assert_eq!(def.perm_min, 10);
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
     /// 造一个说话者实体（`GmWorld::self_entity` 的来源），可带一个佩戴件。
     fn smake_world_with_slot(
         slot: usize,
@@ -6102,5 +6143,79 @@ mod tests {
             assert_eq!((pend.dura, pend.dura_max), (dura, dura_max), "{args}");
             assert_eq!(pend.desc[9], 1, "{args}: 升级次数无条件 +1");
         }
+    }
+
+    /// oracle 命令体 `:20-70` **整段被注释** ⇒ 任何参数（含部署脚本的 78/79/80）都零帧、
+    /// 零副作用；`found` 仍为 true（不走未知命令回落）。
+    #[test]
+    fn show_effect_is_zero_frames_for_every_parameter() {
+        for line in [
+            "@ShowEffect",
+            "@ShowEffect 78",
+            "@ShowEffect 78 4000",
+            "@showeffect 87",
+            "@ShowEffect abc def ghi",
+        ] {
+            let (r, sess) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: 零帧");
+            assert!(r.frames.is_empty(), "{line}: 无直发帧");
+            assert_eq!(
+                r.log_note,
+                Some(NOTE_SHOW_EFFECT_ALL_COMMENTED),
+                "{line}: 空实现必须登记"
+            );
+            assert_eq!(sess.permission, 10, "{line}: 命令体不得改权限（无副作用）");
+        }
+    }
+
+    /// 权限门先于命令体：`Permission < 10` ⇒ 一条红字 `权限不够!!!`。
+    #[test]
+    fn show_effect_permission_gate_blocks_body() {
+        let mut sess = GmSession {
+            permission: 9,
+            ..GmSession::default()
+        };
+        let cfg = GmConfig::default();
+        let r = exec(&mut sess, &cfg, "@ShowEffect 78");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
+        sess.permission = 10;
+        let r = exec(&mut sess, &cfg, "@ShowEffect 78");
+        assert!(r.msgs.is_empty(), "抬权后仍是空实现");
+    }
+
+    /// 部署脚本路（`Market_Def/QFunction-0.txt` 的 `@StdModeFunc14`：
+    /// `Gmexecute showeffect 78/79/80`）经 `NpcPlayer` 的 GMEXECUTE 跳线执行 ⇒ **零帧**
+    /// （oracle 命令体整段注释；此前这段是 `Imp::Unimplemented`，现在仍是零帧但已登记）。
+    #[test]
+    fn show_effect_script_gmexecute_path_is_zero_frames() {
+        use mir2_script::engine::ScriptPlayer;
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        let s_data = format!("@{} {} {} {} {} {}", "showeffect", "78", "", "", "", "");
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world: view,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(&s_data);
+            player.set_permission(0);
+            assert!(player.frames.is_empty(), "空实现 ⇒ 脚本侧零帧");
+            assert!(player.gm_direct_frames.is_empty());
+            assert!(
+                player.gm_notes.iter().any(|n| n.contains("整段注释")),
+                "空实现路径必须登记：{:?}",
+                player.gm_notes
+            );
+        }
+        assert_eq!(sess.permission, 0, "抬权临时生效并还原");
     }
 }

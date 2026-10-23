@@ -2,7 +2,7 @@
 
 - 卡：`openmir2-script-host-noop-audit`（tier=L，只审计 + 开卡，**零生产代码改动**）
 - 作者：`openmir2-worker-63`（worktree `wt-worker-63` / 分支 `card/host-noop-audit`）
-- **取值基线：`73c39cca`（master + `card/gm-host-seam` 合并树）**。演进：初版审计基线 `14864309e` → 复审 `94718b41` 指出 frame-drain 给 `npc.rs` 加 23 行使 51 条行号过时 → 十字复审 `cbcbd136` 指出 master 再 +439 行、且 gm-seam 已落地覆写了三件 ⇒ 本版在**当前合并树**上重算：三件改判 `safe/已覆写`（covered 7→4、safe 54→57），门改为**默认模式行号只 WARN、`--strict-lines` 才逐行精确**（见 §4）。
+- **取值基线：`49983de0`（当前 master）**。演进：初版 `14864309e` → 复审 `94718b41`（frame-drain +23 行）→ 十字复审 `cbcbd136`（gm-seam 落地，三件 `covered→safe/已覆写`；master +439 行）→ 三返工（CHANGEEXP 合并后 `abil_exp`/`set_abil_exp` 转 `safe/已覆写`；`npc.rs`/`mod.rs` 再漂移 ⇒ **本版把全部 `evidence.line` 与 `line_baseline` 重钉到 `49983de0`**，`check` 与 `check --strict-lines` 双绿）。
 - oracle = 本仓 `src/**`（C# 参照实现）；部署语料 = `E:/MirServer/M2GameSvr/Envir`（642 个文件、41473 行）
 - 机器可读台账：`mir2-rs/tests/parity/coverage/script_host_noop_audit.json`；自检：`mir2-rs/tests/parity/coverage/script_host_noop_audit.py`
 
@@ -16,9 +16,9 @@
 
 | 结论 | 个数 | 含义 |
 |---|---|---|
-| **已有卡承接** | 4 | 已有在途卡覆盖（`openmir2-script-sendmsg-host` / `openmir2-gm-script-host-seam`），本卡只登记、不动 |
-| **需开卡** | 107 | 正式宿主未覆写且缺省实现与 oracle 有静默差异（no-op / 恒值），其中 P1（有效可达 ≥100 行）12 个 |
-| **安全** | 57 | 宿主已覆写 54 / 语义等价 2 / 既有近似 1（近似项在下文单独标注，不是「与 oracle 等价」） |
+| **已有卡承接** | 4 | 已有**在途**卡覆盖（当前仅 `openmir2-script-sendmsg-host`；`openmir2-gm-script-host-seam` 已合并落地，其 3 件已转「安全/已覆写」），本卡只登记、不动 |
+| **需开卡** | 105 | 正式宿主未覆写且缺省实现与 oracle 有静默差异（no-op / 恒值），其中 P1（有效可达 ≥100 行）12 个 |
+| **安全** | 59 | 宿主已覆写 56 / 语义等价 2 / 既有近似 1（近似项在下文单独标注，不是「与 oracle 等价」） |
 
 **有效可达计数最高的 5 条（不含已有卡承接项）**：
 
@@ -86,7 +86,7 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 
 ## 2. 台账主表（全量 168 行）
 
-按结论分组：§2.1 已有卡承接（4）、§2.2 需开卡（107，按有效可达降序）、§2.3 安全（57）。
+按结论分组：§2.1 已有卡承接（4）、§2.2 需开卡（105，按有效可达降序）、§2.3 安全（59）。
 
 ### 2.1 已有卡承接（4）
 
@@ -101,9 +101,9 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 
 - `world_broadcast`（`mod.rs:387`，case 0-3 = 318 行）与 `send_say_msg`（`mod.rs:742`，case 4 = 31 行）：`NpcPlayer`/`HostNpc` 均未覆写 ⇒ SENDMSG case 0-4 共 349 行零帧。卡 `openmir2-script-sendmsg-host` 已由 worker-23 认领在途。
 - `send_group_text`（`mod.rs:389`）/`guild_send_msg`（`mod.rs:406`）：同为 `ActionOfLineMsg` 的 case 8/9；部署语料这两个 case **各 0 行**，但仍属同一缺口（同一张卡覆盖）。
-- `process_user_line_msg`（`mod.rs:549`）/`set_permission`（`mod.rs:547`）/`permission`（`mod.rs:185`）：卡 `openmir2-gm-script-host-seam` **已于 master `73c39cca` 合并落地**，`NpcPlayer` 现在真的覆写了这三件（`npc.rs:1207/1217/1238`）⇒ 本版把这三行从「已有卡承接」改判 **安全（已覆写）**；covered 从 7 降到 4（只剩 SENDMSG 那 4 个方法）。
+- `process_user_line_msg`（`mod.rs:549`）/`set_permission`（`mod.rs:547`）/`permission`（`mod.rs:185`）：卡 `openmir2-gm-script-host-seam` **已于 master `73c39cca` 合并落地**，`NpcPlayer` 现在真的覆写了这三件（`npc.rs:1220/1230/1251`，基线 `49983de0`）⇒ 本版把这三行从「已有卡承接」改判 **安全（已覆写）**；covered 从 7 降到 4（只剩 SENDMSG 那 4 个方法）。
 
-### 2.2 需开卡（107，按有效可达降序）
+### 2.2 需开卡（105，按有效可达降序）
 
 | # | 方法 | trait | 缺省语义 | oracle 对应实现 | 可达行数 | NpcPlayer 覆写 | 结论 |
 |---|---|---|---|---|---|---|---|
@@ -174,48 +174,46 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | 65 | `set_pose_is_start_un_marry` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3644 | 8 | **否** | 需开卡（P3） |
 | 66 | `set_re_level` | player | 空实现（no-op） | ProcessingBase.cs:292 | 8 | **否** | 需开卡（P3） |
 | 67 | `target_name` | player | 恒 None | ScriptEngine.cs:343 | 8 | **否** | 需开卡（P3） |
-| 68 | `abil_exp` | player | 恒 0 | ProcessingBase.cs:372 | 7 | **否** | 需开卡（P3） |
-| 69 | `set_abil_exp` | player | 空实现（no-op） | Processings/ConditionProcessingSys.cs:2303 | 7 | **否** | 需开卡（P3） |
-| 70 | `set_delay_call` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3757 | 5 | **否** | 需开卡（P3） |
-| 71 | `set_dlg_query` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2236 | 5 | **否** | 需开卡（P3） |
-| 72 | `set_use_item_dura` | player | 空实现（no-op） | ProcessingBase.cs:457 | 5 | **否** | 需开卡（P3） |
-| 73 | `use_item_dura_max` | player | 恒 0 | Processings/ExecutionProcessingSys.cs:3944 | 5 | **否** | 需开卡（P3） |
-| 74 | `has_level_up` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2903 | 4 | **否** | 需开卡（P3） |
-| 75 | `set_abil_level` | player | 空实现（no-op） | ProcessingBase.cs:297 | 4 | **否** | 需开卡（P3） |
-| 76 | `set_bo_send_msg_flag` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2323 | 4 | **否** | 需开卡（P3） |
-| 77 | `admin_mode` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5580 | 3 | **否** | 需开卡（P3） |
-| 78 | `ob_mode` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5602 | 3 | **否** | 需开卡（P3） |
-| 79 | `pk_point` | player | 恒 0 | ProcessingBase.cs:382 | 3 | **否** | 需开卡（P3） |
-| 80 | `pvp_level` | player | 恒 0 | Processings/ExecutionProcessingSys.cs:2952 | 3 | **否** | 需开卡（P3） |
-| 81 | `ref_name_color` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2104 | 3 | **否** | 需开卡（P3） |
-| 82 | `set_admin_mode` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5580 | 3 | **否** | 需开卡（P3） |
-| 83 | `set_mission` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3425 | 3 | **否** | 需开卡（P3） |
-| 84 | `set_ob_mode` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5602 | 3 | **否** | 需开卡（P3） |
-| 85 | `set_pk_point` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2077 | 3 | **否** | 需开卡（P3） |
-| 86 | `set_super_man` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5591 | 3 | **否** | 需开卡（P3） |
-| 87 | `super_man` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5591 | 3 | **否** | 需开卡（P3） |
-| 88 | `die` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5281 | 2 | **否** | 需开卡（P3） |
-| 89 | `feature_changed` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2872 | 2 | **否** | 需开卡（P3） |
-| 90 | `set_bo_change_item_name_flag` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3513 | 2 | **否** | 需开卡（P3） |
-| 91 | `set_hair` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2871 | 2 | **否** | 需开卡（P3） |
-| 92 | `set_last_hiter_npc` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5284 | 2 | **否** | 需开卡（P3） |
-| 93 | `set_no_item` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5280 | 2 | **否** | 需开卡（P3） |
-| 94 | `xy_obj_count` | player | 恒 None | Processings/ConditionProcessingSys.cs:4578 | 2 | **否** | 需开卡（P3） |
-| 95 | `curr_pos` | player | 恒 (0,0) | ProcessingBase.cs:258 | 1 | **否** | 需开卡（P3） |
-| 96 | `in_safe_zone` | player | 恒 false | ScriptEngine.cs:599 | 1 | **否** | 需开卡（P3） |
-| 97 | `is_new_human` | player | 恒 false | Processings/ConditionProcessingSys.cs:4204 | 1 | **否** | 需开卡（P3） |
-| 98 | `map_name` | player | 恒空串 | ScriptEngine.cs:663 | 1 | **否** | 需开卡（P3） |
-| 99 | `pose` | player | 恒 None | Processings/ConditionProcessingSys.cs:1612 | 1 | **否** | 需开卡（P3） |
-| 100 | `set_is_time_recall` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2109 | 1 | **否** | 需开卡（P3） |
-| 101 | `set_time_recall` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2135 | 1 | **否** | 需开卡（P3） |
-| 102 | `action_variable_text` | player | 空实现（no-op） | ProcessingBase.cs:1463 | 0 | **否** | 需开卡（P3） → `openmir2-script-action-var-text` |
-| 103 | `is_master` | player | 恒 false | Processings/ConditionProcessingSys.cs:2985 | 0 | **否** | 需开卡（P3） |
-| 104 | `magic_level` | player | 恒 None | Processings/ConditionProcessingSys.cs:3602 | 0 | **否** | 需开卡（P3） |
-| 105 | `master_name` | player | 恒空串 | ProcessingBase.cs:227 | 0 | **否** | 需开卡（P3） |
-| 106 | `pose_actor_id` | player | 恒 0 | src/BotSrv/Player/RobotPlayer.cs:303 | 0 | **否** | 需开卡（P3） |
-| 107 | `pose_dear_name` | player | 恒空串 | Processings/ExecutionProcessingSys.cs:3310 | 0 | **否** | 需开卡（P3） |
+| 68 | `set_delay_call` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3757 | 5 | **否** | 需开卡（P3） |
+| 69 | `set_dlg_query` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2236 | 5 | **否** | 需开卡（P3） |
+| 70 | `set_use_item_dura` | player | 空实现（no-op） | ProcessingBase.cs:457 | 5 | **否** | 需开卡（P3） |
+| 71 | `use_item_dura_max` | player | 恒 0 | Processings/ExecutionProcessingSys.cs:3944 | 5 | **否** | 需开卡（P3） |
+| 72 | `has_level_up` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2903 | 4 | **否** | 需开卡（P3） |
+| 73 | `set_abil_level` | player | 空实现（no-op） | ProcessingBase.cs:297 | 4 | **否** | 需开卡（P3） |
+| 74 | `set_bo_send_msg_flag` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2323 | 4 | **否** | 需开卡（P3） |
+| 75 | `admin_mode` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5580 | 3 | **否** | 需开卡（P3） |
+| 76 | `ob_mode` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5602 | 3 | **否** | 需开卡（P3） |
+| 77 | `pk_point` | player | 恒 0 | ProcessingBase.cs:382 | 3 | **否** | 需开卡（P3） |
+| 78 | `pvp_level` | player | 恒 0 | Processings/ExecutionProcessingSys.cs:2952 | 3 | **否** | 需开卡（P3） |
+| 79 | `ref_name_color` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2104 | 3 | **否** | 需开卡（P3） |
+| 80 | `set_admin_mode` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5580 | 3 | **否** | 需开卡（P3） |
+| 81 | `set_mission` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3425 | 3 | **否** | 需开卡（P3） |
+| 82 | `set_ob_mode` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5602 | 3 | **否** | 需开卡（P3） |
+| 83 | `set_pk_point` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2077 | 3 | **否** | 需开卡（P3） |
+| 84 | `set_super_man` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5591 | 3 | **否** | 需开卡（P3） |
+| 85 | `super_man` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5591 | 3 | **否** | 需开卡（P3） |
+| 86 | `die` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5281 | 2 | **否** | 需开卡（P3） |
+| 87 | `feature_changed` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2872 | 2 | **否** | 需开卡（P3） |
+| 88 | `set_bo_change_item_name_flag` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3513 | 2 | **否** | 需开卡（P3） |
+| 89 | `set_hair` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2871 | 2 | **否** | 需开卡（P3） |
+| 90 | `set_last_hiter_npc` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5284 | 2 | **否** | 需开卡（P3） |
+| 91 | `set_no_item` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5280 | 2 | **否** | 需开卡（P3） |
+| 92 | `xy_obj_count` | player | 恒 None | Processings/ConditionProcessingSys.cs:4578 | 2 | **否** | 需开卡（P3） |
+| 93 | `curr_pos` | player | 恒 (0,0) | ProcessingBase.cs:258 | 1 | **否** | 需开卡（P3） |
+| 94 | `in_safe_zone` | player | 恒 false | ScriptEngine.cs:599 | 1 | **否** | 需开卡（P3） |
+| 95 | `is_new_human` | player | 恒 false | Processings/ConditionProcessingSys.cs:4204 | 1 | **否** | 需开卡（P3） |
+| 96 | `map_name` | player | 恒空串 | ScriptEngine.cs:663 | 1 | **否** | 需开卡（P3） |
+| 97 | `pose` | player | 恒 None | Processings/ConditionProcessingSys.cs:1612 | 1 | **否** | 需开卡（P3） |
+| 98 | `set_is_time_recall` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2109 | 1 | **否** | 需开卡（P3） |
+| 99 | `set_time_recall` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2135 | 1 | **否** | 需开卡（P3） |
+| 100 | `action_variable_text` | player | 空实现（no-op） | ProcessingBase.cs:1463 | 0 | **否** | 需开卡（P3） → `openmir2-script-action-var-text` |
+| 101 | `is_master` | player | 恒 false | Processings/ConditionProcessingSys.cs:2985 | 0 | **否** | 需开卡（P3） |
+| 102 | `magic_level` | player | 恒 None | Processings/ConditionProcessingSys.cs:3602 | 0 | **否** | 需开卡（P3） |
+| 103 | `master_name` | player | 恒空串 | ProcessingBase.cs:227 | 0 | **否** | 需开卡（P3） |
+| 104 | `pose_actor_id` | player | 恒 0 | src/BotSrv/Player/RobotPlayer.cs:303 | 0 | **否** | 需开卡（P3） |
+| 105 | `pose_dear_name` | player | 恒空串 | Processings/ExecutionProcessingSys.cs:3310 | 0 | **否** | 需开卡（P3） |
 
-### 2.3 安全（57）
+### 2.3 安全（59）
 
 「安全」分三类：**已覆写**（缺省实现不生效）/ **语义等价**（缺省实现即 oracle 语义）/ **既有近似**（宿主层已接但二者不是逐字等价）。每行理由见机器台账 `reason` 与 `safe_kind`。
 
@@ -267,17 +265,19 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | 44 | `set_map_mode` | player | 空实现（no-op） | Processings/ConditionProcessingSys.cs:927 | 8 | 是 | 安全（已覆写） |
 | 45 | `set_power_rate` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5548 | 8 | 是 | 安全（已覆写） |
 | 46 | `set_sale_deal` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2334 | 8 | 是 | 安全（已覆写） |
-| 47 | `use_item_index` | player | 恒 0 | ScriptEngine.cs:871 | 5 | 是 | 安全（已覆写） |
-| 48 | `use_item_std_name` | player | 恒空串 | src/M2Server/Player/PlayObject.cs:5342 | 5 | 是 | 安全（已覆写） |
-| 49 | `use_items_len` | player | 恒 0 | ScriptEngine.cs:865 | 5 | 是 | 安全（已覆写） |
-| 50 | `envir_map_name` | player | 恒 None | ProcessingBase.cs:268 | 4 | 是 | 安全（已覆写） |
-| 51 | `set_offline` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2727 | 4 | 是 | 安全（已覆写） |
-| 52 | `re_level` | player | 恒 0 | ProcessingBase.cs:292 | 2 | 是 | 安全（已覆写） |
-| 53 | `map_exists` | player | 恒 false | Processings/ConditionProcessingSys.cs:927 | 1 | 是 | 安全（已覆写） |
-| 54 | `set_auto_get_exp` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2707 | 1 | 是 | 安全（已覆写） |
-| 55 | `play_dice_label` | player | 恒 None | Processings/ExecutionProcessingSys.cs:2032 | 0 | 是 | 安全（已覆写） |
-| 56 | `set_server_int_val` | player | 空实现（no-op） | ProcessingBase.cs:1173 | 0 | 是 | 安全（已覆写） |
-| 57 | `set_server_str_val` | player | 空实现（no-op） | ProcessingBase.cs:1099 | 0 | 是 | 安全（已覆写） |
+| 47 | `abil_exp` | player | 恒 0 | ProcessingBase.cs:372 | 7 | 是 | 安全（已覆写） |
+| 48 | `set_abil_exp` | player | 空实现（no-op） | Processings/ConditionProcessingSys.cs:2303 | 7 | 是 | 安全（已覆写） |
+| 49 | `use_item_index` | player | 恒 0 | ScriptEngine.cs:871 | 5 | 是 | 安全（已覆写） |
+| 50 | `use_item_std_name` | player | 恒空串 | src/M2Server/Player/PlayObject.cs:5342 | 5 | 是 | 安全（已覆写） |
+| 51 | `use_items_len` | player | 恒 0 | ScriptEngine.cs:865 | 5 | 是 | 安全（已覆写） |
+| 52 | `envir_map_name` | player | 恒 None | ProcessingBase.cs:268 | 4 | 是 | 安全（已覆写） |
+| 53 | `set_offline` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2727 | 4 | 是 | 安全（已覆写） |
+| 54 | `re_level` | player | 恒 0 | ProcessingBase.cs:292 | 2 | 是 | 安全（已覆写） |
+| 55 | `map_exists` | player | 恒 false | Processings/ConditionProcessingSys.cs:927 | 1 | 是 | 安全（已覆写） |
+| 56 | `set_auto_get_exp` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2707 | 1 | 是 | 安全（已覆写） |
+| 57 | `play_dice_label` | player | 恒 None | Processings/ExecutionProcessingSys.cs:2032 | 0 | 是 | 安全（已覆写） |
+| 58 | `set_server_int_val` | player | 空实现（no-op） | ProcessingBase.cs:1173 | 0 | 是 | 安全（已覆写） |
+| 59 | `set_server_str_val` | player | 空实现（no-op） | ProcessingBase.cs:1099 | 0 | 是 | 安全（已覆写） |
 
 
 > **既有近似**只有 1 条：`use_item_std_item_present` 缺省 `use_item_index(i) > 0`，oracle 是 `GetStdItem(UseItems[i].Index) != null`（`PlayObject.Base.cs:1026`）；Index 非零但物品表查不到时两者不同。这不是本卡的缺口（宿主层不需要新存储），残余归 StdItem/物品表卡。
@@ -345,7 +345,7 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | `quest_unit_status` | 恒 0 | oracle 侧同名字段的读写写法见 `int n10 = playerActor.GetQuestUnitStatus(n14);`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒 0，部署可达 8 行。 | 安全（已覆写） |
 | `sale_deal` | 恒 false | oracle 侧同名字段的读写写法见 `if (playerActor.SaleDeal)`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒 false，部署可达 8 行。 | 安全（已覆写） |
 | `target_name` | 恒 None | oracle 取目标角色名（有目标时非 None）。语料 0 行 ⇒ 当前不会被调用。 | 需开卡 P3 |
-| `abil_exp` | 恒 0 | oracle 取 `Abil.Exp`：有经验玩家非 0。Rust 恒 0 ⇒ `CHANGEEXP`(7) 的按比例分支（`$EXP`/百分比）算错；**确实**会走到。 | 需开卡 P3 |
+| `abil_exp` | 恒 0 | oracle 取 `Abil.Exp`：有经验玩家非 0。Rust 恒 0 ⇒ `CHANGEEXP`(7) 的按比例分支（`$EXP`/百分比）算错；**确实**会走到。 | 安全（已覆写） |
 | `use_item_dura_max` | 恒 0 | oracle 取 `UseItems[i].DuraMax`：装备有最大持久时非 0。Rust 恒 0 ⇒ `REPAIRALL`(5) 写回的持久恒 0。 | 需开卡 P3 |
 | `use_item_index` | 恒 0 | oracle 侧同名字段的读写写法见 `if (playerActor.UseItems[i].Index > 0)`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒 0，部署可达 5 行。 | 安全（已覆写） |
 | `use_item_std_name` | 恒空串 | oracle 侧同名字段的读写写法见 `string sName = SystemShare.ItemSystem.GetStdItemName(UseItems[i].Index);`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒空串，部署可达 5 行。 | 安全（已覆写） |
@@ -421,7 +421,7 @@ RED（期望·干净）: 把 sys_msg 挪到 HostNpc impl ⇒ 1 处不一致
 > 五颗牙都在 `selftest` 内用**内存副本**跑，跑完校验真实台账 sha256 与运行前一致：
 > `d0202859ead50376605a8512665a0773751362154ba1ed8aaa0adbb6c39b0283`（前后同值 = 还原证明；`selftest` 自身 rc=0）。
 
-**行号纪律**：本版 `npc.rs` / `mod.rs` 行号钉在合并树 `73c39cca`；门按**符号**核（impl 块成员 + mod.rs 内 `fn` 声明）。默认模式下**任何行号漂移都只 WARN、永不判红**（牙④ 就是这条的反向证明）；`check --strict-lines` 才要求与 `fn` 声明行逐行相等（本版实测 rc=0）。oracle（`src/**`，冻结面）两种模式都逐行精确核。
+**行号纪律**：本版 `npc.rs` / `mod.rs` 行号钉在 master `49983de0`；门按**符号**核（impl 块成员 + mod.rs 内 `fn` 声明）。默认模式下**任何行号漂移都只 WARN、永不判红**（牙④ 就是这条的反向证明）；`check --strict-lines` 才要求与 `fn` 声明行逐行相等（本版实测 rc=0）。oracle（`src/**`，冻结面）两种模式都逐行精确核。
 
 ---
 
@@ -430,10 +430,10 @@ RED（期望·干净）: 把 sys_msg 挪到 HostNpc impl ⇒ 1 处不一致
 | 项 | 命令 | 结果（本卡实跑） |
 |---|---|---|
 | fmt | `cargo fmt --all -- --check` | **rc=0** |
-| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | **rc=0**（合并树 25s，Finished） |
-| test | `cargo test --workspace` | **rc=0**（141 suites / 3041 passed / 0 failed / 62 ignored） |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | **rc=0**（24s，Finished） |
+| test | `cargo test --workspace` | **rc=0**（141 suites / 3046 passed / 0 failed / 62 ignored） |
 | msgcodegen | `cargo run -p msgcodegen -- --check` | **rc=0**（604 条常量与 C# 源一致） |
-| anchor | `python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check` | **rc=0**（503 条锚 ALL PASS） |
+| anchor | `python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check` | **rc=0**（507 条锚 ALL PASS） |
 | registry | `python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit` | **rc=0**（WHITELIST_REGISTRY GREEN，无重复编号） |
 | T 预约 | `python -I tools/whitelist/t_reservation_gate.py check` | **rc=0**（199 行 / 199 号，GREEN） |
 | 台账自检 | `python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py check` | **rc=0**（168 行全部可核；`--strict-lines` 亦 rc=0） |
@@ -469,3 +469,10 @@ RED（期望·干净）: 把 sys_msg 挪到 HostNpc impl ⇒ 1 处不一致
 | G-2 设计矛盾：`line_policy` 说行号仅参考，但默认模式仍硬性要求行落在 impl 块内 ⇒ 整块前移会误红 | important | 默认模式改为**行号只 WARN、永不判红**（越界也只 WARN）；语义判定（impl 成员、safe_kind、covered/needs_card 互斥）不变。 |
 | G-3 `--strict-lines` 名不副实（只作用于 `mod_line`，evidence.line 两种模式都只 WARN） | important | `--strict-lines` 现在同时要求 `mod_line` 与 `evidence.line` **逐行相等**；本版在合并树上 strict rc=0。新增**牙④**（反向）：同一变异在默认模式必须 GREEN（只 WARN）。 |
 | G-4 把已达覆写的方法挪到另一 impl 块时门抛 `KeyError` traceback，诊断丢失 | minor | 行级校验抽成 `_validate_row`，外层 `try/except` 兜底：任何意外都转成干净 RED 并点名（`` `method` 校验过程异常: KeyError: ... ``）；内部取值一律 `.get`。 |
+
+### 第三轮（三返工：master 行进到 `49983de0`，CHANGEEXP 已合）
+
+| finding | 级别 | 处理 |
+|---|---|---|
+| H-1 `abil_exp`/`set_abil_exp` 已被 CHANGEEXP 卡覆写，台账仍 `needs_card` ⇒ `check` 红 | important | 由协调者先补（`49983de0`）：改判 `safe/overridden` + evidence（npc.rs:1145/:1148），counts 57→59 / 107→105 / overridden 54→56。本版随全量重钉再次生成，语义与该修复逐字段一致（仅清掉这两个 safe 行残留的 `group`/`priority`，与其它 `safe` 行同形）。 |
+| H-2 `check --strict-lines` 仍红 53 处（`npc.rs`/`mod.rs` 被今天多条车道改过，行号整体漂移） | important | **选「让它绿」**（不是把 strict 从 selftest 拿掉）：全部 `evidence.line` 与 `line_baseline` 重钉到 `49983de0`，`check` / `check --strict-lines` / `selftest` 三绿；`selftest` 继续断言 strict rc=0。 |

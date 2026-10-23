@@ -735,6 +735,9 @@ def side_ctx(side, out_dir, scenario, card, discovery=None):
             "forced": bool(d.get("forced")),
             "scenario": d.get("scenario"),
             "required": list(d.get("required") or []),
+            # 场景 `computed` 声明（computed 类变量：derived_from + delta）必须透传给 derive，
+            # 否则 move_walk 的 move_x/move_y 会 fail-closed（安全但跑不起来）。
+            "computed": dict(d.get("computed") or {}),
             "frames": d.get("frames"),
         },
     }
@@ -796,6 +799,25 @@ def scenario_required(path):
     return list(required)
 
 
+def scenario_computed(path):
+    """读场景声明的 `computed`（computed 类变量的派生声明）；坏文件/坏声明 => ConfigError（rc=2）。
+
+    校验口径只认 `param_discovery.validate_computed`（单一口径，不在本工具另造一套）。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, ValueError) as ex:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, ex))
+    if not isinstance(doc, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    try:
+        return param_discovery.validate_computed(doc.get("computed"),
+                                                 doc.get("required") or [], path)
+    except param_discovery.DiscoveryError as ex:
+        raise ConfigError(str(ex))
+
+
 def missing_reason(var):
     """缺变量原因：直接复用 param_discovery 自己登记的说明（不在本工具另造一套口径）。"""
     return (param_discovery.REASONS.get(var)
@@ -803,10 +825,10 @@ def missing_reason(var):
             or "规则表无此变量（不猜）")
 
 
-def derive_from_frames(frames_path, required):
+def derive_from_frames(frames_path, required, computed=None):
     """从本侧 discovery 帧推导 required。坏输入 => param_discovery.DiscoveryError（rc=2）。"""
     frames = param_discovery.load_frames(frames_path)
-    return param_discovery.derive(frames, required)
+    return param_discovery.derive(frames, required, computed=computed)
 
 
 def write_json_file(path, doc):
@@ -825,7 +847,9 @@ def side_discovery_doc(side, ctx, values, missing, probe_rc, probe_argv):
         "format": DISCOVERY_FORMAT,
         "tool": TOOL,
         "side": side,
-        "ok": not missing,
+        # F-1：ok 必须同时包含 discovery probe 的 rc——`--discover` 强制 + 场景无 required 时
+        # missing 为空，只看 missing 会把「probe 失败、没有帧」写成 ok=True。
+        "ok": (probe_rc == 0 and not missing),
         "scenario": real_scenario,
         "scenario_sha256": (sha256_file(real_scenario)
                             if real_scenario and os.path.isfile(real_scenario) else None),
@@ -1080,13 +1104,15 @@ def run_side(runner, side, prof, ctx, password):
                 frames_path = os.path.join(dctx["discovery_dir"], "frames.ndjson")
                 try:
                     values, missing = derive_from_frames(frames_path,
-                                                         disco.get("required") or [])
+                                                         disco.get("required") or [],
+                                                         disco.get("computed") or {})
                 except param_discovery.DiscoveryError as e:
                     derr = "discovery 输入坏掉：%s" % e
             doc = side_discovery_doc(side, dctx, values, missing, res["discover_rc"],
                                      disc_argv)
             if derr:
                 doc["error"] = derr
+                doc["ok"] = False
             try:
                 write_json_file(os.path.join(side_dir, "discovered.json"), doc)
             except OSError as e:
@@ -1452,14 +1478,17 @@ def execute(cfg):
     # 参数发现：场景声明了 required（或显式 --discover）就先跑 discovery。
     # 场景文件不存在时（--dry-run 允许）不读；真跑会在下面报「场景文件不存在」。
     required = []
+    computed = {}
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
+        computed = scenario_computed(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
         cfg.get("discovery_scenario") or DEFAULT_DISCOVERY_SCENARIO)
     needs_discovery = discover or bool(required)
     discovery_cfg = {"needed": needs_discovery, "forced": discover,
                      "scenario": discovery_scenario, "required": required,
+                     "computed": computed,
                      "frames": cfg.get("discovery_frames")}
 
     started_at = iso_now()
@@ -1497,6 +1526,7 @@ def execute(cfg):
                                 if needs_discovery and os.path.isfile(discovery_scenario)
                                 else None),
             "required": list(required),
+            "computed": dict(computed),
             "session_scoped": list(SESSION_SCOPED_VARS),
             "sides": {},
             "complete": None,
@@ -1595,7 +1625,9 @@ def execute(cfg):
                 if required and pattern:
                     frames_path = expand_argv([str(pattern)], dctx)[0]
                     try:
-                        values, missing = derive_from_frames(frames_path, required)
+                        values, missing = derive_from_frames(
+                            frames_path, required,
+                            ctx["discovery"].get("computed") or {})
                     except param_discovery.DiscoveryError as e:
                         values, missing = {}, list(required)
                         runner.log("[%s] discovery 帧不可用：%s" % (side, e))
@@ -1909,7 +1941,12 @@ def main():
         with open(os.path.join(out, "stub-argv.json"), "w", encoding="utf-8") as f:
             json.dump({"side": side, "argv": sys.argv}, f, sort_keys=True)
         if os.path.basename(os.path.normpath(out)) == "discovery":
+            if os.environ.get("STUB_DISCOVERY_FAIL") == side:
+                sys.stderr.write("stub discovery: simulated probe failure\n")
+                return 3
             self_x = 7 if side == "csharp" else 8
+            if os.environ.get("STUB_DISCOVERY_SELF_X"):
+                self_x = int(os.environ["STUB_DISCOVERY_SELF_X"])
             npc = 119 if side == "csharp" else 129
             frames = [
                 {"seq": 1, "ident": 50, "recog": 191, "param": self_x, "tag": 12},
@@ -2333,6 +2370,91 @@ def selftest():
             "DISC-8 无 --discovery-frames => 占位符预览（不发明数值，%s）"
             % prev_probe["argv"][-2:])
 
+        # DISC-9（卡 openmir2-window-discovery-rules）：场景的 computed 声明必须透传到 derive，
+        #   computed 类变量按「已推导量 + 声明 delta」算出并真的进 --var。
+        #   桩发现帧两侧 self_x 默认 7/8（DISC-1..5 用差异），这里把两侧钉成 7，
+        #   让 move_x=self_x+1 两侧都算成 8（非会话变量跨侧必须相等）。
+        scen_comp = os.path.join(tmp, "scen-computed.json")
+        with open(scen_comp, "w", encoding="utf-8") as f:
+            json.dump({"name": "computed", "required": ["move_x", "move_y"],
+                       "computed": {"move_x": {"derived_from": "self_x", "delta": 1},
+                                    "move_y": {"derived_from": "self_y", "delta": 0}},
+                       "steps": [{"wait_for": 50, "timeout_ms": 10}]}, f)
+        prof_comp = _selftest_profile(tmp, stub, log)
+        prof_comp["sides"]["csharp"]["env"] = {"STUB_DISCOVERY_SELF_X": "7"}
+        prof_comp["sides"]["rust"]["env"] = {"STUB_DISCOVERY_SELF_X": "7"}
+        fresh_log()
+        out_comp = os.path.join(tmp, "run-computed")
+        s_comp = execute(base_cfg(out_comp, prof_comp, scenario=scen_comp))
+        chk(s_comp["exit_code"] == 0 and s_comp["verdict"] == "PASS",
+            "DISC-9 computed 场景两侧同起点 => rc=0/PASS（实际 %s/%s）"
+            % (s_comp["exit_code"], s_comp["verdict"]))
+        argv_cc = probe_argv_of(out_comp, "csharp")
+        argv_cr = probe_argv_of(out_comp, "rust")
+        chk("move_x=8" in argv_cc and "move_y=12" in argv_cc,
+            "DISC-9 csharp 的 probe 命令带 computed --var move_x=8/move_y=12（实际 %s）"
+            % argv_cc[-6:])
+        chk("move_x=8" in argv_cr and "move_y=12" in argv_cr,
+            "DISC-9 rust 的 probe 命令带 computed --var move_x=8/move_y=12（实际 %s）"
+            % argv_cr[-6:])
+        try:
+            with open(os.path.join(out_comp, "csharp", "discovered.json"),
+                      encoding="utf-8") as f:
+                d_comp = json.load(f)
+        except (OSError, ValueError):
+            d_comp = {}
+        val = (d_comp.get("values") or {}).get("move_x") or {}
+        chk(val.get("kind") == "computed"
+            and (val.get("source") or {}).get("delta") == 1,
+            "DISC-9 discovered.json 落盘 kind=computed + delta（%s）"
+            % {k: val.get(k) for k in ("value", "kind")})
+
+        # computed 声明坏掉（缺 delta）=> 加载期 rc=2，绝不静默按 0 算
+        scen_bad = os.path.join(tmp, "scen-computed-bad.json")
+        with open(scen_bad, "w", encoding="utf-8") as f:
+            json.dump({"name": "computed-bad", "required": ["move_x"],
+                       "computed": {"move_x": {"derived_from": "self_x"}},
+                       "steps": []}, f)
+        bad_refused = False
+        try:
+            execute(base_cfg(os.path.join(tmp, "run-computed-bad"),
+                             _selftest_profile(tmp, stub, log), scenario=scen_bad,
+                             dry_run=True))
+        except ConfigError as e:
+            bad_refused = "delta" in str(e)
+        chk(bad_refused, "DISC-9 computed 缺 delta => ConfigError（加载期 fail-closed）")
+
+        # F-1：--discover 强制 + 场景**无 required** + discovery probe 失败 =>
+        #      side doc 必须 ok=False（不能因为 missing 为空就写 ok=True），
+        #      顶层 discovered.json 必须 complete=False/consistent=False。
+        scen_noreq = os.path.join(tmp, "scen-no-required.json")
+        with open(scen_noreq, "w", encoding="utf-8") as f:
+            json.dump({"name": "no-required", "steps": []}, f)
+        prof_f1 = _selftest_profile(tmp, stub, log)
+        prof_f1["sides"]["csharp"]["env"] = {"STUB_DISCOVERY_FAIL": "csharp"}
+        fresh_log()
+        out_f1 = os.path.join(tmp, "run-f1")
+        s_f1 = execute(base_cfg(out_f1, prof_f1, scenario=scen_noreq, discover=True))
+        try:
+            with open(os.path.join(out_f1, "csharp", "discovered.json"),
+                      encoding="utf-8") as f:
+                d_f1 = json.load(f)
+        except (OSError, ValueError):
+            d_f1 = {}
+        try:
+            with open(os.path.join(out_f1, "discovered.json"), encoding="utf-8") as f:
+                d_f1_all = json.load(f)
+        except (OSError, ValueError):
+            d_f1_all = {}
+        chk(s_f1["exit_code"] == 2 and d_f1.get("discovery_probe_rc") == 3
+            and d_f1.get("ok") is False and bool(d_f1.get("error")),
+            "F-1 discovery probe 失败（required 为空）=> side ok=False/probe_rc=3（%s）"
+            % {k: d_f1.get(k) for k in ("ok", "discovery_probe_rc", "error")})
+        chk(d_f1_all.get("complete") is False
+            and d_f1_all.get("consistent") is False,
+            "F-1 discovery probe 失败 => 顶层 complete=False/consistent=False（%s）"
+            % {k: d_f1_all.get(k) for k in ("complete", "consistent")})
+
         # 8) 停栈命令碰 mysqld => 拒绝（不碰 MySQL 服务本身）
         prof_mysql = _selftest_profile(tmp, stub, log)
         prof_mysql["sides"]["csharp"]["stop"] = ["powershell", "-Command",
@@ -2398,6 +2520,21 @@ def selftest():
                 "whitelisted"},
             "M-2 嵌套 compare 字段集合完整（%s）"
             % sorted((captured.get("compare") or {}).keys()))
+        # P-1：值断言，一律从本次 report.json 实读（不硬编码）。
+        rep_c = read_report(os.path.join(out_c, "report.json")) or {}
+        cmp_c = captured.get("compare") or {}
+        chk(cmp_c.get("db_state") == (rep_c.get("db") or {}).get("state") == "compared",
+            "P-1 PASS db_state = report.db.state = compared（实际 %r / %r）"
+            % (cmp_c.get("db_state"), (rep_c.get("db") or {}).get("state")))
+        chk(cmp_c.get("diffs") == len(rep_c.get("diffs") or []) == 0,
+            "P-1 PASS diffs = len(report.diffs) = 0（实际 %r / %r）"
+            % (cmp_c.get("diffs"), len(rep_c.get("diffs") or [])))
+        chk(cmp_c.get("undecidable") == len(rep_c.get("undecidable") or []) == 0,
+            "P-1 PASS undecidable = len(report.undecidable) = 0（实际 %r / %r）"
+            % (cmp_c.get("undecidable"), len(rep_c.get("undecidable") or [])))
+        chk(cmp_c.get("whitelisted") == len(rep_c.get("whitelisted") or []),
+            "P-1 PASS whitelisted = len(report.whitelisted)（实际 %r / %r）"
+            % (cmp_c.get("whitelisted"), len(rep_c.get("whitelisted") or [])))
         chk("status" not in captured
             and captured.get("card") == "openmir2-card-window-tool-selftest",
             "comment body 不含 status（绝不改卡状态），card 正确")
@@ -2735,6 +2872,21 @@ def selftest():
             % (captured_f.get("verdict"), captured_f.get("verdict_reason"),
                (captured_f.get("compare") or {}).get("verdict")))
         chk(s_f["exit_code"] == 2, "D-1 compare FAIL => 工具 rc=2")
+        # P-1：FAIL 侧同样从本次 report.json 实读（diffs=1）。
+        rep_f = read_report(os.path.join(out_f, "report.json")) or {}
+        cmp_f = captured_f.get("compare") or {}
+        chk(cmp_f.get("db_state") == (rep_f.get("db") or {}).get("state") == "compared",
+            "P-1 FAIL db_state = report.db.state = compared（实际 %r / %r）"
+            % (cmp_f.get("db_state"), (rep_f.get("db") or {}).get("state")))
+        chk(cmp_f.get("diffs") == len(rep_f.get("diffs") or []) == 1,
+            "P-1 FAIL diffs = len(report.diffs) = 1（实际 %r / %r）"
+            % (cmp_f.get("diffs"), len(rep_f.get("diffs") or [])))
+        chk(cmp_f.get("undecidable") == len(rep_f.get("undecidable") or []) == 0,
+            "P-1 FAIL undecidable = len(report.undecidable) = 0（实际 %r / %r）"
+            % (cmp_f.get("undecidable"), len(rep_f.get("undecidable") or [])))
+        chk(cmp_f.get("whitelisted") == len(rep_f.get("whitelisted") or []),
+            "P-1 FAIL whitelisted = len(report.whitelisted)（实际 %r / %r）"
+            % (cmp_f.get("whitelisted"), len(rep_f.get("whitelisted") or [])))
 
         # 14) I-2：停栈禁词按效果归一（net.exe stop MySQL / spsv / Stop-Service 全拒）
         for label, bad_stop in (
