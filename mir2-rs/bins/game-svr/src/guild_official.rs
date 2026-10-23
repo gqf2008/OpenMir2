@@ -399,7 +399,8 @@ fn queue_script_output(
         );
     }
     for f in frames {
-        // 未知 ident 与 `emit_script_frames` 同口径丢弃（T-142 ⑧ 残余）。
+        // 映射与 `emit_script_frames` 同一处（`pickwire::script_frame`）；`RM_MENU_OK` 自 T-194
+        // 起在此产出 `SM_MENU_OK(767)`（此前整帧丢）。未知 ident 仍按 T-142 ⑧ 口径丢弃。
         let Some(body) = game_svr::pickwire::script_frame(
             f,
             npc_actor_id,

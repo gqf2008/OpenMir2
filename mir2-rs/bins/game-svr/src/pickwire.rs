@@ -17,7 +17,7 @@
 //!   RM_WEIGHTCHANGED(10115)→ SM_WEIGHTCHANGED(622) 用**当下 WAbil**（Weight/WearWeight/HandWeight + 校验和）
 //!   RM_GOLDCHANGED(10136)  → SM_GOLDCHANGED(653)   Gold + LoWord/HiWord(GameGold)
 //!   RM_SYSMESSAGE(11004)   → SM_SYSMESSAGE(100)    recog=ActorId, param=MakeWord(nParam1,nParam2), series=1, 尾=EncodeString(msg)
-//!   RM_MENU_OK(10309)      → SM_MENU_OK(767)        recog=nParam1, 尾=processMsg.Msg（本接缝为空）
+//!   RM_MENU_OK(10309)      → SM_MENU_OK(767)        recog=nParam1, 尾=processMsg.Msg（见 `script_frame`）
 //! ```
 //!
 //! # 已知缺口（登记，不静默）
@@ -144,6 +144,10 @@ pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
 ///   `MakeMessage(SM_SYSMESSAGE, ActorId, MakeWord(FColor,BColor), 0, 1)` + `EncodeString(Msg)`；
 ///   `ActorId` = **收帧玩家自己**（`BaseObject.SysMsg` 的 `this.ActorId`），`F/B` 由
 ///   `SysMsg` 按 `MsgColor` 从 `SystemShare.Config` 选好（`NpcPlayer::sys_msg`）。
+/// - `RM_MENU_OK`（10309）⇒ `SM_MENU_OK(767)`：`PlayObject.Message.cs:1952-1953`
+///   （`SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, Msg)`）；`Recog` = `nParam1`
+///   （脚本 `MESSAGEBOX` 的 `playerActor.ActorId`，`ExecutionProcessingSys.cs:3418`），
+///   尾 = `EDCode.EncodeString(cp936(Msg))`（T-194）。
 ///
 /// 其余 ident 仍按既有口径丢弃（T-142 残余）。
 /// `None` = 不发帧（未知 ident，或 `SoftVersionDateEx == 0` 门挡住）。
@@ -198,6 +202,23 @@ pub fn script_frame(
                 s.n_param3,
                 &bytes,
             ))
+        }
+        // `RM_MENU_OK`（10309）⇒ `SM_MENU_OK(767)`：脚本 `MESSAGEBOX`
+        // （`ActionOfMessageBox`，`ExecutionProcessingSys.cs:3416-3419`）入队的是
+        // `SendMsg(normNpc, RM_MENU_OK, 0, playerActor.ActorId, 0, 0, text)`；泵
+        // `PlayObject.Message.cs:1952-1953` 的 `SendDefMessage(SM_MENU_OK, processMsg.nParam1,
+        // 0, 0, 0, Msg)` ⇒ `Recog` = **`nParam1`（脚本入队时写死的玩家 ActorId）**、
+        // `Param/Tag/Series` = 0、尾 = `EDCode.EncodeString(cp936(Msg))`。
+        //
+        // **Recog 取 `nParam1` 而不是 `player_actor_id`**：oracle 读的是消息自带的
+        // `processMsg.nParam1`，不是排水时刻的会话 id（`MESSAGEBOX` 由 `ActionOfMessageBox`
+        // 写 `playerActor.ActorId`，两者在生产路径上同值；显式取 `nParam1` 才能同时覆盖
+        // 其它写入点的帧）。`SendDefMessage` 的 `string.IsNullOrEmpty(Msg)` 空尾支由
+        // `sm_menu_ok(_, &[])` 保持（`edcode::encode(&[])` 为空 ⇒ 12B header-only）。
+        i if i == mir2_protocol::messages::RM_MENU_OK as i32 => {
+            let msg = s.msg.as_deref().unwrap_or("");
+            let bytes = mir2_script::cp936::encode_gb2312_dotnet(msg);
+            Some(smframe::sm_menu_ok(s.n_param1, &bytes))
         }
         _ => None,
     }
