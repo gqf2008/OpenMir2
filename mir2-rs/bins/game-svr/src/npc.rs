@@ -197,6 +197,13 @@ pub struct NpcVars {
     /// `Rc<RefCell<…>>` ⇒ `NpcVars::clone()`（`lib.rs` 的 `p.vars = vars.clone()`）仍指向同一张表；
     /// 单线程世界由 `no_parallel` 守卫，`RefCell` 只用来提供 `&mut`（卡 `openmir2-script-dyn-var-host`）。
     pub global_dyn_vars: std::rc::Rc<std::cell::RefCell<crate::DynVarStore>>,
+    /// `$HUMAN`/`$ACCOUNT` 的**按角色**动态变量表（oracle `PlayObject.DynamicVarMap`，两者同表）。
+    ///
+    /// 键 = `ChrName` 大写折叠；`Rc<RefCell<…>>` ⇒ `NpcVars::clone()` 仍指向同一张宿主表，
+    /// 脚本漏斗无需改签名即可读写。**偏差**：oracle 生命周期 = `PlayObject`（登出即销毁），
+    /// 本仓为进程级 ⇒ 登出清账点未接（T-222 登记）。
+    pub session_dyn_vars:
+        std::rc::Rc<std::cell::RefCell<std::collections::BTreeMap<String, crate::DynVarStore>>>,
     /// `SystemShare.Config.ServerName`（缺省 `SKY引擎`）。
     pub server_name: String,
     /// `SystemShare.Config.GameGoldName`（缺省 `元宝`）。
@@ -278,6 +285,9 @@ impl Default for NpcVars {
         Self {
             global_dyn_vars: std::rc::Rc::new(std::cell::RefCell::new(
                 crate::DynVarStore::default(),
+            )),
+            session_dyn_vars: std::rc::Rc::new(std::cell::RefCell::new(
+                std::collections::BTreeMap::new(),
             )),
             server_name: "SKY引擎".to_string(),
             game_gold_name: "元宝".to_string(),
@@ -799,9 +809,6 @@ pub struct NpcPlayer<'r, 'g> {
     pub permission: i32,
     /// `ProcessUserLineMsg`/`Permission` 的宿主跳线；`None` ⇒ 与 `ScriptPlayer` 缺省 no-op 同口径。
     pub gm: Option<NpcGm<'g>>,
-    /// `PlayObject.DynamicVarMap` 的宿主存储（卡 `openmir2-script-dyn-var-host`）；
-    /// `None` ⇒ `dyn_var_*` 保持缺省 no-op。由调用方在脚本前挂上（与会话级表的借用方式同 GM 桥）。
-    pub dyn_vars: Option<&'r mut crate::DynVarStore>,
     /// `SendDefMessage`（**不**经 `MsgQueue` 的直发帧，oracle 语义：命令体执行时立即下发）。
     ///
     /// 目前唯一来源是 `gmcmd::GmFrame::AttackMode`（`ChangeAttackModeCommand.cs:65`）；宿主在
@@ -881,7 +888,6 @@ impl NpcPlayer<'_, '_> {
             // 跳线未接 = 缺省 no-op（与 `ScriptPlayer` 缺省一致）。
             permission: 0,
             gm: None,
-            dyn_vars: None,
             gm_direct_frames: Vec::new(),
             gm_notes: Vec::new(),
         }
@@ -1162,7 +1168,10 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     ) -> Option<mir2_script::engine::vars::DynVar> {
         match kind {
             mir2_script::engine::vars::DynVarKind::Human
-            | mir2_script::engine::vars::DynVarKind::Account => self.dyn_vars.as_ref()?.get(name),
+            | mir2_script::engine::vars::DynVarKind::Account => {
+                let key = self.chr_name.to_uppercase();
+                self.vars.session_dyn_vars.borrow().get(&key)?.get(name)
+            }
             mir2_script::engine::vars::DynVarKind::Global => {
                 self.vars.global_dyn_vars.borrow().get(name)
             }
@@ -1178,7 +1187,13 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
         match kind {
             mir2_script::engine::vars::DynVarKind::Human
             | mir2_script::engine::vars::DynVarKind::Account => {
-                self.dyn_vars.as_mut().is_some_and(|s| s.set(name, v))
+                let key = self.chr_name.to_uppercase();
+                self.vars
+                    .session_dyn_vars
+                    .borrow_mut()
+                    .entry(key)
+                    .or_default()
+                    .set(name, v)
             }
             mir2_script::engine::vars::DynVarKind::Global => {
                 self.vars.global_dyn_vars.borrow_mut().set(name, v)
@@ -1195,7 +1210,13 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
         match kind {
             mir2_script::engine::vars::DynVarKind::Human
             | mir2_script::engine::vars::DynVarKind::Account => {
-                self.dyn_vars.as_mut().is_some_and(|s| s.insert(name, v))
+                let key = self.chr_name.to_uppercase();
+                self.vars
+                    .session_dyn_vars
+                    .borrow_mut()
+                    .entry(key)
+                    .or_default()
+                    .insert(name, v)
             }
             mir2_script::engine::vars::DynVarKind::Global => {
                 self.vars.global_dyn_vars.borrow_mut().insert(name, v)
@@ -2322,10 +2343,9 @@ mod tests {
     #[test]
     fn npc_player_dynamic_var_map_matches_oracle_semantics() {
         use mir2_script::engine::vars::{DynVar, DynVarKind};
-        let mut store = crate::DynVarStore::default();
         let mut rng = |_v: i32| 0;
         let mut p = NpcPlayer::empty(&mut rng);
-        p.dyn_vars = Some(&mut store);
+        p.chr_name = "hero".to_string();
         assert!(p.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(5)));
         assert!(!p.dyn_var_insert(DynVarKind::Human, "m1", DynVar::Integer(9)));
         assert_eq!(
@@ -2364,8 +2384,12 @@ mod tests {
             "GLOBAL 表跨玩家共享（`NpcVars` 克隆共享同一 `Rc`），且大小写不敏感"
         );
         assert!(!q.dyn_var_insert(DynVarKind::Global, "g", DynVar::Integer(2)));
-        p.dyn_vars = None;
-        assert_eq!(p.dyn_var_get(DynVarKind::Human, "m1"), None);
+        // 另一个角色看不到 hero 的 HUMAN 表（按角色寻址）。
+        let mut rng3 = |_v: i32| 0;
+        let mut other = NpcPlayer::empty(&mut rng3);
+        other.chr_name = "someone".to_string();
+        other.vars = p.vars.clone();
+        assert_eq!(other.dyn_var_get(DynVarKind::Human, "m1"), None);
     }
 
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
