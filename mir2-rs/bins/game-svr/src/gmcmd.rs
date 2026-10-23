@@ -6035,6 +6035,19 @@ mod tests {
             let (r, _) = run_gm(line);
             assert_eq!(texts(&r), vec![(GmColor::Red, START_QUEST_HELP)], "{line}");
         }
+        // GBK 线上字节：帮助文案必须逐字节等同 oracle（「文本相等」不等于「线上字节相等」；
+        // 同族用例见 `@禁言`）。28 字节 = 命令格式(8) + ": @"(3) + 开始提问(8) + ' '(1) + 问答名称(8)。
+        let (r, _) = run_gm("@开始提问");
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, // 命令格式
+                0x3a, 0x20, 0x40, // ": @"
+                0xbf, 0xaa, 0xca, 0xbc, 0xcc, 0xe1, 0xce, 0xca, // 开始提问
+                0x20, // ' '
+                0xce, 0xca, 0xb4, 0xf0, 0xc3, 0xfb, 0xb3, 0xc6, // 问答名称
+            ]
+        );
         for line in ["@开始提问 quiz", "@开始提问 第一题 extra"] {
             let (r, sess) = run_gm(line);
             assert!(
