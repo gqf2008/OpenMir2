@@ -1012,3 +1012,10 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 > （`fea2fbd9962ca0b0a7630cde4ce549ab8b00a148`）。这三张仍计入 `merged 未 closed 且无登记`，等 owner 裁决。
 
 ---
+## GM 批次 5A 行会族登记（2026-10-23；卡 `openmir2-gm-batch-5a-guild-impl`）
+
+> Leader 裁定 `9e7d2227` 的 A 片（6 条）已接线；本表只登记其中**确实存在但宿主未建模**的那一臂。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
+| --- | --- | --- | --- |
+| T-263 | **`@联盟` / `@取消联盟` 的会长支未建模（登记，不豁免）**：卡 `openmir2-gm-batch-5a-guild-impl`（tier=L，裁定 `9e7d2227` 的 A 片）。**非会长支已 1:1**：`AuthCommand.cs:14` 不进 `ClientGuildAlly`、`AuthCancelCommand.cs:18-21` 直接 `return` ⇒ **零帧**（用例 `batch5a_noops_permission_gate_and_zero_frames`）。**会长支**在 oracle 会进 `ClientGuildAlly`（`PlayObject.Operate.cs:1465-1523`：`SM_GUILDMAKEALLY_OK` / `SM_GUILDMAKEALLY_FAIL(n8)`，成功支另发 `SendServerGroupMsg(SS_207)` + 行会消息 + 行会态改写）或 `ClientGuildBreakAlly`（`:1525-1560`：`SM_GUILDBREAKALLY_OK` / `SM_GUILDMAKEALLY_FAIL(0)`，同样 `SS_207`）——依赖**可写行会态**（本仓 `GmWorld` 只有只读视图）与 **G11 跨服**，宿主只留 `log_note`。用例 `batch5a_guild_master_path_is_registered_not_silent` 钉住 note 必须同时出现 `ClientGuildAlly`/`ClientGuildBreakAlly` 与 `T-263`（不许静默当等价）。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-gm-batch-5a-guild-impl`）；**待独立 principal 复核** |

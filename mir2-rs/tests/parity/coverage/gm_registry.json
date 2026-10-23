@@ -30,16 +30,16 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "db3de4c0224a87f6600ac1a62fc95487ea5a266ae5325852eee6ab6408ce8213"
+   "sha256": "14ad8ce1dcfbe20018e8461b8ed8bb2e6af1be73f027e7c0d8ef20f7c344e687"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
-   "sha256": "762c18c09e4f08606d47f075c90f5d613a21bf17eb000cf30730c8d8d1e6e54d",
+   "sha256": "39490ffb78a110ff2f27cbd7adf806ad3e9c320def4d7c2f5805f3e423258e2e",
    "fields": 160
   },
   "gamecmd_conf": {
    "path": "src/Modules/GameCommand/Conf/GameCmdConf.cs",
-   "sha256": "5d33775115f7c91c37000ad252602dd96ed709150ed4680147338179043484f4",
+   "sha256": "902f042bae72af068335986c29ca6a4c87e3bbb907ae559903262c0510d793fd",
    "bound_fields": 182
   },
   "command_conf": {
@@ -2447,27 +2447,6 @@
    "field_line": 250
   },
   {
-   "cmd": "Announcement",
-   "cmd_name": "Announcement",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/AnnouncementCommand.cs:8",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].Announcement",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "AnnouncementCommand",
-   "attr_name": "Announcement",
-   "handler_exec_line": 12,
-   "name_source": "conf[Command].Announcement",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "Announcement",
-   "field_line": 244
-  },
-  {
    "cmd": "ClearCopyItem",
    "cmd_name": "ClearCopyItem",
    "child_card": null,
@@ -2692,27 +2671,6 @@
    "handler_class": "GiveMineCommand",
    "attr_name": "GiveMine",
    "handler_exec_line": 16,
-   "name_source": "cs[Command] 属性",
-   "register_command": false,
-   "perm_attr": 10,
-   "field": null,
-   "field_line": null
-  },
-  {
-   "cmd": "GuildWar",
-   "cmd_name": "GuildWar",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/GuildWarCommand.cs:5",
-   "perm_min": 10,
-   "perm_source": "cs[Command] 属性",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "GuildWarCommand",
-   "attr_name": "GuildWar",
-   "handler_exec_line": 9,
    "name_source": "cs[Command] 属性",
    "register_command": false,
    "perm_attr": 10,
@@ -3140,27 +3098,6 @@
    "field_line": 104
   },
   {
-   "cmd": "SbkDoor",
-   "cmd_name": "SbkDoor",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/SbkDoorControlCommand.cs:5",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].SbkDoor",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "SbkDoorControlCommand",
-   "attr_name": "SbkDoorControl",
-   "handler_exec_line": 9,
-   "name_source": "conf[Command].SbkDoor",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "SbkDoor",
-   "field_line": 314
-  },
-  {
    "cmd": "sdasdert",
    "cmd_name": "sdasdert",
    "child_card": null,
@@ -3581,27 +3518,6 @@
    "field_line": 130
   },
   {
-   "cmd": "允许联盟",
-   "cmd_name": "允许联盟",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/AuthallyCommand.cs:5",
-   "perm_min": 10,
-   "perm_source": "GameCommands.cs 构造默认",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "AuthallyCommand",
-   "attr_name": "Authally",
-   "handler_exec_line": 9,
-   "name_source": "conf[Command].AuthAlly",
-   "register_command": true,
-   "perm_attr": 0,
-   "field": "Authally",
-   "field_line": 72
-  },
-  {
    "cmd": "创建行会",
    "cmd_name": "创建行会",
    "child_card": null,
@@ -3736,27 +3652,6 @@
    "perm_attr": 10,
    "field": "ReleaseShutup",
    "field_line": 174
-  },
-  {
-   "cmd": "取消联盟",
-   "cmd_name": "取消联盟",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/AuthCancelCommand.cs:8",
-   "perm_min": 10,
-   "perm_source": "GameCommands.cs 构造默认",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "AuthCancelCommand",
-   "attr_name": "AuthCancel",
-   "handler_exec_line": 12,
-   "name_source": "conf[Command].AuthCancel",
-   "register_command": true,
-   "perm_attr": 0,
-   "field": "AuthCancel",
-   "field_line": 120
   },
   {
    "cmd": "复活",
@@ -4074,27 +3969,6 @@
    "field_line": 76
   },
   {
-   "cmd": "联盟",
-   "cmd_name": "联盟",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/AuthCommand.cs:8",
-   "perm_min": 10,
-   "perm_source": "GameCommands.cs 构造默认",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "AuthCommand",
-   "attr_name": "Auth",
-   "handler_exec_line": 12,
-   "name_source": "conf[Command].Auth",
-   "register_command": true,
-   "perm_attr": 0,
-   "field": "Auth",
-   "field_line": 122
-  },
-  {
    "cmd": "退出门派",
    "cmd_name": "退出门派",
    "child_card": null,
@@ -4117,20 +3991,20 @@
   }
  ],
  "summary": {
-  "total": 81,
+  "total": 75,
   "by_verdict": {
-   "unreachable": 80,
+   "unreachable": 74,
    "script-reachable": 1
   },
   "reachable": 0,
   "script_reachable": 1,
-  "unreachable": 80,
+  "unreachable": 74,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 104,
-   "Unimplemented": 81
+   "Implemented": 110,
+   "Unimplemented": 75
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4156,7 +4030,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 83,
+  "complete_implemented": 89,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
