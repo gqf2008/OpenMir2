@@ -1,20 +1,22 @@
 # 窗口批次彩排（2026-10-24）
 
-- **卡**：`openmir2-window-batch-rehearsal`（tier=L；写集 `docs/`）
-- **执行**：`openmir2-worker-67`，worktree `E:/tmp/wt-worker-67`，分支 `card/window-batch-rehearsal`
-- **基线**：`walgit/master` = `8dcb8c8ca`（v1/v2 实测 head）。返工 v3 已 rebase 到 **`b3f48ab49`** 并在其上重跑全矩阵（20 场景 × `--check-scenario` 裸跑/补 var + `--dry-run` 默认 profile/带 magic profile，另加 inventory 五条证据链）；两次结果一致，唯一订正是 `combat_hit` 的 `check` 列（`0` → `2 → 0`）。
-- **目的**：给 owner 一张开窗当天能**照着逐条跑**的表。原则是**宁少勿假**：跑不了的就写跑不了。
-- **红线遵守**：未改任何场景 JSON、未改 `tools/**`、未改 `rules.json`、未改卡片状态；未起栈、未连库、未占端口；全部命令离线。
+- **卡**：`openmir2-rehearsal-refresh-478ff9a33`（tier=L；写集 `docs/`）
+- **执行**：`openmir2-worker-58`，worktree `E:/tmp/wt-worker-58`，分支 `card/rehearsal-refresh`
+- **基线**：`walgit/master` = **`c4b66ddb1`**（本次全矩阵重跑的 head；返工从 `47fd96ca8` rebase 到它）。本表最初在 `b3f48ab49` 时代测过；此后 `spell_cast` 走完「假绿 → fail-closed → 可跑」三段、`rules.json` 补到 **45 条**（含 53/638/639）、`card_window` 增加 `--var` 透传，`c4b66ddb1` 又把 **inventory 夹具接通**（probe 收键 + `card_window` 出预览 + `bag_equip`/`eat_item` 场景自声明 `inventory`），故本版在 `c4b66ddb1` 上对 **20 场景 × 三态**全部重跑，逐格记录当次 rc 与输出。
+- **目的**：给 owner 一张开窗当天能**照着逐条跑**的表。原则是**宁少勿假**：跑不了的就写跑不了。**本文件是唯一的窗口执行清单**（batch-plan §7.4 与 needs-human 的决策项都靠互链，不各自复制一套命令）。
+- **红线遵守**：未改任何场景 JSON、未改 `tools/**`、未改 `rules.json`、未改 `whitelist.md`、未改 batch-plan；未起栈、未连库、未占端口；全部命令离线。
+
+> ⚠ **本卡更新的是「前置与分类」，不是验收结论。** `--dry-run` 绿（rc=0）**≠ 真机已对拍**：它只证明「命令序列可生成、该场景所需夹具能预览出来」。真机证据只能来自开窗当天的双栈实跑与比较器报告。
 
 ---
 
 ## 0. 结论（先看这五条）
 
-1. **20 个场景的离线彩排结果**：15 个「离线绿」（与 `window-batch-plan` 的 15 场景枚举一致）、2 个 `blocked`（`combat_hit` / `combat_strike`）、2 个「dry-run 绿但不可信（假绿）」（`bag_equip` / `eat_item`）、1 个「默认 profile 加载期 fail-closed」（`spell_cast`：默认 `alt` 下 `--dry-run` **rc=2**，带 `magic` profile 才 rc=0 且 2 行夹具预览）。15 + 2 + 2 + 1 = 20。逐条见 §2。
-2. **`spell_cast` 的假绿通道已被工具关掉（已 fail-closed）**：场景顶层声明 `requires: ["magic"]`（`tools/probe/scenarios/spell_cast.json`），`card_window` **加载期**按生效 profile（含 `sides.<side>` 覆盖）**逐侧**核段，缺任一侧的 `magic` ⇒ **rc=2 并点名**（场景 / profile / 缺哪侧 / 场景文件）。实测：`--profile alt` 下 `--dry-run` **rc=2、0 行魔法夹具**；带 `magic` 段的 profile 才 rc=0 且出现两行夹具预览。**「已 fail-closed」不等于「可以真跑」**——真机侧仍不可跑（Rust 魔法帧面 + 第二观察者）。
-3. **`bag_equip` / `eat_item` 的 inventory 夹具当前没有可用路径**：`card_window.py` 已支持**场景级** `inventory`（已合 `bb4317a01`），但 `mir2_probe.py` 的顶层 schema 不收该键 ⇒ 一旦在场景里声明，`--check-scenario` 与真跑都 rc=2。**dry-run 对 inventory 也完全不预览**（只预览 placement 和 magic）。⇒ `openmir2-window-inventory-fixture`（已合 `bb4317a01`）产出的夹具**没有可达入口**；由新卡 **`openmir2-inventory-fixture-reachability`**（open）承接。详见 §3.2 与 §5 差异 3。
-4. **`dice_chain` 的 actor 隐患已由 `--var` 透传收口**（卡 `openmir2-card-window-var-passthrough`）：`params.npc_actor = 119` 是 r9 抓包里的赌场 NPC actor id，C# 的 ActorId 每会话不同；它不在 `required` 里 ⇒ **不会有 discovery 值**。现在 `card_window --var npc_actor=<本次 actor id>` 会**原样**透传给两侧 probe（不传时行为逐字节不变）⇒ 跑 `dice_chain` 时显式给本次 id（取法见 §6.3）；不想手工取 id 仍可直接跑 `dice_chain_auto`（actor 自动发现）。**场景 JSON 不动**（红线，见 §6.3）。
-5. **计数口径**：按 Leader 裁决（drift-sweep 线程 status `eb667db0`）只看**逐行枚举**，禁止 `18−N` 反推。落地位置是 **`docs/window-batch-plan-20261023.md` §7.4 @ `6ceb0689d`**（drift-sweep v5，**尚未合入 master**），枚举为 **10 行 / 15 个场景**。本次实跑与它一致；偏差逐条见 §5。（派单文字写的是「§7.5」，但 §7.5 是「判据口径」，枚举实际在 §7.4；master `8dcb8c8ca` 的 §7.4 仍是旧口径 14。）
+1. **20 个场景的离线彩排结果：18 个「可跑」、2 个 `blocked`（`combat_hit` / `combat_strike`）、0 个假绿。** 18 + 2 = 20。**假绿清零**是因为 `c4b66ddb1` 把 inventory 夹具接通：`bag_equip` / `eat_item` 现在 `--dry-run` rc=0 **且两侧各 1 行**「背包夹具…」预览。**但 batch-plan §7.4 目前仍写 11 行 / 16 个场景**（把这两条列在「仍不可跑」），已滞后于实测 ⇒ 需要另一张卡把它 **16 → 18**（本卡不改 batch-plan，已在卡上 comment 点名）。逐条见 §2。
+2. **`spell_cast` 已从 fail-closed 变成「可跑」，但三态必须写全**：默认 `--profile alt` 下 `--dry-run` **rc=2**（场景 `requires:["magic"]`，加载期点名缺 csharp/rust 两侧）→ 带 `magic` 段 profile **rc=0、2 行魔法夹具预览** → 再叠加 D-9 pin（`sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`）**rc=0、2 行预览**。**开窗必须用第三种态**：pin 不写，`SM_HEALTHSPELLCHANGED(53)` 两侧 `body_len` 16 vs 0 ⇒ 比较器 fail-closed FAIL。profile 可直接照抄的写法**见 `tools/probe/scenarios/README.md`「窗口 profile 前置：`spell_cast` 必须 pin D-9」与「`requires`」两节**，本文件不重写。**「离线可跑」≠「真机已对拍」**——真机窗口仍未跑。
+3. **`bag_equip` / `eat_item` 已脱离假绿（`c4b66ddb1`）**：inventory 夹具现在**有可达入口**——`mir2_probe.py` 顶层 schema 放行 `inventory` 并做形状校验，`card_window.py --dry-run` 走 `preview_inventory`（`:2175` 定义 / `:3440` dry-run 调用 / `:2210` 打印），两个场景 JSON 各自声明 `inventory`。实测 `--dry-run` 默认 `alt` **rc=0、两侧各 1 行**：`bag_equip` 为 `positions=[40] make_index=[5001]`（木剑 StdMode5），`eat_item` 为 `positions=[41] make_index=[5002]`（金创药小量 StdMode0），角色均 `winplay0`。**「预览齐了」≠「真机已对拍」**：真机窗口仍未跑。详见 §3.2。
+4. **`dice_chain` 的 actor 隐患仍靠 `--var` 透传收口**：`params.npc_actor = 119` 是 r9 抓包里的赌场 NPC actor id，C# 的 ActorId 每会话不同；它不在 `required` 里 ⇒ **不会有 discovery 值**。`card_window --var npc_actor=<本次 actor id>` 会**原样**透传给两侧 probe（实测 dry-run 命令里出现 4 处 `--var npc_actor=12345`；不传时行为逐字节不变）⇒ 跑 `dice_chain` 时显式给本次 id（取法见 §6.3）；不想手工取 id 仍可直接跑 `dice_chain_auto`。**场景 JSON 不动**。
+5. **计数口径**：只看**逐行枚举**，禁止 `18−N` 反推。`docs/window-batch-plan-20261023.md` §7.4 @ `c4b66ddb1` 仍是 **11 行 / 16 个场景**；本次实测是 **18 可跑 / 2 blocked / 0 假绿** ⇒ **§7.4 需由 16 更新到 18**（把 `bag_equip`/`eat_item` 移入「现在就能跑」；那是另一张卡的写集，本卡只在此点名）。差异与订正逐条见 §5。
 
 ---
 
@@ -29,16 +31,23 @@ python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/s
 ```
 
 - `--check-scenario`：纯加载期校验（不连网）。**rc=0 = 场景形状合法**；**rc=2 = 场景非法或缺必填 `--var`**。`blocked` 是合法形状（仍 rc=0），由 `card_window` 拒。
-- `card_window --dry-run`：只打印完整命令序列，**不起栈、不建 out**（本次全部用的 `--out E:/tmp/w67-rehearsal/out/<scene>` 自始至终没有被创建）。`blocked` 场景在这里 rc=2；`required` 场景会先打印 discovery 命令，`--var` 值以 `<discovered:NAME>` 占位。场景顶层 `requires` 要求的夹具在**生效 profile** 里缺段时同样 **rc=2**（加载期 fail-closed，先于 discovery 与一切预览；与真跑同一条路径）。
-- 临时目录 `E:/tmp/w67-rehearsal/` 只放日志与临时 profile，**不在仓库内**（残留清单见 §8）。
+- `card_window --dry-run`：只打印完整命令序列，**不起栈、不建 out**（本次 `--out E:/tmp/w58-rehearsal/out/<scene>` 自始至终没有被创建，已核）。`blocked` 场景在这里 rc=2；`required` 场景会先打印 discovery 命令，`--var` 值以 `<discovered:NAME>` 占位。场景顶层 `requires` 要求的夹具在**生效 profile** 里缺段时同样 **rc=2**（加载期 fail-closed，先于 discovery 与一切预览；与真跑同一条路径）。
+- 临时目录 `E:/tmp/w58-rehearsal/` 只放日志与临时 profile / 场景副本，**不在仓库内**（残留清单见 §8）。
 
-### 1.2 两态与「假绿」判据
+### 1.2 三态与「假绿」判据
 
-- **假绿** = `dry-run rc=0`，但输出里**没有该场景所需夹具的预置行**（magic 夹具行形如 `[csharp] 魔法夹具（dry-run 不连库）…`）。
-- **`requires` 已把 magic 类的假绿关掉**：场景顶层声明 `requires` 后，缺夹具的 profile 在**加载期**就 **rc=2 并点名**（见 §3.1），不再产生「rc=0 但零夹具行」的假绿。本 head **只有 `spell_cast` 声明了 `requires`**；`bag_equip` / `eat_item` 没声明 ⇒ 它们的假绿通道**仍在**（inventory 夹具无任何可达路径，见 §3.2）。
-- 需要夹具的场景按两态跑：
-  - **magic 类**（`spell_cast`）：默认 `--profile alt`（实测 **rc=2 fail-closed**）vs `--profile E:/tmp/w67-rehearsal/profile-magic.json`（= alt + 顶层 `"magic": [{"magic_id":1,"level":0,"use_key":"1","curr_train":0}]`，与场景描述逐字一致；实测 **rc=0、2 行夹具预览**）。
-  - **inventory 类**（`bag_equip` / `eat_item`）：默认 vs「对应段」。**当前没有 profile 级 inventory 段**（`card_window.py` 只读场景顶层 `inventory`；profile 顶层未知键被静默忽略）。因此第二态用**仓库外的场景临时副本**（原文件 + `inventory` 段，仓库内场景未改）跑，见 §3.2。
+场景按「能不能在离线阶段证明夹具齐了」分三态：
+
+- **可跑（18）**：`--check-scenario` rc=0（或补 `--var` 后 rc=0）、`--dry-run` rc=0、且**该场景所需的夹具行有预览**（无夹具需求的场景则不需要预览行）。可跑**只代表离线链路通**。
+- **blocked（2）**：场景自声明 `blocked`，`card_window` 在建 out / 起栈前就 `rc=2`、`verdict=BLOCKED`，**连命令序列都不预览**。
+- **假绿（当前 0）**：`--dry-run` rc=0，但输出里**没有该场景所需夹具的预置行** ⇒ **不能当作窗口可跑的证据**。`c4b66ddb1` 起 inventory 也出预览行，20 场景中已无假绿；仍保留该判据，防止后续回归。
+- **fail-closed**：场景声明的 `requires` 在生效 profile 里缺段 ⇒ 加载期 rc=2 并点名（`spell_cast` 在默认 `alt` 下即此态）。它**不是**假绿，是工具明确拒绝。
+
+夹具三态的具体跑法：
+
+- **magic 类**（`spell_cast`）：必须用**带 `magic` 段且带 D-9 pin** 的 profile。本次三态分别是
+  ① 默认 `alt`（实测 **rc=2 fail-closed**）；② `profile-magic.json`（= 内置 alt 深拷贝 + 顶层 `"magic": [{"magic_id":1,"level":0,"use_key":"1","curr_train":0}]`，实测 **rc=0、2 行夹具预览**）；③ `profile-magic-pin.json`（② 再给 `sides.csharp.env` / `sides.rust.env` 各加 `MIR2_CLIENT_ABILITY_LAYOUT="0"`，实测 **rc=0、2 行预览**）。**开窗用 ③**；写法不在此重写，见 README 的两节。
+- **inventory 类**（`bag_equip` / `eat_item`）：**场景自描述**——`inventory` 声明在场景顶层，`card_window` 在每侧 restore 之后、起栈之前写进该侧测试库 `characters_bagitem`，`--dry-run` 同样两侧各打印 1 行预览（`preview_inventory`，`card_window.py:2175`）。**不需要 profile**；profile 顶层 `inventory` 仍被静默忽略（不是受支持通道）。详见 §3.2。
 
 ### 1.3 需要 `--var` 的变量与来源（不是猜值）
 
@@ -51,7 +60,7 @@ python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/s
 | `move_x`/`move_y`/`move_xy` | 场景 `computed`：`self_x+1` / `self_y+0`，再 `pack` 成 `(y<<16)\|x` | `move_walk.json`、`param_discovery.py` |
 | `make_index`/`item_name`/`takeon_where` | 同一条 `SM_BAGITEMS(201)` 里**同一个物品槽**（`MakeIndex`/`Name`/`StdMode→ItemLocation`） | `param_discovery.py` 201 规则族 |
 | `hit_xy` | 场景 `computed.pack {lo: self_x, hi: self_y}`：`CM_HIT(3014)` 的 `recog` 是**攻击者自身格**（不是目标格） | `combat_hit.json` `computed`；`PlayObject.Attack.cs:883`、`PlayObject.Message.cs:1221-1230` |
-| `hit_dir` | **不可推导**：无来源帧，只能**操作者显式** `--var` 给；**无发现规则** | `param_discovery.py:20`（表中「不可推导 / 无来源帧」）、`:246`（`UNDERIVABLE["hit_dir"]`） |
+| `hit_dir` | **不可推导**：无来源帧，只能**操作者显式** `--var` 给；**无发现规则** | `param_discovery.py`（表中「不可推导 / 无来源帧」、`UNDERIVABLE`） |
 
 > **`hit_dir` 不属于发现能力**：`param_discovery.py` 的 `UNDERIVABLE` 明写 `target_x`/`target_y`/`hit_dir` 为「无来源帧（需操作者显式 `--var`）」。因此 `combat_hit` 的 `hit_dir` 承接写 **「无 / operator-supplied」**，**不是** `openmir2-window-param-discovery`；`hit_xy` 则由 `computed` 从 `self_x`/`self_y` 确定性算出（操作者的选择，不是帧事实）。
 
@@ -59,55 +68,88 @@ python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/s
 
 ---
 
-## 2. 主表：20 个场景的实测 rc
+## 2. 主表：20 个场景的实测 rc（head `c4b66ddb1`）
 
 **列说明**：
 
 - `check rc`：`0` = 无变量依赖；`2 → 0` = 裸跑 rc=2（缺 `required` 变量）、按 §1.3 补 `--var` 后 rc=0。
-- `dry rc（默认）` = `--profile alt`（不显式给 profile 时的默认）。`2ʳ` = 场景声明了 `requires` 而该 profile 缺段 ⇒ **加载期 rc=2**（fail-closed，不预览命令序列）。
-- `dry rc（带 profile）`：`0ᵐ` = magic profile 且**该场景所需**的魔法夹具预览行存在（`spell_cast`）；`0ᵛ` = 场景级 inventory 临时副本（rc=0 但**无**预览行）；`0ᵃ` = rc=0、无**该场景专属**夹具。⚠ **魔法夹具是 profile 级「全局 DB 预置」**（`card_window.py:3163-3177`：profile 只要声明了 `magic`，就对该侧**每个非 blocked 场景**预览 1 行）⇒ 带 magic profile 时**所有** `0ᵃ` 场景也会多出 2 行「魔法夹具」预览（两侧各 1），**不是**「与默认完全相同」；返工 v3 实测 **18/20** 场景如此（`combat_hit`/`combat_strike` 两个 `2ᵇ` 各 0 行），不影响可跑性判定。**为什么是 18 而不是 20**：`blocked` 硬门（`card_window.py:3079`，返工基线 `b3f48ab49`）在 `--dry-run` 预览循环（`:3146-3147` 起）**之前**就 `return summary`（rc=2、`verdict=BLOCKED`，连命令序列都不预览）；magic 预览在循环内（`:3163-3177`），两个 `blocked` 场景根本走不到它 ⇒ 只有 **18 个非 blocked 场景 × 2 行 = 36 行**，不是 20 × 2 = 40 行。逐场景复跑计数（magic profile，两态各跑一遍）：`bag_equip`/`dice_chain`/`dice_chain_auto`/`eat_item`/`equip_struck_save`/`gm_batch`/`gm_time`/`king_castle_war`/`king_dialog`/`login_only`/`merchant_dialog`/`move_walk`/`npc_click`/`npc_click_auto`/`npc_script_chain`/`pickup_item`/`spell_cast`/`upgrade_retrieve` 各 2 行，`combat_hit`/`combat_strike` 各 0 行；默认 profile 下 19 个场景各 0 行（`combat_hit`/`combat_strike` 两个 `blocked` 也是 0 行），`spell_cast` **加载期 rc=2**（不预览，`2ʳ`）。⚠ 上述 `:3079` / `:3146-3147` / `:3163-3177` 是**返工基线 `b3f48ab49`** 的行号；代码基线 `1f1a69c84`（本卡 head `077b85a12` 未改代码，行号相同）上分别位移到 `:3154`（BLOCKED 硬门）、`:3228`（dry-run 预览循环）、`:3243-3254`（magic 预览），并新增 `requires` 硬门于 `:3170`（见 §3.1）。
-- `2ᵇ` = 场景自声明 `blocked`，`card_window` 在建 out/起栈前就拒。
-- `2ʳ` = 场景的 `requires` 没被生效 profile 满足（加载期 fail-closed，见 §1.2 / §3.1）；本 head 只有 `spell_cast` 会走到这一格。
-- 「假绿」= rc=0 但没有夹具行 ⇒ **不能当作窗口可跑的证据**；声明了 `requires` 的场景不会落到这一格（缺段直接 `2ʳ`）。
+- `dry rc（默认）` = `--profile alt`（不显式给 profile 时的默认）。
+- `dry rc（带所需 profile）`：
+  - `0ᵃ` = 场景本身**无需夹具 profile**，以默认 `alt` 为终态（rc=0）。另以 magic profile 复跑也 rc=0，并多出**两侧各 1 行、共 2 行**「魔法夹具」预览——那是 **profile 级全局 DB 预置**，**不代表本场景需要或已具备夹具**。
+  - `0ᵐ` = `magic` profile；rc=0 且**该场景所需**的魔法夹具预览 2 行。
+  - `0ᵐᵖ` = `magic` + D-9 pin（`sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`）；rc=0 且 2 行预览。**这是 `spell_cast` 开窗要用的写法。**
+  - `0ⁱ` = 场景**自带 `inventory`**（`bag_equip` / `eat_item`）；rc=0 且两侧各 1 行背包夹具预览（默认 `alt` 即可，无需 profile）。
+  - `2ᵇ` = 场景自声明 `blocked`，`card_window` 在建 out/起栈前就拒（`card_window.py:3349-3359`，`verdict=BLOCKED`，不预览命令序列）。
+  - `2ʳ` = 场景的 `requires` 没被生效 profile 满足（加载期 fail-closed，`card_window.py:3366` 调用 `validate_scenario_requires`，`REQUIRES_KNOWN` 见 `:1366`）。
+- 「假绿」= rc=0 但没有夹具行 ⇒ **不能当作窗口可跑的证据**；声明了 `requires` 的场景不会落到这一格（缺段直接 `2ʳ`）。`c4b66ddb1` 上 **20 个场景已无假绿**（inventory 也出预览行）。
 
-| 场景 | `--check-scenario` rc | `--dry-run` rc（默认 alt） | `--dry-run` rc（带 profile） | 阻塞原因 / 真机前置 | 承接卡 | 依赖的 R 卡（详见 §4） |
+| 场景 | `--check-scenario` rc | `--dry-run` rc（默认 alt） | `--dry-run` rc（带所需 profile） | 阻塞原因 / 真机前置 | 承接卡 | 依赖的 R 卡（详见 §4） |
 |---|---|---|---|---|---|---|
-| `bag_equip` | 2 → 0（`make_index`/`takeon_where`/`item_name`） | **0（假绿）** | 0ᵛ（**仍无夹具预览行**） | 缺 inventory 夹具**且无可用路径**（probe schema 拒 `inventory`）；201 发现无真实样本 | `openmir2-window-inventory-fixture`（已合 `bb4317a01`）；**可达入口缺口 = `openmir2-inventory-fixture-reachability`**（open）；**建议新卡** `openmir2-probe-scenario-inventory-key`（未开） | 1：`delmagic-addmagic-chain` |
-| `combat_hit` | 2 → 0（`hit_xy`/`hit_dir`；**`hit_dir` 需操作者显式给**，见 §1.3） | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：缺同屏怪物夹具 + 伤害夹具（随机护甲 `[AC,2AC-1]` 可能吃成 0、零帧）；`wait_for` 的 recog/来源过滤**已具备**（`8b40443b6`，等待已改 `{"idents": 31, "recog_is": "other"}`；`14`→`31` 缘由见 §6.2）⇒ 不再是「31/14 不可归因」 | **建议新卡** `openmir2-combat-hit-monster-fixture`（未开）；recog/来源过滤**已落地**（`8b40443b6`，selftest **10→11**），原承接卡 `openmir2-probe-waitfor-recog-filter` **已 closed**；仍 blocked 只因缺怪物/装备夹具 | 12：`attacktarget-overrides`、`login-numeric-gaps`、`merchant-race-bias`、`monster-attack-hit-frame`、`proper-target-unfolded`、`rm-delaypushed`、`rm-refmessage-delay-layer`、`run-gap-mb3`、`run-gap-monster-specials`、`run-gap-pl1`、`superman-normnpc`、`weapon-durability-frames` |
-| `combat_strike` | 0 | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：无 `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装（伤害门槛夹具）；`wait_for` recog 过滤**已具备**（`8b40443b6`，等待已改 `{"idents": 31, "recog_is": "other"}` ⇒ 不再误认「自己被守卫打」的 `SM_STRUCK(31)`） | **建议新卡** `openmir2-combat-strike-gear-fixture`（未开）；影响 R3 的 13 张 | 13：见 §4.3（R3 全组） |
-| `dice_chain` | 0 | 0 | 0ᵃ | 赌场 NPC；**`params.npc_actor=119` 是 r9 抓包值、每会话不同且不在 `required`**。`card_window` 现已支持 `--var` 透传（卡 `openmir2-card-window-var-passthrough`）⇒ 开窗时用 `--var npc_actor=<本次 actor id>` 覆盖；不给则仍按 119 点空 | `openmir2-card-window-var-passthrough`（已交付）；不想手工取 id 仍可用 `dice_chain_auto`（见 §6.3） | 2：`script-playdice-openybdeal`、`script-take-persist`；另有 T-211 |
-| `dice_chain_auto` | 0 | 0 | 0ᵃ | 赌场 NPC（actor 自动发现） | — | 2：`menu-ok-unify-pickwire`、`ya52-menu-ok-missing` |
-| `eat_item` | 2 → 0（`make_index`/`item_name`） | **0（假绿）** | 0ᵛ（**仍无夹具预览行**） | 同 `bag_equip`（inventory 路径不可用 + 201 无样本） | 同 `bag_equip` | 1：`unbindlist-consumer`；另有 T-211 |
-| `equip_struck_save` | 0 | 0 | 0ᵃ | 商店 NPC「卫家店」(0103,19,18) 摆位；R 级真机窗口未授权 | `openmir2-persist-useitems-wiring`（T-247）；`openmir2-attack-weapon-wear-642`（T-266）；场景 description 曾写「Rust 未接 642」，已由 `openmir2-642-stale-text-sweep`（合入 `061312242`）订正为「已接线、真机窗口未跑」 | 2：`persist-useitems-wiring`、`attack-weapon-wear-642` |
-| `gm_batch` | 0 | 0 | 0ᵃ | GM 命令权限（角色 Permission） | — | 1：`cm-adjust-bonus` |
-| `gm_time` | 0 | 0 | 0ᵃ | 无 | — | 0 |
-| `king_castle_war` | 2 → 0（`king_actor`） | 0 | 0ᵃ | `king_actor` 是**部署假设**（643 不证明是国王）；城堡战 UnderWar 语境未备（`castle_zone` 无场景文件） | `openmir2-t138-request-castle-war` | 1：`t138-request-castle-war` |
-| `king_dialog` | 2 → 0（`king_actor`） | 0 | 0ᵃ | 同 `king_actor` 假设；需角色站位靠国王 | 无（`king_actor` 发现已合） | 0（方法见 §4） |
-| `login_only` | 0 | 0 | 0ᵃ | 角色预置位（场景未声明 `placement`，用 DB 现值） | — | 34：见 §4.12 |
-| `merchant_dialog` | 2 → 0（`merchant_actor`） | 0 | 0ᵃ | 商人 NPC + 角色站位 | — | 3：`encoding-core-e1-e2`、`market-def-impl`、`sm-merchantsay-recog`；另有 T-211 |
-| `move_walk` | 2 → 0（`move_x`/`move_y`/`move_xy`） | 0 | 0ᵃ | 目标格必须可走（`computed` 由 SM_LOGON 推） | — | 1：`transmap-maptrigger` |
-| `npc_click` | 2 → 0（`npc_actor`） | 0 | 0ᵃ | 角色站位（场景无 `placement`；`npc_actor` 走 643 发现） | — | 5：`click-path-bag-writeback`、`encoding-core-e1-e2`、`npc-def-loading`、`npc-display-table`、`sm-merchantsay-recog`；另有 T-211 |
-| `npc_click_auto` | 0 | 0 | 0ᵃ | **它是所有 `required` 场景的 discovery 载体**（点最近 NPC 取 643） | — | 0（但被 §2 中所有 `2 → 0` 行间接依赖） |
-| `npc_script_chain` | 2 → 0（`npc_actor`） | 0 | 0ᵃ | 场景自带 `placement` (0122,29,33)（贴着比奇国王） | — | 7：`action-line-variable-text`、`guild-official-npc`、`npc-def-loading`、`pickwire-remaining-frames`、`run-gap-pl2`、`run-gap-pl3`、`run-gap-pl4`；另有 T-211 |
-| `pickup_item` | 2 → 0（`self_x`/`self_y`） | 0 | 0ᵃ | 同格必须有可拾取地物（否则 200/201 不来） | — | 0 |
-| `spell_cast` | 0 | **2ʳ FAIL-CLOSED**（`requires:["magic"]`，缺段即加载期 rc=2） | **0ᵐ（magic profile，2 行夹具预览；rc=0）** | 场景已解封；真机仍不可跑：Rust 魔法落点/638/639 + 第二观察者未接 | `openmir2-spell-cast-unblock`（已合）、`openmir2-window-magic-fixture`（已合）；Rust 帧面见下条 | 8：`buff-system`、`default-arm-spell-surface`、`healthspell-emission-model`、`magic-8-21-wiring`、`mb8-9-monsters`、`recall-slave-shift-live`、`spell-mp-wrapper`、`spell-shared-tail`；另有 T-228/230/233/234/260 |
-| `upgrade_retrieve` | 2 → 0（`merchant_actor`） | 0 | 0ᵃ | 商店 NPC 摆位（沙巴克铁匠 (332,317) 西南邻格 (320,328)）；**武器在手 / 金币≥10000 / 背包有黑铁矿**（缺一第 9 步 `wait_idents 709` 必红） | `openmir2-upgrade-npc`（T-95） | 4：`a09-upgrade-item`、`outbound-encoders-red-batch`、`upgrade-npc`、`weapon-upgrade-values` |
+| `bag_equip` | 2 → 0（`make_index`/`takeon_where`/`item_name`） | **0** | `0ⁱ`（**两侧各 1 行**背包夹具预览） | 场景自带 `inventory`（木剑 StdMode5，position 40 / make_index 5001）；角色站位用 DB 现值（场景无 `placement`）；三个 `--var` 由 `SM_BAGITEMS(201)` 发现。**真机窗口未跑** | `openmir2-window-inventory-fixture`（已合 `bb4317a01`）；**可达入口已合 `c4b66ddb1`**（`openmir2-inventory-fixture-reachability`） | 1：`delmagic-addmagic-chain` |
+| `combat_hit` | 2 → 0（`hit_xy`/`hit_dir`；**`hit_dir` 需操作者显式给**，见 §1.3） | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：缺同屏怪物夹具 + 伤害夹具（随机护甲 `[AC,2AC-1]` 可能吃成 0、零帧）；`wait_for` 的 recog/来源过滤**已具备**（`8b40443b6`，等待已改 `{"idents": 31, "recog_is": "other"}`）⇒ 不再是「31/14 不可归因」 | **建议新卡** `openmir2-combat-hit-monster-fixture`（未开）；recog/来源过滤**已落地**（`8b40443b6`），原承接卡 `openmir2-probe-waitfor-recog-filter` **已 closed**；仍 blocked 只因缺怪物/装备夹具 | 12：`attacktarget-overrides`、`login-numeric-gaps`、`merchant-race-bias`、`monster-attack-hit-frame`、`proper-target-unfolded`、`rm-delaypushed`、`rm-refmessage-delay-layer`、`run-gap-mb3`、`run-gap-monster-specials`、`run-gap-pl1`、`superman-normnpc`、`weapon-durability-frames` |
+| `combat_strike` | 0 | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：无 `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装（伤害门槛夹具）；`wait_for` recog 过滤**已具备**（`8b40443b6`，等待已改 `{"idents": 31, "recog_is": "other"}`） | **建议新卡** `openmir2-combat-strike-gear-fixture`（未开）；解封后一次性解锁 R3 的 13 张 | 13：见 §4.3（R3 全组） |
+| `dice_chain` | 0 | 0 | `0ᵃ` | 赌场 NPC；**`params.npc_actor=119` 是 r9 抓包值、每会话不同且不在 `required`**。开窗时用 `--var npc_actor=<本次 actor id>` 覆盖；不给则仍按 119 点空 | `openmir2-card-window-var-passthrough`（已交付）；不想手工取 id 仍可用 `dice_chain_auto`（见 §6.3） | 2：`script-playdice-openybdeal`、`script-take-persist`；另有 T-211 |
+| `dice_chain_auto` | 0 | 0 | `0ᵃ` | 赌场 NPC（actor 自动发现） | — | 2：`menu-ok-unify-pickwire`、`ya52-menu-ok-missing` |
+| `eat_item` | 2 → 0（`make_index`/`item_name`） | **0** | `0ⁱ`（**两侧各 1 行**背包夹具预览） | 场景自带 `inventory`（金创药小量 StdMode0，position 41 / make_index 5002）；角色站位用 DB 现值；两个 `--var` 由 `SM_BAGITEMS(201)` 发现。**真机窗口未跑** | 同 `bag_equip` | 1：`unbindlist-consumer`；另有 T-211 |
+| `equip_struck_save` | 0 | 0 | `0ᵃ` | 商店 NPC「卫家店」(0103,19,18) 摆位；R 级真机窗口未授权 | `openmir2-persist-useitems-wiring`（T-247）；`openmir2-attack-weapon-wear-642`（T-266）；场景 description 的旧文已由 `openmir2-642-stale-text-sweep`（`061312242`）订正为「已接线、真机窗口未跑」 | 2：`persist-useitems-wiring`、`attack-weapon-wear-642` |
+| `gm_batch` | 0 | 0 | `0ᵃ` | GM 命令权限（角色 Permission） | — | 1：`cm-adjust-bonus` |
+| `gm_time` | 0 | 0 | `0ᵃ` | 无 | — | 0 |
+| `king_castle_war` | 2 → 0（`king_actor`） | 0 | `0ᵃ` | `king_actor` 是**部署假设**（643 不证明是国王）；城堡战 UnderWar 语境未备（`castle_zone` 无场景文件） | `openmir2-t138-request-castle-war` | 1：`t138-request-castle-war` |
+| `king_dialog` | 2 → 0（`king_actor`） | 0 | `0ᵃ` | 同 `king_actor` 假设；需角色站位靠国王 | 无（`king_actor` 发现已合） | 0（方法见 §4） |
+| `login_only` | 0 | 0 | `0ᵃ` | 角色预置位（场景未声明 `placement`，用 DB 现值） | — | 34：见 §4.12 |
+| `merchant_dialog` | 2 → 0（`merchant_actor`） | 0 | `0ᵃ` | 商人 NPC + 角色站位 | — | 3：`encoding-core-e1-e2`、`market-def-impl`、`sm-merchantsay-recog`；另有 T-211 |
+| `move_walk` | 2 → 0（`move_x`/`move_y`/`move_xy`） | 0 | `0ᵃ` | 目标格必须可走（`computed` 由 SM_LOGON 推） | — | 1：`transmap-maptrigger` |
+| `npc_click` | 2 → 0（`npc_actor`） | 0 | `0ᵃ` | 角色站位（场景无 `placement`；`npc_actor` 走 643 发现） | — | 5：`click-path-bag-writeback`、`encoding-core-e1-e2`、`npc-def-loading`、`npc-display-table`、`sm-merchantsay-recog`；另有 T-211 |
+| `npc_click_auto` | 0 | 0 | `0ᵃ` | **它是所有 `required` 场景的 discovery 载体**（点最近 NPC 取 643） | — | 0（但被 §2 中所有 `2 → 0` 行间接依赖） |
+| `npc_script_chain` | 2 → 0（`npc_actor`） | 0 | `0ᵃ` | 场景自带 `placement` (0122,29,33)（贴着比奇国王） | — | 7：`action-line-variable-text`、`guild-official-npc`、`npc-def-loading`、`pickwire-remaining-frames`、`run-gap-pl2`、`run-gap-pl3`、`run-gap-pl4`；另有 T-211 |
+| `pickup_item` | 2 → 0（`self_x`/`self_y`） | 0 | `0ᵃ` | 同格必须有可拾取地物（否则 200/201 不来） | — | 0 |
+| `spell_cast` | 0 | **2ʳ FAIL-CLOSED**（`requires:["magic"]`，缺段即加载期 rc=2） | **`0ᵐ`（magic，2 行预览）/ `0ᵐᵖ`（magic + pin，2 行预览）** | **开窗 profile 必须同时含 `magic` 段与 `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`（D-9 pin）**；写法照 `tools/probe/scenarios/README.md`「窗口 profile 前置：`spell_cast` 必须 pin D-9」与「`requires`」节。**真机窗口仍未跑**（离线绿 ≠ 已对拍） | `openmir2-spell-cast-unblock`（已合）、`openmir2-window-magic-fixture`（已合）、`openmir2-spell-cast-window-blockers`（`65d6e7134`）、`openmir2-spell-frame-compare-rules`（`89a3d02fd`，补 53/638/639） | 8：`buff-system`、`default-arm-spell-surface`、`healthspell-emission-model`、`magic-8-21-wiring`、`mb8-9-monsters`、`recall-slave-shift-live`、`spell-mp-wrapper`、`spell-shared-tail`；另有 T-228/230/233/234/260 |
+| `upgrade_retrieve` | 2 → 0（`merchant_actor`） | 0 | `0ᵃ` | 商店 NPC 摆位（沙巴克铁匠 (332,317) 西南邻格 (320,328)）；**武器在手 / 金币≥10000 / 背包有黑铁矿**（缺一第 9 步 `wait_idents 709` 必红） | `openmir2-upgrade-npc`（T-95） | 4：`a09-upgrade-item`、`outbound-encoders-red-batch`、`upgrade-npc`、`weapon-upgrade-values` |
 
-**计数核对**：上表「离线绿」= `check` 0（或 2→0）且 `dry` 0 且非假绿：`dice_chain`、`dice_chain_auto`、`equip_struck_save`、`gm_batch`、`gm_time`、`king_castle_war`、`king_dialog`、`login_only`、`merchant_dialog`、`move_walk`、`npc_click`、`npc_click_auto`、`npc_script_chain`、`pickup_item`、`upgrade_retrieve` = **15 个**；另 **2 个假绿**（`bag_equip` / `eat_item`）+ **2 个 `blocked`**（`combat_hit` / `combat_strike`）+ **1 个 `2ʳ` fail-closed**（`spell_cast`）⇒ 15 + 2 + 2 + 1 = 20。与 §5 引用的枚举 **10 行 / 15 个场景** 一致。
+### 2.1 逐格实跑记录（本次 head，供复核）
+
+| 场景 | check 裸跑 | check 补 `--var` | dry 默认 alt | dry 带 profile | 魔法夹具行 | 背包夹具行 | 判定 |
+|---|---:|---:|---:|---:|---:|---:|---|
+| `bag_equip` | 2 | 0 | 0 | 0ⁱ（场景自带 `inventory`） | 0（默认）/2（magic 复跑） | **2（默认）** | 可跑 |
+| `combat_hit` | 2 | 0 | 2 | 2 | 0 | 0 | **blocked** |
+| `combat_strike` | 0 | — | 2 | 2 | 0 | 0 | **blocked** |
+| `dice_chain` | 0 | — | 0 | 0ᵃ | 0（默认）/2（magic） | 0 | 可跑 |
+| `dice_chain_auto` | 0 | — | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `eat_item` | 2 | 0 | 0 | 0ⁱ（场景自带 `inventory`） | 0 / 2 | **2（默认）** | 可跑 |
+| `equip_struck_save` | 0 | — | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `gm_batch` | 0 | — | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `gm_time` | 0 | — | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `king_castle_war` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `king_dialog` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `login_only` | 0 | — | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `merchant_dialog` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `move_walk` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `npc_click` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `npc_click_auto` | 0 | — | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `npc_script_chain` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `pickup_item` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+| `spell_cast` | 0 | — | **2ʳ** | **0ᵐ（magic）/ 0ᵐᵖ（magic+pin）** | 2 / 2 | 0 | 可跑（开窗须 pin） |
+| `upgrade_retrieve` | 2 | 0 | 0 | 0ᵃ | 0 / 2 | 0 | 可跑 |
+
+**总数**：可跑 **18**、blocked **2**、假绿 **0** = 20。带 magic profile 时 **18/20** 个非 blocked 场景各出 2 行魔法夹具（合计 36 行），两个 `blocked` 各 0 行（硬门在预览循环之前就 rc=2 返回，`card_window.py:3349-3359` 先于 `:3425` 的预览循环，magic 预览在 `:3457` 调用 / `:2252` 发出）；其中 `bag_equip`/`eat_item` 另各有 2 行背包夹具预览。
+
+**计数核对**：上表「可跑」= `check` 0（或 2→0）且 `dry` 0 且非假绿：`bag_equip`、`dice_chain`、`dice_chain_auto`、`eat_item`、`equip_struck_save`、`gm_batch`、`gm_time`、`king_castle_war`、`king_dialog`、`login_only`、`merchant_dialog`、`move_walk`、`npc_click`、`npc_click_auto`、`npc_script_chain`、`pickup_item`、`spell_cast`、`upgrade_retrieve` = **18 个**；另 **2 个 `blocked`**（`combat_hit` / `combat_strike`）⇒ 18 + 2 = 20。**注意**：batch-plan §7.4 仍是 **11 行 / 16 个场景**（把 `bag_equip`/`eat_item` 留在「仍不可跑」）⇒ **§7.4 需从 16 更新到 18**，见 §5。
 
 ---
 
-## 3. 假绿与 fail-closed 证据（命令 + 输出片段）
+## 3. 夹具预览与 fail-closed 证据（命令 + 输出片段）
 
-> 所有日志在 `E:/tmp/w67-rehearsal/logs/`（本机 temp，不入库）。下列 rc 均为真实退出码。
+> 所有日志在 `E:/tmp/w58-rehearsal/logs/`（本机 temp，不入库）。下列 rc 均为真实退出码。
 
-### 3.1 `spell_cast`：默认 profile 已 fail-closed（rc=2），magic profile 才 rc=0
+### 3.1 `spell_cast`：三态（默认 rc=2 / magic rc=0 / magic+pin rc=0）
+
+**态 ①　默认 `alt`：加载期 fail-closed，rc=2。**
 
 ```sh
 python -I -B tools/conformance/card_window.py --dry-run \
   --scenario tools/probe/scenarios/spell_cast.json \
-  --card openmir2-window-batch-rehearsal --out E:/tmp/w67-rehearsal/out/spell_cast
-# rc=2；grep -c '魔法夹具' → 0（加载期 fail-closed；不打印命令序列）
+  --card openmir2-rehearsal-refresh-478ff9a33 --out E:/tmp/w58-rehearsal/out/spell_cast
+# rc=2；grep -c '魔法夹具' → 0（不打印命令序列）
 ```
 
 实际报错（逐字）：
@@ -116,73 +158,69 @@ python -I -B tools/conformance/card_window.py --dry-run \
 card_window.py: 场景 `spell_cast` 要求 `magic` 夹具，但 profile `alt` 未声明 `magic` 段（或某侧被覆盖成空）：缺 csharp、rust 侧（场景文件 …/tools/probe/scenarios/spell_cast.json）
 ```
 
-> **机制（代码基线 `1f1a69c84`；本卡 head `077b85a12` 为 docs-only，行号相同）**：场景顶层 `requires` 由 `scenario_requires`（`card_window.py:1322`）加载并做形状/取值校验（`REQUIRES_KNOWN = ("magic",)`，`:1319`；未知夹具值同样 fail-closed）；`validate_scenario_requires`（`:1356`）在 `:3170` 被调用，按**生效 profile**（含 `sides.<side>` 覆盖）**逐侧**核 `profile_magic`，任一侧为 `None` 即 `ConfigError` ⇒ **rc=2**。调用点位于 `blocked` 硬门之后、建 out / 起栈 / discovery / 写 report 之前 ⇒ **`--dry-run` 与真跑走同一条路径**，不会再出现「dry-run rc=0 但零夹具行」的假绿。**这是工具侧把假绿关掉，不是场景已经可跑**：真机仍缺 Rust 魔法帧面与第二观察者。
-
-对照（`profile-magic.json` = 内置 alt + 顶层 magic 段）：
+**态 ②　`magic` profile：rc=0、2 行夹具预览。**
 
 ```sh
 python -I -B tools/conformance/card_window.py --dry-run \
   --scenario tools/probe/scenarios/spell_cast.json \
-  --profile E:/tmp/w67-rehearsal/profile-magic.json \
-  --card openmir2-window-batch-rehearsal --out E:/tmp/w67-rehearsal/out/spell_cast
+  --profile E:/tmp/w58-rehearsal/profile-magic.json \
+  --card openmir2-rehearsal-refresh-478ff9a33 --out E:/tmp/w58-rehearsal/out/spell_cast
 # rc=0；grep -c '魔法夹具' → 2
 ```
-
-输出片段（magic profile）：
 
 ```text
 [csharp] 魔法夹具（dry-run 不连库）：db=mir2_test_db magic_ids=1
 [rust]   魔法夹具（dry-run 不连库）：db=mir2_test_db_r magic_ids=1
 ```
 
-⇒ **默认 alt 已 rc=2 fail-closed，不构成窗口证据**；带 magic profile 才 rc=0（仅代表离线夹具预览齐了）。场景 description 已写死「未声明 magic 夹具则 fail-closed 超时」。真机另有 Rust 侧缺口（见 §2 该行），所以本场景仍**不在**「今天就能进窗口」清单里。
+**态 ③　`magic` + D-9 pin（**开窗用这个**）：rc=0、2 行夹具预览。**
 
-### 3.2 `bag_equip` / `eat_item`：inventory 夹具「有实现、无通路」
+```sh
+python -I -B tools/conformance/card_window.py --dry-run \
+  --scenario tools/probe/scenarios/spell_cast.json \
+  --profile E:/tmp/w58-rehearsal/profile-magic-pin.json \
+  --card openmir2-rehearsal-refresh-478ff9a33 --out E:/tmp/w58-rehearsal/out/spell_cast
+# rc=0；grep -c '魔法夹具' → 2
+```
 
-证据链（每条都是实跑）：
+**profile 写法不要在这里重写**：`magic` 段与 `sides.<side>.env.MIR2_CLIENT_ABILITY_LAYOUT`（值必须是字符串 `"0"`）的照抄片段、以及「为什么必须 pin」（53 规则按 `body_len` fail-closed），见 **`tools/probe/scenarios/README.md`「窗口 profile 前置：`spell_cast` 必须 pin D-9」**；`requires` 的加载期语义见同文件「`requires`：夹具前置」节。
 
-1. **默认态 rc=0 但无夹具行**（假绿）：
-   ```sh
-   python -I -B tools/conformance/card_window.py --dry-run \
-     --scenario tools/probe/scenarios/bag_equip.json \
-     --card openmir2-window-batch-rehearsal --out E:/tmp/w67-rehearsal/out/bag_equip
-   # rc=0；grep -c '背包夹具' → 0
-   ```
-2. **profile 级 `inventory` 段被静默忽略**：用 `profile-inventory.json`（alt + 顶层 `"inventory": [...]`）再跑，**rc=0、`grep -c inventory` → 0**，没有任何警告。`card_window.load_profile` 不校验顶层未知键，也不读取 profile 级 inventory。
-3. **场景级 `inventory` 会被 `card_window` 接受**：把 `bag_equip.json` 复制到仓库外并加 `"inventory": [{"index":100,"make_index":5001,"position":3}]`，`card_window --dry-run` **rc=0**；但**仍然 `grep -c '背包夹具'` → 0** —— dry-run 的预览分支只覆盖 `placement` 与 `magic`（`card_window.py` 的 dry-run 段），**不预览 inventory**。
-4. **同一个临时副本喂给 probe 直接 rc=2**：
-   ```sh
-   python -I -B tools/probe/mir2_probe.py --check-scenario \
-     --scenario E:/tmp/w67-rehearsal/bag_equip-with-inventory.json \
-     --var make_index=5001 --var takeon_where=3 --var item_name=木剑
-   # rc=2
-   # scenario-error: scenario has unknown key(s): ['inventory'] (fail-closed)
-   ```
-   `mir2_probe.load_scenario` 的顶层可选项只有 `description/params/required/computed/placement/blocked`（`tools/probe/mir2_probe.py:528-530`），**没有 `inventory`**；而真跑同样走 `load_scenario` ⇒ 并非只有 check 会红。
-5. **`card_window` 自身的 inventory 形状校验是有效的**（对照实验）：把临时副本的 `make_index` 删掉，`card_window --dry-run` **rc=2**：
+> **机制（head `47fd96ca8` 行号）**：场景顶层 `requires` 由 `scenario_requires`（`card_window.py:1369`）加载并做形状/取值校验（`REQUIRES_KNOWN = ("magic",)`，`:1366`）；`validate_scenario_requires`（`:1403`）在 **`:3366`** 被调用，按**生效 profile**（含 `sides.<side>` 覆盖）**逐侧**核 `profile_magic`，任一侧为 `None` 即 `ConfigError` ⇒ **rc=2**。调用点位于 `blocked` 硬门（`:3349-3359`）之后、建 out / 起栈 / discovery / 写 report 之前 ⇒ **`--dry-run` 与真跑走同一条路径**，不会再出现「dry-run rc=0 但零夹具行」的假绿。**这是工具侧把假绿关掉，不是场景已经验收**：真机窗口仍未跑（本卡不改变这一点）。
+
+### 3.2 `bag_equip` / `eat_item`：inventory 夹具已可达（`c4b66ddb1`）
+
+证据链（每条都是本次在 `c4b66ddb1` 上实跑）：
+
+1. **场景自声明 `inventory`**：`bag_equip.json` → `{"index":207,"make_index":5001,"position":40,"std_mode":5,"dura":4000,...}`（木剑）；`eat_item.json` → `{"index":3,"make_index":5002,"position":41,"std_mode":0,"ani_count":102,...}`（金创药小量）。声明落在**场景顶层**，`card_window` 在每侧 restore 之后、起栈之前写进该侧测试库 `characters_bagitem`（顺序 restore → placement → inventory → magic → stack）。
+2. **`--check-scenario` 不再因该键 rc=2**：裸跑 rc=2 **只是缺 `required` 变量**；补 `--var` 后 **rc=0**（probe 顶层 schema 已放行 `inventory` 并做形状校验）。
+3. **`--dry-run` 默认 `alt` rc=0 且两侧各 1 行预览**（本次实测，逐字）：
    ```text
-   card_window.py: …bag_equip-bad-inv.json: scenario.inventory[0] 缺必填键 ['make_index']
+   [csharp] 背包夹具（dry-run 不连库）：db=mir2_test_db   声明 1 件 positions=[40] make_index=[5001] 角色=winplay0
+   [rust]   背包夹具（dry-run 不连库）：db=mir2_test_db_r 声明 1 件 positions=[40] make_index=[5001] 角色=winplay0
    ```
-   ⇒ 机制代码本身在，只是**声明进不去 probe**、**dry-run 看不见**。
+   `eat_item` 同理，`positions=[41] make_index=[5002]`。预览由 `preview_inventory`（`card_window.py:2175` 定义、`:3440` dry-run 调用、`:2210` 打印）产生；dry-run 不建 out、不连库。
+4. **形状校验两侧同口径（fail-closed）**：把副本的 `make_index` 删掉 ⇒ `card_window --dry-run` **rc=2**（`scenario.inventory[0] 缺必填键 ['make_index']`），`mir2_probe --check-scenario` **rc=2**（`scenario.inventory[0] missing required key(s): ['make_index']`）。
+5. **profile 级 `inventory` 仍被静默忽略**（不是受支持通道）：拿不带 `inventory` 的 `login_only` 配 `profile-inventory.json`（alt + 顶层 `inventory`）跑 dry-run ⇒ **rc=0、0 行背包预览**，无警告。**正确通道是场景自描述**，不要写进 profile。
 
-**结论**：`bag_equip`/`eat_item` 当前**没有任何受支持的夹具路径**；batch-plan §7.4 写的「或先在场景里补 `inventory`」在本 head 上**不可行**，必须先给 probe 顶层 schema 加键（建议卡 `openmir2-probe-scenario-inventory-key`，未开卡）。**两条独立证据**（① probe 拒键 rc=2；② profile 顶层 `inventory` 静默忽略）已由审查者 reviewer-10 独立复现；「夹具已合但**无可达入口**」的缺口由新卡 **`openmir2-inventory-fixture-reachability`**（open，coordinator 已开）承接，`card_window --dry-run` 不预览 inventory 的缺口归 card_window 线。另有一个独立前置：现有 798 份录制里**一条 `SM_BAGITEMS(201)` 都没有**（`docs/window-runbook-20261023.md:376`），`make_index`/`item_name`/`takeon_where` 的 discovery 在真机没有样本 ⇒ 需要非空背包的一次 discovery/DB 夹具。
+**结论**：`bag_equip`/`eat_item` 在 `c4b66ddb1` 上**已脱离假绿**，按实测移入「可跑」（18 条之一）。真机前置：角色站位用 DB 现值（场景无 `placement`）；三个/两个 `--var` 由 `SM_BAGITEMS(201)` 发现——**夹具在起栈前已把背包写成非空（1 件）**，因此登录期 `CM_QUERYBAGITEMS(81)` 的 201 有样本（旧版「录制里无 201」的缺口由本夹具在窗口期补上）。**「预览齐了」≠「真机已对拍」**：真机窗口仍未跑。
 
 ### 3.3 其他 rc=2（都点明原因）
 
 - `--check-scenario` 的 **11 个** `2 → 0`（`bag_equip`/`combat_hit`/`eat_item`/`king_castle_war`/`king_dialog`/`merchant_dialog`/`move_walk`/`npc_click`/`npc_script_chain`/`pickup_item`/`upgrade_retrieve`）：全部是**缺 `required` 变量**（工具原文 `refusing to send guessed values`），补 §1.3 来源的 `--var` 后 rc=0；`card_window` 会先跑 discovery 注入。其中 **10 个**的变量有发现规则，承接卡 = `openmir2-window-param-discovery`（已合、已 closed；来源表见 §1.3）。**`combat_hit` 是例外**：`hit_xy` 由 `computed.pack(self_x,self_y)` 算出，**`hit_dir` 无来源帧、只能操作者显式 `--var`**（`param_discovery.py` 的 `UNDERIVABLE`）⇒ 它的承接写 **「无 / operator-supplied」**，**不归** `openmir2-window-param-discovery`。**都不是场景损坏**。
 - `combat_hit` / `combat_strike`：`card_window` 原文 `scenario is BLOCKED: …` + `VERDICT: BLOCKED`，rc=2，且**不预览命令序列**（设计如此）。
+- 非法 `--var`：缺 `=` / 空名 / 空值 / 同名不同值 ⇒ 加载期 rc=2 并点名。实测 `--var npc_actor`（缺 `=`）⇒ rc=2：`--var 第 1 个缺少 '='（必须是 NAME=VALUE）：'npc_actor'`。
 
 ---
 
-## 4. 逐场景 R 卡交叉引用
+## 4. 逐场景 R 卡交叉引用（快照 `c4b66ddb1`）
 
 **方法（可复算）**：
 
 1. **窗口判据登记**：`mir2-rs/tests/parity/whitelist.md` 中行首 `| T-…` 的行，按 `` `场景名` ``（带反引号、整词）精确匹配；取行内「卡 \`openmir2-…\`」作为 R 卡。这是「窗口判据里点名该场景」的最强证据。
 2. **批次归属**：`docs/window-batch-plan-20261023.md` §1 的 R 卡表（列 = 卡 / 窗口项 / 场景 / 备注）+ `docs/window-debt-reclass-20261023.md` §R1..R9 分组。
-3. **卡线程**：扫 `refs/collab/inbox/*` 全部 7779 条 entry 的 body（`git cat-file --batch`）搜场景名，作为补充（未做 tier 过滤，噪声大，**只作线索**）。
+3. **卡线程**：扫 `refs/collab/inbox/*` 全部 entry 的 body 搜场景名，作为补充（未做 tier 过滤，噪声大，**只作线索**）。
 
-> **未穷举声明**：① 卡线程侧只按场景名全文匹配，未按 tier 过滤；② `docs/` 里大量「泛引用」（例如 T-211 一行点了多个场景）会被计入；③ 行数会随 whitelist 增行漂移（本表快照 = `8dcb8c8ca`）。
+> **未穷举声明**：① 卡线程侧只按场景名全文匹配，未按 tier 过滤；② `docs/` 里大量「泛引用」（例如 T-211 一行点了多个场景）会被计入；③ 行数会随 whitelist 增行漂移（本表快照 = `c4b66ddb1`；本次复核精确整词命中与 `8dcb8c8ca` 快照一致）。
 
 ### 4.1 `bag_equip` / 4.2 `eat_item`
 
@@ -205,7 +243,7 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 
 ### 4.7 `equip_struck_save`
 
-`persist-useitems-wiring`（T-247）、`attack-weapon-wear-642`（T-266，R 级真机窗口未采）。T-247 正文曾写「Rust 642 未接」，该说法已由 T-266/`8dcb8c8ca` 取代，并已由 `openmir2-whitelist-t247-642-text`（合入 `05ca859bb`）在 `mir2-rs/tests/parity/whitelist.md:970` 逐字订正为「642 已接线…真机窗口未跑」。
+`persist-useitems-wiring`（T-247）、`attack-weapon-wear-642`（T-266，R 级真机窗口未采）。T-247 正文曾写「Rust 642 未接」，该说法已由 T-266/`8dcb8c8ca` 取代，并已由 `openmir2-whitelist-t247-642-text`（合入 `05ca859bb`）在 `mir2-rs/tests/parity/whitelist.md` 逐字订正为「642 已接线…真机窗口未跑」。
 
 ### 4.8 `gm_batch` / 4.9 `gm_time`
 
@@ -251,20 +289,20 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 
 ## 5. 与 batch-plan 计数对照（差异逐条）
 
-**引用口径**：见 `docs/window-batch-plan-20261023.md` **§7.4 @ `6ceb0689d`**（drift-sweep v5；Leader 裁决见 drift-sweep 线程 status `eb667db0`）——**枚举 10 行 / 15 个场景**，禁 `18−N`。本次实跑表与它**一致**（15 个离线绿、2 个 blocked、2 个假绿不可信、1 个默认 profile fail-closed；`spell_cast` 已因 `requires:["magic"]` 从「假绿」移出、归 fail-closed）。以下是必须写清的差异/订正：
+**引用口径**：`docs/window-batch-plan-20261023.md` **§7.4 @ `c4b66ddb1`**（本次已打开该文件逐行数过）——**枚举 11 行 / 16 个场景**，禁 `18−N`。**本表实跑是 18 可跑 / 2 blocked / 0 假绿** ⇒ **§7.4 滞后 2 个场景**：`bag_equip` / `eat_item` 已被 `c4b66ddb1` 接通，但 §7.4 仍把它们列在「仍不可跑」。**§7.4 需要从 16 更新到 18**（`spell_cast` 已在表内、无需再动）；这条属另一张卡的写集，本卡不改 batch-plan，只在卡上 comment 点名。**11 行 = 16 场景的展开**是自己逐行加出来的：`login_only`(1) + `pickup_item`(1) + `move_walk`(1) + `upgrade_retrieve`(1) + `equip_struck_save`(1) + `dice_chain`/`dice_chain_auto`(2) + `npc_click`/`npc_click_auto`(2) + `king_dialog`/`merchant_dialog`/`npc_script_chain`(3) + `king_castle_war`(1) + `gm_time`/`gm_batch`(2) + `spell_cast`(1) = **16**；补上 `bag_equip`/`eat_item`(2) ⇒ **18 个场景（行粒度由 batch-plan 卡定：合成 1 行则 12 行，拆 2 行则 13 行）**。以下是必须写清的差异/订正：
 
-1. **master 文本仍写 14，不能直接引用**。master `8dcb8c8ca` 的 §7.4 写「18 − 4 = 14」，§7.2/§7.3 还写「642 未接 / inventory 夹具未合」——这是 **doc-vs-code 漂移**：代码侧 642 已在 `8dcb8c8ca` 接线（`crates/world/src/combat.rs:767` wear_durability、`:1615-1619` `RM_DURACHANGE ⇒ SM_DURACHANGE(642)`），inventory 夹具已随 `bb4317a01` 合入，但 plan 文本仍旧。**注意**：master §7.1 关于 642 的句子是「`rules.json` 已补登记 642（**本条只影响比较器**）」——它只说比较器补登记，**没有**说 Rust 已接线；真正的缺口是 plan 文本落后于代码（doc-vs-code），不是同一份文件前后打架。v5（`6ceb0689d`，patch `8b810c894`，status `cfc96f1b`）尚未合入（`git merge-base --is-ancestor 6ceb0689d HEAD` ⇒ rc=1）。**开窗计数以 v5 为准；master 文本等 v5 合并后再读**。
-2. **派单写「§7.5」是笔误**：v5 的逐行枚举在 **§7.4**；§7.5 是「判据口径」（v5 已把 preflight 改成「已合入 `2e3b8500a`」）。本文件按 §7.4 引用。
-3. **v5 给 `bag_equip`/`eat_item` 的补救路径不可行（结论写死）**：v5 写「或先在场景里补 `inventory`」，但在本 head 上是**死路**，两条独立证据：① probe 顶层 schema 不收 `inventory`，`load_scenario` 以 `scenario has unknown key(s): ['inventory'] (fail-closed)` **rc=2 拒**（真跑同走该函数，§3.2 第 4 条）；② profile 顶层 `inventory` 被 `load_profile` **静默忽略**（rc=0、零效果、无警告，§3.2 第 2 条）。⇒ `openmir2-window-inventory-fixture`（已合 `bb4317a01`）产出的夹具**没有可达入口**。承接：新卡 **`openmir2-inventory-fixture-reachability`**（open；前置 `openmir2-scenario-fixture-precondition` 已合入 master `9083f4863`，`requires` 加载期机制已生效——本 head 上 `spell_cast` 因此 fail-closed，而 `bag_equip`/`eat_item` 未声明 `requires`，这处死路不变）。这条应回写 batch-plan，但该文件被 `openmir2-docs-state-drift-sweep` 持有，**本卡不改**。
-4. **`dice_chain` 的「引用 T 行 = 3」是子串计数**：whitelist 里带反引号精确点名 `dice_chain` 的只有 T-211 一行；3 = T-211 + T-193 + T-194，其中 T-193/T-194 点名的是 **`dice_chain_auto`**（`dice_chain` 是其子串）。同理 `login_only` 在 master §7.4 写 14，本 head 精确匹配为 **12**（T-211/232/235/236/246/248/250/256/257/258/259/261），宽匹配 16。`equip_struck_save` 按**同一精确整词口径**为 **1**（T-247），与 master §7.4 的 1 一致；宽匹配（路径子串）才得 2（+ T-266，其正文写的是路径 `tools/probe/scenarios/equip_struck_save.json`）。**本文件全程采用精确整词口径，故记 1**。这些是**登记行漂移**，不影响「能跑」判定，但 v5 合入时值得顺手重算。
-5. **v5 把 `equip_struck_save` 计入「能跑」是正确**（对 `8dcb8c8ca` 核过）：`combat.rs:767 wear_durability` + `:1615-1619` 的 `RM_DURACHANGE` 已接，T-266 记 `window_required=true`。本次 dry-run rc=0。**但「能跑」≠「已验收」**：R 级真机窗口仍未采；场景 description 的「Rust 未接 642」旧文已由 `061312242` 订正（见 §2 `equip_struck_save` 行与 §4.7），但「已接线」不等于「已对拍」。
-6. **`npc_click_auto` 在 v5 的 15 场景里，但没有任何 R 卡把它当窗口判据**：它作为 discovery 载体是必需的，建议在开窗 runbook 里单列为「基础设施」，避免被误当成一条独立判据。
+1. **§7.4 现在是 11 行 / 16 场景，但对本次实测已不完整**。旧 master 的「`18 − 4 = 14`」与未合入 v5（`6ceb0689d`，10 行 / 15 场景）**都不再是口径来源**；开窗计数以 §7.4 的逐行枚举为骨架，再按本表实测确认 **18**。§7.4 里 `spell_cast` 的条目（`magic` 段 + `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT=0`）与本次一致。
+2. **§7.4 的 `bag_equip`/`eat_item` 条目已过期（本卡实测推翻）**：§7.4「仍不可跑」表写「或先在场景里补 `inventory`」——`c4b66ddb1` 已把这条路径做实：两个场景**已声明 `inventory`**、probe 顶层 schema 放行并形状校验、`card_window --dry-run` 两侧各出 1 行预览（§3.2 五条证据）。⇒ 这两条应移入「现在就能跑」，**§7.4 需从 16 更新到 18**。本卡不改 batch-plan（写集红线），已在卡上 comment 点名。
+3. **`dice_chain` 的「引用 T 行 = 3」是子串计数**：whitelist 里带反引号精确点名 `dice_chain` 的只有 T-211 一行；3 = T-211 + T-193 + T-194，其中 T-193/T-194 点名的是 **`dice_chain_auto`**（`dice_chain` 是其子串）。同理 `login_only` 在 §7.4 写 14，本 head 精确整词匹配为 **12**（T-211/232/235/236/246/248/250/256/257/258/259/261），宽匹配 16。`equip_struck_save` 按**同一精确整词口径**为 **1**（T-247），与 §7.4 的 1 一致；宽匹配（路径子串）才得 2（+ T-266，其正文写的是路径 `tools/probe/scenarios/equip_struck_save.json`）。这些是**登记行漂移**，不影响「能跑」判定。
+4. **`equip_struck_save` 计入「能跑」是正确的**：`crates/world/src/combat.rs:767` wear_durability + `:1615-1619` 的 `RM_DURACHANGE` 已接（T-266），本次 dry-run rc=0。**但「能跑」≠「已验收」**：R 级真机窗口仍未采；「已接线」不等于「已对拍」。
+5. **`npc_click_auto` 在 18 场景里，但没有任何 R 卡把它当窗口判据**：它作为 discovery 载体是必需的，建议在开窗 runbook 里单列为「基础设施」，避免被误当成一条独立判据。
+6. **`spell_cast` 从「fail-closed 的例外」变成「18 可跑之一」，`bag_equip`/`eat_item` 从「假绿」变成「18 可跑之一」**：两处分类变化**只反映离线链路**（前者 = `requires` 加载期强制 + 比较器补 53/638/639 + magic/pin；后者 = inventory 夹具可达 + dry-run 出预览），**都不代表真机已验证**；开窗时 `spell_cast` 必须带 pin（§3.1），`bag_equip`/`eat_item` 走场景自带 `inventory`（§3.2），且三者真机窗口仍未跑。
 
 ---
 
 ## 6. 开窗清单（给 owner）
 
-### 6.1 今天就能进窗口（离线彩排绿；真机仍需 owner 授权与夹具）
+### 6.1 今天就能进窗口（18 个；离线彩排绿，真机仍需 owner 授权与夹具）
 
 | 场景 | 开窗前必须确认的真机前置 |
 |---|---|
@@ -279,23 +317,24 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 | `dice_chain_auto` | 赌场 NPC 在场 |
 | `dice_chain` | 须显式给本次 actor：`card_window --var npc_actor=<本次 id>`（默认 119 是 r9 会话值，不给会点空）。不想取 id 就用 `dice_chain_auto`（见 §6.3） |
 | `upgrade_retrieve` | 铁匠摆位 (320,328)+武器在手+金币≥10000+黑铁矿（三项缺一必红） |
-| `equip_struck_save` | 「卫家店」(0103,19,18) 摆位；R 级窗口授权（description 已由 `061312242` 订正为「已接线、真机窗口未跑」） |
+| `equip_struck_save` | 「卫家店」(0103,19,18) 摆位；R 级窗口授权（description 已订正为「已接线、真机窗口未跑」） |
 | `gm_time` / `gm_batch` | 角色 GM Permission |
+| `bag_equip` | 角色站位用 DB 现值（场景无 `placement`）；背包由场景自带 `inventory` 在起栈前预置（木剑，position 40 / make_index 5001）；`make_index`/`takeon_where`/`item_name` 由 201 发现（非空背包 ⇒ 201 有样本）。**真机窗口仍未跑** |
+| `eat_item` | 同上；`inventory` = 金创药小量（position 41 / make_index 5002）；`make_index`/`item_name` 由 201 发现。**真机窗口仍未跑** |
+| `spell_cast` | **窗口 profile 必须同时有 `magic` 段与 `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`（D-9 pin）**——缺 magic ⇒ 加载期 rc=2；缺 pin ⇒ 53 规则 `body_len` fail-closed FAIL。写法照 `tools/probe/scenarios/README.md`「窗口 profile 前置：`spell_cast` 必须 pin D-9」；**真机窗口仍未跑** |
 
 ### 6.2 还差一步（差什么 / 谁负责）
 
 | 场景 | 差什么 | 谁负责 / 承接 |
 |---|---|---|
-| `bag_equip` / `eat_item` | ① probe 顶层 schema 收 `inventory`；② `card_window --dry-run` 预览 inventory（否则永远看不出假绿）；③ 非空背包的一次 discovery（201 样本） | **可达入口缺口 = `openmir2-inventory-fixture-reachability`**（open，coordinator 已开；现有 `openmir2-window-inventory-fixture` 已合但夹具无入口）；另建议卡 `openmir2-probe-scenario-inventory-key`（未开，需 coordinator 派） |
-| `spell_cast` | 离线：默认 `alt` 已 **fail-closed（rc=2）**，须带 `magic` profile 才 rc=0 且 2 行夹具预览；真机：Rust 侧魔法落点 + 638/639 生产帧 + 第二观察者 | 场景已由 `openmir2-spell-cast-unblock` 解封、夹具由 `openmir2-window-magic-fixture` 合入；帧面在 **in-progress** 的 `magic-8-21-wiring` / `spell-mp-wrapper` / `default-arm-spell-surface`；**第二观察者仍无人承接**（`openmir2-multi-session-probe` 已 closed `2a5101606`，其 scope 只是 probe 断言、不做第二会话）⇒ 建议 id `openmir2-spell-second-observer`（未开，需 coordinator 派） |
-| `combat_hit` | ① 同屏怪物夹具（保证正前方有目标且可排除其反击）；② 伤害夹具（随机护甲 `[AC,2AC-1]` 可能把伤害吃成 0、零帧）。**recog/来源过滤已具备**（`8b40443b6`，selftest 10→11），不再是缺口 | 建议新卡 `openmir2-combat-hit-monster-fixture`（未开）；`openmir2-combat-strike-gear-fixture`（未开）。**过滤已具备（`8b40443b6`）**：`mir2_probe.py:294` `wait_for(..., recog_filter=None)`、`:313` `wait_frames`、`:331` `wait_idents` 均带 `recog_filter`，`:690-719` 新增 `recog` / `recog_is`（互斥；两者都不写 = 旧语义不变）。本场景 `steps[1]` 已由 `wait_for 14` 改为 `{"idents": 31, "recog_is": "other"}`：`SM_HIT(14)` 的 recog 是**攻击者** ActorId、且本方攻击的 14 被 oracle 自过滤（`PlayObject.Message.cs:1433-1437`）⇒ 改等 `SM_STRUCK(31)` 并只认 recog=other，排除「自己被打」的 31。原承接卡 `openmir2-probe-waitfor-recog-filter` **已合入 `8b40443b6` 并 closed**；真正还缺的是夹具，承接为上述两张**未开**卡。**后果**：过滤已具备，仍 blocked 只是因为缺怪物/装备夹具（`--dry-run` 仍 rc=2）；过滤不再是缺口 |
-| `combat_strike` | `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装与伤害门槛（`wait_for` recog 过滤**已具备** `8b40443b6`，等待已改 `{"idents": 31, "recog_is": "other"}`） | 建议卡 `openmir2-combat-strike-gear-fixture`（未开）；解封后一次性解锁 R3 的 13 张 |
+| `combat_hit` | ① 同屏怪物夹具（保证正前方有目标且可排除其反击）；② 伤害夹具（随机护甲 `[AC,2AC-1]` 可能把伤害吃成 0、零帧）。**recog/来源过滤已具备**（`8b40443b6`，selftest 10→11），不再是缺口 | 建议新卡 `openmir2-combat-hit-monster-fixture`（未开）；过滤已具备（`mir2_probe.py:294` `wait_for(..., recog_filter=None)`、`:313` `wait_frames`、`:331` `wait_idents`；`:694` `_plan_recog_filter`）。本场景 `steps[1]` 已改为 `{"idents": 31, "recog_is": "other"}` |
+| `combat_strike` | `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装与伤害门槛（`wait_for` recog 过滤**已具备** `8b40443b6`） | 建议卡 `openmir2-combat-strike-gear-fixture`（未开）；解封后一次性解锁 R3 的 13 张 |
 
-> **不要用 rc=0 当窗口证据**：上表 6.2 的 5 个场景里，`bag_equip`/`eat_item` 的默认 dry-run 是 rc=0（假绿），`spell_cast` 只有带 `magic` profile 才 rc=0（2 行夹具预览；默认 `alt` 已是 rc=2 fail-closed）——**离线 rc=0 只说明夹具预览齐了，不构成窗口证据**；`combat_hit`/`combat_strike` 是 `blocked` rc=2。
+> ⚠ **不要用 rc=0 当窗口证据**：`bag_equip`/`eat_item` 的默认 dry-run 现在是 rc=0 **且有两侧各 1 行背包夹具预览**（已不是假绿），但那仍只是离线预览；`spell_cast` 的 rc=0 **只在带 `magic` 段 profile 时成立**（默认 `alt` 已 rc=2 fail-closed），且开窗还须叠加 D-9 pin；`combat_hit`/`combat_strike` 是 `blocked` rc=2。**离线 rc=0 只说明夹具预览齐了，不构成窗口证据；dry-run 绿 ≠ 真机已对拍。**
 
 ### 6.3 窗口操作提示（照做，不解释）
 
-- **`dice_chain`：用 `--var npc_actor=<本次 actor id>` 跑本尊**（卡 `openmir2-card-window-var-passthrough` 起支持；此前无透传只能改用 `dice_chain_auto`）：`dice_chain.json` 的 `params.npc_actor` **硬编码为 119**（r9 抓包会话值，C# `ActorId` 每会话不同），而 `npc_actor` **不在 `required`** ⇒ `card_window` 不会为它做 discovery。`--var` 是**覆值通道**（只覆盖已声明变量，不声明新变量），会**原样**出现在两侧 probe 命令行、顺序 = 命令行顺序；不传时行为逐字节不变。取本次 id：在同一会话先跑 `npc_click_auto`（或读上一轮 `frames.ndjson` 里 `CM_CLICKNPC(1010)` 的 `recog/param`），再把该数字喂给 `--var`：
+- **`dice_chain`：用 `--var npc_actor=<本次 actor id>` 跑本尊**（卡 `openmir2-card-window-var-passthrough` 起支持）：`dice_chain.json` 的 `params.npc_actor` **硬编码为 119**（r9 抓包会话值，C# `ActorId` 每会话不同），而 `npc_actor` **不在 `required`** ⇒ `card_window` 不会为它做 discovery。`--var` 是**覆值通道**（只覆盖已声明变量，不声明新变量），会**原样**出现在两侧 probe 命令行、顺序 = 命令行顺序；不传时行为逐字节不变。取本次 id：在同一会话先跑 `npc_click_auto`（或读上一轮 `frames.ndjson` 里 `CM_CLICKNPC(1010)` 的 `recog/param`），再把该数字喂给 `--var`：
 
   ```sh
   python -I -B tools/conformance/card_window.py --card <卡 id> \
@@ -304,11 +343,11 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
     --profile alt --out E:/tmp/win/dice_chain
   ```
 
-  `--dry-run` 会把 `--var npc_actor=<id>` 打在同一行命令里（先核对再开窗）。**场景 JSON 不动**（红线）。不想手工取 id 仍可跑 `dice_chain_auto`（`click_npc="auto:last_turn"` 自动发现）。
+  `--dry-run` 会把 `--var npc_actor=<id>` 打在同一行命令里（先核对再开窗）。**场景 JSON 不动**。不想手工取 id 仍可跑 `dice_chain_auto`（`click_npc="auto:last_turn"` 自动发现）。
 - **非法 `--var` fail-closed**：缺 `=` / 空名 / 空值 / 同名不同值 ⇒ 加载期 rc=2 并点名（不会静默丢一个）。
-- **`bag_equip` / `eat_item` 不要开窗**：inventory 夹具在本 head **无任何可达入口**（§3.2 / §5 差异 3），dry-run rc=0 是假绿。
-- **`spell_cast` 必须带 magic profile**：`--profile alt` 下已 **fail-closed（rc=2，加载期点名缺 csharp/rust 侧）**，不再是假绿；带 `magic` profile 才 rc=0 且 2 行夹具预览（§3.1）。rc=0 只代表离线夹具预览齐了，**真机仍不可跑**。
-- **别把 magic profile 当「只影响 spell_cast」**：profile 一旦声明 `magic`，dry-run 会为**每个非 blocked 场景**预览两侧各 1 行魔法夹具（全局 DB 预置，§2 列说明）；`blocked` 场景没有预览行——硬门在预览循环之前就 rc=2 返回，实测 **18/20**（`combat_hit`/`combat_strike` 为 0），别按「20×2=40 行」对账。
+- **`bag_equip` / `eat_item` 可以开窗，但**要确认背包夹具生效：场景顶层已声明 `inventory`（§3.2），`card_window` 会在每侧 restore 之后、起栈之前写进该侧 `characters_bagitem`，dry-run 应看到**两侧各 1 行**「背包夹具…」。**profile 里写 `inventory` 无效**（静默忽略）。
+- **`spell_cast` 必须带 `magic` + D-9 pin**：`--profile alt` 下已 **fail-closed（rc=2，加载期点名缺 csharp/rust 侧）**；带 `magic` 段 rc=0 且 2 行夹具预览；**再加 `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"` 才是开窗用的形态**（否则 53 比较 fail-closed）。rc=0 只代表离线夹具预览齐了，**真机仍须实跑**。
+- **别把 magic profile 当「只影响 spell_cast」**：profile 一旦声明 `magic`，dry-run 会为**每个非 blocked 场景**预览两侧各 1 行魔法夹具（全局 DB 预置）；`blocked` 场景没有预览行——硬门（`:3349-3359`）在预览循环（`:3425`）之前就 rc=2 返回，实测 **18/20**（`combat_hit`/`combat_strike` 为 0），别按「20×2=40 行」对账。
 
 ---
 
@@ -319,8 +358,11 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 python -I tools/goal/goal_gate.py --json
 python -I tools/conformance/preflight.py --profile alt
 
-# 1) 复制 magic profile（仓库外；内容 = 内置 alt + 顶层 magic 段）
-#    见 §7.1；不建议把 profile 提交进仓库
+# 1) 复制 magic profile（仓库外）
+#    组成 = 内置 alt 深拷贝 + 顶层 magic 段 + 两侧 env 的 D-9 pin。
+#    照抄写法与原因见 tools/probe/scenarios/README.md
+#    「窗口 profile 前置：spell_cast 必须 pin D-9」与「requires」两节。
+#    ⚠ 不要提交进仓库；本文件不重写该片段。
 
 # 2) 无 required / 无夹具的场景
 python -I -B tools/conformance/card_window.py --card <卡 id> \
@@ -344,42 +386,44 @@ python -I -B tools/conformance/card_window.py --card <卡 id> \
   --scenario tools/probe/scenarios/dice_chain_auto.json \
   --profile alt --out E:/tmp/win/dice_chain_auto
 
-# 5) spell_cast：必须带 magic profile（否则加载期 rc=2 并点名缺段；已 fail-closed）
+# 4c) bag_equip / eat_item：场景自带 inventory，无需额外 profile
+#     dry-run 应先看到两侧各 1 行「背包夹具…」预览，再开窗
+python -I -B tools/conformance/card_window.py --card <卡 id> \
+  --scenario tools/probe/scenarios/bag_equip.json \
+  --profile alt --out E:/tmp/win/bag_equip
+python -I -B tools/conformance/card_window.py --card <卡 id> \
+  --scenario tools/probe/scenarios/eat_item.json \
+  --profile alt --out E:/tmp/win/eat_item
+
+# 5) spell_cast：profile 必须含 magic 段 + D-9 pin（否则加载期 rc=2 或比较器 fail-closed）
 python -I -B tools/conformance/card_window.py --card <卡 id> \
   --scenario tools/probe/scenarios/spell_cast.json \
-  --profile E:/tmp/win/profile-magic.json --out E:/tmp/win/spell_cast
+  --profile E:/tmp/win/profile-magic-pin.json --out E:/tmp/win/spell_cast
 
 # 6) 离线单场景校验（不改库、不连网）
 python -I -B tools/probe/mir2_probe.py --check-scenario \
   --scenario tools/probe/scenarios/upgrade_retrieve.json --var merchant_actor=119
 ```
 
-> **`card_window --var NAME=VALUE`（卡 `openmir2-card-window-var-passthrough`）**：可重复，原样透传给两侧（csharp/rust）probe；`--dry-run` 打印的命令里可见。加载期 fail-closed：缺 `=`、空名、空值、同名不同值 ⇒ rc=2 点名。**不传时行为与产物逐字节不变**。此前「dice_chain 只能改场景 params 或改用 dice_chain_auto」的缺口已由该卡收口（场景 JSON 仍未改）。
+> **`card_window --var NAME=VALUE`（卡 `openmir2-card-window-var-passthrough`）**：可重复，原样透传给两侧（csharp/rust）probe；`--dry-run` 打印的命令里可见。加载期 fail-closed：缺 `=`、空名、空值、同名不同值 ⇒ rc=2 点名。**不传时行为与产物逐字节不变**。场景 JSON 未改。
 
-### 7.1 magic profile 内容（复用内置 alt，不复制整份）
+### 7.1 窗口 profile 的组成（只给指针，不重写片段）
 
-```json
-{
-  "format": "card-window-profile/1",
-  "name": "alt+magic",
-  "magic": [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
-}
-```
-
-⚠ 该片段**不能单独作为 profile 使用**：`load_profile` 要求完整的 `sides.{csharp,rust}`（`stack/stop/restore/db/binaries`）。本次实跑用的是「`BUILTIN_PROFILES['alt']` 的深拷贝 + 上面的 `magic` 键」，落在 `E:/tmp/w67-rehearsal/profile-magic.json`（temp，未入库）。
+- **`magic` 段**：值 = 场景 `spell_cast.json` 的 `description` 写死的 `magic_id=1 / level=0 / use_key="1" / curr_train=0`（逐字见该文件）；语义由 `card_window` 在 restore 与 placement 之后、起栈之前写进该侧测试库 `characters_magic`（`profile_magic`/`run_magic`）。`requires` 的加载期判定见 `tools/probe/scenarios/README.md`「`requires`」节。
+- **D-9 pin**：`sides.csharp.env` / `sides.rust.env` 里各写 `"MIR2_CLIENT_ABILITY_LAYOUT": "0"`（**字符串**，不是数字）；真正必需的是 `sides.rust.env`。片段与 fail-closed 原因见 README「窗口 profile 前置：`spell_cast` 必须 pin D-9」。
+- 两者都并入**内置 `alt` 的深拷贝**（profile 必须有完整 `sides.{csharp,rust}` 的 `stack/stop/restore/db/binaries`）⇒ 本次实跑用 `E:/tmp/w58-rehearsal/profile-magic-pin.json`（temp，未入库）。
 
 ---
 
 ## 8. 门禁与残留物
 
 - 写集：仅 `docs/window-batch-rehearsal-20261024.md`。
-- 门禁（见卡上 patch 条目，附 rc）：`t_reservation_gate check`、冲突标记门、`git merge-tree --write-tree refs/remotes/walgit/master HEAD`。
-- 返工 v3 的复跑日志：`E:/tmp/w67-rehearsal/rerun-v3/`（`check.tsv`、`dry.tsv` + 每场景 `.log`；仍在仓库外）。
-- 订正卡（`openmir2-rehearsal-spellcast-classification`）复跑日志：`E:/tmp/w63-spell/`（`alt.tsv`、`magic.tsv` + `logs/<scene>.<alt|magic>.log`；仓库外，可随时删）。
+- 返工基线：`c4b66ddb1`（inventory 可达合入后）；前一版基于 `47fd96ca8`，其 `*-r2` 复跑覆盖全矩阵。
+- 门禁（见卡上 patch 条目，附 rc）：`t_reservation_gate check`、冲突标记门、`git merge-tree --write-tree refs/remotes/walgit/master HEAD`（对 `c4b66ddb1`）。
+- 本次复跑日志：`E:/tmp/w58-rehearsal/logs/`（`*-r2` 后缀 = `c4b66ddb1` 上的全矩阵：每场景 `check-bare` / `check-var` / `dry-alt` / `dry-magic` `.log` + inventory 对照日志；仓库外）。
 - 残留物（全部在仓库外，可随时删）：
-  - `E:/tmp/w67-rehearsal/logs/`（逐场景两份日志 + magic/inventory 对照日志）
-  - `E:/tmp/w67-rehearsal/profile-alt-dump.json`、`profile-magic.json`、`profile-inventory.json`
-  - `E:/tmp/w67-rehearsal/bag_equip-with-inventory.json`、`bag_equip-bad-inv.json`、`eat_item-with-inventory.json`（仓库外场景副本，**仓库内场景 JSON 未动**）
-  - `E:/tmp/w67-rehearsal/thread-map.txt`、`r-cards-by-scene.txt`（R 卡交叉引用的原始扫描）
-  - `E:/tmp/w67-rehearsal/out/` **未创建**（dry-run 不建 out，已核）
-- 未起栈、未连库、未占用任何端口；未改卡片状态。
+  - `E:/tmp/w58-rehearsal/logs/`（含 r1 `47fd96ca8` 与 r2 `c4b66ddb1` 两轮）
+  - `E:/tmp/w58-rehearsal/profile-magic.json`、`profile-magic-pin.json`、`profile-inventory.json`
+  - `E:/tmp/w58-rehearsal/bag_equip-with-inventory.json`、`eat_item-with-inventory.json`、`bag_equip-bad-inv.json`、`bag_equip-bad-inv-r2.json`（仓库外场景副本，**仓库内场景 JSON 未动**）
+  - `E:/tmp/w58-rehearsal/out/` **未创建**（dry-run 不建 out，已核）
+- 未起栈、未连库、未占用任何端口；未改卡片状态（除本卡自己的签名条目）。
