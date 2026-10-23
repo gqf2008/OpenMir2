@@ -1646,6 +1646,14 @@ def cmd_dispatch(args):
     reg_rc = emit_exemption_registry_problems(cards)
     rows, cm, rm_groups, sm_all, rm_producers = build_dispatch_rows(repo, cards)
     counts, reds = summarize(rows)
+    # 卡 `openmir2-recon-noop-false-positive`（review B-1）：`summarize` 只统计**实际出现过**的 status，
+    # tracked 清零时键会消失；而消费端 `tools/goal/goal_gate.py::judge_b_tracked` 的契约是
+    # 「`counts.tracked` 是 int 且 == tracked 行数」，`docs/leader-goal-20261023.md` §1 明写
+    # 「`counts.tracked == 0` 且行集非空 ⇒ PASS」。缺键会被判「需人工」⇒ **B 类真清零时终点条件③
+    # 永远无法达成**（H-3 死锁，2026-10-23 已修过一次同类）。⇒ dispatch 侧**恒定输出** int 的
+    # `tracked`：有 tracked 行时值由 summarize 给出（语义不变），为 0 时补 0（不清零不出现）。
+    counts = dict(counts)
+    counts.setdefault("tracked", 0)
     print("== 协议派发对账门（§4-2）==")
     print(f"oracle={repo / ORACLE_DISPATCH}")
     print(f"inbound case 全集={len(cm)}  outbound SM 帧全集={len(sm_all)}（来自 {len(rm_groups)} 个 RM 支；"
@@ -2251,6 +2259,61 @@ def selftest():
               inbound_arm_noop(_nc, "CM_ZZLIVE4") is False)
     finally:
         shutil.rmtree(_tmp_noop, ignore_errors=True)
+    # ---- 卡 `openmir2-recon-noop-false-positive`（review B-1）：dispatch --json 的 counts 契约 ----
+    # 消费端 `tools/goal/goal_gate.py::judge_b_tracked`：缺 `counts.tracked` 键 ⇒ 「需人工」；
+    # 而 B 类**真清零**（tracked=0）必须判 PASS，否则终点条件③ 永远无法达成（H-3 死锁）。
+    # 旧 `summarize` 只统计实际出现过的 status ⇒ tracked 清零时键消失 ⇒ 清零反而退回需人工。
+    _tmp_dc = Path(tempfile.mkdtemp(prefix="recon-dispatch-counts-"))
+    _orig_board = globals().get("board_card_ids")
+    try:
+        (_tmp_dc / ORACLE_DISPATCH).parent.mkdir(parents=True)
+        (_tmp_dc / ORACLE_DISPATCH).write_text(NL.join([
+            "switch (wIdent) {",
+            "  case Messages.CM_ZZDISP:",
+            "    break;",
+            "}",
+        ]) + NL, encoding="utf-8")
+        (_tmp_dc / "mir2-rs/bins/game-svr/src").mkdir(parents=True)
+        (_tmp_dc / "mir2-rs/bins/game-svr/src/main.rs").write_text(NL.join([
+            "fn main() {",
+            "    match ident {",
+            "        messages::CM_ZZDISP => { let f = client_live(cmd.param); emit(f); }",
+            "    }",
+            "}",
+        ]) + NL, encoding="utf-8")
+        _tmp_dc_cards = _tmp_dc / "cards.json"
+        _tmp_dc_cards.write_text('{"known_cards": [], "assignments": {}}', encoding="utf-8")
+        # 夹具不是 git 仓：别让 resolve_cards 去打真看板（本牙只验 JSON 契约）。
+        globals()["board_card_ids"] = lambda _repo: None
+        _buf_dc = io.StringIO()
+        with contextlib.redirect_stdout(_buf_dc):
+            _rc_dc = main(["dispatch", "--repo", str(_tmp_dc), "--cards", str(_tmp_dc_cards),
+                           "--json", str(_tmp_dc / "out.json")])
+        _payload_dc = json.loads((_tmp_dc / "out.json").read_text(encoding="utf-8"))
+        _counts_dc = _payload_dc.get("counts", {})
+        _rows_dc = _payload_dc.get("rows") or []
+        check("teeth（卡recon-noop-fp B-1）：tracked=0 时 dispatch JSON 仍带 counts.tracked==0（int）且行集非空",
+              _rc_dc == 0 and isinstance(_counts_dc.get("tracked"), int)
+              and _counts_dc.get("tracked") == 0 and len(_rows_dc) > 0)
+        check("对照（卡recon-noop-fp B-1）：stdout summary 也恒带 tracked=0（人读与机读同口径）",
+              '"tracked": 0' in _buf_dc.getvalue())
+        # 消费端集成断言：goal_gate 条件③ 的判据函数必须因此判 PASS。
+        _gg_path = SCRIPT_DIR.parents[3] / "tools/goal/goal_gate.py"
+        if _gg_path.is_file():
+            import importlib.util
+            _spec = importlib.util.spec_from_file_location("_goal_gate_probe", _gg_path)
+            _gg = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_gg)
+            check("teeth（卡recon-noop-fp B-1）：goal_gate.judge_b_tracked ⇒ PASS（tracked=0 不再「需人工」）",
+                  _gg.judge_b_tracked(_rows_dc, [], None, _counts_dc)[0] == "pass")
+        else:
+            check("对照（卡recon-noop-fp B-1）：goal_gate.py 缺席 ⇒ 跳过消费端集成断言（不误红）", True)
+        check("对照（卡recon-noop-fp B-1）：有 tracked 行时 counts.tracked 计数不变（不清零不改语义）",
+              summarize([dict(status="tracked"), dict(status="implemented")])[0].get("tracked") == 1)
+    finally:
+        if _orig_board is not None:
+            globals()["board_card_ids"] = _orig_board
+        shutil.rmtree(_tmp_dc, ignore_errors=True)
     check("teeth（片D1-②）：no-op 臂虽 rust=yes ⇒ 不判 implemented（已卡 ⇒ tracked）",
           dispatch_item_status("inbound", "CM_CARDED", True, cards, noop=True) == "tracked")
     check("对照（片D1-②）：非 no-op 臂 rust=yes ⇒ implemented",

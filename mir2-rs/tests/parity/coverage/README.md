@@ -93,10 +93,13 @@
   `Command::ButchEffect`/`Command::Butch` 入队 ⇒ 是完整实现（卡 `openmir2-recon-noop-false-positive`）。
 - **不会误伤真 no-op**：形态 (a) 原样保留；形态 (b) 的三类登记形态（顶层 bool / 顶层整数 / 多实参中的
   顶层常量）继续命中，`selftest` 各有专门牙（见「SELFTEST」段）。
-- **残余（欠报方向，有意，判据未放宽）**：`foo(false)` 这类「常量裹一层」的实参、以及顶层实参是**合法
-  配置常量**（`client_x(cmd.a, 0)` 而 0 有语义）的臂不会被判 no-op；经 `if-else` 判等链派发的入站帧
-  没有 `=>` 臂体，本判据不覆盖。全表审计（58 个生产臂 + 24 个判等链派发点）见
-  `docs/recon-noop-false-positive-20261023.md`。
+- **残余·欠报方向（有意，判据未放宽）**：`foo(false)` 这类「常量裹一层」的实参判不出恒假；经
+  `if-else` 判等链派发的入站帧没有 `=>` 臂体，本判据不覆盖。全表审计（58 个生产臂 + 24 个判等链派发点）
+  见 `docs/recon-noop-false-positive-20261023.md`。
+- **残余·过报方向**：顶层实参是**合法配置常量**（`client_x(cmd.a, 0)` 而 0 有语义）的臂**会被判 no-op**
+  （实测 `client_call_top_level_literal_args('client_x(cmd.a, 0)') == True`）——这是形态 (b) 的固有代价。
+  当前生产臂里形态 (b) 只命中 `CM_OPENDOOR`（本身就是 `n/a-unreachable` 的真 no-op），无实际误伤；
+  新增「带常量实参的 client_* 调用」形态时须复核。
 
 ### 出站「证据 = 编码器生产调用点」判据 + 调用值未丢弃（片118）
 

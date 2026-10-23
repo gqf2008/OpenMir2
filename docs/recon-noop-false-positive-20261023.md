@@ -49,10 +49,13 @@ inbound::client_butch(&inbound::ButchInputs {
 （`ButchInputs{…true…}`）、嵌套调用实参（`foo(false)`）、字符串 `"false"`。这些都不是「handler 被常量
 顶死」，而是输入/包装表达式。
 
-**残余（欠报方向，有意，判据未放宽）**：
+**残余·欠报方向（有意，判据未放宽）**：
 - `foo(false)` 这类「常量裹一层」的实参判不出恒假；
-- 顶层实参若是**合法配置常量**（`client_x(cmd.a, 0)` 而 0 有语义）仍会被判 no-op；
 - 经 `if-else` 判等链派发的入站帧没有 `=>` 臂体，本判据根本不覆盖（§4.3 逐条核对过，当前无恒空者）。
+
+**残余·过报方向**：顶层实参若是**合法配置常量**（`client_x(cmd.a, 0)` 而 0 有语义）**会被判 no-op**
+（实测 `client_call_top_level_literal_args('client_x(cmd.a, 0)') == True`）；当前生产臂里形态 (b) 只命中
+`CM_OPENDOOR`（本身是 `n/a-unreachable` 的真 no-op），无实际误伤，新增此类调用形态时须复核。
 
 ## 3. dispatch 改前 / 改后
 
@@ -148,15 +151,64 @@ inbound::client_butch(&inbound::ButchInputs {
 
 | 命令 | 改前 | 改后 |
 | --- | --- | --- |
-| `recon_gates.py selftest` | 91 PASS / 0 FAIL，`RESULT: ALL PASS` | **96 PASS / 0 FAIL**（+5 条本卡牙），`RESULT: ALL PASS` |
+| `recon_gates.py selftest` | 91 PASS / 0 FAIL，`RESULT: ALL PASS` | **100 PASS / 0 FAIL**（+5 条判据牙 + 4 条 B-1 counts 契约牙），`RESULT: ALL PASS` |
 | `recon_gates.py mutate` | 38 PASS / 0 FAIL，`RESULT: ALL PASS` | **38 PASS / 0 FAIL**（未受本卡影响） |
 | `recon_gates.py dispatch` | `tracked=1` | **`tracked=0`**（`implemented=179`） |
 
-改后退出码：`selftest` rc=0（96 PASS / 0 FAIL）、`mutate` rc=0（38 PASS / 0 FAIL）、
+改后退出码：`selftest` rc=0（**100** PASS / 0 FAIL）、`mutate` rc=0（38 PASS / 0 FAIL）、
 `dispatch` rc=0（无 RED；`tracked` 为空集）。本卡不触碰任何 `.rs`，`cargo fmt/clippy/test` 与
 `msgcodegen --check` 不受影响（写集仅 `mir2-rs/tests/parity/coverage/` + `docs/`）。
 
+## 7.1 复审返工（reviewer-6 `4246fee6`，request_changes）
+
+### B-1（blocking）：tracked 清零后 `dispatch --json` 缺 `counts.tracked` ⇒ 条件③退回「需人工」
+
+`summarize()` 只统计**实际出现过**的 status，`tracked=0` 时键消失；消费端
+`tools/goal/goal_gate.py::judge_b_tracked` 要求 `counts.tracked` 是 int，`docs/leader-goal-20261023.md`
+§1 明写「`counts.tracked == 0` 且行集非空 ⇒ PASS」。
+
+**修法**（`cmd_dispatch`，本卡写集内）：`counts = dict(counts); counts.setdefault("tracked", 0)`，
+使 dispatch 侧**恒定输出** int 的 `tracked`；有 tracked 行时值由 `summarize` 给出，语义不变。
+
+改后实测：
+
+```
+$ python -I -B tests/parity/coverage/recon_gates.py dispatch --repo .. --json <tmp>
+summary: {"n/a-oracle-noop": 1, "implemented": 179, "n/a-unreachable": 11, "tracked": 0}
+
+$ # goal_gate 条件③ 的**同一代码路径**（load_recon_dispatch → judge_b_tracked，真实 board+whitelist）
+condition3_state  = pass
+condition3_detail = B 类清零：recon tracked=0（rows 191 条非空、counts 一致）（recon 实测 tracked=0）
+recon_counts      = {'n/a-oracle-noop': 1, 'implemented': 179, 'n/a-unreachable': 11, 'tracked': 0}
+board_cards_available = True   whitelist_rows = 196
+```
+
+> 条件①/②/④ 未在本车道重跑：本卡零 `.rs` 改动，且车道 worktree 无 `target/`（clippy 会全量重建）；
+> 条件③ 的 verdict 由 goal_gate 自身函数实算（上），不是手写期望。
+
+**新牙**（selftest，4 条）：用最小临时仓跑完 `main(["dispatch", ..., "--json"])`，断言
+① JSON `counts.tracked == 0` 且 `isinstance(int)` 且行集非空；② stdout summary 同口径；
+③ `goal_gate.judge_b_tracked(rows, [], None, counts)[0] == "pass"`（消费端集成，goal_gate 缺席则跳过不误红）；
+④ 有 tracked 行时 `summarize` 计数不变。
+
+### I-1（important）：README 把「配置常量仍会被判 no-op」写反
+
+已在 `mir2-rs/tests/parity/coverage/README.md` 修正：把「合法配置常量**会被**判 no-op」从
+「欠报方向」段移出，单列为「**残余·过报方向**」，并写实测
+`client_call_top_level_literal_args('client_x(cmd.a, 0)') == True`。代码注释与 patch body 原本正确，未动。
+
+### M-1 / M-2（reviewer 已接受，本卡知情留痕）
+
+- **M-1** `rust_at` 不保证是权威处理点：73 条 inbound 里 5 条非权威（`CM_USERMAKEDRUGITEM` 指
+  `lib.rs:2796` 死兜底臂、真实现 `lib.rs:5682`；`CM_SAY`/`CM_WALK`/`CM_FIREHIT`/`CM_SPELL` 指
+  game-gate 限速代理行）。reviewer 扫全部 58 个生产臂，log-only 恰好 2 条，与本卡审计一致
+  ⇒ 孤例、非系统性。**本卡不修**，建议另开「证据列权威性」小卡（`inbound_dispatch_at` 优先返回
+  game-svr 的 `messages::CM_X =>` 臂头，或增列 `rust_at_all`）。
+- **M-2** 24 条判等链派发的 inbound 不过 noop 启发式（臂体为空 ⇒ 恒 False），实现靠人工审计；
+  reviewer 抽验 8 条全为真实处理。**本卡不修**，若要条件③完全机判需把 noop 判据扩展到判等链（另卡）。
+
 ## 8. 残留物清单
 
-- 临时脚本：`E:/tmp/w61-*.py`、`E:/tmp/w61-*.txt`（审计/复现用，未入库，可删）。
-- 未改任何生产 `.rs`、未改 `cards.json` 的 `known_*`、未删 no-op 判据、未起栈/占端口/连库。
+- 临时脚本/证据：`E:/tmp/w61-*.py|json|txt|log`（审计、牙、goal_gate 复现用，未入库，可删）。
+- 未改任何生产 `.rs`、未改 `cards.json` 的 `known_*`、未删/未放松 no-op 判据、未起栈/占端口/连库。
+- 未改 `tools/goal/goal_gate.py`（B-1 在 recon 侧修，goal_gate 仅被 selftest 以 importlib 只读引用）。
