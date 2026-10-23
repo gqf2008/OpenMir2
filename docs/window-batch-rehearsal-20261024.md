@@ -71,12 +71,12 @@ python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/s
 | 场景 | `--check-scenario` rc | `--dry-run` rc（默认 alt） | `--dry-run` rc（带 profile） | 阻塞原因 / 真机前置 | 承接卡 | 依赖的 R 卡（详见 §4） |
 |---|---|---|---|---|---|---|
 | `bag_equip` | 2 → 0（`make_index`/`takeon_where`/`item_name`） | **0（假绿）** | 0ᵛ（**仍无夹具预览行**） | 缺 inventory 夹具**且无可用路径**（probe schema 拒 `inventory`）；201 发现无真实样本 | `openmir2-window-inventory-fixture`（已合 `bb4317a01`）；**可达入口缺口 = `openmir2-inventory-fixture-reachability`**（open）；**建议新卡** `openmir2-probe-scenario-inventory-key`（未开） | 1：`delmagic-addmagic-chain` |
-| `combat_hit` | 2 → 0（`hit_xy`/`hit_dir`；**`hit_dir` 需操作者显式给**，见 §1.3） | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：无同屏怪物夹具 + `wait_for` 无 recog/来源过滤 ⇒ 31/14 不可归因 | **建议新卡** `openmir2-combat-hit-monster-fixture`（未开）；recog/来源过滤**仍未实现**（待补），建议 id `openmir2-probe-waitfor-recog-filter`（未开） | 12：`attacktarget-overrides`、`login-numeric-gaps`、`merchant-race-bias`、`monster-attack-hit-frame`、`proper-target-unfolded`、`rm-delaypushed`、`rm-refmessage-delay-layer`、`run-gap-mb3`、`run-gap-monster-specials`、`run-gap-pl1`、`superman-normnpc`、`weapon-durability-frames` |
+| `combat_hit` | 2 → 0（`hit_xy`/`hit_dir`；**`hit_dir` 需操作者显式给**，见 §1.3） | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：无同屏怪物夹具 + `wait_for` 无 recog/来源过滤 ⇒ 31/14 不可归因 | **建议新卡** `openmir2-combat-hit-monster-fixture`（未开）；recog/来源过滤**仍未实现**（待补），承接卡 `openmir2-probe-waitfor-recog-filter`（已开，issue `7ef0565ef`；须等前置合入后开工） | 12：`attacktarget-overrides`、`login-numeric-gaps`、`merchant-race-bias`、`monster-attack-hit-frame`、`proper-target-unfolded`、`rm-delaypushed`、`rm-refmessage-delay-layer`、`run-gap-mb3`、`run-gap-monster-specials`、`run-gap-pl1`、`superman-normnpc`、`weapon-durability-frames` |
 | `combat_strike` | 0 | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：无 `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装，且 `wait_for` 无 recog 过滤 | **建议新卡** `openmir2-combat-strike-gear-fixture`（未开）；影响 R3 的 13 张 | 13：见 §4.3（R3 全组） |
 | `dice_chain` | 0 | 0 | 0ᵃ | 赌场 NPC；**`params.npc_actor=119` 是 r9 抓包值、每会话不同且不在 `required`，而 `card_window` 无 `--var` 透传 ⇒ 会点空** | 无（场景本身可跑；**窗口改用 `dice_chain_auto`**，见 §6.3） | 2：`script-playdice-openybdeal`、`script-take-persist`；另有 T-211 |
 | `dice_chain_auto` | 0 | 0 | 0ᵃ | 赌场 NPC（actor 自动发现） | — | 2：`menu-ok-unify-pickwire`、`ya52-menu-ok-missing` |
 | `eat_item` | 2 → 0（`make_index`/`item_name`） | **0（假绿）** | 0ᵛ（**仍无夹具预览行**） | 同 `bag_equip`（inventory 路径不可用 + 201 无样本） | 同 `bag_equip` | 1：`unbindlist-consumer`；另有 T-211 |
-| `equip_struck_save` | 0 | 0 | 0ᵃ | 商店 NPC「卫家店」(0103,19,18) 摆位；**场景 description 仍写「Rust 未接 642」（已过时）**；R 级真机窗口未授权 | `openmir2-persist-useitems-wiring`（T-247）；`openmir2-attack-weapon-wear-642`（T-266）；文字订正 `openmir2-642-stale-text-sweep`（在办） | 2：`persist-useitems-wiring`、`attack-weapon-wear-642` |
+| `equip_struck_save` | 0 | 0 | 0ᵃ | 商店 NPC「卫家店」(0103,19,18) 摆位；R 级真机窗口未授权 | `openmir2-persist-useitems-wiring`（T-247）；`openmir2-attack-weapon-wear-642`（T-266）；场景 description 曾写「Rust 未接 642」，已由 `openmir2-642-stale-text-sweep`（合入 `061312242`）订正为「已接线、真机窗口未跑」 | 2：`persist-useitems-wiring`、`attack-weapon-wear-642` |
 | `gm_batch` | 0 | 0 | 0ᵃ | GM 命令权限（角色 Permission） | — | 1：`cm-adjust-bonus` |
 | `gm_time` | 0 | 0 | 0ᵃ | 无 | — | 0 |
 | `king_castle_war` | 2 → 0（`king_actor`） | 0 | 0ᵃ | `king_actor` 是**部署假设**（643 不证明是国王）；城堡战 UnderWar 语境未备（`castle_zone` 无场景文件） | `openmir2-t138-request-castle-war` | 1：`t138-request-castle-war` |
@@ -195,7 +195,7 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 
 ### 4.7 `equip_struck_save`
 
-`persist-useitems-wiring`（T-247）、`attack-weapon-wear-642`（T-266，R 级真机窗口未采）。注意 T-247 正文仍写「Rust 642 未接」，已被 T-266/`8dcb8c8ca` 取代。
+`persist-useitems-wiring`（T-247）、`attack-weapon-wear-642`（T-266，R 级真机窗口未采）。T-247 正文曾写「Rust 642 未接」，该说法已由 T-266/`8dcb8c8ca` 取代，并已由 `openmir2-whitelist-t247-642-text`（合入 `05ca859bb`）在 `mir2-rs/tests/parity/whitelist.md:970` 逐字订正为「642 已接线…真机窗口未跑」。
 
 ### 4.8 `gm_batch` / 4.9 `gm_time`
 
@@ -247,7 +247,7 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 2. **派单写「§7.5」是笔误**：v5 的逐行枚举在 **§7.4**；§7.5 是「判据口径」（v5 已把 preflight 改成「已合入 `2e3b8500a`」）。本文件按 §7.4 引用。
 3. **v5 给 `bag_equip`/`eat_item` 的补救路径不可行（结论写死）**：v5 写「或先在场景里补 `inventory`」，但在本 head 上是**死路**，两条独立证据：① probe 顶层 schema 不收 `inventory`，`load_scenario` 以 `scenario has unknown key(s): ['inventory'] (fail-closed)` **rc=2 拒**（真跑同走该函数，§3.2 第 4 条）；② profile 顶层 `inventory` 被 `load_profile` **静默忽略**（rc=0、零效果、无警告，§3.2 第 2 条）。⇒ `openmir2-window-inventory-fixture`（已合 `bb4317a01`）产出的夹具**没有可达入口**。承接：新卡 **`openmir2-inventory-fixture-reachability`**（open；它须让位于正在改同一批文件的 `openmir2-scenario-fixture-precondition`）。这条应回写 batch-plan，但该文件被 `openmir2-docs-state-drift-sweep` 持有，**本卡不改**。
 4. **`dice_chain` 的「引用 T 行 = 3」是子串计数**：whitelist 里带反引号精确点名 `dice_chain` 的只有 T-211 一行；3 = T-211 + T-193 + T-194，其中 T-193/T-194 点名的是 **`dice_chain_auto`**（`dice_chain` 是其子串）。同理 `login_only` 在 master §7.4 写 14，本 head 精确匹配为 **12**（T-211/232/235/236/246/248/250/256/257/258/259/261），宽匹配 16。`equip_struck_save` 按**同一精确整词口径**为 **1**（T-247），与 master §7.4 的 1 一致；宽匹配（路径子串）才得 2（+ T-266，其正文写的是路径 `tools/probe/scenarios/equip_struck_save.json`）。**本文件全程采用精确整词口径，故记 1**。这些是**登记行漂移**，不影响「能跑」判定，但 v5 合入时值得顺手重算。
-5. **v5 把 `equip_struck_save` 计入「能跑」是正确**（对 `8dcb8c8ca` 核过）：`combat.rs:767 wear_durability` + `:1615-1619` 的 `RM_DURACHANGE` 已接，T-266 记 `window_required=true`。本次 dry-run rc=0。**但「能跑」≠「已验收」**：R 级真机窗口未采，且场景 description 仍是旧文（见 §2 `equip_struck_save` 行与 §4.7）。
+5. **v5 把 `equip_struck_save` 计入「能跑」是正确**（对 `8dcb8c8ca` 核过）：`combat.rs:767 wear_durability` + `:1615-1619` 的 `RM_DURACHANGE` 已接，T-266 记 `window_required=true`。本次 dry-run rc=0。**但「能跑」≠「已验收」**：R 级真机窗口仍未采；场景 description 的「Rust 未接 642」旧文已由 `061312242` 订正（见 §2 `equip_struck_save` 行与 §4.7），但「已接线」不等于「已对拍」。
 6. **`npc_click_auto` 在 v5 的 15 场景里，但没有任何 R 卡把它当窗口判据**：它作为 discovery 载体是必需的，建议在开窗 runbook 里单列为「基础设施」，避免被误当成一条独立判据。
 
 ---
@@ -269,7 +269,7 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 | `dice_chain_auto` | 赌场 NPC 在场 |
 | `dice_chain` | **不要用本尊**：`card_window` 无 `--var` 透传，默认 119 是 r9 的会话 id ⇒ 会点空。**改用 `dice_chain_auto`**（见 §6.3） |
 | `upgrade_retrieve` | 铁匠摆位 (320,328)+武器在手+金币≥10000+黑铁矿（三项缺一必红） |
-| `equip_struck_save` | 「卫家店」(0103,19,18) 摆位；R 级窗口授权；接受 description 旧文 |
+| `equip_struck_save` | 「卫家店」(0103,19,18) 摆位；R 级窗口授权（description 已由 `061312242` 订正为「已接线、真机窗口未跑」） |
 | `gm_time` / `gm_batch` | 角色 GM Permission |
 
 ### 6.2 还差一步（差什么 / 谁负责）
@@ -278,7 +278,7 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 |---|---|---|
 | `bag_equip` / `eat_item` | ① probe 顶层 schema 收 `inventory`；② `card_window --dry-run` 预览 inventory（否则永远看不出假绿）；③ 非空背包的一次 discovery（201 样本） | **可达入口缺口 = `openmir2-inventory-fixture-reachability`**（open，coordinator 已开；现有 `openmir2-window-inventory-fixture` 已合但夹具无入口）；另建议卡 `openmir2-probe-scenario-inventory-key`（未开，需 coordinator 派） |
 | `spell_cast` | Rust 侧魔法落点 + 638/639 生产帧 + 第二观察者 | 场景已由 `openmir2-spell-cast-unblock` 解封、夹具由 `openmir2-window-magic-fixture` 合入；帧面在 **in-progress** 的 `magic-8-21-wiring` / `spell-mp-wrapper` / `default-arm-spell-surface`；**第二观察者仍无人承接**（`openmir2-multi-session-probe` 已 closed `2a5101606`，其 scope 只是 probe 断言、不做第二会话）⇒ 建议 id `openmir2-spell-second-observer`（未开，需 coordinator 派） |
-| `combat_hit` | ① 同屏怪物夹具（保证正前方有目标且可排除其反击）；② `wait_for` 的 recog/来源过滤 | 建议卡 `openmir2-combat-hit-monster-fixture`（未开）；**recog/来源过滤仍未实现、待补**——`mir2_probe.py:292-302` 的 `wait_for` 只按 `ident` 匹配，`STEP_META_KEYS/ACTION_KEYS`（`:337-340`）无 recog/来源过滤键；`openmir2-probe-scenario-validation-gaps` 只加了 `--check-scenario` 的 R1–R6 形状/语义校验（merged `dd0c2c6f6`，已 closed），**没有** recog 过滤。承接：建议 id `openmir2-probe-waitfor-recog-filter`（未开），或并入 `openmir2-combat-hit-monster-fixture` 范围。**后果**：只补夹具不补过滤时，`SM_STRUCK(31)` 仍可能来自「自己被怪打」⇒ **仍然假绿** |
+| `combat_hit` | ① 同屏怪物夹具（保证正前方有目标且可排除其反击）；② `wait_for` 的 recog/来源过滤 | 建议卡 `openmir2-combat-hit-monster-fixture`（未开）；**recog/来源过滤仍未实现、待补**——`mir2_probe.py:292-302` 的 `wait_for` 只按 `ident` 匹配，`STEP_META_KEYS/ACTION_KEYS`（`:337-340`）无 recog/来源过滤键；`openmir2-probe-scenario-validation-gaps` 只加了 `--check-scenario` 的 R1–R6 形状/语义校验（merged `dd0c2c6f6`，已 closed），**没有** recog 过滤。承接：`openmir2-probe-waitfor-recog-filter`（已开，issue `7ef0565ef`；须等 `openmir2-scenario-fixture-precondition` 与 `openmir2-inventory-fixture-reachability` 合入后开工），或并入 `openmir2-combat-hit-monster-fixture` 范围。**后果**：只补夹具不补过滤时，`SM_STRUCK(31)` 仍可能来自「自己被怪打」⇒ **仍然假绿** |
 | `combat_strike` | `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装，或 `wait_for` recog 过滤 | 建议卡 `openmir2-combat-strike-gear-fixture`（未开）；解封后一次性解锁 R3 的 13 张 |
 
 > **不要用 rc=0 当窗口证据**：上表 6.2 的 5 个场景里，`bag_equip`/`eat_item`/`spell_cast` 的 dry-run 都是 rc=0。
