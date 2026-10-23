@@ -235,5 +235,6 @@
 | T-194 | openmir2-menu-ok-unify | 2026-10-23T08:25:00Z | 已落地 |
 | T-195 | historical-pre-reservation | 2026-10-23T00:00:00Z | 已落地 |
 | T-196 | openmir2-gm-admin-mode-entity-seam | 2026-10-23T08:45:00Z | 已落地 |
-| T-203 | openmir2-ybdeal-frames | 2026-10-23T00:35:09Z | 已落地 |
+| T-199 | openmir2-weapon-durability-frames | 2026-10-23T00:16:58Z | 在用 |
 | T-201 | openmir2-cm-adjust-bonus | 2026-10-23T00:21:36Z | 在用 |
+| T-203 | openmir2-ybdeal-frames | 2026-10-23T00:35:09Z | 已落地 |

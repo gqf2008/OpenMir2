@@ -1074,6 +1074,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     elec_blizzard_range: i32::from(cfg.elec_blizzard_range),
                     mag_turn_undead_level: cfg.mag_turn_undead_level,
                     pk_flag_time: cfg.pk_flag_time,
+                    upgrade_weapon_max_point: cfg.upgrade_weapon_max_point,
+                    dec_lamp_dura: cfg.dec_lamp_dura,
                     console_show_user_count_time:
                         game_svr::castle::load_console_show_user_count_time(&conf),
                     cry_msg_f_color: cfg.cry_msg_f_color,
@@ -14115,6 +14117,78 @@ fn push_name_color_self(
     );
 }
 
+/// **卡 `openmir2-weapon-durability-frames`（tier=R）**：武器耐久族的两条下行帧。
+///
+/// # oracle 触发链（对照表，文件:行）
+///
+/// | 帧 | 上游生产者 | 发射点 | 处理器（→ `Recog`/`Param`） |
+/// |---|---|---|---|
+/// | `SM_LAMPCHANGEDURA(655)` | `PlayObject.Run` 的 `DecLightItemDrugTime` 周期块（`PlayObject.Message.cs:257-262`）⇒ `UseLamp()`（`:2233-2278`）；右手槽耐久 `-1`（`DecLampDura`）；千位门 = `Round((ushort)(Dura / 1000.0))`（**左值先截断**，`:2245`）vs `Round(nDura / 1000.0)`（右值四舍五入，`:2272`） | 燃尽 `SendMsg(RM_LAMPCHANGEDURA, 0, 0, 0, 0)`（`:2265`）；跨千位 `SendMsg(RM_LAMPCHANGEDURA, 0, UseItems[RighThand].Dura, 0, 0)`（`:2274`） | `:1843` `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0, 0, 0)` ⇒ **`Recog = Dura`、`Param = 0`** |
+/// | `SM_BREAKWEAPON(1102)` | `AttackDir`（`PlayObject.Attack.cs:25-31`；门 = 武器 `Index>0 && Desc[10]>0` **且 `attackTarget != null`**）⇒ `CheckWeaponUpgrade`（`PlayObject.cs:4110`）⇒ `Index==0` | `SendRefMsg(RM_BREAKWEAPON, 0, 0, 0, 0, "")`（`:4121`） | `PlayObject.Message.cs:2015-2017` ⇒ `Recog = 断武器者 ActorId`、其余 0 |
+///
+/// # 世界侧
+///
+/// - `world.use_lamps()`（`crates/world/src/world.rs`，按 `DecLightItemDrugTime` 节流）
+///   → `TickRecord` 不需要通道（返回值直接是 [`mir2_world::LampDuraChange`] 列表）；
+/// - `World::attack_once` 的 `CheckWeaponUpgrade` 结算 → `TickRecord::weapon_breaks`。
+///
+/// # 收件人
+///
+/// - 655 是 `SendMsg(RM_LAMPCHANGEDURA)` ⇒ **只投自己**（`BaseObject.Message.cs:152-183`），
+///   优先级 `(byte)10138 = 154`；
+/// - 1102 是 `SendRefMsg` ⇒ ±`SendRefMsgRange` 的 `Race==Play && !Ghost`（**含自己**；
+///   `ObMode || FixedHideMode` 时只自送，`chat::hear_targets` 已复刻该头门），
+///   优先级 `(byte)10413 = 173`。
+///
+/// # 未接的伴随帧（登记，本卡不扩范围）
+///
+/// - 燃尽支的 `SendDelItems`（709）与 `RM_CHANGELIGHT`（654）、`RecalcAbilitys` 的宿主侧重算；
+/// - 破碎支/成功支的 `SysMsg`（100）、`SM_UPDATEITEM(203)`、`RM_ABILITY(19)`/`RM_SUBABILITY(62)`、
+///   `FeatureChanged`（10116）。T-79⑥/T-95① 已登记。
+fn drain_weapon_durability(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut buf = SpellFrameBuf::new();
+    let mut sent = 0usize;
+    // ① `SM_LAMPCHANGEDURA(655)`：自投递，`Recog = Dura`（燃尽 = 0）。
+    for d in world.use_lamps() {
+        let body = smframe_ext::sm_lampchangedura(d.recog);
+        if online.iter().any(|e| e.actor_id == d.actor_id) {
+            buf.push_actor(
+                online,
+                d.actor_id,
+                (mir2_protocol::messages::RM_LAMPCHANGEDURA & 0xFF) as u8,
+                body,
+            );
+            sent += 1;
+        }
+    }
+    // ② `SM_BREAKWEAPON(1102)`：`SendRefMsg` 收件人（±12 格 Play；`hear_targets` 已含
+    //    ObMode/FixedHideMode 的「只自送」头门），`Recog = 断武器者 ActorId`。
+    for ev in &rec.weapon_breaks {
+        if !matches!(ev.outcome, mir2_world::WeaponUpgradeOutcome::Broke) {
+            continue;
+        }
+        let body = smframe_ext::sm_breakweapon(ev.actor_id);
+        for target_id in chat::hear_targets(world, ev.actor_id, chat::SEND_REF_MSG_RANGE) {
+            let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
+                continue;
+            };
+            buf.push_socket(
+                t.socket,
+                (mir2_protocol::messages::RM_BREAKWEAPON & 0xFF) as u8,
+                body.clone(),
+            );
+            sent += 1;
+        }
+    }
+    buf.flush(online, gates);
+    sent
+}
+
 /// **P3 收尾残余**：`PlayObject.CheckPkStatus()`（`PlayObject.cs:4357-4364`）的宿主出帧。
 ///
 /// 世界侧 [`mir2_world::World::check_pk_status`] 按 `DecLightItemDrugTime` 周期（缺省 500ms）
@@ -15317,6 +15391,12 @@ struct EnterConfig {
     /// （`PlayObject.cs:4359`）；`DecLightItemDrugTime` 仍取 oracle 缺省 500
     /// （本仓未解析该键，登记）。
     pk_flag_time: i32,
+    /// **卡 `openmir2-weapon-durability-frames`**：`[Setup] UpgradeWeaponMaxPoint`
+    /// （缺省 20，部署件 7）——`CheckWeaponUpgradeStatus` 的破碎门。
+    upgrade_weapon_max_point: i32,
+    /// **卡 `openmir2-weapon-durability-frames`**：`[Setup] DecLampDura`（缺省 true）——
+    /// `UseLamp` 的「每周期 Dura-1」开关。
+    dec_lamp_dura: bool,
     /// `[Setup] CryMsgFColor/CryMsgBColor`（`!` 喊话的 `SM_HEAR` 颜色；缺省 0x00/0x97）。
     ///
     /// oracle NRE 搬运（T-118）后成功喊话零帧 ⇒ 线上不读；配置管线保留，帧形状由
@@ -15487,6 +15567,8 @@ impl EnterConfig {
             elec_blizzard_range: 2,
             mag_turn_undead_level: 50,
             pk_flag_time: 60_000,
+            upgrade_weapon_max_point: 20,
+            dec_lamp_dura: true,
             cry_msg_f_color: 0,
             cry_msg_b_color: 0x97,
             can_shout_msg_level: 7,
@@ -17448,6 +17530,9 @@ fn sim_loop(
         i64::from(enter_cfg.pk_flag_time),
         500, // `DecLightItemDrugTime` 缺省（`GameSvrConf.cs:1398`；本仓未解析该键，登记）。
     );
+    // **卡 `openmir2-weapon-durability-frames`**：`[Setup] DecLampDura` /
+    // `UpgradeWeaponMaxPoint`（`ServerConf.cs:281/233`；部署件 `1` / `7`）。
+    world.set_weapon_durability_config(enter_cfg.dec_lamp_dura, enter_cfg.upgrade_weapon_max_point);
     // **P3-B4**：`[Setup]` 的 `MabMabe*` / `AmyOunsulPoint` 灌进世界（缺省 = oracle 缺省）。
     world.set_b4_config(enter_cfg.b4);
     // **`openmir2-player-drop-useitems`**：玩家死亡 `DropUseItems` 的配置
@@ -20521,6 +20606,10 @@ fn sim_loop(
         // **P3 收尾残余**：`PvpFlag` 过期（`CheckPkStatus`）⇒ 656。oracle 在玩家 `Run()` 的
         // `DecLightItemDrugTime` 周期块里调用（`PlayObject.Message.cs:257-262`）；本骨架在
         // world tick 之后按同一周期节流（见 `World::check_pk_status`）。
+        // **卡 `openmir2-weapon-durability-frames`**：`UseLamp` / `CheckWeaponUpgrade` 的两条帧
+        // （655 / 1102）。位于 `CheckPkStatus` 之前：oracle 同一周期块里 `UseLamp()` 先于
+        // `CheckPkStatus()`（`PlayObject.Message.cs:257-262`）。
+        let _weapon_durability = drain_weapon_durability(&rec, &mut world, &online, &gates);
         drain_pk_flag_downlink(&mut world, &online, &gates);
         // **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()`→`DelMember`）帧——在本 tick 的
         // `settle_deaths` 里已按 oracle 序算好事件，这里只负责回帧（死亡者仍在线，自身帧照发）。
@@ -59470,5 +59559,273 @@ mod serverinfo_gate_tests {
         assert!(!gate.tick(origin), "注入量级下不得提前首发");
         assert!(!gate.tick(origin + 10_000), "严格 >：正好 10000ms 不发");
         assert!(gate.tick(origin + 10_001), "超过 10000ms 发一次");
+    }
+}
+
+/// **卡 `openmir2-weapon-durability-frames`（tier=R）**：`drain_weapon_durability` 的帧面判据。
+///
+/// 生产链：`World::use_lamps`（`UseLamp`，`PlayObject.Message.cs:2233-2278`）与
+/// `World::attack_once` 的 `CheckWeaponUpgrade`（`PlayObject.cs:4110`）→ 本排水函数 →
+/// 既有编码器 `smframe_ext::sm_lampchangedura` / `sm_breakweapon`
+/// （`smframe_ext.rs:291` / `:101`，构造用例 `header_only_frames_self_computed_golden` 已钉字节）。
+#[cfg(test)]
+mod weapon_durability_downlink_tests {
+    use super::*;
+    use mir2_protocol::frame::CommandMessage;
+    use std::collections::HashMap;
+
+    fn entry(account: &str, chr: &str, sid: i32, gate: i32, sock: i32, actor: i32) -> OnlineEntry {
+        OnlineEntry {
+            account: account.to_string(),
+            chr_name: chr.to_string(),
+            session_id: sid,
+            gate_idx: gate,
+            socket: sock,
+            actor_id: actor,
+        }
+    }
+
+    fn take(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            out.push((socket, body));
+        }
+        out
+    }
+
+    fn cm(body: &[u8]) -> CommandMessage {
+        CommandMessage::from_bytes(body).expect("12B 命令头")
+    }
+
+    fn gates_with(
+        tx: mpsc::UnboundedSender<SimToGate>,
+    ) -> HashMap<u8, mpsc::UnboundedSender<SimToGate>> {
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        gates
+    }
+
+    /// **接线牙**：`sim_loop` 里必须恰有一条 `drain_weapon_durability` 生产调用，
+    /// 且位于 `drain_pk_flag_downlink` 之前（oracle `UseLamp()` 先于 `CheckPkStatus()`，
+    /// `PlayObject.Message.cs:257-262`）。
+    ///
+    /// 红检（实测）：把该调用行注释掉 ⇒ 本用例必红（0 命中）。
+    #[test]
+    fn drain_weapon_durability_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        const CALL: &str =
+            "let _weapon_durability = drain_weapon_durability(&rec, &mut world, &online, &gates);";
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == CALL)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "生产调用行必须恰一条（0 = 被删/被注释/改坏；>1 = 重复）；命中 {hits:?}"
+        );
+        let call = hits[0];
+        let sim_start = lines
+            .iter()
+            .position(|l| l.starts_with("fn sim_loop("))
+            .expect("`fn sim_loop(` 定义行");
+        let pk = lines
+            .iter()
+            .position(|l| l.trim() == "drain_pk_flag_downlink(&mut world, &online, &gates);")
+            .expect("`drain_pk_flag_downlink` 生产调用行");
+        assert!(
+            call > sim_start && call < pk,
+            "必须落在 `sim_loop` 内、`drain_pk_flag_downlink` 之前（call={call} sim={sim_start} pk={pk}）"
+        );
+    }
+
+    /// 判据 ①（帧面）：`Dura 1501 → 1500`（oracle 口径 `trunc(1.501)=1 != round(1.5)=2`）⇒
+    /// **恰好一条** `SM_LAMPCHANGEDURA(655)`，
+    /// `Recog = 新 Dura`、`Param/Tag/Series = 0`、12B 无尾；**只投自己**（同图另一玩家零帧）。
+    #[test]
+    fn lamp_durability_frame_is_one_655_with_durability_as_recog() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.set_item_catalog(vec![mir2_data::StdItem {
+            name: "蜡烛".to_string(),
+            special_pwr: 0,
+            light: 3,
+            ..Default::default()
+        }]);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        world.open_session("q");
+        let q = world
+            .enter_map("q", new_player_entity("q".to_string(), 11, 10), 0)
+            .expect("玩家 q 进图");
+        world.entities.get_mut(p).unwrap().use_items[2] = mir2_world::entity::UseItemSlot {
+            make_index: 1,
+            index: 1,
+            dura: 1501,
+            dura_max: 10_000,
+            desc: [0u8; 14],
+        };
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
+        online_set(&mut online, entry("aq", "q", 1, 0, 902, q));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+        let rec = mir2_world::TickRecord::default();
+
+        // 首次调用只初始化周期游标（`DecLightItemDrugTick`，T-78 口径）⇒ 零帧。
+        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        assert!(take(&mut rx).is_empty(), "周期未到 ⇒ 零帧");
+
+        world.clock_ms += 501;
+        let sent = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        let frames = take(&mut rx);
+        assert_eq!(sent, 1);
+        assert_eq!(frames.len(), 1, "恰好一条 655（不得泄漏给同图 q）");
+        assert_eq!(frames[0].0, 901, "`SendMsg` 只投自己");
+        let m = cm(&frames[0].1);
+        assert_eq!(m.ident, 655);
+        assert_eq!(
+            (m.recog, m.param, m.tag, m.series),
+            (1500, 0, 0, 0),
+            "线上字段 = `Recog: Dura`、`Param: 0`（`PlayObject.Socket.cs:17` 第 2 实参是 nRecog）"
+        );
+        assert_eq!(frames[0].1.len(), 12, "header-only，无尾");
+        assert_eq!(
+            frames[0].1,
+            smframe_ext::sm_lampchangedura(1500),
+            "必须走既有编码器（逐字节）"
+        );
+    }
+
+    /// 判据 ②（帧面）：武器升级结算 ⇒ `Index = 0` ⇒ **一条 `SM_BREAKWEAPON(1102)`**
+    /// 给 ±12 格内每个玩家（含自己），`Recog = 断武器者 ActorId`；12 格外零帧。
+    #[test]
+    fn weapon_break_frame_is_one_1102_per_nearby_player() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.set_weapon_durability_config(true, 7);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        world.open_session("q");
+        let q = world
+            .enter_map("q", new_player_entity("q".to_string(), 11, 10), 0)
+            .expect("玩家 q 进图");
+        world.open_session("r");
+        let r = world
+            .enter_map("r", new_player_entity("r".to_string(), 50, 50), 0)
+            .expect("远处玩家 r 进图");
+        let mut foe = mir2_world::Entity::new(0, "foe", 10, 11);
+        foe.race = 80;
+        let foe = world.add_entity(foe);
+        let mut desc = [0u8; 14];
+        desc[10] = 1; // `ItemAttr.WeaponUpgrade`：1 ⇒ 必碎（`PlayObject.cs:4150-4152`）
+        world.entities.get_mut(p).unwrap().use_items[1] = mir2_world::entity::UseItemSlot {
+            make_index: 7,
+            index: 10,
+            dura: 5000,
+            dura_max: 10_000,
+            desc,
+        };
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
+        online_set(&mut online, entry("aq", "q", 1, 0, 902, q));
+        online_set(&mut online, entry("ar", "r", 1, 0, 903, r));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+
+        world.attack_cmd(p, foe);
+        let rec = world.tick();
+        assert_eq!(rec.weapon_breaks.len(), 1, "一次攻击一次结算");
+        let sent = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        let frames = take(&mut rx);
+        assert_eq!(sent, 2, "±12 格内两个玩家各一条");
+        assert_eq!(frames.len(), 2);
+        let sockets: Vec<i32> = frames.iter().map(|f| f.0).collect();
+        assert!(sockets.contains(&901) && sockets.contains(&902));
+        assert!(!sockets.contains(&903), "12 格外的 r 零帧");
+        for (_, body) in &frames {
+            let m = cm(body);
+            assert_eq!(m.ident, 1102);
+            assert_eq!(m.recog, p, "`Recog` = 断武器者 ActorId（不是 0）");
+            assert_eq!((m.param, m.tag, m.series), (0, 0, 0));
+            assert_eq!(body.len(), 12);
+            assert_eq!(*body, smframe_ext::sm_breakweapon(p));
+        }
+        assert_eq!(
+            world.entities.get(p).unwrap().use_items[1].index,
+            0,
+            "武器被移除（`Index = 0`；oracle 只清 Index）"
+        );
+    }
+
+    /// 判据 ③（帧面负例）：无武器 / 无升级标记 / 无目标 ⇒ `weapon_breaks` 为空 ⇒ 零 1102；
+    /// 无火把 ⇒ 零 655。
+    #[test]
+    fn no_weapon_or_no_target_produces_zero_frames() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.set_weapon_durability_config(true, 7);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        let mut foe = mir2_world::Entity::new(0, "foe", 10, 11);
+        foe.race = 80;
+        let foe = world.add_entity(foe);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+
+        // ① 空手（无武器）：照常攻击，零事件。
+        world.attack_cmd(p, foe);
+        let rec = world.tick();
+        assert!(rec.weapon_breaks.is_empty());
+        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        assert!(take(&mut rx).is_empty(), "空手 ⇒ 零帧");
+
+        // ② 有武器但 `Desc[10] == 0`：不进 `CheckWeaponUpgrade`。
+        let mut desc = [0u8; 14];
+        desc[0] = 3;
+        world.entities.get_mut(p).unwrap().use_items[1] = mir2_world::entity::UseItemSlot {
+            make_index: 7,
+            index: 10,
+            dura: 5000,
+            dura_max: 10_000,
+            desc,
+        };
+        world.attack_cmd(p, foe);
+        let rec = world.tick();
+        assert!(rec.weapon_breaks.is_empty(), "Desc[10]==0 ⇒ 不结算");
+        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        assert!(take(&mut rx).is_empty(), "零帧");
+
+        // ③ 有标记但**空挥**（attackTarget == null）：`attack_swing` 不跑结算。
+        let mut desc = [0u8; 14];
+        desc[10] = 1;
+        world.entities.get_mut(p).unwrap().use_items[1].desc = desc;
+        assert!(world.attack_swing(p).is_some());
+        let rec = world.tick();
+        assert!(
+            rec.weapon_breaks.is_empty(),
+            "空挥不结算（Attack.cs:27 的门）"
+        );
+        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        assert!(take(&mut rx).is_empty(), "零帧");
+        assert_eq!(
+            world.entities.get(p).unwrap().use_items[1].index,
+            10,
+            "武器未碎"
+        );
     }
 }

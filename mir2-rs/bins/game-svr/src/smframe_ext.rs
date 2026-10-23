@@ -54,13 +54,13 @@
 //!
 //! | 帧 | 常量 | oracle 生产点 | 本仓现状 | 判定 |
 //! |---|---|---|---|---|
-//! | [`sm_breakweapon`] | 1102 | `CheckWeaponUpgrade` 的 `SendRefMsg(RM_BREAKWEAPON)`（武器耐久归零） | 编码器 + 构造用例在；`grep RM_BREAKWEAPON` 生产点零命中 | **登记 T-174**：生产链 = 耐久扣减 ⇒ R，随 `SM_LAMPCHANGEDURA` 同窗口跑 |
+//! | [`sm_breakweapon`] | 1102 | `AttackDir`（门 `attackTarget != null` + 武器 `Index>0 && Desc[10]>0`）⇒ `CheckWeaponUpgrade` 的 `SendRefMsg(RM_BREAKWEAPON)`（`PlayObject.cs:4121`） | **已接线**：`crates/world` 的 `check_weapon_upgrade_status` → `TickRecord::weapon_breaks` → `bins/game-svr/src/lib.rs::drain_weapon_durability`（卡 `openmir2-weapon-durability-frames`，T-199） | **已接线**（原 T-174 收口；伴随帧 `SM_UPDATEITEM(203)`/`RM_ABILITY`/`RM_SUBABILITY` 仍未接，T-79⑥/T-95①） |
 //! | [`sm_changeface`] | 1104 | `ElfWarriorMonster` 的 `MakeClone` 支（ELF 分裂出分身时 `SendRefMsg(RM_CHANGEFACE)`） | 编码器 + 构造用例在；本仓无该支生产点 | **登记 T-175**：上游 `ElfWarrior` 分裂支未移植 |
 //! | [`sm_closedoor`] | 614 | `RM_DOORCLOSE`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**：与 `sm_opendoor_ok` 同因，oracle 结构性不可达 |
 //! | [`sm_closehealth`] | 1101 | `BreakOpenHealth`（`BaseObject.Base.cs:219-222` 的 `ShowHp` 到期门；死亡路径不调它）⇒ `SendRefMsg(RM_CLOSEHEALTH)` | 宿主已镜像 `sg.show_hp`；1101 发射点**已接线**（`lib.rs::drain_close_health_for`：玩家在 `drain_stamina` 内逐 actor、怪物/NPC 由 `drain_close_health_residual` 补扫） | **已接线**（卡 `openmir2-sm-closehealth-wire`，2026-10-23）：Leader 放行 `lib.rs`；12B 字节 / 怪物到期 / 帧序用例 + 调用点牙见卡片；相位差见 T-79 ③ |
 //! | [`sm_hideevent`] | 805 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_HIDEEVENT)`） | `World::run_map_events` 只跑 fire-burn + dig-out 两支，未建模 `VisibleEvents` 差集 | **登记 T-178**：MapEvent 可见性未建模 |
 //! | [`sm_itemshow`] | 610 | `Envir.AddItemToMap` 成功支的 `SendRefMsg(RM_ITEMSHOW)` | `MapItem.ItemId == 0` 恒真 ⇒ oracle 不可达（T-19/T-25/T-32） | **登记 T-179**：沿用既有 T-32 结论 |
-//! | [`sm_lampchangedura`] | 655 | 右手火把耐久结算的两处 `SendMsg(RM_LAMPCHANGEDURA)` | 编码器在；生产点零命中 | **登记 T-180**：改耐久 ⇒ R，需真机窗口 |
+//! | [`sm_lampchangedura`] | 655 | 右手火把耐久结算的两处 `SendMsg(RM_LAMPCHANGEDURA)`（`PlayObject.Message.cs:2265`/`:2274`） | **已接线**：`crates/world` 的 `World::use_lamps`（`UseLamp`）→ `bins/game-svr/src/lib.rs::drain_weapon_durability`（卡 `openmir2-weapon-durability-frames`，T-199） | **已接线**（原 T-180 收口；燃尽支的 654/709 仍未接，T-79⑥/T-95①） |
 //! | [`sm_opendoor_ok`] | 612 | `RM_DOOROPEN`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**（与 `sm_closedoor` 同条） |
 //! | [`sm_queryybdeal`] | 23023 | 脚本动作 `QUERYYBDEAL` 的 `SendMsg(RM_QUERYYBDEAL)` 尾 = `EDCode.EncodeBuffer` | `crates/script` 无 `QUERYYB*` handler | **登记 T-181**：上游脚本动作未实现 |
 //! | [`sm_queryybsell`] | 23021 | 脚本动作 `QUERYYBSELL`（同上形状） | 同上 | **登记 T-181**（与 `sm_queryybdeal` 同条） |
