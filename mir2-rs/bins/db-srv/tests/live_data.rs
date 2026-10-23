@@ -212,9 +212,19 @@ async fn roundtrip(
     let pkt = ServerDataPacket::from_bytes(&head).expect("6000 应答头非法");
     assert_eq!(pkt.packet_code, PacketCode);
     let mut body = vec![0u8; usize::from(pkt.packet_len)];
-    sock.read_exact(&mut body)
+    // 体读上界（test-waits 卡复审指出的范围外残余）：头读已有 10s 上界 ⇒ 走到这里说明对端
+    // 活着且已吐完整头；体读若无上界，「发头不吐体」的半帧僵死仍会把门禁挂死。口径同
+    // game-svr/tests/relay.rs `recv_frame`：EOF 照旧快红、超时带诊断慢红；写成 unwrap_or_else
+    // 链而非 match（db-srv 开 pedantic ⇒ `Err(_)` 通配会吃 match_wild_err_arm）。
+    let n = body.len();
+    tokio::time::timeout(Duration::from_secs(10), sock.read_exact(&mut body))
         .await
-        .expect("读 6000 应答体失败");
+        .unwrap_or_else(|_| {
+            panic!("期望读到 6000 应答体（请求 ident={ident}，{n}B）：已耗时 10s 仍未读满，对端 {sock:?} 半帧僵死？")
+        })
+        .unwrap_or_else(|e| {
+            panic!("期望读到 6000 应答体（请求 ident={ident}，{n}B）：读满前对端关闭（EOF：{e}），对端 {sock:?} 提前断开？")
+        });
     let resp = ServerRequestData::from_bytes(&body).expect("6000 应答信封非法");
     let msg = ServerRequestMessage::from_bytes(&edcode::decode(resp.message.as_ref().unwrap()))
         .expect("6000 应答消息头非法");
