@@ -262,8 +262,8 @@ TEETH = [
        '''    if False and not cell["walkable"]:''')]),
     ("P3", "预置位不再核对「只改了需要的列」（连带写坏其它列也放行）",
      "PL-10 预置连带改坏其它列",
-     [('''        if after["fp"] != before["fp"]:''',
-       '''        if False and after["fp"] != before["fp"]:''')]),
+     [("        if after[\"fp\"] != before[\"fp\"]:" + chr(10) + "            raise ConfigError(" + chr(10) + "                \"预置位连带改了",
+       "        if False and after[\"fp\"] != before[\"fp\"]:" + chr(10) + "            raise ConfigError(" + chr(10) + "                \"预置位连带改了")]),
     ("P4", "两侧库配对校验被摘掉（拿 C# 的库给 Rust 侧预置）",
      "PL-12 角色库与该侧部署不配对",
      [('''    if chars_db != expected:''',
@@ -291,6 +291,18 @@ TEETH = [
      "MG-7 写入语句钉到表名+列清单",
      [('''"/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `Level`, "''',
        '''"/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `LevelX`, "''')]),
+    # --- 背包夹具的三条 fail-closed（卡 openmir2-window-inventory-fixture 返工 m1）---------
+    # 锁「判定真的接线」：把分支改成 None / if False: 时，⑩/⑪/⑫ 必须变红。
+    ("INV1", "背包夹具库配对判定被摘掉（_check_db_pairing 改 None）",
+     "⑩ 库配对不匹配",
+     [('''        res["db_pairing"] = _check_db_pairing(side, placement_envir_root(side, sc), db)''',
+       '''        res["db_pairing"] = None''')]),
+    ("INV2", "声明槽位占用判定被摘掉（occ_n != 0 → if False:）",
+     "⑪ 声明槽位已被占用",
+     [('''        if occ_n != 0:''', '''        if False:''')]),
+    ("INV3", "其它槽位行数不变判定被摘掉（count 比较 → if False:）",
+     "⑫ 其它槽位行数变了",
+     [('''        if after["count"] != before["count"]:''', '''        if False:''')]),
 ]
 
 
