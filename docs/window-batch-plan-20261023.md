@@ -6,12 +6,12 @@
 
 ## 0. 一句话结论
 
-**窗口欠账不是 114 张，是 173 张**（机器可复现口径见 §1）。其中：**第 1 批 53 张**（9 个 probe 场景 42 + 既有夹具 11）、**第 2 批 4 张**、**第 3 批 81 张**、**不可协议对拍 35 张**。每一张都落到某一批并给了场景与前置，无遗漏。
+**窗口欠账不是 114 张，是 173 张**（机器可复现口径见 §1）。其中：**第 1 批 53 张**（9 个 probe 场景 41 + 既有夹具 12）、**第 2 批 4 张**、**第 3 批 81 张**、**不可协议对拍 35 张**。每一张都落到某一批并给了场景与前置，无遗漏。
 
 | 批次 | 张数 | 开跑条件 |
 |---|---:|---|
-| 第 1 批 · A（probe 9 场景） | 42 | `card_window.py` + 参数发现接线（`openmir2-window-discovery-wiring`） |
-| 第 1 批 · B（既有 `run_*_pair.ps1`） | 11 | 夹具在 master，逐卡前置见行内 |
+| 第 1 批 · A（probe 9 场景） | 41 | `card_window.py` + 参数发现接线（`openmir2-window-discovery-wiring`） |
+| 第 1 批 · B（既有夹具） | 12 | 夹具在 master，逐卡前置见行内 |
 | 第 2 批 · A（move/king/combat 规则） | 2 | `openmir2-window-discovery-rules` 落地 |
 | 第 2 批 · B（SM_BAGITEMS 规则） | 2 | **需新开卡**（现有规则卡不覆盖） |
 | 第 3 批（新帧/新场景/新夹具） | 81 | 逐卡前置，见行内 |
@@ -81,7 +81,7 @@
 
 列：卡 id / 状态 / 窗口项要点 / 场景 / 前置。状态取最后一条 `status`；`needs-review` 的两张是返工后未合入当前 head 的卡。
 
-### 1P · 第 1 批 · A：9 个可跑 probe 场景（零新增代码）（42 张）
+### 1P · 第 1 批 · A：9 个可跑 probe 场景（零新增代码）（41 张）
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
@@ -109,26 +109,25 @@
 | 22 | `openmir2-encoding-core-e1-e2` | in-progress | 真机：说词/物品名等非 ASCII 文本的逐字节；StringList 与 ConfigFile 两条 BOM 路径的实测 | npc_click / merchant_dialog | 非 ASCII 说词逐字节；BOM 两路属离线（见不可对拍） |
 | 23 | `openmir2-script-playdice-openybdeal` | in-progress | 真机：赌博 NPC 的 playdice 标签放行（接 bins 后）；OPENYBDEAL 成功/不足/已开通三支文案与扣费（内容可达时） | dice_chain | 赌博 NPC playdice 标签放行；OPENYBDEAL 三支部署不可达另记 |
 | 24 | `openmir2-login-654-order` | in-progress | 改动后 Rust 侧登录抓包（654 跨 tick、第二 42、100×4）与 C# 同场景对拍；有会角色 C#+Rust 各一次（811/46 与 750 位置）（共 3 项） | login_only | 654 跨 tick、第二 42、100×4；有会角色 811/46/750 |
-| 25 | `openmir2-account-protection-13` | in-progress | 真机执行 account_protection_roundtrip（建号 13 列逐列 + 改资料 12 列 + PassWord 覆盖） | login_only + db_snapshot | 建号 13 列 + 改资料 12 列 + PassWord 覆盖 |
-| 26 | `openmir2-market-def-impl` | in-progress | 真机：商人 @main/[~@repair] 说词与变量展开（27 处 $STR）；未接分支：@exit/@@sendmsg/@upgradenow/升级武器说词（T-145） | merchant_dialog | @main/[~@repair] 27 处 $STR 展开 |
-| 27 | `openmir2-db-encoding` | in-progress | E-7：真机 oracle 对照跑一次（建号/选角/存档的 ChrName 列值） | login_only + db_snapshot | ChrName 列值（建号/选角/存档） |
-| 28 | `openmir2-login-charstatus-657` | in-progress | Rust 侧重采 657×2（重编后）与 C# 对拍；邻居 657 在观察者同 tick 其它帧之间的相对序（T-147③） | login_only | 657×2 与邻居相对序 |
-| 29 | `openmir2-npc-display-table` | in-progress | 同摆位 0122 (29,33) C# vs Rust 登录抓包逐字节对拍：出现帧带名尾、3 对 nameless 转身 series 0x…；0122 点击国王出 @main 菜单；商人可点开面板（共 3 项） | login_only + npc_click | 同摆位 0122 (29,33) 出现帧/3 对 nameless 转身/点击 @main |
-| 30 | `openmir2-npc-ctor-constants` | in-progress | W1 真机固定 NPC/商人首次出现帧 SM_TURN series 低=4 高=2，与 oracle 逐字节；W2 首 TurnTo 前后序列与 RNG 站点账本一致（共 4 项） | login_only | SM_TURN series 低=4 高=2、Merchant 格 30s 续期 |
-| 31 | `openmir2-guard-ctor-constants` | in-progress | W-guard-1 卫士自扫半径 5→7 的同 tick 可见集/事件序；W-guard-2 bins monster_display 接 light 后帧 Series 高字节=4（共 4 项） | login_only | 卫士自扫半径 5→7 的同 tick 可见集/事件序 |
-| 32 | `openmir2-script-take-persist` | in-progress | r9 原夹具复跑：角色 winplay0（PlayerId=6228），characters_bagitem Position=0 Make…；take 超额：gold=100 跑 `take 金币 200`，DB characters.Gold 必须仍 100（共 8 项） | dice_chain + db_snapshot | @main→@kaiz→@ya5→@ya52 链正是 dice_chain；比 characters_bagitem/Gold/useitems |
-| 33 | `openmir2-click-path-bag-writeback` | in-progress | 真机：固定 NPC 点击（CM_CLICKNPC）触发 @main 的 `take <物品> N` 后断线，DBSvr 落库 charact…；真机：同上触发 `take 金币 N` ⇒ characters.Gold 与 oracle 一致（100→95 类）（共 4 项） | npc_click + db_snapshot | 点击 @main take/give 后断线，落库行/列比对 |
-| 34 | `openmir2-gm-commands-design` | in-progress | 真机 SETPERMISSION=10 + 戴传送装备（T-169 前置）跑 @传送：两次调用间隔卡在 UserMoveTime*1000+…；两号（DB characters.AllowGroupReCall 分别为 1 / 0）进世界后跑 @天地合一：=1 成员必须过允许门，=0…（共 4 项） | gm_batch | 5 条现网可达命令；@传送 等需 SETPERMISSION=10，归第 3 批 |
-| 35 | `openmir2-login-529-status-text` | in-progress | 【依赖 SS_SERVERINFO 卡】真机 529 逐字节对拍当前不可能达成：Rust GameSvr 连上 login-srv 后不上报…；后果：Rust login-srv 的 servers 槽 server_name 恒空 ⇒ is_server_online=false…（共 4 项） | login_only | 前置 openmir2-gamesvr-serverinfo-report（SS_SERVERINFO）落地后才可能 PASS |
-| 36 | `openmir2-searchtick-origin-parity` | in-progress | 双栈真机同时刻：用持续到首扫之后的场景（wait_frames ≥ 登录帧数+首扫帧数，或 sleep ≥2000ms）跑 tools/co…；口径收窄（本次复核结论）：生产 ctor 与进图同刻 ⇒ 本 patch 不引入首扫时刻回归；上述窗口项实质是 T-73/T-184 的相对… | login_only（--dwell-ms ≥2000） | 抓首 SM_TURN/41 与 654/657×2 的到达 tick 窗口 |
-| 37 | `openmir2-verify-tick-base` | in-progress | 登录等待环（RunNotice→CM_LOGINNOTICEOK→UserLogon）建模后，用双栈核对首个 VerifyMapTime（B…；口径收窄：今日生产路径 ctor_tick==clock_ms（代码级可证，见 same_instant_conclusion）⇒ 本 pa… | login_only | 判据实质待 T-73 登录等待环建模；今日生产路径无可观测差异 |
-| 38 | `openmir2-gamesvr-serverinfo-report` | in-progress | 【必跑】双栈 529 逐字节：Rust 栈 ident=529 的 body_hex 必须逐字节 = 545479513e404342564…；【建议】5600 上行抓包：核对 (103/<服务名>/0/<在线数>/1)——第 3 段恒 0（M2Share.ServerIndex 无…（共 3 项） | login_only | 必跑 ident 529 逐字节（body_hex 对照） |
-| 39 | `openmir2-ya52-menu-ok-missing` | in-progress | 用本 head 构建重跑 dice_chain_auto 末步断言 767。**残余**：N-1 T-193 末尾双句号、N-2 白名单未写承接卡号；三条未覆盖漏斗由 openmir2-me… | dice_chain_auto | 末步断言 SM_MENU_OK(767) |
-| 40 | `openmir2-menu-ok-unify-pickwire` | needs-review | 按 review ba93bcb9 返工：I-1 选①抽 emit_login_script_frames 并补 @Login 生产用例 2（删排水则红）、I-2 订正 T-142 ⑧末段/… | dice_chain_auto | 767 分支；回稿后同场景复跑 |
-| 41 | `openmir2-gm-impl-shutup` | in-progress | 已合入 master b8826ad0（approve reviewer-3 841be8bf，tier=R）。门禁：fmt/clippy/msgcodegen 604/test 141 s… | login_only + 手动 @禁言 | 前置 openmir2-gm-script-host-seam 已合（只通 @Login 路径） |
-| 42 | `openmir2-gm-script-host-seam` | in-progress | 新角色登录帧 + **手动在客户端直呼 @禁言 <名> 1** 双侧对拍 `权限不够!!!`（探针不能靠 login_only 自动跑，需 runbook 写明） | login_only + 手动 @禁言 <名> 1 | 探针不发 GM 命令，runbook 要求操作者手输；双侧比「权限不够!!!」 |
+| 25 | `openmir2-market-def-impl` | in-progress | 真机：商人 @main/[~@repair] 说词与变量展开（27 处 $STR）；未接分支：@exit/@@sendmsg/@upgradenow/升级武器说词（T-145） | merchant_dialog | @main/[~@repair] 27 处 $STR 展开 |
+| 26 | `openmir2-db-encoding` | in-progress | E-7：真机 oracle 对照跑一次（建号/选角/存档的 ChrName 列值） | login_only + db_snapshot | ChrName 列值（建号/选角/存档） |
+| 27 | `openmir2-login-charstatus-657` | in-progress | Rust 侧重采 657×2（重编后）与 C# 对拍；邻居 657 在观察者同 tick 其它帧之间的相对序（T-147③） | login_only | 657×2 与邻居相对序 |
+| 28 | `openmir2-npc-display-table` | in-progress | 同摆位 0122 (29,33) C# vs Rust 登录抓包逐字节对拍：出现帧带名尾、3 对 nameless 转身 series 0x…；0122 点击国王出 @main 菜单；商人可点开面板（共 3 项） | login_only + npc_click | 同摆位 0122 (29,33) 出现帧/3 对 nameless 转身/点击 @main |
+| 29 | `openmir2-npc-ctor-constants` | in-progress | W1 真机固定 NPC/商人首次出现帧 SM_TURN series 低=4 高=2，与 oracle 逐字节；W2 首 TurnTo 前后序列与 RNG 站点账本一致（共 4 项） | login_only | SM_TURN series 低=4 高=2、Merchant 格 30s 续期 |
+| 30 | `openmir2-guard-ctor-constants` | in-progress | W-guard-1 卫士自扫半径 5→7 的同 tick 可见集/事件序；W-guard-2 bins monster_display 接 light 后帧 Series 高字节=4（共 4 项） | login_only | 卫士自扫半径 5→7 的同 tick 可见集/事件序 |
+| 31 | `openmir2-script-take-persist` | in-progress | r9 原夹具复跑：角色 winplay0（PlayerId=6228），characters_bagitem Position=0 Make…；take 超额：gold=100 跑 `take 金币 200`，DB characters.Gold 必须仍 100（共 8 项） | dice_chain + db_snapshot | @main→@kaiz→@ya5→@ya52 链正是 dice_chain；比 characters_bagitem/Gold/useitems |
+| 32 | `openmir2-click-path-bag-writeback` | in-progress | 真机：固定 NPC 点击（CM_CLICKNPC）触发 @main 的 `take <物品> N` 后断线，DBSvr 落库 charact…；真机：同上触发 `take 金币 N` ⇒ characters.Gold 与 oracle 一致（100→95 类）（共 4 项） | npc_click + db_snapshot | 点击 @main take/give 后断线，落库行/列比对 |
+| 33 | `openmir2-gm-commands-design` | in-progress | 真机 SETPERMISSION=10 + 戴传送装备（T-169 前置）跑 @传送：两次调用间隔卡在 UserMoveTime*1000+…；两号（DB characters.AllowGroupReCall 分别为 1 / 0）进世界后跑 @天地合一：=1 成员必须过允许门，=0…（共 4 项） | gm_batch | 5 条现网可达命令；@传送 等需 SETPERMISSION=10，归第 3 批 |
+| 34 | `openmir2-login-529-status-text` | in-progress | 【依赖 SS_SERVERINFO 卡】真机 529 逐字节对拍当前不可能达成：Rust GameSvr 连上 login-srv 后不上报…；后果：Rust login-srv 的 servers 槽 server_name 恒空 ⇒ is_server_online=false…（共 4 项） | login_only | 前置 openmir2-gamesvr-serverinfo-report（SS_SERVERINFO）落地后才可能 PASS |
+| 35 | `openmir2-searchtick-origin-parity` | in-progress | 双栈真机同时刻：用持续到首扫之后的场景（wait_frames ≥ 登录帧数+首扫帧数，或 sleep ≥2000ms）跑 tools/co…；口径收窄（本次复核结论）：生产 ctor 与进图同刻 ⇒ 本 patch 不引入首扫时刻回归；上述窗口项实质是 T-73/T-184 的相对… | login_only（--dwell-ms ≥2000） | 抓首 SM_TURN/41 与 654/657×2 的到达 tick 窗口 |
+| 36 | `openmir2-verify-tick-base` | in-progress | 登录等待环（RunNotice→CM_LOGINNOTICEOK→UserLogon）建模后，用双栈核对首个 VerifyMapTime（B…；口径收窄：今日生产路径 ctor_tick==clock_ms（代码级可证，见 same_instant_conclusion）⇒ 本 pa… | login_only | 判据实质待 T-73 登录等待环建模；今日生产路径无可观测差异 |
+| 37 | `openmir2-gamesvr-serverinfo-report` | in-progress | 【必跑】双栈 529 逐字节：Rust 栈 ident=529 的 body_hex 必须逐字节 = 545479513e404342564…；【建议】5600 上行抓包：核对 (103/<服务名>/0/<在线数>/1)——第 3 段恒 0（M2Share.ServerIndex 无…（共 3 项） | login_only | 必跑 ident 529 逐字节（body_hex 对照） |
+| 38 | `openmir2-ya52-menu-ok-missing` | in-progress | 用本 head 构建重跑 dice_chain_auto 末步断言 767。**残余**：N-1 T-193 末尾双句号、N-2 白名单未写承接卡号；三条未覆盖漏斗由 openmir2-me… | dice_chain_auto | 末步断言 SM_MENU_OK(767) |
+| 39 | `openmir2-menu-ok-unify-pickwire` | needs-review | 按 review ba93bcb9 返工：I-1 选①抽 emit_login_script_frames 并补 @Login 生产用例 2（删排水则红）、I-2 订正 T-142 ⑧末段/… | dice_chain_auto | 767 分支；回稿后同场景复跑 |
+| 40 | `openmir2-gm-impl-shutup` | in-progress | 已合入 master b8826ad0（approve reviewer-3 841be8bf，tier=R）。门禁：fmt/clippy/msgcodegen 604/test 141 s… | login_only + 手动 @禁言 | 前置 openmir2-gm-script-host-seam 已合（只通 @Login 路径） |
+| 41 | `openmir2-gm-script-host-seam` | in-progress | 新角色登录帧 + **手动在客户端直呼 @禁言 <名> 1** 双侧对拍 `权限不够!!!`（探针不能靠 login_only 自动跑，需 runbook 写明） | login_only + 手动 @禁言 <名> 1 | 探针不发 GM 命令，runbook 要求操作者手输；双侧比「权限不够!!!」 |
 
-### 1F · 第 1 批 · B：master 上既有的 `run_*_pair.ps1` 夹具（零新增场景）（11 张）
+### 1F · 第 1 批 · B：master 上既有的 `run_*_pair.ps1` 夹具（零新增场景）（12 张）
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
@@ -142,7 +141,8 @@
 | 8 | `openmir2-m3-pet-slave-masterdie-wire` | in-progress | 剩余 DoD = ① 真机两侧 run_hero_pet_pair.ps1 主人死 step 同序列 diff=0（含叛变站点帧序/字节 + RNG 抽数 site/order）② 混合队列… | run_hero_pet_pair.ps1 | 主人死 step + 混合队列 |
 | 9 | `openmir2-m3-rng-scene-driver` | in-progress | RNG 序列真机两侧对拍（W9 独占窗）。approve.window_required=true | run_rng_scene_pair.ps1 | W9 RNG 序列 |
 | 10 | `openmir2-window-collector-preflight` | in-progress | 真机两侧需验证：① 起栈后 C# 流水头 INJECT_OK<seed> 与 Rust RUST_SEED_INJECTED 相等（交叉断言在真栈上首次生效）；② MIR2_RNG_SITE… | card_window.py 真栈一次（login_only） | 起栈后 INJECT_OK/RUST_SEED_INJECTED 交叉断言 |
-| 11 | `openmir2-card-window-tool` | in-progress | 一次真 alt 剖面窗口的 card-window.json + log，要求两侧 stop rc=0、端口全释放、report_kind=compare。后续 hardening（F-1/… | card_window.py 真 alt 剖面一次 | 两侧 stop rc=0、端口全释放、report_kind=compare |
+| 11 | `openmir2-account-protection-13` | in-progress | 真机执行 account_protection_roundtrip（建号 13 列逐列 + 改资料 12 列 + PassWord 覆盖） | run_account_protection_roundtrip.ps1 | 夹具在 mir2-rs/tests/parity/m3/account-protection/（既有）；比建号 13 列 + 改资料 12 列 + PassWord 覆盖 |
+| 12 | `openmir2-card-window-tool` | in-progress | 一次真 alt 剖面窗口的 card-window.json + log，要求两侧 stop rc=0、端口全释放、report_kind=compare。后续 hardening（F-1/… | card_window.py 真 alt 剖面一次 | 两侧 stop rc=0、端口全释放、report_kind=compare |
 
 ### 2A · 第 2 批 · A：需 `openmir2-window-discovery-rules` 新增规则（move / king / combat）（2 张）
 
@@ -163,12 +163,12 @@
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
 | 1 | `openmir2-m3-npc-shop-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑤（master d4d5b89c 未动，与 r1/r2 相同）：仍 BLOCKED，与 r2 逐条相同。静态（00-st… | run_npc_shop_pair.ps1（前置未清） | ⑤-4/NPC 入视野 + markers 前缀口径 |
-| 2 | `openmir2-m3-quest-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑥（master 未动）：仍 BLOCKED，三重阻断与 r2 相同：①markers 前缀口径（卡 openmir2-m… | run_quest_pair.ps1（前置待复核） | 卡面称 quest_state 无生产者，实际已有 engine/quest_state.rs；markers 前缀 + k=0 截断仍需复核 |
-| 3 | `openmir2-m3-party-trade-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑦（master 未动）：PREREQ（静态）。run_party_trade_pair.ps1 在，但 Rust bin… | run_party_trade_pair.ps1（前置待复核） | 卡面称 Rust 无 CM_GROUPMODE，但 master 058c3ad25 已有 party.rs 常量（r3 结论已过时）；开工前复核，可跑则按 1F |
-| 4 | `openmir2-m3-guild-castle-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑧（master 未动）：PREREQ（静态）。master 无 run_guild_castle_pair.ps1；实现… | run_guild_castle_pair.ps1（前置待复核） | 卡面称 master 无该夹具，实际 058c3ad25 已有（r3 结论已过时）；⑧-3.. 实现仍待认领 |
-| 5 | `openmir2-m3-hero-pet-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑨（master 未动）：PREREQ（静态）。master 无 run_hero_pet_pair.ps1；⑨-2/⑨-… | run_hero_pet_pair.ps1（前置待复核） | 卡面称 master 无该夹具，实际已有；⑨-2/⑨-3 仍待认领 |
-| 6 | `openmir2-m3-mail-auction-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑩（master 未动）：PREREQ（静态）。run_selloff_pair.ps1 在，但 Rust bins/ga… | run_selloff_pair.ps1（前置待复核） | 卡面称 Rust 无 SELLOFF 常量，实际已有 selloff.rs；⑩-1/⑩-2 仍待认领 |
-| 7 | `openmir2-m3-drop-exp-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核④（master 未动）：PREREQ（静态）。master 无 run_drop_exp_pair.ps1，BotSrv… | run_drop_exp_pair.ps1（前置待复核） | 卡面称 master 无该夹具，实际已有；BotSrv 固定种子 100 杀驱动仍缺 |
+| 2 | `openmir2-m3-quest-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑥（master 未动）：仍 BLOCKED，三重阻断与 r2 相同：①markers 前缀口径（卡 openmir2-m… | run_quest_pair.ps1（前置未清） | markers 前缀 + C# k=0 截断 + quest_state 无生产者 |
+| 3 | `openmir2-m3-party-trade-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑦（master 未动）：PREREQ（静态）。run_party_trade_pair.ps1 在，但 Rust bin… | run_party_trade_pair.ps1（前置未清） | Rust 侧 CM_GROUPMODE 等常量缺失（r3 实测） |
+| 4 | `openmir2-m3-guild-castle-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑧（master 未动）：PREREQ（静态）。master 无 run_guild_castle_pair.ps1；实现… | run_guild_castle_pair.ps1（前置未清） | ⑧-3..⑧-9 待认领 + 时钟注入前置 |
+| 5 | `openmir2-m3-hero-pet-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑨（master 未动）：PREREQ（静态）。master 无 run_hero_pet_pair.ps1；⑨-2/⑨-… | run_hero_pet_pair.ps1（前置未清） | ⑨-2/⑨-3 待认领、⑨-5 夹具待审 |
+| 6 | `openmir2-m3-mail-auction-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑩（master 未动）：PREREQ（静态）。run_selloff_pair.ps1 在，但 Rust bins/ga… | run_selloff_pair.ps1（前置未清） | ⑩-1/⑩-2 待认领 |
+| 7 | `openmir2-m3-drop-exp-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核④（master 未动）：PREREQ（静态）。master 无 run_drop_exp_pair.ps1，BotSrv… | run_drop_exp_pair.ps1（前置未清） | BotSrv 无固定种子 100 杀驱动 |
 | 8 | `openmir2-m3-quest-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（-Side rust preflight 仍 PREREQ，等 ⑥-3 落地 + 独占窗口） | run_quest_pair.ps1（前置未清） | 等 ⑥-3 + rust preflight |
 | 9 | `openmir2-m3-party-trade-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑦-2/⑦-3 落地 + 独占窗口） | run_party_trade_pair.ps1（前置未清） | 等 ⑦-2/⑦-3 |
 | 10 | `openmir2-m3-selloff-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑩-1/⑩-2 落地 + 独占窗口） | run_selloff_pair.ps1（前置未清） | 等 ⑩-1/⑩-2 |
