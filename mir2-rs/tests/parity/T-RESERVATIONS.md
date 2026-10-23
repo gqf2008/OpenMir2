@@ -274,3 +274,13 @@
 | T-241 | openmir2-run-gap-monster-master-follow | 2026-10-23T15:00:04Z | 在用 |
 | T-242 | openmir2-run-gap-monster-specials | 2026-10-23T15:00:05Z | 在用 |
 | T-243 | openmir2-run-gap-pr1-head-blocking | 2026-10-23T15:00:06Z | 在用 |
+| T-244 | openmir2-run-gap-mb1 | 2026-10-23T15:16:48Z | 在用 |
+| T-245 | openmir2-monster-view-throttle | 2026-10-23T15:16:49Z | 在用 |
+| T-246 | openmir2-persist-create-rows | 2026-10-23T15:16:51Z | 在用 |
+| T-247 | openmir2-persist-useitems-wiring | 2026-10-23T15:16:52Z | 在用 |
+| T-248 | openmir2-persist-item-attr-and-gold | 2026-10-23T15:16:53Z | 在用 |
+| T-249 | openmir2-run-gap-mb3 | 2026-10-23T15:16:54Z | 在用 |
+| T-250 | openmir2-save-on-shutdown | 2026-10-23T15:16:56Z | 在用 |
+| T-251 | openmir2-rm-refmessage-delay-layer | 2026-10-23T15:16:57Z | 在用 |
+| T-252 | openmir2-active-seek-race-missing | 2026-10-23T15:16:59Z | 在用 |
+| T-253 | openmir2-proper-target-unfolded | 2026-10-23T15:17:00Z | 在用 |
