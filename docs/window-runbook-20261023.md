@@ -1,17 +1,94 @@
 # 真机窗口 Runbook（2026-10-23 定稿）
 
+> **本文最后核对：commit `4e0bfd2b8`（提交于 2026-10-23 22:21:57 +0800；审计时刻 22:27）；复审基线 `7ef49f807`（22:28:01，已含 `b42f20a28` @ 22:27:23）**（审计卡 `openmir2-runbook-tool-consistency-audit`）。
+> 逐条命令的实测输出与缺口见 `docs/runbook-tool-consistency-audit-20261023.md`；改工具后**先跑 §0.5 的 60 秒清单**再动窗口。
+
 > 面向：第一次跑窗口的人 / 下一次跑窗口的我。本文只写**跑之前的必做动作**与**读结果的口径**，
 > 工具用法见 `tools/conformance/README.md`，卡的判据见各卡 `whitelist.md` 行。
 
-## 0. 现状（master `73c39cca` @ 2026-10-23 15:20 +0800）
+## 0. 现状（**`4e0bfd2b8` @ 2026-10-23 22:21:57 +0800**，审计时刻 22:27；原写 `73c39cca` @ 15:20，已过期）
 
 - **欠窗口的卡：173 张**（口径见 `docs/leader-goal-20261023.md` §1.1 的订正：早前「grep 已合入 master = 114」是错的，
   那 114 里 70 张已 closed、23 张是 tier=L；真欠账 21 张，加上 149 张措辞不在 grep 里的 + 3 张快照后合入 = **173**）。
   分批与逐卡落点见 `docs/window-batch-plan-20261023.md`。
 - 工具链：`card_window.py`（批处理）、`compare_runs.py`（帧+库比对）、`param_discovery.py`（参数发现）。
-- **开跑前还剩一个前置没到位**：账本的 compare 诊断值**尚未加值断言**（卡 `openmir2-card-window-value-assertions`）。
+- **值断言前置已完成**：账本 compare 诊断值断言已随 `b9765764f`（2026-10-23 16:45:18，approve `reviewer-2 d755493c`）合入
+  （订正：原文写「尚未加值断言 / 仍在飞行」，那是 16:45 之前的状态）。
   参数发现已接进 `card_window.py`（卡 `openmir2-window-discovery-wiring` 已合入 `e72fb9728`）；规则表另见 §4.5。
-  账本值断言不落地就跑，账本可能写下错值（`openmir2-card-window-value-assertions` 仍在飞行）。
+
+## 0.5 开窗前 60 秒自查清单（复制粘贴；每步给「期望」与「失败含义」）
+
+> 五步顺序：**核二进制 sha → 核端口 → 核 profile 键 → `--dry-run` → `--selftest`**；外加第 0 步（文档口径）与第 4.5 步（idents 登记）。
+> 任一步与期望不符 ⇒ **不要开窗**（一轮窗口 ≈ 240G + 数十分钟）。
+
+**第 0 步：文档口径（30 秒）**
+
+```sh
+python -I -c "
+import io,re,sys
+s=io.open('docs/window-runbook-20261023.md',encoding='utf-8').read()
+ok = ('probe_timeout_ms' in s) and not re.search(r'\"timeout_ms\"\s*:', s)
+print('DOC-KEYS', 'OK' if ok else 'RED'); sys.exit(0 if ok else 1)"
+```
+期望：`DOC-KEYS OK`，rc=0。失败含义：runbook 又写回了旧键 `"timeout_ms"` —— profile 会**静默忽略**它，probe 仍在 180s 被杀。
+
+**第 1 步：二进制路径与 sha256**
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root 'E:/tmp/conformance/rust-root' -LogDir 'E:/tmp/conformance/rust-logs' `
+  -PortsProfile 'E:/tmp/window/r5/root/alt-port-profile.json' -WhatIf | Select-String 'SERVER_EXE'
+Get-FileHash -Algorithm SHA256 <上一条打印的路径>
+```
+期望：路径含 `\target\release\mir2-server.exe`；记下 hash 写进 `README.txt`。
+失败含义：含 `\debug\` ⇒ 你所在树没构建 release（或用的是别的检出的二进制）；路径与你预期的主检出不一致 ⇒ 见 §1.1 的解析口径，**以起栈后 pid 文件的 `roles[].exe` 为准**。
+
+**第 2 步：本窗口端口全空（不是 port-status 的十个）**
+
+```powershell
+powershell -NoProfile -Command "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { 15000,15100,15500,15600,15700,16000,17000,17100,17200,17201,17202,17600 -contains $_.LocalPort } | Select-Object LocalPort,OwningProcess"
+```
+期望：**空输出**。失败含义：有输出 ⇒ 上一轮栈没停净；`card_window` 起栈前也会 `check_ports_free` 并 rc=2 点名 pid。
+附：`powershell -File E:\MirServer\port-status.ps1` 里 **3306 必须 UP**（mysqld 不归窗口管）；该脚本查的是默认栈 5000–7200，**不是本窗口端口**。
+
+**第 3 步：profile 键（超时键 / pid 文件 / 对账开关）**
+
+```sh
+python -I -B -c "
+import sys; sys.path.insert(0,'tools/conformance')
+import card_window as c
+p=c.load_profile('alt')
+print('probe_timeout_ms', p.get('probe_timeout_ms'))
+print('pid_file', p['sides']['rust'].get('pid_file'))
+print('require_pid_binaries', p['sides']['rust'].get('require_pid_binaries'))"
+```
+期望：`probe_timeout_ms 20000`（默认；`upgrade_retrieve` 要 720000）、
+`pid_file E:/tmp/conformance/rust-logs/mir2-server.pid.json`、`require_pid_binaries True`。
+失败含义：`pid_file None` ⇒ 工具版本不对（新工具加载期即 `ConfigError`）；`probe_timeout_ms` 仍是 20000 而你要跑 `upgrade_retrieve`（`sleep 660000`）⇒ 180s 必被杀。
+
+**第 4 步：`--dry-run`（不起栈/不建目录）**
+
+```sh
+python -I -B tools/conformance/card_window.py --card <卡 id> \
+  --scenario tools/probe/scenarios/<场景>.json --out E:/tmp/window/<本次 run> --profile alt --dry-run
+```
+期望：rc=0；打印 restore/stack/discover/probe/db/stop/compare 全序列 + `[csharp]|[rust] 预置位 … 可走` + 端口预检与就绪等待；**`<out>` 目录仍不存在**。
+失败含义：rc=2 且 `scenario is BLOCKED: …` ⇒ 封存场景（不能跑）；rc=2 且点名图/坐标 ⇒ 预置位非法；rc=2 且点名端口 ⇒ 栈没停净。
+
+**第 4.5 步：idents 登记（§1 第 5 条的自查，输出必须 `missing: []`）**
+
+见 §1 第 5 条的片段。**截至 `4e0bfd2b8` 它不是空的**（`[202, 203, 642, 709]`）⇒ 跑 `equip_struck_save` / `upgrade_retrieve` 前必须先补 rules.json（另卡）。
+
+**第 5 步：离线自检（工具没被改坏）**
+
+```sh
+python -I -B tools/conformance/card_window.py --selftest     # 期望 GREEN: … selftest 186/186，rc=0
+python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 238/238，rc=0
+```
+失败含义：计数**变小** ⇒ 有判据被删（先查最近提交）；变红 ⇒ 工具坏了，别开窗。
+**注**：`compare_runs` 的自检计数随 `rules.json` 变更而变（`b42f20a28` 的 recog-unmask 就 +40）⇒ 以**实跑**为准，别抄本文的数字。
+
+---
 
 ## 1. 开跑前必做（缺一不可）
 
@@ -19,15 +96,36 @@
    **要重建的是哪个二进制**：`start-rust.ps1` 委托给 `tools/m2-acceptance/start_mir2_server.ps1`，后者的 `-ServerExe` 缺省值是
    **`mir2-rs/target/release/mir2-server.exe`（其次 debug）**——「单二进制多角色」。它**只从 `-Root` 读配置文件**，
    不执行 `rust-root` 里的任何东西。
-   ⇒ **`rust-root` 目录里那堆 `.NET` 程序集（`DBSvr.dll`/`LoginSvr.dll`/`GameSrv.dll`/`TouchSocket.dll`…）与 Rust 栈无关**，
+   ⇒ **`rust-root` 目录里那堆 `.NET` 程序集（`DBSvr.dll`/`LoginSvr.dll`/`GameSrv.dll`/`TouchSocket.dll`…）与 Rust 栈无关**（证据里的 Rust sha256 必须来自 `mir2-rs/target/{release,debug}/mir2-server.exe`；`card_window.py` 已内置该解析并在起栈后用 `mir2-server.pid.json` 的 `roles[].exe` 对账，不符即 rc=2——卡 `openmir2-window-rust-binary-evidence`），
    别被它们误导成「跑的是 C#」；也别以为换掉它们就换了栈。真正决定跑的是哪份代码的，是 `SERVER_EXE` 那一行打印出来的路径。
    **本轮实测的坑**（2026-10-23 16:0x 复核）：`mir2-rs/target/release/mir2-server.exe` = **10-23 09:46**、
    `target/debug/mir2-server.exe` = **10-23 11:54**，而 master 已到同日 15:20+。缺省优先 release ⇒ **不重建就会用 09:46 那份**，
    它早于 gm-registry / window-hardening / gm-shutup / frame-drain / gm-host-seam / param-discovery / 宿主审计等今天全部合并。
    用旧二进制跑出来的对拍结论没有意义，**而且它不会报错**——只会给你一份看起来正常的报告。
-   做法：`cargo build --release -p mir2-server`；起栈时先跑一次 `start_mir2_server.ps1 -WhatIf`，
-   **核对它打印的 `SERVER_EXE` 路径与文件的 sha256**，再把这个 sha256 写进本次窗口的 `README.txt`。
-2. **端口全空**：`powershell -File E:\MirServer\port-status.ps1`，十端口必须全 DOWN。`card_window.py` 起栈前会预检并在占用时 rc=2。
+   做法：**在你要起栈的那棵树里**跑 `cargo build --release -p mir2-server`，再跑一次 `-WhatIf`（命令见 §0.5 第 1 步），
+   **必须看到 `\target\release\mir2-server.exe`**；看到 `\debug\` 就停下先构建（`start_mir2_server.ps1:285-290` 是 release 缺失**静默退 debug**）。
+   `-WhatIf` **只打印路径、不打印 sha256**（`:349`）⇒ sha 自己算：`Get-FileHash -Algorithm SHA256 <SERVER_EXE>`（或 `sha256sum`），写进本次 `README.txt`。
+   **注意解析口径**：`SERVER_EXE` 相对**脚本所在仓库**解析（`:286` `$PSScriptRoot\..\..`），而 profile 的 `stack` 指向 `E:/tmp/conformance/start-rust.ps1`，
+   后者把脚本路径**写死成主检出** ⇒ 在 worktree 里预览到的二进制可能与真窗口不同；**以起栈后 `mir2-server.pid.json` 的 `roles[].exe` 为准**（工具已对账，不符 rc=2）。
+   （订正：原文写「核对它打印的 SERVER_EXE 路径与文件的 sha256」——脚本不打印 sha；也没说清解析是相对脚本仓库。）
+   **下一次真窗口（`alt` profile）核对 pid 的文件就是
+   `E:/tmp/conformance/rust-logs/mir2-server.pid.json`**（= `E:/tmp/conformance/start-rust.ps1` 的
+   `-LogDir`，**不是** `<out>/rust/`）。该路径只由 profile 的 `sides.rust.pid_file` 声明，代码里没有兜底
+   绝对路径；`card_window.py` 起栈后用它的 `roles[].exe` 与登记的 `mir2-server.exe` 对账，
+   **不一致/缺文件 ⇒ rc=2 并点名角色或文件**。该文件是 Windows PowerShell 5
+   `Set-Content -Encoding utf8` 写的，**带 UTF-8 BOM**，工具已按 `utf-8-sig` 读取。
+   自查（只读，不用起栈）：
+
+   ```sh
+   python -I -c "import json;d=json.load(open('E:/tmp/conformance/rust-logs/mir2-server.pid.json',encoding='utf-8-sig'));print(d['roles'][0]['exe'])"
+   ```
+2. **端口**：`powershell -File E:\MirServer\port-status.ps1` 只查 `3306,5000,5100,5500,5600,5700,6000,7000,7100,7200`
+   （脚本 `:38`）——那是**默认栈**的端口 + mysqld，**不是本窗口的端口**。正确的读法：
+   - **3306 必须 UP**（mysqld 是外部依赖，工具显式不碰它）；
+   - 5000–7200 若在监听 ⇒ 有默认栈在跑，先停掉（否则会占资源，但**不影响 alt 的 15xxx**）；
+   - **本窗口要空的是 profile 的 `sides.<side>.ports`**：C# 11 个（15000,15100,15500,15600,15700,16000,17000,17100,17200,17201,17202）、
+     Rust 9 个（15000,15100,15500,15600,15700,16000,17000,17100,17600）。`card_window.py` 起栈前 `check_ports_free`，占用即 rc=2 并点名 pid（`:1896` 判定 / `:1901` 报错）。
+   （订正：原文「十端口必须全 DOWN」把默认栈的检查当成了本窗口的检查，且 3306 是必须 UP 的。）
 3. **库基线复位**：C# 侧 `restore-baseline.sh`（`mir2_test_*`），Rust 侧 `restore-baseline-r.sh`（`mir2_test_*_r`）。**两套库不同名**，拿 `--db test` 给 Rust 侧拍快照会拍到 C# 的库 ⇒ 假差异。
 4. **一次只跑一栈**：C# 与 Rust 用同一组备用端口，串行起停。
 5. **场景用到的 ident 必须先在 `rules.json` 登记**（卡 `openmir2-conformance-rules-idents`，2026-10-23 起为硬前置）：
@@ -35,16 +133,21 @@
    开跑前自查（不起栈、不连库）：
 
    ```sh
-   # 场景 wait_for/wait_frames/wait_idents 用到的 ident – rules.json 已登记 = 差集必须为空
+   # 场景 wait_for / wait_frames / wait_idents（含 {"idents":[…]} 形态）用到的 ident
+   # 与 rules.json 已登记 ident 的差集 —— 必须为空才开跑
    python -I -B -c "
    import json,glob
    ids=set()
    def walk(o):
        if isinstance(o,dict):
            for k,v in o.items():
-               if k in ('wait_for','wait_frames','wait_idents'):
-                   (ids.update(x for x in v if isinstance(x,int)) if isinstance(v,list)
-                    else ids.add(v) if isinstance(v,int) else None)
+               if k in ('wait_for','wait_frames'):
+                   if isinstance(v,list): ids.update(x for x in v if isinstance(x,int))
+                   elif isinstance(v,int): ids.add(v)
+               elif k=='wait_idents':
+                   if isinstance(v,dict): ids.update(x for x in (v.get('idents') or []) if isinstance(x,int))
+                   elif isinstance(v,list): ids.update(x for x in v if isinstance(x,int))
+                   elif isinstance(v,int): ids.add(v)
                else: walk(v)
        elif isinstance(o,list):
            [walk(x) for x in o]
@@ -113,9 +216,96 @@
 - **仍不支持背包夹具**：「背包里必须已有某个 MakeIndex/物品」这类前置仍走手工 DB 夹具，
   由卡 `openmir2-discovery-bagitems-201` 承接（本工具预留了同一处声明点，落地时直接接）。
 
+## 1.6 二进制与 sha256 的开窗前核对（卡 `openmir2-start-server-whatif-sha`，2026-10-23 晚）
+
+`start_mir2_server.ps1 -WhatIf` 固定输出三行（实跑同款，只是多打印告警）：
+
+```text
+SERVER_EXE         <绝对路径>
+SERVER_EXE_SHA256  <小写 hex；文件不存在时为 MISSING>
+SERVER_EXE_BUILD   Release | Debug-Fallback | Explicit
+```
+
+标准核对命令（在**你将要起栈的那棵树**里跑；根解析只用脚本自身的 `$PSScriptRoot`，所以它指向**该树**的 `mir2-rs/target`，与 cwd 无关）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root 'E:/tmp/conformance/rust-root' -LogDir 'E:/tmp/conformance/rust-logs' `
+  -PortsProfile 'E:/tmp/window/r5/root/alt-port-profile.json' -WhatIf
+```
+
+期望与判读：
+
+| 输出 | 含义 | 该做什么 |
+|---|---|---|
+| `SERVER_EXE_BUILD Release` | 用的是 release 构建 | 手工比对 `SERVER_EXE_SHA256` 后，把该值写进本次 `README.txt` |
+| `SERVER_EXE_BUILD Debug-Fallback` + `WARNING: release 二进制不存在…` | **release 缺失，已退到 debug** | 默认先停：在**这棵树**里 `cargo build --release -p mir2-server`；确实要跑 debug 才继续，并在证据里如实写 debug |
+| `SERVER_EXE_BUILD Explicit` | 用 `-ServerExe` 指定 | 自己确认这就是你要的那份二进制 |
+| `SERVER_EXE_SHA256 MISSING` + `RED: ServerExe 不存在`（rc=2） | 路径解析到了、文件不在 | 先构建，或用 `-ServerExe` 指到实际文件 |
+
+**手工比对 sha256（任选其一）**：
+
+```sh
+sha256sum <SERVER_EXE 打印的路径>          # Git Bash / WSL
+```
+
+```powershell
+# 本机 PowerShell 5.1 实测**没有 Get-FileHash**（CommandNotFound）⇒ 用 .NET：
+$p = '<SERVER_EXE 打印的路径>'
+$h = [System.Security.Cryptography.SHA256]::Create(); $fs = [System.IO.File]::OpenRead($p)
+([System.BitConverter]::ToString($h.ComputeHash($fs)) -replace '-','').ToLowerInvariant()
+```
+
+**`-RequireRelease`（建议写进自动化）**：只要构建类型不是 `Release` 就 `RED` + 退出 2，把「跑错二进制」变成硬失败：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root 'E:/tmp/conformance/rust-root' -LogDir 'E:/tmp/conformance/rust-logs' `
+  -PortsProfile 'E:/tmp/window/r5/root/alt-port-profile.json' -WhatIf -RequireRelease
+```
+
+**Debug-Fallback 意味着什么**：优化关闭、构建时间未知，且**很可能不是当前 master**（本机 10-23 实测：release = 09:46、debug = 20:49，两者都不是「刚构建」）。默认批次仍以 **release** 为准；要拿 debug 当证据，必须在卡上写明「本次对拍用的是 debug 构建 + 该 sha256」，否则这份证据的可比性没有保证。
+
+**不改真实启动行为**：上述告警与三行输出在非 `-WhatIf` 路径上同样打印；`-RequireRelease` 是**可选**开关，不加时行为与之前一致。
+
+**注意（脚本能力之外）**：`E:/tmp/conformance/start-rust.ps1` 把脚本路径写死成主检出，因此**在 worktree 里 `-WhatIf` 看到的二进制，可能不是真窗口启动的那份**；真窗口以起栈后 `mir2-server.pid.json` 的 `roles[].exe` 为准（`card_window.py` 已对账，不符 rc=2）。
+
+## 1.7 魔法夹具：**声明即可**（工具已支持，2026-10-23 晚；卡 `openmir2-window-magic-fixture`）
+
+`spell_cast` 场景的 `blocked.missing_fixture` 要的「角色已学魔法」现在由 `card_window.py` 在
+**每侧 restore（与预置位）之后、起栈之前**自动写进该侧测试库 `characters_magic`。
+**不要再手工改库**（技能不是脚本动作、GM 权限恒 0 ⇒ 只能 DB 预置）。
+
+**声明位置是 profile（不是场景）**——顶层 `magic` 应用到两侧；`sides.<side>.magic` 可覆盖本侧：
+
+```json
+{
+  "format": "card-window-profile/1",
+  "magic": [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}],
+  "sides": { "...": {} }
+}
+```
+
+- 四列必填：`magic_id`（1..65535）、`level`（0..3）、`use_key`（单个 ASCII 可见字符）、
+  `curr_train`（>=0）；未知键 / 类型错 / 越界 ⇒ **加载期 rc=2 点名**，一步都不执行。
+- **跨栈不同的字段不进判据**：`PlayerId`（= 本侧 `characters.Id`）与行 `Id` 各侧自己定位；
+  读回只比 `MagicId / Level / UseKey / CurrTrain`。
+- **fail-closed**（每条都 rc=2 且**不起栈、不让 probe 去超时**）：角色不存在 / 角色行不唯一 /
+  `Deleted=1`、同一 `MagicId` 有多行、写后读回不符、**未声明的魔法行**指纹（行数 + MD5）变化。
+- 每侧证据落 `<out>/<side>/magic.json`：`declared` / `before` / `after` / `sql` /
+  `action = noop | written`（一致就不写库；缺行或不一致才 `INSERT`/`UPDATE`）。
+- `--dry-run`：只做离线校验（声明 + 库配对）并预览 SQL，**不连库**。
+- 已知限制：`level` 上限按技能等级 0..3 校验；`use_key` 只允许单字符（线上 `char(2)`，
+  经典客户端只用 1 字节）；`magic_id` 只做数值域校验，**不查 `mir2_data.magic` 表**是否存在该魔号
+  ——写一个不存在的魔号不会报错，但场景也等不到施法帧（窗口里看 `GetMagicInfo` 的行为即可发现）。
+
 ## 2. 跑的时候
 
 - `card_window.py --card <卡 id> --scenario <场景> --out <目录> --profile alt`；R 卡窗口**必须** `--post-comment` 记账（在解禁之后）。
+- **超时**：profile 键是 **`probe_timeout_ms`**（内置 alt 默认 `20000`，`card_window.py:297`），子进程总超时 = `max(180, probe_timeout_ms/1000 + 120)` 秒（`:1949`）。
+  ⇒ **默认 180s 就杀 probe**。`tools/probe/scenarios/upgrade_retrieve.json` 第 9 步是 `{"sleep": {"ms": 660000}}` ⇒ 该场景必须把
+  `probe_timeout_ms` 设到 **720000**（profile JSON 顶层，或命令行 `--timeout-ms 720000`，`:696-697` 等价）。
+  **在 profile 里写 `"timeout_ms"` 会被静默忽略**（profile 顶层没有白名单校验）——这正是「白跑一轮」的经典成因。
 - **参数发现**：9 个场景声明了 `required`（`npc_actor`/`merchant_actor`/`make_index`/自身坐标…）。两侧**各自发现各自的值**，某侧推不出 ⇒ fail-closed，不许拿一侧的值跑另一侧。
 - **手动步骤不要漏**：`login_only.json` 这类**不含发客户端命令的步骤**。若卡面要求「客户端直呼 `@禁言 <名> 1`」之类的探针，必须由操作者在真实客户端手动输入，脚本不会替你做。漏了不会报错，只会让这条判据看起来没红。
   **角色预置位不再是手动步骤**：场景声明 `placement` 即可（见 §1.5），`card_window.py` 在起栈前自动改库并在 `placement.json` 留证；预置不成就 rc=2，不会带着错位去跑。
@@ -186,6 +376,11 @@
 - 基准量推不出 ⇒ **连锁 fail-closed**（`move_x`/`move_y` 一起进 `missing`），绝不拿 0 顶替。
 - 没有 `computed` 声明（单变量推导入口）⇒ 该类变量照旧 missing。
 - `mir2_probe` 不读 `computed`（声明性注记，不是步骤 DSL），但顶层可选键放行，否则带声明的场景会被 `unknown key(s)` 拒绝。
+
+> **计数快照（`4e0bfd2b8` @ 22:21:57；实跑于 22:2x）**：场景已增至 **19** 个，
+> `check-all` ⇒ `SUMMARY scenarios=19 ok=16 rc2=3 derived=5 rule=2 computed=1 no_required=5 params_default=3 missing=3 error=0`（**rc=2**）。
+> 真实录制（`E:/tmp/conformance/runs/w24-csharp-npc_auto/frames.ndjson`）**没有 201** ⇒ `bag_equip`/`eat_item` 仍 missing，`--allow-missing=1` 也是 rc=2（`--allow-missing=3` 才可能 0）。
+> 本节正文里的「12 个 / 14 个 / 15 个 / params_default=1」都是**更早的口径**，保留作对照，不要当现值。
 
 ### 4.5.1 `SM_BAGITEMS(201)` 规则族（卡 `openmir2-discovery-bagitems-201`）
 

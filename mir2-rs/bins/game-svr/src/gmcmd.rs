@@ -209,6 +209,16 @@ pub const UNBIND_USE_ITEM_HELP: &str = "命令格式: @UnBindUseItem ";
 /// （`conf[Command].Shutup=禁言`）。
 pub const SHUTUP_HELP: &str = "命令格式: @禁言 人物名称  时间长度(分钟)";
 
+/// `ShutupReleaseCommand` 唯一的可观测帧：`Command.CommandHelp`（`CommandAttribute.cs:56-58`）
+/// = `命令格式: @{Name} {Help}`。`Name` 被部署 `Command.conf` 的
+/// `[Command] ReleaseShutup=取消禁言` 覆盖，`Help` = `CommandHelp.GameCommandShutupReleaseHelpMsg`
+/// = 「人物名称」（`CommandHelp.cs:41`）。
+pub const SHUTUP_RELEASE_HELP: &str = "命令格式: @取消禁言 人物名称";
+
+/// `ShutupReleaseCommand` 的 `bool.Parse` 失败路径（被 `PlayObject.Chat.cs:402-406` 吞掉 ⇒ 零帧）。
+const NOTE_SHUTUP_RELEASE_BOOL_PARSE: &str =
+    "oracle `bool.Parse(sParam2)` FormatException ⇒ 被 PlayObject.Chat.cs 的 catch 吞掉 ⇒ 零帧";
+
 // ---- 批次 4 的 SysMsg 正文（`MessageSettings` / `CommandHelp` 原文；`String.ini` 未随部署提供 ⇒ 取
 // ---- `SystemModule/MessageSettings.cs` 的构造默认值，见 T-191）----
 pub const USER_FULL_TITLE: &str = "设置服务器最高上线人数。";
@@ -471,8 +481,37 @@ pub enum Imp {
     /// 目标离线 ⇒ 一条 Red/Hint；空名 ⇒ **静默 return**（零帧）。
     KickHuman,
 
-    /// 未接的 81 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 7 条）：
+    /// `ShutupReleaseCommand`（现网 `@取消禁言`）：`IsNullOrEmpty(x) || !IsNullOrEmpty(x)` 恒真
+    /// ⇒ 永远只回帮助文本；名单移除整段被注释；第二参非 `true`/`false` ⇒ `bool.Parse` 抛
+    /// `FormatException` 被 `PlayObject.Chat.cs:402-406` 吞掉 ⇒ 零帧。
+    ShutupRelease,
+
+    /// 未接的 80 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 8 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
+    // ---- 批次 5A · 行会/城堡族 A 片（6，卡 `openmir2-gm-batch-5a-guild-impl`；
+    //      Leader 裁定 `9e7d2227`）----
+    //
+    // **权限与生效名都以 `GameCommands.cs` 构造 + `Command.conf` 为准**（不是 `[Command]` 属性）：
+    // `Authally/Auth/AuthCancel` 的 `[Command(...)]` 写的是 0，但 `GameCommands.cs:371-373`
+    // 的 `new GameCmd { PerMissionMin = 10 }` 覆盖成 **10**；`GameCmdConf.cs:16-18` 又把三条的
+    // `CmdName` 覆盖成中文（`Command.conf [Command]`：`AuthAlly=允许联盟` / `Auth=联盟` /
+    // `AuthCancel=取消联盟`）。`SbkDoorControlCommand` 注册在字段 **`SbkDoor`**（`GameCommands.cs:314`），
+    // 生效名 `@SbkDoor`。
+    /// `AnnouncementCommand`（`AnnouncementCommand.cs:8`；perm 10）；命令体 `:14-41` **整段被注释** ⇒ 真 no-op。
+    Announcement,
+    /// `AuthCommand`（`AuthCommand.cs:12-17`；生效名 `@联盟`，perm 10）：
+    /// `if (IsGuildMaster()) ClientGuildAlly();` —— 非会长 ⇒ 零帧；会长路径未接（T-263）。
+    Auth,
+    /// `AuthallyCommand`（`AuthallyCommand.cs:9-23`；生效名 `@允许联盟`，perm 10）：
+    /// `if (IsGuildMaster()) { /* 翻转 EnableAuthAlly + 两条 SysMsg 全被注释 */ } return;` ⇒ 真 no-op。
+    Authally,
+    /// `AuthCancelCommand`（`AuthCancelCommand.cs:12-21`；生效名 `@取消联盟`，perm 10）：
+    /// 空参 ⇒ return；非会长 ⇒ return；会长路径未接（T-263）。
+    AuthCancel,
+    /// `GuildWarCommand`（`GuildWarCommand.cs:5`；perm 10）：体只有 `if (Permission < 6) return;` ⇒ 零帧。
+    GuildWar,
+    /// `SbkDoorControlCommand`（`SbkDoorControlCommand.cs:5`；注册名 `@SbkDoor`，perm 10）：空体 ⇒ 真 no-op。
+    SbkDoorControl,
     Unimplemented,
 }
 
@@ -1172,6 +1211,54 @@ fn no_frames(note: &'static str) -> GmResult {
         frames: Vec::new(),
         log_note: Some(note),
     }
+}
+
+/// `AuthCommand.Execute`（`AuthCommand.cs:12-17`）：
+/// `if (PlayerActor.IsGuildMaster()) PlayerActor.ClientGuildAlly();`
+///
+/// - 非会长 ⇒ oracle 不进 `ClientGuildAlly` ⇒ **零帧**（本函数照抄）；
+/// - 会长 ⇒ `ClientGuildAlly`（`PlayObject.Operate.cs:1465-1523`）会发
+///   `SM_GUILDMAKEALLY_OK` / `SM_GUILDMAKEALLY_FAIL(n8)`（n8 = -1..-4），成功支还
+///   `SendServerGroupMsg(SS_207)` + 行会消息 + 行会态改写 ⇒ 依赖**可写行会态**与 G11 跨服，
+///   宿主未建模（whitelist **T-263**，本臂只留 `log_note`）。
+fn auth(world: &GmWorld<'_>) -> GmResult {
+    if world.is_guild_master(world.speaker) {
+        return no_frames(
+            "Auth 会长路径：ClientGuildAlly（Operate.cs:1465-1523，SM_GUILDMAKEALLY_OK/_FAIL(n8) + SS_207 + 行会态改写）宿主未接（whitelist T-263）",
+        );
+    }
+    no_frames("Auth 非会长 ⇒ oracle 不进 ClientGuildAlly ⇒ 零帧（AuthCommand.cs:14）")
+}
+
+/// `AuthallyCommand.Execute`（`AuthallyCommand.cs:9-23`）：
+/// `if (PlayerActor.IsGuildMaster()) { /* 翻转 EnableAuthAlly + 两条 SysMsg 全被注释 */ } return;`
+/// ⇒ **两条分支都零帧**（真 no-op）；这里仍按 `IsGuildMaster` 分两条 note，便于窗口定位。
+fn authally(world: &GmWorld<'_>) -> GmResult {
+    if world.is_guild_master(world.speaker) {
+        return no_frames(
+            "Authally 会长支：EnableAuthAlly 翻转与两条 SysMsg 在 AuthallyCommand.cs:12-21 全被注释 ⇒ 零帧",
+        );
+    }
+    no_frames("Authally 非会长 ⇒ AuthallyCommand.cs:12 不成立 ⇒ return（零帧）")
+}
+
+/// `AuthCancelCommand.Execute`（`AuthCancelCommand.cs:12-21`）：
+/// ```text
+/// if (@params == null || @params.Length <= 0) return;
+/// if (PlayerActor.IsGuildMaster()) PlayerActor.ClientGuildBreakAlly(@params[0]);
+/// ```
+/// 空参 / 非会长 ⇒ **零帧**；会长 ⇒ `ClientGuildBreakAlly`（`PlayObject.Operate.cs:1525-1560`）
+/// 发 `SM_GUILDBREAKALLY_OK` / `SM_GUILDMAKEALLY_FAIL(0)` + `SS_207` + 行会态改写 ⇒ 未建模（T-263）。
+fn auth_cancel(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    if parameters.trim().is_empty() {
+        return no_frames("AuthCancel 空参 ⇒ AuthCancelCommand.cs:14-17 return（零帧）");
+    }
+    if world.is_guild_master(world.speaker) {
+        return no_frames(
+            "AuthCancel 会长路径：ClientGuildBreakAlly（Operate.cs:1525-1560，SM_GUILDBREAKALLY_OK / SM_GUILDMAKEALLY_FAIL + SS_207 + 行会态改写）宿主未接（whitelist T-263）",
+        );
+    }
+    no_frames("AuthCancel 非会长 ⇒ oracle return ⇒ 零帧（AuthCancelCommand.cs:18-21）")
 }
 
 /// 单条 `SysMsg` + `log_note`（oracle 文本保持逐字节）。
@@ -2465,10 +2552,24 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
 
         // ---- 批次 5 · 脚本可达族（`GMEXECUTE` 抬权可达，tier=R）----
         Imp::Shutup => shutup(parameters),
+        Imp::ShutupRelease => shutup_release(parameters),
         Imp::ShowEffect => show_effect(),
 
         Imp::KickHuman => kick_human(parameters, sess, world),
 
+        // ---- 批次 5A · 行会/城堡族 A 片（6，卡 `openmir2-gm-batch-5a-guild-impl`）----
+        Imp::Announcement => no_frames(
+            "Announcement：AnnouncementCommand.cs:14-41 命令体整段被注释 ⇒ 真 no-op（零帧）",
+        ),
+        Imp::Auth => auth(world),
+        Imp::Authally => authally(world),
+        Imp::AuthCancel => auth_cancel(parameters, world),
+        Imp::GuildWar => no_frames(
+            "GuildWar：GuildWarCommand.cs:12-15 体只有 if (Permission < 6) return ⇒ 过权限门后零帧",
+        ),
+        Imp::SbkDoorControl => {
+            no_frames("SbkDoorControl：SbkDoorControlCommand.cs:7-9 空体 ⇒ 真 no-op（零帧）")
+        }
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -2529,6 +2630,57 @@ fn shutup(parameters: &str) -> GmResult {
 /// 「逐字节等价」的最小 no-op 并登记，不臆造烟花特效或 `RM_MYSHOW` 帧。
 fn show_effect() -> GmResult {
     no_frames(NOTE_SHOW_EFFECT_ALL_COMMENTED)
+}
+
+/// `ShutupReleaseCommand.Execute`（`src/Modules/GameCommand/Commands/ShutupReleaseCommand.cs:12-49`，
+/// 现网 `@取消禁言`，`Command.conf` 的 `[Command] ReleaseShutup=取消禁言` 覆盖了名字）。
+///
+/// **实际执行行**（逐行核过 oracle）：
+/// - `:14` `if (@params == null) return;`——`GameCommand.Handle` 的 `case 2` 传的是
+///   `parameters.Split(' ')`，`Split` **不返回 null** ⇒ 死分支（只有 `default:` 支传 null，
+///   本命令的 `Execute` 是两参签名，走 `case 2`）；
+/// - `:18` `sHumanName = @params.Length > 0 ? @params[0] : ""`；
+/// - `:19` `boAll = @params.Length > 1 ? bool.Parse(@params[1]) : false`——**先于**下面的
+///   恒真分支求值：第二段不是 `true`/`false`（`""`、`1`、`yes`…）⇒ `FormatException`
+///   冒泡出 `Execute`（`MethodInfo.Invoke` 的 `TargetInvocationException` 由
+///   `PlayObject.Chat.cs:402-406` 的整段 catch 吞掉）⇒ **零帧**；
+/// - `:20` `if (string.IsNullOrEmpty(sHumanName) || !string.IsNullOrEmpty(sHumanName))`——
+///   `A || !A` **恒真** ⇒ 无条件 `SysMsg(Command.CommandHelp, Red, Hint)` 后 `return`；
+///   `Command.CommandHelp` = `$"命令格式: @{Name} {Help}"`（`CommandAttribute.cs:56-58`），
+///   `Name` 被部署 `Command.conf` 覆盖为 `取消禁言`、`Help` = `人物名称`；
+/// - `:25-48` `EnterCriticalSection/LeaveCriticalSection(DenySayMsgList)` 之间对
+///   `DenySayMsgList` 的 `ContainsKey`/`Remove`/两处 `SysMsg` **整段被注释** ⇒ 不清禁言、
+///   不通知目标、不落库；`boAll` 只被注释代码引用 ⇒ **解析了但无副作用**。
+///
+/// 因此本命令的 online 行为 = 「永远一条 Red/Hint 帮助文本」，`取消禁言 <名字> true` 与
+/// `<名字> false` 完全同帧；这正是 oracle 现状（BUG-REPLICA，不修）。
+fn shutup_release(parameters: &str) -> GmResult {
+    // `GameCommand.Handle` `case 2`：`parameters.Split(' ')`（**保留**空段：
+    // `parse_command` 只 trim 两端，内部连续空格会在 `params` 里留下 `""`）。
+    let params = split_params(parameters);
+    let human = params.first().copied().unwrap_or("");
+    // `:20` 的 `bool.Parse(@params[1])` 先求值；失败即零帧（oracle 的异常被 catch 吞掉）。
+    if let Some(second) = params.get(1) {
+        if parse_csharp_bool(second).is_none() {
+            return no_frames(NOTE_SHUTUP_RELEASE_BOOL_PARSE);
+        }
+    }
+    // `:20` 条件恒真（`A || !A`）；`:22-55` 整段被注释 ⇒ 唯一的可观测行为是这条帮助文本。
+    let _ = human;
+    red(SHUTUP_RELEASE_HELP)
+}
+
+/// `bool.Parse`（`System.Boolean.Parse`）：先 `Trim()`，再只认 `True`/`False`（大小写不敏感）；
+/// 其余（含空串）抛 `FormatException`。返回 `None` = 抛异常。
+fn parse_csharp_bool(s: &str) -> Option<bool> {
+    let t = s.trim();
+    if t.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if t.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// `KickHumanCommand.Execute`（`src/Modules/GameCommand/Commands/KickHumanCommand.cs:10-40`，
@@ -2693,7 +2845,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Announcement",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::Announcement,
     },
     CommandDef {
         name: "AttackMode",
@@ -2897,7 +3049,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "GuildWar",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::GuildWar,
     },
     CommandDef {
         name: "hjhg556",
@@ -3149,7 +3301,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "SbkDoor",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::SbkDoorControl,
     },
     CommandDef {
         name: "sdasdert",
@@ -3371,7 +3523,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "允许联盟",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::Authally,
     },
     CommandDef {
         name: "减钱",
@@ -3419,13 +3571,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "取消禁言",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShutupRelease,
     },
     CommandDef {
         name: "取消联盟",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AuthCancel,
     },
     CommandDef {
         name: "增加PK",
@@ -3611,7 +3763,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "联盟",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::Auth,
     },
     CommandDef {
         name: "调整声望",
@@ -4577,6 +4729,103 @@ mod tests {
         execute(sess, cfg, &world, line)
     }
 
+    /// 批次 5A（卡 `openmir2-gm-batch-5a-guild-impl`）：**6 条全部 perm 10**
+    /// （`GameCommands.cs:371-373/526` 的 `PerMissionMin = 10` 覆盖 `[Command]` 属性的 0）。
+    /// 4 条真 no-op（Announcement / 允许联盟 / GuildWar / SbkDoor）+ 联盟 / 取消联盟 的非会长路径。
+    #[test]
+    fn batch5a_noops_permission_gate_and_zero_frames() {
+        // 6 条都是 perm 10：权限不足 ⇒ 恰好一条红字，且零帧
+        for cmd in [
+            "@Announcement",
+            "@联盟",
+            "@允许联盟",
+            "@取消联盟",
+            "@GuildWar",
+            "@SbkDoor",
+        ] {
+            let (r, _) = run(cmd);
+            assert_eq!(texts(&r), vec![(GmColor::Red, PERMISSION_TOO_LOW)], "{cmd}");
+            assert!(r.frames.is_empty(), "{cmd}");
+        }
+        // 权限满足：4 条真 no-op + 联盟/取消联盟 的非会长路径 ⇒ 零帧零消息
+        for cmd in [
+            "@Announcement",
+            "@允许联盟",
+            "@GuildWar",
+            "@SbkDoor",
+            "@联盟",
+            "@取消联盟",
+            "@取消联盟 某会",
+        ] {
+            let (r, _) = run_gm(cmd);
+            assert!(r.found && r.parsed, "{cmd}");
+            assert!(
+                r.msgs.is_empty() && r.frames.is_empty(),
+                "{cmd} 应零帧零消息"
+            );
+            assert!(r.log_note.is_some(), "{cmd} 必须留 oracle 出处 note");
+        }
+    }
+
+    /// 表项级：批次 5A 的 6 条必须在 `COMMANDS` 里且 **imp 不是 `Unimplemented`**、
+    /// **perm 10**（生效口径以 `GameCommands.cs` 构造 + `Command.conf` 为准）。
+    /// 牙：任一条回退 `Unimplemented` ⇒ 本用例红。
+    #[test]
+    fn batch5a_table_entries_are_wired() {
+        for name in [
+            "Announcement",
+            "联盟",
+            "允许联盟",
+            "取消联盟",
+            "GuildWar",
+            "SbkDoor",
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_ne!(
+                def.imp,
+                Imp::Unimplemented,
+                "{name} 仍是 Unimplemented（应为批次 5A 的接线实现）"
+            );
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+        }
+    }
+
+    /// `联盟` / `取消联盟` 的**会长支**：oracle 会进 `ClientGuildAlly`/`ClientGuildBreakAlly`
+    /// （帧 + `SS_207`），宿主未建模 ⇒ 只留 note（whitelist T-263），不许静默当等价。
+    #[test]
+    fn batch5a_guild_master_path_is_registered_not_silent() {
+        let mut gm = mir2_world::GuildManager::new();
+        assert!(gm.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let world = GmWorld {
+            guilds: &gm,
+            maps: None,
+            world: None,
+            speaker: "boss",
+            speaker_id: 7,
+            now_ms: 0,
+        };
+        assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        for (cmd, needle) in [
+            ("@联盟", "ClientGuildAlly"),
+            ("@取消联盟 测试会", "ClientGuildBreakAlly"),
+        ] {
+            let r = execute(&mut sess, &GmConfig::default(), &world, cmd);
+            assert!(
+                r.msgs.is_empty() && r.frames.is_empty(),
+                "{cmd} 会长支只留 note"
+            );
+            let note = r.log_note.unwrap_or("");
+            assert!(
+                note.contains(needle) && note.contains("T-263"),
+                "{cmd} note={note}"
+            );
+        }
+    }
+
     fn texts(r: &GmResult) -> Vec<(GmColor, &str)> {
         r.msgs.iter().map(|m| (m.color, m.text.as_str())).collect()
     }
@@ -4855,7 +5104,8 @@ mod tests {
     /// 卡 `openmir2-gm-impl-startquest` 的 `StartQuest`、卡 `openmir2-gm-impl-kick` 的 `VV踢人`、
     /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`、
     /// 卡 `openmir2-gm-impl-clearbag` 的 `ClearBagItem`）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 81），且命令名 → 实现标签固定。
+    /// 以及批次 5A（卡 `openmir2-gm-batch-5a-guild-impl` 的 6 条行会族）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 75），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4863,16 +5113,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            104,
-            "104 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1）7 条"
+            111,
+            "111 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            81,
-            "185 - 104"
+            74,
+            "185 - 111"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -6543,6 +6793,200 @@ mod tests {
             assert!(
                 player.gm_notes.iter().any(|n| n.contains("整段注释")),
                 "空实现路径必须登记：{:?}",
+                player.gm_notes
+            );
+        }
+        assert_eq!(sess.permission, 0, "抬权临时生效并还原");
+    }
+
+    /// 卡 `openmir2-gm-impl-shutup-release`：表项（名字被 `Command.conf` 覆盖为 `取消禁言`）。
+    #[test]
+    fn shutup_release_is_wired_in_the_command_table() {
+        let def = find("取消禁言").expect("@取消禁言 在 185 行表里");
+        assert_eq!(def.imp, Imp::ShutupRelease);
+        assert_eq!(def.perm_min, 10, "`[Permission] ReleaseShutup=10`");
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+        // `Command.CommandHelp` = `命令格式: @{Name} {Help}`；`Name` 被 `[Command] ReleaseShutup`
+        // 覆盖为 `取消禁言`（`Command.conf:67`），`Help` = `CommandHelp.cs:41` 的「人物名称」。
+        assert_eq!(SHUTUP_RELEASE_HELP, "命令格式: @取消禁言 人物名称");
+    }
+
+    /// 恒真分支：无论带不带名字、`boAll` 是 `true` 还是 `false`，都**只回同一条**帮助文本。
+    ///
+    /// oracle `ShutupReleaseCommand.cs:20` 的 `IsNullOrEmpty(x) || !IsNullOrEmpty(x)` 恒真；
+    /// `:22-55` 对 `DenySayMsgList` 的操作整段被注释 ⇒ `boAll` 只被注释代码引用。
+    #[test]
+    fn shutup_release_always_returns_the_same_help_text() {
+        for line in [
+            "@取消禁言",
+            "@取消禁言 zhangsan",
+            "@取消禁言 zhangsan true",
+            "@取消禁言 zhangsan false",
+            // 只有 ASCII 空格分段（`Split(' ')`）：制表符留在**同一段**里 ⇒ 没有第二参，
+            // 不触发 `bool.Parse` ⇒ 同样落帮助文本。
+            "@取消禁言 zhangsan	true",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            // 与字面量比对（不用常量比常量）：文本一旦被改写，本用例必须红。
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, "命令格式: @取消禁言 人物名称")],
+                "{line}: 恒真分支 ⇒ 恰好一条 Red/Hint 帮助文本"
+            );
+            assert!(r.frames.is_empty(), "{line}: 本命令只发 SysMsg");
+            assert!(r.log_note.is_none(), "{line}: 正常路径不得有登记");
+        }
+    }
+
+    /// 第二段不是 `true`/`false` ⇒ `bool.Parse` 抛 `FormatException`，被
+    /// `PlayObject.Chat.cs:402-406` 的 catch 吞掉 ⇒ **零帧**（`found` 仍为 true，不走回落）。
+    ///
+    /// 含「内部连续空格」情形：`parse_command` 只 Trim 两端 ⇒ `params[1]` 是空串 ⇒ 同样抛。
+    #[test]
+    fn shutup_release_bool_parse_failure_is_zero_frames() {
+        for line in [
+            "@取消禁言 zhangsan yes",
+            "@取消禁言 zhangsan 1",
+            "@取消禁言 zhangsan TRUE2",
+            "@取消禁言 zhangsan  true",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(
+                r.found && r.parsed,
+                "{line}: 命令已命中（只是命令体抛异常）"
+            );
+            assert!(r.msgs.is_empty(), "{line}: 异常被 catch 吞掉 ⇒ 零帧");
+            assert!(r.frames.is_empty(), "{line}: 无其它帧");
+            assert_eq!(
+                r.log_note,
+                Some(NOTE_SHUTUP_RELEASE_BOOL_PARSE),
+                "{line}: 吞异常路径必须登记"
+            );
+        }
+        // 对照：空白被 `bool.Parse` 的 `Trim()` 吃掉的 ` true ` 仍是合法值 ⇒ 帮助文本。
+        let (r, _) = run_gm("@取消禁言 zhangsan 	true ");
+        assert_eq!(texts(&r), vec![(GmColor::Red, SHUTUP_RELEASE_HELP)]);
+    }
+
+    /// **F3（review `01007b5ee8`）**：帮助文本的**线上 GBK 字节**逐字节断言（与兄弟卡
+    /// `shutup_sends_exactly_one_red_sysmsg_bytes` 同口径）。
+    ///
+    /// `SysMsg` 在线上按 GB2312/GBK 编码（`HUtil32.GetString` 语义）；UTF-8 文本相同不能
+    /// 证明线上字节相同（例如「格」在 GBK 是 `B8F1`，UTF-8 是 `E6 A0 BC`）。牙：把常量里的
+    /// 「式」改成同音异形字 ⇒ 本用例红。
+    #[test]
+    fn shutup_release_help_is_gbk_bytes_on_the_wire() {
+        let (r, _) = run_gm("@取消禁言 zhangsan");
+        assert!(r.found && r.parsed, "命中命令体，不走未知命令回落");
+        assert_eq!(r.msgs.len(), 1, "恰好一条 SysMsg");
+        assert_eq!(r.msgs[0].color, GmColor::Red);
+        assert_eq!(r.msgs[0].text, SHUTUP_RELEASE_HELP);
+        assert!(r.frames.is_empty(), "本命令只发 SysMsg，无其它帧");
+        assert!(r.log_note.is_none(), "正常支没有吞异常/未接项");
+        // 线上编码：逐字符 GBK 双字节 + 三个 ASCII（': '、'@'、' '）。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, // 命
+                0xc1, 0xee, // 令
+                0xb8, 0xf1, // 格
+                0xca, 0xbd, // 式
+                0x3a, 0x20, // ": "
+                0x40, // '@'
+                0xc8, 0xa1, // 取
+                0xcf, 0xfb, // 消
+                0xbd, 0xfb, // 禁
+                0xd1, 0xd4, // 言
+                0x20, // ' '
+                0xc8, 0xcb, // 人
+                0xce, 0xef, // 物
+                0xc3, 0xfb, // 名
+                0xb3, 0xc6, // 称
+            ]
+        );
+    }
+
+    /// 权限门先于命令体（`GameCommand.cs:37-40`）：`Permission < 10` ⇒ 红字 `权限不够!!!`，
+    /// 连帮助文本都不出。
+    #[test]
+    fn shutup_release_permission_gate_blocks_body() {
+        let mut sess = GmSession {
+            permission: 9,
+            ..GmSession::default()
+        };
+        let cfg = GmConfig::default();
+        let r = exec(&mut sess, &cfg, "@取消禁言 zhangsan");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
+        sess.permission = 10;
+        let r = exec(&mut sess, &cfg, "@取消禁言 zhangsan");
+        assert_eq!(texts(&r), vec![(GmColor::Red, SHUTUP_RELEASE_HELP)]);
+    }
+
+    /// 卡 `openmir2-gm-impl-shutup-release`：部署脚本路（`Market_Def/功能NPC/比武-GA2.txt:43`
+    /// 的 `Gmexecute 取消禁言 self`）经 `NpcPlayer` 的 GMEXECUTE 跳线抬权执行后，
+    /// 唯一可观测帧 = 帮助文本（oracle `ShutupReleaseCommand.cs:20` 的恒真分支）。
+    ///
+    /// 同时钉住 `bool.Parse` 怪癖：脚本写成 `取消禁言 新人 1` ⇒ 第二参不是 true/false
+    /// ⇒ 命令体抛异常被 catch 吞掉 ⇒ **零帧**（连帮助文本都不出）。
+    #[test]
+    fn shutup_release_script_gmexecute_path_through_npc_player_seam() {
+        use mir2_script::engine::ScriptPlayer;
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        // `ActionOfGmExecute` 同形：`@<cmd> <p1..p6>`，尾随空参产生 3 个空格。
+        let s_data = format!("@{} {} {} {} {} {}", "取消禁言", "新人", "", "", "", "");
+        assert_eq!(s_data, "@取消禁言 新人    ");
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(&s_data);
+            player.set_permission(0);
+            assert_eq!(player.frames.len(), 1, "恒真分支 ⇒ 恰好一条 SysMsg");
+            assert_eq!(
+                player.frames[0].msg.as_deref(),
+                Some(SHUTUP_RELEASE_HELP),
+                "帮助文本逐字节（部署名 `取消禁言`）"
+            );
+            assert_eq!(
+                (player.frames[0].n_param1, player.frames[0].n_param2),
+                (0xFF, 0x38),
+                "Red/Hint 的部署色词"
+            );
+            assert!(player.gm_direct_frames.is_empty(), "本命令无直发帧");
+        }
+        // `bool.Parse` 怪癖：第二参 `1` ⇒ 异常被吞 ⇒ 脚本路径**零帧**。
+        let bad = format!("@{} {} {} {} {} {}", "取消禁言", "新人", "1", "", "", "");
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(&bad);
+            player.set_permission(0);
+            assert!(player.frames.is_empty(), "bool.Parse 失败 ⇒ 零帧");
+            assert!(player.gm_direct_frames.is_empty());
+            assert!(
+                player.gm_notes.iter().any(|n| n.contains("bool.Parse")),
+                "吞异常路径必须登记：{:?}",
                 player.gm_notes
             );
         }

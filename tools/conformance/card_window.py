@@ -212,6 +212,78 @@ CSHARP_STOP = POWERSHELL + [
     "Stop-Process -Id $_.ProcessId -Force }",
 ]
 
+# Rust 栈**实际执行的二进制**（卡 `openmir2-window-rust-binary-evidence`）：
+# `rust-root/M2GameSvr/GameSrv.exe` 是同目录 .dll 的 .NET 程序集，从不是被跑的那个文件；
+# 证据里的 Rust sha256 必须指向 `mir2-rs/target/{release,debug}/mir2-server.exe`。
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+RUST_SERVER_BIN = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "release", "mir2-server.exe"
+).replace(os.sep, "/")
+RUST_SERVER_BIN_DEBUG = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "debug", "mir2-server.exe"
+).replace(os.sep, "/")
+PID_FILE_NAME = "mir2-server.pid.json"
+
+
+def resolve_rust_binary():
+    """release 优先、缺失退 debug（证据里注明用的是 debug）；返回 (path, profile)。"""
+    if os.path.exists(RUST_SERVER_BIN):
+        return RUST_SERVER_BIN, "release"
+    if os.path.exists(RUST_SERVER_BIN_DEBUG):
+        return RUST_SERVER_BIN_DEBUG, "debug"
+    return RUST_SERVER_BIN, "release(missing)"
+
+
+def pid_file_path(side_dir, sc):
+    """pid 文件路径：**只认 profile 的 `pid_file`**（`{side_dir}` 模板按本侧产物目录展开）。
+
+    部署把 pid 写到 wrapper 的 `-LogDir`（alt = `E:/tmp/conformance/rust-logs`），
+    不是 `<side_dir>`；所以路径必须在 profile 里显式声明（load_profile 对
+    `require_pid_binaries` 强制校验），代码里不写死任何部署绝对路径。
+    """
+    raw = sc.get("pid_file")
+    if not raw:
+        return os.path.join(side_dir, PID_FILE_NAME)
+    return str(raw).replace("{side_dir}", side_dir)
+
+
+def verify_pid_binaries(side_dir, sc, side):
+    """起栈后核对 `mir2-server.pid.json` 的 `roles[].exe` 与 profile 登记的 binaries。
+
+    返回 `(ok, error_or_none, info)`；不一致/缺文件 ⇒ 调用方把该侧判 rc=2 并点名。
+    """
+    pid_path = pid_file_path(side_dir, sc)
+    norm = lambda p: os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
+    registered = [norm(p) for p in (sc.get("binaries") or [])]
+    info = {"pid_file": pid_path, "registered": list(sc.get("binaries") or []), "roles": []}
+    if not os.path.exists(pid_path):
+        return False, ("缺少 %s：无法核对 %s 栈实际执行的 exe（拒绝只记 sha256 继续跑）"
+                       % (PID_FILE_NAME, side)), info
+    try:
+        # **必须 utf-8-sig**：pid 文件由 `start_mir2_server.ps1` 用 Windows PowerShell 5
+        # 的 `Set-Content -Encoding utf8` 写出，**带 UTF-8 BOM**；用 utf-8 读会抛
+        # `Unexpected UTF-8 BOM` ⇒ 真窗口永远 rc=2（review B2）。
+        with open(pid_path, "r", encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as ex:
+        return False, ("读取 %s 失败：%s" % (PID_FILE_NAME, ex)), info
+    roles = data.get("roles") if isinstance(data, dict) else None
+    if not roles:
+        return False, ("%s 没有 roles[]：无法核对 %s 栈实际执行的 exe" % (PID_FILE_NAME, side)), info
+    bad = []
+    for role in roles:
+        exe = role.get("exe") if isinstance(role, dict) else None
+        info["roles"].append({"role": role.get("role") if isinstance(role, dict) else None,
+                              "exe": exe})
+        if not exe or norm(exe) not in registered:
+            bad.append("%s=%s" % (role.get("role") if isinstance(role, dict) else "?",
+                                  exe or "(空)"))
+    if bad:
+        return False, ("pid 文件的 exe 与 profile binaries 不一致：%s（登记 %s）"
+                       % (", ".join(bad), ", ".join(sc.get("binaries") or []))), info
+    return True, None, info
+
+
 BUILTIN_PROFILES = {
     "alt": {
         "format": PROFILE_FORMAT,
@@ -249,7 +321,12 @@ BUILTIN_PROFILES = {
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17600],
                 "ready_ports": [15000, 17000, 17100, 17600],
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
-                "binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"],
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
+                # 部署把 pid 写到 wrapper 的 `-LogDir`（`start-rust.ps1` 里写死
+                # `E:/tmp/conformance/rust-logs`），**不是** `<side_dir>`（review B1）。
+                # 下一次真窗口读的就是这个文件；路径只在这里声明，代码里不写死。
+                "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
                 "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
                 "db": {"tables": RUST_DB_TABLES,
                        "characters_db": "mir2_test_db_r",
@@ -290,7 +367,12 @@ BUILTIN_PROFILES = {
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
                 "ready_ports": [5000, 7000, 7100, 7200],
                 "probe_extra": [],
-                "binaries": ["E:/tmp/conformance/rust-default-root/M2GameSvr/GameSrv.exe"],
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
+                # 该部署的 wrapper 目前不在仓内；约定它必须用
+                # `-LogDir $env:CARD_WINDOW_SIDE_DIR` 把 pid 写进本侧产物目录。
+                # 写在别处 ⇒ 起栈后 rc=2 并点名实际要找的文件（fail-closed）。
+                "pid_file": "{side_dir}/" + PID_FILE_NAME,
                 "db": {"preset": "test", "characters_db": "mir2_test_db"},
             },
         },
@@ -576,6 +658,19 @@ def load_profile(value):
             raise ConfigError(
                 "profile.sides.%s.binaries 必须是**非空**字符串数组：窗口证据要求两侧二进制 sha256，"
                 "空列表/缺省会让 PASS 报告里没有任何二进制指纹" % side)
+        pf = sc.get("pid_file")
+        if pf is not None and (not isinstance(pf, str) or not pf):
+            raise ConfigError("profile.sides.%s.pid_file 必须是非空字符串（pid 文件路径，"
+                              "可用 {side_dir} 占位）" % side)
+        if sc.get("require_pid_binaries") and not pf:
+            # 卡 openmir2-window-rust-binary-evidence / review B1：pid 文件由部署的
+            # `-LogDir` 决定，**必须**在 profile 里显式声明，不许代码里兜底写死。
+            raise ConfigError(
+                "profile.sides.%s 开了 require_pid_binaries 就必须显式声明 pid_file"
+                "（部署把 pid 写到 wrapper 的 -LogDir，不是 <side_dir>）" % side)
+        sx = sc.get("server_exe")
+        if sx is not None and (not isinstance(sx, str) or not sx):
+            raise ConfigError("profile.sides.%s.server_exe 必须是非空字符串" % side)
         env = sc.get("env")
         if env is not None:
             if not isinstance(env, dict) or any(
@@ -589,6 +684,9 @@ def load_profile(value):
     for side in SIDES:
         validate_db_client(sides[side].get("db_client"),
                            "profile.sides.%s.db_client" % side)
+    # 魔法夹具声明（卡 `openmir2-window-magic-fixture`）：加载期 fail-closed。
+    for side in SIDES:
+        profile_magic(prof, side)
     return prof
 
 
@@ -1159,6 +1257,51 @@ def scenario_placement(path):
             "note": pl.get("note") or ""}
 
 
+BLOCKED_REQUIRED = ("reason",)
+BLOCKED_OPTIONAL = ("missing_fixture",)
+
+
+def scenario_blocked(path):
+    """读场景顶层的 `blocked` 声明；没有 => None；形状非法 => ConfigError(fail-closed)。
+
+    场景可以声明自己被**封存**：形状合法（probe 的 `--check-scenario` 仍 rc=0），但**不可跑**——
+    「为什么跑不了 / 缺什么夹具」写在顶层机器可读字段里，而不是写在 description 人话里
+    （窗口批次读不到人话）。本工具见到 `blocked` 一律 rc=2，且**不建 out、不起栈、不写 report**，
+    从产物层杜绝「跑了一份 BLOCKED 场景」。
+
+    schema（与 `tools/probe/mir2_probe.py::_check_blocked` 同口径，两处各自 fail-closed）：::
+
+        "blocked": {"reason": "<非空 str>", "missing_fixture": "<str，可选>"}
+
+    与 required/computed/placement 一样**重读场景文件**：不依赖 probe 那一侧是否跑过。
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    bl = data.get("blocked")
+    if bl is None:
+        return None
+    if not isinstance(bl, dict):
+        raise ConfigError("%s: scenario.blocked 必须是对象（reason[/missing_fixture]）" % path)
+    bad_keys = set(bl) - set(BLOCKED_REQUIRED) - set(BLOCKED_OPTIONAL)
+    if bad_keys:
+        raise ConfigError("%s: scenario.blocked 有未知键 %s（fail-closed）"
+                          % (path, sorted(bad_keys)))
+    reason = bl.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ConfigError("%s: scenario.blocked.reason 必须是非空字符串（实际 %r）："
+                          "封存理由必须机器可读，不能只写在 description 里" % (path, reason))
+    mf = bl.get("missing_fixture")
+    if mf is not None and (not isinstance(mf, str) or not mf.strip()):
+        raise ConfigError("%s: scenario.blocked.missing_fixture 给了就必须是非空字符串"
+                          "（实际 %r）" % (path, mf))
+    return {"reason": reason, "missing_fixture": mf or ""}
+
+
 def _get_valid_str3(text):
     """`HUtil32.GetValidStr3(source, ref dest, Separator)` 的 (dest, 返回值) 二元组。
 
@@ -1649,6 +1792,310 @@ def run_placement(runner, side, prof, sc, placement, env):
         res["rc"] = 2
         return res
 
+# ---------------------------------------------------------------------------
+# 魔法夹具（magic）：restore 之后、起栈之前把「角色必须会的魔法」写进该侧测试库
+# `characters_magic`（卡 `openmir2-window-magic-fixture`）。
+#
+# 为什么是 DB 预置：`spell_cast` 场景的 `blocked.missing_fixture` 指出缺这一行 ⇒
+# `GetMagicInfo` 为空 ⇒ 施法只回 `SM_MOVEFAIL(28)`，**永远等不到 638/639**。
+# 技能不是脚本动作、GM 权限恒 0 ⇒ 与预置位/背包同一选型：只在 restore 之后、
+# 起栈之前改**测试库**。
+#
+# 声明形态（profile 顶层，应用到两侧；`sides.<side>.magic` 可覆盖本侧）：
+#   "magic": [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
+# - 四列必填；`magic_id` 1..65535、`level` 0..3、`use_key` 单个 ASCII 可见字符、
+#   `curr_train` >= 0；未知键/类型错/越界 => 加载期 ConfigError（rc=2）。
+# - **跨栈不同的字段不进判据**：`PlayerId`（= 本侧 `characters.Id`）与行 `Id` 各侧自己定位，
+#   读回只比 `MagicId/Level/UseKey/CurrTrain`。
+# ---------------------------------------------------------------------------
+MAGIC_REQUIRED_KEYS = ("magic_id", "level", "use_key", "curr_train")
+MAGIC_OPTIONAL_KEYS = ("note",)
+MAGIC_ID_MAX = 0xFFFF
+MAGIC_LEVEL_MAX = 3
+
+
+def _validate_magic_list(magic, where):
+    """形状+schema 校验（fail-closed）：非法即 ConfigError。"""
+    if not isinstance(magic, list) or not magic:
+        raise ConfigError("%s 必须是非空数组" % where)
+    out = []
+    seen = set()
+    for i, item in enumerate(magic):
+        w = "%s[%d]" % (where, i)
+        if not isinstance(item, dict):
+            raise ConfigError("%s 必须是对象" % w)
+        bad = set(item) - set(MAGIC_REQUIRED_KEYS) - set(MAGIC_OPTIONAL_KEYS)
+        if bad:
+            raise ConfigError("%s 有未知键 %s（fail-closed）" % (w, sorted(bad)))
+        missing = [k for k in MAGIC_REQUIRED_KEYS if k not in item]
+        if missing:
+            raise ConfigError("%s 缺必填键 %s" % (w, missing))
+        mid = item["magic_id"]
+        if not isinstance(mid, int) or isinstance(mid, bool):
+            raise ConfigError("%s.magic_id 必须是整数（实际 %r）" % (w, mid))
+        if mid < 1 or mid > MAGIC_ID_MAX:
+            raise ConfigError("%s.magic_id=%r 越界（1..%d）" % (w, mid, MAGIC_ID_MAX))
+        lv = item["level"]
+        if not isinstance(lv, int) or isinstance(lv, bool):
+            raise ConfigError("%s.level 必须是整数（实际 %r）" % (w, lv))
+        if lv < 0 or lv > MAGIC_LEVEL_MAX:
+            raise ConfigError("%s.level=%r 越界（0..%d）" % (w, lv, MAGIC_LEVEL_MAX))
+        key = item["use_key"]
+        if (not isinstance(key, str) or len(key) != 1
+                or not (0x21 <= ord(key) <= 0x7E)):
+            raise ConfigError("%s.use_key 必须是单个 ASCII 可见字符（实际 %r）" % (w, key))
+        tr = item["curr_train"]
+        if not isinstance(tr, int) or isinstance(tr, bool):
+            raise ConfigError("%s.curr_train 必须是整数（实际 %r）" % (w, tr))
+        if tr < 0:
+            raise ConfigError("%s.curr_train=%r 必须 >= 0" % (w, tr))
+        if mid in seen:
+            raise ConfigError("%s.magic_id=%d 与前面的条目重复（同一魔法只能声明一次）"
+                              % (w, mid))
+        seen.add(mid)
+        if item.get("note") is not None and not isinstance(item["note"], str):
+            raise ConfigError("%s.note 必须是字符串" % w)
+        out.append({"magic_id": mid, "level": lv, "use_key": key, "curr_train": tr,
+                    "note": item.get("note") or ""})
+    return out
+
+
+def profile_magic(prof, side=None):
+    """读 profile 的魔法声明：顶层 `magic` 应用于两侧；`sides.<side>.magic` 覆盖本侧。
+
+    没有声明 => None；形状非法 => ConfigError（加载期 fail-closed）。
+    """
+    sides = prof.get("sides") or {}
+    if side is not None:
+        sc = sides.get(side) or {}
+        if "magic" in sc:
+            return _validate_magic_list(sc["magic"], "profile.sides.%s.magic" % side)
+    if "magic" not in prof:
+        return None
+    return _validate_magic_list(prof["magic"], "profile.magic")
+
+
+def _magic_char_sql(db, chr_name, login_id, has_deleted):
+    tail = ", `Deleted`" if has_deleted else ""
+    return ("/* magic */ SELECT COUNT(*), COALESCE(MIN(`Id`), 0)%s FROM `%s`.`characters` "
+            "WHERE `ChrName` = %s AND `LoginID` = %s;\n"
+            % (tail, db, _sql_quote(chr_name), _sql_quote(login_id)))
+
+
+def _magic_dup_sql(db, player_id, ids):
+    return ("/* magic */ SELECT `MagicId`, COUNT(*) FROM `%s`.`characters_magic` "
+            "WHERE `PlayerId` = %d AND `MagicId` IN (%s) GROUP BY `MagicId` "
+            "HAVING COUNT(*) > 1;\n"
+            % (db, int(player_id), ", ".join(str(int(x)) for x in ids)))
+
+
+def _magic_rows_sql(db, player_id, ids):
+    return ("/* magic */ SELECT `MagicId`, `Level`, `UseKey`, `CurrTrain` FROM `%s`.`characters_magic` "
+            "WHERE `PlayerId` = %d AND `MagicId` IN (%s) ORDER BY `MagicId`;\n"
+            % (db, int(player_id), ", ".join(str(int(x)) for x in ids)))
+
+
+def _magic_fingerprint_sql(db, player_id, ids):
+    return ("/* magic */ SELECT COUNT(*), COALESCE(MIN(MD5(CONCAT_WS(CHAR(31), `MagicId`, `Level`, "
+            "`UseKey`, `CurrTrain`))), '') FROM `%s`.`characters_magic` "
+            "WHERE `PlayerId` = %d AND `MagicId` NOT IN (%s);\n"
+            % (db, int(player_id), ", ".join(str(int(x)) for x in ids)))
+
+
+def _magic_write_sql(db, player_id, m, exists):
+    if exists:
+        return ("/* magic */ UPDATE `%s`.`characters_magic` SET `Level` = %d, `UseKey` = %s, "
+                "`CurrTrain` = %d WHERE `PlayerId` = %d AND `MagicId` = %d;\n"
+                % (db, int(m["level"]), _sql_quote(m["use_key"]), int(m["curr_train"]),
+                   int(player_id), int(m["magic_id"])))
+    return ("/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `Level`, "
+            "`UseKey`, `CurrTrain`) VALUES (%d, %d, %d, %s, %d);\n"
+            % (db, int(player_id), int(m["magic_id"]), int(m["level"]),
+               _sql_quote(m["use_key"]), int(m["curr_train"])))
+
+
+def _parse_magic_rows(out):
+    """解析 `MagicId/Level/UseKey/CurrTrain` 的 SELECT 输出（mysql --batch TSV）。"""
+    rows = {}
+    for ln in (out or "").splitlines():
+        parts = ln.split("\t")
+        if len(parts) < 4 or not parts[0].strip():
+            continue
+        try:
+            rows[int(parts[0])] = {"level": int(parts[1]), "use_key": parts[2],
+                                   "curr_train": int(parts[3])}
+        except ValueError:
+            raise ConfigError("characters_magic 返回无法解析：%r" % (ln,))
+    return rows
+
+
+def _magic_snapshot(magic, rows):
+    """证据/判据用的只读快照：只含声明字段（不含 PlayerId/Id 这类跨栈不同值）。"""
+    out = []
+    for m in magic:
+        found = rows.get(m["magic_id"])
+        out.append({"magic_id": m["magic_id"],
+                    "declared": {k: m[k] for k in ("level", "use_key", "curr_train")},
+                    "found": found})
+    return out
+
+
+def run_magic(runner, side, prof, sc, magic, env, timeout=120):
+    """在一侧预置魔法：restore 之后、起栈之前。返回证据 dict（rc=0 才算完成）。
+
+    fail-closed：角色不存在/多行/已删除、同一 MagicId 多行、写后读回不符、其它魔法行
+    指纹变化 ⇒ rc=2 并点名，**绝不让 probe 去超时**。
+    """
+    res = {
+        "side": side,
+        "source": "profile",
+        "declared": [dict(m) for m in magic],
+        "db": None,
+        "db_pairing": None,
+        "player_id": None,
+        "before": None,
+        "after": None,
+        "action": None,
+        "sql": {"character": None, "select": None, "write": None, "verify": None},
+        "rc": None,
+        "error": None,
+    }
+    try:
+        envir_root = placement_envir_root(side, sc)
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        res["db_pairing"] = _check_db_pairing(side, envir_root, db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        res["error"] = "魔法夹具前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    if not chr_name or not login_id:
+        res["error"] = ("魔法夹具需要 profile 的 char_name/account（定位 characters 行）；"
+                        "当前 char_name=%r account=%r" % (chr_name, login_id))
+        res["rc"] = 2
+        return res
+    argv = _mysql_argv(client)
+
+    def sql(tag, text):
+        rc, out, err = runner.run(side, tag, argv, env=env, timeout=timeout,
+                                  stdin_text=text, capture=True)
+        if rc != 0:
+            raise ConfigError("%s 执行失败（mysql rc=%s）：%s"
+                              % (tag, rc, (err or out or "").strip()[:400]))
+        return out
+
+    try:
+        cols_out = sql("magic.columns", "/* magic */ SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+        columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
+        missing = [c for c in ("Id", "ChrName", "LoginID") if c not in columns]
+        if missing:
+            raise ConfigError("%s.characters 缺列 %s：表结构与预期不符" % (db, missing))
+        char_sql = _magic_char_sql(db, chr_name, login_id, "Deleted" in columns)
+        res["sql"]["character"] = char_sql.strip()
+        parts = (sql("magic.character", char_sql) or "").strip().split("\t")
+        try:
+            count = int(parts[0])
+            player_id = int(parts[1])
+            deleted = int(parts[2]) if len(parts) > 2 else 0
+        except (ValueError, IndexError):
+            raise ConfigError("magic.character 返回无法解析：%r" % (parts,))
+        if count == 0:
+            raise ConfigError("角色不存在：%s.characters 无 ChrName=%r LoginID=%r 的行"
+                              % (db, chr_name, login_id))
+        if count > 1:
+            raise ConfigError("角色行不唯一：ChrName=%r LoginID=%r 命中 %d 行"
+                              % (chr_name, login_id, count))
+        if deleted:
+            raise ConfigError("角色已删除（Deleted=%d）：ChrName=%r" % (deleted, chr_name))
+        res["player_id"] = player_id
+        ids = [m["magic_id"] for m in magic]
+        dup_out = sql("magic.duplicate", _magic_dup_sql(db, player_id, ids))
+        if (dup_out or "").strip():
+            raise ConfigError("同一角色同一 MagicId 有多行（%s）——夹具不替你合并历史脏数据"
+                              % dup_out.strip().replace("\n", "; "))
+        rows_sql = _magic_rows_sql(db, player_id, ids)
+        res["sql"]["select"] = rows_sql.strip()
+        before = _parse_magic_rows(sql("magic.read", rows_sql))
+        res["before"] = _magic_snapshot(magic, before)
+        fp_sql = _magic_fingerprint_sql(db, player_id, ids)
+        fp_before = (sql("magic.fingerprint", fp_sql) or "").strip()
+        writes = []
+        for m in magic:
+            cur = before.get(m["magic_id"])
+            exists = cur is not None
+            if exists and all(cur[k] == m[k] for k in ("level", "use_key", "curr_train")):
+                continue
+            text = _magic_write_sql(db, player_id, m, exists)
+            writes.append(text.strip())
+            sql("magic.write", text)
+        res["sql"]["write"] = "\n".join(writes) if writes else None
+        res["action"] = "written" if writes else "noop"
+        res["sql"]["verify"] = rows_sql.strip()
+        after = _parse_magic_rows(sql("magic.verify", rows_sql))
+        res["after"] = _magic_snapshot(magic, after)
+        for m in magic:
+            got = after.get(m["magic_id"])
+            want = {k: m[k] for k in ("level", "use_key", "curr_train")}
+            if got != want:
+                raise ConfigError(
+                    "魔法夹具读回不符：MagicId=%d 期望 %r 实际 %r"
+                    % (m["magic_id"], want, got))
+        fp_after = (sql("magic.fingerprint", fp_sql) or "").strip()
+        if fp_after != fp_before:
+            raise ConfigError(
+                "魔法夹具连带改了**未声明的魔法行**（其它行的行数/MD5 指纹变了：%r -> %r）"
+                % (fp_before or "<空>", fp_after or "<空>"))
+        res["rc"] = 0
+        return res
+    except ConfigError as e:
+        res["error"] = "魔法夹具失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def preview_magic(runner, side, prof, sc, magic, ctx):
+    """`--dry-run` 用：离线校验声明与库配对，打印将要执行的命令（不连库/不改库）。"""
+    out = {"side": side, "declared": [dict(m) for m in magic], "rc": None,
+           "error": None, "commands": [], "offline_check": None}
+    try:
+        envir_root = placement_envir_root(side, sc)
+        db = placement_characters_db(side, sc)
+        pairing = _check_db_pairing(side, envir_root, db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        out["error"] = "魔法夹具前置校验失败（真跑会 rc=2）：%s" % e
+        out["rc"] = 2
+        return out, True
+    ids = [m["magic_id"] for m in magic]
+    id_list = ", ".join(str(x) for x in ids)
+    out["offline_check"] = {"envir_root": envir_root, "db": db, "db_pairing": pairing,
+                            "magic_ids": ids}
+    argv = _redact_argv(_mysql_argv(client))
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    out["commands"] = [
+        {"argv": argv,
+         "stdin": "SELECT COUNT(*), MIN(`Id`), `Deleted` FROM `%s`.`characters` "
+                  "WHERE ChrName=%r AND LoginID=%r;" % (db, chr_name, login_id)},
+        {"argv": argv,
+         "stdin": "SELECT `MagicId`,`Level`,`UseKey`,`CurrTrain` FROM "
+                  "`%s`.`characters_magic` WHERE `PlayerId`=<id> AND `MagicId` IN (%s);"
+                  % (db, id_list)},
+        {"argv": argv,
+         "stdin": "INSERT/UPDATE `%s`.`characters_magic`（声明 %d 条：%s）"
+                  % (db, len(ids), id_list)},
+        {"argv": argv,
+         "stdin": "SELECT ... （读回校验：声明的 MagicId/Level/UseKey/CurrTrain + "
+                  "未声明魔法行的行数/MD5 指纹）"},
+    ]
+    runner.log("[%s] 魔法夹具（dry-run 不连库）：db=%s magic_ids=%s"
+               % (side, db, id_list))
+    out["rc"] = 0
+    return out, False
+
 
 def preview_placement(runner, side, prof, sc, placement, ctx):
     """`--dry-run` 用：只做离线内容校验 + 打印将要执行的命令（不连库/不改库）。"""
@@ -1699,6 +2146,7 @@ def run_side(runner, side, prof, ctx, password, placement=None):
         "label": sc.get("label") or side,
         "restore_rc": None,
         "placement": None,
+        "magic": None,
         "ports": {"checked": list(sc.get("ports") or []), "busy": []},
         "stack_rc": None,
         "ready": {"ports": list(sc.get("ready_ports") or []), "missing": [],
@@ -1752,6 +2200,25 @@ def run_side(runner, side, prof, ctx, password, placement=None):
                 res["error"] = pres.get("error") or "角色预置位失败"
                 return res
 
+        # 1c) 魔法夹具（profile 声明了才跑）：restore（与预置位）之后、起栈之前。
+        try:
+            magic_decl = profile_magic(prof, side)
+        except ConfigError as e:
+            res["error"] = "魔法夹具声明非法：%s" % e
+            return res
+        if magic_decl:
+            mres = run_magic(runner, side, prof, sc, magic_decl, env)
+            try:
+                write_json_file(os.path.join(side_dir, "magic.json"), mres)
+            except OSError as e:
+                mres["error"] = ((mres.get("error") or "") + "；写 magic.json 失败：%s"
+                                 % e).strip("；")
+                mres["rc"] = 2
+            res["magic"] = mres
+            if mres.get("rc") != 0:
+                res["error"] = mres.get("error") or "魔法夹具失败"
+                return res
+
         # 2) 起栈前端口检查（有人占 => rc=2 并点名 pid；不启动栈）
         busy = check_ports_free(sc.get("ports") or [])
         res["ports"]["busy"] = busy
@@ -1769,6 +2236,29 @@ def run_side(runner, side, prof, ctx, password, placement=None):
         if res["stack_rc"] != 0:
             res["error"] = "起栈命令失败（rc=%s）：不跑场景（栈没起来不能算对拍通过）" % res["stack_rc"]
             return res
+
+        # 3b) **卡 `openmir2-window-rust-binary-evidence`**：先按 release/debug 解析 Rust 栈
+        # 真正执行的二进制，再拿 `mir2-server.pid.json` 的 `roles[].exe` 对账；不符 ⇒ rc=2，
+        # 不许「只记一个错的 sha256 继续跑」。
+        if sc.get("require_pid_binaries"):
+            # profile 可显式声明 `server_exe`（窗口从别的检出/worktree 跑时用，review M1）；
+            # 缺省按本仓 release → debug 解析。
+            if sc.get("server_exe"):
+                path, kind = str(sc["server_exe"]), "profile(server_exe)"
+            else:
+                path, kind = resolve_rust_binary()
+            res["binary_profile"] = kind
+            if not os.path.exists(path):
+                res["error"] = ("Rust 侧二进制不存在：%s（%s）——请先 `cargo build -p mir2-server "
+                                "--release`，或在 profile 显式给 server_exe（不拿不存在的文件"
+                                "记 sha256）" % (path, kind))
+                return res
+            sc["binaries"] = [path]
+            ok, err, info = verify_pid_binaries(side_dir, sc, side)
+            res["pid_binaries"] = info
+            if not ok:
+                res["error"] = err
+                return res
 
         # 4) 等就绪（栈命令返回 0 也可能没真起来）
         missing = wait_ready(sc.get("ready_ports") or [],
@@ -2203,10 +2693,12 @@ def execute(cfg):
     required = []
     computed = {}
     placement = None
+    blocked = None
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
         computed = scenario_computed(scenario)
         placement = scenario_placement(scenario)
+        blocked = scenario_blocked(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
         cfg.get("discovery_scenario") or DEFAULT_DISCOVERY_SCENARIO)
@@ -2251,6 +2743,14 @@ def execute(cfg):
                      "characters 的 MapName/CX/CY 改到位；完成不了 rc=2（不让 probe 超时）"
                      if placement else None),
         },
+        "magic": {
+            "enabled": any(profile_magic(prof, s) for s in SIDES),
+            "declared": profile_magic(prof),
+            "sides": {},
+            "note": ("profile.magic => 每侧 restore（与预置位）之后、起栈之前把该侧测试库 "
+                     "characters_magic 写到位；完成不了 rc=2（不让 probe 超时）"
+                     if profile_magic(prof) else None),
+        },
         "discovery": {
             "enabled": needs_discovery,
             "forced": discover,
@@ -2280,6 +2780,22 @@ def execute(cfg):
 
     if scenario and os.path.isfile(scenario):
         summary["scenario_sha256"] = sha256_file(scenario)
+
+    # BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）。
+    # 位置刻意在「建 out 目录 / 起栈 / 跑 discovery / 写 report」**之前**，--dry-run 与真跑
+    # 走同一条路径：见到 blocked 就停（rc=2，与「端口被占」同一失败等级），连命令序列都不预览
+    # —— 免得 dry-run 绿了让人误以为可以真跑。
+    if blocked:
+        summary["blocked"] = {"reason": blocked["reason"],
+                              "missing_fixture": blocked["missing_fixture"] or ""}
+        summary["notes"].append("scenario is BLOCKED: %s" % blocked["reason"])
+        summary["notes"].append("missing_fixture: %s"
+                                % (blocked["missing_fixture"] or "(场景未声明)"))
+        summary["verdict"] = "BLOCKED"
+        summary["exit_code"] = 2
+        summary["finished_at"] = iso_now()
+        summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
+        return summary
 
     password = cfg.get("password") or os.environ.get("CONFORMANCE_PASSWORD")
     if not password:
@@ -2352,6 +2868,24 @@ def execute(cfg):
                                % (side, pres.get("error")))
                     preview_failed = True
                     side_failed = True
+            if not side_failed:
+                try:
+                    magic_side = profile_magic(prof, side)
+                except ConfigError as e:
+                    runner.log("[%s] 魔法夹具声明非法 ⇒ 真跑 rc=2：%s" % (side, e))
+                    summary["notes"].append("魔法夹具声明非法：%s" % e)
+                    preview_failed = True
+                    side_failed = True
+                    magic_side = None
+                if magic_side:
+                    mprev, mfailed = preview_magic(runner, side, prof, sc, magic_side,
+                                                   ctx)
+                    summary["magic"]["sides"][side] = mprev
+                    if mfailed:
+                        runner.log("[%s] 魔法夹具不可行 ⇒ 真跑 rc=2（不起栈、不跑场景）：%s"
+                                   % (side, mprev.get("error")))
+                        preview_failed = True
+                        side_failed = True
             if not side_failed:
                 runner.log("[%s] 端口预检：%s" % (side, sc.get("ports") or []))
                 runner.log("[%s] 就绪等待：%s（timeout %ss）"
@@ -2451,6 +2985,8 @@ def execute(cfg):
         if res.get("placement"):
             # README/card-window.json 的 placement 段读这份（与 discovery 同口径）
             summary["placement"]["sides"][side] = res["placement"]
+        if res.get("magic"):
+            summary["magic"]["sides"][side] = res["magic"]
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -2677,6 +3213,81 @@ def main():
         # 状态落 `<log>.placement-<side>`，模拟「库里的那一行」；环境变量可以造各种失败。
         import re as _re
         sql_text = sys.stdin.read()
+        if "/* magic */" in sql_text:
+            # 魔法夹具桩（卡 openmir2-window-magic-fixture）：状态落 `<log>.magic-<side>`。
+            mstate = log + ".magic-" + side
+            ms = {"char_id": 6228, "char_count": 1, "deleted": 0,
+                  "rows": {}, "fp": "fp-magic-before"}
+            init = os.environ.get("STUB_MAGIC_INIT")
+            if init:
+                ms["rows"] = json.loads(init)
+            if os.path.exists(mstate):
+                try:
+                    with open(mstate, encoding="utf-8") as f:
+                        ms = json.load(f)
+                except (OSError, ValueError):
+                    pass
+            ms["char_count"] = int(os.environ.get("STUB_MAGIC_CHAR_COUNT",
+                                                  ms.get("char_count", 1)))
+            ms["deleted"] = int(os.environ.get("STUB_MAGIC_DELETED", ms.get("deleted", 0)))
+
+            def _msave():
+                with open(mstate, "w", encoding="utf-8") as f:
+                    json.dump(ms, f, sort_keys=True)
+
+            # 查询对象是 `characters`（不是 `characters_magic`）：必须回 characters
+            # 表列，run_magic 要用 Id/ChrName/LoginID/Deleted。留一行日志标记，
+            # 供 selftest 证明本分支真的被走到（卡 openmir2-magic-fixture-selftest-gaps）。
+            if "SHOW COLUMNS" in sql_text:
+                with open(log, "a", encoding="utf-8") as lf:
+                    lf.write("magic-columns %s\n" % side)
+                print("\n".join("%s\tint(11)\tYES\t\tNULL\t" % c for c in
+                                ["Id", "ServerIndex", "LoginID", "ChrName", "MapName",
+                                 "CX", "CY", "Level", "HomeMap", "Deleted"]))
+                return 0
+            if "INSERT INTO" in sql_text or "UPDATE " in sql_text:
+                if os.environ.get("STUB_MAGIC_NOWRITE") != side:
+                    mi = _re.search(r"VALUES \((\d+), (\d+), (\d+), '([^']*)', (\d+)\)",
+                                    sql_text)
+                    mu = _re.search(r"`PlayerId` = (\d+) AND `MagicId` = (\d+)", sql_text)
+                    mset = _re.search(
+                        r"`Level` = (\d+), `UseKey` = '([^']*)', `CurrTrain` = (\d+)",
+                        sql_text)
+                    if mi:
+                        ms["rows"][mi.group(2)] = {"level": int(mi.group(3)),
+                                                   "use_key": mi.group(4),
+                                                   "curr_train": int(mi.group(5))}
+                    elif mu and mset:
+                        ms["rows"][mu.group(2)] = {"level": int(mset.group(1)),
+                                                   "use_key": mset.group(2),
+                                                   "curr_train": int(mset.group(3))}
+                    if os.environ.get("STUB_MAGIC_CORRUPT") == side:
+                        ms["fp"] = "fp-magic-corrupt"
+                _msave()
+                print("1")
+                return 0
+            if "GROUP BY" in sql_text:
+                if os.environ.get("STUB_MAGIC_DUP") == side:
+                    print("1	2")
+                return 0
+            if "NOT IN" in sql_text:
+                print("%s	%s" % (ms.get("other_count", 0),
+                                   ms.get("fp", "fp-magic-before")))
+                return 0
+            if "IN (" in sql_text:
+                mm = _re.search(r"IN \(([0-9, ]+)\)", sql_text)
+                ids = [x.strip() for x in mm.group(1).split(",")] if mm else []
+                for mid in ids:
+                    row = ms["rows"].get(mid)
+                    if row:
+                        print("%s	%s	%s	%s" % (mid, row["level"], row["use_key"],
+                                                     row["curr_train"]))
+                return 0
+            if ms["char_count"] <= 0:
+                print("0	0	0")
+            else:
+                print("%d	%d	%d" % (ms["char_count"], ms["char_id"], ms["deleted"]))
+            return 0
         state_path = log + ".placement-" + side
         st = {"map": "0", "x": 289, "y": 618, "fp": "fp-before"}
         init = os.environ.get("STUB_PLACEMENT_INIT")
@@ -2726,6 +3337,21 @@ def main():
     if mode == "stack":
         if os.environ.get("STUB_STACK_FAIL") == side:
             return 3
+        pid_mode = os.environ.get("STUB_PID_MODE")
+        if pid_mode and side == "rust":
+            # 模拟 start_mir2_server.ps1：把 roles[].exe 写进 `-LogDir` 的 pid 文件。
+            # 真文件由 Windows PowerShell 5 的 Set-Content -Encoding utf8 写出 => 带 BOM。
+            if pid_mode != "missing":
+                exe = os.environ.get("STUB_PID_EXE", "")
+                if pid_mode == "wrong":
+                    exe = "E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"
+                side_dir = os.environ.get("CARD_WINDOW_SIDE_DIR") or "."
+                enc = "utf-8-sig" if os.environ.get("STUB_PID_BOM") == "1" else "utf-8"
+                with open(os.path.join(side_dir, "mir2-server.pid.json"), "w",
+                          encoding=enc) as f:
+                    json.dump({"server_exe": exe,
+                               "roles": [{"role": "game-svr", "pid": 4242,
+                                          "exe": exe}]}, f)
         return 0
     if mode == "stop":
         return 0
@@ -2801,7 +3427,7 @@ if __name__ == "__main__":
 
 def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
                       busy_port=None, ready_ports=None, envir_roots=None,
-                      chars_db=None):
+                      chars_db=None, pid_wiring=None, pid_bom=False):
     py = sys.executable
 
     def side(name):
@@ -2831,6 +3457,14 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
             prof_side["probe_extra"] = ["--mutate"]
         if name == "csharp" and stack_fail == "csharp":
             prof_side["env"] = {"STUB_STACK_FAIL": "csharp"}
+        if name == "rust" and pid_wiring:
+            # 接线用例：stub 栈写 pid 文件，走完整 run_side（review I1）。
+            # server_exe 显式覆盖 => 不依赖本检出是否构建了 target/{release,debug}。
+            prof_side["require_pid_binaries"] = True
+            prof_side["server_exe"] = stub
+            prof_side["pid_file"] = "{side_dir}/" + PID_FILE_NAME
+            prof_side["env"] = {"STUB_PID_MODE": pid_wiring, "STUB_PID_EXE": stub,
+                                "STUB_PID_BOM": "1" if pid_bom else "0"}
         return prof_side
 
     return {
@@ -2846,6 +3480,118 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
         "compare_extra": [],
         "sides": {"csharp": side("csharp"), "rust": side("rust")},
     }
+
+
+def same_path(a, b):
+    """Windows 口径的路径比较（大小写/分隔符/相对片段归一）。"""
+    def n(p):
+        return os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
+    return n(a) == n(b)
+
+
+def _selftest_pid_binaries(tmp):
+    """卡 openmir2-window-rust-binary-evidence：pid 文件 exe 与登记 binaries 的一致性。
+
+    纯函数层用例（含 review B1/B2 的牙）：① 一致 ⇒ ok；② **带 BOM 的真 pid 文件** ⇒ ok
+    （PowerShell 5 `Set-Content -Encoding utf8` 写出的就是带 BOM 的）；③ 不符 ⇒ 失败并点名
+    角色；④ 缺文件 ⇒ 失败并点名；⑤ 路径只认 profile 的 `pid_file`（不是 `<side_dir>`）；
+    ⑥ `{side_dir}` 模板；⑦ 牙：登记指回 `rust-root/GameSrv.exe` ⇒ 红；
+    ⑧ 内置 alt profile 必须显式声明真窗口读的那个部署路径（牙：改回旧位置 ⇒ 红）。
+    """
+    d = os.path.join(tmp, "pidbin")
+    os.makedirs(d, exist_ok=True)
+    exe = os.path.join(d, "mir2-server.exe")
+    pid = os.path.join(d, PID_FILE_NAME)
+    sc = {"binaries": [exe.replace(os.sep, "/")]}
+    out = []
+
+    def write_pid(path, exe_value, encoding="utf-8"):
+        with open(path, "w", encoding=encoding) as f:
+            json.dump({"server_exe": exe_value,
+                       "roles": [{"role": "game-svr", "pid": 4242, "exe": exe_value}]}, f)
+
+    # ① 正常登记 ⇒ ok
+    write_pid(pid, exe)
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((ok and err is None, "pid 文件 exe 与登记一致 ⇒ ok"))
+    # ② 真 pid 文件带 UTF-8 BOM（PowerShell 5 Set-Content -Encoding utf8）⇒ 仍能读
+    write_pid(pid, exe, encoding="utf-8-sig")
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((ok and err is None, "带 UTF-8 BOM 的 pid 文件 ⇒ 仍 ok（utf-8-sig 读取）"))
+    # ③ 登记与 pid 不符 ⇒ False 且点名
+    write_pid(pid, os.path.join(d, "GameSrv.exe"))
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and "game-svr" in err, "pid exe 与登记不符 ⇒ 失败并点名角色"))
+    # ④ pid 文件缺失 ⇒ False（rc=2 路径）
+    try:
+        os.remove(pid)
+    except OSError:
+        pass
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and PID_FILE_NAME in err, "缺 pid 文件 ⇒ 失败且点名文件"))
+    # ⑤ pid 路径只认 profile 声明（不是 <side_dir>）：真部署写在 wrapper 的 -LogDir
+    logs = os.path.join(tmp, "pidbin-logs")
+    os.makedirs(logs, exist_ok=True)
+    real_pid = os.path.join(logs, PID_FILE_NAME)
+    write_pid(real_pid, exe)
+    empty_side = os.path.join(tmp, "pidbin-side-empty")
+    os.makedirs(empty_side, exist_ok=True)
+    ok, err, info = verify_pid_binaries(empty_side, {"binaries": [exe],
+                                                     "pid_file": real_pid}, "rust")
+    out.append((ok and err is None and same_path(info.get("pid_file"), real_pid),
+                "pid 路径只认 profile 的 pid_file（不是 <side_dir>）"))
+    # ⑥ `{side_dir}` 模板按本侧产物目录展开
+    ok, err, info = verify_pid_binaries(
+        logs, {"binaries": [exe], "pid_file": "{side_dir}/" + PID_FILE_NAME}, "rust")
+    out.append((ok and err is None and same_path(info.get("pid_file"), real_pid),
+                "pid_file 的 {side_dir} 模板按本侧目录展开"))
+    # ⑦ 牙：把 registrations 指回 rust-root 的 .NET 程序集（老值）⇒ 对拍变红
+    write_pid(pid, exe)
+    stale = {"binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"]}
+    ok, _, _ = verify_pid_binaries(d, stale, "rust")
+    out.append((not ok, "牙：登记指回 rust-root/GameSrv.exe ⇒ 一致性断言红"))
+    # ⑧ 内置 alt profile 显式声明真窗口要读的那个文件（review B1）
+    expected = "E:/tmp/conformance/rust-logs/" + PID_FILE_NAME
+    try:
+        alt = load_profile("alt")["sides"]["rust"]
+        resolved = pid_file_path(os.path.join(tmp, "side"), alt)
+        declared_ok = same_path(resolved, expected)
+    except ConfigError:
+        declared_ok = False
+    out.append((declared_ok,
+                "内置 alt profile 显式声明 pid 文件 = 部署 -LogDir（%s）" % expected))
+    return out
+
+
+def _selftest_pid_wiring(tmp, base_cfg, profile_factory):
+    """接线覆盖（review I1 / 牙③）：stub 栈写 pid 文件，走完整 `run_side` 端到端。
+
+    纯函数层绿不代表接线活着——旁路 `if sc.get("require_pid_binaries"):` 整段时，
+    下面三条必须变红（否则这条卡的核心行为随时可以是死的）。
+    """
+    def run(tag, mode, bom=False):
+        prof = profile_factory(pid_wiring=mode, pid_bom=bom)
+        summary = execute(base_cfg(os.path.join(tmp, "pid-wiring-" + tag), prof))
+        return summary, (summary.get("sides") or {}).get("rust") or {}
+
+    out = []
+    s_ok, r_ok = run("ok", "ok", bom=True)
+    info = r_ok.get("pid_binaries") or {}
+    out.append((s_ok["exit_code"] == 0 and r_ok.get("rc") == 0
+                and bool(info.get("roles"))
+                and str(info.get("pid_file") or "").endswith(PID_FILE_NAME),
+                "接线：起栈后读 pid 文件（带 BOM）对账通过 => 整体 rc=0 且证据记下 roles[]"))
+    s_bad, r_bad = run("bad", "wrong")
+    err_bad = r_bad.get("error") or ""
+    out.append((s_bad["exit_code"] == 2 and r_bad.get("rc") == 2
+                and "不一致" in err_bad and "game-svr" in err_bad,
+                "接线：pid exe 与登记不符 => run_side rc=2 并点名角色（整体 rc=2）"))
+    s_miss, r_miss = run("miss", "missing")
+    err_miss = r_miss.get("error") or ""
+    out.append((s_miss["exit_code"] == 2 and r_miss.get("rc") == 2
+                and PID_FILE_NAME in err_miss,
+                "接线：缺 pid 文件 => run_side rc=2 且点名文件（整体 rc=2）"))
+    return out
 
 
 def selftest():
@@ -4066,6 +4812,250 @@ def selftest():
             and "placement.columns" not in [c["step"] for c in s_pdrybad["commands"]],
             "PL-17 --dry-run 预置不可行 => rc=2 且不预览后续场景命令")
 
+        # 19) 本卡的 pid 对账：纯函数层 8 条 + 接线 3 条。
+        #     **必须在 RED/GREEN 判定之前计入**（review B3：放在 `if fail_n: return 1`
+        #     之后时，失败只打印、rc 仍为 0，牙在门禁层面不可能变红）。
+        for cond, msg in _selftest_pid_binaries(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_pid_wiring(
+                tmp, base_cfg, lambda **kw: _selftest_profile(tmp, stub, log, **kw)):
+            chk(cond, msg)
+        # 20) BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）
+        # 判据：合法 blocked ⇒ rc=2 且点名 reason/missing_fixture，**不建 out、不起栈、不写 report**；
+        # 无 blocked ⇒ 一字不变地 rc=0（不误伤）。检查必须在下面的 rc 判定（fail_n）之前。
+        def write_scen(doc, name):
+            path = os.path.join(tmp, "scen-%s-%d.json" % (name, len(os.listdir(tmp))))
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(doc, f, ensure_ascii=False)
+            return path
+
+        b_reason = "夹具不存在：基线角色没有一档同时满足 DC_min>59 与 HitPoint>=17"
+        b_fixture = "combat_strike 夹具矩阵（docs/combat-strike-scenario-20261023.md §6）"
+        scen_b = write_scen({
+            "name": "selftest_blocked",
+            "blocked": {"reason": b_reason, "missing_fixture": b_fixture},
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "blocked")
+        scen_unblocked = write_scen({
+            "name": "selftest_unblocked",
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "unblocked")
+
+        # 19a) --dry-run：rc=2、点名 reason 与 missing_fixture、不建 out、不预览任何命令
+        fresh_log()
+        out_b = os.path.join(tmp, "run-blocked-dry")
+        s_b = execute(base_cfg(out_b, _selftest_profile(tmp, stub, log),
+                               scenario=scen_b, dry_run=True))
+        chk(s_b["exit_code"] == 2
+            and any("scenario is BLOCKED: " + b_reason in n for n in s_b["notes"]),
+            "BL-1 --dry-run 命中 blocked => rc=2 且打印 'scenario is BLOCKED: <reason>'")
+        chk(any(b_fixture in n for n in s_b["notes"]),
+            "BL-1 --dry-run 打印 missing_fixture")
+        chk(s_b["verdict"] == "BLOCKED" and not s_b["commands"]
+            and not os.path.exists(out_b) and not read_log().strip(),
+            "BL-1 --dry-run 命中 blocked => 不建 out、不起栈、不预览命令（verdict=%s）"
+            % s_b["verdict"])
+
+        # 19b) 真跑：rc=2、不建 out 目录、不起栈、不写 report.json（与端口被占同等级）
+        fresh_log()
+        out_b2 = os.path.join(tmp, "run-blocked-real")
+        s_b2 = execute(base_cfg(out_b2, _selftest_profile(tmp, stub, log), scenario=scen_b))
+        chk(s_b2["exit_code"] == 2 and s_b2["verdict"] == "BLOCKED"
+            and not os.path.exists(out_b2) and not read_log().strip(),
+            "BL-2 真跑命中 blocked => rc=2、不建 out、不起栈、不写 report")
+        chk(not os.path.exists(os.path.join(out_b2, "report.json")),
+            "BL-2 真跑命中 blocked => 没有 report.json")
+
+        # 19c) blocked 结构非法 ⇒ 加载期 ConfigError（fail-closed），一步都不执行
+        for label, bad_bl in (("缺 reason", {"missing_fixture": "x"}),
+                              ("blocked 非对象", "yes"),
+                              ("未知键", {"reason": "x", "note": "y"}),
+                              ("reason 空串", {"reason": "  "})):
+            fresh_log()
+            err_b = ""
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-blocked-shape"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=write_scen({"name": "bad", "blocked": bad_bl,
+                                                      "steps": [{"wait_for": 658}]},
+                                                     "badshape"),
+                                 dry_run=True))
+            except ConfigError as e:
+                err_b = str(e)
+            chk("scenario.blocked" in err_b and not os.path.exists(log),
+                "BL-3 blocked 形状非法（%s）=> ConfigError 且一步都没执行（%r）"
+                % (label, err_b[:80]))
+
+        # 19d) 不带 blocked 的场景不受影响（同形状、同样 dry-run => rc=0 且命令照常预览）
+        fresh_log()
+        s_bok = execute(base_cfg(os.path.join(tmp, "run-unblocked"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=scen_unblocked, dry_run=True))
+        chk(s_bok["exit_code"] == 0 and s_bok["verdict"] == "DRY-RUN"
+            and any(c["step"] == "stack" for c in s_bok["commands"]),
+            "BL-4 无 blocked => 仍 rc=0 并照常预览（不误伤，实际 %s/%s）"
+            % (s_bok["exit_code"], s_bok["verdict"]))
+
+        # 21) 魔法夹具（卡 `openmir2-window-magic-fixture`）：profile 声明 => 每侧 restore 之后、
+        #     起栈之前写 `characters_magic`；完成不了 rc=2 且不起栈。检查在 rc 判定之前。
+        def magic_prof(magic, **kw):
+            kw.setdefault("envir_roots", deploy)
+            p = _selftest_profile(tmp, stub, log, **kw)
+            p["magic"] = magic
+            return p
+
+        MAGIC_OK = [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
+        MAGIC_PRE = '{"1": {"level": 0, "use_key": "1", "curr_train": 0}}'
+
+        def reset_magic_state():
+            fresh_log()
+            for s in SIDES:
+                try:
+                    os.remove(log + ".magic-" + s)
+                except OSError:
+                    pass
+
+        # MG-1 已学且一致 => 不写库（action=noop），命令序列里没有 magic.write
+        reset_magic_state()
+        prof_m1 = magic_prof(MAGIC_OK)
+        for s in SIDES:
+            prof_m1["sides"][s]["env"] = {"STUB_MAGIC_INIT": MAGIC_PRE}
+        out_m1 = os.path.join(tmp, "run-magic-noop")
+        s_m1 = execute(base_cfg(out_m1, prof_m1, scenario=scen_unblocked))
+        cs_m1 = (s_m1["sides"].get("csharp") or {}).get("magic") or {}
+        rs_m1 = (s_m1["sides"].get("rust") or {}).get("magic") or {}
+        chk(s_m1["exit_code"] == 0 and cs_m1.get("action") == "noop"
+            and rs_m1.get("action") == "noop",
+            "MG-1 已学且一致 => 两侧都不写库（csharp=%r rust=%r，rc=%s）"
+            % (cs_m1.get("action"), rs_m1.get("action"), s_m1["exit_code"]))
+        chk("magic.write" not in [c["step"] for c in s_m1["commands"]],
+            "MG-1 已学且一致 => 命令序列里没有 magic.write（%s）"
+            % [c["step"] for c in s_m1["commands"]][:10])
+
+        # MG-2 未学 => 按声明 INSERT，且发生在 restore 之后、起栈之前；读回等于声明
+        reset_magic_state()
+        out_m2 = os.path.join(tmp, "run-magic-insert")
+        s_m2 = execute(base_cfg(out_m2, magic_prof(MAGIC_OK), scenario=scen_unblocked))
+        cs_m2 = (s_m2["sides"].get("csharp") or {}).get("magic") or {}
+        steps_m2 = [(c["side"], c["step"]) for c in s_m2["commands"]
+                    if c["side"] == "csharp"]
+        chk(s_m2["exit_code"] == 0 and s_m2["verdict"] == "PASS"
+            and cs_m2.get("action") == "written",
+            "MG-2 未学 => 预置后 rc=0/PASS（action=%r，实际 %s/%s）"
+            % (cs_m2.get("action"), s_m2["exit_code"], s_m2["verdict"]))
+        names_m2 = [x[1] for x in steps_m2]
+        chk("restore" in names_m2 and "magic.write" in names_m2
+            and "stack" in names_m2
+            and names_m2.index("restore") < names_m2.index("magic.write") < names_m2.index("stack"),
+            "MG-2 预置发生在 restore 之后、起栈之前（%s）" % names_m2[:10])
+        chk((cs_m2.get("after") or [{}])[0].get("found")
+            == {"level": 0, "use_key": "1", "curr_train": 0}
+            and cs_m2.get("player_id") == 6228,
+            "MG-2 读回 = 声明（MagicId/Level/UseKey/CurrTrain），PlayerId 各侧自取（%s）"
+            % ((cs_m2.get("after") or [{}])[0].get("found"),))
+        try:
+            with open(os.path.join(out_m2, "csharp", "magic.json"), encoding="utf-8") as f:
+                mj = json.load(f)
+            magic_json_ok = mj.get("action") == "written" and mj.get("sql", {}).get("write")
+        except (OSError, ValueError):
+            magic_json_ok = False
+        chk(magic_json_ok, "MG-2 每侧落 magic.json（含 SQL 与前后值）")
+
+        # MG-3 非法声明 => 加载期 ConfigError（rc=2 口径），一步都不执行
+        fresh_log()
+        err_m3 = ""
+        try:
+            execute(base_cfg(os.path.join(tmp, "run-magic-bad"),
+                             magic_prof([{"magic_id": 0, "level": 0,
+                                          "use_key": "1", "curr_train": 0}]),
+                             scenario=scen_unblocked))
+        except ConfigError as e:
+            err_m3 = str(e)
+        chk("profile.magic[0].magic_id" in err_m3 and not os.path.exists(log),
+            "MG-3 非法声明（magic_id=0）=> ConfigError 且一步都没执行（%r）" % err_m3[:90])
+
+        # MG-4 写后读回不符 => rc=2，且不起栈（不让 probe 去超时）
+        reset_magic_state()
+        prof_m4 = magic_prof(MAGIC_OK)
+        for s in SIDES:
+            prof_m4["sides"][s]["env"] = {"STUB_MAGIC_NOWRITE": s}
+        out_m4 = os.path.join(tmp, "run-magic-readback")
+        s_m4 = execute(base_cfg(out_m4, prof_m4, scenario=scen_unblocked))
+        err_m4 = (s_m4["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_m4["exit_code"] == 2 and "读回不符" in err_m4,
+            "MG-4 读回不符 => rc=2 并点名（%r）" % err_m4[:110])
+        chk("stack" not in [c["step"] for c in s_m4["commands"]],
+            "MG-4 预置失败 => 不起栈、不跑场景（%s）"
+            % [c["step"] for c in s_m4["commands"]][:10])
+
+        # MG-5 角色不存在 => rc=2 并点名
+        reset_magic_state()
+        prof_m5 = magic_prof(MAGIC_OK)
+        for s in SIDES:
+            prof_m5["sides"][s]["env"] = {"STUB_MAGIC_CHAR_COUNT": "0"}
+        s_m5 = execute(base_cfg(os.path.join(tmp, "run-magic-nochar"), prof_m5,
+                                scenario=scen_unblocked))
+        err_m5 = (s_m5["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_m5["exit_code"] == 2 and "角色不存在" in err_m5,
+            "MG-5 角色不存在 => rc=2 并点名（%r）" % err_m5[:110])
+
+        # MG-6 --dry-run：只预览、不连库（没有 magic.character 等 DB 步骤）
+        reset_magic_state()
+        s_m6 = execute(base_cfg(os.path.join(tmp, "run-magic-dry"),
+                                magic_prof(MAGIC_OK), scenario=scen_unblocked,
+                                dry_run=True))
+        mprev = ((s_m6.get("magic") or {}).get("sides") or {}).get("csharp") or {}
+        chk(s_m6["exit_code"] == 0 and mprev.get("offline_check")
+            and not [c for c in s_m6["commands"] if c["step"].startswith("magic.")],
+            "MG-6 --dry-run 只预览魔法夹具、不连库（steps=%s）"
+            % [c["step"] for c in s_m6["commands"]][:10])
+
+        # MG-7 sides.<side>.magic 覆盖：顶层 magic=1 + sides.csharp.magic=2
+        #     => csharp 声明/写入 MagicId=2，rust 保持顶层 MagicId=1。
+        reset_magic_state()
+        OVERRIDE = [{"magic_id": 2, "level": 1, "use_key": "2", "curr_train": 3}]
+        prof_m7 = magic_prof(MAGIC_OK)
+        prof_m7["sides"]["csharp"]["magic"] = OVERRIDE
+        for s in SIDES:
+            prof_m7["sides"][s]["env"] = {"STUB_MAGIC_INIT": MAGIC_PRE}
+        out_m7 = os.path.join(tmp, "run-magic-override")
+        s_m7 = execute(base_cfg(out_m7, prof_m7, scenario=scen_unblocked))
+        cs_m7 = (s_m7["sides"].get("csharp") or {}).get("magic") or {}
+        rs_m7 = (s_m7["sides"].get("rust") or {}).get("magic") or {}
+        chk(s_m7["exit_code"] == 0
+            and [m.get("magic_id") for m in (cs_m7.get("declared") or [])] == [2]
+            and [m.get("magic_id") for m in (rs_m7.get("declared") or [])] == [1],
+            "MG-7 sides.csharp.magic 覆盖顶层 => declared 两侧不同（csharp=%r rust=%r，rc=%s）"
+            % ([m.get("magic_id") for m in (cs_m7.get("declared") or [])],
+               [m.get("magic_id") for m in (rs_m7.get("declared") or [])],
+               s_m7["exit_code"]))
+        chk(cs_m7.get("action") == "written"
+            and "VALUES (6228, 2," in ((cs_m7.get("sql") or {}).get("write") or "")
+            and rs_m7.get("action") == "noop"
+            and (rs_m7.get("sql") or {}).get("write") is None,
+            "MG-7 写入按侧分派：csharp 写 MagicId=2、rust 不写（cs=%r rs=%r）"
+            % (cs_m7.get("action"), rs_m7.get("action")))
+        # 断言强度（卡 openmir2-magic-fixture-assertion-strength）：只钉 VALUES 抓不到
+        # 「写错表/写错列」——必须钉住目标表与完整列清单（与 characters_magic DDL 一致）。
+        write_stmt_m7 = ((cs_m7.get("sql") or {}).get("write") or "")
+        chk(re.search(
+                r"INSERT INTO `[^`]+`\.`characters_magic` \(`PlayerId`, `MagicId`, "
+                r"`Level`, `UseKey`, `CurrTrain`\) VALUES \(6228, 2, 1, '2', 3\);",
+                write_stmt_m7) is not None,
+            "MG-7 写入语句钉到表名+列清单：INSERT INTO …`characters_magic`"
+            "(PlayerId, MagicId, Level, UseKey, CurrTrain)（实际 %r）" % write_stmt_m7)
+        cs_after_m7 = (cs_m7.get("after") or [{}])[0]
+        rs_after_m7 = (rs_m7.get("after") or [{}])[0]
+        chk(cs_after_m7.get("magic_id") == 2
+            and (cs_after_m7.get("found") or {}).get("level") == 1
+            and rs_after_m7.get("magic_id") == 1
+            and (rs_after_m7.get("found") or {}).get("level") == 0,
+            "MG-7 读回：csharp=MagicId2/level1、rust=MagicId1/level0（%r / %r）"
+            % (cs_after_m7, rs_after_m7))
+        chk("magic-columns csharp" in read_log() and "magic-columns rust" in read_log(),
+            "MG-7 两侧 SHOW COLUMNS 都走 magic 桩（日志 magic-columns 标记）")
 
     finally:
         holder.close()
@@ -4089,7 +5079,10 @@ def build_parser():
         description="窗口批处理：restore -> 起 C# 栈 -> probe -> 停栈 -> 起 Rust -> probe -> "
                     "停栈 -> compare -> 归档（语义同 run_dual.sh，run_dual.sh 不改）。")
     ap.add_argument("--card", help="卡片 id（--post-comment 时必填；写入 README/摘要）")
-    ap.add_argument("--scenario", help="场景 JSON（tools/probe/scenarios/*.json）")
+    ap.add_argument("--scenario",
+                    help="场景 JSON（tools/probe/scenarios/*.json）。场景顶层 `blocked`"
+                         "（{reason, [missing_fixture]}）=> 本工具 rc=2 且不建 out/不起栈/不写 report："
+                         "封存场景不得被窗口批次消费")
     ap.add_argument("--out", help="产物目录（真跑必填；--dry-run 可省）")
     ap.add_argument("--profile", default="alt",
                     help="profile：alt（默认）| csharp-default | <profile.json 路径>")

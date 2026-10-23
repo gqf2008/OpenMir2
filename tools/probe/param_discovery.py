@@ -140,6 +140,9 @@ COMPUTED_ORACLES = {
 
 #: `computed` 声明允许且必需的字段（多/少都算场景坏掉，避免拼错静默失效）。
 COMPUTED_DECL_FIELDS = ("derived_from", "delta")
+#: `pack` 形式（打包表达式）：`{"pack": {"lo": <var>, "hi": <var>}}` ⇒ 值 = `(hi<<16)|lo`
+#: （oracle `recog = (Y<<16)|X`，`WorldServer.cs:831-851`）。lo/hi 可以引用**其它 computed 变量**。
+COMPUTED_PACK_FIELDS = ("lo", "hi")
 
 #: `npc_actor` 的退化规则：**规则（部署假设）而非推导**。点错 actor ⇒ 后续步骤响亮超时。
 RULES_FALLBACK = {
@@ -306,6 +309,24 @@ def validate_computed(computed, required, where="computed"):
         if not isinstance(decl, dict):
             raise DiscoveryError("%s: scenario.computed.%s must be an object, got %r"
                                  % (where, var, decl))
+        if "pack" in decl:
+            unknown = sorted(set(decl) - {"pack"})
+            if unknown:
+                raise DiscoveryError("%s: scenario.computed.%s has unknown key(s) %s (fail-closed)"
+                                     % (where, var, unknown))
+            pack = decl["pack"]
+            if not isinstance(pack, dict) or set(pack) != set(COMPUTED_PACK_FIELDS):
+                raise DiscoveryError(
+                    "%s: scenario.computed.%s.pack must be an object with exactly %s, got %r"
+                    % (where, var, list(COMPUTED_PACK_FIELDS), pack))
+            for k in COMPUTED_PACK_FIELDS:
+                v = pack[k]
+                if not isinstance(v, str) or not v:
+                    raise DiscoveryError(
+                        "%s: scenario.computed.%s.pack.%s must be a non-empty variable name, got %r"
+                        % (where, var, k, v))
+            out[var] = {"pack": {"lo": pack["lo"], "hi": pack["hi"]}}
+            continue
         missing = [k for k in COMPUTED_DECL_FIELDS if k not in decl]
         unknown = sorted(set(decl) - set(COMPUTED_DECL_FIELDS))
         if missing:
@@ -326,6 +347,28 @@ def validate_computed(computed, required, where="computed"):
             raise DiscoveryError("%s: scenario.computed.%s.delta must be an int, got %r"
                                  % (where, var, delta))
         out[var] = {"derived_from": base, "delta": delta}
+
+    def _refs(name):
+        d = out[name]
+        if "pack" in d:
+            return [x for x in (d["pack"]["lo"], d["pack"]["hi"]) if x in out]
+        return []
+
+    state = {}
+
+    def _walk(name, stack):
+        if state.get(name) == 2:
+            return
+        if state.get(name) == 1:
+            raise DiscoveryError("%s: computed 依赖成环：%s"
+                                 % (where, " -> ".join(stack + [name])))
+        state[name] = 1
+        for nxt in _refs(name):
+            _walk(nxt, stack + [name])
+        state[name] = 2
+
+    for name in out:
+        _walk(name, [])
     return out
 
 
@@ -553,27 +596,71 @@ def derive(frames, required, field_map=None, computed=None):
             continue
         entry, _ = base(var)
         entries[var] = entry
-    for var in required:                           # 第二遍：computed（依已推导量）
-        decl = decls.get(var)
-        if decl is None:
-            continue
-        bentry, _ = base(decl["derived_from"])
-        if bentry is None:                         # 基准量推不出 ⇒ 连锁 fail-closed
-            entries[var] = None
-            continue
-        entries[var] = {
-            "value": bentry["value"] + decl["delta"],
-            "kind": "computed",
-            "rule": "%s %+d（场景 computed 声明）" % (decl["derived_from"], decl["delta"]),
-            "oracle": COMPUTED_ORACLES.get(
-                var,
-                "场景 JSON 的 computed 声明 + 已推导量（确定性算术，非猜值）"),
-            "source": {"kind": "computed",
-                       "computed_from": decl["derived_from"],
-                       "delta": decl["delta"],
-                       "base_value": bentry["value"],
-                       "base_source": bentry["source"]},
-        }
+    def resolve(name):
+        """取已算好的值：computed 变量取 `entries`，其它变量走规则推导。"""
+        if name in decls:
+            return entries.get(name)
+        entry, _ = base(name)
+        return entry
+
+    # 第二遍：computed（依已推导量）。`pack` 允许引用其它 computed ⇒ 迭代到不动点
+    # （环已在 `validate_computed` 里 fail-closed）。
+    pending = [v for v in required if v in decls]
+    for _ in range(len(pending) + 1):
+        progressed = False
+        for var in list(pending):
+            decl = decls[var]
+            if "pack" in decl:
+                lo = resolve(decl["pack"]["lo"])
+                hi = resolve(decl["pack"]["hi"])
+                if lo is None or hi is None:
+                    continue                       # 依赖还没就绪（可能是另一个 computed）
+                lv, hv = lo["value"], hi["value"]
+                if (not isinstance(lv, int) or isinstance(lv, bool)
+                        or not isinstance(hv, int) or isinstance(hv, bool)
+                        or not (0 <= lv <= 0xFFFF) or not (0 <= hv <= 0xFFFF)):
+                    entries[var] = None            # 非整型/越界 ⇒ 连锁 fail-closed（不截断、不猜）
+                    pending.remove(var)
+                    progressed = True
+                    continue
+                entries[var] = {
+                    "value": (hv << 16) | lv,
+                    "kind": "computed",
+                    "rule": "(%s<<16)|%s（场景 computed.pack 声明）"
+                            % (decl["pack"]["hi"], decl["pack"]["lo"]),
+                    "oracle": COMPUTED_ORACLES.get(
+                        var,
+                        "场景 JSON 的 computed.pack 声明 + 已推导量（确定性位运算，非猜值）"),
+                    "source": {"kind": "computed",
+                               "pack": dict(decl["pack"]),
+                               "lo_value": lv, "hi_value": hv,
+                               "lo_source": lo["source"], "hi_source": hi["source"]},
+                }
+                pending.remove(var)
+                progressed = True
+                continue
+            bentry = resolve(decl["derived_from"])
+            if bentry is None:                     # 基准量推不出 ⇒ 连锁 fail-closed
+                continue
+            entries[var] = {
+                "value": bentry["value"] + decl["delta"],
+                "kind": "computed",
+                "rule": "%s %+d（场景 computed 声明）" % (decl["derived_from"], decl["delta"]),
+                "oracle": COMPUTED_ORACLES.get(
+                    var,
+                    "场景 JSON 的 computed 声明 + 已推导量（确定性算术，非猜值）"),
+                "source": {"kind": "computed",
+                           "computed_from": decl["derived_from"],
+                           "delta": decl["delta"],
+                           "base_value": bentry["value"],
+                           "base_source": bentry["source"]},
+            }
+            pending.remove(var)
+            progressed = True
+        if not progressed:
+            break
+    for var in pending:                            # 依赖链断 ⇒ missing（不是 error）
+        entries[var] = None
     bag_frame = bag_state.get("frame")
     for var in required:                           # 输出顺序 = required 顺序
         entry = entries.get(var)
@@ -885,10 +972,24 @@ def _quiet_check_all_main(argv):
         return check_all_main(argv)
 
 
+#: selftest 合成场景的占位发帧步。mir2_probe 的 `--check-scenario` 有 R2
+#: （`wait_for` 之前必须已有发帧步），而这些合成件只测「推导/分类」、本来不需要真发帧；
+#: 加一个不引入任何变量的 `CM_HIT(3014)` 占位步既满足 R2，又不影响任何推导口径与分类。
+_SYNTH_SEND = {"send": {"ident": 3014}}
+
+
+def _synth_steps(wait_ident):
+    """合成场景 steps：占位发帧步 + 目标 wait_for（timeout_ms=10；selftest 不真跑）。"""
+    return [dict(_SYNTH_SEND), {"wait_for": wait_ident, "timeout_ms": 10}]
+
+
 def selftest():
     fails = []
 
+    ran = []
+
     def case(name, fn):
+        ran.append(name)
         try:
             fn()
             print("  [ok] %s" % name)
@@ -943,9 +1044,9 @@ def selftest():
         # check-all 接线口径：可推导场景 rc=0；缺变量场景 rc=2 且**由本模块**报 missing:
         rows = _tmp_check_all({
             "ok.json": {"name": "ok_scen", "required": ["self_x"],
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
             "bad.json": {"name": "bad_scen", "required": ["make_index"],
-                         "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                         "steps": _synth_steps(50)},
         })
         assert rows["ok.json"][1] == 0, rows["ok.json"]
         assert rows["ok.json"][3] == CLS_DERIVED, rows["ok.json"]
@@ -957,9 +1058,9 @@ def selftest():
         # 分类诚实：只有 params 默认值的场景（dice_chain 形态）算 params_default，不算发现绿
         rows = _tmp_check_all({
             "diceish.json": {"name": "diceish", "params": {"npc_actor": 119},
-                             "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                             "steps": _synth_steps(50)},
             "plain.json": {"name": "plain",
-                           "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                           "steps": _synth_steps(50)},
         })
         assert rows["diceish.json"][1] == 0 and rows["diceish.json"][3] == CLS_PARAMS_DEFAULT, \
             rows["diceish.json"]
@@ -977,9 +1078,9 @@ def selftest():
         os.makedirs(scen)
         docs = {
             "ok.json": {"name": "ok", "required": ["self_x"],
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
             "miss.json": {"name": "miss", "required": ["make_index"],
-                          "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                          "steps": _synth_steps(50)},
             "broken.json": {"name": "broken", "required": ["self_x"],
                             "steps": [{"no_such_step": 1}]},
         }
@@ -1043,7 +1144,7 @@ def selftest():
         rows = _tmp_check_all({
             "nodelta.json": {"name": "nodelta", "required": ["move_x"],
                              "computed": {"move_x": {"derived_from": "self_x"}},
-                             "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                             "steps": _synth_steps(50)},
         })
         row = rows["nodelta.json"]
         assert row[1] == 2 and row[3] == CLS_ERROR, row
@@ -1059,7 +1160,7 @@ def selftest():
         rows = _tmp_check_all({
             "chain.json": {"name": "chain", "required": ["move_x", "move_y"],
                            "computed": decls,
-                           "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                           "steps": _synth_steps(50)},
         }, frames=frames)
         row = rows["chain.json"]
         assert row[1] == 2 and row[3] == CLS_MISSING, row
@@ -1071,7 +1172,7 @@ def selftest():
         rows = _tmp_check_all({
             "mv.json": {"name": "mv", "required": ["move_x"],
                         "computed": {"move_x": {"derived_from": "self_x", "delta": 1}},
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
         })
         assert rows["mv.json"][1] == 0, rows["mv.json"]
         assert rows["mv.json"][3] == CLS_COMPUTED, rows["mv.json"]
@@ -1107,7 +1208,7 @@ def selftest():
         assert m == ["king_actor"] and not v, (v, m)
         rows = _tmp_check_all({
             "king.json": {"name": "king", "required": ["king_actor"],
-                          "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                          "steps": _synth_steps(643)},
         }, frames=_fixture(merchant_say=True))
         assert rows["king.json"][1] == 0, rows["king.json"]
         assert rows["king.json"][3] == CLS_RULE, rows["king.json"]
@@ -1127,7 +1228,7 @@ def selftest():
         # 这一行会变成 cls=error / detail 以 scenario-error: 开头 ⇒ 下面断言红（reviewer 的变异 M2）。
         rows = _tmp_check_all({
             "only.json": {"name": "only", "required": ["make_index"],
-                          "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                          "steps": _synth_steps(50)},
         })
         row = rows["only.json"]
         assert row[3] == CLS_MISSING, "check_all 没自己拦 missing（cls=%s）" % row[3]
@@ -1143,7 +1244,7 @@ def selftest():
         assert m == ["merchant_actor"] and not v, (v, m)
         rows = _tmp_check_all({
             "merchantish.json": {"name": "merchantish", "required": ["merchant_actor"],
-                                 "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                                 "steps": _synth_steps(643)},
         }, frames=frames)
         assert rows["merchantish.json"][1] == 2, rows["merchantish.json"]
         assert rows["merchantish.json"][3] == CLS_MISSING, rows["merchantish.json"]
@@ -1206,9 +1307,9 @@ def selftest():
             "badjson.json": '{"name": "x", "steps": [\n',
             "array.json": '[1, 2, 3]\n',
             "reqstr.json": '{"name": "x", "required": "npc_actor", '
-                           '"steps": [{"wait_for": 643, "timeout_ms": 10}]}\n',
+                           '"steps": [{"send": {"ident": 3014}}, {"wait_for": 643, "timeout_ms": 10}]}\n',
             "reqint.json": '{"name": "x", "required": [123], '
-                           '"steps": [{"wait_for": 643, "timeout_ms": 10}]}\n',
+                           '"steps": [{"send": {"ident": 3014}}, {"wait_for": 643, "timeout_ms": 10}]}\n',
         }
         for name, text in cases.items():
             with open(os.path.join(scen, name), "w", encoding="utf-8") as fh:
@@ -1228,13 +1329,13 @@ def selftest():
         # 变异：check_all 里一律 cls=CLS_DERIVED ⇒ 本断言红。
         rows = _tmp_check_all({
             "npcish.json": {"name": "npcish", "required": ["npc_actor"],
-                            "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                            "steps": _synth_steps(643)},
         }, frames=_fixture())                        # 无 643 ⇒ npc_actor 走 SM_TURN 规则
         assert rows["npcish.json"][1] == 0, rows["npcish.json"]
         assert rows["npcish.json"][3] == CLS_RULE, rows["npcish.json"]
         rows = _tmp_check_all({                      # 有 643 ⇒ npc_actor 走推导
             "npcish.json": {"name": "npcish", "required": ["npc_actor"],
-                            "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                            "steps": _synth_steps(643)},
         }, frames=_fixture(merchant_say=True))
         assert rows["npcish.json"][3] == CLS_DERIVED, rows["npcish.json"]
 
@@ -1260,7 +1361,7 @@ def selftest():
         rows = _tmp_check_all({
             "mv.json": {"name": "mv", "required": ["move_x"],
                         "computed": {"move_x": {"derived_from": "self_x", "delta": 1}},
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
         })
         row = rows["mv.json"]
         assert row[1] == 0, row
@@ -1389,6 +1490,59 @@ def selftest():
         assert "takeon_where=1" in rows["bag_equip.json"][2], rows["bag_equip.json"]
         assert "make_index=9001" in rows["eat_item.json"][2], rows["eat_item.json"]
 
+    def c26():
+        # **卡 `openmir2-probe-computed-pack`**：`computed.pack` —— 值 = `(hi<<16)|lo`
+        # （oracle `recog=(Y<<16)|X`）；lo/hi 允许引用其它 computed（不动点求解）。
+        frames = _fixture()                     # SM_LOGON recog=191 param=7 tag=12
+        decls = {"move_x": {"derived_from": "self_x", "delta": 1},
+                 "move_y": {"derived_from": "self_y", "delta": 0},
+                 "move_xy": {"pack": {"lo": "move_x", "hi": "move_y"}}}
+        v, m = derive(frames, ["move_x", "move_y", "move_xy"], computed=decls)
+        assert not m, m
+        assert v["move_x"]["value"] == 8 and v["move_y"]["value"] == 12, v
+        assert v["move_xy"]["value"] == ((12 << 16) | 8) == 786440, v["move_xy"]
+        assert v["move_xy"]["kind"] == "computed", v["move_xy"]
+        assert v["move_xy"]["source"]["pack"] == {"lo": "move_x", "hi": "move_y"}, v["move_xy"]
+        # 依赖链断 ⇒ 三个都 missing（不拿 0 顶替、不静默给默认）
+        v2, m2 = derive(_fixture(with_login=False),
+                        ["move_x", "move_y", "move_xy"], computed=decls)
+        assert v2 == {} and m2 == ["move_x", "move_y", "move_xy"], (v2, m2)
+        # 坏声明 ⇒ DiscoveryError（缺 hi / 多键 / 与 delta 混用）
+        for bad in ({"pack": {"lo": "move_x"}},
+                    {"pack": {"lo": "move_x", "hi": "move_y", "x": 1}},
+                    {"pack": {"lo": "move_x", "hi": "move_y"}, "delta": 1}):
+            try:
+                derive(frames, ["move_xy"], computed={"move_xy": bad})
+            except DiscoveryError:
+                pass
+            else:
+                raise AssertionError("坏 pack 声明必须 DiscoveryError：%r" % (bad,))
+        # 环 ⇒ DiscoveryError（不许无限迭代/静默 missing）
+        cyc = {"move_x": {"pack": {"lo": "move_xy", "hi": "move_y"}},
+               "move_y": {"derived_from": "self_y", "delta": 0},
+               "move_xy": {"pack": {"lo": "move_x", "hi": "move_y"}}}
+        try:
+            derive(frames, ["move_x", "move_y", "move_xy"], computed=cyc)
+        except DiscoveryError as ex:
+            assert "成环" in str(ex), ex
+        else:
+            raise AssertionError("computed 依赖成环必须 DiscoveryError")
+
+    def c27():
+        # 接线：**真实** `scenarios/move_walk.json` 的 `computed.pack` 在 SM_LOGON 帧上必须算出
+        # `move_xy=(move_y<<16)|move_x=(12<<16)|8=786440`。牙：对调 lo/hi ⇒ 值变 524300 ⇒ 红；
+        # 删掉 `move_xy` 的 computed ⇒ 该变量 missing ⇒ 红。
+        here = os.path.dirname(os.path.abspath(__file__))
+        path = os.path.join(here, "scenarios", "move_walk.json")
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+        v, m = derive(_fixture(), doc.get("required"), computed=doc.get("computed"))
+        assert not m, m
+        assert v["move_xy"]["value"] == 786440, v["move_xy"]
+        assert v["move_xy"]["source"]["pack"] == {"lo": "move_x", "hi": "move_y"}, v["move_xy"]
+        assert render_vars(v) == ["--var", "move_x=8", "--var", "move_xy=786440",
+                                  "--var", "move_y=12"], render_vars(v)
+
     case("① 643+自身 ⇒ 值与来源正确（含 --var 渲染）", c1)
     case("② 缺 NPC ⇒ fail-closed", c2)
     case("③ 缺自身坐标 ⇒ fail-closed", c3)
@@ -1414,6 +1568,8 @@ def selftest():
     case("㉓ 坏 201 包体（长度/series/EDCode）⇒ DiscoveryError + check-all rc=2", c23)
     case("㉔ 接线：bag_equip/eat_item 在合成 201 上 rc=0 且 cls=derived", c24)
     case("㉕ eat 优先级：StdMode31/AniCount!=0 的 QFunction 包先于药/书", c25)
+    case("㉖ computed.pack：值=(hi<<16)|lo；依赖断/坏声明/环都有判据", c26)
+    case("㉗ 接线：真实 move_walk.json 的 pack 算出 move_xy=786440", c27)
     def tooth9():
         # 牙⑨：把 make_index 取到**别的字段**（StdMode；线上没有 StdItem.Index，最接近的混淆字段）
         # ⇒ 值得 5/10 而不是 123456/111 ⇒ 红。变异：BAG_VARS["make_index"]["field"] 改成 std_mode
@@ -1488,7 +1644,7 @@ def selftest():
         for item in fails:
             print("  -", item)
         return 1
-    print("param_discovery selftest: OK (25 cases + 11 teeth)")
+    print("param_discovery selftest: OK (%d cases + 11 teeth)" % len(ran))
     return 0
 
 
