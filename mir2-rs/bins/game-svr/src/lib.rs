@@ -58485,6 +58485,285 @@ mod tests {",
         // 累计：只有 ① 那一帧。
         assert_eq!(collect_raw(&mut rx0).len(), 1, "全程只应出一条 SM_WALK");
     }
+    // =========================================================================================
+    // T-203：`SM_QUERYYBDEAL(23023)` / `SM_QUERYYBSELL(23021)` —— 可达性钉（**不可达登记**）
+    //
+    // 结论（证据见 `mir2-rs/tests/parity/whitelist.md` 的 T-203 行）：两帧在生产内容里
+    // **不可达**。根因是首门 `SaleDeal`（`ExecutionProcessingSys.cs:2346`，全树唯一写点）
+    // 的上游脚本动作 `OPENYBDEAL`(342) 在部署 `Envir` 里 **0 处**，而 `QUERYYBSELL`(343) /
+    // `QUERYYBDEAL`(344) 也是 **0 处**。
+    // =========================================================================================
+
+    /// **T-203 ①「构造该路径 ⇒ 宿主仍零帧」**：把 oracle 发射链的**状态门全开**
+    /// （`SaleDeal = true` + 寄售列表里有本人 `Flag = 0` 的条目），再走**生产入口**
+    /// `CM_MERCHANTDLGSELECT` 执行脚本动作 `QUERYYBSELL`(343) / `QUERYYBDEAL`(344)。
+    ///
+    /// 断言两件事：
+    /// 1. 门②的独立复证：`SellOffInTime(0)`（`PlayObject.Sale.cs:475-514`）此刻为真
+    ///    —— 证明**不是状态门**在挡；
+    /// 2. 宿主仍**零** `23021`/`23023` 帧 —— 缺口是「生产者未实现」：`crates/script` 既无
+    ///    `ActionOfQuerySaleSell` / `ActionOfQueryTrustDeal` 的 handler（落
+    ///    `EngineError::NotImplemented`），也无 `ClientDealOffInfo` 编码器。
+    ///
+    /// **牙**：一旦有人把生产者落地（handler + `ClientDealOffInfo` + `pickwire` 映射），
+    /// 本用例在 `SaleDeal = true` 下必红 ⇒ 强制回来复核并改写 T-203 的可达性结论。
+    #[test]
+    fn t203_queryyb_gate_open_still_zero_frames() {
+        use game_svr::selloff::{sell_off_in_time, DealOffInfo, SellOffSide, SellOffState};
+
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            r"查询寄售\ ",
+            vec![t142_act(343, "", 0, ""), t142_act(344, "", 0, "")],
+        )]);
+
+        // 门①：宿主会话 `SaleDeal = true`（oracle `PlayObject.cs:856`）。
+        rig.sell_off_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .sale_deal = true;
+        // 寄售列表：本人 `Flag = 0`（卖侧命中条件 `PlayObject.Sale.cs:488`）。
+        let mut entry = DealOffInfo::new_with_slots();
+        entry.deal_chr_name = "hero".to_string();
+        entry.flag = 0;
+        rig.sell_off_book.entries.push(entry);
+
+        // 门②独立复证：此刻 `SellOffInTime(0)` 必须为真。
+        {
+            let mut items = Vec::new();
+            let mut gold = 0_i32;
+            let mut game_gold = 0_i32;
+            let mut state = SellOffState {
+                sale_deal: true,
+                ..Default::default()
+            };
+            let side = SellOffSide {
+                id: 1,
+                name: "hero".to_string(),
+                offline: false,
+                items: &mut items,
+                gold: &mut gold,
+                game_gold: &mut game_gold,
+                game_point: 0,
+                weight: 0,
+                wear_weight: 0,
+                hand_weight: 0,
+                max_weight: 0,
+                send_game_gold_info: true,
+                state: &mut state,
+            };
+            assert!(
+                sell_off_in_time(&side, &rig.sell_off_book, 0),
+                "门②：寄售人 + Flag=0 必须命中（`PlayObject.Sale.cs:488`）"
+            );
+        }
+
+        rig.dlg_select("@main");
+        let frames = rig.drain();
+        assert!(
+            !frames
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_QUERYYBSELL),
+            "门全开时宿主仍零 SM_QUERYYBSELL —— 缺口是「生产者未实现」（T-203）"
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_QUERYYBDEAL),
+            "门全开时宿主仍零 SM_QUERYYBDEAL —— 同上"
+        );
+    }
+
+    /// **T-203 ②「正常路径 ⇒ 零帧」反例**：部署内容下 `SaleDeal` 恒 `false`（`OPENYBDEAL`
+    /// 在四个部署 `Envir` 树里各 **0 处**，唯一写点 `ExecutionProcessingSys.cs:2346` 的
+    /// 上游动作永不执行）⇒ 两个查询动作的**首门即落空**。
+    ///
+    /// oracle 在这条路上的实际输出是 `RM_MENU_OK("您未开通寄售服务,请先开通!!!")`
+    /// （`ExecutionProcessingSys.cs:2465-2467`）/ `GotoLable(@AskYBSellFail)`
+    /// （`:2445-2448`）——这两个下行在本仓同样未接（T-145 ④ / T-203），故本用例只钉
+    /// 「零元宝帧」这一条最硬的契约。
+    ///
+    /// **牙**：生产者若把 `SaleDeal` 门删掉（`false` 仍发帧）⇒ 本用例必红。
+    #[test]
+    fn t203_queryyb_normal_path_sale_deal_false_zero_frames() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            r"查询寄售\ ",
+            vec![t142_act(343, "", 0, ""), t142_act(344, "", 0, "")],
+        )]);
+
+        assert!(
+            !rig.sell_off_sessions
+                .get("hero")
+                .is_some_and(|s| s.sale_deal),
+            "未 OPENYBDEAL ⇒ SaleDeal 默认 false（`PlayObject.cs:856` 未初始化自动属性）"
+        );
+
+        rig.dlg_select("@main");
+        let frames = rig.drain();
+        assert!(
+            !frames
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_QUERYYBSELL),
+            "SaleDeal=false ⇒ 零 SM_QUERYYBSELL（`ExecutionProcessingSys.cs:2368` 首门落空）"
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_QUERYYBDEAL),
+            "SaleDeal=false ⇒ 零 SM_QUERYYBDEAL（`:2473` 首门落空）"
+        );
+    }
+
+    /// **T-203 ③ 登记门（「不可达登记被误改 ⇒ 门红」）**：把「两帧在部署内容里不可达」的
+    /// **全部前提**钉到 oracle 源码锚点 + 本仓生产者缺口 + 登记文本三处。
+    ///
+    /// 任何一处漂移都必红：
+    /// - oracle 行号漂移（发射点 / 接收支 / `SaleDeal` 声明或写点）⇒ 重新推导可达性；
+    /// - **`SaleDeal` 出现第二个写点**（例如新增 DB 载入或 CM 路径）⇒ 生产可能可达，
+    ///   T-203 的结论必须重写；
+    /// - `crates/script` 出现 `QUERYYB*` handler（生产者落地）⇒ 改判「已接线」；
+    /// - `whitelist.md` 的 T-203 行被删 / 改写掉关键结论 ⇒ 登记失效。
+    #[test]
+    fn t203_queryyb_unreachable_registration_guard() {
+        fn repo() -> std::path::PathBuf {
+            std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..")
+                .join("..")
+                .join("..")
+        }
+
+        fn read(rel: &str) -> String {
+            let p = repo().join(rel);
+            std::fs::read_to_string(&p).unwrap_or_else(|e| panic!("读 {} 失败: {e}", p.display()))
+        }
+
+        /// 取第 `n` 行（1 基）并去首尾空白。
+        fn at(src: &str, n: usize) -> String {
+            src.lines()
+                .nth(n - 1)
+                .unwrap_or_else(|| panic!("第 {n} 行不存在"))
+                .trim()
+                .to_string()
+        }
+
+        // ---- ① oracle 发射点与门（`ExecutionProcessingSys.cs`）----
+        let eps = read("src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs");
+        assert!(
+            at(&eps, 2368).contains("playerActor.SaleDeal"),
+            "卖侧首门 `ActionOfQuerySaleSell`（`:2363`）必须在 `:2368` 读 SaleDeal"
+        );
+        assert!(
+            at(&eps, 2443).contains("Messages.RM_QUERYYBSELL"),
+            "`SM_QUERYYBSELL` 的唯一发射点必须仍在 `:2443`"
+        );
+        assert!(
+            at(&eps, 2473).contains("playerActor.SaleDeal"),
+            "买侧首门 `ActionOfQueryTrustDeal`（`:2468`）必须在 `:2473` 读 SaleDeal"
+        );
+        assert!(
+            at(&eps, 2550).contains("Messages.RM_QUERYYBDEAL"),
+            "`SM_QUERYYBDEAL` 的唯一发射点必须仍在 `:2550`"
+        );
+        assert!(
+            at(&eps, 2346)
+                .split_whitespace()
+                .collect::<String>()
+                .contains("playerActor.SaleDeal=true"),
+            "`SaleDeal` 唯一写点必须仍是 `OPENYBDEAL`（`ActionOfOpenSaleDeal` `:2329`）的 `:2346`"
+        );
+
+        // ---- ② oracle 接收支（`PlayObject.Message.cs`：尾 = `processMsg.Msg` 原样）----
+        let msg = read("src/M2Server/Player/PlayObject.Message.cs");
+        assert!(
+            at(&msg, 2050).contains("Messages.SM_QUERYYBSELL"),
+            "`RM_QUERYYBSELL` 接收支必须仍在 `:2049-2051`"
+        );
+        assert!(
+            at(&msg, 2054).contains("Messages.SM_QUERYYBDEAL"),
+            "`RM_QUERYYBDEAL` 接收支必须仍在 `:2053-2055`"
+        );
+
+        // ---- ③ `SaleDeal` 是未持久化的自动属性（不落库 ⇒ 每次登录归零）----
+        let po = read("src/M2Server/Player/PlayObject.cs");
+        assert_eq!(
+            at(&po, 856),
+            "public bool SaleDeal { get; set; }",
+            "`SaleDeal` 必须是 `PlayObject.cs:856` 的自动属性（无 DB 绑定）"
+        );
+
+        // ---- ④ 全树唯一写点（多出即生产可能可达 ⇒ 复核 T-203）----
+        fn walk(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+            for e in std::fs::read_dir(dir).expect("read_dir src") {
+                let p = e.expect("dir entry").path();
+                if p.is_dir() {
+                    walk(&p, out);
+                } else if p.extension().and_then(|s| s.to_str()) == Some("cs") {
+                    out.push(p);
+                }
+            }
+        }
+        let mut files = Vec::new();
+        walk(&repo().join("src"), &mut files);
+        let mut writes = Vec::new();
+        for f in &files {
+            let text = std::fs::read_to_string(f).unwrap_or_default();
+            for (i, l) in text.lines().enumerate() {
+                let code = match l.find("//") {
+                    Some(p) => &l[..p],
+                    None => l,
+                };
+                if code
+                    .split_whitespace()
+                    .collect::<String>()
+                    .contains(".SaleDeal=true")
+                {
+                    writes.push((f.clone(), i + 1));
+                }
+            }
+        }
+        assert_eq!(
+            writes.len(),
+            1,
+            "`SaleDeal` 写点必须恰好 1 处（多出即生产可能可达，T-203 结论须重写）: {writes:?}"
+        );
+        assert!(
+            writes[0].0.ends_with("ExecutionProcessingSys.cs") && writes[0].1 == 2346,
+            "唯一写点必须是 `ExecutionProcessingSys.cs:2346`: {:?}",
+            writes[0]
+        );
+
+        // ---- ⑤ 本仓生产者缺口仍在（落地即改判「已接线」）----
+        let actions = read("mir2-rs/crates/script/src/engine/actions.rs");
+        assert!(
+            !actions.contains("QueryYbSell") && !actions.contains("QueryYbDeal"),
+            "`crates/script` 已出现 QUERYYB handler ⇒ 生产者落地，T-203 须改判并补接线"
+        );
+        let dispatch = read("mir2-rs/crates/script/src/engine/dispatch.rs");
+        assert!(
+            !dispatch.contains("ActionOfQuerySaleSell")
+                && !dispatch.contains("ActionOfQueryTrustDeal"),
+            "`IMPLEMENTED_EXECUTIONS` 已列出 QUERYYB 处理器 ⇒ 同上"
+        );
+
+        // ---- ⑥ 登记文本本身 ----
+        let wl = read("mir2-rs/tests/parity/whitelist.md");
+        let row = wl
+            .lines()
+            .find(|l| l.starts_with("| T-203 |"))
+            .expect("`whitelist.md` 必须有 T-203 登记行");
+        for marker in [
+            "QUERYYBSELL",
+            "QUERYYBDEAL",
+            "SaleDeal",
+            "生产内容「不可达」",
+        ] {
+            assert!(
+                row.contains(marker),
+                "T-203 登记行必须保留关键结论标记 `{marker}`（被误改即登记失效）"
+            );
+        }
+    }
 }
 
 /// **C9 `castle_spawn_startup_order_before_merchant`**（L 子项）：启动插入点的**源码序门**。
