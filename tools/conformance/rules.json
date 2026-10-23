@@ -367,6 +367,27 @@
       "tier": "L",
       "reason": "SM_DELITEMS 是真实协议帧（src/OpenMir2/Messages.cs:357）。下行 `SendDelItemList`（src/M2Server/Player/PlayObject.Base.cs:1637-1646）：`MakeMessage(SM_DELITEMS, 0, 0, 0, itemList.Count)` + `SendSocket(ClientMsg, EDCode.EncodeString(s10))`，s10 = 逐项 `ItemName + '/' + MakeIndex + '/'`（`:1640-1643`）；触发 `RM_SENDDELITEMLIST`（`PlayObject.Message.cs:1870-1873`，如 `Merchant.UpgradeWapon` 吃黑铁/首饰）。⇒ **Recog=Param=Tag=0（常量）、Series=条目数、body=逐项「名称/MakeIndex/」文本**。**本规则不加任何掩码、逐字节比**：名称串与条数是语义判据；MakeIndex 在这里是**被删物品的身份**（来自 DB 持久值，两侧同基线一致）⇒ 照比；若运行期新建物品进入删除列表导致 MakeIndex 差异，本规则会红——这是有意的 fail-closed（不放宽、不整帧 ignore）。卡 `openmir2-conformance-rules-updateitem-durachg`（`upgrade_retrieve` 的成功硬门 709）。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-66)"
+    },
+    {
+      "ident": 53,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_HEALTHSPELLCHANGED(53)（src/OpenMir2/Messages.cs:211）是真协议帧。oracle 下行链：BaseObject.HealthSpellChanged()（src/M2Server/Actor/BaseObject.cs:700-709）对 Race==Play 先 SendUpdateMsg(RM_HEALTHSPELLCHANGED,0,0,0,0,\"\") 发自己（ShowHp 时再 SendRefMsg 广播给视野内玩家）→ 收件人 PlayObject.Message.cs:1736-1739 `MakeMessage(SM_HEALTHSPELLCHANGED, processMsg.ActorId, WAbil.HP, WAbil.MP, WAbil.MaxHP)` + `SendSocket(ClientMsg)`（无尾；PlayObject.Socket.cs:77-96 的 PackLength=CommandMessage.Size=12）。**字段口径（全部逐字节保留）**：ident=53；**param=HP(u16)、tag=MP(u16)、series=MaxHP(u16)** 是确定性状态值，逐字节比；recog=发送者 ActorId（会话作用域：C# HUtil32.Sequence() 随机正数 vs Rust EcsStore::alloc_id 自增）⇒ 由全局 recog 掩码处理，本规则不取回。**body 没有多次 EDCode 拼接**：oracle=`SendSocket(ClientMsg)` 无 body（0B）。Rust 侧 smframe::sm_healthspellchanged（smframe.rs:262-266）是 oracle header-only 布局；生产默认 sm_healthspellchanged_frame（:340-346）走 D-9 冻结客户端布局（尾 = EDCode(12B TCharDesc{HP:i32,MP:i32,MaxHP:i32}) = **线缆 16 字符**，见 :325-337）。**对拍前提（D-9 强制口径，mir2-rs/tests/parity/whitelist.md:32）**：跨侧逐字节对拍必须显式 pin `MIR2_CLIENT_ABILITY_LAYOUT=0`；未 pin 时两侧 body 0B vs 16B ⇒ 本规则按 body_len 差异 **fail-closed**（不会静默通过，也不会被掩码洗绿）。本规则不放宽任何字段（HP/MP/MaxHP 照比）；spell_cast 的真机窗口本身仍是 R 级判据。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-58)"
+    },
+    {
+      "ident": 638,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_MAGICFIRE(638)（src/OpenMir2/Messages.cs:300）是真协议帧。oracle 发点：MagicManager.DoSpell 共享尾（src/M2Server/Magic/MagicManager.cs:648-658）`SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType, Effect), MakeLong(nTargetX,nTargetY), targetActorId /*无目标=0*/, \"\")`；收件人 PlayObject.Message.cs:1788-1793：`MakeMessage(SM_MAGICFIRE, processMsg.ActorId, LoWord(nParam2), HiWord(nParam2), nParam1)` + 尾 `EDCode.EncodeBuffer(BitConverter.GetBytes(processMsg.nParam3), 4)`。**字段口径**：ident=638；**param=nTargetX、tag=nTargetY（各 u16）逐字节**；**series=MakeWord(EffectType, Effect) 逐字节**；recog=施法者 ActorId（会话作用域）⇒ 全局掩码，不取回。**body = 单次 EDCode 编码的 4B LE targetActorId**（EncryptUtil.Encode：4B ⇒ 线缆 6 字符，**覆盖全部 4 字节，不是「低 3 字节」**；Rust 侧 smframe.rs:795-811 `sm_magicfire` 与金标准用例 spell_and_magicfire_field_layout（:3470-3496）用 `sm_magicfire(9,0x1112,0x1314,5,6,0x21)` 的 `Encode(4B LE)` 钉住），**没有多次拼接**。**可比性边界**：本场景 spell_cast（tools/probe/scenarios/spell_cast.json）两发 CM_SPELL 的 param=series=0 ⇒ target ActorId=0（oracle `ActorMgr.Get(0)==null`；Rust `cetin_near_xy` 的 `cell_obj_id>0` 门）⇒ 两侧 body 都是 0 的 4B 编码 `6464686b643f`，**逐字节可比，本规则故意不掩 body**（保住 target=0 路径的编码正确性判据，风格同 654/657「先 compare，出现差异再评审窄掩码」）。**若将来出现 target≠0 的场景**：target ActorId 跨栈不可比（同 recog 口径），届时须在评审中新增窄的 `mask_body_ranges: [[0,6]]`（或 decode-aware 判定），**不得整帧 ignore**。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-58)"
+    },
+    {
+      "ident": 639,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_MAGICFIRE_FAIL(639)（src/OpenMir2/Messages.cs:301）是真协议帧。oracle 发点：ClientSpellXY 的 default 支在 MagicManager.DoSpell 返回 false（含距离门 MagicManager.cs:155-157）时 `SendRefMsg(RM_MAGICFIREFAIL, 0, 0, 0, 0, \"\")`（src/M2Server/Player/PlayObject.Attack.cs:1278-1281）；收件人 PlayObject.Message.cs:1794-1796 `SendDefMessage(SM_MAGICFIRE_FAIL, processMsg.ActorId, 0, 0, 0)` ⇒ PlayObject.Socket.cs:17-26 的 5 参 SendDefMessage = MakeMessage + `SendSocket(ClientMsg)`（无尾）。**字段口径**：ident=639；**param=tag=series=0 逐字节**；recog=施法者 ActorId（会话作用域）⇒ 全局掩码，不取回；**body 为空（header-only，0B）**，无 EDCode 尾、无拼接。Rust 同形：smframe_ext.rs:297-302 `sm_magicfire_fail(actor_id)`（金标准 header_only_frames_self_computed_golden 钉 12B 头：`c80000007f02000000000000`）。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-58)"
     }
   ],
   "db": {
