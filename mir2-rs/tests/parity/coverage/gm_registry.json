@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "7d59995a8f88bbc7763e94b774d0b75cf3dbdfce7dc87613ebde5f437bce9795"
+   "sha256": "f225a534f87d18eb0cae713a560b6b72e2b58f6f182893715d41742b8a9b7622"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -2198,6 +2198,14 @@
    "third_state": false
   },
   {
+   "cmd": "开始提问",
+   "file": "QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt",
+   "line": 40,
+   "label": "@假人到指定地图a",
+   "rust_imp": "StartQuest",
+   "third_state": false
+  },
+  {
    "cmd": "禁言",
    "file": "QuestDiary/游戏登陆/登陆脚本.txt",
    "line": 16,
@@ -3688,38 +3696,6 @@
    "field_line": 296
   },
   {
-   "cmd": "开始提问",
-   "cmd_name": "开始提问",
-   "child_card": "openmir2-gm-impl-startquest",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/StartQuestCommand.cs:6",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].StartQuest",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（1 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt",
-     "line": 40,
-     "label": "@假人到指定地图a",
-     "section": "act",
-     "script_arg": "开始提问",
-     "raw": "GMEXECUTE 开始提问 @假人指哪打哪",
-     "label_path": "QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@假人到指定地图a <- QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@假人到指定地图 <- QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@下一页 <- QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@假人设置页面 <- Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt:@main <- engine GotoLable root",
-     "load_origin": "#CALL MapQuest_def/QManage.txt:21"
-    }
-   ],
-   "handler_class": "StartQuestCommand",
-   "attr_name": "StartQuest",
-   "handler_exec_line": 10,
-   "name_source": "conf[Command].StartQuest",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "StartQuest",
-   "field_line": 320
-  },
-  {
    "cmd": "开始攻城",
    "cmd_name": "开始攻城",
    "child_card": null,
@@ -4271,20 +4247,20 @@
   }
  ],
  "summary": {
-  "total": 86,
+  "total": 85,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 6
+   "script-reachable": 5
   },
   "reachable": 0,
-  "script_reachable": 6,
+  "script_reachable": 5,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 99,
-   "Unimplemented": 86
+   "Implemented": 100,
+   "Unimplemented": 85
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4310,7 +4286,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 78,
+  "complete_implemented": 79,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
