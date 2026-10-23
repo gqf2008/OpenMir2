@@ -250,6 +250,22 @@ sha256（提交后的树）：见 §9 与 patch 条目（T1~T5 每次改坏后�
   `messages.rs`/`rules.json` 里存在；③ 攻击场景必须「先 send 后 wait」；④ `params.self_pos == (placement.y<<16)|placement.x`
   （或干脆从 `placement` 自动派生 `self_pos`，不改 DSL 语义）。落地后再补这几条牙。
 
+### 5.4 对账更新（2026-10-23，`openmir2-probe-scenario-validation-gaps` 三轮复审后）
+
+工具缺口卡交付 R1–R6 落地后，§5 三条「未达成」判据的现状：
+
+| # | 现状 | 说明 |
+|---|---|---|
+| T4 | **已覆盖** | 该卡 **R3**：`wait_for` 的 ident 必须存在于 `crates/protocol/src/messages.rs` 的 `CM_*`/`SM_*` ⇒ `4095` rc=2 并点名。 |
+| T5 | **已覆盖** | 该卡 **R5**：声明了 `placement` 时，`self_pos`（`MakeLong(X,Y)=(Y<<16)|X`）与 `self_x`/`self_y` 必须与 `placement.x/y` 一致 ⇒ `placement.y=233` 而 `self_pos` 不动 rc=2。 |
+| T3 | **仍未覆盖（本判据不达成）** | 该卡 **R2** 只保证「`wait_for` 之前**存在过**发帧步」。删掉攻击步 `CM_HIT(3014)`、保留 `CM_TURN(3010)` ⇒ **rc=0**；只有把**全部** send 删掉才 rc=2。 |
+
+**T3 的归属与残留**：要判「删掉攻击步」需要 **producer→consumer 映射**（例如「等 `SM_STRUCK(31)` 就要求
+前面有攻击族 `CM_*`」）。这在本仓库是**猜出来的因果**，会造出假红 —— `SM_STRUCK(31)` 也可由**挨打**产生
+（本卡 §7.0 的守卫一箭即 `recog=self` 的 31）。因此工具缺口卡**显式**把它登记为残留 **`R2-producer-map`**，
+并建议另开卡（必须按 ident 族逐条证明「该帧只能由该命令产生」，否则不得实现）。
+**在该卡/后续卡把它做成真的之前，T3 一律不得写成 PASS。**
+
 ---
 
 ## 6. 夹具矩阵：为什么现在打不出命中（F1 的「缺什么」）
@@ -432,7 +448,7 @@ nDamage = max(0, nPower - nArmor)
 | `python -I -B tools/probe/mir2_probe.py --selftest` | **0**（8 checks OK） |
 | `python -I -B tools/conformance/card_window.py --card openmir2-scenario-combat-strike --scenario tools/probe/scenarios/combat_strike.json --profile alt --dry-run` | **0**（两侧 `map=4 x=256 y=232` 图 500x500 可走） |
 | T1（删 wait_for） / T2（越界 placement） | **2 / 2**（改坏必红） |
-| T3（删攻击步）/ T4（`wait_for=4095`）/ T5（`placement.y=233` 但 `self_pos` 不动） | **0 / 0 / 0+0 —— 未达成，工具缺口（F2），已转 `openmir2-probe-scenario-validation-gaps`** |
+| T3（删攻击步）/ T4（`wait_for=4095`）/ T5（`placement.y=233` 但 `self_pos` 不动） | **0 / 0 / 0+0 —— 未达成，工具缺口（F2），已转 `openmir2-probe-scenario-validation-gaps`**（对账见 §5.4：T4/T5 已被该卡 R3/R5 覆盖；T3 仍未覆盖，登记为残留 `R2-producer-map`） |
 
 未跑 `t_reservation_gate.py check`：本卡未动任何 `T-*` 登记。
 
@@ -447,7 +463,9 @@ nDamage = max(0, nPower - nArmor)
 2. **`tools/probe/scenarios/combat_hit.json` 的 recog/param 口径是错的**（§2.1），且只等本方看不到的 14
    ⇒ 双重恒超时。归属卡建议 **`openmir2-window-discovery-rules`**（拥有 `tools/probe/` 写集），本卡不改。
 3. **场景校验工具缺口（三条）** —— 已转 **`openmir2-probe-scenario-validation-gaps`**：
-   T3（删攻击步 rc=0）、T4（`wait_for` 不存在 ident rc=0）、T5（`placement.y` 与 `self_pos` 不同源、两道门仍 rc=0）。
+   T4（`wait_for` 不存在 ident）与 T5（`placement.y` 与 `self_pos` 不同源）**已由该卡 R3/R5 覆盖（rc=2）**；
+   **T3（删掉中间的攻击步）仍未覆盖**（该卡 R2 只保证 wait 之前存在过发帧步）—— 见 §5.4，
+   该卡已登记残留 `R2-producer-map`，建议按 ident 族逐条证明因果关系后再另开卡实现。
 4. **假绿通道（守卫打人会产出 `recog=self` 的 31）** —— 本卡的处置是 §7.0 的 fail-closed 声明；
    根治要 DSL 支持 `wait_for` 按 `recog` 筛选，属 **`openmir2-probe-scenario-validation-gaps`** 同一族。
 5. **夹具缺口**（§6.4，订正后的规格）：需要「`DC_min > 2*AC-1` 且 `HitPoint ≥ SPEED-1`」的角色

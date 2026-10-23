@@ -885,6 +885,17 @@ def _quiet_check_all_main(argv):
         return check_all_main(argv)
 
 
+#: selftest 合成场景的占位发帧步。mir2_probe 的 `--check-scenario` 有 R2
+#: （`wait_for` 之前必须已有发帧步），而这些合成件只测「推导/分类」、本来不需要真发帧；
+#: 加一个不引入任何变量的 `CM_HIT(3014)` 占位步既满足 R2，又不影响任何推导口径与分类。
+_SYNTH_SEND = {"send": {"ident": 3014}}
+
+
+def _synth_steps(wait_ident):
+    """合成场景 steps：占位发帧步 + 目标 wait_for（timeout_ms=10；selftest 不真跑）。"""
+    return [dict(_SYNTH_SEND), {"wait_for": wait_ident, "timeout_ms": 10}]
+
+
 def selftest():
     fails = []
 
@@ -943,9 +954,9 @@ def selftest():
         # check-all 接线口径：可推导场景 rc=0；缺变量场景 rc=2 且**由本模块**报 missing:
         rows = _tmp_check_all({
             "ok.json": {"name": "ok_scen", "required": ["self_x"],
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
             "bad.json": {"name": "bad_scen", "required": ["make_index"],
-                         "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                         "steps": _synth_steps(50)},
         })
         assert rows["ok.json"][1] == 0, rows["ok.json"]
         assert rows["ok.json"][3] == CLS_DERIVED, rows["ok.json"]
@@ -957,9 +968,9 @@ def selftest():
         # 分类诚实：只有 params 默认值的场景（dice_chain 形态）算 params_default，不算发现绿
         rows = _tmp_check_all({
             "diceish.json": {"name": "diceish", "params": {"npc_actor": 119},
-                             "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                             "steps": _synth_steps(50)},
             "plain.json": {"name": "plain",
-                           "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                           "steps": _synth_steps(50)},
         })
         assert rows["diceish.json"][1] == 0 and rows["diceish.json"][3] == CLS_PARAMS_DEFAULT, \
             rows["diceish.json"]
@@ -977,9 +988,9 @@ def selftest():
         os.makedirs(scen)
         docs = {
             "ok.json": {"name": "ok", "required": ["self_x"],
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
             "miss.json": {"name": "miss", "required": ["make_index"],
-                          "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                          "steps": _synth_steps(50)},
             "broken.json": {"name": "broken", "required": ["self_x"],
                             "steps": [{"no_such_step": 1}]},
         }
@@ -1043,7 +1054,7 @@ def selftest():
         rows = _tmp_check_all({
             "nodelta.json": {"name": "nodelta", "required": ["move_x"],
                              "computed": {"move_x": {"derived_from": "self_x"}},
-                             "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                             "steps": _synth_steps(50)},
         })
         row = rows["nodelta.json"]
         assert row[1] == 2 and row[3] == CLS_ERROR, row
@@ -1059,7 +1070,7 @@ def selftest():
         rows = _tmp_check_all({
             "chain.json": {"name": "chain", "required": ["move_x", "move_y"],
                            "computed": decls,
-                           "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                           "steps": _synth_steps(50)},
         }, frames=frames)
         row = rows["chain.json"]
         assert row[1] == 2 and row[3] == CLS_MISSING, row
@@ -1071,7 +1082,7 @@ def selftest():
         rows = _tmp_check_all({
             "mv.json": {"name": "mv", "required": ["move_x"],
                         "computed": {"move_x": {"derived_from": "self_x", "delta": 1}},
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
         })
         assert rows["mv.json"][1] == 0, rows["mv.json"]
         assert rows["mv.json"][3] == CLS_COMPUTED, rows["mv.json"]
@@ -1107,7 +1118,7 @@ def selftest():
         assert m == ["king_actor"] and not v, (v, m)
         rows = _tmp_check_all({
             "king.json": {"name": "king", "required": ["king_actor"],
-                          "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                          "steps": _synth_steps(643)},
         }, frames=_fixture(merchant_say=True))
         assert rows["king.json"][1] == 0, rows["king.json"]
         assert rows["king.json"][3] == CLS_RULE, rows["king.json"]
@@ -1127,7 +1138,7 @@ def selftest():
         # 这一行会变成 cls=error / detail 以 scenario-error: 开头 ⇒ 下面断言红（reviewer 的变异 M2）。
         rows = _tmp_check_all({
             "only.json": {"name": "only", "required": ["make_index"],
-                          "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                          "steps": _synth_steps(50)},
         })
         row = rows["only.json"]
         assert row[3] == CLS_MISSING, "check_all 没自己拦 missing（cls=%s）" % row[3]
@@ -1143,7 +1154,7 @@ def selftest():
         assert m == ["merchant_actor"] and not v, (v, m)
         rows = _tmp_check_all({
             "merchantish.json": {"name": "merchantish", "required": ["merchant_actor"],
-                                 "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                                 "steps": _synth_steps(643)},
         }, frames=frames)
         assert rows["merchantish.json"][1] == 2, rows["merchantish.json"]
         assert rows["merchantish.json"][3] == CLS_MISSING, rows["merchantish.json"]
@@ -1206,9 +1217,9 @@ def selftest():
             "badjson.json": '{"name": "x", "steps": [\n',
             "array.json": '[1, 2, 3]\n',
             "reqstr.json": '{"name": "x", "required": "npc_actor", '
-                           '"steps": [{"wait_for": 643, "timeout_ms": 10}]}\n',
+                           '"steps": [{"send": {"ident": 3014}}, {"wait_for": 643, "timeout_ms": 10}]}\n',
             "reqint.json": '{"name": "x", "required": [123], '
-                           '"steps": [{"wait_for": 643, "timeout_ms": 10}]}\n',
+                           '"steps": [{"send": {"ident": 3014}}, {"wait_for": 643, "timeout_ms": 10}]}\n',
         }
         for name, text in cases.items():
             with open(os.path.join(scen, name), "w", encoding="utf-8") as fh:
@@ -1228,13 +1239,13 @@ def selftest():
         # 变异：check_all 里一律 cls=CLS_DERIVED ⇒ 本断言红。
         rows = _tmp_check_all({
             "npcish.json": {"name": "npcish", "required": ["npc_actor"],
-                            "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                            "steps": _synth_steps(643)},
         }, frames=_fixture())                        # 无 643 ⇒ npc_actor 走 SM_TURN 规则
         assert rows["npcish.json"][1] == 0, rows["npcish.json"]
         assert rows["npcish.json"][3] == CLS_RULE, rows["npcish.json"]
         rows = _tmp_check_all({                      # 有 643 ⇒ npc_actor 走推导
             "npcish.json": {"name": "npcish", "required": ["npc_actor"],
-                            "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+                            "steps": _synth_steps(643)},
         }, frames=_fixture(merchant_say=True))
         assert rows["npcish.json"][3] == CLS_DERIVED, rows["npcish.json"]
 
@@ -1260,7 +1271,7 @@ def selftest():
         rows = _tmp_check_all({
             "mv.json": {"name": "mv", "required": ["move_x"],
                         "computed": {"move_x": {"derived_from": "self_x", "delta": 1}},
-                        "steps": [{"wait_for": 50, "timeout_ms": 10}]},
+                        "steps": _synth_steps(50)},
         })
         row = rows["mv.json"]
         assert row[1] == 0, row
