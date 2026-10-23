@@ -20,12 +20,15 @@
 3. **取回链要过 10 分钟时效门**：部署 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），
    `Permission>=4` 的豁免在本部署**不可用**（`StartPermission=0` + `AdminList.txt` 唯一行缺 IP 被丢弃）。
    场景用 **`sleep 660000`** 把这条门编码进去 ⇒ **每次窗口 run 至少 11 分钟**，
-   窗口 profile 必须把 `timeout_ms` 抬到 ≥ 720000（见 §4.5）。
-4. **不能站铁匠邻格**：`MonGen.txt` 在 (325,311)/(336,321)/(339,313) 刷了弓箭护卫（ArcherGuard，ViewRange=12），
-   `GuardUnit.IsProperTarget` 对普通玩家返回 true ⇒ 挨着站会被持续射杀，11 分钟等待内必死。
-   placement 取 **(320,328)**：到三只护卫的 Chebyshev 距离 17/16/19（都在 12 之外），
-   同时在 `CM_CLICKNPC` 的 `|dx|<=15 && |dy|<=15` 门内（`PlayObject.Base.cs:691`），
-   且铁匠正好落在本格 `view_range=12` 的最后一列 ⇒ discovery 的 `auto:last_turn` 落在铁匠（§4.4）。
+   窗口 profile 必须把 **`probe_timeout_ms`** 抬到 ≥ 720000（见 §4.5）。
+   > 订正（原：`timeout_ms`）：profile 的键名是 `probe_timeout_ms`（内置 alt 见 `card_window.py:297`；
+   > CLI 是 `--timeout-ms`）；**写成 `timeout_ms` 会被静默忽略**（profile 顶层没有未知键校验），
+   > 结果 probe 仍在 180 秒被杀 ⇒ 窗口白跑一轮。
+4. **placement 取 (320,328) 的三条理由**（订正：原写「不能站铁匠邻格，否则被三只弓箭护卫射杀」是**假前提**，见 §4.2）：
+   ① `.map` 该格 `bk=671/fr=0` 可走；
+   ② 到铁匠 (332,318) 的 `|dx|=12, |dy|=11`，在 `CM_CLICKNPC` 的 `|dx|<=15 && |dy|<=15` 门内（`PlayObject.Base.cs:691`）；
+   ③ x=332 是本行候选里 x 最大 ⇒ discovery 列序把 `auto:last_turn` 落在铁匠（§4.4）。
+   **刷怪威胁不成立**：那三只的名字是 `弓箭护卫`，不在 `monsters` 表 ⇒ 根本不刷（证据见 §4.2）。
 5. **Rust 侧有两个已登记缺口会让窗口变红**（不是场景问题）：升级结果 say 未执行（`T-145④` / `T-95④`：
    `@upgradenow`/`@getbackupgnow` 分支只登记 `goto_label`、不跑 `GotoLable`）。本场景的硬门放在**唯一 ident**
    （`709`/`200`）上，所以「提交/取回是否真的发生」不依赖 say；say 差异会以**多出来的 643 帧**形式出现在
@@ -54,7 +57,7 @@ find . -type f -print0 | xargs -0 grep -aoiE '^[[:space:]]*<CMD>' | wc -l
 | 动作 `RANDOMUPGRADEITEM`（`ExecutionCode.cs:592`） | **0** | 零命中 |
 | 条件 `CHECKUPGRADEITEMS`（`ConditionCode.cs:359`） | **0** | 零命中 |
 | 脚本里 `^CM_[A-Z0-9_]+` | **0** | `CM_*` 是线上协议号、不是脚本语法；本层走 `CM_MERCHANTDLGSELECT(1011)`（`Messages.cs:63`） |
-| `@upgradenow` 类标签 | **16 行**（见 §1.3） | `@upgradenow`/`@getbackupgnow` 只在沙巴克铁匠-3.txt；`@UPGRADEDLGITEM` 是脚本标签、不是系统命令 |
+| `@upgradenow` 类标签 | **18 处 / 17 行**（见 §1.3；订正：原写「16 行」） | `@upgradenow`/`@getbackupgnow` 只在沙巴克铁匠-3.txt；`@UPGRADEDLGITEM` 是脚本标签、不是系统命令 |
 
 ### 1.2 `UPGRADEITEMEX` 34 行明细（`file:line`）
 
@@ -89,7 +92,7 @@ find . -type f -print0 | xargs -0 grep -anoiE '@[A-Za-z0-9_]*upgrade[A-Za-z0-9_]
 | `:141/146/150` | `@getbackupgnow_ok/_ing/_fail` | 同上 |
 | `Market_Def/任务NPC/客栈-0148.txt:24,27`、`功能NPC/比武-GA2.txt:23,26` | `@UPGRADEDLGITEM` | `QUERYITEMDLG` 的回调标签（动作本体是空函数） |
 
-> **部署脚本没有 `~@getbackupgnow_bagfull`**（`ScriptFlagConst.cs:285` 有常量、脚本没有标签）⇒
+> **部署脚本没有 `~@getbackupgnow_bagfull`**（`src/Modules/SystemModule/Const/ScriptFlagConst.cs:59`（`sGETBACKUPGFULL`）有常量、脚本没有标签；订正：原写 `:285`）⇒
 > 包满支 `GotoLable` 空跳、**零帧**。任何 `wait_for` 都等不到它，本场景不覆盖（§5.2）。
 
 ---
@@ -106,12 +109,12 @@ find . -type f -print0 | xargs -0 grep -anoiE '@[A-Za-z0-9_]*upgrade[A-Za-z0-9_]
 | 3 | `CM_MERCHANTDLGSELECT` | 1011（`Messages.cs:63`） | `Merchant.UserSelect`（`Merchant.cs:789-812`）：`LableIsCanJmp`（`PlayObject.Base.cs:2814-2826`，`@main` 恒可跳、其余只认最近说词里的链接）⇒ 不通过则 `GotoLable` 后 `return`（零帧） |
 | 4 | `@upgradenow` 派发 | — | `Merchant.cs:883-889`（`IsUpgradenow` 门）→ `UpgradeWapon`（`:529-590`） |
 | 5 | 提交成功帧 | **202** | `SendDelItems` 单件重载（`PlayObject.Base.cs:1648-1665`）：`Recog=ActorId`、`Param/Tag=0`、`Series=1`、尾 `EncodeBuffer(ClientItem)`；`Messages.cs:222` |
-| 6 | 后续帧 | 52 / 41 / 653 / 657×2 | `Merchant.cs:566-570`：`RecalcAbilitys()`→52、`FeatureChanged()`→41、`GoldChanged()`→653，`RecalcAbilitys` 尾段 657×2（`PlayObject.cs:2874-2876`） |
+| 6 | 后续帧 | 52 / 41 / 653 / 657×2 | `Merchant.cs:557`（`GoldChanged()`→653）、`:570-572`（`RecalcAbilitys()`→52、`FeatureChanged()`→41、`RM_ABILITY`）；`RecalcAbilitys` 尾段 657×2（`PlayObject.cs:2874-2876`）。订正：原写 `566-570` 覆盖不到 `GoldChanged`（在 `:557`） |
 | 7 | 吃材料清单 | **709** | `RM_SENDDELITEMLIST`→`SendDelItems(IList)`（`PlayObject.Base.cs:1636-1646`），`Series=条数`、尾 `EncodeString("名/makeindex/…")`；`Messages.cs:357` |
 | 8 | 提交结果 say | 643 | `GotoLable(~@upgradenow_ok/_ing/_fail)`（`ScriptFlagConst.cs:53-55`） |
 | 9 | `@getbackupgnow` 派发 | — | `Merchant.cs:890-896` → `GetBackupgWeapon`（`:594-759`） |
 | 10 | 取回成功帧 | **200** | `SendAddItem`（`PlayObject.Base.cs:198-238`）：`Recog=ActorId`、`Series=1`、尾 `EncodeBuffer(ClientItem)`（含 `Desc[10]`）；`Messages.cs:220` |
-| 11 | 取回结果 say | 643 | `GotoLable(~@getbackupgnow_ok/_ing/_fail)`（`ScriptFlagConst.cs:57-59`） |
+| 11 | 取回结果 say | 643 | `GotoLable(~@getbackupgnow_ok/_ing/_fail)`（`src/Modules/SystemModule/Const/ScriptFlagConst.cs:57/58/60`；订正：原写 `57-59`，把 `_fail` 与 `_ing` 弄混、且漏了 `:60`） |
 
 ### 2.1 提交支的三道门（顺序即语义，`Merchant.cs:538-541`）
 
@@ -176,17 +179,25 @@ CheckItems(BlackStone) != null-> 部署 BlackStone=黑铁矿（Server.conf:87）
   （`Merchant.cs:373-525`），别指望跑完还在。
 - 背包件数 **< 46**（否则取回走包满支 ⇒ 零帧）。
 - `characters.MapName/CX/CY` 由 `card_window.py` 按 `placement` 自动预置（`--dry-run` 已验证两侧 `map=3 x=320 y=328` 可走）。
-- 背包/装备夹具不在 `card_window.py` 能力内（runbook §1.5 末段：归 `openmir2-discovery-bagitems-201`）。
+- 背包/装备夹具不在 `card_window.py` 能力内（runbook §1.5 末段：归 **`openmir2-window-inventory-fixture`**；订正：原写 `openmir2-discovery-bagitems-201`，那张卡是**参数发现规则**、且已 closed）。
 
-### 4.2 护卫威胁与 placement 选择（**最容易踩的坑**）
+### 4.2 placement 选择（**原写的「护卫射杀」前提是假的，已换证据**）
 
-- 部署 `MonGen.txt:51/58/59` 在 (325,311)/(336,321)/(339,313) 各刷 1 只弓箭护卫（Race=112，`ArcherGuard.cs:11-19`
-  的 `ViewRange=12`）；`GuardUnit.IsProperTarget`（`GuardUnit.cs:35-121`）在 `Castle == null` 时对普通玩家
-  **return true**（只排除 AdminMode/StoneMode）⇒ 会主动射杀。
-- 铁匠正邻格 (332,318) 到三只护卫的 Chebyshev 是 7/4/7，全在 12 内 ⇒ 站 11 分钟必死（死亡后
-  `UserSelect` 的 `!playObject.Death` 门让整段不执行）。
-- 选 **(320,328)**：到三只护卫 17/16/19（视野外）；到铁匠 (12,11)（点击门 15 内）；`.map` 该格 bk=671/fr=0 可走。
-- **不要**把 placement 改回铁匠邻格「图省事」——那样场景会在取回等待期随机死亡。
+> **订正（原：部署 `MonGen.txt:51/58/59` 在 (325,311)/(336,321)/(339,313) 各刷 1 只弓箭护卫，会主动射杀，
+> 邻格站 11 分钟必死）**：三处刷怪行的怪名是 **`弓箭护卫`**，而 `monsters` 表**没有这一行**
+> （部署 `sql/mir2_data.sql` 与窗口 baseline `E:/tmp/conformance/baseline/mir2_test_data.sql` 均 **0 行**；
+> 表里只有 `弓箭手`/`弓箭守卫`/`恶魔弓箭手`）⇒ `GetMonRace` 返回 -1（`WorldServer.cs:167-175`），
+> `RegenMonsters` 的 `if (monGen.Race > 0)` 直接跳过（`WorldServer.MonGen.cs:819`）⇒ **这三只根本不刷**，
+> 「11 分钟必被射杀」不成立。
+
+- **placement (320,328) 的理由（三条，都与刷怪无关）**：
+  ① `.map` 该格 `bk=671/fr=0` 可走；
+  ② 到铁匠 (332,318) 的 `|dx|=12, |dy|=11`，在 `CM_CLICKNPC` 的 15 格门内（`PlayObject.Base.cs:691`）；
+  ③ x=332 是本行候选里 x 最大 ⇒ discovery 列序把 `last_turn` 落在铁匠（§4.4）。
+- **即便真刷也不怕**（作为旁证）：`GuardUnit.SearchViewRange` 只在 `|dx|<=6 && |dy|<=6` 且视线通时才把目标
+  加入 `VisibleActors`（`GuardUnit.cs:176`），而 (320,328) 到三点 17/16/19 全在 6 之外。
+- **不要**把 placement 改回铁匠邻格——理由不再是「会被射杀」，而是：邻格 (332,318) 在 `CM_CLICKNPC` 门内但
+  会让 discovery 的 `last_turn` 落在别的 actor 上（§4.4 的列序口径），夹具不稳。
 
 ### 4.3 时效门与 Permission
 
@@ -210,7 +221,9 @@ CheckItems(BlackStone) != null-> 部署 BlackStone=黑铁矿（Server.conf:87）
 
 - 场景有 `sleep 660000` ⇒ probe 进程至少跑 11 分钟。
 - `card_window.py:1786` 的进程超时 = `max(180, probe_timeout_ms/1000 + 120)` 秒，默认 `probe_timeout_ms=20000`
-  ⇒ 只有 **180 秒**，会被腰斩。**窗口 profile 必须设 `timeout_ms >= 720000`**（= 840 秒 > 660 + 登录/余量）。
+  ⇒ 只有 **180 秒**，会被腰斩。**窗口 profile 必须设 `probe_timeout_ms >= 720000`**（= 840 秒 > 660 + 登录/余量）。
+  > 订正（原：`timeout_ms`）：键名写错会被**静默忽略**，UI 上没有任何报错——probe 仍在 180 秒被杀。
+  > 也可以不改 profile，直接用 CLI `--timeout-ms 720000`（等价，`card_window.py:696-697`）。
 - 两侧各 11 分钟 ⇒ 一次 `card_window` 至少 ~23 分钟（含起停栈）。排窗口时按这个量级预留。
 
 ---
@@ -282,8 +295,50 @@ CheckItems(BlackStone) != null-> 部署 BlackStone=黑铁矿（Server.conf:87）
    steps 之间只 `time.sleep` 不 pump，`mir2_probe.py:1153-1156`）⇒ 第 12 步可能匹配到第 8 步缓冲的结果 say。
    不影响成败（硬门在 `wait_idents 709/200`），但证据归属会指错帧。根治需 wait 支持 recog/body 过滤或「发送后新帧」口径，
    归 `openmir2-probe-scenario-validation-gaps`。
-4. **背包夹具不支持**（runbook §1.5 末段）—— 武器/金币/黑铁矿仍靠手工 DB 夹具；归属 `openmir2-discovery-bagitems-201`。
-5. **窗口成本**：≥11 分钟/侧，profile `timeout_ms >= 720000`（§4.5）。
+4. **背包夹具不支持**（runbook §1.5 末段）—— 武器/金币/黑铁矿仍靠手工 DB 夹具；归属 **`openmir2-window-inventory-fixture`**（订正：原写 `openmir2-discovery-bagitems-201`）。
+5. **窗口成本**：≥11 分钟/侧，profile **`probe_timeout_ms`** >= 720000（§4.5；订正：原写 `timeout_ms`）。
 6. **`UPGRADEITEMEX` 链未覆盖**（§5.2 第 3 条），建议另开场景。
 7. 本卡只在 worktree 内跑离线工具（`--check-scenario`/`--selftest`/`--dry-run`），**零起栈、零连库、零端口**；
    `--dry-run` 会打印 `restore/stack/...` 命令但 `Runner.dry_run` 不执行（`card_window.py:795`）。
+
+## 8. 订正对照表（原错 → 现文，逐条可复算）
+
+> 来源：review `9d3f9b14`（reviewer-6）的 5 条 minor；本卡（`openmir2-upgrade-retrieve-doc-fixes`）一次性修完。
+> 每条都给「复算命令」，审查者不需要相信本文。
+
+| # | 原错（保留原文要点） | 现文 | 复算命令 / 实测 |
+|---|---|---|---|
+| 1 | 「`MonGen.txt:51/58/59` 刷了弓箭护卫，邻格站 11 分钟必被射杀」，并以此解释 placement | placement 的三条理由 = 可走 + 点击门内 + `last_turn` 落铁匠；刷怪威胁**不成立**（`弓箭护卫` 不在 `monsters` 表 ⇒ 不刷） | `grep -c "'弓箭护卫'" sql/mir2_data.sql` ⇒ **0**；同命令对 `E:/tmp/conformance/baseline/mir2_test_data.sql` ⇒ **0**；`grep -c "'弓箭手'"` ⇒ 1（名字相近但不同行）。`WorldServer.cs:167-175`（GetMonRace 未命中 -1）、`WorldServer.MonGen.cs:819`（`if (monGen.Race > 0)`） |
+| 2 | 窗口 profile 要 `timeout_ms >= 720000` | **`probe_timeout_ms`**（或 CLI `--timeout-ms`）；并写明「写错键名会被静默忽略」 | `card_window.py:297`（alt 内置值）、`:973-974`（传给 probe）、`:1949`（子进程超时 `max(180, v/1000+120)`）、`:696-697`（CLI 覆盖）；profile 顶层无未知键校验 ⇒ `timeout_ms` 被忽略 |
+| 3 | 「`@upgradenow` 类标签 **16 行**」 | **18 处 / 17 行** | `cd E:/MirServer/Mir200/Envir && find . -type f -print0 \| xargs -0 grep -anoiE '@[A-Za-z0-9_]*upgrade[A-Za-z0-9_]*\|@getbackupgnow[A-Za-z0-9_]*'` ⇒ **18 行输出**；`cut -d: -f1-2 \| sort -u \| wc -l` ⇒ **17**（`:1` 一行有两个标签） |
+| 4 | 背包夹具「归 `openmir2-discovery-bagitems-201`」 | 归 **`openmir2-window-inventory-fixture`** | `openmir2-discovery-bagitems-201` 是**参数发现规则**卡且已 closed；`card_window.py` 里 `grep -c inventory` ⇒ 0（该能力尚未进 master） |
+| 5 | `ScriptFlagConst.cs:57-59`、`Merchant.cs:566-570`（含 `GoldChanged`） | `src/Modules/SystemModule/Const/ScriptFlagConst.cs:57/58/60`；`Merchant.cs:557`（GoldChanged）+ `:570-572`（RecalcAbilitys/FeatureChanged/RM_ABILITY） | `grep -n 'sGETBACKUPG' src/Modules/SystemModule/Const/ScriptFlagConst.cs` ⇒ 56 NOW / **57 OK / 58 FAIL** / 59 FULL / **60 ING**；`grep -n 'GoldChanged' src/GameSrv/Npc/Merchant.cs` ⇒ **557** |
+
+**机判（改完实跑）**：`python -I -B tools/probe/mir2_probe.py --check-scenario --scenario tools/probe/scenarios/upgrade_retrieve.json --var merchant_actor=1` ⇒ rc=0；
+`mir2_probe --selftest` ⇒ 9 checks OK；`t_reservation_gate.py check` ⇒ GREEN；`conflict_marker_gate` ⇒ 0 markers。
+
+### 8.1 文档牙（把键名改回去必须变红）
+
+```sh
+python -I -c "
+import io,sys
+q=chr(96)
+files=['tools/probe/scenarios/README.md','docs/upgrade-retrieve-scenario-20261023.md']
+wrong=[q+'timeout_ms'+q+' 抬到', q+'timeout_ms >= 720000', '必须把 '+q+'timeout_ms'+q]
+bad=[]
+for p in files:
+    for i,line in enumerate(io.open(p,encoding='utf-8').read().splitlines(),1):
+        if line.lstrip().startswith('|'):   # 跳过 §8 的「原错」对照表行
+            continue
+        for w in wrong:
+            if w in line: bad.append((p,i,w))
+print('DOC-TIMEOUT-KEY', 'OK' if not bad else 'RED')
+print('  BAD', bad[:4]); sys.exit(0 if not bad else 1)"
+```
+
+判据：**两处活文案（README 的 `upgrade_retrieve` 段、本文 §0/§4.5/§7）不得出现旧键名写法**
+（脚本里 `wrong` 列的那三条）；§8 的「原错」对照表按表行跳过（以竖线开头的行）。
+—— 注意两个踩过的坑：① 只用「720000 那一行必须有 `probe_timeout_ms`」不够，因为同一行还写着 CLI `--timeout-ms`；
+② 不跳过对照表行会把「保留原错」本身判红。本牙实测两种写法都能挡住。
+
+实测：基线 rc=0（`DOC-TIMEOUT-KEY OK`）；把 README 的 `probe_timeout_ms` 改回旧键名 ⇒ **rc=1（RED，打印文件+行号）**；逐字节还原后 sha256 回到基线值。
