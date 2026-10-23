@@ -6,19 +6,19 @@
 
 ## 0. 一句话结论
 
-**窗口欠账不是 114 张，是 173 张**（机器可复现口径见 §1）。其中：**第 1 批 52 张**（9 个 probe 场景 40 + 既有夹具 12）、**第 2 批 4 张**、**第 3 批 82 张**、**不可协议对拍 35 张**。每一张都落到某一批并给了场景与前置，无遗漏。
+**窗口欠账不是 114 张，是 173 张**（机器可复现口径见 §1）。其中：**第 1 批 53 张**（9 个 probe 场景 40 + 既有夹具 13）、**第 2 批 4 张**、**第 3 批 81 张**、**不可协议对拍 35 张**。每一张都落到某一批并给了场景与前置，无遗漏。
 
 | 批次 | 张数 | 开跑条件 |
 |---|---:|---|
 | 第 1 批 · A（probe 9 场景） | 40 | `card_window.py` + 参数发现接线（`openmir2-window-discovery-wiring`）；其中 1 张部分可验 |
-| 第 1 批 · B（既有夹具） | 12 | 夹具在 master，逐卡前置见行内 |
+| 第 1 批 · B（既有夹具） | 13 | 夹具在 master（含子目录，如取号用 `find -name`）；逐卡前置见行内 |
 | 第 2 批 · A（move/king/combat 规则） | 2 | `openmir2-window-discovery-rules` 落地 |
 | 第 2 批 · B（SM_BAGITEMS 规则） | 2 | **需新开卡**（现有规则卡不覆盖） |
-| 第 3 批（新帧/新场景/新前置） | 82 | 逐卡前置，见行内 |
+| 第 3 批（新帧/新场景/新前置） | 81 | 逐卡前置，见行内 |
 | 不可协议对拍 | 35 | 替代判据见行内 |
 | **合计** | **173** | |
 
-> 第 1 批全部跑完，**可闭环 51 张（29%）**：1P 40 张里 `openmir2-player-searchviewrange-cadence` 只有项 ① 可验（项 ③ 收件人近似需第二观察者），其余 1F 12 张按卡面前置。**122 张**要等新场景/新帧/工具（第 2、3 批）或走替代判据（不可对拍）。把「第一批 9 个场景」当成整场窗口的解法会严重低估工作量。
+> 第 1 批全部跑完，**可闭环 52 张（30%）**：1P 40 张里 `openmir2-player-searchviewrange-cadence` 只有项 ① 可验（项 ③ 收件人近似需第二观察者），1F 13 张按卡面前置。**121 张**要等新场景/新帧/工具（第 2、3 批）或走替代判据（不可对拍）。把「第一批 9 个场景」当成整场窗口的解法会严重低估工作量。
 
 ## 1. 为什么看板说 114：差额逐项解释（可复现）
 
@@ -127,22 +127,23 @@
 | 39 | `openmir2-gm-impl-shutup` | in-progress | 已合入 master b8826ad0（approve reviewer-3 841be8bf，tier=R）。门禁：fmt/clippy/msgcodegen 604/test 141 s… | login_only + 手动 @禁言 | 前置 openmir2-gm-script-host-seam 已合（只通 @Login 路径） |
 | 40 | `openmir2-gm-script-host-seam` | in-progress | 新角色登录帧 + **手动在客户端直呼 @禁言 <名> 1** 双侧对拍 `权限不够!!!`（探针不能靠 login_only 自动跑，需 runbook 写明） | login_only + 手动 @禁言 <名> 1 | 探针不发 GM 命令，runbook 要求操作者手输；双侧比「权限不够!!!」 |
 
-### 1F · 第 1 批 · B：master 上既有的 `run_*_pair.ps1` 夹具（零新增场景）（12 张）
+### 1F · 第 1 批 · B：master 上既有的 `run_*_pair.ps1` 夹具（零新增场景）（13 张）
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
-| 1 | `openmir2-m3-fixture-matrix` | in-progress | 剩余 = 真机 DoD**：READY 夹具需 -Side rust preflight 前置落地 + 独占窗口跑两侧同序列 diff=0；⑧-10/⑨-5 夹具（本刻待审）合入后 read… | 8 个 READY 夹具逐条 | ⑧-10/⑨-5 待审合入后 8→10 |
-| 2 | `openmir2-m3-quest-persist-observability` | in-progress | 剩余 DoD = 真机两相**（任务交互后两侧 characters_quest=0 行 + characters 无任务列变更；run_pair.ps1 + scoped_diff.py… | run_pair.ps1 + scoped_diff.py --canonical | 任务交互后 characters_quest=0 行 |
-| 3 | `openmir2-m3-party-attribution` | in-progress | 剩余 DoD = 真机两侧同序列 diff=0（run_party_trade_pair.ps1 + 独占窗口，归 openmir2-m3-party-trade-align），按 not_… | run_party_trade_pair.ps1 | 组队归属/分赃：前置 ⑦-2/⑦-3（卡面称待合，开工前复核） |
-| 4 | `openmir2-m3-party-gainexp-npe` | in-progress | 剩余 DoD = 真机两侧同序列 diff=0（归 openmir2-m3-party-trade-align + 独占窗口），按 not_verified 登记。订正：本 burst 早前… | run_party_trade_pair.ps1 | 同上 |
-| 5 | `openmir2-m3-pet-slave-lifecycle` | in-progress | 剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 同序列 diff=0（召唤/诱惑/叛变/幽灵各站点，归 openmir2-m3-hero-pet-align + ow… | run_hero_pet_pair.ps1 | 脚本已在 master；前置 ⑨-2/⑨-3 实现 |
-| 6 | `openmir2-m3-shop-dialog-wiring` | in-progress | 剩余 DoD = 真机两侧 run_npc_shop_pair.ps1 同序列 diff=0（详情 652 / 仓库 700-707 帧序与字节 + characters_storageit… | run_npc_shop_pair.ps1 | ⑤-4 商店派发/帧；storageitem 50 槽 |
-| 7 | `openmir2-m3-pet-slave-clone46` | in-progress | 剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 make_clone step 同序列 diff=0（待真机判据（窗口）），按 review not_verified… | run_hero_pet_pair.ps1 | make_clone step |
-| 8 | `openmir2-m3-pet-slave-masterdie-wire` | in-progress | 剩余 DoD = ① 真机两侧 run_hero_pet_pair.ps1 主人死 step 同序列 diff=0（含叛变站点帧序/字节 + RNG 抽数 site/order）② 混合队列… | run_hero_pet_pair.ps1 | 主人死 step + 混合队列 |
-| 9 | `openmir2-m3-rng-scene-driver` | in-progress | RNG 序列真机两侧对拍（W9 独占窗）。approve.window_required=true | run_rng_scene_pair.ps1 | W9 RNG 序列 |
-| 10 | `openmir2-window-collector-preflight` | in-progress | 真机两侧需验证：① 起栈后 C# 流水头 INJECT_OK<seed> 与 Rust RUST_SEED_INJECTED 相等（交叉断言在真栈上首次生效）；② MIR2_RNG_SITE… | card_window.py 真栈一次（login_only） | 起栈后 INJECT_OK/RUST_SEED_INJECTED 交叉断言 |
-| 11 | `openmir2-account-protection-13` | in-progress | 真机执行 account_protection_roundtrip（建号 13 列逐列 + 改资料 12 列 + PassWord 覆盖） | run_account_protection_roundtrip.ps1 | 夹具在 mir2-rs/tests/parity/m3/account-protection/（既有）；比建号 13 列 + 改资料 12 列 + PassWord 覆盖 |
-| 12 | `openmir2-card-window-tool` | in-progress | 一次真 alt 剖面窗口的 card-window.json + log，要求两侧 stop rc=0、端口全释放、report_kind=compare。后续 hardening（F-1/… | card_window.py 真 alt 剖面一次 | 两侧 stop rc=0、端口全释放、report_kind=compare |
+| 1 | `openmir2-m3-drop-exp-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核④（master 未动）：PREREQ（静态）。master 无 run_drop_exp_pair.ps1，BotSrv… | run_drop_exp_pair.ps1 | 夹具在子目录 mir2-rs/tests/parity/m3/drop-exp/（058c3ad25 有，32290B，10-16）；卡面称 BotSrv 无固定种子 100 杀驱动 ⇒ 开工前按脚本参数复核，若缺再降级 |
+| 2 | `openmir2-m3-fixture-matrix` | in-progress | 剩余 = 真机 DoD**：READY 夹具需 -Side rust preflight 前置落地 + 独占窗口跑两侧同序列 diff=0；⑧-10/⑨-5 夹具（本刻待审）合入后 read… | 8 个 READY 夹具逐条 | ⑧-10/⑨-5 待审合入后 8→10 |
+| 3 | `openmir2-m3-quest-persist-observability` | in-progress | 剩余 DoD = 真机两相**（任务交互后两侧 characters_quest=0 行 + characters 无任务列变更；run_pair.ps1 + scoped_diff.py… | run_pair.ps1 + scoped_diff.py --canonical | 任务交互后 characters_quest=0 行 |
+| 4 | `openmir2-m3-party-attribution` | in-progress | 剩余 DoD = 真机两侧同序列 diff=0（run_party_trade_pair.ps1 + 独占窗口，归 openmir2-m3-party-trade-align），按 not_… | run_party_trade_pair.ps1 | 组队归属/分赃：前置 ⑦-2/⑦-3（卡面称待合，开工前复核） |
+| 5 | `openmir2-m3-party-gainexp-npe` | in-progress | 剩余 DoD = 真机两侧同序列 diff=0（归 openmir2-m3-party-trade-align + 独占窗口），按 not_verified 登记。订正：本 burst 早前… | run_party_trade_pair.ps1 | 同上 |
+| 6 | `openmir2-m3-pet-slave-lifecycle` | in-progress | 剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 同序列 diff=0（召唤/诱惑/叛变/幽灵各站点，归 openmir2-m3-hero-pet-align + ow… | run_hero_pet_pair.ps1 | 脚本已在 master；前置 ⑨-2/⑨-3 实现 |
+| 7 | `openmir2-m3-shop-dialog-wiring` | in-progress | 剩余 DoD = 真机两侧 run_npc_shop_pair.ps1 同序列 diff=0（详情 652 / 仓库 700-707 帧序与字节 + characters_storageit… | run_npc_shop_pair.ps1 | ⑤-4 商店派发/帧；storageitem 50 槽 |
+| 8 | `openmir2-m3-pet-slave-clone46` | in-progress | 剩余 DoD = 真机两侧 run_hero_pet_pair.ps1 make_clone step 同序列 diff=0（待真机判据（窗口）），按 review not_verified… | run_hero_pet_pair.ps1 | make_clone step |
+| 9 | `openmir2-m3-pet-slave-masterdie-wire` | in-progress | 剩余 DoD = ① 真机两侧 run_hero_pet_pair.ps1 主人死 step 同序列 diff=0（含叛变站点帧序/字节 + RNG 抽数 site/order）② 混合队列… | run_hero_pet_pair.ps1 | 主人死 step + 混合队列 |
+| 10 | `openmir2-m3-rng-scene-driver` | in-progress | RNG 序列真机两侧对拍（W9 独占窗）。approve.window_required=true | run_rng_scene_pair.ps1 | W9 RNG 序列 |
+| 11 | `openmir2-window-collector-preflight` | in-progress | 真机两侧需验证：① 起栈后 C# 流水头 INJECT_OK<seed> 与 Rust RUST_SEED_INJECTED 相等（交叉断言在真栈上首次生效）；② MIR2_RNG_SITE… | card_window.py 真栈一次（login_only） | 起栈后 INJECT_OK/RUST_SEED_INJECTED 交叉断言 |
+| 12 | `openmir2-account-protection-13` | in-progress | 真机执行 account_protection_roundtrip（建号 13 列逐列 + 改资料 12 列 + PassWord 覆盖） | run_account_protection_roundtrip.ps1 | 夹具在 mir2-rs/tests/parity/m3/account-protection/（既有）；比建号 13 列 + 改资料 12 列 + PassWord 覆盖 |
+| 13 | `openmir2-card-window-tool` | in-progress | 一次真 alt 剖面窗口的 card-window.json + log，要求两侧 stop rc=0、端口全释放、report_kind=compare。后续 hardening（F-1/… | card_window.py 真 alt 剖面一次 | 两侧 stop rc=0、端口全释放、report_kind=compare |
 
 ### 2A · 第 2 批 · A：需 `openmir2-window-discovery-rules` 新增规则（move / king / combat）（2 张）
 
@@ -158,7 +159,7 @@
 | 1 | `openmir2-delmagic-addmagic-chain` | in-progress | 登录后 characters_magic 行消失/新增与 212/210 真机字节与序；会话内戴上 115 即发 210 / 打碎治愈戒指即发 212（共 3 项） | bag_equip | 缺 SM_BAGITEMS(201) 发现规则（既有 discovery-rules 卡不覆盖 ⇒ 需新开卡） |
 | 2 | `openmir2-unbindlist-consumer` | in-progress | 真机客户端：吃一个 StdMode31/AniCount0 捆装包 ⇒ 客户端依次收到 6 条 SM_ADDITEM(200)（Recog=…；断线存档：hum_items（等价存档）含解包出的 6 件（MakeIndex 逐件递增、Dura=DuraMax=tpl.DuraMax、…（共 3 项） | eat_item | 同上；另需 StdMode31/AniCount0 捆装包夹具 |
 
-### 3 · 第 3 批 · 需新帧 / 新场景 / 新夹具（含前置未清的夹具卡）（82 张）
+### 3 · 第 3 批 · 需新帧 / 新场景 / 新夹具（含前置未清的夹具卡）（81 张）
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
@@ -168,82 +169,81 @@
 | 4 | `openmir2-m3-guild-castle-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑧（master 未动）：PREREQ（静态）。master 无 run_guild_castle_pair.ps1；实现… | run_guild_castle_pair.ps1（前置未清） | ⑧-3..⑧-9 待认领 + 时钟注入前置 |
 | 5 | `openmir2-m3-hero-pet-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑨（master 未动）：PREREQ（静态）。master 无 run_hero_pet_pair.ps1；⑨-2/⑨-… | run_hero_pet_pair.ps1（前置未清） | ⑨-2/⑨-3 待认领、⑨-5 夹具待审 |
 | 6 | `openmir2-m3-mail-auction-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑩（master 未动）：PREREQ（静态）。run_selloff_pair.ps1 在，但 Rust bins/ga… | run_selloff_pair.ps1（前置未清） | ⑩-1/⑩-2 待认领 |
-| 7 | `openmir2-m3-drop-exp-align` | in-progress | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核④（master 未动）：PREREQ（静态）。master 无 run_drop_exp_pair.ps1，BotSrv… | run_drop_exp_pair.ps1（前置未清） | BotSrv 无固定种子 100 杀驱动 |
-| 8 | `openmir2-m3-quest-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（-Side rust preflight 仍 PREREQ，等 ⑥-3 落地 + 独占窗口） | run_quest_pair.ps1（前置未清） | 等 ⑥-3 + rust preflight |
-| 9 | `openmir2-m3-party-trade-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑦-2/⑦-3 落地 + 独占窗口） | run_party_trade_pair.ps1（前置未清） | 等 ⑦-2/⑦-3 |
-| 10 | `openmir2-m3-selloff-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑩-1/⑩-2 落地 + 独占窗口） | run_selloff_pair.ps1（前置未清） | 等 ⑩-1/⑩-2 |
-| 11 | `openmir2-m3-shop-scenario-authority` | in-progress | 剩余 DoD = 真机**：run_npc_shop_pair.ps1 在独占窗口跑两侧同序列 diff=0（等 ⑤-4 第②片仓库存档面 + ⑤-5 / NPC 入视野），离线判据本体已完… | run_npc_shop_pair.ps1（前置未清） | 等 ⑤-4 第②片 + ⑤-5/NPC 入视野 |
-| 12 | `openmir2-m3-castle-gold-tax` | in-progress | 剩余 DoD = ① 真机两侧「同一 10min SaveTick 时间门 → TodayIncome/TotalGold 落盘」diff=0（依赖 ⑧-1 C# GetTickCount… | 新：10min Save 文件 + 时钟注入 | 前置 ⑧-1 C# GetTickCount 注入 + 商人税 4 调用点接线 |
-| 13 | `openmir2-m3-monster-ai-tick` | needs-review | 主动索敌（新卡，W0 前置）+ Animal RNG + 守卫静止 + 真机对拍。未 merge、未自签 review | 新：主动索敌观察（W0 前置） | 未合入当前 head（needs-review）；W0 前置 + Animal RNG |
-| 14 | `openmir2-outbound-encoders-red-batch` | in-progress | 时序/RNG 面真机对拍（W0 窗或系统对拍窗）；帧序/时序真机对拍（654 的入队相对序必须真机定）；制药链的抽数流水（`Merchant.ClientMakeDrugItem` 的 Ra… | 新：R2 upgrade_retrieve | 制药链 Random 流水 + 帧相对序 + MYSTATUS 落库 |
-| 15 | `openmir2-maptrigger-monster-and-door` | in-progress | W-R1-a：pin 一张「怪物路线上的 route 格」真图，两侧同驱怪物走位 ⇒ 判据=两侧怪物坐标均停在走前格（无位移帧）；W-R1-b：pin 一张「门 + ±1 相邻 route… | 新：怪物走 route / 门格 | W-R1-a/b/c 三臂 |
-| 16 | `openmir2-buff-system` | in-progress | ① 三条怪癖的真机表现（`break` 跳 for(j) 的 SysMsg 与递减；递减节奏 50ms vs 1s 两读法——**设计件标为待窗口 A-R2 裁定**；怪物 buff 永不到… | 新：R5 spell_cast + DoT trace | 毒伤逐次 MIR2_RNG_LOG；buff 递减节奏待 A-R2 裁定 |
-| 17 | `openmir2-buff-producer-wiring` | in-progress | 真机窗口项 + 新开片：四块 snap 改用忠实镜像 `cetin_near_xy`（复验新发现的格子层差异）+ 补窗口宽度上界牙 | 新：snap/宠物场景 | 余量只写「真机窗口项」，需先补具体判据 |
-| 18 | `openmir2-default-arm-spell-surface` | in-progress | ① 真机逐帧对拍（窗口项）；② 效果体层未接（MP 扣减 + `RM_HEALTHSPELLCHANGED` 先于 RM_SPELL ⇒ 仍缺一帧、相对序前移；版本门无生产调用点；`RM_M… | 新：R5 spell_cast | 逐帧对拍；效果体层 MP/帧序仍缺 |
-| 19 | `openmir2-snap-cell-fidelity` | in-progress | 真机窗口项；② 两个前置（.map 格子属性未灌进 world.maps；apply_structure_events 无生产调用方）——卡 openmir2-mapcell-attribu… | 新：mapcell + 异图 spell | 前置 mapcell 卡；异图 actorspell 不得 snap |
-| 20 | `openmir2-recall-slave-shift-live` | in-progress | ① 真机窗口（W0 §2e：两侧 RNG 账本 `VERDICT IDENTICAL` + 回召落点同坐标）；② 同窗登记的 `merchant_run → map_random_move`… | 新：R5 spell_cast（回召） | 宝宝 + 异图；RNG 账本 VERDICT IDENTICAL |
-| 21 | `openmir2-map-random-move-shift-loop` | in-progress | ① 真机窗口（商人到点移动：RNG 流水 + 落点）；② 登记未做：201 轮回滚的 `DeleteFromMap`/`AddMapObject` 语义（现只 return）、落格 `Cel… | 新：商人到点移动 | RNG 流水 + 落点 |
-| 22 | `openmir2-magic-8-21-wiring` | in-progress | ① 真机窗口（37 的 Random(20)/Random(2) 流水 + 逐格 SM_BACKSTEP，可与 8 同场景）；② 能量排斥的「37 是否可学/可放」属数据面；③ 本卡另两项既… | 新：R5 spell_cast | 魔号 8/21/37：逐格 BACKSTEP、806 ±12 |
-| 23 | `openmir2-spell-mp-wrapper` | in-progress | ① 真机窗口（失败回帧 + MP/53/尾时序）；② 6/13/14/15/16/18/19/36 的护身符/失败门未建（14/15 的 A-5 路径连 CheckAmulet 都未建）；③… | 新：R5 spell_cast | 失败回帧 639 + MP/53/尾时序 |
-| 24 | `openmir2-spell-shared-tail` | in-progress | ① 真机窗口（注入时钟下 656 帧序）；② T-78 剩余三偏差；③ `vmt`（VerifyMapTime/玩家 viewer 过期/AOI 诊断）在飞 | 新：R5 spell_cast | 注入时钟下 656 帧序 |
-| 25 | `openmir2-run-gap-monster-state-expiry` | in-progress | ① **真机窗口**（CrazyMode 色变 0xF9 / RefNameColor 帧面 / FireHit-TwinHit 到期消息）；② FireHit/TwinHit 写入点依赖未… | 新：world_observe 60–180s | CrazyMode 色变/RefNameColor/FireHit-TwinHit 到期 |
-| 26 | `openmir2-run-gap-corpse-ghost-revive` | in-progress | ① **真机窗口**（3 分钟变尸 / 可复活支 ZenTime-20s / 5 分钟移除 / 两帧 RM_TURN）；② `ReAliveEx` 未建模面（`RecalcAbilitys`… | 新：world_observe ≥300s | 3 分钟变尸/5 分钟移除/RM_TURN×2 |
-| 27 | `openmir2-movetomovingobject-quirk` | in-progress | ① **真机窗口**（多对象格移动时的源/目标格身份序列）；② `WorldGolden` 桩的怪物 CellType 仍硬编码 Play（若未来 dump 格内类型需另卡）；③ 该怪癖同样… | 新：多对象同格移动 | 源/目标格身份序列；覆盖走/跑/SpaceMove/召回 |
-| 28 | `openmir2-run-gap-monster-master-follow` | in-progress | ① **真机窗口**（异图/超距/SlaveRelax 两侧流水）；② 玩家主的 `Dir` 供给另卡 `openmir2-player-dir-supply`；③ 怪物 SpaceMove… | 新：world_observe（宝宝异图/超距） | SlaveRelax/RunAway 流水 |
-| 29 | `openmir2-run-gap-monster-specials` | in-progress | ① **真机窗口**（同 tick 产仔抽数相对次序、`SM_HIT` 帧面、Clone 扣 MP）；② `RM_RANDOMSPACEMOVE`/`RM_DELAYPUSHED` 投递未建… | 新：combat_hit + 产仔观察 | BeeQueen/SpiderHouse/Clone 扣主 MP |
-| 30 | `openmir2-run-gap-pr1-head-blocking` | in-progress | ① 真机窗口；② 跨 actor 泵序（首次入队序 vs 实体序）；③ 宿主 `pending_mag_struck` 排水序与 7 参 `SendStruckDelayMsg` 生产者（M… | 新：队列序观察 | 跨 actor 泵序 / pending_mag_struck 排水序 |
-| 31 | `openmir2-run-gap-mb1` | in-progress | ① **真机窗口**（race 101/95 各 ≥1、R38 抽样）；② `CellType.Event` 格子对象未落格；③ 通用怪 `RM_HIT` 未接；④ `MeltStoneAl… | 新：world_observe race 101/95 | 四类 Run 覆写 + R38 抽样 |
-| 32 | `openmir2-monster-view-throttle` | in-progress | ① **真机窗口**；② GuardUnit 的 6 格/CanPassiveAttack；③ 自扫相位差 ≤1 tick；④ parity 驱动不启 AI；⑤ 多玩家投递序 | 新：world_observe | 怪物视野口径 + 自扫相位 |
-| 33 | `openmir2-persist-useitems-wiring` | in-progress | ① **真机窗口**（耐久磨损/破零/存档往返）；② 破零后的 oracle 收尾未接（能力重算/`SendDelItems`/`FeatureChanged`/`RM_DURACHANGE… | 新：R7 equip_struck_save | 耐久磨损/破零/存档往返 |
-| 34 | `openmir2-run-gap-mb3` | in-progress | ① **真机窗口**（107/105/102/112）；② **`SendStruckDelayMsg` 延时面**（归 `openmir2-rm-refmessage-delay-laye… | 新：combat_hit race 107/105/102/112 | + 排水时序 |
-| 35 | `openmir2-rm-refmessage-delay-layer` | in-progress | ① **真机窗口**（200ms 后二次 `Struck` 的全局帧序）；② 未接的 7 参调用点（AttackDirect/Fireball/ExplosionSpider/DoubleC… | 新：combat_hit（200ms 二次 Struck） | 全局帧序 |
-| 36 | `openmir2-active-seek-race-missing` | in-progress | ① 真机窗口；② 这些 race 的 `AttackTarget` 覆写属 `openmir2-attacktarget-overrides`；③ 118/130 数据不可达 | 新：world_observe（9 seek race） | 另接 attacktarget-overrides |
-| 37 | `openmir2-proper-target-unfolded` | in-progress | ① 真机窗口（攻击已死目标的抽数流水）；② 其余折入版调用点（特殊怪覆写/显示路径）未扩大范围 | 新：combat_hit（攻击已死目标） | 抽数流水逐抽 |
-| 38 | `openmir2-search-target-clear-target` | in-progress | ① 真机窗口；② 其余折入版调用点未扩大范围 | 新：world_observe / combat | ClearTarget/RemoveAt 怪癖 |
-| 39 | `openmir2-attacktarget-overrides` | in-progress | 真机窗口（82/119/130/91/107/105）；114/117/118/215 不可达；`UndeadPower` 口径另卡 | 新：combat_hit（82/119/130/91/107/105 race） | 114/117/118/215 数据不可达 |
-| 40 | `openmir2-rm-delaymagic-six-ids` | in-progress | 真机窗口 + T-81 登记 | 新：spell 延时帧 | T-81 六 id |
-| 41 | `openmir2-rm-delaypushed` | in-progress | 真机窗口 + T-81 登记 | 新：combat_hit 延时 | T-81/T-83 |
-| 42 | `openmir2-player-drop-useitems` | in-progress | 真机窗口 + T-81 登记 | 新：drop 场景（CM_DROPITEM） | T-81/T-82 |
-| 43 | `openmir2-player-dir-supply` | in-progress | 真机窗口 + T-81 登记 | 新：移动/转向场景 | T-81/T-84 |
-| 44 | `openmir2-run-gap-mb4` | in-progress | race 92 真机：SpaceMove/MapRandomMove 落点与帧序、狂暴 500/400 节拍；SiegeLockCount 的 CastleDoor HoldPlace 阻挡支未建模（共 3 项） | 新：world_observe race 92 | SpaceMove/MapRandomMove 落点与帧序、狂暴 500/400 |
-| 45 | `openmir2-run-gap-pl1` | in-progress | P21 的 SendDelItems/SendAddItem 帧序与背包别名结果（真机对拍）；P32 复活链：HP/耐久/RM_DURACHANGE 与 DB 落库（共 4 项） | 新：combat_hit + 存档 | P21 帧序 / P32 复活链 / 53 同 tick |
-| 46 | `openmir2-monster-attack-hit-frame` | in-progress | 两侧同点 (605,578)/L1/60s 各采一趟：每个受击者的 SM_STRUCK 前 ~200ms 内有同 Recog 的 SM_HI…；SM_HIT.Series 与该怪 AttackDir 的方向一致（共 3 项） | 新：combat_hit（同点 605,578 / L1 / 60s） | 14/31 相对序与 AttackDir |
-| 47 | `openmir2-healthspell-emission-model` | in-progress | 整 tick 53 序列的真机对拍（尤其跨 tick G-C pending 被下一 Run 替换）；生产槽的 <68 blocker（RM_HIT=20 等）混合队列场景（共 4 项） | 新：R5 spell_cast | 整 tick 53 序列 + SKILL_SHOWHP |
-| 48 | `openmir2-gategate-speed-rules` | in-progress | 登录包下发相位：oracle 入 MsgList 后到 drain 才 Send（0-210ms 不确定），Rust 仍立即下发——真机同相…；登录后 0-210ms 内未被丢的帧（如 CM_SAY）相对登录包的先后（共 4 项） | 新：login 相位场景 | 登录包 drain 相位 0-210ms |
-| 49 | `openmir2-run-gap-pl3` | in-progress | 内容一旦启用（DECHP/INCHP/HungerSystem/KILLMONEXPRATE/POWERRATE）时的真机数值与帧序；197/198 的 ShowScriptActionMsg 自消息（共 3 项） | 新：R1 npc_script_chain（内容启用支） | 197/198 自消息 + G-B 跨 actor flush 序 |
-| 50 | `openmir2-run-gap-pl2` | in-progress | 内容启用后的 P31 结算与 44/升级链帧序；SETAUTOGETEXP 两态在真机脚本链上的可观测行为 | 新：R1 npc_script_chain | P31 结算 / 44 升级链 / SETAUTOGETEXP 两态 |
-| 51 | `openmir2-run-gap-pl4` | in-progress | 653 同 tick 相位；会话 HomeMap（GetStartPoint）四条分叉（共 3 项） | 新：R1 npc_script_chain | 653 同 tick 相位 / HomeMap 四支 / 800-801 帧序 |
-| 52 | `openmir2-upgrade-npc` | in-progress | 取回两侧同种子抽数序 A(耐久)→B(Random(3))→C/D/E 逐 k diff=0；Desc[10] 字节（含 12/22/32 与 1）与客户端落库字段（共 5 项） | 新：R2 upgrade_retrieve | 抽数序 A→B→C/D/E + Desc[10] + 帧序 |
-| 53 | `openmir2-castle-entities` | in-progress | 部署 A 情景：启动后 0 实体、4 条告警（Castle/Castle/SabukW.txt）；夹具 B：16 实体、24 次 Regen、8 告警、96 抽（同种子两侧）（共 5 项） | 新：castle fixture（16 实体/96 抽） | 4 条告警 + 毒攻门 + 弓手目标 |
-| 54 | `openmir2-castle-guard-target` | in-progress | 同城/盟友/UnderWar 下的守卫目标选择（真机）；Castle!=null 受害者经 AnimalObject.Struck 的合法性判定（T-96⑥④，另开卡） | 新：R6 castle_zone | 同城/盟友/UnderWar 三态 |
-| 55 | `openmir2-castle-war-area-impl` | in-progress | 真机 W-1..W-5：非成员进皇宫/成员/死亡/红名四臂落点与 rng 账本；766 bit4 每 tick 置位与 1s 门（共 4 项） | 新：R6 castle_zone | 766 bit4/1s 门/四臂落点 |
-| 56 | `openmir2-loader-fields` | in-progress | 真机：StartPoint/Server.conf 11 键的取值与落点；接线后 game-svr 消费新加载器（当前仍用旧三列解析） | login_only（部分）+ 新加载器接线 | game-svr 仍用旧三列解析 ⇒ 新加载器真机不可观测 |
-| 57 | `openmir2-mb5-monsters` | in-progress | 真机：五类怪的 Run 分支与帧（数据不可达时以构造级为准）；FrostTiger 657 帧在 host drain 接通后观察 | 新：world_observe 五类怪 | FrostTiger 657 帧待 host drain |
-| 58 | `openmir2-guild-official-npc` | in-progress | 真机：建会成功/失败各支帧字节与 622 负重；宣战战表与 104 文案（共 3 项） | 新：R1 npc_script_chain | 建会成功/失败两支 + 宣战战表 |
-| 59 | `openmir2-mb2-monsters` | in-progress | 真机：三怪 Run 的分支与帧（数据可达时） | 新：world_observe 三怪 | Run 分支与帧 |
-| 60 | `openmir2-mb7-monsters` | in-progress | 真机：race 113/114/134 的 Run/克隆/召唤（部署数据不可达时以构造级为准）；的展示色与排水相位 | 新：world_observe race 113/114/134 | Run/克隆/召唤 |
-| 61 | `openmir2-castle-pure` | in-progress | W1 沙巴克商人买/卖/修/升级后 TotalGold/TodayIncome 增量；W2 城主行会成员价（共 3 项） | 新：castle fixture（商人税三窗） | W1/W2/W3 |
-| 62 | `openmir2-monster-walk-frames` | in-progress | 真机重采怪物走位 SM_WALK 条数/时序（C# 基线 17–76 条）；同 tick 多步、±12 边界、传送误判（T-146 四条残余） | 新：world_observe 60–180s | SM_WALK 条数/时序（基线 17–76） |
-| 63 | `openmir2-mb8-9-monsters` | in-progress | 真机对拍 race 215 施法帧 SM_SPELL/SM_MAGICFIRE（需先接线 T-148）与抽数序；守卫/城门/城墙/NPC 的 SuperMan 打不死行为（另卡 openmir2-superman-normnpc 落地后） | 新：R5 spell_cast race 215 | 需先接 T-148 |
-| 64 | `openmir2-superman-normnpc` | in-progress | 城门 110 连续受击到 HP=0：Death=false、Run 回满、无 SetMapXyFlag(2)；World::kill 直接 Die：12 项掩码、Death 仍 false；两次 kill 各发一次（共 6 项） | 新：combat_hit + GM Kill | 城门/守卫/固定 NPC 的 SuperMan 行为 |
-| 65 | `openmir2-npc-def-loading` | in-progress | 点比奇国王(0122)/老人(3) 的说词面板与菜单可点性（@main 原文逐字）；@@buildguildnow/@ask/@back/@exit 的交互序列与说词/帧出队序（共 4 项） | 新：R1 npc_script_chain（国王 0122/老人 3） | npc_click 只发一次 @main，验不到 @@buildguildnow/@ask/@back/@exit 链 |
-| 66 | `openmir2-merchant-race-bias` | in-progress | 真机玩家以各 HAM_* 模式攻击商人：两侧都应不命中、damage=0、无 SM_STRUCK，且该拍攻击 RNG 少一次 Random(…；NastyMode 怪与城堡守卫对商人：不进目标集（共 4 项） | 新：combat_hit（HAM_* 模式打商人） | 对照 race 50；RNG 少一次 Random(SpeedPoint) |
-| 67 | `openmir2-a09-upgrade-item` | in-progress | 部署 ItemNameList 5 条在真机取同名物品，逐字节对拍 SM_BAGITEMS/SM_SAVEITEMLIST/买卖/取回/详情…；升级武器/衣服：SM_ADDITEM/SM_DELITEM/SM_UPDATEITEM 尾字段与线上 Desc 全 0（共 5 项） | 新：R2 upgrade_retrieve | ItemNameList 5 条 + 124B 尾 + 穿戴门槛 |
-| 68 | `openmir2-weapon-upgrade-values` | in-progress | 真机 @upgradenow 全量对拍四字段与 657 帧；取回路径 Dura 档/n90 抽数逐抽（共 5 项） | 新：R2 upgrade_retrieve | @upgradenow 四字段 + n90 逐抽 |
-| 69 | `openmir2-action-line-variable-text` | in-progress | 真机 C# 跑部署现成素材 `E:/MirServer/Mir200/Envir/QFunction-0.txt:388` 的 `SENDM…；真机 C# 跑 MESSAGEBOX `玩家:<$USERNAME>元宝:<$GAMEGOLD>`（最好再加 `<进入/@main>` 在前…（共 3 项） | 新：R1 npc_script_chain（SENDMSG/MESSAGEBOX 支） | QFunction-0.txt:388 素材 |
-| 70 | `openmir2-gm-commands-design` | in-progress | 真机 SETPERMISSION=10 + 戴传送装备（T-169 前置）跑 @传送：两次调用间隔卡在 UserMoveTime*1000+…；两号（DB characters.AllowGroupReCall 分别为 1 / 0）进世界后跑 @天地合一：=1 成员必须过允许门，=0…（共 4 项） | 新：GM 特权命令场景（SETPERMISSION=10）+ 多会话 | gm_batch 的 5 条命令不覆盖本卡任何一项：7 项均需 SETPERMISSION=10 后跑 @f/@ff/@传送/@bb；第 3 项「两号 @天地合一（AllowGroupReCall 1/0）」另需第二会话 |
-| 71 | `openmir2-setoffline-field-writeback` | in-progress | ① SETOFFLINE → P31：构造 QFunction-0.txt 的 @OnLogout_OffLinePlaying（`OffL…；② ISONMAP：同一窗口内验证在图上 true / 不在图上 false（部署仅 QFunction-0.txt:265 `IsOnMa…（共 3 项） | 新：脚本夹具（@OnLogout_OffLinePlaying） | SETOFFLINE/P31/ISONMAP/T-100 |
-| 72 | `openmir2-setmapmode-dechp` | in-progress | ① 真机 SETMPAMODE DECHP 全量对拍：`now-DecHpTick > nDECHPTIME*1000` 秒门 + HP-=…；② SM_SYSMESSAGE(100) 逐字节：Recog=收帧玩家 ActorId、Param=MakeWord(FColor,BCol…（共 3 项） | 新：脚本夹具（SETMPAMODE DECHP） | 部署 0 处 ⇒ 必须构造 |
-| 73 | `openmir2-door-chain-wiring` | in-progress | ① C# oracle 真机：部署图 `[0 比奇省]`（0.map，700×700，79 门/21 状态）对真实门格发 `CM_OPEND…；② 城堡子系统覆盖：`CastleDoor` Open/Close（`RM_DIGUP`/`RM_DIGDOWN`）期间同样无 612/61…（共 3 项） | 新：CM_OPENDOOR 场景 | 门格样例 (106,315)/(106,316)/(107,315) |
-| 74 | `openmir2-castle-merchant-fixedhide-hit` | in-progress | ⑧ 接通后的城堡战实战（进入/退出战中两侧帧集合 diff=0）。**残余**：`unhide_hit` 注释「恒为客户端可见」严格说只在 !ObMode 成立（商人不可达，当前无偏差）；T… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
-| 75 | `openmir2-castle-merchant-disappear-downlink` | in-progress | ⑧ 接通后城堡战进入/退出战中两侧帧集合 diff=0。**残余**：M-1 帧序无判据（把排水挪到 hits 之前仍全绿，建议补静态/构造断言）；M-2 登录尾 bundle 与战转同 t… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
-| 76 | `openmir2-gm-admin-mode-entity-seam` | in-progress | ①-④）**：5 命令真机帧面/行为、@3 挨打零低血 53 + 登出满血存档、改档→登出→复登记录比对、@2 RM_DISAPPEAR。残余 m-1（@Rest 回执滤 Ghost）/m-… | 新：GM 5 命令场景（@3/@2 等） | gm_batch 不含这些命令 |
-| 77 | `openmir2-cm-adjust-bonus` | in-progress | 真机对拍 752→52→657→252 的字节、条数与次序（安静队列前提）。残余：lib.rs:3476 旧注释 RM_ABILITY(19)/RM_FEATURECHANGED(68) 应… | 新：adjust-bonus 场景（752→52→657→252） | 需触发 RM_ADJUST_BONUS 的动作源 |
-| 78 | `openmir2-weapon-durability-frames` | in-progress | 655 真机帧面（含 DecLampDura=false 的 1500→每周期一条怪癖）、1102 真机。残余：smframe_ext 帧目录两行改「已接线」；复审 N-2 提醒 merge… | 新：combat_hit + 装备耐久 | 655/1102 帧面 |
-| 79 | `openmir2-sendrefmsg-range-config` | in-progress | 部署改 15 双栈三场景对拍。残余：crates/world 两处仍用常量 12（需 World 配置通道，另开卡）；oracle 缺省确认为 12 非 15 | 新：部署改 15 后三场景 | 依赖 World 配置通道（crates/world 两处仍常量 12） |
-| 80 | `openmir2-map-event-frames` | in-progress | 真机双栈火墙进出 5 格比对 804/805 字节与到达窗口 + PileStones 折叠槽提示 +「采 804 前确认没挖过矿/没先建过任何事件」。残余：复审 N-a journal 坏… | 新：火墙进出 5 格场景 | 804/805 字节与到达窗口 |
-| 81 | `openmir2-pickwire-remaining-frames` | in-progress | ①三条脚本帧真机逐字节；②CHANGEEXP ⇒ Recog=加完后总量（依赖 openmir2-script-changexp-exp-writeback fbd26fd8，**该卡落地前… | 新：R1 npc_script_chain | 三条脚本帧；② 依赖 changexp-exp-writeback |
-| 82 | `openmir2-frame-drain-order-audit` | in-progress | 5 场景，gw-capture 可复跑）：施法多条 SM_STRUCK(31) 序 [0,2,1]/[0,3,2,1]、交易 4 条红字(252)、寄售多条 MENU_OK(**767**… | 新：5 个场景（施法/交易/寄售/组队/NPC） | gw-capture 可复跑；767 非 769 |
+| 7 | `openmir2-m3-quest-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（-Side rust preflight 仍 PREREQ，等 ⑥-3 落地 + 独占窗口） | run_quest_pair.ps1（前置未清） | 等 ⑥-3 + rust preflight |
+| 8 | `openmir2-m3-party-trade-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑦-2/⑦-3 落地 + 独占窗口） | run_party_trade_pair.ps1（前置未清） | 等 ⑦-2/⑦-3 |
+| 9 | `openmir2-m3-selloff-fixture-botsrv` | in-progress | 剩余 DoD②③ = 真机两侧同序列 diff=0（等 ⑩-1/⑩-2 落地 + 独占窗口） | run_selloff_pair.ps1（前置未清） | 等 ⑩-1/⑩-2 |
+| 10 | `openmir2-m3-shop-scenario-authority` | in-progress | 剩余 DoD = 真机**：run_npc_shop_pair.ps1 在独占窗口跑两侧同序列 diff=0（等 ⑤-4 第②片仓库存档面 + ⑤-5 / NPC 入视野），离线判据本体已完… | run_npc_shop_pair.ps1（前置未清） | 等 ⑤-4 第②片 + ⑤-5/NPC 入视野 |
+| 11 | `openmir2-m3-castle-gold-tax` | in-progress | 剩余 DoD = ① 真机两侧「同一 10min SaveTick 时间门 → TodayIncome/TotalGold 落盘」diff=0（依赖 ⑧-1 C# GetTickCount… | 新：10min Save 文件 + 时钟注入 | 前置 ⑧-1 C# GetTickCount 注入 + 商人税 4 调用点接线 |
+| 12 | `openmir2-m3-monster-ai-tick` | needs-review | 主动索敌（新卡，W0 前置）+ Animal RNG + 守卫静止 + 真机对拍。未 merge、未自签 review | 新：主动索敌观察（W0 前置） | 未合入当前 head（needs-review）；W0 前置 + Animal RNG |
+| 13 | `openmir2-outbound-encoders-red-batch` | in-progress | 时序/RNG 面真机对拍（W0 窗或系统对拍窗）；帧序/时序真机对拍（654 的入队相对序必须真机定）；制药链的抽数流水（`Merchant.ClientMakeDrugItem` 的 Ra… | 新：R2 upgrade_retrieve | 制药链 Random 流水 + 帧相对序 + MYSTATUS 落库 |
+| 14 | `openmir2-maptrigger-monster-and-door` | in-progress | W-R1-a：pin 一张「怪物路线上的 route 格」真图，两侧同驱怪物走位 ⇒ 判据=两侧怪物坐标均停在走前格（无位移帧）；W-R1-b：pin 一张「门 + ±1 相邻 route… | 新：怪物走 route / 门格 | W-R1-a/b/c 三臂 |
+| 15 | `openmir2-buff-system` | in-progress | ① 三条怪癖的真机表现（`break` 跳 for(j) 的 SysMsg 与递减；递减节奏 50ms vs 1s 两读法——**设计件标为待窗口 A-R2 裁定**；怪物 buff 永不到… | 新：R5 spell_cast + DoT trace | 毒伤逐次 MIR2_RNG_LOG；buff 递减节奏待 A-R2 裁定 |
+| 16 | `openmir2-buff-producer-wiring` | in-progress | 真机窗口项 + 新开片：四块 snap 改用忠实镜像 `cetin_near_xy`（复验新发现的格子层差异）+ 补窗口宽度上界牙 | 新：snap/宠物场景 | 余量只写「真机窗口项」，需先补具体判据 |
+| 17 | `openmir2-default-arm-spell-surface` | in-progress | ① 真机逐帧对拍（窗口项）；② 效果体层未接（MP 扣减 + `RM_HEALTHSPELLCHANGED` 先于 RM_SPELL ⇒ 仍缺一帧、相对序前移；版本门无生产调用点；`RM_M… | 新：R5 spell_cast | 逐帧对拍；效果体层 MP/帧序仍缺 |
+| 18 | `openmir2-snap-cell-fidelity` | in-progress | 真机窗口项；② 两个前置（.map 格子属性未灌进 world.maps；apply_structure_events 无生产调用方）——卡 openmir2-mapcell-attribu… | 新：mapcell + 异图 spell | 前置 mapcell 卡；异图 actorspell 不得 snap |
+| 19 | `openmir2-recall-slave-shift-live` | in-progress | ① 真机窗口（W0 §2e：两侧 RNG 账本 `VERDICT IDENTICAL` + 回召落点同坐标）；② 同窗登记的 `merchant_run → map_random_move`… | 新：R5 spell_cast（回召） | 宝宝 + 异图；RNG 账本 VERDICT IDENTICAL |
+| 20 | `openmir2-map-random-move-shift-loop` | in-progress | ① 真机窗口（商人到点移动：RNG 流水 + 落点）；② 登记未做：201 轮回滚的 `DeleteFromMap`/`AddMapObject` 语义（现只 return）、落格 `Cel… | 新：商人到点移动 | RNG 流水 + 落点 |
+| 21 | `openmir2-magic-8-21-wiring` | in-progress | ① 真机窗口（37 的 Random(20)/Random(2) 流水 + 逐格 SM_BACKSTEP，可与 8 同场景）；② 能量排斥的「37 是否可学/可放」属数据面；③ 本卡另两项既… | 新：R5 spell_cast | 魔号 8/21/37：逐格 BACKSTEP、806 ±12 |
+| 22 | `openmir2-spell-mp-wrapper` | in-progress | ① 真机窗口（失败回帧 + MP/53/尾时序）；② 6/13/14/15/16/18/19/36 的护身符/失败门未建（14/15 的 A-5 路径连 CheckAmulet 都未建）；③… | 新：R5 spell_cast | 失败回帧 639 + MP/53/尾时序 |
+| 23 | `openmir2-spell-shared-tail` | in-progress | ① 真机窗口（注入时钟下 656 帧序）；② T-78 剩余三偏差；③ `vmt`（VerifyMapTime/玩家 viewer 过期/AOI 诊断）在飞 | 新：R5 spell_cast | 注入时钟下 656 帧序 |
+| 24 | `openmir2-run-gap-monster-state-expiry` | in-progress | ① **真机窗口**（CrazyMode 色变 0xF9 / RefNameColor 帧面 / FireHit-TwinHit 到期消息）；② FireHit/TwinHit 写入点依赖未… | 新：world_observe 60–180s | CrazyMode 色变/RefNameColor/FireHit-TwinHit 到期 |
+| 25 | `openmir2-run-gap-corpse-ghost-revive` | in-progress | ① **真机窗口**（3 分钟变尸 / 可复活支 ZenTime-20s / 5 分钟移除 / 两帧 RM_TURN）；② `ReAliveEx` 未建模面（`RecalcAbilitys`… | 新：world_observe ≥300s | 3 分钟变尸/5 分钟移除/RM_TURN×2 |
+| 26 | `openmir2-movetomovingobject-quirk` | in-progress | ① **真机窗口**（多对象格移动时的源/目标格身份序列）；② `WorldGolden` 桩的怪物 CellType 仍硬编码 Play（若未来 dump 格内类型需另卡）；③ 该怪癖同样… | 新：多对象同格移动 | 源/目标格身份序列；覆盖走/跑/SpaceMove/召回 |
+| 27 | `openmir2-run-gap-monster-master-follow` | in-progress | ① **真机窗口**（异图/超距/SlaveRelax 两侧流水）；② 玩家主的 `Dir` 供给另卡 `openmir2-player-dir-supply`；③ 怪物 SpaceMove… | 新：world_observe（宝宝异图/超距） | SlaveRelax/RunAway 流水 |
+| 28 | `openmir2-run-gap-monster-specials` | in-progress | ① **真机窗口**（同 tick 产仔抽数相对次序、`SM_HIT` 帧面、Clone 扣 MP）；② `RM_RANDOMSPACEMOVE`/`RM_DELAYPUSHED` 投递未建… | 新：combat_hit + 产仔观察 | BeeQueen/SpiderHouse/Clone 扣主 MP |
+| 29 | `openmir2-run-gap-pr1-head-blocking` | in-progress | ① 真机窗口；② 跨 actor 泵序（首次入队序 vs 实体序）；③ 宿主 `pending_mag_struck` 排水序与 7 参 `SendStruckDelayMsg` 生产者（M… | 新：队列序观察 | 跨 actor 泵序 / pending_mag_struck 排水序 |
+| 30 | `openmir2-run-gap-mb1` | in-progress | ① **真机窗口**（race 101/95 各 ≥1、R38 抽样）；② `CellType.Event` 格子对象未落格；③ 通用怪 `RM_HIT` 未接；④ `MeltStoneAl… | 新：world_observe race 101/95 | 四类 Run 覆写 + R38 抽样 |
+| 31 | `openmir2-monster-view-throttle` | in-progress | ① **真机窗口**；② GuardUnit 的 6 格/CanPassiveAttack；③ 自扫相位差 ≤1 tick；④ parity 驱动不启 AI；⑤ 多玩家投递序 | 新：world_observe | 怪物视野口径 + 自扫相位 |
+| 32 | `openmir2-persist-useitems-wiring` | in-progress | ① **真机窗口**（耐久磨损/破零/存档往返）；② 破零后的 oracle 收尾未接（能力重算/`SendDelItems`/`FeatureChanged`/`RM_DURACHANGE… | 新：R7 equip_struck_save | 耐久磨损/破零/存档往返 |
+| 33 | `openmir2-run-gap-mb3` | in-progress | ① **真机窗口**（107/105/102/112）；② **`SendStruckDelayMsg` 延时面**（归 `openmir2-rm-refmessage-delay-laye… | 新：combat_hit race 107/105/102/112 | + 排水时序 |
+| 34 | `openmir2-rm-refmessage-delay-layer` | in-progress | ① **真机窗口**（200ms 后二次 `Struck` 的全局帧序）；② 未接的 7 参调用点（AttackDirect/Fireball/ExplosionSpider/DoubleC… | 新：combat_hit（200ms 二次 Struck） | 全局帧序 |
+| 35 | `openmir2-active-seek-race-missing` | in-progress | ① 真机窗口；② 这些 race 的 `AttackTarget` 覆写属 `openmir2-attacktarget-overrides`；③ 118/130 数据不可达 | 新：world_observe（9 seek race） | 另接 attacktarget-overrides |
+| 36 | `openmir2-proper-target-unfolded` | in-progress | ① 真机窗口（攻击已死目标的抽数流水）；② 其余折入版调用点（特殊怪覆写/显示路径）未扩大范围 | 新：combat_hit（攻击已死目标） | 抽数流水逐抽 |
+| 37 | `openmir2-search-target-clear-target` | in-progress | ① 真机窗口；② 其余折入版调用点未扩大范围 | 新：world_observe / combat | ClearTarget/RemoveAt 怪癖 |
+| 38 | `openmir2-attacktarget-overrides` | in-progress | 真机窗口（82/119/130/91/107/105）；114/117/118/215 不可达；`UndeadPower` 口径另卡 | 新：combat_hit（82/119/130/91/107/105 race） | 114/117/118/215 数据不可达 |
+| 39 | `openmir2-rm-delaymagic-six-ids` | in-progress | 真机窗口 + T-81 登记 | 新：spell 延时帧 | T-81 六 id |
+| 40 | `openmir2-rm-delaypushed` | in-progress | 真机窗口 + T-81 登记 | 新：combat_hit 延时 | T-81/T-83 |
+| 41 | `openmir2-player-drop-useitems` | in-progress | 真机窗口 + T-81 登记 | 新：drop 场景（CM_DROPITEM） | T-81/T-82 |
+| 42 | `openmir2-player-dir-supply` | in-progress | 真机窗口 + T-81 登记 | 新：移动/转向场景 | T-81/T-84 |
+| 43 | `openmir2-run-gap-mb4` | in-progress | race 92 真机：SpaceMove/MapRandomMove 落点与帧序、狂暴 500/400 节拍；SiegeLockCount 的 CastleDoor HoldPlace 阻挡支未建模（共 3 项） | 新：world_observe race 92 | SpaceMove/MapRandomMove 落点与帧序、狂暴 500/400 |
+| 44 | `openmir2-run-gap-pl1` | in-progress | P21 的 SendDelItems/SendAddItem 帧序与背包别名结果（真机对拍）；P32 复活链：HP/耐久/RM_DURACHANGE 与 DB 落库（共 4 项） | 新：combat_hit + 存档 | P21 帧序 / P32 复活链 / 53 同 tick |
+| 45 | `openmir2-monster-attack-hit-frame` | in-progress | 两侧同点 (605,578)/L1/60s 各采一趟：每个受击者的 SM_STRUCK 前 ~200ms 内有同 Recog 的 SM_HI…；SM_HIT.Series 与该怪 AttackDir 的方向一致（共 3 项） | 新：combat_hit（同点 605,578 / L1 / 60s） | 14/31 相对序与 AttackDir |
+| 46 | `openmir2-healthspell-emission-model` | in-progress | 整 tick 53 序列的真机对拍（尤其跨 tick G-C pending 被下一 Run 替换）；生产槽的 <68 blocker（RM_HIT=20 等）混合队列场景（共 4 项） | 新：R5 spell_cast | 整 tick 53 序列 + SKILL_SHOWHP |
+| 47 | `openmir2-gategate-speed-rules` | in-progress | 登录包下发相位：oracle 入 MsgList 后到 drain 才 Send（0-210ms 不确定），Rust 仍立即下发——真机同相…；登录后 0-210ms 内未被丢的帧（如 CM_SAY）相对登录包的先后（共 4 项） | 新：login 相位场景 | 登录包 drain 相位 0-210ms |
+| 48 | `openmir2-run-gap-pl3` | in-progress | 内容一旦启用（DECHP/INCHP/HungerSystem/KILLMONEXPRATE/POWERRATE）时的真机数值与帧序；197/198 的 ShowScriptActionMsg 自消息（共 3 项） | 新：R1 npc_script_chain（内容启用支） | 197/198 自消息 + G-B 跨 actor flush 序 |
+| 49 | `openmir2-run-gap-pl2` | in-progress | 内容启用后的 P31 结算与 44/升级链帧序；SETAUTOGETEXP 两态在真机脚本链上的可观测行为 | 新：R1 npc_script_chain | P31 结算 / 44 升级链 / SETAUTOGETEXP 两态 |
+| 50 | `openmir2-run-gap-pl4` | in-progress | 653 同 tick 相位；会话 HomeMap（GetStartPoint）四条分叉（共 3 项） | 新：R1 npc_script_chain | 653 同 tick 相位 / HomeMap 四支 / 800-801 帧序 |
+| 51 | `openmir2-upgrade-npc` | in-progress | 取回两侧同种子抽数序 A(耐久)→B(Random(3))→C/D/E 逐 k diff=0；Desc[10] 字节（含 12/22/32 与 1）与客户端落库字段（共 5 项） | 新：R2 upgrade_retrieve | 抽数序 A→B→C/D/E + Desc[10] + 帧序 |
+| 52 | `openmir2-castle-entities` | in-progress | 部署 A 情景：启动后 0 实体、4 条告警（Castle/Castle/SabukW.txt）；夹具 B：16 实体、24 次 Regen、8 告警、96 抽（同种子两侧）（共 5 项） | 新：castle fixture（16 实体/96 抽） | 4 条告警 + 毒攻门 + 弓手目标 |
+| 53 | `openmir2-castle-guard-target` | in-progress | 同城/盟友/UnderWar 下的守卫目标选择（真机）；Castle!=null 受害者经 AnimalObject.Struck 的合法性判定（T-96⑥④，另开卡） | 新：R6 castle_zone | 同城/盟友/UnderWar 三态 |
+| 54 | `openmir2-castle-war-area-impl` | in-progress | 真机 W-1..W-5：非成员进皇宫/成员/死亡/红名四臂落点与 rng 账本；766 bit4 每 tick 置位与 1s 门（共 4 项） | 新：R6 castle_zone | 766 bit4/1s 门/四臂落点 |
+| 55 | `openmir2-loader-fields` | in-progress | 真机：StartPoint/Server.conf 11 键的取值与落点；接线后 game-svr 消费新加载器（当前仍用旧三列解析） | login_only（部分）+ 新加载器接线 | game-svr 仍用旧三列解析 ⇒ 新加载器真机不可观测 |
+| 56 | `openmir2-mb5-monsters` | in-progress | 真机：五类怪的 Run 分支与帧（数据不可达时以构造级为准）；FrostTiger 657 帧在 host drain 接通后观察 | 新：world_observe 五类怪 | FrostTiger 657 帧待 host drain |
+| 57 | `openmir2-guild-official-npc` | in-progress | 真机：建会成功/失败各支帧字节与 622 负重；宣战战表与 104 文案（共 3 项） | 新：R1 npc_script_chain | 建会成功/失败两支 + 宣战战表 |
+| 58 | `openmir2-mb2-monsters` | in-progress | 真机：三怪 Run 的分支与帧（数据可达时） | 新：world_observe 三怪 | Run 分支与帧 |
+| 59 | `openmir2-mb7-monsters` | in-progress | 真机：race 113/114/134 的 Run/克隆/召唤（部署数据不可达时以构造级为准）；的展示色与排水相位 | 新：world_observe race 113/114/134 | Run/克隆/召唤 |
+| 60 | `openmir2-castle-pure` | in-progress | W1 沙巴克商人买/卖/修/升级后 TotalGold/TodayIncome 增量；W2 城主行会成员价（共 3 项） | 新：castle fixture（商人税三窗） | W1/W2/W3 |
+| 61 | `openmir2-monster-walk-frames` | in-progress | 真机重采怪物走位 SM_WALK 条数/时序（C# 基线 17–76 条）；同 tick 多步、±12 边界、传送误判（T-146 四条残余） | 新：world_observe 60–180s | SM_WALK 条数/时序（基线 17–76） |
+| 62 | `openmir2-mb8-9-monsters` | in-progress | 真机对拍 race 215 施法帧 SM_SPELL/SM_MAGICFIRE（需先接线 T-148）与抽数序；守卫/城门/城墙/NPC 的 SuperMan 打不死行为（另卡 openmir2-superman-normnpc 落地后） | 新：R5 spell_cast race 215 | 需先接 T-148 |
+| 63 | `openmir2-superman-normnpc` | in-progress | 城门 110 连续受击到 HP=0：Death=false、Run 回满、无 SetMapXyFlag(2)；World::kill 直接 Die：12 项掩码、Death 仍 false；两次 kill 各发一次（共 6 项） | 新：combat_hit + GM Kill | 城门/守卫/固定 NPC 的 SuperMan 行为 |
+| 64 | `openmir2-npc-def-loading` | in-progress | 点比奇国王(0122)/老人(3) 的说词面板与菜单可点性（@main 原文逐字）；@@buildguildnow/@ask/@back/@exit 的交互序列与说词/帧出队序（共 4 项） | 新：R1 npc_script_chain（国王 0122/老人 3） | npc_click 只发一次 @main，验不到 @@buildguildnow/@ask/@back/@exit 链 |
+| 65 | `openmir2-merchant-race-bias` | in-progress | 真机玩家以各 HAM_* 模式攻击商人：两侧都应不命中、damage=0、无 SM_STRUCK，且该拍攻击 RNG 少一次 Random(…；NastyMode 怪与城堡守卫对商人：不进目标集（共 4 项） | 新：combat_hit（HAM_* 模式打商人） | 对照 race 50；RNG 少一次 Random(SpeedPoint) |
+| 66 | `openmir2-a09-upgrade-item` | in-progress | 部署 ItemNameList 5 条在真机取同名物品，逐字节对拍 SM_BAGITEMS/SM_SAVEITEMLIST/买卖/取回/详情…；升级武器/衣服：SM_ADDITEM/SM_DELITEM/SM_UPDATEITEM 尾字段与线上 Desc 全 0（共 5 项） | 新：R2 upgrade_retrieve | ItemNameList 5 条 + 124B 尾 + 穿戴门槛 |
+| 67 | `openmir2-weapon-upgrade-values` | in-progress | 真机 @upgradenow 全量对拍四字段与 657 帧；取回路径 Dura 档/n90 抽数逐抽（共 5 项） | 新：R2 upgrade_retrieve | @upgradenow 四字段 + n90 逐抽 |
+| 68 | `openmir2-action-line-variable-text` | in-progress | 真机 C# 跑部署现成素材 `E:/MirServer/Mir200/Envir/QFunction-0.txt:388` 的 `SENDM…；真机 C# 跑 MESSAGEBOX `玩家:<$USERNAME>元宝:<$GAMEGOLD>`（最好再加 `<进入/@main>` 在前…（共 3 项） | 新：R1 npc_script_chain（SENDMSG/MESSAGEBOX 支） | QFunction-0.txt:388 素材 |
+| 69 | `openmir2-gm-commands-design` | in-progress | 真机 SETPERMISSION=10 + 戴传送装备（T-169 前置）跑 @传送：两次调用间隔卡在 UserMoveTime*1000+…；两号（DB characters.AllowGroupReCall 分别为 1 / 0）进世界后跑 @天地合一：=1 成员必须过允许门，=0…（共 4 项） | 新：GM 特权命令场景（SETPERMISSION=10）+ 多会话 | gm_batch 的 5 条命令不覆盖本卡任何一项：7 项均需 SETPERMISSION=10 后跑 @f/@ff/@传送/@bb；第 3 项「两号 @天地合一（AllowGroupReCall 1/0）」另需第二会话 |
+| 70 | `openmir2-setoffline-field-writeback` | in-progress | ① SETOFFLINE → P31：构造 QFunction-0.txt 的 @OnLogout_OffLinePlaying（`OffL…；② ISONMAP：同一窗口内验证在图上 true / 不在图上 false（部署仅 QFunction-0.txt:265 `IsOnMa…（共 3 项） | 新：脚本夹具（@OnLogout_OffLinePlaying） | SETOFFLINE/P31/ISONMAP/T-100 |
+| 71 | `openmir2-setmapmode-dechp` | in-progress | ① 真机 SETMPAMODE DECHP 全量对拍：`now-DecHpTick > nDECHPTIME*1000` 秒门 + HP-=…；② SM_SYSMESSAGE(100) 逐字节：Recog=收帧玩家 ActorId、Param=MakeWord(FColor,BCol…（共 3 项） | 新：脚本夹具（SETMPAMODE DECHP） | 部署 0 处 ⇒ 必须构造 |
+| 72 | `openmir2-door-chain-wiring` | in-progress | ① C# oracle 真机：部署图 `[0 比奇省]`（0.map，700×700，79 门/21 状态）对真实门格发 `CM_OPEND…；② 城堡子系统覆盖：`CastleDoor` Open/Close（`RM_DIGUP`/`RM_DIGDOWN`）期间同样无 612/61…（共 3 项） | 新：CM_OPENDOOR 场景 | 门格样例 (106,315)/(106,316)/(107,315) |
+| 73 | `openmir2-castle-merchant-fixedhide-hit` | in-progress | ⑧ 接通后的城堡战实战（进入/退出战中两侧帧集合 diff=0）。**残余**：`unhide_hit` 注释「恒为客户端可见」严格说只在 !ObMode 成立（商人不可达，当前无偏差）；T… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
+| 74 | `openmir2-castle-merchant-disappear-downlink` | in-progress | ⑧ 接通后城堡战进入/退出战中两侧帧集合 diff=0。**残余**：M-1 帧序无判据（把排水挪到 hits 之前仍全绿，建议补静态/构造断言）；M-2 登录尾 bundle 与战转同 t… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
+| 75 | `openmir2-gm-admin-mode-entity-seam` | in-progress | ①-④）**：5 命令真机帧面/行为、@3 挨打零低血 53 + 登出满血存档、改档→登出→复登记录比对、@2 RM_DISAPPEAR。残余 m-1（@Rest 回执滤 Ghost）/m-… | 新：GM 5 命令场景（@3/@2 等） | gm_batch 不含这些命令 |
+| 76 | `openmir2-cm-adjust-bonus` | in-progress | 真机对拍 752→52→657→252 的字节、条数与次序（安静队列前提）。残余：lib.rs:3476 旧注释 RM_ABILITY(19)/RM_FEATURECHANGED(68) 应… | 新：adjust-bonus 场景（752→52→657→252） | 需触发 RM_ADJUST_BONUS 的动作源 |
+| 77 | `openmir2-weapon-durability-frames` | in-progress | 655 真机帧面（含 DecLampDura=false 的 1500→每周期一条怪癖）、1102 真机。残余：smframe_ext 帧目录两行改「已接线」；复审 N-2 提醒 merge… | 新：combat_hit + 装备耐久 | 655/1102 帧面 |
+| 78 | `openmir2-sendrefmsg-range-config` | in-progress | 部署改 15 双栈三场景对拍。残余：crates/world 两处仍用常量 12（需 World 配置通道，另开卡）；oracle 缺省确认为 12 非 15 | 新：部署改 15 后三场景 | 依赖 World 配置通道（crates/world 两处仍常量 12） |
+| 79 | `openmir2-map-event-frames` | in-progress | 真机双栈火墙进出 5 格比对 804/805 字节与到达窗口 + PileStones 折叠槽提示 +「采 804 前确认没挖过矿/没先建过任何事件」。残余：复审 N-a journal 坏… | 新：火墙进出 5 格场景 | 804/805 字节与到达窗口 |
+| 80 | `openmir2-pickwire-remaining-frames` | in-progress | ①三条脚本帧真机逐字节；②CHANGEEXP ⇒ Recog=加完后总量（依赖 openmir2-script-changexp-exp-writeback fbd26fd8，**该卡落地前… | 新：R1 npc_script_chain | 三条脚本帧；② 依赖 changexp-exp-writeback |
+| 81 | `openmir2-frame-drain-order-audit` | in-progress | 5 场景，gw-capture 可复跑）：施法多条 SM_STRUCK(31) 序 [0,2,1]/[0,3,2,1]、交易 4 条红字(252)、寄售多条 MENU_OK(**767**… | 新：5 个场景（施法/交易/寄售/组队/NPC） | gw-capture 可复跑；767 非 769 |
 
 ### 4 · 不可协议对拍：GUI / 长跑 / 离线文件日志 / 多会话收件人集合 / 工具缺口 / 非窗口欠账（35 张）
 
@@ -304,9 +304,9 @@
 
 **抽样结论**：10 张里 4 张（脚本链/点击路径/529/GM 手动）确实能用所选场景验到，6 张按原判据**单客户端或单场景验不到**，已分别改判第 3 批或不可对拍。特别地，凡是原文出现「收件人集合」「±12」「两个在线成员」「两号同时在线」的卡，一律不进第 1/2 批——这是本次复核最有价值的一条筛选规则。
 
-> **I-1 规则反查（第 1 批全部 52 张）**：命中 2 张——`openmir2-gm-commands-design`（7 项窗口项**没有一项**由 `gm_batch` 覆盖：全需 SETPERMISSION=10 后跑 @f/@ff/@传送/@bb，第 3 项「两号 @天地合一」另需第二会话 ⇒ **整卡移第 3 批**）；`openmir2-player-searchviewrange-cadence`（项 ① 可闭环；项 ③ RM_DISAPPEAR 收件人近似需第二观察者 ⇒ **标部分可验**）。⇒ 第 1 批「可闭环」是 51 张，不是 52/53 张。
+> **I-1 规则反查（第 1 批全部 53 张）**：命中 2 张——`openmir2-gm-commands-design`（7 项窗口项**没有一项**由 `gm_batch` 覆盖：全需 SETPERMISSION=10 后跑 @f/@ff/@传送/@bb，第 3 项「两号 @天地合一」另需第二会话 ⇒ **整卡移第 3 批**）；`openmir2-player-searchviewrange-cadence`（项 ① 可闭环；项 ③ RM_DISAPPEAR 收件人近似需第二观察者 ⇒ **标部分可验**）。⇒ 第 1 批「可闭环」是 52 张，不是 53 张。
 
-> 抽样还发现**卡面结论过时** 4 张（reviewer-6 按 058c3ad25 逐项复核成立）：`m3-guild-castle-align`、`m3-hero-pet-align`（`run_*_pair.ps1` 在）、`m3-mail-auction-align`（bins 有 `CM_SELLOFFADDITEM`）、`m3-party-trade-align`（bins 有 `CM_GROUPMODE/CM_CREATEGROUP`）；行内已改「前置待复核」。另 `login-529` 的前置 SS_SERVERINFO 已在 `185a6c8cb`。**不成立的两类**：`m3-drop-exp-align` 的夹具文件在子目录 `mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1`（只列根目录会漏），但 BotSrv 无固定种子 100 杀驱动，卡面前置成立；`m3-quest-align` 的三条阻断（markers 前缀未认领 / C# k=0 JSON 截断 / quest_state.jsonl 无生产者）仍全部成立。**开窗前仍应重跑前置检查，不要照抄卡片旧结论。**
+> 抽样还发现**卡面结论过时** 5 张（按 058c3ad25 逐项复核）：`m3-guild-castle-align`、`m3-hero-pet-align`（`run_*_pair.ps1` 在）、`m3-mail-auction-align`（bins 有 `CM_SELLOFFADDITEM`）、`m3-party-trade-align`（bins 有 `CM_GROUPMODE/CM_CREATEGROUP`）、`m3-drop-exp-align`（`run_drop_exp_pair.ps1` 在 `m3/drop-exp/` 子目录，32290 字节，10-16 已有；卡面「master 无该夹具」过时 ⇒ 移第 1 批 B 组）。另 `login-529` 的前置 SS_SERVERINFO 已在 `185a6c8cb`。**唯一不成立的是 `m3-quest-align`**：其三条阻断（markers 前缀未认领 / C# k=0 JSON 截断 / quest_state.jsonl 无生产者）仍全部成立。**坑**：`run_*_pair.ps1` 散落在子目录（`drop-exp/`、`rng-scene/`、`rng-trace-scene/`），查夹具要用 `find mir2-rs/tests/parity/m3 -name "run_*pair*.ps1"`，只看 `m3/` 顶层会漏（reviewer 与我都踩过）。**开窗前仍应重跑前置检查，不要照抄卡片旧结论。**
 
 ## 5. 缺口登记（不改场景、不改工具，只登记）
 
