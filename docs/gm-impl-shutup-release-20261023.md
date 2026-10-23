@@ -55,7 +55,7 @@
 ```
 cargo fmt --all -- --check                              OK
 cargo clippy --workspace --all-targets -- -D warnings   OK
-cargo test --workspace                                  141 个测试二进制 / 3068 passed / 0 FAILED（rc=0；合并 master 后重跑）
+cargo test --workspace                                  141 个测试二进制 / 3101 passed / 0 FAILED（rc=0；第二次合并 master 后重跑）
 cargo run -p msgcodegen -- --check                      604 条一致
 whitelist_anchor_gate.py check                          507 条锚 ALL PASS（含 T-212）
 m3_whitelist_registry_audit.py audit                    GREEN
@@ -98,6 +98,15 @@ gm_registry.py build && gate && selftest                GREEN（14 teeth）
   同名的「`取消禁言` → `Imp::Unimplemented`」旧表项（否则表 186 行、`find` 命中旧项 ⇒ 零帧）。
 - 计数：`Implemented 101 / Unimplemented 84`（master 100 + 本卡 1）；`gm_registry.py build` 重新生成指纹。
 - `whitelist.md` / `T-RESERVATIONS.md`：保留 master 全部行 + 重插 T-212 行（含 F1 订正）。
+
+## 5d. 第二次合并 + 工具适配（review 后的 master 前进）
+
+- master 再并入 `gm-integration`（kick/mobfireburn/smake/clearbag 返工）⇒ 同法重放本卡增量：
+  `Implemented 105 / Unimplemented 80`，`gm_registry.py build` 重新生成登记表。
+- **工具适配（跨卡写集，已在卡上给 Leader 留 comment）**：本卡把 `取消禁言` 实现后，
+  `commands` 里再无「未实现的 script-reachable 行」⇒ `gm_registry.py selftest` 的牙 K/N
+  `next(...)` 抛 StopIteration。改为 `next(..., None)` + **显式 `[skip]` 打印**（不静默放行），
+  结尾 OK 行标注 `skipped=K,N`；在 clean master 检出上验证 14 颗牙仍全 ok、无 skip。
 
 ## 6. 残留物清单
 

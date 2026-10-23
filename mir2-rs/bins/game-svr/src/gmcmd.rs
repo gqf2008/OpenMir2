@@ -107,6 +107,11 @@ pub const RELOAD_GUILD_HELP: &str = "命令格式: @ReloadGuild 行会名称";
 /// `FireBurnCommand`：`[Command("FireBurn", "", 10)]` ⇒ `Help` 为 null ⇒ 尾随一个空格。
 pub const FIRE_BURN_HELP: &str = "命令格式: @FireBurn ";
 
+/// `MobFireBurnCommand` 的帮助文本模板：`CommandHelp.GameCommandMobFireBurnHelpMsg` =
+/// `"命令格式: {0} {1} {2} {3} {4} {5} {6}"`（`CommandHelp.cs:104`），实参 = `Command.Name`
+/// + 六个原始串。注意**没有 `@` 前缀**、分隔符是**单个**空格，空槽位 ⇒ 连续/尾随空格照原样。
+pub const MOB_FIRE_BURN_NAME: &str = "MobFireBurn";
+
 // ===== 批次 3（传送/召唤族）的 `Command.CommandHelp` 与 SysMsg 文本常量 =====
 //
 // 口径：`命令格式: @{Name} {Help}`（`CommandAttribute.cs:53`），`Name` 已被 `Command.conf`
@@ -326,6 +331,15 @@ pub enum Imp {
     /// `StartQuestCommand`（现网 `@开始提问`）：`SendQuestMsg` 被注释 ⇒ 非空名零帧；
     /// 空名 ⇒ 红字帮助。
     StartQuest,
+    /// `MobFireBurnCommand`（现网 `@MobFireBurn`）：六参校验 + `MapMgr.FindMap`；
+    /// 地图命中 ⇒ `FireBurnEvent` 入 `EventMgr`（宿主未接 ⇒ 零帧）；未命中 ⇒ 红字。
+    MobFireBurn,
+    /// `SmakeItemCommand`（现网 `@改属性`）：原地改佩戴位属性（`Desc[n]` / `Dura` / `DuraMax`）+
+    /// `RecalcAbilitys()` + `SendUpdateItem()`；空槽 ⇒ 一条红字。
+    SmakeItem,
+    /// `ClearBagItemCommand`（现网 `@清理垃圾`）：清空目标 `ItemList` 并给**目标**发
+    /// `SM_DELITEMS(709)`（`名/makeindex/` 串，`Series` = 件数）；空列表 ⇒ 零帧。
+    ClearBagItem,
 
     // ---- 批次 3 · 传送/召唤（17 + `@传送`，设计件 §4.3 第 11–27 行 / §6 G3）----
     /// `AllowDearRecallCommand`（现网 `@dfsgf567`）。
@@ -463,12 +477,16 @@ pub enum Imp {
     /// **整段被注释** ⇒ 任何参数都零帧、零副作用（最小 no-op 实现）。
     ShowEffect,
 
+    /// `KickHumanCommand`（现网 `@VV踢人`）：置目标的 `BoKickFlag/BoEmergencyClose`；
+    /// 目标离线 ⇒ 一条 Red/Hint；空名 ⇒ **静默 return**（零帧）。
+    KickHuman,
+
     /// `ShutupReleaseCommand`（现网 `@取消禁言`）：`IsNullOrEmpty(x) || !IsNullOrEmpty(x)` 恒真
     /// ⇒ 永远只回帮助文本；名单移除整段被注释；第二参非 `true`/`false` ⇒ `bool.Parse` 抛
     /// `FormatException` 被 `PlayObject.Chat.cs:402-406` 吞掉 ⇒ 零帧。
     ShutupRelease,
 
-    /// 未接的 84 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 4 条）：
+    /// 未接的 80 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 8 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
 }
@@ -509,6 +527,23 @@ pub struct GmMsg {
 ///
 /// 本类型是「把权威值落到实体」的最小差量：每个命令只填自己拥有的字段（`Some`），
 /// 其余保持 `None`（别的命令/别的写点不归它管，避免把陈旧镜像盖回去）。
+/// [`GmSession::pending_use_item`] 的载荷：**改完后的整槽**（`PlayObject.UseItems[n]`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GmUseItemWrite {
+    /// 佩戴位下标（`SmakeItemCommand.cs:22` 的 `nWhere`，守卫 `0..=12`）。
+    pub slot: usize,
+    /// `UserItem.Index`（模板查表用；未改）。
+    pub index: u16,
+    /// `UserItem.MakeIndex`（文案与 `SM_UPDATEITEM` 用；未改）。
+    pub make_index: i32,
+    /// 改后的 `UserItem.Dura`。
+    pub dura: u16,
+    /// 改后的 `UserItem.DuraMax`。
+    pub dura_max: u16,
+    /// 改后的 `UserItem.Desc`（14 字节）。
+    pub desc: [u8; 14],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GmEntityState {
     /// 目标实体 = `GmWorld::self_entity()`（`WorldEngine.GetPlayObject(speaker)`）的 `Entity.id`。
@@ -631,6 +666,24 @@ pub struct GmSession {
     /// 由宿主在**同一事件内**（`lib.rs` 的 `CM_SAY` 支）取走并 [`GmEntityState::apply`]，
     /// 仍在 `world.tick()` 之前。每次命令都会整体覆盖本字段（不会残留上一次的值）。
     pub pending_entity: Option<GmEntityState>,
+    /// **待落地的踢人目标**（卡 `openmir2-gm-impl-kick`，`KickHumanCommand.cs:26-31`）。
+    ///
+    /// oracle 命令体直接写**目标** `PlayObject.BoKickFlag/BoEmergencyClose`；本仓命令体是纯函数、
+    /// `GmWorld` 只读 ⇒ 命令体把目标 `ChrName` 装进本缓冲（与 [`GmSession::pending_entity`] 同法），
+    /// 宿主（`lib.rs` 的 sim 循环）在 `drain_kicks` 之前收口：该支先发
+    /// `SM_OUTOFCONNECTION(528)` 再 `KickUser` + 存档 + `MakeGhost`（`PlayObject.Message.cs:367-378`）。
+    pub pending_kick: Option<String>,
+    /// **待落地的佩戴位写**（卡 `openmir2-gm-impl-smake`，`SmakeItemCommand.cs:28-61`）。
+    ///
+    /// oracle 命令体直接改**目标（= 说话者）自己的** `PlayObject.UseItems[n]` 再
+    /// `RecalcAbilitys()` + `SendUpdateItem()`；本仓命令体纯、`GmWorld` 只读 ⇒ 命令体把
+    /// 「改完后的整槽」装进本缓冲（与 `pending_entity` 同法），宿主在同一事件内落地
+    /// （写会话 `use_items` + 实体 `UseItems`、重算 WAbil、发 `SM_UPDATEITEM(203)`）。
+    pub pending_use_item: Option<GmUseItemWrite>,
+    /// **待落地的清包目标**（卡 `openmir2-gm-impl-clearbag`，`ClearBagItemCommand.cs:31-52`）：
+    /// 目标 `ChrName`。oracle 命令体直接清目标 `ItemList` 并给目标发 `RM_SENDDELITEMLIST`；
+    /// 本仓命令体纯 ⇒ 只登记目标，宿主收口（空包 ⇒ 不发帧，与 oracle 同）。
+    pub pending_clear_bag: Option<String>,
 }
 
 impl Default for GmSession {
@@ -664,6 +717,9 @@ impl Default for GmSession {
             attack_mode: 0,
             re_level: 0,
             pending_entity: None,
+            pending_kick: None,
+            pending_use_item: None,
+            pending_clear_bag: None,
         }
     }
 }
@@ -1042,6 +1098,11 @@ impl<'a> GmWorld<'a> {
         self.world?.entities.get(id)
     }
 
+    /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
+    fn self_use_item(&self, slot: usize) -> Option<&'a mir2_world::entity::UseItemSlot> {
+        self.self_entity()?.use_items.get(slot)
+    }
+
     fn self_entity(&self) -> Option<&'a mir2_world::Entity> {
         if self.speaker.is_empty() {
             return None;
@@ -1168,6 +1229,25 @@ const NOTE_INDEX_OUT_OF_RANGE: &str =
 const NOTE_NO_WORLD: &str =
     "GmWorld 未注入在线实体表/世界（S1 占位世界）⇒ 无法判定目标在线、坐标或地图 Flag";
 
+/// `SmakeItemCommand.cs:77`：空槽位的红字回执（`CommandHelp.GamecommandSuperMakeHelpMsg`）。
+pub const SMAKE_NO_ITEM_HELP: &str = "身上没指定物品!!!";
+
+/// `SmakeItemCommand.cs:26`：三参越界 ⇒ **静默 return**（oracle 无 else 支）。
+const NOTE_SMAKE_RANGE: &str = "SmakeItem：nWhere/nValueType/nValue 越界 ⇒ 静默 return（零帧）";
+
+/// `SmakeItemCommand.cs:36-43`：`nValueType == 16`（吸伤）支**不可达**——`:26` 的范围守卫
+/// 只放行 `0..=15`。照抄时省略，登记在此。
+const NOTE_SMAKE_ABSORB_DEAD: &str =
+    "SmakeItem：nValueType==16 吸伤支被 :26 的 0..=15 守卫挡住（死支）";
+/// `ClearBagItemCommand` 的帮助文本：`Command.CommandHelp` = `命令格式: @清理垃圾 人物名称`
+/// （`Name` 被 `Command.conf` 的 `[Command] ClearBag=清理垃圾` 覆盖，`Help` = 「人物名称」）。
+pub const CLEAR_BAG_HELP: &str = "命令格式: @清理垃圾 人物名称";
+
+/// `ClearBagItemCommand.cs:47-52`：命中且目标背包非空 ⇒ 宿主清包 + 给**目标**发
+/// `SM_DELITEMS(709)`（`Recog=0`、`Series`=件数、尾 = `EncodeString("名/makeindex/…")`）。
+const NOTE_CLEAR_BAG_PENDING: &str =
+    "ClearBagItem：已登记清包目标（空包 ⇒ 不发帧，与 oracle 同；非空由宿主清包并发 709）";
+
 /// `ShowEffectCommand.cs:20-70`：命令体**整段被注释** ⇒ 任何参数都零帧、零副作用。
 const NOTE_SHOW_EFFECT_ALL_COMMENTED: &str =
     "ShowEffect：oracle 命令体 20-70 行整段注释 ⇒ 零帧、零副作用（最小 no-op）";
@@ -1178,6 +1258,14 @@ pub const START_QUEST_HELP: &str = "命令格式: @开始提问 问答名称";
 /// `StartQuestCommand.cs:22`：`SendQuestMsg` 已被注释 ⇒ 非空名零帧、零副作用。
 const NOTE_START_QUEST_MSG_COMMENTED: &str =
     "StartQuest：oracle :22 的 WorldEngine.SendQuestMsg 被注释 ⇒ 零帧、零副作用";
+
+/// `KickHumanCommand.cs:21-24`：空名 **静默 return**（oracle 无任何帧，连帮助文本都不发）。
+const NOTE_KICK_HUMAN_EMPTY_NAME: &str = "KickHuman：空名字 ⇒ oracle 静默 return（零帧）";
+
+/// `KickHumanCommand.cs:26-31`：命中 ⇒ 只置目标 `BoKickFlag/BoEmergencyClose`，命令本身零回帧；
+/// 踢的落地（`SM_OUTOFCONNECTION(528)` + `MakeGhost`）由宿主 `drain_kicks` 在 tick 内收口。
+const NOTE_KICK_HUMAN_PENDING: &str =
+    "KickHuman：已置目标 BoKickFlag/BoEmergencyClose（命令无回帧，宿主 drain_kicks 落地）";
 const NOTE_NO_MAP_REGISTRY: &str =
     "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
 const NOTE_RECALL_HUMAN: &str =
@@ -1578,6 +1666,189 @@ fn start_quest(parameters: &str) -> GmResult {
         return red(START_QUEST_HELP);
     }
     no_frames(NOTE_START_QUEST_MSG_COMMENTED)
+}
+
+/// `MobFireBurnCommand.Execute`（`src/Modules/GameCommand/Commands/MobFireBurnCommand.cs:17-60`，
+/// 现网 `@MobFireBurn`；`Command.conf` **没有** `[Command] MobFireBurn` 覆盖 ⇒ 注册名保持英文
+/// `MobFireBurn`，部署脚本写 `MOBFIREBURN` 靠 `CommandMaps` 的 `OrdinalIgnoreCase` 命中）。
+///
+/// **实际执行行**：
+/// - `:19` `if (@params == null) return;`——`case 2` 传 `Split(' ')`（不返回 null）⇒ 死分支；
+/// - `:23-28` 取六个原始串（地图/坐标 X/Y/光环效果/持续时间/未知）；
+/// - `:29-33` `IsNullOrEmpty(sMap) || sMap != "" && sMap[1] == '?'`：空地图 ⇒ 红字帮助；
+///   **单码元地图名 ⇒ `sMap[1]` 抛 `IndexOutOfRangeException`，被 `PlayObject.Chat.cs:402-406`
+///   吞掉 ⇒ 零帧**（构造级分支；**部署形态不走这条**：`ActionOfGmExecute` 直接拼
+///   `sParam1..6`、不调 `GetLineVariableText`，`<$…>` 在动作参数里原样（T-165）⇒ 实参是
+///   `<$CURRENTMAP>`（13 码元，`sMap[1]` 是 `$`，不越界），`StrToInt("<$CURRENTX>", -1) = -1`
+///   ⇒ 落 `:43` 的 `nX < 0` 帮助支）；
+///   第 2 个 UTF-16 码元是 `?` ⇒ 红字帮助；
+/// - `:34-38` `(short)StrToInt(sX,-1)` / `(short)sY` / `(byte)sType` / `int sTime` / `int sPoint`；
+/// - `:39-42` `nPoint < 0 ⇒ 1`（⇒ `:43` 的 `nPoint < 0` 恒假）；`(byte)` 的 `nType < 0` 也恒假；
+/// - `:43-48` 其余非法 ⇒ 红字帮助（模板 7 槽，空槽 ⇒ 连续/尾随空格）；
+/// - `:49-58` `MapMgr.FindMap`：命中 ⇒ 临时改 `PlayerActor.Envir`、`FireBurnEvent` 入
+///   `EventMgr`、还原 `Envir`，**不发帧**（宿主未接 ⇒ 与 `@FireBurn` 同一支 [`NOTE_EVENT_MGR`]）；
+/// - `:59` 未命中 ⇒ `string.Format("地图{0} 不存在", Command.Name, sMap)`——模板**只有一个**
+///   占位符 ⇒ 实参 `sMap` 被丢弃，文案是 `地图MobFireBurn 不存在`（**BUG-REPLICA**，照抄）。
+fn mob_fire_burn(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let s_map = params.first().copied().unwrap_or("");
+    let s_x = params.get(1).copied().unwrap_or("");
+    let s_y = params.get(2).copied().unwrap_or("");
+    let s_type = params.get(3).copied().unwrap_or("");
+    let s_time = params.get(4).copied().unwrap_or("");
+    let s_point = params.get(5).copied().unwrap_or("");
+    let help = || {
+        red(format!(
+            "命令格式: {MOB_FIRE_BURN_NAME} {s_map} {s_x} {s_y} {s_type} {s_time} {s_point}"
+        ))
+    };
+    // `:29`：`IsNullOrEmpty(sMap)` ⇒ 帮助（此支不求值 `sMap[1]`）。
+    if s_map.is_empty() {
+        return help();
+    }
+    match second_utf16_is_question(s_map) {
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+        Some(true) => return help(),
+        Some(false) => {}
+    }
+    // `:34-38`：C# 的 `(short)`/`(byte)` 是 **unchecked** 截断 ⇒ Rust `as`。
+    let n_x = str_to_int(s_x, -1) as i16;
+    let n_y = str_to_int(s_y, -1) as i16;
+    let n_type = str_to_int(s_type, -1) as u8;
+    let n_time = str_to_int(s_time, -1);
+    let n_point = str_to_int(s_point, -1);
+    let n_point = if n_point < 0 { 1 } else { n_point };
+    // `nType < 0`（byte 恒 ≥ 0）与 `nPoint < 0`（上一行已抬到 1）是死条件，照抄时省略。
+    let _ = (n_type, n_point);
+    if n_x < 0 || n_y < 0 || n_time < 0 {
+        return help();
+    }
+    // `:49` `MapMgr.FindMap(sMap)`：未接地图注册表时按既有口径登记（不伪造「地图不存在」）。
+    let Some(maps) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    if maps.map_by_name(s_map).is_some() {
+        // `:52-57`：`FireBurnEvent(PlayerActor, nX, nY, nType, nTime*1000, nPoint)` 入
+        // `SystemShare.EventMgr`（临时改/还原 `PlayerActor.Envir`）。宿主未接事件队列 ⇒ 零帧。
+        return no_frames(NOTE_EVENT_MGR);
+    }
+    // `:59`：模板只有 `{0}` ⇒ `Command.Name` 被填、`sMap` 被忽略 ⇒ 文案是命令名（BUG-REPLICA）。
+    red(format!("地图{MOB_FIRE_BURN_NAME} 不存在"))
+}
+
+/// `SmakeItemCommand.Execute`（`src/Modules/GameCommand/Commands/SmakeItemCommand.cs:16-80`，
+/// 现网 `@改属性`，`Command.conf` 的 `[Command] SuperMake=改属性` / `[Permission] SuperMake=10`）。
+///
+/// **实际执行行**：
+/// - `:22-24` `nWhere`/`nValueType`/`nValue`（`StrToInt(_, 0)`，缺参 = 0）；
+/// - `:26` 范围守卫 `0<=nWhere<=12 && 0<=nValueType<=15 && 0<=nValue<=255`，不满足 ⇒ **静默
+///   return**（无 else、无回执）；`nValueType <= 15` 让 `:36` 的 `nValueType == 16` 支**不可达**；
+/// - `:28` 该槽 `Index > 0` 才继续；**空槽 ⇒ 红字 `身上没指定物品!!!`**（`:77`）；
+/// - `:30-34` 模板查不到 ⇒ 静默 return（本仓 `GmWorld` 无物品表 ⇒ 该支登记在 T-* 行）；
+/// - `:35` `Desc[9] = (byte)_MIN(255, Desc[9] + 1)`（**无条件**累积升级次数）；
+/// - `:44-55` `nValueType` 14 ⇒ `Dura = (ushort)(_MIN(65, nValue) * 1000)`；15 ⇒ `DuraMax` 同式；
+/// - `:56-59` 否则 `Desc[nValueType] = (byte)nValue`（`nValueType` 已 ≤13）；
+/// - `:60` `RecalcAbilitys()`；`:61` `SendUpdateItem(UseItems[nWhere])`（`SM_UPDATEITEM(203)`）；
+/// - `:62-69` 蓝字回执 `"{Index}-{MakeIndex} {Dura}/{DuraMax} {Desc0}/{1}/…/{13}"`
+///   （`ItemAttr.WeaponUpgrade = 10` ⇒ 13 个 `Desc` 槽按 0..=13 全列）；
+/// - `:70-73` `Config.ShowMakeItemMsg` ⇒ 只写服务端日志（无帧）。
+///
+/// 落地：命令体只算「改完后的整槽」并装进 [`GmSession::pending_use_item`]；宿主
+/// （`lib.rs::apply_pending_gm_use_item`）写会话 + 实体、重算 WAbil、发 `SM_UPDATEITEM(203)`。
+fn smake_item(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let n_where = str_to_int(params.first().copied().unwrap_or(""), 0);
+    let n_value_type = str_to_int(params.get(1).copied().unwrap_or(""), 0);
+    let n_value = str_to_int(params.get(2).copied().unwrap_or(""), 0);
+    // `:26`：越界 ⇒ 静默 return（无 else）。
+    if !(0..=12).contains(&n_where)
+        || !(0..=15).contains(&n_value_type)
+        || !(0..=255).contains(&n_value)
+    {
+        return no_frames(NOTE_SMAKE_RANGE);
+    }
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    let Some(item) = world.self_use_item(n_where as usize) else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    // `:28`：空槽 ⇒ 一条红字（固定文案，不是帮助格式）。
+    if item.index == 0 {
+        return red(SMAKE_NO_ITEM_HELP);
+    }
+    // `:30-34`：模板查不到 ⇒ 静默（`GmWorld` 无物品表，登记为 T-* 残余）。
+    let mut desc = item.desc;
+    let mut dura = item.dura;
+    let mut dura_max = item.dura_max;
+    // `:35`：无条件累积升级次数（`byte` 语义 ⇒ 饱和）。
+    desc[9] = desc[9].saturating_add(1);
+    // `:36-43` 的 `nValueType == 16` 支不可达（守卫 ≤15）——省略并登记。
+    // `:44-59`：14/15 先 `_MIN(65, _)` 再 ×1000；其余写 `Desc[n]`。
+    match n_value_type {
+        14 => dura = (n_value.min(65) * 1000) as u16,
+        15 => dura_max = (n_value.min(65) * 1000) as u16,
+        t => desc[t as usize] = n_value as u8,
+    }
+    let _ = NOTE_SMAKE_ABSORB_DEAD;
+    sess.pending_use_item = Some(GmUseItemWrite {
+        slot: n_where as usize,
+        index: item.index,
+        make_index: item.make_index,
+        dura,
+        dura_max,
+        desc,
+    });
+    // `:62-69`：蓝字回执（`Desc` 0..=13 全列）。
+    let dump = (0..14)
+        .map(|i| desc[i].to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    GmResult::one(
+        GmColor::Blue,
+        format!(
+            "{}-{} {}/{} {dump}",
+            item.index, item.make_index, dura, dura_max
+        ),
+    )
+}
+
+/// `ClearBagItemCommand.Execute`（`src/Modules/GameCommand/Commands/ClearBagItemCommand.cs:13-54`，
+/// 现网 `@清理垃圾`，`Command.conf` 的 `[Command] ClearBag=清理垃圾` / `[Permission] ClearBag=10`）。
+///
+/// **实际执行行**：
+/// - `:15-18` `@params == null` 死分支；
+/// - `:19` `sHumanName = @params[0]`（缺参 = 空串）；
+/// - `:20-24` `IsNullOrEmpty(sHumanName) || … && sHumanName[0] == '?'`（下标 **0**，不越界）
+///   ⇒ 红字 `Command.CommandHelp`（`命令格式: @清理垃圾 人物名称`）；
+/// - `:25-30` `GetPlayObject` 未命中 ⇒ 红字 `"{0} 现在不在线，或在其它服务器上!!!"`；
+/// - `:31-46` 目标 `ItemList.Count > 0` ⇒ **倒序**收集 `DeleteItem{ItemName, MakeIndex}` 并逐件
+///   `RemoveAt`，最后 `Clear()`；
+/// - `:47-52` 列表非空 ⇒ `ActorMgr.AddOhter(Sequence(), delList)` + 目标
+///   `SendMsg(RM_SENDDELITEMLIST, 0, objectId, 0, 0)` ⇒ 泵（`PlayObject.Message.cs:1870-1874`）
+///   `SendDelItemList`：`MakeMessage(SM_DELITEMS, 0, 0, 0, Count)` + `EncodeString("名/make/…")`。
+///   **空背包 ⇒ 完全静默**（`delList` 保持 null）。
+///
+/// 落地：命令体只登记目标 `ChrName`（宿主看得到会话背包，空包判断与清包/发帧都在宿主
+/// `apply_pending_gm_clear_bag`）。
+fn clear_bag_item(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() || name.starts_with('?') {
+        return red(CLEAR_BAG_HELP);
+    }
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    if let Some(entity) = world.play_by_name(name) {
+        // 复审 important-2：存**实体规范名**。`play_by_name` 是 OrdinalIgnoreCase（与 oracle
+        // `GetPlayObject` 同口径），但宿主清包 / 709 路由都按 `chr_name` **精确**匹配 ⇒ 存命令行
+        // 输入的大小写会「命令说命中、宿主找不到目标」（静默不清包且 pending 被消费丢失）。
+        sess.pending_clear_bag = Some(entity.name.clone());
+        no_frames(NOTE_CLEAR_BAG_PENDING)
+    } else {
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
+    }
 }
 
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
@@ -2049,6 +2320,9 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     // 「待落地权威写」一次性：先清空，只有**本次**命中的命令体真的翻转了镜像才重新装填。
     // 否则一条被权限门/未知命令挡下的 `@…` 会把上一条命令的差量顺带落地。
     sess.pending_entity = None;
+    sess.pending_kick = None;
+    sess.pending_use_item = None;
+    sess.pending_clear_bag = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -2134,6 +2408,9 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::BackStep => back_step(parameters, sess),
         Imp::FireBurn => fire_burn(parameters, sess),
         Imp::StartQuest => start_quest(parameters),
+        Imp::MobFireBurn => mob_fire_burn(parameters, world),
+        Imp::SmakeItem => smake_item(parameters, sess, world),
+        Imp::ClearBagItem => clear_bag_item(parameters, sess, world),
 
         // ---- 批次 3 · 传送/召唤（17 + `@传送`）----
         Imp::AllowDearRecall => allow_dear_recall(sess),
@@ -2205,6 +2482,8 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::Shutup => shutup(parameters),
         Imp::ShutupRelease => shutup_release(parameters),
         Imp::ShowEffect => show_effect(),
+
+        Imp::KickHuman => kick_human(parameters, sess, world),
 
         Imp::Unimplemented => GmResult {
             found: true,
@@ -2316,6 +2595,48 @@ fn parse_csharp_bool(s: &str) -> Option<bool> {
         Some(false)
     } else {
         None
+    }
+}
+
+/// `KickHumanCommand.Execute`（`src/Modules/GameCommand/Commands/KickHumanCommand.cs:10-40`，
+/// 现网 `@VV踢人`，`Command.conf` 的 `[Command] Kick=VV踢人` / `[Permission] Kick=10`）。
+///
+/// **实际执行行**：
+/// - `:16` `if (@params == null) return;`——`GameCommand.Handle` 的 `case 2` 传
+///   `parameters.Split(' ')`（不返回 null）⇒ 死分支；
+/// - `:20` `sHumName = @params.Length > 0 ? @params[0] : ""`；
+/// - `:21-24` `string.IsNullOrEmpty(sHumName)` ⇒ **静默 return**（无帮助文本、无帧）；
+/// - `:25` `WorldEngine.GetPlayObject(sHumName)`（`WorldServer.cs:937-954`：`ChrName`
+///   OrdinalIgnoreCase 命中首个、且 `!Ghost`）；
+/// - `:26-31` 命中 ⇒ `mIPlayerActor.BoKickFlag = true; BoEmergencyClose = true;`
+///   （两行 `m_boPlayOffLine/m_boNotOnlineAddExp` 被注释）；
+/// - `:32-38` 未命中 ⇒ `SysMsg("{0} 现在不在线，或在其它服务器上!!!", Red, Hint)`。
+///
+/// 落地：`BoKickFlag` 支由宿主 `drain_kicks` 收口（`PlayObject.Message.cs:367-378`：先
+/// `SendDefMessage(SM_OUTOFCONNECTION, 0, 0, 0, 0)`、再 `MakeGhost()`）；命令体只把目标名字装进
+/// [`GmSession::pending_kick`]（与 `pending_entity` 同法：命令体纯、宿主落账）。
+fn kick_human(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    // `:21-24`：空名 ⇒ 静默 return（oracle 这里**没有**任何 SysMsg，连帮助文本都不发）。
+    if name.is_empty() {
+        return no_frames(NOTE_KICK_HUMAN_EMPTY_NAME);
+    }
+    // `WorldEngine.GetPlayObject` 需要实体表；未接世界时按既有口径登记（不伪造「不在线」）。
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    if let Some(entity) = world.play_by_name(name) {
+        // `:26-31`：置 `BoKickFlag`/`BoEmergencyClose`，**无回执**（oracle 不发任何 SysMsg）。
+        //
+        // 复审 important-1：登记的必须是**实体规范名**。宿主 `online_take` 用
+        // `e.chr_name == chr` 精确匹配，而 `GetPlayObject` 是 OrdinalIgnoreCase ⇒ 若存命令行
+        // 输入的大小写（如 `ViCtIm`），命令说命中、宿主却在在线表里找不到（只留 WRN、不发 528）。
+        sess.pending_kick = Some(entity.name.clone());
+        no_frames(NOTE_KICK_HUMAN_PENDING)
+    } else {
+        // `:32-38`：`NowNotOnLineOrOnOtherServer`（与 `@VV调整元宝` 同一条文案）。
+        red(format!("{name} 现在不在线，或在其它服务器上!!!"))
     }
 }
 
@@ -2751,7 +3072,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "MobFireBurn",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MobFireBurn,
     },
     CommandDef {
         name: "MobNpc",
@@ -3069,7 +3390,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "VV踢人",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::KickHuman,
     },
     CommandDef {
         name: "who",
@@ -3255,7 +3576,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "改属性",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SmakeItem,
     },
     CommandDef {
         name: "时间",
@@ -3303,7 +3624,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "清理垃圾",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ClearBagItem,
     },
     CommandDef {
         name: "清除PK",
@@ -4597,9 +4918,11 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`
-    /// 与卡 `openmir2-gm-impl-startquest` 的 `StartQuest`）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 86），且命令名 → 实现标签固定。
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`、
+    /// 卡 `openmir2-gm-impl-startquest` 的 `StartQuest`、卡 `openmir2-gm-impl-kick` 的 `VV踢人`、
+    /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`、
+    /// 卡 `openmir2-gm-impl-clearbag` 的 `ClearBagItem`）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 81），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4607,16 +4930,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            101,
-            "101 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + 取消禁言 1 + ShowEffect 1 + StartQuest 1）4 条"
+            105,
+            "105 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            84,
-            "185 - 101"
+            80,
+            "185 - 105"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -5997,6 +6320,93 @@ mod tests {
         assert_eq!(sess.permission, 0, "抬权是临时的，执行完必须还原");
     }
 
+    /// 卡 `openmir2-gm-impl-smake`：表项（现网名 `改属性` = `conf[Command].SuperMake`）。
+    #[test]
+    fn smake_item_is_wired_in_the_command_table() {
+        let def = find("改属性").expect("@改属性 在 185 行表里");
+        assert_eq!(def.imp, Imp::SmakeItem);
+        assert_eq!(def.perm_min, 10, "`[Permission] SuperMake=10`");
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
+    /// 卡 `openmir2-gm-impl-clearbag`：表项（现网名 `清理垃圾` = `conf[Command].ClearBag`）。
+    #[test]
+    fn clear_bag_item_is_wired_in_the_command_table() {
+        let def = find("清理垃圾").expect("@清理垃圾 在 185 行表里");
+        assert_eq!(def.imp, Imp::ClearBagItem);
+        assert_eq!(def.perm_min, 10, "`[Permission] ClearBag=10`");
+        assert_eq!(def.params, 2);
+    }
+
+    /// `:20-24`：空名 / 首字符 `?` ⇒ 红字帮助（**字面量**把关，不拿 `CLEAR_BAG_HELP` 自证）
+    /// + GBK 字节（复审 minor）。
+    #[test]
+    fn clear_bag_item_reports_help_for_empty_or_question() {
+        let help = "命令格式: @清理垃圾 人物名称";
+        for line in ["@清理垃圾", "@清理垃圾 ?", "@清理垃圾 ?abc"] {
+            let (r, sess) = run_gm(line);
+            assert_eq!(texts(&r), vec![(GmColor::Red, help)], "{line}");
+            assert!(sess.pending_clear_bag.is_none(), "{line}");
+        }
+        let (r, _) = run_gm("@清理垃圾");
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, 0x3a, 0x20,
+                0x40, // 命令格式:␠@
+                0xc7, 0xe5, 0xc0, 0xed, 0xc0, 0xac, 0xbb, 0xf8, // 清理垃圾
+                0x20, 0xc8, 0xcb, 0xce, 0xef, 0xc3, 0xfb, 0xb3, 0xc6, // ␠人物名称
+            ],
+            "帮助文本的 GBK 字节逐字节等价"
+        );
+    }
+
+    /// `:25-30`：目标不在线 ⇒ 一条 Red「…现在不在线，或在其它服务器上!!!」。
+    #[test]
+    fn clear_bag_item_offline_target_reports_not_online() {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(e);
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@清理垃圾 nobody");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "nobody 现在不在线，或在其它服务器上!!!")]
+        );
+        assert!(sess.pending_clear_bag.is_none());
+        // 线上 GBK 字节（复审 minor）：ASCII 名 + GBK 文案。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0x6e, 0x6f, 0x62, 0x6f, 0x64, 0x79, 0x20, // "nobody "
+                0xcf, 0xd6, 0xd4, 0xda, 0xb2, 0xbb, 0xd4, 0xda, 0xcf, 0xdf, // 现在不在线
+                0xa3, 0xac, 0xbb, 0xf2, 0xd4, 0xda, 0xc6, 0xe4, 0xcb, 0xfc, // ，或在其它
+                0xb7, 0xfe, 0xce, 0xf1, 0xc6, 0xf7, 0xc9, 0xcf, // 服务器上
+                0x21, 0x21, 0x21, // !!!
+            ]
+        );
+        // 命中 ⇒ 零帧 + 登记**实体规范名**（复审 important-2：宿主精确匹配）。
+        let r = execute(&mut sess, &cfg, &view, "@清理垃圾 VICTIM");
+        assert!(r.msgs.is_empty(), "命中 ⇒ 命令本身零帧");
+        assert_eq!(sess.pending_clear_bag.as_deref(), Some("victim"));
+        // **部署形态**（`假人上线NPC-jiaren.txt:19`）：`GMEXECUTE 清理垃圾 <$USERNAME>` 的
+        // 参数**不展开**（T-165）⇒ 按字面量查不到人 ⇒ 一条红字、零 709、零清包。
+        let r = execute(&mut sess, &cfg, &view, "@清理垃圾 <$USERNAME>");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "<$USERNAME> 现在不在线，或在其它服务器上!!!")],
+            "部署字面量形态 ⇒ 不在线支（不是清包）"
+        );
+        assert!(sess.pending_clear_bag.is_none());
+    }
+
     /// 卡 `openmir2-gm-impl-showeffect`：表项（`Command.conf` 无覆盖 ⇒ 注册名保持英文
     /// `ShowEffect`；部署脚本写 `showeffect` 靠 `OrdinalIgnoreCase` 命中）。
     #[test]
@@ -6009,6 +6419,127 @@ mod tests {
             def.params, 2,
             "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
         );
+    }
+
+    /// 卡 `openmir2-gm-impl-kick`：表项（现网名 `VV踢人` = `Command.conf` 的 `[Command] Kick`）。
+    #[test]
+    fn kick_human_is_wired_in_the_command_table() {
+        let def = find("VV踢人").expect("@VV踢人 在 185 行表里");
+        assert_eq!(def.imp, Imp::KickHuman);
+        assert_eq!(def.perm_min, 10, "`[Permission] Kick=10`");
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
+    /// 卡 `openmir2-gm-impl-mobfireburn`：表项（`Command.conf` 无覆盖 ⇒ 注册名英文
+    /// `MobFireBurn`；部署脚本写 `MOBFIREBURN` 靠 `OrdinalIgnoreCase` 命中）。
+    #[test]
+    fn mob_fire_burn_is_wired_in_the_command_table() {
+        let def = find("MOBFIREBURN").expect("@MobFireBurn 在 185 行表里（大小写不敏感）");
+        assert_eq!(def.name, "MobFireBurn");
+        assert_eq!(def.imp, Imp::MobFireBurn);
+        assert_eq!(def.perm_min, 10);
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
+    /// 造一个说话者实体（`GmWorld::self_entity` 的来源），可带一个佩戴件。
+    fn smake_world_with_slot(
+        slot: usize,
+        item: mir2_world::entity::UseItemSlot,
+    ) -> (mir2_world::World, mir2_world::GuildManager) {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "gm", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        if slot < e.use_items.len() {
+            e.use_items[slot] = item;
+        }
+        w.add_entity(e);
+        (w, mir2_world::GuildManager::new())
+    }
+
+    /// `:26` 三参范围守卫：任一越界 ⇒ **静默 return**（零帧、无副作用）。
+    #[test]
+    fn smake_item_out_of_range_is_silent() {
+        for line in [
+            "@改属性 13 1 1",
+            "@改属性 1 16 1",
+            "@改属性 1 1 256",
+            "@改属性 -1 1 1",
+        ] {
+            let (r, sess) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: 越界 ⇒ 零帧");
+            assert!(sess.pending_use_item.is_none(), "{line}: 不得登记佩戴位写");
+        }
+    }
+
+    /// `:28` 空槽 ⇒ 一条红字固定文案（不是帮助格式）。
+    #[test]
+    fn smake_item_empty_slot_reports_red_text() {
+        let (w, guilds) = smake_world_with_slot(1, Default::default());
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@改属性 1 2 7");
+        assert_eq!(texts(&r), vec![(GmColor::Red, SMAKE_NO_ITEM_HELP)]);
+        assert!(sess.pending_use_item.is_none());
+    }
+
+    /// 命中：`Desc[9]` 无条件 +1、`Desc[nValueType] = nValue`；蓝字回执逐字节
+    /// （`{Index}-{MakeIndex} {Dura}/{DuraMax} {Desc0}/…/{Desc13}`）。
+    #[test]
+    fn smake_item_writes_desc_and_reports_blue_dump() {
+        let item = mir2_world::entity::UseItemSlot {
+            make_index: 77,
+            index: 5,
+            dura: 100,
+            dura_max: 200,
+            desc: [0; 14],
+        };
+        let (w, guilds) = smake_world_with_slot(1, item);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@改属性 1 2 7");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Blue, "5-77 100/200 0/0/7/0/0/0/0/0/0/1/0/0/0/0")],
+            "Desc[2]=7、Desc[9] 0→1；其余槽原样"
+        );
+        let pend = sess.pending_use_item.expect("命中 ⇒ 必须登记佩戴位写");
+        assert_eq!(pend.slot, 1);
+        assert_eq!((pend.index, pend.make_index), (5, 77));
+        assert_eq!((pend.dura, pend.dura_max), (100, 200));
+        assert_eq!(pend.desc[2], 7);
+        assert_eq!(pend.desc[9], 1);
+    }
+
+    /// `:44-55`：`nValueType` 14 ⇒ `Dura = _MIN(65, nValue) * 1000`；15 ⇒ `DuraMax` 同式。
+    #[test]
+    fn smake_item_types_14_and_15_set_durability() {
+        let item = mir2_world::entity::UseItemSlot {
+            make_index: 9,
+            index: 3,
+            dura: 1,
+            dura_max: 2,
+            desc: [0; 14],
+        };
+        let cfg = GmConfig::default();
+        for (args, dura, dura_max) in [("14 100", 65_000_u16, 2_u16), ("15 7", 1_u16, 7_000)] {
+            let (w, guilds) = smake_world_with_slot(2, item);
+            let mut sess = gm_session();
+            let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+            let r = execute(&mut sess, &cfg, &view, &format!("@改属性 2 {args}"));
+            assert!(!r.msgs.is_empty(), "{args}: 命中 ⇒ 蓝字回执");
+            let pend = sess.pending_use_item.expect("必须登记");
+            assert_eq!((pend.dura, pend.dura_max), (dura, dura_max), "{args}");
+            assert_eq!(pend.desc[9], 1, "{args}: 升级次数无条件 +1");
+        }
     }
 
     /// oracle 命令体 `:20-70` **整段被注释** ⇒ 任何参数（含部署脚本的 78/79/80）都零帧、
@@ -6326,5 +6857,343 @@ mod tests {
         let cfg = GmConfig::default();
         let r = exec(&mut sess, &cfg, "@开始提问 quiz");
         assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
+    }
+
+    /// 空名字 ⇒ oracle `:21-24` **静默 return**（零帧、无帮助文本），且不得留下踢人目标。
+    #[test]
+    fn kick_human_empty_name_is_silent_zero_frames() {
+        for line in ["@VV踢人", "@VV踢人  "] {
+            let (r, sess) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: 静默 return ⇒ 零帧");
+            assert!(r.frames.is_empty());
+            assert!(sess.pending_kick.is_none(), "{line}: 不得登记踢人目标");
+        }
+    }
+
+    /// 目标不在线 ⇒ 一条 Red/Hint `"{name} 现在不在线，或在其它服务器上!!!"`（`:32-38`）。
+    #[test]
+    fn kick_human_offline_target_reports_not_online() {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(e);
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 nobody");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "nobody 现在不在线，或在其它服务器上!!!")]
+        );
+        // 线上编码（`gbk_encode`）后的字节逐字节锚定（复审 minor）：ASCII + GBK 双字节。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0x6e, 0x6f, 0x62, 0x6f, 0x64, 0x79, 0x20, // "nobody "
+                0xcf, 0xd6, // 现
+                0xd4, 0xda, // 在
+                0xb2, 0xbb, // 不
+                0xd4, 0xda, // 在
+                0xcf, 0xdf, // 线
+                0xa3, 0xac, // ，
+                0xbb, 0xf2, // 或
+                0xd4, 0xda, // 在
+                0xc6, 0xe4, // 其
+                0xcb, 0xfc, // 它
+                0xb7, 0xfe, // 服
+                0xce, 0xf1, // 务
+                0xc6, 0xf7, // 器
+                0xc9, 0xcf, // 上
+                0x21, 0x21, 0x21, // !!!
+            ],
+            "SysMsg 文本的 GBK 字节逐字节等价"
+        );
+        assert!(sess.pending_kick.is_none(), "未命中不得登记目标");
+        // 大小写不敏感（`GetPlayObject` 的 `OrdinalIgnoreCase`）⇒ 命中 ⇒ 零帧 + 登记。
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 VICTIM");
+        assert!(r.msgs.is_empty(), "命中目标 ⇒ 命令无回帧");
+        // 复审 important-1：登记的是实体规范名（`victim`），不是输入串（`VICTIM`）——
+        // 宿主 `online_take` 精确匹配，存输入串会「说命中但踢不到」。
+        assert_eq!(sess.pending_kick.as_deref(), Some("victim"));
+    }
+
+    /// 命中 ⇒ 零帧 + `pending_kick` = 目标名；`Ghost` 玩家按 oracle 口径**不算在线**
+    /// （`GetPlayObject` 的 `!Ghost` 门）。
+    #[test]
+    fn kick_human_online_target_sets_pending_kick_without_frames() {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        for (name, ghost) in [("alive", false), ("gone", true)] {
+            let mut e = mir2_world::Entity::new(0, name, 5, 5);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.ghost = ghost;
+            w.add_entity(e);
+        }
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 alive");
+        assert!(r.msgs.is_empty(), "命中 ⇒ 无回帧");
+        assert!(r.frames.is_empty());
+        assert_eq!(sess.pending_kick.as_deref(), Some("alive"));
+        // Ghost ⇒ `GetPlayObject` 返回 null ⇒ 走「不在线」支。
+        let r = execute(&mut sess, &cfg, &view, "@VV踢人 gone");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "gone 现在不在线，或在其它服务器上!!!")]
+        );
+        assert!(sess.pending_kick.is_none());
+    }
+
+    /// 未注入世界 ⇒ 登记零帧（不伪造「不在线」），与 `@dsfsdt546` 等同一口径。
+    #[test]
+    fn kick_human_without_world_is_registered_no_world() {
+        let (r, sess) = run_gm("@VV踢人 victim");
+        assert!(r.msgs.is_empty());
+        assert_eq!(r.log_note, Some(NOTE_NO_WORLD));
+        assert!(sess.pending_kick.is_none());
+    }
+
+    /// 脚本路（部署 `Market_Def/功能NPC/桃源-N109.txt:49` 的 `Gmexecute VV踢人 <名>`）：
+    /// 经 `NpcPlayer` 的 GMEXECUTE 跳线执行后，目标名落在**会话**缓冲上（宿主 tick 内收口）。
+    #[test]
+    fn kick_human_script_gmexecute_path_sets_pending_kick() {
+        use mir2_script::engine::ScriptPlayer;
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(e);
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds).with_world(&w);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        // `ActionOfGmExecute` 同形：`@<cmd> <p1..p6>`，尾随空参产生 3 个空格。
+        let s_data = format!("@{} {} {} {} {} {}", "VV踢人", "victim", "", "", "", "");
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world: view,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(&s_data);
+            player.set_permission(0);
+            assert!(player.frames.is_empty(), "命中目标 ⇒ 脚本侧零帧");
+            assert!(player.gm_direct_frames.is_empty());
+        }
+        assert_eq!(sess.pending_kick.as_deref(), Some("victim"));
+        assert_eq!(sess.permission, 0, "抬权临时生效并还原");
+    }
+
+    /// 帮助文本逐字节：`"命令格式: {0} {1} {2} {3} {4} {5} {6}"` 的七个槽 —— **没有 `@` 前缀**、
+    /// 单空格分隔、空槽照原样（缺省全空 ⇒ 6 个尾随空格）。
+    #[test]
+    fn mob_fire_burn_empty_map_reports_help_with_trailing_slots() {
+        let (r, _) = run_gm("@MobFireBurn");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn      ")],
+            "六个空槽 ⇒ 六个尾随空格"
+        );
+        // GBK 字节断言（复审 minor）：`命令格式` 8 字节 + `: MobFireBurn` + 6 个尾随空格。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, 0x3a,
+                0x20, // 命令格式:␠
+                0x4d, 0x6f, 0x62, 0x46, 0x69, 0x72, 0x65, 0x42, 0x75, 0x72,
+                0x6e, // MobFireBurn
+                0x20, 0x20, 0x20, 0x20, 0x20, 0x20, // 六个尾随空格
+            ]
+        );
+        // 第 2 个 UTF-16 码元是 `?` ⇒ 帮助（原始串原样回填）。
+        let (r, _) = run_gm("@MobFireBurn m? 10 10 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn m? 10 10 5 600 0")]
+        );
+    }
+
+    /// **构造级分支**（不是部署形态）：单码元地图名 ⇒ oracle `:29` 的 `sMap[1]` 抛
+    /// `IndexOutOfRangeException`，被 `PlayObject.Chat.cs` 的 catch 吞掉 ⇒ **零帧**。
+    ///
+    /// 复审 important-1：部署脚本传的是 `<$CURRENTMAP>` **字面量**（`ActionOfGmExecute` 不展开
+    /// 动作参数，T-165），不是 `0`/`3` 这类单字符名 ⇒ 现网**不走**这条；部署形态见下一条用例。
+    #[test]
+    fn mob_fire_burn_single_char_map_is_zero_frames_construct_only() {
+        for line in [
+            "@MobFireBurn 3 329 329 3 60 0",
+            "@MOBFIREBURN 0 330 330 5 600 0",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: `sMap[1]` 越界 ⇒ 零帧");
+            assert!(r.frames.is_empty());
+            assert_eq!(r.log_note, Some(NOTE_INDEX_OUT_OF_RANGE), "{line}");
+        }
+    }
+
+    /// **部署形态**（复审 important-1）：`Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX>
+    /// <$CURRENTY> 5 600 0`。`ActionOfGmExecute` 直接拼 `sParam1..6`、不调
+    /// `GetLineVariableText`（`ExecutionProcessingSys.cs:4933`；T-165 同源）⇒ 实参是字面量：
+    /// `sMap` = `<$CURRENTMAP>`（13 码元，`sMap[1] == '$'`，不越界）；
+    /// `StrToInt("<$CURRENTX>", -1) = -1` ⇒ 命中 `:43` 的 `nX < 0` ⇒ **一条红字帮助**
+    /// （回填六个原始串，含 `<$…>` 字面量），不是「零帧」。
+    #[test]
+    fn mob_fire_burn_deployment_literals_report_help() {
+        let line = "@MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0";
+        let (r, _) = run_gm(line);
+        assert!(r.found && r.parsed, "命中命令体");
+        assert_eq!(
+            texts(&r),
+            vec![(
+                GmColor::Red,
+                "命令格式: MobFireBurn <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0"
+            )],
+            "部署字面量 ⇒ 一条红字帮助（不是零帧）"
+        );
+        assert!(r.frames.is_empty(), "帮助支没有其它帧");
+        // 线上 GBK 字节：帮助模板 + 六个字面量**原样**（`<$…>` 不被展开）。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xc3, 0xfc, 0xc1, 0xee, 0xb8, 0xf1, 0xca, 0xbd, 0x3a,
+                0x20, // 命令格式:␠
+                0x4d, 0x6f, 0x62, 0x46, 0x69, 0x72, 0x65, 0x42, 0x75, 0x72,
+                0x6e, // MobFireBurn
+                0x20, 0x3c, 0x24, 0x43, 0x55, 0x52, 0x52, 0x45, 0x4e, 0x54, 0x4d, 0x41, 0x50,
+                0x3e, // <$CURRENTMAP>
+                0x20, 0x3c, 0x24, 0x43, 0x55, 0x52, 0x52, 0x45, 0x4e, 0x54, 0x58, 0x3e,
+                // <$CURRENTX>
+                0x20, 0x3c, 0x24, 0x43, 0x55, 0x52, 0x52, 0x45, 0x4e, 0x54, 0x59, 0x3e,
+                // <$CURRENTY>
+                0x20, 0x35, 0x20, 0x36, 0x30, 0x30, 0x20, 0x30, // ␠5␠600␠0
+            ],
+            "部署形态帮助文本的 GBK 字节逐字节等价"
+        );
+    }
+
+    /// 数值校验：`(short)`/`(byte)` unchecked 截断后任一 < 0 ⇒ 帮助（回填**原始串**）。
+    #[test]
+    fn mob_fire_burn_bad_coords_report_help() {
+        // 非数字 X ⇒ `StrToInt(..., -1)` = -1 ⇒ 帮助。
+        let (r, _) = run_gm("@MobFireBurn map abc 10 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn map abc 10 5 600 0")]
+        );
+        // `(short)` 截断：40000 ⇒ -25536 ⇒ 负 ⇒ 帮助（C# unchecked 口径）。
+        let (r, _) = run_gm("@MobFireBurn map 40000 10 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn map 40000 10 5 600 0")]
+        );
+        // `(byte)` 截断：`sType` 非数字 ⇒ (byte)-1 = 255 ⇒ **不**触发 `nType < 0`（死条件）。
+        // 时间非数字 ⇒ -1 ⇒ 帮助。
+        let (r, _) = run_gm("@MobFireBurn map 10 10 zzz bad 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "命令格式: MobFireBurn map 10 10 zzz bad 0")]
+        );
+    }
+
+    /// 地图命中 ⇒ `FireBurnEvent` 入 `EventMgr`（宿主未接）⇒ **零帧** + 登记；缺省 `nPoint`
+    /// 为负 ⇒ 抬到 1 后仍合法（`nPoint < 0` 是死条件）。
+    #[test]
+    fn mob_fire_burn_existing_map_registers_event_and_stays_silent() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_maps(&f.registry);
+        for line in ["@MobFireBurn map 5 5 5 600 0", "@MobFireBurn map 5 5 5 600"] {
+            let r = execute(&mut sess, &cfg, &view, line);
+            assert!(r.msgs.is_empty(), "{line}: 命中地图 ⇒ 零帧");
+            assert!(r.frames.is_empty());
+            assert_eq!(r.log_note, Some(NOTE_EVENT_MGR), "{line}");
+        }
+    }
+
+    /// 地图不存在 ⇒ `string.Format("地图{0} 不存在", Command.Name, sMap)` 的**单占位符怪癖**
+    /// ⇒ 文案填的是**命令名**、地图名被丢弃（BUG-REPLICA）。
+    #[test]
+    fn mob_fire_burn_map_not_found_prints_command_name() {
+        let f = map_fixture(mir2_envir::MapInfoFlag::default());
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_maps(&f.registry);
+        let r = execute(&mut sess, &cfg, &view, "@MobFireBurn nowhere 5 5 5 600 0");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, "地图MobFireBurn 不存在")],
+            "模板只有 {{0}} ⇒ 地图名不入文案（oracle 原样）"
+        );
+        // GBK 字节断言（复审 minor）：`地图` 4 字节 + 命令名 + ` 不存在`。
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xb5, 0xd8, 0xcd, 0xbc, // 地图
+                0x4d, 0x6f, 0x62, 0x46, 0x69, 0x72, 0x65, 0x42, 0x75, 0x72,
+                0x6e, // MobFireBurn
+                0x20, 0xb2, 0xbb, 0xb4, 0xe6, 0xd4, 0xda, // ␠不存在
+            ]
+        );
+        // 未接地图注册表 ⇒ 登记零帧（不伪造「地图不存在」）。
+        let bare = GmWorld::new(&guilds);
+        let r = execute(&mut sess, &cfg, &bare, "@MobFireBurn map 5 5 5 600 0");
+        assert!(r.msgs.is_empty());
+        assert_eq!(r.log_note, Some(NOTE_NO_MAP_REGISTRY));
+    }
+
+    /// 脚本路（部署 `Market_Def/QFunction-0.txt:156/163` 的 `@StdModeFunc15/16`：
+    /// `Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0`）经
+    /// `NpcPlayer` 的 GMEXECUTE 跳线执行 ⇒ 实参是**字面量**（T-165）⇒ **一条红字帮助**。
+    #[test]
+    fn mob_fire_burn_script_gmexecute_path_reports_help() {
+        use mir2_script::engine::ScriptPlayer;
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = GmSession::default();
+        // `ActionOfGmExecute` 同形：`@<cmd> <p1..p6>`，六参全给；部署实参是**字面量**
+        // `<$CURRENTMAP>/<$CURRENTX>/<$CURRENTY>`（GMEXECUTE 不展开动作参数，T-165）。
+        let s_data = "@MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0";
+        let mut rng = |_v: i32| 0;
+        {
+            let mut player = crate::npc::NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(crate::npc::NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world: view,
+                pwd_busy: false,
+            });
+            player.set_permission(10);
+            player.process_user_line_msg(s_data);
+            player.set_permission(0);
+            assert_eq!(
+                player.frames.len(),
+                1,
+                "部署字面量 ⇒ 脚本侧一条红字帮助（复审 important-1：不是零帧）"
+            );
+            assert_eq!(
+                player.frames[0].msg.as_deref(),
+                Some("命令格式: MobFireBurn <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0")
+            );
+            assert!(player.gm_direct_frames.is_empty());
+            assert!(
+                player.gm_notes.is_empty(),
+                "帮助支不登记越界：{:?}",
+                player.gm_notes
+            );
+        }
+        assert_eq!(sess.permission, 0, "抬权临时生效并还原");
     }
 }
