@@ -468,6 +468,12 @@ python -I -B tools/conformance/compare_runs.py selftest
   （或按侧的 `sides.<side>.db_client`）给出，口令只认环境变量 `CONFORMANCE_DB_PASSWORD`。
   **背包夹具不在本能力范围内**（要「背包里已有 MakeIndex/物品」的卡见
   `openmir2-discovery-bagitems-201`）。
+* **Rust 侧 `binaries` 指向真正执行的 `mir2-rs/target/{release,debug}/mir2-server.exe`**（卡
+  `openmir2-window-rust-binary-evidence`）：`rust-root/M2GameSvr/GameSrv.exe` 是同目录 `.dll`
+  的 .NET 程序集，从不是被跑的那个文件。`alt` / `rust-default` 的 Rust 侧登记内置解析
+  （release 优先、缺失退 debug 并在 `binary_profile` 注明）；起栈后还会读
+  `mir2-server.pid.json` 的 `roles[].exe` 与登记对账，**不一致或缺文件 ⇒ rc=2 并点名**。
+
 * **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
   ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
   收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +

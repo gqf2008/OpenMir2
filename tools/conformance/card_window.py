@@ -212,6 +212,62 @@ CSHARP_STOP = POWERSHELL + [
     "Stop-Process -Id $_.ProcessId -Force }",
 ]
 
+# Rust 栈**实际执行的二进制**（卡 `openmir2-window-rust-binary-evidence`）：
+# `rust-root/M2GameSvr/GameSrv.exe` 是同目录 .dll 的 .NET 程序集，从不是被跑的那个文件；
+# 证据里的 Rust sha256 必须指向 `mir2-rs/target/{release,debug}/mir2-server.exe`。
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+RUST_SERVER_BIN = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "release", "mir2-server.exe"
+).replace(os.sep, "/")
+RUST_SERVER_BIN_DEBUG = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "debug", "mir2-server.exe"
+).replace(os.sep, "/")
+PID_FILE_NAME = "mir2-server.pid.json"
+
+
+def resolve_rust_binary():
+    """release 优先、缺失退 debug（证据里注明用的是 debug）；返回 (path, profile)。"""
+    if os.path.exists(RUST_SERVER_BIN):
+        return RUST_SERVER_BIN, "release"
+    if os.path.exists(RUST_SERVER_BIN_DEBUG):
+        return RUST_SERVER_BIN_DEBUG, "debug"
+    return RUST_SERVER_BIN, "release(missing)"
+
+
+def verify_pid_binaries(side_dir, sc, side):
+    """起栈后核对 `mir2-server.pid.json` 的 `roles[].exe` 与 profile 登记的 binaries。
+
+    返回 `(ok, error_or_none, info)`；不一致/缺文件 ⇒ 调用方把该侧判 rc=2 并点名。
+    """
+    pid_path = sc.get("pid_file") or os.path.join(side_dir, PID_FILE_NAME)
+    norm = lambda p: os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
+    registered = [norm(p) for p in (sc.get("binaries") or [])]
+    info = {"pid_file": pid_path, "registered": list(sc.get("binaries") or []), "roles": []}
+    if not os.path.exists(pid_path):
+        return False, ("缺少 %s：无法核对 %s 栈实际执行的 exe（拒绝只记 sha256 继续跑）"
+                       % (PID_FILE_NAME, side)), info
+    try:
+        with open(pid_path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as ex:
+        return False, ("读取 %s 失败：%s" % (PID_FILE_NAME, ex)), info
+    roles = data.get("roles") if isinstance(data, dict) else None
+    if not roles:
+        return False, ("%s 没有 roles[]：无法核对 %s 栈实际执行的 exe" % (PID_FILE_NAME, side)), info
+    bad = []
+    for role in roles:
+        exe = role.get("exe") if isinstance(role, dict) else None
+        info["roles"].append({"role": role.get("role") if isinstance(role, dict) else None,
+                              "exe": exe})
+        if not exe or norm(exe) not in registered:
+            bad.append("%s=%s" % (role.get("role") if isinstance(role, dict) else "?",
+                                  exe or "(空)"))
+    if bad:
+        return False, ("pid 文件的 exe 与 profile binaries 不一致：%s（登记 %s）"
+                       % (", ".join(bad), ", ".join(sc.get("binaries") or []))), info
+    return True, None, info
+
+
 BUILTIN_PROFILES = {
     "alt": {
         "format": PROFILE_FORMAT,
@@ -249,7 +305,8 @@ BUILTIN_PROFILES = {
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17600],
                 "ready_ports": [15000, 17000, 17100, 17600],
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
-                "binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"],
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
                 "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
                 "db": {"tables": RUST_DB_TABLES,
                        "characters_db": "mir2_test_db_r",
@@ -290,7 +347,8 @@ BUILTIN_PROFILES = {
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
                 "ready_ports": [5000, 7000, 7100, 7200],
                 "probe_extra": [],
-                "binaries": ["E:/tmp/conformance/rust-default-root/M2GameSvr/GameSrv.exe"],
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
                 "db": {"preset": "test", "characters_db": "mir2_test_db"},
             },
         },
@@ -1770,6 +1828,19 @@ def run_side(runner, side, prof, ctx, password, placement=None):
             res["error"] = "起栈命令失败（rc=%s）：不跑场景（栈没起来不能算对拍通过）" % res["stack_rc"]
             return res
 
+        # 3b) **卡 `openmir2-window-rust-binary-evidence`**：先按 release/debug 解析 Rust 栈
+        # 真正执行的二进制，再拿 `mir2-server.pid.json` 的 `roles[].exe` 对账；不符 ⇒ rc=2，
+        # 不许「只记一个错的 sha256 继续跑」。
+        if sc.get("require_pid_binaries"):
+            path, kind = resolve_rust_binary()
+            sc["binaries"] = [path]
+            res["binary_profile"] = kind
+            ok, err, info = verify_pid_binaries(side_dir, sc, side)
+            res["pid_binaries"] = info
+            if not ok:
+                res["error"] = err
+                return res
+
         # 4) 等就绪（栈命令返回 0 也可能没真起来）
         missing = wait_ready(sc.get("ready_ports") or [],
                              prof.get("ready_timeout_s", 120))
@@ -2846,6 +2917,40 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
         "compare_extra": [],
         "sides": {"csharp": side("csharp"), "rust": side("rust")},
     }
+
+
+def _selftest_pid_binaries(tmp):
+    """卡 openmir2-window-rust-binary-evidence：pid 文件 exe 与登记 binaries 的一致性（3 用例 + 1 牙）。"""
+    d = os.path.join(tmp, "pidbin")
+    os.makedirs(d, exist_ok=True)
+    exe = os.path.join(d, "mir2-server.exe")
+    pid = os.path.join(d, PID_FILE_NAME)
+    sc = {"binaries": [exe.replace(os.sep, "/")]}
+    out = []
+    # ① 正常登记 ⇒ ok
+    with open(pid, "w", encoding="utf-8") as f:
+        json.dump({"roles": [{"role": "game-svr", "exe": exe}]}, f)
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((ok and err is None, "pid 文件 exe 与登记一致 ⇒ ok"))
+    # ② 登记与 pid 不符 ⇒ False 且点名
+    with open(pid, "w", encoding="utf-8") as f:
+        json.dump({"roles": [{"role": "game-svr", "exe": os.path.join(d, "GameSrv.exe")}]}, f)
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and "game-svr" in err, "pid exe 与登记不符 ⇒ 失败并点名角色"))
+    # ③ pid 文件缺失 ⇒ False（rc=2 路径）
+    try:
+        os.remove(pid)
+    except OSError:
+        pass
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and PID_FILE_NAME in err, "缺 pid 文件 ⇒ 失败且点名文件"))
+    # 牙：把 registrations 指回 rust-root 的 .NET 程序集（老值）⇒ ① 的对拍变红
+    stale = {"binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"]}
+    with open(pid, "w", encoding="utf-8") as f:
+        json.dump({"roles": [{"role": "game-svr", "exe": exe}]}, f)
+    ok, _, _ = verify_pid_binaries(d, stale, "rust")
+    out.append((not ok, "牙：登记指回 rust-root/GameSrv.exe ⇒ 一致性断言红"))
+    return out
 
 
 def selftest():
@@ -4076,7 +4181,10 @@ def selftest():
     if fail_n:
         print("RED: card_window.py selftest %d/%d" % (pass_n, total))
         return 1
-    print("GREEN: card_window.py selftest %d/%d" % (pass_n, total))
+    for cond, msg in _selftest_pid_binaries(tmp):
+        chk(cond, msg)
+
+    print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
 
 
