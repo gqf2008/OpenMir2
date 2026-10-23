@@ -2341,7 +2341,11 @@ Other
             let mut player = NpcPlayer::empty(&mut rng);
             player.chr_name = chr.to_string();
             let _ = host.goto_label("QFunction", &mut player, "@main", false);
-            player.frames.iter().filter_map(|f| f.msg.clone()).collect::<Vec<_>>()
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
         };
         let run = |envir_root: std::path::PathBuf, chr: &str| {
             let host = NpcHost {
