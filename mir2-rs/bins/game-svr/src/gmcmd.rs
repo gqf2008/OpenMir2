@@ -6264,7 +6264,7 @@ mod tests {
                 pwd_busy: false,
             });
             player.set_permission(10);
-            player.process_user_line_msg(&s_data);
+            player.process_user_line_msg(s_data);
             player.set_permission(0);
             assert_eq!(
                 player.frames.len(),
