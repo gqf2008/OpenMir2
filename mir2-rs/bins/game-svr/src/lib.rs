@@ -1487,13 +1487,19 @@ struct ChatHost<'a> {
 /// （进世界建、离场删 ⇒ 重登从 0 起算）。ctor 零值 = **「从未喊过」哨兵**：oracle 的 `now` 是
 /// 机器 uptime（`HUtil32.GetTickCount()`），`now - 0 > 10s` 在 uptime > 10s 时恒真；本仓
 /// `world.clock_ms` 未注入时从 0 起 ⇒ 用 0 作哨兵（见 [`chat::shout_decision`]）。
+/// GM 命令要发的 `SysMsg`（`(FColor, BColor, 文本)`）：`handle_gm_command`/`handle_say`
+/// 只**返回**、由调用方在 `pending` 落地之后再排水（卡 `openmir2-gm-impl-smake` 复审 important-2）。
+type GmSysMsgs = Vec<(u8, u8, String)>;
+/// 已编码的 GM 直发帧（`SendDefMessage` 面，如 `@AttackMode` 的 `SM_ATTACKMODE(213)`）。
+type GmDirectFrames = Vec<Vec<u8>>;
+
 fn handle_say(
     host: &ChatHost<'_>,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
     socket: i32,
     tail: Option<&str>,
-) -> (Vec<(u8, u8, String)>, Vec<Vec<u8>>) {
+) -> (GmSysMsgs, GmDirectFrames) {
     let Some(speaker) = host.online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
             "WRN",
@@ -1778,7 +1784,7 @@ fn handle_gm_command(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     speaker: &OnlineEntry,
     line: &str,
-) -> (Vec<(u8, u8, String)>, Vec<Vec<u8>>) {
+) -> (GmSysMsgs, GmDirectFrames) {
     let Some(sg) = sessions.get_mut(&speaker.chr_name) else {
         glog!(
             "WRN",
