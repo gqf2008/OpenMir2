@@ -270,6 +270,35 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 
 **注意（脚本能力之外）**：`E:/tmp/conformance/start-rust.ps1` 把脚本路径写死成主检出，因此**在 worktree 里 `-WhatIf` 看到的二进制，可能不是真窗口启动的那份**；真窗口以起栈后 `mir2-server.pid.json` 的 `roles[].exe` 为准（`card_window.py` 已对账，不符 rc=2）。
 
+## 1.7 魔法夹具：**声明即可**（工具已支持，2026-10-23 晚；卡 `openmir2-window-magic-fixture`）
+
+`spell_cast` 场景的 `blocked.missing_fixture` 要的「角色已学魔法」现在由 `card_window.py` 在
+**每侧 restore（与预置位）之后、起栈之前**自动写进该侧测试库 `characters_magic`。
+**不要再手工改库**（技能不是脚本动作、GM 权限恒 0 ⇒ 只能 DB 预置）。
+
+**声明位置是 profile（不是场景）**——顶层 `magic` 应用到两侧；`sides.<side>.magic` 可覆盖本侧：
+
+```json
+{
+  "format": "card-window-profile/1",
+  "magic": [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}],
+  "sides": { "...": {} }
+}
+```
+
+- 四列必填：`magic_id`（1..65535）、`level`（0..3）、`use_key`（单个 ASCII 可见字符）、
+  `curr_train`（>=0）；未知键 / 类型错 / 越界 ⇒ **加载期 rc=2 点名**，一步都不执行。
+- **跨栈不同的字段不进判据**：`PlayerId`（= 本侧 `characters.Id`）与行 `Id` 各侧自己定位；
+  读回只比 `MagicId / Level / UseKey / CurrTrain`。
+- **fail-closed**（每条都 rc=2 且**不起栈、不让 probe 去超时**）：角色不存在 / 角色行不唯一 /
+  `Deleted=1`、同一 `MagicId` 有多行、写后读回不符、**未声明的魔法行**指纹（行数 + MD5）变化。
+- 每侧证据落 `<out>/<side>/magic.json`：`declared` / `before` / `after` / `sql` /
+  `action = noop | written`（一致就不写库；缺行或不一致才 `INSERT`/`UPDATE`）。
+- `--dry-run`：只做离线校验（声明 + 库配对）并预览 SQL，**不连库**。
+- 已知限制：`level` 上限按技能等级 0..3 校验；`use_key` 只允许单字符（线上 `char(2)`，
+  经典客户端只用 1 字节）；`magic_id` 只做数值域校验，**不查 `mir2_data.magic` 表**是否存在该魔号
+  ——写一个不存在的魔号不会报错，但场景也等不到施法帧（窗口里看 `GetMagicInfo` 的行为即可发现）。
+
 ## 2. 跑的时候
 
 - `card_window.py --card <卡 id> --scenario <场景> --out <目录> --profile alt`；R 卡窗口**必须** `--post-comment` 记账（在解禁之后）。
