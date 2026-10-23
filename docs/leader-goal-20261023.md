@@ -40,6 +40,10 @@
 - **派活**：在跑 < 4 且写集不重叠 ⇒ 派 1 张（worker-4/5/10 轮换，先签 status 认领）；
 - **拆卡**：待认领 < 3 ⇒ 从盘点/差异/残余里拆出下一个可执行单元，建成签名 `issue` 卡（goal/write_set/oracle 行号/acceptance/forbidden/tier）。
 - **清理**：只删分支（本地 + `git push walgit --delete`），**绝不删 worktree**（worktree = 身份 = Ed25519 私钥）；腾空间只清 `*-target`。
+  > **磁盘现状（2026-10-23 17:1x 实测）**：`E:` 3.8T / 已用 2.9T / **余 856G（78%）**；`/e/tmp` 下已有 **115 个 target 目录**，
+  > 单个满量构建约 **15G**（实测 `/e/tmp/wt-worker-66/mir2-rs/target`）。⇒ 尚未告急，但**一条新车道 ≈ 15G**，再开二三十条会见底。
+  > 做法：清**已收口卡**对应 worktree 里的 `target/`（不是 worktree 本身），保留仍在跑的车道；
+  > **不要在车道跑测试时清它自己的 target**（会触发全量重编，看起来像「卡住」）。
 
 ## 3. 会话重启后如何恢复循环
 
