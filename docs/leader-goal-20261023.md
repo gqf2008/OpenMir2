@@ -79,7 +79,7 @@ python tools/goal/goal_gate.py --full
 | `--repo <dir>` | 仓库根，默认脚本所在仓库 |
 | `--timeout N` / `--test-timeout N` | 单命令超时（默认 1800s）/ cargo test 超时（默认 7200s） |
 | `--allow-verdict-grep` | 条件2 采信 comment/review 里的 `VERDICT=PASS` 文本标记（默认关闭） |
-| `selftest` | 合成输入自检（54 条断言，含 5 颗牙） |
+| `selftest` | 合成输入自检（60 条断言，含 6 颗牙） |
 
 退出码：`0` 四条全 PASS；`1` 有 FAIL；`2` 无 FAIL 但有「需人工」；`3` 脚本自身错误（参数/路径）。
 
@@ -127,7 +127,8 @@ python tools/goal/goal_gate.py --full
    | 1 | board 未列出该卡 | 需人工（视图未同步/线程状态异常） |
    | 2 | board 报未验签条目 | 需人工 |
    | 3 | **board 列 = 已完成 / status = closed** | **PASS（已合并；不要求线程有 merge_result）** |
-   | 4 | **已裁定登记**：最新一条带 `window_required` 的 approve review 说 `true` ⇒ window_required；说 `false` 且 `tier_why/理由` 非空 ⇒ 已裁定不需窗口 | PASS |
+   | 3.5 | **未开工/未合并**：无 merge_result、无 patch、无 review、无 comment，且 board 未 closed | **未合并**（不计 PASS 也不计 FAIL，只列清单） |
+   | 4 | **已裁定登记**：最新一条带 `window_required` 的 approve review 说 `true` ⇒ window_required；说 `false` 且**专用字段 `why_not_window`/`window_waiver` 非空**（或 `tier_why` 命中免窗口短语白名单且否决词均被否定）⇒ 已裁定不需窗口 | PASS |
    | 5 | `window_required=true`（无复核裁定时，作者/状态里的登记） | PASS |
    | 6 | whitelist `T-*` 登记行**点名本卡** | PASS（弱关联不算） |
    | 7 | comment/review 内有 `VERDICT=PASS`（**仅 `--allow-verdict-grep` 时**） | PASS（默认关闭） |
@@ -135,11 +136,22 @@ python tools/goal/goal_gate.py --full
    | 9 | 线程提到 `T-*` 但登记行未点名本卡 | 需人工（弱关联） |
    | 10 | 以上皆无 | **FAIL（三者皆无，列卡 id）** |
 
+   * **条件②只约束「已开工/已合并」的卡**（I-5）：一张刚建、线程里只有 issue + claim 的卡既不需要证据
+     也不需要登记，判成 FAIL 是假阳性。机器代理：`merge_result` / board closed / `patch` / `review` / `comment` 任一存在 ⇒ 判证据；
+     只有 issue + claim（或只有 status）的新卡归 `not_merged`（不计 PASS/FAIL，控制台单列前 20 条）。
+     该代理同时覆盖「Leader 直接合入但没有 merge_result 条目」的记账缺口卡。
    * **「已裁定登记」必须排在 merged 之前**：否则任何 merged 的卡都会进需人工，把「有显式登记」
      误报成缺口（H-1）。review 的结论字段 `decision` 与 `verdict` 两种写法都认；同一卡多次 review
      的 `window_required` 会不一致 ⇒ **取最新一条带该字段的 approve**，不能对历史做 `any(false)`。
+   * **「不需要窗口」必须有免窗口语义，不能只看「理由非空」**（I-1 实证：`tier_why` =「时序/竞态…」
+     描述的是改动性质，却被当成免窗口）：专用字段 `why_not_window` / `window_waiver` 优先；回退
+     `tier_why` 时必须命中白名单短语（`不需要窗口/无需窗口/不占窗口/不可能只在真机暴露/零 .rs/
+     零生产代码/纯文档/纯夹具/纯仓库卫生/生产不可达/等价即放行` 等），且 `时序/竞态/RNG/落库/
+     战斗数值/数值/持久化/随机/tick` 若出现即否决（除非处于「不触/无/零/未」等否定语境）。
    * **merged 但 board 非 closed 且已凭登记 PASS** 的卡进 `evidence.merged_open_hygiene`（卫生清单，
-     带 `last_status_ts`），**不算条件2 缺口**，供 owner 确认是否重开。
+     带 `last_status_ts`），**不算条件2 缺口**，供 owner 确认是否重开；张数同时打印在条件2 的 detail 里。
+   * **登记型 PASS ≠ 已有真机证据**：`window_required=true` 只代表「登记 + 明确理由」，不等于真机窗口
+     已跑（本轮约 95 张此类卡仍欠窗口）。条件② 绿只说明「没有无证据无登记的卡」，不得解读为「R 面已验」。
    * `need_items` 每项带 `last_status_ts`（线程内 `status` 条目的最大 ts），**按升序（最旧先）**排；
      控制台按条件各列前 20 条（条件2 即最旧的 20 张），其余见 `--json`。FAIL 项顺序不动。
 
@@ -197,6 +209,8 @@ python tools/goal/goal_gate.py --full
   （本地视图未同步，或线程条目链/状态异常），并列入缺口明细。
 * **merged 但 board 未 closed**：若已有显式登记（window_required / whitelist / 已裁定）⇒ PASS，并进
   `evidence.merged_open_hygiene` 卫生清单（带 `last_status_ts`），**不算条件2 缺口**；
+* **未开工/未合并的卡**（无 `merge_result`/`patch`/`review`/`comment`）归 `not_merged`：**不计 FAIL 也不计 PASS**，
+  控制台单列「未开工/在飞」前 20 条，全量在 `--json` 的 `not_merged_items`；
   没有任何登记的才判「需人工」，供 owner 确认「是否已重开且新工作有证据」。
 * **whitelist 重复编号**：`build_whitelist` 取并集（不会丢卡↔T 关联），但仍以「提示」列出重复号，
   登记号唯一性归 `m3_whitelist_registry_audit.py`（该门当前 `scope=T-36+`，T-4/T-6 这类低号重复覆盖不到）。
@@ -208,12 +222,12 @@ python tools/goal/goal_gate.py --full
 
 ```sh
 python tools/goal/goal_gate.py selftest --verbose
-# selftest：54 条断言，54 通过，0 失败
+# selftest：60 条断言，60 通过，0 失败
 ```
 
 覆盖四条件各自的 PASS / FAIL / 需人工 分支（含覆盖行解析、语料完整性计数、**rc=1 但未实现 0 ⇒ FAIL**
 的 fail-closed 耦合、任一条目 tier 枚举、board 已完成、已裁定登记（decision/verdict 两种写法、取最新 approve）、
 merged 未 closed、VERDICT 子串默认不认、need_items 按 last_status_ts 升序、弱关联 T 不冒认、未验签、
 board 缺失、master 漂移、ls-remote 不可用、tracked 空/schema 漂移/counts 不一致、**tracked=0 且行集非空 ⇒ PASS**、
-状态优先级），并内置**五颗牙**：忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS、
-把 tracked=0 一律判需人工（H-3 旧口径）—— 任一退化都会被断言判红。改判定逻辑后先跑 selftest 再跑快速模式。
+**approve+false+tier_why=「时序/竞态」⇒ 需人工**、专用 `why_not_window` 优先、未开工卡 ⇒ 未合并、状态优先级），并内置**六颗牙**：忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS、
+把 tracked=0 一律判需人工（H-3 旧口径）、把未开工卡判成 FAIL（I-5）—— 任一退化都会被断言判红。改判定逻辑后先跑 selftest 再跑快速模式。

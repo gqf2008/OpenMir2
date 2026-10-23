@@ -49,7 +49,8 @@ from pathlib import Path
 PASS = "pass"
 FAIL = "fail"
 NEED = "need_human"
-STATE_LABEL = {PASS: "PASS", FAIL: "FAIL", NEED: "需人工"}
+NOT_MERGED = "not_merged"  # 内部第4态：未开工/未合并，不计 PASS 也不计 FAIL
+STATE_LABEL = {PASS: "PASS", FAIL: "FAIL", NEED: "需人工", NOT_MERGED: "未合并"}
 
 DEFAULT_ENVIR = "E:/MirServer/M2GameSvr/Envir"
 
@@ -406,6 +407,41 @@ def _is_approve(body):
     return _review_decision(body) in APPROVE_WORDS
 
 
+def _first_str(body, keys):
+    for key in keys:
+        val = body.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return ""
+
+
+# 免窗口短语白名单（I-1）：必须命中其一，才允许用 tier_why 回退认定「不需要窗口」
+WAIVER_PHRASES = ("不需要窗口", "无需窗口", "不占窗口", "不涉窗口", "免窗口",
+                  "不可能只在真机暴露", "零 .rs", "零.rs", "零生产代码", "纯文档",
+                  "纯夹具", "纯仓库卫生", "纯离线", "纯逻辑", "纯文本", "纯工具",
+                  "生产不可达", "等价即放行", "零行为", "无需真机")
+# 否决词：出现且**未被否定**即不算免窗口（I-1 实证：tier_why=「时序/竞态…」曾被误判为登记）
+VETO_TERMS = ("时序", "竞态", "RNG", "落库", "战斗数值", "数值", "持久化", "随机", "tick")
+NEG_CUES = ("不触", "不涉及", "不涉", "不含", "不包括", "不改变", "不影响", "无", "零", "未", "非", "免", "勿")
+
+
+def _waiver_ok(text):
+    """tier_why 回退是否构成「不需要窗口」的说明：命中白名单短语且否决词均处于否定语境。"""
+    if not text or not any(phrase in text for phrase in WAIVER_PHRASES):
+        return False
+    for clause in re.split(r"[。；;\n]", text):
+        for term in VETO_TERMS:
+            start = 0
+            while True:
+                idx = clause.find(term, start)
+                if idx < 0:
+                    break
+                if not any(cue in clause[:idx] for cue in NEG_CUES):
+                    return False
+                start = idx + len(term)
+    return True
+
+
 def collect_r_cards(index):
     """R 卡枚举 = **任一**条目的 body.tier 归一为 R（不只 issue）。
 
@@ -459,12 +495,20 @@ def collect_r_evidence(card, index, board_cards, whitelist, allow_verdict_grep=F
         wr = body.get("window_required")
         if not isinstance(wr, bool):
             continue
-        reason = body.get("tier_why") or body.get("why_not_window") or body.get("reason")
         if wr is True:
-            adjudicated = {"kind": "window_required", "ts": ts, "oid": oid,
-                           "why": reason if isinstance(reason, str) else ""}
-        elif isinstance(reason, str) and reason.strip():
-            adjudicated = {"kind": "no_window", "ts": ts, "oid": oid, "why": reason}
+            reason = _first_str(body, ("why_not_window", "window_waiver", "tier_why"))
+            adjudicated = {"kind": "window_required", "ts": ts, "oid": oid, "why": reason}
+        else:
+            # 专用免窗口字段优先；回退 tier_why 必须命中免窗口短语且否决词被否定（I-1）
+            special = _first_str(body, ("why_not_window", "window_waiver"))
+            if special:
+                adjudicated = {"kind": "no_window", "ts": ts, "oid": oid,
+                               "why": special, "via": "why_not_window"}
+            else:
+                tier_why = _first_str(body, ("tier_why",))
+                if _waiver_ok(tier_why):
+                    adjudicated = {"kind": "no_window", "ts": ts, "oid": oid,
+                                   "why": tier_why, "via": "tier_why"}
         break
 
     strong = sorted(whitelist["card_to_t"].get(card, set()), key=_t_sort_key)
@@ -476,7 +520,17 @@ def collect_r_evidence(card, index, board_cards, whitelist, allow_verdict_grep=F
     column = board_card.get("_column") if board_card else None
     board_status = board_card.get("status") if board_card else None
     board_closed = bool(board_card) and (column == "已完成" or board_status == "closed")
+    # I-5：未开工/未合并的卡不判证据（条件②约束的对象是已合入代码的卡）。
+    # 机器代理：merge_result / board closed / patch 条目 / 非 open 的 status 任一存在 = 已开工或已合并。
+    kinds = {entry.get("kind") for _oid, entry in entries}
+    has_patch = "patch" in kinds
+    has_review = "review" in kinds
+    has_comment = "comment" in kinds
+    # 已开工信号：合并记录 / 补丁 / 复核 / 讨论。只有 issue + claim（或只有 status）的新卡不算开工。
+    judged = board_closed or merged or has_patch or has_review or has_comment
     return {"card": card, "merged": merged, "window_required": window_required,
+            "has_patch": has_patch, "has_review": has_review, "has_comment": has_comment,
+            "judged": judged,
             "strong_t": strong, "weak_t": weak,
             "adjudicated": adjudicated, "evidence_entries": evidence_entries,
             "in_board": board_card is not None,
@@ -495,10 +549,12 @@ def r_category(ev):
     """
     if not ev.get("in_board"):
         return "not_in_board"
-    if ev.get("unverified"):
-        return "unverified"
     if ev.get("board_closed"):
         return "closed"
+    if not ev.get("judged", True):
+        return "not_merged"
+    if ev.get("unverified"):
+        return "unverified"
     adj = ev.get("adjudicated")
     if adj:
         # 复核裁定优先于历史条目：最新 approve 说 true ⇒ window_required；说 false+理由 ⇒ 已裁定不需窗口
@@ -529,6 +585,9 @@ def classify_r_evidence(ev):
         return NEED, "board 未列出该卡（本地协作视图未同步或线程状态异常），证据无法核对" + suffix
     if category == "unverified":
         return NEED, "board 报 %s 条未验签条目，证据不可信" % ev["unverified"]
+    if category == "not_merged":
+        return NOT_MERGED, ("未开工/在飞（无 merge_result / patch / 非 open status）："
+                            "条件②只对已开工或已合并的卡判证据与登记，本卡不计 PASS 也不计 FAIL")
     if category == "closed":
         why = "board 已完成/closed"
         if ev.get("merged"):
@@ -588,11 +647,12 @@ def judge_r_cards(evidence_list):
     else:
         state = PASS
     detail = ("R 卡 %d 张：已完成 %d / window_required %d / whitelist %d / 已裁定登记 %d / "
-              "comment 证据 %d / 三者皆无 %d / merged 未 closed 且无登记(需人工) %d / 其它需人工 %d" % (
+              "comment 证据 %d / 三者皆无 %d / merged 未 closed 且无登记(需人工) %d / "
+              "未开工或未合并 %d（不计缺口）/ 其它需人工 %d" % (
                   len(per_card), counts.get("closed", 0), counts.get("window_required", 0),
                   counts.get("whitelist_t", 0), counts.get("adjudicated", 0),
                   counts.get("comment_evidence", 0), counts.get("none", 0),
-                  counts.get("merged_not_closed", 0),
+                  counts.get("merged_not_closed", 0), counts.get("not_merged", 0),
                   counts.get("not_in_board", 0) + counts.get("unverified", 0)
                   + counts.get("weak_t", 0)))
     if fail_items:
@@ -834,6 +894,14 @@ def render_table(report):
             if len(items) > limit:
                 lines.append("  … 条件%s 另有 %d 条「需人工」未在表中列出（--json 的 need_items 有全量，"
                              "按 last_status_ts 最旧优先）" % (cond_id, len(items) - limit))
+    if report.get("not_merged_items"):
+        lines.append("")
+        lines.append("未开工/在飞（未合并，不计 PASS/FAIL，仅清单）：")
+        for item in report["not_merged_items"][:20]:
+            lines.append("  未合并 %s（last_status_ts=%s）" % (item["card"], item["last_status_ts"]))
+        rest = len(report["not_merged_items"]) - 20
+        if rest > 0:
+            lines.append("  … 另有 %d 条未合并卡（见 --json 的 not_merged_items）" % rest)
     return "\n".join(lines)
 
 
@@ -920,6 +988,13 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
          for rec in per_card
          if rec["merged"] and rec["board_status"] != "closed" and rec["category"] in hygiene_categories),
         key=lambda x: (x["last_status_ts"], x["card"]))
+    if merged_open_hygiene:
+        detail += ("；merged 未 closed 但已凭登记 PASS：%d 张（卫生清单，见 evidence.merged_open_hygiene；"
+                   "登记型 PASS ≠ 已有真机证据）" % len(merged_open_hygiene))
+    not_merged_items = sorted(
+        ({"card": rec["card"], "last_status_ts": rec["last_status_ts"]}
+         for rec in per_card if rec["category"] == "not_merged"),
+        key=lambda x: (x["last_status_ts"], x["card"]))
     conditions.append(build_condition(2, "R 卡证据", state, detail, {
         "board_cards": len(board_cards) if board_cards else None,
         "index_threads": index_meta.get("threads"), "index_entries": index_meta.get("entries"),
@@ -930,6 +1005,8 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         "enumeration": "任一 entry body.tier 归一为 R（不只 issue）",
         "merged_open_hygiene": merged_open_hygiene,
         "merged_open_hygiene_note": "merged=true 但 board 非 closed、已凭登记 PASS 的卫生清单（不计条件2 缺口）",
+        "not_merged": not_merged_items,
+        "not_merged_note": "未开工/在飞（无 merge_result/patch/非 open status）：不计 PASS 也不计 FAIL，只列清单",
         "allow_verdict_grep": allow_verdict_grep,
         "r_cards": per_card, "notes": index_meta.get("notes")}))
     for item in r_fails:
@@ -985,7 +1062,8 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
             "mode": {"tests": with_tests, "script_coverage": bool(with_script or script_bin)},
             "conditions": conditions, "overall": overall,
             "overall_label": STATE_LABEL[overall], "fail_items": fail_items,
-            "need_items": need_items, "warnings": warnings}
+            "need_items": need_items, "not_merged_items": not_merged_items,
+            "warnings": warnings}
 
 
 # --------------------------------------------------------------------------
@@ -1011,18 +1089,22 @@ def _synth_index():
         "openmir2-card-alpha": [ent("issue", {"tier": "R"}),
                                 ent("merge_result", {"merged": True})],
         "openmir2-card-beta": [ent("issue", {"tier": "R（战斗数值面）"}),
-                               ent("review", {"window_required": True})],
+                               ent("review", {"window_required": True}),
+                               ent("merge_result", {"merged": True})],
         "openmir2-card-gamma": [ent("issue", {"tier": "R"}),
-                                ent("review", {"decision": "approve"})],
+                                ent("review", {"decision": "approve"}),
+                                ent("merge_result", {"merged": True})],
         "openmir2-card-delta": [ent("issue", {"tier": "R"}), ent("status", {}, ts=100)],
         "openmir2-card-eps": [ent("issue", {"tier": "R"}), ent("comment", {"note": "见 T-1"}),
+                              ent("merge_result", {"merged": True}),
                               ent("status", {}, ts=500)],
         "openmir2-card-eta": [ent("issue", {"tier": "R"}),
                               ent("merge_result", {"merged": True}),
                               ent("status", {}, ts=900)],
         "openmir2-card-zeta": [ent("issue", {"tier": "R"})],
         "openmir2-card-theta": [ent("issue", {"tier": "R"}),
-                                ent("comment", {"summary": "窗口跑完：VERDICT=PASS（exit 0）"})],
+                                ent("comment", {"summary": "窗口跑完：VERDICT=PASS（exit 0）"}),
+                                ent("merge_result", {"merged": True})],
         "openmir2-card-iota": [ent("issue", {}), ent("review", {"tier": "R"})],
         "openmir2-card-lambda": [ent("issue", {"tier": "R"}),
                                  ent("review", {"decision": "approve", "window_required": False,
@@ -1038,6 +1120,29 @@ def _synth_index():
                              ent("review", {"decision": "approve", "window_required": False}),
                              ent("merge_result", {"merged": True}),
                              ent("status", {}, ts=50)],
+        # I-1 实证：approve=false 但 tier_why 说的是「时序/竞态」⇒ 不算免窗口，落回 merged_not_closed
+        "openmir2-card-nu": [ent("issue", {"tier": "R"}),
+                             ent("review", {"decision": "approve", "window_required": False,
+                                            "tier_why": "时序/竞态（控制帧 flush 与进程退出）"}),
+                             ent("merge_result", {"merged": True})],
+        # I-1 专用字段 why_not_window 优先，无需命中 tier_why 短语
+        "openmir2-card-xi": [ent("issue", {"tier": "R"}),
+                             ent("review", {"decision": "approve", "window_required": False,
+                                            "why_not_window": "本片生产不可达，不占窗口"}),
+                             ent("merge_result", {"merged": True})],
+        # I-1：命中白名单短语但否决词未被否定 ⇒ 仍不算免窗口
+        "openmir2-card-nv": [ent("issue", {"tier": "R"}),
+                             ent("review", {"decision": "approve", "window_required": False,
+                                            "tier_why": "纯逻辑片，但涉及时序竞态"}),
+                             ent("merge_result", {"merged": True})],
+        # I-1：没有任何免窗口短语（也没否决词）⇒ 不算登记
+        "openmir2-card-nw": [ent("issue", {"tier": "R"}),
+                             ent("review", {"decision": "approve", "window_required": False,
+                                            "tier_why": "控制帧 flush 与进程退出"}),
+                             ent("merge_result", {"merged": True})],
+        # I-5：已合并但无任何证据/登记 ⇒ 真 FAIL
+        "openmir2-card-omicron": [ent("issue", {"tier": "R"}),
+                                  ent("patch", {"head": "deadbeef"})],
     }
 
 
@@ -1068,6 +1173,16 @@ def _synth_board():
                                 "status": "in-progress", "_column": in_progress},
         "openmir2-card-mu": {"id": "openmir2-card-mu", "unverified": 0,
                              "status": "in-progress", "_column": in_progress},
+        "openmir2-card-nu": {"id": "openmir2-card-nu", "unverified": 0,
+                             "status": "in-progress", "_column": in_progress},
+        "openmir2-card-xi": {"id": "openmir2-card-xi", "unverified": 0,
+                             "status": "in-progress", "_column": in_progress},
+        "openmir2-card-nv": {"id": "openmir2-card-nv", "unverified": 0,
+                             "status": "in-progress", "_column": in_progress},
+        "openmir2-card-nw": {"id": "openmir2-card-nw", "unverified": 0,
+                             "status": "in-progress", "_column": in_progress},
+        "openmir2-card-omicron": {"id": "openmir2-card-omicron", "unverified": 0,
+                                  "status": "in-progress", "_column": in_progress},
     }
 
 
@@ -1152,7 +1267,7 @@ def selftest(verbose=False):
         def card_state(card):
             return classify_r_evidence(evs[card])
 
-        check("条件2 识别 12 张 tier=R（任一条目，含 tier 只写在 review）", lambda: (
+        check("条件2 识别 17 张 tier=R（任一条目，含 tier 只写在 review）", lambda: (
             r_cards == sorted(board), str(r_cards)))
         check("条件2 board 已完成 -> PASS（不依赖 merge_result）", lambda: (
             card_state("openmir2-card-alpha")[0] == PASS
@@ -1183,14 +1298,40 @@ def selftest(verbose=False):
             card_state("openmir2-card-mu")[0] == NEED
             and r_category(evs["openmir2-card-mu"]) == "merged_not_closed",
             card_state("openmir2-card-mu")[1]))
-        check("H-4 默认不认 VERDICT=PASS 子串（theta -> FAIL）", lambda: (
-            card_state("openmir2-card-theta")[0] == FAIL, card_state("openmir2-card-theta")[1]))
+        check("I-1 approve+false+tier_why=「时序/竞态」-> 需人工（不冒充免窗口）", lambda: (
+            card_state("openmir2-card-nu")[0] == NEED
+            and r_category(evs["openmir2-card-nu"]) == "merged_not_closed"
+            and evs["openmir2-card-nu"]["adjudicated"] is None,
+            card_state("openmir2-card-nu")[1]))
+        check("I-1 命中白名单短语但含未否定否决词（时序）-> 需人工", lambda: (
+            card_state("openmir2-card-nv")[0] == NEED
+            and evs["openmir2-card-nv"]["adjudicated"] is None,
+            card_state("openmir2-card-nv")[1]))
+        check("I-1 无免窗口短语（只写改动性质）-> 不算登记", lambda: (
+            card_state("openmir2-card-nw")[0] == NEED
+            and evs["openmir2-card-nw"]["adjudicated"] is None,
+            card_state("openmir2-card-nw")[1]))
+        check("I-1 专用 why_not_window 字段优先 -> 已裁定 PASS", lambda: (
+            card_state("openmir2-card-xi")[0] == PASS
+            and r_category(evs["openmir2-card-xi"]) == "adjudicated"
+            and (evs["openmir2-card-xi"].get("adjudicated") or {}).get("via") == "why_not_window",
+            card_state("openmir2-card-xi")[1]))
+        check("H-4 默认不认 VERDICT=PASS 子串（theta 不因子串转 PASS）", lambda: (
+            r_category(evs["openmir2-card-theta"]) == "merged_not_closed"
+            and card_state("openmir2-card-theta")[0] == NEED,
+            card_state("openmir2-card-theta")[1]))
         check("H-4 --allow-verdict-grep 才认（theta -> PASS）", lambda: (
             classify_r_evidence(evs_grep["openmir2-card-theta"])[0] == PASS
             and r_category(evs_grep["openmir2-card-theta"]) == "comment_evidence",
             classify_r_evidence(evs_grep["openmir2-card-theta"])[1]))
-        check("条件2 三者皆无 -> FAIL", lambda: (
-            card_state("openmir2-card-delta")[0] == FAIL, card_state("openmir2-card-delta")[1]))
+        check("I-5 未开工/只建卡的卡 -> 未合并（不计 PASS/FAIL）", lambda: (
+            card_state("openmir2-card-delta")[0] == NOT_MERGED
+            and r_category(evs["openmir2-card-delta"]) == "not_merged",
+            card_state("openmir2-card-delta")[1]))
+        check("条件2 已开工却无任何登记 -> FAIL", lambda: (
+            card_state("openmir2-card-omicron")[0] == FAIL
+            and r_category(evs["openmir2-card-omicron"]) == "none",
+            card_state("openmir2-card-omicron")[1]))
         check("条件2 未验签 -> 需人工", lambda: (
             card_state("openmir2-card-eps")[0] == NEED, card_state("openmir2-card-eps")[1]))
         check("条件2 弱关联 T 不冒认 PASS", lambda: (
@@ -1203,13 +1344,15 @@ def selftest(verbose=False):
                                  "weak_t": []})[0] == NEED, "not in board"))
 
         state2, detail2, per2, fail2, need2 = judge_r_cards(list(evs.values()))
-        check("条件2 聚合状态 FAIL（有皆无卡）", lambda: (
+        check("条件2 聚合状态 FAIL（已开工无登记）", lambda: (
             state2 == FAIL
-            and any(x["card"] == "openmir2-card-delta" for x in fail2)
-            and any(x["card"] == "openmir2-card-theta" for x in fail2), detail2))
+            and any(x["card"] == "openmir2-card-omicron" for x in fail2)
+            and not any(x["card"] == "openmir2-card-delta" for x in fail2), detail2))
         check("H-2 need_items 按 last_status_ts 升序（最旧先）", lambda: (
             [x["card"] for x in need2]
-            == ["openmir2-card-mu", "openmir2-card-eps", "openmir2-card-eta"]
+            == ["openmir2-card-nu", "openmir2-card-nv", "openmir2-card-nw",
+                "openmir2-card-theta", "openmir2-card-mu", "openmir2-card-eps",
+                "openmir2-card-eta"]
             and [x["last_status_ts"] for x in need2] == sorted(x["last_status_ts"] for x in need2),
             str([(x["card"], x["last_status_ts"]) for x in need2])))
 
@@ -1309,6 +1452,15 @@ def selftest(verbose=False):
 
         def mutant_zero_tracked(rows_, wl_, board_, counts_=None):
             return (NEED, "mutant：旧口径把 tracked=0 一律判需人工")
+
+        def mutant_not_merged(ev):
+            _state, why = classify_r_evidence(ev)
+            return (FAIL, why)
+
+        check("牙：把未开工卡判成 FAIL 会被 I-5 断言抓住", lambda: (
+            mutant_not_merged(evs["openmir2-card-delta"])[0] == FAIL
+            and classify_r_evidence(evs["openmir2-card-delta"])[0] == NOT_MERGED,
+            "mutant detected"))
 
         check("牙：把 tracked=0 一律判需人工会被 H-3 PASS 断言抓住", lambda: (
             mutant_zero_tracked(cleared_rows, wl, board, {"tracked": 0})[0] == NEED
