@@ -3034,6 +3034,14 @@ def execute(cfg):
                      "characters_magic 写到位；完成不了 rc=2（不让 probe 超时）"
                      if profile_magic(prof) else None),
         },
+        "inventory": {
+            "enabled": bool(inventory),
+            "declared": inventory,
+            "sides": {},
+            "note": ("场景顶层 inventory => 每侧 restore 之后、起栈之前把该侧测试库 "
+                     "characters_bagitem 写到位；完成不了 rc=2（不让 probe 超时）"
+                     if inventory else None),
+        },
         "discovery": {
             "enabled": needs_discovery,
             "forced": discover,
@@ -3271,6 +3279,18 @@ def execute(cfg):
             summary["placement"]["sides"][side] = res["placement"]
         if res.get("magic"):
             summary["magic"]["sides"][side] = res["magic"]
+        if res.get("inventory"):
+            # 卡 openmir2-card-window-teeth-mg7：`res["inventory"]` 不能只写不读——
+            # 既要把该侧证据并进 summary，也要把 rc 纳入本侧判定（run_side 已早返回；
+            # 这里再兜一次，杜绝旁路后带着失败的夹具继续跑）。
+            summary["inventory"]["sides"][side] = res["inventory"]
+            inv_rc = (res["inventory"] or {}).get("rc")
+            if inv_rc not in (0, None):
+                if res.get("rc") == 0:
+                    res["rc"] = 2
+                res["error"] = (res.get("error")
+                                or (res["inventory"] or {}).get("error")
+                                or "背包夹具失败")
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -3946,13 +3966,16 @@ def _selftest_inventory(tmp):
     # ---- 生产接线 / 失败面（review `c866f358` I-3 / M-1）：用假 runner 跑 run_inventory 本体 ----
     class _FakeRunner:
         def __init__(self, std_mode="0", update_rc=0, verify_fp="-",
-                     occupied=0, before_count=0, after_count=0):
+                     occupied=0, before_count=0, after_count=0,
+                     tpl_missing=False, rows_written=1):
             self.std_mode = std_mode
             self.update_rc = update_rc
             self.verify_fp = verify_fp
             self.occupied = occupied
             self.before_count = before_count
             self.after_count = after_count
+            self.tpl_missing = tpl_missing
+            self.rows_written = rows_written
 
         def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None, capture=True):
             if tag == "inventory.columns":
@@ -3961,6 +3984,8 @@ def _selftest_inventory(tmp):
             if tag == "inventory.occupancy":
                 return 0, "%d\n" % self.occupied, ""
             if tag == "inventory.template":
+                if self.tpl_missing:
+                    return 0, "", ""
                 return 0, "%s\t0\t0\n" % self.std_mode, ""
             if tag == "inventory.read":
                 return 0, "%d\t-\n" % self.before_count, ""
@@ -3969,7 +3994,7 @@ def _selftest_inventory(tmp):
             if tag == "inventory.verify":
                 return 0, "%d\t%s\n" % (self.after_count, self.verify_fp), ""
             if tag == "inventory.verify_rows":
-                return 0, "1\n", ""
+                return 0, "%d\n" % self.rows_written, ""
             return 1, "", "unexpected tag %s" % tag
 
     prof = {"char_name": "hero", "account": "ua",
@@ -4001,9 +4026,71 @@ def _selftest_inventory(tmp):
         bad_cnt = run_inventory(_FakeRunner(after_count=1), "csharp", prof, sc, one, {})
         out.append((bad_cnt["rc"] == 2 and "行数变了" in (bad_cnt["error"] or ""),
                     "⑫ 其它槽位行数变了 => rc=2（%r）" % (bad_cnt["error"] or "")[:90]))
+        # ⑬ 物品模板不存在（卡 openmir2-card-window-teeth-mg7）：`if not tpl:` 必须真的拦下
+        try:
+            bad_tpl = run_inventory(_FakeRunner(tpl_missing=True), "csharp", prof, sc,
+                                    one, {})
+            tpl_ok = bad_tpl["rc"] == 2 and "物品模板" in (bad_tpl["error"] or "")
+        except Exception:
+            # 变异（if not tpl: → if False:）会让 tpl[0] 抛 IndexError：干净判红，不崩 selftest。
+            tpl_ok = False
+        out.append((tpl_ok, "⑬ 物品模板不存在 => rc=2 且点名 mir2_data.stditems"))
+        # ⑮ check_inventory_rows 的调用点：写后行数不足必须从 run_inventory 本体冒出来
+        two = [dict(one[0]), dict(one[0], make_index=5002, position=7)]
+        short = run_inventory(_FakeRunner(rows_written=1), "csharp", prof, sc, two, {})
+        out.append((short["rc"] == 2 and "写后行数" in (short["error"] or ""),
+                    "⑮ 写后行数 < 声明件数 => rc=2（%r）" % (short["error"] or "")[:90]))
     finally:
         globals()["_check_db_pairing"] = orig_pair
         globals()["placement_envir_root"] = orig_root
+
+    # ⑭ make_index<=0 门：0 会被 DBSvr 整行跳过，必须在解析期拒绝
+    mk_path = os.path.join(d, "inv-make0.json")
+    with open(mk_path, "w", encoding="utf-8") as f:
+        _json.dump({"inventory": [{"index": 1, "make_index": 0, "position": 1}]}, f)
+    try:
+        scenario_inventory(mk_path)
+        mk_ok = False
+    except ConfigError as ex:
+        mk_ok = "make_index" in str(ex)
+    out.append((mk_ok, "⑭ make_index<=0 => ConfigError（DBSvr 会整行跳过）"))
+    # ⑯ run_side 的背包夹具 rc 判定：失败必须 rc=2 并早返回（不起栈）
+    class _SideRunner:
+        def __init__(self):
+            self.tags = []
+
+        def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None,
+                capture=True):
+            self.tags.append(tag)
+            return 0
+
+        def log(self, msg):
+            pass
+
+    orig_run_inventory = globals()["run_inventory"]
+    globals()["run_inventory"] = lambda *a, **k: {
+        "rc": 2, "error": "背包夹具失败：inventory: 物品模板 index=100 不存在"}
+    sr_tags = []
+    try:
+        side_prof = {"sides": {"csharp": {
+            "restore": ["true"], "stack": ["true"], "stop": ["true"],
+            "probe": ["true"], "db": {"command": ["true"]},
+            "ports": [], "ready_ports": []}}, "ready_timeout_s": 0.1}
+        side_ctx = {"side_dir": os.path.join(d, "side16"),
+                    "db_dir": os.path.join(d, "side16-db"),
+                    "out": d, "scenario": path, "card": "selftest"}
+        sr = _SideRunner()
+        sres = run_side(sr, "csharp", side_prof, side_ctx, "pw",
+                        inventory=[{"index": 100, "make_index": 5001, "position": 3}])
+        sr_tags = sr.tags
+        sr_ok = (sres.get("rc") == 2
+                 and "背包夹具失败" in (sres.get("error") or "")
+                 and "stack" not in sr.tags)
+    except Exception:
+        sr_ok = False
+    finally:
+        globals()["run_inventory"] = orig_run_inventory
+    out.append((sr_ok, "⑯ run_side 背包夹具失败 => rc=2 且不起栈（tags=%r）" % (sr_tags,)))
 
     # ⑩ 库配对的真实判定（不 stub _check_db_pairing）：部署 `_r`、profile 拿 C# 库 => rc=2
     bad_root = os.path.join(tmp, "inv-bad-envir")
@@ -5492,11 +5579,41 @@ def selftest():
             % (cs_after_m7, rs_after_m7))
         chk("magic-columns csharp" in read_log() and "magic-columns rust" in read_log(),
             "MG-7 两侧 SHOW COLUMNS 都走 magic 桩（日志 magic-columns 标记）")
+        # MG-7（dry-run）：摘要里的两侧 declared 必须按侧覆盖（顶层 1 / csharp 覆盖 2）
+        s_m7d = execute(base_cfg(os.path.join(tmp, "run-magic-override-dry"), prof_m7,
+                                 scenario=scen_unblocked, dry_run=True))
+        mds = (s_m7d.get("magic") or {}).get("sides") or {}
+        cs_d = [m.get("magic_id") for m in ((mds.get("csharp") or {}).get("declared") or [])]
+        rs_d = [m.get("magic_id") for m in ((mds.get("rust") or {}).get("declared") or [])]
+        chk(s_m7d["exit_code"] == 0 and cs_d == [2] and rs_d == [1],
+            "MG-7 --dry-run 摘要两侧 declared 不同（csharp=%r rust=%r，rc=%s）"
+            % (cs_d, rs_d, s_m7d["exit_code"]))
 
         # 18m) 背包夹具（INV-1..）：4 用例 + 2 牙 + 生产接线/失败面——**必须走 chk**，
         # 也就是排在 rc 判定之前；此前这段放在 `if fail_n: return 1` 之后 ⇒ 牙永不判红（review `c866f358` B-1）。
         for cond, msg in _selftest_inventory(tmp):
             chk(cond, msg)
+
+        # ⑰ execute 读 res["inventory"]（卡 openmir2-card-window-teeth-mg7）：
+        #    背包夹具失败 => summary 记该侧证据、整体 rc=2、且不起栈。
+        inv_scen = write_scen({
+            "name": "selftest_inventory_exec",
+            "inventory": [{"index": 100, "make_index": 5001, "position": 3,
+                           "std_mode": 0}],
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}}, {"wait_for": 100}],
+        }, "invexec")
+        fresh_log()
+        prof_inv = _selftest_profile(tmp, stub, log, envir_roots=deploy)
+        s_inv = execute(base_cfg(os.path.join(tmp, "run-inventory-exec"), prof_inv,
+                                 scenario=inv_scen))
+        cs_inv = (s_inv["sides"].get("csharp") or {})
+        inv_side = ((s_inv.get("inventory") or {}).get("sides") or {}).get("csharp") or {}
+        chk(s_inv["exit_code"] == 2
+            and (cs_inv.get("inventory") or {}).get("rc") == 2
+            and inv_side.get("rc") == 2
+            and "stack" not in [c["step"] for c in s_inv["commands"]],
+            "⑰ execute 读 res['inventory']：失败 => summary 记证据、rc=2、不起栈（%r）"
+            % (((cs_inv.get("inventory") or {}).get("error") or "")[:80],))
 
     finally:
         holder.close()
