@@ -97,11 +97,11 @@
 |---|---|
 | `cargo fmt --all -- --check` | rc=0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
-| `cargo test --workspace` | 3028 passed / 0 failed / 62 ignored |
+| `cargo test --workspace` | 3041 passed / 0 failed / 62 ignored（合并 master `7b0e5955` 后的合并树） |
 | `cargo run -p msgcodegen -- --check` | rc=0（604 条） |
 | `python -I -B tests/parity/m3/whitelist_anchor_gate.py check` | ALL PASS（503 条锚） |
-| `python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit` | GREEN（198 条、无重复） |
-| `python -I tools/whitelist/t_reservation_gate.py check` | GREEN（198 行 / 198 号 / max=T-210） |
+| `python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit` | GREEN（199 条、无重复） |
+| `python -I tools/whitelist/t_reservation_gate.py check` | GREEN（199 行 / 199 号 / max=T-210） |
 | `python -I mir2-rs/tests/parity/coverage/gm_registry.py gate` | GREEN（87 条与源码一致） |
 
 ## 6. 已知残余（登记 T-210；reviewer-6 B-1 订正后）
