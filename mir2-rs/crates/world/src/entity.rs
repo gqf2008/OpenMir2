@@ -330,6 +330,20 @@ pub struct AnimalState {
     /// `AnimalObject.MeatQuality`（`BaseObject.cs:2576` 的 `Random(3500)+3000` 初始化，
     /// `Struck` 里按 `Random(300)` 扣减）。本骨架只落字段与扣减，初始化路径未建模（登记）。
     pub meat_quality: u16,
+    /// `BaseObject.BodyLeathery`（`src/M2Server/Actor/BaseObject.cs:186`，ctor `:401` 置 **50**；
+    /// 生成路径按 race 覆写：`WorldServer.MonGen.cs:521-551` 的 52/53 ⇒ **150**，51 ⇒ 50）。
+    ///
+    /// **类型是 `byte`** ⇒ 屠宰效果体的 `-= n10`（`PlayObject.Operate.cs:724`）在 C# unchecked
+    /// 下按 `(byte)` **回绕**（如 3-5 ⇒ 254），随后的 `<= 0` 判据因此只命中 **`== 0`**。
+    /// 唯一读点就是这个 `== 0` 门；写在 [`crate::world::World`] 的屠宰效果体。
+    pub body_leathery: u8,
+    /// `BaseObject.Skeleton`（`src/M2Server/Actor/BaseObject.cs:182`，ctor `:396` 置 `false`）。
+    ///
+    /// **唯一 setter** = 屠宰效果体（`PlayObject.Operate.cs:734`，`BodyLeathery` 归零 + race 在
+    /// `[Animal=50, Monster=80)`）；**唯一清点** = `ReAliveEx`（`BaseObject.cs:2472`，本仓
+    /// [`crate::world::World::revive_monster`]）。`Death && Skeleton` 时 AOI 出现帧发
+    /// `RM_SKELETON` 而非 `RM_DEATH`（`PlayObject.cs:3229-3236`；该出现帧支本卡未接，登记 T-206）。
+    pub skeleton: bool,
     /// `DualAxeMonster._mNAttackCount`（`DualAxeMonster.cs:8`，ctor 置 0）。
     ///
     /// 只被 `DualAxeMonster.AttackTarget` 读写（`DualAxeMonster.cs:44-54`）；`AttackMax` 是
@@ -427,6 +441,9 @@ impl Default for AnimalState {
             struck_tick: 0,
             animal: false,
             meat_quality: 0,
+            // `BaseObject()` ctor `BodyLeathery = 50` / `Skeleton = false`（`BaseObject.cs:401/396`）。
+            body_leathery: 50,
+            skeleton: false,
             m_n_attack_count: 0,
             zil_kill_count: 0,
             zilkin_die_tick: 0,

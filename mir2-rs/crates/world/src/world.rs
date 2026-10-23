@@ -91,6 +91,24 @@ pub enum Command {
     /// **出站接线片 W2**：宰杀（`PlayObject.ClientGetButchItem` 的转发，`PlayObject.Operate.cs:702-750`）。
     /// `dir` = 已解析的 `Dir`（目标 2 格内且有效 ⇒ `btDir`，否则当前朝向；解析在宿主 `CM_BUTCH` 门面）。
     Butch { actor_id: i32, dir: u8 },
+    /// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：屠宰**效果体**（`PlayObject.Operate.cs:716-745`）。
+    ///
+    /// 宿主 `CM_BUTCH` 门面在 `client_butch` 判定「进入效果体」后、`Command::Butch` **之前**入队
+    /// （oracle 次序：效果体 `:718-745` 先于 `RM_BUTCH` `:749`）。世界 tick 在本命令里按
+    /// **oracle 同序同模**抽两次随机数（`Random(16)+5` → `Random(201)+100`），改目标尸体的
+    /// `body_leathery`/`meat_quality`/`skeleton`，命中骨架支时记 [`crate::action::SkeletonEvent`]。
+    ///
+    /// 门**在 tick 里重查**（不采信宿主入队时刻的快照）：`|nX-CurrX|<=2`、目标在该格、
+    /// `Death && !Skeleton && Animal`——与 oracle 同一条链；门不过 ⇒ **零抽数**。
+    ButchEffect {
+        /// 屠宰者（`this`）——只用于 `|Δ|<=2` 门与效果体末尾的 `DeathTick = now`（`:744`）。
+        actor_id: i32,
+        /// 目标尸体（`CM_BUTCH` 的 `charId` = `processMsg.nParam1` = 客户端 `recog`）。
+        target_id: i32,
+        /// `nX` / `nY`（`CM_BUTCH` 的 `param`/`tag`）= `Envir.IsValidObject` 的判格。
+        n_x: i32,
+        n_y: i32,
+    },
 }
 
 /// `PlayObject.Run` 状态到期事件（`PlayObject.Message.cs:54-64`）。
@@ -279,6 +297,14 @@ pub struct TickRecord {
     pub rushes: Vec<crate::action::RushEvent>,
     /// **出站接线片 W2**：本 tick 的 `RM_BUTCH` 族（`SM_BUTCH(637)`）——每次 `ClientGetButchItem` 一条。
     pub butches: Vec<crate::action::ButchEvent>,
+    /// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：本 tick 屠宰效果体产出的 `RM_SKELETON`
+    /// （`PlayObject.Operate.cs:736`，以**尸体自己**为发送者）。
+    ///
+    /// 只在「`body_leathery` 打到 0 **且** race ∈ `[Animal(50), Monster(80))`」时出现；
+    /// 宿主按 `SM_SKELETON(33)` 出帧，收件人 = `SendRefMsg` 的 ±12 格 `Race==Play && !Ghost`
+    /// （`BaseObject.Message.cs:383-475`）。队内优先级：`(byte)RM_SKELETON(10024)=40` 先于
+    /// `(byte)RM_BUTCH(10119)=55`（`BaseObject.Message.cs:182` 的 `PriorityQueue` 最小先出）。
+    pub skeletons: Vec<crate::action::SkeletonEvent>,
     /// **orphan 编码器接线首批**：本 tick 各观察者「离开视野」的对象
     /// （`(观察者 id, 离开者 id)`，保序 = AOI 移除顺序）。
     ///
@@ -4955,6 +4981,7 @@ impl World {
             pushes: Vec::new(),
             rushes: Vec::new(),
             butches: Vec::new(),
+            skeletons: Vec::new(),
             hides: Vec::new(),
             buff_status_changes: Vec::new(),
             buff_sysmsgs: Vec::new(),
@@ -5069,6 +5096,18 @@ impl World {
                     record.processed.push((actor_id, event.is_some()));
                     if let Some(event) = event {
                         record.butches.push(event);
+                    }
+                }
+                Command::ButchEffect {
+                    actor_id,
+                    target_id,
+                    n_x,
+                    n_y,
+                } => {
+                    let skeleton = self.butch_effect_now(actor_id, target_id, n_x, n_y);
+                    record.processed.push((actor_id, true));
+                    if let Some(ev) = skeleton {
+                        record.skeletons.push(ev);
                     }
                 }
             }
@@ -5973,16 +6012,27 @@ impl World {
             meat_quality = Some(self.rng.random_below(3500) + 3000);
         }
         // 2) `switch (Race)`（`BaseObject.cs:2572-2620`）的抽数；169/170 只改 StickMode（未建模，无抽）。
+        //
+        // 同一 `switch` 里 `case 51/52/53` 还写 `BodyLeathery`（`:2583/2593/2599`：51 ⇒ 50、
+        // 52/53 ⇒ 150）——该 `switch` **没有 default**，其余 race 保留原值（本仓同口径）。
+        let mut body_leathery = None;
         match race {
-            51 => meat_quality = Some(self.rng.random_below(3500) + 3000),
+            51 => {
+                meat_quality = Some(self.rng.random_below(3500) + 3000);
+                body_leathery = Some(50);
+            }
             52 => {
                 meat_quality = Some(if self.rng.random_below(30) == 0 {
                     self.rng.random_below(20000) + 10000
                 } else {
                     self.rng.random_below(8000) + 8000
                 });
+                body_leathery = Some(150);
             }
-            53 => meat_quality = Some(self.rng.random_below(8000) + 8000),
+            53 => {
+                meat_quality = Some(self.rng.random_below(8000) + 8000);
+                body_leathery = Some(150);
+            }
             95 => {
                 self.rng.random_below(2);
             }
@@ -6009,9 +6059,15 @@ impl World {
             e.mp = e.max_mp;
             e.gold = 0;
             e.show_hp = false;
+            // `ReAliveEx` 的 `Skeleton = false`（`BaseObject.cs:2472`）——`BaseObject.Skeleton`
+            // 的**唯一清点**（setter 只有屠宰效果体）。
+            e.ai.skeleton = false;
             e.stone_mode = false;
             e.fixed_hide_mode = false;
             e.re_alive_tick = now;
+            if let Some(bl) = body_leathery {
+                e.ai.body_leathery = bl;
+            }
             if race == 54 {
                 // `case 54: Animal = true; break;`（`BaseObject.cs:2601-2603`）。
                 e.ai.animal = true;
@@ -6253,6 +6309,12 @@ impl World {
             speed_point,
         });
         e.race = race;
+        // `WorldServer.MonGen.cs:521-551` 的对象初始化式：`AnimalDeer(52)`/`AnimalWolf(53)` ⇒
+        // `BodyLeathery = 150`；`AnimalChicken(51)` 与其余 race 保持 `BaseObject()` ctor 的 50
+        // （`BaseObject.cs:401`）。该字段只被屠宰效果体的 `== 0` 门读。
+        if race == 52 || race == 53 {
+            e.ai.body_leathery = 150;
+        }
         e.id = id;
         e.map_id = map_id;
         e.gold = gold;
@@ -7413,6 +7475,98 @@ impl World {
             });
         }
         out
+    }
+
+    /// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：屠宰效果体
+    /// （`src/M2Server/Player/PlayObject.Operate.cs:716-745`）。
+    ///
+    /// 逐行对照（行号 = 本仓 `283a27460` 的 `src/M2Server/Player/PlayObject.Operate.cs`）：
+    ///
+    /// | oracle | 本函数 |
+    /// |---|---|
+    /// | `:716` 两轴 `|nX-CurrX|<=2` | 同（屠宰者坐标） |
+    /// | `:718` `Envir.IsValidObject(nX,nY,2,baseObject)` | 目标实体在当前图、且 `x/y == (nX,nY)`、该格 `cell_match && valid`（oracle 的循环变量 `nXx/nYy` **未被使用**，`GetCellInfo` 恒查 `(nX,nY)` ⇒ 实际只判该格） |
+    /// | `:720` `baseObject.Death && !Skeleton && Animal` | `death && !ai.skeleton && (ai.animal || race_is_animal(race))` |
+    /// | `:722` `n10 = (byte)(Random(16) + 5)` | `random_below(16) + 5`（**第 1 抽**） |
+    /// | `:723` `meatQuality = (ushort)(Random(201) + 100)` | `random_below(201) + 100`（**第 2 抽**） |
+    /// | `:724` `BodyLeathery -= n10`（`byte` 回绕） | `wrapping_sub` |
+    /// | `:725-729` `MeatQuality -= meatQuality; if (<=0) = 0`（`ushort` 回绕，`<=0` 只命中 0） | `wrapping_sub` + 恒等清零 |
+    /// | `:730` `if (BodyLeathery <= 0)` | `== 0`（`u8` 无负值） |
+    /// | `:732-736` `Race ∈ [Animal(50), Monster(80))` ⇒ `Skeleton=true; ApplyMeatQuality(); RM_SKELETON` | 置位 + 记 [`crate::action::SkeletonEvent`]；`ApplyMeatQuality`（改 `ItemList` 中 `StdMode==40` 物品的 `Dura`）**未建模**（本仓尸体无 `ItemList`，登记 T-206） |
+    /// | `:738-742` `TakeBagItems` / `BodyLeathery = 50` | 未建模物品转移（登记）；`body_leathery = 50` 同 |
+    /// | `:744` `DeathTick = GetTickCount()`（**玩家自己**的字段） | `actor.death_tick = clock_ms` |
+    ///
+    /// **不建模**：`TakeBagItems`（把尸体 `ItemList` 逐件塞进屠宰者背包，失败时 `SysMsg(YouFoundNothing)`）
+    /// ——本仓尸体无 `ItemList`，属 G-物品面登记（T-206）；`ApplyMeatQuality` 同上。
+    ///
+    /// 返回：命中骨架支 ⇒ `Some(SkeletonEvent)`（以尸体为发送者），否则 `None`。
+    fn butch_effect_now(
+        &mut self,
+        actor_id: i32,
+        target_id: i32,
+        n_x: i32,
+        n_y: i32,
+    ) -> Option<crate::action::SkeletonEvent> {
+        // `:716` `Math.Abs(nX - CurrX) <= 2 && Math.Abs(nY - CurrY) <= 2`（`this` = 屠宰者）。
+        let (curr_x, curr_y, map_id) = {
+            let actor = self.entities.get(actor_id)?;
+            (actor.x, actor.y, actor.map_id)
+        };
+        if (n_x - curr_x).abs() > 2 || (n_y - curr_y).abs() > 2 {
+            return None;
+        }
+        // `:718` `Envir.IsValidObject(nX, nY, 2, baseObject)`。
+        {
+            let target = self.entities.get(target_id)?;
+            if target.map_id != map_id || target.x != n_x || target.y != n_y {
+                return None;
+            }
+            if !self.maps.get(map_id)?.get_cell_info(n_x, n_y).1 {
+                return None;
+            }
+            // `:720` `Death && !Skeleton && Animal`
+            let animal = target.ai.animal || crate::combat::race_is_animal(target.race);
+            if !(target.death && !target.ai.skeleton && animal) {
+                return None;
+            }
+        }
+
+        // `:722-723` 两次抽（**次序与模数**即 R 级判据）：先 `Random(16)+5`，再 `Random(201)+100`。
+        let n10 = u8::try_from(self.rng.random_below(16) + 5).unwrap_or(0);
+        let meat_draw = u16::try_from(self.rng.random_below(201) + 100).unwrap_or(0);
+        let now = self.clock_ms;
+
+        let mut skeleton = None;
+        let e = self.entities.get_mut(target_id)?;
+        // `:724-729`：`byte` / `ushort` 的 unchecked 回绕（**不夹取**；`<=0` 只命中 `==0`）。
+        e.ai.body_leathery = e.ai.body_leathery.wrapping_sub(n10);
+        e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(meat_draw);
+        if e.ai.meat_quality == 0 {
+            e.ai.meat_quality = 0;
+        }
+        // `:730` `if (baseObject.BodyLeathery <= 0)`
+        if e.ai.body_leathery == 0 {
+            // `:732` `Race >= ActorRace.Animal && Race < ActorRace.Monster`
+            if e.race >= crate::entity::ACTOR_RACE_ANIMAL
+                && e.race < crate::entity::ACTOR_RACE_MONSTER
+            {
+                // `:734-736` `Skeleton = true; ApplyMeatQuality(); SendRefMsg(RM_SKELETON, …)`
+                e.ai.skeleton = true;
+                skeleton = Some(crate::action::SkeletonEvent {
+                    actor_id: target_id,
+                    dir: e.ai.dir,
+                    x: e.x,
+                    y: e.y,
+                });
+            }
+            // `:738-742` `TakeBagItems`（未建模，登记）/ `BodyLeathery = 50`
+            e.ai.body_leathery = 50;
+        }
+        // `:744` `DeathTick = HUtil32.GetTickCount();` —— 方法内 `this` = **屠宰者**。
+        if let Some(actor) = self.entities.get_mut(actor_id) {
+            actor.death_tick = now;
+        }
+        skeleton
     }
 
     /// **出站接线片 W2**：`RM_BUTCH`（`src/M2Server/Player/PlayObject.Operate.cs:749`）的世界侧事件。
@@ -9769,6 +9923,230 @@ mod tests {
                 y: 9
             }]
         );
+    }
+
+    // ==============================================================================
+    // **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：屠宰效果体（`PlayObject.Operate.cs:716-745`）。
+    //
+    // 两次抽的**次序与模数**是 R 级判据：先 `Random(16)+5`（`BodyLeathery` 扣减），
+    // 再 `Random(201)+100`（`MeatQuality` 扣减）。次序对调会平移整条世界 RNG 流。
+    // ==============================================================================
+
+    /// 造一个「玩家 + 动物尸体」的世界。`race` 决定骨架支是否可达（`[50,80)` 才发骨架）。
+    ///
+    /// 同时把 `w.rng` 切成固定种子，并**手抽一次**还原首个 `n10`（`Random(16)+5`）——
+    /// 调用方据此把 `body_leathery` 设成「恰好归零」或「不归零」的确定值。
+    fn butch_rig(seed: i32, race: u8, target_death: bool) -> (World, i32, i32, u8) {
+        let mut w = World::new(64, 64);
+        w.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let p = w.add_entity(player(1, "butcher", 10, 10, 10));
+        let mut e = Entity::new(2, "corpse", 11, 10);
+        e.race = race;
+        e.death = target_death;
+        e.ai.dir = 5;
+        let t = w.add_entity(e);
+        let n10 =
+            u8::try_from(mir2_shared::rng::RandomNumber::with_seed(seed).random_below(16) + 5)
+                .unwrap();
+        (w, p, t, n10)
+    }
+
+    /// 判据①（成功支）：`body_leathery` **恰好**被本次抽打归零 + race ∈ `[50,80)` ⇒
+    /// `skeleton = true`、`body_leathery` 复位 50，且 `TickRecord::skeletons` 恰一条
+    /// （`actor_id` / `dir` / `x` / `y` 全部取**尸体**）。
+    #[test]
+    fn butch_effect_hits_zero_leathery_sets_skeleton_and_records_event() {
+        use crate::action::SkeletonEvent;
+        let (mut w, p, t, n10) = butch_rig(20_261_023, 53, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        w.enqueue(Command::ButchEffect {
+            actor_id: p,
+            target_id: t,
+            n_x: 11,
+            n_y: 10,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.skeletons,
+            vec![SkeletonEvent {
+                actor_id: t,
+                dir: 5,
+                x: 11,
+                y: 10
+            }],
+            "骨架事件以**尸体自己**为发送者（`RM_SKELETON, Dir, CurrX, CurrY`）"
+        );
+        // 第二抽（`Random(201)+100`）的手算值：尸体起值 `MeatQuality = 0` ⇒ `ushort` 回绕。
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(20_261_023);
+        let _n10b = rng.random_below(16) + 5;
+        let mq = u16::try_from(rng.random_below(201) + 100).unwrap();
+        let e = w.entities.get(t).unwrap();
+        assert!(e.ai.skeleton, "BodyLeathery 归零 ⇒ Skeleton = true");
+        assert_eq!(e.ai.body_leathery, 50, "`:742` BodyLeathery = 50");
+        assert_eq!(
+            e.ai.meat_quality,
+            0u16.wrapping_sub(mq),
+            "`:725` `MeatQuality -= Random(201)+100`（ushort 回绕，不夹取）"
+        );
+    }
+
+    /// 判据②（**另一支**）：`body_leathery` 未被本次抽打到 0 ⇒ **零骨架事件**、`skeleton` 保持
+    /// false，但两处数值都按 oracle 扣减（`byte` 不回绕的普通支）。
+    #[test]
+    fn butch_effect_miss_branch_reduces_leathery_without_skeleton() {
+        let (mut w, p, t, n10) = butch_rig(4_242, 53, true);
+        // 起值 = 本次抽 + 10 ⇒ 减完必 > 0（且不触发回绕：n10+10 >= n10）。
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 10;
+        let ev = w.butch_effect_now(p, t, 11, 10);
+        assert!(ev.is_none(), "BodyLeathery != 0 ⇒ 不发 RM_SKELETON");
+        let e = w.entities.get(t).unwrap();
+        assert!(!e.ai.skeleton, "未归零 ⇒ Skeleton 不置位");
+        assert_eq!(e.ai.body_leathery, n10 + 10 - n10, "扣减 = Random(16)+5");
+    }
+
+    /// 判据②b（race 门）：`Race >= Monster(80)` 的动物（毒蜘蛛 82）即使 `BodyLeathery` 归零，
+    /// 也**不**置 `Skeleton`、**不**发帧；但 `BodyLeathery` 照样复位 50（`:742` 在 race 门之外）。
+    #[test]
+    fn butch_effect_race_at_or_above_monster_never_skeletons() {
+        let (mut w, p, t, n10) = butch_rig(7_777, 82, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        let ev = w.butch_effect_now(p, t, 11, 10);
+        assert!(ev.is_none(), "race 82 ∉ [50,80) ⇒ 无骨架事件");
+        let e = w.entities.get(t).unwrap();
+        assert!(!e.ai.skeleton);
+        assert_eq!(e.ai.body_leathery, 50, "归零后照样复位 50");
+    }
+
+    /// **R 级判据核心（金种子三路法）**：两次抽的**次序 + 模数**。
+    ///
+    /// A = 生产路径（`butch_effect_now`）；B = 按 oracle 手抽（先 `Random(16)+5` 扣
+    /// `BodyLeathery`，再 `Random(201)+100` 扣 `MeatQuality`）；C = **对调次序**的阴性对照。
+    ///
+    /// 判据双重：
+    /// ① **抽数个数**：A 之后的流位置 == B（恰 2 抽；少抽/多抽 ⇒ 世界流错位）。
+    /// ② **次序/模数**：A 落库的两处**扣减量**必须等于 B 的两个值；把两次抽对调 ⇒ 扣减量
+    ///    互换（`BodyLeathery` 减 `100..300`、`MeatQuality` 减 `5..20`）⇒ 与 A 必不相同。
+    ///
+    /// 注意 `.NET` legacy `Random.Next(n)` **每次只消耗一个 Sample**（与模数无关），所以
+    /// 「对调次序」**不会**改变下一次 `random()` 的返回值——`mark` 只能钉抽数个数，钉次序
+    /// 靠的是扣减量（本用例的 ②）。
+    ///
+    /// 红检（实测）：把 `butch_effect_now` 里两次 `random_below` 的顺序对调 ⇒ ② 必红。
+    #[test]
+    fn butch_effect_rng_draws_match_oracle_order_and_mods() {
+        const SEED: i32 = 20_261_023;
+        const BODY0: u8 = 200;
+        const MEAT0: u16 = 1000;
+
+        // A：生产路径（一次有效屠宰；起值保证不归零、不回绕）。
+        let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
+        {
+            let e = w.entities.get_mut(t).unwrap();
+            e.ai.body_leathery = BODY0;
+            e.ai.meat_quality = MEAT0;
+        }
+        let ev = w.butch_effect_now(p, t, 11, 10);
+        assert!(ev.is_none(), "起值远离 0 ⇒ 不触发骨架，只观察扣减量");
+        let mark_a = w.rng.random();
+        let (bl_a, meat_a) = {
+            let e = w.entities.get(t).unwrap();
+            (e.ai.body_leathery, e.ai.meat_quality)
+        };
+
+        // B：oracle 手抽（`Operate.cs:722` 先 `Random(16)+5`，`:723` 再 `Random(201)+100`）。
+        let mut b = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let n10 = u8::try_from(b.random_below(16) + 5).unwrap();
+        let mq = u16::try_from(b.random_below(201) + 100).unwrap();
+        let mark_b = b.random();
+
+        // C：对调次序（模数也随之互换）的阴性对照。
+        let mut c = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let mq_swapped = c.random_below(201) + 100;
+        let n10_swapped = c.random_below(16) + 5;
+
+        assert_eq!(
+            mark_a, mark_b,
+            "屠宰效果体必须恰好 2 抽（少抽/多抽 ⇒ 世界流错位）"
+        );
+        assert_eq!(
+            bl_a,
+            BODY0.wrapping_sub(n10),
+            "`BodyLeathery -= Random(16)+5`（第 1 抽 = mod 16）"
+        );
+        assert_eq!(
+            meat_a,
+            MEAT0.wrapping_sub(mq),
+            "`MeatQuality -= Random(201)+100`（第 2 抽 = mod 201）"
+        );
+        assert_ne!(
+            (bl_a, meat_a),
+            (
+                BODY0.wrapping_sub(u8::try_from(n10_swapped % 256).unwrap_or(0)),
+                MEAT0.wrapping_sub(u16::try_from(mq_swapped).unwrap_or(0)),
+            ),
+            "对调次序后的扣减量必须不同（阴性对照：`BodyLeathery` 减 100..300）"
+        );
+    }
+
+    /// 判据③（不满足前置 ⇒ 零帧**且零抽数**）：逐条门各构造一例，`butch_effect_now` 后
+    /// RNG 流位置必须与「一次都不抽」的参照完全相同。
+    #[test]
+    fn butch_effect_gate_failures_draw_nothing() {
+        const SEED: i32 = 1_234_567;
+        let mut r = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let baseline = r.random();
+        /// 门破坏器：`(world, target_id) => ()`。
+        type Mutate = fn(&mut World, i32);
+        let cases: Vec<(&str, Mutate)> = vec![
+            ("目标未死（Death=false）", |w: &mut World, t| {
+                w.entities.get_mut(t).unwrap().death = false;
+            }),
+            ("已经是骨架（Skeleton=true）", |w: &mut World, t| {
+                w.entities.get_mut(t).unwrap().ai.skeleton = true;
+            }),
+            ("非动物 race（80 稻草人）", |w: &mut World, t| {
+                w.entities.get_mut(t).unwrap().race = 83;
+            }),
+            ("超出 2 格（|Δx|=3）", |w: &mut World, t| {
+                w.entities.get_mut(t).unwrap().x = 13;
+            }),
+        ];
+        for (why, mutate) in cases {
+            let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
+            mutate(&mut w, t);
+            let (nx, ny) = {
+                let e = w.entities.get(t).unwrap();
+                (e.x, e.y)
+            };
+            let ev = w.butch_effect_now(p, t, nx, ny);
+            assert!(ev.is_none(), "{why} ⇒ 无骨架事件");
+            assert_eq!(
+                w.rng.random(),
+                baseline,
+                "{why} ⇒ **零抽数**（少抽/多抽都会平移世界 RNG 流）"
+            );
+        }
+
+        // 目标格不符（`IsValidObject` 查的是 (nX,nY)，目标不在该格）。
+        let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
+        let ev = w.butch_effect_now(p, t, 10, 10); // 尸体在 (11,10)
+        assert!(ev.is_none(), "目标不在 (nX,nY) ⇒ 无事件");
+        assert_eq!(w.rng.random(), baseline, "目标格不符 ⇒ 零抽数");
+    }
+
+    /// `BodyLeathery` 是 **`byte`**：`-= n10` 在 C# unchecked 下回绕（`3 - 5 = 254`），
+    /// `<= 0` 因此只命中**恰好 0** ⇒ 回绕后既不置骨架也不是负值。
+    #[test]
+    fn butch_effect_body_leathery_wraps_like_oracle() {
+        let (mut w, p, t, n10) = butch_rig(99, 53, true);
+        assert!(n10 >= 5, "Random(16)+5 ∈ [5,20]");
+        w.entities.get_mut(t).unwrap().ai.body_leathery = 3;
+        let ev = w.butch_effect_now(p, t, 11, 10);
+        assert!(ev.is_none(), "回绕成 254 ⇒ 不发骨架");
+        let e = w.entities.get(t).unwrap();
+        assert_eq!(e.ai.body_leathery, 3u8.wrapping_sub(n10), "unchecked 回绕");
+        assert!(e.ai.body_leathery > 200, "3 - (≥5) 必须回绕成大值");
+        assert!(!e.ai.skeleton);
     }
 
     /// **L1 TransMap 触发（核心）**：玩家走一格踩中 `MapRoute` ⇒ `EnterAnotherMap` 门通过 ⇒

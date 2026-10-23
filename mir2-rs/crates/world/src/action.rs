@@ -81,3 +81,20 @@ pub struct ButchEvent {
     pub x: i32,
     pub y: i32,
 }
+
+/// `RM_SKELETON` → 观察者 `SM_SKELETON(33)`（`PlayObject.Operate.cs:736`）。
+///
+/// **生产者** = 屠宰效果体：`BodyLeathery` 归零 + `Race ∈ [Animal(50), Monster(80))` ⇒
+/// `Skeleton = true` 后 **以尸体自己为发送者** `SendRefMsg(RM_SKELETON, Dir, CurrX, CurrY, 0, "")`。
+/// ⇒ 四个字段全部取自**尸体**（不是屠宰者）：`actor_id` = 尸体 id、`dir` = 尸体 `Dir`、
+/// `x/y` = 尸体 `CurrX/CurrY`。
+///
+/// 第二个生产点（AOI 出现帧 `PlayObject.cs:3229-3236`，观察者首次看见已死且 `Skeleton` 的对象）
+/// 本卡未接（需要 `downlink::appear_frames` 增参，见登记 T-206）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SkeletonEvent {
+    pub actor_id: i32,
+    pub dir: u8,
+    pub x: i32,
+    pub y: i32,
+}
