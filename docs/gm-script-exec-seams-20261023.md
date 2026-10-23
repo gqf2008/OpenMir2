@@ -129,13 +129,20 @@ python -I -B tools/whitelist/t_reservation_gate.py              （见卡面结�
 > `card_window.py` 不直接收 `--var`；用自定义 profile 的 `probe_extra` 传：
 > `"probe_extra": ["--var", "npc_actor=<id>"]`（见 `tools/conformance/README.md` §profile）。
 > `--var` 的值必须**两侧各自发现/各自取**，推不出就 fail-closed，不许拿一侧的值跑另一侧。
+>
+> **共同前置：角色必须先停在目标 NPC 所在图**。新角色出生点 = `StartPoint.txt` 默认 `0 289 618`，
+> 而本卡四个 NPC 都不在图 0：`假人上线NPC` 在 `0150 假人配置室 (16,8)`、`比奇国王-0122` 在 `0122 (29,32)`、
+> `比武-GA2` 在 `GA2 (13,27)`、`桃源-N109` 在 `N109 (38,43)`。探针不发跨图移动 ⇒ 开窗前用
+> DB 改角色位置（`characters` 的 Map/X/Y，以现库 schema 为准）或手动客户端走到目标图后**再用探针登录**；
+> 漏了不会报错，只会点不到 NPC（click 超时/发现退化到错误 actor）。
+> QFunction 路另需角色背包里已有目标物品（DB 夹具或手动放入）。
 
 | 路 | 场景 / 命令 | 前置 | 判据 | 现状 |
 | --- | --- | --- | --- | --- |
-| **① 点击路**（清理垃圾） | `npc_click.json` + `probe_extra ["--var","npc_actor=<假人上线NPC actor>"]` | 角色名必须在 `QuestDiary/LEGM2.CC假人系统/假人名单列表.txt`（否则 `@main` 走 `#ELSEACT` MESSAGEBOX）；`假人上线NPC-jiaren`（MerChant.txt:1）在视野内 | 点击后两侧**恰好一条** `SM_SYSMESSAGE(100)`（GMEXECUTE 回执，正文/Recog/Param/尾逐字节），随后 `SM_MERCHANTSAY(643)`（`@继续` 菜单）次序一致；actor 由 643 规则发现，推不出则两侧各自手填 | **可跑**（第 1 批） |
+| **① 点击路**（清理垃圾） | `npc_click.json` + `probe_extra ["--var","npc_actor=<假人上线NPC actor>"]` | **预置位到 `0150 假人配置室 (16,8)`**；角色名必须在 `QuestDiary/LEGM2.CC假人系统/假人名单列表.txt`（否则 `@main` 走 `#ELSEACT` MESSAGEBOX） | 点击后两侧**恰好一条** `SM_SYSMESSAGE(100)`（GMEXECUTE 回执，正文/Recog/Param/尾逐字节），随后 `SM_MERCHANTSAY(643)`（`@继续` 菜单）次序一致；actor 由 643 规则发现，推不出则两侧各自手填 | **可跑**（第 1 批） |
 | **② QFunction 路**（MobFireBurn `@StdModeFunc15/16`、ShowEffect `@StdModeFunc14`） | `eat_item.json` + `probe_extra ["--var","make_index=<MakeIndex>","--var","item_name=<包名>"]` | 角色背包有 `StdMode 31` 且 `AniCount ∈ {14,15,16}` 的包；`MakeIndex/item_name` 从 `SM_BAGITEMS(201)` 手工取（**发现规则无卡**） | 两侧都先跑脚本：`SM_SYSMESSAGE(100)` 正文逐字节（15=「爱情火焰放置成功」/16=「神圣之光放置成功」；14 另有 `SENDMSG 0` 广播与 2000ms `DelayCall` 链）+ 效果帧；**之后**才 `SM_EAT_OK(635)`，物品离包（202/201 后态）。C2S 的 MakeIndex 跨栈不同 ⇒ 只判 S2C | **可跑但需手工 --var**；无物品时需构造背包夹具（记缺口） |
-| **③ 商人多步链**（取消禁言 `@aa←@main`；清理垃圾 `@06←@main`；VV踢人 `@01←@main`；开始提问 `@main→@假人设置页面→@下一页→@假人到指定地图→@假人到指定地图a`） | **需新场景 R1 `npc_script_chain`**（多步 `dlg_select`；现有 `dice_chain` 固定 `@kaiz/@ya5/@ya52`、`merchant_dialog` 只发 `@buy`） | `比武-GA2`（MerChant.txt:137）、`桃源-N109`（:138）、`假人上线NPC`（:1）；开始提问要求 `ISADMIN` + 在假人名单 | 每一步 `643` 后最终**恰好一条** `SM_SYSMESSAGE(100)`，正文/次序与 C# 逐字节 | **需新场景**（第 3 批） |
-| **④ 固定 NPC 路**（改属性 `@qf←@rw03←@rw02←@main`） | **需 R1 + 固定 NPC 多步**（`npc_click` 只发一次 `@main`） | `Npcs.txt` type 1 的 `比奇国王-0122` 在视野内 | 同上（100 回执 + 次序） | **需新场景**（第 3 批） |
+| **③ 商人多步链**（取消禁言 `@aa←@main`；清理垃圾 `@06←@main`；VV踢人 `@01←@main`；开始提问 `@main→@假人设置页面→@下一页→@假人到指定地图→@假人到指定地图a`） | **需新场景 R1 `npc_script_chain`**（多步 `dlg_select`；现有 `dice_chain` 固定 `@kaiz/@ya5/@ya52`、`merchant_dialog` 只发 `@buy`） | **预置位**到各自图：`GA2 (13,27)` / `N109 (38,43)` / `0150 (16,8)`；开始提问要求 `ISADMIN` + 在假人名单（MerChant.txt:137/138/1） | 每一步 `643` 后最终**恰好一条** `SM_SYSMESSAGE(100)`，正文/次序与 C# 逐字节 | **需新场景**（第 3 批） |
+| **④ 固定 NPC 路**（改属性 `@qf←@rw03←@rw02←@main`） | **需 R1 + 固定 NPC 多步**（`npc_click` 只发一次 `@main`） | **预置位到 `0122 (29,32)`**（`Npcs.txt:3`，type 1） | 同上（100 回执 + 次序） | **需新场景**（第 3 批） |
 | **⑤ 组队路**（`PartyEvent::GotoLabel`） | **需新场景/夹具**：发 `CM_GROUPMODE`/`CM_CREATEGROUP` 触发 `GotoLabel`；`run_party_trade_pair.ps1` 是 bot 夹具，需按本判据改造 | 两个会话（组队至少 2 人） | `SM_SYSMESSAGE(100)` 回执 + 会话 `Permission` 原样放回（5→5） | **需新场景 + 多会话**（第 3 批） |
 | **⑥ 无 QFunction 对照**（判据③） | 不跑窗口 | 冻结部署 `FunctionNPC` 恒装载 ⇒ 真机构造不出「无 QFunction」 | **替代判据 = 构造级牙 D**：`function_npc_present=false` ⇒ 只回 `SM_EAT_FAIL(636)`、0 条 SysMsg、物品留在包内 | **构造级**（不占窗口） |
 | **⑦ `@Login` 回归**（T-210） | `login_only.json` | 新角色登录 | T-210 既有判据 | 只验 @Login，**不算本卡五路证据** |
