@@ -324,6 +324,9 @@ pub enum Imp {
     /// `MobFireBurnCommand`（现网 `@MobFireBurn`）：六参校验 + `MapMgr.FindMap`；
     /// 地图命中 ⇒ `FireBurnEvent` 入 `EventMgr`（宿主未接 ⇒ 零帧）；未命中 ⇒ 红字。
     MobFireBurn,
+    /// `SmakeItemCommand`（现网 `@改属性`）：原地改佩戴位属性（`Desc[n]` / `Dura` / `DuraMax`）+
+    /// `RecalcAbilitys()` + `SendUpdateItem()`；空槽 ⇒ 一条红字。
+    SmakeItem,
 
     // ---- 批次 3 · 传送/召唤（17 + `@传送`，设计件 §4.3 第 11–27 行 / §6 G3）----
     /// `AllowDearRecallCommand`（现网 `@dfsgf567`）。
@@ -465,7 +468,7 @@ pub enum Imp {
     /// 目标离线 ⇒ 一条 Red/Hint；空名 ⇒ **静默 return**（零帧）。
     KickHuman,
 
-    /// 未接的 83 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 5 条）：
+    /// 未接的 82 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 6 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
 }
@@ -506,6 +509,23 @@ pub struct GmMsg {
 ///
 /// 本类型是「把权威值落到实体」的最小差量：每个命令只填自己拥有的字段（`Some`），
 /// 其余保持 `None`（别的命令/别的写点不归它管，避免把陈旧镜像盖回去）。
+/// [`GmSession::pending_use_item`] 的载荷：**改完后的整槽**（`PlayObject.UseItems[n]`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GmUseItemWrite {
+    /// 佩戴位下标（`SmakeItemCommand.cs:22` 的 `nWhere`，守卫 `0..=12`）。
+    pub slot: usize,
+    /// `UserItem.Index`（模板查表用；未改）。
+    pub index: u16,
+    /// `UserItem.MakeIndex`（文案与 `SM_UPDATEITEM` 用；未改）。
+    pub make_index: i32,
+    /// 改后的 `UserItem.Dura`。
+    pub dura: u16,
+    /// 改后的 `UserItem.DuraMax`。
+    pub dura_max: u16,
+    /// 改后的 `UserItem.Desc`（14 字节）。
+    pub desc: [u8; 14],
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GmEntityState {
     /// 目标实体 = `GmWorld::self_entity()`（`WorldEngine.GetPlayObject(speaker)`）的 `Entity.id`。
@@ -635,6 +655,13 @@ pub struct GmSession {
     /// 宿主（`lib.rs` 的 sim 循环）在 `drain_kicks` 之前收口：该支先发
     /// `SM_OUTOFCONNECTION(528)` 再 `KickUser` + 存档 + `MakeGhost`（`PlayObject.Message.cs:367-378`）。
     pub pending_kick: Option<String>,
+    /// **待落地的佩戴位写**（卡 `openmir2-gm-impl-smake`，`SmakeItemCommand.cs:28-61`）。
+    ///
+    /// oracle 命令体直接改**目标（= 说话者）自己的** `PlayObject.UseItems[n]` 再
+    /// `RecalcAbilitys()` + `SendUpdateItem()`；本仓命令体纯、`GmWorld` 只读 ⇒ 命令体把
+    /// 「改完后的整槽」装进本缓冲（与 `pending_entity` 同法），宿主在同一事件内落地
+    /// （写会话 `use_items` + 实体 `UseItems`、重算 WAbil、发 `SM_UPDATEITEM(203)`）。
+    pub pending_use_item: Option<GmUseItemWrite>,
 }
 
 impl Default for GmSession {
@@ -669,6 +696,7 @@ impl Default for GmSession {
             re_level: 0,
             pending_entity: None,
             pending_kick: None,
+            pending_use_item: None,
         }
     }
 }
@@ -1047,6 +1075,11 @@ impl<'a> GmWorld<'a> {
         self.world?.entities.get(id)
     }
 
+    /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
+    fn self_use_item(&self, slot: usize) -> Option<&'a mir2_world::entity::UseItemSlot> {
+        self.self_entity()?.use_items.get(slot)
+    }
+
     fn self_entity(&self) -> Option<&'a mir2_world::Entity> {
         if self.speaker.is_empty() {
             return None;
@@ -1172,6 +1205,17 @@ const NOTE_INDEX_OUT_OF_RANGE: &str =
     "oracle 下标越界（`sHumanName[1]`/`@params[0..6]`）被 PlayObject.Chat.cs 的 catch 吞掉 ⇒ 零帧";
 const NOTE_NO_WORLD: &str =
     "GmWorld 未注入在线实体表/世界（S1 占位世界）⇒ 无法判定目标在线、坐标或地图 Flag";
+
+/// `SmakeItemCommand.cs:77`：空槽位的红字回执（`CommandHelp.GamecommandSuperMakeHelpMsg`）。
+pub const SMAKE_NO_ITEM_HELP: &str = "身上没指定物品!!!";
+
+/// `SmakeItemCommand.cs:26`：三参越界 ⇒ **静默 return**（oracle 无 else 支）。
+const NOTE_SMAKE_RANGE: &str = "SmakeItem：nWhere/nValueType/nValue 越界 ⇒ 静默 return（零帧）";
+
+/// `SmakeItemCommand.cs:36-43`：`nValueType == 16`（吸伤）支**不可达**——`:26` 的范围守卫
+/// 只放行 `0..=15`。照抄时省略，登记在此。
+const NOTE_SMAKE_ABSORB_DEAD: &str =
+    "SmakeItem：nValueType==16 吸伤支被 :26 的 0..=15 守卫挡住（死支）";
 
 /// `ShowEffectCommand.cs:20-70`：命令体**整段被注释** ⇒ 任何参数都零帧、零副作用。
 const NOTE_SHOW_EFFECT_ALL_COMMENTED: &str =
@@ -1661,6 +1705,83 @@ fn mob_fire_burn(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     red(format!("地图{MOB_FIRE_BURN_NAME} 不存在"))
 }
 
+/// `SmakeItemCommand.Execute`（`src/Modules/GameCommand/Commands/SmakeItemCommand.cs:16-80`，
+/// 现网 `@改属性`，`Command.conf` 的 `[Command] SuperMake=改属性` / `[Permission] SuperMake=10`）。
+///
+/// **实际执行行**：
+/// - `:22-24` `nWhere`/`nValueType`/`nValue`（`StrToInt(_, 0)`，缺参 = 0）；
+/// - `:26` 范围守卫 `0<=nWhere<=12 && 0<=nValueType<=15 && 0<=nValue<=255`，不满足 ⇒ **静默
+///   return**（无 else、无回执）；`nValueType <= 15` 让 `:36` 的 `nValueType == 16` 支**不可达**；
+/// - `:28` 该槽 `Index > 0` 才继续；**空槽 ⇒ 红字 `身上没指定物品!!!`**（`:77`）；
+/// - `:30-34` 模板查不到 ⇒ 静默 return（本仓 `GmWorld` 无物品表 ⇒ 该支登记在 T-* 行）；
+/// - `:35` `Desc[9] = (byte)_MIN(255, Desc[9] + 1)`（**无条件**累积升级次数）；
+/// - `:44-55` `nValueType` 14 ⇒ `Dura = (ushort)(_MIN(65, nValue) * 1000)`；15 ⇒ `DuraMax` 同式；
+/// - `:56-59` 否则 `Desc[nValueType] = (byte)nValue`（`nValueType` 已 ≤13）；
+/// - `:60` `RecalcAbilitys()`；`:61` `SendUpdateItem(UseItems[nWhere])`（`SM_UPDATEITEM(203)`）；
+/// - `:62-69` 蓝字回执 `"{Index}-{MakeIndex} {Dura}/{DuraMax} {Desc0}/{1}/…/{13}"`
+///   （`ItemAttr.WeaponUpgrade = 10` ⇒ 13 个 `Desc` 槽按 0..=13 全列）；
+/// - `:70-73` `Config.ShowMakeItemMsg` ⇒ 只写服务端日志（无帧）。
+///
+/// 落地：命令体只算「改完后的整槽」并装进 [`GmSession::pending_use_item`]；宿主
+/// （`lib.rs::apply_pending_gm_use_item`）写会话 + 实体、重算 WAbil、发 `SM_UPDATEITEM(203)`。
+fn smake_item(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let n_where = str_to_int(params.first().copied().unwrap_or(""), 0);
+    let n_value_type = str_to_int(params.get(1).copied().unwrap_or(""), 0);
+    let n_value = str_to_int(params.get(2).copied().unwrap_or(""), 0);
+    // `:26`：越界 ⇒ 静默 return（无 else）。
+    if !(0..=12).contains(&n_where)
+        || !(0..=15).contains(&n_value_type)
+        || !(0..=255).contains(&n_value)
+    {
+        return no_frames(NOTE_SMAKE_RANGE);
+    }
+    if world.world.is_none() {
+        return no_frames(NOTE_NO_WORLD);
+    }
+    let Some(item) = world.self_use_item(n_where as usize) else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    // `:28`：空槽 ⇒ 一条红字（固定文案，不是帮助格式）。
+    if item.index == 0 {
+        return red(SMAKE_NO_ITEM_HELP);
+    }
+    // `:30-34`：模板查不到 ⇒ 静默（`GmWorld` 无物品表，登记为 T-* 残余）。
+    let mut desc = item.desc;
+    let mut dura = item.dura;
+    let mut dura_max = item.dura_max;
+    // `:35`：无条件累积升级次数（`byte` 语义 ⇒ 饱和）。
+    desc[9] = desc[9].saturating_add(1);
+    // `:36-43` 的 `nValueType == 16` 支不可达（守卫 ≤15）——省略并登记。
+    // `:44-59`：14/15 先 `_MIN(65, _)` 再 ×1000；其余写 `Desc[n]`。
+    match n_value_type {
+        14 => dura = (n_value.min(65) * 1000) as u16,
+        15 => dura_max = (n_value.min(65) * 1000) as u16,
+        t => desc[t as usize] = n_value as u8,
+    }
+    let _ = NOTE_SMAKE_ABSORB_DEAD;
+    sess.pending_use_item = Some(GmUseItemWrite {
+        slot: n_where as usize,
+        index: item.index,
+        make_index: item.make_index,
+        dura,
+        dura_max,
+        desc,
+    });
+    // `:62-69`：蓝字回执（`Desc` 0..=13 全列）。
+    let dump = (0..14)
+        .map(|i| desc[i].to_string())
+        .collect::<Vec<_>>()
+        .join("/");
+    GmResult::one(
+        GmColor::Blue,
+        format!(
+            "{}-{} {}/{} {dump}",
+            item.index, item.make_index, dura, dura_max
+        ),
+    )
+}
+
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
 //
 // 口径：全部 `PermissionMin = 10`（现网 `Permission` 恒 0 ⇒ 生产一律 `权限不够!!!`）。
@@ -2131,6 +2252,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     // 否则一条被权限门/未知命令挡下的 `@…` 会把上一条命令的差量顺带落地。
     sess.pending_entity = None;
     sess.pending_kick = None;
+    sess.pending_use_item = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -2217,6 +2339,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::FireBurn => fire_burn(parameters, sess),
         Imp::StartQuest => start_quest(parameters),
         Imp::MobFireBurn => mob_fire_burn(parameters, world),
+        Imp::SmakeItem => smake_item(parameters, sess, world),
 
         // ---- 批次 3 · 传送/召唤（17 + `@传送`）----
         Imp::AllowDearRecall => allow_dear_recall(sess),
@@ -3330,7 +3453,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "改属性",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SmakeItem,
     },
     CommandDef {
         name: "时间",
@@ -4672,11 +4795,10 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`
-    /// 与卡 `openmir2-gm-impl-startquest` 的 `StartQuest`、
-    /// 卡 `openmir2-gm-impl-kick` 的 `VV踢人`、
-    /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 83），且命令名 → 实现标签固定。
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`、
+    /// 卡 `openmir2-gm-impl-startquest` 的 `StartQuest`、卡 `openmir2-gm-impl-kick` 的 `VV踢人`、
+    /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 82），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4684,16 +4806,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            102,
-            "102 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1）5 条"
+            103,
+            "103 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1）6 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            83,
-            "185 - 102"
+            82,
+            "185 - 103"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -6074,6 +6196,18 @@ mod tests {
         assert_eq!(sess.permission, 0, "抬权是临时的，执行完必须还原");
     }
 
+    /// 卡 `openmir2-gm-impl-smake`：表项（现网名 `改属性` = `conf[Command].SuperMake`）。
+    #[test]
+    fn smake_item_is_wired_in_the_command_table() {
+        let def = find("改属性").expect("@改属性 在 185 行表里");
+        assert_eq!(def.imp, Imp::SmakeItem);
+        assert_eq!(def.perm_min, 10, "`[Permission] SuperMake=10`");
+        assert_eq!(
+            def.params, 2,
+            "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
+        );
+    }
+
     /// 卡 `openmir2-gm-impl-showeffect`：表项（`Command.conf` 无覆盖 ⇒ 注册名保持英文
     /// `ShowEffect`；部署脚本写 `showeffect` 靠 `OrdinalIgnoreCase` 命中）。
     #[test]
@@ -6112,6 +6246,101 @@ mod tests {
             def.params, 2,
             "`Execute(string[] @params, IPlayerActor)` ⇒ case 2"
         );
+    }
+
+    /// 造一个说话者实体（`GmWorld::self_entity` 的来源），可带一个佩戴件。
+    fn smake_world_with_slot(
+        slot: usize,
+        item: mir2_world::entity::UseItemSlot,
+    ) -> (mir2_world::World, mir2_world::GuildManager) {
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world::Entity::new(0, "gm", 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        if slot < e.use_items.len() {
+            e.use_items[slot] = item;
+        }
+        w.add_entity(e);
+        (w, mir2_world::GuildManager::new())
+    }
+
+    /// `:26` 三参范围守卫：任一越界 ⇒ **静默 return**（零帧、无副作用）。
+    #[test]
+    fn smake_item_out_of_range_is_silent() {
+        for line in [
+            "@改属性 13 1 1",
+            "@改属性 1 16 1",
+            "@改属性 1 1 256",
+            "@改属性 -1 1 1",
+        ] {
+            let (r, sess) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}: 命中命令体");
+            assert!(r.msgs.is_empty(), "{line}: 越界 ⇒ 零帧");
+            assert!(sess.pending_use_item.is_none(), "{line}: 不得登记佩戴位写");
+        }
+    }
+
+    /// `:28` 空槽 ⇒ 一条红字固定文案（不是帮助格式）。
+    #[test]
+    fn smake_item_empty_slot_reports_red_text() {
+        let (w, guilds) = smake_world_with_slot(1, Default::default());
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@改属性 1 2 7");
+        assert_eq!(texts(&r), vec![(GmColor::Red, SMAKE_NO_ITEM_HELP)]);
+        assert!(sess.pending_use_item.is_none());
+    }
+
+    /// 命中：`Desc[9]` 无条件 +1、`Desc[nValueType] = nValue`；蓝字回执逐字节
+    /// （`{Index}-{MakeIndex} {Dura}/{DuraMax} {Desc0}/…/{Desc13}`）。
+    #[test]
+    fn smake_item_writes_desc_and_reports_blue_dump() {
+        let item = mir2_world::entity::UseItemSlot {
+            make_index: 77,
+            index: 5,
+            dura: 100,
+            dura_max: 200,
+            desc: [0; 14],
+        };
+        let (w, guilds) = smake_world_with_slot(1, item);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+        let r = execute(&mut sess, &cfg, &view, "@改属性 1 2 7");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Blue, "5-77 100/200 0/0/7/0/0/0/0/0/0/1/0/0/0/0")],
+            "Desc[2]=7、Desc[9] 0→1；其余槽原样"
+        );
+        let pend = sess.pending_use_item.expect("命中 ⇒ 必须登记佩戴位写");
+        assert_eq!(pend.slot, 1);
+        assert_eq!((pend.index, pend.make_index), (5, 77));
+        assert_eq!((pend.dura, pend.dura_max), (100, 200));
+        assert_eq!(pend.desc[2], 7);
+        assert_eq!(pend.desc[9], 1);
+    }
+
+    /// `:44-55`：`nValueType` 14 ⇒ `Dura = _MIN(65, nValue) * 1000`；15 ⇒ `DuraMax` 同式。
+    #[test]
+    fn smake_item_types_14_and_15_set_durability() {
+        let item = mir2_world::entity::UseItemSlot {
+            make_index: 9,
+            index: 3,
+            dura: 1,
+            dura_max: 2,
+            desc: [0; 14],
+        };
+        let cfg = GmConfig::default();
+        for (args, dura, dura_max) in [("14 100", 65_000_u16, 2_u16), ("15 7", 1_u16, 7_000)] {
+            let (w, guilds) = smake_world_with_slot(2, item);
+            let mut sess = gm_session();
+            let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
+            let r = execute(&mut sess, &cfg, &view, &format!("@改属性 2 {args}"));
+            assert!(!r.msgs.is_empty(), "{args}: 命中 ⇒ 蓝字回执");
+            let pend = sess.pending_use_item.expect("必须登记");
+            assert_eq!((pend.dura, pend.dura_max), (dura, dura_max), "{args}");
+            assert_eq!(pend.desc[9], 1, "{args}: 升级次数无条件 +1");
+        }
     }
 
     /// oracle 命令体 `:20-70` **整段被注释** ⇒ 任何参数（含部署脚本的 78/79/80）都零帧、

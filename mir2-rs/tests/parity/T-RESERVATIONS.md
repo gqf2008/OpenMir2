@@ -250,4 +250,5 @@
 | T-214 | openmir2-gm-impl-kick | 2026-10-23T08:25:54Z | 在用 |
 | T-215 | openmir2-gm-impl-showeffect | 2026-10-23T08:37:07Z | 在用 |
 | T-216 | openmir2-gm-impl-mobfireburn | 2026-10-23T08:46:23Z | 在用 |
+| T-217 | openmir2-gm-impl-smake | 2026-10-23T08:58:25Z | 在用 |
 | T-219 | openmir2-gm-impl-startquest | 2026-10-23T09:19:34Z | 在用 |
