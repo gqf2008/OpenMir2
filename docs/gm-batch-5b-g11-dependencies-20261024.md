@@ -93,12 +93,22 @@ else                          PlanesClient.Instance.SendSocket(nCode + "/" + nSe
 bool boFlag = @params.Length > 2 && bool.Parse(@params[2]);
 ```
 
-- **`@params.Length > 2` 是短路守卫** ⇒ 参数不足 3 个时**不会** `IndexOutOfRange`，`boFlag=false`。
-- 真正会抛的是 **`FormatException`**：`GMEXECUTE` 的动作把参数拼成**固定 6 段**（`ActionOfGmExecute`，`ExecutionProcessingSys.cs:4925-4947`：`"@%s %s %s %s %s %s"`）⇒ `parameters.Split(' ')` 长度恒 6，
-  脚本没给第三段时 `@params[2]` 是**空串** ⇒ `bool.Parse("")` 抛 `FormatException`；
-  同理脚本写 `Gmexecute ChangeSabukLord 沙巴克 行会 abc` ⇒ `bool.Parse("abc")` 抛。
-- 异常被**外层吞掉**：`PlayObject.ProcessUserLineMsg`（`src/M2Server/Player/PlayObject.Chat.cs:229`）里 `CommandSystem.Execute(this, sData)`（`:368`）位于 `try`（`:233`）之内，`catch (Exception e)`（`:402`）只记日志；`ActionOfGmExecute` 本身只有 `try/finally`（`ExecutionProcessingSys.cs:4939-4949`，**无 catch**）。
-- **照抄口径**：① 保留 `Length > 2 &&` 短路（2 参时 `boFlag=false`，不抛）；② 第三段非 `true`/`false`（含空串）⇒ 抛 `FormatException` 并被 GM 入口吞（**不产任何帧、不改状态**）；③ 不要"顺手修成 `TryParse`"。
+- **`@params.Length > 2` 是短路守卫** ⇒ 参数不足 3 个时**不会** `IndexOutOfRange`，也**不会**进 `bool.Parse`，`boFlag=false`。
+- **2 参时命令照常继续执行**：`castle.GetCastle(guild)`（`:39`）**会改写城堡归属**（`OwnGuild`），`:44` 照发绿字；
+  唯一差别是 `:42` 的 `if (boFlag)` 不成立 ⇒ **不发 `SS_211`**。与 §3 row⑤ 同一口径——**不要**写成「零状态变化」。
+- **`FormatException` 只在一种情况发生**：命令与参数先经 `ExtractCommandAndParameters`（`CommandSystem.cs:228-252`）——
+  `:230` `line = line.Trim()`、`:249` `parameters = line[(line.IndexOf(' ') + 1)..].Trim()`——之后 `GameCommand.Handle`
+  才 `parameters.Split(' ')`（`GameCommand.cs:46`）。
+  ⇒ 尾部空格被 `Trim()` 吃掉，**`@params.Length` 等于实际段数**（不恒 6）。因此：
+  **第三段非空且不是 `true`/`false`**（如 `Gmexecute ChangeSabukLord 沙巴克 行会 abc` 的 `abc`）⇒ `bool.Parse` 抛 `FormatException`；
+  **第三段缺失或为空** ⇒ `Length > 2` 为假，短路，不抛。
+- 异常被**外层吞掉**：`PlayObject.ProcessUserLineMsg`（`src/M2Server/Player/PlayObject.Chat.cs:229`）里
+  `CommandSystem.Execute(this, sData)`（`:368`）位于 `try`（`:233`）之内，`catch (Exception e)`（`:402`）只记日志；
+  `ActionOfGmExecute` 本身只有 `try/finally`（`ExecutionProcessingSys.cs:4939-4949`，**无 catch**）。
+  ⇒ 只有在真正抛 `FormatException` 时才是「不产任何帧、不改状态」。
+- **照抄口径**：① 保留 `Length > 2 &&` 短路（2 参：不抛、`boFlag=false`，但**仍改城堡归属**、不发 `SS_211`）；
+  ② 第三段非空且非 `true`/`false` ⇒ 抛 `FormatException` 并被 GM 入口吞（零帧、零状态变化）；
+  ③ 不要"顺手修成 `TryParse`"。
 
 ### 4.2 `GuildRecall` 的 `(short)dwValue` 强转
 
@@ -133,4 +143,6 @@ else PlayerActor.GroupRcallTime = 0;                                            
 ## 7. 未核 / 留给 G11 的问题
 
 - `SS_*` 的实际线上编解码（`PlanesServer.DecodeSocStr` 的 `(...)` 包裹与 `\` 分隔，`PlanesServer.cs:63-90`）在本仓 Rust 侧**没有对应实现** —— G11 若只做"发送可观测"，需要明确是否也要复刻接收端解析。
-- 单区部署（`ServerIndex=0`）下 `PlanesServer` 是否真的启动（`StartPlanesServer` 的调用点）——本卡未核；若生产不启动，则"发送"在现代码里等价于**写到无人接收的 socket**，这一点必须写进 G11 的验收口径。
+- **本部署是否启动 `PlanesService`**：`PlanesService.Start()`（`src/Modules/PlanesSystem/PlanesService.cs:7-19`）在 `ServerIndex==0` 时调
+  `PlanesServer.Instance.StartPlanesServer()`，否则初始化并启动 `PlanesClient`。本卡**未核**它的调用点是否在服务启动路径上；
+  若本部署不启动，则"发送"等价于**写到无人接收的 socket**，这一点必须写进 G11 的验收口径。
