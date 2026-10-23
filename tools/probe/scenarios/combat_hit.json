@@ -1,20 +1,21 @@
 {
   "name": "combat_hit",
-  "description": "朝指定格子砍一刀：CM_HIT(3014) recog=目标X param=目标Y tag=方向 -> 只等 SM_HIT(14)",
+  "description": "朝指定格子砍一刀：CM_HIT(3014) 的 **X/Y 都打包在 recog**（`recog = (target_y<<16) | target_x`；服务端取 LoWord=X、HiWord=Y），`param` 服务端根本不读（恒 0），`tag` = 方向 -> 只等 SM_HIT(14)",
   "required": [
     "target_x",
     "target_y",
+    "target_xy",
     "hit_dir"
   ],
   "steps": [
     {
       "send": {
         "ident": 3014,
-        "recog": "target_x",
-        "param": "target_y",
+        "recog": "target_xy",
+        "param": 0,
         "tag": "hit_dir"
       },
-      "note": "oracle: PlayObject.Message.cs CM_HIT..CM_FIREHIT 统一走 ClientHitXY(wIdent, nParam1=X, nParam2=Y, (byte)wParam=Dir)"
+      "note": "oracle：`src/GameSrv/Word/WorldServer.cs:831-851` 把 CM_HORSERUN/CM_TURN/CM_WALK/CM_SITDOWN/CM_RUN/CM_HIT/CM_HEAVYHIT/…/CM_FIREHIT 归同一 case 组，两支都只读 `LoWord(Recog)`/`HiWord(Recog)`（`:846` SendActionMsg / `:850` SendMsg），**`defMsg.Param` 未被读**；`src/M2Server/Player/PlayObject.Message.cs:1230` `ClientHitXY(wIdent, nParam1=LoWord(Recog)=X, nParam2=HiWord(Recog)=Y, (byte)wParam=Tag=Dir)`。⇒ 线上必须发 `recog=(y<<16)|x`，`param` 留 0；`target_xy` 由调用方按该公式打包（`param_discovery` 不做位运算，见 docs/scenario-recog-packing-20261023.md）"
     },
     {
       "wait_for": 14,

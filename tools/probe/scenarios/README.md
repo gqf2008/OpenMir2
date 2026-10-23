@@ -263,3 +263,14 @@ R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `
 `conn-0001.s2c.bin` 44 帧、`conn-0002.s2c.bin` 106 帧（含 4 条 `SM_MERCHANTSAY(643)`，
 即赌场骰子链的服务端回包）。`*.c2s.bin` 是同一窗口的客户端字节，用于核对帧构造的已知答案向量。
 `sha256` 见提交说明；不要在 fixture 上做任何改写（自测里的 tamper 是内存副本）。
+
+## `recog` 打包口径（动作族 `CM_HIT`/`CM_WALK`/`CM_RUN`/`CM_TURN`…）
+
+这些命令的 **X/Y 都打包在 `recog` 里**：`recog = (y << 16) | x`（`LoWord=X`、`HiWord=Y`），
+**`param` 服务端完全不读**（`src/GameSrv/Word/WorldServer.cs:831-851`，两支都只取 `LoWord/HiWord(Recog)`）。
+
+* `combat_hit.json` 用 `target_xy`、`move_walk.json` 用 `move_xy` 承载打包值；`target_x/target_y`、`move_x/move_y`
+  保留为「意图/推导量」，调用方按公式算好打包值再用 `--var` 传入。
+* 本 DSL **没有位运算表达方式**（取值只有 int / params 名；`computed` 只是给 `param_discovery` 的注记）⇒
+  这两条场景在 `card_window` 里会因 `*_xy` 推不出而 fail-closed（不再是静默打错坐标）。
+* 详细逐文件复核表、oracle 行号与影响面：`docs/scenario-recog-packing-20261023.md`。
