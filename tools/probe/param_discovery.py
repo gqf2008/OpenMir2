@@ -1658,7 +1658,8 @@ def selftest():
     def case_computed_oracle_text():
         # 卡 `openmir2-param-discovery-oracle-text-fix`：文案必须与 oracle 一致——同一公式
         # `recog=(Y<<16)|X`，语义按 ident 区分；动作族 Param 不携带坐标。
-        # 红检（实测）：把 move_y 改回旧说法「nParam1=X → recog，nParam2=Y → param」⇒ 本用例红。
+        # 红检（实测）：① 把 move_y 改回旧说法「nParam1=X → recog，nParam2=Y → param」⇒ 本用例红；
+        # ② 把 CM_SPELL 映射改成「X 在 Param、Y 在 Tag、目标 actor 在 Recog」⇒ 本用例红。
         mx = COMPUTED_ORACLES["move_x"]
         my = COMPUTED_ORACLES["move_y"]
         both = mx + my
@@ -1674,8 +1675,15 @@ def selftest():
         # 魔号=Tag(wParam)，目标 actor=MakeLong(Param,Series)（review F1）
         assert "CM_SPELL" in my and "WorldServer.cs:783" in my, my
         assert "MakeLong(Param" in my and "ClientSpellXY" in my, my
-        assert "Y 在 Param" not in my and "目标 actor 在 Tag" not in my, my
-        assert "default" not in my, my
+        # 显式钉住**正确映射本身**（不能只钉散落 token）：X/Y 归 LoWord/HiWord(Recog)、
+        # 魔号归 Tag、目标 ActorId 归 MakeLong(Param,Series)。
+        assert "X = LoWord(Recog)、Y = HiWord(Recog)" in my, my
+        assert "wParam/Tag = 魔号" in my, my
+        assert "nParam3 = MakeLong(Param, Series) = 目标 ActorId" in my, my
+        # 任何错映射（Y/Tag/Recog 互换、退回 default 支）都必须被咬住（review F3）。
+        for bad in ("Y 在 Param", "X 在 Param", "Y 在 Tag", "目标 actor 在 Tag",
+                    "目标 actor 在 Recog", "default"):
+            assert bad not in my, (bad, my)
         # 旧错说法必须不再出现（X 在 recog、Y 在 param 的错口径）
         assert "nParam1=X → recog，nParam2=Y → param" not in both, my
 
