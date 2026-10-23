@@ -825,7 +825,9 @@ def side_discovery_doc(side, ctx, values, missing, probe_rc, probe_argv):
         "format": DISCOVERY_FORMAT,
         "tool": TOOL,
         "side": side,
-        "ok": not missing,
+        # F-1：ok 必须同时包含 discovery probe 的 rc——`--discover` 强制 + 场景无 required 时
+        # missing 为空，只看 missing 会把「probe 失败、没有帧」写成 ok=True。
+        "ok": (probe_rc == 0 and not missing),
         "scenario": real_scenario,
         "scenario_sha256": (sha256_file(real_scenario)
                             if real_scenario and os.path.isfile(real_scenario) else None),
@@ -1087,6 +1089,7 @@ def run_side(runner, side, prof, ctx, password):
                                      disc_argv)
             if derr:
                 doc["error"] = derr
+                doc["ok"] = False
             try:
                 write_json_file(os.path.join(side_dir, "discovered.json"), doc)
             except OSError as e:
@@ -1909,6 +1912,9 @@ def main():
         with open(os.path.join(out, "stub-argv.json"), "w", encoding="utf-8") as f:
             json.dump({"side": side, "argv": sys.argv}, f, sort_keys=True)
         if os.path.basename(os.path.normpath(out)) == "discovery":
+            if os.environ.get("STUB_DISCOVERY_FAIL") == side:
+                sys.stderr.write("stub discovery: simulated probe failure\n")
+                return 3
             self_x = 7 if side == "csharp" else 8
             npc = 119 if side == "csharp" else 129
             frames = [
@@ -2333,6 +2339,37 @@ def selftest():
             "DISC-8 无 --discovery-frames => 占位符预览（不发明数值，%s）"
             % prev_probe["argv"][-2:])
 
+        # F-1：--discover 强制 + 场景**无 required** + discovery probe 失败 =>
+        #      side doc 必须 ok=False（不能因为 missing 为空就写 ok=True），
+        #      顶层 discovered.json 必须 complete=False/consistent=False。
+        scen_noreq = os.path.join(tmp, "scen-no-required.json")
+        with open(scen_noreq, "w", encoding="utf-8") as f:
+            json.dump({"name": "no-required", "steps": []}, f)
+        prof_f1 = _selftest_profile(tmp, stub, log)
+        prof_f1["sides"]["csharp"]["env"] = {"STUB_DISCOVERY_FAIL": "csharp"}
+        fresh_log()
+        out_f1 = os.path.join(tmp, "run-f1")
+        s_f1 = execute(base_cfg(out_f1, prof_f1, scenario=scen_noreq, discover=True))
+        try:
+            with open(os.path.join(out_f1, "csharp", "discovered.json"),
+                      encoding="utf-8") as f:
+                d_f1 = json.load(f)
+        except (OSError, ValueError):
+            d_f1 = {}
+        try:
+            with open(os.path.join(out_f1, "discovered.json"), encoding="utf-8") as f:
+                d_f1_all = json.load(f)
+        except (OSError, ValueError):
+            d_f1_all = {}
+        chk(s_f1["exit_code"] == 2 and d_f1.get("discovery_probe_rc") == 3
+            and d_f1.get("ok") is False and bool(d_f1.get("error")),
+            "F-1 discovery probe 失败（required 为空）=> side ok=False/probe_rc=3（%s）"
+            % {k: d_f1.get(k) for k in ("ok", "discovery_probe_rc", "error")})
+        chk(d_f1_all.get("complete") is False
+            and d_f1_all.get("consistent") is False,
+            "F-1 discovery probe 失败 => 顶层 complete=False/consistent=False（%s）"
+            % {k: d_f1_all.get(k) for k in ("complete", "consistent")})
+
         # 8) 停栈命令碰 mysqld => 拒绝（不碰 MySQL 服务本身）
         prof_mysql = _selftest_profile(tmp, stub, log)
         prof_mysql["sides"]["csharp"]["stop"] = ["powershell", "-Command",
@@ -2398,6 +2435,21 @@ def selftest():
                 "whitelisted"},
             "M-2 嵌套 compare 字段集合完整（%s）"
             % sorted((captured.get("compare") or {}).keys()))
+        # P-1：值断言，一律从本次 report.json 实读（不硬编码）。
+        rep_c = read_report(os.path.join(out_c, "report.json")) or {}
+        cmp_c = captured.get("compare") or {}
+        chk(cmp_c.get("db_state") == (rep_c.get("db") or {}).get("state") == "compared",
+            "P-1 PASS db_state = report.db.state = compared（实际 %r / %r）"
+            % (cmp_c.get("db_state"), (rep_c.get("db") or {}).get("state")))
+        chk(cmp_c.get("diffs") == len(rep_c.get("diffs") or []) == 0,
+            "P-1 PASS diffs = len(report.diffs) = 0（实际 %r / %r）"
+            % (cmp_c.get("diffs"), len(rep_c.get("diffs") or [])))
+        chk(cmp_c.get("undecidable") == len(rep_c.get("undecidable") or []) == 0,
+            "P-1 PASS undecidable = len(report.undecidable) = 0（实际 %r / %r）"
+            % (cmp_c.get("undecidable"), len(rep_c.get("undecidable") or [])))
+        chk(cmp_c.get("whitelisted") == len(rep_c.get("whitelisted") or []),
+            "P-1 PASS whitelisted = len(report.whitelisted)（实际 %r / %r）"
+            % (cmp_c.get("whitelisted"), len(rep_c.get("whitelisted") or [])))
         chk("status" not in captured
             and captured.get("card") == "openmir2-card-window-tool-selftest",
             "comment body 不含 status（绝不改卡状态），card 正确")
@@ -2735,6 +2787,21 @@ def selftest():
             % (captured_f.get("verdict"), captured_f.get("verdict_reason"),
                (captured_f.get("compare") or {}).get("verdict")))
         chk(s_f["exit_code"] == 2, "D-1 compare FAIL => 工具 rc=2")
+        # P-1：FAIL 侧同样从本次 report.json 实读（diffs=1）。
+        rep_f = read_report(os.path.join(out_f, "report.json")) or {}
+        cmp_f = captured_f.get("compare") or {}
+        chk(cmp_f.get("db_state") == (rep_f.get("db") or {}).get("state") == "compared",
+            "P-1 FAIL db_state = report.db.state = compared（实际 %r / %r）"
+            % (cmp_f.get("db_state"), (rep_f.get("db") or {}).get("state")))
+        chk(cmp_f.get("diffs") == len(rep_f.get("diffs") or []) == 1,
+            "P-1 FAIL diffs = len(report.diffs) = 1（实际 %r / %r）"
+            % (cmp_f.get("diffs"), len(rep_f.get("diffs") or [])))
+        chk(cmp_f.get("undecidable") == len(rep_f.get("undecidable") or []) == 0,
+            "P-1 FAIL undecidable = len(report.undecidable) = 0（实际 %r / %r）"
+            % (cmp_f.get("undecidable"), len(rep_f.get("undecidable") or [])))
+        chk(cmp_f.get("whitelisted") == len(rep_f.get("whitelisted") or []),
+            "P-1 FAIL whitelisted = len(report.whitelisted)（实际 %r / %r）"
+            % (cmp_f.get("whitelisted"), len(rep_f.get("whitelisted") or [])))
 
         # 14) I-2：停栈禁词按效果归一（net.exe stop MySQL / spsv / Stop-Service 全拒）
         for label, bad_stop in (
