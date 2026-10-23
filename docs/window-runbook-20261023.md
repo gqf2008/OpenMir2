@@ -16,7 +16,25 @@
   （订正：原文写「尚未加值断言 / 仍在飞行」，那是 16:45 之前的状态）。
   参数发现已接进 `card_window.py`（卡 `openmir2-window-discovery-wiring` 已合入 `e72fb9728`）；规则表另见 §4.5。
 
-## 0.5 开窗前 60 秒自查清单（复制粘贴；每步给「期望」与「失败含义」）
+## 0.5 开窗前 60 秒自查（**一条命令**；手工步骤保留为退路）
+
+```sh
+python -I -B tools/conformance/preflight.py --profile alt
+```
+
+输出每步一行 `[OK]/[FAIL] <step>: <细节>`，最后 `PREFLIGHT PASS`（rc=0）或 `PREFLIGHT FAIL`（rc=2）；**FAIL 行直接写了修复建议**。五步含义（与卡 `openmir2-window-preflight-script` 一致）：
+
+| 步骤 | 查什么 | 失败时该做什么 |
+|---|---|---|
+| `docs` | runbook 有 `probe_timeout_ms`、无 profile 的 `"timeout_ms"`（旧键会被**静默忽略**）；scenarios/README 同样提到 `probe_timeout_ms` | 按第 0 步改回 `probe_timeout_ms` |
+| `binary` | 委托 `start_mir2_server.ps1 -WhatIf`，解析 `SERVER_EXE/SHA256/BUILD`；必须是 `Release` 且打印的 sha 与本地重算一致 | `cargo build --release -p mir2-server`（确要用 debug 才加 `--allow-debug`，并在证据里写明） |
+| `ports` | 从 profile 的 `sides[*].ports` 逐个 connect 探测（**不写死端口表**），要求全空 | 先停上一轮栈（`preflight` 会点名端口） |
+| `profile` | `probe_timeout_ms` 为正整数；开了 `require_pid_binaries` 的侧必须有 `pid_file` | 补 profile 键 |
+| 可选 | `--with-dry-run` / `--with-selftest` 才委托 `card_window` 对应动作（默认不跑） | 同原命令 |
+
+> 只读：不起栈、不连库、端口只做 connect 探测。`--selftest` 用桩验证五个失败分支（rc=2 且点名）。
+
+### 退路：手工步骤（命令不可用时照旧做）
 
 > 五步顺序：**核二进制 sha → 核端口 → 核 profile 键 → `--dry-run` → `--selftest`**；外加第 0 步（文档口径）与第 4.5 步（idents 登记）。
 > 任一步与期望不符 ⇒ **不要开窗**（一轮窗口 ≈ 240G + 数十分钟）。
