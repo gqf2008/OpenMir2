@@ -216,6 +216,60 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 - **仍不支持背包夹具**：「背包里必须已有某个 MakeIndex/物品」这类前置仍走手工 DB 夹具，
   由卡 `openmir2-discovery-bagitems-201` 承接（本工具预留了同一处声明点，落地时直接接）。
 
+## 1.6 二进制与 sha256 的开窗前核对（卡 `openmir2-start-server-whatif-sha`，2026-10-23 晚）
+
+`start_mir2_server.ps1 -WhatIf` 固定输出三行（实跑同款，只是多打印告警）：
+
+```text
+SERVER_EXE         <绝对路径>
+SERVER_EXE_SHA256  <小写 hex；文件不存在时为 MISSING>
+SERVER_EXE_BUILD   Release | Debug-Fallback | Explicit
+```
+
+标准核对命令（在**你将要起栈的那棵树**里跑；根解析只用脚本自身的 `$PSScriptRoot`，所以它指向**该树**的 `mir2-rs/target`，与 cwd 无关）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root 'E:/tmp/conformance/rust-root' -LogDir 'E:/tmp/conformance/rust-logs' `
+  -PortsProfile 'E:/tmp/window/r5/root/alt-port-profile.json' -WhatIf
+```
+
+期望与判读：
+
+| 输出 | 含义 | 该做什么 |
+|---|---|---|
+| `SERVER_EXE_BUILD Release` | 用的是 release 构建 | 手工比对 `SERVER_EXE_SHA256` 后，把该值写进本次 `README.txt` |
+| `SERVER_EXE_BUILD Debug-Fallback` + `WARNING: release 二进制不存在…` | **release 缺失，已退到 debug** | 默认先停：在**这棵树**里 `cargo build --release -p mir2-server`；确实要跑 debug 才继续，并在证据里如实写 debug |
+| `SERVER_EXE_BUILD Explicit` | 用 `-ServerExe` 指定 | 自己确认这就是你要的那份二进制 |
+| `SERVER_EXE_SHA256 MISSING` + `RED: ServerExe 不存在`（rc=2） | 路径解析到了、文件不在 | 先构建，或用 `-ServerExe` 指到实际文件 |
+
+**手工比对 sha256（任选其一）**：
+
+```sh
+sha256sum <SERVER_EXE 打印的路径>          # Git Bash / WSL
+```
+
+```powershell
+# 本机 PowerShell 5.1 实测**没有 Get-FileHash**（CommandNotFound）⇒ 用 .NET：
+$p = '<SERVER_EXE 打印的路径>'
+$h = [System.Security.Cryptography.SHA256]::Create(); $fs = [System.IO.File]::OpenRead($p)
+([System.BitConverter]::ToString($h.ComputeHash($fs)) -replace '-','').ToLowerInvariant()
+```
+
+**`-RequireRelease`（建议写进自动化）**：只要构建类型不是 `Release` 就 `RED` + 退出 2，把「跑错二进制」变成硬失败：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
+  -Root 'E:/tmp/conformance/rust-root' -LogDir 'E:/tmp/conformance/rust-logs' `
+  -PortsProfile 'E:/tmp/window/r5/root/alt-port-profile.json' -WhatIf -RequireRelease
+```
+
+**Debug-Fallback 意味着什么**：优化关闭、构建时间未知，且**很可能不是当前 master**（本机 10-23 实测：release = 09:46、debug = 20:49，两者都不是「刚构建」）。默认批次仍以 **release** 为准；要拿 debug 当证据，必须在卡上写明「本次对拍用的是 debug 构建 + 该 sha256」，否则这份证据的可比性没有保证。
+
+**不改真实启动行为**：上述告警与三行输出在非 `-WhatIf` 路径上同样打印；`-RequireRelease` 是**可选**开关，不加时行为与之前一致。
+
+**注意（脚本能力之外）**：`E:/tmp/conformance/start-rust.ps1` 把脚本路径写死成主检出，因此**在 worktree 里 `-WhatIf` 看到的二进制，可能不是真窗口启动的那份**；真窗口以起栈后 `mir2-server.pid.json` 的 `roles[].exe` 为准（`card_window.py` 已对账，不符 rc=2）。
+
 ## 2. 跑的时候
 
 - `card_window.py --card <卡 id> --scenario <场景> --out <目录> --profile alt`；R 卡窗口**必须** `--post-comment` 记账（在解禁之后）。
