@@ -488,10 +488,15 @@ class Selftest(object):
         self.check("615 的 recog/param（外观 long + FeatureEx）取回比较",
                    rs.by_ident[615].get("head_compare") == ["recog", "param"],
                    rs.by_ident[615].get("head_compare"))
-        self.check("11/13 **不掩** series（Dir/Light 可复现；不照抄 ident 10 的宽掩码）",
-                   not rs.by_ident[11].get("head_mask")
-                   and not rs.by_ident[13].get("head_mask"),
+        self.check("11/13 掩 series（单客户端只收得到**怪物**走位，Dir=RandomByte(8) 墙钟随机）",
+                   rs.by_ident[11].get("head_mask") == ["series"]
+                   and rs.by_ident[13].get("head_mask") == ["series"],
                    (rs.by_ident[11].get("head_mask"), rs.by_ident[13].get("head_mask")))
+        self.check("11/13 的 reason 写清「单客户端自过滤 + 怪物 RandomByte(8) + 第二观察者才可判」",
+                   all(k in rs.by_ident[i]["reason"]
+                       for i in (11, 13)
+                       for k in ("ActorId != ActorId", "RandomByte(8)", "第二观察者")),
+                   rs.by_ident[11]["reason"][:200])
         self.check("200/201 用记录级比较，且只掩 MakeIndex",
                    rs.by_ident[200].get("record_mask") == ["MakeIndex"]
                    and rs.by_ident[201].get("record_mask") == ["MakeIndex"],
@@ -540,6 +545,27 @@ class Selftest(object):
                                            and d.get("field") == "param"
                                            for d in (rep or {}).get("diffs", [])),
                            (rc, (rep or {}).get("diffs")))
+
+        # 1b) 11/13 的 series（MakeWord(Dir, Light)）不同 ⇒ rc 0 且登记 masked_head；
+        #     body/param 仍必须咬（掩码只掩 series，不外溢）
+        for ident in (11, 13):
+            rc, rep = self._one_pair("%d-series" % ident,
+                                     self.frame(ident, b"\x01\x00\x02\x00", **heads_o),
+                                     self.frame(ident, b"\x01\x00\x02\x00",
+                                                **dict(heads_r, series=6)))
+            self.check("ident=%d series(Dir/Light) 不同 => rc 0 且登记 masked_head" % ident,
+                       rc == 0 and any(w.get("ident") == ident and w.get("field") == "series"
+                                       and w.get("kind") == "masked_head"
+                                       for w in (rep or {}).get("whitelisted", [])),
+                       (rc, (rep or {}).get("whitelisted"), (rep or {}).get("diffs")))
+            rc, rep = self._one_pair("%d-tag" % ident,
+                                     self.frame(ident, b"\x01\x00\x02\x00", **heads_o),
+                                     self.frame(ident, b"\x01\x00\x02\x00",
+                                                **dict(heads_r, tag=99)))
+            self.check("ident=%d tag(落点 y) 不同 => rc 1（series 掩码不外溢）" % ident,
+                       rc == 1 and any(d.get("ident") == ident and d.get("field") == "tag"
+                                       for d in (rep or {}).get("diffs", [])),
+                       (rc, (rep or {}).get("diffs")))
 
         # 2) 失败码取回：616/763 的 recog 必须真的被比（否则全局掩码会吞掉）
         for ident, bad in ((616, -4), (763, 2)):

@@ -55,7 +55,31 @@
 
    输出 `missing: []` 才开跑。新场景先用真实录制跑一遍 `compare_runs.py compare`（`coverage.unclassified_idents` 为空），
    再进窗口。批次 2 已补齐 `11/13/200/201/615/616/635/636/643/644/645/763/767` 共 13 个（`tools/conformance/README.md`
-   「当前规则覆盖」有逐条 oracle 出处）。
+   「当前规则覆盖」有逐条 oracle 出处；其中 `11/13` 是 `compare + head_mask:[series]`——单客户端只看得到**怪物**走位，
+   Dir 是 `RandomByte(8)` 随机，玩家自身走位方向的帧级判据**要第二观察者会话**才有）。
+
+   **5.1 `pending_ignore_rule` 自查（同样会让整次窗口 UNDECIDABLE）**
+
+   规则表里 `action=ignore` 且 `approved_by` 仍以 `PENDING` 开头的条目，**一旦真的剔了帧**，比较器判
+   `UNDECIDABLE`（`compare_runs.py` 的 `pending_ignore_rule`）——这不是「放行」，是「这条忽略还没被批准，
+   不该悄悄生效」。现网正是 `ident 14 SM_HIT`：它在真实录制里**很常见**（`w24-csharp-bagq` 3、`chouma` 1、
+   `kaiz` 3、`kaiz30` 1、`w24-rust-login` 1、`w24-rust-dice*` 各 1、`529/rust` 1），**第 1 批的 `login_only`
+   类窗口顺带抓到一条 14 就会整次判 UNDECIDABLE**。
+
+   开窗前自检：看 `report.json` 的 `frames.ignored_ident_rules_pending`（是否含 14）、以及
+   `undecidable[].kind == "pending_ignore_rule"`。处置只有两条：
+
+   * **(a) owner 批准该 ignore 规则（推荐）**：它与 ident 10 的随机发点同源（`Merchant.Run` 的
+     `Random(50)==0`、`GuildOfficial.Run` 的 `Random(30)==0`，墙钟播种 `src/OpenMir2/RandomNumber.cs:35`），
+     529 双跑已有依据；批准后 `approved_by` 改为非 PENDING，报告即按 rule-driven ignore 处理。
+   * **(b) 显式 `--ignore-idents 14`**：比较器把它当「已分类的显式处置」，报告登记 `CLI --ignore-idents`；
+     可跑，但**每次窗口都要写明**，且**不替代 approve**。
+
+   **绝不许**靠「换一次刚好没有 14 的运行」过关——14 是随机发点，那样得到的是 flake，不是结论
+   （`docs/window-529-dualrun-20261023.md` 记过：最终 PASS 用的是没有 14 的那次运行）。
+
+   **caveat（reviewer-2 F2）**：这条 ignore 也盖掉了 `Merchant.cs:152-157` 里 `FixedHideMode` 解除时**确定性**补发的
+   那条 `SM_HIT`（:156）；需要判这条的场景（城堡商人在战中/战后切换）必须另找场景或构造级用例，不能指望本规则。
 
 ## 1.5 角色预置位：**声明即可**（工具已支持，2026-10-23 起）
 

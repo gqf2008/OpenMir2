@@ -367,8 +367,12 @@ python -I -B tools/conformance/compare_runs.py selftest
   帧形态与收件人由 `downlink::hit_frame` 黄金用例钉死，不靠本规则。
 * `10`（SM_TURN）的 `series` = `MakeWord(Dir, Light)` **整个 word**（对所有 actor 生效），固定 NPC 的
   `Dir` 由随机支 `TurnTo(RandomByte(8))` 改写 ⇒ 掩 `series`，body/param/tag 仍逐字节比。
-  代价：玩家「原地转身」的 Dir 目前没有任何帧级判据，**`SM_WALK(11)`/`SM_RUN(13)` 已登记 `compare`**
-  （2026-10-23 批次 2），所以「走位/移动」的 Dir 现在有帧级判据；但**原地转身**仍只能用 downlink 金标准用例覆盖。
+  代价：**原地转身**的 Dir 没有任何帧级判据；**自己走位**的 Dir 在单客户端窗口里也没有——`SM_WALK(11)`/`SM_RUN(13)`
+  已登记为 `compare + head_mask:[series]`（与 10 同口径）：单客户端收不到自己的走位帧
+  （`if (processMsg.ActorId != ActorId)`，`PlayObject.Message.cs:1403/1423`；Rust `downlink.rs:377-380`），
+  录制里出现的 11/13 只能是**怪物**移动，而怪物 Dir 来自 `RandomByte(8)`（`MonsterObject.cs:210`、
+  `MagicMonster.cs:37`、`PercentMonster.cs:36`、`RunAway.cs:44/48`、`AnimalObject.cs:430-437`）⇒ 与 10 同源的
+  墙钟随机。**「走位 Dir 有帧级判据」只在第二观察者会话下成立**，单客户端不成立；param/tag（落点）仍比。
 * `530` 的 `mask_body_ranges` 偏移是 **EDCode 线缆空间**不是明文空间（见 rules.json 的映射表）；
   selftest 必须用 `lc.encode` 造线缆字节，否则「掩错位置还全绿」这类缺陷咬不到。
 
@@ -388,8 +392,8 @@ python -I -B tools/conformance/compare_runs.py selftest
 
 | ident | 消息 | action | 判据（细节见 `rules.json` 的 reason） |
 | --- | --- | --- | --- |
-| 11 | `SM_WALK` | compare | `MakeMessage(SM_WALK, ActorId, x, y, MakeWord(Dir, Light))` + `EDCode(CharDesc)`；Dir=移动向量、Light=`GetMyLight()`（装备派生，**不是墙钟**）⇒ **不掩 series**（与 10 不同：10 的随机支是固定 NPC 的 `TurnTo(RandomByte(8))`） |
-| 13 | `SM_RUN` | compare | 同 11（`Messages.cs:167`） |
+| 11 | `SM_WALK` | compare + `head_mask:[series]` | `MakeMessage(SM_WALK, ActorId, x, y, MakeWord(Dir, Light))` + `EDCode(CharDesc)`。单客户端**收不到自己的**走位帧（`ActorId != ActorId` 自过滤）⇒ 录制里的 11 只可能是**怪物**移动，其 Dir 来自 `RandomByte(8)`（墙钟随机，与 10 同源）⇒ 掩 series（Dir+Light）。Light 本身无时间成分（`GetMyLight()`，`PlayObject.cs:5404-5430`）。param/tag（落点）仍逐字节比 |
+| 13 | `SM_RUN` | compare + `head_mask:[series]` | 同 11（`Messages.cs:167`；`PlayObject.Message.cs:1423-1430`） |
 | 200 | `SM_ADDITEM` | bagitems_records | 单条 124B `ClientItem`；**只掩 MakeIndex@100**，其余逐字节比 |
 | 201 | `SM_BAGITEMS` | bagitems_records | 逐条 124B `ClientItem` + `'/'`；series=背包数照常比；**只掩 MakeIndex@100** |
 | 615 | `SM_TAKEON_OK` | compare + `head_compare:[recog,param]` | recog=外观 long、param=FeatureEx（装备派生）⇒ 从全局掩码取回 |
@@ -409,7 +413,8 @@ python -I -B tools/conformance/compare_runs.py selftest
   或新增规则并走评审。
 * 驱动器可能产出但尚未登记的：`6/7/9 SM_RUSH*`、`9 SM_BACKSTEP`、`12 SM_SITDOWN`、
   以及任何登录后新增的系统消息 —— 会以 UNCLASSIFIED（退出码 2）暴露，按上面步骤逐条加规则。
-  （`200/201` 已于批次 2 登记；`11/13` 同样已登记——之前这里写的「尚未登记」已过时。）
+  （`200/201` 已于批次 2 登记；`11/13` 也已在批次 2 登记为 `compare + head_mask:[series]`——之前这里写的
+  「尚未登记」已过时；但**玩家自身走位方向的帧级判据仍缺**，需第二观察者会话，见上。）
 * `46/50/51` 只掩了已知的墙钟位；若真机上还有别的定时器字段，会红，届时按证据扩规则。
 * **`654` 的 `param=Light`** 由装备光源/游戏内昼夜决定（C# `PlayObject.Message.cs:1840`），
   **`657` 的 `series=HitSpeed`** 由属性重算派生（同文件 `:1846`）。两者本轮按 `compare` 登记；

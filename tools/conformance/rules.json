@@ -211,15 +211,21 @@
     {
       "ident": 11,
       "action": "compare",
+      "head_mask": [
+        "series"
+      ],
       "tier": "L",
-      "reason": "SM_WALK 是真实协议帧（src/OpenMir2/Messages.cs:165）。下行点 src/M2Server/Player/PlayObject.Message.cs:1403-1410：`MakeMessage(SM_WALK, ActorId, nParam1(x), nParam2(y), MakeWord(wParam(Dir), baseObject.Light))` + body `EDCode(CharDesc{Feature, Status})`。**不掩 series**（与 ident 10 不同）：低字节 Dir 是 RM_WALK 的 wParam（移动向量决定，确定性），高字节 Light=`GetMyLight()`（等级阈值 + 已穿装备 Light 累加，src/M2Server/Player/PlayObject.cs:5404-5430，**不是墙钟**）⇒ Dir/Light 均可复现，整帧逐字节比，param/tag 仍是目的地坐标。ident 10 要掩 series 是因为**固定 NPC 的 TurnTo(RandomByte(8))** 随机支（src/GameSrv/Npc/GuildOfficial.cs:41-49、Merchant.cs:132-141，随机源 src/OpenMir2/RandomNumber.cs:35 墙钟播种）；SM_WALK 没有这条随机支（RM_WALK 只由真实移动产生，且 `processMsg.ActorId != ActorId` 才下行）。若真机窗口出现 Dir/Light 差异，那是真的不可复现来源，须带证据另立**窄**掩码，不得预先放宽。",
+      "reason": "SM_WALK 是真实协议帧（src/OpenMir2/Messages.cs:165）。下行点 src/M2Server/Player/PlayObject.Message.cs:1403-1410：`MakeMessage(SM_WALK, ActorId, nParam1(x), nParam2(y), MakeWord(wParam(Dir), baseObject.Light))` + body `EDCode(CharDesc{Feature, Status})`。**掩整个 series（与 ident 10 同口径）**，理由是单客户端窗口里 11/13 **只可能来自「别人」**：handler 带 `if (processMsg.ActorId != ActorId)`（本文件 :1403；SM_RUN 同 :1423；Rust 侧 bin/game-svr/src/downlink.rs:377-380 照抄）⇒ 录制里出现的 SM_WALK/SM_RUN **永远不是玩家自己的走位**，而是附近**怪物/其他 actor** 的移动；怪物游走方向来自 `RandomByte(8)`（src/M2Server/Monster/MonsterObject.cs:210、MagicMonster.cs:37、PercentMonster.cs:36、RunAway.cs:44/48；AnimalObject.cs:430-437 先 `TurnTo(RandomByte(8))` 再按 Dir 走），随机源与 ident 10 被掩的**是同一个**墙钟播种 `new Random()`（src/OpenMir2/RandomNumber.cs:35）⇒ 跨进程不可复现，`compare` 会假红（第 1 批 move_walk/login_only 一旦抓到怪物走位即中）。**Light 部分已核实无时间成分**（`GetMyLight()` = 等级阈值 + 装备 Light，src/M2Server/Player/PlayObject.cs:5404-5430，只在 RecalcAbilitys(:2881) 与油灯耐久耗尽(PlayObject.Message.cs:2263) 改写）——但 Dir 必须掩，整个 series word 一并掩。**代价（如实登记）**：玩家自身走位/移动的 Dir 在**单客户端窗口**下没有任何帧级判据；只有引入**第二观察者会话**（观察者收得到被观察者的 SM_WALK/SM_RUN）才可能逐值判。param/tag（目的地 x/y）仍逐字节比 ⇒ 落点仍有判据。**覆盖现状**：全部历史录制（E:/tmp/conformance/runs/**/frames.ndjson）**没有一条含 11/13** ⇒ 本规则尚无真实录制验证（reviewer-14 复核）。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
     },
     {
       "ident": 13,
       "action": "compare",
+      "head_mask": [
+        "series"
+      ],
       "tier": "L",
-      "reason": "SM_RUN 是真实协议帧（src/OpenMir2/Messages.cs:167）。下行点 src/M2Server/Player/PlayObject.Message.cs:1423-1430：与 SM_WALK(11) 同形 —— `MakeMessage(SM_RUN, ActorId, nParam1, nParam2, MakeWord(wParam(Dir), Light))` + body `EDCode(CharDesc{Feature, Status})`。Dir/Light 的确定性依据见 ident 11 的条目（PlayObject.cs:5404-5430 GetMyLight 装备派生；RM_RUN 无 NPC 随机支）⇒ 逐字节比，不掩 series。",
+      "reason": "SM_RUN 是真实协议帧（src/OpenMir2/Messages.cs:167）。下行点 src/M2Server/Player/PlayObject.Message.cs:1423-1430：与 SM_WALK(11) 同形 —— `MakeMessage(SM_RUN, ActorId, nParam1, nParam2, MakeWord(wParam(Dir), Light))` + body `EDCode(CharDesc{Feature, Status})`。**掩整个 series（与 ident 10 同口径）**：单客户端收不到自己的 SM_RUN（`processMsg.ActorId != ActorId`，本文件 :1423；Rust downlink.rs:377-380），录制里的 13 只可能来自怪物/其他 actor，而怪物游走 Dir 来自 `RandomByte(8)`（MonsterObject.cs:210 等，墙钟播种）⇒ 不可复现。完整论证与代价（玩家自身走位 Dir 无帧级判据、需第二观察者会话）见 ident 11 的 reason。param/tag 仍比。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
     },
     {
