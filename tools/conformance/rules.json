@@ -55,6 +55,17 @@
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
+      "ident": 31,
+      "action": "mask_body_ranges",
+      "head_mask": [
+        "param"
+      ],
+      "ranges": [[10, 16]],
+      "tier": "L",
+      "reason": "SM_STRUCK(31) 是真实协议帧（src/OpenMir2/Messages.cs:197）。下行点 src/M2Server/Player/PlayObject.Message.cs:1601（本卡已复核）：`MakeMessage(SM_STRUCK, processMsg.ActorId, baseObject.WAbil.HP, baseObject.WAbil.MaxHP, processMsg.wParam)`；processMsg.ActorId=**受击者**（同文件 :774-777 `baseObject = ActorMgr.Get(processMsg.ActorId)`；SendRefMsg 广播以受击者自身为 sender），param=**受击者当前 HP**（伤害的结果），tag=**MaxHP**，series=processMsg.wParam=**本次伤害 nDmg**（不是方向/动作；发点 src/M2Server/Actor/BaseObject.Attack.cs:63/81、src/M2Server/Player/PlayObject.Base.cs:1479/:1500），body=`EDCode.EncodePacket(MessageBodyWL{Param1=GetFeature, Param2=CharStatus, Tag1=processMsg.nParam3, Tag2=RM_STRUCK_MAG?1:0})`（同文件 :1602-1613），16B 明文编码成 22B 线缆。**掩码边界（字段级 + body 区间级，不是整帧 ignore）**：① `head_mask:[param]` 只掩受击者当前 HP。**局限（review M-3）**：series=nDmg 已逐值比，RNG 对拍成立时 HP=HP_before−nDmg ⇒ param 掩码是冗余的；代价是**受击前 HP 的前置偏差本规则不判**（param 差异只进 whitelisted/masked_head）。② recog 按**全局 ActorId 口径**掩（review I-1 返工）：ActorId 是会话作用域标识——C# 取 HUtil32.Sequence() 随机正数、Rust 取 EcsStore::alloc_id 自增（docs/window-run-sheet-20261021.md:732 实测同一帧 C# 255025409 / Rust 275；card_window.py:165/:984/:1037 的成文政策「会话作用域变量允许不同、比较器掩 recog」）；现有 head_compare 取回的都是语义值（52=Gold、520=nChrCount、615=外观、616/763=失败码），ActorId 不该取回——两侧 recog 数值相等不是客户端可观测行为。③ body 用 `mask_body_ranges:[[10,16]]`（**线缆空间**，不是明文空间）掩 **Tag1=攻击者 ActorId** 的编码足迹（review I-2）。布局证据：`EncryptUtil.Encode`（src/OpenMir2/EncryptUtil.cs:108-140；Rust 同式 mir2-rs/crates/protocol/src/edcode.rs:45-71）对 16B 明文按 3 字节一组出 4 字节（16B⇒22B）：组内明文[3g+k]（k=0,1）的 bits {0,1,4,5,6,7} → 线缆[4g+k]、bits {2,3} → 线缆[4g+3]；明文[3g+2] 的 bits {0..5} → 线缆[4g+2]、bits {6,7} → 线缆[4g+3]；末组只剩 1 字节 ⇒ 尾字节线缆[21]（逐位实测见 selftest 的 straddle 断言）。按此 Tag1=明文[8..11] 的足迹 = 线缆 {10,11,12,13,14,15}（[8]→10/11、[9]→12/15、[10]→13/15、[11]→14/15）。因此区间取连续 [10,16)，代价是**连带掩掉 CharStatus（明文[6]/[7]）的 bits 2,3**（它们与 [8] 共用线缆[11]）——本规则登记的已知过掩边界；Param1=Feature（线缆[0..3]）、Tag2=Mag（线缆[16..21]）与 CharStatus 其余位仍逐字节比。`PlayObject.Base.cs:1500` 自发路径 nParam3=0，该路径 Tag1 恒 0、不受跨栈 ActorId 影响（仍落在被掩区间内，但无差异）。区间掩码只在线缆 body 等长（22B）时生效，长度一变退回整字节 diff（fail-closed）。**不得整帧 ignore**：param/tag/series 与 body 未掩区仍需判（本卡 forbidden）；整帧 ignore 会吞掉 tag/series/body 的真实差异。R3 真机窗口首跑的判据是 tag(MaxHP)/series(nDmg)/body 未掩区逐字段一致，recog 与 body 的 Tag1 足迹差异以 masked 显式登记。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-68; rework after review 926d1b67)"
+    },
+    {
       "ident": 46,
       "action": "mask_fields",
       "fields": ["param", "tag"],
@@ -103,42 +114,48 @@
     {
       "ident": 54,
       "action": "compare",
-      "reason": "SM_MAPDESCRIPTION 地图描述文本逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_MAPDESCRIPTION 地图描述文本逐字节比 **Recog=nMusicid（地图音乐号，语义值，非 ActorId）**：下行 `src/M2Server/Player/PlayObject.Base.cs:894` `SendDefMessage(SM_MAPDESCRIPTION, nMusicid, 0, 0, 0, Envir.MapDesc)`，nMusicid 见 `:889-893`（Envir.Flag.Music/MusicId）。全局 recog 掩码会吞掉它 ⇒ `head_compare:[\"recog\"]` 取回逐值比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 5008,
       "action": "compare",
-      "reason": "SM_GAMEGOLDNAME 元宝名称文本逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_GAMEGOLDNAME 元宝名称文本逐字节比 **Recog=GameGold（元宝数量，语义值）**：下行 `PlayObject.Base.cs:938` `SendDefMessage(SM_GAMEGOLDNAME, GameGold, LoWord(GamePoint), HiWord(GamePoint), 0, sMsg)` ⇒ `head_compare:[\"recog\"]` 取回逐值比（param/tag=GamePoint 本来就在比）。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 1106,
       "action": "compare",
-      "reason": "SM_VERSION_FAIL 客户端版本校验参数逐项比",
+      "head_compare": ["recog"],
+      "reason": "SM_VERSION_FAIL 客户端版本校验参数逐项比 **Recog=ClientFile1_CRC（版本校验 CRC1，语义值）**：下行 `PlayObject.Message.cs:1690` `MakeMessage(SM_VERSION_FAIL, Config.ClientFile1_CRC, LoWord(ClientFile2_CRC), HiWord(ClientFile2_CRC), 0)` ⇒ `head_compare:[\"recog\"]` 取回逐值比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 752,
       "action": "compare",
-      "reason": "SM_SUBABILITY 子属性 body 逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_SUBABILITY 子属性 body 逐字节比 **Recog=AntiMagic（语义值；本帧无 body）**：下行 `PlayObject.Message.cs:1675`/`:1935` `SendDefMessage(SM_SUBABILITY, MakeLong(MakeWord(AntiMagic,0),0), …)` ⇒ `head_compare:[\"recog\"]` 取回逐值比；param/tag/series 三个属性对本来就在比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 811,
       "action": "compare",
-      "reason": "SM_ADJUST_BONUS 3x20B 分段体（frame.rs 的 Segmented 契约）逐字节比；分段解码由驱动器负责，这里比最终 body 字节",
+      "head_compare": ["recog"],
+      "reason": "SM_ADJUST_BONUS 3x20B 分段体（frame.rs 的 Segmented 契约）逐字节比；分段解码由驱动器负责，这里比最终 body 字节 **Recog=BonusPoint（语义值）**：下行 `PlayObject.Base.cs:1208` `MakeMessage(SM_ADJUST_BONUS, BonusPoint, 0, 0, 0)`（body 为 3 段）⇒ `head_compare:[\"recog\"]` 取回逐值比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 766,
       "action": "compare",
-      "reason": "SM_AREASTATE 区域状态 body 逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_AREASTATE 区域状态 body 逐字节比 **Recog=n8（区域状态位，语义值；本帧无 body）**：下行 `PlayObject.Base.cs:285` `SendDefMessage(SM_AREASTATE, n8, 0, 0, 0)`，n8 由 FightZone|1 / SafeArea|2 / InGuildWarArea|4 组成（`:270-284`）。不加 head_compare 时该帧实际什么都不比 ⇒ `head_compare:[\"recog\"]`。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
@@ -152,7 +169,8 @@
     {
       "ident": 213,
       "action": "compare",
-      "reason": "SM_ATTACKMODE 攻击模式逐项比",
+      "head_compare": ["recog"],
+      "reason": "SM_ATTACKMODE 攻击模式逐项比 **Recog=(byte)AttatckMode（攻击模式，语义值；本帧无 body）**：下行 `PlayObject.cs:1146` `SendDefMessage(SM_ATTACKMODE, (byte)AttatckMode, 0, 0, 0)`。不加 head_compare 时该帧实际什么都不比 ⇒ `head_compare:[\"recog\"]`。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
@@ -231,9 +249,7 @@
     {
       "ident": 200,
       "action": "bagitems_records",
-      "record_mask": [
-        "MakeIndex"
-      ],
+      "record_mask": ["MakeIndex"],
       "tier": "R",
       "reason": "SM_ADDITEM 是真实协议帧（src/OpenMir2/Messages.cs:220）。下行点 src/M2Server/Player/PlayObject.Base.cs:225-227：`MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)` + body `EDCode(ClientItem)`（**单条** 124B 记录，无 '/' 分隔；布局 See src/OpenMir2/Packets/ClientPackets/ClientItem.cs WritePacket）。**MakeIndex@100 不可复现**：新建物品走 `M2Share.GetItemNumber()` = `ItemNumber++ + HUtil32.GetTickCount()`（src/M2Server/M2Share.cs:547-555）⇒ 墙钟；新角色初始四件正是这条路径（src/M2Server/Player/PlayObject.cs:1201-1240 IsNewHuman 分支）。DB 恢复的物品保留库值（src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:404-425），但规则不能假设走哪条 ⇒ 用 `bagitems_records`：**逐条 124B 记录比**，只掩 MakeIndex，其余字段（Name@0 / StdMode@15 / AniCount@18 / Dura@104 / DuraMax@106 / Desc@108）逐字节比；被掩字段的差异显式登记进 whitelisted（不是静默放行）；记录解码失败/长度不是 124B ⇒ UNDECIDABLE。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
@@ -241,9 +257,7 @@
     {
       "ident": 201,
       "action": "bagitems_records",
-      "record_mask": [
-        "MakeIndex"
-      ],
+      "record_mask": ["MakeIndex"],
       "tier": "R",
       "reason": "SM_BAGITEMS 是真实协议帧（src/OpenMir2/Messages.cs:221）。下行点 src/M2Server/Player/PlayObject.Operate.cs:38-64 ClientQueryBagItems()：`MakeMessage(SM_BAGITEMS, ActorId, 0, 0, ItemList.Count)`（series=背包物品数，照常比），body = 逐项 `EDCode.EncodeBuffer(ClientItem) + '/'`（每条 124B，布局见 src/OpenMir2/Packets/ClientPackets/ClientItem.cs WritePacket：Name@0 / StdMode@15 / AniCount@18 / MakeIndex@100 / Dura@104 / DuraMax@106 / Desc@108）。MakeIndex 的不可复现性、掩码边界、解码失败即 UNDECIDABLE 的口径同 ident 200（M2Share.cs:547-555 GetItemNumber = 计数器 + GetTickCount）。卡 openmir2-discovery-bagitems-201 已在本仓库把该布局用构造级用例钉死。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
@@ -320,6 +334,39 @@
       "tier": "L",
       "reason": "SM_MENU_OK 是真实协议帧（src/OpenMir2/Messages.cs:379）。下行点 src/M2Server/Player/PlayObject.Message.cs:1952-1954：`SendDefMessage(SM_MENU_OK, nParam1, 0, 0, 0, Msg)`，recog=nParam1=ActorId（走全局掩码）；param/tag/series=0；body=菜单文本 ⇒ 逐字节比。**真实录制先例**：`E:/tmp/conformance/runs/dice767-fix` 两侧各 1 条。注意帧号是 767=SM_MENU_OK，**不是** 769=SM_GUILDMAKEALLY_FAIL（runbook §4 记过 ident=769 的事故）。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 202,
+      "action": "bagitems_records",
+      "record_mask": ["MakeIndex"],
+      "tier": "R",
+      "reason": "SM_DELITEM 是真实协议帧（src/OpenMir2/Messages.cs:222）。下行 src/M2Server/Player/PlayObject.Base.cs:1663 `MakeMessage(SM_DELITEM, ActorId, 0, 0, 1)` + `SendSocket(ClientMsg, EDCode.EncodeBuffer(clientItem))`（`SendDelItems`，:1648-1665）：**单条** 124B `ClientItem`、无 '/' 分隔；Recog=ActorId（会话作用域 ⇒ 走全局 recog 掩码）、Param/Tag=0、Series=1（常量，照常比）。**只掩 MakeIndex@100**（新物品 MakeIndex 来自 `GetItemNumber = 计数器 + GetTickCount`，`src/M2Server/M2Share.cs:547-555` ⇒ 跨进程不可复现），Name@0 / StdMode@15 / AniCount@18 / Dura@104 / DuraMax@106 / Desc@108 等逐字节比；被掩字段差异显式登记进 whitelisted；解码失败/长度非 124B ⇒ UNDECIDABLE。卡 `openmir2-conformance-rules-updateitem-durachg`（验收：`upgrade_retrieve` 成功首帧 202）。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-66)"
+    },
+    {
+      "ident": 203,
+      "action": "bagitems_records",
+      "record_mask": ["MakeIndex"],
+      "tier": "R",
+      "reason": "SM_UPDATEITEM 是真实协议帧（src/OpenMir2/Messages.cs:223）。下行三处同形（`SendUpdateItem` / `SendUpdateItemWithLevel` / `SendUpdateItemByJob`，src/M2Server/Player/PlayObject.Base.cs:1683 / :1704 / :1725）：`MakeMessage(SM_UPDATEITEM, ActorId, 0, 0, 1)` + `SendSocket(ClientMsg, EDCode.EncodeBuffer(clientItem))` ⇒ **单条** 124B `ClientItem`；Recog=ActorId（全局掩码）、Param/Tag=0、Series=1 常量照比。**只掩 MakeIndex@100**（同 200/201/202：新物品 MakeIndex 含 GetTickCount，M2Share.cs:547-555），Name@0 / StdMode@15 / AniCount@18 / Dura@104 / DuraMax@106 / Desc@108 等逐字节比；解码失败/长度非 124B ⇒ UNDECIDABLE。卡 `openmir2-conformance-rules-updateitem-durachg`（`equip_struck_save` 的 wait_for 含 203；普通磨损不发，升级取回链会发）。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-66)"
+    },
+    {
+      "ident": 642,
+      "action": "compare",
+      "head_mask": [
+        "recog"
+      ],
+      "tier": "L",
+      "reason": "SM_DURACHANGE 是真实协议帧（src/OpenMir2/Messages.cs:303）。处理器 src/M2Server/Player/PlayObject.Message.cs:1803-1805：`SendDefMessage(SM_DURACHANGE, processMsg.nParam1, processMsg.wParam, LoWord(nParam2), HiWord(nParam2))`；生产者 `SendMsg(RM_DURACHANGE, wParam=槽, nParam1=Dura, nParam2=DuraMax)`（`PlayObject.Attack.cs:1460`/`:1468` 的 DoDamageWeapon、`PlayObject.cs:2994`/`:3026`/`:5386` 的受击/掉落磨损、`MagicBase.cs:119`）⇒ 线上 **Recog=Dura（现耐久，会随伤害/RNG 扣减）/ Param=槽位 / Tag=LoWord(DuraMax) / Series=HiWord(DuraMax)**。按字段窄掩 `head_mask:[\"recog\"]`（Dura 跨进程不可复现：`Random(5)+2-WeaponStrong`、`Round(Dura/1.03)` 等）；**槽位与 DuraMax 低/高 16 位逐值比**，无 body。**禁止整帧 ignore**（那会同时丢掉「这条耐久帧是否存在」与槽位/DuraMax 判据）。卡 `openmir2-conformance-rules-updateitem-durachg`（`equip_struck_save` 的硬门 642）。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-66)"
+    },
+    {
+      "ident": 709,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_DELITEMS 是真实协议帧（src/OpenMir2/Messages.cs:357）。下行 `SendDelItemList`（src/M2Server/Player/PlayObject.Base.cs:1637-1646）：`MakeMessage(SM_DELITEMS, 0, 0, 0, itemList.Count)` + `SendSocket(ClientMsg, EDCode.EncodeString(s10))`，s10 = 逐项 `ItemName + '/' + MakeIndex + '/'`（`:1640-1643`）；触发 `RM_SENDDELITEMLIST`（`PlayObject.Message.cs:1870-1873`，如 `Merchant.UpgradeWapon` 吃黑铁/首饰）。⇒ **Recog=Param=Tag=0（常量）、Series=条目数、body=逐项「名称/MakeIndex/」文本**。**本规则不加任何掩码、逐字节比**：名称串与条数是语义判据；MakeIndex 在这里是**被删物品的身份**（来自 DB 持久值，两侧同基线一致）⇒ 照比；若运行期新建物品进入删除列表导致 MakeIndex 差异，本规则会红——这是有意的 fail-closed（不放宽、不整帧 ignore）。卡 `openmir2-conformance-rules-updateitem-durachg`（`upgrade_retrieve` 的成功硬门 709）。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-66)"
     }
   ],
   "db": {

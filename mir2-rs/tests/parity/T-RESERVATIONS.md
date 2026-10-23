@@ -257,3 +257,14 @@
 | T-219 | openmir2-gm-impl-startquest | 2026-10-23T09:19:34Z | 在用 |
 | T-222 | openmir2-script-dyn-var-host | 2026-10-23T09:56:25Z | 在用 |
 | T-223 | openmir2-script-user-account | 2026-10-23T11:00:00Z | 在用 |
+| T-225 | openmir2-monster-attack-cadence-lead | 2026-10-23T12:35:50Z | 在用 |
+| T-226 | openmir2-oracle-humitems-align | 2026-10-23T12:35:54Z | 在用 |
+| T-227 | openmir2-buff-producer-wiring | 2026-10-23T14:45:24Z | 在用 |
+| T-228 | openmir2-default-arm-spell-surface | 2026-10-23T14:45:29Z | 在用 |
+| T-229 | openmir2-snap-cell-fidelity | 2026-10-23T14:45:30Z | 在用 |
+| T-230 | openmir2-recall-slave-shift-live | 2026-10-23T14:45:32Z | 在用 |
+| T-231 | openmir2-map-random-move-shift-loop | 2026-10-23T14:45:34Z | 在用 |
+| T-232 | openmir2-enter-shift-loop | 2026-10-23T14:45:35Z | 在用 |
+| T-233 | openmir2-magic-8-21-wiring | 2026-10-23T14:45:37Z | 在用 |
+| T-234 | openmir2-spell-mp-wrapper | 2026-10-23T14:45:38Z | 在用 |
+| T-235 | openmir2-aoi-verify-maptime | 2026-10-23T14:45:39Z | 在用 |
