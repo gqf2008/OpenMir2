@@ -789,7 +789,9 @@ def check_scenario(data, plans, params=None, messages=None):
       R2 每个 wait_for 之前必须已有发帧步骤（否则它等的回包没人产生）；
       R1 场景至少要有一个能发帧（send/say/click_npc/dlg_select）或能累计观察
          （wait_idents/wait_frames）的步骤 —— 全是 sleep 的场景什么也证不了；
-      R3 所有 send/wait_* 的 ident 必须存在于协议常量表（表外 ident = 永远发不出/等不到）；
+      R3 所有 send/wait_* 的 ident 必须存在于协议常量表**且方向正确**：发帧动作（send/say/
+         click_npc/dlg_select）是 C2S ⇒ 必须 CM_*；观察动作（wait_for/wait_frames/wait_idents）
+         等的是 S2C ⇒ 必须 SM_*（表外 ident 与方向反了都等于「永远发不出/等不到」）；
       R4 变量引用必须能在场景声明的 required/params/computed 里找到（不许引用未声明变量）；
       R5 `scenario.placement` 与由位置派生的 params（如 self_pos=MakeLong(X,Y)）必须自洽
          （不一致 = 角色落在 A 点、期望值按 B 点算，真跑静默恒超时，card_window dry-run 也看不出来）；
@@ -808,7 +810,6 @@ def check_scenario(data, plans, params=None, messages=None):
     eff_params = dict(data.get("params") or {})
     if params:
         eff_params.update(params)
-    known = set(messages["CM"]) | set(messages["SM"])
     declared = (set((data.get("params") or {}).keys())
                 | set(data.get("required") or [])
                 | set((data.get("computed") or {}).keys()))
@@ -835,16 +836,34 @@ def check_scenario(data, plans, params=None, messages=None):
             % (name, "/".join(sorted(SEND_KINDS)), "/".join(sorted(CUMULATIVE_WAIT_KINDS)),
                "/".join(sorted(set(kinds)))))
 
-    # R3：ident 必须存在于协议常量表。
+    # R3：ident 必须存在于协议常量表，**且方向必须对**。
+    #   * 发帧动作（send/say/click_npc/dlg_select）是 C2S ⇒ 必须 CM_*；
+    #   * 观察动作（wait_for/wait_frames/wait_idents）等的是 S2C ⇒ 必须 SM_*。
+    # 并集口径的已知歧义：CM/SM 有 6 个**同值** ident（42/100/101/102/103/104），同一个号
+    # 在两个命名空间里各有名字（例：100 = CM_QUERYCHR = SM_SYSMESSAGE），方向无法由号判定
+    # ⇒ 两个方向都放行（集合与处理见 docs/probe-ident-direction-20261023.md；不是静默放过：
+    # 代码在这里点名，docs 逐条列出）。ISM_* 不进表（解析器只认 `pub const (CM|SM)_`）。
     for p in plans:
-        if p["kind"] == "send":
-            if p["ident"] not in known:
+        if p["kind"] in SEND_KINDS:
+            ident = p["ident"]
+            if ident not in messages["CM"]:
+                if ident in messages["SM"]:
+                    raise ScenarioError(
+                        "steps[%d].%s ident %d is %s, expected CM_* (send/say/click_npc/"
+                        "dlg_select are client→server frames; an SM_* ident is server→client "
+                        "and can never be sent)" % (p["index"], p["kind"], ident,
+                                                    messages["SM"][ident]))
                 raise ScenarioError(
-                    "steps[%d].send.ident %d is not a CM_*/SM_* constant in %s"
-                    % (p["index"], p["ident"], MESSAGES_RS_REL))
+                    "steps[%d].%s.ident %d is not a CM_*/SM_* constant in %s"
+                    % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
         elif p["kind"] in WAIT_KINDS:
             for ident in p["idents"]:
-                if ident not in known:
+                if ident not in messages["SM"]:
+                    if ident in messages["CM"]:
+                        raise ScenarioError(
+                            "steps[%d].%s ident %d is %s, expected SM_* (a wait can only match "
+                            "server→client frames; a CM_* ident is client→server and can never "
+                            "arrive)" % (p["index"], p["kind"], ident, messages["CM"][ident]))
                     raise ScenarioError(
                         "steps[%d].%s ident %d is not a CM_*/SM_* constant in %s "
                         "(typo? this wait can never match)"
@@ -1868,6 +1887,25 @@ def _selftest_scenario_validation():
     # ②b send.ident 也必须在协议表里（R3 的 send 分支；M2：单独禁用该分支必须红）
     expect_red(lambda d: d["steps"][0]["send"].__setitem__("ident", 4095),
                "send.ident 4095 is not a CM_*/SM_* constant")
+    # ②c **R3-direction**：方向写反必须红（SM 号当 send / CM 号当 wait）。
+    #     这两条也是「禁用方向校验」这个变异的牙：只留旧并集口径时，它们会被接受 ⇒ 本 check 红。
+    expect_red(lambda d: d["steps"][0]["send"].__setitem__("ident", 4),
+               "send ident 4 is SM_41, expected CM_*")
+    expect_red(lambda d: d["steps"][1].__setitem__("wait_for", 80),
+               "wait_for ident 80 is CM_QUERYUSERNAME, expected SM_*")
+    # ②d 并集歧义（同号在 CM 与 SM 都有名字）两个方向都放行：100 = CM_QUERYCHR = SM_SYSMESSAGE。
+    #     没有这一条的话，下次有人「顺手」把歧义号判死会把合法场景误伤。
+    amb_wait = clone(base)
+    amb_wait["steps"][1]["wait_for"] = 100
+    check_scenario(amb_wait, expand_scenario(clone(amb_wait), dict(ok_vars))[0],
+                   ok_vars, messages)
+    amb_send = clone(base)
+    amb_send["steps"][0]["send"]["ident"] = 100
+    check_scenario(amb_send, expand_scenario(clone(amb_send), dict(ok_vars))[0],
+                   ok_vars, messages)
+    # ②e say / click_npc / dlg_select 这三种 C2S 动作同样走方向校验（正向：合法常量必须绿）
+    say_case = {"name": "selftest_say", "steps": [{"say": "@时间"}, {"wait_for": 100}]}
+    check_scenario(say_case, expand_scenario(clone(say_case))[0], None, messages)
     # ⑤ 全是 sleep ⇒ R1（既不发帧也不观察）
     expect_red(lambda d: d.__setitem__("steps", [{"sleep": 1}, {"sleep": 2}]),
                "has no send step")
@@ -2061,7 +2099,7 @@ def _selftest_scenario_validation():
     for name in ("login_only.json", "dice_chain.json"):
         d = load_scenario(os.path.join(SCENARIO_DIR, name))
         check_scenario(d, expand_scenario(d)[0], None, messages)
-    return "R1-R5 硬牙 + R6 方向 WARN + 取表 drift 五例 + blocked 形状（6 坏例）+ 不误伤"
+    return "R1-R5 硬牙（含 R3 方向：send=CM_*/wait=SM_*）+ R6 tag WARN + 取表 drift 五例 + blocked 形状（6 坏例）+ 不误伤"
 
 
 class _TimedSock:

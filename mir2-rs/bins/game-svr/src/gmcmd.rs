@@ -488,6 +488,30 @@ pub enum Imp {
 
     /// 未接的 80 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 8 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
+    // ---- 批次 5A · 行会/城堡族 A 片（6，卡 `openmir2-gm-batch-5a-guild-impl`；
+    //      Leader 裁定 `9e7d2227`）----
+    //
+    // **权限与生效名都以 `GameCommands.cs` 构造 + `Command.conf` 为准**（不是 `[Command]` 属性）：
+    // `Authally/Auth/AuthCancel` 的 `[Command(...)]` 写的是 0，但 `GameCommands.cs:371-373`
+    // 的 `new GameCmd { PerMissionMin = 10 }` 覆盖成 **10**；`GameCmdConf.cs:16-18` 又把三条的
+    // `CmdName` 覆盖成中文（`Command.conf [Command]`：`AuthAlly=允许联盟` / `Auth=联盟` /
+    // `AuthCancel=取消联盟`）。`SbkDoorControlCommand` 注册在字段 **`SbkDoor`**（`GameCommands.cs:314`），
+    // 生效名 `@SbkDoor`。
+    /// `AnnouncementCommand`（`AnnouncementCommand.cs:8`；perm 10）；命令体 `:14-41` **整段被注释** ⇒ 真 no-op。
+    Announcement,
+    /// `AuthCommand`（`AuthCommand.cs:12-17`；生效名 `@联盟`，perm 10）：
+    /// `if (IsGuildMaster()) ClientGuildAlly();` —— 非会长 ⇒ 零帧；会长路径未接（T-263）。
+    Auth,
+    /// `AuthallyCommand`（`AuthallyCommand.cs:9-23`；生效名 `@允许联盟`，perm 10）：
+    /// `if (IsGuildMaster()) { /* 翻转 EnableAuthAlly + 两条 SysMsg 全被注释 */ } return;` ⇒ 真 no-op。
+    Authally,
+    /// `AuthCancelCommand`（`AuthCancelCommand.cs:12-21`；生效名 `@取消联盟`，perm 10）：
+    /// 空参 ⇒ return；非会长 ⇒ return；会长路径未接（T-263）。
+    AuthCancel,
+    /// `GuildWarCommand`（`GuildWarCommand.cs:5`；perm 10）：体只有 `if (Permission < 6) return;` ⇒ 零帧。
+    GuildWar,
+    /// `SbkDoorControlCommand`（`SbkDoorControlCommand.cs:5`；注册名 `@SbkDoor`，perm 10）：空体 ⇒ 真 no-op。
+    SbkDoorControl,
     Unimplemented,
 }
 
@@ -1187,6 +1211,54 @@ fn no_frames(note: &'static str) -> GmResult {
         frames: Vec::new(),
         log_note: Some(note),
     }
+}
+
+/// `AuthCommand.Execute`（`AuthCommand.cs:12-17`）：
+/// `if (PlayerActor.IsGuildMaster()) PlayerActor.ClientGuildAlly();`
+///
+/// - 非会长 ⇒ oracle 不进 `ClientGuildAlly` ⇒ **零帧**（本函数照抄）；
+/// - 会长 ⇒ `ClientGuildAlly`（`PlayObject.Operate.cs:1465-1523`）会发
+///   `SM_GUILDMAKEALLY_OK` / `SM_GUILDMAKEALLY_FAIL(n8)`（n8 = -1..-4），成功支还
+///   `SendServerGroupMsg(SS_207)` + 行会消息 + 行会态改写 ⇒ 依赖**可写行会态**与 G11 跨服，
+///   宿主未建模（whitelist **T-263**，本臂只留 `log_note`）。
+fn auth(world: &GmWorld<'_>) -> GmResult {
+    if world.is_guild_master(world.speaker) {
+        return no_frames(
+            "Auth 会长路径：ClientGuildAlly（Operate.cs:1465-1523，SM_GUILDMAKEALLY_OK/_FAIL(n8) + SS_207 + 行会态改写）宿主未接（whitelist T-263）",
+        );
+    }
+    no_frames("Auth 非会长 ⇒ oracle 不进 ClientGuildAlly ⇒ 零帧（AuthCommand.cs:14）")
+}
+
+/// `AuthallyCommand.Execute`（`AuthallyCommand.cs:9-23`）：
+/// `if (PlayerActor.IsGuildMaster()) { /* 翻转 EnableAuthAlly + 两条 SysMsg 全被注释 */ } return;`
+/// ⇒ **两条分支都零帧**（真 no-op）；这里仍按 `IsGuildMaster` 分两条 note，便于窗口定位。
+fn authally(world: &GmWorld<'_>) -> GmResult {
+    if world.is_guild_master(world.speaker) {
+        return no_frames(
+            "Authally 会长支：EnableAuthAlly 翻转与两条 SysMsg 在 AuthallyCommand.cs:12-21 全被注释 ⇒ 零帧",
+        );
+    }
+    no_frames("Authally 非会长 ⇒ AuthallyCommand.cs:12 不成立 ⇒ return（零帧）")
+}
+
+/// `AuthCancelCommand.Execute`（`AuthCancelCommand.cs:12-21`）：
+/// ```text
+/// if (@params == null || @params.Length <= 0) return;
+/// if (PlayerActor.IsGuildMaster()) PlayerActor.ClientGuildBreakAlly(@params[0]);
+/// ```
+/// 空参 / 非会长 ⇒ **零帧**；会长 ⇒ `ClientGuildBreakAlly`（`PlayObject.Operate.cs:1525-1560`）
+/// 发 `SM_GUILDBREAKALLY_OK` / `SM_GUILDMAKEALLY_FAIL(0)` + `SS_207` + 行会态改写 ⇒ 未建模（T-263）。
+fn auth_cancel(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    if parameters.trim().is_empty() {
+        return no_frames("AuthCancel 空参 ⇒ AuthCancelCommand.cs:14-17 return（零帧）");
+    }
+    if world.is_guild_master(world.speaker) {
+        return no_frames(
+            "AuthCancel 会长路径：ClientGuildBreakAlly（Operate.cs:1525-1560，SM_GUILDBREAKALLY_OK / SM_GUILDMAKEALLY_FAIL + SS_207 + 行会态改写）宿主未接（whitelist T-263）",
+        );
+    }
+    no_frames("AuthCancel 非会长 ⇒ oracle return ⇒ 零帧（AuthCancelCommand.cs:18-21）")
 }
 
 /// 单条 `SysMsg` + `log_note`（oracle 文本保持逐字节）。
@@ -2485,6 +2557,19 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
 
         Imp::KickHuman => kick_human(parameters, sess, world),
 
+        // ---- 批次 5A · 行会/城堡族 A 片（6，卡 `openmir2-gm-batch-5a-guild-impl`）----
+        Imp::Announcement => no_frames(
+            "Announcement：AnnouncementCommand.cs:14-41 命令体整段被注释 ⇒ 真 no-op（零帧）",
+        ),
+        Imp::Auth => auth(world),
+        Imp::Authally => authally(world),
+        Imp::AuthCancel => auth_cancel(parameters, world),
+        Imp::GuildWar => no_frames(
+            "GuildWar：GuildWarCommand.cs:12-15 体只有 if (Permission < 6) return ⇒ 过权限门后零帧",
+        ),
+        Imp::SbkDoorControl => {
+            no_frames("SbkDoorControl：SbkDoorControlCommand.cs:7-9 空体 ⇒ 真 no-op（零帧）")
+        }
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -2760,7 +2845,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Announcement",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::Announcement,
     },
     CommandDef {
         name: "AttackMode",
@@ -2964,7 +3049,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "GuildWar",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::GuildWar,
     },
     CommandDef {
         name: "hjhg556",
@@ -3216,7 +3301,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "SbkDoor",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::SbkDoorControl,
     },
     CommandDef {
         name: "sdasdert",
@@ -3438,7 +3523,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "允许联盟",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::Authally,
     },
     CommandDef {
         name: "减钱",
@@ -3492,7 +3577,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "取消联盟",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AuthCancel,
     },
     CommandDef {
         name: "增加PK",
@@ -3678,7 +3763,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "联盟",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::Auth,
     },
     CommandDef {
         name: "调整声望",
@@ -4644,6 +4729,103 @@ mod tests {
         execute(sess, cfg, &world, line)
     }
 
+    /// 批次 5A（卡 `openmir2-gm-batch-5a-guild-impl`）：**6 条全部 perm 10**
+    /// （`GameCommands.cs:371-373/526` 的 `PerMissionMin = 10` 覆盖 `[Command]` 属性的 0）。
+    /// 4 条真 no-op（Announcement / 允许联盟 / GuildWar / SbkDoor）+ 联盟 / 取消联盟 的非会长路径。
+    #[test]
+    fn batch5a_noops_permission_gate_and_zero_frames() {
+        // 6 条都是 perm 10：权限不足 ⇒ 恰好一条红字，且零帧
+        for cmd in [
+            "@Announcement",
+            "@联盟",
+            "@允许联盟",
+            "@取消联盟",
+            "@GuildWar",
+            "@SbkDoor",
+        ] {
+            let (r, _) = run(cmd);
+            assert_eq!(texts(&r), vec![(GmColor::Red, PERMISSION_TOO_LOW)], "{cmd}");
+            assert!(r.frames.is_empty(), "{cmd}");
+        }
+        // 权限满足：4 条真 no-op + 联盟/取消联盟 的非会长路径 ⇒ 零帧零消息
+        for cmd in [
+            "@Announcement",
+            "@允许联盟",
+            "@GuildWar",
+            "@SbkDoor",
+            "@联盟",
+            "@取消联盟",
+            "@取消联盟 某会",
+        ] {
+            let (r, _) = run_gm(cmd);
+            assert!(r.found && r.parsed, "{cmd}");
+            assert!(
+                r.msgs.is_empty() && r.frames.is_empty(),
+                "{cmd} 应零帧零消息"
+            );
+            assert!(r.log_note.is_some(), "{cmd} 必须留 oracle 出处 note");
+        }
+    }
+
+    /// 表项级：批次 5A 的 6 条必须在 `COMMANDS` 里且 **imp 不是 `Unimplemented`**、
+    /// **perm 10**（生效口径以 `GameCommands.cs` 构造 + `Command.conf` 为准）。
+    /// 牙：任一条回退 `Unimplemented` ⇒ 本用例红。
+    #[test]
+    fn batch5a_table_entries_are_wired() {
+        for name in [
+            "Announcement",
+            "联盟",
+            "允许联盟",
+            "取消联盟",
+            "GuildWar",
+            "SbkDoor",
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_ne!(
+                def.imp,
+                Imp::Unimplemented,
+                "{name} 仍是 Unimplemented（应为批次 5A 的接线实现）"
+            );
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+        }
+    }
+
+    /// `联盟` / `取消联盟` 的**会长支**：oracle 会进 `ClientGuildAlly`/`ClientGuildBreakAlly`
+    /// （帧 + `SS_207`），宿主未建模 ⇒ 只留 note（whitelist T-263），不许静默当等价。
+    #[test]
+    fn batch5a_guild_master_path_is_registered_not_silent() {
+        let mut gm = mir2_world::GuildManager::new();
+        assert!(gm.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let world = GmWorld {
+            guilds: &gm,
+            maps: None,
+            world: None,
+            speaker: "boss",
+            speaker_id: 7,
+            now_ms: 0,
+        };
+        assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        for (cmd, needle) in [
+            ("@联盟", "ClientGuildAlly"),
+            ("@取消联盟 测试会", "ClientGuildBreakAlly"),
+        ] {
+            let r = execute(&mut sess, &GmConfig::default(), &world, cmd);
+            assert!(
+                r.msgs.is_empty() && r.frames.is_empty(),
+                "{cmd} 会长支只留 note"
+            );
+            let note = r.log_note.unwrap_or("");
+            assert!(
+                note.contains(needle) && note.contains("T-263"),
+                "{cmd} note={note}"
+            );
+        }
+    }
+
     fn texts(r: &GmResult) -> Vec<(GmColor, &str)> {
         r.msgs.iter().map(|m| (m.color, m.text.as_str())).collect()
     }
@@ -4922,7 +5104,8 @@ mod tests {
     /// 卡 `openmir2-gm-impl-startquest` 的 `StartQuest`、卡 `openmir2-gm-impl-kick` 的 `VV踢人`、
     /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`、
     /// 卡 `openmir2-gm-impl-clearbag` 的 `ClearBagItem`）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 81），且命令名 → 实现标签固定。
+    /// 以及批次 5A（卡 `openmir2-gm-batch-5a-guild-impl` 的 6 条行会族）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 75），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -4930,16 +5113,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            105,
-            "105 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条"
+            111,
+            "111 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            80,
-            "185 - 105"
+            74,
+            "185 - 111"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),

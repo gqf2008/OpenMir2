@@ -1,14 +1,45 @@
 {
   "name": "move_walk",
-  "description": "走到相邻格：CM_WALK(3011) recog=目标X param=目标Y -> 等 SM_WALK(11)/SM_RUN(13)/SM_TURN(10)/SM_SYSMESSAGE(100)",
-  "required": ["move_x", "move_y"],
+  "description": "走到相邻格：CM_WALK(3011) 的 **X/Y 都打包在 recog**（`recog = (move_y<<16) | move_x`；服务端取 LoWord=X、HiWord=Y），`param` 服务端不读（恒 0） -> 等 SM_WALK(11)/SM_RUN(13)/SM_TURN(10)/SM_SYSMESSAGE(100)",
+  "required": [
+    "move_x",
+    "move_y",
+    "move_xy"
+  ],
   "computed": {
-    "move_x": {"derived_from": "self_x", "delta": 1},
-    "move_y": {"derived_from": "self_y", "delta": 0}
+    "move_x": {
+      "derived_from": "self_x",
+      "delta": 1
+    },
+    "move_y": {
+      "derived_from": "self_y",
+      "delta": 0
+    },
+    "move_xy": {
+      "pack": {
+        "lo": "move_x",
+        "hi": "move_y"
+      }
+    }
   },
   "steps": [
-    {"send": {"ident": 3011, "recog": "move_x", "param": "move_y"},
-     "note": "oracle: PlayObject.Attack.cs:1365 ClientWalkXY(wIdent, nX=nParam1, nY=nParam2)；目标格是绝对坐标。move_x/move_y 由 param_discovery 的 computed 声明（self_x+1 / self_y+0）算出，不是丢死的值"},
-    {"wait_for": [11, 13, 10, 100], "timeout_ms": 3000, "note": "走成功看 SM_WALK；被挡则本节可能超时（fail-loud）"}
+    {
+      "send": {
+        "ident": 3011,
+        "recog": "move_xy",
+        "param": 0
+      },
+      "note": "oracle：`src/GameSrv/Word/WorldServer.cs:831-851`（CM_WALK 与 CM_HIT 同 case 组）同样只读 `LoWord/HiWord(Recog)`，`Param` 不读；`src/M2Server/Player/PlayObject.Message.cs:1060` `ClientWalkXY(wIdent, nX=nParam1=LoWord(Recog), nY=nParam2=HiWord(Recog))`，目标格是绝对坐标。`move_x`/`move_y` 由场景 `computed`（self_x+1 / self_y+0）推导；`move_xy` 由 `computed.pack {lo: move_x, hi: move_y}` 算成 `(move_y<<16)|move_x`（卡 `openmir2-probe-computed-pack`），调用方无需手工打包。"
+    },
+    {
+      "wait_for": [
+        11,
+        13,
+        10,
+        100
+      ],
+      "timeout_ms": 3000,
+      "note": "走成功看 SM_WALK；被挡则本节可能超时（fail-loud）"
+    }
   ]
 }

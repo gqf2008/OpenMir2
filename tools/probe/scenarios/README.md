@@ -47,10 +47,15 @@ python tools/probe/mir2_probe.py \
   2. **R1 至少一个发帧步或累计观察步**（`wait_idents`/`wait_frames`）——全是 `sleep`
      的场景既不发帧也不观察，什么也证不了。纯观察场景（如 `login_only`）靠驱动器的
      登录链 + 自动握手已经发帧，所以它合法。
-  3. **R3 ident 必须存在于协议常量表**：`send.ident` 与 `wait_for` / `wait_frames.idents` /
-     `wait_idents.idents` 都必须能在 `mir2-rs/crates/protocol/src/messages.rs` 的 `CM_*`/`SM_*`
-     里找到（该表由 `msgcodegen` 与 C# `Messages.cs` 对拍）。表外 ident（如 `wait_for: 4095`）
-     = 永远发不出 / 等不到，不会「跑起来才发现」。
+  3. **R3 ident 必须存在于协议常量表，且方向必须对**：发帧动作（`send`/`say`/`click_npc`/
+     `dlg_select`，C2S）必须是 **`CM_*`**；观察动作（`wait_for` / `wait_frames.idents` /
+     `wait_idents.idents`，等的是 S2C）必须是 **`SM_*`**。方向反了与表外 ident 一样 = 永远发不出 /
+     等不到（例：`send ident 4 is SM_41, expected CM_*`；`wait_for ident 80 is CM_QUERYUSERNAME,
+     expected SM_*`），`--check-scenario` 直接 rc=2。表由 `mir2-rs/crates/protocol/src/messages.rs`
+     解析（`msgcodegen` 与 C# `Messages.cs` 对拍），跨服 `ISM_*` **不进表**。
+     **已知并集歧义**：`42/100/101/102/103/104` 这 6 个号在 CM 与 SM 两个命名空间里各有名字
+     （如 `100 = CM_QUERYCHR = SM_SYSMESSAGE`），方向无法由号判定 ⇒ 两个方向都放行；
+     清单与处理见 `docs/probe-ident-direction-20261023.md`。
   4. **R4 变量引用必须已声明**：`send.recog/param/tag/series`、`send.text_from`、`click_npc`、
      `dlg_select.recog` 里的变量名必须在场景的 `required` / `params` / `computed` 里；
      `--var` 是给**已声明**变量覆值的通道，不是声明通道（拿 `--var` 喂一个拼错的名字仍然红）。
@@ -172,10 +177,19 @@ python tools/probe/mir2_probe.py \
 > 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
 > `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
 
-> `upgrade_retrieve` 是**唯一一条武器升级 NPC 链**（R2）：`placement` 到盟重省 map 3 (320,328) → `click_npc` 沙巴克铁匠 → `@upgrade`/`@confirmupgrade`/`@upgradenow` 提交 → `sleep 660000` 过取回时效门 → `@main`/`@getbackupgnow` 取回（`Merchant.cs:529-590 / 594-759`）。四个容易踩的点：① **不能站铁匠邻格**——`MonGen.txt:51/58/59` 在 (325,311)/(336,321)/(339,313) 刷了 ArcherGuard（`GuardUnit.IsProperTarget` 对普通玩家 return true），11 分钟等待里必被射杀；② 取回要过 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），Permission 恒 0 ⇒ 只能等，**窗口 profile 必须把 `timeout_ms` 抬到 ≥ 720000**（`card_window.py:1786` 的进程超时 = `timeout_ms/1000+120` 秒）；③ 提交/取回的成功硬门是**唯一 ident** `709`/`200`（`wait_idents`），`643` 只作成败判别（否则 643 会把失败分支蒙混过去）；④ 本场景要求背包 < 46 件（部署脚本没有 `~@getbackupgnow_bagfull` 标签 ⇒ 包满支零帧，等不到）。逐条 oracle 出处、夹具前置与登记缺口见 `docs/upgrade-retrieve-scenario-20261023.md`。
+> `upgrade_retrieve` 是**唯一一条武器升级 NPC 链**（R2）：`placement` 到盟重省 map 3 (320,328) → `click_npc` 沙巴克铁匠 → `@upgrade`/`@confirmupgrade`/`@upgradenow` 提交 → `sleep 660000` 过取回时效门 → `@main`/`@getbackupgnow` 取回（`Merchant.cs:529-590 / 594-759`）。四个容易踩的点：① **placement (320,328) 的理由与刷怪无关**——`MonGen.txt:51/58/59` 那三行的怪名是 `弓箭护卫`，**不在 `monsters` 表** ⇒ 根本不刷（`GetMonRace=-1`、`if (monGen.Race > 0)` 跳过）；选它的理由是「`.map` 可走 + 到铁匠 (12,11) 在 `CM_CLICKNPC` 15 格门内 + x=332 最大使 discovery 的 `last_turn` 落在铁匠」；② 取回要过 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），Permission 恒 0 ⇒ 只能等，**窗口 profile 必须把 `probe_timeout_ms` 抬到 ≥ 720000**（`card_window.py:1949` 的进程超时 = `max(180, probe_timeout_ms/1000+120)` 秒）；**写错键名（例如 `timeout_ms`）会被静默忽略**（profile 顶层无未知键校验），probe 仍在 180 秒被杀 ⇒ 白跑一轮；也可以用 CLI `--timeout-ms 720000`；③ 提交/取回的成功硬门是**唯一 ident** `709`/`200`（`wait_idents`），`643` 只作成败判别（否则 643 会把失败分支蒙混过去）；④ 本场景要求背包 < 46 件（部署脚本没有 `~@getbackupgnow_bagfull` 标签 ⇒ 包满支零帧，等不到）。逐条 oracle 出处、夹具前置与登记缺口见 `docs/upgrade-retrieve-scenario-20261023.md`。
 
 > `equip_struck_save` 是**唯一一条装备耐久变化**场景（R7）：`placement` 到铁器店 map 0103 (19,19) → `CM_TURN(3010)` 定朝向 Up → `sleep 400` → `CM_HIT(3014)` → `wait_for [642,203]` → `wait_idents [642]`。**选「攻击方武器磨损」而不是「受击方扣耐久」**：`AttackSuccess`（`PlayObject.Attack.cs:215`）只在 `targetObject==null` 时逃逸（`:217-220`），有目标即无条件抽 `Random(5)+2-WeaponStrong`（`:225-229`）——**命中/躲闪/伤害 0 都扣**；受击方要先被打中（概率路径，正是 combat_strike 的坑）。目标 = map 0103 的商店 NPC「卫家店」（`MerChant.txt:26`，坐标 (19,18)）：`GetMovingObject` 返回格内任何 `ActorObject`（`Envirnoment.cs:1203-1239`），且玩家侧的 `IsAttackTarget` 对 NPC 返回 false（`PlayObject.Attack.cs:627-753`：默认 `HAM_ALL` 下只有 `Race<NPC || Race>PeaceNpc` 才可打）⇒ 不掉血、不还手、不触发 `StruckTime`。**平台必须是「零刷怪」的图**：`MonGen.txt` 里 map 0103 **一行都没有**（部署件与两侧窗口 Envir 的 `MonGen.txt` 逐字节相同）⇒ 没有刷怪箱覆盖；此前选 map 0 (288,610) 是错的——`MonGen.txt:112/113/124/125` 的 鹿/稻草人 `Range=50` 箱体覆盖它，`GenMonRate=10` 下每行刷 50 只，稻草人 Race=83 `SlowAtMonster` 会主动攻击。**`642` 才是磨损帧**（`Recog=Dura/Param=槽/Tag,Series=DuraMax`；破零先 `202` 再 `642(Recog=0)`）；**`203` 普通磨损不发**，只在 `CheckWeaponUpgrade` 成功支（武器 `Desc[10]>0`）⇒ 集合里带它只为换夹具不恒超时，硬门只认 642。注意 **Rust 侧这条耐磨帧还没接**（T-199 相邻登记 + `wear_durability` 无事件通道）⇒ 现在跑会在「Rust 缺 642」上红，不是场景问题。逐条 oracle 出处、零怪证明表、存档侧判据与登记见 `docs/equip-struck-save-scenario-20261023.md`。
 
+
+> **R6 `castle_zone` 没有场景文件（2026-10-23 可达性登记）**：城堡战/城堡区在部署里**单会话探针不可达**——`@requestcastlewarnow` 的申请链命中 `UserCastle.AddAttackerInfo(IGuild)` 的 `throw new NotImplementedException()`（`UserCastle.cs:670-673`，白名单 **T-38**）；GM 的 `@ForcedWallconquestWar` 卡在 `PermissionMin=10`（部署是 Release）；`UnderWar` 只在墙钟 `StartCastlewarTime=20` 那一小时开（`Server.conf:380`）且 `Castle/0/AttackSabukWall.txt` 为空 ⇒ `766 SM_AREASTATE` 的 bit4（`RefUserState` 的 `|=4`，`PlayObject.Base.cs:281-284`）永远点不亮。依赖它的 4 张 R 卡（castle-guard-target / castle-war-area-impl / castle-merchant-fixedhide-hit / castle-merchant-disappear-downlink）窗口**当前不可跑**；可达性表、`766` 置位链与夹具规格见 `docs/castle-zone-unreachable-20261023.md`。
+
+> `spell_cast` 是**唯一一条主动施法**的场景（R5）：`placement` 到 map 0122 (29,33) → `CM_SPELL(3017)` 打空地面 (29,28) → 等 `SM_MAGICFIRE(638)`；`sleep 1600` 过 `MagicAttackInterval`（`Delay 60 + MagicHitIntervalTime 1350`）→ 第二发打 (29,42)（|dy|=9 > `MagicAttackRage=8`）→ 等 `SM_MAGICFIRE_FAIL(639)`。
+> 四个容易写错的点，逐条 oracle 出处见 `docs/spell-cast-scenario-20261023.md`：
+> ① **`CM_SPELL` 的字段口径与 `CM_TURN`/`CM_HIT` 不同**——`WorldServer.cs:783-793` 是 `SendMsg(Ident, Tag, LoWord(Recog), HiWord(Recog), MakeLong(Param,Series))` ⇒ `tag=魔号`、`recog=MakeLong(目标X,目标Y)`、`param+series` 拼成目标 ActorId（无目标就都写 0）；
+> ② **`SM_SPELL(17)` 永远不会到自己这条连接**——`PlayObject.Message.cs:1455` 的 `if (processMsg.ActorId != ActorId)` 把自己滤掉 ⇒ 等待集合里写 17 必然恒超时（卡面原本写了 17，是错的）；自己只收 638/639（`:1788-1793`/`:1794-1800` 无 self 守卫）；
+> ③ **两条支路都以「角色已学该魔法」为前提**——`GetMagicInfo(nKey)`（`PlayObject.Attack.cs:1065`）为空时直接 `false`、只回 `SM_MOVEFAIL(28)`，638/639 一枚都不发；基线库 `characters_magic` 里没有窗口角色（winplay0 = PlayerId 6228）的任何一行 ⇒ **本场景现在是 BLOCKED-FIXTURE，缺夹具必红**（fail-closed，不会假绿）；
+> ④ **两次施法之间必须 ≥1410ms**（`MagicAttackInterval = Magic.DelayTime + Config.MagicHitIntervalTime`，`PlayObject.Attack.cs:1112-1118`；部署 60+1350），否则走「魔法忙」早退，第二发既不立刻出帧也打乱两支判定。
 
 ## 驱动器的自动握手（对拍不要关）
 
@@ -256,3 +270,27 @@ R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `
 `conn-0001.s2c.bin` 44 帧、`conn-0002.s2c.bin` 106 帧（含 4 条 `SM_MERCHANTSAY(643)`，
 即赌场骰子链的服务端回包）。`*.c2s.bin` 是同一窗口的客户端字节，用于核对帧构造的已知答案向量。
 `sha256` 见提交说明；不要在 fixture 上做任何改写（自测里的 tamper 是内存副本）。
+
+## `recog` 打包口径（动作族 `CM_HIT`/`CM_WALK`/`CM_RUN`/`CM_TURN`…）
+
+这些命令的 **X/Y 都打包在 `recog` 里**：`recog = (y << 16) | x`（`LoWord=X`、`HiWord=Y`），
+**`param` 服务端完全不读**（`src/GameSrv/Word/WorldServer.cs:831-851`，两支都只取 `LoWord/HiWord(Recog)`）。
+
+* `combat_hit.json` 用 `target_xy`、`move_walk.json` 用 `move_xy` 承载打包值；`target_x/target_y`、`move_x/move_y`
+  保留为「意图/推导量」。
+* **打包可以用 `computed.pack` 声明**（卡 `openmir2-probe-computed-pack`）：`param_discovery` 会算出
+  `值 = (hi<<16)|lo`，`card_window` 的自动发现据此直接拿到 `*_xy`：
+
+  ```json
+  "computed": {
+    "move_x": {"derived_from": "self_x", "delta": 1},
+    "move_y": {"derived_from": "self_y", "delta": 0},
+    "move_xy": {"pack": {"lo": "move_x", "hi": "move_y"}}
+  }
+  ```
+
+  `pack.lo`/`pack.hi` 可写任意可推导变量（**允许引用其它 `computed`**，按不动点求解；成环、缺字段、
+  与 `derived_from/delta` 混用都 fail-closed）。`mir2_probe` 仍不读 `computed`——真跑时值由
+  `--var` 传入，`card_window` 用发现值填。
+* `combat_hit.json` 的 `target_xy` 仍由调用方给（目标格是操作者选的外生坐标，没有可推导基准）。
+* 详细逐文件复核表、oracle 行号与影响面：`docs/scenario-recog-packing-20261023.md`。
