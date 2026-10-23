@@ -66632,6 +66632,328 @@ mod castle_insertion_tests {
     }
 }
 
+/// **源码序门（卡 `openmir2-broadcast-tx-source-order-gate`）**：`@Login` 脚本批的
+/// **调用点结构**与**扇出位置**。
+///
+/// 行为门（`login_sendmsg_*` 等）只在函数体内部断言帧；若有人把
+/// `drain_login_script_batch(own_tx, …)` 重新包回 `if let Some(tx) = own_tx { … }`
+/// （正是 `openmir2-script-broadcast-tx-gating` 修掉的 bug 形状），**函数内行为不变 ⇒
+/// 行为门仍然全绿**，bug 会静默复活。本模块读 `lib.rs` 源码，钉住两件事：
+///
+/// 1. `drain_login_script_batch(` 的**每个**调用点都不在 `if let Some(tx)` 块内；
+/// 2. `drain_login_script_batch` 体内的 `fan_out_world_sysmessage(` 调用在 `tx.map_or(…)`
+///    **之外**（不在闭包体内）——`tx == None`（触发者网关线不可达）时也必须照常扇出。
+///
+/// 手法：先把源码的**注释与字符串/字符字面量**整段涂白（保留换行 ⇒ 字节偏移与行号不变），
+/// 再在「只剩代码」的文本上做括号配平：取调用点所有**外层 `{}` 块的头部文本**
+/// （自上一个 `;`/`{`/`}` 起算），去掉空白后匹配 `ifletSome(tx)`；扇出位置则用
+/// `tx.map_or(` 的**括号区间**判定。涂白后本模块自己的断言字符串不会自命中
+/// （与 `castle_insertion_tests` 的「守卫扫代码不扫注释」同口径）。
+#[cfg(test)]
+mod broadcast_tx_source_order_tests {
+    /// 把注释与字符串/字符字面量的内容涂白（空格），保留换行 ⇒ 字节偏移与行号不变。
+    fn blank_non_code(src: &str) -> String {
+        let bytes = src.as_bytes();
+        let mut out = vec![b' '; bytes.len()];
+        let mut i = 0usize;
+        while i < bytes.len() {
+            let c = bytes[i];
+            if c == b'\n' {
+                out[i] = b'\n';
+                i += 1;
+                continue;
+            }
+            // 行注释（`//`、`///`、`//!`）
+            if c == b'/' && bytes.get(i + 1) == Some(&b'/') {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            // 块注释（Rust 可嵌套）
+            if c == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                let mut depth = 1usize;
+                i += 2;
+                while i < bytes.len() && depth > 0 {
+                    if bytes[i] == b'/' && bytes.get(i + 1) == Some(&b'*') {
+                        depth += 1;
+                        i += 2;
+                    } else if bytes[i] == b'*' && bytes.get(i + 1) == Some(&b'/') {
+                        depth -= 1;
+                        i += 2;
+                    } else {
+                        if bytes[i] == b'\n' {
+                            out[i] = b'\n';
+                        }
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            // 原始字符串 `r"…"` / `r#"…"#` / `br#"…"#`
+            let raw_start = match c {
+                b'r' => Some(i + 1),
+                b'b' if bytes.get(i + 1) == Some(&b'r') => Some(i + 2),
+                _ => None,
+            };
+            if let Some(mut k) = raw_start {
+                let mut hashes = 0usize;
+                while bytes.get(k) == Some(&b'#') {
+                    hashes += 1;
+                    k += 1;
+                }
+                if bytes.get(k) == Some(&b'"') {
+                    k += 1;
+                    while k < bytes.len() {
+                        if bytes[k] == b'"' {
+                            let mut m = k + 1;
+                            let mut h = 0usize;
+                            while bytes.get(m) == Some(&b'#') && h < hashes {
+                                h += 1;
+                                m += 1;
+                            }
+                            if h == hashes {
+                                k = m;
+                                break;
+                            }
+                        }
+                        if bytes[k] == b'\n' {
+                            out[k] = b'\n';
+                        }
+                        k += 1;
+                    }
+                    i = k;
+                    continue;
+                }
+            }
+            // 字节串 `b"…"`（把游标挪到引号，交给下面的普通字符串分支）
+            if c == b'b' && bytes.get(i + 1) == Some(&b'"') {
+                i += 1;
+            }
+            // 普通字符串（含转义）
+            if bytes[i] == b'"' {
+                i += 1;
+                while i < bytes.len() {
+                    if bytes[i] == b'\\' {
+                        i += 1;
+                        if i < bytes.len() {
+                            if bytes[i] == b'\n' {
+                                out[i] = b'\n';
+                            }
+                            i += 1;
+                        }
+                    } else if bytes[i] == b'"' {
+                        i += 1;
+                        break;
+                    } else {
+                        if bytes[i] == b'\n' {
+                            out[i] = b'\n';
+                        }
+                        i += 1;
+                    }
+                }
+                continue;
+            }
+            // 字节字符 `b'x'`（把游标挪到引号，交给下面的字符分支）
+            if c == b'b' && bytes.get(i + 1) == Some(&b'\'') {
+                i += 1;
+            }
+            // 字符字面量 vs 生命周期（`'a`）
+            if bytes[i] == b'\'' {
+                let mut j = i + 1;
+                let mut closed = false;
+                if j < bytes.len() {
+                    if bytes[j] == b'\\' {
+                        // 跳过反斜杠与它转义的**一个**字符，再找闭合引号。
+                        j += 2;
+                        while j < bytes.len() && j <= i + 16 {
+                            if bytes[j] == b'\'' {
+                                closed = true;
+                                j += 1;
+                                break;
+                            }
+                            j += 1;
+                        }
+                    } else if j + 1 < bytes.len() && bytes[j + 1] == b'\'' {
+                        closed = true;
+                        j += 2;
+                    }
+                }
+                if closed {
+                    i = j;
+                    continue;
+                }
+                i += 1; // 生命周期：只涂掉引号本身
+                continue;
+            }
+            out[i] = c;
+            i += 1;
+        }
+        let code = String::from_utf8(out).expect("涂白后应为合法 UTF-8");
+        assert!(
+            code.is_ascii(),
+            "涂白后的源码仍含非 ASCII 字节——新增了非 ASCII 标识符？本门依赖按字节切片。"
+        );
+        code
+    }
+
+    /// 去掉空白（用于匹配块头/单行文本，避免换行与缩进干扰）。
+    fn norm(s: &str) -> String {
+        s.chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    /// 位置 `pos` 之前，所有**仍开着的 `{}` 块**的头部文本（自上一个 `;`/`{`/`}` 起算）。
+    fn enclosing_block_headers(code: &str, pos: usize) -> Vec<String> {
+        let bytes = code.as_bytes();
+        let mut stack: Vec<(usize, usize)> = Vec::new(); // (块头起点, `{` 位置)
+        let mut last_term = 0usize;
+        for (i, &b) in bytes.iter().enumerate().take(pos.min(bytes.len())) {
+            match b {
+                b'{' => {
+                    stack.push((last_term, i));
+                    last_term = i + 1;
+                }
+                b'}' => {
+                    stack.pop();
+                    last_term = i + 1;
+                }
+                b';' => last_term = i + 1,
+                _ => {}
+            }
+        }
+        stack
+            .into_iter()
+            .map(|(start, brace)| code[start..brace].to_string())
+            .collect()
+    }
+
+    /// `open_pos` 处 `(`/`{` 的配对闭合位置（字符串/注释已涂白，故只数同一种括号）。
+    fn matching_close(code: &str, open_pos: usize, open: u8, close: u8) -> usize {
+        let bytes = code.as_bytes();
+        let mut depth = 0usize;
+        for (i, &b) in bytes.iter().enumerate().skip(open_pos) {
+            if b == open {
+                depth += 1;
+            } else if b == close {
+                assert!(depth > 0, "括号提前闭合 @{i}");
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+        }
+        panic!("括号未配平：open_pos={open_pos}");
+    }
+
+    /// `pos` 是否是函数**定义**（前一个记号恰为 `fn`），而非调用点。
+    fn is_fn_definition(code: &str, pos: usize) -> bool {
+        let before = code[..pos].trim_end();
+        match before.strip_suffix("fn") {
+            Some(rest) => !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_'),
+            None => false,
+        }
+    }
+
+    fn line_of(code: &str, pos: usize) -> usize {
+        1 + code[..pos].bytes().filter(|&b| b == b'\n').count()
+    }
+
+    /// 牙①（把调用点包回 `if let Some(tx) = own_tx { … }`）⇒ 本用例必红。
+    #[test]
+    fn login_script_batch_call_sites_not_gated_by_own_tx() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("读 lib.rs");
+        let code = blank_non_code(&src);
+        let needle = "drain_login_script_batch(";
+        let mut calls = 0usize;
+        for (pos, _) in code.match_indices(needle) {
+            if is_fn_definition(&code, pos) {
+                continue; // 函数定义，不是调用点
+            }
+            calls += 1;
+            let line = line_of(&code, pos);
+            for header in enclosing_block_headers(&code, pos) {
+                assert!(
+                    !norm(&header).contains("ifletSome(tx)"),
+                    "lib.rs:{line} 的 `drain_login_script_batch(` 调用点落在 `if let Some(tx)` 块内\
+                     （块头：{}）。这正是 `openmir2-script-broadcast-tx-gating` 修掉的 bug 形状：\
+                     触发者网关线缺席时，全服广播会被一并跳过。调用点必须直接传 `own_tx: Option<&Sender>`。",
+                    header.trim()
+                );
+            }
+        }
+        assert!(
+            calls >= 1,
+            "必须至少有一个 `drain_login_script_batch(` 调用点（生产排水点）"
+        );
+    }
+
+    /// 牙②（把扇出移进 `tx.map_or(…)` 闭包）⇒ 本用例必红。
+    #[test]
+    fn login_script_batch_fans_out_outside_tx_map_or() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("读 lib.rs");
+        let code = blank_non_code(&src);
+
+        // 定位 `drain_login_script_batch` 的函数体。
+        let def_needle = "drain_login_script_batch(";
+        let def = code
+            .match_indices(def_needle)
+            .find(|&(pos, _)| is_fn_definition(&code, pos))
+            .map(|(pos, _)| pos)
+            .expect("找不到 `fn drain_login_script_batch(` 定义");
+        let body_open = def + code[def..].find('{').expect("函数体缺 `{`");
+        let body_close = matching_close(&code, body_open, b'{', b'}');
+        let body = &code[body_open..=body_close];
+
+        // 扇出调用点：体内必须恰好一处（删掉扇出或复制一份都会红）。
+        let fan_needle = "fan_out_world_sysmessage(";
+        let fan_positions: Vec<usize> = body
+            .match_indices(fan_needle)
+            .map(|(p, _)| body_open + p)
+            .collect();
+        assert_eq!(
+            fan_positions.len(),
+            1,
+            "`drain_login_script_batch` 体内必须恰好一处 `fan_out_world_sysmessage(`（实际 {}）",
+            fan_positions.len()
+        );
+
+        // `tx.map_or(` 仍须在体内恰好一处：结构若被改写，本门必须显式报错而不是静默放过。
+        let map_or_needle = "tx.map_or(";
+        let map_or_positions: Vec<usize> = body
+            .match_indices(map_or_needle)
+            .map(|(p, _)| body_open + p)
+            .collect();
+        assert_eq!(
+            map_or_positions.len(),
+            1,
+            "`drain_login_script_batch` 体内必须恰好一处 `tx.map_or(`（实际 {}）；\
+             结构改写后请同步更新本源码门",
+            map_or_positions.len()
+        );
+        let map_or = map_or_positions[0];
+        let map_or_open = map_or + map_or_needle.len() - 1; // `(` 本身
+        let map_or_close = matching_close(&code, map_or_open, b'(', b')');
+
+        let fan = fan_positions[0];
+        let fan_line = line_of(&code, fan);
+        assert!(
+            !(map_or <= fan && fan <= map_or_close),
+            "lib.rs:{fan_line} 的 `fan_out_world_sysmessage(` 落在 `tx.map_or(…)` 内（闭包体）：\
+             触发者网关线不可达（`tx == None`）时全服广播会被一并跳过——扇出必须在 `map_or` 之外。"
+        );
+
+        // 同行形态（`tx.map_or(fan_out_world_sysmessage(…), …)`）：调用行不得含 `tx.map_or(`。
+        let line_start = code[..fan].rfind('\n').map_or(0, |p| p + 1);
+        let line_end = code[fan..].find('\n').map_or(code.len(), |p| fan + p);
+        assert!(
+            !norm(&code[line_start..line_end]).contains(&norm(map_or_needle)),
+            "lib.rs:{fan_line} 的扇出调用与 `tx.map_or(` 同行：`map_or` 的任一实参/闭包都不得承载扇出。"
+        );
+    }
+}
+
 /// **C10（抽样帧）**：城堡门 `RM_TURN` ⇒ `SM_TURN` + `SM_FEATURECHANGED` 两帧
 /// （`PlayObject.Message.cs:1524-1560`）。
 ///
