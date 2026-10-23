@@ -6313,6 +6313,50 @@ fn emit_script_frames_raw(
     sent
 }
 
+/// `@Login`/QManage 的脚本帧排水（生产入口 = `sim_loop` 进世界块；T-194 判据 I-1）。
+///
+/// 与 `emit_script_frames`（商人）和 `run_party_goto_label`（QFunction）共用
+/// [`emit_script_frames_raw`] → [`game_svr::pickwire::script_frame`] ⇒ `MESSAGEBOX` 的
+/// `RM_MENU_OK` 在此同样落 `SM_MENU_OK(767)`。
+///
+/// 标量取数：进世界时会话可能尚未建立 ⇒ 回退 `PlayObject` 的当下值；`soft_version_date`
+/// 只有会话有（缺省 0 ⇒ `RM_GAMEGOLDCHANGED` 的门挡住，与 oracle `SoftVersionDateEx == 0` 同支）。
+///
+/// **已知偏差（登记 T-194）**：本函数读的是**脚本跑完之后、金币写回之前**的会话标量
+/// （`sg.state.gold`），而 oracle 的 `MsgQueue` 在 `PlayObject` 字段写回之后才排水 ⇒ 若
+/// `@Login` 脚本自己改金币，本路径发出的 `SM_GOLDCHANGED` 带脚本前的值。商人路径
+/// （`run_merchant_goto` → `emit_script_frames`）是写回后排水，无此偏差；部署 `QManage.txt`
+/// 的 `@Login` 段当前不改金币，故今日不分叉。
+fn emit_login_script_frames(
+    tx: &mpsc::UnboundedSender<SimToGate>,
+    socket: i32,
+    player_actor_id: i32,
+    chr_name: &str,
+    ground_sessions: &std::collections::HashMap<String, SessionGround>,
+    player: &game_svr::npc::NpcPlayer<'_>,
+) -> usize {
+    if player.frames.is_empty() {
+        return 0;
+    }
+    let (gold, game_gold, game_point, soft_version_date) = ground_sessions
+        .get(chr_name)
+        .map_or((player.gold, player.game_gold, player.game_point, 0), |s| {
+            (s.state.gold, s.game_gold, s.game_point, s.soft_version_date)
+        });
+    // QManage 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
+    emit_script_frames_raw(
+        tx,
+        socket,
+        0,
+        player_actor_id,
+        gold,
+        game_gold,
+        game_point,
+        soft_version_date,
+        &player.frames,
+    )
+}
+
 /// `CM_EAT`(1006) 的派发（issue `8d07694d` 的 ②）。
 ///
 /// oracle 链：`PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(processMsg.nParam1, Msg)`
@@ -19614,30 +19658,26 @@ fn sim_loop(
                                                                 // 商人/组队同一映射（T-194）。
                                                                 // 出队序：说词优先级 0/1 恒先于
                                                                 // 脚本帧（最小 `RM_PLAYDICE` 4）。
-                                                                if !player.frames.is_empty() {
-                                                                    // 进世界时会话可能尚未建立
-                                                                    // ⇒ 回退 `PlayObject` 当下值；
-                                                                    // `soft_version_date` 只有会话有。
-                                                                    let (f_gold, f_game_gold, f_game_point, f_svd) =
-                                                                        ground_sessions
-                                                                            .get(&head.chr_name)
-                                                                            .map_or(
-                                                                                (player.gold, player.game_gold, player.game_point, 0),
-                                                                                |s| (s.state.gold, s.game_gold, s.game_point, s.soft_version_date),
-                                                                            );
-                                                                    // QManage 是隐藏 NPC（`ActorId = 0`）。
-                                                                    let n = emit_script_frames_raw(
-                                                                        tx, socket, 0, id, f_gold,
-                                                                        f_game_gold, f_game_point,
-                                                                        f_svd, &player.frames,
+                                                                //
+                                                                // 抽成生产函数 [`emit_login_script_frames`]：
+                                                                // 单测直接在**同一函数**上断言 767 的存在与
+                                                                // 同批出队序（删本调用或删函数体内的排水 ⇒
+                                                                // `login_messagebox_...` / `login_frame_batch_...`
+                                                                // 两用例必红）。
+                                                                let n = emit_login_script_frames(
+                                                                    tx,
+                                                                    socket,
+                                                                    id,
+                                                                    &head.chr_name,
+                                                                    &ground_sessions,
+                                                                    &player,
+                                                                );
+                                                                if n > 0 {
+                                                                    glog!(
+                                                                        "INF",
+                                                                        "@Login ChrName={} 脚本帧 {n} 条",
+                                                                        head.chr_name
                                                                     );
-                                                                    if n > 0 {
-                                                                        glog!(
-                                                                            "INF",
-                                                                            "@Login ChrName={} 脚本帧 {n} 条",
-                                                                            head.chr_name
-                                                                        );
-                                                                    }
                                                                 }
                                                                 // 回写（本片只回写 `Gold` 与 `QuestFlag`；
                                                                 // `QuestUnit/QuestUnitOpen/ItemList/LastNpc/Script`
@@ -25219,8 +25259,9 @@ break
     /// `Recog` 为玩家 `ActorId`（r1=1833593529、r2=1882717309）。
     ///
     /// 牙（先备份 sha256，改完还原并核对）：
-    /// ① 删 `emit_script_frames` 的 `RM_MENU_OK` 支（回到 `pickwire::script_frame` 的
-    ///    `_ => None`）⇒ 本用例红（0 条 767）；
+    /// ① 停用 `pickwire::script_frame` 的 `RM_MENU_OK` 支 ⇒ 本用例红（0 条 767）。
+    ///    （T-194 起映射已**下沉进 `pickwire::script_frame`**，本卡原有的 `emit_script_frames`
+    ///    直落旁路已删除；因此牙①的落点从「删 `emit_script_frames` 支」改为「停用统一映射」。）
     /// ② 把它提成「无条件发」⇒ [`ya52_checkitem_satisfied_sends_no_menu_ok`] 红。
     #[test]
     fn ya52_elseact_messagebox_emits_exactly_one_sm_menu_ok() {
@@ -56170,6 +56211,153 @@ mod tests {",
             gnp_tail_text(menu[0]),
             "组队创建提示",
             "尾 = cp936 原文经 EDCode"
+        );
+    }
+
+    /// **T-194 判据 I-1（@Login 漏斗，生产入口）**：`NpcHost::run_login` 跑 QManage 的
+    /// `[@Login]`（`#SAY` + `#ACT MESSAGEBOX`），再走**生产排水函数**
+    /// [`emit_login_script_frames`]（`sim_loop` 进世界块调的就是它）⇒ 说词 `643` 之后
+    /// **恰好一条** `SM_MENU_OK(767)`，`Recog` = 玩家 ActorId。
+    ///
+    /// 删 `emit_login_script_frames` 的排水（或删其 `emit_script_frames_raw` 调用）⇒ 本用例红。
+    /// 次序钉住：说词优先级 1 恒先于 767 的 69（oracle `MsgQueue` 按 `(byte)wIdent` 出队）。
+    #[test]
+    fn login_messagebox_emits_one_sm_menu_ok_through_production_drain() {
+        let root = std::env::temp_dir().join(format!("gs-t194-login-{}", std::process::id()));
+        let dir = root.join("Envir").join("MapQuest_def");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = concat!(
+            "[@Login]\r\n",
+            "#SAY\r\n",
+            "欢迎回来\\\r\n",
+            "#ACT\r\n",
+            "MESSAGEBOX 月卡已过期，请及时续费\r\n",
+        );
+        std::fs::write(dir.join("QManage.txt"), encoding_rs::GBK.encode(script).0).unwrap();
+        let parsers = mir2_script::ScriptParsers::new();
+        let mut rename = |_min: i32, _max: i32| 1;
+        let outcome = parsers
+            .load_script_file(
+                &mir2_script::LocalFs,
+                &root.join("Envir"),
+                "MapQuest_def",
+                "QManage",
+                false,
+                &mut rename,
+            )
+            .expect("解析不得 panic")
+            .expect("脚本必须存在");
+        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            outcome.errors.is_empty(),
+            "夹具脚本不得有解析错误：{:?}",
+            outcome.errors
+        );
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QManage".into(),
+                file_path: "MapQuest_def".into(),
+                script_name: Some("QManage".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: outcome.scripts,
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let mut rng = |_v: i32| 0;
+        let mut player = game_svr::npc::NpcPlayer::empty(&mut rng);
+        player.actor_id = 7;
+        player.chr_name = "hero".into();
+        let says = host.run_login(&mut player).expect("QManage 必须可加载");
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        // 进世界时会话可能尚未建立 ⇒ 空表走 `PlayObject` 标量回退分支。
+        let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let _ = emit_npc_says(&tx, 901, 7, &says);
+        let n = emit_login_script_frames(&tx, 901, 7, "hero", &ground_sessions, &player);
+        assert_eq!(n, 1, "@Login 的 MESSAGEBOX 必须下发一条脚本帧");
+        let frames: Vec<Vec<u8>> = {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    other => panic!("@Login 脚本帧路径不得发其它命令，实得 {other:?}"),
+                }
+            }
+            out
+        };
+        let ids: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+        assert_eq!(
+            ids,
+            vec![
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                mir2_protocol::messages::SM_MENU_OK
+            ],
+            "说词(643, 优先级 1)必须先于 767(优先级 69)；实得 {ids:?}"
+        );
+        let menu = &frames[1];
+        assert_eq!(
+            gnp_recog(menu),
+            7,
+            "Recog = 玩家 ActorId（不是隐藏 NPC 的 0）"
+        );
+        assert_eq!(gnp_param(menu), 0);
+        assert_eq!(gnp_tag(menu), 0);
+        assert_eq!(gnp_series(menu), 0);
+        assert_eq!(
+            gnp_tail_text(menu),
+            "月卡已过期，请及时续费",
+            "尾 = cp936 原文经 EDCode"
+        );
+    }
+
+    /// **T-194 判据 I-1（同批出队序）**：`@Login` 排水按 `(byte)wIdent` 升序 —— 767(69)
+    /// 必须先于同批 `SM_SYSMESSAGE(100)`(252)。故意按「反优先级」入队以证明是排序而非入队序。
+    #[test]
+    fn login_frame_batch_orders_menu_ok_before_sysmessage() {
+        let mut rng = |_v: i32| 0;
+        let mut player = game_svr::npc::NpcPlayer::empty(&mut rng);
+        player.actor_id = 7;
+        player.frames.push(game_svr::npc::SendMsg {
+            ident: mir2_protocol::messages::RM_SYSMESSAGE as i32,
+            w_param: 0,
+            n_param1: 0xDB,
+            n_param2: 0xFF,
+            n_param3: 0,
+            msg: Some("提示".into()),
+        });
+        player.frames.push(game_svr::npc::SendMsg {
+            ident: mir2_protocol::messages::RM_MENU_OK as i32,
+            w_param: 0,
+            n_param1: 7,
+            n_param2: 0,
+            n_param3: 0,
+            msg: Some("对话框".into()),
+        });
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let n = emit_login_script_frames(&tx, 901, 7, "hero", &ground_sessions, &player);
+        assert_eq!(n, 2);
+        let ids: Vec<u16> = {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = ev {
+                    out.push(gnp_ident(&body));
+                }
+            }
+            out
+        };
+        assert_eq!(
+            ids,
+            vec![
+                mir2_protocol::messages::SM_MENU_OK,
+                mir2_protocol::messages::SM_SYSMESSAGE
+            ],
+            "767(优先级 69) 必须先于 100(优先级 252)；实得 {ids:?}"
         );
     }
 
