@@ -102,6 +102,32 @@ python tools/probe/mir2_probe.py \
 > 链里没有 `@ask`（部署件无此标签）也没有 `@back`（无 `<.../@back>` 链接 ⇒ `LableIsCanJmp` 门控下零帧），
 > 逐条 oracle 出处与理由见 `docs/npc-script-chain-scenario-20261023.md`。
 
+> `combat_strike` 是**唯一一条主动发起攻击**的场景（R3）：`placement` 到 map 4 封魔谷 (256,232) →
+> `CM_TURN(3010)` 定状态化朝向 → `CM_HIT(3014)` → `wait_for 31`（`SM_STRUCK`）；目标是正上方格
+> (256,231) 的固定刷怪点 `恶魔弓箭手`（`MonGen.txt:90`，Range=0/Count=1；Race=112 `ArcherGuard`，
+> **非 FixedHideMode**）。
+> 三个容易写错的点，逐条 oracle 出处见 `docs/combat-strike-scenario-20261023.md`：
+> ① **`CM_TURN`/`CM_HIT` 的 X/Y 打包在 `recog` 里**（`WorldServer.cs:831-844`：
+> `nParam1=LoWord(Recog)`、`nParam2=HiWord(Recog)`、`wParam=Tag=Dir`，`param` 不被读）
+> ⇒ `recog` 必须写 `(Y<<16)|X`，不是「X 放 recog、Y 放 param」；
+> ② **必须先 `CM_TURN` 定朝向**——`CM_HIT` 取目标走 `GetPoseCreate()` 的**状态化 `Dir`**，
+> 报文里的 `tag` 只管动作帧（`PlayObject.Attack.cs:26` 早于 `BaseObject.Attack.cs:12` 的 `Dir=nDir`）；
+> ③ **本方看不到自己的 `SM_HIT(14)`**（`PlayObject.Message.cs:1433-1437` 自我过滤），
+> 命中只能等受击者的 `SM_STRUCK(31)`。
+> **本条现在是 BLOCKED-FIXTURE，不许当窗口输入，且「跑绿 ≠ 玩家命中」。** 目标必须既「非 FixedHide」又「打得动」——
+> Race=95 的 `僵尸2`/`石墓尸王` 是 `DigOutZombi`（出生即 `FixedHideMode=true`，按 oracle 的隐藏视野门
+> 永不出土、`SendRefMsg` 也不广播 ⇒ 恒超时），而名字不在 `monsters` 表里的 `弓箭护卫` 等根本不刷。
+> 剩下能刷的非隐藏目标只有 112/102/115，AC 都 ≥18；伤害扣的是 **[AC, 2AC-1] 的随机护甲**
+> （`BaseObject.Base.cs:789-806`，怪物 `AC=MakeWord(AC,AC)`，`WorldServer.MonGen.cs:898`），
+> 所以「必伤害」门槛是 `DC_min > 2*AC-1`（AC30 ⇒ ≥60），再叠加 `HitPoint ≥ SPEED-1`（SPEED18 ⇒ ≥17）；
+> 基线角色没有一档同时满足（最好的一对 joint 只有 24%，精确矩阵见文档 §6）。
+> ⇒ 现在跑必然 `wait_for` 超时。**另外这是敌对守卫**（`GuardUnit.cs:120-124` + `ArcherGuard.cs:39-81`），
+> 玩家挨打也会收到 `SM_STRUCK(31)` 且 `recog=self`，而 `wait_for` 只按 ident 匹配（`mir2_probe.py:291-303`）
+> ⇒ **即使跑绿也证明不了「玩家主动一击命中」，窗口批次不得消费本场景的任何 PASS**（fail-closed，见文档 §7.0；
+> 根治需 `wait_for` 支持 recog 过滤，归 `openmir2-probe-scenario-validation-gaps`）。
+> 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
+> `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
+
 ## 驱动器的自动握手（对拍不要关）
 
 照 `src/BotSrv/Player/RobotPlayer.Operate.cs`：
