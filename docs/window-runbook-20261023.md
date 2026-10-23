@@ -5,7 +5,9 @@
 
 ## 0. 现状（master `73c39cca` @ 2026-10-23 15:20 +0800）
 
-- **欠窗口的卡：约 114 张**（`walgit collab board` 全文 grep「窗口欠项」151 张、其中写明「已合入 master」114 张）。这是终点条件②的唯一缺口。
+- **欠窗口的卡：173 张**（口径见 `docs/leader-goal-20261023.md` §1.1 的订正：早前「grep 已合入 master = 114」是错的，
+  那 114 里 70 张已 closed、23 张是 tier=L；真欠账 21 张，加上 149 张措辞不在 grep 里的 + 3 张快照后合入 = **173**）。
+  分批与逐卡落点见 `docs/window-batch-plan-20261023.md`。
 - 工具链：`card_window.py`（批处理）、`compare_runs.py`（帧+库比对）、`param_discovery.py`（参数发现）。
 - **开跑前还有两个前置没到位**：① 参数发现**尚未接进** `card_window.py`（卡 `openmir2-window-discovery-wiring`）；
   ② 账本的 compare 诊断值**尚未加值断言**（卡 `openmir2-card-window-value-assertions`）。

@@ -395,6 +395,14 @@ python -I -B tools/conformance/compare_runs.py selftest
 一条命令跑完双栈窗口（用法见 `docs/leader-queue-20261023.md` §5）；`run_dual.sh` 仍是底层
 语义参照，本工具只调用 `mir2_probe.py` / `compare_runs.py` / `dbsnap.py`，不改它们。
 
+* **参数发现（卡 `openmir2-window-discovery-wiring`）**：场景声明了 `required` 时**自动**
+  先跑 discovery（默认 `npc_click_auto`：点一次 NPC 收 `SM_MERCHANTSAY(643)`），从**本侧**
+  帧推导 required，再把本侧的 `--var` 传给 `mir2_probe`（`--discover` 可强制开启）。任一侧
+  推不出 => 该侧 rc=2 并**点名缺哪个变量**（不跑场景、不抓库）；两侧 `kind` 不一致
+  （`derived` vs `rule`）或非会话变量（坐标等）取值不同 => rc=2。**绝不拿另一侧的值、
+  绝不用默认值/空值填空**。每侧 `<out>/<side>/discovered.json`、汇总 `<out>/discovered.json`
+  （`format=param-discovery/1` / `discovered/1`，含值、推导来源、缺失清单、两侧一致性）。
+  `run_dual.sh` 不改（0 字节 diff），接线只在 `card_window.py`。
 * **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
   ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
   收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +
@@ -439,7 +447,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 5. 还原后 sha256 == 变异前；**不一致 => 整体 rc≠0**（N-3）。
 
 ```sh
-python -I -B tools/conformance/selftest_mutations.py            # 跑全部 23 颗
+python -I -B tools/conformance/selftest_mutations.py            # 跑全部 30 颗
 python -I -B tools/conformance/selftest_mutations.py --list     # 只列牙（含每颗的 expect）
 python -I -B tools/conformance/selftest_mutations.py --only T1,E2
 python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自身 fail-closed
@@ -450,6 +458,9 @@ T5 F-1 旧提示 / T6 H-1 写产物提前 / T7 H-2 固定 `_stale-fixed` / T8 N-
 看不到 README 写失败（等价于先写账本再发 comment）/ T9 N-1 comment verdict 固定 PASS /
 T10 Y1 `finalize_ok` 丢掉 `json_ok` 那一半 / T11 D-1 证据缺件不降级 / T12 D-1 compare FAIL
 被压成 UNDECIDABLE / T13 M-1 FAIL 分支 `verdict_reason` 写成 ok / T14–T16 M-2 嵌套 `compare`
-分别删掉 whitelisted / db_state / undecidable（字段集合断言）；额外牙 E1 fallback run_id
+分别删掉 whitelisted / db_state / undecidable（字段集合断言）/ T17–T20 **P-1 诊断值**变异
+（db_state 写错、diffs 与 db_state 互换、diffs 固定 999、undecidable 固定 -1，断言一律从
+本次 report.json 实读）/ T21 F-1 side doc `ok` 的两处兜底都丢掉（discovery probe 失败仍 ok=True）；额外牙 E1 fallback run_id
 常量、E2 放宽未知库判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README、
-E6 忽略 card-window.json 失败标志、E7 comment body 不带 exit_code。
+E6 忽略 card-window.json 失败标志、E7 comment body 不带 exit_code；发现接线牙 D1 probe
+命令丢掉 `--var`（值推出来了却没传给场景）、D2 发现失败时静默用空值继续跑。
