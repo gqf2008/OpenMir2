@@ -87,6 +87,25 @@
     命中任一条 ⇒ **不要派**，改派到**另一个**空闲 principal（换身份 = 换 worktree），或让它跑完再由
     不同 principal 复审。**「返工给作者」这条（第 10 条）的前提是那个作者身份此刻空闲**。
 
+15. **「打印变红」≠「门禁变红」：自检必须挂在 rc 判定路径之前**（2026-10-23 20:5x，reviewer-5 一轮抓到两处）：
+    - `openmir2-window-inventory-fixture`：`_selftest_inventory` 被放在 `if fail_n: return 1` **之后** ⇒ reviewer-5 把「预置整段旁路 / 写库改成 `pass` / 失败 rc 2→0 / 删 std_mode 校验」四种破坏全做完，selftest 仍打印 **171/171 绿、rc=0**。
+    - `openmir2-window-rust-binary-evidence`：新增的 4 条检查同样在判定之后 ⇒ 旁路整段接线仍 **169/169 rc=0**。
+    ⇒ **牙的判据只能是 rc，不是 stdout**。写牙/审牙时固定问一句：「把它改坏，**退出码**会变吗？」只变文本不变 rc 的牙是假牙。
+    推论：新增自检代码的位置本身就是判据——加在 `return` 之后等于没加。review 时看**调用点在哪个分支里**，不看它是否被执行过。
+16. **审计链口径：git author ≠ collab principal，不是冒名**（2026-10-23 记录）：本机主检出与多个 worktree 共用一份 `git config user`，所以
+    `git log` 里大量提交作者是 `openmir2-worker-39`，而卡片的 owner / 签名条目是 `openmir2-worker-24` / `-70` / `-71` 等。
+    **权威身份是 `refs/collab/*` 的签名条目**（每个 worktree 一把 Ed25519，见 §0），git author 只是工作副本的配置噪声。
+    引用证据时写「签名条目 actor + oid」，不要把 git author 当作者；也不要因此判定审计链断裂。
+
+17. **mutation runner 就地改写 tracked 文件——绝不能跑在「即将提交的树」上**（2026-10-23 21:4x 实测）：
+    我在主检出对合并树跑 `selftest_mutations.py`，它在 `card_window.py` 里留了一条 **live mutation**
+    （`verdict_reason: "compare_fail" → "ok"`）、而合并**已 staged** ⇒ 那一刻提交就会把这条变异一起提交。
+    发现方式：`git status` 出现 `MM`（staged + unstaged 同时改同一文件）、`git diff` 看到一行语义反转。
+    ⇒ **规则**：① mutation/牙 一律在 **worktree 副本**上跑（`E:/tmp/<lane>-teeth`），不在主检出跑；
+    ② 每次提交前 `git diff` 必须为空（`MM` 就是警报）；③ 若 runner 被中断，**先 `git checkout -- <file>`
+    还原**，再比 `sha256sum <file>` 与 `git show :<file> | sha256sum` 一致才提交。
+    与第 11 条同族：门禁工具本身会弄脏树（stale 二进制是另一例）。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
