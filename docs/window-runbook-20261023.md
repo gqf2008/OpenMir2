@@ -53,11 +53,13 @@
 | `combat_hit` | target_x, target_y, hit_dir | ❌ 需新帧/新场景 |
 | `move_walk` | move_x, move_y | ❌ 同上 |
 | `king_dialog` / `king_castle_war` | king_actor | ❌ 需国王标识帧 |
-| 其余 7 个 | 无 required | 直接可跑 |
+| `dice_chain` / `dice_chain_auto` / `gm_batch` / `gm_time` / `login_only` / `npc_click_auto` | 无 required | 直接可跑（6 个，已实测 `--check-scenario` 全 rc=0） |
 
-⇒ **接线落地后，能立即参数化跑的只有 3 个场景**；另外 6 个要等新规则/新帧/新场景。
-所以「②45 次参数化 run」不会一次性解锁——**先按 3 个可发现场景 + 7 个无 required 场景推第一批**，
+⇒ **接线落地后，能立即跑的只有 9 个场景**（3 个可发现 + 6 个无 required）；另外 6 个要等新规则/新帧/新场景。
+所以「②45 次参数化 run」不会一次性解锁——**第一批按这 9 个推**，
 其余按「缺哪个变量 → 补哪条规则/哪个帧」逐条开卡，不要笼统地指望发现工具。
+
+> 计数订正：9 个 required 场景 + 6 个无 required = 15，本表初稿误写「其余 7 个」，已按实测改正。
 
 ## 5. 跑完
 
