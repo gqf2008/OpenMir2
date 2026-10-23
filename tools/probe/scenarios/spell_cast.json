@@ -1,6 +1,10 @@
 {
   "name": "spell_cast",
   "description": "【BLOCKED-FIXTURE，缺 characters_magic 夹具，现在跑必红】R5 主动施法：发 CM_SPELL(3017) 把「已知魔法」打到无目标地面，覆盖成功支 SM_MAGICFIRE(638) 与失败支 SM_MAGICFIRE_FAIL(639)。预置到 map 0122（比奇国王房间，全图无 MonGen 刷怪、无 GuardList 卫士、无 MerChant 商人，见 Envir/MonGen.txt 与 GuardList.txt 均无 0122 行）(29,33)。选样魔法 = 火球术 MagID=1（sql/mir2_data.sql:70；Job=1 法师、NeedL1=7、Spell=4、DefSpell=1、Delay=60），等级 0 时单次耗蓝 = Round(4/4*(0+1))+1 = 2（PlayObject.Base.cs:1369-1372 GetSpellPoint + :1511-1519 蓝门）。**两条必须知道的前提**：① 服务端先查 `GetMagicInfo(nKey)`（PlayObject.Attack.cs:1065-1069），魔号不在 MagicList ⇒ `ClientSpellXY` 直接 false（delayTime=0）⇒ 只回 SM_MOVEFAIL(28)、**永远等不到 637/638/639**；基线库 `characters_magic` 只有 PlayerId 6226/1/13339 三组，窗口角色 winplay0 = PlayerId 6228 一行都没有（E:/tmp/conformance/baseline/mir2_test_db.sql:88 与同一文件 characters_magic 段）⇒ **本场景必须先补夹具**；② **`SM_SPELL(17)` 不能进等待集合**——`RM_SPELL -> SM_SPELL` 的处理器首句是 `if (processMsg.ActorId != ActorId)`（PlayObject.Message.cs:1455）⇒ 施法者自己那条连接永远收不到自己的 17（卡面把 17 写进目标帧集，是错的；等它必然恒超时）。成功/失败只认 638/639（两者处理器 `:1788-1793`/`:1794-1800` **无** self 守卫）。逐条 oracle 出处、夹具 SQL、两支的可达性分析见 docs/spell-cast-scenario-20261023.md",
+  "blocked": {
+    "reason": "BLOCKED-FIXTURE：缺 characters_magic 夹具。服务端施法前查 GetMagicInfo(nKey)（PlayObject.Attack.cs:1065-1069），MagicList 为空 ⇒ ClientSpellXY 直接 false（delayTime=0）⇒ 只回 SM_MOVEFAIL(28)，永远等不到 637/638/639；基线库 characters_magic 没有窗口角色 winplay0（PlayerId 6228）的任何一行，⇒ 本场景现在真跑必红（fail-closed，不会假绿）。另：火球术 Lv0 单发耗蓝 2（PlayObject.Base.cs:1369-1372 + :1511-1519），还有「基线角色 MP ≥ 4」这个未显式断言的假设。",
+    "missing_fixture": "两侧测试库各加一行 characters_magic：(PlayerId=6228, MagicId=1, Level=0, UseKey='1', CurrTrain=0)（mir2_test_db 与 mir2_test_db_r）；建议由新卡 openmir2-window-magic-fixture 提供，详见 docs/spell-cast-scenario-20261023.md §7。"
+  },
   "params": {
     "self_pos": 2162717,
     "near_pos": 1835037,
