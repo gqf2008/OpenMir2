@@ -51333,7 +51333,7 @@ SendRefMsgRange=15
         assert_eq!(
             b4_seq(&frames, 911),
             vec![SM_53, SM_638, SM_642, SM_642, SM_642],
-            "每成功目标一条 642（同优先级保持枚举序）"
+            "每成功目标一条 642（三条同 ident，出队序 = 四叉堆 sift 序，**不是**目标枚举序；             本断言只比 ident 序列，故与枚举序无关）"
         );
         assert_eq!(b4_seq(&frames, 912), vec![SM_17, SM_638]);
         let poisons = rig.delay_msgs(mir2_world::slave::RM_POISON);

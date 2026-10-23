@@ -100,7 +100,19 @@
 
 ## 5. 牙（teeth）
 
-TEETH_PLACEHOLDER
+牙（在**提交后的树**上做；每颗 = 改回稳定排序 → 对应用例红 → `git checkout --` 逐字节还原 →
+`sha256` 与 `git show HEAD:<path>` 一致；工作树回到干净）：
+
+| 牙 | 模块 / 文件 | 改坏内容 | 期望红 | 实测 | 提交后文件 sha256（还原后复核一致） |
+|---|---|---|---|---|---|
+| T-A | `bins/game-svr/src/lib.rs`（`SpellFrameBuf::flush`） | 按收件人堆 → 改回 `frames.sort_by_key(|f| f.1)` 全局稳定排序 | `spell_frame_buf_tests::same_priority_frames_follow_dotnet_heap_order` | **FAILED**（`n=3：同优先级出队序必须是四叉堆序`，`test result: FAILED. 1 passed; 1 failed`） | `5c54e755ff859d5b514db5ad8bd1c6d438bfdb39c80ceb44fd1a9d007be9d9c0` |
+| T-B | `crates/world/src/party.rs`（`Emitter::finish`） | 按收件人堆 → 改回 `sort_by_key(|(p, _)| *p)` | `party::tests::emitter_finish_same_priority_follows_four_ary_heap` | **FAILED**（`n=3`，`test result: FAILED. 2 passed; 1 failed`） | `a71d3e2f0aff7c15059b4555e1198153e1c67db74b63ca3bc38794b5c69ba1ba` |
+| T-C | `bins/game-svr/src/trade.rs`（`Emitter::finish`） | 同上 | `trade::tests::emitter_finish_same_priority_follows_four_ary_heap` | **FAILED**（`n=3`，`test result: FAILED. 1 passed; 1 failed`） | `d8ece1a754417738bb565e2bc97c899a29a1a63f608b29f32617331654a92f97` |
+
+三颗牙分属**三个不同模块 / 两个 crate**（`game-svr` 的 `lib.rs`、`crates/world` 的 `party.rs`、
+`game-svr` 的 `trade.rs`）。注：`recipients_get_independent_heaps` 在 T-A/T-C 下仍绿（两个收件人各 2 条
+等优先级 ⇒ 稳定序恰好等于堆序），所以「分组」本身由 `[0,2,1]` 用例兜底 —— 这正是 `[0,2,1]`/`[0,3,2,1]`
+判据的必要性。
 
 ## 6. 残余与 R 级窗口项（`window_required: true`）
 
@@ -125,4 +137,29 @@ TEETH_PLACEHOLDER
 
 ## 8. 门禁
 
-GATES_PLACEHOLDER
+全部在**本分支 head** 上跑（`mir2-rs/` 下；reviewer 请自行重跑）：
+
+| 门禁 | 命令 | 结果 |
+|---|---|---|
+| fmt | `cargo fmt --all -- --check` | rc=0（clean） |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0（`Finished dev profile`，无 warning） |
+| test | `cargo test --workspace` | **141 suites / 3025 passed / 0 failed / 62 ignored**，rc=0 |
+| msgcodegen | `cargo run -p msgcodegen -- --check` | `OK: 604 条常量（Messages.cs 594 + Grobal2 白名单 10）` |
+| anchor | `python -I tests/parity/m3/whitelist_anchor_gate.py check` | `ALL PASS（496 条锚）` |
+| registry | `python -I tests/parity/m3/m3_whitelist_registry_audit.py audit` | `WHITELIST_REGISTRY GREEN` |
+| T 预约表 | `python -I tools/whitelist/t_reservation_gate.py check`（仓库根） | `GREEN（预约表 197 行 / whitelist 197 号）` |
+| 并行守卫 | `cargo test -p mir2-world --test no_parallel` | 5 passed；**白名单未改**（`git diff <base> -- mir2-rs/crates/world/tests/no_parallel.rs` 为空） |
+
+### 8.1 suite 数对照（改前 master vs 本 head）
+
+| 树 | suites | passed | failed | ignored |
+|---|---:|---:|---:|---:|
+| 基线 `f7a32c2fd`（临时 worktree 实测同一条命令） | 141 | 3013 | 0 | 62 |
+| 本 head | 141 | 3025 | 0 | 62 |
+| 差 | **0** | **+12** | 0 | 0 |
+
+`+12` 全部是**新增判据**，逐条对得上：`crates/world/src/msgqueue.rs` +1（`ties_dequeue_in_four_ary_heap_order`；
+原有 4 个用例是**随模块迁移**，不增不减）、`bins/game-svr/src/msgqueue.rs` +2（再导出模块的两个新用例；
+原 4 个迁走后净 -4+4=0，另加 2）、`lib.rs` +2、`npc.rs` +1、`trade.rs` +2、`selloff.rs` +2、`party.rs` +3。
+**suite 数不变**（无 crate/测试目标增减；`msgqueue` 只是从 `game-svr` 的 `lib` 内模块迁到
+`mir2-world` 的 `lib` 内模块，仍是同两个 lib 测试目标）。

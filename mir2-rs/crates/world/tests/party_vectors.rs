@@ -33,7 +33,10 @@ fn three_players() -> (World, i32, i32, i32) {
 /// **逐收件人**切出事件序（oracle `MsgQueue` 是**每人一条** ⇒ 跨收件人的平坦序不是契约；
 /// 卡 `openmir2-frame-drain-order-audit` 起排队桶按收件人分组建堆）。
 fn per_target(evs: &[PartyEvent], target: i32) -> Vec<PartyEvent> {
-    evs.iter().filter(|e| e.target() == target).cloned().collect()
+    evs.iter()
+        .filter(|e| e.target() == target)
+        .cloned()
+        .collect()
 }
 
 fn sys(target: i32, recog: i32, text: &str) -> PartyEvent {
