@@ -142,6 +142,7 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 | `multiset_by_tick` | **同 ident 连续段**（被别的 ident 隔开不合并）内的帧按 `(param,tag,series,body_hex,phase)` 多重集比（排序后逐项）。顺序不同但集合相同 ⇒ rc 0 并登记 `masked_order`；集合不同 ⇒ rc 1 并给出缺失/多余的具体帧。`tick_tolerance_ms` 只用于标注 tick 窗口（`tick_split`），`t_ms` 不作判定边界；任一帧缺 `t_ms` ⇒ rc 2。**只允许用于无因果序的帧**（当前仅 ident 100） |
 | `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；PENDING 复核的 ignore 真剔了帧 ⇒ UNDECIDABLE |
 | `ability_layout` | 52 SM_ABILITY：`{40,58}` 明文布局对按 18 个语义字段逐项比（布局表从 `tools/loginfixture/capture_login_compare.py` 导入，**不抄第二份**）；线缆字节先按 `54→40 / 78→58` 归一（EDCode，见下）；同长度同布局退回逐字节（归一过的在明文空间比）；未登记长度对 ⇒ UNDECIDABLE |
+| `bagitems_records` | 200 `SM_ADDITEM` / 201 `SM_BAGITEMS`：包体按 **124B `ClientItem` 记录**（`'/'` 分隔）逐条比；`record_mask` 登记过的字段（默认 `["MakeIndex"]`，偏移 100..104）允许不同并**显式登记** `bagitems_masked_field`，其余每个字节都必须相同（`bagitems_record` 报 slot+offset）。条数不同 ⇒ `bagitems_count`；**记录解不开 / 不是 124B ⇒ UNDECIDABLE**（`bagitems_decode`，绝不按通过处理）。依据：`ClientItem.WritePacket`（`src/OpenMir2/Packets/ClientPackets/ClientItem.cs`）+ `M2Share.GetItemNumber()` = 计数器 + `GetTickCount()`（`M2Share.cs:547-555`）⇒ MakeIndex 跨进程不可复现 |
 
 每条 ident 规则还可带：
 
@@ -200,8 +201,17 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 * `mask_body_ranges.ranges` 是 `[start,end]`，`start>=0`，`end>start` 或 `null`；
 * `multiset_by_tick.tick_tolerance_ms` 必须是非负整数（默认 0）；该字段**只允许**出现在
   `multiset_by_tick` 规则上，出现在别的动作 ⇒ 拒绝（退出码 2，fail-closed）；
+* `bagitems_records.record_mask` 可选，缺省 `["MakeIndex"]`；只允许 `MakeIndex`（其它字段未知即
+  fail-closed），数组不能为空；
 * `global` 条目只能是 `mask_fields`，且字段不能重复声明；
 * `db.time_mode ∈ {exact,presence,normalized}`、`db.key_mode ∈ {pk,multiset}`。
+
+> **窗口硬前置（2026-10-23 定，卡 `openmir2-conformance-rules-idents`）**：
+> **场景 `wait_for` / `wait_frames` / `wait_idents` 用到的每个 ident，都必须先在 `rules.json` 登记**。
+> 口径是「未登记 ident 出现 ⇒ `UNCLASSIFIED` ⇒ 退出码 2」，**在比较阶段就把整次窗口判成
+> UNDECIDABLE**——probe 跑得再绿也没用。加场景之前先跑
+> `python -I -B tools/conformance/compare_runs.py` 的 selftest（它按内置表校验常见 ident），
+> 或用 `--allow-unclassified` 临时点名（报告里仍登记，**不算覆盖**）。
 
 **怎么加规则**（不动代码）：
 
@@ -306,7 +316,7 @@ Rust 偶尔多出 `SM_HIT(14)`）不能用「再跑一次直到 PASS」当判定
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，**113 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**198 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
 10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
@@ -326,6 +336,18 @@ python -I -B tools/conformance/compare_runs.py selftest
   与 `oracle_wire_len=54 / rust_wire_len=78`）；线缆形态改 hp ⇒ 1（`space=plain`）；
   两侧同为 58B 线缆 ⇒ 明文逐字节比、改一字节 ⇒ 1（偏移 46）；
 * 52 未登记长度对（41,41）⇒ 2（`ability_layout_unknown`，fail-closed）。
+* `SM_STRUCK(31)`（卡 openmir2-conformance-rule-sm-struck-31；review 926d1b67 返工）：
+  `action=mask_body_ranges`，只有两处窄掩——① `head_mask:[param]` 只掩**受击者当前 HP**（伤害的结果）；
+  **局限**：series=nDmg 已逐值比，RNG 对拍成立时 param 冗余，**受击前 HP 的前置偏差本规则不判**；
+  ② body `ranges:[[10,16]]`（**线缆空间**）掩 **Tag1=攻击者 ActorId** 的 EDCode 足迹（16B 明文⇒22B
+  线缆；Tag1=明文[8..11] ⇒ 线缆 {10..15}；连带走线缆[11] 里 CharStatus 明文[6]/[7] 的 bits 2,3，
+  属已登记的过掩边界）。**recog 走全局 ActorId 掩码**（会话作用域标识，实测 C# 255025409 / Rust 275）；
+  tag（MaxHP）/series（本次伤害）/body 未掩区全部逐字节比。断言：仅 param ⇒ 0+`masked_head`；
+  recog ⇒ 0+`masked_head`；tag / series / Param1(Feature) / Tag2(Mag) / CharStatus 未掩位 ⇒ 1；
+  Tag1 与 CharStatus 明文[6] bits2,3 ⇒ 0+`mask_body_ranges`。**牙 4 颗**：① 去掉 31 规则 ⇒ 2
+  （`unclassified_idents`=[31]）；② 整帧 `ignore` ⇒ tag 被吞成 0；③ 把 recog 加回 `head_compare`
+  ⇒ 同一对变 1 field=recog（对照真规则为 0，证明是掩码生效而非比较器失明）；④ body ranges 放宽成
+  `[[0,null]]` ⇒ Feature 差异被吞成 0（窄区间不外溢）。
 * `multiset_by_tick`（对拍降噪 v2）：内置表**只有 ident=100** 用它（不扩散）且
   `tick_tolerance_ms=0`；两条 100 顺序颠倒 ⇒ 0 且 `masked_order` 登记；
   少一条 100 ⇒ 1 且缺失帧带 param/series/body 前 16 字节；三条 100 轮换（集合相同）⇒ 0；
@@ -346,8 +368,9 @@ python -I -B tools/conformance/compare_runs.py selftest
 
 ## 当前规则覆盖
 
-已覆盖 ident：`10, 14, 41, 42, 46, 50, 51, 52, 54, 100, 213, 520, 525, 529, 530, 654,
-657, 658, 752, 766, 811, 1106, 5008, 11029`。
+已覆盖 ident（38 条）：`10, 11, 13, 14, 31, 41, 42, 46, 50, 51, 52, 54, 100, 200, 201, 213,
+520, 525, 529, 530, 615, 616, 635, 636, 643, 644, 645, 654, 657, 658, 752, 763, 766, 767, 811,
+1106, 5008, 11029`。
 
 **跨进程不可复现的两条**（2026-10-23 双栈窗口登记，见 `rules.json` 的 reason）：
 
@@ -356,8 +379,12 @@ python -I -B tools/conformance/compare_runs.py selftest
   帧形态与收件人由 `downlink::hit_frame` 黄金用例钉死，不靠本规则。
 * `10`（SM_TURN）的 `series` = `MakeWord(Dir, Light)` **整个 word**（对所有 actor 生效），固定 NPC 的
   `Dir` 由随机支 `TurnTo(RandomByte(8))` 改写 ⇒ 掩 `series`，body/param/tag 仍逐字节比。
-  代价：玩家「原地转身」的 Dir 目前**没有任何帧级判据**（`SM_WALK(11)`/`SM_RUN(13)` 尚未登记规则，出现即 UNCLASSIFIED；
-  要兜底须先登记它们，另开卡）。
+  代价：**原地转身**的 Dir 没有任何帧级判据；**自己走位**的 Dir 在单客户端窗口里也没有——`SM_WALK(11)`/`SM_RUN(13)`
+  已登记为 `compare + head_mask:[series]`（与 10 同口径）：单客户端收不到自己的走位帧
+  （`if (processMsg.ActorId != ActorId)`，`PlayObject.Message.cs:1403/1423`；Rust `downlink.rs:377-380`），
+  录制里出现的 11/13 只能是**怪物**移动，而怪物 Dir 来自 `RandomByte(8)`（`MonsterObject.cs:210`、
+  `MagicMonster.cs:37`、`PercentMonster.cs:36`、`RunAway.cs:44/48`、`AnimalObject.cs:430-437`）⇒ 与 10 同源的
+  墙钟随机。**「走位 Dir 有帧级判据」只在第二观察者会话下成立**，单客户端不成立；param/tag（落点）仍比。
 * `530` 的 `mask_body_ranges` 偏移是 **EDCode 线缆空间**不是明文空间（见 rules.json 的映射表）；
   selftest 必须用 `lc.encode` 造线缆字节，否则「掩错位置还全绿」这类缺陷咬不到。
 
@@ -373,13 +400,33 @@ python -I -B tools/conformance/compare_runs.py selftest
 | 654 | `SM_CHANGELIGHT` | compare | header-only；recog=ActorId 掩码；param=Light / tag=nClientKey 逐值比 |
 | 657 | `SM_CHARSTATUSCHANGED` | compare | header-only；recog=ActorId 掩码；param/tag=状态位、series=HitSpeed 逐值比 |
 
+批次 2：场景用到但未登记的 13 个 ident（卡 `openmir2-conformance-rules-idents`，全部给 reason + oracle `file:line`）：
+
+| ident | 消息 | action | 判据（细节见 `rules.json` 的 reason） |
+| --- | --- | --- | --- |
+| 11 | `SM_WALK` | compare + `head_mask:[series]` | `MakeMessage(SM_WALK, ActorId, x, y, MakeWord(Dir, Light))` + `EDCode(CharDesc)`。单客户端**收不到自己的**走位帧（`ActorId != ActorId` 自过滤）⇒ 录制里的 11 只可能是**怪物**移动，其 Dir 来自 `RandomByte(8)`（墙钟随机，与 10 同源）⇒ 掩 series（Dir+Light）。Light 本身无时间成分（`GetMyLight()`，`PlayObject.cs:5404-5430`）。param/tag（落点）仍逐字节比 |
+| 13 | `SM_RUN` | compare + `head_mask:[series]` | 同 11（`Messages.cs:167`；`PlayObject.Message.cs:1423-1430`） |
+| 200 | `SM_ADDITEM` | bagitems_records | 单条 124B `ClientItem`；**只掩 MakeIndex@100**，其余逐字节比 |
+| 201 | `SM_BAGITEMS` | bagitems_records | 逐条 124B `ClientItem` + `'/'`；series=背包数照常比；**只掩 MakeIndex@100** |
+| 615 | `SM_TAKEON_OK` | compare + `head_compare:[recog,param]` | recog=外观 long、param=FeatureEx（装备派生）⇒ 从全局掩码取回 |
+| 616 | `SM_TAKEON_FAIL` | compare + `head_compare:[recog]` | recog=**失败码**（-1/-4）⇒ 不取回就永远比不到 |
+| 635 | `SM_EAT_OK` | compare | 四字段全 0、无 body；出现与否即「吃得下」 |
+| 636 | `SM_EAT_FAIL` | compare | 同 635（「吃不下」） |
+| 643 | `SM_MERCHANTSAY` | compare | recog=ActorId（掩）；param=0/tag=0/series=1；body=脚本文本。**真实录制已验证**（dice767-fix） |
+| 644 | `SM_MERCHANTDLGCLOSE` | compare | recog=商人 ActorId（掩）；其余 0、无 body |
+| 645 | `SM_SENDGOODSLIST` | compare | recog=商人 ActorId（掩）；param=n10=商品条目数；body=商品列表文本 |
+| 763 | `SM_BUILDGUILD_FAIL` | compare + `head_compare:[recog]` | recog=**失败码**（与 616 同型先例） |
+| 767 | `SM_MENU_OK` | compare | recog=ActorId（掩）；其余 0；body=菜单文本。**真实录制已验证**（dice767-fix） |
+
 已知待复核/缺口：
 
 * `10/41` 的默认动作已按评审（review oid d280be71 CH-2）改为 `compare`：10=`SM_TURN`、
   41=`SM_FEATURECHANGED` 是真实协议帧。确需按 phase 区分心跳时用显式 `--ignore-idents`，
   或新增规则并走评审。
-* 驱动器可能产出但尚未登记的：`201 SM_BAGITEMS`、`6/7/9 SM_RUSH*`、`9 SM_BACKSTEP`、
+* 驱动器可能产出但尚未登记的：`6/7/9 SM_RUSH*`、`9 SM_BACKSTEP`、`12 SM_SITDOWN`、
   以及任何登录后新增的系统消息 —— 会以 UNCLASSIFIED（退出码 2）暴露，按上面步骤逐条加规则。
+  （`200/201` 已于批次 2 登记；`11/13` 也已在批次 2 登记为 `compare + head_mask:[series]`——之前这里写的
+  「尚未登记」已过时；但**玩家自身走位方向的帧级判据仍缺**，需第二观察者会话，见上。）
 * `46/50/51` 只掩了已知的墙钟位；若真机上还有别的定时器字段，会红，届时按证据扩规则。
 * **`654` 的 `param=Light`** 由装备光源/游戏内昼夜决定（C# `PlayObject.Message.cs:1840`），
   **`657` 的 `series=HitSpeed`** 由属性重算派生（同文件 `:1846`）。两者本轮按 `compare` 登记；
@@ -403,6 +450,38 @@ python -I -B tools/conformance/compare_runs.py selftest
   绝不用默认值/空值填空**。每侧 `<out>/<side>/discovered.json`、汇总 `<out>/discovered.json`
   （`format=param-discovery/1` / `discovered/1`，含值、推导来源、缺失清单、两侧一致性）。
   `run_dual.sh` 不改（0 字节 diff），接线只在 `card_window.py`。
+* **角色预置位（placement，卡 `openmir2-window-character-placement`）**：场景**顶层**
+  `"placement": {"map": "0122", "x": 30, "y": 32}` 表示「本场景要求角色位于 map/x/y」。
+  工具在**每侧 restore 之后、起栈之前**改该侧**测试库**（`sides.<side>.db.characters_db`，
+  C# = `mir2_test_db` / Rust = `mir2_test_db_r`）`characters` 的这一行。选 DB 预置而不是
+  「走到目标」/GM `@move`：新角色出生在图 `0`、目标 NPC 都不在图 0，探针不发跨图移动，
+  `@move` 的 Permission 恒 0 且多图 `NORECALL`/`NOPOSITIONMOVE`；DB 预置是唯一确定性、
+  起栈前（无竞态）、且只碰测试库的做法。
+  预置**只写** `MapName`/`CX`/`CY`，预置前后对**其余列做 MD5 指纹对比**（其它列变了即 rc=2）。
+  校验全部 fail-closed：图必须在 `<envir_root>/Envir/MapInfo.txt` 且服务器号 = 该侧
+  `[Server] ServerIndex`；坐标必须在 `.map` 宽高内且**不是阻挡格**（与 oracle 登录期
+  `Envirnoment.CanWalk(x,y,true)` 同判据——为假时 oracle 会随机挪 5 次再回 `HomeMap`，
+  探针只会点不到 NPC 而不报错）；角色行唯一、`HomeMap` 非空、`Deleted!=1`、表列齐全；
+  角色库必须与该侧 `Server.conf` 的 `[DataBase] database=mir2_test_data*` **配对**。
+  已在目标位 => **不发 UPDATE**（`action=noop`）。每侧证据落 `<out>/<side>/placement.json`。
+  `envir_root` 缺省由该侧 `binaries[0]` 的目录推出；MySQL 客户端由 profile `db_client`
+  （或按侧的 `sides.<side>.db_client`）给出，口令只认环境变量 `CONFORMANCE_DB_PASSWORD`。
+  **背包夹具不在本能力范围内**（要「背包里已有 MakeIndex/物品」的卡见
+  `openmir2-discovery-bagitems-201`）。
+* **Rust 侧 `binaries` 指向真正执行的 `mir2-rs/target/{release,debug}/mir2-server.exe`**（卡
+  `openmir2-window-rust-binary-evidence`）：`rust-root/M2GameSvr/GameSrv.exe` 是同目录 `.dll`
+  的 .NET 程序集，从不是被跑的那个文件。`alt` / `rust-default` 的 Rust 侧登记内置解析
+  （release 优先、缺失退 debug 并在 `binary_profile` 注明；解析出的文件**不存在 ⇒ rc=2**
+  并提示 `cargo build -p mir2-server --release`；profile 也可用 `server_exe` 显式覆盖）。
+  起栈后还会读 pid 文件的 `roles[].exe` 与登记对账，**不一致或缺文件 ⇒ rc=2 并点名**。
+  * **pid 文件路径只认 profile 的 `pid_file`**（`{side_dir}` 占位可用），代码里不写死部署
+    绝对路径；开了 `require_pid_binaries` 却缺 `pid_file` ⇒ 加载期 ConfigError。
+    **下一次真窗口（`alt`）读的是 `E:/tmp/conformance/rust-logs/mir2-server.pid.json`**
+    ——那是 `E:/tmp/conformance/start-rust.ps1` 的 `-LogDir`，不是 `<out>/rust/`。
+  * pid 文件由 `start_mir2_server.ps1` 用 Windows PowerShell 5 的
+    `Set-Content -Encoding utf8` 写出，**带 UTF-8 BOM**；`card_window.py` 用
+    `encoding="utf-8-sig"` 读（否则真窗口会稳定 rc=2）。
+
 * **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
   ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
   收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +
@@ -447,7 +526,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 5. 还原后 sha256 == 变异前；**不一致 => 整体 rc≠0**（N-3）。
 
 ```sh
-python -I -B tools/conformance/selftest_mutations.py            # 跑全部 30 颗
+python -I -B tools/conformance/selftest_mutations.py            # 跑全部 35 颗
 python -I -B tools/conformance/selftest_mutations.py --list     # 只列牙（含每颗的 expect）
 python -I -B tools/conformance/selftest_mutations.py --only T1,E2
 python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自身 fail-closed
@@ -463,4 +542,7 @@ T10 Y1 `finalize_ok` 丢掉 `json_ok` 那一半 / T11 D-1 证据缺件不降级 
 本次 report.json 实读）/ T21 F-1 side doc `ok` 的两处兜底都丢掉（discovery probe 失败仍 ok=True）；额外牙 E1 fallback run_id
 常量、E2 放宽未知库判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README、
 E6 忽略 card-window.json 失败标志、E7 comment body 不带 exit_code；发现接线牙 D1 probe
-命令丢掉 `--var`（值推出来了却没传给场景）、D2 发现失败时静默用空值继续跑。
+命令丢掉 `--var`（值推出来了却没传给场景）、D2 发现失败时静默用空值继续跑；
+预置位牙 P1 跳过预置阶段（不调 `run_placement`）/ P2 摘掉可走性校验 /
+P3 不再核对「只改了需要的列」/ P4 摘掉两侧库配对校验 / P5 预置证据不进 summary
+（README 的 placement 段退化成 `(not run)`）。

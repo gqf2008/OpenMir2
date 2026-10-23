@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "7d59995a8f88bbc7763e94b774d0b75cf3dbdfce7dc87613ebde5f437bce9795"
+   "sha256": "db3de4c0224a87f6600ac1a62fc95487ea5a266ae5325852eee6ab6408ce8213"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1934,6 +1934,22 @@
    "third_state": false
   },
   {
+   "cmd": "MobFireBurn",
+   "file": "Market_Def/QFunction-0.txt",
+   "line": 156,
+   "label": "@stdmodefunc15",
+   "rust_imp": "MobFireBurn",
+   "third_state": false
+  },
+  {
+   "cmd": "MobFireBurn",
+   "file": "Market_Def/QFunction-0.txt",
+   "line": 163,
+   "label": "@stdmodefunc16",
+   "rust_imp": "MobFireBurn",
+   "third_state": false
+  },
+  {
    "cmd": "ShowEffect",
    "file": "Market_Def/QFunction-0.txt",
    "line": 170,
@@ -1995,6 +2011,30 @@
    "line": 220,
    "label": "@stdmodefunc25",
    "rust_imp": "ShowEffect",
+   "third_state": false
+  },
+  {
+   "cmd": "清理垃圾",
+   "file": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt",
+   "line": 19,
+   "label": "@main",
+   "rust_imp": "ClearBagItem",
+   "third_state": false
+  },
+  {
+   "cmd": "VV踢人",
+   "file": "Market_Def/功能NPC/桃源-N109.txt",
+   "line": 49,
+   "label": "@01",
+   "rust_imp": "KickHuman",
+   "third_state": false
+  },
+  {
+   "cmd": "清理垃圾",
+   "file": "Market_Def/功能NPC/桃源-N109.txt",
+   "line": 87,
+   "label": "@06",
+   "rust_imp": "ClearBagItem",
    "third_state": false
   },
   {
@@ -2195,6 +2235,142 @@
    "line": 54,
    "label": "@rw03",
    "rust_imp": "ShowEffect",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 71,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 72,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 73,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 84,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 85,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 86,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 87,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 99,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 100,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 101,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 102,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 103,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 124,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 125,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 126,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "开始提问",
+   "file": "QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt",
+   "line": 40,
+   "label": "@假人到指定地图a",
+   "rust_imp": "StartQuest",
+   "third_state": false
+  },
+  {
+   "cmd": "VV踢人",
+   "file": "QuestDiary/月卡/月卡系统.txt",
+   "line": 28,
+   "label": "@踢人",
+   "rust_imp": "KickHuman",
    "third_state": false
   },
   {
@@ -2754,48 +2930,6 @@
    "field_line": 158
   },
   {
-   "cmd": "MobFireBurn",
-   "cmd_name": "MobFireBurn",
-   "child_card": "openmir2-gm-impl-mobfireburn",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/MobFireBurnCommand.cs:13",
-   "perm_min": 10,
-   "perm_source": "cs[Command] 属性",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/QFunction-0.txt",
-     "line": 156,
-     "label": "@stdmodefunc15",
-     "section": "act",
-     "script_arg": "MOBFIREBURN",
-     "raw": "Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 5 600 0",
-     "label_path": "Market_Def/QFunction-0.txt:@stdmodefunc15 <- engine GotoLable root",
-     "load_origin": "LocalDB.QFunctionNpc.cs:196"
-    },
-    {
-     "file": "Market_Def/QFunction-0.txt",
-     "line": 163,
-     "label": "@stdmodefunc16",
-     "section": "act",
-     "script_arg": "MOBFIREBURN",
-     "raw": "Gmexecute MOBFIREBURN <$CURRENTMAP> <$CURRENTX> <$CURRENTY> 4 600 0",
-     "label_path": "Market_Def/QFunction-0.txt:@stdmodefunc16 <- engine GotoLable root",
-     "load_origin": "LocalDB.QFunctionNpc.cs:196"
-    }
-   ],
-   "handler_class": "MobFireBurnCommand",
-   "attr_name": "MobFireBurn",
-   "handler_exec_line": 17,
-   "name_source": "cs[Command] 属性",
-   "register_command": false,
-   "perm_attr": 10,
-   "field": null,
-   "field_line": null
-  },
-  {
    "cmd": "MobNpc",
    "cmd_name": "MobNpc",
    "child_card": null,
@@ -3342,48 +3476,6 @@
    "field_line": 322
   },
   {
-   "cmd": "VV踢人",
-   "cmd_name": "VV踢人",
-   "child_card": "openmir2-gm-impl-kick",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/KickHumanCommand.cs:10",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].Kick",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/功能NPC/桃源-N109.txt",
-     "line": 49,
-     "label": "@01",
-     "section": "act",
-     "script_arg": "VV踢人",
-     "raw": "GMEXECUTE VV踢人 <$STR(S6)>",
-     "label_path": "Market_Def/功能NPC/桃源-N109.txt:@01 <- Market_Def/功能NPC/桃源-N109.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:138"
-    },
-    {
-     "file": "QuestDiary/月卡/月卡系统.txt",
-     "line": 28,
-     "label": "@踢人",
-     "section": "act",
-     "script_arg": "VV踢人",
-     "raw": "GMEXECUTE VV踢人 <$USERNAME>",
-     "label_path": "QuestDiary/月卡/月卡系统.txt:@踢人 <- QuestDiary/月卡/月卡系统.txt:@月卡 <- MapQuest_def/QManage.txt:@login <- engine GotoLable root",
-     "load_origin": "#CALL MapQuest_def/QManage.txt:36"
-    }
-   ],
-   "handler_class": "KickHumanCommand",
-   "attr_name": "KickHuman",
-   "handler_exec_line": 14,
-   "name_source": "conf[Command].Kick",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "Kick",
-   "field_line": 164
-  },
-  {
    "cmd": "who",
    "cmd_name": "who",
    "child_card": null,
@@ -3688,38 +3780,6 @@
    "field_line": 296
   },
   {
-   "cmd": "开始提问",
-   "cmd_name": "开始提问",
-   "child_card": "openmir2-gm-impl-startquest",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/StartQuestCommand.cs:6",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].StartQuest",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（1 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt",
-     "line": 40,
-     "label": "@假人到指定地图a",
-     "section": "act",
-     "script_arg": "开始提问",
-     "raw": "GMEXECUTE 开始提问 @假人指哪打哪",
-     "label_path": "QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@假人到指定地图a <- QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@假人到指定地图 <- QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@下一页 <- QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:@假人设置页面 <- Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt:@main <- engine GotoLable root",
-     "load_origin": "#CALL MapQuest_def/QManage.txt:21"
-    }
-   ],
-   "handler_class": "StartQuestCommand",
-   "attr_name": "StartQuest",
-   "handler_exec_line": 10,
-   "name_source": "conf[Command].StartQuest",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "StartQuest",
-   "field_line": 320
-  },
-  {
    "cmd": "开始攻城",
    "cmd_name": "开始攻城",
    "child_card": null,
@@ -3802,178 +3862,6 @@
    "perm_attr": 0,
    "field": "Searching",
    "field_line": 64
-  },
-  {
-   "cmd": "改属性",
-   "cmd_name": "改属性",
-   "child_card": "openmir2-gm-impl-smake",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/SmakeItemCommand.cs:12",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].SuperMake",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（15 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 71,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 72,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 73,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 84,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 85,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 86,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 87,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 0 <$STR(M6)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 99,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 100,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 101,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 102,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 0 <$STR(M6)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 103,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 1 <$STR(M7)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 124,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 125,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 126,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    }
-   ],
-   "handler_class": "SmakeItemCommand",
-   "attr_name": "SmakeItem",
-   "handler_exec_line": 16,
-   "name_source": "conf[Command].SuperMake",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "Smake",
-   "field_line": 258
   },
   {
    "cmd": "是我",
@@ -4079,48 +3967,6 @@
    "perm_attr": 10,
    "field": "ChangeSabukLord",
    "field_line": 304
-  },
-  {
-   "cmd": "清理垃圾",
-   "cmd_name": "清理垃圾",
-   "child_card": "openmir2-gm-impl-clearbag",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ClearBagItemCommand.cs:9",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].ClearBag",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt",
-     "line": 19,
-     "label": "@main",
-     "section": "act",
-     "script_arg": "清理垃圾",
-     "raw": "GMEXECUTE 清理垃圾 <$USERNAME>",
-     "label_path": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:1"
-    },
-    {
-     "file": "Market_Def/功能NPC/桃源-N109.txt",
-     "line": 87,
-     "label": "@06",
-     "section": "act",
-     "script_arg": "清理垃圾",
-     "raw": "GMEXECUTE 清理垃圾 self",
-     "label_path": "Market_Def/功能NPC/桃源-N109.txt:@06 <- Market_Def/功能NPC/桃源-N109.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:138"
-    }
-   ],
-   "handler_class": "ClearBagItemCommand",
-   "attr_name": "ClearBagItem",
-   "handler_exec_line": 13,
-   "name_source": "conf[Command].ClearBag",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ClearBag",
-   "field_line": 356
   },
   {
    "cmd": "清除仓库密码",
@@ -4271,20 +4117,20 @@
   }
  ],
  "summary": {
-  "total": 86,
+  "total": 81,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 6
+   "script-reachable": 1
   },
   "reachable": 0,
-  "script_reachable": 6,
+  "script_reachable": 1,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 99,
-   "Unimplemented": 86
+   "Implemented": 104,
+   "Unimplemented": 81
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4310,7 +4156,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 78,
+  "complete_implemented": 83,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,

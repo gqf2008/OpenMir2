@@ -247,5 +247,12 @@
 | T-209 | openmir2-gm-impl-shutup | 2026-10-23T05:36:07Z | 在用 |
 | T-210 | openmir2-gm-script-host-seam | 2026-10-23T06:18:40Z | 在用 |
 | T-211 | openmir2-gm-script-exec-seams | 2026-10-23T07:31:30Z | 在用 |
+| T-213 | openmir2-script-action-var-text | 2026-10-23T08:25:48Z | 在用 |
+| T-214 | openmir2-gm-impl-kick | 2026-10-23T08:25:54Z | 在用 |
 | T-215 | openmir2-gm-impl-showeffect | 2026-10-23T08:37:07Z | 在用 |
 | T-221 | openmir2-multi-session-probe | 2026-10-23T09:30:00Z | 在用 |
+| T-216 | openmir2-gm-impl-mobfireburn | 2026-10-23T08:46:23Z | 在用 |
+| T-217 | openmir2-gm-impl-smake | 2026-10-23T08:58:25Z | 在用 |
+| T-218 | openmir2-gm-impl-clearbag | 2026-10-23T09:12:30Z | 在用 |
+| T-219 | openmir2-gm-impl-startquest | 2026-10-23T09:19:34Z | 在用 |
+| T-222 | openmir2-script-dyn-var-host | 2026-10-23T09:56:25Z | 在用 |

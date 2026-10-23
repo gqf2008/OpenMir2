@@ -71,6 +71,33 @@ profile：
     自定义 db 快照命令（`db.command`）必须同时用 `db.databases` 声明它读的库名
     （静态安全判定；无法判定为测试库的库名会被**永久拒绝**，声明了也不放行）。
 
+角色预置位（placement，卡 `openmir2-window-character-placement`）：
+  * 场景**顶层**可声明 `"placement": {"map": "0122", "x": 30, "y": 32}`，表示「本场景要求
+    角色位于 map/x/y」。`card_window.py` 在**每侧的 restore 之后、起栈之前**把该侧测试库
+    `characters` 的这一行改到位（C# = `mir2_test_*`，Rust = `mir2_test_*_r`，两侧各改各的库）。
+  * **为什么选 DB 预置而不是「走到目标」/GM `@move`**：新角色出生在图 `0`，四个目标 NPC 都不在
+    图 0；探针不发跨图移动，`@move` 的 Permission 恒 0 且多张图带 `NORECALL`/`NOPOSITIONMOVE`。
+    DB 预置是唯一**确定性**、**起栈前**生效（无竞态）、且只用测试库夹具的做法。
+  * **fail-closed**：完成不了就 rc=2 并点名原因（图不在 MapInfo / 坐标越界 / 格子不可走 /
+    角色不存在或重名 / `HomeMap` 为空 / 改完与目标不符 / 连带改了别的列）。**绝不让 probe 去超时**——
+    开局点在不可走格时 oracle 会随机挪 5 次再回城，客户端只会「点不到 NPC」而不报错。
+  * 只写 `MapName`/`CX`/`CY` 三列；预置前后对**其余列做 MD5 指纹对比**，任何其它列变化 => rc=2
+    （防止 `characters_ablity.Weight` 那类连带写坏重演）。已登记的口径限制：指纹口径是
+    `MD5(CONCAT_WS(CHAR(31), IFNULL(CAST(col AS CHAR), '~')))` —— 字符串值 `'~'` 与 SQL NULL
+    在该口径下碰撞（同 `dbsnap` 的 L2 限制族）。本判据要抓的是「非预期的写入」，不是证明
+    NULL 语义，故不做逐字节往返；真要逐字节可比时走 `dbsnap` 的快照/restore 路径。
+  * 角色库与该侧部署配对：C# = `mir2_test_db`、Rust = `mir2_test_db_r`，并按该侧
+    `Server.conf` 的 `[DataBase] database=mir2_test_data*` 交叉核对（读到 `_r` 结尾就要求
+    角色库也以 `_r` 结尾）；拿 C# 的库给 Rust 侧预置/拍快照会变成假差异，这里直接 rc=2。
+  * 预置的前置条件来自部署内容（只读）：`<envir_root>/Envir/MapInfo.txt` 的图名/服务器号、
+    `<envir_root>/Server.conf` 的 `[Share] MapDir` 与 `[Server] ServerIndex`、`<MapDir>/<图>.map`
+    的宽高与阻挡位（与 oracle `Envirnoment.CanWalk(x, y, true)` 同判据：越界或 bit15 阻挡 = 不可走）。
+    `envir_root` 取 `profile.sides.<side>.envir_root`，缺省由该侧 `binaries[0]` 的目录推出。
+  * 预置使用的 MySQL 客户端/账号由 profile 顶层 `db_client` 给出（缺省与 `tools/dbsnap/dbsnap.py`
+    同一把 `mysql.exe`、127.0.0.1:3306、root、空口令）；口令只认环境变量
+    `CONFORMANCE_DB_PASSWORD`，不写进 profile 文件。
+  * `--dry-run` 只打印预置命令并做**离线内容校验**（图/坐标可走），不连库。
+
 用法：
   CONFORMANCE_PASSWORD=... python -I -B tools/conformance/card_window.py \
       --card openmir2-window-529-dualrun \
@@ -104,6 +131,7 @@ import json
 import os
 import re
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -160,6 +188,22 @@ RUST_DB_TABLES = (
     + [t.replace("mir2_db.", "mir2_test_db_r.") for t in CHARACTER_TABLES]
 )
 
+# --- 角色预置位（placement）----------------------------------------------------
+#: MySQL 客户端缺省路径（与 tools/dbsnap/dbsnap.py 的 DEFAULT_MYSQL 同口径）。
+DEFAULT_MYSQL = r"D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe"
+#: 预置位**只允许**写这三列；其余列必须逐字节不变（指纹比对）。
+PLACEMENT_COLUMNS = ("MapName", "CX", "CY")
+#: 预置位必须依赖的列（缺任何一个 => 表结构与预期不符，fail-closed）。
+PLACEMENT_REQUIRED_COLUMNS = ("Id", "ChrName", "LoginID", "MapName", "CX", "CY",
+                              "HomeMap", "Deleted")
+#: 图名白名单字符集（varchar(10)；现网 MapInfo.txt 322/322 个图名都落在这个集合里）。
+PLACEMENT_MAP_RE = re.compile(r"^[A-Za-z0-9_]{1,10}$")
+#: `HUtil32.Separator = {' ', ',', '\t'}`（MapInfo 分段用）。
+MAPINFO_SEPS = " \t,"
+MAP_HEADER_BYTES = 52
+MAP_CELL_BYTES = 12
+MAP_WALL_BIT = 0x8000
+
 POWERSHELL = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass"]
 CSHARP_STOP = POWERSHELL + [
     "-Command",
@@ -167,6 +211,78 @@ CSHARP_STOP = POWERSHELL + [
     "'E:\\tmp\\conformance\\csharp-root\\*' } | ForEach-Object { "
     "Stop-Process -Id $_.ProcessId -Force }",
 ]
+
+# Rust 栈**实际执行的二进制**（卡 `openmir2-window-rust-binary-evidence`）：
+# `rust-root/M2GameSvr/GameSrv.exe` 是同目录 .dll 的 .NET 程序集，从不是被跑的那个文件；
+# 证据里的 Rust sha256 必须指向 `mir2-rs/target/{release,debug}/mir2-server.exe`。
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+RUST_SERVER_BIN = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "release", "mir2-server.exe"
+).replace(os.sep, "/")
+RUST_SERVER_BIN_DEBUG = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "debug", "mir2-server.exe"
+).replace(os.sep, "/")
+PID_FILE_NAME = "mir2-server.pid.json"
+
+
+def resolve_rust_binary():
+    """release 优先、缺失退 debug（证据里注明用的是 debug）；返回 (path, profile)。"""
+    if os.path.exists(RUST_SERVER_BIN):
+        return RUST_SERVER_BIN, "release"
+    if os.path.exists(RUST_SERVER_BIN_DEBUG):
+        return RUST_SERVER_BIN_DEBUG, "debug"
+    return RUST_SERVER_BIN, "release(missing)"
+
+
+def pid_file_path(side_dir, sc):
+    """pid 文件路径：**只认 profile 的 `pid_file`**（`{side_dir}` 模板按本侧产物目录展开）。
+
+    部署把 pid 写到 wrapper 的 `-LogDir`（alt = `E:/tmp/conformance/rust-logs`），
+    不是 `<side_dir>`；所以路径必须在 profile 里显式声明（load_profile 对
+    `require_pid_binaries` 强制校验），代码里不写死任何部署绝对路径。
+    """
+    raw = sc.get("pid_file")
+    if not raw:
+        return os.path.join(side_dir, PID_FILE_NAME)
+    return str(raw).replace("{side_dir}", side_dir)
+
+
+def verify_pid_binaries(side_dir, sc, side):
+    """起栈后核对 `mir2-server.pid.json` 的 `roles[].exe` 与 profile 登记的 binaries。
+
+    返回 `(ok, error_or_none, info)`；不一致/缺文件 ⇒ 调用方把该侧判 rc=2 并点名。
+    """
+    pid_path = pid_file_path(side_dir, sc)
+    norm = lambda p: os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
+    registered = [norm(p) for p in (sc.get("binaries") or [])]
+    info = {"pid_file": pid_path, "registered": list(sc.get("binaries") or []), "roles": []}
+    if not os.path.exists(pid_path):
+        return False, ("缺少 %s：无法核对 %s 栈实际执行的 exe（拒绝只记 sha256 继续跑）"
+                       % (PID_FILE_NAME, side)), info
+    try:
+        # **必须 utf-8-sig**：pid 文件由 `start_mir2_server.ps1` 用 Windows PowerShell 5
+        # 的 `Set-Content -Encoding utf8` 写出，**带 UTF-8 BOM**；用 utf-8 读会抛
+        # `Unexpected UTF-8 BOM` ⇒ 真窗口永远 rc=2（review B2）。
+        with open(pid_path, "r", encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as ex:
+        return False, ("读取 %s 失败：%s" % (PID_FILE_NAME, ex)), info
+    roles = data.get("roles") if isinstance(data, dict) else None
+    if not roles:
+        return False, ("%s 没有 roles[]：无法核对 %s 栈实际执行的 exe" % (PID_FILE_NAME, side)), info
+    bad = []
+    for role in roles:
+        exe = role.get("exe") if isinstance(role, dict) else None
+        info["roles"].append({"role": role.get("role") if isinstance(role, dict) else None,
+                              "exe": exe})
+        if not exe or norm(exe) not in registered:
+            bad.append("%s=%s" % (role.get("role") if isinstance(role, dict) else "?",
+                                  exe or "(空)"))
+    if bad:
+        return False, ("pid 文件的 exe 与 profile binaries 不一致：%s（登记 %s）"
+                       % (", ".join(bad), ", ".join(sc.get("binaries") or []))), info
+    return True, None, info
+
 
 BUILTIN_PROFILES = {
     "alt": {
@@ -181,6 +297,8 @@ BUILTIN_PROFILES = {
         "probe_timeout_ms": 20000,
         "ready_timeout_s": 120,
         "compare_extra": [],
+        "db_client": {"mysql": [DEFAULT_MYSQL], "host": "127.0.0.1", "port": 3306,
+                      "user": "root", "password": ""},
         "sides": {
             "csharp": {
                 "label": "C# oracle",
@@ -192,7 +310,8 @@ BUILTIN_PROFILES = {
                 "ready_ports": [15000, 17000, 17100, 17200],
                 "probe_extra": [],
                 "binaries": ["E:/tmp/conformance/csharp-root/M2GameSvr/GameSrv.exe"],
-                "db": {"preset": "test"},
+                "envir_root": "E:/tmp/conformance/csharp-root/M2GameSvr",
+                "db": {"preset": "test", "characters_db": "mir2_test_db"},
             },
             "rust": {
                 "label": "Rust",
@@ -202,8 +321,15 @@ BUILTIN_PROFILES = {
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17600],
                 "ready_ports": [15000, 17000, 17100, 17600],
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
-                "binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"],
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
+                # 部署把 pid 写到 wrapper 的 `-LogDir`（`start-rust.ps1` 里写死
+                # `E:/tmp/conformance/rust-logs`），**不是** `<side_dir>`（review B1）。
+                # 下一次真窗口读的就是这个文件；路径只在这里声明，代码里不写死。
+                "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
+                "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
                 "db": {"tables": RUST_DB_TABLES,
+                       "characters_db": "mir2_test_db_r",
                        "allow_db": ["mir2_test_db_r", "mir2_test_account_r"]},
             },
         },
@@ -219,6 +345,8 @@ BUILTIN_PROFILES = {
         "probe_timeout_ms": 20000,
         "ready_timeout_s": 120,
         "compare_extra": [],
+        "db_client": {"mysql": [DEFAULT_MYSQL], "host": "127.0.0.1", "port": 3306,
+                      "user": "root", "password": ""},
         "sides": {
             "csharp": {
                 "label": "C# oracle（默认端口/生产库）",
@@ -229,7 +357,7 @@ BUILTIN_PROFILES = {
                 "ready_ports": [5000, 7000, 7100, 7200],
                 "probe_extra": [],
                 "binaries": ["E:/MirServer/M2GameSvr/GameSrv.exe"],
-                "db": {"preset": "prod"},
+                "db": {"preset": "prod", "characters_db": "mir2_db"},
             },
             "rust": {
                 "label": "Rust（默认端口，需部署在 E:/tmp/conformance/rust-default-root）",
@@ -239,8 +367,13 @@ BUILTIN_PROFILES = {
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
                 "ready_ports": [5000, 7000, 7100, 7200],
                 "probe_extra": [],
-                "binaries": ["E:/tmp/conformance/rust-default-root/M2GameSvr/GameSrv.exe"],
-                "db": {"preset": "test"},
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
+                # 该部署的 wrapper 目前不在仓内；约定它必须用
+                # `-LogDir $env:CARD_WINDOW_SIDE_DIR` 把 pid 写进本侧产物目录。
+                # 写在别处 ⇒ 起栈后 rc=2 并点名实际要找的文件（fail-closed）。
+                "pid_file": "{side_dir}/" + PID_FILE_NAME,
+                "db": {"preset": "test", "characters_db": "mir2_test_db"},
             },
         },
     },
@@ -294,6 +427,8 @@ def _redact_argv(argv):
             redact = False
         elif a == "--password":
             redact = True
+        elif isinstance(a, str) and a.startswith("--password="):
+            out[i] = "--password=***"
     return out
 
 
@@ -423,6 +558,28 @@ def validate_cmd_argv(value, where):
     return value
 
 
+def validate_db_client(value, where):
+    """`db_client`（预置位用的 MySQL 客户端参数）加载期校验；None 视为未配置。"""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ConfigError("%s 必须是对象（mysql/host/port/user/password）" % where)
+    bad_keys = set(value) - {"mysql", "host", "port", "user", "password"}
+    if bad_keys:
+        raise ConfigError("%s 有未知键 %s（fail-closed）" % (where, sorted(bad_keys)))
+    if value.get("mysql") is not None:
+        validate_cmd_argv(value["mysql"], "%s.mysql" % where)
+    for key in ("host", "user", "password"):
+        v = value.get(key)
+        if v is not None and not isinstance(v, str):
+            raise ConfigError("%s.%s 必须是字符串" % (where, key))
+    port = value.get("port")
+    if port is not None and (not isinstance(port, int) or isinstance(port, bool)
+                             or not (0 < port < 65536)):
+        raise ConfigError("%s.port 必须是 1..65535 的整数" % where)
+    return value
+
+
 def load_profile(value):
     if isinstance(value, dict):
         prof = copy.deepcopy(value)
@@ -475,6 +632,10 @@ def load_profile(value):
                 if not isinstance(v, list) or any(not isinstance(x, str) or not x for x in v):
                     raise ConfigError("profile.sides.%s.db.%s 必须是非空字符串数组"
                                       % (side, key))
+        cdb = db.get("characters_db")
+        if cdb is not None and (not isinstance(cdb, str) or not cdb):
+            raise ConfigError("profile.sides.%s.db.characters_db 必须是非空字符串（库名）"
+                              % side)
         if db.get("command") is None and not (db.get("preset") or db.get("tables")):
             raise ConfigError("profile.sides.%s.db 需要 preset / tables（或 command + databases）"
                               % side)
@@ -497,11 +658,32 @@ def load_profile(value):
             raise ConfigError(
                 "profile.sides.%s.binaries 必须是**非空**字符串数组：窗口证据要求两侧二进制 sha256，"
                 "空列表/缺省会让 PASS 报告里没有任何二进制指纹" % side)
+        pf = sc.get("pid_file")
+        if pf is not None and (not isinstance(pf, str) or not pf):
+            raise ConfigError("profile.sides.%s.pid_file 必须是非空字符串（pid 文件路径，"
+                              "可用 {side_dir} 占位）" % side)
+        if sc.get("require_pid_binaries") and not pf:
+            # 卡 openmir2-window-rust-binary-evidence / review B1：pid 文件由部署的
+            # `-LogDir` 决定，**必须**在 profile 里显式声明，不许代码里兜底写死。
+            raise ConfigError(
+                "profile.sides.%s 开了 require_pid_binaries 就必须显式声明 pid_file"
+                "（部署把 pid 写到 wrapper 的 -LogDir，不是 <side_dir>）" % side)
+        sx = sc.get("server_exe")
+        if sx is not None and (not isinstance(sx, str) or not sx):
+            raise ConfigError("profile.sides.%s.server_exe 必须是非空字符串" % side)
         env = sc.get("env")
         if env is not None:
             if not isinstance(env, dict) or any(
                     not isinstance(k, str) or not isinstance(v, str) for k, v in env.items()):
                 raise ConfigError("profile.sides.%s.env 必须是字符串到字符串的对象" % side)
+        er = sc.get("envir_root")
+        if er is not None and (not isinstance(er, str) or not er):
+            raise ConfigError("profile.sides.%s.envir_root 必须是非空字符串（部署内容根目录）"
+                              % side)
+    validate_db_client(prof.get("db_client"), "profile.db_client")
+    for side in SIDES:
+        validate_db_client(sides[side].get("db_client"),
+                           "profile.sides.%s.db_client" % side)
     return prof
 
 
@@ -571,6 +753,9 @@ def _collect_db_specs(prof):
         db = sc.get("db") or {}
         if db.get("preset") is not None:
             specs.append((str(db["preset"]), "sides.%s.db.preset" % side))
+        if db.get("characters_db") is not None:
+            specs.append((str(db["characters_db"]),
+                          "sides.%s.db.characters_db" % side))
         for key in ("tables", "allow_db", "databases"):
             for v in db.get(key) or []:
                 name = str(v)
@@ -611,6 +796,7 @@ def _any_argv_text(prof):
             for t in db.get(key) or []:
                 texts.append(str(t))
         texts.append(str(db.get("preset") or ""))
+        texts.append(str(db.get("characters_db") or ""))
         for k, v in (sc.get("env") or {}).items():
             texts.append("%s=%s" % (k, v))
     texts.append(" ".join(str(x) for x in prof.get("compare_extra") or []))
@@ -688,31 +874,44 @@ class Runner(object):
             with open(self.log_path, "a", encoding="utf-8", newline="\n") as f:
                 f.write(line + "\n")
 
-    def run(self, side, step, argv, env=None, timeout=600):
+    def run(self, side, step, argv, env=None, timeout=600, stdin_text=None,
+            capture=False):
+        """跑一步命令。`capture=True` => 返回 (rc, stdout, stderr)；否则只返回 rc。
+
+        `stdin_text` 用于把 SQL 喂给 mysql 客户端（不经命令行，避免引号/注入歧义）。
+        """
         safe = _redact_argv(argv)
         self.commands.append({"side": side, "step": step, "argv": safe})
         self.steps.append("%s:%s" % (side, step))
         self.log("== %s/%s :: %s" % (side, step, _join_argv(safe)))
+        if stdin_text and self.log_path and not self.dry_run:
+            with open(self.log_path, "a", encoding="utf-8", newline="\n") as f:
+                f.write("---- %s/%s stdin ----\n%s\n" % (side, step, stdin_text))
         if self.dry_run:
-            return 0
+            return (0, "", "") if capture else 0
         try:
+            kw = {}
+            if stdin_text is not None:
+                kw["input"] = stdin_text
             p = subprocess.run(argv, capture_output=True, text=True, encoding="utf-8",
                                errors="replace", timeout=timeout,
-                               env=env, cwd=REPO_ROOT)
+                               env=env, cwd=REPO_ROOT, **kw)
             rc = p.returncode
-            out = (p.stdout or "") + (p.stderr or "")
+            out = p.stdout or ""
+            err = p.stderr or ""
         except subprocess.TimeoutExpired as e:
             rc = 124
-            out = "TIMEOUT after %ss\n%s\n%s" % (
+            out = ""
+            err = "TIMEOUT after %ss\n%s\n%s" % (
                 timeout, e.stdout or "", e.stderr or "")
         except OSError as e:
             rc = 127
-            out = "OSError: %s" % e
-        if out:
+            out, err = "", "OSError: %s" % e
+        if out or err:
             with open(self.log_path, "a", encoding="utf-8", newline="\n") as f:
-                f.write("---- %s/%s rc=%s ----\n%s\n" % (side, step, rc, out))
+                f.write("---- %s/%s rc=%s ----\n%s%s\n" % (side, step, rc, out, err))
         self.log("   %s/%s rc=%s" % (side, step, rc))
-        return rc
+        return (rc, out, err) if capture else rc
 
 
 def side_ctx(side, out_dir, scenario, card, discovery=None):
@@ -1005,7 +1204,633 @@ def stop_ok(attempted, stop_rc):
     return stop_rc == 0
 
 
-def run_side(runner, side, prof, ctx, password):
+# ---------------------------------------------------------------------------
+# 角色预置位（placement）：restore 之后、起栈之前把测试角色放到目标图/坐标
+#
+# 选型（卡 openmir2-window-character-placement）：
+#   (a) DB 改测试库 characters.MapName/CX/CY   <= 本实现
+#   (b) 在 discovery/probe 前加「走到目标」步骤  —— 不可行：探针不发跨图移动，出生图 0 与
+#       四个目标 NPC 所在图之间没有客户端可发的跨图指令；走图还会注入 RNG/时序。
+#   (c) GM `@move`                                —— 不可行：Permission 恒 0，且多图带
+#       NORECALL/NOPOSITIONMOVE。
+# 预置必须发生在 restore 之后（restore 会把库复位）且起栈之前（角色记录只在登录时读一次）。
+# ---------------------------------------------------------------------------
+def scenario_placement(path):
+    """读场景顶层的 `placement` 声明；没有 => None；形状非法 => ConfigError(fail-closed)。"""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    pl = data.get("placement")
+    if pl is None:
+        return None
+    if not isinstance(pl, dict):
+        raise ConfigError("%s: scenario.placement 必须是对象（map/x/y）" % path)
+    bad_keys = set(pl) - {"map", "x", "y", "note"}
+    if bad_keys:
+        raise ConfigError("%s: scenario.placement 有未知键 %s（fail-closed）"
+                          % (path, sorted(bad_keys)))
+    mp = pl.get("map")
+    if not isinstance(mp, str) or not mp:
+        raise ConfigError("%s: scenario.placement.map 必须是非空字符串" % path)
+    if not PLACEMENT_MAP_RE.match(mp):
+        raise ConfigError(
+            "%s: scenario.placement.map=%r 非法（只允许 [A-Za-z0-9_]{1,10}："
+            "characters.MapName 是 varchar(10)，越界会被截断/注入）" % (path, mp))
+    for axis in ("x", "y"):
+        v = pl.get(axis)
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ConfigError("%s: scenario.placement.%s 必须是整数（实际 %r）"
+                              % (path, axis, v))
+        if not (0 <= v <= 0xFFFF):
+            raise ConfigError("%s: scenario.placement.%s=%r 越界（0..65535）"
+                              % (path, axis, v))
+    if pl.get("note") is not None and not isinstance(pl["note"], str):
+        raise ConfigError("%s: scenario.placement.note 必须是字符串" % path)
+    return {"map": mp, "x": int(pl["x"]), "y": int(pl["y"]),
+            "note": pl.get("note") or ""}
+
+
+BLOCKED_REQUIRED = ("reason",)
+BLOCKED_OPTIONAL = ("missing_fixture",)
+
+
+def scenario_blocked(path):
+    """读场景顶层的 `blocked` 声明；没有 => None；形状非法 => ConfigError(fail-closed)。
+
+    场景可以声明自己被**封存**：形状合法（probe 的 `--check-scenario` 仍 rc=0），但**不可跑**——
+    「为什么跑不了 / 缺什么夹具」写在顶层机器可读字段里，而不是写在 description 人话里
+    （窗口批次读不到人话）。本工具见到 `blocked` 一律 rc=2，且**不建 out、不起栈、不写 report**，
+    从产物层杜绝「跑了一份 BLOCKED 场景」。
+
+    schema（与 `tools/probe/mir2_probe.py::_check_blocked` 同口径，两处各自 fail-closed）：::
+
+        "blocked": {"reason": "<非空 str>", "missing_fixture": "<str，可选>"}
+
+    与 required/computed/placement 一样**重读场景文件**：不依赖 probe 那一侧是否跑过。
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    bl = data.get("blocked")
+    if bl is None:
+        return None
+    if not isinstance(bl, dict):
+        raise ConfigError("%s: scenario.blocked 必须是对象（reason[/missing_fixture]）" % path)
+    bad_keys = set(bl) - set(BLOCKED_REQUIRED) - set(BLOCKED_OPTIONAL)
+    if bad_keys:
+        raise ConfigError("%s: scenario.blocked 有未知键 %s（fail-closed）"
+                          % (path, sorted(bad_keys)))
+    reason = bl.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ConfigError("%s: scenario.blocked.reason 必须是非空字符串（实际 %r）："
+                          "封存理由必须机器可读，不能只写在 description 里" % (path, reason))
+    mf = bl.get("missing_fixture")
+    if mf is not None and (not isinstance(mf, str) or not mf.strip()):
+        raise ConfigError("%s: scenario.blocked.missing_fixture 给了就必须是非空字符串"
+                          "（实际 %r）" % (path, mf))
+    return {"reason": reason, "missing_fixture": mf or ""}
+
+
+def _get_valid_str3(text):
+    """`HUtil32.GetValidStr3(source, ref dest, Separator)` 的 (dest, 返回值) 二元组。
+
+    C#：`dest = 第一段`，**返回第二段**（`Split(div, 2, RemoveEmptyEntries)`）。
+    本项目 MapInfo 的行首不会有多余分隔符，这里按「跳过前导分隔符后取第一段/其余」实现。
+    """
+    s = str(text)
+    i = 0
+    n = len(s)
+    while i < n and s[i] in MAPINFO_SEPS:
+        i += 1
+    j = i
+    while j < n and s[j] not in MAPINFO_SEPS:
+        j += 1
+    first = s[i:j]
+    k = j
+    while k < n and s[k] in MAPINFO_SEPS:
+        k += 1
+    return first, s[k:]
+
+
+def _split_map_name_and_file(name):
+    """`MapManager.AddMapInfo` 的逻辑名/文件名拆分（`MapManager.cs:64-86`）。"""
+    s = str(name)
+    if "|" in s:
+        return tuple(_get_valid_str3(s))  # dest=逻辑名, 返回值=文件名
+    if "<" in s and ">" in s and s.index("<") < s.rindex(">"):
+        inner = s[s.index("<") + 1:s.rindex(">")]
+        rest = s[:s.index("<")] + s[s.rindex(">") + 1:]
+        if inner:
+            return rest, inner
+    return s, s
+
+
+def read_ini_sections(path):
+    """极简 INI 读取（`Server.conf`：`[Section]` + `key=value`，`;`/`#` 注释）。
+
+    读不到/坏行 => 不抛异常，缺项由调用方按默认值处理（避免把内容格式差异变成假红）。
+    """
+    out = {}
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return out
+    text = raw.decode("utf-8-sig", "replace")
+    section = None
+    for line in text.splitlines():
+        s = line.strip()
+        if not s or s[0] in ";#":
+            continue
+        if s.startswith("[") and "]" in s:
+            section = s[1:s.index("]")].strip().lower()
+            out.setdefault(section, {})
+            continue
+        if section is None or "=" not in s:
+            continue
+        k, v = s.split("=", 1)
+        out[section].setdefault(k.strip().lower(), v.strip())
+    return out
+
+
+def read_map_info(envir_dir):
+    """解析 `<Envir>/MapInfo.txt`（含一层 `ConnectMapInfo <file>` 子文件）。
+
+    返回 {逻辑图名: {"file": 地图文件名, "server_index": int}}；重名保持首条（oracle 同样丢弃后者）。
+    """
+    path = os.path.join(envir_dir, "MapInfo.txt")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        raise ConfigError("读不了 MapInfo：%s（%s）" % (path, e))
+    text = raw.decode("gbk", "replace")
+    maps = {}
+    for line in text.splitlines():
+        # `HUtil32.CompareLStr("ConnectMapInfo", line)`：前缀比较（大小写不敏感）。
+        if line[:14].lower() == "connectmapinfo":
+            _first, sub = _get_valid_str3(line)
+            if sub:
+                sub_name = sub.split()[0]
+                sub_path = os.path.join(envir_dir, sub_name)
+                maps.update(_parse_map_info_file(sub_path))
+            continue
+        if not line.startswith("[") or "]" not in line:
+            continue
+        inner = line[1:line.index("]")]
+        name_spec, desc = _get_valid_str3(inner)
+        if desc.startswith('"') and desc.count('"') >= 2:
+            desc = desc[1:desc.index('"', 1)]
+        _desc_first, s4c = _get_valid_str3(desc)
+        try:
+            server_index = int((s4c or "").strip() or 0)
+        except ValueError:
+            server_index = 0
+        map_name, map_file = _split_map_name_and_file(name_spec)
+        if not map_name:
+            continue
+        maps.setdefault(map_name, {"file": map_file, "server_index": server_index})
+    return maps
+
+
+def _parse_map_info_file(path):
+    """`ConnectMapInfo` 子文件的 section 解析（与 MapInfo.txt 同一语法）。"""
+    maps = {}
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError:
+        return maps
+    for line in raw.decode("gbk", "replace").splitlines():
+        if not line.startswith("[") or "]" not in line:
+            continue
+        inner = line[1:line.index("]")]
+        name_spec, desc = _get_valid_str3(inner)
+        if desc.startswith('"') and desc.count('"') >= 2:
+            desc = desc[1:desc.index('"', 1)]
+        _desc_first, s4c = _get_valid_str3(desc)
+        try:
+            server_index = int((s4c or "").strip() or 0)
+        except ValueError:
+            server_index = 0
+        map_name, map_file = _split_map_name_and_file(name_spec)
+        if map_name:
+            maps.setdefault(map_name, {"file": map_file, "server_index": server_index})
+    return maps
+
+
+def read_map_cell(map_path, x, y):
+    """读 `.map` 的宽高与 (x,y) 格；返回 dict(width, height, walkable, bk, mid, fr)。
+
+    判据与 oracle 登录期 `Envirnoment.CanWalk(x, y, true)` 一致：**越界或 bit15 阻挡 = 不可走**
+    （`boFlag=true` 时不看格上对象，所以「NPC 站同一格」不影响登录落点）。
+    """
+    try:
+        with open(map_path, "rb") as f:
+            header = f.read(MAP_HEADER_BYTES)
+            if len(header) < MAP_HEADER_BYTES:
+                raise ConfigError("地图文件太短（< %d 字节）：%s"
+                                  % (MAP_HEADER_BYTES, map_path))
+            width, height = struct.unpack_from("<hh", header, 0)
+            if width <= 0 or height <= 0:
+                raise ConfigError("地图文件宽高非法（%dx%d）：%s" % (width, height, map_path))
+            if x < 0 or y < 0 or x >= width or y >= height:
+                return {"width": width, "height": height, "in_bounds": False,
+                        "walkable": False, "bk": None, "mid": None, "fr": None}
+            f.seek(MAP_HEADER_BYTES + (x * height + y) * MAP_CELL_BYTES)
+            cell = f.read(MAP_CELL_BYTES)
+    except OSError as e:
+        raise ConfigError("读不了地图文件 %s：%s" % (map_path, e))
+    if len(cell) < MAP_CELL_BYTES:
+        raise ConfigError("地图文件被截断（格 %d,%d 读不到）：%s" % (x, y, map_path))
+    bk, mid, fr = struct.unpack_from("<HHH", cell, 0)
+    return {"width": width, "height": height, "in_bounds": True,
+            "walkable": not (bk & MAP_WALL_BIT) and not (fr & MAP_WALL_BIT),
+            "bk": bk, "mid": mid, "fr": fr}
+
+
+def placement_envir_root(side, sc):
+    """部署内容根目录：`sides.<side>.envir_root`，缺省由 `binaries[0]` 的目录推出。"""
+    er = sc.get("envir_root")
+    if er:
+        return os.path.abspath(er)
+    bins = sc.get("binaries") or []
+    if not bins:
+        raise ConfigError("profile.sides.%s 缺 binaries/envir_root：无法定位 MapInfo/Map" % side)
+    return os.path.dirname(os.path.abspath(bins[0]))
+
+
+def placement_characters_db(side, sc):
+    """该侧角色库名：必须是测试库（`db.characters_db`，缺省按 preset/tables 推）。"""
+    db = sc.get("db") or {}
+    name = db.get("characters_db")
+    if not name:
+        preset = str(db.get("preset") or "")
+        if preset in ("test", "prod"):
+            name = {"test": "mir2_test_db", "prod": "mir2_db"}[preset]
+        else:
+            for t in db.get("tables") or []:
+                if str(t).endswith(".characters"):
+                    name = str(t).split(".", 1)[0]
+                    break
+    if not name:
+        raise ConfigError(
+            "profile.sides.%s 缺 db.characters_db：预置位必须知道改哪个库的角色表"
+            "（C# 用 mir2_test_db、Rust 用 mir2_test_db_r，两套库不同名）" % side)
+    kind = classify_db_name(name)
+    if kind == "prod":
+        raise ConfigError("profile.sides.%s.db.characters_db=%r 是生产库：预置位只许写测试库"
+                          % (side, name))
+    if kind != "test":
+        raise ConfigError("profile.sides.%s.db.characters_db=%r 无法判定为测试库（保守拒绝）"
+                          % (side, name))
+    return name
+
+
+def placement_db_client(prof, side):
+    """合并 `profile.db_client` / `sides.<side>.db_client` / 环境变量，得到 mysql 调用参数。"""
+    cfg = dict(prof.get("db_client") or {})
+    cfg.update((prof["sides"][side] or {}).get("db_client") or {})
+    mysql = cfg.get("mysql") or [DEFAULT_MYSQL]
+    if not isinstance(mysql, list) or not mysql:
+        raise ConfigError("db_client.mysql 必须是非空 argv 数组")
+    host = os.environ.get("CONFORMANCE_DB_HOST") or cfg.get("host") or "127.0.0.1"
+    user = os.environ.get("CONFORMANCE_DB_USER") or cfg.get("user") or "root"
+    password = os.environ.get("CONFORMANCE_DB_PASSWORD")
+    if password is None:
+        password = cfg.get("password") or ""
+    port = cfg.get("port") or 3306
+    return {"mysql": [str(x) for x in mysql], "host": str(host), "port": int(port),
+            "user": str(user), "password": str(password)}
+
+
+def _sql_quote(value):
+    """把值转成 MySQL 字符串字面量（转义 `\\ ' \\0 \\n \\r \\Z`）。"""
+    out = []
+    for ch in str(value):
+        if ch == "\\":
+            out.append("\\\\")
+        elif ch == "'":
+            out.append("\\'")
+        elif ch == "\0":
+            out.append("\\0")
+        elif ch == "\n":
+            out.append("\\n")
+        elif ch == "\r":
+            out.append("\\r")
+        elif ch == "\x1a":
+            out.append("\\Z")
+        else:
+            out.append(ch)
+    return "'" + "".join(out) + "'"
+
+
+def _placement_row_sql(db, chr_name, login_id, columns, by_id=None):
+    """读一行的：命中行数 / Id / MapName / CX / CY / 其余列 MD5 指纹 / HomeMap / Deleted。
+
+    `by_id` 给了就按主键读（读回用），否则按 ChrName+LoginID 读（定位用）。
+    """
+    fp_cols = [c for c in columns if c not in PLACEMENT_COLUMNS]
+    fp = ", CHAR(31), ".join("IFNULL(CAST(`%s` AS CHAR), '~')" % c for c in fp_cols)
+    where = ("`Id` = %d" % int(by_id)) if by_id is not None else (
+        "`ChrName` = %s AND `LoginID` = %s"
+        % (_sql_quote(chr_name), _sql_quote(login_id)))
+    return (
+        "SELECT COUNT(*), COALESCE(MIN(`Id`), 0), COALESCE(MIN(`MapName`), ''),\n"
+        "       COALESCE(MIN(`CX`), -1), COALESCE(MIN(`CY`), -1),\n"
+        "       COALESCE(MIN(`_fp`), ''), COALESCE(MIN(`_home`), ''),\n"
+        "       COALESCE(MIN(`_deleted`), 0)\n"
+        "FROM (SELECT `Id`, `MapName`, `CX`, `CY`, `HomeMap` AS `_home`,\n"
+        "             IFNULL(`Deleted`, 0) AS `_deleted`,\n"
+        "             MD5(CONCAT_WS(%s)) AS `_fp`\n"
+        "      FROM `%s`.`characters` WHERE %s) AS `t`;\n"
+        % (fp, db, where))
+
+
+def _parse_placement_row(out):
+    """解析 `_placement_row_sql` 的 8 列输出；形状不对 => ConfigError。"""
+    lines = [ln for ln in (out or "").splitlines() if ln.strip()]
+    if len(lines) != 1:
+        raise ConfigError("预置位读行结果不是 1 行（实际 %d 行）：%r" % (len(lines), out[:300]))
+    parts = lines[0].split("\t")
+    if len(parts) != 8:
+        raise ConfigError("预置位读行结果的列数不是 8（实际 %d）：%r"
+                          % (len(parts), lines[0][:300]))
+    try:
+        return {"count": int(parts[0]), "id": int(parts[1]), "map": parts[2],
+                "x": int(parts[3]), "y": int(parts[4]), "fp": parts[5],
+                "home_map": parts[6], "deleted": int(parts[7] or 0)}
+    except ValueError as e:
+        raise ConfigError("预置位读行结果无法解析：%r（%s）" % (lines[0][:300], e))
+
+
+def _check_db_pairing(side, envir_root, chars_db):
+    """C#/Rust 两套库不同名：用部署 `Server.conf` 的 [DataBase] database 交叉核对配对。
+
+    只在部署侧写的是 `mir2_test_data*` 时判定（alt 剖面就是这样），其它情况不判（避免假红）。
+    """
+    ini = read_ini_sections(os.path.join(envir_root, "Server.conf"))
+    dsn = (ini.get("database") or {}).get("connctionstring") or ""
+    m = DB_IN_CONN_RE.search(dsn)
+    if not m:
+        return None
+    data_db = m.group(1)
+    if not data_db.startswith("mir2_test_"):
+        return None
+    family = "rust" if data_db.endswith("_r") else "csharp"
+    expected = "mir2_test_db_r" if family == "rust" else "mir2_test_db"
+    if chars_db != expected:
+        raise ConfigError(
+            "profile.sides.%s.db.characters_db=%r 与该侧部署不配对：%s 的 Server.conf "
+            "[DataBase] database=%s ⇒ 这一侧的角色库必须是 %r（两侧库不同名，拿错库"
+            "预置/拍快照都会变成假差异）"
+            % (side, chars_db, os.path.join(envir_root, "Server.conf"), data_db, expected))
+    return {"data_db": data_db, "expected_characters_db": expected}
+
+
+def validate_placement_content(side, prof_side, placement):
+    """离线校验（只读部署内容）：图存在、服务器号匹配、坐标在界内且可走。"""
+    envir_root = placement_envir_root(side, prof_side)
+    ini = read_ini_sections(os.path.join(envir_root, "Server.conf"))
+    share = ini.get("share") or {}
+    server_sec = ini.get("server") or {}
+    envir_dir = os.path.join(envir_root, share.get("envirdir") or "Envir")
+    map_dir = os.path.join(envir_root, share.get("mapdir") or "Map")
+    map_info_path = os.path.join(envir_dir, "MapInfo.txt")
+    if not os.path.isfile(map_info_path):
+        raise ConfigError(
+            "场景声明了 placement 但找不到 MapInfo：%s（envir_root=%s；图名/坐标无法校验，"
+            "拒绝盲改库）" % (map_info_path, envir_root))
+    try:
+        server_index = int(str(server_sec.get("serverindex") or "0"))
+    except ValueError:
+        server_index = 0
+    maps = read_map_info(envir_dir)
+    name = placement["map"]
+    entry = maps.get(name)
+    if entry is None:
+        raise ConfigError(
+            "placement.map=%r 不在 %s 里（oracle GetMapInfo 会返回 null ⇒ 直接切服/登不进）"
+            % (name, map_info_path))
+    if int(entry.get("server_index") or 0) != server_index:
+        raise ConfigError(
+            "placement.map=%r 在 MapInfo 里属于服务器号 %s，而这一侧 ServerIndex=%s："
+            "oracle 会把它当别的服并发送切服（角色落不了地）"
+            % (name, entry.get("server_index"), server_index))
+    map_path = os.path.join(map_dir, str(entry.get("file") or name) + ".map")
+    if not os.path.isfile(map_path):
+        raise ConfigError("placement.map=%r 的地图文件不存在：%s" % (name, map_path))
+    cell = read_map_cell(map_path, placement["x"], placement["y"])
+    if not cell["in_bounds"]:
+        raise ConfigError(
+            "placement 坐标越界：%r (%d,%d) 不在 %dx%d 的 %s 内"
+            % (name, placement["x"], placement["y"], cell["width"], cell["height"],
+               os.path.basename(map_path)))
+    if not cell["walkable"]:
+        raise ConfigError(
+            "placement 坐标不可走：%r (%d,%d) 是阻挡格（bk=%#06x fr=%#06x）。"
+            "oracle 登录期 CanWalk(x,y,true) 为假时会随机挪 5 次再回落到 HomeMap —— "
+            "探针只会点不到 NPC、不会报错，所以这里 fail-closed"
+            % (name, placement["x"], placement["y"], cell["bk"], cell["fr"]))
+    return {"envir_root": envir_root, "envir_dir": envir_dir, "map_info": map_info_path,
+            "map_file": map_path, "map_size": [cell["width"], cell["height"]],
+            "server_index": server_index,
+            "map_server_index": int(entry.get("server_index") or 0)}
+
+
+def _mysql_argv(client):
+    argv = list(client["mysql"]) + [
+        "-h", client["host"], "-P", str(client["port"]), "-u", client["user"],
+        "--password=%s" % client["password"],
+        "--default-character-set=utf8", "--batch", "--raw", "--skip-column-names",
+    ]
+    return argv
+
+
+def run_placement(runner, side, prof, sc, placement, env):
+    """在一侧执行预置位：restore 之后、起栈之前。返回证据 dict（rc=0 才算完成）。
+
+    fail-closed 的口径见模块头：任何一步不达预期都 rc=2 并点名，**绝不带着错位继续 probe**。
+    """
+    res = {
+        "side": side,
+        "declared": {"map": placement["map"], "x": placement["x"], "y": placement["y"],
+                     "note": placement.get("note") or ""},
+        "source": "scenario",
+        "db": None,
+        "db_pairing": None,
+        "envir_root": None,
+        "envir_dir": None,
+        "map_info": None,
+        "map_file": None,
+        "map_size": None,
+        "server_index": None,
+        "map_server_index": None,
+        "action": None,
+        "before": None,
+        "after": None,
+        "changed_columns": [],
+        "sql": {"read": None, "update": None},
+        "rc": None,
+        "error": None,
+    }
+    try:
+        info = validate_placement_content(side, sc, placement)
+        res.update(dict((k, info[k]) for k in (
+            "envir_root", "envir_dir", "map_info", "map_file", "map_size",
+            "server_index", "map_server_index")))
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        res["db_pairing"] = _check_db_pairing(side, info["envir_root"], db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        res["error"] = "预置位前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+
+    argv = _mysql_argv(client)
+    timeout = 120
+
+    def sql(tag, text):
+        rc, out, err = runner.run(side, tag, argv, env=env, timeout=timeout,
+                                  stdin_text=text, capture=True)
+        if rc != 0:
+            raise ConfigError("%s 执行失败（mysql rc=%s）：%s"
+                              % (tag, rc, (err or out or "").strip()[:400]))
+        return out
+
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    if not chr_name or not login_id:
+        res["error"] = ("预置位需要 profile 的 char_name/account（定位 characters 行）；"
+                        "当前 char_name=%r account=%r" % (chr_name, login_id))
+        res["rc"] = 2
+        return res
+
+    try:
+        cols_out = sql("placement.columns",
+                       "SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+        columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
+        missing = [c for c in PLACEMENT_REQUIRED_COLUMNS if c not in columns]
+        if missing:
+            raise ConfigError(
+                "%s.characters 缺列 %s：表结构与预期不符（预置位不改表结构，只改 "
+                "MapName/CX/CY，因此直接拒绝）" % (db, missing))
+        read_sql = _placement_row_sql(db, chr_name, login_id, columns)
+        res["sql"]["read"] = read_sql.strip()
+        before = _parse_placement_row(sql("placement.read", read_sql))
+        res["before"] = {"id": before["id"], "map": before["map"], "x": before["x"],
+                         "y": before["y"], "fingerprint": before["fp"],
+                         "home_map": before["home_map"]}
+        if before["count"] == 0:
+            raise ConfigError(
+                "预置位找不到角色：%s.characters WHERE ChrName=%r AND LoginID=%r 命中 0 行"
+                % (db, chr_name, login_id))
+        if before["count"] > 1:
+            raise ConfigError(
+                "预置位定位不唯一：%s.characters 命中 %d 行（ChrName=%r LoginID=%r）——"
+                "拒绝猜哪一行" % (db, before["count"], chr_name, login_id))
+        if not before["home_map"]:
+            raise ConfigError(
+                "角色 %r 的 HomeMap 为空：oracle 登录期会用 HomeMap + Random 覆盖落点，"
+                "预置位无效（先把 HomeMap 补上，不能靠 MAP 预置蒙混）" % chr_name)
+        if before["deleted"] == 1:
+            raise ConfigError("角色 %r 的 Deleted=1（已删除）：select 不到，先修夹具"
+                              % chr_name)
+
+        target = (placement["map"], placement["x"], placement["y"])
+        if (before["map"], before["x"], before["y"]) == target:
+            res["action"] = "noop"
+        else:
+            upd = ("UPDATE `%s`.`characters` SET `MapName` = %s, `CX` = %d, `CY` = %d\n"
+                   " WHERE `Id` = %d;\nSELECT ROW_COUNT();\n"
+                   % (db, _sql_quote(target[0]), target[1], target[2], before["id"]))
+            res["sql"]["update"] = upd.strip()
+            out = sql("placement.update", upd).strip()
+            try:
+                affected = int((out.splitlines() or ["-1"])[0])
+            except ValueError:
+                raise ConfigError("placement.update 的 ROW_COUNT 不可解析：%r" % out[:200])
+            if affected != 1:
+                raise ConfigError(
+                    "placement.update 影响了 %d 行（期望 1）：角色行可能在预置期间被删/改，"
+                    "拒绝继续" % affected)
+            res["action"] = "updated"
+
+        after = _parse_placement_row(sql("placement.verify", read_sql))
+        res["after"] = {"id": after["id"], "map": after["map"], "x": after["x"],
+                        "y": after["y"], "fingerprint": after["fp"]}
+        if after["count"] != 1 or after["id"] != before["id"]:
+            raise ConfigError(
+                "预置位读回异常：命中 %d 行、Id=%s（期望 1 行 Id=%s）"
+                % (after["count"], after["id"], before["id"]))
+        if (after["map"], after["x"], after["y"]) != target:
+            raise ConfigError(
+                "预置位读回与目标不符：期望 %r (%d,%d)，实际 %r (%d,%d)"
+                % (target[0], target[1], target[2], after["map"], after["x"], after["y"]))
+        if after["fp"] != before["fp"]:
+            raise ConfigError(
+                "预置位连带改了**其它列**（MapName/CX/CY 之外的 MD5 指纹变了：%s -> %s）："
+                "只允许改这三列，拒绝带着被写坏的字段继续"
+                % (before["fp"][:12] or "<空>", after["fp"][:12] or "<空>"))
+        res["changed_columns"] = ["MapName", "CX", "CY"] if res["action"] == "updated" else []
+        res["rc"] = 0
+        return res
+    except ConfigError as e:
+        res["error"] = "预置位失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def preview_placement(runner, side, prof, sc, placement, ctx):
+    """`--dry-run` 用：只做离线内容校验 + 打印将要执行的命令（不连库/不改库）。"""
+    out = {"side": side, "declared": dict(placement), "rc": None, "error": None,
+           "commands": [], "offline_check": None}
+    try:
+        info = validate_placement_content(side, sc, placement)
+        db = placement_characters_db(side, sc)
+        _check_db_pairing(side, info["envir_root"], db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        out["error"] = "预置位前置校验失败（真跑会 rc=2）：%s" % e
+        out["rc"] = 2
+        return out, True
+    out["offline_check"] = {"envir_root": info["envir_root"], "map_file": info["map_file"],
+                            "map_size": info["map_size"],
+                            "server_index": info["server_index"],
+                            "map_server_index": info["map_server_index"], "db": db}
+    argv = _mysql_argv(client)
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    out["commands"] = [
+        {"argv": _redact_argv(argv), "stdin": "SHOW COLUMNS FROM `%s`.`characters`;" % db},
+        {"argv": _redact_argv(argv),
+         "stdin": "SELECT ... FROM `%s`.`characters` WHERE ChrName=%r AND LoginID=%r;"
+                  % (db, chr_name, login_id)},
+        {"argv": _redact_argv(argv),
+         "stdin": ("UPDATE `%s`.`characters` SET MapName=%r, CX=%d, CY=%d WHERE Id=<row>;"
+                   % (db, placement["map"], placement["x"], placement["y"]))},
+        {"argv": _redact_argv(argv), "stdin": "SELECT ... （读回校验：目标值 + 其余列指纹）"},
+    ]
+    runner.log("[%s] 预置位（dry-run 不连库）：map=%s x=%d y=%d db=%s 图=%s %dx%d 可走"
+               % (side, placement["map"], placement["x"], placement["y"], db,
+                  os.path.basename(info["map_file"]), info["map_size"][0],
+                  info["map_size"][1]))
+    out["rc"] = 0
+    return out, False
+
+
+
+
+def run_side(runner, side, prof, ctx, password, placement=None):
     sc = prof["sides"][side]
     side_dir = ctx["side_dir"]
     db_dir = ctx["db_dir"]
@@ -1013,6 +1838,7 @@ def run_side(runner, side, prof, ctx, password):
         "side": side,
         "label": sc.get("label") or side,
         "restore_rc": None,
+        "placement": None,
         "ports": {"checked": list(sc.get("ports") or []), "busy": []},
         "stack_rc": None,
         "ready": {"ports": list(sc.get("ready_ports") or []), "missing": [],
@@ -1051,6 +1877,21 @@ def run_side(runner, side, prof, ctx, password):
             res["error"] = "基线恢复失败（restore rc=%s）：不起栈、不跑场景" % res["restore_rc"]
             return res
 
+        # 1b) 角色预置位（声明了才跑）：restore 之后、起栈之前；完成不了 => rc=2，
+        #     **绝不让 probe 带着错位去超时**（点不到 NPC 时探针不会报错，只会等超时）。
+        if placement:
+            pres = run_placement(runner, side, prof, sc, placement, env)
+            try:
+                write_json_file(os.path.join(side_dir, "placement.json"), pres)
+            except OSError as e:
+                pres["error"] = ((pres.get("error") or "") + "；写 placement.json 失败：%s"
+                                 % e).strip("；")
+                pres["rc"] = 2
+            res["placement"] = pres
+            if pres.get("rc") != 0:
+                res["error"] = pres.get("error") or "角色预置位失败"
+                return res
+
         # 2) 起栈前端口检查（有人占 => rc=2 并点名 pid；不启动栈）
         busy = check_ports_free(sc.get("ports") or [])
         res["ports"]["busy"] = busy
@@ -1068,6 +1909,29 @@ def run_side(runner, side, prof, ctx, password):
         if res["stack_rc"] != 0:
             res["error"] = "起栈命令失败（rc=%s）：不跑场景（栈没起来不能算对拍通过）" % res["stack_rc"]
             return res
+
+        # 3b) **卡 `openmir2-window-rust-binary-evidence`**：先按 release/debug 解析 Rust 栈
+        # 真正执行的二进制，再拿 `mir2-server.pid.json` 的 `roles[].exe` 对账；不符 ⇒ rc=2，
+        # 不许「只记一个错的 sha256 继续跑」。
+        if sc.get("require_pid_binaries"):
+            # profile 可显式声明 `server_exe`（窗口从别的检出/worktree 跑时用，review M1）；
+            # 缺省按本仓 release → debug 解析。
+            if sc.get("server_exe"):
+                path, kind = str(sc["server_exe"]), "profile(server_exe)"
+            else:
+                path, kind = resolve_rust_binary()
+            res["binary_profile"] = kind
+            if not os.path.exists(path):
+                res["error"] = ("Rust 侧二进制不存在：%s（%s）——请先 `cargo build -p mir2-server "
+                                "--release`，或在 profile 显式给 server_exe（不拿不存在的文件"
+                                "记 sha256）" % (path, kind))
+                return res
+            sc["binaries"] = [path]
+            ok, err, info = verify_pid_binaries(side_dir, sc, side)
+            res["pid_binaries"] = info
+            if not ok:
+                res["error"] = err
+                return res
 
         # 4) 等就绪（栈命令返回 0 也可能没真起来）
         missing = wait_ready(sc.get("ready_ports") or [],
@@ -1260,6 +2124,27 @@ def write_readme(path, summary):
     lines.append("diffs: %s   undecidable: %s   whitelisted: %s"
                  % (summary.get("diffs"), summary.get("undecidable"),
                     summary.get("whitelisted")))
+    plc = summary.get("placement") or {}
+    if plc.get("enabled"):
+        d = plc.get("declared") or {}
+        lines.append("placement: map=%s x=%s y=%s (scenario 顶层声明)"
+                     % (d.get("map"), d.get("x"), d.get("y")))
+        for side in SIDES:
+            p = (plc.get("sides") or {}).get(side) or {}
+            if not p:
+                lines.append("  %-6s placement (not run)" % side)
+                continue
+            b = p.get("before") or {}
+            a = p.get("after") or {}
+            lines.append("  %-6s placement rc=%s db=%s action=%s "
+                         "before=%s(%s,%s) after=%s(%s,%s) fp=%s->%s"
+                         % (side, p.get("rc"), p.get("db"), p.get("action"),
+                            b.get("map"), b.get("x"), b.get("y"),
+                            a.get("map"), a.get("x"), a.get("y"),
+                            (b.get("fingerprint") or "-")[:12],
+                            (a.get("fingerprint") or "-")[:12]))
+            if p.get("error"):
+                lines.append("         error=%s" % p["error"])
     lines.append("")
     lines.append("binaries (sha256):")
     any_bin = False
@@ -1289,9 +2174,10 @@ def write_readme(path, summary):
     lines.append("side results:")
     for side in SIDES:
         r = (summary.get("sides") or {}).get(side) or {}
-        lines.append("  %-6s rc=%s restore=%s stack=%s ready_missing=%s discover=%s "
-                     "probe=%s db=%s stop=%s frames=%s"
-                     % (side, r.get("rc"), r.get("restore_rc"), r.get("stack_rc"),
+        lines.append("  %-6s rc=%s restore=%s placement=%s stack=%s ready_missing=%s "
+                     "discover=%s probe=%s db=%s stop=%s frames=%s"
+                     % (side, r.get("rc"), r.get("restore_rc"),
+                        (r.get("placement") or {}).get("rc"), r.get("stack_rc"),
                         r.get("ready", {}).get("missing"), r.get("discover_rc"),
                         r.get("probe_rc"), r.get("db_rc"), r.get("stop_rc"),
                         r.get("frames")))
@@ -1479,9 +2365,13 @@ def execute(cfg):
     # 场景文件不存在时（--dry-run 允许）不读；真跑会在下面报「场景文件不存在」。
     required = []
     computed = {}
+    placement = None
+    blocked = None
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
         computed = scenario_computed(scenario)
+        placement = scenario_placement(scenario)
+        blocked = scenario_blocked(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
         cfg.get("discovery_scenario") or DEFAULT_DISCOVERY_SCENARIO)
@@ -1518,6 +2408,14 @@ def execute(cfg):
         "whitelisted": None,
         "binaries": {side: bin_info(prof["sides"][side]) for side in SIDES},
         "sides": {},
+        "placement": {
+            "enabled": bool(placement),
+            "declared": placement,
+            "sides": {},
+            "note": ("场景顶层 placement => 每侧 restore 之后、起栈之前把该侧测试库 "
+                     "characters 的 MapName/CX/CY 改到位；完成不了 rc=2（不让 probe 超时）"
+                     if placement else None),
+        },
         "discovery": {
             "enabled": needs_discovery,
             "forced": discover,
@@ -1547,6 +2445,22 @@ def execute(cfg):
 
     if scenario and os.path.isfile(scenario):
         summary["scenario_sha256"] = sha256_file(scenario)
+
+    # BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）。
+    # 位置刻意在「建 out 目录 / 起栈 / 跑 discovery / 写 report」**之前**，--dry-run 与真跑
+    # 走同一条路径：见到 blocked 就停（rc=2，与「端口被占」同一失败等级），连命令序列都不预览
+    # —— 免得 dry-run 绿了让人误以为可以真跑。
+    if blocked:
+        summary["blocked"] = {"reason": blocked["reason"],
+                              "missing_fixture": blocked["missing_fixture"] or ""}
+        summary["notes"].append("scenario is BLOCKED: %s" % blocked["reason"])
+        summary["notes"].append("missing_fixture: %s"
+                                % (blocked["missing_fixture"] or "(场景未声明)"))
+        summary["verdict"] = "BLOCKED"
+        summary["exit_code"] = 2
+        summary["finished_at"] = iso_now()
+        summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
+        return summary
 
     password = cfg.get("password") or os.environ.get("CONFORMANCE_PASSWORD")
     if not password:
@@ -1609,15 +2523,24 @@ def execute(cfg):
         for side in SIDES:
             ctx = side_ctx(side, out_dir, scenario, card, discovery=discovery_cfg)
             sc = prof["sides"][side]
-            runner.run(side, "restore", expand_argv(sc["restore"], ctx))
-            runner.log("[%s] 端口预检：%s" % (side, sc.get("ports") or []))
-            runner.log("[%s] 就绪等待：%s（timeout %ss）"
-                       % (side, sc.get("ready_ports") or [],
-                          prof.get("ready_timeout_s", 120)))
-            runner.run(side, "stack", expand_argv(sc["stack"], ctx))
-            vars_argv = []
             side_failed = False
-            if needs_discovery:
+            runner.run(side, "restore", expand_argv(sc["restore"], ctx))
+            if placement:
+                pres, failed = preview_placement(runner, side, prof, sc, placement, ctx)
+                summary["placement"]["sides"][side] = pres
+                if failed:
+                    runner.log("[%s] 预置位不可行 ⇒ 真跑 rc=2（不起栈、不跑场景）：%s"
+                               % (side, pres.get("error")))
+                    preview_failed = True
+                    side_failed = True
+            if not side_failed:
+                runner.log("[%s] 端口预检：%s" % (side, sc.get("ports") or []))
+                runner.log("[%s] 就绪等待：%s（timeout %ss）"
+                           % (side, sc.get("ready_ports") or [],
+                              prof.get("ready_timeout_s", 120)))
+                runner.run(side, "stack", expand_argv(sc["stack"], ctx))
+            vars_argv = []
+            if needs_discovery and not side_failed:
                 dctx = discovery_ctx(ctx)
                 disc_argv = build_probe_argv(sc, dctx, prof, password)
                 runner.run(side, "discover", disc_argv)
@@ -1661,7 +2584,7 @@ def execute(cfg):
             runner.run("compare", "compare", compare_argv)
         else:
             summary["notes"].append(
-                "dry-run 预览：参数发现失败 ⇒ 真跑会 rc=2（命令序列到 stop 为止）")
+                "dry-run 预览：预置位/参数发现不可行 ⇒ 真跑会 rc=2（命令序列到 stop 为止）")
         summary["commands"] = runner.commands
         summary["verdict"] = "DRY-RUN"
         summary["exit_code"] = 2 if preview_failed else 0
@@ -1695,7 +2618,7 @@ def execute(cfg):
     for side in SIDES:
         ctx = side_ctx(side, out_dir, scenario, card, discovery=discovery_cfg)
         try:
-            res = run_side(runner, side, prof, ctx, password)
+            res = run_side(runner, side, prof, ctx, password, placement=placement)
         except (ConfigError, OSError) as e:
             res = {"side": side, "rc": 2, "error": "配置/执行错误：%s" % e}
             summary["notes"].append("%s: %s" % (side, e))
@@ -1706,6 +2629,9 @@ def execute(cfg):
         summary["sides"][side] = res
         if res.get("discovered"):
             summary["discovery"]["sides"][side] = res["discovered"]
+        if res.get("placement"):
+            # README/card-window.json 的 placement 段读这份（与 discovery 同口径）
+            summary["placement"]["sides"][side] = res["placement"]
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -1927,9 +2853,75 @@ def main():
         f.flush()
     if mode == "restore":
         return 0
+    if mode == "mysql":
+        # 角色预置位的 db 桩：读 stdin 的 SQL，按语句形状返回 mysql --batch 口径的 TSV。
+        # 状态落 `<log>.placement-<side>`，模拟「库里的那一行」；环境变量可以造各种失败。
+        import re as _re
+        sql_text = sys.stdin.read()
+        state_path = log + ".placement-" + side
+        st = {"map": "0", "x": 289, "y": 618, "fp": "fp-before"}
+        init = os.environ.get("STUB_PLACEMENT_INIT")
+        if init:
+            parts = init.split(",")
+            st.update({"map": parts[0], "x": int(parts[1]), "y": int(parts[2])})
+        if os.path.exists(state_path):
+            try:
+                with open(state_path, encoding="utf-8") as f:
+                    st = json.load(f)
+            except (OSError, ValueError):
+                pass
+        if "SHOW COLUMNS" in sql_text:
+            print("\n".join("%s\tint(11)\tYES\t\tNULL\t" % c for c in (
+                ["Id", "ServerIndex", "LoginID", "ChrName", "MapName", "CX", "CY",
+                 "Level", "HomeMap", "Deleted"]
+                if not os.environ.get("STUB_PLACEMENT_NO_HOMECOL")
+                else ["Id", "ServerIndex", "LoginID", "ChrName", "MapName", "CX", "CY",
+                      "Level", "Deleted"])))
+            return 0
+        if "UPDATE" in sql_text:
+            mm = _re.search(r"`MapName`\s*=\s*'([^']*)'", sql_text)
+            mx = _re.search(r"`CX`\s*=\s*(-?\d+)", sql_text)
+            my = _re.search(r"`CY`\s*=\s*(-?\d+)", sql_text)
+            if os.environ.get("STUB_PLACEMENT_NOWRITE") != side:
+                st["map"] = mm.group(1) if mm else st["map"]
+                st["x"] = int(mx.group(1)) if mx else st["x"]
+                st["y"] = int(my.group(1)) if my else st["y"]
+                st["fp"] = ("fp-corrupt"
+                            if os.environ.get("STUB_PLACEMENT_CORRUPT") == side
+                            else st.get("fp", "fp-before"))
+            with open(state_path, "w", encoding="utf-8") as f:
+                json.dump(st, f, sort_keys=True)
+            print(os.environ.get("STUB_PLACEMENT_AFFECTED", "1"))
+            return 0
+        # 读行
+        if os.environ.get("STUB_PLACEMENT_MISSING") == side:
+            print("0\t0\t\t-1\t-1\t\t\t0")
+            return 0
+        home = "" if os.environ.get("STUB_PLACEMENT_NOHOME") == side else "0"
+        deleted = "1" if os.environ.get("STUB_PLACEMENT_DELETED") == side else "0"
+        print("1\t7\t%s\t%d\t%d\t%s\t%s\t%s"
+              % (st["map"], st["x"], st["y"], st.get("fp", "fp-before"), home, deleted))
+        with open(state_path, "w", encoding="utf-8") as f:
+            json.dump(st, f, sort_keys=True)
+        return 0
     if mode == "stack":
         if os.environ.get("STUB_STACK_FAIL") == side:
             return 3
+        pid_mode = os.environ.get("STUB_PID_MODE")
+        if pid_mode and side == "rust":
+            # 模拟 start_mir2_server.ps1：把 roles[].exe 写进 `-LogDir` 的 pid 文件。
+            # 真文件由 Windows PowerShell 5 的 Set-Content -Encoding utf8 写出 => 带 BOM。
+            if pid_mode != "missing":
+                exe = os.environ.get("STUB_PID_EXE", "")
+                if pid_mode == "wrong":
+                    exe = "E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"
+                side_dir = os.environ.get("CARD_WINDOW_SIDE_DIR") or "."
+                enc = "utf-8-sig" if os.environ.get("STUB_PID_BOM") == "1" else "utf-8"
+                with open(os.path.join(side_dir, "mir2-server.pid.json"), "w",
+                          encoding=enc) as f:
+                    json.dump({"server_exe": exe,
+                               "roles": [{"role": "game-svr", "pid": 4242,
+                                          "exe": exe}]}, f)
         return 0
     if mode == "stop":
         return 0
@@ -2004,23 +2996,30 @@ if __name__ == "__main__":
 
 
 def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
-                      busy_port=None, ready_ports=None):
+                      busy_port=None, ready_ports=None, envir_roots=None,
+                      chars_db=None, pid_wiring=None, pid_bom=False):
     py = sys.executable
 
     def side(name):
+        db = {"command": [py, stub, "db", name, log, "{db_dir}"],
+              "databases": ["mir2_test_db"],
+              "characters_db": (chars_db or {}).get(
+                  name, "mir2_test_db" if name == "csharp" else "mir2_test_db_r")}
         prof_side = {
             "label": name,
             "stack": [py, stub, "stack", name, log],
             "stop": [py, stub, "stop", name, log],
             "restore": [py, stub, "restore", name, log],
             "probe": [py, stub, "probe", name, log],
-            "db": {"command": [py, stub, "db", name, log, "{db_dir}"],
-                   "databases": ["mir2_test_db"]},
+            "db": db,
+            "db_client": {"mysql": [py, stub, "mysql", name, log]},
             "ports": [],
             "ready_ports": [],
             "probe_extra": [],
             "binaries": [stub],
         }
+        if envir_roots:
+            prof_side["envir_root"] = envir_roots[name]
         if name == "csharp" and (busy_port or ready_ports):
             prof_side["ports"] = [busy_port] if busy_port else []
             prof_side["ready_ports"] = list(ready_ports or [])
@@ -2028,6 +3027,14 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
             prof_side["probe_extra"] = ["--mutate"]
         if name == "csharp" and stack_fail == "csharp":
             prof_side["env"] = {"STUB_STACK_FAIL": "csharp"}
+        if name == "rust" and pid_wiring:
+            # 接线用例：stub 栈写 pid 文件，走完整 run_side（review I1）。
+            # server_exe 显式覆盖 => 不依赖本检出是否构建了 target/{release,debug}。
+            prof_side["require_pid_binaries"] = True
+            prof_side["server_exe"] = stub
+            prof_side["pid_file"] = "{side_dir}/" + PID_FILE_NAME
+            prof_side["env"] = {"STUB_PID_MODE": pid_wiring, "STUB_PID_EXE": stub,
+                                "STUB_PID_BOM": "1" if pid_bom else "0"}
         return prof_side
 
     return {
@@ -2045,6 +3052,118 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
     }
 
 
+def same_path(a, b):
+    """Windows 口径的路径比较（大小写/分隔符/相对片段归一）。"""
+    def n(p):
+        return os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
+    return n(a) == n(b)
+
+
+def _selftest_pid_binaries(tmp):
+    """卡 openmir2-window-rust-binary-evidence：pid 文件 exe 与登记 binaries 的一致性。
+
+    纯函数层用例（含 review B1/B2 的牙）：① 一致 ⇒ ok；② **带 BOM 的真 pid 文件** ⇒ ok
+    （PowerShell 5 `Set-Content -Encoding utf8` 写出的就是带 BOM 的）；③ 不符 ⇒ 失败并点名
+    角色；④ 缺文件 ⇒ 失败并点名；⑤ 路径只认 profile 的 `pid_file`（不是 `<side_dir>`）；
+    ⑥ `{side_dir}` 模板；⑦ 牙：登记指回 `rust-root/GameSrv.exe` ⇒ 红；
+    ⑧ 内置 alt profile 必须显式声明真窗口读的那个部署路径（牙：改回旧位置 ⇒ 红）。
+    """
+    d = os.path.join(tmp, "pidbin")
+    os.makedirs(d, exist_ok=True)
+    exe = os.path.join(d, "mir2-server.exe")
+    pid = os.path.join(d, PID_FILE_NAME)
+    sc = {"binaries": [exe.replace(os.sep, "/")]}
+    out = []
+
+    def write_pid(path, exe_value, encoding="utf-8"):
+        with open(path, "w", encoding=encoding) as f:
+            json.dump({"server_exe": exe_value,
+                       "roles": [{"role": "game-svr", "pid": 4242, "exe": exe_value}]}, f)
+
+    # ① 正常登记 ⇒ ok
+    write_pid(pid, exe)
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((ok and err is None, "pid 文件 exe 与登记一致 ⇒ ok"))
+    # ② 真 pid 文件带 UTF-8 BOM（PowerShell 5 Set-Content -Encoding utf8）⇒ 仍能读
+    write_pid(pid, exe, encoding="utf-8-sig")
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((ok and err is None, "带 UTF-8 BOM 的 pid 文件 ⇒ 仍 ok（utf-8-sig 读取）"))
+    # ③ 登记与 pid 不符 ⇒ False 且点名
+    write_pid(pid, os.path.join(d, "GameSrv.exe"))
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and "game-svr" in err, "pid exe 与登记不符 ⇒ 失败并点名角色"))
+    # ④ pid 文件缺失 ⇒ False（rc=2 路径）
+    try:
+        os.remove(pid)
+    except OSError:
+        pass
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and PID_FILE_NAME in err, "缺 pid 文件 ⇒ 失败且点名文件"))
+    # ⑤ pid 路径只认 profile 声明（不是 <side_dir>）：真部署写在 wrapper 的 -LogDir
+    logs = os.path.join(tmp, "pidbin-logs")
+    os.makedirs(logs, exist_ok=True)
+    real_pid = os.path.join(logs, PID_FILE_NAME)
+    write_pid(real_pid, exe)
+    empty_side = os.path.join(tmp, "pidbin-side-empty")
+    os.makedirs(empty_side, exist_ok=True)
+    ok, err, info = verify_pid_binaries(empty_side, {"binaries": [exe],
+                                                     "pid_file": real_pid}, "rust")
+    out.append((ok and err is None and same_path(info.get("pid_file"), real_pid),
+                "pid 路径只认 profile 的 pid_file（不是 <side_dir>）"))
+    # ⑥ `{side_dir}` 模板按本侧产物目录展开
+    ok, err, info = verify_pid_binaries(
+        logs, {"binaries": [exe], "pid_file": "{side_dir}/" + PID_FILE_NAME}, "rust")
+    out.append((ok and err is None and same_path(info.get("pid_file"), real_pid),
+                "pid_file 的 {side_dir} 模板按本侧目录展开"))
+    # ⑦ 牙：把 registrations 指回 rust-root 的 .NET 程序集（老值）⇒ 对拍变红
+    write_pid(pid, exe)
+    stale = {"binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"]}
+    ok, _, _ = verify_pid_binaries(d, stale, "rust")
+    out.append((not ok, "牙：登记指回 rust-root/GameSrv.exe ⇒ 一致性断言红"))
+    # ⑧ 内置 alt profile 显式声明真窗口要读的那个文件（review B1）
+    expected = "E:/tmp/conformance/rust-logs/" + PID_FILE_NAME
+    try:
+        alt = load_profile("alt")["sides"]["rust"]
+        resolved = pid_file_path(os.path.join(tmp, "side"), alt)
+        declared_ok = same_path(resolved, expected)
+    except ConfigError:
+        declared_ok = False
+    out.append((declared_ok,
+                "内置 alt profile 显式声明 pid 文件 = 部署 -LogDir（%s）" % expected))
+    return out
+
+
+def _selftest_pid_wiring(tmp, base_cfg, profile_factory):
+    """接线覆盖（review I1 / 牙③）：stub 栈写 pid 文件，走完整 `run_side` 端到端。
+
+    纯函数层绿不代表接线活着——旁路 `if sc.get("require_pid_binaries"):` 整段时，
+    下面三条必须变红（否则这条卡的核心行为随时可以是死的）。
+    """
+    def run(tag, mode, bom=False):
+        prof = profile_factory(pid_wiring=mode, pid_bom=bom)
+        summary = execute(base_cfg(os.path.join(tmp, "pid-wiring-" + tag), prof))
+        return summary, (summary.get("sides") or {}).get("rust") or {}
+
+    out = []
+    s_ok, r_ok = run("ok", "ok", bom=True)
+    info = r_ok.get("pid_binaries") or {}
+    out.append((s_ok["exit_code"] == 0 and r_ok.get("rc") == 0
+                and bool(info.get("roles"))
+                and str(info.get("pid_file") or "").endswith(PID_FILE_NAME),
+                "接线：起栈后读 pid 文件（带 BOM）对账通过 => 整体 rc=0 且证据记下 roles[]"))
+    s_bad, r_bad = run("bad", "wrong")
+    err_bad = r_bad.get("error") or ""
+    out.append((s_bad["exit_code"] == 2 and r_bad.get("rc") == 2
+                and "不一致" in err_bad and "game-svr" in err_bad,
+                "接线：pid exe 与登记不符 => run_side rc=2 并点名角色（整体 rc=2）"))
+    s_miss, r_miss = run("miss", "missing")
+    err_miss = r_miss.get("error") or ""
+    out.append((s_miss["exit_code"] == 2 and r_miss.get("rc") == 2
+                and PID_FILE_NAME in err_miss,
+                "接线：缺 pid 文件 => run_side rc=2 且点名文件（整体 rc=2）"))
+    return out
+
+
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
     stub = os.path.join(tmp, "stub.py")
@@ -2054,6 +3173,50 @@ def selftest():
     scenario = os.path.join(tmp, "scenario.json")
     with open(scenario, "w", encoding="utf-8") as f:
         f.write("{}\n")
+
+    # --- 角色预置位（placement）的离线夹具：两侧各一份部署内容 + 合成 .map ---
+    def write_map(path, w, h, walls=()):
+        body = bytearray()
+        for x in range(w):
+            for y in range(h):
+                bk = MAP_WALL_BIT if (x, y) in walls else 0
+                body += struct.pack("<HHH", bk, 0, 0) + b"\0" * 6
+        with open(path, "wb") as f:
+            f.write(struct.pack("<hh", w, h) + b"\0" * (MAP_HEADER_BYTES - 4))
+            f.write(bytes(body))
+
+    def make_deploy(root, data_db):
+        os.makedirs(os.path.join(root, "Envir"), exist_ok=True)
+        os.makedirs(os.path.join(root, "Map"), exist_ok=True)
+        with open(os.path.join(root, "Envir", "MapInfo.txt"), "w",
+                  encoding="gbk", newline="\n") as f:
+            # `[NAME DESC SERVERINDEX]`：服务器号是描述的第 2 段（与 oracle 同口径）
+            f.write("[0 主城]\n[0122 皇宫]\n[GA2 情人家园]\n[N109 桃源源]\n"
+                    "[WALL 墙图]\n[ELSEWHERE 别的服 3]\n")
+        with open(os.path.join(root, "Server.conf"), "w",
+                  encoding="utf-8", newline="\n") as f:
+            f.write("[DataBase]\nDbType=MySQL\n"
+                    "ConnctionString=server=127.0.0.1;uid=root;pwd=;database=%s;\n\n"
+                    "[Server]\nServerIndex=0\n\n[Share]\nEnvirDir=Envir\nMapDir=Map\n"
+                    % data_db)
+        write_map(os.path.join(root, "Map", "0.map"), 20, 20)
+        write_map(os.path.join(root, "Map", "0122.map"), 30, 30)
+        write_map(os.path.join(root, "Map", "GA2.map"), 10, 10)
+        write_map(os.path.join(root, "Map", "N109.map"), 10, 10)
+        write_map(os.path.join(root, "Map", "WALL.map"), 10, 10, walls={(5, 5)})
+        write_map(os.path.join(root, "Map", "ELSEWHERE.map"), 10, 10)
+
+    deploy = {"csharp": os.path.join(tmp, "deploy-csharp"),
+              "rust": os.path.join(tmp, "deploy-rust")}
+    make_deploy(deploy["csharp"], "mir2_test_data")
+    make_deploy(deploy["rust"], "mir2_test_data_r")
+
+    def place_scenario(pl, name="place"):
+        path = os.path.join(tmp, "scen-%s-%d.json" % (name, len(os.listdir(tmp))))
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"name": name, "placement": pl,
+                       "steps": [{"wait_for": 658, "timeout_ms": 10}]}, f)
+        return path
 
     # 占用一个端口（本进程监听），用于 fail-closed 牙
     holder = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -3003,6 +4166,308 @@ def selftest():
         chk(s_m1b["exit_code"] == 2 and "run.json 为空" in err_m1b,
             "M-1 空 run.json => rc=2")
 
+        # 18) 角色预置位（placement，卡 openmir2-window-character-placement）：
+        #     场景顶层声明 => 每侧 restore 之后、**起栈之前**把该侧测试库改到位；
+        #     完成不了 => rc=2 点名，且不起栈/不跑场景（绝不让 probe 去超时）。
+        def place_prof(**kw):
+            kw.setdefault("envir_roots", deploy)
+            return _selftest_profile(tmp, stub, log, **kw)
+
+        def reset_place_state():
+            fresh_log()
+            for s in SIDES:
+                try:
+                    os.remove(log + ".placement-" + s)
+                except OSError:
+                    pass
+
+        scen_place = place_scenario({"map": "0122", "x": 10, "y": 10})
+
+        # 18a) 已就位 => 无操作（不执行 UPDATE）
+        reset_place_state()
+        prof_p0 = place_prof()
+        for s in SIDES:
+            prof_p0["sides"][s]["env"] = {"STUB_PLACEMENT_INIT": "0122,10,10"}
+        s_p0 = execute(base_cfg(os.path.join(tmp, "run-place-noop"), prof_p0,
+                                scenario=scen_place))
+        p0 = (s_p0["sides"].get("csharp") or {}).get("placement") or {}
+        chk(s_p0["exit_code"] == 0 and p0.get("action") == "noop",
+            "PL-1 已就位 => 不执行 UPDATE（action=%r，rc=%s）"
+            % (p0.get("action"), s_p0["exit_code"]))
+        chk("placement.update" not in [c["step"] for c in s_p0["commands"]],
+            "PL-1 已就位 => 命令序列里没有 placement.update（%s）"
+            % [c["step"] for c in s_p0["commands"]][:8])
+
+        # 18b) 需移动 => 预置成功后才起栈/跑场景；两侧各改各的库，读回等于目标
+        reset_place_state()
+        out_p1 = os.path.join(tmp, "run-place-move")
+        s_p1 = execute(base_cfg(out_p1, place_prof(), scenario=scen_place))
+        steps_p1 = [(c["side"], c["step"]) for c in s_p1["commands"]
+                    if c["side"] == "csharp"]
+        chk(s_p1["exit_code"] == 0 and s_p1["verdict"] == "PASS",
+            "PL-2 需移动 => 预置后 rc=0/PASS（实际 %s/%s）"
+            % (s_p1["exit_code"], s_p1["verdict"]))
+        chk([x[1] for x in steps_p1][:5]
+            == ["restore", "placement.columns", "placement.read", "placement.update",
+                "placement.verify"]
+            and "stack" not in [x[1] for x in steps_p1][:5],
+            "PL-2 预置发生在 restore 之后、起栈之前（%s）"
+            % [x[1] for x in steps_p1][:6])
+        cs_p1 = (s_p1["sides"].get("csharp") or {}).get("placement") or {}
+        rs_p1 = (s_p1["sides"].get("rust") or {}).get("placement") or {}
+        chk(cs_p1.get("action") == "updated"
+            and (cs_p1.get("after") or {}).get("map") == "0122"
+            and (cs_p1.get("after") or {}).get("x") == 10
+            and (cs_p1.get("after") or {}).get("y") == 10,
+            "PL-2 C# 侧预置后读回 = 目标位（%s）" % (cs_p1.get("after"),))
+        chk(cs_p1.get("db") == "mir2_test_db" and rs_p1.get("db") == "mir2_test_db_r",
+            "PL-3 两侧各改各的测试库（csharp=%r rust=%r）"
+            % (cs_p1.get("db"), rs_p1.get("db")))
+        chk((cs_p1.get("before") or {}).get("fingerprint")
+            == (cs_p1.get("after") or {}).get("fingerprint")
+            and cs_p1.get("changed_columns") == ["MapName", "CX", "CY"],
+            "PL-4 只改 MapName/CX/CY：其余列 MD5 指纹不变（%s）"
+            % cs_p1.get("changed_columns"))
+        try:
+            with open(os.path.join(out_p1, "csharp", "placement.json"),
+                      encoding="utf-8") as f:
+                pj = json.load(f)
+        except (OSError, ValueError):
+            pj = {}
+        chk(pj.get("rc") == 0 and pj.get("source") == "scenario"
+            and bool(pj.get("sql", {}).get("update")),
+            "PL-5 每侧落 placement.json（含 SQL 与前后值，%s）"
+            % sorted(pj)[:6])
+        try:
+            with open(os.path.join(out_p1, "README.txt"), encoding="utf-8") as f:
+                readme_p1 = f.read()
+        except OSError:
+            readme_p1 = ""
+        chk("placement: map=0122 x=10 y=10" in readme_p1
+            and "csharp placement rc=0 db=mir2_test_db action=updated" in readme_p1
+            and "placement rc=0 db=mir2_test_db_r action=updated" in readme_p1
+            and "placement (not run)" not in readme_p1,
+            "PL-5 README 的 placement 段写了两侧的前后值（不是 (not run)）")
+
+        # 18c) 目标图不在 MapInfo => rc=2 点名词，且不起栈/不跑场景
+        reset_place_state()
+        s_p2 = execute(base_cfg(os.path.join(tmp, "run-place-badmap"), place_prof(),
+                                scenario=place_scenario({"map": "NOPE", "x": 1, "y": 1},
+                                                        "badmap")))
+        err_p2 = (s_p2["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p2["exit_code"] == 2 and "NOPE" in err_p2,
+            "PL-6 目标图不存在 => rc=2 点名图名（%r）" % err_p2[:90])
+        chk("stack csharp" not in read_log() and "probe csharp" not in read_log(),
+            "PL-6 预置失败 => 不起栈、不跑场景（不让 probe 去超时）")
+
+        # 18d) 坐标越界 / 落在阻挡格 => rc=2 点名
+        reset_place_state()
+        s_p3 = execute(base_cfg(os.path.join(tmp, "run-place-oob"), place_prof(),
+                                scenario=place_scenario({"map": "0122", "x": 100,
+                                                         "y": 10}, "oob")))
+        err_p3 = (s_p3["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p3["exit_code"] == 2 and "越界" in err_p3 and "30x30" in err_p3,
+            "PL-7 坐标越界 => rc=2 点名图/坐标/尺寸（%r）" % err_p3[:90])
+        reset_place_state()
+        s_p4 = execute(base_cfg(os.path.join(tmp, "run-place-wall"), place_prof(),
+                                scenario=place_scenario({"map": "WALL", "x": 5, "y": 5},
+                                                        "wall")))
+        err_p4 = (s_p4["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p4["exit_code"] == 2 and "不可走" in err_p4,
+            "PL-8 目标格是墙 => rc=2（oracle 会随机挪位/回城，探针只会超时，%r）"
+            % err_p4[:90])
+        reset_place_state()
+        s_p5 = execute(base_cfg(os.path.join(tmp, "run-place-else"),
+                                place_prof(),
+                                scenario=place_scenario({"map": "ELSEWHERE", "x": 1,
+                                                         "y": 1}, "else")))
+        err_p5 = (s_p5["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p5["exit_code"] == 2 and "服务器号" in err_p5,
+            "PL-9 图属于别的服务器号 => rc=2（oracle 会切服，%r）" % err_p5[:90])
+
+        # 18e) 连同改坏其它列 => rc=2 点名「其它列」
+        reset_place_state()
+        prof_p6 = place_prof()
+        prof_p6["sides"]["csharp"]["env"] = {"STUB_PLACEMENT_CORRUPT": "csharp"}
+        s_p6 = execute(base_cfg(os.path.join(tmp, "run-place-corrupt"), prof_p6,
+                                scenario=scen_place))
+        err_p6 = (s_p6["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p6["exit_code"] == 2 and "其它列" in err_p6,
+            "PL-10 预置连带改坏其它列 => rc=2（%r）" % err_p6[:90])
+
+        # 18f) 角色不存在 / HomeMap 为空 / 已删除 => rc=2 点名
+        for tag, env, want in (
+                ("missing", {"STUB_PLACEMENT_MISSING": "csharp"}, "命中 0 行"),
+                ("nohome", {"STUB_PLACEMENT_NOHOME": "csharp"}, "HomeMap"),
+                ("deleted", {"STUB_PLACEMENT_DELETED": "csharp"}, "Deleted=1")):
+            reset_place_state()
+            prof_x = place_prof()
+            prof_x["sides"]["csharp"]["env"] = env
+            s_x = execute(base_cfg(os.path.join(tmp, "run-place-" + tag), prof_x,
+                                   scenario=scen_place))
+            err_x = (s_x["sides"].get("csharp") or {}).get("error") or ""
+            chk(s_x["exit_code"] == 2 and want in err_x,
+                "PL-11 预置前置不满足（%s）=> rc=2 点名（%r）" % (tag, err_x[:90]))
+
+        # 18g) 库配对：C# 侧声明成 Rust 的库 => rc=2（两侧库不同名，拿错就是假差异）
+        reset_place_state()
+        s_p7 = execute(base_cfg(os.path.join(tmp, "run-place-pair"),
+                                place_prof(chars_db={"csharp": "mir2_test_db_r"}),
+                                scenario=scen_place))
+        err_p7 = (s_p7["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p7["exit_code"] == 2 and "不配对" in err_p7,
+            "PL-12 角色库与该侧部署不配对 => rc=2（%r）" % err_p7[:90])
+
+        # 18h) 缺 characters_db => rc=2（不猜库名）
+        reset_place_state()
+        prof_p8 = place_prof()
+        prof_p8["sides"]["csharp"]["db"] = {
+            "command": [sys.executable, stub, "db", "csharp", log, "{db_dir}"],
+            "databases": ["mir2_test_db"]}
+        s_p8 = execute(base_cfg(os.path.join(tmp, "run-place-nodb"), prof_p8,
+                                scenario=scen_place))
+        err_p8 = (s_p8["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p8["exit_code"] == 2 and "characters_db" in err_p8,
+            "PL-13 缺 db.characters_db => rc=2 点名（%r）" % err_p8[:90])
+
+        # 18i) 表结构缺列（HomeMap）=> rc=2（不改表结构，直接拒绝）
+        reset_place_state()
+        prof_p9 = place_prof()
+        prof_p9["sides"]["csharp"]["env"] = {"STUB_PLACEMENT_NO_HOMECOL": "1"}
+        s_p9 = execute(base_cfg(os.path.join(tmp, "run-place-nocol"), prof_p9,
+                                scenario=scen_place))
+        err_p9 = (s_p9["sides"].get("csharp") or {}).get("error") or ""
+        chk(s_p9["exit_code"] == 2 and "HomeMap" in err_p9,
+            "PL-14 characters 缺 HomeMap 列 => rc=2（%r）" % err_p9[:90])
+
+        # 18j) scenario.placement 形状非法 => 加载期 ConfigError（CLI rc=2），一步都不执行
+        for label, bad in (("非法图名", {"map": "bad-map!", "x": 1, "y": 1}),
+                           ("x 非整数", {"map": "0122", "x": "10", "y": 1}),
+                           ("缺 y", {"map": "0122", "x": 1}),
+                           ("多余键", {"map": "0122", "x": 1, "y": 1, "z": 2})):
+            reset_place_state()
+            shape_err = ""
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-place-shape"), place_prof(),
+                                 scenario=place_scenario(bad, "shape")))
+            except ConfigError as e:
+                shape_err = str(e)
+            chk("placement" in shape_err and not os.path.exists(log),
+                "PL-15 placement 形状非法（%s）=> ConfigError 且一步都没执行（%r）"
+                % (label, shape_err[:80]))
+
+        # 18k) --dry-run：打印预置命令、做离线校验、不建目录/不连库
+        reset_place_state()
+        out_pdry = os.path.join(tmp, "run-place-dry")
+        s_pdry = execute(base_cfg(out_pdry, place_prof(), scenario=scen_place,
+                                  dry_run=True))
+        dry_steps_p = [c["step"] for c in s_pdry["commands"]]
+        chk(s_pdry["exit_code"] == 0 and not os.path.exists(out_pdry)
+            and not os.path.exists(log),
+            "PL-16 --dry-run => rc=0，不建目录、不执行任何命令")
+        chk(dry_steps_p[:3] == ["restore", "stack", "probe"]
+            or "placement.columns" not in dry_steps_p,
+            "PL-16 --dry-run 的预置是预览（不真连库，%s）" % dry_steps_p[:6])
+        chk((s_pdry["placement"].get("sides", {}).get("csharp") or {}).get("rc") == 0
+            and bool((s_pdry["placement"].get("sides", {}).get("csharp") or {})
+                     .get("offline_check")),
+            "PL-16 --dry-run 仍做离线内容校验（图/坐标可走）")
+
+        # 18l) 预置失败在 dry-run 里也 rc=2
+        s_pdrybad = execute(base_cfg(os.path.join(tmp, "run-place-drybad"),
+                                     place_prof(), dry_run=True,
+                                     scenario=place_scenario(
+                                         {"map": "NOPE", "x": 1, "y": 1}, "drybad")))
+        chk(s_pdrybad["exit_code"] == 2
+            and "placement.columns" not in [c["step"] for c in s_pdrybad["commands"]],
+            "PL-17 --dry-run 预置不可行 => rc=2 且不预览后续场景命令")
+
+        # 19) 本卡的 pid 对账：纯函数层 8 条 + 接线 3 条。
+        #     **必须在 RED/GREEN 判定之前计入**（review B3：放在 `if fail_n: return 1`
+        #     之后时，失败只打印、rc 仍为 0，牙在门禁层面不可能变红）。
+        for cond, msg in _selftest_pid_binaries(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_pid_wiring(
+                tmp, base_cfg, lambda **kw: _selftest_profile(tmp, stub, log, **kw)):
+            chk(cond, msg)
+        # 20) BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）
+        # 判据：合法 blocked ⇒ rc=2 且点名 reason/missing_fixture，**不建 out、不起栈、不写 report**；
+        # 无 blocked ⇒ 一字不变地 rc=0（不误伤）。检查必须在下面的 rc 判定（fail_n）之前。
+        def write_scen(doc, name):
+            path = os.path.join(tmp, "scen-%s-%d.json" % (name, len(os.listdir(tmp))))
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(doc, f, ensure_ascii=False)
+            return path
+
+        b_reason = "夹具不存在：基线角色没有一档同时满足 DC_min>59 与 HitPoint>=17"
+        b_fixture = "combat_strike 夹具矩阵（docs/combat-strike-scenario-20261023.md §6）"
+        scen_b = write_scen({
+            "name": "selftest_blocked",
+            "blocked": {"reason": b_reason, "missing_fixture": b_fixture},
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "blocked")
+        scen_unblocked = write_scen({
+            "name": "selftest_unblocked",
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "unblocked")
+
+        # 19a) --dry-run：rc=2、点名 reason 与 missing_fixture、不建 out、不预览任何命令
+        fresh_log()
+        out_b = os.path.join(tmp, "run-blocked-dry")
+        s_b = execute(base_cfg(out_b, _selftest_profile(tmp, stub, log),
+                               scenario=scen_b, dry_run=True))
+        chk(s_b["exit_code"] == 2
+            and any("scenario is BLOCKED: " + b_reason in n for n in s_b["notes"]),
+            "BL-1 --dry-run 命中 blocked => rc=2 且打印 'scenario is BLOCKED: <reason>'")
+        chk(any(b_fixture in n for n in s_b["notes"]),
+            "BL-1 --dry-run 打印 missing_fixture")
+        chk(s_b["verdict"] == "BLOCKED" and not s_b["commands"]
+            and not os.path.exists(out_b) and not read_log().strip(),
+            "BL-1 --dry-run 命中 blocked => 不建 out、不起栈、不预览命令（verdict=%s）"
+            % s_b["verdict"])
+
+        # 19b) 真跑：rc=2、不建 out 目录、不起栈、不写 report.json（与端口被占同等级）
+        fresh_log()
+        out_b2 = os.path.join(tmp, "run-blocked-real")
+        s_b2 = execute(base_cfg(out_b2, _selftest_profile(tmp, stub, log), scenario=scen_b))
+        chk(s_b2["exit_code"] == 2 and s_b2["verdict"] == "BLOCKED"
+            and not os.path.exists(out_b2) and not read_log().strip(),
+            "BL-2 真跑命中 blocked => rc=2、不建 out、不起栈、不写 report")
+        chk(not os.path.exists(os.path.join(out_b2, "report.json")),
+            "BL-2 真跑命中 blocked => 没有 report.json")
+
+        # 19c) blocked 结构非法 ⇒ 加载期 ConfigError（fail-closed），一步都不执行
+        for label, bad_bl in (("缺 reason", {"missing_fixture": "x"}),
+                              ("blocked 非对象", "yes"),
+                              ("未知键", {"reason": "x", "note": "y"}),
+                              ("reason 空串", {"reason": "  "})):
+            fresh_log()
+            err_b = ""
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-blocked-shape"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=write_scen({"name": "bad", "blocked": bad_bl,
+                                                      "steps": [{"wait_for": 658}]},
+                                                     "badshape"),
+                                 dry_run=True))
+            except ConfigError as e:
+                err_b = str(e)
+            chk("scenario.blocked" in err_b and not os.path.exists(log),
+                "BL-3 blocked 形状非法（%s）=> ConfigError 且一步都没执行（%r）"
+                % (label, err_b[:80]))
+
+        # 19d) 不带 blocked 的场景不受影响（同形状、同样 dry-run => rc=0 且命令照常预览）
+        fresh_log()
+        s_bok = execute(base_cfg(os.path.join(tmp, "run-unblocked"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=scen_unblocked, dry_run=True))
+        chk(s_bok["exit_code"] == 0 and s_bok["verdict"] == "DRY-RUN"
+            and any(c["step"] == "stack" for c in s_bok["commands"]),
+            "BL-4 无 blocked => 仍 rc=0 并照常预览（不误伤，实际 %s/%s）"
+            % (s_bok["exit_code"], s_bok["verdict"]))
+
     finally:
         holder.close()
         import shutil
@@ -3025,7 +4490,10 @@ def build_parser():
         description="窗口批处理：restore -> 起 C# 栈 -> probe -> 停栈 -> 起 Rust -> probe -> "
                     "停栈 -> compare -> 归档（语义同 run_dual.sh，run_dual.sh 不改）。")
     ap.add_argument("--card", help="卡片 id（--post-comment 时必填；写入 README/摘要）")
-    ap.add_argument("--scenario", help="场景 JSON（tools/probe/scenarios/*.json）")
+    ap.add_argument("--scenario",
+                    help="场景 JSON（tools/probe/scenarios/*.json）。场景顶层 `blocked`"
+                         "（{reason, [missing_fixture]}）=> 本工具 rc=2 且不建 out/不起栈/不写 report："
+                         "封存场景不得被窗口批次消费")
     ap.add_argument("--out", help="产物目录（真跑必填；--dry-run 可省）")
     ap.add_argument("--profile", default="alt",
                     help="profile：alt（默认）| csharp-default | <profile.json 路径>")

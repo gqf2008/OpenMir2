@@ -23,13 +23,69 @@ python tools/probe/mir2_probe.py \
 }
 ```
 
-* 顶层只允许 `name` / `description` / `params` / `required` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `blocked` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+  （`blocked` = 场景被封存：形状合法、`--check-scenario` 仍 rc=0，但 `card_window.py` 见到即 rc=2、不建 out/不起栈；schema 见 `docs/probe-scenario-blocked-gate-20261023.md`。）
+  （`computed` 是给 `param_discovery` 的**声明性注记**，probe 不读它；见 `move_walk.json`。）
 * `required`（可选）是**必填变量名列表**：`expand_scenario` 在合并完 `--var` 后逐名检查，缺任何一个即
   `scenario-error`（退出码 2），消息点名缺哪个变量。运行期才知道的值（NPC/商人 `ActorId`、`MakeIndex`、
   物品名、自身坐标）一律走这里，**不要**在 `params` 里放 `"REQUIRED"` 之类的哨兵值。
 * 离线校验：`python -I -B tools/probe/mir2_probe.py --check-scenario --scenario <file.json> [--var k=v ...]`
   —— 只加载+展开，不连网；rc=0 通过、rc=2 场景错误。
+
+  形状之外还做**语义校验**（`check_scenario()`；缺一条就不算「能真跑」，全部 fail-closed rc=2）：
+
+  1. **R2 每个 `wait_for` 之前必须已有发帧步骤**（`send`/`say`/`click_npc`/`dlg_select`）。
+     **真实覆盖口径（别误读——这条不是「删掉攻击步会红」的牙）**：R2 只保证「`wait_for` 之前
+     **存在过**某个发帧步」，**不保证 producer 与 consumer 的对应关系**。只有 `wait_for` 之前
+     **一个发帧步都没有**（例如把场景里的 **send 全部删掉**）才 rc=2；删掉**多个 send 中的某一个**
+     （包括攻击步，如 `combat_strike` 的 `CM_HIT(3014)`、前面还留着 `CM_TURN`）**仍可能 rc=0**。
+     要让「删掉攻击步」变红需要 **producer→consumer 映射**，而那是猜出来的因果：`SM_STRUCK(31)`
+     既可能来自 `CM_HIT` 一族，也可能来自**挨打**（见 `docs/combat-strike-scenario-20261023.md`
+     的 BLOCKED 分析：玩家挨守卫一箭也收 `SM_STRUCK`、`recog=self`）—— 硬映射会把合法场景判死。
+     该能力**不在本卡范围**，已在卡 `openmir2-probe-scenario-validation-gaps` 上登记为残留
+     **R2-producer-map**（建议开卡的描述见该卡 status）。
+  2. **R1 至少一个发帧步或累计观察步**（`wait_idents`/`wait_frames`）——全是 `sleep`
+     的场景既不发帧也不观察，什么也证不了。纯观察场景（如 `login_only`）靠驱动器的
+     登录链 + 自动握手已经发帧，所以它合法。
+  3. **R3 ident 必须存在于协议常量表**：`send.ident` 与 `wait_for` / `wait_frames.idents` /
+     `wait_idents.idents` 都必须能在 `mir2-rs/crates/protocol/src/messages.rs` 的 `CM_*`/`SM_*`
+     里找到（该表由 `msgcodegen` 与 C# `Messages.cs` 对拍）。表外 ident（如 `wait_for: 4095`）
+     = 永远发不出 / 等不到，不会「跑起来才发现」。
+  4. **R4 变量引用必须已声明**：`send.recog/param/tag/series`、`send.text_from`、`click_npc`、
+     `dlg_select.recog` 里的变量名必须在场景的 `required` / `params` / `computed` 里；
+     `--var` 是给**已声明**变量覆值的通道，不是声明通道（拿 `--var` 喂一个拼错的名字仍然红）。
+  5. **R5 `placement` 与由位置派生的 `params` 必须自洽**：声明了 `placement` 且在生效 `params`
+     里给了位置派生变量时（`--var` 覆值同样生效，值可以是**另一个 params 名的间接引用**），
+     它们必须与 `placement` 对得上，否则 rc=2 并打印两个来源：
+     * `self_pos` —— `MakeLong(X,Y) = (Y<<16)|X`（低 16 位 X、高 16 位 Y），解码出的 `(x,y)` 必须等于 `placement.x/y`；
+     * `self_x` / `self_y` —— 必须分别等于 `placement.x` / `placement.y`。
+     不一致意味着角色被放到 A 点、期望值按 B 点算，真跑会**静默恒超时**，`card_window --dry-run` 也看不出来（实战来自 `combat_strike` 复审）。
+  6. **R6（仅警告，不改变 rc）攻击族的 `send.tag` 应是合法 Direction**：`HIT_IDENTS` 的 9 条攻击
+     ident 的 `tag` = oracle 的 `nDir = (byte)Tag`，截断后应在 `0..7`（`Enums/Direction.cs`）。
+     越界时只在 stderr 打一条 `WARN:`（点名 step/值），**rc 仍是 0** —— 因为 oracle **先按状态化
+     Dir 取目标**（C# `PlayObject.Attack.cs:26` / Rust `bins/game-svr/src/lib.rs:8836-8848`），
+     `nDir` 在取目标之后才写入（`BaseObject.Attack.cs:12`），所以越界方向**不影响本次命中**；
+     它污染的是**此后**的状态 Dir（动作帧与下一次取目标），且真实客户端不会发送这种帧。
+     ident 名单与方向值域都**解析 `mir2-rs/bins/game-svr/src/attackwire.rs`**（`HIT_IDENTS` / `DIR_*`），
+     不写私有表；非攻击族不受这条约束。
+  7. **W 至少一个等待步骤**（原有的 N-5 规则，已并入 `check_scenario()`）。
+
+  上面 R1–R5 是硬判据（rc=2），R6 是警告（rc 不变）；这些都只在 `--check-scenario` 生效。另：本卡把 `dlg_select.recog` 也改成了**加载期解析**
+  （`resolve_param` + i32 范围，与 `send.recog` 同口径/PRB-4），这条落在 `plan_step`，真跑也受益。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
+
+## `placement`：角色必须位于 map/x/y（由 `card_window.py` 应用）
+
+```json
+"placement": {"map": "0122", "x": 30, "y": 32, "note": "比奇国王 (29,32) 的邻格"}
+```
+
+* 本驱动器**只校验形状**（`map` 1..10 字符、`x`/`y` 为 0..65535 的整数），**不做预置位**：
+  声明存在时会在 stderr 打印一条提醒。**别以为直接跑 `mir2_probe.py` 就落到了目标位** ——
+  预置位由 `tools/conformance/card_window.py` 在**每侧 restore 之后、起栈之前**改测试库的
+  `characters.MapName/CX/CY` 完成（C# = `mir2_test_db`、Rust = `mir2_test_db_r`），
+  完成不了直接 rc=2，不会让 probe 去超时。详见 `docs/window-runbook-20261023.md` §1.5。
+* 坐标要选**阻挡格之外**的空格（通常取目标 NPC 的邻格）：落在墙格时 oracle 登录会随机挪位。
 
 ## 步骤动作
 
@@ -38,7 +94,7 @@ python tools/probe/mir2_probe.py \
 | `send` | 对象：必填 `ident`；可选 `recog`/`param`/`tag`/`series`；`text` / `raw_hex` / `text_from` **三选一** | 12B 头 + 体，按 `#1<EDCode>!` 发出 |
 | `say` | 字符串 | `CM_SAY(3030)`，`recog=0`，文本按 GBK+EDCode |
 | `click_npc` | int 或 `params` 名 | `CM_CLICKNPC(1010)`，`recog=<NPC actor id>` |
-| `dlg_select` | 字符串 label，或 `{"label": "...", "recog": N}` | `CM_MERCHANTDLGSELECT(1011)`；`recog` 缺省取**最近一条 `SM_MERCHANTSAY(643)` 的 recog** |
+| `dlg_select` | 字符串 label，或 `{"label": "...", "recog": N}` | `CM_MERCHANTDLGSELECT(1011)`；`recog` 缺省取**最近一条 `SM_MERCHANTSAY(643)` 的 recog**，也可写 `params` 名（加载期解析，与 `send.recog` 同口径） |
 | `wait_for` | int 或非空 int 数组 | 等**下一步开始之后**到达的第一条匹配 ident |
 | `wait_frames` | `{"count": N, "idents": [...], "timeout_ms": M}` | 等 gamegate 连接**累计**帧数 ≥ N 且 idents 都出现过 |
 | `wait_idents` | `{"idents": [...], "timeout_ms": M}` | 等 idents **全部**在 gamegate 连接上出现过（累计口径；`timeout_ms` 不满足即步骤失败） |
@@ -81,6 +137,42 @@ python tools/probe/mir2_probe.py \
 
 > `dice_chain` 末步是**分支相关**断言：`@ya52` 持筹码包走 `#ACT` 回 `643`，无筹码包走 `#ELSEACT MESSAGEBOX` 回 `SM_MENU_OK(767)`，
 > 因此该步等 `[643, 767]`——单等 `643` 会变成"无包账号必然超时"的恒失败断言。
+
+> `npc_script_chain` 是**多步标签链**（R1）：点比奇国王(0122) 后连发 5 次 `dlg_select`
+> （`@@buildguildnow` → `@buildguildexp` → `@main` → `@requestcastlewarA` → `@exit`），
+> 断言 `643 → 763 → 643 → 643 → 643 → 644`。`required: ["npc_actor"]` 走 643.recog 发现；
+> 链里没有 `@ask`（部署件无此标签）也没有 `@back`（无 `<.../@back>` 链接 ⇒ `LableIsCanJmp` 门控下零帧），
+> 逐条 oracle 出处与理由见 `docs/npc-script-chain-scenario-20261023.md`。
+
+> `combat_strike` 是**唯一一条主动发起攻击**的场景（R3）：`placement` 到 map 4 封魔谷 (256,232) →
+> `CM_TURN(3010)` 定状态化朝向 → `CM_HIT(3014)` → `wait_for 31`（`SM_STRUCK`）；目标是正上方格
+> (256,231) 的固定刷怪点 `恶魔弓箭手`（`MonGen.txt:90`，Range=0/Count=1；Race=112 `ArcherGuard`，
+> **非 FixedHideMode**）。
+> 三个容易写错的点，逐条 oracle 出处见 `docs/combat-strike-scenario-20261023.md`：
+> ① **`CM_TURN`/`CM_HIT` 的 X/Y 打包在 `recog` 里**（`WorldServer.cs:831-844`：
+> `nParam1=LoWord(Recog)`、`nParam2=HiWord(Recog)`、`wParam=Tag=Dir`，`param` 不被读）
+> ⇒ `recog` 必须写 `(Y<<16)|X`，不是「X 放 recog、Y 放 param」；
+> ② **必须先 `CM_TURN` 定朝向**——`CM_HIT` 取目标走 `GetPoseCreate()` 的**状态化 `Dir`**，
+> 报文里的 `tag` 只管动作帧（`PlayObject.Attack.cs:26` 早于 `BaseObject.Attack.cs:12` 的 `Dir=nDir`）；
+> ③ **本方看不到自己的 `SM_HIT(14)`**（`PlayObject.Message.cs:1433-1437` 自我过滤），
+> 命中只能等受击者的 `SM_STRUCK(31)`。
+> **本条现在是 BLOCKED-FIXTURE，不许当窗口输入，且「跑绿 ≠ 玩家命中」。** 目标必须既「非 FixedHide」又「打得动」——
+> Race=95 的 `僵尸2`/`石墓尸王` 是 `DigOutZombi`（出生即 `FixedHideMode=true`，按 oracle 的隐藏视野门
+> 永不出土、`SendRefMsg` 也不广播 ⇒ 恒超时），而名字不在 `monsters` 表里的 `弓箭护卫` 等根本不刷。
+> 剩下能刷的非隐藏目标只有 112/102/115，AC 都 ≥18；伤害扣的是 **[AC, 2AC-1] 的随机护甲**
+> （`BaseObject.Base.cs:789-806`，怪物 `AC=MakeWord(AC,AC)`，`WorldServer.MonGen.cs:898`），
+> 所以「必伤害」门槛是 `DC_min > 2*AC-1`（AC30 ⇒ ≥60），再叠加 `HitPoint ≥ SPEED-1`（SPEED18 ⇒ ≥17）；
+> 基线角色没有一档同时满足（最好的一对 joint 只有 24%，精确矩阵见文档 §6）。
+> ⇒ 现在跑必然 `wait_for` 超时。**另外这是敌对守卫**（`GuardUnit.cs:120-124` + `ArcherGuard.cs:39-81`），
+> 玩家挨打也会收到 `SM_STRUCK(31)` 且 `recog=self`，而 `wait_for` 只按 ident 匹配（`mir2_probe.py:291-303`）
+> ⇒ **即使跑绿也证明不了「玩家主动一击命中」**。**该封口已在工具层强制**：场景顶层带 `blocked`
+> （`combat_strike.json` 已补；schema 见 `docs/probe-scenario-blocked-gate-20261023.md`），`card_window.py`
+> 见到即 rc=2、不建 out/不起栈；原先「窗口批次不得消费本场景的任何 PASS」的人读约定降为解释。
+> 根治需 `wait_for` 支持 recog 过滤，归 `openmir2-probe-scenario-validation-gaps`）。
+> 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
+> `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
+
+> `upgrade_retrieve` 是**唯一一条武器升级 NPC 链**（R2）：`placement` 到盟重省 map 3 (320,328) → `click_npc` 沙巴克铁匠 → `@upgrade`/`@confirmupgrade`/`@upgradenow` 提交 → `sleep 660000` 过取回时效门 → `@main`/`@getbackupgnow` 取回（`Merchant.cs:529-590 / 594-759`）。四个容易踩的点：① **不能站铁匠邻格**——`MonGen.txt:51/58/59` 在 (325,311)/(336,321)/(339,313) 刷了 ArcherGuard（`GuardUnit.IsProperTarget` 对普通玩家 return true），11 分钟等待里必被射杀；② 取回要过 `UPgradeWeaponGetBackTime=600000`（`Server.conf:331`），Permission 恒 0 ⇒ 只能等，**窗口 profile 必须把 `timeout_ms` 抬到 ≥ 720000**（`card_window.py:1786` 的进程超时 = `timeout_ms/1000+120` 秒）；③ 提交/取回的成功硬门是**唯一 ident** `709`/`200`（`wait_idents`），`643` 只作成败判别（否则 643 会把失败分支蒙混过去）；④ 本场景要求背包 < 46 件（部署脚本没有 `~@getbackupgnow_bagfull` 标签 ⇒ 包满支零帧，等不到）。逐条 oracle 出处、夹具前置与登记缺口见 `docs/upgrade-retrieve-scenario-20261023.md`。
 
 ## 驱动器的自动握手（对拍不要关）
 
@@ -150,6 +242,10 @@ python tools/probe/mir2_probe.py --selftest
 
 `--selftest` 用 `../fixtures/r9/` 的离线 s2c 抓包跑「切帧 -> 解析 -> 落 ndjson」全链路，
 不连网、不起进程；含「改坏必红」的负向用例（载荷字节改成越界值必须报错）。
+当前共 **9 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
+删 `send` 步 / `wait_for` 写表外 ident / `send.ident` 表外 / 引用未声明变量 / `wait_for` 先于 `send` /
+全 `sleep` / 注释掉的常量不得进表 / `placement` 与 `self_pos`·`self_x`·`self_y` 不一致 / 间接 params 名不假红 /
+R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `login_only`、`dice_chain` 与非攻击族 `tag` 不被误伤。
 
 ## fixtures 来源
 
