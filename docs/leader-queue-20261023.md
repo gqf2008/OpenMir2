@@ -105,6 +105,9 @@
     ② 每次提交前 `git diff` 必须为空（`MM` 就是警报）；③ 若 runner 被中断，**先 `git checkout -- <file>`
     还原**，再比 `sha256sum <file>` 与 `git show :<file> | sha256sum` 一致才提交。
     与第 11 条同族：门禁工具本身会弄脏树（stale 二进制是另一例）。
+    **补充（2026-10-24 00:4x，reviewer-3 自曝）**：**还原方式本身也会弄脏树**——它用 Python 文本写回还原变异，
+    Windows 下把 LF 翻成 CRLF ⇒ 工作树变脏、sha 变化。⇒ **还原一律 `git checkout -- <file>`**（从 index/提交恢复），
+    绝不用文本写回；还原后必须 `sha256` 与 `git show :<file>` 比对一致。
 
 18. **worktree 的身份是固定的：reviewer 的 worktree 绝不能拿来干 worker 的活**（2026-10-23 22:3x 实测）：
     卡 `openmir2-start-server-whatif-sha`（worker 卡）被 **`openmir2-reviewer-5`** 用 `card_claim` 认领，
