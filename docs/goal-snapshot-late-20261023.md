@@ -295,3 +295,23 @@ ybdeal-frames），**1 张（`conformance-rng-nondeterminism`）没有**、只�
 2. **5 张 board 缺卡的原因未查明**（§3.4）：现象已复现（board JSON 447 张不含这 5 个 id、thread 可读、snapshot 更早），但 walgit board builder 的具体路径未读——归 coordinator 排查。
 3. **178 的来源查不到**（§6）。
 4. 本卡只做只读复算 + 文档：未改任何工具/代码/场景，未起栈、未连库；临时产物在 `E:/tmp/goalsnap/`（`fast.json` / `fast2.json` / `board.json` / `full.*`），交付后清理。
+
+---
+
+## 后续更新（2026-10-24 00:5x，`5e6b4e12`）
+
+> 本节的数字**覆盖 §1 的旧快照**；引用时以本节为准。
+
+- **条件② `fail` → `need_human`**：`三者皆无 0`、**FAIL 卡 0**。
+- `merged 未 closed 且无登记` **44 → 8**（四批登记共 36 张：T-227..T-262），
+  剩余 8 张 = 3 张显式顺延（真机不可达 1 / 多会话 2）+ 1 张无窗口判据 + 4 张未开班，
+  由卡 `openmir2-r-window-registry-closeout` 三桶收口。
+- `其它需人工 5`（线程可读但 `board --json` 不列出）由卡 `openmir2-board-index-reconcile` 处理。
+- 唯一 FAIL 卡 `openmir2-gm-batch-5-guild-castle` 已按 A/B/C 处置：**A 片 6 条合入 `2810298e9`**、
+  B 片由 `openmir2-gm-batch-5b-cross-server` 承接（**已合 `99a4d30c4`，保持 blocked-by G11**）、
+  C 片部署 `GMEXECUTE` 0 命中登记不实现。
+- **登记质量未审**：`window_required 122` 这个桶从未审计过「判据是否机器可判」——
+  卡 `openmir2-window-criteria-quality-audit` 在办（30 张抽样、三档定性）。
+
+⇒ **条件② 仍差的两件事都在 owner 手里**：① 真机窗口授权（`docs/needs-human-20261023-night.md` §1）；
+② `rules.json` 43 条 PENDING（其中 ident 14 需单独裁定，§2）。
