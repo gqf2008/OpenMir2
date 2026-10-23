@@ -313,6 +313,10 @@ pub enum Imp {
     /// `FireBurnCommand`（`@FireBurn`）。
     FireBurn,
 
+    /// `StartQuestCommand`（现网 `@开始提问`）：`SendQuestMsg` 被注释 ⇒ 非空名零帧；
+    /// 空名 ⇒ 红字帮助。
+    StartQuest,
+
     // ---- 批次 3 · 传送/召唤（17 + `@传送`，设计件 §4.3 第 11–27 行 / §6 G3）----
     /// `AllowDearRecallCommand`（现网 `@dfsgf567`）。
     AllowDearRecall,
@@ -449,7 +453,7 @@ pub enum Imp {
     /// **整段被注释** ⇒ 任何参数都零帧、零副作用（最小 no-op 实现）。
     ShowEffect,
 
-    /// 未接的 87 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 1 条）：
+    /// 未接的 85 条（185 − G1 5 条 − 批次 2/3 30 条 − 批次 3 18 条 − 批次 4 44 条 − 批次 5 3 条）：
     /// 现网全被权限门挡住，命令体留 G4-G6。
     Unimplemented,
 }
@@ -1152,6 +1156,13 @@ const NOTE_NO_WORLD: &str =
 /// `ShowEffectCommand.cs:20-70`：命令体**整段被注释** ⇒ 任何参数都零帧、零副作用。
 const NOTE_SHOW_EFFECT_ALL_COMMENTED: &str =
     "ShowEffect：oracle 命令体 20-70 行整段注释 ⇒ 零帧、零副作用（最小 no-op）";
+/// `StartQuestCommand` 的帮助文本：`Command.CommandHelp` = `命令格式: @开始提问 问答名称`
+/// （`Name` 被 `Command.conf` 的 `[Command] StartQuest=开始提问` 覆盖，`Help` = 「问答名称」）。
+pub const START_QUEST_HELP: &str = "命令格式: @开始提问 问答名称";
+
+/// `StartQuestCommand.cs:22`：`SendQuestMsg` 已被注释 ⇒ 非空名零帧、零副作用。
+const NOTE_START_QUEST_MSG_COMMENTED: &str =
+    "StartQuest：oracle :22 的 WorldEngine.SendQuestMsg 被注释 ⇒ 零帧、零副作用";
 const NOTE_NO_MAP_REGISTRY: &str =
     "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
 const NOTE_RECALL_HUMAN: &str =
@@ -1534,6 +1545,24 @@ fn fire_burn(parameters: &str, sess: &GmSession) -> GmResult {
         return GmResult::one(GmColor::Red, FIRE_BURN_HELP.to_string());
     }
     no_frames(NOTE_EVENT_MGR)
+}
+
+/// `StartQuestCommand.Execute`（`src/Modules/GameCommand/Commands/StartQuestCommand.cs:10-23`，
+/// 现网 `@开始提问`，`Command.conf` 的 `[Command] StartQuest=开始提问` / `[Permission] StartQuest=10`）。
+///
+/// **实际执行行**：
+/// - `:12-15` `@params == null` 死分支；
+/// - `:16` `sQuestName = @params[0]`（缺参 = 空串）；
+/// - `:17-21` 空名 ⇒ 红字 `Command.CommandHelp`（`命令格式: @开始提问 问答名称`）；
+/// - `:22` `SystemShare.WorldEngine.SendQuestMsg(sQuestName);` **整行被注释** ⇒ 非空名
+///   **零帧、零副作用**（照抄空实现并登记，不臆造问题系统）。
+fn start_quest(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(START_QUEST_HELP);
+    }
+    no_frames(NOTE_START_QUEST_MSG_COMMENTED)
 }
 
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
@@ -2089,6 +2118,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::UserCmd => user_cmd(),
         Imp::BackStep => back_step(parameters, sess),
         Imp::FireBurn => fire_burn(parameters, sess),
+        Imp::StartQuest => start_quest(parameters),
 
         // ---- 批次 3 · 传送/召唤（17 + `@传送`）----
         Imp::AllowDearRecall => allow_dear_recall(sess),
@@ -3104,7 +3134,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "开始提问",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::StartQuest,
     },
     CommandDef {
         name: "开始攻城",
@@ -4500,7 +4530,8 @@ mod tests {
         assert_eq!(str_to_int("2147483648", 99), 99);
     }
 
-    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`）
+    /// 批次 2/3 + 批次 3 + 批次 4 + 批次 5（含卡 `openmir2-gm-impl-showeffect` 的 `ShowEffect`
+    /// 与卡 `openmir2-gm-impl-startquest` 的 `StartQuest`）
     /// 的命令体接上（`Unimplemented` 从 180 降到 86），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
@@ -4509,16 +4540,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            99,
-            "99 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1）2 条"
+            100,
+            "100 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1）3 条"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            86,
-            "185 - 98"
+            85,
+            "185 - 100"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -5985,5 +6016,41 @@ mod tests {
             );
         }
         assert_eq!(sess.permission, 0, "抬权临时生效并还原");
+    }
+
+    /// 卡 `openmir2-gm-impl-startquest`：表项（现网名 `开始提问` = `conf[Command].StartQuest`）。
+    #[test]
+    fn start_quest_is_wired_in_the_command_table() {
+        let def = find("开始提问").expect("@开始提问 在 185 行表里");
+        assert_eq!(def.imp, Imp::StartQuest);
+        assert_eq!(def.perm_min, 10, "`[Permission] StartQuest=10`");
+        assert_eq!(def.params, 2);
+        assert_eq!(START_QUEST_HELP, "命令格式: @开始提问 问答名称");
+    }
+
+    /// `:17-21` 空名 ⇒ 红字帮助；`:22` 的 `SendQuestMsg` 被注释 ⇒ 非空名零帧 + 登记。
+    #[test]
+    fn start_quest_help_and_commented_noop() {
+        for line in ["@开始提问", "@开始提问  "] {
+            let (r, _) = run_gm(line);
+            assert_eq!(texts(&r), vec![(GmColor::Red, START_QUEST_HELP)], "{line}");
+        }
+        for line in ["@开始提问 quiz", "@开始提问 第一题 extra"] {
+            let (r, sess) = run_gm(line);
+            assert!(
+                r.msgs.is_empty(),
+                "{line}: 非空名 ⇒ 零帧（SendQuestMsg 被注释）"
+            );
+            assert!(r.frames.is_empty());
+            assert_eq!(r.log_note, Some(NOTE_START_QUEST_MSG_COMMENTED), "{line}");
+            assert_eq!(sess.permission, 10, "{line}: 无副作用");
+        }
+        let mut sess = GmSession {
+            permission: 9,
+            ..GmSession::default()
+        };
+        let cfg = GmConfig::default();
+        let r = exec(&mut sess, &cfg, "@开始提问 quiz");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "权限不够!!!")]);
     }
 }
