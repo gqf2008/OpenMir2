@@ -251,6 +251,7 @@
 | T-213 | openmir2-script-action-var-text | 2026-10-23T08:25:48Z | 在用 |
 | T-214 | openmir2-gm-impl-kick | 2026-10-23T08:25:54Z | 在用 |
 | T-215 | openmir2-gm-impl-showeffect | 2026-10-23T08:37:07Z | 在用 |
+| T-221 | openmir2-multi-session-probe | 2026-10-23T09:30:00Z | 在用 |
 | T-216 | openmir2-gm-impl-mobfireburn | 2026-10-23T08:46:23Z | 在用 |
 | T-217 | openmir2-gm-impl-smake | 2026-10-23T08:58:25Z | 在用 |
 | T-218 | openmir2-gm-impl-clearbag | 2026-10-23T09:12:30Z | 在用 |
