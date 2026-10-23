@@ -61,3 +61,72 @@
 判死前三个信号一起看：① transcript mtime（测试密集车道阈值 40–45 分钟）；② `Get-Process cargo,rustc`；
 ③ worktree 里有没有未提交进展。起 finisher 用**原 worktree 的原 principal**（身份在 git-dir 里）。
 若原车道复活：**首交付为准**，立刻停 finisher 并核对远端 head 没被交叉污染。
+
+## 5. 窗口批处理：一条命令收 R 卡窗口项（`tools/conformance/card_window.py`）
+
+**这一节取代** `tools/conformance/README.md` 里「8 个参数拼 `run_dual.sh`」的写法
+（`run_dual.sh` 本身仍是底层语义参照，**不改**；新工具按同一顺序编排，并补上端口预检、
+就绪等待、统一产物与 ledger 回执）。
+
+```sh
+# 密码只走环境变量，不写进命令行历史
+CONFORMANCE_PASSWORD='<口令>' python -I -B tools/conformance/card_window.py \
+  --card <卡 id> \
+  --scenario tools/probe/scenarios/<场景>.json \
+  --out E:/tmp/conformance/runs/<窗口名> \
+  --profile alt \
+  --post-comment        # 可选：跑完在该卡发一条签名 comment（只发 comment，绝不改卡状态）
+```
+
+编排顺序（与 `run_dual.sh` 同语义）：
+
+```
+restore 基线 -> 起 C# 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
+             -> restore 基线 -> 起 Rust 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
+             -> compare -> 归档
+```
+
+### 5.1 profile
+
+| profile | 含义 |
+| --- | --- |
+| `alt`（默认） | 2026-10-23 双栈窗口的备用端口剖面：`E:/tmp/conformance` 私有根、同一组 15xxx/17xxx 端口、测试库 `mir2_test_*` / `mir2_test_*_r` |
+| `csharp-default` | C# 默认端口栈（`E:/MirServer`，端口 5000/5100/5500/5600/5700/6000/7000/7100/7200）。它指向**生产库**（`mir2_db`/`mir2_data`/`Mir2`），**默认拒绝运行**；只有 owner 授权的生产窗口才加 `--allow-production-db` |
+| `<路径>.json` | 自定义 profile（`format = card-window-profile/1`）：两侧 `stack/stop/restore/db/ports/ready_ports/binaries/probe_extra` 全在文件里 |
+
+账号/服务器名/角色名可用 `--account`、`--server-name`、`--char-name` 覆盖，或走
+`CONFORMANCE_ACCOUNT` / `CONFORMANCE_SERVER_NAME` / `CONFORMANCE_CHAR_NAME`；密码**只**认
+`CONFORMANCE_PASSWORD`。
+
+### 5.2 产物（固定布局）
+
+```
+<out>/csharp/frames.ndjson   <out>/csharp/run.json   <out>/csharp/db/   <out>/csharp/db_snapshot.json
+<out>/rust/frames.ndjson     <out>/rust/run.json     <out>/rust/db/     <out>/rust/db_snapshot.json
+<out>/report.json            # compare_runs.py 原样报告（帧 + 库后态）
+<out>/card-window.json       # 编排摘要（两侧 rc、命令全文、sha256、verdict）
+<out>/card-window.log        # 逐条命令 + stdout/stderr
+<out>/README.txt             # 人读：两侧二进制 sha256、场景 sha256、命令全文、时间戳、verdict
+```
+
+`--post-comment` 的 body 含 `verdict`、帧数、两侧二进制 sha256、场景 sha256、证据路径与时间戳；
+**只发 `kind=comment`，不写 `status`**，因此看板列不变。
+
+### 5.3 fail-closed 口径（退出码 0 = PASS，其余一律 2）
+
+- **起每一侧栈之前**检查该侧端口；被占 => rc=2 并点名 `端口(pid N)`，**不启动栈**。
+- 起栈命令 rc=0 之后仍**轮询就绪端口**；端口不监听 => rc=2（**栈没起来绝不等于对拍通过**）。
+- `frames.ndjson` / `run.json` 缺失或 0 帧 => rc=2；库快照失败或缺 `manifest.json` => rc=2。
+- **停栈在 finally 执行**：恢复/起栈/probe/抓库任一步失败都会尝试停栈；A 侧没跑完不起 B 侧。
+- **不碰 MySQL 服务本身**：停栈命令含 `mysqld` / `Stop-Service` / `net stop` / `mysqladmin` 直接拒绝。
+- compare 的 FAIL(1) / UNDECIDABLE(2) 都映射成工具 rc=2；真实 `compare_rc` 记在 `report.json` 与 `card-window.json`。
+
+### 5.4 不真的开窗也能验
+
+```sh
+# 只打印完整命令序列：不起栈、不建目录、不需要密码
+python -I -B tools/conformance/card_window.py --card X --scenario S --out O --dry-run
+
+# 离线自检（桩命令 + 合成 frames；35 条断言，含端口占用/起栈失败/就绪失败/差分牙）
+python -I -B tools/conformance/card_window.py --selftest
+```
