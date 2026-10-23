@@ -66,8 +66,10 @@ state = need_human，rc = 2
 ## 5. 门禁
 
 - `goal_gate.py --json`：改前/改后 `state` 与 `rc` 一致（need_human / 2）。
-- 无自带 `selftest` 子命令（`grep -c selftest tools/goal/goal_gate.py` = 0）⇒ 无既有自检需更新；
-  构造级检查见 §3。
+- **`goal_gate.py selftest` 存在且仍绿**：改后 `python -I -B tools/goal/goal_gate.py selftest`
+  ⇒ `selftest：68 条断言，68 通过，0 失败` rc=0（master 版同样是 68/68 ⇒ 本次改动未加/减自我断言）；
+  其合成输入**没有**对 `window_required` 计数做断言（用的是 review body 的 `window_required` 字段），
+  故无需同步更新；新分类的构造级覆盖见 §3。
 - 未改 `whitelist.md`、未改任何卡片状态。
 
 ## 6. 残留物
