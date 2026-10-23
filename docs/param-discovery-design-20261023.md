@@ -3,6 +3,9 @@
 - 状态：**已落 `tools/probe/param_discovery.py`**（2026-10-23 返工版，worker-64；
   同日按卡 `openmir2-window-discovery-rules` 扩到 5 条规则 + `computed` 第三类，见 §2.3/§2.4）。接线（`card_window.py --discover` 等）
   不在本卡写集，另开卡 `openmir2-window-discovery-wiring`。
+- **2026-10-23 晚增补**（卡 `openmir2-discovery-bagitems-201`）：`SM_BAGITEMS(201)` 规则族已落地
+  （`make_index` / `item_name` / `takeon_where`，见 §2.5）。正文里「本版不实现 201 规则 / 恒红」的措辞
+  是**上一版的历史记录**，已被 §2.5 取代；`combat_hit`（`target_*` / `hit_dir`）仍不可推导。
 - 红线（卡 acceptance）：推导不出就 fail-closed（`scenario-error`，rc=2），**绝不**用默认值/猜值；不改任何场景的 `required` 声明。
 - 口径纪律（返工后）：**「推导」与「规则」严格分栏**。规则 = 部署经验假设，必须显式标注并写清代价；推导 = 帧语义 + oracle 出处。
 
@@ -19,10 +22,11 @@
 | `merchant_actor` | **推导** | `SM_MERCHANTSAY(643)` 的 `recog` | 643 是 NPC **应答点击**才发出的说词面板：`NormNpc.Click → GotoLable(@main) → RM_MERCHANTSAY`（`src/M2Server/Npc/NormNpc.cs:68-73,1615`；`src/M2Server/Player/PlayObject.Message.cs:1721-1724`）。点击入口 `PlayObject.Base.cs:674-695 ClientClickNpc` = `FindMerchant(actorId) ?? FindNpc(actorId)` |
 | `npc_actor` | **推导**（有 643 时）/ 退化为**规则** | 优先 `SM_MERCHANTSAY(643).recog`；无 643 时 `SM_TURN(10)` 首个 `recog != 自身` | 643 同上一行（实证：该 actor 应答了点击）。退化规则唯一依据是 `PlayObject.Message.cs:1542` `MakeMessage(SM_TURN, ActorId, …)`——那只说明「这个 actor 转了身」，**不说明它是什么**。代价见下方「规则代价」 |
 | `king_actor` | **规则**（部署假设） | `SM_MERCHANTSAY(643)` 的 `recog` | 643 只证明「该 actor 应答了本次点击」（`NormNpc.cs:68-73,1615`；`PlayObject.Message.cs:1721-1724`），**不证明是国王**——仓库里全部 643 录制都是赌场庄家（`〖庄〗…@kaiz`）。⇒ `kind=rule`，**不计入**发现能力；点错则 `dlg_select @@buildguildnow` 响亮失败（零帧 ⇒ 末步超时）。见 §2.4 |
-| `make_index` / `item_name` | **不可推导（本版）** | 需 `SM_BAGITEMS(201)` 的包体 | 现网 22+ 个 run **无 201** ⇒ `bag_equip` / `eat_item` **恒红直到有 201 录制**。本版**不实现** 201 规则（无录制就无法验证解析），另卡 |
+| `make_index` / `item_name` | **推导**（§2.5） | `SM_BAGITEMS(201)` 包体里**同一个物品槽**的 `MakeIndex`@100 / `Name`@0 | `PlayObject.Operate.cs:38-64 ClientQueryBagItems()`：`MakeMessage(SM_BAGITEMS, ActorId, 0, 0, ItemList.Count)` + 逐项 `EDCode.EncodeBuffer(ClientItem) + '/'`；记录定长 124B（`ClientItem.WritePacket`）。**帧里没有 StdItem 的 `Index`**；**`item_name` 帧里就有，不查 `StdItems` 表**。上一版「恒红直到有 201 录制」已由 §2.5 取代（真实录制仍待补） |
 | `move_x` / `move_y` | **计算**（`kind=computed`） | 场景 `computed` 声明（`derived_from` + `delta`）+ 已推导量 | 目标格是**操作者的选择**而非帧事实（已录帧里没有 `SM_WALK/SM_RUN`）⇒ 由「已推导量 + 场景显式 delta」确定性算出，**不是猜**；oracle `PlayObject.Attack.cs:1365-1428 ClientWalkXY(wIdent, nX, nY)`（`PlayObject.Message.cs:1059-1060`：nParam1=X、nParam2=Y，**绝对**目标格）。见 §2.3 |
 | `target_x` / `target_y` | **不可推导** | 目标是**实体**：帧里没有目标格坐标 | fail-closed；**需新帧/新场景**（缺一帧「AOI 出现/实体位置 + 对象类型」）。唯一近似来源 `SM_TURN(10).param/tag` 是**转身者自己**的坐标（`BaseObject.cs:1375`），且不区分怪物/NPC ⇒ 不许冒充 |
-| `takeon_where` / `hit_dir` | **不可推导** | 无来源帧 | fail-closed（可由操作者 `--var` 显式给） |
+| `takeon_where` | **推导**（§2.5） | 同一物品槽的 `StdMode`@15 → `ItemLocation` 槽号 | `M2Share.CheckUserItems`（`src/M2Server/M2Share.cs:376-458`）的逆表；`btWhere` 即 `CM_TAKEONITEM` 的 `nParam2`（`PlayObject.Message.cs:820-821`）。同 StdMode 多槽取最小槽号 |
+| `hit_dir` | **不可推导** | 无来源帧 | fail-closed（可由操作者 `--var` 显式给）；还缺「目标实体」一帧 |
 
 ### 2.1 `merchant_actor` 为什么必须换掉 `SM_TURN` 规则（返工 blocking-1）
 
@@ -113,6 +117,34 @@
 - 真解锁条件（留给后续卡）：一个**能点中国王的 discovery 场景/步骤**（或 `--discovery-scenario` 专门场景 +
   角色预先停在国王身边），再叠加 643 正文校验，才能把 king 提回 `derived`。
 
+### 2.5 `SM_BAGITEMS(201)` 规则族（卡 `openmir2-discovery-bagitems-201`，2026-10-23）
+
+**帧体**：`header = MakeMessage(SM_BAGITEMS(201), ActorId, 0, 0, ItemList.Count)`（`series` = 背包数），
+`body = EDCode.EncodeBuffer(ClientItem) + '/'` 逐项拼接。单条 `ClientItem` 记录**定长 124B**
+（`src/OpenMir2/Packets/ClientPackets/ClientItem.cs WritePacket`）：
+
+| 偏移 | 字段 | 说明 |
+|---:|---|---|
+| 0 | `Name` | `WriteAsciiString(ItemNameLen=14)` = 1B 长度 + 14B 定长（GBK）；= `CustomItemSystem.GetItemName(userItem)` |
+| 15 | `StdMode` | u8 |
+| 100 | `MakeIndex` | i32 LE |
+| 104 / 106 | `Dura` / `DuraMax` | u16×2 |
+| 108 | `Desc[14]` | |
+
+- **没有 `Index`（StdItem 索引）**：客户端靠 `Name` 识别物品，服务端 `ClientTakeOnItems` / `ClientUseItems`
+  也是「MakeIndex + GetItemName」双匹配 ⇒ 想「把 MakeIndex 取成 Index」**在线上无从发生**；对应的真牙是
+  「字段/偏移取错」（取 `StdMode` 或把偏移挪 15 ⇒ 值变 5/10，见 selftest 牙⑨）。
+- **`item_name` 不需要查 DB**：名字在帧里，且与服务端匹配用的名字同源。
+- **取哪个物品（确定、不随机）**：只看**首条** 201，取**第一个**满足谓词的槽（槽序 = `ItemList` 序）：
+  `required` 含 `takeon_where` ⇒ 可装备（`StdMode` 在 `CheckUserItems` 槽表里）；否则 ⇒ 可食用
+  （`StdMode ∈ {0,1,2,3,4,31}`，`ClientUseItems` 的 switch 分支）。一次 `derive` 只选一次 ⇒
+  `make_index` / `item_name` / `takeon_where` **必然同槽**。无候选 ⇒ missing（不退回默认值）。
+- **fail-closed**：无 201 ⇒ missing；空包体只有 `series=0` 才合法（否则 error）；记录解码后 ≠124B、
+  `series` 与槽数不符、EDCode 越界、Name 非 GBK / 为空 ⇒ `DiscoveryError`（rc=2），**不跳过坏槽继续取**。
+- **证据**：`param_discovery.py selftest` 用例 ⑲–㉔ + 牙⑨–⑪；`check-all` 在「真实录制 + 一条合成 201」
+  的副本上 `ok=12 → ok=14`、`--allow-missing=3 → =1`。**真实录制仍待补**（`E:/tmp` + `E:/MirServer`
+  798 份 `frames.ndjson` 实测 0 条 201）。
+
 ## 3. 发现阶段流程（已落 `tools/probe/param_discovery.py`）
 
 ```text
@@ -141,7 +173,7 @@ discovery run（收帧：login_only 段 + 一次 auto:last_turn 点击）
 2. 缺目标 NPC（只有自身 turn）⇒ `npc_actor` missing ⇒ fail-closed；
 3. 缺自身坐标（无 `SM_LOGON`）⇒ `self_x/self_y` missing ⇒ fail-closed；
 4. 只有自己的 `SM_TURN` ⇒ 不得把自己当 NPC；
-5. 无 `SM_BAGITEMS(201)` ⇒ `make_index/item_name` **恒** missing（本版不实现 201 规则）；
+5. 无 `SM_BAGITEMS(201)` ⇒ `make_index/item_name` **恒** missing（本版不实现 201 规则；**[已被 §2.5 取代]**：有 201 时现在会推导，无 201 仍 missing）；
 6. 同夹具两次跑 ⇒ 同结果（确定性）；
 7. 混合：可推导的照样给出、不可推导的逐个点名；
 8. `check-all` 接线口径：可推导场景 rc=0（`cls=derived`）/ 缺变量场景 rc=2 且 detail 由**本模块**报 `missing:`（`cls=missing`）；
@@ -215,6 +247,7 @@ restore -> 起栈 -> 等就绪 -> discover（每侧各自一次 probe run）
 - **`run_dual.sh` 不改**（0 字节 diff）：它是底层语义参照，窗口批处理统一走 `card_window.py`；
   接线不在 shell 里做，避免同一逻辑两套实现。
 - 仍不可推导的场景（`make_index/item_name`、`target_*`）继续 fail-closed 并点名变量——等 201 录制/新场景另卡。
+  （**[已被 §2.5 取代]**：`make_index/item_name/takeon_where` 已由 201 规则族覆盖；仅剩 `target_*`/`hit_dir`。）
   （`move_*` 后来由 `computed` 声明计算、`king_actor` 记 `rule`，见 §2.3/§2.4；本接线卡当时未含这两条。）
 
 ## 6. 返工实测账目（2026-10-23，worker-64，master `14864309e`）
@@ -295,7 +328,7 @@ rc=2（默认）；`--allow-missing=6` ⇒ rc=0
 | 1 | `merchant_actor` | `SM_TURN` 首个非自身（部署假设，任意第三方 actor 可冒充） | `SM_MERCHANTSAY(643).recog`（真应答过点击的 NPC）；无 643 ⇒ missing |
 | 2 | 牙② | 空牙（只断言 `derive` 的 missing，变异后 selftest 仍绿） | 对 `check_all` 行为断言（`cls=missing` + `missing:` 前缀） |
 | 3 | `self_x/self_y` oracle | 只写实测 ↔ DB | `PlayObject.cs:1128-1131 SendLogon()` |
-| 4 | 201 / `make_index` | 设计 §4 承诺「有 201 就能推」，代码硬编码 UNDERIVABLE（矛盾） | 统一为「本版不实现 201 规则；`bag_equip`/`eat_item` 恒红直到有 201 录制」 |
+| 4 | 201 / `make_index` | 设计 §4 承诺「有 201 就能推」，代码硬编码 UNDERIVABLE（矛盾） | 统一为「本版不实现 201 规则；`bag_equip`/`eat_item` 恒红直到有 201 录制」（**[已由 §2.5 实现]**） |
 | 5 | `dice_chain` 的绿 | 混在「9 绿」里 | 单列 `params_default`，不计入发现能力 |
 | 6 | 坏行 | traceback / rc=1 | `DiscoveryError`，`file:lineno` + rc=2 |
 | 7 | `check-all` 门禁 | 任一 fail-closed ⇒ 恒 rc=2，无法机判 | `--allow-missing[=N]`（默认仍 rc=2；`error` 行永不放行；钉住的 N 不符也 rc=2） |
@@ -328,7 +361,8 @@ rc=2（默认）；`--allow-missing=6` ⇒ rc=0
 
 acceptance[6]「15 个场景全绿」**不可达**，改判为「**可推导的全绿 + 不可推导的逐条登记原因**」。必须同时承认：
 
-1. `bag_equip` / `eat_item` 的 `make_index`/`item_name` 在拿到 `SM_BAGITEMS(201)` 录制前**恒红**（本版未实现 201 规则）；
+1. `bag_equip` / `eat_item` 的 `make_index`/`item_name` 在拿到 `SM_BAGITEMS(201)` 录制前**恒红**（本版未实现 201 规则）
+   ——**[已由 §2.5 实现]**，但真机仍要等一次**非空背包**的录制；
 2. `combat_hit`（`target_x/target_y/hit_dir`）需要新帧或新场景才可能推导；`move_walk`（`move_x/move_y`）后由
    `computed` 声明计算，`king_dialog`/`king_castle_war`（`king_actor`）后记 `rule`（部署假设，仍需「点中国王」的场景才可能升回 `derived`）；
 3. `dice_chain` 的绿来自 `params.npc_actor=119` 硬编码默认值，**不是**发现值。
