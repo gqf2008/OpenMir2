@@ -2320,9 +2320,9 @@ def _selftest_inventory_reachability(tmp):
         try:
             for side in ("csharp", "rust"):
                 dr = _DryRunner()
-                res = run_inventory(dr, side, prof, cur, decl["bag_equip"], {})
+                res, failed = preview_inventory(dr, side, prof, cur, decl["bag_equip"], {})
                 logs.extend(dr.lines)
-                if res.get("rc") != 0 or res.get("action") != "dry-run":
+                if failed or res.get("rc") != 0:
                     ok_dry = False
         finally:
             globals()["placement_envir_root"] = old_root
