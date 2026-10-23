@@ -13,8 +13,16 @@
 
 ## 1. 开跑前必做（缺一不可）
 
-1. **重建 Rust 栈并记录 sha256**。`E:/tmp/conformance/rust-root` 里的二进制可能是旧的（本轮实测：二进制约 10-22 23:35，而 master 已到 10-23 15:20，中间合了十余张卡）。**用旧二进制跑出来的对拍结论没有意义，而且不会报错**——它只会给你一份正常的报告。
-   构建后把四个二进制的 sha256 写进本次窗口的 `README.txt`（`card_window.py` 会自动记，但你要确认它记的是**新**的）。
+1. **重建 Rust 栈并记录 sha256**。
+   **要重建的是哪个二进制**：`start-rust.ps1` 委托给 `tools/m2-acceptance/start_mir2_server.ps1`，后者的 `-ServerExe` 缺省值是
+   **`mir2-rs/target/release/mir2-server.exe`（其次 debug）**——「单二进制多角色」。它**只从 `-Root` 读配置文件**，
+   不执行 `rust-root` 里的任何东西。
+   ⇒ **`rust-root` 目录里那堆 `.NET` 程序集（`DBSvr.dll`/`LoginSvr.dll`/`GameSrv.dll`/`TouchSocket.dll`…）与 Rust 栈无关**，
+   别被它们误导成「跑的是 C#」；也别以为换掉它们就换了栈。真正决定跑的是哪份代码的，是 `SERVER_EXE` 那一行打印出来的路径。
+   **本轮实测的坑**：`mir2-rs/target` 里的 `mir2-server` 是 10-22 23:35 构建的，而 master 已到 10-23 15:20，中间合了十余张卡。
+   用旧二进制跑出来的对拍结论没有意义，**而且它不会报错**——只会给你一份看起来正常的报告。
+   做法：`cargo build --release -p mir2-server`；起栈时先跑一次 `start_mir2_server.ps1 -WhatIf`，
+   **核对它打印的 `SERVER_EXE` 路径与文件的 sha256**，再把这个 sha256 写进本次窗口的 `README.txt`。
 2. **端口全空**：`powershell -File E:\MirServer\port-status.ps1`，十端口必须全 DOWN。`card_window.py` 起栈前会预检并在占用时 rc=2。
 3. **库基线复位**：C# 侧 `restore-baseline.sh`（`mir2_test_*`），Rust 侧 `restore-baseline-r.sh`（`mir2_test_*_r`）。**两套库不同名**，拿 `--db test` 给 Rust 侧拍快照会拍到 C# 的库 ⇒ 假差异。
 4. **一次只跑一栈**：C# 与 Rust 用同一组备用端口，串行起停。
