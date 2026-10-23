@@ -10,6 +10,13 @@
 > 一律用符号锚；whitelist / 监控文件缺失 ⇒ fail-closed rc=2）。登记号 `T-*` 唯一性由
 > `mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py` 守护（撞号即 rc≠0）。
 
+> **新增登记必须先预约**：`T-<n>` 是**全仓共用的线性编号空间**，统一由预约表
+> `mir2-rs/tests/parity/T-RESERVATIONS.md` 分配——**先取号**
+> （`python -I tools/whitelist/next_t.py --card <卡 id>`），**再**在本表写登记；合并前跑
+> `python -I tools/whitelist/t_reservation_gate.py check`（①whitelist→预约表 ②同号多认领
+> ③已落地→whitelist ④本表内部同号 ⑤同卡多认领 ⓪坏行/未闭合围栏，任一不满足 rc=1；
+> 且必须**在合并结果树上**跑）。**不要再 grep 现算最大号**——并行时它必然读到旧值。
+
 ## D 线登记
 
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
