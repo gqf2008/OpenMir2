@@ -172,7 +172,11 @@ python tools/goal/goal_gate.py --full
    2. 行缺 `status`（schema 漂移）⇒ 需人工；
    3. 缺 `counts.tracked` 或与实际 tracked 行数不一致 ⇒ 需人工；
    4. **`counts.tracked == 0` 且行集非空 ⇒ PASS（B 类清零）**——否则条件3 永远无法在 DONE 时转 PASS；
-   5. 否则按条目判定。
+   5. 否则按条目判定（**`tracked > 0` 不等于 FAIL**：每个 tracked 条目只要有 `T-*` 登记或看板上有卡，就判 PASS）。
+      ⚠️ 2026-10-23 实测教训：某张卡以「tracked 永远 ≥1 ⇒ 条件③ 被卡死」为前提立项，实际 `tracked=1` 时
+      条件③ **本来就是 PASS**（该条目有 `T-*` 登记）。此后把该条目正确归类为 implemented、`tracked` 变 0，
+      反而因 `counts` 丢 `tracked` 键（`summarize()` 只统计出现过的 status）而退回「需人工」。
+      ⇒ **`counts` 必须恒带 `tracked:int`（含 0）**，且「`tracked>0` 是否算缺口」要看条目登记，不看这个数字本身。
 
    「查不到」与「确认清零」必须分开：recon 给不出结构 ⇒ 需人工；recon 明确 `tracked=0` 且计数自洽 ⇒ PASS。
 
