@@ -64,7 +64,7 @@ python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/s
 
 - `check rc`：`0` = 无变量依赖；`2 → 0` = 裸跑 rc=2（缺 `required` 变量）、按 §1.3 补 `--var` 后 rc=0。
 - `dry rc（默认）` = `--profile alt`（不显式给 profile 时的默认）。
-- `dry rc（带 profile）`：`0ᵐ` = magic profile 且**该场景所需**的魔法夹具预览行存在（`spell_cast`）；`0ᵛ` = 场景级 inventory 临时副本（rc=0 但**无**预览行）；`0ᵃ` = rc=0、无**该场景专属**夹具。⚠ **魔法夹具是 profile 级「全局 DB 预置」**（`card_window.py:3163-3177`：profile 只要声明了 `magic`，就对该侧**每个**场景预览 1 行）⇒ 带 magic profile 时**所有** `0ᵃ` 场景也会多出 2 行「魔法夹具」预览（两侧各 1），**不是**「与默认完全相同」；返工 v3 实测 20/20 场景均如此，不影响可跑性判定。
+- `dry rc（带 profile）`：`0ᵐ` = magic profile 且**该场景所需**的魔法夹具预览行存在（`spell_cast`）；`0ᵛ` = 场景级 inventory 临时副本（rc=0 但**无**预览行）；`0ᵃ` = rc=0、无**该场景专属**夹具。⚠ **魔法夹具是 profile 级「全局 DB 预置」**（`card_window.py:3163-3177`：profile 只要声明了 `magic`，就对该侧**每个非 blocked 场景**预览 1 行）⇒ 带 magic profile 时**所有** `0ᵃ` 场景也会多出 2 行「魔法夹具」预览（两侧各 1），**不是**「与默认完全相同」；返工 v3 实测 **18/20** 场景如此（`combat_hit`/`combat_strike` 两个 `2ᵇ` 各 0 行），不影响可跑性判定。**为什么是 18 而不是 20**：`blocked` 硬门（`card_window.py:3079`，返工基线 `b3f48ab49`）在 `--dry-run` 预览循环（`:3146-3147` 起）**之前**就 `return summary`（rc=2、`verdict=BLOCKED`，连命令序列都不预览）；magic 预览在循环内（`:3163-3177`），两个 `blocked` 场景根本走不到它 ⇒ 只有 **18 个非 blocked 场景 × 2 行 = 36 行**，不是 20 × 2 = 40 行。逐场景复跑计数（magic profile，两态各跑一遍）：`bag_equip`/`dice_chain`/`dice_chain_auto`/`eat_item`/`equip_struck_save`/`gm_batch`/`gm_time`/`king_castle_war`/`king_dialog`/`login_only`/`merchant_dialog`/`move_walk`/`npc_click`/`npc_click_auto`/`npc_script_chain`/`pickup_item`/`spell_cast`/`upgrade_retrieve` 各 2 行，`combat_hit`/`combat_strike` 各 0 行；默认 profile 下 20 个场景全 0 行。
 - `2ᵇ` = 场景自声明 `blocked`，`card_window` 在建 out/起栈前就拒。
 - 「假绿」= rc=0 但没有夹具行 ⇒ **不能当作窗口可跑的证据**。
 
@@ -288,7 +288,7 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 - **`dice_chain` 会点空 ⇒ 窗口里改用 `dice_chain_auto`**：`card_window` **没有 `--var` 透传**（argparse 列表 `:5640-5667` 无该参数；`--help` 里唯一的 "var" 是 `--discovery-frames` 的说明文字），而 `dice_chain.json` 的 `params.npc_actor` **硬编码为 119**（r9 抓包会话值，C# `ActorId` 每会话不同）⇒ 默认跑是对着本次不存在的 actor 点。`dice_chain_auto` 用 `click_npc="auto:last_turn"` 自动发现，是窗口唯一可用形态。要跑 `dice_chain` 本尊只能改场景 `params`（红线禁止）或等 `card_window` 加 `--var`（建议 id `openmir2-cardwindow-var-passthrough`，未开）。
 - **`bag_equip` / `eat_item` 不要开窗**：inventory 夹具在本 head **无任何可达入口**（§3.2 / §5 差异 3），dry-run rc=0 是假绿。
 - **`spell_cast` 必须带 magic profile**：`--profile alt` 的 rc=0 是假绿（§3.1）。
-- **别把 magic profile 当「只影响 spell_cast」**：profile 一旦声明 `magic`，dry-run 会为**每个**场景预览两侧各 1 行魔法夹具（全局 DB 预置，§2 列说明）。
+- **别把 magic profile 当「只影响 spell_cast」**：profile 一旦声明 `magic`，dry-run 会为**每个非 blocked 场景**预览两侧各 1 行魔法夹具（全局 DB 预置，§2 列说明）；`blocked` 场景没有预览行——硬门在预览循环之前就 rc=2 返回，实测 **18/20**（`combat_hit`/`combat_strike` 为 0），别按「20×2=40 行」对账。
 
 ---
 
