@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "f225a534f87d18eb0cae713a560b6b72e2b58f6f182893715d41742b8a9b7622"
+   "sha256": "ed57cadbdf6dbead7bacad49009b64b8089565f91c50beeea7d5eac361c42380"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1998,6 +1998,14 @@
    "third_state": false
   },
   {
+   "cmd": "VV踢人",
+   "file": "Market_Def/功能NPC/桃源-N109.txt",
+   "line": 49,
+   "label": "@01",
+   "rust_imp": "KickHuman",
+   "third_state": false
+  },
+  {
    "cmd": "ShowEffect",
    "file": "Market_Def/封魔谷/月老-M101.txt",
    "line": 118,
@@ -2203,6 +2211,14 @@
    "line": 40,
    "label": "@假人到指定地图a",
    "rust_imp": "StartQuest",
+   "third_state": false
+  },
+  {
+   "cmd": "VV踢人",
+   "file": "QuestDiary/月卡/月卡系统.txt",
+   "line": 28,
+   "label": "@踢人",
+   "rust_imp": "KickHuman",
    "third_state": false
   },
   {
@@ -3350,48 +3366,6 @@
    "field_line": 322
   },
   {
-   "cmd": "VV踢人",
-   "cmd_name": "VV踢人",
-   "child_card": "openmir2-gm-impl-kick",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/KickHumanCommand.cs:10",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].Kick",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/功能NPC/桃源-N109.txt",
-     "line": 49,
-     "label": "@01",
-     "section": "act",
-     "script_arg": "VV踢人",
-     "raw": "GMEXECUTE VV踢人 <$STR(S6)>",
-     "label_path": "Market_Def/功能NPC/桃源-N109.txt:@01 <- Market_Def/功能NPC/桃源-N109.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:138"
-    },
-    {
-     "file": "QuestDiary/月卡/月卡系统.txt",
-     "line": 28,
-     "label": "@踢人",
-     "section": "act",
-     "script_arg": "VV踢人",
-     "raw": "GMEXECUTE VV踢人 <$USERNAME>",
-     "label_path": "QuestDiary/月卡/月卡系统.txt:@踢人 <- QuestDiary/月卡/月卡系统.txt:@月卡 <- MapQuest_def/QManage.txt:@login <- engine GotoLable root",
-     "load_origin": "#CALL MapQuest_def/QManage.txt:36"
-    }
-   ],
-   "handler_class": "KickHumanCommand",
-   "attr_name": "KickHuman",
-   "handler_exec_line": 14,
-   "name_source": "conf[Command].Kick",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "Kick",
-   "field_line": 164
-  },
-  {
    "cmd": "who",
    "cmd_name": "who",
    "child_card": null,
@@ -4247,20 +4221,20 @@
   }
  ],
  "summary": {
-  "total": 85,
+  "total": 84,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 5
+   "script-reachable": 4
   },
   "reachable": 0,
-  "script_reachable": 5,
+  "script_reachable": 4,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 100,
-   "Unimplemented": 85
+   "Implemented": 101,
+   "Unimplemented": 84
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4286,7 +4260,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 79,
+  "complete_implemented": 80,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
