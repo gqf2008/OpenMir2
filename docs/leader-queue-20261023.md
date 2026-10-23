@@ -58,6 +58,10 @@
 11. **合并树门禁可能撞上 stale 测试二进制**（2026-10-23 实测）：合并后首次 `cargo test --workspace` 命中一个 cargo 判定为 fresh 的旧测试二进制，报一条 panic 用例红；`touch` 源文件强制重编后该用例绿、全量 3041/0，源码 sha256 未变。
     ⇒ 门禁报红时**先分三态**：① 真回归（源码确变）；② 环境噪声（stale 二进制 / 并发抢锁）；③ 夹具漂移。判环境噪声的办法：`touch` 相关源文件或换一个空 `CARGO_TARGET_DIR` 重跑一次，**并在 merge_result 里写明是噪声、附两次的 rc**。
     这条与 10-23 早前那次「并发 cargo 抢锁 ⇒ clippy 假红」同族；合并时一律单跑门禁、不要与车道并行。
+    **第三种噪声（10-23 17:2x 新增，reviewer-5 实测）**：**共享 `CARGO_TARGET_DIR` 会内嵌旧的 `CARGO_MANIFEST_DIR`**。
+    他在共享 target 上跑全量时 `mir2-protocol oracle_vectors` 误报，原因是该二进制编译时嵌的 manifest 路径指向**已被删除的临时 worktree**；
+    `cargo clean -p mir2-protocol` 后 2 passed，换成**全新 target dir** 全量即绿。
+    ⇒ **复核别人的 head 时用全新 target dir**（`CARGO_TARGET_DIR=/e/tmp/<lane>-review-target`），或在误报后先 `cargo clean -p <crate>` 再判。
 
 12. **并行车道的真正代价不是文本冲突，是签名演化**（2026-10-23 一天两次）：
     ① `emit_script_frames` → `emit_script_frames_raw`：pickwire 加帧时改签名，frame-drain 随后重写排水；
