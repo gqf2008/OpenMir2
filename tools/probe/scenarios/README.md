@@ -118,9 +118,9 @@ python tools/probe/mir2_probe.py \
 | `say` | 字符串 | `CM_SAY(3030)`，`recog=0`，文本按 GBK+EDCode |
 | `click_npc` | int 或 `params` 名 | `CM_CLICKNPC(1010)`，`recog=<NPC actor id>` |
 | `dlg_select` | 字符串 label，或 `{"label": "...", "recog": N}` | `CM_MERCHANTDLGSELECT(1011)`；`recog` 缺省取**最近一条 `SM_MERCHANTSAY(643)` 的 recog**，也可写 `params` 名（加载期解析，与 `send.recog` 同口径） |
-| `wait_for` | int 或非空 int 数组 | 等**下一步开始之后**到达的第一条匹配 ident |
-| `wait_frames` | `{"count": N, "idents": [...], "timeout_ms": M}` | 等 gamegate 连接**累计**帧数 ≥ N 且 idents 都出现过 |
-| `wait_idents` | `{"idents": [...], "timeout_ms": M}` | 等 idents **全部**在 gamegate 连接上出现过（累计口径；`timeout_ms` 不满足即步骤失败） |
+| `wait_for` | int、非空 int 数组，或 `{"idents": int\|数组, "recog": ..., "recog_is": ...}` | 等**下一步开始之后**到达的第一条匹配 ident（可选来源过滤，见下） |
+| `wait_frames` | `{"count": N, "idents": [...], "timeout_ms": M}`，可选 `recog` / `recog_is` | 等 gamegate 连接**累计**帧数 ≥ N 且 idents 都出现过（过滤只作用于 ident 覆盖判定，`count` 仍是总帧数） |
+| `wait_idents` | `{"idents": [...], "timeout_ms": M}`，可选 `recog` / `recog_is` | 等 idents **全部**在 gamegate 连接上出现过（累计口径；`timeout_ms` 不满足即步骤失败；过滤只作用于 ident 覆盖判定） |
 | `sleep` | int 毫秒，或 `{"ms": N}` | 纯等待，不发包 |
 
 `send.text` 的编码口径 = C# `EDCode.EncodeString`：先 `text.encode("gbk")`，再 EDCode。
@@ -140,6 +140,31 @@ python tools/probe/mir2_probe.py \
   `pump --between-ms`），**只用于复现旧问题**，对拍不要用。
   `--dwell-ms` 必须 ≥ 0；负值在参数校验期 fail-closed（退出码 2，不落 `run.json`）。
 * 步骤间默认间隔 `--between-ms`（默认 200ms）；单步可用 `delay_ms` 覆盖。等待本身用 `timeout_ms`。
+
+### 等待来源过滤（`recog` / `recog_is`，可选；卡 `openmir2-probe-waitfor-recog-filter`）
+
+`wait_for` / `wait_idents` / `wait_frames` 可以只认**来源**（帧头 `recog`）匹配的帧。
+**两个键都不写 = 与过去逐字节相同**（只按 ident 匹配）；写了一个才启用过滤。
+
+```json
+{"wait_for": {"idents": 31, "recog_is": "other"}, "timeout_ms": 3000}
+{"wait_for": {"idents": [31, 642], "recog": "target_actor"}}
+{"wait_idents": {"idents": [658], "recog_is": "self"}}
+```
+
+* `recog`：int 或 `params` 名（加载期解析，与 `send.recog` 同口径/i32 范围）——**精确匹配**
+  帧的 `recog`。典型用途：`SM_STRUCK(31)` 的 `recog` = **被打对象**的 ActorId。
+* `recog_is`：`"self"` 或 `"other"`——与**自身** ActorId（进世界 `SM_LOGON(50).recog`）比较。
+  `other` = 来源不是自己（例：自己主动打怪时怪物的受击 `31`）；`self` = 来源是自己
+  （例：**自己被怪打**时收到的 `31`，`recog` = 自己）。
+* 语义：`wait_for` 只认「ident 与来源同时匹配」的第一条；`wait_idents` / `wait_frames`
+  的 `idents` 覆盖判定只统计来源匹配的帧——`wait_frames.count` **仍是连接累计总帧数**（不过滤）。
+* **fail-closed（加载期 rc=2）**：`recog` 与 `recog_is` **同时出现**（互斥）；`recog_is` 不是
+  `self`/`other`；对象形状里的未知键；`recog` 引用了未声明的 `params` 名。
+* **fail-closed（运行期 rc=2）**：用 `recog_is` 时**还没观察到自身 ActorId**（没进世界/
+  没收到 `SM_LOGON`）⇒ 直接报错，绝不猜（否则过滤会静默退化成恒真/恒假）。
+* 不带过滤的旧场景**行为与输出逐字节不变**（含 `run.json` 的 `steps` 字段：只有启用过滤的步骤
+  才多出加性字段 `recog` / `recog_is`）。
 
 ## 参数
 
@@ -187,11 +212,13 @@ python tools/probe/mir2_probe.py \
 > 所以「必伤害」门槛是 `DC_min > 2*AC-1`（AC30 ⇒ ≥60），再叠加 `HitPoint ≥ SPEED-1`（SPEED18 ⇒ ≥17）；
 > 基线角色没有一档同时满足（最好的一对 joint 只有 24%，精确矩阵见文档 §6）。
 > ⇒ 现在跑必然 `wait_for` 超时。**另外这是敌对守卫**（`GuardUnit.cs:120-124` + `ArcherGuard.cs:39-81`），
-> 玩家挨打也会收到 `SM_STRUCK(31)` 且 `recog=self`，而 `wait_for` 只按 ident 匹配（`mir2_probe.py:291-303`）
+> 玩家挨打也会收到 `SM_STRUCK(31)` 且 `recog=self`（现由 `recog_is: "other"` 排除）
 > ⇒ **即使跑绿也证明不了「玩家主动一击命中」**。**该封口已在工具层强制**：场景顶层带 `blocked`
 > （`combat_strike.json` 已补；schema 见 `docs/probe-scenario-blocked-gate-20261023.md`），`card_window.py`
 > 见到即 rc=2、不建 out/不起栈；原先「窗口批次不得消费本场景的任何 PASS」的人读约定降为解释。
-> 根治需 `wait_for` 支持 recog 过滤，归 `openmir2-probe-scenario-validation-gaps`）。
+> **来源过滤已具备**（卡 `openmir2-probe-waitfor-recog-filter`）：本场景等待已改为
+> `{"idents": 31, "recog_is": "other"}`，排除「自己被守卫打」的 31（`recog=self`）；
+> 但伤害/配装夹具仍缺 ⇒ **BLOCKED 保持**（过滤已具备、仍缺夹具）。
 > 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
 > `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
 
@@ -279,7 +306,10 @@ python tools/probe/mir2_probe.py --selftest
 
 `--selftest` 用 `../fixtures/r9/` 的离线 s2c 抓包跑「切帧 -> 解析 -> 落 ndjson」全链路，
 不连网、不起进程；含「改坏必红」的负向用例（载荷字节改成越界值必须报错）。
-当前共 **10 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
+当前共 **11 checks**；`wait-recog-filter` 用**合成帧流**（同 ident、`recog`=自己 vs 他人）断言：
+带 `recog_is=self/other` / 精确 `recog` 时只认匹配来源，**不带过滤时两者都算命中**（旧语义兼容），
+并覆盖三种等待动作、加载期互斥/非法值/未知键 rc=2、运行期未知自身 ActorId 的 fail-closed。
+其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
 删 `send` 步 / `wait_for` 写表外 ident / `send.ident` 表外 / 引用未声明变量 / `wait_for` 先于 `send` /
 全 `sleep` / 注释掉的常量不得进表 / `placement` 与 `self_pos`·`self_x`·`self_y` 不一致 / 间接 params 名不假红 /
 R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `login_only`、`dice_chain` 与非攻击族 `tag` 不被误伤；
@@ -314,5 +344,9 @@ R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `
   `pack.lo`/`pack.hi` 可写任意可推导变量（**允许引用其它 `computed`**，按不动点求解；成环、缺字段、
   与 `derived_from/delta` 混用都 fail-closed）。`mir2_probe` 仍不读 `computed`——真跑时值由
   `--var` 传入，`card_window` 用发现值填。
-* `combat_hit.json` 的 `hit_xy` 同样用 `computed.pack {lo: self_x, hi: self_y}`：**CM_HIT 的 Recog 是攻击者自己的坐标**（`PlayObject.Attack.cs:883` 只在 `nX==CurrX && nY==CurrY` 时执行），方向在 `tag`。但该场景**已登记 BLOCKED**：self 过滤只挡住**自己动作的回声**（等不到自己砍出的 14），而打中怪物会收到以怪物为 ActorId 的 `SM_STRUCK(31)`、「怪打人」也会发 14 ⇒ 真正的问题是**无夹具不保证目标 + wait 无法归因**，不是「收不到任何 SM 帧」（见卡 `openmir2-scenario-combat-hit-waitfix` 与 `combat_strike` 的 blocked 口径）。
+* `combat_hit.json` 的 `hit_xy` 同样用 `computed.pack {lo: self_x, hi: self_y}`：**CM_HIT 的 Recog 是攻击者自己的坐标**（`PlayObject.Attack.cs:883` 只在 `nX==CurrX && nY==CurrY` 时执行），方向在 `tag`。该场景**仍登记 BLOCKED**，但等待帧已改为可归因口径：`{"idents": 31, "recog_is": "other"}`
+  （卡 `openmir2-probe-waitfor-recog-filter`）——只认「被打对象是他人」的 31，排除自己被怪打；
+  原 `wait_for 14` 无法归因（`SM_HIT` 的 recog 是**攻击者**，怪打谁都是同一个 recog，且本方攻击的
+  14 被 oracle 自我过滤）⇒ 真正剩下的问题是**无夹具不保证目标 + 随机护甲可能 0 伤害**，
+  不是「收不到任何 SM 帧」，也不是「过滤没做」（见卡 `openmir2-scenario-combat-hit-waitfix` 与 `combat_strike` 的 blocked 口径）。
 * 详细逐文件复核表、oracle 行号与影响面：`docs/scenario-recog-packing-20261023.md`。

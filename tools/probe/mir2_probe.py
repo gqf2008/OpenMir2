@@ -95,6 +95,8 @@ SM_TAKEON_FAIL = 616
 SM_OUTOFCONNECTION = 528
 SM_CHANGELIGHT = 654          # src/OpenMir2/Messages.cs（延迟段帧）
 SM_CHARSTATUSCHANGED = 657    # src/OpenMir2/Messages.cs（延迟段帧）
+SM_HIT = 14                   # SM_HIT：攻击者动作广播（recog=攻击者 ActorId）
+SM_STRUCK = 31                # SM_STRUCK：受击广播（recog=被打对象的 ActorId）
 
 CLIENT_VERSION_NUMBER = 1200409180  # src/OpenMir2/Grobal2.cs
 HEARTBEAT = b"*"
@@ -289,25 +291,36 @@ class Conn:
     def next_seq(self):
         return self.recorder.seq + 1
 
-    def wait_for(self, idents, timeout_ms, after_seq):
-        """等 seq > after_seq 的第一条 ident ∈ idents 的帧；超时返回 None。"""
+    def wait_for(self, idents, timeout_ms, after_seq, recog_filter=None):
+        """等 seq > after_seq 的第一条 ident ∈ idents 且 recog_filter 通过的帧；超时返回 None。
+
+        ``recog_filter``（可选）是 ``frame -> bool``：只看**来源**（帧头 ``recog``）匹配的帧。
+        ``None`` = 旧语义（只按 ident 匹配，不筛来源）。场景 DSL 的 ``recog`` / ``recog_is``
+        由 ``Run._recog_filter`` 编译成这个谓词（见 README「等待来源过滤」）。
+        """
         wanted = set(idents)
         end = time.time() + timeout_ms / 1000.0
         while True:
             for seq, fr in self.frames:
-                if seq > after_seq and fr.ident in wanted:
+                if (seq > after_seq and fr.ident in wanted
+                        and (recog_filter is None or recog_filter(fr))):
                     return seq, fr
             remain = end - time.time()
             if remain <= 0:
                 return None
             self.pump(min(100, int(remain * 1000)))
 
-    def wait_frames(self, count, idents, timeout_ms):
-        """等累计帧数 >= count 且 idents 全部出现过（含等待前已收到的帧）。"""
+    def wait_frames(self, count, idents, timeout_ms, recog_filter=None):
+        """等累计帧数 >= count 且 idents 全部出现过（含等待前已收到的帧）。
+
+        ``recog_filter`` 只作用于「idents 是否都出现过」；``count`` 仍是连接累计帧数
+        （不过滤），保持旧口径。
+        """
         required = set(idents or [])
         end = time.time() + timeout_ms / 1000.0
         while True:
-            seen = {fr.ident for _, fr in self.frames}
+            seen = {fr.ident for _, fr in self.frames
+                    if recog_filter is None or recog_filter(fr)}
             if len(self.frames) >= count and required <= seen:
                 return True
             remain = end - time.time()
@@ -315,7 +328,7 @@ class Conn:
                 return False
             self.pump(min(100, int(remain * 1000)))
 
-    def wait_idents(self, idents, timeout_ms):
+    def wait_idents(self, idents, timeout_ms, recog_filter=None):
         """等 idents **全部**出现过（累计口径，含等待前已收到的帧）；超时返回差集。
 
         返回 (missing, waited_ms)：missing 为空 = 全部到齐。与 wait_for 的区别：
@@ -325,7 +338,8 @@ class Conn:
         t0 = time.time()
         deadline = t0 + timeout_ms / 1000.0
         while True:
-            missing = sorted(required - {fr.ident for _, fr in self.frames})
+            missing = sorted(required - {fr.ident for _, fr in self.frames
+                                         if recog_filter is None or recog_filter(fr)})
             now = time.time()
             if not missing or now >= deadline:
                 return missing, int((now - t0) * 1000)
@@ -673,6 +687,38 @@ def _encode_send_body(val, where, params=None):
         raise ScenarioError("%s.raw_hex is not valid hex: %s" % (where, ex))
 
 
+#: `recog_is` 只认这两值（相对**自身** ActorId 的来源分类）。
+RECOG_IS_VALUES = ("self", "other")
+
+
+def _plan_recog_filter(val, where, params, out):
+    """把等待动作里的可选来源过滤键编译进 plan（形状/互斥 fail-closed）。
+
+    **两个键都不写 = 旧语义逐字节不变**（`plan` 里不会多出 recog/recog_is）：
+      * ``recog``：int 或 params 名（加载期 `resolve_param` + i32 范围，与 `send.recog`
+        同口径），按帧头 ``recog`` **精确匹配**（例：SM_STRUCK 的目标 ActorId）；
+      * ``recog_is``：``"self"`` / ``"other"``，与 ``run.state["self_actor"]``（进世界
+        ``SM_LOGON(50).recog``）比较；运行期还不知道自身 ActorId 时 **fail-closed**。
+    两者**互斥**（同时写 = 想不清跟谁比）。
+    """
+    if not isinstance(val, dict):
+        return
+    has_recog = "recog" in val
+    has_is = "recog_is" in val
+    if has_recog and has_is:
+        raise ScenarioError("%s: recog and recog_is are mutually exclusive (fail-closed)"
+                            % where)
+    if has_recog:
+        out["recog"] = _need_int(resolve_param(val["recog"], params, where + ".recog"),
+                                 where + ".recog", -0x80000000, 0x7FFFFFFF)
+    if has_is:
+        isv = val["recog_is"]
+        if isv not in RECOG_IS_VALUES:
+            raise ScenarioError("%s.recog_is must be one of %s, got %r (fail-closed)"
+                                % (where, list(RECOG_IS_VALUES), isv))
+        out["recog_is"] = isv
+
+
 def plan_step(step, index, params):
     """校验并把一步场景展开成可执行动作（不依赖运行期状态）。"""
     where = "steps[%d]" % index
@@ -744,16 +790,26 @@ def plan_step(step, index, params):
         out.update(ident=CM_MERCHANTDLGSELECT, recog=recog, param=0, tag=0, series=0,
                    body=label.encode("gbk"), _needs_merchant_recog=(recog is None))
     elif action == "wait_for":
-        if isinstance(val, int) and not isinstance(val, bool):
-            idents = [_need_int(val, where + ".wait_for")]
-        elif isinstance(val, list) and val:
-            idents = [_need_int(x, where + ".wait_for[]") for x in val]
+        # 旧形状（int / 非空 int 数组）原样保留；要来源过滤才写对象形状：
+        #   {"idents": 31 | [31, 642], "recog": <int|params 名> | "recog_is": "self"|"other"}
+        if isinstance(val, dict):
+            _need_keys(val, where + ".wait_for", required=("idents",),
+                       optional=("recog", "recog_is"))
+            idents_val = val["idents"]
         else:
-            raise ScenarioError("%s.wait_for must be an int or a non-empty list" % where)
+            idents_val = val
+        if isinstance(idents_val, int) and not isinstance(idents_val, bool):
+            idents = [_need_int(idents_val, where + ".wait_for")]
+        elif isinstance(idents_val, list) and idents_val:
+            idents = [_need_int(x, where + ".wait_for[]") for x in idents_val]
+        else:
+            raise ScenarioError("%s.wait_for must be an int, a non-empty list, or "
+                                "{idents, recog|recog_is}" % where)
         out["idents"] = idents
+        _plan_recog_filter(val, where + ".wait_for", params, out)
     elif action == "wait_frames":
         _need_keys(val, where + ".wait_frames", required=("count",),
-                   optional=("idents", "timeout_ms"))
+                   optional=("idents", "timeout_ms", "recog", "recog_is"))
         out["count"] = _need_int(val["count"], where + ".wait_frames.count", 0, 1000000)
         ids = val.get("idents") or []
         if not isinstance(ids, list):
@@ -762,9 +818,10 @@ def plan_step(step, index, params):
         if "timeout_ms" in val:
             out["timeout_ms"] = _need_int(val["timeout_ms"],
                                           where + ".wait_frames.timeout_ms", 0, 3600000)
+        _plan_recog_filter(val, where + ".wait_frames", params, out)
     elif action == "wait_idents":
         _need_keys(val, where + ".wait_idents", required=("idents",),
-                   optional=("timeout_ms",))
+                   optional=("timeout_ms", "recog", "recog_is"))
         ids = val["idents"]
         if not isinstance(ids, list) or not ids:
             raise ScenarioError("%s.wait_idents.idents must be a non-empty list" % where)
@@ -772,6 +829,7 @@ def plan_step(step, index, params):
         if "timeout_ms" in val:
             out["timeout_ms"] = _need_int(val["timeout_ms"],
                                           where + ".wait_idents.timeout_ms", 0, 3600000)
+        _plan_recog_filter(val, where + ".wait_idents", params, out)
     elif action == "sleep":
         if isinstance(val, int) and not isinstance(val, bool):
             out["ms"] = _need_int(val, where + ".sleep", 0, 3600000)
@@ -924,6 +982,11 @@ def _var_refs(data):
         v = step.get("dlg_select")
         if isinstance(v, dict) and isinstance(v.get("recog"), str):
             refs.append((where + ".dlg_select.recog", v["recog"]))
+        # 等待对象形状的 recog 与 send.recog 同口径（可写 params 名）
+        for kind in ("wait_for", "wait_frames", "wait_idents"):
+            v = step.get(kind)
+            if isinstance(v, dict) and isinstance(v.get("recog"), str):
+                refs.append((where + "." + kind + ".recog", v["recog"]))
     return refs
 
 
@@ -1188,6 +1251,27 @@ class Run:
             "note": plan.get("note", ""),
         })
 
+    def _recog_filter(self, plan, idx):
+        """把 plan 里的 ``recog`` / ``recog_is`` 编译成 ``frame -> bool``（None = 不过滤）。
+
+        ``recog_is`` 依赖 ``self.state["self_actor"]``（``do_enter_world`` 从
+        ``SM_LOGON(50).recog`` 学到）。**还不知道自身 ActorId 时不许猜**：直接
+        ``ScenarioError``（退出码 2），否则 self/other 过滤会静默退化成恒真/恒假。
+        """
+        if plan.get("recog_is") is not None:
+            self_actor = self.state.get("self_actor")
+            if self_actor is None:
+                raise ScenarioError(
+                    "steps[%d]: recog_is=%r needs the self actor id (SM_LOGON(50).recog), "
+                    "which has not been observed; refusing to guess (fail-closed)"
+                    % (idx, plan["recog_is"]))
+            want_self = plan["recog_is"] == "self"
+            return lambda fr: (fr.recog == self_actor) == want_self
+        if plan.get("recog") is not None:
+            want = plan["recog"]
+            return lambda fr: fr.recog == want
+        return None
+
     def execute_step(self, conn, plan):
         idx = plan["index"]
         kind = plan["kind"]
@@ -1219,11 +1303,16 @@ class Run:
             after = conn.recorder.seq
             t_start = now_ms()
             timeout = plan["timeout_ms"] if plan["timeout_ms"] is not None else default_timeout
-            got = conn.wait_for(plan["idents"], timeout, after)
+            recog_filter = self._recog_filter(plan, idx)
+            got = conn.wait_for(plan["idents"], timeout, after, recog_filter)
             rec = {"index": idx, "kind": "wait_for", "idents": plan["idents"],
                    "timeout_ms": timeout, "t_ms": t_start - self.t0_ms,
                    "waited_ms": now_ms() - t_start, "matched": got is not None,
                    "note": plan.get("note", "")}
+            if recog_filter is not None:
+                # 加性字段：只在用了来源过滤时出现（旧场景的 run.json 逐字节不变）
+                rec["recog"] = plan.get("recog")
+                rec["recog_is"] = plan.get("recog_is")
             if got is None:
                 self.steps.append(rec)
                 raise StepFailure("steps[%d]: timeout waiting for ident(s) %s after %.0fms"
@@ -1236,13 +1325,19 @@ class Run:
         if kind == "wait_frames":
             timeout = plan["timeout_ms"] if plan.get("timeout_ms") is not None else default_timeout
             t_start = now_ms()
-            ok = conn.wait_frames(plan["count"], plan["idents"], timeout)
+            recog_filter = self._recog_filter(plan, idx)
+            ok = conn.wait_frames(plan["count"], plan["idents"], timeout, recog_filter)
+            seen = {fr.ident for _, fr in conn.frames
+                    if recog_filter is None or recog_filter(fr)}
             rec = {"index": idx, "kind": "wait_frames", "count": plan["count"],
                    "idents": plan["idents"], "timeout_ms": timeout,
                    "t_ms": t_start - self.t0_ms, "waited_ms": now_ms() - t_start,
                    "total_frames": len(conn.frames),
-                   "seen_idents": sorted({fr.ident for _, fr in conn.frames}),
+                   "seen_idents": sorted(seen),
                    "matched": ok, "note": plan.get("note", "")}
+            if recog_filter is not None:
+                rec["recog"] = plan.get("recog")
+                rec["recog_is"] = plan.get("recog_is")
             self.steps.append(rec)
             if not ok:
                 raise StepFailure("steps[%d]: wait_frames count=%d idents=%s not met in %.0fms "
@@ -1253,13 +1348,18 @@ class Run:
         if kind == "wait_idents":
             timeout = plan["timeout_ms"] if plan["timeout_ms"] is not None else default_timeout
             t_start = now_ms()
-            missing, waited = conn.wait_idents(plan["idents"], timeout)
-            seen = sorted({fr.ident for _, fr in conn.frames})
+            recog_filter = self._recog_filter(plan, idx)
+            missing, waited = conn.wait_idents(plan["idents"], timeout, recog_filter)
+            seen = sorted({fr.ident for _, fr in conn.frames
+                           if recog_filter is None or recog_filter(fr)})
             rec = {"index": idx, "kind": "wait_idents", "idents": plan["idents"],
                    "timeout_ms": timeout, "t_ms": t_start - self.t0_ms,
                    "waited_ms": waited, "seen_idents": seen,
                    "missing_idents": missing, "matched": not missing,
                    "note": plan.get("note", "")}
+            if recog_filter is not None:
+                rec["recog"] = plan.get("recog")
+                rec["recog_is"] = plan.get("recog_is")
             self.steps.append(rec)
             if missing:
                 raise StepFailure(
@@ -2446,6 +2546,119 @@ def _selftest_dwell():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _selftest_wait_recog_filter():
+    """合成帧流（不连网）：同 ident、来源 recog=自己 vs 他人 ⇒ 过滤只认匹配的来源。
+
+    覆盖：① 旧语义（不带过滤）两条都算命中（兼容性牙）；② ``recog_is=self/other``；
+    ③ ``recog`` 精确值（含 params 名加载期解析）；④ wait_idents/wait_frames 的过滤；
+    ⑤ 互斥/非法 recog_is/未知键在**加载期** rc=2；⑥ 运行期未知 self_actor 时 fail-closed。
+    """
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mir2probe-recog-")
+    try:
+        self_actor, other_actor = 6930, 119
+        frames = [
+            build_s2c_frame(self_actor, SM_STRUCK, 1, 2, 0, b"\x00\x00"),
+            build_s2c_frame(other_actor, SM_STRUCK, 3, 4, 0, b"\x00\x00"),
+            build_s2c_frame(other_actor, SM_HIT, 0, 0, 0, b""),
+        ]
+        args = argparse.Namespace(out=tmp, no_auto_handshake=True, timeout_ms=8000)
+        run = Run(args)
+        # do_enter_world 从 SM_LOGON(50).recog 学到自身 ActorId（这里直接喂状态）
+        run.state["self_actor"] = self_actor
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock(frames)
+        conn.pump(100)
+        assert [f.ident for _, f in conn.frames] == [SM_STRUCK, SM_STRUCK, SM_HIT], conn.frames
+        seq_self = conn.frames[0][0]
+        seq_other = conn.frames[1][0]
+
+        # ① 旧语义：不带过滤 ⇒ 同 ident 的两条都算命中（先到先得）——兼容性判据。
+        got = conn.wait_for([SM_STRUCK], 30, 0)
+        assert got is not None and got[0] == seq_self, got
+        got = conn.wait_for([SM_STRUCK], 30, seq_self)
+        assert got is not None and got[0] == seq_other, got
+
+        # ② recog_is=other / self：只认来源匹配的帧（同 ident 两条的区分点）。
+        got = conn.wait_for([SM_STRUCK], 30, 0, lambda fr: fr.recog != self_actor)
+        assert got is not None and got[0] == seq_other, got
+        got = conn.wait_for([SM_STRUCK], 30, 0, lambda fr: fr.recog == self_actor)
+        assert got is not None and got[0] == seq_self, got
+        # 精确 recog=OTHER 同口径
+        got = conn.wait_for([SM_STRUCK], 30, 0, lambda fr: fr.recog == other_actor)
+        assert got is not None and got[0] == seq_other, got
+
+        # ③ 加载期编译：dict 形状 / params 名 / 互斥与非法值 fail-closed。
+        plan = plan_step({"wait_for": {"idents": SM_STRUCK, "recog_is": "other"}}, 0, {})
+        assert plan["idents"] == [SM_STRUCK] and plan["recog_is"] == "other", plan
+        assert "recog" not in plan, plan
+        plan = plan_step({"wait_for": {"idents": [SM_STRUCK], "recog": "want"}}, 0,
+                         {"want": other_actor})
+        assert plan["recog"] == other_actor and "recog_is" not in plan, plan
+        plan = plan_step({"wait_idents": {"idents": [SM_STRUCK], "recog_is": "self"}}, 0, {})
+        assert plan["recog_is"] == "self", plan
+        plan = plan_step({"wait_frames": {"count": 3, "recog": other_actor}}, 0, {})
+        assert plan["count"] == 3 and plan["recog"] == other_actor, plan
+        for bad in ({"idents": SM_STRUCK, "recog": other_actor, "recog_is": "self"},
+                    {"idents": SM_STRUCK, "recog_is": "me"},
+                    {"idents": SM_STRUCK, "bogus": 1},
+                    {"recog_is": "self"}):
+            try:
+                plan_step({"wait_for": bad}, 0, {})
+            except ScenarioError:
+                continue
+            raise AssertionError("bad wait_for accepted: %r" % (bad,))
+
+        # ④ wait_idents / wait_frames 的过滤只作用于 ident 覆盖判定（count 仍是总帧数）。
+        missing, _ = conn.wait_idents([SM_STRUCK], 20, lambda fr: fr.recog == other_actor)
+        assert missing == [], missing
+        missing, _ = conn.wait_idents([SM_HIT], 20, lambda fr: fr.recog == self_actor)
+        assert missing == [SM_HIT], missing
+        assert conn.wait_frames(3, [SM_STRUCK], 20, lambda fr: fr.recog == other_actor) is True
+        assert conn.wait_frames(3, [SM_HIT], 20, lambda fr: fr.recog == self_actor) is False
+
+        # ⑤ 运行期还不知道自身 ActorId ⇒ recog_is 必须 fail-closed（不许猜）。
+        run2 = Run(args)
+        conn2 = Conn("gamegate", run2.recorder, on_frame=run2.on_frame)
+        conn2.phase = "gamegate"
+        plan = plan_step({"wait_for": {"idents": SM_STRUCK, "recog_is": "other"}}, 0, {})
+        try:
+            run2.execute_step(conn2, plan)
+        except ScenarioError as ex:
+            assert "self actor" in str(ex), str(ex)
+        else:
+            raise AssertionError("recog_is with unknown self actor was accepted (fail-closed broken)")
+
+        # ⑥ 完整 execute_step：过滤后 matched_recog 必须是「他人」那帧；
+        #    同一串帧**不带过滤**必须命中第一条（自己那帧），且旧 run.json 字段不多不少。
+        run3 = Run(args)
+        run3.state["self_actor"] = self_actor
+        conn3 = Conn("gamegate", run3.recorder, on_frame=run3.on_frame)
+        conn3.phase = "gamegate"
+        conn3.sock = _FakeSock(frames)
+        plan = plan_step({"wait_for": {"idents": SM_STRUCK, "recog_is": "other"},
+                          "timeout_ms": 200}, 0, {})
+        run3.execute_step(conn3, plan)
+        step = run3.steps[-1]
+        assert step["matched"] and step["matched_recog"] == other_actor, step
+        assert step["recog"] is None and step["recog_is"] == "other", step
+
+        run4 = Run(args)
+        conn4 = Conn("gamegate", run4.recorder, on_frame=run4.on_frame)
+        conn4.phase = "gamegate"
+        conn4.sock = _FakeSock(frames)
+        plan = plan_step({"wait_for": SM_STRUCK, "timeout_ms": 200}, 0, {})
+        run4.execute_step(conn4, plan)
+        step4 = run4.steps[-1]
+        assert step4["matched_recog"] == self_actor, step4
+        assert "recog_is" not in step4 and "recog" not in step4, step4
+        return "合成帧 3 条：self/other 过滤各认其源；无过滤两者都命中"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_selftest():
     fails = []
 
@@ -2473,12 +2686,13 @@ def run_selftest():
     check("conn-semantics", _selftest_conn_semantics)
     check("multi-session", _selftest_multi_session)
     check("dwell-after-enter", _selftest_dwell)
+    check("wait-recog-filter", _selftest_wait_recog_filter)
     if fails:
         print("mir2_probe selftest: FAIL")
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (10 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (11 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
     return 0
 
 
