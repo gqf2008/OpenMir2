@@ -21402,16 +21402,82 @@ mod tests {
         let body = game_svr::smframe::sm_healthspellchanged_frame(mon_id, 42, 7, 100);
         broadcast_healthspellchanged(&world, &online, &gates, mon_id, &body, 12);
 
-        let mut got: Vec<(i32, i32, u16)> = Vec::new();
+        let mut got: Vec<(i32, i32, u16, u16, u16)> = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
             let cm = CommandMessage::from_bytes(&body).expect("53 头 12B");
             assert_eq!(cm.ident, mir2_protocol::messages::SM_HEALTHSPELLCHANGED);
-            got.push((socket, cm.recog, cm.param));
+            got.push((socket, cm.recog, cm.param, cm.tag, cm.series));
         }
         assert_eq!(
             got,
-            vec![(901, mon_id, 42)],
-            "dx=12 收（闭区间）、dx=13 不收、跨图同距不收"
+            vec![(901, mon_id, 42, 7, 100)],
+            "dx=12 收（闭区间）、dx=13 不收、跨图同距不收；载荷 = Recog/HP/MP/MaxHP"
+        );
+    }
+
+    /// **卡 `openmir2-monster-showhp-53-broadcast` R3-1a（复核 I-1）**：`SendRefMsg` 在
+    /// `ObMode || FixedHideMode` 时退化为 `SendMsg(self)`（`BaseObject.Message.cs:390-393`；
+    /// 自投重载 `:34-96` 非机器人恒 `boSend=true`）⇒ 隐身 Play 源**再收 1 条** 53
+    /// （自见 = `SendUpdateMsg` 1 + 退化自投 1 = 2），±12 观察者 0 条。
+    ///
+    /// 红检：删掉门内自投段（保留早退）⇒ 源 socket 0 条 ⇒ 本用例必红（复审牙 T3）。
+    #[test]
+    fn broadcast_healthspellchanged_hidden_play_source_gets_degraded_self_copy() {
+        use mir2_protocol::frame::CommandMessage;
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut play = mir2_world::Entity::new(0, "hero".to_string(), 10, 10);
+        play.race = mir2_world::ACTOR_RACE_PLAY;
+        play.ob_mode = true; // 隐身（GM @ObMode；FixedHideMode 同口径）
+        let src = world.add_entity(play);
+        let mut obs = mir2_world::Entity::new(0, "p".to_string(), 12, 10); // dx=2 ∈ ±12
+        obs.race = mir2_world::ACTOR_RACE_PLAY;
+        let obs_id = world.add_entity(obs);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: src,
+            },
+            OnlineEntry {
+                account: "ub".into(),
+                chr_name: "p".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: obs_id,
+            },
+        ];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let body = game_svr::smframe::sm_healthspellchanged_frame(src, 42, 7, 100);
+        broadcast_healthspellchanged(&world, &online, &gates, src, &body, 12);
+
+        let mut got: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            got.push((socket, body));
+        }
+        assert_eq!(got.len(), 1, "隐身 Play 源：仅退化自投 1 条，观察者 0 条");
+        assert_eq!(
+            got[0].0, 901,
+            "退化自投只给源自己 socket（观察者 902 零条）"
+        );
+        assert_eq!(got[0].1, body, "字节 == 传入 body");
+        let cm = CommandMessage::from_bytes(&got[0].1).expect("53 头 12B");
+        assert_eq!(
+            (cm.ident, cm.recog, cm.param, cm.tag, cm.series),
+            (
+                mir2_protocol::messages::SM_HEALTHSPELLCHANGED,
+                src,
+                42,
+                7,
+                100
+            ),
+            "载荷 = Recog(ActorId)/HP/MP/MaxHP"
         );
     }
 
