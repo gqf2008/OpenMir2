@@ -723,10 +723,15 @@ def _var_refs(data):
     return refs
 
 
-#: 由 `scenario.placement` 派生、必须与它自洽的变量。目前只有 self_pos：场景作者按
-#: `MakeLong(X, Y) = (unsigned short)X | (Y << 16)` 打包（HUtil32.MakeLong 口径，
-#: docs/HUtil32-parity-inventory-20261020.md 第 9 条），低 16 位 X、高 16 位 Y。
-PLACEMENT_DERIVED_VARS = {"self_pos": "MakeLong(X,Y)=(Y<<16)|X"}
+#: 由 `scenario.placement` 派生、必须与它自洽的变量：变量名 -> (比较口径, 说明)。
+#:   * `self_pos`：按 `MakeLong(X, Y) = (unsigned short)X | (Y << 16)` 打包（HUtil32.MakeLong
+#:     口径，docs/HUtil32-parity-inventory-20261020.md 第 9 条），低 16 位 X、高 16 位 Y；
+#:   * `self_x` / `self_y`：自身坐标，必须分别等于 placement.x / placement.y。
+PLACEMENT_DERIVED_VARS = {
+    "self_pos": ("packed", "MakeLong(X,Y)=(Y<<16)|X"),
+    "self_x": ("x", "自身坐标 X"),
+    "self_y": ("y", "自身坐标 Y"),
+}
 
 
 def _decode_self_pos(value):
@@ -755,8 +760,9 @@ def check_scenario(data, plans, params=None, messages=None):
       R4 变量引用必须能在场景声明的 required/params/computed 里找到（不许引用未声明变量）；
       R5 `scenario.placement` 与由位置派生的 params（如 self_pos=MakeLong(X,Y)）必须自洽
          （不一致 = 角色落在 A 点、期望值按 B 点算，真跑静默恒超时，card_window dry-run 也看不出来）；
-      R6 攻击族（HIT_IDENTS 9 条）的 `send.tag` 按 oracle `(byte)Tag = nDir` 截断后必须是合法
-         Direction（0..7）—— 非法值在 oracle 里「原地不动」，场景必然等不到命中帧；
+      R6（**WARN 级，不改 rc**）攻击族（HIT_IDENTS 9 条）的 `send.tag` 按 oracle `(byte)Tag = nDir`
+         截断后应是合法 Direction（0..7）。越界只打 stderr 警告：它**不影响本次命中**（取目标用
+         状态化 Dir，nDir 之后才写入），但会污染状态 Dir（动作帧/此后取目标），且真实客户端不会发；
       W  至少要有一个等待步骤（原 main 里的 N-5 规则，收进来一起判）。
 
     R4 的「声明」口径刻意**不含 `--var`**：`--var` 是给已声明变量覆值的通道（README），
@@ -820,28 +826,36 @@ def check_scenario(data, plans, params=None, messages=None):
                 "%s references undeclared variable %r: declare it in required/params/computed "
                 "(--var only overrides a declared name, it does not declare one)" % (where, ref))
 
-    # R5：placement 与由位置派生的 params 必须自洽。
+    # R5：placement 与由位置派生的 params 必须自洽。取值与 plan_step 同口径走
+    # resolve_param（**支持 params 名间接引用/链式**，否则 `"self_pos": "start_pos"` 会假红）。
     placement = data.get("placement")
     if isinstance(placement, dict):
-        for var, how in PLACEMENT_DERIVED_VARS.items():
+        for var, (how_kind, how) in PLACEMENT_DERIVED_VARS.items():
             if var not in eff_params:
                 continue
-            raw = eff_params[var]
-            if isinstance(raw, str) and _is_int_literal(raw):
-                raw = int(raw, 10)
-            if not isinstance(raw, int) or isinstance(raw, bool):
+            value = resolve_param(eff_params[var], eff_params, "params." + var)
+            if how_kind == "packed":
+                x, y = _decode_self_pos(value)
+                if (x, y) != (placement["x"], placement["y"]):
+                    raise ScenarioError(
+                        "scenario.placement map=%s x=%d y=%d disagrees with %s=%d "
+                        "(decodes to x=%d y=%d via %s): the character would be placed at one point "
+                        "while the scenario expects another (silent timeout at run time)"
+                        % (placement["map"], placement["x"], placement["y"], var, value, x, y, how))
+            elif value != placement[how_kind]:
                 raise ScenarioError(
-                    "%s must be an int packed as %s (scenario.placement is declared), got %r"
-                    % (var, how, raw))
-            x, y = _decode_self_pos(raw)
-            if (x, y) != (placement["x"], placement["y"]):
-                raise ScenarioError(
-                    "scenario.placement map=%s x=%d y=%d disagrees with %s=%d "
-                    "(decodes to x=%d y=%d via %s): the character would be placed at one point "
-                    "while the scenario expects another (silent timeout at run time)"
-                    % (placement["map"], placement["x"], placement["y"], var, raw, x, y, how))
+                    "scenario.placement map=%s x=%d y=%d disagrees with %s=%d (%s must equal "
+                    "placement.%s): the character would be placed at one point while the scenario "
+                    "expects another (silent timeout at run time)"
+                    % (placement["map"], placement["x"], placement["y"], var, value, var, how_kind))
 
-    # R6：攻击族 send.tag = (byte)wParam = Direction，必须在 Direction 值域内。
+    # R6（**WARN 级，不改变 rc**）：攻击族 send.tag = (byte)wParam = 状态化朝向。
+    # 机理（两侧一致，别写反）：oracle **先按状态化 Dir 取目标**，之后才写入 nDir ——
+    #   C#：PlayObject.Attack.cs:26 GetPoseCreate()（状态 Dir）→ :75 AttackDir(...) →
+    #       BaseObject.Attack.cs:12 `Dir = nDir;` → :13 `_Attack`（用已选好的目标）；
+    #   Rust：bins/game-svr/src/lib.rs:8836-8848 `pose_dir = e.ai.dir` 取目标，随后 `e.ai.dir = dir`。
+    # ⇒ 越界方向**不影响本击命中**（CM_TURN(tag=0)+CM_HIT(tag=99) 第一击照样命中并出 SM_STRUCK），
+    #   它污染的是**此后**的状态 Dir（动作帧 + 下一次取目标）。所以这里只警告、不判死。
     direction_spec = None
     for p in plans:
         if p["kind"] != "send":
@@ -853,12 +867,12 @@ def check_scenario(data, plans, params=None, messages=None):
             continue
         eff_dir = p["tag"] & 0xFF          # oracle: (byte)Tag
         if eff_dir not in dirs:
-            raise ScenarioError(
-                "steps[%d].send.tag %d is not a valid Direction for ident %d (attack family): "
-                "oracle takes nDir = (byte)Tag = %d, valid values are %s (source %s HIT_IDENTS/DIR_*) "
-                "— an out-of-range direction never hits, so the wait can only time out"
-                % (p["index"], p["tag"], p["ident"], eff_dir,
-                   "%d..%d" % (min(dirs), max(dirs)), ATTACKWIRE_RS_REL))
+            print("WARN: steps[%d].send.tag %d (ident %d, attack family) is not a valid Direction: "
+                  "oracle takes nDir = (byte)Tag = %d, valid %s (source %s HIT_IDENTS/DIR_*). "
+                  "真实客户端不会发送越界方向；该值**不影响本次命中**（取目标用的是状态化 Dir，"
+                  "nDir 在取目标之后才写入），但会污染角色的状态 Dir，影响动作帧与**此后**的取目标。"
+                  % (p["index"], p["tag"], p["ident"], eff_dir,
+                     "%d..%d" % (min(dirs), max(dirs)), ATTACKWIRE_RS_REL), file=sys.stderr)
 
     # W：必须有等待步骤（N-5：只发不等证明不了任何东西）。
     if not any(k in WAIT_KINDS for k in kinds):
@@ -1747,6 +1761,16 @@ def _selftest_scenario_required():
             pass
 
 
+def _write_tmp_rs(text):
+    """selftest 用：写一个临时 .rs 文件（假 messages.rs / attackwire.rs），返回路径。"""
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".rs")
+    os.close(fd)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
 def _selftest_scenario_validation():
     """`--check-scenario` 的语义牙：R1/R2/R3/R4，外加「纯观察场景不误伤」。
 
@@ -1813,13 +1837,10 @@ def _selftest_scenario_validation():
 
     # M4：常量表先剥 `//` 注释再匹配 —— 注释掉的常量不得进表（否则 wait_for 假绿）
     import tempfile
-    fd, fake_rs = tempfile.mkstemp(suffix=".rs")
-    os.close(fd)
+    fake_rs = _write_tmp_rs("// removed: pub const SM_FAKE: u16 = 4095;\n"
+                            "pub const SM_REAL: u16 = 50;   // 行尾注释内的 pub const SM_X: u16 = 51;\n"
+                            "pub const CM_OTHER: u16 = 3014;\n")
     try:
-        with open(fake_rs, "w", encoding="utf-8") as fh:
-            fh.write("// removed: pub const SM_FAKE: u16 = 4095;\n"
-                     "pub const SM_REAL: u16 = 50;   // 行尾注释内的 pub const SM_X: u16 = 51;\n"
-                     "pub const CM_OTHER: u16 = 3014;\n")
         tbl = load_message_constants(fake_rs)
         assert 4095 not in tbl["SM"] and 4095 not in tbl["CM"], tbl   # 整行注释
         assert 51 not in tbl["SM"], tbl                                # 行尾注释
@@ -1853,36 +1874,113 @@ def _selftest_scenario_validation():
     else:
         raise AssertionError("--var self_pos mismatch accepted (R5 tooth broken)")
 
-    # R6：攻击族的 tag = (byte)Direction（0..7）；源表自检 + 牙（tag=99 红 / tag=7 绿）
-    hit_idents, dirs = load_direction_spec(messages=messages)
-    assert len(hit_idents) == 9 and dirs == frozenset(range(8)), (hit_idents, dirs)
-    assert 3014 in hit_idents, hit_idents          # CM_HIT
-    hit_scen = {
-        "name": "selftest_dir",
-        "steps": [{"send": {"ident": 3014, "recog": 1, "param": 1, "tag": 7}},
-                  {"wait_for": 14}],
+    # M1：self_x / self_y 也必须与 placement 自洽
+    placed_xy = {
+        "name": "selftest_placement_xy",
+        "params": {"self_x": 256, "self_y": 232},
+        "placement": {"map": "4", "x": 256, "y": 232},
+        "steps": [{"send": {"ident": 3011, "recog": "self_x", "param": "self_y"}},
+                  {"wait_for": 11}],
     }
-    check_scenario(clone(hit_scen), expand_scenario(clone(hit_scen))[0], None, messages)
-    for bad_dir in (8, 99):
-        d = clone(hit_scen)
-        d["steps"][0]["send"]["tag"] = bad_dir
+    check_scenario(clone(placed_xy), expand_scenario(clone(placed_xy))[0], None, messages)
+    for var, bad in (("self_x", 257), ("self_y", 233)):
+        d = clone(placed_xy)
+        d["params"][var] = bad
         try:
             check_scenario(d, expand_scenario(clone(d))[0], None, messages)
         except ScenarioError as ex:
-            msg = str(ex)
-            assert "is not a valid Direction" in msg and ("tag %d" % bad_dir) in msg, msg
+            assert ("disagrees with %s" % var) in str(ex), str(ex)
         else:
-            raise AssertionError("attack tag=%d accepted (R6 tooth broken)" % bad_dir)
+            raise AssertionError("%s mismatch accepted (R5 tooth broken)" % var)
+
+    # M2：派生变量写成**间接 params 名**（链式）不得假红；链到错值仍要红
+    indirect = {
+        "name": "selftest_indirect",
+        "params": {"self_pos": "start_pos", "start_pos": 15204608},
+        "placement": {"map": "4", "x": 256, "y": 232},
+        "steps": [{"send": {"ident": 3010, "recog": "self_pos"}}, {"wait_for": 10}],
+    }
+    check_scenario(clone(indirect), expand_scenario(clone(indirect))[0], None, messages)
+    indirect_bad = clone(indirect)
+    indirect_bad["params"]["start_pos"] = 15204609
+    try:
+        check_scenario(indirect_bad, expand_scenario(clone(indirect_bad))[0], None, messages)
+    except ScenarioError as ex:
+        assert "disagrees with self_pos" in str(ex), str(ex)
+    else:
+        raise AssertionError("indirect self_pos mismatch accepted")
+
+    # R6（WARN 级）：攻击族 tag=(byte)Direction 越界 ⇒ stderr 警告，**不判死**。
+    # 机理：oracle 先按**状态化** Dir 取目标（PlayObject.Attack.cs:26 / lib.rs:8836-8848），
+    # nDir 之后才写入 ⇒ CM_TURN(tag=0)+CM_HIT(tag=99) 的第一击照样命中，不能 rc=2。
+    import contextlib
+    import io as _io
+    hit_idents, dirs = load_direction_spec(messages=messages)
+    assert len(hit_idents) == 9 and dirs == frozenset(range(8)), (hit_idents, dirs)
+    assert 3014 in hit_idents, hit_idents          # CM_HIT
+
+    def stderr_of(data):
+        """展开 + 校验，返回 stderr 文本（不抛 = 通过；抛则冒泡）。"""
+        plans, _ = expand_scenario(clone(data))
+        buf = _io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            check_scenario(clone(data), plans, None, messages)
+        return buf.getvalue()
+
+    turn_hit = {
+        "name": "selftest_turn_hit",
+        "steps": [{"send": {"ident": 3010, "recog": 1, "param": 1, "tag": 0}},
+                  {"send": {"ident": 3014, "recog": 1, "param": 1, "tag": 99}},
+                  {"wait_for": 31}],
+    }
+    warn = stderr_of(turn_hit)       # 不得抛：oracle 第一击仍命中
+    assert "WARN" in warn and "tag 99" in warn, warn
+    assert "不影响本次命中" in warn and "状态 Dir" in warn, warn
+    assert "never hits" not in warn and "only time out" not in warn, warn
+    ok_dir = clone(turn_hit)
+    ok_dir["steps"][1]["send"]["tag"] = 7
+    assert stderr_of(ok_dir) == "", "合法 Direction (tag=7) 不该有警告"
     # 非攻击族不受 R6 约束（不误伤）：CM_SAY 的 tag 没有方向语义
     say_scen = {"name": "selftest_say", "steps": [{"send": {"ident": 3030, "tag": 99}},
                                                   {"wait_for": 100}]}
-    check_scenario(clone(say_scen), expand_scenario(clone(say_scen))[0], None, messages)
+    assert stderr_of(say_scen) == "", "非攻击族 ident 不该有方向警告"
+
+    # M3：R6 取表 fail-closed 的四种 drift 都要在 selftest 里被钉住
+    _NL = "\n"
+    dir_consts = "".join("const DIR_X%d: u8 = %d;\n" % (i, i) for i in range(8))
+    good_aw = ("pub const HIT_IDENTS: [u16; 1] = [\n    messages::CM_HIT,\n];\n" + dir_consts)
+    drift_cases = [
+        ("missing-file", None, "cannot read attack-family table"),
+        ("no-hit-idents", "pub const NOPE: u16 = 1;\n" + dir_consts,
+         "cannot find `pub const HIT_IDENTS"),
+        ("unknown-name", "pub const HIT_IDENTS: [u16; 1] = [messages::CM_NOPE];\n" + dir_consts,
+         "references CM_NOPE"),
+        ("short-direction-set",
+         "pub const HIT_IDENTS: [u16; 1] = [messages::CM_HIT];\n"
+         + "".join("const DIR_X%d: u8 = %d;\n" % (i, i) for i in range(7)),
+         "expected 0..7"),
+        # 多出一个越界方向（0..7+99）：任何「放宽成包含」的变异都必须被这条钉住
+        ("extra-direction",
+         "pub const HIT_IDENTS: [u16; 1] = [messages::CM_HIT];" + _NL + dir_consts
+         + "const DIR_XBOGUS: u8 = 99;" + _NL,
+         "expected 0..7"),
+    ]
+    assert load_direction_spec(_write_tmp_rs(good_aw), messages)[0] == {3014}, "good fake"
+    for label, text, needle in drift_cases:
+        path = os.path.join(tempfile.mkdtemp(prefix="pd-dir-"), "no-such.rs") if text is None \
+            else _write_tmp_rs(text)
+        try:
+            load_direction_spec(path, messages)
+        except ScenarioError as ex:
+            assert needle in str(ex), (label, needle, str(ex))
+        else:
+            raise AssertionError("direction-table drift %r accepted (fail-closed broken)" % label)
 
     # 防误伤：login_only（纯累计观察）与 dice_chain（params 默认值）必须绿
     for name in ("login_only.json", "dice_chain.json"):
         d = load_scenario(os.path.join(SCENARIO_DIR, name))
         check_scenario(d, expand_scenario(d)[0], None, messages)
-    return "R1-R6 九颗牙（send.ident/注释常量/placement/Direction）+ 不误伤"
+    return "R1-R5 硬牙 + R6 方向 WARN + 取表 drift 四例 + 不误伤"
 
 
 class _TimedSock:
