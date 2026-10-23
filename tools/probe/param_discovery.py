@@ -16,7 +16,7 @@
 | `king_actor` | **规则**（部署假设） | `SM_MERCHANTSAY(643)` 的 `recog` | 643 只证明「该 actor 应答了点击」，**不证明是国王**（仓库里全部 643 录制都是赌场庄家）⇒ 记 `kind=rule`，不计入发现能力；点错则末步响亮超时 |
 | `make_index` / `item_name` | 推导 | `SM_BAGITEMS(201)` 包体里**同一个物品槽**的 `MakeIndex` / `Name` | `PlayObject.Operate.cs:38-64 ClientQueryBagItems()`：`MakeMessage(SM_BAGITEMS, ActorId, 0, 0, ItemList.Count)`，包体 = 逐项 `EDCode.EncodeBuffer(ClientItem) + '/'`；记录**定长 124B**（`ClientItem.WritePacket`）：`Name`@0（1B 长度 + 14B 定长，GBK）、`StdMode`@15、`MakeIndex`@100（i32 LE）。**帧里没有 StdItem 的 `Index`**（客户端靠 Name 识别），所以「MakeIndex 取成 Index」在线上不可能发生 |
 | `takeon_where` | 推导 | **同一物品槽**的 `StdMode` → `ItemLocation` | `M2Share.CheckUserItems`（`src/M2Server/M2Share.cs:376-458`）的逆表：StdMode 5/6→Weapon(1)、10/11→Dress(0)、15→Helmet(4)、19/20/21→Necklace(3)、22/23→Ringl(7)、24/25/26→ArmRingl(5)、28/29/30→RighThand(2)、51→Bujuk(9)、52/62→Boots(11)、53/63→Charm(12)、54/64→Belt(10)；同 StdMode 多槽时取**最小槽号**（24/25/26 只可能 ArmRingl 而非 ArmRingr/Bujuk） |
-| `move_x` / `move_y` | **计算**（`kind=computed`） | 场景 `computed` 声明：`{derived_from: self_x, delta: N}` + 已推导量 | 目标格是**操作者的选择**而非帧事实 ⇒ 由「已推导量 + 场景显式 delta」确定性算出，**不是猜**；oracle `PlayObject.Attack.cs:1365 ClientWalkXY`（目标格为绝对坐标） |
+| `move_x` / `move_y` | **计算**（`kind=computed`） | 场景 `computed` 声明：`{derived_from: self_x, delta: N}` + 已推导量 | 坐标是**操作者的选择**而非帧事实 ⇒ 由「已推导量 + 场景显式 delta」确定性算出，**不是猜**。线上口径：**`recog = (Y<<16) \| X`、`Tag = Dir`，动作族 Param 不携带坐标**（`src/GameSrv/Word/WorldServer.cs:832-857`）；**语义按 ident 区分**——`CM_WALK`/`CM_RUN` 是**目标格**（`PlayObject.Message.cs:1059-1060` → `ClientWalkXY`，`PlayObject.Attack.cs:1365-1428`），`CM_TURN`/`CM_HIT`/`CM_*HIT` 是**攻击者自身格**（`PlayObject.Message.cs:1221-1230` → `ClientHitXY`，`PlayObject.Attack.cs:823/:883` 的 `nX == CurrX && nY == CurrY` 门） |
 | `target_*` / `hit_dir` | 不可推导 | 无来源帧 | fail-closed（可由操作者 `--var` 显式给）；`combat_hit` 的目标是**实体**，需一帧报出附近怪物位置（见 `docs/window-runbook-20261023.md` §4.5） |
 
 **201 的「取哪个物品」规则（显式、确定、不随机）**：只看**首条** `SM_BAGITEMS(201)`（槽序 = oracle
@@ -133,9 +133,20 @@ RULES = {
 
 #: `computed` 类变量的 oracle（写进输出便于复审复算）；未列出的走通用文案。
 COMPUTED_ORACLES = {
-    "move_x": "src/M2Server/Player/PlayObject.Attack.cs:1365-1428 ClientWalkXY(wIdent, nX, nY)："
-              "CM_WALK(3011) 的 nParam1/nParam2 是**绝对**目标格（PlayObject.Message.cs:1059-1060）",
-    "move_y": "同上（nParam1=X → recog，nParam2=Y → param）",
+    "move_x": "**线上打包：`recog = (Y<<16) | X`、`Tag = Dir`；动作族 Param 不携带坐标**"
+              "（src/GameSrv/Word/WorldServer.cs:832-857：CM_TURN/CM_WALK/CM_RUN/CM_HIT 一族走 "
+              "`SendActionMsg(Ident, Tag, LoWord(Recog), HiWord(Recog), 0, …)` 或等价的 "
+              "`SendMsg(…, Tag, LoWord(Recog), HiWord(Recog), 0)`）⇒ **X = LoWord(Recog)**（不是 Param）。"
+              "**语义按 ident 区分（同一公式，两种含义）**："
+              "CM_WALK/CM_RUN = **目标格**（src/M2Server/Player/PlayObject.Message.cs:1059-1060 → "
+              "ClientWalkXY，src/M2Server/Player/PlayObject.Attack.cs:1365-1428 把 nX/nY 当目标坐标）；"
+              "CM_TURN/CM_HIT/CM_*HIT = **攻击者自身格**（PlayObject.Message.cs:1221-1230 → ClientHitXY，"
+              "PlayObject.Attack.cs:823/:883 的 `nX == CurrX && nY == CurrY` 门）",
+    "move_y": "同上：**Y = HiWord(Recog)**（高字），与 X 同一条 `(Y<<16)|X` 公式；动作族 **Param 不携带坐标**。"
+              "特例 CM_SPELL 不走动作族分支（WorldServer.cs 的 default 支 ⇒ nParam1=Recog、nParam2=Param；"
+              "src/M2Server/Player/PlayObject.Message.cs:1339-1341 的 ClientSpellXY(…, (short)nParam1, "
+              "(short)nParam2, nParam3)）⇒ 法术帧 X 在 Recog、Y 在 Param、目标 actor 在 Tag；"
+              "本工具的 computed 只服务走/攻场景",
 }
 
 #: `computed` 声明允许且必需的字段（多/少都算场景坏掉，避免拼错静默失效）。
@@ -1639,6 +1650,26 @@ def selftest():
     case("牙⑨ make_index 错取 StdMode ⇒ 值断言红（三变量仍同槽）", tooth9)
     case("牙⑩ 取物品改成随机 ⇒ 40 次出现多值、断言红", tooth10)
     case("牙⑪ takeon_where 取成 MakeIndex（绕过 StdMode 逆表）⇒ 红", tooth11)
+
+    def case_computed_oracle_text():
+        # 卡 `openmir2-param-discovery-oracle-text-fix`：文案必须与 oracle 一致——同一公式
+        # `recog=(Y<<16)|X`，语义按 ident 区分；动作族 Param 不携带坐标。
+        # 红检（实测）：把 move_y 改回旧说法「nParam1=X → recog，nParam2=Y → param」⇒ 本用例红。
+        mx = COMPUTED_ORACLES["move_x"]
+        my = COMPUTED_ORACLES["move_y"]
+        both = mx + my
+        assert "WorldServer.cs:832-857" in both, mx
+        assert "LoWord(Recog)" in mx, mx
+        assert "目标格" in mx and "PlayObject.Attack.cs:1365" in mx, mx
+        assert "自身格" in mx and ":883" in mx, mx
+        assert "HiWord(Recog)" in my, my
+        assert "Param 不携带" in both, both
+        # 旧错说法必须不再出现（X 在 recog、Y 在 param 的错口径）
+        assert "nParam1=X → recog，nParam2=Y → param" not in both, my
+        assert "nParam2=Y" not in my or "CM_SPELL" in my, my
+
+    case("㉘ computed 文案与 oracle 一致（CM_WALK 目标格 / CM_HIT 自身格 / Y=HiWord(Recog)）",
+         case_computed_oracle_text)
     if fails:
         print("param_discovery selftest: FAIL")
         for item in fails:
