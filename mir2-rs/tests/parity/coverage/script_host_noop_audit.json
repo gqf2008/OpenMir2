@@ -16,11 +16,11 @@
     "total_defaults": 168,
     "player_defaults": 165,
     "npc_defaults": 3,
-    "safe": 63,
-    "needs_card": 101,
+    "safe": 64,
+    "needs_card": 100,
     "covered": 4,
     "safe_kind": {
-      "overridden": 60,
+      "overridden": 61,
       "equivalent": 2,
       "approximation": 1
     }
@@ -325,7 +325,7 @@
       "name": "envir_root",
       "trait": "npc",
       "line": 738,
-      "overridden": false,
+      "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
       "direct_count": 0,
@@ -367,20 +367,26 @@
         "text": "sListFileName = SystemShare.GetEnvirFilePath(sListFileName);"
       },
       "kind": "const",
-      "semantics": "恒 None",
-      "verdict": "needs_card",
+      "semantics": "host 注入 Envir 根后返回 `Some(root)`（`HostNpc` 覆写）；未注入（`NpcHost::default`）仍为 `None` ⇒ 文件类条件/动作按「文件不存在」处理",
+      "verdict": "safe",
       "group": "envir_root",
       "priority": "P1",
       "side_effect": "读（文件系统根）",
-      "consequence": "HostNpc 未覆写 envir_root() ⇒ 恒 None：CHECKNAMELIST/CHECKACCOUNTLIST 恒 false、ADDNAMELIST/DELACCOUNTLIST/ADDUSERDATE 等文件类动作恒按「文件不存在」记错且不写盘。宿主 NpcHost 已有 envir_root 字段，缺的是把它传进 HostNpc。",
-      "reason": "HostNpc 未覆写 envir_root() ⇒ 恒 None：CHECKNAMELIST/CHECKACCOUNTLIST 恒 false、ADDNAMELIST/DELACCOUNTLIST/ADDUSERDATE 等文件类动作恒按「文件不存在」记错且不写盘。宿主 NpcHost 已有 envir_root 字段，缺的是把它传进 HostNpc。",
-      "safe_kind": null,
-      "evidence": {},
-      "host_overridden": false,
+      "consequence": "覆写后 `CHECKNAMELIST`/`CHECKACCOUNTLIST`/`ADDNAMELIST`/`DELNAMELIST`/`ADDUSERDATE` 等文件类命令按 Envir 根解析路径并真实读写；**两参口径只用于 `CHECKNAMEDATELIST`**（`GetEnvirFilePath(dirPath, filePath)`，`..` 前缀忽略 NPC 路径）；`ADDUSERDATE`/`DELUSERDATE` 与 `ADDNAMELIST` 等相同——先拼 `npc.path()+sParam1` 再走**单参**（oracle `ExecutionProcessingSys.cs:5842-5846`），部署 `..\\` 形态拼成 `Market_Def..\\…` 不以 `..` 开头 ⇒ 两侧都不剥前缀、都不写盘（review `40109056` I-1）。",
+      "reason": "卡 `openmir2-script-envir-root-host` 交付：`HostNpc::envir_root` 返回注入的 Envir 根（`npc.rs` 的 `ScriptNpc for HostNpc` 覆写）；两参 helper `envir_file_path_with_dir` 只服务 `cond_check_name_date_list`。",
+      "safe_kind": "overridden",
+      "evidence": {
+        "file": "mir2-rs/bins/game-svr/src/npc.rs",
+        "impl": "ScriptNpc for HostNpc",
+        "method": "envir_root",
+        "line": 610
+      },
+      "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
       "mod_line": 738,
       "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:738",
-      "subcard": "openmir2-script-envir-root-host"
+      "subcard": null,
+      "residual_whitelist": "T-220"
     },
     {
       "name": "dyn_var_get",
@@ -439,7 +445,8 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "dyn_var_get",
-        "line": 1183
+        "line": 1202,
+        "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
@@ -564,7 +571,8 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "dyn_var_set",
-        "line": 1200
+        "line": 1219,
+        "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
@@ -989,7 +997,8 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "dyn_var_insert",
-        "line": 1223
+        "line": 1242,
+        "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
@@ -3377,7 +3386,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "abil_exp",
-        "line": 1246
+        "line": 1265
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
@@ -3429,7 +3438,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_abil_exp",
-        "line": 1249
+        "line": 1268
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
@@ -5062,7 +5071,8 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "action_variable_text",
-        "line": 1582
+        "line": 1601,
+        "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
@@ -5305,7 +5315,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "sys_msg",
-        "line": 1717
+        "line": 1736
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5479,7 +5489,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "chr_name",
-        "line": 1315
+        "line": 1334
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5557,7 +5567,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "guild_name",
-        "line": 1442
+        "line": 1461
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5629,7 +5639,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptNpc for HostNpc",
         "method": "path",
-        "line": 622
+        "line": 641
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5680,7 +5690,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "drop_item_on_full_bag",
-        "line": 1916
+        "line": 1935
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5731,7 +5741,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "gold_changed",
-        "line": 1307
+        "line": 1326
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5865,7 +5875,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "global_a_val",
-        "line": 1783
+        "line": 1802
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5949,7 +5959,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "globa_dy_mval",
-        "line": 1780
+        "line": 1799
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6033,7 +6043,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "global_val",
-        "line": 1777
+        "line": 1796
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6091,7 +6101,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_globa_dy_mval",
-        "line": 1817
+        "line": 1836
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6149,7 +6159,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_global_val",
-        "line": 1812
+        "line": 1831
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6207,7 +6217,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_mdy_val",
-        "line": 1798
+        "line": 1817
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6265,7 +6275,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_mn_integer",
-        "line": 1804
+        "line": 1823
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6323,7 +6333,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_mnmval",
-        "line": 1801
+        "line": 1820
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6378,7 +6388,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "game_gold_changed",
-        "line": 1415
+        "line": 1434
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6439,7 +6449,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "game_gold",
-        "line": 1404
+        "line": 1423
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6495,7 +6505,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_global_a_val",
-        "line": 1822
+        "line": 1841
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6551,7 +6561,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_ms_string",
-        "line": 1809
+        "line": 1828
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6606,7 +6616,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_game_gold",
-        "line": 1401
+        "line": 1420
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6679,7 +6689,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "server_str_val",
-        "line": 1789
+        "line": 1808
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6738,7 +6748,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "permission",
-        "line": 1321
+        "line": 1340
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6809,7 +6819,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "server_int_val",
-        "line": 1786
+        "line": 1805
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6860,7 +6870,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "process_user_line_msg",
-        "line": 1352
+        "line": 1371
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6911,7 +6921,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_permission",
-        "line": 1331
+        "line": 1350
       },
       "side_effect": "-",
       "consequence": "-",
@@ -6968,7 +6978,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "game_point",
-        "line": 1433
+        "line": 1452
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7025,7 +7035,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "credit_point",
-        "line": 1436
+        "line": 1455
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7072,7 +7082,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "send_del_use_item",
-        "line": 1906
+        "line": 1925
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7119,7 +7129,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_use_item_index",
-        "line": 1881
+        "line": 1900
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7212,7 +7222,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_play_dice_label",
-        "line": 1447
+        "line": 1466
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7271,7 +7281,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "tick_count",
-        "line": 1676
+        "line": 1695
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7322,7 +7332,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "config_game_gold_name",
-        "line": 1430
+        "line": 1449
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7415,7 +7425,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "group_member_jobs",
-        "line": 1607
+        "line": 1626
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7472,7 +7482,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "group_owner",
-        "line": 1604
+        "line": 1623
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7517,7 +7527,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "line_variable_text",
-        "line": 1509
+        "line": 1528
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7564,7 +7574,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "quest_unit_open_status",
-        "line": 1278
+        "line": 1297
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7611,7 +7621,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "quest_unit_status",
-        "line": 1274
+        "line": 1293
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7662,7 +7672,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "sale_deal",
-        "line": 1421
+        "line": 1440
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7713,7 +7723,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_bo_dec_game_gold",
-        "line": 1627
+        "line": 1646
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7764,7 +7774,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_bo_inc_game_gold",
-        "line": 1624
+        "line": 1643
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7815,7 +7825,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_kill_mon_exp_rate",
-        "line": 1616
+        "line": 1635
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7866,7 +7876,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_map_mode",
-        "line": 1692
+        "line": 1711
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7917,7 +7927,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_power_rate",
-        "line": 1620
+        "line": 1639
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7968,7 +7978,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_sale_deal",
-        "line": 1425
+        "line": 1444
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8023,7 +8033,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_index",
-        "line": 1873
+        "line": 1892
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8076,7 +8086,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_std_name",
-        "line": 1890
+        "line": 1909
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8129,7 +8139,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_items_len",
-        "line": 1870
+        "line": 1889
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8184,7 +8194,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "envir_map_name",
-        "line": 1668
+        "line": 1687
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8235,7 +8245,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_offline",
-        "line": 1646
+        "line": 1665
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8292,7 +8302,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "re_level",
-        "line": 1439
+        "line": 1458
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8349,7 +8359,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "map_exists",
-        "line": 1682
+        "line": 1701
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8400,7 +8410,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_auto_get_exp",
-        "line": 1630
+        "line": 1649
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8439,7 +8449,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "play_dice_label",
-        "line": 1451
+        "line": 1470
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8478,7 +8488,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_server_int_val",
-        "line": 1827
+        "line": 1846
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8517,7 +8527,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_server_str_val",
-        "line": 1832
+        "line": 1851
       },
       "side_effect": "-",
       "consequence": "-",

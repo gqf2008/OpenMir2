@@ -1950,8 +1950,24 @@ impl Engine<'_, '_> {
     }
 
     /// `ActionOfAddUseDateList`：把「名字 + 当天日期」追加到名单（去重，忽略大小写）。
+    ///
+    /// **I-1（review `40109056`）**：oracle `ExecutionProcessingSys.cs:5842-5846` 是
+    /// **先 `normNpc.Path + sParam1`、再走单参** `GetEnvirFilePath(sListFileName)`。
+    /// （`:2576` 的两参写法属于**另一个动作** `ActionOfAddNameDateList`，code 231
+    /// `ADDNAMEDATELIST`，本仓未实现，不在 `IMPLEMENTED_ACTIONS`。）
+    ///
+    /// 部署形态（`Market_Def/QFunction-0.txt:82/84`，`[@StdModeFunc11]` 月卡充值）：
+    /// `"Market_Def" + "..\QuestDiary\月卡\月卡记录.txt"` = `Market_Def..\QuestDiary\…`
+    /// **不以 `..` 开头** ⇒ 单参口径**不剥前缀** ⇒ 指向 `<Envir>/Market_Def../…`
+    /// （Win32 去尾点后 `<Envir>/Market_Def/QuestDiary/…`，该目录不存在）⇒ oracle
+    /// `File.Exists` 为 false 且 `SaveToFile` 抛异常被 catch ⇒ **不写盘**。
+    /// 若误改成两参 helper 则会剥前缀、写进真实文件 `<Envir>/QuestDiary/月卡/月卡记录.txt`
+    /// ⇒ 与 oracle 分叉（回归，见回归用例
+    /// `host_npc_envir_root_add_use_date_list_deployment_form_does_not_write`）。
     fn action_of_add_use_date_list(&mut self, info: &QuestActionInfo) {
         let hum_name = self.player.chr_name();
+        // oracle `ExecutionProcessingSys.cs:5842`：`sListFileName = normNpc.Path + sParam1;`
+        // `:5846`：`sListFileName = SystemShare.GetEnvirFilePath(sListFileName);`（**单参**）。
         let rel = format!("{}{}", self.npc.path(), info.s_param1);
         let Some(path) = self.envir_file_path(&rel) else {
             return;
@@ -2325,6 +2341,40 @@ impl Engine<'_, '_> {
         let mut p = std::path::PathBuf::from(root);
         if !rel.is_empty() {
             p.push(rel);
+        }
+        Some(p)
+    }
+
+    /// `SystemShare.GetEnvirFilePath(dirPath, filePath)`（两参口径，`M2Share.cs:1979-1982`）：
+    /// `filePath` 以 `..` 开头 ⇒ **忽略 `dirPath`**、丢前 3 字符、拼到 Envir 根；
+    /// 否则 `Path.Combine(BasePath, EnvirDir, dirPath, filePath)`。
+    ///
+    /// 只用于 oracle 里显式传 `normNpc.Path` 作两参的站点：`CHECKNAMEDATELIST`
+    /// （`ConditionProcessingSys.cs:642`；Rust `cond_check_name_date_list`）。
+    /// 与单参站点（`ActionOfAddUseDateList` / `ActionOfDelUseDateList` / `ActionOfAddNameList`
+    /// 等先 `normNpc.Path + sParam1` 再单参）**不可混用**——见 review `40109056` I-1：
+    /// 把 `ADDUSERDATE` 改走两参会让部署形态真的写盘，与 oracle 分叉。
+    pub(crate) fn envir_file_path_with_dir(
+        &self,
+        dir: &str,
+        rel: &str,
+    ) -> Option<std::path::PathBuf> {
+        let root = self.npc.envir_root()?;
+        let mut p = std::path::PathBuf::from(root);
+        if rel.starts_with("..") {
+            // C# `filePath[3..]`：长度 <3 时抛 `ArgumentOutOfRangeException`；Rust 取空串
+            // （部署不可达，登记见 whitelist T-220 的 M-2 注记）。
+            let rest = rel.get(3..).unwrap_or("");
+            if !rest.is_empty() {
+                p.push(rest);
+            }
+        } else {
+            if !dir.is_empty() {
+                p.push(dir);
+            }
+            if !rel.is_empty() {
+                p.push(rel);
+            }
         }
         Some(p)
     }
