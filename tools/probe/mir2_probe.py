@@ -338,6 +338,9 @@ class Conn:
 STEP_META_KEYS = {"timeout_ms", "note", "delay_ms"}
 ACTION_KEYS = {"send", "wait_for", "wait_frames", "wait_idents", "sleep",
                "say", "click_npc", "dlg_select"}
+# 场景顶层 `requires` 只认这些夹具值（卡 `openmir2-scenario-fixture-precondition`）：
+# 目前只有 `magic`（characters_magic 预置）。未知值 fail-closed，避免「加了值却没生效」假绿。
+REQUIRES_KNOWN = ("magic",)
 
 
 def _need_int(value, where, lo=0, hi=0xFFFF):
@@ -527,7 +530,7 @@ def load_scenario(path):
     # 仍能被 --check-scenario / 真跑加载（否则会被下面的 unknown key 拒绝）。
     _need_keys(data, "scenario", required=("name", "steps"),
                optional=("description", "params", "required", "computed",
-                         "placement", "blocked"))
+                         "placement", "blocked", "requires"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -547,6 +550,7 @@ def load_scenario(path):
             raise ScenarioError("scenario.required has duplicates: %s" % dup)
     _check_placement(data.get("placement"))
     _check_blocked(data.get("blocked"))
+    _check_requires(data.get("requires"))
     return data
 
 
@@ -609,6 +613,33 @@ def _check_blocked(bl):
     if mf is not None and (not isinstance(mf, str) or not mf.strip()):
         raise ScenarioError("scenario.blocked.missing_fixture must be a non-empty string "
                             "when present, got %r" % (mf,))
+
+
+def _check_requires(rq):
+    """`scenario.requires` 的**形状**校验（卡 `openmir2-scenario-fixture-precondition`）。
+
+    语义：场景显式声明「跑我需要的 DB 夹具」（目前只认 `magic`）。**本驱动器不预置夹具、
+    也没有 profile 概念**，所以只校验形状；「生效 profile 里有没有对应段」由
+    `tools/conformance/card_window.py` 在**加载期**核（缺段 ⇒ rc=2 并点名，dry-run 与真跑同路径）。
+
+    形状（fail-closed，与 `placement`/`blocked` 同口径）：
+      * `requires` 必须是非空、无重复的非空字符串数组；
+      * 只认 `magic`；未知值点名（拼错/未实现的值不许被静默忽略）。
+    """
+    if rq is None:
+        return
+    if (not isinstance(rq, list) or not rq
+            or any(not isinstance(x, str) or not x for x in rq)):
+        raise ScenarioError("scenario.requires must be a non-empty array of non-empty "
+                            "strings, got %r" % (rq,))
+    dup = sorted({x for x in rq if rq.count(x) > 1})
+    if dup:
+        raise ScenarioError("scenario.requires has duplicates: %s" % dup)
+    unknown = [x for x in rq if x not in REQUIRES_KNOWN]
+    if unknown:
+        raise ScenarioError("scenario.requires has unknown fixture(s): %s "
+                            "(only %s is implemented; fail-closed)"
+                            % (unknown, list(REQUIRES_KNOWN)))
 
 
 def _encode_send_body(val, where, params=None):
@@ -1957,6 +1988,53 @@ def _selftest_scenario_required():
             pass
 
 
+def _selftest_scenario_requires():
+    """`scenario.requires` 形状校验（卡 `openmir2-scenario-fixture-precondition`）：
+
+    * `["magic"]` 放行（夹具段由 `card_window.py` 按生效 profile 核，本驱动器不读）；
+    * 未知值（含大小写/未来值）⇒ ScenarioError 并点名，不许静默不生效；
+    * 非数组 / 空数组 / 非字符串元素 / 重复 ⇒ ScenarioError。
+    """
+    import tempfile
+    good = {
+        "name": "selftest_requires",
+        "requires": ["magic"],
+        "steps": [{"send": {"ident": CM_SAY, "text": "@时间"}},
+                  {"wait_for": SM_SYSMESSAGE}],
+    }
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        def _load(doc):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh, ensure_ascii=False)
+            return load_scenario(path)
+
+        assert _load(good).get("requires") == ["magic"]
+        bad_cases = [
+            ({"requires": "magic"}, "non-empty array"),
+            ({"requires": []}, "non-empty array"),
+            ({"requires": [1]}, "non-empty array"),
+            ({"requires": ["magic", "magic"]}, "duplicates"),
+            ({"requires": ["inventory"]}, "unknown fixture"),
+            ({"requires": ["magic", "Magic"]}, "unknown fixture"),
+        ]
+        for patch, needle in bad_cases:
+            err = None
+            try:
+                _load(dict(good, **patch))
+            except ScenarioError as ex:
+                err = str(ex)
+            assert err is not None, "load_scenario accepted bad requires: %r" % (patch,)
+            assert needle in err, (needle, err)
+        return "requires 形状 6 项"
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _write_tmp_rs(text):
     """selftest 用：写一个临时 .rs 文件（假 messages.rs / attackwire.rs），返回路径。"""
     import tempfile
@@ -2389,6 +2467,7 @@ def run_selftest():
     check("tamper-red", _selftest_tamper)
     check("scenario-dsl", _selftest_scenarios)
     check("scenario-required", _selftest_scenario_required)
+    check("scenario-requires", _selftest_scenario_requires)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
@@ -2399,7 +2478,7 @@ def run_selftest():
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (9 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (10 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
     return 0
 
 

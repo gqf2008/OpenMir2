@@ -291,6 +291,24 @@ TEETH = [
      "MG-7 写入语句钉到表名+列清单",
      [('''"/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `Level`, "''',
        '''"/* magic */ INSERT INTO `%s`.`characters_magic` (`PlayerId`, `MagicId`, `LevelX`, "''')]),
+    # --- 夹具前置 requires（卡 openmir2-scenario-fixture-precondition）--------------------
+    # 锁「场景显式声明夹具，加载期按生效 profile 核段」这一层：
+    # RQ1 = 把调用点整个摘掉 ⇒ 声明了 requires 但 profile 缺段时 dry-run 会重新变绿；
+    # RQ2 = 反向（有段也判缺）⇒ 有 magic 段时 rc=0 的路径必须变红（证明不是「永远红/永远绿」）。
+    ("RQ1", "场景 requires 的加载期校验被摘掉（声明了缺段也不红）",
+     "RQ-1 requires=['magic'] + profile 无 magic 段",
+     [('''    validate_scenario_requires(scenario, requires_decl, prof, profile_label)''',
+       '''    _ = (scenario, requires_decl, prof, profile_label)  # RQ1: 摘掉夹具前置校验''')]),
+    ("RQ2", "requires 校验不核 profile（有 magic 段也判缺，dry-run 变红）",
+     "RQ-2 同场景 + 有 magic 段",
+     [('''        missing = [s for s in SIDES if not profile_magic(prof, s)]''',
+       '''        missing = list(SIDES)  # RQ2: 有段也判缺''')]),
+    # MG7D（本卡 minor②）：run_side 丢掉按侧覆盖（profile_magic(prof, side) → profile_magic(prof)）。
+    # csharp 侧因此读到顶层 MagicId=1，MG-7 的按侧断言必须红（且红只落在 MG-7 组）。
+    ("MG7D", "MG-7 按侧覆盖调用点被摘掉（run_side 改读顶层 magic）",
+     "MG-7 sides.csharp.magic 覆盖顶层",
+     [('''            magic_decl = profile_magic(prof, side)''',
+       '''            magic_decl = profile_magic(prof)  # MG7D: 丢掉按侧覆盖''')]),
     # --- 背包夹具的三条 fail-closed（卡 openmir2-window-inventory-fixture 返工 m1）---------
     # 锁「判定真的接线」：把分支改成 None / if False: 时，⑩/⑪/⑫ 必须变红。
     ("INV1", "背包夹具库配对判定被摘掉（_check_db_pairing 改 None）",

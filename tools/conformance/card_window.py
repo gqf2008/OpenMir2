@@ -125,8 +125,10 @@ profile：
         记录在 <out>/report.json 与 <out>/card-window.json 里。
 """
 import argparse
+import contextlib
 import copy
 import hashlib
+import io
 import json
 import os
 import re
@@ -1300,6 +1302,73 @@ def scenario_blocked(path):
         raise ConfigError("%s: scenario.blocked.missing_fixture 给了就必须是非空字符串"
                           "（实际 %r）" % (path, mf))
     return {"reason": reason, "missing_fixture": mf or ""}
+
+
+# ---------------------------------------------------------------------------
+# 夹具前置声明（`requires`）：场景显式声明「跑我需要的 DB 夹具」
+#
+# 卡 `openmir2-scenario-fixture-precondition`：`spell_cast` 摘掉 `blocked` 后暴露的假绿通道——
+# 场景需要 `characters_magic` 夹具，但 profile 没有 `magic` 段时 `profile_magic` 返回 None，
+# dry-run 的 magic 段整段跳过 ⇒ **rc=0 却根本没预置**，真跑才在 `wait_for` 上超时。
+# 现在：场景顶层**显式声明** `requires`，本工具**加载期**按**生效 profile**（含 `sides.<side>`
+# 覆盖）逐侧核段；缺段 ⇒ rc=2 并点名。位置与 BLOCKED 硬门同级：`--dry-run` 与真跑走同一条路径，
+# 免得 dry-run 绿被误读成「可以真跑」。
+#
+# **只认 `magic`**（别的先不实现）：未知值 fail-closed 并点名，避免「写了值却没生效」再次假绿。
+# ---------------------------------------------------------------------------
+REQUIRES_KNOWN = ("magic",)
+
+
+def scenario_requires(path):
+    """读场景顶层 `requires`；没有 => `{"name": ..., "requires": []}`。
+
+    形状/取值非法一律 ConfigError（fail-closed，rc=2）：
+      * `requires` 必须是非空、无重复的非空字符串数组；
+      * 只认 `REQUIRES_KNOWN`，未知值点名（拼错/未实现的值不许被静默忽略）。
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    name = data.get("name")
+    if not isinstance(name, str) or not name:
+        name = os.path.splitext(os.path.basename(path))[0]
+    rq = data.get("requires")
+    if rq is None:
+        return {"name": name, "requires": []}
+    if (not isinstance(rq, list) or not rq
+            or any(not isinstance(x, str) or not x for x in rq)):
+        raise ConfigError("%s: scenario.requires 必须是非空字符串数组（实际 %r）"
+                          % (path, rq))
+    dup = sorted({x for x in rq if rq.count(x) > 1})
+    if dup:
+        raise ConfigError("%s: scenario.requires 有重复值 %s（fail-closed）" % (path, dup))
+    bad_values = [x for x in rq if x not in REQUIRES_KNOWN]
+    if bad_values:
+        raise ConfigError("%s: scenario.requires 含未知夹具 %s（只认 %s；fail-closed）"
+                          % (path, bad_values, list(REQUIRES_KNOWN)))
+    return {"name": name, "requires": list(rq)}
+
+
+def validate_scenario_requires(scenario, decl, prof, profile_label):
+    """场景声明的夹具必须由**生效 profile** 提供，否则 ConfigError（rc=2）。
+
+    `magic` 要在**两侧**分别写各侧测试库，所以逐侧判：`profile_magic(prof, side)` 任一侧为
+    None 即红（顶层 `magic` 应用到两侧；`sides.<side>.magic` 可覆盖本侧）。
+    """
+    for kind in decl.get("requires") or []:
+        if kind != "magic":       # 未知值已在 scenario_requires 里 fail-closed
+            continue
+        missing = [s for s in SIDES if not profile_magic(prof, s)]
+        if missing:
+            raise ConfigError(
+                "场景 `%s` 要求 `magic` 夹具，但 profile `%s` 未声明 `magic` 段"
+                "（或某侧被覆盖成空）：缺 %s 侧（场景文件 %s）"
+                % (decl.get("name") or os.path.basename(scenario), profile_label,
+                   "、".join(missing), scenario))
 
 
 def _get_valid_str3(text):
@@ -2956,8 +3025,12 @@ def execute(cfg):
     """cfg: dict(card, scenario, out, profile, password, post_comment, dry_run,
                  allow_production_db, rules, timeout_ms, ...) -> summary"""
     dry_run = bool(cfg.get("dry_run"))
-    prof = load_profile(cfg.get("profile") if cfg.get("profile") is not None else "alt")
+    raw_profile = cfg.get("profile")
+    prof = load_profile(raw_profile if raw_profile is not None else "alt")
     prof = apply_overrides(prof, cfg)
+    # 报错里点名的 profile：给了内建名/路径就原样用；inline dict（selftest/嵌入）用其 name。
+    profile_label = (raw_profile if isinstance(raw_profile, str) and raw_profile
+                     else (prof.get("name") or "<inline>"))
     warnings = check_profile_safety(prof, bool(cfg.get("allow_production_db")), dry_run)
 
     raw_out = cfg.get("out")
@@ -2976,12 +3049,14 @@ def execute(cfg):
     placement = None
     blocked = None
     inventory = None
+    requires_decl = {"name": "", "requires": []}
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
         computed = scenario_computed(scenario)
         placement = scenario_placement(scenario)
         blocked = scenario_blocked(scenario)
         inventory = scenario_inventory(scenario)
+        requires_decl = scenario_requires(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
         cfg.get("discovery_scenario") or DEFAULT_DISCOVERY_SCENARIO)
@@ -3087,6 +3162,12 @@ def execute(cfg):
         summary["finished_at"] = iso_now()
         summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
         return summary
+
+    # 夹具前置（卡 `openmir2-scenario-fixture-precondition`）：场景声明了 `requires` 就按**生效
+    # profile** 逐侧核（含 `sides.<side>` 覆盖）。位置与 BLOCKED 硬门同级——在建 out / 起栈 /
+    # 跑 discovery / 写 report **之前**，`--dry-run` 与真跑走同一条路径，缺段一律 rc=2 并点名；
+    # 没有 `requires` 的场景在这里是 no-op（行为逐字节不变）。
+    validate_scenario_requires(scenario, requires_decl, prof, profile_label)
 
     password = cfg.get("password") or os.environ.get("CONFORMANCE_PASSWORD")
     if not password:
@@ -3281,16 +3362,11 @@ def execute(cfg):
             summary["magic"]["sides"][side] = res["magic"]
         if res.get("inventory"):
             # 卡 openmir2-card-window-teeth-mg7：`res["inventory"]` 不能只写不读——
-            # 既要把该侧证据并进 summary，也要把 rc 纳入本侧判定（run_side 已早返回；
-            # 这里再兜一次，杜绝旁路后带着失败的夹具继续跑）。
+            # 把该侧证据并进 summary。**rc 判定不在这里**：`run_side` 的 `rc` 默认 2，
+            # 背包夹具失败时它在写 `<side>/inventory.json` 之后立刻 `return`（`rc=2` + `error`），
+            # 所以本层再兜一次 rc 是**死分支**（卡 `openmir2-scenario-fixture-precondition`
+            # 收掉的 minor①）；真正起作用的判据在 `run_side` 的 `if ires.get("rc") != 0`。
             summary["inventory"]["sides"][side] = res["inventory"]
-            inv_rc = (res["inventory"] or {}).get("rc")
-            if inv_rc not in (0, None):
-                if res.get("rc") == 0:
-                    res["rc"] = 2
-                res["error"] = (res.get("error")
-                                or (res["inventory"] or {}).get("error")
-                                or "背包夹具失败")
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -5420,6 +5496,96 @@ def selftest():
             and any(c["step"] == "stack" for c in s_bok["commands"]),
             "BL-4 无 blocked => 仍 rc=0 并照常预览（不误伤，实际 %s/%s）"
             % (s_bok["exit_code"], s_bok["verdict"]))
+
+        # 20b) 夹具前置声明 `requires`（卡 `openmir2-scenario-fixture-precondition`）：
+        #      场景显式声明「需要 magic 夹具」时，**加载期**按生效 profile 逐侧核段；
+        #      缺段 => rc=2 并点名场景/profile/缺的侧（`--dry-run` 与真跑走同一条路径）。
+        #      没有 requires 的场景在这里是 no-op（BL-4 就是对照：同 profile 同形状 => rc=0）。
+        MAGIC_REQ_OK = [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
+        scen_req = write_scen({
+            "name": "selftest_requires_magic",
+            "requires": ["magic"],
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "requires")
+
+        # RQ-1 声明 requires=["magic"] + profile 无 magic 段 => ConfigError（rc=2 口径）、
+        #      消息点名场景 / profile / **两侧都缺**，且一步都没执行（不建 out、不起栈）。
+        fresh_log()
+        err_rq1 = ""
+        try:
+            execute(base_cfg(os.path.join(tmp, "run-req-missing"),
+                             _selftest_profile(tmp, stub, log),
+                             scenario=scen_req, dry_run=True))
+        except ConfigError as e:
+            err_rq1 = str(e)
+        chk("场景 `selftest_requires_magic` 要求 `magic` 夹具" in err_rq1
+            and "profile `selftest`" in err_rq1
+            and "未声明 `magic` 段" in err_rq1
+            and "缺 csharp、rust 侧" in err_rq1
+            and not os.path.exists(log),
+            "RQ-1 requires=['magic'] + profile 无 magic 段 => rc=2 并点名场景/profile/两侧（%r）"
+            % err_rq1[:150])
+
+        # RQ-2 同场景 + profile 有 magic 段 => rc=0，且**两侧都打印**「魔法夹具（dry-run 不连库）」
+        #      预置行（把 dry-run 的假绿通道封死：有段才绿、绿了就有预置行）。
+        #      这里必须接住 ConfigError：校验被写反（有段也判缺）时要变成**干净 FAIL**，
+        #      不能让异常冒到 selftest 顶层变成 Traceback（牙 RQ2 的还原条件）。
+        prof_rq2 = _selftest_profile(tmp, stub, log)
+        prof_rq2["magic"] = MAGIC_REQ_OK
+        fresh_log()
+        rq2_err = io.StringIO()
+        s_rq2 = None
+        err_rq2 = ""
+        try:
+            with contextlib.redirect_stderr(rq2_err):
+                s_rq2 = execute(base_cfg(os.path.join(tmp, "run-req-ok"), prof_rq2,
+                                         scenario=scen_req, dry_run=True))
+        except ConfigError as e:
+            err_rq2 = str(e)
+        rq2_lines = [l for l in rq2_err.getvalue().splitlines() if "魔法夹具" in l]
+        chk(s_rq2 is not None and s_rq2["exit_code"] == 0
+            and s_rq2["verdict"] == "DRY-RUN"
+            and len(rq2_lines) == 2
+            and any("db=mir2_test_db magic_ids=1" in l for l in rq2_lines)
+            and any("db=mir2_test_db_r magic_ids=1" in l for l in rq2_lines),
+            "RQ-2 同场景 + 有 magic 段 => rc=0 且两侧都打印魔法夹具预置行（%r%s）"
+            % ([l.split("card_window: ")[-1] for l in rq2_lines],
+               ("；意外 ConfigError=%r" % err_rq2[:120]) if err_rq2 else ""))
+
+        # RQ-3 未知 requires 值（含未来才实现的值）=> 加载期 ConfigError 并点名，不让它静默不生效。
+        fresh_log()
+        err_rq3 = ""
+        try:
+            execute(base_cfg(os.path.join(tmp, "run-req-unknown"),
+                             _selftest_profile(tmp, stub, log),
+                             scenario=write_scen({
+                                 "name": "selftest_requires_unknown",
+                                 "requires": ["magic", "inventory"],
+                                 "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                                           {"wait_for": 100}],
+                             }, "requnknown"),
+                             dry_run=True))
+        except ConfigError as e:
+            err_rq3 = str(e)
+        chk("scenario.requires 含未知夹具" in err_rq3
+            and "inventory" in err_rq3 and not os.path.exists(log),
+            "RQ-3 requires 含未知值 => rc=2 并点名（只认 magic；%r）" % err_rq3[:110])
+
+        # RQ-4 两侧分别判：顶层无 magic、只有 sides.csharp.magic => 仍红且**只点名 rust**
+        #      （一侧有一侧无也要红——不能因为 C# 侧够用就放过 Rust 侧）。
+        prof_rq4 = _selftest_profile(tmp, stub, log)
+        prof_rq4["sides"]["csharp"]["magic"] = MAGIC_REQ_OK
+        fresh_log()
+        err_rq4 = ""
+        try:
+            execute(base_cfg(os.path.join(tmp, "run-req-oneside"), prof_rq4,
+                             scenario=scen_req, dry_run=True))
+        except ConfigError as e:
+            err_rq4 = str(e)
+        chk("缺 rust 侧" in err_rq4 and "缺 csharp" not in err_rq4
+            and not os.path.exists(log),
+            "RQ-4 只有 csharp 侧有 magic 段 => rc=2 且只点名 rust 侧（%r）" % err_rq4[:120])
 
         # 21) 魔法夹具（卡 `openmir2-window-magic-fixture`）：profile 声明 => 每侧 restore 之后、
         #     起栈之前写 `characters_magic`；完成不了 rc=2 且不起栈。检查在 rc 判定之前。
