@@ -43,7 +43,9 @@
 //! - **`GetGoodTick` 直发字节**（`M2Share.cs:205`，`SendSocket(string)`）：字符串源 `MessageSettings.sSTATUS_GOOD`
 //!   未建模 ⇒ [`client_sit_down_hit`] 只产出「应直发 GoodTick」标志，字节留接线层登记。
 //! - **`SM_ABILITY(52)`/`SM_SUBABILITY(752)` 尾**（`WAbil`/7 项能力）：复用入图路径的帧体
-//!   （`enter.rs`），本模块只产出帧头与「应发」标志。
+//!   （`smframe::sm_ability`/`sm_subability`）。**已接**：`CM_ADJUST_BONUS` 的
+//!   `RecalcAbilitys` + 52/752/657×2（合法支）/ 红字 `SysMsg`（非法支）在 `lib.rs` 的 1043 支；
+//!   本模块仍只产出决策标志（无 I/O）。
 //! - **`RM_ITEMSHOW` 广播**（`DropGoldDown` 成功才发）：因 BUG-REPLICA 2 恒不发，本模块不产出。
 //! - **各 `SysMsg` 的文案**（`MessageSettings.*`）：`String.conf` 无键，只记语义标签。
 //! - **`CM_BUTCH` 的 `MeatQuality`/`Skeleton` RNG 效果体**：`M2Share.RandomNumber` 序列 + 动物实体
@@ -250,6 +252,9 @@ pub struct AdjustBonus {
 }
 
 /// `CM_ADJUST_BONUS(1043)`：`PlayObject.Message.cs:999-1001` → `ClientAdjustBonus(nParam1, Msg)`。
+///
+/// 调用点：`lib.rs::handle_inbound_cmd` 的 1043 支（`n_point` = 消息 `Recog`、
+/// `bonus_point` = 会话 `PlayObject.BonusPoint`，`WorldServer.cs:1131` 由记录装入）。
 ///
 /// **BUG-REPLICA 3**：oracle 里 `NakedAbility bonusAbil = new NakedAbility()` 从不被 `sMsg` 灌值
 /// ⇒ `nTotleUsePoint = DC+MC+SC+AC+MAC+HP+MP+Hit+Speed+Reserved = 0`，`BonusAbil.* += 0` 全 no-op

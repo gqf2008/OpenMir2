@@ -2377,6 +2377,25 @@ fn drain_slave_mutiny_downlink(
     sent
 }
 
+/// `CM_ADJUST_BONUS(1043)` 合法支的 `SysMsg` 原文（`PlayObject.Base.cs:1178` 的字面量，
+/// `MsgColor.Red` + `MsgType.Hint` ⇒ `RedMsgFColor/RedMsgBColor`；出帧前按 GBK 编码）。
+const ADJUST_BONUS_INVALID_MSG: &str = "非法数据调整!!!";
+
+/// [`handle_inbound_cmd`] 的「能力重算 + 出帧面」输入。
+///
+/// 只有 `CM_ADJUST_BONUS(1043)` 用得到（oracle 的成功支是 `RecalcAbilitys()` + 52/752/657 帧、
+/// 失败支是一条红色 `SysMsg`）——其余 9 条入站命令不读 `catalog`/颜色/半径。
+struct InboundFramesCtx<'a> {
+    /// `stditems` 目录（`RecalcAbilitys` 的物品属性合成；与入图/装备路径**同一份**）。
+    catalog: &'a dyn game_svr::ability::ItemCatalog,
+    /// 帧 52 的布局（`MIR2_CLIENT_ABILITY_LAYOUT`，D-9 家族）。
+    client_layout: bool,
+    /// `Config.RedMsgFColor/RedMsgBColor`（`MsgColor.Red` + `MsgType.Hint` 的颜色对）。
+    red: (u8, u8),
+    /// `Config.SendRefMsgRange`（`StatusChanged()` 的 `SendRefMsg` 近邻半径，缺省 12）。
+    ref_msg_range: i32,
+}
+
 /// R1 入站派发余 10 条（Task C / 片 76）的接线臂。
 ///
 /// 决策逻辑在 [`game_svr::inbound`]（纯函数、单测覆盖）；本函数只负责
@@ -2388,7 +2407,10 @@ fn drain_slave_mutiny_downlink(
 /// 客户端侧（`RobotPlayer.cs:4751/4883`）也用 `MakeMessage(ident, recog, param, tag, series)`
 /// 印证：`CM_DROPGOLD` 的金币数在 `recog`、`CM_BUTCH` 的 `(charId,x,y,dir)` 在 `(recog,param,tag,series)`。
 ///
-/// **未做**（逐项登记在 `inbound` 模块头「未做清单」）：`SM_ABILITY/SUBABILITY` 帧体、`RM_BUTCH`/
+/// **`CM_ADJUST_BONUS(1043)` 已完整接线**（会话 `BonusPoint` → `RecalcAbilitys` → 52/752/657×2；
+/// 非法支只有一条红字 `SysMsg`），oracle 锚见该分支内的逐行注释。
+///
+/// **未做**（逐项登记在 `inbound` 模块头「未做清单」）：`RM_BUTCH`/
 /// `RM_POWERHIT` 附近广播、`GetGoodTick` 直发字节、`SM_MENU_OK`/`SysMsg` 文案、密码态持久化、
 /// 商人注册表/配方体。（`Envir.MinMap` 已接线：`CM_WANTMINIMAP` 经 [`inbound::session_min_map`]
 /// 按会话 `map_id` 还原 oracle 的 `Envirnoment.MinMap`。）
@@ -2407,6 +2429,7 @@ fn handle_inbound_cmd(
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     cfg: &GroundCfg,
     displays: &downlink::DisplayTable,
+    frames_ctx: &InboundFramesCtx<'_>,
 ) {
     use game_svr::inbound;
     use mir2_protocol::messages;
@@ -2453,17 +2476,131 @@ fn handle_inbound_cmd(
             );
         }
         messages::CM_ADJUST_BONUS => {
-            // `BonusPoint` 未挂会话态（`EquipInputs` 只带 `bonus_abil`）⇒ 传 0；帧体登记。
-            let out = inbound::client_adjust_bonus(cmd.recog, 0);
-            glog!(
-                "INF",
-                "CM_ADJUST_BONUS：ChrName={chr_name} nPoint={} ⇒ applied={} recalc={} send_ability={} send_subability={} sysmsg_invalid={}（SM_ABILITY/SUBABILITY 帧体复用入图路径，登记）",
-                cmd.recog,
-                out.applied,
-                out.recalc,
-                out.send_ability,
-                out.send_subability,
-                out.sysmsg_invalid
+            // `PlayObject.Message.cs:999-1001`：`ClientAdjustBonus(processMsg.nParam1, processMsg.Msg)`。
+            // 收包口径（`WorldServer.cs:827-829` 的 `SendMsg(..., Series, Recog, Param, Tag, sMsg)`）：
+            // `nParam1 = Recog`（b0-3）、`sMsg` = 尾串——**本支 oracle 不读尾串**（BUG-REPLICA 3）。
+            let Some(sg) = sessions.get_mut(chr_name) else {
+                glog!(
+                    "WRN",
+                    "CM_ADJUST_BONUS：ChrName={chr_name} 无会话态（未进世界/已断线）⇒ 丢弃"
+                );
+                return;
+            };
+            let out = inbound::client_adjust_bonus(cmd.recog, sg.bonus_point);
+            if !out.applied {
+                // 失败支（`PlayObject.Base.cs:1177-1179`）：**零** 52/752/657，只有一条红色
+                // `SysMsg("非法数据调整!!!", MsgColor.Red, MsgType.Hint)`（`BaseObject.cs:1678-1682`
+                // ⇒ `SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor, RedMsgBColor, 0, sMsg)`）。
+                let body = game_svr::smframe::sm_sysmessage(
+                    sg.actor_id,
+                    u16::from(frames_ctx.red.0),
+                    u16::from(frames_ctx.red.1),
+                    &gbk_encode(ADJUST_BONUS_INVALID_MSG),
+                );
+                if let Some(tx) = route_to_gate(gates, gate_idx, socket, "CM_ADJUST_BONUS 非法支")
+                {
+                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                }
+                return;
+            }
+            // 合法支起点（`PlayObject.Base.cs:1162`）：`BonusPoint = nPoint`。门是
+            // `nPoint + 0 == BonusPoint` ⇒ 本行恒等赋值（oracle 原样，BUG-REPLICA 3）。
+            sg.bonus_point = out.new_bonus_point;
+            // `BonusAbil.* += bonusAbil.*`：`bonusAbil` 是 fresh `NakedAbility`（全零）⇒ 逐项 +0，
+            // 净变化为零 ⇒ `BonusAbil` 不动（[`inbound::client_adjust_bonus`] 的 `bonus_abil_changed`）。
+            let actor_id = sg.actor_id;
+            // `RecalcAbilitys()`（`PlayObject.Base.cs:1173`）。oracle 在 `UseItems` 不变时重算出的
+            // `WAbil`/`SubAbility` 与重算前**逐字段相同**（`RecalcAdjusBonus` 的 `WAbil` 写被尾段
+            // 逐项覆盖，见 `ability.rs` 模块头第 6 条）——但**必须真的跑**：① 它是 `52/752` 的载荷
+            // 来源；② 重复调用会按 oracle 在 `prior` 上累加 `Poison/Health/SpellRecover`（T-18）。
+            // 210/212 尾段传 `magic = None`：本支不改装备 ⇒ `FlameRing/RecoveryRing` 命中集不变、
+            // `Add/DelItemSkill` 幂等 ⇒ 无可观测事件（与 T-95 ⑨ 同口径，登记）。
+            let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
+            let effect = recalc_session_ability(sg, frames_ctx.catalog, extra_abil.as_ref(), None);
+            // `PlayObject.cs:2873`：`CharStatus = GetCharStatus();`（RecalcAbilitys 尾段）。
+            let status = world.get_char_status(actor_id);
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+                e.char_status = status;
+                if effect.revival {
+                    e.revival = true;
+                }
+                e.flame_ring |= effect.flame_ring;
+            } else {
+                glog!(
+                    "WRN",
+                    "CM_ADJUST_BONUS：找不到 actor_id={actor_id} ⇒ 属性未装载（登记）"
+                );
+            }
+            let Some(tx) = route_to_gate(gates, gate_idx, socket, "CM_ADJUST_BONUS 回帧") else {
+                return;
+            };
+            // **线上序 = 优先级升序，不是源码序**（`BaseObject.Message.cs:181` 的
+            // `MsgQueue.Enqueue(msg, (byte)wIdent)` + `TryDequeue` 的最小堆）：
+            //   `RM_SUBABILITY=10302 ⇒ 62 < RM_ABILITY=10051 ⇒ 67 < RM_CHARSTATUSCHANGED=10139 ⇒ 155`
+            // ⇒ `752 → 52 → 657`。（复审 `124fe49e52cde4cd97acc550912fdba2924468ca` I-1：旧注释把
+            // `RM_ABILITY` 手算成 19 是错的；登录路径看到的 `52 → 752` 走 `SendPriorityMsg(High=0)`，
+            // 是另一条路，不能类推到本支。）
+            //
+            // **657 只 1 条**（I-2）：`RecalcAbilitys()` 尾段先 `StatusChanged()`（`SendRefMsg`）把
+            // 657 入队，紧接着 `SendUpdateMsg(RM_CHARSTATUSCHANGED, …)` 做**头-only 去重**
+            // （`BaseObject.Message.cs:283-303`）——本支此刻队列里唯一的待出队项就是刚入的那条 657
+            // ⇒ 删掉再入 1 条（净 1 条）。登录时能见 2 条是因为当时队首有 `654=153` 之类 blocker。
+            // 队列语义直接用 [`game_svr::msgqueue`]（与 `healthspell.rs` 同一实现）。
+            let prio = |ident: u16| (ident & 0xFF) as u8;
+            let mut queue = game_svr::msgqueue::NetPriorityQueue::new();
+            queue.enqueue(
+                mir2_protocol::messages::RM_CHARSTATUSCHANGED,
+                prio(mir2_protocol::messages::RM_CHARSTATUSCHANGED),
+            );
+            game_svr::msgqueue::send_update_msg(
+                &mut queue,
+                mir2_protocol::messages::RM_CHARSTATUSCHANGED,
+            );
+            queue.enqueue(
+                mir2_protocol::messages::RM_ABILITY,
+                prio(mir2_protocol::messages::RM_ABILITY),
+            );
+            queue.enqueue(
+                mir2_protocol::messages::RM_SUBABILITY,
+                prio(mir2_protocol::messages::RM_SUBABILITY),
+            );
+            // 帧体按 ident 备好，出队序即线上序。
+            let frame_ability = game_svr::smframe::sm_ability(
+                sg.state.gold,
+                sg.equip.job,
+                sg.game_gold,
+                &ability_tail(&sg.state.wabil, frames_ctx.client_layout),
+            );
+            let sb = sg.sub.to_frame_bytes();
+            let frame_subability = game_svr::smframe::sm_subability(
+                sb[0],
+                u8::try_from(sb[1]).unwrap_or(0),
+                u8::try_from(sb[2]).unwrap_or(0),
+                u8::try_from(sb[3]).unwrap_or(0),
+                u8::try_from(sb[4]).unwrap_or(0),
+                u8::try_from(sb[5]).unwrap_or(0),
+                u8::try_from(sb[6]).unwrap_or(0),
+            );
+            let frame_657 =
+                game_svr::smframe_ext::sm_charstatuschanged(actor_id, status, sg.hit_speed);
+            while let Some(ident) = queue.dequeue() {
+                let body = match ident {
+                    mir2_protocol::messages::RM_ABILITY => frame_ability.clone(),
+                    mir2_protocol::messages::RM_SUBABILITY => frame_subability.clone(),
+                    _ => frame_657.clone(),
+                };
+                let _ = tx.send(SimToGate::SendFrame { socket, body });
+            }
+            // `StatusChanged()` 的 `SendRefMsg` 还给 ±`SendRefMsgRange` 格内**其他**玩家各一条 657
+            // （自己那两条已在上方按发送序放入同一批）。
+            broadcast_charstatuschanged_except_self(
+                world,
+                online,
+                gates,
+                actor_id,
+                status,
+                frames_ctx.ref_msg_range,
             );
         }
         messages::CM_SITDOWN => {
@@ -3432,7 +3569,7 @@ fn handle_bag_cmd_with_magic(
     // oracle `FeatureChanged()`（`PlayObject.Operate.cs:459`/`:548` ⇒ `BaseObject.cs:1509`
     // → `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), 0,0)`）：
     // 成功换装后向**周围 `SendRefMsgRange` 格内同图**的玩家（**含自己**）广播 `SM_FEATURECHANGED`。
-    // `RM_FEATURECHANGED=10116` 的队列优先级 `(byte)10116=68` 排在 `RM_ABILITY(19)`/`RM_SUBABILITY(62)`
+    // `RM_FEATURECHANGED=10116` 的队列优先级 `(byte)10116=132` 排在 `RM_ABILITY(67)`/`RM_SUBABILITY(62)`
     // 之后 ⇒ 线上顺序 = `SM_ADDITEM → OK/FAIL → 52 → 752 → 41`（与 oracle 消息泵一致）。
     if out.recalc {
         let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg
@@ -7037,6 +7174,8 @@ fn build_save_record(
     }
     rec.data.gold = sg.state.gold;
     rec.data.game_gold = sg.game_gold;
+    // `MakeSaveRcd` `:1285`：`playerInfo.BonusPoint = playObject.BonusPoint`（唯一写点=CM_ADJUST_BONUS）。
+    rec.data.bonus_point = sg.bonus_point;
     // `MakeSaveRcd` `:1236`：`playerInfo.ServerIndex = M2Share.ServerIndex`。
     rec.data.server_index = sg.server_index;
     rec.data.inc_health = u8::try_from(sg.recovery.inc_health & 0x00FF).unwrap_or(0);
@@ -14882,6 +15021,13 @@ struct SessionGround {
     client_tick: i16,
     /// `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
     game_point: i32,
+    /// `PlayObject.BonusPoint`（`PlayObject.cs:226`，auto-property 零值）——
+    /// `WorldServer.cs:1131` 由记录 `humData.BonusPoint` 装入、`:1285` 存档写回。
+    ///
+    /// **唯一读点 = `CM_ADJUST_BONUS(1043)`** 的合法门（`PlayObject.Base.cs:1160`：
+    /// `nPoint + nTotleUsePoint == BonusPoint`；`nTotleUsePoint` 恒 0 ⇒ 退化为 `nPoint == BonusPoint`，
+    /// BUG-REPLICA 3）。本仓写点也只有该支的 `BonusPoint = nPoint`（等值赋值）。
+    bonus_point: i32,
     /// `MessageSettings.CanotPickUpItem` 的 GBK 原文（缺则 `RM_SYSMESSAGE` 不产出）。
     sys_msg: Option<Vec<u8>>,
     /// `PlayObject.UseItems`（13 槽；`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 迁移用）。
@@ -18565,6 +18711,13 @@ fn sim_loop(
                             &mut pwd_sessions,
                             &enter_cfg.ground,
                             &displays,
+                            // `CM_ADJUST_BONUS` 的重算/出帧面输入（其余入站命令不读）。
+                            &InboundFramesCtx {
+                                catalog: &enter_cfg.catalog,
+                                client_layout: mir2_client_ability_layout(),
+                                red: (enter_cfg.red_msg_f_color, enter_cfg.red_msg_b_color),
+                                ref_msg_range: enter_cfg.ref_msg_range,
+                            },
                         );
                     }
                 }
@@ -19452,6 +19605,8 @@ fn sim_loop(
                                                             client_tick: 0,
                                                             // `BaseObject.GamePoint`（`SM_GAMEGOLDNAME` 的 LoWord/HiWord）。
                                                             game_point: data.map_or(0, |d| d.game_point),
+                                                            // `WorldServer.cs:1131`：`playObject.BonusPoint = humData.BonusPoint`。
+                                                            bonus_point: d.bonus_point,
                                                             sys_msg: Some(enter::gbk(
                                                                 enter_cfg.string_conf.canot_pick_up_item(),
                                                             )),
@@ -24735,6 +24890,7 @@ mod tests {
             soft_version_date: 0,
             client_tick: 0,
             game_point: 0,
+            bonus_point: 0,
             sys_msg: None,
             use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
             sub: game_svr::ability::SubAbility::first_call(),
@@ -24776,6 +24932,18 @@ mod tests {
             off_line_flag: false,
             kick_off_line_tick: 0,
             guild: guild_cmd::GuildSession::default(),
+        }
+    }
+
+    /// [`handle_inbound_cmd`] 的「重算 + 出帧面」输入（测试用：给定物品目录 + oracle 布局 + 红 253/0）。
+    fn test_frames_ctx<'a>(
+        catalog: &'a dyn game_svr::ability::ItemCatalog,
+    ) -> InboundFramesCtx<'a> {
+        InboundFramesCtx {
+            catalog,
+            client_layout: false,
+            red: (253, 0),
+            ref_msg_range: 12,
         }
     }
 
@@ -26424,6 +26592,7 @@ break
             soft_version_date: 0,
             client_tick: 0,
             game_point: 0,
+            bonus_point: 0,
             sys_msg: None,
             use_items,
             sub: game_svr::ability::SubAbility::first_call(),
@@ -28617,6 +28786,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -28818,6 +28988,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items,
                 // 登录时首次 `RecalcAbilitys` 留下的 recover（非 0 ⇒ 可实测「传 prior」）。
@@ -29006,6 +29177,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -29165,6 +29337,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -29337,6 +29510,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -31886,6 +32060,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -32231,6 +32406,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -33465,6 +33641,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -37443,6 +37620,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -37628,6 +37806,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items,
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -37775,6 +37954,7 @@ break
                 soft_version_date: 0,
                 client_tick: 0,
                 game_point: 0,
+                bonus_point: 0,
                 sys_msg: None,
                 use_items: vec![None; game_svr::ability::USE_ITEMS_LEN],
                 sub: game_svr::ability::SubAbility::first_call(),
@@ -39316,6 +39496,8 @@ break
             &mut pwd_sessions,
             &cfg,
             &displays,
+            // 测试用：空物品目录 + oracle 布局 + 红 253/0。
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
         );
         // `PlayObject.Operate.cs:747 Dir = btDir`：实体 `ai.dir` 是权威（AOI/存档/GetPoseCreate）。
         assert_eq!(
@@ -39362,6 +39544,8 @@ break
             &mut pwd_sessions,
             &cfg,
             &displays,
+            // 测试用：空物品目录 + oracle 布局 + 红 253/0。
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
         );
         let rec = world.tick();
         assert_eq!(rec.butches.len(), 1);
@@ -40649,6 +40833,8 @@ break
             &mut pwd_sessions,
             &cfg,
             &displays,
+            // 测试用：空物品目录 + oracle 布局 + 红 253/0。
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
         );
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1, "收 1033 ⇒ 恰好一帧 SM_READMINIMAP_*");
@@ -40674,6 +40860,8 @@ break
             &mut pwd_sessions,
             &cfg,
             &displays,
+            // 测试用：空物品目录 + oracle 布局 + 红 253/0。
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
         );
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1);
@@ -40698,12 +40886,280 @@ break
             &mut pwd_sessions,
             &cfg,
             &displays,
+            // 测试用：空物品目录 + oracle 布局 + 红 253/0。
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
         );
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1);
         assert_eq!(u16::from_le_bytes([frames[0][4], frames[0][5]]), 711);
 
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // ─────────────────── CM_ADJUST_BONUS(1043) 端到端（卡 `openmir2-cm-adjust-bonus`） ───────────────────
+
+    /// `CM_ADJUST_BONUS(1043)` 的用例骨架：一条进世界的 hero + 会话（`BonusPoint` 可设）+ 网关通道。
+    ///
+    /// 会话侧的 `WAbil`/`SubAbility` 用**入图同一实现**（[`recalc_session_ability`]）先算一遍
+    /// ⇒ 用例里的「重算前真值」= oracle 进世界时 `RecalcAbilitys()` 的产物；装备槽装一把木剑
+    /// （`newbie_catalog` 的 3 号，`std_mode 5`、`weight 5`）让 52 的载荷不是全零。
+    struct AdjustBonusFix {
+        world: mir2_world::World,
+        online: OnlineRegistry,
+        sessions: HashMap<String, SessionGround>,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        catalog: game_svr::ability::StdItemCatalog,
+        actor: i32,
+    }
+
+    impl AdjustBonusFix {
+        fn new(bonus_point: i32) -> Self {
+            let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+            world.open_session("hero");
+            let actor = world
+                .enter_map("hero", mir2_world::Entity::new(0, "hero", 5, 5), 0)
+                .unwrap();
+            let online: OnlineRegistry = vec![OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            }];
+            let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let catalog = newbie_catalog();
+            let mut sg = test_session_ground(actor);
+            sg.bonus_point = bonus_point;
+            sg.use_items[game_svr::ability::SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+                make_index: 1,
+                index: 3,
+                dura: 20,
+                dura_max: 20,
+                desc: [0u8; 14],
+            });
+            // 背包放一根蜡烛（1 号，`weight 1`）⇒ `WAbil.Weight`（`RecalcBagWeight`）非零。
+            sg.state.item_list = vec![game_svr::bag::BagItem {
+                make_index: 2,
+                index: 1,
+                dura: 20,
+                dura_max: 20,
+                desc: [0u8; 14],
+            }];
+            let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+            if let Some(e) = world.entities.get_mut(actor) {
+                apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+            }
+            let mut sessions = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            Self {
+                world,
+                online,
+                sessions,
+                gates,
+                rx,
+                catalog,
+                actor,
+            }
+        }
+
+        /// 发一条 `CM_ADJUST_BONUS`（`nPoint` 在 `Recog`，见 `WorldServer.cs:827-829`）并取走本批帧。
+        fn send(&mut self, n_point: i32) -> Vec<Vec<u8>> {
+            let cmd = CommandMessage {
+                recog: n_point,
+                ident: mir2_protocol::messages::CM_ADJUST_BONUS,
+                param: 0,
+                tag: 0,
+                series: 0,
+            };
+            let cfg = GroundCfg {
+                human_max_gold: 10_000_000,
+                floor_item_can_pick_up_time: 120_000,
+                control_drop_item: false,
+                in_safe_disable_drop: false,
+                can_drop_price: 500,
+                can_drop_gold: 1000,
+                drop_item_rage: 3,
+            };
+            let displays = downlink::DisplayTable::new();
+            let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+            handle_inbound_cmd(
+                &cmd,
+                None,
+                "hero",
+                901,
+                &self.online,
+                &mut self.world,
+                &mut self.sessions,
+                &self.gates,
+                None,
+                None,
+                &mut pwd_sessions,
+                &cfg,
+                &displays,
+                &test_frames_ctx(&self.catalog),
+            );
+            drain_frames(&mut self.rx)
+        }
+    }
+
+    /// **`CM_ADJUST_BONUS` ①（合法支）**：`nPoint == BonusPoint` ⇒ `BonusPoint = nPoint`（**等值**，
+    /// 门是 `nPoint + 0 == BonusPoint`）、真跑 `RecalcAbilitys()`、线上
+    /// **`752 → 52 → 657`（各 1 条）**——优先级 `RM_SUBABILITY=62 < RM_ABILITY=67 <
+    /// RM_CHARSTATUSCHANGED=155`；657 之所以只 1 条是 `SendUpdateMsg` 的**头-only 去重**
+    /// （`BaseObject.Message.cs:283-303`）删掉了 `StatusChanged()` 刚入的那条。
+    ///
+    /// 红检（复审 `124fe49e` I-1/I-2 的证伪牙）：改成「源码序 52→752」或「657×2」⇒ 本用例红。
+    ///
+    /// **牙 1「撤会话态」**：把派发臂的 `sg.bonus_point` 换回常量 0（旧缺陷）⇒ 本用例
+    /// （`BonusPoint=3`、`nPoint=3`）落到非法支 ⇒ 帧面与属性断言全红。
+    #[test]
+    fn adjust_bonus_valid_equal_point_emits_752_52_and_one_657() {
+        let mut fix = AdjustBonusFix::new(3);
+        let (wabil0, sub0, hit0) = {
+            let sg = &fix.sessions["hero"];
+            (sg.state.wabil.clone(), sg.sub, sg.hit_speed)
+        };
+        let frames = fix.send(3);
+        let ids: Vec<u16> = frames.iter().map(|f| hdr(f).0).collect();
+        assert_eq!(
+            ids,
+            vec![
+                mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "oracle 出队序：RM_SUBABILITY(62) → RM_ABILITY(67) → RM_CHARSTATUSCHANGED(155)，657 仅 1 条"
+        );
+        // `BonusPoint = nPoint`（等值赋值 ⇒ 会话值不变；`BonusAbil.* += 0` 同理，BUG-REPLICA 3）。
+        assert_eq!(fix.sessions["hero"].bonus_point, 3);
+        assert_eq!(
+            fix.sessions["hero"].state.wabil, wabil0,
+            "输入不变 ⇒ WAbil 逐字段不变"
+        );
+        assert_eq!(fix.sessions["hero"].sub, sub0, "SubAbility 逐字段不变");
+        // 657：`(Recog=ActorId, Param=LoWord(CharStatus), Tag=HiWord(CharStatus), Series=HitSpeed)`。
+        let (ident, param, tag, recog) = hdr(&frames[2]);
+        assert_eq!(ident, mir2_protocol::messages::SM_CHARSTATUSCHANGED);
+        assert_eq!((param, tag), (0, 0), "CharStatus = 0（无 buff）");
+        assert_eq!(recog, fix.actor);
+        assert_eq!(
+            u16::from_le_bytes([frames[2][10], frames[2][11]]),
+            hit0,
+            "Series = 重算后的 HitSpeed"
+        );
+        assert_eq!(
+            frames.len(),
+            3,
+            "657 必须只有 1 条（SendUpdateMsg 头-only 去重；登录的 2 条是另一种队列形态）"
+        );
+        // 实体侧（战斗权威值）与 52 的载荷同源。
+        let e = fix.world.entities.get(fix.actor).unwrap();
+        assert_eq!(e.max_hp, fix.sessions["hero"].state.wabil.max_hp);
+        assert_eq!(e.max_mp, fix.sessions["hero"].state.wabil.max_mp);
+        assert_eq!(e.ac, i32::from(fix.sessions["hero"].state.wabil.ac));
+    }
+
+    /// **`CM_ADJUST_BONUS` ②（失败支）**：`nPoint != BonusPoint` ⇒ **零** 52/752/657，只有一条
+    /// 红色 `SysMsg("非法数据调整!!!", Red, Hint)`（`PlayObject.Base.cs:1177-1179`）；`BonusPoint`
+    /// 与会话属性都不动。
+    ///
+    /// **牙 2「门写反」**：把 [`game_svr::inbound::client_adjust_bonus`] 的 `==` 写成 `!=` ⇒ 本用例的
+    /// 三个 `nPoint` 全部被接受（出 4 帧）⇒ 必红；用例①的 `nPoint==BonusPoint` 反被拒 ⇒ 也红。
+    #[test]
+    fn adjust_bonus_mismatched_point_emits_only_red_sysmsg() {
+        let mut fix = AdjustBonusFix::new(3);
+        let (wabil0, sub0) = {
+            let sg = &fix.sessions["hero"];
+            (sg.state.wabil.clone(), sg.sub)
+        };
+        let expected = game_svr::smframe::sm_sysmessage(
+            fix.actor,
+            253,
+            0,
+            &gbk_encode(ADJUST_BONUS_INVALID_MSG),
+        );
+        for n in [0, 7, -1] {
+            let frames = fix.send(n);
+            assert_eq!(
+                frames.len(),
+                1,
+                "nPoint={n} ≠ BonusPoint=3 ⇒ 只有一条 SysMsg"
+            );
+            assert_eq!(
+                frames[0], expected,
+                "SM_SYSMESSAGE(252)：红 253/0 + GBK 原文"
+            );
+            let (ident, param, tag, recog) = hdr(&frames[0]);
+            assert_eq!(ident, mir2_protocol::messages::SM_SYSMESSAGE);
+            assert_eq!(recog, fix.actor, "Recog = 自己的 ActorId");
+            assert_eq!(
+                param, 253,
+                "Param = MakeWord(RedMsgFColor=253, RedMsgBColor=0)"
+            );
+            assert_eq!(tag, 0);
+            assert_eq!(
+                u16::from_le_bytes([frames[0][10], frames[0][11]]),
+                1,
+                "Series 恒 1"
+            );
+            assert_eq!(fix.sessions["hero"].bonus_point, 3, "失败支不动 BonusPoint");
+            assert_eq!(fix.sessions["hero"].state.wabil, wabil0, "失败支不重算");
+            assert_eq!(fix.sessions["hero"].sub, sub0);
+        }
+    }
+
+    /// **`CM_ADJUST_BONUS` ③（重算口径）**：成功支的 52 载荷 `MaxHP/MaxMP/AC/MAC/DC/MC/SC` 与
+    /// `RecalcAbilitys()` 的 oracle 口径一致——期望值用**字面量**钉住（等级 1 战士 + 木剑 `weight 5`），
+    /// 再用同一份 `wabil` 独立重建 52/752 帧做逐字节比对。
+    ///
+    /// 牙：漏掉会话装备（`use_items`）⇒ `Weight`/`WearWeight`/`MaxWeight` 变；把 `prior` 传成
+    /// `SubAbility::first_call()`（重复调用的 T-18 口径）⇒ `SubAbility` 的 recover 项变 ⇒ 752 红。
+    #[test]
+    fn adjust_bonus_recalc_matches_oracle_pinned_ability() {
+        let mut fix = AdjustBonusFix::new(0);
+        let frames = fix.send(0);
+        assert_eq!(frames.len(), 3, "合法支出 752/52/657");
+        let w = &fix.sessions["hero"].state.wabil;
+        assert_eq!(
+            (
+                w.max_hp,
+                w.max_mp,
+                w.ac,
+                w.mac,
+                w.dc,
+                w.mc,
+                w.sc,
+                w.weight,
+                w.wear_weight,
+                w.hand_weight,
+                w.max_weight,
+            ),
+            (19u16, 15u16, 0u16, 0u16, 257u16, 0u16, 0u16, 1u16, 0u8, 5u8, 50u16),
+            "oracle 口径：等级 1 战士裸装 + 木剑"
+        );
+        assert_eq!(
+            frames[1],
+            game_svr::smframe::sm_ability(0, 0, 0, &record::encode_ability(w)),
+            "52 帧尾 = Encode(40B TAbility)，载荷逐字段来自 RecalcAbilitys"
+        );
+        let sb = fix.sessions["hero"].sub.to_frame_bytes();
+        assert_eq!(
+            frames[0],
+            game_svr::smframe::sm_subability(
+                sb[0],
+                u8::try_from(sb[1]).unwrap_or(0),
+                u8::try_from(sb[2]).unwrap_or(0),
+                u8::try_from(sb[3]).unwrap_or(0),
+                u8::try_from(sb[4]).unwrap_or(0),
+                u8::try_from(sb[5]).unwrap_or(0),
+                u8::try_from(sb[6]).unwrap_or(0),
+            ),
+            "752 帧 = SubAbility 的 7 项（AntiMagic/HitPoint/SpeedPoint/…）"
+        );
     }
 
     /// **接线批 A 端到端（SM_PASSWORD）**：`CM_PASSWORD` 命中 `ProcessClientPassword` 的重设支
@@ -40773,6 +41229,8 @@ break
             &mut pwd_sessions,
             &cfg,
             &displays,
+            // 测试用：空物品目录 + oracle 布局 + 红 253/0。
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
         );
         let mut ids = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -40857,6 +41315,8 @@ break
             &mut pwd_sessions,
             &cfg,
             &displays,
+            // 测试用：空物品目录 + oracle 布局 + 红 253/0。
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
         );
         assert!(
             rx0.try_recv().is_err(),
