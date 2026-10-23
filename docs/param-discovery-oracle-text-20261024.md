@@ -30,7 +30,7 @@
 | `python -I -B tools/probe/param_discovery.py selftest` | **OK（39 cases + 11 teeth）**（改前 38 cases；+1 用例，teeth 仍 11） |
 | `python -I -B tools/probe/mir2_probe.py --selftest` | **OK（9 checks）**——条数前后一致 |
 | 牙 A：把 `move_y` 改回旧错说法「`nParam1=X → recog，nParam2=Y → param`」 | `selftest` **rc=1** 并点名 ㉘；`git checkout -- tools/probe/param_discovery.py` 还原，`sha256` 与 `git show HEAD:<path>` 一致，还原后 rc=0 |
-| 牙 B：把 `CM_SPELL` 句改成另一套错映射「X 在 Param、Y 在 Tag、目标 actor 在 Recog」 | 上一版此变异 **仍绿**（review `2b818b5d1` F3 指出断言恒真）；本版补了显式断言（含 `WorldServer.cs:783`/`MakeLong(Param`/`ClientSpellXY`，禁「Y 在 Param」「目标 actor 在 Tag」「default」）⇒ `selftest` **rc=1** 并点名 ㉘ |
+| 牙 B：把 `CM_SPELL` 句改成错映射「X 在 Param、Y 在 Tag、目标 actor 在 Recog」 | v2 的散落 token 断言**仍绿**（worker-73 接管后实测复现，F3 未真正闭口）；worker-73 改为钉正确映射整句并把禁语扩到 `Y/X 在 Param`、`Y 在 Tag`、`目标 actor 在 Tag/Recog`、`default` ⇒ 该变异 `selftest` **rc=1** 并点名 ㉘ |
 | `t_reservation_gate check` | GREEN（本卡未动 T 号） |
 | 冲突标记门 | OK（0 markers） |
 | `git merge-tree --write-tree walgit/master HEAD` | rc=0 |
@@ -49,12 +49,13 @@
   - `WorldServer.cs:783-792`：`case Messages.CM_SPELL` 为独立 case；`:790` `SendMsg(…, Tag, LoWord(Recog), HiWord(Recog), MakeLong(Param, Series))`（`:786` `SendUpdateMsg` 同参），`:792` `break`，`:793` 已是 `CM_QUERYUSERNAME`。
   - `PlayObject.Message.cs:1340`：`ClientSpellXY(wIdent, wParam, (short)nParam1, (short)nParam2, ActorMgr.Get(nParam3), …)`；`PlayObject.Attack.cs:1054` 签名 `(wIdent, nKey, nTargetX, nTargetY, targetObject, …)` ⇒ X=nParam1、Y=nParam2、魔号=wParam、目标 ActorId=nParam3。**Y 不在 Param；Tag 不是目标 actor。**
   - `PlayObject.Message.cs:1008-1009`：`case CM_TURN` → `ClientChangeDir(...)`；`PlayObject.Operate.cs:310` 签名、`:331` `if (nX == CurrX && nY == CurrY)` ⇒ CM_TURN 自身格。`:1221-1230` 的 case 列表不含 CM_TURN，故不再与 CM_HIT 族共用出处。
-- **worker-73 在本版上的改动（两处，语义不变）**：
+- **worker-73 在本版上的改动（三处；前两处语义不变，第三处是补牙）**：
   1. `WorldServer.cs:783-793` → `783-792`：`:792` 才是 `break`，`:793` 是下一条 `case CM_QUERYUSERNAME:`；与 review F1 的 `783-792` 对齐（py 与本文 §1/§2/§4 同步）。
   2. 模块 docstring 的「反斜杠 + 竖线」改为「双反斜杠 + 竖线」：消除 `python` 的 `SyntaxWarning: invalid escape sequence`；运行期文本不变（仍是 markdown 的转义竖线）。
+  3. **㉘ 补牙**：v2 只断言散落 token（`WorldServer.cs:783`/`MakeLong(Param`/`ClientSpellXY`）。worker-73 实测把 CM_SPELL 映射改成「X 在 Param、Y 在 Tag、目标 actor 在 Recog」后 `selftest` 仍 rc=0 ⇒ 未咬住 review F3 点名的错映射。现改为钉住正确映射整句（`X = LoWord(Recog)、Y = HiWord(Recog)` / `wParam/Tag = 魔号` / `nParam3 = MakeLong(Param, Series) = 目标 ActorId`），禁语扩为 `Y 在 Param`、`X 在 Param`、`Y 在 Tag`、`目标 actor 在 Tag`、`目标 actor 在 Recog`、`default`。
 - **门禁（并入 `walgit/master = 196439400` 后实测）**：
   - `python -I -B tools/probe/param_discovery.py selftest` ⇒ `OK (39 cases + 11 teeth)`，rc=0，无 warning。
   - `python -I -B tools/probe/mir2_probe.py --selftest` ⇒ `OK (9 checks)`，rc=0。
   - `t_reservation_gate check` ⇒ GREEN（rows=252 whitelist=252 live=61 landed=191 malformed=0）。
   - 冲突标记 0；`git merge-tree --write-tree walgit/master HEAD` ⇒ rc=0。
-- **牙（worker-73 复跑）**：把 `COMPUTED_ORACLES["move_y"]` 的 CM_SPELL 句改成更错写法（目标 actor 在 Recog / Y 在 Tag）⇒ `selftest` rc=1 并点名 ㉘；`git checkout -- tools/probe/param_discovery.py` 还原，`sha256(file) == sha256(git show HEAD:path)`，还原后 rc=0。
+- **牙（worker-73 复跑，均在提交后的树上实测）**：① 把 `move_y` 改回旧说法「nParam1=X → recog，nParam2=Y → param」⇒ `selftest` rc=1 点名 ㉘；② 把 CM_SPELL 映射改成「X 在 Param、Y 在 Tag、目标 actor 在 Recog」⇒ `selftest` rc=1 点名 ㉘（v2 原断言对 ② 仍绿，见 §3 牙 B）。两次均 `git checkout -- tools/probe/param_discovery.py` 还原：`sha256(file) == sha256(git show HEAD:path)`，还原后 rc=0。
