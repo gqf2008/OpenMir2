@@ -2243,6 +2243,7 @@ fn shutup(parameters: &str) -> GmResult {
 /// 「逐字节等价」的最小 no-op 并登记，不臆造烟花特效或 `RM_MYSHOW` 帧。
 fn show_effect() -> GmResult {
     no_frames(NOTE_SHOW_EFFECT_ALL_COMMENTED)
+}
 
 /// `KickHumanCommand.Execute`（`src/Modules/GameCommand/Commands/KickHumanCommand.cs:10-40`，
 /// 现网 `@VV踢人`，`Command.conf` 的 `[Command] Kick=VV踢人` / `[Permission] Kick=10`）。
