@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "e5e3ab25608a48bc3930a14d90397994840fb910fd0e000ad16a4f87426cd696"
+   "sha256": "907c2ebd6d356ee565f0dc0d30e6505ecdefe2d12dbe656784f37169fd86f2a4"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1765,6 +1765,126 @@
   }
  ],
  "script_reachable_but_implemented": [
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 71,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 72,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 73,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 84,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 85,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 86,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 87,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 99,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 100,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 101,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 102,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 103,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 124,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 125,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
+  {
+   "cmd": "改属性",
+   "file": "Npc_Def/比奇国王-0122.txt",
+   "line": 126,
+   "label": "@qf",
+   "rust_imp": "SmakeItem",
+   "third_state": false
+  },
   {
    "cmd": "禁言",
    "file": "QuestDiary/游戏登陆/登陆脚本.txt",
@@ -3934,178 +4054,6 @@
    "field_line": 64
   },
   {
-   "cmd": "改属性",
-   "cmd_name": "改属性",
-   "child_card": "openmir2-gm-impl-smake",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/SmakeItemCommand.cs:12",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].SuperMake",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（15 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 71,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 72,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 73,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 84,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 85,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 86,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 87,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 0 <$STR(M6)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 99,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 100,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 101,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 102,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 0 <$STR(M6)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 103,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 1 <$STR(M7)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 124,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 2 <$STR(M3)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 125,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 3 <$STR(M4)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    },
-    {
-     "file": "Npc_Def/比奇国王-0122.txt",
-     "line": 126,
-     "label": "@qf",
-     "section": "act",
-     "script_arg": "改属性",
-     "raw": "Gmexecute 改属性 3 4 <$STR(M5)>",
-     "label_path": "Npc_Def/比奇国王-0122.txt:@qf <- Npc_Def/比奇国王-0122.txt:@rw03 <- Npc_Def/比奇国王-0122.txt:@rw02 <- Npc_Def/比奇国王-0122.txt:@main <- engine GotoLable root",
-     "load_origin": "Npcs.txt:3"
-    }
-   ],
-   "handler_class": "SmakeItemCommand",
-   "attr_name": "SmakeItem",
-   "handler_exec_line": 16,
-   "name_source": "conf[Command].SuperMake",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "Smake",
-   "field_line": 258
-  },
-  {
    "cmd": "是我",
    "cmd_name": "是我",
    "child_card": null,
@@ -4401,20 +4349,20 @@
   }
  ],
  "summary": {
-  "total": 87,
+  "total": 86,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 7
+   "script-reachable": 6
   },
   "reachable": 0,
-  "script_reachable": 7,
+  "script_reachable": 6,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 98,
-   "Unimplemented": 87
+   "Implemented": 99,
+   "Unimplemented": 86
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4440,7 +4388,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 77,
+  "complete_implemented": 78,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
