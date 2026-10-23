@@ -1028,6 +1028,32 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let sim_ids_online = std::sync::Arc::clone(&ids_online);
     let sim_ids_out = ids_out_tx.clone();
     let ids_server_name = cfg.server_name.clone();
+    // **T-202**：`!servertable.txt`（`GameApp.cs:258-308` `LoadServerTable`）—— `GetMultiServerAddrPort`
+    // （`GameShare.cs:57-79`）的唯一数据源，也是 `SM_RECONNECT` 载荷 `"{ip}/{port}"` 的来源。
+    // 与 `Server.conf` 同目录（oracle `M2Share.BasePath`）。缺文件 ⇒ 空表 ⇒
+    // `GetMultiServerAddrPort` 恒 false ⇒ 换服帧**不发**（oracle 同：`LoadServerTable` 里
+    // `File.Exists` 为假就整段跳过）。按字节读再 lossy 解码：oracle `StringList.LoadFromFile`
+    // 是 GBK 行读，而本文件只含 ASCII 的 IP/端口与注释。
+    let server_table = match std::fs::read(base.join("!servertable.txt")) {
+        Ok(bytes) => {
+            let table = parse_server_table(&String::from_utf8_lossy(&bytes));
+            glog!(
+                "INF",
+                "!servertable.txt：{} 条路由（base={}）",
+                table.len(),
+                base.display()
+            );
+            table
+        }
+        Err(e) => {
+            glog!(
+                "WRN",
+                "读取 !servertable.txt 失败（{}：{e}）⇒ 换服路由为空，SM_RECONNECT 不会发出（登记 T-202）",
+                base.join("!servertable.txt").display()
+            );
+            Vec::new()
+        }
+    };
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1035,6 +1061,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
         // header-only 658（照 oracle 空尾分支；`notice.rs` 模块头有源码定位）。
         .spawn(move || {
             sim_loop(
+                server_table,
                 map_sizes,
                 registry,
                 EnterConfig {
@@ -15408,6 +15435,307 @@ fn process_switch_data(
     }
 }
 
+// ============================================================================
+// 卡 `openmir2-sm-reconnect-wiring`（T-202）：`SM_RECONNECT(802)` 的上游生产者
+// ============================================================================
+//
+// **语义澄清**（orphan 审计 §5 ①）：`SM_RECONNECT` 不是「客户端断线重连」，而是
+// 「**服务端让客户端换一个网关地址**」，载荷 `"{ip}/{port}"`。它与软关链
+// （`CM_SOFTCLOSE → BoReconnection`，见 [`handle_soft_close_cmd`] / [`drain_soft_close`]）
+// **只共享 `BoReconnection` 标志、不共享帧** —— 软关**永不**发 802。
+//
+// oracle 全树生产者（`src/` 内 `RM_RECONNECTION`/`SM_RECONNECT` 的**全部**命中）：
+//  ① `M2Server/Player/PlayObject.Base.cs:3415-3418` `TransferPlanesServer` ⇒
+//     `SendMsg(RM_RECONNECTION, …, serveraddr + '/' + gamePort)`；**唯一调用点
+//     `GameSrv/AppService.cs:179` 被注释** ⇒ 生产不可达（关闭转移链已死）；
+//  ② `GameSrv/Word/WorldServer.cs:1066-1075` `SendChangeServer` ⇒ **直接**
+//     `SendDefMessage(SM_RECONNECT, 0, 0, 0, 0, "{ip}/{port}")`：**绕过 RM 泵**
+//     （不经 `PlayObject.Message.cs` 的 `RM_RECONNECTION` 支），因为它拿的是
+//     `SendDefMessage` 而不是 `SendMsg`，直接把帧写给本 socket；调用点两处：
+//     `:366`（`ProcessHumansMakeNewHuman` 的跨服分支）与 `:609`（换服门的 100ms 轮询）；
+//  ③ `Modules/GameCommand/Commands/ReconnectionCommand.cs:38` GM `@Reconnection` ⇒
+//     `SendMsg(PlayerActor, RM_RECONNECTION, …, sIPaddr + '/' + sPort)`；
+//     `[Command(…, 10)]` + 现网 `Permission` 恒 0（`GetHumPermission` 唯一调用点被注释）
+//     ⇒ 生产路径永远停在 `权限不够!!!`（**不接线**，审计 §5 ③）。
+//  RM 泵的落帧支 ④ `M2Server/Player/PlayObject.Message.cs:1988-1991`：
+//     `case RM_RECONNECTION: BoReconnection = true; SendDefMessage(SM_RECONNECT, …)` ——
+//     ①③ 的**唯一**落帧点。
+//
+// 本卡接线范围：**②** 的两个调用点（登录跨服 + 换服门轮询）——即生产可达面。
+// ① 的调用点已注释、③ 被权限门锁死，均**不可达**；两者的落帧支行为由
+// [`ReconnectPending`] 的同一条通道覆盖（见 patch body 的四生产者对照）。
+//
+// **通道**：生产者 ⇒ [`ReconnectPending`] 队列 ⇒ [`drain_reconnects`] ⇒
+// [`smframe_ext::sm_reconnect`]（既有编码器）。**不走 `TickRecord`**：两个生产点都
+// 在宿主的**登录路径**与**换服门轮询**里（`ground_sessions`/`online` 是宿主态），
+// 把 `gate_idx`/`socket` 塞进 `TickRecord` 会把「连接/会话」搬进世界层，与
+// 设计文档 §4.2.2「不得塞进 ECS：连接/会话/认证/限流」冲突 ⇒ 采用与
+// `soft_close_pending`（软关链，同一条登录/断线面）**同构**的宿主排水队列。
+
+/// `TRouteInfo`（`src/OpenMir2/Data/TRouteInfo.cs:3-16`）：`!servertable.txt` 的一行。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RouteInfo {
+    /// `TRouteInfo.ServerIdx`（`HUtil32.StrToInt(sIdx, 0)`）。
+    server_idx: i32,
+    /// `TRouteInfo.GameGateIP[0..GateCount]`（`GameApp.cs:293-298`，容量 16）。
+    game_gate_ips: Vec<String>,
+    /// `TRouteInfo.GameGatePort[0..GateCount]`；与 `game_gate_ips` 同长（同时写入）。
+    game_gate_ports: Vec<i32>,
+}
+
+/// `HUtil32.GetValidStr3(source, ref dest, new[]{" ", "\t"})`（`HUtil32.cs:391-402`）：
+/// `source.Split(div, 2, RemoveEmptyEntries)` ⇒ `dest` = 第一段，返回值 = 第二段（其余原样）。
+///
+/// `count = 2` 是关键：第二段保留**内嵌分隔符**（`"a b c"` ⇒ `dest="a"`、返回 `"b c"`）。
+fn get_valid_str3(source: &str, dest: &mut String) -> String {
+    let s = source.trim_start_matches([' ', '\t']);
+    if s.is_empty() {
+        *dest = String::new();
+        return String::new();
+    }
+    match s.find([' ', '\t']) {
+        None => {
+            *dest = s.to_string();
+            String::new()
+        }
+        Some(i) => {
+            *dest = s[..i].to_string();
+            s[i..].trim_start_matches([' ', '\t']).to_string()
+        }
+    }
+}
+
+/// `HUtil32.StrToInt(s, 0)`（`HUtil32.cs:359-362`）：`int.TryParse` 失败 ⇒ 缺省 0。
+fn str_to_int(s: &str) -> i32 {
+    s.trim().parse::<i32>().unwrap_or(0)
+}
+
+/// `GameApp.LoadServerTable`（`GameApp.cs:258-308`）的纯函数版：`!servertable.txt` → 路由表。
+///
+/// 逐行：
+/// - 跳过空行与**行首**（未 trim）为 `;` 的注释行（oracle 判 `sLineText[0]`）；
+/// - `sIdx` / `sSelGateIPaddr` / `sGameGate` 任一为空 ⇒ 整行丢弃；
+/// - 余下按 `(ip, port)` 成对消费到 `GameGateIP/GameGatePort`，`GateCount = 对数`。
+///
+/// 越界（> 16 对）时 oracle 会抛 `IndexOutOfRange`；这里**截断到 16** 并保留该行
+/// （真机 `!servertable.txt` 只有 1 行 1 对：`0 127.0.0.1 127.0.0.1 7200`）。
+fn parse_server_table(text: &str) -> Vec<RouteInfo> {
+    let mut out = Vec::new();
+    for line in text.lines() {
+        if line.is_empty() || line.starts_with(';') {
+            continue;
+        }
+        let mut idx = String::new();
+        let mut sel_gate_ip = String::new();
+        let rest = get_valid_str3(line, &mut idx);
+        let mut game_gate = get_valid_str3(&rest, &mut sel_gate_ip);
+        if idx.is_empty() || game_gate.is_empty() || sel_gate_ip.is_empty() {
+            continue;
+        }
+        let mut route = RouteInfo {
+            server_idx: str_to_int(&idx),
+            ..Default::default()
+        };
+        let mut n = 0usize;
+        while !game_gate.is_empty() {
+            let mut ip = String::new();
+            let mut port = String::new();
+            game_gate = get_valid_str3(&game_gate, &mut ip);
+            game_gate = get_valid_str3(&game_gate, &mut port);
+            if n >= 16 {
+                break;
+            }
+            route.game_gate_ips.push(ip.trim().to_string());
+            route.game_gate_ports.push(str_to_int(&port));
+            n += 1;
+        }
+        out.push(route);
+    }
+    out
+}
+
+/// `MapMgr.GetMapOfServerIndex(MapName)`（`MapManager.cs:169-180`）：空名/找不到 ⇒ 0。
+///
+/// 与 `castle::owner_server_index` 同口径（那里是私有副本；本卡在宿主层再要一份，
+/// 避免为一个 5 行取值跨模块暴露）。
+fn map_owner_server_index(registry: Option<&mir2_envir::MapRegistry>, map_name: &str) -> i32 {
+    if map_name.is_empty() {
+        return 0;
+    }
+    registry.map_or(0, |r| {
+        r.entries()
+            .iter()
+            .find(|e| e.map_name.eq_ignore_ascii_case(map_name))
+            .map_or(0, |e| i32::from(e.server_index))
+    })
+}
+
+/// `GameShare.GetMultiServerAddrPort(serverIndex)`（`GameShare.cs:57-79`）+
+/// `GetRandpmRoute`（`:81-86`）。
+///
+/// 逐行：
+/// - `routeInfo == null` / `GateCount <= 0` ⇒ 跳过；`ServerIdx == serverIndex` ⇒ 命中即 `break`
+///   （**取第一条**匹配路由，不是最优/最后）；
+/// - `GetRandpmRoute`：`Random(GateCount)` 取下标 ⇒ `GameGatePort[random]` / `GameGateIP[random]`。
+///
+/// **抽数**：`RandomNumber.GetInstance()` 与 `M2Share.RandomNumber` 是**同一个单例**
+/// （`M2Server/M2Share.cs:194` / `SystemModule/SystemShare.cs:193` 都取 `GetInstance()`）
+/// ⇒ 这次 `Random(GateCount)` 必须走**世界那条** `world.rng`，与 oracle 同一条流水。
+/// 返回 `None` = oracle 的 `false`（**不发帧**）。
+fn get_multi_server_addr_port(
+    table: &[RouteInfo],
+    server_index: i32,
+    rng: &mut mir2_shared::rng::RandomNumber,
+) -> Option<(String, i32)> {
+    for route in table {
+        if route.game_gate_ips.is_empty() {
+            continue;
+        }
+        if route.server_idx != server_index {
+            continue;
+        }
+        let gate_count = i32::try_from(route.game_gate_ips.len()).unwrap_or(i32::MAX);
+        let random = rng.random_below(gate_count);
+        let i = usize::try_from(random).unwrap_or(0);
+        let ip = route.game_gate_ips.get(i)?.clone();
+        let port = route.game_gate_ports.get(i).copied().unwrap_or(0);
+        return Some((ip, port));
+    }
+    None
+}
+
+/// 一条待发的 `SM_RECONNECT(802)`：oracle `SendDefMessage(SM_RECONNECT, 0, 0, 0, 0, Msg)`
+/// （`Recog/Param/Tag/Series` 全 0，尾部 `EncodeString(Msg)`；编码器 [`smframe_ext::sm_reconnect`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ReconnectPending {
+    /// 收件人 `[GateIdx, Socket]`：`SendDefMessage` 单投本 socket（不广播、不抄送观察者）。
+    gate_idx: i32,
+    socket: i32,
+    /// **请求时刻**在线登记里的 `ChrName`；排水时据此置 `BoReconnection`。
+    /// 登录跨服分支为空串（oracle 那里 `playObject = null; return`，没有会话可置位）。
+    chr_name: String,
+    /// `"{ip}/{port}"` 的 GBK 字节（oracle `string.Format("{0}/{1}", sIPaddr, nPort)`）。
+    msg: Vec<u8>,
+}
+
+/// `SM_RECONNECT` 的**唯一**宿主排水点（与 `TickRecord` 排水块同位）。
+///
+/// 顺序（逐帧一条）：置 `BoReconnection` ⇒ 编码 ⇒ 按 `[GateIdx, Socket]` 单投。
+/// oracle 的两处生产都在发帧**之前**置 `BoReconnection`（`WorldServer.cs:1072`、
+/// `PlayObject.Message.cs:1989`），这里保持同序；找不到会话（登录跨服 / 已断线）时
+/// 置位落空，与 oracle 的 `playObject == null` 同。
+fn drain_reconnects(
+    pending: &mut Vec<ReconnectPending>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    for p in std::mem::take(pending) {
+        if let Some(sg) = sessions.get_mut(&p.chr_name) {
+            sg.bo_reconnection = true;
+        }
+        let Some(tx) = route_to_gate(gates, p.gate_idx, p.socket, "SM_RECONNECT 下行") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: p.socket,
+            body: smframe_ext::sm_reconnect(&p.msg),
+        });
+        glog!(
+            "INF",
+            "SM_RECONNECT：向 ChrName:{} socket={} 下发换服地址（oracle SendChangeServer）",
+            p.chr_name,
+            p.socket
+        );
+    }
+}
+
+/// oracle `WorldServer.cs:609-610`（换服门 100ms 轮询的第二闭包体）== `SendChangeServer`。
+///
+/// 逐行：
+/// ```text
+/// if (M2Share.GetMultiServerAddrPort(nServerIndex, ref sIPaddr, ref nPort)) {
+///     playObject.BoReconnection = true;                       // 排水时置（drain_reconnects）
+///     playObject.SendDefMessage(SM_RECONNECT, 0, 0, 0, 0, "{ip}/{port}");
+/// }
+/// ```
+/// `nServerIndex` = `playObject.ServerIndex`：oracle 在跨服分支写 `GetMapOfServerIndex(MapName)`
+/// （`WorldServer.cs:359`）⇒ 这里按该玩家**当前地图**的归属服取（找不到 ⇒ 0）。
+/// `GetMultiServerAddrPort` 返回 false ⇒ **一条帧都不发**（不是发空帧）。
+fn switch_data_send_change_server(
+    st: &SwitchDataState,
+    name: &str,
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    registry: Option<&mir2_envir::MapRegistry>,
+    server_table: &[RouteInfo],
+    pending: &mut Vec<ReconnectPending>,
+) {
+    let Some(entry) = online.iter().find(|e| e.chr_name == name) else {
+        glog!(
+            "WRN",
+            "换服：ChrName={name} 不在在线登记表 ⇒ SendChangeServer 跳过（登记）"
+        );
+        return;
+    };
+    let map_name = world
+        .entities
+        .get(entry.actor_id)
+        .and_then(|e| registry.and_then(|r| r.name_of(e.map_id)))
+        .map_or(String::new(), str::to_string);
+    let target = map_owner_server_index(registry, &map_name);
+    let Some((ip, port)) = get_multi_server_addr_port(server_table, target, &mut world.rng) else {
+        glog!(
+            "INF",
+            "换服：ChrName={name} 无可用路由（ServerIdx={target}）⇒ SendChangeServer 不发帧（temp={}）",
+            st.switch_data_temp_file
+        );
+        return;
+    };
+    glog!(
+        "INF",
+        "换服：ChrName={name} SendChangeServer ⇒ {ip}/{port}（temp={}）",
+        st.switch_data_temp_file
+    );
+    pending.push(ReconnectPending {
+        gate_idx: entry.gate_idx,
+        socket: entry.socket,
+        chr_name: name.to_string(),
+        msg: format!("{ip}/{port}").into_bytes(),
+    });
+}
+
+/// oracle `WorldServer.cs:352-368`（`ProcessHumansMakeNewHuman` 的跨服分支）的宿主版。
+///
+/// `envir = MapMgr.GetMapInfo(M2Share.ServerIndex, playObject.MapName); if (envir == null) { … }`：
+/// 本仓的等价条件是 [`mapwire::resolve_enter_map`] 返回 `Err`（CurMap 与回落 HomeMap
+/// **都不在本服地图表里**）。命中后：`ServerIndex = GetMapOfServerIndex(MapName)` ⇒
+/// `SendSwitchData`（`.shr` 序列化，**未移植**，登记）⇒ `SendChangeServer` ⇒ 放弃进图。
+///
+/// 返回 `true` = 已发出换服请求，调用方**必须**放弃本次进图（oracle `playObject = null;
+/// return result;`）。返回 `false` = 无可用路由（`GetMultiServerAddrPort == false`）⇒
+/// oracle 同样**不发帧**，由调用方按既有「拒绝进图 + WRN」处理。
+fn try_cross_server_redirect(
+    server_table: &[RouteInfo],
+    rng: &mut mir2_shared::rng::RandomNumber,
+    registry: Option<&mir2_envir::MapRegistry>,
+    map_name: &str,
+    gate_idx: i32,
+    socket: i32,
+    pending: &mut Vec<ReconnectPending>,
+) -> bool {
+    let target = map_owner_server_index(registry, map_name);
+    let Some((ip, port)) = get_multi_server_addr_port(server_table, target, rng) else {
+        return false;
+    };
+    pending.push(ReconnectPending {
+        gate_idx,
+        socket,
+        chr_name: String::new(),
+        msg: format!("{ip}/{port}").into_bytes(),
+    });
+    true
+}
+
 /// 一次 `RecalcAbilitys()` 的静态输入（不含随动作变化的 `UseItems`/`ItemList`/`WAbil`）。
 ///
 /// 与 `enter::AbilityInputs` 同源，但**拥有**借用的记录字段（`CharacterData` 在进世界后即丢），
@@ -17576,6 +17904,8 @@ fn startup_online_hum_gate(world_clock_ms: i64) -> game_svr::ids::OnlineHumGate 
 
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
+    // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
+    server_table: Vec<RouteInfo>,
     map_sizes: Vec<(i32, i32)>,
     mut registry: Option<mir2_envir::MapRegistry>,
     mut enter_cfg: EnterConfig,
@@ -17599,6 +17929,10 @@ fn sim_loop(
     // 广播收件人集合都读 `chat::send_ref_msg_range()`。缺键时 `config` 已按 oracle 源码缺省
     // 12（`GameSvrConf.cs:1503`）填好，这里只做搬运（不是另立缺省）。
     chat::install_send_ref_msg_range(enter_cfg.ref_msg_range);
+    // **T-202**：`SM_RECONNECT` 的宿主排水队列（与 `soft_close_pending` 同构）。生产者：
+    // ① 登录跨服分支（`login_cross_server_or_refuse`）②换服门 100ms 轮询（`process_switch_data`
+    // 的第二闭包）。唯一排水点 = 每轮 tick 的 `drain_reconnects`。
+    let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
     // **G2**：行会管理器的生产配置（与 `Server.conf` 同源，简报 §8）与会表（G3 启动加载）。
     // **I-6**：`GuildChief/GuildMemberRank` 的生产源是 `String.conf [Guild]`（`StringConf.cs:30-35`），
     // 不是 `GuildCastleConfig`；不覆盖会静默回落 `掌门人/行会成员`（W3-m8/m9）。
@@ -19255,6 +19589,32 @@ fn sim_loop(
                                     // 回落（`WorldServer.cs:319-341`）；仍找不到即拒绝进图并记 WRN
                                     //（`MapRegistry::require_id`），不许静默退回 0 号占位图。无注册表（S1
                                     // `WorldMaps` 占位，启动时已记 WRN）时保留 0 号图。
+                                    // **T-202**：oracle `WorldServer.cs:352-368`（`ProcessHumansMakeNewHuman`
+                                    // 的跨服分支）——`envir = MapMgr.GetMapInfo(ServerIndex, MapName); if (envir
+                                    // == null)` 时先 `SendSwitchData`（.shr 序列化，未移植，登记）+ 同时
+                                    // `SendChangeServer`（`SM_RECONNECT`），再 `playObject = null; return`。
+                                    // 这里的等价条件是下面的 `resolve_enter_map(..)` 返回 `Err`（CurMap 与
+                                    // 回落 HomeMap 都**不在本服地图表**里）；`resolve_map_id` 是纯查表，
+                                    // 调两次无抽数、无副作用。
+                                    // 命中且有路由 ⇒ 排 `SM_RECONNECT`（进图随即失败，下面的 `Err` 臂照旧记
+                                    // 既有的「拒绝进图」WRN：两条日志互补，不是重复错误）。
+                                    if mapwire::resolve_enter_map(
+                                        registry.as_ref(),
+                                        &enter_map_name,
+                                        rec_home,
+                                    )
+                                    .is_err()
+                                    {
+                                        let _ = try_cross_server_redirect(
+                                            &server_table,
+                                            &mut world.rng,
+                                            registry.as_ref(),
+                                            &enter_map_name,
+                                            gate_idx,
+                                            socket,
+                                            &mut reconnect_pending,
+                                        );
+                                    }
                                     match mapwire::resolve_enter_map(
                                         registry.as_ref(),
                                         &enter_map_name,
@@ -20856,8 +21216,11 @@ fn sim_loop(
         // oracle `WorldServer.cs:592-610` 的换服轮询（G11）。生产闭合：跨服搬家
         // （`ChangeSpaceMove`）、`.shr` 序列化与 `SendServerGroupMsg` 均未移植 ⇒
         // `send_switch_data` 返回 false（不假装 `.shr` 已写），由 oracle 的
-        // `WriteChgDataErrCount > 20` 错误退避兜底；`send_change_server` 只登记。
-        // 生产路径上 `switch_state.switch_data` 恒 false（无 `ChangeSpaceMove`）⇒ 本段零行为。
+        // `WriteChgDataErrCount > 20` 错误退避兜底。
+        // **T-202**：`send_change_server`（`:609` 的 `SendChangeServer`）已接线 —— 它只依赖
+        // `!servertable.txt` 路由表（`GetMultiServerAddrPort`）与玩家当前地图的归属服，
+        // 与 `.shr` 无关 ⇒ 换服门推进后能真正下发 `SM_RECONNECT`。
+        // 生产路径上 `switch_state.switch_data` 仍恒 false（无 `ChangeSpaceMove`）⇒ 真机零行为。
         process_switch_data(
             &mut ground_sessions,
             now_ms(),
@@ -20870,13 +21233,21 @@ fn sim_loop(
                 false
             },
             |st, name| {
-                glog!(
-                    "WRN",
-                    "换服：SendChangeServer 未移植（G11 登记；temp={}）ChrName={name}",
-                    st.switch_data_temp_file
+                switch_data_send_change_server(
+                    st,
+                    name,
+                    &mut world,
+                    &online,
+                    registry.as_ref(),
+                    &server_table,
+                    &mut reconnect_pending,
                 );
             },
         );
+        // **T-202**：`SM_RECONNECT` 的唯一宿主排水点（生产者的两条路径共用）。
+        // 位置 = 换服门轮询之后：oracle 里 `:609` 的 `SendChangeServer` 在该轮询内**同步**发帧，
+        // 登录跨服分支（`:366`）放弃进图后该 socket 无其它帧 ⇒ 本轮内帧序等价（详见模块头）。
+        drain_reconnects(&mut reconnect_pending, &mut ground_sessions, &gates);
         if ticks.is_multiple_of(50) {
             let diag = world_aoi_diag(&world, &displays, &aoi_frames_total);
             glog!(
@@ -40545,6 +40916,301 @@ SendRefMsgRange=15
         assert!(sg.bo_reconnection && sg.bo_soft_close);
         assert!(!sg.bo_emergency_close, "wParam==0 ⇒ 不置 BoEmergencyClose");
         assert_eq!(world.session("hero").unwrap().soft_close_count, 2);
+    }
+
+    /// 源码锚点断言的**去注释**视图：逐行删掉整行注释（`// ...`）。
+    ///
+    /// 不做这一步时「把调用注释掉」仍能通过文本断言（红检会假绿）——本卡的两条牙齿
+    /// 用例统一走这里。
+    fn strip_comment_lines(src: &str) -> String {
+        src.lines()
+            .map(|l| {
+                if l.trim_start().starts_with("//") {
+                    ""
+                } else {
+                    l
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// **T-202 判据①**：登录跨服分支（oracle `WorldServer.cs:352-368` 的
+    /// `GetMapInfo(ServerIndex, MapName) == null` 支）⇒ **恰好一条** `SM_RECONNECT`：
+    /// 载荷 `"{ip}/{port}"`、头四字段全 0、尾 `EncodeString(Msg)`、单投 `[GateIdx, Socket]`。
+    ///
+    /// 红检：删 `try_cross_server_redirect` 里的 `pending.push(..)`，或删 `sim_loop` 的
+    /// `drain_reconnects(..)` 调用 ⇒ 「恰好一条」必红（见 `sm_reconnect_production_calls_are_wired_in_sim_loop`）。
+    #[test]
+    fn login_cross_server_redirect_emits_exactly_one_sm_reconnect() {
+        // 真机 `!servertable.txt` 的内容（`0 127.0.0.1 127.0.0.1 7200`）。
+        let table = parse_server_table("0 127.0.0.1 127.0.0.1 7200\n");
+        assert_eq!(table.len(), 1);
+        assert_eq!(table[0].server_idx, 0);
+        assert_eq!(table[0].game_gate_ips, vec!["127.0.0.1".to_string()]);
+        assert_eq!(table[0].game_gate_ports, vec![7200], "GateCount=1");
+
+        let mut world = mir2_world::World::new(16, 16);
+        let mut pending: Vec<ReconnectPending> = Vec::new();
+        assert!(
+            try_cross_server_redirect(
+                &table,
+                &mut world.rng,
+                None,
+                "本服没有的图",
+                0,
+                901,
+                &mut pending
+            ),
+            "有路由 ⇒ 必须转服（oracle GetMultiServerAddrPort == true）"
+        );
+        assert_eq!(pending.len(), 1, "恰好一条待发");
+        assert_eq!(pending[0].msg, b"127.0.0.1/7200".to_vec());
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        drain_reconnects(&mut pending, &mut sessions, &gates);
+        assert!(pending.is_empty(), "排水后队列清空（不得重发）");
+
+        let mut frames = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            frames.push((socket, body));
+        }
+        assert_eq!(frames.len(), 1, "恰好一条 SM_RECONNECT");
+        assert_eq!(frames[0].0, 901, "收件人 = 登录 socket");
+        assert_eq!(
+            frames[0].1,
+            smframe_ext::sm_reconnect(b"127.0.0.1/7200"),
+            "逐字节 = 既有编码器（头全 0 + 尾 EncodeString）"
+        );
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&frames[0].1).expect("12B 头");
+        assert_eq!(cm.recog, 0);
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_RECONNECT);
+        assert_eq!((cm.param, cm.tag, cm.series), (0, 0, 0));
+
+        // 无路由 ⇒ oracle `GetMultiServerAddrPort == false` ⇒ **不发帧**（也不消耗进图）。
+        let empty = parse_server_table("1 10.0.0.1 10.0.0.1 7100\n");
+        let mut pending2: Vec<ReconnectPending> = Vec::new();
+        assert!(
+            !try_cross_server_redirect(
+                &empty,
+                &mut world.rng,
+                None,
+                "本服没有的图",
+                0,
+                901,
+                &mut pending2
+            ),
+            "ServerIdx 不匹配 ⇒ 无路由"
+        );
+        assert!(pending2.is_empty());
+    }
+
+    /// **T-202 判据②**：软关链（`CM_SOFTCLOSE`）**零条** `SM_RECONNECT` —— 两条链
+    /// **只共享 `BoReconnection` 标志、不共享帧**（审计 §5 ①）。
+    ///
+    /// 红检：把软关与重连混成一条（在 `handle_soft_close_cmd` 里 push 重连队列）⇒
+    /// 本用例的「零条」与 `soft_close_body_does_not_share_the_reconnect_channel` **同时**必红。
+    #[test]
+    fn soft_close_sets_flag_without_any_sm_reconnect() {
+        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .unwrap();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        handle_soft_close_cmd(0, "hero", 901, &online, &mut sessions, &mut world, None);
+        assert!(
+            sessions["hero"].bo_reconnection,
+            "软关照样置 BoReconnection（两链共享的**唯一**东西）"
+        );
+
+        let mut reconnects = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("12B 头");
+            if cm.ident == mir2_protocol::messages::SM_RECONNECT {
+                reconnects += 1;
+            }
+        }
+        assert_eq!(reconnects, 0, "软关 ⇒ 零条 SM_RECONNECT（不共享帧）");
+    }
+
+    /// **T-202 牙②（静态）**：软关链**不得**接入重连通道 —— `handle_soft_close_cmd` 函数体里
+    /// 出现 `reconnect_pending` / `drain_reconnects` / `try_cross_server_redirect` 即红。
+    #[test]
+    fn soft_close_body_does_not_share_the_reconnect_channel() {
+        let src = strip_comment_lines(include_str!("lib.rs"));
+        let start = src.find("fn handle_soft_close_cmd(").expect("定义行");
+        let end = src[start..]
+            .find("\n}\n")
+            .map(|i| start + i)
+            .expect("函数结束行");
+        let body = &src[start..end];
+        for banned in [
+            "reconnect_pending",
+            "drain_reconnects",
+            "try_cross_server_redirect",
+            "SM_RECONNECT",
+        ] {
+            assert!(
+                !body.contains(banned),
+                "软关链与重连链只共享标志，函数体不得含 {banned}"
+            );
+        }
+    }
+
+    /// **T-202 判据③**：直发路径（`WorldServer.cs:606-610` + `:1066-1075` `SendChangeServer`）的
+    /// **时机与收件人**：`SwitchDataSended` 严格 `> 100ms` 才发；帧只给该玩家自己
+    /// （`SendDefMessage` 单投，不广播、不抄送观察者）；`GetMultiServerAddrPort` 失败 ⇒ 不发。
+    #[test]
+    fn switch_data_poll_sends_change_server_only_to_the_player() {
+        // 同一路由两对网关 ⇒ `GetRandpmRoute` 的 `Random(2)` 抽一对（oracle `GameShare.cs:83-85`）。
+        let table = parse_server_table("0 10.1.1.1 10.1.1.1 7001 10.1.1.1 7002\n");
+        assert_eq!(
+            table[0].game_gate_ports,
+            vec![7001, 7002],
+            "GateCount=2（两对 ip/port）"
+        );
+
+        let mut world = mir2_world::World::new(16, 16);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let other = world.add_entity({
+            let mut e = mir2_world::Entity::new(2, "other", 12, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero));
+        sessions.insert("other".into(), test_session_ground(other));
+        sessions.get_mut("hero").unwrap().switch_state.switch_data = true;
+        sessions.get_mut("hero").unwrap().switch_state.rcd_saved = true;
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        online_set(&mut online, entry("ub", "other", 1, 0, 902, other));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut pending: Vec<ReconnectPending> = Vec::new();
+        // 2_000ms：SendSwitchData 成功 ⇒ 进入 100ms 窗口，本轮不发。
+        process_switch_data(
+            &mut sessions,
+            2_000,
+            |_, _| true,
+            |st, name| {
+                switch_data_send_change_server(
+                    st,
+                    name,
+                    &mut world,
+                    &online,
+                    None,
+                    &table,
+                    &mut pending,
+                );
+            },
+        );
+        assert!(pending.is_empty(), "刚进入窗口（0ms）不得 SendChangeServer");
+        // 2_100ms：oracle 是严格 `>` ⇒ 恰好 100ms 仍不发。
+        process_switch_data(
+            &mut sessions,
+            2_100,
+            |_, _| true,
+            |st, name| {
+                switch_data_send_change_server(
+                    st,
+                    name,
+                    &mut world,
+                    &online,
+                    None,
+                    &table,
+                    &mut pending,
+                );
+            },
+        );
+        assert!(pending.is_empty(), "恰好 100ms 不得发（严格 > 100）");
+        // 2_101ms ⇒ 发一条。
+        process_switch_data(
+            &mut sessions,
+            2_101,
+            |_, _| true,
+            |st, name| {
+                switch_data_send_change_server(
+                    st,
+                    name,
+                    &mut world,
+                    &online,
+                    None,
+                    &table,
+                    &mut pending,
+                );
+            },
+        );
+        assert_eq!(pending.len(), 1, "101ms 后恰好一条");
+        assert_eq!(pending[0].socket, 901);
+        assert_eq!(pending[0].chr_name, "hero");
+        let msg = String::from_utf8(pending[0].msg.clone()).expect("ASCII");
+        assert!(
+            msg == "10.1.1.1/7001" || msg == "10.1.1.1/7002",
+            "载荷必须来自本路由的两对网关之一：{msg}"
+        );
+
+        drain_reconnects(&mut pending, &mut sessions, &gates);
+        let mut sockets = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, .. }) = rx0.try_recv() {
+            sockets.push(socket);
+        }
+        assert_eq!(
+            sockets,
+            vec![901],
+            "只投给该玩家，不广播（观察者 902 一条都没有）"
+        );
+        assert!(
+            sessions["hero"].bo_reconnection,
+            "SendChangeServer 先置 BoReconnection 再发帧"
+        );
+        assert!(!sessions["other"].bo_reconnection, "旁观者不受影响");
+    }
+
+    /// **T-202 牙①**：撤发射点 ⇒ 红。生产编排里的接线必须在位且在正确的段落：
+    /// `sim_loop` 体内 登录跨服调 `try_cross_server_redirect(`、换服门轮询 `process_switch_data(`
+    /// **之后**调 `drain_reconnects(`（oracle `:609` 的 `SendChangeServer` 在该轮询内同步发帧）。
+    #[test]
+    fn sm_reconnect_production_calls_are_wired_in_sim_loop() {
+        let src = strip_comment_lines(include_str!("lib.rs"));
+        // **只看生产源码**：本模块自身就含 `drain_reconnects(` 等**字符串字面量**，
+        // 不切掉 `mod tests {` 会自指假绿（首次实现踩过，红检 A 实测）。
+        let prod_end = src.find("\nmod tests {").expect("测试模块起点");
+        let prod = &src[..prod_end];
+        let sim_loop = prod.find("fn sim_loop(").expect("`fn sim_loop(` 定义行");
+        let body = &prod[sim_loop..];
+        let login = body
+            .find("try_cross_server_redirect(")
+            .expect("登录跨服分支必须调 try_cross_server_redirect(");
+        let poll = body
+            .find("switch_data_send_change_server(")
+            .expect("换服门轮询的生产闭包必须调 switch_data_send_change_server(");
+        let drain = body
+            .find("drain_reconnects(")
+            .expect("sim_loop 必须排水 SM_RECONNECT");
+        // 定义行都在 sim_loop 之前（不在 body 里），body 里首次命中即**调用点**。
+        assert!(
+            login < poll,
+            "登录跨服分支在换服门轮询之前（本文件的实际次序）"
+        );
+        assert!(drain > poll, "SM_RECONNECT 排水必须在换服门轮询之后");
     }
 
     /// `CM_CLICKNPC(1010)`：`IsCanDeal` 门、`Death`/`Ghost` 门、`ClickNpcTime` 限频门、

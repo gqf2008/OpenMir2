@@ -237,6 +237,7 @@
 | T-196 | openmir2-gm-admin-mode-entity-seam | 2026-10-23T08:45:00Z | 已落地 |
 | T-199 | openmir2-weapon-durability-frames | 2026-10-23T00:16:58Z | 在用 |
 | T-201 | openmir2-cm-adjust-bonus | 2026-10-23T00:21:36Z | 在用 |
+| T-202 | openmir2-sm-reconnect-wiring | 2026-10-23T00:23:10Z | 在用 |
 | T-203 | openmir2-ybdeal-frames | 2026-10-23T00:35:09Z | 已落地 |
 | T-204 | openmir2-sendrefmsg-range-config | 2026-10-23T00:45:07Z | 已落地 |
 | T-205 | openmir2-map-event-frames | 2026-10-23T01:02:40Z | 已落地 |

@@ -64,7 +64,7 @@
 //! | [`sm_opendoor_ok`] | 612 | `RM_DOOROPEN`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**（与 `sm_closedoor` 同条） |
 //! | [`sm_queryybdeal`] | 23023 | 脚本动作 `QUERYYBDEAL` 的 `SendMsg(RM_QUERYYBDEAL)` 尾 = `EDCode.EncodeBuffer` | `crates/script` 无 `QUERYYB*` handler | **登记 T-181**：上游脚本动作未实现 |
 //! | [`sm_queryybsell`] | 23021 | 脚本动作 `QUERYYBSELL`（同上形状） | 同上 | **登记 T-181**（与 `sm_queryybdeal` 同条） |
-//! | [`sm_reconnect`] | 802 | `PlayObject` 的 `TransferPlanesServer` / `WorldServer` 的 `SendChangeServer`（读 `!servertable.txt` 的路由表） | 本仓无 `!servertable.txt` 装载，`ChangeSpaceMove` 未移植（G11） | **登记 T-182**：跨服搬家子系统未移植 |
+//! | [`sm_reconnect`] | 802 | `WorldServer.SendChangeServer`（`WorldServer.cs:1066-1075`，读 `!servertable.txt` 路由表）：登录跨服分支 + 换服门 100ms 轮询；RM 泵支由 `RM_RECONNECTION` 落帧 | `!servertable.txt` 装载、`GetMultiServerAddrPort`/`SendChangeServer` 已接；`ChangeSpaceMove` 与 `.shr` 序列化仍未移植（G11） | **已接线**（卡 `openmir2-sm-reconnect-wiring`，T-202）：`lib.rs::try_cross_server_redirect`/`switch_data_send_change_server`/`drain_reconnects`；软关链不共享帧（同条登记） |
 //! | [`sm_showevent`] | 804 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_SHOWEVENT)`） | 同 `sm_hideevent` | **已接线**（T-205，与 `sm_hideevent` 同条） |
 //! | `sm_skeleton`（`smframe.rs`） | 33 | `PlayObject` 的 `SendRefMsg(RM_SKELETON)`（尸体转骷髅） | 已登记 `deferred`（`downlink.rs`），缺 setter | **登记 T-183**：沿用既有 deferred 结论 |
 //!
