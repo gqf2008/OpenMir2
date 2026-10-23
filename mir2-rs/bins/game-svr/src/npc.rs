@@ -374,6 +374,9 @@ impl MerchantScriptBook {
             curr_x,
             curr_y,
             self.goto_count_limit,
+            // 商人脚本表未持有 Envir 根 ⇒ 文件列表类条件按「文件不存在」（与接线前行为一致；
+            // 商人路径的注入另开卡，见 T-220 登记）。
+            None,
             player,
             label,
             bo_ext_jmp,
@@ -501,6 +504,7 @@ impl NpcHost {
             0,
             0,
             self.goto_count_limit,
+            Some(self.envir_root.as_path()),
             player,
             label,
             bo_ext_jmp,
@@ -538,6 +542,9 @@ struct HostNpc<'a> {
     map_name: String,
     curr_x: i32,
     curr_y: i32,
+    /// Envir 根（`NpcHost::envir_root` 注入；文件列表类条件/动作用它拼绝对路径）。
+    /// 空串/未注入 ⇒ `None`（`check_string_list` 按「文件不存在」处理并记错误）。
+    envir_root: Option<String>,
 }
 
 /// 跑一次 `ScriptEngine.GotoLable` 并收说词（[`NpcHost`] 与 [`MerchantScriptBook`] 共用）。
@@ -549,6 +556,8 @@ fn run_goto_label(
     curr_x: i32,
     curr_y: i32,
     goto_count_limit: i32,
+    // `SystemShare.GetEnvirFilePath` 的根（宿主注入；`None` ⇒ 文件列表类按「文件不存在」）。
+    envir_root: Option<&std::path::Path>,
     player: &mut NpcPlayer<'_, '_>,
     label: &str,
     bo_ext_jmp: bool,
@@ -561,6 +570,9 @@ fn run_goto_label(
         map_name: map_name.to_string(),
         curr_x,
         curr_y,
+        envir_root: envir_root
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(|p| p.to_string_lossy().into_owned()),
     };
     {
         let mut engine = Engine::new(&mut npc, player);
@@ -572,6 +584,13 @@ fn run_goto_label(
 impl ScriptNpc for HostNpc<'_> {
     fn actor_id(&self) -> i32 {
         self.actor_id
+    }
+
+    /// `SystemShare.GetEnvirFilePath` 的根（卡 `openmir2-script-envir-root-host`）：
+    /// `NpcHost.envir_root` 由宿主注入 ⇒ `CHECKNAMELIST`/`ADDNAMELIST` 等文件列表类条件/动作
+    /// 才能按 oracle 拼出 `Path.Combine(BasePath, EnvirDir, rel)`；未注入 ⇒ 缺省 `None`。
+    fn envir_root(&self) -> Option<String> {
+        self.envir_root.clone()
     }
     fn chr_name(&self) -> String {
         self.def.chr_name.clone()
@@ -2249,6 +2268,92 @@ mod tests {
             curr_y: 12,
         });
         book
+    }
+
+    /// **卡 `openmir2-script-envir-root-host`**：`HostNpc::envir_root` 覆写后，
+    /// `CHECKNAMELIST`（condition 36 → `ProcessingBase.GotoLableCheckStringList`）按 Envir 根
+    /// 拼路径读名单（`Trim()` + 忽略大小写）；未注入根 ⇒ 按「文件不存在」恒假（接线前行为）。
+    ///
+    /// 牙：删 `impl ScriptNpc for HostNpc` 的 `fn envir_root` ⇒ 第一段由 hit 变 miss ⇒ 红。
+    #[test]
+    fn host_npc_envir_root_enables_check_name_list() {
+        let root = std::env::temp_dir().join(format!("gs-envir-root-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        // 名单：首尾空白 + 大小写混写 ⇒ oracle `Trim()` 后 OrdinalIgnoreCase 命中。
+        std::fs::write(
+            envir.join("TestList.txt"),
+            "  Hero  
+Other
+",
+        )
+        .unwrap();
+        let makes = || NpcDef {
+            chr_name: "QFunction".to_string(),
+            file_path: "Market_Def".to_string(),
+            script_name: Some("QFunction-0".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: vec![mir2_script::QuestConditionInfo {
+                            cmd_code: 36, // `CHECKNAMELIST`（`codes.rs:56`）
+                            s_param1: "TestList.txt".to_string(),
+                            ..Default::default()
+                        }],
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31, // `SENDMSG`
+                            n_param1: 5,
+                            s_param2: "hit".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "miss".to_string(),
+                            ..Default::default()
+                        }],
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let run = |envir_root: std::path::PathBuf, chr: &str| {
+            let host = NpcHost {
+                envir_root,
+                defs: vec![makes()],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = chr.to_string();
+            let _ = host.goto_label("QFunction", &mut player, "@main", false);
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
+        };
+        // 注入 Envir 根：命中（Trim + 忽略大小写）。
+        assert_eq!(run(envir.clone(), "HERO"), vec!["hit".to_string()]);
+        // 未命中 ⇒ else 支。
+        assert_eq!(run(envir.clone(), "Nobody"), vec!["miss".to_string()]);
+        // 未注入根（空 PathBuf）⇒ 按「文件不存在」⇒ 恒假（接线前行为，也是牙的红条件）。
+        assert_eq!(
+            run(std::path::PathBuf::new(), "HERO"),
+            vec!["miss".to_string()]
+        );
+        std::fs::remove_dir_all(&root).ok();
     }
 
     /// **I-1 连带面（`ISONMAP`）**：`cond_is_on_map`（`conditions.rs:387`）读的
