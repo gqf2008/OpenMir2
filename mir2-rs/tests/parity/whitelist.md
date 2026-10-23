@@ -922,3 +922,28 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 > **本批未登记 1 张（无窗口判据）**：`openmir2-enter-map-cell-rejected-vs-oracle` —— 该卡 `status 8c5f59e1654893f8a52e26ade65785d376129ae6`
 > 原文：「余量：① 真机窗口（切图失败路径；**当前生产无 `switch_map` 调用者 ⇒ 真机不可达**）」。**窗口跑不了 ⇒ 不登记窗口项**；
 > 已在卡片线程发 comment 说明「无窗口判据、需另行定性（构造级替代 / 转 closed 由 owner 裁决）」。
+
+## R 卡窗口证据登记——B2 批 2（2026-10-23；卡 `openmir2-r-window-registry-batch`）
+
+> 口径同批 1：本表登记的是「真机窗口证据未采」，**不是行为豁免**；每行引用**该卡自己的** `status` 原文与出处 oid；
+> **一行只登记一张卡**，行内跨卡引用不带 `openmir2-` 前缀（`goal_gate.py:62` 的 `CARD_ID_RE` 整行匹配，
+> 带前缀会把别的卡误算成 `whitelist_t`，批 1 实测踩到过）。
+> 名单来源：`python -I tools/goal/goal_gate.py --json`（2026-10-23T14:58:31Z，`generated_ts=1792767532`，commit `19c59598a`）
+> 的「merged 未 closed 且无登记」35 张，按 `last_status_ts` 升序取最旧 10；其中 8 张登记（T-236..T-243）、
+> 2 张需多会话/第二观察者 ⇒ 只发 comment（详见 `docs/r-window-registry-batch-2-20261023.md`）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
+| --- | --- | --- | --- |
+| T-236 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-player-searchviewrange-cadence`（tier=R） | 该卡 `status 0550c8c490f4a5e84725ea07bbf2938839ed931b` 原文：「余量：① **真机窗口**——首扫约 1.2s、之后每 1.2s；② 非玩家扫描节拍仍每 tick（另卡）；③ `RM_DISAPPEAR` 收件人近似（误差窗口随节流放大）——应改格扫或窗口验证」。**场景已存在**：`login_only`（仅项 ① 可验；项 ③ 需第二观察者 ⇒ 多会话批次）。离线实跑：`python -I -B tools/probe/mir2_probe.py --check-scenario --scenario tools/probe/scenarios/login_only.json` ⇒ **rc=0**。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+| T-237 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-run-gap-player-run-quantification`（tier=R） | 该卡 `status 0a5391375242acfe358ef619c838a016ea1a395b` 原文：「余量：① **裁定证据**——按 §3 方案取数（B1 静置压血看 53 填充间隔：50/s≈6.0s vs 40/s≈7.5s）；② 若判 50/s ⇒ 改 `stamina.rs` 节拍…；③ A2 时钟注入需 owner 裁决 O3（无对应 T-*）；④ A1 harness 需先 spike；⑤ R 卡保持 in-progress（window_required: true）」。**场景待建**：需 A1 harness spike + owner 裁决 O3（时钟注入）；未指定承接卡 ⇒ 需 owner/coordinator 派。离线复核：`python -I tools/goal/goal_gate.py --json`。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+| T-238 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-run-gap-monster-state-expiry`（tier=R） | 该卡 `status 0add6624f0bb55f58f85474d70ea012806543c15` 原文：「余量：① **真机窗口**（CrazyMode 色变 0xF9 / RefNameColor 帧面 / FireHit-TwinHit 到期消息）；② FireHit/TwinHit 写入点依赖未移植的技能层…」。**场景待建**：window-batch-plan §1 第 24 行「新：world_observe 60–180s」，未指定承接卡 ⇒ 需 owner/coordinator 派场景卡。离线复核：`python -I tools/goal/goal_gate.py --json`。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+| T-239 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-run-gap-corpse-ghost-revive`（tier=R） | 该卡 `status b37880c0ef620e79bf7b928aae8272380cd9b836` 原文：「余量：① **真机窗口**（3 分钟变尸 / 可复活支 ZenTime-20s / 5 分钟移除 / 两帧 RM_TURN）；② `ReAliveEx` 未建模面…」。**场景待建**：window-batch-plan §1 第 25 行「新：world_observe ≥300s」，未指定承接卡。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+| T-240 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-movetomovingobject-quirk`（tier=R） | 该卡 `status aceda41633a8800f68f047a8715f069b89e18a63` 原文：「余量：① **真机窗口**（多对象格移动时的源/目标格身份序列）；② `WorldGolden` 桩的怪物 CellType 仍硬编码 Play…；③ 该怪癖同样影响走/跑/SpaceMove/召回——本片已全部经同一 `move_object`，窗口对拍需覆盖移动路径」。**场景待建**：window-batch-plan §1 第 26 行「新：多对象同格移动」，未指定承接卡。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+| T-241 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-run-gap-monster-master-follow`（tier=R） | 该卡 `status 15847cd8fe83a24092ecb809185073a3a37dc920` 原文：「余量：① **真机窗口**（异图/超距/SlaveRelax 两侧流水）；② 玩家主的 `Dir` 供给另卡…；③ 怪物 SpaceMove 出帧与跨服支未建模…」。**场景待建**：window-batch-plan §1 第 27 行「新：world_observe（宝宝异图/超距）」，未指定承接卡。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+| T-242 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-run-gap-monster-specials`（tier=R） | 该卡 `status ece643c506a86f5b9dabf1fa6ec50e059062ab88` 原文：「余量：① **真机窗口**（同 tick 产仔抽数相对次序、`SM_HIT` 帧面、Clone 扣 MP）；② `RM_RANDOMSPACEMOVE`/`RM_DELAYPUSHED` 投递未建模…」。**场景部分已存在**：`combat_hit`（`tools/probe/scenarios/combat_hit.json`，离线实跑 `--check-scenario … --var target_x=30 --var target_y=32 --var target_xy=15204608 --var hit_dir=4` ⇒ **rc=0**）；**产仔观察部分待建**（window-batch-plan §1 第 28 行「新：combat_hit + 产仔观察」），未指定承接卡。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+| T-243 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-run-gap-pr1-head-blocking`（tier=R） | 该卡 `status 4a92013550ae1b4fc69cbd1e5518019e12a2bab4` 原文：「余量：① 真机窗口；② 跨 actor 泵序（首次入队序 vs 实体序）；③ 宿主 `pending_mag_struck` 排水序与 7 参 `SendStruckDelayMsg` 生产者（MB-9）」。**场景待建**：window-batch-plan §1 第 29 行「新：队列序观察」，未指定承接卡。 | 作者登记（`openmir2-worker-69`，卡 `openmir2-r-window-registry-batch`）；**待独立 principal 复核** |
+
+> **本批未登记 2 张（需多会话 / 第二观察者，单会话探针跑不了）**：
+> ① `openmir2-run-gap-checkdupobj` —— status `d758a92ff637e4a44a73e3d539335b50a6976df7` 原文「余量：① **真机窗口**——3 人同格推挤的源/目标格身份序列 + AOI 相位（1000ms 口径）」⇒ 需 ≥3 会话；
+> ② `openmir2-disappear-recipients-gridscan` —— status `2f85770698c56f5ead5ab9762409dfd45db36599` 原文「余量：① **真机窗口**（节流窗口内进入 ±12 的观察者、离世广播与 AOI/移动帧的全局次序）」⇒ 需第二观察者。
+> 两张均已在卡片线程发 comment（请 owner 裁决：等多会话探针卡 `openmir2-multi-session-probe` 落地，或以构造级替代），**未改状态**。
