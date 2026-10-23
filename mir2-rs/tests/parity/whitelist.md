@@ -14,7 +14,8 @@
 > `mir2-rs/tests/parity/T-RESERVATIONS.md` 分配——**先取号**
 > （`python -I tools/whitelist/next_t.py --card <卡 id>`），**再**在本表写登记；合并前跑
 > `python -I tools/whitelist/t_reservation_gate.py check`（①whitelist→预约表 ②同号多认领
-> ③已落地→whitelist，任一不满足 rc=1）。**不要再 grep 现算最大号**——并行时它必然读到旧值。
+> ③已落地→whitelist ④本表内部同号 ⑤同卡多认领 ⓪坏行/未闭合围栏，任一不满足 rc=1；
+> 且必须**在合并结果树上**跑）。**不要再 grep 现算最大号**——并行时它必然读到旧值。
 
 ## D 线登记
 
