@@ -20,7 +20,7 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    EntityStore, VisibleBaseObject, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    EntityStore, VisibleBaseObject, VisibleEvent, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 
@@ -305,6 +305,123 @@ pub fn search_view_range_with_updates(
         removed,
         view_updates,
     }
+}
+
+/// 对应 `PlayObject.UpdateVisibleEvent`（`PlayObject.cs:5464-5486`）。
+///
+/// oracle 逐行：
+/// ```text
+/// for (i = 0; i < VisibleEvents.Count; i++)
+///     if (VisibleEvents[i] == MapEvent) { VisibleEvents[i].VisibleFlag = Invisible; return; }
+/// MapEvent.VisibleFlag = Show; MapEvent.nX = wX; MapEvent.nY = wY; VisibleEvents.Add(MapEvent);
+/// ```
+///
+/// **已在本列表 ⇒ 只打 `Invisible`、不更新坐标** ⇒ nX/nY 恒为「本趟扫描**首次**命中该事件
+/// 的格子」坐标（折叠语义下后续格子不覆盖）。oracle 改的是**共享对象**的 nX/nY；因发送紧跟
+/// 同一趟扫描之后（观察者之间不并发），按观察者各自存一份与 oracle 可观测行为等价。
+pub fn update_visible_event(store: &mut EntityStore, viewer_id: i32, event: usize, x: i32, y: i32) {
+    let Some(viewer) = store.get_mut(viewer_id) else {
+        return;
+    };
+    for v in viewer.visible_events.iter_mut() {
+        if v.event == event {
+            v.flag = VisibleFlag::Invisible;
+            return;
+        }
+    }
+    viewer.visible_events.push(VisibleEvent {
+        event,
+        x,
+        y,
+        flag: VisibleFlag::Show,
+    });
+}
+
+/// `PlayObject.SearchViewRange` 的 **`CellType.Event` 支**（卡 `openmir2-map-event-frames`）。
+///
+/// 扫描段（`PlayObject.cs:3186-3194`）：
+/// ```text
+/// case CellType.Event:
+///     MapEvent mapEvent = M2Share.CellObjectMgr.Get<MapEvent>(cellObject.CellObjId); // 恒 0
+///     if (mapEvent == null) continue;
+///     if (mapEvent.Visible) UpdateVisibleEvent(nX, nY, mapEvent);
+/// ```
+/// 差集收尾（`:3271-3287`）：`Hidden` ⇒ `SendMsg(RM_HIDEEVENT, 0, mapEvent.Id, mapEvent.nX,
+/// mapEvent.nY)` 并 `RemoveAt`；`Show` ⇒ `SendMsg(RM_SHOWEVENT, …)`（帧面由宿主出）。
+///
+/// 与 actors 的合并实现拆开的**等价性**：oracle 把两段写在同一格子双层循环里，但事件只写
+/// 观察者自己的 `VisibleEvents`、actors 只写 `VisibleActors`，互不读写 ⇒ 拆两趟（同一窗口、
+/// 同一「X 外层升序、Y 内层升序」序）结果逐字段相同。
+///
+/// **只有玩家**走这段：`BaseObject.SearchViewRange` / `GuardUnit.SearchViewRange`
+/// （`BaseObject.ViewRange.cs`）**没有** `CellType.Event` 分支——`VisibleEvents` 是
+/// `PlayObject` 独有字段（`PlayObject.cs:211`）。非玩家调用 ⇒ 空返回。
+///
+/// **`Id == 0` 折叠（1:1 硬约束）**：`events` 里的查找按 oracle `Get<MapEvent>(0)` 的
+/// `TryAdd` 语义取**全进程第一条 `registered` 事件**（key 0 第一条胜、`DeleteFromMap` 对
+/// id 0 恒不移除 ⇒ 关闭后**不再替换**）；与格子坐标无关（oracle `CellObjectMgr` 是
+/// `M2Share` 的静态全局，跨图共享）。给事件编唯一 id ⇒ 每个事件格各解析各的 ⇒ 折叠用例必红。
+///
+/// 返回本趟「离开视野」的 `(事件下标, nX, nY)`（`Hidden` ⇒ `RemoveAt`，下标升序保序）——
+/// 对应 oracle `RM_HIDEEVENT` 的发送对象。
+pub fn search_view_range_events(
+    map: &MapGrid,
+    store: &mut EntityStore,
+    viewer_id: i32,
+    events: &[crate::world::FireBurnEvent],
+) -> Vec<(usize, i32, i32)> {
+    let Some(viewer) = store.get(viewer_id) else {
+        return Vec::new();
+    };
+    if viewer.race != ACTOR_RACE_PLAY {
+        return Vec::new();
+    }
+    let (cx, cy, view_range) = (viewer.x, viewer.y, viewer.view_range);
+    // 置 Hidden（oracle `:3078-3082`：`for (i = Count - 1; i >= 0; i--) … = Hidden;`——
+    // 逆序置位与顺序无关，逐条目结果相同）。
+    if let Some(viewer) = store.get_mut(viewer_id) {
+        for v in viewer.visible_events.iter_mut() {
+            v.flag = VisibleFlag::Hidden;
+        }
+    }
+    // 扫描窗口与 actors 同一（`CurrX ± ViewRange` 的正方形，X 外层升序、Y 内层升序）。
+    for x in (cx - view_range)..=(cx + view_range) {
+        for y in (cy - view_range)..=(cy + view_range) {
+            let (cell, success) = map.get_cell_info(x, y);
+            if !success || cell.count() == 0 {
+                continue; // C#：cellSuccess && cellInfo.IsAvailable
+            }
+            for obj in &cell.obj_list {
+                if obj.cell_type != CellType::Event {
+                    continue;
+                }
+                // `Get<MapEvent>(0)`：Id==0 折叠——任何事件格都解析到**第一条** registered 事件。
+                let Some((event_idx, folded)) =
+                    events.iter().enumerate().find(|(_, e)| e.registered)
+                else {
+                    continue; // oracle `mapEvent == null ⇒ continue`（key 0 还空着）
+                };
+                if !folded.visible {
+                    continue; // oracle `if (mapEvent.Visible)`
+                }
+                update_visible_event(store, viewer_id, event_idx, x, y);
+            }
+        }
+    }
+    // 差集收尾（oracle `:3271-3287`）：`Hidden` ⇒ 记移除（宿主发 `SM_HIDEEVENT`）、下标升序保序。
+    let mut removed: Vec<(usize, i32, i32)> = Vec::new();
+    if let Some(viewer) = store.get_mut(viewer_id) {
+        let mut i = 0;
+        while i < viewer.visible_events.len() {
+            if viewer.visible_events[i].flag == VisibleFlag::Hidden {
+                let ev = viewer.visible_events.remove(i);
+                removed.push((ev.event, ev.x, ev.y));
+                continue;
+            }
+            i += 1;
+        }
+    }
+    removed
 }
 
 /// 对应 `BaseObject.SearchViewRangeDeath`（`BaseObject.ViewRange.cs:159`）。

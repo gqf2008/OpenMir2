@@ -58,14 +58,14 @@
 //! | [`sm_changeface`] | 1104 | `ElfWarriorMonster` 的 `MakeClone` 支（ELF 分裂出分身时 `SendRefMsg(RM_CHANGEFACE)`） | 编码器 + 构造用例在；本仓无该支生产点 | **登记 T-175**：上游 `ElfWarrior` 分裂支未移植 |
 //! | [`sm_closedoor`] | 614 | `RM_DOORCLOSE`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**：与 `sm_opendoor_ok` 同因，oracle 结构性不可达 |
 //! | [`sm_closehealth`] | 1101 | `BreakOpenHealth`（`BaseObject.Base.cs:219-222` 的 `ShowHp` 到期门；死亡路径不调它）⇒ `SendRefMsg(RM_CLOSEHEALTH)` | 宿主已镜像 `sg.show_hp`；1101 发射点**已接线**（`lib.rs::drain_close_health_for`：玩家在 `drain_stamina` 内逐 actor、怪物/NPC 由 `drain_close_health_residual` 补扫） | **已接线**（卡 `openmir2-sm-closehealth-wire`，2026-10-23）：Leader 放行 `lib.rs`；12B 字节 / 怪物到期 / 帧序用例 + 调用点牙见卡片；相位差见 T-79 ③ |
-//! | [`sm_hideevent`] | 805 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_HIDEEVENT)`） | `World::run_map_events` 只跑 fire-burn + dig-out 两支，未建模 `VisibleEvents` 差集 | **登记 T-178**：MapEvent 可见性未建模 |
+//! | [`sm_hideevent`] | 805 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_HIDEEVENT)`） | 已建模：`aoi::search_view_range_events`（`Id==0` 折叠）→ `TickRecord::event_hides` → `lib.rs::drain_aoi_events` | **已接线**（卡 `openmir2-map-event-frames`，T-205）：进入/离开/不可见三态 + 折叠用例与牙见 whitelist T-205 |
 //! | [`sm_itemshow`] | 610 | `Envir.AddItemToMap` 成功支的 `SendRefMsg(RM_ITEMSHOW)` | `MapItem.ItemId == 0` 恒真 ⇒ oracle 不可达（T-19/T-25/T-32） | **登记 T-179**：沿用既有 T-32 结论 |
 //! | [`sm_lampchangedura`] | 655 | 右手火把耐久结算的两处 `SendMsg(RM_LAMPCHANGEDURA)`（`PlayObject.Message.cs:2265`/`:2274`） | **已接线**：`crates/world` 的 `World::use_lamps`（`UseLamp`）→ `bins/game-svr/src/lib.rs::drain_weapon_durability`（卡 `openmir2-weapon-durability-frames`，T-199） | **已接线**（原 T-180 收口；燃尽支的 654/709 仍未接，T-79⑥/T-95①） |
 //! | [`sm_opendoor_ok`] | 612 | `RM_DOOROPEN`（`SendDoorStatus`） | 门恒 `Opened=false`（T-65） | **登记 T-176**（与 `sm_closedoor` 同条） |
 //! | [`sm_queryybdeal`] | 23023 | 脚本动作 `QUERYYBDEAL` 的 `SendMsg(RM_QUERYYBDEAL)` 尾 = `EDCode.EncodeBuffer` | `crates/script` 无 `QUERYYB*` handler | **登记 T-181**：上游脚本动作未实现 |
 //! | [`sm_queryybsell`] | 23021 | 脚本动作 `QUERYYBSELL`（同上形状） | 同上 | **登记 T-181**（与 `sm_queryybdeal` 同条） |
 //! | [`sm_reconnect`] | 802 | `PlayObject` 的 `TransferPlanesServer` / `WorldServer` 的 `SendChangeServer`（读 `!servertable.txt` 的路由表） | 本仓无 `!servertable.txt` 装载，`ChangeSpaceMove` 未移植（G11） | **登记 T-182**：跨服搬家子系统未移植 |
-//! | [`sm_showevent`] | 804 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_SHOWEVENT)`） | 同 `sm_hideevent` | **登记 T-178**（与 `sm_hideevent` 同条） |
+//! | [`sm_showevent`] | 804 | `PlayObject` 的 `VisibleEvents` 差集（`SendMsg(RM_SHOWEVENT)`） | 同 `sm_hideevent` | **已接线**（T-205，与 `sm_hideevent` 同条） |
 //! | `sm_skeleton`（`smframe.rs`） | 33 | `PlayObject` 的 `SendRefMsg(RM_SKELETON)`（尸体转骷髅） | 已登记 `deferred`（`downlink.rs`），缺 setter | **登记 T-183**：沿用既有 deferred 结论 |
 //!
 //! 汇总：**12 条登记 / 1 条可接线**（`SM_CLOSEHEALTH`）。可接线项的发射点在 `lib.rs` 的 RM 泵，
@@ -196,7 +196,7 @@ pub fn sm_closehealth(actor_id: i32) -> Vec<u8> {
 
 /// `SM_HIDEEVENT`(805)（`PlayObject.Message.cs:1993` 的 `RM_HIDEEVENT` 支）：
 /// `SendDefMessage(SM_HIDEEVENT, nParam1, wParam, nParam2, nParam3)` ⇒ header-only（无尾）。
-/// **orphan 登记（接线首批，registered_not_wired）**：本帧与 sm_showevent 在 oracle 只由 MapEvent 系统（SystemShare.EventMgr + EventProcessor 20ms）在可见变化时发（PlayObject.cs:3278/3284）；本仓 crates/world 未建模 MapEvent（仅 CellType::MapEvent 枚举占位）⇒ 无生产发射点，登记不接线（见 tests/parity/m3/design-door-and-mapevent-20261016.md §0）。
+/// **已接线（卡 `openmir2-map-event-frames`，T-205）**：生产发射点 = `PlayObject.SearchViewRange` 的 `VisibleEvents` 差集——世界侧 `aoi::search_view_range_events`（`MapEvent.Id == 0` 折叠 1:1）填 `TickRecord::event_hides`，宿主 `drain_aoi_events` 出帧（Hidden 支）；判据与牙见 `tests/parity/whitelist.md` T-205。
 #[must_use]
 pub fn sm_hideevent(n_param1: i32, w_param: i32, n_param2: i32, n_param3: i32) -> Vec<u8> {
     let header = command_header(
@@ -515,6 +515,10 @@ pub fn sm_sendusermakedrugitemlist(n_param1: i32, n_param2: i32, msg: &[u8]) -> 
 
 /// `SM_SHOWEVENT`(804)（`PlayObject.Message.cs:1999` 的 `RM_SHOWEVENT` 支）：
 /// `MakeMessage(SM_SHOWEVENT, nParam1, wParam, nParam2, nParam3)` + 尾 `EDCode.EncodePacket(ShortMessage)`。
+///
+/// **已接线（卡 `openmir2-map-event-frames`，T-205）**：生产发射点同 `sm_hideevent`（`VisibleEvents`
+/// 差集的 `Show` 支）；宿主 `drain_aoi_events` 出帧，`nParam1 = EventType`、`wParam = Id = 0`（折叠）、
+/// `nParam2 = MakeLong(nX, EventParam)`、`nParam3 = nY`。
 ///
 /// oracle 组 `ShortMessage shortMessage = { Ident = HUtil32.HiWord(nParam2), wMsg = 0 }`（`:2002-2005`）；
 /// `ShortMessage`（`src/OpenMir2/Packets/ClientPackets/ShortMessage.cs`）= `{ Ident: u16; wMsg: u16 }`
