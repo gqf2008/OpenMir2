@@ -28,7 +28,7 @@
     {
       "wait_for": 638,
       "timeout_ms": 3000,
-      "note": "成功支只认 SM_MAGICFIRE(638)（messages.rs:275 / OpenMir2/Messages.cs:300）。因果链：`PlayObject.DoSpell` 包装层（PlayObject.Base.cs:1505-1531）先扣蓝（2 点）+ 发 RM_HEALTHSPELLCHANGED ⇒ `MagicManager.DoSpell`（:145）过战士门/距离门/版本门（:167，`SoftVersionDateEx==0 && ClientTick==0` —— 探针 `--client-version` 默认 1200409180（mir2_probe.py:99 = Grobal2.cs:5），非 0 ⇒ 该门对本场景恒开）⇒ 火球术 case 无命中目标 ⇒ 共享尾 `boSpellFire` 仍为 true（:166 初值，case 只在命中支才碰 targetObject）⇒ `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType=1,Effect=1), MakeLong(29,28), 0)`（:648-658）⇒ 处理器无 self 守卫 ⇒ 本连接收到 638，体 = `EncodeBuffer(BitConverter.GetBytes(nParam3))` 的低 3 字节（目标 ActorId=0 ⇒ 全 0）。**注意**：若不补 characters_magic 夹具，本步会因 `GetMagicInfo==null` 拿到 SM_MOVEFAIL(28) 而超时（fail-closed，不会假绿）"
+      "note": "成功支只认 SM_MAGICFIRE(638)（messages.rs:275 / OpenMir2/Messages.cs:300）。因果链：`PlayObject.DoSpell` 包装层（PlayObject.Base.cs:1505-1531）先扣蓝（2 点）+ 发 RM_HEALTHSPELLCHANGED ⇒ `MagicManager.DoSpell`（:145）过战士门/距离门/版本门（:167，`SoftVersionDateEx==0 && ClientTick==0` —— 探针 `--client-version` 默认 1200409180（mir2_probe.py:99 = Grobal2.cs:5），非 0 ⇒ 该门对本场景恒开）⇒ 火球术 case 无命中目标 ⇒ 共享尾 `boSpellFire` 仍为 true（:166 初值，case 只在命中支才碰 targetObject）⇒ `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType=1,Effect=1), MakeLong(29,28), 0)`（:648-658）⇒ 处理器无 self 守卫 ⇒ 本连接收到 638，体 = `EncodeBuffer(BitConverter.GetBytes(nParam3))` 的**4 字节**（`EDCode` 编码后 **6 字符**，4 字节全编码；目标 ActorId=0 ⇒ 全 0）。**注意**：若不补 characters_magic 夹具，本步会因 `GetMagicInfo==null` 拿到 SM_MOVEFAIL(28) 而超时（fail-closed，不会假绿）"
     },
     {
       "sleep": 1600,

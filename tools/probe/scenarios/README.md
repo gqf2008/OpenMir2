@@ -230,11 +230,41 @@ python tools/probe/mir2_probe.py \
 > **R6 `castle_zone` 没有场景文件（2026-10-23 可达性登记）**：城堡战/城堡区在部署里**单会话探针不可达**——`@requestcastlewarnow` 的申请链命中 `UserCastle.AddAttackerInfo(IGuild)` 的 `throw new NotImplementedException()`（`UserCastle.cs:670-673`，白名单 **T-38**）；GM 的 `@ForcedWallconquestWar` 卡在 `PermissionMin=10`（部署是 Release）；`UnderWar` 只在墙钟 `StartCastlewarTime=20` 那一小时开（`Server.conf:380`）且 `Castle/0/AttackSabukWall.txt` 为空 ⇒ `766 SM_AREASTATE` 的 bit4（`RefUserState` 的 `|=4`，`PlayObject.Base.cs:281-284`）永远点不亮。依赖它的 4 张 R 卡（castle-guard-target / castle-war-area-impl / castle-merchant-fixedhide-hit / castle-merchant-disappear-downlink）窗口**当前不可跑**；可达性表、`766` 置位链与夹具规格见 `docs/castle-zone-unreachable-20261023.md`。
 
 > `spell_cast` 是**唯一一条主动施法**的场景（R5）：`placement` 到 map 0122 (29,33) → `CM_SPELL(3017)` 打空地面 (29,28) → 等 `SM_MAGICFIRE(638)`；`sleep 1600` 过 `MagicAttackInterval`（`Delay 60 + MagicHitIntervalTime 1350`）→ 第二发打 (29,42)（|dy|=9 > `MagicAttackRage=8`）→ 等 `SM_MAGICFIRE_FAIL(639)`。
-> 四个容易写错的点，逐条 oracle 出处见 `docs/spell-cast-scenario-20261023.md`：
+> 五个容易写错的点，逐条 oracle 出处见 `docs/spell-cast-scenario-20261023.md`：
 > ① **`CM_SPELL` 的字段口径与 `CM_TURN`/`CM_HIT` 不同**——`WorldServer.cs:783-793` 是 `SendMsg(Ident, Tag, LoWord(Recog), HiWord(Recog), MakeLong(Param,Series))` ⇒ `tag=魔号`、`recog=MakeLong(目标X,目标Y)`、`param+series` 拼成目标 ActorId（无目标就都写 0）；
 > ② **`SM_SPELL(17)` 永远不会到自己这条连接**——`PlayObject.Message.cs:1455` 的 `if (processMsg.ActorId != ActorId)` 把自己滤掉 ⇒ 等待集合里写 17 必然恒超时（卡面原本写了 17，是错的）；自己只收 638/639（`:1788-1793`/`:1794-1800` 无 self 守卫）；
 > ③ **两条支路都以「角色已学该魔法」为前提**——`GetMagicInfo(nKey)`（`PlayObject.Attack.cs:1065`）为空时直接 `false`、只回 `SM_MOVEFAIL(28)`，638/639 一枚都不发；基线库 `characters_magic` 里没有窗口角色（winplay0 = PlayerId 6228）的任何一行 ⇒ **本场景现在是 BLOCKED-FIXTURE，缺夹具必红**（fail-closed，不会假绿）；
 > ④ **两次施法之间必须 ≥1410ms**（`MagicAttackInterval = Magic.DelayTime + Config.MagicHitIntervalTime`，`PlayObject.Attack.cs:1112-1118`；部署 60+1350），否则走「魔法忙」早退，第二发既不立刻出帧也打乱两支判定。
+> ⑤ **窗口 profile 必须先 pin `MIR2_CLIENT_ABILITY_LAYOUT=0`**——施法扣蓝会触发 53，未 pin 时两侧 `body_len` 0B vs 16B ⇒ `body_len` fail-closed FAIL。可直接抄的片段与原因见下节「窗口 profile 前置：`spell_cast` 必须 pin D-9」。
+
+## 窗口 profile 前置：`spell_cast` 必须 pin D-9（`MIR2_CLIENT_ABILITY_LAYOUT=0`）
+
+`spell_cast` 的等待集合里有 `SM_HEALTHSPELLCHANGED(53)`（施法扣蓝触发）。生产默认走 D-9 冻结客户端
+布局（尾 = `EDCode(12B TCharDesc)`，线缆 **16 字符**），而 oracle 本尊是 header-only（**body 0B**）。
+跨侧逐字节对拍**必须**让 Rust 侧以 oracle 布局起栈，否则 `tools/conformance/rules.json` 的 53 规则按
+`body_len` 差异 **fail-closed FAIL**（不会被掩码洗绿）。这是既有全局口径（D-9），不是本场景新缺口。
+
+**开窗前照抄这一项到窗口 profile**（值是字符串 `"0"`，不是数字 `0`；类型不对 `card_window.py`
+加载期直接 rc=2）：
+
+```json
+{
+  "sides": {
+    "csharp": { "env": { "MIR2_CLIENT_ABILITY_LAYOUT": "0" } },
+    "rust":   { "env": { "MIR2_CLIENT_ABILITY_LAYOUT": "0" } }
+  }
+}
+```
+
+并入已有 profile 时，`env` 加在**每个 side 对象内部**（与 `stack` / `restore` / `ports` 同级），
+**不是 profile 顶层**；`card_window.py` 的 `run_side()` 会把 `sides.<side>.env` 原样注入该侧
+restore / stack / probe / db / stop 子进程的环境。**真正必需的只有 `sides.rust.env`**（只有 Rust 读
+这个变量）；C# 侧不读该键，写成两侧对称只为换栈/换侧时不漏。
+
+**不加会怎样**：53 两侧 `body_len` = Rust 16 vs C# 0 ⇒ 比较器判 **FAIL**（fail-closed）。这不是 Rust
+缺陷，**不许**用掩码或改规则绕过。既有样例 profile `E:/tmp/spellcast-profile.json` 当前**没有**这一段，
+开窗前先补；D-9 的口径原文见 `mir2-rs/tests/parity/whitelist.md`，本场景的规则说明见
+`docs/spell-frame-compare-rules-20261024.md` §3。
 
 ## 驱动器的自动握手（对拍不要关）
 
