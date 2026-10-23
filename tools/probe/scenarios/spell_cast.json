@@ -1,0 +1,52 @@
+{
+  "name": "spell_cast",
+  "description": "【BLOCKED-FIXTURE，缺 characters_magic 夹具，现在跑必红】R5 主动施法：发 CM_SPELL(3017) 把「已知魔法」打到无目标地面，覆盖成功支 SM_MAGICFIRE(638) 与失败支 SM_MAGICFIRE_FAIL(639)。预置到 map 0122（比奇国王房间，全图无 MonGen 刷怪、无 GuardList 卫士、无 MerChant 商人，见 Envir/MonGen.txt 与 GuardList.txt 均无 0122 行）(29,33)。选样魔法 = 火球术 MagID=1（sql/mir2_data.sql:70；Job=1 法师、NeedL1=7、Spell=4、DefSpell=1、Delay=60），等级 0 时单次耗蓝 = Round(4/4*(0+1))+1 = 2（PlayObject.Base.cs:1369-1372 GetSpellPoint + :1511-1519 蓝门）。**两条必须知道的前提**：① 服务端先查 `GetMagicInfo(nKey)`（PlayObject.Attack.cs:1065-1069），魔号不在 MagicList ⇒ `ClientSpellXY` 直接 false（delayTime=0）⇒ 只回 SM_MOVEFAIL(28)、**永远等不到 637/638/639**；基线库 `characters_magic` 只有 PlayerId 6226/1/13339 三组，窗口角色 winplay0 = PlayerId 6228 一行都没有（E:/tmp/conformance/baseline/mir2_test_db.sql:88 与同一文件 characters_magic 段）⇒ **本场景必须先补夹具**；② **`SM_SPELL(17)` 不能进等待集合**——`RM_SPELL -> SM_SPELL` 的处理器首句是 `if (processMsg.ActorId != ActorId)`（PlayObject.Message.cs:1455）⇒ 施法者自己那条连接永远收不到自己的 17（卡面把 17 写进目标帧集，是错的；等它必然恒超时）。成功/失败只认 638/639（两者处理器 `:1788-1793`/`:1794-1800` **无** self 守卫）。逐条 oracle 出处、夹具 SQL、两支的可达性分析见 docs/spell-cast-scenario-20261023.md",
+  "params": {
+    "self_pos": 2162717,
+    "near_pos": 1835037,
+    "far_pos": 2752541,
+    "magic_id": 1
+  },
+  "placement": {
+    "map": "0122",
+    "x": 29,
+    "y": 33,
+    "note": "比奇国王 (29,32)（E:/MirServer/Mir200/Envir/Npcs.txt:3『比奇国王 1 0122 29 32 0 8』）的南邻格，与 npc_script_chain 同一落点。选 0122 的理由是**清场**：MonGen.txt 无 0122 行（零刷怪）、GuardList.txt 的卫士全在 map 0、MerChant.txt 无 0122 行 ⇒ 两次施法之间不会被任何敌对目标打断（upgrade_retrieve 踩过 ArcherGuard 的坑）。0122.map 为 51x55，本格 bk=0/fr=0 可走（card_window.read_map_cell 口径 = oracle 登录期 CanWalk(x,y,true)）。self_pos = MakeLong(X=29,Y=33) = (33<<16)|29 = 2162717，与 placement 同源（R5）"
+  },
+  "steps": [
+    {
+      "send": {
+        "ident": 3017,
+        "recog": "near_pos",
+        "param": 0,
+        "tag": "magic_id",
+        "series": 0
+      },
+      "note": "第一发（成功支）：CM_SPELL(3017) 打**空地面**。线上字段口径（GameSrv/Word/WorldServer.cs:783-793）：`SendMsg(playObject, Ident, Tag, LoWord(Recog), HiWord(Recog), MakeLong(Param, Series))` ⇒ `wParam=Tag=魔号`、`nParam1=LoWord(Recog)=X`、`nParam2=HiWord(Recog)=Y`、`nParam3=MakeLong(Param,Series)=目标 ActorId`。处理器 `PlayObject.Message.cs:1339-1341` 再交给 `ClientSpellXY(wIdent, wParam, nParam1, nParam2, ActorMgr.Get(nParam3), …)`（PlayObject.Attack.cs:1054）。**故不是「X 放 recog、Y 放 param」**（那是 CM_TURN/CM_HIT 的口径，两者不同）。这里 Param=Series=0 ⇒ 目标 ActorId=0 ⇒ `ActorMgr.Get(0)` 回 null ⇒ `MagCanHitTarget(null)` 直接 false（BaseObject.cs:2059-2065）⇒ **世界 RNG 零抽**（火球术 case 的 `Random(10)` 在 `MagCanHitTarget` 之后，MagicManager.cs:174-203）。near_pos = MakeLong(29,28) ⇒ 目标 (29,28)，与本格 |dy|=5 ≤ MagicAttackRage=8（Server.conf:755）⇒ 过距离门（MagicManager.cs:155-157）"
+    },
+    {
+      "wait_for": 638,
+      "timeout_ms": 3000,
+      "note": "成功支只认 SM_MAGICFIRE(638)（messages.rs:275 / OpenMir2/Messages.cs:300）。因果链：`PlayObject.DoSpell` 包装层（PlayObject.Base.cs:1505-1531）先扣蓝（2 点）+ 发 RM_HEALTHSPELLCHANGED ⇒ `MagicManager.DoSpell`（:145）过战士门/距离门/版本门（:167，`SoftVersionDateEx==0 && ClientTick==0` —— 探针 `--client-version` 默认 1200409180（mir2_probe.py:99 = Grobal2.cs:5），非 0 ⇒ 该门对本场景恒开）⇒ 火球术 case 无命中目标 ⇒ 共享尾 `boSpellFire` 仍为 true（:166 初值，case 只在命中支才碰 targetObject）⇒ `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(EffectType=1,Effect=1), MakeLong(29,28), 0)`（:648-658）⇒ 处理器无 self 守卫 ⇒ 本连接收到 638，体 = `EncodeBuffer(BitConverter.GetBytes(nParam3))` 的低 3 字节（目标 ActorId=0 ⇒ 全 0）。**注意**：若不补 characters_magic 夹具，本步会因 `GetMagicInfo==null` 拿到 SM_MOVEFAIL(28) 而超时（fail-closed，不会假绿）"
+    },
+    {
+      "sleep": 1600,
+      "note": "两次施法之间必须 ≥ MagicAttackInterval = `UserMagic.Magic.DelayTime + Config.MagicHitIntervalTime` = 60 + 1350 = 1410ms（PlayObject.Attack.cs:1112-1118；Server.conf:326 `MagicHitIntervalTime=1350`，:755 `MagicAttackRage=8`）。不足则 `ClientSpellXY` 走「魔法忙」早退（delayTime>0 ⇒ SendSelfDelayMsg ⇒ 之后才补 RM_MOVEFAIL），第二发既不会立刻出帧也会打乱两支判定。1600 = 1410 + 13% 余量（C# 用 GetTickCount 墙钟，Rust 用 sim clock_ms，重载后 sim 会落后墙钟）"
+    },
+    {
+      "send": {
+        "ident": 3017,
+        "recog": "far_pos",
+        "param": 0,
+        "tag": "magic_id",
+        "series": 0
+      },
+      "note": "第二发（失败支）：同一 magic_id，目标改到 (29,42) —— 与本格 |dy|=9 > MagicAttackRage=8 ⇒ **距离门**（MagicManager.cs:155-157）必失败。选距离门而不是「蓝不足」/「打空」，是因为它**与随机、与目标、与等级全部无关**，且蓝门（PlayObject.Base.cs:1515）已在它之前通过：两发合计只掉 4 点蓝。失败支的因果链 = `MagicManager.DoSpell` 返回 false ⇒ `ClientSpellXY` default 支 `SendRefMsg(RM_MAGICFIREFAIL)`（PlayObject.Attack.cs:1278-1281）⇒ 处理器 `:1794` 回 SM_MAGICFIRE_FAIL(639)（Recog=ActorId、Param/Tag/Series 全 0）。注意 `SendRefMsg(RM_SPELL)` 在距离门**之前**（:159），所以远端玩家仍会看到 SM_SPELL(17) —— 本场景不验它（见 description ②）"
+    },
+    {
+      "wait_for": 639,
+      "timeout_ms": 3000,
+      "note": "失败支硬门：SM_MAGICFIRE_FAIL(639)（messages.rs:276 / Messages.cs:301）。它与第一发的 638 **ident 不同**，所以两次等待互不污染；这一支若被写成「也接受 638」就废了（成功支漏出的 638 会把它蒙混过去）。未补 characters_magic 夹具时本步同样超时（GetMagicInfo==null 只回 SM_MOVEFAIL(28)），两支一起红 —— 这是设计意图：**夹具缺失必须显式红，不许假绿**"
+    }
+  ]
+}
