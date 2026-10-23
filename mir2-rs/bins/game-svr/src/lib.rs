@@ -2157,11 +2157,20 @@ fn run_party_goto_label(
                 // 运行时会话优先、无会话（已断线/未进世界）回退到 `PlayObject` 当下值；
                 // `soft_version_date` 只有会话有（缺省 0 ⇒ `RM_GAMEGOLDCHANGED` 门挡住，与 oracle
                 // `SoftVersionDateEx == 0` 同支）。
-                let (f_gold, f_game_gold, f_game_point, f_svd) = ground_sessions
-                    .get(chr_name)
-                    .map_or((player.gold, player.game_gold, player.game_point, 0), |s| {
-                        (s.state.gold, s.game_gold, s.game_point, s.soft_version_date)
-                    });
+                let (f_gold, f_game_gold, f_game_point, f_svd, f_exp) =
+                    ground_sessions.get(chr_name).map_or(
+                        (player.gold, player.game_gold, player.game_point, 0, 0),
+                        |s| {
+                            (
+                                s.state.gold,
+                                s.game_gold,
+                                s.game_point,
+                                s.soft_version_date,
+                                // `SM_WINEXP` 的 `Recog`（`Abil.Exp` 当下总量；T-207）。
+                                s.state.wabil.exp,
+                            )
+                        },
+                    );
                 if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 脚本帧")
                 {
                     // QFunction 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
@@ -2174,6 +2183,7 @@ fn run_party_goto_label(
                         f_game_gold,
                         f_game_point,
                         f_svd,
+                        f_exp,
                         &player.frames,
                     );
                 }
@@ -6474,6 +6484,9 @@ fn emit_script_frames(
         sg.game_gold,
         sg.game_point,
         sg.soft_version_date,
+        // `SM_WINEXP` 的 `Recog` = `Abil.Exp` 当下总量（会话里 `state.wabil` 与 `equip.abil`
+        // 同源同步，见 `drain_*` 的经验帧支；T-207）。
+        sg.state.wabil.exp,
         frames,
     )
 }
@@ -6491,18 +6504,27 @@ fn emit_script_frames_raw(
     game_gold: i32,
     game_point: i32,
     soft_version_date: i32,
+    // `PlayObject.Abil.Exp` 的当下总量（`SM_WINEXP` 的 `Recog`；T-207）。
+    exp: i32,
     frames: &[game_svr::npc::SendMsg],
 ) -> usize {
     let mut sent = 0usize;
-    // oracle `MsgQueue` = `PriorityQueue<SendMessage, byte>`，优先级 = `(byte)wIdent`
-    // （`ActorEntity.cs:16`、`BaseObject.Message.cs:181`）⇒ 按 `ident as u8` 升序：
-    // `RM_GAMEGOLDCHANGED`(8084&0xFF=148) 先于 `RM_GOLDCHANGED`(10136&0xFF=152)。
-    // **同一优先级内只是近似 FIFO**：.NET `PriorityQueue` 对相等优先级不保证稳定，
-    // 本仓 `sort_by_key` 是稳定排序 ⇒ 退化为「入队序」。两者仅在同 ident 有多帧时才可能
-    // 分叉；本路径每 ident 至多一帧（`SendUpdateMsg` 先合并同 ident 旧条目）。
-    let mut ordered: Vec<&game_svr::npc::SendMsg> = frames.iter().collect();
-    ordered.sort_by_key(|f| f.ident as u8);
-    for f in ordered {
+    // oracle `MsgQueue` = `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`），入队优先级 =
+    // `(byte)wIdent`（`BaseObject.Message.cs:181`）。.NET 的 `PriorityQueue` 是**四叉最小堆**
+    // ⇒ 出队序 = 优先级字节升序，**但同优先级不是入队序**（sift 决定）：
+    // 3 条同优先级实测出队 `[0,2,1]`、4 条 `[0,3,2,1]`（dotnet 真跑 + 本仓
+    // [`game_svr::msgqueue::NetPriorityQueue`] 逐位复刻一致；reviewer-5 I-1）。
+    // 故这里按**入队序**灌堆再出队，**不是**稳定排序（`sort_by_key` 会给 `[0,1,2]`）。
+    //
+    // 同 ident 多帧在本路径是**常态**：`ActionOfRepairAllItem`（`ExecutionProcessingSys.cs:3937-3948`）
+    // 对每件装备各发一条 `RM_DURACHANGE`（优先级 141），走的是 `SendMsg`（**不合并**）；
+    // 只有 `SendUpdateMsg`（`BaseObject.Message.cs:283-305`）才会先删同 ident 旧条目。
+    let mut queue: game_svr::msgqueue::NetPriorityQueue<&game_svr::npc::SendMsg> =
+        game_svr::msgqueue::NetPriorityQueue::new();
+    for f in frames {
+        queue.enqueue(f, f.ident as u8);
+    }
+    while let Some(f) = queue.dequeue() {
         let Some(body) = game_svr::pickwire::script_frame(
             f,
             npc_actor_id,
@@ -6511,6 +6533,7 @@ fn emit_script_frames_raw(
             game_gold,
             game_point,
             soft_version_date,
+            exp,
         ) else {
             continue;
         };
@@ -6550,6 +6573,12 @@ fn emit_login_script_frames(
         .map_or((player.gold, player.game_gold, player.game_point, 0), |s| {
             (s.state.gold, s.game_gold, s.game_point, s.soft_version_date)
         });
+    // `SM_WINEXP` 的 `Recog`（`PlayObject.Abil.Exp`）：本路径在**进世界建会话之前**跑
+    // （`ground_sessions` 常常还没有该角色）⇒ 无会话时只能给 0（oracle 此时读到的是角色记录里的
+    // `Abil.Exp`）；有会话则取会话当下总量。登记为 T-207 的已知偏差/窗口项。
+    let exp = ground_sessions
+        .get(chr_name)
+        .map_or(0, |s| s.state.wabil.exp);
     // QManage 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
     emit_script_frames_raw(
         tx,
@@ -6560,6 +6589,7 @@ fn emit_login_script_frames(
         game_gold,
         game_point,
         soft_version_date,
+        exp,
         &player.frames,
     )
 }
@@ -59317,6 +59347,138 @@ mod tests {",
         );
     }
 
+    /// **T-207 端到端（商的 `GotoLable` 生产排水口径）**：`NpcPlayer.frames` 里的三条
+    /// 脚本动作帧经 [`emit_script_frames`] → `pickwire::script_frame` 落成
+    /// `SM_WINEXP(44)` / `SM_DURACHANGE(642)` / `SM_MERCHANTDLGCLOSE(644)`，出队序 =
+    /// `(byte)wIdent` 升序（`8075&0xFF=139 < 10125&0xFF=141 < 10127&0xFF=143`），且
+    /// `SM_WINEXP.Recog` = 会话 `state.wabil.exp`（**总量**，不是增量）。
+    ///
+    /// oracle：`PlayObject.Message.cs:1666-1669`（44）、`:1803-1805`（642）、`:1806-1808`（644）；
+    /// 脚本发点 `ExecutionProcessingSys.cs:2861` / `:3945` / `:2183`。
+    ///
+    /// 红检：删 `script_frame` 任一支 ⇒ `n != 3`（少一条）；把 `emit_script_frames` 传给
+    /// `script_frame` 的 `exp` 换成 0 或增量 ⇒ `Recog` 断言红。
+    #[test]
+    fn script_drain_emits_winexp_durachange_merchantdlgclose() {
+        let mut sg = test_session_ground(9001);
+        sg.state.wabil.exp = 88_888;
+        sg.state.gold = 555;
+        let frames = vec![
+            game_svr::npc::SendMsg {
+                ident: mir2_protocol::messages::RM_MERCHANTDLGCLOSE as i32,
+                w_param: 0,
+                n_param1: 4711,
+                n_param2: 0,
+                n_param3: 0,
+                msg: None,
+            },
+            game_svr::npc::SendMsg {
+                ident: mir2_protocol::messages::RM_DURACHANGE as i32,
+                w_param: 5,
+                n_param1: 3200,
+                n_param2: 4000,
+                n_param3: 0,
+                msg: None,
+            },
+            game_svr::npc::SendMsg {
+                ident: mir2_protocol::messages::RM_WINEXP as i32,
+                w_param: 0,
+                n_param1: 100_000,
+                n_param2: 0,
+                n_param3: 0,
+                msg: None,
+            },
+        ];
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let n = emit_script_frames(&tx, 901, 4242, &sg, &frames);
+        assert_eq!(
+            n, 3,
+            "三条脚本动作帧都必须下发（此前整帧丢弃 ⇒ 客户端零帧）"
+        );
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                out.push(body);
+            }
+        }
+        assert_eq!(
+            gnp_idents(&out),
+            vec![
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_DURACHANGE,
+                mir2_protocol::messages::SM_MERCHANTDLGCLOSE,
+            ],
+            "出队序 = (byte)wIdent 升序：139 < 141 < 143"
+        );
+        // 44：Recog = 总量、Param/Tag = 增量 Lo/Hi（100000 = 0x0001_86A0）、无尾。
+        assert_eq!(
+            gnp_recog(&out[0]),
+            88_888,
+            "SM_WINEXP.Recog = Abil.Exp 总量"
+        );
+        assert_eq!(gnp_param(&out[0]), 0x86A0);
+        assert_eq!(gnp_tag(&out[0]), 0x0001);
+        assert_eq!(out[0].len(), 12, "SM_WINEXP 无尾");
+        // 642：Recog = Dura、Param = 槽位、Tag = DuraMax、无尾。
+        assert_eq!(gnp_recog(&out[1]), 3200);
+        assert_eq!(gnp_param(&out[1]), 5);
+        assert_eq!(gnp_tag(&out[1]), 4000);
+        assert_eq!(out[1].len(), 12, "SM_DURACHANGE 无尾");
+        // 644：Recog = 消息自带的 NPC ActorId（不是排水时的 npc/玩家 id）、无尾。
+        assert_eq!(gnp_recog(&out[2]), 4711);
+        assert_eq!(gnp_param(&out[2]), 0);
+        assert_eq!(out[2].len(), 12, "SM_MERCHANTDLGCLOSE header-only");
+    }
+
+    /// **I-1（reviewer-5）出队序 = oracle `MsgQueue` 的四叉堆序，不是入队序**：
+    /// 同优先级（`RM_DURACHANGE` ⇒ `(byte)10125` = **141**）多条时，出队序是 sift 结果——
+    /// 3 条 `[0,2,1]`、4 条 `[0,3,2,1]`（dotnet 实跑 = 本仓
+    /// [`game_svr::msgqueue::NetPriorityQueue`] 逐位复刻；oracle `MsgQueue` =
+    /// `PriorityQueue<SendMessage, byte>`，`ActorEntity.cs:16`）。
+    ///
+    /// 可达面：`ActionOfRepairAllItem`（`ExecutionProcessingSys.cs:3937-3948` /
+    /// `crates/script/src/engine/actions.rs:667-687`）对**每件装备**各发一条 `RM_DURACHANGE`
+    /// （`SendMsg` 不合并；只有 `SendUpdateMsg` 合并）⇒ ≥3 件装备是常态；部署 `Envir` 有 5 处
+    /// `RepairAll`。
+    ///
+    /// 红检：把 [`emit_script_frames_raw`] 改回 `ordered.sort_by_key(|f| f.ident as u8)` 稳定排序
+    /// ⇒ 实得 `[0,1,2]` / `[0,1,2,3]`，本用例红。
+    #[test]
+    fn script_drain_orders_same_priority_by_dotnet_heap() {
+        for (n, want) in [(3usize, vec![0u16, 2, 1]), (4usize, vec![0, 3, 2, 1])] {
+            let sg = test_session_ground(9001);
+            let frames: Vec<game_svr::npc::SendMsg> = (0..n)
+                .map(|i| game_svr::npc::SendMsg {
+                    ident: mir2_protocol::messages::RM_DURACHANGE as i32,
+                    w_param: i as i32,         // 槽位（入队序 0,1,2,…）
+                    n_param1: 1000 + i as i32, // Dura（跟着槽位走，便于交叉核对）
+                    n_param2: 2000,            // DuraMax
+                    n_param3: 0,
+                    msg: None,
+                })
+                .collect();
+            let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+            let sent = emit_script_frames(&tx, 901, 4242, &sg, &frames);
+            assert_eq!(sent, n, "每件装备一条 SM_DURACHANGE");
+            let mut slots = Vec::new();
+            let mut duras = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = ev {
+                    assert_eq!(gnp_ident(&body), mir2_protocol::messages::SM_DURACHANGE);
+                    slots.push(gnp_param(&body));
+                    duras.push(gnp_recog(&body));
+                }
+            }
+            assert_eq!(
+                slots, want,
+                "n={n}：同优先级出队槽位序必须是 oracle 四叉堆序（稳定排序会给 [0,1,..]）"
+            );
+            // 槽位与 Dura 同步置换 ⇒ 证明是**帧整体**换序，不是只换了 Param。
+            let want_dura: Vec<i32> = want.iter().map(|s| 1000 + i32::from(*s)).collect();
+            assert_eq!(duras, want_dura, "n={n}：Recog(Dura) 必须随槽位一起换序");
+        }
+    }
+
     fn gnp_on(frames: &[(i32, Vec<u8>)], socket: i32) -> Vec<Vec<u8>> {
         frames
             .iter()
@@ -59596,24 +59758,30 @@ mod tests {",
         assert_eq!(
             gnp_idents(&hero),
             vec![653, 42, 42, 104, 104],
-            "宣战帧序：653(152) → 42×2(165) → 104×2(255)"
+            "宣战帧序：653(152) → 42×2(165) → 104×2(255)（优先级字节升序；**段内是堆序**）"
         );
         assert_eq!(gnp_recog(&hero[0]), 70_000, "653 Recog = 100,000-30,000");
-        assert_eq!(gnp_recog(&hero[1]), 1, "42#1 Recog = hero");
+        // **段内序 = oracle `MsgQueue` 的四叉堆出队序，不是入队序**（I-1 / T-207）：
+        // hero 队列的入队序 = `[653, 104(持续), 104(开始), 42(hero), 42(boss)]`
+        //（`GuildOfficial.cs:184-188` 先 `DecGold`→653，`GuildInfo.cs:1020-1044` 再
+        //  `SendGuildMsg` ×2 → 104，最后 `RefMemberName()` → 42）⇒ 堆出队 =
+        // `[653, 42(boss), 42(hero), 104(开始), 104(持续)]`（本仓 `NetPriorityQueue` 与
+        // dotnet 实跑逐位一致）。旧期望 `[hero, boss] / [持续, 开始]` 是稳定排序的产物，非 oracle。
         assert_eq!(
-            gnp_recog(&hero[2]),
+            gnp_recog(&hero[1]),
             3,
-            "42#2 Recog = boss（目标会 RefMemberName）"
+            "42#1 Recog = boss（堆序先出后入队的那条）"
         );
+        assert_eq!(gnp_recog(&hero[2]), 1, "42#2 Recog = hero");
         assert_eq!(
             gnp_tail_text(&hero[3]),
-            "***B行会战争将持续三个小时。",
-            "第一层命中克隆的文案"
+            "***B行会战争开始(三个小时)",
+            "104#1 = 第二条入队的文案（堆序）"
         );
         assert_eq!(
             gnp_tail_text(&hero[4]),
-            "***B行会战争开始(三个小时)",
-            "同一函数内又追加副本的文案（N2 照搬）"
+            "***B行会战争将持续三个小时。",
+            "104#2 = 第一条入队的文案（堆序）"
         );
         assert_eq!(f.hero_session_mut().state.gold, 70_000);
         let a = f.guilds.find_guild("A").unwrap();
