@@ -389,3 +389,47 @@ python -I -B tools/conformance/compare_runs.py selftest
   （`docs/conformance-first-dual-run-20261023.md` §2.1/§2.2），不是规则缺口：规则补齐后重跑，
   它们仍会以 `body_len` / `block_align` / `multiset_missing`/`multiset_extra` 等差异出现，直到服务端行为被另卡修好。
 * 全部规则 `approved_by` 均为 `PENDING owner/coordinator review`，尚未获批准。
+
+## `card_window.py`（窗口批处理）的 fail-closed 口径
+
+一条命令跑完双栈窗口（用法见 `docs/leader-queue-20261023.md` §5）；`run_dual.sh` 仍是底层
+语义参照，本工具只调用 `mir2_probe.py` / `compare_runs.py` / `dbsnap.py`，不改它们。
+
+* **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
+  ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
+  收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +
+  `card-window.log`，且 `verdict=UNDECIDABLE` / `exit=2` / `report.json.reason=missing_binaries`。
+  **本工具明确选择「完整产物集」而不是「fail-closed 不写部分产物」**——窗口证据的价值在于
+  事后谁都能复查，写半套反而让复查者以为产物丢了。
+* **无法判定为测试库的库名是永久拒绝**：在 `db.databases` 里再声明一次也不放行，
+  `--allow-production-db` 与 `--dry-run` 同样不放行；补救办法只有一个——把库名换成
+  `preset=test` 或 `mir2_test_*` 一类。旧提示让人「在 db.databases 里显式声明」，但照做
+  之后仍被拒（review F-1），该提示已改为「永久拒绝 + 请换库」。
+* **停栈失败挂在调用点**：起过栈而停栈没跑成（`stop_rc=None`）或 `rc!=0` 一律判本侧失败
+  （rc=2）；不只是 `stop_ok()` 辅助函数有判据，`run_side` 的 finally 调用点也有集成断言
+  （monkeypatch `Runner.run` 让 stop 返回 `None`/非 0）。
+* `--selftest` 离线覆盖上述每条，不连网、不连库、不起真栈、不占 15xxx/17xxx。
+* **先定稿 verdict/exit_code，再写产物**（H-1）：`write_artifacts()` 在 README.txt 写失败时
+  置 `exit=2`，这段判定必须发生在 `0 if ok else 2` **之后**，否则 PASS 运行会「缺 README
+  却报绿」。`write_summary_json()` 写失败同样返回 False 并让调用方置 `exit=2`——两件产物
+  都在卡面承诺内，不允许静默吞掉。
+* **旧证据归档唯一化**（H-2）：同一 `--out` 反复使用会把上一次产物整体挪进
+  `_stale-<ts>-<pid>[-n]/`；selftest 连跑三次，断言两个 `_stale-*` **各自独立**（第一次的
+  PASS 存档不会被后一次覆盖）。
+
+### 牙（回归判据的可复跑 harness）
+
+`tools/conformance/selftest_mutations.py` 是上面每条 fail-closed 口径的**变异牙**：
+每颗牙对 `card_window.py` 做一处精确替换，要求 `--selftest` 退出码非 0、至少一条
+`FAIL `、输出无 `Traceback`，最后按原始字节还原并校验 sha256（`==` 变异前）。
+
+```sh
+python -I -B tools/conformance/selftest_mutations.py          # 跑全部 13 颗
+python -I -B tools/conformance/selftest_mutations.py --list   # 只列牙
+python -I -B tools/conformance/selftest_mutations.py --only T1,E2
+```
+
+覆盖：T1 F-2 调用点回退 / T2 F-5 run_id 常量 / T3 F-3 空 binaries / T4 F-4 半套产物 /
+T5 F-1 旧提示 / T6 H-1 写产物提前 / T7 H-2 固定 `_stale-fixed`；额外牙 E1 fallback run_id
+常量、E2 放宽未知库判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README
+（验证干净 FAIL）、E6 忽略 card-window.json 失败标志。
