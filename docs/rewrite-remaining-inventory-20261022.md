@@ -1,19 +1,26 @@
 # OpenMir2 重写剩余量清单（可复现盘点）
 
-- 采集时间：第 1 轮 2026-10-22T14:34Z；第 2 轮复核 2026-10-22T14:46Z；**第 3 轮（处置第 2 轮复核）2026-10-22T15:10Z（本文件当前版本）**
-- 采集点：worktree `/e/tmp/wt-inventory`；第 1 轮 HEAD `0e7da10b8`；第 2 轮 `git merge master` 后 HEAD `24e9a5fab4647c3b12d02d1a7c62e12b462667ab`（= master `b0dde46a9` + 本文件第 1 轮提交的合并树）；**第 3 轮基于第 2 轮文档提交 `019b64e88`（树 = `24e9a5fab` + 文档改动），本轮只改本文档**
-- 分支：`inventory-20261022`（第 3 轮在 `019b64e88` 上处置；master 未再前进，仍 `b0dde46a9`）
-- 复核输入：reviewer-14 第 1 轮 `request_changes`（review oid `1d3bc1e1`）+ **第 2 轮 `request_changes`（review oid `c3e551d8`）**，均 tier=L；逐条处置见 §9（第 1 轮）/ §10（第 3 轮）
-- 只读面：`src/**`、`sql/**`、`E:/MirServer/**`；未起进程、未占端口、未写 DB
-- 口径：**每个数字后面给「命令 → 输出摘要」**；估算一律标 `估算`，不计入结论。
+- 采集时间：第 1 轮 2026-10-22T14:34Z；第 2 轮 2026-10-22T14:46Z；第 3 轮 2026-10-22T15:10Z；
+  **第 4 轮（本文件当前版本，2026-10-23）按 recon 门在 master `6d79be4da` 上重算全部数字**
+- 采集点：第 4 轮 worktree `E:/tmp/wt-worker-40`（分支 `card/inventory-refresh`），基线 `6d79be4da`
+  （含 `73d84e33a` 窗口欠账重分档、`6d79be4da` 孤儿编码器触发源审计）
+- 复核输入：本卡 `openmir2-inventory-refresh` 的 issue（Leader 2026-10-23 实测清单）；历史复核见 §9/§10
+- 只读面：`src/**`、`sql/**`、`E:/MirServer/**`；第 4 轮未起服务端/客户端进程、未占端口、未写 DB
+- 口径：**每个数字后面给「命令 → 当 HEAD 实测输出摘要」**；估算一律标 `估算`，不计入结论。
+  **三条一步到位的复算命令见 §11「复核方式」**。
 
-> **一句话结论**：脚本引擎在**部署语料**上已 100% 覆盖（106/106 个派发目标、0 未实现）；真正的剩余量集中在
-> **① 185 张 in-progress 卡里 152 张是 R 级真机窗口欠账**、**② GM 命令 185 条里 150 条命令体未实现，另 21 条只到「文本已逐字节、宿主动作未接」（第三态）**、
-> **③ 协议出站 13 帧有编码器但无生产发射点（另 1 帧 `SM_DONATE_FAIL` 连编码器都没有）**、**④ 内容消费件缺口已清零（UnbindList、AdminList 均已接，2026-10-23）**。
+> **一句话结论（第 4 轮，master `6d79be4da`）**：脚本引擎在**部署语料**上仍 100% 覆盖（106/106、0 未实现）。
+> 真正的剩余量集中在四处：
+> **① 窗口欠账**：152 张 A 卡的机器分档 = **①57**（48 可进池 + 9 前置未清）/ **②45**（8 模板 → 45 次参数化 run）/ **③50**（③-G 1 + ③-O 27 + ③-N 22）；
+> **② GM**：185 条表里 **88 条未实现**，另有 **21 条第三态**（文本逐字节、宿主动作未接），完整实现 **76 条**；
+> **③ 协议**：入站 tracked **2**（`CM_ADJUST_BONUS` 待接线；`CM_OPENDOOR` 已判结构性不可达 T-65）；
+> 出站 tracked **13** = **12 个孤儿编码器**（审计三态：0 可直接接线 / 8 需补上游 / 4 不可达）+ **`SM_DONATE_FAIL`（已判非缺陷）**；
+> **④ 内容**：`rust=no` 实现缺口 **0**（`UnbindList`、`AdminList` 均已接；tracked 3 条均 `rust=yes`，只是卡未关闭）。
 
-> **快照后变化（2026-10-22T15:30Z，master `7fa7a2e99`）**：GM 第 3 批（传送/召唤族 18 条）已合入，
-> 因此本文档 §2 的「已实现 35 / 未实现 150」更新为 **已实现 53 / 未实现 132**（第三态 21 不变，
-> 精确到「185 − 5 − 30 − 18 = 132」）；其余各节数字仍是 `0e7da10b8` 快照，未变。
+> **第 4 轮相对第 3 轮的差异（旧数字 → 新数字）**：GM 已实现 35→**97**（完整 14→**76**、第三态 21 不变、未实现 150→**88**）；
+> 协议 implemented 170→**172** / tracked 17→**15**（`CM_WANTMINIMAP`、`SM_CLOSEHEALTH` 已接）；
+> 内容 implemented 11→**13** / tracked 5→**3**（UnbindList、AdminList 已接）；
+> board 进行中 185→**203** / 已完成 153→**169**；A 152 由「人工四分类」改为**机器分档 ①57/②45/③50**。
 
 ---
 
@@ -21,12 +28,17 @@
 
 | 维度 | 总量 | 已完成 | 未完成/欠账 | 证据 |
 |---|---:|---:|---:|---|
-| 脚本派发目标（注册 + switch） | 274 | 148 | 126 | §1.1 |
+| 脚本派发目标（注册 handler + switch 分支） | 274 | 147（118 handler 名 + 29 switch） | **124** = 123 唯一 handler 名（条件 62 + 动作 61）+ switch `TakecheckItem` 1 | §1.1 |
 | 脚本：部署语料实际用到的派发目标 | 106 | **106** | **0** | §1.2 |
-| GM 命令（185 条表 + 内建 2） | 187 | 16（14 完整 + 2 内建） | 150 未实现 + **21 第三态**（文本已逐字节 / 宿主动作未接） | §2 |
-| 协议派发（入站 + 出站） | 191 | 170 | 17 tracked + 3 n/a-unreachable | §4.1 |
-| 内容加载调用点 | 40 | 11 implemented + 24 n/a | 5 tracked（其中 `rust=no` 2） | §4.1 |
-| 协作卡（in-progress） | 185 | — | A 152 / B 22（+3 条无卡面）/ D 8 / C 2 / O 1 | §3 |
+| GM 命令（185 条表 + 内建 2） | 187 | 76 完整 + **21 第三态** + 2 内建 | **88 未实现**（文本已逐字节 / 宿主动作未接） | §2 |
+| 协议派发（入站 + 出站） | 191 | 172 | **15 tracked**（入站 2 + 出站 13）+ 3 n/a-unreachable + 1 n/a-oracle-noop | §4.1 |
+| 内容加载调用点 | 40 | 13 implemented | **3 tracked**（均 `rust=yes`）+ 24 n/a；`rust=no` 实现缺口 **0** | §4.1 |
+| 协作卡（board 实读，快照 `6d79be4da` @ 2026-10-23T07:31+08:00） | 377 | 169 已完成 | 203 进行中 + 5 待审（0 需要人 / 0 受阻 / 0 待认领） | §3.1 |
+| A 窗口欠账（152 张 A 卡集合的机器分档） | 152 | — | **①57**（48 可进池 + 9 前置未清）/ **②45**（8 模板）/ **③50**（③-G 1 + ③-O 27 + ③-N 22） | §3.1 + `docs/window-debt-reclass-20261023.md` |
+
+> 计数口径注（避免 147+124≠274 的疑问）：274 = 244 个 handler **code**（条件 111 + 动作 133）+ 30 个 switch 分支；
+> handler 数组里有 3 处重名（条件 1 处、动作 2 处），所以**唯一 handler 名 = 241**。
+> 147（已实现）+ 124（未实现）= 271，再加上 3 处重名 = 274。
 
 ---
 
@@ -39,89 +51,73 @@
 > `dispatch.rs` 的三态查询（`condition_target_status`/`execution_target_status`）+
 > `crates/script-tool/src/parsestats.rs::coverage_lines`。本节的数字按后者复算。
 
-| 类别 | 注册表 | 已实现 handler | 未实现 handler | switch 分支（注册/已实现） | 目标合计（已实现/总） |
+| 类别 | 注册表（code / 唯一名） | 已实现 handler | 未实现 handler（唯一名） | switch 分支（注册/已实现） | 目标合计（已实现/总） |
 |---|---:|---:|---:|---:|---:|
-| 条件 | 111 | 49 codes（48 names） | **62** | 10 / 10 | 59 / 121 |
-| 动作 | 133 | 70 codes（69 names） | **63** | 20 / 19 | 89 / 153 |
-| 合计 | 244 | 119 codes（117 names） | **125** | 30 / 29 | **148 / 274** |
+| 条件 | 111 / 110 | 48 | **62** | 10 / 10 | 58 / 121 |
+| 动作 | 133 / 131 | 70 | **61** | 20 / 19 | 89 / 153 |
+| 合计 | 244 / 241 | 118 | **123** | 30 / 29 | **147 / 274** |
 
-> 计数口径：上表「已实现/未实现」按**注册 code** 数；`CONDITION_HANDLERS` 有 1 个 handler 名复用到 2 个 code，
-> `EXECUTION_HANDLERS` 有 2 个名字复用 ⇒ **按 handler 名去重**的未实现数为 62（条件）/ 62（动作）。
-
-复算命令（在 `mir2-rs/` 下）：
-
-```sh
-python - <<'PY'
-import re
-d=open("crates/script/src/engine/dispatch.rs",encoding="utf-8").read()
-h=open("crates/script/src/handlers.rs",encoding="utf-8").read()
-def arr(t,n):
-    m=re.search(r"(?:pub )?(?:static|const) "+n+r"[^=]*=\s*&\[(.*?)\];",t,re.S)
-    return re.findall(r'"([^"]+)"',m.group(1))
-for n in ["CONDITION_HANDLERS","EXECUTION_HANDLERS","ENGINE_SWITCH_CONDITIONS","ENGINE_SWITCH_EXECUTIONS"]:
-    print(n,len(arr(h,n)))
-for n in ["IMPLEMENTED_CONDITIONS","IMPLEMENTED_EXECUTIONS","IMPLEMENTED_SWITCH_CONDITIONS","IMPLEMENTED_SWITCH_EXECUTIONS"]:
-    print(n,len(arr(d,n)))
-PY
-# 输出摘要：CONDITION_HANDLERS 111 / EXECUTION_HANDLERS 133 / ENGINE_SWITCH_CONDITIONS 10 /
-#           ENGINE_SWITCH_EXECUTIONS 20 / IMPLEMENTED_CONDITIONS 48 / IMPLEMENTED_EXECUTIONS 69 /
-#           IMPLEMENTED_SWITCH_CONDITIONS 10 / IMPLEMENTED_SWITCH_EXECUTIONS 19
-```
+> 计数口径：注册表按 **code** 数（条件 111、动作 133）；`CONDITION_HANDLERS` 有 1 个 handler 名复用到 2 个 code、
+> `EXECUTION_HANDLERS` 有 2 个名字复用 ⇒ **唯一 handler 名 = 241**。上表「已实现/未实现」按**唯一 handler 名**计。
+> 目标合计按 code 口径：条件 111（handler）+10（switch）=121；动作 133+20=153；合计 274。
+> **第 4 轮变化**：`IMPLEMENTED_EXECUTIONS` 由 69→**70**（新增 `ActionOfSetMapMode`，见 §5.2 A-21 订正），
+> 因此动作未实现由 63→**61**；条件未实现 62 不变。
 
 唯一的 **switch 未实现项 = `TakecheckItem`**（`ENGINE_SWITCH_EXECUTIONS` 20 条中缺 1；
 `set(ENGINE_SWITCH_EXECUTIONS) - set(IMPLEMENTED_SWITCH_EXECUTIONS)` ⇒ `{'TakecheckItem'}`）。
 它不在部署语料里（见 §1.2），所以不造成语料缺口。
 
-未实现的 62 个条件 / 62 个动作 handler 名（完整清单）：
+未实现的 handler 名（唯一名，第 4 轮实测：条件 62 / 动作 61；完整清单）：
 
 ```
 条件：ConditionOfAnsiContainsText, ConditionOfCheCkContAinsTextList, ConditionOfCheckAccountIpList,
-ConditionOfCheckCastleChageDay, ConditionOfCheckCastleDoorStatus, ConditionOfCheckCastleGold,
-ConditionOfCheckCastleWarDay, ConditionOfCheckChiefItemCount, ConditionOfCheckContribution,
-ConditionOfCheckDc, ConditionOfCheckDura, ConditionOfCheckExp, ConditionOfCheckFlourishPoint,
-ConditionOfCheckGuildAuraePoint, ConditionOfCheckGuildBuildPoint, ConditionOfCheckGuildList,
-ConditionOfCheckHp, ConditionOfCheckInMapRange, ConditionOfCheckIpList,
-ConditionOfCheckIsAttackGuild, ConditionOfCheckIsDefenseAllyGuild, ConditionOfCheckIsDefenseGuild,
-ConditionOfCheckIsMaster, ConditionOfCheckIsOnMap, ConditionOfCheckItemType,
-ConditionOfCheckLuckyPoint, ConditionOfCheckMC, ConditionOfCheckMagicLvl,
-ConditionOfCheckMapHumanCount, ConditionOfCheckMapMonCount, ConditionOfCheckMapName,
-ConditionOfCheckMarryCount, ConditionOfCheckMaster, ConditionOfCheckMemberType,
-ConditionOfCheckMonMapCount, ConditionOfCheckMp, ConditionOfCheckNameIpList,
-ConditionOfCheckNameListPostion, ConditionOfCheckOfGuild, ConditionOfCheckOnlineLongMin,
-ConditionOfCheckPkPoint, ConditionOfCheckPos, ConditionOfCheckPoseIsMaster,
-ConditionOfCheckPoseMaster, ConditionOfCheckRangeMonCount, ConditionOfCheckSc,
-ConditionOfCheckServerName, ConditionOfCheckSkill, ConditionOfCheckSlaveCount,
-ConditionOfCheckSlaveLevel, ConditionOfCheckSlaveName, ConditionOfCheckStabilityPoint,
-ConditionOfCheckTextList, ConditionOfCompareText, ConditionOfDayOfWeek, ConditionOfDayTime,
-ConditionOfHaveMaster, ConditionOfHour, ConditionOfIsHigh, ConditionOfMin,
-ConditionOfPoseHaveMaster, ConditionOfReviveSlave
+        ConditionOfCheckCastleChageDay, ConditionOfCheckCastleDoorStatus, ConditionOfCheckCastleGold,
+        ConditionOfCheckCastleWarDay, ConditionOfCheckChiefItemCount, ConditionOfCheckContribution,
+        ConditionOfCheckDc, ConditionOfCheckDura, ConditionOfCheckExp, ConditionOfCheckFlourishPoint,
+        ConditionOfCheckGuildAuraePoint, ConditionOfCheckGuildBuildPoint, ConditionOfCheckGuildList,
+        ConditionOfCheckHp, ConditionOfCheckInMapRange, ConditionOfCheckIpList,
+        ConditionOfCheckIsAttackGuild, ConditionOfCheckIsDefenseAllyGuild, ConditionOfCheckIsDefenseGuild,
+        ConditionOfCheckIsMaster, ConditionOfCheckIsOnMap, ConditionOfCheckItemType,
+        ConditionOfCheckLuckyPoint, ConditionOfCheckMC, ConditionOfCheckMagicLvl,
+        ConditionOfCheckMapHumanCount, ConditionOfCheckMapMonCount, ConditionOfCheckMapName,
+        ConditionOfCheckMarryCount, ConditionOfCheckMaster, ConditionOfCheckMemberType,
+        ConditionOfCheckMonMapCount, ConditionOfCheckMp, ConditionOfCheckNameIpList,
+        ConditionOfCheckNameListPostion, ConditionOfCheckOfGuild, ConditionOfCheckOnlineLongMin,
+        ConditionOfCheckPkPoint, ConditionOfCheckPos, ConditionOfCheckPoseIsMaster,
+        ConditionOfCheckPoseMaster, ConditionOfCheckRangeMonCount, ConditionOfCheckSc,
+        ConditionOfCheckServerName, ConditionOfCheckSkill, ConditionOfCheckSlaveCount,
+        ConditionOfCheckSlaveLevel, ConditionOfCheckSlaveName, ConditionOfCheckStabilityPoint,
+        ConditionOfCheckTextList, ConditionOfCompareText, ConditionOfDayOfWeek, ConditionOfDayTime,
+        ConditionOfHaveMaster, ConditionOfHour, ConditionOfIsHigh, ConditionOfMin, ConditionOfPoseHaveMaster,
+        ConditionOfReviveSlave
 动作：ActionOfAddAccountList, ActionOfAddGuildList, ActionOfAddIpList, ActionOfAddNameDateList,
-ActionOfBonusPoint, ActionOfChangeGender, ActionOfChangeJob, ActionOfChangeNameColor,
-ActionOfChangePerMission, ActionOfClearList, ActionOfClearMakeItems, ActionOfClearNeedItems,
-ActionOfClearPassword, ActionOfClearSkill, ActionOfDelGuildList, ActionOfDelIpList,
-ActionOfDelMarry, ActionOfDelMaster, ActionOfDelNameDateList, ActionOfDelNoJobSkill,
-ActionOfDelSkill, ActionOfDivData, ActionOfExchangeMap, ActionOfExeaction, ActionOfGetMarry,
-ActionOfGetMaster, ActionOfGroupAddList, ActionOfGroupMoveMap, ActionOfGuildAuraePoint,
-ActionOfGuildBuildPoint, ActionOfGuildChiefItemCount, ActionOfGuildFlourishPoint,
-ActionOfGuildRecall, ActionOfGuildstabilityPoint, ActionOfKillSlave, ActionOfKillSlaveName,
-ActionOfMapTing, ActionOfMaster, ActionOfMonClear, ActionOfMonGen, ActionOfOpenMagicBox,
-ActionOfPercentData, ActionOfPkPoint, ActionOfPkZone, ActionOfQueryBagItems,
-ActionOfQuerySaleSell, ActionOfQueryTrustDeal, ActionOfRandomMove, ActionOfReCallMap,
-ActionOfRecallmob, ActionOfRestBonusPoint, ActionOfSetMapMode, ActionOfSetMemberLevel,
-ActionOfSetMemberType, ActionOfSetRandomNo, ActionOfSetRankLevelName, ActionOfSkillLevel,
-ActionOfSumData, ActionOfTakeCastleGold, ActionOfThrowitem, ActionOfUnMaster,
-ActionOfUpgradeItems
+        ActionOfBonusPoint, ActionOfChangeGender, ActionOfChangeJob, ActionOfChangeNameColor,
+        ActionOfChangePerMission, ActionOfClearList, ActionOfClearMakeItems, ActionOfClearNeedItems,
+        ActionOfClearPassword, ActionOfClearSkill, ActionOfDelGuildList, ActionOfDelIpList, ActionOfDelMarry,
+        ActionOfDelMaster, ActionOfDelNameDateList, ActionOfDelNoJobSkill, ActionOfDelSkill, ActionOfDivData,
+        ActionOfExchangeMap, ActionOfExeaction, ActionOfGetMarry, ActionOfGetMaster, ActionOfGroupAddList,
+        ActionOfGroupMoveMap, ActionOfGuildAuraePoint, ActionOfGuildBuildPoint, ActionOfGuildChiefItemCount,
+        ActionOfGuildFlourishPoint, ActionOfGuildRecall, ActionOfGuildstabilityPoint, ActionOfKillSlave,
+        ActionOfKillSlaveName, ActionOfMapTing, ActionOfMaster, ActionOfMonClear, ActionOfMonGen,
+        ActionOfOpenMagicBox, ActionOfPercentData, ActionOfPkPoint, ActionOfPkZone, ActionOfQueryBagItems,
+        ActionOfQuerySaleSell, ActionOfQueryTrustDeal, ActionOfRandomMove, ActionOfReCallMap,
+        ActionOfRecallmob, ActionOfRestBonusPoint, ActionOfSetMemberLevel, ActionOfSetMemberType,
+        ActionOfSetRandomNo, ActionOfSetRankLevelName, ActionOfSkillLevel, ActionOfSumData,
+        ActionOfTakeCastleGold, ActionOfThrowitem, ActionOfUnMaster, ActionOfUpgradeItems
 ```
+
+> 与第 3 轮清单的差：动作侧少 2 个——`ActionOfSetMapMode`（A-21，已实现）与旧稿的重名计数误差已按唯一名口径订正。
 
 ### 1.2 部署语料实测覆盖（关键判据）
 
 ```sh
-CARGO_TARGET_DIR=/e/tmp/wt-inventory-target \
-  cargo run --release -p mir2-script-tool -- parse-stats /e/MirServer/M2GameSvr/Envir \
-  --json /tmp/parsestats.json --require-implemented
+cd mir2-rs
+CARGO_TARGET_DIR=<任选空目录> \
+  cargo run --release --locked -p mir2-script-tool -- parse-stats E:/MirServer/M2GameSvr/Envir \
+  --json E:/tmp/parsestats.json --require-implemented
 ```
 
-输出摘要（rc=0）：
+输出摘要（第 4 轮 master `6d79be4da` 实测，rc=0）：
 
 ```
 Envir: E:/MirServer/M2GameSvr/Envir
@@ -148,8 +144,8 @@ Envir: E:/MirServer/M2GameSvr/Envir
 ```sh
 awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -c "name:"
 # 185
-awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -o "imp: Imp::[A-Za-z]*" | sort | uniq -c
-# 150 imp: Imp::Unimplemented；其余 35 条各有具名 Imp
+awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -o "imp: Imp::[A-Za-z]*" | sort | uniq -c | head -3
+#  88 imp: Imp::Unimplemented；其余 97 条各有具名 Imp
 # 第三态（T-161 的 14 + T-163 的 7 = 21 条具名 Imp）：
 awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -cE 'imp: Imp::(ReloadAllGuild|ReloadGuild|ReloadLineNotice|ReloadManage|ReloadRobotManage|ReLoadAdmin|LoadAdmin|ReloadItemDb|ReloadMagicDb|ReloadMonItems|ReloadRobot|ReloadAbuse|ReloadNpc|NpcScript|TestFire|FireBurn|TestStatus|BackStep|UserCmd|TestGetBagItems|TestSpeedMode),'
 # 21
@@ -159,10 +155,10 @@ awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -cE 'imp: Im
 |---|---:|---|
 | 命令表 `COMMANDS` | **185** | `grep -c "name:"` ⇒ 185；单测 `COMMANDS.len()==185` |
 | 内建命令 | **2**（`@help`、`@commands`） | `BUILTIN_HELP`/`BUILTIN_COMMANDS`，表外处理 |
-| 已实现命令体（具名 `Imp`） | **35**（G1 5 + 批次 2/3 30） | `Imp::Unimplemented` = 150 ⇒ 185−150 = 35 |
-| 　├ 完整实现 | **14**（封禁名单 9 + G1 5） | 封禁 9 条按 T-162（oracle 盘点操作全为注释 ⇒ 空表分支即等价）；G1 5 条无宿主缺口 |
-| 　└ **第三态：文本已逐字节、宿主动作未接** | **21**（T-161 的 14 + T-163 的 7） | `whitelist.md:654` / `whitelist.md:656`；定义与脚注见 §2.2 |
-| 未实现命令体 | **150** | 同上 |
+| 已实现命令体（具名 `Imp`） | **97** | `Imp::Unimplemented` = 88 ⇒ 185−88 = 97 |
+| 　├ 完整实现 | **76** | 97 − 第三态 21 |
+| 　└ **第三态：文本已逐字节、宿主动作未接** | **21**（T-161 的 14 + T-163 的 7） | `whitelist.md:709`（T-161）/ `whitelist.md:711`（T-163）；定义与脚注见 §2.2 |
+| 未实现命令体 | **88** | 同上 |
 | perm 0（现网可达） | **5** | `perm_min: 0` ⇒ `AddRobotPlay`/`LockLogin`/`拒绝`/`拒绝私聊`/`时间`；加内建 `@help` = 6 |
 
 ### 2.2 按 §4.3 的 12 族分解（精确、互斥）
@@ -175,9 +171,9 @@ awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -cE 'imp: Im
 
 | 族 | 总数 | 完整实现 | 第三态（文本级） | 未实现 |
 |---|---:|---:|---:|---:|
-| 数值/角色 | 44 | 0 | 0 | **44** |
-| 其它 | 35 | 4 | 0 | **31** |
-| 传送/召唤 | 17 | 0 | 0 | **17** |
+| 数值/角色 | 44 | **44** | 0 | 0 |
+| 其它 | 35 | 5 | 0 | **30** |
+| 传送/召唤 | 17 | **17** | 0 | 0 |
 | 行会/城堡/赛事 | 16 | 0 | 0 | **16** |
 | 查询/展示 | 16 | 0 | 0 | **16** |
 | 重载/管理 | 14 | 0 | **14**（T-161） | 0 |
@@ -187,15 +183,15 @@ awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -cE 'imp: Im
 | 禁言/监听 | 7 | 0 | 0 | **7** |
 | 仓库/登录密码 | 6 | 0 | 0 | **6** |
 | 会话控制 | 4 | 0 | 0 | **4** |
-| **合计** | **185** | **14** | **21** | **150** |
+| **合计** | **185** | **76** | **21** | **88** |
 
-具名 `Imp` 的 35 条 = **完整实现 14** + **第三态 21**。按族：重载/管理 14（T-161）、封禁名单 9（T-162）、
-桩/测试 8 = T-163 的 7 + G1 的 `AddRobotPlay`、其它 4（G1 除 `AddRobotPlay` 外的四条，即
-`时间/拒绝/拒绝私聊/LockLogin`）。14 + 21 = 35；与 §2.1 的 `Imp::Unimplemented` = 150 合并即 185。
+具名 `Imp` 的 97 条 = **完整实现 76** + **第三态 21**。按族：数值/角色 44（GM 第 4 批）、传送/召唤 17（第 3 批）、
+封禁名单 9（T-162）、重载/管理 14（T-161 第三态）、桩/测试 8 = T-163 的 7（第三态）+ G1 的 `AddRobotPlay`、
+其它 5（G1 四条 `时间/拒绝/拒绝私聊/LockLogin` + `传送`/`UserMoveXy`）。76 + 21 = 97；与 §2.1 的 `Imp::Unimplemented` = 88 合并即 185。
 
 **第三态定义（本轮新增，回应 reviewer-14 第 2 轮唯一阻塞 Important）**：命令体已把 oracle 文本**逐字节**复刻
-（`SysMsg` 文本、分支、越界怪癖照抄），但**宿主动作未接线**（`whitelist.md:654` T-161 的重载/管理 14 +
-`whitelist.md:656` T-163 的桩/测试 7）。⇒ 这 21 条的真机可观测行为**只能是「回 oracle 文本 + 零副作用」**，
+（`SysMsg` 文本、分支、越界怪癖照抄），但**宿主动作未接线**（`whitelist.md:709` T-161 的重载/管理 14 +
+`whitelist.md:711` T-163 的桩/测试 7）。⇒ 这 21 条的真机可观测行为**只能是「回 oracle 文本 + 零副作用」**，
 不含 oracle 会产生的后续状态变化（重读后内容刷新、事件入队、状态表写入/广播、`CharPushed` 推挤）。
 该偏差**已按族登记**（作者 `openmir2-worker-4`，卡 `openmir2-gm-commands-design`，tier=L，待独立 principal 复核）；
 21 条命令均 `PermissionMin = 10`，现网 `Permission` 恒 0（T-156 ③）⇒ 生产不可达。
@@ -211,30 +207,50 @@ awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -cE 'imp: Im
 
 ## 3. 卡 backlog（`walgit collab board --format json`）
 
-### 3.1 总览
+### 3.1 总览（第 4 轮 board 实读）
 
 ```sh
-walgit collab board --format json > E:/tmp/board-r2.json
-python -c "import json;d=json.load(open('E:/tmp/board-r2.json',encoding='utf-8'));print({c['name']:len(c['cards']) for c in d['columns']})"
-# {'待认领': 1, '进行中': 185, '待审': 0, '需要人': 0, '受阻': 0, '已完成': 153}
+walgit collab board --format json > E:/tmp/board.json
+python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));print({c['name']:len(c['cards']) for c in d['columns']})"
+# {'待认领': 0, '进行中': 203, '待审': 5, '需要人': 0, '受阻': 0, '已完成': 169}
 ```
 
-**in-progress = 185 张**；`待认领 = 1` 是本次审计卡 `openmir2-rewrite-inventory` 自身，不进入分类。
-分类口径（**人工逐卡指派**；集合硬编码在 `/e/tmp/audit-inv-20261022/finalcls.py`，**不是**从 `work` 文本正则自动生成）：
+**board 快照（`6d79be4da` @ 2026-10-23T07:31+08:00）：203 进行中 + 5 待审 + 169 已完成（共 377）。**
+**这是实时量，复跑会变**（复审当日实测已是 200 进行中 / 8 待审 / 170 已完成；卡随时移动），以跑命令当次输出为准。第 3 轮快照是「185 进行中 / 153 已完成」，
+两者不可混用。**卡数只回答「有多少卡在飞」，不回答「还差多少行为」**；后者看 §0 的四行机器口径。
 
-- **A 真机窗口欠账（R 级缺证据）**：已合并且最新 status 明示窗口/真机/`tier=R` 欠账 ⇒ **152**（第 2 轮：移出 `rng-consumer-structure-parity`、移入已合的 `click-path-bag-writeback`）
-- **B 代码未开工/接线未做**：最新 status 明示 `实现未开`/`第②片`/`接线`/`另开卡` ⇒ **22**（另有 3 条**无卡可派**的代码面 B-补，见 §3.2.1，不计入 22）
-- **D needs-human**：最新 status 明示 owner 裁决/排期/删除授权 ⇒ **8**
-- **C 已合但卡未关（书务/已声明收口）**：**2**（`gate-gmclose-race`、`rng-consumer-structure-parity`）
-- **O 在飞/待审**（不属四类，单列）⇒ **1**（`gm-commands-design`；批次 3 在 `wt-gm3` 未提交）
+#### A 窗口欠账：152 张的机器分档（取代旧「A 152 / B 22 / D 8 / C 2 / O 1」人工四分类）
 
-> 口径（对应 reviewer-14 Minor）：
-> 1. board 的 `需要人` 列实测 **0**；本文 D=8 是**按 `work` 文本中「owner 裁决/排期/授权」推断**的，不是 board 列计数。
-> 2. `work` = 该卡最新一次 `status` 的快照，可能 stale；与源码冲突时以 §5 对账为准。
-> 3. `rng-consumer-structure-parity` 的 `work` 先写「三项余量已全部收口」、尾部又列 R 级真机窗口；按复核意见归 **C**，窗口尾巴保留在 C 表「备注」列，不当作 A 类欠账。
-> 4. `click-path-bag-writeback` 已有 master 合并 `b0dde46a9`（见其 `work`），故从「在飞」改归 **A**（T-160 明示真机落库对拍待窗口）。
+旧四分类的集合硬编码在 `/e/tmp/audit-inv-20261022/finalcls.py`（**不在仓库内、基于 185 卡快照**），
+任何人 checkout 后都无法复算 ⇒ 第 4 轮起**不再作为本文计数**，只保留 §3.2 的历史逐卡快照。
+当前权威口径是已合入 master `73d84e33a` 的 `docs/window-debt-reclass-20261023.md`：
 
-### 3.2–3.6 逐卡清单
+| 档 | 卡数 | 定义 | 细分 |
+|---|---:|---|---|
+| **①** 现有场景已覆盖 | **57** | 现有双栈场景/`run_*_pair.ps1` 跑一次即可给证据 | **①-A 48 可直接进窗口池** + **①-B 9 前置未清（不进池）** |
+| **②** 只差一个新场景 | **45** | 判据可协议判定，但没有现有场景发那串 `CM_*` | **8 个场景模板（R1–R8）→ 45 次参数化 run**（一卡一次 run） |
+| **③** 协议对拍不可替代 | **50** | ③-G GUI 1 + ③-O 离线/日志/长跑/工具缺口 27 + ③-N 无窗口项原文 22 | ③-N 不派，先补 `window_items` |
+| **合计** | **152** | 与旧「A 152」同一集合 | 57 + 45 + 50 = 152 |
+
+复算：`docs/window-debt-reclass-20261023.md` §1/§3/§8 的脚本；本轮只引用其已合入数字，不重跑其分类。
+
+#### B 类（未接线/未实现）的机器口径
+
+手册（`docs/leader-goal-20261023.md` §1 条件3）把 B 类定义为「recon dispatch 的 `tracked` 清单」。
+第 4 轮实测 **tracked 15**：入站 2 + 出站 13。其中**真正待接线**的只有：
+
+- 入站 `CM_ADJUST_BONUS`（1 条，`lib.rs` 仍传 `bonus_point=0`，见 §6 #5）；
+- 出站「需补上游生产者」8 帧（T-174/178/180/181/182/183，**均无卡、待按帧拆建**，见 §4.1 与 §6 #1）。
+
+其余 6 条是**已判不可达/非缺陷但门仍计 tracked**：`CM_OPENDOOR`（T-65）、4 个孤儿帧（T-175/176/179）、
+`SM_DONATE_FAIL`（非缺陷）。⇒ **B 类有效待办 = 1 + 8 = 9 条**，而不是 15 或旧稿的 14。
+
+### 3.2–3.6 逐卡清单（历史快照，仅作参考）
+
+> **⚠ 以下是 2026-10-22 的逐卡快照（当时 board = 185 进行中 / 153 已完成），不是当前状态。**
+> 当前分档看 §3.1 的机器口径；卡的实时位置看 `walgit collab board`。
+> 保留本节只为追溯「当时为什么这样分类」，其中的计数（A 152 / B 22 / D 8 / C 2 / O 1）**不要引用**。
+
 
 ### A. 真机窗口欠账（R 级缺证据）
 
@@ -424,7 +440,7 @@ python -c "import json;d=json.load(open('E:/tmp/board-r2.json',encoding='utf-8')
 | 面 | 索引 | 现状（HEAD `24e9a5fab`，逐文件复核） | 处置 |
 |---|---|---|---|
 | `SETOFFLINE` 的 `AutoGetExp*` 四字段 | m3 A-10 / T-86 | `crates/script/src/engine/mod.rs:603` 的 `ScriptPlayer::set_offline` 是**空默认实现**；`bins/game-svr/src/npc.rs:967` 的 `impl ScriptPlayer for NpcPlayer` **未覆写**；`crates/script/src/engine/actions.rs:617-623` 的 `ActionOfOffLine` 调它 ⇒ 四字段 + `OffLineFlag`/`KickOffLineTick` 均不写 | 无卡；tier=R（PL-2 复验 F6）。建议并入 PL-2/PL-3 后续片或新卡 |
-| `SETMPAMODE DECHP` / `sys_msg` | m3 A-21 / T-85 | `crates/script/src/handlers.rs:211` 注册 `(216, "ActionOfSetMapMode")`，但 `engine/actions.rs` **无实现分支**；`engine/mod.rs:384` 的 `ScriptPlayer::sys_msg` 空默认，`NpcPlayer`（`npc.rs:967`）未覆写；`HungerDecPower` 无消费者 | 无卡；tier=R（内容启用后）。建议随 `openmir2-run-gap-pl3` 后续片 |
+| `SETMPAMODE DECHP` / `sys_msg` | m3 A-21 / T-85 | **已解决 @ `f5b401cc8`（merge `d1b13ba14`）**：分支表 + `sys_msg` 下发帧 + 宿主落库全链 | R 卡等真机窗口 |
 | `Market_Def` 商人脚本装载/说词 | m3 A-08 / T-47③ / T-145 残余 | `shop.rs:36-38` 明写宿主**未装载** `Merchant.LoadScriptFile`；`MerchantScriptBook` 已存在并用于 `Npc_def` 点击路径，但 `Market_Def` 的 `~@repair`/say 链路仍按「脚本未装载 ⇒ 无后续帧」登记 | 无实现卡；建议新卡 `openmir2-merchant-script-load`（本文 §6 top5 #4） |
 
 ### D. needs-human（owner 裁决/排期）
@@ -463,88 +479,166 @@ python -c "import json;d=json.load(open('E:/tmp/board-r2.json',encoding='utf-8')
 
 ```sh
 cd mir2-rs
-python tests/parity/coverage/recon_gates.py content  --repo .. --json /tmp/recon-content.json
-python tests/parity/coverage/recon_gates.py dispatch --repo .. --json /tmp/recon-dispatch.json
+python tests/parity/coverage/recon_gates.py content  --repo .. --json E:/tmp/recon-content.json
+python tests/parity/coverage/recon_gates.py dispatch --repo .. --json E:/tmp/recon-dispatch.json
+# ①附注：crates/ 侧三档（§4.2）——同一个调用图，只去掉 bins 过滤
+python - <<'PY'
+import sys,re
+sys.path.insert(0,'tests/parity/coverage'); import recon_gates as rg
+c=rg.RustCorpus(rg.rust_source_dirs(rg.Path('..'),exclude=rg.DISPATCH_EXCLUDE))
+live,spans=rg.production_live_functions(c); lines=rg._file_code_lines(c)
+d=[s for s in spans if 'bins' not in rg.Path(s['file']).parts and
+   re.search(r'\bpub\s+(?:async\s+)?fn\s+'+re.escape(s['name'])+r'\b', lines[s['file']][s['start']])]
+names=sorted({s['name'] for s in d if s['name'] not in live})
+cnt={n:sum(1 for _,_,ln in c.code if re.search(r'(?<![A-Za-z0-9_])'+re.escape(n)+r'(?![A-Za-z0-9_])',ln)) for n in names}
+wl=open('tests/parity/whitelist.md',encoding='utf-8').read()
+only={n for n in names if cnt[n]==1}
+named={n for n in names if re.search(r'(?<![A-Za-z0-9_])'+re.escape(n)+r'(?![A-Za-z0-9_])',wl)}
+print('defs',len(d),'unique',len(set(s['name'] for s in d)),'unreach',len(names))
+print('only',len(only),'named_outside_only',len(named-only),'triage',len(set(names)-only-named))
+PY
+# 期望：defs 1068 unique 941 unreach 198
+#       only 42 named_outside_only 25 triage 131
 ```
 
-**内容加载门**（40 个 oracle `Load*` 调用点）：
+**内容加载门**（40 个 oracle `Load*` 调用点，第 4 轮实测）：
 
 ```
-summary: {"n/a-oracle-noop": 9, "n/a-db": 5, "tracked": 5, "implemented": 11,
+summary: {"n/a-oracle-noop": 9, "n/a-db": 5, "tracked": 3, "implemented": 13,
           "n/a-deployed": 1, "n/a-empty": 8, "n/a-other": 1}
 ```
 
-`tracked` = 缺口已指派卡（不是 RED）；其中 **`rust=no` 才是实现缺口**：
+`tracked` = **有卡未关**，不是 RED；**`rust=no` 才是实现缺口，当前 = 0**。
+3 条 tracked 全部 `rust=yes`（MiniMap / LineNotice / Robot），卡 `openmir2-envir-redlist-batch` 的接线已落地：
 
-| 内容件 | rust 判定 | 现状 |
+| 内容件 | recon 判定 | 现状（commit / 卡） |
 |---|---|---|
-| `UnbindList.txt` | **yes** | 2026-10-23 已接（`bins/game-svr/src/unbindlist.rs` + `useitem.rs` 解包 6 件；recon `rust=yes / implemented`）。历史：loader 在 `crates/data/src/lists.rs`，此前 game-svr 消费点未接（白名单 T-17） |
-| `AdminList.txt` | **no** | loader 在 `crates/data/src/lists.rs`，**无生产消费者**；oracle 的 `GetHumPermission` 被注释 ⇒ 与「permission 恒 0」裁决一致（D-1） |
-| `MiniMap.txt` | yes | 已加载；但 `CM_WANTMINIMAP` 消费点仍传 `0`（见 §6 top5 #3） |
-| `LineNotice.txt` | yes | `line_notice` 生产接线已存在 |
-| `Robot.txt` | yes | 已加载 |
+| `UnbindList.txt` | **yes / implemented** | 已接 @ `4c983375c`（merge `f796eaeed`）；卡 `openmir2-unbindlist-consumer` 仍 in-progress（R 窗口真机项） |
+| `AdminList.txt` | **yes / implemented** | 已接 @ `55fd7bee0`（merge `140c6aecc`；「装载活、读取死」照抄 oracle）；卡 `openmir2-envir-adminlist` 已收口 |
+| `MiniMap.txt` | yes / tracked | 已加载；`CM_WANTMINIMAP` 消费点已接 @ `4d9bab444`（merge `8889f7f28`，卡 `openmir2-minimap-consumer-wire` closed @ `51a0d5342`） |
+| `LineNotice.txt` | yes / tracked | `line_notice` 生产接线已存在 |
+| `Robot.txt` | yes / tracked | 已加载 |
 
-**协议派发门**（191 条入站 `CM_*` + 出站 `RM_*→SM_*`）：
-
-```
-summary: {"n/a-oracle-noop": 1, "implemented": 170, "tracked": 17, "n/a-unreachable": 3}
-inbound : implemented 69 / tracked 3 / n/a-oracle-noop 1     （共 73）
-outbound: implemented 101 / tracked 14 / n/a-unreachable 3   （共 118）
-```
-
-- **入站 tracked 3**：`CM_ADJUST_BONUS`、`CM_OPENDOOR`、`CM_WANTMINIMAP`。
-  三者都不是「无分支」：`inbound.rs` 已有 handler，但 `lib.rs` 生产分支分别存在
-  「BonusPoint 未挂会话态」「门表恒 false / 结构性 no-op」「MinMap 传 0」的接线缺口（见 §6）。
-- **出站 tracked 14 = 13 个「有编码器、无生产发射点」+ 1 个 `SM_DONATE_FAIL`（连编码器都没有）**：
+**协议派发门**（191 条入站 `CM_*` + 出站 `RM_*→SM_*`，第 4 轮实测）：
 
 ```
-13 帧（编码器定义：smframe_ext.rs 12 个 + smframe.rs 的 sm_skeleton）：
-SM_BREAKWEAPON, SM_CHANGEFACE, SM_CLOSEDOOR, SM_CLOSEHEALTH, SM_HIDEEVENT,
-SM_ITEMSHOW, SM_LAMPCHANGEDURA, SM_OPENDOOR_OK, SM_QUERYYBDEAL, SM_QUERYYBSELL,
-SM_RECONNECT, SM_SHOWEVENT, SM_SKELETON
-
-另 1 帧：SM_DONATE_FAIL —— `grep -rn 'sm_donate_fail' bins/game-svr/src` = 0；
-recon 门把它归卡 `openmir2-m3-guild-state`（不是 orphan-encoder-wiring）。
+summary: {"n/a-oracle-noop": 1, "implemented": 172, "tracked": 15, "n/a-unreachable": 3}
+inbound : implemented 70 / tracked 2 / n/a-oracle-noop 1          （共 73）
+outbound: implemented 102 / tracked 13 / n/a-unreachable 3       （共 118）
 ```
 
-> 卡 `openmir2-orphan-encoder-wiring` 的最新 status 写「片103 落地；余量=真机窗口项」，
-> 但**当前 HEAD 的派发门仍判 13 帧 `rust=no`**——以门为准，这 13 帧没有生产发射点。
-> `SM_DONATE_FAIL` 与它们不同源（无编码器；oracle 失败支属行会/城堡链路），不得并进同一批。
+- **入站 tracked 2**：
+  - `CM_ADJUST_BONUS` —— 真接线缺口：`lib.rs:2383-2385` 仍 `client_adjust_bonus(cmd.recog, 0)`（`BonusPoint` 未挂会话态）。
+  - `CM_OPENDOOR` —— **不是接线缺口**：门链已判结构性不可达（`T-65`，卡 `openmir2-door-chain-wiring` 已合 `75fa9a2d6`；
+    R 卡保持 in-progress 等真机窗口）。Rust 维持 `client_open_door(false)` 即逐字节等价。
+- **出站 tracked 13 = 12 个孤儿编码器 + `SM_DONATE_FAIL`**。12 帧三态以
+  `docs/orphan-encoder-trigger-audit-20261023.md`（master `6d79be4da`）为准：**0 可直接接线 / 8 需补上游 / 4 不可达**。
+
+| 帧 | 三态 | 依据 / 台账 |
+|---|---|---|
+| `SM_BREAKWEAPON(1102)` | 需补上游（武器升级结算） | T-174；**无卡（待建）**；审计建议细化 T-195（未登记） |
+| `SM_HIDEEVENT(805)` / `SM_SHOWEVENT(804)` | 需补上游（`VisibleEvents` 差集 + `MapEvent.Id==0` 折叠） | T-178；**无卡（待建）**；审计建议 T-196（未登记） |
+| `SM_LAMPCHANGEDURA(655)` | 需补上游（`UseLamp`；线上字段 `Recog=Dura`） | T-180；**无卡（待建）**；审计建议 T-194（未登记） |
+| `SM_QUERYYBDEAL(23023)` / `SM_QUERYYBSELL(23021)` | 需补上游（脚本动作 343/344 + 字节尾通道） | T-181；**无卡（待建）**；审计建议 T-198（未登记） |
+| `SM_RECONNECT(802)` | 需补上游（G11 跨服搬家；GM 面 perm 0 锁死） | T-182；**无卡（待建）**；审计建议 T-199（未登记） |
+| `SM_SKELETON(33)` | 需补上游（屠宰效果体 `Skeleton`/`BodyLeathery`） | T-183；**无卡（待建）**；审计建议 T-197（未登记） |
+| `SM_CLOSEDOOR(614)` / `SM_OPENDOOR_OK(612)` | **不可达（oracle 结构性）** | T-176 + T-65（门守卫写反；`75fa9a2d6`） |
+| `SM_ITEMSHOW(610)` | **不可达（oracle 结构性）** | T-179 + T-19/T-25/T-32（`MapItem.ItemId` 恒 0） |
+| `SM_CHANGEFACE(1104)` | **不可达（现网部署级）** | T-175（旧措辞）；审计建议订正为 T-200（未登记），复活=三步、代价 M |
+| `SM_DONATE_FAIL(765)` | **非缺陷**（oracle `RM_DONATE_FAIL` 零生产者） | 卡 `openmir2-sm-donate-fail-encoder` closed；门仍把它归 `openmir2-m3-guild-state` |
+
+> **第 4 轮变化**：`CM_WANTMINIMAP` 与 `SM_CLOSEHEALTH` 已离开 tracked（前者 `4d9bab444`，后者 `e0114909e`），
+> 所以缺席的孤儿帧是 12 而不是 13。T-177（`SM_CLOSEHEALTH`）已由卡 `openmir2-sm-closehealth-wire` 接线（R 卡等窗口）。
 
 ### 4.2 名字级可达性扫描（`pub fn` 调用点是否落在生产路径）
 
-用同一个 `production_live_functions` 对 `bins/game-svr/src` 的全部 `pub fn` 做反查：
+用同一个 `production_live_functions` 对 `bins/game-svr/src` 的全部 `pub fn` 做反查（第 4 轮实测）：
 
 ```sh
-# 见 §8.3 livefns.py；结果：
-live fns 2638 spans 3873
-pub fns in bins defs 842 unique 724
-unreachable pub fns defs 63 unique 58
+cd mir2-rs
+python - <<'PY'
+import sys, re
+sys.path.insert(0,'tests/parity/coverage')
+import recon_gates as rg
+repo=rg.Path('..')
+corpus=rg.RustCorpus(rg.rust_source_dirs(repo, exclude=rg.DISPATCH_EXCLUDE))
+live,spans=rg.production_live_functions(corpus)
+print('live',len(live),'spans',len(spans))
+lines=rg._file_code_lines(corpus)
+defs=[]
+for s in spans:
+    if 'bins' not in rg.Path(s['file']).parts: continue
+    first=lines[s['file']][s['start']]
+    if re.search(r'\bpub\s+(?:async\s+)?fn\s+'+re.escape(s['name'])+r'\b', first):
+        defs.append(s['name'])
+un=[n for n in defs if n not in live]
+print('pub fns defs',len(defs),'unique',len(set(defs)))
+print('unreachable pub fns defs',len(un),'unique',len(set(un)))
+PY
+# 第 4 轮输出：live 2739 spans 3985
+#              pub fns defs 848 unique 722
+#              unreachable pub fns defs 48 unique 43
 ```
 
-58 个「从 `main` 不可达」的 pub fn 分三类：
+43 个「从 `main` 不可达」的 pub fn（唯一名）分三类：
 
 | 类别 | 数量 | 模块 / 函数 | 判定 |
 |---|---:|---|---|
-| 测试支撑（预期） | 13 | `testsupport.rs`：`setup_db/open_db/insert_character/...` | 非生产，忽略 |
-| 编码器（多数与 §4.1 出站缺口**不同源**） | 25 | `smframe_ext.rs` 15、`smframe.rs` 9、`guild_frames.rs::sm_guild_break_ally_ok_770` | **仅 13 个**对应派发门 tracked；其余 12 个是旧 helper/内部帧（`sm_makedrug_fail`/`sm_makedrug_success`/`sm_sendusermakedrugitemlist` 3；`smframe.rs` 的 `client_movefail_layout_enabled`/`frames`/`sm_horserun`/`sm_movefail`/`sm_movefail_client`/`sm_movefail_frame`/`sm_run`/`sm_walk` 8；`sm_guild_break_ally_ok_770` 1），**不算缺口** |
-| 其它需人工复核 | 20 | `config::default_path`、`chat::{cry_text,cry_hear_frame}`、`inbound::{client_make_drug_item,sm_butch}`、`npcs::{build_npc_spawns,place_npcs}`、`selloff::{get_sell_off_gold,select_sell_date}`、`ability::item_names`、`bag::from_slots`、`castle::parse_castle_date`、`gamegold::auto_tick`、`homemap::new_human_spawn`、`merchant::spawn_merchants`、`mongen::venture_server_default_is_false`、`npc::run_std_mode_func`、`record::encode_player_data`、`shop::is_merchant`、`trade::deal_cancel_a` | **名字级过近似**：闭包/trait 对象/同名方法会误报。已抽查 `chat::cry_*` 是**故意的**（oracle `CryCry` NRE，T-118，零帧），`place_npcs`/`spawn_merchants` 的生产入口走 `*_with_scripts` 变体 ⇒ 多数非真缺口 |
+| 测试支撑（预期） | 15 | `conn`/`ddl_for`/`drop_db`/`fail_insert_trigger`/`fail_update_trigger`/`gate_user`/`insert_character`/`insert_index`/`open_db`/`setup_db`/`take_frames`/`test_server`/`with_now`/`with_speaker`/`with_world` | 非生产，忽略 |
+| 编码器 | 24 | 与 §4.1 出站 tracking **同源的 12 个**（`sm_breakweapon`/`sm_changeface`/`sm_closedoor`/`sm_hideevent`/`sm_itemshow`/`sm_lampchangedura`/`sm_opendoor_ok`/`sm_queryybdeal`/`sm_queryybsell`/`sm_reconnect`/`sm_showevent`/`sm_skeleton`）+ **12 个旧 helper/内部帧**（`client_movefail_layout_enabled`/`frames`/`sm_guild_break_ally_ok_770`/`sm_horserun`/`sm_makedrug_fail`/`sm_makedrug_success`/`sm_movefail`/`sm_movefail_client`/`sm_movefail_frame`/`sm_run`/`sm_sendusermakedrugitemlist`/`sm_walk`） | 同源 12 个算 tracked；其余 12 个**不算缺口** |
+| 其它需人工复核 | 4 | `decode_user_reply`、`default_path`、`get_hum_permission`、`parse_castle_date` | 名字级过近似：闭包/trait 对象/同名方法会误报；`get_hum_permission` 是 oracle 注释死读（D-1） |
 
-`crates/` 同口径：204 个 def / 201 个 unique 名字从 bins `main` 不可达；**不建议直接当缺口清单**——
-`hutil32.rs`（27）、`castle.rs`（32）、`lists.rs`（18）、`castle_tax.rs`（13）、`combat.rs`（13）、
-`magic.rs`（13）、`world.rs`（13）里混有纯工具函数、测试专用 API 与动态派发。需要按卡逐项 triage。
+**`crates/` 侧同口径补报**（同一个 `production_live_functions` 调用图，只去掉 `bins` 过滤）：
 
-### 4.3 模块面结论
+```sh
+python - <<'PY'
+import sys,re
+sys.path.insert(0,'tests/parity/coverage'); import recon_gates as rg
+c=rg.RustCorpus(rg.rust_source_dirs(rg.Path('..'),exclude=rg.DISPATCH_EXCLUDE))
+live,spans=rg.production_live_functions(c); lines=rg._file_code_lines(c)
+d=[s for s in spans if 'bins' not in rg.Path(s['file']).parts and
+   re.search(r'\bpub\s+(?:async\s+)?fn\s+'+re.escape(s['name'])+r'\b', lines[s['file']][s['start']])]
+u=[s['name'] for s in d if s['name'] not in live]
+print(len(d), len(set(s['name'] for s in d)), len(u), len(set(u)))
+PY
+# 第 4 轮实测：1068 941 201 198
+```
 
-- **接线缺口**：协议出站 13 帧（+1 帧 `SM_DONATE_FAIL` 缺编码器）仍在；内容消费 2 件（UnbindList、AdminList）已于 2026-10-23 关闭。
-- 入站 3 条 tracked 是「handler 已有、生产参数未挂」的**小接线**，不是重写缺口。
-- 模块文件本身没有「文件存在但 `mod` 未声明」的孤儿：`find bins/game-svr/src -name '*.rs'` 与
-  `lib.rs` 的 `mod` 声明逐一对账，仅 `castle/tests.rs`、`guild_official/tests.rs`、`guild_runtime/tests.rs`
-  三个 `tests` 子模块未声明（测试文件，正常）。
+`crates/` 实测 **1068 defs / 941 unique**，其中从 `bins` 的 `main` 不可达 **201 defs / 198 unique**。
+按与 `bins` 一致的三档口径（**互斥**；判定 =「该名字在全部 crate 代码里出现的次数」+ 白名单点名）：
+
+| 档 | 数量（unique） | 判定 | 代表模块 / 例子 |
+|---|---:|---|---|
+| **仅定义处出现（真不可达强候选）** | **42** | 全仓代码里除定义行外零出现 ⇒ 无任何调用点 | `magic.rs` 10、`world.rs` 6、`combat.rs` 3；如 `resolve_magic`、`power_holy_shield`、`mag_sace_move` |
+| **白名单点名（已登记，待逐条复核）** | **25** | 名称在 `tests/parity/whitelist.md` 出现（2 条与上档重叠，归上档） | `castle.rs::get_castle`/`repair_door`/`repair_wall`、`lists.rs::load_no_clear_mon_list`、`merchant_tax_amount` |
+| **待分诊（名字级过近似）** | **131** | 有调用点，但调用者自身不可达，或经 trait object/闭包/同名方法被误判 | `castle.rs` 27、`hutil32.rs` 26、`castle_tax.rs` 10、`combat.rs` 9 |
+
+合计 42 + 25 + 131 = **198**。判定命令见 §11 第①条附注。
+**注意**：这 198 条**不是 198 个待修缺口**——第二/三档里大量是
+「已接线但名字级调用图看不到」的过近似（第 3 轮已证 `chat::cry_*`、`place_npcs` 等）。
+真正可判的只有第一档 42 条，仍需逐条 triage 后才能进卡。
+
+> **归因订正**：旧稿的「bins 63 defs / 58 unique」与「`crates/` 201」**来源无法归因到 `livefns.py` 的现规则**——
+> 该脚本（`E:/tmp/audit-inv-20261022/livefns.py:13`）写死 `if "/bins/" not in f: continue`，只数 bins，
+> 在本 HEAD 跑出的是 **bins 48/43**。旧数字应视为早期口径/旧快照的遗留，不再沿用；本轮两套数字都按仓内 API 现算。
+
+### 4.3 模块面结论（第 4 轮）
+
+- **真正待接线的协议面 = 9 条**：入站 `CM_ADJUST_BONUS` 1 条 + 出站「需补上游」8 帧。
+- **已判不可达/非缺陷的 6 条**：`CM_OPENDOOR`（T-65）+ `SM_CLOSEDOOR`/`SM_OPENDOOR_OK`（T-176）+
+  `SM_ITEMSHOW`（T-179）+ `SM_CHANGEFACE`（T-175）+ `SM_DONATE_FAIL`（非缺陷）。门仍计 tracked，但**不许接线**。
+- **内容消费件实现缺口 = 0**：`UnbindList`、`AdminList` 均已接（2026-10-23）；tracked 3 条均 `rust=yes`。
+- **孤儿编码器审计的 4 个不可达帧共享一个根因**：`MapItem.ItemId`/`MapEvent.Id`/`MapDoor.DoorId`
+  三处 `GetNextIdentity` 全被注释 ⇒ 三者争 `CellObjectMgr` key 0（审计 §4.3/§5⑤）。这是**登记依据**，不是接线 TODO。
+- 模块文件没有「文件存在但 `mod` 未声明」的孤儿：`find bins/game-svr/src -name '*.rs'` 与 `lib.rs` 的 `mod` 声明逐一对账，
+  仅 `castle/tests.rs`、`guild_official/tests.rs`、`guild_runtime/tests.rs` 三个 `tests` 子模块未声明（测试文件，正常）。
 
 ---
 
 ## 5. 与既有盘点对账（reviewer-14 Important-1）
+
+> **本节是第 2 轮（2026-10-22，HEAD `24e9a5fab`）的历史对账记录，状态列不是第 4 轮实测。**
+> 第 4 轮只更新了 §5.3 的 A 152 分档与 §5.4 的口径说明；逐条卡状态请以 board 为准。
 
 - 对账时点：HEAD `24e9a5fab`（master `b0dde46a9`）；board 快照 2026-10-22T14:46Z（`E:/tmp/board-r2.json`）。
 - 方法：四份件按标题截段后用 `openmir2-[a-z0-9-]+` 抽 id，再与 board 的列名 join；本文 §3 的四类集合用同一方法反查。可复现命令见 §8.4。
@@ -583,12 +677,12 @@ unreachable pub fns defs 63 unique 58
 | A-18 | 编码 E-3..E-8 | A `openmir2-encoding-core-e1-e2`（callsites 卡已 closed） | 部分收口：`openmir2-encoding-callsites` **已完成**；E-7 的 R 窗口仍在 |
 | A-19 | LB-10 持久化证据 | A `openmir2-dbsrv-fault-paths` | 开放（已合 `de71cc01d`；LB-08/09/10 窗口） |
 | A-20 | M3 系统级夹具/驱动 | A `openmir2-m3-drop-exp-align` / `-quest-align` / `-guild-castle-align` / `-hero-pet-align` / `-final-acceptance` | 开放（HEAD 上 `run_drop_exp_pair.ps1`/`run_quest_pair.ps1`/`run_guild_castle_pair.ps1`/`run_hero_pet_pair.ps1` **均在仓内**；等窗口） |
-| A-21 | `SETMPAMODE DECHP` / `sys_msg` | **B-补（§3.2.1）** | 开放（无卡；`ActionOfSetMapMode` 无实现分支） |
+| A-21 | `SETMPAMODE DECHP` / `sys_msg` | **已解决**（`f5b401cc8`，merge `d1b13ba14`） | 已解决：分支表 + `sys_msg` 下发帧 + 宿主落库全链（T-85）；R 卡等窗口 |
 | A-22 | `CastleMgr.Run/Save` 持久化排水 | B `openmir2-castle-pure` | 开放（已合 `4a0590e90`；接线 + W1-W3） |
 
 ### 5.3 开窗前置（R6/R7/R8 三红 + E1–E4 授权）
 
-所有 A 类（152 张）与 r-card 的 71 张共用同一组机器前置；`docs/m3-remaining-inventory-20261022.md` §0.2/「下一次开窗」记录 2026-10-22 **三红**：
+所有 A 类（152 张 = **①57 / ②45 / ③50**，见 §3.1）与 r-card 的 71 张共用同一组机器前置；`docs/m3-remaining-inventory-20261022.md` §0.2/「下一次开窗」记录 2026-10-22 **三红**：
 
 - **R6**：窗口镜像 `f3675f69aa` 落后基线 `c83a9ae24` 的 **93 件**生产路径（guard 实跑读数）。
 - **R7**：`E:/tmp/m2svr-window-target` 与 `window-provenance.json` 不存在（未在当前镜像重编六件并重录 provenance）。
@@ -603,53 +697,60 @@ unreachable pub fns defs 63 unique 58
 - **E4** C# DBSrv/LoginSrv 身份不在六件 provenance 内（E4-a 用主检出构建 / E4-b 全 Rust 对照，但失去 C# oracle）。
 - RNG 账本/W9 另需 **O1–O7**（`docs/window-owner-decisions-20261018.md §5`）。
 
-⇒ 本文 §6 的 top5 中 #2/#5（落库/数值）与 #1 的耐久帧属 R，**开窗前只能做构造级/离线片**。
+⇒ 本文 §6 的 top5 中 #2/#5（落库/数值）属 R；#1 已由审计改判，仅剩 8 帧「需补上游」里含耐久两帧
+（T-174 `SM_BREAKWEAPON`、T-180 `SM_LAMPCHANGEDURA`）属 R，**开窗前只能做构造级/离线片**。
 
 ### 5.4 计数口径差异（避免混用）
 
-- m3 A/B/C/D 是**面 / 行**口径（22 / 60 / 20 / 14），本文 §3 是**卡**口径（A 152 / B 22 / D 8 / C 2 / O 1）；两者不可相加。
-- m3 D 14 是 **owner 待裁决项**（含 E1–E4、O1–O7、D-08、bins 串行序等）；本文 D 8 是从卡 `work` 文本推断的 **needs-human 卡**。二者**不是同一集合**，交集随抽取口径变化（复算命令见 §8.4 末尾）：
+- m3 A/B/C/D 是**面 / 行**口径（22 / 60 / 20 / 14）。本文 §3 的卡口径已在第 4 轮改为：board 实读 203 进行中 / 5 待审 / 169 已完成；
+  窗口欠账 152 张按机器分档 ①57/②45/③50。**旧的 A 152/B 22/D 8/C 2/O 1 人工四分类已停用**（不可复算，见 §7）。两者不可相加。
+- m3 D 14 是 **owner 待裁决项**（含 E1–E4、O1–O7、D-08、bins 串行序等）；旧的 D 8 是从卡 `work` 文本推断的 **needs-human 卡**（已停用）。二者**不是同一集合**，交集随抽取口径变化（复算命令见 §8.4 末尾）：
   - **全件口径**（在整份 `m3-remaining-inventory-20261022.md` 抽 `openmir2-*` id）⇒ **4 张**：`gategate-keepalive`（m3 B-40）、`m5-convergence-drills`（m3 B-58 / G11）、`npc-ctor-draws`（D-12）、`tmp-cleanup-audit-redo`（D-10）；
   - **m3 D 表口径**（只抽「## D 表」段）⇒ **2 张**：`npc-ctor-draws`（D-12）、`tmp-cleanup-audit-redo`（D-10）。
   - 原稿「交集 3 张」不可复现，已按上述两口径改写；`rng-scene-pin-path` 在 m3 件里未以卡 id 出现（D-09 只引用 `m3-rng-scene-driver`），故不计入交集。
 
 ---
 
-## 6. 下一批 top5（可立刻派）
+## 6. 下一批 top5：第 4 轮结项状态
 
-排序依据：**现网可见行为 / 风险 / 写集冲突**。**当前唯一在跑的 Rust 代码车道 = `wt-gm3`**（`openmir2-worker-4`，分支 `gm-batch-3`，**HEAD `e39a08963`，工作区干净**）。第 2 轮记录的「工作区有未提交修改 `gmcmd.rs` + `lib.rs` + `whitelist.md`」在 R1 修订提交 `e39a08963` 时已落盘；第 3 轮复核 `git -C /e/tmp/wt-gm3 status --porcelain` ⇒ **0 行**。其它 worktree 实测（`git worktree list`，2026-10-22T15:05Z）：`wt-clickbag` 在已合并 commit `cddd3e0dd`（detached，干净，等清理）、`OpenMir2-wt-goods` 在 `lane/server-goods` @ `4eb774463`（干净，未合 master；`git diff --stat master...HEAD` **只有 `src/GameSrv/Npc/Merchant.cs`（C#）** ⇒ 不是 Rust 代码车道；master 有同题 `fb2824b6b` 但 oid 不同）、`m2svr-window-origin` 是窗口镜像（detached @ `229d52cd9`，非车道）、`wt-inventory` 为本审计线（只改文档）。**旧稿把 board 历史 `worktree` 字段当在跑清单，已更正。**
+> 第 3 轮把排序依据写成「与在跑车道 `wt-gm3` 冲突 / `lib.rs` 被占用」，该前提**已过期**：
+> 第 4 轮 board 是 203 进行中 / 5 待审，多车道并行。下表按**当前 HEAD 的机器事实**逐条结项，
+> 不再沿用「等某条车道合并后才能排」的表述。
 
-> **共同阻塞**：下 5 条全部要改 `bins/game-svr/src/lib.rs`（RM→SM 泵 / 入站分支 / `handle_shop_cmd`），而 `lib.rs` 正被 `wt-gm3` 占用；因此 **top5 只能串行排在 `wt-gm3` 合并之后**，没有一条能与它并行。`whitelist.md` 与 `smframe_ext.rs` 亦为共享热点。
+| # | 单元 | 第 4 轮状态 | 剩余部分 / 证据 |
+|---:|---|---|---|
+| 1 | `openmir2-orphan-encoder-batch-a` | **部分解决**：卡已 closed @ `f164ccd20`（12 帧登记 T-174..T-183 + 判定表；第 13 帧 `SM_CLOSEHEALTH` 转 `openmir2-sm-closehealth-wire` @ `e0114909e`）。但**审计 `6d79be4da` 改判**：0 可直接接线 / 8 需补上游 / 4 不可达。 | 剩余 = **8 帧需补上游**（T-174/178/180/181/182/183）+ **4 帧登记不接**（T-175/176/179）。已不是「一批接线」，需按帧拆上游卡。 |
+| 2 | `openmir2-unbindlist-consumer` | **已接线** @ `4c983375c`（merge `f796eaeed`）；卡仍 in-progress。`recon content` 已 `rust=yes / implemented`。 | 剩余 = **R 窗口真机**：6 条 `SM_ADDITEM(200)` + `SM_EAT_OK(635)` + `SM_WEIGHTCHANGED(622)`，以及断线存档 `hum_items` 含 6 件。 |
+| 3 | `openmir2-minimap-consumer-wire` | **已解决并关卡** @ `4d9bab444`（merge `8889f7f28`；status closed @ `51a0d5342`）。`CM_WANTMINIMAP` 已离开 tracked。 | 无。 |
+| 4 | `openmir2-merchant-script-load`（A-08 / T-47③） | **未开工，仍无卡**。证据：`shop.rs:36-38` 仍写「`Market_Def` 商人脚本执行 + `GotoLable("~@repair")`：本宿主未装载」；`main.rs` 无 `Market_Def` 装载序。 | 需建卡；判据与写集沿用第 3 轮表（`shop.rs`/`lib.rs`/`merchant.rs`/`main.rs`）。 |
+| 5 | `openmir2-adjust-bonus-wire` | **未开工，仍无卡**。证据：`lib.rs:2383-2385` 仍 `inbound::client_adjust_bonus(cmd.recog, 0)`。 | 需建卡；**R 级**（`SM_ABILITY(52)`/`SM_SUBABILITY(752)` 两帧 + 真机字段级 diff）。 |
 
-| # | 单元（卡 id / 建议新卡） | 写集（已逐文件核实） | tier | 判据 | 与在跑车道冲突 |
-|---:|---|---|---|---|---|
-| 1 | `openmir2-orphan-encoder-batch-a`（**只含 13 个有编码器帧**；剔除 `SM_DONATE_FAIL`） | `smframe_ext.rs`（12 编码器）+ `smframe.rs`（`sm_skeleton`）+ `lib.rs`（RM→SM 发射泵）+ 生产者 `pickwire.rs`/`useitem.rs`/`sessionwire.rs`/`mapdoor.rs`/`ground.rs`；`whitelist.md`（若登记 T-*） | L（帧接线）/ R（`SM_BREAKWEAPON`、`SM_LAMPCHANGEDURA` 改耐久） | ① 每条：oracle 触发点逐行对照 + 帧字节（GBK）；② 抽样冒烟：至少 1 条端到端（建议 `SM_RECONNECT`）；③ 牙：撤发射点 ⇒ 该帧门 RED；④ 耐久两帧改走 R 窗口 | **lib.rs + whitelist.md 与 wt-gm3 冲突**。另：`SM_CHANGEFACE`/`SM_SKELETON` 的生产者本身未实现（上游功能缺口），应先拆子片或明确「只做编码器+构造用例」 |
-| 2 | `openmir2-unbindlist-consumer` | `useitem.rs`（StdMode 31）、`bag.rs`、`lib.rs`（调用点）；`crates/data/src/lists.rs` **只读** | **R** | ① StdMode 31 + `AniCount==0` ⇒ 解包 6 件，背包逐槽字段 diff；② 容量不足分支与 oracle 同（不吃）；③ 真机窗口；④ 牙：把解包改回 no-op ⇒ T-17 用例红 | **lib.rs 与 wt-gm3 冲突**；`useitem.rs`/`bag.rs` 无其它车道 |
-| 3 | `openmir2-minimap-consumer-wire` | `lib.rs:2259`（`CM_WANTMINIMAP` 分支）+ `contentload.rs`（loader 已在）+ `inbound.rs`（`client_get_min_map` 已有） | **L** | ① 构造级：`Envir.MinMap>0` ⇒ `SM_READMINIMAP_OK(710)` 且 `param=MinMap`；`=0` ⇒ `SM_READMINIMAP_FAIL`；② 抽样冒烟：进图后发 `CM_WANTMINIMAP(1033)` 收到 OK；③ 牙：把传参改回 0 ⇒ FAIL 帧用例红 | **lib.rs 与 wt-gm3 冲突**；`contentload.rs`/`inbound.rs` 无其它车道 |
-| 4 | `openmir2-merchant-script-load`（A-08 / T-47③；**原稿漏列**） | `shop.rs`（`~@repair`/say 链路）+ `lib.rs`（`handle_shop_cmd`）+ `merchant.rs`/`npcs.rs`（`MerchantScriptBook` 已存在）+ `main.rs`（`Market_Def` 装载序） | L（说词/标签）/ R（修理/买卖写金币与背包） | ① 商人 `Market_Def` 装载数与 oracle 同；② `~@repair` 命中 ⇒ `SM_MERCHANTSAY(643)` 出队序；③ 牙：删装载 ⇒ say 用例红；④ 买卖/修理落库走 R 窗口 | **lib.rs 与 wt-gm3 冲突**；`shop.rs`/`merchant.rs` 无其它车道 |
-| 5 | `openmir2-adjust-bonus-wire` | `lib.rs:2275`（`CM_ADJUST_BONUS` 现传 `bonus_point=0`）+ `inbound.rs` + `record.rs`/`ability.rs`；`crates/storage` 的 `PlayerData.bonus_point`（`playerdata.rs:641`）**已存在** | **R** | ① 逐字段：`BonusPoint=n` 后 `SM_ABILITY(52)`/`SM_SUBABILITY(752)` 两帧；② `bonus_abil_changed=false`（oracle 恒 `+=0`）；③ 真机字段级 diff（窗口）；④ 牙：`nPoint+0==BonusPoint` 取反 ⇒ 用例红 | **lib.rs 与 wt-gm3 冲突**。**接口冻结线**：`crates/storage`/`crates/protocol` 若需改字段或编码，必须先按 §12.4 通知受影响线；当前 `bonus_point` 已存在，预计只读，不改 schema |
+**补充：已解决的相邻项**
 
-> 明确的**不派**：`openmir2-gm-batch-4-numeric` 与 `wt-gm3` 的 `gmcmd.rs` 直接冲突，且批次 3 尚未合并；等 `wt-gm3` 收口后再排。
+| 单元 | 状态 | 剩余 |
+|---|---|---|
+| `openmir2-click-path-bag-writeback` | 已合 `b0dde46a9`（R 卡保持 in-progress） | 真机落库对拍（T-160） |
+| `openmir2-weapon-upgrade-values` | 已合 `229d52cd9`（R 卡保持 in-progress） | 窗口五项 |
 
 ---
 
-## 7. 最不确定的 2 个数字（建议复核者重点核）
+## 7. 已订正/仍不确定的数字（第 4 轮）
 
-> 原第 1 项「GM G2–G6 批次分解」已按复核意见与 §2.2 整节一起删除；GM 侧精确口径只看 §2.2 的 12 族表（185/35/150）。
+1. **旧 A/B/D/C/O 四分类（A 152 / B 22 / D 8 / C 2 / O 1）——已停用。**
+   分类脚本 `/e/tmp/audit-inv-20261022/finalcls.py` 不在仓库、且基于 185 卡快照，任何人 checkout 都无法复算。
+   第 4 轮起改用两个可复算口径：① 窗口欠账看 `docs/window-debt-reclass-20261023.md` 的 **①57 / ②45 / ③50**；
+   ② 协议未接线看 `recon_gates.py dispatch` 的 tracked（15，其中有效待办 9）。
+2. **`crates/` 的「201 个不可达 pub fn」——已补报，但只当分诊候选。**
+   仓内 API 同口径复算：**201 defs / 198 unique**（defs 1068 / unique 941）。按 §4.2 三档：
+   **42 仅定义处出现（真不可达强候选）/ 25 白名单点名（已登记待复核）/ 131 待分诊（名字级过近似）**。
+   **198 不是 198 个缺口**；旧稿「201 来自 livefns.py」的归因已订正（该脚本现规则只数 bins = 48/43）。
+3. **§1.1 的 274 口径仍有两种合法读法**：按 **handler code + switch 分支** = 274（已实现 147 / 未实现 124 + 3 重复 code）；
+   按 **唯一 handler 名 + switch 分支** = 271（已实现 147 / 未实现 124）。两者不可相加或混用；
+   本文表格固定用 274（code 口径）并在 §0 脚注写明唯一名 241。
 
-1. **卡 backlog 的 A/B/D/C/O 分类**（§3）。分类是**人工逐卡指派**（集合在 `/e/tmp/audit-inv-20261022/finalcls.py`），
-   依据是 `work` 自由文本，不是结构化字段；边界卡至少 4 张：`openmir2-script-take-persist`（窗口 vs 夹具）、
-   `openmir2-openybdeal-host-wiring`（真机 + 残余代码）、`openmir2-gm-commands-design`（在飞 vs 已合）、
-   `openmir2-inbound-dispatch-red-batch`/`openmir2-envir-redlist-batch`（剩余接线 vs 可收口）。
-   预计 **±5 张**（A↔B 或 A↔C 漂移）。
-2. **`crates/` 的 201 个「不可达 pub fn」**（§4.2）。名字级调用图是**过近似**，
-   trait object / 闭包 / 同名方法会把已接线函数判成不可达（已证例：`chat::cry_*` 是故意零帧、
-   `place_npcs` 走 `*_with_scripts` 变体）。`bins/` 的 58 个更可信；`crates/` 的 201 个只能当 triage 候选，
-   直接当缺口会**高估**。
-
-> 附：§1.1 的「274 个派发目标」是把「注册表 handler」与「engine switch 分支」相加得到；
-> 两者 key 空间不同（handler 名 vs CmdCode case），但**不保证一个 code 只落一边**——若要「按 code 去重」的
-> 口径，需要先跑一遍 `codes.rs` 的枚举全集，当前数字未做该去重（偏保守的高估）。
+> 仍在等窗口、但数字本身可复算的不确定性：`docs/window-debt-reclass` 的 ①/②/③ 分类依赖 `tools/probe/scenarios/`
+> 的 15 个场景文件——其中 12 个当前在分支 `card/openmir2-dualrun-window-burndown`，**尚未进 master**（该文件 §1 明示）。
+> 若窗口基线不含该分支，① 的「现有场景」实际只有 3 个，这是开窗前必须确认的前置。
 
 ---
 
@@ -658,9 +759,11 @@ unreachable pub fns defs 63 unique 58
 ### 8.1 GM 族 × 实现状态 join（§2.2）
 
 ```sh
-cd /e/tmp/wt-inventory/mir2-rs
-# 1) 从设计件截出 §4.3 表（342..533 行）
-sed -n '342,533p' tests/parity/m3/design-gm-commands-20261023.md > E:/tmp/table43.md
+cd mir2-rs
+# 1) 从设计件截出 §4.3 表（按标题截，不按固定行号，避免行号漂移）
+awk '/^### 4.3 /{f=1;next} /^### 4.4 /{f=0} f' \
+  tests/parity/m3/design-gm-commands-20261023.md > E:/tmp/table43.md
+grep -c '^| *[0-9]* *|' E:/tmp/table43.md        # 185
 # 2) join.awk（FS="|"；gmcmd.rs 取 name/imp，table 取第 3 列族 + 第 5 列现网名）
 cat > E:/tmp/join.awk <<'AWK'
 BEGIN{FS="|"}
@@ -683,42 +786,53 @@ for(k in t) printf "%-16s total=%3d done=%3d remain=%3d\n",k,t[k],d[k],r[k]}' E:
 # 校验：FAM 185 行、IMP 185 行、名字集合双向零差集（comm -3 为空）
 ```
 
-### 8.2 卡分类（§3）
+第 4 轮实测：FAM 185 / IMP 185，`done` 合计 97、`remain` 合计 88；再按 T-161/T-163 的 21 条第三态拆，
+即 **76 完整 + 21 第三态 + 88 未实现**（§2.2 表）。
+
+### 8.2 卡计数（§3.1）
 
 ```sh
-walgit collab board --format json > E:/tmp/board-r2.json
-python - <<'PY'
-import json
-d=json.load(open('E:/tmp/board-r2.json',encoding='utf-8'))
-rows=[[c['id'],c.get('owner'),c.get('worktree'),c.get('branch'),c.get('work')]
-      for col in d['columns'] for c in col['cards'] if col['name']=='进行中']
-print(len(rows))  # 185
-print({c['name']:len(c['cards']) for c in d['columns']})
-PY
-# 分类：人工逐卡指派，集合硬编码在 /e/tmp/audit-inv-20261022/finalcls.py
-# 第 2 轮修正：rng-consumer-structure-parity 从 A 移到 C；click-path-bag-writeback 从 O 移到 A。
-# 第 3 轮：脚本已按上述两处更新并实跑（cd /e/tmp/audit-inv-20261022 && python -I finalcls.py）
-# 实跑输出：Counter({'a': 152, 'b': 22, 'd': 8, 'c': 2, 'o': 1})
-# 即 A 152 / B 22 / D 8 / C 2 / O 1，与本文 §3.1 一致。
+walgit collab board --format json > E:/tmp/board.json
+python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));print({c['name']:len(c['cards']) for c in d['columns']})"
+# 第 4 轮快照（6d79be4da @ 2026-10-23T07:31+08:00；实时量，复跑会变）：
+# {'待认领': 0, '进行中': 203, '待审': 5, '需要人': 0, '受阻': 0, '已完成': 169}
 ```
+
+> **旧 §8.2 的 `finalcls.py` 分类已停用**（脚本不在仓库、基于 185 卡快照、不可复算）。
+> 当前 A 窗口欠账的分档见 `docs/window-debt-reclass-20261023.md` §3/§8（①57 / ②45 / ③50）。
 
 ### 8.3 生产可达性（§4.2）
 
 ```sh
-cd /e/tmp/wt-inventory/mir2-rs
+cd mir2-rs
 python - <<'PY'
-import sys
+import sys, re
 sys.path.insert(0,'tests/parity/coverage')
 import recon_gates as rg
 repo=rg.Path('..')
 corpus=rg.RustCorpus(rg.rust_source_dirs(repo, exclude=rg.DISPATCH_EXCLUDE))
 live,spans=rg.production_live_functions(corpus)
 print('live',len(live),'spans',len(spans))
+lines=rg._file_code_lines(corpus)
+defs=[]
+for s in spans:
+    if 'bins' not in rg.Path(s['file']).parts: continue
+    if re.search(r'\bpub\s+(?:async\s+)?fn\s+'+re.escape(s['name'])+r'\b',
+                 lines[s['file']][s['start']]):
+        defs.append(s['name'])
+un=[n for n in defs if n not in live]
+print('pub fns defs',len(defs),'unique',len(set(defs)))
+print('unreachable pub fns defs',len(un),'unique',len(set(un)))
 PY
-# 输出：live 2638 spans 3873（HEAD 24e9a5fab 复跑，与第 1 轮相同）
+# 第 4 轮实测：live 2739 spans 3985
+#              pub fns defs 848 unique 722
+#              unreachable pub fns defs 48 unique 43
 ```
 
-### 8.4 与既有盘点对账（§5，第 2 轮新增；第 3 轮补 §5.4 交集复算）
+### 8.4 与既有盘点对账（§5；**历史脚本，第 2/3 轮**）
+
+> **本小节的脚本依赖 `/e/tmp/wt-inventory` 与 `E:/tmp/board-r2.json`（第 2 轮快照），不是第 4 轮复算入口。**
+> 第 4 轮复算入口是 §11 的三条命令；本节保留只为追溯 §5 的历史结论。
 
 ```sh
 cd /e/tmp/wt-inventory
@@ -760,16 +874,18 @@ PY
 #            'openmir2-npc-ctor-draws', 'openmir2-tmp-cleanup-audit-redo']                      （4 张）
 ```
 
-### 8.5 残留物清单
+### 8.5 残留物清单（第 4 轮）
 
 | 路径 | 内容 | 处置 |
 |---|---|---|
-| `/e/tmp/audit-inv-20261022/` | 第 1 轮盘点中间物 + **第 3 轮已更新并重跑的分类脚本**：`board.json`、`cards.tsv`、`cardtables.md`、`pairs.tsv`、`parsestats.{json,txt}`、`recon-*.json/txt`、`join.awk`、`classify*.py`、**`finalcls.py` / `finalcls.txt`（§8.2 分类的唯一事实源，第 3 轮按 rng→C、clickbag→A 修正后重跑）**、`livefns*.py`、`prod/` | 保留供复核；可随时删除，不含仓库内产物 |
-| `E:/tmp/board-r2.json`、`E:/tmp/recon-{content,dispatch}-r2.json`、`E:/tmp/livefns-r2.txt`、`E:/tmp/parsestats-r2.{json,txt}`、`E:/tmp/{sec5,sec6,tail,test-hd}.md`、`E:/tmp/inv-round1-backup.md` | 第 2 轮复核中间物（board 快照、两门重跑、livefns、parse-stats、本文件分段稿/备份） | 保留供复核；可随时删除 |
-| `/e/tmp/wt-inventory-target/` | `mir2-script-tool` 的 release 构建产物 | 保留（构建缓存）；未提交 |
+| `E:/tmp/wt-worker-40-target/` | `mir2-script-tool` 的 release 构建产物 | 保留（构建缓存）；未提交 |
+| `E:/tmp/parsestats40.json`、`E:/tmp/parsestats40.txt` | §1.2 parse-stats 的 json + stdout | 保留供复核；可随时删除 |
+| `E:/tmp/recon-dispatch40.json`、`E:/tmp/recon-content40.json` | §4.1 两门的 JSON | 保留供复核；可随时删除 |
+| `E:/tmp/board40.json` | §3.1 board 快照 | 保留供复核；可随时删除 |
+| `E:/tmp/goalgate40/goal_gate.py` | 从 `card/goal-gate` 分支取出的终点机判脚本（§11 第③条） | 保留；不是仓库产物 |
 | 仓库内 | **仅** `docs/rewrite-remaining-inventory-20261022.md` 一个文件 | 本卡唯一写集 |
 
-- 未启动任何服务端/客户端进程；`E:/MirServer` 只读访问（`parse-stats` 读 639 个脚本、`recon_gates` 读部署件）。
+- 未启动任何服务端/客户端进程；`E:/MirServer` 只读访问（parse-stats 读 639 个脚本、recon 门读部署件）。
 - 未修改 `src/**`、`sql/**`、`mir2-rs/**` 中任何代码；未写 DB。
 
 ---
@@ -805,3 +921,47 @@ PY
 
 - 本轮仍是**纯文档**：只改 `docs/rewrite-remaining-inventory-20261022.md`；只读 `src/**`、`sql/**`、`E:/MirServer/**`；
   未起进程、未占端口、未写 DB。所有数字均给出命令与实跑输出（§8.1–§8.4）。
+
+---
+
+## 11. 复核方式（三条命令复现本文所有数字）
+
+> 三条命令都在仓库根执行（第①条会 `cd mir2-rs`）。`<任选空目录>` 是占位符（任选一个空目录即可，勿写死别人的 worktree）。第③条 `goal_gate.py` 尚未进 master
+> （卡 `openmir2-goal-gate`，分支 `card/goal-gate` @ `807b44e6b`，复审中），所以用 `git show` 取脚本。
+
+```sh
+# ① 协议派发门 + 内容门（§4.1 的 172/15/3/1 与 13/3/24）
+cd mir2-rs
+python tests/parity/coverage/recon_gates.py dispatch --repo ..
+python tests/parity/coverage/recon_gates.py content  --repo ..
+# 期望（静态，不随卡移动）：dispatch summary {"n/a-oracle-noop":1,"implemented":172,"tracked":15,"n/a-unreachable":3}
+#       content summary {"n/a-oracle-noop":9,"n/a-db":5,"tracked":3,"implemented":13,
+#                        "n/a-deployed":1,"n/a-empty":8,"n/a-other":1}
+
+# ② 脚本语料 100% + GM 面（§1.1/§1.2/§2 的 106/0、185/88/21）
+cd mir2-rs
+CARGO_TARGET_DIR=<任选空目录> cargo run --release --locked -p mir2-script-tool -- \
+  parse-stats E:/MirServer/M2GameSvr/Envir --json E:/tmp/parsestats.json --require-implemented
+awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -c "name:"
+awk '/^pub const COMMANDS/,/^];/' bins/game-svr/src/gmcmd.rs | grep -c 'imp: Imp::Unimplemented'
+# 期望：语料派发目标覆盖：已实现 106 个（11829 次调用）；未实现 0 个
+#       185 / 88（⇒ 已实现 97 = 76 完整 + 21 第三态）
+
+# ③ 看板 + 终点四条件（§3.1 快照 203/5/169；条件2 在快照时 FAIL = 5 张 R 卡无证据无登记；两者均为实时量）
+walgit collab board --format json | python -c "import sys,json;d=json.load(sys.stdin);print({c['name']:len(c['cards']) for c in d['columns']})"
+git show card/goal-gate:tools/goal/goal_gate.py > E:/tmp/goal_gate.py
+python -I -B E:/tmp/goal_gate.py --repo . --full
+# 期望 board（快照 6d79be4da @ 2026-10-23T07:31+08:00；**实时量，复跑以当次输出为准**）：
+# {'待认领':0,'进行中':203,'待审':5,'需要人':0,'受阻':0,'已完成':169}
+# goal_gate --full：条件1 PASS / 条件2 FAIL（快照时 5 张；**R 卡集合是实时量**，复审当日为 6 张）/ 条件3 PASS / 条件4 由门禁结果决定；总体 FAIL
+```
+
+| 本文数字 | 来源命令 |
+|---|---|
+| 106/106、0 未实现 | ② parse-stats 的「语料派发目标覆盖」行 |
+| 185、88、21、76 | ② 的 awk 两条 + §2.1 第三态 grep |
+| 172 / 15 / 3 / 1 | ① dispatch summary |
+| 13 / 3 / 24 | ① content summary |
+| 203 / 5 / 169 | ③ board |
+| 条件② 5 张 R 卡（快照时；实时量） | ③ goal_gate 的 FAIL 明细 |
+| 147/274、62/61/123、①57/②45/③50 | §1.1 / §3.1 内的专门脚本（第 4 轮已附实测输出） |
