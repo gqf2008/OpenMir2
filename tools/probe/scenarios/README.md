@@ -23,9 +23,11 @@ python tools/probe/mir2_probe.py \
 }
 ```
 
-* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `blocked` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
+* 顶层只允许 `name` / `description` / `params` / `required` / `computed` / `placement` / `blocked` / `requires` / `steps`；多写一个键即 **fail-closed**（退出码 2）。
   （`blocked` = 场景被封存：形状合法、`--check-scenario` 仍 rc=0，但 `card_window.py` 见到即 rc=2、不建 out/不起栈；schema 见 `docs/probe-scenario-blocked-gate-20261023.md`。）
   （`computed` 是给 `param_discovery` 的**声明性注记**，probe 不读它；见 `move_walk.json`。）
+  （`requires` = **夹具前置声明**（可选字符串数组，目前只认 `"magic"`）：加载期由 `card_window.py` 核
+  生效 profile，缺段即 rc=2 并点名；probe 只校验形状。见下节「`requires`」。）
 * `required`（可选）是**必填变量名列表**：`expand_scenario` 在合并完 `--var` 后逐名检查，缺任何一个即
   `scenario-error`（退出码 2），消息点名缺哪个变量。运行期才知道的值（NPC/商人 `ActorId`、`MakeIndex`、
   物品名、自身坐标）一律走这里，**不要**在 `params` 里放 `"REQUIRED"` 之类的哨兵值。
@@ -78,6 +80,22 @@ python tools/probe/mir2_probe.py \
   上面 R1–R5 是硬判据（rc=2），R6 是警告（rc 不变）；这些都只在 `--check-scenario` 生效。另：本卡把 `dlg_select.recog` 也改成了**加载期解析**
   （`resolve_param` + i32 范围，与 `send.recog` 同口径/PRB-4），这条落在 `plan_step`，真跑也受益。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
+
+## `requires`：夹具前置（由 `card_window.py` 在加载期强制）
+
+```json
+"requires": ["magic"]
+```
+
+* **可选**；不写 = 与过去完全一样（既有场景的 rc 与输出逐字节不变）。
+* 目前**只认 `"magic"`**：声明后，`card_window.py` 在加载场景时核**生效 profile**（顶层 `magic` 或
+  `sides.<side>.magic` 覆盖之后）——该场景要在**两侧**都把魔法写进 `characters_magic`，所以
+  **两侧都要有** `magic` 段；任一侧缺 ⇒ **rc=2**，消息点名场景、profile 与缺的侧：
+  `场景 \`spell_cast\` 要求 \`magic\` 夹具，但 profile \`alt\` 未声明 \`magic\` 段（或某侧被覆盖成空）：缺 csharp、rust 侧（场景文件 …）`。
+  `--dry-run` 与真跑走同一条加载期判定 ⇒ **dry-run 绿不再被误读成「可以真跑」**。
+* 其它值（拼错、未来才实现的值）一律 **fail-closed rc=2** 并点名：只认 `magic`，避免「加了值却没生效」的假绿。
+* `mir2_probe.py` 只做**形状校验**（非空字符串数组、不重复、值在已知集合内），它没有 profile 概念，
+  不做「profile 有没有这一段」的核对；该项由 `card_window.py` 负责。
 
 ## `placement`：角色必须位于 map/x/y（由 `card_window.py` 应用）
 
@@ -245,7 +263,9 @@ python tools/probe/mir2_probe.py \
 * `0` 全绿；
 * `1` 链路或场景失败（网关不可达、登录被拒、`wait_for` / `wait_idents` 超时、角色不存在等）；
 * `2` UNCLASSIFIED：帧解析失败（越界字节/未闭合帧）、规则没覆盖（`531` 改密、
-  `dlg_select` 无 643 锚点）、场景 DSL 非法、必需参数缺失（参数校验在建证据目录之前，
+  `dlg_select` 无 643 锚点）、场景 DSL 非法（含 `requires` 写了未知值）、**场景 `requires` 声明的夹具
+  在生效 profile 里缺段**（如要求 `magic` 而 profile 没有 `magic` 段，由 `card_window.py` 判）、
+  必需参数缺失（参数校验在建证据目录之前，
   因此不落 `run.json`，只在 stderr 报缺哪几个参数）、内部错误。
 
 工具是 fail-closed 的：解析不了就退出 2 并写进 `unclassified`，**绝不静默当绿**。
@@ -259,10 +279,12 @@ python tools/probe/mir2_probe.py --selftest
 
 `--selftest` 用 `../fixtures/r9/` 的离线 s2c 抓包跑「切帧 -> 解析 -> 落 ndjson」全链路，
 不连网、不起进程；含「改坏必红」的负向用例（载荷字节改成越界值必须报错）。
-当前共 **9 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
+当前共 **10 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
 删 `send` 步 / `wait_for` 写表外 ident / `send.ident` 表外 / 引用未声明变量 / `wait_for` 先于 `send` /
 全 `sleep` / 注释掉的常量不得进表 / `placement` 与 `self_pos`·`self_x`·`self_y` 不一致 / 间接 params 名不假红 /
-R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `login_only`、`dice_chain` 与非攻击族 `tag` 不被误伤。
+R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `login_only`、`dice_chain` 与非攻击族 `tag` 不被误伤；
+`scenario-requires` 覆盖顶层 `requires` 的形状（未知名/非数组/空数组/非字符串元素/重复 ⇒ rc=2 并点名，
+`["magic"]` 放行）。
 
 ## fixtures 来源
 
