@@ -101,7 +101,9 @@
 | `openmir2-m3-monster-active-seek` | `3074d4ba9107f228b0a218fe159e3159d93111f9` |
 
 
-## 9. 接管复核（`openmir2-worker-73`，head `13fcd46d6`，base `71420a145`）
+## 9. 接管复核（`openmir2-worker-73`，被核树 `13fcd46d6`，base `71420a145`）
+
+> 本节逐项数字在 `13fcd46d6` 上实测；其后若只有 `docs/` 提交（如本文自身），不改变本节任何结论。最终 head 见卡片 `patch`。
 
 - 接管链：takeover `fff41f45aa510f25fca436cb41b4ad885722d6f8` → `status: in-progress` `6f87edef4f1157eea2e8c312741324b079f50a0b`；worker-24 自 v2 起停止本分支写入。
 - rebase：v2 `825cf63ac` → **`13fcd46d6`**（`git rebase walgit/master` rc=0，无冲突）；本 §9 的每个数字都在该 head 上重跑。
