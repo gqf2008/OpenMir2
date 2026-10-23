@@ -464,8 +464,11 @@ pub fn use_item(
     //      且该支不产 68）；
     //   ④ `RM_MENU_OK`(69)（`can_use_item==false` 的 else 支）；
     //   ⑤ `RM_WEIGHTCHANGED`(131)（`eaten` 支）。
-    // 每个可达组合（{252} / {68,131} / {155,166,131} / {69}）内优先级字节两两不同 ⇒ 稳定排序与
-    // 四叉堆出序逐条相同。新增同 ident 的 `SendMsg` 前必须先改成 `NetPriorityQueue`。
+    // 每个可达组合内优先级字节两两不同 ⇒ 稳定排序与四叉堆出序逐条相同。可达组合共五个：
+    //   `{252}`（禁药）/ `{68,131}`（StdMode 0 shape 1 或 3 补血补魔成功）/ `{155,166,131}`
+    //   （StdMode 1 状态跳档）/ **`{131}`**（纯 `WeightChanged`：StdMode 2、StdMode 31 解包成功、
+    //   以及 StdMode 0 的 shape 非 1/3 的 default 支）/ `{69}`（`can_use_item==false`）。
+    // 新增同 ident 的 `SendMsg` 前必须先改成 `NetPriorityQueue`。
     notices.sort_by_key(|n| n.ident as u8);
 
     UseItemOutcome {

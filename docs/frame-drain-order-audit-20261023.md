@@ -36,12 +36,12 @@
 | 7 | `bins/game-svr/src/run_frames.rs` `RunFrames` | 每 actor 一条 `NetPriorityQueue<GroupFrame>` | ✅ 已有 | 可达 | `flush_orders_by_rm_ident_low_byte` 等 |
 | 8 | `bins/game-svr/src/guild_official.rs` `flush` | `QueuedFrame`，**按 `actor_id` 分组**后各自建堆 | ✅ 已有（pickwire 修） | 可达 | `flush_drains_per_recipient_heap` |
 | 9 | `bins/game-svr/src/guild_official.rs` `build_queued_frames` | `out.sort_by_key(|(p, _)| *p)`（稳定） | ⚪ 稳定排序 | **不可达** | 该批优先级字节**两两不同**：`PRI_CHANGEGUILDNAME`=61、`PRI_BUILDGUILD_OK/FAIL`=63（互斥）、`PRI_GOLDCHANGED`=152 ⇒ 稳定序 = 堆序。函数头注释已订正 |
-| 10 | `bins/game-svr/src/npc.rs` `dequeue_order`（说词） | 整批灌堆（`High=0` 组 + `SendMsg=1` 组） | ✅ **本卡修**（原「priority 组 ++ 非 priority 组」= 稳定退化；**防御性收口**） | **部署无实例**（构造级可达） | 真说词路径 = `GotoLableSendMerChantSayMsg`（`ScriptEngine.cs:988-999`）→ `NpcPlayer::send_say`。同优先级（`High=0`）多条需要同一 label 内 ≥2 次 `send_say(true)`；`goto_params.send_say_msg` 只由 `MAP`/`MAPMOVE`/`PLAYDICE` 置位且 sticky（`crates/script/src/engine/actions.rs:959-965`），而 `BREAK` 会终止整个 label 循环 ⇒ 实测 **0 个 label 能产出 ≥2 条同优先级说词**：扫 `E:/MirServer/M2GameSvr/Envir` 的 `Market_Def`+`Npc_def`+`QuestDiary` 共 361 个 `.txt`，含上述动作的 label 150 个，按 sticky+break 规则统计 ≥2 次发射的 = **0**；reviewer-5 独立扫（`#say` + 该类动作的 label 25 个）同样 max 1 触发、≥2 为 0。故本修是**构造级防御性**（判据 `dequeue_order_same_priority_follows_four_ary_heap` / `dequeue_order_puts_priority_high_first`），**真机窗口验不到它**（见 §6）。 |
+| 10 | `bins/game-svr/src/npc.rs` `dequeue_order`（说词） | 整批灌堆（`High=0` 组 + `SendMsg=1` 组） | ✅ **本卡修**（原「priority 组 ++ 非 priority 组」= 稳定退化；**防御性收口**） | **部署无实例**（构造级可达） | 真说词路径 = `GotoLableSendMerChantSayMsg`（`ScriptEngine.cs:988-999`）→ `NpcPlayer::send_say`。同优先级（`High=0`）多条需要同一 label 内 ≥2 次 `send_say(true)`；`goto_params.send_say_msg` 只由 `MAP`/`MAPMOVE`/`PLAYDICE` 置位且 sticky（`crates/script/src/engine/actions.rs:959-965`），而 `BREAK` 会终止整个 label 循环 ⇒ 实测 **0 个 label 能产出 ≥2 条同优先级说词**。**扫描口径（两个口径互不包含但并集闭合）**：① 作者口径 —— 三个脚本目录 `Market_Def`+`Npc_def`+`QuestDiary`（**不含 `MapQuest_def`**）共 361 个 `.txt`，含上述动作的 label 150 个，按 sticky+break 逐 procedure 建模 ⇒ ≥2 次发射 = **0**；② reviewer-5 口径 —— 全 Envir 642 文件、label 同时含 `#say` 且 ≥1 个该类动作 ⇒ 25 个 label 全 (1 trigger, 1 `#say`)、≥2 触发 = 0（只数动作数，是上界）。**盲区互补**：reviewer 补查了作者的 `MapQuest_def`（12 文件 / 24 label、`#say`+动作 0 个；`@OnTimer9` 虽有 2 个 `MAPMOVE`，但第一个 procedure 的 `BREAK`（`QManage.txt:113/138`）在第二个（`:145`）之前 ⇒ 至多 1 次发射且文本为空）⇒ **0 成立，二者都不欠扫**。故本修是**构造级防御性**（判据 `dequeue_order_same_priority_follows_four_ary_heap` / `dequeue_order_puts_priority_high_first`），**真机窗口永远验不到它**。**分级：本项按 L（构造级）记账；承接卡 `openmir2-script-sendmsg-host` 落地后转 R**（届时 `send_say_msg`/`world_broadcast` 让该路径变活）。 |
 | 11 | `bins/game-svr/src/trade.rs` `Emitter::finish` | `QueuedEvent`，**按 target 分组**后各自建堆 | ✅ **本卡修**（原 `sort_by_key(|q| q.priority)`） | **可达** | `deal_success` 四个前置检查各发一条 `red_msg`（`RM_SYSMESSAGE`=252）给同一 `me.id`，`deal_cancel_em` 再叠。判据 `emitter_finish_same_priority_follows_four_ary_heap` 等 |
 | 12 | `bins/game-svr/src/selloff.rs` `Emitter::finish` | `QueuedFrame`，**按 target 分组**后各自建堆 | ✅ **本卡修**（原 `sort_by_key(|(p, _, _)| *p)`） | **可达** | `client_cancel_sell_off_ing` 每取消一条寄售各一条 `menu_ok`（69，同一 `me.id`）；`client_buy_sell_off_item` 每颗金刚石各一条 `blue_msg`（252） |
 | 13 | `crates/world/src/party.rs` `Emitter::finish` | `(u8, PartyEvent)`，**按 `PartyEvent::target()` 分组**后各自建堆 | ✅ **本卡修**（原 `sort_by_key(|(p, _)| *p)`） | **可达** | 团长死亡散组（`party_del_member_em` 的 `owner == target` 支）逐成员 `LeaveGroup()` ⇒ 同一成员一次收多条 `RM_GROUPMESSAGE`(253)。判据 `emitter_finish_same_priority_follows_four_ary_heap` |
 | 14 | `bins/game-svr/src/ground.rs` `dequeue_order`（拾取/丢弃 self notice） | `sort_by_key(|n| (n.ident as u8) as u16)`（稳定） | ⚪ 稳定排序 | **不可达** | 枚举：`pick_up` 的 `notices` 只在三条**互斥且立即 return** 的分支里产生 ⇒ 可达集合 `{SYSMESSAGE 252}` / `{GOLDCHANGED 152}` / `{ITEMHIDE 149, WEIGHTCHANGED 131}`；`drop_item` 只有 `{MENU_OK 69}` / `{WEIGHTCHANGED 131}`；`update()` 已按同 ident 去重。组合内优先级字节两两不同 ⇒ 稳定序 = 堆序（模块头与函数注释已写清） |
-| 15 | `bins/game-svr/src/useitem.rs` `use_item` 尾 | `sort_by_key(|n| n.ident as u8)`（稳定） | ⚪ 稳定排序 | **不可达** | 枚举：`notices` 只在四条互斥分支产生 —— 禁药 `SYSMESSAGE`(252)（`eaten=false`）/ `CHARSTATUSCHANGED`(155) + `MYSTATUS`(166)（成对）/ `MENU_OK`(69) / `WEIGHTCHANGED`(131)。组合内两两不同（注释已写清） |
+| 15 | `bins/game-svr/src/useitem.rs` `use_item` 尾 | `sort_by_key(|n| n.ident as u8)`（稳定） | ⚪ 稳定排序 | **不可达** | 枚举：`notices` 只在五条互斥分支产生 —— ①禁药 `SYSMESSAGE`(252)（`eaten=false`）/ ②`HEALTHSPELLCHANGED`(68)（StdMode 0 的 shape 1 / shape 3，两支互斥且成功才入队）/ ③`CHARSTATUSCHANGED`(155) + `MYSTATUS`(166)（StdMode 1 状态跳档，成对）/ ④`MENU_OK`(69)（`can_use_item==false`）/ ⑤`WEIGHTCHANGED`(131)。可达组合共五个：`{252}` / `{68,131}` / `{155,166,131}` / **`{131}`**（纯 WeightChanged：StdMode 2、StdMode 31 解包成功、StdMode 0 的 shape 非 1/3 default 支）/ `{69}`——组合内两两不同（注释已写清） |
 | 16 | `bins/game-svr/src/guild_cmd.rs` `Ctx::flush(Vec<Deferred>)` | 无排序 = 插入序 | ⚪ 无排序 | **不可达** | 每个分支对同一 recipient 至多各推 750(61)/42(165)/100(252) 一条，且插入序已升序 ⇒ 与堆序一致 |
 | 17 | `lib.rs` `emit_def_frames` / `emit_shop_frames` | 无排序 = 源码序 | — | 不适用 | **`SendDefMessage` 直发**（不进 `MsgQueue`）⇒ oracle 同样按源码序写 socket |
 | 18 | `crates/world/src/world.rs` `deliver_mag_struck`（`msgs.sort_by_key(|m| m.order)`） | 消息创建序 | ⚪ 稳定排序 | 本卡**不改** | 不是帧排水，是 `Operate(RM_MAGSTRUCK)` 的**交付队列**（跨 actor 处理序 + RNG 抽数序）；oracle 每人一条队列、由 `ProcessMonsters` 的目标序泵出，跨 actor 序已登记 `not_verified`（合同 §1.6）。同 target 重复只在「同 tick 多施法者命中同一目标」出现，属同一登记面 |
@@ -73,7 +73,7 @@
    - `useitem.rs`：同上；
    - `trade.rs` / `selloff.rs` 模块头与 `later()`：「同优先级 FIFO」→ 四叉堆 sift 序；
    - `lib.rs` 五处效果体注释「按优先级稳定排序」→「按每收件人各自的四叉堆出队序」；
-   - `npc.rs::dequeue_order` 文档：「组内取入队序」→ 堆序（并点名部署里 9 条连续 `SendMsg`）。
+   - `npc.rs::dequeue_order` 文档：「组内取入队序」→ 堆序。
 
 ## 3. 受影响的既有判据（期望值订正，逐条给理由）
 
@@ -139,14 +139,14 @@ python -I -B tools/gw-capture/gate_shadow_proxy.py --verify E:/tmp/w208/rust/sel
 ```
 
 判读：从两侧 `sel/frames.ndjson` 取同一 `ident` 的**出现次序**逐帧比（不只比集合）；同优先级 N 条的
-期望序 = .NET 八叉堆序（3 条 `[0,2,1]`、4 条 `[0,3,2,1]`）。
+期望序 = .NET 四叉堆序（3 条 `[0,2,1]`、4 条 `[0,3,2,1]`）。
 
 | # | 场景（触发点） | 期望 | 覆盖的修复点 |
 |---|---|---|---|
 | ① | 角色带 9/10（地狱火/疾光电影）技能，对**同一视野内 ≥3 只怪**施放（B2 块） | 观察者侧 `ident=31` 的**出现次序** = 堆序（不是目标枚举序）；条数 = 命中目标数 | #2 `SpellFrameBuf::flush` |
 | ② | ~~桃源-N109 的 9 条连续 `SendMsg`~~ **已撤回**：那是 `SENDMSG 0` ⇒ `WorldEngine.SendBroadCastMsg` ⇒ `RM_SYSMESSAGE(252)`，**不是** `RM_MERCHANTSAY`；且宿主 `world_broadcast`/`send_say_msg` 目前是 no-op（`crates/script/src/engine/mod.rs`，`NpcPlayer` 未覆写）⇒ 当前产 0 帧。**真说词路径在部署无 ≥2 同优先级实例**（§1 #10）⇒ 本项**无窗口场景**，由构造级判据兜底；接上 `SENDMSG` 宿主（承接卡 `openmir2-script-sendmsg-host`，issue `bdddbeba`）后，`world_broadcast` 的逐玩家 `SM_SYSMESSAGE` 会**新增一个同 ident 排水点，必须按四叉堆序处理**，届时另开窗口。 | — | #10（构造级） |
 | ③ | 两账号交易，双方背包/金币同时越界使 `DealSuccess` 的**四个前置检查全部失败** | 接收侧 `ident=100`（`SM_SYSMESSAGE`）红字的**次序** = 该玩家队列的堆序（4 条 ⇒ `[0,3,2,1]`），不是提示语序 | #11 `trade::Emitter::finish` |
-| ④ | 元宝寄售：同一玩家**连续取消 ≥3 条**寄售（多条 `SM_MENU_OK(69)`）；另跑「一次买多颗金刚石」（多条 `SM_SYSMESSAGE(252)`） | `ident=769`/`ident=100` 的条数与次序 = 堆序；`Recog` 均为该玩家 | #12 `selloff::Emitter::finish` |
+| ④ | 元宝寄售：同一玩家**连续取消 ≥3 条**寄售（多条 `SM_MENU_OK`）；另跑「一次买多颗金刚石」（多条 `SM_SYSMESSAGE`） | `ident=767`（`SM_MENU_OK`，`crates/protocol/src/messages.rs:354`；**不是** 769 = `SM_GUILDMAKEALLY_FAIL`）/`ident=100` 的条数与次序 = 堆序；`Recog` 均为该玩家 | #12 `selloff::Emitter::finish` |
 | ⑤ | 3 人组（L/T/U）由团长 L 死亡触发散组 | 每名成员收到的 `ident=100`（`RM_GROUPMESSAGE`）条数 = 退组事件数；同一成员的**次序** = 其队列堆序 | #13 `party::Emitter::finish` |
 
 ### 6.3 本卡不覆盖 / 承接
@@ -203,3 +203,15 @@ python -I -B tools/gw-capture/gate_shadow_proxy.py --verify E:/tmp/w208/rust/sel
 | **M-2** `guild_official.rs` 仍写 `(priority, seq)` 排序 | 已改为「按收件人分组 + 每组 `NetPriorityQueue` 出队；同优先级 = 四叉堆 sift 序，不是 FIFO」。 |
 | **M-3** §5 T-A 的 `lib.rs` sha 过期 | **T-A 已在返工前的当前 head（`4d2420934`）上重跑**（红：`same_priority_frames_follow_dotnet_heap_order`，`n=3`），`git checkout --` 还原后 sha256 = `a86d505ae25144e4949ea0cb4d1fbd08a9e2ab1cc3304b8096eb2ddf12bc6921`（= 提交后树 `git show HEAD:<path>` 同值，且与 reviewer 测得的 `a86d505a…` 一致）。旧值 `5c54e755…` 作废（它在 `d7f17a6cf` 之前取，属「fmt/后续提交后哈希变化」同类事故）。T-B/T-C 不受影响。 |
 | **M-4** T-208 窗口项无可复跑命令 | 已按 T-207 的 gw-capture 范式重写（`tools/gw-capture/gate_shadow_proxy.py` 捕获 + `--verify`，两侧同命令、独立输出目录、逐帧次序判读），五个场景逐条写清触发点与期望（§6.2 与 whitelist T-208）。 |
+
+### 9.1 第二轮（review `549aee7e` / reviewer-5）
+
+| 项 | 处置 |
+|---|---|
+| **M-4r**（important）窗口④ 的 `ident=769` | **订正为 `ident=767`（`SM_MENU_OK`，`crates/protocol/src/messages.rs:354`）；769 = `SM_GUILDMAKEALLY_FAIL`**。三处同步：台账 §6.2 ④、whitelist T-208、返工 status 的窗口列表（新 status）。 |
+| **m-1** 「.NET 八叉堆序」 | 改为**四叉**（8 处堆都是 Arity=4）。 |
+| **m-2** §2 第 5 条残留「点名部署里 9 条连续 `SendMsg`」 | **删除**（该点名在 I-1 已撤回且从未成立，台账里只保留 §6.2/I-1 的「撤回记录」，不再作为修复理由出现）。 |
+| **m-3** useitem 可达组合漏纯 `{131}` | 已补：五组合 `{252}` / `{68,131}` / `{155,166,131}` / **`{131}`**（StdMode 2、StdMode 31 解包成功、StdMode 0 shape 非 1/3 的 default 支）/ `{69}`；台账 #15 同步。 |
+| **m-4** 「361 脚本」未注明范围 | 已注明：三个脚本目录（`Market_Def`+`Npc_def`+`QuestDiary`）**不含 `MapQuest_def`**；并写入 reviewer 的补查（`MapQuest_def` 12 文件 / 24 label、`#say`+动作 0 个；`@OnTimer9` 的两个 `MAPMOVE` 之间隔着一个 procedure 的 `BREAK`）与「两口径互不包含但并集闭合」。 |
+| **分级** | 按 reviewer 裁决写入台账 §1 结论段：`npc::dequeue_order` **按 L（构造级）记账**、`openmir2-script-sendmsg-host` 落地后转 R；**整卡保持 R**（另 4 处部署可达）；**不拆卡**（同一排水原语 + 避免承接卡落地时留下无人负责的未验路径）。#10 与 T-208 均加了「本项 L（构造级）；承接卡落地后转 R」。 |
+| **机器守卫缺失** | 台账新增「已知局限」：§1 的不可达枚举是散文、无断言（reviewer N2：删 useitem 68 那条仍绿）⇒ 改动需人工复核；代码侧新增同 ident 帧有夹具兜底（N3 红）。 |
