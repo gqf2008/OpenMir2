@@ -1,6 +1,7 @@
 # Runbook × 工具一致性审计（2026-10-23 晚场）
 
-> **快照**：master **`4e0bfd2b8`** @ **2026-10-23 22:27 +0800**；工具 = 同一 commit 的 `tools/`。
+> **快照**：审计读的是 commit **`4e0bfd2b8`**（提交于 **2026-10-23 22:21:57 +0800**），审计**执行时刻 22:27**；
+> 复审基线是 **`7ef49f807`**（22:28:01，已含 `b42f20a28` @ 22:27:23 的 recog-unmask +40 条 selftest 断言）——两者不是同一时刻，计数以基线实跑为准。
 > 审计对象是**改前**的 runbook（`git show 4e0bfd2b8:docs/window-runbook-20261023.md`），审计后 runbook 已就地订正（见 §4 的 sha）。
 > 卡：`openmir2-runbook-tool-consistency-audit`（tier=L，写集 `docs/`）。
 > **每条都实跑或 `--help` 验证过**；没实跑的（会写库/起栈/耗时构建）逐条注明「未实跑 + 为什么」。
@@ -27,7 +28,7 @@
 | 13 | §4.5.1 | `card_window --selftest`（DISC-9） | 仍有效 | 实跑 `GREEN: card_window.py selftest 186/186`，**rc=0** | 期望计数写死 **186**（见 §2.5） |
 | 14 | §4.5.1 / §1.5 | 「`card_window.py` 本期未接背包预置」 | 仍有效 | `grep -rn inventory tools/ --include=*.py` ⇒ 与背包预置相关的命中 **0**（只有两个无关文件名的 `inventory` 字样） | 结论仍对：背包夹具还得手工 DB；`openmir2-window-inventory-fixture` 的实现**没有**在 master 上 |
 | 15 | §4 | `grep -n 'ident=' docs/<卡相关文档>` | 仍有效 | 通用命令，实跑可用 | 无 |
-| 16 | §0 | 工具链三件套 `card_window.py` / `compare_runs.py` / `param_discovery.py` | 仍有效 | 三者 `--help` 均 rc=0；`compare_runs.py selftest` = `GREEN 198/198` rc=0 | `param_discovery --help` 只有一行 usage（`selftest | <frames> <vars> | check-all …`） |
+| 16 | §0 | 工具链三件套 `card_window.py` / `compare_runs.py` / `param_discovery.py` | 仍有效 | 三者 `--help` 均 rc=0；`compare_runs.py selftest` = `GREEN 238/238` rc=0（基线 `7ef49f807` 实测；`4e0bfd2b8` 上是 198，`b42f20a28` 的 recog-unmask +40） | `param_discovery --help` 只有一行 usage（`selftest` / `<frames> <vars>` / `check-all …`） |
 | 17 | §0 | 「开跑前还剩一个前置没到位：账本 compare 诊断值**尚未加值断言**（卡 `openmir2-card-window-value-assertions`）」 | **已过期需改** | 该卡已合入：`b9765764f` @ 2026-10-23 16:45:18，approve `reviewer-2 d755493c`（+69 行 card_window + mutation 用例） | 改成「已完成」并给 oid；不要再当前置 |
 | 18 | §1.1 | 「`rust-root` 里的 .NET 程序集与 Rust 栈无关」 | 仍有效 | 起栈命令的 `-Root` 只读配置文件；`SERVER_EXE` 列证明跑的是 `mir2-server.exe` | 无 |
 | 19 | §1.1 | 「pid 文件路径只由 profile 的 `sides.rust.pid_file` 声明，代码里不写死」 | 仍有效 | `card_window.py:237-244`（`pid_file_path` 只读 `sc["pid_file"]`）、`:329`（alt 的值）、`:664-672`（缺 `pid_file` ⇒ `ConfigError`） | 无 |
@@ -95,8 +96,9 @@ rust-default 的 `pid_file` 是 `{side_dir}/mir2-server.pid.json`，**但它的 
 
 ### 2.5 `--selftest` 期望计数
 
-`python -I -B tools/conformance/card_window.py --selftest` ⇒ `GREEN: card_window.py selftest 186/186`，**rc=0**（本机 2026-10-23 22:2x 实跑）。
-同族：`compare_runs.py selftest` = `198/198` rc=0。**这两个数是「代码没被改坏」的门槛，runbook 里要写死**（改动后第一件事就是跑）。
+`python -I -B tools/conformance/card_window.py --selftest` ⇒ `GREEN: card_window.py selftest 186/186`，**rc=0**（本机 2026-10-23 22:3x，基线 `7ef49f807` 实跑）。
+同族：`compare_runs.py selftest` = `238/238` rc=0（**同一基线实测**；在 `4e0bfd2b8` 上是 198 —— `b42f20a28` 的 recog-unmask 加了 40 条）。
+**这两个数是「代码没被改坏」的门槛，改动后第一件事就是跑**；`compare_runs` 的计数**随 `rules.json` 变更而变**，以实跑为准，别抄本文。
 
 ## 3. 审计发现的**窗口级缺口**（不在本卡写集，必须另卡）
 
@@ -120,7 +122,7 @@ ok = ('probe_timeout_ms' in s) and not re.search(r'\"timeout_ms\"\s*:', s)
 print('DOC-KEYS', 'OK' if ok else 'RED'); sys.exit(0 if ok else 1)"
 ```
 
-- **基线（订正后的 runbook）**：rc=0，`DOC-KEYS OK`；sha256 = `7e08004d338cb0bbe5fe0b0b1b89a5665d668807bb2adc2f2bff428964ed1cfb`。
+- **基线（订正后的 runbook）**：rc=0，`DOC-KEYS OK`；sha256 = `04c63029b8df2db281e1ce14a32978230f535cd0961200d34da444a97a03e802`。
 - **变红**：把 runbook §2 的超时写法改回旧形态（在 profile JSON 段落里写 `"timeout_ms": 720000`）⇒ 同一命令 **rc=1、`DOC-KEYS RED`**（实测见下方记录）。
 - **还原**：逐字节还原后 sha256 必须回到上面的值。
 
@@ -132,10 +134,10 @@ print('DOC-KEYS', 'OK' if ok else 'RED'); sys.exit(0 if ok else 1)"
 ### 4.1 本次牙的实测记录（2026-10-23 22:3x）
 
 1. 备份：`cp docs/window-runbook-20261023.md E:/tmp/w67-scratch/runbook-base.md`
-2. 基线：sha256 = `7e08004d338cb0bbe5fe0b0b1b89a5665d668807bb2adc2f2bff428964ed1cfb`；断言 `DOC-KEYS OK`，**rc=0**
+2. 基线：sha256 = `04c63029b8df2db281e1ce14a32978230f535cd0961200d34da444a97a03e802`；断言 `DOC-KEYS OK`，**rc=0**
 3. 变异（把 §2 的超时写法改回旧形态，模拟旧 runbook）：把
    `` `probe_timeout_ms` 设到 **720000** `` 换成 `"timeout_ms": 720000` ⇒ 断言 **`DOC-KEYS RED`，rc=1**
-4. 还原：从备份 `cp` 回 ⇒ sha256 回到 `7e08004d…`（与基线逐字节一致），断言 `DOC-KEYS OK`，**rc=0**
+4. 还原：从备份 `cp` 回 ⇒ sha256 回到 `04c63029…`（与基线逐字节一致），断言 `DOC-KEYS OK`，**rc=0**
 
 > 牙的含义：只要有人在 runbook 里把 profile 键写回 `timeout_ms`，这条 30 秒断言就会拦下来；
 > 而它是**真的会白跑窗口**的那类错（profile 顶层无白名单 ⇒ 静默忽略 ⇒ probe 180s 被杀）。

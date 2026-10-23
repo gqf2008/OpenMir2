@@ -1,12 +1,12 @@
 # 真机窗口 Runbook（2026-10-23 定稿）
 
-> **本文最后核对：`4e0bfd2b8` @ 2026-10-23 22:27 +0800**（审计卡 `openmir2-runbook-tool-consistency-audit`）。
+> **本文最后核对：commit `4e0bfd2b8`（提交于 2026-10-23 22:21:57 +0800；审计时刻 22:27）；复审基线 `7ef49f807`（22:28:01，已含 `b42f20a28` @ 22:27:23）**（审计卡 `openmir2-runbook-tool-consistency-audit`）。
 > 逐条命令的实测输出与缺口见 `docs/runbook-tool-consistency-audit-20261023.md`；改工具后**先跑 §0.5 的 60 秒清单**再动窗口。
 
 > 面向：第一次跑窗口的人 / 下一次跑窗口的我。本文只写**跑之前的必做动作**与**读结果的口径**，
 > 工具用法见 `tools/conformance/README.md`，卡的判据见各卡 `whitelist.md` 行。
 
-## 0. 现状（**`4e0bfd2b8` @ 2026-10-23 22:27 +0800**；原写 `73c39cca` @ 15:20，已过期）
+## 0. 现状（**`4e0bfd2b8` @ 2026-10-23 22:21:57 +0800**，审计时刻 22:27；原写 `73c39cca` @ 15:20，已过期）
 
 - **欠窗口的卡：173 张**（口径见 `docs/leader-goal-20261023.md` §1.1 的订正：早前「grep 已合入 master = 114」是错的，
   那 114 里 70 张已 closed、23 张是 tier=L；真欠账 21 张，加上 149 张措辞不在 grep 里的 + 3 张快照后合入 = **173**）。
@@ -83,9 +83,10 @@ python -I -B tools/conformance/card_window.py --card <卡 id> \
 
 ```sh
 python -I -B tools/conformance/card_window.py --selftest     # 期望 GREEN: … selftest 186/186，rc=0
-python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 198/198，rc=0
+python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 238/238，rc=0
 ```
 失败含义：计数**变小** ⇒ 有判据被删（先查最近提交）；变红 ⇒ 工具坏了，别开窗。
+**注**：`compare_runs` 的自检计数随 `rules.json` 变更而变（`b42f20a28` 的 recog-unmask 就 +40）⇒ 以**实跑**为准，别抄本文的数字。
 
 ---
 
@@ -293,7 +294,7 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 - 没有 `computed` 声明（单变量推导入口）⇒ 该类变量照旧 missing。
 - `mir2_probe` 不读 `computed`（声明性注记，不是步骤 DSL），但顶层可选键放行，否则带声明的场景会被 `unknown key(s)` 拒绝。
 
-> **计数快照（`4e0bfd2b8` @ 2026-10-23 22:2x 实跑）**：场景已增至 **19** 个，
+> **计数快照（`4e0bfd2b8` @ 22:21:57；实跑于 22:2x）**：场景已增至 **19** 个，
 > `check-all` ⇒ `SUMMARY scenarios=19 ok=16 rc2=3 derived=5 rule=2 computed=1 no_required=5 params_default=3 missing=3 error=0`（**rc=2**）。
 > 真实录制（`E:/tmp/conformance/runs/w24-csharp-npc_auto/frames.ndjson`）**没有 201** ⇒ `bag_equip`/`eat_item` 仍 missing，`--allow-missing=1` 也是 rc=2（`--allow-missing=3` 才可能 0）。
 > 本节正文里的「12 个 / 14 个 / 15 个 / params_default=1」都是**更早的口径**，保留作对照，不要当现值。
