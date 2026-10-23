@@ -43,8 +43,8 @@
 - 工具已就绪：`preflight.py` 已合入 master（最新 commit `deea8d3d0`，`git merge-base --is-ancestor deea8d3d0 master` 为真）；
   `docs/window-batch-plan-20261023.md` §7.1 里「preflight 在办（未合）」**已过期**。
 - 场景：`tools/probe/scenarios/` 现 20 个，2 个仍 `blocked`（`combat_hit` / `combat_strike`）；
-  `spell_cast` 已解封（master `7bb48239a`）并已在 §7.4 可跑（见 batch-plan §7.4 @ `478ff9a33`，
-  枚举 **11 行 / 16 场景**；跑前 profile 需 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，
+  `spell_cast` 已解封（master `7bb48239a`）并已在 §7.4 可跑（见 batch-plan §7.4 @ `81ecc0d28`，
+  枚举 **12 行 / 18 场景**；跑前 profile 需 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，
   写法引用 `tools/probe/scenarios/README.md:240`），`equip_struck_save` 因 `642` 合入（`8dcb8c8ca`）解锁。
   **「今天能跑」的集合不在本文件定义**——逐行枚举见 §1.2 引用的 batch-plan §7.4。
 
@@ -89,7 +89,7 @@ conditions[1].evidence.whitelist_t_rows = 255
 
 ### owner 的选项（一句话）
 
-- **A**：批一轮窗口，按 §1.2 引用的 batch-plan §7.4 枚举（见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**）逐场景跑——成本与前置见下表；
+- **A**：批一轮窗口，按 §1.2 引用的 batch-plan §7.4 枚举（见 batch-plan §7.4 @ `81ecc0d28`，枚举 **12 行 / 18 场景**）逐场景跑——成本与前置见下表；
 - **B**：只批最小验证集（`login_only` + `upgrade_retrieve` + `equip_struck_save`，三者均在上述枚举内），其余下一轮；
 - **C**：暂不开窗，先做不占窗口的清理项（§2 `rules.json` 最小解阻 / §4 `T-161..T-222` 复核口径 / §3 三张卡的替代判据）；
   `openmir2-ability-weaponstrong` 的合入阻塞已解除（`d38acf25b`），不再是开窗前置。
@@ -123,10 +123,10 @@ rc=0 = `PREFLIGHT PASS`；rc=2 = `PREFLIGHT FAIL`（FAIL 行自带修复建议�
 export CONFORMANCE_PASSWORD='<窗口测试账号密码>'     # PowerShell: $env:CONFORMANCE_PASSWORD='...'
 ```
 
-**今天就能跑**：**本文件不自行计数**，一律引用 `docs/window-batch-plan-20261023.md` §7.4（见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**）。下面按该表原样列出（其中 `spell_cast` **不能**照抄下循环的 `--profile alt`，见循环后的说明）：
+**今天就能跑**：**本文件不自行计数**，一律引用 `docs/window-batch-plan-20261023.md` §7.4（见 batch-plan §7.4 @ `81ecc0d28`，枚举 **12 行 / 18 场景**）。下面按该表原样列出（其中 `spell_cast` **不能**照抄下循环的 `--profile alt`，见循环后的说明）：
 
 ```sh
-for s in login_only pickup_item move_walk upgrade_retrieve equip_struck_save \
+for s in login_only pickup_item move_walk upgrade_retrieve equip_struck_save bag_equip eat_item \
          dice_chain dice_chain_auto npc_click npc_click_auto \
          king_dialog merchant_dialog npc_script_chain king_castle_war \
          gm_time gm_batch; do
@@ -137,7 +137,7 @@ for s in login_only pickup_item move_walk upgrade_retrieve equip_struck_save \
 done
 ```
 
-> 上面这段循环覆盖 §7.4（见 batch-plan §7.4 @ `478ff9a33`）里可用内置 `alt` 直跑的 15 个场景；第 16 个 `spell_cast` **不能**加进这个循环——它要求 profile 带 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，写成 `--profile alt` 会直接 rc=2。profile 片段见 `tools/probe/scenarios/README.md:240`「窗口 profile 前置：`spell_cast` 必须 pin D-9」（本文件不重写第二份）：
+> 上面这段循环覆盖 §7.4（见 batch-plan §7.4 @ `81ecc0d28`）里可用内置 `alt` 直跑的 17 个场景；第 18 个 `spell_cast` **不能**加进这个循环——它要求 profile 带 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，写成 `--profile alt` 会直接 rc=2。profile 片段见 `tools/probe/scenarios/README.md:240`「窗口 profile 前置：`spell_cast` 必须 pin D-9」（本文件不重写第二份）：
 >
 > ```sh
 > python -I -B tools/conformance/card_window.py \
@@ -155,9 +155,10 @@ done
   （`--check-scenario` 是开关，场景必须另给 `--scenario`；写成 `--check-scenario <file>` 会 `unrecognized arguments`）。
   摆位 map `0103` (19,19)、目标正上方 (19,18) 商店 NPC「卫家店」（场景自带 `placement`）。
   注意：场景 `description` 已随 `8dcb8c8ca` 改写为「Rust 已接这条磨损帧」，与 master 代码一致（`combat.rs` 有 `attack_success_weapon_wear`）；上位旧说法只作历史对照。
+- `bag_equip` / `eat_item` 现在可跑（前置：**场景自描述 `inventory`**；profile 顶层 `inventory` 仍会被静默忽略）；夹具卡 acceptance ④（真库写入/读回）未跑 ⇒ **真机窗口仍未跑**。
 - R 卡记账用 `--post-comment --card <卡 id>`（一次 run 可对多张卡各发一条 comment；卡 id 见 batch-plan §3 的「场景」列）。
 
-**`spell_cast` 已在 §7.4 可跑（见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**）——跑前需 profile 带 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，否则 53 body 0B vs 16B fail-closed；真机窗口仍未跑**
+**`spell_cast` 已在 §7.4 可跑（见 batch-plan §7.4 @ `81ecc0d28`，枚举 **12 行 / 18 场景**）——跑前需 profile 带 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，否则 53 body 0B vs 16B fail-closed；真机窗口仍未跑**
 
 batch-plan 原排除理由「Rust 侧魔法落点 + 第二观察者仍未接」已由卡 `openmir2-spell-cast-window-blockers`（`65d6e7134`）逐条否证，比较器规则已由 `openmir2-spell-frame-compare-rules`（`89a3d02fd`）补齐 ⇒ 2026-10-24 移入 §7.4。场景自 `cecc3fe41` 起声明
 `"requires": ["magic"]`，**默认 `alt` profile 直接 rc=2 fail-closed**（不再是静默假绿）：
@@ -184,7 +185,6 @@ python -I -B tools/conformance/card_window.py --scenario tools/probe/scenarios/s
 | 场景 | 原因 | 什么时候能跑 |
 |---|---|---|
 | `combat_hit` / `combat_strike` | 场景自身 `blocked`；`card_window` 见到 `blocked` 即 rc=2、不建 out、不起栈 | 需第二会话/同格怪夹具（`combat_hit`）、满足 DC/HitPoint 的配装或 `wait_for` recog 过滤（`combat_strike`） |
-| `bag_equip` / `eat_item` | 背包夹具 `inventory` 已进 master（`bb4317a01`），但这两个场景**没有**声明 `inventory`，`required` 又要从 201 帧发现非空背包 | 场景补 `inventory` 声明后（另卡） |
 | `castle_zone` | 仓库内无该场景文件（不可达登记） | 双行会 DB + 私有根 `AttackSabukWall.txt` + 多会话探针 |
 
 ### 1.3 第③步：证据落点与复核
@@ -223,7 +223,7 @@ python -I -B tools/conformance/preflight.py --profile alt
   建卡 issue body 缺 `window_required` → 被归「三者皆无」→ 条件② 掉成 `fail`；Leader 补签名 comment `c7f43850`
   后修回。**教训：判定条件② 前先看 `body.window_required` 是否落在任意一条签名条目上，不要只读 issue 标题/正文。**
 - 旧文档把 `spell_cast` 归为「已解封但真机跑不了」→ **已过期**：`spell_cast` 现已在 batch-plan §7.4 的可跑枚举内
-  （见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**），前置是 profile 带 `magic` 段 **且**
+  （见 batch-plan §7.4 @ `81ecc0d28`，枚举 **12 行 / 18 场景**），前置是 profile 带 `magic` 段 **且**
   `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`（否则 53 body 0B vs 16B fail-closed），**真机窗口仍未跑**。
   旧理由「Rust 侧魔法落点 + 第二观察者未接」已由 `65d6e7134` 否证。另：缺 `magic` 夹具自 `cecc3fe41` 起是
   rc=2 fail-closed（`"requires": ["magic"]`），**不是**上一版说的静默假绿。
