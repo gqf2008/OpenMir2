@@ -54,7 +54,7 @@
 ## 5. 口径不动（可复算）
 
 - 未改 `tools/goal/goal_gate.py`、`rules.json`、`card_window.py`、场景 JSON、任何他人卡片 status。
-- 本批只新增 comment（10 张 × r1 + 4 张 × r2 = **14 条签名 comment**，均 `verified=true`）与本文；`whitelist.md` 未改。
+- 本批只新增 comment（10 张 × r1 + 4 张 × r2 + 10 张 × r3 = **24 条签名 comment**，均 `verified=true`）与本文，并就地订正上游审计 `docs/window-criteria-quality-audit-20261024.md` §5.2 **#26 一行**（保留原说法 + 订正日期 + 依据 `185a6c8cb`）；`whitelist.md` 未改。
 - `python -I -B tools/goal/goal_gate.py --json --skip-tests --skip-script` 的条件② detail 与改前一致（本批不动判据/登记）。
 
 ## 6. 门禁
@@ -69,5 +69,32 @@
 ## 7. 残留
 
 - 10 张的**真机窗口全部未跑**；① 类也只有离线命令。
-- ② 类的承接卡一律**只点名不建卡**（`openmir2-castle-under-war-writer`、`openmir2-probe-multi-session-launch`、`openmir2-window-selgate-restart-tool`、`openmir2-clock-injection-scenario`）。
+- ② 类的承接卡一律**只点名不建卡**（`openmir2-castle-under-war-writer`、`openmir2-probe-multi-session-launch`、`openmir2-window-selgate-restart-tool`、`openmir2-clock-injection-scenario`）、`openmir2-gategate-keepalive-rule-decision`）。
 - ③ 类（2 张）只有在构造级用例变化时才需重跑；真机不可跑的结论登记在卡片 comment。
+
+## 8. 返工 v2（review `0e8d75cc`，request_changes）
+
+| 项 | 处置 |
+|---|---|
+| **R1（阻断）** | `openmir2-gategate-keepalive` 补承接卡：**承接卡 = 本卡**；若需独立成卡，建议 id **`openmir2-gategate-keepalive-rule-decision`**（未自行开卡）；已补进 §7 清单与该卡 r3 comment。 |
+| **M1** | 10 张的 r3 comment 把 `items[].owner` 改为**纯 principal**（状态另置 `items[].status`）。 |
+| **M2** | 冲突标记只写 **0 markers**，不写死 tracked 数（会随 master 漂移）；本次 head 实测 **7439**、base `8dcb8c8ca` 为 7438。 |
+| **M3** | §5 已补「并就地订正审计 §5.2 #26」这一事实。 |
+| **M4** | 每张 r3 comment 带 **`rendered_text`（lint 的输入原文）** 与命令 `python -I -B tools/goal/window_criteria_lint.py --text <rendered_text>`，可复算（10/10 OK）。 |
+| **M5** | goal_gate 改前/改后快照：base `01d4f5877` 与 head 均 **`need_human`**，条件② detail **逐字节相同**（同一仓库状态上分别用 `--repo <base-worktree>` 与 `--repo .` 跑 `--json --skip-tests --skip-script`；10 张目标卡 category 全未变）。 |
+| **M6** | `gategate` 的 expect 写死 **`SS_KEEPALIVE(104)`**（`Messages.cs:440`；网关 3min 超时表现为连接关闭、无 SM_ 帧）；`clock-injection` 的 expect 写 **`SM_TURN(10)`** 与 **`SM_HEALTHSPELLCHANGED(53)`**（可选加 `655`/`642`）。 |
+
+### 8.1 r3 comment oid（owner 纯 principal + 渲染文本；本表为准）
+
+| 卡 | r3 oid |
+|---|---|
+| `openmir2-castle-merchant-disappear-downlink` | `90802f6a73e6bf3da7db9096d8519e5a729b7782` |
+| `openmir2-chat-channels` | `49d11751feae78957704ce4a2471ee103e7f33b4` |
+| `openmir2-m3-castle-gold-tax` | `e21d555ec405e5a9474322a3ff2dbdd14ed2a3b9` |
+| `openmir2-m3-clock-injection` | `88515588a1f5102fa9802f2c4897580e848a3937` |
+| `openmir2-orphan-encoder-wiring` | `501958fca5c19c827111c77aed50d279a82568f3` |
+| `openmir2-gategate-keepalive` | `db6598a57fc443996281fbd963a3cae000a0a5ec` |
+| `openmir2-selgate-reconnect` | `419d1d4f4841ef51cf4fbc5c500ab88db487a34f` |
+| `openmir2-login-529-status-text` | `f8501182085240f06cc2948dce02f155313fa58f` |
+| `openmir2-monster-showhp-53-broadcast` | `18f14e03bf0a158434ff0f90562d985624e99e09` |
+| `openmir2-m3-monster-active-seek` | `3074d4ba9107f228b0a218fe159e3159d93111f9` |
