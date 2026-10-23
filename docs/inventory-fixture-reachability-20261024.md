@@ -1,7 +1,7 @@
 # 背包夹具（inventory）可达性修复（`openmir2-inventory-fixture-reachability`）
 
 - 卡：`openmir2-inventory-fixture-reachability`（tier=L）；分支 `card/openmir2-inventory-fixture-reachability`；写集 `card_window.py` / `mir2_probe.py` / `scenarios/**` / `docs/`。
-- 基线：首发 rebase 到 `08e8b318a`（前置 `openmir2-scenario-fixture-precondition` 已合入）；返工（review `78aeb794`）再 rebase 到 `walgit/master = 89a3d02fd`。
+- 基线：首发 rebase 到 `08e8b318a`（前置 `openmir2-scenario-fixture-precondition` 已合入）；返工（review `78aeb794`）在 `walgit/master = 89a3d02fd` 上跑门禁与全量牙，交付前再 rebase 到 `478ff9a33`（`merge-tree` rc=0）。
 
 ## 1. 为什么之前不可达（两条独立断点）
 
