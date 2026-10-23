@@ -59,6 +59,14 @@
     ⇒ 门禁报红时**先分三态**：① 真回归（源码确变）；② 环境噪声（stale 二进制 / 并发抢锁）；③ 夹具漂移。判环境噪声的办法：`touch` 相关源文件或换一个空 `CARGO_TARGET_DIR` 重跑一次，**并在 merge_result 里写明是噪声、附两次的 rc**。
     这条与 10-23 早前那次「并发 cargo 抢锁 ⇒ clippy 假红」同族；合并时一律单跑门禁、不要与车道并行。
 
+12. **并行车道的真正代价不是文本冲突，是签名演化**（2026-10-23 一天两次）：
+    ① `emit_script_frames` → `emit_script_frames_raw`：pickwire 加帧时改签名，frame-drain 随后重写排水；
+    ② `emit_login_script_frames` 6 参 → 7 参（frame-drain 加了 `fallback: (i32,i32,i32)` 与 `frames: &[SendMsg]`）：
+    CHANGEEXP 分支切出得早，复审时 `git merge` 解完文本冲突仍 **clippy/test rc=101**（`E0425 player 未定义`、`E0107 生命周期个数`、`E0061 参数个数`）。
+    ⇒ **分支越长命，越要在合并前 rebase 到当前 master 再自证**：文本冲突 git 会告诉你，**签名冲突只有编译器会告诉你**。
+    reviewer 的复核必须在**试合并树**上跑完整门禁；作者的自证同理（「分支绿」不是证据）。
+    推论：动 `lib.rs`/`npc.rs` 这类热点、且改动会碰到**函数签名**的卡，**不要长命**——要么拆小，要么中途 rebase 一次。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
