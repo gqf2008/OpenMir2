@@ -612,7 +612,10 @@ SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select"})
 CUMULATIVE_WAIT_KINDS = frozenset({"wait_idents", "wait_frames"})
 WAIT_KINDS = frozenset({"wait_for"}) | CUMULATIVE_WAIT_KINDS
 
-_MSG_CONST_RE = re.compile(r"pub const (CM|SM)_([A-Z0-9_]+): u16 = (\d+);")
+# 只认「整行就是一个常量定义」：先按行剥 `//` 注释、再锚定 `pub const ... ;`。
+# 这样注释掉的常量（`// removed: pub const SM_FAKE: u16 = 4095;`）、字符串里的同名文本
+# 都不会进表（M4：否则 wait_for 4095 会假绿）。
+_MSG_CONST_RE = re.compile(r"pub const (CM|SM)_([A-Z0-9_]+): u16 = (\d+);\s*$")
 
 
 def load_message_constants(path=None):
@@ -621,6 +624,7 @@ def load_message_constants(path=None):
     不写死一张私有表：这张表由 `cargo run -p msgcodegen -- --check` 与 C# `Messages.cs`
     对拍，是「ident 是否真实存在」的唯一事实源。同值别名（如 CM_IDPASSWORD/CM_PASSWORD）
     与跨命名空间同值（CM_QUERYCHR == SM_SYSMESSAGE == 100）都合法，先出现的名字胜出。
+    行注释（`// ...`）先剥掉再匹配：被注释掉的常量不算数（M4）。
     fail-closed：文件缺失或一条常量都解析不到 => ScenarioError。
     """
     path = path or MESSAGES_RS
@@ -630,7 +634,10 @@ def load_message_constants(path=None):
     except OSError as ex:
         raise ScenarioError("cannot read protocol constant table %s: %s" % (path, ex))
     out = {"CM": {}, "SM": {}}
-    for m in _MSG_CONST_RE.finditer(text):
+    for raw in text.splitlines():
+        m = _MSG_CONST_RE.match(raw.split("//", 1)[0].strip())
+        if not m:
+            continue
         out[m.group(1)].setdefault(int(m.group(3)), "%s_%s" % (m.group(1), m.group(2)))
     if not out["CM"] or not out["SM"]:
         raise ScenarioError("protocol constant table %s parsed %d CM / %d SM constants "
@@ -668,6 +675,17 @@ def _var_refs(data):
     return refs
 
 
+#: 由 `scenario.placement` 派生、必须与它自洽的变量。目前只有 self_pos：场景作者按
+#: `MakeLong(X, Y) = (unsigned short)X | (Y << 16)` 打包（HUtil32.MakeLong 口径，
+#: docs/HUtil32-parity-inventory-20261020.md 第 9 条），低 16 位 X、高 16 位 Y。
+PLACEMENT_DERIVED_VARS = {"self_pos": "MakeLong(X,Y)=(Y<<16)|X"}
+
+
+def _decode_self_pos(value):
+    """MakeLong(X,Y) -> (x, y)：低 16 位 X、高 16 位 Y（HUtil32.MakeLong 口径）。"""
+    return value & 0xFFFF, (value >> 16) & 0xFFFF
+
+
 def _is_int_literal(text):
     try:
         int(text, 10)
@@ -676,7 +694,7 @@ def _is_int_literal(text):
         return False
 
 
-def check_scenario(data, plans, messages=None):
+def check_scenario(data, plans, params=None, messages=None):
     """`--check-scenario` 的语义校验（形状之外）。非法即抛 ScenarioError。
 
     已有形状校验（load_scenario/expand_scenario）：键名/类型/范围、恰好一个动作键、
@@ -687,6 +705,8 @@ def check_scenario(data, plans, messages=None):
          （wait_idents/wait_frames）的步骤 —— 全是 sleep 的场景什么也证不了；
       R3 所有 send/wait_* 的 ident 必须存在于协议常量表（表外 ident = 永远发不出/等不到）；
       R4 变量引用必须能在场景声明的 required/params/computed 里找到（不许引用未声明变量）；
+      R5 `scenario.placement` 与由位置派生的 params（如 self_pos=MakeLong(X,Y)）必须自洽
+         （不一致 = 角色落在 A 点、期望值按 B 点算，真跑静默恒超时，card_window dry-run 也看不出来）；
       W  至少要有一个等待步骤（原 main 里的 N-5 规则，收进来一起判）。
 
     R4 的「声明」口径刻意**不含 `--var`**：`--var` 是给已声明变量覆值的通道（README），
@@ -695,6 +715,10 @@ def check_scenario(data, plans, messages=None):
     name = data.get("name")
     if messages is None:
         messages = load_message_constants()
+    # 生效参数 = 场景 params + --var 覆盖（R5 用；R4 的「声明」口径刻意不含 --var）。
+    eff_params = dict(data.get("params") or {})
+    if params:
+        eff_params.update(params)
     known = set(messages["CM"]) | set(messages["SM"])
     declared = (set((data.get("params") or {}).keys())
                 | set(data.get("required") or [])
@@ -745,6 +769,27 @@ def check_scenario(data, plans, messages=None):
             raise ScenarioError(
                 "%s references undeclared variable %r: declare it in required/params/computed "
                 "(--var only overrides a declared name, it does not declare one)" % (where, ref))
+
+    # R5：placement 与由位置派生的 params 必须自洽。
+    placement = data.get("placement")
+    if isinstance(placement, dict):
+        for var, how in PLACEMENT_DERIVED_VARS.items():
+            if var not in eff_params:
+                continue
+            raw = eff_params[var]
+            if isinstance(raw, str) and _is_int_literal(raw):
+                raw = int(raw, 10)
+            if not isinstance(raw, int) or isinstance(raw, bool):
+                raise ScenarioError(
+                    "%s must be an int packed as %s (scenario.placement is declared), got %r"
+                    % (var, how, raw))
+            x, y = _decode_self_pos(raw)
+            if (x, y) != (placement["x"], placement["y"]):
+                raise ScenarioError(
+                    "scenario.placement map=%s x=%d y=%d disagrees with %s=%d "
+                    "(decodes to x=%d y=%d via %s): the character would be placed at one point "
+                    "while the scenario expects another (silent timeout at run time)"
+                    % (placement["map"], placement["x"], placement["y"], var, raw, x, y, how))
 
     # W：必须有等待步骤（N-5：只发不等证明不了任何东西）。
     if not any(k in WAIT_KINDS for k in kinds):
@@ -1271,7 +1316,7 @@ def main(argv=None):
         try:
             data = load_scenario(args.scenario)
             plans, params = expand_scenario(data, parse_vars(args.var))
-            check_scenario(data, plans)
+            check_scenario(data, plans, params)
         except ScenarioError as ex:
             print("scenario-error: %s" % ex, file=sys.stderr)
             return 2
@@ -1663,7 +1708,7 @@ def _selftest_scenario_validation():
             msg = str(ex)
         else:
             try:
-                check_scenario(d, plans, messages)
+                check_scenario(d, plans, None, messages)
             except ScenarioError as ex:
                 msg = str(ex)
             else:
@@ -1672,7 +1717,8 @@ def _selftest_scenario_validation():
         return msg
 
     # 好样例（与 combat_hit 同形）必须绿
-    check_scenario(clone(base), expand_scenario(clone(base), dict(ok_vars))[0], messages)
+    check_scenario(clone(base), expand_scenario(clone(base), dict(ok_vars))[0],
+                   ok_vars, messages)
 
     # ① 删掉 send 步 ⇒ wait_for 之前没有发帧步骤（R2 点名）
     expect_red(lambda d: d.__setitem__("steps", [s for s in d["steps"] if "send" not in s]),
@@ -1689,15 +1735,60 @@ def _selftest_scenario_validation():
     # ④ wait_for 排在 send 之前 ⇒ R2
     expect_red(lambda d: d.__setitem__("steps", [d["steps"][1], d["steps"][0]]),
                "no send step precedes")
+    # ②b send.ident 也必须在协议表里（R3 的 send 分支；M2：单独禁用该分支必须红）
+    expect_red(lambda d: d["steps"][0]["send"].__setitem__("ident", 4095),
+               "send.ident 4095 is not a CM_*/SM_* constant")
     # ⑤ 全是 sleep ⇒ R1（既不发帧也不观察）
     expect_red(lambda d: d.__setitem__("steps", [{"sleep": 1}, {"sleep": 2}]),
                "has no send step")
 
+    # M4：常量表先剥 `//` 注释再匹配 —— 注释掉的常量不得进表（否则 wait_for 假绿）
+    import tempfile
+    fd, fake_rs = tempfile.mkstemp(suffix=".rs")
+    os.close(fd)
+    try:
+        with open(fake_rs, "w", encoding="utf-8") as fh:
+            fh.write("// removed: pub const SM_FAKE: u16 = 4095;\n"
+                     "pub const SM_REAL: u16 = 50;   // 行尾注释内的 pub const SM_X: u16 = 51;\n"
+                     "pub const CM_OTHER: u16 = 3014;\n")
+        tbl = load_message_constants(fake_rs)
+        assert 4095 not in tbl["SM"] and 4095 not in tbl["CM"], tbl   # 整行注释
+        assert 51 not in tbl["SM"], tbl                                # 行尾注释
+        assert tbl["SM"] == {50: "SM_REAL"} and tbl["CM"] == {3014: "CM_OTHER"}, tbl
+    finally:
+        os.unlink(fake_rs)
+
+    # R5：placement 与 params.self_pos 必须自洽（牙：placement.y 改 1 ⇒ 红）
+    placed = {
+        "name": "selftest_placement",
+        "params": {"self_pos": 15204608},                 # MakeLong(X=256, Y=232)
+        "placement": {"map": "4", "x": 256, "y": 232},
+        "steps": [{"send": {"ident": 3010, "recog": "self_pos"}}, {"wait_for": 10}],
+    }
+    check_scenario(clone(placed), expand_scenario(clone(placed))[0], None, messages)
+    bad_pl = clone(placed)
+    bad_pl["placement"]["y"] = 233
+    try:
+        check_scenario(bad_pl, expand_scenario(clone(bad_pl))[0], None, messages)
+    except ScenarioError as ex:
+        msg = str(ex)
+        assert "disagrees with self_pos" in msg and "x=256 y=232" in msg, msg
+    else:
+        raise AssertionError("placement/self_pos mismatch accepted (R5 tooth broken)")
+    # --var 覆成不一致的值也必须红（生效参数口径）
+    try:
+        check_scenario(clone(placed), expand_scenario(clone(placed), {"self_pos": 15204609})[0],
+                       {"self_pos": 15204609}, messages)
+    except ScenarioError as ex:
+        assert "disagrees with self_pos" in str(ex), str(ex)
+    else:
+        raise AssertionError("--var self_pos mismatch accepted (R5 tooth broken)")
+
     # 防误伤：login_only（纯累计观察）与 dice_chain（params 默认值）必须绿
     for name in ("login_only.json", "dice_chain.json"):
         d = load_scenario(os.path.join(SCENARIO_DIR, name))
-        check_scenario(d, expand_scenario(d)[0], messages)
-    return "R1/R2/R3/R4 五颗牙 + 纯观察场景不误伤"
+        check_scenario(d, expand_scenario(d)[0], None, messages)
+    return "R1-R5 七颗牙（含 send.ident/注释常量/placement）+ 纯观察场景不误伤"
 
 
 class _TimedSock:
