@@ -336,6 +336,24 @@ TEETH = [
     ("INV7", "run_side 的背包夹具 rc 判定被摘掉（if ires.get(\"rc\") != 0: → if False:）",
      "⑯ run_side 背包夹具失败",
      [('''            if ires.get("rc") != 0:''', '''            if False:''')]),
+    # --- --var 透传（卡 openmir2-card-window-var-passthrough）-----------------------
+    # V1 锁「透传真的接进 probe 命令的调用点」（丢弃 --var ⇒ VAR-1 红）；
+    # V2/V3 锁「非法形式真的在加载期 fail-closed」（删空值/同名不同值校验 ⇒ VAR-3 红）。
+    ("V1", "--var 透传在 --dry-run 的 probe 命令里被丢弃（操作者输入被静默丢掉）",
+     "VAR-1",
+     [('''                runner.run(side, "probe",
+                           build_probe_argv(sc, ctx, prof, password,
+                                            vars_argv=list(vars_argv)
+                                            + list(user_vars or [])))''',
+       '''                runner.run(side, "probe",
+                           build_probe_argv(sc, ctx, prof, password,
+                                            vars_argv=list(vars_argv)))''')]),
+    ("V2", "空 value 校验被删（--var k= 静默放行，当默认值用）",
+     "VAR-3",
+     [('''        if value == "":''', '''        if False:''')]),
+    ("V3", "同名不同值的校验被删（静默丢掉其中一个值）",
+     "VAR-3",
+     [('''            if seen[name] != value:''', '''            if False:''')]),
 ]
 
 

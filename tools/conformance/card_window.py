@@ -55,6 +55,12 @@
   * 真跑 **--out 必填**（不允许把证据静默写进 cwd）；out 里若已有上次运行的产物，开跑前整体
     归档到 `_stale-<ts>-<pid>/`，并**无条件**写本次的 report.json（compare 报告或 fallback），
     杜绝旧 PASS 冒充本次证据。
+  * **`--var NAME=VALUE`（可重复）原样透传**（卡 `openmir2-card-window-var-passthrough`）：
+    两侧（csharp / rust）probe 命令行里都逐字带上，顺序 = 命令行顺序；`--dry-run` 打印的
+    命令里同样可见。加载期 fail-closed：缺 `=` / 变量名为空 / 值为空串 / 同名不同值 =>
+    rc=2 并点名（绝不静默丢掉一个值）。**不传时行为与产物逐字节不变**。它只覆盖场景已声明
+    的变量（覆值通道，不声明新变量），用于 `dice_chain` 这种 `params.npc_actor` 硬编码、
+    又不在 `required`（因此没有 discovery 值）的场景。
   * **参数发现 fail-closed**（场景声明 `required` 时自动启用，`--discover` 可强制）：每侧
     先跑一次 discovery（默认 `npc_click_auto`：点一次 NPC 收 `SM_MERCHANTSAY(643)`），从
     **本侧**帧推导 required，再用本侧的值拼 `--var` 跑真正的场景。任一侧推不出 ⇒ 该侧
@@ -107,6 +113,11 @@ profile：
 
   # 只打印将要执行的完整命令序列（不起栈、不建目录、不需要密码）
   python -I -B tools/conformance/card_window.py --card X --scenario S --out O --dry-run
+
+  # 操作者透传 --var（可重复）：原样进两侧 probe 命令行；非法形式加载期 rc=2
+  python -I -B tools/conformance/card_window.py --card X \
+      --scenario tools/probe/scenarios/dice_chain.json --out O \
+      --var npc_actor=<本次 actor id> --dry-run
 
   # 带 required 的场景自动先跑 discovery；离线预览带**真实值**的 --var 命令序列
   # （用已录帧回放推导，不起栈；推不出 => rc=2 并点名缺哪个变量）
@@ -961,6 +972,42 @@ def discovery_ctx(ctx):
     d["scenario"] = ctx["discovery"]["scenario"]
     d["discovery_dir"] = disc_dir
     return d
+
+
+def parse_var_args(items):
+    """`--var NAME=VALUE`（可重复）=> probe argv 片段；**加载期** fail-closed。
+
+    卡 `openmir2-card-window-var-passthrough`：窗口编排此前没有把操作者输入喂给 probe 的通道，
+    `dice_chain` 这类 `params.npc_actor` 硬编码场景只能点到旧会话的 actor。
+      * 原样保留 `NAME=VALUE`（只按**第一个** `=` 切，值里允许再有 `=`；与 mir2_probe 的
+        `parse_vars` 同口径），顺序 = 命令行顺序（确定性，两侧一致）；
+      * 缺 `=` / 变量名为空 / 值为空串 / **同名不同值** => ConfigError（rc=2 并点名），
+        绝不静默丢弃其中一个值；
+      * 完全相同的重复项只保留一次（值不变，透传结果相同）。
+    """
+    out = []
+    seen = {}
+    for idx, item in enumerate(items or [], 1):
+        if not isinstance(item, str):
+            raise ConfigError("--var 第 %d 个必须是字符串 NAME=VALUE（实际 %r）"
+                              % (idx, item))
+        if "=" not in item:
+            raise ConfigError("--var 第 %d 个缺少 '='（必须是 NAME=VALUE）：%r"
+                              % (idx, item))
+        name, _, value = item.partition("=")
+        if not name:
+            raise ConfigError("--var 第 %d 个的变量名为空：%r" % (idx, item))
+        if value == "":
+            raise ConfigError("--var %s 的值为空字符串：拒绝静默当默认值（%r）"
+                              % (name, item))
+        if name in seen:
+            if seen[name] != value:
+                raise ConfigError("--var %s 重复且值不同（%r vs %r）：拒绝静默丢掉其中一个"
+                                  % (name, seen[name], value))
+            continue
+        seen[name] = value
+        out += ["--var", "%s=%s" % (name, value)]
+    return out
 
 
 def build_probe_argv(side_cfg, ctx, prof, password, vars_argv=None):
@@ -2471,7 +2518,8 @@ def preview_placement(runner, side, prof, sc, placement, ctx):
 
 
 
-def run_side(runner, side, prof, ctx, password, placement=None, inventory=None):
+def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
+             user_vars=None):
     sc = prof["sides"][side]
     side_dir = ctx["side_dir"]
     db_dir = ctx["db_dir"]
@@ -2669,8 +2717,10 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None):
             vars_argv = param_discovery.render_vars(values)
             res["vars"] = vars_argv
 
-        # 6) probe（带上本侧 discovery 推导出的 --var）
-        probe_argv = build_probe_argv(sc, ctx, prof, password, vars_argv=vars_argv)
+        # 6) probe（带上本侧 discovery 推导出的 --var + 操作者透传的 --var）
+        probe_argv = build_probe_argv(
+            sc, ctx, prof, password,
+            vars_argv=list(vars_argv) + list(user_vars or []))
         res["probe_rc"] = runner.run(side, "probe", probe_argv, env=env,
                                      timeout=probe_timeout)
         # 7) 抓库（probe 失败也拍，保留现场；缺快照 => 失败）
@@ -3025,6 +3075,9 @@ def execute(cfg):
     """cfg: dict(card, scenario, out, profile, password, post_comment, dry_run,
                  allow_production_db, rules, timeout_ms, ...) -> summary"""
     dry_run = bool(cfg.get("dry_run"))
+    # --var 透传（卡 openmir2-card-window-var-passthrough）：**加载期**解析并校验——非法形式
+    # 在建 out / 起栈 / 跑 discovery / 写 report 之前就 rc=2 点名（fail-closed）。
+    user_vars = parse_var_args(cfg.get("vars"))
     raw_profile = cfg.get("profile")
     prof = load_profile(raw_profile if raw_profile is not None else "alt")
     prof = apply_overrides(prof, cfg)
@@ -3143,6 +3196,9 @@ def execute(cfg):
         ] + list(warnings),
         "exit_code": 2,
     }
+    if user_vars:
+        # 只在真给了 --var 时落该字段：不传时产物逐字节不变。
+        summary["probe_vars"] = list(user_vars)
 
     if scenario and os.path.isfile(scenario):
         summary["scenario_sha256"] = sha256_file(scenario)
@@ -3296,7 +3352,9 @@ def execute(cfg):
                                % side)
             if not side_failed:
                 runner.run(side, "probe",
-                           build_probe_argv(sc, ctx, prof, password, vars_argv=vars_argv))
+                           build_probe_argv(sc, ctx, prof, password,
+                                            vars_argv=list(vars_argv)
+                                            + list(user_vars or [])))
                 runner.run(side, "db", build_db_argv(sc, ctx))
             runner.run(side, "stop", expand_argv(sc["stop"], ctx))
         compare_argv = [sys.executable, "-I", "-B", COMPARE,
@@ -3344,7 +3402,7 @@ def execute(cfg):
         ctx = side_ctx(side, out_dir, scenario, card, discovery=discovery_cfg)
         try:
             res = run_side(runner, side, prof, ctx, password, placement=placement,
-                           inventory=inventory)
+                           inventory=inventory, user_vars=user_vars)
         except (ConfigError, OSError) as e:
             res = {"side": side, "rc": 2, "error": "配置/执行错误：%s" % e}
             summary["notes"].append("%s: %s" % (side, e))
@@ -5755,6 +5813,61 @@ def selftest():
             "MG-7 --dry-run 摘要两侧 declared 不同（csharp=%r rust=%r，rc=%s）"
             % (cs_d, rs_d, s_m7d["exit_code"]))
 
+        # 18n) --var 透传（卡 openmir2-card-window-var-passthrough）：
+        #   VAR-1 = 原样（token 逐字）出现在**两侧** probe 命令行、顺序 = 命令行顺序，
+        #           且 --dry-run 打印出来的那一行里也能看到；
+        #   VAR-2 = 不传时两侧 probe 命令行都不带 --var（默认行为不变）；
+        #   VAR-3 = 四种非法形式在任何 IO 之前加载期 ConfigError 并点名。
+        var_prof = _selftest_profile(tmp, stub, log)
+
+        def _has_seq(argv, seq):
+            n = len(seq)
+            return any(list(argv[i:i + n]) == list(seq)
+                       for i in range(len(argv) - n + 1))
+
+        var_args = ["npc_actor=4242", "move_x=7"]
+        want_var = ["--var", "npc_actor=4242", "--var", "move_x=7"]
+        s_var = execute(base_cfg(os.path.join(tmp, "run-var-dry"), var_prof,
+                                 scenario=scen_unblocked, dry_run=True,
+                                 vars=var_args))
+        var_probe = {c["side"]: c["argv"] for c in s_var["commands"]
+                     if c["step"] == "probe"}
+        chk(s_var["exit_code"] == 0
+            and _has_seq(var_probe.get("csharp") or [], want_var),
+            "VAR-1 --var 原样出现在 csharp probe 命令行（顺序一致，%s）"
+            % (var_probe.get("csharp") or [])[-4:])
+        chk(s_var["exit_code"] == 0
+            and _has_seq(var_probe.get("rust") or [], want_var),
+            "VAR-1 --var 原样出现在 rust probe 命令行（顺序一致，%s）"
+            % (var_probe.get("rust") or [])[-4:])
+        chk("--var npc_actor=4242 --var move_x=7"
+            in _join_argv(var_probe.get("csharp") or []),
+            "VAR-1 --dry-run 打印的行里可见 --var（%s）"
+            % _join_argv(var_probe.get("csharp") or [])[-60:])
+        s_novar = execute(base_cfg(os.path.join(tmp, "run-novar-dry"), var_prof,
+                                   scenario=scen_unblocked, dry_run=True))
+        novar_probe = [c["argv"] for c in s_novar["commands"] if c["step"] == "probe"]
+        chk(s_novar["exit_code"] == 0 and len(novar_probe) == 2
+            and all("--var" not in a for a in novar_probe),
+            "VAR-2 不传 --var => 两侧 probe 命令行都不带 --var（默认不变）")
+        bad_var_cases = [
+            ("缺 '='", ["npc_actor119"]),
+            ("空 key", ["=119"]),
+            ("空 value", ["npc_actor="]),
+            ("同名不同值", ["npc_actor=1", "npc_actor=2"]),
+        ]
+        for bad_label, bad_args in bad_var_cases:
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-var-bad"), var_prof,
+                                 scenario=scen_unblocked, dry_run=True,
+                                 vars=bad_args))
+                bad_err = None
+            except ConfigError as e:
+                bad_err = str(e)
+            chk(bad_err is not None and "--var" in bad_err,
+                "VAR-3 非法 --var（%s）=> 加载期 ConfigError 并点名（%r）"
+                % (bad_label, bad_err))
+
         # 18m) 背包夹具（INV-1..）：4 用例 + 2 牙 + 生产接线/失败面——**必须走 chk**，
         # 也就是排在 rc 判定之前；此前这段放在 `if fail_n: return 1` 之后 ⇒ 牙永不判红（review `c866f358` B-1）。
         for cond, msg in _selftest_inventory(tmp):
@@ -5822,6 +5935,9 @@ def build_parser():
                          "必须点击一次 NPC 才收得到 SM_MERCHANTSAY(643)）")
     ap.add_argument("--discovery-frames",
                     help="[仅 --dry-run] 用已录 frames 回放推导，打印带真实值的 --var 命令序列")
+    ap.add_argument("--var", action="append", default=[], metavar="NAME=VALUE",
+                    help="透传给两侧 probe 的场景变量覆值（可重复，如 --var npc_actor=119）；"
+                         "加载期校验：缺 '=' / 空名 / 空值 / 同名不同值 => rc=2 点名")
     ap.add_argument("--selftest", action="store_true", help="离线自检（桩命令 + 合成 frames）")
     ap.add_argument("--allow-production-db", action="store_true",
                     help="显式放行生产库配置（仅 owner 授权的窗口；默认拒绝）")
@@ -5848,6 +5964,7 @@ def main(argv=None):
         "discover": args.discover,
         "discovery_scenario": args.discovery_scenario,
         "discovery_frames": args.discovery_frames,
+        "vars": args.var,
         "allow_production_db": args.allow_production_db,
         "rules": args.rules,
         "login_gate": args.login_gate,
