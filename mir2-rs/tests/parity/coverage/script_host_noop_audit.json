@@ -2,7 +2,7 @@
   "card": "openmir2-script-host-noop-audit",
   "author": "openmir2-worker-63",
   "base_oid": "14864309e",
-  "line_baseline": "master 95b169ecc（rebase 后合并树）：npc.rs / mod.rs 行号按**合并树**重钉（卡 openmir2-script-sendmsg-host 给 npc.rs +139 行、mod.rs +49 行；master 又给 npc.rs +335 行）",
+  "line_baseline": "master 95b169ecc（rebase 后合并树）：npc.rs / mod.rs 行号按**合并树**重钉（卡 openmir2-script-sendmsg-host 给 npc.rs +139 行、mod.rs +49 行；master 又给 npc.rs +335 行）；卡 `openmir2-sendmsg-login-qmanage-cases` 未改 `npc.rs`/`engine/mod.rs` 的覆写 ⇒ 相关行号不变（`check --strict-lines` 复核）",
   "line_policy": "npc.rs / mod.rs 行号仅作文档参考；自检门按**符号**校验（impl 块内方法成员、mod.rs 内 fn 声明、行号只需落在该 impl 块范围内）。oracle（src/**，冻结面）仍按 file:line 精确核行。",
   "tier": "L",
   "oracle_root": "src/ (C# 参照实现)",
@@ -191,7 +191,7 @@
         "line": 715
       },
       "side_effect": "发帧（NPC 说词）",
-      "consequence": "脚本 `SENDMSG 0-4` 在部署语料 349 行（case0-3=318 / case4=31）上产帧：`SM_SYSMESSAGE(100)`（全服每个 `!Ghost` 玩家各一发，Recog=收件人自己）与 `SM_HEAR(40)`（NPC ±12 格，Recog=NPC）。**可触达的排水点**：商人/点击、1011、`@back`、`~@repair`、QFunction 组队、GuildOfficial `handle_select`、`@StdModeFunc*`（`run_std_mode_func_script`，部署 `Market_Def/QFunction-0.txt:107` 的 `[@StdModeFunc14]` 是**无条件 `SENDMSG 0`** ⇒ 经 `handle_eat_cmd` 的 std_mode=31 && ani_count!=0 可达；**改前**该点只取 `player.frames` ⇒ 触发者收到、其余在线玩家 0 帧，**改后**全服扇出）。**仍未接线**：`@Login`/`QManage`（SENDMSG 全是 case5/7，0 条 0-4）与 `@PlayDie`（Rust 侧无触发点）。",
+      "consequence": "脚本 `SENDMSG 0-4` 在部署语料 349 行（case0-3=318 / case4=31）上产帧：`SM_SYSMESSAGE(100)`（全服每个 `!Ghost` 玩家各一发，Recog=收件人自己）与 `SM_HEAR(40)`（NPC ±12 格，Recog=NPC）。**可触达的排水点**：商人/点击、1011、`@back`、`~@repair`、QFunction 组队、GuildOfficial `handle_select`、`@StdModeFunc*`（`run_std_mode_func_script`，部署 `Market_Def/QFunction-0.txt:107` 的 `[@StdModeFunc14]` 是**无条件 `SENDMSG 0`** ⇒ 经 `handle_eat_cmd` 的 std_mode=31 && ani_count!=0 可达；**改前**该点只取 `player.frames` ⇒ 触发者收到、其余在线玩家 0 帧，**改后**全服扇出）、**`@Login`/QManage**（卡 `openmir2-sendmsg-login-qmanage-cases`，T-267：生产排水点 `lib.rs::drain_login_script_batch` = `emit_login_script_frames` + `fan_out_world_sysmessage`，`world_broadcasts` 与 `frames` 同批 `std::mem::take`、扇出在写回之前）。**部署可达性（T-267 复算）**：`@Login` 的 `#CALL` 链（`QuestDiary/月卡/月卡系统.txt:8/15/16/23`、`QuestDiary/游戏登陆/登陆脚本.txt:17-22`）与 `MapQuest_def/QManage.txt` 本体（10 条原始行 = case5×9 + case7×1）**0 条 case 0-4** ⇒ 该路接线是防静默丢弃、用例为构造级（oracle `GotoLableQuestActionProcess` 每个 `#ACT` 只执行第一个已注册动作 ⇒ 行数≠帧数）；`@PlayDie` 的 4 条 case1（`Market_Def/QFunction-0.txt:50/51/55/56`）与 `[@假人上线A]:62` 的 case0 **oracle 不可达**（`PlayObject.Die()` 从不 `GotoLable(\"@PlayDie\")`，`ScriptFlagConst.SPLAYDIE/NPLAYDIE` 无消费点）⇒ **不实现**、登记 T-267。",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
@@ -244,7 +244,7 @@
         "line": 1881
       },
       "side_effect": "发帧（全世界广播）",
-      "consequence": "脚本 `SENDMSG 0-4` 在部署语料 349 行（case0-3=318 / case4=31）上产帧：`SM_SYSMESSAGE(100)`（全服每个 `!Ghost` 玩家各一发，Recog=收件人自己）与 `SM_HEAR(40)`（NPC ±12 格，Recog=NPC）。**可触达的排水点**：商人/点击、1011、`@back`、`~@repair`、QFunction 组队、GuildOfficial `handle_select`、`@StdModeFunc*`（`run_std_mode_func_script`，部署 `Market_Def/QFunction-0.txt:107` 的 `[@StdModeFunc14]` 是**无条件 `SENDMSG 0`** ⇒ 经 `handle_eat_cmd` 的 std_mode=31 && ani_count!=0 可达；**改前**该点只取 `player.frames` ⇒ 触发者收到、其余在线玩家 0 帧，**改后**全服扇出）。**仍未接线**：`@Login`/`QManage`（SENDMSG 全是 case5/7，0 条 0-4）与 `@PlayDie`（Rust 侧无触发点）。",
+      "consequence": "脚本 `SENDMSG 0-4` 在部署语料 349 行（case0-3=318 / case4=31）上产帧：`SM_SYSMESSAGE(100)`（全服每个 `!Ghost` 玩家各一发，Recog=收件人自己）与 `SM_HEAR(40)`（NPC ±12 格，Recog=NPC）。**可触达的排水点**：商人/点击、1011、`@back`、`~@repair`、QFunction 组队、GuildOfficial `handle_select`、`@StdModeFunc*`（`run_std_mode_func_script`，部署 `Market_Def/QFunction-0.txt:107` 的 `[@StdModeFunc14]` 是**无条件 `SENDMSG 0`** ⇒ 经 `handle_eat_cmd` 的 std_mode=31 && ani_count!=0 可达；**改前**该点只取 `player.frames` ⇒ 触发者收到、其余在线玩家 0 帧，**改后**全服扇出）、**`@Login`/QManage**（卡 `openmir2-sendmsg-login-qmanage-cases`，T-267：生产排水点 `lib.rs::drain_login_script_batch` = `emit_login_script_frames` + `fan_out_world_sysmessage`，`world_broadcasts` 与 `frames` 同批 `std::mem::take`、扇出在写回之前）。**部署可达性（T-267 复算）**：`@Login` 的 `#CALL` 链（`QuestDiary/月卡/月卡系统.txt:8/15/16/23`、`QuestDiary/游戏登陆/登陆脚本.txt:17-22`）与 `MapQuest_def/QManage.txt` 本体（10 条原始行 = case5×9 + case7×1）**0 条 case 0-4** ⇒ 该路接线是防静默丢弃、用例为构造级（oracle `GotoLableQuestActionProcess` 每个 `#ACT` 只执行第一个已注册动作 ⇒ 行数≠帧数）；`@PlayDie` 的 4 条 case1（`Market_Def/QFunction-0.txt:50/51/55/56`）与 `[@假人上线A]:62` 的 case0 **oracle 不可达**（`PlayObject.Die()` 从不 `GotoLable(\"@PlayDie\")`，`ScriptFlagConst.SPLAYDIE/NPLAYDIE` 无消费点）⇒ **不实现**、登记 T-267。",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
