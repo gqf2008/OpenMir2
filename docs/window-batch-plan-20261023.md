@@ -6,19 +6,19 @@
 
 ## 0. 一句话结论
 
-**窗口欠账不是 114 张，是 173 张**（机器可复现口径见 §1）。其中：**第 1 批 53 张**（9 个 probe 场景 41 + 既有夹具 12）、**第 2 批 4 张**、**第 3 批 81 张**、**不可协议对拍 35 张**。每一张都落到某一批并给了场景与前置，无遗漏。
+**窗口欠账不是 114 张，是 173 张**（机器可复现口径见 §1）。其中：**第 1 批 52 张**（9 个 probe 场景 40 + 既有夹具 12）、**第 2 批 4 张**、**第 3 批 82 张**、**不可协议对拍 35 张**。每一张都落到某一批并给了场景与前置，无遗漏。
 
 | 批次 | 张数 | 开跑条件 |
 |---|---:|---|
-| 第 1 批 · A（probe 9 场景） | 41 | `card_window.py` + 参数发现接线（`openmir2-window-discovery-wiring`） |
+| 第 1 批 · A（probe 9 场景） | 40 | `card_window.py` + 参数发现接线（`openmir2-window-discovery-wiring`）；其中 1 张部分可验 |
 | 第 1 批 · B（既有夹具） | 12 | 夹具在 master，逐卡前置见行内 |
 | 第 2 批 · A（move/king/combat 规则） | 2 | `openmir2-window-discovery-rules` 落地 |
 | 第 2 批 · B（SM_BAGITEMS 规则） | 2 | **需新开卡**（现有规则卡不覆盖） |
-| 第 3 批（新帧/新场景/新夹具） | 81 | 逐卡前置，见行内 |
+| 第 3 批（新帧/新场景/新前置） | 82 | 逐卡前置，见行内 |
 | 不可协议对拍 | 35 | 替代判据见行内 |
 | **合计** | **173** | |
 
-> 第 1 批全部跑完，也只能消掉 173 张里的 **53 张（31%）**；**120 张**要等新场景/新帧/工具（第 2、3 批）或走替代判据（不可对拍）。把「第一批 9 个场景」当成整场窗口的解法会严重低估工作量。
+> 第 1 批全部跑完，**可闭环 51 张（29%）**：1P 40 张里 `openmir2-player-searchviewrange-cadence` 只有项 ① 可验（项 ③ 收件人近似需第二观察者），其余 1F 12 张按卡面前置。**122 张**要等新场景/新帧/工具（第 2、3 批）或走替代判据（不可对拍）。把「第一批 9 个场景」当成整场窗口的解法会严重低估工作量。
 
 ## 1. 为什么看板说 114：差额逐项解释（可复现）
 
@@ -57,6 +57,7 @@
 
 - 同口径实测：merged-not-closed **217** / 其中最新 approve tier=R **155** / 无 tier 声明 **18**（AGENTS.md「缺 tier 按 R」）⇒ **173**。（任意一条 review 声明过 R 的是 **162**；其中 7 张最新 approve 已改判 L，按「最新一次判定」不计入。）
 - 155 张 R 卡的证据强度：approve 显式 `window_required=true` **105** 张、显式 `window_items` **69** 张；其余 50 张只有 `status.work` 里的文字；18 张无 tier 卡里有 15 张是 M3 夹具/对齐卡。**这 68 张「只有 work 文字」的卡是本清单置信度最低的一档**（行内已标）。
+- 机械集合含 2 张最新 approve 为 `window_required=false`：`gate-gmclose-race`（§5.4 已单列为非窗口欠账，建议 owner closed）与 `login-frame-order-52-752`（后续「R 级记账补登」又把窗口项登记回来，故仍算欠账）。不影响 173 与分批。
 - **卡数 ≠ 合并数**：173 张里有 14 张共用 5 个 merge 提交（`27d22a9f3`/`759320894`/`50dd3f2ef`/`6a774ea79`/`c518e075b`），按合并提交数只能数出约 164，按卡数才是 173——这是「看板聚合的重复计数」的实际来源。
 
 > 复现命令见 §6。
@@ -81,7 +82,7 @@
 
 列：卡 id / 状态 / 窗口项要点 / 场景 / 前置。状态取最后一条 `status`；`needs-review` 的两张是返工后未合入当前 head 的卡。
 
-### 1P · 第 1 批 · A：9 个可跑 probe 场景（零新增代码）（41 张）
+### 1P · 第 1 批 · A：9 个可跑 probe 场景（零新增代码）（40 张）
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
@@ -92,7 +93,7 @@
 | 5 | `openmir2-enter-shift-loop` | in-progress | ① 真机窗口（墙格出生登录：RNG 流水 + 落点；默认零抽）；② HomeMap 不可解析分支的 oracle `goto ReGetMap` 语义未建模（当前不可达，已登记）；③ `ed… | login_only | 墙格出生：RNG 流水 + 落点（默认零抽） |
 | 6 | `openmir2-login-notice-clienttick` | in-progress | ① 真机窗口（含 `SoftVersionDateEx==0` 两侧构造）；② **方案 A**（完整等待环 + 10s 超时踢人 + 等待期丢弃）另开 R 卡；③ 8 个显式 MagIdx… | login_only | 含 SoftVersionDateEx==0 两侧构造 |
 | 7 | `openmir2-aoi-verify-maptime` | in-progress | ① **真机窗口**——同缩窗场景需验 vis>=1、nearest<=vr、capture 出 SM_TURN(281,661) + 配对 SM_FEATURECHANGED、SM_WAL… | login_only | vis>=1/nearest<=vr、SM_TURN(281,661)+41、SM_WALK=0 |
-| 8 | `openmir2-player-searchviewrange-cadence` | in-progress | ① **真机窗口**——首扫约 1.2s、之后每 1.2s；② 非玩家扫描节拍仍每 tick（另卡）；③ `RM_DISAPPEAR` 收件人近似（误差窗口随节流放大）——应改格扫或窗口验证… | login_only | 首扫约 1.2s、之后每 1.2s |
+| 8 | `openmir2-player-searchviewrange-cadence` | in-progress | ① **真机窗口**——首扫约 1.2s、之后每 1.2s；② 非玩家扫描节拍仍每 tick（另卡）；③ `RM_DISAPPEAR` 收件人近似（误差窗口随节流放大）——应改格扫或窗口验证… | login_only（部分可验：仅项 ①） | 项 ① 首扫约 1.2s/之后每 1.2s 可闭环；项 ③ RM_DISAPPEAR 收件人近似需第二观察者 ⇒ 移多会话批次 |
 | 9 | `openmir2-persist-create-rows` | in-progress | ① 真机窗口（建角/兜底建角往返）；② `name_quick`/`name_text` 分裂的同名判重（另卡） | login_only + db_snapshot | 建角/兜底建角往返 |
 | 10 | `openmir2-persist-item-attr-and-gold` | in-progress | ① G-01 功能上仍不落库（oracle 门决定，`B-117`）；若要修，单开批次（upsert + 按 MakeIndex 关联 + 读全 14 列）；② G-02 仍丢失（`B-11… | login_only + db_snapshot | 建角/存档往返；G-01/G-02 口径另记 |
 | 11 | `openmir2-save-on-shutdown` | in-progress | ① **真机窗口**（`DB_SAVEHUMANRCD` 帧与落库 diff、`-Stop` graceful 日志；并裁决 D-12 的「oracle 是否真的落库」）；② `CTRL_C… | login_only + 停栈后 db_snapshot | DB_SAVEHUMANRCD 帧与落库 diff、-Stop 日志；同时裁决 D-12 |
@@ -117,15 +118,14 @@
 | 30 | `openmir2-guard-ctor-constants` | in-progress | W-guard-1 卫士自扫半径 5→7 的同 tick 可见集/事件序；W-guard-2 bins monster_display 接 light 后帧 Series 高字节=4（共 4 项） | login_only | 卫士自扫半径 5→7 的同 tick 可见集/事件序 |
 | 31 | `openmir2-script-take-persist` | in-progress | r9 原夹具复跑：角色 winplay0（PlayerId=6228），characters_bagitem Position=0 Make…；take 超额：gold=100 跑 `take 金币 200`，DB characters.Gold 必须仍 100（共 8 项） | dice_chain + db_snapshot | @main→@kaiz→@ya5→@ya52 链正是 dice_chain；比 characters_bagitem/Gold/useitems |
 | 32 | `openmir2-click-path-bag-writeback` | in-progress | 真机：固定 NPC 点击（CM_CLICKNPC）触发 @main 的 `take <物品> N` 后断线，DBSvr 落库 charact…；真机：同上触发 `take 金币 N` ⇒ characters.Gold 与 oracle 一致（100→95 类）（共 4 项） | npc_click + db_snapshot | 点击 @main take/give 后断线，落库行/列比对 |
-| 33 | `openmir2-gm-commands-design` | in-progress | 真机 SETPERMISSION=10 + 戴传送装备（T-169 前置）跑 @传送：两次调用间隔卡在 UserMoveTime*1000+…；两号（DB characters.AllowGroupReCall 分别为 1 / 0）进世界后跑 @天地合一：=1 成员必须过允许门，=0…（共 4 项） | gm_batch | 5 条现网可达命令；@传送 等需 SETPERMISSION=10，归第 3 批 |
-| 34 | `openmir2-login-529-status-text` | in-progress | 【依赖 SS_SERVERINFO 卡】真机 529 逐字节对拍当前不可能达成：Rust GameSvr 连上 login-srv 后不上报…；后果：Rust login-srv 的 servers 槽 server_name 恒空 ⇒ is_server_online=false…（共 4 项） | login_only | 前置 gamesvr-serverinfo-report 已合入 master 185a6c8cb（SS_SERVERINFO 上报已接）；本卡窗口=用当前二进制复跑 login_only 比 529 body |
-| 35 | `openmir2-searchtick-origin-parity` | in-progress | 双栈真机同时刻：用持续到首扫之后的场景（wait_frames ≥ 登录帧数+首扫帧数，或 sleep ≥2000ms）跑 tools/co…；口径收窄（本次复核结论）：生产 ctor 与进图同刻 ⇒ 本 patch 不引入首扫时刻回归；上述窗口项实质是 T-73/T-184 的相对… | login_only（--dwell-ms ≥2000） | 抓首 SM_TURN/41 与 654/657×2 的到达 tick 窗口 |
-| 36 | `openmir2-verify-tick-base` | in-progress | 登录等待环（RunNotice→CM_LOGINNOTICEOK→UserLogon）建模后，用双栈核对首个 VerifyMapTime（B…；口径收窄：今日生产路径 ctor_tick==clock_ms（代码级可证，见 same_instant_conclusion）⇒ 本 pa… | login_only | 判据实质待 T-73 登录等待环建模；今日生产路径无可观测差异 |
-| 37 | `openmir2-gamesvr-serverinfo-report` | in-progress | 【必跑】双栈 529 逐字节：Rust 栈 ident=529 的 body_hex 必须逐字节 = 545479513e404342564…；【建议】5600 上行抓包：核对 (103/<服务名>/0/<在线数>/1)——第 3 段恒 0（M2Share.ServerIndex 无…（共 3 项） | login_only | 必跑 ident 529 逐字节（body_hex 对照） |
-| 38 | `openmir2-ya52-menu-ok-missing` | in-progress | 用本 head 构建重跑 dice_chain_auto 末步断言 767。**残余**：N-1 T-193 末尾双句号、N-2 白名单未写承接卡号；三条未覆盖漏斗由 openmir2-me… | dice_chain_auto | 末步断言 SM_MENU_OK(767) |
-| 39 | `openmir2-menu-ok-unify-pickwire` | needs-review | 按 review ba93bcb9 返工：I-1 选①抽 emit_login_script_frames 并补 @Login 生产用例 2（删排水则红）、I-2 订正 T-142 ⑧末段/… | dice_chain_auto | 767 分支；回稿后同场景复跑 |
-| 40 | `openmir2-gm-impl-shutup` | in-progress | 已合入 master b8826ad0（approve reviewer-3 841be8bf，tier=R）。门禁：fmt/clippy/msgcodegen 604/test 141 s… | login_only + 手动 @禁言 | 前置 openmir2-gm-script-host-seam 已合（只通 @Login 路径） |
-| 41 | `openmir2-gm-script-host-seam` | in-progress | 新角色登录帧 + **手动在客户端直呼 @禁言 <名> 1** 双侧对拍 `权限不够!!!`（探针不能靠 login_only 自动跑，需 runbook 写明） | login_only + 手动 @禁言 <名> 1 | 探针不发 GM 命令，runbook 要求操作者手输；双侧比「权限不够!!!」 |
+| 33 | `openmir2-login-529-status-text` | in-progress | 【依赖 SS_SERVERINFO 卡】真机 529 逐字节对拍当前不可能达成：Rust GameSvr 连上 login-srv 后不上报…；后果：Rust login-srv 的 servers 槽 server_name 恒空 ⇒ is_server_online=false…（共 4 项） | login_only | 前置 gamesvr-serverinfo-report 已合入 master 185a6c8cb（SS_SERVERINFO 上报已接）；本卡窗口=用当前二进制复跑 login_only 比 529 body |
+| 34 | `openmir2-searchtick-origin-parity` | in-progress | 双栈真机同时刻：用持续到首扫之后的场景（wait_frames ≥ 登录帧数+首扫帧数，或 sleep ≥2000ms）跑 tools/co…；口径收窄（本次复核结论）：生产 ctor 与进图同刻 ⇒ 本 patch 不引入首扫时刻回归；上述窗口项实质是 T-73/T-184 的相对… | login_only（--dwell-ms ≥2000） | 抓首 SM_TURN/41 与 654/657×2 的到达 tick 窗口 |
+| 35 | `openmir2-verify-tick-base` | in-progress | 登录等待环（RunNotice→CM_LOGINNOTICEOK→UserLogon）建模后，用双栈核对首个 VerifyMapTime（B…；口径收窄：今日生产路径 ctor_tick==clock_ms（代码级可证，见 same_instant_conclusion）⇒ 本 pa… | login_only | 判据实质待 T-73 登录等待环建模；今日生产路径无可观测差异 |
+| 36 | `openmir2-gamesvr-serverinfo-report` | in-progress | 【必跑】双栈 529 逐字节：Rust 栈 ident=529 的 body_hex 必须逐字节 = 545479513e404342564…；【建议】5600 上行抓包：核对 (103/<服务名>/0/<在线数>/1)——第 3 段恒 0（M2Share.ServerIndex 无…（共 3 项） | login_only | 必跑 ident 529 逐字节（body_hex 对照） |
+| 37 | `openmir2-ya52-menu-ok-missing` | in-progress | 用本 head 构建重跑 dice_chain_auto 末步断言 767。**残余**：N-1 T-193 末尾双句号、N-2 白名单未写承接卡号；三条未覆盖漏斗由 openmir2-me… | dice_chain_auto | 末步断言 SM_MENU_OK(767) |
+| 38 | `openmir2-menu-ok-unify-pickwire` | needs-review | 按 review ba93bcb9 返工：I-1 选①抽 emit_login_script_frames 并补 @Login 生产用例 2（删排水则红）、I-2 订正 T-142 ⑧末段/… | dice_chain_auto | 767 分支；回稿后同场景复跑 |
+| 39 | `openmir2-gm-impl-shutup` | in-progress | 已合入 master b8826ad0（approve reviewer-3 841be8bf，tier=R）。门禁：fmt/clippy/msgcodegen 604/test 141 s… | login_only + 手动 @禁言 | 前置 openmir2-gm-script-host-seam 已合（只通 @Login 路径） |
+| 40 | `openmir2-gm-script-host-seam` | in-progress | 新角色登录帧 + **手动在客户端直呼 @禁言 <名> 1** 双侧对拍 `权限不够!!!`（探针不能靠 login_only 自动跑，需 runbook 写明） | login_only + 手动 @禁言 <名> 1 | 探针不发 GM 命令，runbook 要求操作者手输；双侧比「权限不够!!!」 |
 
 ### 1F · 第 1 批 · B：master 上既有的 `run_*_pair.ps1` 夹具（零新增场景）（12 张）
 
@@ -158,7 +158,7 @@
 | 1 | `openmir2-delmagic-addmagic-chain` | in-progress | 登录后 characters_magic 行消失/新增与 212/210 真机字节与序；会话内戴上 115 即发 210 / 打碎治愈戒指即发 212（共 3 项） | bag_equip | 缺 SM_BAGITEMS(201) 发现规则（既有 discovery-rules 卡不覆盖 ⇒ 需新开卡） |
 | 2 | `openmir2-unbindlist-consumer` | in-progress | 真机客户端：吃一个 StdMode31/AniCount0 捆装包 ⇒ 客户端依次收到 6 条 SM_ADDITEM(200)（Recog=…；断线存档：hum_items（等价存档）含解包出的 6 件（MakeIndex 逐件递增、Dura=DuraMax=tpl.DuraMax、…（共 3 项） | eat_item | 同上；另需 StdMode31/AniCount0 捆装包夹具 |
 
-### 3 · 第 3 批 · 需新帧 / 新场景 / 新夹具（含前置未清的夹具卡）（81 张）
+### 3 · 第 3 批 · 需新帧 / 新场景 / 新夹具（含前置未清的夹具卡）（82 张）
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
@@ -231,18 +231,19 @@
 | 67 | `openmir2-a09-upgrade-item` | in-progress | 部署 ItemNameList 5 条在真机取同名物品，逐字节对拍 SM_BAGITEMS/SM_SAVEITEMLIST/买卖/取回/详情…；升级武器/衣服：SM_ADDITEM/SM_DELITEM/SM_UPDATEITEM 尾字段与线上 Desc 全 0（共 5 项） | 新：R2 upgrade_retrieve | ItemNameList 5 条 + 124B 尾 + 穿戴门槛 |
 | 68 | `openmir2-weapon-upgrade-values` | in-progress | 真机 @upgradenow 全量对拍四字段与 657 帧；取回路径 Dura 档/n90 抽数逐抽（共 5 项） | 新：R2 upgrade_retrieve | @upgradenow 四字段 + n90 逐抽 |
 | 69 | `openmir2-action-line-variable-text` | in-progress | 真机 C# 跑部署现成素材 `E:/MirServer/Mir200/Envir/QFunction-0.txt:388` 的 `SENDM…；真机 C# 跑 MESSAGEBOX `玩家:<$USERNAME>元宝:<$GAMEGOLD>`（最好再加 `<进入/@main>` 在前…（共 3 项） | 新：R1 npc_script_chain（SENDMSG/MESSAGEBOX 支） | QFunction-0.txt:388 素材 |
-| 70 | `openmir2-setoffline-field-writeback` | in-progress | ① SETOFFLINE → P31：构造 QFunction-0.txt 的 @OnLogout_OffLinePlaying（`OffL…；② ISONMAP：同一窗口内验证在图上 true / 不在图上 false（部署仅 QFunction-0.txt:265 `IsOnMa…（共 3 项） | 新：脚本夹具（@OnLogout_OffLinePlaying） | SETOFFLINE/P31/ISONMAP/T-100 |
-| 71 | `openmir2-setmapmode-dechp` | in-progress | ① 真机 SETMPAMODE DECHP 全量对拍：`now-DecHpTick > nDECHPTIME*1000` 秒门 + HP-=…；② SM_SYSMESSAGE(100) 逐字节：Recog=收帧玩家 ActorId、Param=MakeWord(FColor,BCol…（共 3 项） | 新：脚本夹具（SETMPAMODE DECHP） | 部署 0 处 ⇒ 必须构造 |
-| 72 | `openmir2-door-chain-wiring` | in-progress | ① C# oracle 真机：部署图 `[0 比奇省]`（0.map，700×700，79 门/21 状态）对真实门格发 `CM_OPEND…；② 城堡子系统覆盖：`CastleDoor` Open/Close（`RM_DIGUP`/`RM_DIGDOWN`）期间同样无 612/61…（共 3 项） | 新：CM_OPENDOOR 场景 | 门格样例 (106,315)/(106,316)/(107,315) |
-| 73 | `openmir2-castle-merchant-fixedhide-hit` | in-progress | ⑧ 接通后的城堡战实战（进入/退出战中两侧帧集合 diff=0）。**残余**：`unhide_hit` 注释「恒为客户端可见」严格说只在 !ObMode 成立（商人不可达，当前无偏差）；T… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
-| 74 | `openmir2-castle-merchant-disappear-downlink` | in-progress | ⑧ 接通后城堡战进入/退出战中两侧帧集合 diff=0。**残余**：M-1 帧序无判据（把排水挪到 hits 之前仍全绿，建议补静态/构造断言）；M-2 登录尾 bundle 与战转同 t… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
-| 75 | `openmir2-gm-admin-mode-entity-seam` | in-progress | ①-④）**：5 命令真机帧面/行为、@3 挨打零低血 53 + 登出满血存档、改档→登出→复登记录比对、@2 RM_DISAPPEAR。残余 m-1（@Rest 回执滤 Ghost）/m-… | 新：GM 5 命令场景（@3/@2 等） | gm_batch 不含这些命令 |
-| 76 | `openmir2-cm-adjust-bonus` | in-progress | 真机对拍 752→52→657→252 的字节、条数与次序（安静队列前提）。残余：lib.rs:3476 旧注释 RM_ABILITY(19)/RM_FEATURECHANGED(68) 应… | 新：adjust-bonus 场景（752→52→657→252） | 需触发 RM_ADJUST_BONUS 的动作源 |
-| 77 | `openmir2-weapon-durability-frames` | in-progress | 655 真机帧面（含 DecLampDura=false 的 1500→每周期一条怪癖）、1102 真机。残余：smframe_ext 帧目录两行改「已接线」；复审 N-2 提醒 merge… | 新：combat_hit + 装备耐久 | 655/1102 帧面 |
-| 78 | `openmir2-sendrefmsg-range-config` | in-progress | 部署改 15 双栈三场景对拍。残余：crates/world 两处仍用常量 12（需 World 配置通道，另开卡）；oracle 缺省确认为 12 非 15 | 新：部署改 15 后三场景 | 依赖 World 配置通道（crates/world 两处仍常量 12） |
-| 79 | `openmir2-map-event-frames` | in-progress | 真机双栈火墙进出 5 格比对 804/805 字节与到达窗口 + PileStones 折叠槽提示 +「采 804 前确认没挖过矿/没先建过任何事件」。残余：复审 N-a journal 坏… | 新：火墙进出 5 格场景 | 804/805 字节与到达窗口 |
-| 80 | `openmir2-pickwire-remaining-frames` | in-progress | ①三条脚本帧真机逐字节；②CHANGEEXP ⇒ Recog=加完后总量（依赖 openmir2-script-changexp-exp-writeback fbd26fd8，**该卡落地前… | 新：R1 npc_script_chain | 三条脚本帧；② 依赖 changexp-exp-writeback |
-| 81 | `openmir2-frame-drain-order-audit` | in-progress | 5 场景，gw-capture 可复跑）：施法多条 SM_STRUCK(31) 序 [0,2,1]/[0,3,2,1]、交易 4 条红字(252)、寄售多条 MENU_OK(**767**… | 新：5 个场景（施法/交易/寄售/组队/NPC） | gw-capture 可复跑；767 非 769 |
+| 70 | `openmir2-gm-commands-design` | in-progress | 真机 SETPERMISSION=10 + 戴传送装备（T-169 前置）跑 @传送：两次调用间隔卡在 UserMoveTime*1000+…；两号（DB characters.AllowGroupReCall 分别为 1 / 0）进世界后跑 @天地合一：=1 成员必须过允许门，=0…（共 4 项） | 新：GM 特权命令场景（SETPERMISSION=10）+ 多会话 | gm_batch 的 5 条命令不覆盖本卡任何一项：7 项均需 SETPERMISSION=10 后跑 @f/@ff/@传送/@bb；第 3 项「两号 @天地合一（AllowGroupReCall 1/0）」另需第二会话 |
+| 71 | `openmir2-setoffline-field-writeback` | in-progress | ① SETOFFLINE → P31：构造 QFunction-0.txt 的 @OnLogout_OffLinePlaying（`OffL…；② ISONMAP：同一窗口内验证在图上 true / 不在图上 false（部署仅 QFunction-0.txt:265 `IsOnMa…（共 3 项） | 新：脚本夹具（@OnLogout_OffLinePlaying） | SETOFFLINE/P31/ISONMAP/T-100 |
+| 72 | `openmir2-setmapmode-dechp` | in-progress | ① 真机 SETMPAMODE DECHP 全量对拍：`now-DecHpTick > nDECHPTIME*1000` 秒门 + HP-=…；② SM_SYSMESSAGE(100) 逐字节：Recog=收帧玩家 ActorId、Param=MakeWord(FColor,BCol…（共 3 项） | 新：脚本夹具（SETMPAMODE DECHP） | 部署 0 处 ⇒ 必须构造 |
+| 73 | `openmir2-door-chain-wiring` | in-progress | ① C# oracle 真机：部署图 `[0 比奇省]`（0.map，700×700，79 门/21 状态）对真实门格发 `CM_OPEND…；② 城堡子系统覆盖：`CastleDoor` Open/Close（`RM_DIGUP`/`RM_DIGDOWN`）期间同样无 612/61…（共 3 项） | 新：CM_OPENDOOR 场景 | 门格样例 (106,315)/(106,316)/(107,315) |
+| 74 | `openmir2-castle-merchant-fixedhide-hit` | in-progress | ⑧ 接通后的城堡战实战（进入/退出战中两侧帧集合 diff=0）。**残余**：`unhide_hit` 注释「恒为客户端可见」严格说只在 !ObMode 成立（商人不可达，当前无偏差）；T… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
+| 75 | `openmir2-castle-merchant-disappear-downlink` | in-progress | ⑧ 接通后城堡战进入/退出战中两侧帧集合 diff=0。**残余**：M-1 帧序无判据（把排水挪到 hits 之前仍全绿，建议补静态/构造断言）；M-2 登录尾 bundle 与战转同 t… | 新：R6 castle_zone 城堡战 | ⑧ 战中帧集合 diff=0 |
+| 76 | `openmir2-gm-admin-mode-entity-seam` | in-progress | ①-④）**：5 命令真机帧面/行为、@3 挨打零低血 53 + 登出满血存档、改档→登出→复登记录比对、@2 RM_DISAPPEAR。残余 m-1（@Rest 回执滤 Ghost）/m-… | 新：GM 5 命令场景（@3/@2 等） | gm_batch 不含这些命令 |
+| 77 | `openmir2-cm-adjust-bonus` | in-progress | 真机对拍 752→52→657→252 的字节、条数与次序（安静队列前提）。残余：lib.rs:3476 旧注释 RM_ABILITY(19)/RM_FEATURECHANGED(68) 应… | 新：adjust-bonus 场景（752→52→657→252） | 需触发 RM_ADJUST_BONUS 的动作源 |
+| 78 | `openmir2-weapon-durability-frames` | in-progress | 655 真机帧面（含 DecLampDura=false 的 1500→每周期一条怪癖）、1102 真机。残余：smframe_ext 帧目录两行改「已接线」；复审 N-2 提醒 merge… | 新：combat_hit + 装备耐久 | 655/1102 帧面 |
+| 79 | `openmir2-sendrefmsg-range-config` | in-progress | 部署改 15 双栈三场景对拍。残余：crates/world 两处仍用常量 12（需 World 配置通道，另开卡）；oracle 缺省确认为 12 非 15 | 新：部署改 15 后三场景 | 依赖 World 配置通道（crates/world 两处仍常量 12） |
+| 80 | `openmir2-map-event-frames` | in-progress | 真机双栈火墙进出 5 格比对 804/805 字节与到达窗口 + PileStones 折叠槽提示 +「采 804 前确认没挖过矿/没先建过任何事件」。残余：复审 N-a journal 坏… | 新：火墙进出 5 格场景 | 804/805 字节与到达窗口 |
+| 81 | `openmir2-pickwire-remaining-frames` | in-progress | ①三条脚本帧真机逐字节；②CHANGEEXP ⇒ Recog=加完后总量（依赖 openmir2-script-changexp-exp-writeback fbd26fd8，**该卡落地前… | 新：R1 npc_script_chain | 三条脚本帧；② 依赖 changexp-exp-writeback |
+| 82 | `openmir2-frame-drain-order-audit` | in-progress | 5 场景，gw-capture 可复跑）：施法多条 SM_STRUCK(31) 序 [0,2,1]/[0,3,2,1]、交易 4 条红字(252)、寄售多条 MENU_OK(**767**… | 新：5 个场景（施法/交易/寄售/组队/NPC） | gw-capture 可复跑；767 非 769 |
 
 ### 4 · 不可协议对拍：GUI / 长跑 / 离线文件日志 / 多会话收件人集合 / 工具缺口 / 非窗口欠账（35 张）
 
@@ -303,7 +304,9 @@
 
 **抽样结论**：10 张里 4 张（脚本链/点击路径/529/GM 手动）确实能用所选场景验到，6 张按原判据**单客户端或单场景验不到**，已分别改判第 3 批或不可对拍。特别地，凡是原文出现「收件人集合」「±12」「两个在线成员」「两号同时在线」的卡，一律不进第 1/2 批——这是本次复核最有价值的一条筛选规则。
 
-> 抽样还发现 **卡面结论过时** 两类：(a) `login-529` 称 SS_SERVERINFO 未接，实际已合 master `185a6c8cb`；(b) `m3-party-trade/guild-castle/hero-pet/drop-exp/mail-auction/quest-align` 称夹具或 Rust 常量不存在，实际 `run_*_pair.ps1` 与 `party.rs`/`selloff.rs`/`quest_state.rs` 已在 058c3ad25。行内已按当前 master 订正；**窗口开跑前仍应重跑一次前置检查**，不要照抄卡片旧结论。
+> **I-1 规则反查（第 1 批全部 52 张）**：命中 2 张——`openmir2-gm-commands-design`（7 项窗口项**没有一项**由 `gm_batch` 覆盖：全需 SETPERMISSION=10 后跑 @f/@ff/@传送/@bb，第 3 项「两号 @天地合一」另需第二会话 ⇒ **整卡移第 3 批**）；`openmir2-player-searchviewrange-cadence`（项 ① 可闭环；项 ③ RM_DISAPPEAR 收件人近似需第二观察者 ⇒ **标部分可验**）。⇒ 第 1 批「可闭环」是 51 张，不是 52/53 张。
+
+> 抽样还发现**卡面结论过时** 4 张（reviewer-6 按 058c3ad25 逐项复核成立）：`m3-guild-castle-align`、`m3-hero-pet-align`（`run_*_pair.ps1` 在）、`m3-mail-auction-align`（bins 有 `CM_SELLOFFADDITEM`）、`m3-party-trade-align`（bins 有 `CM_GROUPMODE/CM_CREATEGROUP`）；行内已改「前置待复核」。另 `login-529` 的前置 SS_SERVERINFO 已在 `185a6c8cb`。**不成立的两类**：`m3-drop-exp-align` 的夹具文件在子目录 `mir2-rs/tests/parity/m3/drop-exp/run_drop_exp_pair.ps1`（只列根目录会漏），但 BotSrv 无固定种子 100 杀驱动，卡面前置成立；`m3-quest-align` 的三条阻断（markers 前缀未认领 / C# k=0 JSON 截断 / quest_state.jsonl 无生产者）仍全部成立。**开窗前仍应重跑前置检查，不要照抄卡片旧结论。**
 
 ## 5. 缺口登记（不改场景、不改工具，只登记）
 
