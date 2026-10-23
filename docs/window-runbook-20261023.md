@@ -27,6 +27,17 @@
    用旧二进制跑出来的对拍结论没有意义，**而且它不会报错**——只会给你一份看起来正常的报告。
    做法：`cargo build --release -p mir2-server`；起栈时先跑一次 `start_mir2_server.ps1 -WhatIf`，
    **核对它打印的 `SERVER_EXE` 路径与文件的 sha256**，再把这个 sha256 写进本次窗口的 `README.txt`。
+   **下一次真窗口（`alt` profile）核对 pid 的文件就是
+   `E:/tmp/conformance/rust-logs/mir2-server.pid.json`**（= `E:/tmp/conformance/start-rust.ps1` 的
+   `-LogDir`，**不是** `<out>/rust/`）。该路径只由 profile 的 `sides.rust.pid_file` 声明，代码里没有兜底
+   绝对路径；`card_window.py` 起栈后用它的 `roles[].exe` 与登记的 `mir2-server.exe` 对账，
+   **不一致/缺文件 ⇒ rc=2 并点名角色或文件**。该文件是 Windows PowerShell 5
+   `Set-Content -Encoding utf8` 写的，**带 UTF-8 BOM**，工具已按 `utf-8-sig` 读取。
+   自查（只读，不用起栈）：
+
+   ```sh
+   python -I -c "import json;d=json.load(open('E:/tmp/conformance/rust-logs/mir2-server.pid.json',encoding='utf-8-sig'));print(d['roles'][0]['exe'])"
+   ```
 2. **端口全空**：`powershell -File E:\MirServer\port-status.ps1`，十端口必须全 DOWN。`card_window.py` 起栈前会预检并在占用时 rc=2。
 3. **库基线复位**：C# 侧 `restore-baseline.sh`（`mir2_test_*`），Rust 侧 `restore-baseline-r.sh`（`mir2_test_*_r`）。**两套库不同名**，拿 `--db test` 给 Rust 侧拍快照会拍到 C# 的库 ⇒ 假差异。
 4. **一次只跑一栈**：C# 与 Rust 用同一组备用端口，串行起停。
