@@ -1,20 +1,21 @@
-# 2026-10-24 会话摘要（截至 master `47fd96ca8`）
+# 2026-10-24 会话摘要（截至 master `c4b66ddb1`）
 
-> **范围**：`git log --first-parent --merges bb4317a01..47fd96ca8` 的 **35** 次合并（L **27** / R **8**），外加今天关闭、今天新开仍在开的卡。
-> **取数时间**：2026-10-24（Asia/Shanghai）；看板快照 `walgit collab board --repo . --format json`。
-> **口径**：合并只数 **master 第一父链**上的 merge（`--first-parent`），分支内部把 master 合进卡片的 merge 不计；卡号由线程里 `merge_result.oid`（短 oid 前缀匹配 merge commit）确定，tier 取该 `merge_result.tier`（35/35 张都有）。
+> **范围**：`git log --first-parent --merges bb4317a01..c4b66ddb1` 的 **36** 次合并（L **28** / R **8**），外加今天关闭、今天新开仍在开的卡。
+> **取数时点**：2026-10-24 07:19（Asia/Shanghai，master=c4b66ddb1）；看板快照 `walgit collab board --repo . --format json`（503 张卡）。
+> **口径**：合并只数 **master 第一父链**上的 merge（`--first-parent`），分支内部把 master 合进卡片的 merge 不计；卡号由线程里 `merge_result.oid`（短 oid 前缀匹配 merge commit）确定，tier 取该 `merge_result.tier`（36/36 张都有）。
 > **R 卡一律只写「已合并、窗口未跑」**，不写「已完成验收」；`tier=R` 的卡按策略保持 `in-progress`、不 closed。
+> **数字是「取数时点」值**：master 继续前进时，同样的命令会数出更大的值（更多合并/关闭）；复核请以本表头的 commit 为准，或按新 commit 重跑 §0 命令并重新记账。
 
 ## 0. 数字与复算命令
 
 | 数 | 值 | 复算 |
 |---|---:|---|
-| 第一父链合并 | 35（L 27 / R 8） | `git log --first-parent --merges --format=%h bb4317a01..walgit/master \| wc -l` |
-| 今天关闭的卡 | 37 | 见下「复算 B」 |
+| 第一父链合并 | 36（L 28 / R 8） | `git log --first-parent --merges --format=%h bb4317a01..walgit/master \| wc -l` |
+| 今天关闭的卡 | 38 | 见下「复算 B」 |
 | 今天新开仍在开 | 11 | 见下「复算 C」 |
 | 仍开着且已合并的 R 卡 | 8 | 看板里 `status!=closed` 且出现在 §2 的 R 表 |
 
-看板列（同一快照）：已完成 **261** / 进行中 **235** / 待审 **4** / 受阻 **2** / 待认领 **0**（共 502 张卡）。
+看板列（同一快照）：已完成 **262** / 进行中 **234** / 待审 **5** / 受阻 **2** / 待认领 **0** / 需要人 **0**（共 503 张卡）。
 
 ```sh
 # 复算 B：今天关闭 = 线程里最后一条 status 的 ts 落在今天 且 body.status=="closed"
@@ -29,22 +30,22 @@ for i in ids:
     st = [e for e in t if e["entry"]["kind"] == "status"]
     if st and (st[-1]["entry"].get("body") or {}).get("status") == "closed" and int(st[-1]["entry"]["ts"]) >= DAY:
         n += 1
-print(n)   # -> 37
+print(n)   # 取数时点 -> 38（master 前进后会更大）
 EOF
 
 # 复算 C：今天新开仍在开 = issue 的 ts 落在今天 且 当前 status != closed
-#   （看板 JSON 的 created_ts 就是 issue 的 ts；本文件另用线程首条 entry 的 ts 复核过，11 张全部一致）
+#   （看板 JSON 的 created_ts 就是 issue 的 ts；本文件另用线程首条 entry 的 ts 复核过）
 python -I - <<'EOF'
 import json, subprocess, datetime
 DAY = int(datetime.datetime(2026, 10, 24, tzinfo=datetime.timezone(datetime.timedelta(hours=8)).timestamp()))
 b = json.loads(subprocess.run(["walgit", "collab", "board", "--repo", ".", "--format", "json"], capture_output=True, text=True).stdout)
-print(sum(1 for col in b["columns"] for c in col["cards"] if c["status"] != "closed" and c.get("created_ts", 0) >= DAY))   # -> 11
+print(sum(1 for col in b["columns"] for c in col["cards"] if c["status"] != "closed" and c.get("created_ts", 0) >= DAY))   # 取数时点 -> 11
 EOF
 ```
 
-> 快速近似：`board` 里 `status==closed and last_ts>=今天` 得到 **39**，比精确值多 2 张——`openmir2-d2-m3-fixtures`（今天只收到 comment）与 `openmir2-window-magic-fixture`（昨天已 closed，今天又补 comment）。所以「今天关闭」必须看**最后一条 status** 的 ts，不能看 `last_ts`。
+> 快速近似：`board` 里 `status==closed and last_ts>=今天` 会**多算**「今天只收到 comment 的旧收口卡」（取数时点实测多 2 张：`openmir2-d2-m3-fixtures`、`openmir2-window-magic-fixture`）。所以「今天关闭」必须看**最后一条 status** 的 ts，不能看 `last_ts`。
 
-## 1. 合并表（35 次，按时间升序）
+## 1. 合并表（36 次，按时间升序）
 
 | 时间 | commit | 卡号 | tier | 一句话结果 | 新增窗口项 |
 |---|---|---|---|---|---|
@@ -83,6 +84,7 @@ EOF
 | 06:42 | `d54fa4581` | `openmir2-weaponstrong-dura-zero-skip` | R | 属性重算补 oracle 的 Dura==0 跳过 | 是（见 §2） |
 | 06:46 | `478ff9a33` | `openmir2-batch-plan-spellcast-runnable` | L | spell_cast 移入「现在就能跑」 | 否 |
 | 07:00 | `47fd96ca8` | `openmir2-needs-human-count-sync` | L | owner 决策清单同步到 11 行/16 场景 | 否 |
+| 07:16 | `c4b66ddb1` | `openmir2-inventory-fixture-reachability` | L | inventory 夹具可达 + 两侧口径统一（接管返工） | 否 |
 
 ## 2. 今天新增/触及的 R 窗口项（8 条，全部**窗口未跑**）
 
@@ -97,7 +99,7 @@ EOF
 - `openmir2-ability-weaponstrong`（`d38acf25b`，05:35）：同一条磨损量的取数站点（RNG 站点保位）+ Desc[7] 覆盖 —— 线程：`walgit collab thread --repo . openmir2-ability-weaponstrong`
 - `openmir2-weaponstrong-dura-zero-skip`（`d54fa4581`，06:42）：`Dura==0` 整槽跳过对 `WeaponStrong` 的影响（决定磨损量） —— 线程：`walgit collab thread --repo . openmir2-weaponstrong-dura-zero-skip`
 
-## 3. 今天关闭的卡（37）
+## 3. 今天关闭的卡（38）
 
 | 卡号 | 关闭时间 | 收口者 |
 |---|---|---|
@@ -138,8 +140,9 @@ EOF
 | `openmir2-spell-cast-note-and-layout-pin` | 10-24 06:36 | openmir2-orchestrator |
 | `openmir2-batch-plan-spellcast-runnable` | 10-24 06:46 | openmir2-orchestrator |
 | `openmir2-needs-human-count-sync` | 10-24 07:00 | openmir2-orchestrator |
+| `openmir2-inventory-fixture-reachability` | 10-24 07:16 | openmir2-orchestrator |
 
-> 关闭数（37）≠ 合并数（35）：35 张里 **27 张今天已 closed**，其余 **8 张是 R 卡**（按策略保持 `in-progress`，见 §2）；另 **10 张**今天 closed 的卡其合并在 `bb4317a01` 之前（不在 §1 表内）。37 = 27 + 10。
+> 关闭数（38）≠ 合并数（36）：28 张对应 §1 表里的合并，其余 10 张的合并发生在 `bb4317a01` 之前（不在 §1 表内）；§1 里 8 张 R 卡按策略未 closed。
 
 ## 4. 今天新开、现在仍开着（11）
 
@@ -148,14 +151,14 @@ EOF
 | `openmir2-attack-weapon-wear-642` | openmir2-orchestrator | in-progress | 已合入 master 8dcb8c8ca（tier=R，approve reviewer-6 dbcf22f8 第二轮）。攻击成功磨损 + 642 帧已接；尾桶门照 oracle 怪癖；equip_struck_save 场景 dry… |
 | `openmir2-ability-weaponstrong` | openmir2-orchestrator | in-progress | 已合入 master d38acf25b（tier=R，approve reviewer-6 d3868d66 第二轮）。WeaponStrong 建模 + Desc[7] 覆盖 + RNG 站点保位。**R 卡不 closed**：… |
 | `openmir2-sendmsg-login-qmanage-cases` | openmir2-orchestrator | in-progress | 已合入 master b3f48ab49（tier=R，approve reviewer-14 8a9b5dab）。@Login/QManage 排水点接线（复用既有扇出）、@PlayDie 不可达登记 T-267、T-224 三处陈… |
-| `openmir2-inventory-fixture-reachability` | openmir2-worker-73 | needs-review | 返工已推送 head 552008754（patch 11d3d76c，rework_of 78aeb794）。I-1：probe 补 note 字符串校验——note=123 时 probe --check-scenario rc=… |
 | `openmir2-script-broadcast-tx-gating` | openmir2-orchestrator | in-progress | 已合入 master 71420a145（tier=R，approve reviewer-14 831c7594）。@Login 全服广播不再被触发者网关通道把关；其余四漏斗已核一致。**R 卡不 closed**：真机窗口未跑。 |
 | `openmir2-docs-stale-pointer-gate` | openmir2-worker-63 | needs-review | 过期指针门 + 首次接入：selftest 7/7、master 全量 OK（4 处真实命中已订正/白名单、2 条白名单含 rot 检测）；未改 src/规则/场景/whitelist，未起栈未连库。请 reviewer 独立复跑 -… |
 | `openmir2-weaponstrong-dura-zero-skip` | openmir2-orchestrator | in-progress | 已合入 master d54fa4581（tier=R，approve reviewer-9 dc504cf8，findings=0）。**R 卡不 closed**：真机窗口未跑。 |
 | `openmir2-stale-pointer-card-status-check` | openmir2-worker-23 | in-progress | 核对 stale pointer 卡状态并留证据 |
 | `openmir2-gate-baseline-snapshot` | openmir2-worker-24 | needs-review | 已交付 head `3bd8c6580`（patch `9654badb0`，base `478ff9a33`，tier=L）：`docs/gate-baseline-478ff9a33.md` 记录 19 项门禁现取结果——fmt/… |
-| `openmir2-leader-process-lessons-20261024` | openmir2-worker-24 | in-progress | 已交付 head `9ed7160c7`（patch `64525f8e5`，base `478ff9a33`，tier=L）：`docs/leader-process-lessons-20261024.md` 复盘今天 6 类事故（… |
-| `openmir2-session-digest-20261024` | openmir2-worker-24 | in-progress | 认领：写 docs/session-digest-20261024.md——bb4317a01..master 的合并表（commit/卡号/tier/一句话结果/是否新增窗口项）+ 今天关闭的卡 + 今天新开仍开着的卡 + 给 ow… |
+| `openmir2-leader-process-lessons-20261024` | openmir2-worker-24 | needs-review | 已按 reviewer-6 d7bc2322 返工 I-1/I-2/I-3 + 两条 Minor：规则改 14–20 并写明与规则 20 同源（订正 patch 64525f8e5 的事实错误）；dead claim 四证据语义改「c… |
+| `openmir2-session-digest-20261024` | openmir2-worker-24 | needs-review | 已交付 docs/session-digest-20261024.md：35 次合并表（L27/R8，tier 取 merge_result 35/35）+ 今天关闭 37 张 + 今天新开仍开 11 张（含 owner/状态）+ 8… |
+| `openmir2-rehearsal-refresh-478ff9a33` | openmir2-worker-58 | needs-review | 20 场景三态矩阵已在 master 47fd96ca8 上重跑并刷新；分类 16 可跑 / 2 blocked / 2 假绿；spell_cast 三态写全且前置写死 D-9 pin；gate rc 全 0 |
 
 > 另有 **3 张 R 卡是昨天开的、今天合并**，按策略同样留在 `in-progress`、不在上表：`openmir2-script-user-account`、`openmir2-script-envir-root-host`、`openmir2-script-sendmsg-host`。所以「仍开着的已合并 R 卡」一共 **8** 张。
 
@@ -163,14 +166,14 @@ EOF
 
 1. **8 张 R 卡合入、一条窗口没跑**：攻击磨损与 642 帧、`WeaponStrong`（含 `Dura==0` 跳过）、SENDMSG 全服/附近广播两条、@Login 排水点、脚本账号/名单落盘两条、脚本广播不被自身 tx 把关。真机窗口现在是唯一能推进条件② 的事（排期见 `docs/needs-human-20261024.md` §1）。
 2. **窗口从「没有判据」变成「照表跑」**：20 场景彩排表 + 20/20 判据补齐（六字段模板、只告警 lint）合入；`spell_cast` 由「假绿」改判为**可跑**，但必须 profile 带 `magic` 段且 `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，「今天就能跑」的枚举在 `docs/window-batch-plan-20261023.md` §7.4（现为 **11 行 / 16 场景**，`478ff9a33`）。
-3. **循环能自己判的更多了**：未合并窗口桶分类、`goal_gate` 合成用例、场景 `requires` 前置 fail-closed、probe `--var` 透传、比较器补 53/638/639 规则、`card_window` 四颗 F5 牙 + MG-7 + inventory 读判定。留给人的仍是 `needs-human` §0 的五件事（窗口授权、`rules.json` PENDING 裁定、`T-161..T-222` 口径、三张卡替代判据、私有 C# 栈去留）。
-4. **收口 37 张卡、35 次合入，11 张今天新开还在跑**：其中 3 张是文档交付（gate 基线、流程复盘、本摘要）在待审/在写，1 张（`openmir2-stale-pointer-card-status-check`）在核「stale pointer 卡状态」并在等前置合入。
+3. **循环能自己判的更多了**：未合并窗口桶分类、`goal_gate` 合成用例、场景 `requires` 前置 fail-closed、probe `--var` 透传、比较器补 53/638/639 规则、`card_window` 四颗 F5 牙 + MG-7 + inventory 读判定、inventory 夹具可达（两侧口径统一，`c4b66ddb1`）。留给人的仍是 `needs-human` §0 的五件事（窗口授权、`rules.json` PENDING 裁定、`T-161..T-222` 口径、三张卡替代判据、私有 C# 栈去留）。
+4. **收口 38 张卡、36 次合入，11 张今天新开还在跑**：其中 3 张是文档交付（gate 基线、流程复盘、本摘要）在待审/在写，1 张（`openmir2-stale-pointer-card-status-check`）在核「stale pointer 卡状态」。
 5. **R 卡在看板上仍显示「进行中」是设计如此**，不是卡壳：`merged but window_required` 一律不 closed，看板的「进行中」里因此长期压着 R 卡（这也是 `goal_gate` 条件② 的输入）。
 
 ## 6. 交叉链接与尚未合入的件
 
 - `docs/needs-human-20261024.md`（**已在 master**）：owner 决策清单，§0 五件事；窗口枚举引用 batch-plan §7.4。
-- `docs/gate-baseline-478ff9a33.md`：**在办**，卡 `openmir2-gate-baseline-snapshot`（head `3bd8c6580`，待审），未合入 master。
-- `docs/leader-process-lessons-20261024.md`：**在办**，卡 `openmir2-leader-process-lessons-20261024`（head `9ed7160c7`，待审），未合入 master。
-- `docs/inventory-fixture-reachability-20261024.md`：**在办**，卡 `openmir2-inventory-fixture-reachability`（worker-73 返工中，head `552008754`）。
+- `docs/gate-baseline-478ff9a33.md`：**在办**，卡 `openmir2-gate-baseline-snapshot`（head `3bd8c6580`，待审/返工中），未合入 master。
+- `docs/leader-process-lessons-20261024.md`：**在办**，卡 `openmir2-leader-process-lessons-20261024`（head `744023506`，待审/返工中），未合入 master。
+- `docs/inventory-fixture-reachability-20261024.md`：**已合入 master**（`c4b66ddb1`，接管返工，tier=L）。
 - 本文件只写 `docs/`，未改 `src/**`、`tools/**`、场景 JSON、`rules.json`、`whitelist.md`、任何卡片状态。
