@@ -22,6 +22,10 @@
      t_ms 不是判定边界（1ms 抖动不得报缺帧，tick_split 只作证据）；跨别的 ident 绝不合并
      （I-1）；任一帧缺 t_ms ⇒ 2 且点名侧/帧/seq（I-2）；块数不同只报 block_align（I-3）；
      phase 进键（M-1）；tick_tolerance_ms 坏值 ⇒ 2。
+ 13. 7 条规则被全局 recog 掩码吞掉语义字段（卡 openmir2-conformance-rules-recog-unmask）：
+     54/5008/1106/752/811/766/213 的 Recog 都是语义值（非 ActorId）⇒ head_compare:["recog"]；
+     改前仅 recog 不同 ⇒ 0（被吞）、改后 ⇒ 1 且 field=recog；另有「删 head_compare ⇒ 7 条全变 0」
+     与「给 ActorId 类 42 硬加 head_compare ⇒ 跨栈必红」两颗牙。
 
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
@@ -190,6 +194,9 @@ class Selftest(object):
         self.t_body_ranges()
         self.t_rule_validation(o, r)
         self.t_multiset_by_tick(o, r)
+        self.t_recog_unmask_rules()
+        self.t_recog_unmask_diff()
+        self.t_recog_unmask_actorid_abuse()
         self.t_db()
         return self.finish()
 
@@ -670,6 +677,107 @@ class Selftest(object):
         rc, rep = self.compare(od, rd, ["--rules", path2])
         self.check("忽略牙：同一条 14 改回 compare => rc 1（多出的帧立刻暴露）",
                    rc == 1, (rc, (rep or {}).get("diffs")))
+
+    # ------------------------------------------------------------------
+    # 批次 4（卡 openmir2-conformance-rules-recog-unmask）
+    # 这 7 条 action=compare 但此前 head_mask/head_compare 都是 None，而 global
+    # 第一条是 mask_fields:["recog"] ⇒ Recog 上的语义值根本没参与比较；
+    # 213/766 无 body、其余头部全 0 ⇒ 该帧实际「什么都不比」。
+    # 逐条定性（oracle 实参）：7/7 都是语义值、0 条 ActorId、0 条判不准。
+    #   Recog 载荷与 oracle file:line 见 rules.json 各条 reason 的「Recog=」段。
+    # ------------------------------------------------------------------
+    RECOG_UNMASK = (
+        # ident, Recog 载荷, oracle 值, rust 值（两侧故意不同）
+        (54, "nMusicid/地图音乐号", 7, 8),
+        (5008, "GameGold/元宝数量", 100, 200),
+        (1106, "ClientFile1_CRC/版本CRC1", 0x1234, 0x5678),
+        (752, "AntiMagic/魔法躲避", 3, 4),
+        (811, "BonusPoint/加点数", 10, 11),
+        (766, "n8/区域状态位", 0, 5),
+        (213, "AttatckMode/攻击模式", 0, 2),
+    )
+
+    def _recog_pair(self, ident, body, recog_o, recog_r, name,
+                    param_o=7, param_r=7, rules_path=None):
+        heads = dict(phase="recog", seq=900, t_ms=1, conn="o",
+                     param=param_o, tag=8, series=9)
+        fo = self.frame(ident, body, **dict(heads, recog=recog_o))
+        fr = self.frame(ident, body,
+                        **dict(heads, seq=901, t_ms=2, conn="r",
+                               param=param_r, recog=recog_r))
+        return self._one_pair(name, fo, fr, rules_path=rules_path)
+
+    def t_recog_unmask_rules(self):
+        rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
+        self.check("recog 批次前提：global 仍以 mask_fields 掩 recog（不掩就不需要本卡）",
+                   "recog" in rs.global_masks, sorted(rs.global_masks))
+        for ident, label, _, _ in self.RECOG_UNMASK:
+            rule = rs.by_ident.get(ident) or {}
+            self.check("ident=%d（%s）的 recog 已取回比较（head_compare=[recog]）"
+                       % (ident, label), rule.get("head_compare") == ["recog"], rule)
+            self.check("ident=%d 仍是 compare，且不另掩 body/其它头部（只取回 recog）" % ident,
+                       rule.get("action") == "compare" and not rule.get("head_mask")
+                       and not rule.get("ranges"), rule)
+        self.check("反滥用不变式：ident=42（Recog=ActorId）不加 head_compare（会话作用域必须保持被掩）",
+                   not (rs.by_ident.get(42) or {}).get("head_compare"),
+                   rs.by_ident.get(42))
+
+    def t_recog_unmask_diff(self):
+        bodies = {54: b"\x0a", 5008: b"Gold\rPoint", 811: b"a/b/c"}
+        # 牙①：一次性删掉这 7 条的 head_compare，作为「改前」对照（临时副本）
+        pre = json.loads(json.dumps(self.builtin_rules))
+        want = {ident for ident, _, _, _ in self.RECOG_UNMASK}
+        for rule in pre["rules"]:
+            if rule.get("ident") in want:
+                rule.pop("head_compare", None)
+        pre_path = self.rules_file("rules-recog-pre.json", pre)
+        pre_rc = {}
+        for ident, label, r_o, r_r in self.RECOG_UNMASK:
+            body = bodies.get(ident, b"")
+            # 改后：内置规则必须咬 recog
+            rc, rep = self._recog_pair(ident, body, r_o, r_r, "ru-%d-after" % ident)
+            self.check("ident=%d（%s）改后仅 recog 不同 => rc 1 且 field=recog"
+                       % (ident, label),
+                       rc == 1 and any(d.get("ident") == ident and d.get("field") == "recog"
+                                       for d in (rep or {}).get("diffs", [])),
+                       (rc, (rep or {}).get("diffs")))
+            # 改前：同一对在删掉 head_compare 的副本上必须 rc 0（证明被全局掩码吞掉）
+            rc0, rep0 = self._recog_pair(ident, body, r_o, r_r, "ru-%d-pre" % ident,
+                                         rules_path=pre_path)
+            pre_rc[ident] = rc0
+            self.check("ident=%d（%s）改前（删 head_compare）同一对 => rc 0（recog 被吞）"
+                       % (ident, label), rc0 == 0, (rc0, (rep0 or {}).get("diffs")))
+            # 不外溢：只改 param（recog 相同）⇒ 改后仍 rc 1 field=param
+            rc2, rep2 = self._recog_pair(ident, body, r_o, r_o, "ru-%d-param" % ident,
+                                         param_r=8)
+            self.check("ident=%d 取回 recog 后 param 仍逐值比（改 param => rc 1 field=param）"
+                       % ident,
+                       rc2 == 1 and any(d.get("ident") == ident and d.get("field") == "param"
+                                        for d in (rep2 or {}).get("diffs", [])),
+                       (rc2, (rep2 or {}).get("diffs")))
+        self.check("牙①：删掉这 7 条的 head_compare 后，7 对 recog 差异全部 rc 0"
+                   "（上面 7 条「改后 rc 1」断言会全红）",
+                   all(v == 0 for v in pre_rc.values()), pre_rc)
+
+    def t_recog_unmask_actorid_abuse(self):
+        # 牙②：反例——把 head_compare:["recog"] 硬加到 ActorId 类（42 SM_USERNAME）。
+        # 跨栈真实形态：C# HUtil32.Sequence() 实测 255025409 / Rust alloc_id 275
+        #（docs/window-run-sheet-20261021.md:732）。这种取回会把必然差异判成 FAIL。
+        abuse = json.loads(json.dumps(self.builtin_rules))
+        for rule in abuse["rules"]:
+            if rule.get("ident") == 42:
+                rule["head_compare"] = ["recog"]
+        abuse_path = self.rules_file("rules-recog-abuse-42.json", abuse)
+        rc, rep = self._recog_pair(42, b"Hero", 255025409, 275, "ru-42-abuse",
+                                   rules_path=abuse_path)
+        self.check("牙②：给 ActorId 类（42）硬加 head_compare => 跨栈 recog 差异必红"
+                   "（rc 1 field=recog）——所以不能滥用",
+                   rc == 1 and any(d.get("ident") == 42 and d.get("field") == "recog"
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        rc0, rep0 = self._recog_pair(42, b"Hero", 255025409, 275, "ru-42-real")
+        self.check("对照：内置规则下同一对 ActorId 差异 => rc 0（全局 recog 掩码按设计生效）",
+                   rc0 == 0, (rc0, (rep0 or {}).get("diffs")))
 
     # ------------------------------------------------------------------
     # 批次 3（卡 openmir2-conformance-rule-sm-struck-31；review 926d1b67 返工）

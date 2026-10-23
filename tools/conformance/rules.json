@@ -114,42 +114,48 @@
     {
       "ident": 54,
       "action": "compare",
-      "reason": "SM_MAPDESCRIPTION 地图描述文本逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_MAPDESCRIPTION 地图描述文本逐字节比 **Recog=nMusicid（地图音乐号，语义值，非 ActorId）**：下行 `src/M2Server/Player/PlayObject.Base.cs:894` `SendDefMessage(SM_MAPDESCRIPTION, nMusicid, 0, 0, 0, Envir.MapDesc)`，nMusicid 见 `:889-893`（Envir.Flag.Music/MusicId）。全局 recog 掩码会吞掉它 ⇒ `head_compare:[\"recog\"]` 取回逐值比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 5008,
       "action": "compare",
-      "reason": "SM_GAMEGOLDNAME 元宝名称文本逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_GAMEGOLDNAME 元宝名称文本逐字节比 **Recog=GameGold（元宝数量，语义值）**：下行 `PlayObject.Base.cs:938` `SendDefMessage(SM_GAMEGOLDNAME, GameGold, LoWord(GamePoint), HiWord(GamePoint), 0, sMsg)` ⇒ `head_compare:[\"recog\"]` 取回逐值比（param/tag=GamePoint 本来就在比）。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 1106,
       "action": "compare",
-      "reason": "SM_VERSION_FAIL 客户端版本校验参数逐项比",
+      "head_compare": ["recog"],
+      "reason": "SM_VERSION_FAIL 客户端版本校验参数逐项比 **Recog=ClientFile1_CRC（版本校验 CRC1，语义值）**：下行 `PlayObject.Message.cs:1690` `MakeMessage(SM_VERSION_FAIL, Config.ClientFile1_CRC, LoWord(ClientFile2_CRC), HiWord(ClientFile2_CRC), 0)` ⇒ `head_compare:[\"recog\"]` 取回逐值比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 752,
       "action": "compare",
-      "reason": "SM_SUBABILITY 子属性 body 逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_SUBABILITY 子属性 body 逐字节比 **Recog=AntiMagic（语义值；本帧无 body）**：下行 `PlayObject.Message.cs:1675`/`:1935` `SendDefMessage(SM_SUBABILITY, MakeLong(MakeWord(AntiMagic,0),0), …)` ⇒ `head_compare:[\"recog\"]` 取回逐值比；param/tag/series 三个属性对本来就在比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 811,
       "action": "compare",
-      "reason": "SM_ADJUST_BONUS 3x20B 分段体（frame.rs 的 Segmented 契约）逐字节比；分段解码由驱动器负责，这里比最终 body 字节",
+      "head_compare": ["recog"],
+      "reason": "SM_ADJUST_BONUS 3x20B 分段体（frame.rs 的 Segmented 契约）逐字节比；分段解码由驱动器负责，这里比最终 body 字节 **Recog=BonusPoint（语义值）**：下行 `PlayObject.Base.cs:1208` `MakeMessage(SM_ADJUST_BONUS, BonusPoint, 0, 0, 0)`（body 为 3 段）⇒ `head_compare:[\"recog\"]` 取回逐值比。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
     {
       "ident": 766,
       "action": "compare",
-      "reason": "SM_AREASTATE 区域状态 body 逐字节比",
+      "head_compare": ["recog"],
+      "reason": "SM_AREASTATE 区域状态 body 逐字节比 **Recog=n8（区域状态位，语义值；本帧无 body）**：下行 `PlayObject.Base.cs:285` `SendDefMessage(SM_AREASTATE, n8, 0, 0, 0)`，n8 由 FightZone|1 / SafeArea|2 / InGuildWarArea|4 组成（`:270-284`）。不加 head_compare 时该帧实际什么都不比 ⇒ `head_compare:[\"recog\"]`。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
@@ -163,7 +169,8 @@
     {
       "ident": 213,
       "action": "compare",
-      "reason": "SM_ATTACKMODE 攻击模式逐项比",
+      "head_compare": ["recog"],
+      "reason": "SM_ATTACKMODE 攻击模式逐项比 **Recog=(byte)AttatckMode（攻击模式，语义值；本帧无 body）**：下行 `PlayObject.cs:1146` `SendDefMessage(SM_ATTACKMODE, (byte)AttatckMode, 0, 0, 0)`。不加 head_compare 时该帧实际什么都不比 ⇒ `head_compare:[\"recog\"]`。",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
