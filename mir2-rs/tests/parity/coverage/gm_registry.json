@@ -1769,6 +1769,7 @@
   {
    "cmd": "+-jy",
    "cmd_name": "+-jy",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/DisableSendMsgListCommand.cs:7",
@@ -1789,6 +1790,7 @@
   {
    "cmd": "+jy",
    "cmd_name": "+jy",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/DisableSendMsgCommand.cs:7",
@@ -1809,6 +1811,7 @@
   {
    "cmd": "-jy",
    "cmd_name": "-jy",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/EnableSendMsgCommand.cs:10",
@@ -1829,6 +1832,7 @@
   {
    "cmd": "Announcement",
    "cmd_name": "Announcement",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/AnnouncementCommand.cs:8",
@@ -1849,6 +1853,7 @@
   {
    "cmd": "ClearCopyItem",
    "cmd_name": "ClearCopyItem",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ClearCopyItemCommand.cs:11",
@@ -1869,6 +1874,7 @@
   {
    "cmd": "ClearItemMap",
    "cmd_name": "ClearItemMap",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ClearItemMapCommand.cs:6",
@@ -1889,6 +1895,7 @@
   {
    "cmd": "ContestPoint",
    "cmd_name": "ContestPoint",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ContestPointCommand.cs:10",
@@ -1909,6 +1916,7 @@
   {
    "cmd": "DelNpc",
    "cmd_name": "DelNpc",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/DelNpcCommand.cs:9",
@@ -1929,6 +1937,7 @@
   {
    "cmd": "DisableFilter",
    "cmd_name": "DisableFilter",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/DisableFilterCommand.cs:10",
@@ -1949,6 +1958,7 @@
   {
    "cmd": "EndContest",
    "cmd_name": "EndContest",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/EndContestCommand.cs:8",
@@ -1969,6 +1979,7 @@
   {
    "cmd": "fdgfdg56",
    "cmd_name": "fdgfdg56",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:177",
@@ -1989,6 +2000,7 @@
   {
    "cmd": "fdht7ed",
    "cmd_name": "fdht7ed",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SearchMasterCommand.cs:10",
@@ -2009,6 +2021,7 @@
   {
    "cmd": "gfh678dfg",
    "cmd_name": "gfh678dfg",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:137",
@@ -2029,6 +2042,7 @@
   {
    "cmd": "ghjhg6",
    "cmd_name": "ghjhg6",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:64",
@@ -2049,6 +2063,7 @@
   {
    "cmd": "GiveMine",
    "cmd_name": "GiveMine",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/GiveMineCommand.cs:12",
@@ -2069,6 +2084,7 @@
   {
    "cmd": "GuildWar",
    "cmd_name": "GuildWar",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/GuildWarCommand.cs:5",
@@ -2089,6 +2105,7 @@
   {
    "cmd": "hjhg556",
    "cmd_name": "hjhg556",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:97",
@@ -2109,6 +2126,7 @@
   {
    "cmd": "hjhgj67",
    "cmd_name": "hjhgj67",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:11",
@@ -2129,6 +2147,7 @@
   {
    "cmd": "HumanCountwa",
    "cmd_name": "HumanCountwa",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/HumanCountCommand.cs:10",
@@ -2149,6 +2168,7 @@
   {
    "cmd": "IP",
    "cmd_name": "IP",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/HumanLocalCommand.cs:10",
@@ -2169,6 +2189,7 @@
   {
    "cmd": "LotteryTicket",
    "cmd_name": "LotteryTicket",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/LotteryTicketCommand.cs:7",
@@ -2189,6 +2210,7 @@
   {
    "cmd": "Map",
    "cmd_name": "Map",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MapInfoCommand.cs:8",
@@ -2209,6 +2231,7 @@
   {
    "cmd": "MapInfo",
    "cmd_name": "MapInfo",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowMapInfoCommand.cs:6",
@@ -2229,6 +2252,7 @@
   {
    "cmd": "MemberFuncEx",
    "cmd_name": "MemberFuncEx",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MemberFunctionExCommand.cs:6",
@@ -2249,6 +2273,7 @@
   {
    "cmd": "Mission",
    "cmd_name": "Mission",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MissionCommand.cs:11",
@@ -2269,6 +2294,7 @@
   {
    "cmd": "MobCountwa",
    "cmd_name": "MobCountwa",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MobCountCommand.cs:10",
@@ -2289,6 +2315,7 @@
   {
    "cmd": "MobFireBurn",
    "cmd_name": "MobFireBurn",
+   "child_card": "openmir2-gm-impl-mobfireburn",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MobFireBurnCommand.cs:13",
@@ -2330,6 +2357,7 @@
   {
    "cmd": "MobNpc",
    "cmd_name": "MobNpc",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MobNpcCommand.cs:10",
@@ -2350,6 +2378,7 @@
   {
    "cmd": "MobPlace",
    "cmd_name": "MobPlace",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MobPlaceCommand.cs:11",
@@ -2370,6 +2399,7 @@
   {
    "cmd": "OffHorse",
    "cmd_name": "OffHorse",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/TakeOffHorseCommand.cs:5",
@@ -2390,6 +2420,7 @@
   {
    "cmd": "OnHorse",
    "cmd_name": "OnHorse",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/TakeOnHorseCommand.cs:7",
@@ -2410,6 +2441,7 @@
   {
    "cmd": "PasswordLock",
    "cmd_name": "PasswordLock",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/PasswordLockCommand.cs:11",
@@ -2430,6 +2462,7 @@
   {
    "cmd": "ReCallMobEx",
    "cmd_name": "ReCallMobEx",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ReCallMobExCommand.cs:11",
@@ -2450,6 +2483,7 @@
   {
    "cmd": "Reconnection",
    "cmd_name": "Reconnection",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ReconnectionCommand.cs:10",
@@ -2470,6 +2504,7 @@
   {
    "cmd": "s",
    "cmd_name": "s",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MakeItemCommand.cs:13",
@@ -2490,6 +2525,7 @@
   {
    "cmd": "SabukWallGold",
    "cmd_name": "SabukWallGold",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowSbkGoldCommand.cs:11",
@@ -2510,6 +2546,7 @@
   {
    "cmd": "sadsa54",
    "cmd_name": "sadsa54",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:38",
@@ -2530,6 +2567,7 @@
   {
    "cmd": "SbkDoor",
    "cmd_name": "SbkDoor",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SbkDoorControlCommand.cs:5",
@@ -2550,6 +2588,7 @@
   {
    "cmd": "sdasdert",
    "cmd_name": "sdasdert",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SearchDearCommand.cs:10",
@@ -2570,6 +2609,7 @@
   {
    "cmd": "ServerInfo",
    "cmd_name": "ServerInfo",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ServerInfoCommand.cs:6",
@@ -2590,6 +2630,7 @@
   {
    "cmd": "setflag",
    "cmd_name": "setflag",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:212",
@@ -2610,6 +2651,7 @@
   {
    "cmd": "SetMapMode",
    "cmd_name": "SetMapMode",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetMapModeCommamd.cs:8",
@@ -2630,6 +2672,7 @@
   {
    "cmd": "setopen",
    "cmd_name": "setopen",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:247",
@@ -2650,6 +2693,7 @@
   {
    "cmd": "setunit",
    "cmd_name": "setunit",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:282",
@@ -2670,6 +2714,7 @@
   {
    "cmd": "ShowEffect",
    "cmd_name": "ShowEffect",
+   "child_card": "openmir2-gm-impl-showeffect",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowEffectCommand.cs:8",
@@ -3231,6 +3276,7 @@
   {
    "cmd": "showflag",
    "cmd_name": "showflag",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowHumanFlagCommand.cs:11",
@@ -3251,6 +3297,7 @@
   {
    "cmd": "ShowMapMode",
    "cmd_name": "ShowMapMode",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowMapModeCommand.cs:10",
@@ -3271,6 +3318,7 @@
   {
    "cmd": "showopen",
    "cmd_name": "showopen",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowHumanUnitOpenCommand.cs:8",
@@ -3291,6 +3339,7 @@
   {
    "cmd": "showunit",
    "cmd_name": "showunit",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowUnitCommand.cs:4",
@@ -3311,6 +3360,7 @@
   {
    "cmd": "Showuseiteminfo",
    "cmd_name": "Showuseiteminfo",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShowUseItemInfoCommand.cs:10",
@@ -3331,6 +3381,7 @@
   {
    "cmd": "StartContest",
    "cmd_name": "StartContest",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/StartContestCommand.cs:12",
@@ -3351,6 +3402,7 @@
   {
    "cmd": "Total",
    "cmd_name": "Total",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/TotalCommand.cs:8",
@@ -3371,6 +3423,7 @@
   {
    "cmd": "vv杀死",
    "cmd_name": "vv杀死",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/KillCommand.cs:10",
@@ -3391,6 +3444,7 @@
   {
    "cmd": "VV给予权限",
    "cmd_name": "VV给予权限",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SetPermissionCommand.cs:11",
@@ -3411,6 +3465,7 @@
   {
    "cmd": "VV踢人",
    "cmd_name": "VV踢人",
+   "child_card": "openmir2-gm-impl-kick",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/KickHumanCommand.cs:10",
@@ -3452,6 +3507,7 @@
   {
    "cmd": "who",
    "cmd_name": "who",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/WhoCommand.cs:8",
@@ -3472,6 +3528,7 @@
   {
    "cmd": "交易",
    "cmd_name": "交易",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/LetTradeCommand.cs:6",
@@ -3492,6 +3549,7 @@
   {
    "cmd": "信息",
    "cmd_name": "信息",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/HumanInfoCommand.cs:10",
@@ -3512,6 +3570,7 @@
   {
    "cmd": "停止叛变",
    "cmd_name": "停止叛变",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SpirtStopCommand.cs:10",
@@ -3532,6 +3591,7 @@
   {
    "cmd": "允许天地合一",
    "cmd_name": "允许天地合一",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/AllowGroupReCallCommand.cs:9",
@@ -3552,6 +3612,7 @@
   {
    "cmd": "允许联盟",
    "cmd_name": "允许联盟",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/AuthallyCommand.cs:5",
@@ -3572,6 +3633,7 @@
   {
    "cmd": "创建行会",
    "cmd_name": "创建行会",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/AddGuildCommand.cs:11",
@@ -3592,6 +3654,7 @@
   {
    "cmd": "删除技能",
    "cmd_name": "删除技能",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/DelSkillCommand.cs:11",
@@ -3612,6 +3675,7 @@
   {
    "cmd": "删除行会",
    "cmd_name": "删除行会",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/DelGuildCommand.cs:11",
@@ -3632,6 +3696,7 @@
   {
    "cmd": "加入门派",
    "cmd_name": "加入门派",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/LetGuildCommand.cs:6",
@@ -3652,6 +3717,7 @@
   {
    "cmd": "取消禁言",
    "cmd_name": "取消禁言",
+   "child_card": "openmir2-gm-impl-shutup-release",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShutupReleaseCommand.cs:8",
@@ -3703,6 +3769,7 @@
   {
    "cmd": "取消联盟",
    "cmd_name": "取消联盟",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/AuthCancelCommand.cs:8",
@@ -3723,6 +3790,7 @@
   {
    "cmd": "复活",
    "cmd_name": "复活",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ReAliveCommand.cs:11",
@@ -3743,6 +3811,7 @@
   {
    "cmd": "开始提问",
    "cmd_name": "开始提问",
+   "child_card": "openmir2-gm-impl-startquest",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/StartQuestCommand.cs:6",
@@ -3774,6 +3843,7 @@
   {
    "cmd": "开始攻城",
    "cmd_name": "开始攻城",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:11",
@@ -3794,6 +3864,7 @@
   {
    "cmd": "怪",
    "cmd_name": "怪",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MobCommand.cs:11",
@@ -3814,6 +3885,7 @@
   {
    "cmd": "拒绝组队聊天",
    "cmd_name": "拒绝组队聊天",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/LetShoutCommand.cs:6",
@@ -3834,6 +3906,7 @@
   {
    "cmd": "探测",
    "cmd_name": "探测",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SearchHumanCommand.cs:11",
@@ -3854,6 +3927,7 @@
   {
    "cmd": "改属性",
    "cmd_name": "改属性",
+   "child_card": "openmir2-gm-impl-smake",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SmakeItemCommand.cs:12",
@@ -4025,6 +4099,7 @@
   {
    "cmd": "是我",
    "cmd_name": "是我",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MemberFunctionCommand.cs:6",
@@ -4045,6 +4120,7 @@
   {
    "cmd": "查看周围",
    "cmd_name": "查看周围",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/MobLevelCommand.cs:8",
@@ -4065,6 +4141,7 @@
   {
    "cmd": "查看禁言",
    "cmd_name": "查看禁言",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShutupListCommand.cs:11",
@@ -4085,6 +4162,7 @@
   {
    "cmd": "查看私聊",
    "cmd_name": "查看私聊",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ViewWhisperCommand.cs:10",
@@ -4105,6 +4183,7 @@
   {
    "cmd": "沙城",
    "cmd_name": "沙城",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs:11",
@@ -4125,6 +4204,7 @@
   {
    "cmd": "清理垃圾",
    "cmd_name": "清理垃圾",
+   "child_card": "openmir2-gm-impl-clearbag",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ClearBagItemCommand.cs:9",
@@ -4166,6 +4246,7 @@
   {
    "cmd": "清除仓库密码",
    "cmd_name": "清除仓库密码",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ClearHumanPasswordCommand.cs:10",
@@ -4186,6 +4267,7 @@
   {
    "cmd": "清除任务",
    "cmd_name": "清除任务",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ClearMissionCommand.cs:10",
@@ -4206,6 +4288,7 @@
   {
    "cmd": "清除怪物",
    "cmd_name": "清除怪物",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ClearMapMonsterCommand.cs:10",
@@ -4226,6 +4309,7 @@
   {
    "cmd": "祈祷生效",
    "cmd_name": "祈祷生效",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/SpirtStartCommand.cs:11",
@@ -4246,6 +4330,7 @@
   {
    "cmd": "禁止行会信息",
    "cmd_name": "禁止行会信息",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/BanGuildChatCommand.cs:6",
@@ -4266,6 +4351,7 @@
   {
    "cmd": "禁言",
    "cmd_name": "禁言",
+   "child_card": "openmir2-gm-impl-shutup",
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/ShutupCommand.cs:11",
@@ -4297,6 +4383,7 @@
   {
    "cmd": "联盟",
    "cmd_name": "联盟",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/AuthCommand.cs:8",
@@ -4317,6 +4404,7 @@
   {
    "cmd": "退出门派",
    "cmd_name": "退出门派",
+   "child_card": null,
    "rust_imp": "Unimplemented",
    "rust_perm_min": 10,
    "handler": "src/Modules/GameCommand/Commands/EndGuildCommand.cs:11",

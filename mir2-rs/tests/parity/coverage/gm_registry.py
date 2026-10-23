@@ -85,6 +85,18 @@ THIRD_STATE_IMPS = {
 # 部署脚本里 GMEXECUTE 抬到的权限值（ExecutionProcessingSys.cs:4938 `playerActor.Permission = 10`）。
 GMEXECUTE_PERMISSION = 10
 
+# script-reachable 且 Rust 未实现 ⇒ 每条开一张签名子卡（卡 openmir2-gm-reachability-registry 的返工交付）。
+CHILD_CARDS = {
+    "禁言": "openmir2-gm-impl-shutup",
+    "取消禁言": "openmir2-gm-impl-shutup-release",
+    "VV踢人": "openmir2-gm-impl-kick",
+    "ShowEffect": "openmir2-gm-impl-showeffect",
+    "MobFireBurn": "openmir2-gm-impl-mobfireburn",
+    "改属性": "openmir2-gm-impl-smake",
+    "清理垃圾": "openmir2-gm-impl-clearbag",
+    "开始提问": "openmir2-gm-impl-startquest",
+}
+
 # 对 reviewer-1 `ad13dc87` 的逐条复核结论（静态证据，工具不依赖它们做判定，只作为交付说明随表落盘）。
 REVIEW_CORRECTIONS = [
     {
@@ -836,6 +848,7 @@ def build(conf_path, envir_path, deploy_dir):
             verdict = "unreachable"
             why = "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住"
         row = {"cmd": r["name"], "cmd_name": m["cmd_name"] if m else None,
+               "child_card": CHILD_CARDS.get(r["name"]),
                "rust_imp": r["imp"], "rust_perm_min": r["perm_min"],
                "handler": handler, "perm_min": perm, "perm_source": perm_src,
                "verdict": verdict, "verdict_why": why,
@@ -1066,6 +1079,8 @@ def check_registry(doc, conf_path, envir_path, deploy_dir, recomputed=None):
                                     % (cmd, e.get("file"), idx, arg))
             if cmd not in deployed_evidence:
                 problems.append("%s: 声称 script-reachable，但本次源码扫描没有任何可达脚本调用" % cmd)
+            if not r.get("child_card"):
+                problems.append("%s: script-reachable 但没链接子卡（child_card 为空）" % cmd)
         if verdict == "unreachable":
             if deployed_evidence.get(cmd):
                 problems.append("%s: 登记 unreachable，但部署脚本里有 %d 处可达 GMEXECUTE 调用"
@@ -1355,7 +1370,14 @@ def cmd_selftest(args):
     tooth("J 把 conf 键当 CmdName（B2 原缺陷）⇒ gate 红", t_j)
     tooth("K 证据指向未加载副本脚本 ⇒ gate 红", t_k)
     tooth("L StartPermission=1/10 重算：结构性行不被翻、perm=10 不被 sp=1 翻", t_l)
+    def t_n():
+        doc = copy.deepcopy(base)
+        row = next(r for r in doc["commands"] if r["verdict"] == "script-reachable")
+        row["child_card"] = None
+        gate_red(doc, row["cmd"], "N script-reachable 未链接子卡")
+
     tooth("M Map / MapInfo handler 未对调", t_m)
+    tooth("N script-reachable 未链接子卡 ⇒ gate 红", t_n)
 
     if base_sha != hashlib.sha256(open(REGISTRY, "rb").read()).hexdigest():
         fails.append("牙把登记表写坏了（sha256 变化）")
@@ -1367,7 +1389,7 @@ def cmd_selftest(args):
         for f in fails:
             print("  -", f)
         return 1
-    print("gm_registry selftest: OK (13 teeth; registry sha256=%s 未变)" % base_sha[:16])
+    print("gm_registry selftest: OK (14 teeth; registry sha256=%s 未变)" % base_sha[:16])
     return 0
 
 

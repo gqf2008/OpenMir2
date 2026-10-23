@@ -71,6 +71,9 @@ script_reachable_but_implemented: []
 | `清理垃圾`（ClearBag） | `ClearBag`→`清理垃圾` | `ClearBagItemCommand.cs:9` | 10 | `Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt:19` `[@main]`；`功能NPC/桃源-N109.txt:87` `[@06]` | 点假人上线 NPC / 桃源 NPC 的 `<清空包裹/@06>` |
 | `开始提问`（StartQuest） | `StartQuest`→`开始提问` | `StartQuestCommand.cs:6` | 10 | `QuestDiary/LEGM2.CC假人系统/假人登录脚本.txt:40` `[@假人到指定地图A]` | `@main` → `[@假人设置页面]` → `[@下一页]` → `[@假人到指定地图]` 的 `QUERYVALUE … @假人到指定地图A`（玩家输入地图编号后跳转） |
 
+> 上表 8 条在 Rust 侧**全部未实现**（`gmcmd.rs` 里都是 `Imp::Unimplemented`，这正是它们被登记在本表的原因）
+> ⇒ 8 条都已开签名子卡 `openmir2-gm-impl-*`（tier=R，见 §9.1）。
+
 > 每条命令的**全部**命中位置、label 调用链（`label_path`）、加载来源（`load_origin`）、脚本 sha256
 > 都在 `gm_registry.json` 的 `commands[].script_evidence` / `sources.envir.script_sha256` 里，可逐条复算。
 
@@ -191,23 +194,24 @@ $ python -I -B mir2-rs/tests/parity/coverage/gm_registry.py gate
 GREEN: gm_registry 88 条与源码逐字段一致（handler/perm/verdict/脚本证据全部复算通过）   (rc=0)
 
 $ python -I -B mir2-rs/tests/parity/coverage/gm_registry.py selftest
-  [ok] A 在界指错命令 ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] B perm 10→8 ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] C 改 cmd 名 ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] D register_command=true + handler=null ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] E perm=null + unreachable ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] F perm_min=0 却判 unreachable ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] G handler 行号越界 ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] H script-reachable 无证据 ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] I 伪造脚本证据（该行不是 GMEXECUTE）⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] J 把 conf 键当 CmdName（B2 原缺陷）⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] K 证据指向未加载的副本脚本 ⇒ gate 红  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] L StartPermission=1/10 重算：结构性行不被翻、perm=10 不被 sp=1 翻  [sha256 7c1eaaac901e0a2d 未变]
-  [ok] M Map / MapInfo handler 未对调  [sha256 7c1eaaac901e0a2d 未变]
-gm_registry selftest: OK (13 teeth; registry sha256=7c1eaaac901e0a2d 未变)
+  [ok] A 在界指错命令 ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] B perm 10→8 ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] C 改 cmd 名 ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] D register_command=true + handler=null ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] E perm=null + unreachable ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] F perm_min=0 却判 unreachable ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] G handler 行号越界 ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] H script-reachable 无证据 ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] I 伪造脚本证据（该行不是 GMEXECUTE）⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] J 把 conf 键当 CmdName（B2 原缺陷）⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] K 证据指向未加载的副本脚本 ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+  [ok] L StartPermission=1/10 重算：结构性行不被翻、perm=10 不被 sp=1 翻  [sha256 366fa4109e79b3c0 未变]
+  [ok] M Map / MapInfo handler 未对调  [sha256 366fa4109e79b3c0 未变]
+  [ok] N script-reachable 未链接子卡 ⇒ gate 红  [sha256 366fa4109e79b3c0 未变]
+gm_registry selftest: OK (14 teeth; registry sha256=366fa4109e79b3c0 未变)
 ```
 
-- **A–E 五颗牙正是 review I2 自造的五种失败模式**（自洽却能穿过 v1 门禁），本版逐个变红。
+- **A–E 五颗牙正是 review I2 自造的五种失败模式**（N 是新加的「script-reachable 必须链接子卡」）（自洽却能穿过 v1 门禁），本版逐个变红。
 - 每颗牙执行后都校验登记表 sha256 未变；`selftest` 末尾再断言 `render(base) == 磁盘字节` ⇒ **逐字节还原**。
 - **M1**：`build` 以 utf-8 + LF 写出，`gate` 额外校验「登记表是本工具的规范序列化」⇒ build 后工作区不再有 diff。
 
@@ -217,6 +221,20 @@ gm_registry selftest: OK (13 teeth; registry sha256=7c1eaaac901e0a2d 未变)
 anchor gate / registry audit / T 预约表 gate）。
 
 ## 9. 结论
+
+### 9.1 开出的子卡（script-reachable 且 Rust 未实现 ⇒ 每条一张）
+
+| 命令 | 子卡 id |
+|---|---|
+| `禁言` | `openmir2-gm-impl-shutup` |
+| `取消禁言` | `openmir2-gm-impl-shutup-release` |
+| `VV踢人` | `openmir2-gm-impl-kick` |
+| `ShowEffect` | `openmir2-gm-impl-showeffect` |
+| `MobFireBurn` | `openmir2-gm-impl-mobfireburn` |
+| `改属性` | `openmir2-gm-impl-smake` |
+| `清理垃圾` | `openmir2-gm-impl-clearbag` |
+| `开始提问` | `openmir2-gm-impl-startquest` |
+
 
 1. **8 条命令在 Release 现网真的可达**（脚本 GMEXECUTE 抬权）⇒ 已逐条开子卡，不能再用「GM 不可达」打包。
 2. **80 条不可达**有逐条静态证据：有命令体、`perm=10`、部署脚本 101 处 GMEXECUTE 无一条命中。
