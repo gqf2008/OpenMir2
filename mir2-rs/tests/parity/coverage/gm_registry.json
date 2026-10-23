@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "e5e3ab25608a48bc3930a14d90397994840fb910fd0e000ad16a4f87426cd696"
+   "sha256": "6b3db448805d0e6326c719100b89668f373c0c3c69cd9e8b61c804177a5edece"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1765,6 +1765,22 @@
   }
  ],
  "script_reachable_but_implemented": [
+  {
+   "cmd": "清理垃圾",
+   "file": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt",
+   "line": 19,
+   "label": "@main",
+   "rust_imp": "ClearBagItem",
+   "third_state": false
+  },
+  {
+   "cmd": "清理垃圾",
+   "file": "Market_Def/功能NPC/桃源-N109.txt",
+   "line": 87,
+   "label": "@06",
+   "rust_imp": "ClearBagItem",
+   "third_state": false
+  },
   {
    "cmd": "禁言",
    "file": "QuestDiary/游戏登陆/登陆脚本.txt",
@@ -4211,48 +4227,6 @@
    "field_line": 304
   },
   {
-   "cmd": "清理垃圾",
-   "cmd_name": "清理垃圾",
-   "child_card": "openmir2-gm-impl-clearbag",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ClearBagItemCommand.cs:9",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].ClearBag",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（2 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt",
-     "line": 19,
-     "label": "@main",
-     "section": "act",
-     "script_arg": "清理垃圾",
-     "raw": "GMEXECUTE 清理垃圾 <$USERNAME>",
-     "label_path": "Market_Def/LEGM2.CC假人NPC/假人上线NPC-jiaren.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:1"
-    },
-    {
-     "file": "Market_Def/功能NPC/桃源-N109.txt",
-     "line": 87,
-     "label": "@06",
-     "section": "act",
-     "script_arg": "清理垃圾",
-     "raw": "GMEXECUTE 清理垃圾 self",
-     "label_path": "Market_Def/功能NPC/桃源-N109.txt:@06 <- Market_Def/功能NPC/桃源-N109.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:138"
-    }
-   ],
-   "handler_class": "ClearBagItemCommand",
-   "attr_name": "ClearBagItem",
-   "handler_exec_line": 13,
-   "name_source": "conf[Command].ClearBag",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ClearBag",
-   "field_line": 356
-  },
-  {
    "cmd": "清除仓库密码",
    "cmd_name": "清除仓库密码",
    "child_card": null,
@@ -4401,20 +4375,20 @@
   }
  ],
  "summary": {
-  "total": 87,
+  "total": 86,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 7
+   "script-reachable": 6
   },
   "reachable": 0,
-  "script_reachable": 7,
+  "script_reachable": 6,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 98,
-   "Unimplemented": 87
+   "Implemented": 99,
+   "Unimplemented": 86
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4440,7 +4414,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 77,
+  "complete_implemented": 78,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,

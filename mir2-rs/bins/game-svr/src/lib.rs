@@ -1862,6 +1862,43 @@ fn apply_pending_gm_entity(
     }
 }
 
+/// **卡 `openmir2-gm-impl-clearbag`**：把 `@清理垃圾` 的待落地目标
+/// （[`gmcmd::GmSession::pending_clear_bag`]）收口——清空**目标**的会话背包，返回
+/// `(目标 ChrName, SM_DELITEMS(709) 帧体)`。
+///
+/// oracle `ClearBagItemCommand.cs:31-52`：目标 `ItemList.Count > 0` 时**倒序**收 `DeleteItem`
+/// 并 `Clear()`，再 `SendMsg(RM_SENDDELITEMLIST, …)` ⇒ 泵 `SendDelItemList`
+/// （`PlayObject.Base.cs:1637-1645`）：`MakeMessage(SM_DELITEMS, 0, 0, 0, Count)` +
+/// `EncodeString("名/makeindex/…")`。**空背包 ⇒ 零帧**（`delList` 保持 null）⇒ 本函数返回 `None`。
+/// `ActorMgr.AddOhter(Sequence(), …)` 只是 oracle 内部句柄（不落 wire）⇒ 不建模。
+fn apply_pending_gm_clear_bag(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> Option<(String, Vec<u8>)> {
+    let target = sessions.get_mut(chr_name)?.gm.pending_clear_bag.take()?;
+    let sg = sessions.get_mut(&target)?;
+    if sg.state.item_list.is_empty() {
+        return None;
+    }
+    let mut s10 = String::new();
+    let mut count: u16 = 0;
+    for it in sg.state.item_list.iter().rev() {
+        s10.push_str(catalog.name(it.index).unwrap_or(""));
+        s10.push('/');
+        s10.push_str(&it.make_index.to_string());
+        s10.push('/');
+        count = count.saturating_add(1);
+    }
+    sg.state.item_list.clear();
+    let tail = mir2_protocol::edcode::encode(&gbk_encode(&s10));
+    let body = game_svr::smframe::gm_data_body(
+        game_svr::smframe::command_header(0, mir2_protocol::messages::SM_DELITEMS, 0, 0, count),
+        &tail,
+    );
+    Some((target, body))
+}
+
 /// `SysMsg(msg, color, Hint)` 的通用红/绿/蓝版（[`send_self_sysmsg`] 是它的 Red 特化）。
 fn send_self_sysmsg_color(
     host: &ChatHost<'_>,
@@ -19252,6 +19289,27 @@ fn sim_loop(
                         // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
                         // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
                         apply_pending_gm_entity(&mut ground_sessions, &chr_name, &mut world);
+                        // **卡 `openmir2-gm-impl-clearbag`**：`@清理垃圾` 清目标背包 +
+                        // `SM_DELITEMS(709)`（发给**目标**，oracle 同一事件内当场发）。
+                        if let Some((target, body)) = apply_pending_gm_clear_bag(
+                            &mut ground_sessions,
+                            &chr_name,
+                            &enter_cfg.catalog,
+                        ) {
+                            if let Some(e) = online.iter().find(|e| e.chr_name == target) {
+                                if let Some(tx) = route_to_gate(
+                                    &gates,
+                                    e.gate_idx,
+                                    e.socket,
+                                    "GM 清理垃圾 SM_DELITEMS",
+                                ) {
+                                    let _ = tx.send(SimToGate::SendFrame {
+                                        socket: e.socket,
+                                        body,
+                                    });
+                                }
+                            }
+                        }
                     } else if cmd.ident == game_svr::ground::CM_PICKUP
                         || cmd.ident == game_svr::ground::CM_DROPITEM
                     {
@@ -32597,6 +32655,54 @@ break
             sessions["gm"].state.wabil.hp, 100,
             "投影必须看到回满值（oracle 同一份 WAbil）"
         );
+    }
+
+    /// **卡 `openmir2-gm-impl-clearbag`**：`@清理垃圾` 的宿主收口——清空**目标**背包并返回
+    /// `SM_DELITEMS(709)`（`Recog=0`、`Series`=件数、尾 = `EncodeString("名/makeindex/…")`，
+    /// **倒序**收集）；空背包 ⇒ 零帧。
+    #[test]
+    fn gm_pending_clear_bag_clears_target_and_emits_sm_delitems() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                ..Default::default()
+            },
+        );
+        let item = |make_index: i32| game_svr::bag::BagItem {
+            make_index,
+            index: 1,
+            dura: 1,
+            dura_max: 1,
+            desc: [0; 14],
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut gm = test_session_ground(7);
+        gm.gm.pending_clear_bag = Some("victim".into());
+        sessions.insert("gm".into(), gm);
+        let mut victim = test_session_ground(8);
+        victim.state.item_list = vec![item(10), item(11)];
+        sessions.insert("victim".into(), victim);
+        let (target, body) =
+            apply_pending_gm_clear_bag(&mut sessions, "gm", &catalog).expect("非空 ⇒ 有帧");
+        assert_eq!(target, "victim");
+        assert!(
+            sessions["victim"].state.item_list.is_empty(),
+            "目标背包清空"
+        );
+        assert!(sessions["gm"].gm.pending_clear_bag.is_none(), "缓冲一次性");
+        let cm = CommandMessage::from_bytes(&body).expect("12B 头");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_DELITEMS);
+        assert_eq!(cm.recog, 0, "`MakeMessage(SM_DELITEMS, 0, …)`");
+        assert_eq!(cm.series, 2, "Series = 件数");
+        let tail = gbk_decode(&mir2_protocol::edcode::decode(&body[12..]));
+        assert_eq!(tail, "木剑/11/木剑/10/", "倒序收集 + `名/makeindex/`");
+        // 空背包 ⇒ 零帧（oracle `delList` 保持 null）。
+        sessions.get_mut("gm").unwrap().gm.pending_clear_bag = Some("victim".into());
+        assert!(apply_pending_gm_clear_bag(&mut sessions, "gm", &catalog).is_none());
     }
 
     /// **F-2（review `2c5cb955`）· 生产接线点保鲜**：`sim_loop` 的 `CM_SAY` 支必须恰好一处
