@@ -2139,6 +2139,8 @@ fn run_party_goto_label(
             // **A-10/T-86**：`SETOFFLINE` 的 `OffLineFlag`/`KickOffLineTick`（同一个 `PlayObject`）。
             player.off_line_flag = sg.off_line_flag;
             player.kick_off_line_tick = sg.kick_off_line_tick;
+            // **A-26/T-207**：`Abil.Exp`（脚本 `CHANGEEXP` 的读写面）。
+            player.abil_exp = sg.equip.abil.exp;
         }
         // `HUtil32.GetTickCount()`：宿主注入域（与 P31 `host_now` 同源）。
         player.tick = now_ms() as i32;
@@ -2166,8 +2168,9 @@ fn run_party_goto_label(
                                 s.game_gold,
                                 s.game_point,
                                 s.soft_version_date,
-                                // `SM_WINEXP` 的 `Recog`（`Abil.Exp` 当下总量；T-207）。
-                                s.state.wabil.exp,
+                                // `SM_WINEXP` 的 `Recog`（`Abil.Exp` 当下总量；T-207）：
+                                // 脚本刚跑完、会话写回在本函数尾部 ⇒ 用 `PlayObject` 的当下值。
+                                player.abil_exp,
                             )
                         },
                     );
@@ -2211,6 +2214,9 @@ fn run_party_goto_label(
             // **A-10/T-86**：`SETOFFLINE` 两字段写回（四字段已在上方 P31 块内写回）。
             sg.off_line_flag = player.off_line_flag;
             sg.kick_off_line_tick = player.kick_off_line_tick;
+            // **A-26/T-207**：经验写回两个同源字段。
+            sg.state.wabil.exp = player.abil_exp;
+            sg.equip.abil.exp = player.abil_exp;
         }
         if let Some(e) = world.entities.get_mut(actor) {
             e.kill_mon_exp_rate = player.kill_mon_exp_rate;
@@ -5961,6 +5967,9 @@ fn npc_player_from_session<'r, 'g>(
     p.game_point = sg.game_point;
     p.credit_point = i32::from(sg.equip.credit_point);
     p.re_level = i32::from(sg.equip.re_level);
+    // **A-26/T-207（CHANGEEXP）**：`Abil.Exp` 是同一个 `PlayObject` 字段 ⇒ 脚本前 seed，
+    // 脚本后由 [`write_back_player_abil_exp`] 写回（否则 `$EXP` 与 `SM_WINEXP.Recog` 恒 0）。
+    p.abil_exp = sg.equip.abil.exp;
     p.vars = vars.clone();
     // `SETMPAMODE` 的 `MapMgr.FindMap` 门（`map_names`）与 `sys_msg` 色词：都来自
     // `SystemShare`（宿主一次灌入 `NpcVars`，每个脚本快照只读复制）。
@@ -6016,6 +6025,17 @@ fn write_back_player_offline(p: &game_svr::npc::NpcPlayer<'_, '_>, sg: &mut Sess
     sg.auto_get_exp_point = p.auto_get_exp_point;
     sg.off_line_flag = p.off_line_flag;
     sg.kick_off_line_tick = p.kick_off_line_tick;
+}
+
+/// 脚本跑完把 `NpcPlayer.abil_exp` 写回会话的两个同源字段。
+///
+/// oracle：`ExecutionProcessingSys.cs:2859-2861` 的 `+` 支先 `abil.Exp += dwInt; playerActor.Abil = abil;`
+/// 再 `SendMsg(RM_WINEXP, 0, dwInt, 0, 0)`；泵 `PlayObject.Message.cs:1666-1669` 读 `Abil.Exp`
+/// （加完后总量）。本仓会话里 `state.wabil` 与 `equip.abil` 同源（见 `drain_*` 的经验帧支），
+/// 两处都必须落，否则 `SM_WINEXP.Recog` 与存档会各读各的。
+fn write_back_player_abil_exp(p: &game_svr::npc::NpcPlayer<'_>, sg: &mut SessionGround) {
+    sg.state.wabil.exp = p.abil_exp;
+    sg.equip.abil.exp = p.abil_exp;
 }
 
 /// 脚本跑完后把 `NpcPlayer.MNMval`（见 [`npc_player_from_session`] 的映射说明）写回会话，
@@ -6366,6 +6386,8 @@ fn run_merchant_goto(
         write_back_player_gold_deal(&player, sg, session, sell_off);
         // **A-10/T-86**：`SETOFFLINE` 的六字段写回（与 P31 四字段同一位置；未命中动作时等值）。
         write_back_player_offline(&player, sg);
+        // **A-26/T-207（CHANGEEXP）**：经验写回会话两个同源字段（脚本帧排水读 `state.wabil.exp`）。
+        write_back_player_abil_exp(&player, sg);
         // **A-21/T-85（SETMPAMODE）**：脚本动作只记录、宿主落库（同一 tick 的 P25 之前）。
         // oracle 是同一个 `Envirnoment.Flag`；本宿主按「命令处理完 → 落库 → 消费」等价。
         session
@@ -6618,12 +6640,10 @@ fn emit_login_script_frames(
         .map_or((fallback.0, fallback.1, fallback.2, 0), |s| {
             (s.state.gold, s.game_gold, s.game_point, s.soft_version_date)
         });
-    // `SM_WINEXP` 的 `Recog`（`PlayObject.Abil.Exp`）：本路径在**进世界建会话之前**跑
-    // （`ground_sessions` 常常还没有该角色）⇒ 无会话时只能给 0（oracle 此时读到的是角色记录里的
-    // `Abil.Exp`）；有会话则取会话当下总量。登记为 T-207 的已知偏差/窗口项。
-    let exp = ground_sessions
-        .get(chr_name)
-        .map_or(0, |s| s.state.wabil.exp);
+    // `SM_WINEXP` 的 `Recog`（`PlayObject.Abil.Exp`）：本路径在**进世界建会话之前**跑，
+    // 会话里可能是旧值甚至没有 ⇒ 直接取 `PlayObject` 的当下值（脚本已跑完，T-207 修复后
+    // 该字段由角色记录 seed + 脚本增量，不再是恒 0）。
+    let exp = player.abil_exp;
     // QManage 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
     emit_script_frames_raw(
         tx,
@@ -20828,6 +20848,12 @@ fn sim_loop(
                                                                     player.kick_off_line_tick =
                                                                         sg.kick_off_line_tick;
                                                                 }
+                                                                // **A-26/T-207**：`Abil.Exp` 的登录侧 seed——`@Login`
+                                                                // 跑在进世界建会话之前，取角色记录里的 `Ability.Exp`
+                                                                //（oracle 此时读的也是 `PlayObject.Abil.Exp` 初值）。
+                                                                player.abil_exp = data
+                                                                    .and_then(|d| d.abil.as_ref())
+                                                                    .map_or(0, |a| a.exp);
                                                                 // `HUtil32.GetTickCount()` 的宿主值
                                                                 //（与 P31 `host_now` 同源）。
                                                                 player.tick = now_ms() as i32;
@@ -27534,6 +27560,96 @@ break
         assert_eq!(sg.auto_get_exp_point, 900);
         assert!(sg.off_line_flag, "挂机标志不得被商人脚本清零");
         assert_eq!(sg.kick_off_line_tick, 42, "踢号时限不得被商人脚本清零");
+    }
+
+    /// `CHANGEEXP`（`ExecutionCode.ChangeExp = 185`；`s_param1` = 运算符、`s_param2` = 数值）。
+    fn changexp_act(op: &str, n: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 185,
+            s_param1: op.to_string(),
+            s_param2: n.to_string(),
+            ..Default::default()
+        }
+    }
+
+    /// **A-26/T-207（CHANGEEXP）**：脚本 `CHANGEEXP + 1000` 在**生产路径**（`CM_MERCHANTDLGSELECT`
+    /// → `run_merchant_goto`）上必须：① 只发一条 `SM_WINEXP(44)`；② `Recog` = seed+1000（`Abil.Exp`
+    /// 加完总量，`PlayObject.Message.cs:1666-1669`）；③ `Param/Tag` = 增量 1000 的 Lo/Hi、`Series=0`；
+    /// ④ 会话 `state.wabil.exp` 与 `equip.abil.exp` 同步落 1500（存档与战斗侧同读）。
+    ///
+    /// 牙（删 `run_merchant_goto` 的 `write_back_player_abil_exp` ⇒ 本用例红）：
+    /// `SM_WINEXP.Recog` 由 `emit_script_frames` 读会话 `state.wabil.exp` ⇒ 不写回时回到 seed(500)；
+    /// 会话断言同时红（500 ≠ 1500）。
+    #[test]
+    fn changexp_plus_lands_one_sm_winexp_and_writes_back_session() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![changexp_act("+", "1000")],
+        )]);
+        {
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.equip.abil.exp = 500;
+            sg.state.wabil.exp = 500;
+        }
+        rig.dlg_select("@main");
+        let frames = rig.drain();
+        let win: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_WINEXP)
+            .collect();
+        assert_eq!(
+            win.len(),
+            1,
+            "CHANGEEXP + ⇒ 恰好一条 SM_WINEXP(44)；实得 {:?}",
+            idents(&frames)
+        );
+        let (ident, param, tag, recog) = hdr(win[0].as_slice());
+        assert_eq!(ident, mir2_protocol::messages::SM_WINEXP);
+        assert_eq!(
+            recog, 1500,
+            "Recog = 加完后的 Abil.Exp 总量（seed 500 + 1000）"
+        );
+        assert_eq!((param, tag), (1000, 0), "Param/Tag = 增量 1000 的 Lo/Hi");
+        assert_eq!(
+            u16::from_le_bytes([win[0][10], win[0][11]]),
+            0,
+            "Series 必须为 0"
+        );
+        let sg = &rig.sessions["hero"];
+        assert_eq!(sg.state.wabil.exp, 1500, "会话 wabil.exp 必须写回");
+        assert_eq!(sg.equip.abil.exp, 1500, "会话 equip.abil.exp 必须同源写回");
+    }
+
+    /// **A-26/T-207 的 seed/写回面（牙的显式版）**：`npc_player_from_session` 必须把
+    /// `sg.equip.abil.exp` seed 进 `NpcPlayer.abil_exp`（`$EXP` 与脚本读侧），
+    /// `write_back_player_abil_exp` 必须把脚本增量落回会话**两个**同源字段；
+    /// 不调用写回时会话保持 seed（这就是上一条用例的红条件）。
+    #[test]
+    fn changexp_seed_and_writeback_round_trip() {
+        let mut rig = T142Rig::new(vec![t142_record("@main", "", Vec::new())]);
+        // 目录从 rig 里择出来，避免「&rig.catalog（不可变借）」与「&mut rig.sessions」冲突。
+        let catalog = std::mem::take(&mut rig.catalog);
+        let vars = rig.npc_vars.clone();
+        let mut sg = rig.sessions.remove("hero").unwrap();
+        sg.equip.abil.exp = 500;
+        sg.state.wabil.exp = 500;
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        {
+            let mut rngf = |v: i32| rng.random_below(v);
+            let mut player = npc_player_from_session(&mut rngf, "hero", &sg, "0", &catalog, &vars);
+            assert_eq!(player.abil_exp, 500, "seed：快照必须拿到会话经验");
+            player.abil_exp += 1000;
+            assert_eq!(
+                sg.state.wabil.exp, 500,
+                "未写回时会话仍是 seed（牙的红条件）"
+            );
+            write_back_player_abil_exp(&player, &mut sg);
+        }
+        assert_eq!(sg.state.wabil.exp, 1500, "写回后 wabil.exp = 脚本后总量");
+        assert_eq!(sg.equip.abil.exp, 1500, "写回后 equip.abil.exp 同源");
+        rig.sessions.insert("hero".to_string(), sg);
+        rig.catalog = catalog;
     }
 
     /// `SETMPAMODE`（`ExecutionCode.SetMapMode = 216`；`sParam1..4` = 地图/分支/参数1/参数2）。

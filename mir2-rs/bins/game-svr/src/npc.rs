@@ -656,6 +656,11 @@ pub struct NpcPlayer<'r, 'g> {
     pub credit_point: i32,
     /// `playerActor.ReLevel`（`$RELEVEL`）。
     pub re_level: i32,
+    /// `playerActor.Abil.Exp`（`$EXP` 与 `SM_WINEXP.Recog` 的读源，T-207）。
+    ///
+    /// `NpcPlayer` 是每次调用重建的快照 ⇒ 宿主在脚本前 seed（`sg.equip.abil.exp`）、
+    /// 脚本后写回 `sg.state.wabil.exp` 与 `sg.equip.abil.exp`（oracle `playerActor.Abil = abil`）。
+    pub abil_exp: i32,
     /// 说词变量展开的非玩家取值（`NormNpc.GetVariableText` 的 `SystemShare.Config`/NPC 侧）。
     pub vars: NpcVars,
     /// `PlayObject.LastNpc`
@@ -808,6 +813,7 @@ impl NpcPlayer<'_, '_> {
             game_point: 0,
             credit_point: 0,
             re_level: 0,
+            abil_exp: 0,
             vars: NpcVars::default(),
             last_npc: 0,
             script_index: None,
@@ -1135,6 +1141,13 @@ fn push_sys_msg(frames: &mut Vec<SendMsg>, f: u8, b: u8, text: String) {
 }
 
 impl ScriptPlayer for NpcPlayer<'_, '_> {
+    /// `playerActor.Abil.Exp`（`ExecutionProcessingSys.cs:2859-2861` 的 `+` 支读/写同一字段）。
+    fn abil_exp(&self) -> i32 {
+        self.abil_exp
+    }
+    fn set_abil_exp(&mut self, v: i32) {
+        self.abil_exp = v;
+    }
     fn last_npc(&self) -> i32 {
         self.last_npc
     }
