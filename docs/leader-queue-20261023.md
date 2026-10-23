@@ -23,6 +23,11 @@
    撞了按「先认领者持有」处理：后到者停手、保留 worktree（身份）、清掉未提交改动、线程留让渡 comment；
    并把后到者顺手探到的**范围清点**作为 Leader comment 回灌给卡主（常常比卡面引用的旧行号更准）。
 7. **whitelist 编号**：本日一天撞号 **4 次**（T-174..T-179 vs T-174..T-183、T-4 重复、T-6 同号不同义、T-194 被 menu-ok 与 gm-admin 同时认领）。根因是「先写先占」+ 并行车道各自 grep 到旧值。已拆卡 `openmir2-t-number-reservation` 做**预约表 + 门禁**，**该卡已交付**：取号统一走 `python -I tools/whitelist/next_t.py --card <卡 id>`（写 `mir2-rs/tests/parity/T-RESERVATIONS.md`），「开工时 grep 最大号」的做法**作废**——并行时它必然读到旧值。合并前检查见第 9 条。
+9. **裸 `card_claim` 不构成有效认领**：认领账本以「最近一条 **status** 的 owner/worktree/branch」为准；
+   只有 `card_claim` 而没有任何后续 status/patch/comment 的，视为占位不干活（2026-10-23 实测 worker-23
+   一天认领 8 张卡、交付 0 张，8 张全是别人做完的）。遇到这种 claim 可在自己的 status 里写明
+   「接管未交付 claim」直接开工，不必等释放。**这条不削弱「先认领者持有」**——那条针对真在干活的
+   车道（有 status/patch 跟进）。
 8. **跨工具链的 `/tmp` 不是同一个目录**（Python 的 `/tmp` = `E:/tmp`，Git Bash 的 `/tmp` = `C:/Users/gxh/AppData/Local/Temp`）。`--body "$(cat /tmp/x.json)"` 可能读到**上一次的旧 payload**。2026-10-23 真发生过：一条 review 因此发错内容（作者已删 ref 并在 review 里声明 incident）。临时文件一律用 `E:/tmp/<lane>-<用途>.json`，`cat` 前先 `sha256sum` 核对。
 
 9. **合并前必跑 `T-*` 预约门禁——在「合并结果树」上跑，不是在自己的分支上跑**（卡 `openmir2-t-number-reservation` 交付）：
