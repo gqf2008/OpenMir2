@@ -645,6 +645,54 @@ def load_message_constants(path=None):
     return out
 
 
+# 攻击族的方向语义由 game-svr 的 `attackwire.rs` 承载（不写私有表）：
+#   * `pub const HIT_IDENTS: [u16; 9]` —— PlayObject.Message.cs:1221-1230 的 9 条攻击 ident；
+#   * `const DIR_*: u8 = 0..7` —— Enums/Direction.cs 的 8 个方向；
+#   * 模块头 `nDir = (byte)Tag` —— 所以判据是 `(tag & 0xFF) in DIR_*`（截断后再判）。
+ATTACKWIRE_RS_REL = "mir2-rs/bins/game-svr/src/attackwire.rs"
+ATTACKWIRE_RS = os.path.join(REPO_ROOT, *ATTACKWIRE_RS_REL.split("/"))
+_HIT_IDENTS_BLOCK_RE = re.compile(r"pub const HIT_IDENTS:[^=]*=\s*\[(.*?)\];", re.S)
+_HIT_IDENT_NAME_RE = re.compile(r"messages::(CM_[A-Z0-9_]+)")
+_DIR_CONST_RE = re.compile(r"^\s*const (DIR_[A-Z0-9_]+): u8 = (\d+);\s*$", re.M)
+
+
+def load_direction_spec(path=None, messages=None):
+    """从 `mir2-rs/bins/game-svr/src/attackwire.rs` 读 (攻击族 ident 集合, Direction 值域)。
+
+    复用现成源（不写死私有表）：`HIT_IDENTS` 里的名字用 messages.rs 的「名→号」解析。
+    fail-closed：文件缺失 / 找不到 HIT_IDENTS / 名字解析不了 / 方向不是 0..7 连续 8 个。
+    """
+    path = path or ATTACKWIRE_RS
+    if messages is None:
+        messages = load_message_constants()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as ex:
+        raise ScenarioError("cannot read attack-family table %s: %s" % (path, ex))
+    block = _HIT_IDENTS_BLOCK_RE.search(text)
+    if not block:
+        raise ScenarioError("%s: cannot find `pub const HIT_IDENTS: [u16; N] = [...]` "
+                            "(parser drift?)" % path)
+    name_to_ident = {}
+    for ns in ("CM", "SM"):
+        for ident, name in messages[ns].items():
+            name_to_ident[name] = ident
+    idents = set()
+    for name in _HIT_IDENT_NAME_RE.findall(block.group(1)):
+        if name not in name_to_ident:
+            raise ScenarioError("%s: HIT_IDENTS references %s, which is not in %s"
+                                % (path, name, MESSAGES_RS_REL))
+        idents.add(name_to_ident[name])
+    if not idents:
+        raise ScenarioError("%s: HIT_IDENTS parsed 0 idents (parser drift?)" % path)
+    dirs = sorted(int(v) for _, v in _DIR_CONST_RE.findall(text))
+    if dirs != list(range(8)):
+        raise ScenarioError("%s: DIR_* constants parsed as %s, expected 0..7 (parser drift?)"
+                            % (path, dirs))
+    return idents, frozenset(dirs)
+
+
 def _var_refs(data):
     """收集场景里**按变量名**引用的字段：[(where, name)]。
 
@@ -707,6 +755,8 @@ def check_scenario(data, plans, params=None, messages=None):
       R4 变量引用必须能在场景声明的 required/params/computed 里找到（不许引用未声明变量）；
       R5 `scenario.placement` 与由位置派生的 params（如 self_pos=MakeLong(X,Y)）必须自洽
          （不一致 = 角色落在 A 点、期望值按 B 点算，真跑静默恒超时，card_window dry-run 也看不出来）；
+      R6 攻击族（HIT_IDENTS 9 条）的 `send.tag` 按 oracle `(byte)Tag = nDir` 截断后必须是合法
+         Direction（0..7）—— 非法值在 oracle 里「原地不动」，场景必然等不到命中帧；
       W  至少要有一个等待步骤（原 main 里的 N-5 规则，收进来一起判）。
 
     R4 的「声明」口径刻意**不含 `--var`**：`--var` 是给已声明变量覆值的通道（README），
@@ -790,6 +840,25 @@ def check_scenario(data, plans, params=None, messages=None):
                     "(decodes to x=%d y=%d via %s): the character would be placed at one point "
                     "while the scenario expects another (silent timeout at run time)"
                     % (placement["map"], placement["x"], placement["y"], var, raw, x, y, how))
+
+    # R6：攻击族 send.tag = (byte)wParam = Direction，必须在 Direction 值域内。
+    direction_spec = None
+    for p in plans:
+        if p["kind"] != "send":
+            continue
+        if direction_spec is None:
+            direction_spec = load_direction_spec(messages=messages)
+        hit_idents, dirs = direction_spec
+        if p["ident"] not in hit_idents:
+            continue
+        eff_dir = p["tag"] & 0xFF          # oracle: (byte)Tag
+        if eff_dir not in dirs:
+            raise ScenarioError(
+                "steps[%d].send.tag %d is not a valid Direction for ident %d (attack family): "
+                "oracle takes nDir = (byte)Tag = %d, valid values are %s (source %s HIT_IDENTS/DIR_*) "
+                "— an out-of-range direction never hits, so the wait can only time out"
+                % (p["index"], p["tag"], p["ident"], eff_dir,
+                   "%d..%d" % (min(dirs), max(dirs)), ATTACKWIRE_RS_REL))
 
     # W：必须有等待步骤（N-5：只发不等证明不了任何东西）。
     if not any(k in WAIT_KINDS for k in kinds):
@@ -1784,11 +1853,36 @@ def _selftest_scenario_validation():
     else:
         raise AssertionError("--var self_pos mismatch accepted (R5 tooth broken)")
 
+    # R6：攻击族的 tag = (byte)Direction（0..7）；源表自检 + 牙（tag=99 红 / tag=7 绿）
+    hit_idents, dirs = load_direction_spec(messages=messages)
+    assert len(hit_idents) == 9 and dirs == frozenset(range(8)), (hit_idents, dirs)
+    assert 3014 in hit_idents, hit_idents          # CM_HIT
+    hit_scen = {
+        "name": "selftest_dir",
+        "steps": [{"send": {"ident": 3014, "recog": 1, "param": 1, "tag": 7}},
+                  {"wait_for": 14}],
+    }
+    check_scenario(clone(hit_scen), expand_scenario(clone(hit_scen))[0], None, messages)
+    for bad_dir in (8, 99):
+        d = clone(hit_scen)
+        d["steps"][0]["send"]["tag"] = bad_dir
+        try:
+            check_scenario(d, expand_scenario(clone(d))[0], None, messages)
+        except ScenarioError as ex:
+            msg = str(ex)
+            assert "is not a valid Direction" in msg and ("tag %d" % bad_dir) in msg, msg
+        else:
+            raise AssertionError("attack tag=%d accepted (R6 tooth broken)" % bad_dir)
+    # 非攻击族不受 R6 约束（不误伤）：CM_SAY 的 tag 没有方向语义
+    say_scen = {"name": "selftest_say", "steps": [{"send": {"ident": 3030, "tag": 99}},
+                                                  {"wait_for": 100}]}
+    check_scenario(clone(say_scen), expand_scenario(clone(say_scen))[0], None, messages)
+
     # 防误伤：login_only（纯累计观察）与 dice_chain（params 默认值）必须绿
     for name in ("login_only.json", "dice_chain.json"):
         d = load_scenario(os.path.join(SCENARIO_DIR, name))
         check_scenario(d, expand_scenario(d)[0], None, messages)
-    return "R1-R5 七颗牙（含 send.ident/注释常量/placement）+ 纯观察场景不误伤"
+    return "R1-R6 九颗牙（send.ident/注释常量/placement/Direction）+ 不误伤"
 
 
 class _TimedSock:

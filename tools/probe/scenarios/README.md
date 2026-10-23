@@ -50,9 +50,14 @@ python tools/probe/mir2_probe.py \
      解码出的 `(x,y)` 必须等于 `placement.x/y`，否则 rc=2 并打印两个来源——不一致意味着角色被放到
      A 点、期望值按 B 点算，真跑会**静默恒超时**，`card_window --dry-run` 也看不出来（实战来自
      `combat_strike` 复审）。
-  6. **W 至少一个等待步骤**（原有的 N-5 规则，已并入 `check_scenario()`）。
+  6. **R6 攻击族的 `send.tag` 必须是合法 Direction**：`HIT_IDENTS` 的 9 条攻击 ident 的
+     `tag` = oracle 的 `nDir = (byte)Tag`，截断后必须是 `0..7`（`Enums/Direction.cs`）。
+     非法方向在 oracle 里「原地不动」⇒ 永远打不中，场景只能超时。ident 名单与方向值域都
+     **解析 `mir2-rs/bins/game-svr/src/attackwire.rs`**（`HIT_IDENTS` / `DIR_*`），不写私有表；
+     非攻击族不受这条约束。
+  7. **W 至少一个等待步骤**（原有的 N-5 规则，已并入 `check_scenario()`）。
 
-  上面 R1–R5 只在 `--check-scenario` 生效。另：本卡把 `dlg_select.recog` 也改成了**加载期解析**
+  上面 R1–R6 只在 `--check-scenario` 生效。另：本卡把 `dlg_select.recog` 也改成了**加载期解析**
   （`resolve_param` + i32 范围，与 `send.recog` 同口径/PRB-4），这条落在 `plan_step`，真跑也受益。
 * `steps` 非空；每一步是对象，**恰好一个动作键**，外加可选元键 `timeout_ms` / `delay_ms` / `note`。
 
@@ -220,10 +225,10 @@ python tools/probe/mir2_probe.py --selftest
 
 `--selftest` 用 `../fixtures/r9/` 的离线 s2c 抓包跑「切帧 -> 解析 -> 落 ndjson」全链路，
 不连网、不起进程；含「改坏必红」的负向用例（载荷字节改成越界值必须报错）。
-当前共 **9 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R5：
+当前共 **9 checks**；其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
 删 `send` 步 / `wait_for` 写表外 ident / `send.ident` 表外 / 引用未声明变量 / `wait_for` 先于 `send` /
-全 `sleep` / 注释掉的常量不得进表 / `placement` 与 `self_pos` 不一致），并断言 `login_only`、`dice_chain`
-仍绿（防误伤）。
+全 `sleep` / 注释掉的常量不得进表 / `placement` 与 `self_pos` 不一致 / 攻击族方向越界），
+并断言 `login_only`、`dice_chain` 与非攻击族 `tag` 不被误伤。
 
 ## fixtures 来源
 
