@@ -511,15 +511,24 @@ def card_for(cards: dict, key: str):
 # 人工豁免登记的证据门（卡 `openmir2-recon-unreachable-registry`，tier=L）
 # ---------------------------------------------------------------------------
 # 每条 `known_unreachable` / `known_false` 必须是**结构化条目**：
-#   {"id": "outbound:SM_X", "reason": "…", "evidence": "path/to/oracle.cs:NNN",
-#    "t": "T-65", "refs": ["T-176"], "determination": "文档:行 或 线程 id+oid"}
+#   {"id": "outbound:SM_X", "kind": "oracle-structural|deployment-level|gate-false-positive",
+#    "reason": "…", "evidence": "path/to/oracle.cs:NNN",
+#    "t": "T-65", "refs": ["T-176"], "determination": "文档:行 或 线程 id+oid",
+#    "scope": "（kind=deployment-level 必填）本条判不可达的部署面边界"}
 # 判红口径（与「用一句散文把条目藏起来」对着干）：
 #   ① 不是对象 / 缺 id|reason|evidence / 缺可追溯判定（`t`=T-<n> 或 `determination`）⇒ 红；
-#   ② `evidence` 不是 `file:line` 形态 ⇒ 红；
-#   ③ `evidence` 指向的文件在仓库里不存在，或行号越界 ⇒ 红。
+#   ② `kind` 缺失或不在三分类里 ⇒ 红；`kind=deployment-level` 缺 `scope` ⇒ 红
+#      （部署级结论只对 `scope` 写明的部署成立——「四棵部署」不许被默认化）；
+#   ③ `evidence` 不是 `file:line` 形态 ⇒ 红；
+#   ④ `evidence` 指向的文件在仓库里不存在，或行号越界 ⇒ 红。
 # 登记项判红 ⇒ 该 key **不生效**（落回 tracked/RED）+ `emit_exemption_registry_problems`
 # 印 `REGISTRY_EVIDENCE_RED` 且命令 rc=1。
+#
+# **边界（F2，review `45715661`）**：本门只校验**形状/存在性/分类完备**，**不校验证据与结论的
+# 相关性**——把一条确实可达的帧写成带真实 file:line 的豁免，门照样绿。门绿 ≠ 该条已由机器证明
+# 不可达；可达性结论必须由 reviewer 在钉住 commit 上人工复核（见 coverage/README.md）。
 RE_REGISTRY_T = re.compile(r"^T-\d+$")
+REGISTRY_KINDS = ("oracle-structural", "deployment-level", "gate-false-positive")
 
 
 def exemption_entries(cards: dict):
@@ -540,10 +549,20 @@ def exemption_problem(repo: Path, entry) -> "str|None":
         val = entry.get(field)
         if not isinstance(val, str) or not val.strip():
             return "缺字段 %s" % field
+    kind = entry.get("kind")
+    if kind not in REGISTRY_KINDS:
+        return "kind 缺失或非法（须为 %s 之一）" % "/".join(REGISTRY_KINDS)
+    if kind == "deployment-level":
+        scope = entry.get("scope")
+        if not isinstance(scope, str) or not scope.strip():
+            return "deployment-level 登记必须写 scope（限定判不可达的部署面；防「四棵部署」口径被默认化）"
     t = entry.get("t")
     det = entry.get("determination")
-    if not ((isinstance(t, str) and RE_REGISTRY_T.match(t.strip()))
-            or (isinstance(det, str) and det.strip())):
+    if t is not None:
+        # 写了 `t` 就必须是 `T-<n>`：写错 T 号比不写更糟（旧号/撞号正是 T 预约门要治的病）。
+        if not (isinstance(t, str) and RE_REGISTRY_T.match(t.strip())):
+            return "t 不是 T-<n> 形态：%r" % t
+    elif not (isinstance(det, str) and det.strip()):
         return "缺可追溯判定出处（t=T-<n> 或 determination=文档/线程:行）"
     ev = entry["evidence"].strip()
     if not RE_EVIDENCE_LINE.fullmatch(ev):
@@ -2228,7 +2247,7 @@ def selftest():
     try:
         (_tmp_reg / "src").mkdir()
         (_tmp_reg / "src/Oracle.cs").write_text("line1" + NL + "line2" + NL + "line3" + NL, encoding="utf-8")
-        _reg_good = {"id": "outbound:SM_REG_OK", "reason": "r",
+        _reg_good = {"id": "outbound:SM_REG_OK", "kind": "oracle-structural", "reason": "r",
                      "evidence": "src/Oracle.cs:2", "t": "T-65"}
         _c_good = {"known_cards": [], "assignments": {}, "known_unreachable": [_reg_good]}
         validate_exemption_registry(_c_good, _tmp_reg)
@@ -2261,12 +2280,45 @@ def selftest():
               and dispatch_item_status("outbound", "SM_REG_PLAIN", False, _c_plain,
                                        reachable=True) == "RED")
         _c_notdet = {"known_cards": [], "assignments": {},
-                     "known_unreachable": [{"id": "outbound:SM_REG_NODET", "reason": "r",
-                                            "evidence": "src/Oracle.cs:1"}]}
+                     "known_unreachable": [{"id": "outbound:SM_REG_NODET", "kind": "oracle-structural",
+                                            "reason": "r", "evidence": "src/Oracle.cs:1"}]}
         validate_exemption_registry(_c_notdet, _tmp_reg)
         check("teeth（登记证据门）：有 evidence 但无 t/determination（不可追溯）⇒ 判红",
               len(_c_notdet["_exemption_problems"]) == 1
               and "判定出处" in _c_notdet["_exemption_problems"][0][2])
+        _c_badt = {"known_cards": [], "assignments": {},
+                    "known_unreachable": [dict(_reg_good, id="outbound:SM_REG_BADT", t="T-200x")]}
+        validate_exemption_registry(_c_badt, _tmp_reg)
+        check("teeth（登记证据门）：t 写了但不是 T-<n>（present-but-malformed）⇒ 判红（不再被 determination 兜底放过）",
+              len(_c_badt["_exemption_problems"]) == 1
+              and "t 不是" in _c_badt["_exemption_problems"][0][2])
+        _c_badkind = {"known_cards": [], "assignments": {},
+                      "known_unreachable": [dict(_reg_good, id="outbound:SM_REG_BADKIND",
+                                                 kind="looks-unreachable-to-me")]}
+        validate_exemption_registry(_c_badkind, _tmp_reg)
+        check("teeth（登记证据门）：kind 不在三分类（结构性/部署级/门误报）⇒ 判红且不生效",
+              len(_c_badkind["_exemption_problems"]) == 1
+              and "kind" in _c_badkind["_exemption_problems"][0][2]
+              and dispatch_item_status("outbound", "SM_REG_BADKIND", False, _c_badkind,
+                                       reachable=True) == "RED")
+        _c_noscope = {"known_cards": [], "assignments": {},
+                      "known_unreachable": [dict(_reg_good, id="outbound:SM_REG_NOSCOPE",
+                                                 kind="deployment-level")]}
+        validate_exemption_registry(_c_noscope, _tmp_reg)
+        check("teeth（登记证据门）：kind=deployment-level 缺 scope（部署面未限定）⇒ 判红",
+              len(_c_noscope["_exemption_problems"]) == 1
+              and "scope" in _c_noscope["_exemption_problems"][0][2]
+              and dispatch_item_status("outbound", "SM_REG_NOSCOPE", False, _c_noscope,
+                                       reachable=True) == "RED")
+        _c_scope = {"known_cards": [], "assignments": {},
+                    "known_unreachable": [dict(_reg_good, id="outbound:SM_REG_SCOPE",
+                                               kind="deployment-level",
+                                               scope="仅三套本地 Release 部署")]}
+        validate_exemption_registry(_c_scope, _tmp_reg)
+        check("对照（登记证据门）：deployment-level + scope ⇒ 通过并豁免生效",
+              _c_scope["_exemption_problems"] == []
+              and dispatch_item_status("outbound", "SM_REG_SCOPE", False, _c_scope,
+                                       reachable=True) == "n/a-unreachable")
         _buf_reg = io.StringIO()
         with contextlib.redirect_stdout(_buf_reg):
             _reg_rc = emit_exemption_registry_problems(_c_badpath)

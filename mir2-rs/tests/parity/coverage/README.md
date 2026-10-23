@@ -55,10 +55,20 @@
   `summary = {"implemented": 178, "tracked": 1, "n/a-unreachable": 11, "n/a-oracle-noop": 1}`，
   `tracked` 仅剩 `SM_SKELETON`（由卡 `openmir2-sm-skeleton-wiring` 实现中）。登记面：
   `known_unreachable` = 3 条 RM 死支 + `CM_OPENDOOR`/`SM_OPENDOOR_OK`/`SM_CLOSEDOOR`(T-65/T-176)
-  + `SM_ITEMSHOW`(T-19/25/32/179) + `SM_CHANGEFACE`(T-175) + `SM_QUERYYBDEAL`/`SM_QUERYYBSELL`
+  + `SM_ITEMSHOW`(T-19/25/32/179) + `SM_CHANGEFACE`(T-200；订正后的真实链见下) + `SM_QUERYYBDEAL`/`SM_QUERYYBSELL`
   （部署级：Envir 从不派发脚本动作 343/344）；`known_false` = `SM_DONATE_FAIL`（非缺陷）。
   注意 `SM_QUERYYBDEAL`/`SM_QUERYYBSELL` 的自动可达性仍判 **可达**（`src/**` 有生产者），
   其不可达性来自**部署内容**（四棵 Envir 树 grep 0 命中）⇒ 只能人工登记，门无法自动推出。
+- **2026-10-23 订正（review `45715661` F1）**：`SM_CHANGEFACE` 的登记理由**不是**「现网造不出 race-114」——
+  `sql/mir2_data.sql:372` 里 `神兽1`(Idx=147, **Race=114**) 确实存在，`MySqlDB.cs:171` 全表加载。真实链是：
+  能刷出 `神兽1` 的面只有 MonGen/脚本（部署精确 token=0）与 GM 刷怪命令（`@Mob`/`@RecallMob`/`@MobPlace`），
+  而 GM 命令被 `GameCommand.cs:37` 的 `PermissionMin` 门挡住；普通玩家 `Permission` 的唯一赋值点
+  `PlayObject.cs:1188-1198`（`GetHumPermission`）**被整段注释** ⇒ Release 构建下恒 0。T 号由 T-175 订正为
+  **T-200**（`docs/rewrite-remaining-inventory-20261022.md:547`）。
+  **边界**：该结论只覆盖三套本地 Release 部署（`!deployed-from.json` 指向 `bin/Release`、DB=127.0.0.1/mir2_data）；
+  `E:/MirServer/Mir200` 是 **Debug 构建**（`GameSvr.dll` 含 `GameCommand.cs:35` 的 DEBUG-only 串）且指向远端
+  `10.10.0.199/Mir2`、无 `!deployed-from.json`、不在 `start-all.ps1`/`port-status.ps1` 的十端口栈里
+  ⇒ 不在本判定的现网面内、也**未**被排除；若 owner 改以 Mir200/任一 Debug 构建为对拍面，该登记立即失效。
 
 ### 出站「证据 = 编码器生产调用点」判据 + 调用值未丢弃（片118）
 
@@ -161,7 +171,8 @@ python mir2-rs/tests/parity/coverage/recon_gates.py dispatch   # 出表；RED �
 
   ```json
   {"id": "outbound:SM_CLOSEDOOR",
-   "reason": "oracle 为什么永不发这一帧（结构性 / 部署级）",
+   "kind": "oracle-structural",
+   "reason": "oracle 为什么永不发这一帧（结构性 / 内容级 / 部署级）",
    "evidence": "src/GameSrv/Word/WorldServer.cs:1479",
    "t": "T-65", "refs": ["T-176"]}
   ```
@@ -169,13 +180,24 @@ python mir2-rs/tests/parity/coverage/recon_gates.py dispatch   # 出表；RED �
   机判规则（`exemption_problem`，`dispatch`/`content` 均生效）：
 
   1. 必须是对象且 `id`/`reason`/`evidence` 非空；缺字段 ⇒ 该登记**判红且不生效**；
-  2. 必须有可追溯判定出处：`t` 形如 `T-<n>`，**或** `determination` 指向既有判定（`文档:行` 或线程 id+oid）；
-  3. `evidence` 必须是 `file:line`，且该文件**在仓库里真实存在**、`line` 在 `1..文件行数` 内
-     （`evidence` 只认仓库内路径；部署侧（`E:/MirServer/**`）的计数写进 `reason`，不写进 `evidence`）。
+  2. `kind` 必须显式声明三分类之一：`oracle-structural`（oracle 代码结构性死支）/
+     `deployment-level`（冻结内容或部署构建导致不可达）/ `gate-false-positive`（门误报、非缺陷）；
+     **`kind=deployment-level` 必须同时写 `scope`**，写明结论覆盖哪几套部署（防「四棵部署」口径被默认化）；
+  3. 必须有可追溯判定出处：`t` 形如 `T-<n>`，**或** `determination` 指向既有判定（`文档:行` 或线程 id+oid）；
+  4. `evidence` 必须是 `file:line`，且该文件**在仓库里真实存在**、`line` 在 `1..文件行数` 内
+     （`evidence` 只认仓库内路径；部署侧（`E:/MirServer/**`）的计数写进 `reason`/`scope`，不写进 `evidence`）。
 
-  违反 1–3 任一 ⇒ 印 `REGISTRY_EVIDENCE_RED: <key> [<bucket>] <原因> ⇒ 该登记不生效（按未豁免处理）`
+  违反 1–4 任一 ⇒ 印 `REGISTRY_EVIDENCE_RED: <key> [<bucket>] <原因> ⇒ 该登记不生效（按未豁免处理）`
   且命令 **rc=1**；该 key 同时**不再享受豁免**（落回 `tracked`/`RED`）。旧式纯字符串条目一律按未豁免
-  处理（迁移时补 `{id,reason,evidence,t|determination}`）。
+  处理（迁移时补 `{id,kind,reason,evidence,t|determination}`）。
+
+- **证据门的边界（必须连同上面一起读；review `45715661` F2）**：本门只校验登记的**形状 / 字段完备性 /
+  分类 / evidence 的 file:line 是否存在且界内**，**不校验证据与结论的相关性**。反例（reviewer 已实测）：
+  把确实可达的 `SM_SKELETON` 从 `assignments` 摘掉、按结构化格式写进 `known_unreachable`，`evidence`
+  随便填一条仓库里真实存在的行、`t=T-65` ⇒ `dispatch` **rc=0**、该帧变 `n/a-unreachable`、`tracked` 1→0、
+  **无** `REGISTRY_EVIDENCE_RED`。⇒ **门绿 ≠ 该条已由机器证明不可达**；可达性结论仍须由 reviewer 在钉住
+  commit 上人工复核（这正是本门把「理由 + 证据 + 分类」结构化、要求 `scope` 的原因：让人工复核有据可查，
+  而不是宣告机器已判）。
 - 出站 36 帧 triage 三分类（A 真缺编码器 / B 有编码器缺发射点 / C 门误报-oracle 死支）逐条落
   `assignment_roles`；A/B 指向承接卡、C 进 `known_unreachable`。
 - 数值随实现推进**递减**：`tracked`/`RED` 计数是进度表（`docs/移植计划重审-20261015.md` §4-6）。
