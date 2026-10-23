@@ -1,49 +1,50 @@
 # 2026-10-24 会话摘要（截至 master `c4b66ddb1`）
 
 > **范围**：`git log --first-parent --merges bb4317a01..c4b66ddb1` 的 **36** 次合并（L **28** / R **8**），外加今天关闭、今天新开仍在开的卡。
-> **取数时点**：2026-10-24 07:19（Asia/Shanghai，master=c4b66ddb1）；看板快照 `walgit collab board --repo . --format json`（503 张卡）。
+> **取数时点**：2026-10-24 **07:18:30 +08**（master=c4b66ddb1）；看板快照 `walgit collab board --repo . --format json`（503 张卡，快照 epoch `1792797510`）。
 > **口径**：合并只数 **master 第一父链**上的 merge（`--first-parent`），分支内部把 master 合进卡片的 merge 不计；卡号由线程里 `merge_result.oid`（短 oid 前缀匹配 merge commit）确定，tier 取该 `merge_result.tier`（36/36 张都有）。
 > **R 卡一律只写「已合并、窗口未跑」**，不写「已完成验收」；`tier=R` 的卡按策略保持 `in-progress`、不 closed。
-> **数字是「取数时点」值**：master 继续前进时，同样的命令会数出更大的值（更多合并/关闭）；复核请以本表头的 commit 为准，或按新 commit 重跑 §0 命令并重新记账。
+> **数字冻结在上述快照**：§0 的复算片段用 `CUTOFF=1792797510` 从线程条目**重建当时状态**，所以任何时刻重跑都应得到同样的 `closed=38 new_open=11`；想数「现况」就把 `CUTOFF` 换成当前 epoch。
 
 ## 0. 数字与复算命令
 
 | 数 | 值 | 复算 |
 |---|---:|---|
-| 第一父链合并 | 36（L 28 / R 8） | `git log --first-parent --merges --format=%h bb4317a01..walgit/master \| wc -l` |
-| 今天关闭的卡 | 38 | 见下「复算 B」 |
-| 今天新开仍在开 | 11 | 见下「复算 C」 |
+| 第一父链合并 | 36（L 28 / R 8） | `git log --first-parent --merges --format=%h bb4317a01..c4b66ddb1 \| wc -l` |
+| 今天关闭的卡 | 38 | §0 片段输出 `closed=` |
+| 今天新开仍在开 | 11 | §0 片段输出 `new_open=` |
 | 仍开着且已合并的 R 卡 | 8 | 看板里 `status!=closed` 且出现在 §2 的 R 表 |
 
 看板列（同一快照）：已完成 **262** / 进行中 **234** / 待审 **5** / 受阻 **2** / 待认领 **0** / 需要人 **0**（共 503 张卡）。
 
 ```sh
-# 复算 B：今天关闭 = 线程里最后一条 status 的 ts 落在今天 且 body.status=="closed"
+# 复算 B/C：用 CUTOFF 从线程条目重建「当天」状态，一次遍历同时算两项
+#   输出应为：CUTOFF=1792797510 closed=38 new_open=11
+#   成本约 4 分钟（503 张卡各 1 次 `walgit collab thread`）
 python -I - <<'EOF'
 import json, subprocess, datetime
-DAY = int(datetime.datetime(2026, 10, 24, tzinfo=datetime.timezone(datetime.timedelta(hours=8)).timestamp()))
-b = json.loads(subprocess.run(["walgit", "collab", "board", "--repo", ".", "--format", "json"], capture_output=True, text=True).stdout)
+TZ = datetime.timezone(datetime.timedelta(hours=8))
+DAY = int(datetime.datetime(2026, 10, 24, tzinfo=TZ).timestamp())   # 当天 00:00 +08
+CUTOFF = 1792797510          # 本文件看板快照时刻（2026-10-24 07:18:30 +08）
+b = json.loads(subprocess.run(["walgit", "collab", "board", "--repo", ".", "--format", "json"],
+                              capture_output=True, text=True).stdout)
 ids = [c["id"] for col in b["columns"] for c in col["cards"]]
-n = 0
+closed = new_open = 0
 for i in ids:
-    t = json.loads(subprocess.run(["walgit", "collab", "thread", "--repo", ".", i], capture_output=True, text=True).stdout)
-    st = [e for e in t if e["entry"]["kind"] == "status"]
-    if st and (st[-1]["entry"].get("body") or {}).get("status") == "closed" and int(st[-1]["entry"]["ts"]) >= DAY:
-        n += 1
-print(n)   # 取数时点 -> 38（master 前进后会更大）
-EOF
-
-# 复算 C：今天新开仍在开 = issue 的 ts 落在今天 且 当前 status != closed
-#   （看板 JSON 的 created_ts 就是 issue 的 ts；本文件另用线程首条 entry 的 ts 复核过）
-python -I - <<'EOF'
-import json, subprocess, datetime
-DAY = int(datetime.datetime(2026, 10, 24, tzinfo=datetime.timezone(datetime.timedelta(hours=8)).timestamp()))
-b = json.loads(subprocess.run(["walgit", "collab", "board", "--repo", ".", "--format", "json"], capture_output=True, text=True).stdout)
-print(sum(1 for col in b["columns"] for c in col["cards"] if c["status"] != "closed" and c.get("created_ts", 0) >= DAY))   # 取数时点 -> 11
+    t = json.loads(subprocess.run(["walgit", "collab", "thread", "--repo", ".", i],
+                                  capture_output=True, text=True).stdout)
+    hist = [(int(e["entry"]["ts"]), e["entry"]) for e in t if int(e["entry"]["ts"]) <= CUTOFF]
+    st = [x for x in hist if x[1]["kind"] == "status"]
+    cur = (st[-1][1].get("body") or {}).get("status") if st else None
+    if st and cur == "closed" and st[-1][0] >= DAY:
+        closed += 1
+    if hist and DAY <= hist[0][0] <= CUTOFF and cur != "closed":
+        new_open += 1
+print("CUTOFF=%d closed=%d new_open=%d" % (CUTOFF, closed, new_open))
 EOF
 ```
 
-> 快速近似：`board` 里 `status==closed and last_ts>=今天` 会**多算**「今天只收到 comment 的旧收口卡」（取数时点实测多 2 张：`openmir2-d2-m3-fixtures`、`openmir2-window-magic-fixture`）。所以「今天关闭」必须看**最后一条 status** 的 ts，不能看 `last_ts`。
+> 快速近似（**不可用于复算**）：`board` 里 `status==closed and last_ts>=今天` 会多算「今天只收到 comment 的旧收口卡」（快照时实测多 2 张：`openmir2-d2-m3-fixtures`、`openmir2-window-magic-fixture`）；且它数的是**现况**不是快照。所以「今天关闭」必须按**最后一条 status 的 ts**（且 `<= CUTOFF`）来判。
 
 ## 1. 合并表（36 次，按时间升序）
 
