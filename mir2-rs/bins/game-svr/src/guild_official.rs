@@ -392,6 +392,15 @@ pub(crate) trait FixedNpcScript {
         Vec<game_svr::npc::SendMsg>,
         Vec<usize>,
     );
+
+    /// 本次 `GotoLable` 期间 `WorldEngine.SendBroadCastMsg`（脚本 `SENDMSG 0-3`）记下的正文
+    /// （已拼 `SysMsgPreFix` 前缀，顺序 = 脚本动作序）。调用方在排水后按
+    /// `lib.rs::fan_out_world_sysmessage` 扇出给其余在线玩家。
+    ///
+    /// 缺省空表 = 未接线（与 `ScriptPlayer::world_broadcast` 的缺省 no-op 同口径）。
+    fn take_script_broadcasts(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// `RM_MERCHANTSAY` 在 `MsgQueue` 里的优先级 = `(byte)11009 = 1`（`BaseObject.Message.cs:180`）；
@@ -575,6 +584,22 @@ pub(crate) fn handle_select(
         let ss = shop_sessions.entry(chr_name.to_string()).or_default();
         script.goto_label(sg, ss, npc_actor_id, label, !can_jmp, &*world, &*guilds)
     };
+    // 卡 `openmir2-script-sendmsg-host`：脚本 `SENDMSG 0-3`（`WorldEngine.SendBroadCastMsg`）的
+    // 全服扇出。本例玩家自己那一份已在 `script_frames` 里（`RM_SYSMESSAGE`），由本函数的
+    // `queue_script_output` 排水；其余 `!Ghost` 在线玩家在此扇出（GuildOfficial 是地图上的
+    // 实体 NPC，但它自己的 `SendSayMsg`（`SENDMSG 4`）语料里没有调用点 ⇒ 本路不扇 `SM_HEAR`）。
+    let broadcast_texts = script.take_script_broadcasts();
+    if !broadcast_texts.is_empty() {
+        crate::fan_out_world_sysmessage(
+            online,
+            &*world,
+            gates,
+            actor_id,
+            &broadcast_texts,
+            red_color.0,
+            red_color.1,
+        );
+    }
     // `TAKEW` 摘下的佩戴位：会话已写回，实体同步（否则下一 tick 的实体→会话回写会撤掉）。
     for slot in use_slots {
         crate::sync_use_item_slot_to_entity(world, sg, slot);

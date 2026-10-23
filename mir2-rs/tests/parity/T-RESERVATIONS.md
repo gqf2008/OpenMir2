@@ -259,6 +259,7 @@
 | T-219 | openmir2-gm-impl-startquest | 2026-10-23T09:19:34Z | 在用 |
 | T-222 | openmir2-script-dyn-var-host | 2026-10-23T09:56:25Z | 在用 |
 | T-223 | openmir2-script-user-account | 2026-10-23T11:00:00Z | 在用 |
+| T-224 | openmir2-script-sendmsg-host | 2026-10-23T12:28:52Z | 在用 |
 | T-225 | openmir2-monster-attack-cadence-lead | 2026-10-23T12:35:50Z | 在用 |
 | T-226 | openmir2-oracle-humitems-align | 2026-10-23T12:35:54Z | 在用 |
 | T-227 | openmir2-buff-producer-wiring | 2026-10-23T14:45:24Z | 在用 |
