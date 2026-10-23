@@ -55,6 +55,10 @@
     发给他；要审代码 ⇒ **发给不是他的那个人**。发错后立即发「撤回」并转投，别指望对方自己判断——
     对方若照做，要么是作者自审、要么是审查者改代码，两种都会废掉这张卡的审查链。
 
+11. **合并树门禁可能撞上 stale 测试二进制**（2026-10-23 实测）：合并后首次 `cargo test --workspace` 命中一个 cargo 判定为 fresh 的旧测试二进制，报一条 panic 用例红；`touch` 源文件强制重编后该用例绿、全量 3041/0，源码 sha256 未变。
+    ⇒ 门禁报红时**先分三态**：① 真回归（源码确变）；② 环境噪声（stale 二进制 / 并发抢锁）；③ 夹具漂移。判环境噪声的办法：`touch` 相关源文件或换一个空 `CARGO_TARGET_DIR` 重跑一次，**并在 merge_result 里写明是噪声、附两次的 rc**。
+    这条与 10-23 早前那次「并发 cargo 抢锁 ⇒ clippy 假红」同族；合并时一律单跑门禁、不要与车道并行。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
@@ -127,8 +131,13 @@ restore 基线 -> 起 C# 栈 -> 等就绪 -> probe -> 抓库 -> 停栈
 若 out 里已有上次产物，开跑前整体归档到 `<out>/_stale-<ts>-<pid>/`，失败时也**无条件**写本次的
 fallback `report.json`（`format=card-window-report/1`, `verdict=UNDECIDABLE`, 带 `run_id`）。
 
-`--post-comment` 的 body 含 `verdict`、帧数、两侧二进制 sha256、场景 sha256、证据路径与时间戳；
-**只发 `kind=comment`，不写 `status`**，因此看板列不变。
+`--post-comment` 的 body 顶层只有一个**三态** `verdict`（compare FAIL => `FAIL`；无结论或证据
+缺件 => `UNDECIDABLE`；完整且 PASS 才 `PASS`），并带 `verdict_reason` / `blockers` / `exit_code` /
+`report_kind` / `finalize_ok`；compare 的事实（`verdict` / `rc` / **帧数** / `db_state` / `diffs` /
+`undecidable` / `whitelisted`）在**嵌套 `compare`** 里，顶层**没有** `report_verdict` / `frames`
+——只扫顶层 `PASS` 的读者不会把缺件运行误读成「窗口通过」。body 另含两侧二进制 sha256、场景
+sha256、证据路径与时间戳。comment 在 report.json / README.txt / card-window.json 全部写完之后
+才发；**只发 `kind=comment`，不写 `status`**，因此看板列不变。
 
 ### 5.3 fail-closed 口径（退出码 0 = PASS，其余一律 2）
 

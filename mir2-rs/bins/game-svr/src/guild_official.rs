@@ -14,7 +14,9 @@
 //!
 //! oracle 的 `SendDefMessage` 是**直发**，`SendMsg`/`SendRefMsg` 是**入队**；`MsgQueue` 按
 //! `(byte)wIdent` 升序出队（`BaseObject.Message.cs:334` 的 `TryDequeue`）。本模块用
-//! [`PRI_CHANGEGUILDNAME`] 等常量固化这个序，`sort_by_key` 是稳定排序 ⇒ 同优先级保持**入队序**：
+//! [`PRI_CHANGEGUILDNAME`] 等常量固化这个序。注意 oracle 的 `PriorityQueue` **不保同优先级入队序**
+//! （.NET 8 四叉堆；3 条 `[0,2,1]`、4 条 `[0,3,2,1]`）——[`build_queued_frames`] 里仍用
+//! `sort_by_key` 只是因为该批的优先级字节**两两不同**（61 / 63 / 152），稳定序与堆序逐条相同：
 //!
 //! - 建会成功：`202 SM_DELITEM`（直发）→ `750 SM_CHANGEGUILDNAME`(61) →
 //!   `762 SM_BUILDGUILD_OK`(63) → `622 SM_WEIGHTCHANGED`(131) → `653 SM_GOLDCHANGED`(152)
@@ -399,8 +401,9 @@ const PRI_MERCHANTSAY: u8 = pri(messages::RM_MERCHANTSAY);
 /// 把 `GotoLable` 的说词与脚本帧放进本 handler 的出帧队列。
 ///
 /// oracle 里两者都是**入队**消息（`SendPriorityMsg`/`SendMsg` ⇒ 脚本 `SendMsg`），handler 结束后
-/// 由 `MsgQueue` 按 `(byte)wIdent` 出队；[`flush`] 的 `(priority, seq)` 排序即同口径
-/// （说词 0/1 先于 `RM_GAMEGOLDCHANGED` 148 等脚本帧）。
+/// 由 `MsgQueue` 按 `(byte)wIdent` 出队；[`flush`] 按**收件人分组**、每组按入队序灌
+/// [`game_svr::msgqueue::NetPriorityQueue`] 再出队，即同口径
+/// （说词 0/1 先于 `RM_GAMEGOLDCHANGED` 148 等脚本帧；同优先级按四叉堆 sift 序，**不是** FIFO）。
 fn queue_script_output(
     queue: &mut Vec<QueuedFrame>,
     says: &[game_svr::npc::SayMsg],

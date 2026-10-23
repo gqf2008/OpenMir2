@@ -1,7 +1,9 @@
 //! 组队（party）状态机的 oracle 边界向量 —— M3⑦-实现 2（卡 `openmir2-m3-party-group-state`）。
 //!
 //! 断言逐条对外 oracle 的**源码调用序**与 **`Run()` 出队序**（见 `crates/world/src/party.rs` 模块头）：
-//! 同一目标的线上帧 = 立即帧（源码序）→ 排队帧（`(byte)wIdent` 升序）。
+//! **同一收件人**的线上帧 = 立即帧（源码序）→ 排队帧（`(byte)wIdent` 升序；同优先级按 .NET 8
+//! 四叉堆 sift 序）。oracle 每人一条 `PriorityQueue` ⇒ 本文件按收件人断言，**不**断言跨收件人的
+//! 平坦序。
 //!
 //! oracle 锚点：`PlayObject.Operate.cs:787-909`、`PlayObject.cs:5126-5197`、
 //! `PlayObject.Base.cs:1339-1369/2418-2422`、`PlayObject.Message.cs:704-719/914-935`。
@@ -28,6 +30,15 @@ fn three_players() -> (World, i32, i32, i32) {
     (w, l, t, u)
 }
 
+/// **逐收件人**切出事件序（oracle `MsgQueue` 是**每人一条** ⇒ 跨收件人的平坦序不是契约；
+/// 卡 `openmir2-frame-drain-order-audit` 起排队桶按收件人分组建堆）。
+fn per_target(evs: &[PartyEvent], target: i32) -> Vec<PartyEvent> {
+    evs.iter()
+        .filter(|e| e.target() == target)
+        .cloned()
+        .collect()
+}
+
 fn sys(target: i32, recog: i32, text: &str) -> PartyEvent {
     PartyEvent::SysMessage {
         target,
@@ -43,15 +54,13 @@ fn create_group_matches_oracle_call_order_and_dequeue_order() {
     let (mut w, l, t, _u) = three_players();
     let evs = w.party_create_group(l, "T", &cfg());
 
-    let expected = vec![
-        // 立即帧（Operate.cs:840/841-842）
+    // 逐收件人（oracle 每人一条 `MsgQueue`）：
+    // - L：立即 `660`/`667` → 排队 `GotoLabel`(1) → `RM_GROUPMESSAGE`(253) join(L)、join(T)；
+    // - T：立即 `667` → 排队 join(L)、join(T)（T 不是本次动作的触发者 ⇒ 无 GotoLabel）。
+    let want_l = vec![
         PartyEvent::CreateGroupOk { target: l },
         PartyEvent::GroupMembers {
             target: l,
-            members_text: "L/T/".into(),
-        },
-        PartyEvent::GroupMembers {
-            target: t,
             members_text: "L/T/".into(),
         },
         // GotoLable("@GroupCreate")（`Operate.cs:843`）：脚本说词经 `RM_MERCHANTSAY`（优先级字节 1）
@@ -60,13 +69,21 @@ fn create_group_matches_oracle_call_order_and_dequeue_order() {
             target: l,
             label: "@GroupCreate",
         },
-        // 排队帧（RM_GROUPMESSAGE，优先级 253；入队序 = JoinGroup(L) 再 JoinGroup(T)）
+        // 排队帧（RM_GROUPMESSAGE，优先级 253；入队序 = JoinGroup(L) 再 JoinGroup(T)；两条等优先级
+        // ⇒ 四叉堆出队序对 2 条元素 = 入队序）
         sys(l, l, "〖组队〗L 已加入小组."),
-        sys(t, l, "〖组队〗L 已加入小组."),
         sys(l, t, "〖组队〗T 已加入小组."),
+    ];
+    let want_t = vec![
+        PartyEvent::GroupMembers {
+            target: t,
+            members_text: "L/T/".into(),
+        },
+        sys(t, l, "〖组队〗L 已加入小组."),
         sys(t, t, "〖组队〗T 已加入小组."),
     ];
-    assert_eq!(evs, expected);
+    assert_eq!(per_target(&evs, l), want_l, "L 的线上序");
+    assert_eq!(per_target(&evs, t), want_t, "T 的线上序");
 
     // 状态：团长 L 的成员表含自己 + T，两方 GroupOwner 都是 L，L 的 AllowGroup 置 true
     let le = w.entities.get(l).unwrap();
@@ -169,7 +186,7 @@ fn del_member_regular_keeps_leader_with_cancel_and_delmem_ok() {
 
     // 立即：CancelGroup()==false ⇒ SM_GROUPCANCEL(L)，随后 SM_GROUPDELMEM_OK(L, T)
     // 排队（优先级升序）：RM_GROUPCANCEL(T)=156 排在 RM_GROUPMESSAGE(253) 之前
-    let expected = vec![
+    let want_l = vec![
         PartyEvent::GroupCancel { target: l },
         PartyEvent::DelMemberOk {
             target: l,
@@ -180,12 +197,16 @@ fn del_member_regular_keeps_leader_with_cancel_and_delmem_ok() {
             target: l,
             label: "@GroupDelMember",
         },
-        PartyEvent::GroupCancel { target: t },
+        // 两条 253（退出说词、解散说词）在 L 的队列里等优先级 ⇒ 四叉堆 2 元素 = 入队序。
         sys(l, t, "〖组队〗T 已经退出了本组."),
-        sys(t, t, "〖组队〗T 已经退出了本组."),
         sys(l, l, "〖组队〗你的小组被解散了."),
     ];
-    assert_eq!(evs, expected);
+    let want_t = vec![
+        PartyEvent::GroupCancel { target: t },
+        sys(t, t, "〖组队〗T 已经退出了本组."),
+    ];
+    assert_eq!(per_target(&evs, l), want_l, "L 的线上序");
+    assert_eq!(per_target(&evs, t), want_t, "T 的线上序");
 
     // 状态：L 的组被解散（成员空、GroupOwner=0），T 的 GroupOwner=0
     let le = w.entities.get(l).unwrap();
@@ -226,22 +247,23 @@ fn group_close_non_leader_calls_del_member_and_clears_allow_group() {
     let (mut w, l, t, _u) = three_players();
     w.party_create_group(l, "T", &cfg());
     let evs = w.party_group_close(t, &cfg());
-    // 与 `del_member_em(L, T)` 同序（但没有 CM_GROUPDELMEM 的回包）
-    assert_eq!(
-        evs,
-        vec![
-            PartyEvent::GroupCancel { target: l },
-            // GotoLable("@GroupClose")（`Operate.cs:806`）：触发者是**发 CM 的成员** T。
-            PartyEvent::GotoLabel {
-                target: t,
-                label: "@GroupClose",
-            },
-            PartyEvent::GroupCancel { target: t },
-            sys(l, t, "〖组队〗T 已经退出了本组."),
-            sys(t, t, "〖组队〗T 已经退出了本组."),
-            sys(l, l, "〖组队〗你的小组被解散了."),
-        ]
-    );
+    // 与 `del_member_em(L, T)` 同序（但没有 CM_GROUPDELMEM 的回包）；**按收件人**断言。
+    let want_l = vec![
+        PartyEvent::GroupCancel { target: l },
+        sys(l, t, "〖组队〗T 已经退出了本组."),
+        sys(l, l, "〖组队〗你的小组被解散了."),
+    ];
+    let want_t = vec![
+        // GotoLable("@GroupClose")（`Operate.cs:806`）：触发者是**发 CM 的成员** T。
+        PartyEvent::GotoLabel {
+            target: t,
+            label: "@GroupClose",
+        },
+        PartyEvent::GroupCancel { target: t },
+        sys(t, t, "〖组队〗T 已经退出了本组."),
+    ];
+    assert_eq!(per_target(&evs, l), want_l, "L 的线上序");
+    assert_eq!(per_target(&evs, t), want_t, "T 的线上序");
     assert!(!w.entities.get(t).unwrap().allow_group);
 }
 
@@ -436,22 +458,29 @@ fn die_member_triggers_oracle_del_member_and_group_survives() {
 
     // 事件面（立即帧 → 排队帧按 `(byte)wIdent` 升序）：
     // `SendGroupMembers`（立即，成员表已不含死者）→ `RM_GROUPCANCEL`(156) → `RM_GROUPMESSAGE`(253)。
-    let expected = vec![
+    // 逐收件人：L/U 各是「立即 `667` → 排队 `253`（退出说词）」；T 是「排队 `156` → `253`」。
+    // `SendGroupText(sender=T)`：`recog` = 发送者 T，收件人 = 当时组长成员表 [L,T,U]。
+    let w_l = vec![
         PartyEvent::GroupMembers {
             target: l,
             members_text: "L/U/".into(),
         },
+        sys(l, t, "〖组队〗T 已经退出了本组."),
+    ];
+    let w_u = vec![
         PartyEvent::GroupMembers {
             target: u,
             members_text: "L/U/".into(),
         },
-        PartyEvent::GroupCancel { target: t },
-        // `SendGroupText(sender=T)`：`recog` = 发送者 T，收件人 = 当时组长成员表 [L,T,U]。
-        sys(l, t, "〖组队〗T 已经退出了本组."),
-        sys(t, t, "〖组队〗T 已经退出了本组."),
         sys(u, t, "〖组队〗T 已经退出了本组."),
     ];
-    assert_eq!(rec.party_events, expected);
+    let w_t = vec![
+        PartyEvent::GroupCancel { target: t },
+        sys(t, t, "〖组队〗T 已经退出了本组."),
+    ];
+    assert_eq!(per_target(&rec.party_events, l), w_l, "L 的线上序");
+    assert_eq!(per_target(&rec.party_events, u), w_u, "U 的线上序");
+    assert_eq!(per_target(&rec.party_events, t), w_t, "T 的线上序");
 
     // 复活后重新入组：`group_owner == 0` 是入组前置（`-3`），证明无残留死组员。
     w.entities.get_mut(t).unwrap().death = false;

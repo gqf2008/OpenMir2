@@ -73,6 +73,11 @@ pub fn merchant_say_gbk(chr_name: &str, msg: &str) -> Vec<u8> {
 /// 只用于 `BaseObject.SysMsg` 的 default 支判定（`BaseObject.cs:1670-1680`）。
 const MSG_TYPE_CUST: i32 = 5;
 
+/// `(byte)MessagePriority.High`（`src/OpenMir2/Enums/MessagePriority.cs:20`）。
+const PRIO_HIGH: u8 = 0;
+/// `(byte)RM_MERCHANTSAY` = `11009 & 0xFF` = 1（`BaseObject.Message.cs:181` 的 `(byte)wIdent`）。
+const PRIO_RM_MERCHANTSAY: u8 = (mir2_protocol::messages::RM_MERCHANTSAY & 0xFF) as u8;
+
 /// 一条待下发的 `RM_MERCHANTSAY`（`ScriptEngine.cs:991/996` 的两个入队点）。
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SayMsg {
@@ -93,15 +98,33 @@ pub struct SayMsg {
 /// `BaseObject.Message.cs:334` 的 `TryDequeue`）：
 ///
 /// - `SendPriorityMsg(..., MessagePriority.High)` 入队优先级 = `(byte)High = 0`（`BaseObject.Message.cs:30`）；
-/// - `SendMsg(normNpc, ...)` 入队优先级 = `(byte)RM_MERCHANTSAY = 11009 & 0xFF = 1`（`:180`）。
+/// - `SendMsg(normNpc, ...)` 入队优先级 = `(byte)RM_MERCHANTSAY = 11009 & 0xFF = 1`（`:181`）。
 ///
-/// ⇒ 出队是**优先级字节升序**：`High` 组（0）先、`SendMsg` 组（1）后。oracle 用的是
-/// `PriorityQueue`（同优先级不保证稳定序），本函数只按两个**不同**优先级分组，组内取**入队序**
-/// （即引擎调用序）。这正是 `②③` F-1 那条「入队序 ≠ 出队序」的同源规则（那里三段优先级互不相同）。
+/// ⇒ 出队是**优先级字节升序**：`High` 组（0）先、`SendMsg` 组（1）后。但 oracle 用的是
+/// `PriorityQueue<SendMessage, byte>`（.NET 8 **四叉最小堆**，`ActorEntity.cs:16`）：**同优先级
+/// 不是入队序**（3 条等优先级出队 `[0,2,1]`、4 条 `[0,3,2,1]`；dotnet 实跑 = 本仓
+/// [`game_svr::msgqueue::NetPriorityQueue`]）。脚本连续多条 `SendMsg`/`SendPriorityMsg` 是**常态**
+/// （一段 NPC 对白逐行出队）⇒ 组内必须按堆序，不能按引擎调用序。
+///
+/// 实现：整批说词按入队序灌一份堆再出队（0 < 1 ⇒ 两个组天然分成前后两段，组内是各自的 sift 序）。
+/// 卡 `openmir2-frame-drain-order-audit` 之前是「priority 组 ++ 非 priority 组」= 稳定退化。
 #[must_use]
 pub fn dequeue_order(says: &[SayMsg]) -> Vec<&SayMsg> {
-    let mut out: Vec<&SayMsg> = says.iter().filter(|s| s.priority).collect();
-    out.extend(says.iter().filter(|s| !s.priority));
+    let mut heap: game_svr::msgqueue::NetPriorityQueue<&SayMsg> =
+        game_svr::msgqueue::NetPriorityQueue::new();
+    for s in says {
+        // `SendPriorityMsg(..., High)` ⇒ `(byte)MessagePriority.High` = 0；`SendMsg` ⇒ `(byte)wIdent` = 1。
+        let priority = if s.priority {
+            PRIO_HIGH
+        } else {
+            PRIO_RM_MERCHANTSAY
+        };
+        heap.enqueue(s, priority);
+    }
+    let mut out = Vec::with_capacity(says.len());
+    while let Some(s) = heap.dequeue() {
+        out.push(s);
+    }
     out
 }
 
@@ -1922,20 +1945,28 @@ mod tests {
         assert_ne!(says[0].text, says[0].raw_msg, "前缀不能被吞");
     }
 
-    /// **M3⑥-实现 3 第②片**：oracle `MsgQueue` 出队序——`SendPriorityMsg(..., High)` 的入队
-    /// 优先级 = 0（`BaseObject.Message.cs:30`），`SendMsg` 的 = `(byte)RM_MERCHANTSAY = 1`
-    /// （`:180`）⇒ **High 组先出、SendMsg 组后出**；即使调用序与出队序相反也要分组。
-    ///
-    /// 红检：把 `dequeue_order` 改成直接返回入队序 ⇒ 本用例必红。
-    #[test]
-    fn dequeue_order_puts_priority_high_first() {
-        let say = |m: &str, priority| SayMsg {
+    fn say(m: &str, priority: bool) -> SayMsg {
+        SayMsg {
             npc_name: "QManage".to_string(),
             raw_msg: m.to_string(),
             text: merchant_say_text("QManage", m),
             priority,
             npc_actor_id: 1,
-        };
+        }
+    }
+
+    /// **M3⑥-实现 3 第②片 + 卡 `openmir2-frame-drain-order-audit`**：oracle `MsgQueue` 出队序——
+    /// `SendPriorityMsg(..., High)` 的入队优先级 = 0（`BaseObject.Message.cs:30`），`SendMsg` 的 =
+    /// `(byte)RM_MERCHANTSAY = 1`（`:181`）⇒ **High 组先出、SendMsg 组后出**。
+    ///
+    /// 组**内**不是入队序：整批按入队序灌 .NET 8 四叉堆后出队（`[a,b,c,d]` ⇒ 堆出队
+    /// `[b,d,c,a]`）。旧期望 `[b,d,a,c]` 是「两个组各自保持入队序」的稳定分组产物——那正是本卡
+    /// 修掉的退化：堆里混着另一优先级的元素时，同优先级元素的相对序**会**被 sift 改变
+    /// （`[a(1),b(0),c(1),d(0)]` 的堆布局见 `msgqueue.rs` 的 dotnet 实跑用例）。
+    ///
+    /// 红检：把 `dequeue_order` 改回「priority 组 ++ 非 priority 组」⇒ 得 `[b,d,a,c]`，断言红。
+    #[test]
+    fn dequeue_order_puts_priority_high_first() {
         let says = vec![
             say("a", false),
             say("b", true),
@@ -1948,9 +1979,29 @@ mod tests {
             .collect();
         assert_eq!(
             order,
-            vec!["b", "d", "a", "c"],
-            "High(0) 组先、组内入队序，SendMsg(1) 组后"
+            vec!["b", "d", "c", "a"],
+            "High(0) 组先、SendMsg(1) 组后"
         );
+    }
+
+    /// **卡 `openmir2-frame-drain-order-audit` 判据**：同优先级（同组）多条出队是 .NET 8 四叉堆序
+    /// ——3 条 `[0,2,1]`、4 条 `[0,3,2,1]`（dotnet 实跑）。NPC 一段对白连续 3/4 条 `SendMsg`
+    /// 是部署常态（`QManage`/`Market_Def` 脚本逐行说词），稳定分组会退化成入队序。
+    ///
+    /// 牙（改坏必红）：`dequeue_order` 改回稳定分组 ⇒ `[0,1,2]`/`[0,1,2,3]`，断言红。
+    #[test]
+    fn dequeue_order_same_priority_follows_four_ary_heap() {
+        for (n, want) in [
+            (3usize, vec!["s0", "s2", "s1"]),
+            (4, vec!["s0", "s3", "s2", "s1"]),
+        ] {
+            let says: Vec<SayMsg> = (0..n).map(|i| say(&format!("s{i}"), false)).collect();
+            let order: Vec<&str> = dequeue_order(&says)
+                .iter()
+                .map(|s| s.raw_msg.as_str())
+                .collect();
+            assert_eq!(order, want, "n={n}：同优先级出队序必须是四叉堆序");
+        }
     }
 
     /// `has_manage_npc`/`has_function_npc` = oracle `SystemShare.ManageNPC/FunctionNPC != null`
@@ -3192,11 +3243,55 @@ mod tests {
                 world,
                 pwd_busy: true,
             });
-            player.permission = 10;
+            // 有桥时 `player.permission` 是死字段（读写走 `GmSession.permission`）——
+            // 本用例只依赖 `pwd_busy`，不再做无效赋值（reviewer-6 M-3）。
             player.process_user_line_msg("@禁言 新人 30");
             assert!(player.frames.is_empty(), "命令体不得执行（无任何帧）");
             assert_eq!(player.gm_notes.len(), 1, "登记被密码支吃掉的路径");
         }
+        assert_eq!(sess.permission, 0);
+    }
+
+    /// 「无泄漏」探针（reviewer-6 I-2）：脚本抬权执行后，**客户端直呼**同一条 perm-10 命令
+    /// 仍必须被权限门挡住 —— 读的是同一个 `GmSession.permission`。
+    ///
+    /// 这是窗口判据的代码侧镜像：客户端 `@` 走 `handle_say` → `gmcmd::execute`，
+    /// 权限取 `sg.gm.permission`；GMEXECUTE 的抬权写的是同一个字段 ⇒ 若还原失败，
+    /// 下面这条直呼会真的执行并回「已被禁言」文本（而不是 `权限不够!!!`）。
+    #[test]
+    fn gmexecute_seam_does_not_leak_permission_to_client_commands() {
+        let host = host_with(vec![def_with_actions(
+            "QManage",
+            "@Login",
+            vec![gmexec_action("禁言", "self", "10000")],
+        )]);
+        let guilds = mir2_world::GuildManager::new();
+        let world = gmcmd::GmWorld::new(&guilds);
+        let cfg = gmcmd::GmConfig::default();
+        let mut sess = gmcmd::GmSession::default();
+        let mut rng = no_rng();
+        {
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "新人".to_string();
+            player.gm = Some(NpcGm {
+                sess: &mut sess,
+                cfg: &cfg,
+                world,
+                pwd_busy: false,
+            });
+            let _ = host.run_login(&mut player).expect("QManage 必须可解析");
+            assert_eq!(
+                sys_frames(&player.frames).len(),
+                1,
+                "脚本路径确实执行了一条"
+            );
+        }
+        assert_eq!(sess.permission, 0, "脚本路径结束后会话权限已还原");
+        // 客户端直呼：应停在权限门（若 10 泄漏到会话态，这里会真的执行）。
+        let direct = gmcmd::execute(&mut sess, &cfg, &world, "@禁言 新人 30");
+        assert_eq!(direct.msgs.len(), 1);
+        assert_eq!(direct.msgs[0].text, "权限不够!!!");
+        assert!(direct.msgs.iter().all(|m| !m.text.contains("已被禁言")));
         assert_eq!(sess.permission, 0);
     }
 

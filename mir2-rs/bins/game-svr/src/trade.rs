@@ -28,7 +28,7 @@
 //! 与 ⑦-2（[`crate::party`] 世界侧的同名约定）一致：`SendDefMessage` / `SendSocket` 是
 //! **立即**帧（源码调用序），`SendMsg` / `SendUpdateMsg` 入 `MsgQueue`（优先级 = `(byte)wIdent`），
 //! 在**同一** `Run()` 内按优先级**升序**出队。⇒ 同一目标的线上序 = 立即帧（源码序）→ 排队帧
-//! （优先级升序，同优先级 FIFO）。`SendUpdateMsg` 先移除队列里同 `wIdent` 的旧条目再入队 ⇒
+//! （优先级升序；同优先级按 .NET 8 四叉堆 sift 序，**不是** FIFO。`SendUpdateMsg` 先移除队列里同 `wIdent` 的旧条目再入队 ⇒
 //! [`Emitter::later_update`] 的「同 key 覆盖」语义（`BaseObject.Message.cs:283-306`）。
 //!
 //! 排队帧优先级字节：`RM_MENU_OK(10309)⇒69` / `RM_WEIGHTCHANGED(10115)⇒131` /
@@ -236,7 +236,20 @@ pub enum DealEvent {
     GoldChanged { target: i32 },
 }
 
-/// 「立即帧 + 排队帧」两桶（见模块头）。`finish` = 立即（插入序）++ 排队（优先级升序，稳定）。
+/// 「立即帧 + 排队帧」两桶（见模块头）。`finish` = 立即（插入序）++ 排队（**每收件人各自的四叉堆出队序**）。
+/// 事件收件人 `ActorId`（oracle `MsgQueue` 的归属者 = 该 `PlayObject`）。
+fn deal_event_target(ev: &DealEvent) -> i32 {
+    match ev {
+        DealEvent::Def { target, .. }
+        | DealEvent::SysMsg { target, .. }
+        | DealEvent::MenuOk { target, .. }
+        | DealEvent::AddItem { target, .. }
+        | DealEvent::RemoteItem { target, .. }
+        | DealEvent::WeightChanged { target }
+        | DealEvent::GoldChanged { target } => *target,
+    }
+}
+
 /// 排队帧条目（优先级 + 可选去重 key + 事件）。
 struct QueuedEvent {
     priority: u8,
@@ -260,7 +273,7 @@ impl Emitter {
         self.immediate.push(ev);
     }
 
-    /// `SendMsg`：入队（同优先级 FIFO）。
+    /// `SendMsg`：入队（排队桶在 [`Emitter::finish`] 里按每人一条 `MsgQueue` 的四叉堆出队）。
     fn later(&mut self, priority: u8, ev: DealEvent) {
         self.queued.push(QueuedEvent {
             priority,
@@ -281,11 +294,37 @@ impl Emitter {
         });
     }
 
-    fn finish(mut self) -> Vec<DealEvent> {
-        // `sort_by_key` 稳定 ⇒ 同优先级保持入队序。
-        self.queued.sort_by_key(|q| q.priority);
+    /// 排队桶按 **oracle `MsgQueue`（每人一条队列）的四叉最小堆出队序**落成线性序。
+    ///
+    /// - 先**按收件人分组**（分组序 = 首次入队序）：oracle 的 `MsgQueue` 是 `PlayObject` 的实例字段
+    ///   （`ActorEntity.cs:16`），跨收件人混堆会改变本会话的 sift；
+    /// - 每组按入队序灌 [`game_svr::msgqueue::NetPriorityQueue`] 再出队，**不是**稳定排序：
+    ///   同优先级多条出队是 `[0,2,1]`（3 条）/ `[0,3,2,1]`（4 条）。
+    ///
+    /// 同 ident 多帧**可达**：`deal_success` 的四个前置检查可各发一条 `red_msg`（`RM_SYSMESSAGE`
+    /// 优先级 252）给**同一** `me.id`；`deal_cancel_em` 还会再叠。卡
+    /// `openmir2-frame-drain-order-audit`（此前是 `sort_by_key` 稳定排序 = 退化为入队序）。
+    fn finish(self) -> Vec<DealEvent> {
         let mut out = self.immediate;
-        out.extend(self.queued.into_iter().map(|q| q.ev));
+        let mut buckets: Vec<(i32, Vec<QueuedEvent>)> = Vec::new();
+        for q in self.queued {
+            let target = deal_event_target(&q.ev);
+            match buckets.iter_mut().find(|(t, _)| *t == target) {
+                Some((_, v)) => v.push(q),
+                None => buckets.push((target, vec![q])),
+            }
+        }
+        for (_, queue) in buckets {
+            let mut heap: game_svr::msgqueue::NetPriorityQueue<QueuedEvent> =
+                game_svr::msgqueue::NetPriorityQueue::new();
+            for q in queue {
+                let priority = q.priority;
+                heap.enqueue(q, priority);
+            }
+            while let Some(q) = heap.dequeue() {
+                out.push(q.ev);
+            }
+        }
         out
     }
 }
@@ -1071,6 +1110,70 @@ mod tests {
     use crate::ability::StdItemCatalog;
     use mir2_data::StdItem;
 
+    fn sys_msg(target: i32, text: &str) -> DealEvent {
+        DealEvent::SysMsg {
+            target,
+            recog: target,
+            f_color: 0,
+            b_color: 0,
+            text: text.to_string(),
+        }
+    }
+
+    fn sys_texts(evs: &[DealEvent]) -> Vec<String> {
+        evs.iter()
+            .map(|e| match e {
+                DealEvent::SysMsg { text, .. } => text.clone(),
+                other => panic!("只应产 SysMsg，实得 {other:?}"),
+            })
+            .collect()
+    }
+
+    /// **卡 `openmir2-frame-drain-order-audit` 判据**：排队桶出队 = oracle `MsgQueue`（每人一条）
+    /// 的 .NET 8 四叉堆序 ⇒ 同优先级 3 条 `[0,2,1]`、4 条 `[0,3,2,1]`。
+    ///
+    /// 可达性：`DealSuccess` 的四个前置检查可各发一条 `red_msg`（`RM_SYSMESSAGE`，252）给**同一**
+    /// `me.id`（`deal_success` 的 `ok=false` 累积支）；`deal_cancel_em` 还会再叠。
+    ///
+    /// 牙（改坏必红）：`Emitter::finish` 改回 `self.queued.sort_by_key(|q| q.priority)` ⇒
+    /// 得 `[s0,s1,s2]`/`[s0,s1,s2,s3]`，断言红。
+    #[test]
+    fn emitter_finish_same_priority_follows_four_ary_heap() {
+        for (n, want) in [
+            (3usize, vec!["s0", "s2", "s1"]),
+            (4, vec!["s0", "s3", "s2", "s1"]),
+        ] {
+            let mut em = Emitter::new();
+            for i in 0..n {
+                em.later(PRIO_RM_SYSMESSAGE, sys_msg(901, &format!("s{i}")));
+            }
+            assert_eq!(sys_texts(&em.finish()), want, "n={n}");
+        }
+    }
+
+    /// **跨收件人不得混堆**：oracle 每人一条 `MsgQueue`。`[A0,B1,A2,B3]` 交替入队 ⇒ 混堆会让 B
+    /// 出 `[B3,B1]`，分组（本实现）出 `[B1,B3]`。
+    #[test]
+    fn emitter_finish_keeps_recipients_in_separate_heaps() {
+        let mut em = Emitter::new();
+        for (target, text) in [(901, "a0"), (902, "b1"), (901, "a2"), (902, "b3")] {
+            em.later(PRIO_RM_SYSMESSAGE, sys_msg(target, text));
+        }
+        let evs = em.finish();
+        let a: Vec<String> = evs
+            .iter()
+            .filter(|e| deal_event_target(e) == 901)
+            .flat_map(|e| sys_texts(std::slice::from_ref(e)))
+            .collect();
+        let b: Vec<String> = evs
+            .iter()
+            .filter(|e| deal_event_target(e) == 902)
+            .flat_map(|e| sys_texts(std::slice::from_ref(e)))
+            .collect();
+        assert_eq!(a, vec!["a0", "a2"]);
+        assert_eq!(b, vec!["b1", "b3"], "混堆会得 [b3,b1]");
+    }
+
     struct P {
         id: i32,
         name: String,
@@ -1433,10 +1536,10 @@ mod tests {
                 (1, messages::SM_DEALCANCEL),
                 (2, messages::SM_DEALCANCEL),
                 (1, u16::MAX),
-                (2, u16::MAX),
                 (1, u16::MAX),
+                (2, u16::MAX),
             ],
-            "立即两条 DEALCANCEL；随后排队红提示 + 两条绿色取消提示"
+            "立即两条 DEALCANCEL；随后排队帧**按收件人分组**（oracle 每人一条 MsgQueue）：             L 的红提示 + 绿取消先出完，再出 T 的绿取消"
         );
         assert!(!a.state.dealing && !b.state.dealing);
     }

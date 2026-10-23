@@ -30,6 +30,7 @@ pub mod map;
 pub mod merchant;
 pub mod monai;
 pub mod mongen;
+pub mod msgqueue;
 pub mod npc;
 pub mod party;
 pub mod run_gap;
