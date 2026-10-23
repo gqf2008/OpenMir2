@@ -13,7 +13,7 @@
 | `self_x` / `self_y` | 推导 | `SM_LOGON(50)` 的 `param` / `tag` | `PlayObject.cs:1128-1131 SendLogon()` `MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, …)` |
 | `merchant_actor` | 推导 | `SM_MERCHANTSAY(643)` 的 `recog` | 643 是 NPC **应答点击**才发的面板（`NormNpc.Click → GotoLable(@main) → RM_MERCHANTSAY`），`PlayObject.Message.cs:1721-1724` |
 | `npc_actor` | 优先推导，退化为**规则** | 有 643 就取 643 的 `recog`（实证）；否则取 `SM_TURN(10)` 首个 `recog != self` | 退化规则是**部署假设**（非帧语义）：点错 actor 时后续步骤**响亮超时**，不会静默通过 |
-| `king_actor` | 推导（同商人） | `SM_MERCHANTSAY(643)` 的 `recog` | 与 `merchant_actor` 同一实证（643 是**对该次点击的应答**）；643 不区分国王/商人 ⇒ 发现 run 必须点国王 |
+| `king_actor` | **规则**（部署假设） | `SM_MERCHANTSAY(643)` 的 `recog` | 643 只证明「该 actor 应答了点击」，**不证明是国王**（仓库里全部 643 录制都是赌场庄家）⇒ 记 `kind=rule`，不计入发现能力；点错则末步响亮超时 |
 | `make_index` / `item_name` | 不可推导（现版） | 需 `SM_BAGITEMS(201)` 的包体 | 现网 22+ 个 run **无 201** ⇒ `bag_equip`/`eat_item` 恒红，201 规则另卡 |
 | `move_x` / `move_y` | **计算**（`kind=computed`） | 场景 `computed` 声明：`{derived_from: self_x, delta: N}` + 已推导量 | 目标格是**操作者的选择**而非帧事实 ⇒ 由「已推导量 + 场景显式 delta」确定性算出，**不是猜**；oracle `PlayObject.Attack.cs:1365 ClientWalkXY`（目标格为绝对坐标） |
 | `target_*` / `takeon_where` / `hit_dir` | 不可推导 | 无来源帧 | fail-closed（可由操作者 `--var` 显式给）；`combat_hit` 的目标是**实体**，需一帧报出附近怪物位置（见 `docs/window-runbook-20261023.md` §4.5） |
@@ -36,6 +36,9 @@
 - 没有 `computed` 声明（例如单变量推导入口 `param_discovery.py <frames> <vars>`）⇒ 这类变量照旧 missing，**绝不猜 delta**。
 - `mir2_probe` 不读 `computed`：它只是场景的**声明性注记**，不是步骤 DSL（无新 step 类型、不改 send/wait 语义），
   但顶层可选键里必须放行，否则带声明的场景会被 `unknown key(s)` 拒绝。
+- **已知局限（无机器守卫）**：`derived_from` 的**语义正确性**机判不了——例如把 `move_x.derived_from`
+  从 `self_x` 改成 `self_y`，`selftest` 仍绿、`check-all` 仍 rc=0（reviewer 自造牙证实）。接线卡必须在真机判据里
+  补一条断言（如「目标格 = 起始格 + 声明的 delta」，且两侧一致）。
 
 用法：
 
@@ -98,12 +101,14 @@ RULES = {
         "oracle": "同 merchant_actor；没有 643 时退化为 RULES_FALLBACK",
     },
     "king_actor": {
-        "kind": "derived", "ident": SM_MERCHANTSAY, "field": "recog",
-        "rule": "SM_MERCHANTSAY(643).recog（= 本次发现 run 点击的脚本 NPC）",
-        "oracle": "与 merchant_actor 同一实证：正常 NPC 的 Click → GotoLable(@main) → RM_MERCHANTSAY"
-                  "（src/M2Server/Npc/NormNpc.cs:68-73,1615；"
-                  "src/M2Server/Player/PlayObject.Message.cs:1721-1724）。"
-                  "**代价**：643 不区分国王/商人 ⇒ 发现 run 必须点国王（部署假设，点错则后续步骤响亮超时）",
+        "kind": "rule", "ident": SM_MERCHANTSAY, "field": "recog",
+        "rule": "SM_MERCHANTSAY(643).recog（**部署假设**：发现 run 点中的是国王）",
+        "oracle": "643 只证明「这个 actor 应答了本次点击」（src/M2Server/Npc/NormNpc.cs:68-73,1615；"
+                  "src/M2Server/Player/PlayObject.Message.cs:1721-1724），**不证明它是国王**："
+                  "仓库里所有 643 录制都是赌场庄家（〖庄〗…@kaiz），无一含 @@buildguildnow/国王名。"
+                  "点错国王的后果是**响亮失败**（ClientMerchantDlgSelect → UserSelect → GotoLable 查不到 label"
+                  " ⇒ 零帧 ⇒ 末步超时），不会静默通过。⇒ 与 npc_actor 的退化规则同栏（kind=rule），"
+                  "不计入「发现能力已验证」",
     },
 }
 
@@ -142,8 +147,9 @@ REASONS = {
 UNDERIVABLE = {
     "make_index": "需 SM_BAGITEMS(201)；现网无 201 录制（本版未实现 201 规则，另卡）",
     "item_name": "同上（SM_BAGITEMS(201)）",
-    "target_x": "目标是**实体**：帧里无目标格坐标；需一帧报出附近怪物位置（AOI 出现帧）",
-    "target_y": "同上（需一帧报出附近怪物位置）",
+    "target_x": "目标实体**未知**：位置本身有来源（`SM_TURN(10).param/tag` 报的是转身者自己的坐标），"
+                "缺的是「哪一个实体是目标 + 它的对象类型（怪物/NPC）」——这两项当前没有任何帧给出",
+    "target_y": "同上（缺「目标实体是谁 + 对象类型」，不是缺坐标来源）",
     "takeon_where": "无来源帧（需操作者显式 --var）",
     "hit_dir": "无来源帧（需操作者显式 --var）；即使有目标坐标，SM_TURN(10).param/tag 也只报"
                "**转身者**自己的位置，且不区分怪物/NPC",
@@ -777,6 +783,23 @@ def selftest():
             else:
                 raise AssertionError("坏 computed 声明必须抛 DiscoveryError：%r" % (decl,))
 
+    def c18():
+        # king_actor 归 rule（部署假设），不是 derived：643 不证明「这个 actor 是国王」
+        # （仓库全部 643 录制都是赌场庄家）。有 643 ⇒ 给值但 kind=rule、场景 cls=rule；
+        # 无 643 ⇒ missing（fail-closed）。
+        v, m = derive(_fixture(merchant_say=True), ["king_actor"])
+        assert not m and v["king_actor"]["kind"] == "rule", (v, m)
+        assert v["king_actor"]["value"] == 119, v
+        v, m = derive(_fixture(), ["king_actor"])
+        assert m == ["king_actor"] and not v, (v, m)
+        rows = _tmp_check_all({
+            "king.json": {"name": "king", "required": ["king_actor"],
+                          "steps": [{"wait_for": 643, "timeout_ms": 10}]},
+        }, frames=_fixture(merchant_say=True))
+        assert rows["king.json"][1] == 0, rows["king.json"]
+        assert rows["king.json"][3] == CLS_RULE, rows["king.json"]
+        assert rows["king.json"][3] != CLS_DERIVED, "king_actor 不得计入 derived"
+
     def tooth1():
         # 牙①：把 self_x 错取成 tag ⇒ 值变成 12，与真值 7 不同（用例会红）
         good, _ = derive(_fixture(), ["self_x"])
@@ -948,6 +971,7 @@ def selftest():
     case("⑮ 基准量推不出 ⇒ computed 连锁 fail-closed（missing，不拿 0 顶替）", c15)
     case("⑯ kind 分类：computed 行 cls=computed，不混算成 derived", c16)
     case("⑰ computed 边界声明（不在 required/未知键/bool delta/链式）⇒ 场景坏掉", c17)
+    case("⑱ king_actor 归 rule（643 不证明是国王），cls=rule 不计 derived", c18)
     case("牙① self_x 错取 tag ⇒ 值与真值不同", tooth1)
     case("牙② check-all 静默吞 missing（if missing:→if False:）⇒ 行为断言红", tooth2)
     case("牙③ 第三方 actor 无 643 ⇒ merchant_actor fail-closed", tooth3)
@@ -961,7 +985,7 @@ def selftest():
         for item in fails:
             print("  -", item)
         return 1
-    print("param_discovery selftest: OK (17 cases + 8 teeth)")
+    print("param_discovery selftest: OK (18 cases + 8 teeth)")
     return 0
 
 

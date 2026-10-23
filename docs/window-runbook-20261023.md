@@ -52,10 +52,10 @@
 
 ## 4.5 参数发现覆盖 12/15 —— 决定窗口战役能先推多少
 
-> 2026-10-23 更新（卡 `openmir2-window-discovery-rules`）：规则表 4 条 → **6 条规则 + 1 类 computed**。
+> 2026-10-23 更新（卡 `openmir2-window-discovery-rules`）：规则表 4 条 → **5 条规则**（+ `npc_actor` 一条退化规则），另加 **1 类 computed**。
 
-`param_discovery.py` 的规则表有 **6 条规则**：`self_x` / `self_y`（SM_LOGON 的 param/tag）、
-`merchant_actor` / `npc_actor` / `king_actor`（SM_MERCHANTSAY(643).recog），
+`param_discovery.py` 的规则表有 **5 条规则**：`self_x` / `self_y`（SM_LOGON 的 param/tag）、
+`merchant_actor` / `npc_actor` / `king_actor`（SM_MERCHANTSAY(643).recog；`npc_actor` 另有一条 `SM_TURN` 退化规则），
 外加第三类 **`computed`**（`move_x` / `move_y`：由 `self_x`/`self_y` + **场景 JSON 里显式声明的 `delta`** 算出）。
 三栏**分开计数**，`kind` 分别是 `derived` / `rule` / `computed`：
 
@@ -72,16 +72,17 @@
 | `merchant_dialog` | merchant_actor | ✅（derived，643） |
 | `npc_click` | npc_actor | ✅（derived，643） |
 | `pickup_item` | self_x, self_y | ✅（derived，SM_LOGON） |
-| `king_dialog` / `king_castle_war` | king_actor | ✅（derived，643；643 不区分国王/商人 ⇒ **发现 run 必须点国王**） |
+| `king_dialog` / `king_castle_war` | king_actor | ⚠️ **rule（部署假设，不计入发现能力）**：643 只证明「该 actor 应答了点击」，**不证明是国王**——仓库里全部 643 录制都是赌场庄家（`〖庄〗…@kaiz`），且默认 discovery 点的是「最近的非自己 `SM_TURN`」（录制里就是庄家），**没有可执行步骤能让 discovery 点中国王**。点错的后果是末步响亮超时（`@@buildguildnow` 只存在于`比奇国王-0122.txt`，查不到 label ⇒ 零帧） |
 | `move_walk` | move_x, move_y | ✅（**computed**：`self_x+1` / `self_y+0`，delta 写在场景 JSON 的 `computed` 里） |
 | `bag_equip` | make_index, takeon_where, item_name | ❌ 需 `SM_BAGITEMS(201)` 规则 + `takeon_where` 来源，本版未实现 |
 | `eat_item` | make_index, item_name | ❌ 同上 |
 | `combat_hit` | target_x, target_y, hit_dir | ❌ **需新帧/新场景**：目标是**实体**，当前录制里没有任何一帧报出「附近怪物在第几格」。已知的唯一近似来源 `SM_TURN(10).param/tag` 是**转身者自己**的坐标（`BaseObject.cs:1375 SendRefMsg(RM_TURN, Dir, CurrX, CurrY, …)`），且帧里不区分怪物/NPC ⇒ 不能拿它冒充。缺的是一帧「AOI 出现/实体位置」且带种族或对象类型的字段；`hit_dir` 还要能算 `GetNextDirection(self, target)`（`M2Share.cs:299`） |
 | `dice_chain` / `dice_chain_auto` / `gm_batch` / `gm_time` / `login_only` / `npc_click_auto` | 无 required | 直接可跑（6 个，已实测 `--check-scenario` 全 rc=0；`dice_chain` 绿来自 `params` 硬编码默认值，**不算发现**） |
 
-⇒ **规则表落地后，`check-all` 能覆盖 12 个场景**（5 derived + 1 computed + 6 无 required）；
+⇒ **规则表落地后，`check-all` 能覆盖 12 个场景**（3 derived + 2 rule + 1 computed + 6 无 required）；
 其中 `king_*`（2 个）与 `move_walk`（1 个）是本次新解锁的。`move_walk` 的真机 run 还要等 `card_window.py`
-透传 `computed`（见下方「接线现状」），`king_*` 可直接跑（但发现 run 必须点国王）。
+透传 `computed`（见下方「接线现状」）；`king_*` **能跑但不该算绿**——`king_actor` 是部署假设（rule），
+默认 discovery 推出来的是庄家，真跑会在末步超时（响亮失败），要让它真绿必须先有「点中国王」的 discovery 场景/步骤。
 另外 3 个（`bag_equip` / `eat_item` / `combat_hit`）要等新规则/新帧。
 所以「②45 次参数化 run」**第一批按这 12 个推**，
 其余按「缺哪个变量 → 补哪条规则/哪个帧」逐条开卡，不要笼统地指望发现工具。
@@ -102,8 +103,8 @@
 > 改动点：`scenario_required` 同源读 `computed` → `discovery_cfg`/`side_ctx` 携带 → `derive_from_frames(frames, required, computed)` → `run_side` 调用点透传。
 
 > 计数订正：本表初稿写「9 个场景（3 可发现 + 6 无 required）」，是规则表 4 条时的口径；
-> 规则扩到 6 条 + computed 后实测为 **12 个**（`SUMMARY ... ok=12 rc2=3 derived=5 rule=0 computed=1
-> no_required=5 params_default=1 missing=3 error=0`）。
+> 规则扩到 5 条 + computed 后实测为 **12 个**（`SUMMARY ... ok=12 rc2=3 derived=3 rule=2 computed=1
+> no_required=5 params_default=1 missing=3 error=0`）。复审 `1e9f6315` 指出 king 记 derived 与本文件的分栏定义冲突，已改判 **rule**（`derived` 5→3、`rule` 0→2），`king_*` 不再计入「发现能力已验证」。
 
 ## 5. 跑完
 
