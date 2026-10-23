@@ -38,6 +38,27 @@
 - `grep -n 'ident=' docs/ <卡相关文档>`：**帧号写错没有机器守卫**——今天出过 `ident=769`（实为 `SM_GUILDMAKEALLY_FAIL`）而真帧是 `767`（`SM_MENU_OK`）的事故。写窗口项时**帧号必须同时给 `SM_` 名字**。
 - 场景文件里 `--var` 的值必须来自**发现**，不是 `params` 里的默认值（`dice_chain` 的 `npc_actor=119` 就是硬编码默认值，不计入发现能力）。
 
+## 4.5 参数发现只覆盖 3/15 —— 决定窗口战役能先推多少
+
+`param_discovery.py` 的规则表只有 **4 条**：`self_x` / `self_y`（SM_LOGON 的 param/tag）、`merchant_actor` / `npc_actor`（SM_MERCHANTSAY(643).recog）。
+对照 15 个场景的 `required`：
+
+| 场景 | required | 发现能否覆盖 |
+|---|---|---|
+| `merchant_dialog` | merchant_actor | ✅ |
+| `npc_click` | npc_actor | ✅ |
+| `pickup_item` | self_x, self_y | ✅ |
+| `bag_equip` | make_index, takeon_where, item_name | ❌ 需 `SM_BAGITEMS(201)` 规则，本版未实现 |
+| `eat_item` | make_index, item_name | ❌ 同上 |
+| `combat_hit` | target_x, target_y, hit_dir | ❌ 需新帧/新场景 |
+| `move_walk` | move_x, move_y | ❌ 同上 |
+| `king_dialog` / `king_castle_war` | king_actor | ❌ 需国王标识帧 |
+| 其余 7 个 | 无 required | 直接可跑 |
+
+⇒ **接线落地后，能立即参数化跑的只有 3 个场景**；另外 6 个要等新规则/新帧/新场景。
+所以「②45 次参数化 run」不会一次性解锁——**先按 3 个可发现场景 + 7 个无 required 场景推第一批**，
+其余按「缺哪个变量 → 补哪条规则/哪个帧」逐条开卡，不要笼统地指望发现工具。
+
 ## 5. 跑完
 
 - 写 `--post-comment`（解禁后）+ 卡的 `status` 里写明：哪几个窗口项已验、证据路径、两侧二进制 sha256、以及**没验到的项和原因**。
