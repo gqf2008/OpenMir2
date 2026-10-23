@@ -410,6 +410,8 @@ fn queue_script_output(
             sg.game_gold,
             sg.game_point,
             sg.soft_version_date,
+            // `SM_WINEXP` 的 `Recog` = `Abil.Exp` 当下总量（T-207）。
+            sg.state.wabil.exp,
         ) else {
             continue;
         };

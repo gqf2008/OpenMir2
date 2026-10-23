@@ -2157,11 +2157,20 @@ fn run_party_goto_label(
                 // 运行时会话优先、无会话（已断线/未进世界）回退到 `PlayObject` 当下值；
                 // `soft_version_date` 只有会话有（缺省 0 ⇒ `RM_GAMEGOLDCHANGED` 门挡住，与 oracle
                 // `SoftVersionDateEx == 0` 同支）。
-                let (f_gold, f_game_gold, f_game_point, f_svd) = ground_sessions
-                    .get(chr_name)
-                    .map_or((player.gold, player.game_gold, player.game_point, 0), |s| {
-                        (s.state.gold, s.game_gold, s.game_point, s.soft_version_date)
-                    });
+                let (f_gold, f_game_gold, f_game_point, f_svd, f_exp) =
+                    ground_sessions.get(chr_name).map_or(
+                        (player.gold, player.game_gold, player.game_point, 0, 0),
+                        |s| {
+                            (
+                                s.state.gold,
+                                s.game_gold,
+                                s.game_point,
+                                s.soft_version_date,
+                                // `SM_WINEXP` 的 `Recog`（`Abil.Exp` 当下总量；T-207）。
+                                s.state.wabil.exp,
+                            )
+                        },
+                    );
                 if let Some(tx) = route_to_gate(gates, gate_idx, socket, "组队 GotoLable 脚本帧")
                 {
                     // QFunction 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
@@ -2174,6 +2183,7 @@ fn run_party_goto_label(
                         f_game_gold,
                         f_game_point,
                         f_svd,
+                        f_exp,
                         &player.frames,
                     );
                 }
@@ -6474,6 +6484,9 @@ fn emit_script_frames(
         sg.game_gold,
         sg.game_point,
         sg.soft_version_date,
+        // `SM_WINEXP` 的 `Recog` = `Abil.Exp` 当下总量（会话里 `state.wabil` 与 `equip.abil`
+        // 同源同步，见 `drain_*` 的经验帧支；T-207）。
+        sg.state.wabil.exp,
         frames,
     )
 }
@@ -6491,6 +6504,8 @@ fn emit_script_frames_raw(
     game_gold: i32,
     game_point: i32,
     soft_version_date: i32,
+    // `PlayObject.Abil.Exp` 的当下总量（`SM_WINEXP` 的 `Recog`；T-207）。
+    exp: i32,
     frames: &[game_svr::npc::SendMsg],
 ) -> usize {
     let mut sent = 0usize;
@@ -6511,6 +6526,7 @@ fn emit_script_frames_raw(
             game_gold,
             game_point,
             soft_version_date,
+            exp,
         ) else {
             continue;
         };
@@ -6550,6 +6566,12 @@ fn emit_login_script_frames(
         .map_or((player.gold, player.game_gold, player.game_point, 0), |s| {
             (s.state.gold, s.game_gold, s.game_point, s.soft_version_date)
         });
+    // `SM_WINEXP` 的 `Recog`（`PlayObject.Abil.Exp`）：本路径在**进世界建会话之前**跑
+    // （`ground_sessions` 常常还没有该角色）⇒ 无会话时只能给 0（oracle 此时读到的是角色记录里的
+    // `Abil.Exp`）；有会话则取会话当下总量。登记为 T-207 的已知偏差/窗口项。
+    let exp = ground_sessions
+        .get(chr_name)
+        .map_or(0, |s| s.state.wabil.exp);
     // QManage 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
     emit_script_frames_raw(
         tx,
@@ -6560,6 +6582,7 @@ fn emit_login_script_frames(
         game_gold,
         game_point,
         soft_version_date,
+        exp,
         &player.frames,
     )
 }
@@ -59315,6 +59338,89 @@ mod tests {",
             ],
             "767(优先级 69) 必须先于 100(优先级 252)；实得 {ids:?}"
         );
+    }
+
+    /// **T-207 端到端（商的 `GotoLable` 生产排水口径）**：`NpcPlayer.frames` 里的三条
+    /// 脚本动作帧经 [`emit_script_frames`] → `pickwire::script_frame` 落成
+    /// `SM_WINEXP(44)` / `SM_DURACHANGE(642)` / `SM_MERCHANTDLGCLOSE(644)`，出队序 =
+    /// `(byte)wIdent` 升序（`8075&0xFF=139 < 10125&0xFF=141 < 10127&0xFF=143`），且
+    /// `SM_WINEXP.Recog` = 会话 `state.wabil.exp`（**总量**，不是增量）。
+    ///
+    /// oracle：`PlayObject.Message.cs:1666-1669`（44）、`:1803-1805`（642）、`:1806-1808`（644）；
+    /// 脚本发点 `ExecutionProcessingSys.cs:2861` / `:3945` / `:2183`。
+    ///
+    /// 红检：删 `script_frame` 任一支 ⇒ `n != 3`（少一条）；把 `emit_script_frames` 传给
+    /// `script_frame` 的 `exp` 换成 0 或增量 ⇒ `Recog` 断言红。
+    #[test]
+    fn script_drain_emits_winexp_durachange_merchantdlgclose() {
+        let mut sg = test_session_ground(9001);
+        sg.state.wabil.exp = 88_888;
+        sg.state.gold = 555;
+        let frames = vec![
+            game_svr::npc::SendMsg {
+                ident: mir2_protocol::messages::RM_MERCHANTDLGCLOSE as i32,
+                w_param: 0,
+                n_param1: 4711,
+                n_param2: 0,
+                n_param3: 0,
+                msg: None,
+            },
+            game_svr::npc::SendMsg {
+                ident: mir2_protocol::messages::RM_DURACHANGE as i32,
+                w_param: 5,
+                n_param1: 3200,
+                n_param2: 4000,
+                n_param3: 0,
+                msg: None,
+            },
+            game_svr::npc::SendMsg {
+                ident: mir2_protocol::messages::RM_WINEXP as i32,
+                w_param: 0,
+                n_param1: 100_000,
+                n_param2: 0,
+                n_param3: 0,
+                msg: None,
+            },
+        ];
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let n = emit_script_frames(&tx, 901, 4242, &sg, &frames);
+        assert_eq!(
+            n, 3,
+            "三条脚本动作帧都必须下发（此前整帧丢弃 ⇒ 客户端零帧）"
+        );
+        let mut out: Vec<Vec<u8>> = Vec::new();
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                out.push(body);
+            }
+        }
+        assert_eq!(
+            gnp_idents(&out),
+            vec![
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_DURACHANGE,
+                mir2_protocol::messages::SM_MERCHANTDLGCLOSE,
+            ],
+            "出队序 = (byte)wIdent 升序：139 < 141 < 143"
+        );
+        // 44：Recog = 总量、Param/Tag = 增量 Lo/Hi（100000 = 0x0001_86A0）、无尾。
+        assert_eq!(
+            gnp_recog(&out[0]),
+            88_888,
+            "SM_WINEXP.Recog = Abil.Exp 总量"
+        );
+        assert_eq!(gnp_param(&out[0]), 0x86A0);
+        assert_eq!(gnp_tag(&out[0]), 0x0001);
+        assert_eq!(out[0].len(), 12, "SM_WINEXP 无尾");
+        // 642：Recog = Dura、Param = 槽位、Tag = DuraMax、无尾。
+        assert_eq!(gnp_recog(&out[1]), 3200);
+        assert_eq!(gnp_param(&out[1]), 5);
+        assert_eq!(gnp_tag(&out[1]), 4000);
+        assert_eq!(out[1].len(), 12, "SM_DURACHANGE 无尾");
+        // 644：Recog = 消息自带的 NPC ActorId（不是排水时的 npc/玩家 id）、无尾。
+        assert_eq!(gnp_recog(&out[2]), 4711);
+        assert_eq!(gnp_param(&out[2]), 0);
+        assert_eq!(out[2].len(), 12, "SM_MERCHANTDLGCLOSE header-only");
     }
 
     fn gnp_on(frames: &[(i32, Vec<u8>)], socket: i32) -> Vec<Vec<u8>> {

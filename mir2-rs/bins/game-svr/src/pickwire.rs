@@ -126,6 +126,12 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
 pub const RM_SCRIPT_GAMEGOLDCHANGED: i32 = mir2_protocol::messages::RM_GAMEGOLDCHANGED as i32;
 /// `Messages.RM_PLAYDICE`（`Messages.cs` 10500；泵 `PlayObject.Message.cs:2034-2041`）。
 pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
+/// `Messages.RM_WINEXP`（`Messages.cs` 8075；泵 `PlayObject.Message.cs:1666-1669`）。
+pub const RM_SCRIPT_WINEXP: i32 = mir2_protocol::messages::RM_WINEXP as i32;
+/// `Messages.RM_DURACHANGE`（`Messages.cs` 10125；泵 `PlayObject.Message.cs:1803-1805`）。
+pub const RM_SCRIPT_DURACHANGE: i32 = mir2_protocol::messages::RM_DURACHANGE as i32;
+/// `Messages.RM_MERCHANTDLGCLOSE`（`Messages.cs` 10127；泵 `PlayObject.Message.cs:1806-1808`）。
+pub const RM_SCRIPT_MERCHANTDLGCLOSE: i32 = mir2_protocol::messages::RM_MERCHANTDLGCLOSE as i32;
 
 /// **脚本帧**（[`SendMsg`]，`NpcPlayer.frames`）⇒ wire body。
 ///
@@ -148,10 +154,23 @@ pub const RM_SCRIPT_PLAYDICE: i32 = mir2_protocol::messages::RM_PLAYDICE as i32;
 ///   （`SendDefMessage(SM_MENU_OK, processMsg.nParam1, 0, 0, 0, Msg)`）；`Recog` = `nParam1`
 ///   （脚本 `MESSAGEBOX` 的 `playerActor.ActorId`，`ExecutionProcessingSys.cs:3418`），
 ///   尾 = `EDCode.EncodeString(cp936(Msg))`（T-194）。
+/// - `RM_WINEXP`（8075）⇒ `SM_WINEXP(44)`：`PlayObject.Message.cs:1666-1669` 的 `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(processMsg.nParam1), HiWord(processMsg.nParam1), 0)` + `SendSocket(ClientMsg)`（**无尾**）。`Recog` = 加完之后的 `Abil.Exp` **总量**（排水时的会话当下值，由 `exp` 形参给出，**不是**本次增量）、`Param/Tag` = 增量 `nParam1` 的 Lo/Hi、`Series` = 0。脚本发点 = `ExecutionProcessingSys.cs:2861`（`ActionOfChangeExp` 的 `'+'` 支：`SendMsg(playerActor, RM_WINEXP, 0, dwInt, 0, 0)` ⇒ `wParam` = 0、`nParam1` = `dwInt`）。
+/// - `RM_DURACHANGE`（10125）⇒ `SM_DURACHANGE(642)`：`PlayObject.Message.cs:1803-1805` 的 `SendDefMessage(SM_DURACHANGE, processMsg.nParam1, processMsg.wParam, LoWord(processMsg.nParam2), HiWord(processMsg.nParam2))` ⇒ `Recog` = `nParam1` = **`Dura`**、`Param` = `wParam` = 槽位、`Tag/Series` = `nParam2` = **`DuraMax`** 的 Lo/Hi（`ushort` ⇒ Hi = 0）。脚本发点 = `ExecutionProcessingSys.cs:3945`（`ActionOfRepairAllItem`：`SendMsg(normNpc, RM_DURACHANGE, (short)i, Dura, DuraMax, 0)`）。
+/// - `RM_MERCHANTDLGCLOSE`（10127）⇒ `SM_MERCHANTDLGCLOSE(644)`：`PlayObject.Message.cs:1806-1808` 的 `SendDefMessage(SM_MERCHANTDLGCLOSE, processMsg.nParam1, 0, 0, 0)`（**header-only**）。脚本发点 = `ExecutionProcessingSys.cs:2183`（`ActionOfClose`：`SendMsg(normNpc, RM_MERCHANTDLGCLOSE, 0, normNpc.ActorId, 0, 0)`）⇒ `Recog` = `nParam1` = **NPC** 的 `ActorId`（**不是**玩家、也不是排水时的 `npc_actor_id`：oracle 读的是消息自带的 `processMsg.nParam1`，此处取 `s.n_param1` 才与泵同源）。
+///
+/// **`RM_ADJUST_BONUS`（8078）本片仍不映射（登记，非新增缺口）**：泵
+/// `PlayObject.Message.cs:2002-2003` 调 `SendAdjustBonus()`
+/// （`PlayObject.Base.cs:1193-1210`：`MakeMessage(SM_ADJUST_BONUS, BonusPoint, 0, 0, 0)` +
+/// `EncodeMessage(Config.BonusAbilofXxx)/EncodeMessage(BonusAbil)/EncodeMessage(Config.NakedAbilofXxx)`
+/// 尾），而帧体**不带** `BonusPoint`/职业/三段能力模板（`SendMsg(RM_ADJUST_BONUS, 0,0,0,0)`
+/// 四参全 0）⇒ 要发对必须由宿主注入 4 项额外状态。部署 `Envir` 的脚本动作里**零处**触发它
+/// （`BONUSPOINT`/`RESTBONUSPOINT`/`RENEWLEVEL` 各 0 处，见 T-207 的 grep 计数）⇒
+/// 按「不可达只登记、不硬造分支」处理，等真有内容触发（或需要 811 的脚本路径）时单独一片接。
 ///
 /// 其余 ident 仍按既有口径丢弃（T-142 残余）。
 /// `None` = 不发帧（未知 ident，或 `SoftVersionDateEx == 0` 门挡住）。
 #[must_use]
+#[allow(clippy::too_many_arguments)]
 pub fn script_frame(
     s: &SendMsg,
     npc_actor_id: i32,
@@ -162,6 +181,8 @@ pub fn script_frame(
     game_gold: i32,
     game_point: i32,
     soft_version_date: i32,
+    // `PlayObject.Abil.Exp`（`SM_WINEXP` 的 `Recog`）——排水时的**当下总量**（不是增量）。
+    exp: i32,
 ) -> Option<Vec<u8>> {
     match s.ident {
         // `BaseObject.GoldChanged`（`BaseObject.cs:585-591`）⇒
@@ -220,6 +241,33 @@ pub fn script_frame(
             let bytes = mir2_script::cp936::encode_gb2312_dotnet(msg);
             Some(smframe::sm_menu_ok(s.n_param1, &bytes))
         }
+        // `RM_WINEXP`（8075）⇒ `SM_WINEXP(44)`（`PlayObject.Message.cs:1666-1669`）：
+        //   `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(processMsg.nParam1), HiWord(...), 0)`
+        //   + `SendSocket(ClientMsg)` ⇒ **无尾**。
+        // 脚本发点 `ExecutionProcessingSys.cs:2861`（`ActionOfChangeExp` 的 `'+'` 支）：
+        //   `SendMsg(playerActor, RM_WINEXP, 0, dwInt, 0, 0)`（`nParam1` = 本次增量）。
+        // `Recog` = **加完之后的总量** `Abil.Exp` ⇒ 用排水时的会话当下值 `exp`，不是增量。
+        RM_SCRIPT_WINEXP => Some(smframe::sm_winexp(exp, s.n_param1)),
+        // `RM_DURACHANGE`（10125）⇒ `SM_DURACHANGE(642)`（`PlayObject.Message.cs:1803-1805`）：
+        //   `SendDefMessage(SM_DURACHANGE, nParam1 /*Dura*/, wParam /*槽位*/,
+        //   LoWord(nParam2) /*DuraMax*/, HiWord(nParam2))`，无尾。
+        // 脚本发点 `ExecutionProcessingSys.cs:3945`（`ActionOfRepairAllItem`）：
+        //   `SendMsg(normNpc, RM_DURACHANGE, (short)i, Dura, DuraMax, 0)`。
+        // `Dura`/`DuraMax` 在 oracle 是 `ushort`，`MakeMessage` 再把 Param/Tag/Series 截成 16 位
+        // ⇒ 按低 16 位取值（槽位 `i` = `ItemLocation`，实语料 0..12）。
+        RM_SCRIPT_DURACHANGE => Some(smframe::sm_durachange(
+            u16::try_from(s.n_param1 & 0xFFFF).unwrap_or(0),
+            u8::try_from(s.w_param & 0xFF).unwrap_or(0),
+            u16::try_from(s.n_param2 & 0xFFFF).unwrap_or(0),
+        )),
+        // `RM_MERCHANTDLGCLOSE`（10127）⇒ `SM_MERCHANTDLGCLOSE(644)`
+        // （`PlayObject.Message.cs:1806-1808`）：`SendDefMessage(SM_MERCHANTDLGCLOSE,
+        // processMsg.nParam1, 0, 0, 0)` ⇒ **header-only**，无尾。
+        // 脚本发点 `ExecutionProcessingSys.cs:2183`（`ActionOfClose`）：
+        //   `SendMsg(normNpc, RM_MERCHANTDLGCLOSE, 0, normNpc.ActorId, 0, 0)`
+        // ⇒ `Recog` = `nParam1` = **NPC** 的 `ActorId`（oracle 读消息自带值，不是排水时的
+        // `npc_actor_id`，也不是玩家 `ActorId`）。
+        RM_SCRIPT_MERCHANTDLGCLOSE => Some(smframe::sm_merchantdlgclose(s.n_param1)),
         _ => None,
     }
 }
@@ -691,7 +739,7 @@ mod tests {
             n_param3: 0x090a_0b0c,
             msg: Some("@cube82\u{E7C8}".to_string()),
         };
-        let got = script_frame(&s, 4242, 9001, 0, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
+        let got = script_frame(&s, 4242, 9001, 0, 0, 0, 0, 0).expect("RM_PLAYDICE 必须映射");
         let want = crate::smframe_ext::sm_playdice(
             4242,
             1,
@@ -708,5 +756,121 @@ mod tests {
     fn pickup_position_gate() {
         assert!(pickup_position_ok(10, 20, 10, 20));
         assert!(!pickup_position_ok(10, 20, 11, 20));
+    }
+
+    /// **`RM_WINEXP`(8075) → `SM_WINEXP`(44)**：`PlayObject.Message.cs:1666-1669`
+    /// `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(nParam1), HiWord(nParam1), 0)` + `SendSocket`
+    /// （**无尾**）。脚本发点 = `ExecutionProcessingSys.cs:2861`（`ActionOfChangeExp` 的 `'+'` 支：
+    /// `SendMsg(playerActor, RM_WINEXP, 0, dwInt, 0, 0)`）。
+    ///
+    /// 断言钉死四件事：`Recog` = **总量**（不是增量）、`Param/Tag` = 增量的 Lo/Hi、`Series` = 0、
+    /// 尾为空（12B）。
+    ///
+    /// 牙①：删 `RM_SCRIPT_WINEXP` 分支 ⇒ 返回 `None`，本用例红。
+    /// 牙②：把 `sm_winexp(exp, s.n_param1)` 写成 `(s.n_param1, exp)`（`Recog`/`Param` 对调）
+    /// ⇒ `Recog=1234567/Param=0x86A0` 的帧断言红。
+    #[test]
+    fn script_frame_maps_winexp_to_sm_winexp() {
+        let s = SendMsg {
+            ident: RM_SCRIPT_WINEXP,
+            w_param: 0,
+            n_param1: 100_000, // `dwInt`（本次增量）
+            n_param2: 0,
+            n_param3: 0,
+            msg: None,
+        };
+        let got = script_frame(&s, 4242, 9001, 0, 0, 0, 0, 1_234_567).expect("RM_WINEXP 必须映射");
+        // 100000 = 0x0001_86A0 ⇒ Param = LoWord = 0x86A0、Tag = HiWord = 0x0001。
+        assert_eq!(got, header(1_234_567, 44, 0x86A0, 0x0001, 0));
+        assert_eq!(got.len(), 12, "`SendSocket(ClientMsg)` ⇒ 无尾");
+        assert_eq!(got, crate::smframe::sm_winexp(1_234_567, 100_000));
+        // 反例锚：`Recog` 若是增量 / `Param` 若是总量 ⇒ 上面断言红。
+        assert_ne!(got, header(100_000, 44, 0x86A0, 0x0001, 0));
+    }
+
+    /// **`RM_DURACHANGE`(10125) → `SM_DURACHANGE`(642)**：`PlayObject.Message.cs:1803-1805`
+    /// `SendDefMessage(SM_DURACHANGE, nParam1 /*Dura*/, wParam /*槽位*/,
+    /// LoWord(nParam2) /*DuraMax*/, HiWord(nParam2))`。脚本发点 =
+    /// `ExecutionProcessingSys.cs:3945`（`ActionOfRepairAllItem`：
+    /// `SendMsg(normNpc, RM_DURACHANGE, (short)i, Dura, DuraMax, 0)`）。
+    ///
+    /// 牙①：删 `RM_SCRIPT_DURACHANGE` 分支 ⇒ 用例红。
+    /// 牙②：`Recog`/`Param` 对调（`sm_durachange(slot, dura, dura_max)`）⇒ 帧断言红。
+    #[test]
+    fn script_frame_maps_durachange_to_sm_durachange() {
+        let s = SendMsg {
+            ident: RM_SCRIPT_DURACHANGE,
+            w_param: 5,     // 槽位（`ItemLocation`）
+            n_param1: 3200, // Dura
+            n_param2: 4000, // DuraMax
+            n_param3: 0,
+            msg: None,
+        };
+        let got = script_frame(&s, 4242, 9001, 0, 0, 0, 0, 0).expect("RM_DURACHANGE 必须映射");
+        assert_eq!(got, header(3200, 642, 5, 4000, 0));
+        assert_eq!(got.len(), 12, "`SendDefMessage` 无尾");
+        assert_eq!(got, crate::smframe::sm_durachange(3200, 5, 4000));
+        assert_ne!(
+            got,
+            header(5, 642, 3200, 4000, 0),
+            "Recog 是 Dura，不是槽位"
+        );
+    }
+
+    /// **`RM_MERCHANTDLGCLOSE`(10127) → `SM_MERCHANTDLGCLOSE`(644)**：
+    /// `PlayObject.Message.cs:1806-1808` 的 `SendDefMessage(SM_MERCHANTDLGCLOSE,
+    /// processMsg.nParam1, 0, 0, 0)`（**header-only**）。脚本发点 =
+    /// `ExecutionProcessingSys.cs:2183`（`ActionOfClose`：
+    /// `SendMsg(normNpc, RM_MERCHANTDLGCLOSE, 0, normNpc.ActorId, 0, 0)`）⇒ `Recog` =
+    /// **NPC** 的 `ActorId`。
+    ///
+    /// 牙①：删 `RM_SCRIPT_MERCHANTDLGCLOSE` 分支 ⇒ 用例红。
+    /// 牙②：`Recog` 改用排水时的 `npc_actor_id`/`player_actor_id`（oracle 读消息自带
+    /// `nParam1`）⇒ `assert_ne!` 与帧断言红。
+    #[test]
+    fn script_frame_maps_merchantdlgclose_to_sm_merchantdlgclose() {
+        let s = SendMsg {
+            ident: RM_SCRIPT_MERCHANTDLGCLOSE,
+            w_param: 0,
+            n_param1: 4711, // `normNpc.ActorId`
+            n_param2: 0,
+            n_param3: 0,
+            msg: None,
+        };
+        let got =
+            script_frame(&s, 4242, 9001, 0, 0, 0, 0, 0).expect("RM_MERCHANTDLGCLOSE 必须映射");
+        assert_eq!(
+            got,
+            header(4711, 644, 0, 0, 0),
+            "Recog = nParam1 = NPC ActorId"
+        );
+        assert_eq!(got.len(), 12, "`SendDefMessage` 无尾 ⇒ header-only");
+        assert_eq!(got, crate::smframe::sm_merchantdlgclose(4711));
+        // 排水层的两个 ActorId 都**不是** Recog（只有消息自带的 `nParam1` 才是）。
+        assert_ne!(got, header(4242, 644, 0, 0, 0));
+        assert_ne!(got, header(9001, 644, 0, 0, 0));
+    }
+
+    /// **`RM_ADJUST_BONUS`(8078) 仍按 T-207 登记丢弃**（不硬造分支）：
+    /// 泵 `PlayObject.Message.cs:2002-2003` → `SendAdjustBonus()`（`PlayObject.Base.cs:1193-1210`）
+    /// 要 `BonusPoint` + 职业 + 三段能力模板，而脚本入队帧 `SendMsg(RM_ADJUST_BONUS,0,0,0,0)`
+    /// 四参全 0 ⇒ 帧体**不带**这些输入；部署 `Envir` 的脚本动作 `BONUSPOINT`/`RESTBONUSPOINT`/
+    /// `RENEWLEVEL` 各 **0 处** ⇒ 脚本侧不可达。
+    ///
+    /// 红检：谁给它加支（header-only 811 之类）却没带全 4 项输入 ⇒ 本用例红，逼其登记。
+    #[test]
+    fn script_frame_adjust_bonus_stays_registered_drop() {
+        let s = SendMsg {
+            ident: mir2_protocol::messages::RM_ADJUST_BONUS as i32,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            msg: None,
+        };
+        assert!(
+            script_frame(&s, 4242, 9001, 0, 0, 0, 0, 1234).is_none(),
+            "RM_ADJUST_BONUS 无脚本可达路径（T-207）⇒ 不得凭空发 811"
+        );
     }
 }
