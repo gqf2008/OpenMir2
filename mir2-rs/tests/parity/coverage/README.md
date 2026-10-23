@@ -166,6 +166,10 @@ python -I -B mir2-rs/tests/parity/coverage/gm_registry.py summary   # 一条命�
 python -I -B mir2-rs/tests/parity/coverage/gm_registry.py selftest  # 14 颗牙（逐颗校验登记表 sha256 未变）
 ```
 
+数据源路径可用 `--conf`（部署 `Command.conf`）、`--envir`（部署 `Envir` 根）、`--deploy`（部署根，判构型）覆盖；
+缺任一必需源 ⇒ `build` rc=2 / `gate` rc=2（fail-closed，绝不产出「看起来绿」的登记表）。
+`build` 还会自校验推导表与 `gmcmd.rs` 的 `COMMANDS` 完全一致，不一致同样 rc=2。
+
 **四种判定**（写死在工具里，不靠人工结论）：
 
 | verdict | 判据 | 处置 |

@@ -1149,6 +1149,10 @@ def cmd_build(args):
         fh.write(render(doc))
     print("WROTE %s (%d bytes)" % (REGISTRY, len(render(doc))))
     print_summary(doc["summary"])
+    if not doc["crosscheck"]["ok"]:
+        sys.stderr.write("无法判定：取数口径自校验失败（推导表与 gmcmd.rs 不一致）%r" + chr(10)
+                         % doc["crosscheck"])
+        return 2
     return 0 if doc["summary"]["undetermined"] == 0 else 2
 
 
