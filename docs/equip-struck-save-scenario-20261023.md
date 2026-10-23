@@ -20,8 +20,8 @@
 3. **场景 5 步**：`CM_TURN(3010)` 定朝向 Up → `sleep 400` → `CM_HIT(3014)` → `wait_for [642, 203]` →
    `wait_idents [642]`（成功硬门）。目标是 map 0103 唯一的 actor：商店 NPC「卫家店」(19,18)。
 4. **`SM_DURACHANGE(642)` 才是磨损帧**；`SM_UPDATEITEM(203)` 在普通磨损里**根本不发**（只在
-   `CheckWeaponUpgrade` 成功支等属性更新路径出现）。硬门只认 642。
-5. **Rust 侧未接**（T-199 相邻登记 + 受击方 `wear_durability` 无事件通道）⇒ 现在跑会在「Rust 缺 642」上红（§8.1）。
+   `CheckWeaponUpgrade` 成功支等属性更新路径出现）。硬门只认 642；**注意破零支会发两条 642**（`DoDamageWeapon` 破零支一条 + 尾桶门 `Math.Abs(nDura/1.03) != nDuraPoint` 再一条，载荷同为 `Dura=0`）——`wait_idents [642]` 不受影响，但真机判定**不要按「恰一条」写**。
+5. **Rust 侧已接 642**（卡 `openmir2-attack-weapon-wear-642` 合入 master `8dcb8c8ca`）：`AttackSuccess` 有目标即 `Random(5)+2-WeaponStrong` → `DoDamageWeapon` → `SM_DURACHANGE(642)`（`Recog=Dura`/`Param=槽`/`Tag,Series=DuraMax`），破零支 `SM_DELITEM(202)` → `642(0)` →（尾桶门）**再一条 642(0)**。今日 `card_window --dry-run --scenario equip_struck_save.json` **rc=0**；真机窗口**未跑**（取证须真机）。
 6. **存档往返不属本卡**（要连库）：窗口侧判据见 §5。
 
 ---
@@ -128,7 +128,7 @@
   `if (Math.Abs(nDura / 1.03) != nDuraPoint)` —— **左边是未取整的 `double`，右边是扣前 `Round(Dura/1.03)` 的 `int`**。
   两者只在「扣后 `Dura/1.03` 恰为整数」时相等（测度零）⇒ **实际上几乎每次都发**。
   （首版把它写成「两边都 `Round` 再比」，与代码不符，已订正——reviewer-6 minor ②。）
-- 破零支（`:1444-1457`）：先把 `Dura=0`、`SendDelItems`（**202**，`PlayObject.Base.cs:1648-1665`）→ `Index=0` → 再发 `Recog=0` 的 **642**。
+- 破零支（`:1444-1457`）：先把 `Dura=0`、`SendDelItems`（**202**，`PlayObject.Base.cs:1648-1665`）→ `Index=0` → 再发 `Recog=0` 的 **642**；**随后尾桶门通常再补一条同载荷 642**（见 §1.4）⇒ 破零一击常见 `202 → 642(0) → 642(0)`。
 
 ### 4.2 `SM_UPDATEITEM(203)` —— 普通磨损**不发**
 - `SendUpdateItem`（`PlayObject.Base.cs:1668-1686`）是「物品属性更新」，尾 = `EncodeBuffer(ClientItem)`。
@@ -160,7 +160,7 @@
    - `0 < Dura_new < DuraMax` 且 `Dura_new < Dura_old`（严格减少，≥2）。
 4. **破零收尾**（窗口若要单测破零，需把武器 `Dura` 夹具压到 **≤2**——`nWeaponDamage` 最小 2，
    `Dura ≤ 6` 只保证「可能破」不保证一击破）：
-   - 客户端：**202 → 642(Recog=0)**（同一 `CM_HIT` 内，202 先）；
+   - 客户端：**202 → 642(Recog=0) →（尾桶门）642(Recog=0)**（同一 `CM_HIT` 内，202 先；破零常见两条 642，判定别按「恰一条」）；
    - 库：`characters_item` 该 `Position` 行被 `ClearUseItemSql` 清空
      （`MakeIndex=0/StdIndex=0/Dura=0/DuraMax=0`）**且** `characters_item_attr` 该 `MakeIndex` 行被
      `ClearItemAttr` 清零（`VALUE0..13` 全 0）；
@@ -206,15 +206,15 @@
 
 ## 8. 残留项（只登记，不改）
 
-### 8.1 Rust 侧缺这条帧（会让窗口红）
+### 8.1 Rust 侧缺这条帧（**2026-10-24 订正：已接**，见本节末）
 - `mir2-rs/tests/parity/whitelist.md` **T-199** 的「范围外但相邻（既有登记）」原文：
   「`AttackSuccess` 的 `DoDamageWeapon`（`PlayObject.Attack.cs:225-229`）武器耐久磨损与 `RM_DURACHANGE(10125)` 未接（T-142 末段）」
-  ——即**攻击方武器磨损整条未实现**。
+  ——即**攻击方武器磨损整条未实现**。〔**2026-10-24 订正**：该条已过期——卡 `openmir2-attack-weapon-wear-642` 合入 master `8dcb8c8ca`，攻击成功磨损与 `SM_DURACHANGE(642)` 已接（`drain_attack_weapon_wear`；破零支 `202 → 642(0) → 642(0)`）；今日 `--dry-run` rc=0；真机窗口仍未跑。〕
 - 受击方：`crates/world/src/combat.rs:824-841` 的 `struck_damage_durability` / `:767-775` 的 `wear_durability`
   **只改 `use_items[*].dura`**，没有事件通道；宿主 `sync_use_items_from_entity_if_loaded`
   （`bins/game-svr/src/lib.rs`）只复制值、**不发帧**。
-- 宿主里所有 642 的生产点都在**护身符/施法**路径。
-- ⇒ 本场景作为窗口输入时，**Rust 侧必然缺 642**；修复前不得作为 PASS 依据。
+- 宿主里所有 642 的生产点**今非昔比**：`openmir2-attack-weapon-wear-642`（合入 `8dcb8c8ca`）已在攻击成功路径接上 `DoDamageWeapon` → `SM_DURACHANGE(642)`，并由 `drain_attack_weapon_wear` 出帧（202 直发、642 入队、只投自己）。
+- ⇒ 本场景作为窗口输入时，**Rust 侧不再缺 642**；今日 `--dry-run` rc=0。**真机窗口未跑**（取证须真机），破零支的两条 642 见 §1 第 4 条。
 
 ### 8.2 工具缺口（返工后只剩 T1）
 - master `1893470a0` 已补 R1–R6：T2（ident 必须存在于协议常量表，R3）与 T5（placement↔self_pos 自洽，R5）
