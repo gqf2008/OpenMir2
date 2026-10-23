@@ -38,29 +38,39 @@
 
 ## 2. 取样：从 20 张里取 10 张（规则 + 理由）
 
-**规则（读卡面/夹具之前写定，可复算）**：按 `docs/window-batch-plan-20261023.md` 的「场景」列排序：
+**规则（读卡面/夹具之前写定，可复算）**：以 `docs/window-batch-plan-20261023.md` 的「场景」列为线索，按**离线载体**分档：
 
-1. **A 组：已有现成场景文件**（`tools/probe/scenarios/*.json` 或 `mir2-rs/tests/parity/m3/**/run_*_pair.ps1`），
-   且 `--check-scenario` 或 `-SelfCheckNoStack` 今日可离线跑通 ⇒ 取全部 **8** 张；
-2. **B 组：场景尚未建、但同卡已有精确期望字段**（whitelist T 行/构造级用例）⇒ 取 **2** 张；
-3. 其余 10 张按「前置被阻塞 / 多会话 / 长跑 / 工具缺口 / ③ 无载体」留到下一批。
+1. **A 组 = 有离线载体、今日实跑 rc=0**。载体三类，逐张在表里标注：
+   (i) 现成场景文件（`tools/probe/scenarios/*.json`，`--check-scenario` rc=0）；
+   (ii) master 上既有的 `mir2-rs/tests/parity/m3/**/run_*_pair.ps1`（`-SelfCheckNoStack` rc=0）；
+   (iii) 同卡构造级 cargo 用例（whitelist T 行写死期望，rc=0）。
+   **场景文件存在但 dry-run 判 `BLOCKED` 的只算 (iii)**，并显式标 BLOCKED。
+2. **B 组 = 无任何离线载体**（前置被阻塞 / 多会话 / 长跑 / 工具缺口 / ③ 无载体）⇒ 留到下一批。
+3. **名额**：卡面验收是「从 20 张里取 10 张」，本轮上限 10。实测 **A 组共 11 张**（下表 10 张 + `openmir2-login-529-status-text`），
+   故不是「取全部 A 组」；`login-529` 判据本身已可机判（`login_only` check rc=0），不属本卡要补的「判据不可执行」对象，
+   顺延下一批（理由见未取表）。
 
-**取样的 10 张（= A 组 8 + B 组 2）**：
+**取样的 10 张（全部为 A 组；括号内为载体类型）**：
 
-| 卡 | 组 | 现成载体 | 今日实跑结果 |
+| 卡 | 组/载体 | 现成载体 | 今日实跑结果 |
 |---|---|---|---|
-| `openmir2-m3-rng-scene-driver` | A | `m3/rng-scene/run_rng_scene_pair.ps1` + `rng_scene_scenario.json` | `-SelfCheckNoStack` **rc=0（23/23）** |
-| `openmir2-m3-drop-exp-wiring` | A | `m3/drop-exp/run_drop_exp_pair.ps1` + `drop_exp_scenario.json` | `-SelfCheckNoStack` **rc=0（21/21）** |
-| `openmir2-weapon-upgrade-values` | A | `tools/probe/scenarios/upgrade_retrieve.json` | check rc=0 + card_window dry-run **rc=0** |
-| `openmir2-encoding-core-e1-e2` | A | `crates/encoding/tests/cp936_vectors.rs` 等（离线） | `cargo test` **8/8 + 7/7 + 4/4 rc=0** |
-| `openmir2-world-tick-expansion` | A | `login_only.json` + `MIR2_RNG_LOG`；构造级 `npc_tick`/`refresh_game_time`/`line_notice` | check/dry-run **rc=0**；cargo **2/2 + 2/2 + 15/15** |
-| `openmir2-buff-system` | A | `spell_cast.json`（**BLOCKED-FIXTURE**）+ `buff::tests` | check rc=0；dry-run **rc=2 BLOCKED**；cargo **16/16** |
-| `openmir2-outbound-encoders-red-batch` | A | `upgrade_retrieve.json`（R2）+ `cm_make_drug_gates` | dry-run **rc=0**；cargo **1/1** |
-| `openmir2-weapon-durability-frames` | A+B | T-199 精确期望 + `weapon_durability_tests`；**655/1102 真机场景待建** | cargo **13/13 + 4/4 rc=0** |
-| `openmir2-mb7-monsters` | B | T-143/T-144 + `mb7` 构造级用例；**真机场景待建** | cargo **6/6 rc=0** |
-| `openmir2-castle-guard-target` | B | T-96 + `proper_target` 构造级用例；**R6 castle_zone 场景待建** | cargo **5/5 + 1/1 + 1/1 rc=0** |
+| `openmir2-m3-rng-scene-driver` | A-(ii) | `m3/rng-scene/run_rng_scene_pair.ps1` + `rng_scene_scenario.json` | `-SelfCheckNoStack` **rc=0（23/23）** |
+| `openmir2-m3-drop-exp-wiring` | A-(ii) | `m3/drop-exp/run_drop_exp_pair.ps1` + `drop_exp_scenario.json`（batch-plan §1F 的对应卡名是 `openmir2-m3-drop-exp-align`，非本卡 id） | `-SelfCheckNoStack` **rc=0（21/21）** |
+| `openmir2-weapon-upgrade-values` | A-(i) | `tools/probe/scenarios/upgrade_retrieve.json` | check rc=0 + card_window dry-run **rc=0** |
+| `openmir2-encoding-core-e1-e2` | A-(iii) | `crates/encoding/tests/cp936_vectors.rs` 等（纯离线） | `cargo test` **8/8 + 7/7 + 4/4 rc=0** |
+| `openmir2-world-tick-expansion` | A-(i)+(iii) | `login_only.json` + `MIR2_RNG_LOG`；构造级 `npc_tick`/`refresh_game_time`/`line_notice` | check/dry-run **rc=0**；cargo **2/2 + 2/2 + 15/15** |
+| `openmir2-buff-system` | A-(iii)；场景 **BLOCKED** | `spell_cast.json`（自带 **BLOCKED-FIXTURE**）+ `buff::tests` | check rc=0；dry-run **rc=2 BLOCKED**；cargo **16/16** |
+| `openmir2-outbound-encoders-red-batch` | A-(i)+(iii) | `upgrade_retrieve.json`（R2）+ `cm_make_drug_gates`；制药链无场景 | dry-run **rc=0**；cargo **1/1** |
+| `openmir2-weapon-durability-frames` | A-(iii)；**无场景文件** | T-199 精确期望 + `weapon_durability_tests`；**655/1102 真机场景待建** | cargo **13/13 + 4/4 rc=0** |
+| `openmir2-mb7-monsters` | A-(iii) | T-143/T-144 + `mb7` 构造级用例；**真机场景待建** | cargo **6/6 rc=0** |
+| `openmir2-castle-guard-target` | A-(iii) | T-96 + `proper_target` 构造级用例；**R6 castle_zone 场景待建** | cargo **5/5 + 1/1 + 1/1 rc=0** |
 
-**未取的 10 张及理由**（同样逐条给结论，属本批「判不了/先不排」清单）：
+> **载体纠偏（review R5）**：`openmir2-weapon-durability-frames` **没有场景文件**（`ls tools/probe/scenarios/ | grep -i durability` = 0），
+> 载体是 T-199 + 构造级 cargo；`openmir2-buff-system` 的 `spell_cast.json` 存在但 `card_window --dry-run` 判 `BLOCKED`（rc=2，缺 `characters_magic`），
+> 故只算构造级；`openmir2-m3-drop-exp-wiring` 在批次计划里没有同名行，§1F 对应的是 `openmir2-m3-drop-exp-align`（`docs/window-batch-plan-20261023.md:134`）。
+> 规则按「离线载体」而非「是否有场景文件」重写，每张的载体类型与 blocked 状态都已落到表里，可逐张复算。
+
+**未取的 10 张及理由**（9 张 B 组 + 1 张顺延的 A 组；同样逐条给结论，属本批「不取/先不排」清单）：
 
 | 卡 | 不取理由 |
 |---|---|
@@ -71,7 +81,7 @@
 | `openmir2-orphan-encoder-wiring` | 单客户端验不到：② 需两真客户端、③ 需 ±12 第二观察者 ⇒ 只能构造级替代（本批不做） |
 | `openmir2-gategate-keepalive` | 长跑 + `==` vs `>` 与 3min 分支可达性待 owner 裁决 |
 | `openmir2-selgate-reconnect` | 工具缺口：需 DBSrv 重启、断链期间真实客户端表现 |
-| `openmir2-login-529-status-text` | **字面当前不可能达成**：Rust GameSvr 不上报 `SS_SERVERINFO`（`mir2-rs/bins/game-svr/src/ids.rs:18`）⇒ 状态段恒 0 |
+| `openmir2-login-529-status-text` | **A 组，判据本身已可机判；本轮名额已满 ⇒ 顺延下一批**：`login_only` 场景 `--check-scenario` rc=0（今日实跑），529 两侧 `body_hex` 逐字节比即闭环。旧结论「Rust 不上报 `SS_SERVERINFO` ⇒ 状态段恒 0」**已作废**：`185a6c8cb` 已合入且是 HEAD 祖先，`mir2-rs/bins/game-svr/src/ids.rs:17-19` 明写两处上报；`docs/window-batch-plan-20261023.md`（`80935bac9`）§7.4 第 8 行与 §4 抽样亦判「能」。（上游审计 §5.2 #26 的 ③ 分类基于旧卡面，建议下一批重分类） |
 | `openmir2-monster-showhp-53-broadcast` | 多会话 ±12 帧集合 + 无场景/具名命令 |
 | `openmir2-m3-monster-active-seek`（③） | 无场景、无比较对象、无期望、无命令；映射到 GUI 真实客户端 `mir_click.ps1` |
 
@@ -93,18 +103,18 @@
 > 每节末尾「实跑证据」= 本次 2026-10-24 在 `E:/tmp/wt-worker-69` 真跑的命令与 rc。
 > 卡片可见位置 = 该卡线程的签名 comment（`kind=comment`, `actor=openmir2-worker-69`, `verified=true`），oid 如下：
 
-| 卡 | comment oid |
+| 卡 | comment oid（初版 = 6 字段；r2 = 补 ⑥ owner，见 §8 R2） |
 |---|---|
-| `openmir2-m3-rng-scene-driver` | `fc00ed3ac88a1cede6cf9b1b7397f733ffd8f8ea` |
-| `openmir2-m3-drop-exp-wiring` | `abc94e9fbd5facdaf29f92e5d5d6cfc6bbf1cb12` |
-| `openmir2-weapon-upgrade-values` | `00b9a64e0f5dfa587ae7c9defbfd908ef05b3698` |
-| `openmir2-weapon-durability-frames` | `d20b54579d3fd7d9a168793c83838bfbd3c65301` |
-| `openmir2-encoding-core-e1-e2` | `bce06ff8c53b5d522cf59bd56f11420bf9e0e1bc` |
-| `openmir2-world-tick-expansion` | `76768fd40f40baa2cda7a652b9002cb988cd6f3c` |
-| `openmir2-mb7-monsters` | `2d2d5b3461a716577701eb0c83b41f0ed340dbd4` |
-| `openmir2-buff-system` | `41fcf511017a95de909f5532083e14eae59e04b9` |
-| `openmir2-castle-guard-target` | `77d1421ba61d64aa7fad7ce83afc3f41d99e7623` |
-| `openmir2-outbound-encoders-red-batch` | `0118efc8d767495aa88fea8009ffe52acdfe9d8f` |
+| `openmir2-m3-rng-scene-driver` | `fc00ed3ac88a1cede6cf9b1b7397f733ffd8f8ea`（初版）/ `8a2b12f856281997f8824707927832733bbc43ee`（r2 补 ⑥） |
+| `openmir2-m3-drop-exp-wiring` | `abc94e9fbd5facdaf29f92e5d5d6cfc6bbf1cb12`（初版）/ `5e89c005a86064ff7759cc996f09d8cccf5ad668`（r2 补 ⑥） |
+| `openmir2-weapon-upgrade-values` | `00b9a64e0f5dfa587ae7c9defbfd908ef05b3698`（初版）/ `cda8dbc03f718b9b256bd2e36c312f7e6221effc`（r2 补 ⑥） |
+| `openmir2-weapon-durability-frames` | `d20b54579d3fd7d9a168793c83838bfbd3c65301`（初版）/ `785763f327311eda8efa03945af7d0d6c2ee03d8`（r2 补 ⑥） |
+| `openmir2-encoding-core-e1-e2` | `bce06ff8c53b5d522cf59bd56f11420bf9e0e1bc`（初版）/ `7ecb8b415eabbf9b409f335c8bf50cc0ea54d1fb`（r2 补 ⑥） |
+| `openmir2-world-tick-expansion` | `76768fd40f40baa2cda7a652b9002cb988cd6f3c`（初版）/ `0ddf3541620ad42047c00bbe280a0a35a77687d0`（r2 补 ⑥） |
+| `openmir2-mb7-monsters` | `2d2d5b3461a716577701eb0c83b41f0ed340dbd4`（初版）/ `90fd394b72a5297474a0c481262112a6b34e6df5`（r2 补 ⑥） |
+| `openmir2-buff-system` | `41fcf511017a95de909f5532083e14eae59e04b9`（初版）/ `ef8fa8fc88e1f9b7408f9cca11eb0ffcd6a8c41f`（r2 补 ⑥） |
+| `openmir2-castle-guard-target` | `77d1421ba61d64aa7fad7ce83afc3f41d99e7623`（初版）/ `b64f6ca7242b287fe0b2861d39ae7a202587ec6f`（r2 补 ⑥） |
+| `openmir2-outbound-encoders-red-batch` | `0118efc8d767495aa88fea8009ffe52acdfe9d8f`（初版）/ `70d4e29ca41f93ef250890287b7300cfbc2d03ad`（r2 补 ⑥） |
 
 ### 4.1 `openmir2-m3-rng-scene-driver`（审计 #15，行 123）
 
@@ -251,7 +261,8 @@
 - **W-1 三条怪癖；W-2 毒伤 DoT 流水；W-3 `CharStatus` 位序；W-4 魔法盾 MP + `LastHiter` 守卫**
 - **① 前置/夹具**：`spell_cast.json` **已声明 BLOCKED**（缺 `characters_magic` 夹具：两侧测试库各加
   `(PlayerId=6228, MagicId=1, Level=0, UseKey='1', CurrTrain=0)`；建议新卡 `openmir2-window-magic-fixture`）；
-  且 W-1 的「递减 50ms vs 1s 两读法」**待窗口 A-R2 裁定**。
+  且 W-1 的「递减 50ms vs 1s 两读法」**待窗口 A-R2 裁定**。`characters_magic` 夹具本身已在 `512d9ecf5`；
+  场景封口由卡 `openmir2-spell-cast-unblock` 处理（head `923a98a5c` **待审**，本文件不预设合并结果）。
 - **② 可复跑命令**：
   - ✅ `python -I -B tools/probe/mir2_probe.py --check-scenario --scenario tools/probe/scenarios/spell_cast.json`（形状合法 rc=0）
   - ✅ `python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/scenarios/spell_cast.json` → **rc=2 BLOCKED**
@@ -315,8 +326,16 @@
 | castle-guard-target | 三态目标集合 + Struck 合法性 | cargo 5/5+1/1+1/1 | 构造级可判；**真机判不了**（场景待建 + W-2 另卡） |
 | outbound-encoders-red-batch | 654 相对序 + 制药链流水/帧序/落库 | dry-run rc=0；cargo 1/1 | 部分可判；**制药链判不了**（场景待建） |
 
-**计数**：完全可机判（现成场景/离线/构造级）**7 张**；部分可判 **2 张**（encoding-core 的 W-2；
-outbound 的 654/202/200）；判不了 **2 张**（buff-system；mb7/castle-guard 的真机半）——按「判不了也算完成」如实登记。
+**计数（互斥分桶，总和 = 10）**：
+
+- **完全可机判 6 张**（判据文本齐备，剩下只是排窗口/离线执行）：`m3-rng-scene-driver`、`m3-drop-exp-wiring`、
+  `weapon-upgrade-values`、`weapon-durability-frames`、`encoding-core-e1-e2`、`world-tick-expansion`；
+- **部分可机判 3 张**（构造级可判、真机面判不了）：`mb7-monsters`（部署数据不可达 + 场景待建）、
+  `castle-guard-target`（场景待建 + W-2 另卡）、`outbound-encoders-red-batch`（制药链无场景；654/202/200 部分可判）；
+- **判不了 1 张**：`buff-system`（窗口 A-R2 未裁 + 场景 BLOCKED，只有构造级 16/16）。
+
+> 上一版把 mb7/castle-guard 的「真机半」重复计入最后两档、且 encoding 的 W-1/W-2 跨档（review R3），已改为互斥分桶；
+> 「判不了也算完成」的口径不变。mb7/castle-guard/outbound 的真机残缺只在「部分可机判」一档计入一次。
 
 ## 6. 门禁前后对照
 
@@ -324,19 +343,33 @@ outbound 的 654/202/200）；判不了 **2 张**（buff-system；mb7/castle-gua
 |---|---|---|
 | `t_reservation_gate` | GREEN（rows=250, whitelist=250, max=T-264） | 未改 whitelist/预约表 ⇒ 同值 |
 | `whitelist_anchor_gate` | ALL PASS（548 条锚） | 未改 whitelist ⇒ 同值 |
-| `conflict_marker_gate` | OK（0 markers / 7426 tracked files） | **OK（0 markers / 7426 tracked files）** |
-| `goal_gate --json` 条件② | `state=need_human`；r_cards 193：`window_required=121` / `whitelist_t=48` / `closed=11` / `not_in_board=5` / `merged_not_closed=5` / `adjudicated=3` | **`state=need_human`；r_cards 193：同上 6 类计数逐一相同；逐卡 category diff 为空集**（`index_entries` 7567→7584 只因新增 comment 条目，不影响分类） |
+| `conflict_marker_gate` | OK（0 markers / 7426 tracked files，`5a6ed54c1`） | **OK（0 markers / 7430 tracked files，返工 head）**（base 7426 + master `19009c6a0` 带入 3 个文件 + 本 patch 的 1 个 docs 文件 = 7430；`git ls-tree -r --name-only` 实测） |
+| `goal_gate --json` 条件② | `state=need_human`；r_cards **194**：`window_required=116` / `window_required_unmerged=5` / `whitelist_t=48` / `closed=11` / `not_in_board=5` / `merged_not_closed=5` / `adjudicated=3` / `weak_t=1` | **`state=need_human`；r_cards 194：同上 8 类计数逐一相同；逐卡 category diff 为空集**（`index_entries` 因本批新增 comment 增长，不影响分类；改前基线取合并提交 `d971f318e`，已含并行卡合并） |
 
-> 改后实测（2026-10-24 01:55）：`t_reservation_gate` rc=0 GREEN；`conflict_marker_gate` rc=0（0）；
+> 返工 r2 实测（2026-10-24）：`t_reservation_gate` rc=0 GREEN；`conflict_marker_gate` rc=0；
 > `whitelist_anchor_gate` rc=0 `ALL PASS（548 条锚）`；`goal_gate --json` 快照
-> `E:/tmp/worker69-backfill/gg-after.json` 的 `conditions[id=2].state` 仍为 `need_human`，`r_cards` 的
+> `E:/tmp/worker69-backfill-r2/gg-after.json` 的 `conditions[id=2].state` 仍为 `need_human`，`r_cards` 的
 > `{card: category}` 映射与改前**逐项相等**（diff = `{}`）。
-> 基线快照：`E:/tmp/worker69-backfill/gg-before.json`（`generated_ts` 见文件）。
+> 改前基线快照：`E:/tmp/worker69-backfill-r2/gg-before.json`（取合并提交 `d971f318e`，`generated_ts` 见文件；
+> 本批 r2 新增的 10 条 ⑥ 补登 comment 只增长 `index_entries`，不改变任何卡的 `category`）。
 > 本批**未改 `goal_gate` 判据、未改 whitelist、未改任何卡片 status**。
 
 ## 7. 残留物清单
 
 - 仓库内：仅本文件 `docs/window-criteria-backfill-20261024.md`。
-- 仓库外（`E:/tmp/worker69-backfill/`，本线专属，交付后可删）：`gg-before.json`、`gg-after.json`、
-  `dryrun-*.log`、`gates-*.txt`。
+- 仓库外（`E:/tmp/worker69-backfill-r2/`，本线专属，交付后可删）：`gg-before.json`、`gg-after.json`、`cat-before.json`、`cat-after.json`、门禁输出。
 - 未起任何服务端/客户端/假人/代理进程；未占端口；未改 `E:/MirServer`。
+
+## 8. 返工对照（review `ef710b00f`，request_changes）
+
+| # | 处置 | 落点 / 证据 |
+|---|---|---|
+| R1 | `login-529` 不再是「不可能达成」：改判 **A 组、判据已可机判**，因本轮名额 10 张已满而顺延；删除「SS_SERVERINFO 未接 ⇒ 状态段恒 0」。 | 本文 §2 未取表；证据：`git merge-base --is-ancestor 185a6c8cb HEAD` → YES；`sed -n '17,20p' mir2-rs/bins/game-svr/src/ids.rs` →「**上报**：SS_SERVERINFO … 由两处产生」；`mir2_probe --check-scenario --scenario tools/probe/scenarios/login_only.json` → rc=0 `scenario OK: login_only (1 steps)`。10 条 comment 内无同一表述（逐条 grep 0 命中）。上游审计 §5.2 #26 仍带旧分类，属另一卡文件，未改，建议下一批重分类。 |
+| R2 | 10 张卡各补一条签名 comment，`items[].status` 写 `owner=<principal>；<状态>` 并新增显式 `owner` 字段；owner 取自该卡最近一条 `status` 的 `owner`（非本卡作者）。 | 10 条 r2 comment 全部 `rc=0`、`verified=true`；oid 逐条见 §4 开头 oid 表的「r2 补 ⑥」列。 |
+| R3 | 汇总计数改**互斥分桶**：完全可机判 6 + 部分可机判 3 + 判不了 1 = **10**。 | 本文 §5「计数（互斥分桶）」 |
+| R4 | tracked files 按返工 head 实测写 **7430**（base 7426 + master 合并 3 + 本 patch 1）；goal_gate 六类改为实测 **8 类 194 张**（改前基线 = 合并提交 `d971f318e`）。 | 本文 §6；`git ls-tree -r --name-only <head> | wc -l`；`tools/hygiene/conflict_marker_gate.py` |
+| R5 | A 组定义改为「离线载体（场景/RunPair/构造级 cargo）且今日 rc=0」，blocked 场景只算构造级；10 张逐张标载体类型；`drop-exp-wiring` 注明 batch-plan 对应行是 `m3-drop-exp-align`。 | 本文 §2 规则 + 表 + 「载体纠偏」注 |
+
+> batch-plan 漂移（review「另发现」）：`docs/window-batch-plan-20261023.md` §7.1/§7.2/§7.3 的 `spell_cast` 行改为
+> 「夹具已在 `512d9ecf5`；场景封口由卡 `openmir2-spell-cast-unblock` 处理（head `923a98a5c` 待审）」，
+> **不预设合并结果**；未改 `tools/probe/**`。

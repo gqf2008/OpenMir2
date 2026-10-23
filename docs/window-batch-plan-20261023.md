@@ -446,7 +446,7 @@ python -I tools/goal/goal_gate.py --json
 |---|---|---|
 | **新规则已合（只影响比较器）** | 7 条被 `recog` 掩码吞掉的规则、`202/203/642/709` 补登记、`SM_STRUCK(31)` 窄掩码 | `b42f20a8` / `6c2da8bf` / `57302d3df`；`tools/conformance/rules.json` 现含 ident 31/201/202/203/642/709（本条为**实测算**：脚本 enumerate 42 条规则） |
 | **新场景已合** | `upgrade_retrieve`、`equip_struck_save`、`spell_cast`、`combat_strike`、`combat_hit`（改 blocked） | `tools/probe/scenarios/` 现 **20** 个场景（实测算）；其中 3 个声明 `blocked`（见 7.3） |
-| **新夹具/工具已合** | `characters_magic` 预置、BLOCKED 硬门、`-WhatIf` sha/构建类型 | `512d9ecf5`（magic）、`8dac04eb0`（blocked 门）、`821492abf`（whatif） |
+| **新夹具/工具已合** | `characters_magic` 预置、BLOCKED 硬门、`-WhatIf` sha/构建类型 | `512d9ecf5`（magic）、`8dac04eb0`（blocked 门）、`821492abf`（whatif）；本行只说明夹具代码已合，**场景层是否解锁见 7.3 `spell_cast` 行** |
 | **在办（未合，不得计入「现在就能跑」）** | 背包 `inventory` 预置；`tools/conformance/preflight.py` | inventory：卡 `openmir2-window-inventory-fixture`（分支 `card/openmir2-window-inventory-fixture`，head `515eb2804`，**非 master 祖先**；被审 head 的 `tools/conformance/card_window.py` 无 inventory 支持，grep 0 命中）。preflight：卡 `openmir2-window-preflight-script`（分支 `card/openmir2-window-preflight-script`，head `deea8d3d0`，**非 master 祖先**；被审 head 内 `git ls-tree` 0 命中） |
 
 > **概念边界（review A-4）**：`tools/conformance/rules.json` 是**比较器掩码规则**——它只决定 `compare_runs` 能否/如何判某个 ident 的帧，**不等于 Rust 生产侧会出这条帧**。一条场景判定「能跑」必须有两条独立依据：① 场景不在自身 `blocked` 列表；② 判据涉及的关键帧在 Rust 生产侧有实现点（或场景 `required` 可发现）。`rules.json` 里有 ident，只满足「比较器能判」，不满足 ②。
@@ -455,7 +455,7 @@ python -I tools/goal/goal_gate.py --json
 
 - **2A（需新发现规则）**：规则已合只解锁**比较器**，不解锁 Rust 出帧。依赖 `202/203/709` 且 Rust 实现点已接的条目（如 `upgrade_retrieve`）可移入「现在能跑」；依赖 `642` 的 `equip_struck_save` **仍不可跑**——Rust 攻击方武器磨损未接（`crates/world/src/combat.rs:1149` 自述「本骨架无武器耐久面」；whitelist T-199 / T-247 明写 642 未接），场景末步 `wait_idents [642]` 是硬门。
 - **2B（需 `SM_BAGITEMS(201)` 规则）**：规则已在 `rules.json`（ident 201），但**背包 `inventory` 夹具未合**（`openmir2-window-inventory-fixture`，head `515eb2804`）⇒ `bag_equip` / `eat_item` 仍不可跑，直到该卡合并并在 `card_window.py` 里能声明 `inventory`。
-- **3（需新帧/新场景/新夹具）**：`upgrade_retrieve` 可跑，理由是 **Rust 升级接缝已接**（卡 `openmir2-upgrade-npc`，T-95）：`bins/game-svr/src/shop.rs:1346 upgrade_request_for` → `bins/game-svr/src/lib.rs:5741` → `crates/world/src/merchant.rs:1348 merchant_upgrade_wapon_begin`；**不是**因为 `rules.json` 有 202/203/709。`equip_struck_save` 仍不可跑（缺 642，见 7.3）；`spell_cast` 仍因 BLOCKED 不可跑（缺 Rust 魔法 + 第二观察者）。
+- **3（需新帧/新场景/新夹具）**：`upgrade_retrieve` 可跑，理由是 **Rust 升级接缝已接**（卡 `openmir2-upgrade-npc`，T-95）：`bins/game-svr/src/shop.rs:1346 upgrade_request_for` → `bins/game-svr/src/lib.rs:5741` → `crates/world/src/merchant.rs:1348 merchant_upgrade_wapon_begin`；**不是**因为 `rules.json` 有 202/203/709。`equip_struck_save` 仍不可跑（缺 642，见 7.3）；`spell_cast` 仍因 BLOCKED 不可跑（缺 Rust 魔法 + 第二观察者；场景封口卡 `openmir2-spell-cast-unblock`，head `923a98a5c` 待审，见 7.3）。
 - **1P/1F**：不受影响；但注意 `combat_hit` 已从「可跑」移入「跑也没用」（7.3）。
 - **4（不可协议对拍 35 张）**：本卡不改其口径；其中多会话收件人集合类仍等 `openmir2-multi-session-probe` slice-2。
 
@@ -465,7 +465,7 @@ python -I tools/goal/goal_gate.py --json
 |---|---|---:|---|
 | `combat_hit` | **`blocked`**（本卡 `f56a391db` 合入）：攻击者收不到自己的 `SM_HIT(14)` | 引用 5 行 T（`T-242/249/251/253/255`，实测算） | 同屏第二会话或同格怪物夹具 |
 | `combat_strike` | **`blocked`**（`2a69cd6e0`）：无满足条件的配装，且 DSL 无 recog 过滤 | 引用 **13** 张（源：`docs/window-debt-reclass-20261023.md` §R3，经 `docs/goal-snapshot-late-20261023.md:245` 转引） | `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装，或 `wait_for` 的 recog 过滤 |
-| `spell_cast` | **`blocked`** | 引用 **8** 张（源：卡 `openmir2-scenario-spell-cast` issue 的 R5 口径） | Rust 侧魔法落点 + 第二观察者；`characters_magic` 夹具已在位（`512d9ecf5`） |
+| `spell_cast` | **`blocked`** | 引用 **8** 张（源：卡 `openmir2-scenario-spell-cast` issue 的 R5 口径） | Rust 侧魔法落点 + 第二观察者；`characters_magic` 夹具已在 `512d9ecf5`；场景封口由卡 `openmir2-spell-cast-unblock` 处理（head `923a98a5c` **待审**） |
 | `equip_struck_save` | **不可跑（非 `blocked` 字段，是硬门必超时）** | 引用 **1** 行（`T-247`）；相邻登记 `T-199` | **Rust 接 642 攻击方武器磨损**：`AttackSuccess` 的 `DoDamageWeapon` 与 `RM_DURACHANGE(10125)` 未接（T-199 / T-142 末段）；`crates/world/src/combat.rs:1149` 自述「本骨架无武器耐久面」；场景自身 description 写「现在跑两侧会在『Rust 缺 642』上红」，末步 `wait_idents [642]` 是硬门 ⇒ 必超时。另需商店 NPC「卫家店」(map 0103, 19,18) 摆位与铁器店 `placement` |
 | `castle_zone`（R6） | **不可达登记，仓库内无该场景文件**（实测算：`tools/probe/scenarios/` 无 castle_zone） | 引用 **4** 张（源：`docs/goal-snapshot-late-20261023.md:246`、`docs/castle-zone-unreachable-20261023.md`） | 双行会 DB + 私有根 `AttackSabukWall.txt` + 20 点开战钟点 + 多会话探针 |
 
