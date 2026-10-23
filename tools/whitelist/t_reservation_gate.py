@@ -312,7 +312,7 @@ def cmd_selftest(_args):
         ns = argparse.Namespace(table=zero_t, whitelist=zero_w, json=None)
         expect("0 字节空表 ⇒ rc=2（N-2：空文件不是绿）", cmd_check(ns) == 2)
     finally:
-        shutil.rmtree(empty, ignore_errors=True)
+        _force_rmtree(empty)
 
     # N-5：两份解析器 cross-check（同一份文本，号集合 / 行号 / 状态必须一致）
     sample = (table + "| T-4 | d | 2026-01-01T00:00:00Z | 已释放 |\n| T-5 | bad |\n"
@@ -339,6 +339,20 @@ def cmd_selftest(_args):
 
 
 # --------------------------------------------------------------------------- 牙齿
+def _force_rmtree(path):
+    """Windows 上 git 对象是只读的，rmtree 会静默失败（ignore_errors 吞掉）⇒ 先改权限再删。"""
+    import stat
+
+    def _onexc(func, target, exc):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            pass
+
+    shutil.rmtree(path, onerror=_onexc)
+
+
 def _sha256_bytes(blob):
     return hashlib.sha256(blob).hexdigest()
 
@@ -456,7 +470,7 @@ def cmd_teeth(args):
                                             "" if intact else "（正本 sha256 变了！）"))
         return 0 if green else 1
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _force_rmtree(tmp)
 
 
 def main(argv=None):

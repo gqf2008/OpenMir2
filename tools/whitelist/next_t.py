@@ -490,6 +490,20 @@ def bootstrap(table_path=DEFAULT_TABLE, whitelist_path=DEFAULT_WHITELIST,
 
 
 # --------------------------------------------------------------------------- 自检
+def _force_rmtree(path):
+    """Windows 上 git 对象是只读的，rmtree 会静默失败（ignore_errors 吞掉）⇒ 先改权限再删。"""
+    import stat
+
+    def _onexc(func, target, exc):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            pass
+
+    shutil.rmtree(path, onerror=_onexc)
+
+
 def _git(args, cwd=None, check=True):
     proc = subprocess.run(["git"] + args, cwd=cwd, capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=120)
@@ -693,7 +707,7 @@ def cmd_selftest(_args):
         print("SELFTEST {0} {1}/{2}".format("GREEN" if ok == total else "RED", ok, total))
         return 0 if ok == total else 1
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)          # N-4：不泄临时目录
+        _force_rmtree(tmp)          # N-4：不泄临时目录
 
 
 def main(argv=None):
