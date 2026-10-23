@@ -1,6 +1,6 @@
 {
   "name": "npc_click_auto",
-  "description": "进世界后点「首个非自己的 SM_TURN actor」（固定 NPC），等 SM_MERCHANTSAY(643)/SM_SYSMESSAGE(100)；无需 --var（C# 的 ActorId 每会话不同，不能跨 run 复用）",
+  "description": "进世界后点「最近一条非自己的 SM_TURN actor」（固定 NPC），等 SM_MERCHANTSAY(643)/SM_SYSMESSAGE(100)；无需 --var（C# 的 ActorId 每会话不同，不能跨 run 复用）",
   "steps": [
     {
       "click_npc": "auto:last_turn",

@@ -24,7 +24,7 @@
 | # | 卡 | 场景（`tools/probe/scenarios/`） | 期望证据 | 现状 |
 |---:|---|---|---|---|
 | 1 | `openmir2-login-654-order` | `login_only.json`（现有） | 654 相对序 + 750/811/46 位置 | 首跑已有：C# 有 654、Rust 无（差异 2） |
-| 2 | `openmir2-login-frame-order-52-752` | `login_only.json` + 52 布局 (54,78) | 52 body 布局对 | 首跑 52=(54,78) 不在白名单 ⇒ 规则缺口 |
+| 2 | `openmir2-login-frame-order-52-752` | `login_only.json` + 52 布局 (54,78) | 52 body 按布局语义比 | 首跑 52=(54,78)；比较器按布局比后 **login 段语义相等**（见批次报告 §21） |
 | 3 | `openmir2-login-numeric-gaps` | `login_only.json` | 登录数值帧逐字节 | 首跑 19 帧对齐，余差见规则表 |
 | 4 | `openmir2-login-charstatus-657` | `login_only.json` | Rust 侧重采 657 + 邻居相对序 | 首跑：C# 657×2、Rust 无 |
 | 5 | `openmir2-login-notice-clienttick` | `login_only.json` | 51/658 | 含 `SoftVersionDateEx==0` 两侧构造，需另一轮 |
@@ -242,7 +242,7 @@
    已全部落到 `tools/probe/scenarios/`，**消息号与参数位置均有 oracle 出处**（1010/1011 / 1003 / 1006 / 1001，见各文件 `note`）；
    运行时数据（NPC/商人 `ActorId`、`MakeIndex`、物品名、自身坐标）一律写进顶层 `required`，缺 `--var` 即加载期 `scenario-error`(rc=2)，绝不猜；文本参数化走 `send.text_from`（`text` 保持字面量，不做替换）；
 
-2. 规则表缺口（`100/520/525/529/530/654/657` + 52 的 (54,78)）属 `conformance-rules` 车道，本卡只引用不修改；
+2. 规则表缺口（`100/520/525/529/530/654/657` 等未覆盖号）属 `conformance-rules` 车道，本卡只引用不修改（`52` 不在此列：布局比后语义相等）；
 4. `CM_DROPITEM(1000)` 暂未建场景：oracle `ClientDropItem(processMsg.Msg, processMsg.nParam1)` 的 body 是**物品名文本**，
    而 DSL 的 `params` 只把 int 代入数字字段，文本必须写字面量 ⇒ 需先定部署里可丢弃的物品名再建，不写猜的名字。
 3. ~~48 张低置信度卡的通道判定待逐卡回读~~ ⇒ 已做（§3.1/§3.2）：19 张按 `window_items` 定；余 27 张的 findings 为评审问题单、不含证据形态 ⇒ 仍低置信度，待 owner/Leader 补窗口清单。

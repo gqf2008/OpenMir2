@@ -243,16 +243,16 @@ python -I -B tools/probe/mir2_probe.py ... --out E:/tmp/conformance/runs/w24-rus
 |---|---|---|
 | `openmir2-login-654-order` | 两侧 `654` 各 1 条、位次一致（21/22 对齐） | **有证据** |
 | `openmir2-login-charstatus-657` | 两侧 `657` 各 2 条、邻居一致 | **有证据** |
-| `openmir2-login-frame-order-52-752` | `752` 各 1 条位次一致；`52` body 54 vs 78 | 帧序有证据；`52` 布局待规则 |
+| `openmir2-login-frame-order-52-752` | `752` 各 1 条位次一致；`52` 长度 54 vs 78（布局比后语义相等） | **有证据** |
 | `openmir2-login-numeric-gaps` | 除 `52`/同 tick `100` 外逐字节相同（6 对 run） | **有证据** |
 | `openmir2-npc-def-loading` | 点庄家两侧各得 `643`，正文逐字相同 | **有证据** |
 | `openmir2-npcs-fixed-loading` | NPC `10+41` 出现帧两侧均有（C# 偶发多一对） | **有证据（含偶发差）** |
 | `openmir2-npc-hit-frames` | `SM_HIT(14)` 两侧都发，**series C#=0 / Rust=4** | **有证据（差异已定位到字段）** |
 | `openmir2-openybdeal-host-wiring` | `@kaiz`/`@chouma` 应答迟到且不稳定 | 受阻（需 oracle 应答口径） |
 | `openmir2-script-take-persist` / `persist-useitems-wiring` / `click-path-bag-writeback` | 22+ run 无 `SM_BAGITEMS(201)` | 受阻（需 oracle 回包口径） |
-| `openmir2-gm-commands-design` | `CM_SAY` 两侧均无回包 | 受阻（需确认回包号/前置） |
+| `openmir2-gm-commands-design` | `gm_time` 30/30、`gm_batch` 36/34；`@时间`/`@拒绝`/`@拒绝私聊`/`@help`/`@LockLogin` 回包内容两侧一致；`@AddRobotPlay` 两侧皆无回包 | **有证据**（§18） |
 
-前 7 张卡的证据已可直接引用；后三组需要 Leader 回口径（`5511ea0d` gm、`25220260` bag、`2840f903` dice）。
+前 8 张卡的证据已可直接引用（GM 族在 §17 双 EDCode 修复 + §18 复跑后已跑通）；**仅背包族**仍待 Oracle 回包口径（`25220260`）；dice 侧的 `@ya52` 缺 767 已定案并另开卡（`openmir2-ya52-menu-ok-missing`，§23 复跑确认修复）。
 
 ## 16. 庄家菜单选择：四种组合都不回第二条 643（05:36–05:45）
 
@@ -353,7 +353,7 @@ selftest 期望同步改为 `.encode("gbk")`，8 项仍全绿。
 
 1. **`52` 不是规则缺口**：比较器按布局语义比，3 对 login run 的 `52_semantic` **无差异**（54/78 只是长度不同）；
    `mp` ±1 只出现在 gm/dice 这类长会话（C# 18 / Rust 17），更像回蓝 tick 相位差，归 R 级窗口项复采样。§3/§11 已改。
-2. **`SM_TURN(10)` 的 `series`**：剔除 14 后仍观察到两侧不等——本批实测 **C# 512 / 514**、**Rust 516**（gm_batch、dice 各一次）；
+2. **`SM_TURN(10)` 的 `series`**：剔除 14 后仍观察到两侧不等——本批实测 **C# 512 / 514**、**Rust 516**（gm_batch、dice 各一次；规则表可用 `head_mask: ["series"]` 掩掉后再比，本卡不改规则表）；
    Leader 另有一例 **517 vs 516**。⇒ 记作「series 两侧不一致（值随场景/时间浮动）」，不作为 §11 之外的独立结论。
 3. **`SM_HIT(14)` 的归因更正**：Rust 的脚本 `MESSAGEBOX` 分支**已实现**（`npc.rs:2228-2293`，有单测）；
    且 `login_only`（完全没有 NPC 对话）里也出现过 14 ⇒ **14 是背景噪声，不是 767 的替代帧**。
