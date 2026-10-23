@@ -316,7 +316,7 @@ Rust 偶尔多出 `SM_HIT(14)`）不能用「再跑一次直到 PASS」当判定
 python -I -B tools/conformance/compare_runs.py selftest
 ```
 
-全离线合成两次运行，**113 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
+全离线合成两次运行，**198 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
 10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
@@ -336,6 +336,18 @@ python -I -B tools/conformance/compare_runs.py selftest
   与 `oracle_wire_len=54 / rust_wire_len=78`）；线缆形态改 hp ⇒ 1（`space=plain`）；
   两侧同为 58B 线缆 ⇒ 明文逐字节比、改一字节 ⇒ 1（偏移 46）；
 * 52 未登记长度对（41,41）⇒ 2（`ability_layout_unknown`，fail-closed）。
+* `SM_STRUCK(31)`（卡 openmir2-conformance-rule-sm-struck-31；review 926d1b67 返工）：
+  `action=mask_body_ranges`，只有两处窄掩——① `head_mask:[param]` 只掩**受击者当前 HP**（伤害的结果）；
+  **局限**：series=nDmg 已逐值比，RNG 对拍成立时 param 冗余，**受击前 HP 的前置偏差本规则不判**；
+  ② body `ranges:[[10,16]]`（**线缆空间**）掩 **Tag1=攻击者 ActorId** 的 EDCode 足迹（16B 明文⇒22B
+  线缆；Tag1=明文[8..11] ⇒ 线缆 {10..15}；连带走线缆[11] 里 CharStatus 明文[6]/[7] 的 bits 2,3，
+  属已登记的过掩边界）。**recog 走全局 ActorId 掩码**（会话作用域标识，实测 C# 255025409 / Rust 275）；
+  tag（MaxHP）/series（本次伤害）/body 未掩区全部逐字节比。断言：仅 param ⇒ 0+`masked_head`；
+  recog ⇒ 0+`masked_head`；tag / series / Param1(Feature) / Tag2(Mag) / CharStatus 未掩位 ⇒ 1；
+  Tag1 与 CharStatus 明文[6] bits2,3 ⇒ 0+`mask_body_ranges`。**牙 4 颗**：① 去掉 31 规则 ⇒ 2
+  （`unclassified_idents`=[31]）；② 整帧 `ignore` ⇒ tag 被吞成 0；③ 把 recog 加回 `head_compare`
+  ⇒ 同一对变 1 field=recog（对照真规则为 0，证明是掩码生效而非比较器失明）；④ body ranges 放宽成
+  `[[0,null]]` ⇒ Feature 差异被吞成 0（窄区间不外溢）。
 * `multiset_by_tick`（对拍降噪 v2）：内置表**只有 ident=100** 用它（不扩散）且
   `tick_tolerance_ms=0`；两条 100 顺序颠倒 ⇒ 0 且 `masked_order` 登记；
   少一条 100 ⇒ 1 且缺失帧带 param/series/body 前 16 字节；三条 100 轮换（集合相同）⇒ 0；
@@ -356,8 +368,8 @@ python -I -B tools/conformance/compare_runs.py selftest
 
 ## 当前规则覆盖
 
-已覆盖 ident（37 条）：`10, 11, 13, 14, 41, 42, 46, 50, 51, 52, 54, 100, 200, 201, 213, 520,
-525, 529, 530, 615, 616, 635, 636, 643, 644, 645, 654, 657, 658, 752, 763, 766, 767, 811,
+已覆盖 ident（38 条）：`10, 11, 13, 14, 31, 41, 42, 46, 50, 51, 52, 54, 100, 200, 201, 213,
+520, 525, 529, 530, 615, 616, 635, 636, 643, 644, 645, 654, 657, 658, 752, 763, 766, 767, 811,
 1106, 5008, 11029`。
 
 **跨进程不可复现的两条**（2026-10-23 双栈窗口登记，见 `rules.json` 的 reason）：
@@ -456,6 +468,20 @@ python -I -B tools/conformance/compare_runs.py selftest
   （或按侧的 `sides.<side>.db_client`）给出，口令只认环境变量 `CONFORMANCE_DB_PASSWORD`。
   **背包夹具不在本能力范围内**（要「背包里已有 MakeIndex/物品」的卡见
   `openmir2-discovery-bagitems-201`）。
+* **Rust 侧 `binaries` 指向真正执行的 `mir2-rs/target/{release,debug}/mir2-server.exe`**（卡
+  `openmir2-window-rust-binary-evidence`）：`rust-root/M2GameSvr/GameSrv.exe` 是同目录 `.dll`
+  的 .NET 程序集，从不是被跑的那个文件。`alt` / `rust-default` 的 Rust 侧登记内置解析
+  （release 优先、缺失退 debug 并在 `binary_profile` 注明；解析出的文件**不存在 ⇒ rc=2**
+  并提示 `cargo build -p mir2-server --release`；profile 也可用 `server_exe` 显式覆盖）。
+  起栈后还会读 pid 文件的 `roles[].exe` 与登记对账，**不一致或缺文件 ⇒ rc=2 并点名**。
+  * **pid 文件路径只认 profile 的 `pid_file`**（`{side_dir}` 占位可用），代码里不写死部署
+    绝对路径；开了 `require_pid_binaries` 却缺 `pid_file` ⇒ 加载期 ConfigError。
+    **下一次真窗口（`alt`）读的是 `E:/tmp/conformance/rust-logs/mir2-server.pid.json`**
+    ——那是 `E:/tmp/conformance/start-rust.ps1` 的 `-LogDir`，不是 `<out>/rust/`。
+  * pid 文件由 `start_mir2_server.ps1` 用 Windows PowerShell 5 的
+    `Set-Content -Encoding utf8` 写出，**带 UTF-8 BOM**；`card_window.py` 用
+    `encoding="utf-8-sig"` 读（否则真窗口会稳定 rc=2）。
+
 * **`binaries` 是必需项**：两侧各至少一条非空路径，加载期校验；空列表/缺省直接
   ConfigError（否则会出现「PASS 报告里没有任何二进制 sha256」）。二进制文件缺失时提前
   收尾，但**产物集仍然完整**：`report.json` + `README.txt` + `card-window.json` +

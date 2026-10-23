@@ -50,6 +50,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import socket
 import sys
 import time
@@ -386,7 +387,7 @@ def load_scenario(path):
     # 仍能被 --check-scenario / 真跑加载（否则会被下面的 unknown key 拒绝）。
     _need_keys(data, "scenario", required=("name", "steps"),
                optional=("description", "params", "required", "computed",
-                         "placement"))
+                         "placement", "blocked"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -405,6 +406,7 @@ def load_scenario(path):
         if dup:
             raise ScenarioError("scenario.required has duplicates: %s" % dup)
     _check_placement(data.get("placement"))
+    _check_blocked(data.get("blocked"))
     return data
 
 
@@ -435,6 +437,38 @@ def _check_placement(pl):
     print("note: scenario.placement 声明了 map=%s x=%s y=%s，但**本驱动器不预置位**"
           "（由 tools/conformance/card_window.py 在起栈前改测试库完成）"
           % (pl["map"], pl["x"], pl["y"]), file=sys.stderr)
+
+
+def _check_blocked(bl):
+    """`scenario.blocked` 的**形状**校验：合法 ⇒ 放行（rc=0），结构非法 ⇒ ScenarioError（rc=2）。
+
+    语义：场景可以声明自己被**封存**——形状合法、能加载、能过 `--check-scenario`，但**不可跑**。
+    「为什么跑不了 / 缺什么夹具」必须写在**顶层机器可读字段**里，而不是只写在 `description`
+    人话里（窗口批次读不到人话，本日已三次「文字写了但机判不拦」的假绿）。
+
+    schema（顶层 `blocked`）：:
+
+        "blocked": {"reason": "<非空 str>", "missing_fixture": "<str，可选>"}
+
+    * `reason` 必填、非空字符串（缺/空/非字符串 ⇒ rc=2 点名 `scenario.blocked.reason`）；
+    * `missing_fixture` 可选，给了就必须是**非空**字符串（空串按「没写」处理会掩盖信息，fail-closed）；
+    * 未知键 fail-closed（与 `scenario.placement` 同口径）。
+
+    消费侧：`tools/conformance/card_window.py` 在起栈前见到 `blocked` 一律 rc=2，不建 out、
+    不起栈、不写 report —— 从产物层杜绝「跑了一份 BLOCKED 场景」。本驱动器只校验形状，
+    `blocked` 场景的 `--check-scenario` 仍是 rc=0（它是形状合法的场景，只是不可跑）。
+    """
+    if bl is None:
+        return
+    _need_keys(bl, "scenario.blocked", required=("reason",), optional=("missing_fixture",))
+    reason = bl["reason"]
+    if not isinstance(reason, str) or not reason.strip():
+        raise ScenarioError("scenario.blocked.reason must be a non-empty string, got %r"
+                            % (reason,))
+    mf = bl.get("missing_fixture")
+    if mf is not None and (not isinstance(mf, str) or not mf.strip()):
+        raise ScenarioError("scenario.blocked.missing_fixture must be a non-empty string "
+                            "when present, got %r" % (mf,))
 
 
 def _encode_send_body(val, where, params=None):
@@ -531,6 +565,11 @@ def plan_step(step, index, params):
             recog = val.get("recog")
         if not isinstance(label, str) or not label:
             raise ScenarioError("%s.dlg_select label must be a non-empty string" % where)
+        # recog 与 send.recog 同口径（PRB-4）：可以写 params 名，加载期就解析并校验 i32 范围；
+        # 否则要等到发送时才抛 FrameError，被归类成 frame-parse(2) 而不是 scenario-error(2)。
+        if recog is not None:
+            recog = _need_int(resolve_param(recog, params, where + ".dlg_select.recog"),
+                              where + ".dlg_select.recog", -0x80000000, 0x7FFFFFFF)
         out.update(ident=CM_MERCHANTDLGSELECT, recog=recog, param=0, tag=0, series=0,
                    body=label.encode("gbk"), _needs_merchant_recog=(recog is None))
     elif action == "wait_for":
@@ -584,6 +623,296 @@ def expand_scenario(data, params_override=None):
             % (data.get("name"), ", ".join("%s=<value>" % n for n in missing)))
     plans = [plan_step(s, i, params) for i, s in enumerate(data["steps"])]
     return plans, params
+
+
+# ==========================================================================
+# 场景语义校验（--check-scenario 的「牙」）
+# ==========================================================================
+# 背景：load_scenario + expand_scenario 只做**形状**校验（键名/类型/范围/required 变量/
+# text_from 是否存在）。它对「这个场景能不能真跑」无能为力：删掉中间的 send 步（等一个
+# 永远不会来的回包）、把 wait_for 写成协议表里不存在的 ident，曾经都是 rc=0 —— 审查者
+# 无法拿工具本身证伪场景。check_scenario() 补上这层语义校验。
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+MESSAGES_RS_REL = "mir2-rs/crates/protocol/src/messages.rs"
+MESSAGES_RS = os.path.join(REPO_ROOT, *MESSAGES_RS_REL.split("/"))
+
+# 发帧动作：在 GameGate 连接上真的写出 c2s 帧（say/click_npc/dlg_select 分别展开成
+# CM_SAY / CM_CLICKNPC / CM_MERCHANTDLGSELECT）。`send` 只是其中最通用的一个。
+SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select"})
+# 累计观察动作：等的是「累计出现过」而不是「本步之后的第一条回包」——驱动器的登录链
+# （CM_IDPASSWORD/SELECTSERVER/QUERYCHR/SELCHR + GameGate 登录）与自动握手
+# （CM_LOGINNOTICEOK / CM_QUERYBAGITEMS）本来就会发帧，所以纯观察场景（login_only）合法。
+CUMULATIVE_WAIT_KINDS = frozenset({"wait_idents", "wait_frames"})
+WAIT_KINDS = frozenset({"wait_for"}) | CUMULATIVE_WAIT_KINDS
+
+# 只认「整行就是一个常量定义」：先按行剥 `//` 注释、再锚定 `pub const ... ;`。
+# 这样注释掉的常量（`// removed: pub const SM_FAKE: u16 = 4095;`）、字符串里的同名文本
+# 都不会进表（M4：否则 wait_for 4095 会假绿）。
+_MSG_CONST_RE = re.compile(r"pub const (CM|SM)_([A-Z0-9_]+): u16 = (\d+);\s*$")
+
+
+def load_message_constants(path=None):
+    """解析 `mir2-rs/crates/protocol/src/messages.rs` -> {"CM": {ident: 名}, "SM": {...}}。
+
+    不写死一张私有表：这张表由 `cargo run -p msgcodegen -- --check` 与 C# `Messages.cs`
+    对拍，是「ident 是否真实存在」的唯一事实源。同值别名（如 CM_IDPASSWORD/CM_PASSWORD）
+    与跨命名空间同值（CM_QUERYCHR == SM_SYSMESSAGE == 100）都合法，先出现的名字胜出。
+    行注释（`// ...`）先剥掉再匹配：被注释掉的常量不算数（M4）。
+    fail-closed：文件缺失或一条常量都解析不到 => ScenarioError。
+    """
+    path = path or MESSAGES_RS
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as ex:
+        raise ScenarioError("cannot read protocol constant table %s: %s" % (path, ex))
+    out = {"CM": {}, "SM": {}}
+    for raw in text.splitlines():
+        m = _MSG_CONST_RE.match(raw.split("//", 1)[0].strip())
+        if not m:
+            continue
+        out[m.group(1)].setdefault(int(m.group(3)), "%s_%s" % (m.group(1), m.group(2)))
+    if not out["CM"] or not out["SM"]:
+        raise ScenarioError("protocol constant table %s parsed %d CM / %d SM constants "
+                            "(parser drift?)" % (path, len(out["CM"]), len(out["SM"])))
+    return out
+
+
+# 攻击族的方向语义由 game-svr 的 `attackwire.rs` 承载（不写私有表）：
+#   * `pub const HIT_IDENTS: [u16; 9]` —— PlayObject.Message.cs:1221-1230 的 9 条攻击 ident；
+#   * `const DIR_*: u8 = 0..7` —— Enums/Direction.cs 的 8 个方向；
+#   * 模块头 `nDir = (byte)Tag` —— 所以判据是 `(tag & 0xFF) in DIR_*`（截断后再判）。
+ATTACKWIRE_RS_REL = "mir2-rs/bins/game-svr/src/attackwire.rs"
+ATTACKWIRE_RS = os.path.join(REPO_ROOT, *ATTACKWIRE_RS_REL.split("/"))
+_HIT_IDENTS_BLOCK_RE = re.compile(r"pub const HIT_IDENTS:[^=]*=\s*\[(.*?)\];", re.S)
+_HIT_IDENT_NAME_RE = re.compile(r"messages::(CM_[A-Z0-9_]+)")
+_DIR_CONST_RE = re.compile(r"^\s*const (DIR_[A-Z0-9_]+): u8 = (\d+);\s*$", re.M)
+
+
+def load_direction_spec(path=None, messages=None):
+    """从 `mir2-rs/bins/game-svr/src/attackwire.rs` 读 (攻击族 ident 集合, Direction 值域)。
+
+    复用现成源（不写死私有表）：`HIT_IDENTS` 里的名字用 messages.rs 的「名→号」解析。
+    fail-closed：文件缺失 / 找不到 HIT_IDENTS / 名字解析不了 / 方向不是 0..7 连续 8 个。
+    """
+    path = path or ATTACKWIRE_RS
+    if messages is None:
+        messages = load_message_constants()
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as ex:
+        raise ScenarioError("cannot read attack-family table %s: %s" % (path, ex))
+    block = _HIT_IDENTS_BLOCK_RE.search(text)
+    if not block:
+        raise ScenarioError("%s: cannot find `pub const HIT_IDENTS: [u16; N] = [...]` "
+                            "(parser drift?)" % path)
+    name_to_ident = {}
+    for ns in ("CM", "SM"):
+        for ident, name in messages[ns].items():
+            name_to_ident[name] = ident
+    idents = set()
+    for name in _HIT_IDENT_NAME_RE.findall(block.group(1)):
+        if name not in name_to_ident:
+            raise ScenarioError("%s: HIT_IDENTS references %s, which is not in %s"
+                                % (path, name, MESSAGES_RS_REL))
+        idents.add(name_to_ident[name])
+    if not idents:
+        raise ScenarioError("%s: HIT_IDENTS parsed 0 idents (parser drift?)" % path)
+    dirs = sorted(int(v) for _, v in _DIR_CONST_RE.findall(text))
+    if dirs != list(range(8)):
+        raise ScenarioError("%s: DIR_* constants parsed as %s, expected 0..7 (parser drift?)"
+                            % (path, dirs))
+    return idents, frozenset(dirs)
+
+
+def _var_refs(data):
+    """收集场景里**按变量名**引用的字段：[(where, name)]。
+
+    与 plan_step 的解析点一一对应（send 的 recog/param/tag/series、click_npc、
+    dlg_select.recog、send.text_from）。纯数字字面量（含 "0" 这种字符串）不算变量引用；
+    click_npc 的 "auto:last_turn" 是动作级哨兵，也不是变量。
+    """
+    refs = []
+    for i, step in enumerate(data.get("steps") or []):
+        if not isinstance(step, dict):
+            continue
+        where = "steps[%d]" % i
+        send = step.get("send")
+        if isinstance(send, dict):
+            for key in ("recog", "param", "tag", "series"):
+                v = send.get(key)
+                if isinstance(v, str):
+                    refs.append((where + ".send." + key, v))
+            v = send.get("text_from")
+            if isinstance(v, str):
+                refs.append((where + ".send.text_from", v))
+        v = step.get("click_npc")
+        if isinstance(v, str) and v != "auto:last_turn":
+            refs.append((where + ".click_npc", v))
+        v = step.get("dlg_select")
+        if isinstance(v, dict) and isinstance(v.get("recog"), str):
+            refs.append((where + ".dlg_select.recog", v["recog"]))
+    return refs
+
+
+#: 由 `scenario.placement` 派生、必须与它自洽的变量：变量名 -> (比较口径, 说明)。
+#:   * `self_pos`：按 `MakeLong(X, Y) = (unsigned short)X | (Y << 16)` 打包（HUtil32.MakeLong
+#:     口径，docs/HUtil32-parity-inventory-20261020.md 第 9 条），低 16 位 X、高 16 位 Y；
+#:   * `self_x` / `self_y`：自身坐标，必须分别等于 placement.x / placement.y。
+PLACEMENT_DERIVED_VARS = {
+    "self_pos": ("packed", "MakeLong(X,Y)=(Y<<16)|X"),
+    "self_x": ("x", "自身坐标 X"),
+    "self_y": ("y", "自身坐标 Y"),
+}
+
+
+def _decode_self_pos(value):
+    """MakeLong(X,Y) -> (x, y)：低 16 位 X、高 16 位 Y（HUtil32.MakeLong 口径）。"""
+    return value & 0xFFFF, (value >> 16) & 0xFFFF
+
+
+def _is_int_literal(text):
+    try:
+        int(text, 10)
+        return True
+    except ValueError:
+        return False
+
+
+def check_scenario(data, plans, params=None, messages=None):
+    """`--check-scenario` 的语义校验（形状之外）。非法即抛 ScenarioError。
+
+    已有形状校验（load_scenario/expand_scenario）：键名/类型/范围、恰好一个动作键、
+    required 变量是否给全、text_from 是否在 params 里。本函数补「这场景真跑得起来吗」：
+
+      R2 每个 wait_for 之前必须已有发帧步骤（否则它等的回包没人产生）；
+      R1 场景至少要有一个能发帧（send/say/click_npc/dlg_select）或能累计观察
+         （wait_idents/wait_frames）的步骤 —— 全是 sleep 的场景什么也证不了；
+      R3 所有 send/wait_* 的 ident 必须存在于协议常量表（表外 ident = 永远发不出/等不到）；
+      R4 变量引用必须能在场景声明的 required/params/computed 里找到（不许引用未声明变量）；
+      R5 `scenario.placement` 与由位置派生的 params（如 self_pos=MakeLong(X,Y)）必须自洽
+         （不一致 = 角色落在 A 点、期望值按 B 点算，真跑静默恒超时，card_window dry-run 也看不出来）；
+      R6（**WARN 级，不改 rc**）攻击族（HIT_IDENTS 9 条）的 `send.tag` 按 oracle `(byte)Tag = nDir`
+         截断后应是合法 Direction（0..7）。越界只打 stderr 警告：它**不影响本次命中**（取目标用
+         状态化 Dir，nDir 之后才写入），但会污染状态 Dir（动作帧/此后取目标），且真实客户端不会发；
+      W  至少要有一个等待步骤（原 main 里的 N-5 规则，收进来一起判）。
+
+    R4 的「声明」口径刻意**不含 `--var`**：`--var` 是给已声明变量覆值的通道（README），
+    不是声明通道 —— 否则把一个拼错的变量名用 `--var` 一喂，校验就绿了。
+    """
+    name = data.get("name")
+    if messages is None:
+        messages = load_message_constants()
+    # 生效参数 = 场景 params + --var 覆盖（R5 用；R4 的「声明」口径刻意不含 --var）。
+    eff_params = dict(data.get("params") or {})
+    if params:
+        eff_params.update(params)
+    known = set(messages["CM"]) | set(messages["SM"])
+    declared = (set((data.get("params") or {}).keys())
+                | set(data.get("required") or [])
+                | set((data.get("computed") or {}).keys()))
+
+    # R2：wait_for 之前必须已有发帧步骤。先判这一步，坏样例拿到最具体的诊断。
+    first_send = None
+    for p in plans:
+        if p["kind"] in SEND_KINDS:
+            if first_send is None:
+                first_send = p["index"]
+        elif p["kind"] == "wait_for" and first_send is None:
+            raise ScenarioError(
+                "steps[%d].wait_for %s: no send step precedes it — nothing in this scenario can "
+                "produce that response (a scenario that only waits proves nothing; add a "
+                "send/say/click_npc/dlg_select before it)" % (p["index"], p["idents"]))
+
+    kinds = [p["kind"] for p in plans]
+
+    # R1：至少一个发帧或累计观察步骤。
+    if not any(k in SEND_KINDS or k in CUMULATIVE_WAIT_KINDS for k in kinds):
+        raise ScenarioError(
+            "scenario %r has no send step (%s) and no cumulative wait step (%s): "
+            "steps contain only %s, so it neither triggers nor observes any frame"
+            % (name, "/".join(sorted(SEND_KINDS)), "/".join(sorted(CUMULATIVE_WAIT_KINDS)),
+               "/".join(sorted(set(kinds)))))
+
+    # R3：ident 必须存在于协议常量表。
+    for p in plans:
+        if p["kind"] == "send":
+            if p["ident"] not in known:
+                raise ScenarioError(
+                    "steps[%d].send.ident %d is not a CM_*/SM_* constant in %s"
+                    % (p["index"], p["ident"], MESSAGES_RS_REL))
+        elif p["kind"] in WAIT_KINDS:
+            for ident in p["idents"]:
+                if ident not in known:
+                    raise ScenarioError(
+                        "steps[%d].%s ident %d is not a CM_*/SM_* constant in %s "
+                        "(typo? this wait can never match)"
+                        % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
+
+    # R4：变量引用必须在场景里声明过。
+    for where, ref in _var_refs(data):
+        if _is_int_literal(ref):
+            continue
+        if ref not in declared:
+            raise ScenarioError(
+                "%s references undeclared variable %r: declare it in required/params/computed "
+                "(--var only overrides a declared name, it does not declare one)" % (where, ref))
+
+    # R5：placement 与由位置派生的 params 必须自洽。取值与 plan_step 同口径走
+    # resolve_param（**支持 params 名间接引用/链式**，否则 `"self_pos": "start_pos"` 会假红）。
+    placement = data.get("placement")
+    if isinstance(placement, dict):
+        for var, (how_kind, how) in PLACEMENT_DERIVED_VARS.items():
+            if var not in eff_params:
+                continue
+            value = resolve_param(eff_params[var], eff_params, "params." + var)
+            if how_kind == "packed":
+                x, y = _decode_self_pos(value)
+                if (x, y) != (placement["x"], placement["y"]):
+                    raise ScenarioError(
+                        "scenario.placement map=%s x=%d y=%d disagrees with %s=%d "
+                        "(decodes to x=%d y=%d via %s): the character would be placed at one point "
+                        "while the scenario expects another (silent timeout at run time)"
+                        % (placement["map"], placement["x"], placement["y"], var, value, x, y, how))
+            elif value != placement[how_kind]:
+                raise ScenarioError(
+                    "scenario.placement map=%s x=%d y=%d disagrees with %s=%d (%s must equal "
+                    "placement.%s): the character would be placed at one point while the scenario "
+                    "expects another (silent timeout at run time)"
+                    % (placement["map"], placement["x"], placement["y"], var, value, var, how_kind))
+
+    # R6（**WARN 级，不改变 rc**）：攻击族 send.tag = (byte)wParam = 状态化朝向。
+    # 机理（两侧一致，别写反）：oracle **先按状态化 Dir 取目标**，之后才写入 nDir ——
+    #   C#：PlayObject.Attack.cs:26 GetPoseCreate()（状态 Dir）→ :75 AttackDir(...) →
+    #       BaseObject.Attack.cs:12 `Dir = nDir;` → :13 `_Attack`（用已选好的目标）；
+    #   Rust：bins/game-svr/src/lib.rs:8836-8848 `pose_dir = e.ai.dir` 取目标，随后 `e.ai.dir = dir`。
+    # ⇒ 越界方向**不影响本击命中**（CM_TURN(tag=0)+CM_HIT(tag=99) 第一击照样命中并出 SM_STRUCK），
+    #   它污染的是**此后**的状态 Dir（动作帧 + 下一次取目标）。所以这里只警告、不判死。
+    direction_spec = None
+    for p in plans:
+        if p["kind"] != "send":
+            continue
+        if direction_spec is None:
+            direction_spec = load_direction_spec(messages=messages)
+        hit_idents, dirs = direction_spec
+        if p["ident"] not in hit_idents:
+            continue
+        eff_dir = p["tag"] & 0xFF          # oracle: (byte)Tag
+        if eff_dir not in dirs:
+            print("WARN: steps[%d].send.tag %d (ident %d, attack family) is not a valid Direction: "
+                  "oracle takes nDir = (byte)Tag = %d, valid %s (source %s HIT_IDENTS/DIR_*). "
+                  "真实客户端不会发送越界方向；该值**不影响本次命中**（取目标用的是状态化 Dir，"
+                  "nDir 在取目标之后才写入），但会污染角色的状态 Dir，影响动作帧与**此后**的取目标。"
+                  % (p["index"], p["tag"], p["ident"], eff_dir,
+                     "%d..%d" % (min(dirs), max(dirs)), ATTACKWIRE_RS_REL), file=sys.stderr)
+
+    # W：必须有等待步骤（N-5：只发不等证明不了任何东西）。
+    if not any(k in WAIT_KINDS for k in kinds):
+        raise ScenarioError(
+            "scenario %r has no wait step: at least one wait_for/wait_frames/wait_idents is required "
+            "(a send-only scenario proves nothing)" % name)
+    return True
 
 
 # --------------------------------------------------------------------------
@@ -1074,7 +1403,11 @@ def build_argparser():
     ap.add_argument("--finish", choices=("softclose", "close", "none"), default="softclose",
                     help="收尾方式（默认 softclose = CM_SOFTCLOSE 后断开）")
     ap.add_argument("--check-scenario", action="store_true",
-                    help="只加载+展开场景做校验（不连网）：rc=0 通过 / rc=2 场景错误")
+                    help="只加载+展开场景做校验（不连网）：rc=0 通过 / rc=2 场景错误。"
+                         "顶层 `blocked`（schema {\"reason\": <非空 str>, "
+                         "\"missing_fixture\": <str，可选>}）是**合法的形状**：合法 blocked 场景"
+                         "仍 rc=0（只是不可跑，card_window 见到会 rc=2）；`blocked` 结构非法"
+                         "（缺 reason / 类型错 / 未知键）⇒ rc=2 并点名 scenario.blocked.*")
     ap.add_argument("--selftest", action="store_true", help="离线自测（不连网）")
     return ap
 
@@ -1103,11 +1436,7 @@ def main(argv=None):
         try:
             data = load_scenario(args.scenario)
             plans, params = expand_scenario(data, parse_vars(args.var))
-            wait_kinds = {"wait_for", "wait_frames", "wait_idents"}
-            if not any(pl.get("kind") in wait_kinds for pl in plans):
-                raise ScenarioError(
-                    "scenario %r has no wait step: at least one wait_for/wait_frames/wait_idents is required "
-                    "(a send-only scenario proves nothing)" % data.get("name"))
+            check_scenario(data, plans, params)
         except ScenarioError as ex:
             print("scenario-error: %s" % ex, file=sys.stderr)
             return 2
@@ -1467,6 +1796,274 @@ def _selftest_scenario_required():
             os.unlink(path)
         except OSError:
             pass
+
+
+def _write_tmp_rs(text):
+    """selftest 用：写一个临时 .rs 文件（假 messages.rs / attackwire.rs），返回路径。"""
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".rs")
+    os.close(fd)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+    return path
+
+
+def _selftest_scenario_validation():
+    """`--check-scenario` 的语义牙：R1/R2/R3/R4，外加「纯观察场景不误伤」。
+
+    卡面要求的三条坏样例：① 删 send 步 ② wait_for 写成表外的 4095 ③ 引用未声明变量；
+    另加 ④ wait_for 排在 send 之前、⑤ 全 sleep 场景，以及 login_only/dice_chain 仍绿的断言。
+    """
+    messages = load_message_constants()
+    base = {
+        "name": "selftest_validation",
+        "required": ["target_x", "target_y", "hit_dir"],
+        "steps": [
+            {"send": {"ident": 3014, "recog": "target_x",
+                      "param": "target_y", "tag": "hit_dir"}},
+            {"wait_for": 14},
+        ],
+    }
+    ok_vars = {"target_x": 30, "target_y": 32, "hit_dir": 4}
+
+    def clone(obj):
+        return json.loads(json.dumps(obj))
+
+    def expect_red(mut, needle):
+        d = clone(base)
+        mut(d)
+        try:
+            plans, _ = expand_scenario(d, dict(ok_vars))
+        except ScenarioError as ex:
+            msg = str(ex)
+        else:
+            try:
+                check_scenario(d, plans, None, messages)
+            except ScenarioError as ex:
+                msg = str(ex)
+            else:
+                raise AssertionError("bad scenario accepted (tooth broken): %r" % (needle,))
+        assert needle in msg, (needle, msg)
+        return msg
+
+    # 好样例（与 combat_hit 同形）必须绿
+    check_scenario(clone(base), expand_scenario(clone(base), dict(ok_vars))[0],
+                   ok_vars, messages)
+
+    # ① 删掉 send 步 ⇒ wait_for 之前没有发帧步骤（R2 点名）
+    expect_red(lambda d: d.__setitem__("steps", [s for s in d["steps"] if "send" not in s]),
+               "no send step precedes")
+    # ② wait_for 写成协议表里不存在的 ident ⇒ R3 点名 4095
+    expect_red(lambda d: d["steps"][1].__setitem__("wait_for", 4095),
+               "ident 4095 is not a CM_*/SM_* constant")
+    # ③ 引用未声明变量（拼错）⇒ 加载期就红
+    expect_red(lambda d: d["steps"][0]["send"].__setitem__("recog", "no_such_var"),
+               "no_such_var")
+    # ③b 只在 --var 里出现、场景从未声明 ⇒ R4 仍然红（--var 是覆值通道，不是声明通道）
+    expect_red(lambda d: d.__setitem__("required", ["target_y", "hit_dir"]),
+               "undeclared variable 'target_x'")
+    # ④ wait_for 排在 send 之前 ⇒ R2
+    expect_red(lambda d: d.__setitem__("steps", [d["steps"][1], d["steps"][0]]),
+               "no send step precedes")
+    # ②b send.ident 也必须在协议表里（R3 的 send 分支；M2：单独禁用该分支必须红）
+    expect_red(lambda d: d["steps"][0]["send"].__setitem__("ident", 4095),
+               "send.ident 4095 is not a CM_*/SM_* constant")
+    # ⑤ 全是 sleep ⇒ R1（既不发帧也不观察）
+    expect_red(lambda d: d.__setitem__("steps", [{"sleep": 1}, {"sleep": 2}]),
+               "has no send step")
+
+    # M4：常量表先剥 `//` 注释再匹配 —— 注释掉的常量不得进表（否则 wait_for 假绿）
+    import tempfile
+    fake_rs = _write_tmp_rs("// removed: pub const SM_FAKE: u16 = 4095;\n"
+                            "pub const SM_REAL: u16 = 50;   // 行尾注释内的 pub const SM_X: u16 = 51;\n"
+                            "pub const CM_OTHER: u16 = 3014;\n")
+    try:
+        tbl = load_message_constants(fake_rs)
+        assert 4095 not in tbl["SM"] and 4095 not in tbl["CM"], tbl   # 整行注释
+        assert 51 not in tbl["SM"], tbl                                # 行尾注释
+        assert tbl["SM"] == {50: "SM_REAL"} and tbl["CM"] == {3014: "CM_OTHER"}, tbl
+    finally:
+        os.unlink(fake_rs)
+
+    # R5：placement 与 params.self_pos 必须自洽（牙：placement.y 改 1 ⇒ 红）
+    placed = {
+        "name": "selftest_placement",
+        "params": {"self_pos": 15204608},                 # MakeLong(X=256, Y=232)
+        "placement": {"map": "4", "x": 256, "y": 232},
+        "steps": [{"send": {"ident": 3010, "recog": "self_pos"}}, {"wait_for": 10}],
+    }
+    check_scenario(clone(placed), expand_scenario(clone(placed))[0], None, messages)
+    bad_pl = clone(placed)
+    bad_pl["placement"]["y"] = 233
+    try:
+        check_scenario(bad_pl, expand_scenario(clone(bad_pl))[0], None, messages)
+    except ScenarioError as ex:
+        msg = str(ex)
+        assert "disagrees with self_pos" in msg and "x=256 y=232" in msg, msg
+    else:
+        raise AssertionError("placement/self_pos mismatch accepted (R5 tooth broken)")
+    # --var 覆成不一致的值也必须红（生效参数口径）
+    try:
+        check_scenario(clone(placed), expand_scenario(clone(placed), {"self_pos": 15204609})[0],
+                       {"self_pos": 15204609}, messages)
+    except ScenarioError as ex:
+        assert "disagrees with self_pos" in str(ex), str(ex)
+    else:
+        raise AssertionError("--var self_pos mismatch accepted (R5 tooth broken)")
+
+    # M1：self_x / self_y 也必须与 placement 自洽
+    placed_xy = {
+        "name": "selftest_placement_xy",
+        "params": {"self_x": 256, "self_y": 232},
+        "placement": {"map": "4", "x": 256, "y": 232},
+        "steps": [{"send": {"ident": 3011, "recog": "self_x", "param": "self_y"}},
+                  {"wait_for": 11}],
+    }
+    check_scenario(clone(placed_xy), expand_scenario(clone(placed_xy))[0], None, messages)
+    for var, bad in (("self_x", 257), ("self_y", 233)):
+        d = clone(placed_xy)
+        d["params"][var] = bad
+        try:
+            check_scenario(d, expand_scenario(clone(d))[0], None, messages)
+        except ScenarioError as ex:
+            assert ("disagrees with %s" % var) in str(ex), str(ex)
+        else:
+            raise AssertionError("%s mismatch accepted (R5 tooth broken)" % var)
+
+    # M2：派生变量写成**间接 params 名**（链式）不得假红；链到错值仍要红
+    indirect = {
+        "name": "selftest_indirect",
+        "params": {"self_pos": "start_pos", "start_pos": 15204608},
+        "placement": {"map": "4", "x": 256, "y": 232},
+        "steps": [{"send": {"ident": 3010, "recog": "self_pos"}}, {"wait_for": 10}],
+    }
+    check_scenario(clone(indirect), expand_scenario(clone(indirect))[0], None, messages)
+    indirect_bad = clone(indirect)
+    indirect_bad["params"]["start_pos"] = 15204609
+    try:
+        check_scenario(indirect_bad, expand_scenario(clone(indirect_bad))[0], None, messages)
+    except ScenarioError as ex:
+        assert "disagrees with self_pos" in str(ex), str(ex)
+    else:
+        raise AssertionError("indirect self_pos mismatch accepted")
+
+    # R6（WARN 级）：攻击族 tag=(byte)Direction 越界 ⇒ stderr 警告，**不判死**。
+    # 机理：oracle 先按**状态化** Dir 取目标（PlayObject.Attack.cs:26 / lib.rs:8836-8848），
+    # nDir 之后才写入 ⇒ CM_TURN(tag=0)+CM_HIT(tag=99) 的第一击照样命中，不能 rc=2。
+    import contextlib
+    import io as _io
+    hit_idents, dirs = load_direction_spec(messages=messages)
+    assert len(hit_idents) == 9 and dirs == frozenset(range(8)), (hit_idents, dirs)
+    assert 3014 in hit_idents, hit_idents          # CM_HIT
+
+    def stderr_of(data):
+        """展开 + 校验，返回 stderr 文本（不抛 = 通过；抛则冒泡）。"""
+        plans, _ = expand_scenario(clone(data))
+        buf = _io.StringIO()
+        with contextlib.redirect_stderr(buf):
+            check_scenario(clone(data), plans, None, messages)
+        return buf.getvalue()
+
+    turn_hit = {
+        "name": "selftest_turn_hit",
+        "steps": [{"send": {"ident": 3010, "recog": 1, "param": 1, "tag": 0}},
+                  {"send": {"ident": 3014, "recog": 1, "param": 1, "tag": 99}},
+                  {"wait_for": 31}],
+    }
+    warn = stderr_of(turn_hit)       # 不得抛：oracle 第一击仍命中
+    assert "WARN" in warn and "tag 99" in warn, warn
+    assert "不影响本次命中" in warn and "状态 Dir" in warn, warn
+    assert "never hits" not in warn and "only time out" not in warn, warn
+    ok_dir = clone(turn_hit)
+    ok_dir["steps"][1]["send"]["tag"] = 7
+    assert stderr_of(ok_dir) == "", "合法 Direction (tag=7) 不该有警告"
+    # 非攻击族不受 R6 约束（不误伤）：CM_SAY 的 tag 没有方向语义
+    say_scen = {"name": "selftest_say", "steps": [{"send": {"ident": 3030, "tag": 99}},
+                                                  {"wait_for": 100}]}
+    assert stderr_of(say_scen) == "", "非攻击族 ident 不该有方向警告"
+
+    # M3：R6 取表 fail-closed 的五种 drift 都要在 selftest 里被钉住
+    _NL = "\n"
+    dir_consts = "".join("const DIR_X%d: u8 = %d;\n" % (i, i) for i in range(8))
+    good_aw = ("pub const HIT_IDENTS: [u16; 1] = [\n    messages::CM_HIT,\n];\n" + dir_consts)
+    drift_cases = [
+        ("missing-file", None, "cannot read attack-family table"),
+        ("no-hit-idents", "pub const NOPE: u16 = 1;\n" + dir_consts,
+         "cannot find `pub const HIT_IDENTS"),
+        ("unknown-name", "pub const HIT_IDENTS: [u16; 1] = [messages::CM_NOPE];\n" + dir_consts,
+         "references CM_NOPE"),
+        ("short-direction-set",
+         "pub const HIT_IDENTS: [u16; 1] = [messages::CM_HIT];\n"
+         + "".join("const DIR_X%d: u8 = %d;\n" % (i, i) for i in range(7)),
+         "expected 0..7"),
+        # 多出一个越界方向（0..7+99）：任何「放宽成包含」的变异都必须被这条钉住
+        ("extra-direction",
+         "pub const HIT_IDENTS: [u16; 1] = [messages::CM_HIT];" + _NL + dir_consts
+         + "const DIR_XBOGUS: u8 = 99;" + _NL,
+         "expected 0..7"),
+    ]
+    assert load_direction_spec(_write_tmp_rs(good_aw), messages)[0] == {3014}, "good fake"
+    for label, text, needle in drift_cases:
+        path = os.path.join(tempfile.mkdtemp(prefix="pd-dir-"), "no-such.rs") if text is None \
+            else _write_tmp_rs(text)
+        try:
+            load_direction_spec(path, messages)
+        except ScenarioError as ex:
+            assert needle in str(ex), (label, needle, str(ex))
+        else:
+            raise AssertionError("direction-table drift %r accepted (fail-closed broken)" % label)
+
+    # BLOCKED：顶层 `blocked` 是**合法的形状**（rc=0，只是不可跑）；结构非法才 rc=2。
+    # 牙：① 合法 blocked 必须放行（否则所有封存场景都会被 --check-scenario 判死）；
+    #     ② 缺 reason / reason 非字符串 / 未知键 / 空串 必须点名 scenario.blocked.*
+    import shutil
+    bl_dir = tempfile.mkdtemp(prefix="pd-blocked-")
+
+    def _load_doc(name, doc):
+        path = os.path.join(bl_dir, name + ".json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, ensure_ascii=False)
+        return load_scenario(path)
+
+    try:
+        good_blocked = clone(base)
+        good_blocked["blocked"] = {"reason": "夹具不存在：AC 30..59 无解",
+                                   "missing_fixture": "combat_strike 夹具矩阵"}
+        gb = _load_doc("good", good_blocked)
+        check_scenario(gb, expand_scenario(gb, dict(ok_vars))[0], ok_vars, messages)
+        only_reason = clone(base)
+        only_reason["blocked"] = {"reason": "只写理由，不写 missing_fixture"}
+        orr = _load_doc("only-reason", only_reason)   # missing_fixture 可选
+        check_scenario(orr, expand_scenario(orr, dict(ok_vars))[0], ok_vars, messages)
+
+        for i, (label, blocked, needle) in enumerate((
+            ("缺 reason", {"missing_fixture": "x"}, "scenario.blocked missing key(s): ['reason']"),
+            ("reason 非字符串", {"reason": 123},
+             "scenario.blocked.reason must be a non-empty string"),
+            ("reason 空串", {"reason": "   "}, "scenario.blocked.reason must be a non-empty string"),
+            ("blocked 非对象", "yes", "scenario.blocked must be an object"),
+            ("未知键", {"reason": "x", "note": "y"}, "scenario.blocked has unknown key(s)"),
+            ("missing_fixture 空串", {"reason": "x", "missing_fixture": ""},
+             "scenario.blocked.missing_fixture must be a non-empty string"),
+        )):
+            d = clone(base)
+            d["blocked"] = blocked
+            try:
+                _load_doc("bad%d" % i, d)
+            except ScenarioError as ex:
+                assert needle in str(ex), (label, needle, str(ex))
+            else:
+                raise AssertionError("bad blocked accepted (%s) — fail-closed broken" % label)
+    finally:
+        shutil.rmtree(bl_dir, ignore_errors=True)
+
+    # 防误伤：login_only（纯累计观察）与 dice_chain（params 默认值）必须绿
+    for name in ("login_only.json", "dice_chain.json"):
+        d = load_scenario(os.path.join(SCENARIO_DIR, name))
+        check_scenario(d, expand_scenario(d)[0], None, messages)
+    return "R1-R5 硬牙 + R6 方向 WARN + 取表 drift 五例 + blocked 形状（6 坏例）+ 不误伤"
+
+
 class _TimedSock:
     """selftest 用：按墙钟延迟吐出预录字节（不占端口、不连网）。
 
@@ -1614,6 +2211,7 @@ def run_selftest():
     check("tamper-red", _selftest_tamper)
     check("scenario-dsl", _selftest_scenarios)
     check("scenario-required", _selftest_scenario_required)
+    check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
     check("dwell-after-enter", _selftest_dwell)
@@ -1622,7 +2220,7 @@ def run_selftest():
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (8 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (9 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
     return 0
 
 

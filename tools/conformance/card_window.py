@@ -212,6 +212,78 @@ CSHARP_STOP = POWERSHELL + [
     "Stop-Process -Id $_.ProcessId -Force }",
 ]
 
+# Rust 栈**实际执行的二进制**（卡 `openmir2-window-rust-binary-evidence`）：
+# `rust-root/M2GameSvr/GameSrv.exe` 是同目录 .dll 的 .NET 程序集，从不是被跑的那个文件；
+# 证据里的 Rust sha256 必须指向 `mir2-rs/target/{release,debug}/mir2-server.exe`。
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+RUST_SERVER_BIN = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "release", "mir2-server.exe"
+).replace(os.sep, "/")
+RUST_SERVER_BIN_DEBUG = os.path.join(
+    REPO_ROOT, "mir2-rs", "target", "debug", "mir2-server.exe"
+).replace(os.sep, "/")
+PID_FILE_NAME = "mir2-server.pid.json"
+
+
+def resolve_rust_binary():
+    """release 优先、缺失退 debug（证据里注明用的是 debug）；返回 (path, profile)。"""
+    if os.path.exists(RUST_SERVER_BIN):
+        return RUST_SERVER_BIN, "release"
+    if os.path.exists(RUST_SERVER_BIN_DEBUG):
+        return RUST_SERVER_BIN_DEBUG, "debug"
+    return RUST_SERVER_BIN, "release(missing)"
+
+
+def pid_file_path(side_dir, sc):
+    """pid 文件路径：**只认 profile 的 `pid_file`**（`{side_dir}` 模板按本侧产物目录展开）。
+
+    部署把 pid 写到 wrapper 的 `-LogDir`（alt = `E:/tmp/conformance/rust-logs`），
+    不是 `<side_dir>`；所以路径必须在 profile 里显式声明（load_profile 对
+    `require_pid_binaries` 强制校验），代码里不写死任何部署绝对路径。
+    """
+    raw = sc.get("pid_file")
+    if not raw:
+        return os.path.join(side_dir, PID_FILE_NAME)
+    return str(raw).replace("{side_dir}", side_dir)
+
+
+def verify_pid_binaries(side_dir, sc, side):
+    """起栈后核对 `mir2-server.pid.json` 的 `roles[].exe` 与 profile 登记的 binaries。
+
+    返回 `(ok, error_or_none, info)`；不一致/缺文件 ⇒ 调用方把该侧判 rc=2 并点名。
+    """
+    pid_path = pid_file_path(side_dir, sc)
+    norm = lambda p: os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
+    registered = [norm(p) for p in (sc.get("binaries") or [])]
+    info = {"pid_file": pid_path, "registered": list(sc.get("binaries") or []), "roles": []}
+    if not os.path.exists(pid_path):
+        return False, ("缺少 %s：无法核对 %s 栈实际执行的 exe（拒绝只记 sha256 继续跑）"
+                       % (PID_FILE_NAME, side)), info
+    try:
+        # **必须 utf-8-sig**：pid 文件由 `start_mir2_server.ps1` 用 Windows PowerShell 5
+        # 的 `Set-Content -Encoding utf8` 写出，**带 UTF-8 BOM**；用 utf-8 读会抛
+        # `Unexpected UTF-8 BOM` ⇒ 真窗口永远 rc=2（review B2）。
+        with open(pid_path, "r", encoding="utf-8-sig") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as ex:
+        return False, ("读取 %s 失败：%s" % (PID_FILE_NAME, ex)), info
+    roles = data.get("roles") if isinstance(data, dict) else None
+    if not roles:
+        return False, ("%s 没有 roles[]：无法核对 %s 栈实际执行的 exe" % (PID_FILE_NAME, side)), info
+    bad = []
+    for role in roles:
+        exe = role.get("exe") if isinstance(role, dict) else None
+        info["roles"].append({"role": role.get("role") if isinstance(role, dict) else None,
+                              "exe": exe})
+        if not exe or norm(exe) not in registered:
+            bad.append("%s=%s" % (role.get("role") if isinstance(role, dict) else "?",
+                                  exe or "(空)"))
+    if bad:
+        return False, ("pid 文件的 exe 与 profile binaries 不一致：%s（登记 %s）"
+                       % (", ".join(bad), ", ".join(sc.get("binaries") or []))), info
+    return True, None, info
+
+
 BUILTIN_PROFILES = {
     "alt": {
         "format": PROFILE_FORMAT,
@@ -249,7 +321,12 @@ BUILTIN_PROFILES = {
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17600],
                 "ready_ports": [15000, 17000, 17100, 17600],
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
-                "binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"],
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
+                # 部署把 pid 写到 wrapper 的 `-LogDir`（`start-rust.ps1` 里写死
+                # `E:/tmp/conformance/rust-logs`），**不是** `<side_dir>`（review B1）。
+                # 下一次真窗口读的就是这个文件；路径只在这里声明，代码里不写死。
+                "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
                 "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
                 "db": {"tables": RUST_DB_TABLES,
                        "characters_db": "mir2_test_db_r",
@@ -290,7 +367,12 @@ BUILTIN_PROFILES = {
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
                 "ready_ports": [5000, 7000, 7100, 7200],
                 "probe_extra": [],
-                "binaries": ["E:/tmp/conformance/rust-default-root/M2GameSvr/GameSrv.exe"],
+                "binaries": [RUST_SERVER_BIN],
+                "require_pid_binaries": True,
+                # 该部署的 wrapper 目前不在仓内；约定它必须用
+                # `-LogDir $env:CARD_WINDOW_SIDE_DIR` 把 pid 写进本侧产物目录。
+                # 写在别处 ⇒ 起栈后 rc=2 并点名实际要找的文件（fail-closed）。
+                "pid_file": "{side_dir}/" + PID_FILE_NAME,
                 "db": {"preset": "test", "characters_db": "mir2_test_db"},
             },
         },
@@ -576,6 +658,19 @@ def load_profile(value):
             raise ConfigError(
                 "profile.sides.%s.binaries 必须是**非空**字符串数组：窗口证据要求两侧二进制 sha256，"
                 "空列表/缺省会让 PASS 报告里没有任何二进制指纹" % side)
+        pf = sc.get("pid_file")
+        if pf is not None and (not isinstance(pf, str) or not pf):
+            raise ConfigError("profile.sides.%s.pid_file 必须是非空字符串（pid 文件路径，"
+                              "可用 {side_dir} 占位）" % side)
+        if sc.get("require_pid_binaries") and not pf:
+            # 卡 openmir2-window-rust-binary-evidence / review B1：pid 文件由部署的
+            # `-LogDir` 决定，**必须**在 profile 里显式声明，不许代码里兜底写死。
+            raise ConfigError(
+                "profile.sides.%s 开了 require_pid_binaries 就必须显式声明 pid_file"
+                "（部署把 pid 写到 wrapper 的 -LogDir，不是 <side_dir>）" % side)
+        sx = sc.get("server_exe")
+        if sx is not None and (not isinstance(sx, str) or not sx):
+            raise ConfigError("profile.sides.%s.server_exe 必须是非空字符串" % side)
         env = sc.get("env")
         if env is not None:
             if not isinstance(env, dict) or any(
@@ -1157,6 +1252,51 @@ def scenario_placement(path):
         raise ConfigError("%s: scenario.placement.note 必须是字符串" % path)
     return {"map": mp, "x": int(pl["x"]), "y": int(pl["y"]),
             "note": pl.get("note") or ""}
+
+
+BLOCKED_REQUIRED = ("reason",)
+BLOCKED_OPTIONAL = ("missing_fixture",)
+
+
+def scenario_blocked(path):
+    """读场景顶层的 `blocked` 声明；没有 => None；形状非法 => ConfigError(fail-closed)。
+
+    场景可以声明自己被**封存**：形状合法（probe 的 `--check-scenario` 仍 rc=0），但**不可跑**——
+    「为什么跑不了 / 缺什么夹具」写在顶层机器可读字段里，而不是写在 description 人话里
+    （窗口批次读不到人话）。本工具见到 `blocked` 一律 rc=2，且**不建 out、不起栈、不写 report**，
+    从产物层杜绝「跑了一份 BLOCKED 场景」。
+
+    schema（与 `tools/probe/mir2_probe.py::_check_blocked` 同口径，两处各自 fail-closed）：::
+
+        "blocked": {"reason": "<非空 str>", "missing_fixture": "<str，可选>"}
+
+    与 required/computed/placement 一样**重读场景文件**：不依赖 probe 那一侧是否跑过。
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    bl = data.get("blocked")
+    if bl is None:
+        return None
+    if not isinstance(bl, dict):
+        raise ConfigError("%s: scenario.blocked 必须是对象（reason[/missing_fixture]）" % path)
+    bad_keys = set(bl) - set(BLOCKED_REQUIRED) - set(BLOCKED_OPTIONAL)
+    if bad_keys:
+        raise ConfigError("%s: scenario.blocked 有未知键 %s（fail-closed）"
+                          % (path, sorted(bad_keys)))
+    reason = bl.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ConfigError("%s: scenario.blocked.reason 必须是非空字符串（实际 %r）："
+                          "封存理由必须机器可读，不能只写在 description 里" % (path, reason))
+    mf = bl.get("missing_fixture")
+    if mf is not None and (not isinstance(mf, str) or not mf.strip()):
+        raise ConfigError("%s: scenario.blocked.missing_fixture 给了就必须是非空字符串"
+                          "（实际 %r）" % (path, mf))
+    return {"reason": reason, "missing_fixture": mf or ""}
 
 
 def _get_valid_str3(text):
@@ -1770,6 +1910,29 @@ def run_side(runner, side, prof, ctx, password, placement=None):
             res["error"] = "起栈命令失败（rc=%s）：不跑场景（栈没起来不能算对拍通过）" % res["stack_rc"]
             return res
 
+        # 3b) **卡 `openmir2-window-rust-binary-evidence`**：先按 release/debug 解析 Rust 栈
+        # 真正执行的二进制，再拿 `mir2-server.pid.json` 的 `roles[].exe` 对账；不符 ⇒ rc=2，
+        # 不许「只记一个错的 sha256 继续跑」。
+        if sc.get("require_pid_binaries"):
+            # profile 可显式声明 `server_exe`（窗口从别的检出/worktree 跑时用，review M1）；
+            # 缺省按本仓 release → debug 解析。
+            if sc.get("server_exe"):
+                path, kind = str(sc["server_exe"]), "profile(server_exe)"
+            else:
+                path, kind = resolve_rust_binary()
+            res["binary_profile"] = kind
+            if not os.path.exists(path):
+                res["error"] = ("Rust 侧二进制不存在：%s（%s）——请先 `cargo build -p mir2-server "
+                                "--release`，或在 profile 显式给 server_exe（不拿不存在的文件"
+                                "记 sha256）" % (path, kind))
+                return res
+            sc["binaries"] = [path]
+            ok, err, info = verify_pid_binaries(side_dir, sc, side)
+            res["pid_binaries"] = info
+            if not ok:
+                res["error"] = err
+                return res
+
         # 4) 等就绪（栈命令返回 0 也可能没真起来）
         missing = wait_ready(sc.get("ready_ports") or [],
                              prof.get("ready_timeout_s", 120))
@@ -2203,10 +2366,12 @@ def execute(cfg):
     required = []
     computed = {}
     placement = None
+    blocked = None
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
         computed = scenario_computed(scenario)
         placement = scenario_placement(scenario)
+        blocked = scenario_blocked(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
         cfg.get("discovery_scenario") or DEFAULT_DISCOVERY_SCENARIO)
@@ -2280,6 +2445,22 @@ def execute(cfg):
 
     if scenario and os.path.isfile(scenario):
         summary["scenario_sha256"] = sha256_file(scenario)
+
+    # BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）。
+    # 位置刻意在「建 out 目录 / 起栈 / 跑 discovery / 写 report」**之前**，--dry-run 与真跑
+    # 走同一条路径：见到 blocked 就停（rc=2，与「端口被占」同一失败等级），连命令序列都不预览
+    # —— 免得 dry-run 绿了让人误以为可以真跑。
+    if blocked:
+        summary["blocked"] = {"reason": blocked["reason"],
+                              "missing_fixture": blocked["missing_fixture"] or ""}
+        summary["notes"].append("scenario is BLOCKED: %s" % blocked["reason"])
+        summary["notes"].append("missing_fixture: %s"
+                                % (blocked["missing_fixture"] or "(场景未声明)"))
+        summary["verdict"] = "BLOCKED"
+        summary["exit_code"] = 2
+        summary["finished_at"] = iso_now()
+        summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
+        return summary
 
     password = cfg.get("password") or os.environ.get("CONFORMANCE_PASSWORD")
     if not password:
@@ -2726,6 +2907,21 @@ def main():
     if mode == "stack":
         if os.environ.get("STUB_STACK_FAIL") == side:
             return 3
+        pid_mode = os.environ.get("STUB_PID_MODE")
+        if pid_mode and side == "rust":
+            # 模拟 start_mir2_server.ps1：把 roles[].exe 写进 `-LogDir` 的 pid 文件。
+            # 真文件由 Windows PowerShell 5 的 Set-Content -Encoding utf8 写出 => 带 BOM。
+            if pid_mode != "missing":
+                exe = os.environ.get("STUB_PID_EXE", "")
+                if pid_mode == "wrong":
+                    exe = "E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"
+                side_dir = os.environ.get("CARD_WINDOW_SIDE_DIR") or "."
+                enc = "utf-8-sig" if os.environ.get("STUB_PID_BOM") == "1" else "utf-8"
+                with open(os.path.join(side_dir, "mir2-server.pid.json"), "w",
+                          encoding=enc) as f:
+                    json.dump({"server_exe": exe,
+                               "roles": [{"role": "game-svr", "pid": 4242,
+                                          "exe": exe}]}, f)
         return 0
     if mode == "stop":
         return 0
@@ -2801,7 +2997,7 @@ if __name__ == "__main__":
 
 def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
                       busy_port=None, ready_ports=None, envir_roots=None,
-                      chars_db=None):
+                      chars_db=None, pid_wiring=None, pid_bom=False):
     py = sys.executable
 
     def side(name):
@@ -2831,6 +3027,14 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
             prof_side["probe_extra"] = ["--mutate"]
         if name == "csharp" and stack_fail == "csharp":
             prof_side["env"] = {"STUB_STACK_FAIL": "csharp"}
+        if name == "rust" and pid_wiring:
+            # 接线用例：stub 栈写 pid 文件，走完整 run_side（review I1）。
+            # server_exe 显式覆盖 => 不依赖本检出是否构建了 target/{release,debug}。
+            prof_side["require_pid_binaries"] = True
+            prof_side["server_exe"] = stub
+            prof_side["pid_file"] = "{side_dir}/" + PID_FILE_NAME
+            prof_side["env"] = {"STUB_PID_MODE": pid_wiring, "STUB_PID_EXE": stub,
+                                "STUB_PID_BOM": "1" if pid_bom else "0"}
         return prof_side
 
     return {
@@ -2846,6 +3050,118 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
         "compare_extra": [],
         "sides": {"csharp": side("csharp"), "rust": side("rust")},
     }
+
+
+def same_path(a, b):
+    """Windows 口径的路径比较（大小写/分隔符/相对片段归一）。"""
+    def n(p):
+        return os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
+    return n(a) == n(b)
+
+
+def _selftest_pid_binaries(tmp):
+    """卡 openmir2-window-rust-binary-evidence：pid 文件 exe 与登记 binaries 的一致性。
+
+    纯函数层用例（含 review B1/B2 的牙）：① 一致 ⇒ ok；② **带 BOM 的真 pid 文件** ⇒ ok
+    （PowerShell 5 `Set-Content -Encoding utf8` 写出的就是带 BOM 的）；③ 不符 ⇒ 失败并点名
+    角色；④ 缺文件 ⇒ 失败并点名；⑤ 路径只认 profile 的 `pid_file`（不是 `<side_dir>`）；
+    ⑥ `{side_dir}` 模板；⑦ 牙：登记指回 `rust-root/GameSrv.exe` ⇒ 红；
+    ⑧ 内置 alt profile 必须显式声明真窗口读的那个部署路径（牙：改回旧位置 ⇒ 红）。
+    """
+    d = os.path.join(tmp, "pidbin")
+    os.makedirs(d, exist_ok=True)
+    exe = os.path.join(d, "mir2-server.exe")
+    pid = os.path.join(d, PID_FILE_NAME)
+    sc = {"binaries": [exe.replace(os.sep, "/")]}
+    out = []
+
+    def write_pid(path, exe_value, encoding="utf-8"):
+        with open(path, "w", encoding=encoding) as f:
+            json.dump({"server_exe": exe_value,
+                       "roles": [{"role": "game-svr", "pid": 4242, "exe": exe_value}]}, f)
+
+    # ① 正常登记 ⇒ ok
+    write_pid(pid, exe)
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((ok and err is None, "pid 文件 exe 与登记一致 ⇒ ok"))
+    # ② 真 pid 文件带 UTF-8 BOM（PowerShell 5 Set-Content -Encoding utf8）⇒ 仍能读
+    write_pid(pid, exe, encoding="utf-8-sig")
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((ok and err is None, "带 UTF-8 BOM 的 pid 文件 ⇒ 仍 ok（utf-8-sig 读取）"))
+    # ③ 登记与 pid 不符 ⇒ False 且点名
+    write_pid(pid, os.path.join(d, "GameSrv.exe"))
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and "game-svr" in err, "pid exe 与登记不符 ⇒ 失败并点名角色"))
+    # ④ pid 文件缺失 ⇒ False（rc=2 路径）
+    try:
+        os.remove(pid)
+    except OSError:
+        pass
+    ok, err, _ = verify_pid_binaries(d, sc, "rust")
+    out.append((not ok and err and PID_FILE_NAME in err, "缺 pid 文件 ⇒ 失败且点名文件"))
+    # ⑤ pid 路径只认 profile 声明（不是 <side_dir>）：真部署写在 wrapper 的 -LogDir
+    logs = os.path.join(tmp, "pidbin-logs")
+    os.makedirs(logs, exist_ok=True)
+    real_pid = os.path.join(logs, PID_FILE_NAME)
+    write_pid(real_pid, exe)
+    empty_side = os.path.join(tmp, "pidbin-side-empty")
+    os.makedirs(empty_side, exist_ok=True)
+    ok, err, info = verify_pid_binaries(empty_side, {"binaries": [exe],
+                                                     "pid_file": real_pid}, "rust")
+    out.append((ok and err is None and same_path(info.get("pid_file"), real_pid),
+                "pid 路径只认 profile 的 pid_file（不是 <side_dir>）"))
+    # ⑥ `{side_dir}` 模板按本侧产物目录展开
+    ok, err, info = verify_pid_binaries(
+        logs, {"binaries": [exe], "pid_file": "{side_dir}/" + PID_FILE_NAME}, "rust")
+    out.append((ok and err is None and same_path(info.get("pid_file"), real_pid),
+                "pid_file 的 {side_dir} 模板按本侧目录展开"))
+    # ⑦ 牙：把 registrations 指回 rust-root 的 .NET 程序集（老值）⇒ 对拍变红
+    write_pid(pid, exe)
+    stale = {"binaries": ["E:/tmp/conformance/rust-root/M2GameSvr/GameSrv.exe"]}
+    ok, _, _ = verify_pid_binaries(d, stale, "rust")
+    out.append((not ok, "牙：登记指回 rust-root/GameSrv.exe ⇒ 一致性断言红"))
+    # ⑧ 内置 alt profile 显式声明真窗口要读的那个文件（review B1）
+    expected = "E:/tmp/conformance/rust-logs/" + PID_FILE_NAME
+    try:
+        alt = load_profile("alt")["sides"]["rust"]
+        resolved = pid_file_path(os.path.join(tmp, "side"), alt)
+        declared_ok = same_path(resolved, expected)
+    except ConfigError:
+        declared_ok = False
+    out.append((declared_ok,
+                "内置 alt profile 显式声明 pid 文件 = 部署 -LogDir（%s）" % expected))
+    return out
+
+
+def _selftest_pid_wiring(tmp, base_cfg, profile_factory):
+    """接线覆盖（review I1 / 牙③）：stub 栈写 pid 文件，走完整 `run_side` 端到端。
+
+    纯函数层绿不代表接线活着——旁路 `if sc.get("require_pid_binaries"):` 整段时，
+    下面三条必须变红（否则这条卡的核心行为随时可以是死的）。
+    """
+    def run(tag, mode, bom=False):
+        prof = profile_factory(pid_wiring=mode, pid_bom=bom)
+        summary = execute(base_cfg(os.path.join(tmp, "pid-wiring-" + tag), prof))
+        return summary, (summary.get("sides") or {}).get("rust") or {}
+
+    out = []
+    s_ok, r_ok = run("ok", "ok", bom=True)
+    info = r_ok.get("pid_binaries") or {}
+    out.append((s_ok["exit_code"] == 0 and r_ok.get("rc") == 0
+                and bool(info.get("roles"))
+                and str(info.get("pid_file") or "").endswith(PID_FILE_NAME),
+                "接线：起栈后读 pid 文件（带 BOM）对账通过 => 整体 rc=0 且证据记下 roles[]"))
+    s_bad, r_bad = run("bad", "wrong")
+    err_bad = r_bad.get("error") or ""
+    out.append((s_bad["exit_code"] == 2 and r_bad.get("rc") == 2
+                and "不一致" in err_bad and "game-svr" in err_bad,
+                "接线：pid exe 与登记不符 => run_side rc=2 并点名角色（整体 rc=2）"))
+    s_miss, r_miss = run("miss", "missing")
+    err_miss = r_miss.get("error") or ""
+    out.append((s_miss["exit_code"] == 2 and r_miss.get("rc") == 2
+                and PID_FILE_NAME in err_miss,
+                "接线：缺 pid 文件 => run_side rc=2 且点名文件（整体 rc=2）"))
+    return out
 
 
 def selftest():
@@ -4066,6 +4382,91 @@ def selftest():
             and "placement.columns" not in [c["step"] for c in s_pdrybad["commands"]],
             "PL-17 --dry-run 预置不可行 => rc=2 且不预览后续场景命令")
 
+        # 19) 本卡的 pid 对账：纯函数层 8 条 + 接线 3 条。
+        #     **必须在 RED/GREEN 判定之前计入**（review B3：放在 `if fail_n: return 1`
+        #     之后时，失败只打印、rc 仍为 0，牙在门禁层面不可能变红）。
+        for cond, msg in _selftest_pid_binaries(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_pid_wiring(
+                tmp, base_cfg, lambda **kw: _selftest_profile(tmp, stub, log, **kw)):
+            chk(cond, msg)
+        # 20) BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）
+        # 判据：合法 blocked ⇒ rc=2 且点名 reason/missing_fixture，**不建 out、不起栈、不写 report**；
+        # 无 blocked ⇒ 一字不变地 rc=0（不误伤）。检查必须在下面的 rc 判定（fail_n）之前。
+        def write_scen(doc, name):
+            path = os.path.join(tmp, "scen-%s-%d.json" % (name, len(os.listdir(tmp))))
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(doc, f, ensure_ascii=False)
+            return path
+
+        b_reason = "夹具不存在：基线角色没有一档同时满足 DC_min>59 与 HitPoint>=17"
+        b_fixture = "combat_strike 夹具矩阵（docs/combat-strike-scenario-20261023.md §6）"
+        scen_b = write_scen({
+            "name": "selftest_blocked",
+            "blocked": {"reason": b_reason, "missing_fixture": b_fixture},
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "blocked")
+        scen_unblocked = write_scen({
+            "name": "selftest_unblocked",
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "unblocked")
+
+        # 19a) --dry-run：rc=2、点名 reason 与 missing_fixture、不建 out、不预览任何命令
+        fresh_log()
+        out_b = os.path.join(tmp, "run-blocked-dry")
+        s_b = execute(base_cfg(out_b, _selftest_profile(tmp, stub, log),
+                               scenario=scen_b, dry_run=True))
+        chk(s_b["exit_code"] == 2
+            and any("scenario is BLOCKED: " + b_reason in n for n in s_b["notes"]),
+            "BL-1 --dry-run 命中 blocked => rc=2 且打印 'scenario is BLOCKED: <reason>'")
+        chk(any(b_fixture in n for n in s_b["notes"]),
+            "BL-1 --dry-run 打印 missing_fixture")
+        chk(s_b["verdict"] == "BLOCKED" and not s_b["commands"]
+            and not os.path.exists(out_b) and not read_log().strip(),
+            "BL-1 --dry-run 命中 blocked => 不建 out、不起栈、不预览命令（verdict=%s）"
+            % s_b["verdict"])
+
+        # 19b) 真跑：rc=2、不建 out 目录、不起栈、不写 report.json（与端口被占同等级）
+        fresh_log()
+        out_b2 = os.path.join(tmp, "run-blocked-real")
+        s_b2 = execute(base_cfg(out_b2, _selftest_profile(tmp, stub, log), scenario=scen_b))
+        chk(s_b2["exit_code"] == 2 and s_b2["verdict"] == "BLOCKED"
+            and not os.path.exists(out_b2) and not read_log().strip(),
+            "BL-2 真跑命中 blocked => rc=2、不建 out、不起栈、不写 report")
+        chk(not os.path.exists(os.path.join(out_b2, "report.json")),
+            "BL-2 真跑命中 blocked => 没有 report.json")
+
+        # 19c) blocked 结构非法 ⇒ 加载期 ConfigError（fail-closed），一步都不执行
+        for label, bad_bl in (("缺 reason", {"missing_fixture": "x"}),
+                              ("blocked 非对象", "yes"),
+                              ("未知键", {"reason": "x", "note": "y"}),
+                              ("reason 空串", {"reason": "  "})):
+            fresh_log()
+            err_b = ""
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-blocked-shape"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=write_scen({"name": "bad", "blocked": bad_bl,
+                                                      "steps": [{"wait_for": 658}]},
+                                                     "badshape"),
+                                 dry_run=True))
+            except ConfigError as e:
+                err_b = str(e)
+            chk("scenario.blocked" in err_b and not os.path.exists(log),
+                "BL-3 blocked 形状非法（%s）=> ConfigError 且一步都没执行（%r）"
+                % (label, err_b[:80]))
+
+        # 19d) 不带 blocked 的场景不受影响（同形状、同样 dry-run => rc=0 且命令照常预览）
+        fresh_log()
+        s_bok = execute(base_cfg(os.path.join(tmp, "run-unblocked"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=scen_unblocked, dry_run=True))
+        chk(s_bok["exit_code"] == 0 and s_bok["verdict"] == "DRY-RUN"
+            and any(c["step"] == "stack" for c in s_bok["commands"]),
+            "BL-4 无 blocked => 仍 rc=0 并照常预览（不误伤，实际 %s/%s）"
+            % (s_bok["exit_code"], s_bok["verdict"]))
 
     finally:
         holder.close()
@@ -4089,7 +4490,10 @@ def build_parser():
         description="窗口批处理：restore -> 起 C# 栈 -> probe -> 停栈 -> 起 Rust -> probe -> "
                     "停栈 -> compare -> 归档（语义同 run_dual.sh，run_dual.sh 不改）。")
     ap.add_argument("--card", help="卡片 id（--post-comment 时必填；写入 README/摘要）")
-    ap.add_argument("--scenario", help="场景 JSON（tools/probe/scenarios/*.json）")
+    ap.add_argument("--scenario",
+                    help="场景 JSON（tools/probe/scenarios/*.json）。场景顶层 `blocked`"
+                         "（{reason, [missing_fixture]}）=> 本工具 rc=2 且不建 out/不起栈/不写 report："
+                         "封存场景不得被窗口批次消费")
     ap.add_argument("--out", help="产物目录（真跑必填；--dry-run 可省）")
     ap.add_argument("--profile", default="alt",
                     help="profile：alt（默认）| csharp-default | <profile.json 路径>")
