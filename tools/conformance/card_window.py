@@ -2183,19 +2183,23 @@ def scenario_inventory(path):
     return out
 
 
-def inventory_fingerprint_sql(db, chr_name, login_id, columns):
-    """读该角色**背包快照**：命中行数 + 除「声明列」外其余列的 MD5 指纹。
+def inventory_fingerprint_sql(db, chr_name, login_id, columns, exclude_positions=()):
+    """读该角色**其它槽位**的快照：行数 + 除声明列外其余列的 MD5 指纹。
 
-    返回 (sql, declared_cols)；`declared_cols` 之外的列一律进指纹，用来证明「只改了
-    声明的列」。
+    口径（review `c866f358` M-1）：预置只会写声明的槽位，所以「未声明的行有没有被
+    动过」必须**排除声明槽位**来比 —— 否则新增行本身就会让聚合指纹变化，证明不了任何事。
+    `exclude_positions` 非空时加 `Position NOT IN (…)`。
     """
     skip = {"Id", "ChrName", "LoginID", "Index", "MakeIndex", "Position", "Dura", "DuraMax"}
     fp_cols = [c for c in columns if c not in skip]
     fp = ", CHAR(31), ".join("IFNULL(CAST(`%s` AS CHAR), '~')" % c for c in fp_cols) or "''"
+    excl = ""
+    if exclude_positions:
+        excl = " AND `Position` NOT IN (%s)" % ", ".join(str(int(x)) for x in exclude_positions)
     sql = (
         "SELECT COUNT(*), COALESCE(MIN(MD5(CONCAT_WS(%s))), '')\n"
-        "FROM `%s`.`characters_bagitem` WHERE `ChrName` = %s AND `LoginID` = %s;\n"
-        % (fp, db, _sql_quote(chr_name), _sql_quote(login_id)))
+        "FROM `%s`.`characters_bagitem` WHERE `ChrName` = %s AND `LoginID` = %s%s;\n"
+        % (fp, db, _sql_quote(chr_name), _sql_quote(login_id), excl))
     return sql
 
 
@@ -2237,6 +2241,9 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
     try:
         db = placement_characters_db(side, sc)
         res["db"] = db
+        # review `c866f358` I-2：与 `run_placement` 同一口径——用部署 `Server.conf` 的
+        # [DataBase] database 交叉核对 profile 的角色库（拿错库预置会变成假差异）。
+        res["db_pairing"] = _check_db_pairing(side, placement_envir_root(side, sc), db)
         client = placement_db_client(prof, side)
     except ConfigError as e:
         res["error"] = "背包夹具前置校验失败：%s" % e
@@ -2266,7 +2273,22 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
             if need not in columns:
                 raise ConfigError("%s.characters_bagitem 缺列 %s（表结构与预期不符，拒绝）"
                                   % (db, need))
-        fp_sql = inventory_fingerprint_sql(db, chr_name, login_id, columns)
+        positions = [it["position"] for it in items]
+        # 声明槽位必须原本为空：DELETE+INSERT 会把该行其它列重置成默认值，工具不替操作者
+        # 做「覆盖已有物品」这件事（review `c866f358` M-1）。
+        occ_sql = ("SELECT COUNT(*) FROM `%s`.`characters_bagitem`\n"
+                   " WHERE `ChrName` = %s AND `LoginID` = %s AND `Position` IN (%s);\n"
+                   % (db, _sql_quote(chr_name), _sql_quote(login_id),
+                      ", ".join(str(p) for p in positions)))
+        occ = sql("inventory.occupancy", occ_sql)
+        occ_n = int((occ or "0").strip().splitlines()[0] or 0)
+        res["pre_occupied"] = occ_n
+        if occ_n != 0:
+            raise ConfigError(
+                "inventory: 声明槽位里已有 %d 行（%s）——DELETE+INSERT 会把该行其它列重置，"
+                "请改用空槽或先清空" % (occ_n, positions))
+        fp_sql = inventory_fingerprint_sql(db, chr_name, login_id, columns,
+                                           exclude_positions=positions)
         res["sql"]["read"] = fp_sql.strip()
         before = _parse_inventory_fp(sql("inventory.read", fp_sql))
         res["before"] = before
@@ -2297,10 +2319,22 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
                   ", ".join(str(it["position"]) for it in items), db, ", ".join(values)))
         res["sql"]["update"] = upd.strip()
         sql("inventory.update", upd)
+        written = int((sql("inventory.verify_rows", occ_sql) or "0").strip()
+                      .splitlines()[0] or 0)
+        res["written"] = written
+        check_inventory_rows(items, written)
         after = _parse_inventory_fp(sql("inventory.verify", fp_sql))
         res["after"] = after
-        res["action"] = "updated" if after["count"] >= len(items) else None
-        check_inventory_rows(items, after["count"])
+        res["action"] = "updated" if written >= len(items) else None
+        # 「只写了声明的槽位」的机判：其它槽位（排除声明位置）的行数与指纹都必须逐字节不变。
+        if after["count"] != before["count"]:
+            raise ConfigError(
+                "inventory: 其它槽位的行数变了（%d → %d）——预置动到了未声明的行"
+                % (before["count"], after["count"]))
+        if after["fp"] != before["fp"]:
+            res["altered_columns"] = ["<其它槽位的指纹变化>"]
+            raise ConfigError("inventory: 其它槽位的指纹变了（%r → %r）"
+                              % (before["fp"], after["fp"]))
         res["rc"] = 0
         return res
     except ConfigError as e:
@@ -3908,6 +3942,67 @@ def _selftest_inventory(tmp):
     except ConfigError as ex:
         tooth2_ok = "MakeIndex" in str(ex)
     out.append((tooth2_ok, "牙②：两侧 MakeIndex 不同 => 报错并点名"))
+
+    # ---- 生产接线 / 失败面（review `c866f358` I-3 / M-1）：用假 runner 跑 run_inventory 本体 ----
+    class _FakeRunner:
+        def __init__(self, std_mode="0", update_rc=0, verify_fp="-"):
+            self.std_mode = std_mode
+            self.update_rc = update_rc
+            self.verify_fp = verify_fp
+
+        def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None, capture=True):
+            if tag == "inventory.columns":
+                return 0, ("ChrName\nLoginID\nIndex\nMakeIndex\nPosition"
+                           "\nDura\nDuraMax\nDesc0\n"), ""
+            if tag == "inventory.occupancy":
+                return 0, "0\n", ""
+            if tag == "inventory.template":
+                return 0, "%s\t0\t0\n" % self.std_mode, ""
+            if tag == "inventory.read":
+                return 0, "0\t-\n", ""
+            if tag == "inventory.update":
+                return self.update_rc, "", ("boom" if self.update_rc else "")
+            if tag == "inventory.verify":
+                return 0, "0\t%s\n" % self.verify_fp, ""
+            if tag == "inventory.verify_rows":
+                return 0, "1\n", ""
+            return 1, "", "unexpected tag %s" % tag
+
+    prof = {"char_name": "hero", "account": "ua",
+            "sides": {"csharp": {"db": {"characters_db": "mir2_test_db"}}}}
+    sc = prof["sides"]["csharp"]
+    one = [{"index": 100, "make_index": 5001, "position": 3, "std_mode": 0,
+            "dura": 0, "dura_max": 0}]
+
+    orig_pair = globals()["_check_db_pairing"]
+    orig_root = globals()["placement_envir_root"]
+    globals()["_check_db_pairing"] = lambda *a, **k: None
+    globals()["placement_envir_root"] = lambda *a, **k: tmp
+    try:
+        ok = run_inventory(_FakeRunner(), "csharp", prof, sc, one, {})
+        out.append((ok["rc"] == 0 and ok["sql"].get("update") and ok["db_pairing"] is None,
+                    "⑤ 生产路径：假 runner 走通 run_inventory（rc=0、有 UPDATE SQL）"))
+        bad_std = run_inventory(_FakeRunner(std_mode="31"), "csharp", prof, sc, one, {})
+        out.append((bad_std["rc"] == 2 and "StdMode" in (bad_std["error"] or ""),
+                    "⑥ StdMode 与声明不符 => rc=2 且点名"))
+        bad_upd = run_inventory(_FakeRunner(update_rc=1), "csharp", prof, sc, one, {})
+        out.append((bad_upd["rc"] == 2 and "inventory.update" in (bad_upd["error"] or ""),
+                    "⑦ UPDATE 执行失败 => rc=2 且点名"))
+        bad_fp = run_inventory(_FakeRunner(verify_fp="deadbeef"), "csharp", prof, sc, one, {})
+        out.append((bad_fp["rc"] == 2 and bad_fp["altered_columns"],
+                    "⑧ 其它槽位指纹变了 => rc=2 且记 altered_columns"))
+    finally:
+        globals()["_check_db_pairing"] = orig_pair
+        globals()["placement_envir_root"] = orig_root
+
+    # ⑨ 生产接线顺序：run_side 必须调用 run_inventory，且排在 stack 之前（防旁路/挪位）
+    import inspect
+    side_src = inspect.getsource(run_side)
+    out.append(("if inventory:" in side_src
+                and "run_inventory(" in side_src
+                and side_src.index("if inventory:") < side_src.index("run_inventory(")
+                and side_src.index("run_inventory(") < side_src.index('"stack"'),
+                "⑨ run_side 生产接线：if inventory: 走 run_inventory，且在起栈之前"))
     return out
 
 
@@ -5374,6 +5469,11 @@ def selftest():
         chk("magic-columns csharp" in read_log() and "magic-columns rust" in read_log(),
             "MG-7 两侧 SHOW COLUMNS 都走 magic 桩（日志 magic-columns 标记）")
 
+        # 18m) 背包夹具（INV-1..）：4 用例 + 2 牙 + 生产接线/失败面——**必须走 chk**，
+        # 也就是排在 rc 判定之前；此前这段放在 `if fail_n: return 1` 之后 ⇒ 牙永不判红（review `c866f358` B-1）。
+        for cond, msg in _selftest_inventory(tmp):
+            chk(cond, msg)
+
     finally:
         holder.close()
         import shutil
@@ -5383,8 +5483,6 @@ def selftest():
     if fail_n:
         print("RED: card_window.py selftest %d/%d" % (pass_n, total))
         return 1
-    for cond, msg in _selftest_inventory(tmp):
-        chk(cond, msg)
 
     print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
