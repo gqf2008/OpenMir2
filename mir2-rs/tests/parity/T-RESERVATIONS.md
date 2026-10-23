@@ -284,3 +284,12 @@
 | T-251 | openmir2-rm-refmessage-delay-layer | 2026-10-23T15:16:57Z | 在用 |
 | T-252 | openmir2-active-seek-race-missing | 2026-10-23T15:16:59Z | 在用 |
 | T-253 | openmir2-proper-target-unfolded | 2026-10-23T15:17:00Z | 在用 |
+| T-254 | openmir2-search-target-clear-target | 2026-10-23T15:28:07Z | 在用 |
+| T-255 | openmir2-attacktarget-overrides | 2026-10-23T15:28:09Z | 在用 |
+| T-256 | openmir2-persist-single-sided-columns | 2026-10-23T15:28:10Z | 在用 |
+| T-257 | openmir2-save-misc-gaps | 2026-10-23T15:28:11Z | 在用 |
+| T-258 | openmir2-mapcell-attributes-loading | 2026-10-23T15:28:12Z | 在用 |
+| T-259 | openmir2-login-notice-clienttick | 2026-10-23T15:28:13Z | 在用 |
+| T-260 | openmir2-spell-shared-tail | 2026-10-23T15:28:15Z | 在用 |
+| T-261 | openmir2-sm-additem-tail | 2026-10-23T15:28:16Z | 在用 |
+| T-262 | openmir2-db-error-reply | 2026-10-23T15:28:30Z | 在用 |

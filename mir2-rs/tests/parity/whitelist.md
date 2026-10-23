@@ -976,3 +976,38 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 > `disappear-recipients-gridscan`）已由批 1/批 2 发 comment，本批不重复登记（避免同卡多 T 行）。
 
 ---
+
+## R 卡窗口证据登记——B2 批 4（2026-10-23；卡 `r-window-registry-batch`）
+
+> 口径同批 1–3：本表登记的是「真机窗口证据未采」，**不是行为豁免**；每行引用**该卡自己的** `status` 原文与出处 oid
+> （引文保留原文的加粗/反引号，可做子串比对）；**一行只登记一张卡**，行内跨卡引用不带 `openmir2-` 前缀。
+> 名单来源：`python -I tools/goal/goal_gate.py --json`（2026-10-23T15:26:54Z，`generated_ts=1792769214`，commit `512d9ecf5`）
+> 的「merged 未 closed 且无登记」17 张，按 `last_status_ts` 升序取最旧 10；其中 **9 张登记（T-254..T-262）**、
+> 1 张无窗口判据 ⇒ 只发 comment（`gate-gmclose-race`，见本节末）。
+> **显式顺延规则（延续批 3）**：最旧 3 张（`enter-map-cell-rejected-vs-oracle` / `run-gap-checkdupobj` /
+> `disappear-recipients-gridscan`）已由批 1/批 2 发 comment，本批继续**显式顺延、不重复登记**（避免同卡多 T 行）。
+
+| 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
+| --- | --- | --- | --- |
+| T-254 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-search-target-clear-target`（tier=R） | 该卡 `status d63ea986b23a46d05471cc87d9e7625245976034` 原文：「SearchTarget 的 ClearTarget/RemoveAt 怪癖已照抄（6a774ea79，tier=R）。余量：① 真机窗口；② 其余折入版调用点未扩大范围。」**场景待建**：window-batch-plan §1 第 37 行「新：world_observe / combat」，未指定承接卡 ⇒ 需 owner/coordinator 派场景卡。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-255 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-attacktarget-overrides`（tier=R） | 该卡 `status fbfe582628678bb7998ff96348521aa443670d69` 原文：「10 个 AttackTarget 覆写已落地（bbf9694aa，tier=R；首轮 F1 Critical → 修复 CONFIRMED）。余量：真机窗口（82/119/130/91/107/105）；114/117/118/215 不可达；`UndeadPower` 口径另卡。」**场景待建**：window-batch-plan §1 第 38 行「新：`combat_hit`（82/119/130/91/107/105 race）」——现有 `combat_hit` 只能对指定格砍一刀、不能选怪 race；未指定承接卡。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-256 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-persist-single-sided-columns`（tier=R） | 该卡 `status 30c4ae0f0975169d4c3ea19e8874d95400d34d27` 原文：「单边列与 Rust-only 补齐已落地（50dd3f2ef，tier=R）。余量：真机窗口；失败移动后 `DisplayTable.dir` 未随实体（建议单卡）。」**场景已存在**：`login_only` + 停栈后 `db_snapshot`；离线实跑 `python -I -B tools/probe/mir2_probe.py --check-scenario --scenario tools/probe/scenarios/login_only.json` ⇒ **rc=0**。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-262 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-db-error-reply`（tier=R） | 该卡 `status 4685a4bc936721c163fb4a42b3833d8c5380587f` 原文：「DB 错误应答已落地（50dd3f2ef，tier=R）。余量：真机窗口（失败注入的 C# 对拍）。」**场景待建**：window-batch-plan §1 第 263 行场景列为「—；替代=离线注入 + 帧构造」——无现成 probe 场景，需 DB 失败注入夹具/构造级替代，**替代方案未建** ⇒ 未指定承接卡，需 owner/coordinator 派；本行不写跑不通的命令。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-257 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-save-misc-gaps`（tier=R） | 该卡 `status 08ae888f48600f8dd57cffd4c4b1df89ce1abdc0` 原文：「存档杂项已落地（50dd3f2ef，tier=R）。余量：真机窗口；G11 传输面未移植；G7 读到一半失败未构造。」**场景已存在**：`login_only` + 停栈后 `db_snapshot`；离线实跑 `--check-scenario --scenario tools/probe/scenarios/login_only.json` ⇒ **rc=0**（G11/G7 两项另记，不在本条判据内）。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-258 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-mapcell-attributes-loading`（tier=R） | 该卡 `status 4dda39d08ec20346f3ff62f80046ebc3ae8a9d03` 原文：「实现 + 独立复验 + 数字/判据订正（2ff02ac0e + b192bd9f3，tier=R 不收卡）。余量：① 真机窗口（**必核**：route added=1649、刷怪位置与 RNG 流水、进图/落格/AOI/CanWalk(true)/snap）；② `castle.rs::apply_structure_events` 运行期掩码仍无生产调用方（归 M3⑧）；③ 同族 `Valid` 消费点未穷尽 30 余处；④ 被掩码格 ObjList 对外不可读（oracle 无 gameplay 路径直读，当前零影响）。」**场景已存在**：`login_only` + 停栈后 `db_snapshot`；离线实跑 ⇒ **rc=0**；RNG 流水需双开 `MIR2_RNG_LOG`。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-259 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-login-notice-clienttick`（tier=R） | 该卡 `status 46b350f5cc51e6a7b046f24a769ba3a24e785e95` 原文：「B1 已落地（326c6431f，tier=R）：1018→`ClientTick`（零出帧）+ `SM_SPELL` 后接版本门（失败恰 1 条 639、MP/53 先行、+GD 照发）。**T-73** 登记 B1 非阻塞窗口等未建模面。余量：① 真机窗口（含 `SoftVersionDateEx==0` 两侧构造）；② **方案 A**（完整等待环 + 10s 超时踢人 + 等待期丢弃）另开 R 卡；③ 8 个显式 MagIdx case 的 MP 逻辑。共享尾：P1 已落，P2（14/15/31）/P3 未做。」**场景已存在**：`login_only`；离线实跑 ⇒ **rc=0**；`SoftVersionDateEx==0` 两侧构造需 C# 侧等价夹具（status 原文已注明）。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-260 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-spell-shared-tail`（tier=R） | 该卡 `status f9bc711a2b9cf59550223f79e50f6a4681e1dad1` 原文：「T-78 节流修复落地（2dac5c7bb，tier=R）。余量：① 真机窗口（注入时钟下 656 帧序）；② T-78 剩余三偏差；③ `vmt`（VerifyMapTime/玩家 viewer 过期/AOI 诊断）在飞。」**场景部分已存在**：`spell_cast`（`tools/probe/scenarios/spell_cast.json`），离线实跑 `--check-scenario` ⇒ **rc=0**；但 **656 帧序/注入时钟不在该场景内**（window-batch-plan §1 第 23 行「新：R5 spell_cast」）⇒ 待建，未指定承接卡。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+| T-261 | **R 卡窗口证据未采（登记，不豁免）**：卡 `openmir2-sm-additem-tail`（tier=R） | 该卡 `status 8b252336efaca93c1394fd646cbb69131fe01ab3` 原文：「随帧面批次落地（27d22a9f3，tier=R）。余量：真机窗口 + T-79/T-80 登记项。」**场景已存在**：`login_only`；离线实跑 ⇒ **rc=0**；判据=T-79/T-80 帧尾逐字节。 | 作者登记（`worker-66`，卡 `r-window-registry-batch`）；**待独立 principal 复核** |
+
+> **本批未登记 1 张（无窗口判据）**：`openmir2-gate-gmclose-race` —— `status c77d9772a1a3d1fb469946f22f36bd3c437890e9`
+> 原文「已合入 master（c83a9ae24，tier=R）。无待窗口项；按 R 级规则不 closed，观察点=长跑下控制帧 flush」；
+> review `8a2773d26e08c44d442feb3db8e24fe7d28de2ae` 判 approve 且 `window_required: false`；记账 comment
+> `d7630aab349497b0b366b4d274d2d383e127b410` 建议「owner/coordinator 复核后改为 closed」。
+> 已在本卡线程发 comment（见 status 里的 `comment_oid`），请 owner 裁决：按 review 关闭，或把「长跑控制帧 flush」
+> 写成可判窗口项后再登记。**未改状态**。
+>
+> **显式顺延 3 张（延续批 3）**：`enter-map-cell-rejected-vs-oracle`（comment `da8a172a99d152a26181371964334bbf997de825`）、
+> `run-gap-checkdupobj`（`8515c9d0cca824e1c5888fb8acf19cb198c1f5c`）、`disappear-recipients-gridscan`
+> （`fea2fbd9962ca0b0a7630cde4ce549ab8b00a148`）。这三张仍计入 `merged 未 closed 且无登记`，等 owner 裁决。
+
+---
