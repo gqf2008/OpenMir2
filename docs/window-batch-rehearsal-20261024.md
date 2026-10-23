@@ -13,7 +13,7 @@
 1. **20 个场景的离线彩排结果**：15 个「离线绿」（与 `window-batch-plan` 的 15 场景枚举一致）、2 个 `blocked`（`combat_hit` / `combat_strike`）、2 个「dry-run 绿但不可信（假绿）」（`bag_equip` / `eat_item`）、1 个「默认 profile 加载期 fail-closed」（`spell_cast`：默认 `alt` 下 `--dry-run` **rc=2**，带 `magic` profile 才 rc=0 且 2 行夹具预览）。15 + 2 + 2 + 1 = 20。逐条见 §2。
 2. **`spell_cast` 的假绿通道已被工具关掉（已 fail-closed）**：场景顶层声明 `requires: ["magic"]`（`tools/probe/scenarios/spell_cast.json`），`card_window` **加载期**按生效 profile（含 `sides.<side>` 覆盖）**逐侧**核段，缺任一侧的 `magic` ⇒ **rc=2 并点名**（场景 / profile / 缺哪侧 / 场景文件）。实测：`--profile alt` 下 `--dry-run` **rc=2、0 行魔法夹具**；带 `magic` 段的 profile 才 rc=0 且出现两行夹具预览。**「已 fail-closed」不等于「可以真跑」**——真机侧仍不可跑（Rust 魔法帧面 + 第二观察者）。
 3. **`bag_equip` / `eat_item` 的 inventory 夹具当前没有可用路径**：`card_window.py` 已支持**场景级** `inventory`（已合 `bb4317a01`），但 `mir2_probe.py` 的顶层 schema 不收该键 ⇒ 一旦在场景里声明，`--check-scenario` 与真跑都 rc=2。**dry-run 对 inventory 也完全不预览**（只预览 placement 和 magic）。⇒ `openmir2-window-inventory-fixture`（已合 `bb4317a01`）产出的夹具**没有可达入口**；由新卡 **`openmir2-inventory-fixture-reachability`**（open）承接。详见 §3.2 与 §5 差异 3。
-4. **`dice_chain` 有一个窗口级隐患**：`params.npc_actor = 119` 是 r9 抓包里的赌场 NPC actor id，而 C# 的 ActorId 每会话不同；它又不在 `required` 里 ⇒ `card_window` 不会为它做 discovery。**而 `card_window` 没有 `--var` 透传 ⇒ 119 无法从命令行覆盖**。**开窗时直接跑 `dice_chain_auto`**（actor 自动发现）；要跑 `dice_chain` 本尊只能改场景 `params`（红线禁止，见 §6.3）。
+4. **`dice_chain` 的 actor 隐患已由 `--var` 透传收口**（卡 `openmir2-card-window-var-passthrough`）：`params.npc_actor = 119` 是 r9 抓包里的赌场 NPC actor id，C# 的 ActorId 每会话不同；它不在 `required` 里 ⇒ **不会有 discovery 值**。现在 `card_window --var npc_actor=<本次 actor id>` 会**原样**透传给两侧 probe（不传时行为逐字节不变）⇒ 跑 `dice_chain` 时显式给本次 id（取法见 §6.3）；不想手工取 id 仍可直接跑 `dice_chain_auto`（actor 自动发现）。**场景 JSON 不动**（红线，见 §6.3）。
 5. **计数口径**：按 Leader 裁决（drift-sweep 线程 status `eb667db0`）只看**逐行枚举**，禁止 `18−N` 反推。落地位置是 **`docs/window-batch-plan-20261023.md` §7.4 @ `6ceb0689d`**（drift-sweep v5，**尚未合入 master**），枚举为 **10 行 / 15 个场景**。本次实跑与它一致；偏差逐条见 §5。（派单文字写的是「§7.5」，但 §7.5 是「判据口径」，枚举实际在 §7.4；master `8dcb8c8ca` 的 §7.4 仍是旧口径 14。）
 
 ---
@@ -75,7 +75,7 @@ python -I -B tools/conformance/card_window.py --dry-run --scenario tools/probe/s
 | `bag_equip` | 2 → 0（`make_index`/`takeon_where`/`item_name`） | **0（假绿）** | 0ᵛ（**仍无夹具预览行**） | 缺 inventory 夹具**且无可用路径**（probe schema 拒 `inventory`）；201 发现无真实样本 | `openmir2-window-inventory-fixture`（已合 `bb4317a01`）；**可达入口缺口 = `openmir2-inventory-fixture-reachability`**（open）；**建议新卡** `openmir2-probe-scenario-inventory-key`（未开） | 1：`delmagic-addmagic-chain` |
 | `combat_hit` | 2 → 0（`hit_xy`/`hit_dir`；**`hit_dir` 需操作者显式给**，见 §1.3） | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：无同屏怪物夹具 + `wait_for` 无 recog/来源过滤 ⇒ 31/14 不可归因 | **建议新卡** `openmir2-combat-hit-monster-fixture`（未开）；recog/来源过滤**仍未实现**（待补），承接卡 `openmir2-probe-waitfor-recog-filter`（已开，issue `7ef0565ef`；须等前置合入后开工） | 12：`attacktarget-overrides`、`login-numeric-gaps`、`merchant-race-bias`、`monster-attack-hit-frame`、`proper-target-unfolded`、`rm-delaypushed`、`rm-refmessage-delay-layer`、`run-gap-mb3`、`run-gap-monster-specials`、`run-gap-pl1`、`superman-normnpc`、`weapon-durability-frames` |
 | `combat_strike` | 0 | **2ᵇ BLOCKED** | 2ᵇ | `blocked`：无 `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装，且 `wait_for` 无 recog 过滤 | **建议新卡** `openmir2-combat-strike-gear-fixture`（未开）；影响 R3 的 13 张 | 13：见 §4.3（R3 全组） |
-| `dice_chain` | 0 | 0 | 0ᵃ | 赌场 NPC；**`params.npc_actor=119` 是 r9 抓包值、每会话不同且不在 `required`，而 `card_window` 无 `--var` 透传 ⇒ 会点空** | 无（场景本身可跑；**窗口改用 `dice_chain_auto`**，见 §6.3） | 2：`script-playdice-openybdeal`、`script-take-persist`；另有 T-211 |
+| `dice_chain` | 0 | 0 | 0ᵃ | 赌场 NPC；**`params.npc_actor=119` 是 r9 抓包值、每会话不同且不在 `required`**。`card_window` 现已支持 `--var` 透传（卡 `openmir2-card-window-var-passthrough`）⇒ 开窗时用 `--var npc_actor=<本次 actor id>` 覆盖；不给则仍按 119 点空 | `openmir2-card-window-var-passthrough`（已交付）；不想手工取 id 仍可用 `dice_chain_auto`（见 §6.3） | 2：`script-playdice-openybdeal`、`script-take-persist`；另有 T-211 |
 | `dice_chain_auto` | 0 | 0 | 0ᵃ | 赌场 NPC（actor 自动发现） | — | 2：`menu-ok-unify-pickwire`、`ya52-menu-ok-missing` |
 | `eat_item` | 2 → 0（`make_index`/`item_name`） | **0（假绿）** | 0ᵛ（**仍无夹具预览行**） | 同 `bag_equip`（inventory 路径不可用 + 201 无样本） | 同 `bag_equip` | 1：`unbindlist-consumer`；另有 T-211 |
 | `equip_struck_save` | 0 | 0 | 0ᵃ | 商店 NPC「卫家店」(0103,19,18) 摆位；R 级真机窗口未授权 | `openmir2-persist-useitems-wiring`（T-247）；`openmir2-attack-weapon-wear-642`（T-266）；场景 description 曾写「Rust 未接 642」，已由 `openmir2-642-stale-text-sweep`（合入 `061312242`）订正为「已接线、真机窗口未跑」 | 2：`persist-useitems-wiring`、`attack-weapon-wear-642` |
@@ -277,7 +277,7 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 | `move_walk` | 相邻目标格可走（由 SM_LOGON 推） |
 | `pickup_item` | 脚下有可拾取地物（否则 200/201 不来） |
 | `dice_chain_auto` | 赌场 NPC 在场 |
-| `dice_chain` | **不要用本尊**：`card_window` 无 `--var` 透传，默认 119 是 r9 的会话 id ⇒ 会点空。**改用 `dice_chain_auto`**（见 §6.3） |
+| `dice_chain` | 须显式给本次 actor：`card_window --var npc_actor=<本次 id>`（默认 119 是 r9 会话值，不给会点空）。不想取 id 就用 `dice_chain_auto`（见 §6.3） |
 | `upgrade_retrieve` | 铁匠摆位 (320,328)+武器在手+金币≥10000+黑铁矿（三项缺一必红） |
 | `equip_struck_save` | 「卫家店」(0103,19,18) 摆位；R 级窗口授权（description 已由 `061312242` 订正为「已接线、真机窗口未跑」） |
 | `gm_time` / `gm_batch` | 角色 GM Permission |
@@ -295,7 +295,17 @@ R3 全组 **13 张**（`docs/window-debt-reclass-20261023.md` §R3）：`merchan
 
 ### 6.3 窗口操作提示（照做，不解释）
 
-- **`dice_chain` 会点空 ⇒ 窗口里改用 `dice_chain_auto`**：`card_window` **没有 `--var` 透传**（argparse 列表 `:5640-5667` 无该参数；`--help` 里唯一的 "var" 是 `--discovery-frames` 的说明文字），而 `dice_chain.json` 的 `params.npc_actor` **硬编码为 119**（r9 抓包会话值，C# `ActorId` 每会话不同）⇒ 默认跑是对着本次不存在的 actor 点。`dice_chain_auto` 用 `click_npc="auto:last_turn"` 自动发现，是窗口唯一可用形态。要跑 `dice_chain` 本尊只能改场景 `params`（红线禁止）或等 `card_window` 加 `--var`（建议 id `openmir2-cardwindow-var-passthrough`，未开）。
+- **`dice_chain`：用 `--var npc_actor=<本次 actor id>` 跑本尊**（卡 `openmir2-card-window-var-passthrough` 起支持；此前无透传只能改用 `dice_chain_auto`）：`dice_chain.json` 的 `params.npc_actor` **硬编码为 119**（r9 抓包会话值，C# `ActorId` 每会话不同），而 `npc_actor` **不在 `required`** ⇒ `card_window` 不会为它做 discovery。`--var` 是**覆值通道**（只覆盖已声明变量，不声明新变量），会**原样**出现在两侧 probe 命令行、顺序 = 命令行顺序；不传时行为逐字节不变。取本次 id：在同一会话先跑 `npc_click_auto`（或读上一轮 `frames.ndjson` 里 `CM_CLICKNPC(1010)` 的 `recog/param`），再把该数字喂给 `--var`：
+
+  ```sh
+  python -I -B tools/conformance/card_window.py --card <卡 id> \
+    --scenario tools/probe/scenarios/dice_chain.json \
+    --var npc_actor=<本次 actor id> \
+    --profile alt --out E:/tmp/win/dice_chain
+  ```
+
+  `--dry-run` 会把 `--var npc_actor=<id>` 打在同一行命令里（先核对再开窗）。**场景 JSON 不动**（红线）。不想手工取 id 仍可跑 `dice_chain_auto`（`click_npc="auto:last_turn"` 自动发现）。
+- **非法 `--var` fail-closed**：缺 `=` / 空名 / 空值 / 同名不同值 ⇒ 加载期 rc=2 并点名（不会静默丢一个）。
 - **`bag_equip` / `eat_item` 不要开窗**：inventory 夹具在本 head **无任何可达入口**（§3.2 / §5 差异 3），dry-run rc=0 是假绿。
 - **`spell_cast` 必须带 magic profile**：`--profile alt` 下已 **fail-closed（rc=2，加载期点名缺 csharp/rust 侧）**，不再是假绿；带 `magic` profile 才 rc=0 且 2 行夹具预览（§3.1）。rc=0 只代表离线夹具预览齐了，**真机仍不可跑**。
 - **别把 magic profile 当「只影响 spell_cast」**：profile 一旦声明 `magic`，dry-run 会为**每个非 blocked 场景**预览两侧各 1 行魔法夹具（全局 DB 预置，§2 列说明）；`blocked` 场景没有预览行——硬门在预览循环之前就 rc=2 返回，实测 **18/20**（`combat_hit`/`combat_strike` 为 0），别按「20×2=40 行」对账。
@@ -322,8 +332,14 @@ python -I -B tools/conformance/card_window.py --card <卡 id> \
   --scenario tools/probe/scenarios/npc_script_chain.json \
   --profile alt --out E:/tmp/win/npc_script_chain
 
-# 4) dice_chain：改用 dice_chain_auto（actor 自动发现）——card_window 没有 --var 透传，
-#    所以 dice_chain 的默认 actor 119 无法从命令行覆盖；要跑 dice_chain 只能手工改场景 params（红线禁止）
+# 4a) dice_chain：用 --var 覆盖本次 actor id（卡 openmir2-card-window-var-passthrough）
+#     默认 params.npc_actor=119 是 r9 会话值；id 的取法见 §6.3
+python -I -B tools/conformance/card_window.py --card <卡 id> \
+  --scenario tools/probe/scenarios/dice_chain.json \
+  --var npc_actor=<本次 actor id> \
+  --profile alt --out E:/tmp/win/dice_chain
+
+# 4b) 不想手工取 id：dice_chain_auto（actor 自动发现）
 python -I -B tools/conformance/card_window.py --card <卡 id> \
   --scenario tools/probe/scenarios/dice_chain_auto.json \
   --profile alt --out E:/tmp/win/dice_chain_auto
@@ -338,7 +354,7 @@ python -I -B tools/probe/mir2_probe.py --check-scenario \
   --scenario tools/probe/scenarios/upgrade_retrieve.json --var merchant_actor=119
 ```
 
-> `card_window --help` 目前**没有 `--var` 参数**；需要手工给 `dice_chain` 指定 actor 时，只能改场景 `params`（被本卡红线禁止）或改用 `dice_chain_auto`。**这是本卡发现的一个工具缺口**：建议在 `card_window` 增加透传 `--var`（建议卡 `openmir2-cardwindow-var-passthrough`，未开）。
+> **`card_window --var NAME=VALUE`（卡 `openmir2-card-window-var-passthrough`）**：可重复，原样透传给两侧（csharp/rust）probe；`--dry-run` 打印的命令里可见。加载期 fail-closed：缺 `=`、空名、空值、同名不同值 ⇒ rc=2 点名。**不传时行为与产物逐字节不变**。此前「dice_chain 只能改场景 params 或改用 dice_chain_auto」的缺口已由该卡收口（场景 JSON 仍未改）。
 
 ### 7.1 magic profile 内容（复用内置 alt，不复制整份）
 
