@@ -1,7 +1,7 @@
 # 文档「状态词」漂移清扫（`openmir2-docs-state-drift-sweep`）
 
 - 卡：`openmir2-docs-state-drift-sweep`（tier=L）；分支 `card/openmir2-docs-state-drift-sweep`；写集 `docs/`。
-- **扫描时点**：`walgit/master = 2e3b8500a`（2026-10-24）；**交付 head 基于 `01d4f5877`**（rebase 链：`5a6ed54c1` 窗口判据审计 → `bb4317a01` 背包夹具 → `a112e59b5` recog 打包 → 最新 master）；每次 rebase 后相关行已同步订正（§1 #16/#19 与 §3），其余判定不受影响。本报告与所有订正都以这个 commit 为判据；**本报告自己也会过期**，引用前先带上这个戳。
+- **扫描时点**：`walgit/master = 2e3b8500a`（2026-10-24）；**交付 head 基于 `01d4f5877`**（rebase 链：`5a6ed54c1` 窗口判据审计 → `bb4317a01` 背包夹具 → `a112e59b5` recog 打包 → 最新 master；**接管返工（worker-58）rebase 到 `aaefd6d1e`（latest master）**）；每次 rebase 后相关行已同步订正（§1 #16/#19 与 §3），其余判定不受影响。本报告与所有订正都以这个 commit 为判据；**本报告自己也会过期**，引用前先带上这个戳。
 - 起因：今晚至少三次「文档写着未合/在办，实际已合」，而 `docs/window-batch-plan-20261023.md` 正是 owner 开窗时的执行依据。
 
 ## 0. 扫描口径（可复算）
@@ -21,11 +21,11 @@
    - **仍准确** ⇒ 不动，本报告 §3 记「已核，仍准确」；
    - **判不了** ⇒ 写「判不了 + 缺什么」（§4），**不写成已核**。
 
-**命中统计**：67 个文件里 **35 个**含状态词，共 **123 行**命中；其中 **19 个文件 / 35 个「2026-10-24 订正」标记行**（同一行内出现 **36** 次——`window-batch-plan` 的「在办」行含 2 个）判为过期并已订正（**本报告自身不计**），其余归 §3/§4。计数可复算（**base 相对**）：`base=$(git merge-base walgit/master HEAD); git diff $base..HEAD -- docs/ ":!docs/docs-state-drift-sweep-20261024.md" | grep "^+" | grep -c "2026-10-24 订正"` ⇒ **35**（出现次数用 `grep -o … | wc -l` ⇒ 36）。
+**命中统计**：67 个文件里 **35 个**含状态词，共 **123 行**命中；其中 **19 个文件 / 36 个「2026-10-24 订正」标记行**（同一行内出现 **37** 次——`window-batch-plan` 的「在办」行含 2 个）判为过期并已订正（**本报告自身不计**），其余归 §3/§4。计数可复算（**base 相对**）：`base=$(git merge-base walgit/master HEAD); git diff $base..HEAD -- docs/ ":!docs/docs-state-drift-sweep-20261024.md" | grep "^+" | grep -c "2026-10-24 订正"` ⇒ **36**（出现次数用 `grep -o … | wc -l` ⇒ 37）。
 
 > 说明：多数命中是**交卡时自述**（「未合并、未自签 review」）、**分类名**（`未开工/未合并` 桶）、**引用原文**（脚本说词「尚未开放」）或**带戳快照**——这些不算漂移，见 §3。
 
-## 1. 订正清单（22 行 + v5 新增订正行 ⇒ 19 个文件 / 35 个标记行；#10、#19 已撤回，见下表说明）
+## 1. 订正清单（22 行 + v5 新增订正行 ⇒ 19 个文件 / 36 个标记行；#10、#19 已撤回，见下表说明）
 
 每条格式：**位置** ⇒ 原说法 → 订正（判据 commit）。
 
@@ -55,7 +55,7 @@
 | 21 | `window-runbook-20261023.md:126/128` | 「`-WhatIf` 只打印路径、不打印 sha256（`:349`）」 | 脚本已打印 `SERVER_EXE`/`SERVER_EXE_SHA256`/`SERVER_EXE_BUILD` 三行（`start_mir2_server.ps1:381`）；两处已订正（review F4 漏项） |
 | 22 | `upgrade-retrieve-scenario-20261023.md:298` | 「背包夹具不支持」 | 工具随 `bb4317a01` 支持 `inventory` 声明；本场景缺的是**声明**，且夹具卡真库读写回未跑（review F2 漏项） |
 
-> 表内 22 行（v5 又在 batch-plan 补了 3 行）合计 **19 个文件 / 35 个订正标记行**（`window-batch-plan` **12**（含 v5 新增的 I1/I2 订正行）、`r-card-ledger-sweep` 4、`rewrite-remaining-inventory` 3，其余 **16** 个文件各 1；本报告自身不计；#10/#19 已撤回不计）。
+> 表内 22 行（v5 又在 batch-plan 补了 3 行）合计 **19 个文件 / 36 个订正标记行**（`window-batch-plan` **13**（含 v5 新增的 I1/I2 订正行与 v6 补的 §7.2 3 行）、`r-card-ledger-sweep` 4、`rewrite-remaining-inventory` 3，其余 **16** 个文件各 1；本报告自身不计；#10/#19 已撤回不计）。
 
 ## 2. 三个卡面点名实例的结论
 
@@ -130,7 +130,7 @@ walgit collab thread <卡> --repo .
 ## 6. 残留与边界
 
 - 写集仅 `docs/`：**未改** `whitelist.md`、`T-RESERVATIONS.md`、工具、场景、任何卡片状态。
-- 本卡**不修**判据本身：例如 `window-batch-plan` 里「现在就能跑 = 14 个」的场景计数（preflight 合入不改变场景集，因此仍成立），以及 §7.3 的结论均原样保留——**`combat_strike`/`combat_hit` 仍 `blocked`；`spell_cast` 已解封（`7bb48239a`），但仍缺 Rust 魔法落点 + 第二观察者 ⇒ 真机仍跑不了，且 dry-run 取证须带 `--profile`（`magic` 段声明）**。
+- 本卡**不修**判据本身：例如 `window-batch-plan` §7.4 的「现在就能跑」计数（v5 起按逐行枚举为 **10 行 / 15 个场景**，`equip_struck_save` 已因 `8dcb8c8ca` 移入能跑；原句「= 14 个…仍成立」已作废），以及 §7.3 的结论均原样保留——**`combat_strike`/`combat_hit` 仍 `blocked`；`spell_cast` 已解封（`7bb48239a`），但仍缺 Rust 魔法落点 + 第二观察者 ⇒ 真机仍跑不了，且 dry-run 取证须带 `--profile`（`magic` 段声明）**。
 - 本报告**是快照**：master 一旦再动，§1 的「现在的事实」会再次过期；下一轮按 §5 重跑即可，不要直接引用 §1 的 commit 而不核 master。
 - 临时物：`E:/tmp/tonight-docs.txt`、`E:/tmp/master-files.txt`、`E:/tmp/drift_scan.py`、`E:/tmp/drift-scan.txt`（扫描原始命中 123 行）、`E:/tmp/drift_edits.py`、`E:/tmp/drift_edits2.py`、`E:/tmp/board.txt`、`E:/tmp/cards.txt`（479 张卡清单）——均为复核证据，保留；无进程、无库改动。
 
@@ -141,4 +141,14 @@ walgit collab thread <卡> --repo .
 | **I1**（Important） | master `8dcb8c8ca` 已接 642 攻击方磨损（T-266），但 batch-plan 的活执行依据仍写「未接/必超时」⇒ 已订正 §7.2 2A、§7.3 表（删除 `equip_struck_save` 行）、§7.3 表后两条结论、§7.4 计数行与「能跑」表（新增 `equip_struck_save` 行）、§7.4「仍不可跑」表（删除该行）。快照 `goal-snapshot-late` 与 `needs-human-night` **不重写正文**，在「后续更新」/§5 处各加一条指向 `8dcb8c8ca` 的现态指针；本报告 §3 的 `goal-snapshot-late` 行不再记「准确」。 |
 | **Leader 裁决（计数）** | 「现在就能跑」**按逐行枚举**：§7.4 现为 **10 行 / 15 个场景**，禁用 `18−N` 反推；`equip_struck_save` 计入、`bag_equip`/`eat_item`（场景未声明 `inventory`）与 `spell_cast`（缺 Rust 魔法落点 + 第二观察者）仍在「仍不可跑」。Leader 提到的 `docs/needs-human-20261024.md`（写「可跑场景 16」）**在 master 上不存在**——该文件落地时必须引用本表枚举（单一事实源），本卡无法修改不存在的文件，已记在卡上。 |
 | **I2**（Important） | §7.5 开头 `:501`「`preflight.py` 尚未合入」与同节 `:503/:505` 矛盾 ⇒ 已改为「已合入 master `2e3b8500a`，手工清单仅作回退」；本报告 §2 ① 同步去掉「§7.5 全部同步」的过度声明。 |
-| **M1**（Minor） | 计数口径修正为 **19 个文件 / 35 个标记行 / 出现 36 次**（v5 自身在 batch-plan 又补了 3 个标记行），分布「其余 16 个文件各 1」（12+4+3+16=35）。 |
+| **M1**（Minor） | 计数口径修正为 **19 个文件 / 35 个标记行 / 出现 36 次**（v5 自身在 batch-plan 又补了 3 个标记行），分布「其余 16 个文件各 1」（12+4+3+16=35）。接管 v6 再补 1 行 ⇒ **19 / 36 / 37**（13+4+3+16=36）。 |
+
+## 9. 接管返工 v6（worker-58；review `1862c8b42` 漏项复核 + X1 跨卡收窄）
+
+| 项 | 处置 |
+|---|---|
+| **I1 残留** | `window-batch-plan:458` §7.2 3 仍写「`equip_struck_save` 仍不可跑（缺 642，见 7.3）」——v5 已改 §7.2 2A / §7.3 / §7.4，但同一句的 3 小段漏改，且「见 7.3」已悬空（该行 v5 已从 §7.3 删除）⇒ 改为「**已随 `8dcb8c8ca` 接线（T-266）并移入 §7.4「现在就能跑」**」，保留「真机窗口未授权」限定。让原句变假的 commit = `8dcb8c8ca`（卡 `openmir2-attack-weapon-wear-642`；`combat.rs:767` `wear_durability`、`:1151` `attack_success_weapon_damage`、`:1619` `SM_DURACHANGE(642)`；T-266 在用）。 |
+| **I2 复核** | §7.5 开头已写「已合入 master `2e3b8500a`」（v5 订正），与同节 :503/:505 一致；本报告 §2 ① 已同步，无残留。 |
+| **M1 复核** | base（`aaefd6d1e`）相对复算：**19 个文件 / 36 标记行 / 37 出现**；分布 `window-batch-plan` 13 + `r-card-ledger-sweep` 4 + `rewrite-remaining-inventory` 3 + 其余 **16** 个文件各 1 = 36。32/33 两个旧数与文件数 18 均已被 v5/v6 取代。 |
+| **X1（跨卡）** | `needs-human-20261023-night` §5 现态注（`:52`）与 `:55` 均已收窄为「**动作侧已被取代；643 结果说词仍缺**」：`GotoLable(~@upgradenow_ok/_fail/_ing)` 在宿主仍只 `glog!`（`mir2-rs/bins/game-svr/src/lib.rs:5919-5924` / `:5960-5965`），`rules.json` 643=`compare`，T-95④/T-145④ 仍登记；全仓 grep 该四字概括短语 = 空（不再保留「均…已被取代」这种会读成「643 已没问题」的写法）。与 `061312242` 合并后不再语义打架。 |
+| **计数变化** | 本报告自身不计入统计；v6 新补的 §7.2 3 订正使 batch-plan 标记行 12→13，全仓 35→36（出现 36→37），凡旧数已逐处同步。 |
