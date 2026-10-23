@@ -68,7 +68,7 @@
 
 > **载体纠偏（review R5）**：`openmir2-weapon-durability-frames` **没有场景文件**（`ls tools/probe/scenarios/ | grep -i durability` = 0），
 > 载体是 T-199 + 构造级 cargo；`openmir2-buff-system` 的 `spell_cast.json` **已解封**（卡 `openmir2-spell-cast-unblock` 删去 `blocked`），
-> 故只算构造级；`openmir2-m3-drop-exp-wiring` 在批次计划里没有同名行，§1F 对应的是 `openmir2-m3-drop-exp-align`（`docs/window-batch-plan-20261023.md:134`）。
+> 故其离线载体为 A-(i)+(iii)（check rc=0 + 构造级 cargo；dry-run 须带声明 `magic` 的 `--profile`）；`openmir2-m3-drop-exp-wiring` 在批次计划里没有同名行，§1F 对应的是 `openmir2-m3-drop-exp-align`（`docs/window-batch-plan-20261023.md:134`）。
 > 规则按「离线载体」而非「是否有场景文件」重写，每张的载体类型与 blocked 状态都已落到表里，可逐张复算。
 
 **未取的 10 张及理由**（9 张 B 组 + 1 张顺延的 A 组；同样逐条给结论，属本批「不取/先不排」清单）：
