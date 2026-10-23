@@ -1360,22 +1360,14 @@ impl<'n, 'p> Engine<'n, 'p> {
         // （两点 + 分隔符），再 `Path.Combine(BasePath, EnvirDir, rest)`；部署里
         // `CHECKNAMELIST` 站点 100% 是两点前缀形态 ⇒ 不剥离会把 `..` 当普通段 push 出
         // Envir 根、恒「文件不存在」。与 `envir_file_path` 的既有口径一致。
-        let rel = if rel.starts_with("..") {
-            rel.get(3..).unwrap_or("")
-        } else {
-            rel
-        };
-        let abs = match self.npc.envir_root() {
-            Some(root) => {
-                let mut p = std::path::PathBuf::from(root);
-                for part in rel.replace('\\', "/").split('/') {
-                    if !part.is_empty() {
-                        p.push(part);
-                    }
-                }
-                p
+        // 复用 `envir_file_path`（单参口径），不再内联第二份剥离逻辑（review `ac78b56a` I-2(b)）。
+        let abs = match self.envir_file_path(rel) {
+            Some(p) => p,
+            None => {
+                let text = format!("file not found => {}", rel);
+                self.errors.push(EngineError::ScriptError { text });
+                return false;
             }
-            None => std::path::PathBuf::from(rel),
         };
         let bytes = match std::fs::read(&abs) {
             Ok(b) => b,

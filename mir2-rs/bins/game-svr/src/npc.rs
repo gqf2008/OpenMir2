@@ -2274,7 +2274,7 @@ mod tests {
     /// `CHECKNAMELIST`（condition 36 → `ProcessingBase.GotoLableCheckStringList`）按 Envir 根
     /// 拼路径读名单（`Trim()` + 忽略大小写）；未注入根 ⇒ 按「文件不存在」恒假（接线前行为）。
     ///
-    /// 牙：删 `impl ScriptNpc for HostNpc` 的 `fn envir_root` ⇒ 第一段由 hit 变 miss ⇒ 红。
+    /// 牙：删掉 `HostNpc` 的 `ScriptNpc` 覆写里的 `fn envir_root`（即 `HostNpc::envir_root`）⇒ 第一段由 hit 变 miss ⇒ 红。
     #[test]
     fn host_npc_envir_root_enables_check_name_list() {
         let root = std::env::temp_dir().join(format!("gs-envir-root-{}", std::process::id()));
@@ -3523,4 +3523,179 @@ Other
         assert!(player.gm_notes.is_empty());
         assert!(player.gm_direct_frames.is_empty());
     }
+    /// **I-3（review `ac78b56a`）**：`CHECKNAMEDATELIST` 的两参 `GetEnvirFilePath` 口径。
+    ///
+    /// oracle `ConditionProcessingSys.cs:642` 调 `SystemShare.GetEnvirFilePath(normNpc.Path, sParam1)`
+    /// （`M2Share.cs:1979-1982`）：`sParam1` 以 `..` 开头 ⇒ **忽略 NPC 路径**、剥前 3 字符后拼 Envir 根；
+    /// 否则才拼 `Envir/<npc.Path>/<sParam1>`。部署形态 `..\QuestDiary\月卡\月卡记录.txt` 来自
+    /// `MapQuest_def/QManage.txt` 的 `#CALL` 链（QManage = HostNpc 漏斗）。
+    ///
+    /// 牙：把同一份名单只放在「先拼再单参」会指向的 `Envir/MapQuest_def../…` ⇒ 必须 miss。
+    #[test]
+    fn host_npc_envir_root_check_name_date_list_uses_two_arg_envir_path() {
+        let root = std::env::temp_dir().join(format!("gs-envir-2arg-{}", std::process::id()));
+        let envir = root.join("Envir");
+        let good = envir.join("QuestDiary").join("月卡");
+        std::fs::create_dir_all(&good).unwrap();
+        let file = good.join("月卡记录.txt");
+        std::fs::write(
+            &file,
+            mir2_script::textfile::encode_gb2312("hero\t2020-01-01\r\n"),
+        )
+        .unwrap();
+        let makes = || NpcDef {
+            chr_name: "QManage".to_string(),
+            file_path: "MapQuest_def".to_string(),
+            script_name: Some("QManage".to_string()),
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 0,
+            scripts: vec![mir2_script::ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![mir2_script::SayingRecord {
+                    s_label: "@main".to_string(),
+                    procedure_list: vec![mir2_script::SayingProcedure {
+                        condition_list: vec![mir2_script::QuestConditionInfo {
+                            cmd_code: 144, // `CHECKNAMEDATELIST` / `CHECKUSERDATE`
+                            s_param1: r"..\QuestDiary\月卡\月卡记录.txt".to_string(),
+                            s_param2: ">".to_string(),
+                            s_param3: "30".to_string(),
+                            s_param4: "p0".to_string(),
+                            s_param5: "p1".to_string(),
+                            ..Default::default()
+                        }],
+                        action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "hit".to_string(),
+                            ..Default::default()
+                        }],
+                        else_action_list: vec![mir2_script::QuestActionInfo {
+                            n_cmd_code: 31,
+                            n_param1: 5,
+                            s_param2: "miss".to_string(),
+                            ..Default::default()
+                        }],
+                        s_say_msg: String::new(),
+                        s_else_say_msg: String::new(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        };
+        let run = |envir_root: std::path::PathBuf| {
+            let host = NpcHost {
+                envir_root,
+                defs: vec![makes()],
+                failures: Vec::new(),
+                goto_count_limit: 40,
+            };
+            let mut rng = |_v: i32| 0;
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.chr_name = "hero".to_string();
+            let _ = host.goto_label("QManage", &mut player, "@main", false);
+            player
+                .frames
+                .iter()
+                .filter_map(|f| f.msg.clone())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            run(envir.clone()),
+            vec!["hit".to_string()],
+            "两参口径：.. 前缀忽略 NPC 路径"
+        );
+        // 牙（正向即牙）：旧写法「先拼 MapQuest_def..\… 再单参」不以两个点开头 ⇒ 不剥离
+        // ⇒ 指向不存在的路径 ⇒ 本断言在修复前必红。这里再补一条「文件不在 ⇒ miss」的对照。
+        std::fs::remove_file(&file).unwrap();
+        assert_eq!(
+            run(envir.clone()),
+            vec!["miss".to_string()],
+            "文件不在 ⇒ miss（fail-closed，不猜）"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **M-1 回归（review `ac78b56a`）**：商人 `MerchantScriptBook` 不注入 Envir 根
+    /// （`goto_label` 传 `None`）⇒ `CHECKNAMELIST` 按「文件不存在」恒假、且**不写盘**。
+    ///
+    /// 与 `HostNpc` 漏斗（有注入）相对照，钉住两条漏斗的差异不被后续改动抹平。
+    #[test]
+    fn merchant_script_book_without_envir_root_keeps_check_name_list_false() {
+        let root = std::env::temp_dir().join(format!("gs-merchant-none-{}", std::process::id()));
+        let envir = root.join("Envir");
+        std::fs::create_dir_all(&envir).unwrap();
+        let list = envir.join("MerchantList.txt");
+        let mut book = MerchantScriptBook::new(30);
+        book.insert(MerchantNpc {
+            def: NpcDef {
+                chr_name: "商人".to_string(),
+                file_path: "Market_Def".to_string(),
+                script_name: Some("挂机商-0103".to_string()),
+                is_hide: false,
+                is_quest: false,
+                loaded: true,
+                actor_id: 4242,
+                scripts: vec![mir2_script::ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![mir2_script::SayingRecord {
+                        s_label: "@main".to_string(),
+                        procedure_list: vec![mir2_script::SayingProcedure {
+                            condition_list: vec![mir2_script::QuestConditionInfo {
+                                cmd_code: 36, // `CHECKNAMELIST`
+                                s_param1: r"..\MerchantList.txt".to_string(),
+                                ..Default::default()
+                            }],
+                            action_list: vec![mir2_script::QuestActionInfo {
+                                n_cmd_code: 31,
+                                n_param1: 5,
+                                s_param2: "hit".to_string(),
+                                ..Default::default()
+                            }],
+                            else_action_list: vec![mir2_script::QuestActionInfo {
+                                n_cmd_code: 31,
+                                n_param1: 5,
+                                s_param2: "miss".to_string(),
+                                ..Default::default()
+                            }],
+                            s_say_msg: String::new(),
+                            s_else_say_msg: String::new(),
+                        }],
+                        bo_ext_jmp: false,
+                    }],
+                    quest_count: 0,
+                }],
+            },
+            price_rate: 100,
+            castle: None,
+            map_name: "0103".to_string(),
+            curr_x: 9,
+            curr_y: 12,
+        });
+        // 名单**存在且命中**——但商人漏斗没有 Envir 根 ⇒ 恒 miss。
+        std::fs::write(&list, "hero\r\n").unwrap();
+        let mut rng = |_v: i32| 0;
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.chr_name = "hero".to_string();
+        let _ = book
+            .goto_label(4242, &mut player, "@main", false)
+            .expect("商人脚本在表里");
+        let msgs: Vec<String> = player.frames.iter().filter_map(|f| f.msg.clone()).collect();
+        assert_eq!(
+            msgs,
+            vec!["miss".to_string()],
+            "无 Envir 根 ⇒ CHECKNAMELIST 恒假"
+        );
+        assert_eq!(
+            std::fs::read(&list).unwrap(),
+            b"hero\r\n".to_vec(),
+            "不写盘"
+        );
+        std::fs::remove_dir_all(&root).ok();
+    }
+
 }

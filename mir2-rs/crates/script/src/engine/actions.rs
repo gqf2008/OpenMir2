@@ -1933,8 +1933,10 @@ impl Engine<'_, '_> {
     /// `ActionOfAddUseDateList`：把「名字 + 当天日期」追加到名单（去重，忽略大小写）。
     fn action_of_add_use_date_list(&mut self, info: &QuestActionInfo) {
         let hum_name = self.player.chr_name();
-        let rel = format!("{}{}", self.npc.path(), info.s_param1);
-        let Some(path) = self.envir_file_path(&rel) else {
+        // oracle `ExecutionProcessingSys.cs:2576`：`GetEnvirFilePath(normNpc.Path, sParam1)`（两参）——
+        // `sParam1` 以 `..` 开头时**忽略 NPC 路径**、剥前 3 字符拼 Envir 根。
+        let dir = self.npc.path().to_string();
+        let Some(path) = self.envir_file_path_with_dir(&dir, &info.s_param1) else {
             return;
         };
         let mut lines: Vec<String> = Vec::new();
@@ -2306,6 +2308,35 @@ impl Engine<'_, '_> {
         let mut p = std::path::PathBuf::from(root);
         if !rel.is_empty() {
             p.push(rel);
+        }
+        Some(p)
+    }
+
+    /// `SystemShare.GetEnvirFilePath(dirPath, filePath)`（两参口径，`M2Share.cs:1979-1982`）：
+    /// `filePath` 以 `..` 开头 ⇒ **忽略 `dirPath`**、丢前 3 字符、拼到 Envir 根；
+    /// 否则 `Path.Combine(BasePath, EnvirDir, dirPath, filePath)`。
+    ///
+    /// 用于 oracle 里显式传 `normNpc.Path` 的站点（`CHECKNAMEDATELIST`、
+    /// `ConditionProcessingSys.cs:642`；`ADDUSERDATE`/`DELUSERDATE`，
+    /// `ExecutionProcessingSys.cs:2576/2613`）——与单参站点（`ActionOfAddNameList` 先
+    /// `normNpc.Path + sParam1` 再单参）**不可混用**。
+    pub(crate) fn envir_file_path_with_dir(&self, dir: &str, rel: &str) -> Option<std::path::PathBuf> {
+        let root = self.npc.envir_root()?;
+        let mut p = std::path::PathBuf::from(root);
+        if rel.starts_with("..") {
+            // C# `filePath[3..]`：长度 <3 时抛 `ArgumentOutOfRangeException`；Rust 取空串
+            // （部署不可达，登记见 whitelist T-220 的 M-2 注记）。
+            let rest = rel.get(3..).unwrap_or("");
+            if !rest.is_empty() {
+                p.push(rest);
+            }
+        } else {
+            if !dir.is_empty() {
+                p.push(dir);
+            }
+            if !rel.is_empty() {
+                p.push(rel);
+            }
         }
         Some(p)
     }

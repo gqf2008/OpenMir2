@@ -664,9 +664,13 @@ impl Engine<'_, '_> {
             self.script_condition_error("CHECKNAMEDATELIST", info);
             return;
         }
-        let rel = format!("{}{}", self.npc.path(), info.s_param1);
-        let Some(path) = self.envir_file_path(&rel) else {
-            let text = format!("file not found => {}", rel);
+        // oracle `ConditionProcessingSys.cs:642`：`GetEnvirFilePath(normNpc.Path, sParam1)` 是
+        // **两参**口径——`sParam1` 以 `..` 开头时忽略 NPC 路径、剥离前 3 字符后拼 Envir 根
+        // （`M2Share.cs:1979-1982`）。先拼再单参（旧写法）会让 `MapQuest_def..\QuestDiary\…`
+        // 不以 `..` 开头 ⇒ 不剥离 ⇒ 指向不存在的路径。
+        let dir = self.npc.path().to_string();
+        let Some(path) = self.envir_file_path_with_dir(&dir, &info.s_param1) else {
+            let text = format!("file not found => {}", info.s_param1);
             self.errors.push(EngineError::ScriptError { text });
             return;
         };
