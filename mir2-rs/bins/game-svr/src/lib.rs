@@ -41213,6 +41213,57 @@ SendRefMsgRange=15
         assert!(drain > poll, "SM_RECONNECT 排水必须在换服门轮询之后");
     }
 
+    /// **T-202 牙③（复审 `513c571a` I-1）**：`GateCount==1` 也必须**真实消耗一次**
+    /// `Next(max)` 采样 —— oracle `RandomNumber.Random(value)`（`RandomNumber.cs:93-100`）在
+    /// `value=1` 时同样调 `random.Next(1)` 消耗一次，且 `GetRandpmRoute`（`GameShare.cs:81-86`）
+    /// 的 `RandomNumber.GetInstance()` 与 `M2Share.RandomNumber` 是**同一单例** ⇒ 这一次抽样
+    /// 就在世界 RNG 流里。若未来有人把 `random_below(gate_count)`「优化」成
+    /// `if gate_count > 1 { … } else { 0 }`（部署 `!servertable.txt` 恰好只有 1 对网关：
+    /// `0 127.0.0.1 127.0.0.1 7200`），世界流会**静默少消耗一次** ⇒ 之后所有抽数整体错位
+    /// （对拍全面 flaky）——本用例即红。
+    ///
+    /// 手法 = 复审建议的备选「金种子序列对比」：同一种子三路对照 —— A 走生产路径；B 手抽一次
+    /// `random_below(1)`（= oracle `Next(1)` 的等价消耗）；C 不抽。断言 `A ≡ B ≠ C`：
+    /// 「恰好一次」由 `A=B` 钉住（少抽 ⇒ `A=C` 红；多抽 ⇒ `A` 与 `B` 的流位置错开一次，也红），
+    /// 「不是零次空转」由 `A≠C` 钉住。**不用** `rng_trace::enable`：那是进程级 `OnceLock`
+    /// 全局开关，并行测试下会被别的用例占住 ⇒ trace 落不到本用例的文件。
+    #[test]
+    fn multi_server_route_draws_once_even_with_a_single_gate() {
+        let table = parse_server_table("0 127.0.0.1 127.0.0.1 7200\n");
+        assert_eq!(
+            table[0].game_gate_ips.len(),
+            1,
+            "GateCount=1（与部署 !servertable.txt 同形）"
+        );
+
+        // A：生产路径（get_multi_server_addr_port 内部的抽数）。
+        let mut a = mir2_shared::rng::RandomNumber::with_seed(20_261_023);
+        let got = get_multi_server_addr_port(&table, 0, &mut a);
+        assert_eq!(
+            got,
+            Some(("127.0.0.1".to_string(), 7200)),
+            "路由命中：载荷 = 第一对（唯一一对）网关"
+        );
+        let mark_a = a.random();
+
+        // B：金序列 —— 手抽一次 `random_below(1)`（= oracle `Next(1)`，返回恒 0 但消耗一次）。
+        let mut b = mir2_shared::rng::RandomNumber::with_seed(20_261_023);
+        assert_eq!(b.random_below(1), 0, "Next(1) 返回恒 0（但消耗一次采样）");
+        let mark_b = b.random();
+        assert_eq!(
+            mark_a, mark_b,
+            "GateCount==1 必须恰好消耗一次采样（少抽/多抽 ⇒ 世界流错位）"
+        );
+
+        // C：零次对照 —— 不抽直接取下一个值；与 A 不同 ⇒ 证明 A 确实消耗了（不是空转）。
+        let mut c = mir2_shared::rng::RandomNumber::with_seed(20_261_023);
+        let mark_c = c.random();
+        assert_ne!(
+            mark_a, mark_c,
+            "GateCount==1 不得跳过抽样（跳过 ⇒ 世界流静默少消耗一次）"
+        );
+    }
+
     /// `CM_CLICKNPC(1010)`：`IsCanDeal` 门、`Death`/`Ghost` 门、`ClickNpcTime` 限频门、
     /// `FindMerchant` 解析、同图/±15 距离门——全过才返回 `true`（走到 `Click` 点）。
     ///
