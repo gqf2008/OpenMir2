@@ -1,0 +1,1799 @@
+{
+ "format": "gm-registry/1",
+ "sources": {
+  "rust_table": {
+   "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
+   "sha256": "3832ebef1efce90c2b210c2c5fe937d231b988b46c763a7c9785af322601e453"
+  },
+  "gamecommands": {
+   "path": "src/Modules/GameCommand/GameCommands.cs",
+   "sha256": "762c18c09e4f08606d47f075c90f5d613a21bf17eb000cf30730c8d8d1e6e54d"
+  },
+  "cs_dir": {
+   "path": "src/Modules/GameCommand/Commands",
+   "classes": 185
+  },
+  "command_conf": {
+   "path": "E:\\MirServer\\M2GameSvr\\Command.conf",
+   "state": "present",
+   "sha256": "062eda7d2e3600a5cca2fbc9b64e62f6acbb29cbe9e6c7de46a0260305b5970a"
+  }
+ },
+ "assumptions": {
+  "start_permission": 0,
+  "get_hum_permission": "commented（PlayObject.cs:1188-1194）",
+  "adminlist": "无有效 IP 段（Envir/AdminList.txt 仅一行，无 IP 段）"
+ },
+ "rule": "perm_min==0 ⇒ reachable（必须开实现卡）；perm_min>0 或无处理类 ⇒ unreachable",
+ "commands": [
+  {
+   "cmd": "+-jy",
+   "cmd_name": "DisableSendMsgList",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "DisableSendMsgListCommand",
+   "handler": "src/Modules/GameCommand/Commands/DisableSendMsgListCommand.cs:7",
+   "handler_exec_line": 11,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "disablesendmsglist",
+    "gamecommands_line": 472,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "+jy",
+   "cmd_name": "DisableSendMsg",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "DisableSendMsgCommand",
+   "handler": "src/Modules/GameCommand/Commands/DisableSendMsgCommand.cs:7",
+   "handler_exec_line": 11,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "disablesendmsg",
+    "gamecommands_line": 470,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "-jy",
+   "cmd_name": "EnableSendMsg",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "EnableSendMsgCommand",
+   "handler": "src/Modules/GameCommand/Commands/EnableSendMsgCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "enablesendmsg",
+    "gamecommands_line": 471,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "Announcement",
+   "cmd_name": "Announcement",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "AnnouncementCommand",
+   "handler": "src/Modules/GameCommand/Commands/AnnouncementCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "announcement",
+    "gamecommands_line": 466,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "ClearCopyItem",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ClearCopyItemCommand",
+   "handler": "src/Modules/GameCommand/Commands/ClearCopyItemCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "cs[Command]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"ClearCopyItem\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "ClearItemMap",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ClearItemMapCommand",
+   "handler": "src/Modules/GameCommand/Commands/ClearItemMapCommand.cs:6",
+   "handler_exec_line": 10,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "cs[Command]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"ClearItemMap\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "ContestPoint",
+   "cmd_name": "ContestPoint",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ContestPointCommand",
+   "handler": "src/Modules/GameCommand/Commands/ContestPointCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "contestpoint",
+    "gamecommands_line": 463,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "DelNpc",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "DelNpcCommand",
+   "handler": "src/Modules/GameCommand/Commands/DelNpcCommand.cs:9",
+   "handler_exec_line": 13,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"DelNpc\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": "delnpc",
+    "gamecommands_line": null,
+    "conf_permission": 10,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "DisableFilter",
+   "cmd_name": "DisableFilter",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "DisableFilterCommand",
+   "handler": "src/Modules/GameCommand/Commands/DisableFilterCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "disablefilter",
+    "gamecommands_line": 460,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "EndContest",
+   "cmd_name": "EndContest",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "EndContestCommand",
+   "handler": "src/Modules/GameCommand/Commands/EndContestCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "endcontest",
+    "gamecommands_line": 465,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "fdgfdg56",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 storagelock=fdgfdg56 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "storagelock",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "fdht7ed",
+   "cmd_name": "Master",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SearchMasterCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=Master（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "master",
+    "gamecommands_line": 394,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "gfh678dfg",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 passwordunlock=gfh678dfg 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "passwordunlock",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "ghjhg6",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 storagechgpassword=ghjhg6 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "storagechgpassword",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "GiveMine",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "GiveMineCommand",
+   "handler": "src/Modules/GameCommand/Commands/GiveMineCommand.cs:12",
+   "handler_exec_line": 16,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "cs[Command]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"GiveMine\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "GuildWar",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "GuildWarCommand",
+   "handler": "src/Modules/GameCommand/Commands/GuildWarCommand.cs:5",
+   "handler_exec_line": 9,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "cs[Command]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"GuildWar\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "hjhg556",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 storageunlock=hjhg556 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "storageunlock",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "hjhgj67",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 storagesetpassword=hjhgj67 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "storagesetpassword",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "HumanCountwa",
+   "cmd_name": "HumanCount",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "HumanCountCommand",
+   "handler": "src/Modules/GameCommand/Commands/HumanCountCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "humancount",
+    "gamecommands_line": 407,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "IP",
+   "cmd_name": "HumanLocal",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "HumanLocalCommand",
+   "handler": "src/Modules/GameCommand/Commands/HumanLocalCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "humanlocal",
+    "gamecommands_line": 401,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "LotteryTicket",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "LotteryTicketCommand",
+   "handler": "src/Modules/GameCommand/Commands/LotteryTicketCommand.cs:7",
+   "handler_exec_line": 11,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"LotteryTicket\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": "lotteryticket",
+    "gamecommands_line": null,
+    "conf_permission": 10,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "Map",
+   "cmd_name": "Map",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MapInfoCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=Map（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "map",
+    "gamecommands_line": 408,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "MapInfo",
+   "cmd_name": "MapInfo",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MapInfoCommand",
+   "handler": "src/Modules/GameCommand/Commands/MapInfoCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "mapinfo",
+    "gamecommands_line": 525,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "MemberFuncEx",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 memberfuncex=MemberFuncEx 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "memberfuncex",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "Mission",
+   "cmd_name": "Mission",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MissionCommand",
+   "handler": "src/Modules/GameCommand/Commands/MissionCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "mission",
+    "gamecommands_line": 450,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "MobCountwa",
+   "cmd_name": "MobCount",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MobCountCommand",
+   "handler": "src/Modules/GameCommand/Commands/MobCountCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "mobcount",
+    "gamecommands_line": 406,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "MobFireBurn",
+   "cmd_name": "Mobfireburn",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MobFireBurnCommand",
+   "handler": "src/Modules/GameCommand/Commands/MobFireBurnCommand.cs:13",
+   "handler_exec_line": 17,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": 553,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "MobNpc",
+   "cmd_name": "MobNpc",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MobNpcCommand",
+   "handler": "src/Modules/GameCommand/Commands/MobNpcCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "mobnpc",
+    "gamecommands_line": 428,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "MobPlace",
+   "cmd_name": "MobPlace",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MobPlaceCommand",
+   "handler": "src/Modules/GameCommand/Commands/MobPlaceCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "mobplace",
+    "gamecommands_line": 451,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "OffHorse",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 takeoffhorse=OffHorse 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "takeoffhorse",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "OnHorse",
+   "cmd_name": "TakeonHorse",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "TakeOnHorseCommand",
+   "handler": "src/Modules/GameCommand/Commands/TakeOnHorseCommand.cs:7",
+   "handler_exec_line": 11,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "takeonhorse",
+    "gamecommands_line": 399,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "PasswordLock",
+   "cmd_name": "PasswordLock",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "PasswordLockCommand",
+   "handler": "src/Modules/GameCommand/Commands/PasswordLockCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "passwordlock",
+    "gamecommands_line": 384,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "ReCallMobEx",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ReCallMobExCommand",
+   "handler": "src/Modules/GameCommand/Commands/ReCallMobExCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "cs[Command]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"ReCallMobEx\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "Reconnection",
+   "cmd_name": "Reconnection",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ReconnectionCommand",
+   "handler": "src/Modules/GameCommand/Commands/ReconnectionCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "reconnection",
+    "gamecommands_line": 459,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "s",
+   "cmd_name": "Make",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MakeItemCommand",
+   "handler": "src/Modules/GameCommand/Commands/MakeItemCommand.cs:13",
+   "handler_exec_line": 17,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "make",
+    "gamecommands_line": 474,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "SabukWallGold",
+   "cmd_name": "SabukWallGold",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShowSbkGoldCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=SabukWallGold（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "sabukwallgold",
+    "gamecommands_line": 420,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "sadsa54",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 storageuserclearpassword=sadsa54 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "storageuserclearpassword",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "SbkDoor",
+   "cmd_name": "SbkDoor",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SbkDoorControlCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=SbkDoor（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "sbkdoor",
+    "gamecommands_line": 526,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "sdasdert",
+   "cmd_name": "Dear",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SearchDearCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=Dear（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "dear",
+    "gamecommands_line": 391,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "ServerInfo",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ServerInfoCommand",
+   "handler": "src/Modules/GameCommand/Commands/ServerInfoCommand.cs:6",
+   "handler_exec_line": 10,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "cs[Command]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"ServerInfo\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "setflag",
+   "cmd_name": "SetFlag",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SetPassWordCommand",
+   "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:212",
+   "handler_exec_line": 216,
+   "perm_min": 10,
+   "perm_attr": 4,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "setflag",
+    "gamecommands_line": 456,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "SetMapMode",
+   "cmd_name": "SetMapMode",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SetMapModeCommamd",
+   "handler": "src/Modules/GameCommand/Commands/SetMapModeCommamd.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "setmapmode",
+    "gamecommands_line": 545,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "setopen",
+   "cmd_name": "SetOpen",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SetPassWordCommand",
+   "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:247",
+   "handler_exec_line": 251,
+   "perm_min": 10,
+   "perm_attr": 4,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "setopen",
+    "gamecommands_line": 457,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "setunit",
+   "cmd_name": "SetUnit",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SetPassWordCommand",
+   "handler": "src/Modules/GameCommand/Commands/SetPassWordCommand.cs:282",
+   "handler_exec_line": 286,
+   "perm_min": 10,
+   "perm_attr": 4,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "setunit",
+    "gamecommands_line": 458,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "ShowEffect",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShowEffectCommand",
+   "handler": "src/Modules/GameCommand/Commands/ShowEffectCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "cs[Command]",
+   "verdict": "unreachable",
+   "verdict_why": "仅有 [Command(\"ShowEffect\")] 属性、GameCommands.cs 无该 CmdName 声明 ⇒ 未注册为 GameCmd（现网无命令）",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "showflag",
+   "cmd_name": "ShowFlag",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShowHumanFlagCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=ShowFlag（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "flag",
+    "gamecommands_line": 423,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "ShowMapMode",
+   "cmd_name": "ShowMapMode",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShowMapModeCommand",
+   "handler": "src/Modules/GameCommand/Commands/ShowMapModeCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "showemapmode",
+    "gamecommands_line": 546,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "showopen",
+   "cmd_name": "ShowOpen",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShowHumanUnitOpenCommand",
+   "handler": "src/Modules/GameCommand/Commands/ShowHumanUnitOpenCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "showopen",
+    "gamecommands_line": 424,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "showunit",
+   "cmd_name": "ShowUnit",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShowUnitCommand",
+   "handler": "src/Modules/GameCommand/Commands/ShowUnitCommand.cs:4",
+   "handler_exec_line": 8,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "showunit",
+    "gamecommands_line": 425,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "Showuseiteminfo",
+   "cmd_name": "Showuseiteminfo",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShowUseItemInfoCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=Showuseiteminfo（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": null,
+    "gamecommands_line": 551,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "StartContest",
+   "cmd_name": "StartContest",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "StartContestCommand",
+   "handler": "src/Modules/GameCommand/Commands/StartContestCommand.cs:12",
+   "handler_exec_line": 16,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "startcontest",
+    "gamecommands_line": 464,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "Total",
+   "cmd_name": "Total",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "TotalCommand",
+   "handler": "src/Modules/GameCommand/Commands/TotalCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "total",
+    "gamecommands_line": 523,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "vv杀死",
+   "cmd_name": "Kill",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "KillCommand",
+   "handler": "src/Modules/GameCommand/Commands/KillCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "kill",
+    "gamecommands_line": 473,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "VV给予权限",
+   "cmd_name": "SetperMission",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SetPermissionCommand",
+   "handler": "src/Modules/GameCommand/Commands/SetPermissionCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "setpermission",
+    "gamecommands_line": 530,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "VV踢人",
+   "cmd_name": "Kick",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "KickHumanCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=Kick（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "kick",
+    "gamecommands_line": 409,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "who",
+   "cmd_name": "Who",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "WhoCommand",
+   "handler": "src/Modules/GameCommand/Commands/WhoCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "who",
+    "gamecommands_line": 522,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "交易",
+   "cmd_name": "LetTrade",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "LetTradeCommand",
+   "handler": "src/Modules/GameCommand/Commands/LetTradeCommand.cs:6",
+   "handler_exec_line": 10,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "lettrade",
+    "gamecommands_line": 367,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "信息",
+   "cmd_name": "Info",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "HumanInfoCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=Info（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "info",
+    "gamecommands_line": 404,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "停止叛变",
+   "cmd_name": "SpiritStop",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SpirtStopCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=SpiritStop（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "spiritstop",
+    "gamecommands_line": 544,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "允许天地合一",
+   "cmd_name": "AllowGroupCall",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "AllowGroupReCallCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=AllowGroupCall（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "allowgroupcall",
+    "gamecommands_line": 377,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "允许联盟",
+   "cmd_name": "Authally",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "AuthallyCommand",
+   "handler": "src/Modules/GameCommand/Commands/AuthallyCommand.cs:5",
+   "handler_exec_line": 9,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "authally",
+    "gamecommands_line": 371,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "创建行会",
+   "cmd_name": "AddGuild",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "AddGuildCommand",
+   "handler": "src/Modules/GameCommand/Commands/AddGuildCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "addguild",
+    "gamecommands_line": 506,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "删除技能",
+   "cmd_name": "DeleteSkill",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "DelSkillCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=DeleteSkill（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "deleteskill",
+    "gamecommands_line": 446,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "删除行会",
+   "cmd_name": "DelGuild",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "DelGuildCommand",
+   "handler": "src/Modules/GameCommand/Commands/DelGuildCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "delguild",
+    "gamecommands_line": 507,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "加入门派",
+   "cmd_name": "LetGuild",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "LetGuildCommand",
+   "handler": "src/Modules/GameCommand/Commands/LetGuildCommand.cs:6",
+   "handler_exec_line": 10,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "letguild",
+    "gamecommands_line": 368,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "取消禁言",
+   "cmd_name": "ReleaseShutup",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShutupReleaseCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=ReleaseShutup（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "releaseshutup",
+    "gamecommands_line": 414,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "取消联盟",
+   "cmd_name": "AuthCancel",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "AuthCancelCommand",
+   "handler": "src/Modules/GameCommand/Commands/AuthCancelCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "authcancel",
+    "gamecommands_line": 373,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "复活",
+   "cmd_name": "ReaLive",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ReAliveCommand",
+   "handler": "src/Modules/GameCommand/Commands/ReAliveCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "realive",
+    "gamecommands_line": 502,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "开始提问",
+   "cmd_name": "StartQuest",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "StartQuestCommand",
+   "handler": "src/Modules/GameCommand/Commands/StartQuestCommand.cs:6",
+   "handler_exec_line": 10,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "startquest",
+    "gamecommands_line": 529,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "开始攻城",
+   "cmd_name": "ForcedWallConQuestWar",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ForcedWallconquestWarCommand",
+   "handler": "src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "forcedwallconquestwar",
+    "gamecommands_line": 509,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "怪",
+   "cmd_name": "Mob",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MobCommand",
+   "handler": "src/Modules/GameCommand/Commands/MobCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "mob",
+    "gamecommands_line": 427,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "拒绝组队聊天",
+   "cmd_name": "Letshout",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "LetShoutCommand",
+   "handler": "src/Modules/GameCommand/Commands/LetShoutCommand.cs:6",
+   "handler_exec_line": 10,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "letshout",
+    "gamecommands_line": 366,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "探测",
+   "cmd_name": "Searching",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "SearchHumanCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=Searching（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "searching",
+    "gamecommands_line": 376,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "改属性",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 supermake=改属性 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "supermake",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "是我",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 memberfunc=是我 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "memberfunc",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "查看周围",
+   "cmd_name": "MobLevel",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "MobLevelCommand",
+   "handler": "src/Modules/GameCommand/Commands/MobLevelCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "moblevel",
+    "gamecommands_line": 405,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "查看禁言",
+   "cmd_name": "ShutupList",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShutupListCommand",
+   "handler": "src/Modules/GameCommand/Commands/ShutupListCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "shutuplist",
+    "gamecommands_line": 415,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "查看私聊",
+   "cmd_name": "ViewWhisper",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ViewWhisperCommand",
+   "handler": "src/Modules/GameCommand/Commands/ViewWhisperCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "viewwhisper",
+    "gamecommands_line": 542,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "沙城",
+   "cmd_name": "ChangeSabukLord",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ChangeSabukLordCommand",
+   "handler": "src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "changesabuklord",
+    "gamecommands_line": 508,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "清理垃圾",
+   "cmd_name": "ClearBag",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ClearBagItemCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=ClearBag（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "clearbag",
+    "gamecommands_line": 550,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "清除仓库密码",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 storageclearpassword=清除仓库密码 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "storageclearpassword",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "清除任务",
+   "cmd_name": "ClearMission",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ClearMissionCommand",
+   "handler": "src/Modules/GameCommand/Commands/ClearMissionCommand.cs:10",
+   "handler_exec_line": 14,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "clearmission",
+    "gamecommands_line": 455,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "清除怪物",
+   "cmd_name": "ClearMon",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ClearMapMonsterCommand",
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": 10,
+   "perm_attr": null,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "GameCommands 声明 CmdName=ClearMon（perm=10）但无 [RegisterCommand] 处理类 ⇒ 现网无命令体",
+   "evidence": {
+    "conf_class": "clearmon",
+    "gamecommands_line": 531,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "祈祷生效",
+   "cmd_name": null,
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": null,
+   "handler": null,
+   "handler_exec_line": null,
+   "perm_min": null,
+   "perm_attr": null,
+   "perm_source": null,
+   "verdict": "unreachable",
+   "verdict_why": "conf 有改名条目 spiritstart=祈祷生效 但 GameCommands.cs 无该 CmdName 声明 ⇒ 现网无 GameCmd/命令体",
+   "evidence": {
+    "conf_class": "spiritstart",
+    "gamecommands_line": null,
+    "conf_permission": null,
+    "register_command": false
+   }
+  },
+  {
+   "cmd": "禁止行会信息",
+   "cmd_name": "BanGuildChat",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "BanGuildChatCommand",
+   "handler": "src/Modules/GameCommand/Commands/BanGuildChatCommand.cs:6",
+   "handler_exec_line": 10,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "banguildchat",
+    "gamecommands_line": 370,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "禁言",
+   "cmd_name": "ShutUp",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "ShutupCommand",
+   "handler": "src/Modules/GameCommand/Commands/ShutupCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 10,
+   "perm_source": "conf[Permission]",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "shutup",
+    "gamecommands_line": 413,
+    "conf_permission": 10,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "联盟",
+   "cmd_name": "Auth",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "AuthCommand",
+   "handler": "src/Modules/GameCommand/Commands/AuthCommand.cs:8",
+   "handler_exec_line": 12,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "auth",
+    "gamecommands_line": 372,
+    "conf_permission": null,
+    "register_command": true
+   }
+  },
+  {
+   "cmd": "退出门派",
+   "cmd_name": "EndGuild",
+   "rust_imp": "Unimplemented",
+   "rust_perm_min": 10,
+   "handler_class": "EndGuildCommand",
+   "handler": "src/Modules/GameCommand/Commands/EndGuildCommand.cs:11",
+   "handler_exec_line": 15,
+   "perm_min": 10,
+   "perm_attr": 0,
+   "perm_source": "GameCommands.cs",
+   "verdict": "unreachable",
+   "verdict_why": "perm_min>0 且 StartPermission=0 / GetHumPermission 注释 / AdminList 无有效 IP",
+   "evidence": {
+    "conf_class": "endguild",
+    "gamecommands_line": 369,
+    "conf_permission": null,
+    "register_command": true
+   }
+  }
+ ],
+ "summary": {
+  "total": 88,
+  "by_verdict": {
+   "unreachable": 88
+  },
+  "reachable": 0,
+  "unreachable": 88,
+  "undetermined": 0
+ }
+}

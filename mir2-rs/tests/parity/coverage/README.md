@@ -151,3 +151,38 @@ python mir2-rs/tests/parity/coverage/recon_gates.py dispatch   # 出表；RED �
   `assignment_roles`；A/B 指向承接卡、C 进 `known_unreachable`。
 - 数值随实现推进**递减**：`tracked`/`RED` 计数是进度表（`docs/移植计划重审-20261015.md` §4-6）。
 - oracle 漂移（新增 `Load*` 调用 / 新 `case`）⇒ 内容门会以 `unmapped` 行暴露未归类项；派发门自动纳入。
+
+---
+
+## GM 命令可达性登记（`gm_registry.py` / `gm_registry.json`）
+
+卡：`openmir2-gm-reachability-registry`。目的：把「88 条未实现 GM 命令」从一句「GM 不可达」变成
+**逐条可复算的静态证据**（命令名 → C# 处理类 `file:line` → `PermissionMin` 实值 → 三态判定）。
+
+```sh
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py build     # 生成/刷新 gm_registry.json
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py gate      # 门禁（红=1 / 绿=0 / 判不了=2）
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py summary   # 一条命令复算汇总
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py selftest  # 三颗牙
+```
+
+**判据**（写死在工具里，不靠人工结论）：
+
+- `perm_min == 0` ⇒ `reachable`，**必须开实现卡**（禁止登记成不可达）；
+- `perm_min > 0` ∧ 现网 `StartPermission=0`（`Server.conf:365`）∧ `GetHumPermission` 被注释
+  （`PlayObject.cs:1188-1194`）∧ `AdminList.txt` 无有效 IP 段 ⇒ `unreachable`；
+- `GameCommands.cs` 声明了 `CmdName` 但无 `[RegisterCommand]` 处理类，或 conf 有名字而 `GameCommands.cs`
+  无该 `CmdName` ⇒ **结构性不可达**（现网无命令体），`handler=null` 属预期，门禁允许但要求 verdict 自洽。
+
+**数据源**（三方交叉，缺一即 `undetermined`→门禁红）：`gmcmd.rs` 的 `COMMANDS`（现网名/perm/imp）、
+`GameCommands.cs`（`PerMissionMin` 默认值 + `[RegisterCommand]`）、部署 `Command.conf`
+（`[Command]` 改名 + `[Permission]` 覆盖；缺省 `E:/MirServer/M2GameSvr/Command.conf`，可用 `--conf` 指定，
+文件不存在时在 `sources.command_conf.state=absent` 显式登记）。
+优先级：`conf[Permission]` > `GameCommands.cs` > `[Command]` 属性 `minUserLevel`。
+
+**门禁判红口径**：handler 文件不存在 / 行号越界 / 该行不含 `[Command(` / `perm_min==0` 却登记为
+`unreachable` / `perm_min>0` 却登记为 `reachable` / 出现 `undetermined`。
+
+> 改了 `gmcmd.rs`、`GameCommands.cs`、`Commands/*.cs` 或部署 `Command.conf` 后，都要重跑 `build` + `gate`；
+> `selftest` 的三颗牙保证判据不是写死的：① 把 `perm_min=0` 改判 `unreachable` ⇒ 红；
+> ② handler 行号越界 ⇒ 红；③ 把 `StartPermission` 假设改成 1 重算 ⇒ 全部翻为 reachable。
