@@ -7485,8 +7485,8 @@ impl World {
     /// | oracle | 本函数 |
     /// |---|---|
     /// | `:716` 两轴 `|nX-CurrX|<=2` | 同（屠宰者坐标） |
-    /// | `:718` `Envir.IsValidObject(nX,nY,2,baseObject)` | 目标实体在当前图、且 `x/y == (nX,nY)`、该格 `cell_match && valid`（oracle 的循环变量 `nXx/nYy` **未被使用**，`GetCellInfo` 恒查 `(nX,nY)` ⇒ 实际只判该格） |
-    /// | `:720` `baseObject.Death && !Skeleton && Animal` | `death && !ai.skeleton && (ai.animal || race_is_animal(race))` |
+    /// | `:718` `Envir.IsValidObject(nX,nY,2,baseObject)` | `get_cell_info(nX,nY)` 成功（格子在图内且是 `Walk`）**且** `IsAvailable`（`ObjList` 非空，`MapCellInfo.cs:30`）**且** 该格 `ObjList` 里有 `actor_object && cell_obj_id == 尸体.ActorId` 的成员（oracle 的循环变量 `nXx/nYy` **未被使用**，`GetCellInfo` 恒查 `(nX,nY)` ⇒ 实际只判该格；已 `make_ghost`/`DisappearA` 摘格的尸体不再过门） |
+    /// | `:720` `baseObject.Death && !Skeleton && Animal` | `death && !ai.skeleton && (ai.animal || is_animal_race(race))`——`Animal` 的**运行时等价物**是 [`crate::monai::is_animal_race`]（ctor 继承补 105/106/114/132；118/119 显式 false 已排除），**不是** `combat::race_is_animal`（那只是 `SKILL_TAMMING` 门） |
     /// | `:722` `n10 = (byte)(Random(16) + 5)` | `random_below(16) + 5`（**第 1 抽**） |
     /// | `:723` `meatQuality = (ushort)(Random(201) + 100)` | `random_below(201) + 100`（**第 2 抽**） |
     /// | `:724` `BodyLeathery -= n10`（`byte` 回绕） | `wrapping_sub` |
@@ -7515,17 +7515,29 @@ impl World {
         if (n_x - curr_x).abs() > 2 || (n_y - curr_y).abs() > 2 {
             return None;
         }
-        // `:718` `Envir.IsValidObject(nX, nY, 2, baseObject)`。
+        // `:718` `Envir.IsValidObject(nX, nY, 2, baseObject)`（`Envirnoment.cs:1254-1275`）：
+        // oracle 的双层循环变量 `nXx/nYy` **未被使用**（`GetCellInfo` 恒查 `(nX,nY)`），所以
+        // 实际判据 = 该格 `cellSuccess && IsAvailable`（`MapCellInfo.cs:30`：`ObjList.Count > 0`）
+        // **且** 该格 `ObjList` 里存在 `CellObjId == baseObject.ActorId` 的成员。
+        // ⇒ 已 `make_ghost`/`DisappearA` 摘格的尸体（坐标不变但不在格内）不再过门——这正是
+        // oracle 的语义；只看坐标会把它们放行（多 2 抽 + 多一条 SM_SKELETON）。
         {
             let target = self.entities.get(target_id)?;
-            if target.map_id != map_id || target.x != n_x || target.y != n_y {
+            let (cell, cell_success) = self.maps.get(map_id)?.get_cell_info(n_x, n_y);
+            if !cell_success
+                || !cell.is_available()
+                || !cell
+                    .obj_list
+                    .iter()
+                    .any(|o| o.actor_object && o.cell_obj_id == target_id)
+            {
                 return None;
             }
-            if !self.maps.get(map_id)?.get_cell_info(n_x, n_y).1 {
-                return None;
-            }
-            // `:720` `Death && !Skeleton && Animal`
-            let animal = target.ai.animal || crate::combat::race_is_animal(target.race);
+            // `:720` `Death && !Skeleton && Animal`。`Animal` 的运行时等价物 =
+            // [`crate::monai::is_animal_race`]（ctor 继承补 105/106/114/132；118/119 已排除），
+            // **不是** `combat::race_is_animal`（后者只服务 `SKILL_TAMMING` 门，会让这 4 个
+            // race 在 oracle 抽 2 次、本仓零抽 ⇒ 每次屠宰推移世界 RNG 流）。
+            let animal = target.ai.animal || crate::monai::is_animal_race(target.race);
             if !(target.death && !target.ai.skeleton && animal) {
                 return None;
             }
@@ -9937,14 +9949,28 @@ mod tests {
     /// 同时把 `w.rng` 切成固定种子，并**手抽一次**还原首个 `n10`（`Random(16)+5`）——
     /// 调用方据此把 `body_leathery` 设成「恰好归零」或「不归零」的确定值。
     fn butch_rig(seed: i32, race: u8, target_death: bool) -> (World, i32, i32, u8) {
+        butch_rig_at(seed, race, target_death, 11, 10)
+    }
+
+    /// 与 [`butch_rig`] 相同，但尸体落在 `(cx, cy)`（用于 `|Δ|` 闭边界用例）。
+    fn butch_rig_at(
+        seed: i32,
+        race: u8,
+        target_death: bool,
+        cx: i32,
+        cy: i32,
+    ) -> (World, i32, i32, u8) {
         let mut w = World::new(64, 64);
-        w.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let p = w.add_entity(player(1, "butcher", 10, 10, 10));
-        let mut e = Entity::new(2, "corpse", 11, 10);
+        let mut e = Entity::new(2, "corpse", cx, cy);
         e.race = race;
         e.death = target_death;
         e.ai.dir = 5;
         let t = w.add_entity(e);
+        // `IsValidObject` 读的是格子的 `ObjList` 成员关系 ⇒ 必须先让 `Enter` 命令落地
+        // （`add_entity` 只是入队）。`tick()` 本身不抽随机数；随后重设种子保证抽数可复算。
+        w.tick();
+        w.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n10 =
             u8::try_from(mir2_shared::rng::RandomNumber::with_seed(seed).random_below(16) + 5)
                 .unwrap();
@@ -10017,6 +10043,101 @@ mod tests {
         assert_eq!(e.ai.body_leathery, 50, "归零后照样复位 50");
     }
 
+    /// **F1（review `8c4da05a`，blocking）**：`Animal` 必须是 [`crate::monai::is_animal_race`]
+    /// （ctor 继承补 105/106/114/132），不是 `combat::race_is_animal`。
+    ///
+    /// race 105（楔蛾，部署 MonGen 有 252 行）在 oracle 里 `Animal=true`（GasAttackMonster ctor
+    /// 继承）⇒ 效果体照跑（**2 抽** + `BodyLeathery`/`MeatQuality`/`DeathTick` 写入）；用错谓词
+    /// 会提前 return ⇒ **零抽数**，每次屠宰让世界 RNG 流比 oracle 少 2 抽。
+    ///
+    /// 红检（实测）：把 `is_animal_race` 改回 `combat::race_is_animal` ⇒ 本用例红（零抽 + 状态不变）。
+    #[test]
+    fn butch_effect_inherited_ctor_animal_race_draws_twice_without_skeleton() {
+        const SEED: i32 = 8_675_309;
+        let (mut w, p, t, n10) = butch_rig(SEED, 105, true);
+        {
+            let e = w.entities.get_mut(t).unwrap();
+            e.ai.body_leathery = n10; // 本次抽恰好归零
+            e.ai.meat_quality = 1000;
+        }
+        let ev = w.butch_effect_now(p, t, 11, 10);
+        assert!(ev.is_none(), "race 105 ≥ Monster(80) ⇒ 不置骨架");
+        let mut r = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let _n10 = r.random_below(16) + 5;
+        let mq = u16::try_from(r.random_below(201) + 100).unwrap();
+        let e = w.entities.get(t).unwrap();
+        assert_eq!(e.ai.body_leathery, 50, "归零后仍复位 50（race 门外）");
+        assert_eq!(
+            e.ai.meat_quality,
+            1000u16.wrapping_sub(mq),
+            "第 2 抽必须发生（`MeatQuality` 被扣）"
+        );
+        assert!(!e.ai.skeleton);
+        // 流位置 = 恰 2 抽。
+        let mark_a = w.rng.random();
+        let mut b = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let _ = b.random_below(16);
+        let _ = b.random_below(201);
+        assert_eq!(
+            mark_a,
+            b.random(),
+            "race 105 必须与 oracle 一样抽 2 次（用 race_is_animal 会零抽 ⇒ 流错位）"
+        );
+    }
+
+    /// **F2（review `8c4da05a`，important）**：`IsValidObject` 的成员关系——已 `make_ghost` /
+    /// `DisappearA` 摘格的尸体（坐标不变、格子仍 Walk）**不得**过门：零事件 + **零抽数**。
+    ///
+    /// 红检（实测）：把门改回「只判坐标 + 格子 valid」⇒ 本用例红（返 `Some` + 2 抽）。
+    #[test]
+    fn butch_effect_removed_corpse_fails_gate_and_draws_nothing() {
+        const SEED: i32 = 31_415_926;
+        let (mut w, p, t, n10) = butch_rig(SEED, 53, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        // `make_ghost` / `DisappearA` 的等价物：置 ghost + 摘格（坐标仍是 (11,10)）。
+        w.entities.get_mut(t).unwrap().ghost = true;
+        assert!(w.disappear_a(t), "尸体原本在格内 ⇒ 摘格成功");
+        let baseline = mir2_shared::rng::RandomNumber::with_seed(SEED).random();
+        let ev = w.butch_effect_now(p, t, 11, 10);
+        assert!(ev.is_none(), "已摘格的尸体 ⇒ IsValidObject 假");
+        assert_eq!(w.rng.random(), baseline, "零抽数");
+        let e = w.entities.get(t).unwrap();
+        assert!(!e.ai.skeleton);
+        assert_eq!(e.ai.body_leathery, n10, "未被扣减");
+    }
+
+    /// **F4（review `8c4da05a`，minor）**：`|Δ|<=2` 是**闭**边界——`|Δx|==2` 必须过门（2 抽），
+    /// `|Δx|==3` 必须不过门（0 抽）。把 `>2` 改成 `>1` ⇒ ±2 两条必红。
+    #[test]
+    fn butch_effect_delta_boundary_is_inclusive_two() {
+        const SEED: i32 = 2_718_281;
+        for (dx, should_pass) in [(-2_i32, true), (2, true), (-3, false), (3, false)] {
+            let cx = 10 + dx;
+            let (mut w, p, t, n10) = butch_rig_at(SEED, 53, true, cx, 10);
+            {
+                let e = w.entities.get_mut(t).unwrap();
+                e.ai.body_leathery = n10; // 过门则归零 + 骨架
+                e.ai.meat_quality = 1000;
+            }
+            let ev = w.butch_effect_now(p, t, cx, 10);
+            let e = w.entities.get(t).unwrap();
+            if should_pass {
+                assert!(
+                    ev.is_some(),
+                    "|Δx|={} 恰在闭边界内 ⇒ 必须结算（骨架）",
+                    dx.abs()
+                );
+                assert!(e.ai.skeleton);
+                assert_eq!(e.ai.body_leathery, 50);
+            } else {
+                assert!(ev.is_none(), "|Δx|={} ⇒ 不过门", dx.abs());
+                assert!(!e.ai.skeleton);
+                assert_eq!(e.ai.body_leathery, n10, "零扣减");
+                assert_eq!(e.ai.meat_quality, 1000, "零扣减");
+            }
+        }
+    }
+
     /// **R 级判据核心（金种子三路法）**：两次抽的**次序 + 模数**。
     ///
     /// A = 生产路径（`butch_effect_now`）；B = 按 oracle 手抽（先 `Random(16)+5` 扣
@@ -10059,7 +10180,8 @@ mod tests {
         let mq = u16::try_from(b.random_below(201) + 100).unwrap();
         let mark_b = b.random();
 
-        // C：对调次序（模数也随之互换）的阴性对照。
+        // C：**真对调实现**的阴性对照——语句对调后，`BodyLeathery` 减的是**第 1 次**
+        // `Random(201)+100`（`u8` 截断），`MeatQuality` 减的是**第 2 次** `Random(16)+5`。
         let mut c = mir2_shared::rng::RandomNumber::with_seed(SEED);
         let mq_swapped = c.random_below(201) + 100;
         let n10_swapped = c.random_below(16) + 5;
@@ -10081,10 +10203,12 @@ mod tests {
         assert_ne!(
             (bl_a, meat_a),
             (
-                BODY0.wrapping_sub(u8::try_from(n10_swapped % 256).unwrap_or(0)),
-                MEAT0.wrapping_sub(u16::try_from(mq_swapped).unwrap_or(0)),
+                // 真对调：`BodyLeathery` 减 `(Random(201)+100)`，按 C# `(byte)` 截断（`as u8`）。
+                BODY0.wrapping_sub(mq_swapped as u8),
+                // `MeatQuality` 减 `(Random(16)+5)`（`ushort`）。
+                MEAT0.wrapping_sub(n10_swapped as u16),
             ),
-            "对调次序后的扣减量必须不同（阴性对照：`BodyLeathery` 减 100..300）"
+            "对调次序后的扣减量必须不同（阴性对照：`BodyLeathery` 减 100..300、`MeatQuality` 减 5..20）"
         );
     }
 
@@ -10104,7 +10228,7 @@ mod tests {
             ("已经是骨架（Skeleton=true）", |w: &mut World, t| {
                 w.entities.get_mut(t).unwrap().ai.skeleton = true;
             }),
-            ("非动物 race（80 稻草人）", |w: &mut World, t| {
+            ("非动物 race 83（稻草人）", |w: &mut World, t| {
                 w.entities.get_mut(t).unwrap().race = 83;
             }),
             ("超出 2 格（|Δx|=3）", |w: &mut World, t| {
