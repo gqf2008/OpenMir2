@@ -12241,6 +12241,118 @@ fn drain_aoi_downlink(
     sent
 }
 
+/// **卡 `openmir2-map-event-frames`**：地图事件可见性上行——`SM_SHOWEVENT(804)` / `SM_HIDEEVENT(805)`。
+///
+/// # oracle 口径（tier=R）
+///
+/// 触发链：`WorldServer.cs:663-666`（玩家 `SearchTime=1000ms` 节流）→ `PlayObject.SearchViewRange`
+/// （`PlayObject.cs:3073`）扫到 `CellType.Event` 格 ⇒ `CellObjectMgr.Get<MapEvent>(0)`
+/// （`MapEvent.Id` 恒 0 ⇒ **折叠**：所有事件格解析到同一对象）⇒ `Visible` 才
+/// `UpdateVisibleEvent(nX, nY, e)`（`:5464-5486`，已在本列表 ⇒ 只打 `Invisible` 不更新坐标）⇒
+/// 扫描后的差集循环（`:3271-3287`）：
+///
+/// ```text
+/// Hidden ⇒ SendMsg(RM_HIDEEVENT, 0, mapEvent.Id, mapEvent.nX, mapEvent.nY); VisibleEvents.RemoveAt(I);
+/// Show   ⇒ SendMsg(RM_SHOWEVENT, (short)mapEvent.EventType, mapEvent.Id,
+///                      MakeLong(mapEvent.nX, (short)mapEvent.EventParam), mapEvent.nY);
+/// ```
+/// 处理器（`PlayObject.Message.cs:1992-2006`）：`RM_HIDEEVENT` ⇒
+/// `SendDefMessage(SM_HIDEEVENT, nParam1, wParam, nParam2, nParam3)`（header-only）；
+/// `RM_SHOWEVENT` ⇒ `MakeMessage(SM_SHOWEVENT, …)` + 尾 `ShortMessage{ Ident = HiWord(nParam2),
+/// wMsg = 0 }`。`EventParam` 在可达事件族（火墙/圣言/掘尸，`MapEvent.cs:65` ctor 恒 0）无写点
+/// ⇒ `HiWord(nParam2)` 恒 0；`Id` 恒 0 ⇒ `wParam` 恒 0。
+///
+/// # 出帧位置与顺序
+///
+/// oracle 的 VisibleEvents 循环是 `SearchViewRange` 收尾的**最后一趟**（actors → items → events）
+/// ⇒ 本段排在 [`drain_aoi_downlink`]（actors 出现帧）之后。队列优先级
+/// `(byte)RM_HIDEEVENT(10333) = 93`、`(byte)RM_SHOWEVENT(10334) = 94`（`BaseObject.Message.cs:94`
+/// `(byte)wIdent` 入堆）。Hide 在前、Show 在后与 oracle 同一循环内「下标升序、Hidden ⇒ RemoveAt」
+/// 的次序一致（折叠 ⇒ 每观察者至多 1 条，两个方向互斥不同 tick）。
+///
+/// Show 支的观察者门 = 与 [`drain_aoi_downlink`] 相同的「本 tick 实际扫过」判据
+/// （`SearchTick == clock_ms`）——`Show` 标志会保留到下一次扫描，不设门会把同一对 804 重复发。
+fn drain_aoi_events(
+    world: &mir2_world::World,
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let mut sent = 0usize;
+    // ① `Hidden` ⇒ `SM_HIDEEVENT(805)`：`SendDefMessage(SM_HIDEEVENT, 0 /*nParam1*/,
+    //    Id /*wParam = 0*/, nX /*nParam2*/, nY /*nParam3*/)`（`PlayObject.cs:3278`）。
+    for (observer_id, _event_idx, x, y) in &rec.event_hides {
+        let Some(entry) = online.iter().find(|e| e.actor_id == *observer_id) else {
+            glog!(
+                "WRN",
+                "事件消失帧：观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_HIDEEVENT(805)"
+            );
+            continue;
+        };
+        let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "事件消失帧") else {
+            continue;
+        };
+        let _ = tx.send(SimToGate::SendFrame {
+            socket: entry.socket,
+            body: smframe_ext::sm_hideevent(0, 0, *x, *y),
+        });
+        sent += 1;
+    }
+    // ② `Show` ⇒ `SM_SHOWEVENT(804)`：`SendMsg(RM_SHOWEVENT, (short)EventType, Id,
+    //    MakeLong(nX, EventParam), nY)`（`PlayObject.cs:3284`）。
+    for sess in world.sessions.iter() {
+        if sess.stage != mir2_world::WorldStage::InWorld {
+            continue;
+        }
+        let Some(observer_id) = sess.actor_id else {
+            continue;
+        };
+        let Some(observer) = world.entities.get(observer_id) else {
+            continue;
+        };
+        // 只在该观察者「本 tick 实际扫过」时出帧（同 [`drain_aoi_downlink`] 的判据）。
+        if observer.race == mir2_world::ACTOR_RACE_PLAY && observer.ai.search_tick != world.clock_ms
+        {
+            continue;
+        }
+        let Some(entry) = online.iter().find(|e| e.chr_name == sess.chr_name) else {
+            glog!(
+                "WRN",
+                "事件出现帧：ChrName={} 已进世界但无在线网关坐标 ⇒ 不猜线、跳过",
+                sess.chr_name
+            );
+            continue;
+        };
+        for visible in &observer.visible_events {
+            if visible.flag != mir2_world::VisibleFlag::Show {
+                continue;
+            }
+            // `mapEvent.EventType` 取**折叠对象**（第一条 registered 事件）的类型；
+            // `EventParam` 无写点 ⇒ 恒 0 ⇒ `MakeLong(nX, 0)` = `nX` 的 u16 位型。
+            let Some(ev) = world.fire_burn_events.get(visible.event) else {
+                continue;
+            };
+            let event_param: i32 = 0; // BUG-REPLICA：MapEvent 家族（可达面）无 EventParam 写点
+            let n_param2 = (visible.x as i64 & 0xFFFF) as i32 | (event_param << 16);
+            let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "事件出现帧")
+            else {
+                continue;
+            };
+            // review `39262b65` F1：`MakeMessage(SM_SHOWEVENT, nParam1, wParam, nParam2, nParam3)`
+            // （处理器 `PlayObject.Message.cs:2003`；`Messages.cs:846` recog=第 2 参）⇒
+            // **Recog = nParam1 = Id = 0（折叠）、Param = wParam = EventType**——发点
+            // `SendMsg(RM_SHOWEVENT, wParam=(short)EventType, nParam1=Id, …)`
+            // （`PlayObject.cs:3284`；签名 `BaseObject.Message.cs:34`）。
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body: smframe_ext::sm_showevent(0, ev.event_type, n_param2, visible.y),
+            });
+            sent += 1;
+        }
+    }
+    sent
+}
+
 /// **卡 `openmir2-monster-smwalk`（`audit-monster-attack-cadence-20261019.md` B.1）**：怪物走位
 /// 的 `SM_WALK(11)` 下行。
 ///
@@ -13841,6 +13953,9 @@ fn drain_run_downlinks_with_magic(
     let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);
     let _disappeared = drain_aoi_disappear(rec, online, gates);
     let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
+    // **卡 `openmir2-map-event-frames`**：地图事件可见性上行（804/805）。oracle `SearchViewRange`
+    // 收尾的最后一趟循环（actors → items → events）⇒ 排在 [`drain_aoi_downlink`] 之后。
+    let _event_frames = drain_aoi_events(world, rec, online, gates);
     // **卡 `openmir2-monster-smwalk`**：怪物走位 `SM_WALK(11)`。位置按队列优先级定：
     // `RM_TURN(17)`（出现帧）< `RM_WALK(18)` < `RM_CHANGELIGHT(153)`（654）—— 故夹在
     // [`drain_aoi_downlink`] 与 [`drain_login_tail`] 之间。
@@ -24757,6 +24872,293 @@ mod tests {
             "Ident = 30"
         );
         assert_eq!(cm.recog, b, "`Recog` = 离开者 id");
+    }
+    // ==============================================================================
+    // **卡 `openmir2-map-event-frames`**：地图事件可见性上行 `SM_SHOWEVENT(804)` /
+    // `SM_HIDEEVENT(805)`（oracle `PlayObject.SearchViewRange` 的 `CellType.Event` 支）。
+    // ==============================================================================
+
+    /// 事件视野夹具：玩家 (11,10)（`view_range=12`）+ 一发火墙事件 (10,10)（Visible、60s），
+    /// 推进到首次玩家扫描。返回 `(world, 玩家 id, 该 tick 的 TickRecord)`。
+    fn map_event_fixture(continue_ms: i32) -> (mir2_world::World, i32, mir2_world::TickRecord) {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 11, 10), 0)
+            .expect("玩家进图");
+        world.add_fire_burn_event(p, 0, 10, 10, 5, continue_ms);
+        let rec = tick_until_next_player_scan(&mut world);
+        (world, p, rec)
+    }
+
+    /// **判据①（tier=R）**：观察者进入含 `Visible` 事件的格 ⇒ 下一轮扫描恰 **1 条**
+    /// `SM_SHOWEVENT(804)`。字段（发点 `PlayObject.cs:3284`
+    /// `SendMsg(RM_SHOWEVENT, wParam=(short)EventType, nParam1=Id, MakeLong(nX,EventParam), nY)`，
+    /// 签名 `BaseObject.Message.cs:34`；处理器 `PlayObject.Message.cs:2003`
+    /// `MakeMessage(SM_SHOWEVENT, nParam1, wParam, nParam2, nParam3)`，`Messages.cs:846`
+    /// recog=第 2 参）：**`Recog = nParam1 = Id = 0`（折叠）、`Param = wParam =
+    /// EventType = ET_FIRE(5)`（`Grobal2.cs:48`）**、`Tag = LoWord(nParam2) = nX = 10`、
+    /// `Series = nY = 10`，尾 `ShortMessage{Ident = HiWord(nParam2) = EventParam = 0, wMsg = 0}`。
+    #[test]
+    fn map_event_enter_sends_one_showevent() {
+        let (world, p, rec) = map_event_fixture(60_000);
+        assert_eq!(
+            world.entities.get(p).unwrap().visible_events.len(),
+            1,
+            "扫描后 VisibleEvents 恰 1 条（折叠 ⇒ 至多 1 条）"
+        );
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        let sent = drain_aoi_events(&world, &rec, &online, &gates);
+        assert_eq!(sent, 1, "恰 1 条 SM_SHOWEVENT");
+        let mut bodies = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            bodies.push(body);
+        }
+        assert_eq!(bodies.len(), 1);
+        let b = &bodies[0];
+        let cm = CommandMessage::from_bytes(b).expect("SM_SHOWEVENT 头至少 12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_SHOWEVENT,
+            "Ident = 804"
+        );
+        assert_eq!(
+            cm.recog, 0,
+            "Recog = nParam1 = mapEvent.Id = 0（Id==0 折叠）"
+        );
+        assert_eq!(
+            cm.param, 5,
+            "Param = wParam = EventType = ET_FIRE（Grobal2.cs:48）"
+        );
+        assert_eq!(cm.tag, 10, "Tag = LoWord(MakeLong(nX=10, EventParam=0))");
+        assert_eq!(cm.series, 10, "Series = nY");
+        assert_eq!(
+            b.len(),
+            18,
+            "SM_SHOWEVENT = 12B 头 + EDCode.Encode(ShortMessage 4B ⇒ 6B) 尾"
+        );
+        assert_eq!(
+            &b[12..],
+            mir2_protocol::edcode::encode(&[0u8, 0, 0, 0]),
+            "尾 = Encode(ShortMessage{{Ident=EventParam=0, wMsg=0}})"
+        );
+    }
+
+    /// **判据②（tier=R）**：观察者离开事件视野（走出视距）⇒ 下一轮扫描恰 **1 条**
+    /// `SM_HIDEEVENT(805)`：`(nParam1=0, wParam=Id=0, nParam2=nX, nParam3=nY)`，header-only。
+    #[test]
+    fn map_event_leave_sends_one_hideevent() {
+        let (mut world, p, _rec) = map_event_fixture(60_000);
+        // 走出视距：11 → 23，Chebyshev(23-10, 0) = 13 > view_range(12)。
+        for _ in 0..12 {
+            world.walk(p, 1, 0);
+        }
+        let rec2 = tick_until_next_player_scan(&mut world);
+        assert!(
+            world.entities.get(p).unwrap().visible_events.is_empty(),
+            "离开 ⇒ 条目被 Hidden 移除"
+        );
+        assert_eq!(
+            rec2.event_hides,
+            vec![(p, 0, 10, 10)],
+            "恰 1 条 HIDEEVENT 记录：观察者、折叠事件下标、首次看到时的格子坐标"
+        );
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        let sent = drain_aoi_events(&world, &rec2, &online, &gates);
+        assert_eq!(sent, 1, "恰 1 条 SM_HIDEEVENT");
+        let mut bodies = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            bodies.push(body);
+        }
+        assert_eq!(bodies.len(), 1);
+        let b = &bodies[0];
+        assert_eq!(b.len(), 12, "SM_HIDEEVENT header-only（无尾）");
+        let cm = CommandMessage::from_bytes(b).expect("12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_HIDEEVENT,
+            "Ident = 805"
+        );
+        assert_eq!(cm.recog, 0, "Recog = nParam1 = 0");
+        assert_eq!(cm.param, 0, "Param = wParam = mapEvent.Id = 0（折叠）");
+        assert_eq!(cm.tag, 10, "Tag = nParam2 = mapEvent.nX");
+        assert_eq!(cm.series, 10, "Series = nParam3 = mapEvent.nY");
+    }
+
+    /// **判据③（tier=R）**：事件 `Visible = false`（`ContinueTime` 到期 `Close()`）⇒ **零帧**：
+    /// 扫描不再把它加入可见集、也没有 HIDEEVENT 记录。
+    #[test]
+    fn map_event_not_visible_sends_nothing() {
+        // ContinueTime = 100ms：EventProcessor 的 RunTick(500ms) 门在 600ms 过后立刻 Close。
+        let (world, _p, rec) = map_event_fixture(100);
+        assert!(
+            !world.fire_burn_events[0].visible,
+            "600ms 时事件已 Close（visible=false）"
+        );
+        assert!(
+            world.fire_burn_events[0].registered,
+            "但 key 0 仍被它占住（永不移除）"
+        );
+        let (online, gates, mut rx0) = aoi_observer_fixture(1);
+        assert_eq!(rec.event_hides.len(), 0, "不可见 ⇒ 不产生 HIDEEVENT");
+        let sent = drain_aoi_events(&world, &rec, &online, &gates);
+        assert_eq!(sent, 0, "Visible=false ⇒ 零帧");
+        assert!(rx0.try_recv().is_err(), "不得有任何帧");
+    }
+
+    /// **折叠语义（1:1 硬约束，tier=R）**：同一观察者视距内有**两个** `Visible` 事件格、
+    /// **同一趟扫描**先后命中 ⇒ 只 **1 条**可见条目（两条都解析到第一条 registered 事件，
+    /// oracle `Get<MapEvent>(0)` 与格子无关），且第二次 `UpdateVisibleEvent` 把 `Show` 打成
+    /// `Invisible`（`PlayObject.cs:5468-5471` 的「已在本列表 ⇒ 置 Invisible 并 return」）——
+    /// 而发帧循环在**扫描结束之后**读旗标 ⇒ `Invisible` 既非 `Hidden` 也非 `Show` ⇒
+    /// **该趟 804 一条都不发**（oracle 的折叠把首见帧也吃掉的更深一层怪癖）。
+    ///
+    /// 改成「每事件唯一 id」⇒ 两个格子各推一条 `Show` 条目 ⇒ 2 条 804 + 2 条目 ⇒ 本用例必红。
+    #[test]
+    fn map_event_id_zero_fold_same_scan_two_cells_no_frame() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 11, 10), 0)
+            .expect("玩家进图");
+        world.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
+        world.add_fire_burn_event(p, 0, 12, 10, 5, 60_000);
+        let rec = tick_until_next_player_scan(&mut world);
+        let vis = &world.entities.get(p).unwrap().visible_events;
+        assert_eq!(vis.len(), 1, "折叠 ⇒ VisibleEvents 至多 1 条");
+        assert_eq!(vis[0].event, 0, "折叠对象 = 第一条 registered 事件");
+        assert_eq!((vis[0].x, vis[0].y), (10, 10), "坐标 = 扫描序首个事件格");
+        assert_eq!(
+            vis[0].flag,
+            mir2_world::VisibleFlag::Invisible,
+            "同趟第二次命中 ⇒ Show 被打成 Invisible（oracle :5468-5471）"
+        );
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        assert_eq!(
+            drain_aoi_events(&world, &rec, &online, &gates),
+            0,
+            "发帧循环读到的旗标是 Invisible ⇒ 0 条 804"
+        );
+        assert!(rx0.try_recv().is_err(), "零帧");
+    }
+
+    /// **F3（review `39262b65`，tier=R）**：`nX/nY` 是折叠**共享对象**的字段——双观察者首见格
+    /// 不同时，先见者离场的 805 坐标 = **后见者覆写后的共享值**（oracle `:5483-5484` 首见支覆写
+    /// 同一份、`:3278` 发送读共享值），不是本观察者条目里的 add 时刻快照。
+    ///
+    /// 场景：事件格 (10,10) 与 (12,10)；A(11,10) 首见 (10,10)、B(24,10) 首见 (12,10)（B 视距
+    /// 恰好只够到 (12,10)）⇒ 共享 sight = (12,10)。A 走到 (11,23)（离两格均 13 > 12）⇒ A 的
+    /// 805 = Tag 12 / Series 10。按观察者各存快照的旧实现会发 (10,10) ⇒ 本用例红。
+    #[test]
+    fn map_event_hideevent_coords_are_shared_sight() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("a");
+        world.open_session("b");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 11, 10), 0)
+            .expect("a 进图");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 24, 10), 0)
+            .expect("b 进图");
+        world.add_fire_burn_event(a, 0, 10, 10, 5, 60_000);
+        world.add_fire_burn_event(a, 0, 12, 10, 5, 60_000);
+        let _rec1 = tick_until_next_player_scan(&mut world); // 1200：A 首见 (10,10)、B 首见 (12,10)
+        assert_eq!(world.event_sight, (12, 10), "后见者覆写共享 sight");
+        for _ in 0..13 {
+            world.walk(a, 0, 1); // a → (11,23)：Chebyshev 到两格均 13 > 12
+        }
+        let rec2 = tick_until_next_player_scan(&mut world); // 2400：A 离场
+        assert!(
+            world.entities.get(a).unwrap().visible_events.is_empty(),
+            "A 离场 ⇒ 条目移除"
+        );
+        assert_eq!(
+            rec2.event_hides,
+            vec![(a, 0, 12, 10)],
+            "805 坐标 = 共享 sight（B 的首见格），不是 A 的首见格 (10,10)"
+        );
+        let online: OnlineRegistry = vec![
+            entry("ua", "a", 1, 0, 901, a),
+            entry("ub", "b", 2, 0, 902, b),
+        ];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        assert_eq!(
+            drain_aoi_events(&world, &rec2, &online, &gates),
+            1,
+            "只有 A 一条 805（B 仍在视野内 ⇒ Invisible 不出帧）"
+        );
+        let mut to_a = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            }
+        }
+        assert_eq!(to_a.len(), 1);
+        let cm = CommandMessage::from_bytes(&to_a[0]).expect("12B");
+        assert_eq!(
+            cm.ident,
+            mir2_protocol::messages::SM_HIDEEVENT,
+            "Ident = 805"
+        );
+        assert_eq!(cm.recog, 0, "Recog = nParam1 = Id = 0");
+        assert_eq!(cm.param, 0, "Param = wParam = Id = 0（折叠）");
+        assert_eq!(cm.tag, 12, "Tag = 共享 nX = B 的首见格 (12,10)");
+        assert_eq!(cm.series, 10, "Series = 共享 nY");
+    }
+
+    /// **退化语义（oracle 审计 §4.3-⑤ / §4.4(c)）**：第一个事件 `Close()` 后 key 0 仍被它
+    /// 占住（`DeleteFromMap` 只在 `CellObjId > 0` 支移除）⇒ 之后**任何**新事件都进不了折叠槽
+    /// ⇒ 即使视距内有别的 `Visible` 事件也**零帧**。改成「关闭后替换」或「每事件唯一 id」⇒ 必红。
+    #[test]
+    fn map_event_closed_slot_never_replaced() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 11, 10), 0)
+            .expect("玩家进图");
+        // 第一个事件：100ms 即 Close（600ms 时 visible=false，但 key 0 仍归它）。
+        world.add_fire_burn_event(p, 0, 10, 10, 5, 100);
+        for _ in 0..3 {
+            world.tick();
+        }
+        assert!(!world.fire_burn_events[0].visible);
+        // 第二个事件：Visible、长寿命——oracle 里 TryAdd 恒失败 ⇒ 对玩家不可见。
+        world.add_fire_burn_event(p, 0, 12, 10, 5, 60_000);
+        let rec = tick_until_next_player_scan(&mut world);
+        assert!(
+            world.entities.get(p).unwrap().visible_events.is_empty(),
+            "折叠槽被已关闭的首个事件占住 ⇒ 新事件不可见"
+        );
+        assert!(rec.event_hides.is_empty());
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        assert_eq!(drain_aoi_events(&world, &rec, &online, &gates), 0);
+        assert!(rx0.try_recv().is_err(), "零帧");
+    }
+
+    /// **接线牙（撤发射点 ⇒ 红）**：`drain_run_downlinks_with_magic` 里的 `drain_aoi_events`
+    /// 调用必须仍在（口径同 `npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks`）。
+    #[test]
+    fn map_event_frames_production_call_is_wired() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let fn_start = lines
+            .iter()
+            .position(|l| l.starts_with("fn drain_run_downlinks_with_magic("))
+            .expect("`fn drain_run_downlinks_with_magic(` 定义行");
+        let want = "let _event_frames = drain_aoi_events(world, rec, online, gates);";
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| *i > fn_start && l.trim() == want)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "`{want}` 必须在 `drain_run_downlinks_with_magic` 体内恰好出现一次且未被注释；命中 {hits:?}（0 = 发射点被撤 ⇒ 804/805 永不出现；>1 = 重复发帧）"
+        );
     }
 
     /// **orphan 接线第二批（验证者一号 must_fix#1）**：`SM_DISAPPEAR(30)` 的**第二个 oracle 发点**——

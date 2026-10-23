@@ -289,6 +289,16 @@ pub struct TickRecord {
     /// 帧经**观察者自己**的消息队列发出 ⇒ 收件人 = 观察者，`Recog` = 离开者。
     /// 由 [`crate::aoi::search_view_range`] 的返回值填充；帧面由宿主（`bins/game-svr`）出。
     pub hides: Vec<(i32, i32)>,
+    /// **卡 `openmir2-map-event-frames`**：本 tick 各玩家观察者「离开事件视野」的
+    /// `(观察者 id, 事件下标, nX, nY)`（保序 = 下标升序移除序）。
+    ///
+    /// 对应 oracle `PlayObject.cs:3275-3279` 的 `VisibleFlag.Hidden` 支：
+    /// `SendMsg(RM_HIDEEVENT, 0, mapEvent.Id, mapEvent.nX, mapEvent.nY)` ⇒ 宿主出
+    /// `SM_HIDEEVENT(805)`（`PlayObject.Message.cs:1992-1994`）。`nX/nY` 是观察者**首次**
+    /// 看到该事件时扫描的格子坐标；`Id` 恒 0（折叠）。只对玩家观察者产生（oracle 仅
+    /// `PlayObject.SearchViewRange` 处理 `CellType.Event`）。由
+    /// [`crate::aoi::search_view_range_events`] 填充；帧面由宿主出。
+    pub event_hides: Vec<(i32, usize, i32, i32)>,
     /// **车道 B1（buff 系统）**：本 tick `StatusChanged()` 的结果 `(actor_id, 新 CharStatus)`，保序。
     ///
     /// oracle `ActorBuffSystem.Operate` 的 `boChg` 支（`ActorBuffSystem.cs:220-224`）⇒
@@ -1029,6 +1039,16 @@ pub struct World {
     /// `Closed` 的事件留在表里但不再 `Run`（oracle 移到 `ClosedEvents`，语义等价）。
     /// 缺省空表 ⇒ 既有 golden 逐字节不变。
     pub fire_burn_events: Vec<FireBurnEvent>,
+    /// **卡 `openmir2-map-event-frames`（review `39262b65` F3）**：折叠对象（key 0 的第一条
+    /// registered 事件）的共享 `MapEvent.nX/nY`（`MapEvent.cs:17-18`）。
+    ///
+    /// oracle 里 `nX/nY` 是**共享对象字段**：ctor 写注册格（`MapEvent.cs:70-71`），此后唯一写点是
+    /// `UpdateVisibleEvent` 的**首见支**（`PlayObject.cs:5483-5484`，每个观察者首见都覆写同一份；
+    /// 已在列表的早退支**不写**，`:5471-5473`）；`RM_HIDEEVENT` 读的是**发送时刻的共享值**
+    /// （`:3278`）⇒ 双观察者首见格不同时，先见者离场的 805 坐标 = **后写者的格**。804 的坐标在
+    /// 同一趟扫描内写读无间隔（早退支不覆写）⇒ 观察者条目里的 add 时刻快照与之恒相等
+    /// （`VisibleEvent.x/y` 只服务 804）。缺省 (0,0)——首见支必然先于任何 805 读而覆写。
+    pub event_sight: (i32, i32),
     /// **MB-1**：`EventMgr.Events` 里 `ET_DIGOUTZOMBI` 事件的最小表（插入序）。
     ///
     /// 只由 `DigOutZombi.Turned` 写入（5 分钟 `ContinueTime`），由 [`World::run_map_events`]
@@ -1273,6 +1293,7 @@ impl World {
             ],
             pending_sculture_spawns: Vec::new(),
             fire_burn_events: Vec::new(),
+            event_sight: (0, 0),
             dig_out_events: Vec::new(),
             event_registered: false,
             self_delay_msgs: crate::slave::SelfDelayQueue::new(),
@@ -3628,12 +3649,18 @@ impl World {
         continue_ms: i32,
     ) {
         let now = self.clock_ms;
+        // review `39262b65` F2：oracle `ET_FIRE = 5`（`src/OpenMir2/Grobal2.cs:48`；
+        // `MagicManager.cs:1074-1089` 四处全传 `ET_FIRE`）。基线误写 1（= `ET_DIGOUTZOMBI` 的号，
+        // `Grobal2.cs:41`）——本卡把它送上 804 线（`wParam`/`Param` 字节）⇒ 一并订正。
+        // （NEEDHOLE 联锁核实：`route_enter`/`step_with_route` 的门读 `dig_out_event_at`
+        // = `dig_out_events` 表 + `event_type == 1`（world.rs `dig_out_event_at`），火墙在
+        // `fire_burn_events` 另表 ⇒ 基线的 1 并不构成 NEEDHOLE 误触发，但仍是 oracle 偏离。）
         self.fire_burn_events.push(FireBurnEvent {
             owner_id: Some(owner_id),
             map_id,
             x,
             y,
-            event_type: 1, // `Grobal2.ET_FIRE`
+            event_type: 5, // `Grobal2.ET_FIRE`（`src/OpenMir2/Grobal2.cs:48`）
             damage,
             open_start_ms: now,
             continue_ms,
@@ -3654,6 +3681,18 @@ impl World {
         if added {
             if let Some(evt) = self.fire_burn_events.last_mut() {
                 evt.registered = true;
+            }
+            // 折叠对象 = 第一条 registered 事件（`CellObjectMgr.TryAdd(0, …)` 第一条胜）；
+            // 其 ctor 的 `nX/nY` = 注册格（`MapEvent.cs:69-70`）。之后只由
+            // `UpdateVisibleEvent` 的首见支覆写。
+            if self
+                .fire_burn_events
+                .iter()
+                .filter(|e| e.registered)
+                .count()
+                == 1
+            {
+                self.event_sight = (x, y);
             }
             self.event_registered = true;
         }
@@ -4894,6 +4933,7 @@ impl World {
             clock_ms: self.clock_ms,
             processed: Vec::new(),
             aoi_order: Vec::new(),
+            event_hides: Vec::new(),
             attacks: Vec::new(),
             weapon_breaks: Vec::new(),
             deaths: Vec::new(),
@@ -5300,6 +5340,30 @@ impl World {
                             if let Some(monster) = entities.get_mut(monster_id) {
                                 monster.ai.pending_view_updates.push(player_id);
                             }
+                        }
+                    }
+                    // **卡 `openmir2-map-event-frames`**：`PlayObject.SearchViewRange` 的
+                    // `CellType.Event` 支（`PlayObject.cs:3186-3194` 扫描 + `:3271-3287` 差集）。
+                    // oracle **只有** `PlayObject` 的覆写处理事件（`BaseObject.ViewRange.cs` 无
+                    // Event 分支）⇒ 只对玩家观察者执行；`Id == 0` 折叠（第一条 registered 事件）
+                    // 在 [`crate::aoi::search_view_range_events`] 内 1:1 照抄；帧面（804/805）
+                    // 由宿主出（`TickRecord::event_hides` + 观察者 `visible_events` 的 Show 支）。
+                    if entities
+                        .get(*id)
+                        .is_some_and(|e| e.race == crate::entity::ACTOR_RACE_PLAY)
+                    {
+                        let events = &self.fire_burn_events;
+                        // review `39262b65` F3：`nX/nY` 是折叠共享对象字段—— sight 镜像随扫描
+                        // 首见支覆写，805 读发送时刻共享值。
+                        let sight = &mut self.event_sight;
+                        for (idx, x, y) in crate::aoi::search_view_range_events(
+                            &map[map_id],
+                            entities,
+                            *id,
+                            events,
+                            sight,
+                        ) {
+                            record.event_hides.push((*id, idx, x, y));
                         }
                     }
                 }
@@ -7642,6 +7706,139 @@ mod tests {
             w.add_entity(e);
         }
         w
+    }
+
+    // ==============================================================================
+    // **卡 `openmir2-map-event-frames`**：地图事件可见性的世界侧（`VisibleEvents` 差集）。
+    // ==============================================================================
+
+    /// **判据①（世界侧）**：观察者（玩家）进入含 `Visible` 事件的格（视距内）⇒ 首次扫描后
+    /// `visible_events` 恰 1 条 `Show`、坐标 = 事件格（`UpdateVisibleEvent` 的 `wX/wY`）、
+    /// `event_hides` 为空。
+    #[test]
+    fn map_event_visible_observer_gets_one_show_entry() {
+        let mut w = World::new(64, 64);
+        let mut e = Entity::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
+        for _ in 0..6 {
+            w.tick(); // 1200ms：玩家 SearchTime(1000) 的严格大于门首次命中
+        }
+        let vis = &w.entities.get(p).unwrap().visible_events;
+        assert_eq!(vis.len(), 1, "恰 1 条可见事件条目");
+        assert_eq!(vis[0].event, 0, "折叠对象 = 第一条 registered 事件");
+        assert_eq!((vis[0].x, vis[0].y), (10, 10), "坐标 = 扫描到的事件格");
+        assert_eq!(vis[0].flag, crate::entity::VisibleFlag::Show);
+        assert!(w.last_tick.event_hides.is_empty(), "无离开 ⇒ 无 HIDEEVENT");
+    }
+
+    /// **判据②（世界侧）**：观察者走出视距 ⇒ 下一次扫描把条目 `Hidden` 移除并记
+    /// `event_hides = (观察者, 事件下标, nX, nY)`（宿主据此发 `SM_HIDEEVENT(805)`）。
+    #[test]
+    fn map_event_leave_records_one_hide() {
+        let mut w = World::new(64, 64);
+        let mut e = Entity::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert_eq!(w.entities.get(p).unwrap().visible_events.len(), 1);
+        // 走出视距：11 → 23，Chebyshev 距离 13 > 12。
+        for _ in 0..12 {
+            w.walk(p, 1, 0);
+        }
+        for _ in 0..6 {
+            w.tick(); // 2400ms：下一次扫描
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_events.is_empty(),
+            "离开 ⇒ 条目移除"
+        );
+        assert_eq!(
+            w.last_tick.event_hides,
+            vec![(p, 0, 10, 10)],
+            "恰 1 条 HIDEEVENT 记录（含首次看到时的格子坐标）"
+        );
+    }
+
+    /// **判据③（世界侧）**：事件 `Visible = false`（`ContinueTime` 到期 `Close()`）⇒
+    /// 扫描不加入可见集、无 `event_hides` ⇒ 宿主零帧。
+    #[test]
+    fn map_event_not_visible_no_entries() {
+        let mut w = World::new(64, 64);
+        let mut e = Entity::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 100); // 100ms 即 Close
+        for _ in 0..3 {
+            w.tick(); // 600ms：RunTick(500) 门过后立刻 Close
+        }
+        assert!(!w.fire_burn_events[0].visible);
+        assert!(w.fire_burn_events[0].registered, "key 0 仍被它占住");
+        for _ in 0..3 {
+            w.tick(); // 1200ms：首次扫描
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_events.is_empty(),
+            "零条目"
+        );
+        assert!(w.last_tick.event_hides.is_empty(), "零 HIDEEVENT");
+    }
+
+    /// **折叠语义（1:1 硬约束）**：同一观察者视距内有**两个** `Visible` 事件格、同一趟扫描
+    /// 先后命中 ⇒ `visible_events` 仍只 **1 条**（两条都解析到第一条 registered 事件；oracle
+    /// `Get<MapEvent>(0)` 与格子无关），且第二次 `UpdateVisibleEvent` 把 `Show` 打成
+    /// `Invisible`（oracle `:5468-5471`）⇒ 发帧循环（扫描结束后读旗标）什么都不发。
+    /// 把它改成「每事件唯一 id」⇒ 两条 `Show` ⇒ 本用例必红。
+    #[test]
+    fn map_event_id_zero_fold_single_entry() {
+        let mut w = World::new(64, 64);
+        let mut e = Entity::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
+        w.add_fire_burn_event(p, 0, 12, 10, 5, 60_000);
+        for _ in 0..6 {
+            w.tick();
+        }
+        let vis = &w.entities.get(p).unwrap().visible_events;
+        assert_eq!(vis.len(), 1, "折叠 ⇒ 至多 1 条");
+        assert_eq!(vis[0].event, 0);
+        assert_eq!((vis[0].x, vis[0].y), (10, 10), "坐标 = 扫描序首个事件格");
+        assert_eq!(
+            vis[0].flag,
+            crate::entity::VisibleFlag::Invisible,
+            "同趟第二次命中 ⇒ Show 被打成 Invisible（oracle :5468-5471）"
+        );
+        assert!(w.last_tick.event_hides.is_empty());
+    }
+
+    /// **退化语义（oracle 审计 §4.3-⑤）**：折叠槽（key 0）被首个事件占住后**永不替换**
+    /// （`DeleteFromMap` 只在 `CellObjId > 0` 支移除）——首个事件 `Close()` 后，即使视距内
+    /// 出现新的 `Visible` 事件，观察者也看不到（零条目）。
+    #[test]
+    fn map_event_closed_slot_never_replaced() {
+        let mut w = World::new(64, 64);
+        let mut e = Entity::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 100); // 首个事件：100ms 即 Close
+        for _ in 0..3 {
+            w.tick();
+        }
+        assert!(!w.fire_burn_events[0].visible);
+        w.add_fire_burn_event(p, 0, 12, 10, 5, 60_000); // 新事件：Visible，但 TryAdd 恒失败
+        for _ in 0..3 {
+            w.tick();
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_events.is_empty(),
+            "折叠槽被已关闭的首个事件占住 ⇒ 新事件不可见"
+        );
+        assert!(w.last_tick.event_hides.is_empty());
     }
 
     #[test]

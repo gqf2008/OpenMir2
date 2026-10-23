@@ -99,6 +99,30 @@ pub struct VisibleBaseObject {
     pub flag: VisibleFlag,
 }
 
+/// C# `PlayObject.VisibleEvents`（`IList<MapEvent>`，`PlayObject.cs:211`）的条目——
+/// **卡 `openmir2-map-event-frames`**。
+///
+/// **BUG-REPLICA（`MapEvent.Id == 0` 折叠）**：oracle `MapEvent.Id` 是 `readonly int` 且赋值行
+/// 被注释（`MapEvent.cs:62`）⇒ 恒 0；`CellObjectMgr` 是 `ConcurrentDictionary<int, object>` 的
+/// **TryAdd**（`CellObjectMgr.cs:10-16`）⇒ 全进程只有**第一条**成功注册的事件占住 key 0，且
+/// `DeleteFromMap` 只在 `CellObjId > 0` 支移除（`Envirnoment.cs:652-667`）⇒ key 0 **永不替换**。
+/// 因此 `SearchViewRange` 对**任何**事件格的 `Get<MapEvent>(0)` 都解析到**同一个对象**，
+/// 每观察者的 `VisibleEvents` 至多一条（差集按**对象同一性**去重，`PlayObject.cs:5468`
+/// `if (mapEvent == MapEvent)` 是引用比较）。`event` 存的是该折叠对象在
+/// `World::fire_burn_events` 里的下标——**不得**改成「每事件一个 id」，否则第二次进事件格
+/// 会多出一条 `SM_SHOWEVENT`（oracle 不发）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VisibleEvent {
+    /// 折叠到的唯一事件：`fire_burn_events` 里**第一条** `registered == true` 的下标。
+    pub event: usize,
+    /// **add 时刻共享 sight 的快照**（review `39262b65` F3）：oracle 首见支写共享对象的
+    /// `nX/nY`（`PlayObject.cs:5483-5484`），同趟扫描内早退支不覆写 ⇒ 804 在扫描后读共享值
+    /// 与该快照恒相等。**805 不读这里**——读发送时刻共享值（`World::event_sight`，`aoi` 收尾支）。
+    pub x: i32,
+    pub y: i32,
+    pub flag: VisibleFlag,
+}
+
 /// oracle `BaseObject` + `AnimalObject` 两层 ctor 的**唯一**抽数契约（kind + 顺序）。
 ///
 /// 怪物（`MonsterObject: AnimalObject`）、固定 NPC（`NormNpc: AnimalObject`）、商人列表
@@ -685,6 +709,9 @@ pub struct Entity {
     pub add_to_mapped: bool,
     /// C# `VisibleActors`
     pub visible_actors: Vec<VisibleBaseObject>,
+    /// C# `PlayObject.VisibleEvents`（`PlayObject.cs:211`；仅玩家观察者维护，见
+    /// `aoi::search_view_range_events`）。缺省空表 ⇒ 既有 golden 逐字节不变。
+    pub visible_events: Vec<VisibleEvent>,
     /// C# `IsVisibleActive`
     pub is_visible_active: bool,
     /// 本 tick 是否已被处理（tick 顺序判据用）
@@ -1099,6 +1126,7 @@ impl Entity {
             want_ref_msg: false,
             add_to_mapped: false,
             visible_actors: Vec::new(),
+            visible_events: Vec::new(),
             is_visible_active: false,
             processed_tick: 0,
             map_id: 0,

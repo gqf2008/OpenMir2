@@ -41,8 +41,9 @@ pub mod world;
 
 pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame};
 pub use aoi::{
-    search_view_range, search_view_range_death, search_view_range_with_updates,
-    update_monster_visible, update_visible_gay, visible_snapshot, SearchViewRangeOutcome,
+    search_view_range, search_view_range_death, search_view_range_events,
+    search_view_range_with_updates, update_monster_visible, update_visible_event,
+    update_visible_gay, visible_snapshot, SearchViewRangeOutcome,
 };
 pub use bevy_bridge::{collect_tick_order_system, snapshot_from_world};
 pub use buff::{
@@ -81,8 +82,8 @@ pub use ctor_fold::{
     CTOR_FOLD_BARRIER_A_MOD, CTOR_FOLD_DRAWS_PER_SITE, CTOR_FOLD_DRAW_KIND,
 };
 pub use entity::{
-    BaseAnimalCtorDraws, Entity, EntityStore, MonsterCtorDraws, VisibleFlag, ACTOR_RACE_MONSTER,
-    ACTOR_RACE_PLAY, BASE_ANIMAL_CTOR_DRAW_MODS,
+    BaseAnimalCtorDraws, Entity, EntityStore, MonsterCtorDraws, VisibleEvent, VisibleFlag,
+    ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, BASE_ANIMAL_CTOR_DRAW_MODS,
 };
 pub use guild::{
     check_guild_name, AddWarGuildOutcome, GuildConfig, GuildManager, GuildRank, GuildRunEvent,

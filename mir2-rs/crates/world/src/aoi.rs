@@ -20,7 +20,7 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    EntityStore, VisibleBaseObject, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    EntityStore, VisibleBaseObject, VisibleEvent, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 
@@ -305,6 +305,143 @@ pub fn search_view_range_with_updates(
         removed,
         view_updates,
     }
+}
+
+/// 对应 `PlayObject.UpdateVisibleEvent`（`PlayObject.cs:5464-5486`）。
+///
+/// oracle 逐行：
+/// ```text
+/// for (i = 0; i < VisibleEvents.Count; i++)
+///     if (VisibleEvents[i] == MapEvent) { VisibleEvents[i].VisibleFlag = Invisible; return; }
+/// MapEvent.VisibleFlag = Show; MapEvent.nX = wX; MapEvent.nY = wY; VisibleEvents.Add(MapEvent);
+/// ```
+///
+/// **已在本列表 ⇒ 只打 `Invisible`、不更新坐标**（早退支不写 ⇒ 同一趟后续格子不覆写）。
+///
+/// **review `39262b65` F3**：`nX/nY` 是**折叠共享对象**的字段——首见支先写共享镜像 `sight`
+/// （oracle `PlayObject.cs:5483-5484`，每个观察者首见都覆写同一份），再把该值快照进观察者
+/// 条目。快照只服务 **804**（同一趟扫描内写读无间隔 ⇒ 与共享值恒相等）；**805** 读的是发送
+/// 时刻的共享值（`:3278`）——它可能已被**后见者**覆写 ⇒ 由 [`search_view_range_events`]
+/// 的收尾支读 `sight`，不读条目快照。
+pub fn update_visible_event(
+    store: &mut EntityStore,
+    viewer_id: i32,
+    event: usize,
+    x: i32,
+    y: i32,
+    sight: &mut (i32, i32),
+) {
+    let Some(viewer) = store.get_mut(viewer_id) else {
+        return;
+    };
+    for v in viewer.visible_events.iter_mut() {
+        if v.event == event {
+            v.flag = VisibleFlag::Invisible;
+            return;
+        }
+    }
+    // oracle `:5483-5484`：`MapEvent.VisibleFlag = Show; MapEvent.nX = wX; MapEvent.nY = wY;`
+    *sight = (x, y);
+    viewer.visible_events.push(VisibleEvent {
+        event,
+        x,
+        y,
+        flag: VisibleFlag::Show,
+    });
+}
+
+/// `PlayObject.SearchViewRange` 的 **`CellType.Event` 支**（卡 `openmir2-map-event-frames`）。
+///
+/// 扫描段（`PlayObject.cs:3186-3194`）：
+/// ```text
+/// case CellType.Event:
+///     MapEvent mapEvent = M2Share.CellObjectMgr.Get<MapEvent>(cellObject.CellObjId); // 恒 0
+///     if (mapEvent == null) continue;
+///     if (mapEvent.Visible) UpdateVisibleEvent(nX, nY, mapEvent);
+/// ```
+/// 差集收尾（`:3271-3287`）：`Hidden` ⇒ `SendMsg(RM_HIDEEVENT, 0, mapEvent.Id, mapEvent.nX,
+/// mapEvent.nY)` 并 `RemoveAt`；`Show` ⇒ `SendMsg(RM_SHOWEVENT, …)`（帧面由宿主出）。
+///
+/// 与 actors 的合并实现拆开的**等价性**：oracle 把两段写在同一格子双层循环里，但事件只写
+/// 观察者自己的 `VisibleEvents`、actors 只写 `VisibleActors`，互不读写 ⇒ 拆两趟（同一窗口、
+/// 同一「X 外层升序、Y 内层升序」序）结果逐字段相同。
+///
+/// **只有玩家**走这段：`BaseObject.SearchViewRange` / `GuardUnit.SearchViewRange`
+/// （`BaseObject.ViewRange.cs`）**没有** `CellType.Event` 分支——`VisibleEvents` 是
+/// `PlayObject` 独有字段（`PlayObject.cs:211`）。非玩家调用 ⇒ 空返回。
+///
+/// **review `39262b65` F3**：`sight` = 折叠对象共享 `nX/nY` 的镜像（`World::event_sight`）。
+/// 首见支覆写它；差集收尾的 `RM_HIDEEVENT` 记录读**发送时刻的共享值**（oracle `:3278`）——
+/// 即「最后一次首见」的格子，**不是**本观察者条目里的 add 时刻快照（后见者可能已覆写）。
+///
+/// **`Id == 0` 折叠（1:1 硬约束）**：`events` 里的查找按 oracle `Get<MapEvent>(0)` 的
+/// `TryAdd` 语义取**全进程第一条 `registered` 事件**（key 0 第一条胜、`DeleteFromMap` 对
+/// id 0 恒不移除 ⇒ 关闭后**不再替换**）；与格子坐标无关（oracle `CellObjectMgr` 是
+/// `M2Share` 的静态全局，跨图共享）。给事件编唯一 id ⇒ 每个事件格各解析各的 ⇒ 折叠用例必红。
+///
+/// 返回本趟「离开视野」的 `(事件下标, nX, nY)`（`Hidden` ⇒ `RemoveAt`，下标升序保序）——
+/// 对应 oracle `RM_HIDEEVENT` 的发送对象。
+pub fn search_view_range_events(
+    map: &MapGrid,
+    store: &mut EntityStore,
+    viewer_id: i32,
+    events: &[crate::world::FireBurnEvent],
+    sight: &mut (i32, i32),
+) -> Vec<(usize, i32, i32)> {
+    let Some(viewer) = store.get(viewer_id) else {
+        return Vec::new();
+    };
+    if viewer.race != ACTOR_RACE_PLAY {
+        return Vec::new();
+    }
+    let (cx, cy, view_range) = (viewer.x, viewer.y, viewer.view_range);
+    // 置 Hidden（oracle `:3078-3082`：`for (i = Count - 1; i >= 0; i--) … = Hidden;`——
+    // 逆序置位与顺序无关，逐条目结果相同）。
+    if let Some(viewer) = store.get_mut(viewer_id) {
+        for v in viewer.visible_events.iter_mut() {
+            v.flag = VisibleFlag::Hidden;
+        }
+    }
+    // 扫描窗口与 actors 同一（`CurrX ± ViewRange` 的正方形，X 外层升序、Y 内层升序）。
+    for x in (cx - view_range)..=(cx + view_range) {
+        for y in (cy - view_range)..=(cy + view_range) {
+            let (cell, success) = map.get_cell_info(x, y);
+            if !success || cell.count() == 0 {
+                continue; // C#：cellSuccess && cellInfo.IsAvailable
+            }
+            for obj in &cell.obj_list {
+                if obj.cell_type != CellType::Event {
+                    continue;
+                }
+                // `Get<MapEvent>(0)`：Id==0 折叠——任何事件格都解析到**第一条** registered 事件。
+                let Some((event_idx, folded)) =
+                    events.iter().enumerate().find(|(_, e)| e.registered)
+                else {
+                    continue; // oracle `mapEvent == null ⇒ continue`（key 0 还空着）
+                };
+                if !folded.visible {
+                    continue; // oracle `if (mapEvent.Visible)`
+                }
+                update_visible_event(store, viewer_id, event_idx, x, y, sight);
+            }
+        }
+    }
+    // 差集收尾（oracle `:3271-3287`）：`Hidden` ⇒ 记移除（宿主发 `SM_HIDEEVENT`）、下标升序保序。
+    // review `39262b65` F3：805 坐标 = **发送时刻共享值**（oracle `:3278` 读 `mapEvent.nX/nY`）
+    // —— 本趟无首见支（Hidden 才会移除）⇒ sight 未被本趟覆写，即「最后一次首见」的格子。
+    let mut removed: Vec<(usize, i32, i32)> = Vec::new();
+    if let Some(viewer) = store.get_mut(viewer_id) {
+        let mut i = 0;
+        while i < viewer.visible_events.len() {
+            if viewer.visible_events[i].flag == VisibleFlag::Hidden {
+                let ev = viewer.visible_events.remove(i);
+                removed.push((ev.event, sight.0, sight.1));
+                continue;
+            }
+            i += 1;
+        }
+    }
+    removed
 }
 
 /// 对应 `BaseObject.SearchViewRangeDeath`（`BaseObject.ViewRange.cs:159`）。
