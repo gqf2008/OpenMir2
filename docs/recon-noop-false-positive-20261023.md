@@ -1,0 +1,150 @@
+# recon 入站 no-op 判据假阳性：`CM_BUTCH` 与全表审计
+
+- 卡：`openmir2-recon-noop-false-positive`（tier=L）
+- 车道：`openmir2-worker-61` / worktree `wt-worker-61` / 分支 `card/recon-noop-fp`
+- 基线：master `995fbddfd`
+- 写集：`mir2-rs/tests/parity/coverage/`、`docs/`（零生产 .rs）
+
+## 1. 根因复核（确认）
+
+`mir2-rs/tests/parity/coverage/recon_gates.py`（改前 `:129`）：
+
+```python
+RE_CLIENT_LITERAL_ARG = re.compile(
+    r"(?<![A-Za-z0-9_])client_[a-z0-9_]+\s*\([^)]*?(?:\bfalse\b|\btrue\b|(?<![A-Za-z0-9_.])\d+(?![A-Za-z0-9_.]))")
+```
+
+它是**字符级**匹配：`[^)]*?` 只躲 `)`，不认 `{}`/`[]`。`bins/game-svr/src/lib.rs:2732` 的
+`CM_BUTCH` 臂实参是结构体字面量
+
+```rust
+inbound::client_butch(&inbound::ButchInputs {
+    n_x, n_y, bt_dir, curr_x, curr_y,
+    close_speed_hack_check: true,
+    now_tick: world.clock_ms as i32,
+    turn_interval_time: 600,
+    valid_object, target_butcherable,
+})
+```
+
+`true` / `600` 是**输入结构体的字段值**，不是被顶死的会话态；`ButchOutcome` 随后被完整消费
+（`out.send_butch` → `Command::Butch` 入队、`out.butchered` → `Command::ButchEffect` 入队）。
+旧判据仍命中 ⇒ `noop=True` ⇒ `inbound:CM_BUTCH` 落 `tracked`，终点条件③（`tracked == 0`）被工具 bug 卡死。
+**根因成立，非业务缺口。**
+
+## 2. 判据形态（改后）
+
+形态 (b) 由「实参文本里出现裸字面量」改为「**某一段顶层实参整体就是一个裸字面量**」：
+
+1. `RE_CLIENT_CALL = client_[a-z0-9_]+\s*\(` 找到调用；
+2. `_call_top_level_args()` 从 `(` 起扫到配对的 `)`，`(`/`[`/`{` 计深度、`)`/`]`/`}` 减深度，
+   字符串 `"…"` / 字符 `'…'` 整体跳过，**只按顶层逗号切分**实参；
+3. `RE_BARE_LITERAL_ARG.fullmatch(arg)`：`true`/`false`/十进制·十六·八·二进制整数/浮点，
+   可带 `i*/u*/f32/f64` 类型后缀，允许前后空白；
+4. 任一段顶层实参命中 ⇒ 形态 (b) 成立。形态 (a)（`let (d, _frames) = …`）原样保留。
+
+**为什么不会误伤真 no-op**：登记在案的三类真 no-op 形态都是「handler 的**顶层实参**就是常量」——
+`client_open_door(false)`、`client_get_min_map(0)`、`client_adjust_bonus(cmd.recog, 0)`，改后仍全部命中
+（`selftest` 各有牙，见 §5）。被排除的只是**嵌套表达式里的常量**：结构体字段初始化
+（`ButchInputs{…true…}`）、嵌套调用实参（`foo(false)`）、字符串 `"false"`。这些都不是「handler 被常量
+顶死」，而是输入/包装表达式。
+
+**残余（欠报方向，有意，判据未放宽）**：
+- `foo(false)` 这类「常量裹一层」的实参判不出恒假；
+- 顶层实参若是**合法配置常量**（`client_x(cmd.a, 0)` 而 0 有语义）仍会被判 no-op；
+- 经 `if-else` 判等链派发的入站帧没有 `=>` 臂体，本判据根本不覆盖（§4.3 逐条核对过，当前无恒空者）。
+
+## 3. dispatch 改前 / 改后
+
+命令：`cd mir2-rs && python -I -B tests/parity/coverage/recon_gates.py dispatch --repo ..`
+
+| | summary | `inbound:CM_BUTCH` |
+| --- | --- | --- |
+| 改前（`995fbddfd`） | `{"implemented": 178, "tracked": 1, "n/a-unreachable": 11, "n/a-oracle-noop": 1}` | `noop` / **tracked** / `lib.rs:2732` |
+| 改后 | `{"implemented": 179, "n/a-unreachable": 11, "n/a-oracle-noop": 1}` | `-` / **implemented** / `lib.rs:2732` |
+
+`tracked` 变 **0**，且**没有其他 tracked 行**需要解释（改前唯一一条就是它）。全表只有两行的 `noop` 列
+非 `-`：`CM_BUTCH`（本卡修掉）与 `CM_OPENDOOR`（真 no-op，见下）。
+
+## 4. 全表审计（本卡重点）
+
+对象 = 全部 58 个**生产活跃**的 `messages::CM_X => { … }` 臂体（`production_cm_arms`），外加 24 个
+**无 match 臂、经判等链派发**的 oracle `CM_*` 派发点（`inbound_dispatch_at`）。
+
+### 4.1 被判 no-op 但实际有实现（假阳性）
+
+| # | 位置 | 判定 |
+| --- | --- | --- |
+| 1 | `mir2-rs/bins/game-svr/src/lib.rs:2732` `CM_BUTCH` | **唯一一条**。结构体字段值撞上字符级正则；实为完整实现（`client_butch` 出帧 + 两条 `world.enqueue`）。本卡修复后转 implemented。 |
+
+### 4.2 被判非 no-op 但实际恒空（假阴性）
+
+判据：臂体去掉 `glog!(…)` 后不剩任何调用/赋值/结构体（自动化扫描了全部 58 个生产臂）。
+
+| # | 位置 | 事实 | 结论 |
+| --- | --- | --- | --- |
+| 1 | `mir2-rs/bins/game-svr/src/lib.rs:2796` `CM_USERMAKEDRUGITEM` | 臂体**只有 `glog!`**，且注释明示「该臂在 sim 循环里**不可达**（商店派发先命中）」。真正的生产实现在 `lib.rs:5682`（`handle_shop_cmd` 的 `game_svr::shop::CM_USERMAKEDRUGITEM` 臂）。 | **门证据行指向死兜底**（status=implemented 但 `rust_at` 指 `2796`）。帧本身没有丢，属「证据列弱」，不是真缺口。登记为残余。 |
+| 2 | `mir2-rs/bins/game-svr/src/lib.rs:2491` `CM_1042` | 臂体**只有 `glog!`**（无出帧、无状态改动）。 | **正确**：oracle 自身就是 log-only（`src/M2Server/Player/PlayObject.Message.cs:996-998`，`LogService.Warn`），已登记 `known_oracle_noop` ⇒ `n/a-oracle-noop`。不是假阴性。 |
+
+**不是恒空、无需登记的两类（核对过）**：
+
+- **值映射臂**：`attackwire.rs:78-86`（`CM_HIT => Some(0)`、`CM_BIGHIT => Some(2)`、… `CM_TWINHIT => Some(9)`）、
+  `movewire.rs:115-116`（`CM_RUN => 2`、`CM_HORSERUN => 3`）、`movewire.rs:125-126`
+  （`CM_RUN => messages::SM_RUN`、`CM_HORSERUN => messages::SM_HORSERUN`）——返回值被调用方消费，
+  是调度实现本身。
+- **短委派臂**：`CM_DEAL*`/`CM_SELLOFF*`/`CM_GUILD*`/`CM_*STORE*` 等一行调用 (`lib.rs:3197-3224`、
+  `lib.rs:4891-4915`、`guild_cmd.rs:266-274`)，效果在被调函数里（`guild_cmd.rs:466-810` 的 `ctx.*` 均出帧/改态）。
+
+### 4.3 判据不覆盖的 24 个判等链派发点（无 `=>` 臂体，逐条核对均非恒空）
+
+`CM_CLICKNPC` `lib.rs:4596` → `handle_click_npc_cmd`；`CM_DROPITEM` `lib.rs:19057` → `handle_ground_cmd`；
+`CM_EAT` `lib.rs:19169` → `handle_eat_cmd`；`CM_MAGICKEYCHANGE` `magicwire.rs:90` → 处理体 `lib.rs:11690+`；
+`CM_MERCHANTDLGSELECT` `lib.rs:5045`；`CM_MERCHANTQUERYREPAIRCOST` `lib.rs:5582`；
+`CM_MERCHANTQUERYSELLPRICE` `lib.rs:5517`；`CM_PICKUP` `lib.rs:2939`；
+`CM_QUERYBAGITEMS` `lib.rs:19188` → `handle_query_bag_cmd`；`CM_QUERYUSERNAME` `lib.rs:4570`；
+`CM_QUERYUSERSET` `lib.rs:4584`；`CM_QUERYUSERSTATE` `lib.rs:4577`；`CM_QUERYVAL` `lib.rs:4588`；
+`CM_SAY` `game-gate/src/lib.rs:1044`；`CM_SOFTCLOSE` `lib.rs:4592`；
+`CM_TAKEOFFITEM` `lib.rs:19134`；`CM_TAKEONITEM` `lib.rs:3500`；`CM_USERBUYITEM` `lib.rs:5021`；
+`CM_USERGETDETAILITEM` `lib.rs:5563`；`CM_USERREPAIRITEM` `lib.rs:5600`；`CM_USERSELLITEM` `lib.rs:5535`；
+`CM_USERSTORAGEITEM` `lib.rs:5813`；`CM_USERTAKEBACKSTORAGEITEM` `lib.rs:5833`；
+`CM_WALK` `game-gate/src/lib.rs:1005`。
+
+### 4.4 结论
+
+- 假阳性**恰好 1 条**（`CM_BUTCH`），已修；
+- 假阴性**0 条真缺口**；1 条证据列弱（`CM_USERMAKEDRUGITEM` 指向死兜底臂），1 条 oracle-noop（`CM_1042`）正确豁免；
+- 24 个判等链派发点不在本启发式覆盖面内，逐条核对均委派给有出帧/改态的 handler。
+
+## 5. 构造级正 / 负样本（`selftest` 夹具，均通过）
+
+正样本（必须仍判 `True`，真 no-op）：
+
+1. `let (d, _f) = client_open_door(false);`（形态 a）；
+2. `let f = client_get_min_map(0); emit(f);`（形态 b，顶层整数）；
+3. `let o = client_adjust_bonus(cmd.recog, 0); emit(o);`（形态 b，多实参里的顶层常量）；
+4. `let o = client_open_door(true); emit(o);`（形态 b，顶层 bool）。
+
+负样本（必须判 `False`，真实现）：
+
+1. `let i = client_live(cmd.param); emit(i);`（动态入参 + 出帧）；
+2. `let o = client_butch(&ButchInputs { n_x: 1, n_y: 2, close_speed_hack_check: true, turn_interval_time: 600 }); emit(o);`
+   （结构体字面量**字段值**）；
+3. `let o = client_wrap(make_for(cmd.param, 1)); emit(o);`（嵌套调用里的常量）；
+4. `let o = client_note("false", cmd.param); emit(o);`（字符串不算裸字面量）。
+
+## 6. 牙（逐字节还原 + sha256 从提交后树取）
+
+见卡片 `patch` 条目 §牙；三颗均实跑，还原后 `sha256` 与提交树一致。
+
+## 7. 门禁
+
+| 命令 | 改前 | 改后 |
+| --- | --- | --- |
+| `recon_gates.py selftest` | 91 PASS / 0 FAIL，`RESULT: ALL PASS` | **96 PASS / 0 FAIL**（+5 条本卡牙），`RESULT: ALL PASS` |
+| `recon_gates.py mutate` | 38 PASS / 0 FAIL，`RESULT: ALL PASS` | **38 PASS / 0 FAIL**（未受本卡影响） |
+| `recon_gates.py dispatch` | `tracked=1` | **`tracked=0`** |
+
+## 8. 残留物清单
+
+- 临时脚本：`E:/tmp/w61-*.py`、`E:/tmp/w61-*.txt`（审计/复现用，未入库，可删）。
+- 未改任何生产 `.rs`、未改 `cards.json` 的 `known_*`、未删 no-op 判据、未起栈/占端口/连库。

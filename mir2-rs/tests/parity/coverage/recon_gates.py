@@ -125,8 +125,82 @@ RE_LOAD_FN_NAME = re.compile(r"(?<![A-Za-z0-9_])fn\s+(load[a-z0-9_]*)")
 # 入站 no-op 臂结构判据（片 D1-②）：本臂「恒假/恒空」的可机判形态。
 #   (a) handler 输出绑到 `_` 前缀名（形态 `let (decision, _frames) = ...`）⇒ 输出被丢弃。
 RE_NOOP_UNDERSCORE_BIND = re.compile(r"let\s*\([^)]*\b_\w+")
-#   (b) 用裸字面量（false/true/整数）喂 `client_*` handler —— 会话态未挂、被常量顶死。
-RE_CLIENT_LITERAL_ARG = re.compile(r"(?<![A-Za-z0-9_])client_[a-z0-9_]+\s*\([^)]*?(?:\bfalse\b|\btrue\b|(?<![A-Za-z0-9_.])\d+(?![A-Za-z0-9_.]))")
+#   (b) 用**顶层实参为裸字面量**（false/true/整数/浮点）喂 `client_*` handler —— 会话态未挂、被常量顶死
+#       （`client_open_door(false)` / `client_get_min_map(0)` / `client_adjust_bonus(cmd.recog, 0)`）。
+#       卡 `openmir2-recon-noop-false-positive`：旧正则 `client_x\([^)]*?(false|true|\d+)` 是**字符级**
+#       匹配，`[^)]*?` 不认 `{}`/`[]`，会一路吃到嵌套结构体字面量的**字段值**上 ——
+#       `client_butch(&ButchInputs { …, close_speed_hack_check: true, turn_interval_time: 600, … })`
+#       因此被误判成「用裸字面量顶死 handler」（其实那些字面量是**输入结构体的字段值**，handler 输出
+#       还被完整用于出帧）。现改为**实参列表级**判据（[`client_call_top_level_literal_args`]）：先把
+#       调用实参按**顶层逗号**切成实参段（`(`/`[`/`{` 计深度、字符串/字符字面量整体跳过），只有
+#       「**某一段顶层实参整体就是一个裸字面量**」才算命中。⇒ 嵌套结构体字段值 / 嵌套调用
+#       `foo(false)` / 动态表达式一律不算。
+#       残余（**欠报**方向，有意）：`foo(false)` 这类「常量裹一层的实参」判不出恒假；顶层实参若是
+#       合法的配置常量（`client_x(cmd.a, 0)` 而 0 有语义）仍会被判 no-op。
+RE_CLIENT_CALL = re.compile(r"(?<![A-Za-z0-9_])client_[a-z0-9_]+\s*\(")
+# 裸字面量整体（Rust）：`true`/`false`、十进制/十六/八/二进制整数、浮点，可带类型后缀。
+RE_BARE_LITERAL_ARG = re.compile(
+    r"\s*(?:true|false|-?(?:0[xX][0-9a-fA-F_]+|0[oO][0-7_]+|0[bB][01_]+|\d[\d_]*(?:\.[\d_]+)?(?:[eE][-+]?\d+)?)"
+    r"(?:[iu](?:8|16|32|64|128|size)|f(?:32|64))?)\s*")
+
+
+def _call_top_level_args(text, open_paren):
+    """从 `text[open_paren]`（= `(` 之后的下标）起取**顶层实参**列表；未闭合 ⇒ None。
+
+    `(`/`[`/`{` 计深度、`)]}` 减深度；只按顶层的 `,` 切分。字符串 `"…"` / 字符 `'…'` 整体跳过
+    （语料里字符串已被 `strip_code` 折叠成 `""`，这里仍按字面量跳过以便自测夹具直接用原文；
+    `'…'` 只在像字符字面量时跳过，生命周期 `'a` 不当字符串）。
+    """
+    args, cur, depth = [], [], 1
+    i, n = open_paren, len(text)
+    while i < n:
+        c = text[i]
+        if c == QT:
+            j = text.find(QT, i + 1)
+            if j == -1:
+                return None
+            cur.append(text[i:j + 1])
+            i = j + 1
+            continue
+        if c == "'" and i + 2 < n and (text[i + 2] == "'" or text[i + 1] == BS):
+            j = i + 1
+            while j < n and j < i + 4:
+                if text[j] == BS:
+                    j += 2
+                    continue
+                if text[j] == "'":
+                    j += 1
+                    break
+                j += 1
+            cur.append(text[i:j])
+            i = j
+            continue
+        if c in "([{":
+            depth += 1
+        elif c in ")]}":
+            depth -= 1
+            if depth == 0:
+                args.append("".join(cur))
+                return args
+        elif c == "," and depth == 1:
+            args.append("".join(cur))
+            cur = []
+            i += 1
+            continue
+        cur.append(c)
+        i += 1
+    return None
+
+
+def client_call_top_level_literal_args(text: str) -> bool:
+    """臂体里是否存在**顶层实参整体为裸字面量**的 `client_*(…)` 调用（片 D1-② 形态 (b)，见上注释）。"""
+    for m in RE_CLIENT_CALL.finditer(text):
+        args = _call_top_level_args(text, m.end())
+        if not args:
+            continue
+        if any(RE_BARE_LITERAL_ARG.fullmatch(a) for a in args):
+            return True
+    return False
 
 
 def rust_source_dirs(repo: Path, exclude=()):
@@ -998,8 +1072,11 @@ def inbound_arm_noop(corpus, name: str, arms: dict = None) -> bool:
 
     形态判据（命中任一即 no-op）：
       (a) handler 输出被丢弃——`let (decision, _frames) = …`（绑到 `_` 前缀名）；
-      (b) 用裸字面量（`false`/`true`/整数）喂 `client_*` handler——会话态未挂、被常量顶死
-          （`client_open_door(false)` / `client_get_min_map(0)` / `client_adjust_bonus(cmd.recog, 0)`）。
+      (b) 用**顶层实参整体为裸字面量**（`false`/`true`/整数/浮点）喂 `client_*` handler——会话态未挂、
+          被常量顶死（`client_open_door(false)` / `client_get_min_map(0)` /
+          `client_adjust_bonus(cmd.recog, 0)`）。**字段值不算**：`client_butch(&ButchInputs {
+          close_speed_hack_check: true, … })` 是结构体字面量的**字段初始化**，不是被顶死的会话态
+          （卡 `openmir2-recon-noop-false-positive`）。
     臂不存在 ⇒ False（交由既有「缺臂」判据）；所有抽到的臂都命中形态 ⇒ True（⇒ 不算 implemented）。
     `arms` 可传入 `extract_cm_arms(corpus)` 的缓存（build_dispatch_rows 逐臂复用，避免重复抽取）。
     """
@@ -1008,7 +1085,8 @@ def inbound_arm_noop(corpus, name: str, arms: dict = None) -> bool:
     bodies = arms.get(name)
     if not bodies:
         return False
-    return all((RE_NOOP_UNDERSCORE_BIND.search(b) or RE_CLIENT_LITERAL_ARG.search(b)) for b in bodies)
+    return all((RE_NOOP_UNDERSCORE_BIND.search(b) or client_call_top_level_literal_args(b))
+               for b in bodies)
 
 
 def oracle_rm_producers(repo: Path):
@@ -2141,7 +2219,14 @@ def selftest():
             "match ident {",
             "  messages::CM_ZZDEAD => { let (d, _f) = client_open_door(false); glog!(\"x\"); }",
             "  messages::CM_ZZDEAD2 => { let f = client_get_min_map(0); emit(f); }",
+            "  messages::CM_ZZDEAD3 => { let o = client_adjust_bonus(cmd.recog, 0); emit(o); }",
+            "  messages::CM_ZZDEAD4 => { let o = client_open_door(true); emit(o); }",
             "  messages::CM_ZZLIVE => { let i = client_live(cmd.param); emit(i); }",
+            "  messages::CM_ZZLIVE2 => { let o = client_butch(&ButchInputs {",
+            "      n_x: 1, n_y: 2, close_speed_hack_check: true, turn_interval_time: 600 });",
+            "    emit(o); }",
+            "  messages::CM_ZZLIVE3 => { let o = client_wrap(make_for(cmd.param, 1)); emit(o); }",
+            "  messages::CM_ZZLIVE4 => { let o = client_note(\"false\", cmd.param); emit(o); }",
             "}",
         ]) + NL, encoding="utf-8")
         _nc = RustCorpus(rust_source_dirs(_tmp_noop))
@@ -2149,8 +2234,21 @@ def selftest():
               inbound_arm_noop(_nc, "CM_ZZDEAD") is True)
         check("teeth（片D1-②）：no-op 臂（常量喂 client_* handler，恒走 FAIL 支）⇒ inbound_arm_noop=True",
               inbound_arm_noop(_nc, "CM_ZZDEAD2") is True)
+        # ---- 卡 `openmir2-recon-noop-false-positive`：判据收紧为「顶层实参整体为裸字面量」----
+        # 正样本（真 no-op）多形态：顶层整数 / 顶层 bool / 多实参里的顶层常量。
+        check("teeth（卡recon-noop-fp）：no-op 臂（`client_adjust_bonus(cmd.recog, 0)` 顶层实参含裸字面量）⇒ True",
+              inbound_arm_noop(_nc, "CM_ZZDEAD3") is True)
+        check("teeth（卡recon-noop-fp）：no-op 臂（`client_open_door(true)` 顶层实参为 bool 字面量）⇒ True",
+              inbound_arm_noop(_nc, "CM_ZZDEAD4") is True)
         check("对照（片D1-②）：动态入参 + 出帧臂 ⇒ inbound_arm_noop=False",
               inbound_arm_noop(_nc, "CM_ZZLIVE") is False)
+        # 负样本（真实现）多形态：结构体字面量**字段值** / 嵌套调用里的常量 / 字符串里的 "false"。
+        check("teeth（卡recon-noop-fp）：结构体字面量字段值 `ButchInputs{…true…600…}` + 输出出帧 ⇒ 非 no-op",
+              inbound_arm_noop(_nc, "CM_ZZLIVE2") is False)
+        check("teeth（卡recon-noop-fp）：嵌套调用 `client_wrap(make_for(cmd.param, 1))` 顶层实参非字面量 ⇒ 非 no-op",
+              inbound_arm_noop(_nc, "CM_ZZLIVE3") is False)
+        check("teeth（卡recon-noop-fp）：字符串实参 \"false\" 不算裸字面量 ⇒ 非 no-op",
+              inbound_arm_noop(_nc, "CM_ZZLIVE4") is False)
     finally:
         shutil.rmtree(_tmp_noop, ignore_errors=True)
     check("teeth（片D1-②）：no-op 臂虽 rust=yes ⇒ 不判 implemented（已卡 ⇒ tracked）",

@@ -53,7 +53,9 @@
 - **2026-10-23 更新（卡 `openmir2-recon-unreachable-registry`）**：上段的「3」是片118 时的**自动判据**计数。
   该卡把已审计的登记项逐条带证据并入豁免表后，`dispatch` 实测
   `summary = {"implemented": 178, "tracked": 1, "n/a-unreachable": 11, "n/a-oracle-noop": 1}`，
-  `tracked` 仅剩 `SM_SKELETON`（由卡 `openmir2-sm-skeleton-wiring` 实现中）。登记面：
+  `tracked` 仅剩 `SM_SKELETON`（由卡 `openmir2-sm-skeleton-wiring` 实现中）。
+  **后续（2026-10-23，卡 `openmir2-recon-noop-false-positive`）**：`SM_SKELETON` 已 implemented，
+  随后 `CM_BUTCH` 的假阳性修掉 ⇒ 现网 `tracked = 0`（`implemented=179`）。登记面：
   `known_unreachable` = 3 条 RM 死支 + `CM_OPENDOOR`/`SM_OPENDOOR_OK`/`SM_CLOSEDOOR`(T-65/T-176)
   + `SM_ITEMSHOW`(T-19/25/32/179) + `SM_CHANGEFACE`(T-200；订正后的真实链见下) + `SM_QUERYYBDEAL`/`SM_QUERYYBSELL`
   （部署级：Envir 从不派发脚本动作 343/344）；`known_false` = `SM_DONATE_FAIL`（非缺陷）。
@@ -69,6 +71,32 @@
   `E:/MirServer/Mir200` 是 **Debug 构建**（`GameSvr.dll` 含 `GameCommand.cs:35` 的 DEBUG-only 串）且指向远端
   `10.10.0.199/Mir2`、无 `!deployed-from.json`、不在 `start-all.ps1`/`port-status.ps1` 的十端口栈里
   ⇒ 不在本判定的现网面内、也**未**被排除；若 owner 改以 Mir200/任一 Debug 构建为对拍面，该登记立即失效。
+
+### 入站 no-op 臂判据（片 D1-②；形态 (b) 由卡 `openmir2-recon-noop-false-positive` 收紧）
+
+`dispatch` 的入站行有 **`noop` 列**：值为 `noop` ⇒ 该 `CM_*` **生产臂**「恒假/恒空」⇒ **不判
+`implemented`**（rust=yes 也落 tracked/RED）。判据只看 `messages::CM_X => { … }` 臂体（且必须在生产活跃
+函数内），命中**任一**形态即 no-op：
+
+- **(a) handler 输出被丢弃**：`let (decision, _frames) = …`（绑到 `_` 前缀名；如 `CM_OPENDOOR`）。
+- **(b) 顶层实参整体为裸字面量**：`client_open_door(false)` / `client_get_min_map(0)` /
+  `client_adjust_bonus(cmd.recog, 0)` —— 会话态未挂、被常量顶死。
+
+形态 (b) 是**实参列表级**判据（`client_call_top_level_literal_args`）：把 `client_*(…)` 的实参按
+**顶层逗号**切段（`(`/`[`/`{` 计深度，字符串/字符字面量整体跳过），只有「**某一段顶层实参整体就是
+一个裸字面量**（`true`/`false`/整数/浮点，可带类型后缀）」才算命中。
+
+- **为什么不再是字符级正则**：旧形态 `client_x\([^)]*?(false|true|\d+)` 不认 `{}`/`[]`，会一路吃到
+  **嵌套结构体字面量的字段值**上 —— `client_butch(&ButchInputs { …, close_speed_hack_check: true,
+  turn_interval_time: 600, … })`（`bins/game-svr/src/lib.rs:2732`）因此被误判成「用裸字面量顶死
+  handler」。那些字面量是**输入结构体的字段初始化**，`ButchOutcome` 还被完整用于
+  `Command::ButchEffect`/`Command::Butch` 入队 ⇒ 是完整实现（卡 `openmir2-recon-noop-false-positive`）。
+- **不会误伤真 no-op**：形态 (a) 原样保留；形态 (b) 的三类登记形态（顶层 bool / 顶层整数 / 多实参中的
+  顶层常量）继续命中，`selftest` 各有专门牙（见「SELFTEST」段）。
+- **残余（欠报方向，有意，判据未放宽）**：`foo(false)` 这类「常量裹一层」的实参、以及顶层实参是**合法
+  配置常量**（`client_x(cmd.a, 0)` 而 0 有语义）的臂不会被判 no-op；经 `if-else` 判等链派发的入站帧
+  没有 `=>` 臂体，本判据不覆盖。全表审计（58 个生产臂 + 24 个判等链派发点）见
+  `docs/recon-noop-false-positive-20261023.md`。
 
 ### 出站「证据 = 编码器生产调用点」判据 + 调用值未丢弃（片118）
 
