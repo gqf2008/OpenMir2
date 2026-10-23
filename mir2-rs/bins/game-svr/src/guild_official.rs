@@ -324,8 +324,10 @@ fn flush(
 ) -> usize {
     // oracle 的 `MsgQueue` 是**每个 `PlayObject` 一条**（`ActorEntity.cs:16` 的实例字段）⇒
     // 先把帧按收件人分组（分组序 = 首次入队序；跨会话的出队序本就不可观测），**每组各自**按
-    // 入队序灌 `NetPriorityQueue` 再出队。不能把不同收件人的帧混进同一个堆：混堆时堆内
-    // 其它会话的元素会改变本会话的 sift 结果（实测 `guild_official_war_declares_…` 的 42 序会翻）。
+    // 入队序灌 `NetPriorityQueue` 再出队。不能把不同收件人的帧混进同一个堆：堆里多出别的会话
+    // 的元素会改变本会话的 sift 结果——4 条等优先级、两个收件人交替入队
+    // `[A0,B1,A2,B3]` 时，混堆让 B 出 `[B3,B1]`，分组（= oracle 每条队列独立）出 `[B1,B3]`；
+    // 判据 `flush_drains_per_recipient_heap` / `guild_official/tests.rs`。
     let mut recipients: Vec<i32> = Vec::new();
     for f in queue.iter() {
         if !recipients.contains(&f.actor_id) {

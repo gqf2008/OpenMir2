@@ -433,3 +433,45 @@ fn t138_str_to_int_and_index_semantics() {
     );
     assert_eq!(super::castle_war_index("0", 0), None, "无城 ⇒ null");
 }
+
+/// **I-1（reviewer-5）/ T-207：出队序按「每个 `PlayObject` 一条 `MsgQueue`」分组建堆**。
+///
+/// oracle `MsgQueue` = `PriorityQueue<SendMessage, byte>` 的**实例**字段（`ActorEntity.cs:16`）
+/// ⇒ 每个收件人一条四叉堆，同优先级出队不是入队序；**不同收件人的帧绝不进同一个堆**。
+/// 本用例：4 条等优先级（141）帧、两个收件人交替入队 `[A0, B1, A2, B3]` ⇒
+/// hero(901) 收 `[0,2]`、boss(902) 收 `[1,3]`；若把所有人的帧混进一个堆，boss 会收到 `[3,1]`。
+///
+/// 红检：把 `flush` 的 `queue.iter().filter(|f| f.actor_id == actor_id)` 改回 `queue.iter()`
+/// （单堆）⇒ boss 断言红。
+#[test]
+fn flush_drains_per_recipient_heap() {
+    let mut f = Fixture::new(); // hero = (1, socket 901)
+    f.add_player("boss", 3, 10, 11, 902);
+    let mut queue: Vec<super::QueuedFrame> = Vec::new();
+    for (i, (priority, actor_id)) in [(141u8, 1i32), (141, 3), (141, 1), (141, 3)]
+        .into_iter()
+        .enumerate()
+    {
+        // 12B 命令头（`ident=642`、`Param=i`）—— 本用例只判出队序，不解析载荷。
+        let mut body = vec![0u8; 12];
+        body[4..6].copy_from_slice(&642u16.to_le_bytes());
+        body[6..8].copy_from_slice(&(i as u16).to_le_bytes());
+        super::push_frame(&mut queue, priority, actor_id, body);
+    }
+    let sent = super::flush(&mut queue, &f.online, &f.gates);
+    assert_eq!(sent, 4, "四条帧都必须路由出去");
+    let frames = f.drain();
+    let params = |socket: i32| -> Vec<u16> {
+        frames
+            .iter()
+            .filter(|(s, _)| *s == socket)
+            .map(|(_, b)| u16::from_le_bytes([b[6], b[7]]))
+            .collect()
+    };
+    assert_eq!(params(901), vec![0, 2], "hero 队列独立成堆 ⇒ 入队序保持");
+    assert_eq!(
+        params(902),
+        vec![1, 3],
+        "boss 队列独立成堆 ⇒ 混堆会给 [3,1]（别的会话的元素改变本会话 sift）"
+    );
+}
