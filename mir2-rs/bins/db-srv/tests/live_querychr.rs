@@ -339,7 +339,19 @@ async fn gate_roundtrip(sock: &mut TcpStream, socket_id: &str, frame: &[u8]) -> 
         .expect("读内部帧头失败");
     let pkt = ServerDataPacket::from_bytes(&head).expect("内部帧头非法");
     let mut body = vec![0u8; usize::from(pkt.packet_len)];
-    sock.read_exact(&mut body).await.expect("读内部帧体失败");
+    // 体读上界（test-waits 卡复审指出的范围外残余）：头读已有 10s 上界 ⇒ 走到这里说明对端
+    // 活着且已吐完整头；体读若无上界，「发头不吐体」的半帧僵死仍会把门禁挂死。口径同
+    // game-svr/tests/relay.rs `recv_frame`：EOF 照旧快红、超时带诊断慢红；写成 unwrap_or_else
+    // 链而非 match（db-srv 开 pedantic ⇒ `Err(_)` 通配会吃 match_wild_err_arm）。
+    let n = body.len();
+    tokio::time::timeout(Duration::from_secs(10), sock.read_exact(&mut body))
+        .await
+        .unwrap_or_else(|_| {
+            panic!("期望读到下行业务帧体（{n}B）：已耗时 10s 仍未读满，对端 {sock:?} 半帧僵死？")
+        })
+        .unwrap_or_else(|e| {
+            panic!("期望读到下行业务帧体（{n}B）：读满前对端关闭（EOF：{e}），对端 {sock:?} 提前断开？")
+        });
     let msg = ServerDataMessage::from_bytes(&body).expect("内部帧体非法");
     assert_eq!(msg.kind, ServerDataType::Data, "不是透传帧：{msg:?}");
     msg.data
