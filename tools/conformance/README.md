@@ -416,20 +416,33 @@ python -I -B tools/conformance/compare_runs.py selftest
 * **旧证据归档唯一化**（H-2）：同一 `--out` 反复使用会把上一次产物整体挪进
   `_stale-<ts>-<pid>[-n]/`；selftest 连跑三次，断言两个 `_stale-*` **各自独立**（第一次的
   PASS 存档不会被后一次覆盖）。
+* **`--post-comment` 只记「证据包完整」的 PASS**（N-1）：comment 在 report.json /
+  README.txt / card-window.json **全部写完之后**才发，body 带 `exit_code`、`report_kind`、
+  `finalize_ok`；`exit_code != 0` 或最终化失败时 `verdict=UNDECIDABLE`，compare 的结论单列在
+  `report_verdict`。comment 之后对 card-window.json 只再追加一条回执（不新增证据），
+  回执写失败同样 `exit=2`。**这是 R 卡证据账本，绝不允许缺件时留下 PASS。**
 
 ### 牙（回归判据的可复跑 harness）
 
 `tools/conformance/selftest_mutations.py` 是上面每条 fail-closed 口径的**变异牙**：
-每颗牙对 `card_window.py` 做一处精确替换，要求 `--selftest` 退出码非 0、至少一条
-`FAIL `、输出无 `Traceback`，最后按原始字节还原并校验 sha256（`==` 变异前）。
+每颗牙对 `card_window.py` 做一处（或几处）精确替换，要求
+
+1. `--selftest` 退出码非 0（子进程带 timeout，超时按失败 `rc=124`，不会走成绿）；
+2. stdout 至少一条 `FAIL `；
+3. 这批 FAIL 里**至少一条命中该牙的 `expect` 子串**——锁住「FAIL 落在该牙的判据组」，
+   防止某颗牙只是被别的兜底断言顺带抓到（N-2；E3/E5 曾只被「全流程 => 退出码 0」兜住）；
+4. 输出无 `Traceback`（干净 RED，不是异常噪声）；
+5. 还原后 sha256 == 变异前；**不一致 => 整体 rc≠0**（N-3）。
 
 ```sh
-python -I -B tools/conformance/selftest_mutations.py          # 跑全部 13 颗
-python -I -B tools/conformance/selftest_mutations.py --list   # 只列牙
+python -I -B tools/conformance/selftest_mutations.py            # 跑全部 16 颗
+python -I -B tools/conformance/selftest_mutations.py --list     # 只列牙（含每颗的 expect）
 python -I -B tools/conformance/selftest_mutations.py --only T1,E2
+python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自身 fail-closed
 ```
 
 覆盖：T1 F-2 调用点回退 / T2 F-5 run_id 常量 / T3 F-3 空 binaries / T4 F-4 半套产物 /
-T5 F-1 旧提示 / T6 H-1 写产物提前 / T7 H-2 固定 `_stale-fixed`；额外牙 E1 fallback run_id
-常量、E2 放宽未知库判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README
-（验证干净 FAIL）、E6 忽略 card-window.json 失败标志。
+T5 F-1 旧提示 / T6 H-1 写产物提前 / T7 H-2 固定 `_stale-fixed` / T8 N-1 comment 挪到产物
+之前 / T9 N-1 comment verdict 固定 PASS；额外牙 E1 fallback run_id 常量、E2 放宽未知库
+判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README、E6 忽略 card-window.json
+失败标志、E7 comment body 不带 exit_code。

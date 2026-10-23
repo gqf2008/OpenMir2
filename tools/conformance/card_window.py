@@ -39,6 +39,10 @@
     （report.json + README.txt + card-window.json + card-window.log），不写半套证据。
   * **先定稿 verdict/exit_code，再写产物**：README.txt / card-window.json 写失败 =>
     exit=2（verdict 仍如实记录，但绝不因为写产物失败而报绿）。
+  * **`--post-comment` 只记「证据包完整」的 PASS**：comment 在全部产物写完之后才发，
+    body 带 `exit_code` / `report_kind` / `finalize_ok`；exit_code!=0 或最终化失败时
+    `verdict=UNDECIDABLE`，compare 的结论单列在 `report_verdict`（N-1：曾出现
+    「exit=2 但 comment 报 PASS」的假账）。
   * **不碰 MySQL 服务本身**：停栈命令先做归一化（去 `.exe`、折叠大小写/空白）再按效果判定 ——
     任何 mysql/mysqld 提及、或服务控制族（Stop-Service/spsv/net stop/sc stop）直接拒绝。
   * 默认拒绝生产库：把 db 规格（preset / tables / allow_db / databases / command 的
@@ -1122,11 +1126,13 @@ ARTIFACT_FILES = ("report.json", "csharp/frames.ndjson", "csharp/run.json",
 
 
 def write_artifacts(out_dir, summary):
-    """登记 report.json / 两侧产物 sha256 并写 README.txt。
+    """登记 report.json / 两侧产物 sha256 并写 README.txt；返回 README 是否写成。
 
     F-4：所有收尾分支（含「缺二进制」提前收尾）共用这一步，保证产物集完整，
-    绝不留下「只有 report.json + log」的半套证据。
+    绝不留下「只有 report.json + log」的半套证据。N-1：返回值供调用方把
+    「最终化失败」如实写进 comment，而不是先发 PASS 账本再发现缺件。
     """
+    readme_ok = True
     artifacts = {}
     for rel in ARTIFACT_FILES:
         p = os.path.join(out_dir, rel.replace("/", os.sep))
@@ -1143,6 +1149,8 @@ def write_artifacts(out_dir, summary):
     except OSError as e:
         summary["notes"].append("写 README.txt 失败：%s" % e)
         summary["exit_code"] = 2
+        readme_ok = False
+    return readme_ok
 
 
 def write_summary_json(out_dir, summary):
@@ -1390,16 +1398,32 @@ def execute(cfg):
     summary["exit_code"] = 0 if ok else 2
 
     # 归档：report.json + 两侧产物 sha256 + README.txt（与缺二进制分支共用同一实现）
-    write_artifacts(out_dir, summary)
+    artifacts_ok = write_artifacts(out_dir, summary)
+
+    # N-1：comment 必须在**全部产物写完之后**发。card-window.json 先落一版（此时还没有
+    # comment 回执），这样「最终化失败」能被 comment 如实记账，而不是先写账本再发现缺件。
+    json_ok = write_summary_json(out_dir, summary)
+    finalize_ok = artifacts_ok and json_ok
+    if not finalize_ok:
+        summary["exit_code"] = 2
 
     # --post-comment：只发 comment，绝不改卡状态
     if cfg.get("post_comment") and card:
+        # N-1：verdict 是**记账 verdict**——exit_code 或最终化任一失败都必须是非 PASS，
+        # compare 的结论另放 report_verdict，绝不把「证据包缺件」记成 PASS。
+        comment_verdict = ("PASS"
+                           if (summary["exit_code"] == 0 and finalize_ok)
+                           else "UNDECIDABLE")
         body = {
             "tool": TOOL,
             "run_id": summary["run_id"],
             "card": card,
             "profile": summary["profile"],
-            "verdict": summary["verdict"],
+            "verdict": comment_verdict,
+            "report_verdict": summary["verdict"],
+            "exit_code": summary["exit_code"],
+            "report_kind": summary["report_kind"],
+            "finalize_ok": finalize_ok,
             "compare_rc": summary["compare_rc"],
             "frames": summary["frames"],
             "db_state": summary["db_state"],
@@ -1432,7 +1456,9 @@ def execute(cfg):
             summary["notes"].append("--post-comment 失败：%s" % detail)
             summary["exit_code"] = 2
 
-    # 摘要最后写（包含 comment 结果）；写失败 => 产物不完整 => rc=2（H-1）
+    # 摘要把 comment 回执追加进去（第二版）。这一版**只追加回执、不再新增证据**：
+    # comment 判定所依据的产物（report.json / README.txt / card-window.json 首版）在
+    # comment 之前已全部落盘（N-1）。回执写失败仍 => rc=2 + note。
     if not write_summary_json(out_dir, summary):
         summary["exit_code"] = 2
     return summary
@@ -1780,6 +1806,11 @@ def selftest():
             globals()["post_comment"] = orig_post
         chk(s_c["exit_code"] == 0 and captured.get("verdict") == "PASS",
             "--post-comment 成功 => rc=0 且 comment 带 verdict=PASS")
+        chk(captured.get("exit_code") == 0
+            and captured.get("report_kind") == "compare"
+            and captured.get("finalize_ok") is True
+            and captured.get("report_verdict") == "PASS",
+            "N-1 正常 comment 带 exit_code=0/report_kind=compare/finalize_ok=True")
         chk("status" not in captured
             and captured.get("card") == "openmir2-card-window-tool-selftest",
             "comment body 不含 status（绝不改卡状态），card 正确")
@@ -2002,6 +2033,46 @@ def selftest():
             globals()["write_summary_json"] = orig_wsj
         chk(s_h1w["exit_code"] == 2,
             "H-1b card-window.json 写失败 => 调用方 rc=2（实际 %s）" % s_h1w["exit_code"])
+
+        # 13e) N-1：最终化失败 => comment 必须是 UNDECIDABLE + 带 exit_code/report_kind，
+        #      且 comment 发生在**产物写完之后**（post 时 card-window.json 已存在）。
+        captured_n1 = {}
+        seen_n1 = {}
+        out_n1 = os.path.join(tmp, "run-n1")
+        orig_post_n1 = globals()["post_comment"]
+
+        def capture_post_n1(card, body, repo):
+            captured_n1.update(body)
+            seen_n1["card_window_exists"] = os.path.exists(
+                os.path.join(out_n1, "card-window.json"))
+            seen_n1["log_exists"] = os.path.exists(
+                os.path.join(out_n1, "card-window.log"))
+            return True, "stub-n1-oid"
+
+        globals()["write_readme"] = boom_readme
+        globals()["post_comment"] = capture_post_n1
+        try:
+            fresh_log()
+            s_n1 = execute(base_cfg(out_n1, _selftest_profile(tmp, stub, log),
+                                    post_comment=True))
+        finally:
+            globals()["write_readme"] = orig_write_readme
+            globals()["post_comment"] = orig_post_n1
+        chk(captured_n1.get("verdict") == "UNDECIDABLE"
+            and captured_n1.get("exit_code") == 2,
+            "N-1 README 写失败 => comment verdict=UNDECIDABLE + exit_code=2（实际 %r/%r）"
+            % (captured_n1.get("verdict"), captured_n1.get("exit_code")))
+        chk(captured_n1.get("report_kind") == "compare"
+            and captured_n1.get("report_verdict") == "PASS"
+            and captured_n1.get("finalize_ok") is False,
+            "N-1 comment 带 report_kind/report_verdict/finalize_ok（不掩盖 compare 结论）")
+        chk(seen_n1.get("card_window_exists") is True
+            and seen_n1.get("log_exists") is True,
+            "N-1 comment 发生在产物写完之后（post 时 card-window.json/log 已存在，%s）"
+            % seen_n1)
+        chk(s_n1["exit_code"] == 2
+            and (s_n1.get("comment") or {}).get("posted") is True,
+            "N-1 最终化失败仍把结论记到卡上（posted=True）且工具 rc=2")
 
         # 14) I-2：停栈禁词按效果归一（net.exe stop MySQL / spsv / Stop-Service 全拒）
         for label, bad_stop in (
