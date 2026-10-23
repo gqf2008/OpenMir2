@@ -1907,8 +1907,11 @@ def selftest():
         chk(nobin_rep.get("reason") == "missing_binaries"
             and nobin_rep.get("run_id") == s_nobin.get("run_id"),
             "F-4 缺二进制 => fallback report 写明 missing_binaries 且 run_id 属于本次")
-        with open(os.path.join(out_nobin, "README.txt"), encoding="utf-8") as f:
-            nobin_readme = f.read()
+        try:
+            with open(os.path.join(out_nobin, "README.txt"), encoding="utf-8") as f:
+                nobin_readme = f.read()
+        except OSError:
+            nobin_readme = ""
         chk(missing_bin in nobin_readme and "UNDECIDABLE" in nobin_readme,
             "F-4 缺二进制 => README 点名缺失二进制并写明 verdict")
         chk(bool((s_nobin.get("artifacts") or {}).get("README.txt", {}).get("sha256"))
