@@ -1518,7 +1518,7 @@ fn handle_say(
         &text,
     );
     let mut delivered = 0usize;
-    for target_id in chat::hear_targets(host.world, speaker.actor_id, chat::SEND_REF_MSG_RANGE) {
+    for target_id in chat::hear_targets(host.world, speaker.actor_id, chat::send_ref_msg_range()) {
         let Some(t) = host.online.iter().find(|e| e.actor_id == target_id) else {
             continue;
         };
@@ -7999,7 +7999,7 @@ impl SpellFrameBuf {
         priority: u8,
         body: &[u8],
     ) {
-        for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
+        for target_id in chat::hear_targets(world, actor_id, chat::send_ref_msg_range()) {
             if !include_self && target_id == actor_id {
                 continue;
             }
@@ -8647,7 +8647,7 @@ fn handle_spell_cmd_with_magic(
                                 gates,
                                 actor_id,
                                 &body,
-                                chat::SEND_REF_MSG_RANGE,
+                                chat::send_ref_msg_range(),
                             );
                         }
                     }
@@ -8791,7 +8791,7 @@ fn handle_spell_cmd_with_magic(
                             chr_name,
                             actor_id,
                             &mut deferred_health,
-                            chat::SEND_REF_MSG_RANGE,
+                            chat::send_ref_msg_range(),
                         );
                         let fail = smframe_ext::sm_magicfire_fail(actor_id);
                         broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
@@ -8814,7 +8814,7 @@ fn handle_spell_cmd_with_magic(
                 chr_name,
                 actor_id,
                 &mut deferred_health,
-                chat::SEND_REF_MSG_RANGE,
+                chat::send_ref_msg_range(),
             );
             // `if (!DoSpell(...)) SendRefMsg(RM_MAGICFIREFAIL, 0, 0, 0, 0, "")`
             // （`PlayObject.Attack.cs:1279-1281`）——`DoSpell` 的**距离门**单语句
@@ -10520,7 +10520,7 @@ fn handle_spell_cmd_with_magic(
                                     chr_name,
                                     actor_id,
                                     &mut deferred_health,
-                                    chat::SEND_REF_MSG_RANGE,
+                                    chat::send_ref_msg_range(),
                                 );
                                 // `:253 SetTargetCreat`（在 `if (stdItem != null)` 内）。
                                 if let Some(c) = world.entities.get_mut(actor_id) {
@@ -10568,7 +10568,7 @@ fn handle_spell_cmd_with_magic(
                                 chr_name,
                                 actor_id,
                                 &mut deferred_health,
-                                chat::SEND_REF_MSG_RANGE,
+                                chat::send_ref_msg_range(),
                             );
                             let fail = smframe_ext::sm_magicfire_fail(actor_id);
                             broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
@@ -10674,7 +10674,7 @@ fn handle_spell_cmd_with_magic(
                             chr_name,
                             actor_id,
                             &mut deferred_health,
-                            chat::SEND_REF_MSG_RANGE,
+                            chat::send_ref_msg_range(),
                         );
                         finish_spell_tail(
                             world,
@@ -11264,7 +11264,7 @@ fn handle_spell_cmd_with_magic(
         chr_name,
         actor_id,
         &mut deferred_health,
-        chat::SEND_REF_MSG_RANGE,
+        chat::send_ref_msg_range(),
     );
     // `ClientSpellXY` 全分支 `result = true` ⇒ 调用方 `ActionTick = GetTickCount()`；`SendSocket(GetGoodTick)`。
     send_good_tick(online, gates, chr_name);
@@ -11506,9 +11506,9 @@ fn broadcast_ref_msg_opt(
 ) {
     let targets = match at {
         Some((map_id, x, y)) => {
-            chat::hear_targets_at(world, actor_id, map_id, x, y, chat::SEND_REF_MSG_RANGE)
+            chat::hear_targets_at(world, actor_id, map_id, x, y, chat::send_ref_msg_range())
         }
-        None => chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE),
+        None => chat::hear_targets(world, actor_id, chat::send_ref_msg_range()),
     };
     for target_id in targets {
         if !include_self && target_id == actor_id {
@@ -12871,7 +12871,7 @@ fn drain_combat_downlink(
             frame.n_param3,
             false,
         );
-        for observer_id in chat::hear_targets(world, frame.actor_id, chat::SEND_REF_MSG_RANGE) {
+        for observer_id in chat::hear_targets(world, frame.actor_id, chat::send_ref_msg_range()) {
             let Some(observer) = online.iter().find(|e| e.actor_id == observer_id) else {
                 continue;
             };
@@ -12914,7 +12914,7 @@ fn drain_combat_downlink(
             dead_dir,
             &downlink::char_desc(d.feature, d.status),
         );
-        for target_id in chat::hear_targets(world, dead_id, chat::SEND_REF_MSG_RANGE) {
+        for target_id in chat::hear_targets(world, dead_id, chat::send_ref_msg_range()) {
             let Some(t) = online.iter().find(|e| e.actor_id == target_id) else {
                 continue;
             };
@@ -13841,7 +13841,7 @@ fn push_charstatuschanged(
     status: i32,
 ) {
     let priority = (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8;
-    for target_id in chat::hear_targets(world, actor_id, chat::SEND_REF_MSG_RANGE) {
+    for target_id in chat::hear_targets(world, actor_id, chat::send_ref_msg_range()) {
         let Some(entry) = online.iter().find(|e| e.actor_id == target_id) else {
             continue;
         };
@@ -17169,6 +17169,12 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // **`openmir2-sendrefmsg-range-config`**：`[Setup] SendRefMsgRange` 的生效值
+    // （oracle `SystemShare.Config.SendRefMsgRange`：`SendRefMsg` 每次按当时配置值扫
+    // `CurrX/Y ± SendRefMsgRange`，`BaseObject.Message.cs:399-402`）。安装一次后所有生产
+    // 广播收件人集合都读 `chat::send_ref_msg_range()`。缺键时 `config` 已按 oracle 源码缺省
+    // 12（`GameSvrConf.cs:1503`）填好，这里只做搬运（不是另立缺省）。
+    chat::install_send_ref_msg_range(enter_cfg.ref_msg_range);
     // **G2**：行会管理器的生产配置（与 `Server.conf` 同源，简报 §8）与会表（G3 启动加载）。
     // **I-6**：`GuildChief/GuildMemberRank` 的生产源是 `String.conf [Guild]`（`StringConf.cs:30-35`），
     // 不是 `GuildCastleConfig`；不覆盖会静默回落 `掌门人/行会成员`（W3-m8/m9）。
@@ -30122,6 +30128,122 @@ break
         check(&mut rx0, 901); // 自己（客户端靠这条回声渲染自己发的话）
         check(&mut rx1, 902); // 边界内近邻
         assert!(rx2.try_recv().is_err(), "另一张图的角色不该收到普通说话");
+    }
+
+    /// **卡 `openmir2-sendrefmsg-range-config` 判据②（生产路径）**：`[Setup] SendRefMsgRange=15`
+    /// ⇒ `CM_SAY` 的 `SendRefMsg(RM_HEAR)` 收件人集合按 **15** 格算：12 格外、15 格内的玩家
+    /// **能收到**，16 格不收。配置值经 `config::load` 真读文件（不是常量 12），再经生产安装点
+    /// `sim_loop` 的 `chat::install_send_ref_msg_range(enter_cfg.ref_msg_range)` →
+    /// `chat::send_ref_msg_range()`（所有生产广播消费点读它）。
+    ///
+    /// 本用例用 [`chat::with_send_ref_msg_range`] 注入**同一来源**的配置值（线程本地，避免并行
+    /// 串扰）；`config::load` 已把「文件 → 15」这步钉住（缺键 ③ 面见
+    /// `chat::send_ref_msg_range_defaults_to_oracle_default_12`）。
+    ///
+    /// 齿说明：本用例走线程本地覆盖（不碰进程全局）；「安装值被忽略」这一面由独立进程的集成用例
+    /// `tests/sendrefmsg_range_config.rs` 咬住（把 `chat::send_ref_msg_range()` 改回常量
+    /// `SEND_REF_MSG_RANGE`=12 ⇒ 该用例红）。本用例钉的是**生产消费点**真的读生效值。
+    #[test]
+    fn say_recipients_follow_configured_send_ref_msg_range() {
+        use std::collections::HashMap;
+        // ① 真读配置：部署同款键 `[Setup] SendRefMsgRange=15`（**不是**常量 12）。
+        let dir = std::env::temp_dir().join(format!("gs-srmr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("临时目录");
+        let p = dir.join("Server.conf");
+        std::fs::write(
+            &p,
+            "[Server]
+GateAddr=127.0.0.1
+GatePort=5000
+CheckBlock=12288
+             IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+             [Setup]
+SendRefMsgRange=15
+",
+        )
+        .expect("写临时 Server.conf");
+        let cfg = crate::config::load(&p).expect("解析 Server.conf");
+        assert_eq!(
+            cfg.send_ref_msg_range, 15,
+            "[Setup] SendRefMsgRange=15 必须解析为 15"
+        );
+        let range = i32::from(cfg.send_ref_msg_range);
+
+        // ② 生产路径：说话者 a（10,10）+ 13/15/16 格邻居。
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, mut rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx2, mut rx2) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx3, mut rx3) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        gates.insert(1, tx1);
+        gates.insert(2, tx2);
+        gates.insert(3, tx3);
+
+        let mut world = mir2_world::World::new(64, 64);
+        let mut mk = |name: &str, x: i32, y: i32| {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            world.add_entity(e)
+        };
+        let a = mk("aaa", 10, 10);
+        let d13 = mk("d13", 23, 10);
+        let d15 = mk("d15", 25, 10);
+        let d16 = mk("d16", 26, 10);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
+        online_set(&mut online, entry("b", "d13", 2, 1, 902, d13));
+        online_set(&mut online, entry("c", "d15", 3, 2, 903, d15));
+        online_set(&mut online, entry("d", "d16", 4, 3, 904, d16));
+
+        let colors = MsgColors {
+            red_f: 0xFF,
+            red_b: 0x38,
+            hear_f: 0x00,
+            hear_b: 0xFF,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        for (name, id) in [("aaa", a), ("d13", d13), ("d15", d15), ("d16", d16)] {
+            sessions.insert(name.to_string(), test_session_ground(id));
+        }
+        let ctx = TestChatCtx::new();
+        let host = ctx.host(&online, &world, &gates, &colors);
+        chat::with_send_ref_msg_range(range, || {
+            handle_say(&host, &mut sessions, "aaa", 901, Some("hi"));
+        });
+
+        let want_hear = |rx: &mut mpsc::UnboundedReceiver<SimToGate>, sock: i32, what: &str| {
+            match rx.try_recv() {
+                Ok(SimToGate::SendFrame { socket, body }) => {
+                    assert_eq!(socket, sock, "{what}");
+                    assert_eq!(
+                        u16::from_le_bytes([body[4], body[5]]),
+                        mir2_protocol::messages::SM_HEAR,
+                        "{what}"
+                    );
+                }
+                _ => panic!("{what}：socket={sock} 必须收到 SM_HEAR"),
+            }
+        };
+        want_hear(&mut rx0, 901, "说话者自己（echo）");
+        want_hear(&mut rx1, 902, "13 格邻居（15 > 13）");
+        want_hear(&mut rx2, 903, "15 格邻居（恰在边界）");
+        assert!(rx3.try_recv().is_err(), "16 格邻居（15 < 16）不得收到");
+        assert!(
+            rx0.try_recv().is_err() && rx1.try_recv().is_err() && rx2.try_recv().is_err(),
+            "每个收件人恰一条 SM_HEAR"
+        );
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// **orphan 编码器接线首批**：`/目标名 正文` 私聊 ⇒ `SM_WHISPER(103)`

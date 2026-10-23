@@ -44,6 +44,10 @@
 //! **已接（orphan 编码器接线首批）**：私聊 `/`（[`parse_whisper`]/[`whisper_text`]）
 //! ⇒ `SM_WHISPER(103)`，发射点见 `lib.rs::handle_whisper`。
 
+// 单测钩子 `TEST_SEND_REF_MSG_RANGE` 的初值已是 `const { Cell::new(None) }`，本工具链
+// clippy 仍在 `thread_local!` 宏调用处误报 `missing_const_for_thread_local` ⇒ 仅测试构建放行。
+#![cfg_attr(test, allow(clippy::missing_const_for_thread_local))]
+
 #[cfg(test)]
 use crate::smframe;
 use mir2_world::{World, ACTOR_RACE_PLAY};
@@ -51,10 +55,66 @@ use mir2_world::{World, ACTOR_RACE_PLAY};
 /// `Messages.CM_SAY`（`Messages.cs:147`）。
 pub const CM_SAY: u16 = 3030;
 
-/// `[Setup] SendRefMsgRange`（`GameSvrConf.cs:1503` 缺省 12；现网 `Server.conf` 同为 12）。
+/// `[Setup] SendRefMsgRange` 的 **oracle 源码缺省**（`src/Modules/SystemModule/Conf/Model/GameSvrConf.cs:1503`
+/// 构造体内的 `SendRefMsgRange = 12;`；部署 `E:/MirServer/M2GameSvr/Server.conf:394` 同为 12）。
 ///
-/// 本切片按常量取用（配置读取登记为后续项，见模块头）；现网与缺省一致 ⇒ 行为等价。
+/// **生产路径一律读 [`send_ref_msg_range`]**（= `[Setup] SendRefMsgRange` 的生效值；
+/// oracle 每次 `SendRefMsg` 读全局 `SystemShare.Config.SendRefMsgRange`，
+/// 见 `BaseObject.Message.cs:399-402`）。本常量只做两件事：
+/// ① 生效值在「未安装」时的进程缺省；② 纯函数/单测显式传入的缺省半径。
 pub const SEND_REF_MSG_RANGE: i32 = 12;
+
+/// `[Setup] SendRefMsgRange` 的生效值（oracle `SystemShare.Config.SendRefMsgRange` 的等价物）。
+///
+/// 由 `bins/game-svr` 的 `sim_loop` 在启动时经 [`install_send_ref_msg_range`] 从
+/// `EnterConfig::ref_msg_range`（← [`crate::config::GameSvrConfig::send_ref_msg_range`]，
+/// 即 `Server.conf [Setup] SendRefMsgRange`）灌入一次；未安装（单测/未走 `sim_loop`）⇒ 缺省 12。
+static SEND_REF_MSG_RANGE_CONFIGURED: std::sync::atomic::AtomicI32 =
+    std::sync::atomic::AtomicI32::new(SEND_REF_MSG_RANGE);
+
+/// 安装 `[Setup] SendRefMsgRange` 的生效值（生产：`sim_loop` 启动处调用一次）。
+pub fn install_send_ref_msg_range(range: i32) {
+    SEND_REF_MSG_RANGE_CONFIGURED.store(range, std::sync::atomic::Ordering::Relaxed);
+}
+
+#[cfg(test)]
+use std::cell::Cell;
+
+#[cfg(test)]
+thread_local! {
+    /// 单测线程内的生效值覆盖（`with_send_ref_msg_range` 用；并行测试互不干扰）。
+    static TEST_SEND_REF_MSG_RANGE: Cell<Option<i32>> = const { Cell::new(None) };
+}
+
+/// `[Setup] SendRefMsgRange` 的**生效值** —— 所有生产 `SendRefMsg` 收件人集合的半径。
+///
+/// 口径 = oracle `SystemShare.Config.SendRefMsgRange`：`SendRefMsg` 每次按当时配置值扫
+/// `CurrX/Y ± SendRefMsgRange`（`BaseObject.Message.cs:399-402`）。本宿主等价物是启动时安装、
+/// 之后只读的进程值（配置在 oracle 侧也是启动加载后不再变）。`#[cfg(test)]` 分支允许本线程
+/// 临时覆盖（[`with_send_ref_msg_range`]），用于「配置值 → 生产收件人集合」的接线用例。
+#[must_use]
+pub fn send_ref_msg_range() -> i32 {
+    #[cfg(test)]
+    {
+        if let Some(range) = TEST_SEND_REF_MSG_RANGE.with(Cell::get) {
+            return range;
+        }
+    }
+    SEND_REF_MSG_RANGE_CONFIGURED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 测试专用：本线程内把 [`send_ref_msg_range`] 临时改为 `range`，返回后（含 panic）自动还原。
+#[cfg(test)]
+pub fn with_send_ref_msg_range<T>(range: i32, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<i32>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            TEST_SEND_REF_MSG_RANGE.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(TEST_SEND_REF_MSG_RANGE.with(|c| c.replace(Some(range))));
+    f()
+}
 
 /// `PlayObject.ProcessUserLineMsg` 的"不以 `@` 开头"这一支。**当前分流**在 `lib.rs::handle_say`：
 /// 先 `@`（[`crate::gmcmd`]，命令面**已接**：命中即整条 `CM_SAY` 结束）、再 `/`（[`parse_whisper`]）、
@@ -588,5 +648,50 @@ mod tests {
             "现网 String.conf 的 `%d` 在 C# string.Format 下不被替换"
         );
         assert_eq!(format_int("no placeholder", 1), "no placeholder");
+    }
+
+    /// **卡 `openmir2-sendrefmsg-range-config` 判据③**：未安装（未走 `sim_loop`）⇒ 生效值是
+    /// oracle **源码缺省 12**（`GameSvrConf.cs:1503` 的 `SendRefMsgRange = 12;`），**不是 15**。
+    ///
+    /// 牙（③）：把 `config.rs` 的缺省写成 15（`send_ref_msg_range.unwrap_or(15)`）⇒
+    /// `config::tests::setup_drop_pickup_keys_and_defaults` 的缺键断言红（本条的「未安装缺省」
+    /// 是同一常量，见 [`SEND_REF_MSG_RANGE`]）。
+    #[test]
+    fn send_ref_msg_range_defaults_to_oracle_default_12() {
+        assert_eq!(send_ref_msg_range(), SEND_REF_MSG_RANGE);
+        assert_eq!(send_ref_msg_range(), 12);
+        assert_ne!(send_ref_msg_range(), 15, "oracle 源码缺省是 12，不是 15");
+    }
+
+    /// **卡 `openmir2-sendrefmsg-range-config` 判据①②**：收件人集合随生效值变化 ——
+    /// ① 缺省 12 ⇒ 与今天一致（12 格内，13 格起不收）；
+    /// ② 显式 15（`[Setup] SendRefMsgRange=15`）⇒ 12 格外、15 格内的玩家**能收到**，16 格不收。
+    ///
+    /// 覆盖走线程本地（[`with_send_ref_msg_range`]），并行测试互不干扰。
+    #[test]
+    fn hear_targets_follow_configured_range() {
+        let mut world = World::new(64, 64);
+        let a = put(&mut world, "a", 10, 10);
+        let d12 = put(&mut world, "d12", 22, 10); // dx=12
+        let d13 = put(&mut world, "d13", 23, 10); // dx=13
+        let d15 = put(&mut world, "d15", 25, 10); // dx=15
+        let d16 = put(&mut world, "d16", 26, 10); // dx=16
+        assert_eq!(
+            hear_targets(&world, a, send_ref_msg_range()),
+            vec![a, d12],
+            "① 缺省 12 ⇒ 今天的收件人集合（12 格内；13 格起不收）"
+        );
+        let got = with_send_ref_msg_range(15, || hear_targets(&world, a, send_ref_msg_range()));
+        assert_eq!(
+            got,
+            vec![a, d12, d13, d15],
+            "② 生效值 15 ⇒ 12 格外、15 格内的玩家能收到"
+        );
+        assert!(!got.contains(&d16), "16 格外不收");
+        assert_eq!(
+            send_ref_msg_range(),
+            SEND_REF_MSG_RANGE,
+            "本线程覆盖退出后回到缺省 12"
+        );
     }
 }
