@@ -417,7 +417,8 @@ def _is_book(rec):
 
 
 def _bag_select(records, required):
-    """确定性地选**一个**物品槽：`required` 含 takeon_where ⇒ 首个可装备槽，否则首个可食用槽。
+    """确定性地选**一个**物品槽：`required` 含 takeon_where ⇒ 首个可装备槽；
+    否则按固定价值次序取首个可食用槽（QFunction 包 → 解包 → 药 → 书，见下方注释）。
 
     返回 (slot_index, record, mode)；无候选 ⇒ (None, None, mode)。**绝不随机、绝不取默认值**。
     """
