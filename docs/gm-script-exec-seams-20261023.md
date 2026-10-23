@@ -113,7 +113,7 @@ python -I -B tools/whitelist/t_reservation_gate.py              （见卡面结�
 4. **脚本路的 `pending_entity` 未应用**：管理态命令（`@1/@2/@3/@Rest/@AttackMode`）把权威值装进
    `GmSession.pending_entity`，由 `apply_pending_gm_entity` 落到实体；该函数目前只在聊天路径
    （`handle_say`）被调用。本卡新接的商人/点击/QFunction/组队/固定 NPC 路脚本若执行这类命令，
-   pending 会滞留到下一次聊天命令才被应用（相位错）。本卡 8 条 script-reachable 命令里没有管理态命令，
+   pending 会滞留到下一次聊天命令才被应用（相位错）。本卡 7 条（+ T-210 的禁言，共 8 条）script-reachable 命令里没有管理态命令，
    部署脚本也未在脚本路调用它们 ⇒ **当前不可达**，属未来 GMEXECUTE 命令的登记项（reviewer-6 M-3）。
 5. **`mem::take` 的 GM 会话态无 RAII 守卫**（reviewer-6 M-1，可选加固，**本卡不改代码**）：
    正常/早退路径逐条核过不会丢；panic 会停在 `GmSession::default()`，但 bins/game-svr 无
