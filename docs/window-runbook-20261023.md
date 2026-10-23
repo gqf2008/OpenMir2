@@ -80,8 +80,7 @@
 | `dice_chain` / `dice_chain_auto` / `gm_batch` / `gm_time` / `login_only` / `npc_click_auto` | 无 required | 直接可跑（6 个，已实测 `--check-scenario` 全 rc=0；`dice_chain` 绿来自 `params` 硬编码默认值，**不算发现**） |
 
 ⇒ **规则表落地后，`check-all` 能覆盖 12 个场景**（3 derived + 2 rule + 1 computed + 6 无 required）；
-其中 `king_*`（2 个）与 `move_walk`（1 个）是本次新解锁的。`move_walk` 的真机 run 还要等 `card_window.py`
-透传 `computed`（见下方「接线现状」）；`king_*` **能跑但不该算绿**——`king_actor` 是部署假设（rule），
+其中 `king_*`（2 个）与 `move_walk`（1 个）是本次新解锁的。`move_walk` 的 `computed` 已接进 `card_window.py`（见下方「接线」）；`king_*` **能跑但不该算绿**——`king_actor` 是部署假设（rule），
 默认 discovery 推出来的是庄家，真跑会在末步超时（响亮失败），要让它真绿必须先有「点中国王」的 discovery 场景/步骤。
 另外 3 个（`bag_equip` / `eat_item` / `combat_hit`）要等新规则/新帧。
 所以「②45 次参数化 run」**第一批按这 12 个推**，
@@ -96,11 +95,12 @@
 - 没有 `computed` 声明（单变量推导入口）⇒ 该类变量照旧 missing。
 - `mir2_probe` 不读 `computed`（声明性注记，不是步骤 DSL），但顶层可选键放行，否则带声明的场景会被 `unknown key(s)` 拒绝。
 
-> **接线现状（`card_window.py`）**：`computed` 的**规则与判据已落地**（`check-all` 覆盖 12 个场景），
-> 但 `card_window.py` 的 discovery 仍只把 `required` 传进 `param_discovery.derive`，**没有透传场景的
-> `computed` 声明** ⇒ 真机跑 `move_walk` 时 `move_x`/`move_y` 会 fail-closed（这比「用错值」安全，但跑不起来）。
-> 该文件当时正被卡 `openmir2-card-window-value-assertions` 占用（同文件串行纪律），透传改动另开一行跟进；
-> 改动点：`scenario_required` 同源读 `computed` → `discovery_cfg`/`side_ctx` 携带 → `derive_from_frames(frames, required, computed)` → `run_side` 调用点透传。
+**接线（`card_window.py`，已完成）**：`scenario_computed()` 读场景的 `computed` 声明 → `discovery_cfg`/`side_ctx`
+携带 → `derive_from_frames(frames, required, computed)` → 两处调用点（真跑 `run_side` + `--dry-run` 回放）透传。
+证据：`card_window --selftest` 的 DISC-9（两侧 `self_x` 钉 7 ⇒ 两侧 `--var move_x=8 move_y=12`、
+`discovered.json` 记 `kind=computed`、缺 `delta` 加载期 `ConfigError`）；以及离线预览
+`--dry-run --discovery-frames E:/tmp/conformance/runs/w24-csharp-npc_auto/frames.ndjson` 两侧 probe 命令都带
+`--var move_x=8 --var move_y=12`（不起栈、不建目录）。
 
 > 计数订正：本表初稿写「9 个场景（3 可发现 + 6 无 required）」，是规则表 4 条时的口径；
 > 规则扩到 5 条 + computed 后实测为 **12 个**（`SUMMARY ... ok=12 rc2=3 derived=3 rule=2 computed=1

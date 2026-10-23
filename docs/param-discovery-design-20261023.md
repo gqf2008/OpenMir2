@@ -208,6 +208,10 @@ restore -> 起栈 -> 等就绪 -> discover（每侧各自一次 probe run）
   `--discovery-frames '<已录 frames>'`（支持 `{side}` 占位符）用回放推导**真实值**；回放推不出
   => 预览 rc=2 且不打印场景命令。不给 `--discovery-frames` 时值渲染成
   `<discovered:NAME>` 占位符（只预览接线，**绝不发明数值**）。
+- **`computed` 透传**（扩展卡补）：`scenario_computed()` 读场景声明 → `discovery_cfg`/`side_ctx` →
+  `derive_from_frames(frames, required, computed)` → 真跑与 `--dry-run` 两处调用点。校验口径只认
+  `param_discovery.validate_computed`（本工具不另造一套）；缺 `delta` 在**加载期**就是 `ConfigError`(rc=2)。
+  证据：`card_window --selftest` DISC-9（两侧 `--var move_x=8/move_y=12`、`discovered.json` 记 `kind=computed`）。
 - **`run_dual.sh` 不改**（0 字节 diff）：它是底层语义参照，窗口批处理统一走 `card_window.py`；
   接线不在 shell 里做，避免同一逻辑两套实现。
 - 仍不可推导的场景（`make_index/item_name`、`target_*`）继续 fail-closed 并点名变量——等 201 录制/新场景另卡。
