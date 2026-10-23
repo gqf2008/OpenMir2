@@ -7737,9 +7737,15 @@ fn emit_login_script_frames(
 ///
 /// **QManage 是隐藏 NPC**（`NpcHost::goto_label` 的 `ActorId = 0`、`Envir == null`）⇒
 /// 本路**不扇** `SM_HEAR`（`SENDMSG 4` 的 `SendSayMsg` 本就零帧，见 T-224 偏差④）。
+///
+/// **`tx == None`**（触发者自己的网关线不可达）：只跳过**本例玩家自己**的脚本文本/帧，
+/// [`fan_out_world_sysmessage`] 照常扇出——oracle `SendBroadCastMsg` 遍历 `PlayObjectList`，
+/// 与发送者自身 socket 状态无关（卡 `openmir2-script-broadcast-tx-gating`）。
 #[allow(clippy::too_many_arguments)]
 fn drain_login_script_batch(
-    tx: &mpsc::UnboundedSender<SimToGate>,
+    // 本例玩家自己的回帧通道（`None` = 该网关线不可达 ⇒ 只做世界侧扇出）。
+    // **卡 `openmir2-script-broadcast-tx-gating`**：自己的帧需要它，**别人的扇出不需要**。
+    tx: Option<&mpsc::UnboundedSender<SimToGate>>,
     socket: i32,
     player_actor_id: i32,
     chr_name: &str,
@@ -7755,16 +7761,18 @@ fn drain_login_script_batch(
     // `SystemShare.Config.RedMsgFColor/BColor`（= 脚本侧 `SysMsg(_, MsgColor.Red, …)` 的 `Param`）。
     red: (u8, u8),
 ) -> (usize, usize) {
-    let n = emit_login_script_frames(
-        tx,
-        socket,
-        player_actor_id,
-        chr_name,
-        ground_sessions,
-        fallback,
-        exp,
-        frames,
-    );
+    let n = tx.map_or(0, |tx| {
+        emit_login_script_frames(
+            tx,
+            socket,
+            player_actor_id,
+            chr_name,
+            ground_sessions,
+            fallback,
+            exp,
+            frames,
+        )
+    });
     // 复用既有扇出（**不另写一份**）：`fan_out_world_sysmessage` 跳过 `player_actor_id`，
     // 只发其余 `!Ghost` 在线玩家，逐收件人各一个 `NetPriorityQueue`。
     let fanned = fan_out_world_sysmessage(
@@ -22231,12 +22239,19 @@ fn sim_loop(
                                                 // N1（reviewer-3）：按该用户的 gate_idx 路由回**它自己那条**网关线
                                                 // （与上面 KickNoData 的 `route_to_gate` 完全同构）；找不到线号记 WRN，
                                                 // 绝不 `gates.values().next()` 静默挑一个。
-                                                if let Some(tx) = route_to_gate(
+                                                //
+                                                // **卡 `openmir2-script-broadcast-tx-gating`**：`own_tx` 只把关
+                                                // 「本例玩家自己」的入图帧 / `MarkInWorld` / 说词 / 直发帧 / 脚本帧；
+                                                // `@Login` 脚本执行、写回与**其余在线玩家**的 `SENDMSG 0-3`
+                                                // 扇出**不**受它约束（oracle `SendBroadCastMsg` 遍历
+                                                // `PlayObjectList`，与发送者自身 socket 状态无关）。
+                                                let own_tx = route_to_gate(
                                                     &gates,
                                                     gate_idx,
                                                     socket,
                                                     "标记进世界/下发入图帧",
-                                                ) {
+                                                );
+                                                if let Some(tx) = own_tx {
                                                     // **lane654**：登录队列切成两段。`before` =
                                                     // 优先级 ≤ `(byte)RM_TURN`(17) 的帧（oracle 在同一
                                                     // `Run()` 里先出队的那些，含入图 15 帧）；`after` =
@@ -22263,246 +22278,248 @@ fn sim_loop(
                                                     // 堆布局重算（[`drain_login_tail`]）。
                                                     login_tails.insert(head.chr_name.clone(), inputs);
                                                     let _ = tx.send(SimToGate::MarkInWorld { socket });
-                                                    // **M3⑥-实现 3 第②片**：进世界完成点 oracle
-                                                    // `PlayObject.cs:1440` 的 `if (SystemShare.ManageNPC != null)
-                                                    // SystemShare.ManageNPC.GotoLable(this, "@Login", false)`。
-                                                    // 引擎产出的说词经 oracle `MsgQueue` 出队序落
-                                                    // `SM_MERCHANTSAY(643)`（`PlayObject.Message.cs:1722`）。
-                                                    // 脚本取数走**同一条** `world.rng`（临时移出后归位，
-                                                    // 与 `step_mon_gen` 同法）。
-                                                    if let Some(host) = npc_host.as_ref() {
-                                                        if host.has_manage_npc() {
-                                                            let mut rng = std::mem::replace(
-                                                                &mut world.rng,
-                                                                mir2_shared::rng::RandomNumber::with_seed(0),
+                                                }
+                                                // **M3⑥-实现 3 第②片**：进世界完成点 oracle
+                                                // `PlayObject.cs:1440` 的 `if (SystemShare.ManageNPC != null)
+                                                // SystemShare.ManageNPC.GotoLable(this, "@Login", false)`。
+                                                // 引擎产出的说词经 oracle `MsgQueue` 出队序落
+                                                // `SM_MERCHANTSAY(643)`（`PlayObject.Message.cs:1722`）。
+                                                // 脚本取数走**同一条** `world.rng`（临时移出后归位，
+                                                // 与 `step_mon_gen` 同法）。
+                                                if let Some(host) = npc_host.as_ref() {
+                                                    if host.has_manage_npc() {
+                                                        let mut rng = std::mem::replace(
+                                                            &mut world.rng,
+                                                            mir2_shared::rng::RandomNumber::with_seed(0),
+                                                        );
+                                                        {
+                                                            let mut rngf =
+                                                                |v: i32| rng.random_below(v);
+                                                            let level = data
+                                                                .and_then(|d| d.abil.as_ref())
+                                                                .map_or(1, |a| i32::from(a.level));
+                                                            // §1.O `recall-ext` 读侧：同源自 `World` 的组队快照。
+                                                            let (group_owner, group_member_jobs) =
+                                                                world
+                                                                    .party_script_group_snapshot(
+                                                                        id,
+                                                                    );
+                                                            // **Lane A 缺口 1 的正向副作用（登记）**：`npc_player_from` 读记录
+                                                            // `bag_items`；四件新手物品已并入记录 ⇒ 脚本侧 `CHECKBAGGAGE` 一类
+                                                            // 查询在新号首次登录即可见四件（与 oracle 的 `ItemList` 语义一致，
+                                                            // 但与旧 Rust 行为不同——旧行为要等 late 调用之后才有）。
+                                                            // **卡 `openmir2-gm-script-host-seam`（T-210）**：
+                                                            // `player.gm` 借住 `&mut ground_sessions[..].gm` 与 `&world`
+                                                            // ⇒ 把「建快照 + 跑 @Login」收进独立块；块尾 `player`
+                                                            // 析构即释放借用，后面的脚本帧排水 / 写回才能再借同一张表。
+                                                            let (
+                                                                login_says,
+                                                                login_frames,
+                                                                gm_direct,
+                                                                gm_notes,
+                                                                login_broadcasts,
+                                                                wb,
+                                                            ) = {
+                                                            let mut player = npc_player_from(
+                                                                &mut rngf,
+                                                                &head.chr_name,
+                                                                id,
+                                                                &final_map_name,
+                                                                level,
+                                                                data.map_or(0, |d| d.gold),
+                                                                data.and_then(|d| {
+                                                                    d.bag_items.as_deref()
+                                                                }),
+                                                                data.and_then(|d| {
+                                                                    d.quest_flag.as_deref()
+                                                                }),
+                                                                &enter_cfg.catalog,
+                                                                group_owner,
+                                                                &group_member_jobs,
+                                                            &npc_vars_base,
                                                             );
+                                                            // **PL-3 / P27**：脚本 197/198 的
+                                                            // 读写源（见 `run_party_goto_label` 同段）。
+                                                            if let Some(e) = world.entities.get(id) {
+                                                                player.kill_mon_exp_rate =
+                                                                    e.kill_mon_exp_rate;
+                                                                player.kill_mon_exp_rate_time =
+                                                                    e.kill_mon_exp_rate_time;
+                                                                player.power_rate = e.power_rate;
+                                                                player.power_rate_time =
+                                                                    e.power_rate_time;
+                                                            }
+                                                            // **PL-2 / P31**：`SETAUTOGETEXP`
+                                                            // 四字段从宿主会话 seed（`@Login` 里
+                                                            // 脚本可写，执行后写回）。
+                                                            if let Some(sg) =
+                                                                ground_sessions
+                                                                    .get(&head.chr_name)
                                                             {
-                                                                let mut rngf =
-                                                                    |v: i32| rng.random_below(v);
-                                                                let level = data
-                                                                    .and_then(|d| d.abil.as_ref())
-                                                                    .map_or(1, |a| i32::from(a.level));
-                                                                // §1.O `recall-ext` 读侧：同源自 `World` 的组队快照。
-                                                                let (group_owner, group_member_jobs) =
-                                                                    world
-                                                                        .party_script_group_snapshot(
-                                                                            id,
-                                                                        );
-                                                                // **Lane A 缺口 1 的正向副作用（登记）**：`npc_player_from` 读记录
-                                                                // `bag_items`；四件新手物品已并入记录 ⇒ 脚本侧 `CHECKBAGGAGE` 一类
-                                                                // 查询在新号首次登录即可见四件（与 oracle 的 `ItemList` 语义一致，
-                                                                // 但与旧 Rust 行为不同——旧行为要等 late 调用之后才有）。
-                                                                // **卡 `openmir2-gm-script-host-seam`（T-210）**：
-                                                                // `player.gm` 借住 `&mut ground_sessions[..].gm` 与 `&world`
-                                                                // ⇒ 把「建快照 + 跑 @Login」收进独立块；块尾 `player`
-                                                                // 析构即释放借用，后面的脚本帧排水 / 写回才能再借同一张表。
-                                                                let (
-                                                                    login_says,
-                                                                    login_frames,
-                                                                    gm_direct,
-                                                                    gm_notes,
-                                                                    login_broadcasts,
-                                                                    wb,
-                                                                ) = {
-                                                                let mut player = npc_player_from(
-                                                                    &mut rngf,
-                                                                    &head.chr_name,
-                                                                    id,
-                                                                    &final_map_name,
-                                                                    level,
-                                                                    data.map_or(0, |d| d.gold),
-                                                                    data.and_then(|d| {
-                                                                        d.bag_items.as_deref()
-                                                                    }),
-                                                                    data.and_then(|d| {
-                                                                        d.quest_flag.as_deref()
-                                                                    }),
-                                                                    &enter_cfg.catalog,
-                                                                    group_owner,
-                                                                    &group_member_jobs,
-                                                                &npc_vars_base,
+                                                                player.auto_get_exp_in_safe_zone =
+                                                                    sg.auto_get_exp_in_safe_zone;
+                                                                player.auto_get_exp_envir =
+                                                                    sg.auto_get_exp_envir.clone();
+                                                                player.auto_get_exp_time =
+                                                                    sg.auto_get_exp_time;
+                                                                player.auto_get_exp_point =
+                                                                    sg.auto_get_exp_point;
+                                                                // **PL-4 / P22**：脚本 192/193
+                                                                // 的 `BoIncGameGold`/`BoDecGameGold`。
+                                                                player.bo_inc_game_gold =
+                                                                    sg.p22.bo_inc_game_gold;
+                                                                player.bo_dec_game_gold =
+                                                                    sg.p22.bo_dec_game_gold;
+                                                                // **A-10/T-86**：`SETOFFLINE`
+                                                                // 的两字段（同一个 `PlayObject`）。
+                                                                player.off_line_flag =
+                                                                    sg.off_line_flag;
+                                                                player.kick_off_line_tick =
+                                                                    sg.kick_off_line_tick;
+                                                            }
+                                                            // **A-26/T-207**：`Abil.Exp` 的登录侧 seed 取角色记录里的
+                                                            // `Ability.Exp`（oracle 此时读的是 `PlayObject.Abil.Exp` 初值；
+                                                            // 会话虽已建，但 `equip.abil` 的 exp 同样来自该记录）。
+                                                            player.abil_exp = data
+                                                                .and_then(|d| d.abil.as_ref())
+                                                                .map_or(0, |a| a.exp);
+                                                            // **卡 `openmir2-script-user-account`**：
+                                                            // `playerActor.UserAccount`（`CHECKACCOUNTLIST` 读源）。
+                                                            player.user_account = head.account.clone();
+                                                            // `HUtil32.GetTickCount()` 的宿主值
+                                                            //（与 P31 `host_now` 同源）。
+                                                            player.tick = now_ms() as i32;
+                                                            // **卡 `openmir2-gm-script-host-seam`（T-210）**：脚本
+                                                            // `GMEXECUTE` 的宿主跳线（oracle `PlayObject.Permission`
+                                                            // 的读写 + `ProcessUserLineMsg`，`PlayObject.cs:58` /
+                                                            // `PlayObject.Chat.cs:229-406`）。
+                                                            //
+                                                            // `Permission` 的权威 = 会话 `GmSession`；抬权在脚本动作里
+                                                            // （`ExecutionProcessingSys.cs:4938-4947`，actions.rs 的
+                                                            // `PermissionGuard`），跳线本身不抬权。
+                                                            //
+                                                            // 密码状态机在本仓是会话层（`pwd_sessions`，`CM_PASSWORD`
+                                                            // 驱动）：oracle 在 `@` 支**之前**判它（`Chat.cs:241-362`）
+                                                            // ⇒ 正在密码流里时注入 `pwd_busy`，跳线不执行（不绕过拦截）。
+                                                            let gm_cfg = gmcmd::GmConfig {
+                                                                lock_human_login: enter_cfg
+                                                                    .lock_human_login,
+                                                                ..gmcmd::GmConfig::default()
+                                                            };
+                                                            let gm_world = gmcmd::GmWorld {
+                                                                guilds: &guilds,
+                                                                maps: registry.as_ref(),
+                                                                world: Some(&world),
+                                                                speaker: &head.chr_name,
+                                                                speaker_id: id,
+                                                                now_ms: world.clock_ms,
+                                                            };
+                                                            if let Some(sg) = ground_sessions
+                                                                .get_mut(&head.chr_name)
+                                                            {
+                                                                let pwd_busy = pwd_sessions
+                                                                    .get(&head.chr_name)
+                                                                    .is_some_and(|p| {
+                                                                        let st = &p.state;
+                                                                        st.is_set_storage_pwd
+                                                                            || st.is_re_config_pwd
+                                                                            || st.is_un_lock_pwd
+                                                                            || st.is_un_lock_storage_pwd
+                                                                            || st.is_check_old_pwd
+                                                                    });
+                                                                player.gm =
+                                                                    Some(game_svr::npc::NpcGm {
+                                                                        sess: &mut sg.gm,
+                                                                        cfg: &gm_cfg,
+                                                                        world: gm_world,
+                                                                        pwd_busy,
+                                                                    });
+                                                            }
+                                                            let login_says = host.run_login(&mut player);
+                                                            // 写回快照：`player` 带 GM 跳线的借用，块外不能再持有它
+                                                            // ⇒ 先把 oracle 会落账的标量取出来（语义与逐字段读写等价）。
+                                                            let wb = LoginScriptWriteBack {
+                                                                abil_exp: player.abil_exp,
+                                                                gold: player.gold,
+                                                                game_gold: player.game_gold,
+                                                                game_point: player.game_point,
+                                                                quest_flag: player
+                                                                    .quest_flag
+                                                                    .as_bytes()
+                                                                    .to_vec(),
+                                                                auto_get_exp_in_safe_zone: player
+                                                                    .auto_get_exp_in_safe_zone,
+                                                                auto_get_exp_envir: player
+                                                                    .auto_get_exp_envir
+                                                                    .clone(),
+                                                                auto_get_exp_time: player
+                                                                    .auto_get_exp_time,
+                                                                auto_get_exp_point: player
+                                                                    .auto_get_exp_point,
+                                                                bo_inc_game_gold: player
+                                                                    .bo_inc_game_gold,
+                                                                bo_dec_game_gold: player
+                                                                    .bo_dec_game_gold,
+                                                                off_line_flag: player
+                                                                    .off_line_flag,
+                                                                kick_off_line_tick: player
+                                                                    .kick_off_line_tick,
+                                                                kill_mon_exp_rate: player
+                                                                    .kill_mon_exp_rate,
+                                                                kill_mon_exp_rate_time: player
+                                                                    .kill_mon_exp_rate_time,
+                                                                power_rate: player.power_rate,
+                                                                power_rate_time: player
+                                                                    .power_rate_time,
+                                                            };
+                                                            (
+                                                                login_says,
+                                                                std::mem::take(&mut player.frames),
+                                                                std::mem::take(
+                                                                    &mut player.gm_direct_frames,
+                                                                ),
+                                                                std::mem::take(&mut player.gm_notes),
+                                                                // 卡 `openmir2-sendmsg-login-qmanage-cases`：
+                                                                // `SENDMSG 0-3` 的**其余玩家**扇出正文
+                                                                // （`WorldServer.SendBroadCastMsg`）。本例玩家
+                                                                // 自己那一份已在 `player.frames` 里。
+                                                                std::mem::take(
+                                                                    &mut player.world_broadcasts,
+                                                                ),
+                                                                wb,
+                                                            )
+                                                            };
+                                                            // 脚本已跑完、`player` 已 drop（对 `sg.gm`/`world` 的
+                                                            // 借用结束）⇒ 落地脚本里抬权执行的 `@改属性`
+                                                            // （oracle `SendUpdateItem` 立即 ⇒ 早于下面的脚本帧）。
+                                                            let gm_use_item = match ground_sessions
+                                                                .get_mut(&head.chr_name)
+                                                            {
+                                                                Some(sg) => {
+                                                                    apply_pending_gm_use_item_in(
+                                                                        sg,
+                                                                        &mut world,
+                                                                        &enter_cfg.catalog,
+                                                                    )
+                                                                }
+                                                                None => None,
+                                                            };
+                                                            if let Some(says) = login_says {
+                                                                let sent = own_tx.map_or(0, |tx| {
+                                                                    emit_npc_says(tx, socket, id, &says)
+                                                                });
+                                                                glog!(
+                                                                    "INF",
+                                                                    "@Login 已执行 ChrName={} 说词 {} 条（下发 {sent}）",
+                                                                    head.chr_name,
+                                                                    says.len()
                                                                 );
-                                                                // **PL-3 / P27**：脚本 197/198 的
-                                                                // 读写源（见 `run_party_goto_label` 同段）。
-                                                                if let Some(e) = world.entities.get(id) {
-                                                                    player.kill_mon_exp_rate =
-                                                                        e.kill_mon_exp_rate;
-                                                                    player.kill_mon_exp_rate_time =
-                                                                        e.kill_mon_exp_rate_time;
-                                                                    player.power_rate = e.power_rate;
-                                                                    player.power_rate_time =
-                                                                        e.power_rate_time;
-                                                                }
-                                                                // **PL-2 / P31**：`SETAUTOGETEXP`
-                                                                // 四字段从宿主会话 seed（`@Login` 里
-                                                                // 脚本可写，执行后写回）。
-                                                                if let Some(sg) =
-                                                                    ground_sessions
-                                                                        .get(&head.chr_name)
-                                                                {
-                                                                    player.auto_get_exp_in_safe_zone =
-                                                                        sg.auto_get_exp_in_safe_zone;
-                                                                    player.auto_get_exp_envir =
-                                                                        sg.auto_get_exp_envir.clone();
-                                                                    player.auto_get_exp_time =
-                                                                        sg.auto_get_exp_time;
-                                                                    player.auto_get_exp_point =
-                                                                        sg.auto_get_exp_point;
-                                                                    // **PL-4 / P22**：脚本 192/193
-                                                                    // 的 `BoIncGameGold`/`BoDecGameGold`。
-                                                                    player.bo_inc_game_gold =
-                                                                        sg.p22.bo_inc_game_gold;
-                                                                    player.bo_dec_game_gold =
-                                                                        sg.p22.bo_dec_game_gold;
-                                                                    // **A-10/T-86**：`SETOFFLINE`
-                                                                    // 的两字段（同一个 `PlayObject`）。
-                                                                    player.off_line_flag =
-                                                                        sg.off_line_flag;
-                                                                    player.kick_off_line_tick =
-                                                                        sg.kick_off_line_tick;
-                                                                }
-                                                                // **A-26/T-207**：`Abil.Exp` 的登录侧 seed 取角色记录里的
-                                                                // `Ability.Exp`（oracle 此时读的是 `PlayObject.Abil.Exp` 初值；
-                                                                // 会话虽已建，但 `equip.abil` 的 exp 同样来自该记录）。
-                                                                player.abil_exp = data
-                                                                    .and_then(|d| d.abil.as_ref())
-                                                                    .map_or(0, |a| a.exp);
-                                                                // **卡 `openmir2-script-user-account`**：
-                                                                // `playerActor.UserAccount`（`CHECKACCOUNTLIST` 读源）。
-                                                                player.user_account = head.account.clone();
-                                                                // `HUtil32.GetTickCount()` 的宿主值
-                                                                //（与 P31 `host_now` 同源）。
-                                                                player.tick = now_ms() as i32;
-                                                                // **卡 `openmir2-gm-script-host-seam`（T-210）**：脚本
-                                                                // `GMEXECUTE` 的宿主跳线（oracle `PlayObject.Permission`
-                                                                // 的读写 + `ProcessUserLineMsg`，`PlayObject.cs:58` /
-                                                                // `PlayObject.Chat.cs:229-406`）。
-                                                                //
-                                                                // `Permission` 的权威 = 会话 `GmSession`；抬权在脚本动作里
-                                                                // （`ExecutionProcessingSys.cs:4938-4947`，actions.rs 的
-                                                                // `PermissionGuard`），跳线本身不抬权。
-                                                                //
-                                                                // 密码状态机在本仓是会话层（`pwd_sessions`，`CM_PASSWORD`
-                                                                // 驱动）：oracle 在 `@` 支**之前**判它（`Chat.cs:241-362`）
-                                                                // ⇒ 正在密码流里时注入 `pwd_busy`，跳线不执行（不绕过拦截）。
-                                                                let gm_cfg = gmcmd::GmConfig {
-                                                                    lock_human_login: enter_cfg
-                                                                        .lock_human_login,
-                                                                    ..gmcmd::GmConfig::default()
-                                                                };
-                                                                let gm_world = gmcmd::GmWorld {
-                                                                    guilds: &guilds,
-                                                                    maps: registry.as_ref(),
-                                                                    world: Some(&world),
-                                                                    speaker: &head.chr_name,
-                                                                    speaker_id: id,
-                                                                    now_ms: world.clock_ms,
-                                                                };
-                                                                if let Some(sg) = ground_sessions
-                                                                    .get_mut(&head.chr_name)
-                                                                {
-                                                                    let pwd_busy = pwd_sessions
-                                                                        .get(&head.chr_name)
-                                                                        .is_some_and(|p| {
-                                                                            let st = &p.state;
-                                                                            st.is_set_storage_pwd
-                                                                                || st.is_re_config_pwd
-                                                                                || st.is_un_lock_pwd
-                                                                                || st.is_un_lock_storage_pwd
-                                                                                || st.is_check_old_pwd
-                                                                        });
-                                                                    player.gm =
-                                                                        Some(game_svr::npc::NpcGm {
-                                                                            sess: &mut sg.gm,
-                                                                            cfg: &gm_cfg,
-                                                                            world: gm_world,
-                                                                            pwd_busy,
-                                                                        });
-                                                                }
-                                                                let login_says = host.run_login(&mut player);
-                                                                // 写回快照：`player` 带 GM 跳线的借用，块外不能再持有它
-                                                                // ⇒ 先把 oracle 会落账的标量取出来（语义与逐字段读写等价）。
-                                                                let wb = LoginScriptWriteBack {
-                                                                    abil_exp: player.abil_exp,
-                                                                    gold: player.gold,
-                                                                    game_gold: player.game_gold,
-                                                                    game_point: player.game_point,
-                                                                    quest_flag: player
-                                                                        .quest_flag
-                                                                        .as_bytes()
-                                                                        .to_vec(),
-                                                                    auto_get_exp_in_safe_zone: player
-                                                                        .auto_get_exp_in_safe_zone,
-                                                                    auto_get_exp_envir: player
-                                                                        .auto_get_exp_envir
-                                                                        .clone(),
-                                                                    auto_get_exp_time: player
-                                                                        .auto_get_exp_time,
-                                                                    auto_get_exp_point: player
-                                                                        .auto_get_exp_point,
-                                                                    bo_inc_game_gold: player
-                                                                        .bo_inc_game_gold,
-                                                                    bo_dec_game_gold: player
-                                                                        .bo_dec_game_gold,
-                                                                    off_line_flag: player
-                                                                        .off_line_flag,
-                                                                    kick_off_line_tick: player
-                                                                        .kick_off_line_tick,
-                                                                    kill_mon_exp_rate: player
-                                                                        .kill_mon_exp_rate,
-                                                                    kill_mon_exp_rate_time: player
-                                                                        .kill_mon_exp_rate_time,
-                                                                    power_rate: player.power_rate,
-                                                                    power_rate_time: player
-                                                                        .power_rate_time,
-                                                                };
-                                                                (
-                                                                    login_says,
-                                                                    std::mem::take(&mut player.frames),
-                                                                    std::mem::take(
-                                                                        &mut player.gm_direct_frames,
-                                                                    ),
-                                                                    std::mem::take(&mut player.gm_notes),
-                                                                    // 卡 `openmir2-sendmsg-login-qmanage-cases`：
-                                                                    // `SENDMSG 0-3` 的**其余玩家**扇出正文
-                                                                    // （`WorldServer.SendBroadCastMsg`）。本例玩家
-                                                                    // 自己那一份已在 `player.frames` 里。
-                                                                    std::mem::take(
-                                                                        &mut player.world_broadcasts,
-                                                                    ),
-                                                                    wb,
-                                                                )
-                                                                };
-                                                                // 脚本已跑完、`player` 已 drop（对 `sg.gm`/`world` 的
-                                                                // 借用结束）⇒ 落地脚本里抬权执行的 `@改属性`
-                                                                // （oracle `SendUpdateItem` 立即 ⇒ 早于下面的脚本帧）。
-                                                                let gm_use_item = match ground_sessions
-                                                                    .get_mut(&head.chr_name)
-                                                                {
-                                                                    Some(sg) => {
-                                                                        apply_pending_gm_use_item_in(
-                                                                            sg,
-                                                                            &mut world,
-                                                                            &enter_cfg.catalog,
-                                                                        )
-                                                                    }
-                                                                    None => None,
-                                                                };
-                                                                if let Some(says) = login_says {
-                                                                    let sent = emit_npc_says(
-                                                                        tx, socket, id, &says,
-                                                                    );
-                                                                    glog!(
-                                                                        "INF",
-                                                                        "@Login 已执行 ChrName={} 说词 {} 条（下发 {sent}）",
-                                                                        head.chr_name,
-                                                                        says.len()
-                                                                    );
-                                                                }
-                                                                // `GMEXECUTE` 的**直发帧**（oracle `SendDefMessage`：
-                                                                // 命令体执行时立即下发，不经 `MsgQueue`）⇒ 先于本批
-                                                                // `MsgQueue` 投影排水；未接项/被吞路径记 DBG（不静默）。
-                                                                if let Some(body) = gm_use_item {
+                                                            }
+                                                            // `GMEXECUTE` 的**直发帧**（oracle `SendDefMessage`：
+                                                            // 命令体执行时立即下发，不经 `MsgQueue`）⇒ 先于本批
+                                                            // `MsgQueue` 投影排水；未接项/被吞路径记 DBG（不静默）。
+                                                            if let Some(body) = gm_use_item {
+                                                                if let Some(tx) = own_tx {
                                                                     let _ = tx.send(
                                                                         SimToGate::SendFrame {
                                                                             socket,
@@ -22510,6 +22527,8 @@ fn sim_loop(
                                                                         },
                                                                     );
                                                                 }
+                                                            }
+                                                            if let Some(tx) = own_tx {
                                                                 for f in &gm_direct {
                                                                     let body = match f {
                                                                         gmcmd::GmFrame::AttackMode(mode) => {
@@ -22521,124 +22540,124 @@ fn sim_loop(
                                                                         body,
                                                                     });
                                                                 }
-                                                                for note in &gm_notes {
-                                                                    glog!(
-                                                                        "DBG",
-                                                                        "@Login GMEXECUTE ChrName={}：{note}",
-                                                                        head.chr_name
-                                                                    );
-                                                                }
-                                                                // 脚本帧（`NpcPlayer.frames` =
-                                                                // `MsgQueue` 的脚本侧投影）：@Login
-                                                                // 此前只发说词、整组脚本帧被丢 ⇒
-                                                                // QManage 的 `MESSAGEBOX` 零帧。现与
-                                                                // 商人/组队同一映射（T-194）。
-                                                                // 出队序：说词优先级 0/1 恒先于
-                                                                // 脚本帧（最小 `RM_PLAYDICE` 4）。
-                                                                //
-                                                                // 抽成生产函数 [`drain_login_script_batch`]（内部复用
-                                                                // [`emit_login_script_frames`] 的脚本帧排水）：
-                                                                // 单测直接在**同一函数**上断言 767 的存在与
-                                                                // 同批出队序（删本调用或删函数体内的排水 ⇒
-                                                                // `login_messagebox_...` / `login_frame_batch_...`
-                                                                // 两用例必红）。
-                                                                //
-                                                                // **卡 `openmir2-sendmsg-login-qmanage-cases`**：
-                                                                // `SENDMSG 0-3` 的其余玩家扇出也在这个生产函数里
-                                                                // （复用 [`fan_out_world_sysmessage`]；牙=把它的正
-                                                                // 文实参换成 `&[]` ⇒ `login_sendmsg_*` 用例必红）。
-                                                                let (n, fanned) = drain_login_script_batch(
-                                                                    tx,
-                                                                    socket,
-                                                                    id,
-                                                                    &head.chr_name,
-                                                                    &ground_sessions,
-                                                                    (wb.gold, wb.game_gold, wb.game_point),
-                                                                    wb.abil_exp,
-                                                                    &login_frames,
-                                                                    &login_broadcasts,
-                                                                    &online,
-                                                                    &world,
-                                                                    &gates,
-                                                                    (
-                                                                        npc_vars_base.sys_msg.red.0,
-                                                                        npc_vars_base.sys_msg.red.1,
-                                                                    ),
+                                                            }
+                                                            for note in &gm_notes {
+                                                                glog!(
+                                                                    "DBG",
+                                                                    "@Login GMEXECUTE ChrName={}：{note}",
+                                                                    head.chr_name
                                                                 );
-                                                                if n > 0 {
-                                                                    glog!(
-                                                                        "INF",
-                                                                        "@Login ChrName={} 脚本帧 {n} 条",
-                                                                        head.chr_name
-                                                                    );
-                                                                }
-                                                                if fanned > 0 {
-                                                                    glog!(
-                                                                        "INF",
-                                                                        "@Login ChrName={} 全服广播 {fanned} 帧",
-                                                                        head.chr_name
-                                                                    );
-                                                                }
-                                                                // 回写（本片回写 `Gold`、`QuestFlag`
-                                                                // 与 `Abil.Exp`（T-207 I-1；
-                                                                // `QuestUnit/QuestUnitOpen/ItemList/LastNpc/Script`
-                                                                // 的写回登记为后续分片，见 patch body）。
-                                                                if let Some(s) =
-                                                                    saves.get_mut(&head.chr_name)
-                                                                {
-                                                                    s.record.data.gold = wb.gold;
-                                                                    if let Some(qf) = s
-                                                                        .record
-                                                                        .data
-                                                                        .quest_flag
-                                                                        .as_mut()
-                                                                    {
-                                                                        let n = qf
-                                                                            .len()
-                                                                            .min(wb.quest_flag.len());
-                                                                        qf[..n].copy_from_slice(
-                                                                            &wb.quest_flag[..n],
-                                                                        );
-                                                                    }
-                                                                }
-                                                                // **A-26/T-207 I-1**：`@Login`
-                                                                // 的 `CHANGEEXP` 增量落进角色记录
-                                                                // 与会话两字段（常态会话已存在；
-                                                                // 未建会话的分支记录是唯一载体）。
-                                                                write_back_login_player_abil_exp(
-                                                                    saves.get_mut(&head.chr_name),
-                                                                    ground_sessions
-                                                                        .get_mut(&head.chr_name),
-                                                                    wb.abil_exp,
+                                                            }
+                                                            // 脚本帧（`NpcPlayer.frames` =
+                                                            // `MsgQueue` 的脚本侧投影）：@Login
+                                                            // 此前只发说词、整组脚本帧被丢 ⇒
+                                                            // QManage 的 `MESSAGEBOX` 零帧。现与
+                                                            // 商人/组队同一映射（T-194）。
+                                                            // 出队序：说词优先级 0/1 恒先于
+                                                            // 脚本帧（最小 `RM_PLAYDICE` 4）。
+                                                            //
+                                                            // 抽成生产函数 [`drain_login_script_batch`]（内部复用
+                                                            // [`emit_login_script_frames`] 的脚本帧排水）：
+                                                            // 单测直接在**同一函数**上断言 767 的存在与
+                                                            // 同批出队序（删本调用或删函数体内的排水 ⇒
+                                                            // `login_messagebox_...` / `login_frame_batch_...`
+                                                            // 两用例必红）。
+                                                            //
+                                                            // **卡 `openmir2-sendmsg-login-qmanage-cases`**：
+                                                            // `SENDMSG 0-3` 的其余玩家扇出也在这个生产函数里
+                                                            // （复用 [`fan_out_world_sysmessage`]；牙=把它的正
+                                                            // 文实参换成 `&[]` ⇒ `login_sendmsg_*` 用例必红）。
+                                                            let (n, fanned) = drain_login_script_batch(
+                                                                own_tx,
+                                                                socket,
+                                                                id,
+                                                                &head.chr_name,
+                                                                &ground_sessions,
+                                                                (wb.gold, wb.game_gold, wb.game_point),
+                                                                wb.abil_exp,
+                                                                &login_frames,
+                                                                &login_broadcasts,
+                                                                &online,
+                                                                &world,
+                                                                &gates,
+                                                                (
+                                                                    npc_vars_base.sys_msg.red.0,
+                                                                    npc_vars_base.sys_msg.red.1,
+                                                                ),
+                                                            );
+                                                            if n > 0 {
+                                                                glog!(
+                                                                    "INF",
+                                                                    "@Login ChrName={} 脚本帧 {n} 条",
+                                                                    head.chr_name
                                                                 );
-                                                                if let Some(sg) =
-                                                                    ground_sessions
-                                                                        .get_mut(&head.chr_name)
+                                                            }
+                                                            if fanned > 0 {
+                                                                glog!(
+                                                                    "INF",
+                                                                    "@Login ChrName={} 全服广播 {fanned} 帧",
+                                                                    head.chr_name
+                                                                );
+                                                            }
+                                                            // 回写（本片回写 `Gold`、`QuestFlag`
+                                                            // 与 `Abil.Exp`（T-207 I-1；
+                                                            // `QuestUnit/QuestUnitOpen/ItemList/LastNpc/Script`
+                                                            // 的写回登记为后续分片，见 patch body）。
+                                                            if let Some(s) =
+                                                                saves.get_mut(&head.chr_name)
+                                                            {
+                                                                s.record.data.gold = wb.gold;
+                                                                if let Some(qf) = s
+                                                                    .record
+                                                                    .data
+                                                                    .quest_flag
+                                                                    .as_mut()
                                                                 {
-                                                                    sg.state.gold = wb.gold;
-                                                                    // **PL-2 / P31**：脚本写回。
-                                                                    sg.auto_get_exp_in_safe_zone = wb.auto_get_exp_in_safe_zone;
-                                                                    sg.auto_get_exp_envir = wb.auto_get_exp_envir.clone();
-                                                                    sg.auto_get_exp_envir_map_id = None;
-                                                                    sg.auto_get_exp_time = wb.auto_get_exp_time;
-                                                                    sg.auto_get_exp_point = wb.auto_get_exp_point;
-                                                                    // **PL-4 / P22**：脚本写回。
-                                                                    sg.p22.bo_inc_game_gold = wb.bo_inc_game_gold;
-                                                                    sg.p22.bo_dec_game_gold = wb.bo_dec_game_gold;
-                                                                    // **A-10/T-86**：两字段写回
-                                                                    //（四字段已在上方 P31 块内写回）。
-                                                                    sg.off_line_flag = wb.off_line_flag;
-                                                                    sg.kick_off_line_tick = wb.kick_off_line_tick;
-                                                                }
-                                                                if let Some(e) = world.entities.get_mut(id) {
-                                                                    e.kill_mon_exp_rate = wb.kill_mon_exp_rate;
-                                                                    e.kill_mon_exp_rate_time = wb.kill_mon_exp_rate_time;
-                                                                    e.power_rate = wb.power_rate;
-                                                                    e.power_rate_time = wb.power_rate_time;
+                                                                    let n = qf
+                                                                        .len()
+                                                                        .min(wb.quest_flag.len());
+                                                                    qf[..n].copy_from_slice(
+                                                                        &wb.quest_flag[..n],
+                                                                    );
                                                                 }
                                                             }
-                                                            world.rng = rng;
+                                                            // **A-26/T-207 I-1**：`@Login`
+                                                            // 的 `CHANGEEXP` 增量落进角色记录
+                                                            // 与会话两字段（常态会话已存在；
+                                                            // 未建会话的分支记录是唯一载体）。
+                                                            write_back_login_player_abil_exp(
+                                                                saves.get_mut(&head.chr_name),
+                                                                ground_sessions
+                                                                    .get_mut(&head.chr_name),
+                                                                wb.abil_exp,
+                                                            );
+                                                            if let Some(sg) =
+                                                                ground_sessions
+                                                                    .get_mut(&head.chr_name)
+                                                            {
+                                                                sg.state.gold = wb.gold;
+                                                                // **PL-2 / P31**：脚本写回。
+                                                                sg.auto_get_exp_in_safe_zone = wb.auto_get_exp_in_safe_zone;
+                                                                sg.auto_get_exp_envir = wb.auto_get_exp_envir.clone();
+                                                                sg.auto_get_exp_envir_map_id = None;
+                                                                sg.auto_get_exp_time = wb.auto_get_exp_time;
+                                                                sg.auto_get_exp_point = wb.auto_get_exp_point;
+                                                                // **PL-4 / P22**：脚本写回。
+                                                                sg.p22.bo_inc_game_gold = wb.bo_inc_game_gold;
+                                                                sg.p22.bo_dec_game_gold = wb.bo_dec_game_gold;
+                                                                // **A-10/T-86**：两字段写回
+                                                                //（四字段已在上方 P31 块内写回）。
+                                                                sg.off_line_flag = wb.off_line_flag;
+                                                                sg.kick_off_line_tick = wb.kick_off_line_tick;
+                                                            }
+                                                            if let Some(e) = world.entities.get_mut(id) {
+                                                                e.kill_mon_exp_rate = wb.kill_mon_exp_rate;
+                                                                e.kill_mon_exp_rate_time = wb.kill_mon_exp_rate_time;
+                                                                e.power_rate = wb.power_rate;
+                                                                e.power_rate_time = wb.power_rate_time;
+                                                            }
                                                         }
+                                                        world.rng = rng;
                                                     }
                                                 }
                                             }
@@ -66135,7 +66154,7 @@ GMEXECUTE 禁言 self 20
         gates.insert(0, tx.clone());
         let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         let (n, fanned) = drain_login_script_batch(
-            &tx,
+            Some(&tx),
             901,
             hero,
             "hero",
@@ -66202,7 +66221,7 @@ GMEXECUTE 禁言 self 20
         gates.insert(0, tx.clone());
         let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         let (n, fanned) = drain_login_script_batch(
-            &tx,
+            Some(&tx),
             901,
             hero,
             "hero",
@@ -66328,6 +66347,209 @@ GMEXECUTE 禁言 self 20
         assert!(
             by_socket(903).is_empty(),
             "Ghost 收件人零帧（`if (!playObject.Ghost)`）"
+        );
+    }
+
+    /// **证伪夹具（卡 `openmir2-script-broadcast-tx-gating`）**：`hero` 在 **gate 0**（缺席），
+    /// `other`/`ghost` 在 **gate 1**（活线）。用来把「触发者自己的网关通道」与「别人的收件通道」
+    /// 分开：触发者那条线不在 `gates` 表里时，扇出仍须走到 `other`。
+    fn gate_gone_world() -> (
+        mir2_world::World,
+        OnlineRegistry,
+        [i32; 3],
+        mpsc::UnboundedSender<SimToGate>,
+        mpsc::UnboundedReceiver<SimToGate>,
+    ) {
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
+        let other = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "other", 12, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let ghost = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "ghost", 13, 10);
+            e.ghost = true;
+            e
+        });
+        let mut online: OnlineRegistry = Vec::new();
+        for (chr, actor_id, gate_idx, socket) in [
+            ("hero", hero, 0i32, 901i32),
+            ("other", other, 1, 902),
+            ("ghost", ghost, 1, 903),
+        ] {
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("acc-{chr}"),
+                    chr_name: chr.to_string(),
+                    session_id: socket - 900,
+                    gate_idx,
+                    socket,
+                    actor_id,
+                },
+            );
+        }
+        let (tx1, rx1) = mpsc::unbounded_channel::<SimToGate>();
+        (world, online, [hero, other, ghost], tx1, rx1)
+    }
+
+    /// **证伪 ①（卡 `openmir2-script-broadcast-tx-gating`）**：`@Login` 的
+    /// `drain_login_script_batch` 在**触发者网关线缺席**（`route_to_gate` 返回 `None`）时，
+    /// 其他在线玩家仍须收到 `SENDMSG 0`（oracle `WorldServer.SendBroadCastMsg` 遍历
+    /// `PlayObjectList`，与发送者自己的 socket 无关）。
+    ///
+    /// 改前形态：生产调用点整段在 `if let Some(tx)` 内 ⇒ `fanned == 0`，本用例红。
+    #[test]
+    fn login_broadcast_reaches_other_player_when_trigger_gate_is_gone() {
+        let host = qmanage_host_for(
+            concat!("[@Login]\r\n", "#ACT\r\n", "SENDMSG 0 全服公告\r\n"),
+            "gate-gone",
+        );
+        let (world, online, [_hero, other, _ghost], tx1, mut rx1) = gate_gone_world();
+        let mut rngf = |_v: i32| 0;
+        let mut player = game_svr::npc::NpcPlayer::empty(&mut rngf);
+        player.actor_id = 1;
+        player.chr_name = "hero".into();
+        let _ = host.run_login(&mut player).expect("QManage 必须可加载");
+        assert_eq!(
+            player.world_broadcasts,
+            vec!["全服公告".to_string()],
+            "`SENDMSG 0` 必须进其余玩家扇出正文"
+        );
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::from([(1u8, tx1)]);
+        let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        // 生产调用点形态：`route_to_gate` 找不到触发者那条线 ⇒ `None`。
+        let own_tx = crate::route_to_gate(&gates, 0, 901, "证伪：触发者网关缺席");
+        assert!(own_tx.is_none(), "夹具前提：触发者 gate 0 不在表里");
+        let (_n, fanned) = drain_login_script_batch(
+            own_tx,
+            901,
+            1,
+            "hero",
+            &ground_sessions,
+            (0, 0, 0),
+            0,
+            &player.frames,
+            &player.world_broadcasts,
+            &online,
+            &world,
+            &gates,
+            game_svr::npc::NpcVars::default().sys_msg.red,
+        );
+        assert_eq!(
+            fanned, 1,
+            "触发者网关线缺席时，其余在线玩家仍须收到 1 条 `SM_SYSMESSAGE`"
+        );
+        assert_eq!(
+            sendmsg_drain(&mut rx1),
+            vec![(902, sendmsg_sysmessage(other, "全服公告"))],
+            "other（gate 1 活线）必须收到，Recog = 自己"
+        );
+    }
+
+    /// **证伪 ②（卡 `openmir2-script-broadcast-tx-gating`）**：`@StdModeFunc*` 的
+    /// `run_std_mode_func_script` 在**触发者网关线缺席**时，其他在线玩家仍须收到
+    /// `SENDMSG 0`（部署可达：`Market_Def/QFunction-0.txt` 的 `[@StdModeFunc14]`）。
+    #[test]
+    fn stdmodefunc_broadcast_reaches_other_player_when_trigger_gate_is_gone() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            310,
+            mir2_data::StdItem {
+                name: "礼炮".into(),
+                std_mode: 31,
+                ani_count: 14,
+                shape: 0,
+                ..Default::default()
+            },
+        );
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QFunction".into(),
+                file_path: "Market_Def".into(),
+                script_name: Some("QFunction-0".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: vec![mir2_script::ScriptInfo {
+                    is_quest: false,
+                    quest_info: Default::default(),
+                    record_list: vec![t142_record(
+                        "@StdModeFunc14",
+                        "",
+                        vec![sendmsg_act(0, "[%s]燃放礼炮")],
+                    )],
+                    quest_count: 0,
+                }],
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let make_index = 77;
+        let (mut world, online, [_hero, other, _ghost], tx1, mut rx1) = gate_gone_world();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(1);
+        sg.state.item_list = vec![game_svr::bag::BagItem {
+            make_index,
+            index: 310,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        sessions.insert("hero".into(), sg);
+        // 触发者（gate 0）的线**不在表里**；other 的 gate 1 是活线。
+        let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::from([(1u8, tx1)]);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        handle_eat_cmd(
+            make_index,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            None,
+            &unbind,
+            &mut item_number,
+            Some(&host),
+            &game_svr::npc::NpcVars::default(),
+            None,
+        );
+        let frames = sendmsg_drain(&mut rx1);
+        let other_sys: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|(s, b)| {
+                *s == 902
+                    && mir2_protocol::frame::CommandMessage::from_bytes(b)
+                        .is_some_and(|m| m.ident == mir2_protocol::messages::SM_SYSMESSAGE)
+            })
+            .map(|(_, b)| b)
+            .collect();
+        assert_eq!(
+            other_sys,
+            vec![&sendmsg_sysmessage(other, "[hero]燃放礼炮")],
+            "触发者网关线缺席时，other 仍须收到 `@StdModeFunc14` 的 `SENDMSG 0`"
         );
     }
 }
