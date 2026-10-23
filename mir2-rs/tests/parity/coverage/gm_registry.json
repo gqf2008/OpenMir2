@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "e5e3ab25608a48bc3930a14d90397994840fb910fd0e000ad16a4f87426cd696"
+   "sha256": "769de74093cc3e399ecba31d314974287255f9059002ceb3018af70c6b1117c1"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -1765,6 +1765,30 @@
   }
  ],
  "script_reachable_but_implemented": [
+  {
+   "cmd": "取消禁言",
+   "file": "Market_Def/功能NPC/比武-GA2.txt",
+   "line": 43,
+   "label": "@aa",
+   "rust_imp": "ShutupRelease",
+   "third_state": false
+  },
+  {
+   "cmd": "取消禁言",
+   "file": "Market_Def/功能NPC/比武-GA2.txt",
+   "line": 68,
+   "label": "@aa",
+   "rust_imp": "ShutupRelease",
+   "third_state": false
+  },
+  {
+   "cmd": "取消禁言",
+   "file": "Market_Def/功能NPC/比武-GA2.txt",
+   "line": 106,
+   "label": "@aa",
+   "rust_imp": "ShutupRelease",
+   "third_state": false
+  },
   {
    "cmd": "禁言",
    "file": "QuestDiary/游戏登陆/登陆脚本.txt",
@@ -3724,58 +3748,6 @@
    "field_line": 74
   },
   {
-   "cmd": "取消禁言",
-   "cmd_name": "取消禁言",
-   "child_card": "openmir2-gm-impl-shutup-release",
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ShutupReleaseCommand.cs:8",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].ReleaseShutup",
-   "verdict": "script-reachable",
-   "verdict_why": "perm_min=10>0，但部署脚本经 GMEXECUTE 抬权到 10 调用（3 处可达调用）⇒ 现网可达，必须开实现卡",
-   "script_evidence": [
-    {
-     "file": "Market_Def/功能NPC/比武-GA2.txt",
-     "line": 43,
-     "label": "@aa",
-     "section": "act",
-     "script_arg": "取消禁言",
-     "raw": "Gmexecute 取消禁言 self",
-     "label_path": "Market_Def/功能NPC/比武-GA2.txt:@aa <- Market_Def/功能NPC/比武-GA2.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:137"
-    },
-    {
-     "file": "Market_Def/功能NPC/比武-GA2.txt",
-     "line": 68,
-     "label": "@aa",
-     "section": "act",
-     "script_arg": "取消禁言",
-     "raw": "Gmexecute 取消禁言 self",
-     "label_path": "Market_Def/功能NPC/比武-GA2.txt:@aa <- Market_Def/功能NPC/比武-GA2.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:137"
-    },
-    {
-     "file": "Market_Def/功能NPC/比武-GA2.txt",
-     "line": 106,
-     "label": "@aa",
-     "section": "act",
-     "script_arg": "取消禁言",
-     "raw": "Gmexecute 取消禁言 self",
-     "label_path": "Market_Def/功能NPC/比武-GA2.txt:@aa <- Market_Def/功能NPC/比武-GA2.txt:@main <- engine GotoLable root",
-     "load_origin": "MerChant.txt:137"
-    }
-   ],
-   "handler_class": "ShutupReleaseCommand",
-   "attr_name": "ShutupRelease",
-   "handler_exec_line": 12,
-   "name_source": "conf[Command].ReleaseShutup",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ReleaseShutup",
-   "field_line": 174
-  },
-  {
    "cmd": "取消联盟",
    "cmd_name": "取消联盟",
    "child_card": null,
@@ -4401,20 +4373,20 @@
   }
  ],
  "summary": {
-  "total": 87,
+  "total": 86,
   "by_verdict": {
    "unreachable": 80,
-   "script-reachable": 7
+   "script-reachable": 6
   },
   "reachable": 0,
-  "script_reachable": 7,
+  "script_reachable": 6,
   "unreachable": 80,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 98,
-   "Unimplemented": 87
+   "Implemented": 99,
+   "Unimplemented": 86
   },
   "third_state": 21,
   "third_state_imps": [
@@ -4440,7 +4412,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 77,
+  "complete_implemented": 78,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,

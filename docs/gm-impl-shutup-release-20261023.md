@@ -1,0 +1,84 @@
+# GM `@取消禁言`（`ShutupReleaseCommand`）实现（T-212）
+
+- 卡：`openmir2-gm-impl-shutup-release`（tier=R；父卡 `openmir2-gm-reachability-registry` 的 `script-reachable` 项）
+- 分支：`card/openmir2-gm-impl-shutup-release`，base master `619de1ce9`
+- 作者：`openmir2-worker-24`；worktree `OpenMir2-wt-cronclaim`
+
+## 1. oracle 逐行（`src/Modules/GameCommand/Commands/ShutupReleaseCommand.cs:12-49`）
+
+| 行 | 代码 | 语义 |
+| --- | --- | --- |
+| `:14` | `if (@params == null) return;` | **死分支**：`GameCommand.Handle` 的 `case 2` 传 `parameters.Split(' ')`（不返回 null）；只有 `default:` 支传 null，而本命令 `Execute` 是两参签名 |
+| `:18` | `sHumanName = @params.Length > 0 ? @params[0] : ""` | 名字 |
+| `:19` | `boAll = @params.Length > 1 ? bool.Parse(@params[1]) : false` | **先求值**；第二段不是 `true`/`false`（空串、`1`、`yes`…）⇒ `FormatException` 冒泡出命令体、被 `PlayObject.Chat.cs:402-406` 的整段 `catch` 吞掉 ⇒ **零帧** |
+| `:20` | `if (string.IsNullOrEmpty(sHumanName) \|\| !string.IsNullOrEmpty(sHumanName))` | **`A \|\| !A` 恒真** |
+| `:22-23` | `SysMsg(Command.CommandHelp, Red, Hint); return;` | 唯一可观测帧 |
+| `:25-48` | `Enter/LeaveCriticalSection(DenySayMsgList)`，其中 `:28-43` 的名单 `ContainsKey`/`Remove`/两处 `SysMsg` **整段被注释** | 不解禁、不通知目标、不落库；`boAll` 只被注释代码引用 |
+
+`Command.CommandHelp` = `命令格式: @{Name} {Help}`（`CommandAttribute.cs:56-58`）；`Name` 被部署
+`Command.conf` 的 `[Command] ReleaseShutup=取消禁言` 覆盖，`Help` = `CommandHelp.cs:41` 的「人物名称」
+⇒ 逐字节 **`命令格式: @取消禁言 人物名称`**，色词 Red/Hint（部署 `RedMsgFColor/RedMsgBColor` ⇒ `(0xFF,0x38)`）。
+
+> 结论：online 行为 = 「**永远一条帮助文本**」。`取消禁言 <名> true` 与 `<名> false` 同帧；
+> `<名> <非布尔>` ⇒ 零帧。按 §1 硬约束③ **BUG-REPLICA，不修**。
+
+## 2. 实现（`bins/game-svr/src/gmcmd.rs`）
+
+- `Imp::ShutupRelease` + 派发 `Imp::ShutupRelease => shutup_release(parameters)`；
+- `取消禁言` 表项 `Imp::Unimplemented → Imp::ShutupRelease`（`perm_min 10` = `[Permission] ReleaseShutup=10`，`params 2`）；
+- `shutup_release()`：`split_params`（`Split(' ')` 保留空段）→ 第二段存在时 `parse_csharp_bool`（`Trim` 后只认 `true`/`false`，大小写不敏感）失败即 `no_frames(NOTE_SHUTUP_RELEASE_BOOL_PARSE)` → 否则 `red(SHUTUP_RELEASE_HELP)`；
+- 常量 `SHUTUP_RELEASE_HELP = "命令格式: @取消禁言 人物名称"`；
+- `gm_registry.json` 重算：`Implemented 98 → 99`、`Unimplemented 87 → 86`，`script_reachable_but_implemented` 新增 3 条 `比武-GA2.txt:43/68/106`；既有计数用例同步更新。
+
+## 3. 用例（5）与牙（2）
+
+用例（`gmcmd.rs::tests`）：
+
+1. `shutup_release_is_wired_in_the_command_table`：imp / perm 10 / params 2 / 帮助文本**字面量**。
+2. `shutup_release_always_returns_the_same_help_text`：无参、有名字、`true`、`false`、制表符不分段
+   —— 5 种写法都恰好一条 `(Red, "命令格式: @取消禁言 人物名称")`，无其它帧、无登记。
+3. `shutup_release_bool_parse_failure_is_zero_frames`：`yes`/`1`/`TRUE2`/双空格空段 ⇒ 零帧 +
+   `NOTE_SHUTUP_RELEASE_BOOL_PARSE` 登记；对照 `\ttrue`（`Trim` 后合法）⇒ 帮助文本。
+4. `shutup_release_permission_gate_blocks_body`：perm 9 ⇒ `权限不够!!!`；perm 10 ⇒ 帮助文本。
+5. `shutup_release_script_gmexecute_path_through_npc_player_seam`：生产跳线（`NpcPlayer`）
+   `@取消禁言 新人` ⇒ 恰好一条帮助帧 `(0xFF,0x38)`；`@取消禁言 新人 1` ⇒ 零帧 + 登记。
+
+牙（实做并还原，`sha256` 一致：`gmcmd.rs` `778020f5f173ad26…`）：
+
+| 牙 | 改动 | 结果 |
+| --- | --- | --- |
+| 1 | 删 `bool.Parse` 守卫 | 用例 3、5 红（得帮助文本而非零帧） |
+| 2 | 帮助文本改成现网描述名 `恢复禁言` | 用例 1（以及改成字面量比对的用例 2）红 |
+
+## 4. 门禁（本 head）
+
+```
+cargo fmt --all -- --check                              OK
+cargo clippy --workspace --all-targets -- -D warnings   OK
+cargo test --workspace                                  141 个测试二进制 / 0 FAILED（rc=0）
+cargo run -p msgcodegen -- --check                      604 条一致
+whitelist_anchor_gate.py check                          507 条锚 ALL PASS（含 T-212）
+m3_whitelist_registry_audit.py audit                    GREEN
+t_reservation_gate.py check                             GREEN
+gm_registry.py build && gate && selftest                GREEN（14 teeth）
+```
+
+**环境噪声记录**（按队列纪律 #11 的三态判定）：
+第 1 次 `cargo test --workspace` rc=101，红在 `game-gate --test relay::oversize_frame_is_dropped_without_kick`
+（期望 1 条命令帧、实得 0）；**单跑该用例 rc=0**，且本卡只改 `gm-svr` 的 `gmcmd.rs` ⇒ 判为并发/时序噪声。
+第 2 次 rc=101 是**真回归**：既有计数用例 `batch2_table_wires_thirty_command_bodies` 仍按 98 条断言，
+已随本卡更新为 99/86。第 3 次 rc=0、141 个测试二进制 0 FAILED。
+
+## 5. 残余 / 窗口项（R，未跑）
+
+- 真机双栈窗口未跑：部署脚本 `Market_Def/功能NPC/比武-GA2.txt:43`（`@aa ← @main`）经
+  `GMEXECUTE 取消禁言 self` 触发 ⇒ 两侧各恰好一条 `SM_SYSMESSAGE(100)`、正文
+  `命令格式: @取消禁言 人物名称`、色词 `MakeWord(255,56)`；对照 `取消禁言 <名> 1` ⇒ 两侧零帧；
+  名单后态两侧均无变化。窗口未跑前本卡不得 `closed`（T-212）。
+- 该窗口需要前置卡 `openmir2-gm-script-exec-seams`（商人路 GMEXECUTE 跳线，head
+  `c0a55368f`，本 worker 的上一张卡，needs-review）先合并，否则 Rust 侧商人脚本路径零帧。
+- 窗口统一由 owner 排；本卡未起栈、未占端口、未连库。
+
+## 6. 残留物清单
+
+- `E:/tmp/w24-sr.sha`（牙的 sha256 基线）、`E:/tmp/w24-sr-tests{,2,3}.txt`（三次全量测试输出）。
