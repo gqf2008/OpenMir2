@@ -30,6 +30,32 @@
 2. **端口全空**：`powershell -File E:\MirServer\port-status.ps1`，十端口必须全 DOWN。`card_window.py` 起栈前会预检并在占用时 rc=2。
 3. **库基线复位**：C# 侧 `restore-baseline.sh`（`mir2_test_*`），Rust 侧 `restore-baseline-r.sh`（`mir2_test_*_r`）。**两套库不同名**，拿 `--db test` 给 Rust 侧拍快照会拍到 C# 的库 ⇒ 假差异。
 4. **一次只跑一栈**：C# 与 Rust 用同一组备用端口，串行起停。
+5. **场景用到的 ident 必须先在 `rules.json` 登记**（卡 `openmir2-conformance-rules-idents`，2026-10-23 起为硬前置）：
+   比较器的口径是「未登记 ident 出现 ⇒ `UNCLASSIFIED` ⇒ **整次窗口 UNDECIDABLE(rc=2)**」——probe 跑得再绿也没用。
+   开跑前自查（不起栈、不连库）：
+
+   ```sh
+   # 场景 wait_for/wait_frames/wait_idents 用到的 ident – rules.json 已登记 = 差集必须为空
+   python -I -B -c "
+   import json,glob
+   ids=set()
+   def walk(o):
+       if isinstance(o,dict):
+           for k,v in o.items():
+               if k in ('wait_for','wait_frames','wait_idents'):
+                   (ids.update(x for x in v if isinstance(x,int)) if isinstance(v,list)
+                    else ids.add(v) if isinstance(v,int) else None)
+               else: walk(v)
+       elif isinstance(o,list):
+           [walk(x) for x in o]
+   [walk(json.load(open(p,encoding='utf-8'))) for p in glob.glob('tools/probe/scenarios/*.json')]
+   reg={r['ident'] for r in json.load(open('tools/conformance/rules.json',encoding='utf-8'))['rules']}
+   print('missing:', sorted(ids-reg))"
+   ```
+
+   输出 `missing: []` 才开跑。新场景先用真实录制跑一遍 `compare_runs.py compare`（`coverage.unclassified_idents` 为空），
+   再进窗口。批次 2 已补齐 `11/13/200/201/615/616/635/636/643/644/645/763/767` 共 13 个（`tools/conformance/README.md`
+   「当前规则覆盖」有逐条 oracle 出处）。
 
 ## 1.5 角色预置位：**声明即可**（工具已支持，2026-10-23 起）
 
@@ -82,6 +108,8 @@
 
 - `grep -n 'ident=' docs/ <卡相关文档>`：**帧号写错没有机器守卫**——今天出过 `ident=769`（实为 `SM_GUILDMAKEALLY_FAIL`）而真帧是 `767`（`SM_MENU_OK`）的事故。写窗口项时**帧号必须同时给 `SM_` 名字**。
 - 场景文件里 `--var` 的值必须来自**发现**，不是 `params` 里的默认值（`dice_chain` 的 `npc_actor=119` 就是硬编码默认值，不计入发现能力）。
+- **规则表覆盖**：场景 `wait_for` 里出现的每个 ident 都必须在 `rules.json` 有条目（§1 第 5 条的自查），
+  否则跑出来的不是 FAIL 而是 `UNDECIDABLE`——**UNDECIDABLE 不是通过**（§3）。
 
 ## 4.5 参数发现覆盖 14/15 —— 决定窗口战役能先推多少
 

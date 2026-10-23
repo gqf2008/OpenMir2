@@ -207,6 +207,113 @@
       "reason": "SM_CHARSTATUSCHANGED：无 body（header-only）；recog=ActorId 走全局掩码；param/tag = nParam1 的低/高字（状态位）、series=HitSpeed（C# src/M2Server/Player/PlayObject.Message.cs:1846 `SendDefMessage(SM_CHARSTATUSCHANGED, processMsg.ActorId, LoWord(nParam1), HiWord(nParam1), HitSpeed)`）。HitSpeed 由属性重算派生，同一库基线两次运行应相同 ⇒ 先 compare；若下一轮出现差异，登记窄掩码（head_mask 里逐个字段）并写明来源",
       "tier": "L",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
+    },
+    {
+      "ident": 11,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_WALK 是真实协议帧（src/OpenMir2/Messages.cs:165）。下行点 src/M2Server/Player/PlayObject.Message.cs:1403-1410：`MakeMessage(SM_WALK, ActorId, nParam1(x), nParam2(y), MakeWord(wParam(Dir), baseObject.Light))` + body `EDCode(CharDesc{Feature, Status})`。**不掩 series**（与 ident 10 不同）：低字节 Dir 是 RM_WALK 的 wParam（移动向量决定，确定性），高字节 Light=`GetMyLight()`（等级阈值 + 已穿装备 Light 累加，src/M2Server/Player/PlayObject.cs:5404-5430，**不是墙钟**）⇒ Dir/Light 均可复现，整帧逐字节比，param/tag 仍是目的地坐标。ident 10 要掩 series 是因为**固定 NPC 的 TurnTo(RandomByte(8))** 随机支（src/GameSrv/Npc/GuildOfficial.cs:41-49、Merchant.cs:132-141，随机源 src/OpenMir2/RandomNumber.cs:35 墙钟播种）；SM_WALK 没有这条随机支（RM_WALK 只由真实移动产生，且 `processMsg.ActorId != ActorId` 才下行）。若真机窗口出现 Dir/Light 差异，那是真的不可复现来源，须带证据另立**窄**掩码，不得预先放宽。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 13,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_RUN 是真实协议帧（src/OpenMir2/Messages.cs:167）。下行点 src/M2Server/Player/PlayObject.Message.cs:1423-1430：与 SM_WALK(11) 同形 —— `MakeMessage(SM_RUN, ActorId, nParam1, nParam2, MakeWord(wParam(Dir), Light))` + body `EDCode(CharDesc{Feature, Status})`。Dir/Light 的确定性依据见 ident 11 的条目（PlayObject.cs:5404-5430 GetMyLight 装备派生；RM_RUN 无 NPC 随机支）⇒ 逐字节比，不掩 series。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 200,
+      "action": "bagitems_records",
+      "record_mask": [
+        "MakeIndex"
+      ],
+      "tier": "R",
+      "reason": "SM_ADDITEM 是真实协议帧（src/OpenMir2/Messages.cs:220）。下行点 src/M2Server/Player/PlayObject.Base.cs:225-227：`MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)` + body `EDCode(ClientItem)`（**单条** 124B 记录，无 '/' 分隔；布局 See src/OpenMir2/Packets/ClientPackets/ClientItem.cs WritePacket）。**MakeIndex@100 不可复现**：新建物品走 `M2Share.GetItemNumber()` = `ItemNumber++ + HUtil32.GetTickCount()`（src/M2Server/M2Share.cs:547-555）⇒ 墙钟；新角色初始四件正是这条路径（src/M2Server/Player/PlayObject.cs:1201-1240 IsNewHuman 分支）。DB 恢复的物品保留库值（src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Query.cs:404-425），但规则不能假设走哪条 ⇒ 用 `bagitems_records`：**逐条 124B 记录比**，只掩 MakeIndex，其余字段（Name@0 / StdMode@15 / AniCount@18 / Dura@104 / DuraMax@106 / Desc@108）逐字节比；被掩字段的差异显式登记进 whitelisted（不是静默放行）；记录解码失败/长度不是 124B ⇒ UNDECIDABLE。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 201,
+      "action": "bagitems_records",
+      "record_mask": [
+        "MakeIndex"
+      ],
+      "tier": "R",
+      "reason": "SM_BAGITEMS 是真实协议帧（src/OpenMir2/Messages.cs:221）。下行点 src/M2Server/Player/PlayObject.Operate.cs:38-64 ClientQueryBagItems()：`MakeMessage(SM_BAGITEMS, ActorId, 0, 0, ItemList.Count)`（series=背包物品数，照常比），body = 逐项 `EDCode.EncodeBuffer(ClientItem) + '/'`（每条 124B，布局见 src/OpenMir2/Packets/ClientPackets/ClientItem.cs WritePacket：Name@0 / StdMode@15 / AniCount@18 / MakeIndex@100 / Dura@104 / DuraMax@106 / Desc@108）。MakeIndex 的不可复现性、掩码边界、解码失败即 UNDECIDABLE 的口径同 ident 200（M2Share.cs:547-555 GetItemNumber = 计数器 + GetTickCount）。卡 openmir2-discovery-bagitems-201 已在本仓库把该布局用构造级用例钉死。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 615,
+      "action": "compare",
+      "head_compare": [
+        "recog",
+        "param"
+      ],
+      "tier": "L",
+      "reason": "SM_TAKEON_OK 是真实协议帧（src/OpenMir2/Messages.cs:284）。下行点 src/M2Server/Player/PlayObject.Operate.cs:458：`SendDefMessage(SM_TAKEON_OK, GetFeatureToLong(), GetFeatureEx(), 0, 0)` —— recog=外观 long、param=FeatureEx，**都是装备派生的确定性值**；全局 recog 掩码会把它吞掉，所以 head_compare 取回 recog/param 逐值比较（与 52/520 同型先例）。tag/series=0，无 body。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 616,
+      "action": "compare",
+      "head_compare": [
+        "recog"
+      ],
+      "tier": "L",
+      "reason": "SM_TAKEON_FAIL 是真实协议帧（src/OpenMir2/Messages.cs:285）。下行点 src/M2Server/Player/PlayObject.Operate.cs:493-496：`SendDefMessage(SM_TAKEON_FAIL, n18, 0, 0, 0)`，recog=n18 是**失败码**（-1/-4 等，见 Operate.cs:377-495 的 FailExit 路径），不是 ActorId ⇒ 全局 recog 掩码会让失败码永远比不到。按 763（SM_BUILDGUILD_FAIL）的已确认先例用 head_compare 把 recog 从全局掩码里取回逐值比较。param/tag/series=0，无 body。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 635,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_EAT_OK 是真实协议帧（src/OpenMir2/Messages.cs:297）。下行点 src/M2Server/Player/PlayObject.Operate.cs:690：`SendDefMessage(SM_EAT_OK, 0, 0, 0, 0)` —— 四个头部字段全 0、无 body ⇒ 逐字节比即全部判据（全局 recog 掩码对它没有副作用，因为本来两边都是 0）。不登记 ignore：本帧出现与否本身就是「吃得下」的判据。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 636,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_EAT_FAIL 是真实协议帧（src/OpenMir2/Messages.cs:298）。下行点 src/M2Server/Player/PlayObject.Operate.cs:698：`SendDefMessage(SM_EAT_FAIL, 0, 0, 0, 0)` —— 同 635，字段全 0、无 body，逐字节比；出现与否是「吃不下」的判据。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 643,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_MERCHANTSAY 是真实协议帧（src/OpenMir2/Messages.cs:304）。链路：src/M2Server/Npc/NormNpc.cs:1615 `SendMsg(this, RM_MERCHANTSAY, 0, 0, 0, 0, ChrName + '/' + sMsg)` → src/M2Server/Player/PlayObject.Message.cs:1723-1729 `MakeMessage(SM_MERCHANTSAY, ActorId, MakeWord(nParam1, nParam2), 0, 1)` + body `EDCode.EncodeString(Msg)`。recog=ActorId（走全局掩码）；param=MakeWord(0,0)=0、tag=0、series=1 均确定；body 是脚本文本（静态）⇒ 逐字节比。**真实录制先例**：`E:/tmp/conformance/runs/dice767-fix` 两侧各 3 条，补登记后 compare 由 UNDECIDABLE 变可判。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 644,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_MERCHANTDLGCLOSE 是真实协议帧（src/OpenMir2/Messages.cs:306）。下行点 src/M2Server/Player/PlayObject.Message.cs:1806-1808：`SendDefMessage(SM_MERCHANTDLGCLOSE, nParam1, 0, 0, 0)`，recog=nParam1=商人 ActorId（走全局掩码），param/tag/series=0、无 body ⇒ 逐字节比。场景 npc_script_chain 用它判 `@exit` 关窗。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 645,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_SENDGOODSLIST 是真实协议帧（src/OpenMir2/Messages.cs:307）。链路：src/GameSrv/Npc/Merchant.cs:985-991 逐商品拼 `名字/子菜单/价格/库存/` 并 `n10++`，末尾 `user.SendMsg(RM_SENDGOODSLIST, 0, ActorId, n10, 0, sSendMsg)` → src/M2Server/Player/PlayObject.Message.cs:1809-1811 `SendDefMessage(SM_SENDGOODSLIST, nParam1=ActorId, nParam2=n10, 0, 0, Msg)`。recog=商人 ActorId（走全局掩码）；param=n10=商品条目数（由 DB 商品表决定，确定性）；tag/series=0；body=商品列表文本 ⇒ 逐字节比。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 763,
+      "action": "compare",
+      "head_compare": [
+        "recog"
+      ],
+      "tier": "L",
+      "reason": "SM_BUILDGUILD_FAIL 是真实协议帧（src/OpenMir2/Messages.cs:376）。下行点 src/M2Server/Player/PlayObject.Message.cs:1940-1942：`SendDefMessage(SM_BUILDGUILD_FAIL, nParam1, 0, 0, 0)`，recog=nParam1 是**失败码**（RM_BUILDGUILD_FAIL 的 nParam1），**不是 ActorId** ⇒ 全局 recog 掩码会让失败码永远比不到；必须 head_compare 取回逐值比较（先例已确认）。param/tag/series=0，无 body。场景 npc_script_chain 用它判 `@@buildguildnow` 的失败分支。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
+    },
+    {
+      "ident": 767,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_MENU_OK 是真实协议帧（src/OpenMir2/Messages.cs:379）。下行点 src/M2Server/Player/PlayObject.Message.cs:1952-1954：`SendDefMessage(SM_MENU_OK, nParam1, 0, 0, 0, Msg)`，recog=nParam1=ActorId（走全局掩码）；param/tag/series=0；body=菜单文本 ⇒ 逐字节比。**真实录制先例**：`E:/tmp/conformance/runs/dice767-fix` 两侧各 1 条。注意帧号是 767=SM_MENU_OK，**不是** 769=SM_GUILDMAKEALLY_FAIL（runbook §4 记过 ident=769 的事故）。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-70)"
     }
   ],
   "db": {
