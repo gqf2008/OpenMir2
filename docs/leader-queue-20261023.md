@@ -129,7 +129,13 @@
     ⇒ **第 4 查**：`walgit collab thread <card>` 看**该卡线程**最近 N 条 entry 的 `actor`+`ts`；
     若同 principal 在**最近 10 分钟内**有过写入（尤其是 comment/patch），视为在干活，**不派**。
     三查看的是 git 层，第 4 查看的是**协作层**——两层都要查。
-    **连带口径（与第 16 条一起读）**：`git author` 是共享工作副本配置（`OpenMir2-wt-cronclaim` 的
+    **追加操作（2026-10-24 01:2x，一晚四次同卡双写换来的）**：`shutup-release` 返工误派、`sweep` 同 principal 双车道、
+    `script-user-account` 双修、`window-batch-plan-refresh` 双返工——**四次里有三次是「原车道在我派活之后才动手」**。
+    ⇒ **派返工/接管前，先在该卡线程发一条签名「接管声明」**（写明：本卡由 `<principal>` 接管、原车道请停写、
+    已有改动请让渡或说明），**再开工**。这条声明不是仪式：它让原车道在下一次读线程时**必然看到**，从而收敛。
+    同理，**合并前先看线程有没有第二条并行分支**，别把两版都合进去。
+
+    连带口径（与第 16 条一起读）：`git author` 是共享工作副本配置（`OpenMir2-wt-cronclaim` 的
     `user.name` 就是 `openmir2-worker-66`，谁提交都显示 worker-66），所以**author ≠ 签名者不等于代签**；
     但「同一 principal 两条车道并发写同一张卡」本身就是污染，与 author 字段无关，必须重交付、重签。
     干净的交付 = **一号一车一 worktree**：签名 principal、worktree 的 `walgit/identity`、提交所在 worktree 三者一致。
