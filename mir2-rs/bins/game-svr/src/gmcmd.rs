@@ -665,8 +665,15 @@ impl GmSession {
     /// 即不伪造写入——oracle 里命令对象与 `PlayObject` 是同一引用，不存在这种情形；
     /// 本仓只有「会话在、实体不在」的边角（未进世界/已 Ghost），此时命令仍回执但不写实体。
     fn entity_write(&self, world: &GmWorld<'_>) -> Option<GmEntityState> {
-        world.self_entity().map(|e| GmEntityState {
-            actor_id: e.id,
+        // 优先用宿主给出的说话者 `ActorId`（oracle 的命令对象就是这个 `PlayObject`，Ghost 与否
+        // 都写同一字段）；`0`（测试/无在线表）时回落到按名查找。实体不在表里 ⇒ `apply` 是 no-op。
+        let actor_id = if world.speaker_id > 0 {
+            world.speaker_id
+        } else {
+            world.self_entity()?.id
+        };
+        Some(GmEntityState {
+            actor_id,
             ..GmEntityState::default()
         })
     }
@@ -930,6 +937,12 @@ pub struct GmWorld<'a> {
     pub world: Option<&'a mir2_world::World>,
     /// 命令发起者 `ChrName`（`@天地合一` 的 `GroupOwner == ActorId` 自比用）。
     pub speaker: &'a str,
+    /// 命令发起者的 `ActorId`（`OnlineEntry.actor_id` / `SessionGround.actor_id`）＝ oracle
+    /// 「命令对象就是那个 `PlayObject`」的等价物。`0` = 宿主未接线（测试/无在线表）。
+    ///
+    /// 管理态写穿用它定位实体（卡 `openmir2-gm-admin-mode-entity-seam`，review `2c5cb955` m-2）：
+    /// 按名查找 `play_by_name` 会滤掉 `Ghost`，而 oracle 直接写那个对象、Ghost 与否都写同一字段。
+    pub speaker_id: i32,
     /// `HUtil32.GetTickCount()` 的等价物（ms；冷却门的 `now`）。
     pub now_ms: i64,
 }
@@ -943,6 +956,7 @@ impl<'a> GmWorld<'a> {
             maps: None,
             world: None,
             speaker: "",
+            speaker_id: 0,
             now_ms: 0,
         }
     }

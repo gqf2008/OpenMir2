@@ -1760,6 +1760,7 @@ fn handle_gm_command(
         maps: host.registry,
         world: Some(host.world),
         speaker: &speaker.chr_name,
+        speaker_id: speaker.actor_id,
         now_ms: host.world.clock_ms,
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
@@ -1805,6 +1806,31 @@ fn handle_gm_command(
         result.found,
         result.msgs.len() + usize::from(!result.found && result.parsed)
     );
+}
+
+/// **GM 管理态写穿的生产落地段**（卡 `openmir2-gm-admin-mode-entity-seam`，F-2）。
+///
+/// `@1/@2/@3/@Rest/@AttackMode` 的命令体把权威值装进 `GmSession::pending_entity`，
+/// 本函数在**同一事件内**把它取走并写到 `Entity`（`state.apply`）。调用点：
+/// [`sim_loop`] 的 `CM_SAY` 支（`handle_say` 返回后、`world.tick_head()` 之前）与测试夹具
+/// `GmRig::say`——**同一份实现**，不复制。
+///
+/// 返回是否真的落了写（诊断用；`false` = 本条命令没有实体差量，如未知命令/无实体）。
+fn apply_pending_gm_entity(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    world: &mut mir2_world::World,
+) -> bool {
+    match sessions
+        .get_mut(chr_name)
+        .and_then(|sg| sg.gm.pending_entity.take())
+    {
+        Some(state) => {
+            state.apply(world);
+            true
+        }
+        None => false,
+    }
 }
 
 /// `SysMsg(msg, color, Hint)` 的通用红/绿/蓝版（[`send_self_sysmsg`] 是它的 Red 特化）。
@@ -6931,6 +6957,10 @@ fn build_save_record(
         // （**判定前**，失败也保留尝试方向）、9 条攻击命令（含挥空）、`CM_SPELL` default 支。
         // 旧实现只改显示表，存档写的是载入值（G-09 / F1）。
         rec.data.dir = e.dir();
+        // `MakeSaveRcd` `:1296`：`playerInfo.AttatckMode = (byte)playObject.AttatckMode`。
+        // 实体是权威（登录装入 + `@AttackMode` 写穿）⇒ 记录随会话实时值落库，
+        // 否则 `@AttackMode` 只在本会话生效、登出即丢（review `2c5cb955` m-1）。
+        rec.data.attatck_mode = e.attack_mode;
     }
     rec.data.gold = sg.state.gold;
     rec.data.game_gold = sg.game_gold;
@@ -11497,6 +11527,10 @@ fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
 ///
 /// - `Dir`：oracle 把 `CharacterData.Dir` 直接赋给 `PlayObject`（`WorldServer.cs:1113-1125`
 ///   之外的口径）；旧实现不装载 ⇒ `MakeSaveRcd` 只能写回载入值（G-09）。
+/// - `AttatckMode`：`WorldServer.cs:1148`
+///   `playObject.AttatckMode = (AttackMode)humData.AttatckMode;`——引擎读实体
+///   （`combat::is_attack_target_player_grouped` 按 `Entity.attack_mode` 分派），
+///   不装载 ⇒ 记录里非 `HAM_ALL` 的角色登录后战斗仍按全体攻击（review `2c5cb955` m-1）。
 /// - `AllowGroupReCall`：`WorldServer.cs:1159`
 ///   `playObject.AllowGroupReCall = humData.AllowGroupReCall;`——DB 列（[`record::CharacterData`]
 ///   已解析）是**唯一初值来源**，之后只由 `@允许天地合一` 翻转
@@ -11505,6 +11539,10 @@ fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
 fn apply_login_record_scalars(ent: &mut mir2_world::Entity, data: Option<&record::CharacterData>) {
     ent.ai.dir = data.map_or(0, |d| d.dir);
     ent.allow_group_re_call = data.is_some_and(|d| d.allow_group_re_call);
+    // `WorldServer.cs:1148`：`playObject.AttatckMode = (AttackMode)humData.AttatckMode`——登录即
+    // 装入 `PlayObject`。本仓引擎读 `Entity.attack_mode`（`combat::is_attack_target_player_grouped`）
+    // ⇒ 记录侧非 0 的角色必须在这里落实体，否则战斗按 `HAM_ALL` 分派（review `2c5cb955` m-1）。
+    ent.attack_mode = data.map_or(0, |d| d.attatck_mode);
 }
 
 /// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world`）。
@@ -13085,6 +13123,34 @@ fn drain_kill_exp_chain_with_magic(
 ///
 /// **不再**用「升级/钳制抑制恢复」：oracle 的恢复 53 在 `CM_HIT(198)` 之前已出队，同 tick 的
 /// 升级/钳制属于**后续**批次，各成一条（审计 `laneB-53dedup` D1/D2）。
+/// **F-1（review `2c5cb955`）**：`World::tick_tail` 的玩家 `SuperMan` 回满段
+/// （`BaseObject.Base.cs:32-36`）写的是**实体** `hp/mp`；而会话 `sg.state.wabil` 是本宿主的
+/// 跨 tick **投影**（oracle 里 `WAbil` 与实体是同一份对象）。
+///
+/// 相位陷阱：P21（[`drain_player_need_recheck_with_magic`]）在 `tick_tail` **之前**同步过一次
+/// 投影（那时 hp 还是挨打后的值）；`tick_tail` 才回满实体。若不补一次同步，其后的
+/// [`drain_recovery`]（P1，`BaseObject.Base.cs:44` 的 `WAbil.HP < WAbil.MaxHP` 门）与
+/// [`drain_stamina`]（P7/P8）会拿**旧投影**过门 ⇒ 回血 n18、再把低血回写实体，并多发一条
+/// oracle 不会发的 `SM_HEALTHSPELLCHANGED(53)`（oracle 回满后该门恒假 ⇒ 零 53，存档也是满血）。
+///
+/// 作用域限 `super_man`：`race == PLAY && super_man` 的写入者只有 GM `@3`（见 whitelist T-196），
+/// 非 GM 角色恒 false ⇒ 对既有路径是纯 no-op、不改变任何既有 golden。
+fn sync_super_man_wabil(
+    world: &mir2_world::World,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+) {
+    for sg in sessions.values_mut() {
+        let Some(e) = world.entities.get(sg.actor_id) else {
+            continue;
+        };
+        if !e.super_man {
+            continue;
+        }
+        sg.state.wabil.hp = e.hp;
+        sg.state.wabil.mp = e.mp;
+    }
+}
+
 fn drain_recovery(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mir2_world::World,
@@ -17908,12 +17974,7 @@ fn sim_loop(
                         // （oracle `PlayObject` 同名字段的等价物），而引擎（战斗/AOI/怪物 AI）
                         // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
                         // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
-                        if let Some(state) = ground_sessions
-                            .get_mut(&chr_name)
-                            .and_then(|sg| sg.gm.pending_entity.take())
-                        {
-                            state.apply(&mut world);
-                        }
+                        apply_pending_gm_entity(&mut ground_sessions, &chr_name, &mut world);
                     } else if cmd.ident == game_svr::ground::CM_PICKUP
                         || cmd.ident == game_svr::ground::CM_DROPITEM
                     {
@@ -20081,6 +20142,11 @@ fn sim_loop(
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
+        // **F-1（review `2c5cb955`）**：`tick_tail` 的玩家 `SuperMan` 回满段只写实体；会话
+        // `WAbil` 是投影且在 P21（tick 之前）同步过一次 ⇒ 这里立刻把投影补到回满值，
+        // 让紧随其后的 P1 恢复段（`BaseObject.Base.cs:44` 的门）与 P7/P8 体力段看到同一份
+        // 值（oracle 同一对象语义）。对非 `super_man` 角色是纯 no-op。
+        sync_super_man_wabil(&world, &mut ground_sessions);
         // **G-A（oracle P1 → P2）**：`PlayObject.Run` 的周期恢复（`:70-141`）与 `ExtraAbil`
         // 到期（`:163-227`）落在同一队列批次；两者的 `SendUpdateMsg(53)` 只保留一条 pending。
         // 次序：先恢复状态（P1）→ 再到期状态/SysMsg（P2）→ flush 53（优先级 68）→ SysMsg（252）。
@@ -29186,13 +29252,7 @@ break
             handle_say(&host, &mut self.sessions, "aaa", 901, Some(line));
             // 与生产 `sim_loop` 的 `CM_SAY` 支同一步：命令体装填的权威写在**同一事件内**
             // 落到 `Entity`（卡 `openmir2-gm-admin-mode-entity-seam`）。
-            if let Some(state) = self
-                .sessions
-                .get_mut("aaa")
-                .and_then(|sg| sg.gm.pending_entity.take())
-            {
-                state.apply(&mut self.world);
-            }
+            apply_pending_gm_entity(&mut self.sessions, "aaa", &mut self.world);
             let mut out = Vec::new();
             while let Ok(msg) = self.rx.try_recv() {
                 match msg {
@@ -29467,6 +29527,238 @@ break
             .filter(|b| frame_ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
             .map(|b| gbk_decode(&mir2_protocol::edcode::decode(&b[12..])))
             .collect()
+    }
+
+    /// **F-1（review `2c5cb955`）· 宿主相位序**：`tick_tail` 的玩家 `SuperMan` 回满段之后，
+    /// 会话 `WAbil` 投影必须被补到回满值——否则 P1 恢复段（`BaseObject.Base.cs:44` 的
+    /// `WAbil.HP < WAbil.MaxHP` 门）与 P7/P8 体力段会拿**旧投影**回血、把低血回写实体、
+    /// 多发一条 oracle 不会发的 `SM_HEALTHSPELLCHANGED(53)`。
+    ///
+    /// 场景 = 生产线：`@3` 号挨打到 0 → 下一 tick 的 `tick_head` → `sync_super_man_wabil`
+    /// （紧跟 `tick_tail`）→ `drain_recovery` → `drain_stamina`（两者都吃 `HealthFillTime=0`
+    /// 的立即回血门，等价于「到点」）。
+    ///
+    /// 牙：删 `sync_super_man_wabil` 的调用 ⇒ 实体被回写成低血（`2`）且多一条 53 ⇒ 红。
+    #[test]
+    fn gm_super_man_refill_projection_feeds_recovery_and_stamina() {
+        let mut world = mir2_world::World::new(32, 32);
+        let mut e = new_player_entity("gm".to_string(), 5, 5);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        e.hp = 0;
+        e.max_hp = 100;
+        e.mp = 0;
+        e.max_mp = 100;
+        e.super_man = true;
+        let id = world.add_entity(e);
+        // `tick_head` 处理 Enter；回满段在 `tick_tail`（oracle `base.Run:32-36`）。
+        let mut rec = world.tick_head();
+        assert_eq!(
+            world.entities.get(id).unwrap().hp,
+            0,
+            "进 tick 时是挨打后的 0"
+        );
+
+        let mut sessions = std::collections::HashMap::new();
+        let mut sg = test_session_ground(id);
+        // P21 在 `tick_tail` **之前**同步过投影 ⇒ 这里就是那份旧值。
+        sg.state.wabil.hp = 0;
+        sg.state.wabil.mp = 0;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 100;
+        // 重放游标拨到「刚好过 50ms 的 Run 边界」：`drain_stamina` 会重放**恰好一次** `Run()`
+        // （`replay_cursor += 50 <= now`）。不拨的话 `replay_cursor = 0` 而 `now` 是墙钟毫秒
+        // ⇒ 会有数百亿次空转（既有用例同样必须先拨到 `now_ms()`，见 31876 行附近）。
+        sg.stamina.replay_cursor = now_ms() - 60;
+        sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
+        sessions.insert("gm".to_string(), sg);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("a", "gm", 1, 0, 901, id));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+
+        world.tick_tail(&mut rec);
+        assert_eq!(
+            world.entities.get(id).unwrap().hp,
+            100,
+            "tick_tail 的 SuperMan 回满段（BaseObject.Base.cs:32-36）"
+        );
+        sync_super_man_wabil(&world, &mut sessions);
+
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &world, &mut slots);
+        drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 0, 0, &[]);
+        // 判定顺序：先钉「实体没被低血回写」（缺陷的直接后果 = 100 → 2），再钉「零 53」，最后钉投影。
+        assert_eq!(
+            world.entities.get(id).unwrap().hp,
+            100,
+            "P7/P8 不得把旧投影的低血回写实体（缺陷态为 2）"
+        );
+        assert!(rx.try_recv().is_err(), "回满后 `:44` 门恒假 ⇒ 零 53 帧");
+        assert_eq!(
+            sessions["gm"].state.wabil.hp, 100,
+            "投影必须看到回满值（oracle 同一份 WAbil）"
+        );
+    }
+
+    /// **F-2（review `2c5cb955`）· 生产接线点保鲜**：`sim_loop` 的 `CM_SAY` 支必须恰好一处
+    /// 调用 [`apply_pending_gm_entity`]，且**在 `world.tick_head()` 之前**（oracle 是命令体
+    /// 直接写字段，不存在延后一拍）。
+    ///
+    /// 牙：删/注释该调用（复审自造牙 D）⇒ 本用例红；把调用挪到 tick 之后 ⇒ 红。
+    #[test]
+    fn gm_entity_apply_production_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        let tick_head = lines
+            .iter()
+            .enumerate()
+            .find(|(i, l)| {
+                *i > sim_loop && l.trim() == "let mut rec = tick_world_head_with_specials("
+            })
+            .map(|(i, _)| i)
+            .expect("`sim_loop` 的 world tick 入口行");
+        let want = "apply_pending_gm_entity(&mut ground_sessions, &chr_name, &mut world);";
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| *i > sim_loop && *i < tests_start && l.trim() == want)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "`{want}` 必须在 `sim_loop` 生产体内恰好出现一次且未被注释；命中 {hits:?}             （0 = 被删/被注释/被抽走；>1 = 重复调用点）"
+        );
+        assert!(
+            hits[0] < tick_head,
+            "GM 写穿必须在 `world.tick_head()` 之前（oracle 命令体即时写同一对象）：调用 {} vs tick {}",
+            hits[0],
+            tick_head
+        );
+    }
+
+    /// **F-1 接线点保鲜**：`sync_super_man_wabil` 必须在 `sim_loop` 里、紧跟 `world.tick_tail`
+    /// 之后、且在 P1 恢复段 `drain_recovery(` 之前调用（回满后的投影要让恢复/体力段看到）。
+    ///
+    /// 牙：删该生产调用 ⇒ 本用例红（序列用例本身只证明函数语义，不证明宿主接线）。
+    #[test]
+    fn gm_super_man_refill_projection_is_wired_after_tick_tail() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        let prod = &lines[sim_loop..tests_start];
+        let want = "sync_super_man_wabil(&world, &mut ground_sessions);";
+        let hits: Vec<usize> = prod
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == want)
+            .map(|(i, _)| sim_loop + i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "`{want}` 必须在 `sim_loop` 生产体内恰好一次；命中 {hits:?}"
+        );
+        let tail = prod
+            .iter()
+            .position(|l| l.trim() == "world.tick_tail(&mut rec);")
+            .map(|i| sim_loop + i)
+            .expect("`world.tick_tail(&mut rec)` 行");
+        let recovery = prod
+            .iter()
+            .enumerate()
+            .find(|(i, l)| {
+                *i + sim_loop > hits[0]
+                    && l.trim()
+                        == "drain_recovery(&mut ground_sessions, &world, &mut healthspell_slots);"
+            })
+            .map(|(i, _)| sim_loop + i)
+            .expect("`drain_recovery` 调用行");
+        assert!(
+            tail < hits[0],
+            "必须在 `tick_tail` 之后：tail {tail} vs sync {}",
+            hits[0]
+        );
+        assert!(
+            hits[0] < recovery,
+            "必须在 P1 恢复段之前：sync {} vs drain_recovery {recovery}",
+            hits[0]
+        );
+    }
+
+    /// **m-1（review `2c5cb955`）· `AttatckMode` 的登录装载与落库**（`WorldServer.cs:1148` /
+    /// `:1296`）：记录 → `Entity`（登录）与 `Entity` → 存档（`MakeSaveRcd`）两段都要在，
+    /// 否则 `@AttackMode` 只在本会话生效、复登回旧值。
+    #[test]
+    fn gm_attack_mode_round_trips_through_login_and_save() {
+        // ① 登录：`GetHumData` → `playObject.AttatckMode`（本仓 = `Entity.attack_mode`）。
+        let mut ent = new_player_entity("hero".to_string(), 10, 10);
+        assert_eq!(ent.attack_mode, 0, "`Entity::new` 缺省 HAM_ALL");
+        let data = record::CharacterData {
+            attatck_mode: 5,
+            ..record::CharacterData::default()
+        };
+        apply_login_record_scalars(&mut ent, Some(&data));
+        assert_eq!(
+            ent.attack_mode, 5,
+            "WorldServer.cs:1148：登录即装入 AttatckMode（战斗按它分派）"
+        );
+        apply_login_record_scalars(&mut ent, None);
+        assert_eq!(ent.attack_mode, 0, "无记录 ⇒ 不置位（保持 0）");
+
+        // ② 存档：`MakeSaveRcd` 写 `playObject.AttatckMode`（本仓 = 实体值）。
+        let saved = SavedHuman {
+            account: "acct".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+        };
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("atk");
+        let id = world
+            .enter_map("atk", new_player_entity("atk".to_string(), 11, 22), 0)
+            .expect("进世界");
+        world.entities.get_mut(id).unwrap().attack_mode = 6;
+        let sg = test_session_ground(id);
+        let rec = build_save_record(&saved, "atk", &world, &sg, None);
+        assert_eq!(
+            rec.data.attatck_mode, 6,
+            "MakeSaveRcd :1296：存档写 playObject.AttatckMode（@AttackMode 不再登出即丢）"
+        );
+    }
+
+    /// **m-2（review `2c5cb955`）**：命令对象在 oracle 里就是那个 `PlayObject`，**Ghost 与否都写
+    /// 同一字段**。本仓 `play_by_name` 会滤 `Ghost` ⇒ 写穿改用宿主给的说话者 `ActorId`
+    /// （`GmWorld::speaker_id`），Ghost 说话者同样落到 `Entity`。
+    ///
+    /// 牙：把 `entity_write` 改回按名查找 ⇒ 本用例红（`admin_mode` 停在 false）。
+    #[test]
+    fn gm_command_from_ghost_speaker_still_writes_entity() {
+        let mut rig = GmRig::new();
+        rig.world.tick();
+        rig.world.entities.get_mut(rig.actor).unwrap().ghost = true;
+        let frames = rig.say_gm("@1");
+        assert_eq!(texts_of(&frames), vec!["已进入管理员模式".to_string()]);
+        assert!(
+            rig.world.entities.get(rig.actor).unwrap().admin_mode,
+            "Ghost 说话者（oracle 命令对象仍写同一字段）也必须落到权威 Entity"
+        );
     }
 
     /// `@时间`（`DataCommand`）：`SysMsg(当前日期时间: yyyy-MM-dd HH:mm:ss, Blue, Hint)`
