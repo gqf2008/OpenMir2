@@ -157,7 +157,7 @@ ChangePkStatus 的调用点（三处，方向两 false 一 true）
    `GuildMgr.FindGuild` 命中 + 日期可解析，`UserCastle.cs:242-284`；`Run()` 只认 `Year/Month/Day` 相同的条目，`:350-354`）。
    —— 这是**替代 B1（玩家申请链抛异常）** 的唯一合法姿势，不是「修 bug」。
 3. **多会话**：≥2 个客户端（守卫三态/四路落点/商人可见性都要「另一个玩家」在视野里）。
-   仓库里多会话探针仍在办（`card/openmir2-multi-session-probe`），当前 `card_window.py` 每侧只起一个 probe。
+   多会话探针的**断言面已合入**（卡 `card/openmir2-multi-session-probe`，master `2a5101606`：`mir2_probe.py` 的 `recipients(..., sessions=/statuses=)`、`online_sessions()`）；它只加强「多会话收件人断言」，**不负责起第二个客户端**——当前 `card_window.py` 每侧仍只起一个 probe。（**2026-10-24 订正**：原文写「多会话探针仍在办」，该卡已合入。）
 
 **结论**：R6 的门槛是「内容冻结面 + 构建面 + 多会话工具」三件事，不是一张场景卡能解决的；
 本卡按卡面要求只做**显式登记**，不编造一条「只在新月之夜能跑」的路。

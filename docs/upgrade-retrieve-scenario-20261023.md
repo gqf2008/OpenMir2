@@ -295,7 +295,7 @@ CheckItems(BlackStone) != null-> 部署 BlackStone=黑铁矿（Server.conf:87）
    steps 之间只 `time.sleep` 不 pump，`mir2_probe.py:1153-1156`）⇒ 第 12 步可能匹配到第 8 步缓冲的结果 say。
    不影响成败（硬门在 `wait_idents 709/200`），但证据归属会指错帧。根治需 wait 支持 recog/body 过滤或「发送后新帧」口径，
    归 `openmir2-probe-scenario-validation-gaps`。
-4. **背包夹具不支持**（runbook §1.5 末段）—— 武器/金币/黑铁矿仍靠手工 DB 夹具；归属 **`openmir2-window-inventory-fixture`**（订正：原写 `openmir2-discovery-bagitems-201`）。
+4. **背包夹具：工具已支持，本场景尚未声明**（runbook §1.6「声明即可」）——**2026-10-24 订正**：工具随 `bb4317a01` 支持场景顶层 `inventory`，本场景仍靠手工 DB 夹具只是因为**尚未写 `inventory` 声明**；且夹具卡 `openmir2-window-inventory-fixture` 的 acceptance ④（真库写入·读回）未跑、卡保持 `window_required=true` 不 closed。归属 **`openmir2-window-inventory-fixture`**（原写 `openmir2-discovery-bagitems-201` 的归属亦已订正）。
 5. **窗口成本**：≥11 分钟/侧，profile **`probe_timeout_ms`** >= 720000（§4.5；订正：原写 `timeout_ms`）。
 6. **`UPGRADEITEMEX` 链未覆盖**（§5.2 第 3 条），建议另开场景。
 7. 本卡只在 worktree 内跑离线工具（`--check-scenario`/`--selftest`/`--dry-run`），**零起栈、零连库、零端口**；

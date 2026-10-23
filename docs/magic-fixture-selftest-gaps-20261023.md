@@ -86,5 +86,5 @@ rc=1
 ## 5. 边界与残留
 
 - 未改 `src/**`、`rules.json`、`scenarios/*.json`；未起栈、未连库、未占端口。
-- 未合并、未自签 review、未删 worktree。
+- 未合并、未自签 review、未删 worktree。**2026-10-24 订正**：本卡已合入 master `e115339e3`（approve reviewer-6 `7a9b847a`，closed）；上句为交卡时状态。
 - 与在审的 `openmir2-window-inventory-fixture` 同写集（`card_window.py`）：本分支从 master `ed4dd05c6` 起；若合并时冲突，按「保留两边」解（本卡改动集中在 `run_magic` 的 SHOW COLUMNS、magic 桩、selftest 末尾 MG-7）。

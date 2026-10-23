@@ -124,10 +124,10 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
    用旧二进制跑出来的对拍结论没有意义，**而且它不会报错**——只会给你一份看起来正常的报告。
    做法：**在你要起栈的那棵树里**跑 `cargo build --release -p mir2-server`，再跑一次 `-WhatIf`（命令见 §0.5 第 1 步），
    **必须看到 `\target\release\mir2-server.exe`**；看到 `\debug\` 就停下先构建（`start_mir2_server.ps1:285-290` 是 release 缺失**静默退 debug**）。
-   `-WhatIf` **只打印路径、不打印 sha256**（`:349`）⇒ sha 自己算：`Get-FileHash -Algorithm SHA256 <SERVER_EXE>`（或 `sha256sum`），写进本次 `README.txt`。
+   `-WhatIf` 现在会打印 **`SERVER_EXE` / `SERVER_EXE_SHA256` / `SERVER_EXE_BUILD` 三行**（`start_mir2_server.ps1:381`）——**2026-10-24 订正**：原文写「只打印路径、不打印 sha256（`:349`）」已过期（`openmir2-start-server-whatif-sha` 之后工具升级）；把这三行写进本次 `README.txt`。
    **注意解析口径**：`SERVER_EXE` 相对**脚本所在仓库**解析（`:286` `$PSScriptRoot\..\..`），而 profile 的 `stack` 指向 `E:/tmp/conformance/start-rust.ps1`，
    后者把脚本路径**写死成主检出** ⇒ 在 worktree 里预览到的二进制可能与真窗口不同；**以起栈后 `mir2-server.pid.json` 的 `roles[].exe` 为准**（工具已对账，不符 rc=2）。
-   （订正：原文写「核对它打印的 SERVER_EXE 路径与文件的 sha256」——脚本不打印 sha；也没说清解析是相对脚本仓库。）
+   （订正：原文写「核对它打印的 SERVER_EXE 路径与文件的 sha256——脚本不打印 sha」；**2026-10-24 复核**：脚本**已打印 sha256**（`:381`），但「`SERVER_EXE` 相对脚本所在仓库解析」这一点仍成立。）
    **下一次真窗口（`alt` profile）核对 pid 的文件就是
    `E:/tmp/conformance/rust-logs/mir2-server.pid.json`**（= `E:/tmp/conformance/start-rust.ps1` 的
    `-LogDir`，**不是** `<out>/rust/`）。该路径只由 profile 的 `sides.rust.pid_file` 声明，代码里没有兜底

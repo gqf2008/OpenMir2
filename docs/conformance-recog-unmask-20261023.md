@@ -170,4 +170,4 @@ python -I -B tools/conformance/compare_runs.py --oracle .../o42 --rust .../r42 \
 
 - `E:/tmp/worker66-scratch/recog-demo/`：改前/改后与牙②的合成产物、报告与临时规则副本（仓库外；可整目录删除）。
 - 未起栈、未连库、未占端口。
-- 分支 `card/rules-recog-unmask` 已推 walgit；未合并、未自签 review、未删 worktree。
+- 分支 `card/rules-recog-unmask` 已推 walgit；未合并、未自签 review、未删 worktree。**2026-10-24 订正**：本卡已合入 master `b42f20a28`（卡 `openmir2-conformance-rules-recog-unmask`，approve reviewer-5 `98f6b49a`，closed）；上句为交卡时状态。

@@ -311,7 +311,7 @@ ybdeal-frames），**1 张（`conformance-rng-nondeterminism`）没有**、只�
   B 片由 `openmir2-gm-batch-5b-cross-server` 承接（**已合 `99a4d30c4`，保持 blocked-by G11**）、
   C 片部署 `GMEXECUTE` 0 命中登记不实现。
 - **登记质量未审**：`window_required 122` 这个桶从未审计过「判据是否机器可判」——
-  卡 `openmir2-window-criteria-quality-audit` 在办（30 张抽样、三档定性）。
+  卡 `openmir2-window-criteria-quality-audit` 在办（30 张抽样、三档定性）；**2026-10-24 订正**：该卡已合入 master `5a6ed54c1`（返工 v2，纯 docs，tier=L），不再「在办」。
 
 ⇒ **条件② 仍差的两件事都在 owner 手里**：① 真机窗口授权（`docs/needs-human-20261023-night.md` §1）；
 ② `rules.json` 43 条 PENDING（其中 ident 14 需单独裁定，§2）。

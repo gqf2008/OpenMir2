@@ -71,7 +71,7 @@
   B 片由 `openmir2-gm-batch-5b-cross-server` 承接（blocked-by G11）、C 片部署 0 命中登记不实现。
 
 **你开窗时的执行依据**换成了 `docs/window-batch-plan-20261023.md`（卡 `openmir2-window-batch-plan-refresh`
-在更新它）：它会给出「现在就能跑」与「现在跑也没用」两份清单——**后者比前者更重要**，
+更新它；**2026-10-24 订正**：该刷新已合入 master `ccf74b2b4`）：它会给出「现在就能跑」与「现在跑也没用」两份清单——**后者比前者更重要**，
 因为 BLOCKED/不可达的场景即使跑绿也不能当证据（`combat_strike` R3 13 张、`castle_zone` 4 张、
 `spell_cast` R5 8 张（已解封，但 Rust 魔法未接仍不可跑）、`equip_struck_save` 1 张、`upgrade_retrieve` 4 张）。
 

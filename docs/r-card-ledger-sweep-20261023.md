@@ -14,7 +14,7 @@
 | **A 已具备登记**（已补 `status: in-progress`，窗口项写进 `work`） | 107 |
 | **B1 无需窗口**（只发 comment 建议 closed，未改状态） | 1 |
 | **B2 真等窗口但缺登记**（只发 comment，保留 in-progress） | 35 |
-| **U 未合并 / 等返工**（纠正性 status，恢复 needs-review） | 1 |
+| **U 未合并 / 等返工**（纠正性 status，恢复 needs-review） | 1 → **0**（**2026-10-24 订正**：该卡已合入 master `65a8af8d6`） |
 | SKIP「有人在跟」<1h（只登记不动作） | 3 |
 | 无 tier 声明的 merged-not-closed（附录 A，未动作） | 16 |
 | 实发条目 | 144（另 +1 条 F-1 纠正） |
@@ -167,7 +167,7 @@
 | 135 | `openmir2-sm-closehealth-wire` | A | approve.window_required=true；whitelist T-177,T-79,T-89；线程提及 T-174,T-183,T-36（review 正文，宽口径） | `f55ebe4ec02abe09d1c691c4a7101cbcc5cecaa2` | 1792696829 |
 | 136 | `openmir2-unbindlist-consumer` | A | approve.window_required=true；线程提及 T-17（review 正文，宽口径） | `59b95691d3433a8f361c7b373692a9f5a84ee388` | 1792698704 |
 | 137 | `openmir2-setoffline-field-writeback` | A | approve.window_required=true；whitelist T-100,T-86 | `3e386a8ad569bc60a355c9090d5004490dc571e0` | 1792699799 |
-| 138 | `openmir2-monster-showhp-53-broadcast` | **U（未合并/等返工）** | **无 merge_result；patch head 7721c8bbc/5e29dc369 均非 master 祖先；最近 review=request_changes（R3-1/R3-2 Important）**；窗口项自 patch body 摘录 | `ffc6f32b248b9db81df50f6ba9523c1a2029351b`（纠正）；原误判条目 `0f711d85` | 1792700946 |
+| 138 | `openmir2-monster-showhp-53-broadcast` | **U（未合并/等返工）** | **（2026-10-24 订正：已合入 master `65a8af8d6`，approve reviewer-2 `593ae8bf`，tier=R 保持 in-progress）原判据（2026-10-23 时点）：无 merge_result；patch head 7721c8bbc/5e29dc369 均非 master 祖先；最近 review=request_changes（R3-1/R3-2 Important）**；窗口项自 patch body 摘录 | `ffc6f32b248b9db81df50f6ba9523c1a2029351b`（纠正）；原误判条目 `0f711d85` | 1792700946 |
 | 139 | `openmir2-gamesvr-serverinfo-report` | A | approve.window_required=true；whitelist T-101,T-6,T-7,T-8,T-9；线程提及 T-1,T-2,T-3,T-4,T-5,T-65（review 正文，宽口径） | `ffce97c44a3408a427c48604dae7088bdd8ac839` | 1792701044 |
 | 140 | `openmir2-setmapmode-dechp` | A | approve.window_required=true；whitelist T-85 | `93fa31b3f7d1a57d39f302bf3f4afe24e7a9b2f6` | 1792705282 |
 | 141 | `openmir2-gm-batch-4-numeric` | A | approve.window_required=true；whitelist T-174,T-179,T-186,T-187,T-188,T-189,T-190,T-191；线程提及 T-172,T-173,T-175,T-176,T-177,T-178,T-183,T-184（review 正文，宽口径） | `aa3078317cf522f7833d875f41edbbde11fa04d5` | 1792705514 |
@@ -232,7 +232,7 @@ A 类每条 `status.work` 形如：
 | `openmir2-db-error-reply` | 余量：真机窗口（失败注入的 C# 对拍）。 |
 | `openmir2-save-misc-gaps` | 余量：真机窗口；G11 传输面未移植；G7 读到一半失败未构造。 |
 
-## 4b. U 类：未合并 / 等返工（1 张，复审 F-1 纠正）
+## 4b. U 类：未合并 / 等返工（1 张，复审 F-1 纠正；**2026-10-24 订正：现为 0 张——该卡已合入 master `65a8af8d6`**）
 
 `openmir2-monster-showhp-53-broadcast` 此前被 sweep 误判为 A（依据是某条 review 带 `window_required:true`，但那条不是 approve）。复审实测：
 
@@ -242,7 +242,7 @@ A 类每条 `status.work` 形如：
 
 已补纠正性 status `ffc6f32b248b9db81df50f6ba9523c1a2029351b`：owner 保持 `openmir2-worker-4`、worktree `wt-probe`、branch `showhp53`，**status 恢复 `needs-review`**，并写明「此前 sweep 条目误判为已合并，本条目纠正」；真实窗口项从 patch body 摘录为「观察者帧集合 / ±12 边界 / 与 1100 同时段顺序」。
 
-**全量同型扫描**：对 144 张 sweep 卡逐卡重读线程，判据「有 patch 且 patch head 非 master 祖先且无 merge_result」⇒ **仅此 1 张**；其余 143 张均有 `merge_result`（其中 142 张的原始 patch head 因 rebase/重放不是当前 master 祖先，但 merge_result 在场，不算未合并）。
+**全量同型扫描**：对 144 张 sweep 卡逐卡重读线程，判据「有 patch 且 patch head 非 master 祖先且无 merge_result」⇒ **仅此 1 张**（**2026-10-24 订正：2026-10-24 时点已为 0——该卡已合并，见上**）；其余 143 张均有 `merge_result`（其中 142 张的原始 patch head 因 rebase/重放不是当前 master 祖先，但 merge_result 在场，不算未合并）。
 
 ---
 

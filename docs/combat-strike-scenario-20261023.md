@@ -460,7 +460,7 @@ nDamage = max(0, nPower - nArmor)
 
 ## 10. 残留项（只登记，不改）
 
-1. **`rules.json` 缺 `31`（`SM_STRUCK`）** —— 已另开卡 **`openmir2-conformance-rule-sm-struck-31`** 在办。
+1. **`rules.json` 缺 `31`（`SM_STRUCK`）** —— 已另开卡 **`openmir2-conformance-rule-sm-struck-31`** 在办。（**2026-10-24 订正**：本条已过期——`rules.json` 现含 ident 31 的窄掩码（master `57302d3df`），该卡已 `closed`（approve reviewer-1 `38b40efc`）。注意「比较器能判 31」≠「Rust 生产侧出这条帧」；`combat_strike` 场景本身仍 `blocked`（`2a69cd6e0`）。）
    在它落地前本场景**不能**作为窗口输入：未登记 ident 一出现就 `UNCLASSIFIED` ⇒ 整次窗口 `UNDECIDABLE(rc=2)`
    （`docs/window-runbook-20261023.md` §1 第 5 条）。`31` 头是 `(受击者, HP, MaxHP, 伤害)`，HP/伤害随 RNG 变，
    应做**字段窄掩码**而不是整帧 ignore。`tools/conformance/` 不在本卡写集。
