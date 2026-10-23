@@ -691,6 +691,9 @@ def _check_inventory(inv):
                 raise ScenarioError("%s.%s must be an int, got %r" % (where, key, v))
             if v < 0 or v > 0xFFFFFFFF:
                 raise ScenarioError("%s.%s out of range: %r" % (where, key, v))
+        note = item.get("note")
+        if note is not None and not isinstance(note, str):
+            raise ScenarioError("%s.note must be a string, got %r" % (where, note))
         pos = int(item["position"])
         if pos > 45:
             raise ScenarioError("%s.position=%d out of range (0..45)" % (where, pos))
@@ -2217,6 +2220,8 @@ def _selftest_scenario_inventory():
             ({"inventory": [{"index": 1, "make_index": 0, "position": 1}]}, "make_index"),
             ({"inventory": [{"index": 1, "make_index": 5, "position": 1},
                             {"index": 2, "make_index": 5, "position": 2}]}, "duplicated"),
+            ({"inventory": [{"index": 1, "make_index": 1, "position": 1,
+                             "note": 123}]}, "note"),
         ]
         for body, needle in bad_cases:
             err = None
@@ -2226,7 +2231,7 @@ def _selftest_scenario_inventory():
                 err = str(ex)
             assert err is not None, "load_scenario accepted bad inventory: %r" % (body,)
             assert needle in err, (needle, err)
-        return "inventory 形状 8 项"
+        return "inventory 形状 9 项（含 note 类型）"
     finally:
         try:
             os.unlink(path)
@@ -2760,8 +2765,10 @@ def _selftest_wait_recog_filter():
 
 def run_selftest():
     fails = []
+    checked = [0]
 
     def check(name, fn):
+        checked[0] += 1
         try:
             detail = fn()
             print("  [ok] %-24s %s" % (name, detail if detail is not None else ""))
@@ -2792,7 +2799,8 @@ def run_selftest():
         for f in fails:
             print("  -", f)
         return 2
-    print("mir2_probe selftest: OK (11 checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)")
+    print("mir2_probe selftest: OK (%d checks; fixtures replayed at 1/2/3/5/7/11/13/17/64-byte chunks)"
+          % checked[0])
     return 0
 
 

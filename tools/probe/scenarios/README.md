@@ -98,9 +98,11 @@ python tools/probe/mir2_probe.py \
 - **可选**：`std_mode` / `ani_count`（声明时必须与 `mir2_data.stditems` 模板一致，不符 ⇒ 该侧 rc=2）、
   `dura` / `dura_max` / `note`。
 - **fail-closed（加载期，`mir2_probe` 与 `card_window` 同口径）**：非空数组、项为对象、未知键、
-  非整数/bool、`position` 越界或重复、`make_index<=0` 或重复 ⇒ rc=2 并点名。
-- **运行期 fail-closed（`card_window`）**：目标角色不存在/多行、模板不存在、`std_mode`/`ani_count` 与模板不符、
-  声明槽位原本非空、写后行数/指纹不符 ⇒ rc=2 点名（dry-run 也会在预览阶段报出）。
+  非整数/bool（`note` 必须是字符串）、`position` 越界或重复、`make_index<=0` 或重复 ⇒ rc=2 并点名。
+- **运行期 fail-closed（`card_window`，只能真跑）**：目标角色不存在/多行、模板不存在、
+  `std_mode`/`ani_count` 与模板不符、声明槽位原本非空、写后行数/指纹不符 ⇒ rc=2 点名。
+  **`--dry-run` 只做离线前置（`envir_root` / 库名与库配对 / 客户端参数）**：它不查模板、角色、槽位或行数，
+  所以 dry-run rc=0 只证明「声明形状合法且能打印预览行」，**不能**证明夹具真能用。
 - **dry-run**：两侧各打一行「背包夹具（dry-run 不连库）：db=… 声明 N 件 positions=… make_index=… 角色=…」；
   没有这一行就说明该场景**没有** inventory 声明（不是夹具已就绪）。
 - **与 `required` 的关系**：`inventory` 只保证「背包里有这件物品」；C2S 用的 `make_index`/`item_name`
@@ -361,7 +363,7 @@ python tools/probe/mir2_probe.py --selftest
 
 `--selftest` 用 `../fixtures/r9/` 的离线 s2c 抓包跑「切帧 -> 解析 -> 落 ndjson」全链路，
 不连网、不起进程；含「改坏必红」的负向用例（载荷字节改成越界值必须报错）。
-当前共 **11 checks**；`wait-recog-filter` 用**合成帧流**（同 ident、`recog`=自己 vs 他人）断言：
+当前共 **13 checks**；`wait-recog-filter` 用**合成帧流**（同 ident、`recog`=自己 vs 他人）断言：
 带 `recog_is=self/other` / 精确 `recog` 时只认匹配来源，**不带过滤时两者都算命中**（旧语义兼容），
 并覆盖三种等待动作、加载期互斥/非法值/未知键 rc=2、运行期未知自身 ActorId 的 fail-closed。
 其中 `scenario-validation` 覆盖 `--check-scenario` 的语义牙（R1–R6：
