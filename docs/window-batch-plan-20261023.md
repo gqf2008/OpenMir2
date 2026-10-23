@@ -156,8 +156,8 @@
 
 | # | 卡 id | 状态 | 窗口项要点 | 场景 | 前置 / 说明 |
 |---:|---|---|---|---|---|
-| 1 | `openmir2-delmagic-addmagic-chain` | in-progress | 登录后 characters_magic 行消失/新增与 212/210 真机字节与序；会话内戴上 115 即发 210 / 打碎治愈戒指即发 212（共 3 项） | bag_equip | 缺 SM_BAGITEMS(201) 发现规则（既有 discovery-rules 卡不覆盖 ⇒ 需新开卡） |
-| 2 | `openmir2-unbindlist-consumer` | in-progress | 真机客户端：吃一个 StdMode31/AniCount0 捆装包 ⇒ 客户端依次收到 6 条 SM_ADDITEM(200)（Recog=…；断线存档：hum_items（等价存档）含解包出的 6 件（MakeIndex 逐件递增、Dura=DuraMax=tpl.DuraMax、…（共 3 项） | eat_item | 同上；另需 StdMode31/AniCount0 捆装包夹具 |
+| 1 | `openmir2-delmagic-addmagic-chain` | in-progress | 登录后 characters_magic 行消失/新增与 212/210 真机字节与序；会话内戴上 115 即发 210 / 打碎治愈戒指即发 212（共 3 项） | bag_equip | SM_BAGITEMS(201) 发现规则**已落地**（`openmir2-discovery-bagitems-201`，构造级 `check-all` rc=0）；**剩余前置** = 非空背包的录制/夹具（背包预置尚未接进 `card_window.py`） |
+| 2 | `openmir2-unbindlist-consumer` | in-progress | 真机客户端：吃一个 StdMode31/AniCount0 捆装包 ⇒ 客户端依次收到 6 条 SM_ADDITEM(200)（Recog=…；断线存档：hum_items（等价存档）含解包出的 6 件（MakeIndex 逐件递增、Dura=DuraMax=tpl.DuraMax、…（共 3 项） | eat_item | 规则同 `bag_equip`（已落地，构造级）；另需 StdMode31/AniCount0 捆装包夹具 |
 
 ### 3 · 第 3 批 · 需新帧 / 新场景 / 新夹具（含前置未清的夹具卡）（81 张）
 
@@ -324,7 +324,7 @@
 
 | 缺口 | 影响卡 | 建议 |
 |---|---|---|
-| **`SM_BAGITEMS(201)` 发现规则**（`make_index`/`item_name`/`takeon_where`） | `delmagic-addmagic-chain`、`unbindlist-consumer`，以及一切 `bag_equip`/`eat_item` 场景 | `window-runbook §4.5` 只写了「需 SM_BAGITEMS(201) 规则，本版未实现」；`openmir2-window-discovery-rules` 的范围只有 move/king/combat ⇒ **需新开一张规则卡**（写集 `tools/probe/`） |
+| ~~**`SM_BAGITEMS(201)` 发现规则**~~（`make_index`/`item_name`/`takeon_where`） | `delmagic-addmagic-chain`、`unbindlist-consumer`，以及一切 `bag_equip`/`eat_item` 场景 | **已落地**：卡 `openmir2-discovery-bagitems-201`（`param_discovery.py` 的 201 规则族 + 合成帧夹具；`bag_equip`/`eat_item` 在合成 201 帧上 `check-all` rc=0）。**剩余前置**：真实录制里至今**没有一条 201**（`E:/tmp` + `E:/MirServer` 下 798 份 `frames.ndjson` 实测 0 命中）⇒ 需要一次**非空背包**的 discovery run / 背包 DB 夹具，见 `window-runbook §4.5.1` |
 | **多会话/多观察者驱动器**（≥3 会话、可摆放 ±12 格边界静止号） | 第 4 批里 11 张收件人集合类 | 需新开「窗口多会话探针」卡；否则这 11 张永远只能构造级 |
 | **C# 时钟注入**（HUtil32.GetTickCount / DateTime.Now） | `m3-clock-injection`、`m3-castle-gold-tax`、`m3-scoped-diff-ability` | 已在 `m3-clock-injection` 卡上，需 owner 裁决三选一 |
 | **DB 故障注入**（停机/半失败/慢存档） | `db-error-reply`、`dbsrv-fault-paths`、`dbsrv-scheme-a` | 需新开故障注入夹具卡（纪律禁止真停 mysqld） |

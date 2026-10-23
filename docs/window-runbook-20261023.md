@@ -83,9 +83,14 @@
 - `grep -n 'ident=' docs/ <卡相关文档>`：**帧号写错没有机器守卫**——今天出过 `ident=769`（实为 `SM_GUILDMAKEALLY_FAIL`）而真帧是 `767`（`SM_MENU_OK`）的事故。写窗口项时**帧号必须同时给 `SM_` 名字**。
 - 场景文件里 `--var` 的值必须来自**发现**，不是 `params` 里的默认值（`dice_chain` 的 `npc_actor=119` 就是硬编码默认值，不计入发现能力）。
 
-## 4.5 参数发现覆盖 12/15 —— 决定窗口战役能先推多少
+## 4.5 参数发现覆盖 14/15 —— 决定窗口战役能先推多少
 
 > 2026-10-23 更新（卡 `openmir2-window-discovery-rules`）：规则表 4 条 → **5 条规则**（+ `npc_actor` 一条退化规则），另加 **1 类 computed**。
+>
+> 2026-10-23 晚更新（卡 `openmir2-discovery-bagitems-201`）：新增 **`SM_BAGITEMS(201)` 规则族**
+> （`make_index` / `item_name` / `takeon_where`，三变量取自**同一个**物品槽）⇒ 覆盖 12/15 → **14/15**。
+> **注意**：该规则目前只有**构造级**证据（合成 201 帧 + oracle 布局），现有 **798 份** `frames.ndjson`（`E:/tmp` + `E:/MirServer` 全扫）里**一条 201 都没有**
+> （登录期背包为空 ⇒ oracle `ClientQueryBagItems` 不发帧），真机验证要等一次**非空背包**的录制。
 
 `param_discovery.py` 的规则表有 **5 条规则**：`self_x` / `self_y`（SM_LOGON 的 param/tag）、
 `merchant_actor` / `npc_actor` / `king_actor`（SM_MERCHANTSAY(643).recog；`npc_actor` 另有一条 `SM_TURN` 退化规则），
@@ -98,7 +103,8 @@
 | `rule` | 退化规则 = 部署假设（点错就响亮超时） | ❌ |
 | `computed` | 场景声明 + 已推导量的**确定性算术**（不是猜值） | ❌（另外记录，见 `discovered.json` 的 `kind`） |
 
-对照 15 个场景的 `required`（2026-10-23 实测，`--allow-missing=3` 时 rc=0）：
+对照 15 个场景的 `required`（2026-10-23 实测；201 规则落地前 `--allow-missing=3` 时 rc=0，
+201 规则落地后构造级帧上 **`--allow-missing=1` 时 rc=0**，只剩 `combat_hit`）：
 
 | 场景 | required | 发现能否覆盖 |
 |---|---|---|
@@ -107,16 +113,17 @@
 | `pickup_item` | self_x, self_y | ✅（derived，SM_LOGON） |
 | `king_dialog` / `king_castle_war` | king_actor | ⚠️ **rule（部署假设，不计入发现能力）**：643 只证明「该 actor 应答了点击」，**不证明是国王**——仓库里全部 643 录制都是赌场庄家（`〖庄〗…@kaiz`），且默认 discovery 点的是「最近的非自己 `SM_TURN`」（录制里就是庄家），**没有可执行步骤能让 discovery 点中国王**。点错的后果是末步响亮超时（`@@buildguildnow` 只存在于`比奇国王-0122.txt`，查不到 label ⇒ 零帧） |
 | `move_walk` | move_x, move_y | ✅（**computed**：`self_x+1` / `self_y+0`，delta 写在场景 JSON 的 `computed` 里） |
-| `bag_equip` | make_index, takeon_where, item_name | ❌ 需 `SM_BAGITEMS(201)` 规则 + `takeon_where` 来源，本版未实现 |
-| `eat_item` | make_index, item_name | ❌ 同上 |
+| `bag_equip` | make_index, takeon_where, item_name | ✅（**derived，201**）：三变量取自同一槽——`MakeIndex`@100 / `Name`@0（帧里就有，不查 StdItems）/ `StdMode`@15 → `ItemLocation`（`M2Share.CheckUserItems` 逆表） |
+| `eat_item` | make_index, item_name | ✅（**derived，201**）：同一个「首个可食用槽」的 `MakeIndex`@100 + `Name`@0 |
 | `combat_hit` | target_x, target_y, hit_dir | ❌ **需新帧/新场景**：目标是**实体**，当前录制里没有任何一帧报出「附近怪物在第几格」。已知的唯一近似来源 `SM_TURN(10).param/tag` 是**转身者自己**的坐标（`BaseObject.cs:1375 SendRefMsg(RM_TURN, Dir, CurrX, CurrY, …)`），且帧里不区分怪物/NPC ⇒ 不能拿它冒充。缺的是一帧「AOI 出现/实体位置」且带种族或对象类型的字段；`hit_dir` 还要能算 `GetNextDirection(self, target)`（`M2Share.cs:299`） |
 | `dice_chain` / `dice_chain_auto` / `gm_batch` / `gm_time` / `login_only` / `npc_click_auto` | 无 required | 直接可跑（6 个，已实测 `--check-scenario` 全 rc=0；`dice_chain` 绿来自 `params` 硬编码默认值，**不算发现**） |
 
-⇒ **规则表落地后，`check-all` 能覆盖 12 个场景**（3 derived + 2 rule + 1 computed + 6 无 required）；
-其中 `king_*`（2 个）与 `move_walk`（1 个）是本次新解锁的。`move_walk` 的 `computed` 已接进 `card_window.py`（见下方「接线」）；`king_*` **能跑但不该算绿**——`king_actor` 是部署假设（rule），
+⇒ **规则表落地后，`check-all` 能覆盖 14 个场景**（5 derived + 2 rule + 1 computed + 5 no_required + 1 params_default）；
+其中 `king_*`（2 个）与 `move_walk`（1 个）由 `openmir2-window-discovery-rules` 解锁，
+`bag_equip` / `eat_item`（2 个）由 `openmir2-discovery-bagitems-201` 解锁（构造级，见 §4.5.1）。`move_walk` 的 `computed` 已接进 `card_window.py`（见下方「接线」）；`king_*` **能跑但不该算绿**——`king_actor` 是部署假设（rule），
 默认 discovery 推出来的是庄家，真跑会在末步超时（响亮失败），要让它真绿必须先有「点中国王」的 discovery 场景/步骤。
-另外 3 个（`bag_equip` / `eat_item` / `combat_hit`）要等新规则/新帧。
-所以「②45 次参数化 run」**第一批按这 12 个推**，
+只剩 `combat_hit`（1 个）要等「AOI 实体位置 + 对象类型」的新帧。
+所以「②45 次参数化 run」**第一批按这 14 个推**，
 其余按「缺哪个变量 → 补哪条规则/哪个帧」逐条开卡，不要笼统地指望发现工具。
 
 `computed` 的判据形态（复审要能复算）：
@@ -128,6 +135,44 @@
 - 没有 `computed` 声明（单变量推导入口）⇒ 该类变量照旧 missing。
 - `mir2_probe` 不读 `computed`（声明性注记，不是步骤 DSL），但顶层可选键放行，否则带声明的场景会被 `unknown key(s)` 拒绝。
 
+### 4.5.1 `SM_BAGITEMS(201)` 规则族（卡 `openmir2-discovery-bagitems-201`）
+
+**oracle 帧体**（`src/M2Server/Player/PlayObject.Operate.cs:38-64 ClientQueryBagItems()`）：
+
+```
+header: MakeMessage(SM_BAGITEMS(201), ActorId, 0, 0, ItemList.Count)   // series = 背包物品数
+body  : EDCode.EncodeBuffer(ClientItem) + '/'  × ItemList.Count        // 逐项、无分隔前缀
+```
+
+每条 `ClientItem` 记录是**定长 124B**（`src/OpenMir2/Packets/ClientPackets/ClientItem.cs WritePacket`），
+关键偏移：`Name`@0（`WriteAsciiString(ItemNameLen=14)` = 1B 长度 + 14B 定长 GBK）、`StdMode`@15、
+`MakeIndex`@100（i32 LE）。**帧里没有 StdItem 的 `Index`**（客户端靠 Name 识别物品；服务端
+`ClientTakeOnItems`/`ClientUseItems` 也是 MakeIndex + GetItemName 双匹配）⇒ 「MakeIndex 取成 Index」
+在线上不可能发生，`item_name` **不需要查 `StdItems` 表**。旁证：M3 实测 `SM_BAGITEMS body_len=668`
+= 4 × (166B 编码 + 1B `'/'`)，与 124B 记录一致。
+
+**取哪个物品（显式、确定、不随机）**：只看**首条** 201（槽序 = `ItemList` 序）：
+`required` 含 `takeon_where` ⇒ **首个可装备槽**（`StdMode` 在 `M2Share.CheckUserItems` 槽表里）；
+否则 ⇒ **可食用槽**（`StdMode ∈ {0,1,2,3,4,31}`，`ClientUseItems` 的 switch 分支），并按**固定价值次序**
+`StdMode31 & AniCount!=0`（QFunction `@StdModeFunc<N>` 有脚本，exec-seams ② 路的判据包）→
+`StdMode31 & AniCount==0`（解包）→ 药（0/1/2/3）→ 书（4），同档次序取最小槽。
+**`AniCount` 在帧里**（记录偏移 18），所以这条优先级不需要额外信息。
+`make_index`/`item_name`/`takeon_where` 一次 derive 只选一次 ⇒ **三个 `--var` 必然同槽**。
+无候选 ⇒ missing（不退回「随便取一个」）。
+
+**`takeon_where` 的来源**：`StdMode` → `ItemLocation` 逆表（`M2Share.CheckUserItems`，
+`src/M2Server/M2Share.cs:376-458`）；同 StdMode 多槽时取**最小槽号**
+（24/25/26 → ArmRingl(5)，25 虽然也能进 Bujuk(9)）。CM_TAKEONITEM 的 `nParam2` 就是这个槽号
+（`PlayObject.Message.cs:820-821`）。
+
+**局限（真机前必读）**：
+1. **待真实录制验证**：现有录制无 201 ⇒ 规则只有构造级证据；真机需要一个**非空背包**的 discovery run
+   （背包夹具仍走手工 DB 或后续卡，`card_window.py` 本期未接背包预置）。
+2. **跨侧一致性**：`make_index` **不在** `card_window.py` 的 `SESSION_SCOPED_VARS` 里 ⇒ 两侧 `MakeIndex`
+   不同会被判 `value_mismatch` rc=2。两侧库由同一基线克隆且 `characters_bagitem.MakeIndex` 是从库读回的
+   （`PlayDataStorage.Query.cs:404-425`）时两侧相同；若某侧在会话里**新造**物品（GM/掉落）则两侧必然不同，
+   那时要么把 `make_index` 加进会话作用域（改 `card_window.py`，另卡），要么先做背包夹具对齐。
+
 **接线（`card_window.py`，已完成）**：`scenario_computed()` 读场景的 `computed` 声明 → `discovery_cfg`/`side_ctx`
 携带 → `derive_from_frames(frames, required, computed)` → 两处调用点（真跑 `run_side` + `--dry-run` 回放）透传。
 证据：`card_window --selftest` 的 DISC-9（两侧 `self_x` 钉 7 ⇒ 两侧 `--var move_x=8 move_y=12`、
@@ -138,6 +183,14 @@
 > 计数订正：本表初稿写「9 个场景（3 可发现 + 6 无 required）」，是规则表 4 条时的口径；
 > 规则扩到 5 条 + computed 后实测为 **12 个**（`SUMMARY ... ok=12 rc2=3 derived=3 rule=2 computed=1
 > no_required=5 params_default=1 missing=3 error=0`）。复审 `1e9f6315` 指出 king 记 derived 与本文件的分栏定义冲突，已改判 **rule**（`derived` 5→3、`rule` 0→2），`king_*` 不再计入「发现能力已验证」。
+>
+> 再订正（`openmir2-discovery-bagitems-201`）：201 规则族落地后，**同一个真实录制**
+> （`E:/tmp/conformance/runs/w24-csharp-npc_auto/frames.ndjson`，**无 201**）仍是
+> `ok=12 rc2=3 missing=3`——这是**正确**的 fail-closed（没有 201 就推不出）；
+> 把一条按 oracle 布局合成的 201 帧（4 项背包同理，`body_len=334` 对应 2 项）追加到同一录制的**副本**后，
+> 实测 `SUMMARY ... ok=14 rc2=1 derived=5 rule=2 computed=1 no_required=5 params_default=1 missing=1 error=0`，
+> `bag_equip` 得 `item_name=屠龙,make_index=123456,takeon_where=1`、`eat_item` 得
+> `item_name=金创药,make_index=9001`。**真实录制仍待补**（见 §4.5.1 局限 1）。
 
 ## 4.6 脚本动作参数里的 `<$…>` **不会被展开**（2026-10-23 晚实测，写窗口项前必读）
 
