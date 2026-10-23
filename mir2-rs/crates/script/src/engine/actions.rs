@@ -2320,7 +2320,11 @@ impl Engine<'_, '_> {
     /// `ConditionProcessingSys.cs:642`；`ADDUSERDATE`/`DELUSERDATE`，
     /// `ExecutionProcessingSys.cs:2576/2613`）——与单参站点（`ActionOfAddNameList` 先
     /// `normNpc.Path + sParam1` 再单参）**不可混用**。
-    pub(crate) fn envir_file_path_with_dir(&self, dir: &str, rel: &str) -> Option<std::path::PathBuf> {
+    pub(crate) fn envir_file_path_with_dir(
+        &self,
+        dir: &str,
+        rel: &str,
+    ) -> Option<std::path::PathBuf> {
         let root = self.npc.envir_root()?;
         let mut p = std::path::PathBuf::from(root);
         if rel.starts_with("..") {
