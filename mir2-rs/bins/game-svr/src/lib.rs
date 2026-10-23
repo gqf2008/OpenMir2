@@ -6033,9 +6033,40 @@ fn write_back_player_offline(p: &game_svr::npc::NpcPlayer<'_, '_>, sg: &mut Sess
 /// 再 `SendMsg(RM_WINEXP, 0, dwInt, 0, 0)`；泵 `PlayObject.Message.cs:1666-1669` 读 `Abil.Exp`
 /// （加完后总量）。本仓会话里 `state.wabil` 与 `equip.abil` 同源（见 `drain_*` 的经验帧支），
 /// 两处都必须落，否则 `SM_WINEXP.Recog` 与存档会各读各的。
-fn write_back_player_abil_exp(p: &game_svr::npc::NpcPlayer<'_>, sg: &mut SessionGround) {
+fn write_back_player_abil_exp(p: &game_svr::npc::NpcPlayer<'_, '_>, sg: &mut SessionGround) {
     sg.state.wabil.exp = p.abil_exp;
     sg.equip.abil.exp = p.abil_exp;
+}
+
+/// `@Login` 漏斗的经验**持久化**（A-26/T-207 I-1）。
+///
+/// oracle：`@Login` 跑在活的 `PlayObject` 上，`CHANGEEXP` 的 `abil.Exp += dwInt`
+/// （`ExecutionProcessingSys.cs:2859-2861`）随后随该对象的存档落库。
+///
+/// 本仓控制流（**两种形态都处理**）：
+/// - **常态**：`sim_loop` 在 @Login 之前已 `ground_sessions.insert`（会话随进世界建）⇒ `session`
+///   是 `Some`，两个会话字段与角色记录**同时**落账；
+/// - **未建会话**：`data`/`ability_inputs` 缺失等分支不会建会话（`session` 为 `None`）⇒ 角色记录
+///   `saves.record.data.abil.exp` 是唯一持久载体。
+///
+/// 入参是标量 `exp`（`LoginScriptWriteBack.abil_exp` / `NpcPlayer.abil_exp` 的快照）——`@Login`
+/// 的 `NpcPlayer` 带 GM 跳线借用，不能跨出写回块（T-210）。
+///
+/// 牙：删掉记录写回 ⇒ `login_changexp_persists_into_character_record` 红
+/// （帧侧断言看不出：`SM_WINEXP.Recog` 读的是 `NpcPlayer` 本身）。
+fn write_back_login_player_abil_exp(
+    saved: Option<&mut SavedHuman>,
+    session: Option<&mut SessionGround>,
+    exp: i32,
+) {
+    if let Some(abil) = saved.and_then(|s| s.record.data.abil.as_mut()) {
+        abil.exp = exp;
+    }
+    if let Some(sg) = session {
+        // 与 [`write_back_player_abil_exp`] 同口径：会话里 `state.wabil` 与 `equip.abil` 同源。
+        sg.state.wabil.exp = exp;
+        sg.equip.abil.exp = exp;
+    }
 }
 
 /// 脚本跑完后把 `NpcPlayer.MNMval`（见 [`npc_player_from_session`] 的映射说明）写回会话，
@@ -6299,6 +6330,8 @@ fn write_back_player_use_items(
 /// 的生命期参数在变量存续期里都是“活的” ⇒ 带桥的 `player` 不能跨到后面的排水/写回。
 /// 故把 oracle 会落账的标量在块内取出，块外按同值写回（读写语义与逐字段等价）。
 struct LoginScriptWriteBack {
+    /// `PlayObject.Abil.Exp`（脚本跑完后的快照；T-207）。
+    abil_exp: i32,
     gold: i32,
     game_gold: i32,
     game_point: i32,
@@ -6622,6 +6655,9 @@ fn emit_script_frames_raw(
 /// `@Login` 脚本自己改金币，本路径发出的 `SM_GOLDCHANGED` 带脚本前的值。商人路径
 /// （`run_merchant_goto` → `emit_script_frames`）是写回后排水，无此偏差；部署 `QManage.txt`
 /// 的 `@Login` 段当前不改金币，故今日不分叉。
+// 8 个标量/引用参数（T-207 增加了 `exp`）：本函数是 @Login 排水的生产接缝，抽出来就是为了让
+// 单测在**同一函数**上断言（与 `handle_eat_cmd` 同口径，故显式豁免该 lint）。
+#[allow(clippy::too_many_arguments)]
 fn emit_login_script_frames(
     tx: &mpsc::UnboundedSender<SimToGate>,
     socket: i32,
@@ -6630,6 +6666,9 @@ fn emit_login_script_frames(
     ground_sessions: &std::collections::HashMap<String, SessionGround>,
     // 无会话（进世界建会话之前）时的回退：`PlayObject` 的当下 `Gold/GameGold/GamePoint`。
     fallback: (i32, i32, i32),
+    // `SM_WINEXP` 的 `Recog`（`PlayObject.Abil.Exp`）：脚本已跑完 ⇒ 传 `NpcPlayer.abil_exp`
+    // （T-207：记录 seed + `CHANGEEXP` 增量；`@Login` 时会话里可能是旧值或没有会话）。
+    exp: i32,
     frames: &[game_svr::npc::SendMsg],
 ) -> usize {
     if frames.is_empty() {
@@ -6640,10 +6679,6 @@ fn emit_login_script_frames(
         .map_or((fallback.0, fallback.1, fallback.2, 0), |s| {
             (s.state.gold, s.game_gold, s.game_point, s.soft_version_date)
         });
-    // `SM_WINEXP` 的 `Recog`（`PlayObject.Abil.Exp`）：本路径在**进世界建会话之前**跑，
-    // 会话里可能是旧值甚至没有 ⇒ 直接取 `PlayObject` 的当下值（脚本已跑完，T-207 修复后
-    // 该字段由角色记录 seed + 脚本增量，不再是恒 0）。
-    let exp = player.abil_exp;
     // QManage 是隐藏 NPC（`NpcHost::goto_label` 的 `ActorId = 0`）。
     emit_script_frames_raw(
         tx,
@@ -20848,9 +20883,9 @@ fn sim_loop(
                                                                     player.kick_off_line_tick =
                                                                         sg.kick_off_line_tick;
                                                                 }
-                                                                // **A-26/T-207**：`Abil.Exp` 的登录侧 seed——`@Login`
-                                                                // 跑在进世界建会话之前，取角色记录里的 `Ability.Exp`
-                                                                //（oracle 此时读的也是 `PlayObject.Abil.Exp` 初值）。
+                                                                // **A-26/T-207**：`Abil.Exp` 的登录侧 seed 取角色记录里的
+                                                                // `Ability.Exp`（oracle 此时读的是 `PlayObject.Abil.Exp` 初值；
+                                                                // 会话虽已建，但 `equip.abil` 的 exp 同样来自该记录）。
                                                                 player.abil_exp = data
                                                                     .and_then(|d| d.abil.as_ref())
                                                                     .map_or(0, |a| a.exp);
@@ -20907,6 +20942,7 @@ fn sim_loop(
                                                                 // 写回快照：`player` 带 GM 跳线的借用，块外不能再持有它
                                                                 // ⇒ 先把 oracle 会落账的标量取出来（语义与逐字段读写等价）。
                                                                 let wb = LoginScriptWriteBack {
+                                                                    abil_exp: player.abil_exp,
                                                                     gold: player.gold,
                                                                     game_gold: player.game_gold,
                                                                     game_point: player.game_point,
@@ -21001,6 +21037,7 @@ fn sim_loop(
                                                                     &head.chr_name,
                                                                     &ground_sessions,
                                                                     (wb.gold, wb.game_gold, wb.game_point),
+                                                                    wb.abil_exp,
                                                                     &login_frames,
                                                                 );
                                                                 if n > 0 {
@@ -21010,7 +21047,8 @@ fn sim_loop(
                                                                         head.chr_name
                                                                     );
                                                                 }
-                                                                // 回写（本片只回写 `Gold` 与 `QuestFlag`；
+                                                                // 回写（本片回写 `Gold`、`QuestFlag`
+                                                                // 与 `Abil.Exp`（T-207 I-1；
                                                                 // `QuestUnit/QuestUnitOpen/ItemList/LastNpc/Script`
                                                                 // 的写回登记为后续分片，见 patch body）。
                                                                 if let Some(s) =
@@ -21031,6 +21069,16 @@ fn sim_loop(
                                                                         );
                                                                     }
                                                                 }
+                                                                // **A-26/T-207 I-1**：`@Login`
+                                                                // 的 `CHANGEEXP` 增量落进角色记录
+                                                                // 与会话两字段（常态会话已存在；
+                                                                // 未建会话的分支记录是唯一载体）。
+                                                                write_back_login_player_abil_exp(
+                                                                    saves.get_mut(&head.chr_name),
+                                                                    ground_sessions
+                                                                        .get_mut(&head.chr_name),
+                                                                    wb.abil_exp,
+                                                                );
                                                                 if let Some(sg) =
                                                                     ground_sessions
                                                                         .get_mut(&head.chr_name)
@@ -27665,9 +27713,12 @@ break
     }
 
     /// **A-26/T-207 ④**：`$EXP` 的**脚本读侧**（`ProcessingBase.cs:35-566` 的 switch）必须读
-    /// 同一个 `Abil.Exp` ⇒ 脚本里 `MOV P0 <$EXP>` 之后的说词 `<$STR(P0)>` 展开成 seed+增量。
+    /// 同一个 `Abil.Exp` ⇒ 脚本里 `CHANGEEXP + 1000` 之后 `MOV P0 <$EXP>` 的说词 `<$STR(P0)>`
+    /// 展开成 seed+增量。
     ///
-    /// 用例路径：一条 label 两个 procedure —— ①`MOV P0 <$EXP>`；②说词 `<$STR(P0)>`。
+    /// 用例路径：一条 label 两个 procedure —— ①`CHANGEEXP + 1000` 然后 `MOV P0 <$EXP>`；
+    /// ②说词 `<$STR(P0)>`。**先加后读**：把 `set_abil_exp` 写成 no-op（reviewer 的 N1 牙）
+    /// 或只 seed 不写 `NpcPlayer` ⇒ 展开回 500 ⇒ 本用例红（旧版只钉 seed 读侧，写路径坏掉仍绿）。
     /// `Engine::goto_label` 把说词**累积**到所有 procedure 跑完后才 `line_variable_text` 展开
     /// （`crates/script/src/engine/mod.rs` 的尾段）⇒ 展开时 `P0` 已是脚本读到的值。
     ///
@@ -27678,6 +27729,17 @@ break
         let rec = mir2_script::SayingRecord {
             s_label: "@main".to_string(),
             procedure_list: vec![
+                // `CHANGEEXP` 与 `MOV` 必须在**各自的 procedure** 里：oracle
+                // `GotoLableQuestActionProcess` 的 `if (IsRegister) { Execute(...); return result; }`
+                // 只执行一条动作表里的**第一个已注册动作**（`run_actions` 已 1:1 移植，见
+                // `crates/script/src/engine/mod.rs:1420-1433`）⇒ 同表两条动作会静默丢掉后一条。
+                mir2_script::SayingProcedure {
+                    condition_list: Vec::new(),
+                    action_list: vec![changexp_act("+", "1000")],
+                    else_action_list: Vec::new(),
+                    s_say_msg: String::new(),
+                    s_else_say_msg: String::new(),
+                },
                 mir2_script::SayingProcedure {
                     condition_list: Vec::new(),
                     action_list: vec![mov_act("P0", "<$EXP>")],
@@ -27720,8 +27782,9 @@ break
         );
         let text = gbk_decode(&mir2_protocol::edcode::decode(&says[0][12..]));
         assert_eq!(
-            text, "寄售商/exp=500",
-            "`<$EXP>` 必须读到 seed 的 Abil.Exp（缺省会展开成 0/原样）"
+            text, "寄售商/exp=1500",
+            "`<$EXP>` 必须读到 seed(500) + CHANGEEXP 增量(1000) 后的 Abil.Exp
+             （缺省会展开成 0；`set_abil_exp` 写丢时回 500 —— 两种都红）"
         );
     }
 
@@ -27766,6 +27829,159 @@ break
             d.abil.as_ref().expect("解码后必须有 Abil").exp,
             1500,
             "存档体逐字段往返后 exp 仍是写回值"
+        );
+    }
+
+    /// **A-26/T-207 I-1（@Login 漏斗的持久化）**：QManage `[@Login]` 的 `CHANGEEXP + 1000`
+    /// 必须 ① 改 `NpcPlayer.abil_exp`（帧与 `$EXP` 都读它）；② 由
+    /// [`write_back_login_player_abil_exp`] 落进**角色记录** `saves.record.data.abil.exp`
+    /// ——常态下会话已随进世界建好（`ground_sessions.insert` 在 @Login 之前），记录与会话两字段
+    /// 同时落账；只有未建会话的分支（`data`/`ability_inputs` 缺失）才以记录为唯一载体
+    /// （oracle 里 `@Login` 跑在活的 `PlayObject` 上，增量随后随存档落库）。
+    ///
+    /// 牙：删掉该函数的记录写回 ⇒ 记录仍是 seed 500 ⇒ 红。**帧侧断言看不出**——帧读的是
+    /// `NpcPlayer`，这正是旧版「patch/status 声明写回、实际只 seed」漏掉的那半。
+    #[test]
+    fn login_changexp_persists_into_character_record() {
+        let root = std::env::temp_dir().join(format!("gs-t207-login-{}", std::process::id()));
+        let dir = root.join("Envir").join("MapQuest_def");
+        std::fs::create_dir_all(&dir).unwrap();
+        let script = concat!(
+            "[@Login]
+",
+            "#ACT
+",
+            "CHANGEEXP + 1000
+"
+        );
+        std::fs::write(dir.join("QManage.txt"), encoding_rs::GBK.encode(script).0).unwrap();
+        let parsers = mir2_script::ScriptParsers::new();
+        let mut rename = |_min: i32, _max: i32| 1;
+        let outcome = parsers
+            .load_script_file(
+                &mir2_script::LocalFs,
+                &root.join("Envir"),
+                "MapQuest_def",
+                "QManage",
+                false,
+                &mut rename,
+            )
+            .expect("解析不得 panic")
+            .expect("脚本必须存在");
+        std::fs::remove_dir_all(&root).ok();
+        assert!(
+            outcome.errors.is_empty(),
+            "夹具脚本不得有解析错误：{:?}",
+            outcome.errors
+        );
+        let host = game_svr::npc::NpcHost {
+            envir_root: std::path::PathBuf::new(),
+            defs: vec![game_svr::npc::NpcDef {
+                chr_name: "QManage".into(),
+                file_path: "MapQuest_def".into(),
+                script_name: Some("QManage".into()),
+                is_hide: true,
+                is_quest: false,
+                loaded: true,
+                actor_id: 0,
+                scripts: outcome.scripts,
+            }],
+            failures: Vec::new(),
+            goto_count_limit: 40,
+        };
+        let mut rng = |_v: i32| 0;
+        let mut player = game_svr::npc::NpcPlayer::empty(&mut rng);
+        player.actor_id = 7;
+        player.chr_name = "hero".into();
+        // seed：`sim_loop` 登录块用角色记录的 `Ability.Exp` 灌 `NpcPlayer.abil_exp`。
+        player.abil_exp = 500;
+        let _ = host.run_login(&mut player).expect("QManage 必须可加载");
+        assert_eq!(
+            player.abil_exp, 1500,
+            "CHANGEEXP + 1000 必须改 NpcPlayer（帧与 $EXP 都读它）"
+        );
+
+        // 帧侧：SM_WINEXP.Recog = 加完后的总量（伴随断言；它读 NpcPlayer，抓不到持久化缺失）。
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let _ = emit_login_script_frames(
+            &tx,
+            901,
+            7,
+            "hero",
+            &ground_sessions,
+            (player.gold, player.game_gold, player.game_point),
+            player.abil_exp,
+            &player.frames,
+        );
+        let mut win = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if hdr(body.as_slice()).0 == mir2_protocol::messages::SM_WINEXP {
+                    win = Some(body);
+                }
+            }
+        }
+        let win = win.expect("CHANGEEXP ⇒ 必须下发一条 SM_WINEXP(44)");
+        assert_eq!(
+            hdr(win.as_slice()).3,
+            1500,
+            "SM_WINEXP.Recog = 加完后的 Abil.Exp"
+        );
+
+        // 有会话（重登/断线重入）：记录 + 两个会话字段都必须落 1500。
+        let mut saved = SavedHuman {
+            account: "ua".to_string(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".to_string(),
+        };
+        saved.record.data.abil = Some(record::Ability {
+            exp: 500,
+            ..Default::default()
+        });
+        let mut sg = test_session_ground(7);
+        sg.state.wabil.exp = 500;
+        sg.equip.abil.exp = 500;
+        write_back_login_player_abil_exp(Some(&mut saved), Some(&mut sg), player.abil_exp);
+        assert_eq!(
+            saved
+                .record
+                .data
+                .abil
+                .as_ref()
+                .expect("记录必须有 Abil")
+                .exp,
+            1500,
+            "@Login 的增量必须落进角色记录（会话存在时两处同源；未建会话时记录是唯一载体）"
+        );
+        assert_eq!(sg.state.wabil.exp, 1500, "已有会话时 wabil.exp 同源写回");
+        assert_eq!(
+            sg.equip.abil.exp, 1500,
+            "已有会话时 equip.abil.exp 同源写回"
+        );
+
+        // 未建会话形态（`data`/`ability_inputs` 缺失等分支：`sim_loop` 的
+        // `ground_sessions.get_mut` 得 None）⇒ 角色记录是唯一持久载体。
+        let mut saved = SavedHuman {
+            account: "ua".to_string(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".to_string(),
+        };
+        saved.record.data.abil = Some(record::Ability {
+            exp: 500,
+            ..Default::default()
+        });
+        write_back_login_player_abil_exp(Some(&mut saved), None, player.abil_exp);
+        assert_eq!(
+            saved
+                .record
+                .data
+                .abil
+                .as_ref()
+                .expect("记录必须有 Abil")
+                .exp,
+            1500,
+            "无会话（进世界之前）也必须持久化"
         );
     }
 
@@ -58269,6 +58485,31 @@ SendRefMsgRange=15
             1,
             "`@Login` 必须仍装配 GM 跳线（脚本 `GMEXECUTE` 的宿主入口）"
         );
+        // ④d **A-26/T-207（@Login 经验持久化）的生产接线**（reviewer `5cf0add0` M-1）：
+        //     写回 helper 本身有行为用例（`login_changexp_persists_into_character_record` 直调），
+        //     但「sim_loop 真的调它」只能靠源码锚点保鲜——删掉这一行，行为用例仍绿（已实测）。
+        assert_eq!(
+            seq(&[
+                "write_back_login_player_abil_exp(",
+                "saves.get_mut(&head.chr_name),",
+                "ground_sessions",
+                ".get_mut(&head.chr_name),",
+                "wb.abil_exp,",
+                ");",
+            ]),
+            1,
+            "sim_loop 的 @Login 回写块必须仍调用 write_back_login_player_abil_exp(..)（T-207 I-1 接线）"
+        );
+        // ④e `SM_WINEXP.Recog` 取 `wb.abil_exp`（脚本后快照），不是会话旧值。
+        assert_eq!(
+            seq(&[
+                "(wb.gold, wb.game_gold, wb.game_point),",
+                "wb.abil_exp,",
+                "&login_frames,",
+            ]),
+            1,
+            "emit_login_script_frames 的调用必须传 wb.abil_exp（否则 SM_WINEXP.Recog 回落到会话旧值）"
+        );
         // ⑤ 组队 `GotoLable`（`run_party_goto_label`）：与 `@Login` 同法的 P31 seed/写回，
         //    不在 sim_loop 体内 ⇒ 单独取该函数体做源码锚。
         let start = lines
@@ -60099,6 +60340,7 @@ mod tests {",
             "hero",
             &ground_sessions,
             (player.gold, player.game_gold, player.game_point),
+            player.abil_exp,
             &player.frames,
         );
         assert_eq!(n, 1, "@Login 的 MESSAGEBOX 必须下发一条脚本帧");
@@ -60169,6 +60411,7 @@ mod tests {",
             "hero",
             &ground_sessions,
             (player.gold, player.game_gold, player.game_point),
+            player.abil_exp,
             &player.frames,
         );
         assert_eq!(n, 2);
