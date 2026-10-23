@@ -1159,6 +1159,51 @@ def scenario_placement(path):
             "note": pl.get("note") or ""}
 
 
+BLOCKED_REQUIRED = ("reason",)
+BLOCKED_OPTIONAL = ("missing_fixture",)
+
+
+def scenario_blocked(path):
+    """读场景顶层的 `blocked` 声明；没有 => None；形状非法 => ConfigError(fail-closed)。
+
+    场景可以声明自己被**封存**：形状合法（probe 的 `--check-scenario` 仍 rc=0），但**不可跑**——
+    「为什么跑不了 / 缺什么夹具」写在顶层机器可读字段里，而不是写在 description 人话里
+    （窗口批次读不到人话）。本工具见到 `blocked` 一律 rc=2，且**不建 out、不起栈、不写 report**，
+    从产物层杜绝「跑了一份 BLOCKED 场景」。
+
+    schema（与 `tools/probe/mir2_probe.py::_check_blocked` 同口径，两处各自 fail-closed）：::
+
+        "blocked": {"reason": "<非空 str>", "missing_fixture": "<str，可选>"}
+
+    与 required/computed/placement 一样**重读场景文件**：不依赖 probe 那一侧是否跑过。
+    """
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    bl = data.get("blocked")
+    if bl is None:
+        return None
+    if not isinstance(bl, dict):
+        raise ConfigError("%s: scenario.blocked 必须是对象（reason[/missing_fixture]）" % path)
+    bad_keys = set(bl) - set(BLOCKED_REQUIRED) - set(BLOCKED_OPTIONAL)
+    if bad_keys:
+        raise ConfigError("%s: scenario.blocked 有未知键 %s（fail-closed）"
+                          % (path, sorted(bad_keys)))
+    reason = bl.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ConfigError("%s: scenario.blocked.reason 必须是非空字符串（实际 %r）："
+                          "封存理由必须机器可读，不能只写在 description 里" % (path, reason))
+    mf = bl.get("missing_fixture")
+    if mf is not None and (not isinstance(mf, str) or not mf.strip()):
+        raise ConfigError("%s: scenario.blocked.missing_fixture 给了就必须是非空字符串"
+                          "（实际 %r）" % (path, mf))
+    return {"reason": reason, "missing_fixture": mf or ""}
+
+
 def _get_valid_str3(text):
     """`HUtil32.GetValidStr3(source, ref dest, Separator)` 的 (dest, 返回值) 二元组。
 
@@ -2203,10 +2248,12 @@ def execute(cfg):
     required = []
     computed = {}
     placement = None
+    blocked = None
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
         computed = scenario_computed(scenario)
         placement = scenario_placement(scenario)
+        blocked = scenario_blocked(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
         cfg.get("discovery_scenario") or DEFAULT_DISCOVERY_SCENARIO)
@@ -2280,6 +2327,22 @@ def execute(cfg):
 
     if scenario and os.path.isfile(scenario):
         summary["scenario_sha256"] = sha256_file(scenario)
+
+    # BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）。
+    # 位置刻意在「建 out 目录 / 起栈 / 跑 discovery / 写 report」**之前**，--dry-run 与真跑
+    # 走同一条路径：见到 blocked 就停（rc=2，与「端口被占」同一失败等级），连命令序列都不预览
+    # —— 免得 dry-run 绿了让人误以为可以真跑。
+    if blocked:
+        summary["blocked"] = {"reason": blocked["reason"],
+                              "missing_fixture": blocked["missing_fixture"] or ""}
+        summary["notes"].append("scenario is BLOCKED: %s" % blocked["reason"])
+        summary["notes"].append("missing_fixture: %s"
+                                % (blocked["missing_fixture"] or "(场景未声明)"))
+        summary["verdict"] = "BLOCKED"
+        summary["exit_code"] = 2
+        summary["finished_at"] = iso_now()
+        summary["duration_s"] = _fmt_duration(time.monotonic() - t0)
+        return summary
 
     password = cfg.get("password") or os.environ.get("CONFORMANCE_PASSWORD")
     if not password:
@@ -4066,6 +4129,83 @@ def selftest():
             and "placement.columns" not in [c["step"] for c in s_pdrybad["commands"]],
             "PL-17 --dry-run 预置不可行 => rc=2 且不预览后续场景命令")
 
+        # 19) BLOCKED 场景硬门（卡 openmir2-window-blocked-scenario-hard-gate）
+        # 判据：合法 blocked ⇒ rc=2 且点名 reason/missing_fixture，**不建 out、不起栈、不写 report**；
+        # 无 blocked ⇒ 一字不变地 rc=0（不误伤）。检查必须在下面的 rc 判定（fail_n）之前。
+        def write_scen(doc, name):
+            path = os.path.join(tmp, "scen-%s-%d.json" % (name, len(os.listdir(tmp))))
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump(doc, f, ensure_ascii=False)
+            return path
+
+        b_reason = "夹具不存在：基线角色没有一档同时满足 DC_min>59 与 HitPoint>=17"
+        b_fixture = "combat_strike 夹具矩阵（docs/combat-strike-scenario-20261023.md §6）"
+        scen_b = write_scen({
+            "name": "selftest_blocked",
+            "blocked": {"reason": b_reason, "missing_fixture": b_fixture},
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "blocked")
+        scen_unblocked = write_scen({
+            "name": "selftest_unblocked",
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}},
+                      {"wait_for": 100}],
+        }, "unblocked")
+
+        # 19a) --dry-run：rc=2、点名 reason 与 missing_fixture、不建 out、不预览任何命令
+        fresh_log()
+        out_b = os.path.join(tmp, "run-blocked-dry")
+        s_b = execute(base_cfg(out_b, _selftest_profile(tmp, stub, log),
+                               scenario=scen_b, dry_run=True))
+        chk(s_b["exit_code"] == 2
+            and any("scenario is BLOCKED: " + b_reason in n for n in s_b["notes"]),
+            "BL-1 --dry-run 命中 blocked => rc=2 且打印 'scenario is BLOCKED: <reason>'")
+        chk(any(b_fixture in n for n in s_b["notes"]),
+            "BL-1 --dry-run 打印 missing_fixture")
+        chk(s_b["verdict"] == "BLOCKED" and not s_b["commands"]
+            and not os.path.exists(out_b) and not read_log().strip(),
+            "BL-1 --dry-run 命中 blocked => 不建 out、不起栈、不预览命令（verdict=%s）"
+            % s_b["verdict"])
+
+        # 19b) 真跑：rc=2、不建 out 目录、不起栈、不写 report.json（与端口被占同等级）
+        fresh_log()
+        out_b2 = os.path.join(tmp, "run-blocked-real")
+        s_b2 = execute(base_cfg(out_b2, _selftest_profile(tmp, stub, log), scenario=scen_b))
+        chk(s_b2["exit_code"] == 2 and s_b2["verdict"] == "BLOCKED"
+            and not os.path.exists(out_b2) and not read_log().strip(),
+            "BL-2 真跑命中 blocked => rc=2、不建 out、不起栈、不写 report")
+        chk(not os.path.exists(os.path.join(out_b2, "report.json")),
+            "BL-2 真跑命中 blocked => 没有 report.json")
+
+        # 19c) blocked 结构非法 ⇒ 加载期 ConfigError（fail-closed），一步都不执行
+        for label, bad_bl in (("缺 reason", {"missing_fixture": "x"}),
+                              ("blocked 非对象", "yes"),
+                              ("未知键", {"reason": "x", "note": "y"}),
+                              ("reason 空串", {"reason": "  "})):
+            fresh_log()
+            err_b = ""
+            try:
+                execute(base_cfg(os.path.join(tmp, "run-blocked-shape"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=write_scen({"name": "bad", "blocked": bad_bl,
+                                                      "steps": [{"wait_for": 658}]},
+                                                     "badshape"),
+                                 dry_run=True))
+            except ConfigError as e:
+                err_b = str(e)
+            chk("scenario.blocked" in err_b and not os.path.exists(log),
+                "BL-3 blocked 形状非法（%s）=> ConfigError 且一步都没执行（%r）"
+                % (label, err_b[:80]))
+
+        # 19d) 不带 blocked 的场景不受影响（同形状、同样 dry-run => rc=0 且命令照常预览）
+        fresh_log()
+        s_bok = execute(base_cfg(os.path.join(tmp, "run-unblocked"),
+                                 _selftest_profile(tmp, stub, log),
+                                 scenario=scen_unblocked, dry_run=True))
+        chk(s_bok["exit_code"] == 0 and s_bok["verdict"] == "DRY-RUN"
+            and any(c["step"] == "stack" for c in s_bok["commands"]),
+            "BL-4 无 blocked => 仍 rc=0 并照常预览（不误伤，实际 %s/%s）"
+            % (s_bok["exit_code"], s_bok["verdict"]))
 
     finally:
         holder.close()
@@ -4089,7 +4229,10 @@ def build_parser():
         description="窗口批处理：restore -> 起 C# 栈 -> probe -> 停栈 -> 起 Rust -> probe -> "
                     "停栈 -> compare -> 归档（语义同 run_dual.sh，run_dual.sh 不改）。")
     ap.add_argument("--card", help="卡片 id（--post-comment 时必填；写入 README/摘要）")
-    ap.add_argument("--scenario", help="场景 JSON（tools/probe/scenarios/*.json）")
+    ap.add_argument("--scenario",
+                    help="场景 JSON（tools/probe/scenarios/*.json）。场景顶层 `blocked`"
+                         "（{reason, [missing_fixture]}）=> 本工具 rc=2 且不建 out/不起栈/不写 report："
+                         "封存场景不得被窗口批次消费")
     ap.add_argument("--out", help="产物目录（真跑必填；--dry-run 可省）")
     ap.add_argument("--profile", default="alt",
                     help="profile：alt（默认）| csharp-default | <profile.json 路径>")

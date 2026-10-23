@@ -387,7 +387,7 @@ def load_scenario(path):
     # 仍能被 --check-scenario / 真跑加载（否则会被下面的 unknown key 拒绝）。
     _need_keys(data, "scenario", required=("name", "steps"),
                optional=("description", "params", "required", "computed",
-                         "placement"))
+                         "placement", "blocked"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -406,6 +406,7 @@ def load_scenario(path):
         if dup:
             raise ScenarioError("scenario.required has duplicates: %s" % dup)
     _check_placement(data.get("placement"))
+    _check_blocked(data.get("blocked"))
     return data
 
 
@@ -436,6 +437,38 @@ def _check_placement(pl):
     print("note: scenario.placement 声明了 map=%s x=%s y=%s，但**本驱动器不预置位**"
           "（由 tools/conformance/card_window.py 在起栈前改测试库完成）"
           % (pl["map"], pl["x"], pl["y"]), file=sys.stderr)
+
+
+def _check_blocked(bl):
+    """`scenario.blocked` 的**形状**校验：合法 ⇒ 放行（rc=0），结构非法 ⇒ ScenarioError（rc=2）。
+
+    语义：场景可以声明自己被**封存**——形状合法、能加载、能过 `--check-scenario`，但**不可跑**。
+    「为什么跑不了 / 缺什么夹具」必须写在**顶层机器可读字段**里，而不是只写在 `description`
+    人话里（窗口批次读不到人话，本日已三次「文字写了但机判不拦」的假绿）。
+
+    schema（顶层 `blocked`）：:
+
+        "blocked": {"reason": "<非空 str>", "missing_fixture": "<str，可选>"}
+
+    * `reason` 必填、非空字符串（缺/空/非字符串 ⇒ rc=2 点名 `scenario.blocked.reason`）；
+    * `missing_fixture` 可选，给了就必须是**非空**字符串（空串按「没写」处理会掩盖信息，fail-closed）；
+    * 未知键 fail-closed（与 `scenario.placement` 同口径）。
+
+    消费侧：`tools/conformance/card_window.py` 在起栈前见到 `blocked` 一律 rc=2，不建 out、
+    不起栈、不写 report —— 从产物层杜绝「跑了一份 BLOCKED 场景」。本驱动器只校验形状，
+    `blocked` 场景的 `--check-scenario` 仍是 rc=0（它是形状合法的场景，只是不可跑）。
+    """
+    if bl is None:
+        return
+    _need_keys(bl, "scenario.blocked", required=("reason",), optional=("missing_fixture",))
+    reason = bl["reason"]
+    if not isinstance(reason, str) or not reason.strip():
+        raise ScenarioError("scenario.blocked.reason must be a non-empty string, got %r"
+                            % (reason,))
+    mf = bl.get("missing_fixture")
+    if mf is not None and (not isinstance(mf, str) or not mf.strip()):
+        raise ScenarioError("scenario.blocked.missing_fixture must be a non-empty string "
+                            "when present, got %r" % (mf,))
 
 
 def _encode_send_body(val, where, params=None):
@@ -1370,7 +1403,11 @@ def build_argparser():
     ap.add_argument("--finish", choices=("softclose", "close", "none"), default="softclose",
                     help="收尾方式（默认 softclose = CM_SOFTCLOSE 后断开）")
     ap.add_argument("--check-scenario", action="store_true",
-                    help="只加载+展开场景做校验（不连网）：rc=0 通过 / rc=2 场景错误")
+                    help="只加载+展开场景做校验（不连网）：rc=0 通过 / rc=2 场景错误。"
+                         "顶层 `blocked`（schema {\"reason\": <非空 str>, "
+                         "\"missing_fixture\": <str，可选>}）是**合法的形状**：合法 blocked 场景"
+                         "仍 rc=0（只是不可跑，card_window 见到会 rc=2）；`blocked` 结构非法"
+                         "（缺 reason / 类型错 / 未知键）⇒ rc=2 并点名 scenario.blocked.*")
     ap.add_argument("--selftest", action="store_true", help="离线自测（不连网）")
     return ap
 
@@ -1976,11 +2013,55 @@ def _selftest_scenario_validation():
         else:
             raise AssertionError("direction-table drift %r accepted (fail-closed broken)" % label)
 
+    # BLOCKED：顶层 `blocked` 是**合法的形状**（rc=0，只是不可跑）；结构非法才 rc=2。
+    # 牙：① 合法 blocked 必须放行（否则所有封存场景都会被 --check-scenario 判死）；
+    #     ② 缺 reason / reason 非字符串 / 未知键 / 空串 必须点名 scenario.blocked.*
+    import shutil
+    bl_dir = tempfile.mkdtemp(prefix="pd-blocked-")
+
+    def _load_doc(name, doc):
+        path = os.path.join(bl_dir, name + ".json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, ensure_ascii=False)
+        return load_scenario(path)
+
+    try:
+        good_blocked = clone(base)
+        good_blocked["blocked"] = {"reason": "夹具不存在：AC 30..59 无解",
+                                   "missing_fixture": "combat_strike 夹具矩阵"}
+        gb = _load_doc("good", good_blocked)
+        check_scenario(gb, expand_scenario(gb, dict(ok_vars))[0], ok_vars, messages)
+        only_reason = clone(base)
+        only_reason["blocked"] = {"reason": "只写理由，不写 missing_fixture"}
+        orr = _load_doc("only-reason", only_reason)   # missing_fixture 可选
+        check_scenario(orr, expand_scenario(orr, dict(ok_vars))[0], ok_vars, messages)
+
+        for i, (label, blocked, needle) in enumerate((
+            ("缺 reason", {"missing_fixture": "x"}, "scenario.blocked missing key(s): ['reason']"),
+            ("reason 非字符串", {"reason": 123},
+             "scenario.blocked.reason must be a non-empty string"),
+            ("reason 空串", {"reason": "   "}, "scenario.blocked.reason must be a non-empty string"),
+            ("blocked 非对象", "yes", "scenario.blocked must be an object"),
+            ("未知键", {"reason": "x", "note": "y"}, "scenario.blocked has unknown key(s)"),
+            ("missing_fixture 空串", {"reason": "x", "missing_fixture": ""},
+             "scenario.blocked.missing_fixture must be a non-empty string"),
+        )):
+            d = clone(base)
+            d["blocked"] = blocked
+            try:
+                _load_doc("bad%d" % i, d)
+            except ScenarioError as ex:
+                assert needle in str(ex), (label, needle, str(ex))
+            else:
+                raise AssertionError("bad blocked accepted (%s) — fail-closed broken" % label)
+    finally:
+        shutil.rmtree(bl_dir, ignore_errors=True)
+
     # 防误伤：login_only（纯累计观察）与 dice_chain（params 默认值）必须绿
     for name in ("login_only.json", "dice_chain.json"):
         d = load_scenario(os.path.join(SCENARIO_DIR, name))
         check_scenario(d, expand_scenario(d)[0], None, messages)
-    return "R1-R5 硬牙 + R6 方向 WARN + 取表 drift 五例 + 不误伤"
+    return "R1-R5 硬牙 + R6 方向 WARN + 取表 drift 五例 + blocked 形状（6 坏例）+ 不误伤"
 
 
 class _TimedSock:
