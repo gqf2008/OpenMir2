@@ -439,7 +439,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 5. 还原后 sha256 == 变异前；**不一致 => 整体 rc≠0**（N-3）。
 
 ```sh
-python -I -B tools/conformance/selftest_mutations.py            # 跑全部 22 颗
+python -I -B tools/conformance/selftest_mutations.py            # 跑全部 23 颗
 python -I -B tools/conformance/selftest_mutations.py --list     # 只列牙（含每颗的 expect）
 python -I -B tools/conformance/selftest_mutations.py --only T1,E2
 python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自身 fail-closed
