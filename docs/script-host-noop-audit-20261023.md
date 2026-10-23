@@ -2,7 +2,7 @@
 
 - 卡：`openmir2-script-host-noop-audit`（tier=L，只审计 + 开卡，**零生产代码改动**）
 - 作者：`openmir2-worker-63`（worktree `wt-worker-63` / 分支 `card/host-noop-audit`）
-- **取值基线：`7b0e5955`（master + `card/frame-drain-order` 合并树）**。初版审计基线 `14864309e`；复审（`94718b41`）指出 frame-drain 给 `npc.rs` 加了 23 行导致 51 条 evidence 行号过时，本版已在合并树上重钉，并把自检门改成**按符号校验**（见 §4）。
+- **取值基线：`73c39cca`（master + `card/gm-host-seam` 合并树）**。演进：初版审计基线 `14864309e` → 复审 `94718b41` 指出 frame-drain 给 `npc.rs` 加 23 行使 51 条行号过时 → 十字复审 `cbcbd136` 指出 master 再 +439 行、且 gm-seam 已落地覆写了三件 ⇒ 本版在**当前合并树**上重算：三件改判 `safe/已覆写`（covered 7→4、safe 54→57），门改为**默认模式行号只 WARN、`--strict-lines` 才逐行精确**（见 §4）。
 - oracle = 本仓 `src/**`（C# 参照实现）；部署语料 = `E:/MirServer/M2GameSvr/Envir`（642 个文件、41473 行）
 - 机器可读台账：`mir2-rs/tests/parity/coverage/script_host_noop_audit.json`；自检：`mir2-rs/tests/parity/coverage/script_host_noop_audit.py`
 
@@ -16,9 +16,9 @@
 
 | 结论 | 个数 | 含义 |
 |---|---|---|
-| **已有卡承接** | 7 | 已有在途卡覆盖（`openmir2-script-sendmsg-host` / `openmir2-gm-script-host-seam`），本卡只登记、不动 |
+| **已有卡承接** | 4 | 已有在途卡覆盖（`openmir2-script-sendmsg-host` / `openmir2-gm-script-host-seam`），本卡只登记、不动 |
 | **需开卡** | 107 | 正式宿主未覆写且缺省实现与 oracle 有静默差异（no-op / 恒值），其中 P1（有效可达 ≥100 行）12 个 |
-| **安全** | 54 | 宿主已覆写 51 / 语义等价 2 / 既有近似 1（近似项在下文单独标注，不是「与 oracle 等价」） |
+| **安全** | 57 | 宿主已覆写 54 / 语义等价 2 / 既有近似 1（近似项在下文单独标注，不是「与 oracle 等价」） |
 
 **有效可达计数最高的 5 条（不含已有卡承接项）**：
 
@@ -47,7 +47,7 @@
 
 ### 1.1 三态判据
 
-- **已有卡承接**：卡片线程里已有在途卡（`card_claim`/`status: in-progress`）明确承接该宿主方法 ⇒ 本卡只登记、**绝不改**。
+- **已有卡承接**：卡片线程里已有**在途**卡明确承接该宿主方法 ⇒ 本卡只登记、**绝不改**。卡一旦合并落地并真的覆写，门会因「covered 但已覆写」判红，必须改判 `safe/已覆写`（本轮 gm-seam 就是这样转过来的）。
 - **需开卡**：`NpcPlayer`/`HostNpc` **未覆写**，且缺省实现（空实现 / 恒值）与 oracle 在该方法被调用时的语义不同 ⇒ 静默走错分支或丢副作用。**可空转的 getter 也要判，不许因为「恒 0」一律算安全**（§3 逐条给 oracle 何时非零）。
 - **安全**：① 正式宿主已覆写（缺省实现不会被使用）；或 ② 缺省实现本身就按 oracle 逐行实现（例如 `is_enough_bag` 委托给已覆写的 `bag_count()`），或 oracle 对应分支体已被注释（`config_renewlevel_clear_exp`）。
 
@@ -86,9 +86,9 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 
 ## 2. 台账主表（全量 168 行）
 
-按结论分组：§2.1 已有卡承接（7）、§2.2 需开卡（107，按有效可达降序）、§2.3 安全（54）。
+按结论分组：§2.1 已有卡承接（4）、§2.2 需开卡（107，按有效可达降序）、§2.3 安全（57）。
 
-### 2.1 已有卡承接（7）
+### 2.1 已有卡承接（4）
 
 | # | 方法 | trait | 缺省语义 | oracle 对应实现 | 可达行数 | NpcPlayer 覆写 | 结论 |
 |---|---|---|---|---|---|---|---|
@@ -96,15 +96,12 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | 2 | `send_group_text` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3194 | 806 | **否** | 已有卡 `openmir2-script-sendmsg-host` |
 | 3 | `send_say_msg` | npc | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3182 | 806 | **否** | 已有卡 `openmir2-script-sendmsg-host` |
 | 4 | `world_broadcast` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:3170 | 806 | **否** | 已有卡 `openmir2-script-sendmsg-host` |
-| 5 | `permission` | player | 恒 0 | Processings/ConditionProcessingSys.cs:3894 | 147 | **否** | 已有卡 `openmir2-gm-script-host-seam` |
-| 6 | `process_user_line_msg` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:4942 | 139 | **否** | 已有卡 `openmir2-gm-script-host-seam` |
-| 7 | `set_permission` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:4941 | 139 | **否** | 已有卡 `openmir2-gm-script-host-seam` |
 
 **已知三条现状点名**：
 
 - `world_broadcast`（`mod.rs:387`，case 0-3 = 318 行）与 `send_say_msg`（`mod.rs:742`，case 4 = 31 行）：`NpcPlayer`/`HostNpc` 均未覆写 ⇒ SENDMSG case 0-4 共 349 行零帧。卡 `openmir2-script-sendmsg-host` 已由 worker-23 认领在途。
 - `send_group_text`（`mod.rs:389`）/`guild_send_msg`（`mod.rs:406`）：同为 `ActionOfLineMsg` 的 case 8/9；部署语料这两个 case **各 0 行**，但仍属同一缺口（同一张卡覆盖）。
-- `process_user_line_msg`（`mod.rs:549`）/`set_permission`（`mod.rs:547`）：GMEXECUTE 抬权跳线的两个前置，卡 `openmir2-gm-script-host-seam`（worker-62）在途。`permission`（`mod.rs:185`，恒 0）是该链的读侧，一并登记在同一张卡下。
+- `process_user_line_msg`（`mod.rs:549`）/`set_permission`（`mod.rs:547`）/`permission`（`mod.rs:185`）：卡 `openmir2-gm-script-host-seam` **已于 master `73c39cca` 合并落地**，`NpcPlayer` 现在真的覆写了这三件（`npc.rs:1207/1217/1238`）⇒ 本版把这三行从「已有卡承接」改判 **安全（已覆写）**；covered 从 7 降到 4（只剩 SENDMSG 那 4 个方法）。
 
 ### 2.2 需开卡（107，按有效可达降序）
 
@@ -218,7 +215,7 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | 106 | `pose_actor_id` | player | 恒 0 | src/BotSrv/Player/RobotPlayer.cs:303 | 0 | **否** | 需开卡（P3） |
 | 107 | `pose_dear_name` | player | 恒空串 | Processings/ExecutionProcessingSys.cs:3310 | 0 | **否** | 需开卡（P3） |
 
-### 2.3 安全（54）
+### 2.3 安全（57）
 
 「安全」分三类：**已覆写**（缺省实现不生效）/ **语义等价**（缺省实现即 oracle 语义）/ **既有近似**（宿主层已接但二者不是逐字等价）。每行理由见机器台账 `reason` 与 `safe_kind`。
 
@@ -245,39 +242,42 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | 19 | `set_ms_string` | player | 空实现（no-op） | ProcessingBase.cs:671 | 297 | 是 | 安全（已覆写） |
 | 20 | `set_game_gold` | player | 空实现（no-op） | ProcessingBase.cs:432 | 285 | 是 | 安全（已覆写） |
 | 21 | `server_str_val` | player | 恒空串 | ProcessingBase.cs:1099 | 161 | 是 | 安全（已覆写） |
-| 22 | `server_int_val` | player | 恒 0 | ProcessingBase.cs:1173 | 147 | 是 | 安全（已覆写） |
-| 23 | `game_point` | player | 恒 0 | ProcessingBase.cs:437 | 96 | 是 | 安全（已覆写） |
-| 24 | `credit_point` | player | 恒 0 | ProcessingBase.cs:387 | 68 | 是 | 安全（已覆写） |
-| 25 | `send_del_use_item` | player | 空实现（no-op） | src/M2Server/Player/PlayObject.Base.cs:2646 | 42 | 是 | 安全（已覆写） |
-| 26 | `set_use_item_index` | player | 空实现（no-op） | ScriptEngine.cs:871 | 42 | 是 | 安全（已覆写） |
-| 27 | `use_item_std_item_present` | player | 委托 use_item_index() | src/M2Server/Player/PlayObject.Base.cs:1026 | 42 | **否** | 安全（既有近似，见注） |
-| 28 | `set_play_dice_label` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2032 | 24 | 是 | 安全（已覆写） |
-| 29 | `tick_count` | player | 恒 0 | Processings/ExecutionProcessingSys.cs:2138 | 10 | 是 | 安全（已覆写） |
-| 30 | `config_game_gold_name` | player | 委托其它钩子 | ProcessingBase.cs:123 | 8 | 是 | 安全（已覆写） |
-| 31 | `config_renewlevel_clear_exp` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5417 | 8 | **否** | 安全（语义等价） |
-| 32 | `group_member_jobs` | player | 恒空表 | Processings/ConditionProcessingSys.cs:287 | 8 | 是 | 安全（已覆写） |
-| 33 | `group_owner` | player | 恒 0 | Processings/ConditionProcessingSys.cs:285 | 8 | 是 | 安全（已覆写） |
-| 34 | `line_variable_text` | player | 委托其它钩子 | ScriptEngine.cs:989 | 8 | 是 | 安全（已覆写） |
-| 35 | `quest_unit_open_status` | player | 恒 0 | Processings/ConditionProcessingSys.cs:204 | 8 | 是 | 安全（已覆写） |
-| 36 | `quest_unit_status` | player | 恒 0 | Processings/ConditionProcessingSys.cs:4109 | 8 | 是 | 安全（已覆写） |
-| 37 | `sale_deal` | player | 恒 false | Processings/ExecutionProcessingSys.cs:2334 | 8 | 是 | 安全（已覆写） |
-| 38 | `set_bo_dec_game_gold` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2744 | 8 | 是 | 安全（已覆写） |
-| 39 | `set_bo_inc_game_gold` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2678 | 8 | 是 | 安全（已覆写） |
-| 40 | `set_kill_mon_exp_rate` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5458 | 8 | 是 | 安全（已覆写） |
-| 41 | `set_map_mode` | player | 空实现（no-op） | Processings/ConditionProcessingSys.cs:927 | 8 | 是 | 安全（已覆写） |
-| 42 | `set_power_rate` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5548 | 8 | 是 | 安全（已覆写） |
-| 43 | `set_sale_deal` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2334 | 8 | 是 | 安全（已覆写） |
-| 44 | `use_item_index` | player | 恒 0 | ScriptEngine.cs:871 | 5 | 是 | 安全（已覆写） |
-| 45 | `use_item_std_name` | player | 恒空串 | src/M2Server/Player/PlayObject.cs:5342 | 5 | 是 | 安全（已覆写） |
-| 46 | `use_items_len` | player | 恒 0 | ScriptEngine.cs:865 | 5 | 是 | 安全（已覆写） |
-| 47 | `envir_map_name` | player | 恒 None | ProcessingBase.cs:268 | 4 | 是 | 安全（已覆写） |
-| 48 | `set_offline` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2727 | 4 | 是 | 安全（已覆写） |
-| 49 | `re_level` | player | 恒 0 | ProcessingBase.cs:292 | 2 | 是 | 安全（已覆写） |
-| 50 | `map_exists` | player | 恒 false | Processings/ConditionProcessingSys.cs:927 | 1 | 是 | 安全（已覆写） |
-| 51 | `set_auto_get_exp` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2707 | 1 | 是 | 安全（已覆写） |
-| 52 | `play_dice_label` | player | 恒 None | Processings/ExecutionProcessingSys.cs:2032 | 0 | 是 | 安全（已覆写） |
-| 53 | `set_server_int_val` | player | 空实现（no-op） | ProcessingBase.cs:1173 | 0 | 是 | 安全（已覆写） |
-| 54 | `set_server_str_val` | player | 空实现（no-op） | ProcessingBase.cs:1099 | 0 | 是 | 安全（已覆写） |
+| 22 | `permission` | player | 恒 0 | Processings/ConditionProcessingSys.cs:3894 | 147 | 是 | 安全（已覆写） |
+| 23 | `server_int_val` | player | 恒 0 | ProcessingBase.cs:1173 | 147 | 是 | 安全（已覆写） |
+| 24 | `process_user_line_msg` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:4942 | 139 | 是 | 安全（已覆写） |
+| 25 | `set_permission` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:4941 | 139 | 是 | 安全（已覆写） |
+| 26 | `game_point` | player | 恒 0 | ProcessingBase.cs:437 | 96 | 是 | 安全（已覆写） |
+| 27 | `credit_point` | player | 恒 0 | ProcessingBase.cs:387 | 68 | 是 | 安全（已覆写） |
+| 28 | `send_del_use_item` | player | 空实现（no-op） | src/M2Server/Player/PlayObject.Base.cs:2646 | 42 | 是 | 安全（已覆写） |
+| 29 | `set_use_item_index` | player | 空实现（no-op） | ScriptEngine.cs:871 | 42 | 是 | 安全（已覆写） |
+| 30 | `use_item_std_item_present` | player | 委托 use_item_index() | src/M2Server/Player/PlayObject.Base.cs:1026 | 42 | **否** | 安全（既有近似，见注） |
+| 31 | `set_play_dice_label` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2032 | 24 | 是 | 安全（已覆写） |
+| 32 | `tick_count` | player | 恒 0 | Processings/ExecutionProcessingSys.cs:2138 | 10 | 是 | 安全（已覆写） |
+| 33 | `config_game_gold_name` | player | 委托其它钩子 | ProcessingBase.cs:123 | 8 | 是 | 安全（已覆写） |
+| 34 | `config_renewlevel_clear_exp` | player | 恒 false | Processings/ExecutionProcessingSys.cs:5417 | 8 | **否** | 安全（语义等价） |
+| 35 | `group_member_jobs` | player | 恒空表 | Processings/ConditionProcessingSys.cs:287 | 8 | 是 | 安全（已覆写） |
+| 36 | `group_owner` | player | 恒 0 | Processings/ConditionProcessingSys.cs:285 | 8 | 是 | 安全（已覆写） |
+| 37 | `line_variable_text` | player | 委托其它钩子 | ScriptEngine.cs:989 | 8 | 是 | 安全（已覆写） |
+| 38 | `quest_unit_open_status` | player | 恒 0 | Processings/ConditionProcessingSys.cs:204 | 8 | 是 | 安全（已覆写） |
+| 39 | `quest_unit_status` | player | 恒 0 | Processings/ConditionProcessingSys.cs:4109 | 8 | 是 | 安全（已覆写） |
+| 40 | `sale_deal` | player | 恒 false | Processings/ExecutionProcessingSys.cs:2334 | 8 | 是 | 安全（已覆写） |
+| 41 | `set_bo_dec_game_gold` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2744 | 8 | 是 | 安全（已覆写） |
+| 42 | `set_bo_inc_game_gold` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2678 | 8 | 是 | 安全（已覆写） |
+| 43 | `set_kill_mon_exp_rate` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5458 | 8 | 是 | 安全（已覆写） |
+| 44 | `set_map_mode` | player | 空实现（no-op） | Processings/ConditionProcessingSys.cs:927 | 8 | 是 | 安全（已覆写） |
+| 45 | `set_power_rate` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:5548 | 8 | 是 | 安全（已覆写） |
+| 46 | `set_sale_deal` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2334 | 8 | 是 | 安全（已覆写） |
+| 47 | `use_item_index` | player | 恒 0 | ScriptEngine.cs:871 | 5 | 是 | 安全（已覆写） |
+| 48 | `use_item_std_name` | player | 恒空串 | src/M2Server/Player/PlayObject.cs:5342 | 5 | 是 | 安全（已覆写） |
+| 49 | `use_items_len` | player | 恒 0 | ScriptEngine.cs:865 | 5 | 是 | 安全（已覆写） |
+| 50 | `envir_map_name` | player | 恒 None | ProcessingBase.cs:268 | 4 | 是 | 安全（已覆写） |
+| 51 | `set_offline` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2727 | 4 | 是 | 安全（已覆写） |
+| 52 | `re_level` | player | 恒 0 | ProcessingBase.cs:292 | 2 | 是 | 安全（已覆写） |
+| 53 | `map_exists` | player | 恒 false | Processings/ConditionProcessingSys.cs:927 | 1 | 是 | 安全（已覆写） |
+| 54 | `set_auto_get_exp` | player | 空实现（no-op） | Processings/ExecutionProcessingSys.cs:2707 | 1 | 是 | 安全（已覆写） |
+| 55 | `play_dice_label` | player | 恒 None | Processings/ExecutionProcessingSys.cs:2032 | 0 | 是 | 安全（已覆写） |
+| 56 | `set_server_int_val` | player | 空实现（no-op） | ProcessingBase.cs:1173 | 0 | 是 | 安全（已覆写） |
+| 57 | `set_server_str_val` | player | 空实现（no-op） | ProcessingBase.cs:1099 | 0 | 是 | 安全（已覆写） |
 
 
 > **既有近似**只有 1 条：`use_item_std_item_present` 缺省 `use_item_index(i) > 0`，oracle 是 `GetStdItem(UseItems[i].Index) != null`（`PlayObject.Base.cs:1026`）；Index 非零但物品表查不到时两者不同。这不是本卡的缺口（宿主层不需要新存储），残余归 StdItem/物品表卡。
@@ -305,7 +305,7 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 | `find_magic` | 恒 None | oracle 查 `WorldEngine.FindMagic(name)`：名字命中魔法表时返回 Some。Rust 恒 None ⇒ `ADDSKILL`(165) 一律走「找不到技能」错误支；**确实**会走到。 | 需开卡 P1 |
 | `is_training_skill` | 恒 false | oracle 查 `playerActor.IsTrainingSkill(id)`：已学该技能 true。Rust 恒 false ⇒ 已学技能会被重复学习/或走错支。 | 需开卡 P1 |
 | `server_str_val` | 恒空串 | oracle 侧同名字段的读写写法见 `sValue = playerActor.ServerStrVal[n01 - 1600];`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒空串，部署可达 161 行。 | 安全（已覆写） |
-| `permission` | 恒 0 | oracle 取 `playerActor.Permission`；GM/管理员非 0。Rust 恒 0 ⇒ `GMEXECUTE`/`ISADMIN`/`ISSYSOP` 分支永不成立；**真实 GM 账号确实会走到**（139/8 行，已有卡 `openmir2-gm-script-host-seam` 承接）。 | 已有卡 `openmir2-gm-script-host-seam` |
+| `permission` | 恒 0 | oracle 取 `playerActor.Permission`；GM/管理员非 0。Rust 恒 0 ⇒ `GMEXECUTE`/`ISADMIN`/`ISSYSOP` 分支永不成立；**真实 GM 账号确实会走到**（139/8 行，已有卡 `openmir2-gm-script-host-seam` 承接）。 | 安全（已覆写） |
 | `server_int_val` | 恒 0 | oracle 侧同名字段的读写写法见 `nValue = playerActor.ServerIntVal[n01 - 1700];`；只要真实玩家/世界状态非缺省即为非零/非空。Rust 当前恒 0，部署可达 147 行。 | 安全（已覆写） |
 | `use_items_upper_bound` | 恒 -1 | oracle 取 `UseItems.GetUpperBound(0)`（13 槽 ⇒ 12，恒非 -1）。Rust 恒 -1 ⇒ `CHECKUSEITEM`/`CHECKITEMADDVALUE` 的越界判定恒成立、直接报错返回；**确实**会走到。 | 需开卡 P1 |
 | `worn_item_add_value` | 恒 None | oracle 取 `UseItems[nWhere].Desc[...]` 之和：装备有附加属性时非 None。Rust 恒 None ⇒ `CHECKITEMADDVALUE` 判假。 | 需开卡 P1 |
@@ -375,15 +375,14 @@ SENDMSG 的 `nParam1` 分档（决定命中的宿主）：`0`=72、`1`=246、`4`
 
 ## 4. 牙（≥2）与自检
 
-自检脚本：`python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py check`（rc=0 绿）；`selftest` 跑两颗牙。
+自检脚本：`python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py check`（默认 rc=0）/ `check --strict-lines`（逐行精确 rc=0）；`selftest` 跑五颗牙（4 正 + 1 反向）。
 
 ### 牙①（证据必须可核：不存在的 file:line 必须红）
 
 台账里「安全」结论的证据若换成**不存在/不合法**的形式（不存在的 oracle 文件、越界行号、或行上不含引用文本），`check` 必须红。`selftest` 实测：把 `sys_msg` 的 oracle 改成 `src/Modules/ScriptEngine/__no_such_file__.cs:999999` ⇒
 
 ```text
-RED（期望）: 牙①：sys_msg 的 oracle 改成 src/.../__no_such_file__.cs:999999 ⇒ 1 处不一致
-  首条: `sys_msg` oracle 文件不存在: src/Modules/ScriptEngine/__no_such_file__.cs
+RED（期望）: 牙①：sys_msg 的 oracle 改成 src/.../__no_such_file__.cs:999999；首条: `sys_msg` oracle 文件不存在: src/Modules/ScriptEngine/__no_such_file__.cs
 ```
 
 ### 牙②（防把已实现的方法列成缺口：谎报「已覆写」必须红）
@@ -391,23 +390,38 @@ RED（期望）: 牙①：sys_msg 的 oracle 改成 src/.../__no_such_file__.cs:
 `check` 会现场解析 `bins/game-svr/src/npc.rs` 的 `impl ScriptPlayer for NpcPlayer` / `impl ScriptNpc for HostNpc` 块：`needs_card` 行的方法名**不得**在块内；`safe` 里 `host_overridden=true` 的行**必须**在块内且 evidence 行含 `fn <name>`。反向牙把 `space_move`（实测 `NpcPlayer` 确无覆写）谎报成 `safe/已覆写` ⇒
 
 ```text
-RED（期望）: 牙②：把 space_move 改判「safe：已覆写」（npc.rs:1072） ⇒ 2 处不一致
-  首条: `space_move` 标「已覆写」但 ScriptPlayer for NpcPlayer impl 块里没有该方法
+RED（期望）: 牙②：把 space_move 改判「safe：已覆写」（impl 起点由门现场解析）；首条: `space_move` 标「已覆写」但 ScriptPlayer for NpcPlayer impl 块里没有该方法
 ```
 
 ### 牙③（行号仍要落在 impl 块内：防「换个乱行号糊弄」）
 
-符号核不是「完全不看行号」：`evidence.line` 必须落在**同一 impl 块**的范围内。把任一条「已覆写」行的 evidence.line 改成 1（块外）⇒
+符号核不是「完全不看行号」——只是把它挪到 `--strict-lines` 档：严格模式下 `evidence.line` 必须与 `fn` 声明行**逐行相等**。把任一条「已覆写」行的 evidence.line 改成 1（块外）⇒
 
 ```text
-RED（期望）: 牙③：sys_msg 的 evidence.line 改成 1（impl 块外） ⇒ 1 处不一致
-  首条: `sys_msg` evidence.line 1 不在 impl 块 [1072,1605] 内
+RED（期望）: 牙③：sys_msg 的 evidence.line 改成 1（impl 块外）；首条: `sys_msg` evidence.line 1 ≠ 声明行 1530（strict）
 ```
 
-> 三颗牙都在 `selftest` 内用**内存副本**跑，跑完校验真实台账 sha256 与运行前一致：
-> `6fb73e09b07c33cddc7bd70755697419233b01a0f73eb8c277bbf337d25c4c39`（前后同值 = 还原证明；`selftest` 自身 rc=0）。
+### 牙④（默认模式**永不因行号误红**——反向牙）
 
-**行号纪律**：本版 `npc.rs` / `mod.rs` 行号钉在合并树 `7b0e5955`；门按**符号**核（impl 块成员 + mod.rs 内 `fn` 声明），所以别的分支改这两个热文件后**不会误红**，只会在 `check` 里打 `WARN: 行号已漂移`。需要逐行严格时跑 `check --strict-lines`。oracle（`src/**`，冻结面）仍逐行精确核。
+同一次变异（evidence.line=1）在**默认模式**下必须 GREEN、只打 WARN，证明「别的分支改热文件不会误红」：`selftest` 以 `strict=False, expect_red=False` 断言。
+
+```text
+GREEN（期望）: 牙④（默认模式）：sys_msg 的 evidence.line 改成 1 —— 默认必须 GREEN（只 WARN）
+```
+
+### 牙⑤（回归：方法被挪到另一个 impl 块 ⇒ 干净 RED，不是 traceback）
+
+把一条「已覆写」方法（`sys_msg`）在内存里从 `impl ScriptPlayer for NpcPlayer` 挪到 `impl ScriptNpc for HostNpc`，门必须给出可读错误而不是 `KeyError`：
+
+```text
+RED（期望·干净）: 把 sys_msg 挪到 HostNpc impl ⇒ 1 处不一致
+  首条: `sys_msg` 标「已覆写」但 ScriptPlayer for NpcPlayer impl 块里没有该方法
+```
+
+> 五颗牙都在 `selftest` 内用**内存副本**跑，跑完校验真实台账 sha256 与运行前一致：
+> `d0202859ead50376605a8512665a0773751362154ba1ed8aaa0adbb6c39b0283`（前后同值 = 还原证明；`selftest` 自身 rc=0）。
+
+**行号纪律**：本版 `npc.rs` / `mod.rs` 行号钉在合并树 `73c39cca`；门按**符号**核（impl 块成员 + mod.rs 内 `fn` 声明）。默认模式下**任何行号漂移都只 WARN、永不判红**（牙④ 就是这条的反向证明）；`check --strict-lines` 才要求与 `fn` 声明行逐行相等（本版实测 rc=0）。oracle（`src/**`，冻结面）两种模式都逐行精确核。
 
 ---
 
@@ -416,12 +430,12 @@ RED（期望）: 牙③：sys_msg 的 evidence.line 改成 1（impl 块外） �
 | 项 | 命令 | 结果（本卡实跑） |
 |---|---|---|
 | fmt | `cargo fmt --all -- --check` | **rc=0** |
-| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | **rc=0**（合并树 32s，Finished） |
-| test | `cargo test --workspace` | **rc=0**（141 suites / 3030 passed / 0 failed / 62 ignored） |
+| clippy | `cargo clippy --workspace --all-targets -- -D warnings` | **rc=0**（合并树 25s，Finished） |
+| test | `cargo test --workspace` | **rc=0**（141 suites / 3041 passed / 0 failed / 62 ignored） |
 | msgcodegen | `cargo run -p msgcodegen -- --check` | **rc=0**（604 条常量与 C# 源一致） |
-| anchor | `python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check` | **rc=0**（498 条锚 ALL PASS） |
+| anchor | `python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check` | **rc=0**（503 条锚 ALL PASS） |
 | registry | `python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit` | **rc=0**（WHITELIST_REGISTRY GREEN，无重复编号） |
-| T 预约 | `python -I tools/whitelist/t_reservation_gate.py check` | **rc=0**（198 行 / 198 号，GREEN） |
+| T 预约 | `python -I tools/whitelist/t_reservation_gate.py check` | **rc=0**（199 行 / 199 号，GREEN） |
 | 台账自检 | `python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py check` | **rc=0**（168 行全部可核；`--strict-lines` 亦 rc=0） |
 | 台账牙 | `python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py selftest` | **rc=0**（check 绿 + 牙①②③各红 + sha 还原） |
 
@@ -446,3 +460,12 @@ RED（期望）: 牙③：sys_msg 的 evidence.line 改成 1（impl 块外） �
 | F-3 `user_account`(P1/476) 无子卡，envir-root 卡引用的「另一子卡」不存在 | minor | 先新开 `openmir2-script-user-account-host`，随后发现 orchestrator 在 28 秒后已派出 `openmir2-script-user-account`（oid `8b3f7041d5e34474874a0047430d4adede9f3964`，同时覆盖 user_account 与 envir_root）⇒ 把重复卡置 `blocked` 作废并在两处留痕，台账 / 本文子卡表指向**canonical 卡**。envir-root 卡已签名 comment 交叉链接（`4dc44bea`）。 |
 | F-4 `use_item_std_item_present` 标「语义等价」易被读成等价 | minor | 新增 `safe_kind` 三分类（overridden / equivalent / approximation）；该行改标 **既有近似**，理由写明 `Index>0` 与 `GetStdItem(...)!=null` 的差异与残余归属。§2.3 增加专门注记。 |
 | F-5（info）全量性/计数/覆写一致性复核通过 | info | 无动作。 |
+
+### 第二轮（review `cbcbd136`，reviewer-3）
+
+| finding | 级别 | 处理 |
+|---|---|---|
+| G-1 master 前进到 `73c39cca` 后合并树仍 RED 7 处：3 处语义过期（gm-seam 已合并并覆写了 permission/set_permission/process_user_line_msg，门仍看到 covered）+ 4 处行号越界（npc.rs +439 行） | important | 在**当前合并树**（含 gm-seam）上重跑生成器：三件改判 `safe/已覆写`（safe 54→57、covered 7→4、safe_kind.overridden 51→54）；行号重钉（impl 起点 1137）。`check` 在合并树 rc=0。 |
+| G-2 设计矛盾：`line_policy` 说行号仅参考，但默认模式仍硬性要求行落在 impl 块内 ⇒ 整块前移会误红 | important | 默认模式改为**行号只 WARN、永不判红**（越界也只 WARN）；语义判定（impl 成员、safe_kind、covered/needs_card 互斥）不变。 |
+| G-3 `--strict-lines` 名不副实（只作用于 `mod_line`，evidence.line 两种模式都只 WARN） | important | `--strict-lines` 现在同时要求 `mod_line` 与 `evidence.line` **逐行相等**；本版在合并树上 strict rc=0。新增**牙④**（反向）：同一变异在默认模式必须 GREEN（只 WARN）。 |
+| G-4 把已达覆写的方法挪到另一 impl 块时门抛 `KeyError` traceback，诊断丢失 | minor | 行级校验抽成 `_validate_row`，外层 `try/except` 兜底：任何意外都转成干净 RED 并点名（`` `method` 校验过程异常: KeyError: ... ``）；内部取值一律 `.get`。 |

@@ -14,8 +14,9 @@
   - `oracle`（`src/**`，冻结面）按 **file:line 精确**核行——oracle 不随分支漂移。
   - `mod` / `evidence`（`npc.rs`、`engine/mod.rs`，热文件）按 **符号**核：
       * `mod`：该文件里存在 `fn <name>` 声明；`mod_line` 仅作文档参考。
-      * `evidence`：`impl` 块里存在该方法，且记录行号落在**同一 impl 块**范围内。
-    ⇒ 别的分支给 `npc.rs` 加/删行（不增删覆写）不会再把门判红；`--strict-lines` 可恢复逐行严格核。
+      * `evidence`：`impl` 块里存在该方法（语义核）；行号在**默认模式只 WARN、永不判红**，
+        `--strict-lines` 时才要求与 `fn` 声明行**逐行相等**。
+    ⇒ 别的分支给 `npc.rs` 加/删行（不增删覆写）不会把门判红；需要精确行号时跑 `--strict-lines`。
 
 判红口径（缺一即红）：
   ① 结构：168 行 = ScriptPlayer 165 + ScriptNpc 3；verdict/safe_kind 计数一致；无重名
@@ -40,8 +41,9 @@ LEDGER = os.path.join(HERE, 'script_host_noop_audit.json')
 NPC_RS = os.path.join(ROOT, 'mir2-rs', 'bins', 'game-svr', 'src', 'npc.rs')
 
 KNOWN_CARDS = {
+    # `openmir2-gm-script-host-seam` 已合并落地（master 73c39cca）并覆写了
+    # permission / set_permission / process_user_line_msg ⇒ 不再是「在途卡」。
     'openmir2-script-sendmsg-host',
-    'openmir2-gm-script-host-seam',
 }
 SUBCARDS = {
     'openmir2-script-action-var-text',
@@ -98,6 +100,111 @@ class Ctx:
         return self._mod_cache[path]
 
 
+def _validate_row(r, ctx, errs, warns):
+    """单行校验（异常由调用方兜底成干净 RED 并点名）。"""
+    name = r.get('name')
+    tag = '`%s`' % name
+    v = r.get('verdict')
+    if v not in VERDICTS:
+        errs.append('%s verdict 非法: %r' % (tag, v))
+    if r.get('kind') not in {'noop', 'const', 'delegate'}:
+        errs.append('%s kind 非法: %r' % (tag, r.get('kind')))
+    if not r.get('semantics'):
+        errs.append('%s 缺 semantics' % tag)
+    if not r.get('reason'):
+        errs.append('%s 缺 reason' % tag)
+
+    # ② mod：符号定位（行号默认只 WARN；strict 才要求精确）
+    mf = r.get('mod_file') or ''
+    mpath = os.path.join(ROOT, mf)
+    if not os.path.isfile(mpath):
+        errs.append('%s mod 文件不存在: %r' % (tag, mf))
+    else:
+        mlines = ctx.mod_lines(mpath)
+        hits = [i + 1 for i, l in enumerate(mlines)
+                if re.search(r'\bfn\s+' + re.escape(name) + r'\b', l)]
+        if not hits:
+            errs.append('%s mod 文件里找不到 fn 声明: %s' % (tag, mf))
+        elif ctx.strict and r.get('mod_line') not in hits:
+            errs.append('%s mod_line %r 不在 fn 声明行 %s 里（strict）' % (tag, r.get('mod_line'), hits))
+        elif r.get('mod_line') not in hits:
+            warns.append('%s mod_line %r 已漂移（现为 %s）；符号核通过' % (tag, r.get('mod_line'), hits))
+
+    # ③ oracle：冻结面（src/**），两种模式都精确核行
+    o = r.get('oracle')
+    if not o:
+        errs.append('%s 缺 oracle file:line（本台账所有行都应可核）' % tag)
+    else:
+        path = os.path.join(ROOT, o.get('file', ''))
+        if not os.path.isfile(path):
+            errs.append('%s oracle 文件不存在: %s' % (tag, o.get('file')))
+        else:
+            olines = read_lines(path)
+            ln = o.get('line') or 0
+            if not isinstance(ln, int) or ln < 1 or ln > len(olines):
+                errs.append('%s oracle 行号越界: %s:%r' % (tag, o.get('file'), ln))
+            elif norm(o.get('text', '')) not in norm(olines[ln - 1]):
+                errs.append('%s oracle 行上不含所引文本: %s:%d' % (tag, o.get('file'), ln))
+
+    # ④⑤⑥⑦ 覆写一致性（语义判定，两种模式都硬性）
+    impl = ctx.impls[IMPL_OF[r['trait']]]
+    is_impl = name in impl['methods']
+    actual = impl['line_of'].get(name)
+    if v == 'needs_card':
+        if is_impl:
+            errs.append('%s 判「需开卡」但 %s 已覆写（npc.rs:%r）'
+                        % (tag, IMPL_OF[r['trait']], actual))
+    elif v == 'covered':
+        if r.get('card') not in KNOWN_CARDS:
+            errs.append('%s covered 指向未知卡: %r' % (tag, r.get('card')))
+        if is_impl:
+            errs.append('%s covered 但 %s 已覆写 ⇒ 不该再挂在在途卡下' % (tag, IMPL_OF[r['trait']]))
+    else:
+        kind = r.get('safe_kind')
+        if kind not in SAFE_KINDS:
+            errs.append('%s safe 行 safe_kind 非法: %r' % (tag, kind))
+        elif kind == 'overridden':
+            if not r.get('host_overridden') or not is_impl:
+                errs.append('%s 标「已覆写」但 %s impl 块里没有该方法'
+                            % (tag, IMPL_OF[r['trait']]))
+            ev = r.get('evidence')
+            if not isinstance(ev, dict) or not ev:
+                errs.append('%s 标「已覆写」但缺 evidence 对象' % tag)
+            else:
+                if ev.get('impl') != IMPL_OF[r['trait']]:
+                    errs.append('%s evidence.impl 与 trait 不符: %r' % (tag, ev.get('impl')))
+                if ev.get('method') != name:
+                    errs.append('%s evidence.method 与行名不符: %r' % (tag, ev.get('method')))
+                ln = ev.get('line')
+                if ctx.strict:
+                    if actual is None:
+                        errs.append('%s evidence 方法不在 impl 块内（strict）' % tag)
+                    elif ln != actual:
+                        errs.append('%s evidence.line %r ≠ 声明行 %d（strict）' % (tag, ln, actual))
+                else:
+                    # 默认模式：行号只作文档参考 —— 别的分支给热文件加/删行（哪怕整块前移）
+                    # 都只 WARN，绝不判红。
+                    if not isinstance(ln, int) or not (impl['start'] < ln <= impl['end']):
+                        warns.append('%s evidence.line %r 已越出 impl 块 [%d,%d]（现为 %r）；符号核通过'
+                                     % (tag, ln, impl['start'], impl['end'], actual))
+                    elif ln != actual:
+                        warns.append('%s evidence.line %d 已漂移（现为 %r）；符号核通过'
+                                     % (tag, ln, actual))
+        else:
+            if r.get('host_overridden') or is_impl:
+                errs.append('%s 标「%s」但宿主已覆写 ⇒ 口径矛盾' % (tag, kind))
+            if len((r.get('reason') or '')) < 30:
+                errs.append('%s 判安全但理由过短（需给出等价/近似证明）' % tag)
+
+    # ⑧ 子卡
+    sc = r.get('subcard')
+    if sc is not None:
+        if sc not in SUBCARDS:
+            errs.append('%s subcard 未知: %r' % (tag, sc))
+        if v != 'needs_card':
+            errs.append('%s 非 needs_card 却挂了子卡' % tag)
+
+
 def validate(doc, ctx):
     errs = []
     warns = ctx.warnings
@@ -115,112 +222,40 @@ def validate(doc, ctx):
     need(traits.count('player') == 165, 'player 缺省实现应为 165，实为 %d' % traits.count('player'))
     need(traits.count('npc') == 3, 'npc 缺省实现应为 3，实为 %d' % traits.count('npc'))
     names = [r.get('name') for r in rows]
-    need(len(names) == len(set(names)), '台账有重名方法: %s' % sorted({n for n in names if names.count(n) > 1}))
+    need(len(names) == len(set(names)),
+         '台账有重名方法: %s' % sorted({n for n in names if names.count(n) > 1}))
     cnt = {v: sum(1 for r in rows if r.get('verdict') == v) for v in VERDICTS}
     need(cnt['safe'] + cnt['needs_card'] + cnt['covered'] == len(rows), 'verdict 三态未覆盖全部行')
     sk = {k: sum(1 for r in rows if r.get('safe_kind') == k) for k in SAFE_KINDS}
-    need(sum(sk.values()) == cnt['safe'], 'safe_kind 计数(%d)与 safe 行数(%d)不符' % (sum(sk.values()), cnt['safe']))
+    need(sum(sk.values()) == cnt['safe'],
+         'safe_kind 计数(%d)与 safe 行数(%d)不符' % (sum(sk.values()), cnt['safe']))
     declared = doc.get('counts') or {}
     for k in ('safe', 'needs_card', 'covered'):
-        need(declared.get(k) == cnt[k], 'counts.%s 声明 %r 与实算 %d 不符' % (k, declared.get(k), cnt[k]))
+        need(declared.get(k) == cnt[k],
+             'counts.%s 声明 %r 与实算 %d 不符' % (k, declared.get(k), cnt[k]))
     for k, v in sk.items():
         if 'safe_kind' in declared:
-            need(declared['safe_kind'].get(k) == v, 'counts.safe_kind.%s 声明 %r 与实算 %d 不符' % (k, declared['safe_kind'].get(k), v))
+            need(declared['safe_kind'].get(k) == v,
+                 'counts.safe_kind.%s 声明 %r 与实算 %d 不符'
+                 % (k, declared['safe_kind'].get(k), v))
 
     for impl_name in IMPL_OF.values():
         need(impl_name in ctx.impls and ctx.impls[impl_name]['methods'],
              '解析不到 impl %s（npc.rs 结构变了？）' % impl_name)
 
     for r in rows:
-        name = r.get('name')
-        tag = '`%s`' % name
-        v = r.get('verdict')
-        need(v in VERDICTS, '%s verdict 非法: %r' % (tag, v))
-        need(r.get('kind') in {'noop', 'const', 'delegate'}, '%s kind 非法: %r' % (tag, r.get('kind')))
-        need(bool(r.get('semantics')), '%s 缺 semantics' % tag)
-        need(bool(r.get('reason')), '%s 缺 reason' % tag)
-
-        # ② mod：符号定位（strict 时行号必须命中声明）
-        mf = r.get('mod_file') or ''
-        mpath = os.path.join(ROOT, mf)
-        if not os.path.isfile(mpath):
-            errs.append('%s mod 文件不存在: %r' % (tag, mf))
-        else:
-            mlines = ctx.mod_lines(mpath)
-            hits = [i + 1 for i, l in enumerate(mlines) if re.search(r'\bfn\s+' + re.escape(name) + r'\b', l)]
-            if not hits:
-                errs.append('%s mod 文件里找不到 fn 声明: %s' % (tag, mf))
-            elif ctx.strict and r.get('mod_line') not in hits:
-                errs.append('%s mod_line %r 不在 fn 声明行 %s 里（strict）' % (tag, r.get('mod_line'), hits))
-            elif r.get('mod_line') not in hits:
-                warns.append('%s mod_line %r 已漂移（现为 %s）；符号核通过' % (tag, r.get('mod_line'), hits))
-
-        # ③ oracle：冻结面，精确核行
-        o = r.get('oracle')
-        if not o:
-            errs.append('%s 缺 oracle file:line（本台账所有行都应可核）' % tag)
-        else:
-            path = os.path.join(ROOT, o.get('file', ''))
-            if not os.path.isfile(path):
-                errs.append('%s oracle 文件不存在: %s' % (tag, o.get('file')))
-            else:
-                olines = read_lines(path)
-                ln = o.get('line') or 0
-                if not isinstance(ln, int) or ln < 1 or ln > len(olines):
-                    errs.append('%s oracle 行号越界: %s:%r' % (tag, o.get('file'), ln))
-                elif norm(o.get('text', '')) not in norm(olines[ln - 1]):
-                    errs.append('%s oracle 行上不含所引文本: %s:%d' % (tag, o.get('file'), ln))
-
-        # ④⑤⑥⑦ 覆写一致性
-        impl = ctx.impls[IMPL_OF[r['trait']]]
-        is_impl = name in impl['methods']
-        if v == 'needs_card':
-            if is_impl:
-                errs.append('%s 判「需开卡」但 %s 已覆写（npc.rs:%d）' % (tag, IMPL_OF[r['trait']], impl['line_of'][name]))
-        elif v == 'covered':
-            if r.get('card') not in KNOWN_CARDS:
-                errs.append('%s covered 指向未知卡: %r' % (tag, r.get('card')))
-            if is_impl:
-                errs.append('%s covered 但 %s 已覆写 ⇒ 不该再挂在在途卡下' % (tag, IMPL_OF[r['trait']]))
-        else:
-            kind = r.get('safe_kind')
-            if kind not in SAFE_KINDS:
-                errs.append('%s safe 行 safe_kind 非法: %r' % (tag, kind))
-            elif kind == 'overridden':
-                if not r.get('host_overridden') or not is_impl:
-                    errs.append('%s 标「已覆写」但 %s impl 块里没有该方法' % (tag, IMPL_OF[r['trait']]))
-                ev = r.get('evidence')
-                if not isinstance(ev, dict) or not ev:
-                    errs.append('%s 标「已覆写」但缺 evidence 对象' % tag)
-                else:
-                    if ev.get('impl') != IMPL_OF[r['trait']]:
-                        errs.append('%s evidence.impl 与 trait 不符: %r' % (tag, ev.get('impl')))
-                    if ev.get('method') != name:
-                        errs.append('%s evidence.method 与行名不符: %r' % (tag, ev.get('method')))
-                    ln = ev.get('line')
-                    if not isinstance(ln, int) or not (impl['start'] < ln <= impl['end']):
-                        errs.append('%s evidence.line %r 不在 impl 块 [%d,%d] 内' % (tag, ln, impl['start'], impl['end']))
-                    elif impl['line_of'].get(name) != ln:
-                        warns.append('%s evidence.line %d 已漂移（现为 %d）；符号核通过'
-                                     % (tag, ln, impl['line_of'][name]))
-            else:
-                if r.get('host_overridden') or is_impl:
-                    errs.append('%s 标「%s」但宿主已覆写 ⇒ 口径矛盾' % (tag, kind))
-                if len((r.get('reason') or '')) < 30:
-                    errs.append('%s 判安全但理由过短（需给出等价/近似证明）' % tag)
-
-        # ⑧ 子卡
-        sc = r.get('subcard')
-        if sc is not None:
-            if sc not in SUBCARDS:
-                errs.append('%s subcard 未知: %r' % (tag, sc))
-            if v != 'needs_card':
-                errs.append('%s 非 needs_card 却挂了子卡' % tag)
+        try:
+            _validate_row(r, ctx, errs, warns)
+        except Exception as e:  # noqa: BLE001 —— 门自身异常也必须干净 RED 并点名
+            errs.append('`%s` 校验过程异常（门 bug 或台账形态非法）: %s: %s'
+                        % (r.get('name'), type(e).__name__, e))
 
     declared_subs = {s.get('id') for s in (doc.get('subcards') or [])}
-    need(declared_subs == SUBCARDS, 'subcards 声明与门内置集合不一致: %s' % sorted(declared_subs ^ SUBCARDS))
+    need(declared_subs == SUBCARDS,
+         'subcards 声明与门内置集合不一致: %s' % sorted(declared_subs ^ SUBCARDS))
     for s in doc.get('subcards') or []:
-        need(isinstance(s.get('oid'), str) and len(s['oid']) == 40, '子卡 %s 的 oid 非法' % s.get('id'))
+        need(isinstance(s.get('oid'), str) and len(s['oid']) == 40,
+             '子卡 %s 的 oid 非法' % s.get('id'))
 
     return errs
 
@@ -279,7 +314,7 @@ def mut_tooth2(doc):
     doc['counts']['safe'] += 1
     doc['counts']['needs_card'] -= 1
     doc['counts']['safe_kind']['overridden'] += 1
-    return '牙②：把 space_move 改判「safe：已覆写」（npc.rs:1072）'
+    return '牙②：把 space_move 改判「safe：已覆写」（impl 起点由门现场解析）'
 
 
 def mut_tooth3(doc):
@@ -288,14 +323,48 @@ def mut_tooth3(doc):
     return '牙③：%s 的 evidence.line 改成 1（impl 块外）' % target['name']
 
 
-def run_case(name, mutate):
+def mut_tooth4(doc):
+    """默认模式的反向牙：行号漂移**不得**误红（只 WARN）。"""
+    target = next(r for r in doc['rows'] if r['verdict'] == 'safe' and r['safe_kind'] == 'overridden')
+    target['evidence']['line'] = 1
+    return '牙④（默认模式）：%s 的 evidence.line 改成 1 —— 默认必须 GREEN（只 WARN）' % target['name']
+
+
+def run_moved_impl_case():
+    """minor 回归：把一条「已覆写」方法挪到**另一个 impl 块** ⇒ 必须干净 RED，不得 traceback。"""
+    doc = json.loads(json.dumps(json.load(open(LEDGER, encoding='utf-8'))))
+    ctx = Ctx(False)
+    src = ctx.impls[IMPL_OF['player']]
+    dst = ctx.impls[IMPL_OF['npc']]
+    name = 'sys_msg'
+    dst['methods'].add(name)
+    dst['line_of'][name] = src['line_of'].pop(name)
+    src['methods'].discard(name)
+    try:
+        errs = validate(doc, ctx)
+    except Exception as e:  # noqa: BLE001
+        print('  TRACEBACK（非期望！）: 挪 impl 块触发了 %s: %s' % (type(e).__name__, e))
+        return 1
+    if errs and any('impl 块里没有该方法' in x for x in errs):
+        print('  RED（期望·干净）: 把 sys_msg 挪到 HostNpc impl ⇒ %d 处不一致；首条: %s'
+              % (len(errs), errs[0]))
+        return 0
+    print('  GREEN/错误形态（非期望！）: 挪 impl 块未被干净判红: %s' % (errs[:1] or 'no error'))
+    return 1
+
+
+def run_case(name, mutate, strict=False, expect_red=True):
     doc = json.loads(json.dumps(json.load(open(LEDGER, encoding='utf-8'))))
     how = mutate(doc)
-    errs = validate(doc, Ctx(False))
-    if errs:
-        print('  RED（期望）: %s ⇒ %d 处不一致；首条: %s' % (how, len(errs), errs[0]))
+    errs = validate(doc, Ctx(strict))
+    red = bool(errs)
+    got = 'RED' if red else 'GREEN'
+    if red == expect_red:
+        extra = ('；首条: %s' % errs[0]) if errs else ''
+        print('  %s（期望）: %s%s' % (got, how, extra))
         return 0
-    print('  GREEN（非期望！）: %s 未被门抓到' % how)
+    print('  %s（非期望！）: %s（期望 %s）%s' % (got, how, 'RED' if expect_red else 'GREEN',
+                                                 ('；首条: %s' % errs[0]) if errs else ''))
     return 1
 
 
@@ -303,10 +372,16 @@ def cmd_selftest():
     before = sha256(LEDGER)
     print('== 台账 sha256（运行前）: %s' % before)
     rc = cmd_check()
-    print('== check rc=%d（期望 0）' % rc)
-    if rc != 0:
+    print('== check（默认模式）rc=%d（期望 0）' % rc)
+    rc_strict = cmd_check(strict_lines=True)
+    print('== check --strict-lines rc=%d（期望 0）' % rc_strict)
+    if rc != 0 or rc_strict != 0:
         return 1
-    rcs = [run_case('tooth1', mut_tooth1), run_case('tooth2', mut_tooth2), run_case('tooth3', mut_tooth3)]
+    rcs = [run_case('tooth1', mut_tooth1),
+           run_case('tooth2', mut_tooth2),
+           run_case('tooth3', mut_tooth3, strict=True),
+           run_case('tooth4', mut_tooth4, strict=False, expect_red=False),
+           run_moved_impl_case()]
     after = sha256(LEDGER)
     print('== 台账 sha256（运行后）: %s' % after)
     if after != before:
@@ -314,7 +389,7 @@ def cmd_selftest():
         return 1
     print('== 还原证明: sha256 前后一致（%s）' % before)
     ok = all(rc == 0 for rc in rcs)
-    print('== selftest %s' % ('GREEN' if ok else 'RED'))
+    print('== selftest %s（默认模式永不因行号误红；--strict-lines 逐行精确）' % ('GREEN' if ok else 'RED'))
     return 0 if ok else 1
 
 

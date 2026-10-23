@@ -2,7 +2,7 @@
  "card": "openmir2-script-host-noop-audit",
  "author": "openmir2-worker-63",
  "base_oid": "14864309e",
- "line_baseline": "7b0e59550（master + card/frame-drain-order 合并树）",
+ "line_baseline": "73c39cca7（master + card/gm-host-seam 合并树）",
  "line_policy": "npc.rs / mod.rs 行号仅作文档参考；自检门按**符号**校验（impl 块内方法成员、mod.rs 内 fn 声明、行号只需落在该 impl 块范围内）。oracle（src/**，冻结面）仍按 file:line 精确核行。",
  "tier": "L",
  "oracle_root": "src/ (C# 参照实现)",
@@ -16,11 +16,11 @@
   "total_defaults": 168,
   "player_defaults": 165,
   "npc_defaults": 3,
-  "safe": 54,
+  "safe": 57,
   "needs_card": 107,
-  "covered": 7,
+  "covered": 4,
   "safe_kind": {
-   "overridden": 51,
+   "overridden": 54,
    "equivalent": 2,
    "approximation": 1
   }
@@ -242,155 +242,6 @@
    "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
    "mod_line": 387,
    "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:387",
-   "subcard": null
-  },
-  {
-   "name": "permission",
-   "trait": "player",
-   "line": 185,
-   "overridden": false,
-   "direct_handlers": [
-    "ActionOfGmExecute",
-    "ConditionOfIsAdmin",
-    "ConditionOfIssysop"
-   ],
-   "direct_commands": [
-    "GMEXECUTE",
-    "ISADMIN",
-    "ISSYSOP"
-   ],
-   "direct_count": 147,
-   "indirect_handlers": [
-    "ActionOfGmExecute",
-    "ActionOfMarry",
-    "ActionOfUnMarry",
-    "ConditionOfIsAdmin",
-    "ConditionOfIssysop"
-   ],
-   "indirect_commands": [
-    "GMEXECUTE",
-    "ISADMIN",
-    "ISSYSOP",
-    "MARRY",
-    "UNMARRY"
-   ],
-   "indirect_count": 155,
-   "default": "fn permission(&self) -> i32 {\n        0\n    }",
-   "doc": "/// `playerActor.Permission`",
-   "oracle": {
-    "file": "src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs",
-    "line": 3894,
-    "text": "if (!(playerActor.Permission >= 4))"
-   },
-   "kind": "const",
-   "semantics": "恒 0",
-   "verdict": "covered",
-   "group": null,
-   "card": "openmir2-gm-script-host-seam",
-   "reason": "已有卡 openmir2-gm-script-host-seam 承接（在途，本审计只登记不改动）。",
-   "safe_kind": null,
-   "evidence": {},
-   "side_effect": "读（权限值）",
-   "consequence": "-",
-   "priority": null,
-   "host_overridden": false,
-   "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-   "mod_line": 185,
-   "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:185",
-   "subcard": null
-  },
-  {
-   "name": "process_user_line_msg",
-   "trait": "player",
-   "line": 549,
-   "overridden": false,
-   "direct_handlers": [
-    "ActionOfGmExecute"
-   ],
-   "direct_commands": [
-    "GMEXECUTE"
-   ],
-   "direct_count": 139,
-   "indirect_handlers": [
-    "ActionOfGmExecute",
-    "ActionOfMarry",
-    "ActionOfUnMarry"
-   ],
-   "indirect_commands": [
-    "GMEXECUTE",
-    "MARRY",
-    "UNMARRY"
-   ],
-   "indirect_count": 147,
-   "default": "fn process_user_line_msg(&mut self, _line: &str) {}",
-   "doc": "/// `playerActor.ProcessUserLineMsg(line)`",
-   "oracle": {
-    "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
-    "line": 4942,
-    "text": "playerActor.ProcessUserLineMsg(sData);"
-   },
-   "kind": "noop",
-   "semantics": "空实现（no-op）",
-   "verdict": "covered",
-   "group": null,
-   "card": "openmir2-gm-script-host-seam",
-   "reason": "已有卡 openmir2-gm-script-host-seam 承接（在途，本审计只登记不改动）。",
-   "safe_kind": null,
-   "evidence": {},
-   "side_effect": "执行 GM 命令体",
-   "consequence": "-",
-   "priority": null,
-   "host_overridden": false,
-   "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-   "mod_line": 549,
-   "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:549",
-   "subcard": null
-  },
-  {
-   "name": "set_permission",
-   "trait": "player",
-   "line": 547,
-   "overridden": false,
-   "direct_handlers": [
-    "ActionOfGmExecute"
-   ],
-   "direct_commands": [
-    "GMEXECUTE"
-   ],
-   "direct_count": 139,
-   "indirect_handlers": [
-    "ActionOfGmExecute",
-    "ActionOfMarry",
-    "ActionOfUnMarry"
-   ],
-   "indirect_commands": [
-    "GMEXECUTE",
-    "MARRY",
-    "UNMARRY"
-   ],
-   "indirect_count": 147,
-   "default": "fn set_permission(&mut self, _v: i32) {}",
-   "doc": "/// `playerActor.Permission = v`（C# 字段类型 `byte`）",
-   "oracle": {
-    "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
-    "line": 4941,
-    "text": "playerActor.Permission = 10;"
-   },
-   "kind": "noop",
-   "semantics": "空实现（no-op）",
-   "verdict": "covered",
-   "group": null,
-   "card": "openmir2-gm-script-host-seam",
-   "reason": "已有卡 openmir2-gm-script-host-seam 承接（在途，本审计只登记不改动）。",
-   "safe_kind": null,
-   "evidence": {},
-   "side_effect": "写（权限值）",
-   "consequence": "-",
-   "priority": null,
-   "host_overridden": false,
-   "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-   "mod_line": 547,
-   "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:547",
    "subcard": null
   },
   {
@@ -5422,13 +5273,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1386 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1530 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "sys_msg",
-    "line": 1386
+    "line": 1530
    },
    "side_effect": "-",
    "consequence": "-",
@@ -5596,13 +5447,13 @@
    "semantics": "恒空串",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1136 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1201 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "chr_name",
-    "line": 1136
+    "line": 1201
    },
    "side_effect": "-",
    "consequence": "-",
@@ -5674,13 +5525,13 @@
    "semantics": "恒 None",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1184 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1328 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "guild_name",
-    "line": 1184
+    "line": 1328
    },
    "side_effect": "-",
    "consequence": "-",
@@ -5746,13 +5597,13 @@
    "semantics": "恒空串",
    "verdict": "safe",
    "group": null,
-   "reason": "HostNpc 已在 npc.rs:603 覆写，缺省实现不被使用。",
+   "reason": "HostNpc 已在 npc.rs:604 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptNpc for HostNpc",
     "method": "path",
-    "line": 603
+    "line": 604
    },
    "side_effect": "-",
    "consequence": "-",
@@ -5797,13 +5648,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1585 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1729 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "drop_item_on_full_bag",
-    "line": 1585
+    "line": 1729
    },
    "side_effect": "-",
    "consequence": "-",
@@ -5848,13 +5699,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1128 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1193 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "gold_changed",
-    "line": 1128
+    "line": 1193
    },
    "side_effect": "-",
    "consequence": "-",
@@ -5982,13 +5833,13 @@
    "semantics": "恒空串",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1452 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1596 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "global_a_val",
-    "line": 1452
+    "line": 1596
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6066,13 +5917,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1449 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1593 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "globa_dy_mval",
-    "line": 1449
+    "line": 1593
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6150,13 +6001,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1446 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1590 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "global_val",
-    "line": 1446
+    "line": 1590
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6208,13 +6059,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1486 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1630 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_globa_dy_mval",
-    "line": 1486
+    "line": 1630
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6266,13 +6117,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1481 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1625 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_global_val",
-    "line": 1481
+    "line": 1625
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6324,13 +6175,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1467 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1611 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_mdy_val",
-    "line": 1467
+    "line": 1611
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6382,13 +6233,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1473 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1617 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_mn_integer",
-    "line": 1473
+    "line": 1617
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6440,13 +6291,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1470 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1614 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_mnmval",
-    "line": 1470
+    "line": 1614
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6495,13 +6346,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1157 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1301 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "game_gold_changed",
-    "line": 1157
+    "line": 1301
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6556,13 +6407,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1146 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1290 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "game_gold",
-    "line": 1146
+    "line": 1290
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6612,13 +6463,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1491 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1635 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_global_a_val",
-    "line": 1491
+    "line": 1635
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6668,13 +6519,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1478 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1622 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_ms_string",
-    "line": 1478
+    "line": 1622
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6723,13 +6574,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1143 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1287 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_game_gold",
-    "line": 1143
+    "line": 1287
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6796,13 +6647,13 @@
    "semantics": "恒空串",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1458 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1602 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "server_str_val",
-    "line": 1458
+    "line": 1602
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6811,6 +6662,65 @@
    "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
    "mod_line": 334,
    "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:334",
+   "subcard": null
+  },
+  {
+   "name": "permission",
+   "trait": "player",
+   "line": 185,
+   "overridden": true,
+   "direct_handlers": [
+    "ActionOfGmExecute",
+    "ConditionOfIsAdmin",
+    "ConditionOfIssysop"
+   ],
+   "direct_commands": [
+    "GMEXECUTE",
+    "ISADMIN",
+    "ISSYSOP"
+   ],
+   "direct_count": 147,
+   "indirect_handlers": [
+    "ActionOfGmExecute",
+    "ActionOfMarry",
+    "ActionOfUnMarry",
+    "ConditionOfIsAdmin",
+    "ConditionOfIssysop"
+   ],
+   "indirect_commands": [
+    "GMEXECUTE",
+    "ISADMIN",
+    "ISSYSOP",
+    "MARRY",
+    "UNMARRY"
+   ],
+   "indirect_count": 155,
+   "default": "fn permission(&self) -> i32 {\n        0\n    }",
+   "doc": "/// `playerActor.Permission`",
+   "oracle": {
+    "file": "src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs",
+    "line": 3894,
+    "text": "if (!(playerActor.Permission >= 4))"
+   },
+   "kind": "const",
+   "semantics": "恒 0",
+   "verdict": "safe",
+   "group": null,
+   "reason": "NpcPlayer 已在 npc.rs:1207 覆写，缺省实现不被使用。",
+   "safe_kind": "overridden",
+   "evidence": {
+    "file": "mir2-rs/bins/game-svr/src/npc.rs",
+    "impl": "ScriptPlayer for NpcPlayer",
+    "method": "permission",
+    "line": 1207
+   },
+   "side_effect": "-",
+   "consequence": "-",
+   "priority": null,
+   "host_overridden": true,
+   "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
+   "mod_line": 185,
+   "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:185",
    "subcard": null
   },
   {
@@ -6867,13 +6777,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1455 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1599 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "server_int_val",
-    "line": 1455
+    "line": 1599
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6882,6 +6792,108 @@
    "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
    "mod_line": 330,
    "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:330",
+   "subcard": null
+  },
+  {
+   "name": "process_user_line_msg",
+   "trait": "player",
+   "line": 549,
+   "overridden": true,
+   "direct_handlers": [
+    "ActionOfGmExecute"
+   ],
+   "direct_commands": [
+    "GMEXECUTE"
+   ],
+   "direct_count": 139,
+   "indirect_handlers": [
+    "ActionOfGmExecute",
+    "ActionOfMarry",
+    "ActionOfUnMarry"
+   ],
+   "indirect_commands": [
+    "GMEXECUTE",
+    "MARRY",
+    "UNMARRY"
+   ],
+   "indirect_count": 147,
+   "default": "fn process_user_line_msg(&mut self, _line: &str) {}",
+   "doc": "/// `playerActor.ProcessUserLineMsg(line)`",
+   "oracle": {
+    "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
+    "line": 4942,
+    "text": "playerActor.ProcessUserLineMsg(sData);"
+   },
+   "kind": "noop",
+   "semantics": "空实现（no-op）",
+   "verdict": "safe",
+   "group": null,
+   "reason": "NpcPlayer 已在 npc.rs:1238 覆写，缺省实现不被使用。",
+   "safe_kind": "overridden",
+   "evidence": {
+    "file": "mir2-rs/bins/game-svr/src/npc.rs",
+    "impl": "ScriptPlayer for NpcPlayer",
+    "method": "process_user_line_msg",
+    "line": 1238
+   },
+   "side_effect": "-",
+   "consequence": "-",
+   "priority": null,
+   "host_overridden": true,
+   "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
+   "mod_line": 549,
+   "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:549",
+   "subcard": null
+  },
+  {
+   "name": "set_permission",
+   "trait": "player",
+   "line": 547,
+   "overridden": true,
+   "direct_handlers": [
+    "ActionOfGmExecute"
+   ],
+   "direct_commands": [
+    "GMEXECUTE"
+   ],
+   "direct_count": 139,
+   "indirect_handlers": [
+    "ActionOfGmExecute",
+    "ActionOfMarry",
+    "ActionOfUnMarry"
+   ],
+   "indirect_commands": [
+    "GMEXECUTE",
+    "MARRY",
+    "UNMARRY"
+   ],
+   "indirect_count": 147,
+   "default": "fn set_permission(&mut self, _v: i32) {}",
+   "doc": "/// `playerActor.Permission = v`（C# 字段类型 `byte`）",
+   "oracle": {
+    "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
+    "line": 4941,
+    "text": "playerActor.Permission = 10;"
+   },
+   "kind": "noop",
+   "semantics": "空实现（no-op）",
+   "verdict": "safe",
+   "group": null,
+   "reason": "NpcPlayer 已在 npc.rs:1217 覆写，缺省实现不被使用。",
+   "safe_kind": "overridden",
+   "evidence": {
+    "file": "mir2-rs/bins/game-svr/src/npc.rs",
+    "impl": "ScriptPlayer for NpcPlayer",
+    "method": "set_permission",
+    "line": 1217
+   },
+   "side_effect": "-",
+   "consequence": "-",
+   "priority": null,
+   "host_overridden": true,
+   "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
+   "mod_line": 547,
+   "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:547",
    "subcard": null
   },
   {
@@ -6924,13 +6936,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1175 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1319 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "game_point",
-    "line": 1175
+    "line": 1319
    },
    "side_effect": "-",
    "consequence": "-",
@@ -6981,13 +6993,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1178 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1322 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "credit_point",
-    "line": 1178
+    "line": 1322
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7028,13 +7040,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1575 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1719 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "send_del_use_item",
-    "line": 1575
+    "line": 1719
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7075,13 +7087,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1550 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1694 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_use_item_index",
-    "line": 1550
+    "line": 1694
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7168,13 +7180,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1189 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1333 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_play_dice_label",
-    "line": 1189
+    "line": 1333
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7227,13 +7239,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1345 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1489 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "tick_count",
-    "line": 1345
+    "line": 1489
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7278,13 +7290,13 @@
    "semantics": "委托其它钩子",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1172 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1316 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "config_game_gold_name",
-    "line": 1172
+    "line": 1316
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7371,13 +7383,13 @@
    "semantics": "恒空表",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1276 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1420 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "group_member_jobs",
-    "line": 1276
+    "line": 1420
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7428,13 +7440,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1273 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1417 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "group_owner",
-    "line": 1273
+    "line": 1417
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7473,13 +7485,13 @@
    "semantics": "委托其它钩子",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1251 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1395 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "line_variable_text",
-    "line": 1251
+    "line": 1395
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7520,13 +7532,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1099 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1164 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "quest_unit_open_status",
-    "line": 1099
+    "line": 1164
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7567,13 +7579,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1095 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1160 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "quest_unit_status",
-    "line": 1095
+    "line": 1160
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7618,13 +7630,13 @@
    "semantics": "恒 false",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1163 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1307 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "sale_deal",
-    "line": 1163
+    "line": 1307
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7669,13 +7681,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1296 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1440 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_bo_dec_game_gold",
-    "line": 1296
+    "line": 1440
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7720,13 +7732,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1293 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1437 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_bo_inc_game_gold",
-    "line": 1293
+    "line": 1437
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7771,13 +7783,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1285 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1429 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_kill_mon_exp_rate",
-    "line": 1285
+    "line": 1429
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7822,13 +7834,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1361 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1505 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_map_mode",
-    "line": 1361
+    "line": 1505
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7873,13 +7885,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1289 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1433 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_power_rate",
-    "line": 1289
+    "line": 1433
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7924,13 +7936,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1167 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1311 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_sale_deal",
-    "line": 1167
+    "line": 1311
    },
    "side_effect": "-",
    "consequence": "-",
@@ -7979,13 +7991,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1542 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1686 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "use_item_index",
-    "line": 1542
+    "line": 1686
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8032,13 +8044,13 @@
    "semantics": "恒空串",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1559 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1703 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "use_item_std_name",
-    "line": 1559
+    "line": 1703
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8085,13 +8097,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1539 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1683 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "use_items_len",
-    "line": 1539
+    "line": 1683
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8140,13 +8152,13 @@
    "semantics": "恒 None",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1337 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1481 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "envir_map_name",
-    "line": 1337
+    "line": 1481
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8191,13 +8203,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1315 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1459 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_offline",
-    "line": 1315
+    "line": 1459
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8248,13 +8260,13 @@
    "semantics": "恒 0",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1181 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1325 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "re_level",
-    "line": 1181
+    "line": 1325
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8305,13 +8317,13 @@
    "semantics": "恒 false",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1351 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1495 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "map_exists",
-    "line": 1351
+    "line": 1495
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8356,13 +8368,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1299 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1443 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_auto_get_exp",
-    "line": 1299
+    "line": 1443
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8395,13 +8407,13 @@
    "semantics": "恒 None",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1193 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1337 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "play_dice_label",
-    "line": 1193
+    "line": 1337
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8434,13 +8446,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1496 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1640 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_server_int_val",
-    "line": 1496
+    "line": 1640
    },
    "side_effect": "-",
    "consequence": "-",
@@ -8473,13 +8485,13 @@
    "semantics": "空实现（no-op）",
    "verdict": "safe",
    "group": null,
-   "reason": "NpcPlayer 已在 npc.rs:1501 覆写，缺省实现不被使用。",
+   "reason": "NpcPlayer 已在 npc.rs:1645 覆写，缺省实现不被使用。",
    "safe_kind": "overridden",
    "evidence": {
     "file": "mir2-rs/bins/game-svr/src/npc.rs",
     "impl": "ScriptPlayer for NpcPlayer",
     "method": "set_server_str_val",
-    "line": 1501
+    "line": 1645
    },
    "side_effect": "-",
    "consequence": "-",
