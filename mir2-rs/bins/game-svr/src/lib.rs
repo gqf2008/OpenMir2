@@ -4292,6 +4292,8 @@ fn handle_click_npc_cmd(
     // 共用**同一个**会话级计数器，见 [`run_merchant_goto`]）。
     item_number: &mut i32,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
+    gm: Option<&ScriptGmEnv<'_>>,
 ) -> bool {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -4404,6 +4406,9 @@ fn handle_click_npc_cmd(
             // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
             now_ms() as i32,
             &mut rng,
+            // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
+            Some(&*world),
+            gm,
         );
         world.rng = rng;
         // 佩戴位写回后同步世界实体（`Entity.use_items` 是每 tick 的源，不同步会被覆盖）。
@@ -4609,6 +4614,10 @@ fn dispatch_inbound_p0(
             catalog,
             item_number,
             gates,
+            // **卡 `openmir2-gm-script-exec-seams`**：生产路径的 `CM_CLICKNPC` 由 sim 循环在
+            // 调本函数**之前**接管（那里才能同时借 `&guilds` 给 GM 跳线，而本函数的
+            // `guild: &mut GuildDisconnect` 与它冲突）⇒ 本分支只作单元级入口，不装桥。
+            None,
         );
         true
     } else {
@@ -4995,6 +5004,8 @@ fn handle_shop_cmd(
     item_number: &mut i32,
     merchant_book: &game_svr::npc::MerchantScriptBook,
     npc_vars: &game_svr::npc::NpcVars,
+    // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
+    gm: Option<&ScriptGmEnv<'_>>,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -5192,6 +5203,9 @@ fn handle_shop_cmd(
                 // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
                 now_ms() as i32,
                 &mut rng,
+                // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
+                Some(&*world),
+                gm,
             );
             world.rng = rng;
             for slot in use_slots {
@@ -5242,6 +5256,9 @@ fn handle_shop_cmd(
                     // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
                     now_ms() as i32,
                     &mut rng,
+                    // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
+                    Some(&*world),
+                    gm,
                 );
                 world.rng = rng;
                 for slot in use_slots {
@@ -5648,6 +5665,9 @@ fn handle_shop_cmd(
                     // `HUtil32.GetTickCount()` 的宿主值（与 P31 `host_now` 同域）。
                     now_ms() as i32,
                     &mut rng,
+                    // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
+                    Some(&*world),
+                    gm,
                 );
                 world.rng = rng;
                 for slot in use_slots {
@@ -6273,6 +6293,69 @@ fn write_back_player_use_items(
     changed
 }
 
+
+/// 脚本 `GMEXECUTE` 宿主跳线的**宿主视图**（卡 `openmir2-gm-script-exec-seams`，承 T-210
+/// `openmir2-gm-script-host-seam` 的 `@Login` 一路）。
+///
+/// oracle 里 `Permission` 与 `ProcessUserLineMsg` 是**同一个 `PlayObject`** 的成员，脚本动作
+/// `ActionOfGmExecute` 只是调用方（`ExecutionProcessingSys.cs:4925-4947`）。本仓的 `NpcPlayer`
+/// 是每次脚本调用重建的快照 ⇒ 三个新增执行点（商人 `GotoLable` / QFunction `@StdModeFunc*` /
+/// 组队 `GotoLable`）在**跑脚本前**装桥、**跑完立刻摘下**（`player.gm = None`），后面的写回
+/// 才能再借 `&mut SessionGround`。
+///
+/// 与 `@Login` 的装配逐字段同源：`guilds`/`maps` 来自 sim 循环的 `GuildManager`/Envir 注册表，
+/// `cfg` 是同一份 `GmConfig`（`lock_human_login` 取部署配置），`pwd_sessions` 是会话层密码状态机。
+pub struct ScriptGmEnv<'a> {
+    /// `SystemShare.GuildMgr`。
+    pub guilds: &'a mir2_world::GuildManager,
+    /// `M2Share.MapMgr`（`WorldMap` 注册表）；`None` = 无 Envir。
+    pub maps: Option<&'a mir2_envir::MapRegistry>,
+    /// `SystemShare.Config` 的 GM 半边（`GmConfig`）。
+    pub cfg: &'a gmcmd::GmConfig,
+    /// `CM_PASSWORD` 驱动的会话层密码状态机（oracle `PlayObject.Chat.cs:241-362`）。
+    pub pwd_sessions: &'a std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+}
+
+impl ScriptGmEnv<'_> {
+    /// oracle 在 `@` 支**之前**判密码状态机（`PlayObject.Chat.cs:241-362` 的五个 `Is*` 位）
+    /// ⇒ 正在密码流里时脚本跳线不执行（不绕过拦截）。与 `@Login` 装配处的谓词同源。
+    fn pwd_busy(&self, chr_name: &str) -> bool {
+        self.pwd_sessions.get(chr_name).is_some_and(|p| {
+            let st = &p.state;
+            st.is_set_storage_pwd
+                || st.is_re_config_pwd
+                || st.is_un_lock_pwd
+                || st.is_un_lock_storage_pwd
+                || st.is_check_old_pwd
+        })
+    }
+
+    /// 装配 `game_svr::npc::NpcGm`（`Permission` 权威 = 会话 `GmSession`）。
+    ///
+    /// `now_ms` 取 `world.clock_ms`：与 `@Login` 装配处（T-210）**同一口径**。
+    fn bridge<'g>(
+        &'g self,
+        sess: &'g mut gmcmd::GmSession,
+        world: &'g mir2_world::World,
+        chr_name: &'g str,
+        actor_id: i32,
+    ) -> game_svr::npc::NpcGm<'g> {
+        game_svr::npc::NpcGm {
+            sess,
+            cfg: self.cfg,
+            world: gmcmd::GmWorld {
+                guilds: self.guilds,
+                maps: self.maps,
+                world: Some(world),
+                speaker: chr_name,
+                speaker_id: actor_id,
+                now_ms: world.clock_ms,
+            },
+            pwd_busy: self.pwd_busy(chr_name),
+        }
+    }
+}
+
 /// `@Login` 脚本的写回快照（卡 `openmir2-gm-script-host-seam`，T-210）。
 ///
 /// 原因：`NpcPlayer.gm`（GM 跳线）要借住 `&mut SessionGround.gm` 与 `&World`，而 `NpcPlayer<'r, 'g>`
@@ -6333,6 +6416,10 @@ fn run_merchant_goto(
     // 生产 = `now_ms() as i32`（与 P31 的 `host_now` 同域），**不是** `world.clock_ms`。
     now_tick: i32,
     rng: &mut mir2_shared::rng::RandomNumber,
+    // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 的宿主跳线视图。
+    // `world` 与 `gm` 都给了才装桥；否则保持 `ScriptPlayer` 缺省 no-op（无桥用例）。
+    world: Option<&mir2_world::World>,
+    gm: Option<&ScriptGmEnv<'_>>,
 ) -> (
     Vec<game_svr::npc::SayMsg>,
     Vec<game_svr::npc::SendMsg>,
@@ -6347,6 +6434,12 @@ fn run_merchant_goto(
     // `NpcPlayer` 借走 `rng`（`rngf` 闭包）⇒ 收在块里，块结束才把 `rng` 交还，
     // 供满包 `DropItemDown` 的 `StdMode 45` 抽数（`T-159`）。
     let (says, frames, bag_after, full_bag_drops, use_slots) = {
+        // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线要 `&mut GmSession`，而下面的写回要
+        // `&mut sg`（整表）——若把 `&mut sg.gm` 装进 `player`，它得活到 `player` 的**类型**不再
+        // 使用为止（NLL 对结构体字段不做流敏），写回就借不到 `sg`。oracle 里是同一个
+        // `PlayObject` 对象 ⇒ 这里把这半张会话态**移出**一次（跨脚本期间是唯一持有者），
+        // 块尾 `player` 最后一次使用之后原样放回；移出/放回逐字段等价。
+        let mut gm_sess = gm.map(|_| std::mem::replace(&mut sg.gm, gmcmd::GmSession::default()));
         let mut rngf = |v: i32| rng.random_below(v);
         let mut player =
             npc_player_from_session(&mut rngf, chr_name, &*sg, map_text, catalog, npc_vars);
@@ -6357,6 +6450,11 @@ fn run_merchant_goto(
         // oracle 的同一个 `PlayObject` 字段：脚本跑前 seed（`OPENYBDEAL` 读 `SaleDeal`，
         // `LableIsCanJmp` 读 `PlayDiceLabel`）。
         seed_player_gold_deal(&mut player, session, sell_off);
+        // **卡 `openmir2-gm-script-exec-seams`**：装 GM 跳线（`sess` = 移出的会话 GM 态）。
+        if let (Some(env), Some(w), Some(sess)) = (gm, world, gm_sess.as_mut()) {
+            let actor = sg.actor_id;
+            player.gm = Some(env.bridge(sess, w, chr_name, actor));
+        }
         let says = book
             .goto_label(merchant_actor_id, &mut player, label, bo_ext_jmp)
             .unwrap_or_default();
@@ -6372,13 +6470,18 @@ fn run_merchant_goto(
             .pending_map_modes
             .extend(std::mem::take(&mut player.map_mode_writes));
         let use_slots = write_back_player_use_items(&player, sg, &use_before);
-        (
+        let out = (
             says,
             std::mem::take(&mut player.frames),
             player.items.clone(),
             std::mem::take(&mut player.full_bag_drops),
             use_slots,
-        )
+        );
+        // `player` 的最后一次使用已过（`gm_sess` 的借用到此结束）⇒ 原样放回会话 GM 态。
+        if let Some(s) = gm_sess {
+            sg.gm = s;
+        }
+        out
     };
     // 背包的脚本副作用（`GotoLableTakeItem`/`GotoLableGiveItem`）与上面同一位置回写；
     // 满包余件照 oracle 走 `DropItemDown`，落不地的（模板缺失）只记 WRN，不编造 `MakeIndex`。
@@ -6424,6 +6527,11 @@ struct FixedNpcScriptCtx<'a> {
     map_text: &'a str,
     /// `HUtil32.GetTickCount()`（宿主 `now_ms() as i32`）：脚本动作的时间基准。
     now_tick: i32,
+    /// `SystemShare.WorldEngine`（脚本 `GMEXECUTE` 跳线的 `GmWorld.world`；卡
+    /// `openmir2-gm-script-exec-seams`）。
+    world: Option<&'a mir2_world::World>,
+    /// 脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
+    gm: Option<&'a ScriptGmEnv<'a>>,
 }
 
 impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
@@ -6454,6 +6562,8 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
             self.sell_off,
             self.now_tick,
             self.rng,
+            self.world,
+            self.gm,
         )
     }
 }
@@ -19222,6 +19332,37 @@ fn sim_loop(
                             &enter_cfg.catalog,
                             &world,
                         );
+                    } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
+                        // **卡 `openmir2-gm-script-exec-seams`**：点击 NPC 的 `@main` 与商人对框
+                        // 是同一路商人脚本（`PlayObject.Base.cs:676` → `FindNpc` → `GotoLable`）。
+                        // 必须在这里接管而不是走 `dispatch_inbound_p0`：那一路要传
+                        // `&mut guilds`（`GuildDisconnect`），与 GM 跳线要借的 `&guilds` 冲突。
+                        let gm_cfg = gmcmd::GmConfig {
+                            lock_human_login: enter_cfg.lock_human_login,
+                            ..gmcmd::GmConfig::default()
+                        };
+                        let script_gm = ScriptGmEnv {
+                            guilds: &guilds,
+                            maps: registry.as_ref(),
+                            cfg: &gm_cfg,
+                            pwd_sessions: &pwd_sessions,
+                        };
+                        handle_click_npc_cmd(
+                            cmd.recog,
+                            &chr_name,
+                            socket,
+                            &online,
+                            &mut ground_sessions,
+                            &mut world,
+                            &merchant_book,
+                            &mut shop_sessions,
+                            &mut sell_off_sessions,
+                            &npc_vars_base,
+                            &enter_cfg.catalog,
+                            &mut item_number,
+                            &gates,
+                            Some(&script_gm),
+                        );
                     } else if dispatch_inbound_p0(
                         &cmd,
                         tail.as_deref(),
@@ -19276,6 +19417,13 @@ fn sim_loop(
                             chr_name: &chr_name,
                             map_text: &map_text,
                             now_tick,
+                            // **卡 `openmir2-gm-script-exec-seams` 的**已知缺口**：固定 NPC
+                            //（`GuildOfficial.UserSelect`）这一路要同时把 `&mut world` 交给
+                            // `guild_official::handle_select`，与跳线的 `&World` 冲突；部署件里
+                            // 7 条 script_evidence 无一落在 `Npc_def/`（`比奇国王-0122` 在
+                            // `Market_Def/`，走商人路）⇒ 本卡按「未接线、保持缺省 no-op」登记。
+                            world: None,
+                            gm: None,
                         };
                         guild_official::handle_select(
                             cmd.recog,
@@ -19316,6 +19464,16 @@ fn sim_loop(
                         // M3⑤-实现 4：商店 `CM_*`（对话/售价/卖出/买入/详情/查修理价/修理）。
                         // 制药片 WB：并入同一派发（`CM_USERMAKEDRUGITEM` 需商人上下文）。
                         // oracle `PlayObject.Message.cs:888-942` + `:972-974`。
+                        let gm_cfg = gmcmd::GmConfig {
+                            lock_human_login: enter_cfg.lock_human_login,
+                            ..gmcmd::GmConfig::default()
+                        };
+                        let script_gm = ScriptGmEnv {
+                            guilds: &guilds,
+                            maps: registry.as_ref(),
+                            cfg: &gm_cfg,
+                            pwd_sessions: &pwd_sessions,
+                        };
                         handle_shop_cmd(
                             cmd.ident,
                             cmd.recog,
@@ -19339,6 +19497,9 @@ fn sim_loop(
                             &mut item_number,
                             &merchant_book,
                             &npc_vars_base,
+                            // **卡 `openmir2-gm-script-exec-seams`**：商人对话的 GM 跳线视图
+                            //（`guilds`/`registry`/`GmConfig`/`pwd_sessions`，与 `@Login` 同源）。
+                            Some(&script_gm),
                         );
                     } else if matches!(
                         cmd.ident,
@@ -26887,6 +27048,12 @@ mod tests {
 
         /// 生产入口 ①：`CM_MERCHANTDLGSELECT`（`PlayObject.Operate.cs:114-128`）。
         fn dlg_select(&mut self, label: &str) {
+            self.dlg_select_with_gm(label, None);
+        }
+
+        /// 同 [`Self::dlg_select`]，但把脚本 `GMEXECUTE` 的宿主跳线视图传进生产入口
+        /// （卡 `openmir2-gm-script-exec-seams`）。
+        fn dlg_select_with_gm(&mut self, label: &str, gm: Option<&ScriptGmEnv<'_>>) {
             let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
             handle_shop_cmd(
                 game_svr::shop::CM_MERCHANTDLGSELECT,
@@ -26911,11 +27078,17 @@ mod tests {
                 &mut self.item_number,
                 &self.book,
                 &self.npc_vars,
+                gm,
             );
         }
 
         /// 生产入口 ②：`CM_CLICKNPC`（`PlayObject.Message.cs:2071-2095` 的 `Click` 支）。
         fn click(&mut self) -> bool {
+            self.click_with_gm(None)
+        }
+
+        /// 同 [`Self::click`]，但装脚本 `GMEXECUTE` 的宿主跳线（卡 `openmir2-gm-script-exec-seams`）。
+        fn click_with_gm(&mut self, gm: Option<&ScriptGmEnv<'_>>) -> bool {
             handle_click_npc_cmd(
                 self.merchant_id,
                 "hero",
@@ -26930,6 +27103,7 @@ mod tests {
                 &self.catalog,
                 &mut self.item_number,
                 &self.gates,
+                gm,
             )
         }
 
@@ -26960,6 +27134,7 @@ mod tests {
                 &mut self.item_number,
                 &self.book,
                 &self.npc_vars,
+                None,
             );
         }
 
@@ -26980,6 +27155,101 @@ mod tests {
     /// `@dice` **不出现在任何说词里** ⇒ 进入资格只能来自 `LableIsCanJmp` 第三支
     /// （`PlayObject.Base.cs:2824-2828`，命中即清 `string.Empty` ⇒ 一次性）。
     ///
+    /// **卡 `openmir2-gm-script-exec-seams`（商家路）**：`CM_MERCHANTDLGSELECT` 送进
+    /// `run_merchant_goto` 的脚本里写 `GMEXECUTE 禁言 self 10000`，必须与 `@Login`（T-210）
+    /// 同口径产出**恰好一条** `SM_SYSMESSAGE(100)`（`@禁言` 的 oracle 文案逐字节），
+    /// 且抬权（`Permission 3 → 10`）在脚本结束后还原成进入前的 3。
+    ///
+    /// 牙：删 `run_merchant_goto` 的装桥块 ⇒ 本用例红（0 条 SysMsg：`process_user_line_msg`
+    /// 回到 `ScriptPlayer` 缺省 no-op）；删块尾 `sg.gm = s` 的放回 ⇒ 会话 GM 态变默认值、
+    /// permission 3 丢（断言红）。
+    #[test]
+    fn merchant_goto_gmexecute_emits_one_sysmsg_and_restores_permission() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![gmexec_act("禁言", "self", "10000")],
+        )]);
+        rig.sessions.get_mut("hero").unwrap().gm.permission = 3;
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &cfg,
+            pwd_sessions: &pwd,
+        };
+        rig.dlg_select_with_gm("@main", Some(&env));
+        let frames = rig.drain();
+        let sys: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_SYSMESSAGE)
+            .collect();
+        assert_eq!(
+            sys.len(),
+            1,
+            "脚本 GMEXECUTE ⇒ 恰好一条 SM_SYSMESSAGE；实得 {:?}",
+            idents(&frames)
+        );
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..]));
+        assert_eq!(text, "hero 已被禁言10000分钟", "`@禁言` 的 SysMsg 逐字节");
+        assert_eq!(
+            rig.sessions["hero"].gm.permission, 3,
+            "抬权必须还回进入前的值（3），且会话 GM 态已原样放回"
+        );
+    }
+
+    /// 同卡的**点击路**：`CM_CLICKNPC(@main)`（`PlayObject.Base.cs:676` → `GotoLable("@main")`）
+    /// 与对话框是同一个 [`run_merchant_goto`] ⇒ 装桥后脚本 `GMEXECUTE` 必须同样出帧。
+    ///
+    /// 牙：把 `handle_click_npc_cmd` 里 `run_merchant_goto(...)` 的 `gm` 实参换回 `None` ⇒ 红。
+    #[test]
+    fn click_npc_gmexecute_produces_sysmsg() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![gmexec_act("禁言", "self", "30")],
+        )]);
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &cfg,
+            pwd_sessions: &pwd,
+        };
+        assert!(rig.click_with_gm(Some(&env)), "点击必须命中商人");
+        let frames = rig.drain();
+        let sys: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_SYSMESSAGE)
+            .collect();
+        assert_eq!(
+            sys.len(),
+            1,
+            "点击路 GMEXECUTE ⇒ 恰好一条 SM_SYSMESSAGE；实得 {:?}",
+            idents(&frames)
+        );
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..])),
+            "hero 已被禁言30分钟"
+        );
+    }
+
+    /// `GMEXECUTE`（`ExecutionCode.GmExecute = 229`）：`sParam1` 命令名、`sParam2` 目标、
+    /// `sParam3` 参数（`ExecutionProcessingSys.cs:4925-4937`）。
+    fn gmexec_act(p1: &str, p2: &str, p3: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 229,
+            s_param1: p1.to_string(),
+            s_param2: p2.to_string(),
+            s_param3: p3.to_string(),
+            ..Default::default()
+        }
+    }
+
     /// 牙（删生产接线必红）：删 `run_merchant_goto` 的 `seed_player_gold_deal` ⇒ 实测**先红在
     /// 第一次 `@dice` 的 `LableIsCanJmp` 断言**（`lib.rs` 的
     /// `assert_eq!(play_dice_label.as_deref(), Some(""))`：快照没 seed 到会话里的
@@ -40666,6 +40936,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -40708,6 +40979,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -40739,6 +41011,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         let mut emitted = 0usize;
         while rx0.try_recv().is_ok() {
@@ -40881,6 +41154,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -40939,6 +41213,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -40991,6 +41266,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -41182,6 +41458,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         let panel = drain_frames(&mut rx0);
         assert_eq!(
@@ -41223,6 +41500,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         let frames = drain_frames(&mut rx0);
         let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
@@ -41279,6 +41557,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         assert!(
             drain_frames(&mut rx0).is_empty(),
@@ -42283,6 +42562,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
             ),
             "IsCanDeal=false ⇒ 不点"
         );
@@ -42304,6 +42584,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
             ),
             "商人在 ±15 ⇒ 到达 Click 点"
         );
@@ -42329,6 +42610,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
             ),
             "NPC 超 ±15 ⇒ 不点"
         );
@@ -42355,6 +42637,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
             ),
             "限频内 ⇒ 不点"
         );
@@ -42375,6 +42658,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
             ),
             "超出限频窗 ⇒ 可点"
         );
@@ -58777,6 +59061,7 @@ mod tests {",
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         assert!(drain_frames(&mut rx0).is_empty(), "未展示标签 ⇒ 零帧");
         assert_eq!(sessions["hero"].state.gold, 20_000, "未展示 ⇒ 不扣金");
@@ -58841,6 +59126,7 @@ mod tests {",
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         let frames = drain_frames(&mut rx0);
         let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
@@ -59028,6 +59314,7 @@ mod tests {",
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
         );
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1, "取回成功仅 SM_ADDITEM（+ say 未装载）");
@@ -59326,6 +59613,9 @@ mod tests {",
                 chr_name: "hero",
                 map_text: "0",
                 now_tick,
+                // 卡 `openmir2-gm-script-exec-seams`：固定 NPC 一路未接线（见生产侧的登记）。
+                world: None,
+                gm: None,
             };
             guild_official::handle_select(
                 self.npc_id,
@@ -60707,6 +60997,7 @@ mod tests {",
                 &self.catalog,
                 &mut self.item_number,
                 &self.gates,
+                None,
             )
         }
 
@@ -60749,6 +61040,7 @@ mod tests {",
                 &mut item_number,
                 &self.book,
                 &self.npc_vars,
+                None,
             );
         }
 
