@@ -1104,7 +1104,11 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         per_card, r_fails, r_needs = [], [], []
     else:
         state, detail, per_card, r_fails, r_needs = judge_r_cards(evidence_list)
-    hygiene_categories = {"window_required", "whitelist_t", "adjudicated", "comment_evidence"}
+    # 卡 `openmir2-goal-gate-unmerged-selftest`：把 `window_required_unmerged` 一并纳入。它是
+    # `merged=false` 的桶，永远不会命下面 `rec["merged"]` 的门 ⇒ 行为不变；纳入只是让「登记类
+    # 分类集合」保持一个枚举（避免下次新增分类时又漏），不在卫生清单里制造条目。
+    hygiene_categories = {"window_required", "window_required_unmerged", "whitelist_t",
+                          "adjudicated", "comment_evidence"}
     merged_open_hygiene = sorted(
         ({"card": rec["card"], "board_status": rec["board_status"],
           "category": rec["category"], "last_status_ts": rec["last_status_ts"]}
@@ -1271,6 +1275,13 @@ def _synth_index():
         # I-5：已合并但无任何证据/登记 ⇒ 真 FAIL
         "openmir2-card-omicron": [ent("issue", {"tier": "R"}),
                                   ent("patch", {"head": "deadbeef"})],
+        # 卡 `openmir2-goal-gate-unmerged-selftest`：窗口登记但**未合并** ⇒ 单列
+        # `window_required_unmerged`（pi），补上 `merge_result` 后回到 `window_required`（rho）。
+        "openmir2-card-pi": [ent("issue", {"tier": "R"}),
+                             ent("review", {"window_required": True})],
+        "openmir2-card-rho": [ent("issue", {"tier": "R"}),
+                              ent("review", {"window_required": True}),
+                              ent("merge_result", {"merged": True})],
     }
 
 
@@ -1311,6 +1322,10 @@ def _synth_board():
                              "status": "in-progress", "_column": in_progress},
         "openmir2-card-omicron": {"id": "openmir2-card-omicron", "unverified": 0,
                                   "status": "in-progress", "_column": in_progress},
+        "openmir2-card-pi": {"id": "openmir2-card-pi", "unverified": 0,
+                             "status": "in-progress", "_column": in_progress},
+        "openmir2-card-rho": {"id": "openmir2-card-rho", "unverified": 0,
+                              "status": "in-progress", "_column": in_progress},
     }
 
 
@@ -1424,7 +1439,7 @@ def selftest(verbose=False):
         def card_state(card):
             return classify_r_evidence(evs[card])
 
-        check("条件2 识别 17 张 tier=R（任一条目，含 tier 只写在 review）", lambda: (
+        check("条件2 识别 19 张 tier=R（任一条目，含 tier 只写在 review）", lambda: (
             r_cards == sorted(board), str(r_cards)))
         check("条件2 board 已完成 -> PASS（不依赖 merge_result）", lambda: (
             card_state("openmir2-card-alpha")[0] == PASS
@@ -1436,6 +1451,14 @@ def selftest(verbose=False):
             card_state("openmir2-card-zeta")[1]))
         check("条件2 window_required 分支", lambda: (
             card_state("openmir2-card-beta")[0] == PASS, card_state("openmir2-card-beta")[1]))
+        check("未合并窗口桶① window_required + 无 merge_result -> window_required_unmerged（仍 PASS）", lambda: (
+            r_category(evs["openmir2-card-pi"]) == "window_required_unmerged"
+            and card_state("openmir2-card-pi")[0] == PASS,
+            card_state("openmir2-card-pi")[1]))
+        check("未合并窗口桶② 同卡补 merge_result -> 回到 window_required", lambda: (
+            r_category(evs["openmir2-card-rho"]) == "window_required"
+            and card_state("openmir2-card-rho")[0] == PASS,
+            card_state("openmir2-card-rho")[1]))
         check("条件2 whitelist T-* 分支（登记行点名）", lambda: (
             card_state("openmir2-card-gamma")[0] == PASS
             and evs["openmir2-card-gamma"]["strong_t"] == ["T-3"],
