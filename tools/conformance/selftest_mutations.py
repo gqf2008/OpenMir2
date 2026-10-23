@@ -138,6 +138,22 @@ TEETH = [
      "N-1 README 写失败 => comment verdict=UNDECIDABLE",
      [('''            "verdict": comment_verdict,''',
        '''            "verdict": "PASS",''')]),
+    ("T10", "Y1 finalize_ok 只依赖 artifacts_ok（忽略首版 card-window.json 写失败）",
+     "Y1 首版 card-window.json 写失败",
+     [('''    finalize_ok = artifacts_ok and json_ok''',
+       '''    finalize_ok = artifacts_ok''')]),
+    ("T11", "D-1 证据缺件不再降级（exit!=0/finalize 失败仍判 PASS）",
+     "N-1 README 写失败",
+     [('''        elif summary["exit_code"] != 0 or not finalize_ok:
+            comment_verdict = "UNDECIDABLE"
+            verdict_reason = blockers[0] if blockers else "evidence_incomplete"''',
+       '''        elif False:
+            comment_verdict = "UNDECIDABLE"
+            verdict_reason = blockers[0] if blockers else "evidence_incomplete"''')]),
+    ("T12", "D-1 compare FAIL 被压成 UNDECIDABLE（丢掉「确定失败」）",
+     "D-1 compare FAIL",
+     [('''        if compare_verdict == "FAIL":''',
+       '''        if False:''')]),
     ("E1", "额外牙：fallback report 的 run_id 写成常量",
      "仍落本次 fallback report",
      [('''        "run_id": summary.get("run_id"),''',

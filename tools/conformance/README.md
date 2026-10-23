@@ -417,10 +417,14 @@ python -I -B tools/conformance/compare_runs.py selftest
   `_stale-<ts>-<pid>[-n]/`；selftest 连跑三次，断言两个 `_stale-*` **各自独立**（第一次的
   PASS 存档不会被后一次覆盖）。
 * **`--post-comment` 只记「证据包完整」的 PASS**（N-1）：comment 在 report.json /
-  README.txt / card-window.json **全部写完之后**才发，body 带 `exit_code`、`report_kind`、
-  `finalize_ok`；`exit_code != 0` 或最终化失败时 `verdict=UNDECIDABLE`，compare 的结论单列在
-  `report_verdict`。comment 之后对 card-window.json 只再追加一条回执（不新增证据），
-  回执写失败同样 `exit=2`。**这是 R 卡证据账本，绝不允许缺件时留下 PASS。**
+  README.txt / card-window.json **全部写完之后**才发。顶层只有一个**三态** `verdict`
+  （D-1）：compare FAIL ⇒ `FAIL`；无结论或证据缺件 ⇒ `UNDECIDABLE`；完整且 PASS 才 `PASS`。
+  同时带 `verdict_reason`、`blockers`（如 `evidence_incomplete: README.txt write failed`）、
+  `exit_code`、`report_kind`、`finalize_ok`；compare 的事实（verdict/rc/frames/db_state/
+  diffs/undecidable/whitelisted）收进**嵌套 `compare`**，顶层不再有 `report_verdict`——
+  只扫顶层 PASS 的读者/正则不会误读成「窗口通过」。comment 之后对 card-window.json 只再
+  追加一条回执（不新增证据），回执写失败同样 `exit=2`。**这是 R 卡证据账本，绝不允许缺件
+  时留下 PASS。**
 
 ### 牙（回归判据的可复跑 harness）
 
@@ -435,7 +439,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 5. 还原后 sha256 == 变异前；**不一致 => 整体 rc≠0**（N-3）。
 
 ```sh
-python -I -B tools/conformance/selftest_mutations.py            # 跑全部 16 颗
+python -I -B tools/conformance/selftest_mutations.py            # 跑全部 19 颗
 python -I -B tools/conformance/selftest_mutations.py --list     # 只列牙（含每颗的 expect）
 python -I -B tools/conformance/selftest_mutations.py --only T1,E2
 python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自身 fail-closed
@@ -443,6 +447,7 @@ python -I -B tools/conformance/selftest_mutations.py --selfcheck  # harness 自�
 
 覆盖：T1 F-2 调用点回退 / T2 F-5 run_id 常量 / T3 F-3 空 binaries / T4 F-4 半套产物 /
 T5 F-1 旧提示 / T6 H-1 写产物提前 / T7 H-2 固定 `_stale-fixed` / T8 N-1 comment 挪到产物
-之前 / T9 N-1 comment verdict 固定 PASS；额外牙 E1 fallback run_id 常量、E2 放宽未知库
-判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README、E6 忽略 card-window.json
-失败标志、E7 comment body 不带 exit_code。
+之前 / T9 N-1 comment verdict 固定 PASS / T10 Y1 `finalize_ok` 丢掉 `json_ok` 那一半 /
+T11 D-1 证据缺件不降级 / T12 D-1 compare FAIL 被压成 UNDECIDABLE；额外牙 E1 fallback run_id
+常量、E2 放宽未知库判定、E3 不落 card-window.json、E4 口令抹除失效、E5 不写 README、
+E6 忽略 card-window.json 失败标志、E7 comment body 不带 exit_code。
