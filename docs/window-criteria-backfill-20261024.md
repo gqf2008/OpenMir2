@@ -5,8 +5,9 @@
 > 上游：卡 `openmir2-window-criteria-quality-audit`（审计返工 v2，文件 head `ed7453ac5b1dc70c5cbc8cc86c49a0f6e216ed57`，
 > 合并点 `5a6ed54c1`，blob `651a29f6634e3e75d72f1b65d45773d2f6f9f730`）。
 > 性质：**只补判据文本**（docs 总表 + 每张卡的签名 comment），未改代码/工具/goal_gate 判据/任何人卡片 status。
-> 模板：`docs/window-criteria-template.md` 尚未合入（模板卡 `openmir2-window-criteria-template` 仍在
-> `needs-review`）⇒ 按审计 §3 与卡面 6 字段：①前置 ②可复跑命令 ③期望 ④判据 ⑤不可比字段与理由 ⑥负责人与状态。
+> 模板：初版交付（`36a9c0d0f`）时 `docs/window-criteria-template.md` 尚未合入，按审计 §3 与卡面 6 字段回填；
+> 返工 r2 期间模板卡已合入 master（`a30a6fa79`）。本文件的 6 字段与模板 §1 同名同义：
+> ①前置 ②可复跑命令 ③期望 ④判据 ⑤掩码/不可比字段 ⑥负责人与状态。
 
 ## 1. 清单先定：审计 §5.2/§5.3 的 20 张（从文件现取）
 
@@ -343,7 +344,7 @@
 |---|---|---|
 | `t_reservation_gate` | GREEN（rows=250, whitelist=250, max=T-264） | 未改 whitelist/预约表 ⇒ 同值 |
 | `whitelist_anchor_gate` | ALL PASS（548 条锚） | 未改 whitelist ⇒ 同值 |
-| `conflict_marker_gate` | OK（0 markers / 7426 tracked files，`5a6ed54c1`） | **OK（0 markers / 7430 tracked files，返工 head）**（base 7426 + master `19009c6a0` 带入 3 个文件 + 本 patch 的 1 个 docs 文件 = 7430；`git ls-tree -r --name-only` 实测） |
+| `conflict_marker_gate` | OK（0 markers / 7426 tracked files，`5a6ed54c1`） | **OK（0 markers / 7432 tracked files，返工 head（见卡面 patch 的 `head`））**（base 7426 + master `19009c6a0` 带入 3 + master `a30a6fa79` 带入 2（模板/lint）+ 本 patch 的 1 个 docs 文件 = 7432；`git ls-tree -r --name-only` 实测） |
 | `goal_gate --json` 条件② | `state=need_human`；r_cards **194**：`window_required=116` / `window_required_unmerged=5` / `whitelist_t=48` / `closed=11` / `not_in_board=5` / `merged_not_closed=5` / `adjudicated=3` / `weak_t=1` | **`state=need_human`；r_cards 194：同上 8 类计数逐一相同；逐卡 category diff 为空集**（`index_entries` 因本批新增 comment 增长，不影响分类；改前基线取合并提交 `d971f318e`，已含并行卡合并） |
 
 > 返工 r2 实测（2026-10-24）：`t_reservation_gate` rc=0 GREEN；`conflict_marker_gate` rc=0；
@@ -367,9 +368,13 @@
 | R1 | `login-529` 不再是「不可能达成」：改判 **A 组、判据已可机判**，因本轮名额 10 张已满而顺延；删除「SS_SERVERINFO 未接 ⇒ 状态段恒 0」。 | 本文 §2 未取表；证据：`git merge-base --is-ancestor 185a6c8cb HEAD` → YES；`sed -n '17,20p' mir2-rs/bins/game-svr/src/ids.rs` →「**上报**：SS_SERVERINFO … 由两处产生」；`mir2_probe --check-scenario --scenario tools/probe/scenarios/login_only.json` → rc=0 `scenario OK: login_only (1 steps)`。10 条 comment 内无同一表述（逐条 grep 0 命中）。上游审计 §5.2 #26 仍带旧分类，属另一卡文件，未改，建议下一批重分类。 |
 | R2 | 10 张卡各补一条签名 comment，`items[].status` 写 `owner=<principal>；<状态>` 并新增显式 `owner` 字段；owner 取自该卡最近一条 `status` 的 `owner`（非本卡作者）。 | 10 条 r2 comment 全部 `rc=0`、`verified=true`；oid 逐条见 §4 开头 oid 表的「r2 补 ⑥」列。 |
 | R3 | 汇总计数改**互斥分桶**：完全可机判 6 + 部分可机判 3 + 判不了 1 = **10**。 | 本文 §5「计数（互斥分桶）」 |
-| R4 | tracked files 按返工 head 实测写 **7430**（base 7426 + master 合并 3 + 本 patch 1）；goal_gate 六类改为实测 **8 类 194 张**（改前基线 = 合并提交 `d971f318e`）。 | 本文 §6；`git ls-tree -r --name-only <head> | wc -l`；`tools/hygiene/conflict_marker_gate.py` |
+| R4 | tracked files 按返工 head 实测写 **7432**（base 7426 + master `19009c6a0` 合并带入 3 + master `a30a6fa79` 合并带入 2 + 本 patch 1）；goal_gate 六类改为实测 **8 类 194 张**（改前基线 = 合并提交 `d971f318e`）。 | 本文 §6；`git ls-tree -r --name-only <head> | wc -l`；`tools/hygiene/conflict_marker_gate.py` |
 | R5 | A 组定义改为「离线载体（场景/RunPair/构造级 cargo）且今日 rc=0」，blocked 场景只算构造级；10 张逐张标载体类型；`drop-exp-wiring` 注明 batch-plan 对应行是 `m3-drop-exp-align`。 | 本文 §2 规则 + 表 + 「载体纠偏」注 |
 
 > batch-plan 漂移（review「另发现」）：`docs/window-batch-plan-20261023.md` §7.1/§7.2/§7.3 的 `spell_cast` 行改为
 > 「夹具已在 `512d9ecf5`；场景封口由卡 `openmir2-spell-cast-unblock` 处理（head `923a98a5c` 待审）」，
 > **不预设合并结果**；未改 `tools/probe/**`。
+>
+> 模板同步：返工期 master 合入 `a30a6fa79`（`docs/window-criteria-template.md` + 只告警的
+> `tools/goal/window_criteria_lint.py`）。本文件的 ①–⑥ 与模板 §1 同名同义，**未改判据口径**；
+> lint 的输入契约是 `status.work` 散文段（本卡受 acceptance ⑦ 约束只发 comment，不改他人 status），故未调用 lint 改任何卡。
