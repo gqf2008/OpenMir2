@@ -10,7 +10,7 @@
 | # | 一句话 | 预计成本 | 不做的后果 |
 |---:|---|---|---|
 | 1 | **窗口授权**：批一轮真机窗口（或指定车道去跑），先跑 60 秒 `preflight`，再按 §1.2 逐场景跑 | 一轮 ≈ 240 GB 磁盘写入 + 数十分钟（`docs/window-runbook-20261023.md:42`）；前置见 §1 | 条件② 的 **123** 张 `window_required`（其中未合并 2）证据永远拿不到；`merged 未 closed` 的 **172** 张只能继续「登记型 PASS」挂着 |
-| 2 | **`rules.json` 裁定**：47 条 PENDING = **44 条可批 / 3 条需返工或 owner 明确裁定**（旧文档的 33/10 已不成立） | 1 次评审 + 1 个提交；全批要同步改 **22 条** selftest 断言（否则 240/262 红），只解 ident 14 只需改 **1 条**（261/262） | 每轮窗口报告都带 `rules_pending_review=true`，不能当 R 级已复核证据；两侧一旦出现 `SM_HIT(14)` 整轮判 `UNDECIDABLE(rc=2)` |
+| 2 | **`rules.json` 裁定**：PENDING 总数 **50**（`global` **4** + rules 数组 **45** + `db` **1**）。分类（rules 数组 **42** 时快照）：**44** 可批 / **3** 需返工或 owner 明确裁定；另 **3** 条（`53/638/639`，`89a3d02fd`）**未归类**，待 owner 一并裁定（旧文档的 33/10 已不成立） | 1 次评审 + 1 个提交（含 53/638/639 的归类裁定）；全批要同步改 **22 条** selftest 断言（否则 240/262 红），只解 ident 14 只需改 **1 条**（261/262） | 每轮窗口报告都带 `rules_pending_review=true`，不能当 R 级已复核证据；两侧一旦出现 `SM_HIT(14)` 整轮判 `UNDECIDABLE(rc=2)` |
 | 3 | **`T-161..T-222` 复核口径**：58 行里只有 2 行有可核的非作者 approve | 一句话定口径（§4 给 3 个选项）；逐号复核则至少看 5 个文件 + 8 张卡 | 条件② 的 whitelist 支永远停在「待复核」；`goal_gate` 卫生清单只能按「有登记」记账，不能按「已复核」 |
 | 4 | **三张卡的替代判据**：`run-gap-checkdupobj` / `disappear-recipients-gridscan` / `enter-map-cell-rejected-vs-oracle` 各等一句话 | 每张 1 句话（§3 给了每张的两个选项） | 三张永久挂 `in-progress`，`goal_gate` 的「需人工 10 张」常驻 |
 | 5 | **私有 C# 栈去留**：`E:/tmp/conformance/csharp-root` 是否长期保留（低优先级） | 保留=0；归档/退役需先安排重建 | 不表态=默认保留，占 `E:/tmp/conformance` 共 **699 MB** |
@@ -43,8 +43,10 @@
 - 工具已就绪：`preflight.py` 已合入 master（最新 commit `deea8d3d0`，`git merge-base --is-ancestor deea8d3d0 master` 为真）；
   `docs/window-batch-plan-20261023.md` §7.1 里「preflight 在办（未合）」**已过期**。
 - 场景：`tools/probe/scenarios/` 现 20 个，2 个仍 `blocked`（`combat_hit` / `combat_strike`）；
-  `spell_cast` 已解封（master `7bb48239a`）但因 Rust 侧缺魔法帧仍不在可跑集合内，`equip_struck_save` 因 `642`
-  合入（`8dcb8c8ca`）解锁。**「今天能跑」的集合不在本文件定义**——逐行枚举见 §1.2 引用的 batch-plan §7.4。
+  `spell_cast` 已解封（master `7bb48239a`）并已在 §7.4 可跑（见 batch-plan §7.4 @ `478ff9a33`，
+  枚举 **11 行 / 16 场景**；跑前 profile 需 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，
+  写法引用 `tools/probe/scenarios/README.md:240`），`equip_struck_save` 因 `642` 合入（`8dcb8c8ca`）解锁。
+  **「今天能跑」的集合不在本文件定义**——逐行枚举见 §1.2 引用的 batch-plan §7.4。
 
 ### 证据
 
@@ -87,7 +89,7 @@ conditions[1].evidence.whitelist_t_rows = 255
 
 ### owner 的选项（一句话）
 
-- **A**：批一轮窗口，按 §1.2 引用的 batch-plan §7.4 枚举（**10 行 / 15 个场景**，`@ a42171d04`）逐场景跑——成本与前置见下表；
+- **A**：批一轮窗口，按 §1.2 引用的 batch-plan §7.4 枚举（见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**）逐场景跑——成本与前置见下表；
 - **B**：只批最小验证集（`login_only` + `upgrade_retrieve` + `equip_struck_save`，三者均在上述枚举内），其余下一轮；
 - **C**：暂不开窗，先做不占窗口的清理项（§2 `rules.json` 最小解阻 / §4 `T-161..T-222` 复核口径 / §3 三张卡的替代判据）；
   `openmir2-ability-weaponstrong` 的合入阻塞已解除（`d38acf25b`），不再是开窗前置。
@@ -121,8 +123,7 @@ rc=0 = `PREFLIGHT PASS`；rc=2 = `PREFLIGHT FAIL`（FAIL 行自带修复建议�
 export CONFORMANCE_PASSWORD='<窗口测试账号密码>'     # PowerShell: $env:CONFORMANCE_PASSWORD='...'
 ```
 
-**今天就能跑**：**本文件不自行计数**，一律引用 `docs/window-batch-plan-20261023.md` §7.4（枚举出处 `a42171d04`，
-该文件此后未改；master `55a8e7fca` 上逐行核对为 **10 行 / 15 个场景**）。下面按该表原样列出：
+**今天就能跑**：**本文件不自行计数**，一律引用 `docs/window-batch-plan-20261023.md` §7.4（见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**）。下面按该表原样列出（其中 `spell_cast` **不能**照抄下循环的 `--profile alt`，见循环后的说明）：
 
 ```sh
 for s in login_only pickup_item move_walk upgrade_retrieve equip_struck_save \
@@ -136,6 +137,15 @@ for s in login_only pickup_item move_walk upgrade_retrieve equip_struck_save \
 done
 ```
 
+> 上面这段循环覆盖 §7.4（见 batch-plan §7.4 @ `478ff9a33`）里可用内置 `alt` 直跑的 15 个场景；第 16 个 `spell_cast` **不能**加进这个循环——它要求 profile 带 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，写成 `--profile alt` 会直接 rc=2。profile 片段见 `tools/probe/scenarios/README.md:240`「窗口 profile 前置：`spell_cast` 必须 pin D-9」（本文件不重写第二份）：
+>
+> ```sh
+> python -I -B tools/conformance/card_window.py \
+>   --scenario tools/probe/scenarios/spell_cast.json \
+>   --out E:/tmp/conformance/runs/20261024/spell_cast \
+>   --profile <带 magic 段且两侧 pin D-9 的 profile.json> --dry-run
+> ```
+
 - 带 `required` 的场景（`npc_click*` / `merchant_dialog` / `king_dialog` / `npc_script_chain` / `move_walk` / `pickup_item` / `upgrade_retrieve`）
   会**自动先跑 discovery**；推不出参数即 fail-closed（不会拿空参数硬跑）。
 - `upgrade_retrieve` 的夹具三件套缺一必红：**武器在手、金币 ≥ 10000、背包有黑铁矿**（场景 note 原文）。
@@ -147,10 +157,10 @@ done
   注意：场景 `description` 已随 `8dcb8c8ca` 改写为「Rust 已接这条磨损帧」，与 master 代码一致（`combat.rs` 有 `attack_success_weapon_wear`）；上位旧说法只作历史对照。
 - R 卡记账用 `--post-comment --card <卡 id>`（一次 run 可对多张卡各发一条 comment；卡 id 见 batch-plan §3 的「场景」列）。
 
-**`spell_cast` 不在可跑枚举内（batch-plan §7.4 末尾「仍不可跑」，本文件不另立计数）**
+**`spell_cast` 已在 §7.4 可跑（见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**）——跑前需 profile 带 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，否则 53 body 0B vs 16B fail-closed；真机窗口仍未跑**
 
-batch-plan 的排除理由是：Rust 侧魔法落点 + 第二观察者仍未接 ⇒ 真机必超时。场景自 `cecc3fe41` 起声明
-`"requires": ["magic"]`，**默认 `alt` profile 现在直接 rc=2 fail-closed**（不再是静默假绿）：
+batch-plan 原排除理由「Rust 侧魔法落点 + 第二观察者仍未接」已由卡 `openmir2-spell-cast-window-blockers`（`65d6e7134`）逐条否证，比较器规则已由 `openmir2-spell-frame-compare-rules`（`89a3d02fd`）补齐 ⇒ 2026-10-24 移入 §7.4。场景自 `cecc3fe41` 起声明
+`"requires": ["magic"]`，**默认 `alt` profile 直接 rc=2 fail-closed**（不再是静默假绿）：
 
 ```sh
 # 默认 alt 没有 magic 段 → 明确拒绝（本卡在 master 55a8e7fca 实跑）
@@ -175,7 +185,6 @@ python -I -B tools/conformance/card_window.py --scenario tools/probe/scenarios/s
 |---|---|---|
 | `combat_hit` / `combat_strike` | 场景自身 `blocked`；`card_window` 见到 `blocked` 即 rc=2、不建 out、不起栈 | 需第二会话/同格怪夹具（`combat_hit`）、满足 DC/HitPoint 的配装或 `wait_for` recog 过滤（`combat_strike`） |
 | `bag_equip` / `eat_item` | 背包夹具 `inventory` 已进 master（`bb4317a01`），但这两个场景**没有**声明 `inventory`，`required` 又要从 201 帧发现非空背包 | 场景补 `inventory` 声明后（另卡） |
-| `spell_cast` | Rust 侧魔法落点 + 第二观察者未接（场景已解封且 `requires:["magic"]`）；见上一节 | 见 batch-plan §7.3/§7.4 |
 | `castle_zone` | 仓库内无该场景文件（不可达登记） | 双行会 DB + 私有根 `AttackSabukWall.txt` + 多会话探针 |
 
 ### 1.3 第③步：证据落点与复核
@@ -213,14 +222,16 @@ python -I -B tools/conformance/preflight.py --profile alt
   本卡第一版曾写「现在 overall=fail、唯一 FAIL 卡 `openmir2-ability-weaponstrong`」，那是**假 FAIL**：
   建卡 issue body 缺 `window_required` → 被归「三者皆无」→ 条件② 掉成 `fail`；Leader 补签名 comment `c7f43850`
   后修回。**教训：判定条件② 前先看 `body.window_required` 是否落在任意一条签名条目上，不要只读 issue 标题/正文。**
-- 旧文档把 `spell_cast` 归为「已解封但真机跑不了」→ 场景确已解封，但仍在 batch-plan §7.4 的「仍不可跑」，
-  **不在本轮 15 个场景内**：Rust 侧魔法落点 + 第二观察者未接，真机必超时。另：缺 `magic` 夹具现在自 `cecc3fe41`
-  起是 rc=2 fail-closed（`"requires": ["magic"]`），**不是**上一版说的静默假绿。
+- 旧文档把 `spell_cast` 归为「已解封但真机跑不了」→ **已过期**：`spell_cast` 现已在 batch-plan §7.4 的可跑枚举内
+  （见 batch-plan §7.4 @ `478ff9a33`，枚举 **11 行 / 16 场景**），前置是 profile 带 `magic` 段 **且**
+  `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`（否则 53 body 0B vs 16B fail-closed），**真机窗口仍未跑**。
+  旧理由「Rust 侧魔法落点 + 第二观察者未接」已由 `65d6e7134` 否证。另：缺 `magic` 夹具自 `cecc3fe41` 起是
+  rc=2 fail-closed（`"requires": ["magic"]`），**不是**上一版说的静默假绿。
 - 旧文档的「`preflight.py` 未合、按手工清单自查」→ `preflight.py` 已在 master（`deea8d3d0`）。
 
 ---
 
-## 2. `rules.json` 的 47 条 PENDING
+## 2. `rules.json` 的 50 条 PENDING（`global` 4 + rules 数组 45 + `db` 1）
 
 ### 现状（现算，不抄旧数）
 
@@ -232,14 +243,14 @@ python -I -B -c "import json;d=json.load(open('tools/conformance/rules.json',enc
 
 | 口径 | 现算值 | 说明 |
 |---|---:|---|
-| PENDING 总数 | **47** | `global` 4 + `rules` 42 + `db` 1（旧文档 43 = 4+38+1，已过期） |
-| **可批（证据充分）** | **44** | 含新补的 `202/203/642/709` 四条 |
+| PENDING 总数 | **50** | `global` **4** + rules 数组 **45** + `db` **1**（旧值 47 = 4+42+1 是 rules 数组 42 时的快照；`89a3d02fd` 新增 53/638/639 三条 ⇒ rules 45） |
+| **可批（证据充分）** | **44**（rules 数组 42 时快照） | 分类未随 rules 42→45 重算：新增的 `53/638/639` 三条（`89a3d02fd`）归类待 owner 一并裁定；原含新补的 `202/203/642/709` 四条 |
 | **需先返工/owner 明确裁定** | **3** | ident **14**（`ignore`）、**10**、**50** |
 | 其中 `tier=R` 的规则 | 6 | 10 / 14 / 200 / 201 / 202 / 203 |
-| 草稿人分组 | worker-4 28、worker-70 13、worker-66 4、worker-68 1、worker-26 1 | 同一命令的变体 |
-| 文件指纹 | `sha256=193aa7b7c010828b33f437f40f904d759cd21774c29db60176e9be8bd1bf478d` | 引用时带指纹 |
+| 草稿人分组（现算 @ `478ff9a33`） | worker-4 23、worker-70 13、worker-66 4、worker-58 3、worker-68 1、worker-26 1（合计 rules 数组 45） | 同一命令的变体（按 `approved_by` 里的 `draft:` 字段分组） |
+| 文件指纹 | `sha256=4bfde36357e9b68ce5fa3b409d3513b9e76b91f354f0472cd0c7028a0085d258` | 引用时带指纹（@ `478ff9a33`） |
 
-> 本卡在 master `55a8e7fca` 复算：仍 **47/47**，`sha256=193aa7b7…` 未变（`rules.json` 自上一版快照起未被改动）。
+> 本卡在 master `478ff9a33` 复算：**50/50**（`global` 4 + rules 数组 45 + `db` 1），`sha256=4bfde363…`；相对上一版快照 rules 数组 42→45（`89a3d02fd` 新增 53/638/639 三条）。
 
 **为什么从 33/10 变成 44/3**：旧文档列的 10 条「需证据」里，7 条（54/5008/1106/752/811/766/213）
 已按 `b42f20a28`（merge `card/rules-recog-unmask`）补上 `head_compare:["recog"]`（本卡逐条核 `rules.json` 确有该键）；同时新增 `202/203/642/709` 四条
@@ -258,7 +269,7 @@ python -I -B -c "import json;d=json.load(open('tools/conformance/rules.json',enc
 ### 证据：批准会触及哪些 selftest 断言，不改会怎么红
 
 - 当前：`python -I -B tools/conformance/compare_runs.py selftest` → **GREEN 262/262**（本卡实跑）。
-- 实测（在仓库外的临时副本上把 47 条 `approved_by` 全改成非 PENDING，再跑同一 selftest）：
+- 实测（在仓库外的临时副本上把 50 条 `approved_by` 全改成非 PENDING，再跑同一 selftest；本卡在 `478ff9a33` 复跑）：
   **`RED: compare_runs selftest 240/262`** —— 恰好 **22 条**断言红。
   复跑方法：`cp -r tools E:/tmp/nh24-sim/` → 改副本 `tools/conformance/rules.json` 的 `approved_by` → 在副本里跑 selftest。
 - 22 条断言的分布（`tools/conformance/selftest_impl.py`）：
@@ -266,7 +277,7 @@ python -I -B -c "import json;d=json.load(open('tools/conformance/rules.json',enc
   - 13 条：批次 2 逐 ident 同型断言（`:494`，覆盖 11/13/200/201/615/616/635/636/643/644/645/763/767）；
   - 1 条：`31 的 reason/tier/approved_by=PENDING 齐全`（`:830`）；
   - 1 条：`内置 14 是 PENDING ignore ⇒ 真剔帧时 rc 2`（`:667`）。
-- **只批 ident 14**（口径 A）实测：`RED: compare_runs selftest 261/262`（只红 `:667` 那一条）。
+- **只批 ident 14**（口径 A）实测：`RED: compare_runs selftest 261/262`（只红 `:667` 那一条；`478ff9a33` 复跑同值）。
 - 新补的 `202/203/642/709` **不动**上述断言（全批模拟里这四条的牙仍 PASS）。
 
 ### owner 的选项
@@ -274,7 +285,7 @@ python -I -B -c "import json;d=json.load(open('tools/conformance/rules.json',enc
 | 选项 | 内容 | 成本 | 不做的后果 |
 |---|---|---|---|
 | **A 最小解阻** | 只批 ident 14（先裁定其保留条件） | 改 1 条断言（261/262）+ 1 次评审 | 不批：遇 14 即整轮 rc=2；批错了则 R 级证据失真 |
-| **B 清账** | 先批 44 条可批 + 返工 10/50（补 T 行）+ 裁定 14 | 22 条断言同步改（或分两次提交），全批后 240/262 绿 | 不批：每轮都带 `rules_pending_review=true`，不能当已复核判据 |
+| **B 清账** | 先批 44 条可批（rules 数组 42 时的分类快照；新增 53/638/639 的归类待裁定）+ 返工 10/50（补 T 行）+ 裁定 14 | 22 条断言同步改（或分两次提交），全批后 240/262 绿 | 不批：每轮都带 `rules_pending_review=true`，不能当已复核判据 |
 | **C 不批** | 维持 PENDING，窗口用 `--ignore-idents 14` 逐次显式处置 | 0 | `--ignore-idents` 不替代 approve，证据等级永远不足 |
 
 **不替 owner 决定批不批**；只提示：若选 A，必须在同一提交里改 `selftest_impl.py:667`，否则门禁假红。
