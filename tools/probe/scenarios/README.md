@@ -270,7 +270,20 @@ R6 取表五种 drift / 攻击族越界方向只 WARN 不判死），并断言 `
 **`param` 服务端完全不读**（`src/GameSrv/Word/WorldServer.cs:831-851`，两支都只取 `LoWord/HiWord(Recog)`）。
 
 * `combat_hit.json` 用 `target_xy`、`move_walk.json` 用 `move_xy` 承载打包值；`target_x/target_y`、`move_x/move_y`
-  保留为「意图/推导量」，调用方按公式算好打包值再用 `--var` 传入。
-* 本 DSL **没有位运算表达方式**（取值只有 int / params 名；`computed` 只是给 `param_discovery` 的注记）⇒
-  这两条场景在 `card_window` 里会因 `*_xy` 推不出而 fail-closed（不再是静默打错坐标）。
+  保留为「意图/推导量」。
+* **打包可以用 `computed.pack` 声明**（卡 `openmir2-probe-computed-pack`）：`param_discovery` 会算出
+  `值 = (hi<<16)|lo`，`card_window` 的自动发现据此直接拿到 `*_xy`：
+
+  ```json
+  "computed": {
+    "move_x": {"derived_from": "self_x", "delta": 1},
+    "move_y": {"derived_from": "self_y", "delta": 0},
+    "move_xy": {"pack": {"lo": "move_x", "hi": "move_y"}}
+  }
+  ```
+
+  `pack.lo`/`pack.hi` 可写任意可推导变量（**允许引用其它 `computed`**，按不动点求解；成环、缺字段、
+  与 `derived_from/delta` 混用都 fail-closed）。`mir2_probe` 仍不读 `computed`——真跑时值由
+  `--var` 传入，`card_window` 用发现值填。
+* `combat_hit.json` 的 `target_xy` 仍由调用方给（目标格是操作者选的外生坐标，没有可推导基准）。
 * 详细逐文件复核表、oracle 行号与影响面：`docs/scenario-recog-packing-20261023.md`。
