@@ -99,6 +99,9 @@ conflict_marker_gate             0 markers / 7415 files，rc=0
 goal_gate.py --json              rc=2；merged_not_closed = 5（detail 见 §2）
 ```
 
+**本返工 merge master `2000e1cc5` 后（2026-10-24）**：预约表 **250** / 锚 **548** / 冲突标记 **0/7422**；
+`goal_gate --json` 的 `merged_not_closed` 仍为 **5**（同上 detail）。
+
 ## 6. 残留物
 
 - `E:/tmp/w24-closeout-before.json`、`E:/tmp/w24-closeout-after.json`（goal_gate 前后快照）。
