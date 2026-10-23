@@ -56,3 +56,22 @@
 ## 6. 私有 C# 栈保留
 
 - `E:/tmp/conformance/csharp-root` 仍在使用（`mir2_test_*` 库）；请确认是否长期保留。
+
+## 7. 进度更新（2026-10-24 00:1x，`38ffb0bfe`）
+
+**条件② 已从 `fail` 转为 `need_human`**：`三者皆无 0`、**FAIL 卡 0**。
+- `merged 未 closed 且无登记`：**44 → 8**（四批登记 36 张）；剩 8 张由卡
+  `openmir2-r-window-registry-closeout` 三桶定性（3 张显式顺延 = 真机不可达 1 / 多会话 2；
+  1 张无窗口判据；4 张未开班）。
+- `其它需人工 5`：线程可读但 `board --json` 不列出 ⇒ 由卡 `openmir2-board-index-reconcile` 处理
+  （改 `board.toml` 需提交+评审，或补卡状态）。
+- 唯一那张 FAIL 卡 `gm-batch-5-guild-castle` 已处置：**A 片 6 条合入**（`2810298e9`）、
+  B 片由 `openmir2-gm-batch-5b-cross-server` 承接（blocked-by G11）、C 片部署 0 命中登记不实现。
+
+**你开窗时的执行依据**换成了 `docs/window-batch-plan-20261023.md`（卡 `openmir2-window-batch-plan-refresh`
+在更新它）：它会给出「现在就能跑」与「现在跑也没用」两份清单——**后者比前者更重要**，
+因为 BLOCKED/不可达的场景即使跑绿也不能当证据（`combat_strike` R3 13 张、`castle_zone` 4 张、
+`spell_cast` R5 8 张、`equip_struck_save` 1 张、`upgrade_retrieve` 4 张）。
+
+§1–§6 的六项 owner 决策**仍然有效**，其中 §1（窗口授权）与 §2（43 条规则 PENDING + ident 14 裁定）
+是唯一还挡在条件② 前面的两件事。

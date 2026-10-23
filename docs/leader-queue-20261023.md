@@ -105,6 +105,9 @@
     ② 每次提交前 `git diff` 必须为空（`MM` 就是警报）；③ 若 runner 被中断，**先 `git checkout -- <file>`
     还原**，再比 `sha256sum <file>` 与 `git show :<file> | sha256sum` 一致才提交。
     与第 11 条同族：门禁工具本身会弄脏树（stale 二进制是另一例）。
+    **补充（2026-10-24 00:4x，reviewer-3 自曝）**：**还原方式本身也会弄脏树**——它用 Python 文本写回还原变异，
+    Windows 下把 LF 翻成 CRLF ⇒ 工作树变脏、sha 变化。⇒ **还原一律 `git checkout -- <file>`**（从 index/提交恢复），
+    绝不用文本写回；还原后必须 `sha256` 与 `git show :<file>` 比对一致。
 
 18. **worktree 的身份是固定的：reviewer 的 worktree 绝不能拿来干 worker 的活**（2026-10-23 22:3x 实测）：
     卡 `openmir2-start-server-whatif-sha`（worker 卡）被 **`openmir2-reviewer-5`** 用 `card_claim` 认领，
@@ -130,6 +133,14 @@
     `user.name` 就是 `openmir2-worker-66`，谁提交都显示 worker-66），所以**author ≠ 签名者不等于代签**；
     但「同一 principal 两条车道并发写同一张卡」本身就是污染，与 author 字段无关，必须重交付、重签。
     干净的交付 = **一号一车一 worktree**：签名 principal、worktree 的 `walgit/identity`、提交所在 worktree 三者一致。
+
+20. **长命 agent 会耗尽上下文——每张卡起新 agent，不要 resume 一个跑了很多卡的 agent**（2026-10-24 01:0x）：
+    `openmir2-worker-69` 的 agent 今晚连做了 6+ 张卡（场景、登记批、GM 5A、夹具、审计），
+    最后在派第 7 张时**因上下文超限（请求 1,060,113 tokens > 1,048,576）直接失败**，
+    且失败前没有任何提交——白跑一次派单。
+    ⇒ **同一个 worktree 可以复用，但 agent 不要复用**：每张新卡 `Agent(...)` 起新实例（新实例会重新读卡面与 worktree 状态）；
+    resume（`SendMessage`）只用于**同一张卡的返工**，且返工超过 2 轮就换新实例并把「已确认的结论」写进 brief。
+    同理：**给 agent 的 brief 里不要塞整段历史**，只给结论 + 文件路径。
 
 ## 2. 正在跑（每次巡检更新）
 

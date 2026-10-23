@@ -1988,7 +1988,7 @@ def run_magic(runner, side, prof, sc, magic, env, timeout=120):
         return out
 
     try:
-        cols_out = sql("magic.columns", "SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+        cols_out = sql("magic.columns", "/* magic */ SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
         columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
         missing = [c for c in ("Id", "ChrName", "LoginID") if c not in columns]
         if missing:
@@ -3235,10 +3235,15 @@ def main():
                 with open(mstate, "w", encoding="utf-8") as f:
                     json.dump(ms, f, sort_keys=True)
 
+            # 查询对象是 `characters`（不是 `characters_magic`）：必须回 characters
+            # 表列，run_magic 要用 Id/ChrName/LoginID/Deleted。留一行日志标记，
+            # 供 selftest 证明本分支真的被走到（卡 openmir2-magic-fixture-selftest-gaps）。
             if "SHOW COLUMNS" in sql_text:
+                with open(log, "a", encoding="utf-8") as lf:
+                    lf.write("magic-columns %s\n" % side)
                 print("\n".join("%s\tint(11)\tYES\t\tNULL\t" % c for c in
-                                ["Id", "PlayerId", "MagicId", "Level", "UseKey",
-                                 "CurrTrain"]))
+                                ["Id", "ServerIndex", "LoginID", "ChrName", "MapName",
+                                 "CX", "CY", "Level", "HomeMap", "Deleted"]))
                 return 0
             if "INSERT INTO" in sql_text or "UPDATE " in sql_text:
                 if os.environ.get("STUB_MAGIC_NOWRITE") != side:
@@ -5006,6 +5011,51 @@ def selftest():
             and not [c for c in s_m6["commands"] if c["step"].startswith("magic.")],
             "MG-6 --dry-run 只预览魔法夹具、不连库（steps=%s）"
             % [c["step"] for c in s_m6["commands"]][:10])
+
+        # MG-7 sides.<side>.magic 覆盖：顶层 magic=1 + sides.csharp.magic=2
+        #     => csharp 声明/写入 MagicId=2，rust 保持顶层 MagicId=1。
+        reset_magic_state()
+        OVERRIDE = [{"magic_id": 2, "level": 1, "use_key": "2", "curr_train": 3}]
+        prof_m7 = magic_prof(MAGIC_OK)
+        prof_m7["sides"]["csharp"]["magic"] = OVERRIDE
+        for s in SIDES:
+            prof_m7["sides"][s]["env"] = {"STUB_MAGIC_INIT": MAGIC_PRE}
+        out_m7 = os.path.join(tmp, "run-magic-override")
+        s_m7 = execute(base_cfg(out_m7, prof_m7, scenario=scen_unblocked))
+        cs_m7 = (s_m7["sides"].get("csharp") or {}).get("magic") or {}
+        rs_m7 = (s_m7["sides"].get("rust") or {}).get("magic") or {}
+        chk(s_m7["exit_code"] == 0
+            and [m.get("magic_id") for m in (cs_m7.get("declared") or [])] == [2]
+            and [m.get("magic_id") for m in (rs_m7.get("declared") or [])] == [1],
+            "MG-7 sides.csharp.magic 覆盖顶层 => declared 两侧不同（csharp=%r rust=%r，rc=%s）"
+            % ([m.get("magic_id") for m in (cs_m7.get("declared") or [])],
+               [m.get("magic_id") for m in (rs_m7.get("declared") or [])],
+               s_m7["exit_code"]))
+        chk(cs_m7.get("action") == "written"
+            and "VALUES (6228, 2," in ((cs_m7.get("sql") or {}).get("write") or "")
+            and rs_m7.get("action") == "noop"
+            and (rs_m7.get("sql") or {}).get("write") is None,
+            "MG-7 写入按侧分派：csharp 写 MagicId=2、rust 不写（cs=%r rs=%r）"
+            % (cs_m7.get("action"), rs_m7.get("action")))
+        # 断言强度（卡 openmir2-magic-fixture-assertion-strength）：只钉 VALUES 抓不到
+        # 「写错表/写错列」——必须钉住目标表与完整列清单（与 characters_magic DDL 一致）。
+        write_stmt_m7 = ((cs_m7.get("sql") or {}).get("write") or "")
+        chk(re.search(
+                r"INSERT INTO `[^`]+`\.`characters_magic` \(`PlayerId`, `MagicId`, "
+                r"`Level`, `UseKey`, `CurrTrain`\) VALUES \(6228, 2, 1, '2', 3\);",
+                write_stmt_m7) is not None,
+            "MG-7 写入语句钉到表名+列清单：INSERT INTO …`characters_magic`"
+            "(PlayerId, MagicId, Level, UseKey, CurrTrain)（实际 %r）" % write_stmt_m7)
+        cs_after_m7 = (cs_m7.get("after") or [{}])[0]
+        rs_after_m7 = (rs_m7.get("after") or [{}])[0]
+        chk(cs_after_m7.get("magic_id") == 2
+            and (cs_after_m7.get("found") or {}).get("level") == 1
+            and rs_after_m7.get("magic_id") == 1
+            and (rs_after_m7.get("found") or {}).get("level") == 0,
+            "MG-7 读回：csharp=MagicId2/level1、rust=MagicId1/level0（%r / %r）"
+            % (cs_after_m7, rs_after_m7))
+        chk("magic-columns csharp" in read_log() and "magic-columns rust" in read_log(),
+            "MG-7 两侧 SHOW COLUMNS 都走 magic 桩（日志 magic-columns 标记）")
 
     finally:
         holder.close()

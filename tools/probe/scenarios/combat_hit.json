@@ -1,26 +1,36 @@
 {
   "name": "combat_hit",
-  "description": "朝指定格子砍一刀：CM_HIT(3014) 的 **X/Y 都打包在 recog**（`recog = (target_y<<16) | target_x`；服务端取 LoWord=X、HiWord=Y），`param` 服务端根本不读（恒 0），`tag` = 方向 -> 只等 SM_HIT(14)",
+  "description": "朝自己所在格砍一刀：CM_HIT(3014) 的 **X/Y 是攻击者自己的坐标**（`ClientHitXY` 只在 `nX==CurrX && nY==CurrY` 时执行，`PlayObject.Attack.cs:883`；同 `CM_TURN` 的 `MakeLong(X,Y)` 口径，`RobotPlayer.cs:358`），打包进 `recog`（`(self_y<<16)|self_x`），`tag`=方向。**BLOCKED 的理由是「不保证 + 不可归因」，不是「收不到任何 SM 帧」**：① 自己动作的 `SM_HIT(14)`/`SM_TURN(10)` 有 self 过滤（`ActorId != ActorId`，`PlayObject.Message.cs:1433-1437` / `:1528`）⇒ 攻击者收不到**自己砍出的** 14；② 但打中怪物时，受害者的 `RM_STRUCK` 广播会以**怪物**为 ActorId 给攻击者发 `SM_STRUCK(31)`（`:1562 → :1593 → :1601 → :1614`，只有「自己=受害者」才按 `DisableSelfStruck` 过滤），「怪打人」方向也会给玩家发 14；③ 本场景没有 `placement`/怪物夹具 ⇒ 前方不保证有目标；`wait_for 31` 也无法区分「自己砍中」与「被怪打」（与 `combat_strike` 同病）⇒ 不可判定。⇒ 登记 BLOCKED，不参与窗口批次。",
+  "blocked": {
+    "reason": "无 placement/怪物夹具时**不保证前方有目标**，且候选 wait 帧**不可归因**——不是「攻击者收不到任何 SM 帧」：① 自己动作的回声确实收不到：`SM_HIT(14)`/`SM_TURN(10)` 只挡 `ActorId != ActorId`（`PlayObject.Message.cs:1433-1437` / `:1528`）；② 但帧本身会到：打中怪物时受害者 `RM_STRUCK` 广播以怪物为 ActorId 发 `SM_STRUCK(31)` 给攻击者（`:1562 → :1593 if ActorId!=0 → :1601 MakeMessage(SM_STRUCK, ActorId, …) → :1614 SendSocket`；仅「自己=受害者」才按 `DisableSelfStruck` 过滤），且怪打人方向也会给玩家发 `SM_HIT(14)` ⇒ `wait_for 14/31` **都不是永不满足**；③ 真正的问题是：本场景不预置位置、也不保证有怪，于是「31 到没到」既不能证明「我砍中了」，也无法排除「我被怪打」（`wait_for` 只按 ident 匹配，无 recog/来源过滤）⇒ 判 BLOCKED（跑绿=假绿、超时=假红）。与 `combat_strike` 的 blocked 同口径。",
+    "missing_fixture": "① 同屏怪物夹具（保证正前方确有目标，且怪物不还手/或可排除其反击）；② `wait_for` 的 recog/来源过滤（区分「怪物受击的 31」与「自己被打的 31/14」）——两者缺一不可：只有怪物夹具时，31 仍可能来自玩家自己被怪打；只有旁观者会话才知道那一击是谁砍的。"
+  },
   "required": [
-    "target_x",
-    "target_y",
-    "target_xy",
+    "hit_xy",
     "hit_dir"
   ],
+  "computed": {
+    "hit_xy": {
+      "pack": {
+        "lo": "self_x",
+        "hi": "self_y"
+      }
+    }
+  },
   "steps": [
     {
       "send": {
         "ident": 3014,
-        "recog": "target_xy",
+        "recog": "hit_xy",
         "param": 0,
         "tag": "hit_dir"
       },
-      "note": "oracle：`src/GameSrv/Word/WorldServer.cs:831-851` 把 CM_HORSERUN/CM_TURN/CM_WALK/CM_SITDOWN/CM_RUN/CM_HIT/CM_HEAVYHIT/…/CM_FIREHIT 归同一 case 组，两支都只读 `LoWord(Recog)`/`HiWord(Recog)`（`:846` SendActionMsg / `:850` SendMsg），**`defMsg.Param` 未被读**；`src/M2Server/Player/PlayObject.Message.cs:1230` `ClientHitXY(wIdent, nParam1=LoWord(Recog)=X, nParam2=HiWord(Recog)=Y, (byte)wParam=Tag=Dir)`。⇒ 线上必须发 `recog=(y<<16)|x`，`param` 留 0；`target_xy` 由调用方按该公式打包（`param_discovery` 不做位运算，见 docs/scenario-recog-packing-20261023.md）"
+      "note": "oracle：`WorldServer.cs:831-851` 动作族只取 `LoWord/HiWord(Recog)`；`PlayObject.Message.cs:1230` → `ClientHitXY(wIdent, nParam1, nParam2, (byte)wParam)`；`PlayObject.Attack.cs:883` 要求 `nX==CurrX && nY==CurrY` ⇒ Recog 必须是**自己的坐标**，方向在 Tag。`hit_xy` 由 `computed.pack {lo: self_x, hi: self_y}` 推出。"
     },
     {
       "wait_for": 14,
       "timeout_ms": 3000,
-      "note": "只认 SM_HIT(14)：100 是通用系统提示，证明不了命中；本方客户端看不到被击者 HP 变化，故不加 HP 断言（如需 HP 差需第二客户端）"
+      "note": "**保留但不跑**：本场景已 BLOCKED（无目标夹具 + wait 帧不可归因，见 blocked.reason），`card_window` 在起栈前即 rc=2；该 wait 只是形状合法性的载体。解锁需怪物夹具 + wait 的 recog 过滤（见 blocked.missing_fixture）。"
     }
   ]
 }
