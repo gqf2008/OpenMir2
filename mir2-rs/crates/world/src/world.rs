@@ -10106,6 +10106,20 @@ mod tests {
         assert_eq!(e.ai.body_leathery, n10, "未被扣减");
     }
 
+    /// **复审 `48eae6ce` minor 2**：`if (BodyLeathery <= 0)` 在 `byte` 上只等于 `== 0`——
+    /// 扣完**恰好剩 1** 时不得置骨架、也不得复位 50。把 `== 0` 改成 `<= 1` ⇒ 本用例红。
+    #[test]
+    fn butch_effect_leathery_exactly_one_after_draw_is_not_zero() {
+        const SEED: i32 = 5_550_555;
+        let (mut w, p, t, n10) = butch_rig(SEED, 53, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 1;
+        let ev = w.butch_effect_now(p, t, 11, 10);
+        assert!(ev.is_none(), "扣完 = 1 ≠ 0 ⇒ 不发骨架");
+        let e = w.entities.get(t).unwrap();
+        assert_eq!(e.ai.body_leathery, 1, "停在 1（不复位 50）");
+        assert!(!e.ai.skeleton);
+    }
+
     /// **F4（review `8c4da05a`，minor）**：`|Δ|<=2` 是**闭**边界——`|Δx|==2` 必须过门（2 抽），
     /// `|Δx|==3` 必须不过门（0 抽）。把 `>2` 改成 `>1` ⇒ ±2 两条必红。
     #[test]

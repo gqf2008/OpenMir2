@@ -12822,6 +12822,10 @@ fn butch_target_gates(
         .entities
         .get(actor_id)
         .map_or(usize::MAX, |e| e.map_id);
+    // ⚠️ **本函数不是权威判据**：它只决定「宿主是否入队 `Command::ButchEffect`」。
+    // 权威门在 `World::butch_effect_now`（同一套判据 + `|Δ|<=2`，且门不过 ⇒ **零抽数**）。
+    // 因此这里的 `valid_object` 若误放行，最多多入队一条命令，世界侧会拒绝且不动 RNG 流
+    // （review `48eae6ce` minor 1）。
     let Some(target) = world.entities.get(target_id) else {
         return (false, false);
     };
@@ -61662,6 +61666,28 @@ mod sm_skeleton_downlink_tests {
             (true, false),
             "race 83 非动物 ⇒ 效果体门关"
         );
+        // **复审 `48eae6ce` important**：宿主闸口必须用 `is_animal_race`（ctor 继承），
+        // 不是 `combat::race_is_animal`——后者会让 105/106/114/132 在宿主就判定「非动物」
+        // ⇒ **不入队效果体** ⇒ oracle 抽 2 次、本仓零抽（部署 252 行楔蛾 = race 105）。
+        // 这几档是宿主侧 F1 的唯一判据：把谓词改回 `race_is_animal` ⇒ 本用例红。
+        for animal_race in [105_u8, 106, 114, 132] {
+            world.entities.get_mut(t).unwrap().race = animal_race;
+            world.entities.get_mut(t).unwrap().death = true;
+            assert_eq!(
+                butch_target_gates(&world, p, t, 11, 10),
+                (true, true),
+                "race {animal_race} 由 ctor 继承 Animal=true ⇒ 效果体门必须开（F1 宿主侧判据）"
+            );
+        }
+        // 显式 `Animal = false` 的派生（118/119）不得被继承进来。
+        for non_animal in [118_u8, 119] {
+            world.entities.get_mut(t).unwrap().race = non_animal;
+            assert_eq!(
+                butch_target_gates(&world, p, t, 11, 10),
+                (true, false),
+                "race {non_animal} 显式 Animal=false ⇒ 门关"
+            );
+        }
         assert_eq!(
             butch_target_gates(&world, p, 9999, 11, 10),
             (false, false),
