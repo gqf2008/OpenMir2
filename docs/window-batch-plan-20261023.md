@@ -453,7 +453,7 @@ python -I tools/goal/goal_gate.py --json
 
 ### 7.2 旧批次（§3.1P / 1F / 2A / 2B / 3 / 4）怎么变
 
-- **2A（需新发现规则）**：规则已合只解锁**比较器**，不解锁 Rust 出帧。依赖 `202/203/709` 且 Rust 实现点已接的条目（如 `upgrade_retrieve`）可移入「现在能跑」；依赖 `642` 的 `equip_struck_save` **仍不可跑**——Rust 攻击方武器磨损未接（`crates/world/src/combat.rs:1149` 自述「本骨架无武器耐久面」；whitelist T-199 / T-247 明写 642 未接），场景末步 `wait_idents [642]` 是硬门。
+- **2A（需新发现规则）**：规则已合只解锁**比较器**，不解锁 Rust 出帧。依赖 `202/203/709` 且 Rust 实现点已接的条目（如 `upgrade_retrieve`）可移入「现在能跑」；**依赖 `642` 的 `equip_struck_save` 已接线**（2026-10-24 订正：卡 `openmir2-attack-weapon-wear-642` 合入 master `8dcb8c8ca`，T-266；`card_window --dry-run --scenario equip_struck_save.json` rc=0）⇒ 已移入 §7.4。
 - **2B（需 `SM_BAGITEMS(201)` 规则）**：规则已在 `rules.json`（ident 201），背包 `inventory` 夹具**已合入 `bb4317a01`**（工具侧 `card_window.py` 支持 `inventory` 声明）——**2026-10-24 订正：原文写「夹具未合」已过期**；但 master 的 `bag_equip`/`eat_item` 场景**尚未写 `inventory` 声明**，且夹具卡 acceptance ④（真库写入·读回）未跑、保持 `window_required=true` ⇒ 二者仍不可跑，直到场景侧补声明（现无承接卡，建议开卡或在场景卡里补）。
 - **3（需新帧/新场景/新夹具）**：`upgrade_retrieve` 可跑，理由是 **Rust 升级接缝已接**（卡 `openmir2-upgrade-npc`，T-95）：`bins/game-svr/src/shop.rs:1346 upgrade_request_for` → `bins/game-svr/src/lib.rs:5741` → `crates/world/src/merchant.rs:1348 merchant_upgrade_wapon_begin`；**不是**因为 `rules.json` 有 202/203/709。`equip_struck_save` 仍不可跑（缺 642，见 7.3）；`spell_cast` **已解封**（卡 `openmir2-spell-cast-unblock` 删去 `blocked`；夹具改由 profile `magic` 段声明，dry-run 取证须带 `--profile`），但 Rust 侧魔法落点 + 第二观察者仍未接 ⇒ 真机仍跑不了（见 7.3）。
 - **1P/1F**：不受影响；但注意 `combat_hit` 已从「可跑」移入「跑也没用」（7.3）。
@@ -466,21 +466,21 @@ python -I tools/goal/goal_gate.py --json
 | `combat_hit` | **`blocked`**（本卡 `f56a391db` 合入）：攻击者收不到自己的 `SM_HIT(14)` | 引用 5 行 T（`T-242/249/251/253/255`，实测算） | 同屏第二会话或同格怪物夹具 |
 | `combat_strike` | **`blocked`**（`2a69cd6e0`）：无满足条件的配装，且 DSL 无 recog 过滤 | 引用 **13** 张（源：`docs/window-debt-reclass-20261023.md` §R3，经 `docs/goal-snapshot-late-20261023.md:245` 转引） | `DC_min≥36..60` 且 `HitPoint≥17..34` 的配装，或 `wait_for` 的 recog 过滤 |
 | `spell_cast` | **已解封（非 `blocked`）**：卡 `openmir2-spell-cast-unblock` 删去 `blocked` | 引用 **8** 张（源：卡 `openmir2-scenario-spell-cast` issue 的 R5 口径） | **Rust 侧魔法落点 + 第二观察者未接 ⇒ 真机仍跑不了**；`characters_magic` 夹具已在 `512d9ecf5`、改由 profile `magic` 段声明（dry-run 取证须带 `--profile`） |
-| `equip_struck_save` | **不可跑（非 `blocked` 字段，是硬门必超时）** | 引用 **1** 行（`T-247`）；相邻登记 `T-199` | **Rust 接 642 攻击方武器磨损**：`AttackSuccess` 的 `DoDamageWeapon` 与 `RM_DURACHANGE(10125)` 未接（T-199 / T-142 末段）；`crates/world/src/combat.rs:1149` 自述「本骨架无武器耐久面」；场景自身 description 写「现在跑两侧会在『Rust 缺 642』上红」，末步 `wait_idents [642]` 是硬门 ⇒ 必超时。另需商店 NPC「卫家店」(map 0103, 19,18) 摆位与铁器店 `placement` |
 | `castle_zone`（R6） | **不可达登记，仓库内无该场景文件**（实测算：`tools/probe/scenarios/` 无 castle_zone） | 引用 **4** 张（源：`docs/goal-snapshot-late-20261023.md:246`、`docs/castle-zone-unreachable-20261023.md`） | 双行会 DB + 私有根 `AttackSabukWall.txt` + 20 点开战钟点 + 多会话探针 |
 
-> **不再在「跑也没用」里的只剩 `upgrade_retrieve`**：理由**不是** `rules.json` 补了 202/203/709，而是 Rust 升级接缝已接（T-95，`openmir2-upgrade-npc`，见 7.2）。旧「开窗必 UNDECIDABLE」结论的过期，应记在「Rust 接缝落地」上（旧口径见 `docs/runbook-tool-consistency-audit-20261023.md` §3.1）。
-> `equip_struck_save` **没有**移出「跑也没用」；上一版把它列入「现在就能跑」是错误分类，本版已订正。
+> **不再在「跑也没用」里的现在有 `upgrade_retrieve` 与 `equip_struck_save`**：前者因 Rust 升级接缝已接（T-95，`openmir2-upgrade-npc`，见 7.2），后者因 642 攻击方武器磨损已接（`8dcb8c8ca`，T-266；2026-10-24 订正）。
+> **2026-10-24 订正**：`equip_struck_save` 已随 master `8dcb8c8ca`（T-266）接线并移入 §7.4「现在就能跑」；本条原句（「没有移出」）的结论作废，旧说法只作历史对照。
 
 ### 7.4 「现在就能跑」最小清单（现算）
 
-删掉 2 个 `blocked` 后，仓库内可用场景外壳 **18** 个（20 − 2）；castle_zone **不在**这 20 个文件里（它是不可达登记，见 7.3）。这 18 个里再扣除 **4 个依赖未合卡/未接线的场景**（`bag_equip` / `eat_item` 依赖未合的 inventory 夹具；`equip_struck_save` 依赖未接的 Rust 642；`spell_cast` 依赖未接的 Rust 魔法落点 + 第二观察者）⇒ **现在就能跑 = 14 个**。其中带 `required` 的场景由 `card_window` 先做 discovery（两侧各自推导、推不出即 fail-closed）。下表「引用 T 行」是 `whitelist.md` 里**点名该场景行数**的现算值：（**2026-10-24 订正**：`bag_equip`/`eat_item` 的阻塞理由已从「依赖未合的 inventory 夹具」改为「场景未声明 `inventory`」——夹具已合 `bb4317a01`（卡 `openmir2-window-inventory-fixture` 保持 `window_required=true`、真库写入/读回未跑）；`spell_cast` 已解封但仍缺 Rust 魔法落点 + 第二观察者。）
+**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **10 行 / 15 个场景**。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中只剩 `combat_hit` / `combat_strike` 两个 `blocked`）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item`（场景未声明 `inventory`）与 `spell_cast`（缺 Rust 魔法落点 + 第二观察者）仍在 §7.4 末尾「仍不可跑」。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
 | 场景 | `required` | 引用 T 行（现算） | 跑前还需 |
 |---|---|---:|---|
 | `login_only` | — | 14 | 角色预置位（场景可声明 `placement`） |
 | `pickup_item` | `self_x/self_y`（SM_LOGON 推导） | 0（被 T-211 等泛引用） | 同格地物 |
 | `move_walk` | `move_x/move_y/move_xy`（`computed.pack`，本日已支持） | 0 | 空格目标格 |
 | `upgrade_retrieve` | `merchant_actor`（643 推导） | 0 | 商店 NPC 摆位（沙巴克铁匠 (332,317) 西南邻格 (320,328)）；**武器在手、金币 ≥ 10000、背包有黑铁矿**（三项缺一，第 9 步 `wait_idents 709` 必红；场景 note 原文） |
+| `equip_struck_save` | — | 1（`T-247`） | 商店 NPC「卫家店」摆位（map 0103, 19,18）+ 铁器店 `placement`；642 已接线（`8dcb8c8ca`，T-266），**真机窗口未授权**；破零支会发两条 642（`202 → 642(0) → 642(0)`） |
 | `dice_chain` / `dice_chain_auto` | — / — | 3 / 2 | 赌场 NPC |
 | `npc_click` / `npc_click_auto` | `npc_actor` | 1 / 0 | 场景 `placement` |
 | `king_dialog` / `merchant_dialog` / `npc_script_chain` | `king_actor` / `merchant_actor` / `npc_actor` | 0 / 1 / 1 | 场景 `placement` |
@@ -492,13 +492,12 @@ python -I tools/goal/goal_gate.py --json
 | 场景 | 引用 T 行（现算） | 依赖（卡 / 分支 / head） | 说明 |
 |---|---:|---|---|
 | `bag_equip` / `eat_item` | 3 / 1 | 卡 `openmir2-window-inventory-fixture` **已合入 `bb4317a01`**（卡不 closed：`window_required=true`，真库写入/读回未跑；2026-10-24 订正） | `card_window.py` 已支持 `inventory`，但**这两个场景尚未声明** ⇒ 仍按手工 DB 夹具跑，或先在场景里补 `inventory` |
-| `equip_struck_save` | 1（`T-247`） | Rust 642 攻击方武器磨损（T-199；T-142 末段） | 场景未 `blocked`，但末步 `wait_idents [642]` 必超时（见 7.3） |
 | `spell_cast` | 5 | Rust 侧魔法落点 + 第二观察者（见 7.3） | 场景已解封，但 Rust 生产侧缺魔法帧 ⇒ 真机必超时；夹具改由 profile `magic` 段声明（dry-run 取证须带 `--profile`） |
 
 ### 7.5 判据口径（写给开窗的 owner）
 
 - 「能跑」= 场景不被自身 `blocked` 拒 + `required` 可发现 + 两侧栈起得来 + **该场景依赖的夹具/工具已在 master**；依赖未合卡片的一律不算，哪怕场景文件已合。
-- 开窗前自查（`preflight.py` **尚未合入**，合并前用本节手工清单）：
+- 开窗前自查（`preflight.py` **已合入 master `2e3b8500a`**；2026-10-24 订正——原文写「尚未合入，用手工清单」已过期，手工清单仅作回退）：
   1. `python -I tools/goal/goal_gate.py --json` 看条件与 merge 卫生；
   2. `git ls-tree -r --name-only HEAD` 确认所跑场景依赖的文件在树内（`tools/conformance/preflight.py` 自 master `2e3b8500a` 起**应查得到**——2026-10-24 订正，原文写「应查不到」）；
   3. `python -I -c` 读 `tools/probe/scenarios/<scene>.json` 的 `blocked` 与 `placement`；

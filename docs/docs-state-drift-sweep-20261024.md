@@ -21,11 +21,11 @@
    - **仍准确** ⇒ 不动，本报告 §3 记「已核，仍准确」；
    - **判不了** ⇒ 写「判不了 + 缺什么」（§4），**不写成已核**。
 
-**命中统计**：67 个文件里 **35 个**含状态词，共 **123 行**命中；其中 **18 个文件 / 32 个「2026-10-24 订正」标记行**（同一行内出现 **33** 次——`window-batch-plan` 的「在办」行含 2 个）判为过期并已订正（**本报告自身不计**），其余归 §3/§4。计数可复算（**base 相对**）：`base=$(git merge-base walgit/master HEAD); git diff $base..HEAD -- docs/ ':!docs/docs-state-drift-sweep-20261024.md' | grep "^+" | grep -c "2026-10-24 订正"` ⇒ **32**（出现次数用 `grep -o … | wc -l` ⇒ 33）。
+**命中统计**：67 个文件里 **35 个**含状态词，共 **123 行**命中；其中 **19 个文件 / 35 个「2026-10-24 订正」标记行**（同一行内出现 **36** 次——`window-batch-plan` 的「在办」行含 2 个）判为过期并已订正（**本报告自身不计**），其余归 §3/§4。计数可复算（**base 相对**）：`base=$(git merge-base walgit/master HEAD); git diff $base..HEAD -- docs/ ":!docs/docs-state-drift-sweep-20261024.md" | grep "^+" | grep -c "2026-10-24 订正"` ⇒ **35**（出现次数用 `grep -o … | wc -l` ⇒ 36）。
 
 > 说明：多数命中是**交卡时自述**（「未合并、未自签 review」）、**分类名**（`未开工/未合并` 桶）、**引用原文**（脚本说词「尚未开放」）或**带戳快照**——这些不算漂移，见 §3。
 
-## 1. 订正清单（22 行对应 18 个文件 / 32 个订正标记行；#10、#19 已撤回，见下表说明）
+## 1. 订正清单（22 行 + v5 新增订正行 ⇒ 19 个文件 / 35 个标记行；#10、#19 已撤回，见下表说明）
 
 每条格式：**位置** ⇒ 原说法 → 订正（判据 commit）。
 
@@ -55,13 +55,13 @@
 | 21 | `window-runbook-20261023.md:126/128` | 「`-WhatIf` 只打印路径、不打印 sha256（`:349`）」 | 脚本已打印 `SERVER_EXE`/`SERVER_EXE_SHA256`/`SERVER_EXE_BUILD` 三行（`start_mir2_server.ps1:381`）；两处已订正（review F4 漏项） |
 | 22 | `upgrade-retrieve-scenario-20261023.md:298` | 「背包夹具不支持」 | 工具随 `bb4317a01` 支持 `inventory` 声明；本场景缺的是**声明**，且夹具卡真库读写回未跑（review F2 漏项） |
 
-> 表内 22 行对应 **18 个文件 / 32 个订正标记行**（`window-batch-plan` **9**、`r-card-ledger-sweep` 4、`rewrite-remaining-inventory` 3，其余 15 个文件各 1；本报告自身不计；#10/#19 已撤回不计）。**#19（runbook:234）已撤回**：rebase 到 `bb4317a01` 时该段已被背包夹具卡整段重写为「声明即可」，本卡取 master 版本。
+> 表内 22 行（v5 又在 batch-plan 补了 3 行）合计 **19 个文件 / 35 个订正标记行**（`window-batch-plan` **12**（含 v5 新增的 I1/I2 订正行）、`r-card-ledger-sweep` 4、`rewrite-remaining-inventory` 3，其余 **16** 个文件各 1；本报告自身不计；#10/#19 已撤回不计）。
 
 ## 2. 三个卡面点名实例的结论
 
 | 卡面实例 | 结论 |
 |---|---|
-| ① `window-batch-plan` 把 `preflight.py` 标「在办（未合）」 | **成立**，已订正（§1 #16）：合并点 `2e3b8500a`；§7 开头命令行、§7.1 行、§7.2 2B、§7.4、§7.5 全部同步 |
+| ① `window-batch-plan` 把 `preflight.py` 标「在办（未合）」 | **成立**，已订正（§1 #16）：合并点 `2e3b8500a`；**2026-10-24 返工**：§7.5 开头 :501 的「尚未合入」也已改（上一版漏报「§7.5 全部同步」，实际只改了 :503/:505） |
 | ② `window-runbook` 曾把 `-WhatIf` 写成「只打印路径」 | **上一版误判为「已核，仍准确」**（review `808613798` F4）：§1.6 虽已写三行，但 §1.5 的 `:126/:128` 仍写「只打印路径、不打印 sha256（`:349`）」，与 master 脚本 `start_mir2_server.ps1:381` 矛盾 ⇒ **本版已就地订正**（§1 #21） |
 | ③ `needs-human-night` 条件② / `goal-snapshot-late` 主表数字 | `needs-human-night` §7 与 `goal-snapshot-late` §「后续更新（00:5x，`5e6b4e12`）」都**明确覆盖**旧数字 ⇒ **已核，仍准确**（带戳）；仅 §1 第 3 条夹具状态过期（§1 #10）与 §1 的 `criteria-quality-audit` 状态过期（§1 #20）已订正 |
 
@@ -72,7 +72,7 @@
 | `castle-zone-unreachable` :5/:60/:132（3 处除 #1 外） | 城堡区**仍不可跑**：`T-38` 申请链 `NotImplementedException`、`StartCastlewarTime=20` 整点门、`AttackSabukWall.txt` 空；`git ls-tree master tools/probe/scenarios/` **无** `castle_zone` 文件 |
 | `combat-hit-waitfix`:72 | `combat_hit.json` 在 master 仍含 `blocked`（实读 20 个场景 JSON：只有 `combat_hit`/`combat_strike` 带 `blocked`；`spell_cast` 已由 `openmir2-spell-cast-unblock`（`7bb48239a`）解封） |
 | `combat-strike`:417 | T3（删攻击步）缺口仍在：卡 `openmir2-probe-scenario-validation-gaps` 已 closed，但 T3 仍登记为残留 `R2-producer-map` |
-| `goal-snapshot-late`（其余 10 处） | §1 是**带戳快照**且被「后续更新（`5e6b4e12`）」显式覆盖；§4 的「不可跑 22 张」口径在该戳上自洽 |
+| `goal-snapshot-late`（其余 10 处） | §1 是**带戳快照**且被「后续更新（`5e6b4e12`）」显式覆盖；但 **`equip_struck_save` 的 642 行（:248/:268）已被 `8dcb8c8ca` 取代**（本版已在该文件「后续更新」下补指针），**不再记「准确」** |
 | `r-window-registry-batch-1`（其余 10 处） | 基线戳 `74f0fbb0d` + `generated_ts` 前后对比；批次数字是历史快照 |
 | `r-window-registry-batch-2`(10) / `batch-3`(10) / `batch-4`(7) / `closeout`(1) | 均带基线戳（`19c59598a` / `ee292359b` / `512d9ecf5` / `ed4dd05c6`）；「场景待建」指向的 `world_observe.json`、`cadence.json`、`humitems-slots.json` 在 master 中**确实不存在**（`git ls-tree` 0 命中） |
 | `r-card-evidence-sweep`:16/25/86/97 | 数字带 `04366adc8` 戳；`cadence`/`humitems-slots` 场景仍不存在 ⇒「尚未存在/待建」准确 |
@@ -133,3 +133,12 @@ walgit collab thread <卡> --repo .
 - 本卡**不修**判据本身：例如 `window-batch-plan` 里「现在就能跑 = 14 个」的场景计数（preflight 合入不改变场景集，因此仍成立），以及 §7.3 的结论均原样保留——**`combat_strike`/`combat_hit` 仍 `blocked`；`spell_cast` 已解封（`7bb48239a`），但仍缺 Rust 魔法落点 + 第二观察者 ⇒ 真机仍跑不了，且 dry-run 取证须带 `--profile`（`magic` 段声明）**。
 - 本报告**是快照**：master 一旦再动，§1 的「现在的事实」会再次过期；下一轮按 §5 重跑即可，不要直接引用 §1 的 commit 而不核 master。
 - 临时物：`E:/tmp/tonight-docs.txt`、`E:/tmp/master-files.txt`、`E:/tmp/drift_scan.py`、`E:/tmp/drift-scan.txt`（扫描原始命中 123 行）、`E:/tmp/drift_edits.py`、`E:/tmp/drift_edits2.py`、`E:/tmp/board.txt`、`E:/tmp/cards.txt`（479 张卡清单）——均为复核证据，保留；无进程、无库改动。
+
+## 8. 返工 v5（review `1862c8b42`，request_changes；含 Leader 裁决）
+
+| 项 | 处置 |
+|---|---|
+| **I1**（Important） | master `8dcb8c8ca` 已接 642 攻击方磨损（T-266），但 batch-plan 的活执行依据仍写「未接/必超时」⇒ 已订正 §7.2 2A、§7.3 表（删除 `equip_struck_save` 行）、§7.3 表后两条结论、§7.4 计数行与「能跑」表（新增 `equip_struck_save` 行）、§7.4「仍不可跑」表（删除该行）。快照 `goal-snapshot-late` 与 `needs-human-night` **不重写正文**，在「后续更新」/§5 处各加一条指向 `8dcb8c8ca` 的现态指针；本报告 §3 的 `goal-snapshot-late` 行不再记「准确」。 |
+| **Leader 裁决（计数）** | 「现在就能跑」**按逐行枚举**：§7.4 现为 **10 行 / 15 个场景**，禁用 `18−N` 反推；`equip_struck_save` 计入、`bag_equip`/`eat_item`（场景未声明 `inventory`）与 `spell_cast`（缺 Rust 魔法落点 + 第二观察者）仍在「仍不可跑」。Leader 提到的 `docs/needs-human-20261024.md`（写「可跑场景 16」）**在 master 上不存在**——该文件落地时必须引用本表枚举（单一事实源），本卡无法修改不存在的文件，已记在卡上。 |
+| **I2**（Important） | §7.5 开头 `:501`「`preflight.py` 尚未合入」与同节 `:503/:505` 矛盾 ⇒ 已改为「已合入 master `2e3b8500a`，手工清单仅作回退」；本报告 §2 ① 同步去掉「§7.5 全部同步」的过度声明。 |
+| **M1**（Minor） | 计数口径修正为 **19 个文件 / 35 个标记行 / 出现 36 次**（v5 自身在 batch-plan 又补了 3 个标记行），分布「其余 16 个文件各 1」（12+4+3+16=35）。 |

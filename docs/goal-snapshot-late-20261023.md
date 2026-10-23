@@ -300,6 +300,8 @@ ybdeal-frames），**1 张（`conformance-rng-nondeterminism`）没有**、只�
 
 ## 后续更新（2026-10-24 00:5x，`5e6b4e12`）
 
+> **2026-10-24 再更新（卡 `openmir2-docs-state-drift-sweep`）**：§4「不可跑」与 :248/:268 的 `equip_struck_save` 行**已被 master `8dcb8c8ca` 取代**——642 攻击方武器磨损 + `SM_DURACHANGE(642)` 已接（T-266），`card_window --dry-run --scenario equip_struck_save.json` rc=0。本文件其余数字仍是带戳快照。
+
 > 本节的数字**覆盖 §1 的旧快照**；引用时以本节为准。
 
 - **条件② `fail` → `need_human`**：`三者皆无 0`、**FAIL 卡 0**。
