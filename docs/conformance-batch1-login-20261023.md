@@ -48,7 +48,7 @@ Rust(30): 529 530 520 525 658 51 50 41 213 11029 42 766 54 5008 1106 52 752 811 
    |---|---|---|
    | 26 | 「禁止使用任何外挂、加速、辅助、脱机…」 | 「唯一客服QQ：79311185 唯一担保QQ：79311185」 |
    | 27 | 「唯一客服QQ…」 | 「禁止使用任何外挂…」 |
-   ⇒ 内容两边都在，**发送次序相反**（时序差，R 级口径）。
+   ⇒ 内容两边都在，~~**发送次序相反**~~（**该结论已在 §10 撤回：同 tick 内次序两侧都不固定**）。
 3. **`SM_ABILITY(52)` body 长度 54 vs 78**（C# 54 / Rust 78）：比较器按布局语义逐字段比，
    **login 段三者语义相等**（3 对 login run 的 `52_semantic` 无差异）；仅长会话里出现 `mp` ±1（见 §21）。
    ~~「(54,78) 是规则缺口」的说法作废。~~
@@ -83,7 +83,7 @@ Rust(30): 529 530 520 525 658 51 50 41 213 11029 42 766 54 5008 1106 52 752 811 
 - 结论：**gm 族当前不可作对拍证据**，先要解决「进世界后 `CM_SAY` 何时/怎样才被处理」；
   首批应缩到 `login_only`（已跑通）与点击/背包族，gm 族另行排查。
 
-## 7. 追加（05:09–05:12 第三次窗口）：点击族跑通，`SM_HIT(14)` 不可复现、`100` 顺序差可复现
+## 7. 追加（05:09–05:12 第三次窗口）：点击族跑通；`SM_HIT(14)` 不可复现；`100` 顺序差为同 tick 抖动（见 §10）
 
 **问题与解法**：C# 的 ActorId 每会话不同（本批 2123442500，前一会话见过别的值），跨 run 复用必然点空。
 驱动器新增 `click_npc: "auto:last_turn"`：取进世界后**首个非自己的 `SM_TURN(10)`** 的 recog，
@@ -391,6 +391,13 @@ powershell -File tools/m2-acceptance/start_mir2_server.ps1 -Root E:/tmp/conforma
 |---|---|---:|---|
 | Rust（master `e4dd64c77` 构建） | **exit=0**（修复前 exit=1） | 33 | ✅ `seq=33 "请打开商铺兑换[筹码]后再来！"` |
 | C#（对照，未变） | exit=0 | 33 | ✅ 同文案 |
+
+```sh
+python -I -B tools/conformance/compare_runs.py   --oracle E:/tmp/conformance/runs/w24-csharp-dice-ya52fix   --rust   E:/tmp/conformance/runs/w24-rust-dice-ya52fix   --allow-unclassified 643,767 --out /e/tmp/conformance/runs/w24-dice-ya52fix-report.json
+```
+
+> **规则表尚未登记 `643`/`767`**（属 `conformance-rules` 车道）：不加 `--allow-unclassified 643,767` 时比较器判
+> `UNDECIDABLE(exit 2)`；加了之后结论如下（`FAIL(exit 1)`，唯一差即下面的 `52 mp`）。
 
 `compare_runs.py`：`frames 33/33`、**DIFFS 1**——
 只剩 `idx=15 ident=52 52_semantic:mp oracle=18 rust=17`（§21 的 tick 相位项）；`whitelisted 54 条`。

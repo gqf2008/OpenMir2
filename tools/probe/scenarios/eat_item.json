@@ -1,6 +1,6 @@
 {
   "name": "eat_item",
-  "description": "吃指定 MakeIndex 的药品/食物：CM_EAT(1006) recog=MakeIndex body=物品名 -> 等 SM_EAT_OK(635)/SM_EAT_FAIL(636)",
+  "description": "吃指定 MakeIndex 的药品/食物：CM_EAT(1006) recog=MakeIndex body=物品名 -> 等 SM_EAT_OK(635)/SM_EAT_FAIL(636)（注意：MakeIndex 每会话不同 ⇒ 本场景 C2S 字节无法跨栈相同，比较时只判 S2C；C2S 仅比 ident+长度）",
   "required": [
     "make_index",
     "item_name"
