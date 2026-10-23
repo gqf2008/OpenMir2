@@ -78,7 +78,8 @@ python tools/goal/goal_gate.py --full
 | `--envir <dir>` | 脚本语料目录，默认 `E:/MirServer/M2GameSvr/Envir` |
 | `--repo <dir>` | 仓库根，默认脚本所在仓库 |
 | `--timeout N` / `--test-timeout N` | 单命令超时（默认 1800s）/ cargo test 超时（默认 7200s） |
-| `selftest` | 合成输入自检（46 条断言，含 4 颗牙） |
+| `--allow-verdict-grep` | 条件2 采信 comment/review 里的 `VERDICT=PASS` 文本标记（默认关闭） |
+| `selftest` | 合成输入自检（54 条断言，含 5 颗牙） |
 
 退出码：`0` 四条全 PASS；`1` 有 FAIL；`2` 无 FAIL 但有「需人工」；`3` 脚本自身错误（参数/路径）。
 
@@ -126,13 +127,24 @@ python tools/goal/goal_gate.py --full
    | 1 | board 未列出该卡 | 需人工（视图未同步/线程状态异常） |
    | 2 | board 报未验签条目 | 需人工 |
    | 3 | **board 列 = 已完成 / status = closed** | **PASS（已合并；不要求线程有 merge_result）** |
-   | 4 | 线程有 `merge_result merged=true` 但 board 非 closed | **需人工**（R 卡合并后常保持 in-progress；需确认未重开且新工作有证据） |
-   | 5 | `window_required=true` | PASS |
+   | 4 | **已裁定登记**：最新一条带 `window_required` 的 approve review 说 `true` ⇒ window_required；说 `false` 且 `tier_why/理由` 非空 ⇒ 已裁定不需窗口 | PASS |
+   | 5 | `window_required=true`（无复核裁定时，作者/状态里的登记） | PASS |
    | 6 | whitelist `T-*` 登记行**点名本卡** | PASS（弱关联不算） |
-   | 7 | comment/review 内有 `VERDICT=PASS` | PASS（如 Leader 直接执行、未写 merge_result 的窗口交付） |
-   | 8 | 线程提到 `T-*` 但登记行未点名本卡 | 需人工（弱关联） |
-   | 9 | 以上皆无 | **FAIL（三者皆无，列卡 id）** |
+   | 7 | comment/review 内有 `VERDICT=PASS`（**仅 `--allow-verdict-grep` 时**） | PASS（默认关闭） |
+   | 8 | 线程有 `merge_result merged=true` 但 board 非 closed，**且以上登记都没有** | **需人工**（可能已重开且新工作无证据） |
+   | 9 | 线程提到 `T-*` 但登记行未点名本卡 | 需人工（弱关联） |
+   | 10 | 以上皆无 | **FAIL（三者皆无，列卡 id）** |
 
+   * **「已裁定登记」必须排在 merged 之前**：否则任何 merged 的卡都会进需人工，把「有显式登记」
+     误报成缺口（H-1）。review 的结论字段 `decision` 与 `verdict` 两种写法都认；同一卡多次 review
+     的 `window_required` 会不一致 ⇒ **取最新一条带该字段的 approve**，不能对历史做 `any(false)`。
+   * **merged 但 board 非 closed 且已凭登记 PASS** 的卡进 `evidence.merged_open_hygiene`（卫生清单，
+     带 `last_status_ts`），**不算条件2 缺口**，供 owner 确认是否重开。
+   * `need_items` 每项带 `last_status_ts`（线程内 `status` 条目的最大 ts），**按升序（最旧先）**排；
+     控制台按条件各列前 20 条（条件2 即最旧的 20 张），其余见 `--json`。FAIL 项顺序不动。
+
+   * `VERDICT=PASS` 是文本子串匹配，可能被「计划/预期」误命中 ⇒ **默认不采信**，要显式加
+     `--allow-verdict-grep`（当前 0 张卡依赖它）。
    * `whitelist.md` 同一编号出现多行时**取并集**（卡集合合并、行文本拼接），不让覆盖写吃掉卡↔T 关联。
    * 卡 id 匹配会排掉 `refs/collab/meta/principals/*` 里的 principal 名（`openmir2-worker-5` 等不是卡）。
    * 判定 tier 时把散文式 tier（如 `R（战斗数值/时序/持久化面）…`）归一为 R；线程里**任一**条目
@@ -140,9 +152,14 @@ python tools/goal/goal_gate.py --full
 
 3. **B 类清零**：跑 `cd mir2-rs && python -I -B tests/parity/coverage/recon_gates.py dispatch --repo .. --json <临时文件>`，
    取 `status == "tracked"` 的行，逐条判：条目名出现在某条 `T-*` 登记行 ⇒「有 T-* 登记」；
-   否则其 `card` 在 board 里存在 ⇒「有卡」；都没有 ⇒ FAIL。**查不到一律「需人工」**：
-   rows 为空、行缺 `status` 字段（schema 漂移）、缺 `counts.tracked`、
-   `counts.tracked` 与实际 tracked 行数不一致 —— 任一命中 ⇒ 需人工，不冒认 PASS。
+   否则其 `card` 在 board 里存在 ⇒「有卡」；都没有 ⇒ FAIL。判定顺序（fail-closed **且不判死终点**）：
+   1. rows 为空 / 非 list ⇒ 需人工；
+   2. 行缺 `status`（schema 漂移）⇒ 需人工；
+   3. 缺 `counts.tracked` 或与实际 tracked 行数不一致 ⇒ 需人工；
+   4. **`counts.tracked == 0` 且行集非空 ⇒ PASS（B 类清零）**——否则条件3 永远无法在 DONE 时转 PASS；
+   5. 否则按条目判定。
+
+   「查不到」与「确认清零」必须分开：recon 给不出结构 ⇒ 需人工；recon 明确 `tracked=0` 且计数自洽 ⇒ PASS。
 
 4. **门禁恒绿**：逐项跑并在 `--json` 里留 rc/耗时——`cargo fmt --all -- --check`、
    `cargo clippy --workspace --all-targets --locked -- -D warnings`、
@@ -178,8 +195,9 @@ python tools/goal/goal_gate.py --full
   不改 `Cargo.lock`。parse-stats 需要 `E:/MirServer/M2GameSvr/Envir`（不存在则「需人工」并说明）。
 * **board 未列出的卡**：本仓看板只显示命中列谓词的线程；索引里有 `tier=R`、board 却不显示 ⇒「需人工」
   （本地视图未同步，或线程条目链/状态异常），并列入缺口明细。
-* **merged 但 board 未 closed**：R 卡按分级策略合并后常保持 `in-progress`，gate 把这类单列为
-  「需人工」而不是 PASS——它会逐卡列出，供owner确认「是否已重开且新工作有证据」。
+* **merged 但 board 未 closed**：若已有显式登记（window_required / whitelist / 已裁定）⇒ PASS，并进
+  `evidence.merged_open_hygiene` 卫生清单（带 `last_status_ts`），**不算条件2 缺口**；
+  没有任何登记的才判「需人工」，供 owner 确认「是否已重开且新工作有证据」。
 * **whitelist 重复编号**：`build_whitelist` 取并集（不会丢卡↔T 关联），但仍以「提示」列出重复号，
   登记号唯一性归 `m3_whitelist_registry_audit.py`（该门当前 `scope=T-36+`，T-4/T-6 这类低号重复覆盖不到）。
 * **JSON 结构**：`{schema, generated_ts, repo, envir, mode, conditions[4]{id,name,state,label,detail,evidence},
@@ -190,12 +208,12 @@ python tools/goal/goal_gate.py --full
 
 ```sh
 python tools/goal/goal_gate.py selftest --verbose
-# selftest：46 条断言，46 通过，0 失败
+# selftest：54 条断言，54 通过，0 失败
 ```
 
 覆盖四条件各自的 PASS / FAIL / 需人工 分支（含覆盖行解析、语料完整性计数、**rc=1 但未实现 0 ⇒ FAIL**
-的 fail-closed 耦合、任一条目 tier 枚举、board 已完成、merged 未 closed、comment VERDICT=PASS、
-弱关联 T 不冒认、未验签、board 缺失、master 漂移、ls-remote 不可用、tracked 空/schema 漂移/counts 不一致、
-状态优先级），并内置**四颗牙**：
-忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS —— 任一退化都会被断言判红。
-改动判定逻辑后先跑 selftest 再跑快速模式。
+的 fail-closed 耦合、任一条目 tier 枚举、board 已完成、已裁定登记（decision/verdict 两种写法、取最新 approve）、
+merged 未 closed、VERDICT 子串默认不认、need_items 按 last_status_ts 升序、弱关联 T 不冒认、未验签、
+board 缺失、master 漂移、ls-remote 不可用、tracked 空/schema 漂移/counts 不一致、**tracked=0 且行集非空 ⇒ PASS**、
+状态优先级），并内置**五颗牙**：忽略未实现计数、删掉 rc 守卫、把三者皆无判成 PASS、把空 tracked 判成 PASS、
+把 tracked=0 一律判需人工（H-3 旧口径）—— 任一退化都会被断言判红。改判定逻辑后先跑 selftest 再跑快速模式。

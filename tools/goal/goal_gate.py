@@ -390,6 +390,20 @@ def _names_in_whitelist_rows(name: str, whitelist):
 # --------------------------------------------------------------------------
 
 EVIDENCE_MARK_RE = re.compile(r"VERDICT\s*[=:：]\s*PASS", re.I)
+APPROVE_WORDS = {"approve", "approved", "pass", "passed", "lgtm"}
+
+
+def _review_decision(body):
+    """review 的结论字段有 `decision` 与 `verdict` 两种写法，都要认。"""
+    for key in ("decision", "verdict"):
+        val = body.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip().lower()
+    return None
+
+
+def _is_approve(body):
+    return _review_decision(body) in APPROVE_WORDS
 
 
 def collect_r_cards(index):
@@ -408,28 +422,55 @@ def collect_r_cards(index):
     return sorted(cards)
 
 
-def collect_r_evidence(card, index, board_cards, whitelist):
+def collect_r_evidence(card, index, board_cards, whitelist, allow_verdict_grep=False):
     entries = index.get(card, [])
     merged = False
     window_required = False
-    for _oid, entry in entries:
+    last_status_ts = 0
+    last_any_ts = 0
+    reviews = []
+    evidence_entries = []
+    for oid, entry in entries:
         body = entry.get("body")
+        ts = entry.get("ts") or 0
+        last_any_ts = max(last_any_ts, ts)
+        if entry.get("kind") == "status":
+            last_status_ts = max(last_status_ts, ts)
         if not isinstance(body, dict):
             continue
         if entry.get("kind") == "merge_result" and body.get("merged") is True:
             merged = True
         if body.get("window_required") is True:
             window_required = True
+        if entry.get("kind") == "review":
+            reviews.append((ts, oid, body))
+        # H-4：VERDICT=PASS 是文本子串，默认不采信（--allow-verdict-grep 才开）
+        if allow_verdict_grep and entry.get("kind") in ("comment", "review"):
+            if EVIDENCE_MARK_RE.search(json.dumps(body, ensure_ascii=False)):
+                evidence_entries.append(oid)
+
+    # 已裁定登记：按 ts 倒序取**第一条带 window_required 布尔值**的 approve review。
+    # 不能对全部历史 review 做 any(false)：同一卡多次 review 的 window_required 会不一致
+    # （gm-commands-design 最新 approve 是 true、早前一条是 false）。
+    adjudicated = None
+    for ts, oid, body in sorted(reviews, key=lambda x: (x[0], x[1]), reverse=True):
+        if not _is_approve(body):
+            continue
+        wr = body.get("window_required")
+        if not isinstance(wr, bool):
+            continue
+        reason = body.get("tier_why") or body.get("why_not_window") or body.get("reason")
+        if wr is True:
+            adjudicated = {"kind": "window_required", "ts": ts, "oid": oid,
+                           "why": reason if isinstance(reason, str) else ""}
+        elif isinstance(reason, str) and reason.strip():
+            adjudicated = {"kind": "no_window", "ts": ts, "oid": oid, "why": reason}
+        break
+
     strong = sorted(whitelist["card_to_t"].get(card, set()), key=_t_sort_key)
     thread_ts = set()
-    evidence_entries = []
-    for oid, entry in entries:
-        text = json.dumps(entry, ensure_ascii=False)
-        thread_ts |= set(T_ID_RE.findall(text))
-        if entry.get("kind") in ("comment", "review"):
-            body_text = json.dumps(entry.get("body", {}), ensure_ascii=False)
-            if EVIDENCE_MARK_RE.search(body_text):
-                evidence_entries.append(oid)
+    for _oid, entry in entries:
+        thread_ts |= set(T_ID_RE.findall(json.dumps(entry, ensure_ascii=False)))
     weak = sorted((thread_ts & set(whitelist["rows"])) - set(strong), key=_t_sort_key)
     board_card = (board_cards or {}).get(card)
     column = board_card.get("_column") if board_card else None
@@ -437,42 +478,46 @@ def collect_r_evidence(card, index, board_cards, whitelist):
     board_closed = bool(board_card) and (column == "已完成" or board_status == "closed")
     return {"card": card, "merged": merged, "window_required": window_required,
             "strong_t": strong, "weak_t": weak,
-            "evidence_entries": evidence_entries,
+            "adjudicated": adjudicated, "evidence_entries": evidence_entries,
             "in_board": board_card is not None,
             "board_column": column, "board_status": board_status,
             "board_closed": board_closed,
             "unverified": board_card.get("unverified") if board_card else None,
+            "last_status_ts": last_status_ts or last_any_ts,
             "entries": len(entries)}
 
 
 def r_category(ev):
-    """单卡归类（顺序即判据优先级）。"""
+    """单卡归类（顺序即判据优先级）。
+
+    「已裁定登记」（window_required / whitelist 强关联 / approve+window_required:false+理由）
+    必须排在 merged_not_closed **之前**：有登记 ⇒ PASS；merged 未 closed 只作为卫生清单单列。
+    """
     if not ev.get("in_board"):
         return "not_in_board"
     if ev.get("unverified"):
         return "unverified"
     if ev.get("board_closed"):
         return "closed"
-    if ev.get("merged"):
-        return "merged_not_closed"
+    adj = ev.get("adjudicated")
+    if adj:
+        # 复核裁定优先于历史条目：最新 approve 说 true ⇒ window_required；说 false+理由 ⇒ 已裁定不需窗口
+        return "window_required" if adj.get("kind") == "window_required" else "adjudicated"
     if ev.get("window_required"):
         return "window_required"
     if ev.get("strong_t"):
         return "whitelist_t"
     if ev.get("evidence_entries"):
         return "comment_evidence"
+    if ev.get("merged"):
+        return "merged_not_closed"
     if ev.get("weak_t"):
         return "weak_t"
     return "none"
 
 
 def classify_r_evidence(ev):
-    """四态判定：已合并 / window_required / whitelist T-* / 三者皆无。
-
-    「已合并」= board 已完成/closed **或** 线程有 merge_result merged=true；
-    但 merged 而 board 非 closed 单列一档「需人工」（R 卡合并后常保持 in-progress，
-    需确认是否已重开且新工作有证据）。
-    """
+    """判定：已合并 / 有显式登记（window_required、whitelist、已裁定）/ 需人工 / 三者皆无。"""
     category = r_category(ev)
     if category == "not_in_board":
         hints = []
@@ -491,56 +536,69 @@ def classify_r_evidence(ev):
         if ev.get("evidence_entries"):
             why += "；comment/review 内有 VERDICT=PASS"
         return PASS, why
-    if category == "merged_not_closed":
-        return NEED, "merge_result merged=true 但 board 状态=%s（非 closed）；需确认未重开新工作或无证据" % (
-            ev.get("board_status") or ev.get("board_column") or "?")
     if category == "window_required":
         return PASS, "有 window_required=true 登记"
     if category == "whitelist_t":
         return PASS, "whitelist 登记 %s（登记行点名本卡）" % ",".join(ev["strong_t"])
+    if category == "adjudicated":
+        adj = ev["adjudicated"]
+        if adj["kind"] == "no_window":
+            return PASS, "已裁定登记：review %s approve + window_required=false + 理由（%s）" % (
+                adj["oid"][:8], adj["why"][:60])
+        return PASS, "已裁定登记：review %s approve + window_required=true" % adj["oid"][:8]
     if category == "comment_evidence":
-        return PASS, "comment/review 内有 VERDICT=PASS 证据（%s）" % ",".join(
+        return PASS, "comment/review 内有 VERDICT=PASS 证据（%s；--allow-verdict-grep 开启）" % ",".join(
             oid[:8] for oid in ev["evidence_entries"])
-
+    if category == "merged_not_closed":
+        return NEED, ("merge_result merged=true 但 board 状态=%s（非 closed）且无显式登记；"
+                      "需确认未重开新工作或无证据" % (ev.get("board_status") or ev.get("board_column") or "?"))
     if category == "weak_t":
         return NEED, "线程提到 %s，但登记行未点名本卡（弱关联，需人判是否算登记）" % ",".join(ev["weak_t"])
-    return FAIL, "三者皆无（未合并 / 无 window_required / 无 whitelist T-* 登记）"
+    return FAIL, "三者皆无（未合并 / 无 window_required / 无 whitelist T-* 登记 / 无已裁定登记）"
 
 
 def judge_r_cards(evidence_list):
-    """聚合条件2。返回 (state, detail, per_card, fail_items, need_items)。"""
+    """聚合条件2。need_items 按 last_status_ts 升序（最旧先）；FAIL 顺序不动。"""
     per_card, fail_items, need_items = [], [], []
     counts = {}
     for ev in evidence_list:
         state, why = classify_r_evidence(ev)
         category = r_category(ev)
         counts[category] = counts.get(category, 0) + 1
-        per_card.append({"card": ev["card"], "state": state, "reason": why, "category": category,
-                         "merged": ev["merged"], "window_required": ev["window_required"],
-                         "strong_t": ev["strong_t"], "weak_t": ev["weak_t"],
-                         "board_status": ev["board_status"], "board_column": ev["board_column"],
-                         "comment_evidence": list(ev.get("evidence_entries") or []),
-                         "unverified": ev["unverified"]})
+        record = {"card": ev["card"], "state": state, "reason": why, "category": category,
+                  "merged": ev["merged"], "window_required": ev["window_required"],
+                  "strong_t": ev["strong_t"], "weak_t": ev["weak_t"],
+                  "board_status": ev["board_status"], "board_column": ev["board_column"],
+                  "adjudicated": ev.get("adjudicated"),
+                  "comment_evidence": list(ev.get("evidence_entries") or []),
+                  "last_status_ts": ev.get("last_status_ts", 0),
+                  "unverified": ev["unverified"]}
+        per_card.append(record)
         if state == FAIL:
-            fail_items.append({"card": ev["card"], "reason": why})
+            fail_items.append({"card": ev["card"], "reason": why,
+                               "last_status_ts": ev.get("last_status_ts", 0)})
         elif state == NEED:
-            need_items.append({"card": ev["card"], "reason": why})
+            need_items.append({"card": ev["card"], "reason": why,
+                               "last_status_ts": ev.get("last_status_ts", 0)})
+    need_items.sort(key=lambda x: (x["last_status_ts"], x["card"]))
     if fail_items:
         state = FAIL
     elif need_items:
         state = NEED
     else:
         state = PASS
-    detail = ("R 卡 %d 张：已完成 %d / 已合并未 closed(需人工) %d / window_required %d / "
-              "whitelist %d / comment 证据 %d / 三者皆无 %d / 需人工(其它) %d" % (
-                  len(per_card), counts.get("closed", 0), counts.get("merged_not_closed", 0),
-                  counts.get("window_required", 0), counts.get("whitelist_t", 0),
+    detail = ("R 卡 %d 张：已完成 %d / window_required %d / whitelist %d / 已裁定登记 %d / "
+              "comment 证据 %d / 三者皆无 %d / merged 未 closed 且无登记(需人工) %d / 其它需人工 %d" % (
+                  len(per_card), counts.get("closed", 0), counts.get("window_required", 0),
+                  counts.get("whitelist_t", 0), counts.get("adjudicated", 0),
                   counts.get("comment_evidence", 0), counts.get("none", 0),
-                  counts.get("not_in_board", 0) + counts.get("unverified", 0) + counts.get("weak_t", 0)))
+                  counts.get("merged_not_closed", 0),
+                  counts.get("not_in_board", 0) + counts.get("unverified", 0)
+                  + counts.get("weak_t", 0)))
     if fail_items:
         detail += "；FAIL 卡：" + ", ".join(x["card"] for x in fail_items)
     if need_items:
-        detail += "；需人工 %d 张（见 JSON need_items）" % len(need_items)
+        detail += "；需人工 %d 张（按 last_status_ts 最旧优先，见 JSON need_items）" % len(need_items)
     return state, detail, per_card, fail_items, need_items
 
 
@@ -584,25 +642,29 @@ def classify_b_row(row, whitelist, board_cards):
 
 
 def judge_b_tracked(rows, whitelist, board_cards, counts=None):
-    """条件3 聚合。查不到 / schema 漂移 / counts 不一致一律「需人工」，不冒出 PASS。"""
+    """条件3 聚合。查不到 / schema 漂移 / counts 不一致一律「需人工」，不冒出 PASS。
+
+    但 **B 类真正清零**时 recon 会给出 rows 非空、counts.tracked=0 —— 这一情形必须 PASS，
+    否则终点永远无法达成（H-3）。所以 counts 校验在前、清零判定在后。
+    """
     if not isinstance(rows, list) or not rows:
         return NEED, "recon dispatch 未给出任何行（输出为空/解析失败），无法判定 tracked 清单", [], [], []
     missing_status = [row for row in rows if not isinstance(row, dict) or "status" not in row]
     if missing_status:
         return NEED, "recon 行缺 status 字段（schema 漂移：%d/%d 行），无法判定 tracked" % (
             len(missing_status), len(rows)), [], [], []
-    tracked = [row for row in rows if row.get("status") == "tracked"]
-    if not tracked:
-        return NEED, "recon 里 tracked=0（查不到不等于清零；schema/分母可疑）", [], [], []
     if not isinstance(counts, dict) or counts.get("tracked") is None:
         return NEED, "recon JSON 缺 counts.tracked，无法与 tracked 行数交叉校验", [], [], []
     try:
         expected = int(counts["tracked"])
     except (TypeError, ValueError):
         return NEED, "recon counts.tracked 不是整数（%r）" % (counts.get("tracked"),), [], [], []
+    tracked = [row for row in rows if row.get("status") == "tracked"]
     if expected != len(tracked):
         return NEED, "recon counts.tracked=%d 与 tracked 行数 %d 不一致（分母漂移）" % (
             expected, len(tracked)), [], [], []
+    if expected == 0:
+        return PASS, "B 类清零：recon tracked=0（rows %d 条非空、counts 一致）" % len(rows), [], [], []
 
     per_item, fail_items, need_items = [], [], []
     for row in tracked:
@@ -762,11 +824,16 @@ def render_table(report):
         for item in report["fail_items"]:
             lines.append("  FAIL [条件%s] %s：%s" % (item["condition"], item["item"], item["reason"]))
         limit = 20
-        for item in report["need_items"][:limit]:
-            lines.append("  需人工 [条件%s] %s：%s" % (item["condition"], item["item"], item["reason"]))
-        rest = len(report["need_items"]) - limit
-        if rest > 0:
-            lines.append("  … 另有 %d 条「需人工」未在表中列出（--json 的 need_items 有全量）" % rest)
+        groups = {}
+        for item in report["need_items"]:
+            groups.setdefault(item["condition"], []).append(item)
+        for cond_id in sorted(groups):
+            items = groups[cond_id]
+            for item in items[:limit]:
+                lines.append("  需人工 [条件%s] %s：%s" % (cond_id, item["item"], item["reason"]))
+            if len(items) > limit:
+                lines.append("  … 条件%s 另有 %d 条「需人工」未在表中列出（--json 的 need_items 有全量，"
+                             "按 last_status_ts 最旧优先）" % (cond_id, len(items) - limit))
     return "\n".join(lines)
 
 
@@ -782,7 +849,8 @@ def _cond(item_state, cond_id, item, reason, fail_items, need_items):
 
 
 def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
-                   with_script: bool, timeout: int, test_timeout: int):
+                   with_script: bool, timeout: int, test_timeout: int,
+                   allow_verdict_grep: bool = False):
     mir2_root = repo / "mir2-rs"
     warnings, conditions, fail_items, need_items = [], [], [], []
 
@@ -831,7 +899,9 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
 
     # ---- 条件2
     r_cards = collect_r_cards(index) if index else []
-    evidence_list = [collect_r_evidence(card, index, board_cards, whitelist) for card in r_cards]
+    evidence_list = [collect_r_evidence(card, index, board_cards, whitelist,
+                                          allow_verdict_grep=allow_verdict_grep)
+                     for card in r_cards]
     if not index or not board_cards:
         state = NEED
         detail = "协作视图不可用（board=%s，entries=%d），R 卡证据无法枚举" % (
@@ -843,6 +913,13 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         per_card, r_fails, r_needs = [], [], []
     else:
         state, detail, per_card, r_fails, r_needs = judge_r_cards(evidence_list)
+    hygiene_categories = {"window_required", "whitelist_t", "adjudicated", "comment_evidence"}
+    merged_open_hygiene = sorted(
+        ({"card": rec["card"], "board_status": rec["board_status"],
+          "category": rec["category"], "last_status_ts": rec["last_status_ts"]}
+         for rec in per_card
+         if rec["merged"] and rec["board_status"] != "closed" and rec["category"] in hygiene_categories),
+        key=lambda x: (x["last_status_ts"], x["card"]))
     conditions.append(build_condition(2, "R 卡证据", state, detail, {
         "board_cards": len(board_cards) if board_cards else None,
         "index_threads": index_meta.get("threads"), "index_entries": index_meta.get("entries"),
@@ -851,11 +928,16 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         "whitelist_duplicates": sorted(set(whitelist["duplicates"])),
         "principals_excluded": len(principals),
         "enumeration": "任一 entry body.tier 归一为 R（不只 issue）",
+        "merged_open_hygiene": merged_open_hygiene,
+        "merged_open_hygiene_note": "merged=true 但 board 非 closed、已凭登记 PASS 的卫生清单（不计条件2 缺口）",
+        "allow_verdict_grep": allow_verdict_grep,
         "r_cards": per_card, "notes": index_meta.get("notes")}))
     for item in r_fails:
-        _cond(FAIL, 2, item["card"], item["reason"], fail_items, need_items)
+        fail_items.append({"condition": 2, "item": item["card"], "reason": item["reason"],
+                           "last_status_ts": item.get("last_status_ts", 0)})
     for item in r_needs:
-        _cond(NEED, 2, item["card"], item["reason"], fail_items, need_items)
+        need_items.append({"condition": 2, "item": item["card"], "reason": item["reason"],
+                           "last_status_ts": item.get("last_status_ts", 0)})
 
     # ---- 条件3
     recon, recon_rec, _recon_ok = load_recon_dispatch(mir2_root)
@@ -923,8 +1005,8 @@ SYNTH_WHITELIST = "\n".join([
 
 
 def _synth_index():
-    def ent(kind, body):
-        return (kind, {"kind": kind, "body": body})
+    def ent(kind, body, ts=0):
+        return (kind, {"kind": kind, "ts": ts, "body": body})
     return {
         "openmir2-card-alpha": [ent("issue", {"tier": "R"}),
                                 ent("merge_result", {"merged": True})],
@@ -932,38 +1014,60 @@ def _synth_index():
                                ent("review", {"window_required": True})],
         "openmir2-card-gamma": [ent("issue", {"tier": "R"}),
                                 ent("review", {"decision": "approve"})],
-        "openmir2-card-delta": [ent("issue", {"tier": "R"})],
-        "openmir2-card-eps": [ent("issue", {"tier": "R"}), ent("comment", {"note": "见 T-1"})],
+        "openmir2-card-delta": [ent("issue", {"tier": "R"}), ent("status", {}, ts=100)],
+        "openmir2-card-eps": [ent("issue", {"tier": "R"}), ent("comment", {"note": "见 T-1"}),
+                              ent("status", {}, ts=500)],
         "openmir2-card-eta": [ent("issue", {"tier": "R"}),
-                              ent("merge_result", {"merged": True})],
+                              ent("merge_result", {"merged": True}),
+                              ent("status", {}, ts=900)],
         "openmir2-card-zeta": [ent("issue", {"tier": "R"})],
         "openmir2-card-theta": [ent("issue", {"tier": "R"}),
                                 ent("comment", {"summary": "窗口跑完：VERDICT=PASS（exit 0）"})],
-        # tier 只写在 review 里（issue 漏写）——验证「任一条目 tier=R」的枚举口径
         "openmir2-card-iota": [ent("issue", {}), ent("review", {"tier": "R"})],
+        "openmir2-card-lambda": [ent("issue", {"tier": "R"}),
+                                 ent("review", {"decision": "approve", "window_required": False,
+                                                "tier_why": "纯夹具工具，不触 RNG/时序/持久化，无需窗口"}),
+                                 ent("merge_result", {"merged": True})],
+        "openmir2-card-kappa": [ent("issue", {"tier": "R"}),
+                                ent("review", {"decision": "approve", "window_required": False,
+                                               "tier_why": "早前判定"}, ts=100),
+                                ent("review", {"verdict": "approve", "window_required": True,
+                                               "tier_why": "最新判定"}, ts=200),
+                                ent("merge_result", {"merged": True})],
+        "openmir2-card-mu": [ent("issue", {"tier": "R"}),
+                             ent("review", {"decision": "approve", "window_required": False}),
+                             ent("merge_result", {"merged": True}),
+                             ent("status", {}, ts=50)],
     }
 
 
 def _synth_board():
+    in_progress = "进行中"
     return {
         "openmir2-card-alpha": {"id": "openmir2-card-alpha", "unverified": 0,
                                 "status": "closed", "_column": "已完成"},
         "openmir2-card-beta": {"id": "openmir2-card-beta", "unverified": 0,
-                               "status": "in-progress", "_column": "进行中"},
+                               "status": "in-progress", "_column": in_progress},
         "openmir2-card-gamma": {"id": "openmir2-card-gamma", "unverified": 0,
                                 "status": "needs-review", "_column": "待审"},
         "openmir2-card-delta": {"id": "openmir2-card-delta", "unverified": 0,
-                                "status": "in-progress", "_column": "进行中"},
+                                "status": "in-progress", "_column": in_progress},
         "openmir2-card-eps": {"id": "openmir2-card-eps", "unverified": 1,
-                              "status": "in-progress", "_column": "进行中"},
+                              "status": "in-progress", "_column": in_progress},
         "openmir2-card-eta": {"id": "openmir2-card-eta", "unverified": 0,
-                              "status": "in-progress", "_column": "进行中"},
+                              "status": "in-progress", "_column": in_progress},
         "openmir2-card-zeta": {"id": "openmir2-card-zeta", "unverified": 0,
                                "status": "closed", "_column": "已完成"},
         "openmir2-card-theta": {"id": "openmir2-card-theta", "unverified": 0,
-                                "status": "in-progress", "_column": "进行中"},
+                                "status": "in-progress", "_column": in_progress},
         "openmir2-card-iota": {"id": "openmir2-card-iota", "unverified": 0,
                                "status": "closed", "_column": "已完成"},
+        "openmir2-card-lambda": {"id": "openmir2-card-lambda", "unverified": 0,
+                                 "status": "in-progress", "_column": in_progress},
+        "openmir2-card-kappa": {"id": "openmir2-card-kappa", "unverified": 0,
+                                "status": "in-progress", "_column": in_progress},
+        "openmir2-card-mu": {"id": "openmir2-card-mu", "unverified": 0,
+                             "status": "in-progress", "_column": in_progress},
     }
 
 
@@ -995,7 +1099,6 @@ def selftest(verbose=False):
             "openmir2-card-alpha" not in build_whitelist(
                 wl_path, exclude_ids={"openmir2-card-alpha"})["card_to_t"], "excluded"))
 
-        # ---------- 条件1 ----------
         ok_stdout = ("文件: 639 加载: 639 缺失: 0 异常: 0\n"
                      "解析错误: 427；解码异常文件: 0\n"
                      "语料派发目标覆盖：已实现 106 个（11829 次调用）；未实现 0 个\n")
@@ -1043,11 +1146,13 @@ def selftest(verbose=False):
         board = _synth_board()
         r_cards = collect_r_cards(idx)
         evs = {c: collect_r_evidence(c, idx, board, wl) for c in r_cards}
+        evs_grep = {c: collect_r_evidence(c, idx, board, wl, allow_verdict_grep=True)
+                    for c in r_cards}
 
         def card_state(card):
             return classify_r_evidence(evs[card])
 
-        check("条件2 识别 9 张 tier=R（任一条目，含 tier 只写在 review）", lambda: (
+        check("条件2 识别 12 张 tier=R（任一条目，含 tier 只写在 review）", lambda: (
             r_cards == sorted(board), str(r_cards)))
         check("条件2 board 已完成 -> PASS（不依赖 merge_result）", lambda: (
             card_state("openmir2-card-alpha")[0] == PASS
@@ -1067,10 +1172,23 @@ def selftest(verbose=False):
             card_state("openmir2-card-eta")[0] == NEED
             and r_category(evs["openmir2-card-eta"]) == "merged_not_closed",
             card_state("openmir2-card-eta")[1]))
-        check("条件2 comment VERDICT=PASS 证据 -> PASS", lambda: (
-            card_state("openmir2-card-theta")[0] == PASS
-            and r_category(evs["openmir2-card-theta"]) == "comment_evidence",
-            card_state("openmir2-card-theta")[1]))
+        check("H-1 已裁定登记（approve+window_required:false+理由）-> PASS", lambda: (
+            card_state("openmir2-card-lambda")[0] == PASS
+            and r_category(evs["openmir2-card-lambda"]) == "adjudicated",
+            card_state("openmir2-card-lambda")[1]))
+        check("H-1 取最新 approve（早 false / 新 true，verdict 写法）", lambda: (
+            (evs["openmir2-card-kappa"].get("adjudicated") or {}).get("kind") == "window_required",
+            str(evs["openmir2-card-kappa"].get("adjudicated"))))
+        check("H-1 approve+false 但无理由 -> 不算登记（仍需人工）", lambda: (
+            card_state("openmir2-card-mu")[0] == NEED
+            and r_category(evs["openmir2-card-mu"]) == "merged_not_closed",
+            card_state("openmir2-card-mu")[1]))
+        check("H-4 默认不认 VERDICT=PASS 子串（theta -> FAIL）", lambda: (
+            card_state("openmir2-card-theta")[0] == FAIL, card_state("openmir2-card-theta")[1]))
+        check("H-4 --allow-verdict-grep 才认（theta -> PASS）", lambda: (
+            classify_r_evidence(evs_grep["openmir2-card-theta"])[0] == PASS
+            and r_category(evs_grep["openmir2-card-theta"]) == "comment_evidence",
+            classify_r_evidence(evs_grep["openmir2-card-theta"])[1]))
         check("条件2 三者皆无 -> FAIL", lambda: (
             card_state("openmir2-card-delta")[0] == FAIL, card_state("openmir2-card-delta")[1]))
         check("条件2 未验签 -> 需人工", lambda: (
@@ -1086,7 +1204,14 @@ def selftest(verbose=False):
 
         state2, detail2, per2, fail2, need2 = judge_r_cards(list(evs.values()))
         check("条件2 聚合状态 FAIL（有皆无卡）", lambda: (
-            state2 == FAIL and any(x["card"] == "openmir2-card-delta" for x in fail2), detail2))
+            state2 == FAIL
+            and any(x["card"] == "openmir2-card-delta" for x in fail2)
+            and any(x["card"] == "openmir2-card-theta" for x in fail2), detail2))
+        check("H-2 need_items 按 last_status_ts 升序（最旧先）", lambda: (
+            [x["card"] for x in need2]
+            == ["openmir2-card-mu", "openmir2-card-eps", "openmir2-card-eta"]
+            and [x["last_status_ts"] for x in need2] == sorted(x["last_status_ts"] for x in need2),
+            str([(x["card"], x["last_status_ts"]) for x in need2])))
 
         # ---------- 条件3 ----------
         rows = [
@@ -1104,7 +1229,7 @@ def selftest(verbose=False):
             by_name["CM_ORPHAN"]["category"] == "none" and b_state == FAIL, b_detail))
         check("条件3 只算 tracked 不计 implemented", lambda: (
             "SM_IGNORED" not in by_name and len(b_items) == 3, str(len(b_items))))
-        check("条件3 tracked 为空 -> 需人工", lambda: (
+        check("条件3 rows 为空 -> 需人工", lambda: (
             judge_b_tracked([], wl, board, {"tracked": 0})[0] == NEED, "empty rows"))
         check("条件3 rows 为 None -> 需人工", lambda: (
             judge_b_tracked(None, wl, board, {"tracked": 0})[0] == NEED, "none rows"))
@@ -1117,6 +1242,15 @@ def selftest(verbose=False):
                             {"tracked": 1})[0] == NEED, "schema drift"))
         check("条件3 counts 一致时按条目判定", lambda: (
             judge_b_tracked(rows, wl, board, counts_ok)[0] == FAIL, b_detail))
+        cleared_rows = [{"status": "implemented", "name": "SM_A", "card": ""},
+                        {"status": "implemented", "name": "SM_B", "card": ""}]
+        check("H-3 rows 非空且 counts.tracked=0 -> PASS（B 类清零）", lambda: (
+            judge_b_tracked(cleared_rows, wl, board, {"tracked": 0})[0] == PASS
+            and "B 类清零" in judge_b_tracked(cleared_rows, wl, board, {"tracked": 0})[1],
+            str(judge_b_tracked(cleared_rows, wl, board, {"tracked": 0})[:2])))
+        check("H-3 rows 非空但 counts.tracked>0 -> 需人工", lambda: (
+            judge_b_tracked(cleared_rows, wl, board, {"tracked": 2})[0] == NEED,
+            "counts mismatch"))
 
         # ---------- 条件4 ----------
         def chk(name, state):
@@ -1141,7 +1275,6 @@ def selftest(verbose=False):
 
         # ---------- 牙：把判定改坏必须能被上面的断言抓住 ----------
         def mutant_cov(_rec, parsed, counters=None):
-            # 故意忽略「未实现」计数（模拟退化判定）
             return (PASS, "mutant") if parsed else (NEED, "mutant")
 
         check("牙：忽略未实现计数的退化判定会被 FAIL 断言判死", lambda: (
@@ -1150,7 +1283,6 @@ def selftest(verbose=False):
             "mutant detected"))
 
         def mutant_cov_no_rc(_rec, parsed, counters=None):
-            # 故意删掉 rc!=0 守卫（review 牙 B 的场景）
             return (PASS, "mutant") if parsed else (NEED, "mutant")
 
         check("牙：删掉 rc!=0 守卫会被『rc=1 且未实现=0 ⇒ FAIL』断言抓住", lambda: (
@@ -1159,7 +1291,6 @@ def selftest(verbose=False):
             "mutant detected"))
 
         def mutant_r(ev):
-            # 故意把「三者皆无」判成 PASS（模拟放宽判据）
             _state, why = classify_r_evidence(ev)
             return (PASS, why)
 
@@ -1170,12 +1301,19 @@ def selftest(verbose=False):
             "mutant detected"))
 
         def mutant_empty_tracked(rows_, wl_, board_, counts_=None):
-            # 故意把「查不到」判成 PASS（G-2 的场景）
             return (PASS, "mutant")
 
         check("牙：把空 tracked 判成 PASS 会被『查不到⇒需人工』断言抓住", lambda: (
             mutant_empty_tracked([], wl, board, {"tracked": 0})[0] == PASS
             and judge_b_tracked([], wl, board, {"tracked": 0})[0] == NEED, "mutant detected"))
+
+        def mutant_zero_tracked(rows_, wl_, board_, counts_=None):
+            return (NEED, "mutant：旧口径把 tracked=0 一律判需人工")
+
+        check("牙：把 tracked=0 一律判需人工会被 H-3 PASS 断言抓住", lambda: (
+            mutant_zero_tracked(cleared_rows, wl, board, {"tracked": 0})[0] == NEED
+            and judge_b_tracked(cleared_rows, wl, board, {"tracked": 0})[0] == PASS,
+            "mutant detected"))
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
 
@@ -1211,6 +1349,8 @@ def main(argv=None):
     parser.add_argument("--full", action="store_true", help="完整模式（= --tests --script）")
     parser.add_argument("--timeout", type=int, default=1800, help="单命令超时秒数（默认 1800）")
     parser.add_argument("--test-timeout", type=int, default=7200, help="cargo test 超时秒数（默认 7200）")
+    parser.add_argument("--allow-verdict-grep", action="store_true",
+                        help="条件2 采信 comment/review 里的 VERDICT=PASS 文本标记（默认关闭：子串匹配易假 PASS）")
     parser.add_argument("--verbose", action="store_true", help="selftest 逐条打印")
     args = parser.parse_args(argv)
 
@@ -1239,7 +1379,8 @@ def main(argv=None):
 
     report = collect_report(repo=repo, envir=args.envir, script_bin=args.script_bin,
                             with_tests=with_tests, with_script=with_script,
-                            timeout=args.timeout, test_timeout=args.test_timeout)
+                            timeout=args.timeout, test_timeout=args.test_timeout,
+                            allow_verdict_grep=args.allow_verdict_grep)
 
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
