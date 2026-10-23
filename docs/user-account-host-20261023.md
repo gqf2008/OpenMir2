@@ -53,7 +53,7 @@
 ```
 cargo fmt --all -- --check                                        rc=0
 cargo clippy --workspace --all-targets -- -D warnings             rc=0
-cargo test --workspace                                            141 suites / <填> passed / 0 failed
+cargo test --workspace                                            141 suites / 3108 passed / 0 failed
 cargo run -p msgcodegen -- --check                                604 条一致
 script_host_noop_audit.py check --strict-lines                    GREEN（168 行：safe 65 / needs_card 99 / covered 4）
 whitelist_anchor_gate.py check                                    ALL PASS（546 条锚）
@@ -63,8 +63,8 @@ t_reservation_gate.py check                                       GREEN（rows=2
 
 牙的 sha256（提交后树 `git show <head>:<path>`）：
 
-- `npc.rs` = `<填>`
-- `crates/script/src/engine/mod.rs` = `<填>`
+- `npc.rs` = `05bfce3bfcf3e4d97b7bb4d9b324c25edf7a1c1617e0de5622554e40fc63bf11`（= `git show 8235f2276:mir2-rs/bins/game-svr/src/npc.rs`）
+- `crates/script/src/engine/mod.rs` = `8800a326cc8daf05396eecba07162a49a18084b39a33c49a41c2479dab5eab0c`（= `git show 8235f2276:…`）
 
 ## 6. 残余 / 窗口项（R，未跑）
 
