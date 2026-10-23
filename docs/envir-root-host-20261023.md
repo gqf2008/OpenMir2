@@ -71,19 +71,19 @@
 | A | 删 `impl ScriptNpc for HostNpc` 的 `fn envir_root` | **3 FAILED**（用例 1、2、3）/ 1 passed（用例 4 本来就期待 miss） | `npc.rs` = `260298317242baa21d24c86c840ef87ef0611e2025efbe7d230aff8084cfff25` |
 | B | `envir_file_path` 关掉剥离（`let rel = rel;`） | **2 FAILED**（用例 1 的两点分支、用例 2）；用例 3 仍绿（它走两参 helper） | `actions.rs` = `134a1e92b43c535f551838892114f0e984753e4a90506cb87cc98133ed2d8107` |
 
-## 4. 门禁（本 head `f35418b41` + `8cab9f3ff` fmt）
+## 4. 门禁（合并树 `f7c70aad8` = master `a9beb4c44` + 本卡）
 
 ```
 cargo fmt --all -- --check                                        rc=0
 cargo clippy --workspace --all-targets -- -D warnings             rc=0
-cargo test --workspace                                            <待填>
-cargo run -p msgcodegen -- --check                                <待填>
+cargo test --workspace                                            141 suites / 3105 passed / 0 failed
+cargo run -p msgcodegen -- --check                                rc=0（604 条）
 python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py check                  GREEN（168 行：safe 60 / needs_card 104 / covered 4）
 python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py check --strict-lines   GREEN（同上）
 python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py selftest               GREEN（牙后 sha256 不变）
-python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check        ALL PASS（520 条锚）
+python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check        ALL PASS（544 条锚）
 python -I -B mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit  GREEN
-python -I tools/whitelist/t_reservation_gate.py check                      GREEN（rows=202 whitelist=202）
+python -I tools/whitelist/t_reservation_gate.py check                      GREEN（rows=209 whitelist=209）
 ```
 
 **台账重钉**（I-1，纪律第 13 条）：`envir_root` 行由 `needs_card` 改为 `safe/overridden`，`evidence`
