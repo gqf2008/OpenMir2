@@ -32,7 +32,12 @@ tools/e2e/run_e2e.ps1         E2E 回归套件（工具自测+金标准+流程+�
 tools/e2e/stack_e2e.ps1       **整栈 E2E 一条命令**（停栈→开号→起栈→run_e2e→压测档→收尾） -SelfTestRed
 tools/oracle/                 S1 线：oracle 部署件对账 / 铺部署 / 网关重连门禁（见 tools/oracle/README.md）  -SelfTestRed
 tools/worldsample/world_sampler.py  世界态采样/对拍（位置·AOI·背包·金币·tick）  selftest（确定性 + 改坏必红）
+tools/hygiene/conflict_marker_gate.py  被跟踪文件的冲突标记门禁（扫 <</>>/= 行）  --selftest（6 项：有标记红、干净绿、Markdown 的 '=' 不误报）
 ```
+
+冲突标记门禁（合并前可跑，零依赖）：`python -I tools/hygiene/conflict_marker_gate.py`
+扫 `git ls-files` 里所有被跟踪文件，命中标记行即打印 `file:line` 并 rc=1；干净 rc=0。
+自检 `--selftest`；`=` 分隔行仅在**同文件**还有 `<`/`>` 标记时才判红（避免误伤 Markdown 一级标题下划线）。
 
 ## 0. 一次跑完全部自测（不需起服务端）
 

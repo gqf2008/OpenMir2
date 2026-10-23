@@ -385,7 +385,8 @@ def load_scenario(path):
     # 不是步骤 DSL：probe 不读它，无新 step 类型、不改 send/wait 语义。放行只是为了让带声明的场景
     # 仍能被 --check-scenario / 真跑加载（否则会被下面的 unknown key 拒绝）。
     _need_keys(data, "scenario", required=("name", "steps"),
-               optional=("description", "params", "required", "computed"))
+               optional=("description", "params", "required", "computed",
+                         "placement"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -403,7 +404,37 @@ def load_scenario(path):
         dup = sorted({n for n in req if req.count(n) > 1})
         if dup:
             raise ScenarioError("scenario.required has duplicates: %s" % dup)
+    _check_placement(data.get("placement"))
     return data
+
+
+def _check_placement(pl):
+    """`scenario.placement` 的**形状**校验（本驱动器不做预置位，只负责别让坏声明溜过去）。
+
+    预置位由 `tools/conformance/card_window.py` 在开窗前改**测试库**的
+    `characters.MapName/CX/CY` 完成（卡 `openmir2-window-character-placement`）；
+    这里只校验形状，并在声明存在时提示「本驱动器不应用它」——避免有人直接跑 probe
+    就以为预置已经生效。
+    """
+    if pl is None:
+        return
+    _need_keys(pl, "scenario.placement", required=("map", "x", "y"), optional=("note",))
+    if not isinstance(pl["map"], str) or not pl["map"]:
+        raise ScenarioError("scenario.placement.map must be a non-empty string")
+    if len(pl["map"]) > 10:
+        raise ScenarioError("scenario.placement.map %r is longer than 10 chars "
+                            "(characters.MapName is varchar(10))" % pl["map"])
+    if not all(("a" <= c <= "z") or ("A" <= c <= "Z") or ("0" <= c <= "9") or c == "_"
+               for c in pl["map"]):
+        raise ScenarioError("scenario.placement.map %r must match [A-Za-z0-9_]{1,10} "
+                            "(same rule as tools/conformance/card_window.py)" % pl["map"])
+    _need_int(pl["x"], "scenario.placement.x", 0, 0xFFFF)
+    _need_int(pl["y"], "scenario.placement.y", 0, 0xFFFF)
+    if pl.get("note") is not None and not isinstance(pl["note"], str):
+        raise ScenarioError("scenario.placement.note must be a string")
+    print("note: scenario.placement 声明了 map=%s x=%s y=%s，但**本驱动器不预置位**"
+          "（由 tools/conformance/card_window.py 在起栈前改测试库完成）"
+          % (pl["map"], pl["x"], pl["y"]), file=sys.stderr)
 
 
 def _encode_send_body(val, where, params=None):

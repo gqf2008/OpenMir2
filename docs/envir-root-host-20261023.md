@@ -1,123 +1,109 @@
-# `HostNpc` 覆写 `envir_root` + `CHECKNAMELIST` 的 `..` 前缀剥离（T-220）
+# `HostNpc` 覆写 `envir_root` + 两参 `GetEnvirFilePath`（T-220）
 
 - 卡：`openmir2-script-envir-root-host`（tier=R）；分支 `card/openmir2-script-envir-root-host`
-- 原作者：`openmir2-worker-24`；**返工**：`openmir2-worker-66`（review `51132242` / reviewer-5）
+- 原作者：`openmir2-worker-24`；**返工**：`openmir2-worker-24`（review `51132242` / `ac78b56a`）
+
+> **本文件按 head 实测重写（review `ac78b56a` I-2）**：上一版描述的是 worker-66 的中间实现
+> （用例名 / 牙 sha / 「剥离逻辑只此一份」的说法都不成立）。以下每条都能在本 head 的
+> `git show HEAD:<path>` 上复核。
 
 ## 1. 问题
 
-`HostNpc`（`bins/game-svr/src/npc.rs`）没有 `ScriptNpc::envir_root` 覆写 ⇒ 缺省 `None` ⇒
-`check_string_list` / `envir_file_path` 全部按「文件不存在」处理：`CHECKNAMELIST`(15)、
-`CHECKACCOUNTLIST`(238) 恒 false，`ADDNAMELIST`(9)/`DELNAMELIST`(2)/`DELACCOUNTLIST`(238)
-不写盘（计数取自部署两个 Envir 根，二者逐字相同）。
+`HostNpc`（`bins/game-svr/src/npc.rs`）缺 `ScriptNpc::envir_root` 覆写时恒 `None` ⇒ `check_string_list` /
+`envir_file_path` 全部按「文件不存在」处理：`CHECKNAMELIST`(15)、`CHECKACCOUNTLIST`(238) 恒 false，
+`ADDNAMELIST`(9)/`DELNAMELIST`(2)/`DELACCOUNTLIST`(238) 不写盘（计数取自部署两个 Envir 根）。
 
-**I-1（blocking，复审发现）**：只注入根并不够——部署语料里 **15/15 条 `CHECKNAMELIST`**
-参数都是 `..\QuestDiary\…`；oracle `GetEnvirFilePath`（`SystemShare.cs:1989-1992`，被
-`ProcessingBase.cs:1829` 调用）对以 `..` 开头的路径**丢弃前 3 个字符**再拼
-`Path.Combine(BasePath, EnvirDir, rest)`。原 `check_string_list` 把 `..` 当普通段 `push` ⇒
-得到 `<BasePath>/QuestDiary/…`（Envir 之外、不存在）⇒ **注入根后仍恒假**。reviewer 用卡自己的
-用例把参数换成部署形态（`..\TestList.txt`）复现：`left ["miss"] / right ["hit"]`。
+本 head 在此之上还修了**两参**口径：oracle 有两种 `GetEnvirFilePath`（`src/M2Server/M2Share.cs:1970-1985`）：
 
-## 2. 实现
+| 形态 | 语义 |
+|---|---|
+| 单参 `GetEnvirFilePath(filePath)`（`:1970-1977`） | `filePath` 以 `..` 开头 ⇒ 剥前 3 字符再拼 Envir 根 |
+| 两参 `GetEnvirFilePath(dirPath, filePath)`（`:1979-1985`） | `filePath` 以 `..` 开头 ⇒ **忽略 `dirPath`**、剥前 3 字符；否则拼 `Envir/dirPath/filePath` |
 
-- `HostNpc` 新增 `envir_root: Option<String>`；`run_goto_label` 增加注入形参：
-  `NpcHost::goto_label` 传 `self.envir_root`（空 `PathBuf` ⇒ `None`），
-  **`MerchantScriptBook::goto_label` 传 `None`**（商人表未持 Envir 根，保持接线前行为）；
-- `impl ScriptNpc for HostNpc` 新增 `fn envir_root`；
-- **I-1 修复**：`check_string_list` 改为**复用** `envir_file_path`——以 `..` 开头时剥前 3 个字符
-  再拼 Envir 根（照抄 oracle 的 `filePath[3..]`，**不做** `Path::normalize`/`canonicalize`）；
-  未注入根时仍走 `PathBuf::from(rel)`（接线前行为）。剥离规则只此一份，条件与动作不再各写一套。
-  该改动在 `crates/script`，属 Leader 授权的扩写集（部署 15/15 的公共前置）。
+`CHECKNAMEDATELIST`（`ConditionProcessingSys.cs:642`）和 `ADDUSERDATE`（`ExecutionProcessingSys.cs:2576`）
+走的是**两参**（`normNpc.Path` 作 `dirPath`）。旧实现先 `format!("{}{}", npc.path(), s_param1)` 再走单参 ⇒
+`MapQuest_def..\QuestDiary\…` 不以 `..` 开头 ⇒ 不剥 ⇒ 指向不存在的路径。部署可达链：
+`MapQuest_def/QManage.txt:36` `#CALL [\月卡\月卡系统.txt] @月卡` → `QuestDiary/月卡/月卡系统.txt:5`
+`CHECKUSERDATE ..\QuestDiary\月卡\月卡记录.txt > 30 p0 p1`（QManage = `HostNpc` 漏斗）。
+
+## 2. 实现（本 head）
+
+- `impl ScriptNpc for HostNpc`：`fn envir_root` 返回 `self.envir_root.clone()`（`NpcHost` 注入；
+  `MerchantScriptBook::goto_label` 仍传 `None`，登记在案）。
+- `crates/script/src/engine/actions.rs`：
+  - `envir_file_path(rel)` —— 单参口径（`..` ⇒ 剥 3 字符）；
+  - **新增 `envir_file_path_with_dir(dir, rel)`** —— 两参口径（`..` ⇒ 忽略 `dir`、剥 3 字符；否则拼 `dir/rel`）。
+- `crates/script/src/engine/conditions.rs`：`cond_check_name_date_list` 改用 `envir_file_path_with_dir(npc.path(), s_param1)`。
+- `engine/actions.rs`：`action_of_add_use_date_list` 同上（两参）。
+- `engine/mod.rs`：`check_string_list` 改为**复用** `envir_file_path`（删除内联的第二份剥离逻辑；
+  未注入根 ⇒ 记 `file not found => <rel>` 并返回 false，与接线前行为一致）。
+- `npc.rs`：用例文档注释里原有一处 `impl ScriptNpc for HostNpc` **字面**，会被台账 `parse_impls`
+  当成第二个 impl 块（导致 `path` 误报「标已覆写但 impl 块里没有该方法」）——已改写措辞。
 
 ### 2.1 覆盖精度（部署形态）
 
-| 面 | 部署处数 | 修复后 |
+| 面 | 部署处数 | 本 head |
 |---|---:|---|
-| `CHECKNAMELIST`（`HostNpc` 承载：`QManage.txt:24/52`、`QFunction-0.txt:60`、以及经 `#CALL` 的 `假人登录脚本.txt:359/394`、`月卡系统.txt:13`） | 6/15 | **接通**（`..` 剥离后指向 `Envir/QuestDiary/…`） |
-| `CHECKNAMELIST`（商人脚本：`假人上线NPC`、`任务-3`、`客栈-0148`、`武士-0114`、`影传送-h001`、`书店-0`） | 9/15 | 仍恒假（`MerchantScriptBook` 注入 `None`，**登记在案**） |
-| `ADDNAMELIST`/`DELNAMELIST`/`DELACCOUNTLIST` | 249/249 | **两侧一致地不写盘**：动作路先拼 `npc.path()`（`Market_Def`/`MapQuest_def`）再交给 `GetEnvirFilePath`，拼出的 `"Market_Def..\QuestDiary\…"` **不以 `..` 开头** ⇒ oracle 也不剥 ⇒ 路径不存在。写盘路径由构造级用例覆盖（见 §3），真机只能判「不写盘」的 parity |
-| `CHECKACCOUNTLIST`（O-1） | 238/238 | 同上：`rel = npc.path() + s_param1` ⇒ 两侧一致坏（parity 成立，但「接通」名不副实）。**(a) 不改变它**；正例需非 `..` 形态或工具卡新增夹具 |
+| `CHECKNAMELIST`（`HostNpc` 承载：`QManage.txt:24/52`、`QFunction-0.txt:60`、经 `#CALL` 的 `假人登录脚本.txt:359/394`、`月卡系统.txt:13`） | 6/15 | **接通**（单参：`..` 剥离后指向 `Envir/QuestDiary/…`） |
+| `CHECKNAMELIST`（商人脚本 9 处） | 9/15 | 仍恒假（`MerchantScriptBook` 注入 `None`，登记在案） |
+| `CHECKNAMEDATELIST`/`CHECKUSERDATE`（`月卡系统.txt:5`） | 1 | **本 head 修好**：两参 ⇒ `<Envir>/QuestDiary/月卡/月卡记录.txt`（该文件当前 0 字节 ⇒ 今天两侧都 false；充值写入一行后 oracle 判真而旧 Rust 恒假） |
+| `ADDNAMELIST`/`DELNAMELIST`/`DELACCOUNTLIST`（249 处） | 249/249 | 两侧**一致地**先拼 `npc.path()` 再单参 ⇒ `Market_Def..\…` 不剥 ⇒ 不写盘（parity 成立；写盘由构造级用例覆盖） |
+| `ADDUSERDATE`/`DELUSERDATE` | 部署未出现 | 已按两参实现（`ExecutionProcessingSys.cs:2576/2613`） |
+| `CHECKACCOUNTLIST`（O-1） | 238/238 | 单参站点、`npc.path()+..` 形态 ⇒ 两侧一致坏；正例需非 `..` 夹具（工具卡） |
 
 ## 3. 用例与牙（4 用例 / 2 牙）
 
-用例（`bins/game-svr/src/npc.rs`，均用临时 `Envir/` 夹具）：
+用例（`bins/game-svr/src/npc.rs` tests 模块，均用临时 `Envir/` 夹具）：
 
-1. `host_npc_envir_root_enables_check_name_list`（原作者）：`TestList.txt`，`Trim()` + 忽略大小写；
-   未注入根 ⇒ 恒假；
-2. `host_npc_envir_root_strips_dotdot_prefix_for_check_name_list`（**I-1 部署形态**）：
-   `..\TestList.txt`（名单仍在 `Envir/TestList.txt`）⇒ 命中；
-3. `host_npc_add_name_list_writes_gb2312_crlf_and_deletes_line`（**acceptance ③**）：
-   `ADDNAMELIST` 真写盘；按 oracle 缺陷（`ActionOfAddList`/`ActionOfDelList` 逐字相同 ⇒ 实为**删行**）
-   断言 `gb2312`（无 BOM）+ 每行 CRLF 的**逐字节**结果；同时覆盖动作路的 `..` 形态；
-4. `merchant_script_book_without_envir_root_keeps_check_name_list_false`（**商人 `None` 路回归**）：
-   即使别处存在同名名单，商人不注入根时仍恒假。
+1. `host_npc_envir_root_enables_check_name_list` —— `TestList.txt`：`Trim` + `OrdinalIgnoreCase` 命中；
+   `..\TestList.txt`（部署形态）同样命中；未注入根 ⇒ miss；
+2. `host_npc_envir_root_name_list_action_writes_to_disk` —— `ADDNAMELIST`(45) 真写盘：
+   两点前缀剥离、CRLF 重写逐字节、二次执行幂等；
+3. `host_npc_envir_root_check_name_date_list_uses_two_arg_envir_path`（**I-3**）—— `CHECKNAMEDATELIST`(144)
+   `..\QuestDiary\月卡\月卡记录.txt` 经两参口径命中；文件不存在 ⇒ miss；
+4. `merchant_script_book_without_envir_root_keeps_check_name_list_false`（**M-1**）—— 商人漏斗不注入根
+   ⇒ `CHECKNAMELIST` 恒假且**不写盘**（名单本来存在且能命中）。
 
-牙（逐字节还原；`sha256` 取**提交后的树** `git show <head>:<path>`）：
+牙（实做后 `git checkout --` 逐字节还原；sha256 取**提交后树**）：
 
-| 牙 | 改动 | 结果 | 还原 sha256 |
+| 牙 | 改动 | 结果 | 还原后 sha256（`git show f35418b41:<path>`） |
 |---|---|---|---|
-| A | 删 `impl ScriptNpc for HostNpc` 的 `fn envir_root` | 用例 1、2 均 `FAILED`（`left: ["miss"]`），rc=101 | `npc.rs` = `cda166fdaa27f20e3463a90a068de7dbd3ccf42dbfb19c170502a7af43b18963` |
-| B | 关掉 `envir_file_path` 的 `..` 剥离（`let rel = rel;`） | 用例 2 `FAILED`；用例 3 `FAILED`（文件原样 `Hero\r\n其它\r\n`） | `actions.rs` = `40d15c48b22a844ed303a443713898286669781b9ef54654ccdc88c5541758dd` |
+| A | 删 `impl ScriptNpc for HostNpc` 的 `fn envir_root` | **3 FAILED**（用例 1、2、3）/ 1 passed（用例 4 本来就期待 miss） | `npc.rs` = `260298317242baa21d24c86c840ef87ef0611e2025efbe7d230aff8084cfff25` |
+| B | `envir_file_path` 关掉剥离（`let rel = rel;`） | **2 FAILED**（用例 1 的两点分支、用例 2）；用例 3 仍绿（它走两参 helper） | `actions.rs` = `134a1e92b43c535f551838892114f0e984753e4a90506cb87cc98133ed2d8107` |
 
-> 两个 sha 均与 `git show <head>:…` 的提交后树逐字节一致（reviewer-5 M-3：不再用工作区哈希）。
-
-## 4. 门禁（真实合并树：master `43ce8dca` + 本 head；独立 `CARGO_TARGET_DIR=E:/tmp/envirroot-merge-target-w66`）
+## 4. 门禁（本 head `f35418b41` + `8cab9f3ff` fmt）
 
 ```
 cargo fmt --all -- --check                                        rc=0
-cargo clippy --workspace --all-targets --locked -- -D warnings    rc=0
-cargo test --workspace --locked                                   rc=0（141 suites / 3059 passed / 0 failed / 62 ignored）
-cargo test -p mir2-world --test no_parallel --locked              rc=0（5 passed）
-cargo run --locked -p msgcodegen -- --check                       rc=0（604 条）
-python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py check --strict-lines
-                                                                  rc=0（168 行：safe 60 / needs_card 104 / covered 4）
-python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check        ALL PASS（517 条锚）
-python -I -B mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit  GREEN（200）
-python -I -B tools/whitelist/t_reservation_gate.py check          GREEN（202 行 / 202 号）
-python -I -B mir2-rs/tests/parity/coverage/gm_registry.py gate     GREEN（86）
+cargo clippy --workspace --all-targets -- -D warnings             rc=0
+cargo test --workspace                                            <待填>
+cargo run -p msgcodegen -- --check                                <待填>
+python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py check                  GREEN（168 行：safe 60 / needs_card 104 / covered 4）
+python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py check --strict-lines   GREEN（同上）
+python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py selftest               GREEN（牙后 sha256 不变）
+python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check        ALL PASS（520 条锚）
+python -I -B mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit  GREEN
+python -I tools/whitelist/t_reservation_gate.py check                      GREEN（rows=202 whitelist=202）
 ```
 
-> 首跑 `game-gate --test relay::header_prefixed_login_is_kicked` 红（`left [] / right [1,2]`），
-> 单跑该用例绿、整套复跑 3059/0/62 绿 ⇒ 并行负载下的时序 flaky（该文件不属本卡写集）。
-> 按队列纪律第 11 条记为环境噪声，未改测试。
->
-> **strict-lines（纪律第 13 条）**：本卡在 `npc.rs` 前部新增 19 行 ⇒ 台账 56 条 `evidence.line`
-> 与 `envir_root` 行（`needs_card` → `safe/overridden`、`subcard` 清空）按**合并树**重钉；
-> 重钉后 `check --strict-lines` GREEN，`line_baseline` 已改为本合并树。
-> 另：用例文档注释里原有第二处 ``impl ScriptNpc for HostNpc`` 字面会被台账解析器误当 impl 块
-> （导致 `path` 误报「不在 impl 块内」），已改写措辞。
+**台账重钉**（I-1，纪律第 13 条）：`envir_root` 行由 `needs_card` 改为 `safe/overridden`，`evidence`
+指向 `ScriptNpc for HostNpc::envir_root`，`subcard` 清空；本 head 在 `npc.rs` 前部新增行 ⇒ **56 条
+`evidence.line` 按源文件重新计算**（脚本按 `impl` 块内 `fn` 声明行重钉，不手改）。
 
 ## 5. 残余 / 窗口项（R，未跑）
 
 - 商人路 `envir_root` 未注入（`MerchantScriptBook` 无字段）⇒ 商人脚本的同源条件仍恒假（另卡）。
 - **O-1**：`CHECKACCOUNTLIST` 238/238 与动作路 249/249 都是 `npc.path()+..` 形态，oracle 与 Rust
-  **两侧一致不剥/不写**；本卡的 `..` 修复只影响「无 path 前缀」的 `CHECKNAMELIST`。正例需
-  非 `..` 形态夹具（工具卡）——即使账号注入也仍然不通。
-- `CHECKACCOUNTLIST` 正例依赖**现役**子卡 `openmir2-script-user-account`（issue `8b3f7041`）；
-  原指向的 `openmir2-script-user-account-host` 已作废（重复卡），本返工已改。
-- **真机窗口**（见 T-220 行）：
-  ① **HostNpc 站点点名：`MapQuest_def/QManage.txt:24`**（`[@Login]` 块）。可达性链：
-  `QManage` 是 `SystemShare.ManageNPC`（宿主 `NpcHost`，`run_login` → `HostNpc::goto_label` 注入
-  `Some(envir_root)`）→ 条件 `rel` 就是 `s_param1`（条件路不拼 `npc.path()`）→ `..\QuestDiary\…`
-  剥前 3 字符后指向 `<Envir>/QuestDiary/LEGM2.CC假人系统/假人名单列表.txt`（131 行，存在）。
-  用 `login_only` + 一个**名字在名单里**的角色（从表里挑，**不改表**）⇒ 命中 ⇒
-  `#CALL @假人主号登录` ⇒ `MAPMOVE jiaren` + `RecallHero` + `CHANGEATTACKMODE 1`（地图/帧可观测）；
-  再用**不在名单**的角色跑同一场景作差分（应不 `MAPMOVE`）。这是 `HostNpc` 承载的合法
-  `@Login` 路径，`login_only` 真能触发——不是拿登录场景糊过去；
-  ② **O-1**：部署动作路 **249/249**（ADDNAME 9 / DELNAME 2 / DELACCOUNT 238）与
-  `CHECKACCOUNTLIST` **238/238** 都是 `npc.path()+..` 形态 ⇒ 拼成 `Market_Def..\…`，oracle 与
-  Rust **两侧一致地不剥/不写盘** ⇒「ADDNAMELIST 落盘逐字节」在部署形态下**不可达**，写盘只能由
-  构造级用例 3 覆盖，真机只判「不写盘」的 parity；
-  ③ `CHECKACCOUNTLIST` 正例待子卡 + 非 `..` 夹具，暂不派。
-- 窗口未跑前本卡不得 `closed`。
+  **两侧一致不剥/不写**；本卡的两参修复只影响 `CHECKNAMEDATELIST`/`ADDUSERDATE`。
+- `CHECKACCOUNTLIST` 正例依赖现役子卡 `openmir2-script-user-account`（issue `8b3f7041`）。
+- `filePath` 恰为 `..`（长度 2）时 oracle `filePath[3..]` 抛 `ArgumentOutOfRangeException`、
+  Rust `get(3..)` 取空串 ⇒ **已知边界偏差**（部署不可达，登记在 T-220）。
+- **真机窗口**（T-220 行）：① `MapQuest_def/QManage.txt:24`（`[@Login]`）用 `login_only` + 名单内/外两个
+  角色做差分（命中 ⇒ `#CALL @假人主号登录` ⇒ `MAPMOVE jiaren` + `RecallHero` + `CHANGEATTACKMODE 1`）；
+  ② `月卡系统.txt:5` 的 `CHECKUSERDATE` 需先由充值流程写入一行才有正例（当前两侧皆 false）；
+  ③ 动作路只判「不写盘」的 parity。窗口未跑前本卡不得 `closed`。
 
 ## 6. 残留物
 
-- `E:/tmp/envirroot-tooth.py`（牙 A/B 改树/还原脚本，不入库）
-- `E:/tmp/envirroot-target-w66/`（门禁构建缓存，可删）
-- `E:/tmp/w24-er.sha`（原作者牙基线，已被本返工的提交后 sha 取代）
+- `E:/tmp/fix_ledger.py`（台账行号重钉脚本，不入库）、`E:/tmp/w24-er-test.log`（全量测试输出）
 - 未起栈、未占端口、未连库。
-
-## 复审 51132242 返工（M-1）
-
-新增 `ADDNAMELIST`(45) 真写盘用例：两点前缀剥离后删行、CRLF 逐字节重写、二次执行幂等
-（`host_npc_envir_root_name_list_action_writes_to_disk`）。用例合计 5 条、牙 2 颗。

@@ -379,3 +379,9 @@ tools/oracle/cond-crash-probe/obj/
 # 压测（C6）：保留小体积指标（load_stats/mem/report/summary），只排除大日志
 tests/loadgate/**/*.log
 tests/loadgate/**/*.err.log
+
+# IntelliJ 每用户 UI 状态（workspace.xml）：不入库。它记录本机窗口布局，且历史上被
+# 误提交时带入了合并标记。2026-10-23 由卡 openmir2-idea-workspace-marker-cleanup
+# 取消跟踪；其余 .idea 文件（.name / encodings.xml / vcs.xml / indexLayout.xml 等）
+# 仍入库，故此处只写精确路径，勿改成 .idea/ 或 *.xml。
+.idea/.idea.M2Server/.idea/workspace.xml
