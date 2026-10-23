@@ -151,9 +151,12 @@ body  : EDCode.EncodeBuffer(ClientItem) + '/'  × ItemList.Count        // 逐�
 在线上不可能发生，`item_name` **不需要查 `StdItems` 表**。旁证：M3 实测 `SM_BAGITEMS body_len=668`
 = 4 × (166B 编码 + 1B `'/'`)，与 124B 记录一致。
 
-**取哪个物品（显式、确定、不随机）**：只看**首条** 201，取**第一个**满足谓词的槽（槽序 = `ItemList` 序）：
-`required` 含 `takeon_where` ⇒ 可装备槽（`StdMode` 在 `M2Share.CheckUserItems` 槽表里）；
-否则 ⇒ 可食用槽（`StdMode ∈ {0,1,2,3,4,31}`，`ClientUseItems` 的 switch 分支）。
+**取哪个物品（显式、确定、不随机）**：只看**首条** 201（槽序 = `ItemList` 序）：
+`required` 含 `takeon_where` ⇒ **首个可装备槽**（`StdMode` 在 `M2Share.CheckUserItems` 槽表里）；
+否则 ⇒ **可食用槽**（`StdMode ∈ {0,1,2,3,4,31}`，`ClientUseItems` 的 switch 分支），并按**固定价值次序**
+`StdMode31 & AniCount!=0`（QFunction `@StdModeFunc<N>` 有脚本，exec-seams ② 路的判据包）→
+`StdMode31 & AniCount==0`（解包）→ 药（0/1/2/3）→ 书（4），同档次序取最小槽。
+**`AniCount` 在帧里**（记录偏移 18），所以这条优先级不需要额外信息。
 `make_index`/`item_name`/`takeon_where` 一次 derive 只选一次 ⇒ **三个 `--var` 必然同槽**。
 无候选 ⇒ missing（不退回「随便取一个」）。
 

@@ -127,6 +127,7 @@
 |---:|---|---|
 | 0 | `Name` | `WriteAsciiString(ItemNameLen=14)` = 1B 长度 + 14B 定长（GBK）；= `CustomItemSystem.GetItemName(userItem)` |
 | 15 | `StdMode` | u8 |
+| 18 | `AniCount` | u8（StdMode31 的 QFunction 编号，`@StdModeFunc<AniCount>`） |
 | 100 | `MakeIndex` | i32 LE |
 | 104 / 106 | `Dura` / `DuraMax` | u16×2 |
 | 108 | `Desc[14]` | |
@@ -135,9 +136,10 @@
   也是「MakeIndex + GetItemName」双匹配 ⇒ 想「把 MakeIndex 取成 Index」**在线上无从发生**；对应的真牙是
   「字段/偏移取错」（取 `StdMode` 或把偏移挪 15 ⇒ 值变 5/10，见 selftest 牙⑨）。
 - **`item_name` 不需要查 DB**：名字在帧里，且与服务端匹配用的名字同源。
-- **取哪个物品（确定、不随机）**：只看**首条** 201，取**第一个**满足谓词的槽（槽序 = `ItemList` 序）：
-  `required` 含 `takeon_where` ⇒ 可装备（`StdMode` 在 `CheckUserItems` 槽表里）；否则 ⇒ 可食用
-  （`StdMode ∈ {0,1,2,3,4,31}`，`ClientUseItems` 的 switch 分支）。一次 `derive` 只选一次 ⇒
+- **取哪个物品（确定、不随机）**：只看**首条** 201。`required` 含 `takeon_where` ⇒ 首个**可装备**槽
+  （`StdMode` 在 `CheckUserItems` 槽表里）；否则 ⇒ 首个**可食用**槽（`StdMode ∈ {0,1,2,3,4,31}`），
+  并按**固定价值次序** `StdMode31 & AniCount!=0`（QFunction `@StdModeFunc<N>`）→ `StdMode31 & AniCount==0`
+  （解包）→ 药 → 书，同档取最小槽（`AniCount` 在记录偏移 18）。一次 `derive` 只选一次 ⇒
   `make_index` / `item_name` / `takeon_where` **必然同槽**。无候选 ⇒ missing（不退回默认值）。
 - **fail-closed**：无 201 ⇒ missing；空包体只有 `series=0` 才合法（否则 error）；记录解码后 ≠124B、
   `series` 与槽数不符、EDCode 越界、Name 非 GBK / 为空 ⇒ `DiscoveryError`（rc=2），**不跳过坏槽继续取**。

@@ -25,7 +25,9 @@
 - `required` 含 `takeon_where`（`bag_equip`）⇒ **可装备**：`StdMode` 在 `M2Share.CheckUserItems` 的
   槽表里（否则 `CheckUserItems` 为假 ⇒ `SM_TAKEON_FAIL`，场景没有意义）；
 - 其余（`eat_item`）⇒ **可食用**：`StdMode ∈ {0,1,2,3,4,31}`（`PlayObject.Operate.cs:601-676
-  ClientUseItems` 的 `switch` 分支；其余 StdMode 恒 `SM_EAT_FAIL`）。
+  ClientUseItems` 的 `switch` 分支；其余 StdMode 恒 `SM_EAT_FAIL`），且按**固定价值次序**取
+  `StdMode31 & AniCount!=0`（QFunction `@StdModeFunc<N>`，有脚本可判）→ `StdMode31 & AniCount==0`（解包）
+  → 药（0/1/2/3）→ 书（4）；同档次序取最小槽。
 
 `make_index` / `item_name` / `takeon_where` **必须来自同一个槽**（一次 derive 只选一次），否则三个 `--var`
 指向不同物品，oracle 的「MakeIndex + 名称双匹配」必然落空。没有候选 ⇒ **missing**（逐个点名），
@@ -156,6 +158,7 @@ BAG_RECORD_LEN = 124
 BAG_NAME_LEN = 14
 BAG_RECORD_NAME_OFF = 0
 BAG_RECORD_STDMODE_OFF = 1 + BAG_NAME_LEN   # 15
+BAG_RECORD_ANICOUNT_OFF = BAG_RECORD_STDMODE_OFF + 3   # 18（StdMode,Shape,Weight,AniCount）
 BAG_RECORD_MAKEINDEX_OFF = 100              # 见 docstring：Name…Reference(15B)…0x00 之后的 i32
 
 #: StdMode -> ItemLocation 槽号（`M2Share.CheckUserItems` 的**逆表**；同 StdMode 命中多槽取最小槽号，
@@ -175,6 +178,8 @@ STD_MODE_TO_WHERE = {
 }
 
 #: `PlayObject.Operate.cs:601-676 ClientUseItems` 的可食用 StdMode 分支（其余恒 SM_EAT_FAIL）。
+#: 选择时**不是**简单取首个：按 `_is_script_bundle > _is_bundle > _is_potion > _is_book` 的固定次序
+#: （StdMode31/AniCount!=0 的 QFunction 包优先——那是有脚本可判的包）。
 BAG_USE_MODES = frozenset((0, 1, 2, 3, 4, 31))
 
 #: 201 类变量：字段 + 规则文案 + oracle 出处（写进输出，便于复审复算）。
@@ -341,6 +346,7 @@ def _bag_record(raw, slot):
         "slot": slot,
         "name": name,
         "std_mode": raw[BAG_RECORD_STDMODE_OFF],
+        "ani_count": raw[BAG_RECORD_ANICOUNT_OFF],
         "make_index": int.from_bytes(
             raw[BAG_RECORD_MAKEINDEX_OFF:BAG_RECORD_MAKEINDEX_OFF + 4], "little", signed=True),
     }
@@ -391,16 +397,45 @@ def _parse_bagitems(frame):
     return records
 
 
+def _is_script_bundle(rec):
+    """StdMode 31 且 AniCount != 0：`ClientUseItems` 走 `UseStdModeFunItem` ⇒ 先跑
+    `@StdModeFunc<AniCount>` 脚本再移物品（exec-seams ② 路的判据包）。"""
+    return rec["std_mode"] == 31 and rec["ani_count"] != 0
+
+
+def _is_bundle(rec):
+    """StdMode 31 且 AniCount == 0：解包成 6 件（`ClientUseItemsGetUnBindItems`）。"""
+    return rec["std_mode"] == 31 and rec["ani_count"] == 0
+
+
+def _is_potion(rec):
+    return rec["std_mode"] in (0, 1, 2, 3)      # ClientUseItems: 药
+
+
+def _is_book(rec):
+    return rec["std_mode"] == 4                 # ClientUseItems: 书（ReadBook）
+
+
 def _bag_select(records, required):
     """确定性地选**一个**物品槽：`required` 含 takeon_where ⇒ 首个可装备槽，否则首个可食用槽。
 
     返回 (slot_index, record, mode)；无候选 ⇒ (None, None, mode)。**绝不随机、绝不取默认值**。
     """
     mode = "equip" if "takeon_where" in (required or []) else "use"
-    allowed = STD_MODE_TO_WHERE if mode == "equip" else BAG_USE_MODES
-    for idx, rec in enumerate(records):
-        if rec["std_mode"] in allowed:
-            return idx, rec, mode
+    if mode == "equip":
+        for idx, rec in enumerate(records):
+            if rec["std_mode"] in STD_MODE_TO_WHERE:
+                return idx, rec, mode
+        return None, None, mode
+    # use：按 oracle 的**分支价值**排序（固定次序、确定性；同档内取槽序最小者）：
+    #   1) StdMode 31 且 AniCount != 0 ⇒ QFunction `@StdModeFunc<AniCount>` 有脚本
+    #      （`PlayObject.Base.cs:1072 UseStdModeFunItem`，调用点 `Operate.cs:668`；exec-seams ② 路要的正是这种包）
+    #   2) StdMode 31 且 AniCount == 0 ⇒ 解包物品（ClientUseItemsGetUnBindItems）
+    #   3) StdMode 0/1/2/3（药）  4) StdMode 4（书）
+    for pred in (_is_script_bundle, _is_bundle, _is_potion, _is_book):
+        for idx, rec in enumerate(records):
+            if pred(rec):
+                return idx, rec, mode
     return None, None, mode
 
 
@@ -764,7 +799,7 @@ def _fixture(with_npc=True, with_login=True, merchant_say=False):
 
 
 #: ---- 201 合成帧夹具（构造级：布局逐字段照 ClientItem.WritePacket，见模块 docstring）----
-def _bag_record_bytes(name="屠龙", std_mode=5, make_index=123456):
+def _bag_record_bytes(name="屠龙", std_mode=5, make_index=123456, ani_count=0):
     """按 `ClientItem.WritePacket` 的定长 124B 布局拼一条记录（未 EDCode 编码）。"""
     import struct
     name_bytes = name.encode("gbk")
@@ -773,7 +808,8 @@ def _bag_record_bytes(name="屠龙", std_mode=5, make_index=123456):
     b.append(len(name_bytes))
     b += name_bytes.ljust(BAG_NAME_LEN, b"\x00")          # Name: 1B 长度 + 14B 定长
     b.append(std_mode)                                    # @15 StdMode
-    b += bytes([0] * 6)                                   # Shape/Weight/AniCount/SpecialPwr/ItemDesc/0
+    b += bytes([0, 0, ani_count])                         # @16 Shape @17 Weight @18 AniCount
+    b += bytes([0, 0, 0])                                 # @19 SpecialPwr @20 ItemDesc @21 0
     b += struct.pack("<H", 0)                             # @22 Looks
     b += struct.pack("<H", 0)                             # @24 DuraMax
     b += struct.pack("<HHHHH", 0, 0, 0, 0, 0)             # @26 AC MAC DC MC SC
@@ -1310,6 +1346,32 @@ def selftest():
                                                    "scenarios")]) == 2, \
             "坏 201 ⇒ check-all 整体 rc=2"
 
+    def c25():
+        # eat 的选择**不是**「首个可食用」：StdMode31 且 AniCount!=0 的 QFunction 包优先
+        # （exec-seams ② 路要的判据包正是这种；`PlayObject.Base.cs:1072 UseStdModeFunItem`）。
+        frames = [_f(1, SM_LOGON, recog=191, param=7, tag=12),
+                  _bag_frame([_bag_record_bytes("金创药", 0, 9001),
+                              _bag_record_bytes("书", 4, 9002),
+                              _bag_record_bytes("捆装包(空)", 31, 9003, ani_count=0),
+                              _bag_record_bytes("捆装包15", 31, 9004, ani_count=15)])]
+        v, m = derive(frames, ["make_index", "item_name"])
+        assert not m, m
+        assert v["make_index"]["value"] == 9004, v          # 第 3 槽（StdMode31/AniCount15）
+        assert v["item_name"]["value"] == "捆装包15", v
+        assert v["make_index"]["source"]["slot"] == 3, v
+        # 没有 31 ⇒ 药先于书
+        frames2 = [_f(1, SM_LOGON, recog=191, param=7, tag=12),
+                   _bag_frame([_bag_record_bytes("书", 4, 9101),
+                               _bag_record_bytes("金创药", 0, 9102)])]
+        v, _ = derive(frames2, ["make_index"])
+        assert v["make_index"]["value"] == 9102, v
+        # StdMode31/AniCount==0（解包）先于药
+        frames3 = [_f(1, SM_LOGON, recog=191, param=7, tag=12),
+                   _bag_frame([_bag_record_bytes("金创药", 0, 9201),
+                               _bag_record_bytes("捆装包(空)", 31, 9202, ani_count=0)])]
+        v, _ = derive(frames3, ["make_index"])
+        assert v["make_index"]["value"] == 9202, v
+
     def c24():
         # 接线：真实场景 bag_equip / eat_item 在合成 201 帧上 rc=0，且归 derived（不是 rule/computed）
         here = os.path.dirname(os.path.abspath(__file__))
@@ -1350,6 +1412,7 @@ def selftest():
     case("㉒ 多物品取定值：5 次同结果 + 取首个候选槽", c22)
     case("㉓ 坏 201 包体（长度/series/EDCode）⇒ DiscoveryError + check-all rc=2", c23)
     case("㉔ 接线：bag_equip/eat_item 在合成 201 上 rc=0 且 cls=derived", c24)
+    case("㉕ eat 优先级：StdMode31/AniCount!=0 的 QFunction 包先于药/书", c25)
     def tooth9():
         # 牙⑨：把 make_index 取到**别的字段**（StdMode；线上没有 StdItem.Index，最接近的混淆字段）
         # ⇒ 值得 5/10 而不是 123456/111 ⇒ 红。变异：BAG_VARS["make_index"]["field"] 改成 std_mode
@@ -1424,7 +1487,7 @@ def selftest():
         for item in fails:
             print("  -", item)
         return 1
-    print("param_discovery selftest: OK (24 cases + 11 teeth)")
+    print("param_discovery selftest: OK (25 cases + 11 teeth)")
     return 0
 
 
