@@ -118,6 +118,19 @@
     reviewer worktree 只用于 review，且 review 时**不要长期切分支**（detached 核完即回）。
     这类 claim 我按队列第 9 条（裸 claim 无跟进）直接撤销并退回待认领。
 
+19. **派同身份 agent 前的第 4 查：这条线程最近几分钟有没有同 principal 的写入**（2026-10-23 22:3x 事故）：
+    我按第 14 条三查（commit 时间 / 脏文件 / cargo 进程）判 `OpenMir2-wt-cronclaim` 空闲，派了
+    `openmir2-worker-24` 去做 `openmir2-r-evidence-registry-sweep` 的返工；**同一条外部车道当时也在用
+    同一个 worktree/身份**，结果线程在 `5b1aca66` 处分叉（两个写入者互相看不到），reviewer 判
+    request_changes「签名链不干净」。
+    ⇒ **第 4 查**：`walgit collab thread <card>` 看**该卡线程**最近 N 条 entry 的 `actor`+`ts`；
+    若同 principal 在**最近 10 分钟内**有过写入（尤其是 comment/patch），视为在干活，**不派**。
+    三查看的是 git 层，第 4 查看的是**协作层**——两层都要查。
+    **连带口径（与第 16 条一起读）**：`git author` 是共享工作副本配置（`OpenMir2-wt-cronclaim` 的
+    `user.name` 就是 `openmir2-worker-66`，谁提交都显示 worker-66），所以**author ≠ 签名者不等于代签**；
+    但「同一 principal 两条车道并发写同一张卡」本身就是污染，与 author 字段无关，必须重交付、重签。
+    干净的交付 = **一号一车一 worktree**：签名 principal、worktree 的 `walgit/identity`、提交所在 worktree 三者一致。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
