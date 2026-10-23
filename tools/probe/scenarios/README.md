@@ -114,13 +114,18 @@ python tools/probe/mir2_probe.py \
 > 报文里的 `tag` 只管动作帧（`PlayObject.Attack.cs:26` 早于 `BaseObject.Attack.cs:12` 的 `Dir=nDir`）；
 > ③ **本方看不到自己的 `SM_HIT(14)`**（`PlayObject.Message.cs:1433-1437` 自我过滤），
 > 命中只能等受击者的 `SM_STRUCK(31)`。
-> **本条现在是 BLOCKED-FIXTURE，不许当窗口输入**：目标必须既「非 FixedHide」又「打得动」——
+> **本条现在是 BLOCKED-FIXTURE，不许当窗口输入，且「跑绿 ≠ 玩家命中」。** 目标必须既「非 FixedHide」又「打得动」——
 > Race=95 的 `僵尸2`/`石墓尸王` 是 `DigOutZombi`（出生即 `FixedHideMode=true`，按 oracle 的隐藏视野门
 > 永不出土、`SendRefMsg` 也不广播 ⇒ 恒超时），而名字不在 `monsters` 表里的 `弓箭护卫` 等根本不刷。
-> 剩下能刷的非隐藏目标只有 112/102/115，AC 都 ≥18，而基线角色没有一档能同时满足
-> 「DC > AC」与「HitPoint ≥ SPEED-1」（最好的一对 `m3st0 × 恶魔弓箭手` 单击也只有 33%）
-> ⇒ 现在跑必然 `wait_for` 超时。缺的夹具与证明见文档 §6；另两条登记：
-> 「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，`wait_for` 匹配不到，扩展建议见文档 §4）、
+> 剩下能刷的非隐藏目标只有 112/102/115，AC 都 ≥18；伤害扣的是 **[AC, 2AC-1] 的随机护甲**
+> （`BaseObject.Base.cs:789-806`，怪物 `AC=MakeWord(AC,AC)`，`WorldServer.MonGen.cs:898`），
+> 所以「必伤害」门槛是 `DC_min > 2*AC-1`（AC30 ⇒ ≥60），再叠加 `HitPoint ≥ SPEED-1`（SPEED18 ⇒ ≥17）；
+> 基线角色没有一档同时满足（最好的一对 joint 只有 24%，精确矩阵见文档 §6）。
+> ⇒ 现在跑必然 `wait_for` 超时。**另外这是敌对守卫**（`GuardUnit.cs:120-124` + `ArcherGuard.cs:39-81`），
+> 玩家挨打也会收到 `SM_STRUCK(31)` 且 `recog=self`，而 `wait_for` 只按 ident 匹配（`mir2_probe.py:291-303`）
+> ⇒ **即使跑绿也证明不了「玩家主动一击命中」，窗口批次不得消费本场景的任何 PASS**（fail-closed，见文档 §7.0；
+> 根治需 `wait_for` 支持 recog 过滤，归 `openmir2-probe-scenario-validation-gaps`）。
+> 另两条登记：「没打中」支零协议帧（只有明文 `+GD` ack、`ident=null`，扩展建议见文档 §4）、
 > `rules.json` 缺 ident 31（另卡 `openmir2-conformance-rule-sm-struck-31` 在办）。
 
 ## 驱动器的自动握手（对拍不要关）

@@ -2,8 +2,8 @@
 
 - 车道：`wt-worker-71` / principal `openmir2-worker-71` / 分支 `card/scenario-combat-strike`
 - tier：**L**（只造场景夹具与说明；零生产代码、零帧字节）
-- 本篇是 **request_changes（review `3c15d4ed`）后的返工版**：F1 换目标并给出完整判定表；F2 继续如实登记；
-  F5 修正 ident 14 的措辞；F3/F4 只登记并指明归属卡。
+- 本篇是 **第二轮 request_changes（review `ed4633b9`）后的返工版**：第一轮（`3c15d4ed`）换掉 FixedHide 目标；
+  本轮订正三处数字、补 §7.0 的假绿封口、修正 Race 102 的排除理由。第一轮原错数字保留为「原（错）」注记。
 - 未起栈、未连库、未占端口。本文所有数字都是离线推导：读 `.map`、部署 `Envir/`、`sql/`、`E:/tmp/conformance/baseline/*.sql`。
 
 ---
@@ -14,13 +14,17 @@
    `SendRefMsg` 的隐藏早退还会吞掉 `RM_STRUCK` 广播 ⇒ `wait_for 31` 恒超时。原目标作废。
 2. **目标已换成非 FixedHide 的确定性刷怪点**：map 4 封魔谷 (256,231) 的 **`恶魔弓箭手`**（Race=112 `ArcherGuard`，
    `FixedHideMode=false`），`placement` 到 (256,232) 面向正上。
-3. **但这条场景现在仍然是 BLOCKED-FIXTURE**：把所有「确定性刷怪点 × 基线角色」两两算过，
-   **没有任何一对能同时满足「打穿目标 AC」和「过目标躲闪门」**（最好的一对是 `m3st0` 打 `恶魔弓箭手`，
-   单击命中率 **33%**）。所以它现在跑起来会 `wait_for` 超时 —— 场景文件里已写 **BLOCKED** 字样，
-   不许当窗口输入。缺什么夹具见 §6。
-4. **F2 如实登记**：卡面「删掉攻击步 ⇒ `--check-scenario` / dry-run 应红」这条判据**本卡做不到**，
-   工具对 ident 语义零校验（reviewer 实测 `wait_for=4095` 也 rc=0）。本卡**不**把它写成 PASS，
-   也不改工具（不在写集）；另开工具卡的建议见 §7.3。
+3. **这条场景仍是 BLOCKED-FIXTURE**（第二轮订正后的精确数）：伤害扣的是 `[AC, 2AC-1]` 的**随机护甲**，
+   必伤害门槛是 `DC_min > 2*AC-1`；再叠加 `HitPoint ≥ SPEED-1` 的躲闪门，全库**没有任何一对**能同时满足
+   （最好的一对 `m3st0 × 赤月恶魔`：伤害恒 >0 但命中 24%，joint 24%）。所以它跑起来仍会 `wait_for` 超时，
+   场景里写着 **BLOCKED**，不许当窗口输入。规格见 §6.4。
+4. **假绿封口（本轮新增）**：目标 `恶魔弓箭手` 是**敌对守卫**，玩家挨打也会收到 `SM_STRUCK(31)`（**`recog=self`**），
+   而 `wait_for` 只按 ident 匹配（`mir2_probe.py:291-303`）⇒ **跑绿也证明不了「玩家主动一击命中」**。
+   DSL 无 recog 过滤，故按 reviewer 选项 ③ fail-closed：`description` / `steps[3].note` / README / 本文 §7.0
+   四处写死「窗口批次不得消费本场景的任何 PASS」。
+5. **F2 如实登记**：卡面「删掉攻击步 ⇒ 应红」本卡做不到（实测 rc=0），同族的
+   「`wait_for` 不存在 ident」「`placement.y` 与 `self_pos` 不同源」也都 rc=0。三条已转
+   **`openmir2-probe-scenario-validation-gaps`**，本卡**不**写成 PASS、不改工具（不在写集）。
 
 ---
 
@@ -112,8 +116,8 @@ map 4 = 封魔谷，500x500，MapInfo 行 '[4 封魔谷] DAY'（无 |N 别名 �
 
 | 候选 | 问题 |
 |---|---|
-| Race 102 `祖玛教主` | 出生 `StoneMode=true`（`BaseObject.cs:2533-2536`），而 `IsAttackTarget` 对 `targetObject.StoneMode` **直接返回 false**（`BaseObject.Base.cs:384-387`）⇒ 未「醒来」前根本打不中；AC 20 / SPEED 32 也最差 |
-| Race 115 `赤月恶魔` | AC 18 / SPEED 25，且 `WALK_SPD=0`（DB）⇒ 每次 `Run` 都满足 `(now - WalkTick) > WalkSpeed`，站位最不稳 |
+| Race 102 `祖玛教主` | **排除理由是命中门槛，不是石化**（review 第二轮 F4 纠正）：玩家侧走的是**完整 override** `PlayObject.IsAttackTarget`（`PlayObject.Attack.cs:627-760`），它只按 `AttackMode` 与 Race 区间判、**既不查 `StoneMode` 也不回落 base** ⇒ 石化目标本身是可被玩家攻击的。真正的不可满足项是 `SPEED=32` ⇒ 必中需 `HitPoint ≥ 31`，而全库最高 `HitPoint=14`（§6.3）；AC 20 也要求 `DC_min ≥ 40` |
+| Race 115 `赤月恶魔` | AC 18 / SPEED 25，且 `WALK_SPD=0`（DB）⇒ 每次 `Run` 都满足 `(now - WalkTick) > WalkSpeed`，站位最不稳（但它是数值上最好的一对之一：`m3st0` 对它伤害恒 >0） |
 | Race 115 `千年树妖` | AC 20 / SPEED 35，命中率最差；`WALK_SPD=400` |
 
 ⇒ 112 的 `恶魔弓箭手` 是「非隐藏 + AC/SPEED 最低 + 不移位」的唯一合理选择。
@@ -227,78 +231,131 @@ probe 记为 `frame_class=server_ack_time`、`ident=null`（`mir2_probe.py:176-1
 
 ## 5. 牙（≥1）+ sha256
 
-sha256（提交后的树）：**`9f04ae0808d02b13fcd6f63482316cc0a0891c2a7d7e1befe76ec27770cf9a9a`**
-（`sha256sum tools/probe/scenarios/combat_strike.json`；T1~T4 四次改坏后都逐字节还原，读数不变）。
+sha256（提交后的树）：见 §9 与 patch 条目（T1~T5 每次改坏后都逐字节还原，读数不变）。
 
 | # | 怎么改坏 | 期望 | 实测 |
 |---|---|---|---|
 | T1 | 删掉 `wait_for` 那一步 | `--check-scenario` 红 | rc=2（`has no wait step`） |
-| T2 | `placement` 改到越界/阻挡格 | `card_window --dry-run` 红 | rc=2 |
+| T2 | `placement` 改到越界格 (600,600)（map 4 是 500x500） | `card_window --dry-run` 红 | rc=2 |
 | T3 | **删掉攻击步（`send` 3014）** | **卡面要求红** | **rc=0 —— 工具层缺口，不写成 PASS（F2）** |
 | T4 | `wait_for` 改成不存在的 ident 4095 | 理想应红 | rc=0 —— 同一缺口（reviewer 实测） |
-
-两次改坏都逐字节还原，sha256 前后一致。
+| T5 | `placement.y` 改 233、`self_pos` 保持 `(232<<16)|256`（第二轮 reviewer 自造） | 理想应红（self_pos 与 placement 不同源 ⇒ 恒超时） | rc=0 / rc=0 —— 同一缺口（新发现，已转 `openmir2-probe-scenario-validation-gaps`） |
 
 ### 5.3 关于 F2 的处置
 
-- **不把它写成 PASS**：卡面这条判据在本卡**未达成**，原因在工具（`mir2_probe.py:1096-1110` 只查形状 + 至少一个 wait 步），
-  不在场景。
-- 治理建议（另开卡，不在本卡写集）：给 `--check-scenario` 补
+- **不把它写成 PASS**：T3/T4/T5 三条判据在本卡**未达成**，原因在工具（`mir2_probe.py:1096-1110` 只查形状 +
+  至少一个 wait 步），不在场景。
+- 已全部转 **`openmir2-probe-scenario-validation-gaps`**（coordinator 转派）。建议给 `--check-scenario` 补：
   ① `send.ident ∈ HIT_IDENTS` 时要求存在 `wait_for` 且 recog 形态可判；② `wait_for` 的 ident 必须在
-  `messages.rs`/`rules.json` 里存在；③ 攻击场景必须「先 send 后 wait」。落地后再补这条牙。
+  `messages.rs`/`rules.json` 里存在；③ 攻击场景必须「先 send 后 wait」；④ `params.self_pos == (placement.y<<16)|placement.x`
+  （或干脆从 `placement` 自动派生 `self_pos`，不改 DSL 语义）。落地后再补这几条牙。
 
 ---
 
 ## 6. 夹具矩阵：为什么现在打不出命中（F1 的「缺什么」）
 
-### 6.1 基线夹具的全部可用角色能力
+> **本节在第二轮 review（`ed4633b9`）后订正了三处数字**。原错数字保留在「原（错）」小节里，便于审查对照；
+> 结论（没有可行配对）不变，但规格必须能指导后续夹具卡。
+
+### 6.0 两处口径先钉死（第一轮我写错了）
+
+**（a）穿戴表是 `characters_item`，不是 `characters_bagitem`。**
+`characters_bagitem` 是包裹，`characters_item` 才是穿戴（`Position` → `UseItems[Position]`，
+`PlayDataStorage.Query.cs:377-395`；槽位枚举 `src/OpenMir2/Enums/ItemLocation.cs`：0=Dress、**1=Weapon**、
+2=RighThand、3=Necklace …12=Charm）。
+**`gm01`（PlayerId=1）在 `characters_item` Position=1 穿着 `StdIndex=223` 裁决之杖**
+（基线行 `(2,1,1,1073741874,223,22198,32000)`，Dura=22198≠0 ⇒ 参与 `RecalcAbilitys`）。
+
+**（b）伤害不是「减 AC」，而是减一个随机护甲。**
+`GetHitStruckDamage`（`BaseObject.Base.cs:789-806`）：
+
+```
+nRnd   = LoByte(AC) + Random(|HiByte(AC) - LoByte(AC)| + 1)
+nArmor = LoByte(AC) + Random(nRnd)          // nRnd > 0 时
+nDamage = max(0, nPower - nArmor)
+```
+
+怪物侧 `Abil.AC = MakeWord(monster.AC, monster.AC)`（`WorldServer.MonGen.cs:898`）⇒
+**`nArmor ∈ [AC, 2*AC-1]`，均匀**（AC=30 ⇒ 30..59；AC=18 ⇒ 18..35）。
+⇒ 保证伤害 > 0 的条件是 **`DC_min > 2*AC-1`**，不是 `DC_min > AC`。
+
+### 6.1 基线夹具的可用角色能力（订正后）
 
 - `characters_bonusability` 全表**只有 1 行种子** `(13339,1,2,3,4,5,6,7,8,9,10)` ⇒ 其余角色 `BonusAbil = 0`。
 - `characters_magic` 全表**只有 8 行**；只有 `PlayerId=1`（`gm01`）有 `MagicId 3 = 基本剑法`（`MagicConst.cs:16`），**Level 3**。
-- `characters_bagitem` 里 `winplay0`/`m3st*` 全是零物品（`m3st*` 46 行全 0），`gm01` 的 12 件都在包裹位（0..11），
-  没有穿在身上的 DC/准确装备。
+- **穿戴（`characters_item`）**：`gm01` 只有 Position=1 的裁决之杖是真物品（其余槽 `StdIndex=0`）；
+  `winplay0` / `m3st0` / `m3sa0` / `m3se0` / `m3p2c200` 的 13 个穿戴槽**全 0**。
 
-| 角色 | Job/Level | `Abil.DC`（出处） | `GetBaseAttackPoewr` | `HitPoint` |
-|---|---|---|---|---|
-| `winplay0` | 法师 1 | `MakeWord(max(1/7-1,0),max(1,0)) = 0-1`（`PlayObject.cs:5288`） | `0+Random(2) ∈ {0,1}` | `DEFHIT=5`（`MessageSettings.cs:10`；`PlayObject.cs:3668/3673`） |
-| `gm01` | 战士 40 | `MakeWord(max(40/5-1,1),max(1,40/5)) = 7-8`（`PlayObject.cs:5300`） | `7+Random(2) ∈ {7,8}` | `5 + Round(9/3.0*3) = 14`（`PlayObject.cs:3690`） |
-| `m3st0`/`m3sa0`/`m3se0`/`m3p2c200` | 战士 255 | `MakeWord(max(255/5-1,1),max(1,51)) = 50-51`（`PlayObject.cs:5300`） | `50+Random(2) ∈ {50,51}` | **5**（无技能、无 bonus） |
+| 角色 | Job/Level | 穿戴 | `Abil.DC`（等级/职业） | `AddAbil.DC`（装备） | `WAbil.DC` | `GetBaseAttackPoewr` | `HitPoint` |
+|---|---|---|---|---|---|---|---|
+| `winplay0` | 法师 1 | 无 | `MakeWord(max(1/7-1,0),max(1,0)) = 0-1`（`PlayObject.cs:5288`） | 0 | **0-1** | `0+Random(2) ∈ {0,1}` | `DEFHIT=5`（`MessageSettings.cs:10`；`PlayObject.cs:3668/3673`） |
+| `gm01` | 战士 40 | **裁决之杖**（`stditems` 223：`Dc=0, DcMax=30, Ac=0, Accurate=0`，`StdMode=6`） | `MakeWord(max(40/5-1,1),max(1,40/5)) = 7-8`（`PlayObject.cs:5300`） | `MakeWord(0,30)` | **`MakeWord(7, 8+30) = 7-38`**（`BaseObject.Abil.cs:73`） | **`7+Random(32) ∈ [7,38]`** | `5 + Round(9/3.0*3) = 14`（`PlayObject.cs:3690`；武器 `StdMode=6` 的 HIT 取 `HiByte(AC)=0`，`PlayObject.cs:4604`） |
+| `m3st0`/`m3sa0`/`m3se0`/`m3p2c200` | 战士 255 | 无 | `MakeWord(max(255/5-1,1),max(1,51)) = 50-51`（`PlayObject.cs:5300`） | 0 | **50-51** | `50+Random(2) ∈ {50,51}` | **5**（无技能、无 bonus） |
+
+> **原（错）**：第一轮写「gm01 的 12 件都在包裹位，没有穿在身上的 DC/准确装备」⇒ `Abil.DC = 7-8` ⇒「gm01 × 任一 = 0 伤害」。
+> **订正**：漏了 `characters_item`；gm01 实际 `WAbil.DC = 7-38`，对 AC 18 的赤月恶魔最高能打出 **20**（只是概率低，见 §6.3）。
 
 ### 6.2 目标侧的四个门槛数
 
-| 目标 | AC | SPEED | DC | 备注 |
-|---|---:|---:|---|---|
-| 恶魔弓箭手（112） | 30 | 18 | 50-120 | 非隐藏、不移位 ⇒ **本卡选它** |
-| 祖玛教主（102） | 20 | 32 | 40-65 | 另有 `StoneMode` 门 |
-| 赤月恶魔（115） | 18 | 25 | 25-70 | `WALK_SPD=0` |
-| 千年树妖（115） | 20 | 35 | 20-50 | `WALK_SPD=400` |
+| 目标 | AC | 随机护甲区间 `[AC, 2AC-1]` | 必伤害门槛 `DC_min ≥ 2AC` | SPEED | 必中门槛 `HitPoint ≥ SPEED-1` | DC | 备注 |
+|---|---:|---|---:|---:|---:|---|---|
+| 恶魔弓箭手（112） | 30 | 30..59 | **60** | 18 | **17** | 50-120 | 非隐藏、不移位 ⇒ **本卡选它** |
+| 祖玛教主（102） | 20 | 20..39 | **40** | 32 | **31** | 40-65 | |
+| 赤月恶魔（115） | 18 | 18..35 | **36** | 25 | **24** | 25-70 | `WALK_SPD=0` |
+| 千年树妖（115） | 20 | 20..39 | **40** | 35 | **34** | 20-50 | `WALK_SPD=400` |
 
-### 6.3 两两组合（伤害 = `max(0, DC_min - AC)`；命中率 = `P(HitPoint ≥ Random(SPEED))` = `(HitPoint+1)/SPEED`）
+### 6.3 两两组合（**订正后**的精确数）
 
-| 角色 × 目标 | 伤害 | 单击命中率 | 能否出 `SM_STRUCK` |
-|---|---:|---:|---|
-| `winplay0` × 任一 | 0 | — | **否**（伤害恒 0） |
-| `gm01` × 任一 | `max(0, 7-AC) = 0`（AC 均 ≥18） | — | **否**（伤害恒 0） |
-| `m3st0` × 恶魔弓箭手 | 20-21 | 6/18 ≈ **33%** | 概率，**非确定** |
-| `m3st0` × 赤月恶魔 | 32-33 | 6/25 = 24% | 概率 |
-| `m3st0` × 祖玛教主 | 30-31 | 6/32 ≈ 19% | 概率（+ StoneMode） |
-| `m3st0` × 千年树妖 | 30-31 | 6/35 ≈ 17% | 概率 |
+口径：`nPower` 在 `[DC_min, DC_max]` 均匀；`nArmor` 在 `[AC, 2AC-1]` 均匀；
+`P(伤害>0) = P(nPower > nArmor)`；`P(命中) = P(HitPoint ≥ Random(SPEED)) = (HitPoint+1)/SPEED`（`HitPoint < SPEED` 时）；
+`joint = P(伤害>0) × P(命中)`。
 
-⇒ **没有任何一对能给出确定的 `SM_STRUCK`**：能打穿 AC 的角色（`m3st*`）准确只有 5；
-准确够的角色（`gm01`，14）攻击力只有 7-8，打不穿 AC ≥18。
-而且 33% 单击成功率也不能靠「多打几下」补：`wait_for` 第一次没中就整步失败（`mir2_probe.py:699-712`），
-`wait_idents` 又是累计口径，会被「怪打我们」产生的 31（`recog=self`）冒充 ⇒ 恒过。
+| 角色 × 目标 | 伤害区间 | `P(伤害>0)` | 单击命中率 | joint |
+|---|---|---:|---:|---:|
+| `winplay0` × 任一 | 恒 0（`nPower ≤ 1 < AC`） | 0% | — | **0%** |
+| `gm01` × 恶魔弓箭手（AC30） | **0..8** | 3.75% | 83.33% | 3.12% |
+| `gm01` × 赤月恶魔（AC18） | **0..20** | 35.94% | 60.00% | 21.56% |
+| `gm01` × 祖玛教主/千年树妖（AC20） | 0..18 | 26.72% | 46.88% / 42.86% | 12.52% / 11.45% |
+| `m3st0` × 恶魔弓箭手（AC30） | **0..21** | 68.33% | 33.33% | 22.78% |
+| `m3st0` × 赤月恶魔（AC18） | **15..33（恒 > 0）** | 100% | 24.00% | **24.00%** |
+| `m3st0` × 祖玛教主（AC20） | 11..31 | 100% | 18.75% | 18.75% |
+| `m3st0` × 千年树妖（AC20） | 11..31 | 100% | 17.14% | 17.14% |
 
-### 6.4 需要什么夹具（这是本卡的「缺什么」结论）
+> **原（错）**：第一轮写「`gm01` × 任一 = 0 伤害」「`m3st0` × 恶魔弓箭手 = 20-21」「× 赤月恶魔 = 32-33」。
+> **订正**：gm01 有裁决之杖（7-38）；伤害要扣 `[AC, 2AC-1]` 的随机护甲 ⇒ 上表。
 
-**一个同时满足 `DC > 目标 AC` 与 `HitPoint ≥ 目标 SPEED - 1` 的角色**。以本卡目标（AC 30 / SPEED 18）为例：
+⇒ **仍然没有任何一对能给出确定的 `SM_STRUCK`**：最好的一对是 `m3st0 × 赤月恶魔`（伤害恒 >0，但命中率只有
+24%，joint 24%）；`gm01` 虽然准确够（14），但伤害是概率（最好 36%）。全库最高 `HitPoint = 14`（`gm01`；
+`6226` 同为 14），而 `SPEED ≤ 15` 的确定性目标只有隐藏的 `DigOutZombi`。
+（reviewer 独立扫了全库 7338 角色 × 95409 件装备 × 5 个确定性目标，结论一致：0 对。）
 
-- `DC ≥ 31`：`gm01`（7-8）需要一把 **DC ≥ 24** 的武器，或换 `m3st*`（50-51，已够）；
-- `HitPoint ≥ 17`：`m3st*`（5）需要 **`BonusAbil.Hit ≥ 240`**（`DEFHIT(5) + Hit/20 ≥ 17`，`GameSvrConf.cs:1413` 的
-  `BonusAbilofWarr.Hit = 20`），或补 **基本剑法 Lv3 + 精神力战法 Lv3**（5+9+8 = 22，`PlayObject.cs:3690/3696`）。
+而且这些 20%~30% 的成功率不能靠「多打几下」补：`wait_for` 第一次没中就整步失败（`mir2_probe.py:699-712`）；
+`wait_idents` 是累计口径，会被「怪打我们」产生的 31（`recog=self`）冒充 ⇒ 恒过（见 §7 的假绿封口）。
 
-落地方式（任一）：给 `characters_bonusability` 补一行、给 `characters_magic` 补两条、或在 `characters_bagitem`
-里放一把已穿戴的 DC 武器。**这些都超出本卡写集**（要改测试库基线），建议开一张「combat 夹具」卡。
+### 6.4 需要什么夹具（**订正后**的规格）
+
+**一个同时满足 `DC_min > 2*AC-1` 与 `HitPoint ≥ SPEED-1` 的角色。** 逐目标的最低门槛：
+
+| 目标 | `DC_min ≥` | `HitPoint ≥` |
+|---|---:|---:|
+| 恶魔弓箭手（AC30/SPEED18） | **60** | **17** |
+| 祖玛教主（AC20/SPEED32） | **40** | **31** |
+| 赤月恶魔（AC18/SPEED25） | **36** | **24** |
+| 千年树妖（AC20/SPEED35） | **40** | **34** |
+
+以本卡目标（AC30/SPEED18）为例的可行配法：
+
+- `DC_min ≥ 60`：`m3st*`（50-51）不够，需要再 +10 DC（武器/装备）；`gm01`（7-38）差得远。
+- `HitPoint ≥ 17`：`m3st*`（5）需要 **`BonusAbil.Hit ≥ 240`**（`DEFHIT(5) + Hit/20 ≥ 17`，
+  `GameSvrConf.cs:1413` 的 `BonusAbilofWarr.Hit = 20`，`GameSvrConf.cs:1414/1415` 同理）；
+  或补 **基本剑法 Lv3 + 精神力战法 Lv3**（5+9+8 = 22，`PlayObject.cs:3690/3696`）。
+
+> **原（错）**：第一轮写「`DC ≥ 31`」。按那个规格配出来的是「30 次里只出 1 点伤害」的无效夹具
+> （`DC_min=31` 对 AC30 的护甲 30..59 只有 31>30 那一种组合能出 1 点）。
+
+落地方式（任一）：给 `characters_bonusability` 补一行、给 `characters_magic` 补技能、或在 `characters_item`
+里换一把 `Dc`/`DcMax` 够高的**穿戴**武器（注意是 `characters_item`，不是 `characters_bagitem`）。
+**这些都超出本卡写集**（要改测试库基线），建议开一张「combat 夹具」卡。
 
 内容侧的另一条出路（不改夹具）：**加一条 `Range=0` 且目标 `HIT=0` 或 `SPEED≤1` 的刷怪行** ——
 但部署 `MonGen.txt` 是冻结内容，只能由 owner 裁决。
@@ -307,6 +364,25 @@ sha256（提交后的树）：**`9f04ae0808d02b13fcd6f63482316cc0a0891c2a7d7e1be
 
 ## 7. 本卡能证明什么 / 不能证明什么（F2 要求写死）
 
+### 7.0 **假绿封口（第二轮 review F3，必须写死）**
+
+**即使本场景跑绿，也证明不了「玩家主动一击命中」。** 三个理由：
+
+1. 目标 `恶魔弓箭手` 是**敌对守卫**：`GuardUnit.IsProperTarget` 对普通玩家走到 `return true`
+   （`GuardUnit.cs:120-124`；`Castle == null` 跳过城堡分支，玩家 `PvpLevel < 2` 也不被排除），
+   `ArcherGuard.Run` 每 `NextHitTime=1200ms` 攻击一次（`ArcherGuard.cs:39-81`）；地图 `[4 封魔谷]` 无 `SAFE` 标记。
+2. 玩家挨打时**自己**也会收到 `SM_STRUCK(31)`：`SendStruckDelayMsg(RM_REFMESSAGE)` → 玩家自己的
+   `RM_REFMESSAGE` 支 `SendRefMsg(RM_STRUCK)`（`BaseObject.Base.cs:699-702`）→ `PlayObject.Message.cs:1562-1618`
+   回 `SM_STRUCK`，**`recog = 玩家自己`**。
+3. `wait_for` 只按 `ident` 匹配（`mir2_probe.py:291-303`），**不筛 `recog`** ⇒ 这一步可能匹配到「怪打我」的 31。
+   现有 DSL 没有别的表达手段（`ACTION_KEYS` 里没有任何 recog 过滤，`mir2_probe.py:338-339`）。
+
+⇒ **本卡的选择是 fail-closed（reviewer 选项 ③）**：
+**场景 `description` / `steps[3].note` / `tools/probe/scenarios/README.md` / 本文 §7.0 四处都写明
+「跑绿 ≠ 玩家命中」；窗口批次不得消费本场景的任何 PASS。**
+要真正消除这个歧义，DSL 必须能给 `wait_for` 加 `recog` 过滤（→ 见 §10 的 `openmir2-probe-scenario-validation-gaps`）。
+附带：`winplay0`（HP 16）会被 50-120 的箭一箭打死，可能在 `CM_TURN`/`CM_HIT` 之前就死 ⇒ 场景结果更不确定。
+
 **能证明（离线、可复算）**
 
 1. `CM_HIT`/`CM_TURN` 的线上字段口径：X/Y 打包在 `recog`，`param` 不被读（`WorldServer.cs:831-844` 两支都如此）。
@@ -314,15 +390,19 @@ sha256（提交后的树）：**`9f04ae0808d02b13fcd6f63482316cc0a0891c2a7d7e1be
 3. 本方收不到自己的 `SM_HIT(14)`；命中只能等受击者的 `SM_STRUCK(31)`。
 4. `僵尸2`/`石墓尸王`（Race 95 `DigOutZombi`）**不具备可打的可见性前提**；`弓箭护卫` 等名字**在 `monsters` 表里不存在**（不会刷）。
 5. 确定性刷怪点（Range=0/MissionGenRate=0/名字可解析）只落到 4 个 Race，逐一的 FixedHide/StoneMode 判定见 §1.2。
-6. 现基线夹具下，**任何确定性目标都打不出确定的 `SM_STRUCK`**（§6.3 表）。
+6. 现基线夹具下，**任何确定性目标都打不出确定的 `SM_STRUCK`**（§6.3 的精确矩阵：最好的一对 joint 也只有 24%）。
 7. 场景文件的形状/预置位合法：`--check-scenario` rc=0、`card_window --dry-run` 两侧 rc=0。
 
 **不能证明 / 未达成**
 
 1. **卡面判据「删掉攻击步 ⇒ 应红」**：工具不支持，实测 rc=0（F2，**不写成 PASS**）。
+   同族缺口还有一条（第二轮 review 新发现）：把 `placement.y` 改成 233 而 `self_pos` 不动 ⇒ 两道门都 rc=0，
+   会把场景静默变成恒超时。两者都已转 **`openmir2-probe-scenario-validation-gaps`**。
 2. **场景真能跑出 `SM_STRUCK(31)`**：不能 —— 缺 §6.4 的夹具。所以本场景**不是可用的窗口输入**。
-3. 帧级对拍结论（`SM_STRUCK` 头的 HP/伤害逐字节）：本卡零真机证据，属后续窗口批次。
-4. Rust/C# 在 `SM_STRUCK` 生成链上的等价性：本卡不判。
+3. **「跑绿」等价于「玩家主动一击命中」**：**不等价**（§7.0 假绿封口）。`wait_for` 只认 ident，
+   守卫打玩家也会产生 `recog=self` 的 31。窗口批次不得消费本场景的任何 PASS。
+4. 帧级对拍结论（`SM_STRUCK` 头的 HP/伤害逐字节）：本卡零真机证据，属后续窗口批次。
+5. Rust/C# 在 `SM_STRUCK` 生成链上的等价性：本卡不判。
 
 ---
 
@@ -340,7 +420,10 @@ sha256（提交后的树）：**`9f04ae0808d02b13fcd6f63482316cc0a0891c2a7d7e1be
 
 ---
 
-## 9. 门禁（返工后实跑，命令 + rc）
+## 9. 门禁（第二轮返工后实跑，命令 + rc）
+
+场景 sha256（提交后的树）：**`89d9feb745b2732ee61b059217c82c19bdf53d613c150c4a5cd8db82565c637f`**
+（T1~T5 每次改坏后都逐字节还原，读数不变）。
 
 | 命令 | rc |
 |---|---|
@@ -348,14 +431,14 @@ sha256（提交后的树）：**`9f04ae0808d02b13fcd6f63482316cc0a0891c2a7d7e1be
 | 同上 + `--var self_pos=15204608` | **0** |
 | `python -I -B tools/probe/mir2_probe.py --selftest` | **0**（8 checks OK） |
 | `python -I -B tools/conformance/card_window.py --card openmir2-scenario-combat-strike --scenario tools/probe/scenarios/combat_strike.json --profile alt --dry-run` | **0**（两侧 `map=4 x=256 y=232` 图 500x500 可走） |
-| T1（删 wait_for） / T2（阻挡或越界 placement） | **2 / 2**（改坏必红） |
-| T3（删攻击步）/ T4（`wait_for=4095`） | **0 / 0 —— 未达成，工具缺口（F2）** |
+| T1（删 wait_for） / T2（越界 placement） | **2 / 2**（改坏必红） |
+| T3（删攻击步）/ T4（`wait_for=4095`）/ T5（`placement.y=233` 但 `self_pos` 不动） | **0 / 0 / 0+0 —— 未达成，工具缺口（F2），已转 `openmir2-probe-scenario-validation-gaps`** |
 
 未跑 `t_reservation_gate.py check`：本卡未动任何 `T-*` 登记。
 
 ---
 
-## 10. 残留项（F3/F4 只登记，不改）
+## 10. 残留项（只登记，不改）
 
 1. **`rules.json` 缺 `31`（`SM_STRUCK`）** —— 已另开卡 **`openmir2-conformance-rule-sm-struck-31`** 在办。
    在它落地前本场景**不能**作为窗口输入：未登记 ident 一出现就 `UNCLASSIFIED` ⇒ 整次窗口 `UNDECIDABLE(rc=2)`
@@ -363,6 +446,11 @@ sha256（提交后的树）：**`9f04ae0808d02b13fcd6f63482316cc0a0891c2a7d7e1be
    应做**字段窄掩码**而不是整帧 ignore。`tools/conformance/` 不在本卡写集。
 2. **`tools/probe/scenarios/combat_hit.json` 的 recog/param 口径是错的**（§2.1），且只等本方看不到的 14
    ⇒ 双重恒超时。归属卡建议 **`openmir2-window-discovery-rules`**（拥有 `tools/probe/` 写集），本卡不改。
-3. **夹具缺口**（§6.4）：需要「DC ≥ 31 且 HitPoint ≥ 17」的角色，或 owner 裁决给冻结内容加一条
+3. **场景校验工具缺口（三条）** —— 已转 **`openmir2-probe-scenario-validation-gaps`**：
+   T3（删攻击步 rc=0）、T4（`wait_for` 不存在 ident rc=0）、T5（`placement.y` 与 `self_pos` 不同源、两道门仍 rc=0）。
+4. **假绿通道（守卫打人会产出 `recog=self` 的 31）** —— 本卡的处置是 §7.0 的 fail-closed 声明；
+   根治要 DSL 支持 `wait_for` 按 `recog` 筛选，属 **`openmir2-probe-scenario-validation-gaps`** 同一族。
+5. **夹具缺口**（§6.4，订正后的规格）：需要「`DC_min > 2*AC-1` 且 `HitPoint ≥ SPEED-1`」的角色
+   （对 AC30/SPEED18 即 `DC_min ≥ 60` 且 `HitPoint ≥ 17`），或 owner 裁决给冻结内容加一条
    `HIT=0 / SPEED≤1` 的 `Range=0` 刷怪行。建议开「combat 夹具」卡。
-4. 本卡临时脚本在 `E:/tmp/w71/`（纯离线分析），不属于仓库内容。
+6. 本卡临时脚本在 `E:/tmp/w71/`（纯离线分析），不属于仓库内容。
