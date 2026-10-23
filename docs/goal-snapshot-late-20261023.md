@@ -198,19 +198,40 @@ walgit collab thread openmir2-ybdeal-frames   # 6 条可读（issue/patch/status
 git cat-file -p refs/collab/meta/snapshot | head -c 120   # snapshot ts=1792066344（早于这 5 张的 last_status_ts）
 ```
 
-⇒ **「board 未列出」是协作视图/索引口径问题**（thread 与索引都在），不是这 5 张缺证据；
-其中 4 张索引里已有 `window_required=true`（真欠窗口），1 张（`client-e2e-enter-gaps`）最后一次 merge 是 L。
+⇒ **「board 未列出」是协作视图/索引口径问题**（thread 与索引都在），不是这 5 张缺证据。逐卡实测
+（本次快照 `r_cards[].window_required` / `adjudicated` + 线程复核）：
+
+| 卡 | 索引内 `window_required` | `adjudicated.kind` | 最后一次 merge 的 tier |
+|---|---|---|---|
+| `openmir2-m3-monster-ai-tick` | **true** | window_required | R |
+| `openmir2-client-e2e-enter-gaps` | **true** | window_required | **L**（末次 merge；但历史多次 R+wr，需按最新一次判定复核是否可 closed） |
+| `openmir2-conformance-rng-nondeterminism` | **false** | —（无） | R（review 有 tier=R，但没有任何 `window_required` 标注） |
+| `openmir2-menu-ok-unify-pickwire` | **true** | window_required | R |
+| `openmir2-ybdeal-frames` | **true** | window_required | R |
+
+⇒ **5 张里 4 张有 `window_required=true`**（m3-monster-ai-tick / client-e2e-enter-gaps / menu-ok-unify-pickwire /
+ybdeal-frames），**1 张（`conformance-rng-nondeterminism`）没有**、只有 tier=R 的 review。
+> **与 review `bfc49ebf` 的对照（保留原错）**：review 说「4 张应为 **5** 张」并点名 `client-e2e-enter-gaps`——
+> **它说对了一半**：第一版把例外卡错写成 `client-e2e-enter-gaps`（它其实**有** `window_required=true`），
+> 真正的例外是 `conformance-rng-nondeterminism`；所以「有 wr 的张数」仍是 **4**（不是 5）。本版改成逐卡表，
+> 计数与例外卡都以此表为准（任何人可按上表逐行复算）。
 **修复不在本卡写集**：需要 coordinator 重放/重折快照并核对 `walgit collab board --format json` 的生成逻辑。
 
 ### 3.5 三类定性汇总（同一快照，桶间互斥，不重复计数）
 
 | 定性 | 张数 | 来源桶 |
 |---|---:|---|
-| **真欠窗口** | 121 + 6 + 3 + 3 + 43 + 4 = **180** | window_required 121 / whitelist 6 / adjudicated 3 / 三者皆无 3 / 44 桶里 A8+B2 35=43 / board 缺卡 4 |
+| **真欠窗口（含当前不可跑，见下两行）** | 121 + 6 + 3 + 3 + 43 + 4 = **180** | window_required 121 / whitelist 6 / adjudicated 3 / 三者皆无 3 / 44 桶里 A8+B2 35=43 / board 缺卡 4 |
+| ↳ 其中**当前不可跑**（§4：窗口跑也会失败，**已含在 180 内**） | **22** = R3 **13**（6 window_required + 7 merged_not_closed）+ castle_zone **4** + upgrade_retrieve **4**（均 window_required）+ equip_struck_save **1**（merged_not_closed） | 见 §4 逐条（本次快照逐卡复核：14 张落在 window_required 121 桶、8 张落在 merged_not_closed 43 桶） |
+| ↳ **可跑欠窗口（排期按这个算）** | **158** = 180 − 22 | 窗口能跑、只是还没轮到 |
 | ↳ 其中**只差登记**（真欠窗口但机判看不见） | **38**（B2 35 + 三者皆无 3） | 补 `window_required` 即可转成机判可见 |
 | **判据口径 / 记账债** | **1**（B1：`openmir2-gate-gmclose-race`，建议 closed）+ **1**（`client-e2e-enter-gaps` 需按最新 L 复核） | 44 桶 B1 + 5 桶里的 L |
 | **视图/索引口径** | **5**（整桶） | board 未列出 |
 | 已完成 / 无缺口 | 10 | 已完成 |
+
+> **180 / 22 / 158 的口径**：§4 说「不可跑 ≠ 欠窗口」指的是**排期口径**——这 22 张在机器分类上落在
+> 欠窗口桶里（所以 **180 包含它们**），但它们的窗口现在跑也会失败，**排期不能按可跑窗口估** ⇒ **可跑 158**。
+> 两者不是两个集合，是同一个 180 的两种切法（第一版 §3.5 只写了 180，没剔除这 22，属自相矛盾，已订正）。
 
 > **不要把「登记型 PASS」当证据**：whitelist 6 + adjudicated 3 + `merged_open_hygiene` 124 都是
 > 「有登记」而不是「有真机证据」（快照 detail 原文：`登记型 PASS ≠ 已有真机证据`）。
