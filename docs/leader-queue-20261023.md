@@ -71,6 +71,11 @@
     reviewer 的复核必须在**试合并树**上跑完整门禁；作者的自证同理（「分支绿」不是证据）。
     推论：动 `lib.rs`/`npc.rs` 这类热点、且改动会碰到**函数签名**的卡，**不要长命**——要么拆小，要么中途 rebase 一次。
 
+13. **动过 `npc.rs` / `mod.rs` 的卡，合并前跑一次 `script_host_noop_audit.py check --strict-lines`**（2026-10-23 定）：
+    默认档只对行号 WARN、永不判红（避免热文件误红），`--strict-lines` 才是「台账没欠账」的机判点。
+    当天 `npc.rs` 被 frame-drain / gm-host-seam / CHANGEEXP 连续改，evidence 行号漂移 9~53 处；**strict 绿才说明台账与代码同步**。
+    **不要给 WARN 设阈值**（会引入新的假红）；也不要让 strict 常年红（会训练大家忽略门）。
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。

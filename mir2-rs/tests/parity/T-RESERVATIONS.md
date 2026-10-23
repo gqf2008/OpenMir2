@@ -246,4 +246,6 @@
 | T-208 | openmir2-frame-drain-order-audit | 2026-10-23T05:23:46Z | 在用 |
 | T-209 | openmir2-gm-impl-shutup | 2026-10-23T05:36:07Z | 在用 |
 | T-210 | openmir2-gm-script-host-seam | 2026-10-23T06:18:40Z | 在用 |
+| T-211 | openmir2-gm-script-exec-seams | 2026-10-23T07:31:30Z | 在用 |
+| T-215 | openmir2-gm-impl-showeffect | 2026-10-23T08:37:07Z | 在用 |
 | T-218 | openmir2-gm-impl-clearbag | 2026-10-23T09:12:30Z | 在用 |
