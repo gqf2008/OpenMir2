@@ -142,7 +142,7 @@ v1 的「28 条结构性不可达」全部不成立。本工具：
 | `QFunction-0.txt [@PlayLevelUp]` | `HasLevelUp` 里的 GotoLable 被注释 | 取消禁言（另有活路） |
 | `QFunction-0.txt [@OnLogout_OffLinePlaying]` | 无引擎派发、无入边 | VV管理模式（未知命令） |
 | `QFunction-0.txt [@假人技能]` | 仅被上面的死 label 用 DelayCall 引用 | TestStatus（第三态、已实现；不影响本表） |
-| `QFunction-0.txt [@UserCmd1..9]` | `UserCmdCommand.cs` 的派发整段被注释 | 其 `#CALL` 整棵子树（含 `代练.txt`、`@OffLinePlay`、`@一/@二/@三`） |
+| `QFunction-0.txt [@UserCmd1..9]` | `UserCmdCommand.cs` 的派发整段被注释 | 本身不含 GMEXECUTE（故不出现在 `dead_gmexecute_labels`），但其 `#CALL`/超链接子树（`代练.txt`、`@OffLinePlay`、`@一/@二/@三`）里的 GMEXECUTE 全部计为不可达 |
 | `代练.txt [@LQ01..03]` | 只由死 label `[@UserCmd5]` 的 `#CALL` 进入 | ShowEffect（另有活路） |
 
 > 死 label 上的 GMEXECUTE **不算证据**，但**没有删除**——它们仍在 `script_occurrences` 里以
