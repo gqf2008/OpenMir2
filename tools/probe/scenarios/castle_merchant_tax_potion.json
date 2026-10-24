@@ -1,7 +1,9 @@
 {
   "name": "castle_merchant_tax_potion",
   "description": "W-TAX-1 **买腿**的 Castle 分支（今天可跑的那一腿）：城堡药店（0153，`MerChant.txt:90` `沙巴克/药店 0153 14 7 药店 0 1 1` ⇒ CastleMerchant=1；0153 ∈ `CastleMapList` ⇒ `Castle` 非空）买 1 瓶 `金创药(小量)`。**为什么不用 652 解码**：`ClientBuyItem` 的取物门是 `StdMode <= 4 || StdMode == 42 || StdMode == 31 || userItem.MakeIndex == nInt`（`Merchant.cs:1241`），药品 `StdMode=0` ⇒ 按名字即可买，`MakeIndex` 传 0（`param/tag=0`）。**税**：买价 = `GetItemPrice` → `ItemTypeList` 含 0（脚本 `+0`）⇒ `stdItem.Price=80`（`sql/mir2_data.sql:993`，`StdMode=0/Weight=1/Price=80`），启动补货时 `CheckItemPrice` 先把 `ItemPriceList[3]` 记为 `Round(80*1.1)=88`（`Merchant.cs:184-206/229-234`）⇒ **实际买价 88**（该表为空才回落 80）；`GetUserPrice` 的 `PriceRate=100` 不缩放；`Castle.IncRateGold(88)` ⇒ `nInGold = Round(88 * CastleTaxRate 5 / 100) = Round(4.4) = 4`（AwayFromZero，`UserCastle.cs:768-812；80 时 Round(4.0) 也=4`）⇒ `TotalGold/TodayIncome` 各 +4。**注意 `[goods] 金创药(小量) 100 3` 是「库存/刷新分钟」不是价格**（`ScriptParsers.cs:949-975` 按 `名/数量/刷新时间` 解析）。**证据**：`SM_BUYITEM_SUCCESS(650)` + `SM_ADDITEM(200)` 帧序 + **600s 存档门之后**手工比两侧 `Castle/0/SabukW.txt` 的 `TotalGold`/`TodayIncome`（`SystemProcessor.ShowOnline` 的 `ConsoleShowUserCountTime=600000`，`Server.conf:334`；`IncRateGold` 不写盘）——所以最后一步 sleep 620000ms 跨过存档门。`SaveTick` 本身不落盘（见 `castle_merchant_tax.json` 的 blocked③ / 文档 §2.3）。",
-  "required": ["merchant_actor"],
+  "required": [
+    "merchant_actor"
+  ],
   "params": {
     "buy_item": "金创药(小量)"
   },
@@ -45,9 +47,14 @@
       "note": "CM_USERBUYITEM(1014)（Messages.cs:66；PlayObject.Message.cs:897-899 → `ClientUserBuyItem(wIdent, nParam1=recog, MakeLong(param,tag)=nInt, 0, Msg)`）→ `Merchant.ClientBuyItem`（Merchant.cs:1225-1305）：`StdMode<=4` 分支不看 `nInt`（:1241）⇒ param/tag 传 0 合法；body=物品名（`sUserItemName.Equals(sItemName)`，:1244）。成功 ⇒ `Gold -= nPrice` → **`Castle.IncRateGold(nPrice)`**（:1257-1266，本部署 Castle 非空 ⇒ Castle 分支）。"
     },
     {
-      "wait_for": [650, 200],
-      "timeout_ms": 5000,
-      "note": "SM_BUYITEM_SUCCESS(650)（`RM_BUYITEM_SUCCESS`，Merchant.cs:1299-1302）+ SM_ADDITEM(200)（`SendAddItem`）。**失败形态**：`n1C != 0` ⇒ 只回 SM_BUYITEM_FAIL(651)（钱不够/背包满/负重/商人/视距门），且**无税**；此时本步超时（fail-closed）。"
+      "note": "**累计口径**：`SM_BUYITEM_SUCCESS(650)` 与 `SM_ADDITEM(200)` 两帧都要到（`SM_ADDITEM` 通常先入队；只 `wait_for [650,200]` 会命中 200 就返回，650 只剩在 drain 里 ⇒ 本步用 `wait_idents` 钉死两帧）。**650 的钱在 `recog` 不在 `param`**：发送端 `SendMsg(this, RM_BUYITEM_SUCCESS, 0, playObject.Gold, nInt, 0)`（`Merchant.cs:1303`，签名 `SendMsg(baseObject,wIdent,wParam,nParam1,nParam2,nParam3)`），泵里 `SendDefMessage(SM_BUYITEM_SUCCESS, nParam1, LoWord(nParam2), HiWord(nParam2), 0)`（`PlayObject.Message.cs:1824-1826`；`SendDefMessage(wIdent,nRecog,nParam,nTag,nSeries)`，`PlayObject.Socket.cs:27`）⇒ **Recog = Gold（10000−88=9912）**、Param = LoWord(MakeIndex) = 0、Tag = HiWord(MakeIndex) = 0。**失败形态**：`n1C != 0` ⇒ 只回 SM_BUYITEM_FAIL(651)（钱不够/背包满/负重/商人/视距门），无税；本步超时（fail-closed）。",
+      "wait_idents": {
+        "idents": [
+          650,
+          200
+        ],
+        "timeout_ms": 5000
+      }
     },
     {
       "sleep": {

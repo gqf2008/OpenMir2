@@ -82,12 +82,12 @@
 | 脚本 | `Market_Def/沙巴克/药店-0153.txt`：`(@buy @sell)`、`%100`（PriceRate=100）、`+0`（ItemTypeList=[0]）；`[goods]` 首行 `金创药(小量) 100 3` = 库存 100 / 刷新 3 分钟 |
 | placement | `0153 (15,7)` = 药店 (14,7) 正东邻格；两侧 map 同源（21×25），`bk=0 fr=500` 可走（两侧 `read_map_cell` 实跑一致）；`MapInfo.txt:840 [0153 药品店] FIGHT` ⇒ server_index=0；`MonGen/Npcs` 无 0153 行、`MerChant` 仅 :90 ⇒ 全图唯一 actor |
 | 物品 | `金创药(小量)`：`StdMode=0`、`Weight=1`、`Price=80`（`sql/mir2_data.sql:993`） |
-| 步序 | 点 NPC → 643 →`@buy`→ 645 → `CM_USERBUYITEM(1014, recog=merchant_actor, param=0, tag=0, body=金创药(小量))` → [650, 200] → `sleep 620000` |
+| 步序 | 点 NPC → 643 →`@buy`→ 645 → `CM_USERBUYITEM(1014, recog=merchant_actor, param=0, tag=0, body=金创药(小量))` → `wait_idents [650, 200]` → `sleep 620000` |
 | 为什么免 MakeIndex | `ClientBuyItem` 取物门 `StdMode <= 4 \|\| StdMode == 42 \|\| StdMode == 31 \|\| userItem.MakeIndex == nInt`（`Merchant.cs:1241`）；药品 `StdMode=0` ⇒ 名字命中即可，`nInt` 不参与 |
 | 期望买价 | **88**（不是 80、更不是 `[goods]` 的 100）：启动时 `LoadNpcData`→`RefillGoods` 首次补货先走 `CheckItemPrice`（`Merchant.cs:184-206/229-234`）
 把 `ItemPriceList[3]` 记为 `Round(stdItem.Price 80 * 1.1) = 88`，`GetItemPrice` 先查该表 ⇒ `GetUserPrice(88)` 且 `PriceRate=100` ⇒ 88（若该表为空才回落到 80） |
 | 期望税 | `Castle.IncRateGold(nPrice)` ⇒ `nInGold = Round(nPrice * 5 / 100)`：88 ⇒ `Round(4.4) = 4`；80 ⇒ `Round(4.0) = 4` ⇒ **`TotalGold`/`TodayIncome` 各 +4**（两种价都落 4，AwayFromZero） |
-| 帧差即证据 | `SM_BUYITEM_SUCCESS(650).param` = 购买后 `Gold`（10000−88 vs 10000−80）⇒ **买价口径写错会直接帧 diff**，不需要等 600s 存档 |
+| 帧差即证据 | **`SM_BUYITEM_SUCCESS(650).recog`** = 购买后 `Gold`（10000−88 vs 10000−80）⇒ **买价口径写错会直接帧 diff**，不需要等 600s 存档。**钱在 `recog` 不在 `param`**：发送 `SendMsg(this, RM_BUYITEM_SUCCESS, 0, playObject.Gold, nInt, 0)`（`Merchant.cs:1303`；`SendMsg(baseObject,wIdent,wParam,nParam1,nParam2,nParam3)`）→ 泵 `SendDefMessage(SM_BUYITEM_SUCCESS, nParam1, LoWord(nParam2), HiWord(nParam2), 0)`（`PlayObject.Message.cs:1824-1826`；`SendDefMessage(wIdent,nRecog,nParam,nTag,nSeries)`，`PlayObject.Socket.cs:27`）⇒ `recog=Gold`、`param=LoWord(MakeIndex)=0`、`tag=HiWord(MakeIndex)=0`；**用 `param` 判价会恒读 0** |
 | 期望帧 | `SM_BUYITEM_SUCCESS(650)` + `SM_ADDITEM(200)`；失败只回 651（钱/背包/负重门）⇒ 本步超时（fail-closed） |
 | 文件证据 | 末步 `sleep 620000` 跨过 600s 存档门；之后手工比两侧 `Castle/0/SabukW.txt` 的 `TotalGold`/`TodayIncome`（**两侧 diff 必须 = 0**，且各自 +4）。`SaveTick` 不落盘（§2.3） |
 | run3 | `#23 castle_merchant_tax_potion`，`extra=["--timeout-ms","700000"]`（默认 20000 会在 20s 杀掉带 620s sleep 的 probe） |
