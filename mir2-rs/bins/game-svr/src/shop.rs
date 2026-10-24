@@ -69,6 +69,11 @@ use crate::ground::GroundState;
 use crate::itemwire::{encode_client_item, ClientItem};
 use crate::smframe;
 
+/// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2829`）——**单一实现**：
+/// 引擎 `mir2_script::engine::lable_is_can_jmp(can_jmp_labels, play_dice_label, label)`。
+/// 本模块只做 re-export，避免 `engine/mod.rs` 与 `shop.rs` 两份口径漂移（T-142 ⑪）。
+pub use mir2_script::engine::lable_is_can_jmp;
+
 pub const CM_MERCHANTDLGSELECT: u16 = 1011;
 pub const CM_MERCHANTQUERYSELLPRICE: u16 = 1012;
 pub const CM_USERSELLITEM: u16 = 1013;
@@ -1533,43 +1538,6 @@ pub fn get_backupgnow_outcome(
         upgrade_request: Some(UpgradeRequest::GetBackupgWeapon),
         feature_changed: None,
     }
-}
-
-/// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2829`）的 1:1 移植：**按序**三支，
-/// 比较一律 `OrdinalIgnoreCase`（`eq_label`）：
-///
-/// 1. `@main` **恒可跳**（`Base.cs:2816-2819`，先于其它两支，且**不消费** `PlayDiceLabel`）；
-/// 2. 「最近一次说词」重建的 `CanJmpScriptLableMap` 命中（`Base.cs:2820-2823`）；
-/// 3. `PlayDiceLabel` 命中（`Base.cs:2824-2828`）⇒ **一次性**：命中即清成 `string.Empty`
-///    再放行（掷骰结果标签只能用一次）。
-///
-/// 第三支的取数口是 `&mut Option<String>`：`None` = C# 未初始化自动属性 `null`
-/// （`PlayObject.cs:588`），`string.Compare(sLabel, null)` 对任何非 null 标签都 != 0
-/// ⇒ **`None` 永不匹配**（与 `Some("")` 不等价：后者只匹配空标签）。宿主把
-/// `PlayObject.PlayDiceLabel` 存在 `ShopSession::play_dice_label`，跨对话调用保持。
-#[must_use]
-pub fn lable_is_can_jmp(
-    can_jmp_labels: &[String],
-    play_dice_label: &mut Option<String>,
-    label: &str,
-) -> bool {
-    // ① `Base.cs:2816`：`string.Compare(sLabel, "@main", OrdinalIgnoreCase) == 0 ⇒ true`。
-    if eq_label(label, "@main") {
-        return true;
-    }
-    // ② `Base.cs:2820`：`CanJmpScriptLableMap.ContainsKey(sLabel) ⇒ true`。
-    if can_jmp_labels.iter().any(|l| eq_label(l, label)) {
-        return true;
-    }
-    // ③ `Base.cs:2824-2828`：`string.Compare(sLabel, PlayDiceLabel, OrdinalIgnoreCase) == 0`
-    //    ⇒ `PlayDiceLabel = string.Empty; return true;`（一次性）。
-    if let Some(dice_label) = play_dice_label.as_deref() {
-        if eq_label(dice_label, label) {
-            *play_dice_label = Some(String::new());
-            return true;
-        }
-    }
-    false
 }
 
 /// `PlayObject.GetScriptLabel`（`PlayObject.Base.cs:2775-2807`）的标签抽取：

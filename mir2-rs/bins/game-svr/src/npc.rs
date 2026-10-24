@@ -1538,7 +1538,28 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     /// 本帧 8084&0xFF = 148），见宿主 `emit_script_frames`。
     fn game_gold_changed(&mut self) {
         let ident = i32::from(mir2_protocol::messages::RM_GAMEGOLDCHANGED);
-        self.frames.retain(|f| f.ident != ident);
+        // `SendUpdateMsg`（`BaseObject.Message.cs:283-303`）的**头-only**去重：循环里每次
+        // `TryPeek` 都看**队首**（最小优先级），只有队首 ident 命中才 `TryDequeue`；说词
+        // （优先级 1）插在两条 GAMEGOLD（148）之间时，队首是说词 ⇒ 旧 GAMEGOLD **保留**。
+        // 旧实现 `retain` 全删，会在该场景把帧数少发 1（T-142 ⑩③）。
+        let mut q: game_svr::msgqueue::NetPriorityQueue<usize> =
+            game_svr::msgqueue::NetPriorityQueue::new();
+        for (i, f) in self.frames.iter().enumerate() {
+            q.enqueue(i, f.ident as u8);
+        }
+        let mut removed: Option<usize> = None;
+        let mut i = 0usize;
+        while q.len() > i {
+            if let Some(&idx) = q.peek() {
+                if Some(idx) != removed && self.frames[idx].ident == ident {
+                    removed = q.dequeue();
+                }
+            }
+            i += 1;
+        }
+        if let Some(idx) = removed {
+            self.frames.remove(idx);
+        }
         self.send_msg(ident, 0, 0, 0, 0, Some(""));
     }
     /// `playerActor.SaleDeal`（`PlayObject.cs:856`，未初始化自动属性 ⇒ false）。
@@ -1553,6 +1574,11 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     /// "元宝" `GameSvrConf.cs:1320`）：宿主经 [`NpcVars::game_gold_name`] 注入部署值。
     fn config_game_gold_name(&self) -> String {
         self.vars.game_gold_name.clone()
+    }
+    /// `playerActor.GamePoint = v`（`ActionOfGamePoint`，`ExecutionProcessingSys.cs:3105/3112/3117`）。
+    /// 写 `NpcPlayer.game_point`；宿主 `write_back_player_gold_deal` 回写 `SessionGround.game_point`。
+    fn set_game_point(&mut self, v: i32) {
+        self.game_point = v;
     }
     fn game_point(&self) -> i32 {
         self.game_point
