@@ -72,6 +72,7 @@ param(
   [string]$ServerExe = '',
   [string[]]$Roles = @('db-srv', 'login-srv', 'game-svr', 'login-gate', 'sel-gate', 'game-gate'),
   [string]$Seed = '',
+  [string]$RngLog = '',
   [string]$DbName = '',
   [string]$LogDir = '',
   [int]$WaitSeconds = 60,
@@ -376,6 +377,23 @@ if ($dbNameText -and ($dbNameText -notmatch '^[A-Za-z0-9_]+(\*)?$')) {
 $childEnv = @{ 'MIR2_RNG_SEED' = $seedText }
 if ($dbNameText) { $childEnv['MIR2_DB_NAME'] = $dbNameText }
 
+# ---- RNG 流水（卡 openmir2-window-kit-p0-unblock）：显式 -RngLog > 环境 MIR2_RNG_LOG。----
+# 与 start_rust_stack.ps1 同口径：给了流水就必须有种子（Seed 恒有默认 42）；
+# 父目录必须已存在（证据目录由调用方建好），否则 fail-closed = 退出 2。
+$rngLogText = if (-not [string]::IsNullOrWhiteSpace($RngLog)) { $RngLog.Trim() }
+              elseif (-not [string]::IsNullOrWhiteSpace($env:MIR2_RNG_LOG)) { $env:MIR2_RNG_LOG.Trim() }
+              else { '' }
+if ($rngLogText) {
+  $rngParent = Split-Path -Parent $rngLogText
+  if ([string]::IsNullOrWhiteSpace($rngParent) -or -not (Test-Path -LiteralPath $rngParent -PathType Container)) {
+    Write-Output ("RED: -RngLog 的父目录不存在：{0}（先建证据目录，fail-closed）" -f $rngLogText)
+    exit 2
+  }
+  $childEnv['MIR2_RNG_LOG'] = $rngLogText
+  # C# rng-hook 只有 MIR2_RNG_SITE=1 才写 5 列（含 site）；不设则 4 列、账本校验必红。
+  $childEnv['MIR2_RNG_SITE'] = '1'
+}
+
 Write-Output ("ROOT {0}" -f $Root)
 Write-Output ("SERVER_EXE {0}" -f $ServerExe)
 Write-Output ("SERVER_EXE_SHA256 {0}" -f $ServerExeSha256)
@@ -396,6 +414,7 @@ foreach ($p in $RoleTable) {
   Write-Output ("PORTS {0}: {1}" -f $p.role, (($p.ports) -join ','))
 }
 Write-Output ("SEED: 将向角色注入 MIR2_RNG_SEED={0}（显式 -Seed > 环境变量 > 默认 42，口径同 start_rust_stack.ps1）" -f $seedText)
+Write-Output ("RNG_LOG: " + $(if ($rngLogText) { "将向角色注入 MIR2_RNG_LOG=" + $rngLogText + "（流水由 rng_trace 写 TSV：seq/kind/max/result/site；同时注入 MIR2_RNG_SITE=1 供 C# 钩子写 5 列）" } else { "(none；未给 -RngLog/MIR2_RNG_LOG，不落流水)" }))
 if ($dbNameText) {
   Write-Output ("DB_NAME: 将向角色注入 MIR2_DB_NAME={0}（仅环境透传，当前无消费者；库名仍由各配置文件决定）" -f $dbNameText)
 } else {

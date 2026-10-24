@@ -40,7 +40,7 @@
 | W 项 | kit 资产 | 状态 | 缺什么 / 手工步骤 |
 |---|---|---|---|
 | W-LF-1 出生点 11 键与落点 | `login_only` 用**既有角色**（基线 restore），不触发新建角色出生点 | **部分/缺** | 缺 `CM_NEWCHR` 驱动。手工：窗口内用客户端建新角色（三种职业各一）进图，记首包地图/坐标/朝向；或新提案：给 probe 加 `newchr` 步骤（`CM_NEWCHR=101` 已在协议表） |
-| W-LF-2 5 新列消费 | 无消费点（卡面自述：`MakeSafePkZone`/`InSafeZone` 属后续片） | **构造级**（非窗口） | 构造测试已覆盖解析/回落/RNG（`mir2-rs/bins/game-svr/src/homemap.rs` 的 `#[test]` 组）；窗口不列；**将来具备消费点条件时重开窗口项** |
+| W-LF-2 5 新列消费 | 无消费点（卡面自述：`MakeSafePkZone`/`InSafeZone` 属后续片） | **构造级**（非窗口） | 构造测试已覆盖解析/回落/RNG（`mir2-rs/bins/game-svr/src/homemap.rs` 的 `#[test]` 组）；窗口不列；**当 `MakeSafePkZone`/`InSafeZone` 在服务端被消费（接线片合入）时重开为窗口项** |
 
 ### 1.3 playdice T-142 `bff927e11`（W-PD-1..2）
 

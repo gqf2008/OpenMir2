@@ -22,6 +22,7 @@
 #   bash tools/window/run_batch.sh --no-rebuild       # 跳过 cargo build（不推荐）
 #   bash tools/window/run_batch.sh --no-preflight     # 跳过前置自检（只在调试时用）
 #   bash tools/window/run_batch.sh --skip-pin-smoke   # pin 链只做静态核对（证据里登记未冒烟）
+#   bash tools/window/run_batch.sh --rng-log          # 每侧落 RNG 流水并校验（缺账本/无 site ⇒ 该场景 rc=2）
 #   bash tools/window/run_batch.sh --run-dir E:/tmp/window/run3 --timeout-sec 2700
 #
 # 退出码：0 = 所有选中场景都产出了 PASS/FAIL（有结论）；2 = 缺参/前置失败/出现
@@ -52,11 +53,12 @@ DO_PREFLIGHT=1
 DRY_RUN=0
 FORCE=0
 SKIP_PIN_SMOKE=0
+RNG_LOG=0
 ONLY=""
 FROM=""
 
 usage() {
-    sed -n '3,42p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+    sed -n '3,43p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
 die() {
@@ -79,6 +81,7 @@ while [ $# -gt 0 ]; do
         --no-rebuild)     DO_REBUILD=0; shift ;;
         --no-preflight)   DO_PREFLIGHT=0; shift ;;
         --skip-pin-smoke) SKIP_PIN_SMOKE=1; shift ;;
+        --rng-log)        RNG_LOG=1; shift ;;
         --python)         [ $# -ge 2 ] || die "--python 缺值"; PY=$2; shift 2 ;;
         *)                die "未知参数 $1" ;;
     esac
@@ -307,8 +310,10 @@ run_one() {
         log "SKIP  n=$n name=$name（$skip_reason）"
     else
         if [ "$DRY_RUN" -eq 1 ]; then
-            log "PLAN  n=$n name=$name profile=$prof extra=[$extra] out=$out"
-            log "      $PY -I -B $CARD_WINDOW --card $CARD --scenario tools/probe/scenarios/$name.json --out $out --profile $prof ${extra}"
+            local rngflag=""
+            [ "$RNG_LOG" -eq 1 ] && rngflag="--rng-log"
+            log "PLAN  n=$n name=$name profile=$prof extra=[$extra] rng_log=$RNG_LOG out=$out"
+            log "      $PY -I -B $CARD_WINDOW --card $CARD --scenario tools/probe/scenarios/$name.json --out $out --profile $prof ${rngflag} ${extra}"
             return 0
         fi
         log "START n=$n name=$name profile=$prof extra=[$extra] at=$(now_iso)"
@@ -316,6 +321,9 @@ run_one() {
         local -a cmd=("$PY" -I -B "$CARD_WINDOW" --card "$CARD"
                       --scenario "tools/probe/scenarios/$name.json"
                       --out "$out" --profile "$prof")
+        if [ "$RNG_LOG" -eq 1 ]; then
+            cmd+=("--rng-log")
+        fi
         if [ -n "$extra" ]; then
             local -a ex=()
             read -r -a ex <<<"$extra"
