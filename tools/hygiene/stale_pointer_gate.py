@@ -578,7 +578,7 @@ def _commit_time(top, sha, cache):
     return cache[sha]
 
 
-def _blame_delta(top, rel, lines, epoch, cache):
+def _blame_delta(top, rel, lines, epoch, cache, reasons=None):
     """``|commit time - declared time|`` for the *newest* declaration line.
 
     ``git blame --porcelain`` names the commit that last touched a line.  A
@@ -601,15 +601,32 @@ def _blame_delta(top, rel, lines, epoch, cache):
                 top, "blame", "-L", "%d,%d" % (line, line), "--porcelain", "--", rel
             )
             times = []
-            if rc == 0:
-                for raw in out.splitlines():
+            reason = None
+            if rc != 0:
+                reason = "git blame rc=%d" % rc
+            else:
+                rows = out.splitlines()
+                if rows:
+                    sha = rows[0].split()[0] if rows[0].split() else ""
+                    if sha == "0" * 40 or not sha:
+                        reason = ("blame commit 全 0（该行未提交：Not Committed Yet）")
+                if any(row.strip() == "author Not Committed Yet" for row in rows):
+                    reason = "blame 输出含 Not Committed Yet（声明行未提交）"
+                for raw in rows:
                     if raw.startswith("author-time "):
                         times.append(int(raw.split()[1]))
                     elif raw.startswith("committer-time "):
                         times.append(int(raw.split()[1]))
-            cache[key] = tuple(times) if times else None
-        times = cache[key]
+                if reason is None and not times:
+                    reason = "解析不出 author/committer 时间"
+            # Card openmir2-stale-pointer-blame-failclosed: uncommitted / all-zero
+            # blame must be **unusable** (never exempt), and the reason is kept for
+            # the caller's NOTE instead of a bare "unavailable".
+            cache[key] = (tuple(times), reason) if not reason else (None, reason)
+        times, reason = cache[key]
         if not times:
+            if reasons is not None and reason:
+                reasons.append(reason)
             return None
         worst = max(worst, min(abs(epoch - stamp) for stamp in times))
     return worst
@@ -677,7 +694,9 @@ def checked_declarations(
             continue
         sha_line, sha_text, times, delta = accepted
         lines = sorted({decl["anchor"], decl["time_line"], sha_line})
-        blamed = _blame_delta(top, rel, lines, decl["epoch"], blame_cache)
+        blame_reasons = []
+        blamed = _blame_delta(top, rel, lines, decl["epoch"], blame_cache,
+                              reasons=blame_reasons)
         if blamed is None:
             if reject_sink is not None:
                 reject_sink.append(
@@ -686,7 +705,7 @@ def checked_declarations(
                         "line": decl["anchor"],
                         "sha": sha_text,
                         "time": decl["time_text"],
-                        "reasons": [
+                        "reasons": blame_reasons or [
                             "declaration line is not committed (blame unavailable)"
                         ],
                     }
@@ -1420,7 +1439,7 @@ def emit(result, ref, allowlist_path, out=sys.stdout, err=sys.stderr):
         print(
             "stale-pointer gate: OK (%d files / %d lines scanned under docs; "
             "%d green pointer(s), %d correction-marker line(s), %d allow-listed "
-            "line(s), %d snapshot-exempt hit(s), %d unresolved; %d card-status "
+            "line(s), %d snapshot-exempt line(s), %d unresolved; %d card-status "
             "hit(s), %d card id(s) judged, %d card-bearing line(s)%s; ref=%s, "
             "allow-list=%s)"
             % (
@@ -2197,6 +2216,42 @@ def selftest():
             and snap_neighbor["snapshot_info"][0]["decl"]["sha"] == merged
             and snap_neighbor["snapshot_info"][0]["decl"]["sha_line"] == 4
             and snap_neighbor["snapshot_info"][0]["decl"]["rejected_candidates"],
+        )
+
+        # ---- ㉛ (card openmir2-stale-pointer-blame-failclosed): staged but NOT committed
+        staged_repo = os.path.join(tmp, "staged-repo")
+        os.makedirs(staged_repo)
+        _run_git(staged_repo, "init", "-q", "-b", "main")
+        _run_git(staged_repo, "config", "user.email", "selftest@example.invalid")
+        _run_git(staged_repo, "config", "user.name", "selftest")
+        _write(os.path.join(staged_repo, "seed.md"), "seed" + chr(10))
+        _run_git(staged_repo, "add", "-A")
+        _run_git(staged_repo, "commit", "-qm", "base")
+        staged_base = _run_git(staged_repo, "rev-parse", "HEAD")
+        staged_epoch = int(
+            _run_git(staged_repo, "show", "-s", "--format=%ct", staged_base)
+        )
+        staged_stamp = datetime.datetime.fromtimestamp(
+            staged_epoch, datetime.timezone(datetime.timedelta(hours=8))
+        ).strftime("%Y-%m-%d %H:%M:%S +08")
+        _write(
+            os.path.join(staged_repo, "docs", "staged", "staged.md"),
+            ("# 快照 @ `%s` @ %s" + chr(10) * 2
+             + "分支 head `%s`，**未合入**" + chr(10))
+            % (staged_base, staged_stamp, staged_base),
+        )
+        _run_git(staged_repo, "add", "-A")  # staged only: blame = 全 0 / Not Committed Yet
+        staged = scan(
+            staged_repo, "docs", "refs/heads/main",
+            load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉛ 声明行已 stage 未 commit ⇒ blame 全 0（Not Committed Yet）⇒ 不豁免，仍红",
+            staged["rc"] == 1
+            and len(staged["hits"]) == 1
+            and staged["snapshot_exempt"] == 0
+            and len(staged["decl_notes"]) == 1
+            and "Not Committed Yet" in " ".join(staged["decl_notes"][0]["reasons"]),
         )
 
     failed = 0
