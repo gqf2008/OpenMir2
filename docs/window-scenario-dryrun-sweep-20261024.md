@@ -24,7 +24,7 @@
 | `npc_script_chain` | alt / csharp-default | **0 / 2** | alt 可跑；csharp-default 生产库守卫 | 同上 |
 | `king_castle_war` | alt / csharp-default | 0 / 0 | 可跑（语境另注） | 跑前确认城堡战语境（§7.3 castle_zone 缺口） |
 | `gm_time` / `gm_batch` | alt / csharp-default | 0 / 0 | 可跑 | 无前置 |
-| `spell_cast` | alt / csharp-default / **window-magic** | **2 / 2 / 0** | **可跑（用 `window-magic`；alt/csharp-default 缺 magic 前置）** | 前三格为缺少前置的 fail-closed；`window-magic`（2026-10-24 新增，卡 `openmir2-window-profile-magic-preset`）⇒ rc=0 且两侧 `magic_ids=1` 预览（证据 `@ 6cb7d72b4 @ 10:33 +08`） |
+| `spell_cast` | alt / csharp-default / **window-magic** | **2 / 2 / 0** | **可跑（用 `window-magic`；alt/csharp-default 缺 magic 前置）** | 前三格为缺少前置的 fail-closed；`window-magic`（2026-10-24 新增，卡 `openmir2-window-profile-magic-preset`）⇒ rc=0 且两侧 `magic_ids=1` 预览（证据 `@ 72c26da9f @ 10:33 +08`） |
 
 **20 个场景文件的另两个**：`combat_hit` / `combat_strike`（不在 §7.4）实测仍 `rc=2 BLOCKED`
 （缺同屏怪物/伤害夹具）——设计内，未被本卡改动。
@@ -32,7 +32,7 @@
 ## 2. 分类结论
 
 - **可跑（alt）**：**17/18** 场景 `rc=0`；`spell_cast` 现由**内置 `window-magic`** 承担（`--profile window-magic`
-  ⇒ rc=0 + 两侧 `magic_ids=1` 预览，2026-10-24 @ `6cb7d72b4`），**不是坏场景**。
+  ⇒ rc=0 + 两侧 `magic_ids=1` 预览，2026-10-24 @ `72c26da9f`），**不是坏场景**。
 - **无坏场景**：本卡**未改任何场景 JSON**（18 个文件 dry-run 均按语义返回 0 或设计内 2）；
   因此不需要 `card_window --selftest` 复跑（未动代码/场景；如需复跑见 §4）。
 - **profile 结论（重要，给开窗人）**：`csharp-default` 把 C# 侧 DB 指向 **生产库**（`prod` / `mir2_db`）。

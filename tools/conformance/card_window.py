@@ -5364,21 +5364,6 @@ def selftest():
             i3_ok = False
         chk(i3_ok, "I-3 内置 alt（preset=test + mir2_test_*_r）仍放行")
 
-        # 15c) 新内置 profile `window-magic`（卡 openmir2-window-profile-magic-preset）：
-        #      两侧 magic 段 + D-9 pin 必须同时成立，否则 `spell_cast` 仍是「少前置」状态。
-        try:
-            wm = load_profile("window-magic")
-            wm_magic = profile_magic(wm)
-            wm_env = {s: (wm["sides"][s].get("env") or {}).get("MIR2_CLIENT_ABILITY_LAYOUT")
-                      for s in wm["sides"]}
-            wm_ok = (bool(wm_magic) and len(wm_magic) >= 1
-                     and all(v == "0" for v in wm_env.values()))
-            wm_err = ""
-        except ConfigError as exc:
-            wm_ok, wm_err = False, str(exc)
-        chk(wm_ok, "15c) 内置 window-magic：两侧 magic 段 + MIR2_CLIENT_ABILITY_LAYOUT=0 %s"
-            % wm_err)
-
         # 15b) F-3：binaries 是窗口证据的必需项（空列表/缺省 => 加载期 ConfigError，不许 PASS）
         for label, mutate in (
                 ("binaries=[]", lambda p: p["sides"]["csharp"].__setitem__("binaries", [])),
@@ -5415,6 +5400,25 @@ def selftest():
         chk("在 db.databases 里显式声明" not in f1_msg
             and "mir2_test_*" in f1_msg,
             "F-1 提示不再教「在 db.databases 里显式声明」，改为指名换库")
+
+        # 15d) 新内置 profile `window-magic`（卡 openmir2-window-profile-magic-preset）：
+        #      两侧 magic 段（magic_id=1）+ D-9 pin 必须同时成立，否则 `spell_cast` 仍是「少前置」状态。
+        try:
+            wm = load_profile("window-magic")
+            wm_magic = profile_magic(wm)
+            wm_side_magic = {s: profile_magic(wm, s) for s in wm["sides"]}
+            wm_env = {s: (wm["sides"][s].get("env") or {}).get("MIR2_CLIENT_ABILITY_LAYOUT")
+                      for s in wm["sides"]}
+            wm_ok = (bool(wm_magic) and len(wm_magic) == 1
+                     and wm_magic[0]["magic_id"] == 1
+                     and all(m and len(m) == 1 and m[0]["magic_id"] == 1
+                             for m in wm_side_magic.values())
+                     and all(v == "0" for v in wm_env.values()))
+            wm_err = ""
+        except ConfigError as exc:
+            wm_ok, wm_err = False, str(exc)
+        chk(wm_ok, "15d) 内置 window-magic：两侧 magic 段(magic_id=1) + MIR2_CLIENT_ABILITY_LAYOUT=0 %s"
+            % wm_err)
 
         # 16) I-4：真跑缺 --out => rc=2，且不往 cwd 写任何证据
         old_cwd = os.getcwd()
@@ -6116,7 +6120,8 @@ def build_parser():
                          "封存场景不得被窗口批次消费")
     ap.add_argument("--out", help="产物目录（真跑必填；--dry-run 可省）")
     ap.add_argument("--profile", default="alt",
-                    help="profile：alt（默认）| csharp-default | <profile.json 路径>")
+                    help="profile：%s | <profile.json 路径>（默认 alt）"
+                         % " | ".join(sorted(BUILTIN_PROFILES)))
     ap.add_argument("--post-comment", action="store_true",
                     help="跑完在该卡发一条签名 comment（含 VERDICT/帧数/sha256/证据路径；不改卡状态）")
     ap.add_argument("--dry-run", action="store_true",

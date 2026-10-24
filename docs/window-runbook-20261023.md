@@ -387,14 +387,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
   | `bag_equip` / `eat_item` | **场景自描述 `inventory`**（已在场景 JSON 里，见 §1.6「背包夹具」）；场景 `required` 会自动触发 discovery（`bag_equip`：`item_name` / `make_index` / `takeon_where`；`eat_item`：`item_name` / `make_index`，**无** `takeon_where`） | 写 profile 顶层 `inventory` 无效（静默忽略） |
   | `upgrade_retrieve` | `probe_timeout_ms=720000`（profile 顶层）或 `--timeout-ms 720000`（实测两侧 probe 命令行均为 720000） | 默认 20000 ⇒ 180s 杀 probe，白跑一整轮 |
   | `spell_cast` | **可直接用内置 `window-magic`**（= `alt` + 两侧 `magic` + D-9 pin，见下）；或自定义 profile 两侧都写 `magic` 段 + `sides.*.env.MIR2_CLIENT_ABILITY_LAYOUT="0"` | `alt`/`csharp-default` ⇒ 加载期 rc=2（缺 magic）；不 pin D-9 ⇒ 53 的 `body_len` 0B vs 16B FAIL |
+  | `combat_hit` / `combat_strike` | 无——**封存**（缺同屏怪物夹具与伤害夹具） | rc=2 `BLOCKED`；这是设计如此，不要当「工具坏了」去改 |
+  | `login_only` | 探针不替操作者发客户端命令；卡面要求的手动输入（如 `@禁言 <名> 1`）必须由人在真实客户端做 | 漏了**不报错**，只会让判据看起来没红 |
 
-  > **内置 `window-magic`（2026-10-24 @ `6cb7d72b4`）**：`--profile window-magic` = `alt` 的副本 + 顶层
+  > **内置 `window-magic`（2026-10-24 @ `72c26da9f`）**：`--profile window-magic` = `alt` 的副本 + 顶层
   > `magic:[{magic_id:1,level:0,use_key:"1",curr_train:0}]` + 两侧 `env.MIR2_CLIENT_ABILITY_LAYOUT="0"`。
   > 实测：`spell_cast --dry-run --profile window-magic` ⇒ **rc=0**，两侧各打印 `魔法夹具（dry-run 不连库）… magic_ids=1`；
   > 既有 `alt`/`csharp-default` 下 18 个场景的 rc 逐格不变（alt 17×0 + spell 2；csharp-default 12×0 + 5×生产库守卫 + spell 2）。
   > `alt` 默认值**未被修改**（它是 18 场景的既有基线）。
-  | `combat_hit` / `combat_strike` | 无——**封存**（缺同屏怪物夹具与伤害夹具） | rc=2 `BLOCKED`；这是设计如此，不要当「工具坏了」去改 |
-  | `login_only` | 探针不替操作者发客户端命令；卡面要求的手动输入（如 `@禁言 <名> 1`）必须由人在真实客户端做 | 漏了**不报错**，只会让判据看起来没红 |
 
 - **两条硬提醒（照做，别省）**：
   1. **`--dry-run` 绿 ≠ 真机已对拍**：dry-run 不连库、不起栈，只预览命令序列；判据只看顶层 `verdict`
