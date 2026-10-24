@@ -25,7 +25,7 @@ python -I -B tools/conformance/preflight.py \
   --log-dir E:/tmp/conformance/rust-logs \
   --ports-profile E:/tmp/window/r5/root/alt-port-profile.json
 # 需要更深自查时再加：--with-dry-run（委托 card_window --dry-run）/ --with-selftest
-#   （--with-selftest 就是委托 `card_window --selftest`：2026-10-24 实测 GREEN 239/239；
+#   （--with-selftest 就是委托 `card_window --selftest`：2026-10-24 实测 GREEN 240/240；
 #    测法 `time python -I -B tools/conformance/card_window.py --selftest`；
 #    耗时随机器/profile 环境而变：reviewer-3 机 22.26s、worker-58 机 45.05s/52.70s、上一轮/另一环境约 55s）
 ```
@@ -117,11 +117,11 @@ python -I -B tools/conformance/card_window.py --card <卡 id> \
 **第 5 步：离线自检（工具没被改坏）**
 
 ```sh
-python -I -B tools/conformance/card_window.py --selftest     # 期望 GREEN: … selftest 239/239，rc=0（2026-10-24 本机实测）
+python -I -B tools/conformance/card_window.py --selftest     # 期望 GREEN: … selftest 240/240，rc=0（2026-10-24 本机实测）
 python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 262/262，rc=0
 ```
 失败含义：计数**变小** ⇒ 有判据被删（先查最近提交）；变红 ⇒ 工具坏了，别开窗。
-**注**：两个自检的计数都随夹具与规则表变更而变（`compare_runs` 侧实测：`4e0bfd2b8` 198 ⇒ `b42f20a28` recog-unmask +40 = 238 ⇒ `c8473b344` 补 202/203/642/709 四条规则 +24 = 262）⇒ 以**实跑**为准，别抄本文的数字（本文的 239/239、262/262 是 2026-10-24 实测）。
+**注**：两个自检的计数都随夹具与规则表变更而变（`compare_runs` 侧实测：`4e0bfd2b8` 198 ⇒ `b42f20a28` recog-unmask +40 = 238 ⇒ `c8473b344` 补 202/203/642/709 四条规则 +24 = 262）⇒ 以**实跑**为准，别抄本文的数字（本文的 240/240、262/262 是 2026-10-24 实测）。
 
 ---
 
@@ -375,16 +375,22 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
 
 `window-testdb` 是 `alt` 的深拷贝 + **C# 侧显式指向测试库**（`db.preset=test`、
 `db.characters_db=mir2_test_db`；Rust 侧沿用 `mir2_test_db_r`）。它只让**输入不再命中**守卫：
+**注意：今天就结果而言 `window-testdb` 与 `alt` 等价**——`alt` 的 C# 侧本来就写着同一对值
+（`preset=test` / `mir2_test_db`），所以它**不会让任何场景「新通过」**，5 个预置位场景在 `alt`
+下本来也是 rc=0。本 profile 的价值只是把「test-DB 契约」固化成独立、可命名的句柄（并把两键
+显式写在构造器里，由 selftest 22b 钉住），不是改变任何行为；选 `alt` 还是它，结果一样。
 
 - **守卫一字未动**：`check_profile_safety` 的 `prod(...)` 代码、报错文案、触发条件全部保持原样；
   本 profile 既没有 `--allow-production-db`，也没有 `production_db` 标记。
-- **只加数据**：`git diff -U0 tools/conformance/card_window.py` 的改动局限在 `BUILTIN_PROFILES`
-  数据区（构造器 + 赋值），不改任何判定逻辑。
+- **只加数据、不加判定**：改动局限于**模块级构造器与赋值**——`def _derived_testdb_profile(...)`
+  （`copy.deepcopy` 基线 + 显式写 C# 侧两键）加 `BUILTIN_PROFILES["window-testdb"] =
+  _derived_testdb_profile(...)`，与既有的 `window-magic` 同形；**不是**只往
+  `BUILTIN_PROFILES` 里塞一段 dict 字面量，但也不改任何判定逻辑。
 - **仅测试库，绝不可用于生产**：`db.characters_db=mir2_test_db` / `mir2_test_db_r` 是测试库；
   真跑会写测试库，**不要**把它当生产窗口 profile，也**不要**在它基础上改回 `mir2_db`。
 - 用法：`--profile window-testdb`。`--dry-run` 下这 5 个场景 rc=0；`alt` / `csharp-default`
   的 18 场景 rc 逐格不变（`csharp-default` 下那 5 个**仍然 rc=2**，守卫还在）。
-- 实测快照戳：`@ 633e2d8a1 @ 2026-10-24 11:04 +0800`（18 格矩阵与 5 个 rc=0 证据见
+- 实测快照戳：`@ 7cc81fbfa @ 2026-10-24 11:04 +0800`（原测于 feature commit `633e2d8a1`，同一组数字在 tip `7cc81fbfa` 上复验一致；18 格矩阵与 5 个 rc=0 证据见
   `docs/window-scenario-dryrun-sweep-20261024.md` §1）。
 
 ## 2. 跑的时候
@@ -404,7 +410,8 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
   **注意 `csharp-default` 的定位是「核对生产库守卫」，不是「跑场景的默认 profile」**：带 `placement` 的
   5 个场景（`upgrade_retrieve` / `equip_struck_save` / `bag_equip` / `eat_item` / `npc_script_chain`）
   在它下面 `--dry-run` 即 rc=2（设计内 fail-closed）。要预览这 5 个，用 `--profile window-testdb`（§1.9，
-  **仅测试库，绝不可用于生产**）。
+  **仅测试库，绝不可用于生产**）；**今天它与 `alt` 等价**（同一份深拷贝 + 把 `alt` 里本就相同的
+  C# 库名再显式写一遍），选哪个都行。
 - **本节点到名字的场景，前置如下**（其余场景以场景 JSON 的 `requires` / `inventory` / `required` 为准，
   全量枚举见 `docs/window-batch-plan-20261023.md` §7.4 @ `81ecc0d28`：**12 行 / 18 场景**；
   能不能跑的矩阵见 `docs/window-batch-rehearsal-20261024.md`：**18 可跑 / 2 blocked / 0 假绿**——本文不复写矩阵）：
