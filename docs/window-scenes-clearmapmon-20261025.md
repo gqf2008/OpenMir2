@@ -30,6 +30,45 @@
 窗口执行时由 `card_window.py` 的 `assets`（白名单列）或手工 DB 预置提供；两条场景均**不写 `assets` 键**
 （原因：本批先于 P0 白名单落地/或所列列不在 `ASSETS_COLUMNS`），前置在 `description` 与 `placement.note` 里写明。
 
+## 1.7 seed 实测（2026-10-25；卡 `openmir2-clearmapmon-t118-unblock`）：**未找到稳定 seed，保持 blocked**
+
+- 方法：私有 C# 栈（`tools/window/start-csharp.ps1 -Seed N -RngLog …`，`MIR2_RNG_SITE=1`，
+  账本 `INJECT_OK`/`SEED_PROBE` 自证）；探针走到 `@rw01`（`movr M3 3`）后**立即停止，不选 `@st`**
+  （避免输支扣佛牌/写名单）；从 RNG 流水按 site
+  `ScriptSystem.Processings.ExecutionProcessingSys.ActionOfMovrData@ExecutionProcessingSys.cs:244`
+  读取 `Next(max)=3` 的实抽结果。为在 winplay0（等级 1、无佛牌）上触达 `@rw01`，
+  **只在私有副本** `csharp-root/.../武士-0114.txt` 注释了两条前置条件（备份
+  `E:/tmp/scriptcov/t118/武士-0114.txt.bak`，演练后按 sha256 还原为 `ead2df9f…`）；
+  `E:/MirServer` 一字未动。
+- **seed → M3 实测表**（每行 = 一次全新起栈；`auto` = 场景内 `auto:last_turn` 点 NPC，
+  无独立 discovery 会话；`disc` = 先跑 `npc_click_auto` 发现会话再跑主场景）：
+
+  | seed | 路径 | 第 1 次 | 第 2 次 | 结论 |
+  |---:|---|---:|---:|---|
+  | 42 | auto | 1 | 1 | 稳定平局，但非赢 |
+  | 42 | disc | 2 | 0 | **同 seed 两次不同** |
+  | 43 | auto | 2（扫描）| 2 / 0（两次确认）| **同 seed 三次中两次 2、一次 0** |
+
+- **结论**：**同 seed 下 M3 会随起栈/会话时序漂移**（`movr` 之前的取数次数受 NPC 转身、
+  握手等时序影响）⇒ **seed 本身不能保证「首掷即赢」**；`M3=0` 的输支会扣佛牌并写
+  `命运之刃名单.txt`，一次失败即破坏夹具。故**不满足解封条件 ②**，`clearmapmon_t118`
+  **保持 `blocked`，不进 run3**。
+- **额外的内容前置缺口**（本次实测新发现，需 owner/内容侧裁决）：`@main` 要 `checkitem 佛牌 1`
+  且 `checklevel 43`，但——
+  1. `佛牌` 在 `mir2_data` / `mir2_test_data` / `mir2_test_data_r` 三个 `stditems` 里**都不存在**
+     （`SELECT ... WHERE Name LIKE '%佛牌%'` 0 行）⇒ 标准包里没有任何角色能持有该道具，
+     `@rw01` 对正常客户端**不可达**；
+  2. 窗口角色 `winplay0` 等级 1（`mir2_test_db.characters.Level=1`），`assets` 白名单只有
+     `Gold/GamePoint`，**无法声明 Level≥43**。
+  ⇒ 即使将来能固定 RNG，场景仍需「内容侧修脚本/补佛牌定义」或「窗口专用角色+道具夹具」，
+  后者超出本卡写集。**建议另立卡**：给 t118 加受支持的 `Level`/任务道具夹具，或由 owner
+  裁定把 `武士-0114` 的前置改成可声明。
+- **证据文件**：`E:/tmp/scriptcov/t118/`（`seed-scan.tsv`、`seed42-csharp.tsv`、
+  `seed42b-csharp.tsv`、`autoA/autoB/conf1/conf2-csharp.tsv` 的 head 与 movr 行；
+  大账本已删，只保留扫描/确认日志与 `武士-0114.txt.bak`）。
+
+---
+
 ## 1.6 分支随机（F1）：只能靠「两侧同 seed」，当前 `blocked`
 
 `[@rw01]` 的 `#act movr M3 3`（`武士-0114.txt:27`）随机 0..2，只有赢页有 `<打听[命运之刃]的下落/@rw02>`(:61)；
