@@ -1,7 +1,9 @@
 # 背包夹具按基线实表适配（`openmir2-window-inventory-fixture-adapt`，tier=L）
 
 - 卡：`openmir2-window-inventory-fixture-adapt`；分支 `card/window-inventory-fixture-adapt`；
-  执行者 openmir2-worker-76；基线 `walgit/master = 133c0f6a1`。
+  执行者 openmir2-worker-76；首发基线 `walgit/master = 133c0f6a1`；
+  **返工（review `a94e5dd2be`，reviewer openmir2-worker-5）后 rebase 到 `walgit/master = da519ab04`**
+  （window-profile-env-hardening 并入，card_window.py 零冲突重放）。
 - 写集：`tools/conformance/card_window.py`、`tools/hygiene/dynamic_count_allowlist.toml`、本文档。
 - 红线遵守：**零 ALTER**（全程只读取证：DESCRIBE / SHOW CREATE TABLE / SELECT）；
   mysqld（3306，pid 2580）全程未停未启；未写 `mir2_db` 任何数据；未改 `src/**`、`rules.json`。
@@ -60,7 +62,9 @@ window-run-1 `login_only`（帧+库后态全对拍）钉死 C# 同语义。同�
 
 **替代键方案**：`PlayerId = characters.Id`，由 profile 的 `char_name`/`account` 在 `characters`
 表上解析（`ChrName+LoginID` 唯一命中、`Deleted=0`——与魔法夹具同口径；表无 `Deleted` 列时按 0）。
-行键、占位检查、指纹检查、DELETE+INSERT、写后读回全部以 `PlayerId` 为键。
+唯一性是**运行期校验**（count>1 ⇒ rc=2），非 schema 约束：`characters(ChrName,LoginID)` 无唯一索引
+（`SHOW INDEX` 仅 `PRIMARY(Id)`，review F4 记录）。行键、占位检查、指纹检查、DELETE+INSERT、
+写后读回全部以 `PlayerId` 为键。
 
 `tools/conformance/card_window.py` 改动：
 
@@ -93,33 +97,41 @@ INV 牙锚点（`_check_db_pairing` 行、`if occ_n != 0:`、`if after["count"] 
 | rust × eat_item 声明 | mir2_test_db_r | 0 | updated | 1 | `13580, 41, 5002, 3, 1, 1` ✓ |
 
 前态：两侧 `characters_bagitem` 各 337640 行；写后各 337642 行（+2，只动声明槽位，指纹/行数
-门全过）。**恢复现场**：跑仓内既有 `E:/tmp/conformance/restore-baseline.sh` +
-`restore-baseline-r.sh`（drop+create+灌 baseline，共 6 库），复跑计数：两侧 bagitem 回 337640、
+门全过）。**恢复现场**：跑既有带外 restore 工具（`E:/tmp/conformance/restore-baseline.sh` +
+`restore-baseline-r.sh`；该目录不入 git，机制记载见
+`docs/runbook-tool-consistency-audit-20261023.md` §5 / `docs/needs-human-20261024.md`，
+drop+create+灌 baseline，共 6 库），复跑计数：两侧 bagitem 回 337640、
 `characters` 无 `invfix76`（两侧 COUNT=0）。mysqld（3306，pid 2580）全程在线未动。
 
-## 4. 回归与门禁（acceptance④⑤）
+## 4. 回归与门禁（acceptance④⑤；**rebase 到 da519ab04 后在最终代码上全部复跑**）
 
 | 项 | 结果 |
 |---|---|
 | `mir2_probe.py --selftest` | OK (13 checks) |
-| `card_window.py --selftest` | **GREEN 241/241**（改前 240/240，本卡 +1：④b） |
+| `compare_runs.py selftest` | **GREEN 293/293**（rebase 带入 ident=100 掩码等 master 增量） |
+| `card_window.py --selftest` | **GREEN 256/256**（并入 master da519ab04 后实跑；master 侧 selftest 增量 + 本卡 ④b 在内） |
 | `bag_equip --check-scenario`（`--var make_index=5001 takeon_where=1 item_name=x`） | **rc=0** |
 | `eat_item --check-scenario`（`--var make_index=5002 item_name=x`） | **rc=0** |
 | `card_window --dry-run`（alt profile，两场景） | rc=0，两侧各 1 行背包夹具预览 |
-| INV1–INV7（变异牙，最终代码重跑） | **7/7 全红** + 逐字节还原（restored sha256 == baseline）；其余 44 牙锚点不在本卡写集，未改动其锚文本 |
+| INV1–INV7（变异牙，rebase 后重跑） | **7/7 全红** + 逐字节还原（restored sha256 == baseline）；其余牙锚点不在本卡写集，未改动其锚文本 |
+| acceptance④ 真库写入/读回（rebase 后复跑） | **4/4 rc=0**（专属角色 invfix76，读回逐列相符），跑完带外 restore 复原：两侧 bagitem 回 337640、invfix76 清零；mysqld pid 2580 未动 |
 | `stale_pointer_gate.py` | rc=0 |
-| `dynamic_count_stamp_gate.py` | rc=0（master `133c0f6a1` 上即红 2 缺戳，见 §5） |
+| `dynamic_count_stamp_gate.py` | **rc=0（0 缺戳、0 ROT，扫 154 个 markdown）**——allowlist 已回 master 态（§5）；对照：master `da519ab04` 同命令亦 OK（0 缺戳） |
 | `conflict_marker_gate.py` | rc=0 |
 | `git diff --check` | rc=0 |
-| `git merge-tree --write-tree walgit/master HEAD` | 无冲突（rc=0） |
+| `git merge-tree --write-tree walgit/master HEAD` | 无冲突（rc=0；本分支已含 da519ab04，快进形态） |
 
-## 5. 带外登记：dynamic_count_allowlist +2 条（历史快照类）
+## 5. 返工记录：allowlist 两条撤销（review `a94e5dd2be` F1/F2）
 
-master `133c0f6a1` 上 `dynamic_count_stamp_gate` 本来就红（`docs/window-run-1-20261024.md`
-L53/L70 的当轮计分 `PASS 1 / FAIL 5 / UNDECIDABLE 12` 缺行内 24 字符快照戳；非本卡引入）。
-按该门禁「历史快照/引述」既有类（同 `docs/goal-gate-card-association-20261023.md` 条目口径）
-增补 2 条 allowlist（指纹由门禁 `--fingerprint` 生成，reason+added=2026-10-24）。
-未改该报告正文（改写历史计分即伪造历史）。
+首发曾在基线 `133c0f6a1` 上给 `tools/hygiene/dynamic_count_allowlist.toml` 增补 2 条
+「历史快照」条目（指向 `docs/window-run-1-20261024.md` L53/L70 的当轮计分
+「PASS 1 / FAIL 5 / UNDECIDABLE 12」缺行内快照戳）。review F1 实证：交付后 master 已由
+noise-mask 合并（`790c1c5f6` 并入 `085c31664`）给那两行补了快照戳（L53 `@ efb8c9314`、
+L70 `截至 efb8c9314`），行内容已变 ⇒ 首发的 2 条指纹在合并树上抑制零命中，按门禁自身
+定义判 ROT。**处置：2 条全部删除，allowlist 回到 master 态**；L53/L70 由 master 侧的
+快照戳自证，无需任何豁免。review F2 指出本报告此节原有行内反引号计分构成新的裸
+`FAIL` 计数缺戳（引述豁免只认「」/『』）⇒ 本节改用「」引述并在 §4 如实登记
+stamp gate 的最终实跑结果。
 
 ## 6. 残留物清单
 
