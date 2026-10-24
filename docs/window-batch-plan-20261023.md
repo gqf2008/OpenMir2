@@ -1,5 +1,10 @@
 # 窗口批次执行清单（2026-10-23）
 
+> **2026-10-25 口径同步**：本文件的历史计数（173/114/137/18 等）是 2026-10-23/24 快照；
+> **当前残余、四桶与 B 表重算见 `docs/rewrite-remaining-inventory-20261025.md`**（本文不再维护旧数）。
+> 窗口清单以 §7.4 为准：**11 行 / 17 场景（W1=17）**；`pickup_item` 已封存（见 §7.4 勾注），
+> run-3 执行清单 = `tools/window/run3-scenarios.json`（`tools/window/run_batch.sh`）。
+
 - 卡：`openmir2-window-batch-plan`；owner `openmir2-worker-66`；tier=L；write_set=`docs/`（零代码）
 - 基线：master `058c3ad25`；worktree `E:/tmp/wt-worker-66`，分支 `card/window-batch-plan`
 - 输入：全部 `refs/collab/inbox/*` 条目（6793 条，按 `git cat-file --batch` 直读，与 `walgit collab thread` 同源）、`docs/window-debt-reclass-20261023.md`、`docs/r-card-ledger-sweep-20261023.md`、`docs/conformance-a-card-scenario-map-20261023.md`、`docs/window-runbook-20261023.md` §4.5、`tools/probe/scenarios/*.json`（15 个）、`mir2-rs/tests/parity/m3/run_*_pair.ps1`（11 个）
@@ -472,7 +477,7 @@ python -I tools/goal/goal_gate.py --json
 
 ### 7.4 「现在就能跑」最小清单（现算）
 
-**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **11 行 / 17 个场景**。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中有 `combat_hit` / `combat_strike` / `pickup_item` 三个 `blocked`；最后一个见下方 2026-10-24 勾注）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item` 已由「场景自描述 `inventory`」（工具侧 `bb4317a01`、场景侧 `c4b66ddb1` 接通）移入本表，前置见行内（**profile 顶层 `inventory` 会被静默忽略，声明只能写在场景 JSON 里**）。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
+**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **11 行 / 17 个场景（W1=17）**；当前残余口径见 `docs/rewrite-remaining-inventory-20261025.md`，run-3 清单见 `tools/window/run3-scenarios.json`。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中有 `combat_hit` / `combat_strike` / `pickup_item` 三个 `blocked`；最后一个见下方 2026-10-24 勾注）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item` 已由「场景自描述 `inventory`」（工具侧 `bb4317a01`、场景侧 `c4b66ddb1` 接通）移入本表，前置见行内（**profile 顶层 `inventory` 会被静默忽略，声明只能写在场景 JSON 里**）。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
 | 场景 | `required` | 引用 T 行（现算） | 跑前还需 |
 |---|---|---:|---|
 | `login_only` | — | 14 | 角色预置位（场景可声明 `placement`） |
