@@ -3837,8 +3837,9 @@ def run_level_fixture(runner, side, prof, sc, level, env, side_dir, timeout=120)
         res["rc"] = 2
         return res
     argv = _mysql_argv(client)
-    res["_client"] = client
-    res["_argv"] = argv
+    # review：凭据（client.password / --password=… 的 argv）**不得进证据 dict**；
+    # 只放在内存 `_session`，写盘一律经 `level_evidence()` 过滤。
+    res["_session"] = {"client": client, "argv": argv}
     chr_name = str(prof.get("char_name") or "")
     login_id = str(prof.get("account") or "")
     if not chr_name or not login_id:
@@ -3902,14 +3903,30 @@ def run_level_fixture(runner, side, prof, sc, level, env, side_dir, timeout=120)
         return res
 
 
+def level_evidence(res):
+    """可落盘的等级夹具证据：剔除所有 `_` 前缀键（`_session` 含口令/argv），并二次脱敏。"""
+    if not res:
+        return res
+    out = {k: v for k, v in res.items() if not str(k).startswith("_")}
+    blob = json.dumps(out, ensure_ascii=False)
+    if "--password" in blob or '"password"' in blob:
+        # 理论上不会发生；防御性兜底，绝不把口令写进证据。
+        out["redacted"] = True
+        for k in list(out):
+            if isinstance(out[k], str) and "--password" in out[k]:
+                out[k] = _redact_argv([out[k]])[0]
+    return out
+
+
 def restore_level_fixture(runner, res, env, timeout=120):
     """停栈后把 `Level` 还原到写前值并**重读**校验；失败返回错误串（调用方升级 rc=2）。"""
     if not res or res.get("action") not in ("updated",):
         return None
     try:
-        client = res.get("_client")
+        sess = res.get("_session") or {}
+        client = sess.get("client")
         db = res.get("db")
-        argv = res.get("_argv")
+        argv = sess.get("argv")
         if not client or not db or not argv:
             return "等级夹具还原缺少连接信息"
         upd = ("UPDATE `%s`.`characters` SET `Level` = %d WHERE `Id` = %d;\n"
@@ -4135,6 +4152,7 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
     os.makedirs(db_dir, exist_ok=True)
 
     stack_attempted = False
+    level_state = None  # 等级夹具的内存态（含凭据）；落盘只用 level_evidence()
     try:
         # 1) 恢复基线
         restore_argv = expand_argv(sc["restore"], ctx)
@@ -4231,13 +4249,15 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             if fixtures_decl.get("level") is not None:
                 lres = run_level_fixture(runner, side, prof, sc, fixtures_decl["level"],
                                          env, side_dir)
+                level_state = lres
                 try:
-                    write_json_file(os.path.join(side_dir, "level.json"), lres)
+                    write_json_file(os.path.join(side_dir, "level.json"),
+                                    level_evidence(lres))
                 except OSError as e:
                     lres["error"] = ((lres.get("error") or "") + "；写 level.json 失败：%s"
                                      % e).strip("；")
                     lres["rc"] = 2
-                res["level"] = lres
+                res["level"] = level_evidence(lres)
                 if lres.get("rc") != 0:
                     res["error"] = lres.get("error") or "等级夹具失败"
                     return res
@@ -4421,7 +4441,7 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                     res["rc"] = 2
         # 8c) 还原等级夹具（DB）：停栈后把 Level 写回并**重读**校验；失败该侧 rc=2。
         if res.get("level"):
-            lerr = restore_level_fixture(runner, res["level"], env)
+            lerr = restore_level_fixture(runner, level_state, env)
             res["level"]["restore_error"] = lerr
             try:
                 write_json_file(os.path.join(side_dir, "level.json"), res["level"])
@@ -6853,6 +6873,21 @@ def _selftest_level_fixture(tmp):
                     and restored is None and "level.restore" in r.tags
                     and "level.restore_verify" in r.tags,
                     "LEVEL3 生产路径：写前 1 -> 写 43 -> 读回 43；停栈后还原并重读为 1"))
+
+        # LEVEL 牙6（review Minor）：凭据不得进证据 dict / level.json
+        globals()["placement_db_client"] = lambda prof_, side_: {
+            "mysql": [DEFAULT_MYSQL], "host": "127.0.0.1", "port": 3306,
+            "user": "root", "password": "SECRETPW"}
+        r_sec = _R()
+        res_sec = run_level_fixture(r_sec, "csharp", prof, sc, 43, {}, tmp)
+        ev = level_evidence(res_sec)
+        blob = json.dumps(ev, ensure_ascii=False)
+        raw_blob = json.dumps(res_sec, ensure_ascii=False, default=str)
+        out.append(("_session" in res_sec and "_session" not in ev
+                    and "SECRETPW" not in blob and "--password" not in blob
+                    and "SECRETPW" in raw_blob,
+                    "LEVEL 牙6 凭据只留在内存 _session：level_evidence/level.json 不含 "
+                    "--password/SECRETPW（原始 res 里确有此值，证明牙有效）"))
 
         r_noop = _R(read_level=43)
         noop = run_level_fixture(r_noop, "csharp", prof, sc, 43, {}, tmp)
