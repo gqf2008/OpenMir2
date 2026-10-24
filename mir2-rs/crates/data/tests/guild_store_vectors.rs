@@ -18,6 +18,7 @@
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use mir2_data::guild::{
     get_valid_str3, parse_guild_file, serialize_guild_file, GuildConfValues, GuildFileBody,
@@ -77,11 +78,53 @@ fn gbk(s: &str) -> Vec<u8> {
     mir2_encoding::encode_gb2312_dotnet(s)
 }
 
-fn tmp_root(tag: &str) -> PathBuf {
-    let base = std::env::temp_dir().join(format!("m3-guild-store-{}-{tag}", std::process::id()));
-    let _ = fs::remove_dir_all(&base);
-    fs::create_dir_all(base.join("GuildBase/Guilds")).unwrap();
-    base
+static TEMP_SEQ: AtomicU64 = AtomicU64::new(0);
+
+/// 用例级唯一临时根 + RAII 清理（并发安全化，卡 `openmir2-test-db-concurrency-isolation`）。
+///
+/// 旧实现 `%TEMP%/m3-guild-store-{pid}-{tag}` 有三处并发隐患（设计文档 §17.1「门禁必须同一
+/// 命令重复得同一结论」的 WorldMaps 前科同族）：① 目录名只用 pid——跨时刻 pid 复用会撞上一
+/// 次运行残留的陈树；② 开头 `let _ = remove_dir_all` 吞错——高负载下可能半途失败，旧文件残
+/// 留会打破「名单文件不存在 / 名单逐字节」类断言；③ 无用后清理（实测 %TEMP% 积了 3990 棵
+/// `m3-guild-store-*` 残树，放大 AV 扫描面）。新口径照仓内既有惯例（`game-svr/tests/
+/// support::unique_temp_dir` 的 `pid + 原子计数`、`TempDirGuard` 的 RAII、`next_port` 的有界
+/// 重试）：目录名 = `tag + pid + 进程内原子序号 + 纳秒时戳`——同进程用例间靠 `seq`、同刻多
+/// 跑者靠 `pid`、跨时刻 pid 复用靠 `nanos`，三重互异 ⇒ 建好即净、无需先删任何旧目录；建失败
+/// 按有界重试兜住瞬时文件锁（负载尖峰下 AV/索引器的短暂占用），真失败照常炸出、不吞。
+struct TempRoot(PathBuf);
+
+impl std::ops::Deref for TempRoot {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn tmp_root(tag: &str) -> TempRoot {
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos());
+    let base = std::env::temp_dir().join(format!(
+        "m3-guild-store-{tag}-{}-{seq}-{nanos}",
+        std::process::id()
+    ));
+    let mut created = fs::create_dir_all(base.join("GuildBase/Guilds"));
+    for _ in 0..2 {
+        if created.is_ok() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        created = fs::create_dir_all(base.join("GuildBase/Guilds"));
+    }
+    created.expect("建用例临时根失败（重试 2 次后仍失败）");
+    TempRoot(base)
 }
 
 fn store_for(root: &Path) -> GuildStore {
