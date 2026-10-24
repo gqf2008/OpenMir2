@@ -44,7 +44,7 @@ CSHARP_STACK_GREEN
 1	INJECT_OK	42	0
 SEED_PROBE 1434747710 302596119 269548474 1122627734 361709742 563913476 1555655117 1101493307
 1	Next(max)	1500	1002	M2Server.Actor.BaseObject..ctor@BaseObject.cs:438
-2	Next(max)	2000	281	M2Server.Actor.AnimalObject..ctor@AnimalObject.cs:75
+2	Next(max)	2000	281	M2Server.Actor.BaseObject..ctor@BaseObject.cs:441
 ```
 
 - 行数 **3,469,374**；**每行 5 列且 site 非空**（3,469,372 行含 site）。
@@ -104,3 +104,8 @@ awk -F'\t' 'NF>=5 && $5!="" {n++} END{print n}' <ledger>
 - 账本增长快（空闲 NPC RNG 也记）：窗口只对需要 RNG 的一侧开 `--rng-log`，跑完及时停栈并归档
   head+hash；大文件不要留在磁盘。
 - C# 时钟注入仍未实现（本卡只接 RNG 种子）；`SaveTick` 等时序降级口径见 runbook §0.7。
+- **reviewer-21 独立复跑快照**（2026-10-25 05:56:42，`start-csharp.ps1 -Seed 42 -RngLog`）：
+  `lines=2237185 rows_with_site=2237183`、sha256 `1b8947a9d79afd1f35dac1244fb047891444dfa11c2ec25d39c80828ff32374a`；
+  头 4 行同 `INJECT_OK 42` + `SEED_PROBE` + `1002/281`，第二抽 site 实测为 `BaseObject.cs:441`。
+  原始件：`E:/tmp/scriptcov/reviewer21-rng/reviewer21-evidence.txt`。本仓自己的大账本已在取证后删除，
+  两份证据均只保留 head+hash+行数（磁盘纪律：账本增长速度以百万行/十分钟计）。
