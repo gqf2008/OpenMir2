@@ -5390,8 +5390,8 @@ fn apply_merchant_tax_to_world(
 ) {
     let cfg = shop_castle_tax_config(shop_cfg);
     let tick_ms = world.clock_ms;
-    let _ =
-        game_svr::shop::apply_merchant_tax(&mut world.castles, castle_index, intent, &cfg, tick_ms);
+    let posting = game_svr::shop::posting_for(intent.as_ref(), castle_index);
+    let _ = game_svr::shop::apply_merchant_tax(&mut world.castles, posting, &cfg, tick_ms);
 }
 
 /// 武器升级的税（`Merchant.cs:546-554`）：在 `DecGold(UpgradeWeaponPrice)` 之后立刻收。
