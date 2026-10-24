@@ -173,12 +173,15 @@
     实例二：本仓的常驻认领车道就挂在 `openmir2-worker-24` 上（`OpenMir2-wt-cronclaim`），
     再派同 principal 的第二条车道，账本里**无法区分谁认领、谁交付**（同 identity、同 worktree）。
     ⇒ 派单文本固定写一句：「**开工前再读线程；若已有更新 head，就在其上快进，别另起竞争 head**」。
-    阈值口径（与规则 19 对齐）：最后一条 `verified=true` 的 entry 是 `patch`/`status` 且
+    阈值口径（与规则 19 对齐）：**`entry.ts` 最大**的那条 `verified=true` entry 是 `patch`/`status` 且
     **age < 180s ⇒ `HOT`**（几乎确定在写，停手）；**180–600s ⇒ `WARM`**（按规则 19 的 600s 上限判「可能在做」，先问）；
     **>600s ⇒ `COLD`** 才可派。**180s 是「刚写过」的强信号，600s 是规则 19 的派单上限（180 ⊂ 600）。**
-    **自检（可复制；HOT 时 exit 1，且只看 `verified=true`）**：
+    **「最新」一律按 `entry.ts` 取 `max`，不按输出位置**：`walgit collab thread` 的输出序**不是**时间序契约——
+    本线程在 `f1c9d6d33` 处就有兄弟分叉（`70ff66ef0` 与 `c3bf50a7d` 同为 `ts=1792808228`），谁落在 `[-1]` 取决于遍历顺序。
+    空列表（含「无 `verified=true`」）必须 `exit 2`（判不了），不许 traceback。
+    **自检（可复制；HOT 时 exit 1，空/无 verified 时 exit 2）**：
     ```sh
-    walgit collab thread <card> | python -I -c "import json,sys,time;t=json.load(sys.stdin);e=[x for x in t if x.get('verified') is True][-1]['entry'];age=int(time.time())-int(e['ts']);state='HOT' if age<180 else ('WARM' if age<600 else 'COLD');print(e['kind'],e['ts'],'age=%ds'%age,state);sys.exit(1 if state=='HOT' and e['kind'] in ('patch','status') else 0)"
+    walgit collab thread <card> | python -I -c "import json,sys,time;v=[x for x in json.load(sys.stdin) if x.get('verified') is True];not v and (print('no verified entry'),sys.exit(2));e=max(v,key=lambda x:int(x['entry']['ts']))['entry'];age=int(time.time())-int(e['ts']);state='HOT' if age<180 else ('WARM' if age<600 else 'COLD');print(e['kind'],e['ts'],'age=%ds'%age,state);sys.exit(1 if state=='HOT' and e['kind'] in ('patch','status') else 0)"
     ```
 
 23. **豁免/降级必须受检，否则就是新的假绿通道**（2026-10-24，一天内两例）：
@@ -208,8 +211,15 @@
     实例二（真实「错→对」）：中文正则用字节 `grep -P` 会**静默少报**：同一模式 `尚未.{0,6}inventory`
     （排除本报告自身）裸 `grep -rnP` 得 **1** 行，加 `LC_ALL=C.UTF-8`（或 `(*UTF)`）得 **3** 行
     （正确写法见 `docs/docs-post-18-sweep-20261024.md:30-31`）。
-    实例三（真实「错→对」）：`git rev-parse <sha>^2` 在 **cmd.exe** 里 `^` 是转义符，会被吞成
-    `ambiguous argument '<sha>2'`；对：加引号 `git rev-parse '<sha>^2'`（或写 `~2`）。
+    实例三（真实「错→对」）：`git rev-parse <sha>^2` 在 **cmd.exe** 里有**两个**坑，两轮返工才收干净：
+    ① `^` 是 cmd 的转义符，不带引号时被吞，`e9d00c6b3^2` 变成 `ambiguous argument 'e9d00c6b32'`（rc=128）；
+    ② **cmd 里单引号不是引号**——`git rev-parse 'e9d00c6b3^2'` 同样被吞成 `'e9d00c6b32'`、同样 rc=128，
+    第一版「对」例写的正是单引号，**等于没修**（I-4）。
+    对：**双引号** `git rev-parse "e9d00c6b3^2"` ⇒ `56cf6affa0a8f40bbf692786852543926ff4ffb5`，rc=0（实测，见下自检）。
+    **`~2` 不是 `^2`**：`^2` = 第二父（`56cf6affa`），`~2` = 第一父走两次（`dc6e96995`）——照抄会**静默拿到另一个 commit**，
+    正是本规则要防的漂移，所以此处**不能**用 `~2` 代替。
+    另注意：**双引号 + 双脱字符 `"^^2"` 解析到第三个 commit** `17e6a3abd`（引号内 `^` 不转义，git 收到的是 `^^2`）；
+    **不带引号的 `^^2`** 才被 cmd 吃成一个 `^` 后正常解析成 `56cf6affa`——**「双引号 + 单 `^`」或「不加引号 + `^^`」二选一，别混用**。
     **反面教材**：不要把 `tail -1` 与 `--reverse | head -1` 当作「错→对」——对 `git log` 两者**等价**
     （`--reverse` 只反转输出顺序、不改选择集），实测三个区间输出完全相同。
     ⇒ 中文一律走 Python unicode `re`（或 `grep -P '(*UTF)'`）；顺序敏感处写清「取最旧 / 最新」；
@@ -223,12 +233,22 @@
     EX="--exclude=docs-post-18-sweep-20261024.md --exclude=leader-queue-20261023.md --exclude=dynamic-count-stamp-gate-20261024.md"  # 排除「描述该模式」的三份文档
     grep -rnP $EX '尚未.{0,6}inventory' docs/ | wc -l             # 1（少报）
     LC_ALL=C.UTF-8 grep -rnP $EX '尚未.{0,6}inventory' docs/ | wc -l   # 3
-    git rev-parse 'e9d00c6b3^2'    # 对：带引号；cmd.exe 里不带引号会被吞成 '...2'
     # PowerShell 单对象 .Count：5.1 空、7 得 1；接 Measure-Object 两壳都得 1
     powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }).Count"
     pwsh       -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }).Count"
     powershell -NoProfile -Command "(@(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }) | Measure-Object).Count"
     pwsh       -NoProfile -Command "(@(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }) | Measure-Object).Count"
+    ```
+    **cmd.exe 逐字执行**（实例三的四条；`cmd` 没有 `#` 注释，故单列成 `bat` 块，整块粘进 `cmd.exe` 即可）：
+    ```bat
+    REM 错：^ 是 cmd 的转义符，被吞 → fatal: ambiguous argument 'e9d00c6b32'      rc=128
+    git rev-parse e9d00c6b3^2
+    REM 也错：cmd 里单引号不是引号，^ 照样被吞                                      rc=128
+    git rev-parse 'e9d00c6b3^2'
+    REM 对：双引号 → 56cf6affa0a8f40bbf692786852543926ff4ffb5                     rc=0
+    git rev-parse "e9d00c6b3^2"
+    REM 不是 ^2：~2 = 第一父走两次 → dc6e969958cba05b2593a3100d8412c022118c2b（静默另一个 commit）
+    git rev-parse "e9d00c6b3~2"
     ```
 
 ## 2. 正在跑（每次巡检更新）
