@@ -215,8 +215,11 @@ CARD_PENDING_RE = re.compile("|".join(re.escape(w) for w in CARD_PENDING_WORDS))
 # that output is not read as a live "the card is still unmerged" claim.  A
 # pending-word match lying inside one of these spans is skipped (reviewer-3
 # finding I-1 on e5c9f169c: these were the two false reds that the same-cell
-# rule used to hide).  The spans apply to the card class only; a hash + word
-# pair is still judged by the hash class (selftest pins that boundary).
+# rule used to hide).  Both candidate classes consume the table: the card class
+# in ``candidate_cards`` and, since the hash class gained the same filter, the
+# pointer class in ``candidate_pointers`` (a statistic label next to a commit
+# hash is equally not a live "still unmerged" claim).  A *real* pending word on
+# the same line still pairs in both classes (selftest ⑰c / ⑰f pin that).
 NOT_ASSERTIVE = ("含未合并", "其中未合并", "另未合并", "未接线", "未接入")
 
 # The repo's two correction-marker spellings: 〔…订正…〕 and "YYYY-MM-DD 订正",
@@ -367,14 +370,25 @@ def nearest_pending(line, start, end, quote_spans):
 
 
 def candidate_pointers(line, max_gap):
-    """Return [(hash, word, gap)] for pointers close to an unfinished word."""
+    """Return [(hash, word, gap)] for pointers close to an unfinished word.
+
+    The hash class consumes the same NOT_ASSERTIVE literal table as the card
+    class: a statistic-row label (含未合并 / 其中未合并 / 另未合并 / …) is a
+    category, not this line's own "still unmerged" claim, so a pending word
+    inside one of those spans is skipped exactly like a quoted word
+    (goal_gate's 2026-10-24 comparison table puts a hash and
+    "（另未合并 2）" on one line — without this filter that verbatim row is a
+    false red).  A *real* pending word (未合入 / 未合并 bare of a label) on the
+    same line still pairs and stays red.
+    """
     quote_spans = [(m.start(), m.end()) for m in QUOTE_RE.finditer(line)]
+    skip_spans = quote_spans + _literal_spans(line, NOT_ASSERTIVE)
     out = []
     for match in HASH_RE.finditer(line):
         token = match.group(1)
         if not HAS_HEX_LETTER.search(token):
             continue
-        near = nearest_pending(line, match.start(), match.end(), quote_spans)
+        near = nearest_pending(line, match.start(), match.end(), skip_spans)
         if near is not None and near[1] <= max_gap:
             out.append((token, near[0], near[1]))
     return out
@@ -1614,7 +1628,8 @@ def selftest():
         )
         # goal_gate's 2026-10-24 wording 「另未合并」: a verbatim statistic line
         # must not pair as a card assertion; the same line with a real pending
-        # word must still be red; and the hash class is intentionally unchanged.
+        # word must still be red; and the hash class applies the same filter
+        # (selftest ⑰b-⑰f).
         _write(
             os.path.join(repo, "docs", "cardspan", "span.md"),
             "| `openmir2-synthetic-closed` | 未接线，且未合并 |\n",
@@ -1630,6 +1645,25 @@ def selftest():
         _write(
             os.path.join(repo, "docs", "newwordhash", "hash.md"),
             "| window_required 131（另未合并 2） | `%s` |\n" % merged,
+        )
+        # Same shape with the older label spelling: hash + （含未合并 2） is a
+        # statistic row, not a stale-pointer assertion (reviewer finding: the
+        # hash class must consume NOT_ASSERTIVE like the card class).
+        _write(
+            os.path.join(repo, "docs", "newwordhashstat", "hash.md"),
+            "| window_required 131（含未合并 2） | `%s` |\n" % merged,
+        )
+        # The boundary that keeps the filter honest: a hash next to a *real*
+        # pending word on the same line is still a stale pointer.
+        _write(
+            os.path.join(repo, "docs", "newwordhashred", "hash.md"),
+            "| 窗口未合入 2 | `%s` |\n" % merged,
+        )
+        # Span-level, never whole-line (hash-class twin of ㉜): a label on the
+        # line does not veto a *real* pending word further out on the same line.
+        _write(
+            os.path.join(repo, "docs", "newwordhashspan", "hash.md"),
+            "| 窗口未合并 2（其中未合并 1） | `%s` |\n" % merged,
         )
         # A card the board projection does not list: only snapshot/inbox know it.
         _write(
@@ -2064,10 +2098,59 @@ def selftest():
             and newword_red["card_hits"][0]["state"] == "closed",
         )
         check(
-            "⑰d 边界：hash 类不消费该字面表 ⇒ hash + 另未合并 仍红（本次只扩卡类）",
-            newword_hash["rc"] == 1
-            and len(newword_hash["hits"]) == 1
-            and newword_hash["hits"][0]["word"] == "未合并",
+            "⑰d 反转：hash 类同样消费字面表 ⇒ hash + 另未合并 不判红（旧行为是假红，本卡修掉）",
+            newword_hash["rc"] == 0
+            and not newword_hash["hits"]
+            and not newword_hash["card_hits"],
+        )
+        # Same filter, older label spelling: the hash sits next to a
+        # statistic-row category, not next to this line's own claim.
+        newword_hashstat = scan(
+            repo,
+            "docs/newwordhashstat",
+            ref,
+            load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP,
+            ledger,
+        )
+        check(
+            "⑰e hash + （含未合并 2）同行是统计行 ⇒ 不判红（hash 类与卡类同权豁免）",
+            newword_hashstat["rc"] == 0
+            and not newword_hashstat["hits"]
+            and not newword_hashstat["card_hits"],
+        )
+        # The boundary that keeps the table from becoming a blanket exemption:
+        # a hash next to a *real* pending word on the same line stays red.
+        newword_hashred = scan(
+            repo,
+            "docs/newwordhashred",
+            ref,
+            load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP,
+            ledger,
+        )
+        check(
+            "⑰f 边界：hash + 真断言（未合入）同行 ⇒ 仍红（字面表不是万能豁免）",
+            newword_hashred["rc"] == 1
+            and len(newword_hashred["hits"]) == 1
+            and newword_hashred["hits"][0]["hash"] == merged
+            and newword_hashred["hits"][0]["word"] == "未合入",
+        )
+        # Span-level, never whole-line, hash class too: the（其中未合并 1）label
+        # must not veto the real 未合并 further out on the same line.
+        newword_hashspan = scan(
+            repo,
+            "docs/newwordhashspan",
+            ref,
+            load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP,
+            ledger,
+        )
+        check(
+            "⑰g span 级语义（hash 类）：（其中未合并 1）不否决同行真断言 未合并 ⇒ 仍红（整行否决变异必红）",
+            newword_hashspan["rc"] == 1
+            and len(newword_hashspan["hits"]) == 1
+            and newword_hashspan["hits"][0]["word"] == "未合并",
         )
 
         # ---- carried #38: the exclusion is span-level, never whole-line
