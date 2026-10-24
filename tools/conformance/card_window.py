@@ -420,6 +420,38 @@ BUILTIN_PROFILES["window-magic"] = _derived_magic_profile(
      "（卡 `openmir2-window-profile-magic-preset`）。"),
 )
 
+
+def _derived_testdb_profile(base, name, description):
+    """构造「alt + C# 侧显式指向测试库」的内置 profile（卡 `openmir2-window-profile-testdb-preset`）。
+
+    只加数据、不加判定逻辑：C# 侧 ``db.preset=test`` / ``db.characters_db=mir2_test_db``
+    走既有 profile 通道，Rust 侧沿用 alt 的 ``mir2_test_db_r``。
+    **不改 `alt` 默认值**：alt 是 18 个场景的既有基线，动它会让所有场景的输入一起变。
+    **不削弱生产库守卫**：``check_profile_safety`` 的 ``prod(...)`` 检查一字不动；
+    本 profile 只是让输入展开后的库名落到 test，从而不再命中守卫。
+    """
+    prof = copy.deepcopy(base)
+    prof["name"] = name
+    prof["description"] = description
+    cs = prof["sides"]["csharp"]
+    db = dict(cs.get("db") or {})
+    db["preset"] = "test"
+    db["characters_db"] = "mir2_test_db"
+    cs["db"] = db
+    return prof
+
+
+BUILTIN_PROFILES["window-testdb"] = _derived_testdb_profile(
+    BUILTIN_PROFILES["alt"],
+    "window-testdb",
+    ("alt 的副本 + C# 侧显式指向测试库（`db.preset=test` / "
+     "`db.characters_db=mir2_test_db`，Rust 侧沿用 `mir2_test_db_r`）。"
+     "让 `upgrade_retrieve` / `equip_struck_save` / `bag_equip` / `eat_item` / "
+     "`npc_script_chain` 这 5 个带预置位的场景在开窗前即可 dry-run 通过"
+     "（卡 `openmir2-window-profile-testdb-preset`）。"
+     "**仅指向测试库；真跑会写测试库，绝不可用于生产。**"),
+)
+
 PROD_DB_RE = re.compile(r"(?<![A-Za-z0-9_])mir2_(db|account|data)(?![A-Za-z0-9_])", re.I)
 PROD_LOGIN_RE = re.compile(r"database\s*=\s*Mir2(?![A-Za-z0-9_])", re.I)
 
@@ -6090,6 +6122,51 @@ def selftest():
             and "stack" not in [c["step"] for c in s_inv["commands"]],
             "⑰ execute 读 res['inventory']：失败 => summary 记证据、rc=2、不起栈（%r）"
             % (((cs_inv.get("inventory") or {}).get("error") or "")[:80],))
+
+        # 22) 内置 profile `window-testdb`（卡 openmir2-window-profile-testdb-preset）：
+        #     alt 的副本 + C# 侧显式指向测试库 ⇒ 5 个带预置位的场景不再命中生产库守卫。
+        #     断言的是「输入不命中守卫」，**不是**「守卫放过」：守卫代码一字未动。
+        try:
+            wtd = load_profile("window-testdb")
+            wtd_cs = (wtd["sides"]["csharp"].get("db") or {})
+            wtd_rs = (wtd["sides"]["rust"].get("db") or {})
+            wtd_ok = (wtd_cs.get("preset") == "test"
+                      and wtd_cs.get("characters_db") == "mir2_test_db"
+                      and classify_db_name(wtd_cs.get("characters_db")) == "test"
+                      and classify_db_name(wtd_rs.get("characters_db")) == "test")
+            # 非 dry-run、不容许生产库：若仍命中守卫会抛 ConfigError ⇒ 断言失败。
+            check_profile_safety(wtd, False, dry_run=False)
+            wtd_err = ""
+        except ConfigError as exc:
+            wtd_ok, wtd_err = False, str(exc)
+        chk(wtd_ok, "22) 内置 window-testdb：C# 侧 test 库(mir2_test_db) + Rust 侧测试库，"
+            "且不触发生产库守卫 %s" % wtd_err)
+
+        # 22b) 钉子：钉住 `_derived_testdb_profile` 里那两行**显式赋值**（返工项，reviewer-5 变异 B）。
+        #     为什么不能只比值：`alt` 的 `sides.csharp.db` 本来就是
+        #     {preset: test, characters_db: mir2_test_db}，所以「删掉两行、退化成纯别名」
+        #     在最终 dict 上与现在**逐键相同** —— 只断言 load_profile("window-testdb") 的值，
+        #     把赋值删了也照样 GREEN。牙必须打在构造器的**行为**上。
+        #     做法：给构造器一个 C# 侧指向生产库的合成基线，输出仍必须被那两行强制改写成
+        #     test / mir2_test_db（删掉任一行 ⇒ 输出保留该键的生产库值 ⇒ 本断言红）；
+        #     同时基线本身不得被改动（deepcopy），且内置条目确实是该构造器作用于 `alt` 的产物。
+        synth_base = {"name": "synth-base", "description": "",
+                      "sides": {"csharp": {"db": {"preset": "prod",
+                                                  "characters_db": "mir2_db"}},
+                                "rust": {"db": {"characters_db": "mir2_test_db_r"}}}}
+        synth_out = _derived_testdb_profile(synth_base, "synth-out", "selftest")
+        synth_db = synth_out["sides"]["csharp"]["db"]
+        wtd_builtin_db = (BUILTIN_PROFILES["window-testdb"]["sides"]["csharp"].get("db") or {})
+        from_alt_db = (_derived_testdb_profile(BUILTIN_PROFILES["alt"], "probe", "probe")
+                       ["sides"]["csharp"]["db"])
+        chk(synth_db.get("preset") == "test"
+            and synth_db.get("characters_db") == "mir2_test_db"
+            and synth_base["sides"]["csharp"]["db"]
+            == {"preset": "prod", "characters_db": "mir2_db"}
+            and wtd_builtin_db == from_alt_db,
+            "22b) `_derived_testdb_profile` 的两行显式赋值仍在且取值正确："
+            "生产库基线也被强制改写成 test / mir2_test_db、基线不被改、内置条目确为该构造器产物"
+            "（实际 %r / %r）" % (synth_db, wtd_builtin_db))
 
     finally:
         holder.close()
