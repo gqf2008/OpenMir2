@@ -8027,20 +8027,33 @@ fn handle_eat_cmd(
         return;
     };
     let actor_id = sg.actor_id;
+    // **死亡态**（review `9fed9ade26` D8，卡 `openmir2-spell-fill-projection-mirror`）：
+    // oracle `ClientUseItems` 的门是 `if (BoCanUseItem) { if (!Death) {…} }`
+    // （`PlayObject.Operate.cs:601-608`）⇒ 死亡时**整条用药路拒绝**（只落
+    // `SM_EAT_FAIL(636)`，`WAbil` 不动）；M3 夹具 `eat_fail_dead` 已钉该语义。
+    // 线路顺序（`sim_loop`：命令排水 → `tick_head`/P21 → `tick_tail` 死亡结算）
+    // ⇒ 死亡后的下一轮命令排水里 `entity.hp=0` 而投影仍是上一 P21 的旧值；
+    // 不接线 `dead` 时 `use_item` 照常回血，再经下方回写把假值写进实体（死体复活）。
+    let dead = world.entities.get(actor_id).is_some_and(|e| e.death);
     // **卡 `openmir2-gm-script-exec-seams`**：`PlayObject.Base.cs:1072 UseStdModeFunItem`
     // ——`StdMode 31` 且 `AniCount != 0` 时先跑 `QFunction` 的 `@StdModeFunc<N>`（脚本里
     // 大批 `GMEXECUTE showeffect/MOBFIREBURN`），再按返回值决定是否吃（oracle
     // `Operate.cs:660-673` 的顺序）。`FunctionNPC == null` ⇒ 不吃（`use_item` 的
     // `function_npc_present` 同源）。
     let function_npc_present = npc_host.is_some_and(|h| h.has_function_npc());
-    let std_mode_fun = sg
-        .state
-        .item_list
-        .iter()
-        .find(|it| it.make_index == recog)
-        .and_then(|it| catalog.get(it.index))
-        .filter(|tpl| tpl.std_mode == 31 && tpl.ani_count != 0)
-        .map(|tpl| tpl.ani_count);
+    // 死亡 ⇒ oracle 的 item 循环整体不进入（见上 `dead`）⇒连 StdMode 31 的
+    // `@StdModeFunc<N>` 脚本前置步也不跑；用 `dead` 短路 `std_mode_fun` 即可。
+    let std_mode_fun = if dead {
+        None
+    } else {
+        sg.state
+            .item_list
+            .iter()
+            .find(|it| it.make_index == recog)
+            .and_then(|it| catalog.get(it.index))
+            .filter(|tpl| tpl.std_mode == 31 && tpl.ani_count != 0)
+            .map(|tpl| tpl.ani_count)
+    };
     if let (Some(ani), true, Some(host)) = (std_mode_fun, function_npc_present, npc_host) {
         run_std_mode_func_script(
             i32::from(ani),
@@ -8108,8 +8121,10 @@ fn handle_eat_cmd(
         catalog,
         // `BoCanUseItem` 在 oracle 初生即 true（`PlayObject.cs:961`）；运行期置位未建模 ⇒ 恒 true（登记）。
         can_use_item: true,
-        // `Death` 未建模（在线即活）⇒ false（登记）。
-        dead: false,
+        // `Death`（`PlayObject.Operate.cs:601-608`）：从实体取真实死亡态
+        // （review `9fed9ade26` D8 接线；旧值恒 false 已过时）⇒ 死亡时
+        // `use_item` 走 oracle 的拒绝分支（不吃、只落 636）。
+        dead,
         actor_id,
         // `ClientUseItems(processMsg.nParam1, ...)`：`make_index` 取自 12B 头 `Recog`。
         make_index: recog,
@@ -8146,9 +8161,16 @@ fn handle_eat_cmd(
     // `sg.state.wabil.hp/mp = e.hp/mp`）把吃药恢复擦回实体旧值（reviewer 反例牙：药后
     // 投影 (15,15)、实体 (5,5)、P21 后 (5,5)；oracle 应 (15,15)）。沿「每个写点同步」
     // 教义 hp/mp 双侧镜像；实体缺席（纯函数测试夹具）⇒ 保持原样（guard）。
-    if let Some(e) = world.entities.get_mut(actor_id) {
-        e.hp = sg.state.wabil.hp;
-        e.mp = sg.state.wabil.mp;
+    // **门：只有本次用药确实成功（`out.eaten`）才回写实体**（review `9fed9ade26` D8）：
+    // 死亡拒绝与失败分支不改 `WAbil`（`use_item` 的 `if !ctx.dead` / 各拒绝支），
+    // 而此时会话投影可能是上一 P21 的旧值（命令排水先于 P21）⇒ 无条件回写会把
+    // 旧投影覆盖进实体（死体（hp=0）被写成投影旧值 = 复活，且越过 P21 持久化）。
+    // oracle 单份 `WAbil` 的 `!Death` 拒绝路不产生任何写点 ⇒ 镜像同样不该执行。
+    if out.eaten {
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.hp = sg.state.wabil.hp;
+            e.mp = sg.state.wabil.mp;
+        }
     }
 
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "用药回帧") else {
@@ -50386,6 +50408,207 @@ SendRefMsgRange=15
             rec.data.abil.as_ref().expect("abil").mp,
             140,
             "存档 MP=140（修复前落库 20）"
+        );
+    }
+
+    /// **卡 `openmir2-spell-fill-projection-mirror` 回归测试（tier R）· D8（review `9fed9ade26`）**：
+    /// 死亡 + CM_EAT ⇒ oracle 整条拒绝（`PlayObject.Operate.cs:601-608` 的 `!Death` 门：
+    /// 只落 `SM_EAT_FAIL(636)`，`WAbil` 不动；M3 夹具 `eat_fail_dead` 已钉该语义）。
+    ///
+    /// 生产相位（`sim_loop`）：命令排水先于 `tick_head`/P21，死亡结算在上一轮 `tick_tail` ⇒
+    /// 死体包到本函数时 `entity=(0,0)/death=true` 而会话投影仍是上一 P21 的旧值
+    /// （本用例用陈旧投影 (50,60) 加压，覆盖「无条件镜像把旧投影写回实体」的复活面）。
+    /// 修复前（`dead: false` 接线 + 无条件镜像）：`use_item` 照常回血并镜像进实体 ⇒ P21 每
+    /// tick 传播、`build_save_record` 读投影 ⇒ 死亡角色被存档成 HP=30。
+    /// 修复后：`dead` 从实体接入（`use_item` 走 oracle 拒绝分支）+ 镜像以 `out.eaten` 为门。
+    ///
+    /// 红检（牙⑤，实测后还原）：把 `dead` 接线改回 `false` ⇒ 药被吃下（635/53）、实体被写成
+    /// (30,40)、落库 HP=30 ⇒ 本用例红。
+    #[test]
+    fn eat_dead_rejected_636_entity_stays_zero_and_p21_heals_projection() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        const SM_EAT_OK: u16 = mir2_protocol::messages::SM_EAT_OK;
+        const SM_EAT_FAIL: u16 = mir2_protocol::messages::SM_EAT_FAIL;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        // 冻结内容 `sql/mir2_data.sql:1013` 太阳水（StdMode=0、Shape=1、AC=30、MAC=40）。
+        catalog.insert(
+            101,
+            mir2_data::StdItem {
+                name: "太阳水".into(),
+                std_mode: 0,
+                shape: 1,
+                ac: 30,
+                mac: 40,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let mut ent = new_player_entity("hero".to_string(), 5, 5);
+        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let actor = world.enter_map("hero", ent, 0).expect("进图");
+        world.tick();
+        {
+            // 死亡结算后的实体：HP/MP 归零、death=true（`tick_tail` 的 Die 段）。
+            let e = world.entities.get_mut(actor).expect("实体在图");
+            e.hp = 0;
+            e.mp = 0;
+            e.max_hp = 100;
+            e.max_mp = 200;
+            e.death = true;
+        }
+        let mut sg = test_session_ground(actor);
+        // 陈旧投影（上一 P21 的旧值）：命令排水先于本 tick 的 P21。
+        sg.state.wabil.hp = 50;
+        sg.state.wabil.mp = 60;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 200;
+        sg.state.item_list = vec![game_svr::bag::BagItem {
+            make_index: 1001,
+            index: 101,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        }];
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &cfg,
+            pwd_sessions: &pwd,
+        };
+        handle_eat_cmd(
+            1001,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            None,
+            &unbind,
+            &mut item_number,
+            None,
+            &game_svr::npc::NpcVars::default(),
+            Some(&env),
+        );
+        let mut bodies: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            bodies.push(body);
+        }
+        let idents: Vec<u16> = bodies
+            .iter()
+            .filter_map(|b| CommandMessage::from_bytes(b).map(|m| m.ident))
+            .collect();
+        assert_eq!(
+            idents.iter().filter(|id| **id == SM_EAT_FAIL).count(),
+            1,
+            "死亡 ⇒ 恰一条 SM_EAT_FAIL(636)；实得 {idents:?}"
+        );
+        assert!(
+            !idents.contains(&SM_EAT_OK),
+            "死亡 ⇒ 不得 SM_EAT_OK；实得 {idents:?}"
+        );
+        assert!(
+            !idents.contains(&SM_53),
+            "死亡 ⇒ 不得 SM_HEALTHSPELLCHANGED(53)；实得 {idents:?}"
+        );
+        assert_eq!(
+            (
+                sessions["hero"].state.wabil.hp,
+                sessions["hero"].state.wabil.mp
+            ),
+            (50, 60),
+            "死亡拒绝不改 WAbil（会话投影保持陈旧值，待 P21 自愈）"
+        );
+        assert_eq!(
+            (
+                world.entities.get(actor).expect("实体在图").hp,
+                world.entities.get(actor).expect("实体在图").mp
+            ),
+            (0, 0),
+            "镜像以 out.eaten 为门 ⇒ 死体不被旧投影覆盖（复活面）"
+        );
+        assert_eq!(
+            sessions["hero"].state.item_list.len(),
+            1,
+            "死亡拒绝 ⇒ 药未被消耗"
+        );
+
+        // P21：实体权威把陈旧投影自愈回 (0,0)。
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        assert_eq!(
+            (
+                sessions["hero"].state.wabil.hp,
+                sessions["hero"].state.wabil.mp
+            ),
+            (0, 0),
+            "P21 后投影回到实体值 (0,0)（oracle 同一份 WAbil 的死亡态）"
+        );
+
+        // 落库：死亡角色不得带假 HP。
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "hero".into(),
+            SavedHuman {
+                account: "ua".into(),
+                record: stage6_record(),
+                enter_map: "0".into(),
+            },
+        );
+        let saved = saves.get("hero").expect("存档在册");
+        let sg = sessions.get("hero").expect("会话在");
+        let rec = build_save_record(saved, "hero", &world, sg, None);
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").hp,
+            0,
+            "死亡角色落库 HP=0（修复前会被吃成 30）"
+        );
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").mp,
+            0,
+            "死亡角色落库 MP=0"
         );
     }
 
