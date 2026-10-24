@@ -11,14 +11,18 @@
 
 退出码（fail-closed）：全部步骤 OK ⇒ 0；任一步 FAIL ⇒ 2（并给出修复建议）。
 
-五步（与 runbook §0.5 一一对应）：
+五步+一步（与 runbook §0.5 对应）：
   ① docs    runbook/README 的键口径断言（复用 §0.5 第 0 步的 DOC-KEYS：有 `probe_timeout_ms`、
             没有 profile 里的 `"timeout_ms"`）；
   ② binary  调 `tools/m2-acceptance/start_mir2_server.ps1 -WhatIf` 并解析 `SERVER_EXE*` 三行；
             构建类型必须是 `Release`，打印的 sha256 必须与本地重算一致（不另写选路逻辑）；
   ③ ports   从 profile 的 `sides[*].ports` 取端口**逐个探测**（不写死端口表），要求全空；
   ④ profile profile 键存在性：`probe_timeout_ms` / 每侧 `pid_file` / `require_pid_binaries`；
-  ⑤ 可选    `--with-dry-run` 委托 `card_window.py --dry-run`；`--with-selftest` 委托 `--selftest`
+  ⑤ bash    restore 的 bash 探测（卡 `openmir2-window-profile-env-hardening`）：裸 `bash` 在
+            Windows 会被 CreateProcess 先解析到 System32 的 WSL 启动器 stub（未装发行版 rc=1，
+            window-run-1 §1.1 实测）——System32 有 bash.exe 即 FAIL；显式路径必须存在且非
+            System32/Sysnative stub；
+  ⑥ 可选    `--with-dry-run` 委托 `card_window.py --dry-run`；`--with-selftest` 委托 `--selftest`
             （默认不跑，避免 preflight 本身变慢）。
 """
 
@@ -208,7 +212,70 @@ def check_profile_keys(prof):
 
 
 # ---------------------------------------------------------------------------
-# ⑤ 可选委托
+# ⑤ restore bash（WSL stub 检测；卡 openmir2-window-profile-env-hardening）
+# ---------------------------------------------------------------------------
+def is_wsl_stub_path(path):
+    """bash 路径落在 System32/Sysnative 下 ⇒ WSL 启动器 stub（与 card_window 同判据）。"""
+    p = os.path.normcase(str(path).replace("/", os.sep))
+    return (os.path.basename(p).startswith("bash")
+            and ("system32" in os.path.dirname(p) or "sysnative" in os.path.dirname(p)))
+
+
+def default_sys32_bash():
+    """裸 `bash` 在 Windows 上必然先命中的位置（CreateProcess 搜索序：System32 在 PATH 前）。"""
+    return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
+                        "System32", "bash.exe")
+
+
+def check_bash(prof, resolver=None, isfile=None, sys32=None):
+    """restore 的 bash 必须落到非 WSL 的 Git bash 且文件存在；`resolver`/`isfile`/`sys32`
+    供 `--selftest` 注桩（默认 shutil.which / os.path.isfile / %SystemRoot%\\System32\\bash.exe）。"""
+    resolver = resolver or shutil.which
+    isfile = isfile or os.path.isfile
+    sys32 = sys32 or default_sys32_bash()
+    sides = prof.get("sides") or {}
+    if not sides:
+        raise StepFail("profile 缺 sides ⇒ 无法核对 restore bash")
+    seen = []
+    for side in sorted(sides):
+        argv = (sides[side] or {}).get("restore") or []
+        if not argv or not str(argv[0]).strip():
+            raise StepFail("side `%s` 缺 restore 命令 ⇒ 无法核对 bash" % side)
+        token = str(argv[0])
+        if os.path.dirname(token):
+            if is_wsl_stub_path(token):
+                raise StepFail("side `%s` restore 的 %r 是 System32/Sysnative 的 WSL 启动器"
+                               " stub（未装发行版 rc=1）⇒ 改写 Git bash 绝对路径"
+                               "（如 C:/Program Files/Git/usr/bin/bash.exe）" % (side, token))
+            if not isfile(token):
+                raise StepFail("side `%s` restore 的 bash 不存在：%s"
+                               " ⇒ 装 Git for Windows 或改 CARD_WINDOW_GIT_BASH"
+                               % (side, token))
+            seen.append("%s=%s" % (side, token))
+            continue
+        # 裸 `bash`：CreateProcess 在 PATH 之前先查 System32——那里有 bash.exe（WSL 启动器）
+        # 就轮不到 PATH 上的 Git bash（window-run-1 §1.1 实测命中）。
+        if isfile(sys32):
+            raise StepFail("side `%s` restore 用裸 `%s`，而 %s 存在（WSL 启动器 stub）："
+                           "CreateProcess 在 PATH 之前先查 System32 ⇒ restore 必败；"
+                           "profile 里改写 Git bash 绝对路径"
+                           % (side, token, sys32))
+        resolved = resolver(token)
+        if not resolved:
+            raise StepFail("side `%s` restore 用裸 `%s` 且解析不到 ⇒ 装 Git for Windows"
+                           "（C:/Program Files/Git/usr/bin/bash.exe）或设 CARD_WINDOW_GIT_BASH"
+                           % (side, token))
+        if is_wsl_stub_path(resolved):
+            raise StepFail("side `%s` restore 的裸 `%s` 解析到 System32 的 WSL 启动器 stub"
+                           "（%s）⇒ profile 里改写 Git bash 绝对路径" % (side, token, resolved))
+        if not isfile(resolved):
+            raise StepFail("side `%s` restore 的 bash 解析到 %s 但文件不存在" % (side, resolved))
+        seen.append("%s=%s" % (side, resolved))
+    return "restore bash 非 WSL stub（%s）" % "; ".join(seen)
+
+
+# ---------------------------------------------------------------------------
+# ⑥ 可选委托
 # ---------------------------------------------------------------------------
 def check_dry_run(profile_value, scenario, out_dir):
     argv = [sys.executable, "-I", "-B", CARD_WINDOW, "--profile", profile_value,
@@ -271,10 +338,12 @@ def run_steps(profile_value, root, log_dir, ports_profile, with_dry_run, with_se
     if prof is None:
         report(False, "ports", "profile 未加载，无法取端口")
         report(False, "profile", "profile 未加载")
-        results += [False, False]
+        report(False, "bash", "profile 未加载，无法核对 restore bash")
+        results += [False, False, False]
     else:
         one("ports", lambda: check_ports(prof))
         one("profile", lambda: check_profile_keys(prof))
+        one("bash", lambda: check_bash(prof))
     if with_dry_run:
         scen = os.path.join(REPO, "tools", "probe", "scenarios", "login_only.json")
         one("dry-run", lambda: check_dry_run(profile_value, scen,
@@ -289,7 +358,9 @@ def run_steps(profile_value, root, log_dir, ports_profile, with_dry_run, with_se
 # --selftest（五个失败分支各 rc=2 且点名；检查在 rc 判定之前）
 # ---------------------------------------------------------------------------
 def selftest():
-    """用桩验证：① docs 红 ② 二进制 Debug-Fallback 红 ③ 端口被占红 ④ profile 缺键红 ⑤ 全绿 rc=0。
+    """用桩验证：① docs 红 ② 二进制 Debug-Fallback 红 ③ 端口被占红 ④ profile 缺键红
+    ⑤ restore bash（WSL stub 命中红 / 真 Git bash 绿 / 显式 stub 红 / 解析不到红 /
+    解析到 stub 红）⑥ 汇总（任一步红 ⇒ rc=2）。
 
     自检自身也遵守纪律 15：所有断言先收集，最后统一判定（不存在「先 return 1 再跑检查」）。
     """
@@ -396,12 +467,63 @@ def selftest():
     except StepFail as ex:
         chk("probe_timeout_ms" in str(ex), "④b 缺 probe_timeout_ms 必须红并点名（%s）" % str(ex)[:60])
 
-    # ⑤ 汇总：run_steps 在桩下必须 rc=2（任何一步红），全绿必须 rc=0
+    # ⑤ restore bash（WSL stub 检测；卡 openmir2-window-profile-env-hardening）。
+    #    全部用桩（resolver/isfile/sys32 注入），不依赖本机是否真装了 Git bash / WSL。
+    git_bash = os.path.join(tmp, "GitBash", "bash.exe")     # 桩：非 System32 的绝对路径
+    sys32_fake = os.path.join(tmp, "System32", "bash.exe")  # 桩：System32 WSL 启动器
+    prof_bare_bash = {"sides": {"csharp": {"restore": ["bash", "x.sh"]},
+                                "rust": {"restore": ["bash", "x.sh"]}}}
+
+    def isfile_stub(allowed):
+        allowed = {os.path.normcase(os.path.abspath(str(a))) for a in allowed}
+        return lambda p: os.path.normcase(os.path.abspath(str(p))) in allowed
+
+    try:
+        check_bash(prof_bare_bash, resolver=lambda t: None,
+                   isfile=isfile_stub([sys32_fake]), sys32=sys32_fake)
+        chk(False, "⑤a System32 有 bash.exe（WSL stub）⇒ 裸 bash 必须红")
+    except StepFail as ex:
+        chk("System32" in str(ex) and "stub" in str(ex),
+            "⑤a System32 有 bash.exe（WSL stub）⇒ 裸 bash 必须红并点名（%s）" % str(ex)[:60])
+
+    try:
+        detail = check_bash(prof_bare_bash, resolver=lambda t: git_bash,
+                            isfile=isfile_stub([git_bash]), sys32=sys32_fake)
+        chk("restore bash 非 WSL stub" in detail and "csharp" in detail and "rust" in detail,
+            "⑤b 真 Git bash（System32 无 stub）⇒ 通过（%s）" % detail[:60])
+    except StepFail as ex:
+        chk(False, "⑤b 真 Git bash（System32 无 stub）⇒ 通过（%s）" % str(ex)[:60])
+
+    try:
+        check_bash({"sides": {"csharp": {"restore": [sys32_fake, "x.sh"]},
+                              "rust": {"restore": [git_bash, "x.sh"]}}},
+                   resolver=lambda t: None, isfile=isfile_stub([git_bash]),
+                   sys32=sys32_fake)
+        chk(False, "⑤c 显式 System32 stub 路径必须红")
+    except StepFail as ex:
+        chk("stub" in str(ex), "⑤c 显式 System32 stub 路径必须红并点名（%s）" % str(ex)[:60])
+
+    try:
+        check_bash(prof_bare_bash, resolver=lambda t: None,
+                   isfile=isfile_stub([]), sys32=sys32_fake)
+        chk(False, "⑤d 裸 bash 且解析不到必须红")
+    except StepFail as ex:
+        chk("CARD_WINDOW_GIT_BASH" in str(ex) or "解析不到" in str(ex),
+            "⑤d 裸 bash 且解析不到必须红并给修法（%s）" % str(ex)[:60])
+
+    try:
+        check_bash(prof_bare_bash, resolver=lambda t: sys32_fake,
+                   isfile=isfile_stub([sys32_fake]), sys32=sys32_fake)
+        chk(False, "⑤e 裸 bash 解析到 System32 stub 必须红")
+    except StepFail as ex:
+        chk("stub" in str(ex), "⑤e 裸 bash 解析到 System32 stub 必须红并点名（%s）" % str(ex)[:60])
+
+    # ⑥ 汇总：run_steps 在桩下必须 rc=2（任何一步红），全绿必须 rc=0
     rep = []
     res = run_steps("no-such-profile", "r", "l", None, False, False,
                     reporter=lambda ok, s, d: rep.append((ok, s, d)))
     chk(False in res and any(s == "profile" for ok, s, _ in rep),
-        "⑤a 缺 profile ⇒ 至少一步红（fail-closed）")
+        "⑥a 缺 profile ⇒ 至少一步红（fail-closed）")
 
     shutil.rmtree(tmp, ignore_errors=True)
     failed = [msg for ok, msg in checks if not ok]

@@ -37,7 +37,7 @@ python -I -B tools/conformance/preflight.py \
   （`SERVER_EXE_BUILD=Debug-Fallback`，rc=2）——修法就是它自己打印的那句 `cargo build --release -p mir2-server`。
   这是**预期内的门**：树里只有 debug 构建时，窗口不能开。
 
-输出每步一行 `[OK]/[FAIL] <step>: <细节>`，最后 `PREFLIGHT PASS`（rc=0）或 `PREFLIGHT FAIL`（rc=2）；**FAIL 行直接写了修复建议**。五步含义（与卡 `openmir2-window-preflight-script` 一致）：
+输出每步一行 `[OK]/[FAIL] <step>: <细节>`，最后 `PREFLIGHT PASS`（rc=0）或 `PREFLIGHT FAIL`（rc=2）；**FAIL 行直接写了修复建议**。各步含义（`docs`/`binary`/`ports`/`profile` 四步与卡 `openmir2-window-preflight-script` 一致；`bash` 步 2026-10-24 新增，卡 `openmir2-window-profile-env-hardening`）：
 
 | 步骤 | 查什么 | 失败时该做什么 |
 |---|---|---|
@@ -45,9 +45,10 @@ python -I -B tools/conformance/preflight.py \
 | `binary` | 委托 `start_mir2_server.ps1 -WhatIf`，解析 `SERVER_EXE/SHA256/BUILD`；必须是 `Release` 且打印的 sha 与本地重算一致 | `cargo build --release -p mir2-server`（确要用 debug 才加 `--allow-debug`，并在证据里写明） |
 | `ports` | 从 profile 的 `sides[*].ports` 逐个 connect 探测（**不写死端口表**），要求全空 | 先停上一轮栈（`preflight` 会点名端口） |
 | `profile` | `probe_timeout_ms` 为正整数；开了 `require_pid_binaries` 的侧必须有 `pid_file` | 补 profile 键 |
+| `bash` | restore 的 bash 不落到 WSL 启动器 stub：裸 `bash` 在 `%SystemRoot%\System32\bash.exe` 存在时必被 CreateProcess 先命中（未装发行版 rc=1，window-run-1 §1.1）；显式路径必须存在且不在 System32/Sysnative 下 | profile 里改写 Git bash 绝对路径（如 `C:/Program Files/Git/usr/bin/bash.exe`）；装 Git for Windows 或设 `CARD_WINDOW_GIT_BASH` |
 | 可选 | `--with-dry-run` / `--with-selftest` 才委托 `card_window` 对应动作（默认不跑） | 同原命令 |
 
-> 只读：不起栈、不连库、端口只做 connect 探测。`--selftest` 用桩验证五个失败分支（rc=2 且点名）。
+> 只读：不起栈、不连库、端口只做 connect 探测。`--selftest` 用桩验证失败分支（rc=2 且点名；bash 步 5 条：stub 命中红 / 真 Git bash 绿 / 显式 stub 红 / 解析不到红 / 解析到 stub 红）。
 
 ### 退路：手工步骤（命令不可用时照旧做）
 
