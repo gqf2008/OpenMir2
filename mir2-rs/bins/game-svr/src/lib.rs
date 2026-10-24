@@ -5178,22 +5178,176 @@ fn shop_context<'a>(
 }
 
 /// 按 `[GateIdx,Socket]` 下发商店帧（12B 头 + 尾）。
+///
+/// **卡 `openmir2-script-handler-msgqueue`（tier R；rework per review f215e887）**：一次
+/// `handle_shop_cmd` 内、同一收件人的 oracle `MsgQueue` 投影。
+///
+/// oracle 每个 `PlayObject` 有**一条** `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16,21`，
+/// 入队优先级 `(byte)wIdent`，`BaseObject.Message.cs:181`），在**自己的 `Run`**
+/// （`BaseObject.Base.cs:25-30`：`while (GetMessage(...)) Operate(...)`）里一次排空。
+///
+/// 三类帧按 **oracle 入队序**进同一条堆：
+/// 1. **说词**：`SendPriorityMsg(High)=0` / `SendMsg` = `(byte)RM_MERCHANTSAY` = 1
+///    （`ScriptEngine.cs:993/997`）；
+/// 2. **脚本帧**：`NpcPlayer.frames`（`(byte)RM_*`）；
+/// 3. **面板/结果帧**：`shop::user_select` 等的 `out`——优先级由**生产者**标注在
+///    [`game_svr::shop::ShopFrame::queue_priority`]（同一 SM 可来自不同 RM，不能反推）。
+///
+/// 出队 = `.NET PriorityQueue` 四叉最小堆序（同优先级**不是**入队序：3 条 `[0,2,1]`、
+/// 4 条 `[0,3,2,1]`，`msgqueue::NetPriorityQueue` 逐位复刻）。
+///
+/// **一条队列消息可为多 body 的原子批次**：`RM_USERGETBACKITEM` → `SendSaveItemList`
+/// 一次调用**顺序发多页**（`PlayObject.Base.cs:1600-1622`）⇒ 出队时按页序连发，不被堆打散。
+///
+/// **真直连帧**（oracle 调用点 `SendSocket`/`SendDefMessage`、无 RM 泵：`SM_DELITEM` /
+/// `SM_ADDITEM` / `SM_STORAGE_*` / `SM_TAKEBACKSTORAGEITEM_*`）不进堆，按产生序在堆排水**之前**发。
+///
+/// 正常路径由 `handle_shop_cmd` 在**世界扇出之前**显式 `flush`（oracle：发送者自己的 `Run`
+/// 先排空，收件人各自的 `Run` 后排水）；`Drop` 只做早退兜底。
+struct HandlerMsgQueue {
+    tx: Option<mpsc::UnboundedSender<SimToGate>>,
+    socket: i32,
+    /// 一条队列消息 = 一组按序下发的 body（单帧 = 1 个；`SM_SAVEITEMLIST` 多页 = N 个）。
+    heap: game_svr::msgqueue::NetPriorityQueue<Vec<Vec<u8>>>,
+    direct: Vec<Vec<u8>>,
+    flushed: bool,
+}
+
+impl HandlerMsgQueue {
+    fn new(tx: Option<mpsc::UnboundedSender<SimToGate>>, socket: i32) -> Self {
+        HandlerMsgQueue {
+            tx,
+            socket,
+            heap: game_svr::msgqueue::NetPriorityQueue::new(),
+            direct: Vec::new(),
+            flushed: false,
+        }
+    }
+
+    fn enqueue(&mut self, priority: u8, body: Vec<u8>) {
+        self.heap.enqueue(vec![body], priority);
+    }
+
+    fn enqueue_batch(&mut self, priority: u8, bodies: Vec<Vec<u8>>) {
+        self.heap.enqueue(bodies, priority);
+    }
+
+    fn direct(&mut self, body: Vec<u8>) {
+        self.direct.push(body);
+    }
+
+    fn set_tx(&mut self, tx: Option<mpsc::UnboundedSender<SimToGate>>, socket: i32) {
+        self.tx = tx;
+        self.socket = socket;
+    }
+
+    /// 下发：**直连批 → 堆（批次内按页序）**；幂等。
+    fn flush(&mut self) {
+        if self.flushed {
+            return;
+        }
+        self.flushed = true;
+        let Some(tx) = &self.tx else {
+            return;
+        };
+        for body in self.direct.drain(..) {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: self.socket,
+                body,
+            });
+        }
+        while let Some(bodies) = self.heap.dequeue() {
+            for body in bodies {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: self.socket,
+                    body,
+                });
+            }
+        }
+    }
+}
+
+impl Drop for HandlerMsgQueue {
+    fn drop(&mut self) {
+        self.flush();
+    }
+}
+
+/// **发送者先于收件人**（review f215e887 M-6）：oracle 每条 `MsgQueue` 在**自己的 `Run`** 里排空
+/// （`BaseObject.Base.cs:25-30`），发送者的 handler 先跑完 ⇒ 它的帧先上 wire，收件人的帧在它们
+/// 各自的 `Run` 才排水。故 `handle_shop_cmd` 先 `queue.flush()` 再做这些**其它收件人**的发送。
+enum DeferredSend {
+    /// `SENDMSG 0-4` 的世界侧扇出（`WorldServer.cs:1726-1736/1738+` 逐收件人）。
+    ScriptBroadcast {
+        caller_actor_id: i32,
+        npc_pos: Option<i32>,
+        broadcasts: Vec<String>,
+        hear: Vec<(String, u8, u8)>,
+    },
+    /// 武器升级 `FeatureChanged()`（`BaseObject.cs:1509-1512`，`RM_FEATURECHANGED`=10116→132）
+    /// 的其它玩家 41。
+    Feature {
+        actor_id: i32,
+        feature: i32,
+        feature_ex: u16,
+    },
+    /// 升级链 `StatusChanged()`（`BaseObject.cs:1514-1517`，`RM_CHARSTATUSCHANGED`=10139→155）
+    /// 的其它玩家 657。
+    CharStatus { actor_id: i32, status: i32 },
+}
+
+/// `ShopFrame` → wire body（`SendDefMessage` 的尾编码口径）。
+fn shop_frame_body(f: &game_svr::shop::ShopFrame) -> Vec<u8> {
+    let header = game_svr::smframe::command_header(f.recog, f.ident, f.param, f.tag, f.series);
+    if f.tail_encoded {
+        game_svr::smframe::gm_data_body(header, &f.tail)
+    } else {
+        game_svr::smframe::gm_data_body(header, &mir2_protocol::edcode::encode(&f.tail))
+    }
+}
+
+/// 直连下发（oracle `SendSocket`/`SendDefMessage` 无队列的调用点；本函数保持原行为）。
 fn emit_shop_frames(
     tx: &mpsc::UnboundedSender<SimToGate>,
     socket: i32,
     frames: &[game_svr::shop::ShopFrame],
 ) {
     for f in frames {
-        let header = game_svr::smframe::command_header(f.recog, f.ident, f.param, f.tag, f.series);
-        // 尾编码口径：`SendDefMessage(...)`（`PlayObject.Socket.cs:26-43`）对未编码原文施加
-        // `EDCode.EncodeString`；`SendSocket(ClientMsg, sMsg)` 直连（`SM_SAVEITEMLIST` / `SM_ADDITEM` 尾）
-        // 已是线上字节 ⇒ 原样下发（`tail_encoded == true`）。空尾 `encode([]) == []` ⇒ header-only 不变。
-        let body = if f.tail_encoded {
-            game_svr::smframe::gm_data_body(header, &f.tail)
-        } else {
-            game_svr::smframe::gm_data_body(header, &mir2_protocol::edcode::encode(&f.tail))
-        };
+        let body = shop_frame_body(f);
         let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
+}
+
+/// **统一入队版**：按生产者标注的 [`game_svr::shop::ShopFrame::queue_priority`] 分流——
+/// `Some` 入堆（`atomic_batch` 的**连续同优先级**帧合并成一条队列消息，出队时按页序连发）；
+/// `None` = oracle 真直连，按产生序在堆排水前发。
+fn emit_shop_frames_into(queue: &mut HandlerMsgQueue, frames: &[game_svr::shop::ShopFrame]) {
+    let mut i = 0usize;
+    while i < frames.len() {
+        let f = &frames[i];
+        match f.queue_priority {
+            Some(priority) if f.atomic_batch => {
+                let mut bodies = vec![shop_frame_body(f)];
+                let mut j = i + 1;
+                while j < frames.len()
+                    && frames[j].atomic_batch
+                    && frames[j].queue_priority == Some(priority)
+                {
+                    bodies.push(shop_frame_body(&frames[j]));
+                    j += 1;
+                }
+                queue.enqueue_batch(priority, bodies);
+                i = j;
+            }
+            Some(priority) => {
+                queue.enqueue(priority, shop_frame_body(f));
+                i += 1;
+            }
+            None => {
+                queue.direct(shop_frame_body(f));
+                i += 1;
+            }
+        }
     }
 }
 
@@ -5214,6 +5368,10 @@ fn charstatuschanged_shop_frame(
         series: hit_speed,
         tail: Vec::new(),
         tail_encoded: false,
+        // `StatusChanged()`（`BaseObject.cs:1514-1517`）→ `SendRefMsg(RM_CHARSTATUSCHANGED)` ⇒
+        // 每收件人 `SendMsg`（`BaseObject.Message.cs:385-444`）入队，`10139 & 0xFF = 155`。
+        queue_priority: Some((mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8),
+        atomic_batch: false,
     }
 }
 
@@ -5500,7 +5658,7 @@ fn apply_upgrade_weapon_tax(
 /// **距离 quirk 照搬**：`ClientUserBuyItem` 用 `|dx|>15 || |dy|>15` 拒（=`<=15` 放行），
 /// 其余四条用 `IsWithinSight`（`<15`）—— `Operate.cs:200` vs `:1715`。
 #[allow(clippy::too_many_arguments)]
-fn handle_shop_cmd(
+fn handle_shop_cmd_inner(
     ident: u16,
     recog: i32,
     param: u16,
@@ -5528,6 +5686,10 @@ fn handle_shop_cmd(
     // **卡 `openmir2-clearmapmon-impl`**：脚本世界副作用（`CLEARMAPMON`/`MONGENEX`）的应用上下文
     // （`None` = 未接线，同 [`handle_click_npc_cmd`]）。
     mut script_world: Option<&mut ScriptWorldCtx<'_>>,
+    // **卡 `openmir2-script-handler-msgqueue`**：本 handler 的 per-recipient 队列与延后扇出
+    //（发送者 `Run` 先排空 ⇒ 先 flush 本队列，再做其它收件人的发送）。
+    queue: &mut HandlerMsgQueue,
+    deferred: &mut Vec<DeferredSend>,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -5537,6 +5699,10 @@ fn handle_shop_cmd(
         return;
     };
     let gate_idx = entry.gate_idx;
+    queue.set_tx(
+        route_to_gate(gates, gate_idx, socket, "商店帧").cloned(),
+        socket,
+    );
     let Some(sg) = sessions.get_mut(chr_name) else {
         glog!(
             "WRN",
@@ -5780,11 +5946,8 @@ fn handle_shop_cmd(
                     &script_broadcasts,
                     sg,
                     &*world,
-                    online,
-                    gates,
-                    gate_idx,
-                    socket,
-                    npc_vars,
+                    queue,
+                    deferred,
                 );
             }
             if !bo_can_jmp {
@@ -5861,11 +6024,8 @@ fn handle_shop_cmd(
                     &back_broadcasts,
                     sg,
                     &*world,
-                    online,
-                    gates,
-                    gate_idx,
-                    socket,
-                    npc_vars,
+                    queue,
+                    deferred,
                 );
             }
             if is_fixed_npc {
@@ -6125,11 +6285,8 @@ fn handle_shop_cmd(
                                 &script_broadcasts,
                                 sg,
                                 &*world,
-                                online,
-                                gates,
-                                gate_idx,
-                                socket,
-                                npc_vars,
+                                queue,
+                                deferred,
                             );
                         }
                         feature_broadcast = oc.feature_changed;
@@ -6223,11 +6380,8 @@ fn handle_shop_cmd(
                                 &script_broadcasts,
                                 sg,
                                 &*world,
-                                online,
-                                gates,
-                                gate_idx,
-                                socket,
-                                npc_vars,
+                                queue,
+                                deferred,
                             );
                         }
                         out = oc.frames;
@@ -6405,11 +6559,8 @@ fn handle_shop_cmd(
                     &script_broadcasts,
                     sg,
                     &*world,
-                    online,
-                    gates,
-                    gate_idx,
-                    socket,
-                    npc_vars,
+                    queue,
+                    deferred,
                 );
             }
         }
@@ -6455,33 +6606,134 @@ fn handle_shop_cmd(
     if out.is_empty() {
         return;
     }
-    let Some(tx) = route_to_gate(gates, gate_idx, socket, "商店回帧") else {
-        return;
-    };
-    emit_shop_frames(tx, socket, &out);
+    // **卡 `openmir2-script-handler-msgqueue`**：`out` 与说词/脚本帧同队出队
+    // （有 RM 泵的帧入堆、无泵的直连帧保序先发；`Drop` 统一 flush）。
+    emit_shop_frames_into(queue, &out);
+    // 41/657 的**其它玩家**副本：发送者自己的帧已入队（41 直连 / 657 入堆），这里只登记，
+    // 由 `handle_shop_cmd` 在 `queue.flush()` **之后**发出（review f215e887 M-6：
+    // 发送者 `Run` 先排空，收件人各自的 `Run` 后排水）。
     if let Some((feature, feature_ex)) = feature_broadcast {
-        // 41 已随 `out` 发给本人；这里补发给其它同图 12 格内在线玩家（`SendRefMsg` 口径）。
-        broadcast_feature_changed_except(
-            world,
-            online,
-            gates,
+        deferred.push(DeferredSend::Feature {
             actor_id,
             feature,
             feature_ex,
-            shop_cfg.send_ref_msg_range,
-            Some(actor_id),
-        );
+        });
     }
     if let Some(status) = charstatus_broadcast {
-        // 近邻序 41 → 657（自己的两条 657 已随 `out` 走）。
-        broadcast_charstatuschanged_except_self(
-            world,
-            online,
-            gates,
-            actor_id,
-            status,
-            shop_cfg.send_ref_msg_range,
-        );
+        deferred.push(DeferredSend::CharStatus { actor_id, status });
+    }
+}
+
+/// `handle_shop_cmd` 的宿主入口：建 per-recipient 队列 → 跑 handler 本体（只入队/登记）→
+/// **先 flush 发送者队列**（oracle：发送者自己的 `Run` 先排空，`BaseObject.Base.cs:25-30`）→
+/// 再做其它收件人的延后发送（`SENDMSG` 扇出 / 41 / 657）。
+///
+/// 早退路径（handler 内 `return`）同样走 `queue.flush()` + 已登记的延后发送。
+#[allow(clippy::too_many_arguments)]
+fn handle_shop_cmd(
+    ident: u16,
+    recog: i32,
+    param: u16,
+    tag: u16,
+    tail: Option<&str>,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    sell_off_book: &mut game_svr::selloff::SellOffBook,
+    trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    world: &mut mir2_world::World,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    shop_cfg: &ShopCfg,
+    colors: &MsgColors,
+    make_items: Option<&mir2_envir::makeitem::MakeItemRegistry>,
+    item_number: &mut i32,
+    merchant_book: &game_svr::npc::MerchantScriptBook,
+    npc_vars: &game_svr::npc::NpcVars,
+    gm: Option<&ScriptGmEnv<'_>>,
+    script_world: Option<&mut ScriptWorldCtx<'_>>,
+) {
+    let mut queue = HandlerMsgQueue::new(None, socket);
+    let mut deferred: Vec<DeferredSend> = Vec::new();
+    handle_shop_cmd_inner(
+        ident,
+        recog,
+        param,
+        tag,
+        tail,
+        chr_name,
+        socket,
+        online,
+        sessions,
+        shop_sessions,
+        sell_off_sessions,
+        sell_off_book,
+        trade_sessions,
+        gates,
+        world,
+        catalog,
+        shop_cfg,
+        colors,
+        make_items,
+        item_number,
+        merchant_book,
+        npc_vars,
+        gm,
+        script_world,
+        &mut queue,
+        &mut deferred,
+    );
+    queue.flush();
+    let red = npc_vars.sys_msg.red;
+    for d in deferred {
+        match d {
+            DeferredSend::ScriptBroadcast {
+                caller_actor_id,
+                npc_pos,
+                broadcasts,
+                hear,
+            } => {
+                fan_out_world_sysmessage(
+                    online,
+                    &*world,
+                    gates,
+                    caller_actor_id,
+                    &broadcasts,
+                    red.0,
+                    red.1,
+                );
+                if let Some(npc_id) = npc_pos {
+                    fan_out_npc_hear(online, &*world, gates, caller_actor_id, npc_id, &hear);
+                }
+            }
+            DeferredSend::Feature {
+                actor_id,
+                feature,
+                feature_ex,
+            } => broadcast_feature_changed_except(
+                &*world,
+                online,
+                gates,
+                actor_id,
+                feature,
+                feature_ex,
+                shop_cfg.send_ref_msg_range,
+                Some(actor_id),
+            ),
+            DeferredSend::CharStatus { actor_id, status } => {
+                broadcast_charstatuschanged_except_self(
+                    &*world,
+                    online,
+                    gates,
+                    actor_id,
+                    status,
+                    shop_cfg.send_ref_msg_range,
+                );
+            }
+        }
     }
 }
 
@@ -7670,6 +7922,38 @@ fn run_merchant_goto(
     (says, frames, use_slots, world_actions)
 }
 
+/// **统一入队版**：脚本帧按 `(byte)RM_*` 进 handler 队列（与 [`emit_script_frames_raw`] 同一
+/// 映射 [`game_svr::pickwire::script_frame`]）；**入队序 = `NpcPlayer.frames` 原始序**。
+///
+/// 标量取数口径同 [`emit_script_frames`]：写回后的会话值（`SM_WINEXP.Recog` = 加完后总量）。
+#[allow(clippy::too_many_arguments)]
+fn emit_script_frames_into(
+    queue: &mut HandlerMsgQueue,
+    npc_actor_id: i32,
+    player_actor_id: i32,
+    gold: i32,
+    game_gold: i32,
+    game_point: i32,
+    soft_version_date: i32,
+    exp: i32,
+    frames: &[game_svr::npc::SendMsg],
+) {
+    for f in frames {
+        if let Some(body) = game_svr::pickwire::script_frame(
+            f,
+            npc_actor_id,
+            player_actor_id,
+            gold,
+            game_gold,
+            game_point,
+            soft_version_date,
+            exp,
+        ) {
+            queue.enqueue(f.ident as u8, body);
+        }
+    }
+}
+
 /// 商人 `GotoLable` 结果的**排水**（说词 → 脚本帧 → `SENDMSG` 世界扇出）。
 ///
 /// 四个生产调用点共用同一口径：`CM_MERCHANTDLGSELECT` 的 label 臂、`@back` 臂、
@@ -7693,18 +7977,17 @@ fn emit_merchant_goto_result(
     script_broadcasts: &[String],
     sg: &mut SessionGround,
     world: &mir2_world::World,
-    online: &OnlineRegistry,
-    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    gate_idx: i32,
-    socket: i32,
-    npc_vars: &game_svr::npc::NpcVars,
+    // **卡 `openmir2-script-handler-msgqueue`（tier R）**：本 handler 的 per-recipient 队列；
+    // 说词与脚本帧都只**入队**，由 `handle_shop_cmd` 统一按 `(byte)RM_*` 堆序出队
+    //（同一条 oracle `MsgQueue`）。世界侧扇出登记到 `deferred`，在发送者队列 flush 之后执行
+    //（review f215e887 M-6：发送者 `Run` 先排空）。
+    queue: &mut HandlerMsgQueue,
+    deferred: &mut Vec<DeferredSend>,
 ) {
     // 说词的 `CanJmpScriptLableMap` 更新已在 [`run_merchant_goto`] 内完成（P-2 解耦）；
-    // 本函数只负责发说词/脚本帧，不再改会话状态。
+    // 本函数只负责入队说词/脚本帧，不再改会话状态。
     if !says.is_empty() {
-        if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人脚本说词") {
-            emit_npc_says(tx, socket, sg.actor_id, says);
-        }
+        emit_npc_says_into(queue, sg.actor_id, says);
         glog!(
             "INF",
             "{tag}：GotoLable({label}) 说词 {} 条 ChrName={chr_name}",
@@ -7716,23 +7999,44 @@ fn emit_merchant_goto_result(
             "{tag}：GotoLable({label}) 无说词（脚本无该标签/文件缺失）ChrName={chr_name}"
         );
     }
-    // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
+    // 卡 `openmir2-script-sendmsg-host`：脚本帧入本 handler 队列；`SENDMSG 0-4` 的世界侧扇出
+    // 登记到 `deferred`（发送者 `Run` 先排空 ⇒ 先 flush 本队列，再发其它收件人）。
     if !script_frames.is_empty() || !script_broadcasts.is_empty() {
-        let tx = route_to_gate(gates, gate_idx, socket, "商人脚本帧");
-        drain_script_frames_with_host(
-            tx,
-            socket,
-            merchant_actor_id,
-            sg,
-            script_frames,
-            script_broadcasts,
+        // 本例玩家不在 NPC 的 `SendRefMsg` 方格内 ⇒ oracle 不会给他入 `RM_HEAR`
+        // （`BaseObject.Message.cs:399-440`；与 `drain_script_frames_with_host` 同口径）。
+        let owned;
+        let frames = if !caller_within_hear_range(
             world,
-            online,
-            gates,
             sg.actor_id,
-            Some(merchant_actor_id),
-            npc_vars.sys_msg.red,
+            merchant_actor_id,
+            chat::send_ref_msg_range(),
+        ) {
+            owned = script_frames
+                .iter()
+                .filter(|f| f.ident != i32::from(mir2_protocol::messages::RM_HEAR))
+                .cloned()
+                .collect::<Vec<_>>();
+            &owned[..]
+        } else {
+            script_frames
+        };
+        emit_script_frames_into(
+            queue,
+            merchant_actor_id,
+            sg.actor_id,
+            sg.state.gold,
+            sg.game_gold,
+            sg.game_point,
+            sg.soft_version_date,
+            sg.state.wabil.exp,
+            frames,
         );
+        deferred.push(DeferredSend::ScriptBroadcast {
+            caller_actor_id: sg.actor_id,
+            npc_pos: Some(merchant_actor_id),
+            broadcasts: script_broadcasts.to_vec(),
+            hear: script_hear_says(frames),
+        });
     }
 }
 /// 固定 NPC（`Envir/Npcs.txt`）的脚本 `GotoLable` 生产实现——[`guild_official::FixedNpcScript`]
@@ -7840,6 +8144,30 @@ fn emit_npc_says(
         sent += 1;
     }
     sent
+}
+
+/// **统一入队版**：说词按 `ScriptEngine.cs:993/997` 的优先级（`High`=0 / `(byte)RM_MERCHANTSAY`=1）
+/// 进 handler 队列；**入队序 = 原始产生序**（堆自己决定出队序，不预先 `dequeue_order`）。
+fn emit_npc_says_into(
+    queue: &mut HandlerMsgQueue,
+    player_actor_id: i32,
+    says: &[game_svr::npc::SayMsg],
+) {
+    for s in says {
+        let recog = if s.priority {
+            player_actor_id
+        } else {
+            s.npc_actor_id
+        };
+        let wire = game_svr::npc::merchant_say_gbk(&s.npc_name, &s.raw_msg);
+        let body = smframe::sm_merchantsay(recog, 0, 0, &wire);
+        let priority = if s.priority {
+            0
+        } else {
+            (mir2_protocol::messages::RM_MERCHANTSAY & 0xFF) as u8
+        };
+        queue.enqueue(priority, body);
+    }
 }
 
 /// **T-142 F2**：把一次脚本运行的 `SendMsg` 帧（[`game_svr::npc::NpcPlayer::frames`]）按
@@ -44255,6 +44583,8 @@ SendRefMsgRange=15
                 series: 1,
                 tail: tail.clone(),
                 tail_encoded: false,
+                queue_priority: None,
+                atomic_batch: false,
             },
             game_svr::shop::ShopFrame {
                 ident: mir2_protocol::messages::SM_USERREPAIRITEM_FAIL,
@@ -44264,6 +44594,8 @@ SendRefMsgRange=15
                 series: 0,
                 tail: Vec::new(),
                 tail_encoded: false,
+                queue_priority: None,
+                atomic_batch: false,
             },
         ];
         emit_shop_frames(&tx, 7, &frames);
@@ -45817,6 +46149,8 @@ SendRefMsgRange=15
             series: 0,
             tail: raw.clone(),
             tail_encoded: true,
+            queue_priority: None,
+            atomic_batch: false,
         }];
         emit_shop_frames(&tx, 7, &frames);
         let (sock, body) = match rx.try_recv().expect("帧") {
@@ -65364,6 +65698,13 @@ mod tests {",
         );
         let frames = drain_frames(&mut rx0);
         let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
+        // **卡 `openmir2-script-handler-msgqueue`（rework per review f215e887 M-1/M-2/M-5）**：
+        // oracle 同一 `MsgQueue` 的排水序 = 唯一真直连帧先（`SM_DELITEM` ← `SendDelItem`
+        // `PlayObject.Base.cs:1663` `SendSocket`，无 RM 泵），其余入堆按 `(byte)RM` 升序：
+        // `RM_ABILITY`10051→67、`RM_FEATURECHANGED`10116→132、`RM_GOLDCHANGED`10136→152、
+        // `RM_CHARSTATUSCHANGED`10139→155×2、`RM_SENDDELITEMLIST`10148→164
+        //（`SendDelItemList` 的唯一调用点是泵 `PlayObject.Message.cs:1870-1873`，
+        //  入队点 `Merchant.cs:525/1501` 都是 `SendMsg`）。
         assert_eq!(
             idents,
             vec![
@@ -65375,7 +65716,7 @@ mod tests {",
                 mir2_protocol::messages::SM_CHARSTATUSCHANGED,
                 mir2_protocol::messages::SM_DELITEMS,
             ],
-            "C8a：202 → 52 → 41 → 653 → 657 → 657 → 709（无 say，654 无发光变化）"
+            "C8a：202(DELITEM,直连) → 52(67) → 41(132) → 653(152) → 657(155)×2 → 709(164)"
         );
         // 202：Recog=ActorId、Series=1，尾 = del_item_tail(武器)。
         let (ident, param, tag, recog) = hdr(&frames[0]);
@@ -69273,9 +69614,8 @@ GMEXECUTE 禁言 self 20
         let _far = sendmsg_add_player(&mut rig, "far", 903, (11, 30));
         let merchant = rig.merchant_id;
         rig.dlg_select("@main");
-        let frames = sendmsg_drain(&mut rig.rx);
         assert_eq!(
-            frames,
+            sendmsg_drain(&mut rig.rx),
             vec![
                 // 本例玩家（10,10，`|dx|=1, |dy|=0` ⇒ 在方格内）：从他自己的帧表排水。
                 (901, sendmsg_hear(merchant, "寄售商:欢迎光临")),
@@ -70880,6 +71220,162 @@ fn ",
             rng_probe(&mut world.rng, 8),
             rng_probe(&mut probe, 8),
             "零抽数"
+        );
+    }
+
+    // ---- handler 级 MsgQueue 统一（卡 `openmir2-script-handler-msgqueue`，tier R） ----------
+
+    /// **判据（M-3，review f215e887）**：`RM_USERGETBACKITEM` → `SendSaveItemList` 一次调用
+    /// **顺序发多页**（`PlayObject.Base.cs:1600-1622` 的 `for page ... SendSocket`）⇒ 队列里是
+    /// **一条消息**，出队时按页序连发，绝不被四叉堆按同优先级（163）打散。
+    ///
+    /// 牙（实测）：去掉 `atomic_batch` 分组合并（逐页单独入堆）⇒ 3 页同优先级会按堆序出队
+    /// `[0,2,1]`，本用例红。
+    #[test]
+    fn handler_msgqueue_getback_pages_keep_page_order_as_one_message() {
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut q = HandlerMsgQueue::new(Some(tx), 7);
+        let mk = |page: u16| game_svr::shop::ShopFrame {
+            ident: mir2_protocol::messages::SM_SAVEITEMLIST,
+            recog: 1,
+            param: 0,
+            tag: page,
+            series: 2,
+            tail: Vec::new(),
+            tail_encoded: true,
+            queue_priority: Some((mir2_protocol::messages::RM_USERGETBACKITEM & 0xFF) as u8),
+            atomic_batch: true,
+        };
+        emit_shop_frames_into(&mut q, &[mk(0), mk(1), mk(2)]);
+        q.flush();
+        let mut pages = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            pages.push(u16::from_le_bytes([body[8], body[9]]));
+        }
+        assert_eq!(
+            pages,
+            vec![0u16, 1, 2],
+            "多页必须按页序连发（一条队列消息）"
+        );
+    }
+
+    /// 本卡判据用的 rig：`T142Rig` + 预置 `@buy` 可跳（`LableIsCanJmp` 账本）。
+    fn handler_msgqueue_rig(records: Vec<mir2_script::SayingRecord>) -> T142Rig {
+        let mut rig = T142Rig::new(records);
+        rig.shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = game_svr::shop::get_script_label("<确定/@buy>");
+        rig
+    }
+
+    fn ident_of(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    /// **判据 ③（等价保持）**：只有说词 + 脚本帧、没有面板帧时，合并前后帧序**完全一致**：
+    /// 说词优先级 0/1 恒先于脚本帧（`RM_MENU_OK` = 10309 & 0xFF = 69）。
+    ///
+    /// 牙（实测）：让 says 直连绕队（在 `emit_merchant_goto_result` 里直接 `tx.send`）⇒
+    /// 说词会排到脚本帧之后（本用例红）。
+    #[test]
+    fn handler_msgqueue_says_plus_script_order_is_unchanged_by_merge() {
+        let mut rig = handler_msgqueue_rig(vec![t142_record(
+            "@main",
+            "hello",
+            vec![t142_act(234, "m", 0, "")],
+        )]);
+        rig.dlg_select("@main");
+        let frames = drain_frames(&mut rig.rx);
+        let idents: Vec<u16> = frames.iter().map(|b| ident_of(b)).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                mir2_protocol::messages::SM_MENU_OK
+            ],
+            "说词(1) 恒先于脚本帧(69)；合并前后一致"
+        );
+    }
+
+    /// **判据 ②（核心：面板 + 脚本帧同 handler）**：`@buy` 走 `GotoLable(@buy)`（说词 + 脚本帧
+    /// `RM_MENU_OK`=69 / `RM_GAMEGOLDCHANGED`=148）后 `UserSelectBuyItem` 产出
+    /// `RM_SENDGOODSLIST`=144；另加 `CHANGEEXP` ⇒ `RM_WINEXP`=139（落在 133 与 144 之间，
+    /// 用于把「错用 SM ident 低字节」的变异打红）⇒ **同一堆按 `(byte)RM` 升序**：
+    /// 643(say,1) → 767(69) → 44(139) → 645(144) → 5008(148)。
+    ///
+    /// 旧实现（直连 `out`）给的是 643 → 767 → **5008 → 645**；本用例同时断言它与旧序不同，
+    /// 证明「合并改变帧序」只发生在 oracle 要求的组合上。
+    ///
+    /// 牙（实测）：① 把面板帧改回直连（`emit_shop_frames_into` 里 `None => direct` 改成全部
+    /// 直连）⇒ 面板被提前到堆前，本用例红；② 面板优先级用 SM ident 低字节而非 `(byte)RM` ⇒ 红。
+    #[test]
+    fn handler_msgqueue_panel_and_script_interleave_by_rm_priority() {
+        let mut rig = handler_msgqueue_rig(vec![
+            t142_record("@main", "@buy", vec![]),
+            t142_record(
+                "@buy",
+                "hi",
+                vec![
+                    t142_act(234, "m", 0, ""),
+                    t142_act(185, "+", 0, "5"),
+                    t142_act(191, "+", 0, "5"),
+                ],
+            ),
+        ]);
+        rig.dlg_select("@main"); // 让 `@buy` 进 `can_jmp_labels`（说词含 @buy）
+        let _ = drain_frames(&mut rig.rx);
+        rig.dlg_select("@buy");
+        let frames = drain_frames(&mut rig.rx);
+        let idents: Vec<u16> = frames.iter().map(|b| ident_of(b)).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                mir2_protocol::messages::SM_MENU_OK,
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_SENDGOODSLIST,
+                mir2_protocol::messages::SM_GAMEGOLDNAME,
+            ],
+            "同一 MsgQueue：说词(1) → MENU_OK(69) → WINEXP(139) → SENDGOODSLIST(144) → GAMEGOLD(148)"
+        );
+        assert_ne!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_MERCHANTSAY,
+                mir2_protocol::messages::SM_MENU_OK,
+                mir2_protocol::messages::SM_WINEXP,
+                mir2_protocol::messages::SM_GAMEGOLDNAME,
+                mir2_protocol::messages::SM_SENDGOODSLIST,
+            ],
+            "旧实现（out 直连）是 5008 在 645 之前；合并后必须不同"
+        );
+    }
+
+    /// **同优先级仍走 .NET 四叉堆序**（并入同一队后不得退化成稳定排序）：3 条 `MESSAGEBOX`
+    /// （同 `RM_MENU_OK`=69）出队 `[0,2,1]` ⇒ 文本序 a, c, b。
+    ///
+    /// 牙（实测）：把 `HandlerMsgQueue` 的堆换成 `sort_by_key`/FIFO ⇒ 本用例红（a, b, c）。
+    #[test]
+    fn handler_msgqueue_ties_keep_four_ary_heap_order() {
+        let mut rig = handler_msgqueue_rig(vec![t142_record(
+            "@main",
+            "",
+            vec![
+                t142_act(234, "a", 0, ""),
+                t142_act(234, "b", 0, ""),
+                t142_act(234, "c", 0, ""),
+            ],
+        )]);
+        rig.dlg_select("@main");
+        let frames = drain_frames(&mut rig.rx);
+        assert_eq!(frames.len(), 3, "3 条 SM_MENU_OK");
+        let tails: Vec<Vec<u8>> = frames.iter().map(|b| b[12..].to_vec()).collect();
+        let enc = |s: &[u8]| mir2_protocol::edcode::encode(s);
+        assert_eq!(
+            tails,
+            vec![enc(b"a"), enc(b"c"), enc(b"b")],
+            "同优先级 3 条 ⇒ 四叉堆序 [0,2,1]"
         );
     }
 }
