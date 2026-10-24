@@ -1369,6 +1369,17 @@ pub fn castle_vars_for(
 ) -> Option<game_svr::npc::CastleVars> {
     let e = world.entities.get(actor_id)?;
     let index = world.castle_war_area_at(Some(e.map_id), e.x, e.y)?;
+    castle_vars_for_index(world, index, today)
+}
+
+/// [`castle_vars_for`] 的**按下标**版：`CastleMgr.GetCastle(0)`（`NormNpc.cs:805-818` 的
+/// `$CASTLEWARDATE` 回退）与「`$CASTLEWARDATE` 写回后的粘滞解析」都用它。
+#[must_use]
+pub fn castle_vars_for_index(
+    world: &mir2_world::World,
+    index: usize,
+    today: (i32, u32, u32),
+) -> Option<game_svr::npc::CastleVars> {
     let c = world.castles.get(index)?;
     Some(game_svr::npc::CastleVars {
         name: c.name.clone(),
@@ -1397,7 +1408,31 @@ pub fn castle_vars_for(
             .as_deref()
             .and_then(parse_castle_date)
             .map(|d| mir2_shared::hutil32::get_day_count(today, (d.year, d.month, d.day))),
+        change_date_text: c.change_date.as_deref().and_then(change_date_text),
     })
+}
+
+/// `Castle.ChangeDate.ToString("yyyy-MM-dd HH:mm:ss")`（`$CASTLECHANGEDATE`）。
+///
+/// `Castle.ChangeDate` 的读入是 `DateTime.Parse`（`CastleConf.cs:19-21`）⇒ 只写日期的部署件
+/// （`ChangeDate=1998-01-01`）在 oracle 侧时分秒为 `00:00:00`。解析不出 ⇒ `None`（登记）。
+fn change_date_text(raw: &str) -> Option<String> {
+    let d = parse_castle_date(raw)?;
+    let time = raw
+        .split_once(' ')
+        .map(|(_, t)| t.trim())
+        .filter(|t| t.split(':').count() == 3)
+        .map_or_else(
+            || "00:00:00".to_string(),
+            |t| {
+                let mut it = t.split(':');
+                let h = it.next().unwrap_or("0").parse::<u32>().unwrap_or(0);
+                let m = it.next().unwrap_or("0").parse::<u32>().unwrap_or(0);
+                let s = it.next().unwrap_or("0").parse::<u32>().unwrap_or(0);
+                format!("{h:02}:{m:02}:{s:02}")
+            },
+        );
+    Some(format!("{:04}-{:02}-{:02} {time}", d.year, d.month, d.day))
 }
 
 /// `UserCastle.GetWarDate()`（`UserCastle.cs:712-725`）：`AttackWarList` 空 ⇒ `""`，

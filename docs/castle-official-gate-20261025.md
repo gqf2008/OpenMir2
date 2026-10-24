@@ -68,8 +68,10 @@
 
 ## 6. 登记偏差 / 未实现
 
-1. **Base 变量表的其余 token 仍未实现**（`$USERCOUNT/$MACRUNTIME/$SERVERRUNTIME/$MAP/...`，既有缺口，不在本卡）；
-   本卡只补**部署脚本实际用到**的四个（`$DATETIME/$CASTLEWARDATE/$LISTOFWAR/$CASTLEGETDAYS`）。
+1. **Base 变量表的其余 token 仍未实现**（`$USERCOUNT/$MACRUNTIME/$SERVERRUNTIME/$MAP/...`，既有缺口，不在本卡）。
+   本卡补的 base token = 部署 `Npc_def/{沙巴克城堡管理-0150,老人-3,比奇国王-0122}.txt` 实际用到的
+   **五个**：`$DATETIME` / `$CASTLEWARDATE` / `$LISTOFWAR` / `$CASTLEGETDAYS` / **`$CASTLECHANGEDATE`**
+   （后者在 `老人-3` 的 `[@WarStatus]`；F3 订正：上一版报告漏列，已实现 + 用例 `.castle_changedate_formats_or_question_marks`）。
 2. **城堡动作 switch 未实现**（`@openmaindoor`/`@closemaindoor`/`@repairdoornow`/`@repairwallnow1..3`/
    `@hire*now*`/`@@withdrawal/@@receipts`/`@@castlename`/`@@sendmsg`/`@exit`/`@back`）——部署 R-0
    （`MasterGuild` 恒 null、`Permission` 恒 0）使其**不可达**；`crates/world` 的纯函数
@@ -79,7 +81,13 @@
 5. `war_list_text` 的非空格式按 `UserCastle.cs:727-772` 实现但**无构造级用例**（部署申请表 0 字节）；
    真机窗口 W-CO-3 覆盖。
 6. `Permission` 取 `sg.gm.permission`（GM 会话权限）作 `PlayObject.Permission` 的代理；生产恒 0（G12）。
-7. **观测**：2026-10-25 03:52 部署件 `E:/MirServer/M2GameSvr/Castle/List.txt` 的 mtime 被刷新（内容仍为
+7. **`$CASTLEWARDATE` 的 0 号城回退 + 写回已实现（F1）**：`Castle == null ⇒ Castle = CastleMgr.GetCastle(0)`
+   （`NormNpc.cs:805-818`，**字段赋值 ⇒ 跨次对话保留**）。实现：`NpcVars.castle_zero`（宿主每次入口给
+   `castles[0]` 快照）+ `castle_zero_sticky`（按 NPC `ActorId` 记账的共享集合）；`get_variable_text` 命中
+   回退时**写回** `vars.castle` 并记 sticky，宿主下次解析该 NPC 的 `Castle` 时先看 sticky。无 0 号城 ⇒
+   不替换（oracle `if (Castle != null)` 为假）。部署影响：`老人-3`（`@aboutwar`）/`比奇国王-0122`
+   这类不在战区的 NPC 不再把字面 `<$CASTLEWARDATE>` 留在页面上。
+8. **观测**：2026-10-25 03:52 部署件 `E:/MirServer/M2GameSvr/Castle/List.txt` 的 mtime 被刷新（内容仍为
    `0\r\n1\r\n`，6 字节，与部署列表一致）；疑似既有测试套件（`startup_finish` 写列表）在某个过滤器下
    写过真实路径——单跑本卡 6 条用例**不复现**（重跑前后 mtime 不变）。已登记给 Leader 排查，本卡未改任何
    `E:/MirServer` 文件内容。
@@ -100,7 +108,7 @@
 |---|---|
 | `cargo fmt --all -- --check` | rc=0 |
 | `cargo clippy --workspace --all-targets -D warnings` | rc=0 |
-| `cargo test --workspace` | **未完成（本轮）**：首次运行被系统因**内存不足**终止（非命令失败）；终止前的日志 `E:/tmp/t40-ws-test.log` 已过 **18 个 suite 全 `ok`**（0 failed）。按宿主约定「不自行重启被判内存压力的后台任务」⇒ 待授权后复跑；本卡**不声称全量绿**。受影响面：本片改动的 4 个文件已由定向用例覆盖（`castle_official` 5 条 + `t40_type2` 1 条 + `castle_vars_for` 1 条 + 回归 `t127_` 7 条全绿），但**跨 crate 回归未跑**。 |
+| `cargo test --workspace`（分包协议，`--test-threads=2`） | **已完成**：`-p game-svr` = 22 suites / **1528 passed** / 0 failed / 8 ignored（返工后重跑，含 F1/F3 两条新用例）；`--workspace --exclude game-svr` = 119 suites / 1692 passed / 0 failed / 54 ignored；两段 rc=0、未被 reaper 终止；合计 **141 suites / 3220 passed / 0 failed / 62 ignored** |
 | `cargo run -p msgcodegen -- --check` | rc=0（604 条） |
 | 卫生四门 + `t_reservation` + `whitelist_anchor` + `m3_registry` | 见交付 status |
 | 边界 | 仅 `mir2-rs/bins/game-svr/src/{npc.rs,castle.rs,lib.rs,castle/tests.rs}` + `mir2-rs/crates/script/src/engine/mod.rs` + 本报告 |
@@ -111,3 +119,17 @@
 
 - 临时物：`E:/tmp/t40-target/`（隔离 target）、`E:/tmp/t40-ws-test.log`、`E:/tmp/t40-npc.bak`（牙备份，已还原）。
 - 未 merge、未自签 review。
+
+## 10. 返工记录（review `6c510095`，request_changes）
+
+| 编号 | reviewer 结论 | 本片处置 |
+|---|---|---|
+| **F1**（阻塞，实现缺口） | `$CASTLEWARDATE` 少了 `Castle==null ⇒ GetCastle(0)` 回退 + 写回；部署 `老人-3`/`比奇国王-0122` 可达，会把字面 token 留页面上 | **已实现**：`NpcVars.castle_zero` + `castle_zero_sticky`；`get_variable_text` 命中回退即写回 `vars.castle` 并记账；宿主 `run_merchant_goto` 先看 sticky 再按 `InCastleWarArea` 解析。用例 `castle_wardate_falls_back_to_castle_zero_and_writes_back`（含「无 0 号城 ⇒ token 原样」支） |
+| **F2**（Minor） | 两处旧注释仍写「type 2 门未移植」 | **已改**：`lib.rs` 的 `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 两处注释改为实况（Click 门已接线；UserSelect 先 base 后 Castle） |
+| **F3**（Minor） | 报告 §6.1「部署只用到四个」不对；`$CASTLECHANGEDATE`（`老人-3 [@WarStatus]`）未实现 | **已实现 + 订正**：`$CASTLECHANGEDATE` 按 `NormNpc.cs:856-870`（`ChangeDate.ToString("yyyy-MM-dd HH:mm:ss")`，`Castle==null ⇒ "????"`，**无** 0 号城回退）；`CastleVars.change_date_text` 由宿主格式化（日期-only 补 `00:00:00`）；用例 `castle_changedate_formats_or_question_marks` |
+
+**全量门禁（在 `778f30a2c` 上按 tester 协议分包 + `--test-threads=2`）**：
+`-p game-svr` = **22 suites / 1526 passed / 0 failed / 8 ignored**；
+`--workspace --exclude game-svr` = **119 suites / 1692 passed / 0 failed / 54 ignored**；
+合计 **141 suites / 3218 passed / 0 failed / 62 ignored**，两段 rc=0，**未被 reaper 终止**。
+F1/F3 改动只在 `bins/game-svr`（+ docs），故返工后重跑 `-p game-svr` 段：**22 suites / 1528 passed / 0 failed / 8 ignored**（含两条新用例；其余包未受改动、沿用同一基线的绿）。

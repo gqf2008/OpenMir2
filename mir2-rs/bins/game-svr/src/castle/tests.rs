@@ -1272,6 +1272,7 @@ fn castle_vars_fixture() -> game_svr::npc::CastleVars {
         war_date_text: String::new(),
         war_list_text: String::new(),
         get_days: Some(7),
+        change_date_text: Some("1998-01-01 00:00:00".to_string()),
     }
 }
 
@@ -1411,5 +1412,64 @@ fn castle_vars_for_resolves_by_war_area_not_by_index() {
     assert!(
         super::castle_vars_for(&world, elsewhere, (2026, 10, 25)).is_none(),
         "图外 ⇒ Castle == null"
+    );
+}
+
+/// **F1（review `6c510095`）**：`$CASTLEWARDATE` 在 `Castle == null` 时取 `CastleMgr.GetCastle(0)`
+/// **并写回**（`NormNpc.cs:805-818` 是字段赋值，跨次对话保留）⇒ 部署的 `老人-3`（`@aboutwar`）与
+/// `比奇国王-0122` 这类「不在战区」的 NPC 也要展开成整行替换，而不是把字面 token 留在页面上。
+///
+/// 牙：去掉 `castle_zero` 回退（只保留 `if let Some(c) = castle`）⇒ 首断言红。
+#[test]
+fn castle_wardate_falls_back_to_castle_zero_and_writes_back() {
+    use mir2_script::engine::ScriptPlayer;
+    let mut rng = |_v: i32| 0;
+    let mut p = official_player(&mut rng);
+    p.vars.castle_official = false;
+    p.vars.castle = None;
+    p.vars.npc_actor_id = 42;
+    let mut zero = castle_vars_fixture();
+    zero.under_war = false;
+    zero.war_date_text = String::new();
+    p.vars.castle_zero = Some(zero);
+    assert_eq!(
+        p.line_variable_text("下一次战役记录在:<$CASTLEWARDATE> , 20:00开始。"),
+        "暂时没有行会攻城 .\\ \\<返回/@main>",
+        "Castle==null ⇒ GetCastle(0) ⇒ 申请表空 ⇒ 整行替换"
+    );
+    assert!(p.vars.castle.is_some(), "回退必须写回 NPC 的 Castle 字段");
+    assert!(
+        p.vars.castle_zero_sticky.borrow().contains(&42),
+        "写回要按 NPC ActorId 记账（跨次对话粘滞）"
+    );
+
+    // 没有 0 号城 ⇒ oracle 的 `if (Castle != null)` 为假 ⇒ **不替换**（token 原样）。
+    let mut q = official_player(&mut rng);
+    q.vars.castle_official = false;
+    q.vars.castle = None;
+    q.vars.castle_zero = None;
+    assert_eq!(
+        q.line_variable_text("记录:<$CASTLEWARDATE>"),
+        "记录:<$CASTLEWARDATE>"
+    );
+}
+
+/// **F3（review `6c510095`）**：`$CASTLECHANGEDATE`（`NormNpc.cs:856-870`，部署 `老人-3`
+/// `[@WarStatus]` 用到）：`Castle != null` ⇒ `ChangeDate.ToString("yyyy-MM-dd HH:mm:ss")`，
+/// 否则 `"????"`（**无** 0 号城回退）。
+#[test]
+fn castle_changedate_formats_or_question_marks() {
+    use mir2_script::engine::ScriptPlayer;
+    let mut rng = |_v: i32| 0;
+    let mut p = official_player(&mut rng);
+    p.vars.castle_official = false;
+    assert_eq!(
+        p.line_variable_text("占领日期:<$CASTLECHANGEDATE>"),
+        "占领日期:1998-01-01 00:00:00"
+    );
+    p.vars.castle.as_mut().unwrap().change_date_text = None;
+    assert_eq!(
+        p.line_variable_text("占领日期:<$CASTLECHANGEDATE>"),
+        "占领日期:????"
     );
 }

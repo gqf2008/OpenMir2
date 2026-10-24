@@ -4750,8 +4750,8 @@ fn handle_click_npc_cmd(
     };
     let (nx, ny, nmap, ntype) = (ne.x, ne.y, ne.map_id, ne.npc.as_ref().map(|st| st.npc_type));
     // `normNpc.Click(this)` 是**按实际类**的虚调用 ⇒ 先过类型门（[`fixed_npc_script_allowed`]）。
-    // type 2 `CastleOfficial` 的门未移植（T-40/T-140）：oracle 对普通玩家在 `Castle` 门处
-    // return（`CastleOfficial.cs:20-30`），可观测面同样是零帧；红字 `SysMsg` 未建模（T-137 残余①）。
+    // type 2 `CastleOfficial` 的 `Click` 门**已接线**（卡 `openmir2-castle-official-design`）：
+    // 无城 ⇒ 一条红字 `SM_SYSMESSAGE`；有城但未授权 ⇒ 零帧；授权 ⇒ `base.Click`（见下）。
     // `ClickNpcTime` 已在门外按 oracle 置位（`PlayObject.Base.cs:678-682`），不属本门。
     if let Some(ntype) = ntype {
         if ntype == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL {
@@ -5609,10 +5609,9 @@ fn handle_shop_cmd(
         }
     };
     // `npc.UserSelect(this, sMsg.Trim())` 是**按实际类**的虚调用 ⇒ 先过类型门
-    // （[`fixed_npc_script_allowed`]）。type 2 `CastleOfficial` 的 `UserSelect` 门未移植
-    // （`CastleOfficial.cs:93-107`：`Castle` 非空 + `Castle.IsMasterGuild(MyGuild)` +
-    // `IsGuildMaster()` 才 `GotoLable`；`Castle == null` 只有红字 `SysMsg`）⇒ 本宿主在类型门
-    // 直接拦下，保持普通玩家侧零帧零副作用（红字与 `base.UserSelect` 账本未建模，T-137 残余①）。
+    // （[`fixed_npc_script_allowed`]）。type 2 `CastleOfficial` 的 `UserSelect` **已按 oracle
+    // 顺序接线**（`CastleOfficial.cs:93-107`：先 `base.UserSelect` = Merchant 半，再进 Castle 的
+    // `try`）⇒ 本漏斗放行 type 2（见下方 `dialog_allowed`）。
     if let Some(ntype) = fixed_npc_type {
         // `CastleOfficial.UserSelect`（`CastleOfficial.cs:93-107`）的**第一步**就是
         // `base.UserSelect(...)`（= `Merchant.UserSelect`，会 `GotoLable(@main)` 并处理
@@ -7569,7 +7568,23 @@ fn run_merchant_goto(
                 chrono::Datelike::month(&wall_now),
                 chrono::Datelike::day(&wall_now),
             );
-            if let Some(vars) = game_svr::castle::castle_vars_for(w, merchant_actor_id, today) {
+            // `NormNpc.Castle == null ⇒ GetCastle(0)` 的回退源（`$CASTLEWARDATE`，
+            // `NormNpc.cs:805-818`）+ 该 NPC 的 `ActorId`（写回记账）。
+            player.vars.npc_actor_id = merchant_actor_id;
+            player.vars.castle_zero = game_svr::castle::castle_vars_for_index(w, 0, today);
+            // **写回粘滞**：上一次对话里 `$CASTLEWARDATE` 把该 NPC 的 `Castle` 赋成了 0 号城
+            // （oracle 字段赋值，跨次保留）⇒ 本次先用 0 号城；否则按 `InCastleWarArea` 解析。
+            let sticky_zero = player
+                .vars
+                .castle_zero_sticky
+                .borrow()
+                .contains(&merchant_actor_id);
+            let resolved = if sticky_zero {
+                player.vars.castle_zero.clone()
+            } else {
+                game_svr::castle::castle_vars_for(w, merchant_actor_id, today)
+            };
+            if let Some(vars) = resolved {
                 player.vars.castle = Some(vars);
             }
             // `Npcs.txt` 的 type 2（`CastleOfficial`）⇒ `GetVariableText` 走覆写

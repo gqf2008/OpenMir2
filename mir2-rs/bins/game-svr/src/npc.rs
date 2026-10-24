@@ -203,6 +203,9 @@ pub struct CastleVars {
     /// `HUtil32.GetDayCount(DateTime.Now, Castle.ChangeDate)`（`$CASTLEGETDAYS`）；
     /// `None` = `ChangeDate` 解析不出（登记，保留 token 原样）。
     pub get_days: Option<i32>,
+    /// `Castle.ChangeDate.ToString("yyyy-MM-dd HH:mm:ss")`（`$CASTLECHANGEDATE`，
+    /// `NormNpc.cs:856-870`）。
+    pub change_date_text: Option<String>,
 }
 
 /// `NormNpc.GetVariableText` / `Merchant.GetVariableText` 需要的**非玩家**取值。
@@ -253,6 +256,14 @@ pub struct NpcVars {
     pub hire_guard_price: i32,
     /// `HireArcherPrice`（`$ARCHERFEE`；缺省 `300000`，部署 `:307`）。
     pub hire_archer_price: i32,
+    /// `CastleMgr.GetCastle(0)` 的实时快照（`NormNpc.cs:805-818` 的 `$CASTLEWARDATE` 回退源）。
+    pub castle_zero: Option<CastleVars>,
+    /// 本 NPC 的 `ActorId`（`$CASTLEWARDATE` 命中的「`Castle = GetCastle(0)` 写回」按它记账）。
+    pub npc_actor_id: i32,
+    /// **`Castle` 回退写回的持久集**：`$CASTLEWARDATE` 在 `Castle == null` 时把 NPC 的 `Castle`
+    /// 改成 `GetCastle(0)`（oracle 是字段赋值，**跨次对话保留**）⇒ 本表记录「已写过回退」的 NPC，
+    /// 宿主下次解析该 NPC 的城堡时优先用它。`Rc<RefCell<…>>` ⇒ `NpcVars::clone()` 仍共享。
+    pub castle_zero_sticky: std::rc::Rc<std::cell::RefCell<std::collections::BTreeSet<i32>>>,
     /// `DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")` 的注入串（`$DATETIME`，
     /// `NormNpc.cs:356-359` 的墙钟）。宿主在每次脚本入口重填（oracle 在展开时刻读时钟）。
     pub wall_clock: String,
@@ -372,6 +383,11 @@ impl Default for NpcVars {
             price_rate: 100,
             castle: None,
             castle_official: false,
+            castle_zero: None,
+            npc_actor_id: 0,
+            castle_zero_sticky: std::rc::Rc::new(std::cell::RefCell::new(
+                std::collections::BTreeSet::new(),
+            )),
             repair_door_price: 2_000_000,
             repair_wall_price: 500_000,
             hire_guard_price: 300_000,
@@ -1368,6 +1384,18 @@ impl NpcPlayer<'_, '_> {
             // `!UnderWar`：`GetWarDate()` 非空 ⇒ 替换 token，空 ⇒ **整行**换成
             // `"暂时没有行会攻城 .\\ \\<返回/@main>"`；`UnderWar` ⇒ 整行 `"正在攻城当中..."`。
             "$CASTLEWARDATE" => {
+                // `NormNpc.cs:805-818`：`if (Castle == null) { Castle = CastleMgr.GetCastle(0); }`
+                // ——注意是**字段赋值**（写回），跨次对话保留 ⇒ 本实现在此处落 `castle_zero_sticky`，
+                // 宿主下次解析该 NPC 的 `Castle` 时以它为准（`run_merchant_goto`）。
+                if self.vars.castle.is_none() {
+                    if let Some(zero) = self.vars.castle_zero.clone() {
+                        self.vars.castle = Some(zero);
+                        self.vars
+                            .castle_zero_sticky
+                            .borrow_mut()
+                            .insert(self.vars.npc_actor_id);
+                    }
+                }
                 if let Some(c) = self.vars.castle.clone() {
                     if !c.under_war {
                         if c.war_date_text.is_empty() {
@@ -1404,6 +1432,20 @@ impl NpcPlayer<'_, '_> {
                         *s_msg = replace_variable_text(s_msg, &token("$LISTOFWAR"), "????");
                     }
                 }
+            }
+            // `$CASTLECHANGEDATE`（`NormNpc.cs:856-870`）：`Castle != null` ⇒
+            // `ChangeDate.ToString("yyyy-MM-dd HH:mm:ss")`，否则 `"????"`（**无** 0 号城回退）。
+            "$CASTLECHANGEDATE" => {
+                let t = match self
+                    .vars
+                    .castle
+                    .as_ref()
+                    .and_then(|c| c.change_date_text.clone())
+                {
+                    Some(t) => t,
+                    None => "????".to_string(),
+                };
+                *s_msg = replace_variable_text(s_msg, &token("$CASTLECHANGEDATE"), &t);
             }
             // `$CASTLEGETDAYS`（`NormNpc.cs:878-890`）：`HUtil32.GetDayCount(Now, ChangeDate)`。
             "$CASTLEGETDAYS" => {
