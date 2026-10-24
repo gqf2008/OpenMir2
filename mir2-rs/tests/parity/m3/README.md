@@ -631,6 +631,14 @@ StdMode 1（食物：`HungerStatus += DuraMax/10`、夹 5000、跨档 `RefMyStat
 （`result=true`、无任何状态变更）；地图禁药（`Envir.Flag.boNODRUG`）时
 `SysMsg(Red, Hint)` → `RM_SYSMESSAGE` 并拒绝（不吃、只落 `SM_EAT_FAIL`）。
 
+**生产接线（卡 `openmir2-spell-fill-projection-mirror`，review `9fed9ade26` D8）**：
+`handle_eat_cmd` 的 `UseItemContext::dead` 已从实体取真实死亡态
+（`world.entities.get(actor_id).is_some_and(|e| e.death)`，旧值恒 `false`=未接线登记），
+复用本接缝的 oracle `!Death` 拒绝分支（只落 `SM_EAT_FAIL(636)`、`WAbil` 不动）；
+StdMode 31 的 `@StdModeFunc<N>` 脚本前置步同样以 `dead` 短路（oracle 的 item 循环整体
+不进入）。夹具 `eat_fail_dead` 继续钉该语义；回归测试
+`eat_dead_rejected_636_entity_stays_zero_and_p21_heals_projection`（game-svr）。
+
 `ClientUseItems` 产出**两条通道**，接缝分开返回（别混成一条流）：
 
 | 通道 | 产生点 | 本片帧/通知 |

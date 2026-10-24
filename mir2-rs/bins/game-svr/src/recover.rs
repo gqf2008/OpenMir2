@@ -38,6 +38,14 @@
 //! - 血石/魔血石（`CharacterObject.cs:160-230` 的 `IncHealth += stoneDura`）、
 //!   `StateTimeArr`/buff、`AutoTimer` 等 `Run()` 的其它段不在本切片（各自另有卡）。
 
+//! # 写点同步义务（卡 `openmir2-spell-fill-projection-mirror`）
+//!
+//! 本模块只写**会话投影** `wabil`；oracle 的 `IncHealthSpell`（HP/MP 两支）写的是唯一一份
+//! `BaseObject.WAbil` ⇒ 恢复永存。本宿主两份存储必须在**每个写点**同步：调用方
+//! [`crate::drain_recovery`] 在 `recovery_tick` 命中后把 `wabil.hp/wabil.mp` 双侧镜像进
+//! `Entity`。删镜像 ⇒ 下一 tick P21 无条件刷回把恢复擦回实体旧值（reviewer-3 tooth3 实锤
+//! left:15/right:17），合同测试必红。
+
 use crate::ability::Ability;
 
 /// `CharacterObject` 上与周期恢复相关的计数器（`IncHealth/IncSpell/IncHealing` + `Per*` + tick）。

@@ -46,6 +46,15 @@
 //! 恢复先产生 53 则被替换）——宿主按 world tick 批量重放，**登记**为「帧相对 oracle 早
 //! 0–50ms，且跨 tick 替换未建模」（R 级，真机窗口项）。
 //!
+//! # 写点同步义务（卡 `openmir2-spell-fill-projection-mirror`）
+//!
+//! 本模块只写**会话投影** `wabil`（调用方传 `&mut sg.state.wabil`）；oracle 里 HP/MP 恢复
+//! 写的是唯一一份 `BaseObject.WAbil` ⇒ 恢复永存。本宿主两份存储（投影 + `Entity.hp/mp`）
+//! 必须在**每个写点**同步：调用方 [`crate::drain_stamina`] 在回写段把
+//! `wabil.hp/wabil.mp` 镜像进 `Entity`（HP 支 `:44-55` / MP 支 `:57-68` / 负值支 `:105-109`
+//! 三支同镜像）。删镜像 ⇒ 下一 tick P21 无条件刷回把恢复擦回实体旧值（reviewer-3 tooth3
+//! 实锤 left:15/right:17），合同测试必红。
+//!
 //! # 扣体力的站点（都在本模块之外，由调用方作用到 [`Stamina`]）
 //!
 //! - 攻击成功：`HealthTick -= 30; SpellTick -= 100; SpellTick = max(0, SpellTick)`
