@@ -44,6 +44,13 @@
      + `tick_split`）：`t_ms` 是全局掩码的墙钟字段，**不能当判定边界**（1ms 抖动会把
      同一帧集误判成缺帧）；缺 `t_ms` ⇒ rc 2。只允许用于无因果序的帧（当前仅 ident 100），
      绝不推广到出现帧对/攻击序列。
+   * `time_text`（内置掩码，仅 ident=100）：@time 回显 body = EDCode(`当前日期时间: `
+     + `YYYY-MM-DD HH:MM:SS`)，时间戳数字是发送侧墙钟（两次运行必然不同 ⇒ 环境噪声，
+     卡 openmir2-compare-time-noise-mask）。多重集键与逐帧 body 比较都用「时间文本位
+     替换为等长占位符」后的明文；前缀静态文案与其余字节照常逐字节比；解码失败或未命中
+     ⇒ 完全退回原路径（fail-closed）。掩码命中进报告 `masked_ranges`
+     (space=plain_time_text)，被掩差异进 `whitelisted`(kind=time_text_masked)——
+     都不是静默 PASS。掩码不越 ident：同形时间文本在其他 ident 照常逐字节比。
 4) 规则覆盖：某 ident 在两侧任何一帧里出现、规则表却没有它的条目 ⇒ **UNCLASSIFIED ⇒ 退出码 2**
    （显式 `--ignore-idents` 点名的 ident 视为已分类：剔除即处置）。
    只有 `--allow-unclassified 1,2,3` 显式点名才放行，且报告里仍然逐个登记。
@@ -71,6 +78,7 @@ from collections import Counter
 import importlib.util
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -90,6 +98,32 @@ BAG_RECORD_LEN = 124
 BAG_RECORD_FIELDS = {"MakeIndex": (100, 104)}
 BAG_DEFAULT_MASKS = ("MakeIndex",)
 TIERS = ("R", "L")
+
+# ---------------------------------------------------------------------------
+# ident=100（SM_SYSMESSAGE）「@time 回显」的时间文本掩码
+# （卡 openmir2-compare-time-noise-mask，tier=L；比较器内置，rules.json 未改）
+#
+# 现象：gm_time / gm_batch 真机窗口（docs/window-run-1-20261024.md §3 第 3 条）里，
+# 两侧 ident=100 的 @time 回显 body 等长但差 3 字节（线缆 offset 38/41/42 = 时间文本
+# 的时分秒位）——GM 命令 @time 的回显是 `当前日期时间: YYYY-MM-DD HH:MM:SS`（GBK 明文
+# 经 EDCode 编码），时间戳数字来自**发送侧墙钟**，两次独立运行必然不同 ⇒ 环境噪声，
+# 非实现差异。
+#
+# 掩码口径（窄，且 fail-closed）：
+#   * 只作用于 ident == 100 的 body；其他 ident 即使出现同形时间文本也不掩（selftest 牙）；
+#   * body 必须能**严格** EDCode 解码（decode_bytes strict，越界字节即失败），解码失败
+#     ⇒ 完全退回原逐字节路径，绝不掩；
+#   * 明文必须命中「前缀 `当前日期时间: ` + `\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}`」——
+#     前缀是静态文案，**照常逐字节比**（文案写错照样红）；只把命中Match组 1（时间戳
+#     数字段，明文区间）替换为**等长**占位符后再比；
+#   * 掩码后相等但原字节不同 ⇒ whitelisted(kind=time_text_masked) 显式登记，不是静默 PASS；
+#   * 掩码后仍不同 ⇒ diff（明文空间定位）——时间位之外的**真实差异绝不被掩**；
+#   * 命中区间进报告 masked_ranges(space=plain_time_text)，逐帧可审计。
+TIME_TEXT_IDENT = 100
+TIME_TEXT_PREFIX = "当前日期时间: ".encode("gbk")
+TIME_TEXT_RE = re.compile(
+    re.escape(TIME_TEXT_PREFIX) + rb"(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})")
+TIME_TEXT_PLACEHOLDER = b"YYYY-MM-DD HH:MM:SS"   # 与时间戳等长（19B），保持明文对齐
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -457,6 +491,33 @@ def load_run_meta(dirpath):
     return out
 
 
+def time_masked_plain(body):
+    """ident=100 的 EDCode 线缆 body -> (时间文本掩码后的明文, 命中的明文区间列表)。
+
+    掩码 = 把 `当前日期时间: ` 后面的 `YYYY-MM-DD HH:MM:SS` 数字段（Match 组 1）替换为
+    等长占位符。只有**严格解码成功且命中该模式**才返回结果；否则返回 None
+    （调用方必须退回原逐字节路径——掩码绝不放宽、绝不掩盖非时间差异）。
+    """
+    try:
+        mod = load_module("mir2frame", MIR2FRAME)
+        plain = mod.decode_bytes(body, strict=True)
+    except Undecidable:
+        return None             # 解码器模块不可用：不掩码（fail-closed）
+    except Exception:           # FrameError 等：不是合法 EDCode 线缆字节 ⇒ 不掩码
+        return None
+    spans = [list(m.span(1)) for m in TIME_TEXT_RE.finditer(plain)]
+    if not spans:
+        return None
+    out = bytearray()
+    pos = 0
+    for start, end in spans:
+        out += plain[pos:start]
+        out += TIME_TEXT_PLACEHOLDER
+        pos = end
+    out += plain[pos:]
+    return bytes(out), spans
+
+
 # ---------------------------------------------------------------------------
 # 帧比较
 # ---------------------------------------------------------------------------
@@ -495,8 +556,16 @@ def _ord_token(v):
 
 
 def _multiset_body_token(fr):
-    if fr["body"] is not None:
-        return "hex:" + fr["body"].hex()
+    body = fr["body"]
+    if body is not None and fr["ident"] == TIME_TEXT_IDENT:
+        # ident=100：多重集身份用时间文本掩码后的明文——@time 回显的时间戳是墙钟噪声，
+        # 不能让它把「同一文案、只差时分秒」的两帧判成缺失/多余；掩码未命中（非时间文本
+        # 或解码失败）时退回原 wire hex token，行为与掩码引入前完全一致。
+        masked = time_masked_plain(body)
+        if masked is not None:
+            return "plain-time-masked:" + masked[0].hex()
+    if body is not None:
+        return "hex:" + body.hex()
     if fr["body_sha256"]:
         return "sha256:" + fr["body_sha256"]
     return "absent:"
@@ -739,6 +808,72 @@ def _compare_bagitems(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable)
                             "approved_by": rule.get("approved_by", "")})
 
 
+def _compare_time_masked_body(fr_o, fr_r, rule, diffs, whitelisted, masked_ranges_note):
+    """ident=100 @time 回显的时间文本掩码比较。返回 True 表示 body 已处置（不再走默认逐字节）。
+
+    * 任一侧解码失败，或两侧都没命中时间文本 ⇒ False（退回原路径，无任何掩码行为）；
+    * 掩码后相等、原字节不同 ⇒ whitelisted(kind=time_text_masked) 显式登记（不是静默 PASS）；
+    * 掩码后仍不同 ⇒ diff（明文空间定位）——时间位之外的真实差异绝不被掩。
+    """
+    ident = fr_o["ident"]
+    idx = fr_o["index"]
+    ob, rb = fr_o["body"], fr_r["body"]
+    o_mask = time_masked_plain(ob)
+    r_mask = time_masked_plain(rb)
+    if o_mask is None or r_mask is None:
+        return False
+    om, o_spans = o_mask
+    rm, r_spans = r_mask
+    if not o_spans and not r_spans:
+        return False
+    masked_ranges_note.append({"frame_index": idx, "ident": ident,
+                               "space": "plain_time_text",
+                               "oracle_spans": o_spans, "rust_spans": r_spans})
+    if om == rm:
+        if ob != rb:
+            whitelisted.append({
+                "source": "frame", "frame_index": idx, "ident": ident,
+                "field": "body", "kind": "time_text_masked",
+                "oracle_time_spans": o_spans, "rust_time_spans": r_spans,
+                "diff_bytes": count_diff_bytes(ob, rb),
+                "oracle_wire_len": len(ob), "rust_wire_len": len(rb),
+                "plain_len": len(om),
+                "reason": "ident=100 @time 回显的时间戳数字段是发送侧墙钟"
+                          "（跨运行不可复现，卡 openmir2-compare-time-noise-mask，"
+                          "比较器内置掩码，rules.json 未改）；前缀静态文案与其余字节"
+                          "仍逐字节比",
+                "tier": "L",
+                "approved_by": "卡 openmir2-compare-time-noise-mask（draft: "
+                               "openmir2-worker-58）",
+                "detail": "ident=100 body 仅时间文本位不同（线缆 %d 字节），掩码后逐字节相等"
+                          % count_diff_bytes(ob, rb)})
+        return True
+    # 掩码后仍不同 ⇒ 真实差异（占位符两侧相同，任何差异都在时间位之外）
+    if len(om) != len(rm):
+        diffs.append({
+            "source": "frame", "frame_index": idx, "ident": ident,
+            "field": "body_len", "kind": "body_len", "space": "plain",
+            "oracle": len(om), "rust": len(rm),
+            "oracle_wire_len": len(ob), "rust_wire_len": len(rb),
+            "oracle_time_spans": o_spans, "rust_time_spans": r_spans,
+            "detail": "ident=100 body 掩掉时间文本位之后明文长度仍不同"
+                      "（oracle %dB / rust %dB）——时间位之外的真实差异不被掩码" % (len(om), len(rm))})
+        return True
+    off = first_diff_offset(om, rm)
+    diffs.append({
+        "source": "frame", "frame_index": idx, "ident": ident,
+        "field": "body", "kind": "body", "space": "plain",
+        "offset": off,
+        "oracle_byte": om[off], "rust_byte": rm[off],
+        "oracle_plain_len": len(om), "rust_plain_len": len(rm),
+        "oracle_wire_len": len(ob), "rust_wire_len": len(rb),
+        "diff_bytes": count_diff_bytes(om, rm),
+        "oracle_time_spans": o_spans, "rust_time_spans": r_spans,
+        "detail": "ident=100 body 掩掉时间文本位之后仍有差异（明文首处 offset=%d）——"
+                  "时间位之外的真实差异不被掩码" % off})
+    return True
+
+
 def compare_bodies(fr_o, fr_r, rule, diffs, whitelisted, undecidable, masked_ranges_note):
     """按 action 比 body；所有分支都必须给出明确结论。"""
     ident = fr_o["ident"]
@@ -792,6 +927,10 @@ def compare_bodies(fr_o, fr_r, rule, diffs, whitelisted, undecidable, masked_ran
 
     if action == "bagitems_records":
         _compare_bagitems(idx, ident, ob, rb, rule, diffs, whitelisted, undecidable)
+        return
+
+    if ident == TIME_TEXT_IDENT and _compare_time_masked_body(
+            fr_o, fr_r, rule, diffs, whitelisted, masked_ranges_note):
         return
 
     if action == "mask_body_ranges" and len(ob) == len(rb):

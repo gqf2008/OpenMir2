@@ -30,6 +30,12 @@
      202/203 单条 124B ClientItem 只掩 MakeIndex；642 Recog=Dura 窄掩、槽位/DuraMax 保留；
      709 无掩码全字节比。双向断言 + 牙①（删 642 ⇒ 整轮 rc 2 UNCLASSIFIED）
      + 牙②（窄掩码放宽成整帧 ignore ⇒ 保留字段差异被吞 ⇒ rc 0）。
+ 15. ident=100「@time 回显」的时间文本掩码（卡 openmir2-compare-time-noise-mask）：
+     只差 `当前日期时间: YYYY-MM-DD HH:MM:SS` 的时间戳数字位 ⇒ 掩码生效 rc 0 且显式登记
+     time_text_masked（不是静默 PASS）；时间位之外的真实差异（静态文案被改/明文长度变）
+     ⇒ rc 1 且掩码不掩盖；掩码不越 ident（同形时间差在 658 仍 rc 1）；解码失败（非 EDCode
+     线缆字节）⇒ 退回逐字节（fail-closed）；夹具与真机同形态（GBK 明文 → EDCode 线缆），
+     并用真机同款 body_hex 钉住编码形态。
 
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
@@ -198,6 +204,7 @@ class Selftest(object):
         self.t_body_ranges()
         self.t_rule_validation(o, r)
         self.t_multiset_by_tick(o, r)
+        self.t_time_text_mask()
         self.t_recog_unmask_rules()
         self.t_recog_unmask_diff()
         self.t_recog_unmask_actorid_abuse()
@@ -1682,6 +1689,125 @@ class Selftest(object):
         self.check("multiset ⑩(I-3) 块数不同但帧数相同 => rc 1 + block_align 且两侧帧数都=2",
                    rc == 1 and len(ba) == 1 and ba[0].get("oracle_frames") == 2
                    and ba[0].get("rust_frames") == 2, (rc, ba))
+
+    # -- ident=100「@time 回显」的时间文本掩码（卡 openmir2-compare-time-noise-mask）--
+    #: 真机 @time 回显的线缆 body（E:/tmp/window/run1/gm_time idx30 csharp，
+    #: 明文 = `当前日期时间: 2026-10-24 13:46:43` GBK → EDCode）。
+    REAL_TIME_WIRE = ("4141675740547559565a625541404458625c5a636062566b5d61585f5d"
+                      "62545f5c615b6b6260566262605b62")
+
+    def enc_gbk_wire(self, text):
+        m2f = self.api.load_module("mir2frame", self.api.MIR2FRAME)
+        return m2f.encode_bytes(text.encode("gbk"))
+
+    def t_time_text_mask(self):
+        m2f = self.api.load_module("mir2frame", self.api.MIR2FRAME)
+        ts_o = self.enc_gbk_wire("当前日期时间: 2026-10-24 13:46:43")
+        ts_r = self.enc_gbk_wire("当前日期时间: 2026-10-24 13:47:57")
+        plain_o = "当前日期时间: 2026-10-24 13:46:43".encode("gbk")
+        self.check("time_mask ⓪ 夹具往返：GBK 明文 EDCode 编解码无损（等长 33B 明文）",
+                   m2f.decode_bytes(ts_o, strict=True) == plain_o
+                   and len(plain_o) == 33, plain_o)
+        self.check("time_mask ⓪ 夹具与真机 @time 回显同一编码形态（逐字节同 hex）",
+                   ts_o.hex() == self.REAL_TIME_WIRE, ts_o.hex())
+
+        def run_case(tag, ident, obody, rbody, extra=()):
+            of = [self.frame(ident, obody, phase="gamegate", seq=1, conn="o",
+                             t_ms=1000, recog=5555, param=64763, tag=0, series=1)]
+            rf = [self.frame(ident, rbody, phase="gamegate", seq=2, conn="r",
+                             t_ms=2000, recog=6666, param=64763, tag=0, series=1)]
+            od = self.write_run("t25-%s-o" % tag, of)
+            rd = self.write_run("t25-%s-r" % tag, rf)
+            return self.compare(od, rd, list(extra))
+
+        # ① 有时间差（时分秒位，真机 gm_time/gm_batch 的噪声形态）⇒ 掩码生效 rc 0
+        rc, rep = run_case("timediff", 100, ts_o, ts_r)
+        wl = [w for w in (rep or {}).get("whitelisted", [])
+              if w.get("kind") == "time_text_masked"]
+        mr = [m for m in (rep or {}).get("masked_ranges", [])
+              if m.get("space") == "plain_time_text"]
+        self.check("time_mask ① 只差时间文本位 => rc 0（掩码生效）", rc == 0,
+                   (rc, (rep or {}).get("diffs"), (rep or {}).get("undecidable")))
+        self.check("time_mask ① 显式登记 time_text_masked：diff_bytes=3、"
+                   "明文时间区间 [[14,33]]（不是静默 PASS）",
+                   len(wl) == 1 and wl[0].get("ident") == 100
+                   and wl[0].get("diff_bytes") == 3
+                   and wl[0].get("oracle_time_spans") == [[14, 33]]
+                   and wl[0].get("rust_time_spans") == [[14, 33]], wl)
+        self.check("time_mask ① masked_ranges 登记 plain_time_text 掩码命中",
+                   len(mr) == 1 and mr[0].get("oracle_spans") == [[14, 33]], mr)
+
+        # ② 掩码生效、但时间位**之外**有真差异（时间戳后的备注文案不同，等长）⇒ 掩码不掩盖
+        suf_o = self.enc_gbk_wire("当前日期时间: 2026-10-24 13:46:43（偏快1秒）")
+        suf_r = self.enc_gbk_wire("当前日期时间: 2026-10-24 13:46:44（偏慢9秒）")
+        rc, rep = run_case("suffix", 100, suf_o, suf_r)
+        kinds = sorted({d.get("kind") for d in (rep or {}).get("diffs", [])
+                        if d.get("ident") == 100})
+        wl2 = [w for w in (rep or {}).get("whitelisted", [])
+               if w.get("kind") == "time_text_masked"]
+        self.check("time_mask ② 时间位之外的尾部真差异 => rc 1（掩码不掩盖）",
+                   rc == 1 and kinds == ["multiset_extra", "multiset_missing"], (rc, kinds))
+        self.check("time_mask ② 该差异不得登记成 time_text_masked（掩码只免时间位）",
+                   not wl2, wl2)
+
+        def rules_100_compare():
+            rules = json.loads(json.dumps(self.builtin_rules))
+            rules["rules"] = [r for r in rules["rules"] if r.get("ident") != 100]
+            rules["rules"].append({"ident": 100, "action": "compare",
+                                   "reason": "selftest：ident=100 改逐字节比，"
+                                             "钉时间掩码的「不掩盖/定位」路径",
+                                   "tier": "L", "approved_by": "selftest"})
+            return self.rules_file("t25-rules-100cmp.json", rules)
+
+        rp100 = rules_100_compare()
+        # ②b 同 ② 夹具、ident=100 逐字节规则 ⇒ compare_bodies 的掩码路径：
+        #    diff 定位在**明文** offset=37（备注「快/慢」首字节；占位符之后的真差异），
+        #    并带时间区间证据 [[14,33]]
+        rc, rep = run_case("suffixcmp", 100, suf_o, suf_r, ["--rules", rp100])
+        bd = [d for d in (rep or {}).get("diffs", []) if d.get("kind") == "body"]
+        self.check("time_mask ②b 逐字节规则下掩码后真差异 => rc 1 且 space=plain offset=37",
+                   rc == 1 and len(bd) == 1 and bd[0].get("space") == "plain"
+                   and bd[0].get("offset") == 37
+                   and bd[0].get("oracle_time_spans") == [[14, 33]], (rc, bd))
+        # ②c 静态文案前缀被改（间→刻）⇒ 掩码不命中前缀 ⇒ 退回逐字节 => rc 1，定位线缆 offset=13
+        #    （明文[10]=0xBC(间首字节) → 线缆[4*(10//3)+10%3]=13，掩码未掩前缀）
+        pre_o = self.enc_gbk_wire("当前日期时间: 2026-10-24 13:46:43")
+        pre_r = self.enc_gbk_wire("当前日期时刻: 2026-10-24 13:46:43")
+        rc, rep = run_case("prefixcmp", 100, pre_o, pre_r, ["--rules", rp100])
+        bd = [d for d in (rep or {}).get("diffs", []) if d.get("kind") == "body"]
+        self.check("time_mask ②c 前缀静态文案被改 => rc 1（前缀照比，掩码不命中）"
+                   "且定位线缆 offset=13",
+                   rc == 1 and len(bd) == 1 and bd[0].get("offset") == 13
+                   and bd[0].get("space", "wire") != "plain", (rc, bd))
+        # ③ 明文长度不同（一侧备注多一段）⇒ body_len diff（掩码不掩盖长度差）
+        len_r = self.enc_gbk_wire("当前日期时间: 2026-10-24 13:46:44（偏慢9秒）!")
+        rc, rep = run_case("lenmask", 100, suf_o, len_r, ["--rules", rp100])
+        bl = [d for d in (rep or {}).get("diffs", []) if d.get("kind") == "body_len"]
+        self.check("time_mask ③ 掩码后明文长度仍不同 => rc 1 + body_len（space=plain）",
+                   rc == 1 and len(bl) == 1 and bl[0].get("space") == "plain"
+                   and bl[0].get("oracle") == 44 and bl[0].get("rust") == 45, (rc, bl))
+
+        # ④ 牙：掩码不越 ident —— 同形时间差放到 ident=658（action=compare）⇒ 仍 rc 1，
+        #    定位到与真机证据相同的线缆 offset=38，且不得出现 time_text_masked
+        rc, rep = run_case("nocross", 658, ts_o, ts_r)
+        bd = [d for d in (rep or {}).get("diffs", []) if d.get("kind") == "body"]
+        wl3 = [w for w in (rep or {}).get("whitelisted", [])
+               if w.get("kind") == "time_text_masked"]
+        self.check("time_mask ④ 掩码不越 ident（658 同形时间差 => rc 1）",
+                   rc == 1 and len(bd) == 1 and bd[0].get("offset") == 38 and not wl3,
+                   (rc, bd, wl3))
+
+        # ⑤ 牙：body 不是合法 EDCode 线缆字节（明文直写）⇒ 解码失败 ⇒ 退回逐字节（fail-closed）
+        raw_o = "当前日期时间: 2026-10-24 13:46:43".encode("gbk")
+        raw_r = "当前日期时间: 2026-10-24 13:47:57".encode("gbk")
+        rc, rep = run_case("notwire", 100, raw_o, raw_r)
+        kinds = sorted({d.get("kind") for d in (rep or {}).get("diffs", [])
+                        if d.get("ident") == 100})
+        wl4 = [w for w in (rep or {}).get("whitelisted", [])
+               if w.get("kind") == "time_text_masked"]
+        self.check("time_mask ⑤ 非线缆字节（解码失败）=> rc 1，不掩码不登记 time_text_masked",
+                   rc == 1 and kinds == ["multiset_extra", "multiset_missing"] and not wl4,
+                   (rc, kinds, wl4))
 
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
