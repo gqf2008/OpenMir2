@@ -46,7 +46,7 @@ fail_items = []
 |---|---:|---:|---:|---|
 | R 卡总数 | 198 | 198 | 0 | — |
 | 已完成 | 11 | 11 | 0 | — |
-| window_required（含未合并） | 123 | 124 | +1 | `openmir2-weaponstrong-dura-zero-skip` 合入 `d54fa4581` 且 `window_required=true` |
+| window_required（另未合并） | 123 | 124 | +1 | `openmir2-weaponstrong-dura-zero-skip` 合入 `d54fa4581` 且 `window_required=true`。〔2026-10-24 订正：本行标签原写「含未合并」——误；`window_required` 与未合并 2 张是两个独立计数（`r_category` 只返回其一），123/124 **不含**那 2 张，故改「另未合并」，未合并另见下一行〕 |
 | 其中未合并 | 2 | 2 | 0 | — |
 | whitelist | 48 | 48 | 0 | — |
 | 已裁定登记 | 3 | 3 | 0 | — |

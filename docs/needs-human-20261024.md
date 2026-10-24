@@ -57,7 +57,7 @@
   R 卡等真机窗口），**不是 FAIL**。
 - 本版快照：`master=917376a45`，`generated_ts=1792811815`；R 卡 200 张 @ `917376a45`、`window_required` 131（已合并）+ 2（未合并，合计 133）、
   `merged 未 closed 但已凭登记 PASS=180`、`whitelist_t_rows=255`。
-  （旧值 @ `55a8e7fca`，2026-10-24 订正：R 卡 198 / `window_required` 123（含未合并 2）/ `merged 未 closed` 但已凭登记 PASS 172 / `whitelist_t_rows` 255。）
+  （旧值 @ `55a8e7fca`，2026-10-24 订正：R 卡 198 / `window_required` 123、另未合并 2 —— 原写「含未合并 2」，系误读；123 为已合入桶，与那 2 张是两个独立计数，与本版上行「`window_required` 131（已合并）+ 2（未合并，合计 133）」口径一致 / `merged 未 closed` 但已凭登记 PASS 172 / `whitelist_t_rows` 255。）
   （R 卡计数与「未开工/未合并」随 collab 看板漂移：本版 `openmir2-weaponstrong-dura-zero-skip` 已转 `in-progress`，
   故「未开工或未合并」= 0、「其它需人工」= 0、「需人工」= 5。复算一律以命令现取为准。）
 - **这次「假 FAIL」的因果要记下来（首版就踩了）**：Leader 建 `openmir2-ability-weaponstrong` 卡时 issue body

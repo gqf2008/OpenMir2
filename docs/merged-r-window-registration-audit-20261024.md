@@ -85,12 +85,14 @@ python -I tools/goal/goal_gate.py --json --skip-tests --skip-script
 | 口径 | 返工前（本卡 base `6cb7d72b4`） | 返工后（本卡返工状态生效） | 变化 |
 |---|---:|---:|---|
 | R 卡总数 | 200 | 200 | 0 |
-| `window_required`（含未合并 2） | 130 | **131** | **+1** |
+| `window_required`（另未合并 2） | 130 | **131** | **+1** |
 | `whitelist` | 48 | 48 | 0 |
 | 已裁定登记 | 3 | 3 | 0 |
 | `merged_not_closed_no_registration` | 6 | **5** | **−1** |
 | 其它需人工 | 0 | 0 | 0 |
 | 条件②「需人工」张数 | 6 | **5** | **−1** |
+
+> 〔2026-10-24 订正：上表 `window_required` 行的标签原写「（含未合并 2）」——误；`window_required` 与未合并 2 张是两个独立计数（`r_category` 只返回其一，分区和 `11+131+2+48+3+5 = 200` 恰好铺满），130/131 **不含**那 2 张，故改「另未合并 2」。〕
 
 - **唯一的机器口径变化**来自 `openmir2-conformance-rng-nondeterminism`：返工前它三条 review 都无 `window_required` 布尔值
   ⇒ 落 `merged_not_closed`；本卡补一条 `window_required: true` 的 status（**登记**，不是签 tier）
