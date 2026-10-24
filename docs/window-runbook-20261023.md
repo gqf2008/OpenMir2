@@ -240,6 +240,31 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 
 ---
 
+## 0.10 跑后对称性：C# 运行期会重写 Castle 文件（2026-10-25；卡 `openmir2-postrun-symmetry-drift`）
+
+- **事实**：C# 的 `CastleMgr.Save()`/`SaveCastleList()` 会按**内存状态**重写
+  `Castle/List.txt` 与 `Castle/<n>/SabukW.txt`（与 600s 存档门同一机制）⇒ **跑后漂移是预期行为**，
+  不是夹具坏了；两次实测都出现过影子 `M2GameSvr-hook/Castle/List.txt` 从 2 城变 1 城
+  （mtime=运行时刻）。
+- **自动复核**：`card_window.py` 在 verdict 定稿后、写产物前做一次跑后对称性复核，结果写
+  `card-window.json` 的 **`post_run_symmetry_drift`**（无漂移为 `[]`；有则列 `{file, sha256:{侧:sha}}`）。
+  **只标注、不改本轮 parity 结论**。`run_batch.sh` 批次末尾打印一行
+  **`跑后对称性：OK`** 或 **`跑后对称性：DRIFT(n) <文件…>`**。
+- **下一轮前必须还原/对齐**（不碰 `E:/MirServer`，只动私有根）：
+  ```powershell
+  # 以基线为准，把影子与 rust 的 Castle 目录对齐（示例：两城 0,1）
+  Copy-Item -Force E:/tmp/conformance/csharp-root/M2GameSvr/Castle/List.txt `
+    E:/tmp/conformance/csharp-root/M2GameSvr-hook/Castle/List.txt
+  Copy-Item -Force E:/tmp/conformance/csharp-root/M2GameSvr/Castle/List.txt `
+    E:/tmp/conformance/rust-root/M2GameSvr/Castle/List.txt
+  # 再跑 preflight：castle_list_symmetry / envir_shadow_symmetry 必须 OK
+  python -I -B tools/window/preflight_private_stack.py
+  ```
+  若 `SabukW` 的 `TotalGold/TodayIncome` 也被上一轮写脏，按 `window-fixture-config-castle`
+  的 `castle_files` 夹具把两侧初始值显式声明（`TotalGold=0`、`TodayIncome=0`）。
+
+---
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。
