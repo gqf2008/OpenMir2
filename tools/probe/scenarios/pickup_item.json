@@ -1,10 +1,74 @@
 {
   "name": "pickup_item",
-  "description": "在本人脚下拾取：CM_PICKUP(1001) param=自己 X tag=自己 Y（oracle 要求 CurrX==nParam2 && CurrY==nParam3）-> 等 SM_ADDITEM(200)/SM_BAGITEMS(201)",
-  "required": ["self_x", "self_y"],
+  "description": "脚下拾取全链：CM_DROPITEM(1000) 把夹具木剑丢到地面（oracle GetDropPosition 扫描序 i=0 首候选 (self_x+1,self_y+1)，该格可走且空 => 确定落点）-> 等 SM_DROPITEM_SUCCESS(600) -> CM_WALK(3011) 斜走到落点格 -> 等 SM_WALK(11)/SM_RUN(13) -> CM_PICKUP(1001) param=落点X tag=落点Y（oracle 要求 CurrX==nParam2 && CurrY==nParam3）-> 等 SM_ADDITEM(200)/SM_BAGITEMS(201)。原版单步 CM_PICKUP 在无同格地物时两侧都静默（PlayObject.Base.cs:55 ClientPickUpItem 首行 Envir.GetItem 失败即 return）=> run1 双侧等 [200,201] 超时（window-run-1 §2 表 2 行）；本版用「夹具背包物品 => 丢 => 走 => 拾」把地物经真实生产链造出来，让 [200,201] 可达。地物格/摆位假设见 placement.note，全部可离线机判。",
+  "required": ["pickup_x", "pickup_y", "pickup_xy"],
+  "params": {
+    "self_x": 320,
+    "self_y": 328,
+    "make_index": 5001,
+    "item_name": "木剑"
+  },
+  "placement": {
+    "map": "3",
+    "x": 320,
+    "y": 328,
+    "note": "盟重省土城街区（与 upgrade_retrieve 同格）。可机判依据：两侧 3.map 逐字节同源（sha256 5bb37afef0bb827e0ee47b71ed455d737ebd503917fabad4407d7361f0ca694f），(320,328)/(东邻 321,328)/(斜邻 321,329) 三格 walkable（card_window.read_map_cell 口径，bk=671/0/0、fr=0，起栈前 placement 校验会重验本格）；MapInfo.txt:705 [3 盟重省] 只有 DAY flag => 无 SAFE（BaseObject.cs:1777 InSafeZone 先看 Flag.SafeArea，故 Server.conf:721 InSafeDisableDrop=1 也不会拒丢）、无 NoThrowItem；守卫弓手 (325,311)/(336,321)/(339,313)（MonGen.txt，ViewRange=12）与本格 Chebyshev 17/16/19 均在射程外；MonGen.txt map 3 最近刷怪点 (294,341)/(368,348) 距本格 ≥20 格 => 落点格不会被游荡怪占据；传送员(327,327)/足球(318,332)/铁匠(332,317) 在视距 12 内 => discovery(npc_click_auto) 有商人可点、能收 643。"
+  },
+  "inventory": [
+    {
+      "index": 207,
+      "make_index": 5001,
+      "position": 40,
+      "std_mode": 5,
+      "ani_count": 0,
+      "dura": 4000,
+      "dura_max": 4000,
+      "note": "木剑（stditems#207，StdMode=5/AniCount=0/DuraMax=4000，mir2_data 实测行与 sql/mir2_data.sql:1197 一致）——CM_DROPITEM 的源物品；MakeIndex 由夹具钉死 5001（两侧同值 => C2S 字节可比）"
+    }
+  ],
+  "computed": {
+    "pickup_x": {
+      "derived_from": "self_x",
+      "delta": 1
+    },
+    "pickup_y": {
+      "derived_from": "self_y",
+      "delta": 1
+    },
+    "pickup_xy": {
+      "pack": {
+        "lo": "pickup_x",
+        "hi": "pickup_y"
+      }
+    }
+  },
   "steps": [
-    {"send": {"ident": 1001, "recog": 0, "param": "self_x", "tag": "self_y"},
-     "note": "oracle PlayObject.Message.cs CM_PICKUP 只在 CurrX==nParam2 && CurrY==nParam3 时 ClientPickUpItem()"},
-    {"wait_for": [200, 201], "timeout_ms": 3000}
+    {
+      "send": {"ident": 1000, "recog": "make_index", "text_from": "item_name"},
+      "note": "CM_DROPITEM(1000)：recog=nParam1=MakeIndex、body=物品名（GBK）。oracle PlayObject.Message.cs:801-810 => ClientDropItem（PlayObject.Operate.cs:251-306）：DealLastTick 门（新会话 DealLastTick=0 恒过）、IsCanDrop/Envir.Flag.NoThrowItem（map 3 无此 flag）、ControlDropItem=0（Server.conf:720 => 不走廉价删除支）=> DropItemDown(dropWide=min(DropItemRage,3)，部署无 DropItemRage 行 => C# 默认 3)；GetDropPosition（BaseObject.cs:470-523）i=0 首候选 (self_x+1,self_y+1)=(321,329)：可走、无物品、无活物 => 物品确定落在该格"
+    },
+    {
+      "wait_for": [600],
+      "timeout_ms": 3000,
+      "note": "SM_DROPITEM_SUCCESS(600)（Messages.cs:277，SendDefMessage 直发本人）——地物已在 (321,329) 落地的同步点；被拒支发 601 不在集合 => 丢弃被拒时本步响亮超时"
+    },
+    {
+      "send": {"ident": 3011, "recog": "pickup_xy", "param": 0},
+      "note": "CM_WALK(3011) 斜走一格到落点：recog=(pickup_y<<16)|pickup_x（服务端取 LoWord=X/HiWord=Y），param 不读。oracle ClientWalkXY（PlayObject.Attack.cs:1365-1428）：MoveTick 初值 0 => 本会话首走必过 WalkIntervalTime=600 门（Server.conf:328）；WalkTo（BaseObject.cs:601-680）DownRight 直接 (x+1,y+1)，无对角穿墙限制"
+    },
+    {
+      "wait_for": [11, 13],
+      "timeout_ms": 3000,
+      "note": "SM_WALK(11)/SM_RUN(13)：SendRefMsg（BaseObject.Message.cs:383-460）扫视距 12 且含本人 => 走动者收到自己的走路回声；被挡/过速支发 RM_MOVEFAIL/系统消息不在集合 => 响亮超时（fail-loud）"
+    },
+    {
+      "send": {"ident": 1001, "recog": 0, "param": "pickup_x", "tag": "pickup_y"},
+      "note": "CM_PICKUP(1001)：oracle PlayObject.Message.cs:811-817 只在 CurrX==nParam2 && CurrY==nParam3 时进 ClientPickUpItem——前一步已走到落点格 => 位置门成立，Envir.GetItem 命中刚丢下的木剑"
+    },
+    {
+      "wait_for": [200, 201],
+      "timeout_ms": 3000,
+      "note": "SM_ADDITEM(200)（拾取成功首帧，PlayObject.Base.cs:101-121 SendAddItem）/SM_BAGITEMS(201) 兜底。旧版原地拾空格在此恒超时（run1 实测）；本版经 600 => 11 两级同步后按生产链必达"
+    }
   ]
 }
