@@ -5,6 +5,9 @@
 - 写集：**只新增本文档**；bundle 与临时克隆都在 `E:/tmp/openmir2-fallback/`（**不入库**）。
 - **红线（本卡已遵守）**：**未 push 任何远端**（walgit 与 origin 都没推）、未把 bundle 提交进仓库、
   未改代码/卡状态、未动 `E:/MirServer`、未起服务端。
+- **后续补记（卡 `openmir2-fallback-bundle-second`，tier L，2026-10-25）**：Leader 在 `2135f6154` 时点重打了**第二份** bundle，
+  已补进 §2.4。**恢复请用最新一份（第二份）**；bundle 是时点快照，生成之后新增的提交/协作条目不在包内。
+  §1–§2.3 是**第一份**（@`dc0430eda`）的历史快照，数字按当时实测**原样保留、未改写**。
 
 ## 1. 现状（故障快照 @ `dc0430eda`）
 
@@ -47,6 +50,9 @@ git bundle create E:/tmp/openmir2-fallback/openmir2-20261025.bundle --all
 | ref 数（`git bundle list-heads`） | `11470` |
 | 生成时 master | `dc0430eda` |
 
+> 上表是**第一份**（2026-10-25 05:01）的历史实测值，按原样保留。**第二份**（@`2135f6154`，05:35）见 §2.4；
+> **恢复与校验以最新一份为准**。
+
 ### 2.3 自校验（命令 + 输出）
 
 ```sh
@@ -79,6 +85,43 @@ OK refs/archive-origin/archive/m3bag-equip-slot4 main=0616c2804175d32015c065eea4
 
 > **bundle 是时点快照**：生成后新增的提交/协作条目（含本卡的 patch/status 两条）不在里面；
 > 需要时按 §2.1 重打包（bundle 覆盖写同一路径），或恢复后按 §3 直接补推。
+
+### 2.4 第二份 bundle（@ `2135f6154`，2026-10-25 05:35 由 Leader 重打并自校验）
+
+第一份生成后主线继续前进（`dc0430eda` → `2135f6154`，含 msgqueue `4b9ce64ca`、RNG `a3bf5340f`、runbatch `2135f6154` 等合并），
+故重打第二份。**未重打第一份、未删除任何一份**；两份都在 `E:/tmp/openmir2-fallback/`。
+
+| 项 | 第一份（§2.2，历史） | **第二份（最新，恢复用这份）** |
+|---|---|---|
+| 路径 | `E:/tmp/openmir2-fallback/openmir2-20261025.bundle` | `E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle` |
+| 大小 | `166132533` 字节（≈158.4 MiB） | **`167098305` 字节（≈159.4 MiB）** |
+| sha256 | `24d39daccb5051c077ac8e8accc83a6b2a8278f6ce272462c91b51d04306e927` | **`34f657979ca7e57d0b61a15feb82d94856046aa1c4a77cfafa57a8904ea5a857`** |
+| ref 数（`git bundle list-heads`） | `11470` | **`11610`** |
+| 包内 `refs/heads/master` | `dc0430eda…` | **`2135f61549cf82f521830e39cd08ee834dd12dc6`** |
+| `git bundle verify` | `records a complete history`（§2.3） | **rc=0，末行 `The bundle records a complete history.` / `The bundle uses this hash algorithm: sha1`** |
+
+本卡实测（只读；**未重打 bundle**）：
+
+```sh
+# ① 大小与 sha256（复算）
+stat -c %s E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle    # ⇒ 167098305
+sha256sum E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle
+#   ⇒ 34f657979ca7e57d0b61a15feb82d94856046aa1c4a77cfafa57a8904ea5a857
+
+# ② 自包含性（在任意有 git 的仓库里跑；本仓实测 rc=0）
+git bundle verify E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle
+#   ⇒ 倒数第二行：The bundle records a complete history.
+#     末行：The bundle uses this hash algorithm: sha1
+
+# ③ 包内 master 与 ref 总数
+git bundle list-heads E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle | grep 'refs/heads/master$'
+#   ⇒ 2135f61549cf82f521830e39cd08ee834dd12dc6 refs/heads/master
+git bundle list-heads E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle | wc -l
+#   ⇒ 11610
+```
+
+> **恢复请用最新一份**（`openmir2-2135f6154.bundle`）。bundle 是**时点快照**——`2135f6154` 之后新增的
+> 提交与协作条目（含本卡、castle 税卡等）**不在包内**；恢复后按 §3 从本地 `.git` 补推即可，**不要**整包替代本地仓。
 
 ## 3. 补推清单（walgit 恢复后）
 
@@ -116,8 +159,8 @@ git push --dry-run walgit master
 
 ## 6. 若 walgit **永不恢复**（需 owner 批准，本卡不执行）
 
-- **bundle 是审计链兜底**：§2 的 bundle 自包含（`complete history` + 6 ref 抽查一致），可在任意机器
-  `git clone -b master <bundle>` 复原到 `dc0430eda` 的全部主线/分支/协作 ref。
+- **bundle 是审计链兜底**：**最新一份**（§2.4，@`2135f6154`）自包含（`complete history`；第一份 §2.3 另有 6 ref 抽查一致），
+  可在任意机器 `git clone -b master <最新 bundle>` 复原到 `2135f6154` 的全部主线/分支/协作 ref（第一份可复原到 `dc0430eda`）。
 - **GitHub origin 镜像**：可把 master 与 card 分支推到 origin（当前 origin/master 落后 25）；
   `refs/collab/*` 属自定义命名空间，GitHub 允许推送（`git push origin 'refs/collab/inbox/*:refs/collab/inbox/*'`），
   可作为协作审计链的异地备份——**但会公开可见，是否可接受由 owner 决定**。
@@ -125,7 +168,8 @@ git push --dry-run walgit master
 
 ## 7. 残留与复算
 
-- 产物：`E:/tmp/openmir2-fallback/` = `openmir2-20261025.bundle`（§2.2）+ `verify.git/`（空仓，仅用于 verify）
-  + `clone/`（抽查用临时克隆，可删）。**bundle 不入库**；`E:/tmp` 下无其它本线残留。
+- 产物：`E:/tmp/openmir2-fallback/` = `openmir2-20261025.bundle`（第一份，§2.2）+ `openmir2-2135f6154.bundle`
+  （第二份/最新，§2.4）+ `verify.git/`（空仓，仅用于 verify）+ `clone/`（抽查用临时克隆，可删）。**两份 bundle 均不入库**；
+  `E:/tmp` 下无其它本线残留。
 - 本卡**未推任何远端**；walgit 仍 500（§4 的判定在恢复前必然失败）。
 - 本文件是唯一仓库改动；门禁与 `git diff --check <base> <head>`、merge_tree 见 patch body。
