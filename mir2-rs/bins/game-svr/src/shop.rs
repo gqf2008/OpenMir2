@@ -36,15 +36,16 @@
 //!
 //! `Market_Def` 商人脚本装载（`Merchant.LoadMerchantScript`，`Merchant.cs:1096-1102`；`crates/envir::MapLoader::load_merchants_loaded` 在装载期一次解析，`boFlag=true`）与 `GotoLable` 执行（`~@repair`/`~@s_repair`、`~@upgradenow_*`、`~@getbackupgnow_*`）：[`RepairResult::goto_label`] / [`UpgradeOutcome::goto_label`] 只回**标签**（本模块是纯函数接缝，不跑引擎），宿主 `lib.rs` 的 `handle_shop_cmd` 用 `MerchantScriptBook::goto_label` 执行并产出 `SM_MERCHANTSAY(643)` 说词帧 + 脚本帧。
 //!
-//! # 本片未做（其余，登记）
-//! - 城堡税 `Castle.IncRateGold`/`CastleMgr.IncRateGold`（`Merchant.cs:1249/1384/1638`）：
-//!   ⑧ 家族未落地 ⇒ **条件照抄**、效果无目标对象（登记）。
+//! # 已接线（卡 `openmir2-castle-merchant-tax-wiring`）
+//! - 城堡税 `Castle.IncRateGold`/`CastleMgr.IncRateGold`（`Merchant.cs:546/1257/1392/1644`）：
+//!   **已接线**（卡 `openmir2-castle-merchant-tax-wiring`）：四个交易点返回 `tax: MerchantTaxIntent`，
+//!   宿主用 [`apply_merchant_tax`] 入账（Castle 目标入该城；CastleManager 目标升序入全部城）。
 //!
 //! # 三条从 ⑤-3 转入的副作用（owner comment `270a3919`）
 //! 1. `@Superrepairfail` 的 `SendMsgToUser("对不起!我不能帮你修理这个物品。\\ \\ \\<返回/@main>")`
 //!    （`Merchant.cs:1612`）：本模块产出 `SM_MERCHANTSAY(643)` 帧（走 [`RepairResult::sent_to_user`] 字段；
 //!    尾 = `ChrName + '/' + sMsg`，锚 `NormNpc.cs:1613-1616` + `PlayObject.Message.cs:1722-1724`）。
-//! 2. 城堡税：条件照抄（`CastleMerchant || Config.GetAllNpcTax`），效果登记（无城堡对象）。
+//! 2. 城堡税：条件/目的地/税基照抄；本模块回意图，宿主入账（[`apply_merchant_tax`]）。
 //! 3. `GotoLable(REPAIROK/SUPERREPAIROK)`：回 [`RepairResult::goto_label`]，宿主执行（卡 `openmir2-merchant-script-load`）。
 //!
 //! 另 reviewer-5 的 **O-1**：`ScriptLable` 与 `@s_repair` 的比较是 `string.Compare(..., OrdinalIgnoreCase)`，
@@ -53,6 +54,10 @@
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
 use mir2_formula::shop::{self, PriceTables, ShopConfig, StdItemSource};
+use mir2_world::castle::UserCastle;
+use mir2_world::castle_tax::{
+    merchant_tax_intent, CastleTaxConfig, IncRateGoldOutcome, MerchantTaxIntent, MerchantTaxTarget,
+};
 use mir2_world::merchant::{
     GetBackupgWeaponOutcome, MerchantFlags, MerchantItem, UpgradeWaponOutcome,
 };
@@ -153,6 +158,9 @@ pub struct MerchantView {
     pub flags: MerchantFlags,
     pub price_rate: i32,
     pub castle_merchant: bool,
+    /// `NormNpc.Castle` 在 `World.castles` 的下标（`None` ⇔ oracle `Castle == null`）。
+    /// 商税目的地判定用它（`Merchant.cs:546/1257/1392/1644` 的 `Castle != null`）。
+    pub castle_index: Option<usize>,
     pub item_type_list: Vec<i32>,
     /// 商人实体 `ChrName`（`BaseObject.ChrName`）。`SendMsgToUser`（`NormNpc.cs:1613-1616`）
     /// 的 `RM_MERCHANTSAY` 尾 = `ChrName + '/' + sMsg` ⇒ 宿主必须把商人名传进来。
@@ -166,6 +174,8 @@ pub struct ShopContext<'a> {
     pub cfg: ShopConfig,
     /// `SystemShare.Config.GetAllNpcTax`（`Merchant.cs:1249/1384/1638` 的税条件之一）。
     pub get_all_npc_tax: bool,
+    /// `SystemShare.Config.UpgradeWeaponPrice`（CastleManager 分支的税基常量，见 castle_tax 模块头）。
+    pub upgrade_weapon_price: i32,
     /// `PlayObject.ScriptLable`（`Merchant.cs:1555/1599` 的 `@s_repair` 分支）。
     pub script_lable: &'a str,
     /// `Config.HumanMaxGold`（`IncGold` 上限，`PlayObject.Base.cs:168`）。
@@ -936,6 +946,8 @@ pub struct SellResult {
     pub frames: Vec<ShopFrame>,
     /// `ClientSellItem` 的返回值（`Operate.cs:172` 用它决定是否 `RemoveAt`）。
     pub ok: bool,
+    /// 成功后待入账的商税意图（`Merchant.cs:1392-1400`）；失败/无条件 ⇒ `None`。
+    pub tax: Option<MerchantTaxIntent>,
 }
 
 /// `Merchant.ClientSellItem`（`Merchant.cs:1377`）+ `PlayObject.ClientUserSellItem`（`Operate.cs:162`）。
@@ -957,7 +969,11 @@ pub fn sell_item(
         it.make_index == make_index
             && item_name(ctx.catalog, it).is_some_and(|n| eq_label(&n, wanted_name))
     }) else {
-        return SellResult { frames, ok: false };
+        return SellResult {
+            frames,
+            ok: false,
+            tax: None,
+        };
     };
     let source = CatalogSource(ctx.catalog);
     let t = price_tables(&source, &m.item_type_list);
@@ -970,8 +986,14 @@ pub fn sell_item(
     if n_price > 0 && sub_ok {
         if inc_gold(state.gold, n_price, ctx.human_max_gold) {
             state.gold += n_price;
-            // 税条件照抄（`Merchant.cs:1384-1391`）；城堡对象未建模 ⇒ 无目标（登记）。
-            let _tax = m.castle_merchant || ctx.get_all_npc_tax;
+            // `Merchant.cs:1392-1400`：`Castle.IncRateGold(nPrice)` / `CastleMgr.IncRateGold(UpgradeWeaponPrice)`。
+            let tax = merchant_tax_intent(
+                n_price,
+                m.castle_merchant,
+                ctx.get_all_npc_tax,
+                m.castle_index.is_some(),
+                ctx.upgrade_weapon_price,
+            );
             frames.push(frame(
                 mir2_protocol::messages::SM_USERSELLITEM_OK,
                 state.gold,
@@ -993,7 +1015,11 @@ pub fn sell_item(
             // 宿主移除背包件（`Operate.cs:176-179` 的 `ItemList.RemoveAt` + `WeightChanged`）。
             state.item_list.remove(pos);
             state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
-            SellResult { frames, ok: true }
+            SellResult {
+                frames,
+                ok: true,
+                tax,
+            }
         } else {
             frames.push(frame(
                 mir2_protocol::messages::SM_USERSELLITEM_FAIL,
@@ -1003,7 +1029,11 @@ pub fn sell_item(
                 0,
                 Vec::new(),
             ));
-            SellResult { frames, ok: false }
+            SellResult {
+                frames,
+                ok: false,
+                tax: None,
+            }
         }
     } else {
         frames.push(frame(
@@ -1014,7 +1044,11 @@ pub fn sell_item(
             0,
             Vec::new(),
         ));
-        SellResult { frames, ok: false }
+        SellResult {
+            frames,
+            ok: false,
+            tax: None,
+        }
     }
 }
 
@@ -1023,6 +1057,8 @@ pub struct BuyResult {
     pub frames: Vec<ShopFrame>,
     /// `n1C == 0`（买入成功）。
     pub ok: bool,
+    /// 成功后待入账的商税意图（`Merchant.cs:1257-1266`）；失败/无条件 ⇒ `None`。
+    pub tax: Option<MerchantTaxIntent>,
 }
 
 /// `Merchant.ClientBuyItem`（`Merchant.cs:1219`）。
@@ -1039,6 +1075,7 @@ pub fn buy_item(
     ctx: &ShopContext<'_>,
 ) -> BuyResult {
     let mut frames = Vec::new();
+    let mut tax = None;
     let source = CatalogSource(ctx.catalog);
     let t = price_tables(&source, &m.item_type_list);
     let mut n1c = 1i32;
@@ -1076,7 +1113,15 @@ pub fn buy_item(
                             if state.item_list.len() < MAX_BAG_ITEM {
                                 // `AddItemToBag` 成功：金币/税/出包 + 从库存移除。
                                 state.gold -= n_price;
-                                let _tax = m.castle_merchant || ctx.get_all_npc_tax;
+                                // `Merchant.cs:1257-1266`：Castle 分支用 `nPrice`；CastleManager 分支用
+                                // `Config.UpgradeWeaponPrice`（castle_tax 模块头「照搬 ①」）。
+                                tax = merchant_tax_intent(
+                                    n_price,
+                                    m.castle_merchant,
+                                    ctx.get_all_npc_tax,
+                                    m.castle_index.is_some(),
+                                    ctx.upgrade_weapon_price,
+                                );
                                 let bought = to_bag(&price_item);
                                 let add_tail = crate::trade::add_item_tail(&bought, ctx.catalog)
                                     .unwrap_or_default();
@@ -1124,7 +1169,11 @@ pub fn buy_item(
             0,
             Vec::new(),
         ));
-        BuyResult { frames, ok: true }
+        BuyResult {
+            frames,
+            ok: true,
+            tax,
+        }
     } else {
         // `RM_BUYITEM_FAIL(0, n1C)` → `SM_BUYITEM_FAIL(Recog=n1C)`。
         frames.push(frame(
@@ -1135,7 +1184,11 @@ pub fn buy_item(
             0,
             Vec::new(),
         ));
-        BuyResult { frames, ok: false }
+        BuyResult {
+            frames,
+            ok: false,
+            tax: None,
+        }
     }
 }
 
@@ -1168,6 +1221,8 @@ pub fn query_repair_cost(m: &MerchantView, item: &mut BagItem, ctx: &ShopContext
 /// `CM_USERREPAIRITEM` 的结果。
 pub struct RepairResult {
     pub frames: Vec<ShopFrame>,
+    /// 成功后待入账的商税意图（`Merchant.cs:1644-1652`）；失败/不支持 ⇒ `None`。
+    pub tax: Option<MerchantTaxIntent>,
     /// 修理成功时 oracle `GotoLable(REPAIROK/SUPERREPAIROK)` 的标签（`Merchant.cs:1652/1659`）。
     /// 本模块只回**标签**；宿主 `handle_shop_cmd` 在 `Merchant.ScriptList` 上执行它并出说词帧
     /// （卡 `openmir2-merchant-script-load`）。
@@ -1202,6 +1257,7 @@ pub fn repair_item(
             frames: Vec::new(),
             goto_label: None,
             sent_to_user: None,
+            tax: None,
         };
     }
     let source = CatalogSource(ctx.catalog);
@@ -1221,6 +1277,7 @@ pub fn repair_item(
     let mut frames = Vec::new();
     let mut sent_to_user = None;
     let mut goto_label = None;
+    let mut tax = None;
     match out.outcome {
         shop::RepairOutcome::NoFrame => {}
         shop::RepairOutcome::Fail => {
@@ -1251,8 +1308,15 @@ pub fn repair_item(
         }
         shop::RepairOutcome::Ok => {
             state.gold = out.gold;
-            // 税条件照抄（`Merchant.cs:1638-1646`）；城堡对象未建模 ⇒ 无目标（登记）。
-            let _tax = m.castle_merchant || ctx.get_all_npc_tax;
+            // `Merchant.cs:1644-1652`：税基 = 本次实际扣掉的 `nRepairPrice` = `gold - out.gold`。
+            let n_repair_price = gold - out.gold;
+            tax = merchant_tax_intent(
+                n_repair_price,
+                m.castle_merchant,
+                ctx.get_all_npc_tax,
+                m.castle_index.is_some(),
+                ctx.upgrade_weapon_price,
+            );
             // `RM_USERREPAIRITEM_OK(0, Gold, Dura, DuraMax)` → `SM_USERREPAIRITEM_OK(Recog=Gold, Param=Dura, Tag=DuraMax)`。
             frames.push(frame(
                 mir2_protocol::messages::SM_USERREPAIRITEM_OK,
@@ -1273,6 +1337,7 @@ pub fn repair_item(
         frames,
         goto_label,
         sent_to_user,
+        tax,
     }
 }
 
@@ -1537,6 +1602,36 @@ pub fn get_script_label(say_text: &str) -> Vec<String> {
     out
 }
 
+/// 把 [`MerchantTaxIntent`] 落到城堡金库（oracle `Castle.IncRateGold` / `CastleMgr.IncRateGold`）。
+///
+/// - `Castle`：只入 `castle_index` 指向的那座城（`CastleManager.GetCastle` 口径；下标越界 ⇒ 无副作用）；
+/// - `CastleManager`：**升序**遍历全部城（`CastleManager.cs:209-215`）；
+/// - `tick_ms` = `HUtil32.GetTickCount()` 口径；生产传 `world.clock_ms`（虚拟时钟）。
+///
+/// `intent == None`（无税/前置不满足）⇒ 返回空表，绝不猜测目的地。
+#[must_use]
+pub fn apply_merchant_tax(
+    castles: &mut [UserCastle],
+    castle_index: Option<usize>,
+    intent: Option<MerchantTaxIntent>,
+    cfg: &CastleTaxConfig,
+    tick_ms: i64,
+) -> Vec<IncRateGoldOutcome> {
+    let Some(intent) = intent else {
+        return Vec::new();
+    };
+    match intent.target {
+        MerchantTaxTarget::Castle => castle_index
+            .and_then(|i| castles.get_mut(i))
+            .map(|c| vec![c.inc_rate_gold(cfg, intent.amount, tick_ms)])
+            .unwrap_or_default(),
+        MerchantTaxTarget::CastleManager => castles
+            .iter_mut()
+            .map(|c| c.inc_rate_gold(cfg, intent.amount, tick_ms))
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// **C9**：`@upgradenow`/`@getbackupgnow` 的脚本头标志门（`Merchant.cs:883-896`）+
@@ -1548,6 +1643,7 @@ mod tests {
             flags,
             price_rate: 100,
             castle_merchant: false,
+            castle_index: None,
             item_type_list: Vec::new(),
             chr_name: "铁匠".to_string(),
         };
@@ -1735,6 +1831,7 @@ mod tests {
             flags,
             price_rate: 100,
             castle_merchant: false,
+            castle_index: None,
             item_type_list: vec![0, 5],
             chr_name: "商人".to_string(),
         }
@@ -1753,6 +1850,7 @@ mod tests {
             catalog,
             cfg: ShopConfig::default(),
             get_all_npc_tax: false,
+            upgrade_weapon_price: 10_000,
             script_lable: "",
             human_max_gold: 1_000_000,
             player_actor_id: 4242,
@@ -1982,6 +2080,7 @@ mod tests {
             },
             price_rate: 100,
             castle_merchant: false,
+            castle_index: None,
             item_type_list: vec![0, 5],
             chr_name: "商人乙".to_string(),
         };
@@ -2732,5 +2831,221 @@ mod tests {
         };
         let r2 = sell_item(&m, &mut state2, &mut goods, 7, "木剑", &c);
         assert!(!r2.ok, "Desc[13]==1 时名字是自定义名，模板名不匹配");
+    }
+
+    // ---- 商税四调用点合同测试（卡 `openmir2-castle-merchant-tax-wiring`）----------
+    //
+    // oracle 锚：`Merchant.cs:1392-1400`（卖）/`:1257-1266`（买）/`:1644-1652`（修）；
+    // Castle 目标税基 = 本次交易价；CastleManager 目标税基**恒** `UpgradeWeaponPrice`（B-16）。
+    // `UserCastle.IncRateGold`：`Round(amount * 5 / 100)`（AwayFromZero）；日上限/金库上限默认不触发。
+
+    fn tax_cfg() -> CastleTaxConfig {
+        CastleTaxConfig {
+            castle_tax_rate: 5,
+            castle_one_day_gold: 2_000_000,
+            castle_gold_max: 10_000_000,
+            get_all_npc_tax: false,
+            upgrade_weapon_price: 10_000,
+            castle_member_price_rate: 80,
+        }
+    }
+
+    fn castle(name: &str) -> UserCastle {
+        UserCastle::new(name, mir2_world::castle::CastleSiegeConfig::default())
+    }
+
+    fn tax_merchant(
+        flags: MerchantFlags,
+        castle_merchant: bool,
+        castle_index: Option<usize>,
+    ) -> MerchantView {
+        MerchantView {
+            actor_id: 4242,
+            flags,
+            price_rate: 100,
+            castle_merchant,
+            castle_index,
+            item_type_list: vec![0, 5],
+            chr_name: "城堡商人".to_string(),
+        }
+    }
+
+    #[test]
+    fn sell_tax_intent_and_credit_castle_matches_oracle() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let m = tax_merchant(mflags(false, true), true, Some(0));
+        let mut state = GroundState {
+            item_list: vec![BagItem {
+                make_index: 9,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            }],
+            gold: 1000,
+            wabil: ability(3, 100),
+        };
+        let mut goods = Vec::new();
+        let r = sell_item(&m, &mut state, &mut goods, 9, "金创药(小量)", &c);
+        assert!(r.ok);
+        // `GetSellItemPrice(100)=50` ⇒ 税 `Round(50*5/100)=Round(2.5)=3`（AwayFromZero）。
+        assert_eq!(
+            r.tax,
+            Some(MerchantTaxIntent {
+                target: MerchantTaxTarget::Castle,
+                amount: 50,
+            })
+        );
+        let mut castles = vec![castle("沙巴克")];
+        let applied = apply_merchant_tax(&mut castles, Some(0), r.tax, &tax_cfg(), 0);
+        assert_eq!(applied.len(), 1);
+        assert_eq!(applied[0].n_in_gold, 3);
+        assert_eq!(castles[0].total_gold, 3);
+        assert_eq!(castles[0].today_income, 3);
+        // oracle 税分支不查 `MasterGuild`（成员价才查）⇒ master_guild=None 仍入账。
+        assert!(castles[0].master_guild.is_none());
+    }
+
+    #[test]
+    fn buy_tax_intent_and_credit_castle_matches_oracle() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let m = tax_merchant(mflags(true, false), true, Some(0));
+        let mut state = GroundState {
+            item_list: Vec::new(),
+            gold: 500,
+            wabil: ability(0, 100),
+        };
+        let mut goods = vec![vec![MerchantItem {
+            make_index: 7,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0; 14],
+        }]];
+        let r = buy_item(&m, &mut state, &mut goods, "金创药(小量)", 0, &c);
+        assert!(r.ok);
+        // 买入价 100 ⇒ Castle 税基 = 100 ⇒ `Round(5.0)=5`。
+        assert_eq!(
+            r.tax,
+            Some(MerchantTaxIntent {
+                target: MerchantTaxTarget::Castle,
+                amount: 100,
+            })
+        );
+        let mut castles = vec![castle("沙巴克")];
+        let applied = apply_merchant_tax(&mut castles, Some(0), r.tax, &tax_cfg(), 0);
+        assert_eq!(applied[0].n_in_gold, 5);
+        assert_eq!(castles[0].total_gold, 5);
+    }
+
+    #[test]
+    fn buy_tax_manager_branch_uses_upgrade_price_not_trade_price() {
+        let cat = catalog();
+        let mut c = ctx(&cat);
+        c.get_all_npc_tax = true;
+        c.upgrade_weapon_price = 10_000;
+        // `Castle == null` + `GetAllNpcTax` ⇒ CastleManager 分支：税基恒 UpgradeWeaponPrice。
+        let m = tax_merchant(mflags(true, false), true, None);
+        let mut state = GroundState {
+            item_list: Vec::new(),
+            gold: 500,
+            wabil: ability(0, 100),
+        };
+        let mut goods = vec![vec![MerchantItem {
+            make_index: 7,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0; 14],
+        }]];
+        let r = buy_item(&m, &mut state, &mut goods, "金创药(小量)", 0, &c);
+        assert!(r.ok);
+        assert_eq!(
+            r.tax,
+            Some(MerchantTaxIntent {
+                target: MerchantTaxTarget::CastleManager,
+                amount: 10_000,
+            }),
+            "税基 = Round(10000*5/100)=500，**不是**交易价 100 的 5"
+        );
+        let mut castles = vec![castle("沙巴克"), castle("沙巴克二")];
+        let applied = apply_merchant_tax(&mut castles, None, r.tax, &tax_cfg(), 0);
+        assert_eq!(applied.len(), 2, "CastleManager 升序遍历全部城");
+        assert_eq!(castles[0].total_gold, 500);
+        assert_eq!(castles[1].total_gold, 500);
+    }
+
+    #[test]
+    fn repair_tax_intent_and_credit_castle_matches_oracle() {
+        let cat = catalog();
+        let mut c = ctx(&cat);
+        c.script_lable = LABEL_REPAIR;
+        let m = tax_merchant(
+            MerchantFlags {
+                is_repair: true,
+                ..MerchantFlags::default()
+            },
+            true,
+            Some(0),
+        );
+        let mut state = GroundState {
+            item_list: vec![BagItem {
+                make_index: 9,
+                index: 1,
+                dura: 4,
+                dura_max: 10,
+                desc: [0; 14],
+            }],
+            gold: 10_000,
+            wabil: ability(0, 100),
+        };
+        let r = repair_item(&m, &mut state, 0, &c);
+        // 修理价 `Round((100/3)/10*6)=20` ⇒ 税 `Round(20*5/100)=1`。
+        assert_eq!(
+            r.tax,
+            Some(MerchantTaxIntent {
+                target: MerchantTaxTarget::Castle,
+                amount: 20,
+            })
+        );
+        let mut castles = vec![castle("沙巴克")];
+        let applied = apply_merchant_tax(&mut castles, Some(0), r.tax, &tax_cfg(), 0);
+        assert_eq!(applied[0].n_in_gold, 1);
+        assert_eq!(castles[0].total_gold, 1);
+    }
+
+    #[test]
+    fn tax_precondition_without_castle_and_without_global_tax_is_none() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        // `CastleMerchant=true` 但 `Castle == null`、`GetAllNpcTax=false` ⇒ oracle 无税分支。
+        let m = tax_merchant(mflags(false, true), true, None);
+        let mut state = GroundState {
+            item_list: vec![BagItem {
+                make_index: 9,
+                index: 1,
+                dura: 10,
+                dura_max: 10,
+                desc: [0; 14],
+            }],
+            gold: 1000,
+            wabil: ability(3, 100),
+        };
+        let mut goods = Vec::new();
+        let r = sell_item(&m, &mut state, &mut goods, 9, "金创药(小量)", &c);
+        assert!(r.ok);
+        assert_eq!(r.tax, None, "缺 Castle 且不全局收税 ⇒ 不猜目的地");
+        let mut castles = vec![castle("沙巴克")];
+        assert!(apply_merchant_tax(&mut castles, None, r.tax, &tax_cfg(), 0).is_empty());
+        assert_eq!(castles[0].total_gold, 0);
+        // `CastleManager.GetCastle` 前置：越界下标 ⇒ 无副作用（不 panic、不猜 0 号城）。
+        let stray = Some(MerchantTaxIntent {
+            target: MerchantTaxTarget::Castle,
+            amount: 50,
+        });
+        assert!(apply_merchant_tax(&mut castles, Some(9), stray, &tax_cfg(), 0).is_empty());
+        assert_eq!(castles[0].total_gold, 0);
     }
 }
