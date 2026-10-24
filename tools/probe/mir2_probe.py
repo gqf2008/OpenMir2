@@ -78,8 +78,10 @@ CM_LOGINNOTICEOK = 1018
 CM_SAY = 3030
 
 SM_LOGON = 50                 # PlayObject.cs:1131 MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, MakeWord(Dir,Light))
+SM_NEWMAP = 51                # PlayObject.Message.cs:1680-1684（RM_LOGON 支）：body = Envir.MapFileName
 SM_MAPDESCRIPTION = 54        # PlayObject.Base.cs:894（Envir.MapDesc）
-SM_CHANGEMAP = 634            # PlayObject.Message.cs:1776 / PlayObject.cs:3778（尾 = Envir.MapFileName）
+SM_CHANGEMAP = 634            # 只在 **换图**（RM_CHANGEMAP）发：BaseObject.cs:1134 / PlayObject.cs:3778；
+                              # 首登不换图 ⇒ 首包地图帧是 SM_NEWMAP(51)，不是 634
 SM_TURN = 10
 SM_ABILITY = 52
 SM_SYSMESSAGE = 100
@@ -1438,8 +1440,10 @@ class Run:
         if frame.ident == SM_MERCHANTSAY:
             self.state["last_merchant_recog"] = frame.recog
         # **W-LF-1 首包**：`SM_LOGON`（PlayObject.cs:1131）携带 x/y + MakeWord(Dir,Light)；
-        # 地图面：`SM_MAPDESCRIPTION(54)` 是 `Envir.MapDesc`，`SM_CHANGEMAP(634)` 的 body 是
-        # `Envir.MapFileName`（逻辑 MapName 不上线，见 docs/probe-newchr-20261025.md §2.3）。
+        # 地图面：`SM_NEWMAP(51)`（`PlayObject.Message.cs:1680-1684` 的 RM_LOGON 支）body =
+        # `Envir.MapFileName`；`SM_MAPDESCRIPTION(54)` body = `Envir.MapDesc`。
+        # **`SM_CHANGEMAP(634)` 只在换图（RM_CHANGEMAP）时发**，首登不换图 ⇒ 不能用 634 当首包地图
+        # （review F1）。逻辑 MapName 不上线，见 docs/probe-newchr-20261025.md §2.3。
         if frame.ident == SM_LOGON and "first_pack" not in self.state:
             self.state["first_pack"] = {
                 "seq": seq, "actor_id": frame.recog, "x": frame.param, "y": frame.tag,
@@ -1451,7 +1455,7 @@ class Run:
             fp = self.state.get("first_pack")
             if fp is not None and fp["map_desc"] is None:
                 fp["map_desc"] = decode_text(frame.body_decoded, "gbk", "replace")
-        elif frame.ident == SM_CHANGEMAP:
+        elif frame.ident == SM_NEWMAP:
             fp = self.state.get("first_pack")
             if fp is not None and fp["map_file"] is None:
                 fp["map_file"] = decode_text(frame.body_decoded, "gbk", "replace")
@@ -1761,8 +1765,7 @@ def _do_newchr(run, conn, args, session, plan, names):
             % (args.char_name, name))
     if not args.account:
         raise ScenarioError("newchr needs --account (payload starts with the login account)")
-    body = ("%s/%s/%d/%d/%d"
-            % (args.account, name, plan["hair"], plan["job"], plan["sex"])).encode("gbk")
+    body = newchr_payload(args.account, name, plan["hair"], plan["job"], plan["sex"])
     after = conn.recorder.seq
     _chain_send(run, conn, 0, CM_NEWCHR, body, "CM_NEWCHR")
     got = conn.wait_for([SM_NEWCHR_SUCCESS, SM_NEWCHR_FAIL, SM_OUTOFCONNECTION],
@@ -1914,11 +1917,11 @@ def do_enter_world(run, args, gamegate_addr, char_name, session):
     run.dwell = dwell_after_enter(conn,
                                   getattr(args, "dwell_ms", DEFAULT_DWELL_MS),
                                   getattr(args, "between_ms", 0))
-    # 首包（W-LF-1）：dwell 之后再落 chain（`SM_MAPDESCRIPTION/SM_CHANGEMAP` 多在延迟段到达）。
+    # 首包（W-LF-1）：dwell 之后再落 chain（`SM_NEWMAP/SM_MAPDESCRIPTION` 多在延迟段到达）。
     fp = dict(run.state.get("first_pack") or {})
     if fp:
         fp["map_name"] = None
-        fp["map_name_note"] = ("客户端线上不含逻辑地图名：`map_file`=SM_CHANGEMAP 的 MapFileName、"
+        fp["map_name_note"] = ("客户端线上不含逻辑地图名：`map_file`=SM_NEWMAP(51) 的 MapFileName、"
                                "`map_desc`=SM_MAPDESCRIPTION 的 MapDesc；逻辑 MapName/出生点以 DB "
                                "`characters.MapName` 与 `!setup.txt` StartPoint 为准（W-LF-1）")
         run.chain["first_pack"] = fp
@@ -3269,6 +3272,16 @@ NEWCHR_FAIL_CODES = {
 }
 
 
+def newchr_payload(account, name, hair, job, sex):
+    """`CM_NEWCHR` 载荷：`account/name/hair/job/sex`。
+
+    oracle 同序：`BotSrv/.../SelectChrScene.cs:237-241` `SendNewChr(uid,uname,shair,sjob,ssex)` 拼
+    `uid + "/" + uname + "/" + shair + "/" + sjob + "/" + ssex`；DB `NewChr` 按同序
+    `GetValidStr3(…, Backslash)` 收 5 段（`UserService.cs:572-576`）。**hair 在 job 之前**。
+    """
+    return ("%s/%s/%d/%d/%d" % (account, name, hair, job, sex)).encode("gbk")
+
+
 def newchr_fail_message(n_code, frames):
     """`SM_NEWCHR_FAIL` 的显式失败串：nCode 语义 + 服务端返回帧清单（不静默继续）。"""
     meaning = NEWCHR_FAIL_CODES.get(n_code, "未知错误码")
@@ -3727,8 +3740,46 @@ def _selftest_newchr():
     finally:
         shutil.rmtree(tmpd, ignore_errors=True)
 
+    # ⑧ F2：newchr 载荷顺序（account/name/**hair**/job/sex——hair 在 job 前）
+    assert newchr_payload("ua", "abcdef", 5, 2, 1) == b"ua/abcdef/5/2/1"
+    run, conn, tmpd = mk(reply(SM_NEWCHR_SUCCESS))
+    try:
+        _do_newchr(run, conn, run.args, "sess", plan, [])
+        sent = conn.sock.sent[-1]
+        assert encode_text("ua/abcdef/0/0/0") in sent, sent  # plan 默认 hair=0/job=0/sex=0
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # ⑨ F2：first_pack 三条路径（SM_LOGON 位拆 dir/light、SM_NEWMAP(51) 取 map_file、
+    #     SM_MAPDESCRIPTION(54) 取 map_desc）。**刻意在 51 前塞一条 634（body=WRONG）**：
+    #     若实现回退成用 634 ⇒ map_file=WRONG ⇒ 本断言红（review F1 的构造级钉）。
+    import tempfile
+    tmpd = tempfile.mkdtemp(prefix="mir2probe-fp-")
+    try:
+        series = 3 | (5 << 8)  # MakeWord(Dir=3, Light=5)
+        frames = [
+            build_s2c_frame(7, SM_LOGON, 10, 20, series, b""),
+            build_s2c_frame(0, SM_CHANGEMAP, 0, 0, 0, b"WRONG"),
+            build_s2c_frame(0, SM_NEWMAP, 10, 20, 0, b"0114"),
+            build_s2c_frame(0, SM_MAPDESCRIPTION, 0, 0, 0, "比奇省".encode("gbk")),
+        ]
+        args = argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock(frames)
+        conn.pump(100)
+        fp = run.state["first_pack"]
+        assert fp["map_file"] == "0114", fp        # 来自 SM_NEWMAP(51)，不是 634
+        assert fp["map_desc"] == "比奇省", fp
+        assert (fp["x"], fp["y"]) == (10, 20), fp
+        assert (fp["dir"], fp["light"]) == (3, 5), fp   # series&0xFF=Dir、>>8=Light
+        assert fp["actor_id"] == 7 and fp["series"] == series, fp
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
     return ("形状 2 正 + %d 坏例；位置 2 坏例；reuse 4 象限；运行期 created/reused/fail(code2)/code3 4 例；"
-            "S-2 与 B1 各 1 钉" % len(bad))
+            "S-2 与 B1 各 1 钉；F2 载荷序 + first_pack(51/位拆) 各 1" % len(bad))
 
 
 def run_selftest():

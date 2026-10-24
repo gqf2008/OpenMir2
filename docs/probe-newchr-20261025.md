@@ -24,7 +24,8 @@
 | 响应 | `UserService.cs:650-658`：成功 `MakeMessage(SM_NEWCHR_SUCCESS(521), 0, …)`，失败 `MakeMessage(SM_NEWCHR_FAIL(522), nCode, …)` | ⇒ **失败原因在 `Recog`** |
 | 建号落库 | `UserService.cs:259-280` `NewChrData`：只写 `ChrName/Account/Sex/Job/Hair`（`(byte)` 截断），**不写 MapName** | ⇒ 首登地图由 StartPoint 决定 |
 | 首包 `SM_LOGON` | `src/M2Server/Player/PlayObject.cs:1131` `MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, HUtil32.MakeWord(Dir, Light))` | `param=x`、`tag=y`、`series` 低字节 `Dir`、高字节 `Light` |
-| 地图文件名 | `PlayObject.cs:3778` `SendMsg(RM_CHANGEMAP, …, envir.MapFileName)` → `PlayObject.Message.cs:1776` `SendDefMessage(SM_CHANGEMAP(634), …, processMsg.Msg)` | body = `Envir.MapFileName`（**不是**逻辑 MapName） |
+| 首包地图文件名 | `PlayObject.Message.cs:1680-1684`（`RM_LOGON` 支）：`MakeMessage(SM_NEWMAP(51), ActorId, CurrX, CurrY, DayBright())` + 尾 `EDCode.EncodeString(MapFileName)` | body = `Envir.MapFileName`；**首登不换图 ⇒ 首包地图帧是 51** |
+| 换图地图文件名 | `BaseObject.cs:1134` / `PlayObject.cs:3778` `SendMsg(RM_CHANGEMAP, …, MapFileName)` → `PlayObject.Message.cs:1774-1776` `SendDefMessage(SM_CHANGEMAP(634), …)` | 634 **只在换图**时发（review F1 订正：不能拿它当首包） |
 | 地图描述 | `PlayObject.Base.cs:894` `SendDefMessage(SM_MAPDESCRIPTION(54), …, Envir.MapDesc)` | body = `MapDesc` |
 | 出生点 | `PlayObject.Base.cs:715-717` 以 `M2Share.StartPointList` 的 `MapName` 与角色当前 `Envir.MapName` 匹配（`!setup.txt` 11 键） | 新角色记录无 MapName ⇒ 走 StartPoint |
 
@@ -76,7 +77,7 @@
 
 ```json
 {"seq":…, "actor_id":…, "x":…, "y":…, "series":…, "dir":…, "light":…,
- "body_hex":"…", "map_file":"<SM_CHANGEMAP body>", "map_desc":"<SM_MAPDESCRIPTION body>",
+ "body_hex":"…", "map_file":"<SM_NEWMAP(51) body>", "map_desc":"<SM_MAPDESCRIPTION body>",
  "map_name": null, "map_name_note":"客户端线上不含逻辑地图名…"}
 ```
 
@@ -103,7 +104,7 @@
 | 出生点坐标 x/y | `first_pack.x/y`（`SM_LOGON.param/tag`） | 真机两侧对拍 = 逐值 diff=0 |
 | 朝向 | `first_pack.dir`（`series & 0xFF`） | 来自 `humData.Dir`（`NewChrData` 不写方向 ⇒ ctor 缺省 0 待真机核） |
 | 光照 | `first_pack.light`（`series >> 8`） | 过程证据 |
-| 地图 | `first_pack.map_file/map_desc` + **DB `characters.MapName`**（dbsnap）+ `!setup.txt` StartPoint | 逻辑 MapName 不上线，必须 DB/配置侧核 |
+| 地图 | `first_pack.map_file`（**SM_NEWMAP(51)** 的 MapFileName）/`map_desc`（54） + **DB `characters.MapName`**（dbsnap）+ `!setup.txt` StartPoint | 逻辑 MapName 不上线，必须 DB/配置侧核 |
 
 > **可跑 ≠ 覆盖**：本片只解除「只能既有角色」的限制，让 W-LF-1 有入口；判据仍是真机同 tick 的
 > 首包字节对拍 + DB 后态。

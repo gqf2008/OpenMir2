@@ -1,6 +1,6 @@
 {
   "name": "login_newchar",
-  "description": "W-LF-1 的**可跑路径**（卡 `openmir2-probe-newchr-step`）：`CM_NEWCHR(101)` 新建角色 → 进世界 → 首包落 `--out`。首包数据全在 `run.json.chain.first_pack`：`x/y/dir/light` 来自 `SM_LOGON(50)`（`PlayObject.cs:1131` `MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, MakeWord(Dir,Light))` ⇒ param=x、tag=y、series=低字节 Dir/高字节 Light）；`map_file` = `SM_CHANGEMAP(634)` 的 body（`Envir.MapFileName`，`PlayObject.cs:3778`）；`map_desc` = `SM_MAPDESCRIPTION(54)` 的 body（`Envir.MapDesc`，`PlayObject.Base.cs:894`）。**逻辑 MapName 不在线上**（客户端不需要）⇒ W-LF-1 的地图项以 DB `characters.MapName` 与 `!setup.txt` StartPoint 为准（见 docs/probe-newchr-20261025.md §2.3）。**本场景只证明「可跑」，不声称 W-LF-1 已覆盖**。默认角色名 `newchrprobe`（可 `--var newchr_name=<唯一名>` 覆盖）；重名有 `on_exists=reuse` 兜底。",
+  "description": "W-LF-1 的**可跑路径**（卡 `openmir2-probe-newchr-step`）：`CM_NEWCHR(101)` 新建角色 → 进世界 → 首包落 `--out`。首包数据全在 `run.json.chain.first_pack`：`x/y/dir/light` 来自 `SM_LOGON(50)`（`PlayObject.cs:1131` `MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, MakeWord(Dir,Light))` ⇒ param=x、tag=y、series=低字节 Dir/高字节 Light）；`map_file` = **`SM_NEWMAP(51)`** 的 body（`Envir.MapFileName`，`PlayObject.Message.cs:1680-1684` 的 RM_LOGON 支；634 只在换图 `RM_CHANGEMAP` 时发）；`map_desc` = `SM_MAPDESCRIPTION(54)` 的 body（`Envir.MapDesc`，`PlayObject.Base.cs:894`）。**逻辑 MapName 不在线上**（客户端不需要）⇒ W-LF-1 的地图项以 DB `characters.MapName` 与 `!setup.txt` StartPoint 为准（见 docs/probe-newchr-20261025.md §2.3）。**本场景只证明「可跑」，不声称 W-LF-1 已覆盖**。默认角色名 `newchrprobe`（可 `--var newchr_name=<唯一名>` 覆盖）；重名有 `on_exists=reuse` 兜底。",
   "params": {
     "newchr_name": "newchrprobe",
     "job": 0,
@@ -23,11 +23,11 @@
         "idents": [
           50,
           54,
-          634
+          51
         ],
         "timeout_ms": 6000
       },
-      "note": "首包三帧（**累计口径**：进世界/延迟段已到达的也算）：SM_LOGON(50)、SM_MAPDESCRIPTION(54)、SM_CHANGEMAP(634)。证据在 `run.json.chain.first_pack`；帧原始字节在 `frames.ndjson`。"
+      "note": "首包三帧（**累计口径**：进世界/延迟段已到达的也算）：SM_LOGON(50)、SM_MAPDESCRIPTION(54)、**SM_NEWMAP(51)**（RM_LOGON 支，body=MapFileName；634 只在换图时发，首登不换图）。证据在 `run.json.chain.first_pack`；帧原始字节在 `frames.ndjson`。"
     }
   ]
 }
