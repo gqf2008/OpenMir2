@@ -76,6 +76,12 @@
 
 ## 1.6 分支随机（F1）：只能靠「两侧同 seed」，当前 `blocked`
 
+> **⚠ 本节的三步解封条件已被永久不可达结论取代（2026-10-25，卡 `openmir2-wcm1-alternative-criteria`）**：
+> t118 除 RNG 流位外还有**内容前置缺口**——三库 `stditems` 无「佛牌」、`characters.Level=1`、
+> `ASSETS_COLUMNS` 无 `Level` ⇒ `@rw01` 对正常客户端不可达；且同 seed 跨起栈 `movr` 仍漂移（§1.7）。
+> **本节保留为历史、不再执行**；W-CM-1 的关卡证据以 `clearmapmon_q001` 真机 + t118 构造级/单测为准
+> （台账第 4 行、exec sheet ③）。
+
 `[@rw01]` 的 `#act movr M3 3`（`武士-0114.txt:27`）随机 0..2，只有赢页有 `<打听[命运之刃]的下落/@rw02>`(:61)；
 输页只有 `/@exit`(:47)、平局页只有 `<再来/@rw01>`(:54)。`M3` 是**脚本局部量**、动作点覆盖任何预置 ⇒ 不可注入。
 
@@ -100,10 +106,18 @@
 
 ## 2. 期望证据（**不得假设 `cleared` 字段**）
 
-- **清怪**：实体集合/AOI 差集（T118/Q001 内存活怪在 `CLEARMAPMON` 后置 `NoItem`/`Ghost` 并删格），
-  外加 `SM_DISAPPEAR(30)` 帧序（oracle `DisappearA` → `SendRefMsg(RM_DISAPPEAR)`，泵 `PlayObject.Message.cs:1651-1654`）。
-  **帧数与实体数不写死**：以两侧差集一致为准，帧序用于核对（场景最后一步 `wait_for: 30` 只等首帧）。
-- **刷怪**：`MONGENEX` 后的刷怪位置/数量（`命运教主` ×2 于 T118 (14,17) 邻域；`骷髅精灵5` ×2 于 Q001 (10,10) 邻域）。
+- **验收范围（2026-10-25 订正）**：Q001 在冻结内容里**没有 MonGen 行**（`grep Q001 MonGen.txt` = 0；
+  `MapQuest.txt` 的 `Q001 [58]` 是任务标记不是刷怪），且 `老人-1.txt:49-50` 是**先 `CLEARMAPMON` 后
+  `MONGENEX`** ⇒ 清场那一刻地图为空、无可清之怪、**不会有 `SM_DISAPPEAR(30)`**。故 **#19 只验刷怪**：
+  - **MONGENEX 刷怪 + 同名多只 + 玩家切图**（真机，#19）：场景用 `wait_idents [10]`（累计口径）
+    确认「进图后见过怪物再生帧」，**数量/位置交给证据层**（两侧 `frames.ndjson` 逐帧对拍 +
+    实体/AOI 差集）。为什么不用逐帧 `wait_for 10`：那两条 `SM_TURN` 由第 5 步 `@rw02` 的
+    `#act`（`MONGENEX → TimeRecall 5 → map Q001`）触发、在第 6 步 pump 已被记账，逐帧等待会
+    越过它们而必超时。`wait_frames` 也**不能**数出现次数（判的是累计帧总数 + idents 出现过）。
+  - **清场过滤语义**（仅构造级）：实体置 `NoItem`/`Ghost`/删格等只在 `mongen.rs` 单测覆盖，
+    **无真机证据**（台账红线：构造级已绿 ≠ 真机证据）。
+  - **宠物/召唤物腿**（仅构造级）：同图/存活/非 Ghost/非 Master/CertList 等过滤分支由构造用例覆盖，
+    **无真机证据**。
 - **出队序**：动作帧与脚本帧在同 handler 按 `MsgQueue` 优先级（`(byte)wIdent`）出队，口径归
   `openmir2-script-handler-msgqueue`；本卡**不自行发明**编号，比对时以该卡结论为准。
 

@@ -1,6 +1,6 @@
 {
   "name": "clearmapmon_q001",
-  "description": "W-CM-2：`CLEARMAPMON Q001` + `MONGENEX Q001 10 10 骷髅精灵5 2 1 1`（老人-1.txt:49-50）。**前置（F2）**：`[@main]` 分支——`checkitem 精灵头盔` ⇒ 只有 @rw03；`checkitem 蛇毒` ⇒ 才有 @rw01（:20 链接）⇒ 需 **蛇毒×1**（窗口 DB 预置背包），否则 @rw01 不在 CanJmp、第一步 1011 被拒。验收：清怪的可观测集（实体差集 + SM_DISAPPEAR(30) 帧序）+ MONGENEX 刷怪位置/数量；不假设 cleared。",
+  "description": "W-CM-2：`CLEARMAPMON Q001` + `MONGENEX Q001 10 10 骷髅精灵5 2 1 1`（老人-1.txt:49-50）。**验收范围（2026-10-25 订正）**：Q001 在冻结内容里**没有任何 MonGen 行**（`MonGen.txt` grep `Q001`=0；`MapQuest.txt` 的 `Q001` 是任务标记），且脚本顺序是**先清场后刷怪** ⇒ 清场那一刻地图是空的、无可清之怪、**不会出 `SM_DISAPPEAR(30)`**。因此本场景只验 **MONGENEX 刷怪 + 同名多只 + 玩家切图**；**清场过滤语义与宠物/召唤物腿仅有构造级覆盖**（`mongen.rs` 用例），不声称真机清场证据。前置（F2）：`[@main]` 分支——`checkitem 精灵头盔` ⇒ 只有 @rw03；`checkitem 蛇毒` ⇒ 才有 @rw01（:20），需 **蛇毒×1**（窗口 DB 预置背包）。",
   "required": [
     "npc_actor"
   ],
@@ -39,9 +39,17 @@
       "note": "脚本尾说词；与清怪/刷怪帧同 handler 按 MsgQueue 优先级出队"
     },
     {
-      "wait_for": 30,
-      "timeout_ms": 5000,
-      "note": "SM_DISAPPEAR(30)：Q001 被清掉的怪对观察者出帧（DisappearA/MakeGhost）；帧数以实体差集为准，不写死"
+      "wait_idents": {
+        "idents": [
+          10
+        ],
+        "timeout_ms": 5000
+      },
+      "note": "进图后见过怪物再生帧 `SM_TURN(10)`（**累计口径**，含等待前已到的帧）。刷出的 2 只 `骷髅精灵5` 的 `SM_TURN` 实际由第 5 步 `@rw02` 的 `#act`（`MONGENEX → TimeRecall 5 → map Q001`）触发，会在第 6 步 pump 记账；故此处不能用逐帧 `wait_for`（会越过它们而必超时）。**数量/位置不在此断言**：交给证据层（两侧 frames.ndjson 逐帧对拍 + 实体/AOI 差集）。注意 `wait_frames` 不能数出现次数（它判「累计帧总数≥count 且 idents 都出现过」），按 ident 计数需新步型（另卡）。"
+    },
+    {
+      "sleep": 500,
+      "note": "留出刷怪/可见性收尾时间"
     }
   ]
 }

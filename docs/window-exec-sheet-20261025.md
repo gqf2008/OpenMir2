@@ -28,7 +28,7 @@
 |---|---|---|---|---|
 | W1 | #1–#17（`login_only` … `upgrade_retrieve`） | 台账 #2 `W-LF-1`（部分：既有角色进图腿）、#3 的相邻腿；其余为通用冒烟 | `card_window.py` 每轮 out 目录的 `frames.ndjson` + DB 九表快照 + `compare_runs.py` 输出 | `run_batch` 的 rc 双列（outer/compare）；探针日志 `probe.log` |
 | W2 | #18 `gamepoint_exchange` | 台账 #3 **W-PD-1**（GAMEPOINT 落库 + `SM_GAMEGOLDNAME(5008)`） | 5008 的 `Param/Tag` 逐字节 + `characters.GamePoint` 前后值（9→0）+ 643 帧序 | 先看是否命中 `CHECKGAMEPOINT > 8`（`:522`）门；`SoftVersionDateEx == 0` 会导致根本不发 5008（`PlayObject.Base.cs:930-933`） |
-| W3 | #19 `clearmapmon_q001` | 台账 #4 **W-CM-2** | `SM_DISAPPEAR(30)` 帧序 + 实体/AOI 差集 + `MONGENEX` 刷怪位置/数量 | **第 4 步 `wait_for 643` 超时**（第 3 步 `dlg_select @rw01` 的 1011 被 CanJmp 拒）⇒ 多半是前置**蛇毒×1 未预置**（`老人-1.txt` `[@main]` 的 `checkitem 蛇毒` 支才给 `@rw01` 链接 :20）；若已预置仍超时，再查 `[@rw01]` 页的 `@rw02` 链接(:35) 与被清怪是否在场 |
+| W3 | #19 `clearmapmon_q001` | 台账 #4 **W-CM-2**；W-CM-1 的**刷怪腿**（清场/宠物腿仅构造级，无真机证据） | `wait_idents [10]`（累计口径，确认进图后见过怪物再生帧）+ 证据层：两侧 `frames.ndjson` 逐帧对拍 + 实体/AOI 差集（数量/位置在此断言）；**不期望 `SM_DISAPPEAR(30)`**（Q001 无 MonGen 行，清的是空图） | **第 4 步 `wait_for 643` 超时**（第 3 步 `dlg_select @rw01` 的 1011 被 CanJmp 拒）⇒ 多半是前置**蛇毒×1 未预置**（`老人-1.txt` `[@main]` 的 `checkitem 蛇毒` 支才给 `@rw01` 链接 :20）；若已预置仍超时，再查 `[@rw01]` 页的 `@rw02` 链接(:35) 与被清怪是否在场 |
 | W3 | #20 `dropgold_zero_draw` | 台账 #6 **W-DG-1** | `SM_GOLDCHANGED(653)` 恰一条 + `Recog` 同源 + **金币净差 0** + 地面无金币 + RNG 流位不前进 | 653 缺 ⇒ 没进 `ClientDropGold` 或命中前置门（SafeZone / `nGold < CanDropGold`，只发 `RM_MENU_OK`）；**金币差写成 100 是错的**（BUG-REPLICA 2：`DropGoldDown` 恒失败回滚） |
 | W3 | #22 `castle_merchant_tax`（**blocked**） | 台账 #1 **W-TAX-2/3** | 见 ③：本轮不可跑（需配置覆盖通道 + 第二 placement + 600s 落盘） | — |
 | W3 | #23 `castle_merchant_tax_potion` | 台账 #1 **W-TAX-1（买腿）** | 步序：`0153` → 643 → `@buy` → 645 → `CM_USERBUYITEM(1014, 金创药(小量))` → `wait_idents[650,200]` → `sleep 620000`；**期望买价 88、当场 `650.recog` = Gold 9912**、620s 后 `SabukW` 的 `TotalGold`/`TodayIncome` **各 +4** | 650 缺 ⇒ 买卖前置（金币/负重/门槛）不满足；620s 后文件未 +4 ⇒ `SaveTick` 10min 门或税目的地不对（先看台账 #1 的 W-TAX-2 前置） |
@@ -44,7 +44,7 @@
 | 项 | 为什么不可跑 | 解封条件 |
 |---|---|---|
 | `butch_two_draws`（run3 #21，清单标 `YES`） | 仍缺**场景内的击杀步**（活体夹具已落地、C# RNG 已落地 `15dbbe843`；缺的是「把动物打成尸体」那一步的驱动） | ① 活体夹具**已落地**；② C# RNG 接线**已落地**（`15dbbe843`：`start-csharp.ps1` + `RngSeedHook`）；③ 待补：场景击杀步（或用 tester 的 drop/butch 夹具片预置尸体）。源：`tools/probe/scenarios/butch_two_draws.json` 的 `blocked` |
-| `clearmapmon_t118`（**不在 run3**） | `[@st]` 的 `movr M3 3`（`武士-0114.txt:27`）分支随机；M3 不可注入；且输分支会扣佛牌 + 写 `命运之刃名单.txt`（`:37-43`） | ① C# 栈接 hook/seed；② 两侧同 `-Seed N`，用 `MIR2_RNG_SITE=1` 流水确认该 seed 下 `movr` 取 **2**；③ 每次尝试前恢复夹具（佛牌×1 + 从名单移除角色）；④ 记 seed 号后由 owner 裁决入批。源：`docs/window-scenes-clearmapmon-20261025.md` §1.6 |
+| `clearmapmon_t118`（**不在 run3**；**已定性永久不可达**，截至 `92682d3fb`） | ① `[@main]` 要 `checkitem 佛牌 1` + `checklevel 43`，但三库 `stditems` 均无「佛牌」、`characters.Level=1` 且 `ASSETS_COLUMNS` 无 `Level` ⇒ `@rw01` 对正常客户端**不可达**；② 同 seed（42/43）跨全新起栈 `movr` 实抽仍漂移 ⇒ 无稳定赢页 seed。**替代判据**：W-CM-1 = `clearmapmon_q001` 真机（#19）+ t118 构造级/单测覆盖（见台账第 4 行）。原 blocking 记录保留为历史 |
 
 **P0/P1 缺口的当前状态**（源：`docs/window-kit-coverage-20261025.md` §2 + 各修复卡）：
 
