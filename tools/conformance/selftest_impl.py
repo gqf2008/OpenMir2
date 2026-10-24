@@ -2027,6 +2027,33 @@ class Selftest(object):
                    len(diffs) == 3 and all(d.get("ident") == 53 for d in diffs),
                    [(d.get("ident"), d.get("field"), d.get("frame_index"))
                     for d in diffs])
+        # ⑦ 53 真差异分诊卡（openmir2-compare-ident53-diff-triage，tier=R）：残余 3 处
+        #   ident 53 diff 是**显式登记的真差异**，逐处钉死 anatomy——
+        #   (frame_index 30/32, body_len, oracle 0 vs rust 16) ×2 = D-9 owner 裁决的
+        #   HIGHHP 家族故意偏离（mir2-rs/tests/parity/whitelist.md D-9：冻结客户端
+        #   HIGHHP=True 要 12B TCharDesc 尾；window-run-1 的 pin
+        #   MIR2_CLIENT_ABILITY_LAYOUT=0 在起栈链丢失，game-svr.out.log 自证行
+        #   「layout=client-58（<unset>）」）⇒ rules.json 53 条目 fail-closed 该红仍红，
+        #   修属窗口工具链（pin 转发），不许登记成掩码/ignore 消红；
+        #   (frame_index 32, head tag, oracle 13 vs rust 15) = MP 数值/时序分歧
+        #   （基线 MP=17 双侧证实：dbsnap + 入图日志；oracle 17→15→13 与 stamina
+        #   SpellFillTime=800 模型逐位吻合；rust 第 2 帧实发 15 与现 master 静态推演
+        #   不符）⇒ 判不准按 R，待窗口复跑定位。逐字节解剖表与证据链见
+        #   docs/compare-ident53-diff-triage-20261024.md；fixture/rules 任一漂移或
+        #   掩码化都会让本断言红。若将来窗口复跑（pin 生效 + MP 分歧定位）后重新冻结
+        #   fixture，由该卡按 ⑤/⑥ 同款义务更新这里。
+        anatomy = sorted(
+            (d.get("frame_index"), d.get("kind"), d.get("field"),
+             d.get("oracle"), d.get("rust"))
+            for d in diffs)
+        self.check("控制帧 ⑦ 残余 3 处 ident 53 diff anatomy 逐处钉死"
+                   "（body_len 0/16 ×2 + head tag 13/15 ×1，R 级显式登记）",
+                   anatomy == [
+                       (30, "body_len", "body_len", 0, 16),
+                       (32, "body_len", "body_len", 0, 16),
+                       (32, "head", "tag", 13, 15),
+                   ],
+                   anatomy)
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
         cols = list(dp.TABLE_SPECS["mir2_db.characters_ablity"]["columns"])
