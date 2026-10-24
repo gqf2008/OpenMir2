@@ -1,6 +1,6 @@
 {
   "name": "upgrade_retrieve",
-  "description": "R2 武器升级 NPC 全链（沙巴克铁匠：盟重省 map 3 (332,317)，MerChant.txt:82）：CM_CLICKNPC(1010) -> 643 @main -> @upgrade -> 643 -> @confirmupgrade -> 643（说词含 <请求修炼/@upgradenow>）-> @upgradenow 提交（成功首帧 SM_DELITEM(202)，紧跟 52/41/653/657×2/709；失败或已在升级中只回 643）-> sleep 660000ms 过取回时效门（Server.conf:331 UPgradeWeaponGetBackTime=600000）-> @main -> @getbackupgnow 取回（成功首帧 SM_ADDITEM(200)，含 Desc[10]；未到期/无记录只回 643）。为 openmir2-upgrade-npc / openmir2-weapon-upgrade-values / openmir2-a09-upgrade-item 三张 R 卡提供「同一串 CM_* 把两侧推到同一条链」的夹具；抽数序 A(耐久)→B(Random(3))→C/D/E 的逐抽对拍要窗口双开 MIR2_RNG_LOG，本场景不负责判定。逐条 oracle 出处与夹具前置见 docs/upgrade-retrieve-scenario-20261023.md。2026-10-24 部署前置批次（卡 openmir2-window-deploy-prereq-batch1）：三前置改为场景自描述——steps[0..1] 用夹具木剑 CM_TAKEONITEM 上手（param=ItemLocation.Weapon=1，StdMode5 经 M2Share.CheckUserItems 逆表），inventory 声明 木剑#5001@40 + 黑铁矿石#5003@41（=UpgradeWapon 的 CheckItems(BlackStone) 前置）；金币前置（Gold ≥ UpgradeWeaponPrice=10000，Server.conf:333）暂无声明通道（characters.Gold 列不在 placement 三列/inventory 背包夹具通道内），落地前第 9 步 wait_idents[709] 预期超时（fail-closed 残留，非假绿），归金币夹具通道的后续卡。",
+  "description": "R2 武器升级 NPC 全链（沙巴克铁匠：盟重省 map 3 (332,317)，MerChant.txt:82）：CM_CLICKNPC(1010) -> 643 @main -> @upgrade -> 643 -> @confirmupgrade -> 643（说词含 <请求修炼/@upgradenow>）-> @upgradenow 提交（成功首帧 SM_DELITEM(202)，紧跟 52/41/653/657×2/709；失败或已在升级中只回 643）-> sleep 660000ms 过取回时效门（Server.conf:331 UPgradeWeaponGetBackTime=600000）-> @main -> @getbackupgnow 取回（成功首帧 SM_ADDITEM(200)，含 Desc[10]；未到期/无记录只回 643）。为 openmir2-upgrade-npc / openmir2-weapon-upgrade-values / openmir2-a09-upgrade-item 三张 R 卡提供「同一串 CM_* 把两侧推到同一条链」的夹具；抽数序 A(耐久)→B(Random(3))→C/D/E 的逐抽对拍要窗口双开 MIR2_RNG_LOG，本场景不负责判定。逐条 oracle 出处与夹具前置见 docs/upgrade-retrieve-scenario-20261023.md。2026-10-24 部署前置批次（卡 openmir2-window-deploy-prereq-batch1）：三前置改为场景自描述——steps[0..1] 用夹具木剑 CM_TAKEONITEM 上手（param=ItemLocation.Weapon=1，StdMode5 经 M2Share.CheckUserItems 逆表），inventory 声明 木剑#5001@40 + 黑铁矿石#5003@41（=UpgradeWapon 的 CheckItems(BlackStone) 前置）；金币前置经顶层 assets 声明 Gold=10000 抬够（Gold ≥ UpgradeWeaponPrice=10000，Server.conf:333；通道=卡 openmir2-window-gold-declaration-channel 的 card_window assets 声明 + 卡 openmir2-probe-assets-key-delta 的 probe 顶层键放行，本卡 openmir2-upgrade-retrieve-assets-adoption 采用）——三前置全部声明齐，第 9 步 wait_idents[709] 在部署侧预期到达；金币未实际抬够时仍只回 643 => 本步超时（fail-closed 语义不变）。",
   "required": [
     "merchant_actor"
   ],
@@ -28,6 +28,10 @@
       "note": "黑铁矿石（stditems#68，StdMode=43，mir2_data 实测行与 sql/mir2_data.sql:1058 一致）——UpgradeWapon 的 user.CheckItems(BlackStone='黑铁矿石')（Server.conf:87）背包前置，提交成功支被吃并发 709；dura 不声明（矿石纯度只进升级数值数学，不影响链路可达）"
     }
   ],
+  "assets": {
+    "Gold": 10000,
+    "note": "金币前置 Gold ≥ UpgradeWeaponPrice=10000（E:/MirServer/M2GameSvr/Server.conf:333）：UpgradeWapon 提交支要扣金币（Merchant.cs:529-590），基线 winplay0 Gold=100 不够 => ~@upgradenow_fail、上面第 9 步 709 必红。通道 = card_window assets 声明通道（卡 openmir2-window-gold-declaration-channel：restore 后、起栈前按 profile char_name/account UPDATE 每侧测试库 characters.Gold，写前后对其余列 MD5 指纹、写后读回断言目标值）；probe 只做同口径形状校验（卡 openmir2-probe-assets-key-delta），本驱动器不写库"
+  },
   "placement": {
     "map": "3",
     "x": 320,
@@ -95,7 +99,7 @@
         ],
         "timeout_ms": 5000
       },
-      "note": "SM_DELITEMS(709)（Messages.cs:357；RM_SENDDELITEMLIST -> PlayObject.Base.cs:1636-1646，Series=条数、尾=EncodeString(\"名/makeindex/…\")）只在提交成功支出现（黑铁/首饰被吃时由 UpgradeWaponAddValue 组 delItemList，Merchant.cs:512-521）。累计口径 => 把「提交真的成功」钉死：夹具缺武器 / 金币 < 10000 / 背包无黑铁矿时本步必红，不会靠 643 假绿。2026-10-24 部署前置批次后：武器（steps[0..1] 上手）与黑铁（inventory #5003@41）已声明；金币（Gold ≥ UpgradeWeaponPrice=10000，Server.conf:333，基线 winplay0 Gold=100）暂无声明通道——characters.Gold 不在 placement（只写 MapName/CX/CY）与 inventory（只写 characters_bagitem）两通道内 => 金币夹具通道落地前本步在本部署预期超时（fail-closed 残留，卡 openmir2-window-deploy-prereq-batch1 交付注记）"
+      "note": "SM_DELITEMS(709)（Messages.cs:357；RM_SENDDELITEMLIST -> PlayObject.Base.cs:1636-1646，Series=条数、尾=EncodeString(\"名/makeindex/…\")）只在提交成功支出现（黑铁/首饰被吃时由 UpgradeWaponAddValue 组 delItemList，Merchant.cs:512-521）。累计口径 => 把「提交真的成功」钉死：夹具缺武器 / 金币 < 10000 / 背包无黑铁矿时本步必红，不会靠 643 假绿。2026-10-24 部署前置批次后：武器（steps[0..1] 上手）与黑铁（inventory #5003@41）已声明；金币前置改由顶层 assets 声明 Gold=10000 抬够（Gold ≥ UpgradeWeaponPrice=10000，Server.conf:333；基线 winplay0 Gold=100 在 UpgradeWapon 扣金币处不足 => ~@upgradenow_fail 只回 643；通道卡 openmir2-window-gold-declaration-channel 的 assets 声明 + openmir2-probe-assets-key-delta 的 probe 顶层键放行，本卡 openmir2-upgrade-retrieve-assets-adoption 采用）=> 三前置声明齐，本步在本部署预期到达；真机仍超时 = 提交支未走成功路径（如 assets 未实际应用/金币未抬够），fail-closed 语义不变"
     },
     {
       "sleep": {
