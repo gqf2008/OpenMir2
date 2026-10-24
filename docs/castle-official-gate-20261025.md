@@ -87,10 +87,22 @@
    回退时**写回** `vars.castle` 并记 sticky，宿主下次解析该 NPC 的 `Castle` 时先看 sticky。无 0 号城 ⇒
    不替换（oracle `if (Castle != null)` 为假）。部署影响：`老人-3`（`@aboutwar`）/`比奇国王-0122`
    这类不在战区的 NPC 不再把字面 `<$CASTLEWARDATE>` 留在页面上。
-8. **观测**：2026-10-25 03:52 部署件 `E:/MirServer/M2GameSvr/Castle/List.txt` 的 mtime 被刷新（内容仍为
-   `0\r\n1\r\n`，6 字节，与部署列表一致）；疑似既有测试套件（`startup_finish` 写列表）在某个过滤器下
-   写过真实路径——单跑本卡 6 条用例**不复现**（重跑前后 mtime 不变）。已登记给 Leader 排查，本卡未改任何
-   `E:/MirServer` 文件内容。
+8. **`E:/MirServer/M2GameSvr/Castle/List.txt` 的 10 分钟 mtime 刷新 = 已知结论，非违规**：
+   写入者是**运行中的 C# `GameSrv`（PID 14040）**——`SystemProcessor.cs:54-64` 的 10 分钟门
+   （`Server.conf:334 ConsoleShowUserCountTime=600000`）→ `CastleMgr.Save()`（`CastleManager.cs:146-151`）
+   → `SaveCastleList()`（`:178-191` → `StringList.SaveToFile`，`StringList.cs:260-270`）重写
+   `BasePath/Castle/List.txt`（6B，`sha256=9b38d284…`）。**不是测试写的**：本仓所有落盘用例都用 temp 根。
+   完整取证见已合并的卡 `openmir2-test-writes-real-envir-path`（`1379a1833`，
+   `docs/test-writes-real-envir-path-20261025.md`）：巡检只比内容不比 mtime；需零触碰时停 C# 栈（别停 mysqld）。
+
+9. **`$GUILDWARFEE`（及同族的 `$BUILDGUILDFEE` 等）仍未实现**：部署 `比奇国王-0122` 用到
+   `$GUILDWARFEE`（`NormNpc.cs:796-801`），本卡未实现 ⇒ 该 token 原样保留（登记）。
+
+10. **已证 oracle 怪癖（后续卡不许「修」）**：`$CASTLEWARDATE` 的整行替换会**吃掉整页**——oracle
+    `GotoLableSendMerChantSayMsg` 对整个 `sMsg` 调 `GetLineVariableText`（`ScriptEngine.cs:987-999`），
+    一旦该 token 命中「空表/战时」支就 `sMsg = 常量` 并 `return`，同页其它行（含菜单链接）一并丢失。
+    本实现相同，且有用例钉住（`castle_official_aboutwar_whole_line_rules` /
+    `t40_castle_wardate_writeback_survives_next_click` 的第 2 步）。
 
 ## 7. R 级窗口项（`window_required: true`）
 
@@ -133,3 +145,12 @@
 `--workspace --exclude game-svr` = **119 suites / 1692 passed / 0 failed / 54 ignored**；
 合计 **141 suites / 3218 passed / 0 failed / 62 ignored**，两段 rc=0，**未被 reaper 终止**。
 F1/F3 改动只在 `bins/game-svr`（+ docs），故返工后重跑 `-p game-svr` 段：**22 suites / 1528 passed / 0 failed / 8 ignored**（含两条新用例；其余包未受改动、沿用同一基线的绿）。
+
+## 11. 返工 2（review `4c8d2731`）
+
+| 编号 | reviewer 结论 | 本片处置 |
+|---|---|---|
+| **F1 测试缺口**（Important） | 删掉宿主层 sticky 三行后原 `castle_wardate` 用例仍绿（log `eaaf52b3`）⇒ 只钉了 NPC 层写回，没钉宿主「先看 sticky」 | **已补**：`t40_castle_wardate_writeback_survives_next_click`（T137Rig 两次对话：点击 ⇒ `B:????`；`@menu` ⇒ 整页替换；再点击 ⇒ `B:王者`）。牙：删宿主 sticky 三行 ⇒ 该用例 RED（实测） |
+| **Minor ②** | `Click` 门不读 sticky：type 2 曾回退成 0 号城时 oracle `Castle != null` ⇒ 零帧，本实现发红字 | **已修**：`castle_index.is_some() || sticky.contains(&npc_actor_id)`（sticky 命中按 0 号城处理）；补 `t40_castle_official_click_is_zero_frame_after_wardate_writeback`。牙：去掉 sticky 分支 ⇒ 红字重现 ⇒ RED（实测） |
+| **Minor ③** | `changedate` 时间补零无用例（去掉 `{h:02}` 仍绿） | **已补**：`castle_changedate_keeps_nonzero_time_components`（`05:06:07` 原样）+ `change_date_text_pads_date_and_time`（`1998-1-2 5:6:7` → `1998-01-02 05:06:07`；无时间 ⇒ `00:00:00`）。牙：`{h:02}`→`{h}` ⇒ RED（实测） |
+| **Minor ④** | 报告 §6.8 应写成已知结论（C# PID 14040）+ 指向已合并的 `test-writes-real-envir`；§6.1 点名 `$GUILDWARFEE` | **已改**：§6.8 重写（含链与 sha256），§6.1/§6.9 点名 `$GUILDWARFEE`；另把「整行替换吃掉整页」登记为**已证 oracle 怪癖**（§6.10） |

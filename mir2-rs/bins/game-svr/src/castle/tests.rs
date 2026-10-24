@@ -1473,3 +1473,33 @@ fn castle_changedate_formats_or_question_marks() {
         "占领日期:????"
     );
 }
+
+/// **Minor ③（返工 2）**：`$CASTLECHANGEDATE` 的**非零时分秒**必须原样（`ChangeDate` 是
+/// `DateTime`，oracle `ToString("yyyy-MM-dd HH:mm:ss")`）——钉住「去掉 `{h:02}` 补零也绿」的缺口。
+#[test]
+fn castle_changedate_keeps_nonzero_time_components() {
+    use mir2_script::engine::ScriptPlayer;
+    let mut rng = |_v: i32| 0;
+    let mut p = official_player(&mut rng);
+    p.vars.castle_official = false;
+    p.vars.castle.as_mut().unwrap().change_date_text = Some("1998-01-01 05:06:07".to_string());
+    assert_eq!(
+        p.line_variable_text("占领日期:<$CASTLECHANGEDATE>"),
+        "占领日期:1998-01-01 05:06:07"
+    );
+}
+
+/// **Minor ③ 的第二半**：宿主格式化 `Castle.ChangeDate` —— 日期补零 + 缺时间补 `00:00:00`
+/// + 已有时间按 `HH:MM:SS` 补零（`CastleConf.cs:19-21` 的 `DateTime.Parse` 语义）。
+#[test]
+fn change_date_text_pads_date_and_time() {
+    assert_eq!(
+        super::change_date_text("1998-1-2 5:6:7"),
+        Some("1998-01-02 05:06:07".to_string())
+    );
+    assert_eq!(
+        super::change_date_text("1998-01-02"),
+        Some("1998-01-02 00:00:00".to_string())
+    );
+    assert_eq!(super::change_date_text("not-a-date"), None);
+}

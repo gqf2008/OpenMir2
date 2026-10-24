@@ -4762,7 +4762,17 @@ fn handle_click_npc_cmd(
             // // 否则：零帧零日志
             // ```
             // `Castle` = `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）。
-            let castle_index = world.castle_war_area_at(Some(nmap), nx, ny);
+            // `NormNpc.Castle` 若已被 `$CASTLEWARDATE` 回退**写回**成 0 号城（`castle_zero_sticky`），
+            // oracle 此处 `Castle != null` ⇒ 走授权门（未授权 ⇒ **零帧**），不是红字。
+            // 部署不可达（唯一 type 2 在 0150 战区），构造级可达。
+            let sticky_zero = npc_vars.castle_zero_sticky.borrow().contains(&npc_actor_id);
+            let castle_index = world.castle_war_area_at(Some(nmap), nx, ny).or(
+                if sticky_zero && !world.castles.is_empty() {
+                    Some(0)
+                } else {
+                    None
+                },
+            );
             let Some(castle_index) = castle_index else {
                 // `SysMsg("NPC不属于城堡!!!", MsgColor.Red, MsgType.Hint)` ⇒
                 // `SM_SYSMESSAGE(100)`（`Recog` = 玩家、`Param = MakeWord(RedF,RedB)`、`Series=1`）。
@@ -68271,6 +68281,124 @@ GMEXECUTE 禁言 self 20
         assert!(
             !T137Rig::says(&rig.drain()).is_empty(),
             "type 0 对照 ⇒ @main 说词"
+        );
+    }
+
+    /// **F1 宿主层（返工 2，review `4c8d2731`）**：`run_merchant_goto` 的 sticky 分支——两次对话
+    /// 证明「`$CASTLEWARDATE` 的 0 号城回退**写回**跨次保留」。
+    ///
+    /// 夹具：type 0 的 `老人`，`[@main]`=`B:<$OWNERGUILD>`、`[@menu]`=`W:<$CASTLEWARDATE>`；
+    /// 世界放一座 0 号城（`OwnGuild=王者`），但 NPC 不在它的战区（`castle_war_area_at` 为 None）。
+    ///
+    /// 1) 点击 ⇒ `Castle==null` ⇒ `B:????`；
+    /// 2) `@menu` ⇒ `$CASTLEWARDATE` 回退 + 写回 ⇒ **整页替换**成常量（oracle 怪癖，见报告）；
+    /// 3) 再点击 ⇒ 写回生效 ⇒ `B:王者`（且 **零红字**：Click 门也读 sticky）。
+    ///
+    /// 牙：删掉 `run_merchant_goto` 里 sticky 的三行（只按 `InCastleWarArea` 解析）⇒ 第 3 步回
+    /// `B:????` ⇒ 本用例红（review 实测原用例在这一变异下仍绿，正是本条要补的缺口）。
+    #[test]
+    fn t40_castle_wardate_writeback_survives_next_click() {
+        let script = "[@main]\nB:<$OWNERGUILD>\\ <菜单/@menu>\n\n[@menu]\nW:<$CASTLEWARDATE>\n";
+        let mut rig = T137Rig::new_with(
+            ";测试\n老人 0 0 12 10 0 1\n",
+            &[
+                ("Npc_def/国王-0.txt", "[@main]\n国王。"),
+                ("Npc_def/老人-0.txt", script),
+            ],
+            2,
+        );
+        let mut castle = mir2_world::castle::UserCastle::new(
+            "沙巴克",
+            mir2_world::castle::CastleSiegeConfig::default(),
+        );
+        castle.own_guild = Some("王者".to_string());
+        rig.world.castles.push(castle);
+        let elder = rig.elder_id;
+
+        // 1) `Castle == null` ⇒ `$OWNERGUILD` = `????`。
+        assert!(rig.click(elder));
+        assert!(
+            T137Rig::says(&rig.drain())
+                .iter()
+                .any(|s| s.contains("B:????")),
+            "首次点击：Castle 为 null ⇒ ????（页面原文 B:<$OWNERGUILD>）"
+        );
+
+        // 2) `$CASTLEWARDATE`：回退 0 号城 + 写回 ⇒ 整页替换（吃掉整页，含菜单行）。
+        rig.dlg_select(elder, "@menu");
+        let says = T137Rig::says(&rig.drain());
+        assert_eq!(says.len(), 1, "整页替换后只有一条说词：{says:?}");
+        assert!(
+            says[0].ends_with("暂时没有行会攻城 .\\ \\<返回/@main>"),
+            "应整行为常量，实得 {says:?}"
+        );
+
+        // 3) 再点击 ⇒ 写回跨次保留 ⇒ `$OWNERGUILD` = `王者`，且零红字（Click 门读 sticky）。
+        rig.sessions.get_mut("hero").expect("会话").click_npc_time = None;
+        assert!(
+            rig.click(elder),
+            "写回后 Castle != null ⇒ 走授权门/或 base.Click"
+        );
+        let frames = rig.drain();
+        assert!(
+            !frames
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_SYSMESSAGE),
+            "写回后 Click 不得再发「NPC不属于城堡!!!」红字"
+        );
+        assert!(
+            T137Rig::says(&frames).iter().any(|s| s.contains("B:王者")),
+            "第三次：写回生效 ⇒ B:王者，实得 {:?}",
+            T137Rig::says(&frames)
+        );
+    }
+
+    /// **Minor ②（返工 2）**：`Click` 门必须读 sticky——type 2 NPC 若已被 `$CASTLEWARDATE` 回退成
+    /// 0 号城，oracle `Castle != null` 且未授权 ⇒ **零帧**（不是红字）。
+    ///
+    /// 牙：把 `handle_click_npc_cmd` 的 `sticky_zero` 分支去掉 ⇒ 红字重新出现 ⇒ 本用例红。
+    #[test]
+    fn t40_castle_official_click_is_zero_frame_after_wardate_writeback() {
+        let script = "[@main]\nW:<$CASTLEWARDATE>\n";
+        let mut rig = T137Rig::new_with(
+            ";测试\n老人 0 0 12 10 0 1\n",
+            &[
+                ("Npc_def/国王-0.txt", "[@main]\n国王。"),
+                ("Npc_def/老人-0.txt", script),
+            ],
+            2,
+        );
+        let mut castle = mir2_world::castle::UserCastle::new(
+            "沙巴克",
+            mir2_world::castle::CastleSiegeConfig::default(),
+        );
+        castle.own_guild = Some("王者".to_string());
+        rig.world.castles.push(castle);
+        let elder = rig.elder_id;
+        rig.world
+            .entities
+            .get_mut(elder)
+            .expect("老人存在")
+            .npc
+            .as_mut()
+            .expect("NpcState")
+            .npc_type = mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
+
+        // 1011 直发 `@main`：`@main` 恒可跳（`LableIsCanJmp` 特例）⇒ 页面里的
+        // `$CASTLEWARDATE` 触发 0 号城回退 + 写回。
+        rig.dlg_select(elder, "@main");
+        let _ = rig.drain();
+        assert!(
+            rig.npc_vars.castle_zero_sticky.borrow().contains(&elder),
+            "前置：@menu 必须已完成 0 号城写回"
+        );
+
+        // 再点击：`Castle != null` + 未授权（无行会、Permission=0）⇒ 零帧。
+        rig.sessions.get_mut("hero").expect("会话").click_npc_time = None;
+        assert!(!rig.click(elder), "未授权 ⇒ 不落到 base.Click");
+        assert!(
+            rig.drain().is_empty(),
+            "写回后 Click 必须是零帧（oracle Castle != null 支），不得再发红字"
         );
     }
 
