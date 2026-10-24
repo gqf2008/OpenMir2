@@ -556,7 +556,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
     }
     // 出生点回落（`WorldServer.cs:250-260` 的 `GetHomeInfo`）：空 `HomeMap` 的新角色用它进图（见
     // `homemap` 模块头的缺陷现场）。`<base>/<EnvirDir>/StartPoint.txt` + `[Setup] StartPointSize/HomeMap/HomeX/HomeY`。
-    let start_points = homemap::load_start_points(&base, &cfg.envir_dir);
+    let start_points = homemap::load_start_points(&base, &cfg.envir_dir)?;
     let home_fallback = homemap::HomeFallback {
         start_point_size: cfg.start_point_size,
         home_map: cfg.home_map.clone(),
