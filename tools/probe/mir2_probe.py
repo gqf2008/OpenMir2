@@ -883,6 +883,12 @@ def plan_step(step, index, params, depth=0):
         _need_keys(val, where + ".kill", required=("target_xy",),
                    optional=("self_pos", "ident", "turn_ident", "max_swings",
                              "interval_ms", "wait_ident"))
+        # review `ad28d643` F1：kill 的时长只由 max_swings×interval_ms 决定；通用
+        # `timeout_ms` 在这里**不被读取**——静默收下会让人以为它生效（与 repeat 同口径：拒）。
+        if timeout_ms is not None:
+            raise ScenarioError(
+                "%s.kill does not accept timeout_ms (duration = max_swings × interval_ms); "
+                "删掉它或改用 max_swings/interval_ms" % where)
         out["target_xy"] = _need_int(
             resolve_param(val["target_xy"], params, where + ".kill.target_xy"),
             where + ".kill.target_xy", 0, 0xFFFFFFFF)
@@ -1125,7 +1131,9 @@ SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select", "dlg_select_an
 # 累计观察动作：等的是「累计出现过」而不是「本步之后的第一条回包」——驱动器的登录链
 # （CM_IDPASSWORD/SELECTSERVER/QUERYCHR/SELCHR + GameGate 登录）与自动握手
 # （CM_LOGINNOTICEOK / CM_QUERYBAGITEMS）本来就会发帧，所以纯观察场景（login_only）合法。
-CUMULATIVE_WAIT_KINDS = frozenset({"wait_idents", "wait_frames"})
+# `kill` 也归入累计观察（卡 `openmir2-probe-kill-step`）：它内部等死亡帧，
+# 只含 kill 的场景本身就有「观察」语义，不需要再补一条空 wait。
+CUMULATIVE_WAIT_KINDS = frozenset({"wait_idents", "wait_frames", "kill"})
 WAIT_KINDS = frozenset({"wait_for"}) | CUMULATIVE_WAIT_KINDS
 
 # 只认「整行就是一个常量定义」：先按行剥 `//` 注释、再锚定 `pub const ... ;`。
@@ -1328,8 +1336,9 @@ def check_scenario(data, plans, params=None, messages=None):
         elif p["kind"] == "wait_for" and first_send is None:
             raise ScenarioError(
                 "steps[%s].wait_for %s: no send step precedes it — nothing in this scenario can "
-                "produce that response (a scenario that only waits proves nothing; add a "
-                "send/say/click_npc/dlg_select before it)" % (p["index"], p["idents"]))
+                "produce that response (a scenario that only waits proves nothing; add one of "
+                "%s before it)"
+                % (p["index"], p["idents"], "/".join(sorted(SEND_KINDS))))
 
     kinds = [p["kind"] for p in leaves]
 
@@ -1460,8 +1469,9 @@ def check_scenario(data, plans, params=None, messages=None):
     # W：必须有等待步骤（N-5：只发不等证明不了任何东西）。
     if not any(k in WAIT_KINDS for k in kinds):
         raise ScenarioError(
-            "scenario %r has no wait step: at least one wait_for/wait_frames/wait_idents is required "
-            "(a send-only scenario proves nothing)" % name)
+            "scenario %r has no wait step: at least one of %s is required "
+            "(a send-only scenario proves nothing)"
+            % (name, sorted(WAIT_KINDS | {"kill"})))
     return True
 
 
@@ -4007,6 +4017,8 @@ def _selftest_kill():
         ({"kill": {"target_xy": tgt_xy, "interval_ms": 349}}, {"self_pos": self_xy},
          "out of range"),
         ({"kill": {"target_xy": tgt_xy}}, {}, "self_pos"),
+        ({"kill": {"target_xy": tgt_xy}, "timeout_ms": 5000}, {"self_pos": self_xy},
+         "does not accept timeout_ms"),
         ({"kill": {"target_xy": (330 + 3) | (330 << 16)}}, {"self_pos": self_xy},
          "八向相邻"),
     ]
@@ -4124,6 +4136,23 @@ def _selftest_kill():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
+    # F1（review `b0a7797b0`）：死亡帧的**坐标谓词**必须承重——同 ident 但在别的格子
+    # 不能算击杀成功。变异「去掉 fr.param==tx and fr.tag==ty」时本条必须红。
+    wrong = [[struck()] for _ in range(8)]
+    wrong[3].append(death(x=331, y=331))
+    run, conn, tmpd = mk(wrong)
+    try:
+        err = None
+        try:
+            run.execute_step(conn, plan3)
+        except StepFailure as ex:
+            err = str(ex)
+        checks.append((err is not None and "target alive after 6 swing(s)" in err,
+                       "kill 运行期：死亡帧在**别的格子**（331,331）不算成功 ⇒ target alive"
+                       "（钉住坐标谓词）"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
     run, conn, tmpd = mk([])
     try:
         err = None
@@ -4135,6 +4164,35 @@ def _selftest_kill():
                        "kill 运行期：目标格零帧 ⇒ no target frames（与 alive 错误串不同）"))
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # F2（review `b0a7797b0`）：转身/挥击的**tag=Dir 与 recog=自身坐标**必须被钉
+    run, conn, tmpd = mk([[], [struck()], [struck()], [struck(), death()]])
+    calls = []
+    orig_send = conn.send
+
+    def _rec_send(recog, ident, param=0, tag=0, series=0, body=b""):
+        calls.append((recog, ident, param, tag, series))
+        return orig_send(recog, ident, param, tag, series, body)
+
+    conn.send = _rec_send
+    try:
+        run.execute_step(conn, plan3)
+        checks.append((calls[:2] == [(self_xy, CM_TURN, 0, 4, 0),
+                                     (self_xy, CM_HIT, 0, 4, 0)],
+                       "kill 运行期：前两帧 = (自身坐标, CM_TURN, tag=4) 与 "
+                       "(自身坐标, CM_HIT, tag=4)（钉住 recog 与朝向）"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # kill 属累计观察：只含 kill 的场景不应被「has no wait step」拒（review info）
+    only_kill = {"name": "selftest_kill_only", "steps": [
+        {"kill": {"target_xy": tgt_xy}}]}
+    try:
+        check_kill(only_kill, {"self_pos": self_xy})
+        only_ok = True
+    except ScenarioError as ex:
+        only_ok = "no wait step" not in str(ex)
+    checks.append((only_ok, "check_scenario：只含 kill 的场景不被「缺 wait」拒（kill 内部等死亡帧）"))
 
     for cond, msg in checks:
         assert cond, msg

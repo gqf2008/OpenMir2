@@ -59,7 +59,7 @@
 | `self_pos` | `MakeLong(自身X,自身Y)`（可由 params 提供，缺省名为 `self_pos`；R5 与 placement 自洽） |
 | `ident`/`turn_ident` | 默认 `CM_HIT(3014)` / `CM_TURN(3010)`（`Messages.cs:120/136`）；必须 `CM_*`（`check_scenario` R3b） |
 | `max_swings` | 1..100，默认 20 |
-| `interval_ms` | 350..60000，默认 **1000**——同 ident 连击之间有 `HitIntervalTime - HitSpeed*ItemSpeed`（`PlayObject.Attack.cs:850`；部署 `HitIntervalTime=850`，`Server.conf:325`），400ms 会被「攻击忙」吃掉一半挥击 |
+| `interval_ms` | 350..60000，默认 **1000**——同 ident 连击之间有 `HitIntervalTime - HitSpeed*ItemSpeed`（`PlayObject.Attack.cs:850`；部署 `HitIntervalTime=850`，`Server.conf:325`）。**低于它不只是浪费挥击**：被拒的帧进超速分支，部署 `MaxHitMsgCount=1`/`OverSpeedKickCount=2`/`KickOverSpeed=1`（`Server.conf:318/406/407`）⇒ 累计 >2 次被拒会 `BoEmergencyClose` **直接踢掉探针连接**（review `b0a7797b0`） |
 | `wait_ident` | 默认 `[SM_NOWDEATH(34), SM_DEATH(32)]`；**必须 `SM_*`**。真死亡广播是 `RM_DEATH` nParam3=1（`BaseObject.Base.cs:351` → `PlayObject.Message.cs:1632-1634`），帧里 **param/tag = 目标 X/Y**；`SM_DEATH(32)` 是对「已死 actor 进入视野」的刷新帧（`PlayObject.cs:3235`） |
 
 ### 2b.2 三态失败（各不同错误串）
@@ -77,6 +77,8 @@
 - `butch_two_draws` 步序：`kill`（`target_xy` = 目标格、`self_pos=21627210`）→ `CM_BUTCH(1007)`
   → `SM_SKELETON(33)` → `SM_BUTCH(637)` → `sleep 500`；场景总时长 20×1s ⇒ run3 `#21`
   带 `extra=["--timeout-ms","60000"]`。
+- **`target_xy`/`self_pos` 放 `params`（默认 21692746/21627210），不要放 `required`**：`card_window` 见到任何
+  `required` 会先跑 discovery（`npc_click_auto`），map 0 无 NPC ⇒ 必然超时（实测踩到，rc=2）。
 - **状态：仍 `blocked`**，`blocked.reason` 已改为「能力齐、只差实测」；解封条件（实测步骤 +
   证据清单 + 失败分流）写在场景 `blocked.missing_fixture`。
 - 自测：`kill` 进 schema 校验（未知键/越界/缺 `self_pos`/非相邻全拒）、`SEND_KINDS`、`check_scenario`
@@ -85,7 +87,7 @@
 
 ## 3. run3 注册（只追加两行）
 
-`tools/window/run3-scenarios.json`：`#20 dropgold_zero_draw`、`#21 butch_two_draws`（`profile=alt`、`extra=[]`），
+`tools/window/run3-scenarios.json`：`#20 dropgold_zero_draw`（`profile=alt`、`extra=[]`）、`#21 butch_two_draws`（`profile=alt`、`extra=["--timeout-ms","60000"]`；见 §2b.3），
 既有 19 条**逐字节未动**（diff = +2 行 + #19 补逗号）。`#21` 行带 `"blocked": "<原因>"`。
 
 **blocked 的批次语义（按 `tools/window/run_batch.sh:107-108` 注释 + `:223-225` 实现）**：
