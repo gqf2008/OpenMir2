@@ -66,9 +66,9 @@
 
 | 步 | 命令 | 预期 | 失败怎么办 | 证据落哪 |
 |---|---|---|---|---|
-| B1 | `powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/start-all.ps1` | 十端口监听；**勿加 `-Stop`**（会连 mysqld 一起停） | 端口占用 ⇒ `E:/MirServer/port-status.ps1` 定位后清进程；**不要**动 mysqld | 十端口状态输出 |
-| B2 | `bash tools/window/run_batch.sh --dry-run` | 只读自检全绿 + 17 场景清单；不起栈 | 缺参/前置失败 ⇒ 按脚本输出修；`--dry-run` 不写产物 | dry-run 输出 |
-| B3 | `bash tools/window/run_batch.sh --list` | 打印 17 场景（alt×16 + window-magic×1） | 清单与 `tools/window/run3-scenarios.json` 不一致 ⇒ 停，别跑 | 清单输出 |
+| B1 | `powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1` | **确认 5000–7200 全部 DOWN、mysqld 3306 UP**（窗口要空的是 profile 的 15xxx/16xxx；窗口栈由 `run_batch.sh`/`card_window.py` 自己起；`start-all.ps1` **不要**跑，`check_ports_free` 占用即 rc=2） | 端口被占 ⇒ `port-status.ps1` 定位后清进程；**不要**动 mysqld | port-status 输出（5000–7200 DOWN / 3306 UP） |
+| B2 | `bash tools/window/run_batch.sh --dry-run` | 只读自检全绿 + **场景清单（条数以 `--list` 实况为准，勿写死）**；不起栈 | 缺参/前置失败 ⇒ 按脚本输出修；`--dry-run` 不写产物 | dry-run 输出 |
+| B3 | `bash tools/window/run_batch.sh --list` | 打印**当前场景清单**（条数 = `--list` 输出，由它实测；勿写死「17」） | 清单与 `tools/window/run3-scenarios.json` 不一致 ⇒ 停，别跑 | 清单输出 |
 
 ### 3.2 真机对拍（🔒；R 卡按 `docs/window-closure-ledger-20261025.md` 逐行）
 
@@ -76,7 +76,7 @@
 |---|---|---|---|---|
 | B4 | `bash tools/window/run_batch.sh --run-dir E:/tmp/window/run3 --timeout-sec 2700` | 批次 rc=0；`batch-summary.json` 里每场景 `PASS/FAIL`，**UNDECIDABLE 计失败** | rc=2 ⇒ 看 `report/card-window/<场景>/card-window.json` 的 `verdict/compare_rc`；**不得**手工改 verdict | `E:/tmp/window/run3/**` + sha256 |
 | B5 | 带 RNG 账本的场景：`bash tools/window/run_batch.sh --rng-log …`（或在 B4 同参数） | 两侧 `MIR2_RNG_LOG` 的 site/order 流水逐位一致；缺账本 ⇒ 该场景 rc=2 | 流水差异 ⇒ 按卡的 W 项定位（如 W-MQ-2 四叉堆序、W-DG-2 两抽流位） | 两侧账本文件 + diff 输出 |
-| B6 | 逐卡回填 `docs/window-closure-ledger-20261025.md` 对应行（证据路径 / 帧 sha256 / db 快照） | 每行「窗口状态」由 `window_required(in-progress)` 改为 `verified`（**只在该行证据确实入卡后**） | 证据不全 ⇒ 保持 in-progress，写「缺什么」 | 台账行 + 卡线程签名 `comment` |
+| B6 | 逐卡回填 `docs/window-closure-ledger-20261025.md` 对应行（证据路径 / 帧 sha256 / db 快照） | 每行只**填证据**（证据路径 / 帧 sha256 / db 快照）+ 在卡线程签 `comment`；**不改台账状态为 `verified`**（`verified` 不在 ledger 词表，`closed` 由 B7 判定） | 证据不全 ⇒ 保持 in-progress，写「缺什么」 | 台账行 + 卡线程签名 `comment` |
 | B7 | R 卡收口：签名 `status: closed`（`work` 写明 W 项与证据路径） | 卡的 `window_required` 桶随 `goal_gate` 反映 | 未全验 ⇒ **不 closed**，保持 `in-progress` | 线程条目 + goal_gate 输出 |
 | B8 | 收窗：按窗口 runbook §5 的收尾（进程结束、端口复原、临时物登记） | 十端口与开窗前一致；`E:/tmp` 无本线专属残留 | 有残留 ⇒ 先登记到报告再清 | 端口状态 + 残留清单 |
 
@@ -126,7 +126,8 @@ git diff --check <base> <head>                                           # 带�
 | 文档 | 引用点 |
 |---|---|
 | `docs/three-day-report-20261025.md` **§4** | 补推清单的「值/分支表」以该节为准；本文件 §2 只给**流程与判据** |
-| `docs/window-runbook-20261023.md` **§6** / **§7.4**（batch-plan） | 门禁三类口径（§4 引用）；17 场景清单（§3 B2/B3 引用） |
+| `docs/window-runbook-20261023.md` **§6** | 门禁三类口径（§4 引用） |
+| `docs/window-batch-plan-20261023.md` **§7.4**（**注意：§7.4 在 batch-plan，不在 window-runbook**） | 场景清单口径（§3 B2/B3 引用） |
 | `docs/window-closure-ledger-20261025.md` | R 卡逐行登记与窗口状态（§3.2 B6 引用）；**登记 ≠ 已有真机证据** |
 | `docs/needs-human-20261025.md` | G11 裁决 / Q1 窗口 / Q2–Q5 口径 / walgit 恢复（A1、§3 前置、B10 引用） |
 | `docs/gate-baseline-*.md`、`docs/goal-gate-full-20261024.md` | goal_gate 的历史基线与四条件原文（§1.6/§1.7 对照） |
