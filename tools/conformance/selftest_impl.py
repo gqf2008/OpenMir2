@@ -30,6 +30,12 @@
      202/203 单条 124B ClientItem 只掩 MakeIndex；642 Recog=Dura 窄掩、槽位/DuraMax 保留；
      709 无掩码全字节比。双向断言 + 牙①（删 642 ⇒ 整轮 rc 2 UNCLASSIFIED）
      + 牙②（窄掩码放宽成整帧 ignore ⇒ 保留字段差异被吞 ⇒ rc 0）。
+ 15. ident=null 控制帧过滤（卡 openmir2-spell-cast-controlframe-filter）：真机 fixture
+     （window-run-1 spell_cast，冻结副本 tools/conformance/fixtures/spell_cast/）两侧各
+     2 条 +GD/server_ack_time 控制帧被输入层剔除并逐帧计数（oracle 行 31/34、rust 行 33/36），
+     协议帧原样保留、整轮出 verdict；全控制帧流不崩溃（empty_run 兜底，--allow-empty 才放行）；
+     牙：协议帧改字节仍 rc 1（过滤不吞真差异）、控制帧内容改坏不影响判定、ident 非法
+     （负数/超 u16/字符串）与 frame_class=protocol 缺 ident 仍 fail-closed（过滤不外溢）。
 
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
@@ -204,6 +210,7 @@ class Selftest(object):
         self.t_updateitem_durachg_rules()
         self.t_updateitem_durachg_diff()
         self.t_updateitem_durachg_teeth()
+        self.t_control_frames()
         self.t_db()
         return self.finish()
 
@@ -1682,6 +1689,199 @@ class Selftest(object):
         self.check("multiset ⑩(I-3) 块数不同但帧数相同 => rc 1 + block_align 且两侧帧数都=2",
                    rc == 1 and len(ba) == 1 and ba[0].get("oracle_frames") == 2
                    and ba[0].get("rust_frames") == 2, (rc, ba))
+
+    # ------------------------------------------------------------------
+    # 批次 6（卡 openmir2-spell-cast-controlframe-filter）：ident=null 控制帧过滤。
+    # 真机来源：window-run-1 spell_cast 双栈运行（2026-10-24）；冻结副本在
+    # tools/conformance/fixtures/spell_cast/{csharp,rust}/frames.ndjson。oracle 第 31 行
+    # 的 GameGate `+GD/<rtime>` 时间应答控制帧（frame_class=server_ack_time，ident=null）
+    # 曾让 load_stream fail-closed（「缺合法 ident」）⇒ 整轮 UNDECIDABLE。
+    # ------------------------------------------------------------------
+    #: 真实控制帧原样行（oracle 文件行 31：10 位 tick）
+    REAL_CONTROL_FRAME_10 = (
+        '{"seq": 31, "t_ms": 4507, "phase": "gamegate", "conn": "gamegate", "ident": null,'
+        ' "recog": null, "param": null, "tag": null, "series": null, "body_len": 13,'
+        ' "body_hex": "2b47442f353638383330333930",'
+        ' "body_sha256": "524f429f783e3f8ddeaaf32b327dce084bd01881efdce64d7adc4dc43a619178",'
+        ' "frame_class": "server_ack_time", "tail": "!", "raw_len": 15,'
+        ' "body_text": "+GD/568830390"}')
+    #: 真实控制帧原样行（rust 文件行 33：13 位 tick，同族不同长度的样本）
+    REAL_CONTROL_FRAME_13 = (
+        '{"seq": 33, "t_ms": 2241, "phase": "gamegate", "conn": "gamegate", "ident": null,'
+        ' "recog": null, "param": null, "tag": null, "series": null, "body_len": 17,'
+        ' "body_hex": "2b47442f31373932383231343737393132",'
+        ' "body_sha256": "4aeeafeecf363c23b6956aa0ef69ab2e9d4773a22ae8f91b3c9bf1575e9d8a48",'
+        ' "frame_class": "server_ack_time", "tail": "!", "raw_len": 19,'
+        ' "body_text": "+GD/1792821477912"}')
+
+    @classmethod
+    def _mixed_control_lines(cls, control_lines, frames):
+        """控制帧与协议帧**交错**排（不聚在头尾）：证明过滤按内容判、不看位置。"""
+        proto = [json.dumps(fr, ensure_ascii=True, sort_keys=True) for fr in frames]
+        out = []
+        for i in range(max(len(control_lines), len(proto))):
+            if i < len(control_lines):
+                out.append(control_lines[i])
+            if i < len(proto):
+                out.append(proto[i])
+        return out
+
+    @staticmethod
+    def _filtered(rep, side):
+        """report["frames"]["filtered_control_frames"] 里某一侧的台账（缺侧给空）。"""
+        fcf = ((rep or {}).get("frames") or {}).get("filtered_control_frames") or {}
+        return fcf.get(side) or {}
+
+    def t_control_frames(self):
+        ctl10, ctl13 = self.REAL_CONTROL_FRAME_10, self.REAL_CONTROL_FRAME_13
+        o, r = self.base_pair()
+
+        def run_case(tag, o_lines, r_lines, extra=()):
+            od = self.write_run("t25-%s-o" % tag, None, raw_lines=o_lines)
+            rd = self.write_run("t25-%s-r" % tag, None, raw_lines=r_lines)
+            return self.compare(od, rd, list(extra))
+
+        o_lines = self._mixed_control_lines([ctl10, ctl13], o)
+        r_lines = self._mixed_control_lines([], r)
+
+        # ① 控制帧被滤 + 台账：两侧等价 ⇒ rc 0；oracle 侧 2 条控制帧逐帧登记
+        #   （行 1/3、frame_class、seq），rust 侧 0 条；协议帧 7 条全部参与比较。
+        rc, rep = run_case("filter", o_lines, r_lines)
+        self.check("控制帧 ① 混入控制帧后其余全等 => rc 0", rc == 0,
+                   (rc, (rep or {}).get("undecidable"), (rep or {}).get("diffs")))
+        fo, fr_ = self._filtered(rep, "oracle"), self._filtered(rep, "rust")
+        self.check("控制帧 ① oracle 侧滤 2 条并逐帧留痕（行 1/3，server_ack_time）",
+                   fo.get("count") == 2
+                   and [f.get("line") for f in fo.get("frames") or []] == [1, 3]
+                   and all(f.get("frame_class") == "server_ack_time"
+                           for f in fo.get("frames") or []),
+                   fo)
+        self.check("控制帧 ① rust 侧 0 条被滤", fr_.get("count") == 0, fr_)
+        self.check("控制帧 ① 协议帧 7 条全部保留参与比较（oracle_total 不含控制帧）",
+                   ((rep or {}).get("frames", {}).get("oracle_total") == 7
+                    and (rep or {}).get("frames", {}).get("compared") == 7),
+                   (rep or {}).get("frames"))
+        self.check("控制帧 ① 终端摘要有过滤计数行（不静默）",
+                   any("filtered(控制帧" in ln for ln in
+                       self.api.human_summary(rep).splitlines()),
+                   self.api.human_summary(rep))
+
+        # ② 正常帧保留（牙）：同一混入形态下协议帧改一个字节 => 仍 rc 1 且定位
+        #   （过滤绝不吞真差异）。
+        r_bad = json.loads(json.dumps(r))
+        target = [fr for fr in r_bad if fr["ident"] == 658][0]
+        body = bytes.fromhex(target["body_hex"])
+        mutated = body[:-1] + bytes([body[-1] ^ 0xFF])
+        target["body_hex"] = mutated.hex()
+        target["body_len"] = len(mutated)
+        target["body_sha256"] = _sha(mutated)
+        rc, rep = run_case("keep-proto", o_lines,
+                           self._mixed_control_lines([], r_bad))
+        self.check("控制帧 ② 混入控制帧 + 协议帧改一字节 => rc 1 且定位 658 偏移",
+                   rc == 1 and any(d.get("ident") == 658
+                                   and d.get("offset") == len(body) - 1
+                                   for d in (rep or {}).get("diffs", [])),
+                   (rc, (rep or {}).get("diffs")))
+        # ②b 控制帧内容改坏（hex 改坏、与声明的 sha 不再自洽）不影响判定：
+        #   控制帧根本不进判定，只留台账（登记的是驱动器声明值，不另做校验）。
+        bad_ctl = json.loads(ctl13)
+        bad_ctl["body_hex"] = "ff" * 8
+        rc, rep = run_case("ctl-content",
+                           self._mixed_control_lines(
+                               [ctl10, json.dumps(bad_ctl, ensure_ascii=True)], o),
+                           self._mixed_control_lines([], r))
+        self.check("控制帧 ②b 控制帧内容改坏仍被滤 => rc 0（不进判定，台账照记）",
+                   rc == 0 and self._filtered(rep, "oracle").get("count") == 2,
+                   (rc, (rep or {}).get("diffs"), self._filtered(rep, "oracle")))
+
+        # ③ 全控制帧流不崩溃：两侧只有控制帧 => kept 0/0 走 empty_run 兜底（rc 2），
+        #   --allow-empty 才放行；全程无异常（异常会让 selftest 整体 INCOMPLETE）。
+        only_ctl = [ctl10, ctl13]
+        rc, rep = run_case("all-ctl", only_ctl, list(only_ctl))
+        self.check("控制帧 ③ 全控制帧流 => rc 2 (empty_run)，不崩溃",
+                   rc == 2 and any(u.get("kind") == "empty_run"
+                                   for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
+        self.check("控制帧 ③ 全控制帧流两侧各滤 2 条（台账照记）",
+                   self._filtered(rep, "oracle").get("count") == 2
+                   and self._filtered(rep, "rust").get("count") == 2,
+                   (self._filtered(rep, "oracle"), self._filtered(rep, "rust")))
+        rc2, rep2 = run_case("all-ctl-allow", only_ctl, list(only_ctl),
+                             ["--allow-empty"])
+        self.check("控制帧 ③ --allow-empty => rc 0 且登记 allowed_empty_run",
+                   rc2 == 0 and any(w.get("kind") == "allowed_empty_run"
+                                    for w in (rep2 or {}).get("whitelisted", [])),
+                   (rc2, (rep2 or {}).get("whitelisted")))
+
+        # ④ 红线牙（过滤不外溢）：ident **存在但非法**（负数/超 u16/字符串）一律仍
+        #   fail-closed（「缺合法 ident」），不滤、不崩、整份输入被拒（report 无 frames 台账
+        #   ——输入层拒绝是整体拒绝，不下账）。
+        for tag, bad_ident in (("neg", -1), ("over", 70000), ("str", "53")):
+            obad = json.loads(json.dumps(o))
+            obad[0]["ident"] = bad_ident
+            rc, rep = run_case("bad-%s" % tag,
+                               self._mixed_control_lines([], obad),
+                               self._mixed_control_lines([], r))
+            u0 = ((rep or {}).get("undecidable") or [{}])[0]
+            self.check("控制帧 ④ ident 非法(%s=%r) => rc 2 fail-closed（不滤）"
+                       % (tag, bad_ident),
+                       rc == 2 and u0.get("source") == "input"
+                       and "缺合法 ident" in str(u0.get("detail")),
+                       (rc, u0))
+        # ④b frame_class=protocol 却缺 ident = 驱动器自相矛盾的产物 ⇒ 同样 fail-closed
+        #   （过滤绝不扩大到任何声明为协议帧的行）。
+        proto_null = json.loads(ctl10)
+        proto_null["frame_class"] = "protocol"
+        rc, rep = run_case(
+            "bad-proto-null",
+            self._mixed_control_lines([json.dumps(proto_null, ensure_ascii=True)], o),
+            self._mixed_control_lines([], r))
+        u0 = ((rep or {}).get("undecidable") or [{}])[0]
+        self.check("控制帧 ④b frame_class=protocol 却缺 ident => rc 2（自相矛盾不滤）",
+                   rc == 2 and u0.get("source") == "input"
+                   and "自相矛盾" in str(u0.get("detail")),
+                   (rc, u0))
+
+        # ⑤ 真机冻结 fixture（tools/conformance/fixtures/spell_cast/）：修复前必红
+        #   （input/Undecidable 缺合法 ident）；修复后必须出确定性 verdict：
+        #   两侧各滤 2 条控制帧（oracle 行 31/34、rust 行 33/36）、34 条协议帧全部比较、
+        #   UNDECIDABLE 只剩「ident 211 未分类」（真发现，属后续规则卡，不是输入问题）。
+        #   注：钉死 rc/undecidable 是**冻结 fixture + 冻结 rules.json** 下的确定性结论；
+        #   若将来规则表把 211 分类，须随该规则卡一起更新这里的期望（与 baseline 钉
+        #   ignored_ident_rules==[14] 同理）。
+        fix_o = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
+                             "spell_cast", "csharp")
+        fix_r = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
+                             "spell_cast", "rust")
+        self.check("控制帧 ⑤ 冻结 fixture 双侧 frames.ndjson 在库",
+                   os.path.exists(os.path.join(fix_o, "frames.ndjson"))
+                   and os.path.exists(os.path.join(fix_r, "frames.ndjson")),
+                   (fix_o, fix_r))
+        rc, rep = self.compare(fix_o, fix_r, ["--ignore-idents", "14"])
+        fo, fr_ = self._filtered(rep, "oracle"), self._filtered(rep, "rust")
+        self.check("控制帧 ⑤ 冻结 fixture 不再 input/Undecidable（出 verdict）",
+                   rc in (0, 1, 2) and rep is not None
+                   and not any(u.get("source") == "input"
+                               for u in (rep or {}).get("undecidable", [])),
+                   (rc, (rep or {}).get("undecidable")))
+        self.check("控制帧 ⑤ oracle 滤 2 条（行 31/34）、rust 滤 2 条（行 33/36）",
+                   fo.get("count") == 2
+                   and [f.get("line") for f in fo.get("frames") or []] == [31, 34]
+                   and fr_.get("count") == 2
+                   and [f.get("line") for f in fr_.get("frames") or []] == [33, 36],
+                   (fo, fr_))
+        self.check("控制帧 ⑤ 34 条协议帧全部比较（oracle_total=rust_total=compared=34）",
+                   ((rep or {}).get("frames", {}).get("oracle_total") == 34
+                    and (rep or {}).get("frames", {}).get("rust_total") == 34
+                    and (rep or {}).get("frames", {}).get("compared") == 34),
+                   (rep or {}).get("frames"))
+        und = (rep or {}).get("undecidable", [])
+        self.check("控制帧 ⑤ 唯一 UNDECIDABLE = ident 211 未分类（真发现；211 入规则表后"
+                   "本断言随规则卡更新）",
+                   rc == 2 and len(und) == 1
+                   and und[0].get("kind") == "unclassified_ident"
+                   and und[0].get("ident") == 211,
+                   (rc, und))
 
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
