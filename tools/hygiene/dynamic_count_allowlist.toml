@@ -305,12 +305,6 @@ added = "2026-10-24"
 
 [[allow]]
 path = "docs/rewrite-remaining-inventory-20261022.md"
-line_sha256 = "0b97dcfc4418833e6d0ad97b6c657088493c4c1f118e227eb9bc4378d29c5e7a"
-reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
-added = "2026-10-24"
-
-[[allow]]
-path = "docs/rewrite-remaining-inventory-20261022.md"
 line_sha256 = "2c7659ffa83eb3b501d23d3c4238dba1de8c5765bdfe70800dd9114127e18796"
 reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
 added = "2026-10-24"
