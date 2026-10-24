@@ -64,10 +64,12 @@
 - 分支语义：赢 ⇒ `dlg_select_any` 选中 `@rw02`（终止）；平 ⇒ 选中 `@rw01` 回 `[@rw01]` 页再掷；
   输 ⇒ 页上只有 `/@exit`，两候选皆无 ⇒ **显式失败**并打印链接清单（不掩盖）。
 - `--check-scenario`：`scenario OK: clearmapmon_t118 (8 steps, params=npc_actor=1)` rc=0。
-- **裁决（review 复审 + 编排确认）**：**本轮不解封、不进 run3 #20**。DSL 只解决「读哪一页/选哪个
-  链接」，不解决「分支可复现」；C# 栈仍无 seed/hook（`openmir2-window-csharp-rng` 未落地），未接线时
-  oracle 每轮真随机，**约一半窗口会失败并烧掉测试角色**（输支 `take 佛牌` + `addnamelist` 是终局、
-  破坏夹具）。解封条件仍是三步：C# hook 接线 → 同 seed 确认 `movr=2` → 记 seed。
+- **裁决（review 复审 + 编排确认）**：**本轮不解封、不进 run3 #20**。**裁决时点：本节写于该卡合并前**
+  （2026-10-25；下列结论只对该时点负责，不随后续合并自动失效）。DSL 只解决「读哪一页/选哪个链接」，
+  不解决「分支可复现」；C# 栈的 seed/hook **已落地**（`openmir2-window-csharp-rng` **已合并 `15dbbe843`**，
+  时点 2026-10-25）——解封仍待三步：**同 seed 确认 `movr=2` → 记 seed → 解封**。三步完成前 oracle
+  每轮仍可能真随机，**约一半窗口会失败并烧掉测试角色**（输支 `take 佛牌` + `addnamelist` 是终局、
+  破坏夹具）。
 
 ## 3. 用例与证据（acceptance ②/④/⑤）
 
