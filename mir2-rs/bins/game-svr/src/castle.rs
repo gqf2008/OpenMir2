@@ -1349,6 +1349,107 @@ pub(crate) fn queue_structure_ref_msg(
     true
 }
 
+// ---------------------------------------------------------------------------
+// **卡 `openmir2-castle-official-design`（CastleOfficial 门）**：说词变量快照
+// ---------------------------------------------------------------------------
+
+/// `NormNpc.Initialize` 的 `Castle = SystemShare.CastleMgr.InCastleWarArea(this)`
+/// （`NormNpc.cs:1674-1678`）→ `CastleOfficial.GetVariableText`（`CastleOfficial.cs:33-91`）
+/// 与 `NormNpc.GetVariableText` 的 `$CASTLE*` 支所需字段的**实时快照**。
+///
+/// 每座城的 `TotalGold/TodayIncome/UnderWar/MainDoor` 都是运行期可变量，oracle 里 `Castle` 是
+/// **对象引用**（展开时刻读实时值）⇒ 宿主必须在**每次脚本入口**重算，不能装载期缓存。
+///
+/// `today` = 宿主墙钟的 `(y, m, d)`（`$CASTLEGETDAYS` 的 `HUtil32.GetDayCount(DateTime.Now, ChangeDate)`）。
+#[must_use]
+pub fn castle_vars_for(
+    world: &mir2_world::World,
+    actor_id: i32,
+    today: (i32, u32, u32),
+) -> Option<game_svr::npc::CastleVars> {
+    let e = world.entities.get(actor_id)?;
+    let index = world.castle_war_area_at(Some(e.map_id), e.x, e.y)?;
+    let c = world.castles.get(index)?;
+    Some(game_svr::npc::CastleVars {
+        name: c.name.clone(),
+        // `NormNpc.cs:749-765`：`Castle.OwnGuild`，空 ⇒ 展开为「游戏管理」（见 `npc.rs` 的
+        // `$OWNERGUILD` 支；这里只搬原值）。
+        own_guild: c.own_guild.clone().unwrap_or_default(),
+        // `Castle.MasterGuild` 在部署态恒 `None`（R-0：`CastleMgr.Initialize` 早于
+        // `GuildMgr.LoadGuildInfo`，且 `UserCastle.LoadConfig` 是唯一可达赋值点）⇒ `$LORD`
+        // 展开「管理员」。**不**在这里补行会反查。
+        lord: None,
+        total_gold: c.total_gold,
+        today_income: c.today_income,
+        // `CastleOfficial.cs:54`：`(CastleDoor)Castle.MainDoor.BaseObject` —— 无 null 检查。
+        // `CastleUnit::entity_id == None`（= 造怪失败/名字不在怪物库）⇒ 对应 oracle 的
+        // `BaseObject == null` ⇒ `None` 让展开器抛 NRE 等价（整页中止）。
+        main_door_state: c
+            .main_door
+            .as_ref()
+            .filter(|d| d.entity_id.is_some())
+            .map(mir2_world::castle::door_state_text),
+        under_war: c.under_war,
+        war_date_text: castle_war_date_text(c),
+        war_list_text: castle_attack_war_list_text(c),
+        get_days: c
+            .change_date
+            .as_deref()
+            .and_then(parse_castle_date)
+            .map(|d| mir2_shared::hutil32::get_day_count(today, (d.year, d.month, d.day))),
+    })
+}
+
+/// `UserCastle.GetWarDate()`（`UserCastle.cs:712-725`）：`AttackWarList` 空 ⇒ `""`，
+/// 否则**首条**申请的 `{年}年{月}月{日}日`。
+#[must_use]
+pub fn castle_war_date_text(c: &mir2_world::castle::UserCastle) -> String {
+    let Some(first) = c.attack_war_list.first() else {
+        return String::new();
+    };
+    format!(
+        "{}年{}月{}日",
+        first.attack_date.year, first.attack_date.month, first.attack_date.day
+    )
+}
+
+/// `UserCastle.GetAttackWarList()`（`UserCastle.cs:727-772`）的 1:1 移植。
+///
+/// 逐条：日期变化时追加 `{年}年{月}月{日}日\`（首条前无分隔、后续前置 `\`）；累计宽度
+/// `n10 > 40` 时先插 `\` 再重置；条目文本 = `"行会名"`（两侧 ASCII 双引号）。
+/// 空表 ⇒ `""`（部署 `Castle/0/AttackSabukWall.txt` 0 字节 ⇒ `$LISTOFWAR` 走整行替换）。
+#[must_use]
+pub fn castle_attack_war_list_text(c: &mir2_world::castle::UserCastle) -> String {
+    let mut result = String::new();
+    let (mut wy, mut wm, mut wd) = (0i32, 0u32, 0u32);
+    let mut n10 = 0usize;
+    for entry in &c.attack_war_list {
+        let (y, m, d) = (
+            entry.attack_date.year,
+            entry.attack_date.month,
+            entry.attack_date.day,
+        );
+        if y != wy || m != wm || d != wd {
+            wy = y;
+            wm = m;
+            wd = d;
+            if !result.is_empty() {
+                result.push('\\');
+            }
+            result.push_str(&format!("{y}年{m}月{d}日\\"));
+            n10 = 0;
+        }
+        if n10 > 40 {
+            result.push('\\');
+            n10 = 0;
+        }
+        let s20 = format!("\"{}\"", entry.guild_name);
+        n10 += s20.chars().count();
+        result.push_str(&s20);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests;
 

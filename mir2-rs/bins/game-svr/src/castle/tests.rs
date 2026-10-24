@@ -1246,3 +1246,170 @@ fn t127_cross_source_frames_follow_priority_order() {
         "跨源帧序必须是优先级升序 165 < 217 < 252"
     );
 }
+
+// ---------------------------------------------------------------------------
+// **卡 `openmir2-castle-official-design`（CastleOfficial 门，tier R）**
+// ---------------------------------------------------------------------------
+//
+// 钉两层：
+// ① `CastleOfficial.GetVariableText`（`CastleOfficial.cs:33-91`）+ `NormNpc` 的 `$DATETIME/
+//    $CASTLEWARDATE/$LISTOFWAR/$CASTLEGETDAYS` 展开（含 `Castle == null ⇒ 整行 "????"` 与
+//    `$CASTLEDOORSTATE` 无门 ⇒ NRE 中止）；
+// ② 宿主 `castle_vars_for`（`CastleMgr.InCastleWarArea(this)`，`NormNpc.cs:1674-1678`）。
+//
+// 牙（改坏必红，读数见报告 §5）：① `$CASTLEDOORSTATE` 缺门时改成返回 "closed" ⇒ A2 红；
+// ② `Castle == null` 分支不整行覆盖 ⇒ A3 红；③ `$CASTLEWARDATE` 的整行替换改回 token 替换 ⇒ A4 红。
+
+fn castle_vars_fixture() -> game_svr::npc::CastleVars {
+    game_svr::npc::CastleVars {
+        name: "沙巴克".to_string(),
+        own_guild: String::new(),
+        lord: None,
+        total_gold: 1234,
+        today_income: 56,
+        main_door_state: Some("closed"),
+        under_war: false,
+        war_date_text: String::new(),
+        war_list_text: String::new(),
+        get_days: Some(7),
+    }
+}
+
+fn official_player<'r, 'g>(rng: &'r mut dyn FnMut(i32) -> i32) -> game_svr::npc::NpcPlayer<'r, 'g> {
+    use game_svr::npc::{CastleVars, NpcPlayer};
+    let mut p = NpcPlayer::empty(rng);
+    p.vars.castle_official = true;
+    p.vars.castle = Some(CastleVars {
+        ..castle_vars_fixture()
+    });
+    p.vars.wall_clock = "2026-10-25 20:00:00".to_string();
+    p.vars.repair_door_price = 2_000_000;
+    p.vars.repair_wall_price = 500_000;
+    p.vars.hire_guard_price = 300_000;
+    p.vars.hire_archer_price = 300_000;
+    p
+}
+
+/// **A1**：`@main` 页用到的 11 个 token 一次展开（部署值：OWNERGUILD 空 ⇒ 游戏管理、
+/// LORD 无城主 ⇒ 管理员、金币 1234 / 收入 56 / 天数 7 / 价格 2000000/500000/300000/300000、
+/// `$GUARDRULE` 常量「无效」、`$DATETIME` 宿主注入）。
+#[test]
+fn castle_official_main_page_expands_all_tokens() {
+    use mir2_script::engine::ScriptPlayer;
+    let mut rng = |_v: i32| 0;
+    let mut p = official_player(&mut rng);
+    let page = "<$OWNERGUILD>|<$LORD>|<$CASTLEGOLD>|<$TODAYINCOME>|<$DATETIME>|\
+                <$CASTLEGETDAYS>|<$REPAIRDOORGOLD>|<$REPAIRWALLGOLD>|<$ARCHERFEE>|\
+                <$GUARDFEE>|<$GUARDRULE>|<$CASTLEDOORSTATE>";
+    assert_eq!(
+        p.line_variable_text(page),
+        "游戏管理|管理员|1234|56|2026-10-25 20:00:00|7|2000000|500000|300000|300000|无效|closed"
+    );
+    assert!(!p.take_say_abort(), "有门实体 ⇒ 不中止");
+}
+
+/// **A2（牙①）**：`$CASTLEDOORSTATE` 在 `MainDoor.BaseObject == null`（= 本快照
+/// `main_door_state == None`）时 oracle **无 null 检查** ⇒ `NullReferenceException` ⇒ 整页中止：
+/// 展开器置 `say_abort`，引擎在发说词前取走并 `return`（`crates/script` 的三处说词点）。
+#[test]
+fn castle_official_door_state_without_door_aborts_page() {
+    use mir2_script::engine::ScriptPlayer;
+    let mut rng = |_v: i32| 0;
+    let mut p = official_player(&mut rng);
+    p.vars.castle.as_mut().unwrap().main_door_state = None;
+    let _ = p.line_variable_text("城门当前状态为:<$CASTLEDOORSTATE>\\");
+    assert!(p.take_say_abort(), "缺门 ⇒ NRE 等价 ⇒ 必须置中止信号");
+    assert!(!p.take_say_abort(), "中止信号是一次性的（引擎取走即清零）");
+}
+
+/// **A3（牙②）**：`CastleOfficial.cs:36-40`——`Castle == null` ⇒ **整行** `"????"`
+/// （不是只换该 token；base 已替换的其它变量一起丢）。
+#[test]
+fn castle_official_without_castle_replaces_whole_line() {
+    use mir2_script::engine::ScriptPlayer;
+    let mut rng = |_v: i32| 0;
+    let mut p = official_player(&mut rng);
+    p.vars.castle = None;
+    assert_eq!(p.line_variable_text("甲<$CASTLEGOLD>乙"), "????");
+    // 非 CastleOfficial 类没有这层覆写 ⇒ `$CASTLEGOLD` 原样保留。
+    let mut q = official_player(&mut rng);
+    q.vars.castle_official = false;
+    q.vars.castle = None;
+    assert_eq!(
+        q.line_variable_text("甲<$CASTLEGOLD>乙"),
+        "甲<$CASTLEGOLD>乙"
+    );
+}
+
+/// **A4（牙③）**：`$CASTLEWARDATE` / `$LISTOFWAR` 的**整行替换**（`NormNpc.cs:805-877`）：
+/// 申请表空 ⇒ `"暂时没有行会攻城 .\\ \\<返回/@main>"`；战时 ⇒ `"正在攻城当中.\\ \\<返回/@main>"`。
+#[test]
+fn castle_official_aboutwar_whole_line_rules() {
+    use mir2_script::engine::ScriptPlayer;
+    let mut rng = |_v: i32| 0;
+    let mut p = official_player(&mut rng);
+    assert_eq!(
+        p.line_variable_text("下一次战役记录在:<$CASTLEWARDATE> , 20:00开始。"),
+        "暂时没有行会攻城 .\\ \\<返回/@main>"
+    );
+    assert_eq!(
+        p.line_variable_text("<$LISTOFWAR> \\ <返回/@aboutwar>"),
+        "暂时没有行会攻城 .\\ \\<返回/@main>"
+    );
+    p.vars.castle.as_mut().unwrap().under_war = true;
+    assert_eq!(
+        p.line_variable_text("下一次战役记录在:<$CASTLEWARDATE>"),
+        "正在攻城当中.\\ \\<返回/@main>"
+    );
+}
+
+/// **A5**：宿主 `castle_vars_for` = `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）：
+/// 皇宫图上的实体 ⇒ 命中该城并按 `CastleOfficial.cs:33-91` 取快照；图外实体 ⇒ `None`
+/// （= oracle `Castle == null`）。
+///
+/// 牙④：把 `castle_war_area_at` 换成「取 castles[0]」⇒ 图外实体也命中 ⇒ 断言红。
+#[test]
+fn castle_vars_for_resolves_by_war_area_not_by_index() {
+    let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+    let mut castle = mir2_world::castle::UserCastle::new(
+        "沙巴克",
+        mir2_world::castle::CastleSiegeConfig::default(),
+    );
+    castle.palace_map_id = Some(0); // 皇宫图
+    castle.total_gold = 777;
+    castle.today_income = 88;
+    castle.change_date = Some("2026-10-20 19:00:00".to_string());
+    castle.own_guild = Some(String::new());
+    castle.main_door = Some(mir2_world::castle::CastleUnit {
+        entity_id: Some(1),
+        x: 5,
+        y: 5,
+        death: false,
+        opened: true,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    world.castles.push(castle);
+    world.open_session("甲");
+    let in_palace = world
+        .enter_map("甲", play_entity("甲", 5, 6), 0)
+        .expect("皇宫图实体");
+    world.open_session("乙");
+    let elsewhere = world
+        .enter_map("乙", play_entity("乙", 5, 6), 1)
+        .expect("图外实体");
+
+    let v = super::castle_vars_for(&world, in_palace, (2026, 10, 25)).expect("皇宫图命中该城");
+    assert_eq!(v.name, "沙巴克");
+    assert_eq!(v.own_guild, "");
+    assert!(v.lord.is_none(), "R-0：MasterGuild 恒 None ⇒ $LORD=管理员");
+    assert_eq!(v.total_gold, 777);
+    assert_eq!(v.today_income, 88);
+    assert_eq!(v.main_door_state, Some("opened"), "IsOpened ⇒ opened");
+    assert!(!v.under_war);
+    assert!(v.war_date_text.is_empty(), "申请表空 ⇒ GetWarDate() 空");
+    assert_eq!(v.get_days, Some(5), "2026-10-20 → 2026-10-25 = 5 天");
+    assert!(
+        super::castle_vars_for(&world, elsewhere, (2026, 10, 25)).is_none(),
+        "图外 ⇒ Castle == null"
+    );
+}

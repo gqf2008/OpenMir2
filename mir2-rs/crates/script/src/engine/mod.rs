@@ -169,6 +169,19 @@ pub trait ScriptPlayer {
     fn line_variable_text(&mut self, msg: &str) -> String {
         msg.to_string()
     }
+    /// `GotoLableSendMerChantSayMsg` 里变量展开**抛异常**的中止信号（取走并清零）。
+    ///
+    /// oracle 的展开（`ScriptEngine.cs:987-999` → `NormNpc.GetLineVariableText` →
+    /// `GetVariableText` 覆写）会抛：典型是 `CastleOfficial.$CASTLEDOORSTATE` 对
+    /// `Castle.MainDoor.BaseObject` **无 null 检查**（`CastleOfficial.cs:54`）⇒ `NullReferenceException`
+    /// 从 `GotoLable` 逃出、由 `Merchant.UserSelect` 的 catch（`Merchant.cs:944-947`）吞掉
+    /// ⇒ **整页说词不发、`GotoLable` 余下段不执行**。
+    ///
+    /// 本 trait 用「说词发出去之前查一次」的显式信号复刻该副作用；缺省恒 `false`
+    /// （实现方不产生展开异常）。
+    fn take_say_abort(&mut self) -> bool {
+        false
+    }
     /// `ProcessingBase.GetLineVariableText(playerActor, sMsg)`（`ProcessingBase.cs:1438-1459`）：
     /// **动作 / 条件参数**文本展开。缺省实现按 oracle 逐行（循环骨架见
     /// [`expand_action_line_variable_text`]）。
@@ -1024,6 +1037,10 @@ impl<'n, 'p> Engine<'n, 'p> {
                 }
                 if self.goto_params.send_say_msg {
                     let msg = self.player.line_variable_text(&s_send_msg);
+                    // 展开抛异常（oracle `NullReferenceException`）⇒ 整个 `GotoLable` 中止。
+                    if self.player.take_say_abort() {
+                        return;
+                    }
                     self.npc.send_say(&msg, true);
                 }
             } else {
@@ -1036,12 +1053,19 @@ impl<'n, 'p> Engine<'n, 'p> {
                 }
                 if self.goto_params.send_say_msg {
                     let msg = self.player.line_variable_text(&s_send_msg);
+                    // 展开抛异常（oracle `NullReferenceException`）⇒ 整个 `GotoLable` 中止。
+                    if self.player.take_say_abort() {
+                        return;
+                    }
                     self.npc.send_say(&msg, true);
                 }
             }
         }
         if !s_send_msg.is_empty() {
             let msg = self.player.line_variable_text(&s_send_msg);
+            if self.player.take_say_abort() {
+                return;
+            }
             self.npc.send_say(&msg, false);
         }
     }

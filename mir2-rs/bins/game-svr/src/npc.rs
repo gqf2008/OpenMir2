@@ -183,6 +183,26 @@ pub struct CastleVars {
     pub own_guild: String,
     /// `Castle.MasterGuild.GetChiefName()`（`$LORD`；`None` = MasterGuild 为 null ⇒ `"管理员"`）。
     pub lord: Option<String>,
+    /// `Castle.TotalGold`（`$CASTLEGOLD`；`CastleOfficial.cs:44-47`）。
+    pub total_gold: i32,
+    /// `Castle.TodayIncome`（`$TODAYINCOME`；`:48-51`）。
+    pub today_income: i32,
+    /// `$CASTLEDOORSTATE` 的三分支文本（`:52-69`，由宿主用
+    /// [`mir2_world::castle::door_state_text`] 从 `MainDoor` 实体算出）。
+    ///
+    /// **`None` = `Castle.MainDoor.BaseObject == null`** ⇒ oracle 在该 token 处抛
+    /// `NullReferenceException`（无 null 检查）⇒ 整页说词中止（见
+    /// [`ScriptPlayer::take_say_abort`]）。
+    pub main_door_state: Option<&'static str>,
+    /// `Castle.UnderWar`（`$CASTLEWARDATE` 的 `NormNpc.cs:805-831` 门）。
+    pub under_war: bool,
+    /// `Castle.GetWarDate()`（`UserCastle.cs:712-725`）：`AttackWarList` 空 ⇒ `""`。
+    pub war_date_text: String,
+    /// `Castle.GetAttackWarList()`（`UserCastle.cs:727-...`）：空 ⇒ `""`。
+    pub war_list_text: String,
+    /// `HUtil32.GetDayCount(DateTime.Now, Castle.ChangeDate)`（`$CASTLEGETDAYS`）；
+    /// `None` = `ChangeDate` 解析不出（登记，保留 token 原样）。
+    pub get_days: Option<i32>,
 }
 
 /// `NormNpc.GetVariableText` / `Merchant.GetVariableText` 需要的**非玩家**取值。
@@ -220,6 +240,22 @@ pub struct NpcVars {
     pub price_rate: i32,
     /// `NormNpc.Castle`（`$OWNERGUILD/$LORD/$CASTLENAME/...`）。
     pub castle: Option<CastleVars>,
+    /// 本 NPC 是否为 `CastleOfficial`（`Npcs.txt` type 2）⇒ `GetVariableText` 走
+    /// `CastleOfficial` 的覆写（`CastleOfficial.cs:33-91`：base 之后 `Castle==null ⇒ "????"`，
+    /// 再 8 个 token）。
+    pub castle_official: bool,
+    /// `SystemShare.Config.RepairDoorPrice`（`$REPAIRDOORGOLD`，`CastleOfficial.cs:70-73`；
+    /// 缺省 = `GameSvrConf.cs:1794` 的 `2000000`，部署 `Server.conf:308` 同值）。
+    pub repair_door_price: i32,
+    /// `RepairWallPrice`（`$REPAIRWALLGOLD`；缺省 `500000`，部署 `:309`）。
+    pub repair_wall_price: i32,
+    /// `HireGuardPrice`（`$GUARDFEE`；缺省 `300000`，部署 `:306`）。
+    pub hire_guard_price: i32,
+    /// `HireArcherPrice`（`$ARCHERFEE`；缺省 `300000`，部署 `:307`）。
+    pub hire_archer_price: i32,
+    /// `DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")` 的注入串（`$DATETIME`，
+    /// `NormNpc.cs:356-359` 的墙钟）。宿主在每次脚本入口重填（oracle 在展开时刻读时钟）。
+    pub wall_clock: String,
     /// `UseItems[Weapon]` 的展示名（`$USERWEAPON`；`None`/空 = `无`）。
     pub user_weapon: Option<String>,
     /// `PlayObject.MyGuild?.GuildName`（`$GUILDNAME`）。
@@ -335,6 +371,12 @@ impl Default for NpcVars {
             human_max_gold: 10_000_000,
             price_rate: 100,
             castle: None,
+            castle_official: false,
+            repair_door_price: 2_000_000,
+            repair_wall_price: 500_000,
+            hire_guard_price: 300_000,
+            hire_archer_price: 300_000,
+            wall_clock: String::new(),
             user_weapon: None,
             guild_name: None,
             global_val: vec![0; 500],
@@ -423,7 +465,12 @@ impl MerchantScriptBook {
         // `Merchant.GetVariableText` 覆写在基类之后读 `PriceRate`；`NormNpc` 的 `Castle` 支读
         // `Initialize` 落下的城堡快照。两者都由本表在入口注入。
         player.vars.price_rate = entry.price_rate;
-        player.vars.castle = entry.castle.clone();
+        // `NormNpc.Castle` 是**对象引用**（oracle 每次展开读实时值）；宿主在脚本入口用
+        // `world.castles[i]` 的实时快照预填 `player.vars.castle`，这里只在装载期就带快照的
+        // 条目（商人配置）上覆写，避免把宿主的实时值清回 `None`。
+        if entry.castle.is_some() {
+            player.vars.castle = entry.castle.clone();
+        }
         let (map_name, curr_x, curr_y) = (entry.map_name.clone(), entry.curr_x, entry.curr_y);
         Some(run_goto_label(
             &entry.def,
@@ -938,6 +985,9 @@ pub struct NpcPlayer<'r, 'g> {
     /// **只在无 [`Self::gm`] 桥时**是本快照的存储；有桥时读写都落到 `GmSession.permission`
     /// （同一次脚本执行里的唯一真源，见 [`NpcGm`]）。
     pub permission: i32,
+    /// `GotoLableSendMerChantSayMsg` 的变量展开抛过异常（`CastleOfficial.$CASTLEDOORSTATE`
+    /// 的 NRE）⇒ 引擎取走后中止整个 `GotoLable`（见 `ScriptPlayer::take_say_abort`）。
+    pub say_abort: bool,
     /// `ProcessUserLineMsg`/`Permission` 的宿主跳线；`None` ⇒ 与 `ScriptPlayer` 缺省 no-op 同口径。
     pub gm: Option<NpcGm<'g>>,
     /// `SendDefMessage`（**不**经 `MsgQueue` 的直发帧，oracle 语义：命令体执行时立即下发）。
@@ -1023,6 +1073,7 @@ impl NpcPlayer<'_, '_> {
             // `PlayObject.Permission` 的 ctor 缺省（`PlayObject.cs:58` 未初始化 ⇒ 0）；
             // 跳线未接 = 缺省 no-op（与 `ScriptPlayer` 缺省一致）。
             permission: 0,
+            say_abort: false,
             gm: None,
             gm_direct_frames: Vec::new(),
             gm_notes: Vec::new(),
@@ -1081,6 +1132,81 @@ impl NpcPlayer<'_, '_> {
     /// - `$STR(...)` 按 `GetValNameNo` 的 12 段槽位映射（说词侧：800..1199 偏移 **-700**）；
     /// - oracle 没有 `$GAMEGIRD`/`$GAMEDIAMOND` 分支 ⇒ **原样保留**（部署件 23/20 次，照搬）。
     pub fn get_variable_text(&mut self, s_variable: &str, s_msg: &mut String) {
+        // **`CastleOfficial.GetVariableText`（`CastleOfficial.cs:33-91`）**：先 `base`，再
+        // `if (Castle == null) { sMsg = "????"; return; }`（**整行覆盖**，不是只换 token），
+        // 最后 8 个城堡 token。非 CastleOfficial（`Merchant`/`NormNpc`）没有这层覆写。
+        self.base_variable_text(s_variable, s_msg);
+        if !self.vars.castle_official {
+            return;
+        }
+        let Some(castle) = self.vars.castle.clone() else {
+            *s_msg = "????".to_string();
+            return;
+        };
+        let token = |name: &str| format!("<{name}>");
+        match s_variable {
+            "$CASTLEGOLD" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$CASTLEGOLD"),
+                    &castle.total_gold.to_string(),
+                );
+            }
+            "$TODAYINCOME" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$TODAYINCOME"),
+                    &castle.today_income.to_string(),
+                );
+            }
+            "$CASTLEDOORSTATE" => {
+                // `CastleDoor castleDoor = (CastleDoor)Castle.MainDoor.BaseObject;` —— **无 null
+                // 检查**（`CastleOfficial.cs:54`）⇒ 部署 `MainDoor.BaseObject == null` 时抛 NRE。
+                let Some(state) = castle.main_door_state else {
+                    self.say_abort = true;
+                    return;
+                };
+                *s_msg = replace_variable_text(s_msg, &token("$CASTLEDOORSTATE"), state);
+            }
+            "$REPAIRDOORGOLD" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$REPAIRDOORGOLD"),
+                    &self.vars.repair_door_price.to_string(),
+                );
+            }
+            "$REPAIRWALLGOLD" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$REPAIRWALLGOLD"),
+                    &self.vars.repair_wall_price.to_string(),
+                );
+            }
+            "$GUARDFEE" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$GUARDFEE"),
+                    &self.vars.hire_guard_price.to_string(),
+                );
+            }
+            "$ARCHERFEE" => {
+                *s_msg = replace_variable_text(
+                    s_msg,
+                    &token("$ARCHERFEE"),
+                    &self.vars.hire_archer_price.to_string(),
+                );
+            }
+            "$GUARDRULE" => {
+                // `CastleOfficial.cs:86-89`：常量 `"无效"`。
+                *s_msg = replace_variable_text(s_msg, &token("$GUARDRULE"), "无效");
+            }
+            _ => {}
+        }
+    }
+
+    /// `NormNpc.GetVariableText` + `Merchant.GetVariableText` 的 **base 半**
+    /// （即 `CastleOfficial.GetVariableText` 开头那次 `base.GetVariableText`）。
+    fn base_variable_text(&mut self, s_variable: &str, s_msg: &mut String) {
         let token = |name: &str| format!("<{name}>");
         match s_variable {
             "$SERVERNAME" => {
@@ -1230,6 +1356,62 @@ impl NpcPlayer<'_, '_> {
                     .clone()
                     .unwrap_or_else(|| "????".into());
                 *s_msg = replace_variable_text(s_msg, &token("$HIGHONLINEINFO"), &t);
+            }
+            // `$DATETIME`（`NormNpc.cs:356-359`）：`DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")`。
+            // 墙钟由宿主在每次脚本入口注入（oracle 在展开时刻读 `DateTime.Now`）。
+            "$DATETIME" => {
+                let t = self.vars.wall_clock.clone();
+                *s_msg = replace_variable_text(s_msg, &token("$DATETIME"), &t);
+            }
+            // `$CASTLEWARDATE`（`NormNpc.cs:805-831`）：**整行替换**语义——
+            // `Castle == null ⇒ Castle = CastleMgr.GetCastle(0)`（回落下标 0）；
+            // `!UnderWar`：`GetWarDate()` 非空 ⇒ 替换 token，空 ⇒ **整行**换成
+            // `"暂时没有行会攻城 .\\ \\<返回/@main>"`；`UnderWar` ⇒ 整行 `"正在攻城当中..."`。
+            "$CASTLEWARDATE" => {
+                if let Some(c) = self.vars.castle.clone() {
+                    if !c.under_war {
+                        if c.war_date_text.is_empty() {
+                            *s_msg = "暂时没有行会攻城 .\\ \\<返回/@main>".to_string();
+                        } else {
+                            *s_msg = replace_variable_text(
+                                s_msg,
+                                &token("$CASTLEWARDATE"),
+                                &c.war_date_text,
+                            );
+                        }
+                    } else {
+                        *s_msg = "正在攻城当中.\\ \\<返回/@main>".to_string();
+                    }
+                }
+            }
+            // `$LISTOFWAR`（`NormNpc.cs:832-877`）：`GetAttackWarList()` 空 ⇒ **整行**换
+            // `"暂时没有行会攻城 .\\ \\<返回/@main>"`；非空 ⇒ 替换 token。
+            "$LISTOFWAR" => {
+                let castle = self.vars.castle.clone();
+                match castle {
+                    Some(c) => {
+                        if c.war_list_text.is_empty() {
+                            *s_msg = "暂时没有行会攻城 .\\ \\<返回/@main>".to_string();
+                        } else {
+                            *s_msg = replace_variable_text(
+                                s_msg,
+                                &token("$LISTOFWAR"),
+                                &c.war_list_text,
+                            );
+                        }
+                    }
+                    None => {
+                        *s_msg = replace_variable_text(s_msg, &token("$LISTOFWAR"), "????");
+                    }
+                }
+            }
+            // `$CASTLEGETDAYS`（`NormNpc.cs:878-890`）：`HUtil32.GetDayCount(Now, ChangeDate)`。
+            "$CASTLEGETDAYS" => {
+                let t = match self.vars.castle.as_ref().and_then(|c| c.get_days) {
+                    Some(days) => days.to_string(),
+                    None => "????".to_string(),
+                };
+                *s_msg = replace_variable_text(s_msg, &token("$CASTLEGETDAYS"), &t);
             }
             _ => {
                 // `$STR(...)`（`NormNpc.cs:1532-1587`）。`CompareLStr` 只看前 5 字符。
@@ -1678,6 +1860,11 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     ///
     /// `ArrestStringEx` 失败时 C# 不覆盖 `sVariable`（保留上一次的值）——本实现照搬
     /// （`ArrestWrite::Unchanged`）；最多 101 轮。
+    fn take_say_abort(&mut self) -> bool {
+        let aborted = self.say_abort;
+        self.say_abort = false;
+        aborted
+    }
     fn line_variable_text(&mut self, msg: &str) -> String {
         let mut s = msg.to_string();
         let mut variable = String::new();
@@ -3565,6 +3752,7 @@ Other
             name: "沙巴克".to_string(),
             own_guild: String::new(),
             lord: None,
+            ..CastleVars::default()
         });
         assert_eq!(
             p.line_variable_text("<$OWNERGUILD>|<$LORD>|<$CASTLENAME>"),
@@ -3574,6 +3762,7 @@ Other
             name: "沙巴克".to_string(),
             own_guild: "王者".to_string(),
             lord: Some("老大".to_string()),
+            ..CastleVars::default()
         });
         assert_eq!(p.line_variable_text("<$OWNERGUILD>|<$LORD>"), "王者|老大");
         // `$GUILDNAME` 无行会 ⇒ **整条说词 = "无"**（怪异点，照搬）。
