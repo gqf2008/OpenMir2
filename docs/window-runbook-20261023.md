@@ -416,8 +416,8 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
   **仅测试库，绝不可用于生产**）；**今天它与 `alt` 等价**（同一份深拷贝 + 把 `alt` 里本就相同的
   C# 库名再显式写一遍），选哪个都行。
 - **本节点到名字的场景，前置如下**（其余场景以场景 JSON 的 `requires` / `inventory` / `required` 为准，
-  全量枚举见 `docs/window-batch-plan-20261023.md` §7.4 @ `81ecc0d28`：**11 行 / 17 场景**；
-  能不能跑的矩阵见 `docs/window-batch-rehearsal-20261024.md`：**17 可跑 / 3 blocked / 0 假绿**——本文不复写矩阵）：
+  全量枚举见 `docs/window-batch-plan-20261023.md` §7.4（当前 head：**11 行 / 17 场景**；`81ecc0d28` 当时为 12 行 / 18 场景，pickup_item 封存后推算 11/17）；
+  能不能跑的矩阵见 `docs/window-batch-rehearsal-20261024.md`：**17 可跑 / 3 blocked / 0 假绿**（该文档为当时快照 18 可跑/2 blocked，pickup_item 封存后推算 17/3）——本文不复写矩阵）：
   > **2026-10-25 勾注**：`pickup_item` 已封存（T-19/T-25 ⇒ 地面结构性无物，见 batch-plan §7.4 勾注）⇒
   > 场景数 **18→17**；run-3 执行清单 = `tools/window/run3-scenarios.json`（17 场景 + `tools/window/run_batch.sh`）。
   > **CLEARMAPMON 两处脚本**：`Market_Def/任务NPC/武士-0114.txt:145`（T118）与 `老人-1.txt:49`（Q001）
