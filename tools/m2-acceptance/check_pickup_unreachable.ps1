@@ -36,6 +36,8 @@
     A6) 数组/集合元素写：`a[i].ItemId = …`（名字来自 `MapItem[] a` /
         `List<MapItem>` 等声明；review P-5）。
     A2 还收 `var x = …Get<MapItem>(…)` 推导出的变量（review P-3）。
+    A7) var 别名：`var mi = mapItem;`（右侧已是本文件 MapItem 变量；迭代到不动点，
+        review-20 P-7）。`MapItem mi = mapItem` 已由 A2 的声明规则覆盖。
   其它结构体的 `.ItemId`（如 `MShare.DropExpDropInfo`）、以及注释/字符串里的同名文本
   都**不是** MapItem 赋值点，不参与判定。
 
@@ -177,6 +179,8 @@ $VarGetMapItemRe = [regex]'\bvar\s+(\w+)\s*=\s*[^;\r\n]*?Get\s*<\s*(?:[A-Za-z_]\
 $MapItemSeqDeclRe = [regex]'\b(?:MapItem\s*\[\s*\]|(?:List|IList|IReadOnlyList|HashSet|IEnumerable)\s*<\s*(?:[A-Za-z_]\w*\s*\.\s*)*MapItem\s*>)\s+(\w+)'
 # record `with { … }`（review P-4）
 $WithRe = [regex]'\bwith\s*\{'
+# var 别名：`var mi = mapItem;` / `var mi = this.mapItem;`（review-20 P-7）
+$AliasRe = [regex]'\b(?:var|MapItem)\s+(\w+)\s*=\s*(?:this\s*\.\s*)?(\w+)\s*;'
 
 Record ("== pickup 不可达证明（类型感知）@ " + (Get-Date).ToString("o") + " ==")
 Record ("repo=" + $RepoRoot)
@@ -288,6 +292,25 @@ foreach ($f in $csFiles) {
   foreach ($m in $VarNewMapItemRe.Matches($masked)) { $fileNames.Add($m.Groups[1].Value) | Out-Null }
   foreach ($m in $VarGetMapItemRe.Matches($masked)) { $fileNames.Add($m.Groups[1].Value) | Out-Null }
   foreach ($m in $MapItemSeqDeclRe.Matches($masked)) { $fileNames.Add($m.Groups[1].Value) | Out-Null }
+
+  # A7) var 别名：`var mi = mapItem;` / `var mi = this.mapItem;`（review-20 P-7）。
+  #     右侧已是本文件 MapItem 变量 ⇒ 左侧是别名。迭代到不动点（名字集合单调增长，
+  #     天然有界；仍加 100 次上限，防实现退化时死循环）。
+  $aliasGuard = 0
+  $aliasChanged = $true
+  while ($aliasChanged -and $aliasGuard -lt 100) {
+    $aliasGuard++
+    $aliasChanged = $false
+    $known = @(Get-UniqueOrdinal $fileNames)
+    foreach ($m in $AliasRe.Matches($masked)) {
+      $lhs = $m.Groups[1].Value
+      $rhs = $m.Groups[2].Value
+      if (($known -ccontains $rhs) -and (-not ($known -ccontains $lhs))) {
+        $fileNames.Add($lhs) | Out-Null
+        $aliasChanged = $true
+      }
+    }
+  }
   $fileNames = @(Get-UniqueOrdinal @($fileNames | Where-Object { $_ -notmatch $NameKeywordRe }))
   $namesByFile[$f.FullName] = $fileNames
   foreach ($n in $fileNames) { $declaredNames.Add($n) | Out-Null }
