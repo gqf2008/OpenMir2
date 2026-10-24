@@ -500,4 +500,29 @@ mod tests {
             "第二组 HiddenQFunction ⇒ None"
         );
     }
+    /// **redlist 消费点复核（卡 `openmir2-envir-redlist-batch`）**：`Robot.txt` 有两份解析器——
+    /// 生产消费点 `mir2_envir::robot::parse_robot_lines`（本文件的 RNG 账本，`ctor_fold` 段①）
+    /// 与 `mir2_data::lists::parse_robot_list`（T3 片交付的六件名单之一，`lists.rs:389`）。
+    /// 两者必须逐行等价；本测试是「已接线 = 等价」的合同依据（行过滤/两列分词/入库门一致）。
+    ///
+    /// 红检（改坏必红）：把任一侧的分隔符改掉（如去掉 `'/'`）或放宽入库门 ⇒ 断言必红。
+    #[test]
+    fn robot_txt_parsers_agree_on_deployed_and_edge_fixtures() {
+        let fixtures = [
+            ";机器人名称 脚本名称\r\n系统控制 AutoRunRobot", // 部署件（1 有效行）
+            "\n; c\n系统 脚本\n只一列\n甲/乙\n丙\t丁\n   \n", // 注释/空行/单列/三种分隔符
+            "名1 脚本1\r\n名2/脚本2\n名3\t脚本3",
+        ];
+        for text in fixtures {
+            let envir: Vec<(String, String)> = mir2_envir::robot::parse_robot_lines(text)
+                .into_iter()
+                .map(|r| (r.name, r.script_file_name))
+                .collect();
+            let data: Vec<(String, String)> = mir2_data::lists::parse_robot_list(text)
+                .into_iter()
+                .map(|r| (r.chr_name, r.script_file_name))
+                .collect();
+            assert_eq!(envir, data, "两份 Robot.txt 解析器必须逐行等价：{text:?}");
+        }
+    }
 }
