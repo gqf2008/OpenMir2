@@ -109,9 +109,19 @@
 
 ## 4.2 升级腿实测记录（2026-10-25，私有栈，5 次）
 
-- **配置覆盖生效**：自定义 profile（`fixtures.config_overrides.Server.conf = {CastleGetAllNpcTax:1,
-  ConsoleShowUserCountTime:5000}`）被写到 C# baseline+shadow 与 Rust 根；`fixtures.json` 记录
-  `-CastleGetAllNpcTax=0 / +CastleGetAllNpcTax=1`，跑完三方 `Server.conf` 均还原为 `600000/0`。
+- **配置覆盖生效，且 profile JSON 路径是推荐用法（缺口①撤回）**：`card_window.load_profile`
+  支持 **profile JSON 路径**（`--profile <path>.json`）。把 `BUILTIN_PROFILES["alt"]` dump 成 JSON、
+  加 `fixtures.config_overrides.Server.conf = {CastleGetAllNpcTax:1, ConsoleShowUserCountTime:5000}`，
+  传路径即可 ⇒ 本轮 `fixtures.json` 记录 `-CastleGetAllNpcTax=0 / +CastleGetAllNpcTax=1`，
+  C# baseline+shadow 与 Rust 根均被写；跑完三方 `Server.conf` 均还原为 `600000/0`。
+  **限制只在 run3 批次**：`run_batch.sh` 清单只认内置 profile 名，场景不能携带 profile
+  ⇒ 该场景暂不进批（需 run_batch 支持 profile 路径，另卡）。标准做法示例：
+
+  ```powershell
+  python -c "import json,card_window as c; print(json.dumps(c.BUILTIN_PROFILES['alt'],ensure_ascii=False))" > myprofile.json
+  # 编辑 myprofile.json 加 "fixtures": {"config_overrides": {"Server.conf": {"CastleGetAllNpcTax": 1}}}
+  python -I -B tools/conformance/card_window.py --profile myprofile.json --scenario ... --out ...
+  ```
 - **升级提交链可达（C# 成功一次）**：`frames.ndjson` 含 `SM_DELITEMS(709)` 与 `SM_DELITEM(202)`，
   说明 `MOVR/升级` 提交支真实执行；对应场景 12 步。
 - **但整体未绿，三个独立原因**（全部实测）：
@@ -128,8 +138,11 @@
      只在 `SystemProcessor` 的 `ConsoleShowUserCountTime` 门后写盘（已覆盖 5s 仍未见），且
      `SaveTick`/内存态不可读；⇒ 以**帧+DB 为主、文件为辅**的口径下，无法仅凭本次文件证明
      `Round(10000*5/100)=500/城` 入账。
-- **结论**：升级腿**保持 blocked**，缺口收窄为三项：① `inventory.replace/drop`（另卡，dev-1 已知）；
-  ② 按名字/坐标 discovery 铁匠；③ 税入账可观测（DB/内存导出或时钟注入）。**不声称可跑**。
+- **结论**：升级腿**保持 blocked**，缺口收窄为两项 + 一条批次限制：
+  ① `inventory.replace/drop`（另卡，dev-1 已知）；
+  ② 按名字/坐标 discovery 铁匠（`auto:last_turn` 在密集 NPC 区不可靠——以后同类场景应显式给坐标/名字，不要靠 discovery）；
+  ③ **批次限制**：手工窗口可用 `--profile <path>.json` 声明 config_overrides（已实测），
+  但 run3/`run_batch` 只认内置 profile 名，进批需工具卡。**不声称可跑**。
 - 证据目录：`E:/tmp/scriptcov/taxleg/`（profile、临时场景、card 日志、frames、fixtures diff）。
 
 ---

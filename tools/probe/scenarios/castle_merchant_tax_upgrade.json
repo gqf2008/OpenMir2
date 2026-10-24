@@ -107,7 +107,7 @@
     }
   ],
   "blocked": {
-    "reason": "**run3 内置 profile 不能声明 config_overrides**：`run_batch.sh`/roster 只允许 alt / window-magic；而本场景必须两侧同值 `CastleGetAllNpcTax=1` 才有税（默认 0 ⇒ NPC.Castle=null ⇒ 零税）。⇒ 在 profile 文件里带 `fixtures.config_overrides` 手工跑可验证；进批次需 run_batch 支持 profile 文件或新增内置 profile（工具卡，另开）。",
-    "missing_fixture": "① profile 文件通道（临时 profile 带 fixtures.config_overrides 已可手工跑，本轮实测见 docs/window-scenes-castle-tax-20261025.md §3.5）；② 若进 run3：run_batch 需支持自定义 profile（另卡）。"
+    "reason": "**run3 批次装载通道缺失（能力已有）**：`card_window.load_profile` 支持 **profile JSON 路径**（`--profile <path>.json`）⇒ 手工窗口可声明 `fixtures.config_overrides.Server.conf.CastleGetAllNpcTax=1`（本轮实测生效并已验证还原）；但 `run_batch.sh` 的清单只认内置名 `alt`/`window-magic`，场景本身无法携带 profile ⇒ 本场景暂不进批次。解封进批次需 run_batch 支持 profile 路径（工具卡，另开）。",
+    "missing_fixture": "① 手工跑：dump BUILTIN alt 为 JSON + 加 `fixtures.config_overrides`，传 `--profile <path>`（推荐用法，见 doc §4.2）；② 进 run3：run_batch 需支持自定义 profile（另卡）。"
   }
 }
