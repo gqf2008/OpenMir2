@@ -385,3 +385,6 @@ tests/loadgate/**/*.err.log
 # 取消跟踪；其余 .idea 文件（.name / encodings.xml / vcs.xml / indexLayout.xml 等）
 # 仍入库，故此处只写精确路径，勿改成 .idea/ 或 *.xml。
 .idea/.idea.M2Server/.idea/workspace.xml
+
+# worktrees（一 worktree 一角色，见 AGENTS.md §改树）
+.claude/worktree/
