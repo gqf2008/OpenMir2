@@ -190,7 +190,118 @@ def count_hits(line):
     return hits
 
 
-def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None):
+# ---- 段落级快照声明（卡 openmir2-dynamic-count-paragraph-snapshot-exemption）----
+#
+# 背景：allow-list 里 92 条中有 23 条属「整段已声明快照、段内计数随之冻结」的文档；
+# 每次文档作者改一行，rot 就把别人写集的改动变成对本门的阻塞。这里加一个**受检**的
+# 段落级豁免：只有同一段里、命中之前、且四道检查（祖先 / 时间容差 / 先后 / blame 新近性）
+# 全过的声明，才把命中降级为 INFO。
+#
+# 「段」的定义（可机械判定，不用「同行 ± N 字符」这种会随排版漂移的口径）：
+#   命中行向上找**最近的标题行**（`#`..`######`）作为段首；段尾 = 其后第一个
+#   **同级或更高级**标题的前一行（没有上级标题 ⇒ 到文件末尾；全文无标题 ⇒ 整篇为一段）。
+PARAGRAPH_HEADING_RE = re.compile(r"^(#{1,6})\s")
+DEFAULT_PARAGRAPH_TOL = 3600   # 声明时间与 commit 时间的容差（秒），理由见文档 §2
+DEFAULT_DECL_TOL = 86400       # blame 新近性容差（秒，与 skeleton --decl-tol 同值）
+
+
+def paragraph_bounds(lines, hit_line):
+    """Return (start, end) 1-based inclusive for the section containing ``hit_line``."""
+    level = 0
+    start = 1
+    for i in range(hit_line, 0, -1):
+        m = PARAGRAPH_HEADING_RE.match(lines[i - 1])
+        if m:
+            level = len(m.group(1))
+            start = i
+            break
+    if level == 0:
+        return 1, len(lines)
+    end = len(lines)
+    for j in range(hit_line + 1, len(lines) + 1):
+        m = PARAGRAPH_HEADING_RE.match(lines[j - 1])
+        if m and len(m.group(1)) <= level:
+            end = j - 1
+            break
+    return start, end
+
+
+def paragraph_declarations(lines, start, end):
+    """Candidate declarations *inside* the section ``[start, end]`` (nearest-first)."""
+    out = []
+    for anchor in range(start, end + 1):
+        if not skeleton.SNAPSHOT_ANCHOR_RE.search(lines[anchor - 1]):
+            continue
+        low = max(start, anchor - skeleton.SNAPSHOT_NEAR)
+        high = min(end, anchor + skeleton.SNAPSHOT_NEAR)
+        shas = []
+        times = []
+        for index in range(low, high + 1):
+            for value in skeleton._line_shas(lines[index - 1]):
+                shas.append((index, value))
+            for value in skeleton._line_times(lines[index - 1]):
+                times.append((index, value[0], value[1]))
+        if not shas or not times:
+            continue
+        shas.sort(key=lambda item: (abs(item[0] - anchor), item[0]))
+        times.sort(key=lambda item: (abs(item[0] - anchor), item[0]))
+        out.append({
+            "anchor": anchor,
+            "sha_line": shas[0][0],
+            "sha": shas[0][1],
+            "time_line": times[0][0],
+            "epoch": times[0][1],
+            "time_text": times[0][2],
+            "position": max(anchor, shas[0][0], times[0][0]),
+        })
+    return out
+
+
+def checked_paragraph_declarations(top, rel, lines, start, end, hit_line, ref,
+                                   paragraph_tol, decl_tol, commit_cache,
+                                   blame_cache):
+    """Return (infos, notes): declarations passing (a)(b)(c)(d)."""
+    infos = []
+    notes = []
+    for decl in paragraph_declarations(lines, start, end):
+        if decl["position"] >= hit_line:
+            notes.append("L%d: 声明在命中行之后（%s）" % (decl["anchor"], decl["sha"]))
+            continue
+        try:
+            ancestor = skeleton.is_ancestor(top, decl["sha"], ref)
+        except GateError as exc:
+            notes.append("L%d: 祖先判定失败：%s" % (decl["anchor"], exc))
+            continue
+        if not ancestor:
+            notes.append("L%d %s: 不是 --ref %s 的祖先"
+                         % (decl["anchor"], decl["sha"], ref))
+            continue
+        times = skeleton._commit_time(top, decl["sha"], commit_cache)
+        if times is None:
+            notes.append("L%d %s: 读不到 commit 时间" % (decl["anchor"], decl["sha"]))
+            continue
+        delta = min(abs(decl["epoch"] - times[0]), abs(decl["epoch"] - times[1]))
+        if delta > paragraph_tol:
+            notes.append("L%d %s: 声明时间与 commit 时间差 %ds > --paragraph-tol %ds"
+                         % (decl["anchor"], decl["sha"], delta, paragraph_tol))
+            continue
+        blamed_lines = sorted({decl["anchor"], decl["time_line"], decl["sha_line"]})
+        blamed = skeleton._blame_delta(top, rel, blamed_lines, decl["epoch"],
+                                       blame_cache)
+        if blamed is None:
+            notes.append("L%d: 声明行未提交，blame 不可用" % decl["anchor"])
+            continue
+        if blamed > decl_tol:
+            notes.append("L%d: 声明行写入时间距声称时间 %ds > --decl-tol %ds（事后补的？）"
+                         % (decl["anchor"], blamed, decl_tol))
+            continue
+        infos.append(dict(decl, delta=delta, blame_delta=blamed))
+    return infos, notes
+
+
+def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None,
+         ref=None, paragraph_tol=DEFAULT_PARAGRAPH_TOL, decl_tol=DEFAULT_DECL_TOL):
+
     """Scan ``rel_path``; return findings / rot / unchecked rows.
 
     ``files`` (repo-relative) lets the selftest run against a synthetic tree
@@ -205,6 +316,11 @@ def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None):
         files = markdown_files(top, rel_path)
     findings = []
     unchecked = []
+    infos = []
+    notes = []
+    decl_cache = {}
+    commit_cache = {}
+    blame_cache = {}
     for rel in files:
         try:
             with open(os.path.join(top, rel), "rb") as fh:
@@ -212,7 +328,8 @@ def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None):
         except (OSError, UnicodeDecodeError):
             raise GateError(
                 "dynamic-count gate: cannot read %s (fail-closed)" % rel, rc=2)
-        for number, line in enumerate(text.splitlines(), 1):
+        all_lines = text.splitlines()
+        for number, line in enumerate(all_lines, 1):
             hits = count_hits(line)
             if not hits:
                 continue
@@ -229,6 +346,25 @@ def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None):
             if entry is not None:
                 entry["used"] = True
                 continue
+            if ref is not None:
+                key = (rel, number)
+                if key not in decl_cache:
+                    start, end = paragraph_bounds(all_lines, number)
+                    decl_cache[key] = checked_paragraph_declarations(
+                        top, rel, all_lines, start, end, number, ref,
+                        paragraph_tol, decl_tol, commit_cache, blame_cache)
+                infos_here, notes_here = decl_cache[key]
+                if infos_here:
+                    decl = infos_here[0]
+                    infos.append({
+                        "path": rel, "line": number,
+                        "snippet": line.strip()[:160],
+                        "decl": "L%d %s @ %s" % (decl["anchor"], decl["sha"],
+                                                 decl["time_text"]),
+                        "kinds": sorted({h[2] for h in missing}),
+                    })
+                    continue
+                notes.extend("%s:%d %s" % (rel, number, n) for n in notes_here)
             findings.append({
                 "path": rel, "line": number, "line_sha": digest,
                 "snippet": line.strip()[:160],
@@ -238,7 +374,7 @@ def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None):
     rotten = [e for e in skeleton.allowlist_in_scope(allowlist, rel_path)
               if not e["used"]]
     return {"findings": findings, "rotten": rotten, "unchecked": unchecked,
-            "files": len(files)}
+            "infos": infos, "notes": notes, "files": len(files)}
 
 
 def emit(result, rel_path, max_gap, allowlist_path, err=sys.stderr, out=sys.stdout):
@@ -246,6 +382,11 @@ def emit(result, rel_path, max_gap, allowlist_path, err=sys.stderr, out=sys.stdo
         print("stamp-check: 已跳过（--no-stamp-check）——%d 行计数未检查" %
               len(result["unchecked"]), file=out)
         return 0
+    for item in result.get("infos") or []:
+        print("INFO %s:%d\t%s\t段落声明 %s（降级，不计缺戳）"
+              % (item["path"], item["line"], item["snippet"], item["decl"]), file=out)
+    for note in result.get("notes") or []:
+        print("NOTE %s（段落声明未通过检查）" % note, file=err)
     for item in result["findings"]:
         print("%s:%d\t%s\t缺快照戳（%s）"
               % (item["path"], item["line"], item["snippet"],
@@ -259,8 +400,10 @@ def emit(result, rel_path, max_gap, allowlist_path, err=sys.stderr, out=sys.stdo
               % (len(result["findings"]), len(result["rotten"]),
                  result["files"], rel_path, max_gap, allowlist_path), file=err)
         return 1
-    print("dynamic-count gate: OK（0 缺戳；扫描 %d 个 markdown，path=%s，max-gap=%d）"
-          % (result["files"], rel_path, max_gap), file=out)
+    print("dynamic-count gate: OK（0 缺戳；%d 条段落声明降级 INFO；扫描 %d 个 "
+          "markdown，path=%s，max-gap=%d）"
+          % (len(result.get("infos") or []), result["files"], rel_path, max_gap),
+          file=out)
     return 0
 
 
@@ -444,6 +587,97 @@ def selftest():
     check("⑱ 枚举只用 git 跟踪集（未跟踪的裸计数不扫；改 os.walk 即红）",
           tracked_scan["files"] == 1 and tracked_scan["findings"] == [])
 
+    # ---- ⑲–㉔ 段落级快照声明（卡 openmir2-dynamic-count-paragraph-snapshot-exemption）----
+    T0 = "2026-10-24T10:00:00+08:00"
+    T1 = "2026-10-24T10:05:00+08:00"
+    T_LATE = "2026-10-24T15:00:00+08:00"      # 与 T0 差 5h > paragraph-tol 3600
+    T_FORGED = "2026-10-27T10:00:00+08:00"    # 声明行 3 天后才提交 > decl-tol 86400
+
+    def _git(tmp, *args, env=None):
+        return subprocess.run(["git", "-C", tmp] + list(args), capture_output=True,
+                              text=True, env=env)
+
+    def _commit(tmp, when, files):
+        for rel, body in files.items():
+            path = os.path.join(tmp, rel)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write(body)
+        env = dict(os.environ, GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
+        _git(tmp, "add", "-A", env=env)
+        _git(tmp, "commit", "-q", "-m", "x", env=env)
+        return _git(tmp, "rev-parse", "HEAD").stdout.strip()
+
+    def _fixture(build):
+        with tempfile.TemporaryDirectory(prefix="dc-para-") as tmp:
+            _git(tmp, "init", "-q")
+            _git(tmp, "config", "user.email", "t@example.invalid")
+            _git(tmp, "config", "user.name", "t")
+            build(tmp)
+            return scan(tmp, "docs", [], DEFAULT_MAX_GAP,
+                        files=["docs/a.md"], ref="HEAD")
+
+    def _case_a(tmp):
+        sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("# t\n\n## 段\n\n快照 截至 %s @ %s\n\n进行中 236\n"
+               % (sha1, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_a = _fixture(_case_a)
+    check("⑲ 段内合法声明（祖先 + 时间吻合 + 声明在前 + blame 新近）=> INFO",
+          len(res_a["infos"]) == 1 and res_a["findings"] == [])
+
+    def _case_b(tmp):
+        _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("## 段\n\n快照 截至 %s @ %s\n\n进行中 236\n"
+               % ("d" * 40, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_b = _fixture(_case_b)
+    check("⑳ 声明 sha 不是 --ref 祖先 => 仍红（不降级）",
+          res_b["infos"] == [] and len(res_b["findings"]) == 1)
+
+    def _case_c(tmp):
+        sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("## 段\n\n快照 截至 %s @ %s\n\n进行中 236\n"
+               % (sha1, T_LATE))
+        _commit(tmp, T_LATE, {"docs/a.md": doc})
+
+    res_c = _fixture(_case_c)
+    check("㉑ 声明时间与 commit 时间差 > --paragraph-tol => 仍红",
+          res_c["infos"] == [] and len(res_c["findings"]) == 1)
+
+    def _case_d(tmp):
+        sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("## 段\n\n进行中 236\n\n快照 截至 %s @ %s\n"
+               % (sha1, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_d = _fixture(_case_d)
+    check("㉒ 声明出现在命中之后 => 仍红",
+          res_d["infos"] == [] and len(res_d["findings"]) == 1)
+
+    def _case_e(tmp):
+        sha1 = _commit(tmp, "2026-10-24T09:00:00+08:00", {"base.txt": "x\n"})
+        doc = ("## 段\n\n快照 截至 %s @ %s\n\n进行中 236\n"
+               % (sha1, "2026-10-24T09:00:00+08:00"))
+        _commit(tmp, T_FORGED, {"docs/a.md": doc})
+
+    res_e = _fixture(_case_e)
+    check("㉓ 声明行 3 天后才提交（blame 新近性不符）=> 仍红",
+          res_e["infos"] == [] and len(res_e["findings"]) == 1)
+
+    def _case_f(tmp):
+        sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("## A\n\n快照 截至 %s @ %s\n\n进行中 236\n\n"
+               "## B\n\n待审 5\n" % (sha1, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_f = _fixture(_case_f)
+    check("㉔ 段外裸计数仍红（声明不赦免全文）",
+          len(res_f["infos"]) == 1 and len(res_f["findings"]) == 1
+          and res_f["findings"][0]["line"] > 5)
+
     failed = 0
     for name, ok in checks:
         print(("PASS " if ok else "FAIL ") + name)
@@ -489,6 +723,15 @@ def main(argv):
                         help="skip the stamp check and print 已跳过 (never silent)")
     parser.add_argument("--fingerprint", metavar="PATH:LINE",
                         help="print the line_sha256 for an allow-list entry")
+    parser.add_argument("--ref", default="refs/remotes/walgit/master",
+                        help="branch/ref the paragraph snapshot declaration must be an "
+                             "ancestor of (default: refs/remotes/walgit/master)")
+    parser.add_argument("--paragraph-tol", type=int, default=DEFAULT_PARAGRAPH_TOL,
+                        help="max |declared time - commit time| in seconds "
+                             "(default: %d = 1h)" % DEFAULT_PARAGRAPH_TOL)
+    parser.add_argument("--decl-tol", type=int, default=DEFAULT_DECL_TOL,
+                        help="max |declaration line blame time - declared time| in "
+                             "seconds (default: %d = 1 day)" % DEFAULT_DECL_TOL)
     parser.add_argument("--selftest", action="store_true")
     args = parser.parse_args(argv)
 
@@ -507,7 +750,9 @@ def main(argv):
         print("stamp-check: 已跳过（--no-stamp-check）——只统计计数，不做戳判定",
               file=sys.stdout)
         return 0
-    result = scan(top, rel_path, allowlist, args.max_gap, stamp_check=True)
+    result = scan(top, rel_path, allowlist, args.max_gap, stamp_check=True,
+                  ref=args.ref, paragraph_tol=args.paragraph_tol,
+                  decl_tol=args.decl_tol)
     return emit(result, args.path, args.max_gap, args.allowlist)
 
 
