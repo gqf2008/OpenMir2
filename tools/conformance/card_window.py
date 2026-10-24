@@ -331,11 +331,71 @@ WMI_STACK_WRAPPER = os.path.join(
     REPO_ROOT, "tools", "window", "start-stack-wmi.ps1").replace(os.sep, "/")
 
 
-def wmi_stack_argv(inner_script, ready_ports):
-    """内置 profile 的 stack 命令：WMI 派生 + 就绪端口（**含网关**）+ 暖机，fail-closed。"""
-    return POWERSHELL + ["-File", WMI_STACK_WRAPPER,
+def wmi_stack_argv(inner_script, ready_ports, pin_checks=None, pin_log=None):
+    """内置 profile 的 stack 命令：WMI 派生 + 就绪端口（**含网关**）+ 暖机，fail-closed。
+
+    卡 `openmir2-window-wmi-env-forwarding`：pin_checks/pin_log 给出时追 `-PinChecks`/
+    `-PinLog`——起栈后由包装校验 server 日志自证行（如 game-svr 的
+    `CLIENT_ABILITY_LAYOUT layout=oracle-40（MIR2_CLIENT_ABILITY_LAYOUT=0）`），
+    pin 没到/布局不符 ⇒ 包装非零退出（fail-closed）。"""
+    argv = POWERSHELL + ["-File", WMI_STACK_WRAPPER,
                          "-Script", str(inner_script),
                          "-ReadyPorts", ",".join(str(p) for p in ready_ports)]
+    if pin_checks:
+        argv += ["-PinChecks", ",".join(str(x) for x in pin_checks)]
+    if pin_log:
+        argv += ["-PinLog", str(pin_log)]
+    return argv
+
+
+# --- pin 可观测（卡 `openmir2-window-wmi-env-forwarding`）------------------
+# WMI `Win32_Process.Create` 的父进程是 WmiPrvSE，不继承调用方环境：python 调用面
+# 设好的 `sides.<side>.env` pin 到 server 就丢（53 分诊实锤：game-svr.out.log
+# 05:57:06.620 `layout=client-58（MIR2_CLIENT_ABILITY_LAYOUT=<unset>）`——静默跑错布局）。
+# 修法在包装（tools/window/start-stack-wmi.ps1）：Win32_ProcessStartup 全量转发
+# 调用方 env + 起栈后按 -PinChecks/-PinLog 校验 server 日志自证行。
+PIN_LAYOUT_KEY = "MIR2_CLIENT_ABILITY_LAYOUT"
+WMI_WRAPPER_TOKEN = "start-stack-wmi.ps1"
+# rust 侧 game-svr 自证日志（部署脚本 -LogDir 写死这里，口径同 alt 的 pid_file）。
+RUST_STACK_PIN_LOG = "E:/tmp/conformance/rust-logs/game-svr.out.log"
+
+
+def is_wmi_stack_argv(argv):
+    """stack 命令是否走 WMI 包装（只有它能接 pin 自证）。"""
+    return any(WMI_WRAPPER_TOKEN in str(a) for a in (argv or []))
+
+
+def wmi_pin_checks(stack_argv):
+    """已接线的 -PinChecks 列表；WMI 包装未接线 ⇒ []，非 WMI 链 ⇒ None。"""
+    if not is_wmi_stack_argv(stack_argv):
+        return None
+    argv = [str(a) for a in (stack_argv or [])]
+    if "-PinChecks" in argv:
+        i = argv.index("-PinChecks")
+        if i + 1 < len(argv):
+            return [x for x in argv[i + 1].split(",") if x]
+        return []
+    return []
+
+
+def with_wmi_pin_checks(stack_argv, pin_checks, pin_log):
+    """在既有 WMI 包装 argv 上接线/替换 -PinChecks/-PinLog（幂等）。非 WMI 链 ⇒ ConfigError。"""
+    if not is_wmi_stack_argv(stack_argv):
+        raise ConfigError(
+            "只有 %s 的 stack 命令能接 pin 自证（实际 %r）——非 WMI 链的 env 转发由"
+            "调用方进程保证，无需（也无法）经包装校验" % (WMI_WRAPPER_TOKEN, stack_argv))
+    argv = [str(a) for a in (stack_argv or [])]
+    out, skip = [], False
+    for tok in argv:
+        if skip:
+            skip = False
+            continue
+        if tok in ("-PinChecks", "-PinLog"):
+            skip = True
+            continue
+        out.append(tok)
+    return out + ["-PinChecks", ",".join(str(x) for x in pin_checks),
+                  "-PinLog", str(pin_log)]
 
 
 def resolve_rust_binary():
@@ -519,7 +579,9 @@ def _derived_magic_profile(base, name, description):
     """构造「alt + 两侧 magic + D-9 pin」的内置 profile（卡 `openmir2-window-profile-magic-preset`）。
 
     只加数据、不加判定逻辑：``magic`` 走既有 profile 级夹具通道（README §1.8），
-    ``MIR2_CLIENT_ABILITY_LAYOUT=0`` 走既有 ``sides.<side>.env`` 通道（README「spell_cast 必须 pin D-9」）。
+    ``MIR2_CLIENT_ABILITY_LAYOUT=0`` 走 ``sides.rust.env`` 通道（README「spell_cast 必须 pin D-9」；
+    C# 是 oracle 不消费该 env，卡 `openmir2-window-wmi-env-forwarding` 起不再两侧都设），
+    并给 rust 侧 WMI stack 接线 -PinChecks（pin 自证，见 with_wmi_pin_checks）。
     **不改 `alt` 默认值**：alt 是 18 个场景的既有基线，动它会让所有场景的输入一起变；
     新前置只能以**新 profile** 的形式存在。
     """
@@ -527,19 +589,32 @@ def _derived_magic_profile(base, name, description):
     prof["name"] = name
     prof["description"] = description
     prof["magic"] = [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
-    for _side, side_conf in prof["sides"].items():
-        env = dict(side_conf.get("env") or {})
-        env["MIR2_CLIENT_ABILITY_LAYOUT"] = "0"
-        side_conf["env"] = env
+    # 卡 `openmir2-window-wmi-env-forwarding` 收紧：布局 pin 只设 **rust** 侧——
+    # `MIR2_CLIENT_ABILITY_LAYOUT` 的消费方只有 rust（C# 是 oracle，读都不读该 env；
+    # 旧写法两侧都设是噪音，且让「声明 pin ⇒ 必须可观测」的加载期守卫无处安放）。
+    rs = prof["sides"].get("rust")
+    if rs is not None:
+        env = dict(rs.get("env") or {})
+        env[PIN_LAYOUT_KEY] = "0"
+        rs["env"] = env
+        # pin 声明了就要可观测：rust 侧 stack 是 WMI 包装 ⇒ 接线 -PinChecks/-PinLog
+        #（起栈后由包装校验 game-svr 日志自证行，不一致非零退出）。
+        if is_wmi_stack_argv(rs.get("stack")):
+            rs["stack"] = with_wmi_pin_checks(
+                rs["stack"], ["%s=%s" % (PIN_LAYOUT_KEY, env[PIN_LAYOUT_KEY])],
+                RUST_STACK_PIN_LOG)
     return prof
 
 
 BUILTIN_PROFILES["window-magic"] = _derived_magic_profile(
     BUILTIN_PROFILES["alt"],
     "window-magic",
-    ("alt 的副本 + 两侧 `magic` 夹具（magic_id=1）+ `sides.*.env."
+    ("alt 的副本 + `magic` 夹具（magic_id=1）+ `sides.rust.env."
      "MIR2_CLIENT_ABILITY_LAYOUT=0`：让 `spell_cast` 无需临时手工 profile 即可 dry-run 通过"
-     "（卡 `openmir2-window-profile-magic-preset`）。"),
+     "（卡 `openmir2-window-profile-magic-preset`）。"
+     " | pin 可观测（卡 `openmir2-window-wmi-env-forwarding`）：rust 侧 stack 接线"
+     " `-PinChecks MIR2_CLIENT_ABILITY_LAYOUT=0 -PinLog`（game-svr 日志自证行，"
+     "不一致包装非零退出）。"),
 )
 
 
@@ -874,6 +949,19 @@ def load_profile(value):
             if not isinstance(env, dict) or any(
                     not isinstance(k, str) or not isinstance(v, str) for k, v in env.items()):
                 raise ConfigError("profile.sides.%s.env 必须是字符串到字符串的对象" % side)
+        # 卡 `openmir2-window-wmi-env-forwarding`：声明了布局 pin，就必须可观测——
+        # stack 走 WMI 包装时必须接 -PinChecks（起栈后校验 server 日志自证行，
+        # 不一致 fail-closed）；否则 pin 丢失是静默的（53 分诊的实锤缺口）。
+        pin_val = (sc.get("env") or {}).get(PIN_LAYOUT_KEY)
+        if pin_val is not None:
+            wired = wmi_pin_checks(sc.get("stack"))
+            want = "%s=%s" % (PIN_LAYOUT_KEY, pin_val)
+            if wired is not None and want not in wired:
+                raise ConfigError(
+                    "profile.sides.%s.env.%s=%r 声明了 pin，但 stack 是 WMI 包装且未接 "
+                    "-PinChecks ⇒ pin 到没到不可观测（静默跑错布局缺口）⇒ 用 "
+                    "wmi_stack_argv(..., pin_checks=['%s'], pin_log=...) 或 "
+                    "with_wmi_pin_checks() 接线；非 WMI 链不受此限" % (side, PIN_LAYOUT_KEY, pin_val, want))
         er = sc.get("envir_root")
         if er is not None and (not isinstance(er, str) or not er):
             raise ConfigError("profile.sides.%s.envir_root 必须是非空字符串（部署内容根目录）"
@@ -6119,24 +6207,31 @@ def selftest():
             and "mir2_test_*" in f1_msg,
             "F-1 提示不再教「在 db.databases 里显式声明」，改为指名换库")
 
-        # 15d) 新内置 profile `window-magic`（卡 openmir2-window-profile-magic-preset）：
-        #      两侧 magic 段（magic_id=1）+ D-9 pin 必须同时成立，否则 `spell_cast` 仍是「少前置」状态。
+        # 15d) 新内置 profile `window-magic`（卡 openmir2-window-profile-magic-preset；
+        #      卡 openmir2-window-wmi-env-forwarding 收紧为「pin 只在 rust 侧 + 必须接线」）：
+        #      两侧 magic 段（magic_id=1）+ rust 侧 D-9 pin=0 + rust stack 接线 -PinChecks/-PinLog，
+        #      缺一 `spell_cast` 仍是「少前置/不可观测」状态。
         try:
             wm = load_profile("window-magic")
             wm_magic = profile_magic(wm)
             wm_side_magic = {s: profile_magic(wm, s) for s in wm["sides"]}
-            wm_env = {s: (wm["sides"][s].get("env") or {}).get("MIR2_CLIENT_ABILITY_LAYOUT")
-                      for s in wm["sides"]}
+            wm_rs_env = (wm["sides"]["rust"].get("env") or {}).get(PIN_LAYOUT_KEY)
+            wm_cs_env = (wm["sides"]["csharp"].get("env") or {}).get(PIN_LAYOUT_KEY)
+            wm_wired = wmi_pin_checks(wm["sides"]["rust"].get("stack"))
             wm_ok = (bool(wm_magic) and len(wm_magic) == 1
                      and wm_magic[0]["magic_id"] == 1
                      and all(m and len(m) == 1 and m[0]["magic_id"] == 1
                              for m in wm_side_magic.values())
-                     and all(v == "0" for v in wm_env.values()))
+                     and wm_rs_env == "0"
+                     and wm_cs_env is None
+                     and wm_wired is not None
+                     and ("%s=0" % PIN_LAYOUT_KEY) in wm_wired
+                     and any("-PinLog" == str(x) for x in wm["sides"]["rust"]["stack"]))
             wm_err = ""
         except ConfigError as exc:
             wm_ok, wm_err = False, str(exc)
-        chk(wm_ok, "15d) 内置 window-magic：两侧 magic 段(magic_id=1) + MIR2_CLIENT_ABILITY_LAYOUT=0 %s"
-            % wm_err)
+        chk(wm_ok, "15d) 内置 window-magic：两侧 magic 段(magic_id=1) + rust 侧 pin=0 + "
+            "stack 接线 -PinChecks/-PinLog %s" % wm_err)
 
         # 16) I-4：真跑缺 --out => rc=2，且不往 cwd 写任何证据
         old_cwd = os.getcwd()
@@ -6952,6 +7047,73 @@ def selftest():
                     "23c %s.%s 网关 %r 不在 ready_ports（残留 %r）"
                     "且包装 -ReadyPorts 兜住（缺 %r）"
                     % (pname, side, gateways, gw_missing, gw_uncovered))
+
+        # 24) WMI 派生链的 env 转发 + pin 自证（卡 openmir2-window-wmi-env-forwarding）。
+        #     24a 静态：wmi_stack_argv 带 pin 参数 ⇒ -PinChecks/-PinLog 按序追加；
+        #     24b-g 行为（真 powershell，-CheckPinsOnly 离线跑：不派生/不碰端口/WMI）：
+        #       一致绿 ×2（oracle-40 / client-58 两分支）+ 不一致红 ×3（<unset> 日志、
+        #       调用方缺 pin、调用方值与期望不一致——53 分诊实锤的三种形态都 fail-closed）；
+        #     24h 静态：加载期守卫——声明 pin 的 WMI stack 不接线 ⇒ ConfigError。
+        pin_log_good = os.path.join(tmp, "pin-good.log")      # pin 到达且生效（oracle-40）
+        pin_log_bad = os.path.join(tmp, "pin-bad.log")        # pin 丢失（53 分诊实锤形态）
+        pin_log_c58 = os.path.join(tmp, "pin-client58.log")   # 未 pin 的默认（client-58）
+        with open(pin_log_good, "w", encoding="utf-8", newline="\n") as f:
+            f.write("05:57:06.620 [INF] CLIENT_ABILITY_LAYOUT layout=oracle-40"
+                    "（MIR2_CLIENT_ABILITY_LAYOUT=0）\n")
+        with open(pin_log_bad, "w", encoding="utf-8", newline="\n") as f:
+            f.write("05:57:06.620 [INF] CLIENT_ABILITY_LAYOUT layout=client-58"
+                    "（MIR2_CLIENT_ABILITY_LAYOUT=<unset>）\n")
+        with open(pin_log_c58, "w", encoding="utf-8", newline="\n") as f:
+            f.write("05:57:06.620 [INF] CLIENT_ABILITY_LAYOUT layout=client-58"
+                    "（MIR2_CLIENT_ABILITY_LAYOUT=1）\n")
+        argv_24a = wmi_stack_argv("E:/tmp/conformance/start-rust.ps1", (15000, 17000),
+                                  pin_checks=["MIR2_CLIENT_ABILITY_LAYOUT=0"],
+                                  pin_log=RUST_STACK_PIN_LOG)
+        chk(argv_24a[-4:] == ["-PinChecks", "MIR2_CLIENT_ABILITY_LAYOUT=0",
+                              "-PinLog", RUST_STACK_PIN_LOG],
+            "24a wmi_stack_argv 带 pin 参数 ⇒ -PinChecks/-PinLog 按序追加（尾 4 项 %r）"
+            % (argv_24a[-4:],))
+
+        def run_pin_wrapper(pin_log, env_val, expect):
+            env = os.environ.copy()
+            if env_val is None:
+                env.pop(PIN_LAYOUT_KEY, None)
+            else:
+                env[PIN_LAYOUT_KEY] = env_val
+            argv = POWERSHELL + ["-File", WMI_STACK_WRAPPER, "-CheckPinsOnly",
+                                 "-SkipPortWait", "-PinChecks",
+                                 "%s=%s" % (PIN_LAYOUT_KEY, expect),
+                                 "-PinLog", pin_log, "-PinWaitSec", "1"]
+            proc = subprocess.run(argv, capture_output=True, text=True, env=env,
+                                  timeout=120)
+            return proc.returncode, ((proc.stdout or "") + (proc.stderr or ""))
+
+        rc, outp = run_pin_wrapper(pin_log_good, "0", "0")
+        chk(rc == 0, "24b 行为绿：调用方 pin=0 + 日志 oracle-40（=0）⇒ rc=0（%r）" % outp[-80:])
+        rc, outp = run_pin_wrapper(pin_log_bad, "0", "0")
+        chk(rc != 0 and "<unset>" in outp,
+            "24c 行为红：日志还是 <unset>（53 分诊实锤形态）⇒ rc≠0 并点名观测行（%r）"
+            % outp[-90:])
+        rc, outp = run_pin_wrapper(pin_log_good, None, "0")
+        chk(rc != 0 and PIN_LAYOUT_KEY in outp and "不在调用方环境" in outp,
+            "24d 行为红：调用方 env 没有该 pin ⇒ 派生之前就 rc≠0（%r）" % outp[-90:])
+        rc, outp = run_pin_wrapper(pin_log_good, "1", "0")
+        chk(rc != 0 and "不一致" in outp,
+            "24e 行为红：调用方 pin=1 但期望 0 ⇒ env 与 -PinChecks 不一致 rc≠0（%r）"
+            % outp[-90:])
+        rc, outp = run_pin_wrapper(pin_log_c58, "1", "1")
+        chk(rc == 0, "24f 行为绿：未 pin 的默认布局（client-58，=1）⇒ rc=0（%r）" % outp[-80:])
+        p_pin = _selftest_profile(tmp, stub, log)
+        p_pin["sides"]["rust"]["stack"] = wmi_stack_argv("E:/tmp/x/inner.ps1", (15000,))
+        p_pin["sides"]["rust"]["env"] = {PIN_LAYOUT_KEY: "0"}
+        pin_guard_err = ""
+        try:
+            load_profile(p_pin)
+        except ConfigError as e:
+            pin_guard_err = str(e)
+        chk("-PinChecks" in pin_guard_err,
+            "24h 加载期守卫：声明 pin 的 WMI stack 不接线 ⇒ ConfigError 并点名 -PinChecks（%r）"
+            % pin_guard_err[:100])
 
     finally:
         holder.close()

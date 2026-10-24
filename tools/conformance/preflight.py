@@ -22,7 +22,10 @@
             Windows 会被 CreateProcess 先解析到 System32 的 WSL 启动器 stub（未装发行版 rc=1，
             window-run-1 §1.1 实测）——System32 有 bash.exe 即 FAIL；显式路径必须存在且非
             System32/Sysnative stub；
-  ⑥ 可选    `--with-dry-run` 委托 `card_window.py --dry-run`；`--with-selftest` 委托 `--selftest`
+  ⑥ pin     pin 一致性自检（卡 `openmir2-window-wmi-env-forwarding`）：side env 声明了
+            `MIR2_CLIENT_ABILITY_LAYOUT` 且 stack 是 WMI 包装 ⇒ 必须接 `-PinChecks`
+            （起栈后校验 server 日志自证行）；不接线的 pin 丢失是静默的。
+  ⑦ 可选    `--with-dry-run` 委托 `card_window.py --dry-run`；`--with-selftest` 委托 `--selftest`
             （默认不跑，避免 preflight 本身变慢）。
 """
 
@@ -275,7 +278,53 @@ def check_bash(prof, resolver=None, isfile=None, sys32=None):
 
 
 # ---------------------------------------------------------------------------
-# ⑥ 可选委托
+# ⑥ pin 一致性（卡 openmir2-window-wmi-env-forwarding）
+# ---------------------------------------------------------------------------
+WMI_WRAPPER_TOKEN = "start-stack-wmi.ps1"
+PIN_LAYOUT_KEY = "MIR2_CLIENT_ABILITY_LAYOUT"
+
+
+def stack_wmi_pin_checks(stack_argv):
+    """stack 是否 WMI 包装；是 ⇒ 已接线的 -PinChecks 列表（未接线 = []）；非 WMI 链 ⇒ None。"""
+    argv = [str(a) for a in (stack_argv or [])]
+    if not any(WMI_WRAPPER_TOKEN in a for a in argv):
+        return None
+    if "-PinChecks" in argv:
+        i = argv.index("-PinChecks")
+        if i + 1 < len(argv):
+            return [x for x in argv[i + 1].split(",") if x]
+        return []
+    return []
+
+
+def check_pin_wiring(prof):
+    """side env 声明了布局 pin 且 stack 是 WMI 包装 ⇒ 必须接线 -PinChecks。
+    非 WMI 链（本地适配/桩命令）不适用——env 由调用方进程直传，不经 WMI 跳。
+    口径与 card_window.load_profile 的加载期守卫一致（双保险，见 check_bash 先例）。"""
+    problems, wired_n = [], 0
+    for side, sc in (prof.get("sides") or {}).items():
+        val = (sc.get("env") or {}).get(PIN_LAYOUT_KEY)
+        if val is None:
+            continue
+        checks = stack_wmi_pin_checks(sc.get("stack"))
+        if checks is None:
+            continue
+        want = "%s=%s" % (PIN_LAYOUT_KEY, val)
+        if want not in checks:
+            problems.append(
+                "side `%s` 声明 %s=%r 但 stack（WMI 包装）未接 -PinChecks %s"
+                % (side, PIN_LAYOUT_KEY, val, want))
+        else:
+            wired_n += 1
+    if problems:
+        raise StepFail("；".join(problems) + " ⇒ 用 wmi_stack_argv(..., pin_checks=.../"
+                       "pin_log=...) 或 with_wmi_pin_checks() 接线（起栈后校验 server 日志"
+                       "自证行，不一致 fail-closed），或删掉该 env 项")
+    return "pin 接线一致（%d 侧已接线；未声明 pin 的侧不适用）" % wired_n
+
+
+# ---------------------------------------------------------------------------
+# ⑦ 可选委托
 # ---------------------------------------------------------------------------
 def check_dry_run(profile_value, scenario, out_dir):
     argv = [sys.executable, "-I", "-B", CARD_WINDOW, "--profile", profile_value,
@@ -339,11 +388,13 @@ def run_steps(profile_value, root, log_dir, ports_profile, with_dry_run, with_se
         report(False, "ports", "profile 未加载，无法取端口")
         report(False, "profile", "profile 未加载")
         report(False, "bash", "profile 未加载，无法核对 restore bash")
-        results += [False, False, False]
+        report(False, "pin", "profile 未加载，无法核对 pin 接线")
+        results += [False, False, False, False]
     else:
         one("ports", lambda: check_ports(prof))
         one("profile", lambda: check_profile_keys(prof))
         one("bash", lambda: check_bash(prof))
+        one("pin", lambda: check_pin_wiring(prof))
     if with_dry_run:
         scen = os.path.join(REPO, "tools", "probe", "scenarios", "login_only.json")
         one("dry-run", lambda: check_dry_run(profile_value, scen,
@@ -360,7 +411,8 @@ def run_steps(profile_value, root, log_dir, ports_profile, with_dry_run, with_se
 def selftest():
     """用桩验证：① docs 红 ② 二进制 Debug-Fallback 红 ③ 端口被占红 ④ profile 缺键红
     ⑤ restore bash（WSL stub 命中红 / 真 Git bash 绿 / 显式 stub 红 / 解析不到红 /
-    解析到 stub 红）⑥ 汇总（任一步红 ⇒ rc=2）。
+    解析到 stub 红）⑥ pin 接线（声明 pin 的 WMI stack 不接线红 / 接线绿 / 非 WMI 链不适用）
+    ⑦ 汇总（任一步红 ⇒ rc=2）。
 
     自检自身也遵守纪律 15：所有断言先收集，最后统一判定（不存在「先 return 1 再跑检查」）。
     """
@@ -518,12 +570,45 @@ def selftest():
     except StepFail as ex:
         chk("stub" in str(ex), "⑤e 裸 bash 解析到 System32 stub 必须红并点名（%s）" % str(ex)[:60])
 
-    # ⑥ 汇总：run_steps 在桩下必须 rc=2（任何一步红），全绿必须 rc=0
+    # ⑥ pin 接线（卡 openmir2-window-wmi-env-forwarding）：声明 pin 的 WMI stack
+    #    必须接 -PinChecks；非 WMI 链不适用。
+    wmi_argv = ["powershell", "-File", "x/tools/window/start-stack-wmi.ps1",
+                "-Script", "inner.ps1", "-ReadyPorts", "1"]
+    unwired = {"sides": {"rust": {"env": {PIN_LAYOUT_KEY: "0"}, "stack": list(wmi_argv)}}}
+    try:
+        check_pin_wiring(unwired)
+        chk(False, "⑥a 声明 pin 的 WMI stack 不接线必须红")
+    except StepFail as ex:
+        chk("-PinChecks" in str(ex) and "rust" in str(ex),
+            "⑥a 声明 pin 的 WMI stack 不接线必须红并点名（%s）" % str(ex)[:70])
+    wired = {"sides": {"rust": {"env": {PIN_LAYOUT_KEY: "0"},
+                                "stack": wmi_argv + ["-PinChecks", "MIR2_CLIENT_ABILITY_LAYOUT=0",
+                                                     "-PinLog", "E:/tmp/x/game-svr.out.log"]}}}
+    try:
+        detail = check_pin_wiring(wired)
+        chk("1 侧已接线" in detail, "⑥b 已接线 ⇒ 通过（%s）" % detail)
+    except StepFail as ex:
+        chk(False, "⑥b 已接线 ⇒ 通过（%s）" % str(ex)[:70])
+    nonwmi = {"sides": {"rust": {"env": {PIN_LAYOUT_KEY: "0"},
+                                 "stack": ["python", "local-adapter.py"]}}}
+    try:
+        detail = check_pin_wiring(nonwmi)
+        chk("0 侧已接线" in detail, "⑥c 非 WMI 链不适用 ⇒ 通过（%s）" % detail)
+    except StepFail as ex:
+        chk(False, "⑥c 非 WMI 链不适用 ⇒ 通过（%s）" % str(ex)[:70])
+    nopin = {"sides": {"rust": {"stack": list(wmi_argv)}}}
+    try:
+        detail = check_pin_wiring(nopin)
+        chk("0 侧已接线" in detail, "⑥d 未声明 pin ⇒ 不适用，通过（%s）" % detail)
+    except StepFail as ex:
+        chk(False, "⑥d 未声明 pin ⇒ 不适用，通过（%s）" % str(ex)[:70])
+
+    # ⑦ 汇总：run_steps 在桩下必须 rc=2（任何一步红），全绿必须 rc=0
     rep = []
     res = run_steps("no-such-profile", "r", "l", None, False, False,
                     reporter=lambda ok, s, d: rep.append((ok, s, d)))
     chk(False in res and any(s == "profile" for ok, s, _ in rep),
-        "⑥a 缺 profile ⇒ 至少一步红（fail-closed）")
+        "⑦a 缺 profile ⇒ 至少一步红（fail-closed）")
 
     shutil.rmtree(tmp, ignore_errors=True)
     failed = [msg for ok, msg in checks if not ok]
