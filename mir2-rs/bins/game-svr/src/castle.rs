@@ -1051,6 +1051,304 @@ pub fn load_sabuk_config(
     Ok((cfg, specs))
 }
 
+// ---------------------------------------------------------------------------
+// **卡 `openmir2-m3-castle-siege-state`（T-127 落帧残余）**：`UserCastle.Run` 事件的帧排水
+// ---------------------------------------------------------------------------
+//
+// oracle 调用点：`SystemProcessor.cs:70-77` 的 `CastleMgr.Run()`（与 `GuildMgr.Run` 同一个
+// 10s 块，Guild 先、Castle 后）。`UserCastle.Run`（`UserCastle.cs:311-446`）产出的副作用分三类，
+// 本模块把它们各自落到**宿主已有的排水/出帧路径**上：
+//
+// | `CastleEvent` | oracle | 宿主口径 |
+// |---|---|---|
+// | `Broadcast` | `SendBroadCastMsgExt(s, MsgType.System)`（`UserCastle.cs:370/414/556/594`） | 每个 `!Ghost` 在线玩家一条 `SM_SYSMESSAGE(100)`（[`fan_out_sysmessage_to_all`]） |
+// | `ServerGroupMsg` | `SendServerGroupMsg(SS_204/SS_212, …)`（`WorldServer.cs:885-893`） | **planes 跨服通道**，客户端不可见；单服无对端 ⇒ 只记日志（同 `SS_205` 先例） |
+// | `RefreshShowName` | `StartWallconquestWar` 的 `GetMapRageHuman(PalaceEnvir,HomeX,HomeY,100)` + `RefShowName()`（`UserCastle.cs:564-575`、`BaseObject.Base.cs:1174-1177`） | 皇宫 100 格内玩家逐个 `SendRefMsg(RM_USERNAME)`（[`refresh_show_name_in_area`]） |
+// | `Structure(Ref*)` | `CastleDoor.Open/Close` 的 `SendRefMsg(RM_DIGUP/RM_DIGDOWN)`（`CastleDoor.cs:44-76`） | 重新入队成 [`mir2_world::monai::MonsterRefMsg`]，与门/墙 `Run` 共用同一条排水（[`queue_structure_ref_msg`]） |
+//
+// 排水序的口径与既有各排水点一致：**每个收件人一条** `NetPriorityQueue`，优先级 = `(byte)wIdent`；
+// 跨源（同一玩家队列里同时有城堡广播与其它系统帧）的合并不建模（登记，见卡报告）。
+
+/// `WorldServer.SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）的宿主扇出。
+///
+/// oracle 逐行：
+/// ```text
+/// for (PlayObjectList) if (!playObject.Ghost) playObject.SysMsg(sMsg, MsgColor.Red, MsgType.System);
+/// ```
+/// `MsgColor.Red` + 非 `Notice` ⇒ `BaseObject.SysMsg` 的 `default` 支（`BaseObject.cs:1656-1675`）：
+/// `SendMsg(RM_SYSMESSAGE, 0, RedMsgFColor, RedMsgBColor, 0, sMsg)` ⇒ `SM_SYSMESSAGE(100)`、
+/// `Recog` = **收件人自己**、`Param = MakeWord(RedF, RedB)`、`Series = 1`。
+///
+/// **与脚本 `SENDMSG 0-3`（`lib.rs::fan_out_world_sysmessage`）的两点差别**：
+/// ① `SendBroadCastMsgExt` 没有 caller 概念 ⇒ **不排除**任何收件人；
+/// ② 前缀只在 `SendBroadCastMsg`（`WorldServer.cs:1738-1765`）里拼，本路径**不拼** `SysMsgPreFix`。
+///
+/// 入队序 = `texts` 序（调用方按「城堡列表序 × 每座城 `Run` 的事件序」收集）；同优先级由四叉堆
+/// sift 决定出队序（`crates/world/src/msgqueue.rs`）。
+pub(crate) fn fan_out_sysmessage_to_all(
+    online: &crate::OnlineRegistry,
+    world: &mir2_world::World,
+    gates: &std::collections::HashMap<u8, tokio::sync::mpsc::UnboundedSender<crate::SimToGate>>,
+    texts: &[String],
+    f_color: u8,
+    b_color: u8,
+) -> usize {
+    if texts.is_empty() {
+        return 0;
+    }
+    let priority = (mir2_protocol::messages::RM_SYSMESSAGE & 0xFF) as u8;
+    let mut sent = 0usize;
+    for e in online {
+        // `PlayObjectList` 只含**在世界里**且 `!Ghost` 的玩家。
+        match world.entities.get(e.actor_id) {
+            Some(ent) if !ent.ghost => {}
+            _ => continue,
+        }
+        let Some(tx) = crate::route_to_gate(gates, e.gate_idx, e.socket, "城堡系统广播")
+        else {
+            continue;
+        };
+        // oracle：每个 `PlayObject` 一条 `MsgQueue`。
+        let mut queue: crate::msgqueue::NetPriorityQueue<usize> =
+            crate::msgqueue::NetPriorityQueue::new();
+        for i in 0..texts.len() {
+            queue.enqueue(i, priority);
+        }
+        while let Some(i) = queue.dequeue() {
+            let body = crate::smframe::sm_sysmessage(
+                e.actor_id,
+                u16::from(f_color),
+                u16::from(b_color),
+                &crate::downlink::gbk(&texts[i]),
+            );
+            let _ = tx.send(crate::SimToGate::SendFrame {
+                socket: e.socket,
+                body,
+            });
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// 玩家实体的行会名（`PlayObject.MyGuild?.GuildName`）：在线登记表 → 会话态缓存。
+fn guild_name_of(
+    online: &crate::OnlineRegistry,
+    sessions: &std::collections::HashMap<String, crate::SessionGround>,
+    actor_id: i32,
+) -> Option<String> {
+    let chr = &online.iter().find(|e| e.actor_id == actor_id)?.chr_name;
+    sessions.get(chr)?.guild.guild_name.clone()
+}
+
+/// `StartWallconquestWar`（`UserCastle.cs:564-575`）的 `RefShowName` 排水。
+///
+/// 目标集合 = `GetMapRageHuman(PalaceEnvir, HomeX, HomeY, 100, list)`（`WorldServer.cs:1698-1725`）：
+/// 遍历 `PlayObjectList`（本仓 = 在线登记表序），条件 `!Death && !Ghost && Envir == PalaceEnvir &&
+/// |dx| <= range && |dy| <= range`（**`<=`**，不是 `<`）。`PalaceEnvir == null` ⇒ 零目标（oracle 同）。
+///
+/// 每个目标 `RefShowName()` ⇒ `SendRefMsg(RM_USERNAME, 0,0,0,0, GetShowName())`：
+/// 收件人 = `SendRefMsg` 方格扫描（`chat::hear_targets`，`<= ref_range`、同图、`Race == Play && !Ghost`，
+/// **含目标自己**）；帧 = `SM_USERNAME(42)`，`Recog` = **被展示者**、`Param` = `GetChrColor`、
+/// 尾 = `EncodeString(GetShowName())`。
+///
+/// `GetChrColor` 是**观察者侧**的虚函数（`PlayObject.cs:3585-3655`：PVP/行会关系/攻城区随观察者变）
+/// ⇒ 逐收件人重算（[`query_user_name_color`]），比 `guild_cmd::ref_show_name` 的单色近似更贴近
+/// oracle。`Err`（N1：攻城区 + 双方都在战区 + 观察者有行会）⇒ oracle 在该收件人的消息处理里抛异常
+/// 并被吞（`PlayObject.Message.cs` 的消息循环 catch）⇒ 本帧不投递，只记 WRN（登记：不建模
+/// 「该收件人本 tick 剩余消息一并中止」）。
+///
+/// 排水序：逐收件人一条 `NetPriorityQueue`（优先级 = `RM_USERNAME & 0xFF` = 165），入队序 =
+/// 目标序 × 格扫序。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn refresh_show_name_in_area(
+    online: &crate::OnlineRegistry,
+    world: &mir2_world::World,
+    displays: &crate::downlink::DisplayTable,
+    gates: &std::collections::HashMap<u8, tokio::sync::mpsc::UnboundedSender<crate::SimToGate>>,
+    sessions: &std::collections::HashMap<String, crate::SessionGround>,
+    war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    palace_map_id: Option<usize>,
+    home_x: i16,
+    home_y: i16,
+    range: i32,
+    ref_range: i32,
+) -> usize {
+    // `PalaceEnvir == null` ⇒ `GetMapRageHuman` 的 `Envir == null` 与任何玩家都不等 ⇒ 零目标。
+    let Some(palace_map_id) = palace_map_id else {
+        return 0;
+    };
+    let priority = (mir2_protocol::messages::RM_USERNAME & 0xFF) as u8;
+    // 每个收件人的入队帧（保入队序 = 目标序 × 格扫序）。
+    let mut per_recipient: Vec<(i32, Vec<Vec<u8>>)> = Vec::new();
+    for e in online {
+        let Some(target) = world.entities.get(e.actor_id) else {
+            continue;
+        };
+        if target.death || target.ghost || target.map_id != palace_map_id {
+            continue;
+        }
+        if (target.x - i32::from(home_x)).abs() > range
+            || (target.y - i32::from(home_y)).abs() > range
+        {
+            continue;
+        }
+        let target_id = e.actor_id;
+        // `GetShowName()`：玩家走展示表缓存（进图时算出），缺项回落 `FilterShowName(ChrName)`。
+        let show = displays.get(target_id).map_or_else(
+            || crate::downlink::gbk(crate::downlink::filter_show_name(&target.name)),
+            |d| d.show_name.clone(),
+        );
+        let target_guild = guild_name_of(online, sessions, target_id);
+        let target_in_war = war_states
+            .get(&target_id)
+            .is_some_and(|s| s.in_guild_war_area);
+        for recipient in crate::chat::hear_targets(world, target_id, ref_range) {
+            let viewer_guild = guild_name_of(online, sessions, recipient);
+            let viewer_in_war = war_states
+                .get(&recipient)
+                .is_some_and(|s| s.in_guild_war_area);
+            let color = match query_user_name_color(
+                world,
+                viewer_guild.as_deref(),
+                target_guild.as_deref(),
+                target,
+                target.name_color,
+                viewer_in_war,
+                target_in_war,
+            ) {
+                Ok(color) => color,
+                Err(err) => {
+                    crate::glog!(
+                        "WRN",
+                        "GetChrColor N1（{err:?}）城堡 RefShowName viewer={recipient} target={target_id} ⇒ 丢弃本帧"
+                    );
+                    continue;
+                }
+            };
+            let body = crate::smframe::sm_username(target_id, color, &show);
+            match per_recipient.iter_mut().find(|(id, _)| *id == recipient) {
+                Some((_, frames)) => frames.push(body),
+                None => per_recipient.push((recipient, vec![body])),
+            }
+        }
+    }
+    let mut sent = 0usize;
+    for (recipient, frames) in per_recipient {
+        let Some(entry) = online.iter().find(|e| e.actor_id == recipient) else {
+            continue;
+        };
+        let Some(tx) =
+            crate::route_to_gate(gates, entry.gate_idx, entry.socket, "城堡 RefShowName")
+        else {
+            continue;
+        };
+        let mut queue: crate::msgqueue::NetPriorityQueue<usize> =
+            crate::msgqueue::NetPriorityQueue::new();
+        for i in 0..frames.len() {
+            queue.enqueue(i, priority);
+        }
+        while let Some(i) = queue.dequeue() {
+            let _ = tx.send(crate::SimToGate::SendFrame {
+                socket: entry.socket,
+                body: frames[i].clone(),
+            });
+            sent += 1;
+        }
+    }
+    sent
+}
+
+/// `UserCastle.Run` 的 `Structure(Ref*)` 事件 → [`mir2_world::monai::MonsterRefMsg`]。
+///
+/// **为什么重新入队而不是直接出帧**：门/墙 `Run`（`CastleDoor.Run`/`WallStructure.Run`）在
+/// `crates/world/src/monai.rs::castle_structure_run` 里已经走 `send_ref_msg` →
+/// `pending_monster_ref_msgs` → 宿主 `drain_monster_ref_msgs` 的同一条链（`SM_DIGUP`/`SM_DIGDOWN`/
+/// `SM_TURN`+`SM_FEATURECHANGED`/`SM_ALIVE` 的逐 ident 口径全在那里）。`UserCastle.Run` 的
+/// `MainDoorControl(true)`（`UserCastle.cs:373`）走 `CastleDoor.Close()` 的 `RM_DIGDOWN`，与 Run 的
+/// `RM_TURN` 是同一族 `SendRefMsg` ⇒ 并入同一队列才能保证「同一 tick 内的相对次序 + 同一条排水路径」。
+///
+/// 收件人集合在**本时刻**快照（oracle `SendRefMsg` 在调用时刻入队）：`SEND_REF_MSG_RANGE` 格扫、
+/// 仅 `Race == Play && !Ghost`；sender（门/墙，非玩家）本就不在集合内。
+///
+/// `actor_id` 由事件坐标反查城堡门/墙绑定实体（`CastleUnit::entity_id`）：`CastleEvent::Structure`
+/// 不带 `ActorId`（C# 侧事件源是门对象本身），四件结构体的 `(X,Y)` 在 `SabukW.txt` 里各自独立
+/// ⇒ 按坐标唯一命中（同坐标时取 `MainDoor` 优先，登记）。
+///
+/// 返回是否入队（`SetMapXyFlag` / 无绑定实体 / 实体不在世界 ⇒ `false`）。
+pub(crate) fn queue_structure_ref_msg(
+    world: &mut mir2_world::World,
+    castle_index: usize,
+    event: &mir2_world::castle::StructureEvent,
+) -> bool {
+    use mir2_world::castle::StructureEvent;
+    let (ident, dir, x, y) = match *event {
+        StructureEvent::RefDigUp { dir, x, y } => (mir2_world::monai::RM_DIGUP, dir, x, y),
+        StructureEvent::RefDigDown { dir, x, y } => (mir2_world::monai::RM_DIGDOWN, dir, x, y),
+        StructureEvent::RefTurn { dir, x, y } => (mir2_world::monai::RM_TURN, dir, x, y),
+        StructureEvent::RefAlive { dir, x, y } => (mir2_world::monai::RM_ALIVE, dir, x, y),
+        StructureEvent::SetMapXyFlag { .. } => return false,
+    };
+    let actor_id = {
+        let Some(castle) = world.castles.get(castle_index) else {
+            return false;
+        };
+        [
+            &castle.main_door,
+            &castle.left_wall,
+            &castle.center_wall,
+            &castle.right_wall,
+        ]
+        .into_iter()
+        .flatten()
+        .find(|u| u.x == x && u.y == y)
+        .and_then(|u| u.entity_id)
+    };
+    let Some(actor_id) = actor_id else {
+        crate::glog!(
+            "WRN",
+            "城堡 {castle_index} 结构帧 ({x},{y}) 无绑定实体 ⇒ 丢弃（登记）"
+        );
+        return false;
+    };
+    let Some((map_id, status, self_only)) = world
+        .entities
+        .get(actor_id)
+        .map(|e| (e.map_id, e.char_status, e.ob_mode || e.fixed_hide_mode))
+    else {
+        return false;
+    };
+    let recipients = mir2_world::session::send_ref_msg_targets_at(
+        world,
+        // 门/墙不是玩家 ⇒ sender 永不在收件人集合里；`SendRefMsg` 的格扫本身不排除 sender。
+        i32::MIN,
+        map_id,
+        i32::from(x),
+        i32::from(y),
+        mir2_world::session::SEND_REF_MSG_RANGE,
+    );
+    world
+        .pending_monster_ref_msgs
+        .push(mir2_world::monai::MonsterRefMsg {
+            actor_id,
+            ident,
+            w_param: i32::from(dir),
+            n_param1: i32::from(x),
+            n_param2: i32::from(y),
+            n_param3: 0,
+            target_x: 0,
+            target_y: 0,
+            dir,
+            x: i32::from(x),
+            y: i32::from(y),
+            map_id,
+            status,
+            self_only,
+            recipients,
+        });
+    true
+}
+
 #[cfg(test)]
 mod tests;
 
