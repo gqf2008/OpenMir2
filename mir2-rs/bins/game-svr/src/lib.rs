@@ -1054,6 +1054,11 @@ async fn run_inner(args: &[String]) -> Result<()> {
             Vec::new()
         }
     };
+    // 卡 `openmir2-castle-merchant-tax-wiring`：`EnterConfig` 字面量在 `guild_castle_cfg,`
+    // 字段处 move 它；`ShopCfg` 在其后构造，故先把三个税值拷出来（全是 Copy 基本类型）。
+    let castle_tax_rate = guild_castle_cfg.castle_tax_rate;
+    let castle_one_day_gold = guild_castle_cfg.castle_one_day_gold;
+    let castle_gold_max = guild_castle_cfg.castle_gold_max;
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1130,6 +1135,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         repair_item_dec_dura: cfg.repair_item_dec_dura,
                         make_durg_price: cfg.make_durg_price,
                         get_all_npc_tax: cfg.castle_get_all_npc_tax,
+                        castle_tax_rate,
+                        castle_one_day_gold,
+                        castle_gold_max,
                         human_max_gold: cfg.human_max_gold,
                         upgrade: mir2_world::merchant::UpgradeWeaponConfig {
                             price: cfg.upgrade_weapon_price,
@@ -5090,6 +5098,7 @@ fn shop_context<'a>(
             repair_item_dec_dura: cfg.repair_item_dec_dura,
         },
         get_all_npc_tax: cfg.get_all_npc_tax,
+        upgrade_weapon_price: cfg.upgrade.price,
         script_lable,
         human_max_gold: cfg.human_max_gold,
         player_actor_id,
@@ -5356,6 +5365,54 @@ fn handle_selloff_cmd(
     }
 }
 
+/// `ShopCfg` → `CastleTaxConfig`（税/金库配置视图）。
+///
+/// `UpgradeWeaponPrice` 取 `shop_cfg.upgrade.price`（与 `Merchant.cs:552/1265/1400/1652` 的
+/// `SystemShare.Config.UpgradeWeaponPrice` 同一来源）。
+fn shop_castle_tax_config(shop_cfg: &ShopCfg) -> mir2_world::castle_tax::CastleTaxConfig {
+    mir2_world::castle_tax::CastleTaxConfig {
+        castle_tax_rate: shop_cfg.castle_tax_rate,
+        castle_one_day_gold: shop_cfg.castle_one_day_gold,
+        castle_gold_max: shop_cfg.castle_gold_max,
+        get_all_npc_tax: shop_cfg.get_all_npc_tax,
+        upgrade_weapon_price: shop_cfg.upgrade.price,
+        castle_member_price_rate: shop_cfg.castle_member_price_rate,
+    }
+}
+
+/// 把商税意图落到 `world.castles`（`game_svr::shop::apply_merchant_tax` 的宿主封装）。
+/// `tick_ms` 取 `world.clock_ms`（虚拟时钟；`HUtil32.GetTickCount()` 的确定性等价）。
+fn apply_merchant_tax_to_world(
+    world: &mut mir2_world::World,
+    castle_index: Option<usize>,
+    intent: Option<mir2_world::castle_tax::MerchantTaxIntent>,
+    shop_cfg: &ShopCfg,
+) {
+    let cfg = shop_castle_tax_config(shop_cfg);
+    let tick_ms = world.clock_ms;
+    let _ =
+        game_svr::shop::apply_merchant_tax(&mut world.castles, castle_index, intent, &cfg, tick_ms);
+}
+
+/// 武器升级的税（`Merchant.cs:546-554`）：在 `DecGold(UpgradeWeaponPrice)` 之后立刻收。
+/// Castle 目标税基 = `UpgradeWeaponPrice`；CastleManager 目标同样恒 `UpgradeWeaponPrice`。
+fn apply_upgrade_weapon_tax(
+    world: &mut mir2_world::World,
+    castle_index: Option<usize>,
+    castle_merchant: bool,
+    shop_cfg: &ShopCfg,
+) {
+    let price = shop_cfg.upgrade.price;
+    let intent = mir2_world::castle_tax::merchant_tax_intent(
+        price,
+        castle_merchant,
+        shop_cfg.get_all_npc_tax,
+        castle_index.is_some(),
+        price,
+    );
+    apply_merchant_tax_to_world(world, castle_index, intent, shop_cfg);
+}
+
 /// `CM_MERCHANTDLGSELECT`/`CM_MERCHANTQUERYSELLPRICE`/`CM_USERSELLITEM`/`CM_USERBUYITEM`/
 /// `CM_USERGETDETAILITEM`/`CM_USERREPAIRITEM`/`CM_MERCHANTQUERYREPAIRCOST` 的派发（⑤-4 第①/②片）。
 ///
@@ -5511,11 +5568,18 @@ fn handle_shop_cmd(
     let label = label_full.split('\r').next().unwrap_or("");
     let make_index = i32::from(param) | (i32::from(tag) << 16);
     let item_name = tail.unwrap_or("");
+    // `NormNpc.Castle` 的下标（`None` ⇔ oracle `Castle == null`）；税目的地判定用。
+    // **GetCastle 前置**：越界下标视同无城堡（`CastleManager.GetCastle` 口径；oracle 的
+    // `Castle` 是对象引用、不会悬空，故只在内部不一致时走这里，且不猜目的地）。
+    let mcastle_index = world
+        .merchant_castle_index(merchant_id)
+        .filter(|i| world.castles.get(*i).is_some());
     let view = game_svr::shop::MerchantView {
         actor_id: merchant_id,
         flags: mflags,
         price_rate: mprice,
         castle_merchant: mcastle,
+        castle_index: mcastle_index,
         item_type_list: mitem_type,
         chr_name: mchr_name.clone(),
     };
@@ -5827,6 +5891,9 @@ fn handle_shop_cmd(
                         );
                         let r = match begin {
                             mir2_world::merchant::UpgradeWaponBegin::Accepted(info) => {
+                                // `Merchant.cs:546-554`：begin 已做 `DecGold(UpgradeWeaponPrice)`；
+                                // 税紧随其后（在 `GoldChanged`/摘武器/`RecalcAbilitys` 之前）。
+                                apply_upgrade_weapon_tax(world, mcastle_index, mcastle, shop_cfg);
                                 // `Merchant.cs:566-570`：`UseItems[Weapon].Index = 0`（**槽对象保留**），
                                 // 随后 `RecalcAbilitys()` —— 此时黑铁/首饰**仍在 `ItemList`**（顺序即语义）。
                                 if let Some(Some(slot)) = sg.use_items.get_mut(1) {
@@ -5861,8 +5928,6 @@ fn handle_shop_cmd(
                                     // Lane B：`FlameRing` 粘滞锁存（同换装路径）。
                                     e.flame_ring |= effect.flame_ring;
                                 }
-                                // 税：`if (CastleMerchant || GetAllNpcTax)`（部署两条件皆 false）。
-                                let _tax = mcastle || shop_cfg.get_all_npc_tax;
                                 // `Merchant.cs:572`：`UpgradeWaponAddValue`（吃材料、算四字段、入列表）。
                                 let result = world.merchant_upgrade_wapon_finish(
                                     merchant_id,
@@ -6110,6 +6175,7 @@ fn handle_shop_cmd(
             let r =
                 game_svr::shop::sell_item(&view, &mut sg.state, goods, make_index, item_name, &ctx);
             out = r.frames;
+            apply_merchant_tax_to_world(world, mcastle_index, r.tax, shop_cfg);
         }
         game_svr::shop::CM_USERBUYITEM => {
             // `ClientUserBuyItem`（`Operate.cs:192-220`）+ `Merchant.ClientBuyItem`（`Merchant.cs:1219`）。
@@ -6124,6 +6190,7 @@ fn handle_shop_cmd(
             let r =
                 game_svr::shop::buy_item(&view, &mut sg.state, goods, item_name, make_index, &ctx);
             out = r.frames;
+            apply_merchant_tax_to_world(world, mcastle_index, r.tax, shop_cfg);
         }
         game_svr::shop::CM_USERGETDETAILITEM => {
             // `ClientUserBuyItem`（`Operate.cs:192-213`）的 `CM_USERGETDETAILITEM` 支：与买入**同一门**
@@ -6184,6 +6251,7 @@ fn handle_shop_cmd(
                 out.push(f);
             }
             out.extend(r.frames);
+            apply_merchant_tax_to_world(world, mcastle_index, r.tax, shop_cfg);
             if let Some(g) = r.goto_label {
                 // `Merchant.cs:1652/1659`：修理成功后的 `GotoLable(REPAIROK/SUPERREPAIROK)`。
                 // 出队序按 `MsgQueue` 优先级（`BaseObject.Message.cs:180`）：
@@ -17110,6 +17178,12 @@ struct ShopCfg {
     make_durg_price: i32,
     /// `Config.GetAllNpcTax`（`Merchant.cs:544/1250/1385/1637`；`[Setup] CastleGetAllNpcTax`）。
     get_all_npc_tax: bool,
+    /// `Config.CastleTaxRate`（`[Setup] CastleTaxRate`，百分比；`UserCastle.IncRateGold` 用）。
+    castle_tax_rate: i32,
+    /// `Config.CastleOneDayGold`（`[Setup] CastleOneDayGold`，`TodayIncome` 日上限）。
+    castle_one_day_gold: i32,
+    /// `Config.CastleGoldMax`（`[Setup] CastleGoldMax`，`TotalGold` 上限）。
+    castle_gold_max: i32,
     /// `Config.HumanMaxGold`（`IncGold` 上限，`PlayObject.Base.cs:168`）。
     human_max_gold: i32,
     /// 武器升级 NPC 的配置面（`Merchant.cs:527-759`；`[Names] BlackStone` + `[Setup] UpgradeWeapon*`）。
@@ -17130,6 +17204,9 @@ impl Default for ShopCfg {
             repair_item_dec_dura: 30,
             make_durg_price: 100,
             get_all_npc_tax: false,
+            castle_tax_rate: 5,
+            castle_one_day_gold: 2_000_000,
+            castle_gold_max: 10_000_000,
             human_max_gold: 10_000_000,
             upgrade: mir2_world::merchant::UpgradeWeaponConfig::default(),
             send_ref_msg_range: 12,
@@ -71118,5 +71195,55 @@ mod attack_weapon_wear_tests {
             attach[0],
             spawn[0]
         );
+    }
+    /// 合同测试（卡 `openmir2-castle-merchant-tax-wiring` ④）：武器升级税四路径。
+    ///
+    /// oracle `Merchant.cs:546-554`：`DecGold(UpgradeWeaponPrice)` 之后
+    /// `Castle.IncRateGold(UpgradeWeaponPrice)`；无城堡且 `GetAllNpcTax` ⇒
+    /// `CastleMgr.IncRateGold(UpgradeWeaponPrice)`（**恒 UpgradeWeaponPrice**，B-16）。
+    #[test]
+    fn upgrade_weapon_tax_credits_castle_or_manager_with_upgrade_price() {
+        let mut world = mir2_world::World::new(32, 32);
+        world.castles.push(mir2_world::castle::UserCastle::new(
+            "沙巴克",
+            mir2_world::castle::CastleSiegeConfig::default(),
+        ));
+        world.castles.push(mir2_world::castle::UserCastle::new(
+            "沙巴克二",
+            mir2_world::castle::CastleSiegeConfig::default(),
+        ));
+        let mk = |get_all: bool| ShopCfg {
+            castle_tax_rate: 5,
+            get_all_npc_tax: get_all,
+            upgrade: mir2_world::merchant::UpgradeWeaponConfig {
+                price: 10_000,
+                ..mir2_world::merchant::UpgradeWeaponConfig::default()
+            },
+            ..ShopCfg::default()
+        };
+        let shop_cfg = mk(false);
+        // ① Castle 分支：只入该城（5% * 10000 = 500）。
+        apply_upgrade_weapon_tax(&mut world, Some(0), true, &shop_cfg);
+        assert_eq!(
+            world.castles[0].total_gold, 500,
+            "Castle 税基 = UpgradeWeaponPrice"
+        );
+        assert_eq!(world.castles[1].total_gold, 0, "非目标城不入账");
+        // ② CastleManager 分支：castle_index=None + GetAllNpcTax ⇒ 升序全表，税基仍 10000。
+        apply_upgrade_weapon_tax(&mut world, None, true, &mk(true));
+        assert_eq!(world.castles[0].total_gold, 1_000);
+        assert_eq!(world.castles[1].total_gold, 500);
+        // ③ `CastleMerchant=true` 但无城堡且不全局收税 ⇒ 无税（oracle `else` 无分支）。
+        let before = (world.castles[0].total_gold, world.castles[1].total_gold);
+        apply_upgrade_weapon_tax(&mut world, None, true, &shop_cfg);
+        assert_eq!(
+            (world.castles[0].total_gold, world.castles[1].total_gold),
+            before
+        );
+        // ④ CastleMerchant/GetAll 皆 false ⇒ 无税。
+        apply_upgrade_weapon_tax(&mut world, Some(0), false, &shop_cfg);
+        assert_eq!(world.castles[0].total_gold, 1_000);
+        // ⑤ `MasterGuild` **不是**税前置（oracle 税分支不查它）：master_guild=None 仍入账。
+        assert!(world.castles[0].master_guild.is_none());
     }
 }
