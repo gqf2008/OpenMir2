@@ -36,21 +36,41 @@ PASS clean 1：base→clean1 rc=0 且 tree 为 40hex
 PASS clean 1：tree 与 git rev-parse 逐字一致
 PASS clean 2：clean1 vs clean2 两个参照 rc=0
 PASS clean 2：tree 与直接 git merge-tree 逐字一致
+PASS R-4：陈旧 remote-tracking 被后代本地 master 取代
+PASS R-4：输出 master_candidates（两个候选）
+PASS R-4：WARN 说明取后代/忽略陈旧
+PASS R-4：vs_master 用后代本地 master 计算（rc=0、tree 40hex）
+PASS R-4：显式 --master 优先、不自动纠正
 PASS conflict：c1 vs c2 两个参照 rc=1
 PASS conflict：仍输出 tree oid（冲突 tree）
 PASS conflict：两个参照 tree/rc 相同 ⇒ same=yes
-GREEN: merge_tree_helper selftest 7/7
+GREEN: merge_tree_helper selftest 12/12
 ```
 
 覆盖：两 clean 例（ff + 非冲突双分支）+ 一 conflict 例；clean 的 tree 与
 `git rev-parse <head>^{tree}` / 直接 `git merge-tree` 输出逐字一致。
+
+## 2.5 R-4：故障期默认主源不取陈旧 remote-tracking
+
+- 未显式 `--master` 时，候选 = `refs/remotes/walgit/master` / `refs/heads/master` / `master`
+  （按 sha 去重）；取「是其余候选后代」的那一个，并输出 `master_source`、`master_candidates`
+  与 `WARN`（stderr + JSON `warnings`）。分叉时回落本地 `master` 并 WARN。
+- 显式 `--master` **永远优先**，不做自动纠正。
+- 本机实测（walgit 故障期，`refs/remotes/walgit/master=4ae3dc810` 是本地 `master=d36532a7c` 的祖先）：
+  默认取 `refs/heads/master`，`vs_master tree=a1b8116b`（正确）；显式 `--master refs/heads/master`
+  同值。若仍想零歧义：**故障期请显式 `--master master`**。
+- 牙/自测：临时仓库把 remote-tracking 指向祖先、local master 指向后代 ⇒ 断言取后代 + WARN +
+  candidates 两条；显式 `--master` 保持指定值。
 
 ## 3. patch body 模板
 
 ```json
 "merge_tree": {
   "vs_base":   {"tree": "<脚本输出>", "rc": 0},
-  "vs_master": {"tree": "<脚本输出>", "rc": 0}
+  "vs_master": {"tree": "<脚本输出>", "rc": 0},
+  "master_source": "<ref 或 explicit>",
+  "master_candidates": [{"ref": "...", "sha": "..."}],
+  "warnings": []
 }
 ```
 

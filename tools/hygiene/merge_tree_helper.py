@@ -65,12 +65,57 @@ def resolve_commit(repo, rev):
     return proc.stdout.strip()
 
 
-def default_master(repo):
-    for ref in ("refs/remotes/walgit/master", "master"):
+def _is_ancestor(repo, a, b):
+    """a 是 b 的祖先（或相等）⇒ True。"""
+    return _git(repo, "merge-base", "--is-ancestor", a, b, check=False).returncode == 0
+
+
+def resolve_master(repo, explicit=None):
+    """返回 {sha, source, candidates, warnings}。
+
+    故障期（walgit 不可用）`refs/remotes/walgit/master` 可能是**陈旧祖先**。未显式给
+    `--master` 时：取候选里「是其余所有候选后代」的那一个（R-4）；若候选分叉则回落本地
+    `master` 并 WARN。显式 `--master` 永远优先、不做自动纠正。
+    """
+    if explicit:
+        return {"sha": resolve_commit(repo, explicit), "source": "explicit",
+                "candidates": [], "warnings": []}
+    by_sha = {}
+    for ref in ("refs/remotes/walgit/master", "refs/heads/master", "master"):
         proc = _git(repo, "rev-parse", "--verify", ref, check=False)
-        if proc.returncode == 0 and proc.stdout.strip():
-            return proc.stdout.strip()
-    raise HelperError("找不到主源参照（试过 refs/remotes/walgit/master、master；用 --master 指定）")
+        sha = proc.stdout.strip() if proc.returncode == 0 else ""
+        if sha:
+            by_sha.setdefault(sha, ref)
+    if not by_sha:
+        raise HelperError("找不到主源参照（试过 refs/remotes/walgit/master、refs/heads/master、"
+                          "master；用 --master 指定）")
+    candidates = [{"ref": ref, "sha": sha} for sha, ref in by_sha.items()]
+    warnings = []
+    if len(candidates) == 1:
+        chosen = candidates[0]
+    else:
+        descendants = [
+            c for c in candidates
+            if all(d["sha"] == c["sha"] or _is_ancestor(repo, d["sha"], c["sha"])
+                   for d in candidates)
+        ]
+        local = next((c for c in candidates if c["ref"] in ("refs/heads/master", "master")),
+                     candidates[-1])
+        if descendants:
+            chosen = descendants[0]
+            others = [c for c in candidates if c["sha"] != chosen["sha"]]
+            warnings.append(
+                "主源候选不一致：取后代 %s=%s（忽略祖先/陈旧：%s）；故障期建议显式 --master master"
+                % (chosen["ref"], chosen["sha"][:12],
+                   ", ".join("%s=%s" % (c["ref"], c["sha"][:12]) for c in others)))
+        else:
+            chosen = local
+            warnings.append(
+                "主源候选分叉：回落本地 %s=%s；请显式 --master 指定（候选：%s）"
+                % (local["ref"], local["sha"][:12],
+                   ", ".join("%s=%s" % (c["ref"], c["sha"][:12]) for c in candidates)))
+    return {"sha": chosen["sha"], "source": chosen["ref"],
+            "candidates": candidates, "warnings": warnings}
 
 
 def merge_tree(repo, base, head):
@@ -91,7 +136,8 @@ def compute(repo, base_rev, head_rev, master_rev=None):
     repo = os.path.abspath(repo)
     base = resolve_commit(repo, base_rev)
     head = resolve_commit(repo, head_rev)
-    master = resolve_commit(repo, master_rev) if master_rev else default_master(repo)
+    m = resolve_master(repo, master_rev)
+    master = m["sha"]
     vs_base = merge_tree(repo, base, head)
     vs_master = merge_tree(repo, master, head)
     return {
@@ -100,6 +146,9 @@ def compute(repo, base_rev, head_rev, master_rev=None):
         "base": base,
         "head": head,
         "master": master,
+        "master_source": m["source"],
+        "master_candidates": m["candidates"],
+        "warnings": m["warnings"],
         "vs_base": {"tree": vs_base["tree"], "rc": vs_base["rc"]},
         "vs_master": {"tree": vs_master["tree"], "rc": vs_master["rc"]},
         "same": vs_base["tree"] == vs_master["tree"]
@@ -113,6 +162,11 @@ def emit(doc, as_json):
         return
     print("MERGE_TREE base=%s head=%s master=%s" %
           (doc["base"], doc["head"], doc["master"]))
+    print("MERGE_TREE master_source=%s" % doc["master_source"])
+    print("MERGE_TREE master_candidates=%s" %
+          ",".join("%s=%s" % (c["ref"], c["sha"]) for c in doc["master_candidates"]))
+    for w in doc["warnings"]:
+        print("WARN merge_tree_helper: %s" % w, file=sys.stderr)
     print("MERGE_TREE vs_base tree=%s rc=%d" %
           (doc["vs_base"]["tree"], doc["vs_base"]["rc"]))
     print("MERGE_TREE vs_master tree=%s rc=%d" %
@@ -187,6 +241,23 @@ def selftest():
         direct = _git(repo, "merge-tree", "--write-tree", clean1, clean2)
         chk(d2["vs_base"]["tree"] == direct.stdout.splitlines()[0].strip(),
             "clean 2：tree 与直接 git merge-tree 逐字一致")
+
+        # R-4：陈旧 remote-tracking（祖先）vs 本地 master（后代）⇒ 未显式 --master 时取后代 + WARN
+        _git(repo, "update-ref", "refs/remotes/walgit/master", base)
+        _git(repo, "update-ref", "refs/heads/master", clean2)
+        d_stale = compute(repo, base, clean1)
+        chk(d_stale["master"] == clean2,
+            "R-4：陈旧 remote-tracking 被后代本地 master 取代")
+        chk(len(d_stale["master_candidates"]) >= 2,
+            "R-4：输出 master_candidates（两个候选）")
+        chk(any("后代" in w for w in d_stale["warnings"]),
+            "R-4：WARN 说明取后代/忽略陈旧")
+        chk(d_stale["vs_master"]["rc"] == 0
+            and TREE_RE.match(d_stale["vs_master"]["tree"]) is not None,
+            "R-4：vs_master 用后代本地 master 计算（rc=0、tree 40hex）")
+        d_explicit = compute(repo, base, clean1, master_rev=base)
+        chk(d_explicit["master"] == base and d_explicit["master_source"] == "explicit",
+            "R-4：显式 --master 优先、不自动纠正")
 
         d3 = compute(repo, c1, c2, master_rev=c1)
         chk(d3["vs_base"]["rc"] == 1 and d3["vs_master"]["rc"] == 1,
