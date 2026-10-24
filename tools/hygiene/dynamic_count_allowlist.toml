@@ -536,3 +536,37 @@ path = "docs/rewrite-remaining-inventory-20261022.md"
 line_sha256 = "d4de3f8527f29c2e2fd576df7be92a78b571ed3d4067f508f8662f56dc861fe8"
 reason = "复算命令段的逐字输出（B 表审计当次 `walgit collab board --format json` 看板计数）；该段已声明『看板是实时量，复跑以当次输出为准』，行内插戳会让贴出的输出与命令不再逐字可核。该文件是另一张卡的写集，本卡不改。"
 added = "2026-10-24"
+
+# --- 第③轮返工（2026-10-24）：master 合入 af1f2708b（board merged 列）带来实时看板对比表 ---
+# 5 行同属 docs/board-merged-column-20261024.md 的「加列前/加列后」实时看板对比表；
+# 该段已声明两次 board 调用间隔 2.26s 内的逐字实测。该文件是另一张卡的写集，本卡不改它。
+
+[[allow]]
+path = "docs/board-merged-column-20261024.md"
+line_sha256 = "f26ad0413cb66935834315cea5a3d11c857f26cb72b9f8febf63334f83f30729"
+reason = "实时看板对比表（待认领 加列前/加列后）：段内已声明 2.26s 内两次 board 调用的逐字对比；该文件是另一张卡的写集，本卡不改。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/board-merged-column-20261024.md"
+line_sha256 = "dd44c6fbeaeb00ef890789ae9020399377edb056ed55c20f4deff454085c18bd"
+reason = "实时看板对比表（进行中 加列前/加列后）：段内已声明 2.26s 内两次 board 调用的逐字对比；该文件是另一张卡的写集，本卡不改。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/board-merged-column-20261024.md"
+line_sha256 = "37127778cd4d79e8f59ff8e1de0b97afcc5c189f62ef37f5fac62eb55904d7dc"
+reason = "实时看板对比表（待审 加列前/加列后）：段内已声明 2.26s 内两次 board 调用的逐字对比；该文件是另一张卡的写集，本卡不改。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/board-merged-column-20261024.md"
+line_sha256 = "be1da8a14c931eeb73b60b33ca582e398380b18e1dba88e18eaf8480bcaa9812"
+reason = "实时看板对比表（已完成 加列前/加列后）：段内已声明 2.26s 内两次 board 调用的逐字对比；该文件是另一张卡的写集，本卡不改。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/board-merged-column-20261024.md"
+line_sha256 = "9c1889eddb641214115df3e9cae0c7b8ddb829bb28fc8954daccc49c5a7df65e"
+reason = "实时看板对比表的说明句（计数相对 reviewer 复核时 521→532，因看板实时翻动）：段内已声明 2.26s 内两次 board 调用的逐字对比；该文件是另一张卡的写集，本卡不改。"
+added = "2026-10-24"

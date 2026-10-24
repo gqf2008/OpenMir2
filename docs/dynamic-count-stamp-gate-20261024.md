@@ -58,7 +58,8 @@ added = "2026-10-24"
   这条作用域复用骨架的 `allowlist_in_scope()`，不是本门自己再写一遍。
 - 校验同样复用骨架：`load_allowlist(require_added=True)` —— 缺 `path` / `line_sha256` / `reason` / `added`
   四项缺一 ⇒ rc=2，且**由 selftest ⑬–⑰ 钉住**（不只在运行期校验）。
-- 现行 **86 条**（2026-10-24 返工后）。理由按四类写实：文档级快照（头部已声明时点）、逐字机判摘录
+- 现行 **92 条**（2026-10-24 第③轮返工后；R3-2 订正：此处此前写 86，而 §6.2/§10 当时实为 87，本轮再 +5 条
+  `docs/board-merged-column-20261024.md` 的实时看板对比表 ⇒ 92）。理由按四类写实：文档级快照（头部已声明时点）、逐字机判摘录
   （`goal_gate --json` 的 detail）、规则文本（不是现时计数）、历史里程碑叙述。**引述**（`「可跑场景 16」`）
   已由门直接放行，不再占白名单。
 
@@ -440,3 +441,35 @@ rc=0
 补的牙：selftest ⑱ 在临时目录里 `git init`、只 `git add` 一个干净文件，另一未跟踪文件写裸计数，然后
 `scan(..., files=None)`，断言 `files == 1 && findings == []`。改回 `os.walk` ⇒ 会扫到未跟踪文件 ⇒ ⑱ 红
 （见 §5 第 (f) 颗牙）。这是**行为级**断言，不依赖「函数对象同一性」这种实现细节。
+
+## 11. 返工记录 ③（竞态复现：交付后 master 前进两次，合并树再红）
+
+本卡第②轮交付 head `7e27de47a`（base `e9d00c6b3`）之后、复核跑之前，master 又前进两次：
+`af1f2708b`（board merged 列合入，09:58:49）与 `eb9137615`（lessons 合入，10:00:00）。在
+`walgit/master = eb9137615` 上造合并树，本门报 `FAIL (5 缺戳 / 0 rot; 扫描 142 个 markdown)`，
+5 处全在 `docs/board-merged-column-20261024.md`（`:40,41,42,45,49`）—— 该文件是**另一张卡的写集**，
+本卡不改它，按下表登记 allow-list；`stale_pointer_gate` 仍 rc=0。
+
+| 位置 | 新增条目指纹 | 处置 |
+|---|---|---|
+| `docs/board-merged-column-20261024.md:40` | `f26ad041…` | 新增，实时看板对比表（待认领） |
+| `docs/board-merged-column-20261024.md:41` | `dd44c6fb…` | 新增，实时看板对比表（进行中） |
+| `docs/board-merged-column-20261024.md:42` | `37127778…` | 新增，实时看板对比表（待审） |
+| `docs/board-merged-column-20261024.md:45` | `be1da8a1…` | 新增，实时看板对比表（已完成） |
+| `docs/board-merged-column-20261024.md:49` | `9c1889ed…` | 新增，对比表说明句（reviewer 复核时 521→532） |
+
+这 5 行同属该文件的「加列前/加列后」实时对比表，该段已声明两次 board 调用间隔 2.26s 内的逐字实测；
+行内插戳会破坏贴出的输出与命令的逐字可核性。同时按 R3-2 订正 §3 的 allow-list 条数（此前写 86，
+与 §6.2/§10 的 87 自相矛盾；本轮再 +5 ⇒ 92）。
+
+实测（rebase 到 `walgit/master = eb9137615` 后）：
+
+```text
+$ python -I tools/hygiene/dynamic_count_stamp_gate.py
+dynamic-count gate: OK（0 缺戳；扫描 142 个 markdown，path=docs，max-gap=24）
+rc=0
+```
+
+> **结构性观察（供 Leader 判断，不在本卡实现）**：这是本卡第二次因「master 合入新文档 ⇒ 新文档带实时
+> 看板计数 ⇒ 合并树变红 ⇒ 逐条加白名单」返工。可考虑的方向见交付 status body（围栏代码块豁免 / 段级戳自动
+> 匹配 / 维持现状），属另一张卡。
