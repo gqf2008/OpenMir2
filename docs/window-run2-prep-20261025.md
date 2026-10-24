@@ -120,7 +120,7 @@ python -I -B tools/conformance/preflight.py --profile window-magic --with-dry-ru
 
 `run_batch.sh` 在开跑前自动跑这三条；任一步 FAIL ⇒ 不开跑（`--no-preflight` 仅调试，证据须登记）。
 
-### 4.1 `preflight_private_stack.py` 七步
+### 4.1 `preflight_private_stack.py` 八步
 
 | step | 判什么 | FAIL 的典型现象 |
 |---|---|---|
@@ -139,7 +139,7 @@ python -I -B tools/conformance/preflight.py --profile window-magic --with-dry-ru
 ### 4.2 坑 A：SelGate ListenPort（重建期）
 
 - **背景**：C# `SelGate` 源码把 `GatePort = 7100` 写死；owner 2026-10-23 批准的 T-172
-  （`src/SelGate/GateShare.cs:21` 改 `public static int`，`ConfigManager.cs:71` 读
+  （`src/SelGate/GateShare.cs:21` 改 `public static int`，`Conf/ConfigManager.cs:71` 读
   `[SelGate] ListenPort`）让私有栈能起在 17100。**只有 T-172 构建**会读 `ListenPort`。
 - **机判**：`csharp-root/SelGate/config.conf` 的 `ListenPort == 17100`
   **且** `sha256(csharp-root/SelGate/SelGate.exe) == sha256(selgate-build/SelGate.exe)`
