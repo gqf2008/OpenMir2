@@ -8,16 +8,16 @@
 
 ## 0. 摘要
 
-| 项 | 结果（快照 @ `1c605ca4a`） |
+| 项 | 结果（快照 @ `4ae90226b` @ 2026-10-25 06:15:48） |
 |---|---|
-| 今日合并 | **33 笔**（`git log --first-parent --merges --since="2026-10-24 23:40" 1c605ca4a | wc -l` = 33（**终点须钉 `1c605ca4a`**，否则在后续 master 上会得更多）；§1 逐条） |
-| 条件① 脚本派发 | **未判**（本轮 `--skip-tests` 且未跑 parse-stats ⇒ `need_human`；首版快照 `699c26e28` 为 **pass**，106/106） |
-| 条件② R 卡证据 | **need_human** — R 卡 **213** 张（快照 @ `1c605ca4a`）：已完成 12 / `window_required` 145（另未合并 2）/ whitelist 48 / 已裁定 3 / `merged_not_closed` 1 / 未开工或未合并 2；需人工 1 张（唯一 `merged_not_closed` = `openmir2-gm-batch-5b-cross-server`，G11）。**登记型 PASS 194 张（快照 @ `1c605ca4a`） ≠ 已有真机证据** |
-| 条件③ B 类清零 | **pass** — recon tracked=0（快照 @ `1c605ca4a`）（rows 191 条非空、counts 一致） |
-| 条件④ 门禁恒绿 | **need_human** — 门禁 7 项：绿 5 / 红 0 / 需人工 2（未判：`cargo_test_workspace`（本轮跳过）、`master_sync`（walgit 500）） |
+| 今日合并 | **60 笔**（`git log --first-parent --merges --since="2026-10-24 23:40" 1c605ca4a | wc -l` = 60（**终点钉 `4ae90226b`**）；§1 逐条） |
+| 条件① 脚本派发 | **pass**（第三方复核 `docs/four-condition-independent-check-20261025.md` @ `2135f6154`）：目标 106/106、调用 11829、未实现 0 |
+| 条件② R 卡证据 | **need_human**（第三方复核 @ `2135f6154`）：R 卡 **213** 张（快照 @ `2135f6154`） = 已完成 12 / `window_required` **147**（另未合并 2）/ whitelist 48 / 已裁定 3 / `merged_not_closed` **1**（唯一 = `openmir2-gm-batch-5b-cross-server`/G11）/ 未开工或未合并 **0**（注：「另未合并 2」= `window_required_unmerged`，与「未开工或未合并」**不是同一桶**）；**登记型 PASS ≠ 真机证据**；R 桶是**活量**，复算见 §2.4 |
+| 条件③ B 类清零 | **pass**（第三方复核 @ `2135f6154`）：recon `tracked` 桶 0（`implemented 179 / n/a-unreachable 11 / n/a-oracle-noop 1`，rows 191 条非空、counts 一致） |
+| 条件④ 门禁恒绿 | **need_human**（第三方复核 @ `2135f6154`）：7 项 = 金 5 / 红 0 / 需人工 2（`cargo_test_workspace` 未跑、`master_sync` walgit 500）；第三方的 fmt/clippy/msgcodegen/7 项卫生门/`merge_tree_helper --selftest 12/12` 全 rc=0，`cargo test` 引 tester 在 `2eb147e6e` 的分包结论 |
 | 剩余 owner 决策 | G11 裁决 / Q1 窗口 / Q2–Q5 口径 / walgit 恢复（`docs/needs-human-20261025.md` §1–§4） |
 
-## 1. 合并清单（33 笔）
+## 1. 合并清单（60 笔）
 
 | # | merge oid | 时间 (+08) | 卡 | approve oid | tier | 交付要点 |
 |---:|---|---|---|---|---|---|
@@ -55,8 +55,36 @@
 | 31 | `fe14f0603` | 2026-10-25 04:18 | `openmir2-window-run2-castle-list-caliber` | `257c915c` | L | 窗口 kit 口径：比内容不比 mtime / 零触碰停 C# 栈 / preflight 无 mtime 依赖 |
 | 32 | `1379a1833` | 2026-10-25 04:24 | `openmir2-test-writes-real-envir-path` | `1e4ca2af` | L | `Castle/List.txt` 十分钟重写事实定性（非违规）+ 行号三元组 |
 | 33 | `1c605ca4a` | 2026-10-25 04:27 | `openmir2-window-kit-coverage` | `ef4aa9b3` | L | 窗口 kit 覆盖核对（6 卡 W 项可执行性 + P0/P1 缺口） |
+| 34 | `e5016e76b` | 2026-10-25 04:41 | `review/rcard-audit` | `reviewer-21 2790fe80` | L | R 卡登记审计（6/6 落 window_required，弱登记 10 条）（tier=L，approve reviewer-21 2790fe80） |
+| 35 | `02f83a1a2` | 2026-10-25 04:42 | `card/castle-official-door` | `reviewer-20 b5e7bb43` | R | CastleOfficial 门 + 城堡说词变量（$CASTLEWARDATE 0 号城回退+写回 / $CASTLECHANGEDATE）（tier=R，approve reviewer-20 b5e7bb43，wi |
+| 36 | `64fcb3a9d` | 2026-10-25 04:51 | `review/docs-minors-sweep` | `reviewer-21 59a30a9b` | L | 文档 Minor 清扫（runbook 旁注 / kit P1 计数与措辞 / 审计 A-6..A-8）（tier=L，approve reviewer-21 59a30a9b） |
+| 37 | `dc0430eda` | 2026-10-25 05:01 | `card/three-day-report-refresh` | `reviewer-20 383eca29` | L | 三天交付报告刷新（33→36 合并、四条件新快照、窗口前置 P0/P1）（tier=L，approve reviewer-20 383eca29） |
+| 38 | `aa94a89db` | 2026-10-25 05:03 | `openmir2-window-run-2`（`card/window-kit-p0-unblock`） | `reviewer-21 b62f19c6` | L | 窗口 kit P0 解阻（assets 白名单扩 GamePoint + -RngLog/MIR2_RNG_SITE 贯通 + C# 时钟降级登记）（tier=L，approve reviewer-21 b62f19c6 |
+| 39 | `4b9ce64ca` | 2026-10-25 05:06 | `card/script-handler-msgqueue` | `reviewer-21 f9d5f10f` | R | handler 级 MsgQueue 统一（按泵归属分类 / 原子批次 / 发送者先于收件人）（tier=R，approve reviewer-21 f9d5f10f，window_required） |
+| 40 | `709becbb4` | 2026-10-25 05:06 | `card/window-closure-ledger` | `reviewer-21 729ac6f7` | L | 窗口收口台账（按片写合并态 / @back 非目标 / loader W1 部分缺）（tier=L，approve reviewer-21 729ac6f7） |
+| 41 | `cb5b24647` | 2026-10-25 05:06 | `review/walgit-fallback` | `reviewer-21 b1957ab6` | L | walgit 长故障交付兜底（bundle + 补推/恢复计划，未推任何远端）（tier=L，approve reviewer-21 b1957ab6） |
+| 42 | `a62faeb1c` | 2026-10-25 05:08 | `card/castle-official-actions` | `reviewer-20 67ba3049` | R | 城堡动作 switch 构造级实现（open/close/repair/hire + 帧体 Light/Feature 取自展示层）（tier=R，approve reviewer-20 67ba3049，window_ |
+| 43 | `2eb147e6e` | 2026-10-25 05:13 | `openmir2-rcard-audit-time-bound`（`review/rcard-audit-timebound`） | 无 review（Leader 直合） | L | 登记审计 doc 时间边界 + §8 后续变更（解 stale_pointer 红）（tier=L） |
+| 44 | `9944d58f1` | 2026-10-25 05:19 | `card/window-scenes-gamepoint` | `reviewer-21 c8955a50` | L | GAMEPOINT 兑换链探针场景（tier=L，approve reviewer-21 c8955a50） |
+| 45 | `b42a8701d` | 2026-10-25 05:20 | `card/butch-rng-contract-hardening` | `reviewer-21 03e1eee8` | L | Butch RNG 合同加固（硬编码字面量 + 第二 seed + 模数边界，模数错必红）（tier=L，approve reviewer-21 03e1eee8） |
+| 46 | `15ba925dd` | 2026-10-25 05:24 | `card/delivery-acceptance-runbook` | `reviewer-21 eeffd607` | L | 交付验收 runbook（walgit 恢复 + owner 开窗两路径可执行清单）（tier=L，approve reviewer-21 eeffd607） |
+| 47 | `700d1f701` | 2026-10-25 05:25 | `card/window-scenes-clearmapmon` | `reviewer-20 437531d9` | L | CLEARMAPMON T118(blocked)/Q001 探针场景 + 破坏性副作用约束（tier=L，approve reviewer-20 437531d9） |
+| 48 | `e872fb83c` | 2026-10-25 05:27 | `card/delivery-runbook-crosscheck-fix` | `reviewer-21 27e11293` | L | 交付 runbook 交叉比对修正（B1 起栈口径/§7.4 引用/B6 词表/B2-B3 动态条数）（tier=L，approve reviewer-21 27e11293） |
+| 49 | `97eb5365d` | 2026-10-25 05:28 | `card/probe-assets-whitelist` | `reviewer-21 f3e38755` | L | 探针资产白名单与 card_window 单源同步（GamePoint）+ gamepoint 场景写回 assets（tier=L，approve reviewer-21 f3e38755） |
+| 50 | `2135f6154` | 2026-10-25 05:30 | `card/runbatch-scenario-count` | `reviewer-20 57525821` | L | 窗口批次场景数断言去硬编码（run_batch + preflight 双处）（tier=L，approve reviewer-20 57525821） |
+| 51 | `788c2db1f` | 2026-10-25 05:35 | `card/window-closure-ledger-refresh` | `reviewer-21 55438a08` | L | 台账补录 castle-official / castle-official-actions / msgqueue 三张 R 卡（tier=L，approve reviewer-21 55438a08） |
+| 52 | `d7c2d33b9` | 2026-10-25 05:40 | `card/window-scenes-drop-butchi` | `reviewer-21 8712625e` | L | W-DG-1 dropgold 场景 + W-DG-2 butch(blocked)（tier=L，approve reviewer-21 8712625e） |
+| 53 | `14ec2e943` | 2026-10-25 05:47 | `review/four-condition-check` | `reviewer-21 c70568b1` | L | 四条件第三方独立复核（A/B/C/D 四条不一致 + 台账行号基线漂移定性）（tier=L，approve reviewer-21 c70568b1） |
+| 54 | `7b8a86810` | 2026-10-25 05:55 | `card/probe-conditional-dlg-select` | `0e6452a4` | L | probe DSL dlg_select_any + repeat（候选顺序/不吞子步失败）（tier=L，approve reviewer-20 复验） |
+| 55 | `9a026591a` | 2026-10-25 05:57 | `card/window-exec-sheet` | `81f09bfb` | L | 开窗执行单（前置/分轮次表/不可跑清单/收窗回填/红线）（tier=L，approve reviewer-20） |
+| 56 | `b06040264` | 2026-10-25 05:57 | `card/ledger-line-baseline-resync` | `b2cbddda` | L | 台账行号基线重钉（229 处；--strict-lines 转 rc=0）（tier=L，approve reviewer-20） |
+| 57 | `15dbbe843` | 2026-10-25 05:58 | `card/window-csharp-rng` | `reviewer-21 49bc85f4` | L | 窗口 C# 栈 RNG 接线（仓库版 start-csharp.ps1 + hook/seed + 账本 site）（tier=L，approve reviewer-21 49bc85f4） |
+| 58 | `8542dbbaa` | 2026-10-25 06:05 | `card/probe-dlg-doc-timebound` | `reviewer-20 32bdbcd7` | L | DLG 裁决段加时点边界（解 stale_pointer 红）（tier=L，approve reviewer-20 32bdbcd7） |
+| 59 | `2848f213a` | 2026-10-25 06:05 | `card/walgit-entry-parent-validation` | `5d89759b` | L | walgit entry --parent 零校验缺陷记录（孤儿 parent 三视图隐形）（tier=L，approve reviewer-20） |
+| 60 | `4ae90226b` | 2026-10-25 06:08 | `card/probe-newchr-step` | `reviewer-20 85254c81` | L | probe newchr 步（CM_NEWCHR=101）+ first_pack 取 SM_NEWMAP(51)（tier=L，approve reviewer-20 85254c81） |
 
 > 取数（刷新后固定窗口）：`git log --first-parent --merges --since="2026-10-24 23:40" 1c605ca4a --format="%h|%ci|%s" | wc -l` ⇒ **33**（**终点 `1c605ca4a` 必带**：不带终点在后续 master 上会得 35 等新值）；
+> 卡 id 列：看板 `branch` 字段能映射到的已回填为「卡 id（分支名）」（#34 = `openmir2-rcard-audit-time-bound`）；**其余 #35–#60 与 #5 暂仍显示合并时的分支名**——这些卡的 `branch` 在看板上已被 `master` 覆盖，无法用一次映射批量回填，回线程时按分支名搜（`review/*` 为评审分支直合）。**登记为已知待办**（补齐后本表即为权威序号表）。
 > 编号按**时间升序实测**（#26 起 8 笔为刷新新增）。其中 R 级 **6 笔**（`99156c2c6` 商税 / `9a7b8c798` loader-fields / `bff927e11` T-142 / `f08496192` CLEARMAPMON / `263e77d7e` T-127 / `a3bf5340f` inbound RNG）合并后保持 `in-progress` 等真机窗口。
 
 ## 2. 四条件机判快照（刷新：`1c605ca4a`）
@@ -126,6 +154,19 @@ python -I -c "import json,os;d=json.load(open(os.path.join(os.environ['TEMP'],'g
 ⇒ **开窗前的动作**归属卡 `openmir2-window-kit-p0-unblock`（branch `card/window-kit-p0-unblock`，head `30c6de6f1`，**未合并**）；
 P0 三条未清前，即使 owner 给出独占窗口，W-PD-1 / W-DG / W-TAX-4 / W-T127-2 仍**跑不出判据**。
 
+## 2.6 窗口就绪度（2026-10-25 收口）
+
+| 能力 | 落地 commit | 现状 |
+|---|---|---|
+| C# 栈 RNG 接线（`start-csharp.ps1` + hook/seed + 账本 site） | `15dbbe843` | **已接**；`butch_two_draws`/`t118` 的 RNG 侧解封条件之一已满足（仍差尸体夹具 / DSL 已由 `7b8a86810` 解） |
+| 批次场景数去硬编码 | `2135f6154` | **已去硬编码**：`run_batch` 与 `preflight` 双处按实况，`--list` 现 **21 条（blocked 1 ⇒ 入批 20）** |
+| probe DSL 条件选择/循环（`dlg_select_any` + `repeat`） | `7b8a86810`（含 `c012cb667`） | **已有**；`clearmapmon_t118` 已改成确定性重试（其 run3 注册与解封另行处置） |
+| probe `newchr` 步 + `first_pack`（`CM_NEWCHR=101` / `SM_NEWMAP(51)`） | `4ae90226b` | **已落地**（`login_newchar` 场景可用；真机建号仍受**账号上限 2** 限制，见 §6） |
+| 台账行号基线重钉（229 处，`--strict-lines` rc=0） | `b06040264` | **已回绿** |
+| 开窗当天操作单 | `9a026591a`（`docs/window-exec-sheet-20261025.md`） | **已合并**：前置检查 / 分轮次表 / 不可跑清单 / 收窗回填 / 红线 |
+
+> 窗口执行以 `docs/window-exec-sheet-20261025.md` 为准（本报告只给全局口径与数字）。
+
 ## 3. 剩余缺口总表
 
 | # | 类别 | 项 | 状态 / 证据 | 需要谁 |
@@ -151,7 +192,12 @@ P0 三条未清前，即使 owner 给出独占窗口，W-PD-1 / W-DG / W-TAX-4 /
 
 ## 4. walgit 恢复后的补推清单（刷新：`1c605ca4a`）
 
-- 最后已知 walgit master：`4ae3dc810`（2026-10-24 23:51）；本地 master：`1c605ca4a`；
+- 最后已知 walgit master：`4ae3dc810`（2026-10-24 23:51）；本次刷新时本地 master：`4ae90226b`；
+  `git rev-list --count refs/remotes/walgit/master..master` ⇒ **147**（**活量**，补推前重数）；
+  本地 `card/*` 分支 **16** 条、`refs/collab/inbox` **9603** 条（同为活量）。
+  bundle（两份，均不入库）：
+  - `E:/tmp/openmir2-fallback/openmir2-20261025.bundle`：`sha256 = 24d39daccb5051c077ac8e8accc83a6b2a8278f6ce272462c91b51d04306e927`（快照 @ `dc0430eda`）。
+  - `E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle`：`sha256 = 34f65797…` / **167,098,305 字节** / **11,610 refs**（快照 @ `2135f6154`）；**目前只登记在卡 comment `8e3b0286`，`docs/walgit-outage-fallback-20261025.md` 尚未更新**（该文档补录归 Leader）。
   `git rev-list --count refs/remotes/walgit/master..master` ⇒ **91**（截至 `02f83a1a2`；活量，补推前重数）。
   镜像侧同理：`git rev-list --count origin/master..master` ⇒ **21**（截至同一时点，活量）。
 - 本地 `refs/heads/card` 共 **7** 条（`git for-each-ref refs/heads/card`）：
@@ -209,3 +255,5 @@ git for-each-ref refs/collab/inbox | wc -l   # 推送后与本地一致
   `openmir2-castle-official-design`（R，返工 2 在 reviewer-20 手里，head `edf2d5107`）。
 - **口径澄清**：`@back` 字面在部署不存在（只有 `@back2`）⇒ W-PD-2 转构造级/非目标；
   `Castle/List.txt` 每 600s 重写是运行中 C# `GameSrv` 的周期 Save（**非违规**，只比内容不比 mtime）。
+- **blocked 场景（窗口首轮不可跑，解封条件已写死）**：`butch_two_draws`（run3 #21，缺「单只固定动物尸体」夹具；RNG 侧已由 `15dbbe843` 接好）、`clearmapmon_t118`（不在 run3；DSL 已由 `7b8a86810` 解，余同 seed 验证 + 每次恢复夹具）。详见 `docs/window-exec-sheet-20261025.md` §③。
+- **`login_newchar` 的真机限制**：新建角色路径已由 `4ae90226b` 的 `newchr` 步覆盖，但窗口**账号最多建 2 个角色**（部署账号池约束）⇒ 反复跑需先清角色或用多账号，属执行注意项，不是实现缺口。
