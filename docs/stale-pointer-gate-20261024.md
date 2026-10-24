@@ -366,7 +366,12 @@ python -I tools/hygiene/stale_pointer_gate.py --allowlist /e/tmp/rot.toml
       这种只能人工核：对每条 `INFO snapshot-exempt` 看声明时点与文件名/正文日期是否自洽、
       正文断言的事实是否真在该时点成立。注意「声明行早于命中行」在文件顺序上恒真（(c) 已保证），
       **不能**当作防伪证据。
-    - blame 取不到（工作树里改了声明行还没提交）⇒ 不豁免（fail-closed）；合并前的门要在**干净工作树**上跑。
+    - **blame 不可用一律不豁免（fail-closed），并按具体原因打 NOTE**：行未提交（`git blame` 的 commit 全 0 /
+      输出含 `Not Committed Yet`，2026-10-24 实测**已 stage 未 commit** 就走这一支——卡
+      `openmir2-stale-pointer-blame-failclosed`，selftest ㉛ 钉住）、文件不在历史里、解析不出
+      author/committer 时间。**「合并前在干净工作树上跑」不再是唯一防线**：即使工作树有未提交的声明行，
+      现在也会由机制兜底判红，而不是靠操作纪律。
+    - 盘点统计口径：`snapshot-exempt` 按**行**计数，汇总行写作 `snapshot-exempt line(s)`（与逐行 INFO 一致）。
 17. **账本存在但过期**：卡号存在性依赖 `refs/collab/*` 与 board 投影。账本**读得到但落后**
     （新卡还没 fetch）时，真卡号会被当成「非卡号」⇒ INFO 放行。自动判不出来（这就是要求
     「读不到 ⇒ rc=2」的原因）；`INFO 非账本卡号` 行也要人看一眼。
