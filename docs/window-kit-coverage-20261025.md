@@ -40,13 +40,13 @@
 | W 项 | kit 资产 | 状态 | 缺什么 / 手工步骤 |
 |---|---|---|---|
 | W-LF-1 出生点 11 键与落点 | `login_only` 用**既有角色**（基线 restore），不触发新建角色出生点 | **部分/缺** | 缺 `CM_NEWCHR` 驱动。手工：窗口内用客户端建新角色（三种职业各一）进图，记首包地图/坐标/朝向；或新提案：给 probe 加 `newchr` 步骤（`CM_NEWCHR=101` 已在协议表） |
-| W-LF-2 5 新列消费 | 无消费点（卡面自述：`MakeSafePkZone`/`InSafeZone` 属后续片） | **构造级**（非窗口） | 构造测试已覆盖解析/回落/RNG（`mir2-rs/bins/game-svr/src/homemap.rs` 的 `#[test]` 组）；窗口不列 |
+| W-LF-2 5 新列消费 | 无消费点（卡面自述：`MakeSafePkZone`/`InSafeZone` 属后续片） | **构造级**（非窗口） | 构造测试已覆盖解析/回落/RNG（`mir2-rs/bins/game-svr/src/homemap.rs` 的 `#[test]` 组）；窗口不列；**将来具备消费点条件时重开窗口项** |
 
 ### 1.3 playdice T-142 `bff927e11`（W-PD-1..2）
 
 | W 项 | kit 资产 | 状态 | 缺什么 / 手工步骤 |
 |---|---|---|---|
-| W-PD-1 GAMEPOINT 落库 + 5008 | 无场景点 `真爱-G002`；`dice_chain` 点的是赌场 `赌场-B013`（`@kaiz/@ya5/@ya52`，不含 GAMEPOINT） | **缺** | 部署可达链：`真爱-G002` `[@main]` → `@yhua` → `@9hua`（`GAMEPOINT - 9`，前置 `CHECKGAMEPOINT > 8`；`Market_Def/功能NPC/真爱-G002.txt` 第 100/520 行段）。新场景提案：`gamepoint_exchange`（placement 到 `Merchant.txt:127` 的 G002/49,49 邻格；两步 `dlg_select @yhua → @9hua`；等 5008/643；DB 比 `characters.GamePoint`）。**阻塞**：`assets` 白名单只有 `Gold` ⇒ 前置 `GamePoint≥9` 无声明通道，需扩白名单（L 卡）或手工 DB 预置 |
+| W-PD-1 GAMEPOINT 落库 + 5008 | 无场景点 `真爱-G002`；`dice_chain` 点的是赌场 `赌场-B013`（`@kaiz/@ya5/@ya52`，不含 GAMEPOINT） | **缺** | 部署可达链：`真爱-G002` `[@main]` → `@yhua` → `@9hua`（`GAMEPOINT - 9`，前置 `CHECKGAMEPOINT > 8`；`Market_Def/功能NPC/真爱-G002.txt` 第 105/520 行段）。新场景提案：`gamepoint_exchange`（placement 到 `Merchant.txt:127` 的 G002/49,49 邻格；两步 `dlg_select @yhua → @9hua`；等 5008/643；DB 比 `characters.GamePoint`）。**阻塞**：`assets` 白名单只有 `Gold` ⇒ 前置 `GamePoint≥9` 无声明通道，需扩白名单（L 卡）或手工 DB 预置 |
 | W-PD-2 `@back` 排水 | `npc_script_chain` 明确**不用 `@back`**（部署件无 `@back`，只有 `@back2`；见 `docs/npc-script-chain-scenario-20261023.md:64`） | **缺（按字面不可执行）** | 部署件 grep `@back>` = 0 命中；`真爱-G002`/`真爱666-G002` 只有 `@back2`（`[@back2]` 做 `mapmove`）。**需 dev 澄清**：W-PD-2 是否指 `@back2`；若指字面 `@back` 则为非目标/构造级 |
 
 ### 1.4 CLEARMAPMON `f08496192`（W-CM-1..4）
@@ -55,11 +55,11 @@
 |---|---|---|---|
 | W-CM-1 T118 | 无场景；部署触发点存在：`Market_Def/任务NPC/武士-0114.txt` `[@rw03]` → `CLEARMAPMON T118` + `MONGENEX T118 14 17 命运教主 2 1 1` | **部分** | 手工：`gate_shadow_proxy` 模板（`--map 7101=127.0.0.1:7100 --gate sel --direction s2c`）+ 客户端走到该 NPC 选到 `@rw03`；新场景提案：`clearmapmon_t118`（多步 `dlg_select`，仿 `npc_script_chain`） |
 | W-CM-2 Q001 | 触发点：`Market_Def/任务NPC/老人-1.txt` `[@rw02]` → `CLEARMAPMON Q001` + `MONGENEX Q001 10 10 骷髅精灵5 2 1 1` | **部分** | 同上；新场景提案：`clearmapmon_q001` |
-| W-CM-3 RNG 流水位置 | 窗口私栈未接 `-RngLog` | **缺（接线）** | 若部署出现「MONGENEX 后还有抽数动作」才可观测；当前 T118/Q001 不可观测 ⇒ 登记为观察项，不作关卡硬判据 |
+| W-CM-3 RNG 流水位置 | 窗口私栈未接 `-RngLog` | **缺（接线）** | 若部署出现「MONGENEX 后还有抽数动作」才可观测；当前 T118/Q001 不可观测 ⇒ 登记为观察项，不作关卡硬判据；**将来具备条件时（`-RngLog` 接线 + 部署出现「MONGENEX 后仍有抽数」脚本）重开为窗口项** |
 | W-CM-4 失败门/切图序/Invisible | 构造级 | **构造级** | 已有单测；真机只在「落点与刷怪点重合」时才有差异，窗口不单独设步 |
 
-> **不得假设 `cleared` 字段**：本库只在行会清槽日志里出现 `cleared` 字样（`lib.rs` 的 `guild` 清槽），
-> 与 CLEARMAPMON 无关；CLEARMAPMON 的关卡证据必须是**实体集合/AOI 差集 + `SM_DISAPPEAR(30)` 帧序 + 刷怪位置/数量**，
+> **不得假设 `cleared` 字段**：本库出现 `cleared` 字样的地方还有行会清槽日志（`lib.rs` 的 `guild` 清槽）
+> 与 `crates/world` 的魔法/怪物 AI 同名局部量（`magic_effect.rs` 的 `target_creature_cleared`、`monai.rs` 的 `cleared_target`），均与 CLEARMAPMON 无关；CLEARMAPMON 的关卡证据必须是**实体集合/AOI 差集 + `SM_DISAPPEAR(30)` 帧序 + 刷怪位置/数量**，
 > 不能读某个 `cleared` 标志。
 
 ### 1.5 T-127 `263e77d7e`（W-T127-1..5）
@@ -90,6 +90,7 @@
 | P1 | 无 `CM_NEWCHR` 驱动 | W-LF-1 | probe 加 `newchr` 步骤（协议常量已有）或窗口手工建号 |
 | P1 | 无 GAMEPOINT 场景 | W-PD-1 | 新场景 `gamepoint_exchange`（`真爱-G002` `@yhua→@9hua`） |
 | P1 | `@back` 字面不存在 | W-PD-2 | dev 澄清是否指 `@back2`；否则转构造级/非目标 |
+| P1 | 无多会话/观察者探针（`card_window` 每侧只起一条 probe） | W-T127-3（N1 观察者丢弃） | 双客户端手工，或 `run_pair.ps1` 两假人 + 自定义帧判据 |
 | P2 | 无 CLEARMAPMON 场景 | W-CM-1/2 | 新场景 `clearmapmon_t118/q001`（触发点已定位） |
 | P2 | 无 drop/butch 场景 | W-DG-1/2 | 新场景 `dropgold_zero_draw` + `butch_two_draws`（依赖单怪夹具） |
 
