@@ -49,6 +49,15 @@
      帧 rc 0；牙：删 600 规则 ⇒ rc 2 UNCLASSIFIED(ident=600)、改坏 body 一字节 ⇒ rc 1 且
      定位 offset=0、改坏 recog ⇒ rc 1（证明全局 recog 掩码没吞掉 MakeIndex）。头部形态锚
      ground-probe 真机向量 mir2-rs/tests/parity/m3/fixtures/ground_vectors.json。
+     夹具现含 600+601 两帧（601 见下条）。
+ 17. ident=601（SM_DROPITEM_FAIL）规则卡（openmir2-compare-ident601-registration）：
+     600 同 send 点的失败支（PlayObject.Message.cs:808），同范式 action=compare 全字节比 +
+     head_compare:["recog"]（Recog=MakeIndex）。冻结夹具 dropitem_ack/ 新增 601 case
+     （真机向量 drop_fail_item_id_zero 的 request make_index=51/name="ring"，body=EDCode(ring)），
+     两侧 601 帧 rc 0、compared=2；牙：删 601 规则 ⇒ rc 2 UNCLASSIFIED(ident=601，600 不被
+     连带)、改坏 body 一字节 ⇒ rc 1 定位 offset=0/oracle 0x72 vs rust 0x73、改坏 recog ⇒
+     rc 1 field=recog oracle=51/rust=52；600 的牙改为在含两帧的完整夹具上做，变异不牵连
+     另一 ident。
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
 """
@@ -2070,20 +2079,58 @@ class Selftest(object):
     # ------------------------------------------------------------------
     # 批次 7（卡 openmir2-compare-ident600-registration，tier=L）：ident 600 =
     # SM_DROPITEM_SUCCESS 入规则表（action=compare 全字节比 + head_compare recog）。
-    # 冻结输入 tools/conformance/fixtures/dropitem_ack/ 是**构造等价夹具**
-    # （pickup_item 的 600 等待帧；window-run-2 未跑到 pickup）；头部布局由
-    # ground-probe 真机向量 ground_vectors.json 的 drop_ok_control_price 锚定。
+    # 批次 8（卡 openmir2-compare-ident601-registration，tier=L）：ident 601 =
+    # SM_DROPITEM_FAIL（同一条 case CM_DROPITEM 的失败支，:808）同范式登记。
+    # 冻结输入 tools/conformance/fixtures/dropitem_ack/ 是**构造等价夹具**：
+    # 600 = pickup_item 的 600 等待帧（window-run-2 未跑到 pickup），头部形态由
+    # ground-probe 真机向量 drop_ok_control_price 锚定；601 = 真机向量
+    # drop_fail_item_id_zero 的请求参数（make_index=51 / name="ring"）与头部形态复刻，
+    # body 按 EDCode 算法由 request.name 推出。
     # ------------------------------------------------------------------
     #: EDCode(GBK("木剑")) = 6B：明文 c4bebda3 → 线缆 54424d443f3f。
     FIXTURE_600_BODY_HEX = "54424d443f3f"
     FIXTURE_600_BODY_SHA = (
         "e8c33c3d97209b6302fde94d6a4987e728b83bcc509096071dbb86067460d746")
+    #: EDCode(GBK("ring")) = 6B：明文 72696e67 → 线缆 726d3e796f3e。
+    FIXTURE_601_BODY_HEX = "726d3e796f3e"
+    FIXTURE_601_BODY_SHA = (
+        "9500c41cd99da38613aa6c516f404cc2fb09191b2c4c13c41b91a7d1c227d1eb")
 
-    def _fixture_600_frames(self, side):
+    def _fixture_frames(self, side):
         path = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
                             "dropitem_ack", side, "frames.ndjson")
         with open(path, "r", encoding="utf-8") as f:
             return [json.loads(ln) for ln in f if ln.strip()]
+
+    def _fixture_ident_frames(self, side, ident):
+        return [r for r in self._fixture_frames(side) if r.get("ident") == ident]
+
+    def _fixture_600_frames(self, side):
+        return self._fixture_ident_frames(side, 600)
+
+    def _fixture_601_frames(self, side):
+        return self._fixture_ident_frames(side, 601)
+
+    def _mutate_rust_fixture(self, ident, mutate):
+        """取 rust 侧**整份夹具**（600+601），只改指定 ident 的那一行。
+
+        牙必须在含两帧的完整夹具上做：若只写单帧，对侧多一帧会被判成缺帧，
+        「改坏必红」的红就不再指向被改的那一处。
+        """
+        rows = json.loads(json.dumps(self._fixture_frames("rust")))
+        targets = [r for r in rows if r.get("ident") == ident]
+        assert len(targets) == 1, (ident, len(targets))
+        mutate(targets[0])
+        return rows
+
+    def _ground_vector(self, name):
+        gv_path = os.path.join(self.api.REPO_ROOT, "mir2-rs", "tests", "parity", "m3",
+                               "fixtures", "ground_vectors.json")
+        if not os.path.exists(gv_path):
+            return None
+        with open(gv_path, "r", encoding="utf-8") as f:
+            gv = json.load(f)
+        return {c.get("name"): c for c in (gv or {}).get("cases", [])}.get(name)
 
     def t_dropitem_ack(self):
         fix = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
@@ -2113,17 +2160,10 @@ class Selftest(object):
         # ② oracle 真机向量锚（ground-probe 实测）：600 的头部形态 = ident 600 /
         #   recog=MakeIndex / param=tag=series=0；同 send 点的 601 同形。
         #   本断言把「构造夹具」与真实 oracle 产物绑在一起——向量漂移则本断言红。
-        gv_path = os.path.join(self.api.REPO_ROOT, "mir2-rs", "tests", "parity", "m3",
-                               "fixtures", "ground_vectors.json")
-        gv = None
-        if os.path.exists(gv_path):
-            with open(gv_path, "r", encoding="utf-8") as f:
-                gv = json.load(f)
-        cases = {c.get("name"): c for c in (gv or {}).get("cases", [])}
-        ok_head = cases.get("drop_ok_control_price", {}).get("expect", {})
-        ok_v = ok_head.get("immediate_frames")
-        fl_v = cases.get("drop_fail_item_id_zero", {}).get("expect", {}) \
-            .get("immediate_frames")
+        ok_case = self._ground_vector("drop_ok_control_price")
+        fl_case = self._ground_vector("drop_fail_item_id_zero")
+        ok_v = (ok_case or {}).get("expect", {}).get("immediate_frames")
+        fl_v = (fl_case or {}).get("expect", {}).get("immediate_frames")
         self.check("600 ② 头部形态锚 ground-probe 真机向量：drop_ok_control_price ⇒ "
                    "[{600,recog=MakeIndex,0,0,0}]，drop_fail_item_id_zero ⇒ 601 同形",
                    ok_v == [{"ident": 600, "recog": 52, "param": 0, "tag": 0,
@@ -2146,65 +2186,185 @@ class Selftest(object):
                    and not rule600.get("head_mask")
                    and not rule600.get("ranges"), rule600)
 
-        # ④ 冻结夹具比较：600 从 UNCLASSIFIED 转为已比 ⇒ rc 0、compared=1、
-        #   0 diff / 0 undecidable / 0 unclassified。
+        # ④ 冻结夹具比较：600 从 UNCLASSIFIED 转为已比 ⇒ rc 0、compared=2
+        #   （600+601 两帧）、0 diff / 0 undecidable / 0 unclassified。
         rc, rep = self.compare(fo, fr)
         cov = (rep or {}).get("coverage", {}) or {}
         frames = (rep or {}).get("frames", {}) or {}
-        self.check("600 ④ 冻结夹具 ⇒ rc 0 且 600 已比（compared=1，0 diff/undecidable/"
+        ident_rules = cov.get("ident_rules") or []
+        self.check("600 ④ 冻结夹具 ⇒ rc 0 且 600 已比（compared=2，0 diff/undecidable/"
                    "unclassified；coverage 里 600 action=compare）",
-                   rc == 0 and frames.get("compared") == 1
+                   rc == 0 and frames.get("compared") == 2
                    and not ((rep or {}).get("diffs") or [])
                    and not ((rep or {}).get("undecidable") or [])
                    and not (cov.get("unclassified_idents") or [])
                    and any(x.get("ident") == 600 and x.get("action") == "compare"
-                           for x in cov.get("ident_rules") or []),
+                           for x in ident_rules),
                    (rc, frames, (rep or {}).get("diffs"),
                     (rep or {}).get("undecidable"), cov.get("unclassified_idents")))
 
         # ⑤ 牙A（删规则）：无 600 条目 ⇒ 整轮 rc 2 UNDECIDABLE
-        #   （unclassified_ident ident=600 复现）。临时规则文件，不碰库内 rules.json。
+        #   （unclassified_ident 只有 ident=600；601 已登记、不得被连带判）。
         no600 = json.loads(json.dumps(self.builtin_rules))
         no600["rules"] = [r for r in no600["rules"] if r.get("ident") != 600]
         no600_path = self.rules_file("rules-no-600.json", no600)
         rc, rep = self.compare(fo, fr, ["--rules", no600_path])
+        uc600 = [u for u in (rep or {}).get("undecidable") or []
+                 if u.get("kind") == "unclassified_ident"]
         self.check("600 ⑤ 牙A：删 600 规则 ⇒ rc 2（UNDECIDABLE，unclassified_ident "
-                   "ident=600 复现）",
-                   rc == 2 and any(u.get("kind") == "unclassified_ident"
-                                   and u.get("ident") == 600
-                                   for u in (rep or {}).get("undecidable") or []),
+                   "ident=600 复现；601 仍已比，不被连带）",
+                   rc == 2 and [u.get("ident") for u in uc600] == [600]
+                   and not ((rep or {}).get("diffs") or []),
                    (rc, (rep or {}).get("undecidable")))
 
-        # ⑥ 牙B（改坏 body 一字节）：rust 侧首字节 0x54→0x55，sha256 同步重算
+        # ⑥ 牙B（改坏 body 一字节）：rust 侧 600 帧首字节 0x54→0x55，sha256 同步重算
         #   ⇒ rc 1，diff 精确到 ident=600 / kind=body / offset=0 / 0x54 vs 0x55。
-        rows = self._fixture_600_frames("rust")
-        bad = json.loads(json.dumps(rows))
-        wire = bytearray.fromhex(bad[0]["body_hex"])
-        wire[0] ^= 0x01
-        bad[0]["body_hex"] = bytes(wire).hex()
-        bad[0]["body_sha256"] = _sha(bytes(wire))
-        bad_d = self.write_run("t600-badbody-r", bad)
+        def flip600(rec):
+            wire = bytearray.fromhex(rec["body_hex"])
+            wire[0] ^= 0x01
+            rec["body_hex"] = bytes(wire).hex()
+            rec["body_sha256"] = _sha(bytes(wire))
+            rec["body_len"] = len(wire)
+        bad_d = self.write_run("t600-badbody-r", self._mutate_rust_fixture(600, flip600))
         rc, rep = self.compare(fo, bad_d)
-        bd = [d for d in (rep or {}).get("diffs") or [] if d.get("ident") == 600]
+        all_d = (rep or {}).get("diffs") or []
+        bd = [d for d in all_d if d.get("ident") == 600]
         self.check("600 ⑥ 牙B：改坏 600 body 一字节 ⇒ rc 1 且定位 "
-                   "kind=body/offset=0/oracle 0x54 vs rust 0x55",
-                   rc == 1 and len(bd) == 1
+                   "kind=body/offset=0/oracle 0x54 vs rust 0x55（601 不受牵连）",
+                   rc == 1 and len(all_d) == 1 and len(bd) == 1
                    and bd[0].get("kind") == "body" and bd[0].get("offset") == 0
                    and bd[0].get("oracle_byte") == 0x54
                    and bd[0].get("rust_byte") == 0x55, (rc, bd))
 
         # ⑦ 牙C（recog 取回）：rust 侧 recog 5001→5002 ⇒ 必须 rc 1 field=recog。
         #   若 head_compare 失效，全局 recog 掩码会把该差异静默吞掉（rc 0）⇒ 本断言红。
-        bad2 = json.loads(json.dumps(rows))
-        bad2[0]["recog"] = 5002
-        bad2_d = self.write_run("t600-badrecog-r", bad2)
+        def recog600(rec):
+            rec["recog"] = 5002
+        bad2_d = self.write_run("t600-badrecog-r",
+                                self._mutate_rust_fixture(600, recog600))
         rc, rep = self.compare(fo, bad2_d)
-        hd = [d for d in (rep or {}).get("diffs") or [] if d.get("ident") == 600]
+        all_d = (rep or {}).get("diffs") or []
+        hd = [d for d in all_d if d.get("ident") == 600]
         self.check("600 ⑦ 牙C：改坏 recog(MakeIndex) ⇒ rc 1 且 field=recog"
                    "（head_compare 生效，全局 recog 掩码不吞语义字段）",
-                   rc == 1 and len(hd) == 1 and hd[0].get("field") == "recog"
+                   rc == 1 and len(all_d) == 1 and len(hd) == 1
+                   and hd[0].get("field") == "recog"
                    and hd[0].get("oracle") == 5001 and hd[0].get("rust") == 5002,
                    (rc, hd))
+
+        # ================= ident 601 = SM_DROPITEM_FAIL（批次 8） =================
+        # ⑧ 夹具：601 case 在库、两侧一致，头部/body 与真机向量的请求参数对齐。
+        ok601 = True
+        for side in ("csharp", "rust"):
+            rows = self._fixture_601_frames(side)
+            ok601 = ok601 and len(rows) == 1
+            if len(rows) != 1:
+                continue
+            r = rows[0]
+            ok601 = ok601 and (
+                r.get("ident") == 601 and r.get("recog") == 51
+                and r.get("param") == 0 and r.get("tag") == 0 and r.get("series") == 0
+                and r.get("body_len") == 6
+                and r.get("body_hex") == self.FIXTURE_601_BODY_HEX
+                and r.get("body_sha256") == self.FIXTURE_601_BODY_SHA
+                and r.get("body_text") == "ring"
+                and r.get("raw_len") == 17 + 6 + 1
+                and r.get("frame_class") == "protocol")
+        self.check("601 ① 冻结夹具在库：两侧各 1 帧，头部 ident=601/recog=51(MakeIndex)/"
+                   "param=tag=series=0、body=EDCode(GBK(ring))=726d3e796f3e 且 sha256 钉死",
+                   ok601, (fo, fr))
+
+        # ⑨ 向量绑定：601 夹具的 recog 来自真机向量 drop_fail_item_id_zero 的请求
+        #   make_index（51），头部逐字段等于向量 immediate_frames 的唯一一帧。
+        req = (fl_case or {}).get("request")
+        self.check("601 ② 夹具锚真机向量：drop_fail_item_id_zero.request={make_index:51,"
+                   "name:'ring'}，immediate_frames=[{601,recog=51,0,0,0}]，与夹具 "
+                   "recog=51/body=EDCode(ring) 对齐",
+                   req == {"make_index": 51, "name": "ring"}
+                   and fl_v == [{"ident": 601, "recog": 51, "param": 0, "tag": 0,
+                                 "series": 0}]
+                   and [r.get("recog") for r in self._fixture_601_frames("csharp")]
+                   == [51], (req, fl_v))
+
+        # ⑩ 规则表登记：601 = action=compare 全字节比 + head_compare=["recog"]。
+        rule601 = None
+        for r in self.builtin_rules.get("rules", []):
+            if r.get("ident") == 601:
+                rule601 = r
+                break
+        self.check("601 ③ 规则表：action=compare 全字节比 + head_compare=[recog]"
+                   "（不 ignore、不掩码、无 ranges；recog=MakeIndex 必须取回比较）",
+                   bool(rule601) and rule601.get("action") == "compare"
+                   and rule601.get("head_compare") == ["recog"]
+                   and rule601.get("tier") == "L"
+                   and not rule601.get("head_mask")
+                   and not rule601.get("ranges"), rule601)
+
+        # ⑪ 601 由 UNCLASSIFIED 转为已比：coverage 里 601 action=compare，
+        #   同一轮里 600/601 都被计数（compared=2），无未分类。
+        rc, rep = self.compare(fo, fr)
+        cov = (rep or {}).get("coverage", {}) or {}
+        ident_rules = cov.get("ident_rules") or []
+        self.check("601 ④ 冻结夹具 ⇒ 601 已比（coverage ident=601 action=compare；"
+                   "compared=2；0 diff/undecidable/unclassified）",
+                   rc == 0
+                   and any(x.get("ident") == 601 and x.get("action") == "compare"
+                           for x in ident_rules)
+                   and ((rep or {}).get("frames") or {}).get("compared") == 2
+                   and not ((rep or {}).get("diffs") or [])
+                   and not ((rep or {}).get("undecidable") or [])
+                   and not (cov.get("unclassified_idents") or []),
+                   (rc, ident_rules, (rep or {}).get("frames"),
+                    cov.get("unclassified_idents")))
+
+        # ⑫ 牙A（删 601 规则）：rc 2，unclassified_ident 只有 601（600 不被连带）。
+        no601 = json.loads(json.dumps(self.builtin_rules))
+        no601["rules"] = [r for r in no601["rules"] if r.get("ident") != 601]
+        no601_path = self.rules_file("rules-no-601.json", no601)
+        rc, rep = self.compare(fo, fr, ["--rules", no601_path])
+        uc601 = [u for u in (rep or {}).get("undecidable") or []
+                 if u.get("kind") == "unclassified_ident"]
+        self.check("601 ⑤ 牙A：删 601 规则 ⇒ rc 2（UNDECIDABLE，unclassified_ident "
+                   "ident=601 复现；600 仍已比，不被连带）",
+                   rc == 2 and [u.get("ident") for u in uc601] == [601]
+                   and not ((rep or {}).get("diffs") or []),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # ⑬ 牙B（改坏 601 body 一字节）：首字节 0x72→0x73 ⇒ rc 1，
+        #   diff 精确到 ident=601 / kind=body / offset=0 / 0x72 vs 0x73。
+        def flip601(rec):
+            wire = bytearray.fromhex(rec["body_hex"])
+            wire[0] ^= 0x01
+            rec["body_hex"] = bytes(wire).hex()
+            rec["body_sha256"] = _sha(bytes(wire))
+            rec["body_len"] = len(wire)
+        bad601_d = self.write_run("t601-badbody-r",
+                                  self._mutate_rust_fixture(601, flip601))
+        rc, rep = self.compare(fo, bad601_d)
+        all_d = (rep or {}).get("diffs") or []
+        bd601 = [d for d in all_d if d.get("ident") == 601]
+        self.check("601 ⑥ 牙B：改坏 601 body 一字节 ⇒ rc 1 且定位 "
+                   "kind=body/offset=0/oracle 0x72 vs rust 0x73（600 不受牵连）",
+                   rc == 1 and len(all_d) == 1 and len(bd601) == 1
+                   and bd601[0].get("kind") == "body"
+                   and bd601[0].get("offset") == 0
+                   and bd601[0].get("oracle_byte") == 0x72
+                   and bd601[0].get("rust_byte") == 0x73, (rc, bd601))
+
+        # ⑭ 牙C（recog 取回）：rust 侧 601 recog 51→52 ⇒ rc 1 field=recog。
+        def recog601(rec):
+            rec["recog"] = 52
+        bad601b_d = self.write_run("t601-badrecog-r",
+                                   self._mutate_rust_fixture(601, recog601))
+        rc, rep = self.compare(fo, bad601b_d)
+        all_d = (rep or {}).get("diffs") or []
+        hd601 = [d for d in all_d if d.get("ident") == 601]
+        self.check("601 ⑦ 牙C：改坏 601 recog(MakeIndex) ⇒ rc 1 且 field=recog "
+                   "oracle=51/rust=52（head_compare 生效，全局 recog 掩码不吞语义字段）",
+                   rc == 1 and len(all_d) == 1 and len(hd601) == 1
+                   and hd601[0].get("field") == "recog"
+                   and hd601[0].get("oracle") == 51
+                   and hd601[0].get("rust") == 52, (rc, hd601))
 
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
