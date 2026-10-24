@@ -162,6 +162,27 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 
 ---
 
+## 0.7 C# 时钟注入缺失的降级口径（2026-10-25；卡 `openmir2-window-kit-p0-unblock`）
+
+- **事实**：Rust 侧有 `MIR2_CLOCK_MS`（`mir2-rs/bins/game-svr/src/clock.rs`）；**C# 侧零实现**
+  （`grep -rIl MIR2_CLOCK src/` = 0 命中）。卡 `openmir2-m3-clock-injection` 的 C# 半边仍缺（合并态以线程为准）。
+- **受影响窗口项**（见 `docs/window-kit-coverage-20261025.md` §1.1 W-TAX-4、§1.5 W-T127-2）：
+  1. **W-TAX-4**（日上限/金库上限/`SaveTick` 10min 门）：改为**真实时间点复拍**——在
+     `SaveTick` 相邻两个 10 分钟门附近各取一次（如 **21:50** 与 **22:00**），比较
+     `TotalGold`/`TodayIncome` 的增量与「未到门不刷新」的行为；**不逐位对 `SaveTick`**
+     （两侧 tick 原点不同，且 C# 无法注入）。
+  2. **W-T127-2**（结束预告/超时停战）：改为**真实时间点复拍**——把 `CastleWarTime`/
+     `ShowCastleWarEndMsgTime` 配到当天，取 **21:50**（`[离结束还有10分钟]`）与 **22:00**
+     （`[已经结束]`）两帧；帧文本/颜色/收件人可逐字节比，**时间字段与相对序不逐位比**。
+- **边界（必须写进证据）**：降级只证「帧内容与可见行为一致」，不证「同一 tick 的
+  `SaveTick`/计时器位级一致」；后者留给 C# 时钟钩子落地后的补拍。
+- **将来补 C# 时钟钩子的切入点（后续卡素材，本卡不实现）**：
+  `mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs` 的 StartupHook 模式（`DOTNET_STARTUP_HOOKS`
+  + 环境变量）可替换 `GetTickCount()`/`DateTime.Now` 的调用面；C# 半落地后在窗口用
+  `MIR2_CLOCK_MS` 同值把两侧压到同一时刻，再恢复逐位判据。
+
+---
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。
@@ -686,7 +707,7 @@ oracle 的 `ActionOfGmExecute`（以及多数脚本动作）**直接拼 `sParam1
 ⇒ 三类行为**不能互相替代**：① 2 项接受 `--ref`；② 4 项硬传 rc=2（能看见报错）；③ **2 项静默忽略**——
 传了照样 rc=0，是**假绿**（比报错危险：会让人误以为 ref 已钉到本地 master）。故对 ②③ 两类，
 故障期的唯一正确做法是 **不传 `--ref`**，并用 ② 的 `git rev-parse` 对照确认**默认 ref 已指向本地
-`master`**（CI 的 `refs` 字段只决定任务对哪些 ref 生效，**不改变**门的 `--ref` 默认解析——仍是冻结的 `refs/remotes/walgit/master` ⇒ 故障期 CI 的 `fast-stale-pointer` 同样会误红，本节口径需手动复核）。恢复默认口径后（③）不要给这两门补 `--ref`，它不会生效。
+`master`**（CI 的 `refs` 字段只决定任务对哪些 ref 生效，**不改变**门的 `--ref` 默认解析——仍是冻结的 `refs/remotes/walgit/master` ⇒ 判定建立在冻结 ref 上，结论可能失真（可能翻红也可能误绿），仍需按本地 master 手动复核）。恢复默认口径后（③）不要给这两门补 `--ref`，它不会生效。
 
 **② 可复算对照（跑门之前 1 秒判一次）**
 

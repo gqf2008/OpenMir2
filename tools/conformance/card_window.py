@@ -2975,9 +2975,13 @@ def _parse_inventory_fp(out):
 # 边界：probe 侧 `load_scenario` 的顶层键白名单暂未放行 `assets`——场景 JSON 采用
 # 本通道时需在采卡 delta 里同步加一行 optional 键（见本卡报告「边界」节）。
 # ---------------------------------------------------------------------------
-#: 资产声明**只允许**写这些列（首版仅 Gold）；扩展规则：只加「有符号整数、语义是
+#: 资产声明**只允许**写这些列；扩展规则：只加「有符号整数、语义是
 #: 角色资产/点数、服务端只在登录/结算时读」的列，绝不加字符串列/时间列/主键外键列。
-ASSETS_COLUMNS = ("Gold",)
+#: 2026-10-25（卡 openmir2-window-kit-p0-unblock）：`Gold` → 加 `GamePoint`。
+#: `characters.GamePoint int(11) NULL DEFAULT 0`（`sql/mir2_db.sql:38`，注释「金刚石」；
+#: Rust db-srv 读写见 `bins/db-srv/src/playdata.rs` 的 `game_point`）。
+#: 用途：GAMEPOINT 真机窗口（`真爱-G002` `@yhua→@9hua` 前置 `CHECKGAMEPOINT > 8`）。
+ASSETS_COLUMNS = ("Gold", "GamePoint")
 #: 声明值上限：characters.Gold 是 int(11) 有符号（DESCRIBE 实表），负值一律拒。
 ASSETS_MAX = 0x7FFFFFFF
 #: 通道依赖的列（缺任何一个 => 表结构与预期不符， fail-closed）。
@@ -3275,6 +3279,50 @@ def preview_placement(runner, side, prof, sc, placement, ctx):
 
 
 
+def rng_env(side_dir):
+    """一侧的 RNG 流水环境：路径 + 让 C# 钩子写 5 列（含 site）的开关。
+
+    C# `rng-hook/StartupHook.cs:210` 只在 `MIR2_RNG_SITE=1` 时写 5 列
+    （seq/kind/arg/result/site）；否则 `:399-406` 写 4 列 ⇒ `check_rng_ledger` 的
+    「每行 5 列且 site 非空」必红。Rust 侧不读 `MIR2_RNG_SITE`（无害）。
+    """
+    return {
+        "MIR2_RNG_LOG": os.path.join(side_dir, "rng-stream.tsv"),
+        "MIR2_RNG_SITE": "1",
+    }
+
+
+def check_rng_ledger(path):
+    """校验一侧 RNG 流水账本（`--rng-log`）：存在、非空、头两行自证、每行 5 列且 site 非空。
+
+    格式（`mir2-rs/crates/shared/src/rng_trace.rs` 与 C# `rng-hook/StartupHook.cs` 同形）：
+    `seq \t kind \t max/arg \t result \t site`，头两行 `INJECT_OK` 与 `SEED_PROBE`。
+    返回 (ok, detail)；不 ok 时 detail 点名缺什么（供 rc=2 的 error）。
+    """
+    if not os.path.exists(path):
+        return False, "RNG 账本不存在：%s（-RngLog 未贯通或进程未读 MIR2_RNG_LOG）" % path
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
+            lines = [ln.rstrip("\r\n") for ln in f if ln.strip()]
+    except OSError as e:
+        return False, "RNG 账本读失败：%s（%s）" % (path, e)
+    if len(lines) < 2:
+        return False, "RNG 账本为空/不足两行：%s（%d 行）" % (path, len(lines))
+    head = "\n".join(lines[:4])
+    if "INJECT_OK" not in head:
+        return False, "RNG 账本缺 INJECT_OK 自证行：%s" % path
+    if "SEED_PROBE" not in head:
+        return False, "RNG 账本缺 SEED_PROBE 自证行：%s" % path
+    for i, ln in enumerate(lines[2:], start=3):
+        cols = ln.split("\t")
+        if len(cols) < 5:
+            return False, ("RNG 账本第 %d 行列数 %d < 5（seq/kind/max/result/site）：%r"
+                           % (i, len(cols), ln[:160]))
+        if not cols[4].strip():
+            return False, "RNG 账本第 %d 行 site 为空：%r" % (i, ln[:160])
+    return True, "%d 行（含 INJECT_OK + SEED_PROBE；site 齐）" % len(lines)
+
+
 def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
              assets=None, user_vars=None):
     sc = prof["sides"][side]
@@ -3313,6 +3361,12 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
     })
     for k, v in (sc.get("env") or {}).items():
         env[str(k)] = str(v)
+    if ctx.get("rng_log"):
+        # 卡 openmir2-window-kit-p0-unblock：每侧各自一本账（Rust `-Seed 42` 已在起栈脚本里；
+        # C# 侧需把 rng-hook 部署进私栈并用同一变量名，见 docs/window-kit-p0-unblock-20261025.md）。
+        # review P-1：必须同时给 `MIR2_RNG_SITE=1`，否则 C# 钩子写 4 列（无 site）⇒ 校验必红。
+        env.update(rng_env(side_dir))
+        res["rng_log"] = env["MIR2_RNG_LOG"]
 
     os.makedirs(side_dir, exist_ok=True)
     os.makedirs(db_dir, exist_ok=True)
@@ -3526,6 +3580,13 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             return res
         if res["db_rc"] != 0:
             return res
+        if ctx.get("rng_log"):
+            ok, detail = check_rng_ledger(res["rng_log"])
+            res["rng_log_ok"] = ok
+            res["rng_log_detail"] = detail
+            if not ok:
+                res["error"] = "RNG 账本不可用：%s" % detail
+                return res
         res["rc"] = 0
         return res
     finally:
@@ -4069,6 +4130,7 @@ def execute(cfg):
         preview_failed = False
         for side in SIDES:
             ctx = side_ctx(side, out_dir, scenario, card, discovery=discovery_cfg)
+            ctx["rng_log"] = bool(cfg.get("rng_log"))
             sc = prof["sides"][side]
             side_failed = False
             runner.run(side, "restore", expand_argv(sc["restore"], ctx))
@@ -4200,6 +4262,7 @@ def execute(cfg):
     sides_ok = True
     for side in SIDES:
         ctx = side_ctx(side, out_dir, scenario, card, discovery=discovery_cfg)
+        ctx["rng_log"] = bool(cfg.get("rng_log"))
         try:
             res = run_side(runner, side, prof, ctx, password, placement=placement,
                            inventory=inventory, assets=assets, user_vars=user_vars)
@@ -5082,6 +5145,27 @@ def _selftest_assets(tmp):
     decl = scenario_assets(path)
     out.append((decl == {"Gold": 10000, "note": "upgrade_retrieve 前置 Gold>=10000"},
                 "ASSET1 合法声明（Gold=10000+note）=> 解析透传"))
+
+    # 2026-10-25 卡 openmir2-window-kit-p0-unblock：GamePoint 进白名单（GAMEPOINT 窗口前置）
+    write_doc({"assets": {"GamePoint": 9, "note": "GAMEPOINT 前置 >=9"}})
+    gp = scenario_assets(path)
+    out.append((gp.get("GamePoint") == 9,
+                "ASSET1b GamePoint=9 => 解析透传（真爱-G002 @9hua 前置 CHECKGAMEPOINT > 8）"))
+    # 牙1b（负向，load-bearing）：白名单退回旧值（只有 Gold）=> GamePoint 必须被拒，
+    # 不许静默当 0/忽略——证明「白名单声明」本身是判据，不是装饰。
+    orig_cols = globals()["ASSETS_COLUMNS"]
+    globals()["ASSETS_COLUMNS"] = ("Gold",)
+    try:
+        write_doc({"assets": {"GamePoint": 9}})
+        gp_rejected = False
+        try:
+            scenario_assets(path)
+        except ConfigError as ex:
+            gp_rejected = ("GamePoint" in str(ex) and "白名单" in str(ex))
+    finally:
+        globals()["ASSETS_COLUMNS"] = orig_cols
+    out.append((gp_rejected,
+                "ASSET 牙1b 白名单声明缺失（退回只有 Gold）=> GamePoint 声明被拒（不做静默 0）"))
     # 牙①：非白名单列 => ConfigError 点名列名与白名单（字符串列也不许按列名兜底混入）
     tooth1_ok = True
     for col in ("Level", "CreditPoint", "MasterName", "CREATEDATE"):
@@ -5134,7 +5218,7 @@ def _selftest_assets(tmp):
     class _FakeRunner:
         def __init__(self, before_gold=100, after_gold=10000, fp="a" * 32,
                      verify_fp=None, update_out="1\n", after_id=6228,
-                     before_count=1, after_count=1):
+                     before_count=1, after_count=1, columns_out=None):
             self.before_gold = before_gold
             self.after_gold = after_gold
             self.fp = fp
@@ -5143,11 +5227,13 @@ def _selftest_assets(tmp):
             self.after_id = after_id
             self.before_count = before_count
             self.after_count = after_count
+            self.columns_out = columns_out
 
         def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None,
                 capture=True):
             if tag == "assets.columns":
-                return 0, "Id\nChrName\nLoginID\nGold\nDeleted\n", ""
+                return 0, (self.columns_out
+                           or "Id\nChrName\nLoginID\nGold\nDeleted\n"), ""
             if tag == "assets.read":
                 return 0, "%d\t6228\t%d\t%s\t0\n" % (self.before_count,
                                                           self.before_gold,
@@ -5198,6 +5284,12 @@ def _selftest_assets(tmp):
                               decl_only, {})
         out.append((bad_char["rc"] == 2 and "找不到角色" in (bad_char["error"] or ""),
                     "ASSET6d 角色不存在 => rc=2"))
+        # 牙6e（负向）：声明 GamePoint 但实表缺列 => 拒跑（不是静默 0）
+        miss = run_assets(_FakeRunner(columns_out="Id\nChrName\nLoginID\nGold\nDeleted\n"),
+                          "csharp", prof, sc, {"GamePoint": 9, "note": ""}, {})
+        out.append((miss["rc"] == 2 and "GamePoint" in (miss["error"] or "")
+                    and "缺列" in (miss["error"] or ""),
+                    "ASSET 牙6e 声明 GamePoint 但 characters 缺列 => rc=2（拒绝静默 0）"))
 
         # 牙③（正牙）：dry-run 预览行出现「列=目标值」且 rc=0
         class _DryRunner:
@@ -5231,6 +5323,74 @@ def _selftest_assets(tmp):
                 and side_src.index("run_assets(") < side_src.index('"stack"'),
                 "ASSET7 run_side 生产接线：if assets: 走 run_assets，且在起栈之前"))
     return out
+
+def _selftest_rng_ledger(tmp):
+    """卡 openmir2-window-kit-p0-unblock：RNG 账本校验器 + 接线（--rng-log）。
+    正例：头两行自证 + 5 列且 site 齐；负例：缺文件/空/缺自证/列数不足/site 空。"""
+    out = []
+    d = os.path.join(tmp, "rngledger")
+    os.makedirs(d, exist_ok=True)
+
+    def write(name, text):
+        pth = os.path.join(d, name)
+        with open(pth, "w", encoding="utf-8", newline="") as f:
+            f.write(text)
+        return pth
+
+    good = write("good.tsv",
+                 "1\tINJECT_OK\t42\t0\t\n"
+                 "2\tSEED_PROBE\t8\t0\t\n"
+                 "3\trand_range\t100\t7\tcrates/world/src/combat.rs:105\n"
+                 "4\trand\t10\t3\tcrates/world/src/mongen.rs:88\n")
+
+    ok, detail = check_rng_ledger(good)
+    out.append((ok and "INJECT_OK" in detail and "SEED_PROBE" in detail,
+                "RNG1 正例：头两行自证 + 5 列 site 齐 => ok（%s）" % detail))
+    renv = rng_env(d)
+    out.append((renv.get("MIR2_RNG_SITE") == "1"
+                and renv.get("MIR2_RNG_LOG", "").endswith("rng-stream.tsv"),
+                "RNG1b rng_env 同时给 MIR2_RNG_LOG 与 MIR2_RNG_SITE=1（C# 钩子写 5 列）"))
+    ok2, _ = check_rng_ledger(os.path.join(d, "nope.tsv"))
+    out.append((not ok2, "RNG 牙1 缺文件 => 红"))
+    ok3, _ = check_rng_ledger(write("empty.tsv", ""))
+    out.append((not ok3, "RNG 牙2 空文件 => 红"))
+    noinject = write("noinject.tsv",
+                     "1\tSEED_PROBE\t8\t0\t\n"
+                     "2\trand\t10\t3\ta.rs:1\n")
+    ok4, e4 = check_rng_ledger(noinject)
+    out.append((not ok4 and "INJECT_OK" in e4, "RNG 牙3 缺 INJECT_OK => 红且点名"))
+    short = write("short.tsv",
+                  "1\tINJECT_OK\t42\t0\t\n"
+                  "2\tSEED_PROBE\t8\t0\t\n"
+                  "3\trand\t10\t3\n")
+    ok5, e5 = check_rng_ledger(short)
+    out.append((not ok5 and "列数" in e5, "RNG 牙4 数据行列数不足 => 红且点名"))
+    # 牙6（review P-1 的反向）：C# 钩子不设 MIR2_RNG_SITE 时写 4 列（seq/kind/arg/result）
+    # ⇒ 校验必须红——证明注入 SITE 是判据的一部分，不是装饰。
+    csharp4 = write("csharp-nosite.tsv",
+                    "1'+T+'INJECT_OK'+T+'42'+T+'0'+Nn+'"
+                    "2'+T+'SEED_PROBE'+T+'8'+T+'0'+Nn+'"
+                    "3'+T+'rand'+T+'10'+T+'3'+Nn+'")
+    ok7, e7 = check_rng_ledger(csharp4)
+    out.append((not ok7 and ("site" in e7.lower() or "列数" in e7),
+                "RNG 牙6 C# 钩子未设 MIR2_RNG_SITE 的 4 列账本 => 红（拒绝）"))
+    nosi = write("nosite.tsv",
+                 "1\tINJECT_OK\t42\t0\t\n"
+                 "2\tSEED_PROBE\t8\t0\t\n"
+                 "3\trand\t10\t3\t\n")
+    ok6, e6 = check_rng_ledger(nosi)
+    out.append((not ok6 and "site" in e6, "RNG 牙5 site 为空 => 红且点名"))
+    import inspect
+    src = inspect.getsource(run_side)
+    out.append(("MIR2_RNG_LOG" in src and "MIR2_RNG_SITE" in src
+                and "check_rng_ledger(" in src
+                and src.index("MIR2_RNG_LOG") < src.index(chr(34)+"stack"+chr(34)),
+                "RNG2 接线：run_side 在起栈前注入 MIR2_RNG_LOG+MIR2_RNG_SITE，成功前校验账本"))
+    mod = inspect.getsource(sys.modules[__name__])
+    out.append(("--rng-log" in mod and "rng_log" in mod,
+                "RNG3 CLI --rng-log 与 cfg/ctx 透传在位"))
+    return out
+
 
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
@@ -6884,6 +7044,8 @@ def selftest():
             chk(cond, msg)
         for cond, msg in _selftest_assets(tmp):
             chk(cond, msg)
+        for cond, msg in _selftest_rng_ledger(tmp):
+            chk(cond, msg)
 
         # ⑰ execute 读 res["inventory"]（卡 openmir2-card-window-teeth-mg7）：
         #    背包夹具失败 => summary 记该侧证据、整体 rc=2、且不起栈。
@@ -7169,6 +7331,9 @@ def build_parser():
     ap.add_argument("--server-name", help="覆盖 profile 的服务器名")
     ap.add_argument("--char-name", help="覆盖 profile 的角色名")
     ap.add_argument("--timeout-ms", type=int, help="覆盖 profile 的 probe --timeout-ms")
+    ap.add_argument("--rng-log", action="store_true",
+                    help="每侧把 RNG 流水落到 <out>/<side>/rng-stream.tsv 并校验"
+                         "（INJECT_OK/SEED_PROBE + site 齐）；缺账本 rc=2")
     return ap
 
 
@@ -7194,6 +7359,7 @@ def main(argv=None):
         "server_name": args.server_name,
         "char_name": args.char_name,
         "timeout_ms": args.timeout_ms,
+        "rng_log": args.rng_log,
     }
     try:
         summary = execute(cfg)
