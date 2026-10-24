@@ -65582,6 +65582,308 @@ GMEXECUTE 禁言 self 20
         );
     }
 
+    // ===================== npc_click 真机窗口帧序合同（卡 openmir2-npc-click-frame-seq-fix）====
+
+    /// npc_click 窗口回放夹具：`老人`（type 0 固定 NPC ⇒ Merchant 体）+ 相邻玩家，rng 种子可注入
+    /// （T137Rig 同构，但保留展示表并暴露世界给转身臂驱动 `npc_tick`）。
+    struct NpcClickWindowRig {
+        world: mir2_world::World,
+        elder_id: i32,
+        displays: game_svr::downlink::DisplayTable,
+        book: game_svr::npc::MerchantScriptBook,
+        sessions: HashMap<String, SessionGround>,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        shop_sessions: HashMap<String, ShopSession>,
+        sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
+        npc_vars: game_svr::npc::NpcVars,
+        catalog: game_svr::ability::StdItemCatalog,
+        item_number: i32,
+        dir: std::path::PathBuf,
+    }
+
+    impl Drop for NpcClickWindowRig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+    impl NpcClickWindowRig {
+        fn new(seed: i32) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static SEQ: AtomicU32 = AtomicU32::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("gs-npcclick-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            t137_write(&dir, "Npcs.txt", ";测试\n老人 0 0 12 10 0 1\n");
+            t137_write(
+                &dir,
+                "Npc_def/老人-0.txt",
+                "[@main]\n〖庄〗/欢迎光临-天时地利人和-赌场-系统坐庄-童叟无欺 <开-始-下-注/@ks>\n",
+            );
+
+            let mut world = mir2_world::World::new(32, 32);
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+            let hero = world.add_entity({
+                let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+                e.race = mir2_world::ACTOR_RACE_PLAY;
+                e
+            });
+            let npcs = vec![mir2_envir::npcs::NpcInfo {
+                chr_name: "老人".to_string(),
+                npc_type: mir2_envir::npcs::NpcType::Merchant,
+                map_name: "0".to_string(),
+                x: 12,
+                y: 10,
+                npc_flag: 0,
+                appr: 1,
+            }];
+            let mut book = game_svr::npc::MerchantScriptBook::new(30);
+            let mut displays = game_svr::downlink::DisplayTable::new();
+            let report = game_svr::npcs::place_fixed_npcs_with_scripts(
+                &mut world,
+                &npcs,
+                |_| Some(0),
+                &dir.join("Envir"),
+                &mut book,
+                &mut displays,
+            );
+            assert_eq!(report.placed, 1, "老人必须进世界");
+            assert!(
+                report.script_failures.is_empty() && report.script_missing.is_empty(),
+                "老人脚本必须装载成功：{:?}/{:?}",
+                report.script_failures,
+                report.script_missing
+            );
+            let elder_id = report.placed_npcs[0].actor_id;
+            let elder_in_table = displays.get(elder_id).is_some();
+            assert!(elder_in_table, "展示表已登记老人");
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".to_string(), test_session_ground(hero));
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".to_string(),
+                    chr_name: "hero".to_string(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: hero,
+                },
+            );
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx);
+            Self {
+                world,
+                elder_id,
+                displays,
+                book,
+                sessions,
+                online,
+                gates,
+                rx,
+                shop_sessions: HashMap::new(),
+                sell_off_sessions: HashMap::new(),
+                npc_vars: game_svr::npc::NpcVars::default(),
+                catalog: game_svr::ability::StdItemCatalog::new(),
+                item_number: 0,
+                dir,
+            }
+        }
+
+        fn click(&mut self) -> bool {
+            handle_click_npc_cmd(
+                self.elder_id,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                &self.book,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &self.npc_vars,
+                &self.catalog,
+                &mut self.item_number,
+                &self.gates,
+                None,
+            )
+        }
+
+        fn drain(&mut self) -> Vec<Vec<u8>> {
+            let mut frames = Vec::new();
+            while let Ok(m) = self.rx.try_recv() {
+                if let SimToGate::SendFrame { body, .. } = m {
+                    frames.push(body);
+                }
+            }
+            frames
+        }
+    }
+    /// **真机窗口捕获回放**：把 `E:/tmp/window/run1/npc_click/` 的两侧捕获（sha256 与窗口
+    /// README 记录逐字节一致：csharp `5391dd2a…`、rust `f1c17e53…`）钉进仓库作 fixture
+    /// （`tests/fixtures/npc_click/`），锁定 npc_click 场景的帧序合同。
+    ///
+    /// # 根因（真机 30 vs 32 帧差异的定位结论，卡 openmir2-npc-click-frame-seq-fix）
+    ///
+    /// rust 多出的 `[10 SM_TURN, 41 SM_FEATURECHANGED]`（recog=`老人` actor）**不是 click 路径
+    /// 发的**：`handle_click_npc_cmd` 的发射面只有说词 `SM_MERCHANTSAY(643)` 与脚本帧。多出的一对
+    /// 来自**固定 NPC 处理器的随机转身**——`老人` 在 `Npcs.txt` 是 type 0 ⇒ oracle 实例化
+    /// `Merchant`（`LocalDB.cs:688-698`），`Merchant.Run`（`Merchant.cs:132-134`）每 Run 抽
+    /// `Random(50)==0 ⇒ TurnTo(RandomByte(8))`；rust 同构
+    /// （`crates/world/src/npc.rs::merchant_body_run`），经 `drain_npc_merchant_turns` 落
+    /// `turn_pair_nameless`（无名对、recog=NPC）。观测序（100×4 → 转身对 → 643）与 oracle
+    /// `MsgQueue` 优先级出队序（RM_SYSMESSAGE=252 → RM_TURN=17 → RM_MERCHANTSAY=1，降序）一致
+    /// ⇒ **连次序都是 oracle 口径**；两侧差异只在「该窗口转身抽没抽中」——共享 `RandomNumber`
+    /// 流位置分歧（两侧同 seed 42，但各自 world 起点到会话期的空转抽数不同：串行起栈/暖机锚点
+    /// 不同 + T-42 已登记的墙钟预算支缺省）。同窗口早 3 分钟的 `npc_click_auto`（同一机制）
+    /// 30/30/30 diff=0 PASS ⇒ 该差异是**跨栈 RNG 流位 flaky 类**，不是某模块「多发」。
+    ///
+    /// # 本测试钉住的三段合同
+    ///
+    /// ① fixture 本身：oracle 30 帧 ident 序列逐帧钉住；rust 32 帧 = oracle 前 29 帧 +
+    ///   `[10,41]` + 643（历史差异的精确形状 = R 级时序证据，永不漂移）；
+    /// ② click 路径净面：转身未抽中的窗口里，点击 `老人`（type 0）只发 `[643]`（recog=NPC、
+    ///   尾 `老人/…`）——与 oracle 捕获的第 30 帧同形；
+    /// ③ 转身抽中面：`npc_tick` 抽中转身 ⇒ 恰一对无名 `[10,41]`（recog=NPC），随后点击 ⇒
+    ///   累计 `[10,41,643]` == rust 捕获尾部三帧。改坏生产排水
+    ///   `drain_npc_merchant_turns`（丢展示表门/改无名对编码/丢广播）或 click 路径多出任何帧
+    ///   ⇒ 本用例红。
+    #[test]
+    fn npc_click_window_capture_frame_sequence_contract() {
+        // ---- ① fixture 本身 ----
+        let read_idents = |name: &str| -> Vec<u16> {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/npc_click")
+                .join(name);
+            let text = std::fs::read_to_string(&path).expect("读窗口 fixture");
+            text.lines()
+                .filter(|l| !l.trim().is_empty())
+                .map(|l| {
+                    let key: &str = concat!('"', "ident", '"', ':');
+                    let pos = l.find(key).expect("fixture 行必有 ident 字段");
+                    let rest = l[pos + key.len()..].trim_start();
+                    let end = rest.find([',', '}']).expect("ident 值有界");
+                    rest[..end]
+                        .trim()
+                        .parse::<u16>()
+                        .expect("ident 必须是 u16（控制帧混入 ⇒ 红）")
+                })
+                .collect()
+        };
+        let oracle = read_idents("csharp-frames.ndjson");
+        let rust = read_idents("rust-frames.ndjson");
+        assert_eq!(oracle.len(), 30, "oracle 捕获 30 帧");
+        assert_eq!(
+            oracle,
+            vec![
+                529, 530, 520, 525, 658, 51, 50, 41, 213, 11029, 42, 766, 54, 5008, 1106, 52, 752,
+                811, 46, 10, 41, 654, 657, 657, 42, 100, 100, 100, 100, 643,
+            ],
+            "oracle 捕获的 ident 序列必须逐帧钉住"
+        );
+        let mut expected_rust = oracle[..29].to_vec();
+        expected_rust.extend_from_slice(&[10, 41]);
+        expected_rust.push(mir2_protocol::messages::SM_MERCHANTSAY);
+        assert_eq!(
+            rust, expected_rust,
+            "rust 捕获 = oracle 前 29 帧 + 无名转身对 [10,41] + 643（历史差异的精确形状）"
+        );
+
+        // ---- ② 种子普查：「首次 npc_run 即抽中转身」与「不抽中」各取一（对 ctor 抽数细节
+        //      不敏感：直接以 npc_tick 观测为准，不在测试里复刻抽数序）。 ----
+        let mut turn_rig: Option<NpcClickWindowRig> = None;
+        let mut quiet_rig: Option<NpcClickWindowRig> = None;
+        for seed in 0i32..4096 {
+            let mut rig = NpcClickWindowRig::new(seed);
+            rig.world.clock_ms = 60_000; // 越过 200ms pass 门与 RunTick(≤1500)+250 门
+            let out = rig.world.npc_tick();
+            if !out.turns.is_empty() {
+                if turn_rig.is_none() {
+                    turn_rig = Some(rig);
+                }
+            } else if quiet_rig.is_none() {
+                quiet_rig = Some(rig);
+            }
+            if turn_rig.is_some() && quiet_rig.is_some() {
+                break;
+            }
+        }
+        let mut quiet = quiet_rig.expect("必须存在首跑不转身的种子");
+        let mut turn = turn_rig.expect("必须存在首跑即转身的种子");
+
+        // ---- ③ click 净面（= oracle 捕获第 30 帧的同形回放）----
+        assert!(
+            quiet.rx.try_recv().is_err(),
+            "点击前不得有积压帧（夹具自身零帧）"
+        );
+        assert!(quiet.click(), "点击老人必须到 Click 点");
+        let frames = quiet.drain();
+        assert_eq!(
+            gnp_idents(&frames),
+            vec![mir2_protocol::messages::SM_MERCHANTSAY],
+            "转身未抽中窗口：click 净面 = 恰一条 SM_MERCHANTSAY（oracle 第 30 帧）"
+        );
+        let say = mir2_protocol::frame::CommandMessage::from_bytes(&frames[0]).expect("12B 头");
+        assert_eq!(
+            say.recog, quiet.elder_id,
+            "643 的 Recog = NPC actor（oracle 捕获 recog=NPC actor，会话作用域）"
+        );
+        assert!(
+            gnp_tail_text(&frames[0]).starts_with("老人/"),
+            "说词尾 = `ChrName + '/' + sMsg`（NormNpc.SendMsgToUser）"
+        );
+
+        // ---- ④ 转身抽中面（= rust 捕获第 30/31 帧的同形回放）----
+        // 走**生产排水函数** `drain_npc_merchant_turns`（展示表门 + `fd.dir = *dir` +
+        // `turn_pair_nameless` + `broadcast_ref_msg` 全链），不直调编码器：
+        // 改坏排水（丢展示表门、改无名对编码、丢广播）⇒ 本臂红。
+        let dir = turn
+            .world
+            .entities
+            .get(turn.elder_id)
+            .expect("老人在世界")
+            .ai
+            .dir; // `TurnTo` 已写进实体的本次方向（`Dir = nDir` 后才 SendRefMsg）
+        let rec = mir2_world::TickRecord {
+            npc_turns: vec![(turn.elder_id, dir)],
+            ..Default::default()
+        };
+        let sent =
+            drain_npc_merchant_turns(&rec, &turn.world, &turn.displays, &turn.online, &turn.gates);
+        assert_eq!(sent, 2, "转身对两条都进网关下行");
+        let pair = turn.drain();
+        assert_eq!(
+            gnp_idents(&pair),
+            vec![
+                mir2_protocol::messages::SM_TURN,
+                mir2_protocol::messages::SM_FEATURECHANGED
+            ],
+            "转身支 = SM_TURN + SM_FEATURECHANGED 一对（RM_TURN 支）"
+        );
+        for b in &pair {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).expect("12B 头");
+            assert_eq!(
+                cm.recog, turn.elder_id,
+                "转身对 Recog = NPC actor（rust 捕获 30/31 帧 recog=120=老人）"
+            );
+        }
+        assert!(turn.click(), "转身后点击仍到 Click 点");
+        let mut seq = pair;
+        seq.extend(turn.drain());
+        assert_eq!(
+            gnp_idents(&seq),
+            vec![
+                mir2_protocol::messages::SM_TURN,
+                mir2_protocol::messages::SM_FEATURECHANGED,
+                mir2_protocol::messages::SM_MERCHANTSAY,
+            ],
+            "累计帧序 [10,41,643] == rust 捕获尾部三帧（100×4 → 转身对 → 643 的观测序）"
+        );
+    }
+
     // ===================== T-160：固定 NPC `@main` 的背包/金币写回 =====================
 
     /// T-160 夹具：`老人`（type 0 固定 NPC）的 `@main` 脚本里同时 `take 木剑 1` 与
