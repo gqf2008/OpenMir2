@@ -1616,6 +1616,10 @@ def selftest():
         # must not pair as a card assertion; the same line with a real pending
         # word must still be red; and the hash class is intentionally unchanged.
         _write(
+            os.path.join(repo, "docs", "cardspan", "span.md"),
+            "| `openmir2-synthetic-closed` | 未接线，且未合并 |\n",
+        )
+        _write(
             os.path.join(repo, "docs", "newword", "new.md"),
             "| `openmir2-synthetic-closed`（另未合并 2） |\n",
         )
@@ -2064,6 +2068,30 @@ def selftest():
             newword_hash["rc"] == 1
             and len(newword_hash["hits"]) == 1
             and newword_hash["hits"][0]["word"] == "未合并",
+        )
+
+        # ---- carried #38: the exclusion is span-level, never whole-line
+        card_span = scan(
+            repo, "docs/cardspan", ref, load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, ledger
+        )
+        check(
+            "㉜ span 级语义：「未接线」同行还有真断言「未合并」⇒ 仍红（整行否决变异必红）",
+            card_span["rc"] == 1
+            and len(card_span["card_hits"]) == 1
+            and card_span["card_hits"][0]["card"] == "openmir2-synthetic-closed",
+        )
+
+        # ---- carried #101: a failing git blame must be unusable, never exempt
+        blame_epoch = int(_run_git(repo, "show", "-s", "--format=%ct", merged))
+        blame_reasons = []
+        blame_result = _blame_delta(
+            repo, "docs/does-not-exist.md", [1], blame_epoch, {}, reasons=blame_reasons
+        )
+        check(
+            "㉝ blame 执行失败（rc≠0）⇒ 不可用（返回 None + 点名 rc），绝不豁免",
+            blame_result is None
+            and len(blame_reasons) == 1
+            and blame_reasons[0].startswith("git blame rc="),
         )
 
         # ---- --no-ledger must still keep a card-only entry alive (no false rot)

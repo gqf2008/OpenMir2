@@ -329,6 +329,14 @@ def selftest():
          hidden_threads(unknown, set()) == ["t-unknown"]),
     ]
     checks += _selftest_exit_wiring()
+    # carried #76: a known card kind must never enter NON_CARD_KINDS — adding
+    # one there would silently hide every thread of that kind from the report.
+    checks.append((
+        "⑨ known card kinds stay out of NON_CARD_KINDS (carried #76)",
+        NON_CARD_KINDS.isdisjoint(
+            {"issue", "patch", "status", "review", "merge_result", "comment"}
+        ),
+    ))
     failed = 0
     for name, ok in checks:
         print(("PASS " if ok else "FAIL ") + name)

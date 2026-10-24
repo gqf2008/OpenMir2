@@ -393,6 +393,8 @@ def worktree_state(worktree):
 
 
 _REVIEWER_SEPARATORS = re.compile(r"^[\s,;/|、，；]+$")
+_REVIEWER_PLACEHOLDERS = frozenset(("none", "null", "n/a", "na", "nil", "tbd"))  # carried F2: placeholder literals are not a reviewer
+_PRINCIPAL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*")  # a principal is letters/digits/dash; anything else is an annotation bug
 
 
 def normalize_reviewer(value):
@@ -408,6 +410,13 @@ def normalize_reviewer(value):
         return None
     token = value.strip()
     if not token or _REVIEWER_SEPARATORS.match(token):
+        return None
+    if token.lower() in _REVIEWER_PLACEHOLDERS:
+        return None
+    if not _PRINCIPAL_RE.fullmatch(token):
+        # "a,b" / "a/b" / "openmir2-worker-a（作者）" — annotated or multi-value
+        # caller bugs.  Treating them as "a reviewer was given" would answer OK
+        # to the real author, so they are unusable ⇒ INVALID_REVIEWER (F2).
         return None
     return token
 
@@ -461,6 +470,13 @@ def report(card, authors, skipped, reviewer, worktree,
             rc = 1
         else:
             review_verdict = "OK"
+            if malformed:
+                # carried F2 invariant: a corrupt (skipped) entry must never
+                # yield "OK" — the dropped claim could be the reviewer's own.
+                review_verdict = "MALFORMED_SKIPPED"
+                rc = 2
+                print("warn: malformed_entries_skipped=%d => 不能给 OK"
+                      "（fail-closed，rc=2）" % malformed, file=out)
         print("review_verdict=%s" % review_verdict, file=out)
 
     if worktree is None:
@@ -796,6 +812,44 @@ def selftest():
         invalid_rcs == [2] * 6
         and all("verdict=OK" not in text for text in invalid_outs)
         and all("review_verdict=INVALID_REVIEWER" in text for text in invalid_outs),
+    ))
+
+    # ⑰b carried F2: placeholder literals, annotated and multi-value reviewers
+    # are unusable too (they must not reach verdict=OK).
+    invalid2_rcs = []
+    invalid2_outs = []
+    for bad in ("None", "null", "n/a", "openmir2-worker-a（作者）", "a,b", "a/b"):
+        buf = io.StringIO()
+        invalid2_rcs.append(report("openmir2-synthetic-card",
+                                   ["openmir2-worker-a"], 0, bad, None, out=buf))
+        invalid2_outs.append(buf.getvalue())
+    checks.append((
+        "⑰b 占位字面/带注记/多值 reviewer => INVALID_REVIEWER rc=2（carried F2）",
+        invalid2_rcs == [2] * 6
+        and all("verdict=OK" not in text for text in invalid2_outs)
+        and all("review_verdict=INVALID_REVIEWER" in text for text in invalid2_outs),
+    ))
+
+    # ⑰c carried F2 invariant: a corrupt (skipped) claim entry must never
+    # produce verdict=OK — the dropped entry could be the reviewer's own.
+    corrupt_thread = [
+        _fixture("patch", 123),
+        _fixture("patch", "openmir2-worker-b"),
+    ]
+
+    def _corrupt(repo, card):
+        # _fixture already wraps each entry as {"entry": ..., "verified": ...}.
+        return corrupt_thread, None
+
+    buf = io.StringIO()
+    rc_corrupt = evaluate(".", "openmir2-synthetic-card",
+                          "openmir2-reviewer-b", None, out=buf,
+                          read_thread=_corrupt, err=io.StringIO())
+    checks.append((
+        "⑰c 损坏条目（actor=123）被跳过 ⇒ 不得给 OK（rc=2，carried F2 不变量）",
+        rc_corrupt == 2
+        and "verdict=MALFORMED_SKIPPED" in buf.getvalue()
+        and "malformed_entries_skipped=1" in buf.getvalue(),
     ))
 
     # ⑱ normalization: a padded principal is the same principal.
