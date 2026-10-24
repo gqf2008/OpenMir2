@@ -5119,7 +5119,7 @@ fn target_cret_cleanup(world: &mut World, actor_id: i32, now: i64) {
 /// **oracle 怪癖照抄**：死亡支每跑一次 `base.Run` 且门仍成立就再调一次 `MakeGhost`
 /// （`Invisible` 尸体仍满足 `now - DeathTick > makeGhostTime`）⇒ `GhostTick` 被反复刷新、
 /// `DisappearA` 反复执行。本函数同样重复执行（幂等：已摘格时 `disappear_a` 返回 false）。
-fn make_ghost(world: &mut World, actor_id: i32) {
+pub(crate) fn make_ghost(world: &mut World, actor_id: i32) {
     let now = world.clock_ms;
     if let Some(e) = world.entities.get_mut(actor_id) {
         if e.can_re_alive {

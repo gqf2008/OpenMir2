@@ -468,6 +468,21 @@ pub struct MonGenThread {
     pub entries: Vec<usize>,
 }
 
+/// `CLEARMAPMON` 清场的一条记录（判据/日志用；按 oracle 遍历序产出）。
+///
+/// 由 [`crate::world::World::clear_map_monsters`] 产出（实现见该函数文档）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClearMapMonRecord {
+    pub actor_id: i32,
+    pub name: String,
+    pub x: i32,
+    pub y: i32,
+    /// `MakeGhost()` 走哪一支（`BaseObject.Base.cs:484-496`）：`true` ⇒ `Invisible`（尸体可复活），
+    /// `false` ⇒ `Ghost`（5 分钟后释放）。MonGen 刷出的怪 `CanReAlive = true`；`MONGENEX` 合成的
+    /// `MonGenInfo` 不置该位 ⇒ `Ghost`（登记偏差见 `guardlist` 模块头）。
+    pub can_re_alive: bool,
+}
+
 /// 整套刷怪调度状态（`MonGenList` + `MonGenInfoThreadMap` + `MonsterThreadMap` 的合体）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MonGenState {
@@ -2033,5 +2048,183 @@ mod tests {
         assert_eq!(rec.removed, vec![id], "5min+1 必须移除");
         assert!(world.entities.get(id).is_none(), "实体必须释放");
         assert!(state.entries[0].cert_list.is_empty(), "CertList.RemoveAt");
+    }
+
+    // ---- CLEARMAPMON（卡 `openmir2-clearmapmon-impl`） ------------------------------------
+
+    /// 造一只已落格的怪（`mon_gen = Some(0)`，`cert_list` 由调用方登记）。
+    fn place_monster(
+        world: &mut World,
+        name: &str,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        can_re_alive: bool,
+    ) -> i32 {
+        let mut e = Entity::new(0, name, x, y);
+        e.race = 80;
+        e.map_id = map_id;
+        e.max_hp = 10;
+        e.hp = 10;
+        e.can_re_alive = can_re_alive;
+        e.mon_gen = Some(0);
+        let id = world.add_entity(e);
+        if map_id < world.maps.len() {
+            assert!(world.enter_world(id), "怪必须落格");
+        }
+        id
+    }
+
+    /// **过滤判定**（`GetMapMonster`，`WorldServer.cs:1639-1674`）+ `NoClearMonList` 恒 false：
+    /// 只清「同图 + 存活 + 非 Ghost + 非 Master + 在 CertList」的怪。
+    ///
+    /// 牙（实测）：把 `!e.death` / `!e.ghost` / `e.map_id != map_id` / `e.master.is_some()`
+    /// 任一条件删掉 ⇒ 对应断言红。
+    #[test]
+    fn clear_map_monsters_filters_match_oracle() {
+        let mut world = World::new(32, 32);
+        world.clock_ms = 7_000;
+        let alive = place_monster(&mut world, "活", 0, 5, 5, true);
+        let dead = place_monster(&mut world, "死", 0, 6, 5, true);
+        world.entities.get_mut(dead).unwrap().death = true;
+        let ghosted = place_monster(&mut world, "幽", 0, 7, 5, false);
+        world.entities.get_mut(ghosted).unwrap().ghost = true;
+        let pet = place_monster(&mut world, "宠", 0, 8, 5, false);
+        world.entities.get_mut(pet).unwrap().master = Some(alive);
+        // 异图（map_id 1 不存在于本世界；oracle 比对 `Envir == envir`）。
+        let other_map = place_monster(&mut world, "异图", 1, 9, 5, false);
+        // 不在任何 CertList 的怪（oracle 只遍历 `MonGenInfoThreadMap`）。
+        let not_in_cert = place_monster(&mut world, "野", 0, 10, 5, false);
+        // 另一只正常怪（在 CertList，非 CanReAlive ⇒ Ghost 支）。
+        let plain = place_monster(&mut world, "普", 0, 11, 5, false);
+
+        let mut state = MonGenState::default();
+        let mut entry = MonGenEntry::new("0", 5, 5, "活", 1, 4, 0, 0);
+        entry.cert_list = vec![alive, dead, ghosted, pet];
+        state.entries.push(entry);
+        let mut entry2 = MonGenEntry::new("0", 11, 5, "普", 1, 1, 0, 0);
+        entry2.cert_list = vec![plain];
+        state.entries.push(entry2);
+        state.threads.insert(
+            0,
+            MonGenThread {
+                id: 0,
+                entries: vec![0, 1],
+                ..MonGenThread::default()
+            },
+        );
+
+        let rec = world.clear_map_monsters(0, &state);
+        assert_eq!(
+            rec.iter().map(|r| r.actor_id).collect::<Vec<_>>(),
+            vec![alive, plain],
+            "只清同图/存活/非 Ghost/非 Master/CertList 内"
+        );
+        assert!(rec[0].can_re_alive);
+        assert!(!rec[1].can_re_alive);
+
+        // 副作用：NoItem + MakeGhost（CanReAlive ⇒ Invisible；否则 Ghost）+ GhostTick。
+        let e = world.entities.get(alive).unwrap();
+        assert!(e.no_item, "NoItem = true（禁掉落）");
+        assert!(e.invisible && !e.ghost, "CanReAlive ⇒ Invisible（可复活）");
+        assert_eq!(e.ghost_tick, 7_000, "GhostTick = GetTickCount()");
+        assert!(!e.add_to_mapped, "DisappearA 已摘格");
+        assert!(!e.death, "不得改 Death");
+        let e = world.entities.get(plain).unwrap();
+        assert!(e.ghost && !e.invisible, "非 CanReAlive ⇒ Ghost");
+        assert!(e.no_item);
+
+        // 未命中者逐项不变。
+        assert!(!world.entities.get(dead).unwrap().no_item, "Death 跳过");
+        assert!(!world.entities.get(ghosted).unwrap().no_item, "Ghost 跳过");
+        assert!(!world.entities.get(pet).unwrap().no_item, "Master 跳过");
+        assert!(!world.entities.get(other_map).unwrap().no_item, "异图跳过");
+        assert!(
+            !world.entities.get(not_in_cert).unwrap().no_item,
+            "不在 CertList 不算（oracle 只遍历线程表）"
+        );
+        // CertList 保留（oracle 同样保留，等 Ghost 超时/复活）。
+        assert_eq!(state.entries[0].cert_list, vec![alive, dead, ghosted, pet]);
+        assert_eq!(state.entries[1].cert_list, vec![plain]);
+    }
+
+    /// **顺序判定**：候选序 = thread id 升序 → 条目序 → `CertList` 序（oracle
+    /// `GetMapMonster` 的遍历序），**不是**实体槽位序。本用例让实体槽位序与 oracle 序相反。
+    ///
+    /// 牙（实测）：改成遍历 `world.entities`（槽位序）⇒ 顺序断言红。
+    #[test]
+    fn clear_map_monsters_order_is_thread_entry_cert_not_entity_slot() {
+        let mut world = World::new(32, 32);
+        // 槽位序：1,2,3,4（id 递增）。oracle 序将按 CertList 反向引用。
+        let a = place_monster(&mut world, "a", 0, 3, 3, true);
+        let b = place_monster(&mut world, "b", 0, 4, 3, true);
+        let c = place_monster(&mut world, "c", 0, 5, 3, true);
+        let d = place_monster(&mut world, "d", 0, 6, 3, true);
+        let mut state = MonGenState::default();
+        let mut e0 = MonGenEntry::new("0", 3, 3, "a", 1, 2, 0, 0);
+        e0.cert_list = vec![d, b];
+        let mut e1 = MonGenEntry::new("0", 5, 3, "c", 1, 2, 0, 0);
+        e1.cert_list = vec![c, a];
+        state.entries.push(e0);
+        state.entries.push(e1);
+        state.threads.insert(
+            0,
+            MonGenThread {
+                id: 0,
+                entries: vec![0, 1],
+                ..MonGenThread::default()
+            },
+        );
+        let rec = world.clear_map_monsters(0, &state);
+        assert_eq!(
+            rec.iter().map(|r| r.actor_id).collect::<Vec<_>>(),
+            vec![d, b, c, a],
+            "oracle 遍历序（非实体槽位序）"
+        );
+    }
+
+    /// **帧面判定**：`DisappearA ⇒ SendRefMsg(RM_DISAPPEAR)` 的收件人 = 清场时刻 ±12 格内
+    /// `Race == Play && !Ghost` 的玩家；逐怪、按清场序登记进 `drain_departs`（宿主出
+    /// `SM_DISAPPEAR(30)`）。
+    ///
+    /// 牙（实测）：把格扫换成「全图玩家」或删 `!ghost` 过滤 ⇒ 收件人断言红。
+    #[test]
+    fn clear_map_monsters_departs_follow_disappear_a_broadcast() {
+        let mut world = World::new(64, 64);
+        let mut viewer = Entity::new(0, "观察者", 10, 10);
+        viewer.race = crate::entity::ACTOR_RACE_PLAY;
+        let viewer = world.add_entity(viewer);
+        assert!(world.enter_world(viewer));
+        let mut ghost_viewer = Entity::new(0, "幽观察者", 11, 10);
+        ghost_viewer.race = crate::entity::ACTOR_RACE_PLAY;
+        ghost_viewer.ghost = true;
+        let ghost_viewer = world.add_entity(ghost_viewer);
+        assert!(world.enter_world(ghost_viewer));
+        let mut far = Entity::new(0, "远处", 40, 40);
+        far.race = crate::entity::ACTOR_RACE_PLAY;
+        let far = world.add_entity(far);
+        assert!(world.enter_world(far));
+
+        let m1 = place_monster(&mut world, "m1", 0, 10, 12, false);
+        let m2 = place_monster(&mut world, "m2", 0, 12, 10, false);
+        let mut state = MonGenState::default();
+        let mut entry = MonGenEntry::new("0", 10, 12, "m1", 1, 2, 0, 0);
+        entry.cert_list = vec![m1, m2];
+        state.entries.push(entry);
+        state.threads.insert(
+            0,
+            MonGenThread {
+                id: 0,
+                entries: vec![0],
+                ..MonGenThread::default()
+            },
+        );
+        let rec = world.clear_map_monsters(0, &state);
+        assert_eq!(rec.len(), 2);
+        assert_eq!(
+            world.drain_departs(),
+            vec![(viewer, m1), (viewer, m2)],
+            "帧序 = 清场序；Ghost 观察者/远处观察者不收"
+        );
     }
 }

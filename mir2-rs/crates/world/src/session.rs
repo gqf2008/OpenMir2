@@ -178,6 +178,15 @@ impl SessionRegistry {
         &self.departs
     }
 
+    /// **卡 `openmir2-clearmapmon-impl`**：补记一条「观察者看到 `target` 消失」的帧面事件。
+    ///
+    /// `World::clear_map_monsters` 在 `MakeGhost`（⇒ `DisappearA` ⇒ `SendRefMsg(RM_DISAPPEAR)`）前
+    /// 按清场时刻 ±12 格扫出观察者，逐条登记；与离世广播共用同一条保序队列
+    /// （[`Self::drain_departs`]，宿主同点出 `SM_DISAPPEAR(30)`）。
+    pub fn push_depart(&mut self, observer: i32, target: i32) {
+        self.departs.push((observer, target));
+    }
+
     pub fn get(&self, chr_name: &str) -> Option<&Session> {
         self.sessions.iter().find(|s| s.chr_name == chr_name)
     }
