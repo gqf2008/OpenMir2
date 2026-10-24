@@ -3,27 +3,29 @@
 - 卡：`openmir2-window-run2-prep`（tier **L**；owner `openmir2-dev-2`；worktree `.worktrees/dev-2`；分支 `card/window-run2-prep`）。
 - 基线：`walgit/master` `0ef4e3b96`（2026-10-24 三天计划）；本文件随后续提交更新，实际证据见 §7 的 commit/sha。
 - 定位：**tester-1 窗口执行的操作手册 + 可执行准备件**。窗口时段由 owner 给；本包**不占用窗口**、不起栈、不占端口、不写库。
+- **2026-10-25 修（reviewer-21 W-1）**：`pickup_item` 已封存为结构性不可判（T-19/T-25），从 run-3 清单移除（**18→17**）；
+  `run_batch.sh` 与 preflight `roster` 均断言「17 条且不含 `pickup_item`」，加回即 rc=2（fail-closed）。
 - 验收映射：① 脚本 `--list/--dry-run` + 私栈自检可验证；② 两坑（SelGate ListenPort / 525 路由 17200）写进前置检查且各自可机判；③ 证据目录与 run-1/2 逐字段兼容（§5 样例）；④ `card_window --selftest` 全绿 + 卫生门禁 + `diff --check` + merge-tree（§7）。
 
 ## 0. 一句话
 
-`bash tools/window/run_batch.sh` = **release 重建（head/sha256 对齐）→ 私栈/两坑/pin 自检 → 18 场景续跑 → 证据 + 批次汇总**。被中断后重跑同一条命令即可：已完成的场景跳过，`UNDECIDABLE`/半截场景重跑。
+`bash tools/window/run_batch.sh` = **release 重建（head/sha256 对齐）→ 私栈/两坑/pin 自检 → 17 场景续跑 → 证据 + 批次汇总**。被中断后重跑同一条命令即可：已完成的场景跳过，`UNDECIDABLE`/半截场景重跑。
 
 ## 1. 交付件
 
 | 文件 | 作用 |
 |---|---|
 | `tools/window/run_batch.sh` | run-3 一键续跑（唯一入口） |
-| `tools/window/run3-scenarios.json` | 18 场景清单（batch 与 preflight 共用的唯一事实源） |
+| `tools/window/run3-scenarios.json` | 17 场景清单（batch 与 preflight 共用的唯一事实源；已封存的 `pickup_item` 不在列） |
 | `tools/window/rebuild-server.ps1` | release 重建 + `mir2-server.build.json`（head/sha256/dirty）+ `start-rust.ps1 -ServerExe` 同步 |
-| `tools/window/preflight_private_stack.py` | 私栈完整性 / 两坑 / pin 链 / 二进制对齐 / 清单一致性自检（只读，含 `--selftest` 24 条牙） |
+| `tools/window/preflight_private_stack.py` | 私栈完整性 / 两坑 / pin 链 / 二进制对齐 / 清单一致性自检（只读，含 `--selftest` 27 条牙） |
 | `docs/window-run2-prep-20261025.md` | 本文件 |
 
 未改动：`card_window.py`、`compare_runs.py`、`mir2_probe.py`、`dbsnap.py`、场景 JSON、`rules.json`、`.walgit/board.toml`、`E:/MirServer`、mysqld。
 
 ## 2. run-3 一键续跑
 
-### 2.1 场景清单（顺序 = window-run-2 实跑顺序）
+### 2.1 场景清单（顺序 = window-run-2 实跑顺序去掉已封存的 `pickup_item`，重排为 1..17）
 
 | # | 场景 | profile | 额外参数 | 已知前置（详见 `docs/window-runbook-20261023.md` §1.8/§7.4） |
 |---:|---|---|---|---|
@@ -34,19 +36,18 @@
 | 5 | `dice_chain` | alt | — | `params.npc_actor=119` 是旧抓包值；**跨会话失效**，优先用 `dice_chain_auto` 的结论；保留本行只为清单完整 |
 | 6 | `gm_time` | alt | — | 无；ident 100 时间文本属墙钟噪声 |
 | 7 | `gm_batch` | alt | — | 同上 + 可能带 `Weight` 库差 |
-| 8 | `pickup_item` | alt | — | 基线需同格地物（run-1 缺前置） |
-| 9 | `move_walk` | alt | — | 走位目标格需与部署一致 |
-| 10 | `merchant_dialog` | alt | — | 商人摆位/语境 |
-| 11 | `king_dialog` | alt | — | `king_actor` 发现；点错庄家会响亮超时 |
-| 12 | `king_castle_war` | alt | — | 城堡战语境（castle_zone 缺口） |
-| 13 | `npc_script_chain` | alt | — | 脚本链语境 |
-| 14 | `equip_struck_save` | alt | — | 同屏受击者夹具 |
-| 15 | `bag_equip` | alt | — | 场景自描述 `inventory`；run-2 曾因 `characters_bagitem.ChrName` 列缺失 fail-closed |
-| 16 | `eat_item` | alt | — | 同上 |
-| 17 | `spell_cast` | **window-magic** | — | magic 夹具 + rust 侧 `MIR2_CLIENT_ABILITY_LAYOUT=0` pin（profile 内置） |
-| 18 | `upgrade_retrieve` | alt | `--timeout-ms 720000` | 第 9 步 sleep 660000；默认 20000 会 180s 杀 probe |
+| 8 | `move_walk` | alt | — | 走位目标格需与部署一致 |
+| 9 | `merchant_dialog` | alt | — | 商人摆位/语境 |
+| 10 | `king_dialog` | alt | — | `king_actor` 发现；点错庄家会响亮超时 |
+| 11 | `king_castle_war` | alt | — | 城堡战语境（castle_zone 缺口） |
+| 12 | `npc_script_chain` | alt | — | 脚本链语境 |
+| 13 | `equip_struck_save` | alt | — | 同屏受击者夹具 |
+| 14 | `bag_equip` | alt | — | 场景自描述 `inventory`；run-2 曾因 `characters_bagitem.ChrName` 列缺失 fail-closed |
+| 15 | `eat_item` | alt | — | 同上 |
+| 16 | `spell_cast` | **window-magic** | — | magic 夹具 + rust 侧 `MIR2_CLIENT_ABILITY_LAYOUT=0` pin（profile 内置） |
+| 17 | `upgrade_retrieve` | alt | `--timeout-ms 720000` | 第 9 步 sleep 660000；默认 20000 会 180s 杀 probe |
 
-> `--dry-run` 可用性（2026-10-24 `docs/window-scenario-dryrun-sweep-20261024.md`）：alt 17×rc=0，`spell_cast` 用 `window-magic` rc=0。**dry-run 绿 ≠ 真机已对拍**。
+> `--dry-run` 可用性（2026-10-24 `docs/window-scenario-dryrun-sweep-20261024.md`）：alt 16×rc=0，`spell_cast` 用 `window-magic` rc=0。**dry-run 绿 ≠ 真机已对拍**。
 
 ### 2.2 用法
 
@@ -54,7 +55,7 @@
 cd <本检出>                      # 必须与 rebuild/preflight 同一 checkout
 bash tools/window/run_batch.sh --list
 bash tools/window/run_batch.sh --dry-run          # 只读：打印计划 + 跑前置自检，不起栈
-bash tools/window/run_batch.sh                    # 开窗：重建 + 自检 + 18 场景
+bash tools/window/run_batch.sh                    # 开窗：重建 + 自检 + 17 场景
 bash tools/window/run_batch.sh --only login_only,spell_cast
 bash tools/window/run_batch.sh --from 9           # 中断后从第 9 个接着跑
 bash tools/window/run_batch.sh --force            # 全部重跑（忽略续跑判据）
@@ -131,7 +132,7 @@ python -I -B tools/conformance/preflight.py --profile window-magic --with-dry-ru
 | `pin_smoke` | `start-stack-wmi.ps1 -CheckPinsOnly`（**不派生进程**）读上一轮 game-svr 日志自证 | 日志不存在 / 未见 `MIR2_CLIENT_ABILITY_LAYOUT=0` + `layout=oracle-40` |
 | `binary_stamp` | stamp.head == 当前 HEAD；stamp.sha256 == 文件实际；dirty 为空 | 旧二进制假绿 / 构建时脏树 |
 | `start_rust_exe` | `start-rust.ps1 -ServerExe` == 本检出 release | run-2 遗留的 `wt-worker-73` 路径 |
-| `roster` | 18 场景文件、profile 只允许 alt/window-magic、rules.json 在位 | 清单漂移 |
+| `roster` | 17 场景文件、**不含已封存 `pickup_item`**、profile 只允许 alt/window-magic、rules.json 在位 | 清单漂移 / 已封存场景混入 |
 
 > 私栈根可用 `--root` / `WINDOW_PRIVATE_ROOT` 覆盖；默认 `E:/tmp/conformance`。
 > `--skip-pin-smoke` / `--skip-binary` 只降级为 WARN，**必须**在证据里登记。
@@ -231,7 +232,7 @@ E:/tmp/window/run3/
     "sha256": "<本轮 release sha256>",
     "build_stamp": {"format": "mir2-build-stamp/1", "head": "<本轮 HEAD>", "dirty": ""}
   },
-  "totals": {"PASS": 1, "FAIL": 0, "UNDECIDABLE": 0, "NOT_RUN": 17},
+  "totals": {"PASS": 1, "FAIL": 0, "UNDECIDABLE": 0, "NOT_RUN": 16},
   "scenarios": [
     {
       "n": 1, "name": "login_only", "profile": "alt", "extra": [],
@@ -243,7 +244,7 @@ E:/tmp/window/run3/
       "evidence": {"card_window_json": "…/card-window.json", "report_json": "…/report.json",
                    "readme": "…/README.txt"}
     },
-    {"n": 18, "name": "upgrade_retrieve", "verdict": "NOT_RUN", "skipped": false}
+    {"n": 17, "name": "upgrade_retrieve", "verdict": "NOT_RUN", "skipped": false}
   ]
 }
 ```
@@ -258,7 +259,7 @@ RESULT n=07 name=gm_batch verdict=FAIL outer_rc=2 compare_rc=1 exit_code=2 frame
 ## 6. 开窗前 10 分钟 checklist（tester-1）
 
 1. `git status --porcelain` 为空；`git rev-parse HEAD` 记入本轮快照戳。
-2. `bash tools/window/run_batch.sh --list`（18 行）与 `--dry-run` 跑通；确认 preflight 全 OK。
+2. `bash tools/window/run_batch.sh --list`（17 行）与 `--dry-run` 跑通；确认 preflight 全 OK。
 3. 确认窗口独占：默认 C# 栈的 `E:/MirServer` 六进程已停（**不要**用 `start-all.ps1 -Stop`，会停 mysqld）；3306 仍 UP。
 4. `bash tools/window/run_batch.sh`；中断就重跑同一条命令（续跑）。
 5. 跑完：`batch-summary.json` 的 `totals` 与 `batch.log` 的 RESULT 行逐场景核对；把证据路径 + 两侧二进制 sha256 + HEAD 贴到 `openmir2-window-run-2` 的 `status`/`comment`。
@@ -267,6 +268,8 @@ RESULT n=07 name=gm_batch verdict=FAIL outer_rc=2 compare_rc=1 exit_code=2 frame
 ## 7. 本次 dry-run 验证证据
 
 （以下命令均在本检出执行；**全程未起栈、未占端口、未连库**。）
+> 修后（`openmir2-window-run3-scenarios-blocked`）：`--list`（17 行）与 `check_roster()`（`17 场景…不含 pickup_item`）已实跑；
+> 下方其余输出仍是修前基线 `3d6c85595` 的原始记录（未重跑全量 preflight：私栈 `start-rust.ps1 -ServerExe` 仍指 dev-2，按设计会 FAIL）。
 
 ```text
 快照：`3d6c85595` @ 2026-10-24 23:48 +08（**证据采集点**；此后本文件只有 §7 文档提交，
@@ -284,7 +287,7 @@ Rust 源码未变，二进制 sha256 不变）。
 $ bash -n tools/window/run_batch.sh && echo SYNTAX_OK
 SYNTAX_OK
 
-$ bash tools/window/run_batch.sh --list          # rc=0
+$ bash tools/window/run_batch.sh --list          # rc=0（17 行；修后实跑）
 #   scenario             profile       extra
 1   login_only           alt
 2   npc_click_auto       alt
@@ -293,20 +296,19 @@ $ bash tools/window/run_batch.sh --list          # rc=0
 5   dice_chain           alt
 6   gm_time              alt
 7   gm_batch             alt
-8   pickup_item          alt
-9   move_walk            alt
-10  merchant_dialog      alt
-11  king_dialog          alt
-12  king_castle_war      alt
-13  npc_script_chain     alt
-14  equip_struck_save    alt
-15  bag_equip            alt
-16  eat_item             alt
-17  spell_cast           window-magic
-18  upgrade_retrieve     alt           --timeout-ms 720000
+8   move_walk            alt
+9   merchant_dialog      alt
+10  king_dialog          alt
+11  king_castle_war      alt
+12  npc_script_chain     alt
+13  equip_struck_save    alt
+14  bag_equip            alt
+15  eat_item             alt
+16  spell_cast           window-magic
+17  upgrade_retrieve     alt           --timeout-ms 720000
 
-$ bash tools/window/run_batch.sh --dry-run       # rc=0（18/18 计划；未起栈）
-run_batch: start card=openmir2-window-run-2 run_dir=E:/tmp/window/run3 head=3d6c855951ac selected=18 dry_run=1
+$ bash tools/window/run_batch.sh --dry-run       # rc=0（17/17 计划；未起栈）
+run_batch: start card=openmir2-window-run-2 run_dir=E:/tmp/window/run3 head=3d6c855951ac selected=17 dry_run=1
 run_batch: PLAN rebuild: powershell … tools/window/rebuild-server.ps1 -SyncStartRust -RequireClean
 run_batch: == preflight private（tools/window/preflight_private_stack.py）
   PREFLIGHT_PRIVATE step=inventory status=OK detail=22 个部署件齐全，baseline 非空
@@ -316,7 +318,7 @@ run_batch: == preflight private（tools/window/preflight_private_stack.py）
   PREFLIGHT_PRIVATE step=pin_smoke status=OK detail=pin 链 smoke rc=0（-CheckPinsOnly，不派生/不等端口）
   PREFLIGHT_PRIVATE step=binary_stamp status=OK detail=head=3d6c855951ac sha256=b505fc4c5b56 built_at=2026-10-24T23:48:33+08:00
   PREFLIGHT_PRIVATE step=start_rust_exe status=OK detail=-ServerExe 已对齐：…/dev-2/mir2-rs/target/release/mir2-server.exe
-  PREFLIGHT_PRIVATE step=roster status=OK detail=18 场景（alt×17 + window-magic×1：spell_cast），rules.json 在位
+  PREFLIGHT_PRIVATE step=roster status=OK detail=17 场景（alt×16 + window-magic×1：spell_cast），不含 pickup_item，rules.json 在位
   PREFLIGHT_PRIVATE SUMMARY pass=8 warn=0 fail=0
   PREFLIGHT_PRIVATE RESULT PASS
   [OK] binary: …/mir2-rs/target/release/mir2-server.exe（sha256=b505fc4c5b56…）
@@ -325,11 +327,11 @@ run_batch: == preflight private（tools/window/preflight_private_stack.py）
   PREFLIGHT PASS（private + alt + window-magic）
   PLAN n=1 name=login_only profile=alt extra=[] out=E:/tmp/window/run3/login_only
   …
-  PLAN n=18 name=upgrade_retrieve profile=alt extra=[--timeout-ms 720000]
+  PLAN n=17 name=upgrade_retrieve profile=alt extra=[--timeout-ms 720000]
 run_batch: dry-run 完成：未起栈、未占端口、未写场景；计划 E:/tmp/window/run3-dry-run/batch.log
 
 $ python -I -B tools/window/preflight_private_stack.py --selftest
-GREEN: preflight_private_stack selftest 24/24
+GREEN: preflight_private_stack selftest 27/27
 
 $ python -I -B tools/conformance/card_window.py --selftest
 GREEN: card_window.py selftest 279/279
@@ -341,7 +343,7 @@ GREEN: card_window.py selftest 279/279
 | 检查 | 结果 |
 |---|---|
 | `card_window.py --selftest` | GREEN **279/279** |
-| `preflight_private_stack.py --selftest` | GREEN **24/24** |
+| `preflight_private_stack.py --selftest` | GREEN **27/27**（新增 3 条 roster 牙：17 条 OK / 加回 pickup 18 条红 / 17 条含 pickup 红） |
 | `cargo fmt --all -- --check` | rc=0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
 | `cargo test --workspace` | rc=0 |
@@ -356,6 +358,9 @@ GREEN: card_window.py selftest 279/279
   （同步 `-ServerExe` 前的备份）；`mir2-rs/target/release/mir2-server.build.json`（构建戳，target 内，不入库）。
 - 禁止：启动任何服务端/客户端、占端口、写生产库、改场景 JSON、`--allow-production-db`、
   停 mysqld、用 `--no-preflight` 出正式证据。
+- **已封存场景**：`pickup_item` 结构性不可判（T-19/T-25，见 `docs/pickup-item-reachability-20261024.md`），
+  已从 run-3 清单移除、不进入窗口；把它加回清单（或清单不是 17 条）会被 `run_batch.sh` 与 preflight `roster`
+  双双拒绝（rc=2）。本卡（`openmir2-window-run3-scenarios-blocked`）的牙即此二条。
 - 已知限制：`pin_smoke` 依赖**上一轮** game-svr 日志（本机 `E:/tmp/conformance/rust-logs/game-svr.out.log`）；
   全新机器/日志被清时只能 `--skip-pin-smoke` 并登记。
 - run-2 证据仍在 `E:/tmp/window/run2/`（其 README 里的 rust sha 指向已删除的 `wt-worker-73` 构建，

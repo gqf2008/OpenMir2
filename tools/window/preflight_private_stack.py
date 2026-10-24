@@ -31,7 +31,7 @@
   ⑥ start_rust   `E:/tmp/conformance/start-rust.ps1` 的 `-ServerExe` 默认值必须指向
                  **本检出**的 release 二进制（run-2 遗留值指向已删除的
                  `E:/tmp/wt-worker-73/...`；不修则 card_window 的 pid/exe 对账必红）。
-  ⑦ roster       run3 的 18 场景清单（`tools/window/run3-scenarios.json`）与场景文件/
+  ⑦ roster       run3 的 17 场景清单（`tools/window/run3-scenarios.json`，不含已封存 pickup_item）与场景文件/
                  profile 名/rules.json 一致性。
 
 用法：
@@ -382,7 +382,7 @@ def check_pin_static(alt, wm, pin_log):
         problems.append("window-magic 缺 magic 段（spell_cast 加载期 rc=2）")
     alt_rs_env = ((alt.get("sides") or {}).get("rust") or {}).get("env") or {}
     if PIN_KEY in alt_rs_env:
-        problems.append("alt.rust.env 不该有 %s（alt 是 18 场景基线，不能被窗口 pin 污染）"
+        problems.append("alt.rust.env 不该有 %s（alt 是 17 场景基线，不能被窗口 pin 污染）"
                         % PIN_KEY)
     if problems:
         return FAIL, "；".join(problems), \
@@ -496,8 +496,8 @@ def check_roster(repo=None, manifest=None):
         return FAIL, "读场景清单失败：%s" % ex, "修复 JSON"
     scen = doc.get("scenarios") or []
     problems = []
-    if len(scen) != 18:
-        problems.append("场景数 %d（应为 18）" % len(scen))
+    if len(scen) != 17:
+        problems.append("场景数 %d（应为 17）" % len(scen))
     names, numbers = [], []
     for s in scen:
         names.append(s.get("name"))
@@ -508,6 +508,8 @@ def check_roster(repo=None, manifest=None):
         p = os.path.join(repo, "tools", "probe", "scenarios", "%s.json" % s.get("name"))
         if not os.path.isfile(p):
             problems.append("缺场景文件 %s" % p)
+    if "pickup_item" in names:
+        problems.append("清单含已封存场景 pickup_item（T-19/T-25，结构性不可判，不进入窗口）")
     if len(set(names)) != len(names):
         problems.append("场景名重复")
     if numbers != list(range(1, len(scen) + 1)):
@@ -516,7 +518,7 @@ def check_roster(repo=None, manifest=None):
         problems.append("缺 rules.json")
     if problems:
         return FAIL, "；".join(problems), "修 tools/window/run3-scenarios.json / 补场景文件"
-    return OK, "18 场景（alt×17 + window-magic×1：spell_cast），rules.json 在位", None
+    return OK, "17 场景（alt×16 + window-magic×1：spell_cast），不含 pickup_item，rules.json 在位", None
 
 
 # ---------------------------------------------------------------------------
@@ -735,6 +737,37 @@ def selftest():
         wm_bad2["sides"]["rust"]["env"] = {}
         chk(check_pin_static(alt, wm_bad2, "E:/log/game-svr.out.log")[0] == FAIL,
             "牙: 缺 MIR2_CLIENT_ABILITY_LAYOUT=0 => FAIL")
+
+        # roster：17 场景清单；已封存 pickup_item 不得入列（reviewer-21 W-1）
+        fake_repo = os.path.join(tmp, "roster-repo")
+        scen_dir = os.path.join(fake_repo, "tools", "probe", "scenarios")
+        os.makedirs(scen_dir, exist_ok=True)
+        with open(MANIFEST, encoding="utf-8-sig") as fh:
+            good_manifest = json.load(fh)
+        for s_ in good_manifest["scenarios"]:
+            with open(os.path.join(scen_dir, s_["name"] + ".json"), "w") as fh:
+                fh.write("{}\n")
+        with open(os.path.join(scen_dir, "pickup_item.json"), "w") as fh:
+            fh.write("{}\n")
+        good_path = os.path.join(tmp, "run3-good.json")
+        with open(good_path, "w", encoding="utf-8") as fh:
+            json.dump(good_manifest, fh)
+        chk(check_roster(repo=fake_repo, manifest=good_path)[0] == OK,
+            "roster: 17 场景且不含 pickup_item => OK")
+        bad18 = json.loads(json.dumps(good_manifest))
+        bad18["scenarios"].append({"n": 18, "name": "pickup_item", "profile": "alt", "extra": []})
+        bad18_path = os.path.join(tmp, "run3-bad18.json")
+        with open(bad18_path, "w", encoding="utf-8") as fh:
+            json.dump(bad18, fh)
+        chk(check_roster(repo=fake_repo, manifest=bad18_path)[0] == FAIL,
+            "牙: 清单加回 pickup_item（18 条）=> FAIL")
+        bad17 = json.loads(json.dumps(good_manifest))
+        bad17["scenarios"][-1]["name"] = "pickup_item"
+        bad17_path = os.path.join(tmp, "run3-bad17.json")
+        with open(bad17_path, "w", encoding="utf-8") as fh:
+            json.dump(bad17, fh)
+        chk(check_roster(repo=fake_repo, manifest=bad17_path)[0] == FAIL,
+            "牙: 17 条但含 pickup_item => FAIL")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
