@@ -1,6 +1,6 @@
 # 真机窗口 Runbook（2026-10-23 定稿）
 
-> **本文最后核对：commit `4e0bfd2b8`（提交于 2026-10-23 22:21:57 +0800；审计时刻 22:27）；复审基线 `7ef49f807`（22:28:01，已含 `b42f20a28` @ 22:27:23）**（审计卡 `openmir2-runbook-tool-consistency-audit`）。
+> **本文最后核对：commit `6fe496abd`（2026-10-24 07:55:46 +0800；核对时刻 08:00 +08，卡 `openmir2-runbook-preflight-refresh`）**；上一轮审计基线 `4e0bfd2b8`（2026-10-23 22:21:57，卡 `openmir2-runbook-tool-consistency-audit`）与 `7ef49f807`（22:28:01）。
 > 逐条命令的实测输出与缺口见 `docs/runbook-tool-consistency-audit-20261023.md`；改工具后**先跑 §0.5 的 60 秒清单**再动窗口。
 
 > 面向：第一次跑窗口的人 / 下一次跑窗口的我。本文只写**跑之前的必做动作**与**读结果的口径**，
@@ -19,8 +19,23 @@
 ## 0.5 开窗前 60 秒自查（**一条命令**；手工步骤保留为退路）
 
 ```sh
-python -I -B tools/conformance/preflight.py --profile alt
+python -I -B tools/conformance/preflight.py \
+  --profile alt \
+  --root E:/tmp/conformance/rust-root \
+  --log-dir E:/tmp/conformance/rust-logs \
+  --ports-profile E:/tmp/window/r5/root/alt-port-profile.json
+# 需要更深自查时再加：--with-dry-run（委托 card_window --dry-run）/ --with-selftest
+#   （--with-selftest 就是委托 `card_window --selftest`：2026-10-24 实测 GREEN 237/237；
+#    测法 `time python -I -B tools/conformance/card_window.py --selftest`；
+#    耗时随机器/profile 环境而变：reviewer-3 机 22.26s、worker-58 机 45.05s/52.70s、上一轮/另一环境约 55s）
 ```
+
+- 参数：`--profile` 内建名（`alt` / `csharp-default`）或 profile JSON 路径；`--root` / `--log-dir` 原样传给
+  `start_mir2_server.ps1`（-Root / -LogDir）；`--ports-profile` 可选；`--allow-debug` 把 `Debug-Fallback`
+  从 FAIL 降级为 WARN——**只在明确要用 debug 二进制时加**，并在证据里写明原因。
+- 2026-10-24 在 `6fe496abd` 实跑（带全参数）：`docs`/`ports`/`profile` 三步 OK，`binary` 步 **FAIL**
+  （`SERVER_EXE_BUILD=Debug-Fallback`，rc=2）——修法就是它自己打印的那句 `cargo build --release -p mir2-server`。
+  这是**预期内的门**：树里只有 debug 构建时，窗口不能开。
 
 输出每步一行 `[OK]/[FAIL] <step>: <细节>`，最后 `PREFLIGHT PASS`（rc=0）或 `PREFLIGHT FAIL`（rc=2）；**FAIL 行直接写了修复建议**。五步含义（与卡 `openmir2-window-preflight-script` 一致）：
 
@@ -61,7 +76,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 Get-FileHash -Algorithm SHA256 <上一条打印的路径>
 ```
 期望：路径含 `\target\release\mir2-server.exe`；记下 hash 写进 `README.txt`。
-失败含义：含 `\debug\` ⇒ 你所在树没构建 release（或用的是别的检出的二进制）；路径与你预期的主检出不一致 ⇒ 见 §1.1 的解析口径，**以起栈后 pid 文件的 `roles[].exe` 为准**。
+失败含义：含 `\debug\` ⇒ 你所在树没构建 release（或用的是别的检出的二进制）；路径与你预期的主检出不一致 ⇒ 见 §1 第 1 步「注意解析口径」，**以起栈后 pid 文件的 `roles[].exe` 为准**。
 
 **第 2 步：本窗口端口全空（不是 port-status 的十个）**
 
@@ -102,11 +117,11 @@ python -I -B tools/conformance/card_window.py --card <卡 id> \
 **第 5 步：离线自检（工具没被改坏）**
 
 ```sh
-python -I -B tools/conformance/card_window.py --selftest     # 期望 GREEN: … selftest 186/186，rc=0
-python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 238/238，rc=0
+python -I -B tools/conformance/card_window.py --selftest     # 期望 GREEN: … selftest 237/237，rc=0（2026-10-24 本机实测）
+python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 262/262，rc=0
 ```
 失败含义：计数**变小** ⇒ 有判据被删（先查最近提交）；变红 ⇒ 工具坏了，别开窗。
-**注**：`compare_runs` 的自检计数随 `rules.json` 变更而变（`b42f20a28` 的 recog-unmask 就 +40）⇒ 以**实跑**为准，别抄本文的数字。
+**注**：两个自检的计数都随夹具与规则表变更而变（`compare_runs` 侧实测：`4e0bfd2b8` 198 ⇒ `b42f20a28` recog-unmask +40 = 238 ⇒ `c8473b344` 补 202/203/642/709 四条规则 +24 = 262）⇒ 以**实跑**为准，别抄本文的数字（本文的 237/237、262/262 是 2026-10-24 实测）。
 
 ---
 
@@ -258,7 +273,13 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 > 与 `placement` 同一处声明风格；不起栈的离线校验：`--dry-run` 会打印预置命令并做**离线内容校验**
 > （槽位/键/std_mode），不合规直接 rc=2，不会起栈。
 
-## 1.6 二进制与 sha256 的开窗前核对（卡 `openmir2-start-server-whatif-sha`，2026-10-23 晚）
+**已废弃的做法（2026-10-24 证伪）：不要把这个夹具写进 profile 顶层 `inventory`。**
+profile 顶层没有白名单校验、该键会被**静默忽略**（跑起来像「没有夹具」，不报错）；唯一生效的位置是
+**场景自描述的 `inventory`**。`--dry-run` 现在会为每侧打印一行
+`背包夹具（dry-run 不连库）：db=… 声明 N 件 positions=… make_index=…`（2026-10-24 实测 `bag_equip`
+两侧各 1 行、rc=0）——**看不到这一行就说明夹具没被声明**。
+
+## 1.7 二进制与 sha256 的开窗前核对（卡 `openmir2-start-server-whatif-sha`，2026-10-23 晚；2026-10-24 由 §1.6 改为 §1.7——与「魔法夹具」互换编号，避免 §1.8 排在 §1.7 之前，见文末「已知行号漂移」）
 
 `start_mir2_server.ps1 -WhatIf` 固定输出三行（实跑同款，只是多打印告警）：
 
@@ -312,7 +333,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 
 **注意（脚本能力之外）**：`E:/tmp/conformance/start-rust.ps1` 把脚本路径写死成主检出，因此**在 worktree 里 `-WhatIf` 看到的二进制，可能不是真窗口启动的那份**；真窗口以起栈后 `mir2-server.pid.json` 的 `roles[].exe` 为准（`card_window.py` 已对账，不符 rc=2）。
 
-## 1.7 魔法夹具：**声明即可**（工具已支持，2026-10-23 晚；卡 `openmir2-window-magic-fixture`）
+## 1.8 魔法夹具：**声明即可**（工具已支持，2026-10-23 晚；卡 `openmir2-window-magic-fixture`；2026-10-24 由 §1.7 改为 §1.8——与「二进制与 sha256」互换编号）
 
 `spell_cast` 场景的 `blocked.missing_fixture` 要的「角色已学魔法」现在由 `card_window.py` 在
 **每侧 restore（与预置位）之后、起栈之前**自动写进该侧测试库 `characters_magic`。
@@ -343,12 +364,44 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 
 ## 2. 跑的时候
 
-- `card_window.py --card <卡 id> --scenario <场景> --out <目录> --profile alt`；R 卡窗口**必须** `--post-comment` 记账（在解禁之后）。
+- **命令模板**（所有场景共用，只有前置不同）：
+
+  ```sh
+  python -I -B tools/conformance/card_window.py --card <卡 id> \
+    --scenario tools/probe/scenarios/<场景>.json --out E:/tmp/window/<本次 run> \
+    --profile <本次 profile> [--var NAME=VALUE ...] [--timeout-ms <ms>] [--post-comment]
+  ```
+
+  **不存在「所有场景都用 `--profile alt`」**：`spell_cast` 在 `alt` 下**加载期就 rc=2**
+  （实测原文：`要求 magic 夹具，但 profile alt 未声明 magic 段`）；`combat_hit` / `combat_strike` 是封存场景，
+  任何 profile 都 rc=2 `BLOCKED`（实测）。`--var` 可重复、两侧**原样**透传（实测 `--var npc_actor=12345`
+  同时出现在两侧 probe 命令行）；非法形式（缺 `=`）**加载期** rc=2 且点名。
+- **本节点到名字的场景，前置如下**（其余场景以场景 JSON 的 `requires` / `inventory` / `required` 为准，
+  全量枚举见 `docs/window-batch-plan-20261023.md` §7.4 @ `81ecc0d28`：**12 行 / 18 场景**；
+  能不能跑的矩阵见 `docs/window-batch-rehearsal-20261024.md`：**18 可跑 / 2 blocked / 0 假绿**——本文不复写矩阵）：
+
+  | 场景 | 必带前置 | 不满足时（实测） |
+  |---|---|---|
+  | `dice_chain` | `--var npc_actor=<本次抓到的 actor id>`（场景 `params.npc_actor=119` 是旧抓包值，不在 `required` 里、**不会自动发现**） | 不带就点旧 actor（点空）；或改用 `dice_chain_auto`（自动发现） |
+  | `dice_chain_auto` | 无（actor 自动发现） | — |
+  | `bag_equip` / `eat_item` | **场景自描述 `inventory`**（已在场景 JSON 里，见 §1.6「背包夹具」）；场景 `required` 会自动触发 discovery（`bag_equip`：`item_name` / `make_index` / `takeon_where`；`eat_item`：`item_name` / `make_index`，**无** `takeon_where`） | 写 profile 顶层 `inventory` 无效（静默忽略） |
+  | `upgrade_retrieve` | `probe_timeout_ms=720000`（profile 顶层）或 `--timeout-ms 720000`（实测两侧 probe 命令行均为 720000） | 默认 20000 ⇒ 180s 杀 probe，白跑一整轮 |
+  | `spell_cast` | profile **两侧都有** `magic` 段 + `sides.*.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`；片段抄 `tools/probe/scenarios/README.md`「窗口 profile 前置：`spell_cast` 必须 pin D-9」 | `alt` ⇒ 加载期 rc=2（缺 magic）；不 pin D-9 ⇒ 53 的 `body_len` 0B vs 16B FAIL |
+  | `combat_hit` / `combat_strike` | 无——**封存**（缺同屏怪物夹具与伤害夹具） | rc=2 `BLOCKED`；这是设计如此，不要当「工具坏了」去改 |
+  | `login_only` | 探针不替操作者发客户端命令；卡面要求的手动输入（如 `@禁言 <名> 1`）必须由人在真实客户端做 | 漏了**不报错**，只会让判据看起来没红 |
+
+- **两条硬提醒（照做，别省）**：
+  1. **`--dry-run` 绿 ≠ 真机已对拍**：dry-run 不连库、不起栈，只预览命令序列；判据只看顶层 `verdict`
+     （`PASS` / `FAIL` / `UNDECIDABLE`，见 §3），`UNDECIDABLE` 不是通过。
+  2. **失败/中止时的停栈口径**：只停**本次窗口起的**两个栈进程；`card_window` 的停栈命令禁含
+     `mysqld` / `Stop-Service` / `net stop` / `mysqladmin`，**不碰生产库、不停 mysqld**（3306 必须一直是 UP）。
+     restore 只对 `mir2_test_db*` 测试库做，不要把测试库名改成生产库。
+- R 卡窗口**必须** `--post-comment` 记账（在解禁之后）。
 - **超时**：profile 键是 **`probe_timeout_ms`**（内置 alt 默认 `20000`，`card_window.py:297`），子进程总超时 = `max(180, probe_timeout_ms/1000 + 120)` 秒（`:1949`）。
   ⇒ **默认 180s 就杀 probe**。`tools/probe/scenarios/upgrade_retrieve.json` 第 9 步是 `{"sleep": {"ms": 660000}}` ⇒ 该场景必须把
   `probe_timeout_ms` 设到 **720000**（profile JSON 顶层，或命令行 `--timeout-ms 720000`，`:696-697` 等价）。
   **在 profile 里写 `"timeout_ms"` 会被静默忽略**（profile 顶层没有白名单校验）——这正是「白跑一轮」的经典成因。
-- **参数发现**：9 个场景声明了 `required`（`npc_actor`/`merchant_actor`/`make_index`/自身坐标…）。两侧**各自发现各自的值**，某侧推不出 ⇒ fail-closed，不许拿一侧的值跑另一侧。
+- **参数发现**：11 个场景声明了 `required`（`npc_actor`/`merchant_actor`/`make_index`/自身坐标…；2026-10-24 实测：`bag_equip`、`combat_hit`、`eat_item`、`king_castle_war`、`king_dialog`、`merchant_dialog`、`move_walk`、`npc_click`、`npc_script_chain`、`pickup_item`、`upgrade_retrieve`）。两侧**各自发现各自的值**，某侧推不出 ⇒ fail-closed，不许拿一侧的值跑另一侧。
 - **手动步骤不要漏**：`login_only.json` 这类**不含发客户端命令的步骤**。若卡面要求「客户端直呼 `@禁言 <名> 1`」之类的探针，必须由操作者在真实客户端手动输入，脚本不会替你做。漏了不会报错，只会让这条判据看起来没红。
   **角色预置位不再是手动步骤**：场景声明 `placement` 即可（见 §1.5），`card_window.py` 在起栈前自动改库并在 `placement.json` 留证；预置不成就 rc=2，不会带着错位去跑。
 
@@ -496,3 +549,24 @@ oracle 的 `ActionOfGmExecute`（以及多数脚本动作）**直接拼 `sParam1
 
 - 写 `--post-comment`（解禁后）+ 卡的 `status` 里写明：哪几个窗口项已验、证据路径、两侧二进制 sha256、以及**没验到的项和原因**。
 - R 卡窗口全验完才 `closed`；只验了一部分就保持 `in-progress`，并在 `work` 里写明剩余项。
+
+## 附录：已知行号漂移（2026-10-24 登记；正文既有行号**本卡不改**）
+
+> 下表是 `card_window.py` 的**既有**行号引用（非本卡引入），正文保持原样；按行号去找代码前先查本表。
+> 行号随工具提交持续漂移，**优先按函数/键名检索**（右列锚点）。
+
+| 正文里的旧行号 | 当前实际行号 | 锚点（grep 这个名字/片段） |
+|---|---|---|
+| `:297` | `:310` | `BUILTIN_PROFILES['alt']` 的 `"probe_timeout_ms": 20000` |
+| `:1949` | `:2814` | `probe_timeout = max(180, int(prof.get("probe_timeout_ms", 20000) / 1000) + 120)` |
+| `:696-697` | `:713` | `apply_overrides()` 里的 `prof["probe_timeout_ms"] = cfg["timeout_ms"]` |
+| `:1896`（判定） | `:528` 定义、`:2761` 调用 | `def check_ports_free(ports)` / `busy = check_ports_free(sc.get("ports") or [])` |
+| `:1901`（报错） | `:2766` | `res["error"] = ("起栈前端口已被占用…` |
+
+> **节号也漂过**：原「二进制与 sha256」节与本文件「背包夹具」节同为 `## 1.6`；2026-10-24 起「背包夹具」保留
+> §1.6，「二进制与 sha256」改为 **§1.7**、原「魔法夹具」由 §1.7 改为 **§1.8**（两者互换，避免 §1.8 排在 §1.7 之前；
+> `docs/docs-state-drift-sweep-20261024.md:65` 所称的「§1.6 三行」= 该节）。
+
+> **悬空引用（不算行号漂移）**：§0.5 第 1 步原写「见 §1.1 的解析口径」，但本文件**没有** `## 1.1`（也无 `### 1.1`）；
+> 被指的「注意解析口径」实际在 **§1 第 1 步**（`## 1. 开跑前必做` 下第 1 条的加粗小标题）。2026-10-24 已就地
+> 改为「见 §1 第 1 步『注意解析口径』」——这是**悬空引用**，不是行号漂移，故单列在此。
