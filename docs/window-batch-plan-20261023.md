@@ -70,7 +70,7 @@
 | `npc_click` | `CM_CLICKNPC` → 643/100 | 固定 NPC `@main` 说词与 Recog | 需要继续选标签的链 |
 | `npc_click_auto` | 同上，actor 取最近一条非 self `SM_TURN` | 同上（免 --var） | 同上 |
 | `merchant_dialog` | 点商人 → 643 → `@buy` → 645 | 商人 `@main`/`[~@repair]`/`$STR` 展开/商品列表 | 升级、修理等其它标签 |
-| `pickup_item` | `CM_PICKUP`（脚下）→ 200/201 | 拾取入包帧 | 需要先掉落的场景 |
+| `pickup_item` | `CM_PICKUP`（脚下）→ 200/201 | 拾取入包帧 | 需要先掉落的场景〔2026-10-24 作废：T-19/T-25 结构性不可达 ⇒ 已封存，见 §7.4 勾注〕 |
 | `dice_chain` | 点 NPC → `@kaiz`→`@ya5`→`@ya52` → 643/767 | 正是 `script-take-persist` 的脚本链 | 其它标签链 |
 | `dice_chain_auto` | 同上（actor auto） | 767 分支 | 同上 |
 | `gm_batch` | 5 条 GM 命令 → 100 | `@时间/@拒绝/@拒绝私聊/@help/@LockLogin` | 需 SETPERMISSION=10 的命令 |
@@ -472,11 +472,10 @@ python -I tools/goal/goal_gate.py --json
 
 ### 7.4 「现在就能跑」最小清单（现算）
 
-**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **12 行 / 18 个场景**。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中只剩 `combat_hit` / `combat_strike` 两个 `blocked`）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item` 已由「场景自描述 `inventory`」（工具侧 `bb4317a01`、场景侧 `c4b66ddb1` 接通）移入本表，前置见行内（**profile 顶层 `inventory` 会被静默忽略，声明只能写在场景 JSON 里**）。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
+**「现在就能跑」按逐行枚举本表得出（Leader 2026-10-24 裁决：计数以枚举为准，禁用 `18−N` 反推）**：下表 **11 行 / 17 个场景**。口径：场景不在自身 `blocked`（仓库 20 个场景 JSON 中有 `combat_hit` / `combat_strike` / `pickup_item` 三个 `blocked`；最后一个见下方 2026-10-24 勾注）、`required` 可发现、依赖的夹具/工具已在 master；`bag_equip`/`eat_item` 已由「场景自描述 `inventory`」（工具侧 `bb4317a01`、场景侧 `c4b66ddb1` 接通）移入本表，前置见行内（**profile 顶层 `inventory` 会被静默忽略，声明只能写在场景 JSON 里**）。castle_zone 不在 20 个文件里（不可达登记，见 7.3）。
 | 场景 | `required` | 引用 T 行（现算） | 跑前还需 |
 |---|---|---:|---|
 | `login_only` | — | 14 | 角色预置位（场景可声明 `placement`） |
-| `pickup_item` | `self_x/self_y`（SM_LOGON 推导） | 0（被 T-211 等泛引用） | 同格地物 |
 | `move_walk` | `move_x/move_y/move_xy`（`computed.pack`，本日已支持） | 0 | 空格目标格 |
 | `upgrade_retrieve` | `merchant_actor`（643 推导） | 0 | 商店 NPC 摆位（沙巴克铁匠 (332,317) 西南邻格 (320,328)）；**武器在手、金币 ≥ 10000、背包有黑铁矿**（三项缺一，第 9 步 `wait_idents 709` 必红；场景 note 原文） |
 | `equip_struck_save` | — | 1（`T-247`） | 商店 NPC「卫家店」摆位（map 0103, 19,18）+ 铁器店 `placement`；642 已接线（`8dcb8c8ca`，T-266），**真机窗口未授权**；破零支会发两条 642（`202 → 642(0) → 642(0)`） |
@@ -488,7 +487,9 @@ python -I tools/goal/goal_gate.py --json
 | `gm_time` / `gm_batch` | — | 0 / 0 | 无 |
 | `spell_cast` | —（无参数发现） | 5 | profile 需 `magic` 段（场景 `requires:["magic"]`，缺段加载期 rc=2）**且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT=0`（值是字符串 `"0"`；否则 53 body Rust 16 vs C# 0 ⇒ `body_len` fail-closed）；两段可抄写法见 `tools/probe/scenarios/README.md`「窗口 profile 前置：`spell_cast` 必须 pin D-9」与同文件「`requires`」节；**真机窗口仍未跑** |
 
-**仍不可跑**：**无**（上表 18 个场景全部可跑；`bag_equip`/`eat_item` 已于 2026-10-24 移入上表）。两个 `blocked` 场景 `combat_hit` / `combat_strike` 见 §7.3「跑也没用」；`castle_zone` 为不可达登记（仓库内无该场景文件，见 §7.3）。
+> **〔2026-10-24 勾注，卡 `openmir2-pickup-item-reachability`〕`pickup_item` 移出本表并封存为「结构性不可判」**（场景顶层 `blocked`，T-19/T-25）：oracle 全仓无 `MapItem.ItemId` 赋值点（`MapItem.cs:41` 是注释）⇒ `Envirnoment.AddItemToMap` 首行 `ItemId==0` 恒 `return false`（`:88-92`）⇒ 普通 `CM_DROPITEM` 恒 601、地面永远无物；唯一 600 支 `ControlDropItem`+便宜物（`PlayObject.Operate.cs:284-289`）只 `Dispose` 背包物品、不造 `MapItem` ⇒ `SM_ADDITEM(200)`/`SM_BAGITEMS(201)` 两侧结构性不可达。证据链与甲路线否决理由见 `docs/pickup-item-reachability-20261024.md`；机器牙：`python -I tools/hygiene/scenario_undecidable_audit.py check`。
+
+**仍不可跑**：上表 17 个场景全部可跑；另有 **3 个 `blocked` 场景**：`combat_hit` / `combat_strike`（见 §7.3「跑也没用」）与 `pickup_item`（2026-10-24 封存，结构性不可判，见上方勾注）。`castle_zone` 为不可达登记（仓库内无该场景文件，见 §7.3）。
 
 ### 7.5 判据口径（写给开窗的 owner）
 
