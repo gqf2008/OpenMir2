@@ -75,6 +75,7 @@ import io
 import os
 import re
 import sys
+import subprocess
 import tempfile
 
 # ``python -I`` does not put the script's directory on sys.path (it implies
@@ -419,6 +420,29 @@ def selftest():
                          'reason = "why"\nadded = "2026-10-24"\n') == 2)
         check("⑰ 重复条目 => rc=2",
               load_probe("dup.toml", good_entry + "\n" + good_entry) == 2)
+
+    # ⑱ the enumeration surface is pinned, not just documented (reviewer-3
+    # M1): only **git-tracked** Markdown is scanned, via the shared skeleton
+    # ``markdown_files`` (``git ls-files``).  Swapping that helper for
+    # ``os.walk`` used to keep the whole selftest green while silently scanning
+    # untracked files (and losing the fail-closed unreadable-file path); this
+    # fixture makes such a switch red: the untracked bare count would be found.
+    with tempfile.TemporaryDirectory(prefix="dynamic-count-") as top:
+        subprocess.run(["git", "-C", top, "init", "-q"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=True)
+        os.makedirs(os.path.join(top, "docs"), exist_ok=True)
+        for name, body in (("tracked.md", "# 干净\n"),
+                           ("untracked.md", "FAIL 3\n")):
+            with open(os.path.join(top, "docs", name), "w",
+                      encoding="utf-8", newline="\n") as fh:
+                fh.write(body)
+        subprocess.run(["git", "-C", top, "add", "docs/tracked.md"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                       check=True)
+        tracked_scan = scan(top, "docs", [], DEFAULT_MAX_GAP)  # files=None
+    check("⑱ 枚举只用 git 跟踪集（未跟踪的裸计数不扫；改 os.walk 即红）",
+          tracked_scan["files"] == 1 and tracked_scan["findings"] == [])
 
     failed = 0
     for name, ok in checks:

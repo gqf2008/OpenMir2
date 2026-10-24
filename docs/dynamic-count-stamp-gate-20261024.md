@@ -62,7 +62,7 @@ added = "2026-10-24"
   （`goal_gate --json` 的 detail）、规则文本（不是现时计数）、历史里程碑叙述。**引述**（`「可跑场景 16」`）
   已由门直接放行，不再占白名单。
 
-## 4. 自检（`--selftest`，20/20，当天实跑）
+## 4. 自检（`--selftest`，21/21，当天实跑）
 
 ```text
 PASS ① 带戳的计数 => 绿
@@ -85,7 +85,8 @@ PASS ⑭ 缺 reason => rc=2
 PASS ⑮ 缺 added => rc=2
 PASS ⑯ 坏 sha => rc=2
 PASS ⑰ 重复条目 => rc=2
-selftest: 20/20 passed
+PASS ⑱ 枚举只用 git 跟踪集（未跟踪的裸计数不扫；改 os.walk 即红）
+selftest: 21/21 passed
 ```
 
 ## 5. 五颗牙（串行；还原一律 `git checkout --`，索引即还原源）
@@ -230,19 +231,24 @@ selftest: 18/20 passed      # rc=1
 | 84 | `docs/交接-OpenMir2编排与联调-20261015.md:44` | board | allow-list（`added=2026-10-24`，理由见 toml） |
 | 85 | `docs/交接-OpenMir2编排与联调-20261015.md:152` | board | allow-list（`added=2026-10-24`，理由见 toml） |
 
-### 6.2 返工后（base `dc6e96995`，现行判据）
+### 6.2 返工后（base `e9d00c6b3`，现行判据）
 
-全量扫 **140 个 markdown → 87 处命中 / 86 条唯一行 / 28 个文件**，allow-list **86 条全部压到现行命中**
-（`rot=0`，rc=0）。与 §6.1 的差异只有两处来源：
+全量扫 **140 个 markdown → 88 处命中 / 87 条唯一行 / 28 个文件**（同一行重复出现时指纹相同、合并为一条：
+`docs/rewrite-remaining-inventory-20261022.md` 的 recon `tracked` 摘录在 `:215` 与 `:1102` 各命中一次），
+allow-list **87 条全部压到现行命中**（`rot=0`，rc=0）。与 §6.1（`3738ad234`）的差异有三处来源：
 
 1. **引述豁免**：`docs/docs-state-drift-sweep-20261024.md:142`（「可跑场景 16」是引述）由红转绿，对应条目撤出 →
    命中 85→84、文件面 -1。类别计数里 `runnable` 从 1 变成 0。
-2. **master 前进**（`3738ad234` → `dc6e96995`）后新落地的文档带来 3 处：`docs/rewrite-remaining-inventory-20261022.md:727`
-   （逐字摘录 recon 输出里的 tracked 计数）、`docs/session-digest-20261024.md:18`（看板列，文档级快照）、
+2. **master 前进 `3738ad234` → `dc6e96995`**：新落地的文档带来 3 处 —— `docs/rewrite-remaining-inventory-20261022.md:727`
+   （当时的 minimap 逐字摘录）、`docs/session-digest-20261024.md:18`（看板列，文档级快照）、
    `docs/session-digest-20261024.md:171`（**假红**：正则把「在待审/在写，1 张」的 `1` 当成待审数）。
+3. **master 再前进 `dc6e96995` → `e9d00c6b3`**（`5634ec03d` B 表审计 + runbook 批次）：
+   **+1 处新命中** —— `docs/rewrite-remaining-inventory-20261022.md:464`（B 表审计当次 `walgit collab board --format json`
+   的逐字输出）；**同一行内容变化并下移** —— minimap 摘录由 `:727` 挪到 `:1028`，白名单按新指纹重登
+   （`ed38b665…` → `c9626857…`；旧指纹未被任何命中压到，本门会先报 `rot`）。
 
-净结果 84 + 3 = **87 处 / 86 行 / 28 文件**，86 条 allow-list 一一对应。分类（按类别）：
-`board` 36 / `board`+`r-cards` 19 / `tracked` 23 / `fail` 6 / `r-cards` 2 / `fail`+`r-cards` 1 / `runnable` 0。
+净结果 84 + 3 + 1 = **88 处 / 87 行 / 28 文件**，87 条 allow-list 一一对应。分类（按类别）：
+`board` 37 / `board`+`r-cards` 19 / `tracked` 23 / `fail` 6 / `r-cards` 2 / `fail`+`r-cards` 1 / `runnable` 0。
 
 > `docs/rewrite-remaining-inventory-20261022.md` 是**另一张卡的写集**，本卡不改它；该条目按当前行指纹登记，
 > 那一卡合入后若行内容变化，本门会先报 rot（这正是 rot 检测的用途），按新指纹重登即可。
@@ -263,7 +269,7 @@ selftest: 18/20 passed      # rc=1
 ## 8. 复算命令
 
 ```sh
-python -I tools/hygiene/dynamic_count_stamp_gate.py --selftest          # 20/20
+python -I tools/hygiene/dynamic_count_stamp_gate.py --selftest          # 21/21
 python -I tools/hygiene/dynamic_count_stamp_gate.py                     # 全量 docs（当前应为 OK：140 文件 / 0 缺戳）
 python -I tools/hygiene/dynamic_count_stamp_gate.py --path docs/dynamic-count-stamp-gate-20261024.md   # 缩窄到单个文件
 python -I tools/hygiene/dynamic_count_stamp_gate.py --path docs/zz_probe # 缩窄到空/未跟踪目录：0 文件、rc=0（不再误报 rot）
@@ -382,3 +388,48 @@ selftest 新增 ⑨（非空 allow-list + 收窄不覆盖任何条目 ⇒ 不报
 `docs/Rust重写设计文档.md` 的 4 条命中（`:754` hash 前缀 `3`、`:813` 日期 `2026`、`:861` 任务号 `14`、`:886` 日期 `2026`）
 是**正则噪声**而不是计数。收紧分隔符/数字后瞻属于**判据变更**（会同时改变真阳面），不在本轮返工范围内；
 这 4 条继续留在白名单，reason 已标注「假红（非计数）」。留给下一轮单独判（需要负向夹具 + 全量重分类）。
+
+## 10. 返工记录 ②（reviewer-3 `request_changes` on `bfb42a3e`，被审 head `7baa268fc`）
+
+上一轮（§9）的 F1/F2 已被复核认可；本轮只剩一条**不在被审分支上**的阻塞项 —— **合并结果树是红的** ——
+外加一条 Minor（枚举口径没有牙）。判据未改，只做机械返工与补牙。
+
+### 10.1 I1（Important）合并树上本门 rc=1
+
+master 已从评审 base `dc6e96995` 前进到 `5634ec03d`（B 表审计合入），`git merge-tree` 本身无冲突，
+但在**合并结果树**上本门报 `FAIL (2 缺戳 / 1 allow-list 腐烂)`。根因是只在旧 base 上跑过门。
+
+修法：**rebase 到 `walgit/master = e9d00c6b3`**（不是停在 `5634ec03d`；之后还合了 runbook 批次），
+再按新树上的行重算 allow-list（**不碰 inventory 文档本身** —— 它是另一张卡的写集）：
+
+| 位置 | 新指纹 | 处置 |
+|---|---|---|
+| `docs/rewrite-remaining-inventory-20261022.md:1028` | `c9626857…` | 把旧 `:727` 的 `ed38b665…` 换掉（同一 minimap 摘录，内容变化并下移） |
+| `docs/rewrite-remaining-inventory-20261022.md:464` | `d4de3f85…` | **新增**条目，`added=2026-10-24`，理由：B 表审计当次 `board --format json` 的逐字输出 |
+
+为什么必须 rebase 而不能只在旧 base 上加条目：这两行在旧 base 上不存在（`:464` 是 B 表审计新增；
+minimap 行在旧 base 是 `:727`），只加条目会立刻被判 `rot`。
+
+实测（rebase 后）：
+
+```text
+$ python -I tools/hygiene/dynamic_count_stamp_gate.py --fingerprint docs/rewrite-remaining-inventory-20261022.md:464
+d4de3f8527f29c2e2fd576df7be92a78b571ed3d4067f508f8662f56dc861fe8
+$ python -I tools/hygiene/dynamic_count_stamp_gate.py --fingerprint docs/rewrite-remaining-inventory-20261022.md:1028
+c9626857ba1270f76376d817435205df1575990f5ac3218da6ea466cd1e8f2fa
+$ python -I tools/hygiene/dynamic_count_stamp_gate.py
+dynamic-count gate: OK（0 缺戳；扫描 140 个 markdown，path=docs，max-gap=24）
+rc=0
+```
+
+空 allow-list 重算（与 §6.2 同口径）：**88 处命中 / 87 唯一 / 28 文件**；87 条 allow-list 全部 `used`、`rot=0`。
+
+### 10.2 M1（Minor）「只用 git 跟踪集」此前没有牙
+
+复核实测：把 `markdown_files` 从 `skeleton.markdown_files`（`git ls-files`）换成 `os.walk`，`--selftest`
+**仍 20/20 全绿**，但运行期口径已经变了（`--path docs/zz_probe` 由 rc=0 变 rc=1；未跟踪的非法 UTF-8
+由 rc=0 变 rc=2）。盲区本身在 §7 已登记，缺的是**断言**：F2 刚消除的分叉可以被一次「顺手简化」静默回退。
+
+补的牙：selftest ⑱ 在临时目录里 `git init`、只 `git add` 一个干净文件，另一未跟踪文件写裸计数，然后
+`scan(..., files=None)`，断言 `files == 1 && findings == []`。改回 `os.walk` ⇒ 会扫到未跟踪文件 ⇒ ⑱ 红
+（见 §5 第 (f) 颗牙）。这是**行为级**断言，不依赖「函数对象同一性」这种实现细节。

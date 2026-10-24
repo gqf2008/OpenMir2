@@ -515,8 +515,8 @@ added = "2026-10-24"
 
 [[allow]]
 path = "docs/rewrite-remaining-inventory-20261022.md"
-line_sha256 = "ed38b6655618259912672610c834685e642d16945bb3c30e3dc3c85389e61863"
-reason = "逐字摘录 recon_gates 输出的 `tracked=0`；同一行已有 `@ 4d9bab444`，但距该计数超过 --max-gap(24)。该文件是另一张卡的写集，本卡不改。"
+line_sha256 = "c9626857ba1270f76376d817435205df1575990f5ac3218da6ea466cd1e8f2fa"
+reason = "逐字摘录 recon_gates 输出的 `tracked=0`（minimap 行，位于 §3.2.1 之后的复算命令贴出段）；同一行已有 `@ 4d9bab444`，但距该计数超过 --max-gap(24)。该文件是另一张卡的写集，本卡不改。"
 added = "2026-10-24"
 
 [[allow]]
@@ -529,4 +529,10 @@ added = "2026-10-24"
 path = "docs/session-digest-20261024.md"
 line_sha256 = "1ad549bcb316305612d8d549034cc96ffe6bbcc239e16f8fd69b74c50b9b0cf6"
 reason = "假红（非计数）：正则把「在待审/在写，1 张」的 `1` 当成了待审计数；该句是在说收口数量，不是看板列。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "d4de3f8527f29c2e2fd576df7be92a78b571ed3d4067f508f8662f56dc861fe8"
+reason = "复算命令段的逐字输出（B 表审计当次 `walgit collab board --format json` 看板计数）；该段已声明『看板是实时量，复跑以当次输出为准』，行内插戳会让贴出的输出与命令不再逐字可核。该文件是另一张卡的写集，本卡不改。"
 added = "2026-10-24"
