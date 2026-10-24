@@ -71,6 +71,16 @@
 profile：
   * 内置 `alt`（默认）= 2026-10-23 双栈窗口所用的备用端口剖面
     （E:/tmp/conformance 私有根 + mir2_test_* / mir2_test_*_r 测试库）。
+  * 环境加固（卡 `openmir2-window-profile-env-hardening`，window-run-1 §1 三处阻塞固化，
+    alt / csharp-default 及其派生 profile 一体生效）：
+      - restore 用 **Git bash 绝对路径**（裸 `bash` 会被 CreateProcess 先解析到 System32 的
+        WSL 启动器 stub，rc=1）；加载期校验拒裸 `bash` / System32 路径（本机探测可用
+        `CARD_WINDOW_GIT_BASH` 覆盖，preflight 的 `bash` 步同判据）。
+      - stack 走 `tools/window/start-stack-wmi.ps1`：WMI `Win32_Process.Create` 派生
+        （断开孙进程继承 stdout 管道导致的 stack 步 EOF 死锁）+ 等 `-ReadyPorts`
+        （**含网关**）全监听 + 暖 45s，缺端口非零退出。
+      - `ready_ports` **不含网关端口**（17200/17600/7200）：wait_ready 的连接探针会占住
+        GameGate user 会话槽，596ms 后 probe 的真实连接复用该槽被丢（no SM_LOGON）。
   * 内置 `csharp-default` = C# 默认端口栈（E:/MirServer，**生产库**）。默认拒绝运行，
     必须显式 --allow-production-db，且只有 owner 授权的窗口才允许（见 docs 说明）。
   * `--profile <路径.json>` 也可直接加载自定义 profile（format = card-window-profile/1）。
@@ -143,6 +153,7 @@ import io
 import json
 import os
 import re
+import shutil
 import socket
 import struct
 import subprocess
@@ -237,6 +248,80 @@ RUST_SERVER_BIN_DEBUG = os.path.join(
 ).replace(os.sep, "/")
 PID_FILE_NAME = "mir2-server.pid.json"
 
+# --- restore 的 bash 必须写 Git bash 绝对路径（卡 openmir2-window-profile-env-hardening）---
+# CreateProcess 对裸 `bash` 的搜索顺序是「应用目录 → 当前目录 → **System32** → Windows 目录
+# → PATH」，System32 先于 PATH：机器开着 WSL 功能时 `C:\Windows\System32\bash.exe`（WSL 启动器，
+# 未装发行版 rc=1）会吃掉裸 `bash`，restore 必败（window-run-1 §1.1 实测）。所以 restore 的
+# 可执行位**不许**是裸 `bash`，也**不许**直接指向 System32/Sysnative 的 stub。
+def is_wsl_stub_path(token):
+    """bash 可执行路径落在 System32/Sysnative 下 ⇒ WSL 启动器 stub（未装发行版 rc=1）。"""
+    p = os.path.normcase(str(token).replace("/", os.sep))
+    return (os.path.basename(p).startswith("bash")
+            and ("system32" in os.path.dirname(p) or "sysnative" in os.path.dirname(p)))
+
+
+GIT_BASH_CANDIDATES = (
+    r"C:\Program Files\Git\usr\bin\bash.exe",
+    r"C:\Program Files (x86)\Git\usr\bin\bash.exe",
+    os.path.expandvars(r"%LocalAppData%\Programs\Git\usr\bin\bash.exe"),
+)
+
+
+def detect_git_bash():
+    """探测本机 Git bash 绝对路径：环境变量 `CARD_WINDOW_GIT_BASH` → 常见安装位 → PATH
+    （PATH 命中也跳过 WSL stub）。找不到返回 None——内置 profile 会回退裸 `bash`，
+    加载期由 check_restore_bash fail-closed 拒绝并给出修法。"""
+    override = os.environ.get("CARD_WINDOW_GIT_BASH", "").strip()
+    for c in ([override] if override else []) + list(GIT_BASH_CANDIDATES):
+        if c and os.path.isfile(c) and not is_wsl_stub_path(c):
+            return c.replace(os.sep, "/")
+    found = shutil.which("bash")
+    if found and os.path.isfile(found) and not is_wsl_stub_path(found):
+        return found.replace(os.sep, "/")
+    return None
+
+
+GIT_BASH = detect_git_bash()
+
+
+def check_restore_bash(argv, where):
+    """restore 可执行位的加载期校验（Windows）：拒裸 `bash` 与 System32/Sysnative stub。"""
+    if os.name != "nt" or not argv:
+        return argv
+    exe = str(argv[0])
+    if is_wsl_stub_path(exe):
+        raise ConfigError(
+            "%s 的 bash 指向 System32/Sysnative（WSL 启动器 stub，未装发行版 rc=1）：%r"
+            " ⇒ 改写 Git bash 绝对路径（如 C:/Program Files/Git/usr/bin/bash.exe），"
+            "或安装 Git for Windows / 设 CARD_WINDOW_GIT_BASH" % (where, exe))
+    if os.path.basename(exe).lower() in ("bash", "bash.exe") and not os.path.dirname(exe):
+        hint = ("（本机探测到 %s）" % GIT_BASH) if GIT_BASH else (
+            "（本机未探测到 Git bash：装 Git for Windows 或设 CARD_WINDOW_GIT_BASH）")
+        raise ConfigError(
+            "%s 用裸 `bash`：CreateProcess 在 PATH 之前先查 System32，会命中 WSL 启动器"
+            " stub、restore 必败（window-run-1 §1.1 实测）⇒ 改写 Git bash 绝对路径%s"
+            % (where, hint))
+    return argv
+
+
+# --- 内置栈命令走 WMI Win32_Process.Create 派生 + 全端口监听兜底 + 暖机（同卡）---
+# (1) `Start-Process -RedirectStandardOutput` 派生的服务端**孙进程**继承 python↔powershell 的
+#     stdout 管道写端；stack 步 `subprocess.run(timeout=600)` 超时 kill 后 `communicate()`
+#     等 EOF 永不到来 ⇒ 死锁（window-run-1 §1.2，pipe_repro 最小复现）。WMI 派生的父进程是
+#     WmiPrvSE，无句柄继承 ⇒ stack 步能返回。
+# (2) GameGate 探针占 user 会话槽（§1.3）⇒ 内置 profile 的 `ready_ports` **不含网关端口**
+#     （17200/17600/7200）；网关就绪由包装脚本兜底：等 `-ReadyPorts`（**含**网关）全部监听
+#     + 暖 45s，缺端口非零退出（fail-closed）。
+WMI_STACK_WRAPPER = os.path.join(
+    REPO_ROOT, "tools", "window", "start-stack-wmi.ps1").replace(os.sep, "/")
+
+
+def wmi_stack_argv(inner_script, ready_ports):
+    """内置 profile 的 stack 命令：WMI 派生 + 就绪端口（**含网关**）+ 暖机，fail-closed。"""
+    return POWERSHELL + ["-File", WMI_STACK_WRAPPER,
+                         "-Script", str(inner_script),
+                         "-ReadyPorts", ",".join(str(p) for p in ready_ports)]
+
 
 def resolve_rust_binary():
     """release 优先、缺失退 debug（证据里注明用的是 debug）；返回 (path, profile)。"""
@@ -302,7 +387,14 @@ BUILTIN_PROFILES = {
         "format": PROFILE_FORMAT,
         "name": "alt",
         "description": ("备用端口剖面（2026-10-23 双栈窗口）：E:/tmp/conformance 私有根，"
-                        "测试库 mir2_test_* / mir2_test_*_r，同一组 15xxx/17xxx 端口，两栈串行。"),
+                        "测试库 mir2_test_* / mir2_test_*_r，同一组 15xxx/17xxx 端口，两栈串行。"
+                        " | 环境加固（卡 openmir2-window-profile-env-hardening，window-run-1 §1）："
+                        "restore 用 Git bash 绝对路径（裸 bash 会被 CreateProcess 先解析到 "
+                        "System32 的 WSL stub）；stack 走 tools/window/start-stack-wmi.ps1 "
+                        "（WMI Win32_Process.Create 派生，断开 stdout 管道继承的死锁）并兜底"
+                        "「全就绪端口（含网关）监听 + 暖 45s」；ready_ports 去掉网关端口 "
+                        "17200/17600（wait_ready 的探针会占住 GameGate user 会话槽，"
+                        "596ms 后真实连接被丢 no SM_LOGON）。"),
         "login_gate": "127.0.0.1:17000",
         "account": "winplay0",
         "server_name": "热血传奇",
@@ -315,12 +407,16 @@ BUILTIN_PROFILES = {
         "sides": {
             "csharp": {
                 "label": "C# oracle",
-                "stack": POWERSHELL + ["-File", "E:/tmp/conformance/start-csharp3.ps1"],
+                "stack": wmi_stack_argv("E:/tmp/conformance/start-csharp3.ps1",
+                                        (15000, 17000, 17100, 17200)),
                 "stop": CSHARP_STOP,
-                "restore": ["bash", "E:/tmp/conformance/restore-baseline.sh"],
+                "restore": [GIT_BASH or "bash",
+                            "E:/tmp/conformance/restore-baseline.sh"],
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100,
                           17200, 17201, 17202],
-                "ready_ports": [15000, 17000, 17100, 17200],
+                # 网关 17200 不进 ready_ports（探针占会话槽）；由 stack 包装的
+                # -ReadyPorts 15000,17000,17100,17200 兜底等齐 + 暖机。
+                "ready_ports": [15000, 17000, 17100],
                 "probe_extra": [],
                 "binaries": ["E:/tmp/conformance/csharp-root/M2GameSvr/GameSrv.exe"],
                 "envir_root": "E:/tmp/conformance/csharp-root/M2GameSvr",
@@ -328,11 +424,14 @@ BUILTIN_PROFILES = {
             },
             "rust": {
                 "label": "Rust",
-                "stack": POWERSHELL + ["-File", "E:/tmp/conformance/start-rust.ps1"],
+                "stack": wmi_stack_argv("E:/tmp/conformance/start-rust.ps1",
+                                        (15000, 17000, 17100, 17600)),
                 "stop": POWERSHELL + ["-File", "E:/tmp/conformance/stop-rust.ps1"],
-                "restore": ["bash", "E:/tmp/conformance/restore-baseline-r.sh"],
+                "restore": [GIT_BASH or "bash",
+                            "E:/tmp/conformance/restore-baseline-r.sh"],
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17600],
-                "ready_ports": [15000, 17000, 17100, 17600],
+                # 网关 17600 同上：不进 ready_ports，由 stack 包装兜底。
+                "ready_ports": [15000, 17000, 17100],
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
                 "binaries": [RUST_SERVER_BIN],
                 "require_pid_binaries": True,
@@ -352,7 +451,10 @@ BUILTIN_PROFILES = {
         "name": "csharp-default",
         "description": ("C# 默认端口栈：E:/MirServer（5000/5100/5500/5600/5700/6000/7000/7100/7200），"
                         "ConnctionString 指向**生产库** mir2_db / mir2_data / Mir2。"
-                        "默认拒绝运行（内容冻结，窗口只跑测试库）。"),
+                        "默认拒绝运行（内容冻结，窗口只跑测试库）。"
+                        " | 环境加固与 alt 同批（卡 openmir2-window-profile-env-hardening）："
+                        "restore 用 Git bash 绝对路径；stack 走 WMI 包装；ready_ports 去掉"
+                        "网关 7200（由 start-stack-wmi.ps1 的 -ReadyPorts 兜底 + 暖机）。"),
         "production_db": True,
         "login_gate": "127.0.0.1:7000",
         "probe_timeout_ms": 20000,
@@ -363,22 +465,27 @@ BUILTIN_PROFILES = {
         "sides": {
             "csharp": {
                 "label": "C# oracle（默认端口/生产库）",
-                "stack": POWERSHELL + ["-File", "E:/MirServer/start-all.ps1"],
+                "stack": wmi_stack_argv("E:/MirServer/start-all.ps1",
+                                        (5000, 7000, 7100, 7200)),
                 "stop": POWERSHELL + ["-File", "E:/MirServer/start-all.ps1", "-Stop"],
-                "restore": ["bash", "E:/tmp/conformance/restore-baseline.sh"],
+                "restore": [GIT_BASH or "bash",
+                            "E:/tmp/conformance/restore-baseline.sh"],
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
-                "ready_ports": [5000, 7000, 7100, 7200],
+                # GameGate 7200 不进 ready_ports（同 alt 的 17200 口径）。
+                "ready_ports": [5000, 7000, 7100],
                 "probe_extra": [],
                 "binaries": ["E:/MirServer/M2GameSvr/GameSrv.exe"],
                 "db": {"preset": "prod", "characters_db": "mir2_db"},
             },
             "rust": {
                 "label": "Rust（默认端口，需部署在 E:/tmp/conformance/rust-default-root）",
-                "stack": POWERSHELL + ["-File", "E:/tmp/conformance/start-rust-default.ps1"],
+                "stack": wmi_stack_argv("E:/tmp/conformance/start-rust-default.ps1",
+                                        (5000, 7000, 7100, 7200)),
                 "stop": POWERSHELL + ["-File", "E:/tmp/conformance/stop-rust-default.ps1"],
-                "restore": ["bash", "E:/tmp/conformance/restore-baseline.sh"],
+                "restore": [GIT_BASH or "bash",
+                            "E:/tmp/conformance/restore-baseline.sh"],
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
-                "ready_ports": [5000, 7000, 7100, 7200],
+                "ready_ports": [5000, 7000, 7100],
                 "probe_extra": [],
                 "binaries": [RUST_SERVER_BIN],
                 "require_pid_binaries": True,
@@ -685,6 +792,9 @@ def load_profile(value):
             if key not in sc:
                 raise ConfigError("profile.sides.%s 缺 %r 命令" % (side, key))
             validate_cmd_argv(sc[key], "profile.sides.%s.%s" % (side, key))
+        # restore 的 bash 必须 Git bash 绝对路径（裸 bash / System32 stub 加载期拒绝；
+        # 卡 openmir2-window-profile-env-hardening——内置 profile 也受同一校验管）。
+        check_restore_bash(sc["restore"], "profile.sides.%s.restore" % side)
         if sc.get("probe") is not None:
             validate_cmd_argv(sc["probe"], "profile.sides.%s.probe" % side)
         extra = sc.get("probe_extra")
@@ -4924,9 +5034,10 @@ def selftest():
             refused = "MySQL" in str(e)
         chk(refused, "停栈命令含 mysqld => ConfigError 拒绝（不碰 MySQL 服务）")
 
-        # 9) 生产库 => 默认拒绝
+        # 9) 生产库 => 默认拒绝（restore 用 stub 可执行位：裸 `bash` 自本卡起加载期即拒，
+        #    不能再借它携带 mir2_db 文本——卡 openmir2-window-profile-env-hardening）
         prof_prod = _selftest_profile(tmp, stub, log)
-        prof_prod["sides"]["csharp"]["restore"] = ["bash", "-c", "mysql mir2_db < x"]
+        prof_prod["sides"]["csharp"]["restore"] = [stub, "-c", "mysql mir2_db < x"]
         refused_prod = False
         try:
             execute(base_cfg(os.path.join(tmp, "run-prod"), prof_prod))
@@ -6169,6 +6280,63 @@ def selftest():
             "22b) `_derived_testdb_profile` 的两行显式赋值仍在且取值正确："
             "生产库基线也被强制改写成 test / mir2_test_db、基线不被改、"
             "内置条目名确为构造器所赋（实际 %r / name=%r）" % (synth_db, wtd_builtin_name))
+
+        # 23) 环境加固（卡 openmir2-window-profile-env-hardening，window-run-1 §1 三处阻塞）：
+        #     23a 裸 `bash` / System32 WSL stub 的 restore 加载期拒绝；
+        #     23b 非 stub 的 Git bash 绝对路径放行；
+        #     23c 内置 alt/csharp-default：restore 非裸 bash、stack 走 WMI 包装、
+        #         ready_ports 不含网关端口且包装 -ReadyPorts 兜住网关。
+        for bad_label, bad_restore in (
+                ("裸 bash", ["bash", "E:/tmp/conformance/restore-baseline.sh"]),
+                ("System32 stub", ["C:/Windows/System32/bash.exe",
+                                   "E:/tmp/conformance/restore-baseline.sh"])):
+            p_bash = _selftest_profile(tmp, stub, log)
+            p_bash["sides"]["csharp"]["restore"] = bad_restore
+            bash_err = ""
+            try:
+                load_profile(p_bash)
+            except ConfigError as e:
+                bash_err = str(e)
+            chk("bash" in bash_err,
+                "23a restore %s => ConfigError 点名 bash/WSL stub（%r）"
+                % (bad_label, bash_err[:90]))
+        p_gitbash = _selftest_profile(tmp, stub, log)
+        p_gitbash["sides"]["csharp"]["restore"] = [
+            "C:/Program Files/Git/usr/bin/bash.exe",
+            "E:/tmp/conformance/restore-baseline.sh"]
+        gitbash_ok = True
+        try:
+            load_profile(p_gitbash)
+        except ConfigError:
+            gitbash_ok = False
+        chk(gitbash_ok, "23b restore Git bash 绝对路径 => 加载通过")
+        for pname, side_gws in (("alt", {"csharp": (17200,), "rust": (17600,)}),
+                                ("csharp-default", {"csharp": (7200,), "rust": (7200,)})):
+            prof_gw = BUILTIN_PROFILES[pname]
+            for side in SIDES:
+                sc_gw = prof_gw["sides"][side]
+                gateways = side_gws[side]
+                stack_gw = sc_gw["stack"]
+                rest_gw = str(sc_gw["restore"][0])
+                chk(not (os.path.basename(rest_gw).lower() in ("bash", "bash.exe")
+                         and not os.path.dirname(rest_gw))
+                    and not is_wsl_stub_path(rest_gw),
+                    "23c %s.%s restore 用 Git bash 绝对路径（实际 %r）"
+                    % (pname, side, rest_gw))
+                chk(any("start-stack-wmi.ps1" in str(a) for a in stack_gw),
+                    "23c %s.%s stack 走 WMI 包装（断开 stdout 管道继承）"
+                    % (pname, side))
+                rp_at = (stack_gw.index("-ReadyPorts")
+                         if "-ReadyPorts" in stack_gw else None)
+                wrapper_ports = ([int(p) for p in str(stack_gw[rp_at + 1]).split(",")]
+                                 if rp_at is not None else [])
+                gw_missing = [p for p in gateways
+                              if p in (sc_gw.get("ready_ports") or [])]
+                gw_uncovered = [p for p in gateways if p not in wrapper_ports]
+                chk(not gw_missing and not gw_uncovered,
+                    "23c %s.%s 网关 %r 不在 ready_ports（残留 %r）"
+                    "且包装 -ReadyPorts 兜住（缺 %r）"
+                    % (pname, side, gateways, gw_missing, gw_uncovered))
 
     finally:
         holder.close()
