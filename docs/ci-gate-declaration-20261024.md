@@ -148,7 +148,12 @@ SyntaxError: unterminated string literal (detected at line 1)
 ⇒ 两种失败在**结论字段上完全一样**（`failure` / `exit_code=1`）；区别只在日志：语义牙**零输出**
 （`log_sha256` 为空串哈希），引号牙的日志是 `SyntaxError`。前者才证明「任务主动返回非零 ⇒ CI 捕获并回签失败」。
 **约束**：后续任务命令一律避免内嵌双引号（Windows runner 走 `cmd /C`，引号不保证透传）；确需脚本时写文件再执行。
-temp 任务与 `_tooth_exit1.py` 已在紧随的提交里删除（`git ls-files` 不再含该文件，`[[task]]` 回到 11 条）。
+temp 任务与 `_tooth_exit1.py` 只存在于 temp tip `1ddf307e5`，紧随的 `aecf95c98` 已删除；交付树（本分支）不含该文件，`[[task]]` 为 11 条。
+
+**⑤ 返工 head 全量 11/11**：交付 head（`card/ci-gate-declaration-rework` tip）上跑一次
+`walgit ci run --once --repo . --remote walgit …` 后，`walgit ci status --repo .` 显示 11 条任务全部 `success`
+（含新增的 `fast-dynamic-count-stamp`、`fast-board-coverage`，均由 `openmir2-worker-58` 签名回签）。
+复核：`walgit ci status --repo . | grep -c ' done .*success'`。
 
 ## 4. 这个 CI 不许做什么
 
@@ -157,11 +162,6 @@ temp 任务与 `_tooth_exit1.py` 已在紧随的提交里删除（`git ls-files`
 - **CI 绿 ≠ R 卡可 closed**：真机窗口（双栈对拍、帧字节、落库、RNG 序）**不在 CI 覆盖范围**；
   R 卡仍按 tier=R 保持 `in-progress` 等窗口。
 - **抓不到**：机器/环境差异（只在你跑 runner 的这台机上）、外部依赖（MySQL/端口）、以及人工判据。
-
-**⑤ 返工 head 全量 11/11**：交付 head（`card/ci-gate-declaration-rework` tip）上跑一次
-`walgit ci run --once --repo . --remote walgit …` 后，`walgit ci status --repo .` 显示 11 条任务全部 `success`
-（含新增的 `fast-dynamic-count-stamp`、`fast-board-coverage`，均由 `openmir2-worker-58` 签名回签）。
-复核：`walgit ci status --repo . | grep -c ' done .*success'`。
 
 ## 5. 复现
 
