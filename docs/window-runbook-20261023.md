@@ -183,6 +183,22 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 
 ---
 
+## 0.8 C# 栈 RNG 同种子接线（2026-10-25；卡 `openmir2-window-csharp-rng`）
+
+- 窗口 C# 栈的启动器已收进仓库：**`tools/window/start-csharp.ps1`**（`card_window.py` 的 alt
+  profile 已指向它，仍经 `start-stack-wmi.ps1` WMI 包装）。`E:/tmp/conformance` 副本会被外部清扫，
+  **仓库为准**。
+- 只有 `card_window.py --rng-log`（或手工给 `-RngLog`/env `MIR2_RNG_LOG`）时，它才部署
+  `RngSeedHook.dll` 并给 GameSvr 注入 `DOTNET_STARTUP_HOOKS` + `MIR2_RNG_SEED` + `MIR2_RNG_LOG`
+  + `MIR2_RNG_SITE=1`；不给则与旧脚本行为逐字节相同（不注种子）。
+- 账本口径：头两行 `INJECT_OK <seed>` + `SEED_PROBE`；数据行 5 列且 `site` 非空。
+  Rust 侧同 seed 由 `start_mir2_server.ps1 -RngLog` 注入。实测证据与复算命令见
+  `docs/window-csharp-rng-20261025.md`。
+- 提醒：不要从交互 shell 直接 `powershell -File start-csharp.ps1` 后等返回（子进程继承管道会挂）；
+  窗口路径走 WMI 包装，手工排查用 `-Plan`。
+
+---
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。

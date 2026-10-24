@@ -482,8 +482,12 @@ BUILTIN_PROFILES = {
         "sides": {
             "csharp": {
                 "label": "C# oracle",
-                "stack": wmi_stack_argv("E:/tmp/conformance/start-csharp3.ps1",
-                                        (15000, 17000, 17100, 17200)),
+                # 卡 openmir2-window-csharp-rng：C# 栈改用**仓库内**启动器（E:/tmp 会被清扫）。
+                # 它在 `--rng-log` 时给 GameSvr 注入 DOTNET_STARTUP_HOOKS/MIR2_RNG_SEED/
+                # MIR2_RNG_LOG/MIR2_RNG_SITE（影子 M2GameSvr-hook，冻结基线不动）。
+                "stack": wmi_stack_argv(
+                    os.path.join(REPO_ROOT, "tools", "window", "start-csharp.ps1").replace(os.sep, "/"),
+                    (15000, 17000, 17100, 17200)),
                 "stop": CSHARP_STOP,
                 "restore": [GIT_BASH or "bash",
                             "E:/tmp/conformance/restore-baseline.sh"],

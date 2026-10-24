@@ -76,7 +76,7 @@
 
 | W 项 | kit 资产 | 状态 | 缺什么 / 手工步骤 |
 |---|---|---|---|
-| W-DG-1 `CM_DROPGOLD` 零抽数 | 无 drop 场景（`pickup_item` 已封存；`dropitem_ack` fixture 是 `CM_DROPITEM` 600/601 的**构造件**，非本项） | **缺** | 手工：客户端丢金币（≥`CanDropGold`、`< Gold`）+ `gate_shadow_proxy` 抓 653；RNG 流水需私栈接 `-RngLog`（当前 `E:/tmp/conformance/start-rust.ps1` 只传 `-Seed 42`）。新场景提案：`dropgold_zero_draw`（`send CM_DROPGOLD` + `wait_for 653`，可无 corpse） |
+| W-DG-1 `CM_DROPGOLD` 零抽数 | 无 drop 场景（`pickup_item` 已封存；`dropitem_ack` fixture 是 `CM_DROPITEM` 600/601 的**构造件**，非本项） | **缺** | 手工：客户端丢金币（≥`CanDropGold`、`< Gold`）+ `gate_shadow_proxy` 抓 653；RNG 流水已接：Rust 侧 `start_mir2_server.ps1 -RngLog`（env 回落）+ C# 侧 `tools/window/start-csharp.ps1`（hook + 同 seed；见 docs/window-csharp-rng-20261025.md）。新场景提案：`dropgold_zero_draw`（`send CM_DROPGOLD` + `wait_for 653`，可无 corpse） |
 | W-DG-2 `CM_BUTCH` 两抽流位 | 无屠宰场景；需要动物尸体与后续抽数动作 | **缺** | 手工：杀动物 → 屠宰到骨架（33→637）+ 后续抽数动作；需要 RNG 账本接线。新场景提案：`butch_two_draws`（需先有「单只固定怪」夹具，与 drop-exp 夹具同依赖） |
 
 ## 2. 汇总（窗口前要补的清单）
@@ -84,7 +84,7 @@
 | 优先级 | 缺口 | 影响 W 项 | 建议动作 |
 |---|---|---|---|
 | P0 | `assets` 白名单只有 `Gold` | W-PD-1 | 扩白名单到 `GamePoint`（L 卡，改 `card_window.py` + selftest）或窗口手工 DB 预置（登记为手工步骤） |
-| P0 | 私栈启动未接 `-RngLog` | W-DG-1/2、W-CM-3 | 窗口启动脚本加 `-RngLog <path>`（工具面，改 `E:/tmp/conformance/start-rust.ps1` + `start_mir2_server.ps1` 参数） |
+| P0 | 私栈启动未接 `-RngLog` | W-DG-1/2、W-CM-3 | **已解（2026-10-25）**：Rust `start_mir2_server.ps1 -RngLog` + C# 仓库版 `tools/window/start-csharp.ps1`（hook/seed 接线，见 `docs/window-csharp-rng-20261025.md`） |
 | P0 | C# 无 `MIR2_CLOCK_*` | W-TAX-4、W-T127-2 | ⑧-1 C# 半落地前，改为「真实时间点复拍」并登记降级口径 |
 | P1 | 无城堡商人税场景 / no castle fixture | W-TAX-1..3、W-T127-1..4 | 新场景提案 `castle_merchant_tax` + `castle_war_frames`；配置副本走 `E:/tmp/conformance`，不改 `E:/MirServer` |
 | P1 | 无 `CM_NEWCHR` 驱动 | W-LF-1 | probe 加 `newchr` 步骤（协议常量已有）或窗口手工建号 |
