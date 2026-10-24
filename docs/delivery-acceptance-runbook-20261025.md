@@ -22,10 +22,10 @@
 | # | 命令（可直接复制） | 输出样式（活量） | 判读 |
 |---:|---|---|---|
 | 1.1 | `git rev-parse --short master refs/remotes/walgit/master` | 两行短 sha；恢复前第二行恒为 `4ae3dc810` | 两 sha 相同 ⇒ 默认 ref 口径；不同 ⇒ 见 §4 第①类 |
-| 1.2 | `git rev-list --count refs/remotes/walgit/master..master` | 一个整数（今日快照 **91**，快照 @ `1c605ca4a`） | 本地领先量；恢复后应回到 0 |
+| 1.2 | `git rev-list --count refs/remotes/walgit/master..master` | 一个整数（今日复算：**81 @ `1c605ca4a`**；**91 @ `02f83a1a2`**；活量以 `rev-list` 现测为准） | 本地领先量；恢复后应回到 0 |
 | 1.3 | `git rev-list --count origin/master..master` | 一个整数（镜像落后量，活量） | GitHub 镜像同步量 |
-| 1.4 | `git for-each-ref refs/heads/card --format='%(refname:short) %(objectname:short)'` | 每行 `分支 短sha`；今日快照 **7** 条（快照 @ `1c605ca4a`） | 逐条判「已合并 / 未合并」见 §2.2 |
-| 1.5 | `walgit collab board --format json \| python -I -c "import sys,json;d=json.load(sys.stdin);[print(c['name'],len(c['cards'])) for c in d['columns']]"` | 每行 `看板列 张数`（六列；活量） | 与 §2.3 卡状态对账 |
+| 1.4 | `git for-each-ref refs/heads/card --format='%(refname:short) %(objectname:short)'` | 每行 `分支 短sha`；**活量**（随各线交付变化，执行前现数） | 逐条判「已合并 / 未合并」见 §2.2 |
+| 1.5 | `walgit collab board --format json \| python -I -c "import sys,json;d=json.load(sys.stdin);[print(c['name'],len(c['cards'])) for c in d['columns']]"` | 每行 `看板列 张数`（**七列**：待认领/进行中/待审/需要人/受阻/已完成/已合并未收口，见 `.walgit/board.toml`；活量） | 与 §2.3 卡状态对账 |
 | 1.6 | `python -I tools/goal/goal_gate.py --full --json > "$TEMP/gate.json"; echo rc=$?` | `rc=0`；JSON 里 `conditions[*].state` 四行 | 恢复前条件④ 的 `master_sync` 必为 need_human |
 | 1.7 | `python -I -c "import json,os;d=json.load(open(os.path.join(os.environ['TEMP'],'gate.json')));print(d['overall']);[print(c['id'],c['name'],c['state']) for c in d['conditions']]"` | `overall` + 4 行 `id 名称 state` | 目标：①pass ②pass（G11 裁决后）③pass ④pass |
 
@@ -53,7 +53,7 @@
 
 | 步 | 命令 | 预期 | 失败怎么办 | 证据落哪 |
 |---|---|---|---|---|
-| A6 | `walgit ci run --once --task fast-stale-pointer` 等 `.walgit/ci.toml` 的 7 个 fast 任务 | 每个 `claimed→passed`；`rust-*` 四项留给夜间组 | 任一红 ⇒ 修/登记后重跑；`master_sync` 只有 A3 成功才绿 | ci 日志文件路径 |
+| A6 | `walgit ci run --once --task fast-stale-pointer` 等 `.walgit/ci.toml` 的 **8 个 fast 任务**（含 `fast-merge-tree-helper`；`grep -c '^name = "fast-' .walgit/ci.toml` = 8） | 每个 `claimed→passed`；`rust-*` 四项留给夜间组 | 任一红 ⇒ 修/登记后重跑；`master_sync` 只有 A3 成功才绿 | ci 日志文件路径 |
 | A7 | §1.6/§1.7 重跑 goal_gate --full | 条件④ `master_sync` 由 need_human 转 pass；其余三项与 A 前一致 | 出现新红 ⇒ 与 A 前快照 diff，先归因再动 | `$TEMP/gate.json` + 报告 |
 | A8 | 看板对账（§1.5） | 「待审」清空、「已完成」= 合并数 | 卡状态滞后 ⇒ 用签名 `status` 收口（**不**直接改 board） | board json 输出 |
 
