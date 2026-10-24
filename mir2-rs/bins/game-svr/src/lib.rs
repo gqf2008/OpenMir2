@@ -14777,8 +14777,11 @@ fn drain_show_hp_health_changes(
 /// 路由：`SM_CLEAROBJECTS`/`SM_CHANGEMAP` 是 `SendMsg`（只发自己）；
 /// `SM_SPACEMOVE_SHOW` 是 `SendRefMsg`（±`SendRefMsgRange` 格，含自己）。
 ///
-/// **登记（未做项）**：触发本事件的**玩法路径**（地图链接格 `MapRoute` / 传送技能换图支）尚未移植
-/// 到 sim 宿主 ⇒ 真机上 `switch_map` 暂无调用者（parity harness 里有调用，sim 宿主没有）。**登记（未做项）**：
+/// **玩法路径（2026-10-25 订正）**：地图链接格 `MapRoute` **已接生产**——`sim_loop` 装载
+/// `add_map_routes`（本文件 `:20306-20321`），玩家踩连接格经 `walk_route_check`（CM_TURN）/
+/// `step_with_route`（CM_WALK）→ `route_enter`（`crates/world/src/world.rs:7344`）→ `switch_map`。
+/// 原「尚未移植 / 真机无调用者」的登记已过期（reviewer-20 `a78c28078f` F1）；传送技能换图支
+/// 不在本次订正范围。
 /// `RM_CHANGEMAP` 观测点随后还有 `RefUserState()`/`SendMapDescription()`/`SendServerConfig()` 三帧（另一族、不在本卡帧集）。
 /// **世界 tick 扩容首批（T3）· ② 世界时钟（跨桶重发）**。
 ///

@@ -1,19 +1,28 @@
 # 条件② 收口：5 张 merged_not_closed R 卡逐张裁定（2026-10-25）
 
 - 卡：`openmir2-merged-not-closed-5-sweep`（tier **L**；owner `openmir2-dev-1`；worktree `.worktrees/dev-1`；分支 `card/merged-not-closed-5-sweep`）。
-- 取数时点：master `99156c2c6` @ 2026-10-25 01:04 +08；`goal_gate --json --skip-tests --skip-script` 前后各跑一次。
+- 取数时点：首版 master `99156c2c6` @ 2026-10-25 01:04 +08；返工复算 master `9a7b8c798` @ 2026-10-25 01:20 +08；`goal_gate --json --skip-tests --skip-script`。
 - 写集：5 张目标卡的线程 `status` 条目 + 本文件。**未改代码、未起栈、未连库。**
 
 ## 0. 结论
 
-5 张 merged_not_closed R 卡逐张读线程后：**close 2 张、登记窗口项 2 张、保持 blocked 1 张**。
-条件② 的 need_human 从 **5 → 1**（不是 0）：唯一剩余是 `openmir2-gm-batch-5b-cross-server`，
-它有**未完成的实现工作**（依赖 G11 跨服基础设施），按裁定规则**不得**登记成窗口项、也**不得** close。
+5 张 merged_not_closed R 卡逐张读线程后：**close 1 张、登记窗口项 3 张、保持 blocked 1 张**。
+条件② 的**机判** need_human 从 **5 → 1**（不是 0）：唯一仍是 `openmir2-gm-batch-5b-cross-server`
+（依赖 G11，**有未完成的实现工作**，按规则不得登记成窗口项、也不得 close）。**实质待办是 2 项**：
+`openmir2-enter-map-cell-rejected-vs-oracle`（已登记 `window_required`，转窗口桶 PASS，等真机窗口跑）
+与 gm-batch-5b（等 G11 实现）。
+
+> **返工记录（reviewer-20 review `a78c28078f` F1）**：首版把 enter-map 判为 closed 的依据
+> 「生产无 `switch_map` 调用者」被 reviewer 实测推翻——`crates/world/src/world.rs:7344` 的
+> `route_enter` 调 `switch_map`，`route_enter` 由 `step_with_route`(`:7159`)/`walk_route_check`
+> (`:7203`) 调用，生产 handler 在 `bins/game-svr/src/lib.rs:9167`(CM_WALK)/`:9114`(CM_TURN)
+> 调这两个 API，MapRoute 数据在 `sim_loop`(`lib.rs:20306-20321`) 装载 ⇒ 玩家踩连接格即触发。
+> 已改回 `in-progress` + 显式登记 `window_required=true`（status `9f6899cf7`）。
 
 | # | 卡 | merge oid | 判定 | 本轮 status 条目 |
 |---:|---|---|---|---|
 | 1 | `openmir2-disappear-recipients-gridscan` | `8dea847c5` | **in-progress + `window_required=true`**（±12 收件人集合需第二观察者） | `3fe843d3b` |
-| 2 | `openmir2-enter-map-cell-rejected-vs-oracle` | `ed9ab035d` + `df5a260ea` | **closed**（无新工作；生产无 `switch_map` 调用者 ⇒ 真机不可达；构造级已覆盖） | `0f0c16d69` |
+| 2 | `openmir2-enter-map-cell-rejected-vs-oracle` | `ed9ab035d` + `df5a260ea` | **in-progress + `window_required=true`**（MapRoute 切图失败路径生产可达，需真机双栈对拍；reviewer-20 F1 返工） | `9f6899cf7` |
 | 3 | `openmir2-gate-gmclose-race` | `c83a9ae24` | **closed**（approve 显式 `window_required=false`；20 轮 relay + 2 次全量 workspace 0 失败；「长跑 flush」只是观察点） | `8da01a1cc` |
 | 4 | `openmir2-gm-batch-5b-cross-server` | `99a4d30c4` | **保持 blocked**（blocked-by G11；依赖清单已合入，但 6 条命令实现未做） | `a662151e9` |
 | 5 | `openmir2-run-gap-checkdupobj` | `706c95cae` | **in-progress + `window_required=true`**（3 人同格推挤 + AOI 相位需 ≥3 会话） | `cf9664831` |
@@ -29,14 +38,21 @@
 - 定性：±12 收件人集合需要**第二个会话**（comment `fea2fbd99` / `cff88bf13` 独立确认），属「仍欠真机窗口」
   ⇒ 登记 `window_required=true` + `window_items`（登记型 pass，**不是**真机证据）。
 
-### 1.2 enter-map-cell-rejected-vs-oracle → closed
+### 1.2 enter-map-cell-rejected-vs-oracle → 窗口登记（首版误判 closed，F1 返工）
 
 - merge：`639707079`（`ed9ab035d`，enter_map 落格差异）+ `4a1afaff5`（`df5a260ea`，switch_map 回滚语义）。
 - review：`8bb0c9568` / `a18db2ed1` 均 approve（tier R；复验者独立读 oracle 行并实测）。
-- merge 后无新工作；剩余项均为**独立登记**：宿主缺 oracle 进图前移位环（另卡）、失败支帧面未建模（既有约定）、
-  `route_enter` 对 switch_map 失败的分类缺口（另跟踪）、`DelFormMaped`/地图计数未建模。
-- 本卡自身 status `8c5f59e16` 自述「当前生产无 `switch_map` 调用者 ⇒ 真机不可达」；构造级用例覆盖 `CellRejected` 语义。
-- comment `da8a172a9`（worker-69，无窗口判据）与 `3730b07aa`（worker-24，bucket ③ 建议关闭）独立建议 closed。
+- **可达性（reviewer-20 `a78c28078f` F1 实测，推翻首版）**：`crates/world/src/world.rs:7344`
+  `route_enter` 调 `switch_map`；`route_enter` 由 `step_with_route`(`:7159`)/`walk_route_check`
+  (`:7203`) 调用；生产 `bins/game-svr/src/lib.rs:9167`(CM_WALK)/`:9114`(CM_TURN) 调这两个 API；
+  MapRoute 在 `sim_loop`(`lib.rs:20306-20321`，`world.add_map_routes`) 装载 ⇒ **玩家踩 MapRoute
+  连接格即走 `route_enter→switch_map`，真机可达**。首版「bins 直接调用点 0」只看了 bin 层，
+  漏了 `crates/world` 的私有调用链 ⇒ 结论不成立。
+- 判定：merge 后无新 patch，但**欠真机窗口**（切图失败路径的双栈对拍：旧图旧格回滚、`add_to_mapped`、
+  `RM_CLEAROBJECTS`/`RM_CHANGEMAP` 帧面、失败时可见性/tick 继续）⇒ `in-progress` +
+  `window_required=true`（status `9f6899cf7`）。
+- 登记项不影响本判定：宿主缺进图前移位环（另卡）、失败支帧面未建模（既有约定）、`route_enter`
+  对 switch_map 失败的分类缺口（另跟踪）——它们是独立条目，不改变「本卡欠窗口」。
 
 ### 1.3 gate-gmclose-race → closed
 
@@ -69,18 +85,22 @@
 | 项 | 本轮前 | 本轮后 |
 |---|---:|---:|
 | R 卡总数 | 207 | 207 |
-| `closed` 桶 | 11 | 13（+2：enter-map、gate-gmclose） |
-| `window_required` 桶（已合入） | 138 | 140（+2：disappear、run-gap） |
-| `merged_not_closed`（需人工） | **5** | **1**（gm-batch-5b） |
+| `closed` 桶 | 11 | 12（+1：gate-gmclose） |
+| `window_required` 桶（已合入） | 138 | 141（+3：disappear、run-gap、enter-map） |
+| `merged_not_closed`（需人工） | **5** | **1**（gm-batch-5b；enter-map 已转窗口桶） |
 | 其它桶（whitelist / adjudicated / 未合并 / 三者皆无） | 48 / 3 / 2 / 0 | 48 / 3 / 2 / 0 |
 
-条件② 仍是 `need_human`（rc=2），但 need 项只剩 1 张：`openmir2-gm-batch-5b-cross-server`
-（`merge_result merged=true` 但 board=`blocked` 且无 `window_required` 登记——**这是有意的**，原因见 §1.4）。
+条件② 仍是 `need_human`（rc=2），**机判 need 项 1 张**：`openmir2-gm-batch-5b-cross-server`
+（`merge_result merged=true` 但 board=`blocked` 且**不登记**窗口——这是有意的，原因见 §1.4）。
+enter-map 补上 `window_required=true` 后已转 `window_required` 桶（登记型 PASS），不再计入 need；
+它仍欠真机窗口，只是条件② 的机判口径已解锁。
 
-> **为什么不是 0**：卡面 acceptance ② 明确「若某张确需保持 need_human，如实报告并说明为何」；
-> 根规则是「禁止把有未完成工作的卡登记成窗口项」。gm-batch-5b 的剩余是 G11 就绪后的**实现**，不是窗口证据。
-> 若 owner 仍要条件② 机判为 0，只有两条合法路径：① G11 落地后实现本卡并走窗口；② owner 明确改写本卡判据口径
-> （例如把「G11 外部依赖」列入排除项）——**不能**靠给它补一条 `window_required` 来假装通过。
+> **为什么不是 0**：gm-batch-5b 的剩余是 G11 就绪后的**实现**，不是窗口证据；卡面 acceptance ② 明确
+> 「若某张确需保持 need_human，如实报告并说明为何」。要 0 的合法路径：① G11 落地后实现 gm-batch-5b
+> 并走窗口；② owner 明确改写判据口径——**不能**靠补 `window_required` 假装通过。
+> **与 reviewer 表述的差异**：review F1 写「need_human 5 → 2：enter-map + gm-batch-5b」；机判实测是
+> **5 → 1**（enter-map 的 `window_required` 登记使其落窗口桶 PASS）。「2」是**实质待办**口径
+> （enter-map 等窗口 + gm-batch 等实现），两个口径都写在此处。
 
 复算命令（只读）：
 
@@ -99,7 +119,13 @@ m3-registry）全 rc=0；`git diff --check` rc=0。
 ## 4. 判不准 / 残余
 
 - **未 close、未登记的是 gm-batch-5b**（见 §1.4）；它的 owner 仍是 `openmir2-orchestrator`，实现车道待派。
-- 两张窗口登记卡（disappear / run-gap）的「登记型 pass」**不等于**已有真机证据；窗口批次仍按 Q1 独立推进。
+- **enter-map 已按 F1 返工**改为窗口登记（§1.2）；disappear / run-gap / enter-map 三张的「登记型 pass」
+  **不等于**已有真机证据；窗口批次仍按 Q1 独立推进。
+- **机判 vs 实质待办**：条件② need_human **5→1**（gm-batch）；实质待办 2 项（enter-map 等窗口 +
+  gm-batch 等 G11 实现）。两者都已写进 §2。
+- **顺手订正**：`mir2-rs/bins/game-svr/src/lib.rs:14780-14782` 的陈旧注释（「MapRoute 尚未移植 ⇒
+  switch_map 真机无调用者」）已改为事实描述（MapRoute 在 sim_loop 装载、经
+  `walk_route_check`/`step_with_route`→`route_enter`→`switch_map`）；注释级改动，不动逻辑。
 - 本轮只改 5 张卡的线程 `status`（`ledger_by=openmir2-dev-1`，`adjudication_card=openmir2-merged-not-closed-5-sweep`），
   未改任何代码、未改场景/规则表、未起栈、未连库。
 - 残留：`%TEMP%/gate-sweep.json`（本次复算缓存，可删）；仓库内只新增本文件。
