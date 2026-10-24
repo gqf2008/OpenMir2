@@ -126,6 +126,42 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 
 ---
 
+## 0.6 零触碰与内容比对（2026-10-25 吸收：Castle/List.txt 每 600s 被默认 C# 栈重写）
+
+- **事实**（卡 `openmir2-test-writes-real-envir-path`，2026-10-25 复核）：只要默认 C# GameSrv 在跑
+  （PID 14040，2026-10-24 21:41:48 启动，监听 5000），SystemProcessor 的 10 分钟门会触发
+  `CastleMgr.Save → SaveCastleList`，重写 **`E:/MirServer/M2GameSvr/Castle/List.txt`**。
+  - **实际路径**由 `E:/MirServer/M2GameSvr/Server.conf:65/71`（`CastleDir=Castle`、
+    `CastleFile=Castle/List.txt`）覆盖；`Envir/Castle/` 在本部署**不存在**（默认值
+    `Envir\Castle\` 未被使用）。
+  - 内容恒为 6 字节 `30 0d 0a 31 0d 0a`（文本行 `0` 与 `1`，各以 CRLF 结尾），sha256
+    `9b38d284bae4dc26e593ab0d5cb50d846c3328a8c0467291a8a473cf15c1615b`；
+    实测 mtime `2026-10-25 04:02:02.66 +08`（上一跳 `03:52:02`，Δ600s）。
+- **口径①：比对内容，不比 mtime。** 冻结基线/零触碰核查一律用 sha256 或字节比较；
+  上式 sha256 不变即视为内容未被修改。任何 `LastWriteTime` / `st_mtime` 判断都会每 10 分钟误报。
+- **口径②：零触碰 = 停 C# 业务进程，不停 mysqld。**
+
+  ```powershell
+  # 停（逐进程；勿用 start-all.ps1 -Stop —— 它会把 mysqld 一起停）
+  Get-Process GameSrv,GameGate,LoginGate,SelGate,DBSrv,LoginSrv -ErrorAction SilentlyContinue | Stop-Process -Force
+  # 起回（mysqld 已在跑时自动跳过）
+  powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/start-all.ps1
+  # 恢复核对（期望 10 端口：3306,5000,5100,5500,5600,5700,6000,7000,7100,7200）
+  powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1
+  ```
+
+  核对口径：`port-status.ps1` 的缺失列表为空。2026-10-25 04:00 观测到 5700 未监听
+  （DBSrv 声明端口之一），属既有偏差：窗口前与 owner 确认是否预期，**不要**在本卡里改配置。
+- **口径③：preflight 不依赖 mtime。** 2026-10-25 重跑：
+  `preflight_private_stack.py` = 6 pass / 2 fail（`binary_stamp` 缺 release 二进制、
+  `start_rust_exe` 仍指 `.worktrees/dev-2`）；`preflight.py --profile alt|window-magic --with-dry-run`
+  各 1 fail（`binary: Debug-Fallback`）。两类都由 `run_batch.sh` 的首步
+  `rebuild-server.ps1 -SyncStartRust` 覆盖，**开窗前不必单独重建**。
+  代码面 grep `st_mtime|getmtime|LastWriteTime|mtime`（`tools/window`、`tools/conformance`、
+  `tools/probe`、`tools/dbsnap`）零命中 ⇒ 无其它巡检项依赖文件时间。
+
+---
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。
