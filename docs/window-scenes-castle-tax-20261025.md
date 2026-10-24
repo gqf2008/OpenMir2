@@ -96,16 +96,43 @@
 
 | # | 缺口 | 证据 | 不解封时的行为 |
 |---|---|---|---|
-| ① | **升级腿默认配置零税** | 唯一带 `@upgradenow` 的脚本 = `Market_Def/沙巴克铁匠-3.txt`（`grep -rl @upgradenow Market_Def` 仅 1 个）；`MerChant.txt:82` 该行 IsCastle=**0**；map 3 (332,317) 距 `Home(644,290)` |Δx|=312 ≥ `WarRangeX=100` ⇒ `Castle=null` ⇒ 只有 `CastleGetAllNpcTax=1` 走 Manager 分支（税基恒 `UpgradeWeaponPrice=10000` ⇒ 每城 `Round(500)`）；且铁匠在 map 3、武器铺在 0151 ⇒ 单 placement 不能同场 | 该腿无税入账；硬写进场景只会得到「无税=0」的假绿 |
+| ① | **升级腿已拆成独立场景** | 唯一带 `@upgradenow` 的脚本 = `Market_Def/沙巴克铁匠-3.txt`；`MerChant.txt:82` IsCastle=**0**；map 3 (332,317) 距 `Home(644,290)` |Δx|=312 ≥ `WarRangeX=100` ⇒ `Castle=null` ⇒ 只有 `CastleGetAllNpcTax=1` 走 Manager 分支（税基恒 `UpgradeWeaponPrice=10000` ⇒ 每城 `Round(500)`）。本卡已拆出 **`castle_merchant_tax_upgrade.json`**（12 步，upgrade_retrieve 前 11 步 + 落盘观察 sleep），在 run3 暂保持 blocked：**内置 profile 不能声明 config_overrides**（见 §4.2） | 升级腿不进批次；用**自定义 profile 文件**（`fixtures.config_overrides`）手工可跑，实测记录见 §4.2 |
 | ② | **W-TAX-4 `SaveTick` 不可观测** | `SaveTick` 不落盘（§2.3）；C# `MIR2_CLOCK_*` 零实现（`grep -rIl MIR2_CLOCK src/` = 0） | 只能真实时点复拍；「同 tick 逐位」需 ⑧-1 时钟注入片 |
 
 **备注（工具缺口，不阻断买腿）**：买**武器**需要运行时 `MakeIndex`——货架全 StdMode>4，645 载荷只有 `名/submenu/价格/库存/`
 （`Merchant.cs:983-986`），`MakeIndex` 只在 652 的 EDCode `ClientItem` buffer（`:1329-1341`），而 `mir2_probe.py` 没有该解码。
 买**药品**腿不经过这里（`StdMode<=4`），已由 `castle_merchant_tax_potion` 覆盖。
 
-**夹具不对称（跑 W-TAX-2 前必须修）**：`csharp-root/M2GameSvr/Castle/List.txt` = `0`（1 城），
-`rust-root/.../List.txt` = `0,1`（2 城）；`Castle/0|1/SabukW.txt` 两侧逐字节同源（`diff` = SAME0/SAME1）。
-`CastleMgr.IncRateGold` 升序遍历全表 ⇒ 两侧城数不同会让 W-TAX-2 必然假红。
+**夹具不对称（已解，门固化）**：曾出现 `csharp-root` 1 城 / `rust-root` 2 城（`CastleMgr.IncRateGold`
+升序遍历全表 ⇒ W-TAX-2 必假红）。现由 preflight `castle_list_symmetry` 门固化：两侧（含
+`M2GameSvr-hook` 影子）必须同为 `0,1`，不一致即 FAIL；`SabukW` 两侧逐字节同源。
+
+## 4.2 升级腿实测记录（2026-10-25，私有栈，5 次）
+
+- **配置覆盖生效**：自定义 profile（`fixtures.config_overrides.Server.conf = {CastleGetAllNpcTax:1,
+  ConsoleShowUserCountTime:5000}`）被写到 C# baseline+shadow 与 Rust 根；`fixtures.json` 记录
+  `-CastleGetAllNpcTax=0 / +CastleGetAllNpcTax=1`，跑完三方 `Server.conf` 均还原为 `600000/0`。
+- **升级提交链可达（C# 成功一次）**：`frames.ndjson` 含 `SM_DELITEMS(709)` 与 `SM_DELITEM(202)`，
+  说明 `MOVR/升级` 提交支真实执行；对应场景 12 步。
+- **但整体未绿，三个独立原因**（全部实测）：
+  1. **baseline 背包 46/46 满**：`characters_bagitem` 对 winplay0 已有每个 Position 的行（`StdIndex=0`），
+     而 `inventory` 夹具要求**空槽**（计数行）⇒ `inventory: 声明槽位里已有 N 行` fail-closed。
+     `restore-baseline*.sh` 会把这些行恢复回来，手工删槽在 run_side 的 restore 之后又被还原。
+     ⇒ 声明式 `inventory` 在当前基线上**写不进去**（另卡 `openmir2-window-fixture-inventory`
+     解决 `inventory.replace/drop`；本轮用**一次性手工 DB 夹具**绕过后才得到上条 202/709 证据）。
+  2. **discovery 选错 NPC**：`required merchant_actor` 走 `npc_click_auto` 的 `auto:last_turn`，
+     在 (320,328)/(331,317) 都点到「装备回收」NPC（643 body_text 实测），`@upgrade` 无链接 ⇒
+     `dlg_select @upgrade` 后 643 超时。**铁匠在 map 3 与其它可转身 NPC 同图**，`last_turn`
+     不保证是铁匠；解封需要「按坐标/名字选 NPC」的 discovery 能力（工具卡）。
+  3. **税入账未观测到**：一次成功提交后 `Castle/0/SabukW.txt` 的 `TotalGold` 仍为 0——`CastleMgr.Save`
+     只在 `SystemProcessor` 的 `ConsoleShowUserCountTime` 门后写盘（已覆盖 5s 仍未见），且
+     `SaveTick`/内存态不可读；⇒ 以**帧+DB 为主、文件为辅**的口径下，无法仅凭本次文件证明
+     `Round(10000*5/100)=500/城` 入账。
+- **结论**：升级腿**保持 blocked**，缺口收窄为三项：① `inventory.replace/drop`（另卡，dev-1 已知）；
+  ② 按名字/坐标 discovery 铁匠；③ 税入账可观测（DB/内存导出或时钟注入）。**不声称可跑**。
+- 证据目录：`E:/tmp/scriptcov/taxleg/`（profile、临时场景、card 日志、frames、fixtures diff）。
+
+---
 
 ## 5. W-TAX 项 × 状态
 

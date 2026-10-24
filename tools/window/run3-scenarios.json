@@ -26,7 +26,9 @@
     {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": [],
      "blocked": "无「单只固定动物尸体」夹具 + RNG 面未接线（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）"},
     {"n": 22, "name": "castle_merchant_tax", "profile": "alt",       "extra": [],
-     "blocked": "买武器腿缺 652 ClientItem 解析（买药品腿已由 #23 覆盖）+ 升级腿需 CastleGetAllNpcTax=1 副本（且与武器铺不同图）+ SaveTick 不落盘（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
-    {"n": 23, "name": "castle_merchant_tax_potion", "profile": "alt", "extra": ["--timeout-ms", "700000"]}
+     "blocked": "买武器腿需 652 ClientItem 解码（买药品腿由 #23 覆盖）；W-TAX-4 SaveTick 不落盘；升级腿已拆到 #24（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
+    {"n": 23, "name": "castle_merchant_tax_potion", "profile": "alt", "extra": ["--timeout-ms", "700000"]},
+    {"n": 24, "name": "castle_merchant_tax_upgrade", "profile": "alt", "extra": [],
+     "blocked": "run3 内置 profile 不能声明 config_overrides.CastleGetAllNpcTax=1（默认零税）；用自定义 profile 文件可手工跑"}
   ]
 }

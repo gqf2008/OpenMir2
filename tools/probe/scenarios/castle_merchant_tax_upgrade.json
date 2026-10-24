@@ -1,0 +1,113 @@
+{
+  "name": "castle_merchant_tax_upgrade",
+  "description": "W-TAX-1 第 4 路径（武器升级）的商税腿：沙巴克铁匠（map 3 (332,317)，MerChant.txt:82，IsCastle=0、距 CastleHome(644,290) 312≥WarRange 100 ⇒ NPC.Castle=null）**只能**走 `CastleGetAllNpcTax=1` 的 CastleManager 分支（税基恒 UpgradeWeaponPrice=10000 ⇒ 每城 Round(500)；CastleMgr 升序遍历全表 ⇒ 两城共 1000）。步序 = upgrade_retrieve 的前 11 步（上手木剑→点击→@upgrade→@confirmupgrade→@upgradenow→提交帧→709），**不含 660s 取回腿**。**profile 前置**：两侧同值 `config_overrides.Server.conf.CastleGetAllNpcTax=1`（`_check_fixture_symmetry` 校验）；run3 内置 profile（alt/window-magic）无法表达该覆盖 ⇒ 本场景在 run3 保持 blocked，解封需新 profile 或 run_batch 支持 profile 文件（另卡）。证据：帧（202/709 等）+ DB 后态为主；`Castle/<0,1>/SabukW.txt` 的 TotalGold/TodayIncome **只在 SystemProcessor 的 ConsoleShowUserCountTime 门（生产 600000ms）后**才变，文件字段为辅（可通过 profile 覆盖 `ConsoleShowUserCountTime` 缩短以观察）。",
+  "required": [
+    "merchant_actor"
+  ],
+  "params": {
+    "make_index": 5001,
+    "takeon_where": 1,
+    "item_name": "木剑"
+  },
+  "assets": {
+    "Gold": 10000,
+    "note": "金币前置 Gold ≥ UpgradeWeaponPrice=10000（E:/MirServer/M2GameSvr/Server.conf:333）：UpgradeWapon 提交支要扣金币（Merchant.cs:529-590），基线 winplay0 Gold=100 不够 => ~@upgradenow_fail、上面第 9 步 709 必红。通道 = card_window assets 声明通道（卡 openmir2-window-gold-declaration-channel：restore 后、起栈前按 profile char_name/account UPDATE 每侧测试库 characters.Gold，写前后对其余列 MD5 指纹、写后读回断言目标值）；probe 只做同口径形状校验（卡 openmir2-probe-assets-key-delta），本驱动器不写库"
+  },
+  "inventory": [
+    {
+      "index": 207,
+      "make_index": 5001,
+      "position": 40,
+      "std_mode": 5,
+      "ani_count": 0,
+      "dura": 4000,
+      "dura_max": 4000,
+      "note": "木剑（stditems#207，StdMode=5，mir2_data 实测行与 sql/mir2_data.sql:1197 一致）——steps[0] CM_TAKEONITEM 上手成为 UseItems[ItemLocation.Weapon]（@confirmupgrade 的 CHECKUSEITEM 1 与 UpgradeWapon 的 UseItems[Weapon] 前置）；MakeIndex 夹具钉死 5001（两侧同值 => C2S 字节可比）"
+    },
+    {
+      "index": 68,
+      "make_index": 5003,
+      "position": 41,
+      "std_mode": 43,
+      "note": "黑铁矿石（stditems#68，StdMode=43，mir2_data 实测行与 sql/mir2_data.sql:1058 一致）——UpgradeWapon 的 user.CheckItems(BlackStone='黑铁矿石')（Server.conf:87）背包前置，提交成功支被吃并发 709；dura 不声明（矿石纯度只进升级数值数学，不影响链路可达）"
+    }
+  ],
+  "placement": {
+    "map": "3",
+    "x": 320,
+    "y": 328,
+    "note": "沙巴克铁匠 (332,317)（E:/MirServer/Mir200/Envir/MerChant.txt:82，GBK）的西南邻格（Chebyshev 距离 (12,11)，在 CM_CLICKNPC 的 |dx|<=15&&|dy|<=15 门内，PlayObject.Base.cs:691）。**不能站铁匠正旁边**：部署 MonGen.txt 在 (325,311)/(336,321)/(339,313) 刷了 3 只弓箭护卫（Race=112 ArcherGuard，ViewRange=12），GuardUnit.IsProperTarget 对普通玩家 return true（src/M2Server/Monster/Monsters/GuardUnit.cs:108-121）⇒ 站近处会被持续射杀（11 分钟取回等待内必死，Death 门会让 UserSelect 整段不执行）。本格到三只护卫的 Chebyshev 分别是 17/16/19，均在 ViewRange 12 之外；同时铁匠正好落在本格 view_range=12 的最后一列 x=px+12（PlayObject.cs:904 与 3087-3090 的闭区间扫描），使 discovery(npc_click_auto 的 auto:last_turn) 取到的「最后一条非己 SM_TURN」是铁匠而不是同屏的 传送员(327,327)/足球场(318,332)/会战(318,336)——外观帧按 VisibleActors 追加序（x 升序、同 x 按 y 升序）发出（PlayObject.cs:3220-3243），x=332 的铁匠排在最后。3.map 该格 bk=671/fr=0，无 bit15（card_window.read_map_cell 口径 = oracle CanWalk(x,y,true)）"
+  },
+  "steps": [
+    {
+      "send": {
+        "ident": 1003,
+        "recog": "make_index",
+        "param": "takeon_where",
+        "text_from": "item_name"
+      },
+      "note": "CM_TAKEONITEM(1003)（Messages.cs；oracle PlayObject.Message.cs:819-822 => ClientTakeOnItems((byte)nParam2, nParam1, Msg)）：recog=MakeIndex=5001（夹具钉死）、param=takeon_where=1（ItemLocation.Weapon，src/OpenMir2/Enums/ItemLocation.cs:12；StdMode 5 => Weapon(1) 是 M2Share.CheckUserItems 的逆表映射，与 bag_equip 的发现口径同源）、body=物品名。武器必须经真实装备链上手：UpgradeWapon 检查的是 UseItems[ItemLocation.Weapon]（Merchant.cs:548），背包夹具只写 characters_bagitem => 必须先穿"
+    },
+    {
+      "wait_for": 615,
+      "timeout_ms": 3000,
+      "note": "SM_TAKEON_OK(615)（bag_equip 同口径：615=OK/616=FAIL）。只等 615：装备失败（616）不在集合 => 本步响亮超时，不会带着空手进升级链假绿"
+    },
+    {
+      "click_npc": "merchant_actor",
+      "note": "CM_CLICKNPC(1010)（src/OpenMir2/Messages.cs:62）；recog=商人 ActorId（由 param_discovery 从 643.recog 发现，不写死）。oracle：PlayObject Click -> normNpc.Click（src/M2Server/Npc/NormNpc.cs:67-73：清 ScriptGotoCount/ScriptGoBackLable/ScriptCurrLable 后 GotoLable(@main)）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] 说词面板（Market_Def/沙巴克铁匠-3.txt:2-8）：含 <开始武器升级/@upgrade>、<取回升级武器/@getbackupgnow>、<听更多的歌/@ge>、<离 开/@tuichu>。oracle NormNpc.SendMsgToUser（src/M2Server/Npc/NormNpc.cs:1613-1616）-> SM_MERCHANTSAY(643)（Messages.cs:304）；每句说词经 GetScriptLabel（src/M2Server/Player/PlayObject.Base.cs:2775-2811）重建 CanJmpScriptLableMap"
+    },
+    {
+      "dlg_select": "@upgrade",
+      "note": "CM_MERCHANTDLGSELECT(1011)（Messages.cs:63），recog 取最近一条 643.recog。oracle Merchant.UserSelect（src/GameSrv/Npc/Merchant.cs:789-812）：先 LableIsCanJmp（PlayObject.Base.cs:2814-2826），未在最近说词里出现且不是 @main/@PlayDice 即 GotoLable 后 return（零帧）。@upgrade 来自上一步 @main 说词的 <开始武器升级/@upgrade>"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@upgrade] 纯说词（沙巴克铁匠-3.txt:104-111），含 $UPGRADEWEAPONFEE 展开与 <确认修炼/@confirmupgrade>/<取 消/@main> 两个链接"
+    },
+    {
+      "dlg_select": "@confirmupgrade",
+      "note": "标签逐字取自 [@upgrade] 说词（沙巴克铁匠-3.txt:110）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@confirmupgrade]（沙巴克铁匠-3.txt:113-124）走 #if CHECKUSEITEM 1 的命中支（手上必须有武器）=> 说词含 <请求修炼/@upgradenow>。夹具没武器时走 #elsesay（只有 <返 回/@main>），下一条 dlg_select @upgradenow 会被 LableIsCanJmp 拒 => 第 8 步 wait_for 超时（fail-closed，不会假绿）"
+    },
+    {
+      "dlg_select": "@upgradenow",
+      "note": "系统命令（不是脚本标签）：@upgradenow 在脚本头第 1 行 (…) 里声明（沙巴克铁匠-3.txt:1），ScriptParsers 置 IsUpgradenow（src/Modules/ScriptEngine/ScriptParsers.cs:741-744）；派发在 Merchant.UserSelect 的 :883-889（↑ 见 src/GameSrv/Npc/Merchant.cs:887-892）"
+    },
+    {
+      "wait_for": [
+        202,
+        643
+      ],
+      "timeout_ms": 5000,
+      "note": "提交支（Merchant.UpgradeWapon，src/GameSrv/Npc/Merchant.cs:529-590）：成功首帧 SM_DELITEM(202)（Messages.cs:222；SendDelItems 单件重载 PlayObject.Base.cs:1648-1665，Recog=ActorId、Param/Tag=0、Series=1、尾=EncodeBuffer(ClientItem)）；失败/已在升级中支只回 say 643（~@upgradenow_fail / ~@upgradenow_ing，ScriptFlagConst.cs:53-55）。两支都在集合里 => 任一分支都不会恒超时"
+    },
+    {
+      "wait_idents": {
+        "idents": [
+          709
+        ],
+        "timeout_ms": 5000
+      },
+      "note": "SM_DELITEMS(709)（Messages.cs:357；RM_SENDDELITEMLIST -> PlayObject.Base.cs:1636-1646，Series=条数、尾=EncodeString(\"名/makeindex/…\")）只在提交成功支出现（黑铁/首饰被吃时由 UpgradeWaponAddValue 组 delItemList，Merchant.cs:512-521）。累计口径 => 把「提交真的成功」钉死：夹具缺武器 / 金币 < 10000 / 背包无黑铁矿时本步必红，不会靠 643 假绿。2026-10-24 部署前置批次后：武器（steps[0..1] 上手）与黑铁（inventory #5003@41）已声明；金币前置改由顶层 assets 声明 Gold=10000 抬够（Gold ≥ UpgradeWeaponPrice=10000，Server.conf:333；基线 winplay0 Gold=100 在 UpgradeWapon 扣金币处不足 => ~@upgradenow_fail 只回 643；通道卡 openmir2-window-gold-declaration-channel 的 assets 声明 + openmir2-probe-assets-key-delta 的 probe 顶层键放行，本卡 openmir2-upgrade-retrieve-assets-adoption 采用）=> 三前置声明齐，本步在本部署预期到达；真机仍超时 = 提交支未走成功路径（如 assets 未实际应用/金币未抬够），fail-closed 语义不变"
+    },
+    {
+      "sleep": 8000,
+      "note": "等 SystemProcessor 存档门（测试 profile 把 ConsoleShowUserCountTime 覆盖为 5000ms；生产默认 600000ms）把 CastleMgr.Save 的 TotalGold/TodayIncome 落盘；文件字段为**辅助**证据，主判据是帧（202/709 等）+ 两侧运行内存行为"
+    }
+  ],
+  "blocked": {
+    "reason": "**run3 内置 profile 不能声明 config_overrides**：`run_batch.sh`/roster 只允许 alt / window-magic；而本场景必须两侧同值 `CastleGetAllNpcTax=1` 才有税（默认 0 ⇒ NPC.Castle=null ⇒ 零税）。⇒ 在 profile 文件里带 `fixtures.config_overrides` 手工跑可验证；进批次需 run_batch 支持 profile 文件或新增内置 profile（工具卡，另开）。",
+    "missing_fixture": "① profile 文件通道（临时 profile 带 fixtures.config_overrides 已可手工跑，本轮实测见 docs/window-scenes-castle-tax-20261025.md §3.5）；② 若进 run3：run_batch 需支持自定义 profile（另卡）。"
+  }
+}
