@@ -75,7 +75,7 @@ README 的重新生成脚本已改为同时产出两行，实测输出与库内�
 
 | 牙 | 变异 | 实测 |
 | --- | --- | --- |
-| A：删 601 规则 | 备份后从 `rules.json` 移除 601 条目（47 条） | **RED 302/310，rc=1**；FAIL 8 项：`601 ③`（规则缺失）、`601 ④`（rc 2）、`601 ⑥/⑦`（连锁）、`600 ④/⑤/⑥/⑦`（601 变 UNCLASSIFIED 后整轮非绿灯）。还原后 `rules.json` sha256 回到 `907ffda4…`，GREEN 310/310 |
+| A：删 601 规则 | 备份后从 `rules.json` 移除 601 条目（47 条） | **RED 302/310，rc=1**；FAIL 8 项（@ 5980961da）：`601 ③`（规则缺失）、`601 ④`（rc 2）、`601 ⑥/⑦`（连锁）、`600 ④/⑤/⑥/⑦`（601 变 UNCLASSIFIED 后整轮非绿灯）。还原后 `rules.json` sha256 回到 `907ffda4…`，GREEN 310/310 |
 | B：改坏 601 body 一字节 | rust 侧 `body_hex` 首字节 `72→73`，`body_sha256` 同步重算 | **RED 301/310，rc=1**；直接比较器输出 `{"ident":601,"kind":"body","offset":0,"oracle_byte":114(0x72),"rust_byte":115(0x73)}`（`verdict=FAIL`, rc=1）。还原后夹具 sha256 回到 `9292f05d…`，GREEN |
 | C：改坏 601 recog | rust 侧 `recog 51→52` | **RED 303/310，rc=1**；直接比较器输出 `{"ident":601,"field":"recog","oracle":51,"rust":52}` ⇒ 证明 `head_compare` 生效、全局 recog 掩码没吞语义字段。还原后 GREEN |
 
@@ -85,7 +85,7 @@ README 的重新生成脚本已改为同时产出两行，实测输出与库内�
 | --- | --- |
 | `python -I -B tools/conformance/compare_runs.py selftest` | **GREEN 310/310，rc=0**（基线 303/303 ⇒ +7，即 601 ①-⑦；未减少） |
 | `python -I -B tools/conformance/card_window.py --selftest` | **GREEN 279/279，rc=0**（与基线相同） |
-| `python -I tools/hygiene/conflict_marker_gate.py` | rc=0（0 markers / 7500 tracked files） |
+| `python -I tools/hygiene/conflict_marker_gate.py` | rc=0（0 markers / 7501 tracked files） |
 | `python -I tools/hygiene/stale_pointer_gate.py` | rc=0 |
 | `python -I tools/hygiene/dynamic_count_stamp_gate.py` | rc=0（0 缺戳） |
 | `git diff --check` | rc=0 |
