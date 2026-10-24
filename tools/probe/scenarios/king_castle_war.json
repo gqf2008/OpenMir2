@@ -1,11 +1,42 @@
 {
   "name": "king_castle_war",
-  "description": "点比奇国王 -> 等 643 -> 选 @requestcastlewarA（该支回 messagebox「尚未开放」）-> 等 100/643",
+  "description": "点比奇国王 -> 等 643 -> 选 @requestcastlewarA（申请攻城战争面板）-> 选 @requestcastlewar（缴金条门）-> 等 SM_MERCHANTDLGCLOSE(644)+SM_MENU_OK(767)。run1 UNDECIDABLE 根因：默认 discovery 点中的是赌场庄家 + steps[3] 等 [100,643] 是猜的（castle_war 语境缺失，§7.3 castle_zone 缺口）。本版以 placement 钉死王宫 map 0122 (29,33)（单 actor 证明见 placement.note，king_actor 必然是国王），并改走部署件里真实存在的攻城申请链：[@main] <申请攻城战争./@requestcastlewarA> => [@requestcastlewarA] 说词面板（643：<缴纳金条/@requestcastlewar> + <关闭/@exit>）=> [@requestcastlewar] 的 checkitem 金条 1 对 gm01 恒假（两侧 characters_bagitem 46 槽全满且无金条，StdIndex=60 计数=0，实测 SELECT）=> #elseact：close => SM_MERCHANTDLGCLOSE(644)、messagebox 请先缴纳一根金条 => RM_MENU_OK => SM_MENU_OK(767)（src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2181-2184 close、:3416-3419 messagebox => PlayObject.Message.cs:1952-1954）。**真攻城请求支（@requestcastlewarnow => ReQuestCastleWar）如实登记为缺口**：(a) 面板里 <给祖玛头像/@requestcastlewarnow> 只在 checkitem 金条 为真的 #say 支发出，而金条入包无声明通道——inventory 夹具对「声明槽位原本非空」fail-closed（rc=2），gm01 两侧背包 46/46 全满、没有驱逐夹具；(b) 即使可跳，ReQuestCastleWar（src/GameSrv/Npc/GuildOfficial.cs:239-267）非 IsGuildMaster 走 SysMsg(100)（T138 的 W-T138-1），掌门/双行会/UnderWar 支依赖 castle_zone 夹具（§7.3 不可达登记：双行会 DB + 私有根 AttackSabukWall.txt + 开战钟点）。缺口归属：T138 卡 openmir2-t138-request-castle-war + 背包驱逐/金条夹具能力（待 owner 裁决开卡）。",
   "required": ["king_actor"],
+  "placement": {
+    "map": "0122",
+    "x": 29,
+    "y": 33,
+    "note": "比奇王宫 map 0122，目标「比奇国王」在 (29,32)（Npcs.txt:3，type=1 => GuildOfficial）。本格是其正南邻格。可机判依据：两侧 0122.map 逐字节同源（51x55），(29,33) walkable（bk=0/fr=0，card_window.read_map_cell 口径）；**全图唯一 actor**：Npcs.txt 只有 :3 一行 0122、MerChant.txt 零行、MonGen.txt 0122 零行 ⇒ discovery 点出的 643.recog 必然是国王；GuildOfficial.Run Random(40)==0 => TurnTo（src/GameSrv/Npc/GuildOfficial.cs:36-47）⇒ npc_click_auto 的 auto:last_turn 有帧可取。与 king_dialog / npc_script_chain 同格同出发点。"
+  },
   "steps": [
-    {"click_npc": "king_actor"},
-    {"wait_for": 643, "timeout_ms": 3000},
-    {"dlg_select": "@requestcastlewarA", "note": "label 逐字取自 Npc_Def/比奇国王-0122.txt"},
-    {"wait_for": [100, 643], "timeout_ms": 3000}
+    {
+      "click_npc": "king_actor",
+      "note": "recog=国王 ActorId（discovery 643.recog；placement 单 actor 证明下必然是国王）。oracle：CM_CLICKNPC(1010) -> ClientClickNpc（src/M2Server/Player/PlayObject.Base.cs:674-698，Chebyshev<=15）=> NormNpc.Click（src/M2Server/Npc/NormNpc.cs:68-74）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] #elsesay 面板（check [105] 1 恒假），含 <申请攻城战争./@requestcastlewarA>（部署件 Npc_Def/比奇国王-0122.txt:19）=> SM_MERCHANTSAY(643)，recog=国王 ActorId"
+    },
+    {
+      "dlg_select": "@requestcastlewarA",
+      "note": "标签逐字取自部署件 :10/:19。GuildOfficial.UserSelect（src/GameSrv/Npc/GuildOfficial.cs:55-104）：CanJmp(@requestcastlewarA) 成立 => GotoLable；前缀特判 sREQUESTCASTLEWAR='@requestcastlewarnow'（ScriptFlagConst.cs:71，CompareLStr 前缀比 :82）不匹配 'A' 结尾 => 不进 ReQuestCastleWar，只发 [@requestcastlewarA] 说词面板（:174-177：<缴纳金条/@requestcastlewar> + <关闭/@exit>）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@requestcastlewarA] 纯说词面板（无 #IF），末尾两个链接都进 CanJmpScriptLableMap；@requestcastlewarnow 不在该面板（它在 [@requestcastlewar] 的 #say 支里，金条门之后才可能发出）"
+    },
+    {
+      "dlg_select": "@requestcastlewar",
+      "note": "标签逐字取自部署件 :177。CanJmp 成立 => GotoLable([@requestcastlewar])：#if checkitem 金条 1 恒假（gm01 两侧背包无金条，StdIndex=60 计数=0 实测）=> #elseact 分支：close + messagebox + break（ExecutionCode.Break => result=false，src/Modules/ScriptEngine/ScriptEngine.cs:914-916，终止本段；ElseSayMsg 为空 => 尾部不补发 643）"
+    },
+    {
+      "wait_idents": {
+        "idents": [644, 767],
+        "timeout_ms": 3000
+      },
+      "note": "成功硬门（累计口径，两条都必须到）：① close => ActionOfClose（src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2181-2184）SendMsg(RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0) => SM_MERCHANTDLGCLOSE(644)，Recog=国王 ActorId；② messagebox => ActionOfMessageBox（ExecutionProcessingSys.cs:3416-3419）SendMsg(RM_MENU_OK, 0, playerActor.ActorId, 0, 0, '请先缴纳一根金条') => SM_MENU_OK(767)（Messages.cs:379；PlayObject.Message.cs:1952-1954），Recog=自己 ActorId、body=提示文本。缺金条支不走 @exit 也发 644——旧期望 [100,643] 无生产点（100 只来自真攻城请求支的 SysMsg，见 description 缺口登记）"
+    }
   ]
 }

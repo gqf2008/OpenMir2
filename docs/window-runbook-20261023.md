@@ -491,7 +491,7 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
 | `merchant_dialog` | merchant_actor | ✅（derived，643） |
 | `npc_click` | npc_actor | ✅（derived，643） |
 | `pickup_item` | self_x, self_y | ✅（derived，SM_LOGON） |
-| `king_dialog` / `king_castle_war` | king_actor | ⚠️ **rule（部署假设，不计入发现能力）**：643 只证明「该 actor 应答了点击」，**不证明是国王**——仓库里全部 643 录制都是赌场庄家（`〖庄〗…@kaiz`），且默认 discovery 点的是「最近的非自己 `SM_TURN`」（录制里就是庄家），**没有可执行步骤能让 discovery 点中国王**。点错的后果是末步响亮超时（`@@buildguildnow` 只存在于`比奇国王-0122.txt`，查不到 label ⇒ 零帧） |
+| `king_dialog` / `king_castle_war` | king_actor | ⚠️ **rule（部署假设，不计入发现能力）**：643 只证明「该 actor 应答了点击」，**不证明是国王**——仓库里全部 643 录制都是赌场庄家（`〖庄〗…@kaiz`），且默认 discovery 点的是「最近的非自己 `SM_TURN`」（录制里就是庄家），**没有可执行步骤能让 discovery 点中国王**。点错的后果是末步响亮超时（`@@buildguildnow` 只存在于`比奇国王-0122.txt`，查不到 label ⇒ 零帧）。**〔2026-10-24 勾注，卡 `openmir2-window-deploy-prereq-batch2`〕「点中国王」已由 placement 闭合，不需要新 discovery 步骤**：discovery probe 与真场景共用同一角色（restore→placement→起栈→discovery→probe，`card_window.py` run_side 同栈两跑），场景声明 `placement(0122,29,33)` 后 discovery 也落在王宫 (29,33)；0122 全图唯一 actor=国王（Npcs.txt 仅 :3 一行 0122、MerChant/MonGen 零行，两 Envir 逐字节同源）⇒ 点出的 643.recog 必然是国王，rule 从「赌运气」降为「可离线机判的部署假设」。场景侧同步更新：`king_dialog` 末步期望改 [763]（GuildOfficial.ReQuestBuildGuild 失败支，旧 [643,100] 无生产点）、`king_castle_war` 改走 @requestcastlewarA→@requestcastlewar 缴金条门（644+767） |
 | `move_walk` | move_x, move_y | ✅（**computed**：`self_x+1` / `self_y+0`，delta 写在场景 JSON 的 `computed` 里） |
 | `bag_equip` | make_index, takeon_where, item_name | ✅（**derived，201**）：三变量取自同一槽——`MakeIndex`@100 / `Name`@0（帧里就有，不查 StdItems）/ `StdMode`@15 → `ItemLocation`（`M2Share.CheckUserItems` 逆表） |
 | `eat_item` | make_index, item_name | ✅（**derived，201**）：同一个「首个可食用槽」的 `MakeIndex`@100 + `Name`@0 |
@@ -501,7 +501,7 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
 ⇒ **规则表落地后，`check-all` 能覆盖 14 个场景**（5 derived + 2 rule + 1 computed + 5 no_required + 1 params_default）；
 其中 `king_*`（2 个）与 `move_walk`（1 个）由 `openmir2-window-discovery-rules` 解锁，
 `bag_equip` / `eat_item`（2 个）由 `openmir2-discovery-bagitems-201` 解锁（构造级，见 §4.5.1）。`move_walk` 的 `computed` 已接进 `card_window.py`（见下方「接线」）；`king_*` **能跑但不该算绿**——`king_actor` 是部署假设（rule），
-默认 discovery 推出来的是庄家，真跑会在末步超时（响亮失败），要让它真绿必须先有「点中国王」的 discovery 场景/步骤。
+默认 discovery 推出来的是庄家，真跑会在末步超时（响亮失败），要让它真绿必须先有「点中国王」的 discovery 场景/步骤。〔2026-10-24 勾注：该前提已由批 2 的 `placement(0122,29,33)` + 0122 单 actor 证明闭合——discovery 与真场景同角色同摆位，见 §4.5 表内勾注与卡 `openmir2-window-deploy-prereq-batch2`。〕
 只剩 `combat_hit`（1 个）要等「AOI 实体位置 + 对象类型」的新帧。
 所以「②45 次参数化 run」**第一批按这 14 个推**，
 其余按「缺哪个变量 → 补哪条规则/哪个帧」逐条开卡，不要笼统地指望发现工具。
