@@ -52,8 +52,13 @@ Locality is the card's own criterion: the card id and the word must sit on the
 **same line** and be close (``--max-gap``).  A Markdown table row is one line,
 so a card id in one cell and the unfinished word in another cell *do* pair.
 (The first version required both in the same cell; reviewer-3 showed that this
-silently swallowed two real drifts — ``leader-quota-block-20261023.md:22`` and
-``window-round3-runbook-20261021.md:30`` — while removing only 4 false hits.)
+dropped 4 hits — **2 real + 2 false positives**, not "4 false hits".  The 2 real
+ones were ``leader-quota-block-20261023.md:22`` and
+``window-round3-runbook-20261021.md:30`` (both written 16 / 40 minutes before
+their card merged).  The 2 false positives were the table header 「未合并」
+(``goal-gate-full-20261024.md:47``, a statistic-row label) and the direction
+word 「未接线」 (``window-criteria-backfill-20261024.md:78``).  So the same-cell
+rule was a net loss: it hid 2 real drifts to suppress 2 false ones.)
 
 Two literals that merely *contain* a pending word are not status assertions and
 are skipped: 「未接线」/「未接入」 (a subsystem is not wired — a direction word,

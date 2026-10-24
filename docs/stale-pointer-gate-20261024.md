@@ -231,7 +231,7 @@ base 上 **19 处 / 18 行**逐条处置：
 | 3 | `docs/Rust重写设计文档.md:891` | `openmir2-m5-convergence-drills` | merged（in-progress） | 同上（Claim B/M5 两行） ⇒ 前一轮**就地订正** |
 | 4 | `docs/docs-state-drift-sweep-20261024.md:48` | `openmir2-sm-skeleton-wiring` | merged（in-progress） | 漂移表「订正」列的时点记录，行文写的是已合/在办 ⇒ **白名单**（理由已按事实重写） |
 | 5 | `docs/docs-state-drift-sweep-20261024.md:48` | `openmir2-dualrun-window-burndown` | closed | 同上（同行第二张卡） ⇒ 同一条**白名单** |
-| 6 | `docs/leader-quota-block-20261023.md:22` | `openmir2-monster-showhp-53-broadcast` | merged（in-progress） | **本轮新增（跨格）**：blame 2026-10-23T03:49Z，卡 12:05(+08)=04:05Z 由 `ca7cb5acc` 合入 ⇒ 早 16 分钟的时点快照，**就地订正** |
+| 6 | `docs/leader-quota-block-20261023.md:22` | `openmir2-monster-showhp-53-broadcast` | merged（in-progress） | **本轮新增（跨格）**：blame 2026-10-23T03:49Z（11:49+08），账本 `merge_result` 条目 12:05(+08)=04:05Z，merge commit **`65a8af8d6`**（12:02+08）⇒ 早 16 分钟（对条目）/ 13 分钟（对 merge commit）的时点快照，**就地订正** |
 | 7 | `docs/m3-remaining-inventory-20261022.md:46` | `openmir2-monster-run-overrides` | merged（in-progress） | 2026-10-22 盘点快照；「实现未开」与卡最新 status 一致，只因设计件带来 merge_result 判红 ⇒ **白名单**（理由时间线已订正） |
 | 8 | `docs/r-window-registry-batch-1-20261023.md:66` | `openmir2-scenario-spell-cast` | closed | 2026-10-23 批次登记表：blame 14:49Z 早于首次 merge 14:58Z ⇒ **白名单** |
 | 9 | `docs/r-window-registry-batch-1-20261023.md:69` | `openmir2-scenario-spell-cast` | closed | 同上 ⇒ **白名单** |
@@ -249,6 +249,20 @@ base 上 **19 处 / 18 行**逐条处置：
 **第 6、16 行是本轮新增的两处真漂移**（同格规则看不到）。两行分别写于对应卡合入前 16 分钟 / 40 分钟，
 属当日时点记录：保留原文、就地追加〔2026-10-24 订正〕并写明合入 commit，不重写历史。
 
+**2026-10-24 订正（M-4，合并提交写错）**：第 6 行原写「卡 12:05(+08)=04:05Z 由 `ca7cb5acc` 合入」。
+`65a8af8d6` 才是**合并提交**（`git rev-list --parents -n1 65a8af8d6` 给出两个父：`bf26c39eb` + `ca7cb5acc`，
+提交时间 2026-10-23 12:02:02 +0800）；`ca7cb5acc` 是分支内提交（11:56:53 +0800，正是 `merge_result` 的
+`merged_head`）；12:05:25 +0800 是 `merge_result` **条目自己的 `ts`**，不是任何 commit 的时刻。复现：
+
+```sh
+git log -1 --format='%H %ai %ci %s' 65a8af8d6 ca7cb5acc
+git rev-list --parents -n1 65a8af8d6
+walgit collab thread --repo . openmir2-monster-showhp-53-broadcast   # merge_result: oid / merged_head / ts
+```
+
+**同错残留（不在本卡写集）**：`docs/leader-quota-block-20261023.md:22` 的就地〔订正〕标记也写了
+`ca7cb5acc`。该文件属另一张卡的写集，本卡不改，已作为 comment 留在本卡线程。
+
 **第 11 行改判**：原白名单理由称「2026-10-22 时点未认领，其后多次合入」，但账本是该卡 **2026-10-13T07:21Z 已认领**、
 当日 4 次 `merge_result{merged:true}`，markers 前缀子项也已随 `9ff7ff064`（2026-10-13 15:38+08）合入——
 写作时间 2026-10-22T15:02Z，**写时即错**，「其后」更是反的（`9ff7ff064` / `350cb923b` 都早于该行）。
@@ -258,13 +272,28 @@ base 上 **19 处 / 18 行**逐条处置：
 
 | 条目 | 行 blame（UTC） | 卡首次 merge（UTC） | 重核结论 |
 |---|---|---|---|
-| `docs-state-drift-sweep` :48 | 2026-10-23T21:22Z | sm-skeleton 10-23T05:22Z / dualrun 10-23T04:29Z | 行是「订正」列，写的是已合/在办（措辞准确），只因「存在 merge ⇒ 红」被豁免 ⇒ 成立，reason 已按行文重写 |
-| `m3-remaining-inventory` :46 | 2026-10-20T14:22Z | monster-run-overrides 10-17T13:30Z（设计件） | 行文与卡最新 status 一致 ⇒ 成立（原 reason 的「其后才合入」已订正） |
+| `docs-state-drift-sweep` :48 | 2026-10-23T18:28Z | sm-skeleton 10-23T05:22Z / dualrun 10-23T04:29Z | 行是「订正」列，写的是已合/在办（措辞准确），只因「存在 merge ⇒ 红」被豁免 ⇒ 成立，reason 已按行文重写 |
+| `m3-remaining-inventory` :46 | 2026-10-20T13:23Z | monster-run-overrides 10-17T13:30Z（设计件） | 行文与卡最新 status 一致 ⇒ 成立（原 reason 的「其后才合入」已订正） |
 | `r-window-registry-batch-1` :66/:69/:70 | 2026-10-23T14:49Z | scenario-spell-cast 10-23T14:58Z | 早 9 分钟 ⇒ 成立（真时点快照） |
 | `session-summary-20261023` :39 | 2026-10-23T11:27Z | script-sendmsg-host 10-23T19:23Z | 早 8 小时 ⇒ 成立 |
 | `tmp-cleanup-proposal-20261017` :3 | 2026-10-17T05:21:01Z | tmp-cleanup-audit-redo 10-17T05:21:40Z | 早 39 秒 ⇒ 成立 |
 | `window-round3-runbook` :1016/:1034 | 2026-10-21T10:35Z | merchant-race-bias 10-21T11:15Z | 早 40 分钟 ⇒ 成立 |
 | `交接-OpenMir2编排与联调-20261015` :16 | 2026-10-15T05:14Z | m5-convergence-drills 10-15T12:27Z | 早 7 小时 ⇒ 成立 |
+
+**行 blame 口径（M-2 订正，2026-10-24）**：上表取 **author 时间**（写作时刻）。原版前两行误取了
+**committer 时间**——`docs/docs-state-drift-sweep-20261024.md:48` 的 committer 是 2026-10-23T21:22Z，
+`docs/m3-remaining-inventory-20261022.md:46` 的 committer 是 2026-10-20T14:22Z；两行都被 rebase 改写过
+committer 列，用它会把写作时刻推晚约 3 小时 / 1 小时。复现：
+
+```sh
+git blame -L 48,48 --porcelain -- docs/docs-state-drift-sweep-20261024.md | grep -E '^(author-time|committer-time)'
+# author-time 1792780112 (2026-10-23T18:28:32Z) / committer-time 1792790577 (2026-10-23T21:22:57Z)
+git blame -L 46,46 --porcelain -- docs/m3-remaining-inventory-20261022.md | grep -E '^(author-time|committer-time)'
+# author-time 1792502625 (2026-10-20T13:23:45Z) / committer-time 1792506159 (2026-10-20T14:22:39Z)
+```
+
+对应提交：`9bebfa16f`（author 02:28:32+08 / committer 05:22:57+08）、
+`923b0c17d`（author 21:23:45+08 / committer 22:22:39+08）。
 
 base 19 处命中里 `closed` 6 处（3 张卡：`openmir2-dualrun-window-burndown`、`openmir2-scenario-spell-cast`、
 `openmir2-spell-frame-compare-rules`），`merged:true` 13 处；第一类对这些行全是绿。
@@ -282,14 +311,14 @@ base 19 处命中里 `closed` 6 处（3 张卡：`openmir2-dualrun-window-burndo
 | `docs/rewrite-remaining-inventory-20261022.md:725` | 卡号 `openmir2-merchant-script-load` | **已由 `3fa6899a9`（`3570f31d4`）消解**：`openmir2-inventory-top5-audit` 返工已把该行改写为「已合入 460691b24」，合并树全量扫不再出现该红点。**本卡未改该文件**（另一张卡的写集） |
 
 现状：在 `git merge-tree --write-tree walgit/master HEAD` 的合并树上全量扫 ⇒
-`stale-pointer gate: OK … 0 card-status hit(s), 2 snapshot-exempt hit(s)`，**rc=0**。
+`stale-pointer gate: OK … 0 card-status hit(s)`，快照豁免按**行**计（当时 2 条命中降级），**rc=0**。现行 head（ref=`5848a872b`）实测 `3 snapshot-exempt line(s)` / 5 条 INFO（见 §5-16）。
 零残留、零白名单新增。本卡没有靠收窄词表、扩大引号或放宽 `--max-gap` 来变绿。
 
 ## 4. 白名单：条目数与防腐烂验证
 
 当前 **12 条**：第一类 2 条（§3 表 #3/#4），第二类 10 条（§3.4 表 #4/#5 共用 1 条、#7-#10、#12、
 #15、#17-#19；每条都是**重核过 blame 时间 vs 卡首次 merge 时间**的时点快照，理由见 §3.4 末表）。
-实跑汇总（head，2026-10-24）：`stale-pointer gate: OK (136 files / 32575 lines …; 0 card-status hit(s), 12 card id(s) judged, 22 card-bearing line(s))`，即 `12 allow-listed line(s)`、0 rot。腐烂验证：
+实跑汇总（本卡 head `5848a872b`，2026-10-24）：`stale-pointer gate: OK (144 files / 35094 lines …; 0 card-status hit(s), 10 card id(s) judged, 23 card-bearing line(s))`，即 `12 allow-listed line(s)`、`3 snapshot-exempt line(s)`、0 rot。腐烂验证：
 
 ```sh
 cp tools/hygiene/stale_pointer_allowlist.toml /e/tmp/rot.toml
@@ -411,7 +440,7 @@ python -I tools/hygiene/stale_pointer_gate.py --selftest
 
 ## 7. 自测（`--selftest`）
 
-30 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；带 2026-01-01 日期的祖先 O；
+31 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；带 2026-01-01 日期的祖先 O；
 side 分支 commit B = 对象存在但非祖先；卡号类用内存 `Ledger` **或**合成 `refs/collab/inbox` blob，
 不需要真 `walgit`）：
 
@@ -447,10 +476,11 @@ side 分支 commit B = 对象存在但非祖先；卡号类用内存 `Ledger` **
 | ㉘ | 声明行的事后补提交（blame 时间 = 声称时间 + 30 天） | 不降级，仍红 + `NOTE … > --decl-tol 86400s` |
 | ㉙ | 2026-01-01 的祖先用**它自己的真实时间**声明、文档今天写入 | (a)(b)(c) 全过、仅 (d) 判红 ⇒ 仍红 + NOTE |
 | ㉚ | 头里 anchor 上一行有无关的 `基线 <sha>`，真 sha 在下一行 | 候选近到远试，真 sha 胜出 ⇒ INFO，且 NOTE 里写明被否的基线候选 |
+| ㉛ | 声明行已 `git add` 但未 commit（blame 全 0 / `Not Committed Yet`） | 不豁免，仍红 + NOTE 点名 blame 不可用的原因 |
 
-实测：`selftest: 30/30 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为第二类卡，㉑-㉖ 为首版快照/卡号修正，
-㉗-㉚ 为**本轮返工**：㉗ 钉住文档头两条边界、㉘㉙ 钉住声明可信性 (d) 的两类伪造、
-㉚ 钉住「相邻基线 sha 不再吞掉真声明」）。
+实测：`selftest: 31/31 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为第二类卡，㉑-㉖ 为首版快照/卡号修正，
+㉗-㉚ 为返工：㉗ 钉住文档头两条边界、㉘㉙ 钉住声明可信性 (d) 的两类伪造、
+㉚ 钉住「相邻基线 sha 不再吞掉真声明」；㉛ 为 blame fail-closed：声明行已 stage 未 commit ⇒ 不豁免）。
 
 ## 8. 告警还是阻断（留给 Leader 合并时定）
 
