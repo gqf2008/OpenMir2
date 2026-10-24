@@ -1,0 +1,532 @@
+# Allow-list for tools/hygiene/dynamic_count_stamp_gate.py
+#
+# Every entry must carry:
+#   path          repo-relative Markdown path
+#   line_sha256   sha256 of the line with trailing whitespace stripped
+#   reason        why the line must keep a bare (un-stamped) count
+#   added         YYYY-MM-DD when the exemption was granted
+#
+# An entry that suppresses no current hit is reported as ROT and fails the
+# gate itself, so this file cannot silently accumulate dead exemptions.
+#
+# Add an entry with:
+#   python -I tools/hygiene/dynamic_count_stamp_gate.py --fingerprint docs/foo.md:123
+#
+# First-run classification (85 hits / 84 unique lines, 2026-10-24):
+#   docs/dynamic-count-stamp-gate-20261024.md
+
+[[allow]]
+path = "docs/Rust重写设计文档.md"
+line_sha256 = "2bec82c836b9f857f554fbef6ff2edf1f1268caaa45d204a3578d288004d03b1"
+reason = "假红（非计数）：board 正则把 §17.1/日期/hash 前缀/`T-14` 这类非计数当成了列计数；判据收紧留待下一轮，本轮只如实标注理由。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/Rust重写设计文档.md"
+line_sha256 = "9503e93eb687ce6c6699fa998a387437db628da01be1fe2f4709ec48673b2971"
+reason = "假红（非计数）：board 正则把 §17.1/日期/hash 前缀/`T-14` 这类非计数当成了列计数；判据收紧留待下一轮，本轮只如实标注理由。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/Rust重写设计文档.md"
+line_sha256 = "9702baaff6546403789a825712b1ba84bac05a4c7d0742998f814b55eaf555e2"
+reason = "假红（非计数）：board 正则把 §17.1/日期/hash 前缀/`T-14` 这类非计数当成了列计数；判据收紧留待下一轮，本轮只如实标注理由。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/Rust重写设计文档.md"
+line_sha256 = "e2fea805417195ab1a4157f996000fd3d5e55fe6c7b6b819fbddab0d79d9dd67"
+reason = "假红（非计数）：board 正则把 §17.1/日期/hash 前缀/`T-14` 这类非计数当成了列计数；判据收紧留待下一轮，本轮只如实标注理由。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-card-association-20261023.md"
+line_sha256 = "e48047180ea4b99a01126c7c82f417ebe32721697295f7b66546f9d31a57556d"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-full-20261024.md"
+line_sha256 = "03d9bfdbe38e20a7765ff8507dd9777c33e60bf5b17f04b8ff6996e11a3150b1"
+reason = "该文件头部已声明「只对 master 81ecc0d28 @ 1792798909 有效」；正文是 goal_gate --json 的逐字摘录与对比表，行内再插戳会破坏机判原文与表结构。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-full-20261024.md"
+line_sha256 = "8674f12035de56385343c345db9344d7d7b9214043f8329dcfca959a1f67314d"
+reason = "该文件头部已声明「只对 master 81ecc0d28 @ 1792798909 有效」；正文是 goal_gate --json 的逐字摘录与对比表，行内再插戳会破坏机判原文与表结构。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-full-20261024.md"
+line_sha256 = "ac541025079a38454eef3ca2cf9aa6f96d4e09ceb8decba3cbd349731321664f"
+reason = "该文件头部已声明「只对 master 81ecc0d28 @ 1792798909 有效」；正文是 goal_gate --json 的逐字摘录与对比表，行内再插戳会破坏机判原文与表结构。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-full-20261024.md"
+line_sha256 = "b5cdf0c3537449faca34f1c07bda551951b76a469c4d5abf4ac0bf46e1183348"
+reason = "该文件头部已声明「只对 master 81ecc0d28 @ 1792798909 有效」；正文是 goal_gate --json 的逐字摘录与对比表，行内再插戳会破坏机判原文与表结构。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-full-20261024.md"
+line_sha256 = "db2f68b77cf1c54f2ae5fba2ec1bd2413730aba874ad93a420529ff3cfcbae9f"
+reason = "该文件头部已声明「只对 master 81ecc0d28 @ 1792798909 有效」；正文是 goal_gate --json 的逐字摘录与对比表，行内再插戳会破坏机判原文与表结构。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-full-20261024.md"
+line_sha256 = "ea7eebce0297c7c929a7c3d0b480c06f47b12fe1b8d985121405bf8ce25b567a"
+reason = "该文件头部已声明「只对 master 81ecc0d28 @ 1792798909 有效」；正文是 goal_gate --json 的逐字摘录与对比表，行内再插戳会破坏机判原文与表结构。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-unmerged-selftest-20261024.md"
+line_sha256 = "32dcfd3ad088446c262bdac706450741fcbcc00c9e355b3b9b3c80d9fd4617e2"
+reason = "goal_gate --json 的逐字摘录（R 卡 194 张）；文档基线 walgit/master=a30a6fa79（2026-10-24），改写会与产出它的 JSON 不再逐字可核。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-unmerged-window-bucket-20261024.md"
+line_sha256 = "64cd547da188d2e13bf1157bd1de196859a4f3751cf90567dd8ada8e46ed3c57"
+reason = "goal_gate --json 的逐字摘录（R 卡 193 张）；文档快照戳 master `2000e1cc5`（2026-10-24），改写会与产出它的 JSON 不再逐字可核。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-gate-unmerged-window-bucket-20261024.md"
+line_sha256 = "e6726d08a9ca4eb652e65d523fee0c99f911deff3c1108f9a6d2b33320df1138"
+reason = "goal_gate --json 的逐字摘录（R 卡 193 张）；文档快照戳 master `2000e1cc5`（2026-10-24），改写会与产出它的 JSON 不再逐字可核。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-snapshot-late-20261023.md"
+line_sha256 = "47e0e9de366cfc959638e9d6d931bc18c2b755198425adafa91deb4176d5318f"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-snapshot-late-20261023.md"
+line_sha256 = "7b4f26a42aca838016baa1a2a57bf83b1234ebbfdcdac673134273f0a48a70ff"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/goal-snapshot-late-20261023.md"
+line_sha256 = "ab66bfd6216001ac1f16f0b390ac85ee24d22c4dbbe354476b585d4ce9f90a0f"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-goal-20261023.md"
+line_sha256 = "06a7c22e290172a2a98857ac03f2050e56d501ea978aeaec7d97e9a3ae9d61ab"
+reason = "规则文本与历史教训（tracked=0 的口径讨论、三次返工复盘），不是现时计数；改写会抹掉规则出处。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-goal-20261023.md"
+line_sha256 = "1f3c804042400c07ddd107d4b7554f57931a77ca8d95df99e3c224d1d6f9e798"
+reason = "规则文本与历史教训（tracked=0 的口径讨论、三次返工复盘），不是现时计数；改写会抹掉规则出处。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-goal-20261023.md"
+line_sha256 = "3bbb36d4f6759a336a83ea05df3474c9dbc28b562b7ecb99ceda165c7f49c438"
+reason = "规则文本与历史教训（tracked=0 的口径讨论、三次返工复盘），不是现时计数；改写会抹掉规则出处。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-goal-20261023.md"
+line_sha256 = "86e0cd472047f65a33f45715196e046a059c4ed948bac1e714094e82f114eacc"
+reason = "规则文本与历史教训（tracked=0 的口径讨论、三次返工复盘），不是现时计数；改写会抹掉规则出处。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-goal-20261023.md"
+line_sha256 = "9961e9418b75fdeec9a75fc0f9ba97903a151448b6d25deb26ddec8f9687d83e"
+reason = "规则文本与历史教训（tracked=0 的口径讨论、三次返工复盘），不是现时计数；改写会抹掉规则出处。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-goal-20261023.md"
+line_sha256 = "eb87ff8179cbae47a78c7c5707dd5dbad63ed0cd59b7f097ce8ab75ffa144e42"
+reason = "规则文本与历史教训（tracked=0 的口径讨论、三次返工复盘），不是现时计数；改写会抹掉规则出处。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-loop-20261023.md"
+line_sha256 = "976040baeff791f3a8676275d1a0a9c6db47f456219215363bbdbdb3583b7d61"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/leader-loop-20261023.md"
+line_sha256 = "fba40deba0623cb0dda8a72f3865353b77d071d8e8bff054c8b5a069bab1a3e3"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261023-evening.md"
+line_sha256 = "cce8d34f481cddc71beb1a03610d1fb6279c95abc3683d7879c51efb7bf140d7"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261023-evening.md"
+line_sha256 = "d8bbf172a837eb2619a5d0e8e4f3a6e35fdac10fbe46877a8e728f938110adbc"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261023-night.md"
+line_sha256 = "851a9e783a5e25e610c8464e3b6c5d0805c282a1099f7ee7b4178ab5811b1a69"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261024.md"
+line_sha256 = "0b35861520ec862b1402268a1c5c47a095449d3855a9bb4ed88c5b547eae7358"
+reason = "文档快照 `master = 55a8e7fca`（2026-10-24）下的一组现值；本行行首虽有快照戳，但与计数间距超过 --max-gap(24)，改写会与 goal_gate 输出脱节。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261024.md"
+line_sha256 = "56d3b7df94724ce6e9244c012f29f6690cc509dcc5eacfa45669d23cf44ed34e"
+reason = "goal_gate --json 的 conditions[1].detail 逐字摘录（R 卡 198 张 / window_required=123）；文档快照 `master = 55a8e7fca`（2026-10-24）。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261024.md"
+line_sha256 = "98ee800eebb06483f9c9fd078b85a6ef24c982c2c314014e92be085c3d5e0ffc"
+reason = "goal_gate --json 的逐字摘录（`fail_items = []  # FAIL 卡 0`）；文档快照 `master = 55a8e7fca`（2026-10-24），改写会与产出它的 JSON 不再逐字可核。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261024.md"
+line_sha256 = "c5d7fc10917fcfc10cb5a8587d1bccaeb77c63472541b71b12f3658a51d7d3c0"
+reason = "结论句里的 FAIL 卡 0 与行内 `master 55a8e7fca` 同源，但写法不带门的快照关键词（缺 截至/@/快照）；文档级快照 `master = 55a8e7fca`（2026-10-24）。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/needs-human-20261024.md"
+line_sha256 = "ff416db0cb0595dd70fb9e6efcd4b0c0fbad2ce081985439ebc2c8d9d00974e9"
+reason = "对旧文档的引述 + 复述同源结论（FAIL 0）；文档级快照 `master = 55a8e7fca`（2026-10-24），改写会篡改引述。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-card-evidence-status-20261021.md"
+line_sha256 = "a20eb0c03893c10ec8da6b8db8a50fa77d24e694b5ba9f00da9996dcf437d36d"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-card-evidence-sweep-20261023.md"
+line_sha256 = "807a610fe1f182983a28c90e55b395f0e7b4f89a0c026097c571fd24e63a9bd4"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-card-evidence-sweep-20261023.md"
+line_sha256 = "d22a3b1e39812f2caeeb95fc1bc77ea4e97a6de7c1556133d47ab33a6252dd18"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-card-evidence-triage-20261023.md"
+line_sha256 = "909e50739ed47e4fba50d5cab2b5c4c21b79e439f240fa1754a66106194588f8"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-1-20261023.md"
+line_sha256 = "75134c7527e19e3a259d5c960a99e29107a6d17b71659b167336f4675a17ae83"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-1-20261023.md"
+line_sha256 = "9aebcccba8e2c562281e615769695ff3738dbb8314f6e3214fc90a46a5985674"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-2-20261023.md"
+line_sha256 = "257f8b6548bbbc8706b65f5e05838a3cc7a91c743fb0b9cacf7802ff0b3960c3"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-2-20261023.md"
+line_sha256 = "dc510efb9e15d0fa818c13ca0c62e9622876b00d09334f8f437faca788d9ac4b"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-3-20261023.md"
+line_sha256 = "483a48acfab5dcbcf3d9c7111fdbedacbb5a5d99eecccfce0febaa1b2b8bba81"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-3-20261023.md"
+line_sha256 = "7f9781e26a9dfea5caa84757daffe4f7bebb07f06cfe0af6a0733b29bfb9fb3c"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-4-20261023.md"
+line_sha256 = "483a48acfab5dcbcf3d9c7111fdbedacbb5a5d99eecccfce0febaa1b2b8bba81"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-batch-4-20261023.md"
+line_sha256 = "c1340b33afda399a5faed480fdd2a9d7064507adfe1da7095b1ba7dab97e02e7"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/r-window-registry-closeout-20261023.md"
+line_sha256 = "335e49d3f9c4bc57b5c2fca386a0b16fd5323dfb8770ec4e64a67e19956e2a50"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/recon-noop-false-positive-20261023.md"
+line_sha256 = "17b69bb147f6a8af048b1294e6803e8671f3f81c7a060c1963f2f5b0120845e4"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/recon-noop-false-positive-20261023.md"
+line_sha256 = "befa3671a810f7b571afd80578c246bd1eaacfcd0a905cccac2bd660bf62120b"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/recon-noop-false-positive-20261023.md"
+line_sha256 = "c56bd6e057a643aa7fb90f7dceeaa929ab4add3c3552cbbed158fa39d0cb49f2"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "0b97dcfc4418833e6d0ad97b6c657088493c4c1f118e227eb9bc4378d29c5e7a"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "2c7659ffa83eb3b501d23d3c4238dba1de8c5765bdfe70800dd9114127e18796"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "378d9c97304c104f05a6cf8a32615eac2405bc9b859cd4c7744f26cf05190ed6"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "3b4f3d69aa4b36d269fb240334dca484eb95fe7d067c4b382e826f0c2637877d"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "4043a5312cc08219fba1ac6497b2ff40f7ea09304deb550139c0fc8cb800a6d3"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "44a90733dc817971cd9d9b5193c6014c49e5282d7074ecfa8a27bebc347cfb99"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "473d8dfb2ea8b09f05787bb5978f4fc518354d6eaa7dc3892f06ee43c0aecfd5"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "4ce3608fe659f9e13e7a89f5aad42fe550ac60c9dbb225ca4d77e64bf43aee81"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "650d4ca7ee180edf3b9d78a3885cdeb313a9805838ac4dbb9c0b5d78aeb7a490"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "6d00664f5473f02037cdb019aeca0afea2995ed5373d07fba81c60237049934a"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "6d113cb8b75a077beba5a62db2c843e0e885a908c790b45fb42ccb946421714a"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "6d56961a3a06e287c6fc15a145011350428abdafea294cac6dd45eabef195102"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "6e89a34d187e333768061499513888a16353a3c3d304ee1146a5bd70cf6ecc65"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "977874769923061abc34649744a4648a85e8e3b43f43664ab5e543ecbe8a2788"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "9aa79fa7f358b05af673fa778526bf314dbf1c9bc90ded559b772fc07722a81e"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "b7f807dde2fb52b40782c9b01d5c99553104a5cf47b22d55df57037991f48d9c"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "c54e33aaef9438488d751c40bcc399bbae35c0130fd89b7d2ce27f36423ca39e"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "e4828aa47a0a1f465991bdbb3ba5b060a8b0db676190a77497d6ff2bdcc2b995"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "f747e7f36fdb73c54ff823e54976e4ca7513ee5d6e1e189e981481907cb865a8"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "fb9858bc63eca5c1391a5e7a7a21001da108682f8f6d21187db38fcbfc33b4b1"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "fd1ea13d6d9565649dee883c60825e1dfd1ed2530c729bf35c370f3ef9bfc7ee"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/session-summary-20261023.md"
+line_sha256 = "b513e775a7fb917b267f4aa8ae449872fe834693074f7b48e6b17adec29d1325"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/session-summary-20261023.md"
+line_sha256 = "f4799211b09767ee3acd4ee4e6cc8773088461382474c3bfc8e4450e09c1a3a6"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/window-batch-plan-20261023.md"
+line_sha256 = "0debd66d7cc176b90ef96126b77c8a5898b3ff4be4cc100936915ab5aef0c917"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/window-batch-plan-20261023.md"
+line_sha256 = "bd4ff4c6af13e0d26f2159e93ad85165ade814d43d4167658c9069e87a1d256f"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/window-criteria-quality-audit-20261024.md"
+line_sha256 = "ed7ab4fbd06c90f0f0b3d9781e57f5c1b74d8682c02c3b5a58f68735003ca21c"
+reason = "goal_gate 条件② detail 的逐字摘录（R 卡 193 张…）；文档审计基线 HEAD 2a5101606（截至 2026-10-24 01:06）。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/window-debt-reclass-20261023.md"
+line_sha256 = "38f4356f262515b52ed704315d08bda954fdc25442c6d892537b00bdcd5a1047"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/window-debt-reclass-20261023.md"
+line_sha256 = "3e4ef10ae62e009c1b3cfeb59aa5552bad0921f3a085d8be55a78a31927e2982"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/window-owner-decisions-20261018.md"
+line_sha256 = "2032e5eb6523111b234a13fa03e5fe1ffd62f02fea51fb8a341abef682f8414d"
+reason = "历史快照/引述（2026-10-15～2026-10-23 时点记录）；该行数字是当时状态，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/交接-OpenMir2编排与联调-20261015.md"
+line_sha256 = "924560dc42d4f3b96841a64b7ad1d7fca5ed8e5203ceceadd5a3c685aff98f97"
+reason = "2026-10-15 交接快照；看板计数是当时值，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/交接-OpenMir2编排与联调-20261015.md"
+line_sha256 = "a1ba94d8e04b12e59ff51f954384ff05cb5367b279d6ad99397c322a95706dad"
+reason = "2026-10-15 交接快照；看板计数是当时值，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/交接-OpenMir2编排与联调-20261015.md"
+line_sha256 = "b985a6fec7cb6b8b2414a58b8f74325d050f301cda954a6ff50cf328be5a6d8a"
+reason = "2026-10-15 交接快照；看板计数是当时值，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/交接-OpenMir2编排与联调-20261015.md"
+line_sha256 = "ed61cbbac7665996a51917b5fc5a4c092ba010a3ee81ccbe639cfb1a3d18f3da"
+reason = "2026-10-15 交接快照；看板计数是当时值，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/交接-OpenMir2编排与联调-20261015.md"
+line_sha256 = "f8a9deeaca1d1475fb5f00b7293157c4a1e888e72522ceb97ff8527dfc684972"
+reason = "2026-10-15 交接快照；看板计数是当时值，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "ed38b6655618259912672610c834685e642d16945bb3c30e3dc3c85389e61863"
+reason = "逐字摘录 recon_gates 输出的 `tracked=0`；同一行已有 `@ 4d9bab444`，但距该计数超过 --max-gap(24)。该文件是另一张卡的写集，本卡不改。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/session-digest-20261024.md"
+line_sha256 = "d8d0e3f255a923371f33985cdac8fbb4d09ffb41e6542b15e6874092703561bb"
+reason = "文档级快照：头部声明 `截至 master c4b66ddb1`、取数时点 2026-10-24 07:18:30，本行自注「同一快照」；看板列是那一刻的值，改写即伪造历史。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/session-digest-20261024.md"
+line_sha256 = "1ad549bcb316305612d8d549034cc96ffe6bbcc239e16f8fd69b74c50b9b0cf6"
+reason = "假红（非计数）：正则把「在待审/在写，1 张」的 `1` 当成了待审计数；该句是在说收口数量，不是看板列。"
+added = "2026-10-24"

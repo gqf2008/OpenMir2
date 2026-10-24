@@ -1042,73 +1042,99 @@ def card_state(ledger, card_id):
     return False, status or "open"
 
 
-def load_allowlist(path):
+def load_allowlist(path, require_added=False, prog="stale-pointer gate"):
+    """Load and validate the allow-list.
+
+    ``require_added`` additionally demands an ``added`` date (``YYYY-MM-DD``) on
+    every entry; the dynamic-count gate needs dated exemptions, while the
+    stale-pointer allow-list predates that rule.  ``prog`` only prefixes the
+    error text.  Both default to the historical behaviour, so existing callers
+    (and this gate's own messages) are unchanged.
+    """
+
+    def fail(message):
+        raise GateError("%s: %s" % (prog, message), rc=2)
+
     try:
         with open(path, "rb") as fh:
             data = tomllib.load(fh)
     except FileNotFoundError:
-        raise GateError(
-            "stale-pointer gate: allow-list not found: %s (fail-closed)" % path,
-            rc=2,
-        )
+        fail("allow-list not found: %s (fail-closed)" % path)
     except (OSError, tomllib.TOMLDecodeError) as exc:
-        raise GateError(
-            "stale-pointer gate: cannot read allow-list %s: %s" % (path, exc),
-            rc=2,
-        )
+        fail("cannot read allow-list %s: %s" % (path, exc))
     entries = data.get("allow", [])
     if not isinstance(entries, list):
-        raise GateError(
-            "stale-pointer gate: allow-list %s: `allow` must be an array of tables"
-            % path
-        )
+        fail("allow-list %s: `allow` must be an array of tables" % path)
     seen = {}
     checked = []
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
-            raise GateError(
-                "stale-pointer gate: allow-list %s: entry #%d is not a table"
-                % (path, index + 1)
-            )
+            fail("allow-list %s: entry #%d is not a table" % (path, index + 1))
         rel = entry.get("path")
         fingerprint = entry.get("line_sha256")
         reason = entry.get("reason")
+        added = entry.get("added")
         if not isinstance(rel, str) or not rel:
-            raise GateError(
-                "stale-pointer gate: allow-list %s: entry #%d lacks a non-empty "
-                "`path`" % (path, index + 1)
+            fail(
+                "allow-list %s: entry #%d lacks a non-empty `path`"
+                % (path, index + 1)
             )
         if (
             not isinstance(fingerprint, str)
             or len(fingerprint) != 64
             or any(c not in "0123456789abcdef" for c in fingerprint)
         ):
-            raise GateError(
-                "stale-pointer gate: allow-list %s: entry #%d (%s) has no valid "
-                "64-hex `line_sha256`" % (path, index + 1, rel)
+            fail(
+                "allow-list %s: entry #%d (%s) has no valid 64-hex `line_sha256`"
+                % (path, index + 1, rel)
             )
         if not isinstance(reason, str) or not reason.strip():
-            raise GateError(
-                "stale-pointer gate: allow-list %s: entry #%d (%s) lacks a "
-                "`reason` — every exemption must say why" % (path, index + 1, rel)
+            fail(
+                "allow-list %s: entry #%d (%s) lacks a `reason` — every exemption "
+                "must say why" % (path, index + 1, rel)
+            )
+        if require_added and (
+            not isinstance(added, str)
+            or not re.match(r"^20\d{2}-\d{2}-\d{2}$", added)
+        ):
+            fail(
+                "allow-list %s: entry #%d (%s) lacks `added` (YYYY-MM-DD) — "
+                "exemptions must be dated" % (path, index + 1, rel)
             )
         key = (rel.replace("\\", "/"), fingerprint)
         if key in seen:
-            raise GateError(
-                "stale-pointer gate: allow-list %s: duplicate entry for %s"
-                % (path, rel)
-            )
+            fail("allow-list %s: duplicate entry for %s" % (path, rel))
         seen[key] = index
-        checked.append(
-            {
-                "path": key[0],
-                "line_sha256": fingerprint,
-                "reason": reason.strip(),
-                "index": index + 1,
-                "used": False,
-            }
-        )
+        record = {
+            "path": key[0],
+            "line_sha256": fingerprint,
+            "reason": reason.strip(),
+            "index": index + 1,
+            "used": False,
+        }
+        if require_added:
+            record["added"] = added
+        checked.append(record)
     return checked
+
+
+def allowlist_in_scope(allowlist, rel_path):
+    """Entries a scan of ``rel_path`` is responsible for keeping alive.
+
+    Rot detection only applies to entries inside the scanned subtree — a
+    narrowed ``--path`` must not flag allow-list entries that were simply not
+    looked at.  Scanning the repo root yields ``rel_path`` "." (or ""), which
+    matches no entry prefix; normalize it so root scans keep checking every
+    entry (reviewer-3 finding on eeb8d064f: rot was silently off for ``--path .``).
+    """
+    prefix = rel_path.rstrip("/")
+    if prefix in ("", "."):
+        return list(allowlist)
+    return [
+        e
+        for e in allowlist
+        if e["path"] == prefix or e["path"].startswith(prefix + "/")
+    ]
 
 
 def scan(
@@ -1302,19 +1328,12 @@ def scan(
                     }
                 )
 
-    # Rot detection only applies to entries inside the scanned subtree — a
-    # narrowed --path must not flag allow-list entries that were simply not
-    # looked at.  Scanning the repo root yields rel_path ".", which matches no
-    # entry prefix; normalize it so root scans keep checking every entry
-    # (reviewer-3 finding on eeb8d064f: rot was silently off for --path .).
-    prefix = rel_path.rstrip("/")
-    if prefix in ("", "."):
-        in_scope = allowlist
-    else:
-        in_scope = [
-            e for e in allowlist if e["path"] == prefix or e["path"].startswith(prefix + "/")
-        ]
-    result["rot"] = [e for e in in_scope if not e["used"]]
+    # Rot detection only applies to entries inside the scanned subtree; the
+    # scoping rule lives in ``allowlist_in_scope`` so the dynamic-count gate
+    # reuses it instead of re-deriving it (and getting it wrong).
+    result["rot"] = [
+        e for e in allowlist_in_scope(allowlist, rel_path) if not e["used"]
+    ]
     result["rc"] = 1 if (result["hits"] or result["card_hits"] or result["errors"] or result["rot"]) else 0
     return result
 
