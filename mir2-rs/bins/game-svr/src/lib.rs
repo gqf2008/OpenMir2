@@ -28110,6 +28110,139 @@ mod tests {
         );
         assert_eq!(cm.recog, b, "`Recog` = 离开者 id");
     }
+
+    /// **卡 `openmir2-drain-order-gate` ①（构造级主判据）**：走**生产路径** `drain_run_downlinks`，
+    /// 构造一个 tick 记录**同时含 hides 与 shows**（`rec.hides` 有消失事件 + 观察者可见集里钉一个
+    /// `VisibleFlag::Show` 的真实体），按**发送序**从网关 `rx` 收集帧，断言：
+    /// **所有 `SM_DISAPPEAR(30)` 都排在所有出现帧（`SM_TURN(10)` / `SM_FEATURECHANGED(41)`）之前**。
+    ///
+    /// # oracle 契约
+    ///
+    /// `PlayObject.Run()` 用单趟 `VisibleActors` 循环按下标处理（`Hidden` 发 `RM_DISAPPEAR`、
+    /// `Show` 发 `RM_TURN`/`RM_DEATH`）；`UpdateVisibleGay` 只把**本轮新见**对象 `VisibleActors.Add`
+    /// **追加表尾**，旧条目原地保留 ⇒ `Hidden` 下标恒 < `Show` 下标 ⇒ 出帧次序**必为
+    /// 「先整批消失、后整批出现」**（见 [`drain_aoi_disappear`] 的顺序订正）。
+    ///
+    /// # 与既有用例的分工
+    ///
+    /// - `aoi_disappear_frame_sent_when_target_leaves_view`：**直调** helper，只测帧面；
+    /// - `aoi_disappear_reachable_through_drain_run_downlinks`：走生产路径但只有 hides（无 shows）
+    ///   ⇒ 只证明「生产调用**存在**」；
+    /// - **本用例**：hides + shows 同 tick ⇒ 证明两者之间的**相对次序**（这是唯一的序判据）。
+    ///
+    /// # 牙（红检，实测）
+    ///
+    /// ① 把 `drain_run_downlinks_with_magic` 里两条 drain 调用**交换** ⇒ 首帧变出现帧；
+    /// ② 删 `let _disappeared = drain_aoi_disappear(rec, online, gates);` 行 ⇒ 无消失帧；
+    /// ③ 把 `drain_aoi_disappear` 函数体改空 ⇒ 同上。三者都让「至少一条消失帧」或序断言红。
+    #[test]
+    fn drain_run_downlinks_sends_disappear_before_appear_frames() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        // 出现帧需要 `world.entities` 里的真实体 + 展示表登记：`spawn_clone` 造一个（与
+        // `aoi_show_clone_uses_entity_back_dir` 同一夹具手法）。
+        let out =
+            mir2_world::slave::spawn_clone(&mut world, p, 2).expect("主人在世界 ⇒ 应造出克隆体");
+        let seen = out.clone_id;
+        let caster_display =
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, downlink::PLAYER_NAME_COLOR, Vec::new());
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(seen, downlink::clone_display(out.dir, &caster_display));
+        // 出现帧的两个前置：观察者**本 tick 扫过** + 可见集里的 `Show` 条目。
+        world.entities.get_mut(p).unwrap().visible_actors.push(
+            mir2_world::entity::VisibleBaseObject {
+                target: seen,
+                flag: mir2_world::VisibleFlag::Show,
+            },
+        );
+        world.entities.get_mut(p).unwrap().ai.search_tick = world.clock_ms;
+
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+
+        // 同一 tick：世界侧记下的消失事件 + 上面构造的出现事件。
+        let vanished = 4242;
+        let mut rec = mir2_world::TickRecord::default();
+        rec.hides.push((p, vanished));
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+        );
+
+        // `rx` 是 FIFO，两个 drain 共用同一 gate `tx` ⇒ **接收序 = 发送序 = 调用序**。
+        let mut order: Vec<(u16, i32)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 901, "本夹具只有一个会话（socket 901）");
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            order.push((cm.ident, cm.recog));
+        }
+
+        let is_disappear = |ident: u16| ident == mir2_protocol::messages::SM_DISAPPEAR;
+        let is_appear = |ident: u16| {
+            ident == mir2_protocol::messages::SM_TURN
+                || ident == mir2_protocol::messages::SM_FEATURECHANGED
+        };
+        let disappears: Vec<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| is_disappear(f.0))
+            .map(|(i, _)| i)
+            .collect();
+        let appears: Vec<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| is_appear(f.0))
+            .map(|(i, _)| i)
+            .collect();
+
+        // 夹具自检：这个 tick 必须**真的同时**含两类帧，否则「序」无从谈起（防止用例退化成
+        // 只测一类，或将来出现帧改走另一条通道时静默变绿）。
+        assert!(
+            !disappears.is_empty(),
+            "本 tick 必须至少有一条 `SM_DISAPPEAR(30)`（hides 非空）；删生产调用或把 \
+             `drain_aoi_disappear` 改空 ⇒ 必红。实际帧序（ident, recog） = {order:?}"
+        );
+        assert_eq!(
+            appears.len(),
+            2,
+            "本 tick 必须有一对出现帧 `SM_TURN(10)` + `SM_FEATURECHANGED(41)`；\
+             出现帧改走别的通道 ⇒ 本判据失效，需同步更新。实际帧序（ident, recog） = {order:?}"
+        );
+        assert_eq!(
+            order.len(),
+            disappears.len() + appears.len(),
+            "出现了既非消失也非出现的帧 ⇒ 夹具/分类需同步更新。实际帧序（ident, recog） = {order:?}"
+        );
+
+        let last_disappear = *disappears.last().unwrap();
+        let first_appear = appears[0];
+        assert!(
+            last_disappear < first_appear,
+            "排水次序违约：所有 `SM_DISAPPEAR(30)` 必须排在所有出现帧（`SM_TURN(10)` / \
+             `SM_FEATURECHANGED(41)`）之前。\n\
+             实际序（ident, recog） = {order:?}\n\
+             期望序 = [(30, *)] 全部在前，然后 [(10, *), (41, *)]\n\
+             第一个违约位置 = 第 {} 帧 {:?}（最后一条消失帧在第 {} 帧）",
+            first_appear + 1,
+            order[first_appear],
+            last_disappear + 1
+        );
+    }
+
     // ==============================================================================
     // **卡 `openmir2-map-event-frames`**：地图事件可见性上行 `SM_SHOWEVENT(804)` /
     // `SM_HIDEEVENT(805)`（oracle `PlayObject.SearchViewRange` 的 `CellType.Event` 支）。
@@ -67210,7 +67343,7 @@ mod castle_insertion_tests {
 #[cfg(test)]
 mod broadcast_tx_source_order_tests {
     /// 把注释与字符串/字符字面量的内容涂白（空格），保留换行 ⇒ 字节偏移与行号不变。
-    fn blank_non_code(src: &str) -> String {
+    pub(super) fn blank_non_code(src: &str) -> String {
         let bytes = src.as_bytes();
         let mut out = vec![b' '; bytes.len()];
         let mut i = 0usize;
@@ -67356,12 +67489,12 @@ mod broadcast_tx_source_order_tests {
     }
 
     /// 去掉空白（用于匹配块头/单行文本，避免换行与缩进干扰）。
-    fn norm(s: &str) -> String {
+    pub(super) fn norm(s: &str) -> String {
         s.chars().filter(|c| !c.is_whitespace()).collect()
     }
 
     /// 位置 `pos` 之前，所有**仍开着的 `{}` 块**的头部文本（自上一个 `;`/`{`/`}` 起算）。
-    fn enclosing_block_headers(code: &str, pos: usize) -> Vec<String> {
+    pub(super) fn enclosing_block_headers(code: &str, pos: usize) -> Vec<String> {
         let bytes = code.as_bytes();
         let mut stack: Vec<(usize, usize)> = Vec::new(); // (块头起点, `{` 位置)
         let mut last_term = 0usize;
@@ -67386,7 +67519,7 @@ mod broadcast_tx_source_order_tests {
     }
 
     /// `open_pos` 处 `(`/`{` 的配对闭合位置（字符串/注释已涂白，故只数同一种括号）。
-    fn matching_close(code: &str, open_pos: usize, open: u8, close: u8) -> usize {
+    pub(super) fn matching_close(code: &str, open_pos: usize, open: u8, close: u8) -> usize {
         let bytes = code.as_bytes();
         let mut depth = 0usize;
         for (i, &b) in bytes.iter().enumerate().skip(open_pos) {
@@ -67404,7 +67537,7 @@ mod broadcast_tx_source_order_tests {
     }
 
     /// `pos` 是否是函数**定义**（前一个记号恰为 `fn`），而非调用点。
-    fn is_fn_definition(code: &str, pos: usize) -> bool {
+    pub(super) fn is_fn_definition(code: &str, pos: usize) -> bool {
         let before = code[..pos].trim_end();
         match before.strip_suffix("fn") {
             Some(rest) => !rest.ends_with(|c: char| c.is_alphanumeric() || c == '_'),
@@ -67412,7 +67545,7 @@ mod broadcast_tx_source_order_tests {
         }
     }
 
-    fn line_of(code: &str, pos: usize) -> usize {
+    pub(super) fn line_of(code: &str, pos: usize) -> usize {
         1 + code[..pos].bytes().filter(|&b| b == b'\n').count()
     }
 
@@ -67508,6 +67641,114 @@ mod broadcast_tx_source_order_tests {
         assert!(
             !norm(&code[line_start..line_end]).contains(&norm(map_or_needle)),
             "lib.rs:{fan_line} 的扇出调用与 `tx.map_or(` 同行：`map_or` 的任一实参/闭包都不得承载扇出。"
+        );
+    }
+}
+
+/// **卡 `openmir2-drain-order-gate` ②（静态级第二判据）**：在**涂白注释/字符串后**的源码文本上
+/// 断言排水次序，且两条调用都还在**帧面函数体内**（防止把它们挪到别处，让序判据无从观测）。
+///
+/// 被钉住的函数是 `drain_run_downlinks_with_magic`——生产 `sim_loop` 实际调用的那一层；
+/// `#[cfg(test)] fn drain_run_downlinks` 只是**转发参数**的测试入口（卡面把它简称为
+/// 「`drain_run_downlinks` 函数体」，两者对应同一段生产体）。
+///
+/// # 抓什么 / 抓不到什么
+///
+/// - 抓：`drain_aoi_disappear(...)` 的**调用行**先于 `drain_aoi_downlink(...)`，且各恰一处；
+/// - 抓：两者都还在该函数体内（挪出去 ⇒ 体内计数变 0 ⇒ 红）；
+/// - **抓不到**：序**为何**必须如此（构造级用例负责）；也抓不到「先收集再按别的键排序发送」
+///   这类改写——那种实现下静态调用序仍绿，只有构造级判据会响。
+#[cfg(test)]
+mod drain_order_gate_tests {
+    use super::broadcast_tx_source_order_tests::{
+        blank_non_code, enclosing_block_headers, is_fn_definition, line_of, matching_close, norm,
+    };
+
+    /// 位置 `pos` 处最内层的**函数定义**名（跳过 `if`/`for`/闭包等非 `fn` 块头）。
+    fn enclosing_fn_name(code: &str, pos: usize) -> Option<String> {
+        for header in enclosing_block_headers(code, pos).iter().rev() {
+            let h = norm(header);
+            let Some(f) = h.rfind("fn") else { continue };
+            let name: String = h[f + 2..]
+                .chars()
+                .take_while(|c| c.is_alphanumeric() || *c == '_')
+                .collect();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+        None
+    }
+
+    /// `fn <name>(` 的**定义**位置（跳过调用点）与函数体 `{`/`}` 的字节区间。
+    fn fn_body_range(code: &str, name: &str) -> (usize, usize) {
+        let needle = format!("{name}(");
+        let def = code
+            .match_indices(&needle)
+            .find(|&(pos, _)| is_fn_definition(code, pos))
+            .map(|(pos, _)| pos)
+            .unwrap_or_else(|| panic!("找不到 `fn {name}(` 定义"));
+        let open = def + code[def..].find('{').expect("函数体缺 `{`");
+        let close = matching_close(code, open, b'{', b'}');
+        (open, close)
+    }
+
+    /// 牙（红检，实测）：把两行调用**交换** ⇒ 本用例红；删掉 `drain_aoi_disappear(...)` 行 ⇒
+    /// 体内计数 0 ⇒ 红；把任一调用挪到别的函数 ⇒ 体内计数 0 ⇒ 红。
+    #[test]
+    fn disappear_call_precedes_downlink_inside_frame_drain_body() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("读 lib.rs");
+        let code = blank_non_code(&src);
+
+        let owner = "drain_run_downlinks_with_magic";
+        let (body_open, body_close) = fn_body_range(&code, owner);
+        let body = &code[body_open..=body_close];
+
+        // 体内各恰一处：删掉（0）或复制（2）都在这里红。
+        let dis_rel: Vec<usize> = body
+            .match_indices("drain_aoi_disappear(")
+            .map(|(p, _)| p)
+            .collect();
+        let down_rel: Vec<usize> = body
+            .match_indices("drain_aoi_downlink(")
+            .map(|(p, _)| p)
+            .collect();
+        assert_eq!(
+            dis_rel.len(),
+            1,
+            "`{owner}` 体内必须恰好一处 `drain_aoi_disappear(` 调用（实际 {}）——删掉或复制都会红",
+            dis_rel.len()
+        );
+        assert_eq!(
+            down_rel.len(),
+            1,
+            "`{owner}` 体内必须恰好一处 `drain_aoi_downlink(` 调用（实际 {}）",
+            down_rel.len()
+        );
+
+        let dis = body_open + dis_rel[0];
+        let down = body_open + down_rel[0];
+        let dis_line = line_of(&code, dis);
+        let down_line = line_of(&code, down);
+
+        // 防止「挪到别的函数里」：两处调用的最内层函数必须都还是帧面函数体。
+        for (label, pos) in [("drain_aoi_disappear(", dis), ("drain_aoi_downlink(", down)] {
+            assert_eq!(
+                enclosing_fn_name(&code, pos).as_deref(),
+                Some(owner),
+                "lib.rs:{} 的 `{label}` 调用不在 `{owner}` 函数体内（最内层函数 = {:?}）⇒ \
+                 排水次序失去可观测的生产位置。",
+                line_of(&code, pos),
+                enclosing_fn_name(&code, pos)
+            );
+        }
+
+        assert!(
+            dis < down,
+            "排水次序违约（静态）：`drain_aoi_disappear(` 必须在 `drain_aoi_downlink(` **之前**。\n\
+             实际：drain_aoi_disappear @lib.rs:{dis_line}，drain_aoi_downlink @lib.rs:{down_line}\n\
+             期望：disappear 行号 < downlink 行号（oracle：`Hidden` 下标恒 < `Show` 下标）"
         );
     }
 }
