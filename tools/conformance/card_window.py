@@ -4752,6 +4752,90 @@ def write_summary_json(out_dir, summary):
         return False
 
 
+def _postrun_sha(path):
+    try:
+        with open(path, "rb") as f:
+            return hashlib.sha256(f.read()).hexdigest()
+    except OSError:
+        return None
+
+
+def _postrun_tree(root):
+    out = {}
+    for base, _dirs, files in os.walk(root):
+        for fn in files:
+            fp = os.path.join(base, fn)
+            rel = os.path.relpath(fp, root).replace(os.sep, "/")
+            sha = _postrun_sha(fp)
+            if sha:
+                out[rel] = sha
+    return out
+
+
+def postrun_symmetry(prof):
+    """**跑后**对称性复核（restore 之后、run.json 落盘之前）。
+
+    C# 的 `CastleMgr.Save()`/`SaveCastleList()` 会在运行期按内存状态重写
+    `Castle/List.txt` 与 `Castle/<n>/SabukW.txt`（与 600s 门同一机制）⇒ 跑后漂移是**预期行为**，
+    但必须在下一轮前还原/对齐。这里只**标注**（不 fail 掉本轮 parity），返回差异列表：
+
+      [{"file": "Castle/List.txt", "sha256": {"csharp": "...", "rust": "..."}}, ...]
+    """
+    sides = prof.get("sides") or {}
+    expanded = []
+    for side in SIDES:
+        root = (sides.get(side) or {}).get("envir_root")
+        if not root:
+            continue
+        root = str(root)
+        expanded.append((side, root))
+        if side == "csharp":
+            shadow = os.path.join(os.path.dirname(os.path.abspath(root)),
+                                  "M2GameSvr-hook")
+            if os.path.isdir(shadow):
+                expanded.append(("csharp-hook", shadow))
+    if len(expanded) < 2:
+        return []
+    diffs = []
+
+    def cmp_rel(rel):
+        shas = {}
+        for label, root in expanded:
+            path = os.path.join(root, *rel)
+            sha = _postrun_sha(path)
+            if sha:
+                shas[label] = sha
+        if len(set(shas.values())) > 1:
+            diffs.append({"file": "/".join(rel), "sha256": shas})
+
+    cmp_rel(("Castle", "List.txt"))
+    castle_names = set()
+    for _label, root in expanded:
+        cdir = os.path.join(root, "Castle")
+        if not os.path.isdir(cdir):
+            continue
+        for name in os.listdir(cdir):
+            if os.path.isfile(os.path.join(cdir, name, "SabukW.txt")):
+                castle_names.add(name)
+    for name in sorted(castle_names):
+        cmp_rel(("Castle", name, "SabukW.txt"))
+    base = None
+    for label, root in expanded:
+        edir = os.path.join(root, "Envir")
+        if not os.path.isdir(edir):
+            continue
+        tree = _postrun_tree(edir)
+        if base is None:
+            base = (label, tree)
+            continue
+        for rel in sorted(set(base[1]) | set(tree)):
+            a, b = base[1].get(rel), tree.get(rel)
+            if a != b:
+                diffs.append({"file": "Envir/" + rel,
+                              "sha256": {base[0]: a, label: b}})
+    return diffs[:200]
+
+
 def execute(cfg):
     """cfg: dict(card, scenario, out, profile, password, post_comment, dry_run,
                  allow_production_db, rules, timeout_ms, ...) -> summary"""
@@ -5252,6 +5336,20 @@ def execute(cfg):
           and discovery_evidence_ok
           and all((summary["sides"].get(s) or {}).get("rc") == 0 for s in SIDES))
     summary["exit_code"] = 0 if ok else 2
+
+    # 跑后对称性复核（卡 openmir2-postrun-symmetry-drift）：C# 运行期会重写
+    # Castle/List.txt 与 SabukW ⇒ 只标注、绝不改变本轮 parity 结论。
+    try:
+        drift = postrun_symmetry(prof)
+    except Exception as e:  # 防御：复核自身出错也不能 fail 掉本轮
+        drift = []
+        summary["notes"].append("跑后对称性复核失败（已忽略）：%s: %s"
+                                % (type(e).__name__, e))
+    summary["post_run_symmetry_drift"] = drift
+    if drift:
+        summary["notes"].append(
+            "跑后对称性漂移 %d 项（预期行为，下一轮前须还原/对齐）：%s"
+            % (len(drift), ", ".join(d.get("file") or "?" for d in drift[:8])))
 
     # 归档：report.json + 两侧产物 sha256 + README.txt（与缺二进制分支共用同一实现）
     artifacts_ok = write_artifacts(out_dir, summary)
@@ -6917,6 +7015,56 @@ def _selftest_level_fixture(tmp):
     return out
 
 
+def _selftest_postrun_symmetry(tmp):
+    """卡 openmir2-postrun-symmetry-drift：跑后漂移只标注、列出两侧 sha。"""
+    out = []
+    base = os.path.join(tmp, "postrun")
+    roots = {
+        "csharp": os.path.join(base, "csharp-root", "M2GameSvr"),
+        "csharp-hook": os.path.join(base, "csharp-root", "M2GameSvr-hook"),
+        "rust": os.path.join(base, "rust-root", "M2GameSvr"),
+    }
+
+    def write(root, rel, data):
+        path = os.path.join(root, *rel.split("/"))
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+
+    for root in roots.values():
+        write(root, "Castle/List.txt", b"0\r\n1\r\n")
+        write(root, "Castle/0/SabukW.txt", b"[Setup]\r\nTotalGold=0\r\n")
+        write(root, "Envir/A.txt", b"alpha")
+    prof = {"sides": {"csharp": {"envir_root": roots["csharp"]},
+                      "rust": {"envir_root": roots["rust"]}}}
+    out.append((postrun_symmetry(prof) == [],
+                "POSTRUN1 三方一致 => 空列表（无漂移）"))
+    write(roots["csharp-hook"], "Castle/List.txt", b"0\r\n")
+    drift = postrun_symmetry(prof)
+    entry = next((d for d in drift if d.get("file") == "Castle/List.txt"), {})
+    out.append((len(drift) == 1 and set(entry.get("sha256") or {})
+                == {"csharp", "csharp-hook", "rust"},
+                "POSTRUN 牙1 影子 List 漂移 => 1 项，列出三方 sha"))
+    write(roots["csharp-hook"], "Castle/List.txt", b"0\r\n1\r\n")
+    write(roots["rust"], "Envir/A.txt", b"alpha-drift")
+    drift = postrun_symmetry(prof)
+    out.append((any(d.get("file") == "Envir/A.txt" for d in drift),
+                "POSTRUN 牙2 Envir 文件漂移 => 报 Envir/A.txt"))
+    write(roots["rust"], "Envir/A.txt", b"alpha")
+    write(roots["csharp"], "Castle/0/SabukW.txt", b"[Setup]\r\nTotalGold=500\r\n")
+    drift = postrun_symmetry(prof)
+    out.append((any(d.get("file") == "Castle/0/SabukW.txt" for d in drift),
+                "POSTRUN 牙3 SabukW 漂移 => 报 Castle/0/SabukW.txt"))
+    import inspect
+    src = inspect.getsource(execute)
+    i_ok = src.index('summary["exit_code"] = 0 if ok else 2')
+    i_drift = src.index('summary["post_run_symmetry_drift"] = drift')
+    i_art = src.index("artifacts_ok = write_artifacts(")
+    out.append(("post_run_symmetry_drift" in src and i_ok < i_drift < i_art,
+                "POSTRUN2 接线：execute 在 verdict 定稿后、写产物前复核并写 post_run_symmetry_drift"))
+    return out
+
+
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
     stub = os.path.join(tmp, "stub.py")
@@ -8570,6 +8718,8 @@ def selftest():
         for cond, msg in _selftest_assets(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_level_fixture(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_postrun_symmetry(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_fixtures(tmp):
             chk(cond, msg)

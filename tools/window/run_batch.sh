@@ -605,6 +605,24 @@ for s in d["scenarios"]:
 PY
 fi
 
+# ---- 跑后对称性复核（卡 openmir2-postrun-symmetry-drift）----
+# C# 运行期会按内存重写 Castle/List.txt 与 SabukW ⇒ 跑后漂移是预期行为，只标注（不改本轮 rc）。
+log "== 跑后对称性复核（预期可能漂移；下一轮前须还原/对齐）"
+CARD_WINDOW="$CARD_WINDOW" "$PY" -I -B - <<'PY' | while IFS= read -r ln; do log "$ln"; done
+import importlib.util, os
+path = os.environ["CARD_WINDOW"]
+spec = importlib.util.spec_from_file_location("_postrun_cw", path)
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+prof = mod.load_profile("alt")
+drift = mod.postrun_symmetry(prof)
+if not drift:
+    print("跑后对称性：OK")
+else:
+    files = ",".join((d.get("file") or "?") for d in drift[:8])
+    print("跑后对称性：DRIFT(%d) %s" % (len(drift), files))
+PY
+
 if [ "$bad" -ne 0 ]; then
     log "批次结论：有 UNDECIDABLE/未产出证据的场景 ⇒ rc=2（UNDECIDABLE 不是通过）"
     exit 2
