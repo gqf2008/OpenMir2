@@ -48,11 +48,17 @@ judges by *card identity* instead of commit identity: a line that pairs an
 the ledger says the card is ``closed`` or has **any** ``merge_result`` with
 ``merged: true``.
 
-Locality is the same as for the hash check: the card id and the word must be
-close (``--max-gap``), and inside a Markdown table row both must sit in the
-**same cell** — a table row is a line-serialised record whose cells are
-independent statements, so a card id in one cell and an unfinished word in
-another are not a pair.
+Locality is the card's own criterion: the card id and the word must sit on the
+**same line** and be close (``--max-gap``).  A Markdown table row is one line,
+so a card id in one cell and the unfinished word in another cell *do* pair.
+(The first version required both in the same cell; reviewer-3 showed that this
+silently swallowed two real drifts — ``leader-quota-block-20261023.md:22`` and
+``window-round3-runbook-20261021.md:30`` — while removing only 4 false hits.)
+
+Two literals that merely *contain* a pending word are not status assertions and
+are skipped: 「未接线」/「未接入」 (a subsystem is not wired — a direction word,
+not a card lifecycle) and 「含未合并」/「其中未合并」 (a statistic-row category
+label).  This is a literal exclusion list, not a narrowing of the word tables.
 
 The ledger is read in **one aggregate pass**: ``walgit collab board --format
 json`` once (the projection gives every card's status) plus one bulk
@@ -60,9 +66,12 @@ json`` once (the projection gives every card's status) plus one bulk
 ``merge_result`` flag that the board projection does not expose).  No
 per-card process.  The card check is skipped only when asked:
 ``--no-ledger`` prints ``已跳过`` and judges nothing; an unreadable ledger is
-**fail-closed rc=2** (distinct from a stale-file rc=1).  ``--ledger-json``
-reads a board-shaped snapshot from a file instead of running ``walgit``
-(offline replay / selftest), still merging local snapshot/inbox merge flags.
+**fail-closed rc=2** (distinct from a stale-file rc=1).  A ledger that reads as
+**zero threads** is also rc=2 ("cannot see" is not "no problem": a fresh
+checkout without ``git fetch … refs/collab/*`` looks exactly like that);
+``--allow-empty-ledger`` downgrades it to a loud NOTE.  ``--ledger-json`` reads
+a board-shaped snapshot from a file instead of running ``walgit`` (offline
+replay / selftest), still merging local snapshot/inbox merge flags.
 
 Usage (run from anywhere inside the repo):
 
@@ -70,6 +79,7 @@ Usage (run from anywhere inside the repo):
   python -I tools/hygiene/stale_pointer_gate.py --path docs/m2   # narrow
   python -I tools/hygiene/stale_pointer_gate.py --ref refs/remotes/walgit/master
   python -I tools/hygiene/stale_pointer_gate.py --no-ledger      # hash check only
+  python -I tools/hygiene/stale_pointer_gate.py --allow-empty-ledger  # 0-thread ledger: NOTE
   python -I tools/hygiene/stale_pointer_gate.py --selftest       # synthetic repo
   python -I tools/hygiene/stale_pointer_gate.py --fingerprint docs/foo.md:123
 
@@ -161,6 +171,13 @@ CARD_PENDING_WORDS = (
     "未关闭",
 )
 CARD_PENDING_RE = re.compile("|".join(re.escape(w) for w in CARD_PENDING_WORDS))
+
+# Longer literals that *contain* a card-pending word but are not a card-lifecycle
+# assertion.  「未接线」= a subsystem is not wired (direction, not a card state);
+# 「含未合并」/「其中未合并」= a statistic-row category label.  A pending-word
+# match lying inside one of these spans is skipped (reviewer-3 finding I-1 on
+# e5c9f169c: these were the two false reds that the same-cell rule used to hide).
+NOT_ASSERTIVE = ("含未合并", "其中未合并", "未接线", "未接入")
 
 # The repo's two correction-marker spellings: 〔…订正…〕 and "YYYY-MM-DD 订正",
 # the latter optionally wrapped in bold.  Both mean "this line is a historical
@@ -305,43 +322,48 @@ def candidate_pointers(line, max_gap):
     return out
 
 
-def _line_segments(line):
-    """Split a Markdown table row into cells; other lines are one segment.
-
-    A table row is a line-serialised record: each cell carries its own
-    statement, so a card id in one cell and an unfinished word in another are
-    not a pair.
-    """
-    if line.lstrip().startswith("|"):
-        return line.split("|")
-    return [line]
+def _literal_spans(line, needles):
+    """Every (start, end) span where one of ``needles`` occurs in ``line``."""
+    spans = []
+    for needle in needles:
+        start = line.find(needle)
+        while start != -1:
+            spans.append((start, start + len(needle)))
+            start = line.find(needle, start + 1)
+    return spans
 
 
 def candidate_cards(line, max_gap):
-    """Return [(card_id, word, gap)] for card ids close to a status word."""
+    """Return [(card_id, word, gap)] for card ids close to a status word.
+
+    The card id and the word must be on the same **line** — the card's own
+    acceptance criterion.  Table cells are *not* separate records here: a row
+    ``| `openmir2-x` | 未合入 |`` is one statement about x.
+    """
+    quote_spans = [(m.start(), m.end()) for m in QUOTE_RE.finditer(line)]
+    noise_spans = _literal_spans(line, NOT_ASSERTIVE)
+    words = [
+        m
+        for m in CARD_PENDING_RE.finditer(line)
+        if not any(m.start() >= a and m.end() <= b for a, b in quote_spans)
+        and not any(m.start() >= a and m.end() <= b for a, b in noise_spans)
+    ]
+    if not words:
+        return []
     out = []
-    for segment in _line_segments(line):
-        quote_spans = [(m.start(), m.end()) for m in QUOTE_RE.finditer(segment)]
-        words = [
-            m
-            for m in CARD_PENDING_RE.finditer(segment)
-            if not any(m.start() >= a and m.end() <= b for a, b in quote_spans)
-        ]
-        if not words:
-            continue
-        for match in CARD_ID_RE.finditer(segment):
-            best = None
-            for word in words:
-                if word.end() <= match.start():
-                    gap = match.start() - word.end()
-                elif word.start() >= match.end():
-                    gap = word.start() - match.end()
-                else:  # overlapping: the word sits inside the id token
-                    gap = 0
-                if best is None or gap < best[1]:
-                    best = (word.group(0), gap)
-            if best is not None and best[1] <= max_gap:
-                out.append((match.group(1), best[0], best[1]))
+    for match in CARD_ID_RE.finditer(line):
+        best = None
+        for word in words:
+            if word.end() <= match.start():
+                gap = match.start() - word.end()
+            elif word.start() >= match.end():
+                gap = word.start() - match.end()
+            else:  # overlapping: the word sits inside the id token
+                gap = 0
+            if best is None or gap < best[1]:
+                best = (word.group(0), gap)
+        if best is not None and best[1] <= max_gap:
+            out.append((match.group(1), best[0], best[1]))
     return out
 
 
@@ -367,16 +389,14 @@ class Ledger:
 
 
 def _merged_flag(value):
-    """True when a ``merge_result.body.merged`` value means "merged".
+    """True only for the boolean ``true`` of ``merge_result.body.merged``.
 
-    Modern entries use the boolean ``true``; older entries store the merge
-    commit oid as a string.  ``false`` / ``null`` / missing are not merged.
+    Every observable value is the boolean ``true`` (800 entries) or ``null``
+    (1 entry); no entry stores a string.  The old "a string oid means merged"
+    branch was dead code — reviewer-3 on e5c9f169c — so the contract is now the
+    single testable rule below (selftest ⑲).
     """
-    if value is True:
-        return True
-    if isinstance(value, str) and value.strip().lower() not in ("", "false", "0", "none"):
-        return True
-    return False
+    return value is True
 
 
 def _cards_from_raw(raw):
@@ -1027,9 +1047,88 @@ def selftest():
             os.path.join(repo, "docs", "cardtable", "row.md"),
             "| `openmir2-synthetic-closed` | 未合入 |\n",
         )
+        # A compound that merely *contains* a pending word: a direction word
+        # inside a table cell (未接线) and a statistic-row category label
+        # (含未合并).  Neither is an assertion about the card on the line.
+        _write(
+            os.path.join(repo, "docs", "cardnoise", "noise.md"),
+            "| `openmir2-synthetic-closed` | 前置被阻塞：⑧ 攻城层未接线 |\n"
+            "| window_required（含未合并） | 2 | `openmir2-synthetic-closed` |\n",
+        )
+        # A card the board projection does not list: only snapshot/inbox know it.
+        _write(
+            os.path.join(repo, "docs", "cardoffboard", "offboard.md"),
+            "卡 `openmir2-synthetic-offboard` 未合入\n",
+        )
+        # A card-bearing line whose allow-list entry must survive --no-ledger.
+        allowed_card_line = "卡 `openmir2-synthetic-closed` 未合入\n"
+        _write(os.path.join(repo, "docs", "allowcard", "allowed.md"), allowed_card_line)
         _run_git(repo, "add", "-A")
         _run_git(repo, "commit", "-qm", "fixtures")
 
+        # Collaboration refs the board projection cannot see: a thread absent
+        # from the board JSON but present in the inbox tail (status +
+        # merge_result), plus the closed fixture the board does list.
+        def _blob(text):
+            proc = subprocess.run(
+                ["git", "hash-object", "-w", "--stdin"],
+                cwd=repo,
+                input=text,
+                capture_output=True,
+                check=True,
+                text=True,
+                encoding="utf-8",
+            )
+            return proc.stdout.strip()
+
+        def _entry(kind, card_id, ts, body):
+            return json.dumps(
+                {
+                    "version": 1,
+                    "kind": kind,
+                    "id": card_id,
+                    "actor": "selftest",
+                    "ts": ts,
+                    "parent": "",
+                    "body": body,
+                },
+                ensure_ascii=False,
+            )
+
+        _run_git(
+            repo,
+            "update-ref",
+            "refs/collab/inbox/selftest/status",
+            _blob(_entry("status", "openmir2-synthetic-offboard", 10, {"status": "in-progress"})),
+        )
+        _run_git(
+            repo,
+            "update-ref",
+            "refs/collab/inbox/selftest/merge",
+            _blob(_entry("merge_result", "openmir2-synthetic-offboard", 11, {"merged": True})),
+        )
+        _run_git(
+            repo,
+            "update-ref",
+            "refs/collab/inbox/selftest/closed",
+            _blob(_entry("status", "openmir2-synthetic-closed", 12, {"status": "closed"})),
+        )
+        board_path = os.path.join(tmp, "board.json")
+        _write(
+            board_path,
+            json.dumps(
+                {
+                    "columns": [
+                        {
+                            "name": "x",
+                            "cards": [
+                                {"id": "openmir2-synthetic-closed", "status": "closed"},
+                            ],
+                        }
+                    ]
+                }
+            ),
+        )
         empty_allowlist = os.path.join(tmp, "empty.toml")
         _write(empty_allowlist, "# no exemptions\n")
 
@@ -1041,6 +1140,13 @@ def selftest():
             % line_fingerprint(allowed_line),
         )
 
+        allowcard_path = os.path.join(tmp, "allowcard.toml")
+        _write(
+            allowcard_path,
+            '[[allow]]\npath = "docs/allowcard/allowed.md"\n'
+            'line_sha256 = "%s"\nreason = "selftest fixture (card-only line)"\n'
+            % line_fingerprint(allowed_card_line),
+        )
         rotten_path = os.path.join(tmp, "rot.toml")
         seed_line = _read_seed_line(repo)
         _write(
@@ -1163,8 +1269,10 @@ def selftest():
             repo, "docs/cardtable", ref, load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, ledger
         )
         check(
-            "⑪ table row: id and word in different cells are not a pair ⇒ green",
-            card_table["rc"] == 0 and not card_table["card_hits"],
+            "⑪ table row: id and word in different cells ARE a pair (same line) ⇒ red",
+            card_table["rc"] == 1
+            and len(card_table["card_hits"]) == 1
+            and card_table["card_hits"][0]["card"] == "openmir2-synthetic-closed",
         )
 
         card_quoted = scan(
@@ -1209,6 +1317,118 @@ def selftest():
         check(
             "⑭ --path . (repo root) still reports allow-list rot",
             root_rot["rc"] == 1 and len(root_rot["rot"]) == 1,
+        )
+
+        # ---- board union: the projection omits threads the raw ledger knows
+        with open(board_path, encoding="utf-8") as fh:
+            board_raw = json.load(fh)
+        board_ledger = read_ledger(repo, board_raw=board_raw)
+        offboard = board_ledger.state("openmir2-synthetic-offboard")
+        card_offboard = scan(
+            repo, "docs/cardoffboard", ref, load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, board_ledger
+        )
+        check(
+            "⑮ board 漏卡 + snapshot/inbox 有 ⇒ 并集补回（on_board=False）并判红",
+            offboard is not None
+            and offboard["on_board"] is False
+            and offboard["merged"] is True
+            and card_offboard["rc"] == 1
+            and len(card_offboard["card_hits"]) == 1
+            and card_offboard["card_hits"][0]["card"] == "openmir2-synthetic-offboard",
+        )
+
+        # ---- fold / flatten helpers directly (no scan, no subprocess)
+        folded = _fold_entries(
+            [
+                {"id": "openmir2-synthetic-offboard", "kind": "status", "ts": 5, "body": {"status": "open"}},
+                {"id": "openmir2-synthetic-offboard", "kind": "status", "ts": 7, "body": {"status": "in-progress"}},
+                {"id": "openmir2-synthetic-offboard", "kind": "merge_result", "ts": 6, "body": {"merged": True}},
+                {"id": "", "kind": "status", "ts": 1, "body": {"status": "closed"}},
+            ]
+        )
+        columns_cards = _cards_from_raw({"columns": [{"cards": [{"id": "a"}]}]})
+        thread_cards = _cards_from_raw({"threads": {"b": {"status": "closed"}}})
+        plain_cards = _cards_from_raw({"cards": [{"id": "c"}]})
+        check(
+            "⑯ _fold_entries 取最新 status + 存在 merge；_cards_from_raw 三种形状",
+            folded["openmir2-synthetic-offboard"]["status"] == "in-progress"
+            and folded["openmir2-synthetic-offboard"]["merged"] is True
+            and len(folded) == 1
+            and [c["id"] for c in columns_cards] == ["a"]
+            and [c["id"] for c in thread_cards] == ["b"]
+            and [c["id"] for c in plain_cards] == ["c"],
+        )
+
+        # ---- compound words are not card assertions
+        card_noise = scan(
+            repo, "docs/cardnoise", ref, load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, ledger
+        )
+        check(
+            "⑰ 未接线 / 含未合并 是方向词与分类标签 ⇒ 不配对、不判红",
+            card_noise["rc"] == 0
+            and not card_noise["card_hits"]
+            and card_noise["card_lines"] == 0,
+        )
+
+        # ---- --no-ledger must still keep a card-only entry alive (no false rot)
+        allowcard_noledger = scan(
+            repo, "docs/allowcard", ref, load_allowlist(allowcard_path), DEFAULT_MAX_GAP, None
+        )
+        check(
+            "⑱ --no-ledger 下只压卡号命中的白名单条目仍算 used（不误报腐烂）",
+            allowcard_noledger["rc"] == 0
+            and allowcard_noledger["allow_exempt"] == 1
+            and not allowcard_noledger["rot"],
+        )
+
+        # ---- merge flag contract is the boolean true, nothing else
+        check(
+            "⑲ _merged_flag 只认布尔 true（字符串 oid / null / false 都不算）",
+            _merged_flag(True) is True
+            and _merged_flag(False) is False
+            and _merged_flag(None) is False
+            and _merged_flag("9ff7ff064") is False,
+        )
+
+        # ---- an empty ledger is fail-closed: 查不到 ≠ 无问题
+        empty_repo = os.path.join(tmp, "empty-repo")
+        os.makedirs(empty_repo)
+        _run_git(empty_repo, "init", "-q", "-b", "main")
+        _run_git(empty_repo, "config", "user.email", "selftest@example.invalid")
+        _run_git(empty_repo, "config", "user.name", "selftest")
+        _write(
+            os.path.join(empty_repo, "docs", "card.md"),
+            "卡 `openmir2-synthetic-closed` 未合入\n",
+        )
+        _run_git(empty_repo, "add", "-A")
+        _run_git(empty_repo, "commit", "-qm", "card")
+        empty_board = os.path.join(tmp, "empty-board.json")
+        _write(empty_board, json.dumps({"columns": []}))
+        empty_args = [
+            sys.executable,
+            "-I",
+            os.path.abspath(__file__),
+            "--ref",
+            "refs/heads/main",
+            "--allowlist",
+            empty_allowlist,
+            "--ledger-json",
+            empty_board,
+        ]
+        empty_run = subprocess.run(empty_args, cwd=empty_repo, capture_output=True, check=False)
+        empty_run_allowed = subprocess.run(
+            empty_args + ["--allow-empty-ledger"], cwd=empty_repo, capture_output=True, check=False
+        )
+        empty_text = (empty_run.stdout + empty_run.stderr).decode("utf-8", "replace")
+        allowed_text = (empty_run_allowed.stdout + empty_run_allowed.stderr).decode(
+            "utf-8", "replace"
+        )
+        check(
+            "⑳ 账本 0 线程 ⇒ rc=2；--allow-empty-ledger ⇒ rc=0 + NOTE",
+            empty_run.returncode == 2
+            and "0 threads" in empty_text
+            and empty_run_allowed.returncode == 0
+            and "allow-empty-ledger" in allowed_text,
         )
 
     failed = 0
@@ -1288,6 +1508,12 @@ def main(argv):
         help="skip the card-status (ledger) check; prints 已跳过 and judges nothing",
     )
     parser.add_argument(
+        "--allow-empty-ledger",
+        action="store_true",
+        help="a ledger that reads as 0 threads is rc=2 (查不到 ≠ 无问题); this flag "
+        "downgrades it to a loud NOTE",
+    )
+    parser.add_argument(
         "--ledger-json",
         metavar="PATH",
         default=None,
@@ -1329,6 +1555,22 @@ def main(argv):
             ledger = read_ledger(top, board_raw=load_board_file(args.ledger_json))
         else:
             ledger = read_ledger(top)
+        if len(ledger) == 0:
+            # A checkout that never fetched refs/collab/* looks exactly like a
+            # project with no cards.  "Cannot see" is not "no problem" — this
+            # repo has burned three reworks on that confusion — so an empty
+            # ledger is fail-closed unless the caller says otherwise.
+            message = (
+                "stale-pointer gate: the ledger lists 0 threads — 查不到 ≠ 无问题. "
+                "A fresh checkout without `git fetch <remote> '+refs/collab/*:refs/collab/*'` "
+                "looks exactly like this, and the card-status check would silently pass. "
+                "Fetch refs/collab/* first, or pass --no-ledger (skips the class) / "
+                "--allow-empty-ledger (downgrades this to a NOTE)."
+            )
+            if args.allow_empty_ledger:
+                print("NOTE " + message + " (--allow-empty-ledger: continuing)", file=sys.stderr)
+            else:
+                raise GateError(message, rc=2)
 
     try:
         result = scan(top, rel_path, ref, allowlist, args.max_gap, ledger)
