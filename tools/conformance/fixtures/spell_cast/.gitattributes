@@ -1,0 +1,4 @@
+# 冻结的真机对拍 fixture 必须逐字节保真（卡 openmir2-spell-cast-controlframe-filter）：
+# -text 关闭 EOL 归一，blob 与库内 LF 副本逐字节一致、跨平台检出不变（源文件为 CRLF，
+# 差异仅行尾，sha256 对照见同目录 README.md）；比较器 selftest 对行号/内容断言依赖这一点。
+*.ndjson -text

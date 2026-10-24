@@ -20,6 +20,10 @@
    `action=ignore` 若 `approved_by` 仍是 PENDING 且真的剔了帧 ⇒ 本次 UNDECIDABLE
    （PENDING 的 ignore 不许直接判绿）。被剔除的消息号在两侧先各自剔除再逐位对齐。
    `ident` 永远参与比较（即使该帧其余字段被掩码）。
+   例外（输入层，非 ignore 规则）：`ident` 为空（null/缺键）的**控制帧**（如 GameGate
+   `+GD/<rtime>` 时间应答，frame_class=server_ack_time）在 load_stream 剔除并逐帧留痕
+   （report `frames.filtered_control_frames`），不算 ignore、不静默；`frame_class=protocol`
+   却缺 ident ⇒ 仍 UNDECIDABLE（驱动器产物自相矛盾）。
    两侧剔除后可比较帧数都是 0 ⇒ UNDECIDABLE(kind=empty_run)，只有 `--allow-empty` 放行。
 2) 头部字段（recog/param/tag/series，外加驱动器字段 phase/seq/t_ms/conn）：默认哪些比由规则决定。
    recog（=会话相关 ActorId）、t_ms（墙钟）、conn（驱动器会话标签）、seq（驱动器本地序号）默认掩码。
@@ -397,13 +401,33 @@ def load_rules(path):
 # ---------------------------------------------------------------------------
 # 帧流输入
 # ---------------------------------------------------------------------------
+#: **控制帧过滤（compare 输入层；卡 openmir2-spell-cast-controlframe-filter，tier=L）**。
+#: frames.ndjson 里 `ident` 为空（null / 缺键）的行**不是游戏协议帧**——协议帧必有 u16
+#: 消息号；它们是网关/驱动的**控制帧**（实测：GameGate 对 `+GD` 时间请求的明文应答
+#: `+GD/<rtime>`，frame_class=server_ack_time，分类见 tools/probe/mir2frame.py
+#: classify_plain；window-run-1 spell_cast 两侧各 2 条）。本比较器按 u16 ident 对齐，
+#: 控制帧没有 ident、也从不参与判定，留在流里只会把整轮判成 UNDECIDABLE（「缺合法
+#: ident」fail-closed，window-run-1 spell_cast 实测 oracle 第 31 行）⇒ 在 load_stream
+#: 输入层显式剔除。
+#: **不是静默吞帧**：逐帧登记进 Stream.filtered_control（行号/frame_class/seq/t_ms/
+#: body 摘要），report["frames"]["filtered_control_frames"] 与终端摘要都给计数，
+#: 可与文件总行数对账（total = 协议帧 + filtered_control + 空行）。
+#: 红线：只滤 ident **为空**的行；ident 存在但非法（负数 / >65535 / 类型错）仍然
+#: fail-closed 判 UNDECIDABLE；frame_class=protocol 却缺 ident 是驱动器自相矛盾的
+#: 产物，同样 fail-closed——过滤绝不扩大到任何声明为协议帧（或带合法 ident）的行。
+CONTROL_FRAME_FILTER = "ident-null-control-frame"
+
+
 class Stream(object):
-    def __init__(self, label, dirpath, path, frames, problems):
+    def __init__(self, label, dirpath, path, frames, problems,
+                 filtered_control=None):
         self.label = label
         self.dirpath = dirpath
         self.path = path
         self.frames = frames
         self.problems = problems
+        #: ident=null 的控制帧台账（CONTROL_FRAME_FILTER：被输入层剔除，逐帧留痕不静默）
+        self.filtered_control = list(filtered_control or [])
 
 
 def _parse_body(rec, where):
@@ -429,6 +453,7 @@ def load_stream(dirpath, label):
         raise Undecidable("%s 侧缺 frames.ndjson：%s" % (label, path))
     frames = []
     problems = []
+    filtered_control = []
     with open(path, "rb") as f:
         for lineno, raw in enumerate(f, 1):
             line = raw.strip()
@@ -442,6 +467,17 @@ def load_stream(dirpath, label):
             if not isinstance(rec, dict):
                 raise Undecidable("%s 不是 JSON 对象" % where)
             ident = rec.get("ident")
+            if ident is None:
+                # CONTROL_FRAME_FILTER：ident 为空的行是控制帧，显式剔除并逐帧留痕。
+                if rec.get("frame_class") == "protocol":
+                    raise Undecidable("%s 声明 frame_class=protocol 却缺 ident"
+                                      "（驱动器产物自相矛盾，不按控制帧滤）" % where)
+                filtered_control.append({
+                    "line": lineno, "frame_class": rec.get("frame_class"),
+                    "seq": rec.get("seq"), "t_ms": rec.get("t_ms"),
+                    "body_len": rec.get("body_len"),
+                    "body_sha256": rec.get("body_sha256")})
+                continue
             if not is_int(ident) or ident < 0 or ident > 65535:
                 raise Undecidable("%s 缺合法 ident（u16）" % where)
             body = _parse_body(rec, where)
@@ -471,7 +507,8 @@ def load_stream(dirpath, label):
             for field in STREAM_FIELDS:
                 fr[field] = rec.get(field)
             frames.append(fr)
-    return Stream(label, os.path.abspath(dirpath), os.path.abspath(path), frames, problems)
+    return Stream(label, os.path.abspath(dirpath), os.path.abspath(path), frames,
+                  problems, filtered_control)
 
 
 def load_run_meta(dirpath):
@@ -1592,6 +1629,12 @@ def compare_main(args):
         "oracle_total": len(o_stream.frames),
         "rust_total": len(r_stream.frames),
         "compared": cmp["compared_frames"],
+        "filtered_control_frames": {
+            "oracle": {"count": len(o_stream.filtered_control),
+                       "frames": o_stream.filtered_control},
+            "rust": {"count": len(r_stream.filtered_control),
+                     "frames": r_stream.filtered_control},
+        },
         "ignored": {k: {"count": len(v), "idents": v} for k, v in cmp["ignored"].items()},
         "ignored_cli": {k: {"count": len(v), "idents": v}
                         for k, v in cmp["ignored_cli"].items()},
@@ -1717,6 +1760,11 @@ def human_summary(report):
         if any(v["count"] for v in igc.values()):
             lines.append("ignored(CLI): " + ", ".join(
                 "%s=%d" % (k, v["count"]) for k, v in sorted(igc.items())))
+        fcf = fr.get("filtered_control_frames") or {}
+        if any(v["count"] for v in fcf.values()):
+            lines.append("filtered(控制帧 ident=null, 见 filtered_control_frames): "
+                         + ", ".join("%s=%d" % (k, v["count"])
+                                     for k, v in sorted(fcf.items())))
     cov = report.get("coverage") or {}
     if cov.get("present_idents"):
         lines.append("idents: %s" % cov["present_idents"])
