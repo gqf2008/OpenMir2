@@ -53,52 +53,17 @@
 
 use std::path::Path;
 
-use mir2_shared::hutil32::get_valid_str3;
 use mir2_shared::rng::RandomNumber;
 
-/// 分词器：`LocalDB.TextSplitConst = { ' ', '\t' }`（`src/GameSrv/DB/LocalDB.cs:12`）。
-const TEXT_SPLIT: [char; 2] = [' ', '\t'];
-
-/// 一条出生点（`LocalDB.cs:853-863` 装配的 `StartPoint`；本接缝只用地图名 + 坐标）。
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StartPoint {
-    pub map_name: String,
-    pub x: i16,
-    pub y: i16,
-}
-
-/// `LocalDB.LoadStartPoint`（`src/GameSrv/DB/LocalDB.cs:822-867`）的 1:1 解析。
-///
-/// - `Trim()` 后空行、首字符 `;` 的行跳过；
-/// - 每条按 `TextSplitConst` 顺序取 `MapName / CX / CY`（其余列 `allSay/range/type/zone/fire` 本接缝不用）；
-/// - `MapName/CX/CY` 任一为空即丢弃（oracle 的 `if (!string.IsNullOrEmpty(...))`）。
-#[must_use]
-pub fn parse_start_points(text: &str) -> Vec<StartPoint> {
-    let mut out = Vec::new();
-    for raw in text.split('\n') {
-        let no_cr = raw.strip_suffix('\r').unwrap_or(raw);
-        let line = no_cr.trim();
-        if line.is_empty() || line.starts_with(';') {
-            continue;
-        }
-        let (map_name, rest) = get_valid_str3(line, &TEXT_SPLIT);
-        let (cx, rest) = get_valid_str3(&rest, &TEXT_SPLIT);
-        let (cy, _) = get_valid_str3(&rest, &TEXT_SPLIT);
-        if !map_name.is_empty() && !cx.is_empty() && !cy.is_empty() {
-            out.push(StartPoint {
-                map_name,
-                x: str_to_i16(&cx, 0),
-                y: str_to_i16(&cy, 0),
-            });
-        }
-    }
-    out
-}
-
-/// `HUtil32.StrToInt16(str, def)`：`short.TryParse` 失败取 `def`（`HUtil32.cs`）。
-fn str_to_i16(s: &str, def: i16) -> i16 {
-    s.trim().parse::<i16>().unwrap_or(def)
-}
+// ── 出生点解析：**唯一事实源 = `crates/envir/src/startpoint.rs`**
+// （1:1 `LocalDB.LoadStartPoint`，`LocalDB.cs:822-867`）。
+//
+// 卡 `openmir2-loader-fields` 残余接线：此前本模块私有一份只取 `MapName/X/Y` 三列的解析，
+// 丢弃 oracle 逐行读取的 `NotAllowSay/Range/Type/PkZone/PkFire` 五列（`LocalDB.cs:844-862`）。
+// 现在直接复用 envir 的解析器（`parse_start_points`/`load_start_points_if_exists`）；
+// 本接缝只用 `map_name/x/y`，其余五列随 `StartPoint` 类型一起承载，供后续
+// `MakeSafePkZone`/`InSafeZone` 接线。
+pub use mir2_envir::startpoint::StartPoint;
 
 /// 「空 `HomeMap` ⇒ 出生点」的静态输入（进程启动时读一次）。
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -175,19 +140,24 @@ impl HomeFallback {
     }
 }
 
-/// 读 `<base>/<envir_dir>/StartPoint.txt`；文件不存在/读失败 ⇒ 空出生点表
-/// （oracle `LocalDB.LoadStartPoint` 的 `if (File.Exists)` 分支；此时 `GetHomeInfo` 落到 `Config.HomeMap`）。
+/// 读 `<base>/<envir_dir>/StartPoint.txt`，**消费 `crates/envir::startpoint` 的新加载器**。
 ///
-/// 现网该文件是 **GBK**（首行注释 `;安全区/出生点`），照 oracle `StringList.LoadFromFile`（GB2312）
-/// 用 [`mir2_envir::text::decode_text`]（BOM/UTF-16/GBK 判定）解码，不用 `read_to_string`（会因非 UTF-8 失败
-/// 而静默拿到空表——这条是 2026-10-12 真机跑出的）。
-#[must_use]
-pub fn load_start_points(base: &Path, envir_dir: &str) -> Vec<StartPoint> {
-    let path = base.join(envir_dir).join("StartPoint.txt");
-    match std::fs::read(&path) {
-        Ok(bytes) => parse_start_points(&mir2_envir::text::decode_text(&bytes)),
-        Err(_) => Vec::new(),
-    }
+/// oracle `LocalDB.LoadStartPoint`（`LocalDB.cs:832-867`）：
+/// - `File.Exists` 假 ⇒ 整段跳过（返回空表，**不**报错），`GetHomeInfo` 落到 `Config.HomeMap`；
+/// - 存在但读取失败 ⇒ `LoadFromFile` 抛出、调用点无 try/catch ⇒ **启动期 fail-closed**。
+///   旧实现 `Err(_) => Vec::new()` 会静默吞掉读取失败（与 oracle 不符）；接线后改为 `Err` 上抛。
+///
+/// 现网该文件是 **GBK**（首行注释 `;安全区/出生点`），解码口径由 envir 加载器统一
+/// （`StringList.LoadFromFile`：BOM/UTF-16/GBK；不用 `read_to_string`——2026-10-12 真机跑出的坑）。
+///
+/// # Errors
+/// 文件存在但读取失败 ⇒ [`mir2_envir::EnvirError::Io`]。
+pub fn load_start_points(
+    base: &Path,
+    envir_dir: &str,
+) -> Result<Vec<StartPoint>, mir2_envir::EnvirError> {
+    let path = mir2_envir::startpoint::start_point_path(base, envir_dir);
+    Ok(mir2_envir::startpoint::load_start_points_if_exists(&path)?.unwrap_or_default())
 }
 
 /// `PlayObject.MoveToHome` → `BaseObjectMove`（`PlayObject.Base.cs:2306-2333`）的**目标解析**。
@@ -237,6 +207,7 @@ pub fn resolve_move_home(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mir2_envir::startpoint::parse_start_points;
 
     /// 现网 `E:/MirServer/M2GameSvr/Envir/StartPoint.txt` 的前几行（逐字）。
     const REAL_HEAD: &str = ";安全区/出生点\n0    289  618\n0    650  631\n0    330  266\n2    503  483\n3    330  330\n4    240  200\n5    141  337\n11   178  326\n";
@@ -245,30 +216,23 @@ mod tests {
     fn parse_real_head_matches_oracle_tokens() {
         let sp = parse_start_points(REAL_HEAD);
         assert_eq!(sp.len(), 8, "首行注释跳过：{sp:?}");
-        assert_eq!(
-            sp[0],
-            StartPoint {
-                map_name: "0".into(),
-                x: 289,
-                y: 618
-            }
-        );
-        assert_eq!(
-            sp[1],
-            StartPoint {
-                map_name: "0".into(),
-                x: 650,
-                y: 631
-            }
-        );
-        assert_eq!(
-            sp[7],
-            StartPoint {
-                map_name: "11".into(),
-                x: 178,
-                y: 326
-            }
-        );
+        // 旧三列解析的逐位值（本用例同时是「换加载器后逐位不变」的合同钉）。
+        for (i, (map, x, y)) in [("0", 289, 618), ("0", 650, 631), ("11", 178, 326)]
+            .into_iter()
+            .enumerate()
+        {
+            let idx = if i < 2 { i } else { 7 };
+            assert_eq!(
+                (sp[idx].map_name.as_str(), sp[idx].x, sp[idx].y),
+                (map, x, y)
+            );
+        }
+        // 三列部署件：后五列必须是默认值（`LocalDB.cs:862-863`）。
+        for p in &sp {
+            assert!(!p.not_allow_say);
+            assert_eq!((p.range, p.r#type, p.pk_zone, p.pk_fire), (0, 0, 0, 0));
+            assert_eq!(p.shape, 0);
+        }
     }
 
     /// 红检：把分隔符从 `{ ' ', '\t' }` 改成只认 `','` ⇒ 现网（空格分隔）解析出 0 条 ⇒ 必红。
@@ -278,14 +242,8 @@ mod tests {
     fn parser_splits_on_space_and_tab_only() {
         let text = "0\t289 618\n";
         let sp = parse_start_points(text);
-        assert_eq!(
-            sp,
-            vec![StartPoint {
-                map_name: "0".into(),
-                x: 289,
-                y: 618
-            }]
-        );
+        assert_eq!(sp.len(), 1);
+        assert_eq!((sp[0].map_name.as_str(), sp[0].x, sp[0].y), ("0", 289, 618));
     }
 
     #[test]
@@ -293,14 +251,8 @@ mod tests {
         let text = "\n; c\n0 289\n   \n1 2 3\n";
         let sp = parse_start_points(text);
         // `0 289` 缺 CY ⇒ 丢；`1 2 3` 合法。
-        assert_eq!(
-            sp,
-            vec![StartPoint {
-                map_name: "1".into(),
-                x: 2,
-                y: 3
-            }]
-        );
+        assert_eq!(sp.len(), 1);
+        assert_eq!((sp[0].map_name.as_str(), sp[0].x, sp[0].y), ("1", 2, 3));
     }
 
     #[test]
@@ -420,20 +372,13 @@ mod tests {
         let mut bytes: Vec<u8> = vec![0x3B, 0xB0, 0xB2, 0xC8, 0xAB, 0xC7, 0xF8, 0x0D, 0x0A];
         bytes.extend_from_slice(b"0    289  618\r\n0    650  631\r\n");
         std::fs::write(dir.join("Envir").join("StartPoint.txt"), &bytes).unwrap();
-        let sp = load_start_points(&dir, "Envir");
+        let sp = load_start_points(&dir, "Envir").expect("读取成功");
         assert_eq!(
             sp.len(),
             2,
             "GBK 文件必须解出 2 条（read_to_string 会得 0 条）：{sp:?}"
         );
-        assert_eq!(
-            sp[0],
-            StartPoint {
-                map_name: "0".into(),
-                x: 289,
-                y: 618
-            }
-        );
+        assert_eq!((sp[0].map_name.as_str(), sp[0].x, sp[0].y), ("0", 289, 618));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -470,5 +415,74 @@ mod tests {
         }
         // 负坐标也是「非 0」（照抄 `sX != 0`，不 clamp）。
         assert!(resolve_move_home("3", "0", -1, -1).fixed);
+    }
+    // --------------------------------------------------------------------
+    // 卡 openmir2-loader-fields 残余接线：合同测试 + 牙（≥2）
+    // --------------------------------------------------------------------
+
+    /// **合同（逐位）**：换加载器后，现网三列形态的 `map_name/x/y` 与旧三列解析**逐位相同**；
+    /// 差异只有「新类型多承载 5 列（三列部署件全为默认）」与「读取失败改为 fail-closed」。
+    ///
+    /// 红检（改坏必红）：把 `parse_start_points` 换回旧的三列私有实现（或改 `x` 的默认值）
+    /// ⇒ 本用例必红。
+    #[test]
+    fn wiring_matches_legacy_three_column_view() {
+        let legacy: [(&str, i16, i16); 8] = [
+            ("0", 289, 618),
+            ("0", 650, 631),
+            ("0", 330, 266),
+            ("2", 503, 483),
+            ("3", 330, 330),
+            ("4", 240, 200),
+            ("5", 141, 337),
+            ("11", 178, 326),
+        ];
+        // 旧解析器（本文件接线前）对这些行的输出：map/x/y 完全相同。
+        let sp = parse_start_points(REAL_HEAD);
+        assert_eq!(sp.len(), legacy.len());
+        for (i, want) in legacy.iter().enumerate() {
+            assert_eq!(
+                (sp[i].map_name.as_str(), sp[i].x, sp[i].y),
+                *want,
+                "第 {i} 条与旧三列解析逐位不同"
+            );
+            // 三列部署件：新列必须显式承载默认值。
+            assert_eq!(
+                (sp[i].not_allow_say, sp[i].range, sp[i].r#type),
+                (false, 0, 0)
+            );
+            assert_eq!((sp[i].pk_zone, sp[i].pk_fire, sp[i].shape), (0, 0, 0));
+        }
+    }
+
+    /// **合同（旧三列语义缺什么）**：8 列行必须把 oracle 读到的 5 列承载下来——旧三列解析
+    /// 会丢弃它们。若有人把接线回退成三列解析 ⇒ 本用例必红。
+    #[test]
+    fn wiring_carries_columns_beyond_legacy_three() {
+        let sp = parse_start_points("3 644 290 1 7 2 13 5\n");
+        assert_eq!(sp.len(), 1);
+        assert_eq!((sp[0].map_name.as_str(), sp[0].x, sp[0].y), ("3", 644, 290));
+        assert!(sp[0].not_allow_say, "allSay=1 ⇒ Convert.ToBoolean(1)");
+        assert_eq!(
+            (sp[0].range, sp[0].r#type, sp[0].pk_zone, sp[0].pk_fire),
+            (7, 2, 13, 5)
+        );
+    }
+
+    /// **牙（缺列/非法值）**：缺 `MapName/x/y` 任一并列 ⇒ 丢弃；非法数值 ⇒ `StrToInt16` 取默认 0
+    /// 但行仍入库；`NotAllowSay` 是「非 0 即 true」（负数也为 true）。
+    ///
+    /// 红检（改坏必红）：放宽入库门（空列也收）⇒ `len()==2` 断言必红；
+    /// 把 `x` 的默认值从 0 改成 1 ⇒ `(0, 0)` 断言必红；把 `!= 0` 改成 `> 0` ⇒ 负数断言必红。
+    #[test]
+    fn wiring_gate_and_illegal_values() {
+        let sp = parse_start_points("1 2\n3\n289 618\n4 abc def\n5 -1 -1 -1\n");
+        assert_eq!(sp.len(), 2, "缺列三行丢弃；非法数值行仍入库");
+        assert_eq!((sp[0].map_name.as_str(), sp[0].x, sp[0].y), ("4", 0, 0));
+        assert_eq!((sp[1].map_name.as_str(), sp[1].x, sp[1].y), ("5", -1, -1));
+        assert!(
+            sp[1].not_allow_say,
+            "allSay=-1 非 0 ⇒ true（Convert.ToBoolean）"
+        );
     }
 }
