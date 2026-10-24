@@ -3336,7 +3336,7 @@ def check_rng_ledger(path):
 #:   * `monsters` —— 声明式怪物夹具（卡 `openmir2-window-fixture-corpse`）；
 #:   * `config_overrides` / `castle_list` / `castle_files` —— 配置文件与城堡前置
 #:     （卡 `openmir2-window-fixture-castle`）。
-FIXTURE_KEYS = ("monsters", "config_overrides", "castle_list", "castle_files", "note")
+FIXTURE_KEYS = ("monsters", "config_overrides", "castle_list", "castle_files", "level", "note")
 
 #: 夹具行的第 7 列 `ZenTime`（分钟）**必须 > 0**：两端解析器都按 `ZenTime = 列值*60*1000` 后
 #: `ZenTime <= 0 => 丢弃`（C# `LocalDB.cs:555-558`；Rust `crates/envir/src/mongen.rs:147-150`），
@@ -3514,14 +3514,21 @@ def _validate_fixture_decl(decl, where):
     if not isinstance(note, str):
         raise ConfigError("%s.note 必须是字符串" % where)
     out = {"monsters": None, "config_overrides": {}, "castle_list": None,
-           "castle_files": {}, "note": note}
+           "castle_files": {}, "level": None, "note": note}
     if "monsters" in decl:
         out["monsters"] = _validate_monsters(decl["monsters"], where + ".monsters")
     out.update(_validate_fixture_files(decl, where))
+    if "level" in decl:
+        lv = decl["level"]
+        if not isinstance(lv, int) or isinstance(lv, bool) or not (1 <= lv <= 255):
+            raise ConfigError("%s.level 必须是 1..255 的整数（实际 %r；characters.Level 是 "
+                              "int(11)，部署最大 255）" % (where, lv))
+        out["level"] = lv
     if not (out["monsters"] or out["config_overrides"]
-            or out["castle_list"] is not None or out["castle_files"]):
+            or out["castle_list"] is not None or out["castle_files"]
+            or out["level"] is not None):
         raise ConfigError("%s 只声明了 note：至少要给 monsters / config_overrides / "
-                          "castle_list / castle_files 之一" % where)
+                          "castle_list / castle_files / level 之一" % where)
     return out
 
 
@@ -3560,7 +3567,8 @@ def _fixture_symmetry_key(decl):
             json.dumps(decl.get("castle_files") or {}, sort_keys=True,
                        ensure_ascii=False),
             json.dumps(decl.get("config_overrides") or {}, sort_keys=True,
-                       ensure_ascii=False))
+                       ensure_ascii=False),
+            decl.get("level"))
 
 
 def _check_fixture_symmetry(fixtures_by_side):
@@ -3579,10 +3587,11 @@ def _check_fixture_symmetry(fixtures_by_side):
         shown = []
         for side in sorted(keys):
             decl = fixtures_by_side[side] or {}
-            shown.append("%s{castle_list=%r, castle_files=%r, config_overrides=%r}"
+            shown.append("%s{castle_list=%r, castle_files=%r, config_overrides=%r, level=%r}"
                          % (side, decl.get("castle_list"),
                             decl.get("castle_files") or {},
-                            decl.get("config_overrides") or {}))
+                            decl.get("config_overrides") or {},
+                            decl.get("level")))
         raise ConfigError(
             "fixtures 文件三件套两侧不一致（%s）：`castle_list` 会让 "
             "`castle_list_symmetry` 门失效（门在写盘**之前**检查，夹具在写**之后**生效）；"
@@ -3809,6 +3818,137 @@ def _apply_files(runner, side, root, decl, side_dir, tag):
     return recs, backup_dir
 
 
+def run_level_fixture(runner, side, prof, sc, level, env, side_dir, timeout=120):
+    """起栈前把测试角色 `characters.Level` 设成声明值（写前快照 → 写 → 读回校验）。
+
+    与 assets 通道同族（定位 ChrName+LoginID、其余列 MD5 指纹、写后读回断言）；
+    停栈后的还原由 `restore_level_fixture` 负责。失败一律 rc=2，绝不带着错位继续起栈。
+    """
+    res = {"side": side, "declared": level, "action": None, "db": None,
+           "player_id": None, "before_level": None, "after_level": None,
+           "sql": {}, "rc": None, "error": None}
+    try:
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        res["db_pairing"] = _check_db_pairing(side, placement_envir_root(side, sc), db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        res["error"] = "等级夹具前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    argv = _mysql_argv(client)
+    # review：凭据（client.password / --password=… 的 argv）**不得进证据 dict**；
+    # 只放在内存 `_session`，写盘一律经 `level_evidence()` 过滤。
+    res["_session"] = {"client": client, "argv": argv}
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    if not chr_name or not login_id:
+        res["error"] = "等级夹具需要 profile 的 char_name/account"
+        res["rc"] = 2
+        return res
+    if getattr(runner, "dry_run", False):
+        res["action"] = "dry-run"
+        res["sql"] = {"update": "UPDATE `%s`.`characters` SET `Level`=%d WHERE Id=<row>"
+                               % (db, level)}
+        runner.log("[%s] 等级夹具（dry-run 不连库）：db=%s UPDATE characters SET Level=%d "
+                   "WHERE Id=<row> 角色=%s" % (side, db, level, chr_name))
+        res["rc"] = 0
+        return res
+
+    def sql(tag, text):
+        rc, out, err = runner.run(side, tag, argv, env=env, timeout=timeout,
+                                  stdin_text=text, capture=True)
+        if rc != 0:
+            raise ConfigError("%s 执行失败（mysql rc=%s）：%s"
+                              % (tag, rc, (err or out or "").strip()[:400]))
+        return out
+
+    try:
+        cols_out = sql("level.columns", "SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+        columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
+        if "Level" not in columns:
+            raise ConfigError("%s.characters 缺 Level 列（表结构与预期不符，拒绝）" % db)
+        read_sql = _assets_row_sql(db, chr_name, login_id, columns, ["Level"])
+        res["sql"]["read"] = read_sql.strip()
+        before = _parse_assets_row(sql("level.read", read_sql), 1)
+        res["player_id"] = before["id"]
+        res["before_level"] = before["values"][0]
+        if before["count"] != 1 or before["deleted"] == 1:
+            raise ConfigError("等级夹具定位失败：命中 %d 行 / Deleted=%d（ChrName=%r）"
+                              % (before["count"], before["deleted"], chr_name))
+        if before["values"] == [level]:
+            res["action"] = "noop"
+            res["after_level"] = level
+            res["rc"] = 0
+            return res
+        upd = ("UPDATE `%s`.`characters` SET `Level` = %d WHERE `Id` = %d;\n"
+               % (db, level, before["id"]))
+        res["sql"]["update"] = upd.strip()
+        out = sql("level.update", upd)
+        if str(out).strip() not in ("1", ""):
+            raise ConfigError("等级夹具 UPDATE 影响了 %r 行（期望 1）" % str(out).strip())
+        after = _parse_assets_row(sql("level.verify", read_sql), 1)
+        res["after_level"] = after["values"][0]
+        if after["values"] != [level]:
+            raise ConfigError("等级夹具读回与目标不符：Level=%r != %r"
+                              % (after["values"][0], level))
+        if before["fp"] != after["fp"]:
+            raise ConfigError("等级夹具写后其它列指纹变化（连带写坏）")
+        res["action"] = "updated"
+        res["rc"] = 0
+        return res
+    except (ConfigError, OSError) as e:
+        res["error"] = "等级夹具失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def level_evidence(res):
+    """可落盘的等级夹具证据：剔除所有 `_` 前缀键（`_session` 含口令/argv），并二次脱敏。"""
+    if not res:
+        return res
+    out = {k: v for k, v in res.items() if not str(k).startswith("_")}
+    blob = json.dumps(out, ensure_ascii=False)
+    if "--password" in blob or '"password"' in blob:
+        # 理论上不会发生；防御性兜底，绝不把口令写进证据。
+        out["redacted"] = True
+        for k in list(out):
+            if isinstance(out[k], str) and "--password" in out[k]:
+                out[k] = _redact_argv([out[k]])[0]
+    return out
+
+
+def restore_level_fixture(runner, res, env, timeout=120):
+    """停栈后把 `Level` 还原到写前值并**重读**校验；失败返回错误串（调用方升级 rc=2）。"""
+    if not res or res.get("action") not in ("updated",):
+        return None
+    try:
+        sess = res.get("_session") or {}
+        client = sess.get("client")
+        db = res.get("db")
+        argv = sess.get("argv")
+        if not client or not db or not argv:
+            return "等级夹具还原缺少连接信息"
+        upd = ("UPDATE `%s`.`characters` SET `Level` = %d WHERE `Id` = %d;\n"
+               % (db, int(res["before_level"]), int(res["player_id"])))
+        rc, out, err = runner.run(res["side"], "level.restore", argv, env=env,
+                                  timeout=timeout, stdin_text=upd, capture=True)
+        if rc != 0:
+            return "等级夹具还原 UPDATE 失败（mysql rc=%s）：%s" % (
+                rc, (err or out or "").strip()[:300])
+        rc, out, err = runner.run(res["side"], "level.restore_verify", argv, env=env,
+                                  timeout=timeout, stdin_text=res["sql"]["read"], capture=True)
+        if rc != 0:
+            return "等级夹具还原后读回失败（mysql rc=%s）" % rc
+        after = _parse_assets_row(out, 1)
+        if after["values"] != [int(res["before_level"])]:
+            return "等级夹具还原后 Level=%r != 写前 %r" % (
+                after["values"][0], res["before_level"])
+        return None
+    except (ConfigError, OSError, ValueError, KeyError) as e:
+        return "等级夹具还原失败：%s" % e
+
+
 def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
     """起栈前应用**全部**窗口夹具（怪物 + 文件），对**每个根**（基线 + hook 影子）各写一份。
 
@@ -4012,6 +4152,7 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
     os.makedirs(db_dir, exist_ok=True)
 
     stack_attempted = False
+    level_state = None  # 等级夹具的内存态（含凭据）；落盘只用 level_evidence()
     try:
         # 1) 恢复基线
         restore_argv = expand_argv(sc["restore"], ctx)
@@ -4104,6 +4245,22 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             if fres.get("rc") != 0:
                 res["error"] = fres.get("error") or "窗口夹具失败"
                 return res
+            # 等级夹具（DB 侧）：restore 之后、起栈之前；写前快照 + 读回 + 停栈后还原。
+            if fixtures_decl.get("level") is not None:
+                lres = run_level_fixture(runner, side, prof, sc, fixtures_decl["level"],
+                                         env, side_dir)
+                level_state = lres
+                try:
+                    write_json_file(os.path.join(side_dir, "level.json"),
+                                    level_evidence(lres))
+                except OSError as e:
+                    lres["error"] = ((lres.get("error") or "") + "；写 level.json 失败：%s"
+                                     % e).strip("；")
+                    lres["rc"] = 2
+                res["level"] = level_evidence(lres)
+                if lres.get("rc") != 0:
+                    res["error"] = lres.get("error") or "等级夹具失败"
+                    return res
 
         # 2) 起栈前端口检查（有人占 => rc=2 并点名 pid；不启动栈）
         busy = check_ports_free(sc.get("ports") or [])
@@ -4279,6 +4436,19 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                 pass
             if ferr:
                 msg = "窗口夹具还原失败：%s" % ferr
+                res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
+                if res["rc"] == 0:
+                    res["rc"] = 2
+        # 8c) 还原等级夹具（DB）：停栈后把 Level 写回并**重读**校验；失败该侧 rc=2。
+        if res.get("level"):
+            lerr = restore_level_fixture(runner, level_state, env)
+            res["level"]["restore_error"] = lerr
+            try:
+                write_json_file(os.path.join(side_dir, "level.json"), res["level"])
+            except OSError:
+                pass
+            if lerr:
+                msg = "等级夹具还原失败：%s" % lerr
                 res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
                 if res["rc"] == 0:
                     res["rc"] = 2
@@ -6596,6 +6766,157 @@ def _selftest_fixtures(tmp):
     return out
 
 
+def _selftest_level_fixture(tmp):
+    """卡 openmir2-window-fixture-level-items：level 声明（解析/负例/对称/dry-run/写读回/还原）。"""
+    out = []
+    good = {"level": 43, "note": "t118 前置 checklevel 43"}
+    d = _validate_fixture_decl(dict(good), "selftest.fixtures")
+    out.append((d.get("level") == 43,
+                "LEVEL1 声明 level=43 => 解析透传（note 不参与）"))
+    ok_edges = all(_validate_fixture_decl({"level": v}, "x").get("level") == v
+                   for v in (1, 255))
+    out.append((ok_edges, "LEVEL1b 边界 1 与 255 放行"))
+
+    bad_ok = True
+    for v in (0, 256, -1, True, "43", 43.5, None):
+        try:
+            _validate_fixture_decl({"level": v}, "x")
+            bad_ok = False
+        except ConfigError as ex:
+            if "1..255" not in str(ex):
+                bad_ok = False
+    out.append((bad_ok, "LEVEL 牙1 level 0/256/负数/bool/字符串/浮点/null => ConfigError 点名 1..255"))
+
+    # 未知键仍 fail-closed（level 加入后不得放宽）
+    try:
+        _validate_fixture_decl({"levels": 43}, "x")
+        unknown_ok = False
+    except ConfigError as ex:
+        unknown_ok = "levels" in str(ex) and "未知字段" in str(ex)
+    out.append((unknown_ok, "LEVEL 牙2 未知键 levels => ConfigError 点名"))
+
+    # 两侧 level 必须一致（文件三件套之外，DB 侧也纳入 symmetry key）
+    try:
+        _check_fixture_symmetry({"csharp": {"level": 43}, "rust": {"level": 44}})
+        sym_ok = False
+    except ConfigError as ex:
+        sym_ok = "不一致" in str(ex) and "level=44" in str(ex)
+    out.append((sym_ok, "LEVEL 牙3 两侧 level 不同 => ConfigError（对拍无效）"))
+
+    class _Dry:
+        dry_run = True
+
+        def __init__(self):
+            self.lines = []
+            self.calls = []
+
+        def log(self, t):
+            self.lines.append(t)
+
+        def run(self, *a, **k):
+            self.calls.append(a)
+            return 0, "", ""
+
+    class _R:
+        dry_run = False
+
+        def __init__(self, read_level=1, verify_level=43, restore_level=1,
+                     restore_ok=True):
+            self.read_level = read_level
+            self.verify_level = verify_level
+            self.restore_level = restore_level
+            self.restore_ok = restore_ok
+            self.tags = []
+
+        def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None,
+                capture=True):
+            self.tags.append(tag)
+            if tag == "level.columns":
+                return 0, "Id\nChrName\nLoginID\nLevel\nDeleted\n", ""
+            if tag in ("level.read",):
+                return 0, "1\t6228\t%d\t%s\t0\n" % (self.read_level, "a" * 32), ""
+            if tag == "level.update":
+                return 0, "1\n", ""
+            if tag == "level.verify":
+                return 0, "1\t6228\t%d\t%s\t0\n" % (self.verify_level, "a" * 32), ""
+            if tag == "level.restore":
+                return 0, "1\n", ""
+            if tag == "level.restore_verify":
+                return 0, "1\t6228\t%d\t%s\t0\n" % (
+                    self.restore_level if self.restore_ok else 99, "a" * 32), ""
+            return 1, "", "unexpected tag %s" % tag
+
+    prof = {"char_name": "winplay0", "account": "winplay0",
+            "sides": {"csharp": {"db": {"characters_db": "mir2_test_db"}}}}
+    sc = prof["sides"]["csharp"]
+    orig = (globals()["_check_db_pairing"], globals()["placement_envir_root"],
+            globals()["placement_characters_db"], globals()["placement_db_client"])
+    globals()["_check_db_pairing"] = lambda *a, **k: None
+    globals()["placement_envir_root"] = lambda *a, **k: tmp
+    globals()["placement_characters_db"] = lambda side, sc_: "mir2_test_db"
+    globals()["placement_db_client"] = lambda prof_, side_: {
+        "mysql": [DEFAULT_MYSQL], "host": "127.0.0.1", "port": 3306,
+        "user": "root", "password": ""}
+    try:
+        dr = _Dry()
+        dres = run_level_fixture(dr, "csharp", prof, sc, 43, {}, tmp)
+        out.append((dres.get("rc") == 0 and dres.get("action") == "dry-run"
+                    and any("dry-run 不连库" in l and "Level=43" in l for l in dr.lines)
+                    and not dr.calls,
+                    "LEVEL2 dry-run：打印 UPDATE 预览且不执行任何 mysql"))
+
+        r = _R()
+        res = run_level_fixture(r, "csharp", prof, sc, 43, {}, tmp)
+        restored = restore_level_fixture(r, res, {})
+        out.append((res.get("rc") == 0 and res.get("action") == "updated"
+                    and res.get("before_level") == 1 and res.get("after_level") == 43
+                    and restored is None and "level.restore" in r.tags
+                    and "level.restore_verify" in r.tags,
+                    "LEVEL3 生产路径：写前 1 -> 写 43 -> 读回 43；停栈后还原并重读为 1"))
+
+        # LEVEL 牙6（review Minor）：凭据不得进证据 dict / level.json
+        globals()["placement_db_client"] = lambda prof_, side_: {
+            "mysql": [DEFAULT_MYSQL], "host": "127.0.0.1", "port": 3306,
+            "user": "root", "password": "SECRETPW"}
+        r_sec = _R()
+        res_sec = run_level_fixture(r_sec, "csharp", prof, sc, 43, {}, tmp)
+        ev = level_evidence(res_sec)
+        blob = json.dumps(ev, ensure_ascii=False)
+        raw_blob = json.dumps(res_sec, ensure_ascii=False, default=str)
+        out.append(("_session" in res_sec and "_session" not in ev
+                    and "SECRETPW" not in blob and "--password" not in blob
+                    and "SECRETPW" in raw_blob,
+                    "LEVEL 牙6 凭据只留在内存 _session：level_evidence/level.json 不含 "
+                    "--password/SECRETPW（原始 res 里确有此值，证明牙有效）"))
+
+        r_noop = _R(read_level=43)
+        noop = run_level_fixture(r_noop, "csharp", prof, sc, 43, {}, tmp)
+        out.append((noop.get("rc") == 0 and noop.get("action") == "noop"
+                    and "level.update" not in r_noop.tags,
+                    "LEVEL3b 已是目标等级 => noop（不打 UPDATE）"))
+
+        r_bad = _R(verify_level=42)
+        bad = run_level_fixture(r_bad, "csharp", prof, sc, 43, {}, tmp)
+        out.append((bad.get("rc") == 2 and "读回与目标不符" in (bad.get("error") or ""),
+                    "LEVEL 牙4 写后读回不符 => rc=2"))
+
+        r_restore_bad = _R(restore_ok=False)
+        res_rb = run_level_fixture(r_restore_bad, "csharp", prof, sc, 43, {}, tmp)
+        err = restore_level_fixture(r_restore_bad, res_rb, {})
+        out.append((err is not None and "还原后 Level" in err,
+                    "LEVEL 牙5 还原后重读不符 => 返回错误（调用方升级 rc=2）"))
+    finally:
+        (globals()["_check_db_pairing"], globals()["placement_envir_root"],
+         globals()["placement_characters_db"], globals()["placement_db_client"]) = orig
+
+    import inspect
+    src = inspect.getsource(run_side)
+    out.append(("run_level_fixture(" in src and "restore_level_fixture(" in src
+                and src.index("run_level_fixture(") < src.index('"stack"'),
+                "LEVEL4 接线：run_side 起栈前应用 level，finally 还原"))
+    return out
+
+
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
     stub = os.path.join(tmp, "stub.py")
@@ -8247,6 +8568,8 @@ def selftest():
         for cond, msg in _selftest_inventory_reachability(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_assets(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_level_fixture(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_fixtures(tmp):
             chk(cond, msg)
