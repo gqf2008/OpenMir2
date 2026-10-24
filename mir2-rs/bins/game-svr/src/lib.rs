@@ -70281,6 +70281,365 @@ fn ",
     fn clearmapmon_then_mongenex_via_merchant_dialog_path() {
         run_clear_then_mongen_sequence("T118", "命运教主", 14, 17, false);
     }
+
+    // ---- CM_DROPGOLD / CM_BUTCH 深体 RNG 合同（卡 `openmir2-inbound-dropgold-rng`，tier R） ----
+
+    /// 卡 `openmir2-inbound-dropgold-rng` 的派发夹具：`hero` 落格 + `corpse`（动物尸）+ 帧表 + 种子。
+    ///
+    /// 返回 `(world, hero, corpse, sessions, online, gates, rx, cfg, displays, pwd_sessions)`；
+    /// 调用方在首个 `world.tick()`（落格）之后才可重设 `world.rng`（`Enter` 本身不抽数，
+    /// 但夹具统一在落格后钉种子，避免把落格序算进流位）。
+    #[allow(clippy::type_complexity)]
+    fn dropgold_butch_rig(
+        seed: i32,
+        with_corpse: bool,
+    ) -> (
+        mir2_world::World,
+        i32,
+        i32,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        GroundCfg,
+        downlink::DisplayTable,
+        std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    ) {
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.want_ref_msg = true;
+            e
+        });
+        let mut corpse_id = 0;
+        if with_corpse {
+            // (12,9)：`|Δx|=2` 恰在闭边界；race 53 = AnimalWolf（`Animal` 且 ∈ [50,80)）。
+            let mut corpse = mir2_world::Entity::new(0, "corpse", 12, 9);
+            corpse.race = 53;
+            corpse.death = true;
+            corpse.ai.dir = 5;
+            corpse_id = world.add_entity(corpse);
+        }
+        // 落格（`Envir.IsValidObject` 读格内成员关系），随后钉种子。
+        world.tick();
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+
+        let mut sg = test_session_ground(hero);
+        sg.state.gold = 1_000;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, 255, Vec::new()),
+        );
+        if with_corpse {
+            displays.set(
+                corpse_id,
+                downlink::ActorDisplay::new(5, 0, 0x0A_1234, 0, 0, 255, b"corpse".to_vec()),
+            );
+        }
+        let pwd_sessions = std::collections::HashMap::new();
+        (
+            world,
+            hero,
+            corpse_id,
+            sessions,
+            online,
+            gates,
+            rx0,
+            cfg,
+            displays,
+            pwd_sessions,
+        )
+    }
+
+    /// 取 `world.rng` 之后的 `n` 个抽数（用于逐位比较流位）。
+    fn rng_probe(rng: &mut mir2_shared::rng::RandomNumber, n: usize) -> Vec<i32> {
+        (0..n).map(|_| rng.random_below(1_000_000)).collect()
+    }
+
+    /// **判据 A（R 片）**：`CM_DROPGOLD` 深体**零抽数**——oracle `ClientDropGold`
+    /// （`PlayObject.Operate.cs:222-249`）→ `DropGoldDown`（`BaseObject.cs:735-771`）→
+    /// `GetDropPosition`（`BaseObject.cs:470-527`，纯确定性格扫，**无 `Random`**）→
+    /// `AddItemToMap`（`Envirnoment.cs:88-96`）**首行 `ItemId == 0 ⇒ false`**，而
+    /// `MapItem` 的 ctor 已把 `ItemId` 自增**注释掉**（`SystemModule/Data/MapItem.cs:39-42`）
+    /// ⇒ `DropGoldDown` **恒 false**（BUG-REPLICA 2）⇒ 金币净不变，但 `GoldChanged()` 照发。
+    ///
+    /// 本用例钉三件事：① 世界 RNG 流位**逐位不变**（= 0 抽）；② 653 帧的 `Recog` = 净金币（不变）；
+    /// ③ 金币数只取 `recog`（wire：`MakeMessage(CM_DROPGOLD, dropgold, …)`，`RobotPlayer.cs:4898`），
+    /// `param/tag/series` 不参与。
+    ///
+    /// 牙（实测）：在派发臂里插一次 `world.rng.random_below(2)` ⇒ ①红；把 `client_drop_gold`
+    /// 的净金币改成 `gold - n_gold` ⇒ ②红。
+    #[test]
+    fn cm_dropgold_deep_body_draws_zero_rng_and_emits_goldchanged() {
+        const SEED: i32 = 20_261_025;
+        let (
+            mut world,
+            _hero,
+            _corpse,
+            mut sessions,
+            online,
+            gates,
+            mut rx,
+            cfg,
+            displays,
+            mut pwd,
+        ) = dropgold_butch_rig(SEED, false);
+        let mut probe = world.rng.clone();
+
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: 300, // nGold（wire：recog = nParam1）
+                ident: mir2_protocol::messages::CM_DROPGOLD,
+                param: 7,  // 不参与（三值互异，防字段错位假绿）
+                tag: 8,    // 不参与
+                series: 9, // 不参与
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            None,
+            &mut pwd,
+            &cfg,
+            &displays,
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+        );
+
+        let frames = drain_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "过门 ⇒ 恰好一条 SM_GOLDCHANGED");
+        let f = &frames[0];
+        assert_eq!(
+            u16::from_le_bytes([f[4], f[5]]),
+            mir2_protocol::messages::SM_GOLDCHANGED
+        );
+        assert_eq!(
+            i32::from_le_bytes([f[0], f[1], f[2], f[3]]),
+            1_000,
+            "Recog = 净金币（BUG-REPLICA 2：减了又加回 ⇒ 不变，牙=改成真扣则红）"
+        );
+        assert_eq!(sessions["hero"].state.gold, 1_000, "会话金币净不变");
+
+        let after = rng_probe(&mut world.rng, 16);
+        let expect = rng_probe(&mut probe, 16);
+        assert_eq!(after, expect, "CM_DROPGOLD 深体必须零抽数（流位逐位相同）");
+    }
+
+    /// **判据 B**：`CM_DROPGOLD` 的另两道门同样零抽数、零金币副作用——
+    /// `nGold >= Gold` ⇒ 静默 return（零帧）；`ControlDropItem && nGold < CanDropGold`
+    /// ⇒ `SM_MENU_OK(767)` 拒绝且金币不变。
+    ///
+    /// 牙（实测）：删 `client_drop_gold` 的 `nGold >= Gold` 门 ⇒ 第一段红（多一条 653）。
+    #[test]
+    fn cm_dropgold_gates_draw_zero_rng() {
+        const SEED: i32 = 20_261_026;
+        // ① nGold == Gold ⇒ 零帧、零抽数。
+        let (mut world, _hero, _c, mut sessions, online, gates, mut rx, cfg, displays, mut pwd) =
+            dropgold_butch_rig(SEED, false);
+        let mut probe = world.rng.clone();
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: 1_000,
+                ident: mir2_protocol::messages::CM_DROPGOLD,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            None,
+            &mut pwd,
+            &cfg,
+            &displays,
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+        );
+        assert!(drain_frames(&mut rx).is_empty(), "nGold >= Gold ⇒ 零出帧");
+        assert_eq!(rng_probe(&mut world.rng, 8), rng_probe(&mut probe, 8));
+
+        // ② ControlDropItem ⇒ 500 < 1000 被拒 ⇒ SM_MENU_OK(767)，金币不变、零抽数。
+        let (mut world, _hero, _c, mut sessions, online, gates, mut rx, mut cfg, displays, mut pwd) =
+            dropgold_butch_rig(SEED, false);
+        cfg.control_drop_item = true;
+        let mut probe = world.rng.clone();
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: 500,
+                ident: mir2_protocol::messages::CM_DROPGOLD,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            None,
+            &mut pwd,
+            &cfg,
+            &displays,
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+        );
+        let frames = drain_frames(&mut rx);
+        assert_eq!(frames.len(), 1, "拒绝 ⇒ 一条 SM_MENU_OK");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_MENU_OK
+        );
+        assert_eq!(sessions["hero"].state.gold, 1_000);
+        assert_eq!(rng_probe(&mut world.rng, 8), rng_probe(&mut probe, 8));
+    }
+
+    /// **判据 C（ButchEffect RNG，与 DROPGOLD 同一条 `M2Share.RandomNumber` 流）**：
+    /// `ClientGetButchItem` 效果体（`PlayObject.Operate.cs:722-723`）**先 `Random(16)+5`、
+    /// 后 `Random(201)+100`**；本仓 `World::butch_effect_now` 已按该序接线（`CM_BUTCH` ⇒
+    /// `Command::ButchEffect` ⇒ tick 结算）。本用例从**生产派发面**钉：同 seed 的抽数逐位一致、
+    /// 恰两次、状态落值正确、流位停在第二抽之后。
+    ///
+    /// 牙（实测）：把两抽对调 ⇒ 状态断言红；删第二抽（常量顶替）⇒ 流位断言红。
+    #[test]
+    fn cm_butch_effect_two_draw_sequence_is_bit_exact() {
+        const SEED: i32 = 20_261_027;
+        let (mut world, hero, corpse, mut sessions, online, gates, _rx, cfg, displays, mut pwd) =
+            dropgold_butch_rig(SEED, true);
+        {
+            let e = world.entities.get_mut(corpse).unwrap();
+            e.ai.body_leathery = 255;
+            e.ai.meat_quality = 2_000;
+        }
+        let mut probe = world.rng.clone();
+        let d1 = u8::try_from(probe.random_below(16) + 5).unwrap();
+        let d2 = u16::try_from(probe.random_below(201) + 100).unwrap();
+        let tail = rng_probe(&mut probe, 8);
+
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: corpse,
+                ident: mir2_protocol::messages::CM_BUTCH,
+                param: 12,
+                tag: 9,
+                series: 4,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            None,
+            &mut pwd,
+            &cfg,
+            &displays,
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+        );
+        assert_eq!(world.entities.get(hero).unwrap().ai.dir, 4);
+        let rec = world.tick();
+        assert_eq!(rec.skeletons.len(), 0, "255-d1 > 0 ⇒ 不出骨架");
+
+        let e = world.entities.get(corpse).unwrap();
+        assert_eq!(
+            e.ai.body_leathery,
+            255u8.wrapping_sub(d1),
+            "第 1 抽 = Random(16)+5"
+        );
+        assert_eq!(
+            e.ai.meat_quality,
+            2_000u16.wrapping_sub(d2),
+            "第 2 抽 = Random(201)+100"
+        );
+        assert_eq!(
+            rng_probe(&mut world.rng, 8),
+            tail,
+            "恰好两次抽数：流位停在第二抽之后（逐位）"
+        );
+    }
+
+    /// **判据 D**：`CM_BUTCH` 的门未过（`|Δ|>2`）⇒ 效果体不执行 ⇒ **零抽数**（流位不变），
+    /// `RM_BUTCH` 仍发（`Operate.cs:749` 无条件）。
+    #[test]
+    fn cm_butch_gate_fail_draws_zero_rng() {
+        const SEED: i32 = 20_261_028;
+        let (mut world, _hero, corpse, mut sessions, online, gates, _rx, cfg, displays, mut pwd) =
+            dropgold_butch_rig(SEED, true);
+        let before = world.entities.get(corpse).unwrap().ai.body_leathery;
+        let mut probe = world.rng.clone();
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: corpse,
+                ident: mir2_protocol::messages::CM_BUTCH,
+                param: 20, // |20-10| = 10 > 2
+                tag: 9,
+                series: 4,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            None,
+            &mut pwd,
+            &cfg,
+            &displays,
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+        );
+        let rec = world.tick();
+        assert_eq!(rec.butches.len(), 1, "RM_BUTCH 无条件发");
+        assert_eq!(
+            world.entities.get(corpse).unwrap().ai.body_leathery,
+            before,
+            "门未过 ⇒ 效果体不执行"
+        );
+        assert_eq!(
+            rng_probe(&mut world.rng, 8),
+            rng_probe(&mut probe, 8),
+            "零抽数"
+        );
+    }
 }
 
 #[cfg(test)]
