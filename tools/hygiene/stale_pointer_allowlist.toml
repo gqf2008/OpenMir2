@@ -30,3 +30,58 @@ reason = "drift-sweep 报告 §2 表第 10 行：「原说法」列逐字引用 
 path = "docs/rewrite-remaining-inventory-20261022.md"
 line_sha256 = "7a72837d97499a1da781cc850a9ca9211b9095632dbff703c2641a357895a5e0"
 reason = "2026-10-22 时点的「在飞/待审」清单快照（§O）：记录当时 wt-gm3 的分支 head 与未提交修改；「未接项」指 RNG 项，不是对该 commit 的合入断言。改写即伪造历史。"
+
+# Second-run classification (card-status class, 2026-10-24): every entry below
+# is a **dated snapshot** whose line records the card state as of that day.
+# The card has since been claimed / merged / closed; the line is kept because
+# rewriting a dated record falsifies the audit trail, not because it is right.
+
+[[allow]]
+path = "docs/docs-state-drift-sweep-20261024.md"
+line_sha256 = "652a6272bf47c0179d22c5956a1eac9c13b528f075e034b31266222a122091b0"
+reason = "drift-sweep §2 表第 15 行的「订正」列逐字记录当时结论（openmir2-sm-reconnect-wiring 已合 283a27460、openmir2-sm-skeleton-wiring 在办、场景分支 card/openmir2-dualrun-window-burndown 已合 33b40970）；这几张卡现在都带 merge_result（或已 closed），「在办」仍是 sm-skeleton-wiring 的卡最新 status，只因「存在任一 merge_result ⇒ 红」被判红。整表的用途是把旧说法与订正并列，改写订正列即伪造当时结论。"
+
+[[allow]]
+path = "docs/m3-remaining-inventory-20261022.md"
+line_sha256 = "2fd5414c583b946796b053a44f9600476d6f67f02037089a3f171e9b5a81d1f1"
+reason = "2026-10-22 时点的 M3 实现盘点快照：openmir2-monster-run-overrides 的实现至今未开（卡最新 status 仍写「实现未开」），行文准确；该卡只因设计件 dce6642f4（2026-10-17 21:30+08，早于本行 blame 2026-10-20 21:22+08）带来 merge_result 而被「存在任一 merge_result ⇒ 红」判红，故保留原话。时点盘点表改写即伪造历史。"
+
+[[allow]]
+path = "docs/r-window-registry-batch-1-20261023.md"
+line_sha256 = "3e12fd35985fd2c965061c145a8929b02c2095f44a35555586b964b1f04c2aeb"
+reason = "2026-10-23 R 窗口批次登记表：openmir2-scenario-spell-cast 在登记时点 needs-review（未合）；该卡由 b13b29e39 合入并于 2026-10-23 closed；blame 14:49Z 早于首次 merge_result 14:58Z 9 分钟，属登记时点快照。登记表是合并前置的审计快照，不按事后状态改写。"
+
+[[allow]]
+path = "docs/r-window-registry-batch-1-20261023.md"
+line_sha256 = "fc0895586ae72d37625942e3484cc1b203626141abd81fda96d027e26d7c56d1"
+reason = "同上（docs/r-window-registry-batch-1-20261023.md 第 69 行）：2026-10-23 登记时点对 openmir2-scenario-spell-cast 的未合状态，该卡其后（同日 14:58Z）合入并 closed。"
+
+[[allow]]
+path = "docs/r-window-registry-batch-1-20261023.md"
+line_sha256 = "04c9852cf520b0b0f105d1cc784e55b73e0e2aae65ace93c4c52c018290bf3c9"
+reason = "同上（docs/r-window-registry-batch-1-20261023.md 第 70 行）：2026-10-23 登记时点对 openmir2-scenario-spell-cast 的未合状态，该卡其后（同日 14:58Z）合入并 closed。"
+
+[[allow]]
+path = "docs/session-summary-20261023.md"
+line_sha256 = "075fbaf90baf6d43dbad4c8b56dab4ff937dfa2d67d5d2f3d1c0991c02927a2e"
+reason = "2026-10-23 会话纪要：记录当班看板状态（openmir2-script-sendmsg-host 当时待认领）；该卡已在 01d4f5877 合入（R 卡不 closed）。纪要是历史记录。"
+
+[[allow]]
+path = "docs/tmp-cleanup-proposal-20261017.md"
+line_sha256 = "fbdaf6bb0d40806972b1b3586784775a4a97cd6d850d3e518c00468bba5797e3"
+reason = "2026-10-17 清理提案抬头：逐字引用当时的看板列（待认领）与 issue entry oid 作出处；提案已入库 dace76511，删除仍待 owner 签字。改写抬头会破坏提案与看板的对应。"
+
+[[allow]]
+path = "docs/window-round3-runbook-20261021.md"
+line_sha256 = "0d6931a2a4d9c29ed1c843669ff74fa1e8e62660e219d8d2111832d65ef15384"
+reason = "2026-10-21 窗口 r3 运行手册：当时 openmir2-merchant-race-bias 只在 /e/tmp/wt-mrace 工作树、未提交；该卡已于 a8ff9fdf9 合入（R 卡等窗口）。运行手册是当日 BLOCKED 判定证据，不能事后改写。"
+
+[[allow]]
+path = "docs/window-round3-runbook-20261021.md"
+line_sha256 = "71b6f6495f667be803d8bc9dfeca92622ac38a17bd7346ee081dc7f9c194d7df"
+reason = "同上（docs/window-round3-runbook-20261021.md 第 1034 行）：2026-10-21 当日对 openmir2-merchant-race-bias 未合入的 BLOCKED 记录，该卡其后合入。"
+
+[[allow]]
+path = "docs/交接-OpenMir2编排与联调-20261015.md"
+line_sha256 = "a1ba94d8e04b12e59ff51f954384ff05cb5367b279d6ad99397c322a95706dad"
+reason = "2026-10-15 交接清单：记的是当时看板【待认领】的 M5 五项；openmir2-m5-convergence-drills 其后已认领、阶段0 已合入 2f0b102c5。交接文档是时点记录。"

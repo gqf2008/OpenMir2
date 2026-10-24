@@ -27,7 +27,7 @@
 | G2 | 预构建二进制 ↔ 构建源出处 | provenance `source_head=ab44031ce…`，六件 exe sha256 与清单逐字节一致 | **GREEN 但过期**（R7 自洽；源不是基线） |
 | G3 | 九游戏端口全 DOWN / 7600 DOWN / 3306 UP | 九游戏端口**全部 LISTENING**（外部 C# 全栈），7600 DOWN，3306 UP | **RED**（R8） |
 | G4 | 测试库 `mir2_test_*` 已从生产克隆 | 三库存在，表数 11/13/7，关键表行数 7338/7477/1000 与生产相等 | **GREEN**（手工只读 SQL；`preflight.py` P3 自身有 bug，见 §1.6） |
-| G5 | `openmir2-merchant-race-bias` 已合入构建源 | **未合入**：只在 `/e/tmp/wt-mrace` 工作树里，`entity.rs`/`merchant.rs` 未提交 | **BLOCKED**（§2.5） |
+| G5 | `openmir2-merchant-race-bias` 已合入构建源 | **未合入**：只在 `/e/tmp/wt-mrace` 工作树里，`entity.rs`/`merchant.rs` 未提交 | **BLOCKED**（§2.5） 〔2026-10-24 订正：该卡已随 `a8ff9fdf9` 合入 master；本行为 2026-10-21 18:35(+08) 当日 BLOCKED 记录〕 |
 | G6 | 城堡 SuperMan 门/墙伤害路径内容可达 | 部署件 `Castle/Castle/SabukW.txt` 的门/墙名不在怪物库 ⇒ 启动 **0 个城堡实体**；12 项掩码无客户端可达的直接 Die 入口 | **BLOCKED**（§2.6） |
 
 > **一句话**：当前二进制是 `ab44031ce`（2026-10-21 11:34 构建），**本轮六条判据要收的修复全都不在里面**

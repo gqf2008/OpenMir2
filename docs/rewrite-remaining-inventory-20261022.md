@@ -373,7 +373,7 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 | 115 | `openmir2-m3-drop-exp-wiring` | openmir2-worker-22@land/worktree-redlist-x2 | 余量：真机 100 杀两相窗口（依赖 T-59 rng-scene 已落）+ quest 真机窗口 |
 | 116 | `openmir2-m3-rng-scene-driver` | openmir2-worker-22@land/worktree-redlist-x1 | 余量：真机两侧账本对拍（W9 窗）+ BotSrv real wiring（进 0137/pin 怪/dump，属 W9 窗项） |
 | 117 | `openmir2-npcs-fixed-loading` | openmir2-worker-22@land/worktree-redlist-t1-npcs | 剩余 DoD = 真机两侧 NPC 出现帧一致（并入联调窗，与 ③a/GuardList 同窗） |
-| 118 | `openmir2-m3-quest-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑥（master 未动）：仍 BLOCKED，三重阻断与 r2 相同：①markers 前缀口径（卡 openmir2-m3-fixture-marker-prefix-bug 未认领）②C# k=0 frame 事件 JSON 截… |
+| 118 | `openmir2-m3-quest-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑥（master 未动）：仍 BLOCKED，三重阻断与 r2 相同：①markers 前缀口径（卡 openmir2-m3-fixture-marker-prefix-bug 未认领）②C# k=0 frame 事件 JSON 截… 〔2026-10-24 订正：该卡 2026-10-13 07:21Z 已认领，markers 前缀子项随 `9ff7ff064`（2026-10-13 15:38+08）合入，余量为真机窗口、卡保持 in-progress；本行其余为 2026-10-22 时点记录〕 |
 | 119 | `openmir2-guardlist-guards-loading` | openmir2-worker-22@guardlist/worktree-guardlist-loading | 剩余 DoD = 真机两侧项：③a 反向点出现帧一致（C# 侧现 1 对、修复后应两侧同）+ MIR2_RNG_SEED 双侧 site/order 对拍——并入下次联调窗口（与 ③b/③a 复跑同窗） |
 | 120 | `openmir2-m3-drop-exp-fixture-botsrv` | openmir2-worker-11@m2-svr/worktree-m3-drop-exp-fixture-botsrv | **保持 in-progress（离线夹具片，不 closed）**：本 approve 只覆盖离线夹具/接线/登记片，卡级真机 DoD③⑤ = 真机两侧 100 杀同序列 diff=0 + drop_exp_purity_gate 实测（阻塞 = owner -Go 独占窗口 + shared 承… |
 | 121 | `openmir2-m3-hero-pet-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑨（master 未动）：PREREQ（静态） |

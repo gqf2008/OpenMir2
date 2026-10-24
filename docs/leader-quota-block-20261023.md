@@ -19,7 +19,7 @@ model sent to the API: glm-5.3-flash
 | reviewer-3 | `openmir2-weapon-durability-frames` | 「所有检查已完成，正在撰写复审」——**验证做完、review 未发** | 重发即可（结论已在上下文里） |
 | reviewer-10 | `openmir2-dualrun-window-burndown` | 「三项牙全部 fail-closed 确认，准备 767 活机复跑」——验证做完、**review 未发** | 重发即可；767 复跑可改由 Leader 或新 agent 做 |
 | reviewer-6 | `openmir2-sm-reconnect-wiring` | 刚恢复到「复审 I-1 金种子三路法」 | 重新起复审 |
-| worker-52 | `openmir2-monster-showhp-53-broadcast` | 刚收到「补 R3-1a 用例」指令，未开工 | 重新派 |
+| worker-52 | `openmir2-monster-showhp-53-broadcast` | 刚收到「补 R3-1a 用例」指令，未开工 | 重新派 〔2026-10-24 订正：该卡已于 2026-10-23 12:05(+08) 合入 `ca7cb5acc`；「未开工」是 10-23 11:49 的时点状态〕 |
 
 ## 已确认落地、不受影响的
 

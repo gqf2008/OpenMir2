@@ -210,7 +210,7 @@ VERDICT: PASS (exit 0)                  # rc=0
 - `rules.json` 在本卡**禁止改**（「改规则 = 改判据，必须走评审」，见 `rules.json` 的 `note` 与
   `compare_runs.py:65-66`）。
 - 可行两条路（**都要 owner/评审拍板，本卡不实施**）：
-  1. 建议 id `openmir2-spell-frame-compare-rules`（**未开**）：给 `53/638/639` 各写一条
+  1. 建议 id `openmir2-spell-frame-compare-rules`（**未开**）〔2026-10-24 订正：该 id 已立卡并在 `89a3d02fd` 合入 master（tier=L，approve reviewer-3 `0b8dec26`）；`rules.json` 已补 53/638/639〕：给 `53/638/639` 各写一条
      `action: compare`（逐字节比，不掩码）——首选，因为这三帧都是确定性帧
      （53 = hp/mp；638 = 坐标+ActorId 的 EDCode 体；639 = header-only + Recog）；
   2. 或在**开窗 profile** 的 `compare_extra` 里加 `["--allow-unclassified","53,638,639"]`
@@ -234,7 +234,7 @@ VERDICT: PASS (exit 0)                  # rc=0
    现在默认 `alt` 是 **rc=2 fail-closed**）——建议 drift-sweep 一并订正为「`requires:["magic"]` 已 fail-closed，
    默认 alt 直接 rc=2」。
 4. 17 的未来覆盖：见 §1.3 的最小要求与建议 id（`openmir2-spell-second-observer`，未开）。
-5. 比较器规则：建议 id `openmir2-spell-frame-compare-rules`（未开）；或 profile `compare_extra` 方案（§3.2）。
+5. 比较器规则：建议 id `openmir2-spell-frame-compare-rules`（未开）；或 profile `compare_extra` 方案（§3.2）。〔2026-10-24 订正：该 id 已立卡并在 `89a3d02fd` 合入 master（tier=L），`rules.json` 已补 53/638/639〕
 
 ---
 
