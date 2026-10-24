@@ -2363,14 +2363,15 @@ def preview_inventory(runner, side, prof, sc, items, ctx):
     positions = sorted(int(i["position"]) for i in items)
     makes = sorted(int(i["make_index"]) for i in items)
     chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
     argv = _redact_argv(_mysql_argv(client))
     out["offline_check"] = {"envir_root": envir_root, "db": db, "db_pairing": pairing,
                             "positions": positions, "make_index": makes,
                             "char_name": chr_name}
     out["commands"] = [
         {"argv": argv,
-         "stdin": "SELECT COUNT(*) FROM `%s`.`characters` WHERE ChrName=%r;"
-                  % (db, chr_name)},
+         "stdin": "SELECT COUNT(*), MIN(`Id`), `Deleted` FROM `%s`.`characters` "
+                  "WHERE ChrName=%r AND LoginID=%r;" % (db, chr_name, login_id)},
         {"argv": argv,
          "stdin": "INSERT/UPDATE `%s`.`characters_bagitem`（声明 %d 件：positions=%s "
                   "make_index=%s）" % (db, len(items), positions, makes)},
@@ -2432,6 +2433,17 @@ def preview_magic(runner, side, prof, sc, magic, ctx):
 #   (b) 脚本 GIVE 造物品 —— 不可行：脚本在登录后才跑，probe 的 discovery/click 早于它
 #   (c) GM `@造物` —— 不可行：Permission 恒 0
 # 预置必须发生在 restore 之后（restore 会复位库）且起栈之前（角色记录只在登录时读一次）。
+#
+# 卡 `openmir2-window-inventory-fixture-adapt`：基线实表是 **PlayerId 键**——
+# DESCRIBE mir2_db.characters_bagitem（mir2_test_db / mir2_test_db_r 同构）：
+#   Id(bigint PK auto) / PlayerId(bigint) / Position / MakeIndex / StdIndex / Dura / DuraMax
+# 没有 `ChrName` / `LoginID` / `Index` 列（首版夹具凭空预期了这三列，真库加载期必拒——
+# window-run-1 实锤 bag_equip/eat_item 15s 早退）。替代键方案：`PlayerId` =
+# `characters.Id`，由 profile 的 char_name/account 在 `characters` 表上解析
+# （ChrName+LoginID 唯一、未删除，与魔法夹具 `_magic_char_sql` 同口径）；物品模板号
+# 写 `StdIndex` 列，模板行按 `stditems.Id` 对（实表没有 `idx` 列）。
+# 两侧 db-srv 读包语义即 `SELECT * FROM characters_bagitem WHERE PlayerId=?`
+# （`mir2-rs/bins/db-srv/src/playdata.rs` get_item_slots），与 oracle 同键。
 #
 # 声明形态（场景顶层）：
 #   "inventory": [{"index": 100, "make_index": 5001, "position": 3,
@@ -2594,24 +2606,41 @@ def scenario_inventory(path):
     return out
 
 
-def inventory_fingerprint_sql(db, chr_name, login_id, columns, exclude_positions=()):
+def inventory_fingerprint_sql(db, player_id, columns, exclude_positions=()):
     """读该角色**其它槽位**的快照：行数 + 除声明列外其余列的 MD5 指纹。
 
     口径（review `c866f358` M-1）：预置只会写声明的槽位，所以「未声明的行有没有被
     动过」必须**排除声明槽位**来比 —— 否则新增行本身就会让聚合指纹变化，证明不了任何事。
     `exclude_positions` 非空时加 `Position NOT IN (…)`。
+    卡 `openmir2-window-inventory-fixture-adapt`：行键是 `PlayerId`（实表无 ChrName/LoginID）。
     """
-    skip = {"Id", "ChrName", "LoginID", "Index", "MakeIndex", "Position", "Dura", "DuraMax"}
+    skip = {"Id", "PlayerId", "MakeIndex", "Position", "StdIndex", "Dura", "DuraMax"}
     fp_cols = [c for c in columns if c not in skip]
-    fp = ", CHAR(31), ".join("IFNULL(CAST(`%s` AS CHAR), '~')" % c for c in fp_cols) or "''"
+    # 实表的列可能**全部**属于声明列（DESCRIBE mir2_db.characters_bagitem 就是这 7 列）；
+    # 此时没有可指纹的余列，退化为只比行数（`CONCAT_WS('')` 是单参调用，MySQL 直接报错）。
+    fp = ("COALESCE(MIN(MD5(CONCAT_WS(%s))), '')"
+          % ", CHAR(31), ".join("IFNULL(CAST(`%s` AS CHAR), '~')" % c for c in fp_cols)
+          ) if fp_cols else "''"
     excl = ""
     if exclude_positions:
         excl = " AND `Position` NOT IN (%s)" % ", ".join(str(int(x)) for x in exclude_positions)
     sql = (
-        "SELECT COUNT(*), COALESCE(MIN(MD5(CONCAT_WS(%s))), '')\n"
-        "FROM `%s`.`characters_bagitem` WHERE `ChrName` = %s AND `LoginID` = %s%s;\n"
-        % (fp, db, _sql_quote(chr_name), _sql_quote(login_id), excl))
+        "SELECT COUNT(*), %s\n"
+        "FROM `%s`.`characters_bagitem` WHERE `PlayerId` = %d%s;\n"
+        % (fp, db, int(player_id), excl))
     return sql
+
+
+def _inventory_char_sql(db, chr_name, login_id, has_deleted):
+    """按 ChrName+LoginID 在 `characters` 上解析角色（卡 `openmir2-window-inventory-fixture-adapt`）。
+
+    返回 COUNT(*), MIN(Id)（, Deleted——表无该列时省略，调用方按 0 处理）；
+    与 `_magic_char_sql` 同口径，仅去掉 magic 注释前缀。
+    """
+    tail = ", `Deleted`" if has_deleted else ""
+    return ("/* inventory */ SELECT COUNT(*), COALESCE(MIN(`Id`), 0)%s FROM `%s`.`characters` "
+            "WHERE `ChrName` = %s AND `LoginID` = %s;\n"
+            % (tail, db, _sql_quote(chr_name), _sql_quote(login_id)))
 
 
 def validate_inventory_content(items):
@@ -2639,12 +2668,13 @@ def compare_inventory_make_index(side_items, other_side, other_items):
 def run_inventory(runner, side, prof, sc, items, env, timeout=120):
     """在一侧执行背包夹具：restore 之后、起栈之前。返回证据 dict（rc=0 才算完成）。
 
-    fail-closed：目标角色不存在/多行、`stditems` 查不到或与声明的 std_mode/ani_count
-    不符、写后读回不符、指纹变了 ⇒ rc=2 点名。
+    fail-closed：目标角色不存在/多行/已删除、`stditems` 查不到或与声明的 std_mode/ani_count
+    不符、写后读回不符、指纹变了 ⇒ rc=2 点名。行键 `PlayerId`（= characters.Id）见
+    `openmir2-window-inventory-fixture-adapt`。
     """
-    res = {"side": side, "declared": items, "db": None, "action": None,
-           "before": None, "after": None, "altered_columns": [], "sql": {},
-           "rc": None, "error": None}
+    res = {"side": side, "declared": items, "db": None, "player_id": None,
+           "action": None, "before": None, "after": None, "altered_columns": [],
+           "sql": {}, "rc": None, "error": None}
     if not items:
         res["action"] = "noop"
         res["rc"] = 0
@@ -2695,16 +2725,46 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
         cols_out = sql("inventory.columns",
                        "SHOW COLUMNS FROM `%s`.`characters_bagitem`;\n" % db)
         columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
-        for need in ("ChrName", "LoginID", "Index", "MakeIndex", "Position"):
+        # 卡 `openmir2-window-inventory-fixture-adapt`：实表（DESCRIBE mir2_db.characters_bagitem，
+        # mir2_test_db / mir2_test_db_r 同构）是 PlayerId 键 + StdIndex；首版预期的
+        # ChrName/LoginID/Index 三列在基线库不存在（window-run-1 §2 第 10/11 行实锤）。
+        for need in ("PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax"):
             if need not in columns:
                 raise ConfigError("%s.characters_bagitem 缺列 %s（表结构与预期不符，拒绝）"
                                   % (db, need))
+        # 替代键：`PlayerId` = `characters.Id`，按 profile 的 char_name/account 解析
+        # （ChrName+LoginID 唯一、未删除——与魔法夹具 `_magic_char_sql` 同口径）。
+        char_cols_out = sql("inventory.character.columns",
+                            "SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+        char_columns = [ln.split("\t")[0] for ln in char_cols_out.splitlines() if ln.strip()]
+        char_missing = [c for c in ("Id", "ChrName", "LoginID") if c not in char_columns]
+        if char_missing:
+            raise ConfigError("%s.characters 缺列 %s：表结构与预期不符"
+                              % (db, char_missing))
+        char_sql = _inventory_char_sql(db, chr_name, login_id, "Deleted" in char_columns)
+        res["sql"]["character"] = char_sql.strip()
+        parts = (sql("inventory.character", char_sql) or "").strip().split("\t")
+        try:
+            count = int(parts[0])
+            player_id = int(parts[1])
+            deleted = int(parts[2]) if len(parts) > 2 else 0
+        except (ValueError, IndexError):
+            raise ConfigError("inventory.character 返回无法解析：%r" % (parts,))
+        if count == 0:
+            raise ConfigError("角色不存在：%s.characters 无 ChrName=%r LoginID=%r 的行"
+                              % (db, chr_name, login_id))
+        if count > 1:
+            raise ConfigError("角色行不唯一：ChrName=%r LoginID=%r 命中 %d 行"
+                              % (chr_name, login_id, count))
+        if deleted:
+            raise ConfigError("角色已删除（Deleted=%d）：ChrName=%r" % (deleted, chr_name))
+        res["player_id"] = player_id
         positions = [it["position"] for it in items]
         # 声明槽位必须原本为空：DELETE+INSERT 会把该行其它列重置成默认值，工具不替操作者
         # 做「覆盖已有物品」这件事（review `c866f358` M-1）。
         occ_sql = ("SELECT COUNT(*) FROM `%s`.`characters_bagitem`\n"
-                   " WHERE `ChrName` = %s AND `LoginID` = %s AND `Position` IN (%s);\n"
-                   % (db, _sql_quote(chr_name), _sql_quote(login_id),
+                   " WHERE `PlayerId` = %d AND `Position` IN (%s);\n"
+                   % (db, player_id,
                       ", ".join(str(p) for p in positions)))
         occ = sql("inventory.occupancy", occ_sql)
         occ_n = int((occ or "0").strip().splitlines()[0] or 0)
@@ -2713,7 +2773,7 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
             raise ConfigError(
                 "inventory: 声明槽位里已有 %d 行（%s）——DELETE+INSERT 会把该行其它列重置，"
                 "请改用空槽或先清空" % (occ_n, positions))
-        fp_sql = inventory_fingerprint_sql(db, chr_name, login_id, columns,
+        fp_sql = inventory_fingerprint_sql(db, player_id, columns,
                                            exclude_positions=positions)
         res["sql"]["read"] = fp_sql.strip()
         before = _parse_inventory_fp(sql("inventory.read", fp_sql))
@@ -2723,7 +2783,7 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
         for it in items:
             tpl = sql("inventory.template",
                       "SELECT `StdMode`, `Shape`, `DuraMax` FROM `mir2_data`.`stditems`\n"
-                      " WHERE `idx` = %d;\n" % it["index"]).strip().splitlines()
+                      " WHERE `Id` = %d;\n" % it["index"]).strip().splitlines()
             if not tpl:
                 raise ConfigError("inventory: 物品模板 index=%d 不存在（mir2_data.stditems）"
                                   % it["index"])
@@ -2733,15 +2793,15 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
                 raise ConfigError(
                     "inventory: index=%d 的 StdMode=%r 与声明 %r 不符"
                     % (it["index"], std_mode, it["std_mode"]))
-            values.append("(%s, %s, %d, %d, %d, %d, %d)"
-                          % (_sql_quote(chr_name), _sql_quote(login_id), it["index"],
-                             it["make_index"], it["position"], it["dura"], it["dura_max"]))
+            values.append("(%d, %d, %d, %d, %d, %d)"
+                          % (player_id, it["position"], it["make_index"], it["index"],
+                             it["dura"], it["dura_max"]))
         upd = ("DELETE FROM `%s`.`characters_bagitem`\n"
-               " WHERE `ChrName` = %s AND `LoginID` = %s AND `Position` IN (%s);\n"
+               " WHERE `PlayerId` = %d AND `Position` IN (%s);\n"
                "INSERT INTO `%s`.`characters_bagitem`\n"
-               " (`ChrName`, `LoginID`, `Index`, `MakeIndex`, `Position`, `Dura`, `DuraMax`)\n"
+               " (`PlayerId`, `Position`, `MakeIndex`, `StdIndex`, `Dura`, `DuraMax`)\n"
                " VALUES %s;\n"
-               % (db, _sql_quote(chr_name), _sql_quote(login_id),
+               % (db, player_id,
                   ", ".join(str(it["position"]) for it in items), db, ", ".join(values)))
         res["sql"]["update"] = upd.strip()
         sql("inventory.update", upd)
@@ -4393,11 +4453,17 @@ def _selftest_inventory(tmp):
             bad_ok = False
     out.append((bad_ok, "③ 非法声明（越界/重复/缺键/未知键）=> ConfigError 且点名"))
     # ④ 指纹列 = SHOW COLUMNS 去掉「声明列」（只改需要列的证据面）
-    cols = ["Id", "ChrName", "LoginID", "Index", "MakeIndex", "Position",
+    cols = ["Id", "PlayerId", "Position", "MakeIndex", "StdIndex",
             "Dura", "DuraMax", "Desc0", "Desc1"]
-    fp_sql = inventory_fingerprint_sql("db", "hero", "ua", cols)
+    fp_sql = inventory_fingerprint_sql("db", 6228, cols)
     out.append(("`Desc0`" in fp_sql and "`Desc1`" in fp_sql and "`MakeIndex`" not in fp_sql,
                 "④ 指纹只含未声明列（Desc*），不含 MakeIndex/Position"))
+    # ④b 实表全部列都在声明列集内（DESCRIBE mir2_db.characters_bagitem 就是这 7 列）⇒
+    #    指纹必须退化为只比行数（`CONCAT_WS('')` 单参调用 MySQL 报错——真库实测踩中）。
+    real_cols = ["Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax"]
+    fp_real = inventory_fingerprint_sql("db", 6228, real_cols)
+    out.append(("CONCAT_WS" not in fp_real and fp_real.count("SELECT COUNT(*)") == 1,
+                "④b 实表无余列 ⇒ 指纹退化为行数（不再拼 CONCAT_WS）"))
     # 牙①：跳过预置（写后行数不足）=> 必须报错
     try:
         check_inventory_rows(items, 1)
@@ -4431,8 +4497,12 @@ def _selftest_inventory(tmp):
 
         def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None, capture=True):
             if tag == "inventory.columns":
-                return 0, ("ChrName\nLoginID\nIndex\nMakeIndex\nPosition"
+                return 0, ("Id\nPlayerId\nPosition\nMakeIndex\nStdIndex"
                            "\nDura\nDuraMax\nDesc0\n"), ""
+            if tag == "inventory.character.columns":
+                return 0, "Id\nChrName\nLoginID\nDeleted\n", ""
+            if tag == "inventory.character":
+                return 0, "1\t6228\t0\n", ""
             if tag == "inventory.occupancy":
                 return 0, "%d\n" % self.occupied, ""
             if tag == "inventory.template":

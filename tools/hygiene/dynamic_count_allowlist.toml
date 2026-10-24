@@ -546,3 +546,21 @@ path = "docs/board-merged-column-20261024.md"
 line_sha256 = "9c1889eddb641214115df3e9cae0c7b8ddb829bb28fc8954daccc49c5a7df65e"
 reason = "实时看板对比表的说明句（计数相对 reviewer 复核时 521→532，因看板实时翻动）：段内已声明 2.26s 内两次 board 调用的逐字对比；该文件是另一张卡的写集，本卡不改。"
 added = "2026-10-24"
+
+# 以下两条：window-run-1 报告的**当轮冻结计分**（PASS 1 / FAIL 5 / UNDECIDABLE 12
+# 是 2026-10-24 那一轮的判读结果，文档头部已有全局快照戳；行内数字改写即伪造历史）。
+# 补登原因：dynamic_count_stamp_gate 对 FAIL 计数的行内 24 字符戳要求在该报告中
+# 无法满足（计分行与 §4 的引述行），master `133c0f6a1` 上即红，非本卡引入；
+# 按「历史快照/引述」既有类处置（卡 openmir2-window-inventory-fixture-adapt）。
+
+[[allow]]
+path = "docs/window-run-1-20261024.md"
+line_sha256 = "2c9a456f7946f8ce6efdff0aef6e40c13906a55fdedbd4e85b5b3f7c936ffe76"
+reason = "历史快照（window-run-1 当轮计分：PASS 1 / FAIL 5 / UNDECIDABLE 12 是 2026-10-24 当轮判读结果，文档头部已有全局快照戳；改写即伪造历史）。"
+added = "2026-10-24"
+
+[[allow]]
+path = "docs/window-run-1-20261024.md"
+line_sha256 = "20df02b5132df6bfb3dcc4b6b3d92f784c1529699ab28864b1051051ba0ed00e"
+reason = "历史快照（同上一条：§4 一致性对照里引述当轮 verdict 计分；行首已有 @ 4c5e7fa1b 快照戳但超出 24 字符窗口）。"
+added = "2026-10-24"
