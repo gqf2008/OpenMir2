@@ -44,7 +44,7 @@
 | 项 | 为什么不可跑 | 解封条件 |
 |---|---|---|
 | `butch_two_draws`（run3 #21，清单标 `YES`） | 仍缺**场景内的击杀步**（活体夹具已落地、C# RNG 已落地 `15dbbe843`；缺的是「把动物打成尸体」那一步的驱动） | ① 活体夹具**已落地**；② C# RNG 接线**已落地**（`15dbbe843`：`start-csharp.ps1` + `RngSeedHook`）；③ 待补：场景击杀步（或用 tester 的 drop/butch 夹具片预置尸体）。源：`tools/probe/scenarios/butch_two_draws.json` 的 `blocked` |
-| `clearmapmon_t118`（**不在 run3**） | `[@st]` 的 `movr M3 3`（`武士-0114.txt:27`）分支随机；M3 不可注入；且输分支会扣佛牌 + 写 `命运之刃名单.txt`（`:37-43`） | ① C# 栈接 hook/seed；② 两侧同 `-Seed N`，用 `MIR2_RNG_SITE=1` 流水确认该 seed 下 `movr` 取 **2**；③ 每次尝试前恢复夹具（佛牌×1 + 从名单移除角色）；④ 记 seed 号后由 owner 裁决入批。源：`docs/window-scenes-clearmapmon-20261025.md` §1.6 |
+| `clearmapmon_t118`（**不在 run3**；**已定性永久不可达**，截至 `92682d3fb`） | ① `[@main]` 要 `checkitem 佛牌 1` + `checklevel 43`，但三库 `stditems` 均无「佛牌」、`characters.Level=1` 且 `ASSETS_COLUMNS` 无 `Level` ⇒ `@rw01` 对正常客户端**不可达**；② 同 seed（42/43）跨全新起栈 `movr` 实抽仍漂移 ⇒ 无稳定赢页 seed。**替代判据**：W-CM-1 = `clearmapmon_q001` 真机（#19）+ t118 构造级/单测覆盖（见台账第 4 行）。原 blocking 记录保留为历史 |
 
 **P0/P1 缺口的当前状态**（源：`docs/window-kit-coverage-20261025.md` §2 + 各修复卡）：
 
