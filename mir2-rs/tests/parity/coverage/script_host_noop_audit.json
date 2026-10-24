@@ -1,8 +1,8 @@
 {
   "card": "openmir2-script-host-noop-audit",
   "author": "openmir2-worker-63",
-  "base_oid": "14864309e",
-  "line_baseline": "master 95b169ecc（rebase 后合并树）：npc.rs / mod.rs 行号按**合并树**重钉（卡 openmir2-script-sendmsg-host 给 npc.rs +139 行、mod.rs +49 行；master 又给 npc.rs +335 行）；卡 `openmir2-sendmsg-login-qmanage-cases` 未改 `npc.rs`/`engine/mod.rs` 的覆写 ⇒ 相关行号不变（`check --strict-lines` 复核）",
+  "base_oid": "14ec2e943",
+  "line_baseline": "master 14ec2e943（2026-10-25 重钉，卡 `openmir2-ledger-line-baseline-resync`）：npc.rs / mod.rs 的 `line`/`mod_line`/`mod_ref`/`evidence.line` 按**当前源码**逐符号重钉（impl 块区间由 `impl ... for NpcPlayer/HostNpc` 花括号扫描确定）；语义/`verdict`/`safe_kind`/`counts` 与 oracle 锚不变；`check` 与 `check --strict-lines` 均 rc=0。",
   "line_policy": "npc.rs / mod.rs 行号仅作文档参考；自检门按**符号**校验（impl 块内方法成员、mod.rs 内 fn 声明、行号只需落在该 impl 块范围内）。oracle（src/**，冻结面）仍按 file:line 精确核行。",
   "tier": "L",
   "oracle_root": "src/ (C# 参照实现)",
@@ -51,7 +51,7 @@
     {
       "name": "guild_send_msg",
       "trait": "player",
-      "line": 438,
+      "line": 451,
       "overridden": false,
       "direct_handlers": [
         "ActionOfLineMsg"
@@ -93,14 +93,14 @@
       "priority": null,
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 438,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:438",
+      "mod_line": 451,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:451",
       "subcard": null
     },
     {
       "name": "send_group_text",
       "trait": "player",
-      "line": 421,
+      "line": 434,
       "overridden": false,
       "direct_handlers": [
         "ActionOfLineMsg"
@@ -142,14 +142,14 @@
       "priority": null,
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 421,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:421",
+      "mod_line": 434,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:434",
       "subcard": null
     },
     {
       "name": "send_say_msg",
       "trait": "npc",
-      "line": 811,
+      "line": 824,
       "overridden": false,
       "direct_handlers": [
         "ActionOfLineMsg"
@@ -188,21 +188,21 @@
       "evidence": {
         "impl": "ScriptNpc for HostNpc",
         "method": "send_say_msg",
-        "line": 715
+        "line": 778
       },
       "side_effect": "发帧（NPC 说词）",
       "consequence": "脚本 `SENDMSG 0-4` 在部署语料 349 行（case0-3=318 / case4=31）上产帧：`SM_SYSMESSAGE(100)`（全服每个 `!Ghost` 玩家各一发，Recog=收件人自己）与 `SM_HEAR(40)`（NPC ±12 格，Recog=NPC）。**可触达的排水点**：商人/点击、1011、`@back`、`~@repair`、QFunction 组队、GuildOfficial `handle_select`、`@StdModeFunc*`（`run_std_mode_func_script`，部署 `Market_Def/QFunction-0.txt:107` 的 `[@StdModeFunc14]` 是**无条件 `SENDMSG 0`** ⇒ 经 `handle_eat_cmd` 的 std_mode=31 && ani_count!=0 可达；**改前**该点只取 `player.frames` ⇒ 触发者收到、其余在线玩家 0 帧，**改后**全服扇出）、**`@Login`/QManage**（卡 `openmir2-sendmsg-login-qmanage-cases`，T-267：生产排水点 `lib.rs::drain_login_script_batch` = `emit_login_script_frames` + `fan_out_world_sysmessage`，`world_broadcasts` 与 `frames` 同批 `std::mem::take`、扇出在写回之前）。**部署可达性（T-267 复算）**：`@Login` 的 `#CALL` 链（`QuestDiary/月卡/月卡系统.txt:8/15/16/23`、`QuestDiary/游戏登陆/登陆脚本.txt:17-22`）与 `MapQuest_def/QManage.txt` 本体（10 条原始行 = case5×9 + case7×1）**0 条 case 0-4** ⇒ 该路接线是防静默丢弃、用例为构造级（oracle `GotoLableQuestActionProcess` 每个 `#ACT` 只执行第一个已注册动作 ⇒ 行数≠帧数）；`@PlayDie` 的 4 条 case1（`Market_Def/QFunction-0.txt:50/51/55/56`）与 `[@假人上线A]:62` 的 case0 **oracle 不可达**（`PlayObject.Die()` 从不 `GotoLable(\"@PlayDie\")`，`ScriptFlagConst.SPLAYDIE/NPLAYDIE` 无消费点）⇒ **不实现**、登记 T-267。",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 811,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:811",
+      "mod_line": 824,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:824",
       "subcard": null
     },
     {
       "name": "world_broadcast",
       "trait": "player",
-      "line": 419,
+      "line": 432,
       "overridden": false,
       "direct_handlers": [
         "ActionOfLineMsg"
@@ -241,21 +241,21 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "world_broadcast",
-        "line": 1961
+        "line": 2190
       },
       "side_effect": "发帧（全世界广播）",
       "consequence": "脚本 `SENDMSG 0-4` 在部署语料 349 行（case0-3=318 / case4=31）上产帧：`SM_SYSMESSAGE(100)`（全服每个 `!Ghost` 玩家各一发，Recog=收件人自己）与 `SM_HEAR(40)`（NPC ±12 格，Recog=NPC）。**可触达的排水点**：商人/点击、1011、`@back`、`~@repair`、QFunction 组队、GuildOfficial `handle_select`、`@StdModeFunc*`（`run_std_mode_func_script`，部署 `Market_Def/QFunction-0.txt:107` 的 `[@StdModeFunc14]` 是**无条件 `SENDMSG 0`** ⇒ 经 `handle_eat_cmd` 的 std_mode=31 && ani_count!=0 可达；**改前**该点只取 `player.frames` ⇒ 触发者收到、其余在线玩家 0 帧，**改后**全服扇出）、**`@Login`/QManage**（卡 `openmir2-sendmsg-login-qmanage-cases`，T-267：生产排水点 `lib.rs::drain_login_script_batch` = `emit_login_script_frames` + `fan_out_world_sysmessage`，`world_broadcasts` 与 `frames` 同批 `std::mem::take`、扇出在写回之前）。**部署可达性（T-267 复算）**：`@Login` 的 `#CALL` 链（`QuestDiary/月卡/月卡系统.txt:8/15/16/23`、`QuestDiary/游戏登陆/登陆脚本.txt:17-22`）与 `MapQuest_def/QManage.txt` 本体（10 条原始行 = case5×9 + case7×1）**0 条 case 0-4** ⇒ 该路接线是防静默丢弃、用例为构造级（oracle `GotoLableQuestActionProcess` 每个 `#ACT` 只执行第一个已注册动作 ⇒ 行数≠帧数）；`@PlayDie` 的 4 条 case1（`Market_Def/QFunction-0.txt:50/51/55/56`）与 `[@假人上线A]:62` 的 case0 **oracle 不可达**（`PlayObject.Die()` 从不 `GotoLable(\"@PlayDie\")`，`ScriptFlagConst.SPLAYDIE/NPLAYDIE` 无消费点）⇒ **不实现**、登记 T-267。",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 419,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:419",
+      "mod_line": 432,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:432",
       "subcard": null
     },
     {
       "name": "action_line_variable_text",
       "trait": "player",
-      "line": 184,
+      "line": 197,
       "overridden": false,
       "direct_handlers": [
         "ActionOfDelayCall",
@@ -325,14 +325,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 184,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:184",
+      "mod_line": 197,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:197",
       "subcard": "openmir2-script-action-var-text"
     },
     {
       "name": "envir_root",
       "trait": "npc",
-      "line": 792,
+      "line": 805,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -387,19 +387,19 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptNpc for HostNpc",
         "method": "envir_root",
-        "line": 665
+        "line": 728
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 792,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:792",
+      "mod_line": 805,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:805",
       "subcard": null,
       "residual_whitelist": "T-220"
     },
     {
       "name": "dyn_var_get",
       "trait": "player",
-      "line": 383,
+      "line": 396,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -453,18 +453,18 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "dyn_var_get",
-        "line": 1319,
+        "line": 1543,
         "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 383,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:383"
+      "mod_line": 396,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:396"
     },
     {
       "name": "user_account",
       "trait": "player",
-      "line": 270,
+      "line": 283,
       "overridden": true,
       "direct_handlers": [
         "ActionOfDelAccountList",
@@ -529,19 +529,19 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "user_account",
-        "line": 1384
+        "line": 1608
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 270,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:270",
+      "mod_line": 283,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:283",
       "subcard": null,
       "residual_whitelist": "T-223"
     },
     {
       "name": "dyn_var_set",
       "trait": "player",
-      "line": 388,
+      "line": 401,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -585,18 +585,18 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "dyn_var_set",
-        "line": 1336,
+        "line": 1560,
         "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 388,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:388"
+      "mod_line": 401,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:401"
     },
     {
       "name": "config_show_script_action_msg",
       "trait": "player",
-      "line": 543,
+      "line": 556,
       "overridden": false,
       "direct_handlers": [
         "ActionOfAddSkill",
@@ -651,14 +651,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 543,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:543",
+      "mod_line": 556,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:556",
       "subcard": null
     },
     {
       "name": "find_magic",
       "trait": "player",
-      "line": 653,
+      "line": 666,
       "overridden": false,
       "direct_handlers": [
         "ActionOfAddSkill"
@@ -697,14 +697,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 653,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:653",
+      "mod_line": 666,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:666",
       "subcard": null
     },
     {
       "name": "is_training_skill",
       "trait": "player",
-      "line": 657,
+      "line": 670,
       "overridden": false,
       "direct_handlers": [
         "ActionOfAddSkill"
@@ -743,14 +743,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 657,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:657",
+      "mod_line": 670,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:670",
       "subcard": null
     },
     {
       "name": "learn_magic",
       "trait": "player",
-      "line": 662,
+      "line": 675,
       "overridden": false,
       "direct_handlers": [
         "ActionOfAddSkill"
@@ -789,14 +789,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 662,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:662",
+      "mod_line": 675,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:675",
       "subcard": null
     },
     {
       "name": "use_items_upper_bound",
       "trait": "player",
-      "line": 278,
+      "line": 291,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -833,14 +833,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 278,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:278",
+      "mod_line": 291,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:291",
       "subcard": null
     },
     {
       "name": "worn_item_add_value",
       "trait": "player",
-      "line": 286,
+      "line": 299,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -875,8 +875,8 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 286,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:286",
+      "mod_line": 299,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:299",
       "subcard": null
     },
     {
@@ -928,7 +928,7 @@
     {
       "name": "set_game_point",
       "trait": "player",
-      "line": 480,
+      "line": 493,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGamePoint"
@@ -967,18 +967,18 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_game_point",
-        "line": 1602
+        "line": 1826
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 480,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:480",
+      "mod_line": 493,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:493",
       "subcard": null
     },
     {
       "name": "dyn_var_insert",
       "trait": "player",
-      "line": 392,
+      "line": 405,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1015,18 +1015,18 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "dyn_var_insert",
-        "line": 1359,
+        "line": 1583,
         "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 392,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:392"
+      "mod_line": 405,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:405"
     },
     {
       "name": "send_update_item",
       "trait": "player",
-      "line": 703,
+      "line": 716,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1061,14 +1061,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 703,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:703",
+      "mod_line": 716,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:716",
       "subcard": null
     },
     {
       "name": "set_use_item_desc",
       "trait": "player",
-      "line": 699,
+      "line": 712,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1103,14 +1103,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 699,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:699",
+      "mod_line": 712,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:712",
       "subcard": null
     },
     {
       "name": "set_use_item_dura_max",
       "trait": "player",
-      "line": 701,
+      "line": 714,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1145,14 +1145,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 701,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:701",
+      "mod_line": 714,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:714",
       "subcard": null
     },
     {
       "name": "use_item_desc",
       "trait": "player",
-      "line": 695,
+      "line": 708,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1187,14 +1187,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 695,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:695",
+      "mod_line": 708,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:708",
       "subcard": null
     },
     {
       "name": "use_item_dura",
       "trait": "player",
-      "line": 681,
+      "line": 694,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1229,14 +1229,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 681,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:681",
+      "mod_line": 694,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:694",
       "subcard": null
     },
     {
       "name": "set_credit_point",
       "trait": "player",
-      "line": 482,
+      "line": 495,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeCreditPoint"
@@ -1275,14 +1275,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 482,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:482",
+      "mod_line": 495,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:495",
       "subcard": null
     },
     {
       "name": "job",
       "trait": "player",
-      "line": 214,
+      "line": 227,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1317,14 +1317,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 214,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:214",
+      "mod_line": 227,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:227",
       "subcard": null
     },
     {
       "name": "map_random_move",
       "trait": "player",
-      "line": 453,
+      "line": 466,
       "overridden": false,
       "direct_handlers": [
         "ActionOfMap"
@@ -1363,14 +1363,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 453,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:453",
+      "mod_line": 466,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:466",
       "subcard": null
     },
     {
       "name": "send_ref_msg",
       "trait": "player",
-      "line": 451,
+      "line": 464,
       "overridden": false,
       "direct_handlers": [
         "ActionOfMap"
@@ -1409,14 +1409,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 451,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:451",
+      "mod_line": 464,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:464",
       "subcard": null
     },
     {
       "name": "send_def_message",
       "trait": "player",
-      "line": 440,
+      "line": 453,
       "overridden": false,
       "direct_handlers": [
         "ActionOfOffLine",
@@ -1463,14 +1463,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 440,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:440",
+      "mod_line": 453,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:453",
       "subcard": null
     },
     {
       "name": "gender",
       "trait": "player",
-      "line": 210,
+      "line": 223,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1507,14 +1507,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 210,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:210",
+      "mod_line": 223,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:223",
       "subcard": null
     },
     {
       "name": "is_player_online",
       "trait": "player",
-      "line": 303,
+      "line": 316,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfCheckOnLine"
@@ -1553,14 +1553,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 303,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:303",
+      "mod_line": 316,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:316",
       "subcard": null
     },
     {
       "name": "set_kick_flags",
       "trait": "player",
-      "line": 577,
+      "line": 590,
       "overridden": false,
       "direct_handlers": [
         "ActionOfKick"
@@ -1599,14 +1599,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 577,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:577",
+      "mod_line": 590,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:590",
       "subcard": null
     },
     {
       "name": "set_val_query",
       "trait": "player",
-      "line": 602,
+      "line": 615,
       "overridden": false,
       "direct_handlers": [
         "ActionOfQueryValue"
@@ -1645,14 +1645,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 602,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:602",
+      "mod_line": 615,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:615",
       "subcard": null
     },
     {
       "name": "abil_hp",
       "trait": "player",
-      "line": 493,
+      "line": 506,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -1695,14 +1695,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 493,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:493",
+      "mod_line": 506,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:506",
       "subcard": null
     },
     {
       "name": "abil_mp",
       "trait": "player",
-      "line": 498,
+      "line": 511,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -1745,14 +1745,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 498,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:498",
+      "mod_line": 511,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:511",
       "subcard": null
     },
     {
       "name": "clear_delay_goto",
       "trait": "player",
-      "line": 592,
+      "line": 605,
       "overridden": false,
       "direct_handlers": [
         "ActionOfClearDelayGoto"
@@ -1791,14 +1791,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 592,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:592",
+      "mod_line": 605,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:605",
       "subcard": null
     },
     {
       "name": "clear_map_monsters",
       "trait": "player",
-      "line": 709,
+      "line": 722,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1833,18 +1833,18 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "clear_map_monsters",
-        "line": 1808
+        "line": 2037
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 709,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:709",
+      "mod_line": 722,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:722",
       "subcard": null
     },
     {
       "name": "dear_name",
       "trait": "player",
-      "line": 242,
+      "line": 255,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfCheckMarry"
@@ -1883,14 +1883,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 242,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:242",
+      "mod_line": 255,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:255",
       "subcard": null
     },
     {
       "name": "map_human_count",
       "trait": "player",
-      "line": 307,
+      "line": 320,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1925,14 +1925,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 307,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:307",
+      "mod_line": 320,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:320",
       "subcard": null
     },
     {
       "name": "regen_monster",
       "trait": "player",
-      "line": 705,
+      "line": 718,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -1967,18 +1967,18 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "regen_monster",
-        "line": 1793
+        "line": 2022
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 705,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:705",
+      "mod_line": 718,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:718",
       "subcard": null
     },
     {
       "name": "set_abil_hp",
       "trait": "player",
-      "line": 496,
+      "line": 509,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -2021,14 +2021,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 496,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:496",
+      "mod_line": 509,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:509",
       "subcard": null
     },
     {
       "name": "set_abil_mp",
       "trait": "player",
-      "line": 501,
+      "line": 514,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -2071,14 +2071,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 501,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:501",
+      "mod_line": 514,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:514",
       "subcard": null
     },
     {
       "name": "today_string",
       "trait": "player",
-      "line": 718,
+      "line": 731,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2113,14 +2113,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 718,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:718",
+      "mod_line": 731,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:731",
       "subcard": null
     },
     {
       "name": "wabil_hp",
       "trait": "player",
-      "line": 503,
+      "line": 516,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -2165,14 +2165,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 503,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:503",
+      "mod_line": 516,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:516",
       "subcard": null
     },
     {
       "name": "wabil_max_hp",
       "trait": "player",
-      "line": 507,
+      "line": 520,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -2217,14 +2217,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 507,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:507",
+      "mod_line": 520,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:520",
       "subcard": null
     },
     {
       "name": "wabil_max_mp",
       "trait": "player",
-      "line": 515,
+      "line": 528,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -2269,14 +2269,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 515,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:515",
+      "mod_line": 528,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:528",
       "subcard": null
     },
     {
       "name": "wabil_mp",
       "trait": "player",
-      "line": 511,
+      "line": 524,
       "overridden": false,
       "direct_handlers": [
         "ActionOfHumanHp",
@@ -2321,14 +2321,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 511,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:511",
+      "mod_line": 524,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:524",
       "subcard": null
     },
     {
       "name": "bonus_point",
       "trait": "player",
-      "line": 536,
+      "line": 549,
       "overridden": false,
       "direct_handlers": [
         "ActionOfReNewLevel"
@@ -2367,14 +2367,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 536,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:536",
+      "mod_line": 549,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:549",
       "subcard": null
     },
     {
       "name": "bonus_total_point",
       "trait": "player",
-      "line": 238,
+      "line": 251,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2409,14 +2409,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 238,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:238",
+      "mod_line": 251,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:251",
       "subcard": null
     },
     {
       "name": "inc_marry_count",
       "trait": "player",
-      "line": 736,
+      "line": 749,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2449,14 +2449,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 736,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:736",
+      "mod_line": 749,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:749",
       "subcard": null
     },
     {
       "name": "inc_pose_marry_count",
       "trait": "player",
-      "line": 754,
+      "line": 767,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2489,14 +2489,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 754,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:754",
+      "mod_line": 767,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:767",
       "subcard": null
     },
     {
       "name": "is_guild_master",
       "trait": "player",
-      "line": 258,
+      "line": 271,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfCheckIsGuildMaster"
@@ -2535,14 +2535,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 258,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:258",
+      "mod_line": 271,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:271",
       "subcard": null
     },
     {
       "name": "is_start_marry",
       "trait": "player",
-      "line": 724,
+      "line": 737,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2575,14 +2575,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 724,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:724",
+      "mod_line": 737,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:737",
       "subcard": null
     },
     {
       "name": "is_start_un_marry",
       "trait": "player",
-      "line": 729,
+      "line": 742,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2615,14 +2615,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 729,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:729",
+      "mod_line": 742,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:742",
       "subcard": null
     },
     {
       "name": "last_hiter_name",
       "trait": "player",
-      "line": 327,
+      "line": 340,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2655,14 +2655,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 327,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:327",
+      "mod_line": 340,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:340",
       "subcard": null
     },
     {
       "name": "last_hiter_race",
       "trait": "player",
-      "line": 323,
+      "line": 336,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2695,14 +2695,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 323,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:323",
+      "mod_line": 336,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:336",
       "subcard": null
     },
     {
       "name": "member_level",
       "trait": "player",
-      "line": 234,
+      "line": 247,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfCheckMemBerLevel"
@@ -2741,14 +2741,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 234,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:234",
+      "mod_line": 247,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:247",
       "subcard": null
     },
     {
       "name": "pose_goto_label",
       "trait": "player",
-      "line": 757,
+      "line": 770,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2781,14 +2781,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 757,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:757",
+      "mod_line": 770,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:770",
       "subcard": null
     },
     {
       "name": "pose_is_start_marry",
       "trait": "player",
-      "line": 746,
+      "line": 759,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2821,14 +2821,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 746,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:746",
+      "mod_line": 759,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:759",
       "subcard": null
     },
     {
       "name": "pose_is_start_un_marry",
       "trait": "player",
-      "line": 750,
+      "line": 763,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2861,14 +2861,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 750,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:750",
+      "mod_line": 763,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:763",
       "subcard": null
     },
     {
       "name": "pose_ref_show_name",
       "trait": "player",
-      "line": 755,
+      "line": 768,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2901,14 +2901,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 755,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:755",
+      "mod_line": 768,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:768",
       "subcard": null
     },
     {
       "name": "quest_check_item",
       "trait": "player",
-      "line": 291,
+      "line": 304,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -2941,14 +2941,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 291,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:291",
+      "mod_line": 304,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:304",
       "subcard": null
     },
     {
       "name": "ref_show_name",
       "trait": "player",
-      "line": 530,
+      "line": 543,
       "overridden": false,
       "direct_handlers": [
         "ActionOfReNewLevel"
@@ -2987,14 +2987,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 530,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:530",
+      "mod_line": 543,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:543",
       "subcard": null
     },
     {
       "name": "set_bonus_point",
       "trait": "player",
-      "line": 539,
+      "line": 552,
       "overridden": false,
       "direct_handlers": [
         "ActionOfReNewLevel"
@@ -3033,14 +3033,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 539,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:539",
+      "mod_line": 552,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:552",
       "subcard": null
     },
     {
       "name": "set_dear_name",
       "trait": "player",
-      "line": 734,
+      "line": 747,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -3073,14 +3073,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 734,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:734",
+      "mod_line": 747,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:747",
       "subcard": null
     },
     {
       "name": "set_is_start_marry",
       "trait": "player",
-      "line": 727,
+      "line": 740,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -3113,14 +3113,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 727,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:727",
+      "mod_line": 740,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:740",
       "subcard": null
     },
     {
       "name": "set_is_start_un_marry",
       "trait": "player",
-      "line": 732,
+      "line": 745,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -3153,14 +3153,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 732,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:732",
+      "mod_line": 745,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:745",
       "subcard": null
     },
     {
       "name": "set_pose_dear_name",
       "trait": "player",
-      "line": 745,
+      "line": 758,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -3193,14 +3193,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 745,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:745",
+      "mod_line": 758,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:758",
       "subcard": null
     },
     {
       "name": "set_pose_is_start_marry",
       "trait": "player",
-      "line": 749,
+      "line": 762,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -3233,14 +3233,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 749,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:749",
+      "mod_line": 762,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:762",
       "subcard": null
     },
     {
       "name": "set_pose_is_start_un_marry",
       "trait": "player",
-      "line": 753,
+      "line": 766,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -3273,14 +3273,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 753,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:753",
+      "mod_line": 766,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:766",
       "subcard": null
     },
     {
       "name": "set_re_level",
       "trait": "player",
-      "line": 541,
+      "line": 554,
       "overridden": false,
       "direct_handlers": [
         "ActionOfReNewLevel",
@@ -3323,14 +3323,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 541,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:541",
+      "mod_line": 554,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:554",
       "subcard": null
     },
     {
       "name": "target_name",
       "trait": "player",
-      "line": 331,
+      "line": 344,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -3363,14 +3363,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 331,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:331",
+      "mod_line": 344,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:344",
       "subcard": null
     },
     {
       "name": "abil_exp",
       "trait": "player",
-      "line": 484,
+      "line": 497,
       "overridden": true,
       "direct_handlers": [
         "ActionOfChangeExp"
@@ -3412,19 +3412,19 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "abil_exp",
-        "line": 1387
+        "line": 1611
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 484,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:484",
+      "mod_line": 497,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:497",
       "subcard": null,
       "residual_whitelist": "T-207"
     },
     {
       "name": "set_abil_exp",
       "trait": "player",
-      "line": 487,
+      "line": 500,
       "overridden": true,
       "direct_handlers": [
         "ActionOfChangeExp"
@@ -3464,19 +3464,19 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_abil_exp",
-        "line": 1390
+        "line": 1614
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 487,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:487",
+      "mod_line": 500,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:500",
       "subcard": null,
       "residual_whitelist": "T-207"
     },
     {
       "name": "set_delay_call",
       "trait": "player",
-      "line": 599,
+      "line": 612,
       "overridden": false,
       "direct_handlers": [
         "ActionOfDelayCall"
@@ -3515,14 +3515,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 599,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:599",
+      "mod_line": 612,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:612",
       "subcard": null
     },
     {
       "name": "set_dlg_query",
       "trait": "player",
-      "line": 611,
+      "line": 624,
       "overridden": false,
       "direct_handlers": [
         "ActionOfQueryItemDlg"
@@ -3561,14 +3561,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 611,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:611",
+      "mod_line": 624,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:624",
       "subcard": null
     },
     {
       "name": "set_use_item_dura",
       "trait": "player",
-      "line": 684,
+      "line": 697,
       "overridden": false,
       "direct_handlers": [
         "ActionOfRepairAllItem"
@@ -3607,14 +3607,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 684,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:684",
+      "mod_line": 697,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:697",
       "subcard": null
     },
     {
       "name": "use_item_dura_max",
       "trait": "player",
-      "line": 686,
+      "line": 699,
       "overridden": false,
       "direct_handlers": [
         "ActionOfRepairAllItem"
@@ -3655,14 +3655,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 686,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:686",
+      "mod_line": 699,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:699",
       "subcard": null
     },
     {
       "name": "has_level_up",
       "trait": "player",
-      "line": 491,
+      "line": 504,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeLevel",
@@ -3709,14 +3709,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 491,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:491",
+      "mod_line": 504,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:504",
       "subcard": null
     },
     {
       "name": "set_abil_level",
       "trait": "player",
-      "line": 489,
+      "line": 502,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeLevel"
@@ -3755,14 +3755,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 489,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:489",
+      "mod_line": 502,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:502",
       "subcard": null
     },
     {
       "name": "set_bo_send_msg_flag",
       "trait": "player",
-      "line": 573,
+      "line": 586,
       "overridden": false,
       "direct_handlers": [
         "ActionOfSetScriptFlag",
@@ -3805,14 +3805,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 573,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:573",
+      "mod_line": 586,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:586",
       "subcard": null
     },
     {
       "name": "admin_mode",
       "trait": "player",
-      "line": 558,
+      "line": 571,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeMode"
@@ -3851,14 +3851,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 558,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:558",
+      "mod_line": 571,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:571",
       "subcard": null
     },
     {
       "name": "ob_mode",
       "trait": "player",
-      "line": 568,
+      "line": 581,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeMode"
@@ -3897,14 +3897,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 568,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:568",
+      "mod_line": 581,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:581",
       "subcard": null
     },
     {
       "name": "pk_point",
       "trait": "player",
-      "line": 519,
+      "line": 532,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangePkPoint"
@@ -3945,14 +3945,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 519,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:519",
+      "mod_line": 532,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:532",
       "subcard": null
     },
     {
       "name": "pvp_level",
       "trait": "player",
-      "line": 524,
+      "line": 537,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangePkPoint"
@@ -3991,14 +3991,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 524,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:524",
+      "mod_line": 537,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:537",
       "subcard": null
     },
     {
       "name": "ref_name_color",
       "trait": "player",
-      "line": 528,
+      "line": 541,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangePkPoint"
@@ -4037,14 +4037,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 528,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:528",
+      "mod_line": 541,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:541",
       "subcard": null
     },
     {
       "name": "set_admin_mode",
       "trait": "player",
-      "line": 561,
+      "line": 574,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeMode"
@@ -4083,14 +4083,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 561,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:561",
+      "mod_line": 574,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:574",
       "subcard": null
     },
     {
       "name": "set_mission",
       "trait": "player",
-      "line": 589,
+      "line": 602,
       "overridden": false,
       "direct_handlers": [
         "ActionOfMission"
@@ -4129,14 +4129,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 589,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:589",
+      "mod_line": 602,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:602",
       "subcard": null
     },
     {
       "name": "set_ob_mode",
       "trait": "player",
-      "line": 571,
+      "line": 584,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeMode"
@@ -4175,14 +4175,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 571,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:571",
+      "mod_line": 584,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:584",
       "subcard": null
     },
     {
       "name": "set_pk_point",
       "trait": "player",
-      "line": 522,
+      "line": 535,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangePkPoint"
@@ -4221,14 +4221,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 522,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:522",
+      "mod_line": 535,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:535",
       "subcard": null
     },
     {
       "name": "set_super_man",
       "trait": "player",
-      "line": 566,
+      "line": 579,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeMode"
@@ -4267,14 +4267,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 566,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:566",
+      "mod_line": 579,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:579",
       "subcard": null
     },
     {
       "name": "super_man",
       "trait": "player",
-      "line": 563,
+      "line": 576,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeMode"
@@ -4313,14 +4313,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 563,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:563",
+      "mod_line": 576,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:576",
       "subcard": null
     },
     {
       "name": "die",
       "trait": "player",
-      "line": 585,
+      "line": 598,
       "overridden": false,
       "direct_handlers": [
         "ActionOfKill"
@@ -4359,14 +4359,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 585,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:585",
+      "mod_line": 598,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:598",
       "subcard": null
     },
     {
       "name": "feature_changed",
       "trait": "player",
-      "line": 534,
+      "line": 547,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeHairStyle"
@@ -4405,14 +4405,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 534,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:534",
+      "mod_line": 547,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:547",
       "subcard": null
     },
     {
       "name": "set_bo_change_item_name_flag",
       "trait": "player",
-      "line": 575,
+      "line": 588,
       "overridden": false,
       "direct_handlers": [
         "ActionOfSetScriptFlag"
@@ -4451,14 +4451,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 575,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:575",
+      "mod_line": 588,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:588",
       "subcard": null
     },
     {
       "name": "set_hair",
       "trait": "player",
-      "line": 532,
+      "line": 545,
       "overridden": false,
       "direct_handlers": [
         "ActionOfChangeHairStyle"
@@ -4497,14 +4497,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 532,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:532",
+      "mod_line": 545,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:545",
       "subcard": null
     },
     {
       "name": "set_last_hiter_npc",
       "trait": "player",
-      "line": 587,
+      "line": 600,
       "overridden": false,
       "direct_handlers": [
         "ActionOfKill"
@@ -4543,14 +4543,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 587,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:587",
+      "mod_line": 600,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:600",
       "subcard": null
     },
     {
       "name": "set_no_item",
       "trait": "player",
-      "line": 583,
+      "line": 596,
       "overridden": false,
       "direct_handlers": [
         "ActionOfKill"
@@ -4589,14 +4589,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 583,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:583",
+      "mod_line": 596,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:596",
       "subcard": null
     },
     {
       "name": "xy_obj_count",
       "trait": "player",
-      "line": 319,
+      "line": 332,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfIsDupMode"
@@ -4635,14 +4635,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 319,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:319",
+      "mod_line": 332,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:332",
       "subcard": null
     },
     {
       "name": "curr_pos",
       "trait": "player",
-      "line": 274,
+      "line": 287,
       "overridden": false,
       "direct_handlers": [
         "ActionOfTimereCall"
@@ -4683,14 +4683,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 274,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:274",
+      "mod_line": 287,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:287",
       "subcard": null
     },
     {
       "name": "in_safe_zone",
       "trait": "player",
-      "line": 299,
+      "line": 312,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfCheckSafeZone"
@@ -4729,14 +4729,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 299,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:299",
+      "mod_line": 312,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:312",
       "subcard": null
     },
     {
       "name": "is_new_human",
       "trait": "player",
-      "line": 262,
+      "line": 275,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfIsNewHuman"
@@ -4775,14 +4775,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 262,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:262",
+      "mod_line": 275,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:275",
       "subcard": null
     },
     {
       "name": "map_name",
       "trait": "player",
-      "line": 266,
+      "line": 279,
       "overridden": false,
       "direct_handlers": [
         "ActionOfTimereCall"
@@ -4919,14 +4919,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 266,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:266",
+      "mod_line": 279,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:279",
       "subcard": null
     },
     {
       "name": "pose",
       "trait": "player",
-      "line": 335,
+      "line": 348,
       "overridden": false,
       "direct_handlers": [
         "ConditionOfCheckPoseMarry"
@@ -4971,14 +4971,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 335,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:335",
+      "mod_line": 348,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:348",
       "subcard": null
     },
     {
       "name": "set_is_time_recall",
       "trait": "player",
-      "line": 594,
+      "line": 607,
       "overridden": false,
       "direct_handlers": [
         "ActionOfBreakTimereCall"
@@ -5017,14 +5017,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 594,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:594",
+      "mod_line": 607,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:607",
       "subcard": null
     },
     {
       "name": "set_time_recall",
       "trait": "player",
-      "line": 596,
+      "line": 609,
       "overridden": false,
       "direct_handlers": [
         "ActionOfTimereCall"
@@ -5063,14 +5063,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 596,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:596",
+      "mod_line": 609,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:609",
       "subcard": null
     },
     {
       "name": "action_variable_text",
       "trait": "player",
-      "line": 191,
+      "line": 204,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5097,20 +5097,20 @@
       "evidence": {
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "action_variable_text",
-        "line": 1754,
+        "line": 1983,
         "file": "mir2-rs/bins/game-svr/src/npc.rs"
       },
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 191,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:191",
+      "mod_line": 204,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:204",
       "residual_whitelist": "T-213",
       "audit_doc": "docs/script-action-var-text-audit-20261023.md"
     },
     {
       "name": "is_master",
       "trait": "player",
-      "line": 250,
+      "line": 263,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5137,14 +5137,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 250,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:250",
+      "mod_line": 263,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:263",
       "subcard": null
     },
     {
       "name": "magic_level",
       "trait": "player",
-      "line": 295,
+      "line": 308,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5171,14 +5171,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 295,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:295",
+      "mod_line": 308,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:308",
       "subcard": null
     },
     {
       "name": "master_name",
       "trait": "player",
-      "line": 246,
+      "line": 259,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5205,14 +5205,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 246,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:246",
+      "mod_line": 259,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:259",
       "subcard": null
     },
     {
       "name": "pose_actor_id",
       "trait": "player",
-      "line": 738,
+      "line": 751,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5239,14 +5239,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 738,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:738",
+      "mod_line": 751,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:751",
       "subcard": null
     },
     {
       "name": "pose_dear_name",
       "trait": "player",
-      "line": 742,
+      "line": 755,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5273,14 +5273,14 @@
       "evidence": {},
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 742,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:742",
+      "mod_line": 755,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:755",
       "subcard": null
     },
     {
       "name": "sys_msg",
       "trait": "player",
-      "line": 405,
+      "line": 418,
       "overridden": true,
       "direct_handlers": [
         "ActionOfAddSkill",
@@ -5341,21 +5341,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "sys_msg",
-        "line": 1921
+        "line": 2150
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 405,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:405",
+      "mod_line": 418,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:418",
       "subcard": null
     },
     {
       "name": "chr_name",
       "trait": "player",
-      "line": 198,
+      "line": 211,
       "overridden": true,
       "direct_handlers": [
         "ActionOfAddNameList",
@@ -5515,21 +5515,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "chr_name",
-        "line": 1456
+        "line": 1680
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 198,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:198",
+      "mod_line": 211,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:211",
       "subcard": null
     },
     {
       "name": "guild_name",
       "trait": "player",
-      "line": 254,
+      "line": 267,
       "overridden": true,
       "direct_handlers": [
         "ActionOfLineMsg",
@@ -5593,21 +5593,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "guild_name",
-        "line": 1614
+        "line": 1838
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 254,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:254",
+      "mod_line": 267,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:267",
       "subcard": null
     },
     {
       "name": "path",
       "trait": "npc",
-      "line": 788,
+      "line": 801,
       "overridden": true,
       "direct_handlers": [
         "ActionOfAddNameList",
@@ -5665,15 +5665,15 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptNpc for HostNpc",
         "method": "path",
-        "line": 696
+        "line": 759
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 788,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:788",
+      "mod_line": 801,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:801",
       "subcard": null
     },
     {
@@ -5716,7 +5716,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "drop_item_on_full_bag",
-        "line": 2161
+        "line": 2390
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5767,7 +5767,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "gold_changed",
-        "line": 1448
+        "line": 1672
       },
       "side_effect": "-",
       "consequence": "-",
@@ -5781,7 +5781,7 @@
     {
       "name": "is_enough_bag",
       "trait": "player",
-      "line": 202,
+      "line": 215,
       "overridden": false,
       "direct_handlers": [
         "ActionOfGiveItem"
@@ -5822,14 +5822,14 @@
       "priority": null,
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 202,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:202",
+      "mod_line": 215,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:215",
       "subcard": null
     },
     {
       "name": "global_a_val",
       "trait": "player",
-      "line": 347,
+      "line": 360,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5901,21 +5901,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "global_a_val",
-        "line": 2028
+        "line": 2257
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 347,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:347",
+      "mod_line": 360,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:360",
       "subcard": null
     },
     {
       "name": "globa_dy_mval",
       "trait": "player",
-      "line": 343,
+      "line": 356,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -5985,21 +5985,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "globa_dy_mval",
-        "line": 2025
+        "line": 2254
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 343,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:343",
+      "mod_line": 356,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:356",
       "subcard": null
     },
     {
       "name": "global_val",
       "trait": "player",
-      "line": 339,
+      "line": 352,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6069,21 +6069,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "global_val",
-        "line": 2022
+        "line": 2251
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 339,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:339",
+      "mod_line": 352,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:352",
       "subcard": null
     },
     {
       "name": "set_globa_dy_mval",
       "trait": "player",
-      "line": 366,
+      "line": 379,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6127,21 +6127,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_globa_dy_mval",
-        "line": 2062
+        "line": 2291
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 366,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:366",
+      "mod_line": 379,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:379",
       "subcard": null
     },
     {
       "name": "set_global_val",
       "trait": "player",
-      "line": 364,
+      "line": 377,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6185,21 +6185,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_global_val",
-        "line": 2057
+        "line": 2286
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 364,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:364",
+      "mod_line": 377,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:377",
       "subcard": null
     },
     {
       "name": "set_mdy_val",
       "trait": "player",
-      "line": 370,
+      "line": 383,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6243,21 +6243,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_mdy_val",
-        "line": 2043
+        "line": 2272
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 370,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:370",
+      "mod_line": 383,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:383",
       "subcard": null
     },
     {
       "name": "set_mn_integer",
       "trait": "player",
-      "line": 374,
+      "line": 387,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6301,21 +6301,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_mn_integer",
-        "line": 2049
+        "line": 2278
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 374,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:374",
+      "mod_line": 387,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:387",
       "subcard": null
     },
     {
       "name": "set_mnmval",
       "trait": "player",
-      "line": 372,
+      "line": 385,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6359,21 +6359,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_mnmval",
-        "line": 2046
+        "line": 2275
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 372,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:372",
+      "mod_line": 385,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:385",
       "subcard": null
     },
     {
       "name": "game_gold_changed",
       "trait": "player",
-      "line": 478,
+      "line": 491,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGameGold",
@@ -6414,21 +6414,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "game_gold_changed",
-        "line": 1556
+        "line": 1780
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 478,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:478",
+      "mod_line": 491,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:491",
       "subcard": null
     },
     {
       "name": "game_gold",
       "trait": "player",
-      "line": 218,
+      "line": 231,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGameGold",
@@ -6475,21 +6475,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "game_gold",
-        "line": 1545
+        "line": 1769
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 218,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:218",
+      "mod_line": 231,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:231",
       "subcard": null
     },
     {
       "name": "set_global_a_val",
       "trait": "player",
-      "line": 368,
+      "line": 381,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6531,21 +6531,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_global_a_val",
-        "line": 2067
+        "line": 2296
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 368,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:368",
+      "mod_line": 381,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:381",
       "subcard": null
     },
     {
       "name": "set_ms_string",
       "trait": "player",
-      "line": 376,
+      "line": 389,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6587,21 +6587,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_ms_string",
-        "line": 2054
+        "line": 2283
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 376,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:376",
+      "mod_line": 389,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:389",
       "subcard": null
     },
     {
       "name": "set_game_gold",
       "trait": "player",
-      "line": 456,
+      "line": 469,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGameGold",
@@ -6642,21 +6642,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_game_gold",
-        "line": 1542
+        "line": 1766
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 456,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:456",
+      "mod_line": 469,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:469",
       "subcard": null
     },
     {
       "name": "server_str_val",
       "trait": "player",
-      "line": 355,
+      "line": 368,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6715,21 +6715,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "server_str_val",
-        "line": 2034
+        "line": 2263
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 355,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:355",
+      "mod_line": 368,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:368",
       "subcard": null
     },
     {
       "name": "permission",
       "trait": "player",
-      "line": 206,
+      "line": 219,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGmExecute",
@@ -6774,21 +6774,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "permission",
-        "line": 1462
+        "line": 1686
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 206,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:206",
+      "mod_line": 219,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:219",
       "subcard": null
     },
     {
       "name": "server_int_val",
       "trait": "player",
-      "line": 351,
+      "line": 364,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -6845,21 +6845,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "server_int_val",
-        "line": 2031
+        "line": 2260
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 351,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:351",
+      "mod_line": 364,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:364",
       "subcard": null
     },
     {
       "name": "process_user_line_msg",
       "trait": "player",
-      "line": 581,
+      "line": 594,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGmExecute"
@@ -6896,21 +6896,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "process_user_line_msg",
-        "line": 1493
+        "line": 1717
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 581,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:581",
+      "mod_line": 594,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:594",
       "subcard": null
     },
     {
       "name": "set_permission",
       "trait": "player",
-      "line": 579,
+      "line": 592,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGmExecute"
@@ -6947,21 +6947,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_permission",
-        "line": 1472
+        "line": 1696
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 579,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:579",
+      "mod_line": 592,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:592",
       "subcard": null
     },
     {
       "name": "game_point",
       "trait": "player",
-      "line": 222,
+      "line": 235,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGamePoint",
@@ -7004,21 +7004,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "game_point",
-        "line": 1605
+        "line": 1829
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 222,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:222",
+      "mod_line": 235,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:235",
       "subcard": null
     },
     {
       "name": "credit_point",
       "trait": "player",
-      "line": 226,
+      "line": 239,
       "overridden": true,
       "direct_handlers": [
         "ActionOfChangeCreditPoint",
@@ -7061,21 +7061,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "credit_point",
-        "line": 1608
+        "line": 1832
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 226,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:226",
+      "mod_line": 239,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:239",
       "subcard": null
     },
     {
       "name": "send_del_use_item",
       "trait": "player",
-      "line": 679,
+      "line": 692,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -7108,21 +7108,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "send_del_use_item",
-        "line": 2151
+        "line": 2380
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 679,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:679",
+      "mod_line": 692,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:692",
       "subcard": null
     },
     {
       "name": "set_use_item_index",
       "trait": "player",
-      "line": 669,
+      "line": 682,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -7155,21 +7155,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_use_item_index",
-        "line": 2126
+        "line": 2355
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 669,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:669",
+      "mod_line": 682,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:682",
       "subcard": null
     },
     {
       "name": "use_item_std_item_present",
       "trait": "player",
-      "line": 675,
+      "line": 688,
       "overridden": false,
       "direct_handlers": [],
       "direct_commands": [],
@@ -7204,14 +7204,14 @@
       "priority": null,
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 675,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:675",
+      "mod_line": 688,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:688",
       "subcard": null
     },
     {
       "name": "set_play_dice_label",
       "trait": "player",
-      "line": 613,
+      "line": 626,
       "overridden": true,
       "direct_handlers": [
         "ActionOfPlayDice"
@@ -7248,21 +7248,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_play_dice_label",
-        "line": 1619
+        "line": 1843
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 613,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:613",
+      "mod_line": 626,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:626",
       "subcard": null
     },
     {
       "name": "tick_count",
       "trait": "player",
-      "line": 401,
+      "line": 414,
       "overridden": true,
       "direct_handlers": [
         "ActionOfDelayCall",
@@ -7307,21 +7307,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "tick_count",
-        "line": 1880
+        "line": 2109
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 401,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:401",
+      "mod_line": 414,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:414",
       "subcard": null
     },
     {
       "name": "config_game_gold_name",
       "trait": "player",
-      "line": 469,
+      "line": 482,
       "overridden": true,
       "direct_handlers": [
         "ActionOfOpenSaleDeal"
@@ -7358,21 +7358,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "config_game_gold_name",
-        "line": 1597
+        "line": 1821
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 469,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:469",
+      "mod_line": 482,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:482",
       "subcard": null
     },
     {
       "name": "config_renewlevel_clear_exp",
       "trait": "player",
-      "line": 547,
+      "line": 560,
       "overridden": false,
       "direct_handlers": [
         "ActionOfReNewLevel"
@@ -7411,14 +7411,14 @@
       "priority": null,
       "host_overridden": false,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 547,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:547",
+      "mod_line": 560,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:560",
       "subcard": null
     },
     {
       "name": "group_member_jobs",
       "trait": "player",
-      "line": 434,
+      "line": 447,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -7451,21 +7451,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "group_member_jobs",
-        "line": 1779
+        "line": 2008
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 434,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:434",
+      "mod_line": 447,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:447",
       "subcard": null
     },
     {
       "name": "group_owner",
       "trait": "player",
-      "line": 427,
+      "line": 440,
       "overridden": true,
       "direct_handlers": [
         "ActionOfGroupRecall"
@@ -7508,15 +7508,15 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "group_owner",
-        "line": 1776
+        "line": 2005
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 427,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:427",
+      "mod_line": 440,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:440",
       "subcard": null
     },
     {
@@ -7553,7 +7553,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "line_variable_text",
-        "line": 1681
+        "line": 1910
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7600,7 +7600,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "quest_unit_open_status",
-        "line": 1419
+        "line": 1643
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7647,7 +7647,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "quest_unit_status",
-        "line": 1415
+        "line": 1639
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7661,7 +7661,7 @@
     {
       "name": "sale_deal",
       "trait": "player",
-      "line": 460,
+      "line": 473,
       "overridden": true,
       "direct_handlers": [
         "ActionOfOpenSaleDeal"
@@ -7698,21 +7698,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "sale_deal",
-        "line": 1588
+        "line": 1812
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 460,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:460",
+      "mod_line": 473,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:473",
       "subcard": null
     },
     {
       "name": "set_bo_dec_game_gold",
       "trait": "player",
-      "line": 476,
+      "line": 489,
       "overridden": true,
       "direct_handlers": [
         "ActionOfAutoSubGameGold"
@@ -7749,21 +7749,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_bo_dec_game_gold",
-        "line": 1831
+        "line": 2060
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 476,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:476",
+      "mod_line": 489,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:489",
       "subcard": null
     },
     {
       "name": "set_bo_inc_game_gold",
       "trait": "player",
-      "line": 474,
+      "line": 487,
       "overridden": true,
       "direct_handlers": [
         "ActionOfAutoAddGameGold"
@@ -7800,21 +7800,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_bo_inc_game_gold",
-        "line": 1828
+        "line": 2057
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 474,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:474",
+      "mod_line": 487,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:487",
       "subcard": null
     },
     {
       "name": "set_kill_mon_exp_rate",
       "trait": "player",
-      "line": 553,
+      "line": 566,
       "overridden": true,
       "direct_handlers": [
         "ActionOfKillMonExpRate"
@@ -7851,21 +7851,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_kill_mon_exp_rate",
-        "line": 1820
+        "line": 2049
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 553,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:553",
+      "mod_line": 566,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:566",
       "subcard": null
     },
     {
       "name": "set_map_mode",
       "trait": "player",
-      "line": 640,
+      "line": 653,
       "overridden": true,
       "direct_handlers": [
         "ActionOfSetMapMode"
@@ -7902,21 +7902,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_map_mode",
-        "line": 1896
+        "line": 2125
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 640,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:640",
+      "mod_line": 653,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:653",
       "subcard": null
     },
     {
       "name": "set_power_rate",
       "trait": "player",
-      "line": 556,
+      "line": 569,
       "overridden": true,
       "direct_handlers": [
         "ActionOfPowerRate"
@@ -7953,21 +7953,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_power_rate",
-        "line": 1824
+        "line": 2053
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 556,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:556",
+      "mod_line": 569,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:569",
       "subcard": null
     },
     {
       "name": "set_sale_deal",
       "trait": "player",
-      "line": 467,
+      "line": 480,
       "overridden": true,
       "direct_handlers": [
         "ActionOfOpenSaleDeal"
@@ -8004,21 +8004,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_sale_deal",
-        "line": 1592
+        "line": 1816
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 467,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:467",
+      "mod_line": 480,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:480",
       "subcard": null
     },
     {
       "name": "use_item_index",
       "trait": "player",
-      "line": 282,
+      "line": 295,
       "overridden": true,
       "direct_handlers": [
         "ActionOfRepairAllItem"
@@ -8059,21 +8059,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_index",
-        "line": 2118
+        "line": 2347
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 282,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:282",
+      "mod_line": 295,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:295",
       "subcard": null
     },
     {
       "name": "use_item_std_name",
       "trait": "player",
-      "line": 671,
+      "line": 684,
       "overridden": true,
       "direct_handlers": [
         "ActionOfRepairAllItem"
@@ -8112,21 +8112,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_std_name",
-        "line": 2135
+        "line": 2364
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 671,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:671",
+      "mod_line": 684,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:684",
       "subcard": null
     },
     {
       "name": "use_items_len",
       "trait": "player",
-      "line": 665,
+      "line": 678,
       "overridden": true,
       "direct_handlers": [
         "ActionOfRepairAllItem"
@@ -8165,21 +8165,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_items_len",
-        "line": 2115
+        "line": 2344
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 665,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:665",
+      "mod_line": 678,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:678",
       "subcard": null
     },
     {
       "name": "envir_map_name",
       "trait": "player",
-      "line": 315,
+      "line": 328,
       "overridden": true,
       "direct_handlers": [
         "ActionOfOffLine"
@@ -8220,21 +8220,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "envir_map_name",
-        "line": 1872
+        "line": 2101
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 315,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:315",
+      "mod_line": 328,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:328",
       "subcard": null
     },
     {
       "name": "set_offline",
       "trait": "player",
-      "line": 643,
+      "line": 656,
       "overridden": true,
       "direct_handlers": [
         "ActionOfOffLine"
@@ -8271,21 +8271,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_offline",
-        "line": 1850
+        "line": 2079
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 643,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:643",
+      "mod_line": 656,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:656",
       "subcard": null
     },
     {
       "name": "re_level",
       "trait": "player",
-      "line": 230,
+      "line": 243,
       "overridden": true,
       "direct_handlers": [
         "ActionOfReNewLevel",
@@ -8328,21 +8328,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "re_level",
-        "line": 1611
+        "line": 1835
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 230,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:230",
+      "mod_line": 243,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:243",
       "subcard": null
     },
     {
       "name": "map_exists",
       "trait": "player",
-      "line": 311,
+      "line": 324,
       "overridden": true,
       "direct_handlers": [
         "ActionOfAutoGetExp",
@@ -8385,21 +8385,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "map_exists",
-        "line": 1886
+        "line": 2115
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 311,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:311",
+      "mod_line": 324,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:324",
       "subcard": null
     },
     {
       "name": "set_auto_get_exp",
       "trait": "player",
-      "line": 626,
+      "line": 639,
       "overridden": true,
       "direct_handlers": [
         "ActionOfAutoGetExp"
@@ -8436,21 +8436,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_auto_get_exp",
-        "line": 1834
+        "line": 2063
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 626,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:626",
+      "mod_line": 639,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:639",
       "subcard": null
     },
     {
       "name": "play_dice_label",
       "trait": "player",
-      "line": 621,
+      "line": 634,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -8475,21 +8475,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "play_dice_label",
-        "line": 1623
+        "line": 1847
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 621,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:621",
+      "mod_line": 634,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:634",
       "subcard": null
     },
     {
       "name": "set_server_int_val",
       "trait": "player",
-      "line": 378,
+      "line": 391,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -8514,21 +8514,21 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_server_int_val",
-        "line": 2072
+        "line": 2301
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 378,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:378",
+      "mod_line": 391,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:391",
       "subcard": null
     },
     {
       "name": "set_server_str_val",
       "trait": "player",
-      "line": 380,
+      "line": 393,
       "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
@@ -8553,15 +8553,15 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_server_str_val",
-        "line": 2077
+        "line": 2306
       },
       "side_effect": "-",
       "consequence": "-",
       "priority": null,
       "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
-      "mod_line": 380,
-      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:380",
+      "mod_line": 393,
+      "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:393",
       "subcard": null
     }
   ]
