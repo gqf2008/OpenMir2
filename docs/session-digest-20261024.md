@@ -54,7 +54,7 @@ EOF
 | 02:19 | `a30a6fa79` | `openmir2-window-criteria-template` | L | 窗口判据六字段模板 + 只告警的 lint（返工） | 否 |
 | 02:22 | `a112e59b5` | `openmir2-scenario-recog-packing-fix` | L | 动作族 recog 打包口径订正（接管返工） | 否 |
 | 02:32 | `059a03900` | `openmir2-window-criteria-backfill` | L | 窗口判据补齐首批 10/20（返工） | 否 |
-| 02:39 | `b5b3c47cf` | `openmir2-goal-gate-unmerged-selftest` | L | 未合并窗口桶补仓内合成用例 | 否 |
+| 02:39 | `b5b3c47cf` | `openmir2-goal-gate-unmerged-selftest` | L | 未合并窗口桶补仓内合成用例 | 否 |〔2026-10-24 订正：该卡随后 closed〕|
 | 02:42 | `a9455165f` | `openmir2-script-envir-root-host` | R | HostNpc envir_root 覆写 + 文件列表类脚本接线（返工） | 是（见 §2） |
 | 02:44 | `196439400` | `openmir2-script-user-account` | R | 脚本宿主 user_account 接线 + SessionGround.account 生产缝修复 | 是（见 §2） |
 | 02:55 | `95b169ecc` | `openmir2-param-discovery-oracle-text-fix` | L | COMPUTED_ORACLES 文案按 ident 订正（接管返工） | 否 |
@@ -174,7 +174,7 @@ EOF
 ## 6. 交叉链接与尚未合入的件
 
 - `docs/needs-human-20261024.md`（**已在 master**）：owner 决策清单，§0 五件事；窗口枚举引用 batch-plan §7.4。
-- `docs/gate-baseline-478ff9a33.md`：**在办**，卡 `openmir2-gate-baseline-snapshot`（head `3bd8c6580`，待审/返工中），未合入 master。
+- `docs/gate-baseline-478ff9a33.md`：**在办**〔2026-10-24 订正：已随 `8d326fb19` 合入 master，卡已 closed〕，卡 `openmir2-gate-baseline-snapshot`（head `3bd8c6580`）。
 - `docs/leader-process-lessons-20261024.md`：**在办**，卡 `openmir2-leader-process-lessons-20261024`（head `744023506`，待审/返工中），未合入 master。
 - `docs/inventory-fixture-reachability-20261024.md`：**已合入 master**（`c4b66ddb1`，接管返工，tier=L）。
 - 本文件只写 `docs/`，未改 `src/**`、`tools/**`、场景 JSON、`rules.json`、`whitelist.md`、任何卡片状态。
