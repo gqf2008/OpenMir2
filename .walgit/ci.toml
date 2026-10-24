@@ -61,6 +61,13 @@ refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
 schedule = "@hourly"
 timeout = "2m"
 
+[[task]]
+name = "fast-merge-tree-helper"
+command = "python -I -B tools/hygiene/merge_tree_helper.py --selftest"
+refs = ["refs/heads/master"]
+schedule = "@hourly"
+timeout = "2m"
+
 # --- rust group (minutes-level; declared sequentially, never parallel:
 #     this host was OOM-killed once when clippy/test ran concurrently) ---
 [[task]]
