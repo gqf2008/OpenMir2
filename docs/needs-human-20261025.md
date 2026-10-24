@@ -109,7 +109,7 @@
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**（语料 639/639/0/0） |
 | ② R 卡证据 | **need_human** | R 卡 **213 张**（快照 @ `27a6f27e0`）：closed **12** / `window_required` **147**（另**未合并 2**）/ whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ `not_merged` **0**；卫生清单「登记型 PASS ≠ 真机证据」**196** 张 |
 | ③ B 类清零 | **pass** | recon `tracked=0`（快照 @ 27a6f27e0；rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **need_human** | 7 项：绿 **5** / 红 **0** / 需人工 **2** —— `master_sync`（walgit 500）+ `cargo_test_workspace`（**本轮未跑**；最近一次全量证据为 tester 在 `2eb147e6e` 的 **3237 passed / 0 failed**，其后 7 笔合并我逐笔核过，仅 `b42a8701d` 触及生产文件且只加两条 `#[cfg(test)]`） |
+| ④ 门禁恒绿 | **need_human** | 7 项：绿 **5** / 红 **0** / 需人工 **2** —— `master_sync`（walgit 500）+ `cargo_test_workspace`（**本轮未跑**；最近一次全量证据为 tester 在 `2eb147e6e` 的 **3237 passed / 0 failed**，其后 **27 笔**合并（至 `27a6f27e0`）我逐笔扫过 `mir2-rs/bins/**/*.rs` 与 `crates/**/*.rs`，**只有 `b42a8701d`** 命中且只加两条 `#[cfg(test)]`） |
 
 > 口径：walgit 故障期 `master_sync` 必然 `need_human`；②的「未合并 2」按规则单列、不计 FAIL。
 > **四条件的真缺口只有 ② 的 G11 1 张（§1）**；另有一条仓内不一致已开卡处理（`script_host_noop_audit --strict-lines`
