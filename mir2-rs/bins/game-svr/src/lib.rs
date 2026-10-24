@@ -5610,32 +5610,23 @@ fn handle_shop_cmd(
                     let _ = tx.send(SimToGate::SendFrame { socket, body });
                 }
             }
-            for say in &says {
-                session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
-            }
-            if !says.is_empty() {
-                if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 1011 说词") {
-                    emit_npc_says(tx, socket, actor_id, &says);
-                }
-            }
-            // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
-            if !script_frames.is_empty() || !script_broadcasts.is_empty() {
-                let tx = route_to_gate(gates, gate_idx, socket, "商人 1011 脚本帧");
-                drain_script_frames_with_host(
-                    tx,
-                    socket,
-                    merchant_id,
-                    sg,
-                    &script_frames,
-                    &script_broadcasts,
-                    &*world,
-                    online,
-                    gates,
-                    sg.actor_id,
-                    Some(merchant_id),
-                    npc_vars.sys_msg.red,
-                );
-            }
+            emit_merchant_goto_result(
+                "CM_MERCHANTDLGSELECT",
+                label,
+                chr_name,
+                merchant_id,
+                &says,
+                &script_frames,
+                &script_broadcasts,
+                session,
+                sg,
+                &*world,
+                online,
+                gates,
+                gate_idx,
+                socket,
+                npc_vars,
+            );
             if !bo_can_jmp {
                 glog!(
                     "DBG",
@@ -5917,10 +5908,66 @@ fn handle_shop_cmd(
                             catalog,
                         );
                         if let Some(g) = oc.goto_label {
-                            // `Market_Def` 商人脚本未装载（T-47 ③）⇒ 只登记、不执行 say。
-                            glog!(
-                                "WRN",
-                                "CM_MERCHANTDLGSELECT：GotoLable({g}) 未执行（Market_Def 商人脚本未装载，登记；ChrName={chr_name}）"
+                            // `Merchant.cs:538/582/586`：已在升级 `~@upgradenow_ing`、成功
+                            // `~@upgradenow_ok`、失败 `~@upgradenow_fail` —— 各是一跳
+                            // `M2Share.ScriptEngine.GotoLable(playObject, ActorId, …)`，
+                            // 本宿主经 [`run_merchant_goto`] 跑同一 `Merchant.ScriptList`。
+                            let mut rng = std::mem::replace(
+                                &mut world.rng,
+                                mir2_shared::rng::RandomNumber::with_seed(0),
+                            );
+                            let mut script_broadcasts: Vec<String> = Vec::new();
+                            let (says, script_frames, use_slots) = run_merchant_goto(
+                                merchant_book,
+                                merchant_id,
+                                g,
+                                false,
+                                &mut *sg,
+                                chr_name,
+                                &map_text,
+                                catalog,
+                                item_number,
+                                npc_vars,
+                                session,
+                                sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                                now_ms() as i32,
+                                &mut rng,
+                                Some(&*world),
+                                gm,
+                                &mut script_broadcasts,
+                            );
+                            world.rng = rng;
+                            for slot in use_slots {
+                                sync_use_item_slot_to_entity(world, sg, slot);
+                            }
+                            if let Some(body) =
+                                apply_pending_gm_use_item_in(&mut *sg, world, catalog)
+                            {
+                                if let Some(tx) = route_to_gate(
+                                    gates,
+                                    entry.gate_idx,
+                                    socket,
+                                    "GM 改属性 SM_UPDATEITEM",
+                                ) {
+                                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                                }
+                            }
+                            emit_merchant_goto_result(
+                                "CM_MERCHANTDLGSELECT/@upgradenow",
+                                g,
+                                chr_name,
+                                merchant_id,
+                                &says,
+                                &script_frames,
+                                &script_broadcasts,
+                                session,
+                                sg,
+                                &*world,
+                                online,
+                                gates,
+                                gate_idx,
+                                socket,
+                                npc_vars,
                             );
                         }
                         feature_broadcast = oc.feature_changed;
@@ -5958,9 +6005,66 @@ fn handle_shop_cmd(
                         // 成功也只发 `SM_ADDITEM`，**不**改 `ItemList`（测试断言长度不变）。
                         let oc = game_svr::shop::get_backupgnow_outcome(&r, sg.actor_id, catalog);
                         if let Some(g) = oc.goto_label {
-                            glog!(
-                                "WRN",
-                                "CM_MERCHANTDLGSELECT：GotoLable({g}) 未执行（Market_Def 商人脚本未装载，登记；ChrName={chr_name}）"
+                            // `Merchant.cs:752/755/758`：满包 `~@getbackupgnow_bagfull`、
+                            // 无记录 `~@getbackupgnow_fail`（`sGETBACKUPGFAIL`）、未到
+                            // `~@getbackupgnow_ing`、成功 `~@getbackupgnow_ok`。
+                            // 部署脚本没有 `_bagfull` 标签 ⇒ 与 oracle 同样是空跳（无 say）。
+                            let mut rng = std::mem::replace(
+                                &mut world.rng,
+                                mir2_shared::rng::RandomNumber::with_seed(0),
+                            );
+                            let mut script_broadcasts: Vec<String> = Vec::new();
+                            let (says, script_frames, use_slots) = run_merchant_goto(
+                                merchant_book,
+                                merchant_id,
+                                g,
+                                false,
+                                &mut *sg,
+                                chr_name,
+                                &map_text,
+                                catalog,
+                                item_number,
+                                npc_vars,
+                                session,
+                                sell_off_sessions.entry(chr_name.to_string()).or_default(),
+                                now_ms() as i32,
+                                &mut rng,
+                                Some(&*world),
+                                gm,
+                                &mut script_broadcasts,
+                            );
+                            world.rng = rng;
+                            for slot in use_slots {
+                                sync_use_item_slot_to_entity(world, sg, slot);
+                            }
+                            if let Some(body) =
+                                apply_pending_gm_use_item_in(&mut *sg, world, catalog)
+                            {
+                                if let Some(tx) = route_to_gate(
+                                    gates,
+                                    entry.gate_idx,
+                                    socket,
+                                    "GM 改属性 SM_UPDATEITEM",
+                                ) {
+                                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                                }
+                            }
+                            emit_merchant_goto_result(
+                                "CM_MERCHANTDLGSELECT/@getbackupgnow",
+                                g,
+                                chr_name,
+                                merchant_id,
+                                &says,
+                                &script_frames,
+                                &script_broadcasts,
+                                session,
+                                sg,
+                                &*world,
+                                online,
+                                gates,
+                                gate_idx,
+                                socket,
+                                npc_vars,
                             );
                         }
                         out = oc.frames;
@@ -6123,42 +6227,23 @@ fn handle_shop_cmd(
                         let _ = tx.send(SimToGate::SendFrame { socket, body });
                     }
                 }
-                for say in &says {
-                    session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
-                }
-                if !says.is_empty() {
-                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人修理说词") {
-                        emit_npc_says(tx, socket, actor_id, &says);
-                    }
-                    glog!(
-                        "INF",
-                        "CM_USERREPAIRITEM：GotoLable({g}) 说词 {} 条 ChrName={chr_name}",
-                        says.len()
-                    );
-                } else {
-                    glog!(
-                        "DBG",
-                        "CM_USERREPAIRITEM：GotoLable({g}) 无说词（脚本无该标签/未装载）ChrName={chr_name}"
-                    );
-                }
-                // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
-                if !script_frames.is_empty() || !script_broadcasts.is_empty() {
-                    let tx = route_to_gate(gates, gate_idx, socket, "商人修理脚本帧");
-                    drain_script_frames_with_host(
-                        tx,
-                        socket,
-                        merchant_id,
-                        sg,
-                        &script_frames,
-                        &script_broadcasts,
-                        &*world,
-                        online,
-                        gates,
-                        sg.actor_id,
-                        Some(merchant_id),
-                        npc_vars.sys_msg.red,
-                    );
-                }
+                emit_merchant_goto_result(
+                    "CM_USERREPAIRITEM",
+                    g,
+                    chr_name,
+                    merchant_id,
+                    &says,
+                    &script_frames,
+                    &script_broadcasts,
+                    session,
+                    sg,
+                    &*world,
+                    online,
+                    gates,
+                    gate_idx,
+                    socket,
+                    npc_vars,
+                );
             }
         }
         game_svr::shop::CM_USERMAKEDRUGITEM => {
@@ -7103,6 +7188,34 @@ fn run_std_mode_func_script(
     // `use_slots` 的世界实体同步由调用方做（它持有 `&mut World`）。
 }
 
+/// `Merchant.LoadMerchantScript()` 的**脚本文件缺失**清单。
+///
+/// oracle `ScriptParsers.LoadScriptFile`（`ScriptParsers.cs:976-979`）对不存在的脚本文件写
+/// `LogService.Error("Script file not found: " + sScritpFileName)` 后return；解析器侧对应
+/// `Ok(None)`（`crates/script/src/parser.rs:213`，不产生任何产出也不打日志）。
+///
+/// 因此宿主在 `load_merchant_spawns` 之后按**同一路径口径**
+/// （`envir_file_path(envir_root, "", "Market_Def", "<ScriptName>-<MapName>.txt")`）复核一遍并逐条
+/// 记 `ERR`：条数与正文 = oracle，位置移到装载完成之后（登记；不影响任何字段）。
+#[must_use]
+fn market_def_script_missing(
+    envir_root: &std::path::Path,
+    seeds: &[game_svr::merchant::MerchantScriptSeed],
+) -> Vec<std::path::PathBuf> {
+    seeds
+        .iter()
+        .map(|seed| {
+            mir2_envir::paths::envir_file_path(
+                envir_root,
+                "",
+                mir2_envir::merchant::MERCHANT_SCRIPT_DIR,
+                &format!("{}-{}.txt", seed.script_name, seed.map_name),
+            )
+        })
+        .filter(|path| !path.exists())
+        .collect()
+}
+
 /// 商人 `GotoLable`（`ScriptEngine.cs:38-129` → `Merchant.ScriptList`）＋ `Script/LastNpc`
 /// 跨调用回写。返回 `(说词, 脚本帧, 改动的 UseItems 槽)`：说词按 `MsgQueue` 出队序落
 /// `SM_MERCHANTSAY`，帧经 [`emit_script_frames`] 排水（`RM_GAMEGOLDCHANGED` ⇒ `SM_GAMEGOLDNAME`，
@@ -7226,6 +7339,75 @@ fn run_merchant_goto(
     // 脚本帧（`NpcPlayer.frames` = `MsgQueue` 的脚本侧投影）：写回之后再交给调用方排水，
     // 元宝/金币帧的取值因此是本次脚本写回后的会话值。
     (says, frames, use_slots)
+}
+
+/// 商人 `GotoLable` 结果的**排水**（说词 → 脚本帧 → `SENDMSG` 世界扇出）。
+///
+/// 四个生产调用点共用同一口径：`CM_MERCHANTDLGSELECT` 的 label 臂、`@back` 臂、
+/// `CM_USERREPAIRITEM` 的 `~@repair`/`~@s_repair`、`@upgradenow`/`@getbackupgnow` 的
+/// `~@upgradenow_*`/`~@getbackupgnow_*`。
+///
+/// 次序照 oracle `MsgQueue` 优先级（`BaseObject.Message.cs:181` 的 `(byte)wIdent`）：
+/// 说词 `RM_MERCHANTSAY`(11009&0xFF=1) 最小 ⇒ 先于脚本帧（`RM_GAMEGOLDCHANGED`=148 等）；
+/// 脚本帧内部再由 [`emit_script_frames`] 按同一优先级堆排。
+/// 注：`out`（本命令的直发帧）由 `handle_shop_cmd` 尾部 [`emit_shop_frames`] 发，
+/// 因此它一定排在本函数之后——与既有三处 `GotoLable` 调用点同口径，
+/// 逐帧全局次序由真机窗口核（见卡 `openmir2-merchant-script-load`）。
+#[allow(clippy::too_many_arguments)]
+fn emit_merchant_goto_result(
+    tag: &str,
+    label: &str,
+    chr_name: &str,
+    merchant_actor_id: i32,
+    says: &[game_svr::npc::SayMsg],
+    script_frames: &[game_svr::npc::SendMsg],
+    script_broadcasts: &[String],
+    session: &mut ShopSession,
+    sg: &mut SessionGround,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    gate_idx: i32,
+    socket: i32,
+    npc_vars: &game_svr::npc::NpcVars,
+) {
+    // `ScriptEngine.cs:993-1000` 说词里出现的标签进 `CanJmpScriptLableMap`（逐条覆盖，后到者胜）。
+    for say in says {
+        session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+    }
+    if !says.is_empty() {
+        if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人脚本说词") {
+            emit_npc_says(tx, socket, sg.actor_id, says);
+        }
+        glog!(
+            "INF",
+            "{tag}：GotoLable({label}) 说词 {} 条 ChrName={chr_name}",
+            says.len()
+        );
+    } else {
+        glog!(
+            "DBG",
+            "{tag}：GotoLable({label}) 无说词（脚本无该标签/文件缺失）ChrName={chr_name}"
+        );
+    }
+    // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
+    if !script_frames.is_empty() || !script_broadcasts.is_empty() {
+        let tx = route_to_gate(gates, gate_idx, socket, "商人脚本帧");
+        drain_script_frames_with_host(
+            tx,
+            socket,
+            merchant_actor_id,
+            sg,
+            script_frames,
+            script_broadcasts,
+            world,
+            online,
+            gates,
+            sg.actor_id,
+            Some(merchant_actor_id),
+            npc_vars.sys_msg.red,
+        );
+    }
 }
 /// 固定 NPC（`Envir/Npcs.txt`）的脚本 `GotoLable` 生产实现——[`guild_official::FixedNpcScript`]
 /// 的宿主注入（T-137）。
@@ -20280,6 +20462,9 @@ fn sim_loop(
         let envir_root = loader.base_path.join(&loader.envir_dir);
         match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
             Ok((spawns, report, seeds)) => {
+                // `Merchant.LoadMerchantScript()` 的缺失分支（oracle `LogService.Error`）。
+                // 必须在 `seeds` 被 `spawn_merchants_with_scripts` 消费前取清单。
+                let market_def_missing = market_def_script_missing(&envir_root, &seeds);
                 let (kept, failed, book) = game_svr::merchant::spawn_merchants_with_scripts(
                     &mut world,
                     spawns,
@@ -20295,13 +20480,18 @@ fn sim_loop(
                 );
                 glog!(
                     "INF",
-                    "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}，脚本表 {} 条",
+                    "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}，脚本表 {} 条（Market_Def 文件缺失 {} 条）",
                     report.records,
                     report.dropped_unknown_map.len(),
                     failed.len(),
                     kept,
-                    merchant_book.len()
+                    merchant_book.len(),
+                    market_def_missing.len()
                 );
+                for path in &market_def_missing {
+                    // oracle 逐字面量：`"Script file not found: " + sScritpFileName`。
+                    glog!("ERR", "Script file not found: {}", path.display());
+                }
                 for (name, map) in &report.dropped_unknown_map {
                     glog!(
                         "WRN",
@@ -30454,6 +30644,370 @@ break
             game_svr::smframe::sm_gamegoldname(260, 0x0001_0002, &[]),
             "元宝帧取写回后的会话值：GameGold=260，GamePoint=0x00010002"
         );
+    }
+
+    /// **卡 `openmir2-merchant-script-load`**：临时 Envir（`Merchant.txt` + 可选
+    /// `Market_Def/修理商-0103.txt`），GBK 落盘（`decode_text` 按 GBK 解）。
+    fn merchant_load_envir(
+        tag: &str,
+        merchant_text: &str,
+        script_body: Option<&str>,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!(
+            "gs-merchant-script-load-{tag}-{}-{n}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        let envir = dir.join("Envir");
+        std::fs::create_dir_all(envir.join("Market_Def")).expect("建 Envir/Market_Def");
+        std::fs::write(envir.join("Merchant.txt"), gbk_encode(merchant_text))
+            .expect("写 Merchant.txt");
+        let script_path = envir.join("Market_Def").join("修理商-0103.txt");
+        if let Some(body) = script_body {
+            std::fs::write(&script_path, gbk_encode(body)).expect("写 Market_Def 脚本");
+        }
+        (dir, script_path)
+    }
+
+    /// **判据 ①（装载）**：生产装载链（`MapLoader::load_merchants_loaded` →
+    /// `load_merchant_spawns` → `spawn_merchants_with_scripts`）把磁盘
+    /// `Market_Def/<ScriptName>-<MapName>.txt` 解析进 `MerchantScriptBook`，条目 `loaded=true`、
+    /// 标签可达。**判据 ③（执行）**：同一份脚本经**生产入口** `handle_shop_cmd(CM_USERREPAIRITEM)`
+    /// 的 `~@repair` 跳到脚本并产出 `SM_MERCHANTSAY(643)`。
+    ///
+    /// 牙（逐颗独立复验，见 patch body）：
+    /// - 删「脚本进表」（`MerchantScriptBook::insert` / `seed.scripts` 置空）⇒ `loaded`/say 断言红；
+    /// - 让 `~@repair` 只回标签不执行（删 `handle_shop_cmd` 的 `run_merchant_goto`）⇒ say 断言红。
+    #[test]
+    fn market_def_script_loaded_and_repair_goto_executes_through_production_path() {
+        // `+0` = 脚本头 `+StdMode`（`ScriptParsers.cs:693-702`）⇒ `ItemTypeList=[0]`，
+        // 修理取价 `GetUserItemPrice` 才认 StdMode 0 的模板（oracle 商人脚本同形）。
+        let script = "+0\n[@main]\n欢迎。 <升级/@upgradenow>\n[~@repair]\n修好了。 <返回/@main>\n";
+        let (dir, script_path) =
+            merchant_load_envir("repair", "修理商 0103 9 12 修理商 0 9 0\n", Some(script));
+        assert!(script_path.exists(), "夹具脚本必须在盘上");
+        let loader = mir2_envir::MapLoader::new(dir.clone(), "Map", "Envir");
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let (spawns, report, seeds) =
+            game_svr::merchant::load_merchant_spawns(&loader, |_| Some(0), &mut rng)
+                .expect("Merchant.txt 装载不应失败");
+        assert_eq!(report.records, 1);
+        assert_eq!(spawns.len(), 1);
+        assert_eq!(seeds.len(), 1, "seeds 与 spawns 下标对齐");
+        assert!(
+            seeds[0].scripts[0].contains_label("~@repair"),
+            "生产解析必须把 Market_Def 脚本收进 seeds（装载调用）"
+        );
+
+        let mut world = mir2_world::World::new(64, 64);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut displays = game_svr::downlink::DisplayTable::new();
+        let (kept, failed, book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            spawns,
+            seeds,
+            &mut displays,
+        );
+        assert_eq!((kept, failed.len()), (1, 0));
+        let merchant_id = *world.merchant_ids_sorted().first().expect("商人实体");
+        let entry = book.get(merchant_id).expect("脚本表按世界实体 id 建索引");
+        assert!(
+            entry.def.loaded,
+            "脚本文件存在 ⇒ Merchant.LoadScriptFile 收进了脚本 ⇒ loaded=true"
+        );
+        assert!(
+            entry
+                .def
+                .scripts
+                .iter()
+                .any(|s| s.contains_label("~@repair")),
+            "`~@repair` 必须在 Merchant.ScriptList 里"
+        );
+
+        // —— 生产入口：`CM_USERREPAIRITEM` → `~@repair`。
+        let mut rig = T142Rig::new(Vec::new());
+        rig.world = world;
+        rig.merchant_id = merchant_id;
+        rig.book = book;
+        rig.sessions.get_mut("hero").expect("会话").actor_id = hero;
+        rig.online.clear();
+        online_set(
+            &mut rig.online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        rig.world
+            .entities
+            .get_mut(merchant_id)
+            .and_then(|e| e.merchant.as_mut())
+            .expect("商人实体")
+            .flags
+            .is_repair = true;
+        rig.shop_cfg.repair_item_dec_dura = 30;
+        {
+            let sg = rig.sessions.get_mut("hero").expect("会话");
+            sg.state.gold = 10_000;
+            sg.state.item_list.push(game_svr::bag::BagItem {
+                make_index: 9,
+                index: 1,
+                dura: 4,
+                dura_max: 10,
+                desc: [0; 14],
+            });
+        }
+        rig.catalog.insert(
+            1,
+            mir2_data::models::StdItem {
+                name: "木剑".to_string(),
+                price: 100,
+                weight: 5,
+                std_mode: 0,
+                dura_max: 10,
+                ..mir2_data::models::StdItem::default()
+            },
+        );
+        rig.shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .script_lable = game_svr::shop::LABEL_REPAIR.to_string();
+
+        rig.repair();
+
+        let frames = rig.drain();
+        let say = frames
+            .iter()
+            .find(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_MERCHANTSAY)
+            .unwrap_or_else(|| {
+                panic!(
+                    "`~@repair` 命中脚本后必须下发 SM_MERCHANTSAY(643)：{:?}",
+                    idents(&frames)
+                )
+            });
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&say[12..]));
+        assert!(
+            text.contains("修好了"),
+            "说词 = `ChrName/脚本 say`（NormNpc.cs:1613-1616）；实得 {text:?}"
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_USERREPAIRITEM_OK),
+            "修理 OK 帧仍在（说词只是新增，不吞既有帧）：{:?}",
+            idents(&frames)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **判据 ③ 的升级/取回两臂**：`@upgradenow` 失败支 ⇒ `GotoLable("~@upgradenow_fail")`
+    /// 必须**执行**脚本（旧实现只打「未装载，登记」日志、零帧）。
+    ///
+    /// 牙：把 `handle_shop_cmd` 的 `@upgradenow` 臂改回只打日志（删 `run_merchant_goto`）⇒ 红。
+    #[test]
+    fn upgrade_now_goto_label_executes_market_def_script() {
+        let script =
+            "[@main]\n欢迎。 <升级/@upgradenow>\n[~@upgradenow_fail]\n升级失败。 <返回/@main>\n";
+        let (dir, _) =
+            merchant_load_envir("upgfail", "修理商 0103 9 12 修理商 0 9 0\n", Some(script));
+        let loader = mir2_envir::MapLoader::new(dir.clone(), "Map", "Envir");
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(11);
+        let (spawns, _, seeds) =
+            game_svr::merchant::load_merchant_spawns(&loader, |_| Some(0), &mut rng)
+                .expect("装载不应失败");
+        let mut world = mir2_world::World::new(64, 64);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut displays = game_svr::downlink::DisplayTable::new();
+        let (_, _, book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            spawns,
+            seeds,
+            &mut displays,
+        );
+        let merchant_id = *world.merchant_ids_sorted().first().expect("商人实体");
+
+        let mut rig = T142Rig::new(Vec::new());
+        rig.world = world;
+        rig.merchant_id = merchant_id;
+        rig.book = book;
+        rig.sessions.get_mut("hero").expect("会话").actor_id = hero;
+        rig.online.clear();
+        online_set(
+            &mut rig.online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        rig.world
+            .entities
+            .get_mut(merchant_id)
+            .and_then(|e| e.merchant.as_mut())
+            .expect("商人实体")
+            .flags
+            .is_upgradenow = true;
+        rig.shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = vec![game_svr::shop::LABEL_UPGRADENOW.to_string()];
+
+        // 无武器 ⇒ `UpgradeWaponBegin::Fail` ⇒ `GotoLable(~@upgradenow_fail)`（Merchant.cs:586）。
+        rig.dlg_select(game_svr::shop::LABEL_UPGRADENOW);
+        let frames = rig.drain();
+        let say = frames
+            .iter()
+            .find(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_MERCHANTSAY)
+            .unwrap_or_else(|| {
+                panic!(
+                    "`~@upgradenow_fail` 必须执行脚本并出 say：{:?}",
+                    idents(&frames)
+                )
+            });
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&say[12..]));
+        assert!(text.contains("升级失败"), "实得 {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 同上，取回臂：无升级记录 ⇒ `~@getbackupgnow_fail`（`Merchant.cs:752`）。
+    ///
+    /// 牙：删 `@getbackupgnow` 臂的 `run_merchant_goto` ⇒ 红。
+    #[test]
+    fn getbackupgnow_goto_label_executes_market_def_script() {
+        let script = "[@main]\n欢迎。 <取回/@getbackupgnow>\n[~@getbackupgnow_fail]\n没有记录。 <返回/@main>\n";
+        let (dir, _) =
+            merchant_load_envir("getback", "修理商 0103 9 12 修理商 0 9 0\n", Some(script));
+        let loader = mir2_envir::MapLoader::new(dir.clone(), "Map", "Envir");
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(13);
+        let (spawns, _, seeds) =
+            game_svr::merchant::load_merchant_spawns(&loader, |_| Some(0), &mut rng)
+                .expect("装载不应失败");
+        let mut world = mir2_world::World::new(64, 64);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut displays = game_svr::downlink::DisplayTable::new();
+        let (_, _, book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            spawns,
+            seeds,
+            &mut displays,
+        );
+        let merchant_id = *world.merchant_ids_sorted().first().expect("商人实体");
+
+        let mut rig = T142Rig::new(Vec::new());
+        rig.world = world;
+        rig.merchant_id = merchant_id;
+        rig.book = book;
+        rig.sessions.get_mut("hero").expect("会话").actor_id = hero;
+        rig.online.clear();
+        online_set(
+            &mut rig.online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        rig.world
+            .entities
+            .get_mut(merchant_id)
+            .and_then(|e| e.merchant.as_mut())
+            .expect("商人实体")
+            .flags
+            .is_get_backupgnow = true;
+        rig.shop_sessions
+            .entry("hero".to_string())
+            .or_default()
+            .can_jmp_labels = vec![game_svr::shop::LABEL_GETBACKUPGNOW.to_string()];
+
+        rig.dlg_select(game_svr::shop::LABEL_GETBACKUPGNOW);
+        let frames = rig.drain();
+        let say = frames
+            .iter()
+            .find(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_MERCHANTSAY)
+            .unwrap_or_else(|| {
+                panic!(
+                    "`~@getbackupgnow_fail` 必须执行脚本并出 say：{:?}",
+                    idents(&frames)
+                )
+            });
+        let text = gbk_decode(&mir2_protocol::edcode::decode(&say[12..]));
+        assert!(text.contains("没有记录"), "实得 {text:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **判据 ① 的缺失分支**：`Market_Def/<stem>.txt` 不存在时——
+    /// `scripts` 空、`MerchantNpc.def.loaded == false`、宿主记入
+    /// [`market_def_script_missing`]（oracle `LogService.Error("Script file not found: …")`）。
+    /// **不许静默假装装载成功**。
+    ///
+    /// 牙：把 `spawn_merchants_with_scripts` 的 `loaded: !seed.scripts.is_empty()` 改成
+    /// `loaded: true` ⇒ 本用例红。
+    #[test]
+    fn market_def_missing_file_is_reported_not_silently_loaded() {
+        let (dir, script_path) =
+            merchant_load_envir("missing", "修理商 0103 9 12 修理商 0 9 0\n", None);
+        assert!(!script_path.exists(), "夹具：脚本文件刻意缺失");
+        let loader = mir2_envir::MapLoader::new(dir.clone(), "Map", "Envir");
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(17);
+        let (spawns, _, seeds) =
+            game_svr::merchant::load_merchant_spawns(&loader, |_| Some(0), &mut rng)
+                .expect("Merchant.txt 存在 ⇒ 装载成功、脚本缺失只是分支");
+        assert_eq!(seeds.len(), 1);
+        assert!(seeds[0].scripts.is_empty(), "缺失文件 ⇒ 无脚本产出");
+        let envir_root = dir.join("Envir");
+        let missing = market_def_script_missing(&envir_root, &seeds);
+        assert_eq!(
+            missing.len(),
+            1,
+            "缺失清单必须记一条（oracle LogService.Error）"
+        );
+        assert_eq!(
+            missing[0], script_path,
+            "路径口径 = Market_Def/<ScriptName>-<MapName>.txt"
+        );
+
+        let mut world = mir2_world::World::new(64, 64);
+        let mut displays = game_svr::downlink::DisplayTable::new();
+        let (kept, _, book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            spawns,
+            seeds,
+            &mut displays,
+        );
+        assert_eq!(kept, 1);
+        let merchant_id = *world.merchant_ids_sorted().first().expect("商人实体");
+        let entry = book.get(merchant_id).expect("脚本条目仍在（只是未装载）");
+        assert!(
+            !entry.def.loaded,
+            "文件缺失不得假装装载成功（Merchant.LoadScriptFile 未收集任何脚本）"
+        );
+        assert!(entry.def.scripts.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// **T-142 F2**：脚本 `GAMEGOLD` 动作（`ActionOfGameGold`，`ExecutionProcessingSys.cs:3058-3092`）
@@ -66601,8 +67155,12 @@ mod castle_insertion_tests {
         let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
             .expect("读 lib.rs");
         let code = strip_line_comments(&src);
-        // 只看生产段：切掉本测试模块自身（它的断言文本也含这些标识符）。
-        let code = match code.find("mod castle_insertion_tests") {
+        // 只看生产段：切掉**全部测试代码**（主 `mod tests` 起，含本模块）。
+        // **2026-10-24 订正（卡 `openmir2-merchant-script-load`）**：此前只切到
+        // `mod castle_insertion_tests`，但主 `mod tests` 在它之前 ⇒ 新加在 `mod tests` 里、
+        // 调用同一生产函数的用例会被误计为「第二个生产调用点」。本文件的生产代码全部在
+        // `mod tests`（首处 `mod tests {`）之前，故切点前移只排除测试代码、不缩小生产面。
+        let code = match code.find("mod tests {") {
             Some(pos) => &code[..pos],
             None => code.as_str(),
         };
