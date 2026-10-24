@@ -10386,11 +10386,16 @@ fn handle_spell_cmd_with_magic(
     //
     // **MP 权威存储**：oracle 只有一份 `BaseObject.WAbil`；本宿主运行期权威是
     // `SessionGround.state.wabil`（存档 `build_save_record` 的 `characters_ablity` 从它取，
-    // `saves[..].record.data.abil` 只是读档快照、从不回写）⇒ **本块只改 `sg.state.wabil.mp`**。
-    // 注意：世界 `Entity` **确有** `mp/max_mp`（`entity.rs:421-422`），但其唯一生产写入者是毒伤
-    // `buff::damage_health`（`buff.rs:503-520`，唯一调用方 `make_posion` 当前无生产调用者）
-    // ⇒ 现在无需镜像；将来接毒/魔法盾消耗时必须把 `wabil.mp` 同步进 `entity.mp`
-    // （HP 已有镜像先例：`lib.rs` 的 `e.health` 同步），否则会出现第二份 MP（复验 surviving）。
+    // `saves[..].record.data.abil` 只是读档快照、从不回写）⇒ **本块改 `sg.state.wabil.mp` 并
+    // 镜像进 `entity.mp`**（扣减处）。镜像必需：P21（`drain_player_need_recheck_with_magic`）
+    // 每 tick 无条件 `sg.state.wabil.mp = e.mp`（P32 复活段 / RefMyStatus 同形）⇒ 投影单写
+    // 下一 tick 即被刷回覆盖（ident53 窗口实测 15/15 + 存档 17；oracle 单份 `WAbil` 连扣
+    // = 15/13 + 存档 13，卡 `openmir2-mp-session-projection-clobber`）——两份存储必须在
+    // **每个写点**同步，否则就是本段原来登记的「第二份 MP」。
+    // 世界 `Entity` 的 `mp/max_mp`（`entity.rs:421-422`）另有潜在写者毒伤
+    // `buff::damage_health`（`buff.rs:503-520`，唯一调用方 `make_posion` 当前无生产调用者）；
+    // 将来接毒/魔法盾消耗时同样按「写点同步」双写（HP 已有镜像先例：`lib.rs` 的 `e.health`
+    // 同步），不允许出现只写一侧的 MP 写点。
     //
     // **`HealthSpellChanged` 收件人**（`BaseObject.cs:700-709`）：`Race == Play` ⇒ `SendUpdateMsg`
     // （`BaseObject.Message.cs:283-305` 的 `SendMsg(this)` ⇒ 仅自己）；`ShowHp` ⇒ 再 `SendRefMsg`
@@ -10424,6 +10429,14 @@ fn handle_spell_cmd_with_magic(
                     // `DamageSpell(nSpellPoint)`（`BaseObject.cs:1383`）：`MP - n > 0 ? MP - n : 0`
                     // ⇒ 本支已保证 `MP >= n` ⇒ 等价于饱和减。
                     sg.state.wabil.mp = sg.state.wabil.mp.saturating_sub(n_spell_point);
+                    // **扣减镜像进实体**（卡 `openmir2-mp-session-projection-clobber`）：P21 每
+                    // tick 无条件 `sg.state.wabil.mp = e.mp` ⇒ 实体不镜像时本扣减下一 tick 即被
+                    // 刷回覆盖（ident53：cast1 发 15 → P21 刷回 17 → cast2 再 15 → 存档 17；
+                    // oracle 17→15→13、存档 13）。见上方「MP 权威存储」段——oracle 只有一份
+                    // `WAbil`，两份存储必须在每个写点同步（入口 :10292 已保证实体存在）。
+                    if let Some(e) = world.entities.get_mut(actor_id) {
+                        e.mp = sg.state.wabil.mp;
+                    }
                     // `HealthSpellChanged()`（`BaseObject.cs:700-709`）：
                     // ① `SendUpdateMsg` ⇒ 只给自己；② `ShowHp` ⇒ 再 `SendRefMsg`（含自己 + 观察者）。
                     let body = smframe::sm_healthspellchanged_frame(
@@ -49456,6 +49469,264 @@ SendRefMsgRange=15
         assert!(
             !ids.contains(&mir2_protocol::messages::SM_MAGICFIRE_FAIL),
             "门内 ⇒ 不得有 639；实得 {ids:?}"
+        );
+    }
+
+    /// 两连发合同夹具（卡 `openmir2-mp-session-projection-clobber`）：与 `distfail_run`
+    /// 同构——越界点击（|Δ| = 15 > 8）⇒ MP 包装层照跑（先于距离门）+ DoSpell 距离门
+    /// 失败回 639、效果体零帧零抽；但返回**全套句柄**供第二发、P21 刷回与存档断言。
+    /// 基线钉窗口口径：投影/实体 MP=17（登录 `apply_ability_to_entity` 后实体已同步）、
+    /// HP=16 / MaxHP=16 / MaxMP=18（spell_cast 冻结夹具三方互证基线）。
+    #[allow(clippy::type_complexity)]
+    fn mp_clobber_harness(
+        seed: i32,
+    ) -> (
+        mir2_world::World,
+        std::collections::HashMap<String, SessionGround>,
+        OnlineRegistry,
+        std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        std::collections::HashMap<String, SavedHuman>,
+        magics::MagicTable,
+        downlink::DisplayTable,
+        game_svr::ability::StdItemCatalog,
+        i32,
+    ) {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(64, 64);
+        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        world.open_session("caster");
+        let mut e = new_player_entity("caster".to_string(), 10, 10);
+        e.level = 20;
+        let caster = world.enter_map("caster", e, 0).expect("进图");
+        world.tick();
+        // 窗口基线：登录 `apply_ability_to_entity` 已把 WAbil 同步进实体 ⇒
+        // 两份存储同起点 17（entity.mp 恒 17 正是修复前 P21 刷回的覆盖源）。
+        let ce = world.entities.get_mut(caster).expect("施法者实体");
+        ce.hp = 16;
+        ce.max_hp = 16;
+        ce.mp = 17;
+        ce.max_mp = 18;
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            caster,
+            downlink::ActorDisplay::new(4, 0, 111, 0, 0, 255, b"caster".to_vec()),
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "uc".into(),
+                chr_name: "caster".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 911,
+                actor_id: caster,
+            },
+        );
+        let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut record = stage6_record();
+        record.data.magic = Some(vec![Some(record::MagicRcd {
+            mag_idx: mir2_world::magic::SKILL_FIREWIND,
+            level: 1,
+            magic_key: u16::from(b'm'),
+            tran_point: 0,
+        })]);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "caster".into(),
+            SavedHuman {
+                account: "uc".into(),
+                record,
+                enter_map: "0".into(),
+            },
+        );
+        // spell=0、def_spell=2、learned level=1 ⇒ GetSpellPoint = Round(0/4*(1+1)) + 2 = 2/发。
+        let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: mir2_world::magic::SKILL_FIREWIND,
+            effect: 3,
+            effect_type: 4,
+            spell: 0,
+            def_spell: 2,
+            train_lv: 3,
+            train_level: [255; 4],
+            ..mir2_data::MagicInfo::default()
+        }]);
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = spell_session_ground(caster);
+        sg.state.wabil.hp = 16;
+        sg.state.wabil.mp = 17;
+        sg.state.wabil.max_hp = 16;
+        sg.state.wabil.max_mp = 18;
+        sg.show_hp = false;
+        ground_sessions.insert("caster".into(), sg);
+        (
+            world,
+            ground_sessions,
+            online,
+            gates,
+            rx,
+            saves,
+            magic_table,
+            displays,
+            game_svr::ability::StdItemCatalog::new(),
+            caster,
+        )
+    }
+
+    /// **卡 `openmir2-mp-session-projection-clobber` 合同测试（tier R）**。
+    ///
+    /// oracle 口径（为什么是 13）：oracle 只有一份 `BaseObject.WAbil`；`DoSpell`
+    /// （`PlayObject.Base.cs:1505-1531`）每次施法 `DamageSpell(nSpellPoint)`（`:1518` →
+    /// `BaseObject.cs:1383-1405`；本场景 `GetSpellPoint = 2`，`:1369-1372`）**连续**扣
+    /// 同一份 `WAbil.MP`，随后 `HealthSpellChanged()`（`:1519` → `BaseObject.cs:700-709`）
+    /// 发 53 帧 `Tag=MP` = 扣后值 ⇒ 两连发逐帧 17→15→13；软关 `MakeSaveRcd` 读同一份
+    /// `WAbil` ⇒ `characters_ablity.MP = 13`。cast2 的 tag=13 同时反证窗口内
+    /// （t=2241→4557）没有任何恢复把 MP 送回 17/18——13 是 oracle 唯一可取值。
+    ///
+    /// 修复前（review bab63106f1 静态定位 + 冻结夹具实测）：wrapper 只扣投影
+    /// （`sg.state.wabil.mp`）、不镜像 `entity.mp`（恒 17），P21 每 tick 无条件
+    /// `sg.state.wabil.mp = e.mp` 刷回 ⇒ cast1 发 15 → 刷回 17 → cast2 再发 15 →
+    /// 存档 17（夹具 15/15/17，selftest ⑦ anatomy 已钉死并注明本卡修复）。
+    ///
+    /// 修法：扣减点镜像进 `entity.mp`（见「MP 权威存储」段），P21/P32/RefMyStatus 的
+    /// 实体→投影刷回**保持原样**即自然一致——oracle 单份 WAbil ⇒ 两份存储在每个写点同步。
+    ///
+    /// 红检（两颗变异牙，实测见补丁说明）：① 单删扣减点的实体镜像 ⇒ P21 把投影刷回
+    /// 实体旧值 17 ⇒「P21 后投影 15」「cast2 tag=13」「存档 13」三红（重现金 15/15+17）；
+    /// ② 单删 `saturating_sub` 扣减 ⇒ 投影恒 17 ⇒ 两帧 tag=17、存档 17 ⇒ 红。
+    #[test]
+    fn spell_cast_two_consecutive_fires_mp_17_15_13_and_save_13() {
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let (
+            mut world,
+            mut ground_sessions,
+            online,
+            gates,
+            mut rx,
+            mut saves,
+            magic_table,
+            mut displays,
+            catalog,
+            caster,
+        ) = mp_clobber_harness(5);
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        // 只共享借用的部件进闭包；可变部件（world/会话/存档/显示表）按参传入，
+        // 以便两发之间插 P21 刷回。
+        let cast = |world: &mut mir2_world::World,
+                    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+                    saves: &mut std::collections::HashMap<String, SavedHuman>,
+                    displays: &mut downlink::DisplayTable| {
+            handle_spell_cmd(
+                game_svr::feature::make_long(25, 25),
+                mir2_world::magic::SKILL_FIREWIND,
+                0,
+                0,
+                "caster",
+                911,
+                &online,
+                world,
+                saves,
+                ground_sessions,
+                &catalog,
+                &magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                displays,
+                &gates,
+                1,
+                1,
+                2,
+            );
+        };
+        let drain_frames = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames = Vec::new();
+            while let Ok(m) = rx.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    frames.push((socket, body));
+                }
+            }
+            frames
+        };
+        // 53 帧头：`Recog=ActorId / Param=HP / Tag=MP / Series=MaxHP`（`PlayObject.Message.cs:1736-1739`）。
+        let tags_53 = |frames: &[(i32, Vec<u8>)]| -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, b)| *s == 911 && mp_ident(b) == SM_53)
+                .map(|(_, b)| u16::from_le_bytes([b[8], b[9]]))
+                .collect()
+        };
+
+        // ── 发 1（窗口 t≈2241）：17 → 15，53.Tag = 15。
+        cast(&mut world, &mut ground_sessions, &mut saves, &mut displays);
+        let f1 = drain_frames(&mut rx);
+        assert_eq!(tags_53(&f1), vec![15], "cast1：投影 17-2=15 ⇒ 53.Tag=MP=15");
+        assert_eq!(
+            ground_sessions["caster"].state.wabil.mp, 15,
+            "投影已扣（wrapper 写点）"
+        );
+        assert_eq!(
+            world.entities.get(caster).expect("实体在图").mp,
+            15,
+            "扣减镜像进实体 ⇒ P21 刷回不再回跳"
+        );
+
+        // ── P21 每 tick 刷回（无条件 `sg.state.wabil.mp = e.mp`）：实体已镜像 ⇒ 投影保 15。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        assert!(
+            drain_frames(&mut rx).is_empty(),
+            "空装备 + 无变动 ⇒ P21 零出帧（夹具自检）"
+        );
+        assert_eq!(
+            ground_sessions["caster"].state.wabil.mp, 15,
+            "P21 刷回不得覆盖会话已扣投影（修复前此处被刷回 17 ⇒ cast2 再发 15、存档 17）"
+        );
+
+        // ── 发 2（窗口 t≈4557）：15 → 13，53.Tag = 13（oracle spell_cast seq35 逐位）。
+        cast(&mut world, &mut ground_sessions, &mut saves, &mut displays);
+        let f2 = drain_frames(&mut rx);
+        assert_eq!(
+            tags_53(&f2),
+            vec![13],
+            "cast2：15-2=13（oracle 口径；修复前实发 15）"
+        );
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 13);
+
+        // ── 软关前最后一次 P21 刷回：13 不动。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        assert_eq!(
+            ground_sessions["caster"].state.wabil.mp, 13,
+            "存档前投影保持 13"
+        );
+
+        // ── 存档：`build_save_record` 读会话投影 ⇒ `characters_ablity.MP = 13`。
+        let saved = saves.get("caster").expect("存档在册");
+        let sg = ground_sessions.get("caster").expect("地面会话");
+        let rec = build_save_record(saved, "caster", &world, sg, None);
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").mp,
+            13,
+            "存档 MP=13（oracle 口径；修复前落库 17）"
         );
     }
 

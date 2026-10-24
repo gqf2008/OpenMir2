@@ -2045,7 +2045,8 @@ class Selftest(object):
         #   窗口复拍验证。逐字节解剖表与证据链见
         #   docs/compare-ident53-diff-triage-20261024.md；fixture/rules 任一漂移或
         #   掩码化都会让本断言红。修复卡落地并重新冻结 fixture 后，按 ⑤/⑥ 同款义务
-        #   更新这里。
+        #   更新这里。tag 差异已由本卡（openmir2-mp-session-projection-clobber）修复
+        #   （扣减镜像进 entity.mp，P21 刷回不再覆盖），窗口复拍验证 13/13 后刷新 fixture。
         anatomy = sorted(
             (d.get("frame_index"), d.get("kind"), d.get("field"),
              d.get("oracle"), d.get("rust"))
