@@ -1363,10 +1363,10 @@ def check_scenario(data, plans, params=None, messages=None):
             if ident not in messages["CM"]:
                 if ident in messages["SM"]:
                     raise ScenarioError(
-                        "steps[%s].%s ident %d is %s, expected CM_* (send/say/click_npc/"
-                        "dlg_select/dlg_select_any are client→server frames; an SM_* ident is server→client "
-                        "and can never be sent)" % (p["index"], p["kind"], ident,
-                                                    messages["SM"][ident]))
+                        "steps[%s].%s ident %d is %s, expected CM_* (%s are client→server "
+                        "frames; an SM_* ident is server→client and can never be sent)"
+                        % (p["index"], p["kind"], ident, messages["SM"][ident],
+                           "/".join(sorted(SEND_KINDS))))
                 raise ScenarioError(
                     "steps[%s].%s.ident %d is not a CM_*/SM_* constant in %s"
                     % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
@@ -4054,6 +4054,7 @@ def _selftest_kill():
         good_ok = False
     checks.append((good_ok, "check_scenario：合法 kill + wait_for(32) 通过"))
     bad_waits = []
+    ident_err = ""
     for doc in (
             {"name": "selftest_kill_wait_cm", "steps": [
                 {"kill": {"target_xy": tgt_xy, "wait_ident": CM_TURN}}]},
@@ -4067,10 +4068,15 @@ def _selftest_kill():
             check_kill(doc, {"self_pos": self_xy})
             bad_waits.append("accepted %s" % doc["name"])
         except ScenarioError as ex:
+            ident_err += str(ex)
             if "expected CM_*" not in str(ex) and "expected SM_*" not in str(ex):
                 bad_waits.append("%s: unexpected %s" % (doc["name"], ex))
-    checks.append((not bad_waits, "check_scenario 拒 wait_ident=CM_* 与 ident=SM_*（%s）"
-                   % ("；".join(bad_waits) or "两条都拒")))
+    # R3 的候选列表必须**动态**取自 SEND_KINDS（review `e9731a5e5` F3 第二半）：
+    # 断言完整候选串出现，而不是只看「kill」这个词（它也会出现在 steps[0].kill 前缀里）。
+    want_kinds = "/".join(sorted(SEND_KINDS))
+    checks.append((not bad_waits and want_kinds in ident_err,
+                   "check_scenario 拒 wait_ident=CM_* 与 ident=SM_*（%s；R3 候选串动态=%r）"
+                   % ("；".join(bad_waits) or "三条都拒", want_kinds)))
 
     # ④ 运行期三态（假 socket：每次 sendall 触发一次脚本回帧）
     class _KSock(object):
@@ -4190,9 +4196,23 @@ def _selftest_kill():
     try:
         check_kill(only_kill, {"self_pos": self_xy})
         only_ok = True
+    except ScenarioError:
+        # review `ee452351` N1：任何拒绝都算失败（旧写法 "no wait step" not in msg 是恒真面）
+        only_ok = False
+    checks.append((only_ok, "check_scenario：只含 kill 的场景必须**不被拒**（任何 ScenarioError 都算红）"))
+
+    # N2（review `ee452351`）：R2 的 no-send 文案必须有断言——只 wait 的场景，
+    # 错误串里要出现完整候选（含 kill）。变异回旧硬编码串 ⇒ 红。
+    only_wait = {"name": "selftest_r2_msg", "steps": [{"wait_for": SM_DEATH}]}
+    r2_err = None
+    try:
+        check_kill(only_wait, {"self_pos": self_xy})
     except ScenarioError as ex:
-        only_ok = "no wait step" not in str(ex)
-    checks.append((only_ok, "check_scenario：只含 kill 的场景不被「缺 wait」拒（kill 内部等死亡帧）"))
+        r2_err = str(ex)
+    checks.append((r2_err is not None
+                   and "/".join(sorted(SEND_KINDS)) in r2_err,
+                   "R2 no-send 错误串点名完整候选（%r）"
+                   % "/".join(sorted(SEND_KINDS))))
 
     for cond, msg in checks:
         assert cond, msg
