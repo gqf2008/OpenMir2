@@ -70,7 +70,7 @@ walgit collab report --repo .
    未来 `gc` 折叠校验）都会拿到一条断头链；而写错的那一刻没有任何报错。
 2. **「重放 refs 得到同一视图」静默降级**：按 `ts` 排序的视图看起来仍连续（孤儿条目还会插在中间），
    只有按 parent 走的人才会发现断点——不同读者可能得到**不同的因果视图**。
-3. **成本落在事后**：今天已发生 4 次（见 §4），每次都靠当事人自己读到 `parent=` 的怪值、再重签一条
+3. **成本落在事后**：截至 2026-10-25 已发生 **5 次**（见 §4；第 5 次是「手打/占位 40-hex」这一新形态），每次都靠当事人自己读到 `parent=` 的怪值、再重签一条
    `supersedes` 说明来补救；`thread` 会同时列出作废条目与更正条目，读的人要自己判哪条有效。
 
 ## 4. 真实事故（2026-10-25，全部已补救）
@@ -81,8 +81,20 @@ walgit collab report --repo .
 | 2 | reviewer-21 | `--parent 3784d0dd4c0f…`（40 位但**写错**，真值 `3784d0dd4cef…`） | 同上；重签 `eeffd607` 并注明 `2a0018ff` 作废 |
 | 3 | reviewer-20 | `--parent d398d8678aa0…`（真值 `d398d8671b18…`） | 重签 `b2cbddda`（`supersedes=f06f06ee`） |
 | 4 | （Leader 记录） | 同日第 4 次 | 以重签 + `supersedes` 说明补救 |
+| 5 | reviewer-20 | `--parent 25e13960d8be0f5b9e0a4b3bd5a0f5c8e0a0a0a0`（**手打/占位 40-hex**：前缀与真 oid `25e13960d82f4518…` 完全一致，只有尾部是编的 `…a0a0a0a0`） | 同一张卡签 patch 时 rc=0 收下；发现后用 `supersedes` 重签 `8e0c31d4`（`openmir2-needs-human-final`），有效链 = issue `c938ba7e` → status `25e13960d` → patch `8e0c31d4` → status `ec9ef81f` → review → patch `7161bd8a` |
 
-四种形态归一：**parent 是手抄的**，且工具对错值零反馈。
+**四种形态**（都是「手抄」这一个根因，但**可发现性**不同）：
+
+| 形态 | 样子 | 能否靠肉眼发现 |
+|---:|---|---|
+| 1 | 8 字符短前缀（`a539b428`） | **能**（一眼不像 oid） |
+| 2 | 40 位但拼错（`3784d0dd4c0f…` vs 真值 `…cef…`） | 难（要逐字符比） |
+| 3 | 40 位补零/拼错尾部但真前缀（`d398d8678aa0…`） | 难 |
+| 4 | **手打/占位 40-hex**（`25e13960d8be0f…a0a0a0a0`）：长度字符集合法、**前缀与真 oid 完全一致** | **不能**——看起来就是真 oid，只能靠 `git cat-file -e <oid>` 或脚本取 |
+
+⇒ 纪律从「别手抄」升级为「**一律脚本取，永不键入 oid**」：
+`walgit collab thread <id> | python -c "import sys,json;print(json.load(sys.stdin)[-1]['oid'])"`；
+签完立刻回读，最后一条的 `parent` 必须**逐字等于**你上一条的完整 oid（或为空）。
 
 ## 5. 建议（owner 决策用；本卡不实现）
 
@@ -101,6 +113,8 @@ walgit collab report --repo .
    推荐片段：`walgit collab thread <id> | python -c "import sys,json;print(json.load(sys.stdin)[-1]['oid'])"`。
 2. **交付前自检**：签完一条后立刻回读——最后一条的 `parent` 必须**逐字等于**你上一条的完整 oid
    （或空）；不等于就重签 + `supersedes`。
+3. **永不键入 oid**（形态 4 的教训）：40-hex 一律从 `thread` 输出复制或脚本取，**不许手打/补位**——
+   形态 4 的前缀与真值一致，肉眼与「合法 oid」无法区分。
 3. 若 owner 决定不修，把 B1/B2 固化进 `AGENTS.md` §3（线程协议）的"先读后写"条，作为强制步骤。
 
 ## 6. 清理（复现者必做）
