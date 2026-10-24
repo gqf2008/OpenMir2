@@ -392,6 +392,34 @@ BUILTIN_PROFILES = {
     },
 }
 
+
+def _derived_magic_profile(base, name, description):
+    """构造「alt + 两侧 magic + D-9 pin」的内置 profile（卡 `openmir2-window-profile-magic-preset`）。
+
+    只加数据、不加判定逻辑：``magic`` 走既有 profile 级夹具通道（README §1.8），
+    ``MIR2_CLIENT_ABILITY_LAYOUT=0`` 走既有 ``sides.<side>.env`` 通道（README「spell_cast 必须 pin D-9」）。
+    **不改 `alt` 默认值**：alt 是 18 个场景的既有基线，动它会让所有场景的输入一起变；
+    新前置只能以**新 profile** 的形式存在。
+    """
+    prof = copy.deepcopy(base)
+    prof["name"] = name
+    prof["description"] = description
+    prof["magic"] = [{"magic_id": 1, "level": 0, "use_key": "1", "curr_train": 0}]
+    for _side, side_conf in prof["sides"].items():
+        env = dict(side_conf.get("env") or {})
+        env["MIR2_CLIENT_ABILITY_LAYOUT"] = "0"
+        side_conf["env"] = env
+    return prof
+
+
+BUILTIN_PROFILES["window-magic"] = _derived_magic_profile(
+    BUILTIN_PROFILES["alt"],
+    "window-magic",
+    ("alt 的副本 + 两侧 `magic` 夹具（magic_id=1）+ `sides.*.env."
+     "MIR2_CLIENT_ABILITY_LAYOUT=0`：让 `spell_cast` 无需临时手工 profile 即可 dry-run 通过"
+     "（卡 `openmir2-window-profile-magic-preset`）。"),
+)
+
 PROD_DB_RE = re.compile(r"(?<![A-Za-z0-9_])mir2_(db|account|data)(?![A-Za-z0-9_])", re.I)
 PROD_LOGIN_RE = re.compile(r"database\s*=\s*Mir2(?![A-Za-z0-9_])", re.I)
 
@@ -5335,6 +5363,21 @@ def selftest():
         except ConfigError:
             i3_ok = False
         chk(i3_ok, "I-3 内置 alt（preset=test + mir2_test_*_r）仍放行")
+
+        # 15c) 新内置 profile `window-magic`（卡 openmir2-window-profile-magic-preset）：
+        #      两侧 magic 段 + D-9 pin 必须同时成立，否则 `spell_cast` 仍是「少前置」状态。
+        try:
+            wm = load_profile("window-magic")
+            wm_magic = profile_magic(wm)
+            wm_env = {s: (wm["sides"][s].get("env") or {}).get("MIR2_CLIENT_ABILITY_LAYOUT")
+                      for s in wm["sides"]}
+            wm_ok = (bool(wm_magic) and len(wm_magic) >= 1
+                     and all(v == "0" for v in wm_env.values()))
+            wm_err = ""
+        except ConfigError as exc:
+            wm_ok, wm_err = False, str(exc)
+        chk(wm_ok, "15c) 内置 window-magic：两侧 magic 段 + MIR2_CLIENT_ABILITY_LAYOUT=0 %s"
+            % wm_err)
 
         # 15b) F-3：binaries 是窗口证据的必需项（空列表/缺省 => 加载期 ConfigError，不许 PASS）
         for label, mutate in (
