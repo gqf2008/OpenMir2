@@ -2249,9 +2249,11 @@ def _selftest_scenario_inventory():
 # **同口径 = 同形输入同判**：白名单/值域/note 的规则两处必须同步改，下面三个常量与
 # card_window.py 的 ASSETS_COLUMNS/ASSETS_MAX/ASSETS_NOTE_KEY 逐一对应。
 # ---------------------------------------------------------------------------
-#: 资产声明白名单列（首版仅 Gold；事实源 = card_window.py ASSETS_COLUMNS）。
-ASSETS_COLUMNS = ("Gold",)
-#: 声明值上限：characters.Gold 是 int(11) 有符号（= card_window.py ASSETS_MAX）。
+#: 资产声明白名单列（事实源 = `tools/conformance/card_window.py` 的 `ASSETS_COLUMNS`；
+#: 2026-10-25 起含 `GamePoint`）。运行时显式同步，`--selftest` 的可执行同源校验见
+#: `_card_window_assets_columns()`（漂移即红）。
+ASSETS_COLUMNS = ("Gold", "GamePoint")
+#: 声明值上限：characters.Gold/GamePoint 都是 int(11) 有符号（= card_window.py ASSETS_MAX）。
 ASSETS_MAX = 0x7FFFFFFF
 #: 声明里的备注键（不参与 UPDATE，只进证据；= card_window.py ASSETS_NOTE_KEY）。
 ASSETS_NOTE_KEY = "note"
@@ -2264,7 +2266,8 @@ def _check_assets(assets):
     与 `placement`/`blocked`/`requires`/`inventory` 一致）：
 
     * `assets` 缺省（无此键 / null）⇒ 放行；给了就必须是**非空对象**（列→目标值）；
-    * 键只允许白名单列（首版仅 `Gold`）+ `note`，未知列点名拒绝（拼错/未声明列不许静默）；
+    * 键只允许白名单列（`Gold` / `GamePoint`，与 card_window 单一来源同源）+ `note`，
+      未知列点名拒绝（拼错/未声明列不许静默）；
     * `note` 给了就必须是字符串；
     * 值必须是 JSON 整数（bool/浮点/字符串/null 一律拒）、0..0x7FFFFFFF
       （characters.Gold 是 int(11) 有符号；负数/超 int32 一律拒）；
@@ -2307,13 +2310,33 @@ def _check_assets(assets):
           % sorted(k for k in assets if k != ASSETS_NOTE_KEY), file=sys.stderr)
 
 
-def _selftest_scenario_assets():
-    """`scenario.assets` 形状校验（卡 `openmir2-probe-assets-key-delta`，Gold 通道 follow-up）：
+def _card_window_assets_columns():
+    """懒加载 `tools/conformance/card_window.py` 的资产白名单常量（**只在 selftest** 调用）。
 
-    * `{"Gold": 10000, "note": "…"}` 放行；边界 0 与 0x7FFFFFFF 放行；缺省放行；
-    * 非白名单列 / 空对象 / note-only ⇒ 拒并点名；
+    探针运行时不 import 它（脚本文件、无包结构）；此函数把「单一来源」变成**可执行**的
+    一致性校验：三常量任一漂移，`--selftest` 的 `scenario-assets` 即红。
+    """
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parent.parent / "conformance" / "card_window.py"
+    spec = importlib.util.spec_from_file_location("_card_window_assets_sync", str(path))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return (tuple(mod.ASSETS_COLUMNS), mod.ASSETS_MAX, mod.ASSETS_NOTE_KEY)
+
+
+def _selftest_scenario_assets():
+    """`scenario.assets` 形状校验（卡 `openmir2-probe-assets-key-delta` + 白名单对齐卡
+    `openmir2-probe-assets-whitelist`）：
+
+    * **同源校验**：本文件的 `ASSETS_COLUMNS/ASSETS_MAX/ASSETS_NOTE_KEY` 必须与
+      `tools/conformance/card_window.py` 逐项相同（漂移即红）；
+    * 正例：`{"Gold": 10000}`、`{"GamePoint": 9}`（GAMEPOINT 窗口前置）与两者同声明放行；
+      边界 0 与 0x7FFFFFFF 放行；缺省放行；
+    * 负例：非白名单列（含 `Foo`）/ 空对象 / note-only ⇒ 拒并点名（fail-closed）；
     * 值口径：bool/浮点/字符串/null/负数/超 int32 一律拒（与 card_window.scenario_assets
-      同口径——同形输入同判，两侧口径漂移即红）。
+      同口径——同形输入同判）。
     """
     import tempfile
     good = {
@@ -2330,11 +2353,29 @@ def _selftest_scenario_assets():
                 json.dump(doc, fh, ensure_ascii=False)
             return load_scenario(path)
 
+        # 同源校验（单一来源 = card_window.py）。
+        cw_cols, cw_max, cw_note = _card_window_assets_columns()
+        assert tuple(ASSETS_COLUMNS) == cw_cols, (
+            "ASSETS_COLUMNS drift: probe=%r card_window=%r" % (ASSETS_COLUMNS, cw_cols))
+        assert ASSETS_MAX == cw_max, "ASSETS_MAX drift: %r vs %r" % (ASSETS_MAX, cw_max)
+        assert ASSETS_NOTE_KEY == cw_note, "ASSETS_NOTE_KEY drift"
+        assert "GamePoint" in cw_cols, "card_window 白名单必须含 GamePoint（P0 卡）"
+
         assert _load(good)["assets"]["Gold"] == 10000
         assert _load(dict(good, assets={"Gold": 0}))["assets"]["Gold"] == 0
         assert _load(dict(good, assets={"Gold": 0x7FFFFFFF}))["assets"]["Gold"] == 0x7FFFFFFF
+        # 正例②：GamePoint（`真爱-G002 @9hua` 的 `CHECKGAMEPOINT > 8` 前置）。
+        assert _load(dict(good, assets={"GamePoint": 9}))["assets"]["GamePoint"] == 9
+        assert _load(dict(good, assets={"Gold": 1, "GamePoint": 9}))["assets"] == {
+            "Gold": 1, "GamePoint": 9}
+        assert _load(dict(good, assets={"GamePoint": 0}))["assets"]["GamePoint"] == 0
         assert "assets" not in _load({k: v for k, v in good.items() if k != "assets"})
         bad_cases = [
+            # 负例①（本卡判据）：未知列 `Foo` 必须 fail-closed 点名。
+            ({"assets": {"Foo": 1}}, "non-whitelisted"),
+            ({"assets": {"GamePoint": "9"}}, "must be a JSON int"),
+            ({"assets": {"GamePoint": -1}}, "out of range"),
+            ({"assets": {"GamePoint": True}}, "must be a JSON int"),
             ({"assets": {}}, "non-empty object"),
             ({"assets": []}, "non-empty object"),
             ({"assets": {"Credit": 100}}, "non-whitelisted"),
@@ -2356,8 +2397,9 @@ def _selftest_scenario_assets():
                 err = str(ex)
             assert err is not None, "load_scenario accepted bad assets: %r" % (patch,)
             assert needle in err, (needle, err)
-        return "assets 形状 %d 项（4 正 + %d 负；含 bool/浮点/字符串/null/负数/超 int32 拒绝）" \
-            % (4, len(bad_cases))
+        return ("assets 形状 %d 项（7 正 + %d 负；含 GamePoint 正例、Foo 未知列、"
+                "bool/浮点/字符串/null/负数/超 int32 拒绝；三常量与 card_window 同源）"
+                % (7, len(bad_cases)))
     finally:
         try:
             os.unlink(path)
