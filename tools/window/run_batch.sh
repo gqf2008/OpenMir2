@@ -105,6 +105,12 @@ command -v powershell >/dev/null 2>&1 || die "找不到 powershell"
 # ---- 清单（唯一事实源；batch 与 preflight 共用 tools/window/run3-scenarios.json）----
 # **场景数不硬编码**：期望值 = manifest 的 `scenarios` 条数 N，并校验 `n` 从 1 连续到 N
 #（断号/重复/非正/缺字段 ⇒ rc=2 fail-closed）。`blocked` 场景只在 --list 里标注、不进批次。
+# **blocked 有两个来源，两处都要写才闭环**（卡 openmir2-blocked-two-sources-doc）：
+#   * 本清单行（`run3-scenarios.json` 的 `blocked`，本脚本 `:152-158` 读取）——管**批次排除**；
+#   * 场景 JSON（`tools/probe/scenarios/<name>.json` 的 `blocked`，`card_window.py::scenario_blocked` 读取）
+#     ——管**直接跑 card_window 时的起栈前 BLOCKED（rc=2）**。
+#   只写 JSON：批次不会排除（`--list` 仍显示 blocked 0）；只写清单行：直接跑 card_window 仍会执行。
+#   现有例子：`clearmapmon_t118` 只在场景 JSON（且不在本清单）；`butch_two_draws` 两处都有（#21）。
 # 行格式（US/\x1f 分隔，空字段保留）：n  name  profile  extra  blocked(0/1)  reason
 _rows_file=$(mktemp) || die "建不了临时文件"
 if ! "$PY" -I -B - "$MANIFEST" >"$_rows_file" <<'PY'

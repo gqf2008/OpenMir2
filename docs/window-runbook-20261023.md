@@ -497,6 +497,14 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
   > 仍走 host no-op（部署 2 处使用；需实现，建议 R）——真机跑这两张图时**清场不会发生**，
   > 判据不得假设怪已被清；证据 `docs/clearmapmon-hook-audit-20261025.md`。
 
+  > **`blocked` 有两个来源，两处都要写才闭环（2026-10-25；卡 `openmir2-blocked-two-sources-doc`）**：
+  > ① `tools/window/run3-scenarios.json` 的行级 `blocked` —— 管**批次排除**（`run_batch.sh --list`
+  > 的 blocked 计数与入批选择都读它）；② 场景 JSON（`tools/probe/scenarios/<name>.json`）的顶层
+  > `blocked` —— 管**直接跑 `card_window.py` 时的起栈前 BLOCKED（rc=2）**（`scenario_blocked` 读它）。
+  > 只写 JSON：批次不会排除（`--list` 仍显示 blocked 0，真跑仍入批）；只写清单行：直接跑
+  > `card_window` 仍会执行。现有例子：`clearmapmon_t118` 只在场景 JSON（且不在 run3 清单）；
+  > `butch_two_draws` 两处都有（run3 #21 行级 blocked + 场景 JSON blocked）。
+
   | 场景 | 必带前置 | 不满足时（实测） |
   |---|---|---|
   | `dice_chain` | `--var npc_actor=<本次抓到的 actor id>`（场景 `params.npc_actor=119` 是旧抓包值，不在 `required` 里、**不会自动发现**） | 不带就点旧 actor（点空）；或改用 `dice_chain_auto`（自动发现） |
