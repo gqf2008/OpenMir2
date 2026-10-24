@@ -601,7 +601,7 @@ rows = []
 for l in doc[a+3:b]:
     if not l.startswith('|'): continue
     p = [x.strip() for x in l.strip('|').split('|')]
-    if len(p) < 4 or p[0].startswith('---'): continue
+    if len(p) < 4 or p[0].startswith('---') or p[0].startswith('#'): continue
     rows.append(p[1].strip('`'))
 print('A rows', len(rows), 'on board', sum(1 for r in rows if r in by),
       'not on board', [r for r in rows if r not in by])
@@ -617,7 +617,7 @@ kw = ['接线','实现','前置','未开','未移','未建','待补','待接','�
 n = 0
 for i in range(a+3, b):
     p = [x.strip() for x in doc[i].strip('|').split('|')]
-    if len(p) < 4 or p[0].startswith('---'): continue
+    if len(p) < 4 or p[0].startswith('---') or p[0].startswith('#'): continue
     hit = [k for k in kw if k in p[3]]
     if hit:
         n += 1
