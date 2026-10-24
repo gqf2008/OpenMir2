@@ -1,5 +1,8 @@
 # OpenMir2 重写剩余量清单（可复现盘点）
 
+> **已被 `docs/rewrite-remaining-inventory-20261025.md` 取代（2026-10-25，master `f6b3143b0`）**；本文件保留只读历史。
+
+
 - 采集时间：第 1 轮 2026-10-22T14:34Z；第 2 轮 2026-10-22T14:46Z；第 3 轮 2026-10-22T15:10Z；
   **第 4 轮（本文件当前版本，2026-10-23）按 recon 门在 master `6d79be4da` 上重算全部数字**
 - 采集点：第 4 轮 worktree `E:/tmp/wt-worker-40`（分支 `card/inventory-refresh`），基线 `6d79be4da`
