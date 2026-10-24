@@ -4766,13 +4766,13 @@ fn handle_click_npc_cmd(
             // oracle 此处 `Castle != null` ⇒ 走授权门（未授权 ⇒ **零帧**），不是红字。
             // 部署不可达（唯一 type 2 在 0150 战区），构造级可达。
             let sticky_zero = npc_vars.castle_zero_sticky.borrow().contains(&npc_actor_id);
-            let castle_index = world.castle_war_area_at(Some(nmap), nx, ny).or(
-                if sticky_zero && !world.castles.is_empty() {
-                    Some(0)
-                } else {
-                    None
-                },
-            );
+            // **N1 统一（reviewer-20）**：`Castle` 是**单一字段**——一旦被 `$CASTLEWARDATE`
+            // 写回成 0 号城，它就不再随时间/位置变化 ⇒ **sticky 优先**，否则按战区解析。
+            let castle_index = if sticky_zero {
+                (!world.castles.is_empty()).then_some(0)
+            } else {
+                world.castle_war_area_at(Some(nmap), nx, ny)
+            };
             let Some(castle_index) = castle_index else {
                 // `SysMsg("NPC不属于城堡!!!", MsgColor.Red, MsgType.Hint)` ⇒
                 // `SM_SYSMESSAGE(100)`（`Recog` = 玩家、`Param = MakeWord(RedF,RedB)`、`Series=1`）。

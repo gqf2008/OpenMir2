@@ -1259,6 +1259,30 @@ pub(crate) fn refresh_show_name_in_area(
     sent
 }
 
+/// 城堡结构单元（门 + 左/中/右墙）按坐标找绑定实体。
+///
+/// **唯一实现**：门/墙的 `SendRefMsg` 帧（`queue_structure_ref_msg` 与
+/// `castle_official_action_exec` 的 `emit`）都走它——`RepairWall` 返回的是**墙**的
+/// `RefStatus`（`UserCastle.cs:981/991`），只查门会整帧丢失（review `4a165328` F2）。
+fn castle_unit_entity_at(
+    world: &mir2_world::World,
+    castle_index: usize,
+    x: i16,
+    y: i16,
+) -> Option<i32> {
+    let castle = world.castles.get(castle_index)?;
+    [
+        &castle.main_door,
+        &castle.left_wall,
+        &castle.center_wall,
+        &castle.right_wall,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|u| u.x == x && u.y == y)
+    .and_then(|u| u.entity_id)
+}
+
 /// `UserCastle.Run` 的 `Structure(Ref*)` 事件 → [`mir2_world::monai::MonsterRefMsg`]。
 ///
 /// **为什么重新入队而不是直接出帧**：门/墙 `Run`（`CastleDoor.Run`/`WallStructure.Run`）在
@@ -1289,21 +1313,7 @@ pub(crate) fn queue_structure_ref_msg(
         StructureEvent::RefAlive { dir, x, y } => (mir2_world::monai::RM_ALIVE, dir, x, y),
         StructureEvent::SetMapXyFlag { .. } => return false,
     };
-    let actor_id = {
-        let Some(castle) = world.castles.get(castle_index) else {
-            return false;
-        };
-        [
-            &castle.main_door,
-            &castle.left_wall,
-            &castle.center_wall,
-            &castle.right_wall,
-        ]
-        .into_iter()
-        .flatten()
-        .find(|u| u.x == x && u.y == y)
-        .and_then(|u| u.entity_id)
-    };
+    let actor_id = castle_unit_entity_at(world, castle_index, x, y);
     let Some(actor_id) = actor_id else {
         crate::glog!(
             "WRN",
@@ -1483,6 +1493,192 @@ pub fn castle_attack_war_list_text(c: &mir2_world::castle::UserCastle) -> String
         result.push_str(&s20);
     }
     result
+}
+
+// ---------------------------------------------------------------------------
+// **卡 `openmir2-castle-official-actions`（tier R，构造级）**：城堡动作 switch
+// ---------------------------------------------------------------------------
+//
+// oracle：`CastleOfficial.UserSelect`（`CastleOfficial.cs:109-262`）在
+// `Castle.IsMasterGuild(MyGuild) && PlayObject.IsGuildMaster()` 门之后才进动作 switch。
+// **部署 R-0 不可达**（`MasterGuild` 恒 null、`Permission` 恒 0）⇒ 本片只做**构造级**可判，
+// 不声称真机可达；窗口项见卡报告。
+//
+// 帧序口径：门/墙的 `SendRefMsg` 帧与 T-127 片同源（`smframe::sm_digup/sm_digdown`），
+// 收件人 = `SendRefMsg` 的 ±`SendRefMsgRange` 格扫快照。
+
+/// 一次城堡动作的构造级结果。
+#[derive(Debug, Default)]
+pub struct OfficialActionOutcome {
+    /// 是否需要随后 `GotoLable(@main)`（oracle 四个动作都回 `@main`；N5/N1 不回）。
+    pub say_main: bool,
+    /// 玩家自己的 `SysMsg` 文案（`无` = 该动作不出提示）。
+    pub sysmsg: Option<&'static str>,
+    /// `SysMsg` 的 `Param = MakeWord(f,b)`（成功/无需 = 绿，资金不足 = 红）。
+    pub sysmsg_color: (u8, u8),
+    /// 门/墙帧（`SM_DIGUP`/`SM_DIGDOWN`/`SM_ALIVE`），已按收件人集合生成。
+    pub frames: Vec<(i32, Vec<u8>)>,
+    /// 登记用日志（N5 / N1 等不可达支）。
+    pub log: Option<&'static str>,
+}
+
+/// `CastleOfficial.UserSelect` 的动作 switch（`CastleOfficial.cs:199-238`）构造级实现。
+///
+/// `label` 经 [`mir2_world::castle::castle_official_action`] 判类（精确匹配优先、`CompareLStr`
+/// 前缀匹配次之）；未命中 ⇒ `None`（oracle 的 switch 也没有该分支）。
+///
+/// `prices` = `(RepairDoorPrice, RepairWallPrice)`（`Server.conf [Setup] RepairDoor/RepairWall`）。
+#[allow(clippy::too_many_arguments)]
+pub fn castle_official_action_exec(
+    world: &mut mir2_world::World,
+    displays: &crate::downlink::DisplayTable,
+    castle_index: usize,
+    now_tick: i64,
+    label: &str,
+    prices: (i32, i32),
+    green: (u8, u8),
+    red: (u8, u8),
+) -> Option<OfficialActionOutcome> {
+    use mir2_world::castle::{
+        castle_official_action, official_repair_door, official_repair_wall, CastleOfficialAction,
+        StructureEvent,
+    };
+    let action = castle_official_action(label)?;
+    let Some(castle) = world.castles.get_mut(castle_index) else {
+        return Some(OfficialActionOutcome::default());
+    };
+    let mut out = OfficialActionOutcome {
+        sysmsg_color: green,
+        ..Default::default()
+    };
+    // 事件 → 帧：`SetMapXyFlag` 落到该城地图；`Ref*` 按 `SendRefMsg` 口径出帧。
+    let mut emit = |world: &mut mir2_world::World, events: Vec<StructureEvent>| {
+        for ev in events {
+            match ev {
+                StructureEvent::SetMapXyFlag { x, y, walk } => {
+                    if let Some(map_id) = world
+                        .castles
+                        .get(castle_index)
+                        .and_then(|c| c.castle_map_id)
+                        .filter(|id| *id < world.maps.len())
+                    {
+                        if let Some(grid) = world.maps.get_mut(map_id) {
+                            grid.set_map_xy_flag(i32::from(x), i32::from(y), walk);
+                        }
+                    }
+                }
+                StructureEvent::RefDigUp { dir, x, y }
+                | StructureEvent::RefDigDown { dir, x, y }
+                | StructureEvent::RefAlive { dir, x, y } => {
+                    let ident = match ev {
+                        StructureEvent::RefDigUp { .. } => mir2_world::monai::RM_DIGUP,
+                        StructureEvent::RefDigDown { .. } => mir2_world::monai::RM_DIGDOWN,
+                        _ => mir2_world::monai::RM_ALIVE,
+                    };
+                    let Some(unit) = castle_unit_entity_at(world, castle_index, x, y) else {
+                        continue;
+                    };
+                    // **F1（review `e7f076f4`）**：`RM_DIGUP` 的帧体是
+                    // `MakeWord(Dir, baseObject.Light)` + `GetFeature(this)`（`PlayObject.Message.cs:1891-1897`）
+                    // ⇒ Light/Feature **必须**取实体的展示层（与 `drain_monster_ref_msgs` 同源）。
+                    let Some((map_id, status, feature, light)) =
+                        world.entities.get(unit).map(|e| {
+                            let d = displays.get(unit);
+                            (
+                                e.map_id,
+                                e.char_status,
+                                d.map_or(0, |d| d.feature),
+                                d.map_or(0, |d| d.light),
+                            )
+                        })
+                    else {
+                        continue;
+                    };
+                    let body = match ident {
+                        mir2_world::monai::RM_DIGUP => crate::smframe::sm_digup(
+                            unit,
+                            u16::try_from(x).unwrap_or(0),
+                            u16::try_from(y).unwrap_or(0),
+                            dir,
+                            light,
+                            feature,
+                            status,
+                        ),
+                        mir2_world::monai::RM_DIGDOWN => crate::smframe::sm_digdown(
+                            unit,
+                            u16::try_from(x).unwrap_or(0),
+                            u16::try_from(y).unwrap_or(0),
+                        ),
+                        _ => crate::smframe::sm_alive(
+                            unit,
+                            u16::try_from(x).unwrap_or(0),
+                            u16::try_from(y).unwrap_or(0),
+                            dir,
+                            &crate::downlink::char_desc(feature, status),
+                        ),
+                    };
+                    for r in mir2_world::session::send_ref_msg_targets_at(
+                        world,
+                        i32::MIN,
+                        map_id,
+                        i32::from(x),
+                        i32::from(y),
+                        mir2_world::session::SEND_REF_MSG_RANGE,
+                    ) {
+                        out.frames.push((r, body.clone()));
+                    }
+                }
+                StructureEvent::RefTurn { .. } => {}
+            }
+        }
+    };
+    match action {
+        CastleOfficialAction::OpenMainDoor | CastleOfficialAction::CloseMainDoor => {
+            let close = matches!(action, CastleOfficialAction::CloseMainDoor);
+            // `MainDoorControl` 返回 `CastleEvent`（本次只会是 `Structure`）⇒ 摊平成结构事件。
+            let events: Vec<StructureEvent> = castle
+                .main_door_control(close)
+                .into_iter()
+                .filter_map(|e| match e {
+                    mir2_world::castle::CastleEvent::Structure(ev) => Some(ev),
+                    _ => None,
+                })
+                .collect();
+            emit(world, events);
+            // **F1（review `4a165328`）**：`CastleOfficial.cs:199-206` 只调 `MainDoorControl`，
+            // **没有** `GotoLable(@main)`；`@main` 页由脚本 `[@openmaindoor]/[@closemaindoor]`
+            // 自带的 `goto @main`（部署件 `Npc_def:35-44`）产生 ⇒ 这里不得再回一页（否则重复）。
+            out.say_main = false;
+        }
+        CastleOfficialAction::RepairDoor => {
+            let res = official_repair_door(castle, prices.0, now_tick);
+            // oracle：成功/无需 = 绿；资金不足 = 红（`CastleOfficial.cs:365-380`）。
+            out.sysmsg_color = if res.message.starts_with("城内资金不足") {
+                red
+            } else {
+                green
+            };
+            out.sysmsg = Some(res.message);
+            emit(world, res.events);
+            out.say_main = true;
+        }
+        CastleOfficialAction::RepairWall(index) => {
+            let res = official_repair_wall(castle, index, prices.1, now_tick);
+            out.sysmsg_color = if res.message.starts_with("城内资金不足") {
+                red
+            } else {
+                green
+            };
+            out.sysmsg = Some(res.message);
+            emit(world, res.events);
+            out.say_main = true;
+        }
+        CastleOfficialAction::HireUnreachable => {
+            // N5（T-40）：`Substring` 长度实参恒越界 ⇒ 被吞 ⇒ 无帧、无状态、无提示。
+            out.log = Some("N5");
+        }
+    }
+    Some(out)
 }
 
 #[cfg(test)]
