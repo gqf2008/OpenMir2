@@ -1541,23 +1541,28 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
         // `SendUpdateMsg`（`BaseObject.Message.cs:283-303`）的**头-only**去重：循环里每次
         // `TryPeek` 都看**队首**（最小优先级），只有队首 ident 命中才 `TryDequeue`；说词
         // （优先级 1）插在两条 GAMEGOLD（148）之间时，队首是说词 ⇒ 旧 GAMEGOLD **保留**。
-        // 旧实现 `retain` 全删，会在该场景把帧数少发 1（T-142 ⑩③）。
+        // `Count <= i` 预算还允许一次调用**连删多条**（3 条队首同 ident ⇒ 删 2 留 1，再入队 1）；
+        // 旧实现 `retain` 全删会在「说词夹帧」场景少发 1（T-142 ⑩③），而只删最后一条会在
+        // 「多条队首同 ident」场景多发（reviewer-21 P-1 / reviewer-20 F3）。
         let mut q: game_svr::msgqueue::NetPriorityQueue<usize> =
             game_svr::msgqueue::NetPriorityQueue::new();
         for (i, f) in self.frames.iter().enumerate() {
             q.enqueue(i, f.ident as u8);
         }
-        let mut removed: Option<usize> = None;
+        // 按堆出队序收集**全部**被 `TryDequeue` 的下标；倒序 `remove` 保证前面的下标仍有效。
+        let mut victims: Vec<usize> = Vec::new();
         let mut i = 0usize;
         while q.len() > i {
             if let Some(&idx) = q.peek() {
-                if Some(idx) != removed && self.frames[idx].ident == ident {
-                    removed = q.dequeue();
+                if self.frames[idx].ident == ident {
+                    if let Some(v) = q.dequeue() {
+                        victims.push(v);
+                    }
                 }
             }
             i += 1;
         }
-        if let Some(idx) = removed {
+        for idx in victims.into_iter().rev() {
             self.frames.remove(idx);
         }
         self.send_msg(ident, 0, 0, 0, 0, Some(""));
@@ -4611,5 +4616,73 @@ Other
             "不写盘"
         );
         std::fs::remove_dir_all(&root).ok();
+    }
+    /// **F3 牙 a（队首-only 去重的「说词挡住」形态）**：说词（优先级 1）在队首时，
+    /// `SendUpdateMsg` 的循环永远 peek 到说词 ⇒ 旧 `GAMEGOLDCHANGED`(148) **保留**，
+    /// 只追加新帧 ⇒ 共 2 条。
+    ///
+    /// 红检（改坏必红）：把 `game_gold_changed` 的队首-only 去重回退成旧
+    /// `frames.retain(|f| f.ident != ident)`（全删）⇒ 只剩新帧 1 条 ⇒ 断言必红。
+    #[test]
+    fn gold_dedupe_keeps_old_frame_when_says_blocks_queue_head() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        p.send_msg(
+            i32::from(mir2_protocol::messages::RM_MERCHANTSAY),
+            0,
+            0,
+            0,
+            0,
+            Some("说词"),
+        );
+        p.send_msg(
+            i32::from(mir2_protocol::messages::RM_GAMEGOLDCHANGED),
+            0,
+            0,
+            0,
+            0,
+            Some(""),
+        );
+        p.game_gold_changed();
+        let golds = p
+            .frames
+            .iter()
+            .filter(|f| f.ident == i32::from(mir2_protocol::messages::RM_GAMEGOLDCHANGED))
+            .count();
+        assert_eq!(
+            golds, 2,
+            "说词挡住队首 ⇒ 旧 GAMEGOLD 保留 + 新帧 = 2（retain 全删会得 1）"
+        );
+    }
+
+    /// **F3 牙 b（P-1 边界：3 条队首同 ident）**：oracle `SendUpdateMsg` 的
+    /// `Count <= i` 预算在 3 条队首同 ident 时删 `ceil(3/2)=2`、留 1，再入队 1 ⇒ 共 2 条。
+    /// 旧实现只把**最后一次** dequeue 的下标从 `frames` 删掉 ⇒ 留 3 条。
+    ///
+    /// 红检（改坏必红）：把 `victims: Vec<usize>` 倒序删改回「只删最后一条」⇒ 本用例必红。
+    #[test]
+    fn gold_dedupe_three_queue_head_entries_match_oracle_budget() {
+        let mut rng = no_rng();
+        let mut p = NpcPlayer::empty(&mut rng);
+        for _ in 0..3 {
+            p.send_msg(
+                i32::from(mir2_protocol::messages::RM_GAMEGOLDCHANGED),
+                0,
+                0,
+                0,
+                0,
+                Some(""),
+            );
+        }
+        p.game_gold_changed();
+        let golds = p
+            .frames
+            .iter()
+            .filter(|f| f.ident == i32::from(mir2_protocol::messages::RM_GAMEGOLDCHANGED))
+            .count();
+        assert_eq!(
+            golds, 2,
+            "oracle Count<=i: 3 条队首同 ident 删 2 留 1 + 新帧 = 2（旧实现 3）"
+        );
     }
 }

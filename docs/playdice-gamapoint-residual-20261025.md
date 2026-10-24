@@ -95,7 +95,7 @@
 |---|---|
 | `cargo fmt --all -- --check` | rc=0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
-| `cargo test --workspace` | **3176 passed / 0 failed**（基线 3174 + 本卡 3，其中 1 条属源码序门） |
+| `cargo test --workspace` | **3177 passed / 0 failed**（基线 3174 + 本卡 3，其中 1 条属源码序门） |
 | `cargo run -p msgcodegen -- --check` | rc=0（604 条） |
 | `conflict_marker` / `stale_pointer` / `dynamic_count_stamp` / `t_reservation` / `whitelist_anchor` / `m3_registry` / `board_coverage` | rc=0 |
 | `git diff --check` | rc=0 |
