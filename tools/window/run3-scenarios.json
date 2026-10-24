@@ -21,6 +21,9 @@
     {"n": 16, "name": "spell_cast",        "profile": "window-magic", "extra": []},
     {"n": 17, "name": "upgrade_retrieve",  "profile": "alt",          "extra": ["--timeout-ms", "720000"]},
     {"n": 18, "name": "gamepoint_exchange", "profile": "alt",         "extra": []},
-    {"n": 19, "name": "clearmapmon_q001",     "profile": "alt",          "extra": []}
+    {"n": 19, "name": "clearmapmon_q001",     "profile": "alt",          "extra": []},
+    {"n": 20, "name": "dropgold_zero_draw", "profile": "alt",        "extra": []},
+    {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": [],
+     "blocked": "无「单只固定动物尸体」夹具 + RNG 面未接线（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）"}
   ]
 }
