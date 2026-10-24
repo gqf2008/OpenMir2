@@ -16,18 +16,19 @@
 
 ## 1. 逐帧清单（10 条入户命令）
 
-| # | CM（Rust 号） | Rust handler / 发射点 | 帧（SM） | 直连/入队 | oracle 发送点 | 备注 |
-|---:|---|---|---|---|---|---|
-| 1 | `CM_TEST(1017)` | `lib.rs:2856` `emit_def_frames` | `SM 1`（空 def 帧） | **直连**（`SendDefMessage(1,…)`） | `PlayObject.Message.cs:909-911` | 无门/无尾 |
-| 2 | `CM_1042(1042)` | `lib.rs:2859`（仅日志） | **零帧** | — | `PlayObject.Message.cs:996-998` | `LogService.Warn` |
-| 3 | `CM_WANTMINIMAP(1033)` | `lib.rs:2871` `emit_def_frames` | `SM_READMINIMAP_OK(710)` / `_FAIL(711)` | **直连** | `PlayObject.Message.cs:969-971` → `Operate.cs:1204-1214` | `MinMap` 由 `inbound::session_min_map` 等价还原 |
-| 4 | `CM_OPENDOOR(1002)` | `lib.rs:2873`（无发帧） | **零帧** | — | `Message.cs:817` → `Operate.cs:363-374` + `WorldServer.cs:1445-1452` | **BUG-REPLICA 1**：守卫写反 ⇒ 恒零出帧 |
-| 5 | `CM_ADJUST_BONUS(1043)` | 非法支：`lib.rs:2908` `tx.send`；合法支：`lib.rs:2999` 队列出帧（752→52→657）+ `lib.rs:3003` 广播 657 | 非法：`SM_SYSMESSAGE(100)`；合法：`SM_SUBABILITY(752)`、`SM_ABILITY(52)`、`SM_CHARSTATUSCHANGED(657)`×1（本人）+ 657（±`SendRefMsgRange` 他人） | **入队**（`SendMsg(RM_ABILITY/SUBABILITY)` `Base.cs:1174/1175`；657 `SendRefMsg`；SysMsg `BaseObject.cs:1678-1682`） | `Message.cs:999-1001` → `Base.cs:1156-1180` | 队列序按 `(byte)wIdent`：62→67→155；657 头-only 去重后净 1 条 |
-| 6 | `CM_SITDOWN(3012)` | 成功：`lib.rs:3030`（仅日志，**无帧**）；失败：`lib.rs:3043` `emit_def_frames`；限速：仅日志 | 成功：**缺** `RM_POWERHIT` 广播 + `GetGoodTick` 直连字节；失败：`SM_MOVEFAIL(28)` | 失败 = **入队**（`SendRefMsg(RM_MOVEFAIL)` `Message.cs:1018`） | `Message.cs:1284-1338`；`Operate.cs:343-360`（`SendRefMsg(RM_POWERHIT)` `:356`；`SendSocket(GetGoodTick)`） | **缺发帧登记**：`RM_POWERHIT`（附近广播）与 `GetGoodTick` 直发字节均未建模（`inbound.rs:43-45` 已登记） |
-| 7 | `CM_DROPGOLD(1016)` | 拒绝：`lib.rs:3086` `emit_def_frames`；成功：`lib.rs:3095` | 拒绝：`SM_MENU_OK(767)`；成功：`SM_GOLDCHANGED(653)` | 均**入队**（`SendMsg(RM_MENU_OK)` `Base.cs:678`；`SendUpdateMsg(RM_GOLDCHANGED)` `Message.cs:528`） | `Message.cs:903-908` → `Operate.cs:222-249` + `BaseObject.cs:735-771` | **BUG-REPLICA 2**：`DropGoldDown` 恒 false ⇒ 净金币不变，但 653 照发；深体 RNG 属 R 片（§3） |
-| 8 | `CM_BUTCH(1007)` | 入队：`lib.rs:3152` `Command::Butch`；效果：`lib.rs:3145` `Command::ButchEffect`；帧排水：`lib.rs:14616` `downlink::butch_frame` | `SM_BUTCH(637)`（对观察者，`downlink.rs:458-460`） | **入队**（`SendRefMsg(RM_BUTCH)` `Operate.cs:749`；优先级 `10119&0xFF=55`） | `Message.cs:829-872` → `Operate.cs:702-751` | 效果体（`:718-745`，RNG）已入队到 `ButchEffect` 命令，**归 R 片**；帧面已接 |
-| 9 | `CM_USERMAKEDRUGITEM(1034)` | 入站兜底 `lib.rs:3163`（仅日志，**零帧**）；生产走商店：`lib.rs:6355` `out = r.frames` → `lib.rs:6365` `emit_shop_frames` | `SM_ADDITEM(200)`（直连）、`SM_DELITEMS(709)`（直连）、`SM_MAKEDRUG_SUCCESS(713)` / `FAIL(714)`（入队，166/167） | 混合（见左） | `Message.cs:972-974` → `Operate.cs:1216-1227` + `Merchant.cs:1432-1551` | 入站臂不可达（商店派发先命中）；帧体在 `shop::make_drug_item`（`shop.rs:512`） |
-| 10 | `CM_PASSWORD(2001)` | `lib.rs:3191` `tx.send(sessionwire::password_frame())` | `SM_PASSWORD(5009)` | **入队**（`SendMsg(RM_PASSWORD)` `Base.cs:3207/3304`） | `Message.cs:1397-1399` → `Base.cs:3190-3298` | `send_password_frame` 由 `inbound::process_client_password` 判定 |
+| # | CM（Rust 号） | Rust handler / 发射点 | Rust 机制 | 帧（SM） | oracle 直连/入队 | oracle 发送点 | 备注 |
+|---:|---|---|---|---|---|---|---|
+| 1 | `CM_TEST(1017)` | `mir2-rs/bins/game-svr/src/lib.rs:2856` `emit_def_frames` | **直发** | `SM 1`（空 def 帧） | 直连（`SendDefMessage(1,…)`） | `PlayObject.Message.cs:909-911` | 无门/无尾 |
+| 2 | `CM_1042(1042)` | `mir2-rs/bins/game-svr/src/lib.rs:2859`（仅日志） | 无 | **零帧** | — | `PlayObject.Message.cs:996-998` | `LogService.Warn` |
+| 3 | `CM_WANTMINIMAP(1033)` | `mir2-rs/bins/game-svr/src/lib.rs:2871` `emit_def_frames` | **直发** | `SM_READMINIMAP_OK(710)` / `_FAIL(711)` | 直连 | `PlayObject.Message.cs:969-971` → `Operate.cs:1204-1214` | `MinMap` 由 `inbound::session_min_map` 等价还原 |
+| 4 | `CM_OPENDOOR(1002)` | `mir2-rs/bins/game-svr/src/lib.rs:2873`（无发帧） | 无 | **零帧** | — | `Message.cs:817` → `Operate.cs:363-374` + `WorldServer.cs:1445-1452` | **BUG-REPLICA 1**：守卫写反 ⇒ 恒零出帧 |
+| 5 | `CM_ADJUST_BONUS(1043)` | 非法：`mir2-rs/bins/game-svr/src/lib.rs:2908` `tx.send`；合法：`mir2-rs/bins/game-svr/src/lib.rs:2999` 队列出帧（752→52→657）；广播 `:3003` | **真入队**（`NetPriorityQueue`；非法单帧 `tx.send`） | 非法：`SM_SYSMESSAGE(100)`；合法：`SM_SUBABILITY(752)`、`SM_ABILITY(52)`、`SM_CHARSTATUSCHANGED(657)`×1（本人）+ 657（±`SendRefMsgRange` 他人） | 入队（`SendMsg(RM_ABILITY/SUBABILITY)` `Base.cs:1174/1175`；657 `SendRefMsg`；SysMsg `BaseObject.cs:1678-1682`） | `Message.cs:999-1001` → `Base.cs:1156-1180` | 队列序 62→67→155；657 头-only 去重后净 1 条 |
+| 6 | `CM_SITDOWN(3012)` | 成功：`mir2-rs/bins/game-svr/src/lib.rs:3030`（当前仅日志；本卡后补 `send_good_tick`）；失败：`mir2-rs/bins/game-svr/src/lib.rs:3043` `emit_def_frames` | 失败=**直发**；成功=**直发短包**（`SendRaw`，待补） | 成功：`+GD/<tick>`（`SendRaw`）+ `RM_POWERHIT`（见 §4）；失败：`SM_MOVEFAIL(28)` | 成功：`SendSocket(GetGoodTick)` + `SendRefMsg(RM_POWERHIT)`；失败：入队（`SendRefMsg(RM_MOVEFAIL)` `Message.cs:1018`） | `Message.cs:1284-1338`；`Operate.cs:343-360`（`SendRefMsg(RM_POWERHIT)` `:359`；`SendSocket(GetGoodTick)`） | **缺发帧 1/2**：`RM_POWERHIT` 发送缺失（接收端无 case，客户端零帧）；`+GD` 由 `openmir2-sitdown-powerhit-broadcast` 补 |
+| 7 | `CM_DROPGOLD(1016)` | 拒绝：`mir2-rs/bins/game-svr/src/lib.rs:3086` `emit_def_frames`；成功：`mir2-rs/bins/game-svr/src/lib.rs:3095` | **直发**（`DefFrame` 单帧） | 拒绝：`SM_MENU_OK(767)`；成功：`SM_GOLDCHANGED(653)` | 均入队（`SendMsg(RM_MENU_OK)` `Base.cs:678`；`SendUpdateMsg(RM_GOLDCHANGED)` `Message.cs:528`） | `Message.cs:903-908` → `Operate.cs:222-249` + `BaseObject.cs:735-771` | **BUG-REPLICA 2**：`DropGoldDown` 恒 false ⇒ 净金币不变，但 653 照发；深体 RNG 属 R 片 |
+| 8 | `CM_BUTCH(1007)` | 入队：`mir2-rs/bins/game-svr/src/lib.rs:3152`；效果：`mir2-rs/bins/game-svr/src/lib.rs:3145`；帧排水：`mir2-rs/bins/game-svr/src/lib.rs:14616` `downlink::butch_frame` | **世界命令 → `broadcast_ref_msg_with_self`** | `SM_BUTCH(637)`（对观察者，`downlink.rs:458-460`） | 入队（`SendRefMsg(RM_BUTCH)` `Operate.cs:749`；优先级 `10119&0xFF=55`） | `Message.cs:829-872` → `Operate.cs:702-751` | 效果体（`:718-745`，RNG）归 R 片；帧面已接 |
+| 9 | `CM_USERMAKEDRUGITEM(1034)` | 入站兜底 `mir2-rs/bins/game-svr/src/lib.rs:3163`（零帧）；生产走商店：`mir2-rs/bins/game-svr/src/lib.rs:6365` `out = r.frames` → `mir2-rs/bins/game-svr/src/lib.rs:6375` `emit_shop_frames`（仓库路由同形在 `:6512`） | **直发**（`emit_shop_frames`；`SM_ADDITEM/SM_DELITEMS` 直连，`713/714` 经 oracle 队列但本宿主单批直发） | `SM_ADDITEM(200)`、`SM_DELITEMS(709)`、`SM_MAKEDRUG_SUCCESS(713)` / `FAIL(714)` | 混合（200/709 直连；713/714 `SendMsg` 166/167） | `Message.cs:972-974` → `Operate.cs:1216-1227` + `Merchant.cs:1432-1551` | 入站臂不可达（商店派发先命中）；帧体在 `shop::make_drug_item`（`shop.rs:512`） |
+| 10 | `CM_PASSWORD(2001)` | `mir2-rs/bins/game-svr/src/lib.rs:3191` `tx.send(sessionwire::password_frame())` | **直发**（单帧 `tx.send`） | `SM_PASSWORD(5009)` | 入队（`SendMsg(RM_PASSWORD)` `Base.cs:3207/3304`） | `Message.cs:1397-1399` → `Base.cs:3190-3298` | `send_password_frame` 由 `inbound::process_client_password` 判定 |
+
 
 ## 2. 线缆映射（非出帧，已接）
 
@@ -46,8 +47,8 @@
 
 | # | 命令 | 缺失帧 | oracle 证据 | 当前 Rust |
 |---:|---|---|---|---|
-| M-1 | `CM_SITDOWN` 成功支 | `RM_POWERHIT`（`SendRefMsg` → 附近观察者 `SM_POWERHIT`） | `Operate.cs:356` | `lib.rs:3030` 只日志；`attackwire` 只映射 `RM_SPELL2→SM_POWERHIT`，无 `RM_POWERHIT` 入口 |
-| M-2 | `CM_SITDOWN` 成功支 | `GetGoodTick` 直发字节（`SendSocket(string)`，`+GD/<tick>!`） | `M2Share.cs:205`；`Message.cs:1284-1338` | `lib.rs:149` 有编码器，但入站臂未调用 |
+| M-1 | `CM_SITDOWN` 成功支 | `RM_POWERHIT` **发送**（`SendRefMsg`，`Operate.cs:359`）——接收端**无 `RM_POWERHIT` case**（`PlayObject.Message.cs`/`BaseObject.Base.cs`），客户端零帧；缺口=server-side send | `Operate.cs:359` | `mir2-rs/bins/game-svr/src/lib.rs:3030` 只日志；`attackwire` 只映射 `RM_SPELL2→SM_POWERHIT` |
+| M-2 | `CM_SITDOWN` 成功支 | `GetGoodTick` 直发字节（`SendSocket(string)`，`+GD/<tick>!`） | `M2Share.cs:205`；`Message.cs:1284-1338` | 真正发送器是 `send_good_tick`（`mir2-rs/bins/game-svr/src/lib.rs:13572`），当前已在 CM_TURN（`:9162`）等路径调用；SITDOWN 支未调用（本卡后补） |
 | M-3 | `CM_USERMAKEDRUGITEM` | 入站臂零帧（生产走商店臂，帧在 `shop::make_drug_item`） | `Merchant.cs:1432-1551` | 非缺帧，属**路由**；已登记 §1 第 9 行 |
 | M-4 | `CM_DROPGOLD` | `RM_ITEMSHOW` 广播（仅 `DropGoldDown` 成功时） | `BaseObject.cs:735-771` | BUG-REPLICA 2 ⇒ oracle 恒不发；**不是缺帧** |
 
@@ -67,11 +68,11 @@ grep -n 'CM_ADJUST_BONUS 非法支\|CM_ADJUST_BONUS 回帧' mir2-rs/bins/game-sv
 grep -n 'world.enqueue(mir2_world::Command::Butch' mir2-rs/bins/game-svr/src/lib.rs     # 3145/3152
 grep -n 'downlink::butch_frame' mir2-rs/bins/game-svr/src/lib.rs                        # 14616
 grep -n 'CM_PASSWORD/SM_PASSWORD' mir2-rs/bins/game-svr/src/lib.rs                      # 3189
-grep -n 'emit_shop_frames(tx, socket, &out)' mir2-rs/bins/game-svr/src/lib.rs            # 6365
+grep -n 'emit_shop_frames(tx, socket, &out)' mir2-rs/bins/game-svr/src/lib.rs            # 6375（M-3；仓库路由 6512）
 grep -n 'pub fn make_drug_item' mir2-rs/bins/game-svr/src/shop.rs                       # 512
 
 # oracle 发送点
-grep -n 'RM_POWERHIT' src/M2Server/Player/PlayObject.Operate.cs            # :356
+grep -n 'RM_POWERHIT' src/M2Server/Player/PlayObject.Operate.cs            # :359
 grep -n 'SendUpdateMsg(Messages.RM_GOLDCHANGED' src/M2Server/Player/PlayObject.Message.cs  # :528
 grep -n 'SendRefMsg(Messages.RM_MOVEFAIL' src/M2Server/Player/PlayObject.Message.cs        # :1018
 grep -n 'SendMsg(Messages.RM_PASSWORD' src/M2Server/Player/PlayObject.Base.cs              # :3207/3304
