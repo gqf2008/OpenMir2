@@ -1,6 +1,6 @@
 {
   "name": "clearmapmon_t118",
-  "description": "W-CM-1：`CLEARMAPMON T118` + `MONGENEX T118 14 17 命运教主 2 1 1`（武士-0114.txt:145-146）。**前置（F2）**：`[@main]` 分支需 `checkitem 佛牌 1` + `checklevel 43`（且不在 `命运之刃名单.txt`）才有 @rw01。**分支随机（F1）**：`[@rw01]` 的 `#act movr M3 3`(:27) 只有赢页有 @rw02(:61)；本场景改用 `dlg_select_any` + `repeat(times=6, stop_on_select=@rw02)` 做确定性重试（卡 `openmir2-probe-conditional-dlg-select`）——命中赢页即终止，平局页重掷，输页（只有 /@exit）显式失败。M3 是脚本局部量、动作点覆盖预置 ⇒ 唯一固定办法是**两侧同一 `-Seed N`** + `MIR2_RNG_SITE=1`，且 **C# 侧必须经 hook 接线**（`start-csharp-hook.ps1` + `RngSeedHook.dll`，输出 `INJECT_OK <seed>`）；窗口现有 csharp stack（`start-csharp3.ps1`）无任何 seed/hook 参数 ⇒ oracle 仍按时间种子（工具面见卡 `openmir2-window-csharp-rng`）。**当前状态：blocked** ⇒ 不进 run3 批次；解封三步与**操作约束**（输分支会扣佛牌 + 写名单，每次尝试前须恢复夹具）见 `blocked.missing_fixture`。",
+  "description": "W-CM-1：`CLEARMAPMON T118` + `MONGENEX T118 14 17 命运教主 2 1 1`（武士-0114.txt:145-146）。**前置（F2）**：`[@main]` 分支需 `checkitem 佛牌 1` + `checklevel 43`（且不在 `命运之刃名单.txt`）才有 @rw01。**分支随机（F1）**：`[@rw01]` 的 `#act movr M3 3`(:27) 只有赢页有 @rw02(:61)；本场景改用 `dlg_select_any` + `repeat(times=6, stop_on_select=@rw02)` 做**有界重试**（卡 `openmir2-probe-conditional-dlg-select`）——命中赢页即终止，平局页重掷，输页（只有 /@exit）显式失败并打印链接清单。**注意：这是有界重试、不是确定性**——每轮独立重掷，失败率约由 2/3 降到 1/2；确定性仍只来自两侧同 seed。**本改造不改变解封判据**（C# hook + 同 seed 确认 `movr=2` + 记 seed 三步仍必需），本轮**不解封、不进 run3**。M3 是脚本局部量、动作点覆盖预置 ⇒ 唯一固定办法是**两侧同一 `-Seed N`** + `MIR2_RNG_SITE=1`，且 **C# 侧必须经 hook 接线**（`start-csharp-hook.ps1` + `RngSeedHook.dll`，输出 `INJECT_OK <seed>`）；窗口现有 csharp stack（`start-csharp3.ps1`）无任何 seed/hook 参数 ⇒ oracle 仍按时间种子（工具面见卡 `openmir2-window-csharp-rng`）。**当前状态：blocked** ⇒ 不进 run3 批次；解封三步与**操作约束**（输分支会扣佛牌 + 写名单，每次尝试前须恢复夹具）见 `blocked.missing_fixture`。",
   "required": [
     "npc_actor"
   ],
@@ -53,7 +53,7 @@
           }
         ]
       },
-      "note": "限次重试（≤6 轮）：`[@st]` 后 `movr M3 3`(:27) 三支——赢页含 `<打听[命运之刃]的下落/@rw02>`(:61)、平局页含 `<再来/@rw01>`(:54)、输页只有 `/@exit`(:47)。`dlg_select_any [\"@rw02\",\"@rw01\"]` 按候选顺序选**当前页实际存在**的链接：赢 ⇒ @rw02（`stop_on_select` 命中，终止）；平 ⇒ @rw01 回到 `[@rw01]` 页再掷；输页两者皆无 ⇒ 显式失败并打印该页链接清单（fail-closed）。6 轮仍未命中 @rw02 ⇒ fail 并打印每轮页面 links/selected。"
+      "note": "有界重试（≤6 轮，每轮独立重掷；不消除随机、不替代同 seed）：`[@st]` 后 `movr M3 3`(:27) 三支——赢页含 `<打听[命运之刃]的下落/@rw02>`(:61)、平局页含 `<再来/@rw01>`(:54)、输页只有 `/@exit`(:47)。`dlg_select_any [\"@rw02\",\"@rw01\"]` 按候选顺序选**当前页实际存在**的链接：赢 ⇒ @rw02（`stop_on_select` 命中，终止）；平 ⇒ @rw01 回到 `[@rw01]` 页再掷；输页两者皆无 ⇒ 显式失败并打印该页链接清单（fail-closed）。6 轮仍未命中 @rw02 ⇒ fail 并打印每轮页面 links/selected。"
     },
     {
       "dlg_select": "@rw03",
@@ -72,6 +72,6 @@
   ],
   "blocked": {
     "reason": "分支随机 `movr M3 3`（武士-0114.txt:27）在动作点覆盖任何预置 ⇒ M3 不可注入；只能靠**两侧同一 RNG seed**。而窗口的 C# 栈（`card_window.py` 的 `alt.sides.csharp.stack` = `E:/tmp/conformance/start-csharp3.ps1`）**没有任何 `-Seed`/`MIR2_RNG_SEED`/`DOTNET_STARTUP_HOOKS`** ⇒ oracle 仍按时间种子，M3 不可能与 Rust 对齐。（注：`card_window.py:3305` 是 `env = os.environ.copy()`，父进程的 `MIR2_RNG_SEED`/`MIR2_RNG_SITE` 会透传；缺的是 **oracle 侧 hook 接线**，不是环境变量通道。）",
-    "missing_fixture": "解封三步：① 窗口 C# 栈接 hook/seed（改用 mir2-rs/tests/parity/m3/start-csharp-hook.ps1 + RngSeedHook.dll，输出 INJECT_OK <seed>；工具面归卡 openmir2-window-csharp-rng）；② 两侧同 -Seed N + MIR2_RNG_SITE=1 且 INJECT_OK，确认该 seed 下 movr 取到 2；③ 记 seed 号后解封。**操作约束（破坏性副作用，务必遵守）**：`[@st]` 的 M3=0（输）分支在 #SAY 之前先执行 `#act take 佛牌 1; set [105] 0; addnamelist 命运之刃名单.txt`（武士-0114.txt:37-43）⇒ 一次「抽出 0」的尝试会**扣掉佛牌并把角色写进名单**，之后点该 NPC 只会命中 @main 的 CHECKNAMELIST（只得 767、没有 @rw01）⇒ **永久卡住**。因此：**先用离线/`MIR2_RNG_SITE` 流水确认 seed，再跑第一次**；**每次尝试前恢复夹具**（佛牌×1 + 把角色从 `命运之刃名单.txt` 移除）。"
+    "missing_fixture": "**DSL 改造不解封**（`dlg_select_any`/`repeat` 只解决『读哪一页/选哪个链接』，不解决分支可复现；未接 C# hook 时每轮真随机，约一半窗口会失败，且输支 `take 佛牌 + addnamelist` 是终局并烧夹具 ⇒ 仍按本字段三步解封，本轮不进 run3 #20）。解封三步：① 窗口 C# 栈接 hook/seed（改用 mir2-rs/tests/parity/m3/start-csharp-hook.ps1 + RngSeedHook.dll，输出 INJECT_OK <seed>；工具面归卡 openmir2-window-csharp-rng）；② 两侧同 -Seed N + MIR2_RNG_SITE=1 且 INJECT_OK，确认该 seed 下 movr 取到 2；③ 记 seed 号后解封。**操作约束（破坏性副作用，务必遵守）**：`[@st]` 的 M3=0（输）分支在 #SAY 之前先执行 `#act take 佛牌 1; set [105] 0; addnamelist 命运之刃名单.txt`（武士-0114.txt:37-43）⇒ 一次「抽出 0」的尝试会**扣掉佛牌并把角色写进名单**，之后点该 NPC 只会命中 @main 的 CHECKNAMELIST（只得 767、没有 @rw01）⇒ **永久卡住**。因此：**先用离线/`MIR2_RNG_SITE` 流水确认 seed，再跑第一次**；**每次尝试前恢复夹具**（佛牌×1 + 把角色从 `命运之刃名单.txt` 移除）。"
   }
 }

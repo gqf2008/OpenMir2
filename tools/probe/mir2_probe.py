@@ -900,8 +900,22 @@ def plan_step(step, index, params, depth=0):
         stop = val.get("stop_on_select")
         if stop is not None and (not isinstance(stop, str) or not stop):
             raise ScenarioError("%s.repeat.stop_on_select must be a non-empty string" % where)
+        if timeout_ms is not None:
+            raise ScenarioError(
+                "%s.repeat.timeout_ms is not supported: timing is per inner step "
+                "(give the wait_for steps their own timeout_ms); fail-closed" % where)
         subplans = [plan_step(x, "%s.%d" % (index, j), params, depth + 1)
                     for j, x in enumerate(sub)]
+        if stop is not None:
+            cands = set()
+            for leaf in _iter_plan_leaves(subplans):
+                if leaf["kind"] == "dlg_select_any":
+                    cands.update(c.lower() for c in leaf["candidates"])
+            if stop.lower() not in cands:
+                raise ScenarioError(
+                    "%s.repeat.stop_on_select %r is not one of the inner dlg_select_any "
+                    "candidates %s (a typo would silently exhaust all attempts; fail-closed)"
+                    % (where, stop, sorted(cands)))
         out.update(times=times, steps=subplans, stop_on_select=stop)
     elif action == "wait_for":
         # 旧形状（int / 非空 int 数组）原样保留；要来源过滤才写对象形状：
@@ -1447,7 +1461,14 @@ class Run:
             attempts = []
             for k in range(plan["times"]):
                 self.state["last_selected_label"] = None
-                for sub in plan["steps"]:
+                for j, sub in enumerate(plan["steps"]):
+                    # 内层 pacing 与顶层同口径（`delay_ms` 缺省取 `--between-ms`）；
+                    # 整个 repeat 的第一步不额外延迟（顶层循环已在 repeat 之前等过）。
+                    if not (k == 0 and j == 0):
+                        delay = (sub["delay_ms"] if sub["delay_ms"] is not None
+                                 else getattr(self.args, "between_ms", 0))
+                        if delay:
+                            time.sleep(delay / 1000.0)
                     self.execute_step(conn, sub)
                 page = self.state.get("page")
                 attempts.append({"attempt": k + 1,
@@ -3078,6 +3099,8 @@ def _selftest_dlg_select_any():
     links = parse_page_links(page_text)
     assert links == ["@rw02", "@exit"], links
     assert parse_page_links("<再来/@rw01><石头/@st>") == ["@rw01", "@st"]
+    # 先钉「候选顺序压过链接顺序」（变异：按链接顺序 ⇒ 本行先红，便于归因）
+    assert choose_link(["@rw02", "@rw01"], ["@rw01", "@rw02"]) == "@rw02",         "候选顺序压过链接顺序（反序链接下仍选 @rw02）"
     assert choose_link(["@rw02", "@rw01"], links) == "@rw02"
     assert choose_link(["@rw03", "@rw01"], links) is None
     assert choose_link(["@RW02"], links) == "@RW02", "大小写不敏感"
@@ -3116,6 +3139,10 @@ def _selftest_dlg_select_any():
          "non-empty string"),
         ({"repeat": {"times": 1, "steps": [{"dlg_select": "@st"}], "bogus": 1}},
          "unknown key"),
+        ({"repeat": {"times": 1, "steps": [{"dlg_select": "@st"}]}, "timeout_ms": 100},
+         "timeout_ms is not supported"),
+        ({"repeat": {"times": 1, "stop_on_select": "@typo",
+                     "steps": [{"dlg_select_any": ["@rw02"]}]}}, "not one of the inner"),
     ]
     for step, needle in bad:
         err = None
@@ -3268,6 +3295,20 @@ def _selftest_dlg_select_any():
     finally:
         shutil.rmtree(tmpd, ignore_errors=True)
 
+    # repeat **不得吞子步失败**：@st 后只回输页（links=['@exit']）⇒ 显式失败且只发 1 帧
+    run, conn, sock, tmpd = mkrun_scripted([("@st", lose)])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, rep_plan)
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "none of" in err and "@exit" in err, err
+        assert len(sock.sent) == 1, (
+            "repeat 吞掉了子步失败并空转：sent=%d" % len(sock.sent))
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
     # repeat 超限：每次 @st 给平局页、每次 @rw01 也给平局页 ⇒ 2 轮后仍非 @rw02 ⇒ fail
     rep_plan2 = plan_step({"repeat": {"times": 2, "stop_on_select": "@rw02",
                                       "steps": [{"dlg_select": "@st"}, {"wait_for": 643},
@@ -3284,8 +3325,8 @@ def _selftest_dlg_select_any():
         assert "@rw01" in err, err
     finally:
         shutil.rmtree(tmpd, ignore_errors=True)
-    return ("parse/choose 7 项；形状 %d 坏例；repeat 叶子 0.0-0.3；"
-            "语义正/反；运行期 选中/清单打印/终止/超限 4 例" % len(bad))
+    return ("parse/choose 8 项；形状 %d 坏例；repeat 叶子 0.0-0.3；"
+            "语义正/反；运行期 选中/清单打印/终止/超限/子步失败不吞 5 例" % len(bad))
 
 
 def run_selftest():
