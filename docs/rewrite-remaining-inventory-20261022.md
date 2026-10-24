@@ -437,11 +437,11 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 
 #### 3.2.1 B-补：无卡可派的代码面（来自 m3 A 表；**不计入 22 张卡**）
 
-| 面 | 索引 | 现状（HEAD `24e9a5fab`，逐文件复核） | 处置 |
+| 面 | 索引 | 现状（master `e643b43fb`，第 6 轮复核；#1/#2 结论经 reviewer-2 复核仍成立，行号按当前 master 重取） | 处置 |
 |---|---|---|---|
-| `SETOFFLINE` 的 `AutoGetExp*` 四字段 | m3 A-10 / T-86 | `crates/script/src/engine/mod.rs:603` 的 `ScriptPlayer::set_offline` 是**空默认实现**；`bins/game-svr/src/npc.rs:967` 的 `impl ScriptPlayer for NpcPlayer` **未覆写**；`crates/script/src/engine/actions.rs:617-623` 的 `ActionOfOffLine` 调它 ⇒ 四字段 + `OffLineFlag`/`KickOffLineTick` 均不写 | 无卡；tier=R（PL-2 复验 F6）。建议并入 PL-2/PL-3 后续片或新卡 |
-| `SETMPAMODE DECHP` / `sys_msg` | m3 A-21 / T-85 | **已解决 @ `f5b401cc8`（merge `d1b13ba14`）**：分支表 + `sys_msg` 下发帧 + 宿主落库全链 | R 卡等真机窗口 |
-| `Market_Def` 商人脚本装载/说词 | m3 A-08 / T-47③ / T-145 残余 | `shop.rs:36-38` 明写宿主**未装载** `Merchant.LoadScriptFile`；`MerchantScriptBook` 已存在并用于 `Npc_def` 点击路径，但 `Market_Def` 的 `~@repair`/say 链路仍按「脚本未装载 ⇒ 无后续帧」登记 | 无实现卡；建议新卡 `openmir2-merchant-script-load`（本文 §6 top5 #4） |
+| `SETOFFLINE` 的 `AutoGetExp*` 四字段 | m3 A-10 / T-86 | **已解决 @ `1bcee588a`（merge `1716785bc`）**：`npc.rs:1770` 的 `impl ScriptPlayer for NpcPlayer` **已覆写** `set_offline`，写 `auto_get_exp_in_safe_zone/envir/time/point` + `off_line_flag` + `kick_off_line_tick` 六字段；调用点 `actions.rs:680`（`"ActionOfOffLine" =>`）。原文位置过期：`mod.rs:603`→`622`（默认仍 no-op，但已被覆写）、`npc.rs:967`→`1770`、`actions.rs:617-623`→`680`。证据：`git log -S 'self.kick_off_line_tick = kick_tick' --oneline -- mir2-rs/bins/game-svr/src/npc.rs` → `1bcee588a`。 | 剩余 = 真机窗口（原判 tier=R）：`OffLineFlag`/`KickOffLineTick` 落库与挂机四字段对拍 |
+| `SETMPAMODE DECHP` / `sys_msg` | m3 A-21 / T-85 | **已解决 @ `f5b401cc8`（merge `d1b13ba14`）**：地图 `DECHP`/`INCHP` 门在 `lib.rs:18689`（`drain_player_map_hp`；`reg.flag_of` 读点 `:18713`，`run_segments::map_hp_tick` 调用 `:18721`，真门 `run_segments.rs:41`），`actions.rs:665-678` 是 `SetMapMode` 的参数门（`s_param3`/`s_param4` @ `:676-677`，`set_map_mode` 调用 @ `:678`）；原文位置 `lib.rs:18496-18502`、`actions.rs:668-676` 已随 master 前进漂移（第 6 轮重取），原文「分支表 + sys_msg 下发帧 + 宿主落库全链」的结论未变。 | R 卡等真机窗口 |
+| `Market_Def` 商人脚本装载/说词 | m3 A-08 / T-47③ / T-145 残余 | **已合入 `460691b24`（merge `d494c9d23`，tier=R；卡 `in-progress`、不 `closed`）**：同 §6 #4——`Market_Def` 装载与 `GotoLable` 执行已落地（`shop.rs:35-39` 的「已落地」段、`lib.rs:7224` `run_merchant_goto`、`:7357` `emit_merchant_goto_result`、`:5956` `@upgradenow` 臂、`:6053` `@getbackupgnow` 臂），whitelist T-47③ 已改「2026-10-24 已实现」；`d494c9d23` 已删除原两处「未装载」登记（旧串扫法见 §12.5，count=0）。 | 剩余 = **R 真机窗口**（`SM_MERCHANTSAY(643)` 说词帧集合/字节序/帧序）+ 关卡；**不再建议新建** |
 
 ### D. needs-human（owner 裁决/排期）
 
@@ -716,14 +716,17 @@ PY
 > 第 3 轮把排序依据写成「与在跑车道 `wt-gm3` 冲突 / `lib.rs` 被占用」，该前提**已过期**：
 > 第 4 轮 board 是 203 进行中 / 5 待审，多车道并行。下表按**当前 HEAD 的机器事实**逐条结项，
 > 不再沿用「等某条车道合并后才能排」的表述。
+>
+> **第 5 轮复核（2026-10-24，master `3738ad234`）**：下表五条已逐条重核，每行证据命令的实跑输出见 §12；`已解决 @ <commit>` 的行是**留痕**，不删行。
+> **第 6 轮返工（2026-10-24，master `e643b43fb`）**：#4 按合入后的 master 据实重写（原判「问题仍成立」已被 `460691b24` 推翻）；#1/#2/#3/#5 结论经 reviewer-2 独立复核仍成立，本轮只按新 master 重取漂移的行号（`lib.rs:46806`→`47360`），不改结论。
 
 | # | 单元 | 第 4 轮状态 | 剩余部分 / 证据 |
 |---:|---|---|---|
-| 1 | `openmir2-orphan-encoder-batch-a` | **部分解决**：卡已 closed @ `f164ccd20`（12 帧登记 T-174..T-183 + 判定表；第 13 帧 `SM_CLOSEHEALTH` 转 `openmir2-sm-closehealth-wire` @ `e0114909e`）。但**审计 `6d79be4da` 改判**：0 可直接接线 / 8 需补上游 / 4 不可达。 | 剩余 = **8 帧需补上游**（T-174/178/180/181/182/183）+ **4 帧登记不接**（T-175/176/179）。已不是「一批接线」，需按帧拆上游卡。 |
-| 2 | `openmir2-unbindlist-consumer` | **已接线** @ `4c983375c`（merge `f796eaeed`）；卡仍 in-progress。`recon content` 已 `rust=yes / implemented`。 | 剩余 = **R 窗口真机**：6 条 `SM_ADDITEM(200)` + `SM_EAT_OK(635)` + `SM_WEIGHTCHANGED(622)`，以及断线存档 `hum_items` 含 6 件。 |
-| 3 | `openmir2-minimap-consumer-wire` | **已解决并关卡** @ `4d9bab444`（merge `8889f7f28`；status closed @ `51a0d5342`）。`CM_WANTMINIMAP` 已离开 tracked。 | 无。 |
-| 4 | `openmir2-merchant-script-load`（A-08 / T-47③） | **未开工，仍无卡**。证据：`shop.rs:36-38` 仍写「`Market_Def` 商人脚本执行 + `GotoLable("~@repair")`：本宿主未装载」；`main.rs` 无 `Market_Def` 装载序。 | 需建卡；判据与写集沿用第 3 轮表（`shop.rs`/`lib.rs`/`merchant.rs`/`main.rs`）。 |
-| 5 | `openmir2-adjust-bonus-wire` | **未开工，仍无卡**。证据：`lib.rs:2383-2385` 仍 `inbound::client_adjust_bonus(cmd.recog, 0)`。 | 需建卡；**R 级**（`SM_ABILITY(52)`/`SM_SUBABILITY(752)` 两帧 + 真机字段级 diff）。 |
+| 1 | `openmir2-orphan-encoder-batch-a` | **部分解决（复核 @ `3738ad234`：与原文一致）**：卡已 closed @ `f164ccd20`；审计 `6d79be4da` 改判 0 可直接接线 / 8 需补上游 / 4 不可达；第 13 帧转卡 `openmir2-sm-closehealth-wire` @ `e0114909e`（该卡现 `in-progress`）。证据：`git log -1 --format='%h %s' f164ccd20 6d79be4da` → 两条 merge 均在；board 查该卡 → `closed`。 | 剩余 = **8 帧需补上游** + **4 帧登记不接**；**原文括号里的编号只列了 6 个（T-174/178/180/181/182/183）与 3 个（T-175/176/179），与 8/4 不一致——编号映射本轮未重算，以审计报告 `docs/orphan-encoder-trigger-audit-20261023.md` 的 0/8/4 为准**。 |
+| 2 | `openmir2-unbindlist-consumer` | **已接线（复核 @ `3738ad234`：与原文一致）** @ `4c983375c`（merge `f796eaeed`）；board 该卡仍 `in-progress`。证据：`git log -1 --format='%h %s' 4c983375c f796eaeed` → feat + merge 两条；board → `in-progress`。 | 剩余 = **R 窗口真机**：6 条 `SM_ADDITEM(200)` + `SM_EAT_OK(635)` + `SM_WEIGHTCHANGED(622)`，以及断线存档 `hum_items` 含 6 件。 |
+| 3 | `openmir2-minimap-consumer-wire` | **已解决 @ `4d9bab444`（merge `8889f7f28`；卡 `closed`）**。证据：`python -I -B mir2-rs/tests/parity/coverage/recon_gates.py dispatch | tail -1` → `summary: {"n/a-oracle-noop": 1, "implemented": 179, "n/a-unreachable": 11, "tracked": 0}`（`tracked=0`⇒ 原文「已离开 tracked」成立）；`grep -n CM_WANTMINIMAP mir2-rs/bins/game-svr/src/lib.rs` → `2857` 行 handler。 | 剩余 = 无。 |
+| 4 | `openmir2-merchant-script-load`（A-08 / T-47③） | **已合入 `460691b24`（merge `d494c9d23`；tier=R；卡 `in-progress`、不 `closed`）**：`Market_Def` 商人脚本装载与 `~@repair`/`~@s_repair`、`~@upgradenow_*`、`~@getbackupgnow_*` 执行已落地——`shop.rs:35-39` 的「已落地（卡 `openmir2-merchant-script-load`）」段、`lib.rs:7224`（`run_merchant_goto`）、`:7357`（`emit_merchant_goto_result`）、`:5956`（`@upgradenow` 臂）、`:6053`（`@getbackupgnow` 臂）；whitelist T-47③ 已改「2026-10-24 已实现」。board 实查：`in-progress`（owner `openmir2-orchestrator`，last_ts `1792802841`）。原文「未装载三处仍在」「剩余 = 实现装载」是 `3738ad234` 时点的事实，已作废（旧串扫法见 §12.5，count=0）。 | 剩余 = **R 真机窗口**（`SM_MERCHANTSAY(643)` 说词帧集合/字节序/帧序）+ 关卡；**不再建议新卡**。 |
+| 5 | `openmir2-adjust-bonus-wire` | **已解决 @ `89254a0e8`（merge `a0a5dd21f`，tier=R）**。证据：`grep -n client_adjust_bonus mir2-rs/bins/game-svr/src/lib.rs` → `2887: let out = inbound::client_adjust_bonus(cmd.recog, sg.bonus_point);`（原文 2383-2385 的 `, 0)` 已不存在）；模块注释 `lib.rs:2808`、常量 `:2780`、非法支 `:2890`、合法支起于 `:2887`（`recalc_session_ability` @ `:2917`，657 帧 @ `:2983`）、逻辑 `inbound.rs:263/933/938`、牙 `lib.rs:47360`（第 5 轮写 46806，master 前进后漂移）；board 查 `openmir2-adjust-bonus-wire` → **不存在**（不用再建卡）。 | 剩余 = **R 窗口真机**（`SM_ABILITY(52)`/`SM_SUBABILITY(752)` 帧级 diff）。 |
 
 **补充：已解决的相邻项**
 
@@ -965,3 +968,196 @@ python -I -B E:/tmp/goal_gate.py --repo . --full
 | 203 / 5 / 169 | ③ board |
 | 条件② 5 张 R 卡（快照时；实时量） | ③ goal_gate 的 FAIL 明细 |
 | 147/274、62/61/123、①57/②45/③50 | §1.1 / §3.1 内的专门脚本（第 4 轮已附实测输出） |
+
+
+---
+
+## 12. 第 5 轮复核（2026-10-24，master `3738ad234`）+ 第 6 轮返工（master `e643b43fb`）：§6 top5 与 §3.2.1 两表
+
+> 起因：Leader 拆 §6 #5 `openmir2-adjust-bonus-wire` 前核代码，发现该条已完全过时。本节只复核**上面两张表**，不扩到全文。
+> 第 5 轮在 `master = 3738ad234` 上实跑；第 6 轮（本卡返工，处置 reviewer-2 `9fb3d7f0` 的 I-1/M-1/M-2/M-3）在 `master = e643b43fb` 上**把本节全部命令重新实跑一遍**，行号与看板以第 6 轮输出为准。
+> **含中文的模式一律用 Python unicode `re` 或 `LC_ALL=C.UTF-8 grep -P`**（裸 `grep -P` 在本机是字节匹配，会静默少报）。
+
+### 12.1 合并提交存在性（§6 #1/#2/#3/#4、§3.2.1 三行的「已解决 / 已合入 @ commit」）
+
+```sh
+for c in f164ccd20 e0114909e 4c983375c f796eaeed 4d9bab444 8889f7f28 51a0d5342 \
+         f5b401cc8 d1b13ba14 6d79be4da 89254a0e8 a0a5dd21f 1bcee588a 1716785bc \
+         d494c9d23 460691b24; do
+  git log -1 --format='%h %s' $c
+done
+```
+
+实跑输出（master `e643b43fb`，2026-10-24）：
+
+```text
+f164ccd20 Merge branch 'card/orphan-encoder-batch-a': 13 个孤儿编码器逐帧判定（12 登记 T-174..T-183 + 1 拆卡）
+e0114909e Merge branch 'sm-closehealth': SM_CLOSEHEALTH(1101) 发射点接线（玩家逐 actor + 非会话实体残余扫描）
+4c983375c feat(unbindlist): UnbindList.txt 消费点（StdMode 31 解包 6 件）— 卡 openmir2-unbindlist-consumer
+f796eaeed Merge branch 'unbindlist': UnbindList.txt 消费点（StdMode31 解包 6 件；recon rust=no 清零）
+4d9bab444 feat(game-svr): 接 CM_WANTMINIMAP(1033) 下发帧——会话 map_id → MiniMap 注册表 → Envir.MinMap
+8889f7f28 Merge branch 'minimap': CM_WANTMINIMAP(1033) 下发帧接线（710 带 MinMap / 711 缺失）
+51a0d5342 fix(whitelist): T-65 锚点随 minimap 改动漂移 193→214（inbound.rs）
+f5b401cc8 feat(script): SETMPAMODE DECHP 全链落地——分支表 + sys_msg 下发帧 + 宿主落库（A-21/T-85）
+d1b13ba14 Merge branch 'setmapmode-fix': 修 I-1 锚点漂移 + M-1 T-85 订正（SETMPAMODE 全链，tier=R）
+6d79be4da Merge branch 'card/orphan-audit': 12 个孤儿编码器的触发源审计（0 可接 / 8 需补上游 / 4 不可达，tier=L）
+89254a0e8 feat(inbound): CM_ADJUST_BONUS(1043) 接线（会话 BonusPoint → RecalcAbilitys → 52/752/657×2）
+a0a5dd21f Merge branch 'card/cm-adjust-bonus': CM_ADJUST_BONUS 按 oracle 语义 1:1（合法加点恒等/恒落红字支，B-118，tier=R）
+1bcee588a feat(npc): SETOFFLINE 的 set_offline 覆写——写 AutoGetExp 四字段 + OffLineFlag/KickOffLineTick（A-10/T-86）
+1716785bc Merge branch 'setoffline-fix': SETOFFLINE 六字段落到会话真值（envir/图表 + tick 域）
+d494c9d23 feat(merchant-script): Market_Def 商人脚本执行打通 ~@repair/~@upgradenow*/~@getbackupgnow*（tier=R）
+460691b24 Merge branch 'card/merchant-script-load': Market_Def 商人脚本装载残留两臂 + 缺失 ERR 口径（tier=R）
+```
+
+### 12.2 看板状态（§6 五条 + §3.2.1 的卡）
+
+> 路径用 **`E:/tmp/`（Windows 原生路径）**，因为本机 Python 是原生 Windows 版：POSIX `/tmp` 是 MSYS 私有路径，
+> `open('/tmp/…')` 会 `FileNotFoundError`（第 5 轮原文如此，第 6 轮按 M-1 订正并实跑）。
+
+```sh
+walgit collab board --repo . --format json > E:/tmp/board_r2.json
+python -I -c "import json;b=json.load(open('E:/tmp/board_r2.json',encoding='utf-8'));m={c['id']:(col['name'],c['status'],c.get('owner'),c.get('last_ts')) for col in b['columns'] for c in col['cards']};[print(w,m.get(w,'ABSENT')) for w in ['openmir2-orphan-encoder-batch-a','openmir2-sm-closehealth-wire','openmir2-unbindlist-consumer','openmir2-minimap-consumer-wire','openmir2-merchant-script-load','openmir2-adjust-bonus-wire']]"
+```
+
+实跑输出（2026-10-24，第 6 轮；`openmir2-merchant-script-load` 的 owner/last_ts 已不是第 5 轮的 `worker-73 / 1792800485`）：
+
+```text
+openmir2-orphan-encoder-batch-a ('已完成', 'closed', 'openmir2-orchestrator', 1792691856)
+openmir2-sm-closehealth-wire ('进行中', 'in-progress', 'openmir2-orchestrator', 1792714982)
+openmir2-unbindlist-consumer ('进行中', 'in-progress', 'openmir2-orchestrator', 1792714985)
+openmir2-minimap-consumer-wire ('已完成', 'closed', 'openmir2-orchestrator', 1792699946)
+openmir2-merchant-script-load ('进行中', 'in-progress', 'openmir2-orchestrator', 1792802841)
+openmir2-adjust-bonus-wire ABSENT
+```
+
+### 12.3 §6 #5 / §3.2.1 行 1 的「解决提交」
+
+`--ancestry-path` 的合并提交取 **`--reverse | head -1`**（最早的那个合并 = 把它带进 master 的那次）。
+第 5 轮写的 `| tail -1` 只在「之后没有新 merge」时偶然等于它；master 前进后 `tail -1` 会变成别的卡，**不可复跑**，故本轮改掉。
+
+```sh
+git log -S 'inbound::client_adjust_bonus(cmd.recog, sg.bonus_point)' --oneline -- mir2-rs/bins/game-svr/src/lib.rs
+git log --merges --oneline --ancestry-path 89254a0e8..walgit/master --reverse | head -1
+git log -S 'self.kick_off_line_tick = kick_tick' --oneline -- mir2-rs/bins/game-svr/src/npc.rs
+git log --merges --oneline --ancestry-path 1bcee588a..walgit/master --reverse | head -1
+```
+
+实跑输出：
+
+```text
+89254a0e8 feat(inbound): CM_ADJUST_BONUS(1043) 接线（会话 BonusPoint → RecalcAbilitys → 52/752/657×2）
+a0a5dd21f Merge branch 'card/cm-adjust-bonus': CM_ADJUST_BONUS 按 oracle 语义 1:1（合法加点恒等/恒落红字支，B-118，tier=R）
+1bcee588a feat(npc): SETOFFLINE 的 set_offline 覆写——写 AutoGetExp 四字段 + OffLineFlag/KickOffLineTick（A-10/T-86）
+1716785bc Merge branch 'setoffline-fix': SETOFFLINE 六字段落到会话真值（envir/图表 + tick 域）
+```
+
+### 12.4 §6 #5 的关键行（行号是**按第 6 轮 master 重新取的**，原文 2383-2385 与第 5 轮的 46806 均已作废）
+
+```sh
+grep -n 'client_adjust_bonus' mir2-rs/bins/game-svr/src/lib.rs mir2-rs/bins/game-svr/src/inbound.rs
+python -I -c "import io;L=io.open('mir2-rs/bins/game-svr/src/lib.rs',encoding='utf-8').read().splitlines();[print(n,L[n-1].strip()[:110]) for n in (2780,2808,2887,2890,2917,2983,47360)]"
+```
+
+实跑输出：
+
+```text
+mir2-rs/bins/game-svr/src/lib.rs:2887:            let out = inbound::client_adjust_bonus(cmd.recog, sg.bonus_point);
+mir2-rs/bins/game-svr/src/inbound.rs:263:pub fn client_adjust_bonus(n_point: i32, bonus_point: i32) -> AdjustBonus {
+mir2-rs/bins/game-svr/src/inbound.rs:933:        let ok = client_adjust_bonus(5, 5);
+mir2-rs/bins/game-svr/src/inbound.rs:938:        let bad = client_adjust_bonus(4, 5);
+2780 const ADJUST_BONUS_INVALID_MSG: &str = "非法数据调整!!!";
+2808 /// **`CM_ADJUST_BONUS(1043)` 已完整接线**（会话 `BonusPoint` → `RecalcAbilitys` → 52/752/657×2；
+2887 let out = inbound::client_adjust_bonus(cmd.recog, sg.bonus_point);
+2890 // `SysMsg("非法数据调整!!!", MsgColor.Red, MsgType.Hint)`（`BaseObject.cs:1678-1682`
+2917 let effect = recalc_session_ability(sg, frames_ctx.catalog, extra_abil.as_ref(), None);
+2983 let frame_657 =
+47360 /// **牙 2「门写反」**：把 [`game_svr::inbound::client_adjust_bonus`] 的 `==` 写成 `!=` ⇒ 本用例的
+```
+
+### 12.5 §6 #4 / §3.2.1 行 3（merchant）：装载是否已落地（第 6 轮改写）
+
+第 5 轮扫的是两个「未装载」旧串（当时 3+1 处命中）。`460691b24`（merge `d494c9d23`）已把两处登记删除，
+所以第 6 轮的判据改成**正面证据**：旧串归零 + 「已落地」段存在 + 四条执行接缝在。
+
+```sh
+python -I -c "import io;t=io.open('mir2-rs/bins/game-svr/src/lib.rs',encoding='utf-8').read();print({k:t.count(k) for k in ('Market_Def 商人脚本未装载','GotoLable({g}) 未执行')})"
+grep -nP '^(fn|pub fn) (run_merchant_goto|emit_merchant_goto_result)' mir2-rs/bins/game-svr/src/lib.rs
+python -I -c "import io,re;p='mir2-rs/bins/game-svr/src/shop.rs';[print(i,l.rstrip()[:110]) for i,l in enumerate(io.open(p,encoding='utf-8'),1) if re.search('已落地',l)]"
+LC_ALL=C.UTF-8 grep -nP 'CM_MERCHANTDLGSELECT/@(upgradenow|getbackupgnow)' mir2-rs/bins/game-svr/src/lib.rs
+python -I -c 'import io;t=io.open("mir2-rs/tests/parity/whitelist.md",encoding="utf-8").read();print(t.count("2026-10-24 已实现（卡 `openmir2-merchant-script-load`，tier=R；真机窗口待跑）"))'
+```
+
+实跑输出：
+
+```text
+{'Market_Def 商人脚本未装载': 0, 'GotoLable({g}) 未执行': 0}
+7224:fn run_merchant_goto(
+7357:fn emit_merchant_goto_result(
+35 //! # 已落地（卡 `openmir2-merchant-script-load`）
+5956:                                "CM_MERCHANTDLGSELECT/@upgradenow",
+6053:                                "CM_MERCHANTDLGSELECT/@getbackupgnow",
+1
+```
+
+### 12.6 §3.2.1 行 1（SETOFFLINE）：覆写点
+
+```sh
+grep -n 'fn set_offline' mir2-rs/crates/script/src/engine/mod.rs mir2-rs/bins/game-svr/src/npc.rs
+grep -n 'ActionOfOffLine' mir2-rs/crates/script/src/engine/actions.rs
+```
+
+实跑输出（第 6 轮复跑，与第 5 轮一致）：
+
+```text
+mir2-rs/crates/script/src/engine/mod.rs:622:    fn set_offline(
+mir2-rs/bins/game-svr/src/npc.rs:1770:    fn set_offline(&mut self, envir_map: Option<&str>, time_ms: i32, point: i32, kick_tick: i32) {
+mir2-rs/crates/script/src/engine/actions.rs:680:            "ActionOfOffLine" => {
+```
+
+### 12.7 §3.2.1 行 2（SETMPAMODE DECHP）：参数门与消费点（第 6 轮重取行号）
+
+第 5 轮写的 `lib.rs:18496-18502` / `actions.rs:668-676` 已随 master 前进漂移；结论（全链已落地）不变。
+
+```sh
+grep -n 'ActionOfSetMapMode\|let p1 = info.s_param3\|self.player.set_map_mode' mir2-rs/crates/script/src/engine/actions.rs
+grep -n 'fn drain_player_map_hp\|fn map_hp_tick' mir2-rs/bins/game-svr/src/lib.rs mir2-rs/bins/game-svr/src/run_segments.rs
+python -I -c "import io;L=io.open('mir2-rs/bins/game-svr/src/lib.rs',encoding='utf-8').read().splitlines();[print(n,L[n-1].strip()[:110]) for n in (18713,18721)]"
+```
+
+实跑输出：
+
+```text
+665:            "ActionOfSetMapMode" => {
+676:                let p1 = info.s_param3.clone();
+678:                self.player.set_map_mode(&s_map, &s_mode, &p1, &p2);
+mir2-rs/bins/game-svr/src/lib.rs:18689:fn drain_player_map_hp(
+mir2-rs/bins/game-svr/src/run_segments.rs:41:pub fn map_hp_tick(
+18713 let Some(flag) = reg.flag_of(e.map_id) else {
+18721 let calls = game_svr::run_segments::map_hp_tick(flag, &mut hp, e.max_hp, now, &mut ticks);
+```
+
+### 12.8 §6 #3（minimap）：dispatch 的 tracked 已归零
+
+```sh
+python -I -B mir2-rs/tests/parity/coverage/recon_gates.py dispatch | tail -1
+```
+
+实跑输出：
+
+```text
+summary: {"n/a-oracle-noop": 1, "implemented": 179, "n/a-unreachable": 11, "tracked": 0}
+```
+
+### 12.9 结论与「top5 之外是否还有同类假条目」
+
+- **§3.2.1 的三行**：1 行已解决（SETOFFLINE，`1bcee588a`）、1 行已解决（SETMPAMODE DECHP，`f5b401cc8`）、
+  1 行**已合入但卡未关**（merchant：`460691b24` / `d494c9d23`，卡 `in-progress`、剩余 R 窗口）⇒ **无第三行「假条目」**
+  （「假」= 说未做、实际已做）。第 5 轮把第三行写成「问题仍成立」，在 `460691b24` 合入后即为假陈述（I-1），本轮已据实改写。
+- **§6 top5**：1 已解决并留痕（#5），1 已解决（#3），1 已接线（#2），1 部分解决（#1，编号列表与计数不一致已标注），
+  1 已合入但卡未关（#4）。
+- **教训 ①（写进下文）**：盘点件被当作拆卡依据时，**先行号/先卡状态**必须现取；本轮 §6 #5 如果照抄旧行号，
+  会去重做一件已在 `89254a0e8` 做完的事。
+- **教训 ②（本轮返工的直接起因）**：`stale_pointer_gate` 的 rc=0 **有两种来源**——内容写对，或未完成词被
+  「…」引号豁免。第 5 轮是后者：门绿了，但「问题仍成立」在合入后是错的。**门只防「把已合入说成未合入」这个形状；
+  合入状态本身必须每次 `git show` + `walgit collab board` 现查。** 本轮的 §6 #4 与 §3.2.1 行 3 不含任何未完成词
+  （「已合入」「不 closed」「剩余 = R 真机窗口」），rc=0 来自内容，不来自豁免。
