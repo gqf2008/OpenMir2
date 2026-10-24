@@ -40,6 +40,49 @@
 **blocked 场景不进 run3 批次**（runner 见到 `blocked` 即 rc=2）——因此本卡只把 `dropgold_zero_draw` 作为可跑行加入，
 `butch_two_draws` 的 run3 行**已登记但需 tester 在批次里跳过**，或解封后再真正启用（见下节口径）。
 
+## 2b. 2026-10-25 更新：kill 步落地（卡 `openmir2-probe-kill-step`）
+
+> 本节是**后续卡**对 §2 的修订：`butch_two_draws` 的「场景击杀步」缺口已补，但**仍 blocked**——
+> 红线要求**实测**击杀→屠宰链；本轮无私有栈窗口，故不声称可跑。
+
+### 2b.1 `kill` 步契约（`tools/probe/mir2_probe.py`）
+
+```json
+{"kill": {"target_xy": "target_xy", "self_pos": "self_pos",
+          "ident": 3014, "turn_ident": 3010,
+          "max_swings": 20, "interval_ms": 1000, "wait_ident": 34}}
+```
+
+| 项 | 语义 / oracle |
+|---|---|
+| `target_xy` | 目标格的 `MakeLong(X,Y)`；**必须与 `self_pos` 八向相邻**（加载期就拒）——`CM_HIT` 只打 `GetPoseCreate()` 的**正前方格**（`PlayObject.Attack.cs:26/883`） |
+| `self_pos` | `MakeLong(自身X,自身Y)`（可由 params 提供，缺省名为 `self_pos`；R5 与 placement 自洽） |
+| `ident`/`turn_ident` | 默认 `CM_HIT(3014)` / `CM_TURN(3010)`（`Messages.cs:120/136`）；必须 `CM_*`（`check_scenario` R3b） |
+| `max_swings` | 1..100，默认 20 |
+| `interval_ms` | 350..60000，默认 **1000**——同 ident 连击之间有 `HitIntervalTime - HitSpeed*ItemSpeed`（`PlayObject.Attack.cs:850`；部署 `HitIntervalTime=850`，`Server.conf:325`），400ms 会被「攻击忙」吃掉一半挥击 |
+| `wait_ident` | 默认 `[SM_NOWDEATH(34), SM_DEATH(32)]`；**必须 `SM_*`**。真死亡广播是 `RM_DEATH` nParam3=1（`BaseObject.Base.cs:351` → `PlayObject.Message.cs:1632-1634`），帧里 **param/tag = 目标 X/Y**；`SM_DEATH(32)` 是对「已死 actor 进入视野」的刷新帧（`PlayObject.cs:3235`） |
+
+### 2b.2 三态失败（各不同错误串）
+
+1. **没刷出来**：`kill: no target frames at (X,Y) after N swing(s)` —— 窗口内目标格零帧
+   （`fixtures.monsters` 未生效/落点不同格；也含「0 伤害打空」：`SM_STRUCK(31)` 只在
+   `wParam>0` 时发，`PlayObject.Message.cs:1564`）。
+2. **打了没死**：`kill: target alive after N swing(s)` —— 收到过目标格活动帧（`SM_TURN/DEATH` 带坐标）
+   或带伤害的他人 `SM_STRUCK`，但没等到死亡帧；错误串带帧摘要。
+3. **死了但屠宰不接受**：不在 `kill` 内——由紧随其后的 `wait_for(33)` 超时表达（死亡帧已到，
+   说明击杀成功；33 不来 = 尸体被清/距离或速度门）。
+
+### 2b.3 场景与状态
+
+- `butch_two_draws` 步序：`kill`（`target_xy` = 目标格、`self_pos=21627210`）→ `CM_BUTCH(1007)`
+  → `SM_SKELETON(33)` → `SM_BUTCH(637)` → `sleep 500`；场景总时长 20×1s ⇒ run3 `#21`
+  带 `extra=["--timeout-ms","60000"]`。
+- **状态：仍 `blocked`**，`blocked.reason` 已改为「能力齐、只差实测」；解封条件（实测步骤 +
+  证据清单 + 失败分流）写在场景 `blocked.missing_fixture`。
+- 自测：`kill` 进 schema 校验（未知键/越界/缺 `self_pos`/非相邻全拒）、`SEND_KINDS`、`check_scenario`
+  方向校验（`ident`/`turn_ident` 必须 CM、`wait_ident` 必须 SM）；运行期用假 socket 覆盖
+  dead/alive/no-target 三态。
+
 ## 3. run3 注册（只追加两行）
 
 `tools/window/run3-scenarios.json`：`#20 dropgold_zero_draw`、`#21 butch_two_draws`（`profile=alt`、`extra=[]`），

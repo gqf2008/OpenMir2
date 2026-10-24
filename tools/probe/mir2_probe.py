@@ -103,7 +103,14 @@ SM_OUTOFCONNECTION = 528
 SM_CHANGELIGHT = 654          # src/OpenMir2/Messages.cs（延迟段帧）
 SM_CHARSTATUSCHANGED = 657    # src/OpenMir2/Messages.cs（延迟段帧）
 SM_HIT = 14                   # SM_HIT：攻击者动作广播（recog=攻击者 ActorId）
-SM_STRUCK = 31                # SM_STRUCK：受击广播（recog=被打对象的 ActorId）
+SM_STRUCK = 31                # SM_STRUCK：受击广播（recog=被打对象的 ActorId；param=HP、tag=MaxHP、series=伤害）
+CM_TURN = 3010                # src/OpenMir2/Messages.cs:120 → PlayObject.Message.cs:1218-1220 → ClientChangeDir
+CM_HIT = 3014                 # Messages.cs:136 → PlayObject.Message.cs:1221-1230 → ClientHitXY（recog=**自身**坐标、tag=朝向）
+SM_DEATH = 32                 # 可见性刷新时的死亡帧（PlayObject.Message.cs:1642-1646；来自 PlayObject.cs:3235，nParam3=0）
+SM_NOWDEATH = 34              # **真死亡广播**（BaseObject.Base.cs:351 RM_DEATH nParam3=1 → PlayObject.Message.cs:1632-1634）
+#: 八向朝向：`(dx, dy) -> Dir`（Direction.cs：Up=0/UpRight=1/Right=2/DownRight=3/Down=4/DownLeft=5/Left=6/UpLeft=7）。
+DIRECTION_BY_DELTA = {(0, -1): 0, (1, -1): 1, (1, 0): 2, (1, 1): 3,
+                      (0, 1): 4, (-1, 1): 5, (-1, 0): 6, (-1, -1): 7}
 
 CLIENT_VERSION_NUMBER = 1200409180  # src/OpenMir2/Grobal2.cs
 HEARTBEAT = b"*"
@@ -358,7 +365,8 @@ class Conn:
 # ==========================================================================
 STEP_META_KEYS = {"timeout_ms", "note", "delay_ms"}
 ACTION_KEYS = {"send", "wait_for", "wait_frames", "wait_idents", "sleep",
-               "say", "click_npc", "dlg_select", "dlg_select_any", "repeat", "newchr"}
+               "say", "click_npc", "dlg_select", "dlg_select_any", "repeat", "newchr",
+               "kill"}
 # 场景顶层 `requires` 只认这些夹具值（卡 `openmir2-scenario-fixture-precondition`）：
 # 目前只有 `magic`（characters_magic 预置）。未知值 fail-closed，避免「加了值却没生效」假绿。
 REQUIRES_KNOWN = ("magic",)
@@ -866,6 +874,58 @@ def plan_step(step, index, params, depth=0):
                 where + ".send." + name)
         out["body"] = (_encode_send_body(val, where + ".send", params)
                        if ("text" in val or "raw_hex" in val or "text_from" in val) else b"")
+    elif action == "kill":
+        # 击杀步（卡 `openmir2-probe-kill-step`）：把活体夹具刷出的目标打到死亡。
+        # 语义关键（别写反）：`CM_HIT(3014)` 的 **recog 是自身坐标**（PlayObject.Attack.cs:883
+        # `nX == CurrX && nY == CurrY`），`tag` 是朝向；目标由 `GetPoseCreate()` 按**状态化
+        # Dir** 取正前方格（PlayObject.Attack.cs:26）。所以本步先 `CM_TURN` 转身、再按同一
+        # 朝向连击；`target_xy` 必须与 `self_pos` 八向相邻，否则加载期就拒（不猜）。
+        _need_keys(val, where + ".kill", required=("target_xy",),
+                   optional=("self_pos", "ident", "turn_ident", "max_swings",
+                             "interval_ms", "wait_ident"))
+        out["target_xy"] = _need_int(
+            resolve_param(val["target_xy"], params, where + ".kill.target_xy"),
+            where + ".kill.target_xy", 0, 0xFFFFFFFF)
+        raw_self = val.get("self_pos")
+        if raw_self is None:
+            if "self_pos" not in params:
+                raise ScenarioError(
+                    "%s.kill: 需要 self_pos（MakeLong(自身X,自身Y)）——声明在 params/required "
+                    "里或在本步写 self_pos；没有它算不出朝向（CM_HIT 取目标用状态化 Dir）"
+                    % where)
+            raw_self = "self_pos"
+        out["self_pos"] = _need_int(
+            resolve_param(raw_self, params, where + ".kill.self_pos"),
+            where + ".kill.self_pos", 0, 0xFFFFFFFF)
+        out["ident"] = _need_int(resolve_param(val.get("ident", CM_HIT), params,
+                                               where + ".kill.ident"),
+                                 where + ".kill.ident", 0, 0xFFFF)
+        out["turn_ident"] = _need_int(resolve_param(val.get("turn_ident", CM_TURN), params,
+                                                    where + ".kill.turn_ident"),
+                                      where + ".kill.turn_ident", 0, 0xFFFF)
+        out["max_swings"] = _need_int(val.get("max_swings", 20),
+                                      where + ".kill.max_swings", 1, 100)
+        # 默认 1000ms：同 ident 连击之间 oracle 另有 `HitIntervalTime - HitSpeed*ItemSpeed`
+        # （PlayObject.Attack.cs:850；部署 HitIntervalTime=850，Server.conf:325）——400ms 会
+        # 被「攻击忙」节流吃掉一半挥击。允许覆盖，但下限仍是不同 ident 的 ActionIntervalTime=350。
+        out["interval_ms"] = _need_int(val.get("interval_ms", 1000),
+                                       where + ".kill.interval_ms", 350, 60000)
+        wi = val.get("wait_ident", [SM_NOWDEATH, SM_DEATH])
+        if isinstance(wi, int) and not isinstance(wi, bool):
+            wi = [wi]
+        if not isinstance(wi, list) or not wi:
+            raise ScenarioError("%s.kill.wait_ident 必须是 ident 或非空 ident 数组" % where)
+        out["wait_idents"] = [_need_int(x, where + ".kill.wait_ident[]") for x in wi]
+        tx, ty = out["target_xy"] & 0xFFFF, (out["target_xy"] >> 16) & 0xFFFF
+        sx, sy = out["self_pos"] & 0xFFFF, (out["self_pos"] >> 16) & 0xFFFF
+        if (tx - sx, ty - sy) not in DIRECTION_BY_DELTA:
+            raise ScenarioError(
+                "%s.kill: target_xy (%d,%d) 与 self_pos (%d,%d) 不是八向相邻格——CM_HIT 只打 "
+                "GetPoseCreate() 的正前方格（PlayObject.Attack.cs:26/883）；先把角色摆到目标邻格"
+                % (where, tx, ty, sx, sy))
+        out["recog"] = out["self_pos"]
+        out["param"] = 0
+        out["tag"] = DIRECTION_BY_DELTA[(tx - sx, ty - sy)]
     elif action == "say":
         if not isinstance(val, str):
             raise ScenarioError("%s.say must be a string" % where)
@@ -1061,7 +1121,7 @@ MESSAGES_RS = os.path.join(REPO_ROOT, *MESSAGES_RS_REL.split("/"))
 # 发帧动作：在 GameGate 连接上真的写出 c2s 帧（say/click_npc/dlg_select 分别展开成
 # CM_SAY / CM_CLICKNPC / CM_MERCHANTDLGSELECT）。`send` 只是其中最通用的一个。
 SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select", "dlg_select_any",
-                        "newchr"})
+                        "newchr", "kill"})
 # 累计观察动作：等的是「累计出现过」而不是「本步之后的第一条回包」——驱动器的登录链
 # （CM_IDPASSWORD/SELECTSERVER/QUERYCHR/SELCHR + GameGate 登录）与自动握手
 # （CM_LOGINNOTICEOK / CM_QUERYBAGITEMS）本来就会发帧，所以纯观察场景（login_only）合法。
@@ -1314,6 +1374,32 @@ def check_scenario(data, plans, params=None, messages=None):
                         "(typo? this wait can never match)"
                         % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
 
+    # R3b（kill，卡 `openmir2-probe-kill-step`）：`ident`/`turn_ident` 必须是 CM_*，
+    # `wait_ident` 必须是 SM_*——与 R3 同口径，只是 kill 一步里同时出现三组 ident。
+    for p in leaves:
+        if p["kind"] != "kill":
+            continue
+        for key in ("ident", "turn_ident"):
+            ident = p[key]
+            if ident not in messages["CM"]:
+                if ident in messages["SM"]:
+                    raise ScenarioError(
+                        "steps[%s].kill.%s ident %d is %s, expected CM_* (client→server)"
+                        % (p["index"], key, ident, messages["SM"][ident]))
+                raise ScenarioError(
+                    "steps[%s].kill.%s ident %d is not a CM_*/SM_* constant in %s"
+                    % (p["index"], key, ident, MESSAGES_RS_REL))
+        for ident in p["wait_idents"]:
+            if ident not in messages["SM"]:
+                if ident in messages["CM"]:
+                    raise ScenarioError(
+                        "steps[%s].kill.wait_ident %d is %s, expected SM_* (a wait can only "
+                        "match server→client frames)" % (p["index"], ident,
+                                                         messages["CM"][ident]))
+                raise ScenarioError(
+                    "steps[%s].kill.wait_ident %d is not a CM_*/SM_* constant in %s"
+                    % (p["index"], ident, MESSAGES_RS_REL))
+
     # R4：变量引用必须在场景里声明过。
     for where, ref in _var_refs(data):
         if _is_int_literal(ref):
@@ -1511,10 +1597,97 @@ class Run:
             return lambda fr: fr.recog == want
         return None
 
+    def _execute_kill(self, conn, plan):
+        """击杀步（卡 `openmir2-probe-kill-step`）：转身 → 连击 → 等死亡帧。
+
+        三态失败可分（卡面验收②）：
+          ① `no target frames at (x,y)` —— 整个窗口没有目标格的任何帧（`fixtures.monsters`
+             未生效 / 落点不同格；也含「0 伤害打空」：SM_STRUCK 只在 wParam>0 时才发，
+             PlayObject.Message.cs:1564）；
+          ② `target alive after N swing(s)` —— 收到过目标格的活动帧（SM_TURN/SM_DEATH 带坐标）
+             或带伤害的他人 SM_STRUCK，但没等到死亡帧；
+          ③ 「死了但屠宰不接受」不在本步——由后续 `wait_for(33/637)` 超时表达（不同的步）。
+        """
+        idx = plan["index"]
+        tx = plan["target_xy"] & 0xFFFF
+        ty = (plan["target_xy"] >> 16) & 0xFFFF
+        sx = plan["self_pos"] & 0xFFFF
+        sy = (plan["self_pos"] >> 16) & 0xFFFF
+        direction = DIRECTION_BY_DELTA.get((tx - sx, ty - sy))
+        if direction is None:  # plan_step 已拒；这里再兜一次（fail-closed）
+            raise ScenarioError(
+                "steps[%s].kill: target (%d,%d) 与自身 (%d,%d) 非八向相邻"
+                % (idx, tx, ty, sx, sy))
+        interval = plan["interval_ms"]
+        death = set(plan["wait_idents"])
+        start_seq = conn.recorder.seq
+        # 1) 转身：CM_TURN 的 tag=Dir、recog=自身坐标（ClientChangeDir 只在 x/y==自身时改 Dir）
+        raw = conn.send(plan["self_pos"], plan["turn_ident"], 0, direction, 0, b"")
+        self._log_send(conn, raw, {"index": idx, "kind": "kill.turn",
+                                   "ident": plan["turn_ident"],
+                                   "recog": plan["self_pos"], "tag": direction,
+                                   "note": plan.get("note", "")},
+                       now_ms() - self.t0_ms)
+        conn.pump(interval)  # 不同 ident 之间要 >= ActionIntervalTime(350ms)
+        swings = 0
+        matched = None
+        while swings < plan["max_swings"]:
+            raw = conn.send(plan["self_pos"], plan["ident"], 0, direction, 0, b"")
+            swings += 1
+            self._log_send(conn, raw, {"index": idx, "kind": "kill.swing",
+                                       "ident": plan["ident"],
+                                       "recog": plan["self_pos"], "tag": direction,
+                                       "swing": swings,
+                                       "note": plan.get("note", "")},
+                           now_ms() - self.t0_ms)
+            before = conn.recorder.seq
+            conn.pump(interval)
+            for seq, fr in conn.frames:
+                if seq > before and fr.ident in death and fr.param == tx and fr.tag == ty:
+                    matched = (seq, fr)
+                    break
+            if matched:
+                break
+        rec = {"index": idx, "kind": "kill", "target_xy": plan["target_xy"],
+               "self_pos": plan["self_pos"], "direction": direction,
+               "swings": swings, "max_swings": plan["max_swings"],
+               "interval_ms": interval, "wait_idents": sorted(death),
+               "note": plan.get("note", "")}
+        if matched:
+            seq, fr = matched
+            rec.update(result="dead", matched_seq=seq, matched_ident=fr.ident,
+                       matched_recog=fr.recog)
+            self.steps.append(rec)
+            return
+        window = [(s_, fr) for (s_, fr) in conn.frames if s_ > start_seq]
+        self_actor = self.state.get("self_actor")
+        struck = [(s_, fr.recog, fr.series) for (s_, fr) in window
+                  if fr.ident == SM_STRUCK and fr.series > 0
+                  and (self_actor is None or fr.recog != self_actor)]
+        at_cell = [(s_, fr.ident, fr.recog) for (s_, fr) in window
+                   if fr.param == tx and fr.tag == ty
+                   and fr.ident in (SM_TURN, SM_DEATH, SM_NOWDEATH)]
+        rec.update(result=("alive" if (struck or at_cell) else "no-target"),
+                   struck=struck[:5], frames_at_cell=at_cell[:5])
+        self.steps.append(rec)
+        if struck or at_cell:
+            raise StepFailure(
+                "steps[%s].kill: target alive after %d swing(s) at (%d,%d) — no death frame "
+                "among %s; damage-carrying SM_STRUCK(31)=%r; frames at cell(SM_TURN/DEATH)=%r"
+                % (idx, swings, tx, ty, sorted(death), rec["struck"],
+                   rec["frames_at_cell"]))
+        raise StepFailure(
+            "steps[%s].kill: no target frames at (%d,%d) after %d swing(s) — "
+            "fixtures.monsters 未生效/落点不同格（或 0 伤害打空：SM_STRUCK 只在 wParam>0 "
+            "时才发，PlayObject.Message.cs:1564）" % (idx, tx, ty, swings))
+
     def execute_step(self, conn, plan):
         idx = plan["index"]
         kind = plan["kind"]
         default_timeout = self.args.timeout_ms
+        if kind == "kill":
+            self._execute_kill(conn, plan)
+            return
         if kind == "sleep":
             time.sleep(plan["ms"] / 1000.0)
             self.steps.append({"index": idx, "kind": "sleep", "ms": plan["ms"]})
@@ -3782,6 +3955,192 @@ def _selftest_newchr():
             "S-2 与 B1 各 1 钉；F2 载荷序 + first_pack(51/位拆) 各 1" % len(bad))
 
 
+def _selftest_kill():
+    """`kill` 步（卡 `openmir2-probe-kill-step`）：
+
+    * schema：默认 ident=CM_HIT(3014)/turn_ident=CM_TURN(3010)/interval 1000/max_swings 20/
+      wait_ident=[SM_NOWDEATH(34), SM_DEATH(32)]；未知键/越界/缺 self_pos/非相邻 ⇒ ScenarioError；
+    * 方向：tag = 自身→目标的八向 Dir（Direction.cs 口径）；
+    * check_scenario：ident/turn_ident 必须 CM_*、wait_ident 必须 SM_*；
+    * 运行期三态：死了（死亡帧带 (x,y)）/打了没死（他人 SM_STRUCK 带伤害或目标格活动帧）/
+      没刷出来（窗口内目标格零帧）——错误串各不相同。
+    """
+    import argparse as _argparse
+    import tempfile as _tempfile
+    import shutil as _shutil
+
+    checks = []
+    self_xy = (330 | (330 << 16))
+    tgt_xy = (330 | (331 << 16))          # 正下方一格 ⇒ Dir=4 (Down)
+
+    # ① schema 正例与默认值
+    plan = plan_step({"kill": {"target_xy": tgt_xy}}, 0, {"self_pos": self_xy})
+    checks.append((plan["ident"] == CM_HIT and plan["turn_ident"] == CM_TURN
+                   and plan["max_swings"] == 20 and plan["interval_ms"] == 1000
+                   and plan["wait_idents"] == [SM_NOWDEATH, SM_DEATH]
+                   and plan["tag"] == 4 and plan["recog"] == self_xy,
+                   "kill 默认值：ident=3014/turn=3010/interval=1000/max=20/wait=[34,32]/tag=Down(4)"))
+    plan2 = plan_step({"kill": {"target_xy": tgt_xy, "wait_ident": SM_NOWDEATH,
+                                "max_swings": 5, "interval_ms": 350}},
+                      0, {"self_pos": self_xy})
+    checks.append((plan2["wait_idents"] == [SM_NOWDEATH] and plan2["max_swings"] == 5
+                   and plan2["interval_ms"] == 350,
+                   "kill 显式参数（wait_ident 单值归一成数组、max_swings/interval 可覆盖）"))
+
+    # 八个方向
+    ok_dirs = True
+    for dxy, want in (((0, -1), 0), ((1, -1), 1), ((1, 0), 2), ((1, 1), 3),
+                      ((0, 1), 4), ((-1, 1), 5), ((-1, 0), 6), ((-1, -1), 7)):
+        tx = (330 + dxy[0]) | ((330 + dxy[1]) << 16)
+        p = plan_step({"kill": {"target_xy": tx}}, 0, {"self_pos": self_xy})
+        ok_dirs = ok_dirs and p["tag"] == want
+    checks.append((ok_dirs, "kill 八向 Dir 映射与 Direction.cs 一致（0..7）"))
+
+    # ② schema 反例
+    bad_cases = [
+        ({"kill": {}}, {}, "missing key"),
+        ({"kill": {"target_xy": tgt_xy, "bogus": 1}}, {"self_pos": self_xy}, "unknown key"),
+        ({"kill": {"target_xy": tgt_xy, "max_swings": 0}}, {"self_pos": self_xy},
+         "out of range"),
+        ({"kill": {"target_xy": tgt_xy, "max_swings": 101}}, {"self_pos": self_xy},
+         "out of range"),
+        ({"kill": {"target_xy": tgt_xy, "interval_ms": 349}}, {"self_pos": self_xy},
+         "out of range"),
+        ({"kill": {"target_xy": tgt_xy}}, {}, "self_pos"),
+        ({"kill": {"target_xy": (330 + 3) | (330 << 16)}}, {"self_pos": self_xy},
+         "八向相邻"),
+    ]
+    bad_ok = True
+    detail = ""
+    for step, params, needle in bad_cases:
+        try:
+            plan_step(step, 0, params)
+            bad_ok = False
+            detail = "accepted %r" % (step,)
+            break
+        except ScenarioError as ex:
+            if needle not in str(ex):
+                bad_ok = False
+                detail = "%s not in %s" % (needle, ex)
+                break
+    checks.append((bad_ok, "kill 坏例全拒（缺 target_xy/未知键/越界/缺 self_pos/非相邻）%s"
+                   % ("" if bad_ok else detail)))
+
+    # ③ check_scenario 方向校验
+    msgs = load_message_constants()
+
+    def check_kill(doc, params):
+        plans, _ = expand_scenario(doc, params)
+        check_scenario(doc, plans, params, msgs)
+
+    good = {"name": "selftest_kill_good", "steps": [
+        {"kill": {"target_xy": tgt_xy}}, {"wait_for": 32}]}
+    try:
+        check_kill(good, {"self_pos": self_xy})
+        good_ok = True
+    except ScenarioError:
+        good_ok = False
+    checks.append((good_ok, "check_scenario：合法 kill + wait_for(32) 通过"))
+    bad_waits = []
+    for doc in (
+            {"name": "selftest_kill_wait_cm", "steps": [
+                {"kill": {"target_xy": tgt_xy, "wait_ident": CM_TURN}}]},
+            {"name": "selftest_kill_ident_sm", "steps": [
+                {"kill": {"target_xy": tgt_xy, "ident": SM_STRUCK}}]},
+            # turn_ident 只由 R3b 校验（通用 R3 只看 kill 的 ident）——这条专钉 R3b
+            {"name": "selftest_kill_turn_sm", "steps": [
+                {"kill": {"target_xy": tgt_xy, "turn_ident": SM_STRUCK}}]},
+    ):
+        try:
+            check_kill(doc, {"self_pos": self_xy})
+            bad_waits.append("accepted %s" % doc["name"])
+        except ScenarioError as ex:
+            if "expected CM_*" not in str(ex) and "expected SM_*" not in str(ex):
+                bad_waits.append("%s: unexpected %s" % (doc["name"], ex))
+    checks.append((not bad_waits, "check_scenario 拒 wait_ident=CM_* 与 ident=SM_*（%s）"
+                   % ("；".join(bad_waits) or "两条都拒")))
+
+    # ④ 运行期三态（假 socket：每次 sendall 触发一次脚本回帧）
+    class _KSock(object):
+        def __init__(self, replies):
+            self.replies = list(replies)   # 每个元素：该次 sendall 后要推入的帧列表
+            self.chunks = []
+            self.sent = []
+
+        def recv(self, n):
+            if not self.chunks:
+                raise socket.timeout()
+            return self.chunks.pop(0)
+
+        def sendall(self, data):
+            self.sent.append(bytes(data))
+            if self.replies:
+                self.chunks.extend(self.replies.pop(0))
+
+        def close(self):
+            pass
+
+    def mk(replies):
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-kill-")
+        args = _argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=800,
+                                   account="ua", char_name=None)
+        run = Run(args)
+        run.state["self_actor"] = 700
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _KSock(replies)
+        return run, conn, tmpd
+
+    def struck(actor=800, dmg=9):
+        return build_s2c_frame(actor, SM_STRUCK, 100, 200, dmg, b"")
+
+    def death(ident=SM_NOWDEATH, x=330, y=331, actor=800):
+        return build_s2c_frame(actor, ident, x, y, 4, b"")
+
+    plan3 = plan_step({"kill": {"target_xy": tgt_xy, "max_swings": 6,
+                                "interval_ms": 350}}, 0, {"self_pos": self_xy})
+    # 第 1 次 sendall 是转身（不推帧），之后每击一帧；第 3 击附带死亡帧
+    run, conn, tmpd = mk([[], [struck()], [struck()], [struck(), death()]])
+    try:
+        run.execute_step(conn, plan3)
+        rec = run.steps[-1]
+        checks.append((rec["kind"] == "kill" and rec["result"] == "dead"
+                       and rec["swings"] == 3 and rec.get("matched_ident") == SM_NOWDEATH
+                       and rec["direction"] == 4,
+                       "kill 运行期：第 3 击收到 SM_NOWDEATH(34)@(330,331) ⇒ result=dead（swings=3）"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    run, conn, tmpd = mk([[struck()] for _ in range(8)])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, plan3)
+        except StepFailure as ex:
+            err = str(ex)
+        checks.append((err is not None and "target alive after 6 swing(s)" in err
+                       and "SM_STRUCK(31)" in err,
+                       "kill 运行期：有伤害帧但没死 ⇒ target alive after 6 swing(s)（含帧摘要）"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    run, conn, tmpd = mk([])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, plan3)
+        except StepFailure as ex:
+            err = str(ex)
+        checks.append((err is not None and "no target frames at (330,331)" in err,
+                       "kill 运行期：目标格零帧 ⇒ no target frames（与 alive 错误串不同）"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    for cond, msg in checks:
+        assert cond, msg
+    return "schema 正/反例 + 八向 + check 方向 3 例 + 运行期 dead/alive/no-target 3 态"
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -3810,6 +4169,7 @@ def run_selftest():
     check("scenario-assets", _selftest_scenario_assets)
     check("dsl-dlg-select-any", _selftest_dlg_select_any)
     check("dsl-newchr", _selftest_newchr)
+    check("dsl-kill", _selftest_kill)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
