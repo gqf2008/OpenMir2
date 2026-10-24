@@ -3228,7 +3228,11 @@ fn emit_def_frames(
 ///
 /// **位置门在派发层**（`PlayObject.Message.cs:811-816`）：`CurrX==nParam2 && CurrY==nParam3`
 /// 才进 `ClientPickUpItem`（`CM_PICKUP` 的 `nParam2/nParam3` = 12B 头的 `param/tag`）。
-/// `CM_DROPITEM` 的尾 = 请求 `Msg`，`nParam1`（`param`）= 要丢的 `MakeIndex`。
+/// `CM_DROPITEM` 的尾 = 请求 `Msg`，`nParam1` = **线缆 `Recog`** = 要丢的 `MakeIndex`
+/// （oracle `WorldServer.cs` 的 `CM_DROPITEM` 支 `SendMsg(..., defMsg.Series, defMsg.Recog,
+/// defMsg.Param, defMsg.Tag, sMsg)` ⇒ `processMsg.nParam1 = defMsg.Recog`；
+/// `PlayObject.Message.cs:802-808` 读 `processMsg.nParam1`。**不是** 12B 头的 `param`——
+/// 旧注释误写 `param`，`openmir2-dropitem-recog-param-mixup` 修正）。
 ///
 /// **已知缺口（登记，不静默）**：拾取删格对 `crates/world` 的**写回**尚未开（owner §25.1 (A)
 /// 只批只读分片）⇒ 地面物品在 world 里不消失（客户端已由 `SM_ITEMHIDE` 隐藏）；成功 drop 的
@@ -3236,6 +3240,9 @@ fn emit_def_frames(
 #[allow(clippy::too_many_arguments)]
 fn handle_ground_cmd(
     ident: u16,
+    // oracle `processMsg.nParam1`：`CM_DROPITEM` 取**线缆 `Recog`**（= `MakeIndex`）；
+    // `CM_PICKUP` 不用它（位置门走 `nParam2/nParam3` = `param/tag`）。
+    n_param1: i32,
     param: u16,
     tag: u16,
     tail: Option<&str>,
@@ -3354,7 +3361,7 @@ fn handle_ground_cmd(
             // `PlayObject.DealLastTick`（M3⑦-实现 4）：交易会话真值（`handle_deal_cmd` 用
             // `world.clock_ms` 写入）⇒ 新会话为 0（过 3000ms 门），交易中才拦 drop。
             deal_last_tick,
-            make_index: i32::from(param),
+            make_index: n_param1,
             item_name,
             in_safe_disable_drop: cfg.in_safe_disable_drop,
             in_safe_zone: flag.as_ref().is_some_and(|f| f.safe_area),
@@ -21110,6 +21117,7 @@ fn sim_loop(
                     {
                         handle_ground_cmd(
                             cmd.ident,
+                            cmd.recog,
                             cmd.param,
                             cmd.tag,
                             tail.as_deref(),
@@ -34021,6 +34029,7 @@ break
         // 位置门不成立（X 差 1）⇒ 不投递。
         handle_ground_cmd(
             game_svr::ground::CM_PICKUP,
+            0, // nParam1（`CM_PICKUP` 不用；位置门走 `param/tag`）
             u16::try_from(gold_x + 1).unwrap(),
             u16::try_from(gold_y).unwrap(),
             None,
@@ -34049,6 +34058,7 @@ break
         // 位置门成立 ⇒ 拾取成功，回 SM_GOLDCHANGED（用改后 Gold），且会话金币增加。
         handle_ground_cmd(
             game_svr::ground::CM_PICKUP,
+            0, // nParam1（`CM_PICKUP` 不用；位置门走 `param/tag`）
             u16::try_from(gold_x).unwrap(),
             u16::try_from(gold_y).unwrap(),
             None,
@@ -43886,6 +43896,7 @@ SendRefMsgRange=15
         // 情形 A：hero 与 mate **未组队** ⇒ 归属既非自己也非组员 ⇒ 拒绝（无帧、金币不变）。
         handle_ground_cmd(
             game_svr::ground::CM_PICKUP,
+            0, // nParam1（`CM_PICKUP` 不用；位置门走 `param/tag`）
             u16::try_from(gx).unwrap(),
             u16::try_from(gy).unwrap(),
             None,
@@ -43914,6 +43925,7 @@ SendRefMsgRange=15
         assert_eq!(world.entities.get(mate).unwrap().group_owner, hero);
         handle_ground_cmd(
             game_svr::ground::CM_PICKUP,
+            0, // nParam1（`CM_PICKUP` 不用；位置门走 `param/tag`）
             u16::try_from(gx).unwrap(),
             u16::try_from(gy).unwrap(),
             None,
@@ -44240,7 +44252,8 @@ SendRefMsgRange=15
         // ① 新鲜 `DealLastTick` ⇒ `now - DealLastTick > 3000` 不成立 ⇒ 不进丢弃体 ⇒ Dura 不变。
         handle_ground_cmd(
             game_svr::ground::CM_DROPITEM,
-            60001,
+            60001, // nParam1 = 线缆 Recog = MakeIndex
+            0,
             0,
             Some("木剑"),
             "hero",
@@ -44265,7 +44278,8 @@ SendRefMsgRange=15
         trade_sessions.get_mut("hero").unwrap().deal_last_tick = 1_000;
         handle_ground_cmd(
             game_svr::ground::CM_DROPITEM,
-            60001,
+            60001, // nParam1 = 线缆 Recog = MakeIndex
+            0,
             0,
             Some("木剑"),
             "hero",
@@ -44285,6 +44299,447 @@ SendRefMsgRange=15
             3000,
             "过 3000ms 门 ⇒ 进体 ⇒ Dura 5000-2000（BaseObject.cs:541-548）"
         );
+    }
+
+    /// **`openmir2-dropitem-recog-param-mixup`（tier R）**：`CM_DROPITEM` 的 oracle `nParam1`
+    /// 来自线缆 **`Recog`**（= 物品 `MakeIndex`），**不是** 12B 头的 `param`。
+    ///
+    /// 证据链（oracle 源码，逐环）：
+    /// 1. `src/M2Server/Player/PlayObject.Message.cs:801-810`：`case Messages.CM_DROPITEM:`
+    ///    ⇒ `ClientDropItem(processMsg.Msg, processMsg.nParam1)`；成功支 `:804`
+    ///    `SendDefMessage(SM_DROPITEM_SUCCESS, processMsg.nParam1, 0,0,0, processMsg.Msg)`，
+    ///    失败支 `:808` 同形（`SM_DROPITEM_SUCCESS=600`/`SM_DROPITEM_FAIL=601`，
+    ///    `src/OpenMir2/Messages.cs:277-278`）。
+    /// 2. `src/GameSrv/Word/WorldServer.cs` 的 `CM_DROPITEM` 支（与 `CM_TAKEONITEM` 等同组）：
+    ///    `playObject.SendMsg(playObject, defMsg.Ident, defMsg.Series, defMsg.Recog,
+    ///    defMsg.Param, defMsg.Tag, sMsg)` ⇒ 形参位 `nParam1 = defMsg.Recog`（线缆 `Recog`）。
+    /// 3. `src/M2Server/Actor/BaseObject.Message.cs:98` `SendMsg(IActor, wIdent, wParam,
+    ///    nParam1, nParam2, nParam3, sMsg)` ⇒ `GetMessage`（`:357-375`）原样写入
+    ///    `ProcessMessage.nParam1`。
+    /// 4. `src/M2Server/Player/PlayObject.Socket.cs:27-38` `SendDefMessage(short wIdent,
+    ///    int nRecog, …)` ⇒ `Messages.MakeMessage(wIdent, nRecog, …)` ⇒ 客户端帧 `Recog` 是
+    ///    **int**（4B；`src/OpenMir2/Packets/ClientPackets/ClientMesaagePacket.cs:11-25`），
+    ///    `Param/Tag/Series` 是 `ushort`（超界按 `(ushort)` 截断）。
+    ///
+    /// 本用例走**派发层** [`handle_ground_cmd`]（与生产 `sim_loop` 同一入口）：线缆
+    /// `recog = X.MakeIndex`、`param/tag = 诱饵`（≠X）⇒ 对
+    /// `tests/parity/m3/fixtures/ground_vectors.json` 的 8 个派发层可复现 drop 用例逐字段
+    /// 对齐 600/601 帧（另 3 例不在此层复现：`drop_fail_safe_zone`/`drop_fail_no_throw_item`
+    /// 的输入是**地图 `Flag`**（本层无 registry ⇒ 恒 false），`drop_fail_is_can_drop_false`
+    /// 的 `IsCanDrop=false` 是状态面——派发层按生产恒 `is_can_drop: true`；这三例仍由
+    /// `ground.rs` 的纯函数向量用例覆盖）。
+    ///
+    /// 牙：① `make_index: n_param1` 改回 `i32::from(param)` ⇒ 诱饵算例的帧 `recog` 全红；
+    /// ② 同值帧（`recog == param`）仍先验**整帧 shape**（`ident ∈ {600,601}` 且
+    /// `param/tag/series == 0`），防「恰好相等」假绿；③ `MakeIndex = 100_001`（> u16）
+    /// 证明 `Recog` 按 i32 全宽编码，任何 `u16` 截断改法必红。
+    #[test]
+    fn dropitem_reply_recog_is_wire_recog_not_param() {
+        use game_svr::ability::StdItemCatalog;
+        use mir2_data::StdItem;
+        use serde_json::Value;
+
+        fn u8v(v: &Value) -> u8 {
+            v.as_u64().unwrap() as u8
+        }
+        fn u16v(v: &Value) -> u16 {
+            v.as_u64().unwrap() as u16
+        }
+        fn i32v(v: &Value) -> i32 {
+            v.as_i64().unwrap() as i32
+        }
+        fn std_catalog(doc: &Value) -> StdItemCatalog {
+            let mut c = StdItemCatalog::new();
+            for (k, v) in doc["templates"].as_object().unwrap() {
+                c.insert(
+                    k.parse::<u16>().unwrap(),
+                    StdItem {
+                        name: v["name"].as_str().unwrap().to_string(),
+                        std_mode: u8v(&v["std_mode"]),
+                        shape: u8v(&v["shape"]),
+                        weight: u8v(&v["weight"]),
+                        price: i32v(&v["price"]),
+                        looks: u16v(&v["looks"]),
+                        ani_count: u8v(&v["ani_count"]),
+                        dura_max: u16v(&v["dura_max"]),
+                        ..StdItem::default()
+                    },
+                );
+            }
+            c
+        }
+        fn bag_items(v: &Value) -> Vec<game_svr::bag::BagItem> {
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|b| {
+                    let mut desc = [0u8; 14];
+                    for (i, d) in b["desc"].as_array().unwrap().iter().enumerate() {
+                        desc[i] = u8v(d);
+                    }
+                    game_svr::bag::BagItem {
+                        make_index: i32v(&b["make_index"]),
+                        index: u16v(&b["index"]),
+                        dura: u16v(&b["dura"]),
+                        dura_max: u16v(&b["dura_max"]),
+                        desc,
+                    }
+                })
+                .collect()
+        }
+        fn ability(v: &Value) -> game_svr::ability::Ability {
+            game_svr::ability::Ability {
+                level: u8v(&v["level"]),
+                reserved1: u8v(&v["reserved1"]),
+                ac: u16v(&v["ac"]),
+                mac: u16v(&v["mac"]),
+                dc: u16v(&v["dc"]),
+                mc: u16v(&v["mc"]),
+                sc: u16v(&v["sc"]),
+                hp: u16v(&v["hp"]),
+                mp: u16v(&v["mp"]),
+                max_hp: u16v(&v["max_hp"]),
+                max_mp: u16v(&v["max_mp"]),
+                reserved2: v["reserved2"].as_i64().unwrap() as i16,
+                exp_count: u8v(&v["exp_count"]),
+                exp_max_count: u8v(&v["exp_max_count"]),
+                exp: i32v(&v["exp"]),
+                max_exp: i32v(&v["max_exp"]),
+                weight: u16v(&v["weight"]),
+                max_weight: u16v(&v["max_weight"]),
+                wear_weight: u8v(&v["wear_weight"]),
+                max_wear_weight: u8v(&v["max_wear_weight"]),
+                hand_weight: u8v(&v["hand_weight"]),
+                max_hand_weight: u8v(&v["max_hand_weight"]),
+            }
+        }
+        fn expect_frame(case: &Value) -> (u16, i32, u16, u16, u16) {
+            let e = &case["expect"]["immediate_frames"][0];
+            (
+                u16v(&e["ident"]),
+                i32v(&e["recog"]),
+                u16v(&e["param"]),
+                u16v(&e["tag"]),
+                u16v(&e["series"]),
+            )
+        }
+
+        /// 一个用例派发所需的最小生产上下文（world/会话/回帧队列/配置/交易态）。
+        struct Harness {
+            world: mir2_world::World,
+            sessions: HashMap<String, SessionGround>,
+            online: OnlineRegistry,
+            gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+            rx: mpsc::UnboundedReceiver<SimToGate>,
+            cfg: GroundCfg,
+            trade_sessions: HashMap<String, game_svr::trade::DealState>,
+        }
+
+        fn harness_from(case: &Value) -> Harness {
+            let c = &case["ctx"];
+            let mut world = mir2_world::World::new(64, 64);
+            world.clock_ms = case["now_tick"].as_i64().unwrap();
+            let p = world.add_entity({
+                let mut e =
+                    mir2_world::Entity::new(1, "hero", i32v(&c["curr_x"]), i32v(&c["curr_y"]));
+                e.race = mir2_world::ACTOR_RACE_PLAY;
+                e
+            });
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            let mut sg = test_session_ground(p);
+            sg.state.item_list = bag_items(&case["item_list_before"]);
+            sg.state.gold = i32v(&case["gold_before"]);
+            sg.state.wabil = ability(&case["wabil_before"]);
+            sessions.insert("hero".into(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".into(),
+                    chr_name: "hero".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: p,
+                },
+            );
+            let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let cfg = GroundCfg {
+                human_max_gold: i32v(&c["human_max_gold"]),
+                floor_item_can_pick_up_time: i32v(&c["floor_item_can_pick_up_time"]),
+                control_drop_item: c["control_drop_item"].as_bool().unwrap(),
+                in_safe_disable_drop: c["in_safe_disable_drop"].as_bool().unwrap(),
+                can_drop_price: i32v(&c["can_drop_price"]),
+                can_drop_gold: 1000,
+                drop_item_rage: u8v(&c["drop_item_rage"]),
+            };
+            let mut trade_sessions: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+            trade_sessions.insert(
+                "hero".into(),
+                game_svr::trade::DealState {
+                    deal_last_tick: i64::from(i32v(&c["deal_last_tick"])),
+                    ..Default::default()
+                },
+            );
+            Harness {
+                world,
+                sessions,
+                online,
+                gates,
+                rx: rx0,
+                cfg,
+                trade_sessions,
+            }
+        }
+
+        /// 走生产派发入口（`sim_loop` 的同一条），只取回 600/601 帧体。
+        #[allow(clippy::too_many_arguments)]
+        fn run_drop(
+            world: &mir2_world::World,
+            sessions: &mut HashMap<String, SessionGround>,
+            online: &OnlineRegistry,
+            gates: &HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+            rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+            cfg: &GroundCfg,
+            colors: &MsgColors,
+            catalog: &game_svr::ability::StdItemCatalog,
+            trade_sessions: &HashMap<String, game_svr::trade::DealState>,
+            recog: i32,
+            param: u16,
+            tag: u16,
+            name: &str,
+        ) -> Vec<Vec<u8>> {
+            handle_ground_cmd(
+                game_svr::ground::CM_DROPITEM,
+                recog,
+                param,
+                tag,
+                Some(name),
+                "hero",
+                901,
+                trade_sessions,
+                world,
+                sessions,
+                online,
+                gates,
+                cfg,
+                colors,
+                catalog,
+                None,
+            );
+            let mut frames = Vec::new();
+            while let Ok(m) = rx.try_recv() {
+                if let SimToGate::SendFrame { body, socket } = m {
+                    assert_eq!(socket, 901, "回帧必须走该用户的 [GateIdx,Socket]");
+                    let ident = u16::from_le_bytes([body[4], body[5]]);
+                    if ident == game_svr::ground::SM_DROPITEM_SUCCESS
+                        || ident == game_svr::ground::SM_DROPITEM_FAIL
+                    {
+                        frames.push(body);
+                    }
+                }
+            }
+            frames
+        }
+
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/m3/fixtures/ground_vectors.json"
+        );
+        let raw = std::fs::read_to_string(path)
+            .unwrap_or_else(|e| panic!("oracle 向量夹具缺失/不可读：{path}（{e}）"));
+        let doc: Value =
+            serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} 非法 JSON：{e}"));
+        let catalog = std_catalog(&doc);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+
+        // ① 向量驱动：线缆 `recog = 向量 request.make_index`，`param/tag` 是诱饵（≠Recog）。
+        let mut covered = 0;
+        for case in doc["cases"].as_array().unwrap() {
+            if case["action"] != "drop_item" {
+                continue;
+            }
+            let name = case["name"].as_str().unwrap();
+            if matches!(
+                name,
+                "drop_fail_safe_zone" | "drop_fail_no_throw_item" | "drop_fail_is_can_drop_false"
+            ) {
+                // 派发层不建模这三例（见函数注释）。
+                continue;
+            }
+            covered += 1;
+            let (ident, recog, param, tag, series) = expect_frame(case);
+            let recog_u16 = u16::try_from(recog).expect("向量 MakeIndex 在 u16 内");
+            let decoy = recog_u16.wrapping_add(1);
+            let mut h = harness_from(case);
+            let bodies = run_drop(
+                &h.world,
+                &mut h.sessions,
+                &h.online,
+                &h.gates,
+                &mut h.rx,
+                &h.cfg,
+                &colors,
+                &catalog,
+                &h.trade_sessions,
+                recog,
+                decoy,
+                decoy.wrapping_add(1),
+                case["request"]["name"].as_str().unwrap(),
+            );
+            assert_eq!(
+                bodies.len(),
+                1,
+                "{name}: 丢弃必须恰好回一帧 600/601（实收 {}）",
+                bodies.len()
+            );
+            let body = &bodies[0];
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).expect("body >= 12B");
+            assert_eq!(
+                (cm.ident, cm.recog, cm.param, cm.tag, cm.series),
+                (ident, recog, param, tag, series),
+                "{name}: 600/601 帧头须与 oracle 向量逐字段一致（Recog 取线缆 Recog，非 param）"
+            );
+            assert_eq!(
+                &body[0..4],
+                &recog.to_le_bytes(),
+                "{name}: Recog 必须按 i32 LE 全宽编码（不是 u16 截断）"
+            );
+            let expected = game_svr::smframe::sm_dropitem_reply(
+                ident == game_svr::ground::SM_DROPITEM_SUCCESS,
+                recog,
+                &crate::enter::gbk(case["request"]["name"].as_str().unwrap()),
+            );
+            assert_eq!(
+                body, &expected,
+                "{name}: 整帧 = 600/601 头 + EncodeString(请求 Msg)"
+            );
+        }
+        assert_eq!(
+            covered, 8,
+            "派发层可复现的 drop 向量应为 8 例（实 {covered}）：夹具被改？"
+        );
+
+        // ② 同值帧：`recog == param` ⇒ 仍先验整帧 shape，防止「恰好相等」假绿。
+        {
+            let case = doc["cases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["name"] == "drop_ok_control_price")
+                .expect("夹具必须含 drop_ok_control_price");
+            let (ident, recog, _, _, _) = expect_frame(case);
+            let same = u16::try_from(recog).unwrap();
+            let mut h = harness_from(case);
+            let bodies = run_drop(
+                &h.world,
+                &mut h.sessions,
+                &h.online,
+                &h.gates,
+                &mut h.rx,
+                &h.cfg,
+                &colors,
+                &catalog,
+                &h.trade_sessions,
+                recog,
+                same,
+                0,
+                "cheap",
+            );
+            assert_eq!(bodies.len(), 1, "同值帧：丢弃必须恰回一帧");
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&bodies[0]).expect(">= 12B");
+            assert_eq!(
+                (cm.ident, cm.recog, cm.param, cm.tag, cm.series),
+                (ident, recog, 0, 0, 0),
+                "同值帧（recog==param）仍须整帧 shape 正确：ident=600、Recog=MakeIndex、Param/Tag/Series≡0"
+            );
+        }
+
+        // ③ `MakeIndex = 100_001`（> u16）：`Recog` 是 i32 全宽；截断成 u16 ⇒ 34465 必红。
+        {
+            let make_index: i32 = 100_001;
+            let mut world = mir2_world::World::new(64, 64);
+            world.clock_ms = 1_200_000;
+            let p = world.add_entity({
+                let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+                e.race = mir2_world::ACTOR_RACE_PLAY;
+                e
+            });
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            let mut sg = test_session_ground(p);
+            sg.state.item_list = vec![game_svr::bag::BagItem {
+                make_index,
+                index: 3004, // 夹具模板 "cheap"（price 10 < CanDropPrice 500）
+                dura: 10,
+                dura_max: 20,
+                desc: [0u8; 14],
+            }];
+            sessions.insert("hero".into(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".into(),
+                    chr_name: "hero".into(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: p,
+                },
+            );
+            let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            let cfg = GroundCfg {
+                human_max_gold: 10_000_000,
+                floor_item_can_pick_up_time: 120_000,
+                control_drop_item: true,
+                in_safe_disable_drop: false,
+                can_drop_price: 500,
+                can_drop_gold: 1000,
+                drop_item_rage: 3,
+            };
+            let bodies = run_drop(
+                &world,
+                &mut sessions,
+                &online,
+                &gates,
+                &mut rx0,
+                &cfg,
+                &colors,
+                &catalog,
+                &HashMap::<String, game_svr::trade::DealState>::new(),
+                make_index,
+                0,
+                0,
+                "cheap",
+            );
+            assert_eq!(bodies.len(), 1, "大 MakeIndex：丢弃必须恰回一帧");
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&bodies[0]).expect(">= 12B");
+            assert_eq!(
+                (cm.ident, cm.recog, cm.param, cm.tag, cm.series),
+                (game_svr::ground::SM_DROPITEM_SUCCESS, make_index, 0, 0, 0),
+                "Recog 必须承载 > u16 的 MakeIndex（i32 全宽）"
+            );
+            assert_eq!(
+                &bodies[0][0..4],
+                &make_index.to_le_bytes(),
+                "Recog 前 4 字节 = 100_001i32 LE（0x000186A1）"
+            );
+        }
     }
 
     /// **`openmir2-m3-selloff-consignment-world` 进程级判据**：走**生产路径** `handle_selloff_cmd`，
