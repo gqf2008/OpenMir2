@@ -306,7 +306,7 @@ fi
 run_preflight() {
     local dir="$LOG_DIR/preflight" rc=0
     mkdir -p "$dir"
-    local priv_args=(--json "$dir/preflight-private.json")
+    local priv_args=(--json "$dir/preflight-private.json" --manifest "$MANIFEST")
     [ "$SKIP_PIN_SMOKE" -eq 1 ] && priv_args+=(--skip-pin-smoke)
     log "== preflight private（$PREFLIGHT_PRIVATE）"
     "$PY" -I -B "$PREFLIGHT_PRIVATE" "${priv_args[@]}" >"$dir/preflight-private.log" 2>&1
