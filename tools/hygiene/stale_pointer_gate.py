@@ -61,7 +61,8 @@ json`` once (the projection gives every card's status) plus one bulk
 per-card process.  The card check is skipped only when asked:
 ``--no-ledger`` prints ``已跳过`` and judges nothing; an unreadable ledger is
 **fail-closed rc=2** (distinct from a stale-file rc=1).  ``--ledger-json``
-reads a board-shaped snapshot from a file instead (offline replay, selftest).
+reads a board-shaped snapshot from a file instead of running ``walgit``
+(offline replay / selftest), still merging local snapshot/inbox merge flags.
 
 Usage (run from anywhere inside the repo):
 
@@ -416,11 +417,11 @@ def _card_record(card):
     }
 
 
-def ledger_from_file(path):
-    """Load a board-shaped ledger snapshot from ``--ledger-json`` (offline)."""
+def load_board_file(path):
+    """Read a board-shaped ledger snapshot for ``--ledger-json``."""
     try:
         with open(path, "rb") as fh:
-            raw = json.load(fh)
+            return json.load(fh)
     except FileNotFoundError:
         raise GateError("stale-pointer gate: --ledger-json not found: %s" % path, rc=2)
     except (OSError, ValueError) as exc:
@@ -429,12 +430,6 @@ def ledger_from_file(path):
             % (path, exc),
             rc=2,
         )
-    cards = {}
-    for card in _cards_from_raw(raw):
-        card_id = card.get("id")
-        if isinstance(card_id, str) and card_id:
-            cards[card_id] = _card_record(card)
-    return Ledger(cards, source=path)
 
 
 def _run_board(top):
@@ -607,23 +602,28 @@ def _inbox_entries(top, skip_oids):
     return entries, len(oids)
 
 
-def read_ledger(top):
-    """One board read + one snapshot read + one inbox tail read (never per card)."""
+def read_ledger(top, board_raw=None):
+    """One board read + one snapshot read + one inbox tail read (never per card).
+
+    ``board_raw`` overrides the ``walgit collab board`` projection
+    (``--ledger-json``); the git-side snapshot/inbox read still runs so merge
+    flags are available whenever the refs are present.
+    """
     snapshot, seen = _snapshot_entries(top)
     tail_entries, ref_count = _inbox_entries(top, seen)
-    if not snapshot and not tail_entries and ref_count == 0:
-        entries = []
-    else:
-        entries = snapshot + tail_entries
+    entries = snapshot + tail_entries
+    live = board_raw is None
+    if live:
+        board_raw = _run_board(top)
 
     cards = {}
-    for card in _cards_from_raw(_run_board(top)):
+    for card in _cards_from_raw(board_raw):
         card_id = card.get("id")
         if isinstance(card_id, str) and card_id:
             cards[card_id] = _card_record(card)
 
     fold = _fold_entries(entries)
-    if not fold and cards:
+    if not fold and cards and live:
         raise GateError(
             "stale-pointer gate: no collaboration entries are readable while the "
             "board lists cards; fetch refs/collab/* first (fail-closed)",
@@ -643,7 +643,7 @@ def read_ledger(top):
                 "on_board": False,
                 "entries": record["entries"],
             }
-    return Ledger(cards, source="board+snapshot+refs")
+    return Ledger(cards, source="board+snapshot+refs" if live else "file+snapshot+refs")
 
 
 def card_state(ledger, card_id):
@@ -1326,7 +1326,7 @@ def main(argv):
     ledger = None
     if not args.no_ledger:
         if args.ledger_json:
-            ledger = ledger_from_file(args.ledger_json)
+            ledger = read_ledger(top, board_raw=load_board_file(args.ledger_json))
         else:
             ledger = read_ledger(top)
 
