@@ -53,8 +53,12 @@
 //!   ⇒ 启动期与当前发布命令集都到不了 ⇒ 构造段**抽 0**、不 fold。
 //! - **X1 `MobNpcCommand.cs:36` = N/A**：`//var merchant = new Merchant();` 源码已注释。
 //! - **实体缺口（本片只 fold 抽数、不建实体）**：`RobotObject` 世界实体 + `AutoRun` 驱动器；
-//!   M1/M2 任务 NPC 进 `QuestNpcList`；L1 `QFunction` 进 `MerchantList`（`AddMerchant`）；
-//!   L2/L3 进 `QuestNpcList` + `ActorId` 按序分配 —— 均另立条目，不在本片。
+//!   M1/M2 任务 NPC 进 `QuestNpcList`；
+//!   ~~L1 `QFunction` 进 `MerchantList`（`AddMerchant`）~~ **已接**（2026-10-24，卡
+//!   `openmir2-qfunction-hidden-merchant-world-wiring`：宿主 `bins/game-svr` 用本账本
+//!   `CtorFoldSite::HiddenQFunction` 的第 1 抽当 `RunTick` 建实体，见
+//!   `ctor_fold::hidden_qfunction_run_tick`）；
+//!   L2/L3 进 `QuestNpcList` + `ActorId` 按序分配 —— 仍另立条目，不在本片。
 //! - **构造段「真机账本从 `seq=0` 逐项对齐」的逐条状态**：
 //!   ① `GameApp.cs:55-58` 与本片同段的 `GameCommandSystem`/`AuthenticationService`/`ScriptEngine`
 //!   **已核实读不抽**（`CommandSystem.cs:19-22`/`AuthenticationService.cs:15-20`/

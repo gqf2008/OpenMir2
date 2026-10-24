@@ -21,10 +21,12 @@
 //!   [`mir2_world::World::insert_merchant`] 建实体（槽位序 = 文件序 = tick 序），仅
 //!   **倒序** [`mir2_world::World::attach_merchant_to_map`] 落格（`obj_list` 反序）；
 //!   见 [`spawn_merchants`]（reviewer-5 `0f220cac` F-1 返工）。
-//! - `is_hide` 当前恒 `false` 且不可注入；oracle `MerchantInitialize` 在 `LoadMerchantScript` 之前
-//!   ⇒ 此刻确为默认 `false`，1:1 成立（详见 `crates/world::merchant` 模块头）。
+//! - `is_hide`：`Merchant.txt` 记录恒 `false`（`LocalDB.LoadMerchant` 的 `new Merchant` 不置位）；
+//!   **隐藏 `QFunction` 走 `LocalDB.cs:220` 的 `IsHide = true`**，由 [`qfunction_spawn`] 注入
+//!   （卡 `openmir2-qfunction-hidden-merchant-world-wiring`）。oracle `MerchantInitialize` 在
+//!   `LoadMerchantScript` 之前读它，故 `Merchant.txt` 侧仍为默认 `false`，1:1 成立。
 
-use mir2_envir::MapLoader;
+use mir2_envir::{MapLoader, QuestNpcRecord};
 use mir2_script::ScriptInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_world::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
@@ -111,6 +113,76 @@ pub fn to_spawn(record: mir2_envir::MerchantRecord, map_id: usize) -> MerchantSp
             0,
         ),
     }
+}
+
+/// **隐藏商人 `QFunction` 的 `MerchantSpawn`**（`LocalDB.QFunctionNpc()`，`LocalDB.cs:192-232`）。
+///
+/// 逐字段照 oracle 的 `new Merchant { … }`（`:210-222`）：
+///
+/// | oracle 字段 | 本函数 |
+/// | --- | --- |
+/// | `MapName = "0"` / `CurrX = 0` / `CurrY = 0` | `record.map_name` / `curr_x` / `curr_y`（`crates/envir` 恒这两个值） |
+/// | `ChrName = "QFunction"` | `record.chr_name` |
+/// | `NpcFlag = 0` / `Appr = 0` | `record.npc_flag` / `record.appr` |
+/// | `FilePath = Market_Def` | 不落世界态（脚本装载在 `NpcHost`，按 `record.file_path` 拼路径） |
+/// | `ScriptName = "QFunction"` | `MerchantState::script_name`（= `record.script_name`） |
+/// | `IsHide = true` | `MerchantState::is_hide`（`MerchantInitialize` 的挂图失败移除例外，`WorldServer.Merchant.cs:16`） |
+/// | `IsQuest = false` | 不落世界态（`Merchant` 侧无消费点；`NpcDef::is_quest` 在脚本宿主） |
+/// | ctor 缺省 `PriceRate=100` / `CastleMerchant=false` / `BoCanMove=false` / `MoveTime=0` / 全 `Is*` false | `MerchantState::new` 的实参 |
+///
+/// **`run_tick` 必须由调用方用构造段账本预置**（`CtorFoldSite::HiddenQFunction` 的第 1 抽 =
+/// `BaseObject.cs:439` 的 `Random(1500)`）——`insert_merchant` 见
+/// [`mir2_world::merchant::MERCHANT_RUN_TICK_UNSET`] 才会补抽 4 次，重抽会让共享 RNG 流错位。
+#[must_use]
+pub fn qfunction_spawn(record: &QuestNpcRecord, map_id: usize) -> MerchantSpawn {
+    let script_name = record
+        .script_name
+        .clone()
+        .unwrap_or_else(|| record.chr_name.clone());
+    let mut state = MerchantState::new(
+        script_name,
+        record.map_name.clone(),
+        record.npc_flag,
+        record.appr,
+        100,
+        false,
+        false,
+        0,
+        MerchantFlags::default(),
+        Vec::new(),
+        Vec::new(),
+        0,
+    );
+    state.is_hide = record.is_hide;
+    MerchantSpawn {
+        name: record.chr_name.clone(),
+        x: i32::from(record.curr_x),
+        y: i32::from(record.curr_y),
+        map_id,
+        state,
+    }
+}
+
+/// **`QFunction` 进世界 `MerchantList`**（`LogClass.QFunctionNpc()` 的 `AddMerchant`，
+/// `LocalDB.cs:223`）。
+///
+/// 调用时机 = `LoadMapQuest`（`GameApp.cs:184`，构造段 fold 段③）之后、`LoadMerchant`
+/// （`:227`，`spawn_merchants_with_scripts` 的 ctor 抽）**之前** ⇒ 实体槽位序 = `MerchantList`
+/// 序 = `[QFunction, …Merchant.txt]`，`ProcessMerchants`（`WorldServer.Merchant.cs:68`）正序
+/// tick 时 QFunction **最先** Run。**挂图不在这里做**：`MerchantInitialize`（`:8`）倒序遍历
+/// `MerchantList` ⇒ QFunction 排在**最后**挂图（`obj_list` 追加序），由调用方在商人挂完之后调
+/// [`mir2_world::World::attach_merchant_to_map`]。
+///
+/// `run_tick` = 构造段账本值（见 [`qfunction_spawn`]）；返回 `Some(id)` = 已入世界。
+pub fn insert_hidden_qfunction(
+    world: &mut mir2_world::World,
+    record: &QuestNpcRecord,
+    map_id: usize,
+    run_tick: i64,
+) -> Option<i32> {
+    let mut spawn = qfunction_spawn(record, map_id);
+    spawn.state.run_tick = run_tick;
+    world.insert_merchant(spawn)
 }
 
 /// `[Setup] ClearExpireUpgradeWeaponDays` → 每个商人的 [`MerchantState::clear_expire_upgrade_days`]。
@@ -637,5 +709,212 @@ C
             first_name, "B",
             "倒序 MerchantInitialize ⇒ 后加载的 B 先 AddToMap（obj_list[0] 是 B）；改回正序 ⇒ 必红"
         );
+    }
+    /// **① 核实（改前基线，卡 `openmir2-qfunction-hidden-merchant-world-wiring`）**：
+    /// `LocalDB.QFunctionNpc()`（`LocalDB.cs:192-232`）在 `LoadMapQuest` 里 `AddMerchant`，
+    /// 但本宿主只把 `MapQuestLoad::merchants` 交给 `NpcHost::load`（脚本宿主），**不建世界实体**。
+    ///
+    /// 本用例在**生产装载路径**（`load_merchant_spawns` → `spawn_merchants_with_scripts` +
+    /// `MapLoader::load_map_quest`）上断言：`Market_Def/QFunction-0.txt` 存在、`merchants` 记录
+    /// 有 `QFunction`，但 `World::merchant_ids_sorted()` 里**没有** `QFunction`。
+    /// ⇒ 这就是「隐藏商人未进 `MerchantList` / tick」的构造级证据（改动后本用例仍成立：
+    /// `Merchant.txt` 单路装载本来就不该建 QFunction，建实体走 `insert_hidden_qfunction`）。
+    #[test]
+    fn merchant_txt_load_alone_does_not_insert_qfunction() {
+        let dir = temp_envir("qf-absent", MERCHANT_TXT);
+        let market = dir.join("Envir").join("Market_Def");
+        fs::create_dir_all(&market).unwrap();
+        fs::write(market.join("QFunction-0.txt"), "[@PlayLevelUp]\r\n").unwrap();
+        let loader = loader_for(&dir);
+        let mut rng = RandomNumber::with_seed(42);
+        let (spawns, _report, seeds) =
+            load_merchant_spawns(&loader, |_| Some(0), &mut rng).expect("装载不应失败");
+        let mut world = mir2_world::World::new(64, 64);
+        let mut displays = DisplayTable::new();
+        let (_kept, _failed, _book) =
+            spawn_merchants_with_scripts(&mut world, spawns, seeds, &mut displays);
+
+        let load = loader.load_map_quest(|_| true).expect("MapQuest 装载");
+        assert_eq!(
+            load.merchants.len(),
+            1,
+            "QFunction-0.txt 存在 ⇒ AddMerchant 记录 1 条"
+        );
+        assert_eq!(load.merchants[0].chr_name, "QFunction");
+        let names: Vec<String> = world
+            .merchant_ids_sorted()
+            .into_iter()
+            .map(|id| world.entities.get(id).expect("实体在").name.clone())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "QFunction"),
+            "① 核实：Merchant.txt 装载 + QFunction 记录已解析，世界 MerchantList 仍无 QFunction（names={names:?}）"
+        );
+    }
+
+    /// **②-A 逐字段**：`LocalDB.QFunctionNpc()`（`LocalDB.cs:210-222`）的 `new Merchant { … }`。
+    ///
+    /// 牙：`is_hide` 置反 / `script_name` 写成 `chr_name` / `npc_flag=1` / `price_rate=0` ⇒ 必红。
+    #[test]
+    fn qfunction_hidden_merchant_fields_match_oracle() {
+        let dir = temp_envir("qf-fields", MERCHANT_TXT);
+        let market = dir.join("Envir").join("Market_Def");
+        fs::create_dir_all(&market).unwrap();
+        fs::write(market.join("QFunction-0.txt"), "[@PlayLevelUp]\r\n").unwrap();
+        let loader = loader_for(&dir);
+        let load = loader.load_map_quest(|_| true).expect("MapQuest 装载");
+        let record = load
+            .merchants
+            .iter()
+            .find(|r| r.chr_name == "QFunction")
+            .expect("QFunction 记录");
+        let spawn = qfunction_spawn(record, 7);
+        assert_eq!(spawn.name, "QFunction", "ChrName");
+        assert_eq!((spawn.x, spawn.y), (0, 0), "CurrX=0 / CurrY=0");
+        assert_eq!(spawn.map_id, 7, "FindMap(MapName) 命中的 map_id");
+        assert_eq!(spawn.state.map_name, "0", "MapName=\"0\"");
+        assert_eq!(spawn.state.npc_flag, 0, "NpcFlag=0");
+        assert_eq!(spawn.state.appr, 0, "Appr=0");
+        assert_eq!(
+            spawn.state.script_name, "QFunction",
+            "ScriptName=\"QFunction\""
+        );
+        assert!(
+            spawn.state.is_hide,
+            "IsHide=true（挂图失败不移除的唯一判据）"
+        );
+        assert_eq!(spawn.state.price_rate, 100, "ctor PriceRate=100");
+        assert!(!spawn.state.castle_merchant, "ctor CastleMerchant=false");
+        assert!(!spawn.state.can_move, "ctor BoCanMove=false");
+        assert_eq!(spawn.state.move_time, 0, "ctor MoveTime=0");
+        assert_eq!(
+            spawn.state.flags,
+            MerchantFlags::default(),
+            "ctor 全 Is* false"
+        );
+        assert!(spawn.state.item_type_list.is_empty());
+        assert!(spawn.state.refill_goods.is_empty());
+        assert_eq!(spawn.state.process_refill_index, 0);
+        assert_eq!(
+            spawn.state.run_tick,
+            mir2_world::merchant::MERCHANT_RUN_TICK_UNSET,
+            "run_tick 必须由调用方按构造段账本预置（[`insert_hidden_qfunction`] 做这件事）"
+        );
+    }
+
+    /// **构造抽不重抽**（共享 RNG 流位）：`insert_hidden_qfunction` 只消费账本给的 `run_tick`。
+    ///
+    /// 牙：把 `insert_hidden_qfunction` 改成不预置 `run_tick`（让 `insert_merchant` 兜底抽 4 次）
+    /// ⇒ 本条的「流水位置不变」断言必红。
+    #[test]
+    fn qfunction_insert_does_not_redraw_ctor_rng() {
+        let dir = temp_envir("qf-rng", MERCHANT_TXT);
+        let market = dir.join("Envir").join("Market_Def");
+        fs::create_dir_all(&market).unwrap();
+        fs::write(market.join("QFunction-0.txt"), "[@PlayLevelUp]\r\n").unwrap();
+        let loader = loader_for(&dir);
+        let load = loader.load_map_quest(|_| true).expect("MapQuest 装载");
+        let record = load
+            .merchants
+            .iter()
+            .find(|r| r.chr_name == "QFunction")
+            .expect("QFunction 记录");
+
+        let mut world = mir2_world::World::new(16, 16);
+        world.rng = RandomNumber::with_seed(20240229);
+        let mut expected = world.rng.clone();
+        let id = insert_hidden_qfunction(&mut world, record, 0, 1234).expect("QFunction 入世界");
+        assert_eq!(
+            world.rng.random_below(10_000),
+            expected.random_below(10_000),
+            "建实体不得重抽构造链的 4 个数（否则共享 RNG 流错位 4）"
+        );
+        let st = world
+            .entities
+            .get(id)
+            .and_then(|e| e.merchant.as_ref())
+            .expect("实体有商人态");
+        assert_eq!(st.run_tick, 1234, "run_tick = 调用方给的账本值");
+    }
+
+    /// **`IsHide = true` 的寿命口径**：`MerchantInitialize` 的
+    /// `if (AddtoMapSuccess && !IsHide) RemoveAt(i)`（`WorldServer.Merchant.cs:16-22`）⇒
+    /// 挂图失败（越界/墙格）也**留在** `MerchantList`。
+    ///
+    /// 牙：把 [`qfunction_spawn`] 的 `state.is_hide` 改成 `false` ⇒ 本条的 `attach` 返回值与
+    /// 「实体仍在」断言必红。
+    #[test]
+    fn qfunction_is_hide_keeps_entity_when_attach_fails() {
+        let dir = temp_envir("qf-hide", MERCHANT_TXT);
+        let market = dir.join("Envir").join("Market_Def");
+        fs::create_dir_all(&market).unwrap();
+        fs::write(market.join("QFunction-0.txt"), "[@PlayLevelUp]\r\n").unwrap();
+        let loader = loader_for(&dir);
+        let load = loader.load_map_quest(|_| true).expect("MapQuest 装载");
+        let record = load
+            .merchants
+            .iter()
+            .find(|r| r.chr_name == "QFunction")
+            .expect("QFunction 记录");
+        let mut world = mir2_world::World::new(8, 8);
+        let mut spawn = qfunction_spawn(record, 0);
+        spawn.x = -1; // 越界 ⇒ `CanWalk`/`AddToMap` 失败
+        spawn.state.run_tick = 0;
+        let id = world.insert_merchant(spawn).expect("入世界");
+        assert!(
+            world.attach_merchant_to_map(id),
+            "IsHide=true ⇒ 挂图失败不得 RemoveAt"
+        );
+        let e = world.entities.get(id).expect("实体仍在 MerchantList");
+        assert!(!e.add_to_mapped, "越界格 ⇒ 未落格（AddtoMapSuccess=true）");
+    }
+
+    /// **tick 序**：`LocalDB.cs:223` 的 `AddMerchant` 发生在 `LoadMerchant` 之前 ⇒
+    /// `MerchantList` 首位 = QFunction ⇒ `merchant_ids_sorted()[0]` 是它，
+    /// `Merchant.txt` 记录按文件正序排在其后（`ProcessMerchants` 正序）。
+    ///
+    /// 牙：把 `insert_hidden_qfunction` 挪到商人装载之后 ⇒ 首元素断言必红。
+    #[test]
+    fn qfunction_precedes_merchant_txt_in_tick_order() {
+        let dir = temp_envir("qf-order", MERCHANT_TXT);
+        let market = dir.join("Envir").join("Market_Def");
+        fs::create_dir_all(&market).unwrap();
+        fs::write(market.join("QFunction-0.txt"), "[@PlayLevelUp]\r\n").unwrap();
+        let loader = loader_for(&dir);
+        let mut rng = RandomNumber::with_seed(42);
+        let (spawns, _report, seeds) =
+            load_merchant_spawns(&loader, |_| Some(0), &mut rng).expect("装载不应失败");
+        let load = loader.load_map_quest(|_| true).expect("MapQuest 装载");
+        let record = load
+            .merchants
+            .iter()
+            .find(|r| r.chr_name == "QFunction")
+            .expect("QFunction 记录");
+        let mut world = mir2_world::World::new(64, 64);
+        let mut displays = DisplayTable::new();
+        let qid = insert_hidden_qfunction(&mut world, record, 0, 0).expect("QFunction 入世界");
+        let (_kept, failed, _book) =
+            spawn_merchants_with_scripts(&mut world, spawns, seeds, &mut displays);
+        assert!(failed.is_empty(), "合成图全 Walk ⇒ 无挂图失败");
+        let names: Vec<String> = world
+            .merchant_ids_sorted()
+            .into_iter()
+            .map(|id| world.entities.get(id).expect("实体在").name.clone())
+            .collect();
+        assert_eq!(
+            names[0], "QFunction",
+            "MerchantList 首位 = QFunction（{names:?}）"
+        );
+        assert_eq!(
+            names,
+            vec![
+                "QFunction".to_string(),
+                "repairman".to_string(),
+                "smith".to_string(),
+                "dummy".to_string()
+            ],
+            "其后 = Merchant.txt 文件正序"
+        );
+        assert_eq!(world.merchant_ids_sorted()[0], qid);
     }
 }
