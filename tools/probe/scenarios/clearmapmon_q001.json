@@ -39,14 +39,13 @@
       "note": "脚本尾说词；与清怪/刷怪帧同 handler 按 MsgQueue 优先级出队"
     },
     {
-      "wait_for": 10,
-      "timeout_ms": 5000,
-      "note": "MONGENEX 刷出的第 1 只 `骷髅精灵5` 进入视野（`SM_TURN(10)`）；**不清场**（Q001 无 MonGen 行，清的是空图，不会有 30 帧）"
-    },
-    {
-      "wait_for": 10,
-      "timeout_ms": 5000,
-      "note": "第 2 只 `骷髅精灵5` 进入视野（第二条 `SM_TURN(10)`）；数量/位置以两侧帧与实体差集对拍，不写死"
+      "wait_idents": {
+        "idents": [
+          10
+        ],
+        "timeout_ms": 5000
+      },
+      "note": "进图后见过怪物再生帧 `SM_TURN(10)`（**累计口径**，含等待前已到的帧）。刷出的 2 只 `骷髅精灵5` 的 `SM_TURN` 实际由第 5 步 `@rw02` 的 `#act`（`MONGENEX → TimeRecall 5 → map Q001`）触发，会在第 6 步 pump 记账；故此处不能用逐帧 `wait_for`（会越过它们而必超时）。**数量/位置不在此断言**：交给证据层（两侧 frames.ndjson 逐帧对拍 + 实体/AOI 差集）。注意 `wait_frames` 不能数出现次数（它判「累计帧总数≥count 且 idents 都出现过」），按 ident 计数需新步型（另卡）。"
     },
     {
       "sleep": 500,
