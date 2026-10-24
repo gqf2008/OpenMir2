@@ -1087,6 +1087,10 @@ pub struct World {
     /// 读 `[Names] Zuma1..4`）——`ScultureKingMonster.CallSlave` 的
     /// `Config.Zuma[Random(4)]` 怪名表。缺省 = oracle 构造缺省（部署件同值）。
     pub zuma_names: [String; 4],
+    /// **T-132（castle-war）**：`[Setup]` 的四个名字色（`ServerConf.cs:509-512`；
+    /// `GameSvrConf.cs:1731-1736` 缺省 47/180/69/221）。宿主启动时用
+    /// [`World::set_castle_name_colors`] 灌入；缺省 = oracle 构造缺省（部署件同值）。
+    pub castle_name_colors: crate::castle::CastleNameColors,
     /// **MB-3（R34）**：待执行的 `RegenMonsterByName` 请求（`ScultureKingMonster.CallSlave`）。
     /// 宿主用 [`crate::monai::World::flush_sculture_spawns`]（或同签名方法）在 `world.rng` 上排水。
     pub pending_sculture_spawns: Vec<crate::monai::ScultureSpawnRequest>,
@@ -1361,6 +1365,7 @@ impl World {
                 "祖玛弓箭手".to_string(),
                 "楔蛾".to_string(),
             ],
+            castle_name_colors: crate::castle::CastleNameColors::default(),
             pending_sculture_spawns: Vec::new(),
             fire_burn_events: Vec::new(),
             event_sight: (0, 0),
@@ -1443,6 +1448,14 @@ impl World {
         self.make_ghost_time = make_ghost_time;
         self.mon_gen_user_full = mon_gen_user_full;
         self.mon_gen_zen_fast_step = mon_gen_zen_fast_step;
+    }
+
+    /// 灌入 `[Setup]` 的四个名字色（T-132；与 oracle `ServerConf.cs:509-512` 同源）。
+    ///
+    /// 生产宿主在起世界时调用；合成 golden/单测不调 ⇒ 保持 oracle 构造缺省
+    /// （47/180/69/221），既有对拍逐字节不变（本字段只在名字色查询路径被读）。
+    pub fn set_castle_name_colors(&mut self, colors: crate::castle::CastleNameColors) {
+        self.castle_name_colors = colors;
     }
 
     /// `ProcessSpiritSuite`（`PlayObject.Base.cs:322-330`）的尾：把全服宝宝叛变窗口

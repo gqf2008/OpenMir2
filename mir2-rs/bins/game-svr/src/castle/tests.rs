@@ -620,3 +620,52 @@ fn red_die_home_defaults_and_ini() {
         }
     );
 }
+
+/// **T-131 相位合同**：生产 `initialize_castle`（oracle `CastleMgr.Initialize`，`GameApp.cs:213`，
+/// 早于 `GuildMgr.LoadGuildInfo` `:245`）只经 `LoadConfig` 读 `OwnGuild` 名字，**不解析**
+/// `MasterGuild`（`UserCastle.cs:231` 的 `FindGuild` 在行会表装载前恒 null）⇒ 启动后
+/// `master_guild == None`、`is_master_guild_name(Some(OwnGuild)) == false`（与 oracle 启动态一致）。
+///
+/// 牙：让 `UserCastle::initialize` 落 `master_guild = Some(..)`（错误相位）⇒ 本用例必红。
+#[test]
+fn initialize_leaves_master_guild_none_phase_contract() {
+    let f = fixture("3");
+    let table = MonsterTable::new(vec![row("弓箭手", 112, 2000)]);
+    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut host = MonGenHost::start(
+        Vec::new(),
+        &table,
+        false,
+        MonGenConfig::default(),
+        &mut world.rng,
+    );
+    let mut displays = downlink::DisplayTable::new();
+    let mut rng = RandomNumber::with_seed(20261020);
+    let mut specs = default_specs();
+    specs.own_guild = "沙巴克".to_string();
+    let _ = initialize_castle(
+        &mut world,
+        &f.registry,
+        &table,
+        &mut host.state,
+        &mut displays,
+        &mut rng,
+        &specs,
+        CastleSiegeConfig::default(),
+        0,
+    );
+    let castle = &world.castles[0];
+    assert_eq!(
+        castle.own_guild.as_deref(),
+        Some("沙巴克"),
+        "LoadConfig 只搬名字"
+    );
+    assert!(
+        castle.master_guild.is_none(),
+        "启动相位：MasterGuild 在行会表装载前不得解析（oracle GameApp.cs:213 < :245）"
+    );
+    assert!(
+        !castle.is_master_guild_name(Some("沙巴克")),
+        "MasterGuild == None ⇒ 名字相等也不得判城主身份"
+    );
+}

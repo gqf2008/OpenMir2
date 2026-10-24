@@ -49,9 +49,9 @@ use mir2_envir::castle::{
 use mir2_envir::{MapInfoFlag, MapLoader, MapRegistry};
 use mir2_shared::rng::RandomNumber;
 use mir2_world::castle::{
-    area_state, CastleDate, CastleDefenseSpecs, CastleEvent, CastleNameColors, CastleNow,
-    CastleSaveSkip, CastleSaveSnapshot, CastleSaveUnit, CastleSiegeConfig, DefenseCreature,
-    DefenseUnitSpec, RedDieHome, UserCastle,
+    area_state, CastleDate, CastleDefenseSpecs, CastleEvent, CastleNow, CastleSaveSkip,
+    CastleSaveSnapshot, CastleSaveUnit, CastleSiegeConfig, DefenseCreature, DefenseUnitSpec,
+    RedDieHome, UserCastle,
 };
 use mir2_world::mongen::MonGenState;
 
@@ -263,9 +263,9 @@ pub fn area_state_with(flag: &MapInfoFlag, in_guild_war_area: bool) -> u16 {
 /// `GuildId` 映射（本仓生产路径尚未物化）⇒ 传 0/`false`（登记 T-128）。
 /// `GuildWarArea` 的按观察者副作用由返回值丢弃（调用方只取色）——查询用户名路径不需要它。
 ///
-/// 颜色取 [`CastleNameColors::default()`]（47/180/69/221）：oracle 从 `Server.conf [Setup]`
-/// 读 `PKFlagNameColor` 等四键（`ServerConf.cs:509-512`），本函数**不读配置**；部署件四值与
-/// 源码缺省相同 ⇒ 当前等价（配置覆盖未接，登记 T-132）。
+/// 颜色取 `world.castle_name_colors`（T-132 已接线）：oracle 从 `Server.conf [Setup]` 读
+/// `PKFlagNameColor` 等四键（`ServerConf.cs:509-512`；缺省 `GameSvrConf.cs:1731-1736`），
+/// 宿主启动时经 [`mir2_world::World::set_castle_name_colors`] 灌入（缺省 47/180/69/221）。
 ///
 /// # Errors
 /// 见 [`mir2_world::castle::ChrColorError`]（有行会观察者在攻城区 ⇒ oracle 抛 N1，
@@ -300,7 +300,7 @@ pub fn query_user_name_color(
         viewer_in_guild_war_area,
         target_in_guild_war_area,
     };
-    mir2_world::castle::get_chr_color(&input, &CastleNameColors::default()).map(|r| r.color)
+    mir2_world::castle::get_chr_color(&input, &world.castle_name_colors).map(|r| r.color)
 }
 
 /// `Server.conf` 的 `RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。

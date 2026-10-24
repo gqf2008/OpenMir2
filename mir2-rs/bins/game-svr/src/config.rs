@@ -114,6 +114,15 @@ pub struct GateConfig {
     pub blue_msg_f_color: u8,
     /// `[Setup] BlueMsgBColor`（oracle `GameSvrConf.cs:1539` 缺省 `0xFC`；现网 `=252`）——同上，背景色。
     pub blue_msg_b_color: u8,
+    /// `[Setup] PKFlagNameColor`（`ServerConf.cs:509` 的 `ReadWriteByte`；`GameSvrConf.cs:1731`
+    /// 缺省 `0x2F`=47，部署 `Server.conf:740` 同值）——`GetChrColor` 的 PK 标记名字色。
+    pub pk_flag_name_color: u8,
+    /// `[Setup] AllyAndGuildNameColor`（`ServerConf.cs:510`；`GameSvrConf.cs:1734` 缺省 `0xB4`=180）。
+    pub ally_and_guild_name_color: u8,
+    /// `[Setup] WarGuildNameColor`（`ServerConf.cs:511`；`GameSvrConf.cs:1735` 缺省 `0x45`=69）。
+    pub war_guild_name_color: u8,
+    /// `[Setup] InFreePKAreaNameColor`（`ServerConf.cs:512`；`GameSvrConf.cs:1736` 缺省 `0xDD`=221）。
+    pub in_free_pk_area_name_color: u8,
     /// `[Setup] GroupMembersMax`（`ServerConf.cs:225` 的 `ReadWriteByte`，`GameSvrConf.cs:1402` 缺省 `10`）。
     /// M3⑦-实现 2：组队状态机的成员上限门（`PlayObject.Operate.cs:855` 的严格大于）。
     pub group_members_max: u8,
@@ -427,6 +436,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut whisper_msg_b_color: Option<u8> = None;
     let mut blue_msg_f_color: Option<u8> = None;
     let mut blue_msg_b_color: Option<u8> = None;
+    let mut pk_flag_name_color: Option<u8> = None;
+    let mut ally_and_guild_name_color: Option<u8> = None;
+    let mut war_guild_name_color: Option<u8> = None;
+    let mut in_free_pk_area_name_color: Option<u8> = None;
     let mut group_members_max: Option<u8> = None;
     let mut group_msg_f_color: Option<u8> = None;
     let mut group_msg_b_color: Option<u8> = None;
@@ -704,6 +717,33 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                         v.parse()
                             .with_context(|| format!("BlueMsgBColor 不是合法字节：{v:?}"))?,
                     );
+                }
+                // 四个名字色（`ServerConf.cs:509-512` 的 `ReadWriteByte`；`GameSvrConf.cs:1731-1736`
+                // 缺省 47/180/69/221）。缺键 ⇒ oracle 缺省；写了但非法 ⇒ `Convert.ToByte` 抛
+                // （本层 fail-closed，与 `ReadWriteByte` 的失败要响同口径）。
+                "PKFLAGNAMECOLOR" => {
+                    pk_flag_name_color = Some(
+                        v.parse()
+                            .with_context(|| format!("PKFlagNameColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "ALLYANDGUILDNAMECOLOR" => {
+                    ally_and_guild_name_color =
+                        Some(v.parse().with_context(|| {
+                            format!("AllyAndGuildNameColor 不是合法字节：{v:?}")
+                        })?);
+                }
+                "WARGUILDNAMECOLOR" => {
+                    war_guild_name_color = Some(
+                        v.parse()
+                            .with_context(|| format!("WarGuildNameColor 不是合法字节：{v:?}"))?,
+                    );
+                }
+                "INFREEPKAREANAMECOLOR" => {
+                    in_free_pk_area_name_color =
+                        Some(v.parse().with_context(|| {
+                            format!("InFreePKAreaNameColor 不是合法字节：{v:?}")
+                        })?);
                 }
                 // `ServerConf.cs:308-311` 的四条交易配置（M3⑦-实现 3）。
                 "TRYDEALTIME" => {
@@ -1158,6 +1198,11 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         // oracle 缺省值（`GameSvrConf.cs:1538-1539`）：`[Setup]` 里没写不算错。
         blue_msg_f_color: blue_msg_f_color.unwrap_or(0xFF),
         blue_msg_b_color: blue_msg_b_color.unwrap_or(0xFC),
+        // oracle 缺省值（`GameSvrConf.cs:1731-1736`）：缺键不算错。
+        pk_flag_name_color: pk_flag_name_color.unwrap_or(0x2F),
+        ally_and_guild_name_color: ally_and_guild_name_color.unwrap_or(0xB4),
+        war_guild_name_color: war_guild_name_color.unwrap_or(0x45),
+        in_free_pk_area_name_color: in_free_pk_area_name_color.unwrap_or(0xDD),
         try_deal_time: try_deal_time.unwrap_or(3_000),
         deal_ok_time: deal_ok_time.unwrap_or(1_000),
         can_not_get_back_deal: can_not_get_back_deal.unwrap_or(true),
@@ -1337,6 +1382,23 @@ fn parse_maps(v: &str) -> Result<Vec<(i32, i32)>> {
         out.push((w, h));
     }
     Ok(out)
+}
+
+impl GateConfig {
+    /// `[Setup]` 的四个名字色 ⇒ [`CastleNameColors`]（T-132）。
+    ///
+    /// oracle `GetChrColor`（`PlayObject.cs:3588-3656`）读 `SystemShare.Config.PKFlagNameColor` /
+    /// `AllyAndGuildNameColor` / `WarGuildNameColor` / `InFreePKAreaNameColor`
+    /// （`ServerConf.cs:509-512`）；本方法只是搬运，缺省已在 [`load`] 里按 `GameSvrConf.cs:1731-1736` 落。
+    #[must_use]
+    pub fn castle_name_colors(&self) -> mir2_world::castle::CastleNameColors {
+        mir2_world::castle::CastleNameColors {
+            pk_flag: self.pk_flag_name_color,
+            ally_guild: self.ally_and_guild_name_color,
+            war_guild: self.war_guild_name_color,
+            in_free_pk: self.in_free_pk_area_name_color,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2225,5 +2287,60 @@ HungerSystem=garbage
             );
         }
         std::fs::remove_dir_all(&dir).ok();
+    }
+    /// **T-132**：`[Setup]` 的四个名字色（`ServerConf.cs:509-512`；`GameSvrConf.cs:1731-1736`
+    /// 缺省 47/180/69/221）。缺键 ⇒ oracle 缺省；写了 ⇒ 照读；非法 ⇒ fail-closed
+    /// （oracle `Convert.ChangeType` 抛）。`castle_name_colors()` 是唯一映射点。
+    ///
+    /// 牙：把任一 `unwrap_or` 缺省改掉 / 把 `castle_name_colors()` 的两个字段对调 ⇒ 断言必红。
+    #[test]
+    fn parses_setup_castle_name_colors_with_oracle_defaults() {
+        let dir =
+            std::env::temp_dir().join(format!("gs-setup-castle-colors-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\n\
+                    IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let c = load(&write(&dir, base)).unwrap();
+        assert_eq!(
+            (
+                c.pk_flag_name_color,
+                c.ally_and_guild_name_color,
+                c.war_guild_name_color,
+                c.in_free_pk_area_name_color
+            ),
+            (47, 180, 69, 221),
+            "GameSvrConf.cs:1731-1736 缺省"
+        );
+        assert_eq!(
+            c.castle_name_colors(),
+            mir2_world::castle::CastleNameColors::default()
+        );
+        let c2 = load(&write(
+            &dir,
+            &format!(
+                "{base}[Setup]\nPKFlagNameColor=10\nAllyAndGuildNameColor=20\n\
+                 WarGuildNameColor=30\nInFreePKAreaNameColor=40\n"
+            ),
+        ))
+        .unwrap();
+        assert_eq!(
+            c2.castle_name_colors(),
+            mir2_world::castle::CastleNameColors {
+                pk_flag: 10,
+                ally_guild: 20,
+                war_guild: 30,
+                in_free_pk: 40,
+            }
+        );
+        // 非法值 ⇒ fail-closed（oracle `Convert.ToByte` 抛）。
+        assert!(load(&write(
+            &dir,
+            &format!("{base}[Setup]\nPKFlagNameColor=300\n")
+        ))
+        .is_err());
+        assert!(load(&write(
+            &dir,
+            &format!("{base}[Setup]\nPKFlagNameColor=abc\n")
+        ))
+        .is_err());
     }
 }
