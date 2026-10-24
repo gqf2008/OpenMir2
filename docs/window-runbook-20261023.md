@@ -25,9 +25,9 @@ python -I -B tools/conformance/preflight.py \
   --log-dir E:/tmp/conformance/rust-logs \
   --ports-profile E:/tmp/window/r5/root/alt-port-profile.json
 # 需要更深自查时再加：--with-dry-run（委托 card_window --dry-run）/ --with-selftest
-#   （--with-selftest 就是委托 `card_window --selftest`：本机实测 GREEN 237/237、约 22s；
-#    测法 `time python -I -B tools/conformance/card_window.py --selftest`；reviewer 机约 55s；
-#    本机实测值，随机器/profile 环境而变）
+#   （--with-selftest 就是委托 `card_window --selftest`：2026-10-24 实测 GREEN 237/237；
+#    测法 `time python -I -B tools/conformance/card_window.py --selftest`；
+#    耗时随机器/profile 环境而变：reviewer-3 机 22.26s、worker-58 机 45.05s/52.70s、上一轮/另一环境约 55s）
 ```
 
 - 参数：`--profile` 内建名（`alt` / `csharp-default`）或 profile JSON 路径；`--root` / `--log-dir` 原样传给
@@ -76,7 +76,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 Get-FileHash -Algorithm SHA256 <上一条打印的路径>
 ```
 期望：路径含 `\target\release\mir2-server.exe`；记下 hash 写进 `README.txt`。
-失败含义：含 `\debug\` ⇒ 你所在树没构建 release（或用的是别的检出的二进制）；路径与你预期的主检出不一致 ⇒ 见 §1.1 的解析口径，**以起栈后 pid 文件的 `roles[].exe` 为准**。
+失败含义：含 `\debug\` ⇒ 你所在树没构建 release（或用的是别的检出的二进制）；路径与你预期的主检出不一致 ⇒ 见 §1 第 1 步「注意解析口径」，**以起栈后 pid 文件的 `roles[].exe` 为准**。
 
 **第 2 步：本窗口端口全空（不是 port-status 的十个）**
 
@@ -118,10 +118,10 @@ python -I -B tools/conformance/card_window.py --card <卡 id> \
 
 ```sh
 python -I -B tools/conformance/card_window.py --selftest     # 期望 GREEN: … selftest 237/237，rc=0（2026-10-24 本机实测）
-python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 238/238，rc=0
+python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: compare_runs selftest 262/262，rc=0
 ```
 失败含义：计数**变小** ⇒ 有判据被删（先查最近提交）；变红 ⇒ 工具坏了，别开窗。
-**注**：两个自检的计数都随夹具与规则表变更而变（`compare_runs` 侧，`b42f20a28` 的 recog-unmask 就 +40）⇒ 以**实跑**为准，别抄本文的数字（本文的 237/237、238/238 是 2026-10-24 实测）。
+**注**：两个自检的计数都随夹具与规则表变更而变（`compare_runs` 侧实测：`4e0bfd2b8` 198 ⇒ `b42f20a28` recog-unmask +40 = 238 ⇒ `c8473b344` 补 202/203/642/709 四条规则 +24 = 262）⇒ 以**实跑**为准，别抄本文的数字（本文的 237/237、262/262 是 2026-10-24 实测）。
 
 ---
 
@@ -279,7 +279,7 @@ profile 顶层没有白名单校验、该键会被**静默忽略**（跑起来�
 `背包夹具（dry-run 不连库）：db=… 声明 N 件 positions=… make_index=…`（2026-10-24 实测 `bag_equip`
 两侧各 1 行、rc=0）——**看不到这一行就说明夹具没被声明**。
 
-## 1.8 二进制与 sha256 的开窗前核对（卡 `openmir2-start-server-whatif-sha`，2026-10-23 晚；2026-10-24 由 §1.6 改为 §1.8，见文末「已知行号漂移」）
+## 1.7 二进制与 sha256 的开窗前核对（卡 `openmir2-start-server-whatif-sha`，2026-10-23 晚；2026-10-24 由 §1.6 改为 §1.7——与「魔法夹具」互换编号，避免 §1.8 排在 §1.7 之前，见文末「已知行号漂移」）
 
 `start_mir2_server.ps1 -WhatIf` 固定输出三行（实跑同款，只是多打印告警）：
 
@@ -333,7 +333,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 
 **注意（脚本能力之外）**：`E:/tmp/conformance/start-rust.ps1` 把脚本路径写死成主检出，因此**在 worktree 里 `-WhatIf` 看到的二进制，可能不是真窗口启动的那份**；真窗口以起栈后 `mir2-server.pid.json` 的 `roles[].exe` 为准（`card_window.py` 已对账，不符 rc=2）。
 
-## 1.7 魔法夹具：**声明即可**（工具已支持，2026-10-23 晚；卡 `openmir2-window-magic-fixture`）
+## 1.8 魔法夹具：**声明即可**（工具已支持，2026-10-23 晚；卡 `openmir2-window-magic-fixture`；2026-10-24 由 §1.7 改为 §1.8——与「二进制与 sha256」互换编号）
 
 `spell_cast` 场景的 `blocked.missing_fixture` 要的「角色已学魔法」现在由 `card_window.py` 在
 **每侧 restore（与预置位）之后、起栈之前**自动写进该侧测试库 `characters_magic`。
@@ -564,4 +564,9 @@ oracle 的 `ActionOfGmExecute`（以及多数脚本动作）**直接拼 `sParam1
 | `:1901`（报错） | `:2766` | `res["error"] = ("起栈前端口已被占用…` |
 
 > **节号也漂过**：原「二进制与 sha256」节与本文件「背包夹具」节同为 `## 1.6`；2026-10-24 起「背包夹具」保留
-> §1.6，「二进制与 sha256」改为 **§1.8**（`docs/docs-state-drift-sweep-20261024.md:65` 所称的「§1.6 三行」= 该节）。
+> §1.6，「二进制与 sha256」改为 **§1.7**、原「魔法夹具」由 §1.7 改为 **§1.8**（两者互换，避免 §1.8 排在 §1.7 之前；
+> `docs/docs-state-drift-sweep-20261024.md:65` 所称的「§1.6 三行」= 该节）。
+
+> **悬空引用（不算行号漂移）**：§0.5 第 1 步原写「见 §1.1 的解析口径」，但本文件**没有** `## 1.1`（也无 `### 1.1`）；
+> 被指的「注意解析口径」实际在 **§1 第 1 步**（`## 1. 开跑前必做` 下第 1 条的加粗小标题）。2026-10-24 已就地
+> 改为「见 §1 第 1 步『注意解析口径』」——这是**悬空引用**，不是行号漂移，故单列在此。
