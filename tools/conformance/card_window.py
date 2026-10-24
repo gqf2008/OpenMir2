@@ -3403,6 +3403,22 @@ def _fixture_envir_root(sc):
     return str(root)
 
 
+def _fixture_envir_roots(sc):
+    """夹具要写的 envir 根列表：基线 + **hook 影子**（存在时）。
+
+    G-1（review）：`--rng-log` 时 C# GameSvr 从 `M2GameSvr-hook/`（影子）跑，而 profile 的
+    `envir_root` 指基线 `M2GameSvr/`。只写基线会让①夹具对 oracle 不生效、②影子失配 ⇒
+    下一轮 `envir_shadow_symmetry` 必红。故影子存在时**两侧写同一份内容**，保持 sha 一致。
+    """
+    base = _fixture_envir_root(sc)
+    roots = [base]
+    parent = os.path.dirname(os.path.abspath(base))
+    shadow = os.path.join(parent, "M2GameSvr-hook")
+    if os.path.isdir(shadow) and os.path.isfile(os.path.join(shadow, "Envir", "MonGen.txt")):
+        roots.append(shadow)
+    return roots
+
+
 def _fixture_map_names(root):
     path = os.path.join(root, "Envir", "MapInfo.txt")
     try:
@@ -3432,14 +3448,11 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
     """
     res = {"side": side, "declared": decl, "path": None, "backup": None,
            "before_sha256": None, "after_sha256": None, "appended": [],
-           "action": None, "rc": None, "error": None}
+           "targets": [], "action": None, "rc": None, "error": None}
     try:
-        root = _fixture_envir_root(sc)
-        maps = _fixture_map_names(root)
-        path = os.path.join(root, "Envir", "MonGen.txt")
-        res["path"] = path
-        if not os.path.exists(path):
-            raise ConfigError("MonGen.txt 不存在：%s" % path)
+        roots = _fixture_envir_roots(sc)
+        base = roots[0]
+        maps = _fixture_map_names(base)
         lines = []
         for spec in decl["monsters"]:
             if spec["map"] not in maps:
@@ -3450,35 +3463,49 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
                                     str(FIXTURE_MONGEN_ZEN_TIME)]))
         res["appended"] = lines
         if getattr(runner, "dry_run", False):
-            for ln in lines:
-                runner.log("[%s] 怪物夹具（dry-run 不写 Envir）：%s" % (side, ln))
+            for root in roots:
+                for ln in lines:
+                    runner.log("[%s] 怪物夹具（dry-run 不写 Envir）：%s/Envir/MonGen.txt + %s"
+                               % (side, root, ln))
             res["action"] = "dry-run"
             res["rc"] = 0
             return res
-        with open(path, "rb") as f:
-            raw = f.read()
-        res["before_sha256"] = hashlib.sha256(raw).hexdigest()
-        nl = b"\r\n" if b"\r\n" in raw else b"\n"
-        head = raw if (not raw or raw.endswith(b"\n")) else raw + nl
-        append = b"".join(ln.encode("gbk") + nl for ln in lines)
         backup_dir = os.path.join(side_dir, "fixtures")
         os.makedirs(backup_dir, exist_ok=True)
-        backup = os.path.join(backup_dir, "MonGen.txt.bak")
-        with open(backup, "wb") as f:
-            f.write(raw)
-        with open(path, "wb") as f:
-            f.write(head + append)
-        with open(path, "rb") as f:
-            after = f.read()
-        res["after_sha256"] = hashlib.sha256(after).hexdigest()
-        res["backup"] = backup
+        for i, root in enumerate(roots):
+            path = os.path.join(root, "Envir", "MonGen.txt")
+            if not os.path.exists(path):
+                raise ConfigError("MonGen.txt 不存在：%s" % path)
+            with open(path, "rb") as f:
+                raw = f.read()
+            before = hashlib.sha256(raw).hexdigest()
+            nl = b"\r\n" if b"\r\n" in raw else b"\n"
+            head = raw if (not raw or raw.endswith(b"\n")) else raw + nl
+            append = b"".join(ln.encode("gbk") + nl for ln in lines)
+            tag = "shadow" if i else "baseline"
+            backup = os.path.join(backup_dir, "MonGen.txt.%s.bak" % tag)
+            with open(backup, "wb") as f:
+                f.write(raw)
+            with open(path, "wb") as f:
+                f.write(head + append)
+            with open(path, "rb") as f:
+                after = f.read()
+            tgt = {"target": tag, "path": path, "backup": backup,
+                   "before_sha256": before,
+                   "after_sha256": hashlib.sha256(after).hexdigest()}
+            res["targets"].append(tgt)
+            runner.log("[%s] 怪物夹具（起栈前写 %s/Envir/MonGen.txt）：追加 %d 行；地图=%s；"
+                       "sha256 %s -> %s；备份=%s"
+                       % (side, tag, len(lines),
+                          ",".join(sorted({x["map"] for x in decl["monsters"]})),
+                          before[:12], tgt["after_sha256"][:12], backup))
+            for ln in lines:
+                runner.log("[%s]   + %s" % (side, ln))
+        first = res["targets"][0]
+        res.update({"path": first["path"], "backup": first["backup"],
+                    "before_sha256": first["before_sha256"],
+                    "after_sha256": first["after_sha256"]})
         res["action"] = "appended"
-        runner.log("[%s] 怪物夹具（起栈前写 Envir/MonGen.txt）：追加 %d 行；地图=%s；"
-                   "sha256 %s -> %s；备份=%s"
-                   % (side, len(lines), ",".join(sorted({x["map"] for x in decl["monsters"]})),
-                      res["before_sha256"][:12], res["after_sha256"][:12], backup))
-        for ln in lines:
-            runner.log("[%s]   + %s" % (side, ln))
         res["rc"] = 0
         return res
     except (ConfigError, OSError) as e:
@@ -3491,20 +3518,26 @@ def restore_fixtures(res):
     """把 `run_fixtures` 的备份写回并校验 sha256（停栈后调用；失败只记录不改 rc）。"""
     if not res or res.get("action") != "appended":
         return None
-    try:
-        with open(res["backup"], "rb") as f:
-            raw = f.read()
-        with open(res["path"], "wb") as f:
-            f.write(raw)
-        # F2（review）：必须**重读磁盘**再比，不能拿刚写进去的内存字节自证。
-        with open(res["path"], "rb") as f:
-            disk = f.read()
-        got = hashlib.sha256(disk).hexdigest()
-        if got != res.get("before_sha256"):
-            return "还原 sha256 不符：%s != %s" % (got, res.get("before_sha256"))
-        return None
-    except OSError as e:
-        return "还原 MonGen.txt 失败：%s" % e
+    errors = []
+    targets = res.get("targets") or [{"path": res.get("path"), "backup": res.get("backup"),
+                                      "before_sha256": res.get("before_sha256"),
+                                      "target": "baseline"}]
+    for tgt in targets:
+        try:
+            with open(tgt["backup"], "rb") as f:
+                raw = f.read()
+            with open(tgt["path"], "wb") as f:
+                f.write(raw)
+            # F2（review）：必须**重读磁盘**再比，不能拿刚写进去的内存字节自证。
+            with open(tgt["path"], "rb") as f:
+                disk = f.read()
+            got = hashlib.sha256(disk).hexdigest()
+            if got != tgt.get("before_sha256"):
+                errors.append("%s 还原 sha256 不符：%s != %s"
+                              % (tgt.get("target"), got, tgt.get("before_sha256")))
+        except OSError as e:
+            errors.append("%s 还原 MonGen.txt 失败：%s" % (tgt.get("target"), e))
+    return "；".join(errors) if errors else None
 
 
 def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
@@ -5684,6 +5717,39 @@ def _selftest_fixtures(tmp):
     out.append((len(cols) >= 7 and zen_min > 0 and zen_ms > 0,
                 "FIX2b 夹具行第 7 列 ZenTime>0（%s 分钟 => %d ms）——按两端解析器口径"
                 "（zen_time<=0 即丢弃且无日志）不会被静默丢行" % (zen_min, zen_ms)))
+
+    # FIX2c（review G-1）：hook 影子存在时，夹具必须**同时**写基线与影子（sha 一致）。
+    shadow_root = os.path.join(d, "M2GameSvr-hook")
+    os.makedirs(os.path.join(shadow_root, "Envir"), exist_ok=True)
+    shadow_mongen = os.path.join(shadow_root, "Envir", "MonGen.txt")
+    with open(mongen, "rb") as f:
+        _raw = f.read()
+    with open(shadow_mongen, "wb") as f:
+        f.write(_raw)
+    prof_sh = {"sides": {"csharp": {"envir_root": root,
+                                    "fixtures": {"monsters": [
+                                        {"map": "0", "x": 330, "y": 331,
+                                         "name": "鸡", "count": 1}]}}}}
+    side_dir_sh = os.path.join(d, "side-shadow")
+    res_sh = run_fixtures(_R(), "csharp", prof_sh, prof_sh["sides"]["csharp"],
+                          profile_fixtures(prof_sh, "csharp"), {}, side_dir_sh)
+    tgts = res_sh.get("targets") or []
+    with open(mongen, "rb") as f:
+        b1 = f.read()
+    with open(shadow_mongen, "rb") as f:
+        b2 = f.read()
+    line_bytes = "0\t330\t331\t鸡\t0\t1\t360".encode("gbk")
+    out.append((res_sh.get("rc") == 0 and len(tgts) == 2
+                and {t.get("target") for t in tgts} == {"baseline", "shadow"}
+                and line_bytes in b1 and line_bytes in b2 and b1 == b2,
+                "FIX2c G-1：影子存在时同一夹具同时写基线与影子（两侧内容逐字节相同）"))
+    rerr = restore_fixtures(res_sh)
+    with open(mongen, "rb") as f:
+        r1 = f.read()
+    with open(shadow_mongen, "rb") as f:
+        r2 = f.read()
+    out.append((rerr is None and r1 == _raw and r2 == _raw,
+                "FIX3c G-1：基线与影子都按 sha256 还原（重读磁盘）"))
     err = restore_fixtures(res)
     raw_restored = io.open(mongen, "rb").read()
     out.append((err is None and hashlib.sha256(raw_restored).hexdigest()

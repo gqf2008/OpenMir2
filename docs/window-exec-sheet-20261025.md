@@ -15,6 +15,7 @@
 | 2 | 私栈前置 | `python -I -B tools/window/preflight_private_stack.py`（10 步，含 `castle_list_symmetry` / `envir_shadow_symmetry`，见该脚本 `--help`） | 按脚本输出修；`-CheckPinsOnly` 可只核钉住项 |
 | 2b | 城表对齐 | preflight 的 `castle_list_symmetry` 必须 OK（两侧含 `M2GameSvr-hook` 影子内容/sha256 一致） | 不一致 ⇒ 按 `window-runbook` §0.9 用 `Copy-Item` 对齐（W-TAX-2 需两城 `0,1`），**不碰 `E:/MirServer`**；否则城堡税/多城项必假红 |
 | 2c | 影子=基线 | preflight 的 `envir_shadow_symmetry` 必须 OK（`csharp-root/M2GameSvr/Envir` vs `M2GameSvr-hook/Envir` vs `rust-root` 逐文件 sha256；实测 642 文件 0 差异） | 不一致 ⇒ 用基线 Envir 覆盖影子（或删影子 `GameSvr.exe` 让部署重建）；否则 `--rng-log` 窗口会用被改过的 oracle 脚本（内容冻结风险） |
+| 2d | 写后复核（G-2） | 夹具应用后/收工后**重跑 preflight**（或比对基线/影子 sha）；preflight 是**写前**检查，绿 ≠ 运行期一致 | 任一 Envir/影子 sha 变化 ⇒ 先还原再到 2c；`--rng-log` 下夹具必须同时写基线+影子（G-1） |
 | 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 23（blocked 2 ⇒ 入批 21）`**，#21 标 `YES` | 数量不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ 清单行的 `blocked` 字段被动过 |
 | 4 | 门禁基线 | `python -I -B tools/goal/goal_gate.py --skip-tests --json`（全量版需低负载时段） | 红 ⇒ 先修再开窗（`window-runbook` §6） |
 
