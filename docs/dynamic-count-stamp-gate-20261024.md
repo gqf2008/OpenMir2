@@ -1,6 +1,11 @@
 # `dynamic_count_stamp_gate`：易漂计数必须带快照戳（2026-10-24）
 
 - 卡：`openmir2-dynamic-count-stamp-gate`（tier=L）；写集 `tools/hygiene/`、`docs/`。
+- 数据时点：`@ 917376a45 @ 2026-10-24 11:14 +08`（下列标「现行」的数字均在该 commit 上实跑；§6/§10 的历史值保留各自时点。
+  **仅有的两处例外**是本卡改动产生的派生值——§3 的 allow-list 条数、§12.3/§12.4 的段落声明 INFO 条数——
+  它们改标 `@ 9722222bd @ 2026-10-24 11:16 +08`（本卡 head）并在原位附 base 对照）。
+  刻意不写两道门识别的声明锚词（词表见 §12.1）：本文件同时被 `stale_pointer_gate` 与
+  `dynamic_count_stamp_gate` 扫描，写锚词会让整篇进入豁免通道（§12.2 第 1 类），削弱后续漂移检测。
 - 起因：`docs/` 里大量**会漂的数字**（看板列计数、R 卡总数、`FAIL` 计数、可跑场景数、recon `tracked` 计数）
   被当作现况引用；一天内已因此返工三次（见 `docs/leader-goal-20261023.md` §1.1「动态量必须带快照」）。
 - 本门只做一件事：**同一行**上出现易漂计数、却**没有**邻近快照戳 ⇒ 红。它不判断数字对不对。
@@ -58,12 +63,13 @@ added = "2026-10-24"
   这条作用域复用骨架的 `allowlist_in_scope()`，不是本门自己再写一遍。
 - 校验同样复用骨架：`load_allowlist(require_added=True)` —— 缺 `path` / `line_sha256` / `reason` / `added`
   四项缺一 ⇒ rc=2，且**由 selftest ⑬–⑰ 钉住**（不只在运行期校验）。
-- 现行 **92 条**（2026-10-24 第③轮返工后；R3-2 订正：此处此前写 86，而 §6.2/§10 当时实为 87，本轮再 +5 条
-  `docs/board-merged-column-20261024.md` 的实时看板对比表 ⇒ 92）。理由按四类写实：文档级快照（头部已声明时点）、逐字机判摘录
+- 现行 **88 条**（`@ 9722222bd @ 2026-10-24 11:16 +08`；base `917376a45` 为 **89 条**；沿革：86 → 87 → 92（第③轮 +5 条实时看板对比表）→ 89（段落声明降级撤 3 条，
+  `cd045154c`）→ 88（本卡撤掉 `docs/rewrite-remaining-inventory-20261022.md:1259` 的冗余条目，见 §12.4））。
+  理由按四类写实：文档级快照（头部已声明时点）、逐字机判摘录
   （`goal_gate --json` 的 detail）、规则文本（不是现时计数）、历史里程碑叙述。**引述**（`「可跑场景 16」`）
   已由门直接放行，不再占白名单。
 
-## 4. 自检（`--selftest`，21/21，当天实跑）
+## 4. 自检（`--selftest`，**32/32**，`@ 917376a45 @ 2026-10-24 11:14 +08`；旧写 21/21）
 
 ```text
 PASS ① 带戳的计数 => 绿
@@ -87,12 +93,26 @@ PASS ⑮ 缺 added => rc=2
 PASS ⑯ 坏 sha => rc=2
 PASS ⑰ 重复条目 => rc=2
 PASS ⑱ 枚举只用 git 跟踪集（未跟踪的裸计数不扫；改 os.walk 即红）
-selftest: 21/21 passed
+PASS ⑲ 段内合法声明（祖先 + 时间吻合 + 声明在前 + blame 新近）=> INFO
+PASS ⑳ 合法但非祖先的 commit => 仍红（只能由 (a) 拒）
+PASS ⑳b 不存在的对象名 => 仍红（is_ancestor GateError，fail-closed）
+PASS ㉑ 声明时间与 commit 时间差 > --paragraph-tol => 仍红
+PASS ㉒ 声明出现在命中之后 => 仍红
+PASS ㉓ 声明行 3 天后才提交（blame 新近性不符）=> 仍红
+PASS ㉔ 段外裸计数仍红（声明不赦免全文）
+PASS ㉕ 3 空格缩进的 ATX 标题也切段（上一节声明不豁免下一节）
+PASS ㉖ setext 标题（===/---）也切段（上一节声明不豁免下一节）
+PASS ㉗ 围栏内 `# 注释` 不切段（段内声明仍降级，无假红）
+PASS ㉘ 同一行两个 sha：先出现的非祖先不吞掉后面合法的祖先声明 => INFO
+selftest: 32/32 passed
 ```
 
 ## 5. 六颗牙（串行；还原一律 `git checkout --`，索引即还原源）
 
-在打补丁后的 head 上实跑，基线 `--selftest` = **21/21**：
+> 本节是**第①轮返工的历史记录**：当时 `--selftest` 共 21 条，下列 `x/21` 均为该时点实测输出；
+> 本轮未重跑这六颗牙。现行总数 **32/32**（§4）；@ `917376a45` 上的现行值以 §4 为准，段落轮的牙见 §12.3。
+
+在打补丁后的 head 上实跑，基线 `--selftest` = **21/21（当时；现行 32/32，见 §4）**：
 
 ```text
 # (a) 判据恒绿：missing = [] ⇒ ②③④⑦⑨⑩⑪b 红
@@ -120,7 +140,7 @@ selftest: 20/21 passed      # rc=1
 ```
 
 **六颗牙串行**执行；还原一律 `git checkout -- tools/hygiene/dynamic_count_stamp_gate.py`
-（改前先 `git add`，索引即还原源），每颗还原后立即复跑 21/21。还原后全量扫 docs 也 rc=0。
+（改前先 `git add`，索引即还原源），每颗还原后立即复跑 **21/21（当时总数）**。还原后全量扫 docs 也 rc=0。
 (f) 是 M1 的原始变异：补牙前它 **20/20 全绿**（无牙），补 ⑱ 后才红。
 
 ## 6. 首次接入分类（冒烟，本轮不清零）
@@ -241,9 +261,10 @@ selftest: 20/21 passed      # rc=1
 
 ### 6.2 返工后（base `e9d00c6b3`，现行判据）
 
-全量扫 **140 个 markdown → 88 处命中 / 87 条唯一行 / 28 个文件**（同一行重复出现时指纹相同、合并为一条：
+全量扫 **140 个 markdown → 88 处命中 / 87 条唯一行 / 28 个文件**（**时点值**：`e9d00c6b3` 的 139 个 `.md` + 本报告 = 140，
+即 head `7e27de47a` 的树；现行 144 个，见 §8；同一行重复出现时指纹相同、合并为一条：
 `docs/rewrite-remaining-inventory-20261022.md` 的 recon `tracked` 摘录在 `:215` 与 `:1102` 各命中一次），
-allow-list **87 条全部压到现行命中**（`rot=0`，rc=0）。与 §6.1（`3738ad234`）的差异有三处来源：
+allow-list **87 条全部压到现行命中**（`rot=0`，rc=0；**时点值**——现行条数见 §3，2026-10-24 已为 88）。与 §6.1（`3738ad234`）的差异有三处来源：
 
 1. **引述豁免**：`docs/docs-state-drift-sweep-20261024.md:142`（「可跑场景 16」是引述）由红转绿，对应条目撤出 →
    命中 85→84、文件面 -1。类别计数里 `runnable` 从 1 变成 0。
@@ -255,7 +276,7 @@ allow-list **87 条全部压到现行命中**（`rot=0`，rc=0）。与 §6.1（
    的逐字输出）；**同一行内容变化并下移** —— minimap 摘录由 `:727` 挪到 `:1028`，白名单按新指纹重登
    （`ed38b665…` → `c9626857…`；旧指纹未被任何命中压到，本门会先报 `rot`）。
 
-净结果 84 + 3 + 1 = **88 处 / 87 行 / 28 文件**，87 条 allow-list 一一对应。分类（按类别）：
+净结果 84 + 3 + 1 = **88 处 / 87 行 / 28 文件**，87 条 allow-list 一一对应（时点值）。分类（按类别）：
 `board` 37 / `board`+`r-cards` 19 / `tracked` 23 / `fail` 6 / `r-cards` 2 / `fail`+`r-cards` 1 / `runnable` 0。
 
 > `docs/rewrite-remaining-inventory-20261022.md` 是**另一张卡的写集**，本卡不改它；该条目按当前行指纹登记，
@@ -277,8 +298,8 @@ allow-list **87 条全部压到现行命中**（`rot=0`，rc=0）。与 §6.1（
 ## 8. 复算命令
 
 ```sh
-python -I tools/hygiene/dynamic_count_stamp_gate.py --selftest          # 21/21
-python -I tools/hygiene/dynamic_count_stamp_gate.py                     # 全量 docs（当前应为 OK：140 文件 / 0 缺戳）
+python -I tools/hygiene/dynamic_count_stamp_gate.py --selftest          # 32/32（旧 21/21，见 §4；`@ 917376a45 @ 2026-10-24 11:14 +08`）
+python -I tools/hygiene/dynamic_count_stamp_gate.py                     # 全量 docs（当前 OK：144 个 markdown / 0 缺戳；`@ 917376a45 @ 2026-10-24 11:14 +08`）
 python -I tools/hygiene/dynamic_count_stamp_gate.py --path docs/dynamic-count-stamp-gate-20261024.md   # 缩窄到单个文件
 python -I tools/hygiene/dynamic_count_stamp_gate.py --path docs/zz_probe # 缩窄到空/未跟踪目录：0 文件、rc=0（不再误报 rot）
 python -I tools/hygiene/dynamic_count_stamp_gate.py --no-stamp-check     # 打印「已跳过」并 rc=0
@@ -300,7 +321,7 @@ python -I tools/hygiene/dynamic_count_stamp_gate.py --fingerprint docs/foo.md:12
 selftest ④ 用的是**空 allow-list**，正好盖住了这条路径。
 
 修法：复用骨架的 `allowlist_in_scope()`（本轮把它从 `stale_pointer_gate.scan()` 的内联块提为模块级函数，
-骨架行为不变、30/30 selftest 仍过），rot 只取「扫描根 == 条目 path」或「条目 path 在扫描根下」的条目。
+骨架行为不变、30/30 selftest 仍过（当时；骨架现为 31/31）），rot 只取「扫描根 == 条目 path」或「条目 path 在扫描根下」的条目。
 
 实测对照（同一 checkout、同一 allow-list）：
 
@@ -418,7 +439,7 @@ master 已从评审 base `dc6e96995` 前进到 `5634ec03d`（B 表审计合入�
 为什么必须 rebase 而不能只在旧 base 上加条目：这两行在旧 base 上不存在（`:464` 是 B 表审计新增；
 minimap 行在旧 base 是 `:727`），只加条目会立刻被判 `rot`。
 
-实测（rebase 后）：
+实测（rebase 到 `e9d00c6b3` 后，树 = head `7e27de47a`；下面输出里的 **140 个 markdown 是时点值**，现行 144 见 §8）：
 
 ```text
 $ python -I tools/hygiene/dynamic_count_stamp_gate.py --fingerprint docs/rewrite-remaining-inventory-20261022.md:464
@@ -430,7 +451,7 @@ dynamic-count gate: OK（0 缺戳；扫描 140 个 markdown，path=docs，max-ga
 rc=0
 ```
 
-空 allow-list 重算（与 §6.2 同口径）：**88 处命中 / 87 唯一 / 28 文件**；87 条 allow-list 全部 `used`、`rot=0`。
+空 allow-list 重算（与 §6.2 同口径）：**88 处命中 / 87 唯一 / 28 文件**；87 条 allow-list 全部 `used`、`rot=0`（时点值）。
 
 ### 10.2 M1（Minor）「只用 git 跟踪集」此前没有牙
 
@@ -446,7 +467,7 @@ rc=0
 
 本卡第②轮交付 head `7e27de47a`（base `e9d00c6b3`）之后、复核跑之前，master 又前进两次：
 `af1f2708b`（board merged 列合入，09:58:49）与 `eb9137615`（lessons 合入，10:00:00）。在
-`walgit/master = eb9137615` 上造合并树，本门报 `FAIL (5 缺戳 / 0 rot; 扫描 142 个 markdown)`，
+`walgit/master = eb9137615` 上造合并树，本门报 `FAIL (5 缺戳 / 0 rot; 扫描 142 个 markdown)`（**时点值**：`eb9137615` 的 141 个 `.md` + 本报告 = 142；现行 144 见 §8），
 5 处全在 `docs/board-merged-column-20261024.md`（`:40,41,42,45,49`）—— 该文件是**另一张卡的写集**，
 本卡不改它，按下表登记 allow-list；`stale_pointer_gate` 仍 rc=0。
 
@@ -460,7 +481,7 @@ rc=0
 
 这 5 行同属该文件的「加列前/加列后」实时对比表，该段已声明两次 board 调用间隔 2.26s 内的逐字实测；
 行内插戳会破坏贴出的输出与命令的逐字可核性。同时按 R3-2 订正 §3 的 allow-list 条数（此前写 86，
-与 §6.2/§10 的 87 自相矛盾；本轮再 +5 ⇒ 92）。
+与 §6.2/§10 的 87 自相矛盾；本轮再 +5 ⇒ 92；时点值，现行见 §3）。
 
 实测（rebase 到 `walgit/master = eb9137615` 后）：
 
@@ -553,6 +574,10 @@ selftest: 31/32 passed   # rc=1
 ```
 
 还原后 `--selftest` 32/32；全量扫 docs：`OK（0 缺戳；3 条段落声明降级 INFO；扫描 144 个 markdown）`，rc=0。
+（本卡撤掉 §12.4 的 1259 冗余条目后为 **4 条 INFO**；base `917376a45` 为 3 条，`@ 9722222bd @ 2026-10-24 11:16 +08` 为 4 条。）
+  这 4 条是**本卡树上的值**，不是一个可当「现行」用的计数 —— master 每合入一份带段落声明的文档它就涨
+  （§11 结构性观察同一机制）：本卡返工 base `@ 89230c1fc @ 2026-10-24 11:33 +08` 实测已是 **5 条**
+  （该树仍带 89 条旧 allow-list，1259 还被条目直接压住），撤掉 1259 后再 +1 —— 本卡交付树实跑为 **6 条**。
 （旧文写的「祖先恒真 ⇒ ㉑ 红」是错的：㉑ 的 sha 本身就是祖先，它的红来自 (b)；本轮已订正。）
 
 ### 12.4 仍抓不到什么（残余风险）
@@ -563,11 +588,23 @@ selftest: 31/32 passed   # rc=1
   「这个 sha 在声称时间点是祖先、且声明是当时写的」，**不能证明计数确实取于该时点**。
   ⇒ 声明行仍建议**人工复核**：看声明的时间与同段数字是否与当时报告/命令输出对得上；
   R 卡/看板类数字再抽查一次 `goal_gate` 或 `walgit collab board` 的当次输出。
-- **标题行上的计数永不豁免**（返工登记 M-8）：命中若落在标题行，`paragraph_bounds` 把段首定成命中行
-  自身，检查 (c) 要求 `position < hit_line`，因此「## 已完成 277」这类行无法用同段声明降级。
-  方向是安全的（不会放行裸计数），代价是白名单压力——`docs/rewrite-remaining-inventory-20261022.md`
-  的 215/464/1102/1259 四条因此保留在 allow-list。若日后要修，应另开卡并给出「标题行计数到底属于
-  哪一段」的语义定义，而不是简单放宽。
+- **M-8 例证已重写（2026-10-24 本卡实测，`@ 917376a45 @ 2026-10-24 11:14 +08`）**：旧文称 `docs/rewrite-remaining-inventory-20261022.md`
+  的 215/464/1102/1259 四条都因「标题行永不豁免」而只能留在 allow-list。空 allow-list 实跑是
+  **88 red / 5 INFO**，四条其实分属三种情形：
+  - **1102 / 1259 已降级为 INFO**：分别由同段声明 `L1101` / `L1258`（`6d79be4da @ 2026-10-23T07:31+08:00`）
+    就近匹配；围栏内的 `#` 注释行按 §12.1 的 CommonMark 收窄**不当作标题**。
+  - **215 仍红**：所在段（§3.1）的声明在 `L218/L219`，**位于命中行之后** ⇒ 检查 (c) `position < hit_line`
+    不过；实测 `NOTE … :215 L218: 声明在命中行之后（6d79be4da）`。
+  - **464 仍红**：所在段（§3.2.2 的 fenced 命令输出块）**没有「sha + 时间」的声明候选**——行内只有
+    「首轮快照」字样与 `L460` 的 sha，缺时间戳，故该行连 NOTE 都没有；属 §12.2 第 3 类「段内无从判定」，
+    既不是「标题行」也不是「声明在后」。
+  ⇒ 「标题行永不豁免」这一机制仍成立（方向安全），但它**不是这四条的成因**；旧例证由此作废。
+- **白名单处置（89 → 88，未到 87）**：本卡撤掉 `docs/rewrite-remaining-inventory-20261022.md:1259`
+  的条目（指纹 `0b97dcfc…`）——该行现在由段落声明降级，条目冗余；撤后全量门 rc=0，INFO 由 3 条变
+  4 条（base `917376a45` 为 3 条 → `@ 9722222bd @ 2026-10-24 11:16 +08` 为 4 条；这是本卡树上的值，
+  随 master 前进会增长，见 §12.3）。**没有撤到 87**：`1102` 与 `215` 的整行内容逐字相同，共用指纹 `4ce3608f…`，撤掉该条
+  会让 215 失去抑制 ⇒ 实测 rc=1、215 报缺戳；`464` 的条目（`d4de3f85…`）也仍必需（段内无声明）。
+  所以 N-1 的「89→87」只成立一半：能安全撤的只有 1259 一条。
 - **围栏内的计数仍会扫**：本门不豁免代码块（里面常是命令输出/JSON 摘录，正好是最该冻结的数字），
   这类行继续走 allow-list；围栏只用于**标题识别**，不用于计数豁免。
 - **Markdown 边界仍不完整**：blockquote 内的标题、表格行之间的 setext 歧义未建模；
