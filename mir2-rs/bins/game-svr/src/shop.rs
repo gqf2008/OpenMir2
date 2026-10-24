@@ -32,10 +32,11 @@
 //!   升级差量由 [`crate::itemwire::encode_client_item`] 统一叠加。详情列表照 oracle
 //!   （`Merchant.cs:1327`）**不**取自定义名（模板名），仓库列表照 oracle（`BaseObject.cs:1613`）取。
 //!
+//! # 已落地（卡 `openmir2-merchant-script-load`）
+//!
+//! `Market_Def` 商人脚本装载（`Merchant.LoadMerchantScript`，`Merchant.cs:1096-1102`；`crates/envir::MapLoader::load_merchants_loaded` 在装载期一次解析，`boFlag=true`）与 `GotoLable` 执行（`~@repair`/`~@s_repair`、`~@upgradenow_*`、`~@getbackupgnow_*`）：[`RepairResult::goto_label`] / [`UpgradeOutcome::goto_label`] 只回**标签**（本模块是纯函数接缝，不跑引擎），宿主 `lib.rs` 的 `handle_shop_cmd` 用 `MerchantScriptBook::goto_label` 执行并产出 `SM_MERCHANTSAY(643)` 说词帧 + 脚本帧。
+//!
 //! # 本片未做（其余，登记）
-//! - `Market_Def` 商人脚本执行 + `GotoLable("~@repair")`（`Merchant.cs:1652/1659`）：本宿主
-//!   尚未装载商人脚本（`Merchant.LoadScriptFile`，`Merchant.cs:1089`）⇒ [`RepairResult::goto_label`]
-//!   只回标签、由宿主登记「脚本未装载 ⇒ 无后续说词/帧」，见 `lib.rs` 的 `handle_shop_cmd`。
 //! - 城堡税 `Castle.IncRateGold`/`CastleMgr.IncRateGold`（`Merchant.cs:1249/1384/1638`）：
 //!   ⑧ 家族未落地 ⇒ **条件照抄**、效果无目标对象（登记）。
 //!
@@ -44,7 +45,7 @@
 //!    （`Merchant.cs:1612`）：本模块产出 `SM_MERCHANTSAY(643)` 帧（走 [`RepairResult::sent_to_user`] 字段；
 //!    尾 = `ChrName + '/' + sMsg`，锚 `NormNpc.cs:1613-1616` + `PlayObject.Message.cs:1722-1724`）。
 //! 2. 城堡税：条件照抄（`CastleMerchant || Config.GetAllNpcTax`），效果登记（无城堡对象）。
-//! 3. `GotoLable(REPAIROK/SUPERREPAIROK)`：回 [`RepairResult::goto_label`]，宿主登记未装载脚本。
+//! 3. `GotoLable(REPAIROK/SUPERREPAIROK)`：回 [`RepairResult::goto_label`]，宿主执行（卡 `openmir2-merchant-script-load`）。
 //!
 //! 另 reviewer-5 的 **O-1**：`ScriptLable` 与 `@s_repair` 的比较是 `string.Compare(..., OrdinalIgnoreCase)`，
 //! 本模块用 [`eq_label`]（ASCII 大小写不敏感）同口径。
@@ -1167,8 +1168,9 @@ pub fn query_repair_cost(m: &MerchantView, item: &mut BagItem, ctx: &ShopContext
 /// `CM_USERREPAIRITEM` 的结果。
 pub struct RepairResult {
     pub frames: Vec<ShopFrame>,
-    /// 修理成功时 oracle `GotoLable(REPAIROK/SUPERREPAIROK)` 的标签（本宿主未装载 `Market_Def`
-    /// ⇒ 只回标签，由宿主登记）。
+    /// 修理成功时 oracle `GotoLable(REPAIROK/SUPERREPAIROK)` 的标签（`Merchant.cs:1652/1659`）。
+    /// 本模块只回**标签**；宿主 `handle_shop_cmd` 在 `Merchant.ScriptList` 上执行它并出说词帧
+    /// （卡 `openmir2-merchant-script-load`）。
     pub goto_label: Option<&'static str>,
     /// `SendMsgToUser`（`@Superrepairfail` 支）的 `SM_MERCHANTSAY` 帧若产出，则在此。
     pub sent_to_user: Option<ShopFrame>,
@@ -1325,14 +1327,15 @@ pub struct UpgradeOutcome {
     /// 出帧（发送序；宿主按 vector 顺序直发，见 `emit_shop_frames`）。
     ///
     /// 提交成功 = `SM_DELITEM(202)` → `SM_ABILITY(52)` → `SM_FEATURECHANGED(41)` →
-    /// `SM_GOLDCHANGED(653)` → `SM_DELITEMS(709)`。say 帧**不在**这里：`Market_Def`
-    /// 商人脚本未装载（T-47 ③），`goto_label` 由宿主登记。
+    /// `SM_GOLDCHANGED(653)` → `SM_DELITEMS(709)`。say 帧**不在**这里：它们由宿主在
+    /// `GotoLable(goto_label)` 执行后按 `MsgQueue` 优先级排水（卡 `openmir2-merchant-script-load`）。
     ///
     /// **657**：本接缝只回上面 5 帧；oracle `RecalcAbilitys` 尾段的 `SM_CHARSTATUSCHANGED(657)×2`
     /// （`PlayObject.cs:2874-2876`）由宿主在 `653` 与 `709` 之间按发送序插入，近邻支另行广播
     /// （见 `lib.rs::charstatuschanged_shop_frame` / `broadcast_charstatuschanged_except_self`）。
     pub frames: Vec<ShopFrame>,
-    /// `GotoLable(...)` 的标签名（脚本未装载 ⇒ 不执行，只登记）。
+    /// `GotoLable(...)` 的标签名（`Merchant.cs:538/582/586/600/752/755/758`）。
+    /// 本模块只回**标签**；宿主 `handle_shop_cmd` 在 `Merchant.ScriptList` 上执行并出说词帧。
     pub goto_label: Option<&'static str>,
     /// 本结果对应的宿主动作（`None` = 尚未执行；A5 的接缝标记）。
     pub upgrade_request: Option<UpgradeRequest>,
@@ -1509,7 +1512,8 @@ pub fn lable_is_can_jmp(
 /// （`RemoveEmptyEntries`），**取第二段**为标签（`<返回/@main>` ⇒ `@main`）。
 ///
 /// 返回**去重保序**的标签表（`CanJmpScriptLableMap.Clear()` 后的新表）。
-/// 本卡只提供机制；宿主说词链路（`Market_Def` 装载，T-47 ③）落地后由 say 生产者调用。
+/// 生产调用点：宿主 `emit_merchant_goto_result` 对每条说词调用（`Market_Def` 脚本已装载，
+/// 卡 `openmir2-merchant-script-load`）。
 #[must_use]
 pub fn get_script_label(say_text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
