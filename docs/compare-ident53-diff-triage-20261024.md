@@ -5,18 +5,27 @@ owner：openmir2-worker-74 · 分支：`card/compare-ident53-diff-triage`
 （base = walgit/master `fbd2fa306`）· 2026-10-24
 分诊结论已先签入卡 comment（oid `fa6e9de712eb416f508c5c1b1a5cd3b36715ae5e`）。
 
+> **v2 更正（review `bab63106f1`，worker-10，F1）**：tag ×1 的成因**不是「判不准」**——
+> 原「rust 第 2 帧 15 按现源码不可静态推演」被证伪；成因已静态定位为**投影/实体双份 MP
+> 的实现 bug**（lib.rs:10426 只扣会话投影不镜像 entity.mp + lib.rs:18499 P21 每 tick
+> 无条件 `sg.state.wabil.mp = e.mp` 刷回，entity.mp 无生产写点恒 17），15/15 帧 + 终库 17
+> 可从现源码逐位推出。tier=R 依据相应改为「**修复**触数值+持久化 ⇒ 修复验收必须真机窗口」，
+> window_required 用途从「复跑定位成因」改为「**复拍验证修复**」；MP 镜像修复另卡。本节 §2.2
+> 原文以删除线保留判读过程，供审计。
+
 ## 0. 结论摘要
 
 | # | frame_index | ident | kind/field | oracle | rust | 分诊 |
 |---|---|---|---|---|---|---|
 | 1 | 30 | 53 | body_len | 0 | 16 | **D-9 故意偏离 + 窗口 pin 丢失**（运行环境缺口，非 src 缺陷） |
-| 2 | 32 | 53 | head tag | 13 | 15 | **MP 数值/时序分歧**（tier=R，窗口复跑定位） |
+| 2 | 32 | 53 | head tag | 13 | 15 | **P21 投影刷回覆盖会话扣减（实现 bug，静态可定位，lib.rs:18499+10426）**；修复另卡（R，窗口复拍验证） |
 | 3 | 32 | 53 | body_len | 0 | 16 | 同 #1 |
 
 处置：**不动实现、不碰 `rules.json`**（53 条目 worker-58 起草 `action=compare` fail-closed，
 该红仍红——本卡没有也不许把它掩掉/ignore）；差异表归档本报告 + 卡 comment；
 `selftest_impl.py` 新增 ⑦ 断言把 3 处 diff 的 anatomy 逐处钉死（任何漂移/掩码化必红）。
 `src/**`、C#、场景 JSON、`rules.json`、`card_window.py` 零改动。
+（tag ×1 成因判读的更正见上文 v2 框与 §2.2；自我更正 comment 在线程链上。）
 
 ## 1. ① 取证
 
@@ -93,21 +102,29 @@ rust 行 2026-10-24 已回存 MP=17），且 rust 入图日志
   且违反客户端冻结硬约束）。rules.json 53 条目按设计 fail-closed 该红仍红。
   修属窗口工具链（env 转发/WMI 适配），不在本卡写集，建议另开卡。
 
-### 2.2 head tag ×1（#2）＝ MP 数值/时序分歧 ⇒ tier=R
+### 2.2 head tag ×1（#2）＝ P21 投影刷回覆盖会话扣减（实现 bug，静态可定位）⇒ tier=R
 
 - oracle 侧与静态模型**逐位吻合**：基线 MP=17 → cast1 扣 2 发 15 → cast2 扣 2 发 13；
   窗口内无回复可证：`SpellFillTime=800`（oracle Server.conf 实值）+ `SpellTick += 2/50ms Run`
   ⇒ 2.3s 间隙 tick ≈ 155 ≪ 800，一次回复都不会发生。
-- rust 侧**第 1 帧吻合**（15 = 17−2），**第 2 帧不符**：按现 master 源码（wrapper 先扣后发 +
-  stamina 模型同上）cast 2 应发 13，实发 15；且软关存档把 **MP=17（基线值）** 写回
-  （`characters_ablity` rust 行 ModifyTime=2026-10-24）。三事实（15/15 帧 + 终库 17）
-  与现源码静态推演（13/13 + 终库 13）矛盾，run1 二进制又确含 wrapper 代码
-  （18c7ffe56 特征串「无地面会话」在 exe 内）⇒ **按现源码不可静态定位成因**
-  （可能面：会话/地面双份 WAbil 同步、tick 时序、或窗口二进制与 head 的隐性偏差）。
-- 触**数值（MP 扣减/回复/持久化）+ 时序** ⇒ 按判级政策属 R；机制判不准 ⇒ 「判不准按 R」。
-- **处置**：不动实现；差异归档（本报告 §1.5 + 卡 comment）；窗口复跑定位
-  （前置：修 pin 转发链、二进制与 head 对齐、复跑后核 53 序列与终库 MP）。
-  该项 `window_required: true`。
+- rust 侧成因已静态定位（review `bab63106f1` F1，本卡作者复核三条引用属实）——
+  **wrapper 只扣会话投影、P21 每 tick 用实体刷回投影 ⇒ 第二份 MP**：
+  ① `lib.rs:10426` 扣的是 `sg.state.wabil.mp`（会话投影），不镜像 `entity.mp`；
+    同函数注释 `:10388-10395` 明文登记过该风险（「否则会出现第二份 MP」）；
+  ② `lib.rs:18498-18501` P21（`drain_player_need_recheck_with_magic`，sim_loop 每 tick
+    对每个在线会话）无条件 `sg.state.wabil.hp/mp = e.hp/mp`，而 `entity.mp` 无生产写点
+    （唯一写点毒伤 `buff::damage_health` 的唯一调用方 `make_posion` 无生产调用者）⇒ 恒 17；
+  ③ 逐位推演：cast1(t=2241) 投影 17→15 发 tag=15 → 下一 tick P21 刷回 17 →
+    cast2(t=4557) 再 17→15 发 tag=15 → 软关前最后一次 P21 刷回 17 →
+    `build_save_record`（lib.rs:8671 读投影）落库 MP=17——与夹具 tag 15/15、
+    rust 库行 MP=17、t_ms 2241/4557 **逐位吻合**。
+  原判读（「第 2 帧与静态推演不符 ⇒ 判不准」）的静态模型漏了 ② 的刷回环节，已被证伪；
+  ~~原 §2.2 第 2-3 条（不可静态定位成因、可能面清单）作废~~。
+- **tier=R 依据（更正后）**：修复（MP 扣减镜像到实体，或 P21 刷回豁免——方向由修复卡按
+  oracle 单份 `WAbil` 语义论证）触**战斗数值 + 持久化落库**，按判级政策修复验收必须真机窗口；
+  window_required 保持 true，用途 = **复拍验证修复**（成因已定位，窗口不再承担定位职责）。
+- **处置**：不动实现（MP 镜像修复另卡派发）；本卡差异归档（本报告 §1.5 + 卡 comment +
+  线程更正 comment）；窗口前置不变（修 pin 转发链、二进制与 head 对齐）。
 
 ## 3. ③ 牙（均实测、均还原）
 
@@ -141,6 +158,9 @@ rust 行 2026-10-24 已回存 MP=17），且 rust 入图日志
 - 未碰：`rules.json`（53 条目保持 worker-58 草稿原样，`approved_by` 仍 PENDING）、
   `src/**`、C#、场景 JSON、`card_window.py`、fixture（只读 + 变异即还原）。
 - 残留物：`E:/tmp/w74-triage-comment.json`（comment body 中转，可删）。
-- 移交窗口项（非本卡）：① 起栈链 env 转发修复（WMI 适配/`start_mir2_server.ps1`）；
-  ② spell_cast 复跑（pin 生效）后 53 应余 tag 1 处，再按其结果定位 MP 分歧成因；
+- 移交项（非本卡）：① 起栈链 env 转发修复（WMI 适配/`start_mir2_server.ps1`）；
+  ② **MP 镜像修复卡**（R、window_required——`lib.rs:10426+18499` 双份 MP，本报告 §2.2），
+  落地后 spell_cast 复拍：pin 生效 + 二进制对齐 head，验证 53 序列与终库 MP；
   ③ rules.json 53 条目的 owner 复核（PENDING）。
+  本报告 v2 按 review `bab63106f1`（request_changes，仅 F1 记录性更正）修订；
+  断言与门禁未动（⑦ 元组不变、296/296 保持）。

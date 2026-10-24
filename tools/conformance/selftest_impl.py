@@ -2035,13 +2035,17 @@ class Selftest(object):
         #   MIR2_CLIENT_ABILITY_LAYOUT=0 在起栈链丢失，game-svr.out.log 自证行
         #   「layout=client-58（<unset>）」）⇒ rules.json 53 条目 fail-closed 该红仍红，
         #   修属窗口工具链（pin 转发），不许登记成掩码/ignore 消红；
-        #   (frame_index 32, head tag, oracle 13 vs rust 15) = MP 数值/时序分歧
-        #   （基线 MP=17 双侧证实：dbsnap + 入图日志；oracle 17→15→13 与 stamina
-        #   SpellFillTime=800 模型逐位吻合；rust 第 2 帧实发 15 与现 master 静态推演
-        #   不符）⇒ 判不准按 R，待窗口复跑定位。逐字节解剖表与证据链见
+        #   (frame_index 32, head tag, oracle 13 vs rust 15) = MP 投影/实体双份实现 bug
+        #   （成因已静态定位，review bab63106 F1：lib.rs:10426 wrapper 只扣会话投影
+        #   sg.state.wabil.mp 不镜像 entity.mp + lib.rs:18499 P21 每 tick 无条件
+        #   sg.state.wabil.mp = e.mp 刷回，entity.mp 无生产写点恒 17 ⇒ cast1 17→15 发 15
+        #   → 刷回 17 → cast2 17→15 发 15 → 落库 17，与夹具 15/15/17 逐位吻合；
+        #   基线 MP=17 双侧证实：dbsnap + 入图日志；oracle 17→15→13 与 stamina
+        #   SpellFillTime=800 模型逐位吻合）⇒ 修复触数值+持久化归 R，MP 镜像修复另卡，
+        #   窗口复拍验证。逐字节解剖表与证据链见
         #   docs/compare-ident53-diff-triage-20261024.md；fixture/rules 任一漂移或
-        #   掩码化都会让本断言红。若将来窗口复跑（pin 生效 + MP 分歧定位）后重新冻结
-        #   fixture，由该卡按 ⑤/⑥ 同款义务更新这里。
+        #   掩码化都会让本断言红。修复卡落地并重新冻结 fixture 后，按 ⑤/⑥ 同款义务
+        #   更新这里。
         anatomy = sorted(
             (d.get("frame_index"), d.get("kind"), d.get("field"),
              d.get("oracle"), d.get("rust"))
