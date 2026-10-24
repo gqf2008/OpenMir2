@@ -76,7 +76,7 @@ merged_not_closed 1 / 其它需人工 0 / 未开工或未合并 1（不计缺口
 - 其它桶具名（便于对账）：
   - `merged_not_closed` 1 = `openmir2-gm-batch-5b-cross-server`（board=受阻，G11 跨服依赖；已有 owner 决策页）。
   - `window_required_unmerged` 3 = `openmir2-gm-batch-5-guild-castle` / `openmir2-script-handler-msgqueue`（在飞）/ `openmir2-window-gate-two-runs`（受阻）。
-  - `not_merged` 1 = `openmir2-castle-official-actions`（in-progress，未开工/未合并 ⇒ 不计缺口）。
+  - `not_merged` 1 = `openmir2-castle-official-actions`（**截至 `1c605ca4a` 快照**：当时尚未合并 ⇒ 不计缺口；2026-10-25 订正：该卡已合并 `a62faeb1c`，见 §8）。
 - 卡面 notes 写 `window_required 145（另未合并 2）` 且无「未开工或未合并」行；本次输出为 `145（另未合并 3）`
   + `not_merged 1`。两时点 R 总数同为 213 但分项不同（有卡在桶间移动/新卡插入）⇒ **本文以本次同一时刻的输出为准**，
   不对旧快照作归因；这不影响 6 张卡的登记真实性。
@@ -147,3 +147,17 @@ grep -c 'CM_NEWCHR\|newchr' tools/probe/mir2_probe.py        # 期望 0
 - 本卡纯文档：`git diff --check <base> <head>` rc=0；7 项卫生门禁（`stale_pointer` 用 `--ref master`）+ helper selftest 见 patch body；未跑 cargo（无代码改动）。
 - 残留：无临时物；`E:/MirServer/**` 只读（`Castle/List.txt` 由运行中的 C# GameSrv 每 10 分钟重写、内容恒 `0\r\n1\r\n`，与本卡无关）。
 - 本文**不移动任何卡片、不改任何他人条目**；F1 的补登由卡片 owner 执行。
+
+## 8. 后续变更（时间边界，**不改写上文历史数字**）
+
+> 上文 §2/§4 的一切桶计数与「未合并/未开工」判定都是 **`1c605ca4a` 时点值**；
+> 本节只记录其后发生的事实，供复算者对齐，不替换上面的快照。
+
+- **2026-10-25（截至 `a62faeb1c`）**：§4 具名的两卡状态已变——
+  `openmir2-castle-official-actions` 已合并 `a62faeb1c`（R，window_required ⇒ 仍 in-progress 等窗口）；
+  `openmir2-script-handler-msgqueue` 已合并 `4b9ce64ca`（R ⇒ 仍 in-progress）。
+  ⇒ 若以 `a62faeb1c` 重跑 §6 的逐卡分类，这两张会从 `not_merged` / `window_required_unmerged` 移入 `window_required`；
+  §4 的 213 分项数字随之漂移，属**活量**，复算请重跑命令而不是引用本表。
+- **F1 后续**：T-127 片 `merge_result` 的占位 oid 已由 orchestrator 的 correction comment 补齐
+  （真实 merge = `263e77d7e`，见该卡线程）；本审计原文的 F1 判定不变（登记卫生项，属历史事实）。
+- 本节不含任何「当前状态」断言；需要现状请直接 `walgit collab board` / `goal_gate`。
