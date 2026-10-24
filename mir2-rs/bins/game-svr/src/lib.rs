@@ -50048,14 +50048,7 @@ SendRefMsgRange=15
         //     G-A flush 载荷按 oracle 出队时刻读投影：Param=HP=15 / Tag=MP=18。
         let mut slots = game_svr::healthspell::HealthSpellSlots::new();
         drain_recovery(&mut ground_sessions, &mut world, &mut slots);
-        flush_healthspell_slots(
-            &mut slots,
-            &world,
-            &online,
-            &ground_sessions,
-            &gates,
-            8,
-        );
+        flush_healthspell_slots(&mut slots, &world, &online, &ground_sessions, &gates, 8);
         let f2 = drain_frames(&mut rx);
         assert_eq!(
             tags_53(&f2),
@@ -50070,11 +50063,13 @@ SendRefMsgRange=15
         assert_eq!(ground_sessions["caster"].state.wabil.hp, 15);
         assert_eq!(ground_sessions["caster"].state.wabil.mp, 18);
         assert_eq!(
-            world.entities.get(caster).expect("实体在图").hp, 15,
+            world.entities.get(caster).expect("实体在图").hp,
+            15,
             "hp 侧镜像进实体（单删 e.hp ⇒ P21 擦回 10 ⇒ 牙③红）"
         );
         assert_eq!(
-            world.entities.get(caster).expect("实体在图").mp, 18,
+            world.entities.get(caster).expect("实体在图").mp,
+            18,
             "mp 侧镜像进实体（单删镜像块 ⇒ P21 擦回 15 ⇒ 牙②红）"
         );
 
@@ -50119,11 +50114,13 @@ SendRefMsgRange=15
         let sg = ground_sessions.get("caster").expect("地面会话");
         let rec = build_save_record(saved, "caster", &world, sg, None);
         assert_eq!(
-            rec.data.abil.as_ref().expect("abil").hp, 15,
+            rec.data.abil.as_ref().expect("abil").hp,
+            15,
             "存档 HP=15（修复前落库 10）"
         );
         assert_eq!(
-            rec.data.abil.as_ref().expect("abil").mp, 16,
+            rec.data.abil.as_ref().expect("abil").mp,
+            16,
             "存档 MP=16（修复前落库 13）"
         );
     }
