@@ -407,15 +407,22 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
   **不存在「所有场景都用 `--profile alt`」**：`spell_cast` 在 `alt` 下**加载期就 rc=2**
   （实测原文：`要求 magic 夹具，但 profile alt 未声明 magic 段`）；`combat_hit` / `combat_strike` 是封存场景，
   任何 profile 都 rc=2 `BLOCKED`（实测）。`--var` 可重复、两侧**原样**透传（实测 `--var npc_actor=12345`
-  同时出现在两侧 probe 命令行）；非法形式（缺 `=`）**加载期** rc=2 且点名。
+  同时出现在两侧 probe 命令行）；非法形式（缺 `=` / 空名 / 空值 / 同名不同值）**加载期** rc=2 且点名。
+  **口径**：`--var` 只**覆盖场景已声明**的变量（不新增变量）；值必须来自本次参数发现/会话，
+  **不得沿用 `params` 旧默认值**（如 `dice_chain` 的 `npc_actor=119` 是旧抓包值）；两侧同值 ≠ 可复用。
   **注意 `csharp-default` 的定位是「核对生产库守卫」，不是「跑场景的默认 profile」**：带 `placement` 的
   5 个场景（`upgrade_retrieve` / `equip_struck_save` / `bag_equip` / `eat_item` / `npc_script_chain`）
   在它下面 `--dry-run` 即 rc=2（设计内 fail-closed）。要预览这 5 个，用 `--profile window-testdb`（§1.9，
   **仅测试库，绝不可用于生产**）；**今天它与 `alt` 等价**（同一份深拷贝 + 把 `alt` 里本就相同的
   C# 库名再显式写一遍），选哪个都行。
 - **本节点到名字的场景，前置如下**（其余场景以场景 JSON 的 `requires` / `inventory` / `required` 为准，
-  全量枚举见 `docs/window-batch-plan-20261023.md` §7.4 @ `81ecc0d28`：**12 行 / 18 场景**；
-  能不能跑的矩阵见 `docs/window-batch-rehearsal-20261024.md`：**18 可跑 / 2 blocked / 0 假绿**——本文不复写矩阵）：
+  全量枚举见 `docs/window-batch-plan-20261023.md` §7.4 @ `81ecc0d28`：**11 行 / 17 场景**；
+  能不能跑的矩阵见 `docs/window-batch-rehearsal-20261024.md`：**17 可跑 / 3 blocked / 0 假绿**——本文不复写矩阵）：
+  > **2026-10-25 勾注**：`pickup_item` 已封存（T-19/T-25 ⇒ 地面结构性无物，见 batch-plan §7.4 勾注）⇒
+  > 场景数 **18→17**；run-3 执行清单 = `tools/window/run3-scenarios.json`（17 场景 + `tools/window/run_batch.sh`）。
+  > **CLEARMAPMON 两处脚本**：`Market_Def/任务NPC/武士-0114.txt:145`（T118）与 `老人-1.txt:49`（Q001）
+  > 仍走 host no-op（部署 2 处使用；需实现，建议 R）——真机跑这两张图时**清场不会发生**，
+  > 判据不得假设怪已被清；证据 `docs/clearmapmon-hook-audit-20261025.md`。
 
   | 场景 | 必带前置 | 不满足时（实测） |
   |---|---|---|
@@ -456,6 +463,12 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
 - compare 的帧数/库后态/差异计数在**嵌套 `compare{}`** 里，顶层没有这些字段。
 - 证据包必须齐：`report.json` + `README.txt` + `card-window.json` + 两侧 `frames.ndjson`。缺件时工具 rc=2、comment 记 `UNDECIDABLE`。
 - **`compare_rc` 的 2 是 UNDECIDABLE，不是绿**。
+- **外层 rc 与 `compare_rc` 是两个口径（run-2 误读教训，2026-10-25 勾注）**：
+  - **外层 rc** = `card_window.py` 进程退出码：`0` = 完整 PASS；`2` = 有结论但不通过 / UNDECIDABLE（超时被杀为 `124`/`137`）。它**不区分** FAIL 与 UNDECIDABLE。
+  - **`compare_rc`** = `compare_runs.py` 的结论：`0` = 对拍全绿 / `1` = 抓到真差异（FAIL）/ `2` = 判不了（UNDECIDABLE）。
+  - 读法：外层 rc `0` 只代表 PASS；外层 `2` 必须再看 `compare_rc`（`1`=FAIL、`2`/`null`=UNDECIDABLE）；
+    **绝不能用外层 rc 0 掩盖 `compare_rc` 非 0**。`tools/window/run_batch.sh` 的 `outer_rc` / `compare_rc`
+    双列同此口径（`batch.log` / `batch.jsonl`）。
 
 ## 4. 窗口项本身的自检（跑之前 30 秒）
 
