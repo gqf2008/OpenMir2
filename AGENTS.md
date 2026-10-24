@@ -150,7 +150,7 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 
 1. **工作单元 = 一条线程**：`issue` 必须写清目标、角色、唯一 owner、**机器可判的验收判据**；大任务拆子线程
    （`--related` / `--depends-on`，越界引用会在 thread 视图报 `broken_refs`）。
-2. **改树**：绝不编辑共享检出。`git worktree add .worktrees/<unit> -b <unit> <base>`，本地提交后
+2. **改树**：绝不编辑共享检出。`git worktree add .claude/worktree/<role> -b <unit> <base>`（**worktree 一律建在仓库内 `.claude/worktree/<角色>/`，一个 worktree = 一个身份/角色**；清理 worktree 前必须先备份 `.git/worktrees/<name>/walgit/`——identity/key 在那里，`git worktree remove` 会连带删 admin 目录），本地提交后
    `git push <remote> <branch>`，再补 `--kind patch --base … --head …` 把交付挂到线程上——**评审人读的是 diff/线程，不是聊天**。
 3. **线程协议**：**先读后写**（以上一条 entry 的 oid 作 `--parent`，绝不凭记忆作答）；用 kind 而非散文表达状态
    （`status` / `review` / `merge_result` / `comment`）；`needs-human` 只留给真正需要人的事（授权、优先级、外部输入），
