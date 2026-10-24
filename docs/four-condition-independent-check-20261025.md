@@ -11,8 +11,9 @@
 四条件在本快照上的**机判结果**：① **pass**；② **need_human**（唯一 `need_human` 仍是 `openmir2-gm-batch-5b-cross-server`/G11）；
 ③ **pass**；④ **need_human**（`cargo_test_workspace` 未由我重跑、`master_sync` 因 walgit 500）。
 **另有 4 条与「全部通过」叙事不一致的发现**（§6）：3 条是 goal_gate 的**分桶口径**会把「非严格 R 卡」计入 `closed`
-（含 1 张已降级为 L、1 张无代码改动的分诊卡），1 条是**主源级的台账门红**（`script_host_noop_audit --strict-lines` / `selftest`
-在 master 上 rc=1，根因 = castle-official `778f30a2c` 给 `engine/mod.rs` 插了 13 行却未重钉台账）。
+（含 1 张已降级为 L、1 张无代码改动的分诊卡），1 条是**台账行号基线漂移（数据面）**：语义门 `check` 在 master 上
+**rc=0 GREEN**（168 行台账全部可核：safe 70 / needs_card 96 / covered 2），只有**行号基线**漂移（`--strict-lines` rc=1，
+229 处 +13 漂移）与 `selftest`（其内部断言 strict=0）rc=1；已开卡 `openmir2-ledger-line-baseline-resync`（L，dev-1）重钉。
 
 ## 1. 条件① 脚本派发 100%
 
@@ -73,12 +74,12 @@ merged 未 closed 但已凭登记 PASS：196 张（卫生清单；登记型 PASS
   其后 master 前进 7 笔（`9944d58f1` gamepoint / `b42a8701d` butch / `15ba925dd` runbook / `700d1f701` clearmapmon 场景 /
   `e872fb83c` runbook 修正 / `97eb5365d` probe-assets / `2135f6154` runbatch），逐笔核对 `git diff --name-only <m>^1 <m>`：
   **只有 `b42a8701d` 触及 `mir2-rs/bins/game-svr/src/lib.rs`，且新增的两条都是 `#[cfg(test)] mod tests` 里的 `#[test]`；其余全部是 docs/tools/tests-parity** ⇒ **无生产代码变更**，3237 的结论对该快照后仍具代表性（预计 +2 条测试，未由我复跑）。
-- **但**：仓内另有**台账门** `mir2-rs/tests/parity/coverage/script_host_noop_audit.py`：
-  - `check`（宽容行号）rc=0；
+- **但**：仓内另有台账脚本 `mir2-rs/tests/parity/coverage/script_host_noop_audit.py`——**语义门绿、行号基线红**：
+  - `check`（宽容行号）**rc=0 GREEN：168 行台账全部可核**；
   - **`check --strict-lines` rc=1（229 处不一致）**，形态全部是 `engine/mod.rs` 的 `mod_line` 与 `fn` 声明行**差 +13 行**；
   - **`selftest` rc=1**（其内部断言真台账 strict-lines 必须为 0）。
-  - 根因：`778f30a2c`（castle-official R 卡）给 `engine/mod.rs` 插入 `take_say_abort`（含注释 13 行）**没有重钉台账**
-    （台账最后一次更新是 `4ed9fdf72`）。⇒ 见 §6-D。
+  - 根因：`778f30a2c`（castle-official R 卡）给 `engine/mod.rs` 插入 `take_say_abort` 的行落在**所有锚点之前**（+13 行）
+    **没有重钉台账**（台账最后一次更新是 `4ed9fdf72`）；该提交对 `mod.rs` 共 +24，另 11 行在锚点后、不影响行号。⇒ 见 §6-D。
 
 ## 5. 与两份既有文档对照
 
@@ -106,14 +107,19 @@ merged 未 closed 但已凭登记 PASS：196 张（卫生清单；登记型 PASS
 `openmir2-dualrun-triage-enterworld-frames` 关闭时明写 `code_changed=false`（时序差异、非缺陷）；它作为 R 计入 `closed 12`。
 语义上没问题（分诊卡就应该 closed），但**不能用「closed 12」推断「12 个 R 实现已完成且可验收」**。**建议**同上（在 detail 里单列类型）。
 
-### D. **主源级台账门红**：`script_host_noop_audit --strict-lines` / `selftest` = rc=1
-- 实测：`check` rc=0；`check --strict-lines` **rc=1（229 处）**；`selftest` **rc=1**。
-- 根因：`778f30a2c` 给 `mir2-rs/crates/script/src/engine/mod.rs` 插了 `take_say_abort`（+13 行）**未重钉** `script_host_noop_audit.json`
-  （该 JSON 最后一次更新是 `4ed9fdf72`）；所有 `mod_line` 与 `fn` 声明行都差 **+13**，与插入行数吻合。
+### D. **台账行号基线漂移（数据面）**：语义门 `check` rc=0；`--strict-lines` rc=1（229 处）；`selftest` rc=1
+- 实测：`check`（宽容行号）**rc=0 GREEN——168 行台账全部可核（safe 70 / needs_card 96 / covered 2）**；
+  只有**行号基线**漂移：`check --strict-lines` **rc=1**（首行 `RED: 229 处不一致（strict-lines）`，样例
+  `guild_send_msg mod_line 438 不在 fn 声明行 [451]` ⇒ +13），`selftest`（其内部断言 strict=0）**rc=1**。
+  ⇒ **不是语义门红**：语义/覆盖判据本身全绿，红的是「台账记的行号 vs 源码行号」这一数据面。
+- 根因：`778f30a2c` 给 `mir2-rs/crates/script/src/engine/mod.rs` 插了 `take_say_abort` **但未重钉** `script_host_noop_audit.json`
+  （该 JSON 最后一次更新是 `4ed9fdf72`）；所有 `mod_line` 与 `fn` 声明行都差 **+13**。该提交对 `mod.rs` 共 **+24 行**（三个 hunk）：
+  **13 行在 `:169`**（`ScriptPlayer::take_say_abort`，**所有锚点之前** ⇒ 造成 +13 漂移），另 11 行在 `:1024`/`:1036`
+  （锚点之后，不影响锚点行号）⇒ 与 +13 的漂移量吻合，不矛盾。
 - 影响：goal_gate 的 7 项**不含**这个台账门，所以条件④的机判仍是「绿 5 / 需人工 2」；但多张卡（含 CLEARMAPMON、castle-official 自己）
   把 `check --strict-lines` + `selftest` 写进了 DoD ⇒ **口径不一致**：一项被判据依赖的门在 master 上是红的。
-- **建议**：开一张 L 卡（台账重钉，改 `script_host_noop_audit.json` 的行号，重跑 `check --strict-lines` + `selftest` 至 rc=0）；
-  并决定这个台账门是否要进 goal_gate 的 7 项（若进，当前 master 的条件④会变红）。
+- **处置**：**已开卡 `openmir2-ledger-line-baseline-resync`**（L，dev-1）重钉行号基线，让 `check --strict-lines` + `selftest`
+  回 rc=0；另建议决定这个台账门是否要进 goal_gate 的 7 项（若进，**行号基线重钉期间**条件④会变红）。
 
 ## 7. 复算命令（可直接执行）
 
