@@ -1,0 +1,92 @@
+# .walgit/ci.toml — OpenMir2 declarative gates (card openmir2-ci-gate-declaration, tier=L)
+# Protocol: the walgit *source* repo's docs/D1_CI_PROTOCOL.md (§3.1 validate,
+# §4–§9 run/claim/publish, §8.3 status) — that file does NOT live in this repo.
+# Groups: the protocol has no `group` field — groups are encoded as (a) the name
+# prefixes ``fast-`` / ``rust-`` and (b) two schedules (fast every hour, rust nightly).
+# Run one group with `walgit ci run --once --task fast-<name>`.
+# This file only publishes evidence: it is NOT wired to auto-merge / auto-close.
+
+version = 1
+claim_ttl = "15m"
+timeout = "30m"
+max_attempts = 1
+
+# --- fast group (seconds-level python gates) ---
+[[task]]
+name = "fast-t-reservation"
+command = "python -I tools/whitelist/t_reservation_gate.py check"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "2m"
+
+[[task]]
+name = "fast-conflict-marker"
+command = "python -I tools/hygiene/conflict_marker_gate.py"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "2m"
+
+[[task]]
+name = "fast-stale-pointer"
+command = "python -I -B tools/hygiene/stale_pointer_gate.py"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "3m"
+
+[[task]]
+name = "fast-whitelist-anchor"
+command = "python -I mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "2m"
+
+[[task]]
+name = "fast-m3-registry"
+command = "python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "2m"
+
+[[task]]
+name = "fast-dynamic-count-stamp"
+command = "python -I -B tools/hygiene/dynamic_count_stamp_gate.py"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "2m"
+
+[[task]]
+name = "fast-board-coverage"
+command = "python -I -B tools/hygiene/board_coverage_gate.py --board .walgit/board.toml"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "2m"
+
+# --- rust group (minutes-level; declared sequentially, never parallel:
+#     this host was OOM-killed once when clippy/test ran concurrently) ---
+[[task]]
+name = "rust-fmt"
+command = "cargo fmt --manifest-path mir2-rs/Cargo.toml --all -- --check"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "0 0 3 * * *"
+timeout = "5m"
+
+[[task]]
+name = "rust-clippy"
+command = "cargo clippy --manifest-path mir2-rs/Cargo.toml --workspace --all-targets -- -D warnings"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "0 1 3 * * *"
+timeout = "15m"
+
+[[task]]
+name = "rust-test"
+command = "cargo test --manifest-path mir2-rs/Cargo.toml --workspace"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "0 2 3 * * *"
+timeout = "25m"
+
+[[task]]
+name = "rust-msgcodegen"
+command = "cargo run -q --manifest-path mir2-rs/Cargo.toml -p msgcodegen -- --check"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "0 3 3 * * *"
+timeout = "10m"
