@@ -1,7 +1,7 @@
 # castle-war T-131/T-132：MasterGuild 装载相位 + CastleNameColors 配置源（L 片）— 2026-10-25
 
 - 卡：`openmir2-castle-war-config-slice`（tier **L**；owner `openmir2-dev-1`；worktree `.worktrees/dev-1`；分支 `card/castle-war-config-slice`）。
-- 基线：本地 `master` `e510e78e1`（承接 `openmir2-castle-war-area-impl` 的 L 片）。
+- 基线：本地 `master` `c703f6a03`（patch base；承接 `openmir2-castle-war-area-impl` 的 L 片）。
 - 写集：`crates/world/src/{world.rs,castle.rs 注释}`、`bins/game-svr/src/{config.rs,castle.rs,lib.rs,castle/tests.rs}`、本文件。
 - 红线：未触 RNG/时序面；未改 C# `src/**`；未起栈、未占端口、未连库。
 
@@ -68,17 +68,19 @@ T-131 用**合同测试钉住启动相位**（`MasterGuild` 在启动装载时�
 |---|---|
 | `config::tests::parses_setup_castle_name_colors_with_oracle_defaults` | 缺键 ⇒ 47/180/69/221；写了 ⇒ 逐字段读；非法（`300`/`abc`）⇒ `load` 报错（fail-closed）；`castle_name_colors()` 映射 |
 | `castle::tests::initialize_leaves_master_guild_none_phase_contract` | 启动相位 `master_guild == None`、名字不得顶替城主身份 |
+| `castle::tests::query_user_name_color_reads_world_castle_name_colors` | **F3**：配置源→World→消费者全链——缺省 World 取 47、`set_castle_name_colors(pk_flag=200)` 取 200 |
 
 | 变异 | 结果 |
 |---|---|
 | T-131：去掉 `is_master_guild_name` 的 `master_guild.is_none()` 相位门 | 相位合同测试 **FAILED** → 还原 ok |
 | T-132：`castle_name_colors()` 的 ally/war 两字段对调 | 配置测试 **FAILED** → 还原 ok |
 | T-132：`PKFlagNameColor` 缺省 `0x2F → 0x30` | 配置测试 **FAILED** → 还原 ok |
+| **F3**：`query_user_name_color` 改回 `CastleNameColors::default()`（原始状态） | 全链测试 **FAILED**（缺省 47 仍绿、200 红）→ 还原 ok |
 
 ## 4. 门禁
 
 fmt / clippy / `cargo test --workspace` / msgcodegen 全 rc=0；7 项卫生门禁全 rc=0；
-`git diff --check` rc=0；`git merge-tree` 无冲突（见 patch body）。未改 C# `src/**`。
+`git diff --check` rc=0；`git merge-tree` 无冲突——review head `372af4c5a` vs 当时 master `d36532a7c` = `02b511d0…`、vs base `c703f6a03` = 分支 tree `8625051d…`（返工后 head 的 vs_base / vs_master 由 `tools/hygiene/merge_tree_helper.py` 生成，值见 patch body）。未改 C# `src/**`。
 
 ## 5. 判不准 / 残余
 

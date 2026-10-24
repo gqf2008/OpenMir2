@@ -669,3 +669,51 @@ fn initialize_leaves_master_guild_none_phase_contract() {
         "MasterGuild == None ⇒ 名字相等也不得判城主身份"
     );
 }
+
+/// **F3 牙（T-132 核心接线）**：`query_user_name_color` 必须用 `world.castle_name_colors`
+/// （配置源 → World → 消费者全链），而不是硬编码 `CastleNameColors::default()`。
+/// 缺省 World ⇒ PKFlag 目标取 47；`set_castle_name_colors(pk_flag=200)` ⇒ 取 200。
+///
+/// 红检（改坏必红）：把 `query_user_name_color` 的 `&world.castle_name_colors` 改回
+/// `&mir2_world::castle::CastleNameColors::default()`（本卡要修的原始状态）⇒ 200 断言必红。
+#[test]
+fn query_user_name_color_reads_world_castle_name_colors() {
+    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut target = mir2_world::Entity::new(1, "p", 10, 10);
+    target.pvp_flag = true;
+    target.pk_point = 0; // `PvpLevel() = 0 < 2`
+    world.add_entity(target);
+    // 缺省 World（47/180/69/221）：PKFlag 目标取 47。
+    {
+        let t = world.entities.get(1).expect("目标存在");
+        let c = super::query_user_name_color(&world, None, None, t, 255, false, false)
+            .expect("无城堡区");
+        assert_eq!(c, 47, "缺省名字色 PKFlag = 0x2F");
+    }
+    // 配置覆盖（11/22/33/44，**经 setter**）：PKFlag 目标取 11。
+    world.set_castle_name_colors(mir2_world::castle::CastleNameColors {
+        pk_flag: 11,
+        ally_guild: 22,
+        war_guild: 33,
+        in_free_pk: 44,
+    });
+    {
+        let t = world.entities.get(1).expect("目标存在");
+        let c = super::query_user_name_color(&world, None, None, t, 255, false, false)
+            .expect("无城堡区");
+        assert_eq!(c, 11, "world.castle_name_colors.pk_flag 必须生效");
+    }
+    // 城堡战区（under_war + 两侧 InGuildWarArea + 无行会）⇒ `in_free_pk=44`。
+    let mut castle = mir2_world::castle::UserCastle::new(
+        "沙巴克",
+        mir2_world::castle::CastleSiegeConfig::default(),
+    );
+    castle.castle_map_id = Some(0);
+    castle.home_x = 10;
+    castle.home_y = 10;
+    castle.under_war = true;
+    world.castles.push(castle);
+    let t = world.entities.get(1).expect("目标存在");
+    let c = super::query_user_name_color(&world, None, None, t, 255, true, true).expect("战区查询");
+    assert_eq!(c, 44, "城堡战区名字色 in_free_pk 必须生效");
+}
