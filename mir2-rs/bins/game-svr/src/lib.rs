@@ -4750,14 +4750,68 @@ fn handle_click_npc_cmd(
     };
     let (nx, ny, nmap, ntype) = (ne.x, ne.y, ne.map_id, ne.npc.as_ref().map(|st| st.npc_type));
     // `normNpc.Click(this)` 是**按实际类**的虚调用 ⇒ 先过类型门（[`fixed_npc_script_allowed`]）。
-    // type 2 `CastleOfficial` 的门未移植（T-40/T-140）：oracle 对普通玩家在 `Castle` 门处
-    // return（`CastleOfficial.cs:20-30`），可观测面同样是零帧；红字 `SysMsg` 未建模（T-137 残余①）。
+    // type 2 `CastleOfficial` 的 `Click` 门**已接线**（卡 `openmir2-castle-official-design`）：
+    // 无城 ⇒ 一条红字 `SM_SYSMESSAGE`；有城但未授权 ⇒ 零帧；授权 ⇒ `base.Click`（见下）。
     // `ClickNpcTime` 已在门外按 oracle 置位（`PlayObject.Base.cs:678-682`），不属本门。
     if let Some(ntype) = ntype {
-        if !fixed_npc_script_allowed(ntype) {
+        if ntype == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL {
+            // `CastleOfficial.Click`（`CastleOfficial.cs:20-31`）：
+            // ```text
+            // if (Castle == null) { SysMsg("NPC不属于城堡!!!", Red, Hint); return; }
+            // if (Castle.IsMasterGuild(MyGuild) || Permission >= 3) base.Click(this);
+            // // 否则：零帧零日志
+            // ```
+            // `Castle` = `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）。
+            // `NormNpc.Castle` 若已被 `$CASTLEWARDATE` 回退**写回**成 0 号城（`castle_zero_sticky`），
+            // oracle 此处 `Castle != null` ⇒ 走授权门（未授权 ⇒ **零帧**），不是红字。
+            // 部署不可达（唯一 type 2 在 0150 战区），构造级可达。
+            let sticky_zero = npc_vars.castle_zero_sticky.borrow().contains(&npc_actor_id);
+            let castle_index = world.castle_war_area_at(Some(nmap), nx, ny).or(
+                if sticky_zero && !world.castles.is_empty() {
+                    Some(0)
+                } else {
+                    None
+                },
+            );
+            let Some(castle_index) = castle_index else {
+                // `SysMsg("NPC不属于城堡!!!", MsgColor.Red, MsgType.Hint)` ⇒
+                // `SM_SYSMESSAGE(100)`（`Recog` = 玩家、`Param = MakeWord(RedF,RedB)`、`Series=1`）。
+                let body = smframe::sm_sysmessage(
+                    sg.actor_id,
+                    u16::from(npc_vars.sys_msg.red.0),
+                    u16::from(npc_vars.sys_msg.red.1),
+                    &gbk_encode("NPC不属于城堡!!!"),
+                );
+                if let Some(tx) =
+                    route_to_gate(gates, entry.gate_idx, socket, "城堡官员 Click 回帧")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: entry.socket,
+                        body,
+                    });
+                }
+                return false;
+            };
+            // `Castle.IsMasterGuild(MyGuild)`：部署态 `MasterGuild == None`（R-0）⇒ 恒 false；
+            // `PlayObject.Permission >= 3`：生产恒 0（G12；slot 里是 GM 会话权限，见 `gmcmd`）。
+            let my_guild = sg.guild.guild_name.clone();
+            let authorized = world
+                .castles
+                .get(castle_index)
+                .is_some_and(|c| c.is_master_guild_name(my_guild.as_deref()))
+                || i32::from(sg.gm.permission) >= 3;
+            if !authorized {
+                glog!(
+                    "DBG",
+                    "CM_CLICKNPC：CastleOfficial 未授权（IsMasterGuild=false、Permission<3）⇒ 零帧 ChrName={chr_name} npc={npc_actor_id}"
+                );
+                return false;
+            }
+            // 授权 ⇒ 落到下面的 `base.Click`（`NormNpc.Click` 的 `GotoLable(@main)`）。
+        } else if !fixed_npc_script_allowed(ntype) {
             glog!(
                 "DBG",
-                "CM_CLICKNPC：固定 NPC type={ntype} 不在 {{0,1}} ⇒ 类型门拒绝（CastleOfficial 门未移植，T-40/T-140）ChrName={chr_name} npc={npc_actor_id}"
+                "CM_CLICKNPC：固定 NPC type={ntype} 不在 {{0,1}} ⇒ 类型门拒绝 ChrName={chr_name} npc={npc_actor_id}"
             );
             return false;
         }
@@ -5565,15 +5619,24 @@ fn handle_shop_cmd(
         }
     };
     // `npc.UserSelect(this, sMsg.Trim())` 是**按实际类**的虚调用 ⇒ 先过类型门
-    // （[`fixed_npc_script_allowed`]）。type 2 `CastleOfficial` 的 `UserSelect` 门未移植
-    // （`CastleOfficial.cs:93-107`：`Castle` 非空 + `Castle.IsMasterGuild(MyGuild)` +
-    // `IsGuildMaster()` 才 `GotoLable`；`Castle == null` 只有红字 `SysMsg`）⇒ 本宿主在类型门
-    // 直接拦下，保持普通玩家侧零帧零副作用（红字与 `base.UserSelect` 账本未建模，T-137 残余①）。
+    // （[`fixed_npc_script_allowed`]）。type 2 `CastleOfficial` 的 `UserSelect` **已按 oracle
+    // 顺序接线**（`CastleOfficial.cs:93-107`：先 `base.UserSelect` = Merchant 半，再进 Castle 的
+    // `try`）⇒ 本漏斗放行 type 2（见下方 `dialog_allowed`）。
     if let Some(ntype) = fixed_npc_type {
-        if !fixed_npc_script_allowed(ntype) {
+        // `CastleOfficial.UserSelect`（`CastleOfficial.cs:93-107`）的**第一步**就是
+        // `base.UserSelect(...)`（= `Merchant.UserSelect`，会 `GotoLable(@main)` 并处理
+        // `@exit`/`@back`/脚本标签）⇒ 本漏斗必须放行 type 2，否则 oracle 可达的 P2 说词页
+        // （`@main`/`@repairdoor`/`@aboutwar` …）在本仓恒零帧。
+        //
+        // oracle 在 base 之后还有 Castle 自己的段：`Castle == null ⇒ SysMsg("NPC不属于城堡!!!")`、
+        // 非 `@` 数据 ⇒ `RM_MENU_OK("你没有权利使用.")`、以及
+        // `IsMasterGuild && IsGuildMaster` 门后的动作 switch（部署不可达，R-0；登记 T-40/T-140 剩余）。
+        let dialog_allowed =
+            fixed_npc_script_allowed(ntype) || ntype == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
+        if !dialog_allowed {
             glog!(
                 "DBG",
-                "商店命令：固定 NPC type={ntype} 不在 {{0,1}} ⇒ 类型门拒绝（CastleOfficial 门未移植，T-40/T-140）ident={ident} ChrName={chr_name} npc={merchant_id}"
+                "商店命令：固定 NPC type={ntype} 不在 {{0,1,2}} ⇒ 类型门拒绝 ident={ident} ChrName={chr_name} npc={merchant_id}"
             );
             return;
         }
@@ -7504,6 +7567,44 @@ fn run_merchant_goto(
         // 宿主在脚本尾按同一队列应用（oracle 是动作内同步执行；RNG 面差异见 `NpcPlayer`
         // 字段 `mon_gen_enabled` 的文档与卡面 `window_items`）。
         player.mon_gen_enabled = mon_gen_enabled;
+        // **CastleOfficial**：`NormNpc.Castle` 在 oracle 里是**对象引用**，展开时刻读实时值
+        // ⇒ 每次脚本入口按 `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）重算快照；
+        // `$DATETIME` 的墙钟同点注入（`NormNpc.cs:356-359` 在展开时刻读 `DateTime.Now`）。
+        let wall_now = chrono::Local::now();
+        player.vars.wall_clock = wall_now.format("%Y-%m-%d %H:%M:%S").to_string();
+        if let Some(w) = world {
+            let today = (
+                chrono::Datelike::year(&wall_now),
+                chrono::Datelike::month(&wall_now),
+                chrono::Datelike::day(&wall_now),
+            );
+            // `NormNpc.Castle == null ⇒ GetCastle(0)` 的回退源（`$CASTLEWARDATE`，
+            // `NormNpc.cs:805-818`）+ 该 NPC 的 `ActorId`（写回记账）。
+            player.vars.npc_actor_id = merchant_actor_id;
+            player.vars.castle_zero = game_svr::castle::castle_vars_for_index(w, 0, today);
+            // **写回粘滞**：上一次对话里 `$CASTLEWARDATE` 把该 NPC 的 `Castle` 赋成了 0 号城
+            // （oracle 字段赋值，跨次保留）⇒ 本次先用 0 号城；否则按 `InCastleWarArea` 解析。
+            let sticky_zero = player
+                .vars
+                .castle_zero_sticky
+                .borrow()
+                .contains(&merchant_actor_id);
+            let resolved = if sticky_zero {
+                player.vars.castle_zero.clone()
+            } else {
+                game_svr::castle::castle_vars_for(w, merchant_actor_id, today)
+            };
+            if let Some(vars) = resolved {
+                player.vars.castle = Some(vars);
+            }
+            // `Npcs.txt` 的 type 2（`CastleOfficial`）⇒ `GetVariableText` 走覆写
+            // （`CastleOfficial.cs:33-91`）。
+            player.vars.castle_official = w
+                .entities
+                .get(merchant_actor_id)
+                .and_then(|e| e.npc.as_ref())
+                .is_some_and(|st| st.npc_type == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL);
+        }
         // **卡 `openmir2-gm-script-exec-seams`**：装 GM 跳线（`sess` = 移出的会话 GM 态）。
         if let (Some(env), Some(w), Some(sess)) = (gm, world, gm_sess.as_mut()) {
             let actor = sg.actor_id;
@@ -20315,6 +20416,13 @@ fn sim_loop(
         enter_cfg.upgrade_weapon_price,
         enter_cfg.shop.human_max_gold,
     );
+    // **CastleOfficial**：`$REPAIRDOORGOLD/$REPAIRWALLGOLD/$GUARDFEE/$ARCHERFEE`
+    // （`CastleOfficial.cs:70-89`）的配置源 = `SystemShare.Config.*Price`，宿主侧同源 =
+    // `Server.conf [Setup] RepairDoor/RepairWall/HireGuard/HireArcher`（`GuildCastleConfig` 解析）。
+    npc_vars_base.repair_door_price = enter_cfg.guild_castle_cfg.repair_door_price;
+    npc_vars_base.repair_wall_price = enter_cfg.guild_castle_cfg.repair_wall_price;
+    npc_vars_base.hire_guard_price = enter_cfg.guild_castle_cfg.hire_guard_price;
+    npc_vars_base.hire_archer_price = enter_cfg.guild_castle_cfg.hire_archer_price;
     // **A-21/T-85**：脚本 `SETMPAMODE` 的两处 `SystemShare` 取值——
     // ① `MapMgr` 已装载地图名表（`map_exists` = `FindMap(name) != null`）；
     // ② `SysMsg` 的 `SM_SYSMESSAGE` 色词（`[Setup] *MsgFColor/BColor`）。
@@ -68096,25 +68204,23 @@ GMEXECUTE 禁言 self 20
         assert_eq!(click_says, dlg_says, "两条入口的 `@main` 说词必须一致");
     }
 
-    /// **T-137 复核 F1（回归）**：type 2 `CastleOfficial` 不进 `Npc_def` 脚本。
+    /// **T-40/T-140（本片订正）**：type 2 `CastleOfficial` 的两道门按 oracle 接线。
     ///
-    /// oracle 的门是两层且都未建模（T-40/T-140）：
-    /// - `Click`（`CastleOfficial.cs:20-30`）：`Castle == null` ⇒ 红字 `SysMsg("NPC不属于城堡!!!")`
-    ///   后 return；否则 `Castle.IsMasterGuild(MyGuild) || Permission >= 3` 才 `base.Click`；
-    /// - `UserSelect`（`:93-107`）：先 `base.UserSelect`（回跳账本），`Castle == null` 同一红字；
-    ///   否则 `Castle.IsMasterGuild(MyGuild) && IsGuildMaster()` 且 `LableIsCanJmp` 放行才 `GotoLable`。
+    /// `Click`（`CastleOfficial.cs:20-31`）：`Castle == null` ⇒
+    /// `SysMsg("NPC不属于城堡!!!", MsgColor.Red, MsgType.Hint)`（**一条 `SM_SYSMESSAGE`**）后 return；
+    /// 否则 `Castle.IsMasterGuild(MyGuild) || Permission >= 3` 才 `base.Click`。夹具无城 ⇒ null 支。
     ///
-    /// 本仓由 [`fixed_npc_script_allowed`] 的类型门替代两道门：普通玩家点击/选择**零说词零帧**、
-    /// `GAMEGOLD` 不跑、不进 `base.UserSelect` 账本（与修复前的放宽行为相反）。
+    /// `UserSelect`（`:93-107`）：**先 `base.UserSelect`**（= `Merchant.UserSelect`：`GotoLable`
+    /// 加脚本 `#ACT`），再按 `Castle` 门决定是否进城堡动作段 ⇒ 构造包直发 1011 能拿到脚本说词、
+    /// 元宝 `GAMEGOLD + 5` 也执行（设计 `design-castle-official-20261022.md` §0.1 的 P2/P3）。
     ///
-    /// 夹具：`老人`（type 0，脚本表里已有 `Npc_def/老人-0.txt`）改判为 type 2 —— 脚本条目、
-    /// 同图/距离门都不变，唯一变量是 `npc_type` ⇒ 零帧只可能来自类型门。
+    /// 旧断言（T-137 复核 F1：type 2 点击/选择全零帧）来自「用类型门替代两道门」的临时口径，
+    /// 已被本卡按 oracle 取代：点击不再零帧（无城 ⇒ 红字），选择走 base 半。
     ///
-    /// 牙（真跑，先红后逐字节还原）：把 `fixed_npc_script_allowed` 放宽成恒 `true`
-    /// （或删两条臂的类型门）⇒ 点击出 `老人/…` 说词、选择 `@main`/`@ask` 出说词且 `@ask`
-    /// 跑 `GAMEGOLD + 5` ⇒ 断言红。
+    /// 牙：把 1011 的类型门收回 `{0,1}` ⇒ `@main` 说词为空 ⇒ 红；去掉 Click 的
+    /// `Castle == null` 红字 ⇒ 首帧断言红。
     #[test]
-    fn t137_type2_castle_official_has_zero_frames_on_click_and_select() {
+    fn t40_type2_castle_official_click_gate_and_userselect_base() {
         let mut rig = T137Rig::new();
         let elder_id = rig.elder_id;
         rig.world
@@ -68126,21 +68232,39 @@ GMEXECUTE 禁言 self 20
             .expect("固定 NPC 有 NpcState")
             .npc_type = mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
 
-        assert!(!rig.click(elder_id), "type 2 ⇒ 不可到达 Click 点");
-        assert!(rig.drain().is_empty(), "type 2 点击 ⇒ 零帧");
-        rig.dlg_select(elder_id, "@main");
-        assert!(rig.drain().is_empty(), "type 2 @main ⇒ 零帧");
-        rig.dlg_select(elder_id, "@ask");
-        assert!(rig.drain().is_empty(), "type 2 @ask ⇒ 零帧");
-        assert_eq!(rig.game_gold(), 10, "type 2 ⇒ 脚本不跑、GAMEGOLD 不动");
-        assert!(
-            rig.shop_sessions.get("hero").is_none_or(|ss| {
-                ss.script_curr_lable.is_empty() && ss.script_go_back_lable.is_empty()
-            }),
-            "type 2 ⇒ 不进 base.UserSelect 回跳账本"
+        // Click：夹具无城 ⇒ `Castle == null` ⇒ 恰一条红字 `SM_SYSMESSAGE`（Recog = 玩家）。
+        assert!(!rig.click(elder_id), "type 2 未授权 ⇒ 不落到 base.Click");
+        let frames = rig.drain();
+        let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
+        assert_eq!(
+            idents,
+            vec![mir2_protocol::messages::SM_SYSMESSAGE],
+            "Castle 为 null ⇒ 只有一条红字（`CastleOfficial.cs:22-26`）"
+        );
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&frames[0][12..])),
+            "NPC不属于城堡!!!"
         );
 
-        // 对照：同一实体改回 type 0（脚本表/距离不变）⇒ 两条路径恢复 ⇒ 上文零帧只可能来自类型门。
+        // UserSelect：`base.UserSelect`（Merchant 半）照跑 ⇒ `@main` 页有说词。
+        rig.dlg_select(elder_id, "@main");
+        assert!(
+            T137Rig::says(&rig.drain())
+                .iter()
+                .any(|s| s.starts_with("老人/")),
+            "type 2 的 1011 必须走 base.UserSelect（脚本 @main）"
+        );
+
+        // `@ask` 的 `#ACT`（`GAMEGOLD + 5`）也照跑：10 → 15。
+        assert_eq!(rig.game_gold(), 10, "夹具前置：会话元宝 10");
+        rig.dlg_select(elder_id, "@ask");
+        assert_eq!(
+            rig.game_gold(),
+            15,
+            "@ask 的 GAMEGOLD + 5 必须执行（base.UserSelect 的脚本半）"
+        );
+
+        // 对照：同一实体改回 type 0（脚本表/距离不变）⇒ 点击到达 `base.Click`、@main 说词。
         rig.world
             .entities
             .get_mut(elder_id)
@@ -68157,6 +68281,124 @@ GMEXECUTE 禁言 self 20
         assert!(
             !T137Rig::says(&rig.drain()).is_empty(),
             "type 0 对照 ⇒ @main 说词"
+        );
+    }
+
+    /// **F1 宿主层（返工 2，review `4c8d2731`）**：`run_merchant_goto` 的 sticky 分支——两次对话
+    /// 证明「`$CASTLEWARDATE` 的 0 号城回退**写回**跨次保留」。
+    ///
+    /// 夹具：type 0 的 `老人`，`[@main]`=`B:<$OWNERGUILD>`、`[@menu]`=`W:<$CASTLEWARDATE>`；
+    /// 世界放一座 0 号城（`OwnGuild=王者`），但 NPC 不在它的战区（`castle_war_area_at` 为 None）。
+    ///
+    /// 1) 点击 ⇒ `Castle==null` ⇒ `B:????`；
+    /// 2) `@menu` ⇒ `$CASTLEWARDATE` 回退 + 写回 ⇒ **整页替换**成常量（oracle 怪癖，见报告）；
+    /// 3) 再点击 ⇒ 写回生效 ⇒ `B:王者`（且 **零红字**：Click 门也读 sticky）。
+    ///
+    /// 牙：删掉 `run_merchant_goto` 里 sticky 的三行（只按 `InCastleWarArea` 解析）⇒ 第 3 步回
+    /// `B:????` ⇒ 本用例红（review 实测原用例在这一变异下仍绿，正是本条要补的缺口）。
+    #[test]
+    fn t40_castle_wardate_writeback_survives_next_click() {
+        let script = "[@main]\nB:<$OWNERGUILD>\\ <菜单/@menu>\n\n[@menu]\nW:<$CASTLEWARDATE>\n";
+        let mut rig = T137Rig::new_with(
+            ";测试\n老人 0 0 12 10 0 1\n",
+            &[
+                ("Npc_def/国王-0.txt", "[@main]\n国王。"),
+                ("Npc_def/老人-0.txt", script),
+            ],
+            2,
+        );
+        let mut castle = mir2_world::castle::UserCastle::new(
+            "沙巴克",
+            mir2_world::castle::CastleSiegeConfig::default(),
+        );
+        castle.own_guild = Some("王者".to_string());
+        rig.world.castles.push(castle);
+        let elder = rig.elder_id;
+
+        // 1) `Castle == null` ⇒ `$OWNERGUILD` = `????`。
+        assert!(rig.click(elder));
+        assert!(
+            T137Rig::says(&rig.drain())
+                .iter()
+                .any(|s| s.contains("B:????")),
+            "首次点击：Castle 为 null ⇒ ????（页面原文 B:<$OWNERGUILD>）"
+        );
+
+        // 2) `$CASTLEWARDATE`：回退 0 号城 + 写回 ⇒ 整页替换（吃掉整页，含菜单行）。
+        rig.dlg_select(elder, "@menu");
+        let says = T137Rig::says(&rig.drain());
+        assert_eq!(says.len(), 1, "整页替换后只有一条说词：{says:?}");
+        assert!(
+            says[0].ends_with("暂时没有行会攻城 .\\ \\<返回/@main>"),
+            "应整行为常量，实得 {says:?}"
+        );
+
+        // 3) 再点击 ⇒ 写回跨次保留 ⇒ `$OWNERGUILD` = `王者`，且零红字（Click 门读 sticky）。
+        rig.sessions.get_mut("hero").expect("会话").click_npc_time = None;
+        assert!(
+            rig.click(elder),
+            "写回后 Castle != null ⇒ 走授权门/或 base.Click"
+        );
+        let frames = rig.drain();
+        assert!(
+            !frames
+                .iter()
+                .any(|b| hdr(b).0 == mir2_protocol::messages::SM_SYSMESSAGE),
+            "写回后 Click 不得再发「NPC不属于城堡!!!」红字"
+        );
+        assert!(
+            T137Rig::says(&frames).iter().any(|s| s.contains("B:王者")),
+            "第三次：写回生效 ⇒ B:王者，实得 {:?}",
+            T137Rig::says(&frames)
+        );
+    }
+
+    /// **Minor ②（返工 2）**：`Click` 门必须读 sticky——type 2 NPC 若已被 `$CASTLEWARDATE` 回退成
+    /// 0 号城，oracle `Castle != null` 且未授权 ⇒ **零帧**（不是红字）。
+    ///
+    /// 牙：把 `handle_click_npc_cmd` 的 `sticky_zero` 分支去掉 ⇒ 红字重新出现 ⇒ 本用例红。
+    #[test]
+    fn t40_castle_official_click_is_zero_frame_after_wardate_writeback() {
+        let script = "[@main]\nW:<$CASTLEWARDATE>\n";
+        let mut rig = T137Rig::new_with(
+            ";测试\n老人 0 0 12 10 0 1\n",
+            &[
+                ("Npc_def/国王-0.txt", "[@main]\n国王。"),
+                ("Npc_def/老人-0.txt", script),
+            ],
+            2,
+        );
+        let mut castle = mir2_world::castle::UserCastle::new(
+            "沙巴克",
+            mir2_world::castle::CastleSiegeConfig::default(),
+        );
+        castle.own_guild = Some("王者".to_string());
+        rig.world.castles.push(castle);
+        let elder = rig.elder_id;
+        rig.world
+            .entities
+            .get_mut(elder)
+            .expect("老人存在")
+            .npc
+            .as_mut()
+            .expect("NpcState")
+            .npc_type = mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
+
+        // 1011 直发 `@main`：`@main` 恒可跳（`LableIsCanJmp` 特例）⇒ 页面里的
+        // `$CASTLEWARDATE` 触发 0 号城回退 + 写回。
+        rig.dlg_select(elder, "@main");
+        let _ = rig.drain();
+        assert!(
+            rig.npc_vars.castle_zero_sticky.borrow().contains(&elder),
+            "前置：@menu 必须已完成 0 号城写回"
+        );
+
+        // 再点击：`Castle != null` + 未授权（无行会、Permission=0）⇒ 零帧。
+        rig.sessions.get_mut("hero").expect("会话").click_npc_time = None;
+        assert!(!rig.click(elder), "未授权 ⇒ 不落到 base.Click");
+        assert!(
+            rig.drain().is_empty(),
+            "写回后 Click 必须是零帧（oracle Castle != null 支），不得再发红字"
         );
     }
 
