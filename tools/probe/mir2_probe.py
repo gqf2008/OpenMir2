@@ -351,7 +351,7 @@ class Conn:
 # ==========================================================================
 STEP_META_KEYS = {"timeout_ms", "note", "delay_ms"}
 ACTION_KEYS = {"send", "wait_for", "wait_frames", "wait_idents", "sleep",
-               "say", "click_npc", "dlg_select"}
+               "say", "click_npc", "dlg_select", "dlg_select_any", "repeat"}
 # 场景顶层 `requires` 只认这些夹具值（卡 `openmir2-scenario-fixture-precondition`）：
 # 目前只有 `magic`（characters_magic 预置）。未知值 fail-closed，避免「加了值却没生效」假绿。
 REQUIRES_KNOWN = ("magic",)
@@ -743,6 +743,30 @@ def _encode_send_body(val, where, params=None):
 #: `recog_is` 只认这两值（相对**自身** ActorId 的来源分类）。
 RECOG_IS_VALUES = ("self", "other")
 
+#: 「页面」帧：说词 `SM_MERCHANTSAY(643)` / 对话框 `SM_MENU_OK(767)`——body 文本里可能带
+#: `<文字/@label>` 链接。`dlg_select_any` 只在**当前页**的链接里选候选（fail-closed）。
+PAGE_LINK_IDENTS = frozenset({643, 767})
+_PAGE_LINK_RE = re.compile(r"<([^<>]*)/(@[A-Za-z0-9_]+)>")
+
+
+def parse_page_links(text):
+    """从一页文本抽 `<文字/@label>` 链接（出现序、去重）。"""
+    out = []
+    for m in _PAGE_LINK_RE.finditer(text or ""):
+        lab = m.group(2)
+        if lab not in out:
+            out.append(lab)
+    return out
+
+
+def choose_link(candidates, links):
+    """按候选顺序返回第一个出现在 `links` 里的候选（大小写不敏感）；全不中 ⇒ None。"""
+    lower = {x.lower() for x in links}
+    for c in candidates:
+        if c.lower() in lower:
+            return c
+    return None
+
 
 def _plan_recog_filter(val, where, params, out):
     """把等待动作里的可选来源过滤键编译进 plan（形状/互斥 fail-closed）。
@@ -772,9 +796,12 @@ def _plan_recog_filter(val, where, params, out):
         out["recog_is"] = isv
 
 
-def plan_step(step, index, params):
-    """校验并把一步场景展开成可执行动作（不依赖运行期状态）。"""
-    where = "steps[%d]" % index
+def plan_step(step, index, params, depth=0):
+    """校验并把一步场景展开成可执行动作（不依赖运行期状态）。
+
+    `depth` 只服务 `repeat` 的嵌套上限（≤3 层，fail-closed）。
+    """
+    where = "steps[%s]" % (index,)
     if not isinstance(step, dict):
         raise ScenarioError("%s must be an object" % where)
     actions = [k for k in step if k in ACTION_KEYS]
@@ -842,6 +869,40 @@ def plan_step(step, index, params):
                               where + ".dlg_select.recog", -0x80000000, 0x7FFFFFFF)
         out.update(ident=CM_MERCHANTDLGSELECT, recog=recog, param=0, tag=0, series=0,
                    body=label.encode("gbk"), _needs_merchant_recog=(recog is None))
+    elif action == "dlg_select_any":
+        # `["@rw02","@rw01"]`：按顺序选**当前页实际存在**的第一个链接；全不存在 ⇒ 运行期
+        # StepFailure 并打印当前页链接清单（fail-closed，不静默跳过）。
+        if not isinstance(val, list) or not val:
+            raise ScenarioError("%s.dlg_select_any must be a non-empty list of label strings"
+                                % where)
+        seen = set()
+        for c in val:
+            if not isinstance(c, str) or len(c) < 2 or not c.startswith("@"):
+                raise ScenarioError(
+                    "%s.dlg_select_any[] entries must be labels starting with '@' (got %r)"
+                    % (where, c))
+            if c.lower() in seen:
+                raise ScenarioError(
+                    "%s.dlg_select_any has duplicate candidate %r (ordered candidates must be "
+                    "unique; fail-closed)" % (where, c))
+            seen.add(c.lower())
+        out.update(ident=CM_MERCHANTDLGSELECT, recog=None, param=0, tag=0, series=0,
+                   body=b"", candidates=list(val), _needs_merchant_recog=True)
+    elif action == "repeat":
+        _need_keys(val, where + ".repeat", required=("times", "steps"),
+                   optional=("stop_on_select",))
+        times = _need_int(val["times"], where + ".repeat.times", 1, 100)
+        sub = val["steps"]
+        if not isinstance(sub, list) or not sub:
+            raise ScenarioError("%s.repeat.steps must be a non-empty list" % where)
+        if depth >= 3:
+            raise ScenarioError("%s.repeat: nesting depth > 3 refused (fail-closed)" % where)
+        stop = val.get("stop_on_select")
+        if stop is not None and (not isinstance(stop, str) or not stop):
+            raise ScenarioError("%s.repeat.stop_on_select must be a non-empty string" % where)
+        subplans = [plan_step(x, "%s.%d" % (index, j), params, depth + 1)
+                    for j, x in enumerate(sub)]
+        out.update(times=times, steps=subplans, stop_on_select=stop)
     elif action == "wait_for":
         # 旧形状（int / 非空 int 数组）原样保留；要来源过滤才写对象形状：
         #   {"idents": 31 | [31, 642], "recog": <int|params 名> | "recog_is": "self"|"other"}
@@ -892,6 +953,16 @@ def plan_step(step, index, params):
     return out
 
 
+def _iter_plan_leaves(plans):
+    """展开后的 plan 树 → 叶子动作（`repeat` 递归）。语义校验/方向检查都看叶子。"""
+    for p in plans:
+        if p["kind"] == "repeat":
+            for leaf in _iter_plan_leaves(p["steps"]):
+                yield leaf
+        else:
+            yield p
+
+
 def expand_scenario(data, params_override=None):
     """校验整个场景，返回展开后的动作列表（运行期只差 dlg_select 的 recog）。"""
     params = dict(data.get("params") or {})
@@ -920,7 +991,7 @@ MESSAGES_RS = os.path.join(REPO_ROOT, *MESSAGES_RS_REL.split("/"))
 
 # 发帧动作：在 GameGate 连接上真的写出 c2s 帧（say/click_npc/dlg_select 分别展开成
 # CM_SAY / CM_CLICKNPC / CM_MERCHANTDLGSELECT）。`send` 只是其中最通用的一个。
-SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select"})
+SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select", "dlg_select_any"})
 # 累计观察动作：等的是「累计出现过」而不是「本步之后的第一条回包」——驱动器的登录链
 # （CM_IDPASSWORD/SELECTSERVER/QUERYCHR/SELCHR + GameGate 登录）与自动握手
 # （CM_LOGINNOTICEOK / CM_QUERYBAGITEMS）本来就会发帧，所以纯观察场景（login_only）合法。
@@ -1009,37 +1080,38 @@ def load_direction_spec(path=None, messages=None):
 
 
 def _var_refs(data):
-    """收集场景里**按变量名**引用的字段：[(where, name)]。
-
-    与 plan_step 的解析点一一对应（send 的 recog/param/tag/series、click_npc、
-    dlg_select.recog、send.text_from）。纯数字字面量（含 "0" 这种字符串）不算变量引用；
-    click_npc 的 "auto:last_turn" 是动作级哨兵，也不是变量。
-    """
+    """收集场景里**按变量名**引用的字段：[(where, name)]（`repeat` 内部递归）。"""
     refs = []
-    for i, step in enumerate(data.get("steps") or []):
-        if not isinstance(step, dict):
-            continue
-        where = "steps[%d]" % i
-        send = step.get("send")
-        if isinstance(send, dict):
-            for key in ("recog", "param", "tag", "series"):
-                v = send.get(key)
+
+    def walk(steps, prefix):
+        for i, step in enumerate(steps or []):
+            if not isinstance(step, dict):
+                continue
+            where = "%s[%d]" % (prefix, i)
+            send = step.get("send")
+            if isinstance(send, dict):
+                for key in ("recog", "param", "tag", "series"):
+                    v = send.get(key)
+                    if isinstance(v, str):
+                        refs.append((where + ".send." + key, v))
+                v = send.get("text_from")
                 if isinstance(v, str):
-                    refs.append((where + ".send." + key, v))
-            v = send.get("text_from")
-            if isinstance(v, str):
-                refs.append((where + ".send.text_from", v))
-        v = step.get("click_npc")
-        if isinstance(v, str) and v != "auto:last_turn":
-            refs.append((where + ".click_npc", v))
-        v = step.get("dlg_select")
-        if isinstance(v, dict) and isinstance(v.get("recog"), str):
-            refs.append((where + ".dlg_select.recog", v["recog"]))
-        # 等待对象形状的 recog 与 send.recog 同口径（可写 params 名）
-        for kind in ("wait_for", "wait_frames", "wait_idents"):
-            v = step.get(kind)
+                    refs.append((where + ".send.text_from", v))
+            v = step.get("click_npc")
+            if isinstance(v, str) and v != "auto:last_turn":
+                refs.append((where + ".click_npc", v))
+            v = step.get("dlg_select")
             if isinstance(v, dict) and isinstance(v.get("recog"), str):
-                refs.append((where + "." + kind + ".recog", v["recog"]))
+                refs.append((where + ".dlg_select.recog", v["recog"]))
+            for kind in ("wait_for", "wait_frames", "wait_idents"):
+                v = step.get(kind)
+                if isinstance(v, dict) and isinstance(v.get("recog"), str):
+                    refs.append((where + "." + kind + ".recog", v["recog"]))
+            rep = step.get("repeat")
+            if isinstance(rep, dict) and isinstance(rep.get("steps"), list):
+                walk(rep["steps"], where + ".repeat.steps")
+
+    walk(data.get("steps") or [], "steps")
     return refs
 
 
@@ -1102,18 +1174,19 @@ def check_scenario(data, plans, params=None, messages=None):
                 | set((data.get("computed") or {}).keys()))
 
     # R2：wait_for 之前必须已有发帧步骤。先判这一步，坏样例拿到最具体的诊断。
+    leaves = list(_iter_plan_leaves(plans))
     first_send = None
-    for p in plans:
+    for p in leaves:
         if p["kind"] in SEND_KINDS:
             if first_send is None:
                 first_send = p["index"]
         elif p["kind"] == "wait_for" and first_send is None:
             raise ScenarioError(
-                "steps[%d].wait_for %s: no send step precedes it — nothing in this scenario can "
+                "steps[%s].wait_for %s: no send step precedes it — nothing in this scenario can "
                 "produce that response (a scenario that only waits proves nothing; add a "
                 "send/say/click_npc/dlg_select before it)" % (p["index"], p["idents"]))
 
-    kinds = [p["kind"] for p in plans]
+    kinds = [p["kind"] for p in leaves]
 
     # R1：至少一个发帧或累计观察步骤。
     if not any(k in SEND_KINDS or k in CUMULATIVE_WAIT_KINDS for k in kinds):
@@ -1130,29 +1203,29 @@ def check_scenario(data, plans, params=None, messages=None):
     # 在两个命名空间里各有名字（例：100 = CM_QUERYCHR = SM_SYSMESSAGE），方向无法由号判定
     # ⇒ 两个方向都放行（集合与处理见 docs/probe-ident-direction-20261023.md；不是静默放过：
     # 代码在这里点名，docs 逐条列出）。ISM_* 不进表（解析器只认 `pub const (CM|SM)_`）。
-    for p in plans:
+    for p in leaves:
         if p["kind"] in SEND_KINDS:
             ident = p["ident"]
             if ident not in messages["CM"]:
                 if ident in messages["SM"]:
                     raise ScenarioError(
-                        "steps[%d].%s ident %d is %s, expected CM_* (send/say/click_npc/"
-                        "dlg_select are client→server frames; an SM_* ident is server→client "
+                        "steps[%s].%s ident %d is %s, expected CM_* (send/say/click_npc/"
+                        "dlg_select/dlg_select_any are client→server frames; an SM_* ident is server→client "
                         "and can never be sent)" % (p["index"], p["kind"], ident,
                                                     messages["SM"][ident]))
                 raise ScenarioError(
-                    "steps[%d].%s.ident %d is not a CM_*/SM_* constant in %s"
+                    "steps[%s].%s.ident %d is not a CM_*/SM_* constant in %s"
                     % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
         elif p["kind"] in WAIT_KINDS:
             for ident in p["idents"]:
                 if ident not in messages["SM"]:
                     if ident in messages["CM"]:
                         raise ScenarioError(
-                            "steps[%d].%s ident %d is %s, expected SM_* (a wait can only match "
+                            "steps[%s].%s ident %d is %s, expected SM_* (a wait can only match "
                             "server→client frames; a CM_* ident is client→server and can never "
                             "arrive)" % (p["index"], p["kind"], ident, messages["CM"][ident]))
                     raise ScenarioError(
-                        "steps[%d].%s ident %d is not a CM_*/SM_* constant in %s "
+                        "steps[%s].%s ident %d is not a CM_*/SM_* constant in %s "
                         "(typo? this wait can never match)"
                         % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
 
@@ -1196,7 +1269,7 @@ def check_scenario(data, plans, params=None, messages=None):
     # ⇒ 越界方向**不影响本击命中**（CM_TURN(tag=0)+CM_HIT(tag=99) 第一击照样命中并出 SM_STRUCK），
     #   它污染的是**此后**的状态 Dir（动作帧 + 下一次取目标）。所以这里只警告、不判死。
     direction_spec = None
-    for p in plans:
+    for p in leaves:
         if p["kind"] != "send":
             continue
         if direction_spec is None:
@@ -1206,7 +1279,7 @@ def check_scenario(data, plans, params=None, messages=None):
             continue
         eff_dir = p["tag"] & 0xFF          # oracle: (byte)Tag
         if eff_dir not in dirs:
-            print("WARN: steps[%d].send.tag %d (ident %d, attack family) is not a valid Direction: "
+            print("WARN: steps[%s].send.tag %d (ident %d, attack family) is not a valid Direction: "
                   "oracle takes nDir = (byte)Tag = %d, valid %s (source %s HIT_IDENTS/DIR_*). "
                   "真实客户端不会发送越界方向；该值**不影响本次命中**（取目标用的是状态化 Dir，"
                   "nDir 在取目标之后才写入），但会污染角色的状态 Dir，影响动作帧与**此后**的取目标。"
@@ -1268,7 +1341,9 @@ class Run:
         self.chain = {}
         self.frames_by_conn = {}
         self.ident_hist = {}
-        self.state = {"last_merchant_recog": None, "self_actor": None, "last_turn_recog": None}
+        self.state = {"last_merchant_recog": None, "self_actor": None,
+                      "last_turn_recog": None, "page": None,
+                      "last_selected_label": None}
         self.gamegate = None
         self.conns = []
         self.dwell = None
@@ -1279,6 +1354,12 @@ class Run:
             return
         if frame.ident == SM_MERCHANTSAY:
             self.state["last_merchant_recog"] = frame.recog
+        if frame.ident in PAGE_LINK_IDENTS:
+            # 记「当前页」：`dlg_select_any` 只在这一页的链接里选候选。文本按 GBK 宽松解码
+            # （坏字节只影响链接抽取，不影响其它判据）。
+            text = decode_text(frame.body_decoded, "gbk", "replace")
+            self.state["page"] = {"ident": frame.ident, "seq": seq, "text": text,
+                                  "links": parse_page_links(text)}
         if frame.ident == SM_TURN and frame.recog != self.state.get("self_actor"):
             # 进世界后首个「非自己」的 actor（固定 NPC/怪）：click_npc 的 "auto:last_turn" 用它
             self.state["last_turn_recog"] = frame.recog
@@ -1315,7 +1396,7 @@ class Run:
             self_actor = self.state.get("self_actor")
             if self_actor is None:
                 raise ScenarioError(
-                    "steps[%d]: recog_is=%r needs the self actor id (SM_LOGON(50).recog), "
+                    "steps[%s]: recog_is=%r needs the self actor id (SM_LOGON(50).recog), "
                     "which has not been observed; refusing to guess (fail-closed)"
                     % (idx, plan["recog_is"]))
             want_self = plan["recog_is"] == "self"
@@ -1333,19 +1414,69 @@ class Run:
             time.sleep(plan["ms"] / 1000.0)
             self.steps.append({"index": idx, "kind": "sleep", "ms": plan["ms"]})
             return
+        if kind == "dlg_select_any":
+            recog = plan.get("recog")
+            if recog is None:
+                recog = self.state["last_merchant_recog"]
+            if recog is None:
+                raise ScenarioError(
+                    "steps[%s].dlg_select_any: no SM_MERCHANTSAY(643) seen yet; cannot infer "
+                    "NPC recog (fail-closed)" % plan["index"])
+            page = self.state.get("page")
+            links = list(page["links"]) if page else []
+            chosen = choose_link(plan["candidates"], links)
+            if chosen is None:
+                raise StepFailure(
+                    "steps[%s].dlg_select_any: none of %r is a link on the current page "
+                    "(page ident=%r seq=%r); page links=%r; page text=%r"
+                    % (plan["index"], plan["candidates"],
+                       page.get("ident") if page else None,
+                       page.get("seq") if page else None,
+                       links, page.get("text") if page else None))
+            body = chosen.encode("gbk")
+            raw = conn.send(recog, CM_MERCHANTDLGSELECT, 0, 0, 0, body)
+            self._log_send(conn, raw, dict(plan, recog=recog, body=body),
+                           now_ms() - self.t0_ms)
+            self.state["last_selected_label"] = chosen
+            self.steps.append({"index": plan["index"], "kind": "dlg_select_any",
+                               "candidates": plan["candidates"], "links": links,
+                               "chosen": chosen, "recog": recog,
+                               "note": plan.get("note", "")})
+            return
+        if kind == "repeat":
+            attempts = []
+            for k in range(plan["times"]):
+                self.state["last_selected_label"] = None
+                for sub in plan["steps"]:
+                    self.execute_step(conn, sub)
+                page = self.state.get("page")
+                attempts.append({"attempt": k + 1,
+                                 "links": list(page["links"]) if page else [],
+                                 "selected": self.state.get("last_selected_label")})
+                want = plan.get("stop_on_select")
+                if want and self.state.get("last_selected_label") == want:
+                    self.steps.append({"index": plan["index"], "kind": "repeat",
+                                       "times": plan["times"], "stop_on_select": want,
+                                       "attempts": attempts, "stopped": True,
+                                       "note": plan.get("note", "")})
+                    return
+            raise StepFailure(
+                "steps[%s].repeat: stop_on_select %r not reached in %d attempt(s); "
+                "per-attempt pages (links/selected)=%r"
+                % (plan["index"], plan.get("stop_on_select"), plan["times"], attempts))
         if kind == "send" or kind in ("say", "click_npc", "dlg_select"):
             recog = plan.get("recog")
             if kind == "click_npc" and plan.get("_auto_recog") == "last_turn":
                 recog = self.state.get("last_turn_recog")
                 if recog is None:
                     raise ScenarioError(
-                        "steps[%d].click_npc: no non-self SM_TURN(10) seen yet; "
+                        "steps[%s].click_npc: no non-self SM_TURN(10) seen yet; "
                         "cannot infer NPC recog (fail-closed)" % idx)
             if kind == "dlg_select" and plan.get("_needs_merchant_recog"):
                 recog = self.state["last_merchant_recog"]
                 if recog is None:
                     raise ScenarioError(
-                        "steps[%d].dlg_select: no SM_MERCHANTSAY(643) seen yet; "
+                        "steps[%s].dlg_select: no SM_MERCHANTSAY(643) seen yet; "
                         "cannot infer NPC recog (fail-closed)" % idx)
             raw = conn.send(recog, plan["ident"], plan.get("param", 0),
                             plan.get("tag", 0), plan.get("series", 0),
@@ -1368,7 +1499,7 @@ class Run:
                 rec["recog_is"] = plan.get("recog_is")
             if got is None:
                 self.steps.append(rec)
-                raise StepFailure("steps[%d]: timeout waiting for ident(s) %s after %.0fms"
+                raise StepFailure("steps[%s]: timeout waiting for ident(s) %s after %.0fms"
                                   % (idx, plan["idents"], timeout))
             seq, fr = got
             rec.update(matched_seq=seq, matched_ident=fr.ident, matched_recog=fr.recog,
@@ -1393,7 +1524,7 @@ class Run:
                 rec["recog_is"] = plan.get("recog_is")
             self.steps.append(rec)
             if not ok:
-                raise StepFailure("steps[%d]: wait_frames count=%d idents=%s not met in %.0fms "
+                raise StepFailure("steps[%s]: wait_frames count=%d idents=%s not met in %.0fms "
                                   "(have %d frames)"
                                   % (idx, plan["count"], plan["idents"], timeout,
                                      len(conn.frames)))
@@ -1416,11 +1547,11 @@ class Run:
             self.steps.append(rec)
             if missing:
                 raise StepFailure(
-                    "steps[%d]: timeout waiting for ident(s) %s after %.0fms "
+                    "steps[%s]: timeout waiting for ident(s) %s after %.0fms "
                     "(missing %s; seen %s)"
                     % (idx, plan["idents"], timeout, missing, seen))
             return
-        raise ScenarioError("steps[%d]: unhandled action %r" % (idx, kind))
+        raise ScenarioError("steps[%s]: unhandled action %r" % (idx, kind))
 
 
 def _chain_send(run, conn, recog, ident, body=b"", note=""):
@@ -2931,6 +3062,232 @@ def _selftest_wait_recog_filter():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _selftest_dlg_select_any():
+    """`dlg_select_any`（卡 `openmir2-probe-conditional-dlg-select`）：
+
+    * 纯函数：`parse_page_links`（`<文字/@label>` 抽取，出现序去重）与 `choose_link`
+      （候选顺序优先、大小写不敏感、全不中 ⇒ None）；
+    * 形状：候选列表必须非空/都是 `@label`/不重复；`repeat` 的 times 1..100、steps 非空、
+      `stop_on_select` 字符串、嵌套 ≤3；
+    * 语义：合成场景（repeat 内 send/select/wait）`check_scenario` 通过；wait 在 send 之前 ⇒ 拒；
+    * 叶子展开：`_iter_plan_leaves` 把 repeat 内层动作纳入方向/顺序校验。
+    """
+    # ① 页面链接抽取与择一
+    page_text = ("高级武士：“我出的是<石头> 你赢了！”\\ \\ "
+                 "<打听[命运之刃]的下落/@rw02>\\ \\ <放弃任务/@exit>")
+    links = parse_page_links(page_text)
+    assert links == ["@rw02", "@exit"], links
+    assert parse_page_links("<再来/@rw01><石头/@st>") == ["@rw01", "@st"]
+    assert choose_link(["@rw02", "@rw01"], links) == "@rw02"
+    assert choose_link(["@rw03", "@rw01"], links) is None
+    assert choose_link(["@RW02"], links) == "@RW02", "大小写不敏感"
+    assert choose_link(["@rw01", "@rw02"], links) == "@rw02", "按候选顺序，不是链接顺序"
+
+    # ② 形状：合法
+    def plan1(step):
+        return plan_step(step, 0, {})
+
+    p = plan1({"dlg_select_any": ["@rw02", "@rw01"]})
+    assert p["kind"] == "dlg_select_any" and p["candidates"] == ["@rw02", "@rw01"]
+    assert p["ident"] == CM_MERCHANTDLGSELECT and p["_needs_merchant_recog"] is True
+    rep = plan1({"repeat": {"times": 2, "stop_on_select": "@rw02",
+                            "steps": [{"dlg_select": "@st"},
+                                      {"wait_for": 643},
+                                      {"dlg_select_any": ["@rw02", "@rw01"]},
+                                      {"wait_for": 643}]}})
+    assert rep["kind"] == "repeat" and rep["times"] == 2
+    assert [x["kind"] for x in rep["steps"]] == ["dlg_select", "wait_for",
+                                                 "dlg_select_any", "wait_for"]
+    assert [x["index"] for x in rep["steps"]] == ["0.0", "0.1", "0.2", "0.3"]
+    assert [x["kind"] for x in _iter_plan_leaves([rep])] == [
+        "dlg_select", "wait_for", "dlg_select_any", "wait_for"]
+
+    # ③ 形状：非法（fail-closed）
+    bad = [
+        ({"dlg_select_any": []}, "non-empty list"),
+        ({"dlg_select_any": "x"}, "non-empty list"),
+        ({"dlg_select_any": ["x"]}, "starting with '@'"),
+        ({"dlg_select_any": ["@a", "@A"]}, "duplicate"),
+        ({"dlg_select_any": [1]}, "starting with '@'"),
+        ({"repeat": {"times": 0, "steps": [{"dlg_select": "@st"}]}}, "out of range"),
+        ({"repeat": {"times": 101, "steps": [{"dlg_select": "@st"}]}}, "out of range"),
+        ({"repeat": {"times": 1, "steps": []}}, "non-empty list"),
+        ({"repeat": {"times": 1, "steps": [{"dlg_select": "@st"}], "stop_on_select": 1}},
+         "non-empty string"),
+        ({"repeat": {"times": 1, "steps": [{"dlg_select": "@st"}], "bogus": 1}},
+         "unknown key"),
+    ]
+    for step, needle in bad:
+        err = None
+        try:
+            plan1(step)
+        except ScenarioError as ex:
+            err = str(ex)
+        assert err is not None, "plan_step accepted bad step: %r" % (step,)
+        assert needle in err, (needle, err)
+
+    # 嵌套深度 >3
+    deep = {"dlg_select": "@st"}
+    for _ in range(4):
+        deep = {"repeat": {"times": 1, "steps": [deep]}}
+    err = None
+    try:
+        plan1(deep)
+    except ScenarioError as ex:
+        err = str(ex)
+    assert err is not None and "depth" in err, err
+
+    # ④ 语义：合成场景通过；repeat 内「wait 先于 send」被 R2 拒
+    messages = load_message_constants()
+    good_doc = {
+        "name": "selftest_dlg_any_semantics",
+        "steps": [
+            {"click_npc": "auto:last_turn"},
+            {"wait_for": 643},
+            {"repeat": {"times": 2, "stop_on_select": "@rw02", "steps": [
+                {"dlg_select_any": ["@rw02", "@rw01"]},
+                {"wait_for": 643},
+            ]}},
+            {"wait_for": 643},
+        ],
+    }
+    plans, _ = expand_scenario(good_doc, {"npc_actor": 1})
+    check_scenario(good_doc, plans, None, messages)
+    bad_doc = {
+        "name": "selftest_dlg_any_bad_order",
+        "steps": [
+            {"repeat": {"times": 1, "steps": [{"wait_for": 643}]}},
+            {"click_npc": "auto:last_turn"},
+        ],
+    }
+    plans_bad, _ = expand_scenario(bad_doc, {"npc_actor": 1})
+    err = None
+    try:
+        check_scenario(bad_doc, plans_bad, None, messages)
+    except ScenarioError as ex:
+        err = str(ex)
+    assert err is not None and "no send step precedes" in err, err
+    # ⑤ 运行期（合成帧，不连网）：正例选中 + 负例打印链接清单 + repeat 终止/超限
+    import shutil  # noqa: F401
+    import tempfile
+
+    def page(ident, text):
+        return build_s2c_frame(ident, SM_MERCHANTSAY, 0, 0, 0, text.encode("gbk"))
+
+    def mkrun(chunks):
+        tmpd = tempfile.mkdtemp(prefix="mir2probe-dlgany-")
+        args = argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=8000)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock(chunks)
+        return run, conn, tmpd
+
+    win = page(119, "你赢了 <打听[命运之刃]的下落/@rw02> <放弃任务/@exit>")
+    tie = page(119, "平局 <再来/@rw01>")
+    lose = page(119, "输了 <放弃任务/@exit>")
+    p_any = plan_step({"dlg_select_any": ["@rw02", "@rw01"]}, 0, {})
+    run, conn, tmpd = mkrun([win])
+    try:
+        conn.pump(100)
+        assert run.state["page"]["links"] == ["@rw02", "@exit"], run.state["page"]
+        run.execute_step(conn, p_any)
+        assert run.state["last_selected_label"] == "@rw02"
+        sent = conn.sock.sent[-1]
+        # 线上 body 是 EDCode 编码后的标签（build_s2c_frame/c2s 同口径）⇒ 断言编码片段在场。
+        assert encode_text("@rw02") in sent, sent
+        assert run.steps[-1]["chosen"] == "@rw02"
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    run, conn, tmpd = mkrun([lose])
+    try:
+        conn.pump(100)
+        err = None
+        try:
+            run.execute_step(conn, p_any)
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "dlg_select_any accepted a page without any candidate"
+        assert "none of" in err and "@exit" in err, err
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # repeat：按「发送什么就回什么页面」的脚本化 socket 驱动（不预 pump，避免一次 pump
+    # 把后续页也吃掉——真实服务端也只在收到选择后才发下一页）。
+    class _ScriptedSock:
+        def __init__(self):
+            self.chunks = []
+            self.sent = []
+            self.script = []
+
+        def recv(self, n):
+            if not self.chunks:
+                raise socket.timeout()
+            chunk = self.chunks.pop(0)
+            if len(chunk) > n:
+                self.chunks.insert(0, chunk[n:])
+                chunk = chunk[:n]
+            return chunk
+
+        def sendall(self, data):
+            self.sent.append(bytes(data))
+            for needle, frame in self.script:
+                if encode_text(needle) in data:
+                    self.chunks.append(frame)
+                    break
+
+        def close(self):
+            pass
+
+    def mkrun_scripted(script):
+        tmpd = tempfile.mkdtemp(prefix="mir2probe-dlgany-")
+        args = argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=8000)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        sock = _ScriptedSock()
+        sock.script = script
+        conn.sock = sock
+        run.state["last_merchant_recog"] = 119
+        run.state["page"] = {"ident": 643, "seq": 0, "text": "<石头/@st>",
+                             "links": parse_page_links("<石头/@st>")}
+        return run, conn, sock, tmpd
+
+    rw02_page = page(119, "@rw03 挑战 <挑战命运教主/@rw03>")
+    rep_plan = plan_step({"repeat": {"times": 4, "stop_on_select": "@rw02",
+                                     "steps": [{"dlg_select": "@st"}, {"wait_for": 643},
+                                               {"dlg_select_any": ["@rw02", "@rw01"]},
+                                               {"wait_for": 643}]}}, 0, {})
+    run, conn, sock, tmpd = mkrun_scripted([("@st", win), ("@rw02", rw02_page)])
+    try:
+        run.execute_step(conn, rep_plan)
+        rec = run.steps[-1]
+        assert rec["kind"] == "repeat" and rec["stopped"] is True, rec
+        assert len(rec["attempts"]) == 1 and rec["attempts"][0]["selected"] == "@rw02", rec
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # repeat 超限：每次 @st 给平局页、每次 @rw01 也给平局页 ⇒ 2 轮后仍非 @rw02 ⇒ fail
+    rep_plan2 = plan_step({"repeat": {"times": 2, "stop_on_select": "@rw02",
+                                      "steps": [{"dlg_select": "@st"}, {"wait_for": 643},
+                                                {"dlg_select_any": ["@rw02", "@rw01"]},
+                                                {"wait_for": 643}]}}, 0, {})
+    run, conn, sock, tmpd = mkrun_scripted([("@st", tie), ("@rw01", tie)])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, rep_plan2)
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "not reached" in err and "attempt" in err, err
+        assert "@rw01" in err, err
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+    return ("parse/choose 7 项；形状 %d 坏例；repeat 叶子 0.0-0.3；"
+            "语义正/反；运行期 选中/清单打印/终止/超限 4 例" % len(bad))
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -2957,6 +3314,7 @@ def run_selftest():
     check("scenario-requires", _selftest_scenario_requires)
     check("scenario-inventory", _selftest_scenario_inventory)
     check("scenario-assets", _selftest_scenario_assets)
+    check("dsl-dlg-select-any", _selftest_dlg_select_any)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)

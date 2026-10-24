@@ -1,6 +1,6 @@
 {
   "name": "clearmapmon_t118",
-  "description": "W-CM-1：`CLEARMAPMON T118` + `MONGENEX T118 14 17 命运教主 2 1 1`（武士-0114.txt:145-146）。**前置（F2）**：`[@main]` 分支需 `checkitem 佛牌 1` + `checklevel 43`（且不在 `命运之刃名单.txt`）才有 @rw01。**分支随机（F1）**：`[@rw01]` 的 `#act movr M3 3`(:27) 只有赢页有 @rw02(:61)。M3 是脚本局部量、动作点覆盖预置 ⇒ 唯一固定办法是**两侧同一 `-Seed N`** + `MIR2_RNG_SITE=1`，且 **C# 侧必须经 hook 接线**（`start-csharp-hook.ps1` + `RngSeedHook.dll`，输出 `INJECT_OK <seed>`）；窗口现有 csharp stack（`start-csharp3.ps1`）无任何 seed/hook 参数 ⇒ oracle 仍按时间种子（工具面见卡 `openmir2-window-csharp-rng`）。**当前状态：blocked** ⇒ 不进 run3 批次；解封三步与**操作约束**（输分支会扣佛牌 + 写名单，每次尝试前须恢复夹具）见 `blocked.missing_fixture`。",
+  "description": "W-CM-1：`CLEARMAPMON T118` + `MONGENEX T118 14 17 命运教主 2 1 1`（武士-0114.txt:145-146）。**前置（F2）**：`[@main]` 分支需 `checkitem 佛牌 1` + `checklevel 43`（且不在 `命运之刃名单.txt`）才有 @rw01。**分支随机（F1）**：`[@rw01]` 的 `#act movr M3 3`(:27) 只有赢页有 @rw02(:61)；本场景改用 `dlg_select_any` + `repeat(times=6, stop_on_select=@rw02)` 做确定性重试（卡 `openmir2-probe-conditional-dlg-select`）——命中赢页即终止，平局页重掷，输页（只有 /@exit）显式失败。M3 是脚本局部量、动作点覆盖预置 ⇒ 唯一固定办法是**两侧同一 `-Seed N`** + `MIR2_RNG_SITE=1`，且 **C# 侧必须经 hook 接线**（`start-csharp-hook.ps1` + `RngSeedHook.dll`，输出 `INJECT_OK <seed>`）；窗口现有 csharp stack（`start-csharp3.ps1`）无任何 seed/hook 参数 ⇒ oracle 仍按时间种子（工具面见卡 `openmir2-window-csharp-rng`）。**当前状态：blocked** ⇒ 不进 run3 批次；解封三步与**操作约束**（输分支会扣佛牌 + 写名单，每次尝试前须恢复夹具）见 `blocked.missing_fixture`。",
   "required": [
     "npc_actor"
   ],
@@ -30,22 +30,30 @@
       "note": "[@rw01] 页（:24-33）：`<石头/@st>` 链接 :32"
     },
     {
-      "dlg_select": "@st",
-      "note": "`[@st]` **标签 :36**；`#act movr M3 3`(:27) —— 本场景要求 M3=2（赢页）。**失败形态**：**第 8 步** `wait_for 643` 超时（@st 后三分支都会回 643，第 6 步不会超时） ⇒ 该 seed 未命中赢页（不是场景写错）；**C# 未接线时任何 seed 都不生效**，故解封后若仍失败也不能断定 seed 没选对"
-    },
-    {
-      "wait_for": 643,
-      "timeout_ms": 3000,
-      "note": "赢页：含 `<打听[命运之刃]的下落/@rw02>`(:61)（输页 :47 只有 /@exit、平局页 :54 只有 @rw01）。**失败形态**：**第 8 步** `wait_for 643` 超时（@st 后三分支都会回 643，第 6 步不会超时） ⇒ 该 seed 未命中赢页（不是场景写错）；**C# 未接线时任何 seed 都不生效**，故解封后若仍失败也不能断定 seed 没选对"
-    },
-    {
-      "dlg_select": "@rw02",
-      "note": "[@rw02] 标签 :117"
-    },
-    {
-      "wait_for": 643,
-      "timeout_ms": 3000,
-      "note": "[@rw02] 页；把 @rw03 注册进 CanJmpScriptLableMap（链接 :123）"
+      "repeat": {
+        "times": 6,
+        "stop_on_select": "@rw02",
+        "steps": [
+          {
+            "dlg_select": "@st"
+          },
+          {
+            "wait_for": 643,
+            "timeout_ms": 3000
+          },
+          {
+            "dlg_select_any": [
+              "@rw02",
+              "@rw01"
+            ]
+          },
+          {
+            "wait_for": 643,
+            "timeout_ms": 3000
+          }
+        ]
+      },
+      "note": "限次重试（≤6 轮）：`[@st]` 后 `movr M3 3`(:27) 三支——赢页含 `<打听[命运之刃]的下落/@rw02>`(:61)、平局页含 `<再来/@rw01>`(:54)、输页只有 `/@exit`(:47)。`dlg_select_any [\"@rw02\",\"@rw01\"]` 按候选顺序选**当前页实际存在**的链接：赢 ⇒ @rw02（`stop_on_select` 命中，终止）；平 ⇒ @rw01 回到 `[@rw01]` 页再掷；输页两者皆无 ⇒ 显式失败并打印该页链接清单（fail-closed）。6 轮仍未命中 @rw02 ⇒ fail 并打印每轮页面 links/selected。"
     },
     {
       "dlg_select": "@rw03",
