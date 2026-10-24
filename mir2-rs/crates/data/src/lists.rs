@@ -907,4 +907,138 @@ mod tests {
         }
         std::fs::remove_dir_all(&dir).ok();
     }
+    // --------------------------------------------------------------------
+    // T3 待补牙（卡 openmir2-envir-redlist-teeth）：4 颗常驻反向牙
+    // --------------------------------------------------------------------
+
+    /// **牙 ①（缺行 / 空文件）**：空文件与「无有效行」文件必须给出**空表**（不是通配、
+    /// 不是兜底行）；ItemNameList 缺第三列时按 oracle 收录（空名），缺第二列才跳过。
+    ///
+    /// 红检（改坏必红）：把 `parse_game_log_item_name_list` 的空输入改成 `vec!["*"]`，
+    /// 或给 `parse_item_name_list` 加 `name_s.is_empty() => continue` ⇒ 本用例必红。
+    #[test]
+    fn tooth_missing_rows_and_empty_files() {
+        // 空字符串（0 行）≠ 通配：oracle 的通配门是 `Count == 1 && StartsWith("*")`
+        //（`M2Share.cs:1512-1526`）；同理 2 行且首行 `*` 也不是通配。
+        assert!(parse_game_log_item_name_list("").is_empty());
+        assert!(parse_item_name_list("").is_empty());
+        assert!(parse_admin_list("").unwrap().is_empty());
+        assert!(parse_robot_list("").is_empty());
+        assert_eq!(parse_unbind_list("").unwrap(), UnbindListLoad::default());
+        assert_eq!(
+            parse_game_log_item_name_list("*\n金币\n"),
+            vec!["*".to_string(), "金币".to_string()],
+            "2 行时首行 `*` 不是通配（Count==1 门）"
+        );
+
+        // 文件半：存在但为 0 字节 ⇒ Some(空表)（与「缺文件 ⇒ None」区分）。
+        let dir = temp_dir("teeth-empty");
+        let gl = dir.join(GAME_LOG_ITEM_NAME_LIST_FILE);
+        std::fs::write(&gl, b"").unwrap();
+        assert_eq!(
+            load_game_log_item_name_list_file(&gl).unwrap(),
+            Some(Vec::new())
+        );
+        let it = dir.join(ITEM_NAME_LIST_FILE);
+        std::fs::write(&it, b"").unwrap();
+        assert_eq!(load_item_name_list_file(&it).unwrap(), Some(Vec::new()));
+        std::fs::remove_dir_all(&dir).unwrap();
+
+        // 缺行：第 3 列缺 ⇒ 收录（空名）；第 2 列缺 ⇒ 跳过。
+        let list = parse_item_name_list("1\t2\n1\n");
+        assert_eq!(list.len(), 1, "两列行走收录；单列行跳过");
+        assert_eq!(
+            list[0].item_name, "",
+            "缺第三列 ⇒ 空名（oracle 不补默认名）"
+        );
+    }
+
+    /// **牙 ②（重复行）**：解析层**不去重**；查询层按 oracle 的次序语义
+    /// （ItemName 倒序取最后一条、Admin 正序取第一条、GameLog 任一条命中即真）。
+    ///
+    /// 红检（改坏必红）：在 `parse_item_name_list` 里加同键去重 ⇒ `len() == 2` 断言必红；
+    /// 或把 `get_custom_item_name` 的 `.rev()` 去掉 ⇒ `"乙"` 断言必红。
+    #[test]
+    fn tooth_duplicate_rows_are_preserved() {
+        let list = parse_item_name_list("1\t2\t甲\n1\t2\t乙\n");
+        assert_eq!(list.len(), 2, "重复行照 oracle 原样入表（不去重）");
+        assert_eq!(
+            get_custom_item_name(&list, 1, 2),
+            "乙",
+            "Get 倒序取最后一条"
+        );
+
+        let logs = parse_game_log_item_name_list("金币\n金币\n");
+        assert_eq!(logs, vec!["金币".to_string(), "金币".to_string()]);
+        assert!(game_logs_item(&logs, "金币"));
+
+        let admins = parse_admin_list("* a 1.1.1.1\n* a 2.2.2.2\n").unwrap();
+        assert_eq!(admins.len(), 2, "AdminList 重复名不去重");
+        assert_eq!(
+            lookup_admin(&admins, "a").expect("首个匹配").ipaddr,
+            "1.1.1.1",
+            "lookup 正序取第一条"
+        );
+
+        let unbind = parse_unbind_list("100 甲\n100 乙\n").unwrap();
+        assert_eq!(unbind.map[&100], "甲", "Unbind 重复键保留首个（TryAdd）");
+    }
+
+    /// **牙 ③（非法行：类型错 / 越界）**：数值列溢出 i32 时按 `StrToInt` 失败处理
+    /// （ItemName `-1` ⇒ 跳过；Unbind `0` ⇒ 非正 ⇒ `result = -i; break`），
+    /// 不得静默截断/饱和成合法值。
+    ///
+    /// 红检（改坏必红）：把 `str_to_int(&make_s, -1)` 的默认值改成 `0`（或 i64 饱和到
+    /// `i32::MAX`）⇒ 溢出/类型错行被收录 ⇒ `is_empty()` 必红；把 Unbind 的
+    /// `str_to_int(&data_s, 0)` 默认值改成 `1` ⇒ `map` 非空 ⇒ 本用例必红。
+    #[test]
+    fn tooth_illegal_rows_type_and_overflow() {
+        // 越界：i32::MAX + 1；类型错：非数字；非法值：负数。
+        let illegal = "2147483648\t2\t溢出\n-1\t2\t负值\na\t2\t类型错\n";
+        assert!(
+            parse_item_name_list(illegal).is_empty(),
+            "溢出 / 负值 / 类型错全部跳过"
+        );
+
+        // Unbind：溢出 ⇒ StrToInt 失败取 def=0 ⇒ 非正 ⇒ result = -i 并 break。
+        let load = parse_unbind_list("2147483648 名\n101 后\n").unwrap();
+        assert_eq!(
+            load.result, 0,
+            "首行（i=0）非正 ⇒ -0（与成功不可区分，照搬）"
+        );
+        assert!(load.map.is_empty(), "break 后 101 不再处理");
+
+        // Admin：等级字符不在 '*' / '1'..'9' ⇒ 类型错 ⇒ 跳过。
+        let admins = parse_admin_list("a 名 1.1.1.1\n*\t名\t2.2.2.2\n").unwrap();
+        assert_eq!(admins.len(), 1);
+        assert_eq!(admins[0].ipaddr, "2.2.2.2");
+    }
+
+    /// **牙 ④（边界：空名 / 超长名）**：空名按 oracle 收录（不补默认、不跳过）；
+    /// 超长名逐字符保留（不截断）。
+    ///
+    /// 红检（改坏必红）：给 ItemNameList 加 `name_s.is_empty() => continue` ⇒ 空名断言必红；
+    /// 把 `item_name: name_s` 改成 `name_s.chars().take(64).collect()` ⇒ 超长名断言必红。
+    #[test]
+    fn tooth_boundary_empty_and_long_names() {
+        // 空名：ItemNameList 两列、Unbind 正数 id + 空名（TryAdd 空串）。
+        let list = parse_item_name_list("1\t2\n");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].item_name, "");
+        let unbind = parse_unbind_list("100 \n").unwrap();
+        assert_eq!(unbind.map.get(&100).map(String::as_str), Some(""));
+
+        // 超长名：4096 个 CJK 字符，解析层不得截断。
+        let long = "裁".repeat(4096);
+        let list = parse_item_name_list(&format!("1\t2\t{long}\n"));
+        assert_eq!(list[0].item_name.chars().count(), 4096);
+        assert_eq!(list[0].item_name, long);
+        let unbind = parse_unbind_list(&format!("100 {long}\n")).unwrap();
+        assert_eq!(
+            unbind.map.get(&100).map(String::as_str),
+            Some(long.as_str())
+        );
+        let admins = parse_admin_list(&format!("*\t{long}\t1.2.3.4\n")).unwrap();
+        assert_eq!(admins[0].chr_name, long);
+    }
 }
