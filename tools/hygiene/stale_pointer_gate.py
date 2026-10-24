@@ -60,6 +60,25 @@ are skipped: 「未接线」/「未接入」 (a subsystem is not wired — a dir
 not a card lifecycle) and 「含未合并」/「其中未合并」 (a statistic-row category
 label).  This is a literal exclusion list, not a narrowing of the word tables.
 
+Third class — **snapshot declarations** (card
+``openmir2-stale-pointer-snapshot-exemption``).  A document that declares, in
+its *header*, that it was frozen at a commit (``CUTOFF=<epoch>`` /
+``截至 <sha> @ <YYYY-MM-DD HH:MM>`` / ``快照 @ <sha>`` / ``取数时点 …``) is
+judged under **snapshot semantics**: hits become ``INFO`` lines that print the
+declaration and why it was accepted — they are never silently dropped.  The
+declaration is **checked**, not trusted: (a) the declared sha must exist and be
+an ancestor of ``--ref``; (b) the declared time (UTC+8 unless an explicit
+offset / ``Z`` is written) must be within ``--snapshot-tol`` seconds (default
+900) of that commit's author or committer time; (c) the whole declaration must
+sit *before* the hit.  Declarations are only recognised in the document header
+(before the first ``##`` heading and within the first 60 lines).  Any failed
+check leaves the hit red.
+
+A card-shaped id that is **not** in the ledger thread set is a feature name /
+label, not a card: it is printed as ``INFO 非账本卡号`` and is not red.  An
+unreadable ledger stays fail-closed rc=2 — "cannot look it up" is never "not a
+card".
+
 The ledger is read in **one aggregate pass**: ``walgit collab board --format
 json`` once (the projection gives every card's status) plus one bulk
 ``git cat-file --batch`` over ``refs/collab/inbox/*`` (entry bodies carry the
@@ -92,6 +111,7 @@ ledger unavailable (fail-closed).
 from __future__ import annotations
 
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -188,6 +208,23 @@ CORRECTION_RE = re.compile(r"〔[^〕]*订正[^〕]*〕|\d{4}-\d{2}-\d{2}\s*\*{0
 # *wording being quoted* (the drift-sweep reports literally tabulate
 # "原说法 → 订正"), not this line's own assertion, so it is not a hit.
 QUOTE_RE = re.compile(r"「[^」]*」|『[^』]*』")
+
+# ---- snapshot declarations -------------------------------------------------
+# A document-level freeze marker.  The *anchor* keyword makes a header line a
+# candidate; the sha and the time may sit on the same line or within
+# SNAPSHOT_NEAR lines of it (``截至 <sha>`` on the title and the timestamp on
+# the next metadata line is the common shape).
+SNAPSHOT_ANCHOR_RE = re.compile(r"CUTOFF|截至|快照|取数时点|SNAPSHOT", re.IGNORECASE)
+SNAPSHOT_EPOCH_RE = re.compile(
+    r"(?:CUTOFF|EPOCH)\s*[=:：]?\s*`?(\d{9,11})`?", re.IGNORECASE
+)
+SNAPSHOT_DATETIME_RE = re.compile(
+    r"(?<![0-9])([0-9]{4})-([0-9]{2})-([0-9]{2})[^0-9]{0,6}?([0-9]{2}):([0-9]{2})(?::([0-9]{2}))?"
+    r"(?:\s*([+-])([0-9]{2})(?::?([0-9]{2}))?|\s*(?i:(Z|UTC)))?"
+)
+DEFAULT_SNAPSHOT_TOL = 900  # seconds (--snapshot-tol)
+SNAPSHOT_NEAR = 2  # lines: anchor <-> sha/time
+SNAPSHOT_PREAMBLE_MAX = 60  # declarations must sit in the document header
 
 SNIPPET_LIMIT = 200
 
@@ -364,6 +401,169 @@ def candidate_cards(line, max_gap):
                 best = (word.group(0), gap)
         if best is not None and best[1] <= max_gap:
             out.append((match.group(1), best[0], best[1]))
+    return out
+
+
+# ------------------------------------------------------- snapshot declarations
+def _line_shas(line):
+    return [
+        match.group(1)
+        for match in HASH_RE.finditer(line)
+        if HAS_HEX_LETTER.search(match.group(1))
+    ]
+
+
+def _line_times(line):
+    """Return [(epoch, text)] for every timestamp on one line."""
+    out = []
+    for match in SNAPSHOT_DATETIME_RE.finditer(line):
+        year, month, day = (int(match.group(index)) for index in (1, 2, 3))
+        hour, minute = int(match.group(4)), int(match.group(5))
+        second = int(match.group(6) or 0)
+        sign, off_h, off_m = match.group(7), match.group(8), match.group(9)
+        if sign:
+            offset = int(off_h) * 60 + int(off_m or 0)
+            if sign == "-":
+                offset = -offset
+        elif match.group(10):
+            offset = 0
+        else:
+            # Project convention: doc timestamps are local (+08:00) unless an
+            # explicit offset (or Z/UTC) is written.
+            offset = 480
+        try:
+            stamp = datetime.datetime(
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                tzinfo=datetime.timezone(datetime.timedelta(minutes=offset)),
+            )
+        except ValueError:
+            continue
+        out.append((int(stamp.timestamp()), match.group(0)))
+    for match in SNAPSHOT_EPOCH_RE.finditer(line):
+        out.append((int(match.group(1)), match.group(0)))
+    return out
+
+
+def _nearest_unique(lines, low, high, anchor, extract):
+    """Nearest line whose extracted values are non-empty and unambiguous."""
+    for distance in range(0, high - low + 1):
+        for index in (anchor - distance, anchor + distance):
+            if not low <= index <= high:
+                continue
+            values = extract(lines[index - 1])
+            if not values:
+                continue
+            distinct = set(values)
+            if len(distinct) != 1:
+                return None  # ambiguous header: refuse the exemption
+            return index, distinct.pop()
+    return None
+
+
+def _nearest_time(lines, low, high, anchor):
+    for distance in range(0, high - low + 1):
+        for index in (anchor - distance, anchor + distance):
+            if not low <= index <= high:
+                continue
+            values = _line_times(lines[index - 1])
+            if not values:
+                continue
+            distinct = {value[0]: value[1] for value in values}
+            if len(distinct) != 1:
+                return None
+            epoch, text = next(iter(distinct.items()))
+            return index, epoch, text
+    return None
+
+
+def snapshot_declarations(text):
+    """Document-level snapshot declarations, per the module docstring.
+
+    Only the header is eligible: before the first ``##`` heading and within
+    ``SNAPSHOT_PREAMBLE_MAX`` lines.  A declaration's ``position`` is the last
+    line it occupies, so ``position < hit_line`` means "the whole declaration
+    was written before the assertion".
+    """
+    lines = text.splitlines()
+    preamble = len(lines) + 1
+    for index, line in enumerate(lines, 1):
+        if line.startswith("## "):
+            preamble = index
+            break
+    high = min(preamble - 1, SNAPSHOT_PREAMBLE_MAX, len(lines))
+    out = []
+    seen = set()
+    for anchor in range(1, high + 1):
+        if not SNAPSHOT_ANCHOR_RE.search(lines[anchor - 1]):
+            continue
+        low = max(1, anchor - SNAPSHOT_NEAR)
+        top = min(high, anchor + SNAPSHOT_NEAR)
+        sha = _nearest_unique(lines, low, top, anchor, _line_shas)
+        when = _nearest_time(lines, low, top, anchor)
+        if sha is None or when is None:
+            continue
+        sha_line, sha_text = sha
+        time_line, epoch, time_text = when
+        position = max(anchor, sha_line, time_line)
+        key = (sha_text, epoch, position)
+        if key in seen:
+            continue
+        seen.add(key)
+        text_lines = []
+        for index in sorted({anchor, sha_line, time_line}):
+            snippet = lines[index - 1].strip()
+            if len(snippet) > SNIPPET_LIMIT:
+                snippet = snippet[: SNIPPET_LIMIT - 1] + "…"
+            text_lines.append("L%d: %s" % (index, snippet))
+        out.append(
+            {
+                "position": position,
+                "sha": sha_text,
+                "epoch": epoch,
+                "time_text": time_text,
+                "text": " / ".join(text_lines),
+            }
+        )
+    return out
+
+
+def _commit_time(top, sha, cache):
+    if sha in cache:
+        return cache[sha]
+    rc, out, _err = _git_text(top, "show", "-s", "--format=%at %ct", sha)
+    parts = out.split()
+    if rc != 0 or len(parts) != 2 or not all(part.isdigit() for part in parts):
+        cache[sha] = None
+        return None
+    cache[sha] = (int(parts[0]), int(parts[1]))
+    return cache[sha]
+
+
+def checked_declarations(top, text, tolerance, ancestor, commit_cache):
+    """Keep only declarations that pass (a) and (b) of the docstring.
+
+    (c) "declaration before the hit" is enforced per hit line by the caller.
+    """
+    out = []
+    for decl in snapshot_declarations(text):
+        state = ancestor(decl["sha"])
+        if not state:  # None: not a commit here; False: not an ancestor
+            continue
+        times = _commit_time(top, decl["sha"], commit_cache)
+        if times is None:
+            continue
+        delta = min(abs(decl["epoch"] - times[0]), abs(decl["epoch"] - times[1]))
+        if delta > tolerance:
+            continue
+        checked = dict(decl)
+        checked["delta"] = delta
+        checked["commit_times"] = times
+        out.append(checked)
     return out
 
 
@@ -750,7 +950,15 @@ def load_allowlist(path):
     return checked
 
 
-def scan(top, rel_path, ref, allowlist, max_gap, ledger=None):
+def scan(
+    top,
+    rel_path,
+    ref,
+    allowlist,
+    max_gap,
+    ledger=None,
+    snapshot_tol=DEFAULT_SNAPSHOT_TOL,
+):
     """Scan ``rel_path``; return a dict with hits/exemptions/errors.
 
     ``ledger`` is a :class:`Ledger` (card-status check enabled) or ``None``
@@ -772,8 +980,13 @@ def scan(top, rel_path, ref, allowlist, max_gap, ledger=None):
         "ledger_skipped": ledger is None,
         "errors": [],
         "allowlist": allowlist,
+        "snapshot_info": [],
+        "snapshot_exempt": 0,
+        "snapshot_tol": snapshot_tol,
+        "card_nonid": [],
     }
     ancestry = {}
+    commit_times = {}
 
     def ancestor(sha):
         if sha not in ancestry:
@@ -791,6 +1004,9 @@ def scan(top, rel_path, ref, allowlist, max_gap, ledger=None):
         except (OSError, UnicodeDecodeError) as exc:
             result["errors"].append("cannot read %s: %s" % (rel, exc))
             continue
+        declarations = checked_declarations(
+            top, text, snapshot_tol, ancestor, commit_times
+        )
         for lineno, line in enumerate(text.splitlines(), 1):
             result["lines"] += 1
             candidates = candidate_pointers(line, max_gap)
@@ -818,8 +1034,12 @@ def scan(top, rel_path, ref, allowlist, max_gap, ledger=None):
                         continue
                     verdict = card_state(ledger, card_id)
                     if verdict is None:
-                        # Not a thread id in the ledger (e.g. a principal name):
-                        # nothing to judge, which is green.
+                        # Not a thread id in the ledger (a feature name, label or
+                        # principal): nothing to judge, which is green — but say
+                        # so, so "not a card" is visible rather than silent.
+                        result["card_nonid"].append(
+                            {"path": rel, "line": lineno, "card": card_id}
+                        )
                         result["card_green"] += 1
                     elif verdict[0]:
                         card_red.append((card_id, verdict[1]))
@@ -843,6 +1063,43 @@ def scan(top, rel_path, ref, allowlist, max_gap, ledger=None):
             if entry is not None:
                 entry["used"] = True
                 result["allow_exempt"] += 1
+                continue
+            decl = None
+            for candidate_decl in reversed(declarations):
+                if candidate_decl["position"] < lineno:
+                    decl = candidate_decl
+                    break
+            if decl is not None:
+                # A checked snapshot declaration only *downgrades* hits to INFO;
+                # it never hides them.  (c) is the ``position < lineno`` test.
+                for token, word, state in resolved:
+                    if state is None:
+                        result["unresolved"].append(
+                            {"path": rel, "line": lineno, "hash": token, "snippet": snippet}
+                        )
+                    elif state:
+                        result["snapshot_info"].append(
+                            {
+                                "path": rel,
+                                "line": lineno,
+                                "kind": "hash",
+                                "name": token,
+                                "word": word,
+                                "decl": decl,
+                            }
+                        )
+                for card_id, label in card_red:
+                    result["snapshot_info"].append(
+                        {
+                            "path": rel,
+                            "line": lineno,
+                            "kind": "card",
+                            "name": card_id,
+                            "word": label,
+                            "decl": decl,
+                        }
+                    )
+                result["snapshot_exempt"] += 1
                 continue
             for token, word, state in resolved:
                 if state is None:
@@ -905,6 +1162,32 @@ def emit(result, ref, allowlist_path, out=sys.stdout, err=sys.stderr):
     for hit in result["card_hits"]:
         # Contract output: file:line  卡号  账本状态
         print("%s:%d  %s  %s" % (hit["path"], hit["line"], hit["card"], hit["state"]), file=out)
+    for item in result["card_nonid"]:
+        print(
+            "INFO 非账本卡号（按特性名/标签放行） %s:%d  %s"
+            % (item["path"], item["line"], item["card"]),
+            file=out,
+        )
+    for item in result["snapshot_info"]:
+        decl = item["decl"]
+        print(
+            "INFO snapshot-exempt %s:%d  %s %s  (declaration %s; sha %s @ %s "
+            "(epoch %d), commit %s, Δ%ds ≤ %ds, ancestor of ref)"
+            % (
+                item["path"],
+                item["line"],
+                item["kind"],
+                item["name"],
+                decl["text"],
+                decl["sha"],
+                decl["time_text"],
+                decl["epoch"],
+                "%d/%d" % decl["commit_times"],
+                decl["delta"],
+                result["snapshot_tol"],
+            ),
+            file=out,
+        )
     for item in result["unresolved"]:
         print(
             "NOTE unresolved %s:%d  %s (not a commit in this repository; not judged)"
@@ -924,14 +1207,16 @@ def emit(result, ref, allowlist_path, out=sys.stdout, err=sys.stderr):
         print(
             "stale-pointer gate: OK (%d files / %d lines scanned under docs; "
             "%d green pointer(s), %d correction-marker line(s), %d allow-listed "
-            "line(s), %d unresolved; %d card-status hit(s), %d card id(s) judged, "
-            "%d card-bearing line(s)%s; ref=%s, allow-list=%s)"
+            "line(s), %d snapshot-exempt hit(s), %d unresolved; %d card-status "
+            "hit(s), %d card id(s) judged, %d card-bearing line(s)%s; ref=%s, "
+            "allow-list=%s)"
             % (
                 result["files"],
                 result["lines"],
                 result["green_pointers"],
                 result["marker_exempt"],
                 result["allow_exempt"],
+                result["snapshot_exempt"],
                 len(result["unresolved"]),
                 len(result["card_hits"]),
                 result["card_green"],
@@ -1059,6 +1344,41 @@ def selftest():
         _write(
             os.path.join(repo, "docs", "cardoffboard", "offboard.md"),
             "卡 `openmir2-synthetic-offboard` 未合入\n",
+        )
+        # Snapshot-declaration fixtures.  ``merged`` is an ancestor of the ref,
+        # so a declaration naming it with its own timestamp must downgrade hits
+        # to INFO; the three broken variants must stay red.
+        def _stamp(rev, delta=0):
+            epoch = int(_run_git(repo, "show", "-s", "--format=%ct", rev)) + delta
+            return datetime.datetime.fromtimestamp(
+                epoch, datetime.timezone(datetime.timedelta(hours=8))
+            ).strftime("%Y-%m-%d %H:%M:%S +08")
+
+        _write(
+            os.path.join(repo, "docs", "snapshot-ok", "ok.md"),
+            "# 快照 @ `%s` @ %s\n\n分支 head `%s`，**未合入**\n"
+            "卡 `openmir2-synthetic-closed` 未合入\n" % (merged, _stamp(merged), merged),
+        )
+        _write(
+            os.path.join(repo, "docs", "snapshot-sha", "bad.md"),
+            "# 快照 @ `%s` @ %s\n\n分支 head `%s`，**未合入**\n"
+            % (pending, _stamp(pending), merged),
+        )
+        _write(
+            os.path.join(repo, "docs", "snapshot-time", "bad.md"),
+            "# 快照 @ `%s` @ %s\n\n分支 head `%s`，**未合入**\n"
+            % (merged, _stamp(merged, 3600), merged),
+        )
+        _write(
+            os.path.join(repo, "docs", "snapshot-order", "bad.md"),
+            "分支 head `%s`，**未合入**\n\n# 快照 @ `%s` @ %s\n"
+            % (merged, merged, _stamp(merged)),
+        )
+        # A feature name that merely *looks* like a card id: absent from the
+        # ledger, so it must be INFO (非账本卡号) and not red.
+        _write(
+            os.path.join(repo, "docs", "cardnonid", "feature.md"),
+            "特性名 `openmir2-feature-flag-name` 未开始\n",
         )
         # A card-bearing line whose allow-list entry must survive --no-ledger.
         allowed_card_line = "卡 `openmir2-synthetic-closed` 未合入\n"
@@ -1431,6 +1751,96 @@ def selftest():
             and "allow-empty-ledger" in allowed_text,
         )
 
+        # ---- snapshot declarations: checked, never unconditional
+        snap_ok = scan(
+            repo, "docs/snapshot-ok", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉑ 受检快照声明（sha 祖先 + 时间吻合 + 声明在前）⇒ 命中降级 INFO，不红",
+            snap_ok["rc"] == 0
+            and not snap_ok["hits"]
+            and not snap_ok["card_hits"]
+            and snap_ok["snapshot_exempt"] == 2
+            and {item["kind"] for item in snap_ok["snapshot_info"]} == {"hash", "card"}
+            and all(item["decl"]["sha"] == merged for item in snap_ok["snapshot_info"]),
+        )
+
+        snap_sha = scan(
+            repo, "docs/snapshot-sha", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉒ 声明 sha 存在但不是 --ref 祖先 ⇒ 不豁免，仍红",
+            snap_sha["rc"] == 1
+            and len(snap_sha["hits"]) == 1
+            and snap_sha["hits"][0]["hash"] == merged
+            and not snap_sha["snapshot_info"],
+        )
+
+        snap_time = scan(
+            repo, "docs/snapshot-time", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉓ 声明时间与 commit 差 > --snapshot-tol ⇒ 不豁免，仍红",
+            snap_time["rc"] == 1
+            and len(snap_time["hits"]) == 1
+            and snap_time["hits"][0]["hash"] == merged
+            and not snap_time["snapshot_info"],
+        )
+
+        snap_order = scan(
+            repo, "docs/snapshot-order", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉔ 声明写在命中之后 ⇒ 不豁免，仍红",
+            snap_order["rc"] == 1
+            and len(snap_order["hits"]) == 1
+            and snap_order["hits"][0]["hash"] == merged
+            and not snap_order["snapshot_info"],
+        )
+
+        card_nonid = scan(
+            repo, "docs/cardnonid", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉕ 不在账本的卡号形状 ⇒ 非卡号（特性名），INFO 且不红",
+            card_nonid["rc"] == 0
+            and not card_nonid["card_hits"]
+            and len(card_nonid["card_nonid"]) == 1
+            and card_nonid["card_nonid"][0]["card"] == "openmir2-feature-flag-name",
+        )
+
+        missing_ledger = os.path.join(tmp, "does-not-exist.json")
+        unreadable = subprocess.run(
+            [
+                sys.executable,
+                "-I",
+                os.path.abspath(__file__),
+                "--path",
+                "docs/snapshot-ok",
+                "--ref",
+                ref,
+                "--allowlist",
+                empty_allowlist,
+                "--ledger-json",
+                missing_ledger,
+            ],
+            cwd=repo,
+            capture_output=True,
+            check=False,
+        )
+        unreadable_text = (unreadable.stdout + unreadable.stderr).decode(
+            "utf-8", "replace"
+        )
+        check(
+            "㉖ 账本读不到 ⇒ rc=2（查不到 ≠ 不是卡号）",
+            unreadable.returncode == 2 and "not found" in unreadable_text,
+        )
+
     failed = 0
     for name, ok in checks:
         print(("PASS " if ok else "FAIL ") + name)
@@ -1503,6 +1913,13 @@ def main(argv):
         "(default: 24)",
     )
     parser.add_argument(
+        "--snapshot-tol",
+        type=int,
+        default=DEFAULT_SNAPSHOT_TOL,
+        help="max seconds between a doc's snapshot declaration and the declared "
+        "commit's author/committer time (default %d)" % DEFAULT_SNAPSHOT_TOL,
+    )
+    parser.add_argument(
         "--no-ledger",
         action="store_true",
         help="skip the card-status (ledger) check; prints 已跳过 and judges nothing",
@@ -1573,7 +1990,15 @@ def main(argv):
                 raise GateError(message, rc=2)
 
     try:
-        result = scan(top, rel_path, ref, allowlist, args.max_gap, ledger)
+        result = scan(
+            top,
+            rel_path,
+            ref,
+            allowlist,
+            args.max_gap,
+            ledger,
+            snapshot_tol=args.snapshot_tol,
+        )
     except GateError as exc:
         print(str(exc), file=sys.stderr)
         return exc.rc

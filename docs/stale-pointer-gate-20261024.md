@@ -1,7 +1,8 @@
 # 过期指针门（`stale_pointer_gate`）—— 首次接入报告
 
 - 卡：`openmir2-docs-stale-pointer-gate`（tier=L，write_set = `tools/hygiene/` + `docs/`）；
-  第二类判据由 `openmir2-stale-pointer-card-status-check`（tier=L）追加
+  第二类判据由 `openmir2-stale-pointer-card-status-check`（tier=L）追加；
+  **快照声明受检降级 + 卡号存在性**由 `openmir2-stale-pointer-snapshot-exemption`（tier=L）追加
 - 交付：`tools/hygiene/stale_pointer_gate.py` + `tools/hygiene/stale_pointer_allowlist.toml` + 本报告
 - 基线：`refs/remotes/walgit/master = 55a8e7fca`（第一类）→ `3738ad234`（第二类接入时点）
 - 只读仓库与账本：不改 `src/**`、`rules.json`、场景 JSON、`mir2-rs/tests/parity/whitelist.md`、
@@ -74,6 +75,48 @@ git merge-base --is-ancestor <hash> <ref>     # 默认 --ref refs/remotes/walgit
   `refs/collab/*` 时只能判 `closed`，判不了 `merge_result`（这是离线快照的已知局限）。
 - **白名单腐烂**：白名单条目对两类命中都生效；`--no-ledger` 时，带卡号的候选行仍被视为「可能命中」，
   以免把只压卡号命中的历史条目误报为腐烂。
+
+## 1c. 快照声明：受检才降级（`openmir2-stale-pointer-snapshot-exemption`）
+
+**为什么**：会话摘要/审计报告是**某时点的快照**。它引用「当时还没进 master 的卡或 commit」
+在快照语义下是正确的；门按现况判就是假红。但「文件头加一行 CUTOFF 就赦免全文」会把门变成摆设，
+所以豁免必须**受检**，而且只降级、不静默丢弃。
+
+**识别规则（正则写在 `stale_pointer_gate.py` 顶部，以下为契约）**：
+
+- **anchor**：`CUTOFF|截至|快照|取数时点|SNAPSHOT`（不区分大小写）。
+- **sha**：anchor 行本身或 **±2 行**（`SNAPSHOT_NEAR`）内的 7–40 位十六进制，且至少含一个 `a`–`f`
+  （与第一类同口径，避免把日期当 hash）。
+- **time**：同一窗口内的 `YYYY-MM-DD` + 最多 6 个非数字字符 + `HH:MM[:SS]`
+  （可带 `+HH:MM` / `+HHMM` / `Z` / `UTC`），或 `CUTOFF`/`EPOCH` 后跟 9–11 位 epoch。
+- **时区**：显式 offset / `Z` / `UTC` 优先；**不写时按本项目约定解释为 +08:00**。
+- **只看文档头**：第一个 `## ` 之前，且在前 60 行（`SNAPSHOT_PREAMBLE_MAX`）内。
+  这是有意的：正文中间引用的「看板快照 `<sha>` @ `<ts>`」是**数据点**，不是「全文冻结于此」的声明。
+  `docs/rewrite-remaining-inventory-20261022.md:36`
+  正是这种数据点；若允许文内任意位置，它会把该文件 `:725` 的真滞后一并赦免。
+- **歧义即放弃**：同一窗口里若出现**多个不同的** sha 或时间，不生成声明（宁可少赦免）。
+
+**三项必查（任一不满足 ⇒ 仍判红 rc=1）**：
+
+- (a) 声明 sha 存在，且是 `--ref`（默认 `refs/remotes/walgit/master`）的**祖先**；
+- (b) 声明时间与该 commit 的 **author 或 committer** 时间相差 ≤ `--snapshot-tol`（默认 **900 秒**）；
+- (c) 整个声明（anchor、sha、time 三行的**最后一行**）出现在命中行**之前**——不许文件末尾补一行赦免全文。
+
+通过后，该行命中降级为 `INFO snapshot-exempt`，**打印声明原文**（含行号）、sha、声明时间、commit 时间、
+Δ 秒与「祖先」理由。白名单优先于快照降级（同行两者都命中时按白名单记 used，避免腐烂误报）。
+
+**实测（master `e643b43fb`，138 个 md）**：全库只有 **6 条**受检声明
+（`goal-gate-full-20261024.md`、`goal-snapshot-late-20261023.md`×2、`r-card-evidence-sweep-20261023.md`、
+`runbook-tool-consistency-audit-20261023.md`、`session-digest-20261024.md`）；本轮只有
+`session-digest-20261024.md` 的 3 处命中落在其声明之后，降级为 INFO。`inventory` 的 `:36` 不构成声明，
+所以 `:725` 仍红（见 §3.5）。
+
+**卡号存在性（同一张卡的第二个修正）**：`openmir2-*` 命中后先查**账本线程集合**；
+id 不在集合里 ⇒ 打印 `INFO 非账本卡号（按特性名/标签放行）`，**不红**。
+实测被这样放行的有 `openmir2-spell-second-observer`、`openmir2-combat-hit-monster-fixture`、
+`openmir2-adjust-bonus-wire` 等「计划中的卡 / 特性名」。
+**账本不可读 / 0 线程 ⇒ 仍是 rc=2**：「读不到账本」与「id 不在可读账本里」是两件事，
+只有后者才能判「不是卡号」；`--ledger-json` 指向不存在的文件也有 selftest ㉖ 钉住 rc=2。
 
 ## 2. 三条豁免（都要求行内可见，两类判据共用）
 
@@ -210,6 +253,20 @@ base 19 处命中里 `closed` 6 处（3 张卡：`openmir2-dualrun-window-burndo
 **第二类抓不到本次的 `f5a2e485b` 实例**：`attack-weapon-wear-642-20261024.md:173` 那一行没有卡号，只有 hash。
 所以第二类不是第一类的替代，而是补上「rebase 后 hash 非祖先、但同一行写了卡号」那类。
 
+## 3.5 快照/卡号修正后：master `e643b43fb` 全量重扫
+
+改前：`FAIL (2 stale pointer(s), 3 card-status hit(s))`。改后：
+
+| 位置 | 类别 | 处置 |
+|---|---|---|
+| `docs/session-digest-20261024.md:57` | 卡号 `openmir2-goal-gate-unmerged-selftest` | **INFO snapshot-exempt**：声明 `L4 取数时点 2026-10-24 07:18:30 +08`，sha `c4b66ddb1` 是祖先，Δ106s。该格里的「未合并窗口桶」是**特性名**；整张表是 07:18 的合并记录，快照语义正确 |
+| `docs/session-digest-20261024.md:177` | hash `478ff9a33` / `3bd8c6580` + 卡号 `openmir2-gate-baseline-snapshot` | **INFO snapshot-exempt**：同一份声明（`c4b66ddb1`，Δ106s）；该行是当日「在办/待审」快照 |
+| `docs/rewrite-remaining-inventory-20261022.md:725` | 卡号 `openmir2-merchant-script-load` | **仍红（已知残余）**：原文「未开工，仍无卡」是 2026-10-23 的真实滞后，属 `openmir2-inventory-top5-audit` 的写集，本卡不越界订正 |
+
+汇总：`FAIL (0 stale pointer(s), 1 card-status hit(s), 0 allow-list rot, 0 error(s))`，rc=1。
+**0 stale pointer**；唯一红点是上面那条登记的残余，待 inventory 卡合入后消解。本卡没有靠收窄词表、
+扩大引号或放宽 `--max-gap` 来变绿。
+
 ## 4. 白名单：条目数与防腐烂验证
 
 当前 **12 条**：第一类 2 条（§3 表 #3/#4），第二类 10 条（§3.4 表 #4/#5 共用 1 条、#7-#10、#12、
@@ -279,6 +336,19 @@ python -I tools/hygiene/stale_pointer_gate.py --allowlist /e/tmp/rot.toml
     ⚠ board 是**在线变动**的：同一口径三次实测是 509 → 511/512 → 514 张卡（对应 525 条线程），
     引用具体数字时必须带时点。
 
+16. **伪造快照声明（本版新增机制的天花板）**：快照豁免只校验「sha 是祖先 + 声明时间与该 commit
+    时间吻合 + 声明在命中之前」，**不校验这个时间戳是否真是文档的写作时点**。任何人可以在文件头写
+    `快照 @ <某个 15 分钟内提交的 sha> @ <该 commit 时间>`，把该文档后续的真漂移全部降级为 INFO。
+    代码层没有防御——它只保证**不静默**：每条降级都打印声明原文与 Δ。人工复核建议：对每条
+    `INFO snapshot-exempt` 跑 `git blame -L <decl_line>,<decl_line> -- <path>` 与
+    `git blame -L <hit_line>,<hit_line> -- <path>`；声明行必须**不晚于**命中行（若声明行是新加的，
+    就是伪豁免），再看声明日期与文件名/正文日期是否自洽。
+17. **账本存在但过期**：卡号存在性依赖 `refs/collab/*` 与 board 投影。账本**读得到但落后**
+    （新卡还没 fetch）时，真卡号会被当成「非卡号」⇒ INFO 放行。自动判不出来（这就是要求
+    「读不到 ⇒ rc=2」的原因）；`INFO 非账本卡号` 行也要人看一眼。
+18. **时间解释假设 +08**：文档时间不写 offset 时按 +08 解释。作者用 UTC 却漏写 `Z` ⇒ 差 8 小时、
+    不豁免（假红，方向安全）；显式 offset 写错的伪造声明仍可能落进窗口（见 16）。
+
 因此本门的定位是**把「hash 指得到 / 卡号写得出、话没跟上」的漂移变成机判红点**，不是文档事实核查器。
 
 ## 6. 用法
@@ -309,7 +379,7 @@ python -I tools/hygiene/stale_pointer_gate.py --selftest
 
 ## 7. 自测（`--selftest`）
 
-20 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；side 分支 commit B = 对象存在但非祖先；
+26 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；side 分支 commit B = 对象存在但非祖先；
 卡号类用内存 `Ledger` **或**合成 `refs/collab/inbox` blob，不需要真 `walgit`）：
 
 | # | 场景 | 期望 |
@@ -334,10 +404,16 @@ python -I tools/hygiene/stale_pointer_gate.py --selftest
 | ⑱ | `--no-ledger` + 只压卡号命中的白名单条目 | 条目仍算 used、`allow_exempt==1`、不报 rot |
 | ⑲ | `_merged_flag(True/False/None/"9ff7ff064")` | 只有布尔 `true` 为真（字符串分支已删） |
 | ⑳ | 账本 0 线程 + docs 有卡号 | 默认 rc=2；`--allow-empty-ledger` ⇒ rc=0 + NOTE |
+| ㉑ | 受检快照声明（祖先 + 时间吻合 + 声明在前），行内既有 stale hash 又有 closed 卡号 | 降级 INFO（`snapshot_exempt==2`），rc=0 |
+| ㉒ | 声明 sha 存在但**不是** `--ref` 祖先 | 不豁免，仍红 |
+| ㉓ | 声明时间与 commit 差 3600s > `--snapshot-tol` | 不豁免，仍红 |
+| ㉔ | 声明写在命中**之后** | 不豁免，仍红 |
+| ㉕ | 卡号形状但不在账本（特性名） | rc=0，`card_nonid` 记一条 |
+| ㉖ | `--ledger-json` 指向不存在的账本 | rc=2（「查不到」≠「不是卡号」） |
 
-实测：`selftest: 20/20 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为本卡新增，其中 ⑮⑯ 钉住 board+snapshot+inbox
-并集——本卡最有价值的机制——⑰ 钉住字面复合词排除，⑱ 钉住 `--no-ledger` 下的白名单存活，
-⑲ 钉住已删死代码的替代契约，⑳ 钉住空账本 fail-closed）。
+实测：`selftest: 26/26 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为第二类卡，㉑-㉖ 为本卡新增：
+㉑ 钉住三条件全过时的降级、㉒㉓㉔ 分别钉住 a/b/c 三条否决、㉕ 钉住「非账本卡号不红」、
+㉖ 钉住账本不可读 fail-closed）。
 
 ## 8. 告警还是阻断（留给 Leader 合并时定）
 
@@ -358,6 +434,10 @@ git fetch walgit master '+refs/collab/*:refs/collab/*' \
 
 - 未改任何 `src/**`、规则、场景、whitelist；未起栈、未连库、未占端口、未写生产库。
 - 未把本门写进 `AGENTS.md` 的本地门禁清单（卡面明确「是否接入由 Leader 在合并时定」）。
+- 快照声明只从**文档头**识别（首个 `## ` 之前、前 60 行）；正文中段声明的「本节快照」不生效。
+  这是有意的保守选择：整份豁免的代价太大，宁可假红让人补一个头部声明（见 §5-16 的伪造风险）。
+- 卡号存在性以**可读账本**为前提；账本落后会把新卡误判为「非卡号」并打 INFO（§5-17），
+  合并前仍应 `git fetch walgit '+refs/collab/*:refs/collab/*'`。
 - 未做 `docs/**` 以外的扫描（`mir2-rs/tests/parity/*.md`、thread body、代码注释里的旧断言仍靠人肉）。
 - 第二类只支持**未折叠与已折叠（snapshot + tail）**两种账本形态；`gc` 之后若快照格式再变，门会
   fail-closed（rc=2）而不是静默绿。
