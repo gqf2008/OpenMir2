@@ -8138,6 +8138,18 @@ fn handle_eat_cmd(
     sg.recovery.inc_spell = state.inc_spell;
     sg.user_unlock_durg = state.user_unlock_durg;
     sg.hunger_status = state.hunger_status;
+    // **药品写点镜像进实体**（卡 `openmir2-spell-fill-projection-mirror`，review 94159ca7d1 F1）：
+    // oracle 的 `IncHealthSpell`（`BaseObject.cs:952-975`）写唯一一份 `WAbil`——本段覆盖的写点
+    // 来自 `useitem.rs:306`（StdMode 0 Shape 1 固定量）、`:329`（Shape 3 百分比）、
+    // `:360`（StdMode 1 食物 `RefMyStatus` 的 `recalc_abilitys` 回写），与 P7/P1 恢复同族。
+    // 不镜像 ⇒ 下一 tick P21（`drain_player_need_recheck_with_magic` 无条件
+    // `sg.state.wabil.hp/mp = e.hp/mp`）把吃药恢复擦回实体旧值（reviewer 反例牙：药后
+    // 投影 (15,15)、实体 (5,5)、P21 后 (5,5)；oracle 应 (15,15)）。沿「每个写点同步」
+    // 教义 hp/mp 双侧镜像；实体缺席（纯函数测试夹具）⇒ 保持原样（guard）。
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.hp = sg.state.wabil.hp;
+        e.mp = sg.state.wabil.mp;
+    }
 
     let Some(tx) = route_to_gate(gates, gate_idx, socket, "用药回帧") else {
         return;
@@ -50122,6 +50134,258 @@ SendRefMsgRange=15
             rec.data.abil.as_ref().expect("abil").mp,
             16,
             "存档 MP=16（修复前落库 13）"
+        );
+    }
+
+    /// **卡 `openmir2-spell-fill-projection-mirror` 合同测试（tier R）· CM_EAT 腿**
+    /// （review `94159ca7d1` F1）：同族第三个 `IncHealthSpell` 生产调用者——吃药。
+    ///
+    /// oracle 口径：`EatItems`（`PlayObject.Base.cs:2048-2092`）→ `IncHealthSpell`
+    /// （`BaseObject.cs:952-975`，写唯一一份 `WAbil`）⇒ 太阳水类恢复永存。
+    /// 本宿主修复前 `handle_eat_cmd` 只写会话投影（`lib.rs:8136` 段），下一 tick P21
+    /// 无条件擦回实体旧值（reviewer 反例牙：药后投影 (15,15)、实体 (5,5)、P21 后 (5,5)）。
+    /// 修法：回写段后按「每个写点同步」hp/mp 双侧镜像进实体。
+    ///
+    /// 序列：(10,20)/max(100,200) →
+    ///   ① 太阳水 StdMode 0 Shape 1（AC=30/MAC=40，冻结内容 `sql/mir2_data.sql:1013`）⇒
+    ///      `IncHealthSpell(30,40)` ⇒ (40,60)，53 Param=HP=40 / Tag=MP=60；
+    ///   ② P21 不擦回 (40,60)（修复前被打回 (10,20)）；
+    ///   ③ Shape 3 百分比（AC=30/MAC=40）：`Round(100/100*30)=30`、`Round(200/100*40)=80`
+    ///      ⇒ (70,140)，53 Param=70 / Tag=140；
+    ///   ④ P21 不擦回 (70,140) → `build_save_record` 落库 HP=70 / MP=140。
+    ///
+    /// 红检（牙④，实测后还原）：单删回写段后的实体镜像 ⇒ ①后实体仍 (10,20)、P21 后
+    /// 投影被打回 (10,20) ⇒ 本用例红。
+    #[test]
+    fn eat_sun_water_shape1_shape3_survive_p21_and_save_hp70_mp140() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        // 冻结内容 `sql/mir2_data.sql:1013` 太阳水：StdMode=0、Shape=1、AC=30、MAC=40。
+        catalog.insert(
+            101,
+            mir2_data::StdItem {
+                name: "太阳水".into(),
+                std_mode: 0,
+                shape: 1,
+                ac: 30,
+                mac: 40,
+                ..Default::default()
+            },
+        );
+        // Shape 3 百分比支（同 AC/MAC ⇒ 按 MaxHP/MaxMP 取整）。
+        catalog.insert(
+            102,
+            mir2_data::StdItem {
+                name: "百分比药".into(),
+                std_mode: 0,
+                shape: 3,
+                ac: 30,
+                mac: 40,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let mut ent = new_player_entity("hero".to_string(), 5, 5);
+        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        ent.hp = 10;
+        ent.mp = 20;
+        ent.max_hp = 100;
+        ent.max_mp = 200;
+        let actor = world.enter_map("hero", ent, 0).expect("进图");
+        world.tick();
+        {
+            let e = world.entities.get_mut(actor).expect("实体在图");
+            e.hp = 10;
+            e.mp = 20;
+            e.max_hp = 100;
+            e.max_mp = 200;
+        }
+        let mut sg = test_session_ground(actor);
+        sg.state.wabil.hp = 10;
+        sg.state.wabil.mp = 20;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 200;
+        sg.state.item_list = vec![
+            game_svr::bag::BagItem {
+                make_index: 1001,
+                index: 101,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            },
+            game_svr::bag::BagItem {
+                make_index: 1002,
+                index: 102,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            },
+        ];
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let env = ScriptGmEnv {
+            guilds: &guilds,
+            maps: None,
+            cfg: &cfg,
+            pwd_sessions: &pwd,
+        };
+        let eat = |make_index: i32,
+                   sessions: &mut HashMap<String, SessionGround>,
+                   world: &mut mir2_world::World,
+                   item_number: &mut i32| {
+            handle_eat_cmd(
+                make_index,
+                0,
+                0,
+                None,
+                "hero",
+                901,
+                &online,
+                sessions,
+                &gates,
+                &catalog,
+                world,
+                &colors,
+                None,
+                &unbind,
+                item_number,
+                None,
+                &game_svr::npc::NpcVars::default(),
+                Some(&env),
+            );
+        };
+        let drain = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<Vec<u8>> {
+            let mut bodies = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+                bodies.push(body);
+            }
+            bodies
+        };
+        // 53 头布局：Recog(0..4) / ident(4..6) / Param=HP(6..8) / Tag=MP(8..10) / Series(10..12)。
+        let only_53 = |bodies: &[Vec<u8>]| -> (u16, u16) {
+            let n: Vec<&Vec<u8>> = bodies
+                .iter()
+                .filter(|b| CommandMessage::from_bytes(b).is_some_and(|m| m.ident == SM_53))
+                .collect();
+            assert_eq!(n.len(), 1, "恰一条 53；实得 {}", n.len());
+            let f = n[0];
+            (
+                u16::from_le_bytes([f[6], f[7]]),
+                u16::from_le_bytes([f[8], f[9]]),
+            )
+        };
+
+        // ① 太阳水 Shape 1：固定量 IncHealthSpell(30,40) ⇒ (40,60)。
+        eat(1001, &mut sessions, &mut world, &mut item_number);
+        let f1 = drain(&mut rx0);
+        assert_eq!(
+            only_53(&f1),
+            (40, 60),
+            "Shape 1：HP 10+30 / MP 20+40（53 Param/Tag）"
+        );
+        assert_eq!(
+            (
+                sessions["hero"].state.wabil.hp,
+                sessions["hero"].state.wabil.mp
+            ),
+            (40, 60)
+        );
+        assert_eq!(
+            (
+                world.entities.get(actor).expect("实体在图").hp,
+                world.entities.get(actor).expect("实体在图").mp
+            ),
+            (40, 60),
+            "CM_EAT 写点镜像进实体（F1 修复点；牙④由此红）"
+        );
+
+        // ② P21：恢复存活（修复前实体 (10,20) ⇒ 投影被打回）。
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        assert!(drain(&mut rx0).is_empty(), "P21 零出帧（夹具自检）");
+        assert_eq!(
+            (
+                sessions["hero"].state.wabil.hp,
+                sessions["hero"].state.wabil.mp
+            ),
+            (40, 60),
+            "P21 不得擦回吃药恢复（修复前 (10,20)）"
+        );
+
+        // ③ Shape 3 百分比：Round(100/100*30)=30、Round(200/100*40)=80 ⇒ (70,140)。
+        eat(1002, &mut sessions, &mut world, &mut item_number);
+        let f2 = drain(&mut rx0);
+        assert_eq!(
+            only_53(&f2),
+            (70, 140),
+            "Shape 3：+30 / +80（按 MaxHP/MaxMP 取整）"
+        );
+        assert_eq!(
+            (
+                world.entities.get(actor).expect("实体在图").hp,
+                world.entities.get(actor).expect("实体在图").mp
+            ),
+            (70, 140)
+        );
+
+        // ④ P21 + 落库：HP=70 / MP=140（oracle 单份 WAbil 的 MakeSaveRcd 口径）。
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "hero".into(),
+            SavedHuman {
+                account: "ua".into(),
+                record: stage6_record(),
+                enter_map: "0".into(),
+            },
+        );
+        let saved = saves.get("hero").expect("存档在册");
+        let sg = sessions.get("hero").expect("会话在");
+        let rec = build_save_record(saved, "hero", &world, sg, None);
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").hp,
+            70,
+            "存档 HP=70（修复前落库 10）"
+        );
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").mp,
+            140,
+            "存档 MP=140（修复前落库 20）"
         );
     }
 
