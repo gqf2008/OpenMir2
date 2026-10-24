@@ -24,6 +24,8 @@
     {"n": 19, "name": "clearmapmon_q001",     "profile": "alt",          "extra": []},
     {"n": 20, "name": "dropgold_zero_draw", "profile": "alt",        "extra": []},
     {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": [],
-     "blocked": "无「单只固定动物尸体」夹具 + RNG 面未接线（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）"}
+     "blocked": "无「单只固定动物尸体」夹具 + RNG 面未接线（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）"},
+    {"n": 22, "name": "castle_merchant_tax", "profile": "alt",       "extra": [],
+     "blocked": "买腿缺 652 ClientItem 解析（MakeIndex 不可得）+ 升级腿需 CastleGetAllNpcTax=1 副本（且与武器铺不同图）+ SaveTick 不落盘（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"}
   ]
 }

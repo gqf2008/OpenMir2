@@ -1,0 +1,154 @@
+{
+  "name": "castle_merchant_tax",
+  "description": "W-TAX-1..3：商税四调用点的真机路径（`openmir2-castle-merchant-tax-wiring` 的 R 级窗口项）。目标 = 城堡武器铺（0151，`MerChant.txt:83` `沙巴克/武器铺 0151 7 14 武器店老板 0 0 1` ⇒ CastleMerchant=1）的买/卖/修三腿（Castle 分支）+ 沙巴克铁匠（map 3，`MerChant.txt:82`）的武器升级腿（只有 CastleGetAllNpcTax=1 才收税）。证据 = 帧序 + 手工比 `Castle/0/SabukW.txt` 的 `TotalGold`/`TodayIncome`（**`SaveTick` 不落盘**，见 blocked）+ 两侧 DB 快照。**当前 blocked**：买腿缺「运行时 MakeIndex」通道（645 载荷不含 MakeIndex，只有 652 的 ClientItem buffer 含），升级腿缺 CastleGetAllNpcTax=1 窗口副本且与武器铺不同图（单 placement 不可同场）。**注意**：城主/行会归属**不是**前置——`NormNpc.Initialize`（NormNpc.cs:1677-1680）经 `CastleMgr.InCastleWarArea` 按 `EnvirList`（= `CastleMapList` 0151..0156，CastleConf.cs:25-38）判定，`OwnGuild` 为空也命中；别把不存在的缺口写成阻断项。**本场景只声明形状与步序，不声称可跑**。",
+  "required": ["merchant_actor"],
+  "params": {
+    "repair_item": "木剑",
+    "sell_item": "木剑",
+    "buy_item": "木剑",
+    "item_make_index": 5001,
+    "detail_page": 0
+  },
+  "assets": {
+    "Gold": 10000,
+    "note": "三条腿都要金币前置：修（`DecGold(nRepairPrice)`）、卖（无前置，售出加钱）、买（`Gold >= nPrice` 且 `AddItemToBag` 成功）。Gold=10000 与 upgrade_retrieve 同口径（通道 = card_window assets 声明：restore 后、起栈前 UPDATE characters.Gold）。"
+  },
+  "inventory": [
+    {
+      "index": 207,
+      "make_index": 5001,
+      "position": 40,
+      "std_mode": 5,
+      "ani_count": 0,
+      "dura": 1000,
+      "dura_max": 4000,
+      "note": "木剑（stditems#207，StdMode=5）：修腿要 `userItem.DuraMax > userItem.Dura && StdMode != 43`（Merchant.cs:1617-1618），故 dura 声明 1000 < dura_max 4000；卖腿先修后卖（同一件物品，修完 Dura=DuraMax 仍可卖）。MakeIndex 夹具钉死 5001（两侧同值 ⇒ C2S 字节可比）。"
+    }
+  ],
+  "placement": {
+    "map": "0151",
+    "x": 8,
+    "y": 14,
+    "note": "城堡武器铺（`MerChant.txt:83`，GBK：`沙巴克/武器铺 0151 7 14 武器店老板 0 0 1`）正东邻格（Chebyshev 1，远小于 CM_CLICKNPC 的 15 格门）。可机判依据：两侧 `0151.map` 同源（21x25）；(8,14) 可走（bk=0 fr=49，card_window.read_map_cell 口径）；**NPC 自身格 (7,14) 也可走但不用**（该格站 NPC）；(7,15)/(6,14)/(7,13) 均被 bit15 挡（bk=32768）——原稿想站 NPC 正南会 placement fail-closed。全图唯一 actor：MonGen.txt 无 0151 行、Npcs.txt 无 0151 行、MerChant.txt 仅 :83 一行 ⇒ discovery 从 643.recog 得到的 merchant_actor 必然是武器店老板。"
+  },
+  "steps": [
+    {
+      "click_npc": "merchant_actor",
+      "note": "CM_CLICKNPC(1010)（Messages.cs:62）→ PlayObject.Message.cs:885-887 → ClientClickNpc（PlayObject.Base.cs:674-698：同图 + Chebyshev<=15）→ NormNpc.Click（NormNpc.cs:68-74，清 ScriptCurrLable 后 GotoLable(@main)）。merchant_actor 由 discovery（npc_click_auto 的 auto:last_turn）从 SM_MERCHANTSAY(643).recog 发现，不写死。"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main]（`Market_Def/沙巴克/武器铺-0151.txt:6-15`）：含 <买/@buy>/<卖/@sell>/<修理/@repair>/<特殊修理/@s_repair>/<离 开/@exit>。脚本头 `(@buy @sell @repair @s_repair)`（:1）⇒ IsBuy/IsSell/IsRepair/IsSupRepair 全 true（ScriptParsers.cs:713 等）。$LORD/$OWNERGUILD 展开（NormNpc.cs:780-800）说明它是城堡商人。"
+    },
+    {
+      "dlg_select": "@repair",
+      "note": "修腿第 1 步（先修后卖，让同一件武器两腿都能用）。CM_MERCHANTDLGSELECT(1011) → Merchant.UserSelect（Merchant.cs:789-821）：LableIsCanJmp(@repair) 成立 ⇒ GotoLable 回 643 面板 + sREPAIR 分支 → UserSelectRepairItem（`要修理武器吗？`）。"
+    },
+    {
+      "wait_for": 668,
+      "timeout_ms": 3000,
+      "note": "SM_SENDUSERREPAIR(668)（Messages.cs:319）。**失败形态**：未进 @repair / IsRepair=false ⇒ 零帧超时（不是价格问题）。"
+    },
+    {
+      "send": {
+        "ident": 1023,
+        "recog": "merchant_actor",
+        "param": "item_make_index",
+        "tag": 0,
+        "text_from": "repair_item"
+      },
+      "note": "CM_USERREPAIRITEM(1023)（Messages.cs:78；PlayObject.Message.cs:911-913）→ ClientRepairItem（Merchant.cs:1606-1665）：`recog=nParam1` 经 FindMerchant 找商人；`MakeLong(nParam2,nParam3)` = MakeIndex（本步 param=5001/tag=0）；body=物品名（OrdinalIgnoreCase）。**税点在 `DecGold(nRepairPrice)` 成功之后**（:1644-1652）：`Castle != null` ⇒ `Castle.IncRateGold(nRepairPrice)`。"
+    },
+    {
+      "wait_for": [669, 670],
+      "timeout_ms": 5000,
+      "note": "SM_USERREPAIRITEM_OK(669) / SM_USERREPAIRITEM_FAIL(670)（Messages.cs:328-329）。**失败形态**：价格<=0 / Gold 不足 / Dura 已满 / StdMode==43 ⇒ 670 或零帧；此时税不入账（税在成功支内）。"
+    },
+    {
+      "dlg_select": "@main",
+      "note": "回菜单：@main 恒可跳（PlayObject.Base.cs:2816-2819）。"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] 再次下发（与 `[~@repair]` 的「已经修好了」说词同 handler，按 MsgQueue 优先级出队；本步只做同步）。"
+    },
+    {
+      "dlg_select": "@sell",
+      "note": "卖腿第 1 步。Merchant.UserSelect 的 sSELL 分支 → UserSelectSellItem ⇒ RM_SENDUSERSELL。"
+    },
+    {
+      "wait_for": 646,
+      "timeout_ms": 3000,
+      "note": "SM_SENDUSERSELL(646)（Messages.cs:312）。失败形态：IsSell=false / 未进 @sell ⇒ 零帧。"
+    },
+    {
+      "send": {
+        "ident": 1013,
+        "recog": "merchant_actor",
+        "param": "item_make_index",
+        "tag": 0,
+        "text_from": "sell_item"
+      },
+      "note": "CM_USERSELLITEM(1013)（Messages.cs:65；PlayObject.Message.cs:894-896）→ ClientUserSellItem（PlayObject.Operate.cs:162-189：按 MakeIndex + 物品名匹配 ItemList）→ Merchant.ClientSellItem（Merchant.cs:1385-1410）。**税点在 `IncGold(nPrice)` 成功之后**（:1392-1400）：`Castle.IncRateGold(nPrice)`。卖价 = `Round(GetUserItemPrice/2)`（GetSellItemPrice），StdMode 25/30 需 Dura>=4000（否则零帧/无税）。"
+    },
+    {
+      "wait_for": [648, 649],
+      "timeout_ms": 5000,
+      "note": "SM_USERSELLITEM_OK(648) / SM_USERSELLITEM_FAIL(649)（Messages.cs:310-311）。失败形态：nPrice<=0 / IncGold 超上限 / 耐久门 ⇒ 649；此时无税。"
+    },
+    {
+      "dlg_select": "@main",
+      "note": "回菜单（同上）。"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] 同步。"
+    },
+    {
+      "dlg_select": "@buy",
+      "note": "买腿第 1 步。Merchant.UserSelect 的 sBUY 分支 → UserSelectBuyItem（Merchant.cs:961-991）⇒ RM_SENDGOODSLIST。"
+    },
+    {
+      "wait_for": 645,
+      "timeout_ms": 3000,
+      "note": "SM_SENDGOODSLIST(645) body = `名/submenu/价格/库存/` 串（Merchant.cs:983-986）——**不含 MakeIndex**，这是买腿阻断的根因（见 blocked）。货架空也发，Param=0。"
+    },
+    {
+      "send": {
+        "ident": 1015,
+        "recog": "merchant_actor",
+        "param": "detail_page",
+        "tag": 0,
+        "text_from": "buy_item"
+      },
+      "note": "CM_USERGETDETAILITEM(1015)（Messages.cs:67；PlayObject.Message.cs:900-901）→ ClientGetDetailGoodsList（Merchant.cs:1307-1345）：body=物品名，param=页偏移（nZz），回 652。"
+    },
+    {
+      "wait_for": 652,
+      "timeout_ms": 3000,
+      "note": "SM_SENDDETAILGOODSLIST(652)（Messages.cs:314）：body = 若干 EDCode ClientItem buffer 串（Merchant.cs:1329-1341，`clientItem.MakeIndex = userItem.MakeIndex`）。**probe 目前解析不了这个 buffer** ⇒ 下一条买帧拿不到 MakeIndex（=买腿阻断项）。"
+    },
+    {
+      "send": {
+        "ident": 1014,
+        "recog": "merchant_actor",
+        "param": 0,
+        "tag": 0,
+        "text_from": "buy_item"
+      },
+      "note": "CM_USERBUYITEM(1014)（Messages.cs:66；PlayObject.Message.cs:897-899）→ Merchant.ClientBuyItem（Merchant.cs:1225-1305）：`MakeLong(param,tag)` = nInt，StdMode>4 且非 42/31 时要求 `userItem.MakeIndex == nInt`（:1241）。**本步 param/tag 是占位 0 ⇒ 解封时必须由 652 解析出的 MakeIndex 填入**；不解封时买腿必然只回 651/无帧（fail-closed）。税点在 `Gold -= nPrice` + `AddItemToBag` 成功之后（:1257-1266）：`Castle.IncRateGold(nPrice)`。"
+    },
+    {
+      "wait_for": [650, 200],
+      "timeout_ms": 5000,
+      "note": "SM_BUYITEM_SUCCESS(650) + SM_ADDITEM(200)（Merchant.cs:1299-1305 的 RM_BUYITEM_SUCCESS / SendAddItem；PlayObject.Message.cs:1822-1829）。失败形态：n1C!=0 ⇒ 只回 SM_BUYITEM_FAIL(651)（价格不足/背包满/负重/无此物），此时无税。"
+    }
+  ],
+  "blocked": {
+    "reason": "**三缺口（各自独立，缺一不可解封）**：① **买腿无 MakeIndex 通道**：0151 货架全是 StdMode>4 的武器（`[goods]` 木剑/匕首/青铜剑/…；Merchant.cs:1241 要求 MakeIndex 精确匹配），而 645 载荷只有 `名/submenu/价格/库存/`，MakeIndex 只出现在 SM_SENDDETAILGOODSLIST(652) 的 EDCode ClientItem buffer（Merchant.cs:1329-1341）；`mir2_probe.py` 没有 ClientItem 解码 ⇒ 第 19 步拿不到可用的 param/tag。② **升级腿（W-TAX-1 第 4 路径）在默认配置下不可达**：部署里唯一带 `@upgradenow` 的 NPC 是 `沙巴克铁匠-3.txt`（grep Market_Def 仅此 1 个），而 `MerChant.txt:82` 该行 IsCastle 列 = 0（⇒ CastleMerchant=false），且它在 map 3 (332,317) 与 `CastleHome(644,290)` 的 |Δx|=312 ≥ WarRangeX=100 ⇒ `InCastleWarArea` 为假 ⇒ `Castle=null` ⇒ 只能走 `CastleGetAllNpcTax=1` 的 CastleManager 分支（税基恒 `UpgradeWeaponPrice`=10000）；两侧 conformance `Server.conf:345` 现均 `CastleGetAllNpcTax=0`，且该 NPC 与武器铺不同图 ⇒ 单 placement 场景不能同场覆盖。③ **W-TAX-4 的 `SaveTick` 10 分钟门不可观测**：`SaveTick` 只在内存（CastleConf.cs 无该字段，`UserCastle.cs:798` 读 `HUtil32.GetTickCount()`），**不落盘**；C# 侧 `MIR2_CLOCK_*` 零实现 ⇒ 只能真实时点复拍。另：`Castle/0/SabukW.txt` 的 `TotalGold/TodayIncome` 只有在 `SystemProcessor.ShowOnline` 的 10 分钟门（`ConsoleShowUserCountTime=600000`，Server.conf:334；SystemProcessor.cs:56-62）落盘后才变，窗口内要等 ≥10 分钟或等栈正常退出前的那次 Save。",
+    "missing_fixture": "① **probe 侧**：解析 `SM_SENDDETAILGOODSLIST(652)` 的 ClientItem buffer（EDCode）取 MakeIndex，并把值喂给第 19 步的 param/tag——需改 `tools/probe/mir2_probe.py`（本卡写集外，另开工具卡），或提供「货架 MakeIndex 夹具」（把 GoodsList 的 MakeIndex 钉成已知值，冻结内容下不可行）。② **W-TAX-2/升级腿**：两侧 conformance 副本（`E:/tmp/conformance/{csharp-root,rust-root}/M2GameSvr/Server.conf`）同值置 `CastleGetAllNpcTax=1` 并重启；`restore-baseline*.sh` 只回滚 DB 不覆盖配置 ⇒ 需登记并在跑完还原；再加一条 map 3 铁匠的独立场景（本卡写集只允许一个场景文件 ⇒ 解封时另开卡）。③ **Castle 夹具对齐**：`csharp-root/M2GameSvr/Castle/List.txt` = 「0」（1 城），`rust-root/.../List.txt` = 「0,1」（2 城），而两边 `Castle/0|1/SabukW.txt` 逐字节同源（diff = SAME0/SAME1）；CastleManager 分支是**升序遍历 CastleList 全表入账**（CastleManager.cs:209-215）⇒ 两侧城数不同会让 W-TAX-2 必然假红，必须先对齐 List.txt 与 SabukW 初值（`TotalGold/TodayIncome=0`、`OwnGuild=` 空）。④ **W-TAX-4**：真实时点（10 分钟门）+ 存档门（同上 600000ms）——「同 tick 逐位」需 ⑧-1 的 C# 时钟注入片，未落地前只登记降级口径。"
+  }
+}
