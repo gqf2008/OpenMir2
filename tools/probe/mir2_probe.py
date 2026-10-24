@@ -544,7 +544,7 @@ def load_scenario(path):
     # 仍能被 --check-scenario / 真跑加载（否则会被下面的 unknown key 拒绝）。
     _need_keys(data, "scenario", required=("name", "steps"),
                optional=("description", "params", "required", "computed",
-                         "placement", "blocked", "requires", "inventory"))
+                         "placement", "blocked", "requires", "inventory", "assets"))
     if not isinstance(data["name"], str) or not data["name"]:
         raise ScenarioError("scenario.name must be a non-empty string")
     params = data.get("params") or {}
@@ -566,6 +566,7 @@ def load_scenario(path):
     _check_blocked(data.get("blocked"))
     _check_requires(data.get("requires"))
     _check_inventory(data.get("inventory"))
+    _check_assets(data.get("assets"))
     return data
 
 
@@ -2239,6 +2240,131 @@ def _selftest_scenario_inventory():
             pass
 
 
+# ---------------------------------------------------------------------------
+# 资产声明（assets）的**形状**校验。通道真身（读声明 -> UPDATE 测试库 -> 指纹/读回
+# 断言）在 `tools/conformance/card_window.py`（卡 `openmir2-window-gold-declaration-
+# channel`）；本驱动器不写库，只做**同口径形状校验**（卡 `openmir2-probe-assets-key-
+# delta`，Gold 通道卡 review f7a4acc9bf 登记的 follow-up），使带 assets 声明的场景
+# 能被 `--check-scenario` / 真跑加载（否则顶层 unknown key 直接 rc=2，通道端到端不可用）。
+# **同口径 = 同形输入同判**：白名单/值域/note 的规则两处必须同步改，下面三个常量与
+# card_window.py 的 ASSETS_COLUMNS/ASSETS_MAX/ASSETS_NOTE_KEY 逐一对应。
+# ---------------------------------------------------------------------------
+#: 资产声明白名单列（首版仅 Gold；事实源 = card_window.py ASSETS_COLUMNS）。
+ASSETS_COLUMNS = ("Gold",)
+#: 声明值上限：characters.Gold 是 int(11) 有符号（= card_window.py ASSETS_MAX）。
+ASSETS_MAX = 0x7FFFFFFF
+#: 声明里的备注键（不参与 UPDATE，只进证据；= card_window.py ASSETS_NOTE_KEY）。
+ASSETS_NOTE_KEY = "note"
+
+
+def _check_assets(assets):
+    """`scenario.assets` 的**形状**校验：合法 ⇒ 放行（rc=0），非法 ⇒ ScenarioError（rc=2）。
+
+    与 `tools/conformance/card_window.py` 的 `scenario_assets()` **同口径**（fail-closed，
+    与 `placement`/`blocked`/`requires`/`inventory` 一致）：
+
+    * `assets` 缺省（无此键 / null）⇒ 放行；给了就必须是**非空对象**（列→目标值）；
+    * 键只允许白名单列（首版仅 `Gold`）+ `note`，未知列点名拒绝（拼错/未声明列不许静默）；
+    * `note` 给了就必须是字符串；
+    * 值必须是 JSON 整数（bool/浮点/字符串/null 一律拒）、0..0x7FFFFFFF
+      （characters.Gold 是 int(11) 有符号；负数/超 int32 一律拒）；
+    * 只有 `note`、没声明任何白名单列 ⇒ 拒（无意义声明）。
+    """
+    if assets is None:
+        return
+    if not isinstance(assets, dict) or not assets:
+        raise ScenarioError("scenario.assets must be a non-empty object (column -> value), "
+                            "got %r" % (assets,))
+    bad = set(assets) - set(ASSETS_COLUMNS) - {ASSETS_NOTE_KEY}
+    if bad:
+        raise ScenarioError("scenario.assets has non-whitelisted column(s) %s "
+                            "(fail-closed; whitelist=%s + note key %r; same rule as "
+                            "tools/conformance/card_window.py scenario_assets)"
+                            % (sorted(bad), list(ASSETS_COLUMNS), ASSETS_NOTE_KEY))
+    note = assets.get(ASSETS_NOTE_KEY)
+    if note is not None and not isinstance(note, str):
+        raise ScenarioError("scenario.assets.note must be a string, got %r" % (note,))
+    declared = 0
+    for col in ASSETS_COLUMNS:
+        if col not in assets:
+            continue
+        v = assets[col]
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ScenarioError("scenario.assets.%s must be a JSON int (got %r: %s; "
+                                "string/float/bool/null are all rejected)"
+                                % (col, v, type(v).__name__))
+        if v < 0 or v > ASSETS_MAX:
+            raise ScenarioError("scenario.assets.%s=%r out of range [0,%d] "
+                                "(characters.%s is int(11) signed; negative / >int32 "
+                                "are all rejected)" % (col, v, ASSETS_MAX, col))
+        declared += 1
+    if not declared:
+        raise ScenarioError("scenario.assets has only %r and no declared column(s) %s "
+                            "(meaningless declaration, rejected)"
+                            % (ASSETS_NOTE_KEY, list(ASSETS_COLUMNS)))
+    print("note: scenario.assets 声明了 %s，但**本驱动器不写库**"
+          "（由 tools/conformance/card_window.py 在 restore 后、起栈前应用）"
+          % sorted(k for k in assets if k != ASSETS_NOTE_KEY), file=sys.stderr)
+
+
+def _selftest_scenario_assets():
+    """`scenario.assets` 形状校验（卡 `openmir2-probe-assets-key-delta`，Gold 通道 follow-up）：
+
+    * `{"Gold": 10000, "note": "…"}` 放行；边界 0 与 0x7FFFFFFF 放行；缺省放行；
+    * 非白名单列 / 空对象 / note-only ⇒ 拒并点名；
+    * 值口径：bool/浮点/字符串/null/负数/超 int32 一律拒（与 card_window.scenario_assets
+      同口径——同形输入同判，两侧口径漂移即红）。
+    """
+    import tempfile
+    good = {
+        "name": "selftest_assets",
+        "assets": {"Gold": 10000, "note": "upgrade_retrieve 前置 Gold>=10000"},
+        "steps": [{"send": {"ident": CM_SAY, "text": "@时间"}},
+                  {"wait_for": SM_SYSMESSAGE}],
+    }
+    fd, path = tempfile.mkstemp(suffix=".json")
+    os.close(fd)
+    try:
+        def _load(doc):
+            with open(path, "w", encoding="utf-8") as fh:
+                json.dump(doc, fh, ensure_ascii=False)
+            return load_scenario(path)
+
+        assert _load(good)["assets"]["Gold"] == 10000
+        assert _load(dict(good, assets={"Gold": 0}))["assets"]["Gold"] == 0
+        assert _load(dict(good, assets={"Gold": 0x7FFFFFFF}))["assets"]["Gold"] == 0x7FFFFFFF
+        assert "assets" not in _load({k: v for k, v in good.items() if k != "assets"})
+        bad_cases = [
+            ({"assets": {}}, "non-empty object"),
+            ({"assets": []}, "non-empty object"),
+            ({"assets": {"Credit": 100}}, "non-whitelisted"),
+            ({"assets": {"Gold": 1, "Level": 2}}, "non-whitelisted"),
+            ({"assets": {"note": "only note"}}, "no declared column"),
+            ({"assets": {"Gold": "10000"}}, "must be a JSON int"),
+            ({"assets": {"Gold": 1.5}}, "must be a JSON int"),
+            ({"assets": {"Gold": True}}, "must be a JSON int"),
+            ({"assets": {"Gold": None}}, "must be a JSON int"),
+            ({"assets": {"Gold": -1}}, "out of range"),
+            ({"assets": {"Gold": 0x80000000}}, "out of range"),
+            ({"assets": {"Gold": 1, "note": 123}}, "note"),
+        ]
+        for patch, needle in bad_cases:
+            err = None
+            try:
+                _load(dict(good, **patch))
+            except ScenarioError as ex:
+                err = str(ex)
+            assert err is not None, "load_scenario accepted bad assets: %r" % (patch,)
+            assert needle in err, (needle, err)
+        return "assets 形状 %d 项（4 正 + %d 负；含 bool/浮点/字符串/null/负数/超 int32 拒绝）" \
+            % (4, len(bad_cases))
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+
+
 def _write_tmp_rs(text):
     """selftest 用：写一个临时 .rs 文件（假 messages.rs / attackwire.rs），返回路径。"""
     import tempfile
@@ -2788,6 +2914,7 @@ def run_selftest():
     check("scenario-required", _selftest_scenario_required)
     check("scenario-requires", _selftest_scenario_requires)
     check("scenario-inventory", _selftest_scenario_inventory)
+    check("scenario-assets", _selftest_scenario_assets)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
