@@ -65,6 +65,7 @@ SCHEMA_VERSION = 1
 
 # ---- 消息号（src/OpenMir2/Messages.cs；只抄本驱动器用到的） ----
 CM_QUERYBAGITEMS = 81
+CM_NEWCHR = 101               # src/OpenMir2/Messages.cs:30（SelGate + DB UserService.NewChr）
 CM_QUERYCHR = 100
 CM_SELCHR = 103
 CM_SELECTSERVER = 104
@@ -76,12 +77,18 @@ CM_IDPASSWORD = 2001
 CM_LOGINNOTICEOK = 1018
 CM_SAY = 3030
 
-SM_LOGON = 50
+SM_LOGON = 50                 # PlayObject.cs:1131 MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, MakeWord(Dir,Light))
+SM_NEWMAP = 51                # PlayObject.Message.cs:1680-1684（RM_LOGON 支）：body = Envir.MapFileName
+SM_MAPDESCRIPTION = 54        # PlayObject.Base.cs:894（Envir.MapDesc）
+SM_CHANGEMAP = 634            # 只在 **换图**（RM_CHANGEMAP）发：BaseObject.cs:1134 / PlayObject.cs:3778；
+                              # 首登不换图 ⇒ 首包地图帧是 SM_NEWMAP(51)，不是 634
 SM_TURN = 10
 SM_ABILITY = 52
 SM_SYSMESSAGE = 100
 SM_QUERYCHR = 520
 SM_QUERYCHR_FAIL = 527
+SM_NEWCHR_SUCCESS = 521       # DB UserService.cs:652（MakeMessage(SM_NEWCHR_SUCCESS,0,…)）
+SM_NEWCHR_FAIL = 522          # DB UserService.cs:656（MakeMessage(SM_NEWCHR_FAIL, nCode, …) ⇒ Recog=nCode）
 SM_STARTPLAY = 525
 SM_STARTFAIL = 526
 SM_PASSOK_SELECTSERVER = 529
@@ -351,7 +358,7 @@ class Conn:
 # ==========================================================================
 STEP_META_KEYS = {"timeout_ms", "note", "delay_ms"}
 ACTION_KEYS = {"send", "wait_for", "wait_frames", "wait_idents", "sleep",
-               "say", "click_npc", "dlg_select", "dlg_select_any", "repeat"}
+               "say", "click_npc", "dlg_select", "dlg_select_any", "repeat", "newchr"}
 # 场景顶层 `requires` 只认这些夹具值（卡 `openmir2-scenario-fixture-precondition`）：
 # 目前只有 `magic`（characters_magic 预置）。未知值 fail-closed，避免「加了值却没生效」假绿。
 REQUIRES_KNOWN = ("magic",)
@@ -389,6 +396,24 @@ def resolve_param(value, params, where):
         except ValueError:
             raise ScenarioError("%s: cannot resolve %r (not a params name or int)" % (where, value))
     raise ScenarioError("%s must be int or params name, got %r" % (where, value))
+
+
+def resolve_str_param(value, params, where):
+    """把场景参数解析成**字符串**：字面量原样；是 params 名则取 params 里的字符串值。"""
+    if not isinstance(value, str) or not value:
+        raise ScenarioError("%s must be a non-empty string or params name, got %r"
+                            % (where, value))
+    if value in params:
+        v = params[value]
+        # `--var k=123` 会被 parse_vars 转成 int（数字串）——名字允许数字，转回字符串即可
+        # （长度/字符门仍在调用方校验）。
+        if isinstance(v, int) and not isinstance(v, bool):
+            return str(v)
+        if not isinstance(v, str) or not v:
+            raise ScenarioError("%s: params[%r] must resolve to a non-empty string, got %r"
+                                % (where, value, v))
+        return v
+    return value
 
 
 # ---- 多会话：会话标注与收件人集合断言（卡 openmir2-multi-session-probe）-----------------
@@ -888,6 +913,36 @@ def plan_step(step, index, params, depth=0):
             seen.add(c.lower())
         out.update(ident=CM_MERCHANTDLGSELECT, recog=None, param=0, tag=0, series=0,
                    body=b"", candidates=list(val), _needs_merchant_recog=True)
+    elif action == "newchr":
+        # `CM_NEWCHR(101)`：SelGate → DB `UserService.NewChr`（`:566-666`）。载荷
+        # `account/name/hair/job/sex`（`BotSrv/.../SelectChrScene.cs:237-241` 的
+        # `SendNewChr(uid,uname,shair,sjob,ssex)`）；account 运行期才知（登录账号）。
+        # 本步只能在 steps[0] 且整个场景至多一次（进世界前由 `do_select_char` 执行）。
+        _need_keys(val, where + ".newchr", required=("name",),
+                   optional=("job", "hair", "sex", "on_exists"))
+        name = resolve_str_param(val["name"], params, where + ".newchr.name").strip()
+        if not name:
+            raise ScenarioError("%s.newchr.name must not be blank" % where)
+        if "/" in name or "\\" in name:
+            raise ScenarioError("%s.newchr.name %r must not contain '/' or '\\' "
+                                "(payload separator; fail-closed)" % (where, name))
+        if len(name) < 3 or len(name) > 20:
+            raise ScenarioError(
+                "%s.newchr.name %r length %d out of range 3..20 chars "
+                "(oracle DB `NewChr`: len<3 ⇒ nCode 0; characters.ChrName varchar(20))"
+                % (where, name, len(name)))
+        job = _need_int(resolve_param(val.get("job", 0), params, where + ".newchr.job"),
+                        where + ".newchr.job", 0, 2)
+        hair = _need_int(resolve_param(val.get("hair", 0), params, where + ".newchr.hair"),
+                         where + ".newchr.hair", 0, 255)
+        sex = _need_int(resolve_param(val.get("sex", 0), params, where + ".newchr.sex"),
+                        where + ".newchr.sex", 0, 1)
+        on_exists = val.get("on_exists", "reuse")
+        if on_exists not in ("reuse", "fail"):
+            raise ScenarioError("%s.newchr.on_exists must be 'reuse' or 'fail', got %r"
+                                % (where, on_exists))
+        out.update(ident=CM_NEWCHR, recog=0, param=0, tag=0, series=0, body=b"",
+                   name=name, job=job, hair=hair, sex=sex, on_exists=on_exists)
     elif action == "repeat":
         _need_keys(val, where + ".repeat", required=("times", "steps"),
                    optional=("stop_on_select",))
@@ -1005,7 +1060,8 @@ MESSAGES_RS = os.path.join(REPO_ROOT, *MESSAGES_RS_REL.split("/"))
 
 # 发帧动作：在 GameGate 连接上真的写出 c2s 帧（say/click_npc/dlg_select 分别展开成
 # CM_SAY / CM_CLICKNPC / CM_MERCHANTDLGSELECT）。`send` 只是其中最通用的一个。
-SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select", "dlg_select_any"})
+SEND_KINDS = frozenset({"send", "say", "click_npc", "dlg_select", "dlg_select_any",
+                        "newchr"})
 # 累计观察动作：等的是「累计出现过」而不是「本步之后的第一条回包」——驱动器的登录链
 # （CM_IDPASSWORD/SELECTSERVER/QUERYCHR/SELCHR + GameGate 登录）与自动握手
 # （CM_LOGINNOTICEOK / CM_QUERYBAGITEMS）本来就会发帧，所以纯观察场景（login_only）合法。
@@ -1121,6 +1177,12 @@ def _var_refs(data):
                 v = step.get(kind)
                 if isinstance(v, dict) and isinstance(v.get("recog"), str):
                     refs.append((where + "." + kind + ".recog", v["recog"]))
+            nc = step.get("newchr")
+            if isinstance(nc, dict):
+                for key in ("name", "job", "hair", "sex"):
+                    v = nc.get(key)
+                    if isinstance(v, str):
+                        refs.append((where + ".newchr." + key, v))
             rep = step.get("repeat")
             if isinstance(rep, dict) and isinstance(rep.get("steps"), list):
                 walk(rep["steps"], where + ".repeat.steps")
@@ -1179,6 +1241,15 @@ def check_scenario(data, plans, params=None, messages=None):
     name = data.get("name")
     if messages is None:
         messages = load_message_constants()
+    # `newchr` 只能在 steps[0] 且至多一次（它在选角相位执行，之后的 waits 才有意义）。
+    nc_idx = [i for i, p in enumerate(plans) if p["kind"] == "newchr"]
+    if len(nc_idx) > 1:
+        raise ScenarioError("scenario %r has %d newchr steps; at most one is allowed"
+                            % (name, len(nc_idx)))
+    if nc_idx and nc_idx[0] != 0:
+        raise ScenarioError(
+            "scenario %r: newchr must be steps[0] (it runs in the select-char phase, before "
+            "enter-world; later ones would be unreachable)" % name)
     # 生效参数 = 场景 params + --var 覆盖（R5 用；R4 的「声明」口径刻意不含 --var）。
     eff_params = dict(data.get("params") or {})
     if params:
@@ -1368,6 +1439,26 @@ class Run:
             return
         if frame.ident == SM_MERCHANTSAY:
             self.state["last_merchant_recog"] = frame.recog
+        # **W-LF-1 首包**：`SM_LOGON`（PlayObject.cs:1131）携带 x/y + MakeWord(Dir,Light)；
+        # 地图面：`SM_NEWMAP(51)`（`PlayObject.Message.cs:1680-1684` 的 RM_LOGON 支）body =
+        # `Envir.MapFileName`；`SM_MAPDESCRIPTION(54)` body = `Envir.MapDesc`。
+        # **`SM_CHANGEMAP(634)` 只在换图（RM_CHANGEMAP）时发**，首登不换图 ⇒ 不能用 634 当首包地图
+        # （review F1）。逻辑 MapName 不上线，见 docs/probe-newchr-20261025.md §2.3。
+        if frame.ident == SM_LOGON and "first_pack" not in self.state:
+            self.state["first_pack"] = {
+                "seq": seq, "actor_id": frame.recog, "x": frame.param, "y": frame.tag,
+                "series": frame.series, "dir": frame.series & 0xFF,
+                "light": (frame.series >> 8) & 0xFF, "body_hex": frame.body.hex(),
+                "map_file": None, "map_desc": None,
+            }
+        elif frame.ident == SM_MAPDESCRIPTION:
+            fp = self.state.get("first_pack")
+            if fp is not None and fp["map_desc"] is None:
+                fp["map_desc"] = decode_text(frame.body_decoded, "gbk", "replace")
+        elif frame.ident == SM_NEWMAP:
+            fp = self.state.get("first_pack")
+            if fp is not None and fp["map_file"] is None:
+                fp["map_file"] = decode_text(frame.body_decoded, "gbk", "replace")
         if frame.ident in PAGE_LINK_IDENTS:
             # 记「当前页」：`dlg_select_any` 只在这一页的链接里选候选。文本按 GBK 宽松解码
             # （坏字节只影响链接抽取，不影响其它判据）。
@@ -1644,17 +1735,8 @@ def do_login_gate(run, args):
     return conn, (sg_ip, sg_port), session
 
 
-def do_select_char(run, args, selgate_addr, session):
-    """SelGate 查询/选择角色，返回 (selgate_conn, char_name, gamegate_addr)。"""
-    conn = Conn("selgate", run.recorder)
-    run.conns.append(conn)
-    conn.phase = "selgate"
-    sg_ip, sg_port = selgate_addr
-    try:
-        conn.connect(sg_ip, sg_port, args.timeout_ms / 1000.0)
-    except OSError as ex:
-        raise StepFailure("selgate %s:%d unreachable: %r" % (sg_ip, sg_port, ex))
-    run.chain["selgate"] = conn.peer
+def _query_chr(run, conn, args, session):
+    """`CM_QUERYCHR` 一轮：返回角色列表（`SM_QUERYCHR_FAIL` ⇒ StepFailure）。"""
     after = conn.recorder.seq
     _chain_send(run, conn, 0, CM_QUERYCHR,
                 ("%s/%s" % (args.account, session)).encode("gbk"), "CM_QUERYCHR")
@@ -1665,10 +1747,98 @@ def do_select_char(run, args, selgate_addr, session):
     if fr.ident == SM_QUERYCHR_FAIL:
         raise StepFailure("query-chr: server returned SM_QUERYCHR_FAIL(527) "
                           "(session not accepted)")
-    chars = parse_char_list(_decode_body_text(fr, "SM_QUERYCHR"))
+    return parse_char_list(_decode_body_text(fr, "SM_QUERYCHR"))
+
+
+def _do_newchr(run, conn, args, session, plan, names):
+    """执行 `newchr` 步（SelGate 相位）：`CM_NEWCHR(101)` → 成功/复用/显式失败。
+
+    oracle 链：`BotSrv/.../SelectChrScene.cs:237-241` 的 `SendNewChr(uid,uname,shair,sjob,ssex)`
+    ⇒ SelGate 透传 DB ⇒ `DBSrv UserService.NewChr`（`:566-666`）⇒
+    `SM_NEWCHR_SUCCESS(521)` / `SM_NEWCHR_FAIL(522, Recog=nCode)`；
+    成功时 Bot 侧 `RobotPlayer.Operate.cs:175-176` 会 **重新 `SendQueryChr()`**（本函数同样重查）。
+    """
+    name = plan["name"]
+    if args.char_name and args.char_name.lower() != name.lower():
+        raise ScenarioError(
+            "--char-name %r conflicts with scenario newchr.name %r (fail-closed)"
+            % (args.char_name, name))
+    if not args.account:
+        raise ScenarioError("newchr needs --account (payload starts with the login account)")
+    body = newchr_payload(args.account, name, plan["hair"], plan["job"], plan["sex"])
+    after = conn.recorder.seq
+    _chain_send(run, conn, 0, CM_NEWCHR, body, "CM_NEWCHR")
+    got = conn.wait_for([SM_NEWCHR_SUCCESS, SM_NEWCHR_FAIL, SM_OUTOFCONNECTION],
+                        args.timeout_ms, after)
+    frames = [(seq, fr) for (seq, fr) in conn.frames if seq > after]
+    base = {"index": plan["index"], "kind": "newchr", "phase": "selgate",
+            "name": name, "job": plan["job"], "hair": plan["hair"], "sex": plan["sex"],
+            "note": plan.get("note", "")}
+    if got is None:
+        base["result"] = "no-reply"
+        run.chain["newchr"] = base
+        run.steps.append(base)
+        raise StepFailure("newchr(name=%r): no SM_NEWCHR_SUCCESS/FAIL within %dms; "
+                          "frames since newchr=%r"
+                          % (name, args.timeout_ms,
+                             [(s_, f_.ident, f_.recog) for (s_, f_) in frames]))
+    seq, fr = got
+    if fr.ident == SM_OUTOFCONNECTION:
+        base["result"] = "disconnected"
+        run.chain["newchr"] = base
+        run.steps.append(base)
+        raise StepFailure("newchr(name=%r): server returned SM_OUTOFCONNECTION(528)" % name)
+    if fr.ident == SM_NEWCHR_SUCCESS:
+        base["result"] = "created"
+        run.chain["newchr"] = base
+        run.steps.append(base)
+        return name
+    n_code = fr.recog
+    base["n_code"] = n_code
+    if newchr_should_reuse(plan["on_exists"], n_code, names, name):
+        base["result"] = "reused"
+        run.chain["newchr"] = base
+        run.steps.append(base)
+        return name
+    base["result"] = "failed"
+    run.chain["newchr"] = base
+    run.steps.append(base)
+    raise StepFailure("steps[%s].newchr(name=%r, on_exists=%r): %s"
+                      % (plan["index"], name, plan["on_exists"],
+                         newchr_fail_message(n_code, frames)))
+
+
+def do_select_char(run, args, selgate_addr, session, plans=None):
+    """SelGate 查询/选择角色，返回 (selgate_conn, char_name, gamegate_addr)。
+
+    `plans` 里的 `newchr` 步在**这里**执行（进世界之前）；主步骤循环会跳过它。
+    """
+    conn = Conn("selgate", run.recorder)
+    run.conns.append(conn)
+    conn.phase = "selgate"
+    sg_ip, sg_port = selgate_addr
+    try:
+        conn.connect(sg_ip, sg_port, args.timeout_ms / 1000.0)
+    except OSError as ex:
+        raise StepFailure("selgate %s:%d unreachable: %r" % (sg_ip, sg_port, ex))
+    run.chain["selgate"] = conn.peer
+    chars = _query_chr(run, conn, args, session)
     run.chain["char_list"] = chars
     names = [c["name"] for c in chars]
-    if args.char_name:
+    nc_plan = next((p for p in (plans or []) if p["kind"] == "newchr"), None)
+    if nc_plan is not None:
+        char_name = _do_newchr(run, conn, args, session, nc_plan, names)
+        # oracle `SM_NEWCHR_SUCCESS` ⇒ Bot 重新 QueryChr（新角色进列表）
+        chars = _query_chr(run, conn, args, session)
+        run.chain["char_list_after_newchr"] = chars
+        names = [c["name"] for c in chars]
+        if not any(n.lower() == char_name.lower() for n in names):
+            raise StepFailure(
+                "newchr(name=%r) 成功但刷新后的 SM_QUERYCHR 列表里没有该角色：%s（fail-closed）"
+                % (char_name, names))
+        if char_name not in names:
+            char_name = next(n for n in names if n.lower() == char_name.lower())
+    elif args.char_name:
         if args.char_name not in names:
             raise ProbeError("char %r not in server list %s (fail-closed)"
                              % (args.char_name, names))
@@ -1747,6 +1917,14 @@ def do_enter_world(run, args, gamegate_addr, char_name, session):
     run.dwell = dwell_after_enter(conn,
                                   getattr(args, "dwell_ms", DEFAULT_DWELL_MS),
                                   getattr(args, "between_ms", 0))
+    # 首包（W-LF-1）：dwell 之后再落 chain（`SM_NEWMAP/SM_MAPDESCRIPTION` 多在延迟段到达）。
+    fp = dict(run.state.get("first_pack") or {})
+    if fp:
+        fp["map_name"] = None
+        fp["map_name_note"] = ("客户端线上不含逻辑地图名：`map_file`=SM_NEWMAP(51) 的 MapFileName、"
+                               "`map_desc`=SM_MAPDESCRIPTION 的 MapDesc；逻辑 MapName/出生点以 DB "
+                               "`characters.MapName` 与 `!setup.txt` StartPoint 为准（W-LF-1）")
+        run.chain["first_pack"] = fp
     return conn
 
 
@@ -1963,7 +2141,7 @@ def main(argv=None):
         scenario = {"path": args.scenario, "data": data}
 
         login_conn, selgate_addr, session = do_login_gate(run, args)
-        sg_conn, char_name, gg_addr = do_select_char(run, args, selgate_addr, session)
+        sg_conn, char_name, gg_addr = do_select_char(run, args, selgate_addr, session, plans)
         gg = do_enter_world(run, args, gg_addr, char_name, session)
 
         # BotSrv 在切场景后（延时 1000ms）关掉 Login/SelGate 连接；这里在进世界后关，
@@ -1973,6 +2151,8 @@ def main(argv=None):
             run.chain.setdefault("closed", []).append(c.label)
 
         for i, plan in enumerate(plans):
+            if plan["kind"] == "newchr":
+                continue  # 已在选角相位执行
             if i > 0:
                 delay = plan["delay_ms"] if plan["delay_ms"] is not None else args.between_ms
                 if delay:
@@ -3083,6 +3263,43 @@ def _selftest_wait_recog_filter():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+#: oracle `DBSrv UserService.NewChr` 的 nCode 语义（`:566-666`；`SM_NEWCHR_FAIL.Recog`）。
+NEWCHR_FAIL_CODES = {
+    0: "角色名含非法字符/长度<3/多余字段（NewChr 解析门）",
+    2: "角色名已被使用（Index>=0 或 CheckDenyChrName/Add 失败）",
+    3: "该账号已有两个角色（ChrCountOfAccount >= 2）",
+    4: "创建角色数据失败（NewChrData 落库失败，已回滚索引）",
+}
+
+
+def newchr_payload(account, name, hair, job, sex):
+    """`CM_NEWCHR` 载荷：`account/name/hair/job/sex`。
+
+    oracle 同序：`BotSrv/.../SelectChrScene.cs:237-241` `SendNewChr(uid,uname,shair,sjob,ssex)` 拼
+    `uid + "/" + uname + "/" + shair + "/" + sjob + "/" + ssex`；DB `NewChr` 按同序
+    `GetValidStr3(…, Backslash)` 收 5 段（`UserService.cs:572-576`）。**hair 在 job 之前**。
+    """
+    return ("%s/%s/%d/%d/%d" % (account, name, hair, job, sex)).encode("gbk")
+
+
+def newchr_fail_message(n_code, frames):
+    """`SM_NEWCHR_FAIL` 的显式失败串：nCode 语义 + 服务端返回帧清单（不静默继续）。"""
+    meaning = NEWCHR_FAIL_CODES.get(n_code, "未知错误码")
+    fl = []
+    for (seq, fr) in frames:
+        text = decode_text(fr.body_decoded, "gbk", "replace")
+        fl.append("seq=%s ident=%s recog=%s body=%r" % (seq, fr.ident, fr.recog, text))
+    return ("newchr: server returned SM_NEWCHR_FAIL(%d) Recog(nCode)=%r ⇒ %s; "
+            "server frames since newchr: %s"
+            % (SM_NEWCHR_FAIL, n_code, meaning, fl or "<none>"))
+
+
+def newchr_should_reuse(on_exists, n_code, names, target):
+    """重名时是否复用：策略=reuse 且服务端 nCode=2 且目标名已在角色列表里。"""
+    return (on_exists == "reuse" and n_code == 2
+            and any(n.lower() == target.lower() for n in names))
+
+
 def _selftest_dlg_select_any():
     """`dlg_select_any`（卡 `openmir2-probe-conditional-dlg-select`）：
 
@@ -3329,6 +3546,242 @@ def _selftest_dlg_select_any():
             "语义正/反；运行期 选中/清单打印/终止/超限/子步失败不吞 5 例" % len(bad))
 
 
+def _selftest_newchr():
+    """`newchr` 步（卡 `openmir2-probe-newchr-step`）：
+
+    * 形状：name 字面量/params 名、job 0..2、hair 0..255、sex 0..1、`on_exists` 枚举；
+      blank/长度 3..20/含 `/` 或 `\\`/未知键 ⇒ ScenarioError；
+    * 位置：`newchr` 必须 steps[0] 且至多一次（check_scenario）；
+    * 纯逻辑：`newchr_should_reuse` 四象限、`newchr_fail_message` 带 nCode 语义与帧清单；
+    * 运行期（假 socket）：成功；重名 + reuse ⇒ reused；重名 + fail ⇒ 显式失败带帧；
+      code=3（已有两个角色）不接受 reuse；
+    * **S-2 钉**：只有 `dlg_select_any`+wait 的场景必须过 check_scenario（删 SEND_KINDS 即 R1 红）；
+    * **B1 钉**：没有 643 时 `dlg_select_any` 必须 ScenarioError（不许 recog=0 猜测）。
+    """
+    messages = load_message_constants()
+
+    # ① 形状：合法（字面量 + params 名）
+    p1 = plan_step({"newchr": {"name": "abc", "job": 1, "hair": 3, "sex": 1}}, 0, {})
+    assert p1["kind"] == "newchr" and p1["ident"] == CM_NEWCHR and p1["recog"] == 0
+    assert (p1["name"], p1["job"], p1["hair"], p1["sex"], p1["on_exists"]) == \
+        ("abc", 1, 3, 1, "reuse")
+    p2 = plan_step({"newchr": {"name": "chrname", "job": "job", "hair": "hair", "sex": "sex"}},
+                   0, {"chrname": "英雄A", "job": 2, "hair": 5, "sex": 0})
+    assert (p2["name"], p2["job"], p2["hair"], p2["sex"]) == ("英雄A", 2, 5, 0)
+
+    # ② 形状：非法（fail-closed）
+    bad = [
+        ({"newchr": {"job": 0}}, "missing key"),
+        ({"newchr": {"name": "   "}}, "not be blank"),
+        ({"newchr": {"name": "ab"}}, "length 2 out of range"),
+        ({"newchr": {"name": "x" * 21}}, "length 21 out of range"),
+        ({"newchr": {"name": "a/b"}}, "must not contain"),
+        ({"newchr": {"name": "abc", "job": 3}}, "out of range"),
+        ({"newchr": {"name": "abc", "hair": 256}}, "out of range"),
+        ({"newchr": {"name": "abc", "sex": 2}}, "out of range"),
+        ({"newchr": {"name": "abc", "on_exists": "ignore"}}, "on_exists"),
+        ({"newchr": {"name": "abc", "bogus": 1}}, "unknown key"),
+    ]
+    for step, needle in bad:
+        err = None
+        try:
+            plan_step(step, 0, {})
+        except ScenarioError as ex:
+            err = str(ex)
+        assert err is not None, "plan_step accepted bad newchr: %r" % (step,)
+        assert needle in err, (needle, err)
+
+    # ③ 位置：必须 steps[0] 且至多一次
+    def check_doc(steps):
+        doc = {"name": "selftest_newchr_doc", "required": ["newchr_name"], "steps": steps}
+        plans, _ = expand_scenario(doc, {"newchr_name": "abcdef"})
+        check_scenario(doc, plans, None, messages)
+
+    ok_steps = [
+        {"newchr": {"name": "newchr_name"}},
+        {"wait_idents": {"idents": [SM_LOGON], "timeout_ms": 100}},
+    ]
+    check_doc(ok_steps)
+    for bad_steps, needle in [
+        ([{"send": {"ident": CM_SAY, "text": "x"}}, {"newchr": {"name": "abcdef"}}],
+         "must be steps[0]"),
+        ([{"newchr": {"name": "abcdef"}}, {"newchr": {"name": "abcdef2"}},
+          {"wait_for": SM_LOGON}], "at most one"),
+    ]:
+        err = None
+        try:
+            check_doc(bad_steps)
+        except ScenarioError as ex:
+            err = str(ex)
+        assert err is not None and needle in err, (needle, err)
+
+    # ④ 纯逻辑
+    assert newchr_should_reuse("reuse", 2, ["abc", "def"], "ABC") is True
+    assert newchr_should_reuse("fail", 2, ["abc"], "abc") is False
+    assert newchr_should_reuse("reuse", 3, ["abc"], "abc") is False
+    assert newchr_should_reuse("reuse", 2, ["def"], "abc") is False
+    msg = newchr_fail_message(2, [])
+    assert "SM_NEWCHR_FAIL(522)" in msg and "已被使用" in msg, msg
+
+    # ⑤ 运行期（假 socket）：成功 / 重名 reuse / 重名 fail / code=3
+    class _Sock:
+        def __init__(self, reply):
+            self.chunks = []
+            self.sent = []
+            self.reply = reply
+            self.fired = False
+
+        def recv(self, n):
+            if not self.chunks:
+                raise socket.timeout()
+            return self.chunks.pop(0)
+
+        def sendall(self, data):
+            self.sent.append(bytes(data))
+            if not self.fired and self.reply is not None:
+                self.fired = True
+                self.chunks.append(self.reply)
+
+        def close(self):
+            pass
+
+    def mk(reply):
+        import tempfile
+        tmpd = tempfile.mkdtemp(prefix="mir2probe-newchr-")
+        args = argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=800,
+                                  account="ua", char_name=None)
+        run = Run(args)
+        conn = Conn("selgate", run.recorder)
+        conn.phase = "selgate"
+        sock = _Sock(reply)
+        conn.sock = sock
+        return run, conn, tmpd
+
+    import shutil
+
+    def reply(frame):
+        return build_s2c_frame(0, frame, 0, 0, 0, b"")
+
+    plan = plan_step({"newchr": {"name": "abcdef", "job": 0, "hair": 0, "sex": 0}}, 0, {})
+    run, conn, tmpd = mk(reply(SM_NEWCHR_SUCCESS))
+    try:
+        assert _do_newchr(run, conn, run.args, "sess", plan, []) == "abcdef"
+        assert run.chain["newchr"]["result"] == "created"
+        assert len(conn.sock.sent) == 1
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    run, conn, tmpd = mk(reply(SM_NEWCHR_FAIL))
+    try:
+        # `SM_NEWCHR_FAIL` 的 nCode 在 recog 上（MakeMessage(SM_NEWCHR_FAIL, nCode, …)）
+        conn.sock.reply = build_s2c_frame(2, SM_NEWCHR_FAIL, 0, 0, 0, b"")
+        assert _do_newchr(run, conn, run.args, "sess", plan, ["abcdef"]) == "abcdef"
+        assert run.chain["newchr"]["result"] == "reused"
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    run, conn, tmpd = mk(build_s2c_frame(2, SM_NEWCHR_FAIL, 0, 0, 0, b""))
+    plan_fail = plan_step({"newchr": {"name": "abcdef", "on_exists": "fail"}}, 0, {})
+    try:
+        err = None
+        try:
+            _do_newchr(run, conn, run.args, "sess", plan_fail, ["abcdef"])
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "duplicate+fail was not rejected"
+        assert "SM_NEWCHR_FAIL(522)" in err and "已被使用" in err, err
+        assert "server frames since newchr" in err, err
+        assert run.chain["newchr"]["result"] == "failed"
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    run, conn, tmpd = mk(build_s2c_frame(3, SM_NEWCHR_FAIL, 0, 0, 0, b""))
+    try:
+        err = None
+        try:
+            _do_newchr(run, conn, run.args, "sess", plan, ["abcdef"])
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "两个角色" in err, err
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # ⑥ S-2：只有 dlg_select_any + wait 的场景必须过（删 SEND_KINDS 即 R1 红）
+    s2_doc = {"name": "selftest_send_kinds_dlg_any", "steps": [
+        {"click_npc": "auto:last_turn"},
+        {"wait_for": 643},
+        {"dlg_select_any": ["@rw02", "@rw01"]},
+        {"wait_for": 643},
+    ]}
+    s2_plans, _ = expand_scenario(s2_doc, {"npc_actor": 1})
+    check_scenario(s2_doc, s2_plans, None, messages)
+    only_doc = {"name": "selftest_send_kinds_only", "steps": [
+        {"dlg_select_any": ["@rw02"]},
+        {"wait_for": 643},
+    ]}
+    only_plans, _ = expand_scenario(only_doc, {})
+    check_scenario(only_doc, only_plans, None, messages)  # 删 SEND_KINDS 里的 dlg_select_any ⇒ R1 红
+
+    # ⑦ B1：没有 643 时 dlg_select_any 必须 fail-closed（不许 recog=0）
+    import tempfile
+    tmpd = tempfile.mkdtemp(prefix="mir2probe-b1-")
+    try:
+        args = argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock([])
+        err = None
+        try:
+            run.execute_step(conn, plan_step({"dlg_select_any": ["@rw02"]}, 0, {}))
+        except ScenarioError as ex:
+            err = str(ex)
+        assert err is not None and "no SM_MERCHANTSAY(643) seen yet" in err, err
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # ⑧ F2：newchr 载荷顺序（account/name/**hair**/job/sex——hair 在 job 前）
+    assert newchr_payload("ua", "abcdef", 5, 2, 1) == b"ua/abcdef/5/2/1"
+    run, conn, tmpd = mk(reply(SM_NEWCHR_SUCCESS))
+    try:
+        _do_newchr(run, conn, run.args, "sess", plan, [])
+        sent = conn.sock.sent[-1]
+        assert encode_text("ua/abcdef/0/0/0") in sent, sent  # plan 默认 hair=0/job=0/sex=0
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # ⑨ F2：first_pack 三条路径（SM_LOGON 位拆 dir/light、SM_NEWMAP(51) 取 map_file、
+    #     SM_MAPDESCRIPTION(54) 取 map_desc）。**刻意在 51 前塞一条 634（body=WRONG）**：
+    #     若实现回退成用 634 ⇒ map_file=WRONG ⇒ 本断言红（review F1 的构造级钉）。
+    import tempfile
+    tmpd = tempfile.mkdtemp(prefix="mir2probe-fp-")
+    try:
+        series = 3 | (5 << 8)  # MakeWord(Dir=3, Light=5)
+        frames = [
+            build_s2c_frame(7, SM_LOGON, 10, 20, series, b""),
+            build_s2c_frame(0, SM_CHANGEMAP, 0, 0, 0, b"WRONG"),
+            build_s2c_frame(0, SM_NEWMAP, 10, 20, 0, b"0114"),
+            build_s2c_frame(0, SM_MAPDESCRIPTION, 0, 0, 0, "比奇省".encode("gbk")),
+        ]
+        args = argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock(frames)
+        conn.pump(100)
+        fp = run.state["first_pack"]
+        assert fp["map_file"] == "0114", fp        # 来自 SM_NEWMAP(51)，不是 634
+        assert fp["map_desc"] == "比奇省", fp
+        assert (fp["x"], fp["y"]) == (10, 20), fp
+        assert (fp["dir"], fp["light"]) == (3, 5), fp   # series&0xFF=Dir、>>8=Light
+        assert fp["actor_id"] == 7 and fp["series"] == series, fp
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    return ("形状 2 正 + %d 坏例；位置 2 坏例；reuse 4 象限；运行期 created/reused/fail(code2)/code3 4 例；"
+            "S-2 与 B1 各 1 钉；F2 载荷序 + first_pack(51/位拆) 各 1" % len(bad))
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -3356,6 +3809,7 @@ def run_selftest():
     check("scenario-inventory", _selftest_scenario_inventory)
     check("scenario-assets", _selftest_scenario_assets)
     check("dsl-dlg-select-any", _selftest_dlg_select_any)
+    check("dsl-newchr", _selftest_newchr)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
