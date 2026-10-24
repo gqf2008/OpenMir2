@@ -199,6 +199,34 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 
 ---
 
+## 0.9 两侧 `Castle/List.txt` 必须对齐（2026-10-25；卡 `openmir2-window-castle-list-symmetry`）
+
+- **事实**：私有栈两侧不同源——`csharp-root/M2GameSvr/Castle/List.txt` 曾为 `0`（1 城），
+  `rust-root/M2GameSvr/Castle/List.txt` 为 `0,1`（2 城）；C# 开 `--rng-log` 时 GameSvr 走影子
+  `csharp-root/M2GameSvr-hook/`，其 `Castle/List.txt` 也要同内容。
+- **为什么必须对齐**：`CastleMgr.IncRateGold` 会**升序遍历全表** ⇒ 城数不同时 W-TAX-2
+  （`GetAllNpcTax=1` 两城各入账一次）**必然假红**；多城广播次序（T-127 W-T127-4）等工作项
+  也依赖城表一致。
+- **检查（fail-closed）**：`tools/window/preflight_private_stack.py` 新增
+  `castle_list_symmetry` 步——比对两侧（含影子）内容与 sha256，不一致打印两侧 bytes/sha256
+  并 rc=2；只读，不改文件。
+- **对齐办法**（私有栈夹具，**不碰 `E:/MirServer`**）：
+  ```powershell
+  # W-TAX-2 需两城：以 rust-root 的 0,1 为基准
+  Copy-Item -Force E:/tmp/conformance/rust-root/M2GameSvr/Castle/List.txt `
+    E:/tmp/conformance/csharp-root/M2GameSvr/Castle/List.txt
+  if (Test-Path E:/tmp/conformance/csharp-root/M2GameSvr-hook/Castle/List.txt) {
+    Copy-Item -Force E:/tmp/conformance/rust-root/M2GameSvr/Castle/List.txt `
+      E:/tmp/conformance/csharp-root/M2GameSvr-hook/Castle/List.txt
+  }
+  ```
+  最小场景可反向对齐到 `0`（1 城），但 W-TAX-2 与多城项需 `0,1`；对齐后重跑 preflight，
+  `castle_list_symmetry` 必须 OK。`Castle/0|1/SabukW.txt` 两侧本就逐字节同源，无需改。
+- **影响面**：W-TAX-1..4（尤其 W-TAX-2）、T-127 W-T127-4（多城广播次序）、任何按城表遍历的
+  城堡工作项。窗口执行单（exec sheet）前置表已同步该步。
+
+---
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。

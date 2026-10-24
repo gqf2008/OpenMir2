@@ -12,7 +12,8 @@
 | # | 检查 | 命令 / 判据 | 不合格怎么办 |
 |---:|---|---|---|
 | 1 | 端口 | `powershell -File E:/MirServer/port-status.ps1` ⇒ **5000–7200 全 DOWN**、**mysqld 3306 UP** | 占用 ⇒ 定位后清进程；**不要跑 `start-all.ps1`**（窗口栈由 `run_batch`/`card_window` 自己起；`check_ports_free` 占用即 rc=2）。源：`delivery-acceptance-runbook` §3 B1 |
-| 2 | 私栈前置 | `python -I -B tools/window/preflight_private_stack.py`（8 步，见该脚本 `--help`） | 按脚本输出修；`-CheckPinsOnly` 可只核钉住项 |
+| 2 | 私栈前置 | `python -I -B tools/window/preflight_private_stack.py`（9 步，含 `castle_list_symmetry`，见该脚本 `--help`） | 按脚本输出修；`-CheckPinsOnly` 可只核钉住项 |
+| 2b | 城表对齐 | preflight 的 `castle_list_symmetry` 必须 OK（两侧含 `M2GameSvr-hook` 影子内容/sha256 一致） | 不一致 ⇒ 按 `window-runbook` §0.9 用 `Copy-Item` 对齐（W-TAX-2 需两城 `0,1`），**不碰 `E:/MirServer`**；否则城堡税/多城项必假红 |
 | 3 | 场景清单 | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 21（blocked 1 ⇒ 入批 20）`**，#21 标 `YES` | 数量不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ 清单行的 `blocked` 字段被动过 |
 | 4 | 门禁基线 | `python -I -B tools/goal/goal_gate.py --skip-tests --json`（全量版需低负载时段） | 红 ⇒ 先修再开窗（`window-runbook` §6） |
 
@@ -30,7 +31,7 @@
 | —（不入批） | #21 `butch_two_draws` | 台账 #6 **W-DG-2** | 见 ③：本轮不可跑 | — |
 
 **台账里未落到 run3 场景的卡**（窗口需手工/新夹具，按期执行见台账对应行）：
-#1 商税（W-TAX-1..4，需城堡商人配置副本）、#3 的 `@back` 子项（部署非目标）、#5 T-127（`castle_zone`）、
+#1 商税（W-TAX-1..4，需城堡商人配置副本；**跑前先完成 ① 2b 的 `Castle/List.txt` 对齐**，否则 W-TAX-2 必然假红）、#3 的 `@back` 子项（部署非目标）、#5 T-127（`castle_zone`）、
 #7/#8 castle-official(-actions)（W-CO-1..6，**W-CO-6 需 owner 批准测试专用城主注入**）、#9 msgqueue（W-MQ-1..4，含 `getback` 多页）。
 源：`docs/window-closure-ledger-20261025.md` §1。
 
