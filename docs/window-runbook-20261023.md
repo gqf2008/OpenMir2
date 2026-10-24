@@ -634,20 +634,23 @@ oracle 的 `ActionOfGmExecute`（以及多数脚本动作）**直接拼 `sParam1
 > `stale_pointer_gate` 默认取这个远端 ref 做祖先判定 ⇒ 会把**当前本地 head** 的快照声明误拒
 > （`f08496192` 上实测 1 处红；同一命令加 `--ref master` 即绿）。
 
-**① 口径（本仓 7 项卫生门禁里，只有两项吃 `--ref`）**
+**① 口径（按 `--ref` 行为分三类；7 项卫生门禁 + 1 项台账门）**
 
-| 门 | 是否接受 `--ref` | 故障期口径 |
+| 门 | `--ref` 行为 | 故障期口径 |
 |---|---|---|
-| `tools/hygiene/stale_pointer_gate.py` | **是** | 显式 `--ref master` |
-| `tools/hygiene/dynamic_count_stamp_gate.py` | **是** | 显式 `--ref master` |
-| `tools/hygiene/conflict_marker_gate.py` | 否 | 原样 |
-| `mir2-rs/tests/parity/m3/whitelist_anchor_gate.py` | 否 | 原样 |
-| `mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py` | 否 | 原样 |
-| `tools/hygiene/board_coverage_gate.py` | 否 | 原样 |
-| `tools/whitelist/t_reservation_gate.py` | 否 | 原样 |
+| `tools/hygiene/stale_pointer_gate.py` | **接受**（默认 `refs/remotes/walgit/master`） | 显式 `--ref master` |
+| `tools/hygiene/dynamic_count_stamp_gate.py` | **接受** | 显式 `--ref master` |
+| `tools/whitelist/t_reservation_gate.py` | 硬传 **rc=2**（argparse 子命令 `unrecognized arguments`） | 不传 |
+| `mir2-rs/tests/parity/m3/whitelist_anchor_gate.py` | 硬传 **rc=2**（同上） | 不传 |
+| `mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py` | 硬传 **rc=2**（同上） | 不传 |
+| `tools/hygiene/board_coverage_gate.py` | 硬传 **rc=2**（`unknown argument '--ref'`） | 不传 |
+| `tools/hygiene/conflict_marker_gate.py` | **静默忽略（rc=0 假绿）**：只认 `-h/--help`/`--selftest`，其余 argv 直接忽略 | 不传；默认 ref 口径靠 ② 确认 |
+| `mir2-rs/tests/parity/coverage/script_host_noop_audit.py`（台账门） | **静默忽略（rc=0 假绿）**：`check` 前先丢弃所有 `--` 开头的 token | 不传；同上 |
 
-⇒ 「7 项一律 `--ref master`」的准确落法是：**两项带 ref 的门钉本地 `master`，其余五项没有 `--ref` 参数**
-（硬传会报 unknown option）。`script_host_noop_audit.py`（台账门）同样无 `--ref`。
+⇒ 三类行为**不能互相替代**：① 2 项接受 `--ref`；② 4 项硬传 rc=2（能看见报错）；③ **2 项静默忽略**——
+传了照样 rc=0，是**假绿**（比报错危险：会让人误以为 ref 已钉到本地 master）。故对 ②③ 两类，
+故障期的唯一正确做法是 **不传 `--ref`**，并用 ② 的 `git rev-parse` 对照确认**默认 ref 已指向本地
+`master`**；CI 侧另有 `refs/heads/master` 约束兜底。恢复默认口径后（③）不要给这两门补 `--ref`，它不会生效。
 
 **② 可复算对照（跑门之前 1 秒判一次）**
 
@@ -673,7 +676,8 @@ python -I mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check
 python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit
 python -I -B tools/hygiene/dynamic_count_stamp_gate.py --ref master
 python -I -B tools/hygiene/board_coverage_gate.py --board .walgit/board.toml
-python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py check   # 台账门（无 --ref）
+python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py check   # 台账门（静默忽略 --ref）
+python -I -B tools/hygiene/merge_tree_helper.py --selftest               # CI 第 8 项：不吃 --ref，resolve_master 自解到本地 master
 git diff --check
 ```
 
