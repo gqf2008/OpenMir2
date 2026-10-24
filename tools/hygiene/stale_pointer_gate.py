@@ -209,10 +209,15 @@ CARD_PENDING_RE = re.compile("|".join(re.escape(w) for w in CARD_PENDING_WORDS))
 
 # Longer literals that *contain* a card-pending word but are not a card-lifecycle
 # assertion.  「未接线」= a subsystem is not wired (direction, not a card state);
-# 「含未合并」/「其中未合并」= a statistic-row category label.  A pending-word
-# match lying inside one of these spans is skipped (reviewer-3 finding I-1 on
-# e5c9f169c: these were the two false reds that the same-cell rule used to hide).
-NOT_ASSERTIVE = ("含未合并", "其中未合并", "未接线", "未接入")
+# 「含未合并」/「其中未合并」/「另未合并」= a statistic-row category label.  The
+# third spelling is goal_gate's wording from 2026-10-24 on (detail line
+# "window_required 131（另未合并 2）"); it is added here so a verbatim quote of
+# that output is not read as a live "the card is still unmerged" claim.  A
+# pending-word match lying inside one of these spans is skipped (reviewer-3
+# finding I-1 on e5c9f169c: these were the two false reds that the same-cell
+# rule used to hide).  The spans apply to the card class only; a hash + word
+# pair is still judged by the hash class (selftest pins that boundary).
+NOT_ASSERTIVE = ("含未合并", "其中未合并", "另未合并", "未接线", "未接入")
 
 # The repo's two correction-marker spellings: 〔…订正…〕 and "YYYY-MM-DD 订正",
 # the latter optionally wrapped in bold.  Both mean "this line is a historical
@@ -1607,6 +1612,21 @@ def selftest():
             "| `openmir2-synthetic-closed` | 前置被阻塞：⑧ 攻城层未接线 |\n"
             "| window_required（含未合并） | 2 | `openmir2-synthetic-closed` |\n",
         )
+        # goal_gate's 2026-10-24 wording 「另未合并」: a verbatim statistic line
+        # must not pair as a card assertion; the same line with a real pending
+        # word must still be red; and the hash class is intentionally unchanged.
+        _write(
+            os.path.join(repo, "docs", "newword", "new.md"),
+            "| `openmir2-synthetic-closed`（另未合并 2） |\n",
+        )
+        _write(
+            os.path.join(repo, "docs", "newwordred", "red.md"),
+            "| `openmir2-synthetic-closed`（未合入） |\n",
+        )
+        _write(
+            os.path.join(repo, "docs", "newwordhash", "hash.md"),
+            "| window_required 131（另未合并 2） | `%s` |\n" % merged,
+        )
         # A card the board projection does not list: only snapshot/inbox know it.
         _write(
             os.path.join(repo, "docs", "cardoffboard", "offboard.md"),
@@ -2016,6 +2036,34 @@ def selftest():
             card_noise["rc"] == 0
             and not card_noise["card_hits"]
             and card_noise["card_lines"] == 0,
+        )
+
+        # ---- goal_gate's new wording 「另未合并」 (2026-10-24)
+        newword = scan(
+            repo, "docs/newword", ref, load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, ledger
+        )
+        newword_red = scan(
+            repo, "docs/newwordred", ref, load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, ledger
+        )
+        newword_hash = scan(
+            repo, "docs/newwordhash", ref, load_allowlist(empty_allowlist), DEFAULT_MAX_GAP, ledger
+        )
+        check(
+            "⑰b 「另未合并」是统计行标签 ⇒ 与卡号同行不配对、不判红",
+            newword["rc"] == 0 and not newword["card_hits"],
+        )
+        check(
+            "⑰c 同一位置换成真未完成词（未合入）⇒ 仍红（防放宽成万能豁免）",
+            newword_red["rc"] == 1
+            and len(newword_red["card_hits"]) == 1
+            and newword_red["card_hits"][0]["card"] == "openmir2-synthetic-closed"
+            and newword_red["card_hits"][0]["state"] == "closed",
+        )
+        check(
+            "⑰d 边界：hash 类不消费该字面表 ⇒ hash + 另未合并 仍红（本次只扩卡类）",
+            newword_hash["rc"] == 1
+            and len(newword_hash["hits"]) == 1
+            and newword_hash["hits"][0]["word"] == "未合并",
         )
 
         # ---- --no-ledger must still keep a card-only entry alive (no false rot)

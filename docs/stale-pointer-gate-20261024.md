@@ -54,7 +54,9 @@ git merge-base --is-ancestor <hash> <ref>     # 默认 --ref refs/remotes/walgit
   所以「`| `openmir2-x` | 未合入 |`」这种「卡号一格、词另一格」**算**配对——判据是「同一行」，不是「同一格」
   （返工订正：`e5c9f169c` 曾额外要求同格，静默吞掉两处真漂移，见 §3.4 第 6/16 行）。
 - **非断言复合词**（字面表，不缩词表）：`未接线`/`未接入`（子系统没接线，是方向词，不是卡的流程态）、
-  `含未合并`/`其中未合并`（统计行的分类标签）。命中若落在这些字面串内即跳过；词表本身一个字都没减。
+  `含未合并`/`其中未合并`/`另未合并`（统计行的分类标签；`另未合并` 是 `goal_gate` 自 2026-10-24 起的新措辞，
+  形如 `window_required 131（另未合并 2）`）。命中若落在这些字面串内即跳过；词表本身一个字都没减。
+  **该字面表只作用于卡号类**：hash 类不消费它，`hash + 另未合并` 仍会判红（由 selftest ⑰d 钉住）。
 - **判据**：卡在账本里 `status == closed`，或**存在任一** `merge_result{merged:true}` ⇒ 红，
   打印 `file:line  卡号  账本状态`（`closed` / `merged (status=…)`）。「存在」是验收口径：
   之后的 `merged:false` 不清除先前的合并事实。
@@ -440,7 +442,7 @@ python -I tools/hygiene/stale_pointer_gate.py --selftest
 
 ## 7. 自测（`--selftest`）
 
-31 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；带 2026-01-01 日期的祖先 O；
+34 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；带 2026-01-01 日期的祖先 O；
 side 分支 commit B = 对象存在但非祖先；卡号类用内存 `Ledger` **或**合成 `refs/collab/inbox` blob，
 不需要真 `walgit`）：
 
@@ -463,6 +465,9 @@ side 分支 commit B = 对象存在但非祖先；卡号类用内存 `Ledger` **
 | ⑮ | **board 缺卡、`refs/collab/inbox` 有该卡的 status+merge_result** | 并集补回（`on_board=False`、`merged=True`）并判红 |
 | ⑯ | `_fold_entries`（最新 status + 存在 merge）与 `_cards_from_raw`（columns/cards/threads 三形状） | 折叠结果与三形状解析正确 |
 | ⑰ | `未接线` / `含未合并` 与卡号同行 | 绿（字面复合词排除，`card_lines == 0`） |
+| ⑰b | `另未合并` 与卡号同行 | 绿（新措辞按字面整体排除） |
+| ⑰c | 同位置换成真未完成词（`未合入`） | 红（防把字面表放宽成万能豁免） |
+| ⑰d | `hash + 另未合并` | 红（边界：字面表只作用于卡号类） |
 | ⑱ | `--no-ledger` + 只压卡号命中的白名单条目 | 条目仍算 used、`allow_exempt==1`、不报 rot |
 | ⑲ | `_merged_flag(True/False/None/"9ff7ff064")` | 只有布尔 `true` 为真（字符串分支已删） |
 | ⑳ | 账本 0 线程 + docs 有卡号 | 默认 rc=2；`--allow-empty-ledger` ⇒ rc=0 + NOTE |
@@ -478,9 +483,10 @@ side 分支 commit B = 对象存在但非祖先；卡号类用内存 `Ledger` **
 | ㉚ | 头里 anchor 上一行有无关的 `基线 <sha>`，真 sha 在下一行 | 候选近到远试，真 sha 胜出 ⇒ INFO，且 NOTE 里写明被否的基线候选 |
 | ㉛ | 声明行已 `git add` 但未 commit（blame 全 0 / `Not Committed Yet`） | 不豁免，仍红 + NOTE 点名 blame 不可用的原因 |
 
-实测：`selftest: 31/31 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为第二类卡，㉑-㉖ 为首版快照/卡号修正，
+实测：`selftest: 34/34 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为第二类卡，㉑-㉖ 为首版快照/卡号修正，
 ㉗-㉚ 为返工：㉗ 钉住文档头两条边界、㉘㉙ 钉住声明可信性 (d) 的两类伪造、
-㉚ 钉住「相邻基线 sha 不再吞掉真声明」；㉛ 为 blame fail-closed：声明行已 stage 未 commit ⇒ 不豁免）。
+㉚ 钉住「相邻基线 sha 不再吞掉真声明」；㉛ 为 blame fail-closed：声明行已 stage 未 commit ⇒ 不豁免；
+⑰b-⑰d 为 `另未合并` 字面 + 真断言仍红 + hash 类边界）。
 
 ## 8. 告警还是阻断（留给 Leader 合并时定）
 
