@@ -6157,16 +6157,18 @@ def selftest():
         synth_out = _derived_testdb_profile(synth_base, "synth-out", "selftest")
         synth_db = synth_out["sides"]["csharp"]["db"]
         wtd_builtin_db = (BUILTIN_PROFILES["window-testdb"]["sides"]["csharp"].get("db") or {})
-        from_alt_db = (_derived_testdb_profile(BUILTIN_PROFILES["alt"], "probe", "probe")
-                       ["sides"]["csharp"]["db"])
+        # carried #119：第 4 合取项原为 `wtd_builtin_db == from_alt_db`（恒真——
+        # alt 的 C# db 本就是 test/mir2_test_db）。改为钉「名字是构造器所赋」：
+        # 纯别名 deepcopy(alt) 的 name 仍是 "alt" ⇒ 本断言红。
+        wtd_builtin_name = BUILTIN_PROFILES["window-testdb"].get("name")
         chk(synth_db.get("preset") == "test"
             and synth_db.get("characters_db") == "mir2_test_db"
             and synth_base["sides"]["csharp"]["db"]
             == {"preset": "prod", "characters_db": "mir2_db"}
-            and wtd_builtin_db == from_alt_db,
+            and wtd_builtin_name == "window-testdb",
             "22b) `_derived_testdb_profile` 的两行显式赋值仍在且取值正确："
-            "生产库基线也被强制改写成 test / mir2_test_db、基线不被改、内置条目确为该构造器产物"
-            "（实际 %r / %r）" % (synth_db, wtd_builtin_db))
+            "生产库基线也被强制改写成 test / mir2_test_db、基线不被改、"
+            "内置条目名确为构造器所赋（实际 %r / name=%r）" % (synth_db, wtd_builtin_name))
 
     finally:
         holder.close()
