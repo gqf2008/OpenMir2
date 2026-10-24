@@ -65,14 +65,24 @@ Third class — **snapshot declarations** (card
 its *header*, that it was frozen at a commit (``CUTOFF=<epoch>`` /
 ``截至 <sha> @ <YYYY-MM-DD HH:MM>`` / ``快照 @ <sha>`` / ``取数时点 …``) is
 judged under **snapshot semantics**: hits become ``INFO`` lines that print the
-declaration and why it was accepted — they are never silently dropped.  The
-declaration is **checked**, not trusted: (a) the declared sha must exist and be
-an ancestor of ``--ref``; (b) the declared time (UTC+8 unless an explicit
-offset / ``Z`` is written) must be within ``--snapshot-tol`` seconds (default
-900) of that commit's author or committer time; (c) the whole declaration must
-sit *before* the hit.  Declarations are only recognised in the document header
-(before the first ``##`` heading and within the first 60 lines).  Any failed
-check leaves the hit red.
+declaration and why it was accepted — they are never silently dropped, and a
+*rejected* declaration is printed as a ``NOTE`` with the candidate sha and the
+failed check.  The declaration is **checked**, not trusted: (a) the declared
+sha must exist and be an ancestor of ``--ref``; (b) the declared time (UTC+8
+unless an explicit offset / ``Z`` is written) must be within
+``--snapshot-tol`` seconds (default 900) of that commit's author or committer
+time; (c) the whole declaration must sit *before* the hit; (d) the declaration
+lines must themselves have been **committed** within ``--decl-tol`` seconds
+(default 86400 = 1 day) of the claimed time, judged by ``git blame
+--porcelain``.  (d) is what stops a declaration written months later from
+back-dating an arbitrarily old sha.  What (d) cannot catch is a whole file
+written and committed in one go (declaration and forgery share one blame
+commit); only a human can check that.  Declarations are only recognised in the
+document header (before the first ``##`` heading and within the first 60
+lines).  Several sha candidates inside that small header window are tried
+nearest-first, so an unrelated ``基线 <sha>`` neighbour no longer silently
+swallows the real one; every rejected candidate is printed.  Any failed check
+leaves the hit red.
 
 A card-shaped id that is **not** in the ledger thread set is a feature name /
 label, not a card: it is printed as ``INFO 非账本卡号`` and is not red.  An
@@ -223,6 +233,7 @@ SNAPSHOT_DATETIME_RE = re.compile(
     r"(?:\s*([+-])([0-9]{2})(?::?([0-9]{2}))?|\s*(?i:(Z|UTC)))?"
 )
 DEFAULT_SNAPSHOT_TOL = 900  # seconds (--snapshot-tol)
+DEFAULT_DECL_TOL = 86400  # seconds (--decl-tol): declaration-line blame gap
 SNAPSHOT_NEAR = 2  # lines: anchor <-> sha/time
 SNAPSHOT_PREAMBLE_MAX = 60  # declarations must sit in the document header
 
@@ -449,20 +460,37 @@ def _line_times(line):
     return out
 
 
-def _nearest_unique(lines, low, high, anchor, extract):
-    """Nearest line whose extracted values are non-empty and unambiguous."""
+def _sha_candidates(lines, low, high, anchor):
+    """Candidate ``(line, sha)`` pairs in the header window, nearest first.
+
+    The first version took *one* nearest sha and gave up as soon as it failed
+    check (a)/(b).  A neighbouring line above the anchor (``基线 <sha>``) could
+    then swallow the real declaration and turn a legitimate snapshot into a
+    false red, silently (reviewer-3 M-1).  Now every single-valued line is a
+    candidate; the caller tries them nearest-first, the first one passing
+    *all* checks wins, and rejected candidates are printed as NOTEs.
+
+    A line carrying two different hashes is ambiguous: if it is the nearest
+    sha-bearing line the whole declaration is refused ("歧义即放弃"); farther
+    ambiguous lines are merely skipped.
+    """
+    out = []
     for distance in range(0, high - low + 1):
         for index in (anchor - distance, anchor + distance):
             if not low <= index <= high:
                 continue
-            values = extract(lines[index - 1])
+            values = _line_shas(lines[index - 1])
             if not values:
                 continue
             distinct = set(values)
             if len(distinct) != 1:
-                return None  # ambiguous header: refuse the exemption
-            return index, distinct.pop()
-    return None
+                if not out:
+                    return None  # ambiguous nearest header: refuse the exemption
+                continue
+            sha = distinct.pop()
+            if all(sha != seen for _line, seen in out):
+                out.append((index, sha))
+    return out
 
 
 def _nearest_time(lines, low, high, anchor):
@@ -484,10 +512,13 @@ def _nearest_time(lines, low, high, anchor):
 def snapshot_declarations(text):
     """Document-level snapshot declarations, per the module docstring.
 
-    Only the header is eligible: before the first ``##`` heading and within
-    ``SNAPSHOT_PREAMBLE_MAX`` lines.  A declaration's ``position`` is the last
-    line it occupies, so ``position < hit_line`` means "the whole declaration
-    was written before the assertion".
+    Only the header is eligible: before the first ``##`` heading **and**
+    within ``SNAPSHOT_PREAMBLE_MAX`` lines.  Both bounds are load-bearing: a
+    mid-body ``board 快照 <sha> @ <ts>`` is a data point, not a "frozen here"
+    declaration, and letting it exempt the whole file would launder a real
+    drift (reviewer-3 I-1; selftest ㉗ pins both bounds).  A declaration's
+    ``position`` is the last line it occupies, so ``position < hit_line``
+    means "the whole declaration was written before the assertion".
     """
     lines = text.splitlines()
     preamble = len(lines) + 1
@@ -503,30 +534,33 @@ def snapshot_declarations(text):
             continue
         low = max(1, anchor - SNAPSHOT_NEAR)
         top = min(high, anchor + SNAPSHOT_NEAR)
-        sha = _nearest_unique(lines, low, top, anchor, _line_shas)
+        sha_candidates = _sha_candidates(lines, low, top, anchor)
         when = _nearest_time(lines, low, top, anchor)
-        if sha is None or when is None:
+        if not sha_candidates or when is None:
             continue
-        sha_line, sha_text = sha
         time_line, epoch, time_text = when
-        position = max(anchor, sha_line, time_line)
-        key = (sha_text, epoch, position)
+        key = (tuple(sha_candidates), epoch)
         if key in seen:
             continue
         seen.add(key)
-        text_lines = []
-        for index in sorted({anchor, sha_line, time_line}):
+        snippet_of = {}
+        for index in sorted(
+            {anchor, time_line} | {line for line, _sha in sha_candidates}
+        ):
             snippet = lines[index - 1].strip()
             if len(snippet) > SNIPPET_LIMIT:
                 snippet = snippet[: SNIPPET_LIMIT - 1] + "…"
-            text_lines.append("L%d: %s" % (index, snippet))
+            snippet_of[index] = snippet
         out.append(
             {
-                "position": position,
-                "sha": sha_text,
-                "epoch": epoch,
+                "anchor": anchor,
+                "time_line": time_line,
                 "time_text": time_text,
-                "text": " / ".join(text_lines),
+                "epoch": epoch,
+                "sha_candidates": sha_candidates,
+                "sha": sha_candidates[0][1],
+                "position": max(anchor, time_line, sha_candidates[0][0]),
+                "snippet_of": snippet_of,
             }
         )
     return out
@@ -544,25 +578,152 @@ def _commit_time(top, sha, cache):
     return cache[sha]
 
 
-def checked_declarations(top, text, tolerance, ancestor, commit_cache):
-    """Keep only declarations that pass (a) and (b) of the docstring.
+def _blame_delta(top, rel, lines, epoch, cache):
+    """``|commit time - declared time|`` for the *newest* declaration line.
+
+    ``git blame --porcelain`` names the commit that last touched a line.  A
+    snapshot declaration is only believable when that commit was made near the
+    instant the declaration claims to describe: a header added months after
+    the fact (or an arbitrarily old sha back-dated with its own real
+    timestamp) is exactly the forgery reviewer-3 I-2 demonstrated.  Returns
+    ``None`` when a line cannot be blamed (uncommitted working-tree edit,
+    unknown file) -- "cannot verify" must never exempt.
+
+    Per line both author and committer time are accepted (a rebase rewrites
+    only the latter); the declaration as a whole is only as old as its newest
+    line, hence the ``max``.
+    """
+    worst = 0
+    for line in lines:
+        key = (rel, line)
+        if key not in cache:
+            rc, out, _err = _git_text(
+                top, "blame", "-L", "%d,%d" % (line, line), "--porcelain", "--", rel
+            )
+            times = []
+            if rc == 0:
+                for raw in out.splitlines():
+                    if raw.startswith("author-time "):
+                        times.append(int(raw.split()[1]))
+                    elif raw.startswith("committer-time "):
+                        times.append(int(raw.split()[1]))
+            cache[key] = tuple(times) if times else None
+        times = cache[key]
+        if not times:
+            return None
+        worst = max(worst, min(abs(epoch - stamp) for stamp in times))
+    return worst
+
+
+def checked_declarations(
+    top,
+    rel,
+    text,
+    tolerance,
+    decl_tolerance,
+    ancestor,
+    commit_cache,
+    blame_cache,
+    reject_sink=None,
+):
+    """Keep only declarations that pass (a), (b) and (d) of the docstring.
 
     (c) "declaration before the hit" is enforced per hit line by the caller.
+    Every rejected declaration is appended to ``reject_sink`` (printed as a
+    NOTE) instead of being dropped silently.
     """
     out = []
     for decl in snapshot_declarations(text):
-        state = ancestor(decl["sha"])
-        if not state:  # None: not a commit here; False: not an ancestor
+        rejected = []
+        accepted = None
+        for sha_line, sha_text in decl["sha_candidates"]:
+            state = ancestor(sha_text)
+            if state is None:
+                rejected.append(
+                    "L%d %s: not a commit in this repository" % (sha_line, sha_text)
+                )
+                continue
+            if not state:
+                rejected.append(
+                    "L%d %s: not an ancestor of --ref" % (sha_line, sha_text)
+                )
+                continue
+            times = _commit_time(top, sha_text, commit_cache)
+            if times is None:
+                rejected.append(
+                    "L%d %s: cannot read its commit time" % (sha_line, sha_text)
+                )
+                continue
+            delta = min(abs(decl["epoch"] - times[0]), abs(decl["epoch"] - times[1]))
+            if delta > tolerance:
+                rejected.append(
+                    "L%d %s: Δ%ds > --snapshot-tol %ds"
+                    % (sha_line, sha_text, delta, tolerance)
+                )
+                continue
+            accepted = (sha_line, sha_text, times, delta)
+            break
+        if accepted is None:
+            if reject_sink is not None:
+                reject_sink.append(
+                    {
+                        "path": rel,
+                        "line": decl["anchor"],
+                        "sha": decl["sha"],
+                        "time": decl["time_text"],
+                        "reasons": rejected or ["no sha in the header window"],
+                    }
+                )
             continue
-        times = _commit_time(top, decl["sha"], commit_cache)
-        if times is None:
+        sha_line, sha_text, times, delta = accepted
+        lines = sorted({decl["anchor"], decl["time_line"], sha_line})
+        blamed = _blame_delta(top, rel, lines, decl["epoch"], blame_cache)
+        if blamed is None:
+            if reject_sink is not None:
+                reject_sink.append(
+                    {
+                        "path": rel,
+                        "line": decl["anchor"],
+                        "sha": sha_text,
+                        "time": decl["time_text"],
+                        "reasons": [
+                            "declaration line is not committed (blame unavailable)"
+                        ],
+                    }
+                )
             continue
-        delta = min(abs(decl["epoch"] - times[0]), abs(decl["epoch"] - times[1]))
-        if delta > tolerance:
+        if blamed > decl_tolerance:
+            if reject_sink is not None:
+                reject_sink.append(
+                    {
+                        "path": rel,
+                        "line": decl["anchor"],
+                        "sha": sha_text,
+                        "time": decl["time_text"],
+                        "reasons": [
+                            "declaration written Δ%ds from the claimed time > "
+                            "--decl-tol %ds (added after the fact?)"
+                            % (blamed, decl_tolerance)
+                        ],
+                    }
+                )
             continue
         checked = dict(decl)
-        checked["delta"] = delta
-        checked["commit_times"] = times
+        checked.update(
+            {
+                "sha": sha_text,
+                "sha_line": sha_line,
+                "position": max(decl["anchor"], decl["time_line"], sha_line),
+                "delta": delta,
+                "commit_times": times,
+                "blame_delta": blamed,
+                "lines": lines,
+                "rejected_candidates": rejected,
+                "text": " / ".join(
+                    "L%d: %s" % (index, decl["snippet_of"][index]) for index in lines
+                ),
+            }
+        )
         out.append(checked)
     return out
 
@@ -958,6 +1119,7 @@ def scan(
     max_gap,
     ledger=None,
     snapshot_tol=DEFAULT_SNAPSHOT_TOL,
+    decl_tol=DEFAULT_DECL_TOL,
 ):
     """Scan ``rel_path``; return a dict with hits/exemptions/errors.
 
@@ -983,10 +1145,13 @@ def scan(
         "snapshot_info": [],
         "snapshot_exempt": 0,
         "snapshot_tol": snapshot_tol,
+        "snapshot_decl_tol": decl_tol,
+        "decl_notes": [],
         "card_nonid": [],
     }
     ancestry = {}
     commit_times = {}
+    blame_times = {}
 
     def ancestor(sha):
         if sha not in ancestry:
@@ -1005,7 +1170,15 @@ def scan(
             result["errors"].append("cannot read %s: %s" % (rel, exc))
             continue
         declarations = checked_declarations(
-            top, text, snapshot_tol, ancestor, commit_times
+            top,
+            rel,
+            text,
+            snapshot_tol,
+            decl_tol,
+            ancestor,
+            commit_times,
+            blame_times,
+            reject_sink=result["decl_notes"],
         )
         for lineno, line in enumerate(text.splitlines(), 1):
             result["lines"] += 1
@@ -1170,9 +1343,15 @@ def emit(result, ref, allowlist_path, out=sys.stdout, err=sys.stderr):
         )
     for item in result["snapshot_info"]:
         decl = item["decl"]
+        override = (
+            "; nearer candidate(s) rejected: " + " | ".join(decl["rejected_candidates"])
+            if decl["rejected_candidates"]
+            else ""
+        )
         print(
             "INFO snapshot-exempt %s:%d  %s %s  (declaration %s; sha %s @ %s "
-            "(epoch %d), commit %s, Δ%ds ≤ %ds, ancestor of ref)"
+            "(epoch %d), commit %s, Δ%ds ≤ %ds, ancestor of ref; declaration "
+            "committed Δ%ds ≤ %ds%s)"
             % (
                 item["path"],
                 item["line"],
@@ -1185,8 +1364,23 @@ def emit(result, ref, allowlist_path, out=sys.stdout, err=sys.stderr):
                 "%d/%d" % decl["commit_times"],
                 decl["delta"],
                 result["snapshot_tol"],
+                decl["blame_delta"],
+                result["snapshot_decl_tol"],
+                override,
             ),
             file=out,
+        )
+    for note in result["decl_notes"]:
+        print(
+            "NOTE snapshot-declaration rejected %s:L%d  %s @ %s  (%s)"
+            % (
+                note["path"],
+                note["line"],
+                note["sha"],
+                note["time"],
+                "; ".join(note["reasons"]),
+            ),
+            file=err,
         )
     for item in result["unresolved"]:
         print(
@@ -1254,6 +1448,19 @@ def _run_git(cwd, *args):
     return proc.stdout.strip()
 
 
+def _run_git_env(cwd, env, *args):
+    full = dict(os.environ)
+    full.update(env)
+    proc = subprocess.run(
+        ["git", *args], cwd=cwd, capture_output=True, check=False, text=True, env=full
+    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "selftest git %s failed: %s" % (" ".join(args), proc.stderr.strip())
+        )
+    return proc.stdout.strip()
+
+
 def _write(path, text):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
@@ -1278,6 +1485,23 @@ def selftest():
         _run_git(repo, "add", "-A")
         _run_git(repo, "commit", "-qm", "base")
         merged = _run_git(repo, "rev-parse", "HEAD")
+
+        # An old ancestor dated 2026-01-01: quoting it with its *own real*
+        # timestamp passes checks (a)/(b)/(c) -- only the declaration-line
+        # blame check (d) can tell that the declaration was written today.
+        _write(os.path.join(repo, "docs", "plain", "old.md"), "old\n")
+        _run_git(repo, "add", "-A")
+        _run_git_env(
+            repo,
+            {
+                "GIT_AUTHOR_DATE": "2026-01-01T12:00:00+0800",
+                "GIT_COMMITTER_DATE": "2026-01-01T12:00:00+0800",
+            },
+            "commit",
+            "-qm",
+            "old",
+        )
+        old = _run_git(repo, "rev-parse", "HEAD")
 
         # Side-branch commit B is reachable in the object DB but not an ancestor.
         _run_git(repo, "checkout", "-qb", "side")
@@ -1374,6 +1598,46 @@ def selftest():
             "分支 head `%s`，**未合入**\n\n# 快照 @ `%s` @ %s\n"
             % (merged, merged, _stamp(merged)),
         )
+        # (I-1) The header boundary.  A snapshot declaration placed *after*
+        # the first "##" heading, or *after* line 60, is a mid-body data
+        # point, not a document freeze -- it must NOT downgrade the hit.
+        # Mutation high=len(lines) makes both INFO and must fail check ㉗.
+        _write(
+            os.path.join(repo, "docs", "snapshot-header", "body.md"),
+            "# 头部标题\n\n## 1. 正文\n\n"
+            "board 快照 `%s` @ %s\n\n"
+            "分支 head `%s`，**未合入**\n"
+            % (merged, _stamp(merged), merged),
+        )
+        deep_lines = ["# 深度边界夹具"]
+        deep_lines.extend("填充行 %d。" % i for i in range(2, 62))
+        deep_lines.append("board 快照 `%s` @ %s" % (merged, _stamp(merged)))
+        deep_lines.append("")
+        deep_lines.append("分支 head `%s`，**未合入**" % merged)
+        _write(
+            os.path.join(repo, "docs", "snapshot-header", "deep.md"),
+            "\n".join(deep_lines) + "\n",
+        )
+        # (I-2) A declaration back-dating the 2026-01-01 ancestor while the
+        # line asserting today's drift is current: (a)/(b)/(c) all pass, only
+        # the blame check (d) rejects it.
+        _write(
+            os.path.join(repo, "docs", "snapshot-old", "old.md"),
+            "# 旧 sha 夹具\n\n快照 @ `%s` @ %s\n\n分支 head `%s`，**未合入**\n"
+            % (old, _stamp(old), merged),
+        )
+        # (M-1) An unrelated 基线 sha above the anchor must not swallow the
+        # real declaration: candidates are tried nearest-first, the real sha
+        # (line 4) passes (a)/(b) while the baseline (line 2) does not.
+        _write(
+            os.path.join(repo, "docs", "snapshot-neighbor", "neighbor.md"),
+            "# 邻居 sha 夹具\n"
+            "基线 `%s`\n"
+            "取数时点 %s\n"
+            "head `%s`\n\n"
+            "分支 head `%s`，**未合入**\n"
+            % (old, _stamp(merged), merged, merged),
+        )
         # A feature name that merely *looks* like a card id: absent from the
         # ledger, so it must be INFO (非账本卡号) and not red.
         _write(
@@ -1385,6 +1649,27 @@ def selftest():
         _write(os.path.join(repo, "docs", "allowcard", "allowed.md"), allowed_card_line)
         _run_git(repo, "add", "-A")
         _run_git(repo, "commit", "-qm", "fixtures")
+
+        # (I-2) A declaration added *after the fact*: the doc claims the
+        # snapshot instant of `merged`, but the commit carrying the header is
+        # dated 30 days later, so blame exposes the back-dating.
+        _write(
+            os.path.join(repo, "docs", "snapshot-late", "late.md"),
+            "# 事后声明的夹具\n\n快照 @ `%s` @ %s\n\n分支 head `%s`，**未合入**\n"
+            % (merged, _stamp(merged), merged),
+        )
+        _run_git(repo, "add", "-A")
+        late_epoch = int(_run_git(repo, "show", "-s", "--format=%ct", merged)) + 30 * 86400
+        late_stamp = datetime.datetime.fromtimestamp(
+            late_epoch, datetime.timezone(datetime.timedelta(hours=8))
+        ).strftime("%Y-%m-%dT%H:%M:%S+08:00")
+        _run_git_env(
+            repo,
+            {"GIT_AUTHOR_DATE": late_stamp, "GIT_COMMITTER_DATE": late_stamp},
+            "commit",
+            "-qm",
+            "late declaration",
+        )
 
         # Collaboration refs the board projection cannot see: a thread absent
         # from the board JSON but present in the inbox tail (status +
@@ -1841,6 +2126,60 @@ def selftest():
             unreadable.returncode == 2 and "not found" in unreadable_text,
         )
 
+        snap_header = scan(
+            repo, "docs/snapshot-header", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉗ 文档头边界外的快照声明（首个 ## 之后 / 第 60 行之后）⇒ 不降级，仍红",
+            snap_header["rc"] == 1
+            and len(snap_header["hits"]) == 2
+            and snap_header["snapshot_exempt"] == 0
+            and {hit["path"] for hit in snap_header["hits"]}
+            == {"docs/snapshot-header/body.md", "docs/snapshot-header/deep.md"},
+        )
+
+        snap_late = scan(
+            repo, "docs/snapshot-late", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉘ 声明行事后补（blame 时间与声称时间差 > --decl-tol）⇒ 不降级，仍红",
+            snap_late["rc"] == 1
+            and len(snap_late["hits"]) == 1
+            and not snap_late["snapshot_info"]
+            and len(snap_late["decl_notes"]) == 1
+            and "--decl-tol" in " ".join(snap_late["decl_notes"][0]["reasons"]),
+        )
+
+        snap_old = scan(
+            repo, "docs/snapshot-old", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉙ 2026-01-01 的祖先用其真实时间声明、今天才写入 ⇒ 仍红（blame 新近性）",
+            snap_old["rc"] == 1
+            and len(snap_old["hits"]) == 1
+            and not snap_old["snapshot_info"]
+            and len(snap_old["decl_notes"]) == 1
+            and "--decl-tol" in " ".join(snap_old["decl_notes"][0]["reasons"]),
+        )
+
+        snap_neighbor = scan(
+            repo, "docs/snapshot-neighbor", ref, load_allowlist(empty_allowlist),
+            DEFAULT_MAX_GAP, ledger,
+        )
+        check(
+            "㉚ 相邻 `基线 <sha>` 不再吞掉真声明：候选近到远试，真 sha 胜出 ⇒ INFO",
+            snap_neighbor["rc"] == 0
+            and not snap_neighbor["hits"]
+            and snap_neighbor["snapshot_exempt"] == 1
+            and len(snap_neighbor["snapshot_info"]) == 1
+            and snap_neighbor["snapshot_info"][0]["decl"]["sha"] == merged
+            and snap_neighbor["snapshot_info"][0]["decl"]["sha_line"] == 4
+            and snap_neighbor["snapshot_info"][0]["decl"]["rejected_candidates"],
+        )
+
     failed = 0
     for name, ok in checks:
         print(("PASS " if ok else "FAIL ") + name)
@@ -1918,6 +2257,15 @@ def main(argv):
         default=DEFAULT_SNAPSHOT_TOL,
         help="max seconds between a doc's snapshot declaration and the declared "
         "commit's author/committer time (default %d)" % DEFAULT_SNAPSHOT_TOL,
+    )
+    parser.add_argument(
+        "--decl-tol",
+        type=int,
+        default=DEFAULT_DECL_TOL,
+        help="max seconds between a snapshot declaration's claimed time and the "
+        "commit that wrote the declaration line (git blame); a larger gap means "
+        "the declaration was added after the fact (default %d = 1 day)"
+        % DEFAULT_DECL_TOL,
     )
     parser.add_argument(
         "--no-ledger",
@@ -1998,6 +2346,7 @@ def main(argv):
             args.max_gap,
             ledger,
             snapshot_tol=args.snapshot_tol,
+            decl_tol=args.decl_tol,
         )
     except GateError as exc:
         print(str(exc), file=sys.stderr)

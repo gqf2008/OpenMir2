@@ -86,30 +86,48 @@ git merge-base --is-ancestor <hash> <ref>     # 默认 --ref refs/remotes/walgit
 
 - **anchor**：`CUTOFF|截至|快照|取数时点|SNAPSHOT`（不区分大小写）。
 - **sha**：anchor 行本身或 **±2 行**（`SNAPSHOT_NEAR`）内的 7–40 位十六进制，且至少含一个 `a`–`f`
-  （与第一类同口径，避免把日期当 hash）。
+  （与第一类同口径，避免把日期当 hash）。窗口里可能有多条候选（头里常见的「`基线 <sha>`」+
+  「`head <sha>`」），按**离 anchor 由近到远**逐个尝试，第一个通过全部检查的胜出；
+  **被否的候选逐条打印 NOTE**（返工前是静默丢弃，相邻 `基线 <sha>` 会把合法声明变成假红——reviewer-3 M-1）。
 - **time**：同一窗口内的 `YYYY-MM-DD` + 最多 6 个非数字字符 + `HH:MM[:SS]`
   （可带 `+HH:MM` / `+HHMM` / `Z` / `UTC`），或 `CUTOFF`/`EPOCH` 后跟 9–11 位 epoch。
 - **时区**：显式 offset / `Z` / `UTC` 优先；**不写时按本项目约定解释为 +08:00**。
-- **只看文档头**：第一个 `## ` 之前，且在前 60 行（`SNAPSHOT_PREAMBLE_MAX`）内。
-  这是有意的：正文中间引用的「看板快照 `<sha>` @ `<ts>`」是**数据点**，不是「全文冻结于此」的声明。
-  `docs/rewrite-remaining-inventory-20261022.md:36`
-  正是这种数据点；若允许文内任意位置，它会把该文件 `:725` 的真滞后一并赦免。
-- **歧义即放弃**：同一窗口里若出现**多个不同的** sha 或时间，不生成声明（宁可少赦免）。
+- **只看文档头**：第一个 `## ` 之前，**且**在前 60 行（`SNAPSHOT_PREAMBLE_MAX`）内。
+  **两条边界各由 selftest ㉗ 钉住**（`##` 之后 / 第 61 行之后的声明必须**不降级**）：
+  正文中间引用的「看板快照 `<sha>` @ `<ts>`」是**数据点**，不是「全文冻结于此」的声明。
+  `docs/rewrite-remaining-inventory-20261022.md` 的正文里就有一条带真实时间的 `board 快照` 数据点。
+  在 `e643b43fb` 上删掉任一边界，它**曾**把该文件的真滞后洗成 INFO、rc 1→0（reviewer-3 I-1 的变异实测）；
+  现在 `:725` 已修复，这类回归就只剩夹具 ㉗ 能抓——所以 ㉗ 必须钉住两条边界。
+- **歧义即放弃**：**时间**在窗口里出现多个不同值 ⇒ 不生成声明；**sha** 若最近的一条行内有多个不同值
+  ⇒ 整条放弃（更远的行有多个 sha 时只跳过该行）。sha 的多候选改为逐个受检，**不是**「有歧义就赦免」。
 
-**三项必查（任一不满足 ⇒ 仍判红 rc=1）**：
+**四项必查（任一不满足 ⇒ 仍判红 rc=1；被否的声明打印 `NOTE snapshot-declaration rejected`）**：
 
 - (a) 声明 sha 存在，且是 `--ref`（默认 `refs/remotes/walgit/master`）的**祖先**；
-- (b) 声明时间与该 commit 的 **author 或 committer** 时间相差 ≤ `--snapshot-tol`（默认 **900 秒**）；
-- (c) 整个声明（anchor、sha、time 三行的**最后一行**）出现在命中行**之前**——不许文件末尾补一行赦免全文。
+- (b) 声明时间与该 commit 的 **author 或 committer** 时间相差 ≤ `--snapshot-tol`（默认 **900 秒**）。
+  注意：这只约束「声明声称的时点 vs 它所指 commit 自己的提交时刻」，**不是「相对现在的新近性」**；
+- (c) 整个声明（anchor、time 与**被采纳的** sha 行的**最后一行**）出现在命中行**之前**
+  ——不许文件末尾补一行赦免全文；
+- (d) **声明本身的可信性**：对 anchor / time / sha 三行跑
+  `git blame -L <line>,<line> --porcelain -- <path>`，取该行的 **author 或 committer 时间**，
+  与声明声称的时间相差 > `--decl-tol`（默认 **86400 秒 = 1 天**）⇒ 判红
+  （`declaration written Δ… > --decl-tol`）。语义：声明只在该行**确实写于它所声称的时点附近**时才可信；
+  事后往文件头补一行、或拿 2026-01-01 的旧 sha 用它自己的真实时间回填，都会被这条挡住。
+  - **1 天的取值理由**：本仓现存 5 条真声明的 blame Δ 最大 **7519 秒（≈2.1 小时）**（见下），
+    1 天留足「当天写、隔天提交」与会话跨零点的余量，同时让「几个月后才补的声明」必然判红；
+  - 每行 author / committer 两个时间都接受（rebase 只改后者）；**整条声明以其最新一行为准**；
+  - blame 取不到（行未提交 / 文件不在历史里）⇒ **不豁免**（「无法验证」不等于「可信」），
+    所以合并前的门要在**干净工作树**上跑。
 
 通过后，该行命中降级为 `INFO snapshot-exempt`，**打印声明原文**（含行号）、sha、声明时间、commit 时间、
-Δ 秒与「祖先」理由。白名单优先于快照降级（同行两者都命中时按白名单记 used，避免腐烂误报）。
+Δ 秒、**声明行的 blame Δ**，以及被否的更近候选。白名单优先于快照降级
+（同行两者都命中时按白名单记 used，避免腐烂误报）。
 
-**实测（master `e643b43fb`，138 个 md）**：全库只有 **6 条**受检声明
-（`goal-gate-full-20261024.md`、`goal-snapshot-late-20261023.md`×2、`r-card-evidence-sweep-20261023.md`、
-`runbook-tool-consistency-audit-20261023.md`、`session-digest-20261024.md`）；本轮只有
-`session-digest-20261024.md` 的 3 处命中落在其声明之后，降级为 INFO。`inventory` 的 `:36` 不构成声明，
-所以 `:725` 仍红（见 §3.5）。
+**实测（返工后，master `3fa6899a9`，138 个 md）**：全库 **5 条**受检声明（同一 anchor 窗口只算一条）——
+`goal-gate-full-20261024.md`（blame Δ56s）、`goal-snapshot-late-20261023.md`（Δ130s）、
+`r-card-evidence-sweep-20261023.md`（Δ7519s）、`runbook-tool-consistency-audit-20261023.md`（Δ943s）、
+`session-digest-20261024.md`（Δ712s），**全部通过 (d)**，无 `NOTE snapshot-declaration rejected`。
+本轮只有 `session-digest-20261024.md` 的命中落在其声明之后，降级为 INFO。
 
 **卡号存在性（同一张卡的第二个修正）**：`openmir2-*` 命中后先查**账本线程集合**；
 id 不在集合里 ⇒ 打印 `INFO 非账本卡号（按特性名/标签放行）`，**不红**。
@@ -253,19 +271,19 @@ base 19 处命中里 `closed` 6 处（3 张卡：`openmir2-dualrun-window-burndo
 **第二类抓不到本次的 `f5a2e485b` 实例**：`attack-weapon-wear-642-20261024.md:173` 那一行没有卡号，只有 hash。
 所以第二类不是第一类的替代，而是补上「rebase 后 hash 非祖先、但同一行写了卡号」那类。
 
-## 3.5 快照/卡号修正后：master `e643b43fb` 全量重扫
+## 3.5 快照/卡号修正后：全量重扫（master `3fa6899a9`）
 
-改前：`FAIL (2 stale pointer(s), 3 card-status hit(s))`。改后：
+返工前（base `e643b43fb`）：`FAIL (2 stale pointer(s), 3 card-status hit(s))`。本卡修正后：
 
 | 位置 | 类别 | 处置 |
 |---|---|---|
-| `docs/session-digest-20261024.md:57` | 卡号 `openmir2-goal-gate-unmerged-selftest` | **INFO snapshot-exempt**：声明 `L4 取数时点 2026-10-24 07:18:30 +08`，sha `c4b66ddb1` 是祖先，Δ106s。该格里的「未合并窗口桶」是**特性名**；整张表是 07:18 的合并记录，快照语义正确 |
-| `docs/session-digest-20261024.md:177` | hash `478ff9a33` / `3bd8c6580` + 卡号 `openmir2-gate-baseline-snapshot` | **INFO snapshot-exempt**：同一份声明（`c4b66ddb1`，Δ106s）；该行是当日「在办/待审」快照 |
-| `docs/rewrite-remaining-inventory-20261022.md:725` | 卡号 `openmir2-merchant-script-load` | **仍红（已知残余）**：原文「未开工，仍无卡」是 2026-10-23 的真实滞后，属 `openmir2-inventory-top5-audit` 的写集，本卡不越界订正 |
+| `docs/session-digest-20261024.md:57` | 卡号 `openmir2-goal-gate-unmerged-selftest` | **INFO snapshot-exempt**：声明 `L4 取数时点 2026-10-24 07:18:30 +08`，sha `c4b66ddb1` 是祖先，Δ106s，声明行 blame Δ712s。该格里的「未合并窗口桶」是**特性名**；整张表是 07:18 的合并记录，快照语义正确 |
+| `docs/session-digest-20261024.md:177` | hash `478ff9a33` / `3bd8c6580` + 卡号 `openmir2-gate-baseline-snapshot` | **INFO snapshot-exempt**：同一份声明（`c4b66ddb1`，Δ106s / blame Δ712s）；该行是当日「在办/待审」快照 |
+| `docs/rewrite-remaining-inventory-20261022.md:725` | 卡号 `openmir2-merchant-script-load` | **已由 `3fa6899a9`（`3570f31d4`）消解**：`openmir2-inventory-top5-audit` 返工已把该行改写为「已合入 460691b24」，合并树全量扫不再出现该红点。**本卡未改该文件**（另一张卡的写集） |
 
-汇总：`FAIL (0 stale pointer(s), 1 card-status hit(s), 0 allow-list rot, 0 error(s))`，rc=1。
-**0 stale pointer**；唯一红点是上面那条登记的残余，待 inventory 卡合入后消解。本卡没有靠收窄词表、
-扩大引号或放宽 `--max-gap` 来变绿。
+现状：在 `git merge-tree --write-tree walgit/master HEAD` 的合并树上全量扫 ⇒
+`stale-pointer gate: OK … 0 card-status hit(s), 2 snapshot-exempt hit(s)`，**rc=0**。
+零残留、零白名单新增。本卡没有靠收窄词表、扩大引号或放宽 `--max-gap` 来变绿。
 
 ## 4. 白名单：条目数与防腐烂验证
 
@@ -336,13 +354,19 @@ python -I tools/hygiene/stale_pointer_gate.py --allowlist /e/tmp/rot.toml
     ⚠ board 是**在线变动**的：同一口径三次实测是 509 → 511/512 → 514 张卡（对应 525 条线程），
     引用具体数字时必须带时点。
 
-16. **伪造快照声明（本版新增机制的天花板）**：快照豁免只校验「sha 是祖先 + 声明时间与该 commit
-    时间吻合 + 声明在命中之前」，**不校验这个时间戳是否真是文档的写作时点**。任何人可以在文件头写
-    `快照 @ <某个 15 分钟内提交的 sha> @ <该 commit 时间>`，把该文档后续的真漂移全部降级为 INFO。
-    代码层没有防御——它只保证**不静默**：每条降级都打印声明原文与 Δ。人工复核建议：对每条
-    `INFO snapshot-exempt` 跑 `git blame -L <decl_line>,<decl_line> -- <path>` 与
-    `git blame -L <hit_line>,<hit_line> -- <path>`；声明行必须**不晚于**命中行（若声明行是新加的，
-    就是伪豁免），再看声明日期与文件名/正文日期是否自洽。
+16. **伪造快照声明（本版已加机判防线，但仍有人工边界）**：
+    - **声明 sha 本身没有「新近性」要求**：任意祖先 sha 都可以被声明（包括 2026-01-01 的老 commit）。
+      「900 秒」容差只约束「**声明时间 vs 该 sha 自己的提交时间**」，**与「现在」无关**——
+      别把它读成「只有近期提交的 sha 才能声明」（旧版本段的措辞会误导，此处订正）。
+    - **可机判的伪造 = 事后补声明**：`--decl-tol`（默认 1 天）比较「声明行的 blame commit 时间」
+      与「声明声称的时间」。声明行是几个月后才补的 ⇒ `NOTE snapshot-declaration rejected … Δ… > --decl-tol`
+      且命中**保持红**。用旧 sha 的真实时间回填、却在今天提交，同样判红（差值 = 今天 − 旧时点）。
+    - **挡不住的**：整份文件（声明 + 正文断言）在**同一次提交**里写好——声明行与命中行 blame 到同一个
+      commit，时间也自洽，机判无差异（reviewer-3 用 A/B 两个祖先的 `fakerepo` 实测过）。
+      这种只能人工核：对每条 `INFO snapshot-exempt` 看声明时点与文件名/正文日期是否自洽、
+      正文断言的事实是否真在该时点成立。注意「声明行早于命中行」在文件顺序上恒真（(c) 已保证），
+      **不能**当作防伪证据。
+    - blame 取不到（工作树里改了声明行还没提交）⇒ 不豁免（fail-closed）；合并前的门要在**干净工作树**上跑。
 17. **账本存在但过期**：卡号存在性依赖 `refs/collab/*` 与 board 投影。账本**读得到但落后**
     （新卡还没 fetch）时，真卡号会被当成「非卡号」⇒ INFO 放行。自动判不出来（这就是要求
     「读不到 ⇒ rc=2」的原因）；`INFO 非账本卡号` 行也要人看一眼。
@@ -370,6 +394,9 @@ python -I tools/hygiene/stale_pointer_gate.py --ledger-json /e/tmp/board.json
 # 明知账本为空（例如只做了部分 fetch）仍要跑：0 线程默认 rc=2，此开关降级为 NOTE
 python -I tools/hygiene/stale_pointer_gate.py --allow-empty-ledger
 
+# 放宽/收紧「声明可信性」容差（默认 86400s = 1 天；见 §1c (d)）
+python -I tools/hygiene/stale_pointer_gate.py --decl-tol 172800
+
 # 自测（合成 git 仓库，不依赖真实仓库状态与真实账本）
 python -I tools/hygiene/stale_pointer_gate.py --selftest
 ```
@@ -379,8 +406,9 @@ python -I tools/hygiene/stale_pointer_gate.py --selftest
 
 ## 7. 自测（`--selftest`）
 
-26 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；side 分支 commit B = 对象存在但非祖先；
-卡号类用内存 `Ledger` **或**合成 `refs/collab/inbox` blob，不需要真 `walgit`）：
+30 条，全部在临时目录里造独立 git 仓库（base commit A = 已合入；带 2026-01-01 日期的祖先 O；
+side 分支 commit B = 对象存在但非祖先；卡号类用内存 `Ledger` **或**合成 `refs/collab/inbox` blob，
+不需要真 `walgit`）：
 
 | # | 场景 | 期望 |
 |---:|---|---|
@@ -410,10 +438,14 @@ python -I tools/hygiene/stale_pointer_gate.py --selftest
 | ㉔ | 声明写在命中**之后** | 不豁免，仍红 |
 | ㉕ | 卡号形状但不在账本（特性名） | rc=0，`card_nonid` 记一条 |
 | ㉖ | `--ledger-json` 指向不存在的账本 | rc=2（「查不到」≠「不是卡号」） |
+| ㉗ | 声明在首个 `##` **之后** / 在第 **61** 行之后（两条边界各一个文件） | 不降级，两个文件都仍红（`snapshot_exempt==0`）；删掉边界后本检查 FAIL |
+| ㉘ | 声明行的事后补提交（blame 时间 = 声称时间 + 30 天） | 不降级，仍红 + `NOTE … > --decl-tol 86400s` |
+| ㉙ | 2026-01-01 的祖先用**它自己的真实时间**声明、文档今天写入 | (a)(b)(c) 全过、仅 (d) 判红 ⇒ 仍红 + NOTE |
+| ㉚ | 头里 anchor 上一行有无关的 `基线 <sha>`，真 sha 在下一行 | 候选近到远试，真 sha 胜出 ⇒ INFO，且 NOTE 里写明被否的基线候选 |
 
-实测：`selftest: 26/26 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为第二类卡，㉑-㉖ 为本卡新增：
-㉑ 钉住三条件全过时的降级、㉒㉓㉔ 分别钉住 a/b/c 三条否决、㉕ 钉住「非账本卡号不红」、
-㉖ 钉住账本不可读 fail-closed）。
+实测：`selftest: 30/30 passed`，rc=0（①-⑦ 语义未改；⑧-⑳ 为第二类卡，㉑-㉖ 为首版快照/卡号修正，
+㉗-㉚ 为**本轮返工**：㉗ 钉住文档头两条边界、㉘㉙ 钉住声明可信性 (d) 的两类伪造、
+㉚ 钉住「相邻基线 sha 不再吞掉真声明」）。
 
 ## 8. 告警还是阻断（留给 Leader 合并时定）
 
@@ -436,6 +468,10 @@ git fetch walgit master '+refs/collab/*:refs/collab/*' \
 - 未把本门写进 `AGENTS.md` 的本地门禁清单（卡面明确「是否接入由 Leader 在合并时定」）。
 - 快照声明只从**文档头**识别（首个 `## ` 之前、前 60 行）；正文中段声明的「本节快照」不生效。
   这是有意的保守选择：整份豁免的代价太大，宁可假红让人补一个头部声明（见 §5-16 的伪造风险）。
+  **两条边界分别由 selftest ㉗ 钉住**——首版缺这条夹具，删掉边界后 26 条全过、真漂移被洗绿。
+- 声明可信性 (d) 只能抓「声明行是后来才提交的」；**同一 commit 里连声明带断言一起写**的伪造
+  在 blame 上无差异，仍靠人工复核（§5-16）。blame 不可用时不豁免（fail-closed），
+  因此本地带未提交的文档改动会让声明暂不生效。
 - 卡号存在性以**可读账本**为前提；账本落后会把新卡误判为「非卡号」并打 INFO（§5-17），
   合并前仍应 `git fetch walgit '+refs/collab/*:refs/collab/*'`。
 - 未做 `docs/**` 以外的扫描（`mir2-rs/tests/parity/*.md`、thread body、代码注释里的旧断言仍靠人肉）。
