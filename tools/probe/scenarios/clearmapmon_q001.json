@@ -1,0 +1,47 @@
+{
+  "name": "clearmapmon_q001",
+  "description": "W-CM-2：`CLEARMAPMON Q001` + `MONGENEX Q001 10 10 骷髅精灵5 2 1 1`（老人-1.txt:49-50）。**前置（F2）**：`[@main]` 分支——`checkitem 精灵头盔` ⇒ 只有 @rw03；`checkitem 蛇毒` ⇒ 才有 @rw01（:20 链接）⇒ 需 **蛇毒×1**（窗口 DB 预置背包），否则 @rw01 不在 CanJmp、第一步 1011 被拒。验收：清怪的可观测集（实体差集 + SM_DISAPPEAR(30) 帧序）+ MONGENEX 刷怪位置/数量；不假设 cleared。",
+  "required": [
+    "npc_actor"
+  ],
+  "placement": {
+    "map": "1",
+    "x": 236,
+    "y": 305,
+    "note": "Merchant.txt:155 `任务NPC/老人 1 235 305 老人 …` ⇒ (235,305)；本场景放 (236,305)。**前置**：背包需 **蛇毒×1**（否则 @main 不给 @rw01 链接）。与 :132 的 `功能NPC/老人 E603` 不是同一 NPC。"
+  },
+  "steps": [
+    {
+      "click_npc": "npc_actor",
+      "note": "CM_CLICKNPC(1010) → NormNpc.Click → GotoLable(@main)；recog 从 643.recog 发现，不许写死"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] 页（老人-1.txt:1-24）：**分支页**——`checkitem 蛇毒` ⇒ 有 <晚辈甘愿冒死为前辈夺回头盔/@rw01>（:20 链接）；`checkitem 精灵头盔` ⇒ 只有 <你女儿是谁？/@rw03>（:10 链接）；否则 #elsesay 无链接"
+    },
+    {
+      "dlg_select": "@rw01",
+      "note": "[@rw01]（标签 :31）——页内 <我准备好了/@rw02>（:35）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@rw01] 页；把 @rw02 注册进 CanJmpScriptLableMap"
+    },
+    {
+      "dlg_select": "@rw02",
+      "note": "[@rw02]（:38）——`#ACT` 依次执行 CLEARMAPMON Q001（:49）与 MONGENEX Q001 10 10 骷髅精灵5 2 1 1（:50）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "脚本尾说词；与清怪/刷怪帧同 handler 按 MsgQueue 优先级出队"
+    },
+    {
+      "wait_for": 30,
+      "timeout_ms": 5000,
+      "note": "SM_DISAPPEAR(30)：Q001 被清掉的怪对观察者出帧（DisappearA/MakeGhost）；帧数以实体差集为准，不写死"
+    }
+  ]
+}
