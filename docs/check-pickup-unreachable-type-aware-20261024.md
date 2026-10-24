@@ -160,3 +160,68 @@ P-2 之前被大小写不敏感去重并掉了。）
 | Rust 零变更 | `git diff --stat <base>..HEAD -- src/ mir2-rs/` 为空 |
 
 **T-25 结论不变**：全仓 `.ItemId` 仍无指向 MapItem 的赋值；本次只恢复闸门强度，不改变当前判定。
+
+## 6. P-7 跟进：var 别名同族假绿（2026-10-25）
+
+reviewer-20 独立复验（证据 `E:/tmp/scriptcov/reviewer20/`）在 `ba99db930` 上挖出 P-7：
+
+```csharp
+var mi = mapItem;   // ← 别名没进按文件名字表
+mi.ItemId = 7;      // ← 新脚本 rc=0（漏检）
+mapItem = mi;
+```
+
+base（`152d9e985`）在同样变异下 rc=1；`MapItem alias2 = mapItem;` 也会 RED——同一条
+「别名」语义两种声明写法口径不一致。这是 P-1..P-6 修完后仍然存在的**假绿**：
+命题实际被推翻，门禁却绿。
+
+### 6.1 修法（A7）
+
+- 新增 `$AliasRe = '\b(?:var|MapItem)\s+(\w+)\s*=\s*(?:this\s*\.\s*)?(\w+)\s*;'`。
+- **迭代到不动点**：右侧 ∈ 本文件名字表 ⇒ 收左侧；`while` 直到本轮无新增。
+  名字集合单调增长（上界 = 文件内标识符数），天然有界；仍加 **100 次上限**，防实现退化时死循环。
+- `MapItem x = mapItem` 已由 A2 声明规则覆盖；A7 主要补 `var`，两者现在口径一致。
+- 头注释 A 列表补 A7。**未放宽判据**：别名只是把「同一个 MapItem 对象」的另一个名字收进
+  名字表，最终仍要求 `.ItemId =` 赋值才 RED。
+
+### 6.2 牙与全矩阵（P-1..P-7）
+
+`new` = 本卡；`reviewed` = `d7bd0282d`；`base` = `152d9e985`。每条变异独立施加、`finally`
+里 `git checkout --` 还原。
+
+| mutation | new | reviewed | base |
+| --- | ---: | ---: | ---: |
+| P-1 构造器 `this.ItemId = 42` | 1 | 0 | 1 |
+| P-2 `mapItem.ItemId`（大小写并存） | 1 | 0 | 1 |
+| P-3 `var miVar = …Get<MapItem>(…)` + 写 | 1 | 0 | 1 |
+| P-4 `mapItem = mapItem with { ItemId = 5 }` | 1 | 0 | 1 |
+| P-5 `MapItem[] a; a[0].ItemId = 2` | 1 | 0 | 1 |
+| **P-7 `var mi = mapItem; mi.ItemId = 7;`** | **1** | 0 | 1 |
+| 未变异基线 | 0 | 0 | 1 |
+
+附加控制：
+
+- 别名链到不动点：`var a = mapItem; var b = a; b.ItemId = 1;` ⇒ **new rc=1**（命中 `b`）。
+- 只有别名、无 `ItemId` 写：`var a = mapItem; var b = a;` ⇒ **rc=0**（不误报）。
+- P-6 同行去重：`holder.MapItem.ItemId = 1;` ⇒ 恰好 1 条 RED。
+- BotSrv 负向控制（`DropExpDropInfo.ItemId`）⇒ rc=0。
+- 未变异 master src：rc=0（901 个 `.cs`，4 构造点，名字仍 4 个）。
+
+### 6.3 门禁（本卡实测）
+
+| 门禁 | 结果 |
+| --- | --- |
+| `check_pickup_unreachable.ps1`（master src） | rc=0（901 .cs / 4 构造点） |
+| `conflict_marker_gate` | rc=0 |
+| `stale_pointer_gate` | rc=0 |
+| `dynamic_count_stamp_gate` | rc=0 |
+| `t_reservation_gate` | rc=0 |
+| `whitelist_anchor_gate` | rc=0 |
+| `m3_whitelist_registry_audit` | rc=0 |
+| `board_coverage_gate` | rc=0 |
+| `cargo fmt` / `clippy` / `test` / `msgcodegen` | rc=0（3174 passed） |
+| `git diff --check` | rc=0 |
+| `git merge-tree --write-tree walgit/master HEAD` | 提交后复跑，结果见 patch body |
+| Rust / src 变更 | 零（`git diff --stat <base>..HEAD -- src/ mir2-rs/` 为空） |
+
+**T-25 结论不变**：本卡只补别名追踪，当前 oracle 仍无指向 MapItem 的 `ItemId` 赋值。
