@@ -87,7 +87,7 @@ README 的重新生成脚本已改为同时产出两行，实测输出与库内�
 | `python -I -B tools/conformance/card_window.py --selftest` | **GREEN 279/279，rc=0**（与基线相同） |
 | `python -I tools/hygiene/conflict_marker_gate.py` | rc=0（0 markers / 7501 tracked files） |
 | `python -I tools/hygiene/stale_pointer_gate.py` | rc=0 |
-| `python -I tools/hygiene/dynamic_count_stamp_gate.py` | rc=0（0 缺戳） |
+| `python -I tools/hygiene/dynamic_count_stamp_gate.py` | rc=0（0 缺戳，163 个 markdown；复审 F1 修复后复跑，复跑输出 `dynamic-count gate: OK（0 缺戳；6 条段落声明降级 INFO；扫描 163 个 markdown…）`） |
 | `git diff --check` | rc=0 |
 | `git merge-tree --write-tree walgit/master HEAD` | 无冲突（见收尾记录） |
 | Rust 零变更 | 改动只含 `tools/conformance/**` 与本报告；无 `src/**`、`mir2-rs/**`、场景 JSON、服务端 `rules.json` |
