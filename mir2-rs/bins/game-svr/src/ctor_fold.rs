@@ -43,8 +43,11 @@
 //! **16 抽** = `Robot.txt` 1 有效行 × 4 + 孤儿 × 4）→ 屏障 A（**第 17 条**）→ 段②/段③ 与 oracle
 //! **整段等距**。
 //! ❗**仍未做的只有消费点/实体层**（与原登记一致，且**不改变抽数位置**）：`RobotObject` 世界实体 +
-//! `AutoRun` 驱动器、任务 NPC 进 `QuestNpcList`、L1 `QFunction` 进 `MerchantList`、L2/L3 的 `ActorId`
-//! 按序分配 —— 见 `crates/world/src/ctor_fold.rs` 模块头的「实体缺口」。
+//! `AutoRun` 驱动器、任务 NPC 进 `QuestNpcList`、L2/L3 的 `ActorId` 按序分配 —— 见
+//! `crates/world/src/ctor_fold.rs` 模块头的「实体缺口」。
+//! ✅**L1 `QFunction` 进 `MerchantList` 已接**（2026-10-24，卡
+//! `openmir2-qfunction-hidden-merchant-world-wiring`）：本模块的 [`hidden_qfunction_run_tick`]
+//! 把账本第 1 抽交给 `game_svr::merchant::insert_hidden_qfunction` 当 `RunTick`（不重抽）。
 //! 反向核对：`GameApp.cs`/`AppService.cs`/`AppServer.cs`/`TimedService.cs`/`ServerHost.cs`/
 //! `FrnEngn.cs`/`GeneratorProcessor.cs` 全文 **0 处** `RandomNumber` ⇒ 启动段除上述屏障 A 外
 //! 无其它 RNG 消费者（`GameShare.cs:83` 的 `GetRandpmRoute` 是运行期选网关，不在启动段）。
@@ -157,6 +160,42 @@ pub fn hidden_site_of(rec: &QuestNpcRecord) -> Option<CtorFoldSite> {
         "RobotManage" => Some(CtorFoldSite::HiddenRobotManage),
         _ => None,
     }
+}
+
+/// **`QFunction` 的 `RunTick`**（`LocalDB.cs:210` 的 `new Merchant` 里 `BaseObject.cs:439`
+/// `RunTick = GetTickCount() + Random(1500)`）。
+///
+/// 构造段账本（[`CtorFoldLedger`]）已按 oracle 次序抽过这 4 个数；建世界实体时**只能取用、
+/// 不能重抽**（重抽 ⇒ 共享 RNG 流位置错 4、其后所有商人/怪物抽数错位）。
+///
+/// **fail-closed**：账本里必须恰有一组 **4 条连续的** [`CtorFoldSite::HiddenQFunction`]，
+/// 且第 1 条的 `arg == 1500`（`BASE_ANIMAL_CTOR_DRAW_MODS[0]`）。站点缺失/条数不对/arg 漂移
+/// ⇒ `None`（宿主据此**不建实体**并记 ERR，绝不静默补抽）。
+#[must_use]
+pub fn hidden_qfunction_run_tick(ledger: &CtorFoldLedger, now_ms: i64) -> Option<i64> {
+    let start = ledger
+        .entries
+        .iter()
+        .position(|e| e.site == CtorFoldSite::HiddenQFunction)?;
+    let group = ledger
+        .entries
+        .get(start..start + mir2_world::CTOR_FOLD_DRAWS_PER_SITE)?;
+    let run_delta = match group {
+        [first, rest @ ..]
+            if first.arg == 1500
+                && rest
+                    .iter()
+                    .all(|e| e.site == CtorFoldSite::HiddenQFunction)
+                // 账本里只允许一组（`HIDDEN_NPCS` 里 QFunction 唯一）。
+                && !ledger.entries[start + mir2_world::CTOR_FOLD_DRAWS_PER_SITE..]
+                    .iter()
+                    .any(|e| e.site == CtorFoldSite::HiddenQFunction) =>
+        {
+            first.result
+        }
+        _ => return None,
+    };
+    Some(now_ms + run_delta)
 }
 
 #[cfg(test)]
@@ -388,5 +427,77 @@ mod tests {
             is_quest: false,
         };
         assert_eq!(hidden_site_of(&rec), None);
+    }
+    /// **`hidden_qfunction_run_tick`**：只从账本取用（不重抽），且 fail-closed。
+    ///
+    /// 牙：把 `first.result` 改成 `0`（忽略账本）⇒ 值断言红；删掉 4 条连续/`arg == 1500` 的守卫
+    /// ⇒ 两条 fail-closed 断言红。
+    #[test]
+    fn hidden_qfunction_run_tick_reads_ledger_and_fails_closed() {
+        use mir2_world::{CtorFoldEntry, CtorFoldSite};
+        let (base, loader) = minimal_corpus("qftick");
+        std::fs::write(
+            base.join("Envir/Market_Def/QFunction-0.txt"),
+            b"[@PlayLevelUp]\r\n",
+        )
+        .unwrap();
+        let plan = build_plan(&loader, |_| true).expect("计划成功");
+        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(20240229);
+        let ledger = world.fold_ctor_draws_load_map_quest(&plan);
+
+        let start = ledger
+            .entries
+            .iter()
+            .position(|e| e.site == CtorFoldSite::HiddenQFunction)
+            .expect("段③账本含 HiddenQFunction");
+        let expect = 1000 + ledger.entries[start].result;
+        assert_eq!(
+            hidden_qfunction_run_tick(&ledger, 1000),
+            Some(expect),
+            "run_tick = now + 账本第 1 抽（`BaseObject.cs:439` 的 Random(1500)）"
+        );
+        assert_ne!(
+            hidden_qfunction_run_tick(&ledger, 0),
+            Some(0),
+            "不得忽略账本（`result` 有用，不是丢弃）"
+        );
+
+        // fail-closed：空账本 / 条数不足 / 第 1 条 arg 漂移 ⇒ None（不静默补抽）。
+        assert_eq!(
+            hidden_qfunction_run_tick(&CtorFoldLedger::default(), 0),
+            None,
+            "缺站点 ⇒ None"
+        );
+        let short = CtorFoldLedger {
+            entries: ledger.entries[start..start + 3].to_vec(),
+        };
+        assert_eq!(
+            hidden_qfunction_run_tick(&short, 0),
+            None,
+            "不足 4 抽 ⇒ None"
+        );
+        let mut wrong_arg = ledger.entries[start..start + 4].to_vec();
+        wrong_arg[0].arg = 2000;
+        assert_eq!(
+            hidden_qfunction_run_tick(&CtorFoldLedger { entries: wrong_arg }, 0),
+            None,
+            "第 1 抽 arg 不是 1500 ⇒ None"
+        );
+        // 多一组 QFunction 站点 ⇒ None（`HIDDEN_NPCS` 里 QFunction 唯一）。
+        let mut two = ledger.entries.clone();
+        two.extend_from_within(start..start + 4);
+        let e = CtorFoldEntry {
+            site: CtorFoldSite::HiddenQFunction,
+            kind: mir2_world::CTOR_FOLD_DRAW_KIND,
+            arg: 1500,
+            result: 0,
+        };
+        two.push(e);
+        assert_eq!(
+            hidden_qfunction_run_tick(&CtorFoldLedger { entries: two }, 0),
+            None,
+            "第二组 HiddenQFunction ⇒ None"
+        );
     }
 }

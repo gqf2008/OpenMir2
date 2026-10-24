@@ -20338,6 +20338,11 @@ fn sim_loop(
         ctor_ledger_m1.len(),
         enter_cfg.ctor_fold_plan.load_map_quest.len()
     );
+    // **卡 `openmir2-qfunction-hidden-merchant-world-wiring`**：隐藏商人 `QFunction` 的 `RunTick`
+    // 已在段③账本里抽过（`CtorFoldSite::HiddenQFunction` 的第 1 抽 = `Random(1500)`，
+    // `LocalDB.cs:210` 的 `new Merchant` → `BaseObject.cs:439`）⇒ 建实体时**只取用、不重抽**
+    // （重抽会让共享 RNG 流错位 4）。账本缺站点 ⇒ `None` ⇒ 宿主不建实体并记 ERR（fail-closed）。
+    let qfunction_run_tick = ctor_fold::hidden_qfunction_run_tick(&ctor_ledger_m1, world.clock_ms);
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
     // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
     // **Lane B**：提前到城堡块之前——门/墙/弓手由 `WorldMonsterSink` 登记展示层，
@@ -20460,6 +20465,61 @@ fn sim_loop(
     if let (Some(loader), Some(reg)) = (enter_cfg.loader.take(), registry.as_ref()) {
         // `Envir` 根（`ScriptParsers.LoadScriptFile` 的 `envir_root`）：商人与固定 NPC 的脚本装载共用。
         let envir_root = loader.base_path.join(&loader.envir_dir);
+        // **隐藏商人 `QFunction` 进世界 `MerchantList`**（卡 `openmir2-qfunction-hidden-merchant-world-wiring`）。
+        // oracle `LocalDB.QFunctionNpc()`（`LocalDB.cs:192-232`）在 `LoadMapQuest`（`GameApp.cs:184`，
+        // = 上面的构造段 fold 段③）里 `new Merchant` + **`AddMerchant`**（`:223`）⇒ `MerchantList`
+        // **首位**（早于 `LoadMerchant` `:227` 的 `Merchant.txt` 记录）。`ProcessMerchants`
+        // （`WorldServer.Merchant.cs:68`）正序 tick ⇒ QFunction **最先** Run（`Merchant.Run` 的
+        // `Random(50)` 在流上排在所有 `Merchant.txt` 商人之前）。
+        // 挂图**不在这里**：`MerchantInitialize`（`:8`）倒序遍历 `MerchantList`，QFunction 首位
+        // ⇒ 最后挂图；见 `Merchant.txt` 装载之后的挂图块。
+        let mut qfunction_id: Option<i32> = None;
+        match loader.load_map_quest(|n| reg.id_of(n).is_some()) {
+            Ok(load) => match load.merchants.iter().find(|r| r.chr_name == "QFunction") {
+                Some(record) => match reg.id_of(&record.map_name) {
+                    // `MerchantInitialize` 的 `FindMap(MapName) == null ⇒ Error + RemoveAt`
+                    // （`WorldServer.Merchant.cs:24-31`）；本宿主等价于「不建实体」。
+                    None => glog!(
+                        "ERR",
+                        "{} - Merchant Initalize fail... (m.PEnvir=nil)（MapName={} 不在注册表 ⇒ 按 oracle 移除）",
+                        record.chr_name,
+                        record.map_name
+                    ),
+                    Some(map_id) => match qfunction_run_tick {
+                        Some(run_tick) => {
+                            qfunction_id = game_svr::merchant::insert_hidden_qfunction(
+                                &mut world,
+                                record,
+                                map_id,
+                                run_tick,
+                            );
+                            match qfunction_id {
+                                Some(id) => glog!(
+                                    "INF",
+                                    "隐藏商人 QFunction 已进世界 MerchantList（id={id}，MerchantList 首位，map_id={map_id}，run_tick={run_tick}）"
+                                ),
+                                None => glog!(
+                                    "ERR",
+                                    "隐藏商人 QFunction 入世界失败（map_id={map_id} 越界 ⇒ oracle 不可达）"
+                                ),
+                            }
+                        }
+                        None => glog!(
+                            "ERR",
+                            "构造段账本缺 HiddenQFunction 站点（4 抽 / 第 1 抽 arg=1500）⇒ 不建 QFunction 实体（fail-closed，不静默补抽）"
+                        ),
+                    },
+                },
+                None => glog!(
+                    "WRN",
+                    "MapQuest 装载无 QFunction 记录 ⇒ 不建隐藏商人实体（登记）"
+                ),
+            },
+            Err(e) => glog!(
+                "WRN",
+                "读 MapQuest.txt 失败（{e}）⇒ QFunction 隐藏商人未建（登记）"
+            ),
+        }
         match game_svr::merchant::load_merchant_spawns(&loader, |n| reg.id_of(n), &mut world.rng) {
             Ok((spawns, report, seeds)) => {
                 // `Merchant.LoadMerchantScript()` 的缺失分支（oracle `LogService.Error`）。
@@ -20500,6 +20560,29 @@ fn sim_loop(
                 }
             }
             Err(e) => glog!("WRN", "加载 Envir/Merchant.txt 失败（{e}）⇒ 无商人（登记）"),
+        }
+        // **`QFunction` 挂图（`MerchantInitialize` 倒序末位）**：`MerchantList` 首位 ⇒ 倒序遍历时
+        // **最后** `Initialize()`/`AddToMap` ⇒ map cell `obj_list` 的追加序与 oracle 同。
+        // `IsHide = true` ⇒ 即使 `CanWalk(0,0) && AddToMap()` 失败也**留在** `MerchantList`
+        // （`WorldServer.Merchant.cs:16-22` 的 `AddtoMapSuccess && !IsHide` 不成立）。
+        // 展示表登记与 `Merchant.txt` 商人同口径（`Merchant : NormNpc`：RaceImg=50、Light=2、Appr=0）
+        // —— `Merchant.Run` 的 `RM_TURN`/`RM_HIT` 下行要它（`drain_npc_merchant_{turns,hits}`）。
+        if let Some(id) = qfunction_id {
+            let kept = world.attach_merchant_to_map(id);
+            let attached = world.entities.get(id).is_some_and(|e| e.add_to_mapped);
+            if let Some(e) = world.entities.get(id) {
+                let appr = e.merchant.as_ref().map_or(0, |m| m.appr);
+                displays.set(
+                    id,
+                    downlink::npc_display(e.ai.dir, e.race_img, appr, &e.name),
+                );
+            }
+            glog!(
+                "INF",
+                "隐藏商人 QFunction 挂图（MerchantInitialize 倒序末位）：留在世界={}，落格={}（IsHide ⇒ 挂图失败不移除）",
+                kept,
+                attached
+            );
         }
         // **固定管理 NPC 放置半（R0-1 `openmir2-npcs-fixed-loading`）+ `Npc_def` 脚本装载（T-137）**：
         // `WorldServer.Merchant.cs` 的 `NpCinitialize`（`:37-63`，FindMap 门 + `Initialize()`/AddToMap
@@ -68945,5 +69028,75 @@ mod attack_weapon_wear_tests {
         // `ClientItem.Desc` 在 oracle 里恒 14 个 0（`ClientItem.cs:14-18`，全仓无赋值点）
         // ⇒ 线上尾部与 `UserItem.Desc` 无关（`itemwire.rs` 尾段注释）。
         assert_eq!(tail[108..122], [0u8; 14], "ClientItem.Desc 恒 0");
+    }
+    /// **生产接线保鲜 + 次序**（卡 `openmir2-qfunction-hidden-merchant-world-wiring`，
+    /// oracle `LocalDB.cs:192-232` `QFunctionNpc()` → `AddMerchant` `:223`）：
+    ///
+    /// ① `sim_loop` 恰一处 `ctor_fold::hidden_qfunction_run_tick(`（账本取 `RunTick`，不重抽）；
+    /// ② 恰一处 `game_svr::merchant::insert_hidden_qfunction(`，且**早于**
+    ///    `spawn_merchants_with_scripts(`（`AddMerchant` 早于 `LoadMerchant` ⇒ `MerchantList` 首位）；
+    /// ③ 恰一处「隐藏商人 QFunction 挂图」，且**晚于** `spawn_merchants_with_scripts(`
+    ///    （`MerchantInitialize` 倒序末位挂图）。
+    ///
+    /// 牙：删 ② 的调用（换成 `qfunction_id = None`）⇒ 断言 ② 红（删入世界调用）；把 ② 挪到
+    /// `spawn_merchants_with_scripts` 之后 ⇒ 次序断言红（`MerchantList` 首位错误 ⇒ tick/RNG 序错）。
+    #[test]
+    fn qfunction_hidden_merchant_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        let prod = |i: usize| i > sim_loop && i < tests_start;
+        let find_all = |needle: &str| -> Vec<usize> {
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(i, l)| prod(*i) && l.contains(needle))
+                .map(|(i, _)| i)
+                .collect()
+        };
+
+        let run_tick = find_all("ctor_fold::hidden_qfunction_run_tick(");
+        assert_eq!(
+            run_tick.len(),
+            1,
+            "`sim_loop` 必须恰一处取 `hidden_qfunction_run_tick`（实际 {run_tick:?}）"
+        );
+        let insert = find_all("game_svr::merchant::insert_hidden_qfunction(");
+        assert_eq!(
+            insert.len(),
+            1,
+            "`sim_loop` 必须恰一处把 QFunction 入世界（删入世界调用 ⇒ 本条红；实际 {insert:?}）"
+        );
+        let spawn = find_all("game_svr::merchant::spawn_merchants_with_scripts(");
+        assert_eq!(
+            spawn.len(),
+            1,
+            "`Merchant.txt` 装载入口应恰一处（实际 {spawn:?}）"
+        );
+        assert!(
+            insert[0] < spawn[0],
+            "QFunction 必须先于 Merchant.txt 入 `MerchantList`（实际 insert={} vs spawn={}）",
+            insert[0],
+            spawn[0]
+        );
+        let attach = find_all("隐藏商人 QFunction 挂图");
+        assert_eq!(
+            attach.len(),
+            1,
+            "`sim_loop` 必须恰一处 QFunction 挂图块（实际 {attach:?}）"
+        );
+        assert!(
+            attach[0] > spawn[0],
+            "QFunction 挂图必须在 Merchant.txt 挂完之后（MerchantInitialize 倒序末位；实际 attach={} vs spawn={}）",
+            attach[0],
+            spawn[0]
+        );
     }
 }

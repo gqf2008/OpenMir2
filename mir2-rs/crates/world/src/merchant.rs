@@ -28,9 +28,11 @@
 //! - `ProcessRefillIndex`（`ScriptParsers.cs:838`）：⑤-1 未随记录暴露 ⇒ 置 0（补货延时门）。
 //! - `NormNpc.Initialize` 的脚本/说词加载（`NormNpc.cs:1676`）—— ⑤-4/⑤-6 接缝；商人 `RM_TURN`/
 //!   `RM_HIT`/`RM_DISAPPEAR`/`RM_SPACEMOVE_FIRE` 的**帧面**（`SM_*`）也归接线层（⑤-4）。
-//! - `MerchantState.is_hide` 当前恒 `false` 且 [`MerchantSpawn`] 无该入参（reviewer-6 M-3）：
-//!   oracle `MerchantInitialize` 在 `LoadMerchantScript` **之前**读 `IsHide`（`WorldServer.Merchant.cs:16`）
-//!   ⇒ 此刻确为默认 `false`，当前 1:1；将来若要注入（脚本置位）必须点明消费方。
+//! - `MerchantState.is_hide`：`Merchant.txt` 记录恒 `false`（`LocalDB.LoadMerchant` 的 `new Merchant`
+//!   不置位）；**隐藏 `QFunction` 由宿主注入 `true`**（`LocalDB.cs:220`；卡
+//!   `openmir2-qfunction-hidden-merchant-world-wiring`）。oracle `MerchantInitialize` 在
+//!   `LoadMerchantScript` **之前**读 `IsHide`（`WorldServer.Merchant.cs:16`）⇒ 挂图失败时它是
+//!   「留在 `MerchantList` 而非 `RemoveAt`」的唯一判据（[`World::attach_merchant_to_map`]）。
 //! - `MerchantState.castle_under_war` 缺省 `false`（沙巴克攻城层属 ⑧；`Merchant.cs:143` 同「不在战中」支）。
 
 use mir2_data::models::StdItem;
