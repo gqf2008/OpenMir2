@@ -15342,7 +15342,7 @@ fn sync_super_man_wabil(
 
 fn drain_recovery(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mir2_world::World,
+    world: &mut mir2_world::World,
     slots: &mut game_svr::healthspell::HealthSpellSlots,
 ) {
     let now = now_ms();
@@ -15355,6 +15355,17 @@ fn drain_recovery(
         let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
         if !game_svr::recover::recovery_tick(&mut sg.recovery, &mut sg.state.wabil, death, now) {
             continue;
+        }
+        // **恢复写点镜像进实体**（卡 `openmir2-spell-fill-projection-mirror`）：P1 池的
+        // `IncHealthSpell`（`BaseObject.cs:952-975`）在 oracle 里写**唯一一份 `WAbil`**（HP/MP
+        // 两支同对象）⇒ 恢复永存；本宿主投影单写、实体不镜像 ⇒ 下一 tick P21 无条件刷回把
+        // 恢复擦回实体旧值（{施法→恢复→P21→施法/存档} 与 oracle 分歧，reviewer-3 自造牙
+        // tooth3 实锤 left:15/right:17，review ac6a585866 F2）。沿
+        // `openmir2-mp-session-projection-clobber` 的「**每个写点同步**」教义：hp/mp 双侧
+        // 一起镜像，不允许出现只写一侧的 HP/MP 写点（oracle 单份 WAbil ⇒ 无单侧意图）。
+        if let Some(e) = world.entities.get_mut(sg.actor_id) {
+            e.hp = sg.state.wabil.hp;
+            e.mp = sg.state.wabil.mp;
         }
         slots.health_spell_changed(sg.actor_id, sg.show_hp);
     }
@@ -15454,7 +15465,9 @@ fn flush_healthspell_slots(
 ///
 /// **与 [`drain_recovery`] 的差别**：本段改动的是 `BaseObject.Run()` 里的 `WAbil.HP/MP`，
 /// 攻击结算与 `state_log` 的 `SERVER_STATE` dump 读的是世界实体 [`mir2_world::Entity::hp`]
-/// ⇒ 命中后**回写实体 `hp`**（`mp` 不在世界实体里，只在 `WAbil`，见 `Entity` 字段表）。
+/// ⇒ 命中后回写实体（卡 `openmir2-spell-fill-projection-mirror` 前只回写 `hp`；现在
+/// `hp`/`mp` 双侧镜像——oracle 单份 `WAbil`，`Entity` 的 `mp/max_mp`（`entity.rs:754-755`）
+/// 与投影必须在每个写点同步，见下方两处回写点的教义注释）。
 ///
 /// **登记（阶段顺序 / 跨 tick）**：oracle 一次 `ProcessPlayObjectData` 的顺序是「`PlayObject.Run()`
 /// 的恢复段 → `BaseObject.Run()` 的消息段（攻击/移动在此扣点）→ `BaseObject.Run()` 的体力点段」。
@@ -15544,8 +15557,11 @@ fn drain_stamina(
             }
             // oracle 的 P8 读/写唯一 `WAbil`；本宿主实体只是投影，且 world 的 `tick_tail`
             // 已按**当时实体值**钳过 ⇒ 以会话 `WAbil` 回写，保证攻击结算/逐击 dump 读到 P8 终值。
+            // hp/mp 双侧一起回写（「每个写点同步」，卡 `openmir2-spell-fill-projection-mirror`；
+            // mp_over 支生产当前不可达——MaxMP 只在装备重算时收缩，登记不静默）。
             if let Some(e) = world.entities.get_mut(actor_id) {
                 e.hp = sg.state.wabil.hp;
+                e.mp = sg.state.wabil.mp;
             }
         }
         // 本 tick 没有 P7/P8 待发槽时不必发 53，但 `:219` 的 `ShowHp` 到期检查仍要跑
@@ -15556,8 +15572,16 @@ fn drain_stamina(
             let show_hp = sg.show_hp;
             let max_hp = sg.state.wabil.max_hp;
             // 回写世界实体：攻击结算（`crates/world`）与逐击 `SERVER_STATE` dump 读 `Entity.hp`。
+            // **恢复写点镜像进实体**（卡 `openmir2-spell-fill-projection-mirror`）：P7 的
+            // MP 支（`BaseObject.Base.cs:57-68`，`MaxMP/18+1` 夹 `MaxMP`）与 HP 支（`:44-55`）
+            // 在 oracle 里写同一份 `WAbil` ⇒ 恢复永存；本宿主 `stamina_tick` 只写投影
+            // `sg.state.wabil`，实体不镜像 ⇒ 下一 tick P21 无条件刷回把恢复擦回实体旧值
+            // （reviewer-3 tooth3：cast1 17→15 → 恢复 +2 → P21 ⇒ 投影 15 ≠ oracle 17）。
+            // 沿 `openmir2-mp-session-projection-clobber` 的「每个写点同步」教义补 `e.mp`
+            //（hp 侧本就回写）；两份存储在每个写点同步，不允许只写一侧。
             if let Some(e) = world.entities.get_mut(actor_id) {
                 e.hp = sg.state.wabil.hp;
+                e.mp = sg.state.wabil.mp;
             }
             if let Some(entry) = online.iter().find(|e| e.chr_name == name) {
                 // `SendRefMsg` 的观察者集合：源自己那份已由槽模型计入 `self_frames`，这里只发其它人。
@@ -23514,7 +23538,7 @@ fn sim_loop(
         // 次序：先恢复状态（P1）→ 再到期状态/SysMsg（P2）→ flush 53（优先级 68）→ SysMsg（252）。
         // 载荷在 flush 时读会话 `WAbil`（oracle 在出队时读 `WAbil`）。
         let mut healthspell_slots = game_svr::healthspell::HealthSpellSlots::new();
-        drain_recovery(&mut ground_sessions, &world, &mut healthspell_slots);
+        drain_recovery(&mut ground_sessions, &mut world, &mut healthspell_slots);
         let extra_abil_frames = drain_extra_abil_expiries(
             &rec,
             &world,
@@ -35568,7 +35592,7 @@ break
         sync_super_man_wabil(&world, &mut sessions);
 
         let mut slots = game_svr::healthspell::HealthSpellSlots::new();
-        drain_recovery(&mut sessions, &world, &mut slots);
+        drain_recovery(&mut sessions, &mut world, &mut slots);
         drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 0, 0, &[]);
         // 判定顺序：先钉「实体没被低血回写」（缺陷的直接后果 = 100 → 2），再钉「零 53」，最后钉投影。
         assert_eq!(
@@ -36148,7 +36172,7 @@ break
             .find(|(i, l)| {
                 *i + sim_loop > hits[0]
                     && l.trim()
-                        == "drain_recovery(&mut ground_sessions, &world, &mut healthspell_slots);"
+                        == "drain_recovery(&mut ground_sessions, &mut world, &mut healthspell_slots);"
             })
             .map(|(i, _)| sim_loop + i)
             .expect("`drain_recovery` 调用行");
@@ -38648,7 +38672,7 @@ SendRefMsgRange=15
         // 2) 周期恢复 tick：tick 初值 0、now = 真实时钟 ⇒ 远超 1 级阈值 590ms ⇒ 首轮命中。
         //    G-A 组边界：恢复只 mark，flush 时按会话 WAbil 出帧（`ShowHp` ⇒ 自发副本 + 观察者）。
         let mut slots = game_svr::healthspell::HealthSpellSlots::new();
-        drain_recovery(&mut sessions, &world, &mut slots);
+        drain_recovery(&mut sessions, &mut world, &mut slots);
         flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, socket }) = rx0.try_recv() {
@@ -43442,7 +43466,7 @@ SendRefMsgRange=15
 
         // P1：恢复只 mark；G-A 组边界 flush ⇒ 第 1 条 53（恢复后、升级前）。
         let mut slots = game_svr::healthspell::HealthSpellSlots::new();
-        drain_recovery(&mut sessions, &world, &mut slots);
+        drain_recovery(&mut sessions, &mut world, &mut slots);
         flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
 
         // P3：击杀升级链 ⇒ 第 2 条 53 + 44 + 45/52/752。
@@ -49727,6 +49751,380 @@ SendRefMsgRange=15
             rec.data.abil.as_ref().expect("abil").mp,
             13,
             "存档 MP=13（oracle 口径；修复前落库 17）"
+        );
+    }
+
+    /// **卡 `openmir2-spell-fill-projection-mirror` 合同测试（tier R）· P7 腿**：
+    /// reviewer-3 自造牙 tooth3（review `ac6a585866` F2）的生产路径转绿 + oracle 逐位。
+    ///
+    /// 交错序列 = {施法 → P7 MP 支恢复 → P21 刷回 → 再施法 → 落库}。oracle 单份
+    /// `WAbil`（`BaseObject.Base.cs:57-68`：`MP += MaxMP/18+1` 夹 `MaxMP`；本夹具
+    /// MaxMP=18 ⇒ 一次 +2）：cast1 17→15（53.Tag=15）→ 恢复 15→17（53.Tag=17）→
+    /// P21 刷回读同一份 ⇒ 仍 17 → cast2 17→15（53.Tag=15）→ 存档 MP=15。
+    ///
+    /// 修复前（F2 实锤 left:15/right:17）：`stamina_tick` 只写投影、`drain_stamina`
+    /// 回写段只写 `e.hp` ⇒ P21 无条件刷回把恢复擦回 15 ⇒ cast2 发 13、落库 13。
+    /// 修法：回写段补 `e.mp` 镜像（「每个写点同步」，`openmir2-mp-session-projection-clobber`
+    /// 先例同形）。
+    ///
+    /// 红检（牙①，实测后还原）：单删回写段 `e.mp = sg.state.wabil.mp` ⇒ Tag 序列
+    /// `[15, 17, 13]`、存档 13 ⇒ 本用例红（恢复被 P21 擦回）。
+    ///
+    /// 时序（`clamp_fixture`/`v1_*` 同款、抗停顿）：`SpellTick` 预置 798、
+    /// `SpellFillTime=800` ⇒ 首 Run 到量命中后 `:78-81` 清零，后续 Run 恒低于阈值
+    /// ⇒ **无论重放几次 Run 恰一次 MP 支**；HP=16=MaxHP ⇒ HP 支恒假。
+    #[test]
+    fn spell_recovery_interleaved_p7_stamina_survives_p21_tags_15_17_15_save_15() {
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let (
+            mut world,
+            mut ground_sessions,
+            online,
+            gates,
+            mut rx,
+            mut saves,
+            magic_table,
+            mut displays,
+            catalog,
+            caster,
+        ) = mp_clobber_harness(5);
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let cast = |world: &mut mir2_world::World,
+                    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+                    saves: &mut std::collections::HashMap<String, SavedHuman>,
+                    displays: &mut downlink::DisplayTable| {
+            handle_spell_cmd(
+                game_svr::feature::make_long(25, 25),
+                mir2_world::magic::SKILL_FIREWIND,
+                0,
+                0,
+                "caster",
+                911,
+                &online,
+                world,
+                saves,
+                ground_sessions,
+                &catalog,
+                &magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                displays,
+                &gates,
+                1,
+                1,
+                2,
+            );
+        };
+        let drain_frames = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames = Vec::new();
+            while let Ok(m) = rx.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    frames.push((socket, body));
+                }
+            }
+            frames
+        };
+        let tags_53 = |frames: &[(i32, Vec<u8>)]| -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, b)| *s == 911 && mp_ident(b) == SM_53)
+                .map(|(_, b)| u16::from_le_bytes([b[8], b[9]]))
+                .collect()
+        };
+
+        // ── cast1：17 → 15（Tag=15；投影/实体双镜像 = 先例卡写点）。
+        cast(&mut world, &mut ground_sessions, &mut saves, &mut displays);
+        let f1 = drain_frames(&mut rx);
+        assert_eq!(tags_53(&f1), vec![15], "cast1：17-2=15");
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 15);
+        assert_eq!(world.entities.get(caster).expect("实体在图").mp, 15);
+
+        // ── P21 刷回：15 不动（先例卡行为）。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        assert!(drain_frames(&mut rx).is_empty(), "P21 零出帧（夹具自检）");
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 15);
+
+        // ── P7 恢复（生产入口 `drain_stamina`）：恰一次 MP 支 +2 ⇒ 17；e.mp 镜像。
+        {
+            let sg = ground_sessions.get_mut("caster").expect("会话在");
+            let base = now_ms() - 60;
+            sg.stamina.replay_cursor = base;
+            sg.stamina.auto_recovery_tick = base;
+            sg.stamina.spell_tick = 798;
+            sg.stamina.health_tick = 0;
+        }
+        drain_stamina(
+            &mut ground_sessions,
+            &mut world,
+            &online,
+            &gates,
+            8,
+            300, // HealthFillTime（HP 支门恒假：hp=16=MaxHP）
+            800, // SpellFillTime（SpellTick=798 ⇒ 首 Run 到量、随后清零）
+            &[],
+        );
+        let f2 = drain_frames(&mut rx);
+        assert_eq!(
+            tags_53(&f2),
+            vec![17],
+            "P7 MP 支：15+2=17（BaseObject.Base.cs:57-68，Tag=17）"
+        );
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 17);
+        assert_eq!(
+            world.entities.get(caster).expect("实体在图").mp,
+            17,
+            "恢复写点镜像进实体 ⇒ P21 刷回不再擦回（F2 修复点；牙①由此红）"
+        );
+
+        // ── P21 刷回：恢复存活（修复前此处投影被打回 15 ⇒ tooth3 的 left:15/right:17）。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        assert_eq!(
+            ground_sessions["caster"].state.wabil.mp, 17,
+            "P21 不得擦回恢复（修复前：实体 15 ⇒ 投影 15）"
+        );
+
+        // ── cast2：17 → 15（Tag=15；修复前 13）。
+        cast(&mut world, &mut ground_sessions, &mut saves, &mut displays);
+        let f3 = drain_frames(&mut rx);
+        assert_eq!(
+            tags_53(&f3),
+            vec![15],
+            "cast2：恢复后 17-2=15（修复前实发 13）"
+        );
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 15);
+
+        // ── P21 + 落库：`build_save_record` 读投影 ⇒ characters_ablity.MP=15。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        let saved = saves.get("caster").expect("存档在册");
+        let sg = ground_sessions.get("caster").expect("地面会话");
+        let rec = build_save_record(saved, "caster", &world, sg, None);
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").mp,
+            15,
+            "存档 MP=15（oracle 口径；修复前落库 13）"
+        );
+    }
+
+    /// **卡 `openmir2-spell-fill-projection-mirror` 合同测试（tier R）· P1 池腿**：
+    /// 恢复→施法→落库全链（acceptance ②），并钉 **hp 侧对称面**——P1 池的
+    /// `IncHealthSpell`（`BaseObject.cs:952-975`）HP/MP 两支写同一份 `WAbil`
+    /// ⇒ oracle 无单侧意图，镜像必须双侧。
+    ///
+    /// oracle 口径：低血起点 (HP,MP)=(10,17)；cast1 17→15 → 喝药池
+    /// `IncHealth/IncSpell=100`（`PlayObject.Base.cs:2073-2076`），P1 消费
+    /// `nHP=nMP=PerHealth/PerSpell=5`（`CharacterObject.cs:83-86` 初值、
+    /// `PlayObject.Message.cs:92-111`）⇒ HP 10→15、MP 15→18（夹 MaxMP）→ P21 仍
+    /// (15,18) → cast2 18→16（Tag=16）→ 落库 HP=15 / MP=16。
+    ///
+    /// 修复前：P1 只写投影 ⇒ P21 擦回实体旧值 (10,15) ⇒ cast2 发 13、落库 (10,13)。
+    ///
+    /// 红检（牙②，实测后还原）：单删 `drain_recovery` 的镜像块 ⇒ 投影被 P21 擦回
+    /// (10,15) ⇒ 本用例红。红检（牙③，hp 侧单删）：只删镜像块的 `e.hp` 一行 ⇒
+    /// P21 擦回 hp=10、落库 HP=10 ⇒ 本用例红（mp 腿仍绿 ⇒ 单侧删除可定位）。
+    #[test]
+    fn spell_recovery_interleaved_p1_pool_survives_p21_hp_15_mp_16_save() {
+        const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
+        let (
+            mut world,
+            mut ground_sessions,
+            online,
+            gates,
+            mut rx,
+            mut saves,
+            magic_table,
+            mut displays,
+            catalog,
+            caster,
+        ) = mp_clobber_harness(5);
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let cast = |world: &mut mir2_world::World,
+                    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+                    saves: &mut std::collections::HashMap<String, SavedHuman>,
+                    displays: &mut downlink::DisplayTable| {
+            handle_spell_cmd(
+                game_svr::feature::make_long(25, 25),
+                mir2_world::magic::SKILL_FIREWIND,
+                0,
+                0,
+                "caster",
+                911,
+                &online,
+                world,
+                saves,
+                ground_sessions,
+                &catalog,
+                &magic_table,
+                &pet_cfg,
+                8,
+                None,
+                &table,
+                displays,
+                &gates,
+                1,
+                1,
+                2,
+            );
+        };
+        let drain_frames = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames = Vec::new();
+            while let Ok(m) = rx.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    frames.push((socket, body));
+                }
+            }
+            frames
+        };
+        let tags_53 = |frames: &[(i32, Vec<u8>)]| -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, b)| *s == 911 && mp_ident(b) == SM_53)
+                .map(|(_, b)| u16::from_le_bytes([b[8], b[9]]))
+                .collect()
+        };
+        let params_53 = |frames: &[(i32, Vec<u8>)]| -> Vec<u16> {
+            frames
+                .iter()
+                .filter(|(s, b)| *s == 911 && mp_ident(b) == SM_53)
+                .map(|(_, b)| u16::from_le_bytes([b[6], b[7]]))
+                .collect()
+        };
+
+        // hp 侧对称面起点：挨打后的低血（投影/实体同值 10，MaxHP=16）。
+        world.entities.get_mut(caster).expect("实体在图").hp = 10;
+        {
+            let sg = ground_sessions.get_mut("caster").expect("会话在");
+            sg.state.wabil.hp = 10;
+            // 喝下 StdMode 0 药品 ⇒ IncHealth/IncSpell 入池（`PlayObject.Base.cs:2073-2076`）。
+            sg.recovery.inc_health = 100;
+            sg.recovery.inc_spell = 100;
+            // `dwInChsTime = 600 - min(400, Level*10)`；tick 拨到 1s 前 ⇒ 本轮必命中
+            // （`drain_recovery` 每 tick 恰调一次 `recovery_tick` ⇒ 恰一次 `IncHealthSpell`）。
+            sg.recovery.inc_health_spell_tick = now_ms() - 1000;
+        }
+
+        // ── cast1：17 → 15（Tag=15）。
+        cast(&mut world, &mut ground_sessions, &mut saves, &mut displays);
+        let f1 = drain_frames(&mut rx);
+        assert_eq!(tags_53(&f1), vec![15], "cast1：17-2=15");
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 15);
+
+        // ── P21 刷回（生产次序）：(10,15) 原样。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        assert!(drain_frames(&mut rx).is_empty(), "P21 零出帧（夹具自检）");
+
+        // ── P1 恢复（生产入口 `drain_recovery`）：`IncHealthSpell(5,5)` ⇒ (15,18)；
+        //     G-A flush 载荷按 oracle 出队时刻读投影：Param=HP=15 / Tag=MP=18。
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut ground_sessions, &mut world, &mut slots);
+        flush_healthspell_slots(
+            &mut slots,
+            &world,
+            &online,
+            &ground_sessions,
+            &gates,
+            8,
+        );
+        let f2 = drain_frames(&mut rx);
+        assert_eq!(
+            tags_53(&f2),
+            vec![18],
+            "P1：IncHealthSpell(5,5) ⇒ MP 15→18（夹 MaxMP，BaseObject.cs:968-973）"
+        );
+        assert_eq!(
+            params_53(&f2),
+            vec![15],
+            "P1 同帧 HP 10+5=15（HP 支；hp 侧对称面，牙③由此红）"
+        );
+        assert_eq!(ground_sessions["caster"].state.wabil.hp, 15);
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 18);
+        assert_eq!(
+            world.entities.get(caster).expect("实体在图").hp, 15,
+            "hp 侧镜像进实体（单删 e.hp ⇒ P21 擦回 10 ⇒ 牙③红）"
+        );
+        assert_eq!(
+            world.entities.get(caster).expect("实体在图").mp, 18,
+            "mp 侧镜像进实体（单删镜像块 ⇒ P21 擦回 15 ⇒ 牙②红）"
+        );
+
+        // ── P21 刷回：恢复存活（修复前 (10,15) = tooth3 同型擦回）。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        assert_eq!(
+            ground_sessions["caster"].state.wabil.hp, 15,
+            "P21 不得擦回 hp 恢复（修复前：实体 10 ⇒ 投影 10）"
+        );
+        assert_eq!(
+            ground_sessions["caster"].state.wabil.mp, 18,
+            "P21 不得擦回 mp 恢复（修复前：实体 15 ⇒ 投影 15）"
+        );
+
+        // ── cast2：18 → 16（Tag=16；修复前 13）。
+        cast(&mut world, &mut ground_sessions, &mut saves, &mut displays);
+        let f3 = drain_frames(&mut rx);
+        assert_eq!(
+            tags_53(&f3),
+            vec![16],
+            "cast2：恢复后 18-2=16（修复前实发 13）"
+        );
+        assert_eq!(ground_sessions["caster"].state.wabil.mp, 16);
+
+        // ── P21 + 落库：HP=15 / MP=16（oracle 单份 WAbil 的 MakeSaveRcd 口径）。
+        drain_player_need_recheck(
+            &mut world,
+            &mut ground_sessions,
+            &online,
+            &gates,
+            &catalog,
+            3,
+        );
+        let saved = saves.get("caster").expect("存档在册");
+        let sg = ground_sessions.get("caster").expect("地面会话");
+        let rec = build_save_record(saved, "caster", &world, sg, None);
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").hp, 15,
+            "存档 HP=15（修复前落库 10）"
+        );
+        assert_eq!(
+            rec.data.abil.as_ref().expect("abil").mp, 16,
+            "存档 MP=16（修复前落库 13）"
         );
     }
 
@@ -60091,7 +60489,7 @@ SendRefMsgRange=15
             sg.recovery.inc_health = 20;
         }
         let mut slots = game_svr::healthspell::HealthSpellSlots::new();
-        drain_recovery(&mut sessions, &world, &mut slots);
+        drain_recovery(&mut sessions, &mut world, &mut slots);
         flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
         // 同 tick 的 MaxHP 重算（12 < 恢复后的 HP=15）⇒ P8 按当时 WAbil 命中钳制。
         sessions.get_mut("clamp").unwrap().state.wabil.max_hp = 12;
@@ -60285,7 +60683,7 @@ SendRefMsgRange=15
     /// 牙（改坏必红）：两个生产者各发一条 ⇒ 2 条 53；先发 SysMsg ⇒ 帧序红。
     #[test]
     fn c7_recovery_and_extra_abil_expiry_share_one_frame() {
-        let (world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(10, 0, 100, 0);
+        let (mut world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(10, 0, 100, 0);
         {
             let sg = sessions.get_mut("clamp").unwrap();
             sg.recovery = game_svr::recover::Recovery::new(0);
@@ -60300,7 +60698,7 @@ SendRefMsgRange=15
             ..Default::default()
         };
         let mut slots = game_svr::healthspell::HealthSpellSlots::new();
-        drain_recovery(&mut sessions, &world, &mut slots);
+        drain_recovery(&mut sessions, &mut world, &mut slots);
         let sysmsgs = drain_extra_abil_expiries(&rec, &world, &online, &sessions, &mut slots);
         flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
         sysmsgs.flush(&online, &gates);
