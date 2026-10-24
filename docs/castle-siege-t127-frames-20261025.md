@@ -36,6 +36,21 @@
 | `Ref*`（关门） | `UserCastle.cs:890-909` → `CastleDoor.cs:60-76` | `MainDoorControl(true)` ⇒ `CastleDoor.Close()`：`Dir=3-Round(HP/MaxHP*3)`（`>=3 ⇒ 0`）→ `SendRefMsg(RM_DIGDOWN, Dir, X, Y, 0, "")` → `IsOpened=false` → `StoneMode=false` → `SetMapXyFlag(1)` → `HoldPlace=true` |
 | `SM_DIGDOWN` | `PlayObject.Message.cs:1900-1903` | `MakeMessage(SM_DIGDOWN, ActorId, nParam1=X, nParam2=Y, 0)`，无尾 |
 
+### 2.5 帧优先级（返工 F1 的判据）
+
+oracle `MsgQueue` 的优先级 = `(byte)wIdent`（`BaseObject.Message.cs:181`），**升序出队**：
+
+| RM | 值（`src/OpenMir2/Messages.cs`） | 优先级（低字节） | 出队序 |
+|---|---|---|---|
+| `RM_USERNAME` | 8101（`:699`） | **165** | 1 |
+| `RM_DIGUP` | 10200（`:614`） | **216** | 2 |
+| `RM_DIGDOWN` | 10201（`:615`） | **217** | 3 |
+| `RM_SYSMESSAGE` | 11004（`:646`） | **252** | 4 |
+
+⇒ 开战 tick（同一次 `CastleMgr.Run` 里同时产生 `RefShowName` + 关门 `RM_DIGDOWN` + 全服广播）
+在**同一收件人**上的线缆序 = **`SM_USERNAME` → `SM_DIGDOWN` → `SM_SYSMESSAGE`**。
+本实现按三个相位复刻该序（§3），并有源码序门 + 跨源合同测试钉住（§4）。
+
 ## 3. 实现（三个宿主排水点）
 
 | 函数 | 位置 | 口径 |
@@ -47,8 +62,14 @@
 `lib.rs:23415-23520` 的分派：`Broadcast` → 跨城收集（`Vec<String>`）；`ServerGroupMsg` → **日志**
 （单服无 planes 对端，客户端不可见；与 `guild_official.rs:690` 的 `SS_205` 同口径）；
 `RefreshShowName` → 收集 `(idx,x,y,range)`；`Structure(Ref*)` → `queue_structure_ref_msg`；
-`SpawnDefenseUnit(_)` → 零动作（只有 `Initialize` 会产）。城堡循环结束后统一扇出广播、再跑 `RefShowName`
-（`RM_SYSMESSAGE` 优先级 252 > `RM_USERNAME` 165，分段排水与「同一条 `MsgQueue`」在线缆序上等价）。
+`SpawnDefenseUnit(_)` → 零动作（只有 `Initialize` 会产）。
+
+**帧序（返工 F1 之后的实现）**：按 §2.5 的优先级**升序**分三相位上线 ——
+① `refresh_show_name_in_area`(165) 在城堡循环结束后**立即**发；
+② 门/墙 `Structure(Ref*)`(216/217) 入 `world.pending_monster_ref_msgs`，由紧随其后的
+`tick_world_head_with_specials → drain_monster_ref_msgs` 排水；
+③ `fan_out_sysmessage_to_all`(252) 在 **tick head 之后**扇出（`castle_broadcast_texts` 暂存）。
+三处调用序由源码序门 `t127_castle_frame_phases_are_priority_ascending_in_sim_loop` 钉住。
 
 ## 4. 合同测试（4 条，`castle/tests.rs`）
 
@@ -58,6 +79,9 @@
 | `t127_ref_show_name_targets_only_palace_area_players` | 皇宫图内两玩家各收 2 条（目标序 甲→乙），宫外玩家 0 条；`Recog` = 被展示者、`Param` = `name_color`（255）、尾 = `GetShowName()` |
 | `t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area` | 有会 + 双方 `InGuildWarArea` + `UnderWar` ⇒ **0 帧**（N1 丢弃）；同一夹具去掉行会 ⇒ 4 帧且 `Param = InFreePKAreaNameColor`（`world.castle_name_colors.in_free_pk`） |
 | `t127_door_close_structure_event_drains_to_sm_digdown` | 坐标对不上门/墙 ⇒ 不入队；命中 ⇒ `MonsterRefMsg{ident=RM_DIGDOWN, actor_id=门, recipients=[±12 内玩家]}`，经 `drain_monster_ref_msgs` 出**一条** `SM_DIGDOWN(21)`（`Recog`/`Param=X`/`Tag=Y`/`Series=0`/无尾，12B） |
+| `t127_frame_priorities_are_low_byte_of_rm_ident`（返工新增） | 四个 RM 常量的**低字节** = 165/216/217/252 且严格升序（钉住判据本身，防止再引用非源码字面量如 120/122） |
+| `t127_cross_source_frames_follow_priority_order`（返工新增） | 同一玩家同 tick 收三类帧：驱动三个**生产排水函数**（`refresh_show_name_in_area` → `drain_monster_ref_msgs` → `fan_out_sysmessage_to_all`），断言 ident 序 = `[SM_USERNAME, SM_DIGDOWN, SM_SYSMESSAGE]` |
+| `t127_castle_frame_phases_are_priority_ascending_in_sim_loop`（返工新增，源码序门） | `sim_loop` 内 `refresh_show_name_in_area(` ＜ `let mut rec = tick_world_head_with_specials(` ＜ `fan_out_sysmessage_to_all(` |
 
 ## 5. 牙（4 条，各还原后逐字节比对源文件 sha256）
 
@@ -67,9 +91,11 @@
 | B | `refresh_show_name_in_area` 去掉 `target.map_id != palace_map_id` 门 | **RED**：`sent=5 != 4`（宫外玩家也被瞄准） |
 | C | `queue_structure_ref_msg` 的 `RM_DIGDOWN`/`RM_DIGUP` 对调 | **RED**：`SM_DIGDOWN` ident 断言失败 |
 | D | `refresh_show_name_in_area` 的 `viewer_in_war` 硬改 `false` | **RED**：N1 段 `dropped=4 != 0` |
+| E（返工） | 把广播扇出块从 tick head **之后**挪到 username **之前**（= 返工前的分段序 252→165→217） | **RED**：`t127_castle_frame_phases_are_priority_ascending_in_sim_loop` 失败；还原后源码 sha256 与备份逐字节相同 |
 
-还原后 `castle.rs` sha256 = `9ae04a7b246b62f301ceb8bdc6346cce6cacae6ea6f2a11285a8ea38e375d59e`（与备份同），
-`grep TOOTH` = 0，`cargo test -p game-svr --lib t127_` 4/4 GREEN。
+还原后源码 sha256（**F2 订正**：上一版报告写的是 fmt/clippy 修之前的值）：
+`castle.rs` = `38b02ad07aec0a88d1586199ceb2fab9cdef232df8bce0a7970401f4d18b6816`（= reviewer 实测前缀 `38b02ad0…`）、
+`lib.rs` = `af3a551d555e7e0135d492b07b6f0eda7dde1ddc0ca346e5200abda947383d5f`；`grep TOOTH` = 0，`cargo test -p game-svr --lib t127_` **7/7 GREEN**。
 
 ## 6. 门禁
 
@@ -77,7 +103,7 @@
 |---|---|
 | `cargo fmt --all -- --check` | rc=0 |
 | `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
-| `cargo test --workspace` | rc=0：**141 suites / 3204 passed / 0 failed / 62 ignored**（含本卡 4 条 `t127_*`） |
+| `cargo test --workspace` | rc=0：**141 suites / 3207 passed / 0 failed / 62 ignored**（含本卡 7 条 `t127_*`） |
 | `cargo run -p msgcodegen -- --check` | rc=0（604 条） |
 | `conflict_marker` / `stale_pointer` / `dynamic_count_stamp` / `board_coverage` | rc=0 |
 | `tools/whitelist/t_reservation_gate.py check` + `selftest` | rc=0（255 行）+ SELFTEST GREEN 18/18 |
@@ -88,9 +114,13 @@
 
 ## 7. 登记的偏差 / 未建模（**均为 oracle 侧不可判或本仓既有约定**）
 
-1. **跨源队列合并**：同一玩家的 `MsgQueue` 里若同时有城堡广播与其它系统帧（脚本 `SENDMSG`、行会通知
-   等），本仓仍按「每个排水点只排本次产出」分段排水（既有各排水点同口径）。本片内 `RM_USERNAME(165)`
-   先于 `RM_SYSMESSAGE(252)` 与 oracle 的单队列优先级序一致；**跨排水点**的相对序未建模。
+1. **跨源队列合并（本片内已按优先级修好，片外仍不等价）**：本片四类帧（`USERNAME` 165 /
+   `DIGUP` 216 / `DIGDOWN` 217 / `SYSMESSAGE` 252）已按优先级升序分三相位上线（§2.5/§3），**不再是
+   已知偏差**。**仍不等价**的是：本片之外**其它系统**同 tick 投进同一玩家队列的帧（脚本 `SENDMSG`、
+   行会通知、`SM_DAYCHANGING(46)` 等）——本仓仍按「每个排水点只排本次产出」分段排水，与它们之间的
+   相对序未建模。**修法（后续卡）**：把城堡三相位改为「按收件人累积 (priority, seq, body)，在本轮
+   玩家排水点统一出队」；**窗口项**：W-T127-1 现要求把「本片四类帧的线缆序」与 oracle 逐帧对拍
+   （含与非城堡帧共处的抽样），未过不收卡。
 2. **N1 的「消息段中止」**：oracle 抛异常被吞后，该玩家**本 tick 剩余消息**一并中止；本仓只丢这一帧
    （与 `handle_query_user_name_cmd` 的既有处理同口径）。
 3. **`ServerGroupMsg`**：oracle 走 planes 通道（`PlanesServer`/`PlanesClient`），客户端看不到；本仓单服
@@ -122,3 +152,11 @@
   `E:/tmp/t127-block.rs` / `E:/tmp/t127-tests.rs` / `E:/tmp/t127-edit.py`（生成用中间件）、
   `E:/tmp/t127-tooth-a.txt`（牙读数）、`E:/tmp/t127-thread.json`（卡片线程快照）。均可删。
 - 未 merge、未自签 review。
+
+## 10. 返工记录（review `ab1ac11753` / comment `907fb561`，request_changes）
+
+| 编号 | reviewer 结论 | 本片处置 |
+|---|---|---|
+| **F1**（Important） | 四类帧的跨源相对序与 oracle 相反：上一版按「广播(252) → 用户名(165) → 门帧(217，tick head)」分段立即发，线缆序 252→165→217，而 oracle 单队列按优先级升序 = **165→217→252** | **已修**：改为三相位（165 立即 → 216/217 走 tick head → 252 在 tick head 之后，`castle_broadcast_texts` 暂存）；新增跨源合同测试 `t127_cross_source_frames_follow_priority_order`（断言 `[SM_USERNAME, SM_DIGDOWN, SM_SYSMESSAGE]`）+ 源码序门 `t127_castle_frame_phases_are_priority_ascending_in_sim_loop` + 常量判据 `t127_frame_priorities_are_low_byte_of_rm_ident`；牙 E 复现旧序必红。优先级以源码为准：`Messages.cs:614/615/646/699` ⇒ 216/217/252/165（reviewer 首轮写的 120/122 已由其本人在订正中撤回） |
+| **F2**（Minor） | 报告 §5 的 `castle.rs` sha256 与实际不符 | **已订正**：交付 head 实测 `38b02ad07aec0a88d1586199ceb2fab9cdef232df8bce0a7970401f4d18b6816`（前缀 `38b02ad0…`，与 reviewer 实测一致） |
+| **F3**（Minor） | patch 缺 `merge_tree` 记录 | **已补**：本次 patch body 带 `merge_tree`（`vs_base`/`vs_master`，脚本生成） |

@@ -23396,6 +23396,15 @@ fn sim_loop(
         // **CastleMgr.Run()**（`SystemProcessor.cs:70-77`）：与 `GuildMgr.Run` 同一个 10s 块、
         // **Guild 先、Castle 后**；严格 `>` 门（oracle `GetTickCount()-RunTimeTick>10000`）。
         // 状态机本体已在 `UserCastle::run` 逐行实现（跨天/每日开战/回收 Ghost/StoneMode/预告/超时）。
+        // **T-127 / 返工 F1（review `ab1ac11753`）**：城堡 `Run` 产出的四类帧必须按 oracle
+        // `MsgQueue` 的优先级（`(byte)wIdent`）**升序**上线：
+        //   `RM_USERNAME`=8101&0xFF=**165** ＜ `RM_DIGUP`=10200&0xFF=**216**
+        //   ＜ `RM_DIGDOWN`=10201&0xFF=**217** ＜ `RM_SYSMESSAGE`=11004&0xFF=**252**
+        // ⇒ 分三相位：① `RefShowName`(165) 立即发；② 门/墙 `Ref*`(216/217) 走 tick head 的
+        // `pending_monster_ref_msgs` 排水；③ `Broadcast`(252) 在 tick head **之后**扇出。
+        // （oracle 每个 `PlayObject` 只有一条 `MsgQueue`，其 Drain 在处理该玩家的 Run 里，
+        // 本宿主用这三个相位复刻同一优先级序。）
+        let mut castle_broadcast_texts: Vec<String> = Vec::new();
         if castle_due.run {
             let local = chrono::Local::now();
             let now = mir2_world::castle::CastleNow::new(
@@ -23476,19 +23485,9 @@ fn sim_loop(
                     }
                 }
             }
-            // **T-127**：`SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）——每个 `!Ghost` 在线
-            // 玩家一条 `SM_SYSMESSAGE(100)`（`Recog` = 收件人自己、`Param = MakeWord(RedF,RedB)`）；
-            // 不拼 `SysMsgPreFix`、不排除任何收件人（与脚本 `SENDMSG 0-3` 的两点差别）。
-            let broadcast_frames = game_svr::castle::fan_out_sysmessage_to_all(
-                &online,
-                &world,
-                &gates,
-                &broadcasts,
-                colors.red_f,
-                colors.red_b,
-            );
-            // **T-127**：`StartWallconquestWar` 的 `RefShowName`：皇宫 `range` 格内玩家逐个
-            // `SendRefMsg(RM_USERNAME)`（收件人 = ±`SendRefMsgRange` 格扫，`GetChrColor` 逐观察者）。
+            // **T-127 / 返工 F1 · 相位①（165）**：`StartWallconquestWar` 的 `RefShowName`——
+            // 皇宫 `range` 格内玩家逐个 `SendRefMsg(RM_USERNAME)`（收件人 = ±`SendRefMsgRange`
+            // 格扫，`GetChrColor` 逐观察者）。**先于** tick head 的门帧（216/217）。
             let mut show_name_frames = 0usize;
             for (idx, x, y, range) in show_name_requests {
                 let palace_map_id = world.castles.get(idx).and_then(|c| c.palace_map_id);
@@ -23506,12 +23505,15 @@ fn sim_loop(
                     chat::send_ref_msg_range(),
                 );
             }
-            if broadcast_frames != 0 || show_name_frames != 0 {
+            if show_name_frames != 0 {
                 glog!(
                     "INF",
-                    "城堡帧排水：Broadcast={broadcast_frames} 帧 / RefShowName={show_name_frames} 帧"
+                    "城堡 RefShowName 排水：{show_name_frames} 帧（优先级 165，早于门帧 216/217）"
                 );
             }
+            // **相位③（252）**：`SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）的正文交给
+            // tick head 之后再扇出（见 `castle_broadcast_texts` 的消费点）。
+            castle_broadcast_texts = broadcasts;
         }
         // **orphan 接线第二批**：掉线/小退/顶号的**离世广播**（oracle `BaseObject.DisappearA`
         // `BaseObject.cs:1519-1524` ⇒ `SendRefMsg(RM_DISAPPEAR)`，由 `MakeGhost` 调用）。
@@ -23645,6 +23647,26 @@ fn sim_loop(
             &online,
             &gates,
         );
+        // **T-127 / 返工 F1 · 相位③（252）**：`SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）
+        // ——每个 `!Ghost` 在线玩家一条 `SM_SYSMESSAGE(100)`（`Recog` = 收件人自己、
+        // `Param = MakeWord(RedF,RedB)`）；不拼 `SysMsgPreFix`、不排除任何收件人。
+        // 位置：tick head 已把门/墙 `Ref*` 的 216/217 排完 ⇒ 广播的 252 排在它们之后。
+        {
+            let broadcast_frames = game_svr::castle::fan_out_sysmessage_to_all(
+                &online,
+                &world,
+                &gates,
+                &castle_broadcast_texts,
+                colors.red_f,
+                colors.red_b,
+            );
+            if broadcast_frames != 0 {
+                glog!(
+                    "INF",
+                    "城堡系统广播排水：{broadcast_frames} 帧（优先级 252，晚于门帧 216/217）"
+                );
+            }
+        }
         // **PL-1 宿主段（oracle `PlayObject.Run` 的 P21…P32）**：在 `tick_head` 之后、
         // `tick_tail`（`base.Run` 的 Die + VerifyMapTime）之前。
         drain_player_need_recheck_with_magic(
@@ -36261,6 +36283,55 @@ break
             f.sessions["hero"].state.item_list.len(),
             1,
             "零清包（背包原样）"
+        );
+    }
+
+    /// **T-127 返工 F1（源码序门）**：城堡三相位在 `sim_loop` 里必须按 oracle `MsgQueue`
+    /// 优先级**升序**排列——`refresh_show_name_in_area`(165) → `tick_world_head_with_specials`
+    /// （门/墙 `Ref*` 的 216/217）→ `fan_out_sysmessage_to_all`(252)。
+    ///
+    /// 牙：把广播扇出挪回 username 之前（上一版实现）⇒ 断言红。
+    #[test]
+    fn t127_castle_frame_phases_are_priority_ascending_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        let find_after = |needle: &str| {
+            lines
+                .iter()
+                .enumerate()
+                .filter(|(i, l)| *i > sim_loop && *i < tests_start && l.contains(needle))
+                .map(|(i, _)| i)
+                .next()
+        };
+        let username = find_after("game_svr::castle::refresh_show_name_in_area(")
+            .expect("sim_loop 必须调用 refresh_show_name_in_area");
+        let tick = lines
+            .iter()
+            .enumerate()
+            .find(|(i, l)| {
+                *i > sim_loop
+                    && *i < tests_start
+                    && l.trim() == "let mut rec = tick_world_head_with_specials("
+            })
+            .map(|(i, _)| i)
+            .expect("sim_loop 的 world tick head 入口行");
+        let broadcast = find_after("game_svr::castle::fan_out_sysmessage_to_all(")
+            .expect("sim_loop 必须调用 fan_out_sysmessage_to_all");
+        assert!(
+            username < tick,
+            "RM_USERNAME(165) 必须早于 tick head 的门帧(216/217)：username@{username} tick@{tick}"
+        );
+        assert!(
+            tick < broadcast,
+            "RM_SYSMESSAGE(252) 必须在 tick head 之后扇出：tick@{tick} broadcast@{broadcast}"
         );
     }
 

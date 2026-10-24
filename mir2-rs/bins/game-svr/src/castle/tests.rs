@@ -1123,3 +1123,126 @@ fn t127_door_close_structure_event_drains_to_sm_digdown() {
     );
     assert_eq!(body.len(), 12, "RM_DIGDOWN 无尾（SendSocket(ClientMsg)）");
 }
+
+// ---------------------------------------------------------------------------
+// **T-127 返工 F1**（review `ab1ac11753`）：跨源帧序必须按 oracle `MsgQueue` 优先级升序
+// ---------------------------------------------------------------------------
+
+/// oracle 的 `MsgQueue` 优先级 = `(byte)wIdent`（`BaseObject.Message.cs:181`）：
+/// `RM_USERNAME=8101 ⇒ 165`、`RM_DIGUP=10200 ⇒ 216`、`RM_DIGDOWN=10201 ⇒ 217`、
+/// `RM_SYSMESSAGE=11004 ⇒ 252`（`src/OpenMir2/Messages.cs:614/615/646/699`）。
+///
+/// 牙：把任一常量换成 SM 侧号码或写成 `ident` 全值 ⇒ 断言红（防止再用「120/122」这类
+/// 非源码字面量）。
+#[test]
+fn t127_frame_priorities_are_low_byte_of_rm_ident() {
+    use mir2_protocol::messages as m;
+    let pri = |v: u16| (v & 0xFF) as u8;
+    assert_eq!(m::RM_USERNAME, 8101);
+    assert_eq!(pri(m::RM_USERNAME), 165);
+    assert_eq!(m::RM_DIGUP, 10200);
+    assert_eq!(pri(m::RM_DIGUP), 216);
+    assert_eq!(m::RM_DIGDOWN, 10201);
+    assert_eq!(pri(m::RM_DIGDOWN), 217);
+    assert_eq!(m::RM_SYSMESSAGE, 11004);
+    assert_eq!(pri(m::RM_SYSMESSAGE), 252);
+    assert!(pri(m::RM_USERNAME) < pri(m::RM_DIGUP));
+    assert!(pri(m::RM_DIGUP) < pri(m::RM_DIGDOWN));
+    assert!(pri(m::RM_DIGDOWN) < pri(m::RM_SYSMESSAGE));
+}
+
+/// **跨源合同（F1 的判据）**：同一收件人在**同一个城堡 tick** 里同时收到
+/// `RefShowName`(165)、门 `RM_DIGDOWN`(217)、全服广播(252) ⇒ 线缆序必须是
+/// `[SM_USERNAME, SM_DIGDOWN, SM_SYSMESSAGE]`（= 优先级升序），
+/// **不是**入队序、也不是上一版实现的 `[SYSMESSAGE, USERNAME, DIGDOWN]`。
+///
+/// 驱动的是三个**生产排水函数**（`refresh_show_name_in_area` → `drain_monster_ref_msgs` →
+/// `fan_out_sysmessage_to_all`），调用序 = `sim_loop` 的三相位
+/// （165 立即 / 216-217 走 tick head / 252 在 tick head 之后；见 `lib.rs` 的同名源码序门）。
+///
+/// 牙：把 `fan_out_sysmessage_to_all` 挪回 username 之前（上一版实现）⇒ 首帧断言红。
+#[test]
+fn t127_cross_source_frames_follow_priority_order() {
+    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    let mut door = mir2_world::Entity::new(0, "沙巴克城门".to_string(), 5, 5);
+    door.race = 110;
+    let door_id = world.add_entity(door);
+    world.open_session("甲");
+    let a_id = world
+        .enter_map("甲", play_entity("甲", 5, 5), 0)
+        .expect("甲 进图");
+    let mut castle = mir2_world::castle::UserCastle::new(
+        "沙巴克",
+        mir2_world::castle::CastleSiegeConfig::default(),
+    );
+    // `CastlePlaceMap` = map 0 ⇒ `InCastleWarArea` 为真（`UserCastle.cs:674-678` 皇宫支）。
+    castle.palace_map_id = Some(0);
+    castle.main_door = Some(mir2_world::castle::CastleUnit {
+        entity_id: Some(door_id),
+        x: 5,
+        y: 5,
+        hp: 9_999,
+        max_hp: 9_999,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    world.castles.push(castle);
+
+    let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<crate::SimToGate>();
+    let mut gates: std::collections::HashMap<
+        u8,
+        tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
+    > = std::collections::HashMap::new();
+    gates.insert(0, tx0);
+    let online: crate::OnlineRegistry = vec![online_entry("甲", 5, a_id)];
+    let displays = downlink::DisplayTable::new();
+    let sessions: std::collections::HashMap<String, crate::SessionGround> =
+        [("甲".to_string(), crate::tests::test_session_ground(a_id))]
+            .into_iter()
+            .collect();
+    let war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
+        std::collections::HashMap::new();
+
+    // 相位①（165）：`StartWallconquestWar` 的 `RefShowName`。
+    let n1 = super::refresh_show_name_in_area(
+        &online,
+        &world,
+        &displays,
+        &gates,
+        &sessions,
+        &war_states,
+        Some(0),
+        5,
+        5,
+        100,
+        12,
+    );
+    // 相位②（217）：`MainDoorControl(true)` 的 `CastleDoor.Close()`。
+    assert!(super::queue_structure_ref_msg(
+        &mut world,
+        0,
+        &mir2_world::castle::StructureEvent::RefDigDown { dir: 0, x: 5, y: 5 }
+    ));
+    crate::drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+    // 相位③（252）：`SendBroadCastMsgExt`。
+    let n3 = super::fan_out_sysmessage_to_all(
+        &online,
+        &world,
+        &gates,
+        &["[沙巴克 攻城战已经开始]".to_string()],
+        0xFC,
+        0x01,
+    );
+    assert!(n1 > 0 && n3 > 0, "三个相位都必须产帧（n1={n1} n3={n3}）");
+
+    let frames = drain_frames(&mut rx0);
+    let idents: Vec<u16> = frames.iter().map(|(_, b)| ident_of(b)).collect();
+    assert_eq!(
+        idents,
+        vec![
+            mir2_protocol::messages::SM_USERNAME,
+            mir2_protocol::messages::SM_DIGDOWN,
+            mir2_protocol::messages::SM_SYSMESSAGE,
+        ],
+        "跨源帧序必须是优先级升序 165 < 217 < 252"
+    );
+}
