@@ -200,60 +200,126 @@ def count_hits(line):
 # 「段」的定义（可机械判定，不用「同行 ± N 字符」这种会随排版漂移的口径）：
 #   命中行向上找**最近的标题行**（`#`..`######`）作为段首；段尾 = 其后第一个
 #   **同级或更高级**标题的前一行（没有上级标题 ⇒ 到文件末尾；全文无标题 ⇒ 整篇为一段）。
-PARAGRAPH_HEADING_RE = re.compile(r"^(#{1,6})\s")
+#
+# 标题识别按 CommonMark 收窄了两个会改变豁免宽度的边界（reviewer-6 M-5）：
+#   * 代码围栏（``` / ~~~）内的 `# 注释` **不是**标题——否则段被切小，段内合法声明
+#     覆盖不到命中（假红）；
+#   * ATX 标题允许 **0–3 个前导空格**，且识别 setext 标题（`标题` + `===`/`---`）——
+#     否则这类标题不被识别，下一节的裸计数会被**上一节**的声明豁免（假绿）。
+PARAGRAPH_HEADING_RE = re.compile(r"^ {0,3}(#{1,6})(?:\s+|$)")
+FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+SETEXT_UNDERLINE_RE = re.compile(r"^ {0,3}(=+|-{2,})\s*$")
+_SETEXT_TITLE_BLOCKERS_RE = re.compile(r"^ {0,3}(?:[-*+]\s|\d+[.)]\s|>|\|)")
 DEFAULT_PARAGRAPH_TOL = 3600   # 声明时间与 commit 时间的容差（秒），理由见文档 §2
 DEFAULT_DECL_TOL = 86400       # blame 新近性容差（秒，与 skeleton --decl-tol 同值）
 
 
-def paragraph_bounds(lines, hit_line):
+def heading_levels(lines):
+    """Return ``{line_no: level}`` for headings outside fenced code blocks.
+
+    ATX (0–3 leading spaces) and setext (``===`` ⇒ 1, ``---`` ⇒ 2) are both
+    recognised; a setext heading is attributed to its **text** line.  A fenced
+    block never yields headings (its ``# comment`` lines used to split the
+    section and cause false reds).  Fences track both character and length.
+    """
+    levels = {}
+    fence = None  # (char, length)
+    prev_is_title_text = False
+    for index, line in enumerate(lines, 1):
+        if fence is not None:
+            marker = FENCE_RE.match(line)
+            if (marker and marker.group(1)[0] == fence[0]
+                    and len(marker.group(1)) >= fence[1]):
+                fence = None
+            prev_is_title_text = False
+            continue
+        marker = FENCE_RE.match(line)
+        if marker:
+            fence = (marker.group(1)[0], len(marker.group(1)))
+            prev_is_title_text = False
+            continue
+        atx = PARAGRAPH_HEADING_RE.match(line)
+        if atx:
+            levels[index] = len(atx.group(1))
+            prev_is_title_text = False
+            continue
+        underline = SETEXT_UNDERLINE_RE.match(line)
+        if underline and prev_is_title_text:
+            levels[index - 1] = 1 if underline.group(1)[0] == "=" else 2
+            prev_is_title_text = False
+            continue
+        prev_is_title_text = bool(
+            line.strip()
+            and not line.startswith("    ")
+            and not _SETEXT_TITLE_BLOCKERS_RE.match(line)
+        )
+    return levels
+
+
+def paragraph_bounds(lines, hit_line, levels=None):
     """Return (start, end) 1-based inclusive for the section containing ``hit_line``."""
+    if levels is None:
+        levels = heading_levels(lines)
     level = 0
     start = 1
     for i in range(hit_line, 0, -1):
-        m = PARAGRAPH_HEADING_RE.match(lines[i - 1])
-        if m:
-            level = len(m.group(1))
+        if i in levels:
+            level = levels[i]
             start = i
             break
     if level == 0:
         return 1, len(lines)
     end = len(lines)
     for j in range(hit_line + 1, len(lines) + 1):
-        m = PARAGRAPH_HEADING_RE.match(lines[j - 1])
-        if m and len(m.group(1)) <= level:
+        if j in levels and levels[j] <= level:
             end = j - 1
             break
     return start, end
 
 
 def paragraph_declarations(lines, start, end):
-    """Candidate declarations *inside* the section ``[start, end]`` (nearest-first)."""
+    """Candidate declarations *inside* the section ``[start, end]`` (nearest-first).
+
+    Every distinct sha in the ±``SNAPSHOT_NEAR`` window is its own candidate,
+    paired with the nearest timestamp (reviewer-6 M-1, the same shape as
+    skeleton reviewer-3 M-1): a line like ``快照 截至 <B 旧> 与 <A 新> @ T``
+    must not lose ``A`` because ``B`` is written first, and a neighbouring
+    line's sha must not swallow the real declaration.  The caller tries them
+    nearest-first; the first passing **all** checks wins, rejected candidates
+    become NOTEs.
+    """
     out = []
     for anchor in range(start, end + 1):
         if not skeleton.SNAPSHOT_ANCHOR_RE.search(lines[anchor - 1]):
             continue
         low = max(start, anchor - skeleton.SNAPSHOT_NEAR)
         high = min(end, anchor + skeleton.SNAPSHOT_NEAR)
-        shas = []
         times = []
         for index in range(low, high + 1):
-            for value in skeleton._line_shas(lines[index - 1]):
-                shas.append((index, value))
             for value in skeleton._line_times(lines[index - 1]):
                 times.append((index, value[0], value[1]))
-        if not shas or not times:
+        if not times:
             continue
-        shas.sort(key=lambda item: (abs(item[0] - anchor), item[0]))
         times.sort(key=lambda item: (abs(item[0] - anchor), item[0]))
-        out.append({
-            "anchor": anchor,
-            "sha_line": shas[0][0],
-            "sha": shas[0][1],
-            "time_line": times[0][0],
-            "epoch": times[0][1],
-            "time_text": times[0][2],
-            "position": max(anchor, shas[0][0], times[0][0]),
-        })
+        time_line, epoch, time_text = times[0]
+        seen = set()
+        for distance in range(0, high - low + 1):
+            for index in (anchor - distance, anchor + distance):
+                if not low <= index <= high:
+                    continue
+                for sha in skeleton._line_shas(lines[index - 1]):
+                    if sha in seen:
+                        continue
+                    seen.add(sha)
+                    out.append({
+                        "anchor": anchor,
+                        "sha_line": index,
+                        "sha": sha,
+                        "time_line": time_line,
+                        "epoch": epoch,
+                        "time_text": time_text,
+                        "position": max(anchor, index, time_line),
+                    })
     return out
 
 
@@ -329,6 +395,7 @@ def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None,
             raise GateError(
                 "dynamic-count gate: cannot read %s (fail-closed)" % rel, rc=2)
         all_lines = text.splitlines()
+        levels = heading_levels(all_lines)
         for number, line in enumerate(all_lines, 1):
             hits = count_hits(line)
             if not hits:
@@ -349,11 +416,15 @@ def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None,
             if ref is not None:
                 key = (rel, number)
                 if key not in decl_cache:
-                    start, end = paragraph_bounds(all_lines, number)
+                    start, end = paragraph_bounds(all_lines, number, levels)
                     decl_cache[key] = checked_paragraph_declarations(
                         top, rel, all_lines, start, end, number, ref,
                         paragraph_tol, decl_tol, commit_cache, blame_cache)
                 infos_here, notes_here = decl_cache[key]
+                # Rejected candidates are always reported (reviewer-6 M-1):
+                # keeping the NOTE only when *every* candidate failed hid why
+                # a neighbouring sha was refused.
+                notes.extend("%s:%d %s" % (rel, number, n) for n in notes_here)
                 if infos_here:
                     decl = infos_here[0]
                     infos.append({
@@ -364,7 +435,6 @@ def scan(top, rel_path, allowlist, max_gap, stamp_check=True, files=None,
                         "kinds": sorted({h[2] for h in missing}),
                     })
                     continue
-                notes.extend("%s:%d %s" % (rel, number, n) for n in notes_here)
             findings.append({
                 "path": rel, "line": number, "line_sha": digest,
                 "snippet": line.strip()[:160],
@@ -628,14 +698,40 @@ def selftest():
           len(res_a["infos"]) == 1 and res_a["findings"] == [])
 
     def _case_b(tmp):
+        # A **real, valid** commit that is NOT an ancestor of --ref (HEAD): a
+        # sibling branch.  ``"d" * 40`` cannot serve as this tooth -- it is a
+        # nonexistent object name, so it goes red on the fail-closed
+        # "ancestor check failed" GitError path and the selftest stayed 27/27
+        # even when ``is_ancestor`` always returned True (reviewer-6 I-1).
+        # The side commit's real time equals the declared time, so (b) and (d)
+        # pass and only (a)=False can reject it.
+        _commit(tmp, T0, {"base.txt": "x\n"})
+        branch = _git(tmp, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        _git(tmp, "checkout", "-q", "-b", "side")
+        side_sha = _commit(tmp, T1, {"side.txt": "y\n"})
+        _git(tmp, "checkout", "-q", branch)
+        doc = ("## 段\n\n快照 截至 %s @ %s\n\n进行中 236\n"
+               % (side_sha, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_b = _fixture(_case_b)
+    check("⑳ 合法但非祖先的 commit => 仍红（只能由 (a) 拒）",
+          res_b["infos"] == [] and len(res_b["findings"]) == 1
+          and any("不是 --ref" in note for note in res_b["notes"]))
+
+    def _case_b2(tmp):
+        # Kept separately as a fail-closed tooth: a nonexistent object name
+        # makes ``is_ancestor`` raise GateError, which must NOT exempt.  It
+        # never exercises (a)=False, which is exactly why the two cases split.
         _commit(tmp, T0, {"base.txt": "x\n"})
         doc = ("## 段\n\n快照 截至 %s @ %s\n\n进行中 236\n"
                % ("d" * 40, T1))
         _commit(tmp, T1, {"docs/a.md": doc})
 
-    res_b = _fixture(_case_b)
-    check("⑳ 声明 sha 不是 --ref 祖先 => 仍红（不降级）",
-          res_b["infos"] == [] and len(res_b["findings"]) == 1)
+    res_b2 = _fixture(_case_b2)
+    check("⑳b 不存在的对象名 => 仍红（is_ancestor GateError，fail-closed）",
+          res_b2["infos"] == [] and len(res_b2["findings"]) == 1
+          and any("祖先判定失败" in note for note in res_b2["notes"]))
 
     def _case_c(tmp):
         sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
@@ -677,6 +773,63 @@ def selftest():
     check("㉔ 段外裸计数仍红（声明不赦免全文）",
           len(res_f["infos"]) == 1 and len(res_f["findings"]) == 1
           and res_f["findings"][0]["line"] > 5)
+
+    def _case_g(tmp):
+        # 3-space indented ATX heading is a legal CommonMark heading
+        # (reviewer-6 M-5 1): missing it lets section A's declaration exempt
+        # a bare count in section B (false green).
+        sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("## A\n\n快照 截至 %s @ %s\n\n进行中 236\n\n"
+               "   ## B\n\n待审 5\n" % (sha1, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_g = _fixture(_case_g)
+    check("㉕ 3 空格缩进的 ATX 标题也切段（上一节声明不豁免下一节）",
+          len(res_g["infos"]) == 1 and len(res_g["findings"]) == 1
+          and res_g["findings"][0]["line"] == 9)
+
+    def _case_h(tmp):
+        # setext headings (=== / ---) split sections too.
+        sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("A\n===\n\n快照 截至 %s @ %s\n\n进行中 236\n\n"
+               "B\n---\n\n待审 5\n" % (sha1, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_h = _fixture(_case_h)
+    check("㉖ setext 标题（===/---）也切段（上一节声明不豁免下一节）",
+          len(res_h["infos"]) == 1 and len(res_h["findings"]) == 1
+          and res_h["findings"][0]["line"] == 11)
+
+    def _case_i(tmp):
+        # A "# comment" inside a fenced block is not a heading; treating it as
+        # one used to split the section and turn a legitimate declaration into
+        # a false red (reviewer-6 M-5 2).
+        sha1 = _commit(tmp, T0, {"base.txt": "x\n"})
+        doc = ("## A\n\n快照 截至 %s @ %s\n\n```text\n# 注释\n```\n\n"
+               "进行中 236\n" % (sha1, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_i = _fixture(_case_i)
+    check("㉗ 围栏内 `# 注释` 不切段（段内声明仍降级，无假红）",
+          len(res_i["infos"]) == 1 and res_i["findings"] == [])
+
+    def _case_j(tmp):
+        # Two shas on the declaration line, the non-ancestor written first:
+        # the old shas[0] code lost the legitimate second sha (reviewer-6 M-1,
+        # the skeleton reviewer-3 M-1 shape).
+        sha0 = _commit(tmp, T0, {"base.txt": "x\n"})
+        branch = _git(tmp, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip()
+        _git(tmp, "checkout", "-q", "-b", "side")
+        side_sha = _commit(tmp, T1, {"side.txt": "y\n"})
+        _git(tmp, "checkout", "-q", branch)
+        doc = ("## 段\n\n快照 截至 %s（旧）与 %s（新） @ %s\n\n进行中 236\n"
+               % (side_sha, sha0, T1))
+        _commit(tmp, T1, {"docs/a.md": doc})
+
+    res_j = _fixture(_case_j)
+    check("㉘ 同一行两个 sha：先出现的非祖先不吞掉后面合法的祖先声明 => INFO",
+          len(res_j["infos"]) == 1 and res_j["findings"] == []
+          and any("不是 --ref" in note for note in res_j["notes"]))
 
     failed = 0
     for name, ok in checks:
@@ -750,8 +903,19 @@ def main(argv):
         print("stamp-check: 已跳过（--no-stamp-check）——只统计计数，不做戳判定",
               file=sys.stdout)
         return 0
+    # An unresolvable ``--ref`` is an environment/config error, not a missing
+    # stamp: fail rc=2 before scanning (reviewer-6 M-6; same contract as the
+    # skeleton's ``resolve_ref``).  Otherwise every declaration would NOTE
+    # 「祖先判定失败」 and the gate would exit 1 as if the docs were red — the
+    # default ``refs/remotes/walgit/master`` is absent in a clone that never
+    # fetched ``walgit``.
+    try:
+        ref = skeleton.resolve_ref(top, args.ref)
+    except GateError as exc:
+        raise GateError("dynamic-count gate: cannot resolve --ref %r (%s)"
+                        % (args.ref, exc), rc=2)
     result = scan(top, rel_path, allowlist, args.max_gap, stamp_check=True,
-                  ref=args.ref, paragraph_tol=args.paragraph_tol,
+                  ref=ref, paragraph_tol=args.paragraph_tol,
                   decl_tol=args.decl_tol)
     return emit(result, args.path, args.max_gap, args.allowlist)
 
