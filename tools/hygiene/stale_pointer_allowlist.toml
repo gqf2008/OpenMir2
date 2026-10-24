@@ -1,0 +1,32 @@
+# Allow-list for tools/hygiene/stale_pointer_gate.py
+#
+# A line is normally exempt when it quotes the stale wording inside 「…」/『…』
+# or carries a dated correction marker (「…订正…」 or "YYYY-MM-DD 订正").
+# Only historical narrative that *asserts* a stale state in its own voice needs
+# an entry here.
+#
+# Every entry must say WHY the line has to stay as written.  An entry that no
+# longer suppresses a real hit is itself an error (rot detection), so this file
+# cannot silently accumulate dead exemptions.
+#
+# Add an entry with:
+#   python -I tools/hygiene/stale_pointer_gate.py --fingerprint docs/foo.md:123
+# then fill in `reason` and keep the stanza here.
+#
+# Format:
+#   [[allow]]
+#   path = "docs/foo.md"
+#   line_sha256 = "<sha256 of the line with trailing whitespace stripped>"
+#   reason = "why this historical line must keep its stale-looking wording"
+#
+# First-run classification: docs/stale-pointer-gate-20261024.md.
+
+[[allow]]
+path = "docs/docs-state-drift-sweep-20261024.md"
+line_sha256 = "b78e74d35550532a7d1540889229193ae2f3a40372faefe6e26a2e82ae21076d"
+reason = "drift-sweep 报告 §2 表第 10 行：「原说法」列逐字引用 needs-human 的旧表述（在办），行内 hash 是订正证据 commit；该表的用途就是把旧说法与订正并列，改写会破坏审计链。"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "7a72837d97499a1da781cc850a9ca9211b9095632dbff703c2641a357895a5e0"
+reason = "2026-10-22 时点的「在飞/待审」清单快照（§O）：记录当时 wt-gm3 的分支 head 与未提交修改；「未接项」指 RNG 项，不是对该 commit 的合入断言。改写即伪造历史。"
