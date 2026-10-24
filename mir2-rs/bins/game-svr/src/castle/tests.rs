@@ -1503,3 +1503,261 @@ fn change_date_text_pads_date_and_time() {
     );
     assert_eq!(super::change_date_text("not-a-date"), None);
 }
+
+// ---------------------------------------------------------------------------
+// **卡 `openmir2-castle-official-actions`（tier R，构造级）**：动作 switch
+// ---------------------------------------------------------------------------
+
+fn action_world() -> (mir2_world::World, i32, i32) {
+    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    let mut door = mir2_world::Entity::new(0, "沙巴克城门".to_string(), 5, 5);
+    door.race = 110;
+    let door_id = world.add_entity(door);
+    world.open_session("甲");
+    let a_id = world
+        .enter_map("甲", play_entity("甲", 6, 5), 0)
+        .expect("甲 进图");
+    let mut castle = mir2_world::castle::UserCastle::new(
+        "沙巴克",
+        mir2_world::castle::CastleSiegeConfig::default(),
+    );
+    castle.castle_map_id = Some(0);
+    castle.total_gold = 3_000_000;
+    castle.main_door = Some(mir2_world::castle::CastleUnit {
+        entity_id: Some(door_id),
+        x: 5,
+        y: 5,
+        hp: 9_999,
+        max_hp: 9_999,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    world.castles.push(castle);
+    (world, door_id, a_id)
+}
+
+/// **A-O1**：`@openmaindoor`/`@closemaindoor`（`CastleOfficial.cs:199-206`）⇒
+/// `MainDoorControl(false/true)` ⇒ `CastleDoor.Open/Close` 的 `SM_DIGUP`/`SM_DIGDOWN`
+/// 发给 ±12 格内玩家，且 `SetMapXyFlag` 落到该城地图；两次都要求回 `@main`。
+///
+/// 牙：把 `close` 取反 ⇒ 第一条帧 ident 断言红；把 `say_main` 改回 `true` ⇒ 本用例红（F1 的钉）。
+#[test]
+fn castle_official_action_open_close_emits_door_frames() {
+    let (mut world, door, a_id) = action_world();
+    // **F1（review `e7f076f4`）**：展示层非零 —— `RM_DIGUP` 的 `Series=MakeWord(Dir,Light)`、
+    // 尾 `Param1=GetFeature` 必须取展示层，不得写死 0。
+    let mut displays = downlink::DisplayTable::new();
+    let d = downlink::ActorDisplay {
+        dir: 0,
+        light: 9,
+        feature: 0x1234,
+        feature_ex: 0,
+        status: 0,
+        name_color: 255,
+        show_name: Vec::new(),
+    };
+    displays.set(door, d);
+    let out = super::castle_official_action_exec(
+        &mut world,
+        &displays,
+        0,
+        0,
+        "@openmaindoor",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    assert!(
+        !out.say_main,
+        "F1：open/close 不得回 @main（@main 页由脚本 goto 产生，回了就重复）"
+    );
+    assert!(
+        out.sysmsg.is_none(),
+        "open/close 无 SysMsg（脚本 MESSAGEBOX 负责文案）"
+    );
+    let digup = out
+        .frames
+        .iter()
+        .find(|(r, b)| {
+            *r == a_id && u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_DIGUP
+        })
+        .map(|(_, b)| b.clone())
+        .expect("开门必须有 SM_DIGUP");
+    // 尾是 `MessageBodyWL` 的 **EDCode 编码**（`sm_digup` → `edcode::encode(&wl)`）⇒ 先解码再读。
+    let tail = mir2_protocol::edcode::decode(&digup[12..]);
+    assert_eq!(
+        i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]),
+        0x1234,
+        "F1：尾 Param1 = GetFeature（展示层），不得写死 0"
+    );
+    assert_eq!(
+        u16::from_le_bytes([digup[10], digup[11]]),
+        u16::from(7u8) | (u16::from(9u8) << 8),
+        "F1：Series = MakeWord(Dir=7, Light=9)，Light 不得写死 0"
+    );
+    assert!(world.castles[0].main_door.as_ref().expect("门").opened);
+
+    let out = super::castle_official_action_exec(
+        &mut world,
+        &displays,
+        0,
+        0,
+        "@closemaindoor",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    assert!(!out.say_main, "F1：close 也不得回 @main");
+    assert!(out.frames.iter().any(|(r, b)| *r == a_id
+        && u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_DIGDOWN));
+    assert!(!world.castles[0].main_door.as_ref().expect("门").opened);
+}
+
+/// **A-O2**：`@repairdoornow`/`@repairwallnowN`（`:207-226`）——`official_repair_door/wall` 的价格门
+/// 与 60s 严格 `>` 门；成功才扣 `TotalGold`，文案绿/红分明。
+///
+/// 牙：把 `res.message.starts_with("城内资金不足")` 的颜色判定取反 ⇒ 红/绿断言红。
+#[test]
+fn castle_official_action_repair_gold_and_messages() {
+    let (mut world, _door, _) = action_world();
+    let displays = downlink::DisplayTable::new();
+    // 钱不足 ⇒ 红字、不扣款。
+    world.castles[0].total_gold = 10;
+    let out = super::castle_official_action_exec(
+        &mut world,
+        &displays,
+        0,
+        100_000,
+        "@repairdoornow",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    assert_eq!(out.sysmsg, Some("城内资金不足!!!"));
+    assert_eq!(out.sysmsg_color, (0xFF, 0x38), "资金不足用红");
+    assert_eq!(world.castles[0].total_gold, 10);
+
+    // 钱够 + 门已满血 ⇒ 「城门不需要修理!!!」（绿）、不扣款。
+    world.castles[0].total_gold = 3_000_000;
+    let out = super::castle_official_action_exec(
+        &mut world,
+        &displays,
+        0,
+        100_000,
+        "@repairdoornow",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    assert_eq!(out.sysmsg, Some("城门不需要修理!!!"));
+    assert_eq!(out.sysmsg_color, (0xDB, 0xFF), "不需要修也用绿");
+    assert_eq!(world.castles[0].total_gold, 3_000_000);
+}
+
+/// **A-O3**：N5（T-40）`@hirearchernowN`/`@hireguardnowN` ⇒ oracle `Substring` 恒越界被吞
+/// ⇒ **零帧、零状态、零提示**，只登记日志；未命中标签 ⇒ `None`。
+///
+/// 牙：让 `HireUnreachable` 产出 `say_main=true` ⇒ 断言红。
+#[test]
+fn castle_official_action_hire_is_n5_noop() {
+    let (mut world, _door, _) = action_world();
+    let displays = downlink::DisplayTable::new();
+    for label in ["@hirearchernow1", "@hirearchernow12", "@hireguardnow3"] {
+        let out = super::castle_official_action_exec(
+            &mut world,
+            &displays,
+            0,
+            0,
+            label,
+            (2_000_000, 500_000),
+            (0xDB, 0xFF),
+            (0xFF, 0x38),
+        )
+        .expect("N5 支已识别");
+        assert!(out.frames.is_empty(), "{label} 不得产帧");
+        assert!(out.sysmsg.is_none(), "{label} 不得有提示");
+        assert!(!out.say_main, "{label} 不回 @main");
+        assert_eq!(out.log, Some("N5"), "{label} 只登记");
+    }
+    assert!(
+        super::castle_official_action_exec(
+            &mut world,
+            &displays,
+            0,
+            0,
+            "@main",
+            (2_000_000, 500_000),
+            (0xDB, 0xFF),
+            (0xFF, 0x38)
+        )
+        .is_none(),
+        "非动作标签 ⇒ None（oracle switch 无该分支）"
+    );
+}
+
+/// **A-O4（F2 + Minor）**：`@repairwallnow1` 对**受损的左墙**（`hp<max_hp`、`struck_tick` 已过 60s）
+/// ⇒ 成功扣款 + **墙的 `RefStatus` 帧**（`SM_ALIVE`，`Recog` = **墙**的 ActorId）。
+///
+/// oracle：`UserCastle.cs:981/991` 从**墙**的 `RefStatus` 出帧；本实现经
+/// [`super::castle_unit_entity_at`] 在门 + 三面墙里按坐标找绑定实体。
+/// 牙：把该查找换回「只查 `main_door`」⇒ 帧集为空 ⇒ 本用例红（正是 review `4a165328` F2 的漏检点）。
+#[test]
+fn castle_official_action_repair_wall_emits_wall_frames_after_60s() {
+    let (mut world, _door, a_id) = action_world();
+    let displays = downlink::DisplayTable::new();
+    // **Minor①（review `e7f076f4`）**：门与墙必须是**两个不同实体**，否则「帧的 Recog 必须是墙」
+    // 分不出门/墙；墙坐标 (4,5) 与主门 (5,5) 不同 ⇒ 只查 main_door 的变异会找不到实体。
+    let door_actor = world.castles[0]
+        .main_door
+        .as_ref()
+        .and_then(|d| d.entity_id)
+        .expect("门实体");
+    let mut wall = mir2_world::Entity::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    wall.race = 111;
+    let wall_actor = world.add_entity(wall);
+    assert_ne!(wall_actor, door_actor, "Minor①：门与墙必须是不同实体");
+    world.castles[0].left_wall = Some(mir2_world::castle::CastleUnit {
+        entity_id: Some(wall_actor),
+        x: 4,
+        y: 5,
+        hp: 5,
+        max_hp: 10,
+        struck_tick: 0,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    let out = super::castle_official_action_exec(
+        &mut world,
+        &displays,
+        0,
+        100_000,
+        "@repairwallnow1",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    assert_eq!(out.sysmsg, Some("修理成功。"));
+    assert_eq!(out.sysmsg_color, (0xDB, 0xFF), "成功用绿");
+    assert!(
+        out.say_main,
+        "repair 系列回 @main（`:207-226` 的 `GotoLable(@main)`）"
+    );
+    assert_eq!(
+        world.castles[0].total_gold,
+        3_000_000 - 500_000,
+        "成功才扣 RepairWallPrice"
+    );
+    assert!(
+        !out.frames.is_empty(),
+        "F2：墙修复必须有帧（只查 main_door 会整帧丢失）"
+    );
+    assert!(
+        out.frames
+            .iter()
+            .any(|(r, b)| *r == a_id && i32::from_le_bytes([b[0], b[1], b[2], b[3]]) == wall_actor),
+        "帧的 Recog 必须是**墙**的 ActorId（不是门 {door_actor}）"
+    );
+}
