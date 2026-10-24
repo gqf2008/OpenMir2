@@ -3027,10 +3027,17 @@ fn handle_inbound_cmd(
             };
             let hit = inbound::client_sit_down_hit(&i);
             match inbound::sit_down_action(&hit) {
-                inbound::SitDownAction::GoodTick => glog!(
-                    "INF",
-                    "CM_SITDOWN：ChrName={chr_name} ==成功（RM_POWERHIT 附近广播 + GetGoodTick 直发字节，登记）"
-                ),
+                inbound::SitDownAction::GoodTick => {
+                    // `PlayObject.Message.cs:1286-1289`：成功支 `ActionTick = GetTickCount()`;
+                    // `SendSocket(M2Share.GetGoodTick)` —— `GetGoodTick` = `+GD/<tick>`
+                    // （`MessageSettings.cs:6`），`SendSocket(string)` 短包 ⇒ 网关 `#+GD/<tick>!`。
+                    // 与 Walk/Spell 路径共用同一 [`send_good_tick`]（同一 `movewire` 编码）。
+                    send_good_tick(online, gates, chr_name);
+                    glog!(
+                        "INF",
+                        "CM_SITDOWN：ChrName={chr_name} ==成功（+GD 直发已接；RM_POWERHIT 无接收端映射，见报告 §2）"
+                    )
+                }
                 inbound::SitDownAction::MoveFail => {
                     let e = world.entities.get(actor_id);
                     let f = inbound::DefFrame {
@@ -69602,6 +69609,100 @@ fn ",
         assert!(
             !src[e_start..e_end].contains("can_jmp_labels ="),
             "emit_merchant_goto_result 不得再更新 can_jmp_labels（P-2）"
+        );
+    }
+    /// **SITDOWN 成功支**（卡 `openmir2-sitdown-powerhit-broadcast`）：oracle
+    /// `PlayObject.Message.cs:1286-1289` 在成功支 `SendSocket(M2Share.GetGoodTick)`；
+    /// `GetGoodTick` = `+GD/<tick>`（`MessageSettings.cs:6`）⇒ `SendSocket(string)` 短包。
+    ///
+    /// 同时钉住：**RM_POWERHIT（`Operate.cs:359`）没有接收端映射**（`PlayObject.Message.cs`
+    /// 与 `BaseObject.Base.cs` 均无 `RM_POWERHIT` case）⇒ 成功支**不得**凭空发 `SM_POWERHIT(18)`。
+    ///
+    /// 牙：删 `send_good_tick(online, gates, chr_name);` ⇒ 本用例红（0 条 `+GD`）。
+    #[test]
+    fn sitdown_success_emits_good_tick_and_no_powerhit_frame() {
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(1, "hero", 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = GroundCfg {
+            human_max_gold: 10_000_000,
+            floor_item_can_pick_up_time: 120_000,
+            control_drop_item: false,
+            in_safe_disable_drop: false,
+            can_drop_price: 500,
+            can_drop_gold: 1000,
+            drop_item_rage: 3,
+        };
+        let displays = downlink::DisplayTable::new();
+        let mut pwd_sessions = HashMap::new();
+        handle_inbound_cmd(
+            &CommandMessage {
+                recog: 0,
+                ident: mir2_protocol::messages::CM_SITDOWN,
+                param: 10,
+                tag: 10,
+                series: 0,
+            },
+            None,
+            "hero",
+            901,
+            &online,
+            &mut world,
+            &mut sessions,
+            &gates,
+            None,
+            None,
+            &mut pwd_sessions,
+            &cfg,
+            &displays,
+            &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+        );
+        let mut frames = Vec::new();
+        while let Ok(ev) = rx0.try_recv() {
+            frames.push(ev);
+        }
+        let raw: Vec<&Vec<u8>> = frames
+            .iter()
+            .filter_map(|e| match e {
+                SimToGate::SendRaw { payload, .. } => Some(payload),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            raw.len(),
+            1,
+            "SITDOWN 成功支必须恰一条 +GD 短包：{frames:?}"
+        );
+        assert!(
+            raw[0].starts_with(b"+GD/"),
+            "`GetGoodTick` 形状 = `+GD/<tick>`（MessageSettings.cs:6）；实际 {:?}",
+            raw[0]
+        );
+        assert!(
+            !frames
+                .iter()
+                .any(|e| matches!(e, SimToGate::SendFrame { .. })),
+            "RM_POWERHIT 无接收端映射 ⇒ 不得发 SM_POWERHIT(18)；实际 {frames:?}"
         );
     }
 }
