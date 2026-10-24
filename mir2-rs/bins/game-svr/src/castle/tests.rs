@@ -717,3 +717,409 @@ fn query_user_name_color_reads_world_castle_name_colors() {
     let c = super::query_user_name_color(&world, None, None, t, 255, true, true).expect("战区查询");
     assert_eq!(c, 44, "城堡战区名字色 in_free_pk 必须生效");
 }
+
+// ---------------------------------------------------------------------------
+// **T-127**（卡 `openmir2-m3-castle-siege-state` 落帧残余）：`UserCastle.Run` 事件的帧合同
+// ---------------------------------------------------------------------------
+//
+// 四条用例分别钉：`Broadcast`（`SendBroadCastMsgExt`）/ `RefreshShowName`（`GetMapRageHuman` +
+// `RefShowName`，含逐观察者 `GetChrColor` 的 N1 丢弃）/ `Structure(Ref*)`（`RM_DIGDOWN` 经
+// `pending_monster_ref_msgs` → `drain_monster_ref_msgs` 出 `SM_DIGDOWN`）。
+//
+// 牙（改坏必红，报告里逐条给读数）：
+// ① `fan_out_sysmessage_to_all` 改回「按入队序直发」⇒ 四叉堆出队序断言红（3 条同优先级 = `[0,2,1]`）；
+// ② `refresh_show_name_in_area` 去掉 `map_id != palace_map_id` 门 ⇒ 宫外玩家多收 2 帧 ⇒ 计数红；
+// ③ `queue_structure_ref_msg` 把 `RM_DIGDOWN`/`RM_DIGUP` 对调 ⇒ `SM_DIGDOWN` 逐字节断言红。
+
+fn play_entity(name: &str, x: i32, y: i32) -> mir2_world::Entity {
+    let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+    e.race = mir2_world::ACTOR_RACE_PLAY;
+    e
+}
+
+fn online_entry(chr: &str, socket: i32, actor_id: i32) -> crate::OnlineEntry {
+    crate::OnlineEntry {
+        account: chr.to_string(),
+        chr_name: chr.to_string(),
+        session_id: socket,
+        gate_idx: 0,
+        socket,
+        actor_id,
+    }
+}
+
+fn drain_frames(
+    rx: &mut tokio::sync::mpsc::UnboundedReceiver<crate::SimToGate>,
+) -> Vec<(i32, Vec<u8>)> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let crate::SimToGate::SendFrame { socket, body } = ev {
+            out.push((socket, body));
+        }
+    }
+    out
+}
+
+fn ident_of(body: &[u8]) -> u16 {
+    u16::from_le_bytes([body[4], body[5]])
+}
+
+fn recog_of(body: &[u8]) -> i32 {
+    i32::from_le_bytes([body[0], body[1], body[2], body[3]])
+}
+
+/// **T-127 ①**：`SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）⇒ 每个 `!Ghost` 在线玩家
+/// 一条 `SM_SYSMESSAGE(100)`，`Recog` = **收件人自己**、`Param = MakeWord(RedF,RedB)`、
+/// `Tag = 0`、`Series = 1`、尾 = `EncodeString(GBK 原文)`；同优先级按四叉堆 sift 出队
+/// （3 条 ⇒ `[0,2,1]`，不是入队序）。
+///
+/// oracle 锚：`BaseObject.SysMsg` 的非 `Notice` 支（`BaseObject.cs:1656-1675`）、
+/// `PlayObject.Message.cs:1715-1718`、`WorldServer.cs:1726-1737`（`!Ghost` 门、无 caller 排除）。
+#[test]
+fn t127_broadcast_fans_out_to_every_nonghost_player_in_heap_order() {
+    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    world.open_session("甲");
+    let a_id = world
+        .enter_map("甲", play_entity("甲", 5, 5), 0)
+        .expect("甲 进图");
+    world.open_session("乙");
+    let mut ghost = play_entity("乙", 6, 5);
+    ghost.ghost = true;
+    let b_id = world
+        .enter_map("乙", ghost, 0)
+        .expect("乙 进图（已 Ghost）");
+
+    let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<crate::SimToGate>();
+    let mut gates: std::collections::HashMap<
+        u8,
+        tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
+    > = std::collections::HashMap::new();
+    gates.insert(0, tx0);
+    let online: crate::OnlineRegistry =
+        vec![online_entry("甲", 5, a_id), online_entry("乙", 6, b_id)];
+
+    let texts = vec![
+        "[沙巴克 攻城战已经开始]".to_string(),
+        "[沙巴克 攻城战离结束还有10分钟]".to_string(),
+        "[沙巴克 攻城战已经结束]".to_string(),
+    ];
+    let sent = super::fan_out_sysmessage_to_all(&online, &world, &gates, &texts, 0xFC, 0x01);
+    assert_eq!(sent, 3, "Ghost 的乙不产帧 ⇒ 只有甲收 3 条");
+
+    let frames = drain_frames(&mut rx0);
+    assert_eq!(frames.len(), 3);
+    // 同优先级 3 条的 .NET 四叉堆出队序 = `[0,2,1]`（`crates/world/src/msgqueue.rs`）。
+    let want = [&texts[0], &texts[2], &texts[1]];
+    for (i, ((socket, body), text)) in frames.iter().zip(want).enumerate() {
+        assert_eq!(*socket, 5, "第 {i} 帧：只投给甲（乙 Ghost）");
+        assert_eq!(
+            recog_of(body),
+            a_id,
+            "第 {i} 帧：Recog = 收件人自己的 ActorId"
+        );
+        assert_eq!(
+            ident_of(body),
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            "第 {i} 帧 ident"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[6], body[7]]),
+            0x01FC,
+            "第 {i} 帧：Param = MakeWord(RedF,RedB)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[8], body[9]]),
+            0,
+            "第 {i} 帧：Tag = 0"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[10], body[11]]),
+            1,
+            "第 {i} 帧：Series 恒 1"
+        );
+        let raw = mir2_protocol::edcode::decode(&body[12..]);
+        assert_eq!(
+            encoding_rs::GBK.decode(&raw).0,
+            text.as_str(),
+            "第 {i} 帧：尾 = EncodeString(GBK 原文)"
+        );
+    }
+}
+
+/// **T-127 ②**：`StartWallconquestWar` 的 `RefShowName`——目标 = 皇宫图内 `<=100` 格玩家
+/// （`GetMapRageHuman`，`WorldServer.cs:1698-1725`），收件人 = 目标 ±12 格格扫（含自己）⇒
+/// `SM_USERNAME(42)`：`Recog` = **被展示者**、`Param` = `GetChrColor`（这里无行会/无战区 ⇒
+/// `Entity.name_color`）、尾 = `EncodeString(GetShowName())`。
+///
+/// 「宫外玩家不进目标集」是本条的核心断言（牙②）。
+#[test]
+fn t127_ref_show_name_targets_only_palace_area_players() {
+    let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+    world.open_session("甲");
+    let a_id = world
+        .enter_map("甲", play_entity("甲", 5, 5), 0)
+        .expect("甲 进皇宫图");
+    world.open_session("乙");
+    let b_id = world
+        .enter_map("乙", play_entity("乙", 6, 5), 0)
+        .expect("乙 进皇宫图");
+    world.open_session("丙");
+    let c_id = world
+        .enter_map("丙", play_entity("丙", 5, 5), 1)
+        .expect("丙 进另一张图");
+
+    let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<crate::SimToGate>();
+    let (tx1, _rx1) = tokio::sync::mpsc::unbounded_channel::<crate::SimToGate>();
+    let mut gates: std::collections::HashMap<
+        u8,
+        tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
+    > = std::collections::HashMap::new();
+    gates.insert(0, tx0);
+    gates.insert(1, tx1);
+    let online: crate::OnlineRegistry = vec![
+        online_entry("甲", 5, a_id),
+        online_entry("乙", 6, b_id),
+        crate::OnlineEntry {
+            account: "丙".to_string(),
+            chr_name: "丙".to_string(),
+            session_id: 7,
+            gate_idx: 1,
+            socket: 7,
+            actor_id: c_id,
+        },
+    ];
+    let displays = downlink::DisplayTable::new();
+    let sessions: std::collections::HashMap<String, crate::SessionGround> = [
+        ("甲".to_string(), crate::tests::test_session_ground(a_id)),
+        ("乙".to_string(), crate::tests::test_session_ground(b_id)),
+        ("丙".to_string(), crate::tests::test_session_ground(c_id)),
+    ]
+    .into_iter()
+    .collect();
+    let war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
+        std::collections::HashMap::new();
+
+    let sent = super::refresh_show_name_in_area(
+        &online,
+        &world,
+        &displays,
+        &gates,
+        &sessions,
+        &war_states,
+        Some(0), // 皇宫图 = map_id 0
+        5,
+        5,
+        100,
+        12,
+    );
+    assert_eq!(
+        sent, 4,
+        "甲/乙 各收 2 条（目标甲、乙）；丙不在皇宫图 ⇒ 0 条"
+    );
+
+    let frames = drain_frames(&mut rx0);
+    assert_eq!(frames.len(), 4);
+    // 逐收件人：入队序 = 目标序（甲 → 乙），2 条同优先级 ⇒ 出队 `[0,1]`。
+    for (i, target) in [(0usize, a_id), (1, b_id)].into_iter() {
+        let body = &frames[i].1;
+        assert_eq!(frames[i].0, 5, "甲 的 socket");
+        assert_eq!(recog_of(body), target, "甲 的队列：先目标甲、再目标乙");
+        assert_eq!(ident_of(body), mir2_protocol::messages::SM_USERNAME);
+        assert_eq!(
+            u16::from_le_bytes([body[6], body[7]]),
+            255,
+            "无行会/无战区 ⇒ GetChrColor = Entity.name_color（255）"
+        );
+    }
+    assert_eq!(recog_of(&frames[0].1), a_id, "目标甲的名字帧");
+    assert_eq!(recog_of(&frames[1].1), b_id, "目标乙的名字帧");
+    assert_eq!(recog_of(&frames[2].1), a_id, "乙 也收到甲的名字帧");
+    assert_eq!(recog_of(&frames[3].1), b_id, "乙 也收到乙的名字帧");
+    for (_, body) in &frames {
+        let raw = mir2_protocol::edcode::decode(&body[12..]);
+        let text = encoding_rs::GBK.decode(&raw).0.into_owned();
+        assert!(
+            text == "甲" || text == "乙",
+            "尾 = EncodeString(GetShowName())，实得 {text:?}"
+        );
+    }
+}
+
+/// **T-127 ③**：`GetChrColor` 的 N1 分支（`PlayObject.cs:3656-3659` 的 `castle.IsAttackGuild`）——
+/// 观察者有行会 + 双方都在攻城区 + `UnderWar` ⇒ oracle 在收件人的消息处理里抛异常被吞 ⇒
+/// 本帧不投递。同一夹具去掉行会 ⇒ 帧恢复，`Param = in_free_pk`（战区分支先写的那一色）。
+///
+/// 牙④：把 `Err` 分支从 `continue` 改成「照发」⇒ 第一段断言（0 帧）红。
+#[test]
+fn t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area() {
+    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    world.open_session("甲");
+    let a_id = world
+        .enter_map("甲", play_entity("甲", 5, 5), 0)
+        .expect("甲 进图");
+    world.open_session("乙");
+    let b_id = world
+        .enter_map("乙", play_entity("乙", 6, 5), 0)
+        .expect("乙 进图");
+    let mut castle = mir2_world::castle::UserCastle::new(
+        "沙巴克",
+        mir2_world::castle::CastleSiegeConfig::default(),
+    );
+    // `CastlePlaceMap` 命中 ⇒ `InCastleWarArea` 恒真（`UserCastle.cs:674-678` 的皇宫/密道支）。
+    castle.palace_map_id = Some(0);
+    castle.under_war = true;
+    world.castles.push(castle);
+    let in_free_pk = world.castle_name_colors.in_free_pk;
+
+    let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<crate::SimToGate>();
+    let mut gates: std::collections::HashMap<
+        u8,
+        tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
+    > = std::collections::HashMap::new();
+    gates.insert(0, tx0);
+    let online: crate::OnlineRegistry =
+        vec![online_entry("甲", 5, a_id), online_entry("乙", 6, b_id)];
+    let displays = downlink::DisplayTable::new();
+    let mut war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
+        std::collections::HashMap::new();
+    for id in [a_id, b_id] {
+        let mut st = mir2_world::castle::CastleWarState::new(0);
+        st.in_guild_war_area = true;
+        war_states.insert(id, st);
+    }
+    let mut guilded: std::collections::HashMap<String, crate::SessionGround> = [
+        ("甲".to_string(), crate::tests::test_session_ground(a_id)),
+        ("乙".to_string(), crate::tests::test_session_ground(b_id)),
+    ]
+    .into_iter()
+    .collect();
+    for name in ["甲", "乙"] {
+        guilded.get_mut(name).unwrap().guild.guild_name = Some("攻方".to_string());
+    }
+
+    let dropped = super::refresh_show_name_in_area(
+        &online,
+        &world,
+        &displays,
+        &gates,
+        &guilded,
+        &war_states,
+        Some(0),
+        5,
+        5,
+        100,
+        12,
+    );
+    assert_eq!(
+        dropped, 0,
+        "有会观察者在攻城区命中 N1 ⇒ oracle 抛异常被吞 ⇒ 不投递"
+    );
+    assert!(drain_frames(&mut rx0).is_empty());
+
+    // 去掉行会 ⇒ N1 不可达 ⇒ 帧恢复，色 = `InFreePKAreaNameColor`（`PlayObject.cs:3618`）。
+    let bare: std::collections::HashMap<String, crate::SessionGround> = [
+        ("甲".to_string(), crate::tests::test_session_ground(a_id)),
+        ("乙".to_string(), crate::tests::test_session_ground(b_id)),
+    ]
+    .into_iter()
+    .collect();
+    let sent = super::refresh_show_name_in_area(
+        &online,
+        &world,
+        &displays,
+        &gates,
+        &bare,
+        &war_states,
+        Some(0),
+        5,
+        5,
+        100,
+        12,
+    );
+    assert_eq!(sent, 4);
+    for (_, body) in drain_frames(&mut rx0) {
+        assert_eq!(ident_of(&body), mir2_protocol::messages::SM_USERNAME);
+        assert_eq!(
+            u16::from_le_bytes([body[6], body[7]]),
+            u16::from(in_free_pk),
+            "战区分支先写 InFreePKAreaNameColor，无会观察者直接返回该色"
+        );
+    }
+}
+
+/// **T-127 ④**：`MainDoorControl(true)` 的 `CastleDoor.Close()` ⇒ `RM_DIGDOWN`（`CastleDoor.cs:60-76`）
+/// 经 `queue_structure_ref_msg` 重新入队成 `MonsterRefMsg`，由 `drain_monster_ref_msgs` 出
+/// `SM_DIGDOWN(21)`（头 `(ActorId, X, Y, 0)`、无尾），收件人 = 门 ±12 格内的玩家。
+///
+/// 牙③：把 `RM_DIGDOWN`/`RM_DIGUP` 对调 ⇒ ident 断言红。
+#[test]
+fn t127_door_close_structure_event_drains_to_sm_digdown() {
+    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    let mut door = mir2_world::Entity::new(0, "沙巴克城门".to_string(), 5, 5);
+    door.race = 110;
+    let door_id = world.add_entity(door);
+    world.open_session("甲");
+    let a_id = world
+        .enter_map("甲", play_entity("甲", 6, 5), 0)
+        .expect("甲 进图");
+    let mut castle = mir2_world::castle::UserCastle::new(
+        "沙巴克",
+        mir2_world::castle::CastleSiegeConfig::default(),
+    );
+    castle.main_door = Some(mir2_world::castle::CastleUnit {
+        entity_id: Some(door_id),
+        x: 5,
+        y: 5,
+        hp: 9_999,
+        max_hp: 9_999,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    world.castles.push(castle);
+
+    // 坐标对不上任何门/墙 ⇒ 不入队。
+    assert!(!super::queue_structure_ref_msg(
+        &mut world,
+        0,
+        &mir2_world::castle::StructureEvent::RefDigDown {
+            dir: 0,
+            x: 99,
+            y: 99
+        }
+    ));
+    assert!(world.pending_monster_ref_msgs.is_empty());
+
+    assert!(super::queue_structure_ref_msg(
+        &mut world,
+        0,
+        &mir2_world::castle::StructureEvent::RefDigDown { dir: 0, x: 5, y: 5 }
+    ));
+    assert_eq!(world.pending_monster_ref_msgs.len(), 1);
+    let queued = &world.pending_monster_ref_msgs[0];
+    assert_eq!(queued.actor_id, door_id);
+    assert_eq!(queued.ident, mir2_world::monai::RM_DIGDOWN);
+    assert_eq!(queued.recipients, vec![a_id], "收件人 = 门 ±12 格内玩家");
+
+    let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<crate::SimToGate>();
+    let mut gates: std::collections::HashMap<
+        u8,
+        tokio::sync::mpsc::UnboundedSender<crate::SimToGate>,
+    > = std::collections::HashMap::new();
+    gates.insert(0, tx0);
+    let online: crate::OnlineRegistry = vec![online_entry("甲", 5, a_id)];
+    let displays = downlink::DisplayTable::new();
+    crate::drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+
+    let frames = drain_frames(&mut rx0);
+    assert_eq!(frames.len(), 1, "SM_DIGDOWN 单帧");
+    let body = &frames[0].1;
+    assert_eq!(recog_of(body), door_id, "Recog = 门 ActorId");
+    assert_eq!(ident_of(body), mir2_protocol::messages::SM_DIGDOWN);
+    assert_eq!(u16::from_le_bytes([body[6], body[7]]), 5, "Param = X");
+    assert_eq!(u16::from_le_bytes([body[8], body[9]]), 5, "Tag = Y");
+    assert_eq!(
+        u16::from_le_bytes([body[10], body[11]]),
+        0,
+        "Series = 0（RM_DIGDOWN 支）"
+    );
+    assert_eq!(body.len(), 12, "RM_DIGDOWN 无尾（SendSocket(ClientMsg)）");
+}
