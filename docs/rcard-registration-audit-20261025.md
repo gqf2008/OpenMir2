@@ -67,9 +67,9 @@
 ## 4. goal_gate 分桶对账（`--skip-tests --skip-script`，快照 `1c605ca4a`）
 
 ```
-R 卡 213 张：closed 12 / window_required 145（另未合并 3）/ whitelist 48 / adjudicated 3 /
+R 卡 213 张（快照 @ 1c605ca4a）：closed 12 / window_required 145（另未合并 3）/ whitelist 48 / adjudicated 3 /
 merged_not_closed 1 / 其它需人工 0 / 未开工或未合并 1（不计缺口）
-登记型 PASS ≠ 已有真机证据：merged 未 closed 但已凭登记 PASS = 194 张（卫生清单）
+登记型 PASS ≠ 已有真机证据：merged 未 closed 但已凭登记 PASS = 194 张（卫生清单，快照 @ 1c605ca4a）
 ```
 
 - **6/6 落 `window_required`，0 张对不上**（逐卡判定见 §2；机器判定片段见 §6）。
