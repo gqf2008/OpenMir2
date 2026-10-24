@@ -321,7 +321,7 @@ python -I tools/hygiene/dynamic_count_stamp_gate.py --fingerprint docs/foo.md:12
 selftest ④ 用的是**空 allow-list**，正好盖住了这条路径。
 
 修法：复用骨架的 `allowlist_in_scope()`（本轮把它从 `stale_pointer_gate.scan()` 的内联块提为模块级函数，
-骨架行为不变、30/30 selftest 仍过（当时；骨架现为 31/31）），rot 只取「扫描根 == 条目 path」或「条目 path 在扫描根下」的条目。
+骨架行为不变、30/30 selftest 仍过（当时；骨架现为 **34/34**，旧写 31/31，2026-10-24「另未合并」卡 +3 后实跑）），rot 只取「扫描根 == 条目 path」或「条目 path 在扫描根下」的条目。
 
 实测对照（同一 checkout、同一 allow-list）：
 

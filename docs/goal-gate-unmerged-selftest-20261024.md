@@ -20,7 +20,7 @@
 
 同时把「识别 N 张 tier=R」的期望从 17 改为 **19**（新增两张卡都计入）。
 
-**断言数**：`python -I -B tools/goal/goal_gate.py selftest` ⇒ **70 条断言，70 通过**（改前 68；净增 2，符合「≥ 68 + 新增条数」）。
+**断言数**：`python -I -B tools/goal/goal_gate.py selftest` ⇒ **70 条断言，70 通过**（本卡时点；改前 68；净增 2，符合「≥ 68 + 新增条数」。2026-10-24 现行为 **71 条断言，71 通过**，+1 来自 `openmir2-goal-gate-wording-fix`，本次清扫实跑）。
 
 > 注意 CLI 口径：本脚本自测是**位置参数** `selftest`（不是 `--selftest`）；`--json` 等是 `run` 的选项。
 
@@ -71,7 +71,7 @@ comment 证据 0 / 三者皆无 0 / merged 未 closed 且无登记(需人工) 5 
 
 | 门 | 结果 |
 |---|---|
-| `python -I -B tools/goal/goal_gate.py selftest` | **70/70 绿** |
+| `python -I -B tools/goal/goal_gate.py selftest` | **70/70 绿**（当时；2026-10-24 现行 71/71） |
 | `python -I -B tools/whitelist/t_reservation_gate.py check` | **GREEN**（rows=250 / whitelist=250 / max=T-264 / fence_ok=True） |
 | `python -I -B tools/hygiene/conflict_marker_gate.py` | **OK**（0 markers / 7431 files） |
 | `git merge-tree --write-tree walgit/master HEAD` | **rc=0**（无冲突） |
