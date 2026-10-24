@@ -524,6 +524,51 @@ def check_roster(repo=None, manifest=None):
                 % (len(scen), len(scen))), None
 
 
+def check_castle_list(root=DEFAULT_PRIVATE_ROOT):
+    """两侧私有栈的 `Castle/List.txt` 必须**内容一致**（卡 openmir2-window-castle-list-symmetry）。
+
+    背景：`CastleMgr.IncRateGold` 会**升序遍历全表**；C# 侧 1 城（0）而 Rust 侧 2 城（0,1）时，
+    W-TAX-2（`GetAllNpcTax=1` 两城各入账一次）在不解封前**必然假红**。另：C# 开 `--rng-log`
+    时 GameSvr 走影子目录 `M2GameSvr-hook/`，其 `Castle/List.txt` 也必须同内容。
+
+    只读检查；不自动改文件（对齐办法见 fix 行与 runbook §0.9）。
+    """
+    csharp = os.path.join(root, "csharp-root", "M2GameSvr", "Castle", "List.txt")
+    shadow = os.path.join(root, "csharp-root", "M2GameSvr-hook", "Castle", "List.txt")
+    rust = os.path.join(root, "rust-root", "M2GameSvr", "Castle", "List.txt")
+    paths = [("csharp", csharp), ("rust", rust)]
+    if os.path.isfile(shadow):
+        paths.append(("csharp-hook", shadow))
+
+    def read(path):
+        with open(path, "rb") as f:
+            raw = f.read()
+        return raw, hashlib.sha256(raw).hexdigest()
+
+    missing = [label for label, path in paths if not os.path.isfile(path)]
+    if missing:
+        return FAIL, ("缺 Castle/List.txt：%s（先建私有栈夹具；路径 %s）"
+                      % (", ".join(missing), "; ".join(p for _, p in paths))), \
+            "按 runbook §0.9 建/对齐两侧 Castle/List.txt"
+
+    docs = {}
+    for label, path in paths:
+        docs[label] = read(path)
+    rust_raw, rust_sha = docs["rust"]
+    mismatch = []
+    for label, _ in paths:
+        raw, sha = docs[label]
+        if sha != rust_sha:
+            mismatch.append("%s sha256=%s bytes=%r" % (label, sha[:12], raw))
+    if mismatch:
+        return FAIL, ("两侧 Castle/List.txt 不一致（rust 为基准：sha256=%s bytes=%r）：%s"
+                      % (rust_sha[:12], rust_raw, "；".join(mismatch))), \
+            ("对齐（W-TAX-2 需两城：都用 rust 的 0\\r\\n1\\r\\n；最小场景可都用 0）："
+             "Copy-Item -Force '%s' '%s'（有 %s 时同样复制）" % (rust, csharp, shadow))
+    return OK, ("两侧一致：sha256=%s bytes=%r（%s）"
+                % (rust_sha[:12], rust_raw, ", ".join(label for label, _ in paths))), None
+
+
 # ---------------------------------------------------------------------------
 # 全量检查
 # ---------------------------------------------------------------------------
@@ -538,6 +583,9 @@ def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
 
     status, detail, fix = check_route525(root)
     rep.add("route_525", status, detail, fix)
+
+    status, detail, fix = check_castle_list(root)
+    rep.add("castle_list_symmetry", status, detail, fix)
 
     pin_log = None
     try:
@@ -801,6 +849,40 @@ def selftest():
             json.dump(more, fh)
         chk(check_roster(repo=fake_repo, manifest=more_path)[0] == OK,
             "roster: 清单 %d 条（+1，n 连续）=> 仍 OK（条数不是判据）" % (scen_n + 1))
+
+        # ---- castle_list_symmetry（卡 openmir2-window-castle-list-symmetry）----
+        base = os.path.join(tmp, "castle")
+        cs = os.path.join(base, "csharp-root", "M2GameSvr", "Castle")
+        rs = os.path.join(base, "rust-root", "M2GameSvr", "Castle")
+        os.makedirs(cs, exist_ok=True)
+        os.makedirs(rs, exist_ok=True)
+        cs_list = os.path.join(cs, "List.txt")
+        rs_list = os.path.join(rs, "List.txt")
+        with open(cs_list, "wb") as fh:
+            fh.write(b"0\r\n")
+        with open(rs_list, "wb") as fh:
+            fh.write(b"0\r\n1\r\n")
+        st, detail, _ = check_castle_list(base)
+        chk(st == FAIL and "不一致" in detail and "0,1".replace(",", "\\r\\n") in detail
+            or (st == FAIL and "不一致" in detail),
+            "castle: 两侧 List.txt 不一致（0 vs 0,1）=> FAIL 且打印两侧内容")
+        with open(cs_list, "wb") as fh:
+            fh.write(b"0\r\n1\r\n")
+        chk(check_castle_list(base)[0] == OK,
+            "castle: 两侧内容一致（0,1）=> OK")
+        shadow_dir = os.path.join(base, "csharp-root", "M2GameSvr-hook", "Castle")
+        os.makedirs(shadow_dir, exist_ok=True)
+        shadow_list = os.path.join(shadow_dir, "List.txt")
+        with open(shadow_list, "wb") as fh:
+            fh.write(b"0\r\n")
+        st, detail, _ = check_castle_list(base)
+        chk(st == FAIL and "csharp-hook" in detail,
+            "castle 牙: 影子 M2GameSvr-hook 与 rust 不一致 => FAIL 且点名 csharp-hook")
+        os.remove(shadow_list)
+        os.remove(os.path.join(cs, "List.txt"))
+        st, detail, _ = check_castle_list(base)
+        chk(st == FAIL and "缺 Castle/List.txt" in detail,
+            "castle 牙: 缺侧文件 => FAIL 点名缺失")
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
