@@ -99,7 +99,7 @@ python -I -c "import json,os;d=json.load(open(os.path.join(os.environ['TEMP'],'g
 | 3 | 口径 | Q2–Q5：无场景 62 张分档 / combat 夹具 / RNG flaky / 登记型豁免 | `docs/rcard-evidence-plan-20261025.md` §6 | **owner**：needs-human §3（推荐 D/A/丙/A） |
 | 4 | 基础设施 | walgit 主源故障（R2 WAL 段缺失，fetch/push 500） | `git ls-remote walgit` rc=128；本地 master 领先最后已知远端 **60** 个提交 | **owner**：needs-human §4（等恢复 / GitHub 临时主源） |
 | 5 | 规则表 | `rules.json` PENDING 50（global 4 + rules 45 + db 1）；`T-161..T-222` 复核 58 行 | needs-human `docs/needs-human-20261024.md` §2/§4（现行口径） | **owner** |
-| 6 | 待开工 R | `openmir2-clearmapmon-impl`（CLEARMAPMON world 清怪 + host 队列桥） | 板【待认领】；今日审计 `docs/clearmapmon-hook-audit-20261025.md` 证明部署 2 处使用 ⇒ 需实现且升 R | 排队（可派 R 车道） |
+| 6 | 已合并待窗口 R | `openmir2-clearmapmon-impl`（CLEARMAPMON world 清怪 + MONGENEX regen，共用动作序队列） | 已合并 `f08496192`（tier R、window_required；快照 @ f08496192 @ 2026-10-25 04:10）；审计 `docs/clearmapmon-hook-audit-20261025.md` 证明部署 2 处使用 | 真机 T118/Q001 复拍 |
 | 7 | 待开工 R | T-142 ⑩① handler 级 `MsgQueue`（`out` 6 直连点 + says + script_frames 统一出队） | `docs/playdice-frame-queue-full-20261025.md` §3.2/§4；部署当前不可观测 | 排队（建议 R 卡） |
 | 8 | 受阻 | `openmir2-npc-click-rng-stream-flaky`（跨栈 RNG 流位 flaky 口径） | 板【受阻】；等 owner 窗口口径（needs-human §3 Q4） | **owner** |
 | 9 | 受阻 | `openmir2-window-gate-two-runs`（窗口门两次跑） | 板【受阻】；未合并（window_required 未合并桶） | 合并/裁决 |
