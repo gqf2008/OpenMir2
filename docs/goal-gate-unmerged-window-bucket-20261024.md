@@ -13,7 +13,7 @@
 | `classify_r_evidence` | 新分类 **仍返回 PASS**，文案「有 `window_required` 登记但尚未合并（窗口在合并前跑不了，单列计数；登记本身有效，仍算 PASS）」 |
 | `judge_r_cards` 的 `detail` | `window_required N（其中未合并 M）`；`state` / FAIL / need 语义与条数不变 |
 
-> 〔2026-10-24 订正：`goal_gate` 的 detail 措辞已由「其中」改为「另」；本处为当时原文〕
+> 〔2026-10-24 订正：`goal_gate` 的 detail 措辞已由「其中」改为「另」；本文件内该串引用均为当时原文〕
 
 ## 2. 前后对照（真实数据，同一快照）
 
