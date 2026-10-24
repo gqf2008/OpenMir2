@@ -89,31 +89,38 @@ PASS ⑱ 枚举只用 git 跟踪集（未跟踪的裸计数不扫；改 os.walk 
 selftest: 21/21 passed
 ```
 
-## 5. 五颗牙（串行；还原一律 `git checkout --`，索引即还原源）
+## 5. 六颗牙（串行；还原一律 `git checkout --`，索引即还原源）
+
+在打补丁后的 head 上实跑，基线 `--selftest` = **21/21**：
 
 ```text
 # (a) 判据恒绿：missing = [] ⇒ ②③④⑦⑨⑩⑪b 红
-selftest: 13/20 passed      # rc=1
+selftest: 14/21 passed      # rc=1
 
 # (b) --max-gap 改成无限：DEFAULT_MAX_GAP = 10 ** 9 ⇒ ③ 红
 FAIL ③ 戳在 --max-gap 之外 => 红
-selftest: 19/20 passed      # rc=1
+selftest: 20/21 passed      # rc=1
 
 # (c) 删掉「缺戳即红」分支（if not missing → if True）⇒ ②③④⑦⑨⑩⑪b 红
-selftest: 13/20 passed      # rc=1
+selftest: 14/21 passed      # rc=1
 
 # (d) 删掉 rot 检测（rotten = []）—— reviewer-3 自造的同一颗牙 ⇒ ⑧ 红
 FAIL ⑧ allow-list 条目压不到命中 => rot（rc=1 路径）
-selftest: 19/20 passed      # rc=1
+selftest: 20/21 passed      # rc=1
 
 # (e) 去掉 rot 的子树作用域（allowlist_in_scope(...) → allowlist）⇒ ⑨⑩ 红
 FAIL ⑨ 非空 allow-list + 收窄 --path（不覆盖任何条目）=> 不报 rot、rc=0
 FAIL ⑩ 收窄覆盖某条目 => 该条目已用、子树外条目不判 rot
-selftest: 18/20 passed      # rc=1
+selftest: 19/21 passed      # rc=1
+
+# (f) 枚举改 os.walk（skeleton.markdown_files → 目录遍历）—— reviewer-3 M1 的原始变异 ⇒ ⑱ 红
+FAIL ⑱ 枚举只用 git 跟踪集（未跟踪的裸计数不扫；改 os.walk 即红）
+selftest: 20/21 passed      # rc=1
 ```
 
-**五颗牙串行**执行；还原一律 `git checkout -- tools/hygiene/dynamic_count_stamp_gate.py`
-（改前先 `git add`，索引即还原源），每颗还原后立即复跑 20/20。还原后全量扫 docs 也 rc=0。
+**六颗牙串行**执行；还原一律 `git checkout -- tools/hygiene/dynamic_count_stamp_gate.py`
+（改前先 `git add`，索引即还原源），每颗还原后立即复跑 21/21。还原后全量扫 docs 也 rc=0。
+(f) 是 M1 的原始变异：补牙前它 **20/20 全绿**（无牙），补 ⑱ 后才红。
 
 ## 6. 首次接入分类（冒烟，本轮不清零）
 
