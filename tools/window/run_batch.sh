@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
-# run_batch.sh — 窗口 run-3 一键续跑（17 场景，alt×16 + window-magic×1）· 卡 openmir2-window-run2-prep
+# run_batch.sh — 窗口 run-3 一键续跑（场景数**以清单为准**，不硬编码；alt/window-magic 混合）· 卡 openmir2-window-run2-prep
 #
 # 一条命令完成：release 重建 + head/sha256 对齐 → 私栈/两坑/pin 前置自检
 #                → 按清单逐场景跑 card_window.py → 每个场景落 report/card-window/README
@@ -13,11 +13,11 @@
 #   card_window 会把旧产物整体归档到 `<out>/_stale-<ts>-<pid>/`，不会拿旧 PASS 冒充本次。
 #
 # 用法（在仓库/worktree 根目录执行；脚本自身会 cd 到检出根）：
-#   bash tools/window/run_batch.sh                    # 全流程（重建 + 自检 + 17 场景）
+#   bash tools/window/run_batch.sh                    # 全流程（重建 + 自检 + 清单内全部可跑场景）
 #   bash tools/window/run_batch.sh --dry-run          # 只打印计划 + 跑只读前置自检，不起栈
-#   bash tools/window/run_batch.sh --list             # 打印 17 场景清单
+#   bash tools/window/run_batch.sh --list             # 打印场景清单（含 blocked 标注与计数）
 #   bash tools/window/run_batch.sh --only login_only,spell_cast
-#   bash tools/window/run_batch.sh --from 9           # 从第 9 个场景接着跑（含 9）
+#   bash tools/window/run_batch.sh --from 9           # 从第 9 个场景接着跑（含 9；上界 = 场景数）
 #   bash tools/window/run_batch.sh --force            # 忽略续跑判据，全部重跑
 #   bash tools/window/run_batch.sh --no-rebuild       # 跳过 cargo build（不推荐）
 #   bash tools/window/run_batch.sh --no-preflight     # 跳过前置自检（只在调试时用）
@@ -36,7 +36,7 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 REPO=$(cd "$HERE/../.." && pwd)
-MANIFEST="$HERE/run3-scenarios.json"
+MANIFEST=${WINDOW_MANIFEST:-"$HERE/run3-scenarios.json"}  # 自测可用 WINDOW_MANIFEST 指向临时清单
 CARD_WINDOW="tools/conformance/card_window.py"
 PREFLIGHT_PRIVATE="tools/window/preflight_private_stack.py"
 PREFLIGHT_PUBLIC="tools/conformance/preflight.py"
@@ -90,7 +90,9 @@ LIST_ONLY=${LIST_ONLY:-0}
 
 [ -n "$ONLY" ] && [ -n "$FROM" ] && die "--only 与 --from 不能同时给"
 if [ -n "$FROM" ]; then
-    case "$FROM" in ''|*[!0-9]*) die "--from 必须是 1..17 的整数（实际 $FROM）" ;; esac
+    # 上界在解析清单（得 N）后再校验；这里只查「正整数」形状。
+    case "$FROM" in ''|*[!0-9]*) die "--from 必须是正整数（实际 $FROM）" ;; esac
+    [ "$FROM" -ge 1 ] || die "--from 必须 ≥1（实际 $FROM）"
 fi
 case "$TIMEOUT_SEC" in ''|*[!0-9]*) die "--timeout-sec 必须是整数" ;; esac
 
@@ -101,19 +103,88 @@ command -v "$PY" >/dev/null 2>&1 || die "找不到 python（--python 指定）"
 command -v powershell >/dev/null 2>&1 || die "找不到 powershell"
 
 # ---- 清单（唯一事实源；batch 与 preflight 共用 tools/window/run3-scenarios.json）----
+# **场景数不硬编码**：期望值 = manifest 的 `scenarios` 条数 N，并校验 `n` 从 1 连续到 N
+#（断号/重复/非正/缺字段 ⇒ rc=2 fail-closed）。`blocked` 场景只在 --list 里标注、不进批次。
+# 行格式（US/\x1f 分隔，空字段保留）：n  name  profile  extra  blocked(0/1)  reason
+_rows_file=$(mktemp) || die "建不了临时文件"
+if ! "$PY" -I -B - "$MANIFEST" >"$_rows_file" <<'PY'
+import json, sys
+
+path = sys.argv[1]
+try:
+    with open(path, encoding="utf-8-sig") as fh:
+        doc = json.load(fh)
+except Exception as ex:  # noqa: BLE001
+    print("run_batch: 读不了清单 %s: %s" % (path, ex), file=sys.stderr)
+    raise SystemExit(2)
+sc = doc.get("scenarios")
+if not isinstance(sc, list) or not sc:
+    print("run_batch: 清单 %s 的 scenarios 必须是非空数组" % path, file=sys.stderr)
+    raise SystemExit(2)
+
+
+def clean(t):
+    return (str(t).replace("\t", " ").replace("\n", " ").replace("\r", " ")
+            .replace("\x1f", " "))
+
+
+ns = []
+rows = []
+problems = []
+for s in sc:
+    if not isinstance(s, dict):
+        problems.append("scenarios 元素必须是对象：%r" % (s,))
+        continue
+    n = s.get("n")
+    name = s.get("name")
+    prof = s.get("profile")
+    if not isinstance(n, int) or isinstance(n, bool) or n <= 0:
+        problems.append("scenario %r 的 n 必须是正整数（实际 %r）" % (name, n))
+        continue
+    if not isinstance(name, str) or not name:
+        problems.append("scenario n=%s 缺 name" % n)
+        continue
+    if not isinstance(prof, str) or not prof:
+        problems.append("scenario %s 缺 profile" % name)
+        continue
+    ns.append(n)
+    extra = " ".join(str(x) for x in (s.get("extra") or []))
+    b = s.get("blocked")
+    if b is None or b is False:
+        blocked, reason = "0", "-"
+    elif b is True:
+        blocked, reason = "1", "blocked（未给原因）"
+    elif isinstance(b, str) and b.strip():
+        blocked, reason = "1", b.strip()
+    else:
+        problems.append("scenario %s 的 blocked 必须是 bool/理由字符串" % name)
+        continue
+    rows.append("%d\x1f%s\x1f%s\x1f%s\x1f%s\x1f%s"
+                % (n, clean(name), clean(prof), clean(extra), blocked, clean(reason)))
+
+if sorted(ns) != list(range(1, len(ns) + 1)):
+    problems.append("n 必须从 1 连续到 %d（实际 %s）" % (len(ns), ns))
+if problems:
+    for p in problems:
+        print("run_batch: 清单校验失败：%s" % p, file=sys.stderr)
+    raise SystemExit(2)
+for r in sorted(rows, key=lambda t: int(t.split("\x1f", 1)[0])):
+    print(r)
+PY
+then
+    rm -f "$_rows_file"
+    die "清单校验失败（见上面 run_batch: 清单校验失败 行；fail-closed）"
+fi
 ROWS=()
 while IFS= read -r row; do
     [ -n "$row" ] && ROWS+=("$row")
-done < <("$PY" -I -B - "$MANIFEST" <<'PY'
-import json, sys
-with open(sys.argv[1], encoding="utf-8-sig") as fh:
-    doc = json.load(fh)
-for s in doc.get("scenarios") or []:
-    extra = " ".join(str(x) for x in (s.get("extra") or []))
-    print("%d\t%s\t%s\t%s" % (int(s["n"]), s["name"], s["profile"], extra))
-PY
-)
-[ "${#ROWS[@]}" -eq 17 ] || die "清单解析出 ${#ROWS[@]} 行（应为 17）"
+done <"$_rows_file"
+rm -f "$_rows_file"
+N=${#ROWS[@]}
+[ "$N" -gt 0 ] || die "清单没有场景（scenarios 为空）"
+if [ -n "$FROM" ] && [ "$FROM" -gt "$N" ]; then
+    die "--from 必须是 1..$N 的整数（实际 $FROM）"
+fi
 # 已封存场景不得入列：pickup_item 结构性不可判（T-19/T-25），card_window 见 blocked 即 rc=2。
 for _row in "${ROWS[@]}"; do
     case "$_row" in
@@ -131,13 +202,15 @@ if [ -n "$ONLY" ]; then
 fi
 
 selected=()
+BLOCKED_N=0
 declare -A SEEN_ONLY=()
 for row in "${ROWS[@]}"; do
-    IFS=$'\t' read -r n name prof extra <<<"$row"
+    IFS=$'\x1f' read -r n name prof extra blocked reason <<<"$row"
     take=1
+    requested=0
     if [ "${#ONLY_MAP[@]}" -gt 0 ]; then
         if [ -n "${ONLY_MAP[$n]:-}" ] || [ -n "${ONLY_MAP[$name]:-}" ]; then
-            take=1
+            requested=1
             SEEN_ONLY["$n"]=1
             SEEN_ONLY["$name"]=1
         else
@@ -146,6 +219,11 @@ for row in "${ROWS[@]}"; do
     fi
     if [ -n "$FROM" ]; then
         [ "$n" -ge "$FROM" ] || take=0
+    fi
+    if [ "$blocked" = "1" ]; then
+        BLOCKED_N=$((BLOCKED_N + 1))
+        [ "$requested" -eq 1 ] && die "场景 $name（n=$n）为 blocked，不进批次：$reason"
+        take=0
     fi
     [ "$take" -eq 1 ] && selected+=("$row")
 done
@@ -158,16 +236,21 @@ if [ "${#ONLY_MAP[@]}" -gt 0 ]; then
         [ -n "${SEEN_ONLY[$tok]:-}" ] || die "--only 里的 $tok 不存在"
     done
 fi
-[ "${#selected[@]}" -gt 0 ] || die "没有选中任何场景（--from $FROM？）"
-
 if [ "$LIST_ONLY" -eq 1 ]; then
-    printf '%-3s %-20s %-13s %s\n' '#' 'scenario' 'profile' 'extra'
+    printf '%-3s %-20s %-13s %-7s %s\n' '#' 'scenario' 'profile' 'blocked' 'extra'
     for row in "${ROWS[@]}"; do
-        IFS=$'\t' read -r n name prof extra <<<"$row"
-        printf '%-3s %-20s %-13s %s\n' "$n" "$name" "$prof" "${extra:-}"
+        IFS=$'\x1f' read -r n name prof extra blocked reason <<<"$row"
+        if [ "$blocked" = "1" ]; then
+            printf '%-3s %-20s %-13s %-7s %s | blocked: %s\n' \
+                "$n" "$name" "$prof" 'YES' "${extra:-}" "$reason"
+        else
+            printf '%-3s %-20s %-13s %-7s %s\n' "$n" "$name" "$prof" '-' "${extra:-}"
+        fi
     done
+    echo "场景数 $N（blocked $BLOCKED_N ⇒ 入批 ${#selected[@]}）"
     exit 0
 fi
+[ "${#selected[@]}" -gt 0 ] || die "没有选中任何场景（--from $FROM / 全部 blocked？）"
 
 # ---- 日志/证据目录 ----
 if [ "$DRY_RUN" -eq 1 ]; then
@@ -192,6 +275,7 @@ log() {
 now_iso() { date +%Y-%m-%dT%H:%M:%S%z; }
 
 HEAD=$(git rev-parse HEAD 2>/dev/null) || die "git rev-parse HEAD 失败"
+log "清单：场景数 $N，blocked $BLOCKED_N ⇒ 入批 ${#selected[@]}（清单=$MANIFEST）"
 log "start card=$CARD run_dir=$RUN_DIR head=${HEAD:0:12} selected=${#selected[@]} dry_run=$DRY_RUN timeout=${TIMEOUT_SEC}s"
 
 # ---- timeout 可用性（GNU coreutils；Git bash 自带）----
@@ -222,7 +306,7 @@ fi
 run_preflight() {
     local dir="$LOG_DIR/preflight" rc=0
     mkdir -p "$dir"
-    local priv_args=(--json "$dir/preflight-private.json")
+    local priv_args=(--json "$dir/preflight-private.json" --manifest "$MANIFEST")
     [ "$SKIP_PIN_SMOKE" -eq 1 ] && priv_args+=(--skip-pin-smoke)
     log "== preflight private（$PREFLIGHT_PRIVATE）"
     "$PY" -I -B "$PREFLIGHT_PRIVATE" "${priv_args[@]}" >"$dir/preflight-private.log" 2>&1
@@ -410,7 +494,7 @@ PY
 
 bad=0
 for row in "${selected[@]}"; do
-    IFS=$'\t' read -r n name prof extra <<<"$row"
+    IFS=$'\x1f' read -r n name prof extra blocked reason <<<"$row"
     if ! run_one "$n" "$name" "$prof" "$extra"; then
         bad=1
     fi

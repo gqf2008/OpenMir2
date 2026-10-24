@@ -31,7 +31,7 @@
   ⑥ start_rust   `E:/tmp/conformance/start-rust.ps1` 的 `-ServerExe` 默认值必须指向
                  **本检出**的 release 二进制（run-2 遗留值指向已删除的
                  `E:/tmp/wt-worker-73/...`；不修则 card_window 的 pid/exe 对账必红）。
-  ⑦ roster       run3 的 17 场景清单（`tools/window/run3-scenarios.json`，不含已封存 pickup_item）与场景文件/
+  ⑦ roster       run3 的场景清单（`tools/window/run3-scenarios.json`，**条数按清单实况**，不含已封存 pickup_item）与场景文件/
                  profile 名/rules.json 一致性。
 
 用法：
@@ -382,7 +382,7 @@ def check_pin_static(alt, wm, pin_log):
         problems.append("window-magic 缺 magic 段（spell_cast 加载期 rc=2）")
     alt_rs_env = ((alt.get("sides") or {}).get("rust") or {}).get("env") or {}
     if PIN_KEY in alt_rs_env:
-        problems.append("alt.rust.env 不该有 %s（alt 是 17 场景基线，不能被窗口 pin 污染）"
+        problems.append("alt.rust.env 不该有 %s（alt 是窗口基线 profile，不能被窗口 pin 污染）"
                         % PIN_KEY)
     if problems:
         return FAIL, "；".join(problems), \
@@ -496,8 +496,10 @@ def check_roster(repo=None, manifest=None):
         return FAIL, "读场景清单失败：%s" % ex, "修复 JSON"
     scen = doc.get("scenarios") or []
     problems = []
-    if len(scen) != 17:
-        problems.append("场景数 %d（应为 17）" % len(scen))
+    # **不硬编码场景数**：期望值 = 清单自身条数；只校验 `n` 从 1 连续到 N（断号/重复才 fail）。
+    # 与 `tools/window/run_batch.sh` 同一口径（卡 `openmir2-runbatch-scenario-count`）。
+    if not scen:
+        problems.append("场景清单为空")
     names, numbers = [], []
     for s in scen:
         names.append(s.get("name"))
@@ -518,14 +520,15 @@ def check_roster(repo=None, manifest=None):
         problems.append("缺 rules.json")
     if problems:
         return FAIL, "；".join(problems), "修 tools/window/run3-scenarios.json / 补场景文件"
-    return OK, "17 场景（alt×16 + window-magic×1：spell_cast），不含 pickup_item，rules.json 在位", None
+    return OK, ("%d 场景（清单实况，n=1..%d 连续），不含 pickup_item，rules.json 在位"
+                % (len(scen), len(scen))), None
 
 
 # ---------------------------------------------------------------------------
 # 全量检查
 # ---------------------------------------------------------------------------
 def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
-            skip_pin_smoke=False, skip_binary=False, report=None):
+            skip_pin_smoke=False, skip_binary=False, report=None, manifest=None):
     rep = report or Report()
     status, detail, fix = check_inventory(root)
     rep.add("inventory", status, detail, fix)
@@ -569,7 +572,7 @@ def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
         repo, "mir2-rs", "target", "release", "mir2-server.exe"), repo)
     rep.add("start_rust_exe", status, detail, fix)
 
-    status, detail, fix = check_roster(repo)
+    status, detail, fix = check_roster(repo, manifest)
     rep.add("roster", status, detail, fix)
 
     c = rep.counts()
@@ -738,12 +741,14 @@ def selftest():
         chk(check_pin_static(alt, wm_bad2, "E:/log/game-svr.out.log")[0] == FAIL,
             "牙: 缺 MIR2_CLIENT_ABILITY_LAYOUT=0 => FAIL")
 
-        # roster：17 场景清单；已封存 pickup_item 不得入列（reviewer-21 W-1）
+        # roster：条数按清单实况（不硬编码）；已封存 pickup_item 不得入列；n 必须 1..N 连续。
+        # 牙必须钉在**正确语义**上（断号/重复/pickup），不能靠「多一条就红」——那是 count==17 的旧语义。
         fake_repo = os.path.join(tmp, "roster-repo")
         scen_dir = os.path.join(fake_repo, "tools", "probe", "scenarios")
         os.makedirs(scen_dir, exist_ok=True)
         with open(MANIFEST, encoding="utf-8-sig") as fh:
             good_manifest = json.load(fh)
+        scen_n = len(good_manifest["scenarios"])
         for s_ in good_manifest["scenarios"]:
             with open(os.path.join(scen_dir, s_["name"] + ".json"), "w") as fh:
                 fh.write("{}\n")
@@ -753,21 +758,50 @@ def selftest():
         with open(good_path, "w", encoding="utf-8") as fh:
             json.dump(good_manifest, fh)
         chk(check_roster(repo=fake_repo, manifest=good_path)[0] == OK,
-            "roster: 17 场景且不含 pickup_item => OK")
-        bad18 = json.loads(json.dumps(good_manifest))
-        bad18["scenarios"].append({"n": 18, "name": "pickup_item", "profile": "alt", "extra": []})
-        bad18_path = os.path.join(tmp, "run3-bad18.json")
-        with open(bad18_path, "w", encoding="utf-8") as fh:
-            json.dump(bad18, fh)
-        chk(check_roster(repo=fake_repo, manifest=bad18_path)[0] == FAIL,
-            "牙: 清单加回 pickup_item（18 条）=> FAIL")
-        bad17 = json.loads(json.dumps(good_manifest))
-        bad17["scenarios"][-1]["name"] = "pickup_item"
-        bad17_path = os.path.join(tmp, "run3-bad17.json")
-        with open(bad17_path, "w", encoding="utf-8") as fh:
-            json.dump(bad17, fh)
-        chk(check_roster(repo=fake_repo, manifest=bad17_path)[0] == FAIL,
-            "牙: 17 条但含 pickup_item => FAIL")
+            "roster: 清单 %d 条（实况）且 n 连续、不含 pickup_item => OK" % scen_n)
+
+        # 牙①：追加 pickup_item（n=scen_n+1，仍连续）=> FAIL（原因是封存场景，不是条数）
+        bad_pickup = json.loads(json.dumps(good_manifest))
+        bad_pickup["scenarios"].append(
+            {"n": scen_n + 1, "name": "pickup_item", "profile": "alt", "extra": []})
+        bad_pickup_path = os.path.join(tmp, "run3-bad-pickup.json")
+        with open(bad_pickup_path, "w", encoding="utf-8") as fh:
+            json.dump(bad_pickup, fh)
+        st, detail, _ = check_roster(repo=fake_repo, manifest=bad_pickup_path)
+        chk(st == FAIL and "pickup_item" in detail,
+            "牙: 清单含 pickup_item（n 连续）=> FAIL 且点名 pickup_item")
+
+        # 牙②：断号（删 n=3）=> FAIL 且点名「连续」
+        bad_gap = json.loads(json.dumps(good_manifest))
+        bad_gap["scenarios"] = [x for x in bad_gap["scenarios"] if x.get("n") != 3]
+        bad_gap_path = os.path.join(tmp, "run3-bad-gap.json")
+        with open(bad_gap_path, "w", encoding="utf-8") as fh:
+            json.dump(bad_gap, fh)
+        st, detail, _ = check_roster(repo=fake_repo, manifest=bad_gap_path)
+        chk(st == FAIL and "连续" in detail, "牙: 删 n=3（断号）=> FAIL 且点名不连续")
+
+        # 牙③：重复 n => FAIL
+        bad_dup = json.loads(json.dumps(good_manifest))
+        bad_dup["scenarios"][-1]["n"] = bad_dup["scenarios"][-2]["n"]
+        bad_dup_path = os.path.join(tmp, "run3-bad-dup.json")
+        with open(bad_dup_path, "w", encoding="utf-8") as fh:
+            json.dump(bad_dup, fh)
+        chk(check_roster(repo=fake_repo, manifest=bad_dup_path)[0] == FAIL,
+            "牙: 重复 n => FAIL")
+
+        # 正例②：临时清单**变多一条**（n 连续）仍应 OK——条数不是判据（本条即「count 变化不红」）。
+        more = json.loads(json.dumps(good_manifest))
+        last = more["scenarios"][-1]
+        more["scenarios"].append({"n": scen_n + 1, "name": "zz_extra",
+                                  "profile": last.get("profile"), "extra": []})
+        with open(os.path.join(scen_dir, "zz_extra.json"), "w") as fh:
+            fh.write("{}\n")
+        more_path = os.path.join(tmp, "run3-more.json")
+        with open(more_path, "w", encoding="utf-8") as fh:
+            json.dump(more, fh)
+        chk(check_roster(repo=fake_repo, manifest=more_path)[0] == OK,
+            "roster: 清单 %d 条（+1，n 连续）=> 仍 OK（条数不是判据）" % (scen_n + 1))
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -785,6 +819,9 @@ def main(argv=None):
                     help="私有栈根（默认 %s）" % DEFAULT_PRIVATE_ROOT)
     ap.add_argument("--start-rust", default=DEFAULT_START_RUST, help="start-rust.ps1 路径")
     ap.add_argument("--repo", default=REPO, help="本检出根（默认按脚本位置推导）")
+    ap.add_argument("--manifest",
+                    default=os.environ.get("WINDOW_MANIFEST") or MANIFEST,
+                    help="场景清单（默认 $WINDOW_MANIFEST 或 run3-scenarios.json；自测用临时清单）")
     ap.add_argument("--skip-pin-smoke", action="store_true",
                     help="跳过 -CheckPinsOnly 冒烟（WARN，证据里须登记未验）")
     ap.add_argument("--skip-binary", action="store_true",
@@ -797,7 +834,8 @@ def main(argv=None):
         return selftest()
 
     rep = run_all(root=args.root, start_rust=args.start_rust, repo=args.repo,
-                  skip_pin_smoke=args.skip_pin_smoke, skip_binary=args.skip_binary)
+                  skip_pin_smoke=args.skip_pin_smoke, skip_binary=args.skip_binary,
+                  manifest=args.manifest)
     if args.json:
         os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
         with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
