@@ -63,6 +63,11 @@
   ⇒ 即使将来能固定 RNG，场景仍需「内容侧修脚本/补佛牌定义」或「窗口专用角色+道具夹具」，
   后者超出本卡写集。**建议另立卡**：给 t118 加受支持的 `Level`/任务道具夹具，或由 owner
   裁定把 `武士-0114` 的前置改成可声明。
+- **F1 处置（reviewer-20）**：演练时只还原了基线副本，**影子副本**
+  `csharp-root/M2GameSvr-hook/Envir/Market_Def/任务NPC/武士-0114.txt` 一度残留（sha `e621ba2d…` ≠ 基线
+  `ead2df9f…`）；Leader 已用基线覆盖还原。复核：baseline / shadow / rust-root 三方该文件均
+  `ead2df9f…`，且三方 `Envir` 目录逐文件比对 **642 文件、0 差异**。本卡不再残留改动；
+  该类残留将以 preflight 新门 `envir_shadow_symmetry` 固化（卡 `openmir2-preflight-envir-shadow-symmetry`）。
 - **证据文件**：`E:/tmp/scriptcov/t118/`（`seed-scan.tsv`、`seed42-csharp.tsv`、
   `seed42b-csharp.tsv`、`autoA/autoB/conf1/conf2-csharp.tsv` 的 head 与 movr 行；
   大账本已删，只保留扫描/确认日志与 `武士-0114.txt.bak`）。
