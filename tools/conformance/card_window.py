@@ -3327,6 +3327,186 @@ def check_rng_ledger(path):
     return True, "%d 行（含 INJECT_OK + SEED_PROBE；site 齐）" % len(lines)
 
 
+FIXTURE_KEYS = ("monsters",)
+
+#: 夹具行的第 7 列 `ZenTime`（分钟）**必须 > 0**：两端解析器都按 `ZenTime = 列值*60*1000` 后
+#: `ZenTime <= 0 => 丢弃`（C# `LocalDB.cs:555-558`；Rust `crates/envir/src/mongen.rs:147-150`），
+#: 且**加载期无日志** => 写 0 会造成「夹具看似应用、怪根本不刷」。首刷不受该值影响：
+#: `WorldServer.MonGen.cs:228` 在 `StartTick == 0` 时立即首刷。
+FIXTURE_MONGEN_ZEN_TIME = 360
+
+
+def profile_fixtures(prof, side):
+    """读 profile 的 `sides.<side>.fixtures`（**声明式怪物夹具**，卡 openmir2-window-fixture-corpse）。
+
+    当前支持：
+      "fixtures": {"monsters": [{"map": "0", "x": 330, "y": 331, "name": "鸡", "count": 1}]}
+
+    语义（重要，见 docs/window-fixture-corpse-20261025.md）：oracle **不持久化怪物/尸体**
+    （`monsters` 表只是定义；尸体是运行时对象）⇒ 本夹具做的是「起栈前往本侧私有 Envir 的
+    `MonGen.txt` 追加一条**单点刷怪**（range=0）」，让动物一进图就站在指定格；**不是**直接造尸体。
+    要得到可屠宰尸体，场景需先击杀该动物（场景侧另改）。
+    """
+    sc = prof["sides"][side]
+    fx = sc.get("fixtures")
+    if fx is None:
+        return None
+    if not isinstance(fx, dict) or not fx:
+        raise ConfigError("profile.sides.%s.fixtures 必须是非空对象（当前支持 keys=%s）"
+                          % (side, list(FIXTURE_KEYS)))
+    bad = set(fx) - set(FIXTURE_KEYS)
+    if bad:
+        raise ConfigError("profile.sides.%s.fixtures 有未知字段 %s（fail-closed；只允许 %s）"
+                          % (side, sorted(bad), list(FIXTURE_KEYS)))
+    mons = fx.get("monsters")
+    if not isinstance(mons, list) or not mons:
+        raise ConfigError("profile.sides.%s.fixtures.monsters 必须是非空数组" % side)
+    allowed = {"map", "x", "y", "name", "count"}
+    out = []
+    for i, m in enumerate(mons):
+        where = "profile.sides.%s.fixtures.monsters[%d]" % (side, i)
+        if not isinstance(m, dict):
+            raise ConfigError("%s 必须是对象" % where)
+        unknown = set(m) - allowed
+        if unknown:
+            raise ConfigError("%s 有未知字段 %s（只允许 %s）"
+                              % (where, sorted(unknown), sorted(allowed)))
+        for k in ("map", "x", "y", "name"):
+            if k not in m:
+                raise ConfigError("%s 缺字段 %s" % (where, k))
+        mp = m["map"]
+        if not isinstance(mp, str) or not mp.strip():
+            raise ConfigError("%s.map 必须是非空字符串" % where)
+        for k in ("x", "y"):
+            v = m[k]
+            if not isinstance(v, int) or isinstance(v, bool) or not (0 <= v <= 65535):
+                raise ConfigError("%s.%s 必须是 0..65535 的整数（实际 %r）" % (where, k, v))
+        name = m["name"]
+        if not isinstance(name, str) or not name.strip():
+            raise ConfigError("%s.name 必须是非空字符串" % where)
+        try:
+            name.encode("gbk")
+        except UnicodeEncodeError:
+            raise ConfigError("%s.name 不能编码为 GBK：%r" % (where, name))
+        count = m.get("count", 1)
+        if not isinstance(count, int) or isinstance(count, bool) or not (1 <= count <= 100):
+            raise ConfigError("%s.count 必须是 1..100 的整数（实际 %r）" % (where, count))
+        out.append({"map": mp.strip(), "x": m["x"], "y": m["y"],
+                    "name": name, "count": count})
+    return {"monsters": out}
+
+
+def _fixture_envir_root(sc):
+    root = sc.get("envir_root")
+    if not root:
+        raise ConfigError("fixtures 需要 profile.sides.*.envir_root（当前未声明）")
+    return str(root)
+
+
+def _fixture_map_names(root):
+    path = os.path.join(root, "Envir", "MapInfo.txt")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as e:
+        raise ConfigError("读 MapInfo.txt 失败：%s（%s）" % (path, e))
+    names = set()
+    for line in raw.decode("gbk", "replace").splitlines():
+        line = line.strip()
+        if not line.startswith("["):
+            continue
+        body = line[1:].split("]", 1)[0]
+        tok = body.split()[0] if body.split() else ""
+        if tok:
+            names.add(tok)
+    if not names:
+        raise ConfigError("MapInfo.txt 解析不到任何地图名：%s" % path)
+    return names
+
+
+def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
+    """起栈前把声明式怪物夹具写进**本侧私有 Envir** 的 `MonGen.txt`（备份 + 校验 + 可还原）。
+
+    返回证据 dict：path/backup/before_sha256/after_sha256/appended/action/rc/error。
+    失败（缺文件/地图不存在/GBK 不可编码/写失败）一律 rc=2，绝不静默跳过。
+    """
+    res = {"side": side, "declared": decl, "path": None, "backup": None,
+           "before_sha256": None, "after_sha256": None, "appended": [],
+           "action": None, "rc": None, "error": None}
+    try:
+        root = _fixture_envir_root(sc)
+        maps = _fixture_map_names(root)
+        path = os.path.join(root, "Envir", "MonGen.txt")
+        res["path"] = path
+        if not os.path.exists(path):
+            raise ConfigError("MonGen.txt 不存在：%s" % path)
+        lines = []
+        for spec in decl["monsters"]:
+            if spec["map"] not in maps:
+                raise ConfigError("fixtures 指定的地图 %r 不在本侧 MapInfo.txt（fail-closed）"
+                                  % spec["map"])
+            lines.append("\t".join([spec["map"], str(spec["x"]), str(spec["y"]),
+                                    spec["name"], "0", str(spec["count"]),
+                                    str(FIXTURE_MONGEN_ZEN_TIME)]))
+        res["appended"] = lines
+        if getattr(runner, "dry_run", False):
+            for ln in lines:
+                runner.log("[%s] 怪物夹具（dry-run 不写 Envir）：%s" % (side, ln))
+            res["action"] = "dry-run"
+            res["rc"] = 0
+            return res
+        with open(path, "rb") as f:
+            raw = f.read()
+        res["before_sha256"] = hashlib.sha256(raw).hexdigest()
+        nl = b"\r\n" if b"\r\n" in raw else b"\n"
+        head = raw if (not raw or raw.endswith(b"\n")) else raw + nl
+        append = b"".join(ln.encode("gbk") + nl for ln in lines)
+        backup_dir = os.path.join(side_dir, "fixtures")
+        os.makedirs(backup_dir, exist_ok=True)
+        backup = os.path.join(backup_dir, "MonGen.txt.bak")
+        with open(backup, "wb") as f:
+            f.write(raw)
+        with open(path, "wb") as f:
+            f.write(head + append)
+        with open(path, "rb") as f:
+            after = f.read()
+        res["after_sha256"] = hashlib.sha256(after).hexdigest()
+        res["backup"] = backup
+        res["action"] = "appended"
+        runner.log("[%s] 怪物夹具（起栈前写 Envir/MonGen.txt）：追加 %d 行；地图=%s；"
+                   "sha256 %s -> %s；备份=%s"
+                   % (side, len(lines), ",".join(sorted({x["map"] for x in decl["monsters"]})),
+                      res["before_sha256"][:12], res["after_sha256"][:12], backup))
+        for ln in lines:
+            runner.log("[%s]   + %s" % (side, ln))
+        res["rc"] = 0
+        return res
+    except (ConfigError, OSError) as e:
+        res["error"] = "怪物夹具失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def restore_fixtures(res):
+    """把 `run_fixtures` 的备份写回并校验 sha256（停栈后调用；失败只记录不改 rc）。"""
+    if not res or res.get("action") != "appended":
+        return None
+    try:
+        with open(res["backup"], "rb") as f:
+            raw = f.read()
+        with open(res["path"], "wb") as f:
+            f.write(raw)
+        # F2（review）：必须**重读磁盘**再比，不能拿刚写进去的内存字节自证。
+        with open(res["path"], "rb") as f:
+            disk = f.read()
+        got = hashlib.sha256(disk).hexdigest()
+        if got != res.get("before_sha256"):
+            return "还原 sha256 不符：%s != %s" % (got, res.get("before_sha256"))
+        return None
+    except OSError as e:
+        return "还原 MonGen.txt 失败：%s" % e
+
+
 def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
              assets=None, user_vars=None):
     sc = prof["sides"][side]
@@ -3446,6 +3626,26 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             res["magic"] = mres
             if mres.get("rc") != 0:
                 res["error"] = mres.get("error") or "魔法夹具失败"
+                return res
+
+        # 1d) 声明式怪物夹具（profile.sides.<side>.fixtures）：起栈前写本侧私有 Envir 的
+        # MonGen.txt（备份 + 可还原）；失败 fail-closed。
+        try:
+            fixtures_decl = profile_fixtures(prof, side)
+        except ConfigError as e:
+            res["error"] = "怪物夹具声明非法：%s" % e
+            return res
+        if fixtures_decl:
+            fres = run_fixtures(runner, side, prof, sc, fixtures_decl, env, side_dir)
+            try:
+                write_json_file(os.path.join(side_dir, "fixtures.json"), fres)
+            except OSError as e:
+                fres["error"] = ((fres.get("error") or "") + "；写 fixtures.json 失败：%s"
+                                 % e).strip("；")
+                fres["rc"] = 2
+            res["fixtures"] = fres
+            if fres.get("rc") != 0:
+                res["error"] = fres.get("error") or "怪物夹具失败"
                 return res
 
         # 2) 起栈前端口检查（有人占 => rc=2 并点名 pid；不启动栈）
@@ -3609,6 +3809,13 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
             if res["rc"] == 0:
                 res["rc"] = 2
+        # 8b) 还原怪物夹具（只还原已追加的 MonGen.txt；失败记录但不改 rc）
+        if res.get("fixtures"):
+            ferr = restore_fixtures(res["fixtures"])
+            res["fixtures"]["restore_error"] = ferr
+            if ferr:
+                msg = "怪物夹具还原失败：%s" % ferr
+                res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
 
 
 def run_compare(runner, out_dir, prof, rules):
@@ -5396,6 +5603,116 @@ def _selftest_rng_ledger(tmp):
     return out
 
 
+def _selftest_fixtures(tmp):
+    """卡 openmir2-window-fixture-corpse：声明式怪物夹具（解析/负例/写+还原/接线）。"""
+    import json as _json
+    out = []
+    d = os.path.join(tmp, "fixturesel")
+    root = os.path.join(d, "root")
+    os.makedirs(os.path.join(root, "Envir"), exist_ok=True)
+    with open(os.path.join(root, "Envir", "MapInfo.txt"), "w",
+              encoding="gbk", newline="\n") as f:
+        f.write("[0 主城]\n[3 盟重省]\n")
+    mongen = os.path.join(root, "Envir", "MonGen.txt")
+    with open(mongen, "wb") as f:
+        f.write("3\t294\t341\t神鹰\t10\t1\t360\n".encode("gbk"))
+
+    prof = {"sides": {"csharp": {"envir_root": root,
+                                 "fixtures": {"monsters": [
+                                     {"map": "0", "x": 330, "y": 331, "name": "鸡"}]}}}}
+    decl = profile_fixtures(prof, "csharp")
+    out.append((decl == {"monsters": [{"map": "0", "x": 330, "y": 331,
+                                       "name": "鸡", "count": 1}]},
+                "FIX1 合法声明（map/x/y/name，count 缺省 1）=> 解析透传"))
+    out.append((profile_fixtures({"sides": {"csharp": {}}}, "csharp") is None,
+                "FIX1b 未声明 fixtures => None（不使用夹具的场景行为不变）"))
+
+    bad_cases = [
+        ({"fixtures": {"foo": []}}, "未知字段"),
+        ({"fixtures": {"monsters": []}}, "非空数组"),
+        ({"fixtures": {"monsters": [{"map": "0", "x": 1, "y": 2}]}}, "缺字段 name"),
+        ({"fixtures": {"monsters": [{"map": "0", "x": -1, "y": 2, "name": "鸡"}]}}, "0..65535"),
+        ({"fixtures": {"monsters": [{"map": "0", "x": 1, "y": 2, "name": "鸡",
+                                     "extra": 1}]}}, "未知字段"),
+        ({"fixtures": {"monsters": [{"map": "0", "x": 1, "y": 2, "name": "鸡",
+                                     "count": 0}]}}, "1..100"),
+        ({"fixtures": {"monsters": [{"map": "0", "x": 1, "y": 2,
+                                     "name": "\U0001F600"}]}}, "GBK"),
+    ]
+    bad_ok = True
+    for side_doc, word in bad_cases:
+        sc = {"envir_root": root}
+        sc.update(side_doc)
+        try:
+            profile_fixtures({"sides": {"csharp": sc}}, "csharp")
+            bad_ok = False
+        except ConfigError as ex:
+            if word not in str(ex):
+                bad_ok = False
+    out.append((bad_ok, "FIX 牙1 未知字段/空数组/缺字段/越界/count 0/非 GBK => ConfigError 点名"))
+
+    class _R:
+        dry_run = False
+
+        def __init__(self):
+            self.lines = []
+
+        def log(self, t):
+            self.lines.append(t)
+
+    class _RD:
+        dry_run = True
+
+        def __init__(self):
+            self.lines = []
+
+        def log(self, t):
+            self.lines.append(t)
+
+    r = _R()
+    side_dir = os.path.join(d, "side")
+    res = run_fixtures(r, "csharp", prof, prof["sides"]["csharp"], decl, {}, side_dir)
+    raw_after = io.open(mongen, "rb").read()
+    out.append((res.get("rc") == 0 and res.get("action") == "appended"
+                and "0\t330\t331\t鸡\t0\t1\t360".encode("gbk") in raw_after
+                and os.path.exists(res.get("backup") or ""),
+                "FIX2 写 Envir/MonGen.txt：追加单点刷怪行、备份存在、rc=0"))
+    line = res["appended"][0]
+    cols = line.split("\t")
+    zen_min = int(cols[6]) if len(cols) >= 7 and cols[6].lstrip("-").isdigit() else -1
+    zen_ms = zen_min * 60 * 1000
+    out.append((len(cols) >= 7 and zen_min > 0 and zen_ms > 0,
+                "FIX2b 夹具行第 7 列 ZenTime>0（%s 分钟 => %d ms）——按两端解析器口径"
+                "（zen_time<=0 即丢弃且无日志）不会被静默丢行" % (zen_min, zen_ms)))
+    err = restore_fixtures(res)
+    raw_restored = io.open(mongen, "rb").read()
+    out.append((err is None and hashlib.sha256(raw_restored).hexdigest()
+                == res.get("before_sha256"),
+                "FIX3 停栈后还原：sha256 与写前一致"))
+
+    rd = _RD()
+    res_dry = run_fixtures(rd, "csharp", prof, prof["sides"]["csharp"], decl, {}, side_dir)
+    out.append((res_dry.get("rc") == 0 and res_dry.get("action") == "dry-run"
+                and any("dry-run 不写 Envir" in l for l in rd.lines),
+                "FIX 牙2 dry-run：只打印预览、不写文件"))
+
+    bad_prof = {"sides": {"csharp": {"envir_root": root,
+                                     "fixtures": {"monsters": [
+                                         {"map": "NOPE", "x": 1, "y": 2, "name": "鸡"}]}}}}
+    res_bad = run_fixtures(_R(), "csharp", bad_prof, bad_prof["sides"]["csharp"],
+                           profile_fixtures(bad_prof, "csharp"), {}, side_dir)
+    out.append((res_bad.get("rc") == 2 and "MapInfo" in (res_bad.get("error") or ""),
+                "FIX 牙3 地图不在本侧 MapInfo => rc=2 点名（fail-closed）"))
+
+    import inspect
+    src = inspect.getsource(run_side)
+    out.append(("profile_fixtures(" in src and "run_fixtures(" in src
+                and "restore_fixtures(" in src
+                and src.index("run_fixtures(") < src.index('"stack"'),
+                "FIX4 接线：run_side 起栈前应用夹具、finally 还原"))
+    return out
+
+
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
     stub = os.path.join(tmp, "stub.py")
@@ -7047,6 +7364,8 @@ def selftest():
         for cond, msg in _selftest_inventory_reachability(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_assets(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_fixtures(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_rng_ledger(tmp):
             chk(cond, msg)
