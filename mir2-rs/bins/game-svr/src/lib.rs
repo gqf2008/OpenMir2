@@ -1059,6 +1059,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let castle_tax_rate = guild_castle_cfg.castle_tax_rate;
     let castle_one_day_gold = guild_castle_cfg.castle_one_day_gold;
     let castle_gold_max = guild_castle_cfg.castle_gold_max;
+    // **T-132**：闭包 move 整个 `cfg` 会与 spawn 之后的 `cfg.check_block` 冲突 ⇒ 先拷出
+    // 四个名字色（`CastleNameColors` 是 Copy）。
+    let castle_name_colors = cfg.castle_name_colors();
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1090,6 +1093,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         string_conf.guild_msg_prefix(),
                     ),
                     game_conf,
+                    castle_name_colors,
                     red_die_home: game_svr::castle::load_red_die_home(&conf),
                     string_conf,
                     show_rank_level_name,
@@ -17861,6 +17865,8 @@ struct NewbieItems {
 /// `sim_loop` 需要的入图帧配置层（`Server.conf` 的 `GameSvrConf` + `String.conf` + `[Setup] ShowRankLevelName`）。
 struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
+    /// `[Setup]` 的四个名字色（T-132；`ServerConf.cs:509-512`）。
+    castle_name_colors: mir2_world::castle::CastleNameColors,
     /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
     red_die_home: mir2_world::castle::RedDieHome,
     string_conf: crate::strings::StringConf,
@@ -18066,6 +18072,7 @@ impl EnterConfig {
     fn for_test(string_conf: crate::strings::StringConf) -> Self {
         Self {
             game_conf: None,
+            castle_name_colors: mir2_world::castle::CastleNameColors::default(),
             red_die_home: mir2_world::castle::RedDieHome::default(),
             string_conf,
             show_rank_level_name: false,
@@ -20157,6 +20164,9 @@ fn sim_loop(
     // 广播收件人集合都读 `chat::send_ref_msg_range()`。缺键时 `config` 已按 oracle 源码缺省
     // 12（`GameSvrConf.cs:1503`）填好，这里只做搬运（不是另立缺省）。
     chat::install_send_ref_msg_range(enter_cfg.ref_msg_range);
+    // **T-132**：`[Setup]` 的四个名字色（`ServerConf.cs:509-512`）灌进世界，
+    // `query_user_name_color` 读 `world.castle_name_colors`（缺省 47/180/69/221）。
+    world.set_castle_name_colors(enter_cfg.castle_name_colors);
     // **T-202**：`SM_RECONNECT` 的宿主排水队列（与 `soft_close_pending` 同构）。生产者：
     // ① 登录跨服分支（`login_cross_server_or_refuse`）②换服门 100ms 轮询（`process_switch_data`
     // 的第二闭包）。唯一排水点 = 每轮 tick 的 `drain_reconnects`。
@@ -20539,6 +20549,11 @@ fn sim_loop(
                         &mut world.rng,
                         mir2_shared::rng::RandomNumber::with_seed(0),
                     );
+                    // **T-131 相位**：oracle `CastleMgr.Initialize`（`GameApp.cs:213`）早于
+                    // `GuildMgr.LoadGuildInfo`（`:245`）；本宿主 guild 装载在前（本文件 G3 启动块），
+                    // 但 `UserCastle::initialize` **不解析** `MasterGuild`（只搬 `OwnGuild` 名字）⇒
+                    // 启动态 `master_guild == None`，与 oracle 相位一致。重排启动序属 RNG/时序面，
+                    // 不在本 L 片（登记 T-131）。
                     let report = game_svr::castle::initialize_castle(
                         &mut world,
                         reg,
