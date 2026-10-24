@@ -1,0 +1,152 @@
+# 窗口新场景第四批：`castle_merchant_tax`（blocked）+ `castle_merchant_tax_potion`（买腿可跑）
+
+- 卡：`openmir2-window-scenes-castle-tax`（owner `openmir2-dev-1`，branch `card/window-scenes-castle-tax`，base `4ae90226b`）。
+- 写集（fork-point 口径 4 文件）：`tools/probe/scenarios/castle_merchant_tax.json`、
+  `tools/probe/scenarios/castle_merchant_tax_potion.json`、`tools/window/run3-scenarios.json`（只追加 #22/#23）、本报告。
+- 来源：台账 `docs/window-closure-ledger-20261025.md` #1 行（R 片 `99156c2c6`）、`docs/window-kit-coverage-20261025.md` §1.1、
+  `docs/castle-merchant-tax-wiring-20261025.md` §6。
+- **不动**：`card_window.py` / `run_batch.sh` / `preflight_private_stack.py` / `mir2_probe.py`；不改生产代码；不起服务端；不改 `E:/MirServer`。
+- 结论：**`castle_merchant_tax` = blocked（两缺口）**；**`castle_merchant_tax_potion` 可跑**——W-TAX-1 的**买腿**（Castle 分支）今天就能做。
+
+## 1. 一句话
+
+- `castle_merchant_tax`（0151 城堡武器铺，20 步）：卖/修两腿 + 买**武器**腿（需 652 解码）+ 升级腿说明；**blocked**，原因为
+  ① 升级腿默认配置零税且与武器铺不同图；② `SaveTick` 10 分钟门不可观测（不落盘 + C# 无时钟注入）。
+- `castle_merchant_tax_potion`（0153 城堡药店，7 步）：**买腿可跑**——`金创药(小量)` `StdMode=0` ⇒ `CM_USERBUYITEM` 免 `MakeIndex`
+  （`Merchant.cs:1241` 的 `StdMode<=4` 支），买价 88（首次补货 `×1.1`，回落 80）⇒ 税 `Round(88*5/100)=Round(4.4)=4`；末步 `sleep 620000` 跨过 600s 存档门以读 `SabukW.txt`。
+
+## 2. oracle 证据链（商税四调用点 + 城堡归属判定）
+
+### 2.1 四调用点（`CastleMerchant || GetAllNpcTax`）
+
+| # | 路径 | oracle | 谁付 | 税去向 / 税基 | 失败即无税 |
+|---|---|---|---|---|---|
+| 1 | 武器升级 | `Merchant.cs:546-554` | 玩家（`DecGold(UpgradeWeaponPrice)` 已成功） | `Castle != null` ⇒ `Castle.IncRateGold(UpgradeWeaponPrice)`；否则 `GetAllNpcTax` ⇒ `CastleMgr.IncRateGold(UpgradeWeaponPrice)` | `DecGold` 失败 / 两条件皆假 |
+| 2 | 买入 | `Merchant.cs:1257-1266` | 玩家（`Gold -= nPrice` + `AddItemToBag` 成功） | Castle ⇒ `IncRateGold(nPrice)`；否则 Manager ⇒ `IncRateGold(UpgradeWeaponPrice)` | 钱不够 / 背包满 / 负重不足 ⇒ 无税 |
+| 3 | 卖出 | `Merchant.cs:1392-1400` | 玩家收钱（`IncGold(nPrice)` 成功） | Castle ⇒ `IncRateGold(nPrice)`；否则 Manager ⇒ `IncRateGold(UpgradeWeaponPrice)` | `nPrice<=0` / StdMode 25/30 耐久不足 / IncGold 超上限 |
+| 4 | 修理 | `Merchant.cs:1644-1652` | 玩家（`DecGold(nRepairPrice)` 成功） | Castle ⇒ `IncRateGold(nRepairPrice)`；否则 Manager ⇒ `IncRateGold(UpgradeWeaponPrice)` | 不支持修理 / 价格<=0 / 金币不足 |
+
+- 入账 `UserCastle.IncRateGold`（`UserCastle.cs:768-812`）：`Round(nGold*CastleTaxRate/100)`（AwayFromZero；部署 `CastleTaxRate=5`，`Server.conf:344`）
+  → `TodayIncome` 日上限（`CastleOneDayGold=2000000`，`Server.conf:337`）→ `TotalGold` 封顶（`CastleGoldMax=5000000`，`:310`）
+  → `SaveTick` 10 分钟门（严格大于，`nGold=0` 也刷新）。
+- `CastleMgr.IncRateGold`（`CastleManager.cs:209-215`）：**升序遍历 `CastleList` 全表**，每座城各入账一次。
+
+### 2.2 「Castle 非空」的判定（**不是**城主/归属）
+
+`NormNpc.Initialize`（`NormNpc.cs:1677-1680`）→ `CastleMgr.InCastleWarArea(this)`（`CastleManager.cs:38-48`）
+→ `UserCastle.InCastleWarArea`（`UserCastle.cs:454-480`）三条任一命中即为该城：
+
+1. `envir == CastleEnvir && |HomeX-x| < WarRangeX && |HomeY-y| < WarRangeY`（map 3 且距 `(644,290)` < 100）；
+2. `envir == PalaceEnvir || envir == SecretEnvir`；
+3. `envir.MapName ∈ EnvirList`（= `CastleMapList=0151,0152,0153,0154,0155,0156`，`CastleConf.cs:25-38`）。
+
+⇒ **0151/0152/0153/0154/0155 上的城堡商人 `Castle` 恒非空**，与 `OwnGuild`（部署为空）无关；
+**map 3 上的 `沙巴克/小贩`（`MerChant.txt:89`，`IsCastle=1`，(663,304)）** 也非空——它走第 1 条
+（|663-644|=19、|304-290|=14 均 < 100）。所以「Castle 非空」**不必**在 0151–0155 内；但反过来说，
+**没有任何 `IsCastle=1` 的 NPC 落在攻城区之外**（真机观察不到「CastleMerchant 但 Castle=null」的零税态，见 §5）。
+
+### 2.3 证据面：`SabukW.txt` 只有三个字段，`SaveTick` 读不到
+
+- `CastleConf` 落盘：`CastleName/ChangeDate/WarDate/IncomeToday/OwnGuild/NextWar/TotalGold/TodayIncome` + `[Defense]` 段；
+  **`SaveTick` 不在 `CastleConf.cs`（grep 0 命中）**——只在内存（`UserCastle.cs:44` 置 0、`:798-800` 刷新）。
+  ⇒ 台账「`SaveTick` 字段 diff」在任何时钟注入下都取不到；W-TAX-4 只能验行为级 10 分钟门。
+- 落盘时机：`SystemProcessor.ShowOnline`（`SystemProcessor.cs:54-62`）→ `CastleMgr.Save()`，
+  间隔 `ConsoleShowUserCountTime=600000`（`Server.conf:334`）⇒ **买完要等 ≥10 分钟**（`IncRateGold` 自身不写盘）。
+
+## 3. 场景
+
+### 3.1 `castle_merchant_tax`（0151 城堡武器铺，blocked；20 步）
+
+| 项 | 值 / 依据 |
+|---|---|
+| 目标商人 | `MerChant.txt:83`（GBK）`沙巴克/武器铺 0151 7 14 武器店老板 0 0 1`；列序 `脚本 地图 X Y 名 flag appr IsCastle canMove moveTime`（`LocalDB.cs:430-466`）⇒ `IsCastle=1` ⇒ `CastleMerchant=true` |
+| 脚本 | `Market_Def/沙巴克/武器铺-0151.txt` 第 1 行 `(@buy @sell @repair @s_repair)`；`[goods]`:30-37（木剑/匕首/青铜剑/…，全 StdMode>4） |
+| placement | `0151 (8,14)` = NPC (7,14) 正东邻格；两侧 map 同源（21×25），(8,14) `bk=0 fr=49` 可走；**(7,15)/(6,14)/(7,13) `bk=32768` 不可走**；(7,14) 是 NPC 自身格 |
+| 全图唯一 actor | `MonGen.txt`/`Npcs.txt` 无 0151 行，`MerChant.txt` 仅 :83 ⇒ discovery 的 `merchant_actor` 必为武器店老板 |
+| 步序 | 点 NPC → 643 →`@repair`→ 668 → `1023`（MakeIndex 5001）→ [669/670] → `@main` → `@sell` → 646 → `1013` → [648/649] → `@main` → `@buy` → 645 → `1015`（详情）→ 652 → `1014`（待填 MakeIndex）→ [650/200] |
+| 夹具 | `assets.Gold=10000`；`inventory 木剑 #207 make_index=5001 slot=40 dura=1000/4000`（修腿要 `Dura<DuraMax && StdMode!=43`，`Merchant.cs:1617-1618`）；先修后卖共用同一件 |
+
+### 3.2 价格口径（纠正一个易错点）
+
+脚本 `[goods]` 行是 **`名 / 数量 / 刷新分钟`**，**不是价格**（`ScriptParsers.cs:949-975` 的 `GetValidStrCap` 顺序：
+`sItemName → sItemCount → sItemRefillTime`）。买价来自 `GetItemPrice(index)`：`ItemPriceList`（`LocalDB.LoadGoodPriceRecord`
+在 C# 里整段被注释掉 ⇒ 部署恒空）→ 否则 `stdItem.Price`（要求 `StdMode ∈ ItemTypeList`，由脚本 `+N` 行填充，`ScriptParsers.cs:693-700`）。
+所以 `castle_merchant_tax_potion` 的买价 = `GetItemPrice`：`ItemPriceList` 为空时回落 `stditems#3 Price=80`（`sql/mir2_data.sql:993`）；
+但启动补货时 `CheckItemPrice` 会先把 `ItemPriceList[3]` 记为 `Round(80*1.1)=88`（`Merchant.cs:184-206/229-234`）⇒ **实际买价 88**。`[goods]` 里的 100 不是价格。
+
+### 3.3 `castle_merchant_tax_potion`（0153 城堡药店，**可跑**；7 步）
+
+| 项 | 值 / 依据 |
+|---|---|
+| 目标商人 | `MerChant.txt:90` `沙巴克/药店 0153 14 7 药店 0 1 1` ⇒ `IsCastle=1`；`0153 ∈ CastleMapList` ⇒ `Castle` 非空 |
+| 脚本 | `Market_Def/沙巴克/药店-0153.txt`：`(@buy @sell)`、`%100`（PriceRate=100）、`+0`（ItemTypeList=[0]）；`[goods]` 首行 `金创药(小量) 100 3` = 库存 100 / 刷新 3 分钟 |
+| placement | `0153 (15,7)` = 药店 (14,7) 正东邻格；两侧 map 同源（21×25），`bk=0 fr=500` 可走（两侧 `read_map_cell` 实跑一致）；`MapInfo.txt:840 [0153 药品店] FIGHT` ⇒ server_index=0；`MonGen/Npcs` 无 0153 行、`MerChant` 仅 :90 ⇒ 全图唯一 actor |
+| 物品 | `金创药(小量)`：`StdMode=0`、`Weight=1`、`Price=80`（`sql/mir2_data.sql:993`） |
+| 步序 | 点 NPC → 643 →`@buy`→ 645 → `CM_USERBUYITEM(1014, recog=merchant_actor, param=0, tag=0, body=金创药(小量))` → `wait_idents [650, 200]` → `sleep 620000` |
+| 为什么免 MakeIndex | `ClientBuyItem` 取物门 `StdMode <= 4 \|\| StdMode == 42 \|\| StdMode == 31 \|\| userItem.MakeIndex == nInt`（`Merchant.cs:1241`）；药品 `StdMode=0` ⇒ 名字命中即可，`nInt` 不参与 |
+| 期望买价 | **88**（不是 80、更不是 `[goods]` 的 100）：启动时 `LoadNpcData`→`RefillGoods` 首次补货先走 `CheckItemPrice`（`Merchant.cs:184-206/229-234`）
+把 `ItemPriceList[3]` 记为 `Round(stdItem.Price 80 * 1.1) = 88`，`GetItemPrice` 先查该表 ⇒ `GetUserPrice(88)` 且 `PriceRate=100` ⇒ 88（若该表为空才回落到 80） |
+| 期望税 | `Castle.IncRateGold(nPrice)` ⇒ `nInGold = Round(nPrice * 5 / 100)`：88 ⇒ `Round(4.4) = 4`；80 ⇒ `Round(4.0) = 4` ⇒ **`TotalGold`/`TodayIncome` 各 +4**（两种价都落 4，AwayFromZero） |
+| 帧差即证据 | **`SM_BUYITEM_SUCCESS(650).recog`** = 购买后 `Gold`（10000−88 vs 10000−80）⇒ **买价口径写错会直接帧 diff**，不需要等 600s 存档。**钱在 `recog` 不在 `param`**：发送 `SendMsg(this, RM_BUYITEM_SUCCESS, 0, playObject.Gold, nInt, 0)`（`Merchant.cs:1303`；`SendMsg(baseObject,wIdent,wParam,nParam1,nParam2,nParam3)`）→ 泵 `SendDefMessage(SM_BUYITEM_SUCCESS, nParam1, LoWord(nParam2), HiWord(nParam2), 0)`（`PlayObject.Message.cs:1824-1826`；`SendDefMessage(wIdent,nRecog,nParam,nTag,nSeries)`，`PlayObject.Socket.cs:27`）⇒ `recog=Gold`、`param=LoWord(MakeIndex)=0`、`tag=HiWord(MakeIndex)=0`；**用 `param` 判价会恒读 0** |
+| 期望帧 | `SM_BUYITEM_SUCCESS(650)` + `SM_ADDITEM(200)`；失败只回 651（钱/背包/负重门）⇒ 本步超时（fail-closed） |
+| 文件证据 | 末步 `sleep 620000` 跨过 600s 存档门；之后手工比两侧 `Castle/0/SabukW.txt` 的 `TotalGold`/`TodayIncome`（**两侧 diff 必须 = 0**，且各自 +4）。`SaveTick` 不落盘（§2.3） |
+| run3 | `#23 castle_merchant_tax_potion`，`extra=["--timeout-ms","700000"]`（默认 20000 会在 20s 杀掉带 620s sleep 的 probe） |
+
+## 4. 为什么 `castle_merchant_tax` 仍 blocked（两缺口）
+
+| # | 缺口 | 证据 | 不解封时的行为 |
+|---|---|---|---|
+| ① | **升级腿默认配置零税** | 唯一带 `@upgradenow` 的脚本 = `Market_Def/沙巴克铁匠-3.txt`（`grep -rl @upgradenow Market_Def` 仅 1 个）；`MerChant.txt:82` 该行 IsCastle=**0**；map 3 (332,317) 距 `Home(644,290)` |Δx|=312 ≥ `WarRangeX=100` ⇒ `Castle=null` ⇒ 只有 `CastleGetAllNpcTax=1` 走 Manager 分支（税基恒 `UpgradeWeaponPrice=10000` ⇒ 每城 `Round(500)`）；且铁匠在 map 3、武器铺在 0151 ⇒ 单 placement 不能同场 | 该腿无税入账；硬写进场景只会得到「无税=0」的假绿 |
+| ② | **W-TAX-4 `SaveTick` 不可观测** | `SaveTick` 不落盘（§2.3）；C# `MIR2_CLOCK_*` 零实现（`grep -rIl MIR2_CLOCK src/` = 0） | 只能真实时点复拍；「同 tick 逐位」需 ⑧-1 时钟注入片 |
+
+**备注（工具缺口，不阻断买腿）**：买**武器**需要运行时 `MakeIndex`——货架全 StdMode>4，645 载荷只有 `名/submenu/价格/库存/`
+（`Merchant.cs:983-986`），`MakeIndex` 只在 652 的 EDCode `ClientItem` buffer（`:1329-1341`），而 `mir2_probe.py` 没有该解码。
+买**药品**腿不经过这里（`StdMode<=4`），已由 `castle_merchant_tax_potion` 覆盖。
+
+**夹具不对称（跑 W-TAX-2 前必须修）**：`csharp-root/M2GameSvr/Castle/List.txt` = `0`（1 城），
+`rust-root/.../List.txt` = `0,1`（2 城）；`Castle/0|1/SabukW.txt` 两侧逐字节同源（`diff` = SAME0/SAME1）。
+`CastleMgr.IncRateGold` 升序遍历全表 ⇒ 两侧城数不同会让 W-TAX-2 必然假红。
+
+## 5. W-TAX 项 × 状态
+
+| W 项 | 现状 | 依据 |
+|---|---|---|
+| W-TAX-1 四路径 | **买腿（Castle 分支）可跑**（`castle_merchant_tax_potion`）；卖/修两腿场景已写但随本卡 blocked；买武器腿缺 652 解码；升级腿见缺口① | §3.1/§3.3 |
+| W-TAX-2 `GetAllNpcTax=1` | **blocked**：需配置覆盖通道/两侧副本同值 + 城数对齐 | §4 备注、§6 |
+| W-TAX-3 前置 | **前半只能构造级**：冻结内容里**没有** `IsCastle=1` 且 `Castle=null` 的 NPC（0151–0155 走 EnvirList；map 3 的小贩 (663,304) 在 WarRange 内）⇒ 真机只可观测后半「非城主仍收税」（测试账号无行会；potion 场景即证据的一例） | §2.2 |
+| W-TAX-4 日上限/`SaveTick` | **blocked**：`SaveTick` 不落盘 + C# 无时钟；只能真实时点 + 600s 存档门 | §2.3、§4② |
+
+## 6. 解封条件（写在场景 `blocked.missing_fixture`）
+
+1. **W-TAX-2 / 升级腿**：`card_window` **无配置覆盖通道**（restore→起栈之间没有手工窗口），需该通道，
+   或两侧 conformance 副本（`E:/tmp/conformance/{csharp-root,rust-root}/M2GameSvr/Server.conf`）**同值**置
+   `CastleGetAllNpcTax=1` 并重启（`restore-baseline*.sh` 只回滚 DB 不覆盖配置 ⇒ 需登记并在跑完还原）；
+   再加一条 **map 3 铁匠**的独立场景（单场景一个 placement ⇒ 另开卡）。
+2. **买武器腿**：解析 `SM_SENDDETAILGOODSLIST(652)` 的 ClientItem buffer（EDCode）取 `MakeIndex`，喂给第 19 步
+   （需改 `tools/probe/mir2_probe.py`，本卡写集外）。
+3. **Castle 夹具对齐**：两侧 `Castle/List.txt` 同值（建议都 `0`），`Castle/0/SabukW.txt` 初值同源（现已是）。
+4. **W-TAX-4**：真实时点（10 分钟门）+ 存档门（600000ms）；「同 tick 逐位」等 ⑧-1 的 C# 时钟注入。
+
+## 7. run3 注册（只追加两行）
+
+`tools/window/run3-scenarios.json`：`#22 castle_merchant_tax`（带 `blocked`）、`#23 castle_merchant_tax_potion`
+（`extra=["--timeout-ms","700000"]`）；既有 21 条逐字节未动（`git diff` 只见 #21 行尾逗号 + 4 行新增）。实测：
+
+```text
+$ bash tools/window/run_batch.sh --list
+21  butch_two_draws      alt           YES      | blocked: 无「单只固定动物尸体」夹具 + RNG 面未接线（…）
+22  castle_merchant_tax  alt           YES      | blocked: 买武器腿缺 652 ClientItem 解析（买药品腿已由 #23 覆盖）+ 升级腿需 CastleGetAllNpcTax=1 副本（…）+ SaveTick 不落盘（…）
+23  castle_merchant_tax_potion alt      -        --timeout-ms 700000
+场景数 23（blocked 2 ⇒ 入批 21）
+```
+
+`blocked` 语义（`run_batch.sh:107-108/223-225`）：只在 `--list` 标注、不进批次；只有 `--only castle_merchant_tax` 点名时才 die（rc=2）——预期行为。
+
+## 8. 自证与门禁
+
+- `--check-scenario`：`castle_merchant_tax` rc=0（20 步）、`castle_merchant_tax_potion` rc=0（7 步）；全库 28/28 场景 rc=0。
+- `validate_placement_content`（离线、两侧实跑）：`0151 (8,14)` OK、`0153 (15,7)` OK；把 0151 改 `(7,15)` ⇒ 两侧 `ConfigError`（bk=0x8000）。
+- 卫生门禁（conflict_marker / stale_pointer `--ref master` / dynamic_count `--ref master` / board_coverage）+
+  `git diff --check <base> <head>` + `merge_tree_helper`：见 patch body。
+- 只读证据：`MerChant.txt` / `Market_Def` / `MapInfo.txt` / `0151.map` / `0153.map` / `Castle/*` / `Server.conf` 均只读复核；
+  **未起栈、未占端口、未连库、未改 `E:/MirServer`**。
