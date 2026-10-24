@@ -19,6 +19,7 @@
     {"n": 14, "name": "bag_equip",         "profile": "alt",          "extra": []},
     {"n": 15, "name": "eat_item",          "profile": "alt",          "extra": []},
     {"n": 16, "name": "spell_cast",        "profile": "window-magic", "extra": []},
-    {"n": 17, "name": "upgrade_retrieve",  "profile": "alt",          "extra": ["--timeout-ms", "720000"]}
+    {"n": 17, "name": "upgrade_retrieve",  "profile": "alt",          "extra": ["--timeout-ms", "720000"]},
+    {"n": 18, "name": "gamepoint_exchange", "profile": "alt",         "extra": []}
   ]
 }
