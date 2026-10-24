@@ -1,0 +1,25 @@
+{
+  "format": "window-batch/1",
+  "card": "openmir2-window-run-2",
+  "note": "run3 一键续跑的固定 18 场景清单（顺序 = window-run-2 batch.log 的实际执行顺序）。extra 是 card_window.py 的参数（原样追加）。升级场景 upgrade_retrieve 必须 --timeout-ms 720000（场景第 9 步 sleep 660000，默认 20000 会 180s 杀 probe）。",
+  "scenarios": [
+    {"n": 1,  "name": "login_only",        "profile": "alt",          "extra": []},
+    {"n": 2,  "name": "npc_click_auto",    "profile": "alt",          "extra": []},
+    {"n": 3,  "name": "npc_click",         "profile": "alt",          "extra": []},
+    {"n": 4,  "name": "dice_chain_auto",   "profile": "alt",          "extra": []},
+    {"n": 5,  "name": "dice_chain",        "profile": "alt",          "extra": []},
+    {"n": 6,  "name": "gm_time",           "profile": "alt",          "extra": []},
+    {"n": 7,  "name": "gm_batch",          "profile": "alt",          "extra": []},
+    {"n": 8,  "name": "pickup_item",       "profile": "alt",          "extra": []},
+    {"n": 9,  "name": "move_walk",         "profile": "alt",          "extra": []},
+    {"n": 10, "name": "merchant_dialog",   "profile": "alt",          "extra": []},
+    {"n": 11, "name": "king_dialog",       "profile": "alt",          "extra": []},
+    {"n": 12, "name": "king_castle_war",   "profile": "alt",          "extra": []},
+    {"n": 13, "name": "npc_script_chain",  "profile": "alt",          "extra": []},
+    {"n": 14, "name": "equip_struck_save", "profile": "alt",          "extra": []},
+    {"n": 15, "name": "bag_equip",         "profile": "alt",          "extra": []},
+    {"n": 16, "name": "eat_item",          "profile": "alt",          "extra": []},
+    {"n": 17, "name": "spell_cast",        "profile": "window-magic", "extra": []},
+    {"n": 18, "name": "upgrade_retrieve",  "profile": "alt",          "extra": ["--timeout-ms", "720000"]}
+  ]
+}

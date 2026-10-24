@@ -1,0 +1,285 @@
+# window-run-2 续跑准备包（run-3）— 2026-10-25
+
+- 卡：`openmir2-window-run2-prep`（tier **L**；owner `openmir2-dev-2`；worktree `.worktrees/dev-2`；分支 `card/window-run2-prep`）。
+- 基线：`walgit/master` `0ef4e3b96`（2026-10-24 三天计划）；本文件随后续提交更新，实际证据见 §7 的 commit/sha。
+- 定位：**tester-1 窗口执行的操作手册 + 可执行准备件**。窗口时段由 owner 给；本包**不占用窗口**、不起栈、不占端口、不写库。
+- 验收映射：① 脚本 `--list/--dry-run` + 私栈自检可验证；② 两坑（SelGate ListenPort / 525 路由 17200）写进前置检查且各自可机判；③ 证据目录与 run-1/2 逐字段兼容（§5 样例）；④ `card_window --selftest` 全绿 + 卫生门禁 + `diff --check` + merge-tree（§7）。
+
+## 0. 一句话
+
+`bash tools/window/run_batch.sh` = **release 重建（head/sha256 对齐）→ 私栈/两坑/pin 自检 → 18 场景续跑 → 证据 + 批次汇总**。被中断后重跑同一条命令即可：已完成的场景跳过，`UNDECIDABLE`/半截场景重跑。
+
+## 1. 交付件
+
+| 文件 | 作用 |
+|---|---|
+| `tools/window/run_batch.sh` | run-3 一键续跑（唯一入口） |
+| `tools/window/run3-scenarios.json` | 18 场景清单（batch 与 preflight 共用的唯一事实源） |
+| `tools/window/rebuild-server.ps1` | release 重建 + `mir2-server.build.json`（head/sha256/dirty）+ `start-rust.ps1 -ServerExe` 同步 |
+| `tools/window/preflight_private_stack.py` | 私栈完整性 / 两坑 / pin 链 / 二进制对齐 / 清单一致性自检（只读，含 `--selftest` 24 条牙） |
+| `docs/window-run2-prep-20261025.md` | 本文件 |
+
+未改动：`card_window.py`、`compare_runs.py`、`mir2_probe.py`、`dbsnap.py`、场景 JSON、`rules.json`、`.walgit/board.toml`、`E:/MirServer`、mysqld。
+
+## 2. run-3 一键续跑
+
+### 2.1 场景清单（顺序 = window-run-2 实跑顺序）
+
+| # | 场景 | profile | 额外参数 | 已知前置（详见 `docs/window-runbook-20261023.md` §1.8/§7.4） |
+|---:|---|---|---|---|
+| 1 | `login_only` | alt | — | 无手动步骤；首登 `characters_ablity.Weight` 列差是已知 R 项 |
+| 2 | `npc_click_auto` | alt | — | actor 自动发现 |
+| 3 | `npc_click` | alt | — | 场景 `placement` |
+| 4 | `dice_chain_auto` | alt | — | 无（actor 自动发现） |
+| 5 | `dice_chain` | alt | — | `params.npc_actor=119` 是旧抓包值；**跨会话失效**，优先用 `dice_chain_auto` 的结论；保留本行只为清单完整 |
+| 6 | `gm_time` | alt | — | 无；ident 100 时间文本属墙钟噪声 |
+| 7 | `gm_batch` | alt | — | 同上 + 可能带 `Weight` 库差 |
+| 8 | `pickup_item` | alt | — | 基线需同格地物（run-1 缺前置） |
+| 9 | `move_walk` | alt | — | 走位目标格需与部署一致 |
+| 10 | `merchant_dialog` | alt | — | 商人摆位/语境 |
+| 11 | `king_dialog` | alt | — | `king_actor` 发现；点错庄家会响亮超时 |
+| 12 | `king_castle_war` | alt | — | 城堡战语境（castle_zone 缺口） |
+| 13 | `npc_script_chain` | alt | — | 脚本链语境 |
+| 14 | `equip_struck_save` | alt | — | 同屏受击者夹具 |
+| 15 | `bag_equip` | alt | — | 场景自描述 `inventory`；run-2 曾因 `characters_bagitem.ChrName` 列缺失 fail-closed |
+| 16 | `eat_item` | alt | — | 同上 |
+| 17 | `spell_cast` | **window-magic** | — | magic 夹具 + rust 侧 `MIR2_CLIENT_ABILITY_LAYOUT=0` pin（profile 内置） |
+| 18 | `upgrade_retrieve` | alt | `--timeout-ms 720000` | 第 9 步 sleep 660000；默认 20000 会 180s 杀 probe |
+
+> `--dry-run` 可用性（2026-10-24 `docs/window-scenario-dryrun-sweep-20261024.md`）：alt 17×rc=0，`spell_cast` 用 `window-magic` rc=0。**dry-run 绿 ≠ 真机已对拍**。
+
+### 2.2 用法
+
+```sh
+cd <本检出>                      # 必须与 rebuild/preflight 同一 checkout
+bash tools/window/run_batch.sh --list
+bash tools/window/run_batch.sh --dry-run          # 只读：打印计划 + 跑前置自检，不起栈
+bash tools/window/run_batch.sh                    # 开窗：重建 + 自检 + 18 场景
+bash tools/window/run_batch.sh --only login_only,spell_cast
+bash tools/window/run_batch.sh --from 9           # 中断后从第 9 个接着跑
+bash tools/window/run_batch.sh --force            # 全部重跑（忽略续跑判据）
+bash tools/window/run_batch.sh --skip-pin-smoke   # pin 链只做静态核对（证据登记未冒烟）
+bash tools/window/run_batch.sh --run-dir E:/tmp/window/run3 --timeout-sec 2700
+```
+
+- **续跑判据**（`--force` 之外）：`card-window.json` 同时满足
+  `verdict ∈ {PASS, FAIL}`、`compare_rc ∈ {0,1}`、`report_kind=compare`、`frames.compared>0`、
+  `artifacts` 含 `report.json`/`README.txt`、`git_head == 当前 HEAD`。
+  `UNDECIDABLE`、半截目录、head 变过的场景都会重跑；`card_window.py` 会把旧产物归档到
+  `<out>/_stale-<ts>-<pid>/`，不会用旧 PASS 冒充本轮。
+- **每场景后兜底清理**：只按 `E:\tmp\conformance\csharp-root\*` 路径杀进程 + `stop-rust.ps1`；
+  **不碰 mysqld**（3306 全程 UP）。
+- `--timeout-sec` 是外层超时（GNU `timeout`，默认 2700s）；没有 GNU timeout 时脚本打印 WARNING 并退化为不设外层超时（card_window 自己的子进程超时仍生效）。
+
+### 2.3 rc 双列口径（run-2 已确立，run-3 修正采集 bug）
+
+每个场景在 `batch.log` / `batch.jsonl` 里落两列：
+
+| 列 | 来源 | 含义 |
+|---|---|---|
+| `outer_rc` | 本脚本看到的 `card_window.py` 进程返回码 | `0` = PASS；`2` = 有结论但不通过 / UNDECIDABLE；`124`/`137` = 外层超时 |
+| `compare_rc` | `card-window.json`（`compare_runs.py` 原样） | `0` = 对拍全绿；`1` = 抓到真差异；`null` = 判不了 |
+
+- **run-2 的 bug**：`echo "END $(date +%H:%M:%S) $name shell_rc=$?"` 里命令替换 `$(date)` 先执行并**重置 `$?`**，所以 run-2 的 `shell_rc` 恒为 0（与 `verdict=FAIL/exit=2` 矛盾）。run-3 在调用后**立即** `outer_rc=$?`，再碰任何命令替换。
+- `verdict` 只有三态：`PASS` / `FAIL` / `UNDECIDABLE`；**UNDECIDABLE 不是通过**，批次 rc=2。
+
+### 2.4 退出码
+
+`0` = 所有选中场景都产出了 PASS/FAIL；`2` = 缺参 / 重建失败 / 前置失败 / 任一场景 UNDECIDABLE 或没有证据。
+与 `card_window.py` 的 fail-closed 口径一致。
+
+## 3. release 二进制重建（对齐 head + sha256）
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/rebuild-server.ps1 -SyncStartRust -RequireClean
+```
+
+做的事：
+
+1. `git rev-parse HEAD` + `git status --porcelain`；`-RequireClean` 下脏树直接 RED（证据必须能追溯到 HEAD）。
+2. `cargo build --release -p mir2-server`（cwd = `mir2-rs/`）。
+3. 写 `mir2-rs/target/release/mir2-server.build.json`（`format=mir2-build-stamp/1`）：
+   `head / head_subject / built_at / dirty / exe / sha256 / size / cargo / rustc`。stamp 在 target 下，不入库。
+4. `-SyncStartRust`：把 `E:/tmp/conformance/start-rust.ps1` 的默认 `-ServerExe` 改成**本检出**的 release 二进制；
+   原文件先备份 `start-rust.ps1.bak-<时间戳>`。**为什么必须**：run-2 的默认值指向已删除的
+   `E:\tmp\wt-worker-73\...`；`card_window.py` 起栈后用 `mir2-server.pid.json` 的 `roles[].exe`
+   与 profile `binaries` 对账，不一致直接 rc=2。
+5. 打印机器可读行：`BUILD_HEAD / BUILD_DIRTY / SERVER_EXE / SERVER_EXE_SHA256 / BUILD_STAMP / START_RUST_SERVER_EXE`。
+
+`run_batch.sh` 默认在开跑前自动执行这一步（`--no-rebuild` 可跳过，但证据里必须写明二进制来源）。
+**窗口里 Rust 证据的 sha256 一律以 `batch-summary.json.rust_binary.sha256` 为准**（与每个场景 `README.txt` 里的 rust sha 应一致）。
+C# oracle 侧 sha256 由 `card_window.py` 逐场景记录（`csharp-root/M2GameSvr/GameSrv.exe`）。
+
+## 4. 前置自检
+
+```sh
+python -I -B tools/window/preflight_private_stack.py          # 私栈 + 两坑 + pin + 二进制
+python -I -B tools/conformance/preflight.py --profile alt --with-dry-run
+python -I -B tools/conformance/preflight.py --profile window-magic --with-dry-run
+```
+
+`run_batch.sh` 在开跑前自动跑这三条；任一步 FAIL ⇒ 不开跑（`--no-preflight` 仅调试，证据须登记）。
+
+### 4.1 `preflight_private_stack.py` 七步
+
+| step | 判什么 | FAIL 的典型现象 |
+|---|---|---|
+| `inventory` | 私栈 22 个部署件 + `baseline/` 非空 | 外部清理后只剩半套；restore 无基线 |
+| `selgate_listenport` | **坑 A**：`ListenPort=17100` + SelGate.exe 与 T-172 构建同 sha256 + `AddrTable→:17100` | stack 步只报 `ready ports missing: 17100,17200`，看不出根因 |
+| `route_525` | **坑 B**：两侧 `ServerInfo.txt` 首行端口含 17200；C# RunGate 17200 / Rust 17600 | C# 探针按 525 连网关连空；或 Rust 525 与 oracle 逐字节必红 |
+| `pin_static` | `window-magic` rust env + `-PinChecks/-PinLog` 接线；alt 未被污染 | pin 静默丢失（布局跑错却不报错） |
+| `pin_smoke` | `start-stack-wmi.ps1 -CheckPinsOnly`（**不派生进程**）读上一轮 game-svr 日志自证 | 日志不存在 / 未见 `MIR2_CLIENT_ABILITY_LAYOUT=0` + `layout=oracle-40` |
+| `binary_stamp` | stamp.head == 当前 HEAD；stamp.sha256 == 文件实际；dirty 为空 | 旧二进制假绿 / 构建时脏树 |
+| `start_rust_exe` | `start-rust.ps1 -ServerExe` == 本检出 release | run-2 遗留的 `wt-worker-73` 路径 |
+| `roster` | 18 场景文件、profile 只允许 alt/window-magic、rules.json 在位 | 清单漂移 |
+
+> 私栈根可用 `--root` / `WINDOW_PRIVATE_ROOT` 覆盖；默认 `E:/tmp/conformance`。
+> `--skip-pin-smoke` / `--skip-binary` 只降级为 WARN，**必须**在证据里登记。
+
+### 4.2 坑 A：SelGate ListenPort（重建期）
+
+- **背景**：C# `SelGate` 源码把 `GatePort = 7100` 写死；owner 2026-10-23 批准的 T-172
+  （`src/SelGate/GateShare.cs:21` 改 `public static int`，`ConfigManager.cs:71` 读
+  `[SelGate] ListenPort`）让私有栈能起在 17100。**只有 T-172 构建**会读 `ListenPort`。
+- **机判**：`csharp-root/SelGate/config.conf` 的 `ListenPort == 17100`
+  **且** `sha256(csharp-root/SelGate/SelGate.exe) == sha256(selgate-build/SelGate.exe)`
+  **且** `LoginSrv/AddrTable.txt` 含 `:17100`。
+- **失败现象**：`start-stack-wmi` 报 `ready ports missing: 17100,17200`；登录到选服后无
+  `SM_SELECTSERVER_OK(530)`，看起来像「Rust 协议错」，实际是**选服网关没起来**。
+- **修复**：用 `E:/tmp/conformance/selgate-build/` 的构建覆盖 `csharp-root/SelGate/`；确认
+  `config.conf` 的 `[SelGate] ListenPort=17100`（stock 二进制不认这个键）。
+
+### 4.3 坑 B：525 路由 17200（重建期）
+
+- **背景**：`SM_STARTPLAY(525)` body = `GameGate ip/port`；C# 探针**用它**决定连哪个游戏网关
+  （`mir2_probe.py` `run.chain["gamegate"]`）。`DBSrv/ServerInfo.txt` 默认行是
+  `127.0.0.1 127.0.0.1 7200`；私有栈网关在 17200 ⇒ 不改就连空。
+- **机判**：
+  - `csharp-root/DBSrv/ServerInfo.txt` 首行 = `127.0.0.1 127.0.0.1 17200`；
+  - `rust-root/DBSrv/ServerInfo.txt` **也必须** = `127.0.0.1 127.0.0.1 17200`；
+  - `csharp-root/RunGate/config.conf` `GatePort1=17200`、`rust-root/RunGate` `GatePort1=17600`。
+- **反直觉点（别「修」错）**：Rust 实际连的是 **17600**，由 profile 的
+  `--game-gate 127.0.0.1:17600` 覆盖；但 `rules.json` 对 525 是 `action=compare`
+  （body 逐字节比），所以 **rust-root 的 ServerInfo 必须保持 17200** 才能与 oracle 相同。
+  把它改成 17600 ⇒ 525 必红（preflight 有专门的牙钉住这一点）。
+- **失败现象**：C# 侧 probe 在 `SM_STARTPLAY` 之后连不上网关；或 Rust 525 与 oracle 差
+  `.../17600` vs `.../17200`。
+
+### 4.4 pin 链 smoke
+
+`window-magic` 的 rust 侧 `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT=0` +
+stack `-PinChecks MIR2_CLIENT_ABILITY_LAYOUT=0 -PinLog E:/tmp/conformance/rust-logs/game-svr.out.log`。
+`start-stack-wmi.ps1 -CheckPinsOnly` **只校验调用方 env + 日志自证行，不派生进程**，
+因此可以在开窗前任意跑。日志不存在 ⇒ FAIL（自证无从谈起）；确实没有上一轮日志时用
+`--skip-pin-smoke` 并在证据里登记未冒烟。
+
+## 5. 证据目录规范（`E:/tmp/window/run3/`）
+
+### 5.1 目录树
+
+```text
+E:/tmp/window/run3/
+  batch.log                      # 人读：START/RESULT/SKIP/END（rc 双列）
+  batch.jsonl                    # 机器读：每场景一行（增量写，中断也保留）
+  batch-summary.json             # 批次汇总（每次重算；字段见 5.3）
+  rebuild.log                    # release 重建输出（含 SERVER_EXE_SHA256）
+  preflight/
+    preflight-private.log/.json  # 私栈自检逐项
+    preflight-alt.log
+    preflight-window-magic.log
+  <scenario>/                    # ← 与 run-1/run-2 **逐字段相同**（card_window.py 原样产物）
+    report.json
+    card-window.json
+    card-window.log
+    README.txt
+    csharp/{frames.ndjson,run.json,discovered.json,db/…,placement.json,inventory.json,magic.json}
+    rust/{同上}
+  <scenario>.log                 # card_window 的 stdout/stderr（run-2 同口径）
+```
+
+`--dry-run` 的日志写到 **`E:/tmp/window/run3-dry-run/`**（旁边，不污染真证据目录）。
+
+### 5.2 与 run-1/run-2 的兼容性
+
+- `<scenario>/` 下所有文件由 `card_window.py` 生成，**字段/布局未改**；run-1/run-2 的
+  `report.json` / `card-window.json` / `README.txt` / 两侧 `frames.ndjson` 可直接与 run-3 对照。
+- 本轮新增的只有**批次层**（`batch.*`、`preflight/`、`rebuild.log`），不修改任何单场景字段。
+- `card-window.json` 关键字段（续跑判据与汇总都读这些）：
+  `verdict`、`compare_rc`、`exit_code`、`report_kind`、`frames{oracle_total,rust_total,compared}`、
+  `artifacts{README.txt,report.json,...}`、`git_head`、`binaries{csharp[],rust[]}`、`sides{...}`。
+
+### 5.3 `batch-summary.json` 字段与样例
+
+| 字段 | 说明 |
+|---|---|
+| `format` | `window-batch-summary/1` |
+| `card` / `run_dir` / `repo` / `git_head` / `generated_at` | 批次标识 |
+| `rust_binary.{path,sha256,build_stamp}` | 本轮 Rust 二进制（来自 `mir2-server.build.json`） |
+| `totals.{PASS,FAIL,UNDECIDABLE,NOT_RUN}` | 计数（`NOT_RUN` = 中断时还没轮到的场景） |
+| `scenarios[]` | 按清单顺序，每项：`n/name/profile/extra/verdict/compare_rc/exit_code/outer_rc/frames{oracle,rust,compared}/duration_s/skipped/skip_reason/dir/log/evidence{card_window_json,report_json,readme}` |
+
+样例（真实值以本轮 `E:/tmp/window/run3/batch-summary.json` 为准）：
+
+```json
+{
+  "format": "window-batch-summary/1",
+  "card": "openmir2-window-run-2",
+  "run_dir": "E:/tmp/window/run3",
+  "git_head": "<本轮 HEAD>",
+  "rust_binary": {
+    "path": "E:/…/mir2-rs/target/release/mir2-server.exe",
+    "sha256": "<本轮 release sha256>",
+    "build_stamp": {"format": "mir2-build-stamp/1", "head": "<本轮 HEAD>", "dirty": ""}
+  },
+  "totals": {"PASS": 1, "FAIL": 0, "UNDECIDABLE": 0, "NOT_RUN": 17},
+  "scenarios": [
+    {
+      "n": 1, "name": "login_only", "profile": "alt", "extra": [],
+      "verdict": "PASS", "compare_rc": 0, "exit_code": 0, "outer_rc": 0,
+      "frames": {"oracle": 29, "rust": 29, "compared": 29},
+      "duration_s": 185, "skipped": false, "skip_reason": null,
+      "dir": "E:/tmp/window/run3/login_only",
+      "log": "E:/tmp/window/run3/login_only.log",
+      "evidence": {"card_window_json": "…/card-window.json", "report_json": "…/report.json",
+                   "readme": "…/README.txt"}
+    },
+    {"n": 18, "name": "upgrade_retrieve", "verdict": "NOT_RUN", "skipped": false}
+  ]
+}
+```
+
+`batch.jsonl` 每行就是一个 `scenarios[]` 元素（同一场景重跑时后一行覆盖前一行；汇总取最后一行）。
+`batch.log` 的 `RESULT` 行示例：
+
+```text
+RESULT n=07 name=gm_batch verdict=FAIL outer_rc=2 compare_rc=1 exit_code=2 frames=36/36/35 duration=150s
+```
+
+## 6. 开窗前 10 分钟 checklist（tester-1）
+
+1. `git status --porcelain` 为空；`git rev-parse HEAD` 记入本轮快照戳。
+2. `bash tools/window/run_batch.sh --list`（18 行）与 `--dry-run` 跑通；确认 preflight 全 OK。
+3. 确认窗口独占：默认 C# 栈的 `E:/MirServer` 六进程已停（**不要**用 `start-all.ps1 -Stop`，会停 mysqld）；3306 仍 UP。
+4. `bash tools/window/run_batch.sh`；中断就重跑同一条命令（续跑）。
+5. 跑完：`batch-summary.json` 的 `totals` 与 `batch.log` 的 RESULT 行逐场景核对；把证据路径 + 两侧二进制 sha256 + HEAD 贴到 `openmir2-window-run-2` 的 `status`/`comment`。
+6. 恢复默认栈（`start-all.ps1`），`port-status.ps1` 复核十端口；清理只清本轮起的栈，不动 mysqld。
+
+## 7. 本次 dry-run 验证证据
+
+（以下命令均在本检出执行；**全程未起栈、未占端口、未连库**。）
+
+```text
+__EVIDENCE__
+```
+
+## 8. 残留物与禁止事项
+
+- 残留：`E:/tmp/window/run3-dry-run/`（本次 dry-run 日志）；`E:/tmp/conformance/start-rust.ps1.bak-*`
+  （同步 `-ServerExe` 前的备份）；`mir2-rs/target/release/mir2-server.build.json`（构建戳，target 内，不入库）。
+- 禁止：启动任何服务端/客户端、占端口、写生产库、改场景 JSON、`--allow-production-db`、
+  停 mysqld、用 `--no-preflight` 出正式证据。
+- 已知限制：`pin_smoke` 依赖**上一轮** game-svr 日志（本机 `E:/tmp/conformance/rust-logs/game-svr.out.log`）；
+  全新机器/日志被清时只能 `--skip-pin-smoke` 并登记。
+- run-2 证据仍在 `E:/tmp/window/run2/`（其 README 里的 rust sha 指向已删除的 `wt-worker-73` 构建，
+  **不可**直接当作 run-3 证据；run-3 必须用本轮重建的二进制重跑）。run-1 证据目录已不在本机，
+  以 `docs/window-run-1-20261024.md` 的文字记录为准。
