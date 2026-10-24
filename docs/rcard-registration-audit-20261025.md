@@ -4,7 +4,7 @@
 - 基线：本地 `master = 1c605ca4a`（walgit 故障期，本地主源）。
 - 写集：**只新增本文档**；未改代码、未改任何卡片状态或他人条目；未起栈/占端口/连库。
 - 口径：**本审计只核「登记是否真实、是否可判」，不代表任何一张卡已有真机窗口证据**（登记型 PASS ≠ 真机证据）。
-  作者即 reviewer-20 ⇒ 复核由**另一 principal**（reviewer-21）出，本文不写「已审」字样。
+  作者即 reviewer-20 ⇒ 复核由**另一 principal**（reviewer-21）出；本文不对任何卡作审查结论。
 
 ## 0. 一句话
 
@@ -88,7 +88,7 @@ merged_not_closed 1 / 其它需人工 0 / 未开工或未合并 1（不计缺口
 | **F1** | **Important（登记卫生）** | `openmir2-m3-castle-siege-state` 的 T-127 片 `merge_result`（`c8a74b72`）写成 `oid: "T127_MERGE"`、`merge_commit: "见 master tip"` ⇒ **机器不可判**：审计/台账/复算都无法从条目直接对到 `263e77d7e`（本次靠 `git log --first-parent --merges` 反查）。其余 5 张卡的 `merge_result.oid` 都是真 commit。 | 由卡片 owner 补一条 `comment`（不改 status）写明真实 merge oid `263e77d7e` 与 branch `card/castle-siege-t127`；以后 merge_result 的 `oid` 只写 commit。 |
 | **F2** | Minor（弱登记） | §3 的 10 条 W 项：**6 张卡**都存在「有文本、当前不可当场执行」的情形（缺场景/夹具、C# 时钟注入未落地、RNG 账本未接线、资产白名单只有 `Gold`）。**其中两处性质更硬**：① `loader W-LF-2` 本片无消费点 ⇒ 应移出窗口项；② `playdice W-PD-2` 的 `@back` 字面在部署件 **0 命中**（只有 `@back2`）⇒ 要么改指 `@back2`，要么标构造级。 | 逐条按 §3「依据」列收口：能手工跑的在窗口 kit 里补手工步骤（tester 已做）；不能跑的改登记（移出/挂后继片/标观察项）。 |
 | **F3** | Minor（口径） | 5/6 卡的**最后 status** 是合并后的 `in-progress`，**不带** `tier`/`window_required`；字段实际在 `merge_result` 与更早的 needs-review status 上。`goal_gate` 采「**任一**条目的 `window_required=true`」⇒ 桶正确；但若有人按「最后 status」核对会误判缺登记。 | 审计/复核口径统一写成「以 merge_result（或任一 needs-review status）为准」；不建议为此回填旧 status。 |
-| **F4** | 红线（自检） | 本文全部表述遵守：不把「登记型 PASS」写成「已有真机证据」（§0/§4 明写 194 张卫生清单只是登记型 PASS）；不含「已审」字样。 | — |
+| **F4** | 红线（自检） | 本文全部表述遵守：不把「登记型 PASS」写成「已有真机证据」（§0/§4 明写 194 张卫生清单只是登记型 PASS）；本文不对任何卡作审查结论（复核由 reviewer-21 出）。 | — |
 
 ## 6. 复算命令（可直接执行）
 
