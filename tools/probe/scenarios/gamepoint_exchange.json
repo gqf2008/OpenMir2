@@ -1,0 +1,47 @@
+{
+  "name": "gamepoint_exchange",
+  "description": "W-PD-1：`真爱-G002` 的 GAMEPOINT 兑换链（Market_Def/功能NPC/真爱-G002.txt）：[@main](:3，<使用[玫瑰花]/@yhua> 链接 :7) → @yhua(:105，<9朵兑换[一心一意]烟花/@9hua> 链接 :107) → @9hua(:520) 的 `CHECKGAMEPOINT > 8` 前置 + `GAMEPOINT - 9`（T-142 ⑨）。验收对象：`SM_GAMEGOLDNAME(5008)` 的 Param/Tag = LoWord/HiWord(GamePoint) + 脚本说词 643 的帧序 + DB `characters.GamePoint` 前后值。**不得假设任何未复算字段**（含 cleared）：前置 GamePoint≥9 由 `assets` 声明（依赖 P0 白名单扩到 GamePoint 的卡 `openmir2-window-kit-p0-unblock`）。 **前置声明走文本**：`CHECKGAMEPOINT > 8` 需测试库角色 GamePoint≥9；runner 侧 `assets` 白名单（`card_window.py` 的 ASSETS_COLUMNS）自 P0 卡起含 `GamePoint`，但 `tools/probe/mir2_probe.py` 的 `_check_assets` 仍只认 `Gold` ⇒ 本场景**不写 `assets` 键**（否则 `--check-scenario` fail-closed），前置由窗口脚本/手工置库提供（登记给 Leader）。",
+  "required": [
+    "npc_actor"
+  ],
+  "placement": {
+    "map": "G002",
+    "x": 50,
+    "y": 49,
+    "note": "Merchant.txt:127 `功能NPC/真爱 G002 49 49 红娘 …` ⇒ 商人在 (49,49)；本场景放 (50,49) 东邻格（同图、±15 内满足 CM_CLICKNPC/1011 视距门）。ChrName=红娘（脚本文件按 Merchant.txt 的目录/文件名规则解析为 Npc_def/Market_Def 项）。"
+  },
+  "steps": [
+    {
+      "click_npc": "npc_actor",
+      "note": "CM_CLICKNPC(1010) → NormNpc.Click（src/M2Server/Npc/NormNpc.cs:68-74）→ GotoLable(@main)。recog 由 param_discovery 从 643.recog 发现，不许写死"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] 页（真爱-G002.txt:3-28）：<赠送[玫瑰花]/@shua> <使用[玫瑰花]/@yhua>"
+    },
+    {
+      "dlg_select": "@yhua",
+      "note": "CM_MERCHANTDLGSELECT(1011) → Merchant.UserSelect（PlayObject.Operate.cs:114-128）；[@yhua] 在脚本 :105"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@yhua] 页（:105-110）：说词含 `<$GAMEPOINT>`（当前朵数）+ <9朵兑换[一心一意]烟花/@9hua>（:107）"
+    },
+    {
+      "dlg_select": "@9hua",
+      "note": "[@9hua]（标签 :520）——`#if CHECKGAMEPOINT > 8`（**:522**）`#act GAMEPOINT - 9`（**:524**）；前置（GamePoint≥9）由窗口脚本/手工置库提供（本场景不写 `assets`，见 description）"
+    },
+    {
+      "wait_for": 5008,
+      "timeout_ms": 3000,
+      "note": "`SM_GAMEGOLDNAME(5008)`：oracle `SendGoldInfo`（`PlayObject.Base.cs:927-939`）Param=LoWord(GamePoint)、Tag=HiWord(GamePoint)；扣 9 后 9→0 ⇒ Param=0/Tag=0。**帧序**：优先级按 **RM** 算——该帧由泵 `case RM_GAMEGOLDCHANGED`（`PlayObject.Message.cs:1836-1838`）产出，`RM_GAMEGOLDCHANGED=8084 ⇒ 8084&0xFF=148`；`RM_MERCHANTSAY=11009 ⇒ 1` ⇒ **说词先**（`SM_GAMEGOLDNAME` 自身的 5008&0xFF=144 只是 SM 号，不参与优先级）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "兑换后的脚本说词（同 handler）"
+    }
+  ]
+}
