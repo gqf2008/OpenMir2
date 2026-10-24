@@ -5981,6 +5981,91 @@ impl World {
         true
     }
 
+    /// `CLEARMAPMON`：清指定地图的存活怪（`ActionOfClearMapMon`，`ExecutionProcessingSys.cs:2983-3003`
+    /// + `WorldEngine.GetMapMonster`，`WorldServer.cs:1639-1674`）。
+    ///
+    /// **候选集与顺序逐行照 oracle**：先按 `MonGenInfoThreadMap` 的遍历序（thread id 升序 →
+    /// 条目序 → `CertList` 序）**整表收集**，再逐个 `MakeGhost`（C# 也是先 `GetMapMonster`
+    /// 填 `monList` 再循环）⇒ 快照语义：本函数先固定 id 列表再改动实体。
+    ///
+    /// **过滤**：
+    /// - `!mon.Death && !mon.Ghost && mon.Envir == envir`（本仓 `entity.map_id == map_id`；
+    ///   地图名不存在由调用方先解析成 `map_id`，`FindMap == null` ⇒ 调用方零操作）；
+    /// - `mon.Master != null` ⇒ 跳过（宠物/召唤物）；
+    /// - `SystemShare.GetNoClearMonList(name)` **恒 false**（`M2Share.cs:1782-1794` 整段注释）
+    ///   ⇒ 不设过滤（与 `crates/envir` 的 no-op 实现同口径）。
+    ///
+    /// **副作用（逐怪、按序）**：
+    /// 1. `mon.NoItem = true`（禁止掉落；不是立即删实体）；
+    /// 2. `mon.MakeGhost()` = 置 `Invisible`/`Ghost` + `GhostTick = now` + `DisappearA()`；
+    /// 3. `DisappearA` 的 `SendRefMsg(RM_DISAPPEAR)`：收件人 = **清场时刻** ±`SEND_REF_MSG_RANGE`
+    ///    格内 `Race == Play && !Ghost` 的玩家（与离世广播同口径格扫），逐条登记进
+    ///    [`SessionRegistry::push_depart`]，宿主同点出 `SM_DISAPPEAR(30)`。
+    ///
+    /// `CertList` 条目**保留**（oracle 同）：`Ghost` 的怪由 [`crate::mongen::process_cert_lists`]
+    /// 到期释放、`Invisible` 的可复活怪走 `ReAliveEx`。不消费随机数。
+    pub fn clear_map_monsters(
+        &mut self,
+        map_id: usize,
+        state: &crate::mongen::MonGenState,
+    ) -> Vec<crate::mongen::ClearMapMonRecord> {
+        // ① 候选快照（oracle 先 `GetMapMonster` 收集、后循环 MakeGhost）。
+        let mut ids: Vec<i32> = Vec::new();
+        for thread in state.threads.values() {
+            for &entry_idx in &thread.entries {
+                let Some(entry) = state.entries.get(entry_idx) else {
+                    continue;
+                };
+                for &id in &entry.cert_list {
+                    let Some(e) = self.entities.get(id) else {
+                        continue;
+                    };
+                    if e.death || e.ghost || e.map_id != map_id {
+                        continue;
+                    }
+                    if e.master.is_some() {
+                        continue;
+                    }
+                    ids.push(id);
+                }
+            }
+        }
+        // ② 逐个 MakeGhost（帧面收件人在**清场时刻**格扫；oracle `DisappearA` 同步广播）。
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some((x, y, name, can_re_alive)) = self
+                .entities
+                .get(id)
+                .map(|e| (e.x, e.y, e.name.clone(), e.can_re_alive))
+            else {
+                continue;
+            };
+            let observers = crate::session::send_ref_msg_targets_at(
+                self,
+                id,
+                map_id,
+                x,
+                y,
+                crate::session::SEND_REF_MSG_RANGE,
+            );
+            for observer in observers {
+                self.sessions.push_depart(observer, id);
+            }
+            if let Some(e) = self.entities.get_mut(id) {
+                e.no_item = true;
+            }
+            crate::monai::make_ghost(self, id);
+            out.push(crate::mongen::ClearMapMonRecord {
+                actor_id: id,
+                name,
+                x,
+                y,
+                can_re_alive,
+            });
+        }
+        out
+    }
+
     /// `BaseObject.DisappearA()` 的格子面（`BaseObject.cs:1519-1522`）：
     /// `Envir.DeleteFromMap(CurrX, CurrY, CellType, ActorId, this)`。
     ///

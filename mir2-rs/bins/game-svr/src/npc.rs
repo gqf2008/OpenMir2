@@ -912,6 +912,21 @@ pub struct NpcPlayer<'r, 'g> {
     /// 扇出给**其余** `!Ghost` 在线玩家（每个收件人各建一个 `NetPriorityQueue` 出队，
     /// 同 ident 多帧的四叉堆序与 oracle 的 `MsgQueue` 一致）。
     pub world_broadcasts: Vec<String>,
+    /// **卡 `openmir2-clearmapmon-impl`**：脚本里 `CLEARMAPMON`/`MONGENEX` 产生的世界副作用请求
+    /// （[`mir2_script::engine::WorldAction`]，**按脚本动作序**排队）。宿主在脚本跑完后
+    /// [`ScriptPlayer::take_world_actions`] 取走，并在**同一条队列**上按序应用（清场 → 刷怪），
+    /// 避免「先刷后清」把新刷的怪一起清掉（oracle 是动作内同步执行，见卡面 amendment）。
+    pub world_actions: Vec<mir2_script::engine::WorldAction>,
+    /// 是否把 `CLEARMAPMON`/`MONGENEX` 排进 [`Self::world_actions`]（生产接线 = `true`）。
+    ///
+    /// `false` ⇒ 与接线前**逐字节相同**：`regen_monster` 返回 `false`（`ActionOfMonGenEx` 循环
+    /// 首轮即 break）、`clear_map_monsters` 不产生请求。用例/未接线路径保持旧语料。
+    ///
+    /// **登记偏差（R 窗口项）**：接线后 `regen_monster` 在排队时恒返回 `true`——oracle 的
+    /// `RegenMonsterByName == null`（未知地图/模板/31 次移位失败）会让循环 break，本实现在
+    /// 应用阶段才知道成败 ⇒ 失败输入下**多抽**后续迭代的 x/y 随机数。部署两处（T118/Q001）
+    /// 模板与地图都存在，窗口对拍应含一条无效 MONGENEX 场景。
+    pub mon_gen_enabled: bool,
     /// `SETMPAMODE` 的待落写队列（[`crate::map_mode::MapModeWrite`]）。
     ///
     /// oracle 在 `ActionOfSetMapMode`（`ExecutionProcessingSys.cs:4423-4881`）里**当场**写
@@ -1002,6 +1017,8 @@ impl NpcPlayer<'_, '_> {
             sys_msg_cfg: SysMsgCfg::default(),
             broadcast_cfg: BroadcastCfg::default(),
             world_broadcasts: Vec::new(),
+            world_actions: Vec::new(),
+            mon_gen_enabled: false,
             map_mode_writes: Vec::new(),
             // `PlayObject.Permission` 的 ctor 缺省（`PlayObject.cs:58` 未初始化 ⇒ 0）；
             // 跳线未接 = 缺省 no-op（与 `ScriptPlayer` 缺省一致）。
@@ -1767,6 +1784,38 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     }
     fn random(&mut self, value: i32) -> i32 {
         (self.rng)(value)
+    }
+    /// `SystemShare.WorldEngine.RegenMonsterByName(...) != null`（`ExecutionProcessingSys.cs:5480`）：
+    /// 排队一条 [`mir2_script::engine::WorldAction::RegenMonster`]，由宿主脚本结束后按序应用。
+    ///
+    /// **未接线**（[`Self::mon_gen_enabled`] = false）⇒ 返回 `false`（与 trait 缺省同口径，
+    /// 旧用例逐字节不变）。
+    fn regen_monster(&mut self, map: &str, x: i32, y: i32, name: &str) -> bool {
+        if !self.mon_gen_enabled {
+            return false;
+        }
+        self.world_actions
+            .push(mir2_script::engine::WorldAction::RegenMonster {
+                map: map.to_string(),
+                x,
+                y,
+                name: name.to_string(),
+            });
+        true
+    }
+    /// `ActionOfClearMapMon`（`:2983-3003`）：排队一条
+    /// [`mir2_script::engine::WorldAction::ClearMapMonsters`]（未接线 ⇒ no-op）。
+    fn clear_map_monsters(&mut self, map: &str) {
+        if !self.mon_gen_enabled {
+            return;
+        }
+        self.world_actions
+            .push(mir2_script::engine::WorldAction::ClearMapMonsters {
+                map: map.to_string(),
+            });
+    }
+    fn take_world_actions(&mut self) -> Vec<mir2_script::engine::WorldAction> {
+        std::mem::take(&mut self.world_actions)
     }
     fn set_kill_mon_exp_rate(&mut self, rate: i32, time: i32) {
         self.kill_mon_exp_rate = rate;

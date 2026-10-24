@@ -47,6 +47,27 @@ pub struct PoseInfo {
     pub is_master: bool,
 }
 
+/// 脚本动作产生的**世界副作用请求**（`CLEARMAPMON` / `MONGENEX`），按脚本动作序入队。
+///
+/// 为什么排队而不是动作内执行：引擎侧 [`ScriptPlayer`] 不持有 `&mut World`（trait 面刻意与
+/// 世界解耦，见模块头），而 oracle 的 `ActionOfClearMapMon`/`ActionOfMonGenEx` 是**动作内同步**
+/// 执行。宿主在脚本跑完后按**同一队列的入队序**应用 ⇒「清场 → 刷怪」的相对次序与 oracle 一致
+/// （分两遍应用会先刷后清，把新刷的怪一起清掉，见卡 `openmir2-clearmapmon-impl` 的 scope
+/// amendment）。RNG 面差异（`CreateMonster` 的抽数从动作点移到脚本尾）已在同卡登记为窗口项。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorldAction {
+    /// `CLEARMAPMON <map>`（`ActionOfClearMapMon`，`ExecutionProcessingSys.cs:2983-3003`）。
+    ClearMapMonsters { map: String },
+    /// `MONGENEX <map> <x> <y> <name> …` 的**单次**生成请求
+    /// （`ActionOfMonGenEx`，`ExecutionProcessingSys.cs:5466-5487`；每次循环一条）。
+    RegenMonster {
+        map: String,
+        x: i32,
+        y: i32,
+        name: String,
+    },
+}
+
 /// 玩家侧（脚本可见的最小面；随处理器移植逐步扩充）。
 pub trait ScriptPlayer {
     /// `playerActor.LastNpc`
@@ -686,6 +707,13 @@ pub trait ScriptPlayer {
     }
     /// `ActionOfClearMapMon`：把地图上的怪物（排除 Master / NoClearMonList）置 NoItem + MakeGhost
     fn clear_map_monsters(&mut self, _map: &str) {}
+    /// 取走本脚本执行期间排队的**世界副作用请求**（[`WorldAction`]，按动作序）。
+    ///
+    /// 缺省空 = 该实现不接世界面（C# flow 夹具的 DispatchProxy 口径）。接线的宿主实现
+    /// （`NpcPlayer`）在 `clear_map_monsters`/`regen_monster` 里入队，由宿主脚本结束后按序应用。
+    fn take_world_actions(&mut self) -> Vec<WorldAction> {
+        Vec::new()
+    }
     /// `DateTime.Today` 的 `ToString()` 文本（`ActionOfAddUseDateList` 用）
     fn today_string(&self) -> String {
         String::new()

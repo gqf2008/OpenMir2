@@ -4679,6 +4679,9 @@ fn handle_click_npc_cmd(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
     gm: Option<&ScriptGmEnv<'_>>,
+    // **卡 `openmir2-clearmapmon-impl`**：脚本世界副作用（`CLEARMAPMON`/`MONGENEX`）的应用上下文；
+    // `None` = 未接线（请求丢弃，且脚本期 `mon_gen_enabled=false` 与旧行为逐字节相同）。
+    mut script_world: Option<&mut ScriptWorldCtx<'_>>,
 ) -> bool {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -4776,7 +4779,7 @@ fn handle_click_npc_cmd(
         // 写回后的会话值，与商人路径一致）。
         let map_text = pmap.to_string();
         let mut script_broadcasts: Vec<String> = Vec::new();
-        let (says, script_frames, use_slots) = run_merchant_goto(
+        let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
             merchant_book,
             npc_actor_id,
             "@main",
@@ -4796,8 +4799,12 @@ fn handle_click_npc_cmd(
             Some(&*world),
             gm,
             &mut script_broadcasts,
+            script_world.is_some(),
         );
         world.rng = rng;
+        // **卡 `openmir2-clearmapmon-impl`**：脚本世界副作用按**动作序**在同一队列上应用
+        // （oracle 是动作内同步；RNG 面差异见 `NpcPlayer::mon_gen_enabled` 登记）。
+        apply_script_world_actions(world, &mut script_world, world_actions);
         // 佩戴位写回后同步世界实体（`Entity.use_items` 是每 tick 的源，不同步会被覆盖）。
         for slot in use_slots {
             sync_use_item_slot_to_entity(world, sg, slot);
@@ -5024,6 +5031,8 @@ fn dispatch_inbound_p0(
             // **卡 `openmir2-gm-script-exec-seams`**：生产路径的 `CM_CLICKNPC` 由 sim 循环在
             // 调本函数**之前**接管（那里才能同时借 `&guilds` 给 GM 跳线，而本函数的
             // `guild: &mut GuildDisconnect` 与它冲突）⇒ 本分支只作单元级入口，不装桥。
+            None,
+            // **卡 `openmir2-clearmapmon-impl`**：同因，本分支也没有刷怪宿主 ⇒ 不接世界副作用。
             None,
         );
         true
@@ -5462,6 +5471,9 @@ fn handle_shop_cmd(
     npc_vars: &game_svr::npc::NpcVars,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 宿主跳线视图（`None` = 未接线）。
     gm: Option<&ScriptGmEnv<'_>>,
+    // **卡 `openmir2-clearmapmon-impl`**：脚本世界副作用（`CLEARMAPMON`/`MONGENEX`）的应用上下文
+    // （`None` = 未接线，同 [`handle_click_npc_cmd`]）。
+    mut script_world: Option<&mut ScriptWorldCtx<'_>>,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -5651,7 +5663,7 @@ fn handle_shop_cmd(
             let mut rng =
                 std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
             let mut script_broadcasts: Vec<String> = Vec::new();
-            let (says, script_frames, use_slots) = run_merchant_goto(
+            let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
                 merchant_book,
                 merchant_id,
                 label,
@@ -5671,8 +5683,10 @@ fn handle_shop_cmd(
                 Some(&*world),
                 gm,
                 &mut script_broadcasts,
+                script_world.is_some(),
             );
             world.rng = rng;
+            apply_script_world_actions(world, &mut script_world, world_actions);
             for slot in use_slots {
                 sync_use_item_slot_to_entity(world, sg, slot);
             }
@@ -5727,7 +5741,7 @@ fn handle_shop_cmd(
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
                 let mut script_broadcasts2: Vec<String> = Vec::new();
-                let (says2, script_frames2, use_slots2) = run_merchant_goto(
+                let (says2, script_frames2, use_slots2, world_actions2) = run_merchant_goto(
                     merchant_book,
                     merchant_id,
                     &target,
@@ -5747,8 +5761,10 @@ fn handle_shop_cmd(
                     Some(&*world),
                     gm,
                     &mut script_broadcasts2,
+                    script_world.is_some(),
                 );
                 world.rng = rng;
+                apply_script_world_actions(world, &mut script_world, world_actions2);
                 for slot in use_slots2 {
                     sync_use_item_slot_to_entity(world, sg, slot);
                 }
@@ -5999,7 +6015,7 @@ fn handle_shop_cmd(
                                 mir2_shared::rng::RandomNumber::with_seed(0),
                             );
                             let mut script_broadcasts: Vec<String> = Vec::new();
-                            let (says, script_frames, use_slots) = run_merchant_goto(
+                            let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
                                 merchant_book,
                                 merchant_id,
                                 g,
@@ -6017,8 +6033,10 @@ fn handle_shop_cmd(
                                 Some(&*world),
                                 gm,
                                 &mut script_broadcasts,
+                                script_world.is_some(),
                             );
                             world.rng = rng;
+                            apply_script_world_actions(world, &mut script_world, world_actions);
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
@@ -6095,7 +6113,7 @@ fn handle_shop_cmd(
                                 mir2_shared::rng::RandomNumber::with_seed(0),
                             );
                             let mut script_broadcasts: Vec<String> = Vec::new();
-                            let (says, script_frames, use_slots) = run_merchant_goto(
+                            let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
                                 merchant_book,
                                 merchant_id,
                                 g,
@@ -6113,8 +6131,10 @@ fn handle_shop_cmd(
                                 Some(&*world),
                                 gm,
                                 &mut script_broadcasts,
+                                script_world.is_some(),
                             );
                             world.rng = rng;
+                            apply_script_world_actions(world, &mut script_world, world_actions);
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
@@ -6274,7 +6294,7 @@ fn handle_shop_cmd(
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
                 let mut script_broadcasts: Vec<String> = Vec::new();
-                let (says, script_frames, use_slots) = run_merchant_goto(
+                let (says, script_frames, use_slots, world_actions) = run_merchant_goto(
                     merchant_book,
                     merchant_id,
                     g,
@@ -6294,8 +6314,10 @@ fn handle_shop_cmd(
                     Some(&*world),
                     gm,
                     &mut script_broadcasts,
+                    script_world.is_some(),
                 );
                 world.rng = rng;
+                apply_script_world_actions(world, &mut script_world, world_actions);
                 for slot in use_slots {
                     sync_use_item_slot_to_entity(world, sg, slot);
                 }
@@ -7317,6 +7339,102 @@ fn update_can_jmp_labels(session: &mut ShopSession, says: &[game_svr::npc::SayMs
 /// 跨调用回写。返回 `(说词, 脚本帧, 改动的 UseItems 槽)`：说词按 `MsgQueue` 出队序落
 /// `SM_MERCHANTSAY`，帧经 [`emit_script_frames`] 排水（`RM_GAMEGOLDCHANGED` ⇒ `SM_GAMEGOLDNAME`，
 /// `RM_GOLDCHANGED` ⇒ `SM_GOLDCHANGED`）。
+/// **卡 `openmir2-clearmapmon-impl`**：脚本世界副作用（[`mir2_script::engine::WorldAction`]）
+/// 的应用上下文。生产 = sim 循环里的刷怪宿主 + 地图注册表 + 怪物模板表 + 展示表
+/// （与 [`game_svr::mongen::WorldMonsterSink`] 同一组来源）。
+pub(crate) struct ScriptWorldCtx<'a> {
+    pub host: &'a mut game_svr::mongen::MonGenHost,
+    pub registry: &'a mir2_envir::MapRegistry,
+    pub table: &'a game_svr::mongen::MonsterTable,
+    pub displays: &'a mut downlink::DisplayTable,
+}
+
+/// 按**入队序**应用脚本产生的世界副作用（`CLEARMAPMON` / `MONGENEX`）。
+///
+/// **一条队列、一遍应用**：oracle 是动作内同步执行，若拆成「先统一清场、再统一刷怪」两遍，
+/// 同一脚本里「清场 → 刷怪」会变成「刷怪 → 清场」并把新刷的怪清掉（卡面 amendment）。
+///
+/// - `ClearMapMonsters`：地图名经 [`mir2_envir::MapRegistry::id_of`] 解析（oracle
+///   `MapMgr.FindMap`）；解析失败 ⇒ 零操作（`GetMapMonster` 对 `envir == null` 返回 0）。
+/// - `RegenMonster`：走 [`game_svr::guardlist::regen_monster_by_name`]（与 `MONGENEX` 的
+///   oracle 链 `RegenMonsterByName` 同一条 `CreateMonster` 取数/移位链），并追加合成的
+///   `MonGenInfo`（后续 `GetMapMonster`/`CertList` 清理可见）。
+///
+/// **RNG**：与 `step_mon_gen` 同口径「取出 → 应用 → 放回」`world.rng`（脚本期已归还，
+/// 此处不再有脚本抽数穿插）。应用序 = 动作序 ⇒ 多条 `MONGENEX` 的创建抽数序仍是脚本里的
+/// 先后序；但相对脚本内其它抽数动作的位置已移到脚本尾（`NpcPlayer::mon_gen_enabled` 文档登记）。
+fn apply_script_world_actions(
+    world: &mut mir2_world::World,
+    ctx: &mut Option<&mut ScriptWorldCtx<'_>>,
+    actions: Vec<mir2_script::engine::WorldAction>,
+) {
+    if actions.is_empty() {
+        return;
+    }
+    let Some(ctx) = ctx.as_deref_mut() else {
+        glog!(
+            "WRN",
+            "脚本世界副作用 {} 条（CLEARMAPMON/MONGENEX）：宿主未接线 ⇒ 丢弃",
+            actions.len()
+        );
+        return;
+    };
+    for action in actions {
+        match action {
+            mir2_script::engine::WorldAction::ClearMapMonsters { map } => {
+                // oracle `MapMgr.FindMap(questActionInfo.sParam1)`：不存在 ⇒ 静默零操作。
+                let Some(map_id) = ctx.registry.id_of(&map) else {
+                    glog!(
+                        "DBG",
+                        "CLEARMAPMON {map}：FindMap == null ⇒ 零操作（ExecutionProcessingSys.cs:2997）"
+                    );
+                    continue;
+                };
+                let rec = world.clear_map_monsters(map_id, &ctx.host.state);
+                glog!(
+                    "INF",
+                    "CLEARMAPMON {map}(map_id={map_id})：清场 {} 只（NoItem+MakeGhost）",
+                    rec.len()
+                );
+            }
+            mir2_script::engine::WorldAction::RegenMonster { map, x, y, name } => {
+                let mut rng =
+                    std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+                let id = {
+                    let mut sink = game_svr::mongen::WorldMonsterSink {
+                        world: &mut *world,
+                        registry: ctx.registry,
+                        table: ctx.table,
+                        displays: ctx.displays,
+                    };
+                    game_svr::guardlist::regen_monster_by_name(
+                        &mut rng,
+                        &mut sink,
+                        ctx.table,
+                        &mut ctx.host.state,
+                        &map,
+                        // oracle `(short)` 截断（`ExecutionProcessingSys.cs:5481-5482`）。
+                        x as i16,
+                        y as i16,
+                        &name,
+                    )
+                };
+                world.rng = rng;
+                match id {
+                    Some(id) => glog!(
+                        "INF",
+                        "MONGENEX {map} {x} {y} {name}：生成 actor={id}（合成 MonGenInfo 已入 CertList）"
+                    ),
+                    None => glog!(
+                        "WRN",
+                        "MONGENEX {map} {x} {y} {name}：RegenMonsterByName == null ⇒ 不生成"
+                    ),
+                }
+            }
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_merchant_goto(
     book: &game_svr::npc::MerchantScriptBook,
@@ -7346,10 +7464,16 @@ fn run_merchant_goto(
     // 本例玩家自己那一份已在 `NpcPlayer.frames` 里（`RM_SYSMESSAGE`），本表只装**其余**玩家要收的
     // 那几份（已拼 `SysMsgPreFix` 前缀）⇒ 调用方排水后按 [`fan_out_world_sysmessage`] 扇出。
     broadcasts: &mut Vec<String>,
+    // **卡 `openmir2-clearmapmon-impl`**：是否把 `CLEARMAPMON`/`MONGENEX` 排进
+    // [`mir2_script::engine::WorldAction`] 队列（生产点击/商店路径 = `true`；未接线的路径
+    // 保持 `false` ⇒ 与接线前逐字节相同）。返回的第四项 = 按**动作序**排队的请求，
+    // 由调用方经 [`apply_script_world_actions`] **在同一队列上按序应用**（清场 → 刷怪）。
+    mon_gen_enabled: bool,
 ) -> (
     Vec<game_svr::npc::SayMsg>,
     Vec<game_svr::npc::SendMsg>,
     Vec<usize>,
+    Vec<mir2_script::engine::WorldAction>,
 ) {
     // oracle 的 `GotoLableTakeItem`/`GotoLableGiveItem`（`ScriptEngine.cs:653-745`）与
     // `GotoLableTakeWItem`（`:748-790`）直接改**同一个** `PlayObject` 的 `ItemList`/`UseItems`；
@@ -7359,7 +7483,7 @@ fn run_merchant_goto(
     let use_before = sg.use_items.clone();
     // `NpcPlayer` 借走 `rng`（`rngf` 闭包）⇒ 收在块里，块结束才把 `rng` 交还，
     // 供满包 `DropItemDown` 的 `StdMode 45` 抽数（`T-159`）。
-    let (says, frames, bag_after, full_bag_drops, use_slots) = {
+    let (says, frames, bag_after, full_bag_drops, use_slots, world_actions) = {
         // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线要 `&mut GmSession`，而下面的写回要
         // `&mut sg`（整表）——若把 `&mut sg.gm` 装进 `player`，它得活到 `player` 的**类型**不再
         // 使用为止（NLL 对结构体字段不做流敏），写回就借不到 `sg`。oracle 里是同一个
@@ -7376,6 +7500,10 @@ fn run_merchant_goto(
         // oracle 的同一个 `PlayObject` 字段：脚本跑前 seed（`OPENYBDEAL` 读 `SaleDeal`，
         // `LableIsCanJmp` 读 `PlayDiceLabel`）。
         seed_player_gold_deal(&mut player, session, sell_off);
+        // **卡 `openmir2-clearmapmon-impl`**：`CLEARMAPMON`/`MONGENEX` 的世界副作用**只入队**，
+        // 宿主在脚本尾按同一队列应用（oracle 是动作内同步执行；RNG 面差异见 `NpcPlayer`
+        // 字段 `mon_gen_enabled` 的文档与卡面 `window_items`）。
+        player.mon_gen_enabled = mon_gen_enabled;
         // **卡 `openmir2-gm-script-exec-seams`**：装 GM 跳线（`sess` = 移出的会话 GM 态）。
         if let (Some(env), Some(w), Some(sess)) = (gm, world, gm_sess.as_mut()) {
             let actor = sg.actor_id;
@@ -7409,6 +7537,7 @@ fn run_merchant_goto(
             player.items.clone(),
             std::mem::take(&mut player.full_bag_drops),
             use_slots,
+            mir2_script::engine::ScriptPlayer::take_world_actions(&mut player),
         );
         // `player` 的最后一次使用已过（`gm_sess` 的借用到此结束）⇒ 原样放回会话 GM 态。
         if let Some(s) = gm_sess {
@@ -7437,7 +7566,7 @@ fn run_merchant_goto(
     }
     // 脚本帧（`NpcPlayer.frames` = `MsgQueue` 的脚本侧投影）：写回之后再交给调用方排水，
     // 元宝/金币帧的取值因此是本次脚本写回后的会话值。
-    (says, frames, use_slots)
+    (says, frames, use_slots, world_actions)
 }
 
 /// 商人 `GotoLable` 结果的**排水**（说词 → 脚本帧 → `SENDMSG` 世界扇出）。
@@ -7551,7 +7680,7 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
     ) {
         // 卡 `openmir2-gm-script-exec-seams`：固定 NPC 路的 GM 跳线（与商人/点击同一桥）。
         let env = self.gm.map(|p| p.with(guilds));
-        run_merchant_goto(
+        let (says, frames, slots, _actions) = run_merchant_goto(
             self.book,
             npc_actor_id,
             label,
@@ -7569,7 +7698,12 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
             Some(world),
             env.as_ref(),
             &mut self.broadcasts,
-        )
+            // **卡 `openmir2-clearmapmon-impl`**：固定 NPC 路未接线世界副作用（部署无
+            // `CLEARMAPMON`/`MONGENEX` 用法）；`false` ⇒ 与接线前逐字节相同。
+            false,
+        );
+        // 固定 NPC 路不消费世界副作用（见上注）⇒ 请求必然为空，显式丢弃。
+        (says, frames, slots)
     }
 
     fn take_script_broadcasts(&mut self) -> Vec<String> {
@@ -21400,6 +21534,21 @@ fn sim_loop(
                             cfg: &gm_cfg,
                             pwd_sessions: &pwd_sessions,
                         };
+                        // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
+                        // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
+                        // 无 MonGen 宿主（未配 MonGen.txt）⇒ `None`（副作用丢弃）。
+                        let mut script_world = if let (Some(host), Some(reg)) =
+                            (mon_gen_host.as_mut(), registry.as_ref())
+                        {
+                            Some(ScriptWorldCtx {
+                                host,
+                                registry: reg,
+                                table: &enter_cfg.mon_gen.table,
+                                displays: &mut displays,
+                            })
+                        } else {
+                            None
+                        };
                         handle_click_npc_cmd(
                             cmd.recog,
                             &chr_name,
@@ -21415,6 +21564,7 @@ fn sim_loop(
                             &mut item_number,
                             &gates,
                             Some(&script_gm),
+                            script_world.as_mut(),
                         );
                     } else if dispatch_inbound_p0(
                         &cmd,
@@ -21535,6 +21685,21 @@ fn sim_loop(
                             cfg: &gm_cfg,
                             pwd_sessions: &pwd_sessions,
                         };
+                        // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
+                        // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
+                        // 无 MonGen 宿主（未配 MonGen.txt）⇒ `None`（副作用丢弃）。
+                        let mut script_world = if let (Some(host), Some(reg)) =
+                            (mon_gen_host.as_mut(), registry.as_ref())
+                        {
+                            Some(ScriptWorldCtx {
+                                host,
+                                registry: reg,
+                                table: &enter_cfg.mon_gen.table,
+                                displays: &mut displays,
+                            })
+                        } else {
+                            None
+                        };
                         handle_shop_cmd(
                             cmd.ident,
                             cmd.recog,
@@ -21561,6 +21726,7 @@ fn sim_loop(
                             // **卡 `openmir2-gm-script-exec-seams`**：商人对话的 GM 跳线视图
                             //（`guilds`/`registry`/`GmConfig`/`pwd_sessions`，与 `@Login` 同源）。
                             Some(&script_gm),
+                            script_world.as_mut(),
                         );
                     } else if matches!(
                         cmd.ident,
@@ -29489,6 +29655,21 @@ mod tests {
         /// 同 [`Self::dlg_select`]，但把脚本 `GMEXECUTE` 的宿主跳线视图传进生产入口
         /// （卡 `openmir2-gm-script-exec-seams`）。
         fn dlg_select_with_gm(&mut self, label: &str, gm: Option<&ScriptGmEnv<'_>>) {
+            self.dlg_select_with(label, gm, None);
+        }
+
+        /// 同 [`Self::dlg_select_with_gm`]，再装脚本世界副作用上下文
+        /// （卡 `openmir2-clearmapmon-impl`；`CLEARMAPMON`/`MONGENEX` 走同一条动作序队列）。
+        fn dlg_select_with_world(&mut self, label: &str, sw: &mut ScriptWorldCtx<'_>) {
+            self.dlg_select_with(label, None, Some(sw));
+        }
+
+        fn dlg_select_with(
+            &mut self,
+            label: &str,
+            gm: Option<&ScriptGmEnv<'_>>,
+            script_world: Option<&mut ScriptWorldCtx<'_>>,
+        ) {
             let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
             handle_shop_cmd(
                 game_svr::shop::CM_MERCHANTDLGSELECT,
@@ -29514,6 +29695,7 @@ mod tests {
                 &self.book,
                 &self.npc_vars,
                 gm,
+                script_world,
             );
         }
 
@@ -29524,6 +29706,20 @@ mod tests {
 
         /// 同 [`Self::click`]，但装脚本 `GMEXECUTE` 的宿主跳线（卡 `openmir2-gm-script-exec-seams`）。
         fn click_with_gm(&mut self, gm: Option<&ScriptGmEnv<'_>>) -> bool {
+            self.click_with(gm, None)
+        }
+
+        /// 同 [`Self::click_with_gm`]，再装脚本世界副作用上下文
+        /// （卡 `openmir2-clearmapmon-impl`；T118/Q001 的 `CLEARMAPMON → MONGENEX` 序列走此入口）。
+        fn click_with_world(&mut self, sw: &mut ScriptWorldCtx<'_>) -> bool {
+            self.click_with(None, Some(sw))
+        }
+
+        fn click_with(
+            &mut self,
+            gm: Option<&ScriptGmEnv<'_>>,
+            script_world: Option<&mut ScriptWorldCtx<'_>>,
+        ) -> bool {
             handle_click_npc_cmd(
                 self.merchant_id,
                 "hero",
@@ -29539,6 +29735,7 @@ mod tests {
                 &mut self.item_number,
                 &self.gates,
                 gm,
+                script_world,
             )
         }
 
@@ -29569,6 +29766,7 @@ mod tests {
                 &mut self.item_number,
                 &self.book,
                 &self.npc_vars,
+                None,
                 None,
             );
         }
@@ -45554,6 +45752,7 @@ SendRefMsgRange=15
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
+            None,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -45597,6 +45796,7 @@ SendRefMsgRange=15
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
+            None,
         );
         assert!(
             matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
@@ -45628,6 +45828,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
             None,
         );
         let mut emitted = 0usize;
@@ -45772,6 +45973,7 @@ SendRefMsgRange=15
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
+            None,
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -45831,6 +46033,7 @@ SendRefMsgRange=15
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
+            None,
         );
         let body = match rx0.try_recv() {
             Ok(SimToGate::SendFrame { socket, body }) => {
@@ -45883,6 +46086,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
             None,
         );
         assert!(
@@ -46076,6 +46280,7 @@ SendRefMsgRange=15
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
+            None,
         );
         let panel = drain_frames(&mut rx0);
         assert_eq!(
@@ -46117,6 +46322,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
             None,
         );
         let frames = drain_frames(&mut rx0);
@@ -46174,6 +46380,7 @@ SendRefMsgRange=15
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
             None,
         );
         assert!(
@@ -47180,6 +47387,7 @@ SendRefMsgRange=15
                 &mut 0,
                 &gates,
                 None,
+                None,
             ),
             "IsCanDeal=false ⇒ 不点"
         );
@@ -47201,6 +47409,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
                 None,
             ),
             "商人在 ±15 ⇒ 到达 Click 点"
@@ -47227,6 +47436,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
                 None,
             ),
             "NPC 超 ±15 ⇒ 不点"
@@ -47255,6 +47465,7 @@ SendRefMsgRange=15
                 &mut 0,
                 &gates,
                 None,
+                None,
             ),
             "限频内 ⇒ 不点"
         );
@@ -47275,6 +47486,7 @@ SendRefMsgRange=15
                 &game_svr::ability::StdItemCatalog::new(),
                 &mut 0,
                 &gates,
+                None,
                 None,
             ),
             "超出限频窗 ⇒ 可点"
@@ -64842,6 +65054,7 @@ mod tests {",
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
             None,
+            None,
         );
         assert!(drain_frames(&mut rx0).is_empty(), "未展示标签 ⇒ 零帧");
         assert_eq!(sessions["hero"].state.gold, 20_000, "未展示 ⇒ 不扣金");
@@ -64906,6 +65119,7 @@ mod tests {",
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
             None,
         );
         let frames = drain_frames(&mut rx0);
@@ -65094,6 +65308,7 @@ mod tests {",
             &mut item_number,
             &game_svr::npc::MerchantScriptBook::default(),
             &game_svr::npc::NpcVars::default(),
+            None,
             None,
         );
         let frames = drain_frames(&mut rx0);
@@ -67150,6 +67365,7 @@ GMEXECUTE 禁言 self 20
                 &mut self.item_number,
                 &self.gates,
                 None,
+                None,
             )
         }
 
@@ -67192,6 +67408,7 @@ GMEXECUTE 禁言 self 20
                 &mut item_number,
                 &self.book,
                 &self.npc_vars,
+                None,
                 None,
             );
         }
@@ -67430,6 +67647,7 @@ GMEXECUTE 禁言 self 20
                 &self.catalog,
                 &mut self.item_number,
                 &self.gates,
+                None,
                 None,
             )
         }
@@ -69720,6 +69938,217 @@ fn ",
             "RM_POWERHIT 无接收端映射 ⇒ 不得发 SM_POWERHIT(18)；实际 {frames:?}"
         );
     }
+    static CLEARMAP_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+    fn clear_map_act(map: &str) -> mir2_script::QuestActionInfo {
+        // `codes.rs`: `CLEARMAPMON` enum_value = 215（`ExecutionCode.ClearMapMon`）。
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 215,
+            s_param1: map.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn mongenex_act(
+        map: &str,
+        x: i32,
+        y: i32,
+        name: &str,
+        range: i32,
+        count: i32,
+    ) -> mir2_script::QuestActionInfo {
+        // `codes.rs`: `MONGENEX` enum_value = 214（`ExecutionCode.MonGenex`）。
+        // 参数位 = `ActionOfMonGenEx`（`ExecutionProcessingSys.cs:5467-5474`）：
+        // sParam1=地图 / sParam2=X / sParam3=Y / sParam4=怪名 / nParam5=范围 / nParam6=数量。
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 214,
+            s_param1: map.to_string(),
+            s_param2: x.to_string(),
+            s_param3: y.to_string(),
+            s_param4: name.to_string(),
+            n_param5: range,
+            n_param6: count,
+            ..Default::default()
+        }
+    }
+
+    /// 32×32 全零地图 + 注册表（逻辑名 `map_name` ⇒ map_id 0）。
+    struct ClearMapRegistry {
+        base: std::path::PathBuf,
+        registry: mir2_envir::MapRegistry,
+    }
+
+    impl Drop for ClearMapRegistry {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    fn clear_map_registry(map_name: &str) -> ClearMapRegistry {
+        let base = std::env::temp_dir().join(format!(
+            "gs-clearmapmon-{}-{}",
+            std::process::id(),
+            CLEARMAP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&32_i16.to_le_bytes());
+        bytes[2..4].copy_from_slice(&32_i16.to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES + 32 * 32 * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        std::fs::write(base.join("Map").join("0.map"), &bytes).unwrap();
+        let loader = mir2_envir::MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = mir2_envir::MapRegistry::from_entries(
+            loader,
+            vec![mir2_envir::MapInfoEntry {
+                map_name: map_name.to_string(),
+                map_file_name: "0".to_string(),
+                desc: String::new(),
+                server_index: 0,
+                flag: mir2_envir::MapInfoFlag::default(),
+            }],
+        );
+        assert_eq!(registry.id_of(map_name), Some(0), "注册表必须命中 map 0");
+        ClearMapRegistry { base, registry }
+    }
+
+    fn clear_map_monster_row(name: &str) -> mir2_data::models::MonsterInfo {
+        mir2_data::models::MonsterInfo {
+            name: name.to_string(),
+            race: 80,
+            level: 10,
+            hp: 100,
+            dc: 1,
+            max_dc: 2,
+            ac: 1,
+            hit_point: 5,
+            speed: 6,
+            exp: 10,
+            ..mir2_data::models::MonsterInfo::default()
+        }
+    }
+
+    /// **部署两处序列的判据**（`武士-0114.txt:145-146` T118 / `老人-1.txt:49-50` Q001）：
+    /// `CLEARMAPMON <图>` → `MONGENEX <同图> <x> <y> <怪> 2 1 1`，经**生产点击入口**
+    /// （`handle_click_npc_cmd` → `run_merchant_goto` → `apply_script_world_actions`）执行。
+    ///
+    /// 断言：
+    /// 1. 老怪被清（`NoItem` + `MakeGhost`：MonGen 怪 `CanReAlive` ⇒ `Invisible`；摘格但实体保留）；
+    /// 2. `MONGENEX` 刷出的新怪**存活**——这是「清 → 刷同队列按动作序应用」的直接判据：
+    ///    若把队列倒序应用（先刷后清），新怪已被登记进合成 `CertList`，会被随后清场一并 Ghost。
+    /// 3. 合成 `MonGenInfo` 入表（后续 `GetMapMonster`/Ghost 清理可见）。
+    fn run_clear_then_mongen_sequence(
+        map_name: &str,
+        mon_name: &str,
+        x: i32,
+        y: i32,
+        via_click: bool,
+    ) {
+        let records = vec![t142_record(
+            "@main",
+            "",
+            vec![
+                clear_map_act(map_name),
+                mongenex_act(map_name, x, y, mon_name, 2, 1),
+            ],
+        )];
+        let mut rig = T142Rig::new(records);
+        let fx = clear_map_registry(map_name);
+        let table = game_svr::mongen::MonsterTable::new(vec![clear_map_monster_row(mon_name)]);
+        let mut host = game_svr::mongen::MonGenHost::start(
+            vec![mir2_world::mongen::MonGenEntry::new(
+                map_name, x as i16, y as i16, mon_name, 2, 1, 0, 0,
+            )],
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rig.world.rng,
+        );
+        assert_eq!(host.state.entries.len(), 1);
+        assert_eq!(host.state.entries[0].map_name, map_name);
+
+        // 清场前已有的老怪（同图 + 活 + 在 CertList；MonGen 怪 ⇒ `CanReAlive`）。
+        let old_id = {
+            let mut e = mir2_world::Entity::new(0, mon_name, 5, 5);
+            e.race = 80;
+            e.map_id = 0;
+            e.max_hp = 100;
+            e.hp = 100;
+            e.mon_gen = Some(0);
+            e.can_re_alive = true;
+            let id = rig.world.add_entity(e);
+            assert!(rig.world.enter_world(id), "老怪必须落格");
+            id
+        };
+        host.state.entries[0].cert_list.push(old_id);
+
+        {
+            let mut displays = downlink::DisplayTable::default();
+            let mut ctx = ScriptWorldCtx {
+                host: &mut host,
+                registry: &fx.registry,
+                table: &table,
+                displays: &mut displays,
+            };
+            if via_click {
+                assert!(rig.click_with_world(&mut ctx), "生产点击入口必须执行");
+            } else {
+                rig.dlg_select_with_world("@main", &mut ctx);
+            }
+        }
+
+        // 1) 老怪：NoItem + MakeGhost（CanReAlive ⇒ Invisible）+ 摘格 + 实体保留。
+        let old = rig.world.entities.get(old_id).expect("清场不删实体");
+        assert!(old.no_item, "NoItem = true");
+        assert!(old.invisible && !old.ghost, "CanReAlive ⇒ Invisible");
+        assert!(!old.add_to_mapped, "DisappearA 摘格");
+        assert!(!old.death, "不得改 Death");
+
+        // 2) 新怪存活（队列次序判据）。
+        let new_ids: Vec<i32> = rig
+            .world
+            .entities
+            .iter()
+            .filter(|e| e.name == mon_name && e.id != old_id)
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(new_ids.len(), 1, "MONGENEX 必须刷出 1 只");
+        let new = rig.world.entities.get(new_ids[0]).unwrap();
+        assert!(
+            !new.death && !new.ghost && !new.invisible,
+            "新怪必须存活（先刷后清会把新怪 Ghost 掉）"
+        );
+        assert!(!new.no_item, "新怪不得带 NoItem");
+        assert_eq!(new.map_id, 0, "同图生成");
+
+        // 3) 合成 MonGenInfo 入表（oracle `RegenMonsterByName` 的 `:407`）。
+        assert_eq!(host.state.entries.len(), 2, "合成 MonGenInfo 已追加");
+        assert_eq!(host.state.entries[1].cert_list, vec![new_ids[0]]);
+        assert_eq!(host.state.entries[1].map_name, map_name);
+    }
+
+    /// T118（`Market_Def/任务NPC/武士-0114.txt:145-146`）：
+    /// `CLEARMAPMON T118` + `MONGENEX T118 14 17 命运教主 2 1 1`。
+    #[test]
+    fn clearmapmon_then_mongenex_t118_sequence() {
+        run_clear_then_mongen_sequence("T118", "命运教主", 14, 17, true);
+    }
+
+    /// Q001（`Market_Def/任务NPC/老人-1.txt:49-50`）：
+    /// `CLEARMAPMON Q001` + `MONGENEX Q001 10 10 骷髅精灵5 2 1 1`。
+    #[test]
+    fn clearmapmon_then_mongenex_q001_sequence() {
+        run_clear_then_mongen_sequence("Q001", "骷髅精灵5", 10, 10, true);
+    }
+
+    /// 同一队列在**商店对话入口**（`handle_shop_cmd` → `run_merchant_goto`）也生效：
+    /// 两条生产路径共用同一 `script_world` 接线（部署脚本走点击入口，本用例防单路接线）。
+    #[test]
+    fn clearmapmon_then_mongenex_via_merchant_dialog_path() {
+        run_clear_then_mongen_sequence("T118", "命运教主", 14, 17, false);
+    }
 }
 
 #[cfg(test)]
@@ -71525,4 +71954,6 @@ mod attack_weapon_wear_tests {
         // ⑤ `MasterGuild` **不是**税前置（oracle 税分支不查它）：master_guild=None 仍入账。
         assert!(world.castles[0].master_guild.is_none());
     }
+
+    // ---- CLEARMAPMON + MONGENEX 同一条动作序队列（卡 `openmir2-clearmapmon-impl`） ------
 }
