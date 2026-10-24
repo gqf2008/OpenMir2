@@ -269,8 +269,86 @@ RESULT n=07 name=gm_batch verdict=FAIL outer_rc=2 compare_rc=1 exit_code=2 frame
 （以下命令均在本检出执行；**全程未起栈、未占端口、未连库**。）
 
 ```text
-__EVIDENCE__
+快照：`3d6c85595` @ 2026-10-24 23:48 +08（**证据采集点**；此后本文件只有 §7 文档提交，
+Rust 源码未变，二进制 sha256 不变）。
+- Rust release：`mir2-rs/target/release/mir2-server.exe`
+  sha256 `b505fc4c5b568d47d039829c64f66ae9c4556e904836d748dcc92ff5c4f3e2a4`
+  （`mir2-server.build.json`: `head=3d6c85595`, `dirty=""`）。
+- C# oracle：`csharp-root/M2GameSvr/GameSrv.exe` sha256
+  `ab6550080736e6610c86de226751c66a319e61e6be2176630a2374ea5819392f`；
+  私有栈 SelGate（T-172 构建）sha256 `bc8cf4d708e0d88cd261ffcfca4b8ea47b85a30b12dd1ded12b94439d00c1a27`
+  （与 `selgate-build/SelGate.exe` 相同）。
+- 红线：全程未起栈、未占端口（`preflight.py` 的 `ports` 步只做 connect 探测，12 端口全空）、
+  未连库/写库；pin smoke 走 `-CheckPinsOnly`（不派生进程）。
+
+$ bash -n tools/window/run_batch.sh && echo SYNTAX_OK
+SYNTAX_OK
+
+$ bash tools/window/run_batch.sh --list          # rc=0
+#   scenario             profile       extra
+1   login_only           alt
+2   npc_click_auto       alt
+3   npc_click            alt
+4   dice_chain_auto      alt
+5   dice_chain           alt
+6   gm_time              alt
+7   gm_batch             alt
+8   pickup_item          alt
+9   move_walk            alt
+10  merchant_dialog      alt
+11  king_dialog          alt
+12  king_castle_war      alt
+13  npc_script_chain     alt
+14  equip_struck_save    alt
+15  bag_equip            alt
+16  eat_item             alt
+17  spell_cast           window-magic
+18  upgrade_retrieve     alt           --timeout-ms 720000
+
+$ bash tools/window/run_batch.sh --dry-run       # rc=0（18/18 计划；未起栈）
+run_batch: start card=openmir2-window-run-2 run_dir=E:/tmp/window/run3 head=3d6c855951ac selected=18 dry_run=1
+run_batch: PLAN rebuild: powershell … tools/window/rebuild-server.ps1 -SyncStartRust -RequireClean
+run_batch: == preflight private（tools/window/preflight_private_stack.py）
+  PREFLIGHT_PRIVATE step=inventory status=OK detail=22 个部署件齐全，baseline 非空
+  PREFLIGHT_PRIVATE step=selgate_listenport status=OK detail=ListenPort=17100 + SelGate.exe 与 T-172 构建同 sha256 + AddrTable→:17100
+  PREFLIGHT_PRIVATE step=route_525 status=OK detail=C#/Rust ServerInfo→17200；C# RunGate=(17200, 15000)、Rust RunGate=(17600, 15000)
+  PREFLIGHT_PRIVATE step=pin_static status=OK detail=window-magic: rust env MIR2_CLIENT_ABILITY_LAYOUT=0 + -PinChecks/-PinLog 已接线；alt 未污染
+  PREFLIGHT_PRIVATE step=pin_smoke status=OK detail=pin 链 smoke rc=0（-CheckPinsOnly，不派生/不等端口）
+  PREFLIGHT_PRIVATE step=binary_stamp status=OK detail=head=3d6c855951ac sha256=b505fc4c5b56 built_at=2026-10-24T23:48:33+08:00
+  PREFLIGHT_PRIVATE step=start_rust_exe status=OK detail=-ServerExe 已对齐：…/dev-2/mir2-rs/target/release/mir2-server.exe
+  PREFLIGHT_PRIVATE step=roster status=OK detail=18 场景（alt×17 + window-magic×1：spell_cast），rules.json 在位
+  PREFLIGHT_PRIVATE SUMMARY pass=8 warn=0 fail=0
+  PREFLIGHT_PRIVATE RESULT PASS
+  [OK] binary: …/mir2-rs/target/release/mir2-server.exe（sha256=b505fc4c5b56…）
+  [OK] ports: 12 个端口全空（15000,15100,15500,15600,15700,16000…）
+  [OK] pin: pin 接线一致（1 侧已接线；未声明 pin 的侧不适用）   # window-magic
+  PREFLIGHT PASS（private + alt + window-magic）
+  PLAN n=1 name=login_only profile=alt extra=[] out=E:/tmp/window/run3/login_only
+  …
+  PLAN n=18 name=upgrade_retrieve profile=alt extra=[--timeout-ms 720000]
+run_batch: dry-run 完成：未起栈、未占端口、未写场景；计划 E:/tmp/window/run3-dry-run/batch.log
+
+$ python -I -B tools/window/preflight_private_stack.py --selftest
+GREEN: preflight_private_stack selftest 24/24
+
+$ python -I -B tools/conformance/card_window.py --selftest
+GREEN: card_window.py selftest 279/279
+
 ```
+
+### 7.1 门禁与冲突检查（本检出，2026-10-24 23:50 +08）
+
+| 检查 | 结果 |
+|---|---|
+| `card_window.py --selftest` | GREEN **279/279** |
+| `preflight_private_stack.py --selftest` | GREEN **24/24** |
+| `cargo fmt --all -- --check` | rc=0 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | rc=0 |
+| `cargo test --workspace` | rc=0 |
+| `git diff --check` | 通过（提交时） |
+| `t_reservation_gate` / `conflict_marker_gate` / `stale_pointer_gate` / `whitelist_anchor_gate` / `m3_whitelist_registry_audit` / `board_coverage_gate` | 全 rc=0 |
+| `dynamic_count_stamp_gate` | **基线 `0ef4e3b96` 即 rc=1**：`docs/plan-3day-20261024.md:11-12` 的「R 卡 206 张 / 已完成 11 / tracked=0」缺快照戳（该文件不在本卡写集，本卡未改）。本卡新增文档单跑该门 ⇒ rc=0（`--path docs/window-run2-prep-20261025.md`）。已在 patch/status 点名，交 orchestrator 补戳或裁定 |
+| `git merge-tree`（vs `walgit/master`） | 无冲突（结果见 patch body） |
 
 ## 8. 残留物与禁止事项
 
