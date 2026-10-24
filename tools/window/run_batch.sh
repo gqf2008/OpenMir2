@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # -*- coding: utf-8 -*-
-# run_batch.sh — 窗口 run-3 一键续跑（18 场景，alt×17 + window-magic×1）· 卡 openmir2-window-run2-prep
+# run_batch.sh — 窗口 run-3 一键续跑（17 场景，alt×16 + window-magic×1）· 卡 openmir2-window-run2-prep
 #
 # 一条命令完成：release 重建 + head/sha256 对齐 → 私栈/两坑/pin 前置自检
 #                → 按清单逐场景跑 card_window.py → 每个场景落 report/card-window/README
@@ -13,9 +13,9 @@
 #   card_window 会把旧产物整体归档到 `<out>/_stale-<ts>-<pid>/`，不会拿旧 PASS 冒充本次。
 #
 # 用法（在仓库/worktree 根目录执行；脚本自身会 cd 到检出根）：
-#   bash tools/window/run_batch.sh                    # 全流程（重建 + 自检 + 18 场景）
+#   bash tools/window/run_batch.sh                    # 全流程（重建 + 自检 + 17 场景）
 #   bash tools/window/run_batch.sh --dry-run          # 只打印计划 + 跑只读前置自检，不起栈
-#   bash tools/window/run_batch.sh --list             # 打印 18 场景清单
+#   bash tools/window/run_batch.sh --list             # 打印 17 场景清单
 #   bash tools/window/run_batch.sh --only login_only,spell_cast
 #   bash tools/window/run_batch.sh --from 9           # 从第 9 个场景接着跑（含 9）
 #   bash tools/window/run_batch.sh --force            # 忽略续跑判据，全部重跑
@@ -87,7 +87,7 @@ LIST_ONLY=${LIST_ONLY:-0}
 
 [ -n "$ONLY" ] && [ -n "$FROM" ] && die "--only 与 --from 不能同时给"
 if [ -n "$FROM" ]; then
-    case "$FROM" in ''|*[!0-9]*) die "--from 必须是 1..18 的整数（实际 $FROM）" ;; esac
+    case "$FROM" in ''|*[!0-9]*) die "--from 必须是 1..17 的整数（实际 $FROM）" ;; esac
 fi
 case "$TIMEOUT_SEC" in ''|*[!0-9]*) die "--timeout-sec 必须是整数" ;; esac
 
@@ -110,7 +110,13 @@ for s in doc.get("scenarios") or []:
     print("%d\t%s\t%s\t%s" % (int(s["n"]), s["name"], s["profile"], extra))
 PY
 )
-[ "${#ROWS[@]}" -eq 18 ] || die "清单解析出 ${#ROWS[@]} 行（应为 18）"
+[ "${#ROWS[@]}" -eq 17 ] || die "清单解析出 ${#ROWS[@]} 行（应为 17）"
+# 已封存场景不得入列：pickup_item 结构性不可判（T-19/T-25），card_window 见 blocked 即 rc=2。
+for _row in "${ROWS[@]}"; do
+    case "$_row" in
+        *pickup_item*) die "清单不得包含已封存场景 pickup_item（T-19/T-25，见 docs/pickup-item-reachability-20261024.md）" ;;
+    esac
+done
 
 declare -A ONLY_MAP=()
 if [ -n "$ONLY" ]; then
