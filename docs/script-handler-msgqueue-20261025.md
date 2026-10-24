@@ -1,132 +1,130 @@
-# handler 级 MsgQueue 统一（shop `out` 6 发射点 + 说词 + 脚本帧）— 2026-10-25
+# handler 级 MsgQueue 统一（shop `out` + 说词 + 脚本帧）— 2026-10-25（rework per review `f215e887`）
 
 - 卡：`openmir2-script-handler-msgqueue`（tier **R**；owner `openmir2-dev-1`；worktree `.worktrees/dev-1`；
   分支 `card/script-handler-msgqueue`）。
-- 基线：本地 `master` `1379a1833`（rebase 后；原 `263e77d7e`）。
-- 写集：`mir2-rs/bins/game-svr/src/lib.rs`、本文件（`shop.rs`/`npc.rs` 未改——分类表与入队版都落在
-  lib.rs 的宿主排水层，见 §3）。
-- 红线：未改 protocol / storage 接口；未改 `shop.rs` 的 6 个发射点（`out` 的产生面不动，只在排水侧分流）；
-  未起栈、未占端口、未连库；不 merge、不自审。
+- 基线：本地 `master` `1379a1833`（rebase 后）。
+- 写集：`mir2-rs/bins/game-svr/src/{lib.rs,shop.rs}`、本文件。
+- 红线：未改 protocol / storage 接口；未起栈、未占端口、未连库；不 merge、不自审。
 
 ## 0. 一句话
 
-oracle 每个 `PlayObject` 有**一条** `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`，优先级
-`(byte)wIdent`，`BaseObject.Message.cs:181`），handler 末尾（`Run`）一次按四叉最小堆出队。本片把
-`handle_shop_cmd` 的三类帧——**说词**（`ScriptEngine.cs:993/997`）、**脚本帧**（`NpcPlayer.frames`）、
-**面板/结果帧**（`shop::user_select` 的 `out`，§3.2 的 6 个发射点）——并进**同一条** per-recipient
-队列（`HandlerMsgQueue`），按 `(byte)RM_*` 升序出队；无 RM 泵的直连帧（`SendSocket`/`SendDefMessage`）
-保持「调用点即发」并在堆排水之前保序下发。
+oracle 每个 `PlayObject` 有**一条** `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16,21`），
+入队优先级 `(byte)wIdent`（`BaseObject.Message.cs:181`），在**自己的 `Run`** 里一次排空
+（`BaseObject.Base.cs:25-30`）。本片把 `handle_shop_cmd` 的三类帧——说词、脚本帧、`shop` 的 `out`
+——并进同一条 per-recipient 队列，按 `(byte)RM_*` 四叉最小堆出队；**优先级由生产者标注**
+（同一 SM 可来自不同 RM，不能反推）；多页取回是**一条队列消息内的原子批次**；发送者队列在
+**世界扇出之前** flush（发送者 `Run` 先排空）。
 
-## 1. 发射点与 oracle 行号（acceptance ①）
+## 1. 分类（每帧的 oracle 入队点；review `f215e887` 指正后）
 
-| # | Rust 发射点（本片改动前：直连） | oracle 发射点（全部 `SendMsg` = 入队） | RM → 优先级 |
-|---:|---|---|---:|
-| 1 | `shop::user_select` `SM_SENDGOODSLIST`（`out` 第 1 点） | `Merchant.cs:991`（`UserSelectBuyItem`） | `RM_SENDGOODSLIST`=10128→**144** |
-| 2 | `SM_SENDUSERSELL`（第 2 点） | `Merchant.cs:996`（`UserSelectSellItem`） | 10129→**145** |
-| 3 | `SM_SENDUSERREPAIR`（超级修理支，第 3 点） | `Merchant.cs:1001`（`UserSelectRepairItem`） | 10141→**157** |
-| 4 | `SM_SENDUSERREPAIR`（普通修理支，第 4 点） | `Merchant.cs:1001`（同上） | 10141→**157** |
-| 5 | `SM_SENDUSERSTORAGEITEM`（第 5 点） | `Merchant.cs:1028`（`UserSelectStorage`） | 10146→**162** |
-| 6 | `SM_SENDUSERMAKEDRUGITEMLIST`（第 6 点） | `Merchant.cs:1017`（`UserSelectMakeDurg`） | 10149→**165** |
-| 7 | 说词 `emit_npc_says`（原独立堆直发） | `ScriptEngine.cs:993`（`SendPriorityMsg(High)`）/ `:997`（`SendMsg`） | `High`=**0** / `RM_MERCHANTSAY`=11009→**1** |
-| — | 脚本帧（原 `emit_script_frames_raw` 独立堆） | 各动作 `SendMsg`（`PlayObject.Message.cs` 的 `case RM_X` 泵） | `(byte)RM_*` |
+### 1.1 入队帧（有 `RM_*` 泵 / `SendMsg`）
 
-**直连帧分类（`shop_frame_queue_priority → None`，oracle 无 RM 泵）**：`SM_ADDITEM`（`SendAddItem`，
-`PlayObject.Base.cs:226` `SendSocket`）、`SM_DELITEMS`/`SM_DELITEM`（`:1644/:1663`）、
-`SM_STORAGE_OK/FULL/FAIL`（`Operate.cs:1634/1643/1652`）、`SM_TAKEBACKSTORAGEITEM_OK/FULLBAG/FAIL`
-（`:1688/1697/1711`）、`SM_SAVEITEMLIST`（`Base.cs:1620`）、`SM_FEATURECHANGED`（`PlayObject.cs:1145`
-`FeatureChanged()` 直发）。
+| SM（wire） | oracle 入队点 | 泵（`PlayObject.Message.cs`） | `(byte)RM` |
+|---|---|---|---:|
+| `SM_SENDGOODSLIST` | `Merchant.cs:991` `user.SendMsg(RM_SENDGOODSLIST,…)` | — | `RM_SENDGOODSLIST`=10128→**144** |
+| `SM_SENDUSERSELL` | `Merchant.cs:996` | — | 10129→**145** |
+| `SM_SENDUSERREPAIR`（普通修理） | `Merchant.cs:1001` `user.SendMsg(RM_SENDUSERREPAIR,…)` | `:1851-1853`（与超级修理**共用**分支） | 10141→**157** |
+| `SM_SENDUSERREPAIR`（**超级修理**） | `Merchant.cs:958` `user.SendMsg(RM_SENDUSERSREPAIR,…)` | 同上 | `RM_SENDUSERSREPAIR`=50142→**222** |
+| `SM_SENDUSERSTORAGEITEM` | `Merchant.cs:1028` | `:1865-1868` 区段 | 10146→**162** |
+| `SM_SENDUSERMAKEDRUGITEMLIST` | `Merchant.cs:1017` | `:1876-1878` | 10149→**165** |
+| `SM_SENDBUYPRICE` / `SM_SENDDETAILGOODSLIST` / `SM_SENDREPAIRCOST` | `Merchant.cs` 各 `SendMsg` | `:1816` / `:1831` / `:1859` | 10130→146 / 10135→151 / 10142→158 |
+| `SM_USERSELLITEM_OK/FAIL`、`SM_BUYITEM_SUCCESS/FAIL`、`SM_USERREPAIRITEM_OK/FAIL`、`SM_MAKEDRUG_SUCCESS/FAIL` | `Operate.cs`/`Merchant.cs` 各 `SendMsg` | `:1819/1822/1825/1828`、`:1856/1862`、`:1879/1882` | 10131→147 / 10132→148 / 10133→149 / 10134→150 / 10143→159 / 10144→160 / 10150→166 / 10151→167 |
+| `SM_DELITEMS` | `Merchant.cs:525/1501` `SendMsg(user, RM_SENDDELITEMLIST,…)` | **`:1870-1873` `SendDelItemList`** | `RM_SENDDELITEMLIST`=10148→**164** |
+| `SM_SAVEITEMLIST`（**多页**） | `Operate.cs:1688` 区段 → `SendSaveItemList` | **`:1867-1868` `case RM_USERGETBACKITEM: SendSaveItemList`** | `RM_USERGETBACKITEM`=10147→**163** |
+| `SM_FEATURECHANGED` | `BaseObject.cs:1509-1512 FeatureChanged()` = `SendRefMsg(RM_FEATURECHANGED,…)` → 每收件人 `SendMsg` | `:1762` | `RM_FEATURECHANGED`=10116→**132** |
+| `SM_CHARSTATUSCHANGED` | `BaseObject.cs:1514-1517 StatusChanged()` = `SendRefMsg(RM_CHARSTATUSCHANGED,…)` | `:…` | 10139→**155** |
+| `SM_GOLDCHANGED` | `BaseObject.cs:585-591 GoldChanged()` = `SendUpdateMsg(RM_GOLDCHANGED,…)` | `:1833-1835` | 10136→**152** |
+| `SM_ABILITY` | `BaseObject.cs:2161/2185 SendMsg(RM_ABILITY,…)`（`:1385` 另有 `SendPriorityMsg(High)=0` 支） | `:1673` | 10051→**67** |
+| `SM_MERCHANTSAY`（in `out`） | `Merchant.cs` 修理失败等 `SendMsg(RM_MERCHANTSAY,…)` | `:1723-1725` | 11009→**1** |
+| `SM_SYSMESSAGE`（in `out`） | `BaseObject.cs:1617+ SysMsg` = `SendMsg(RM_SYSMESSAGE,…)` | `:1715-1721` | 11004→**252** |
 
-**F2 订正**：`RM_SENDDEALOFFFORM = 23000 ⇒ 216`（不是旧注释的 152；152 是 `RM_GOLDCHANGED`）。
-本片在 `shop_frame_queue_priority` 的 `SM_SENDDEALOFFFORM` 分支与判据表里同时钉住。
+> **「泵一对一」不成立**：`RM_SENDUSERREPAIR`(157) 与 `RM_SENDUSERSREPAIR`(**222**) 共用泵分支
+> `:1851-1853`，同一 SM `SM_SENDUSERREPAIR` 无法反推优先级 ⇒ 优先级由**生产者**（`shop.rs` 的
+> `ShopFrame::queue_priority`）标注。
 
-## 2. 实现（`bins/game-svr/src/lib.rs`）
+### 1.2 真直连帧（调用点 `SendSocket`/`SendDefMessage`，无 RM 泵）
 
-- `struct HandlerMsgQueue`：`heap: NetPriorityQueue<Vec<u8>>` + `direct: Vec<Vec<u8>>` + 绑定的网关线；
-  `Drop` 时**先直连批、再堆排水**（oracle：直连帧在 `UserSelect*` 调用点即发，队列在 `Run` 尾排水）。
-  用 `Drop` 是因为历史上 handler 有 20+ 条早退路径（`return;`），逐点 flush 易漏。
-- `shop_frame_queue_priority(ident) -> Option<u8>`：SM → `(byte)RM_*`（表见 §1）；`None` = 直连。
-- `emit_npc_says_into` / `emit_script_frames_into` / `emit_shop_frames_into`：三个「只入队」版本；
-  原 `emit_npc_says`/`emit_script_frames`/`emit_shop_frames` 保留给其它路径（@Login/@main/点击/仓库）。
-- `emit_merchant_goto_result(..., queue)`：说词与脚本帧入队；`SENDMSG 0-4` 的世界侧扇出仍即时
-  （其它玩家各有自己的队列，与本会话队序无关）；`RM_HEAR` 的 ±12 格过滤口径不变。
-- `handle_shop_cmd`：入口建 `HandlerMsgQueue`（`route_to_gate` 一次），5 个 `emit_merchant_goto_result`
-  传入同一队列，末尾 `emit_shop_frames_into(&mut handler_queue, &out)`；`Drop` 统一 flush。
+`SM_DELITEM`（`SendDelItem`，`PlayObject.Base.cs:1663`）、`SM_ADDITEM`（`:226`）、
+`SM_STORAGE_OK/FULL/FAIL`（`Operate.cs:1634/1643/1652`）、
+`SM_TAKEBACKSTORAGEITEM_OK/FULLBAG/FAIL`（`:1688/1697/1711`）。
 
-**不改 `shop.rs` 的原因**：优先级由 SM ident 反查 `(byte)RM`（oracle 泵一对一），比在每个
-`out.push(frame(...))` 处再带一个 RM 参数更不容易漏；`shop.rs` 的 `emit_shop_frames` 单测（尾编码
-口径）也无需改动。
+> **订正（review M-1/M-2/M-3）**：`SM_DELITEMS` / `SM_FEATURECHANGED` / `SM_SAVEITEMLIST`
+> **不是**直连——它们的函数体里虽有 `SendSocket`，但**唯一调用点是泵**（`MainMessage` 的
+> `case RM_…`），入队发生在 `SendMsg` 发射点，`SendSocket` 只是出队后的写动作。第一版把它们
+> 归为直连是错的，C8a 的期望也因此被改反；本版已按泵归属纠正。
 
-## 3. 判据（构造级为主；acceptance ②③④）
+## 2. 实现
+
+- `shop::ShopFrame` 新增 `queue_priority: Option<u8>` / `atomic_batch: bool`；每个 `frame(...)`
+  发射点用 `.queued(RM_*)` 标注（直接帧保持 `None`），取回多页用 `.atomic()`。
+- `HandlerMsgQueue`：`NetPriorityQueue<Vec<Vec<u8>>>`（**一条队列消息 = 一组按序 body**）+
+  `direct` 批 + 显式 `flush()`（直连批 → 堆，批次内按页序）；`Drop` 仅作早退兜底。
+- `emit_shop_frames_into`：`Some(prio)` 入堆；**连续同优先级的 `atomic_batch` 帧合并成一条消息**。
+- `handle_shop_cmd` = 薄壳：建队列 → `handle_shop_cmd_inner`（只入队/登记）→
+  **`queue.flush()`（发送者帧先上 wire）** → 执行登记的其它收件人发送（`SENDMSG` 扇出 / 41 / 657）。
+  `DeferredSend` 承载延后发送；早退路径同样走 flush + 已登记发送。
+
+## 3. 判据（构造级；acceptance ②③④）
 
 | 用例 | 钉什么 |
 |---|---|
-| `shop_frame_queue_priority_matches_oracle_pump_table` | 22 个 SM→RM 字节 + 11 个无泵 `None`；含 `SM_SENDDEALOFFFORM→216`（F2） |
-| `handler_msgqueue_says_plus_script_order_is_unchanged_by_merge` | **合并前后一致**：说词(1) 恒先于脚本帧(69)（有/无面板都不变的部分） |
-| `handler_msgqueue_panel_and_script_interleave_by_rm_priority` | `@buy`：说词(1) → `SM_MENU_OK`(69) → `SM_WINEXP`(139) → `SM_SENDGOODSLIST`(144) → `SM_GAMEGOLDNAME`(148)；并断言它**不等于**旧直连序（645 在 148 之后），证明「改变只发生在 oracle 要求的组合」 |
-| `handler_msgqueue_ties_keep_four_ary_heap_order` | 3 条同 `RM_MENU_OK`（69）⇒ 四叉堆序 `[0,2,1]`（文本 a,c,b），并入同一队后不得退化成稳定排序 |
+| `producer_frames_carry_oracle_queue_priorities`（`shop.rs`） | 生产者标注：buy 144 / sell 145 / 普通修理 **157** / 超级修理 **222** / storage 162 / makedrug 165；`del_items_frame` **164**；`back_item_list` 120 件 ⇒ ≥3 页、每页 **163 + atomic** |
+| `handler_msgqueue_says_plus_script_order_is_unchanged_by_merge` | 说词(1) 恒先于脚本帧(69)；合并前后一致 |
+| `handler_msgqueue_panel_and_script_interleave_by_rm_priority` | `@buy`：643(1) → 767(69) → 44(139) → 645(144) → 5008(148)；且≠旧直连序 |
+| `handler_msgqueue_ties_keep_four_ary_heap_order` | 3 条同 `RM_MENU_OK`(69) ⇒ 四叉堆 `[0,2,1]` |
+| `handler_msgqueue_getback_pages_keep_page_order_as_one_message` | 3 页同优先级 163 **一条消息** ⇒ 线序 `[0,1,2]`（堆不会打散） |
+| `sendmsg_case0..4` / `sendmsg_same_ident_frames_dequeue_in_four_ary_heap_order`（**恢复原断言**） | 发送者自己的帧（901）先于其它收件人（902）：发送者 `Run` 先排空；同 ident 252 仍 `[0,2,1]` |
+| `upgrade_npc_submit_and_getback_full_chain` C8a（**恢复原断言**） | `202(DELITEM,直连) → 52(67) → 41(132) → 653(152) → 657(155)×2 → 709(164)` |
 
 ### 牙（逐条实跑：变异 → 目标用例红 → 还原绿）
 
 | # | 变异 | 实际红 |
 |---:|---|---|
-| 1 | `emit_shop_frames_into` 全部 `queue.direct`（面板不进堆） | 交织用例红（面板被提前到堆前） |
-| 2 | 面板优先级改用 `SM ident & 0xFF`（133）而非 `(byte)RM`（144） | 交织用例红（645 与 44 换位） |
-| 3 | 说词优先级打乱成 200（大于 69） | 说词恒先用例红 |
-| 4 | 脚本帧绕过队列（`emit_script_frames_into` 改 `direct`） | 交织 + 同优先级 + 说词恒先 3 条全红 |
-| 5 | `SM_SENDDEALOFFFORM` 取值改回 152 | 优先级表用例红（期望 216） |
-
-### 既有断言的同步（必读）
-
-- **跨收件人全局顺序不受 oracle 约束**（每个 `PlayObject` 各自一条队列，墙钟上谁先发不构成契约）。
-  合并后本会话的帧在 `Drop` 才发 ⇒ 全局 wire 序里「本例玩家」不再天然排在扇出帧之前。6 条
-  `sendmsg_*` 用例改为**按 socket 稳定排序后断言**（组内序不变，组间序不再声明）。
-- `upgrade_npc_submit_and_getback_full_chain`（C8a）：oracle 语义为「直连帧先、堆后」——
-  新期望 `202(DELITEM) → 41(FEATURECHANGED) → 709(DELITEMS)`（直连，按产生序）→
-  `52(67) → 653(152) → 657(155)×2`（堆）；逐帧内容断言改用「语义分组视图」，避免内容与线序耦合。
+| 1 | `emit_shop_frames_into` 的 `Some` 支改 `queue.direct` | 面板交织用例红 |
+| 2 | 超级修理优先级改回 `RM_SENDUSERREPAIR`(157) | 生产者用例红（222） |
+| 3 | 去掉 `atomic_batch` 分组合并 | getback 页序用例红（`[0,2,1]`） |
+| 4 | **M-6**：`queue.flush()` 移到扇出之后（交给 `Drop`） | `sendmsg_case0` 红：`left=[(902,other),(901,hero)]`（复现 review 的牙 C） |
+| 5 | `SM_DELITEMS` 去掉 `.queued(164)` | 生产者用例红 + C8a 红 |
+| 6 | `SM_FEATURECHANGED` 去掉 `.queued(132)` | C8a 红 |
 
 ## 4. 部署可达性（acceptance ⑥，2026-10-25 复扫 `E:/MirServer/M2GameSvr/Envir`）
 
-- 面板/面板标签计数（`Market_Def/`，文件数/行数）：`@buy` 63/199、`@sell` 62/195、`@repair` 41/146、
+- 面板标签计数（`Market_Def/`，文件数/行数）：`@buy` 63/199、`@sell` 62/195、`@repair` 41/146、
   `@s_repair` 41/87、`@storage` 16/48、`@getback` 17/53、`@makedrug` 1/3、`@dealybme` **0/0**。
-- **「同一脚本标签内既有面板标签又有帧产生动作」= 0 处**（逐文件按 `[label]` 段落扫
+- **同一脚本标签内既有面板标签又有帧产生动作 = 0 处**（逐文件按 `[label]` 段落扫
   `MESSAGEBOX|SENDMSG|PLAYDICE|CHANGEEXP|GAMEGOLD|GAMEPOINT|OPENYBDEAL`）⇒ T-142 ⑩ 的
-  「部署当前无该组合」**复核成立**（此前 GAMEGOLD 专项扫描 = 0，本片扩大到全部帧产生动作仍 = 0）。
-- **`@back` 字面量 = 0**（`grep -ria '@back>' Envir` = 0）；部署只有 `@back2`（2 文件 4 行：
-  `Market_Def/功能NPC/真爱-G002.txt`、`真爱666-G002.txt`）。`handle_shop_cmd` 里的 `is_back`
-  分支服务的是**脚本标签 `@back`/`@back2` 的通用回跳**（`Merchant.cs:808` 的 `sLabel` 派发），
-  不是「客户端字面发 `@back`」⇒ 窗口场景请按 `@back2`/脚本标签构造，别按字面 `@back` 找不到。
-- 结论：部署当前**观测不到**本片的帧序变化（无同标签组合；说词 1 恒小于面板 144，顺序不变）；
-  真机窗口项用于**复核**而非发现。
+  「部署当前无该组合」复核成立。
+- **`@back` 字面量 = 0**；部署只有 `@back2`（2 文件 4 行：`功能NPC/真爱-G002.txt`、`真爱666-G002.txt`）。
+  `handle_shop_cmd` 的 `is_back` 走的是**脚本标签派发**（`Merchant.cs:808` 的 `sLabel`），
+  不等于「客户端字面发 `@back`」⇒ 窗口请按 `@back2`/脚本标签构造。
 
 ## 5. 真机窗口项（R 级，`window_required: true`）
 
-- **W-MQ-1**：构造/入侵一条「面板标签 + 脚本帧」同 handler 场景（例如私有测试商人 `[@buy]` 内放
-  `MESSAGEBOX` + `GAMEGOLD`），客户端收帧序 = `SM_MERCHANTSAY(643) → SM_MENU_OK(767) →
-  SM_SENDGOODSLIST(645) → SM_GAMEGOLDNAME(5008)`（按 `(byte)RM`：1→69→144→148），与 C# 栈
-  同场景纯字节序 diff=0。
-- **W-MQ-2**：同标签 3 条同 ident 脚本帧（如 3×`MESSAGEBOX`）出队 `[0,2,1]`（四叉堆序，非入队序），
-  两侧一致。
-- **W-MQ-3**：直连帧（如修理/升级链 `SM_DELITEM`/`SM_DELITEMS`/`SM_FEATURECHANGED`）仍**先于**
-  堆排水；C# 栈同场景逐帧对拍。
+- **W-MQ-1**：构造「面板标签 + 脚本帧」同 handler ⇒ `SM_MERCHANTSAY(643) → SM_MENU_OK(767) →
+  SM_WINEXP(44) → SM_SENDGOODSLIST(645) → SM_GAMEGOLDNAME(5008)`，与 C# 侧纯字节序 diff=0。
+- **W-MQ-2**：同标签 3 条同 ident 脚本帧 ⇒ 出队 `[0,2,1]`（四叉堆序，非入队序）。
+- **W-MQ-3**：**发送者先于收件人**——`SENDMSG 0` 场景下，发送者 socket 的 `SM_SYSMESSAGE` 先于
+  其它在线玩家的同帧（两侧 wire 序一致）；不得出现「收件人先」。
+- **W-MQ-4**：`@getback` 仓库取回 ≥51 件 ⇒ 多页 `SM_SAVEITEMLIST` 按页序连发（不被同优先级重排）。
 - 命令模板：`python -I -B tools/gw-capture/gate_shadow_proxy.py --out E:/tmp/mq/sel --map 7101=127.0.0.1:7100 --gate sel --direction s2c`，
   跑完 `--verify`；同命令 C# 侧重跑，按帧 sha256 对拍。
 
 ## 6. 已知偏差 / 残余
 
-1. `Drop` 时机 ≈ handler 末尾（oracle 是 `PlayObject.Run` 尾）；同 handler 内没有其它队列消费者 ⇒
-   观测等价；跨收件人的全局序不建模也不声明（见 §3）。
-2. 直连帧在 Rust 里统一在 flush 前按产生序发（oracle 是调用点即发）；同一 handler 内两者之间
-   没有其它帧插入 ⇒ 观测等价；若将来有第三方消费者插入，需要按调用点拆 flush。
-3. `SM_SYSMESSAGE` 只按 `RM_SYSMESSAGE`(252) 入堆；`RM_GROUPMESSAGE`(253) 走 `SendGroupText`，
-   不在本 handler 的 `out`（分类表注释已写明）。
-4. 面板标签 + 帧动作组合当前部署不可达（§4）⇒ 本卡判据以**构造级**为主（R 级政策要求）。
+1. **`@dealybme` 元宝寄售开窗帧仍未并入本队列**：该分支在 `selloff` 自己的 emitter 里即时
+   `tx.send`（`RM_SENDDEALOFFFORM`=23000→**216** / `RM_MERCHANTSAY`=1）。部署 `@dealybme` = **0 行**
+   ⇒ 当前不可观测；按卡面写集（`shop.rs`/`lib.rs`/`npc.rs`）未改 `selloff.rs`，登记为后续片。
+2. `Drop` 兜底 flush 只在早退路径生效（正常路径显式 flush），两者都满足「发送者先于收件人」。
+3. 其它收件人的帧仍按批顺序 `tx.send`（各收件人自己的 `MsgQueue` 未逐一建模，属既有实现）；
+   W-MQ-3 只判发送者 vs 收件人的**相对**先后。
+4. 部署无同标签组合（§4）⇒ 判据以构造级为主（R 级政策要求）。
 
 ## 7. 门禁（实测）
 
 - `cargo fmt --all -- --check` rc=0；`cargo clippy --workspace --all-targets -- -D warnings` rc=0。
-- `cargo test --workspace -- --test-threads=2`：**3221 passed / 0 failed**（141 suites）。
+- `cargo test --workspace -- --test-threads=2`：值见 patch body（本轮返工后重跑）。
 - `cargo run -p msgcodegen -- --check` rc=0。
-- 7 项卫生门禁（故障期口径：`stale_pointer_gate`/`dynamic_count_stamp_gate` 带 `--ref master`）+
+- 7 项卫生门禁（故障期：`stale_pointer_gate`/`dynamic_count_stamp_gate` 带 `--ref master`）+
   `script_host_noop_audit check` + `merge_tree_helper --selftest` 全 rc=0。
-- `git diff --check 1379a1833 <head>` rc=0（**带范围**，不用无参 `git diff --check`）。
-- `merge_tree_helper --base master --head <head>`：值见 patch body（rebase 后）。
+- `git diff --check <base> <head>` rc=0（**带范围**）。
+- `merge_tree_helper --base master --head <head>`：值见 patch body。

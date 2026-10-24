@@ -123,6 +123,19 @@ pub struct ShopFrame {
     /// `SM_SAVEITEMLIST` 分页拼接），`emit_shop_frames` **不再**施加 `EncodeString`；
     /// `false` ⇒ `tail` 是未编码原文，`emit` 按 `SendDefMessage` 口径施加 `EDCode.EncodeString`。
     pub tail_encoded: bool,
+    /// **卡 `openmir2-script-handler-msgqueue`（rework per review f215e887）**：该帧在 oracle
+    /// side 的 `MsgQueue` 优先级 = `(byte)RM_*`（`SendMsg` 的 `(byte)wIdent`，
+    /// `BaseObject.Message.cs:181`）。
+    ///
+    /// **由生产者赋值**（不能再由 SM ident 反推）：同一 SM 可来自不同 RM——`SM_SENDUSERREPAIR`
+    /// 普通修理 = `RM_SENDUSERREPAIR`(10141→157)、超级修理 = `RM_SENDUSERSREPAIR`(50142→**222**)，
+    /// 二者共用泵分支（`PlayObject.Message.cs:1851-1853`）⇒ 只有发射点知道是哪一个。
+    /// `None` = oracle 侧**真直连**（调用点 `SendSocket`/`SendDefMessage`，无 RM 泵）。
+    pub queue_priority: Option<u8>,
+    /// **原子批次**（`RM_USERGETBACKITEM` → `SendSaveItemList` 一次调用**顺序发多页**，
+    /// `PlayObject.Base.cs:1600-1622`）：同批连续的帧合并成**一条**队列消息，出队时按页序
+    /// 连发，绝不被四叉堆打散。
+    pub atomic_batch: bool,
 }
 
 fn frame(ident: u16, recog: i32, param: u16, tag: u16, series: u16, tail: Vec<u8>) -> ShopFrame {
@@ -134,6 +147,8 @@ fn frame(ident: u16, recog: i32, param: u16, tag: u16, series: u16, tail: Vec<u8
         series,
         tail,
         tail_encoded: false,
+        queue_priority: None,
+        atomic_batch: false,
     }
 }
 
@@ -154,6 +169,24 @@ fn frame_encoded(
         series,
         tail,
         tail_encoded: true,
+        queue_priority: None,
+        atomic_batch: false,
+    }
+}
+
+impl ShopFrame {
+    /// 标记 oracle `MsgQueue` 优先级 = `(byte)RM`（由**发射点**调用；见 [`ShopFrame::queue_priority`]）。
+    #[must_use]
+    fn queued(mut self, rm: u16) -> ShopFrame {
+        self.queue_priority = Some((rm & 0xFF) as u8);
+        self
+    }
+
+    /// 标记「同一队列消息内顺序发多页」的原子批次（`SendSaveItemList`）。
+    #[must_use]
+    fn atomic(mut self) -> ShopFrame {
+        self.atomic_batch = true;
+        self
     }
 }
 
@@ -314,54 +347,69 @@ pub fn user_select(
             n10 += 1;
         }
         // `RM_SENDGOODSLIST` → `SM_SENDGOODSLIST(Recog=ActorId, Param=n10, tail=Msg)`。
-        out.push(frame(
-            mir2_protocol::messages::SM_SENDGOODSLIST,
-            m.actor_id,
-            n10 as u16,
-            0,
-            0,
-            downlink::gbk(&s_send),
-        ));
+        out.push(
+            frame(
+                mir2_protocol::messages::SM_SENDGOODSLIST,
+                m.actor_id,
+                n10 as u16,
+                0,
+                0,
+                downlink::gbk(&s_send),
+            )
+            .queued(mir2_protocol::messages::RM_SENDGOODSLIST),
+        );
     } else if eq_label(label, LABEL_SELL) && m.flags.is_sell {
-        out.push(frame(
-            mir2_protocol::messages::SM_SENDUSERSELL,
-            m.actor_id,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        out.push(
+            frame(
+                mir2_protocol::messages::SM_SENDUSERSELL,
+                m.actor_id,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_SENDUSERSELL),
+        );
     } else if eq_label(label, LABEL_SUPER_REPAIR) && m.flags.is_sup_repair {
         // `UserSelectSuperRepairItem` → `RM_SENDUSERSREPAIR` → `SM_SENDUSERREPAIR`。
-        out.push(frame(
-            mir2_protocol::messages::SM_SENDUSERREPAIR,
-            m.actor_id,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        out.push(
+            frame(
+                mir2_protocol::messages::SM_SENDUSERREPAIR,
+                m.actor_id,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_SENDUSERSREPAIR),
+        );
     } else if eq_label(label, LABEL_REPAIR) && m.flags.is_repair {
         // `UserSelectRepairItem` → `RM_SENDUSERREPAIR` → `SM_SENDUSERREPAIR`。
-        out.push(frame(
-            mir2_protocol::messages::SM_SENDUSERREPAIR,
-            m.actor_id,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        out.push(
+            frame(
+                mir2_protocol::messages::SM_SENDUSERREPAIR,
+                m.actor_id,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_SENDUSERREPAIR),
+        );
     } else if eq_label(label, LABEL_STORAGE) && m.flags.is_storage {
         // `UserSelectStorage`（`Merchant.cs:1024`）→ `RM_USERSTORAGEITEM` →
         // `SM_SENDUSERSTORAGEITEM(Recog=ActorId, Param=0)`（`PlayObject.Message.cs:1866`）。
-        out.push(frame(
-            mir2_protocol::messages::SM_SENDUSERSTORAGEITEM,
-            m.actor_id,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        out.push(
+            frame(
+                mir2_protocol::messages::SM_SENDUSERSTORAGEITEM,
+                m.actor_id,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_USERSTORAGEITEM),
+        );
     } else if eq_label(label, LABEL_GETBACK) && m.flags.is_getback {
         // `UserSelectGetBack`（`Merchant.cs:1029`）→ `RM_USERGETBACKITEM` → `SendSaveItemList(ActorId)`。
         out.extend(back_item_list(m.actor_id, storage_items, ctx));
@@ -383,14 +431,17 @@ pub fn user_select(
             s_send.push_str(&format!("/0/{}/1/", ctx.make_durg_price));
         }
         if !s_send.is_empty() {
-            out.push(frame(
-                mir2_protocol::messages::SM_SENDUSERMAKEDRUGITEMLIST,
-                m.actor_id,
-                0,
-                0,
-                0,
-                downlink::gbk(&s_send),
-            ));
+            out.push(
+                frame(
+                    mir2_protocol::messages::SM_SENDUSERMAKEDRUGITEMLIST,
+                    m.actor_id,
+                    0,
+                    0,
+                    0,
+                    downlink::gbk(&s_send),
+                )
+                .queued(mir2_protocol::messages::RM_USERMAKEDRUGITEMLIST),
+            );
         }
     }
     out
@@ -586,24 +637,30 @@ pub fn make_drug_item(
     }
     if n14 == 0 {
         // `SendMsg(RM_MAKEDRUG_SUCCESS, 0, Gold, 0, 0)` ⇒ `SendDefMessage(SM_MAKEDRUG_SUCCESS, Gold, 0,0,0)`。
-        frames.push(frame(
-            mir2_protocol::messages::SM_MAKEDRUG_SUCCESS,
-            state.gold,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        frames.push(
+            frame(
+                mir2_protocol::messages::SM_MAKEDRUG_SUCCESS,
+                state.gold,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_MAKEDRUG_SUCCESS),
+        );
     } else {
         // `SendMsg(RM_MAKEDRUG_FAIL, 0, n14, 0, 0)` ⇒ `SendDefMessage(SM_MAKEDRUG_FAIL, n14, 0,0,0)`。
-        frames.push(frame(
-            mir2_protocol::messages::SM_MAKEDRUG_FAIL,
-            n14,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        frames.push(
+            frame(
+                mir2_protocol::messages::SM_MAKEDRUG_FAIL,
+                n14,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_MAKEDRUG_FAIL),
+        );
     }
     MakeDrugResult {
         frames,
@@ -632,6 +689,7 @@ pub fn del_items_frame(deleted: &[(String, i32)]) -> ShopFrame {
         deleted.len() as u16,
         mir2_protocol::edcode::encode(&downlink::gbk(&s10)),
     )
+    .queued(mir2_protocol::messages::RM_SENDDELITEMLIST)
 }
 
 ///
@@ -704,6 +762,7 @@ pub fn detail_goods_list(
         0,
         s_send_msg,
     )
+    .queued(mir2_protocol::messages::RM_SENDDETAILGOODSLIST)
 }
 
 /// `PlayObject.SendSaveItemList`（`PlayObject.Base.cs:1590-1620`）：仓库列表分页（每页 50，末尾页 `Series = page-1`）。
@@ -740,14 +799,18 @@ pub fn back_item_list(actor_id: i32, items: &[BagItem], ctx: &ShopContext<'_>) -
             continue;
         }
         let series = if page - 1 < 0 { 0 } else { page - 1 };
-        out.push(frame_encoded(
-            mir2_protocol::messages::SM_SAVEITEMLIST,
-            actor_id,
-            0,
-            p as u16,
-            series as u16,
-            tail,
-        ));
+        out.push(
+            frame_encoded(
+                mir2_protocol::messages::SM_SAVEITEMLIST,
+                actor_id,
+                0,
+                p as u16,
+                series as u16,
+                tail,
+            )
+            .queued(mir2_protocol::messages::RM_USERGETBACKITEM)
+            .atomic(),
+        );
     }
     out
 }
@@ -897,14 +960,17 @@ pub fn take_back_storage_item(
             } else {
                 // `SysMsg(MessageSettings.CanotGetItems, Red, Hint)` → `SM_SYSMESSAGE(ActorId,
                 // MakeWord(RedMsgFColor, RedMsgBColor), 0, 1, 原文)`（`BaseObject.cs:1678`）。
-                frames.push(frame(
-                    mir2_protocol::messages::SM_SYSMESSAGE,
-                    ctx.player_actor_id,
-                    smframe::make_word(ctx.red_f, ctx.red_b),
-                    0,
-                    1,
-                    downlink::gbk(CANOT_GET_ITEMS_MSG),
-                ));
+                frames.push(
+                    frame(
+                        mir2_protocol::messages::SM_SYSMESSAGE,
+                        ctx.player_actor_id,
+                        smframe::make_word(ctx.red_f, ctx.red_b),
+                        0,
+                        1,
+                        downlink::gbk(CANOT_GET_ITEMS_MSG),
+                    )
+                    .queued(mir2_protocol::messages::RM_SYSMESSAGE),
+                );
             }
             break;
         }
@@ -944,6 +1010,7 @@ pub fn query_sell_price(m: &MerchantView, item: &mut BagItem, ctx: &ShopContext<
         0,
         Vec::new(),
     )
+    .queued(mir2_protocol::messages::RM_SENDBUYPRICE)
 }
 
 /// `CM_USERSELLITEM` 的结果：成功时 `item_list` 已移除、`GoodsList` 已回收。
@@ -999,14 +1066,17 @@ pub fn sell_item(
                 m.castle_index.is_some(),
                 ctx.upgrade_weapon_price,
             );
-            frames.push(frame(
-                mir2_protocol::messages::SM_USERSELLITEM_OK,
-                state.gold,
-                0,
-                0,
-                0,
-                Vec::new(),
-            ));
+            frames.push(
+                frame(
+                    mir2_protocol::messages::SM_USERSELLITEM_OK,
+                    state.gold,
+                    0,
+                    0,
+                    0,
+                    Vec::new(),
+                )
+                .queued(mir2_protocol::messages::RM_USERSELLITEM_OK),
+            );
             // `AddItemToGoodsList`（`Merchant.cs:1417`）：`Dura <= 0` 不收，否则按 `Index` 组 `Insert(0)`。
             if it.dura > 0 {
                 match goods
@@ -1026,14 +1096,17 @@ pub fn sell_item(
                 tax,
             }
         } else {
-            frames.push(frame(
-                mir2_protocol::messages::SM_USERSELLITEM_FAIL,
-                0,
-                0,
-                0,
-                0,
-                Vec::new(),
-            ));
+            frames.push(
+                frame(
+                    mir2_protocol::messages::SM_USERSELLITEM_FAIL,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Vec::new(),
+                )
+                .queued(mir2_protocol::messages::RM_USERSELLITEM_FAIL),
+            );
             SellResult {
                 frames,
                 ok: false,
@@ -1041,14 +1114,17 @@ pub fn sell_item(
             }
         }
     } else {
-        frames.push(frame(
-            mir2_protocol::messages::SM_USERSELLITEM_FAIL,
-            0,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        frames.push(
+            frame(
+                mir2_protocol::messages::SM_USERSELLITEM_FAIL,
+                0,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_USERSELLITEM_FAIL),
+        );
         SellResult {
             frames,
             ok: false,
@@ -1166,14 +1242,17 @@ pub fn buy_item(
     }
     if n1c == 0 {
         // `RM_BUYITEM_SUCCESS(0, Gold, nInt)` → `SM_BUYITEM_SUCCESS(Recog=Gold, LoWord(nInt), HiWord(nInt))`。
-        frames.push(frame(
-            mir2_protocol::messages::SM_BUYITEM_SUCCESS,
-            state.gold,
-            (n_int & 0xFFFF) as u16,
-            ((n_int >> 16) & 0xFFFF) as u16,
-            0,
-            Vec::new(),
-        ));
+        frames.push(
+            frame(
+                mir2_protocol::messages::SM_BUYITEM_SUCCESS,
+                state.gold,
+                (n_int & 0xFFFF) as u16,
+                ((n_int >> 16) & 0xFFFF) as u16,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_BUYITEM_SUCCESS),
+        );
         BuyResult {
             frames,
             ok: true,
@@ -1181,14 +1260,17 @@ pub fn buy_item(
         }
     } else {
         // `RM_BUYITEM_FAIL(0, n1C)` → `SM_BUYITEM_FAIL(Recog=n1C)`。
-        frames.push(frame(
-            mir2_protocol::messages::SM_BUYITEM_FAIL,
-            n1c,
-            0,
-            0,
-            0,
-            Vec::new(),
-        ));
+        frames.push(
+            frame(
+                mir2_protocol::messages::SM_BUYITEM_FAIL,
+                n1c,
+                0,
+                0,
+                0,
+                Vec::new(),
+            )
+            .queued(mir2_protocol::messages::RM_BUYITEM_FAIL),
+        );
         BuyResult {
             frames,
             ok: false,
@@ -1221,6 +1303,7 @@ pub fn query_repair_cost(m: &MerchantView, item: &mut BagItem, ctx: &ShopContext
         0,
         Vec::new(),
     )
+    .queued(mir2_protocol::messages::RM_SENDREPAIRCOST)
 }
 
 /// `CM_USERREPAIRITEM` 的结果。
@@ -1293,23 +1376,29 @@ pub fn repair_item(
                 // = `MakeMessage(SM_MERCHANTSAY(643), ActorId, MakeWord(0,0), 0, 1)`
                 // ⇒ ident=643、Recog=**商人** ActorId、Param=Tag=0、Series=1、尾 = `ChrName + '/' + sMsg`。
                 let tail = format!("{}/{}", m.chr_name, SUPER_REPAIR_FAIL_MSG);
-                sent_to_user = Some(frame(
-                    mir2_protocol::messages::SM_MERCHANTSAY,
-                    m.actor_id,
-                    0,
-                    0,
-                    1,
-                    downlink::gbk(&tail),
-                ));
+                sent_to_user = Some(
+                    frame(
+                        mir2_protocol::messages::SM_MERCHANTSAY,
+                        m.actor_id,
+                        0,
+                        0,
+                        1,
+                        downlink::gbk(&tail),
+                    )
+                    .queued(mir2_protocol::messages::RM_MERCHANTSAY),
+                );
             }
-            frames.push(frame(
-                mir2_protocol::messages::SM_USERREPAIRITEM_FAIL,
-                0,
-                0,
-                0,
-                0,
-                Vec::new(),
-            ));
+            frames.push(
+                frame(
+                    mir2_protocol::messages::SM_USERREPAIRITEM_FAIL,
+                    0,
+                    0,
+                    0,
+                    0,
+                    Vec::new(),
+                )
+                .queued(mir2_protocol::messages::RM_USERREPAIRITEM_FAIL),
+            );
         }
         shop::RepairOutcome::Ok => {
             state.gold = out.gold;
@@ -1323,14 +1412,17 @@ pub fn repair_item(
                 ctx.upgrade_weapon_price,
             );
             // `RM_USERREPAIRITEM_OK(0, Gold, Dura, DuraMax)` → `SM_USERREPAIRITEM_OK(Recog=Gold, Param=Dura, Tag=DuraMax)`。
-            frames.push(frame(
-                mir2_protocol::messages::SM_USERREPAIRITEM_OK,
-                state.gold,
-                out.dura,
-                out.dura_max,
-                0,
-                Vec::new(),
-            ));
+            frames.push(
+                frame(
+                    mir2_protocol::messages::SM_USERREPAIRITEM_OK,
+                    state.gold,
+                    out.dura,
+                    out.dura_max,
+                    0,
+                    Vec::new(),
+                )
+                .queued(mir2_protocol::messages::RM_USERREPAIRITEM_OK),
+            );
             goto_label = Some(if is_super {
                 LABEL_SUPER_REPAIR_OK
             } else {
@@ -1464,30 +1556,39 @@ pub fn upgrade_wapon_outcome(
                 1,
                 tail,
             ));
-            frames.push(frame_encoded(
-                mir2_protocol::messages::SM_ABILITY,
-                gold,
-                smframe::make_word(job, 99),
-                smframe::lo_word(game_gold),
-                smframe::hi_word(game_gold),
-                mir2_protocol::edcode::encode(wabil_tail),
-            ));
-            frames.push(frame_encoded(
-                mir2_protocol::messages::SM_FEATURECHANGED,
-                player_actor_id,
-                smframe::lo_word(feature.0),
-                smframe::hi_word(feature.0),
-                feature.1,
-                Vec::new(),
-            ));
-            frames.push(frame(
-                mir2_protocol::messages::SM_GOLDCHANGED,
-                gold,
-                smframe::lo_word(game_gold),
-                smframe::hi_word(game_gold),
-                0,
-                Vec::new(),
-            ));
+            frames.push(
+                frame_encoded(
+                    mir2_protocol::messages::SM_ABILITY,
+                    gold,
+                    smframe::make_word(job, 99),
+                    smframe::lo_word(game_gold),
+                    smframe::hi_word(game_gold),
+                    mir2_protocol::edcode::encode(wabil_tail),
+                )
+                .queued(mir2_protocol::messages::RM_ABILITY),
+            );
+            frames.push(
+                frame_encoded(
+                    mir2_protocol::messages::SM_FEATURECHANGED,
+                    player_actor_id,
+                    smframe::lo_word(feature.0),
+                    smframe::hi_word(feature.0),
+                    feature.1,
+                    Vec::new(),
+                )
+                .queued(mir2_protocol::messages::RM_FEATURECHANGED),
+            );
+            frames.push(
+                frame(
+                    mir2_protocol::messages::SM_GOLDCHANGED,
+                    gold,
+                    smframe::lo_word(game_gold),
+                    smframe::hi_word(game_gold),
+                    0,
+                    Vec::new(),
+                )
+                .queued(mir2_protocol::messages::RM_GOLDCHANGED),
+            );
             frames.push(del_items_frame(&r.deleted));
             (Some(LABEL_UPGRADENOW_OK), Some(feature))
         }
@@ -3176,5 +3277,126 @@ mod tests {
         )
         .is_empty());
         assert_eq!(c2[0].total_gold, 0);
+    }
+
+    /// **卡 `openmir2-script-handler-msgqueue`（rework per review f215e887）**：`MsgQueue` 优先级
+    /// 必须由**生产者**标注——同一 SM 可来自不同 RM：普通修理 `RM_SENDUSERREPAIR`=10141→**157**
+    /// 与超级修理 `RM_SENDUSERSREPAIR`=50142→**222** 共用泵分支
+    /// （`PlayObject.Message.cs:1851-1853`；入队点 `Merchant.cs:1001` / `:958`）⇒ 不能用 SM 反推。
+    ///
+    /// 另钉三处被 review 指正的「泵内才 SendSocket」帧：`SM_DELITEMS` ← `RM_SENDDELITEMLIST`
+    /// （10148→**164**，泵 `PlayObject.Message.cs:1870-1873`）、`SM_SAVEITEMLIST` ←
+    /// `RM_USERGETBACKITEM`（10147→**163**，泵 `:1867-1868`）且**多页是原子批次**。
+    ///
+    /// 牙（实测）：超级修理改回 157 ⇒ 本用例红；DELITEMS 改 None ⇒ 红；去掉 `.atomic()` ⇒ 红。
+    #[test]
+    fn producer_frames_carry_oracle_queue_priorities() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let no_goods: Vec<Vec<MerchantItem>> = Vec::new();
+        // `@makedrug` 只在商品表非空时产帧（`UserSelectMakeDurg` 的 `!string.IsNullOrEmpty` 门）。
+        let one_good: Vec<Vec<MerchantItem>> = vec![vec![MerchantItem {
+            make_index: 0,
+            index: 1,
+            dura: 5,
+            dura_max: 10,
+            desc: [0; 14],
+        }]];
+        let prio = |label: &str, flags: MerchantFlags, goods: &[Vec<MerchantItem>]| {
+            let out = user_select(label, &merchant(flags), goods, &[], &c);
+            out.first().and_then(|f| f.queue_priority)
+        };
+        assert_eq!(
+            prio(
+                LABEL_BUY,
+                MerchantFlags {
+                    is_buy: true,
+                    ..Default::default()
+                },
+                &no_goods
+            ),
+            Some(144)
+        );
+        assert_eq!(
+            prio(
+                LABEL_SELL,
+                MerchantFlags {
+                    is_sell: true,
+                    ..Default::default()
+                },
+                &no_goods
+            ),
+            Some(145)
+        );
+        assert_eq!(
+            prio(
+                LABEL_REPAIR,
+                MerchantFlags {
+                    is_repair: true,
+                    ..Default::default()
+                },
+                &no_goods
+            ),
+            Some(157)
+        );
+        assert_eq!(
+            prio(
+                LABEL_SUPER_REPAIR,
+                MerchantFlags {
+                    is_sup_repair: true,
+                    ..Default::default()
+                },
+                &no_goods
+            ),
+            Some(222),
+            "超级修理 = RM_SENDUSERSREPAIR(50142→222)，不是普通修理的 157"
+        );
+        assert_eq!(
+            prio(
+                LABEL_STORAGE,
+                MerchantFlags {
+                    is_storage: true,
+                    ..Default::default()
+                },
+                &no_goods
+            ),
+            Some(162)
+        );
+        assert_eq!(
+            prio(
+                LABEL_MAKE_DRUG,
+                MerchantFlags {
+                    is_make_drug: true,
+                    ..Default::default()
+                },
+                &one_good
+            ),
+            Some(165)
+        );
+        let del = del_items_frame(&[("金创药(小量)".to_string(), 7)]);
+        assert_eq!(
+            del.queue_priority,
+            Some(164),
+            "SM_DELITEMS ← RM_SENDDELITEMLIST(10148→164)，泵内才 SendSocket"
+        );
+        let items: Vec<BagItem> = (0..120)
+            .map(|i| BagItem {
+                make_index: i,
+                index: 1,
+                dura: 5,
+                dura_max: 10,
+                desc: [0; 14],
+            })
+            .collect();
+        let pages = back_item_list(4242, &items, &c);
+        assert!(pages.len() >= 3, "120 件 ⇒ ≥3 页，实际 {}", pages.len());
+        for f in &pages {
+            assert_eq!(
+                f.queue_priority,
+                Some(163),
+                "SM_SAVEITEMLIST ← RM_USERGETBACKITEM(10147→163)"
+            );
+            assert!(f.atomic_batch, "分页必须是同一条队列消息的原子批次");
+        }
     }
 }
