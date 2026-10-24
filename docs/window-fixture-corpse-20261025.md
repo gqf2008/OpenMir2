@@ -50,7 +50,11 @@ Rust `crates/envir/src/mongen.rs:147-150`），且**加载期无日志** ⇒ 写
 
 1. **应用时机**：`run_side` 在 assets 之后、端口检查与起栈之前（`profile_fixtures()` →
    `run_fixtures()`）；写前保存 `before_sha256` 与原文件到
-   `<out>/<side>/fixtures/MonGen.txt.bak`，写后记 `after_sha256` 与追加行清单（`fixtures.json`）。
+   `<out>/<side>/fixtures/MonGen.txt.{baseline,shadow}.bak`，写后记 `after_sha256` 与追加行清单
+   （`fixtures.json` 的 `targets[]`）。
+   **G-1（review）应用目标**：`--rng-log` 时 C# GameSvr 从 `M2GameSvr-hook/`（影子）跑，
+   而 profile 的 `envir_root` 指基线 ⇒ 夹具**在影子存在时必须同时写基线与影子**，两侧内容
+   逐字节相同（否则①对 oracle 不生效、②下一轮 `envir_shadow_symmetry` 必红）。
 2. **还原**：`run_side` 的 `finally` 在停栈之后调用 `restore_fixtures()`，把备份写回并**校验
    sha256 等于写前值**；失败写 `restore_error`（不改 rc，但证据可见）。
 3. **dry-run**：只打印 `[side] 怪物夹具（dry-run 不写 Envir）：…`，不落盘。
@@ -67,10 +71,12 @@ PASS FIX 牙1 未知字段/空数组/缺字段/越界/count 0/非 GBK => ConfigE
 PASS FIX2 写 Envir/MonGen.txt：追加单点刷怪行、备份存在、rc=0
 PASS FIX2b 夹具行第 7 列 ZenTime>0（360 分钟 => 21600000 ms）——按两端解析器口径（zen_time<=0 即丢弃且无日志）不会被静默丢行
 PASS FIX3 停栈后还原：sha256 与写前一致（重读磁盘后比对）
+PASS FIX2c G-1：影子存在时同一夹具同时写基线与影子（两侧内容逐字节相同）
+PASS FIX3c G-1：基线与影子都按 sha256 还原（重读磁盘）
 PASS FIX 牙2 dry-run：只打印预览、不写文件
 PASS FIX 牙3 地图不在本侧 MapInfo => rc=2 点名（fail-closed）
 PASS FIX4 接线：run_side 起栈前应用夹具、finally 还原
-GREEN: card_window.py selftest 301/301
+GREEN: card_window.py selftest 303/303
 ```
 
 真实文件演练（`E:/tmp/conformance/rust-root/M2GameSvr/Envir/MonGen.txt`，不 no 起栈）：
