@@ -569,6 +569,72 @@ def check_castle_list(root=DEFAULT_PRIVATE_ROOT):
                 % (rust_sha[:12], rust_raw, ", ".join(label for label, _ in paths))), None
 
 
+def _dir_sha_map(root):
+    """递归目录 -> {relpath: sha256}；不跟随符号链接。"""
+    out = {}
+    for base, _dirs, files in os.walk(root):
+        for fn in files:
+            path = os.path.join(base, fn)
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            try:
+                with open(path, "rb") as f:
+                    out[rel] = hashlib.sha256(f.read()).hexdigest()
+            except OSError as e:
+                raise RuntimeError("读文件失败：%s（%s）" % (path, e))
+    return out
+
+
+def check_envir_shadow_symmetry(root=DEFAULT_PRIVATE_ROOT, limit=20):
+    """影子 Envir 必须与基线逐文件 sha256 一致（卡 openmir2-preflight-envir-shadow-symmetry）。
+
+    背景：`start-csharp.ps1` 在 `--rng-log` 模式下 GameSrv 从 `M2GameSvr-hook/` 影子目录跑，
+    影子部署有 `if (-not (Test-Path $shadowGs))` 守卫 ⇒ 只要 `GameSvr.exe` 在就**不会重新
+    robocopy**；对影子 Envir 的任何手改会一直生效（内容冻结风险）。本检查只读比对：
+      baseline `csharp-root/M2GameSvr/Envir`
+      shadow   `csharp-root/M2GameSvr-hook/Envir`（不存在 ⇒ 跳过，视为未启用 hook 影子）
+      rust     `rust-root/M2GameSvr/Envir`（存在则一并比）
+    任一文件内容不同、影子/rust 独有或缺失 ⇒ FAIL，并列出差异文件 + 两侧 sha。
+    """
+    base_dir = os.path.join(root, "csharp-root", "M2GameSvr", "Envir")
+    shadow_dir = os.path.join(root, "csharp-root", "M2GameSvr-hook", "Envir")
+    rust_dir = os.path.join(root, "rust-root", "M2GameSvr", "Envir")
+    if not os.path.isdir(base_dir):
+        return FAIL, "缺基线 Envir 目录：%s" % base_dir, "按 runbook §0.5/§0.9 建私有栈"
+    try:
+        base = _dir_sha_map(base_dir)
+    except RuntimeError as e:
+        return FAIL, str(e), "检查文件权限/占用"
+    pairs = []
+    if os.path.isdir(shadow_dir):
+        pairs.append(("shadow", shadow_dir))
+    if os.path.isdir(rust_dir):
+        pairs.append(("rust", rust_dir))
+    if not pairs:
+        return OK, "无影子/rust Envir 目录（未启用 hook 影子）⇒ 跳过", None
+    diffs = []
+    for label, other_dir in pairs:
+        try:
+            other = _dir_sha_map(other_dir)
+        except RuntimeError as e:
+            return FAIL, str(e), "检查文件权限/占用"
+        for rel in sorted(set(base) | set(other)):
+            if rel not in other:
+                diffs.append("%s 缺 %s（基线 sha=%s）" % (label, rel, base[rel][:12]))
+            elif rel not in base:
+                diffs.append("%s 多 %s（sha=%s）" % (label, rel, other[rel][:12]))
+            elif base[rel] != other[rel]:
+                diffs.append("%s 内容不同 %s（baseline=%s vs %s=%s）"
+                             % (label, rel, base[rel][:12], label, other[rel][:12]))
+    if diffs:
+        shown = diffs[:limit]
+        more = "" if len(diffs) <= limit else "；…另有 %d 条" % (len(diffs) - limit)
+        return FAIL, ("影子/基线 Envir 不一致（%d 处）：%s%s"
+                      % (len(diffs), "；".join(shown), more)), \
+            "还原影子：robocopy 基线 Envir -> 影子（或删影子 GameSvr.exe 让部署重建）；见 runbook §0.9"
+    return OK, ("影子=基线：%d 文件 0 差异（%s）"
+                % (len(base), ", ".join(label for label, _ in pairs))), None
+
+
 # ---------------------------------------------------------------------------
 # 全量检查
 # ---------------------------------------------------------------------------
@@ -586,6 +652,9 @@ def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
 
     status, detail, fix = check_castle_list(root)
     rep.add("castle_list_symmetry", status, detail, fix)
+
+    status, detail, fix = check_envir_shadow_symmetry(root)
+    rep.add("envir_shadow_symmetry", status, detail, fix)
 
     pin_log = None
     try:
@@ -883,6 +952,40 @@ def selftest():
         st, detail, _ = check_castle_list(base)
         chk(st == FAIL and "缺 Castle/List.txt" in detail,
             "castle 牙: 缺侧文件 => FAIL 点名缺失")
+
+        # ---- envir_shadow_symmetry（卡 openmir2-preflight-envir-shadow-symmetry）----
+        er = os.path.join(tmp, "envirshadow")
+        eb = os.path.join(er, "csharp-root", "M2GameSvr", "Envir")
+        es = os.path.join(er, "csharp-root", "M2GameSvr-hook", "Envir")
+        erust = os.path.join(er, "rust-root", "M2GameSvr", "Envir")
+        for d in (eb, es, erust):
+            os.makedirs(d, exist_ok=True)
+        with open(os.path.join(eb, "A.txt"), "wb") as fh:
+            fh.write(b"alpha")
+        with open(os.path.join(es, "A.txt"), "wb") as fh:
+            fh.write(b"alpha")
+        with open(os.path.join(erust, "A.txt"), "wb") as fh:
+            fh.write(b"alpha")
+        chk(check_envir_shadow_symmetry(er)[0] == OK,
+            "envir_shadow: 基线/影子/rust 逐文件一致 => OK")
+        with open(os.path.join(es, "A.txt"), "wb") as fh:
+            fh.write(b"alpha-changed")
+        st, detail, _ = check_envir_shadow_symmetry(er)
+        chk(st == FAIL and "内容不同" in detail and "A.txt" in detail
+            and "baseline=" in detail,
+            "envir_shadow 牙1: 影子改一行 => FAIL 并打印文件与两侧 sha")
+        with open(os.path.join(es, "A.txt"), "wb") as fh:
+            fh.write(b"alpha")
+        with open(os.path.join(es, "extra.txt"), "wb") as fh:
+            fh.write(b"extra")
+        st, detail, _ = check_envir_shadow_symmetry(er)
+        chk(st == FAIL and "shadow 多 extra.txt" in detail,
+            "envir_shadow 牙2: 影子多一个文件 => FAIL 点名")
+        os.remove(os.path.join(es, "extra.txt"))
+        os.remove(os.path.join(es, "A.txt"))
+        st, detail, _ = check_envir_shadow_symmetry(er)
+        chk(st == FAIL and "shadow 缺 A.txt" in detail,
+            "envir_shadow 牙3: 影子少一个文件 => FAIL 点名")
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

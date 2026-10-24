@@ -224,6 +224,13 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
   `castle_list_symmetry` 必须 OK。`Castle/0|1/SabukW.txt` 两侧本就逐字节同源，无需改。
 - **影响面**：W-TAX-1..4（尤其 W-TAX-2）、T-127 W-T127-4（多城广播次序）、任何按城表遍历的
   城堡工作项。窗口执行单（exec sheet）前置表已同步该步。
+- **影子 Envir 必须等于基线**（卡 `openmir2-preflight-envir-shadow-symmetry`）：`start-csharp.ps1`
+  在 `--rng-log` 模式下 GameSrv 从 `csharp-root/M2GameSvr-hook/` 跑，且影子部署有
+  `if (-not (Test-Path $shadowGs))` 守卫（`GameSvr.exe` 在就不会重新 robocopy）⇒ 手改影子 Envir
+  会一直生效（内容冻结风险）。preflight 的 **`envir_shadow_symmetry`** 逐文件 sha256 比
+  `csharp-root/M2GameSvr/Envir`、`M2GameSvr-hook/Envir` 与 `rust-root/M2GameSvr/Envir`，
+  任一不同/多/少 ⇒ FAIL 并列差异文件+两侧 sha（fail-closed）。开窗前必须 OK（现网实测
+  **642 文件、0 差异**）。
 
 ---
 
