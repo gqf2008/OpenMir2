@@ -388,3 +388,6 @@ tests/loadgate/**/*.err.log
 
 # worktrees（一 worktree 一角色，见 AGENTS.md §改树）
 .claude/worktree/
+
+# 团队 worktree（一 worktree 一角色，Leader 统一创建）
+.worktrees/
