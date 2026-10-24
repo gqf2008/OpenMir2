@@ -762,7 +762,7 @@ def judge_r_cards(evidence_list):
         state = NEED
     else:
         state = PASS
-    detail = ("R 卡 %d 张：已完成 %d / window_required %d（其中未合并 %d） / whitelist %d / "
+    detail = ("R 卡 %d 张：已完成 %d / window_required %d（另未合并 %d） / whitelist %d / "
               "已裁定登记 %d / comment 证据 %d / 三者皆无 %d / "
               "merged 未 closed 且无登记(需人工) %d / 未开工或未合并 %d（不计缺口）/ 其它需人工 %d" % (
                   len(per_card), counts.get("closed", 0), counts.get("window_required", 0),
@@ -1535,6 +1535,12 @@ def selftest(verbose=False):
                 "openmir2-card-eta"]
             and [x["last_status_ts"] for x in need2] == sorted(x["last_status_ts"] for x in need2),
             str([(x["card"], x["last_status_ts"]) for x in need2])))
+        # 卡 `openmir2-goal-gate-wording-fix`：window_required 与
+        # window_required_unmerged 是**两个独立计数器**（`r_category` 只返回其一），
+        # 所以 detail 必须写「另未合并」而不是「其中未合并」——「其中」会被读成
+        # 「已含在那 N 张里」，实际这 1 张并不在 window_required 的 3 张里。
+        check("条件2 detail 用「另未合并」且不含「其中未合并」（两个计数器不相交）", lambda: (
+            "（另未合并 1）" in detail2 and "其中未合并" not in detail2, detail2))
 
         # ---------- 条件3 ----------
         rows = [

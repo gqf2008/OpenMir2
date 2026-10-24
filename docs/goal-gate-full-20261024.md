@@ -15,6 +15,8 @@
 
 `overall = need_human`（需人工）；`fail_items = 0`；`not_merged_items = 0`。
 
+> 〔2026-10-24 订正：`goal_gate` 的 detail 措辞已由「其中」改为「另」；本处为当时原文〕
+
 ## 1. 四条件 detail 原文（逐字，未删节改写）
 
 ```
