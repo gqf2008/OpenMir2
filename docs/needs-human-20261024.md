@@ -460,3 +460,36 @@ owner 的一句话「复核口径」：是接受「有可核非作者 approve �
   **未**新增 owner 决策项，未改 `rules.json` / `whitelist.md` / 工具 / 场景 / 任何卡片状态。
 - 本轮 v3 基于 master `917376a45` 重打快照（旧：`55a8e7fca`）；动态数字现算值见 §1.5（`goal_gate`）与 §4（`whitelist`）。
 - 残留物：无（本版只产生 `E:/tmp/gg67.json` / `E:/tmp/gg67.err` 两份临时输出，收尾已删除）。
+
+---
+
+## 7. 2026-10-24 下午新增四项（Leader 循环自主推进产物，快照 @ 18cab0548 @ 2026-10-24 17:50 +08）
+
+### 7.1 跨栈 RNG 流位 flaky 类——窗口口径三选一
+
+- **现状**：window-run-1 的 npc_click「多出转身对」经 worker-74 分诊为固定 NPC Merchant 随机转身
+  （oracle `Merchant.cs:132-135` Random(50)==0）跨栈 RNG 流位分歧，机制非缺陷（npc_click_auto 同机制 diff=0）。
+- **证据**：卡 `openmir2-npc-click-rng-stream-flaky`（blocked）+ reviewer-3 附带两处文档勘误
+  （MsgQueue 出队方向写反、行号 690/132-135）；53 分诊卡的 tag ×1（MP 时序）同样挂「待窗口复跑」。
+- **还差什么**：owner 三选一——**甲** 窗口口径改「结构等价 + N 跑方差」；**乙** 双栈 RNG 流位锚点同步
+  （M3 clock/seed 同步扩展，另批实现）；**丙** 接受为已知 flaky、runbook 登记归因规则。
+
+### 7.2 king_castle_war 真攻城支——归属裁决
+
+- **现状**：批 2 已把可声明面声明完（@requestcastlewar 面板支 [644,767] 可判）；真攻城支
+  @requestcastlewarnow 不可达，缺口=金条入包无声明通道（inventory 对非空槽 fail-closed，无驱逐夹具）
+  + 掌门/双行会/UnderWar 依赖 castle_zone。
+- **证据**：卡 `openmir2-window-deploy-prereq-batch2`（在审）逐条登记；T138 卡 `openmir2-t138-request-castle-war` 已存在。
+- **还差什么**：owner 拍板「金条夹具/背包驱逐能力 + castle_zone 支援」是否开卡（可并入 7.3 的窗口批次规划）。
+
+### 7.3 窗口覆盖缺口四选一（§0#6 原项，附最新进展）
+
+- 今日已并 8 卡把 18 场景的**可声明/可判面**大幅推前（批 1+2、211 清零、53 分诊、Gold 通道、env 转发在办）；
+  §0#6 的四选一（45 补场景 / 27 替代判据 / 63 无场景）仍是总口径决策，**建议与 7.1/7.2 同批拍板**。
+
+### 7.4 三个低优先级背书/清扫项
+
+- **rules.json compare 注册表 211 条目**：approved_by=PENDING，reviewer-6 已独立批准，owner 背书即可收尾。
+- **%TEMP% 历史残树约 1.15 万棵**（guild_store_vectors 旧 tmp_root 积攒；修复已合并、新增为零）：
+  批量清扫是否立卡（纯机器清理，无 parity 面）。
+- **scan-mongen.txt 登记失准**（批 1 F-4）：作者侧下次登记前核实路径——非阻塞备忘。
