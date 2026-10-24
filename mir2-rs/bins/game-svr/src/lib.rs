@@ -4802,11 +4802,6 @@ fn handle_click_npc_cmd(
                 let _ = tx.send(SimToGate::SendFrame { socket, body });
             }
         }
-        for say in &says {
-            // `GotoLableSendMerChantSayMsg` → `playerActor.GetScriptLabel(sMsg)`
-            // （`ScriptEngine.cs:993`）：**每句说词 Clear 后重建** `CanJmpScriptLableMap`。
-            session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
-        }
         if !says.is_empty() {
             if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "商人 @main 说词") {
                 sent = emit_npc_says(tx, socket, sg.actor_id, &says);
@@ -5695,7 +5690,6 @@ fn handle_shop_cmd(
                     &says,
                     &script_frames,
                     &script_broadcasts,
-                    session,
                     sg,
                     &*world,
                     online,
@@ -5775,7 +5769,6 @@ fn handle_shop_cmd(
                     &back_says,
                     &back_frames,
                     &back_broadcasts,
-                    session,
                     sg,
                     &*world,
                     online,
@@ -6038,7 +6031,6 @@ fn handle_shop_cmd(
                                 &says,
                                 &script_frames,
                                 &script_broadcasts,
-                                session,
                                 sg,
                                 &*world,
                                 online,
@@ -6135,7 +6127,6 @@ fn handle_shop_cmd(
                                 &says,
                                 &script_frames,
                                 &script_broadcasts,
-                                session,
                                 sg,
                                 &*world,
                                 online,
@@ -6316,7 +6307,6 @@ fn handle_shop_cmd(
                     &says,
                     &script_frames,
                     &script_broadcasts,
-                    session,
                     sg,
                     &*world,
                     online,
@@ -7299,6 +7289,19 @@ fn market_def_script_missing(
         .collect()
 }
 
+/// `GotoLableSendMerChantSayMsg`（`ScriptEngine.cs:990-1000`）：每条说词 `GetScriptLabel`
+/// 重建 `CanJmpScriptLableMap`（逐条覆盖，后到者胜）。
+///
+/// **与发帧解耦（reviewer-21 P-2）**：oracle 在说词入队时更新该表；本仓在脚本跑完、帧返回前
+/// 立即更新（[`run_merchant_goto`]），不再由 `emit_merchant_goto_result` 的发帧路径顺带更新。
+/// 当前行为逐位等价：`run_merchant_goto` 不读该表，oracle 的嵌套 `GotoLable`
+/// （`ScriptEngine.cs:131-144`）也不重查 `LableIsCanJmp`（该门只在 `Merchant.UserSelect` 入口）。
+fn update_can_jmp_labels(session: &mut ShopSession, says: &[game_svr::npc::SayMsg]) {
+    for say in says {
+        session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
+    }
+}
+
 /// 商人 `GotoLable`（`ScriptEngine.cs:38-129` → `Merchant.ScriptList`）＋ `Script/LastNpc`
 /// 跨调用回写。返回 `(说词, 脚本帧, 改动的 UseItems 槽)`：说词按 `MsgQueue` 出队序落
 /// `SM_MERCHANTSAY`，帧经 [`emit_script_frames`] 排水（`RM_GAMEGOLDCHANGED` ⇒ `SM_GAMEGOLDNAME`，
@@ -7387,6 +7390,8 @@ fn run_merchant_goto(
         // `WorldServer.SendBroadCastMsg`（`WorldServer.cs:1738-1765`）的扇出清单：脚本里出现的
         // 顺序即 oracle 的入队序（每个收件人各按自己的 `MsgQueue` 出队）。
         broadcasts.append(&mut player.world_broadcasts);
+        // **P-2**：can_jmp 状态更新与帧发射解耦——脚本跑完立刻更新，再返回帧。
+        update_can_jmp_labels(session, &says);
         let out = (
             says,
             std::mem::take(&mut player.frames),
@@ -7445,7 +7450,6 @@ fn emit_merchant_goto_result(
     says: &[game_svr::npc::SayMsg],
     script_frames: &[game_svr::npc::SendMsg],
     script_broadcasts: &[String],
-    session: &mut ShopSession,
     sg: &mut SessionGround,
     world: &mir2_world::World,
     online: &OnlineRegistry,
@@ -7454,10 +7458,8 @@ fn emit_merchant_goto_result(
     socket: i32,
     npc_vars: &game_svr::npc::NpcVars,
 ) {
-    // `ScriptEngine.cs:993-1000` 说词里出现的标签进 `CanJmpScriptLableMap`（逐条覆盖，后到者胜）。
-    for say in says {
-        session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
-    }
+    // 说词的 `CanJmpScriptLableMap` 更新已在 [`run_merchant_goto`] 内完成（P-2 解耦）；
+    // 本函数只负责发说词/脚本帧，不再改会话状态。
     if !says.is_empty() {
         if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人脚本说词") {
             emit_npc_says(tx, socket, sg.actor_id, says);
@@ -69543,16 +69545,63 @@ GMEXECUTE 禁言 self 20
     /// 源码序门：`shop.rs` 不得再出现 `pub fn lable_is_can_jmp`；引擎恰好一份。
     #[test]
     fn t142_lable_is_can_jmp_has_single_definition() {
-        let shop = include_str!("shop.rs");
-        assert!(
-            !shop.contains("pub fn lable_is_can_jmp"),
-            "shop.rs 不得再有第二份 lable_is_can_jmp 实现（T-142 ⑪）"
-        );
-        let engine = include_str!("../../../crates/script/src/engine/mod.rs");
+        // 按**行首**锚定（reviewer-21 P-3）：注释/文档里出现同名文本不算实现。
+        fn definitions(src: &str) -> usize {
+            src.lines()
+                .filter(|l| l.trim_start().starts_with("pub fn lable_is_can_jmp"))
+                .count()
+        }
         assert_eq!(
-            engine.matches("pub fn lable_is_can_jmp").count(),
+            definitions(include_str!("shop.rs")),
+            0,
+            "shop.rs 只能 re-export"
+        );
+        assert_eq!(
+            definitions(include_str!("../../../crates/script/src/engine/mod.rs")),
             1,
             "引擎必须恰好一份 lable_is_can_jmp 实现"
+        );
+    }
+
+    /// **P-2 源码序门**：`can_jmp_labels` 的更新必须在 `run_merchant_goto` 返回帧之前完成；
+    /// `emit_merchant_goto_result` 不得再改会话状态。
+    ///
+    /// 牙：把 `update_can_jmp_labels(session, &says);` 挪到 `let out = (` 之后 ⇒ 本用例红。
+    #[test]
+    fn t142_can_jmp_update_precedes_frame_return_in_run_merchant_goto() {
+        let src = include_str!("lib.rs");
+        let start = src
+            .find("fn run_merchant_goto(")
+            .expect("run_merchant_goto");
+        let end = src[start..]
+            .find(
+                "
+fn emit_merchant_goto_result(",
+            )
+            .map(|i| start + i)
+            .expect("run_merchant_goto 之后的 emit_merchant_goto_result");
+        let body = &src[start..end];
+        let update = body
+            .find("update_can_jmp_labels(session, &says)")
+            .expect("run_merchant_goto 必须调用 update_can_jmp_labels");
+        let frames = body
+            .find("std::mem::take(&mut player.frames)")
+            .expect("run_merchant_goto 必须返回 player.frames");
+        assert!(
+            update < frames,
+            "can_jmp 更新必须早于帧返回（P-2）：update={update} frames={frames}"
+        );
+        let e_start = src.find("fn emit_merchant_goto_result(").expect("emit");
+        let e_end = src[e_start..]
+            .find(
+                "
+fn ",
+            )
+            .map(|i| e_start + i)
+            .unwrap_or(src.len());
+        assert!(
+            !src[e_start..e_end].contains("can_jmp_labels ="),
+            "emit_merchant_goto_result 不得再更新 can_jmp_labels（P-2）"
         );
     }
 }
