@@ -151,6 +151,86 @@
     共同点是**每个实例都被塞了 2–4 张卡**。⇒ **一个实例只做一张卡**（review 也一样：一次一条 review，别打包 2–3 张）；
     需要清积压时**并行起多个新实例**，不要往一个实例里塞。
 
+21. **base 一律取 `walgit/master`，不许取别的卡的 head**（2026-10-24 实测）：
+    实例：`openmir2-review-principal-check` 的 v4 patch（ts=1792802762）把 `base` 写成 `1679b4fa9`
+    —— 那是**另一张卡** `openmir2-dynamic-count-stamp-gate` 的 head。
+    `git merge-base --is-ancestor 1679b4fa9 walgit/master` = **1**，也就是当场就能判出「base 不在 master」；
+    该 patch 返工后在 `f58f042a2` 上由 reviewer-6 approve（ts=1792803194）并 `merge_result` 合入。
+    ⇒ **交付前**：patch body 里的 `base` 必须**等于** `git merge-base <head> walgit/master`；
+    取「另一张卡的 head」当 base 会让合并树不可复现（别人的返工叠加会变成你的 diff）。
+    **自检（可复制；`<base>` 指 patch body 里声明的值，不是现算值）**：
+    ```sh
+    DECLARED_BASE=<patch body 的 base oid>
+    git merge-base --is-ancestor "$DECLARED_BASE" walgit/master; echo "declared-base-in-master=$?"  # 必须 0
+    git merge-base --is-ancestor "$DECLARED_BASE" <head>;        echo "declared-base-in-head=$?"    # 必须 0
+    git merge-base --is-ancestor 1679b4fa9 walgit/master; echo "反例=$?"   # 1：另一卡 head 不在 master
+    ```
+
+22. **规则 19 的延伸：派单/派返工前最后一步重读线程；另加一条——不要把活派给常驻认领车道用的 principal**（2026-10-24；19 讲「看线程有没有同 principal 写入」，本条把它固化成派单文本 + 新增 principal 冲突面）：
+    实例一：`openmir2-drain-order-gate` 在 `ts=1792802945` **同一秒**出现两条 `in-progress`
+    （`openmir2-worker-24` 与 `openmir2-worker-70`），board 只能挑一个 owner，另一条白做
+    （前者 worker-24 的 patch `2bebc2f2`，head `c5d1c900`，未合入；后者 worker-70 的 patch `7676246`，head `37d53616f`，最终合入 `3e9007638`）。
+    实例二：本仓的常驻认领车道就挂在 `openmir2-worker-24` 上（`OpenMir2-wt-cronclaim`），
+    再派同 principal 的第二条车道，账本里**无法区分谁认领、谁交付**（同 identity、同 worktree）。
+    ⇒ 派单文本固定写一句：「**开工前再读线程；若已有更新 head，就在其上快进，别另起竞争 head**」。
+    阈值口径（与规则 19 对齐）：最后一条 `verified=true` 的 entry 是 `patch`/`status` 且
+    **age < 180s ⇒ `HOT`**（几乎确定在写，停手）；**180–600s ⇒ `WARM`**（按规则 19 的 600s 上限判「可能在做」，先问）；
+    **>600s ⇒ `COLD`** 才可派。**180s 是「刚写过」的强信号，600s 是规则 19 的派单上限（180 ⊂ 600）。**
+    **自检（可复制；HOT 时 exit 1，且只看 `verified=true`）**：
+    ```sh
+    walgit collab thread <card> | python -I -c "import json,sys,time;t=json.load(sys.stdin);e=[x for x in t if x.get('verified') is True][-1]['entry'];age=int(time.time())-int(e['ts']);state='HOT' if age<180 else ('WARM' if age<600 else 'COLD');print(e['kind'],e['ts'],'age=%ds'%age,state);sys.exit(1 if state=='HOT' and e['kind'] in ('patch','status') else 0)"
+    ```
+
+23. **豁免/降级必须受检，否则就是新的假绿通道**（2026-10-24，一天内两例）：
+    实例（都可定位）：
+    ① `tools/hygiene/stale_pointer_gate.py:581` 的 `_blame_delta` 快照豁免——**已 stage 未 commit** 的声明行
+    `git blame` 返回全 0 commit / `Not Committed Yet`，若仍被采纳即 fail-open（卡 `openmir2-stale-pointer-blame-failclosed`）；
+    ② `dynamic_count_stamp_gate` 首版 `rot = [e for e in allowlist if not e["used"]]` 未按 `--path` 子树过滤
+    （卡 `openmir2-dynamic-count-stamp-gate`，review `fb80ea1f` 的 F1）。
+    **正例（可定位）**：`openmir2-stale-pointer-snapshot-exemption` 的返工把快照豁免做成**四项必查**——
+    (a) 声明 sha 是 `--ref` 的祖先；(b) 声明时间与该 commit 时间 Δ ≤ `--snapshot-tol`（默认 900s）；
+    (c) 整个声明出现在命中行之前；(d) 声明行的 blame 时间与声称时点 Δ ≤ `--decl-tol`（默认 1 天）；
+    任一不满足仍判红 rc=1，并打印 `NOTE snapshot-declaration rejected`
+    （`docs/stale-pointer-gate-20261024.md` §1c；review `1792805370` approve，前一轮 `1792804331` request_changes）。
+    ⇒ **豁免/降级的「成立性」判不了 ⇒ rc=2**；显式降级必须**打印「已跳过」**；白名单条目压不到命中要报 **ROT**（rc=1）。
+    **注意作用域**：**已 documented 的 NOTE 不算 fail-open**——`stale_pointer_gate` 对「对象不在本仓」打印
+    `NOTE unresolved …（not judged）` 并 rc=0 是有意为之，不要为了「看起来 fail-closed」把它改成红。
+    **自检（可复制；只用 master 上已存在的门）**：
+    ```sh
+    python -I -B tools/hygiene/stale_pointer_gate.py; echo "rc=$?"                       # 绿=0 / 有红=1（unresolved NOTE 仍 0）
+    python -I -B tools/hygiene/stale_pointer_gate.py --path docs/does-not-exist; echo "rc=$?"   # 必须 2（成立性判不了）
+    python -I -B tools/hygiene/stale_pointer_gate.py --selftest | tail -1                # 门自身不能坏
+    ```
+
+24. **报告里给读者的复算命令，必须自己逐字跑一遍**（2026-10-24，三次返工的共同根因）：
+    实例一（真实「错→对」）：`docs/dynamic-count-stamp-gate-20261024.md` 首版 §8 写
+    `--path docs/m2` —— 该目录不存在、读者照抄只得 rc=2；已改为存在的单文件路径（`7e27de47a`）。
+    实例二（真实「错→对」）：中文正则用字节 `grep -P` 会**静默少报**：同一模式 `尚未.{0,6}inventory`
+    （排除本报告自身）裸 `grep -rnP` 得 **1** 行，加 `LC_ALL=C.UTF-8`（或 `(*UTF)`）得 **3** 行
+    （正确写法见 `docs/docs-post-18-sweep-20261024.md:30-31`）。
+    实例三（真实「错→对」）：`git rev-parse <sha>^2` 在 **cmd.exe** 里 `^` 是转义符，会被吞成
+    `ambiguous argument '<sha>2'`；对：加引号 `git rev-parse '<sha>^2'`（或写 `~2`）。
+    **反面教材**：不要把 `tail -1` 与 `--reverse | head -1` 当作「错→对」——对 `git log` 两者**等价**
+    （`--reverse` 只反转输出顺序、不改选择集），实测三个区间输出完全相同。
+    ⇒ 中文一律走 Python unicode `re`（或 `grep -P '(*UTF)'`）；顺序敏感处写清「取最旧 / 最新」；
+    PowerShell 单对象 `.Count` 先 `@()` 再接 `Measure-Object`。**本机双壳实测**（2026-10-24，`powershell` 5.1.19041
+    与 `pwsh` 7.6.6）：`(Get-CimInstance Win32_Process | Where-Object { $_.ProcessId -eq $PID }).Count`
+    ⇒ **5.1 输出为空（`$null`）、7 输出 `1`**；改成 `(@(...) | Measure-Object).Count` 后两壳都得 `1`。
+    同型实测（同探针 5.1 `INDETERMINATE rc=3 own=0` vs 7 `BUSY rc=2 own=1`）见
+    `docs/leader-process-lessons-20261024.md:89`。
+    **自检（逐字跑，贴输出）**：
+    ```sh
+    EX="--exclude=docs-post-18-sweep-20261024.md --exclude=leader-queue-20261023.md --exclude=dynamic-count-stamp-gate-20261024.md"  # 排除「描述该模式」的三份文档
+    grep -rnP $EX '尚未.{0,6}inventory' docs/ | wc -l             # 1（少报）
+    LC_ALL=C.UTF-8 grep -rnP $EX '尚未.{0,6}inventory' docs/ | wc -l   # 3
+    git rev-parse 'e9d00c6b3^2'    # 对：带引号；cmd.exe 里不带引号会被吞成 '...2'
+    # PowerShell 单对象 .Count：5.1 空、7 得 1；接 Measure-Object 两壳都得 1
+    powershell -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }).Count"
+    pwsh       -NoProfile -Command "(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }).Count"
+    powershell -NoProfile -Command "(@(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }) | Measure-Object).Count"
+    pwsh       -NoProfile -Command "(@(Get-CimInstance Win32_Process | Where-Object { \$_.ProcessId -eq \$PID }) | Measure-Object).Count"
+    ```
+
 ## 2. 正在跑（每次巡检更新）
 
 以看板为准。本轮在飞：castle-merchant 复审、ya52 修复、window-debt-reclass 修复、port-hygiene 复审。
