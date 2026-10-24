@@ -31,12 +31,18 @@
         `MapItem x = …` 的局部/字段/参数），其上 `x.ItemId = …` 形式的赋值。
     A3) `Get<MapItem>(…)` 返回后直接链式 `.ItemId = …`。
     A4) 经由 MapItem 字段/属性的链式写：`xxx.MapItem.ItemId = …`。
+    A5) record `with { … ItemId = … }`（`MapItem` 是 `record struct`，MapItem.cs:5；
+        左操作数是本文件 MapItem 变量时判定，review P-4）。
+    A6) 数组/集合元素写：`a[i].ItemId = …`（名字来自 `MapItem[] a` /
+        `List<MapItem>` 等声明；review P-5）。
+    A2 还收 `var x = …Get<MapItem>(…)` 推导出的变量（review P-3）。
   其它结构体的 `.ItemId`（如 `MShare.DropExpDropInfo`）、以及注释/字符串里的同名文本
   都**不是** MapItem 赋值点，不参与判定。
 
-  残留口径（故意保守）：类型追踪只覆盖显式声明/`new` 结果，不做完整语义分析；
-  若将来把 MapItem 塞进 `object`/`dynamic` 再取字段写，本脚本看不见——那种写法若出现，
-  应在本脚本里补进 A1–A4，而不是放宽匹配。宁可假红，不可假绿。
+  残留口径（故意保守）：类型追踪只覆盖显式声明/`new`/`Get<MapItem>` 结果与直接数组/集合
+  元素写，不做完整语义分析。仍看不见：把 MapItem 塞进 `object`/`dynamic`、经字典值/跨文件
+  属性链或 LINQ 中间量（如 `d.Values.First().ItemId = …`）再写字段。那种写法若出现，应在本
+  脚本里补规则（A1–A6 之后继续加），而不是放宽匹配。宁可假红，不可假绿。
 
   判据/退出码（与 harness 其它脚本同口径）：
     `0` GREEN  — 证明成立：无任何指向 MapItem 的 ItemId 赋值点，且守卫存在 ⇒ pickup 不可达。
@@ -165,6 +171,12 @@ $VarNewMapItemRe = [regex]'\bvar\s+(\w+)\s*=\s*new\s+(?:[A-Za-z_]\w*\s*\.\s*)*Ma
 $GetMapItemRe = [regex]'Get\s*<\s*(?:[A-Za-z_]\w*\s*\.\s*)*MapItem\s*>\s*\('
 # 经由 MapItem 字段/属性的链式写：`x.MapItem.ItemId = …`
 $FieldChainRe = [regex]'\.\s*MapItem\s*\.\s*ItemId\s*(?:[+\-*/%&|^]=|\?\?=|=)(?!=)'
+# `var x = … Get<MapItem>(…)` 推导出的变量（review P-3）
+$VarGetMapItemRe = [regex]'\bvar\s+(\w+)\s*=\s*[^;\r\n]*?Get\s*<\s*(?:[A-Za-z_]\w*\s*\.\s*)*MapItem\s*>\s*\('
+# 数组/集合声明：`MapItem[] a` / `List<MapItem> xs` 等（review P-5）
+$MapItemSeqDeclRe = [regex]'\b(?:MapItem\s*\[\s*\]|(?:List|IList|IReadOnlyList|HashSet|IEnumerable)\s*<\s*(?:[A-Za-z_]\w*\s*\.\s*)*MapItem\s*>)\s+(\w+)'
+# record `with { … }`（review P-4）
+$WithRe = [regex]'\bwith\s*\{'
 
 Record ("== pickup 不可达证明（类型感知）@ " + (Get-Date).ToString("o") + " ==")
 Record ("repo=" + $RepoRoot)
@@ -182,6 +194,31 @@ $NameKeywordRe = '^(is|as|new|in|out|ref|default|var|return|public|private|prote
 function Get-LineSnippet([string[]]$rawLines, [int]$ln) {
   if ($ln -ge 1 -and $ln -le $rawLines.Count) { return $rawLines[$ln - 1].Trim() }
   return ""
+}
+
+# 大小写敏感去重（review P-2：`Sort-Object -Unique` 在 PS 5.1 是大小写不敏感，
+# 会把同一文件里的 `MapItem`/`mapItem` 两种拼写并掉，随后大小写敏感匹配就漏一半）。
+function Get-UniqueOrdinal([object]$items) {
+  $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($i in @($items)) {
+    $v = [string]$i
+    if ($seen.Add($v)) { $out.Add($v) | Out-Null }
+  }
+  return $out.ToArray()
+}
+
+# RED 行按 (文件, 行) 去重（review P-6：A2/A4 会对同一行各报一次）。
+function Get-DedupedRedLines([object]$lines) {
+  $seen = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+  $out = New-Object System.Collections.Generic.List[string]
+  foreach ($l in @($lines)) {
+    $text = [string]$l
+    $m = [regex]::Match($text, '^(.*?):(\d+):')
+    $key = if ($m.Success) { $m.Groups[1].Value + ':' + $m.Groups[2].Value } else { $text }
+    if ($seen.Add($key)) { $out.Add($text) | Out-Null }
+  }
+  return $out.ToArray()
 }
 
 foreach ($f in $csFiles) {
@@ -249,7 +286,9 @@ foreach ($f in $csFiles) {
   # A2) 收集 MapItem 类型变量名（局部/字段/参数/模式变量）与 `var x = new MapItem`
   foreach ($m in $MapItemDeclRe.Matches($masked)) { $fileNames.Add($m.Groups[1].Value) | Out-Null }
   foreach ($m in $VarNewMapItemRe.Matches($masked)) { $fileNames.Add($m.Groups[1].Value) | Out-Null }
-  $fileNames = @($fileNames | Where-Object { $_ -notmatch $NameKeywordRe } | Sort-Object -Unique)
+  foreach ($m in $VarGetMapItemRe.Matches($masked)) { $fileNames.Add($m.Groups[1].Value) | Out-Null }
+  foreach ($m in $MapItemSeqDeclRe.Matches($masked)) { $fileNames.Add($m.Groups[1].Value) | Out-Null }
+  $fileNames = @(Get-UniqueOrdinal @($fileNames | Where-Object { $_ -notmatch $NameKeywordRe }))
   $namesByFile[$f.FullName] = $fileNames
   foreach ($n in $fileNames) { $declaredNames.Add($n) | Out-Null }
 
@@ -258,10 +297,37 @@ foreach ($f in $csFiles) {
     $ln = Get-LineNumber $masked $m.Index
     $reds.Add(("{0}:{1}: 经 .MapItem 字段/属性链给 ItemId 赋值 | {2}" -f $rel, $ln, (Get-LineSnippet $rawLines $ln))) | Out-Null
   }
+
+  # A5) record `with { … }`：MapItem 是 record struct（review P-4）。
+  #     只认左操作数是本文件 MapItem 变量（或邻近出现 new MapItem / Get<MapItem>）的 with，
+  #     避免把其它 record 的 ItemId 误判回原假红类。
+  foreach ($m in $WithRe.Matches($masked)) {
+    $before = $masked.Substring(0, $m.Index)
+    $tail = $before.Substring([Math]::Max(0, $before.Length - 200))
+    $op = [regex]::Match($tail, '(\w+)\s*$')
+    $operand = if ($op.Success) { $op.Groups[1].Value } else { '' }
+    $isMapItem = $operand -and ($fileNames -ccontains $operand)
+    if (-not $isMapItem) {
+      if ($tail -notmatch '(?:new\s+(?:[A-Za-z_]\w*\s*\.\s*)*MapItem|Get\s*<\s*(?:[A-Za-z_]\w*\s*\.\s*)*MapItem\s*>)') { continue }
+    }
+    $p = Skip-Ws $masked ($m.Index + $m.Length - 1)
+    if ($p -ge $masked.Length -or $masked[$p] -ne '{') { continue }
+    $init = Get-TopLevelInitializer $masked $p
+    if (-not $init.Closed) {
+      $ln = Get-LineNumber $masked $m.Index
+      $reds.Add(("{0}:{1}: record with 表达式括号不配对，无法判定 | {2}" -f $rel, $ln, (Get-LineSnippet $rawLines $ln))) | Out-Null
+      continue
+    }
+    $hit = [regex]::Match($init.Text, $ItemIdAssign)
+    if ($hit.Success) {
+      $ln = Get-LineNumber $masked ($init.StartPos + $hit.Index)
+      $reds.Add(("{0}:{1}: record with 表达式给 ItemId 赋值（MapItem 是 record struct） | {2}" -f $rel, $ln, (Get-LineSnippet $rawLines $ln))) | Out-Null
+    }
+  }
 }
 
 # A2 检查（按文件各自的 MapItem 类型变量名匹配，避免跨文件同名误配）
-$allNames = @($declaredNames | Sort-Object -Unique)
+$allNames = @(Get-UniqueOrdinal $declaredNames)
 Record ("  MapItem 类型变量名（全仓去重）" + $allNames.Count + " 个：" + ($allNames -join ", "))
 foreach ($f in $csFiles) {
   $rel = $f.FullName.Substring($RepoRoot.Length).TrimStart('\', '/')
@@ -275,6 +341,12 @@ foreach ($f in $csFiles) {
     foreach ($m in [regex]::Matches($masked, $pat)) {
       $ln = Get-LineNumber $masked $m.Index
       $reds.Add(("{0}:{1}: MapItem 变量 {2} 的 ItemId 赋值 | {3}" -f $rel, $ln, $name, (Get-LineSnippet $rawLines $ln))) | Out-Null
+    }
+    # A6) 同一变量的数组/集合元素写：`a[i].ItemId = …`（review P-5）
+    $patElem = '(?<![\w])' + [regex]::Escape($name) + '\s*\[[^\]]*\]\s*\.\s*ItemId\s*(?:[+\-*/%&|^]=|\?\?=|=)(?!=)'
+    foreach ($m in [regex]::Matches($masked, $patElem)) {
+      $ln = Get-LineNumber $masked $m.Index
+      $reds.Add(("{0}:{1}: MapItem 集合/数组元素 {2}[…].ItemId 赋值 | {3}" -f $rel, $ln, $name, (Get-LineSnippet $rawLines $ln))) | Out-Null
     }
   }
   # A3) `Get<MapItem>(…).ItemId = …`
@@ -292,6 +364,7 @@ foreach ($f in $csFiles) {
   }
 }
 
+$reds = @(Get-DedupedRedLines $reds)
 if ($reds.Count -gt 0) {
   Record "RED: 发现指向 MapItem 的未注释 ItemId 赋值点 —— pickup 不可达的证明被推翻："
   foreach ($a in $reds) { Record ("  " + $a) }
@@ -311,6 +384,24 @@ if ($commented.Count -eq 0) {
   exit 1
 }
 Record ("  OK: MapItem.cs 构造器里 ItemId 赋值仍是注释 -> " + $commented[0].Trim())
+
+# B2) review P-1：B 段不能只验「那行注释还在」——构造器/类型体里新增未注释的
+#     `this.ItemId = …`（或 `ItemId = …`）就是推翻核心命题最自然的一行改动，必须 RED。
+$mapItemRaw = [IO.File]::ReadAllText($mapItem)
+$mapItemMasked = Get-MaskedSource $mapItemRaw
+$mapItemRawLines = $mapItemRaw -split "`r?`n"
+$ctorReds = New-Object System.Collections.Generic.List[string]
+foreach ($m in [regex]::Matches($mapItemMasked, '(?:this\s*\.\s*ItemId|\bItemId)\s*(?:[+\-*/%&|^]=|\?\?=|=)(?!=)')) {
+  $ln = Get-LineNumber $mapItemMasked $m.Index
+  $ctorReds.Add(("src/Modules/SystemModule/Data/MapItem.cs:{0}: MapItem 类型体内未注释的 ItemId 赋值 | {1}" -f $ln, (Get-LineSnippet $mapItemRawLines $ln))) | Out-Null
+}
+if ($ctorReds.Count -gt 0) {
+  Record "RED: MapItem 类型体里出现未注释的 ItemId 赋值（MapItem.ItemId 恒 0 被推翻）："
+  foreach ($a in $ctorReds) { Record ("  " + $a) }
+  Save-Evidence
+  exit 1
+}
+Record "  OK: MapItem 类型体内没有未注释的 ItemId 赋值（构造器/字段初始化都无）"
 
 # ---- C) Envirnoment.AddItemToMap 首行守卫必须在 ----
 $envir = Join-Path $SrcRoot "M2Server\Maps\Envirnoment.cs"
