@@ -114,6 +114,21 @@ profile：
     `CONFORMANCE_DB_PASSWORD`，不写进 profile 文件。
   * `--dry-run` 只打印预置命令并做**离线内容校验**（图/坐标可走），不连库。
 
+资产声明通道（assets，卡 `openmir2-window-gold-declaration-channel`）：
+  * 场景**顶层**可声明 `"assets": {"Gold": 10000, "note": "…"}`，表示「本场景要求角色资产
+    列达到目标值」。首例：upgrade_retrieve 需要 Gold>=10000，而 placement（MapName/CX/CY）
+    与 inventory（characters_bagitem）两通道都不覆盖 characters.Gold ⇒ 金币前置无法声明。
+  * **列白名单**（首版仅 `Gold`）：非白名单列 / 非整数 / 负数 / 超 int32 => 加载期 rc=2
+    点名（fail-closed）。扩展白名单只允许「有符号整数、语义是资产/点数」的列（实表取证：
+    characters.Gold 是 int(11)）；绝不加字符串列/时间列/主键外键列。
+  * 每侧 restore 之后、起栈之前 UPDATE 该侧**测试库** characters 的这一行（按 profile
+    char_name/account 定位，ChrName+LoginID 唯一、未删除）；写前后对**其余列**做 MD5
+    指纹对比（只许写声明列），写后读回断言目标值；完成不了 rc=2，绝不让 probe 超时。
+  * `--dry-run` 打印预览行（含 `Gold=10000`）并做离线校验（库名/库配对），不连库。
+  * 边界：`tools/probe/mir2_probe.py` 的场景顶层键白名单暂未放行 `assets`——场景 JSON
+    采用本通道时需在采卡 delta 里给 probe 加一行 optional 键（形状校验与本工具
+    `scenario_assets` 同口径）。本卡不碰场景 JSON、不碰 probe。
+
 用法：
   CONFORMANCE_PASSWORD=... python -I -B tools/conformance/card_window.py \
       --card openmir2-window-529-dualrun \
@@ -2848,6 +2863,290 @@ def _parse_inventory_fp(out):
         raise ConfigError("背包指纹无法解析：%r（%s）" % (lines[0][:200], e))
 
 
+# ---------------------------------------------------------------------------
+# 资产声明通道（assets）：restore 之后、起栈之前把「角色资产列」UPDATE 到目标值
+#
+# 卡 `openmir2-window-gold-declaration-channel`。部署前置卡
+# （openmir2-window-deploy-prereq-batch1）披露：upgrade_retrieve 需要「Gold>=10000」
+# 前置，而 placement（只写 MapName/CX/CY）与 inventory（只写 characters_bagitem）
+# 两通道都不含 characters.Gold，金币前置无法声明。本通道让场景顶层可以声明
+# 「characters 白名单资产列 = 目标值」（首版仅 Gold）。
+#
+# 选型与预置位/背包一致：DB 改**测试库**（restore 之后、起栈之前；角色记录只在
+# 登录时读一次）；脚本/GM 路径不可行（登录后才跑 / Permission 恒 0）。
+#
+# 声明形态（场景顶层；BNF 见本卡报告）：
+#   "assets": {"Gold": 10000, "note": "upgrade_retrieve 前置 Gold>=10000"}
+# - **列白名单**（首版仅 `Gold`）：非白名单列 => 加载期 rc=2 点名（fail-closed）；
+#   扩展只允许「有符号整数、语义是资产/点数、服务端只在登录/结算时读」的列
+#   （实表取证：mir2_test_db.characters.Gold 是 int(11)，DESCRIBE 2026-10-24）；
+# - 值必须是 JSON 整数（bool/浮点/字符串/null 一律拒）、0..2147483647（负数一律红）；
+# - 每侧 UPDATE 该侧行（按 profile char_name/account 定位，ChrName+LoginID 唯一、
+#   未删除），写前后对**其余列**做 MD5 指纹对比（只许写声明列），写后读回断言目标值；
+# - `--dry-run` 打印预览行（含 列=目标值）并做离线校验（库名/库配对），不连库。
+# 边界：probe 侧 `load_scenario` 的顶层键白名单暂未放行 `assets`——场景 JSON 采用
+# 本通道时需在采卡 delta 里同步加一行 optional 键（见本卡报告「边界」节）。
+# ---------------------------------------------------------------------------
+#: 资产声明**只允许**写这些列（首版仅 Gold）；扩展规则：只加「有符号整数、语义是
+#: 角色资产/点数、服务端只在登录/结算时读」的列，绝不加字符串列/时间列/主键外键列。
+ASSETS_COLUMNS = ("Gold",)
+#: 声明值上限：characters.Gold 是 int(11) 有符号（DESCRIBE 实表），负值一律拒。
+ASSETS_MAX = 0x7FFFFFFF
+#: 通道依赖的列（缺任何一个 => 表结构与预期不符， fail-closed）。
+ASSETS_REQUIRED_COLUMNS = ("Id", "ChrName", "LoginID", "Deleted")
+#: 声明里的备注键（不参与 UPDATE， 只进证据）。
+ASSETS_NOTE_KEY = "note"
+
+
+def scenario_assets(path):
+    """读场景顶层 `assets` 声明（白名单列 → 目标值）。没有 => None；形状非法 => ConfigError。"""
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise ConfigError("%s: cannot load scenario: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise ConfigError("%s: scenario must be a JSON object" % path)
+    assets = data.get("assets")
+    if assets is None:
+        return None
+    if not isinstance(assets, dict) or not assets:
+        raise ConfigError("%s: scenario.assets 必须是非空对象（列→目标值）" % path)
+    bad = set(assets) - set(ASSETS_COLUMNS) - {ASSETS_NOTE_KEY}
+    if bad:
+        raise ConfigError(
+            "%s: scenario.assets 有不在白名单里的列 %s（fail-closed；白名单=%s，"
+            "只允许声明白名单内的数字列）" % (path, sorted(bad), list(ASSETS_COLUMNS)))
+    if assets.get(ASSETS_NOTE_KEY) is not None \
+            and not isinstance(assets[ASSETS_NOTE_KEY], str):
+        raise ConfigError("%s: scenario.assets.note 必须是字符串" % path)
+    out = {}
+    for col in ASSETS_COLUMNS:
+        if col not in assets:
+            continue
+        v = assets[col]
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ConfigError(
+                "%s: scenario.assets.%s 必须是 JSON 整数（实际 %r：%s）——"
+                "字符串/浮点/bool/null 一律拒绝" % (path, col, v, type(v).__name__))
+        if v < 0 or v > ASSETS_MAX:
+            raise ConfigError(
+                "%s: scenario.assets.%s=%r 越界（0..%d；characters.%s 是 int(11) "
+                "有符号，负数/超 int32 一律拒绝）" % (path, col, v, ASSETS_MAX, col))
+        out[col] = v
+    if not out:
+        raise ConfigError("%s: scenario.assets 只有 note、没有声明任何列（无意义，拒绝）"
+                          % path)
+    out[ASSETS_NOTE_KEY] = assets.get(ASSETS_NOTE_KEY) or ""
+    return out
+
+
+def _assets_row_sql(db, chr_name, login_id, columns, declared_cols):
+    """读角色一行：命中行数 / Id / 各声明列现值 / 其余列 MD5 指纹 / Deleted。
+
+    口径与 `_placement_row_sql` 同族：指纹只含**未声明列**（声明列允许变），
+    `MD5(CONCAT_WS(CHAR(31), IFNULL(CAST(col AS CHAR), '~')))`——字符串 '~' 与 SQL
+    NULL 在该口径下碰撞（与 dbsnap L2 同族限制；本判据要抓的是「非预期写入」）。
+    characters 实表 42 列 vs 白名单个位数，`fp_cols` 为空在现网不会发生；若发生则退化为
+    常量指纹（只比声明现值与行存在性），防御性兜底同 `inventory_fingerprint_sql`。
+    """
+    fp_cols = [c for c in columns if c not in declared_cols]
+    sel = ", ".join("COALESCE(MIN(`%s`), -1)" % c for c in declared_cols) or "''"
+    # 声明列必须**先在派生表里透传**（真库实锤 2026-10-24：外层 MIN 引用派生表没有的列
+    # 会 1054 Unknown column）。
+    inner = (", " + ", ".join("`%s`" % c for c in declared_cols)) if declared_cols else ""
+    fp_inner = ("MD5(CONCAT_WS(%s))" % ", CHAR(31), ".join(
+        "IFNULL(CAST(`%s` AS CHAR), '~')" % c for c in fp_cols)) if fp_cols else "''"
+    return (
+        "SELECT COUNT(*), COALESCE(MIN(`Id`), 0), %s,\n"
+        "       COALESCE(MIN(`_fp`), ''), COALESCE(MIN(`_deleted`), 0)\n"
+        "FROM (SELECT `Id`%s, IFNULL(`Deleted`, 0) AS `_deleted`, %s AS `_fp`\n"
+        "      FROM `%s`.`characters` WHERE `ChrName` = %s AND `LoginID` = %s) AS `t`;\n"
+        % (sel, inner, fp_inner, db, _sql_quote(chr_name), _sql_quote(login_id)))
+
+
+def _parse_assets_row(out, n_decl):
+    """解析 `_assets_row_sql` 的 n+4 列输出；形状不对 => ConfigError。"""
+    lines = [ln for ln in (out or "").splitlines() if ln.strip()]
+    if len(lines) != 1:
+        raise ConfigError("资产读行结果不是 1 行（实际 %d 行）：%r"
+                          % (len(lines), out[:300]))
+    parts = lines[0].split("\t")
+    if len(parts) != n_decl + 4:
+        raise ConfigError("资产读行结果的列数不是 %d（实际 %d）：%r"
+                          % (n_decl + 4, len(parts), lines[0][:300]))
+    try:
+        return {"count": int(parts[0]), "id": int(parts[1]),
+                "values": [int(p) for p in parts[2:2 + n_decl]],
+                "fp": parts[2 + n_decl], "deleted": int(parts[3 + n_decl] or 0)}
+    except ValueError as e:
+        raise ConfigError("资产读行结果无法解析：%r（%s）" % (lines[0][:300], e))
+
+
+def run_assets(runner, side, prof, sc, assets, env, timeout=120):
+    """在一侧执行资产声明通道：restore 之后、起栈之前。返回证据 dict（rc=0 才算完成）。
+
+    fail-closed：目标角色不存在/多行/已删除、缺列、UPDATE 影响行数 != 1、写后读回与
+    目标不符、其余列指纹变化 => rc=2 点名，绝不带着错位继续 probe。
+    """
+    declared = dict((k, v) for k, v in assets.items() if k != ASSETS_NOTE_KEY)
+    res = {"side": side, "declared": dict(assets), "source": "scenario", "db": None,
+           "db_pairing": None, "player_id": None, "action": None, "before": None,
+           "after": None, "changed_columns": [], "sql": {}, "rc": None, "error": None}
+    if not declared:
+        res["action"] = "noop"
+        res["rc"] = 0
+        return res
+    try:
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        res["db_pairing"] = _check_db_pairing(side, placement_envir_root(side, sc), db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        res["error"] = "资产声明通道前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    argv = _mysql_argv(client)
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    if not chr_name or not login_id:
+        res["error"] = ("资产声明通道需要 profile 的 char_name/account"
+                        "（定位 characters 行）；当前 char_name=%r account=%r"
+                        % (chr_name, login_id))
+        res["rc"] = 2
+        return res
+    cols_sorted = sorted(declared)
+    if getattr(runner, "dry_run", False):
+        pairs = ", ".join("%s=%d" % (c, declared[c]) for c in cols_sorted)
+        res["action"] = "dry-run"
+        res["sql"] = {"declare": "UPDATE `%s`.`characters` SET %s WHERE Id=<row>"
+                                 "（声明 %d 列）" % (db, pairs, len(declared))}
+        runner.log("[%s] 资产声明通道（dry-run 不连库）：db=%s %s 角色=%s"
+                   % (side, db, pairs, chr_name))
+        res["rc"] = 0
+        return res
+
+    def sql(tag, text):
+        rc, out, err = runner.run(side, tag, argv, env=env, timeout=timeout,
+                                  stdin_text=text, capture=True)
+        if rc != 0:
+            raise ConfigError("%s 执行失败（mysql rc=%s）：%s"
+                              % (tag, rc, (err or out or "").strip()[:400]))
+        return out
+
+    try:
+        cols_out = sql("assets.columns",
+                       "SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+        columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
+        missing = [c for c in ASSETS_REQUIRED_COLUMNS + tuple(cols_sorted)
+                   if c not in columns]
+        if missing:
+            raise ConfigError(
+                "%s.characters 缺列 %s：表结构与预期不符（资产通道不改表结构，拒绝）"
+                % (db, missing))
+        read_sql = _assets_row_sql(db, chr_name, login_id, columns, cols_sorted)
+        res["sql"]["read"] = read_sql.strip()
+        before = _parse_assets_row(sql("assets.read", read_sql), len(cols_sorted))
+        res["player_id"] = before["id"]
+        res["before"] = {"id": before["id"],
+                         "values": dict(zip(cols_sorted, before["values"])),
+                         "fingerprint": before["fp"]}
+        if before["count"] == 0:
+            raise ConfigError(
+                "资产声明通道找不到角色：%s.characters WHERE ChrName=%r AND LoginID=%r "
+                "命中 0 行" % (db, chr_name, login_id))
+        if before["count"] > 1:
+            raise ConfigError(
+                "资产声明通道定位不唯一：%s.characters 命中 %d 行（ChrName=%r "
+                "LoginID=%r）——拒绝猜哪一行"
+                % (db, before["count"], chr_name, login_id))
+        if before["deleted"] == 1:
+            raise ConfigError("角色 %r 的 Deleted=1（已删除）：资产通道拒绝改已删角色"
+                              % chr_name)
+        if before["values"] == [declared[c] for c in cols_sorted]:
+            res["action"] = "noop"
+        else:
+            sets = ", ".join("`%s` = %d" % (c, declared[c]) for c in cols_sorted)
+            upd = ("UPDATE `%s`.`characters` SET %s\n"
+                   " WHERE `Id` = %d;\nSELECT ROW_COUNT();\n"
+                   % (db, sets, before["id"]))
+            res["sql"]["update"] = upd.strip()
+            out = sql("assets.update", upd).strip()
+            try:
+                affected = int((out.splitlines() or ["-1"])[0])
+            except ValueError:
+                raise ConfigError("assets.update 的 ROW_COUNT 不可解析：%r" % out[:200])
+            if affected != 1:
+                raise ConfigError(
+                    "assets.update 影响了 %d 行（期望 1）：角色行可能在预置期间被删/改，"
+                    "拒绝继续" % affected)
+            res["action"] = "updated"
+        after = _parse_assets_row(sql("assets.verify", read_sql), len(cols_sorted))
+        res["after"] = {"id": after["id"],
+                        "values": dict(zip(cols_sorted, after["values"])),
+                        "fingerprint": after["fp"]}
+        if after["count"] != 1 or after["id"] != before["id"]:
+            raise ConfigError(
+                "资产声明通道读回异常：命中 %d 行、Id=%s（期望 1 行 Id=%s）"
+                % (after["count"], after["id"], before["id"]))
+        if after["values"] != [declared[c] for c in cols_sorted]:
+            raise ConfigError(
+                "资产声明通道读回与目标不符：期望 %r，实际 %r（列序 %s）"
+                % ([declared[c] for c in cols_sorted], after["values"], cols_sorted))
+        if after["fp"] != before["fp"]:
+            raise ConfigError(
+                "资产声明通道连带改了**其它列**（声明列之外的 MD5 指纹变了：%s -> %s）："
+                "只允许写声明的 %r，拒绝带着被写坏的字段继续"
+                % (before["fp"][:12] or "<空>", after["fp"][:12] or "<空>", cols_sorted))
+        res["changed_columns"] = cols_sorted if res["action"] == "updated" else []
+        res["rc"] = 0
+        return res
+    except ConfigError as e:
+        res["error"] = "资产声明通道失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def preview_assets(runner, side, prof, sc, assets, ctx):
+    """`--dry-run` 用：资产声明通道的离线校验 + 命令预览（不连库/不改库）。
+
+    与 `preview_inventory` 同口径：只做离线校验（库名/库配对/客户端参数），
+    前置不成立 => 返回 failed=True（真跑会 rc=2 并点名）。预览行带「列=目标值」。
+    """
+    out = {"side": side, "declared": dict(assets), "rc": None, "error": None,
+           "commands": [], "offline_check": None}
+    declared = dict((k, v) for k, v in assets.items() if k != ASSETS_NOTE_KEY)
+    pairs = ", ".join("%s=%d" % (c, declared[c]) for c in sorted(declared))
+    try:
+        envir_root = placement_envir_root(side, sc)
+        db = placement_characters_db(side, sc)
+        pairing = _check_db_pairing(side, envir_root, db)
+        client = placement_db_client(prof, side)
+    except ConfigError as e:
+        out["error"] = "资产声明通道前置校验失败（真跑会 rc=2）：%s" % e
+        out["rc"] = 2
+        return out, True
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    argv = _redact_argv(_mysql_argv(client))
+    out["offline_check"] = {"envir_root": envir_root, "db": db,
+                            "db_pairing": pairing, "char_name": chr_name}
+    out["commands"] = [
+        {"argv": argv, "stdin": "SHOW COLUMNS FROM `%s`.`characters`;" % db},
+        {"argv": argv,
+         "stdin": "SELECT COUNT(*), MIN(`Id`), <声明列现值>, <MD5 指纹>, Deleted FROM "
+                  "`%s`.`characters` WHERE ChrName=%r AND LoginID=%r;"
+                  % (db, chr_name, login_id)},
+        {"argv": argv,
+         "stdin": "UPDATE `%s`.`characters` SET %s WHERE `Id`=<row>;" % (db, pairs)},
+        {"argv": argv, "stdin": "SELECT ...（读回校验：目标值 + 其余列 MD5 指纹）"},
+    ]
+    runner.log("[%s] 资产声明通道（dry-run 不连库）：db=%s %s 角色=%s"
+               % (side, db, pairs, chr_name))
+    out["rc"] = 0
+    return out, False
+
+
 def preview_placement(runner, side, prof, sc, placement, ctx):
     """`--dry-run` 用：只做离线内容校验 + 打印将要执行的命令（不连库/不改库）。"""
     out = {"side": side, "declared": dict(placement), "rc": None, "error": None,
@@ -2889,7 +3188,7 @@ def preview_placement(runner, side, prof, sc, placement, ctx):
 
 
 def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
-             user_vars=None):
+             assets=None, user_vars=None):
     sc = prof["sides"][side]
     side_dir = ctx["side_dir"]
     db_dir = ctx["db_dir"]
@@ -2900,6 +3199,7 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
         "placement": None,
         "magic": None,
         "inventory": None,
+        "assets": None,
         "ports": {"checked": list(sc.get("ports") or []), "busy": []},
         "stack_rc": None,
         "ready": {"ports": list(sc.get("ready_ports") or []), "missing": [],
@@ -2966,6 +3266,21 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             res["inventory"] = ires
             if ires.get("rc") != 0:
                 res["error"] = ires.get("error") or "背包夹具失败"
+                return res
+
+        # 1b) 资产声明通道（卡 openmir2-window-gold-declaration-channel）：同样在
+        #     restore 之后、起栈之前；失败即 rc=2 点名，绝不带着错位继续 probe。
+        if assets:
+            ares = run_assets(runner, side, prof, sc, assets, env)
+            try:
+                write_json_file(os.path.join(side_dir, "assets.json"), ares)
+            except OSError as e:
+                ares["error"] = ((ares.get("error") or "") + "；写 assets.json 失败：%s"
+                                 % e).strip("；")
+                ares["rc"] = 2
+            res["assets"] = ares
+            if ares.get("rc") != 0:
+                res["error"] = ares.get("error") or "资产声明通道失败"
                 return res
 
         # 1c) 魔法夹具（profile 声明了才跑）：restore（与预置位）之后、起栈之前。
@@ -3472,6 +3787,7 @@ def execute(cfg):
     placement = None
     blocked = None
     inventory = None
+    assets = None
     requires_decl = {"name": "", "requires": []}
     if scenario and os.path.isfile(scenario):
         required = scenario_required(scenario)
@@ -3479,6 +3795,7 @@ def execute(cfg):
         placement = scenario_placement(scenario)
         blocked = scenario_blocked(scenario)
         inventory = scenario_inventory(scenario)
+        assets = scenario_assets(scenario)
         requires_decl = scenario_requires(scenario)
     discover = bool(cfg.get("discover"))
     discovery_scenario = os.path.abspath(
@@ -3539,6 +3856,15 @@ def execute(cfg):
             "note": ("场景顶层 inventory => 每侧 restore 之后、起栈之前把该侧测试库 "
                      "characters_bagitem 写到位；完成不了 rc=2（不让 probe 超时）"
                      if inventory else None),
+        },
+        "assets": {
+            "enabled": bool(assets),
+            "declared": assets,
+            "sides": {},
+            "note": ("场景顶层 assets => 每侧 restore 之后、起栈之前 UPDATE 该侧测试库 "
+                     "characters 的白名单资产列到目标值（首版 Gold）；完成不了 rc=2"
+                     "（不让 probe 超时）"
+                     if assets else None),
         },
         "discovery": {
             "enabled": needs_discovery,
@@ -3674,6 +4000,14 @@ def execute(cfg):
                                % (side, iprev.get("error")))
                     preview_failed = True
                     side_failed = True
+            if not side_failed and assets:
+                aprev, afailed = preview_assets(runner, side, prof, sc, assets, ctx)
+                summary.setdefault("assets", {}).setdefault("sides", {})[side] = aprev
+                if afailed:
+                    runner.log("[%s] 资产声明通道不可行 ⇒ 真跑 rc=2（不起栈、不跑场景）：%s"
+                               % (side, aprev.get("error")))
+                    preview_failed = True
+                    side_failed = True
             if not side_failed:
                 try:
                     magic_side = profile_magic(prof, side)
@@ -3780,7 +4114,7 @@ def execute(cfg):
         ctx = side_ctx(side, out_dir, scenario, card, discovery=discovery_cfg)
         try:
             res = run_side(runner, side, prof, ctx, password, placement=placement,
-                           inventory=inventory, user_vars=user_vars)
+                           inventory=inventory, assets=assets, user_vars=user_vars)
         except (ConfigError, OSError) as e:
             res = {"side": side, "rc": 2, "error": "配置/执行错误：%s" % e}
             summary["notes"].append("%s: %s" % (side, e))
@@ -3803,6 +4137,8 @@ def execute(cfg):
             # 所以本层再兜一次 rc 是**死分支**（卡 `openmir2-scenario-fixture-precondition`
             # 收掉的 minor①）；真正起作用的判据在 `run_side` 的 `if ires.get("rc") != 0`。
             summary["inventory"]["sides"][side] = res["inventory"]
+        if res.get("assets"):
+            summary["assets"]["sides"][side] = res["assets"]
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -4638,6 +4974,175 @@ def _selftest_inventory(tmp):
                 "⑨ run_side 生产接线：if inventory: 走 run_inventory，且在起栈之前"))
     return out
 
+
+
+def _selftest_assets(tmp):
+    """卡 openmir2-window-gold-declaration-channel：资产声明通道
+    （解析/白名单/值域/接线/真路径）。牙：① 非白名单列 => 红；② 负数/非数字 => 红；
+    ③ dry-run 预览行出现目标值（正牙）。"""
+    import json as _json
+    out = []
+    d = os.path.join(tmp, "assets")
+    os.makedirs(d, exist_ok=True)
+    path = os.path.join(d, "assets-scenario.json")
+
+    def write_doc(body):
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump(body, f)
+
+    write_doc({"assets": {"Gold": 10000, "note": "upgrade_retrieve 前置 Gold>=10000"}})
+    decl = scenario_assets(path)
+    out.append((decl == {"Gold": 10000, "note": "upgrade_retrieve 前置 Gold>=10000"},
+                "ASSET1 合法声明（Gold=10000+note）=> 解析透传"))
+    # 牙①：非白名单列 => ConfigError 点名列名与白名单（字符串列也不许按列名兜底混入）
+    tooth1_ok = True
+    for col in ("Level", "CreditPoint", "MasterName", "CREATEDATE"):
+        write_doc({"assets": {"Gold": 10000, col: 1}})
+        try:
+            scenario_assets(path)
+            tooth1_ok = False
+        except ConfigError as ex:
+            if "白名单" not in str(ex) or col not in str(ex):
+                tooth1_ok = False
+    out.append((tooth1_ok,
+                "ASSET 牙1 非白名单列（Level/CreditPoint/MasterName/CREATEDATE）"
+                "=> ConfigError 且点名白名单"))
+    # 牙②：负数 / 非数字（字符串/浮点/bool/null）/ 超 int32
+    bad_vals = [{"Gold": -1}, {"Gold": "10000"}, {"Gold": 10000.5},
+                {"Gold": True}, {"Gold": None}, {"Gold": 2147483648}]
+    tooth2_ok = True
+    for body in bad_vals:
+        write_doc({"assets": body})
+        try:
+            scenario_assets(path)
+            tooth2_ok = False
+        except ConfigError:
+            pass
+    out.append((tooth2_ok,
+                "ASSET 牙2 负数/字符串/浮点/bool/null/超 int32 => ConfigError"))
+    note_only_ok = True
+    for body in ({"assets": {"note": "x"}}, {"assets": {}}):
+        write_doc(body)
+        try:
+            scenario_assets(path)
+            note_only_ok = False
+        except ConfigError:
+            pass
+    out.append((note_only_ok, "ASSET3 只有 note/空对象 => ConfigError（无意义声明拒绝）"))
+
+    rsql = _assets_row_sql("db", "winplay0", "winplay0",
+                           ["Id", "ChrName", "LoginID", "Gold", "Level", "Deleted",
+                            "CREATEDATE"], ["Gold"])
+    out.append(("MIN(`Gold`)" in rsql and "CAST(`Gold`" not in rsql
+                and "CAST(`Level`" in rsql and "CAST(`CREATEDATE`" in rsql
+                and "FROM (SELECT `Id`, `Gold`," in rsql,
+                "ASSET4 行 SQL：Gold 进现值槽不进指纹（且派生表透传 Gold——真库 1054 实锤），"
+                "Level/CREATEDATE 进指纹"))
+    rsql_all = _assets_row_sql("db", "c", "l", ["Gold"], ["Gold"])
+    out.append(("CONCAT_WS" not in rsql_all,
+                "ASSET4b 声明列覆盖全部列 => 指纹退化为常量（不拼 CONCAT_WS）"))
+
+    # ---- 生产路径（假 runner 走 run_assets 本体；与 _selftest_inventory 同法）----
+    class _FakeRunner:
+        def __init__(self, before_gold=100, after_gold=10000, fp="a" * 32,
+                     verify_fp=None, update_out="1\n", after_id=6228,
+                     before_count=1, after_count=1):
+            self.before_gold = before_gold
+            self.after_gold = after_gold
+            self.fp = fp
+            self.verify_fp = verify_fp
+            self.update_out = update_out
+            self.after_id = after_id
+            self.before_count = before_count
+            self.after_count = after_count
+
+        def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None,
+                capture=True):
+            if tag == "assets.columns":
+                return 0, "Id\nChrName\nLoginID\nGold\nDeleted\n", ""
+            if tag == "assets.read":
+                return 0, "%d\t6228\t%d\t%s\t0\n" % (self.before_count,
+                                                          self.before_gold,
+                                                          self.fp), ""
+            if tag == "assets.update":
+                return 0, self.update_out, ""
+            if tag == "assets.verify":
+                return 0, "%d\t%d\t%d\t%s\t0\n" % (self.after_count,
+                                                        self.after_id,
+                                                        self.after_gold,
+                                                        self.verify_fp or self.fp), ""
+            return 1, "", "unexpected tag %s" % tag
+
+    prof = {"char_name": "winplay0", "account": "winplay0",
+            "sides": {"csharp": {"db": {"characters_db": "mir2_test_db"}}}}
+    sc = prof["sides"]["csharp"]
+    decl_only = {"Gold": 10000, "note": ""}
+    orig_pair = globals()["_check_db_pairing"]
+    orig_root = globals()["placement_envir_root"]
+    globals()["_check_db_pairing"] = lambda *a, **k: None
+    globals()["placement_envir_root"] = lambda *a, **k: tmp
+    try:
+        ok = run_assets(_FakeRunner(), "csharp", prof, sc, decl_only, {})
+        upd = (ok.get("sql") or {}).get("update") or ""
+        out.append((ok["rc"] == 0 and ok["action"] == "updated"
+                    and "UPDATE" in upd and "`Gold` = 10000" in upd
+                    and ok["after"]["values"] == {"Gold": 10000},
+                    "ASSET5 生产路径：假 runner 走通 run_assets（rc=0、UPDATE 只 SET "
+                    "Gold=10000、读回相符）"))
+        noop = run_assets(_FakeRunner(before_gold=10000), "csharp", prof, sc,
+                          decl_only, {})
+        out.append((noop["rc"] == 0 and noop["action"] == "noop"
+                    and not (noop.get("sql") or {}).get("update"),
+                    "ASSET5b 已是目标值 => noop（不打 UPDATE、rc=0）"))
+        bad_fp = run_assets(_FakeRunner(verify_fp="b" * 32), "csharp", prof, sc,
+                            decl_only, {})
+        out.append((bad_fp["rc"] == 2 and "其它列" in (bad_fp["error"] or ""),
+                    "ASSET6a 写后其余列指纹变化 => rc=2（连带写坏即红）"))
+        bad_val = run_assets(_FakeRunner(after_gold=9999), "csharp", prof, sc,
+                             decl_only, {})
+        out.append((bad_val["rc"] == 2 and "读回与目标不符" in (bad_val["error"] or ""),
+                    "ASSET6b 写后读回与目标不符 => rc=2（读回断言）"))
+        bad_upd = run_assets(_FakeRunner(update_out="0\n"), "csharp", prof, sc,
+                             decl_only, {})
+        out.append((bad_upd["rc"] == 2 and "影响了 0 行" in (bad_upd["error"] or ""),
+                    "ASSET6c UPDATE 影响 0 行 => rc=2（行被删/改）"))
+        bad_char = run_assets(_FakeRunner(before_count=0), "csharp", prof, sc,
+                              decl_only, {})
+        out.append((bad_char["rc"] == 2 and "找不到角色" in (bad_char["error"] or ""),
+                    "ASSET6d 角色不存在 => rc=2"))
+
+        # 牙③（正牙）：dry-run 预览行出现「列=目标值」且 rc=0
+        class _DryRunner:
+            dry_run = True
+
+            def __init__(self):
+                self.lines = []
+
+            def log(self, text):
+                self.lines.append(text)
+
+            def run(self, *a, **k):
+                return 0, "", ""
+
+        dr = _DryRunner()
+        dry = run_assets(dr, "csharp", prof, sc, decl_only, {})
+        dry_logs = dr.lines
+        out.append((dry["rc"] == 0 and dry["action"] == "dry-run"
+                    and any("资产声明通道（dry-run 不连库）" in l and "Gold=10000" in l
+                            for l in dry_logs),
+                    "ASSET 牙3 dry-run 预览行出现声明列目标值（Gold=10000）且 rc=0"))
+    finally:
+        globals()["_check_db_pairing"] = orig_pair
+        globals()["placement_envir_root"] = orig_root
+    # 生产接线顺序：run_side 必须调用 run_assets，且排在 stack 之前（防旁路/挪位）
+    import inspect
+    side_src = inspect.getsource(run_side)
+    out.append(("if assets:" in side_src
+                and "run_assets(" in side_src
+                and side_src.index("if assets:") < side_src.index("run_assets(")
+                and side_src.index("run_assets(") < side_src.index('"stack"'),
+                "ASSET7 run_side 生产接线：if assets: 走 run_assets，且在起栈之前"))
+    return out
 
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
@@ -6282,6 +6787,8 @@ def selftest():
             chk(cond, msg)
         for cond, msg in _selftest_inventory_reachability(tmp):
             chk(cond, msg)
+        for cond, msg in _selftest_assets(tmp):
+            chk(cond, msg)
 
         # ⑰ execute 读 res["inventory"]（卡 openmir2-card-window-teeth-mg7）：
         #    背包夹具失败 => summary 记该侧证据、整体 rc=2、且不起栈。
@@ -6303,6 +6810,44 @@ def selftest():
             and "stack" not in [c["step"] for c in s_inv["commands"]],
             "⑰ execute 读 res['inventory']：失败 => summary 记证据、rc=2、不起栈（%r）"
             % (((cs_inv.get("inventory") or {}).get("error") or "")[:80],))
+
+        # 18n) 资产声明通道（卡 openmir2-window-gold-declaration-channel）：
+        #     dry-run 正牙：assets 预览 rc=0 且 UPDATE 命令预览行出现 SET Gold=10000；
+        #     真跑失败路径：run_assets rc=2 => summary 记证据、整体 rc=2、不起栈（同 ⑰）。
+        scen_ast = write_scen({
+            "name": "selftest_assets",
+            "assets": {"Gold": 10000, "note": "upgrade_retrieve 前置"},
+            "steps": [{"send": {"ident": 3030, "text": "@时间"}}, {"wait_for": 100}],
+        }, "assets")
+        fresh_log()
+        prof_ast = _selftest_profile(tmp, stub, log, envir_roots=deploy)
+        s_ast_dry = execute(base_cfg(os.path.join(tmp, "run-assets-dry"), prof_ast,
+                                     scenario=scen_ast, dry_run=True))
+        ast_dry_cs = ((s_ast_dry.get("assets") or {}).get("sides") or {}).get("csharp") or {}
+        ast_stdins = [c.get("stdin") or "" for c in ast_dry_cs.get("commands") or []]
+        chk(s_ast_dry["exit_code"] == 0 and ast_dry_cs.get("rc") == 0
+            and any("SET Gold=10000" in s for s in ast_stdins),
+            "18n dry-run：assets 预览 rc=0 且命令预览行出现 SET Gold=10000（%r）"
+            % ((ast_dry_cs.get("error") or "")[:80],))
+
+        orig_run_assets = globals()["run_assets"]
+        globals()["run_assets"] = lambda *a, **k: {
+            "rc": 2, "error": "资产声明通道失败：assets.update 影响了 0 行（期望 1）"}
+        fresh_log()
+        try:
+            prof_ast2 = _selftest_profile(tmp, stub, log, envir_roots=deploy)
+            s_ast = execute(base_cfg(os.path.join(tmp, "run-assets-exec"), prof_ast2,
+                                     scenario=scen_ast))
+        finally:
+            globals()["run_assets"] = orig_run_assets
+        cs_ast = (s_ast["sides"].get("csharp") or {})
+        ast_side = ((s_ast.get("assets") or {}).get("sides") or {}).get("csharp") or {}
+        chk(s_ast["exit_code"] == 2
+            and (cs_ast.get("assets") or {}).get("rc") == 2
+            and ast_side.get("rc") == 2
+            and "stack" not in [c["step"] for c in s_ast["commands"]],
+            "18n execute 读 res['assets']：失败 => summary 记证据、rc=2、不起栈（%r）"
+            % (((cs_ast.get("assets") or {}).get("error") or "")[:80],))
 
         # 22) 内置 profile `window-testdb`（卡 openmir2-window-profile-testdb-preset）：
         #     alt 的副本 + C# 侧显式指向测试库 ⇒ 5 个带预置位的场景不再命中生产库守卫。
