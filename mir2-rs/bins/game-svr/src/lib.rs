@@ -28192,9 +28192,16 @@ mod tests {
         }
 
         let is_disappear = |ident: u16| ident == mir2_protocol::messages::SM_DISAPPEAR;
+        // 出现帧家族 = oracle `PlayObject.cs:3222-3238` 的 `Show` 分支全部：
+        // `!Death` ⇒ `RM_TURN`（10，下行 `SM_TURN`+`SM_FEATURECHANGED` 41）；
+        // `Death && Skeleton` ⇒ `RM_SKELETON`（33）；`Death && !Skeleton` ⇒ `RM_DEATH`（32）。
+        // 漏掉 32/33 会让「尸体出现帧」既不算消失也不算出现 ⇒ 序判据对它们失效
+        //（卡 `openmir2-drain-order-gate-followup` S-1）。
         let is_appear = |ident: u16| {
             ident == mir2_protocol::messages::SM_TURN
                 || ident == mir2_protocol::messages::SM_FEATURECHANGED
+                || ident == mir2_protocol::messages::SM_DEATH
+                || ident == mir2_protocol::messages::SM_SKELETON
         };
         let disappears: Vec<usize> = order
             .iter()
@@ -28240,6 +28247,109 @@ mod tests {
             first_appear + 1,
             order[first_appear],
             last_disappear + 1
+        );
+    }
+
+    /// **卡 `openmir2-drain-order-gate-followup` S-1（构造级补家族）**：本 tick 的出现帧**只有
+    /// `SM_DEATH(32)`**（目标 `Death == true`）时，序判据仍然成立：所有 `SM_DISAPPEAR(30)`
+    /// 必须早于该死亡出现帧。
+    ///
+    /// # oracle 契约（`src/M2Server/Player/PlayObject.cs`）
+    ///
+    /// `SearchViewRange` 的单趟 `VisibleActors` 循环（`:3202-3242`）里，`Show` 分支（`:3222`）按
+    /// `baseObject.Death` 分叉：`:3227` 为真 ⇒ `Skeleton` 走 `RM_SKELETON`（`:3231`）、否则
+    /// `RM_DEATH`（`:3235`）；`Hidden` 分支（`:3212`）在**同一个循环的前面**处理 ⇒ 消失帧恒先。
+    /// 因此「死亡出现帧」与普通出现帧同属 `Show` 家族，构造级断言必须把它算作出现帧
+    ///（漏掉 ⇒ 该帧既不算消失也不算出现，序判据对它静默失效）。
+    ///
+    /// # 牙（红检，实测）
+    ///
+    /// 把本用例 `is_appear` 里的 `SM_DEATH` 去掉（或让它恒假）⇒ `appears` 为空 ⇒
+    /// 「本 tick 必须至少一条死亡出现帧」断言红。
+    #[test]
+    fn drain_run_downlinks_sends_disappear_before_death_appearance() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let out =
+            mir2_world::slave::spawn_clone(&mut world, p, 2).expect("主人在世界 ⇒ 应造出克隆体");
+        let seen = out.clone_id;
+        let caster_display =
+            downlink::ActorDisplay::new(2, 0, 0, 0, 0, downlink::PLAYER_NAME_COLOR, Vec::new());
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(seen, downlink::clone_display(out.dir, &caster_display));
+        // 尸体分支：`downlink::appear_frames` 见 `target.death == true` ⇒ 只发 `SM_DEATH(32)`。
+        world.entities.get_mut(seen).unwrap().death = true;
+        world.entities.get_mut(p).unwrap().visible_actors.push(
+            mir2_world::entity::VisibleBaseObject {
+                target: seen,
+                flag: mir2_world::VisibleFlag::Show,
+            },
+        );
+        world.entities.get_mut(p).unwrap().ai.search_tick = world.clock_ms;
+
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+
+        let vanished = 4242;
+        let mut rec = mir2_world::TickRecord::default();
+        rec.hides.push((p, vanished));
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+        );
+
+        let mut order: Vec<(u16, i32)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            assert_eq!(socket, 901, "本夹具只有一个会话（socket 901）");
+            let cm = CommandMessage::from_bytes(&body).expect("SM_* body 至少 12B");
+            order.push((cm.ident, cm.recog));
+        }
+
+        let is_disappear = |ident: u16| ident == mir2_protocol::messages::SM_DISAPPEAR;
+        let is_death = |ident: u16| ident == mir2_protocol::messages::SM_DEATH;
+        let disappears: Vec<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| is_disappear(f.0))
+            .map(|(i, _)| i)
+            .collect();
+        let deaths: Vec<usize> = order
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| is_death(f.0))
+            .map(|(i, _)| i)
+            .collect();
+
+        assert!(
+            !disappears.is_empty(),
+            "本 tick 必须至少一条 `SM_DISAPPEAR(30)`；实际帧序（ident, recog） = {order:?}"
+        );
+        assert_eq!(
+            deaths.len(),
+            1,
+            "本 tick 必须恰有一条死亡出现帧 `SM_DEATH(32)`（`Death == true` ⇒ `appear_frames` 只发死亡帧）；\
+             把 `is_death` 分支删掉/改恒假 ⇒ 本断言红。实际帧序（ident, recog） = {order:?}"
+        );
+        assert!(
+            *disappears.last().unwrap() < deaths[0],
+            "排水次序违约：`SM_DISAPPEAR(30)` 必须早于死亡出现帧 `SM_DEATH(32)`。\n\
+             实际序（ident, recog） = {order:?}；死亡帧在第 {} 帧，最后一条消失帧在第 {} 帧",
+            deaths[0] + 1,
+            *disappears.last().unwrap() + 1
         );
     }
 
