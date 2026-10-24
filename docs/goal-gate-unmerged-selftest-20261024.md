@@ -61,6 +61,8 @@ comment 证据 0 / 三者皆无 0 / merged 未 closed 且无登记(需人工) 5 
 其它需人工 6；需人工 11 张 …；merged 未 closed 但已凭登记 PASS：165 张
 ```
 
+> 〔2026-10-24 订正：`goal_gate` 的 detail 措辞已由「其中」改为「另」；本文件内该串引用均为当时原文〕
+
 逐类：`R 卡 194`、`closed 11`、`window_required 116`（含 `window_required_unmerged 5`）、`whitelist_t 48`、
 `adjudicated 3`、`comment_evidence 0`、`none 0`、`merged_not_closed 5`、`not_merged 0`、其它需人工 6、
 卫生清单 165——**全部 0 差异**；`overall = need_human`、`rc = 2`（两版一致）。
