@@ -1,0 +1,4 @@
+# 冻结对拍夹具必须逐字节保真（卡 openmir2-compare-ident600-registration）：
+# -text 关闭 EOL 归一，blob 与库内 LF 副本逐字节一致、跨平台检出不变。
+# 比较器 selftest 对 body_hex/body_sha256 与行内容断言依赖这一点。
+*.ndjson -text

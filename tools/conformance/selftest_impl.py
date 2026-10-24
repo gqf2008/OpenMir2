@@ -42,6 +42,13 @@
      协议帧原样保留、整轮出 verdict；全控制帧流不崩溃（empty_run 兜底，--allow-empty 才放行）；
      牙：协议帧改字节仍 rc 1（过滤不吞真差异）、控制帧内容改坏不影响判定、ident 非法
      （负数/超 u16/字符串）与 frame_class=protocol 缺 ident 仍 fail-closed（过滤不外溢）。
+ 16. ident=600（SM_DROPITEM_SUCCESS）规则卡（openmir2-compare-ident600-registration）：
+     pickup 链「丢→走→拾」的 600 等待帧登记为 action=compare 全字节比，并用
+     head_compare:["recog"] 取回语义字段（Recog=MakeIndex，不是会话 ActorId）。冻结夹具
+     tools/conformance/fixtures/dropitem_ack/（构造等价夹具，run2 未跑到 pickup）两侧 600
+     帧 rc 0；牙：删 600 规则 ⇒ rc 2 UNCLASSIFIED(ident=600)、改坏 body 一字节 ⇒ rc 1 且
+     定位 offset=0、改坏 recog ⇒ rc 1（证明全局 recog 掩码没吞掉 MakeIndex）。头部形态锚
+     ground-probe 真机向量 mir2-rs/tests/parity/m3/fixtures/ground_vectors.json。
 自检自身的牙：每一项「改坏必红」都断言**具体退出码 + 具体定位字段/偏移**；如果比较器退化成
 「永远 0」，这些断言会以 RED 收场。
 """
@@ -217,6 +224,7 @@ class Selftest(object):
         self.t_updateitem_durachg_diff()
         self.t_updateitem_durachg_teeth()
         self.t_control_frames()
+        self.t_dropitem_ack()
         self.t_db()
         return self.finish()
 
@@ -2059,6 +2067,145 @@ class Selftest(object):
                        (32, "head", "tag", 13, 15),
                    ],
                    anatomy)
+    # ------------------------------------------------------------------
+    # 批次 7（卡 openmir2-compare-ident600-registration，tier=L）：ident 600 =
+    # SM_DROPITEM_SUCCESS 入规则表（action=compare 全字节比 + head_compare recog）。
+    # 冻结输入 tools/conformance/fixtures/dropitem_ack/ 是**构造等价夹具**
+    # （pickup_item 的 600 等待帧；window-run-2 未跑到 pickup）；头部布局由
+    # ground-probe 真机向量 ground_vectors.json 的 drop_ok_control_price 锚定。
+    # ------------------------------------------------------------------
+    #: EDCode(GBK("木剑")) = 6B：明文 c4bebda3 → 线缆 54424d443f3f。
+    FIXTURE_600_BODY_HEX = "54424d443f3f"
+    FIXTURE_600_BODY_SHA = (
+        "e8c33c3d97209b6302fde94d6a4987e728b83bcc509096071dbb86067460d746")
+
+    def _fixture_600_frames(self, side):
+        path = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
+                            "dropitem_ack", side, "frames.ndjson")
+        with open(path, "r", encoding="utf-8") as f:
+            return [json.loads(ln) for ln in f if ln.strip()]
+
+    def t_dropitem_ack(self):
+        fix = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
+                           "dropitem_ack")
+        fo, fr = os.path.join(fix, "csharp"), os.path.join(fix, "rust")
+
+        # ① 冻结夹具在库，且两侧逐字节一致：600 的头部/body 是确定性构造，
+        #   夹具钉死 body 字节与头部语义（recog=MakeIndex=5001）。
+        ok_rows = True
+        for side in ("csharp", "rust"):
+            rows = self._fixture_600_frames(side)
+            ok_rows = ok_rows and len(rows) == 1
+            if len(rows) != 1:
+                continue
+            r = rows[0]
+            ok_rows = ok_rows and (
+                r.get("ident") == 600 and r.get("recog") == 5001
+                and r.get("param") == 0 and r.get("tag") == 0 and r.get("series") == 0
+                and r.get("body_len") == 6
+                and r.get("body_hex") == self.FIXTURE_600_BODY_HEX
+                and r.get("body_sha256") == self.FIXTURE_600_BODY_SHA
+                and r.get("frame_class") == "protocol")
+        self.check("600 ① 冻结夹具在库：两侧各 1 帧，头部 recog=5001(MakeIndex)/param=tag="
+                   "series=0、body=EDCode(GBK(木剑))=54424d443f3f 且 sha256 钉死",
+                   ok_rows, (fo, fr))
+
+        # ② oracle 真机向量锚（ground-probe 实测）：600 的头部形态 = ident 600 /
+        #   recog=MakeIndex / param=tag=series=0；同 send 点的 601 同形。
+        #   本断言把「构造夹具」与真实 oracle 产物绑在一起——向量漂移则本断言红。
+        gv_path = os.path.join(self.api.REPO_ROOT, "mir2-rs", "tests", "parity", "m3",
+                               "fixtures", "ground_vectors.json")
+        gv = None
+        if os.path.exists(gv_path):
+            with open(gv_path, "r", encoding="utf-8") as f:
+                gv = json.load(f)
+        cases = {c.get("name"): c for c in (gv or {}).get("cases", [])}
+        ok_head = cases.get("drop_ok_control_price", {}).get("expect", {})
+        ok_v = ok_head.get("immediate_frames")
+        fl_v = cases.get("drop_fail_item_id_zero", {}).get("expect", {}) \
+            .get("immediate_frames")
+        self.check("600 ② 头部形态锚 ground-probe 真机向量：drop_ok_control_price ⇒ "
+                   "[{600,recog=MakeIndex,0,0,0}]，drop_fail_item_id_zero ⇒ 601 同形",
+                   ok_v == [{"ident": 600, "recog": 52, "param": 0, "tag": 0,
+                             "series": 0}]
+                   and fl_v == [{"ident": 601, "recog": 51, "param": 0, "tag": 0,
+                                 "series": 0}],
+                   (ok_v, fl_v))
+
+        # ③ 规则表登记：600 = action=compare（全字节比、无掩码），
+        #   head_compare:["recog"] 取回 MakeIndex（recog 不是会话 ActorId）。
+        rule600 = None
+        for r in self.builtin_rules.get("rules", []):
+            if r.get("ident") == 600:
+                rule600 = r
+                break
+        self.check("600 ③ 规则表：action=compare 全字节比 + head_compare=[recog]"
+                   "（不 ignore、不掩码；recog=MakeIndex 必须取回比较）",
+                   bool(rule600) and rule600.get("action") == "compare"
+                   and rule600.get("head_compare") == ["recog"]
+                   and not rule600.get("head_mask")
+                   and not rule600.get("ranges"), rule600)
+
+        # ④ 冻结夹具比较：600 从 UNCLASSIFIED 转为已比 ⇒ rc 0、compared=1、
+        #   0 diff / 0 undecidable / 0 unclassified。
+        rc, rep = self.compare(fo, fr)
+        cov = (rep or {}).get("coverage", {}) or {}
+        frames = (rep or {}).get("frames", {}) or {}
+        self.check("600 ④ 冻结夹具 ⇒ rc 0 且 600 已比（compared=1，0 diff/undecidable/"
+                   "unclassified；coverage 里 600 action=compare）",
+                   rc == 0 and frames.get("compared") == 1
+                   and not ((rep or {}).get("diffs") or [])
+                   and not ((rep or {}).get("undecidable") or [])
+                   and not (cov.get("unclassified_idents") or [])
+                   and any(x.get("ident") == 600 and x.get("action") == "compare"
+                           for x in cov.get("ident_rules") or []),
+                   (rc, frames, (rep or {}).get("diffs"),
+                    (rep or {}).get("undecidable"), cov.get("unclassified_idents")))
+
+        # ⑤ 牙A（删规则）：无 600 条目 ⇒ 整轮 rc 2 UNDECIDABLE
+        #   （unclassified_ident ident=600 复现）。临时规则文件，不碰库内 rules.json。
+        no600 = json.loads(json.dumps(self.builtin_rules))
+        no600["rules"] = [r for r in no600["rules"] if r.get("ident") != 600]
+        no600_path = self.rules_file("rules-no-600.json", no600)
+        rc, rep = self.compare(fo, fr, ["--rules", no600_path])
+        self.check("600 ⑤ 牙A：删 600 规则 ⇒ rc 2（UNDECIDABLE，unclassified_ident "
+                   "ident=600 复现）",
+                   rc == 2 and any(u.get("kind") == "unclassified_ident"
+                                   and u.get("ident") == 600
+                                   for u in (rep or {}).get("undecidable") or []),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # ⑥ 牙B（改坏 body 一字节）：rust 侧首字节 0x54→0x55，sha256 同步重算
+        #   ⇒ rc 1，diff 精确到 ident=600 / kind=body / offset=0 / 0x54 vs 0x55。
+        rows = self._fixture_600_frames("rust")
+        bad = json.loads(json.dumps(rows))
+        wire = bytearray.fromhex(bad[0]["body_hex"])
+        wire[0] ^= 0x01
+        bad[0]["body_hex"] = bytes(wire).hex()
+        bad[0]["body_sha256"] = _sha(bytes(wire))
+        bad_d = self.write_run("t600-badbody-r", bad)
+        rc, rep = self.compare(fo, bad_d)
+        bd = [d for d in (rep or {}).get("diffs") or [] if d.get("ident") == 600]
+        self.check("600 ⑥ 牙B：改坏 600 body 一字节 ⇒ rc 1 且定位 "
+                   "kind=body/offset=0/oracle 0x54 vs rust 0x55",
+                   rc == 1 and len(bd) == 1
+                   and bd[0].get("kind") == "body" and bd[0].get("offset") == 0
+                   and bd[0].get("oracle_byte") == 0x54
+                   and bd[0].get("rust_byte") == 0x55, (rc, bd))
+
+        # ⑦ 牙C（recog 取回）：rust 侧 recog 5001→5002 ⇒ 必须 rc 1 field=recog。
+        #   若 head_compare 失效，全局 recog 掩码会把该差异静默吞掉（rc 0）⇒ 本断言红。
+        bad2 = json.loads(json.dumps(rows))
+        bad2[0]["recog"] = 5002
+        bad2_d = self.write_run("t600-badrecog-r", bad2)
+        rc, rep = self.compare(fo, bad2_d)
+        hd = [d for d in (rep or {}).get("diffs") or [] if d.get("ident") == 600]
+        self.check("600 ⑦ 牙C：改坏 recog(MakeIndex) ⇒ rc 1 且 field=recog"
+                   "（head_compare 生效，全局 recog 掩码不吞语义字段）",
+                   rc == 1 and len(hd) == 1 and hd[0].get("field") == "recog"
+                   and hd[0].get("oracle") == 5001 and hd[0].get("rust") == 5002,
+                   (rc, hd))
+
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
         cols = list(dp.TABLE_SPECS["mir2_db.characters_ablity"]["columns"])
