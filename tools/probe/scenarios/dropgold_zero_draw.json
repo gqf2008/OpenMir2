@@ -1,0 +1,31 @@
+{
+  "name": "dropgold_zero_draw",
+  "description": "W-DG-1：`CM_DROPGOLD`（`Messages.cs:68`，`=1016`）的**零抽数**复拍。oracle：`PlayObject.Message.cs:903-908` ⇒ `ClientDropGold(nParam1)`；`nParam1 > 0` 才进。C2S 线上字段口径同 `CM_HIT` 一系：`SendMsg(playObject, Ident, Tag, LoWord(Recog), HiWord(Recog), 0)` ⇒ **gold 数量 = LoWord(Recog)**（本场景 `recog=100` ⇒ 100 金）。验收对象：`SM_GOLDCHANGED(653)` 一条且 `Recog` 与请求同源（R 片 `a3bf5340f` 的结论：DROPGOLD 深体**零抽数**） + **金币不变（前后差 = 0）** + **地面无金币** + **RNG 流位不前进**。**RNG 证据依赖**：私栈 `-RngLog` + `MIR2_RNG_SITE=1`（接线归卡 `openmir2-window-csharp-rng`）；未接线时本场景**只能验帧与金币**，RNG 面按降级口径记「未观测」。 **降级口径**：RNG 面未接线时，本场景仍可验 653 帧与金币差；RNG 流位结论记「未观测」，不得写成 PASS。 **K-2 口径（BUG-REPLICA 2 的等价行为，非缺陷）**：`ClientDropGold`（`Operate.cs:222-246`）是 `Gold -= nGold; if (!DropGoldDown(...)) Gold += nGold; GoldChanged();`，而 `DropGoldDown` 构造的 `MapItem` **从不赋 `ItemId`**（默认 0）⇒ `AddItemToMap` 首行 `if (mapItem.ItemId == 0) return false;`（`Envirnoment.cs:88-93`）恒失败 ⇒ **金币回滚、净差 0**，但 `GoldChanged()` 照发 653。写「差 = 100」会在正确实现上误判失败。",
+  "required": [],
+  "placement": {
+    "map": "0",
+    "x": 330,
+    "y": 330,
+    "note": "默认出生点附近的空地（`Envir/StartPoint.txt` 的 0 图位）；需 `Gold >= 100` 且满足 `CanDropGold`。落点若不可走，`card_window` 起栈前会重验。"
+  },
+  "steps": [
+    {
+      "send": {
+        "ident": 1016,
+        "recog": 100,
+        "param": 0,
+        "tag": 0
+      },
+      "note": "`CM_DROPGOLD(1016)`：`recog=100` ⇒ `nParam1=LoWord(Recog)=100`（> 0 才进 `ClientDropGold`，`PlayObject.Message.cs:903-908`）。`param`/`tag` 本 ident 不读"
+    },
+    {
+      "wait_for": 653,
+      "timeout_ms": 3000,
+      "note": "`SM_GOLDCHANGED(653)`（`messages.rs:290`；**不是** `SM_DROPITEM`，后者是 600/601 的 `CM_DROPITEM` 线）：`ClientDropGold` 末尾无条件 `GoldChanged()` ⇒ 653 恰一条、`Recog` 与请求同源。**判据**：金币前后差 = **0**（`DropGoldDown` 恒失败 ⇒ 回滚）、地面无金币。**失败形态**：本步超时 = 没进 `ClientDropGold`（`nParam1<=0`）**或命中前置门**（`InSafeDisableDrop && InSafeZone()` / `ControlDropItem && nGold < CanDropGold` ⇒ 只发 `RM_MENU_OK` 提示，`Operate.cs:224-232`），属夹具/配置问题，不是 RNG"
+    },
+    {
+      "sleep": 500,
+      "note": "留出后续（若有）帧与落库时间；本场景不再发 C2S"
+    }
+  ]
+}

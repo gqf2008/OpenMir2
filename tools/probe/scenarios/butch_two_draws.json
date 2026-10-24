@@ -1,0 +1,24 @@
+{
+  "name": "butch_two_draws",
+  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位。oracle：`PlayObject.Message.cs:829-…` ⇒ `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`；宰杀成功出 `SM_SKELETON(33)`，拿到骨架后出 `SM_BUTCH(637)`。两抽值域：`Random(16)+5` 落 **[5,20]**、`Random(201)+100` 落 **[100,300]**（`a3bf5340f` R 片的合同），并要求**流位恰停在第二抽**（site/order 账本）。**依赖**：① 单只固定动物**尸体**夹具（当前窗口 kit 无 drop/butch 场景与尸体夹具）；② RNG 流水需私栈 `-RngLog` + `MIR2_RNG_SITE=1` + C# hook（卡 `openmir2-window-csharp-rng`）。两者未就绪前本场景 **blocked**，不得声称可跑。",
+  "required": ["target_xy"],
+  "blocked": {
+    "reason": "**双缺口**：① 窗口 kit 无「单只固定动物尸体」夹具（`card_window.py` 只能 placement 玩家，不能预置尸体/怪）；② RNG 流位判据需两侧流水（私栈 `-RngLog` + `MIR2_RNG_SITE=1` + C# `RngSeedHook`），C# 侧未接线 ⇒ 两抽值域与「恰停第二抽」都不可观测。",
+    "missing_fixture": "① 尸体夹具：单只固定动物（如鸡/鹿）在已知格被击杀后的尸体（`CM_BUTCH` 的 `nParam1/nParam2` 指向该格）；建议新场景带 `sg` 夹具或由 tester 的 drop/butch 夹具片提供；② C# 栈接 `start-csharp-hook.ps1` + `RngSeedHook.dll`（卡 `openmir2-window-csharp-rng`）+ 两侧同 `-Seed N` + `MIR2_RNG_SITE=1`。"
+  },
+  "placement": {
+    "map": "0",
+    "x": 330,
+    "y": 330,
+    "note": "玩家站位（与尸体相邻格）；`target_xy` = 尸体所在格的 `MakeLong(X,Y)`（由夹具提供，勿写死）。"
+  },
+  "steps": [
+    {"send": {"ident": 1007, "recog": "target_xy", "param": 0, "tag": 0},
+     "note": "`CM_BUTCH(1007)`：`recog=MakeLong(尸体X,尸体Y)` ⇒ `nParam1=LoWord=X`、`nParam2=HiWord=Y`（`PlayObject.Message.cs:829-831`）。**失败形态**：若 `ClientGetButchItem` 返回 false（无尸体/距离/速度门），服务端不出 33/637，下一步超时"},
+    {"wait_for": 33, "timeout_ms": 3000,
+     "note": "`SM_SKELETON(33)`（`Messages.cs:199`）：屠宰第一段（尸体 → 骨架）。**超时 = 没有可屠宰的尸体/被速度门挡**，不是抽数问题"},
+    {"wait_for": 637, "timeout_ms": 3000,
+     "note": "`SM_BUTCH(637)`（`Messages.cs:299`）：拿到骨架/肉的回帧。**超时 = 第一段未成功**"},
+    {"sleep": 500, "note": "留出后续抽数动作（若有）与落库时间"}
+  ]
+}
