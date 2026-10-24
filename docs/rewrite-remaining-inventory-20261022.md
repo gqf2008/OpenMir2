@@ -721,9 +721,9 @@ LC_ALL=C.UTF-8 grep -cP '(*UTF)城.状态' mir2-rs/bins/game-svr/src/lib.rs
 
 # F. 收尾门禁（主检出 / 本分支）
 python tools/hygiene/stale_pointer_gate.py --path docs/rewrite-remaining-inventory-20261022.md
-# stale-pointer gate: OK (1 files / 1457 lines scanned under docs; 0 green pointer(s),
+# stale-pointer gate: OK (1 files / 1464 lines scanned under docs; 0 green pointer(s),
 #   1 correction-marker line(s), 1 allow-listed line(s), 0 unresolved;
-#   0 card-status hit(s), 1 card id(s) judged, 1 card-bearing line(s); ref=dc6e9699…)
+#   0 card-status hit(s), 1 card id(s) judged, 1 card-bearing line(s); ref=<运行时 HEAD>)
 #   —— ref 是运行时 HEAD，复跑以当次输出为准；本文件逐行未靠「」/『』/去掉引号过门。
 git diff --check; echo "diff-check rc=$?"
 # diff-check rc=0（无空白/冲突标记问题）
