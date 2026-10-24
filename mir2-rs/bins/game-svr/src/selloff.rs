@@ -1052,7 +1052,7 @@ pub fn get_sell_off_gold(me: &mut SellOffSide<'_>, book: &mut SellOffBook) -> Ve
     em.finish()
 }
 
-/// `RM_SENDDEALOFFFORM(23000)` 的队列优先级字节（`(byte)23000 = 152`）。
+/// `RM_SENDDEALOFFFORM(23000)` 的队列优先级字节（`(byte)23000 = 216`，0xD8）。
 const PRIO_RM_SENDDEALOFFFORM: u8 = (messages::RM_SENDDEALOFFFORM & 0xFF) as u8;
 
 /// `SellOffInTime(nCode)`（`PlayObject.Sale.cs:475-514`）：查询玩家是否有进行中的寄售。
