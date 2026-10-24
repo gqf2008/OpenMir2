@@ -254,7 +254,7 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 
 ### A. 真机窗口欠账（R 级缺证据）
 
-> **2026-10-24 描述一致性复核（卡 `openmir2-inventory-b-table-audit`，tier=L）**：本表 152 行的**欠账等级不改**，只核「行内描述的事项是否仍准确」。逐行比对 `walgit collab board --format json` 的 `work` 字段（72 行逐字命中、80 行因 R 级记账补登改写而文字漂移）+ 非窗口关键词筛查（15 行含「接线/实现/前置/缺/另开」等）+ 对其中的实现依赖做代码核验。结论：**9 行描述失真**（含「前置已落地」「缺口已补」「实现卡已合」），已在行内以 〔2026-10-24 判定：…〕 标注；其余 143 行仍为「只欠真机窗口」。复算命令见 §3.2.2。
+> **2026-10-24 描述一致性复核（卡 `openmir2-inventory-b-table-audit`，tier=L）**：本表 152 行的**欠账等级不改**，只核「行内描述的事项是否仍准确」。逐行比对 `walgit collab board --format json` 的 `work` 字段（72 行逐字命中、80 行因 R 级记账补登改写而文字漂移）+ 非窗口关键词筛查（现文件实跑 16 行含「接线/实现/前置/缺/另开」等）+ 对其中的实现依赖做代码核验。结论：**9 行描述失真**（含「前置已落地」「缺口已补」「实现卡已合」），已在行内以 〔2026-10-24 判定：…〕 标注（278/286/289/366/367/388/393/394/406）。**返工（I-4）重算余量分类**：`C-2` 关键词筛查在现文件实跑得 **16 行**（278/282/286/289/294/311/366/367/372/374/380/382/384/394/396/406；与 9 行标注集**交集 7 行**，388/393 在标注集但不在命中集），逐行核过后分三类——**真机窗口 8 行**（278/286/366/372/380/394/396/406）、**非窗口残余 6 行**（282/294/311/374/382/384，保留原判，**不得**写成「只欠窗口」）、**已实现但另有已登记非窗口残余 2 行**（289 的 T-137④⑤、367 的 F2/`RM_SPELL`）。C-2 未命中的 136 行里，388/393 已就地标注为「前置已实现 ⇒ 余量=真机窗口」，其余 **134 行**未含该批关键词，按原判保留「只欠真机窗口」（本轮不对其做实现级断言）。复算命令见 §3.2.2 C-2/C-3。
 
 | # | card id | owner/worktree | 阻塞原因（来自最新 status 的 work） |
 |---:|---|---|---|
@@ -279,14 +279,14 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 | 19 | `openmir2-monster-walk-frames` | openmir2-orchestrator@main/master | 余量=真机重采 + T-146 四条残余 |
 | 20 | `openmir2-login-654-order` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机三项（改动后 Rust 登录抓包/有会角色 811,46 与 750 位置/非 TestServer SysMsg 条数） |
 | 21 | `openmir2-db-encoding` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=E-7 真机 oracle 对照 + 4 条 Low 台账 |
-| 22 | `openmir2-market-def-impl` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机说词/变量 + T-145 未接分支 |
+| 22 | `openmir2-market-def-impl` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机说词/变量 + T-145 未接分支 〔2026-10-24 返工判定**非窗口残余仍成立**——「T-145 未接分支」不是窗口项：T-145 残余④（`Merchant.UserSelect` 的 `@exit/@@sendmsg/@@offlinemsg/@dealybme/@upgradenow/@getbackupgnow` 等 switch 分支与升级武器说词）仍登记在 `mir2-rs/tests/parity/whitelist.md:625` ⇒ 余量=真机说词/变量 + T-145 非窗口分支。〕 |
 | 23 | `openmir2-account-protection-13` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机 roundtrip 13/12 列逐列 |
 | 24 | `openmir2-strlist-bom` | openmir2-orchestrator@main/master | 余量=真机 BOM 文件读取 |
 | 25 | `openmir2-mb7-monsters` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机观察 + T-143 |
 | 26 | `openmir2-encoding-crate` | openmir2-orchestrator@main/master | 余量=真机逐字节 + data StringList 读侧 BOM 缺口（另开卡） 〔2026-10-24 判定**描述失真**——问题仍成立，但「data StringList 读侧 BOM 缺口」已过期：**已解决 @ `51843721d`**（证据 `git log --oneline -1 51843721d` → `fix(data): StringList 读侧补 BOM 探测（lists/monitems/guild 四处）`；现位置 `crates/data/src/lists.rs:494` `read_gbk_if_file`）⇒ 余量=真机逐字节。〕 |
 | 27 | `openmir2-mb2-monsters` | openmir2-orchestrator@main/master | 余量=真机观察 + T-141 |
 | 28 | `openmir2-hutil32-parity` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=round 调用点真机对拍 + 10 个 GB2312 族成员（零依赖契约）+ 两份 Round 分叉（建议 T-136） |
-| 29 | `openmir2-guild-official-npc` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机窗口三项 + T-137（固定 NPC 脚本装载，最大缺口） 〔2026-10-24 判定**描述失真**——问题仍成立，但「T-137 固定 NPC 脚本装载，最大缺口」已过期：装载**已实现**（现位置 `bins/game-svr/src/npcs.rs:298` `place_fixed_npcs_with_scripts`；宿主动线 `lib.rs:20504/20521`），残余只是 `CastleOfficial` 本体（T-40/T-140，归 `openmir2-castle-official-design`）⇒ 余量=真机窗口 + 城堡官实现。〕 |
+| 29 | `openmir2-guild-official-npc` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机窗口三项 + T-137（固定 NPC 脚本装载，最大缺口） 〔2026-10-24 判定**描述失真**——问题仍成立，但「T-137 固定 NPC 脚本装载，最大缺口」已过期：装载**已实现**（现位置 `bins/game-svr/src/npcs.rs:298` `place_fixed_npcs_with_scripts`；宿主动线 `lib.rs:20504/20521`），实现侧残余**主体**是 `CastleOfficial` 本体（T-40/T-140，归 `openmir2-castle-official-design`），另有 T-137 ④（固定 NPC 装载次序相对 oracle 的差异；部署件 0 抽数、当前不可观测）与 ⑤（脚本目录名按 `Npc_def`，部署件实为 `Npc_Def`，依赖 Windows 大小写不敏感，Linux 部署需同名）两项已登记前提（`mir2-rs/tests/parity/whitelist.md:620` 末段）⇒ 余量=真机窗口 + 城堡官实现 + T-137④⑤。〕 |
 | 30 | `openmir2-mb5-monsters` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机观察 + T-135（host drain 10139） |
 | 31 | `openmir2-castle-war-area-impl` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机 W-1..W-5（四臂落点 rng/766 bit4/名字色/10s Run）+ T-125..T-132 |
 | 32 | `openmir2-dbsrv-scheme-a` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=真机 W-DB-1..7（慢存档/全序/闸门/独立失败）+ T-120 |
@@ -308,7 +308,7 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 | 48 | `openmir2-run-gap-pl3` | openmir2-orchestrator@main/master | 余量=真机窗口（内容启用后的数值/帧序）+ T-85 登记的八条偏差 |
 | 49 | `openmir2-delmagic-addmagic-chain` | openmir2-orchestrator@main/master | 余量=真机窗口三项（见 review.window_items） |
 | 50 | `openmir2-login-frame-order-52-752` | openmir2-orchestrator@main/master | 余量=非 TestServer 部署/发光装备/IsSpirit 的槽位变化未取样本 |
-| 51 | `openmir2-gategate-speed-rules` | openmir2-orchestrator@main/master | 余量=真机窗口四项（登录包相位、0-210ms 内未丢帧的先后、超长帧回归、ItemSpeed/SpeedLimit 接线） |
+| 51 | `openmir2-gategate-speed-rules` | openmir2-orchestrator@main/master | 余量=真机窗口四项（登录包相位、0-210ms 内未丢帧的先后、超长帧回归、ItemSpeed/SpeedLimit 接线） 〔2026-10-24 返工判定**非窗口残余仍成立**——「ItemSpeed/SpeedLimit 接线」不是窗口项：`grep -rn -e SpeedLimit -e ItemSpeed mir2-rs/bins/game-svr/src` → `0 行`（无输出），接线仍未做 ⇒ 余量=真机窗口三项 + ItemSpeed/SpeedLimit 非窗口接线。〕 |
 | 52 | `openmir2-healthspell-emission-model` | openmir2-orchestrator@main/master | 余量=真机窗口四项（见 review.window_items） |
 | 53 | `openmir2-monster-attack-hit-frame` | openmir2-orchestrator@main/master | 余量=真机窗口（同 tick/200ms 顺序三项） |
 | 54 | `openmir2-run-gap-pl1` | openmir2-orchestrator@main/master | 余量=真机窗口四项（见 review.window_items） |
@@ -364,7 +364,7 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 | 104 | `openmir2-snap-cell-fidelity` | openmir2-orchestrator@main/master | 余量：① 真机窗口项 |
 | 105 | `openmir2-default-arm-spell-surface` | openmir2-orchestrator@main/master | 余量：① 真机逐帧对拍（窗口项） |
 | 106 | `openmir2-buff-producer-wiring` | openmir2-orchestrator@main/master | 余量=真机窗口项 + 新开片：四块 snap 改用忠实镜像 `cetin_near_xy`（复验新发现的格子层差异）+ 补窗口宽度上界牙 〔2026-10-24 判定**描述失真**——问题仍成立，但「新开片：四块 snap 改 `cetin_near_xy`」已过期：**已实现 @ `befd3ad7c`**（证据 `git log --oneline -1 befd3ad7c` → `fix(world): spell 路径 snap 改用忠实镜像 cetin_near_xy…`；现位置 `bins/game-svr/src/lib.rs:9557` `spell_snap_target`、`queryuser.rs:29`）⇒ 余量=真机窗口。〕 |
-| 107 | `openmir2-buff-system` | openmir2-coordinator@main/master | 余量=真机窗口项 + A-5 生产接线批 〔2026-10-24 判定**描述失真**——问题仍成立，但「A-5 生产接线批」已过期：**已实现 @ `68b0730df`**（证据 `git log --oneline -1 68b0730df` → `feat(world): buff 生产者接线（麻痹/防御系）…（A-5，tier=R）`；现位置 `crates/world/src/buff.rs`）⇒ 余量=真机窗口。〕 |
+| 107 | `openmir2-buff-system` | openmir2-coordinator@main/master | 余量=真机窗口项 + A-5 生产接线批 〔2026-10-24 判定**描述失真**——问题仍成立，但「A-5 生产接线批」已过期：**已实现 @ `68b0730df`**（证据 `git log --oneline -1 68b0730df` → `feat(world): buff 生产者接线（麻痹/防御系）…（A-5，tier=R）`；`git show --name-only --format='' 68b0730df` → `main.rs`/`combat.rs`/`world.rs`/`recon_gates.py`，**未碰 `buff.rs`**；现位置 `crates/world/src/combat.rs`（`attack_dir_grouped_poison`）、`crates/world/src/world.rs`（`Paralysis`/`UnParalysis` 注入）、`bins/game-svr/src/main.rs`（A-5 技能块））⇒ 余量=R 真机窗口 + 已登记非窗口残余（F2 `is_proper_is_friend` 取上界；`DoSpell:159` 的 `RM_SPELL` 在 14/15/31 无生产者，归 `openmir2-default-arm-spell-surface`）。〕 |
 | 108 | `openmir2-world-tick-expansion` | openmir2-coordinator@main/master | 余量=真机窗口项（RNG 流水/时钟/公告节拍） |
 | 109 | `openmir2-transmap-maptrigger` | openmir2-coordinator@main/master | 余量=真机窗口项 |
 | 110 | `openmir2-maptrigger-monster-and-door` | openmir2-coordinator@main/master | 余量=真机窗口项 W-R1-a/b/c |
@@ -379,7 +379,7 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 | 119 | `openmir2-guardlist-guards-loading` | openmir2-worker-22@guardlist/worktree-guardlist-loading | 剩余 DoD = 真机两侧项：③a 反向点出现帧一致（C# 侧现 1 对、修复后应两侧同）+ MIR2_RNG_SEED 双侧 site/order 对拍——并入下次联调窗口（与 ③b/③a 复跑同窗） |
 | 120 | `openmir2-m3-drop-exp-fixture-botsrv` | openmir2-worker-11@m2-svr/worktree-m3-drop-exp-fixture-botsrv | **保持 in-progress（离线夹具片，不 closed）**：本 approve 只覆盖离线夹具/接线/登记片，卡级真机 DoD③⑤ = 真机两侧 100 杀同序列 diff=0 + drop_exp_purity_gate 实测（阻塞 = owner -Go 独占窗口 + shared 承… |
 | 121 | `openmir2-m3-hero-pet-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑨（master 未动）：PREREQ（静态） |
-| 122 | `openmir2-m3-fixture-chain-gate` | openmir2-worker-5@m3cs/worktree-m3-chain-gate-o1o2-closeout | review do_not_close=true）**：剩余 DoD = 卡级真机两侧同序列 diff=0（各 READY 夹具 run_*.ps1 -SelfCheckNoStack + 共享管线自检需世界侧实现 + openmir2-m3-clock-injection + owner 独占窗口… |
+| 122 | `openmir2-m3-fixture-chain-gate` | openmir2-worker-5@m3cs/worktree-m3-chain-gate-o1o2-closeout | review do_not_close=true）**：剩余 DoD = 卡级真机两侧同序列 diff=0（各 READY 夹具 run_*.ps1 -SelfCheckNoStack + 共享管线自检需世界侧实现 + openmir2-m3-clock-injection + owner 独占窗口… 〔2026-10-24 返工判定**非窗口残余仍成立**——「共享管线自检需世界侧实现」不是窗口项：共享管线自检本体在 `mir2-rs/tests/parity/m3/fixture_chain_gate.py`（`run_bots.ps1 -SelfCheckNoStack` + `selftest_gate.ps1`），但「需世界侧实现」的具体落点本轮未取得可复算指针（**判不准**）；保留原判，不并入窗口。〕 |
 | 123 | `openmir2-m3-rng-trace-scene-groups` | openmir2-worker-4@m3bag/wip/m3bag-anchor-teeth | **保持 in-progress（不 closed，review do_not_close 明示）**：本 approve 只覆盖离线证据/门片，卡级 R 真机 DoD（同场景含怪两相 trace + groupdiff --fold --strict 的 site/order diff=0）仍 n… |
 | 124 | `openmir2-m3-pet-slave-masterdie-wire` | openmir2-worker-20@m3hp/worktree-m3-selloff-dealoffform-recog | **按 tier=R 不 closed（保持 in-progress）**：剩余 DoD = ① 真机两侧 run_hero_pet_pair.ps1 主人死 step 同序列 diff=0（含叛变站点帧序/字节 + RNG 抽数 site/order）② 混合队列场景未建模 not_verifie… |
 | 125 | `openmir2-m3-pet-slave-amulet-delitem-frame` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-amulet-delitem | **按卡级剩余 DoD 保持 in-progress（不 closed）**：剩余 = ① 真机 run_hero_pet_pair.ps1 护身符扣光 step 两侧同序列 diff=0（owner 独占窗口，review not_verified）② unimplemented 登记：SendD… |
@@ -403,7 +403,7 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 | 143 | `openmir2-m3-pet-slave-summon` | openmir2-worker-20@m3hp/worktree-m3-pet-slave-m3-rc-eol | 合并检查点（role=merge, openmir2-coordinator）：⑨-2 M-3 收口片（本片 = 仓库卫生离线片：mir2-rs/.gitattributes 追加 `*.rc text eol=lf`，零 .rs，非窗口）已合入 master bdc508ef1（approve o… |
 | 144 | `openmir2-m3-party-gainexp-npe` | openmir2-worker-21@m3pt/worktree-m3-party-gainexp-npe | **按 tier=R 不 closed**：剩余 DoD = 真机两侧同序列 diff=0（归 openmir2-m3-party-trade-align + 独占窗口），按 not_verified 登记 |
 | 145 | `openmir2-m3-shop-scenario-authority` | openmir2-worker-5@m3cs/worktree-m3-shop-scenario-authority | **剩余 DoD = 真机**：run_npc_shop_pair.ps1 在独占窗口跑两侧同序列 diff=0（等 ⑤-4 第②片仓库存档面 + ⑤-5 / NPC 入视野），离线判据本体已完整 |
-| 146 | `openmir2-m3-fixture-matrix` | openmir2-worker-5@m3cs/worktree-m3-fixture-matrix | **剩余 = 真机 DoD**：READY 夹具需 -Side rust preflight 前置落地 + 独占窗口跑两侧同序列 diff=0 〔2026-10-24 判定**描述失真**——问题仍成立，但「READY 夹具需 -Side rust preflight 前置落地」已过期：8 个 READY 脚本均已含 preflight（证据 `grep -l preflight mir2-rs/tests/parity/m3/run_*_pair.ps1 | wc -l` → `8`；`run_party_trade_pair.ps1:510` 起为 preflight 段）⇒ 余量=真机窗口。〕 |
+| 146 | `openmir2-m3-fixture-matrix` | openmir2-worker-5@m3cs/worktree-m3-fixture-matrix | **剩余 = 真机 DoD**：READY 夹具需 -Side rust preflight 前置落地 + 独占窗口跑两侧同序列 diff=0 〔2026-10-24 判定**描述失真**——问题仍成立，但「READY 夹具需 -Side rust preflight 前置落地」已过期：8 个 READY 脚本均已含 preflight（证据 `grep -l preflight mir2-rs/tests/parity/m3/run_*_pair.ps1 \| wc -l` → `8`；`run_party_trade_pair.ps1:510` 起为 preflight 段）⇒ 余量=真机窗口。〕 |
 | 147 | `openmir2-m3-guild-castle-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑧（master 未动）：PREREQ（静态） |
 | 148 | `openmir2-m3-npc-shop-align` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）：窗口 r3 复核⑤（master d4d5b89c 未动，与 r1/r2 相同）：仍 BLOCKED，与 r2 逐条相同 |
 | 149 | `openmir2-m3-scoped-diff-ability` | openmir2-svc-1@window/worktree-window | 窗口 r3（master d4d5b89c 未动）真机加深复跑 ②③F-2（360 击）：attack_diff 仍 GREEN diff=0（360/157/203/6576） |
@@ -412,17 +412,17 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 | 152 | `openmir2-click-path-bag-writeback` | openmir2-worker-5@wt-clickbag/click-bag-writeback | 余量=真机落库对拍（T-160：`characters_bagitem`/`hum_items`/`characters.Gold`）；master 合并 `b0dde46a9`，按 R 不 closed |
 ### B. 代码未开工/接线未做
 
-> **2026-10-24 逐行复算（卡 `openmir2-inventory-b-table-audit`，tier=L）**：22 行全部重核到当前 master（base `3fa6899a9`）代码，行号一律重新 grep。结论：**仍成立 5 行**（`castle-pure`、`castle-official-design`、`loader-fields`、`run-gap-mb2`、`m3-party-attribution`）、**描述失真 11 行**、**部分失真 5 行**、**已实现但欠窗口 1 行**（`market-def-design`）——即 22 行里 **17 行**的「未开工/接线未做」表述已被代码推翻。逐行证据与可复算命令见 §3.2.2。**拆卡前请以本节的 2026-10-24 判定为准。**
+> **2026-10-24 逐行复算（卡 `openmir2-inventory-b-table-audit`，tier=L）**：22 行重核于 base `3fa6899a9`，返工复核于 `walgit/master` `3e9007638`（两 base 间只有 `lib.rs` +247/−6 与 `docs/drain-order-gate-20261024.md`；`lib.rs` 首个 hunk 起于 `:28112`，其后行号整体 +133），行号一律重新 grep。结论：**仍成立 5 行**（`castle-pure`、`castle-official-design`、`loader-fields`、`run-gap-mb2`、`m3-party-attribution`）、**描述失真 11 行**、**部分失真 5 行**、**已实现但欠窗口 1 行**（`market-def-design`）——即 22 行里 **17 行**的「未开工/接线未做」表述已被代码推翻。逐行证据与可复算命令见 §3.2.2。**拆卡前请以本节的 2026-10-24 判定为准。**
 
 | card id | owner/worktree | 阻塞原因（来自最新 status 的 work） |
 |---|---|---|
-| `openmir2-castle-pure` | openmir2-orchestrator@main/master | 余量=接线（shop/main 消费税意图）+ W1-W3 〔2026-10-24 判定**仍成立**——问题与现位置一致：纯计算层**已实现 @ `fe64e93d8`**（`crates/world/src/castle_tax.rs:366` `merchant_tax_intent`），但 bins 无消费者（证据 `grep -rn merchant_tax_intent mir2-rs/bins | wc -l` → `0`），商税四调用点仍 `let _tax = …` 丢弃（现位置 `shop.rs:974/1079/1255`、`lib.rs:5858`）⇒「接线」确为余量。〕 |
-| `openmir2-script-playdice-openybdeal` | openmir2-orchestrator@main/master | 余量=bins 接线（NpcPlayer set/get + game-svr 调用）+ 真机窗口 + T-142 〔2026-10-24 判定**描述失真**——问题仍成立，但原文说的「bins 接线」已过期：现位置 `lib.rs:6661`（`seed_player_gold_deal`）+ `:7281`/`:28769`（两路调用）；**已实现 @ `8f9b95cc6`**（证据 `grep -n 'seed_player_gold_deal(' mir2-rs/bins/game-svr/src/lib.rs` → `6661/7281/28769`）⇒ 余量收窄为真机窗口；R 级，欠真机窗口。〕 |
+| `openmir2-castle-pure` | openmir2-orchestrator@main/master | 余量=接线（shop/main 消费税意图）+ W1-W3 〔2026-10-24 判定**仍成立**——问题与现位置一致：纯计算层**已实现 @ `fe64e93d8`**（`crates/world/src/castle_tax.rs:366` `merchant_tax_intent`），但 bins 无消费者（证据 `grep -rn merchant_tax_intent mir2-rs/bins \| wc -l` → `0`），商税四调用点仍 `let _tax = …` 丢弃（现位置 `shop.rs:974/1079/1255`、`lib.rs:5858`）⇒「接线」确为余量。〕 |
+| `openmir2-script-playdice-openybdeal` | openmir2-orchestrator@main/master | 余量=bins 接线（NpcPlayer set/get + game-svr 调用）+ 真机窗口 + T-142 〔2026-10-24 判定**描述失真**——问题仍成立，但原文说的「bins 接线」已过期：现位置 `lib.rs:6661`（`seed_player_gold_deal`）+ `:7281`/`:28902`（两路调用，master 3e9007638）；**已实现 @ `8f9b95cc6`**（证据 `grep -n 'seed_player_gold_deal(' mir2-rs/bins/game-svr/src/lib.rs` → `6661/7281/28902`）⇒ 余量 = R 真机窗口 + **T-142 已登记残余**（⑨ `GAMEPOINT` 半边未接：`set_game_point` 仍是 trait 默认 no-op，`crates/script/src/engine/mod.rs:459`；⑩ 帧排水是「每次 GotoLable 立即发」而非 handler 级 MsgQueue，未收口；⑪ `lable_is_can_jmp` 双实现：`crates/script/src/engine/mod.rs:857` 与 `bins/game-svr/src/shop.rs:1486`），见 `mir2-rs/tests/parity/whitelist.md:624` 末段；R 级，欠真机窗口。〕 |
 | `openmir2-market-def-design` | openmir2-orchestrator@main/master | 余量=实现（R）：商人脚本装载 + [~@repair] + PlayDiceLabel 〔2026-10-24 判定**已实现，欠窗口**——**已实现 @ `460691b24`（商人脚本装载/`[~@repair]`）与 `8f9b95cc6`（`PlayDiceLabel`/`OPENYBDEAL`）**（证据 `grep -n 'ActionOfOpenSaleDeal\|ActionOfPlayDice' mir2-rs/crates/script/src/engine/actions.rs` → `889/905`；`grep -n 'pub fn load_merchants_loaded' mir2-rs/crates/envir/src/merchant.rs` → `217`）；R 级 ⇒ 欠真机窗口（T-145 残余说词/变量，归 `openmir2-market-def-impl`）。〕 |
-| `openmir2-castle-tax-item-design` | openmir2-orchestrator@main/master | 余量=实现（R）+ GetCastle/MasterGuild 前置 〔2026-10-24 判定**描述失真**——问题仍成立，但原文位置已过期：现位置 `crates/world/src/castle_tax.rs:204`（`get_castle`）/`:231`（`merchant_tax_target`）/`:366`（`merchant_tax_intent`），**已实现 @ `fe64e93d8`**（证据 `grep -n 'pub fn get_castle' mir2-rs/crates/world/src/castle_tax.rs` → `204`）；bins 接线仍缺（`grep -rn merchant_tax_intent mir2-rs/bins | wc -l` → `0`）⇒ 余量=bins 接线（归 `openmir2-castle-pure`）+ R 真机窗口。〕 |
+| `openmir2-castle-tax-item-design` | openmir2-orchestrator@main/master | 余量=实现（R）+ GetCastle/MasterGuild 前置 〔2026-10-24 判定**描述失真**——问题仍成立，但原文位置已过期：现位置 `crates/world/src/castle_tax.rs:204`（`get_castle`）/`:231`（`merchant_tax_target`）/`:366`（`merchant_tax_intent`），**已实现 @ `fe64e93d8`**（证据 `grep -n 'pub fn get_castle' mir2-rs/crates/world/src/castle_tax.rs` → `204`）；bins 接线仍缺（`grep -rn merchant_tax_intent mir2-rs/bins \| wc -l` → `0`）⇒ 余量=bins 接线（归 `openmir2-castle-pure`）+ R 真机窗口。〕 |
 | `openmir2-castle-official-design` | openmir2-orchestrator@main/master | 余量=实现车道（R）+ 共用固定 NPC 对话层前置 〔2026-10-24 判定**仍成立**——现位置 `lib.rs:4731`/`:5494` 仍是「CastleOfficial 门未移植（T-40/T-140）」的零帧分支（证据 `LC_ALL=C.UTF-8 grep -nP '(*UTF)CastleOfficial 门未移植' mir2-rs/bins/game-svr/src/lib.rs` → `4731/5494`），实现车道尚未启动。〕 |
-| `openmir2-loader-fields` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=接线（game-svr 改消费新加载器）+ 真机窗口 〔2026-10-24 判定**仍成立**——问题与现位置一致：新加载器 `crates/envir/src/startpoint.rs:57` 已有，但 bins 仍用 `homemap.rs:185` 的三列解析（证据 `grep -rn envir::startpoint mir2-rs/bins mir2-rs/crates/world | wc -l` → `0`）⇒「改消费新加载器」确为余量。〕 |
-| `openmir2-castle-war-area-design` | openmir2-orchestrator@main/master | 余量=实现车道（R：进图落点 RNG / 766 bit4 / 名字色 / 状态机）+ 真机窗口 〔2026-10-24 判定**描述失真**——问题仍成立，但原文说的「实现车道」已过期：现位置 `crates/world/src/castle.rs:2234`（766 `InGuildWarArea` 每 tick 置位/清除），**已实现 @ `bcce705d1`**（证据 `git log --oneline -1 bcce705d1` → `feat(world): 攻城区谓词/落点改写/766 bit4/名字色（castlewar）`）⇒ 余量=R 真机窗口。〕 |
+| `openmir2-loader-fields` | openmir2-orchestrator@main/master | 按 R 级不 closed：余量=接线（game-svr 改消费新加载器）+ 真机窗口 〔2026-10-24 判定**仍成立**——问题与现位置一致：新加载器 `crates/envir/src/startpoint.rs:57` 已有，但 bins 仍用 `homemap.rs:185` 的三列解析（证据 `grep -rn envir::startpoint mir2-rs/bins mir2-rs/crates/world \| wc -l` → `0`）⇒「改消费新加载器」确为余量。〕 |
+| `openmir2-castle-war-area-design` | openmir2-orchestrator@main/master | 余量=实现车道（R：进图落点 RNG / 766 bit4 / 名字色 / 状态机）+ 真机窗口 〔2026-10-24 判定**描述失真**——问题仍成立，但原文说的「实现车道」已过期：现位置 `crates/world/src/castle.rs:2234`（766 `InGuildWarArea` 每 tick 置位/清除），**已实现 @ `bcce705d1`**（证据 `git log --oneline -1 bcce705d1` → `feat(world): 攻城区谓词/落点改写/766 bit4/名字色（castlewar）`）⇒ 余量=R 真机窗口 + **impl 车道残余（T-125..T-132）**，与本表 A#31（`openmir2-castle-war-area-impl`）一致（逐条见 `mir2-rs/tests/parity/whitelist.md:599-606`）；其中 T-126 会话位按 actor id 侧挂、T-131 `MasterGuild` 装载相位、T-132 `CastleNameColors` 配置源属装载/配置/状态建模项，**不是窗口项**；design 卡依赖 impl 车道、impl 未排水 ⇒ 不能只剩窗口。〕 |
 | `openmir2-dbsrv-connection-design` | openmir2-orchestrator@main/master | 余量=方案 A 实现（另开卡，tier=R）+ LB-10-E1 真机证据（窗口） 〔2026-10-24 判定**描述失真**——问题仍成立，但原文说的「方案 A 实现」已过期：现位置 `bins/db-srv/src/db.rs:111`（去全局 `Arc<Mutex<Db>>`）/`:121`（`RwLock<Indexes>`），**已实现 @ `53d7aacc8`**（证据 `git log --oneline -1 53d7aacc8` → `refactor(db-srv): 方案 A 去全局 Mutex<Db>…`）⇒ 余量=LB-10-E1 真机证据。〕 |
 | `openmir2-run-gap-mb2` | openmir2-orchestrator@impl-mb2/detached@0ebdbbf54 | 车道在飞（wf_6845f065-267） 〔2026-10-24 判定**仍成立**——板面文字一致（证据 `walgit collab board --format json` 的 `work` → `车道在飞（wf_6845f065-267）。`）；车道存活需进程/心跳，仓库内无法机判。〕 |
 | `openmir2-monster-run-overrides` | openmir2-orchestrator@main/master | 余量：12 条未决（延迟队列/RunTime 节拍/MAC·AntiMagic/目标选择/SendRefMsg 缓存…） 〔2026-10-24 判定**描述失真**——问题仍成立，但「实现未开」已过期：现位置 `crates/world/src/monai.rs:6700`（`fireball_monster_run`）/`:709`（`is_active_seek_race`），**已实现 @ `00a039ee9`/`294278505`/`eb93779ed`/`afdb53c44`**（证据 `grep -n 'pub fn fireball_monster_run\|pub fn is_active_seek_race' mir2-rs/crates/world/src/monai.rs` → `709/6700`）⇒ 余量=P5 机器人 AutoSpell（`RobotProcessor` 未移植，现位置 `lib.rs:15842`）+ R 真机窗口。〕 |
@@ -449,7 +449,7 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 
 #### 3.2.2 复算命令（B 表 22 行逐行 + A 表描述一致性；2026-10-24 卡 `openmir2-inventory-b-table-audit`）
 
-> 以下命令全部在 base `3fa6899a9` 的检出上实跑并贴出当次输出；**代码行号一律重新 grep**，不沿用旧稿。
+> 以下命令在 `walgit/master` = `3e9007638` 的检出上实跑并贴出当次输出（首轮在 `3fa6899a9`；两 base 之间只有 `lib.rs` +247/−6 与 `docs/drain-order-gate-20261024.md`，`lib.rs` 首个 hunk 起于 `:28112` ⇒ `:28112` 以下行号不变、以上整体 +133）；**代码行号一律重新 grep**，不沿用旧稿。
 > 判定口径：`仍成立` = 行内描述与现况一致；`描述失真` = 问题仍在但原文措辞/前置已过期；`部分失真` = 一段余量里
 > 有的已落地、有的仍成立；`已实现，欠窗口` = 代码已落地但 R 级真机窗口未跑（**不得**据此把 R 卡判成「已解决」）。
 > 含中文的模式一律显式开 UTF（见本节 E）。
@@ -457,11 +457,11 @@ python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));p
 ```sh
 # A. base 与看板（看板是实时量，复跑以当次输出为准）
 git rev-parse walgit/master
-# 3fa6899a9c98749ee4952f5bfae5c312216c7210
+# 3e90076389d6344135b17ca785ded470fc9d6a4c
 
 walgit collab board --format json > E:/tmp/board.json
 python -c "import json;d=json.load(open('E:/tmp/board.json',encoding='utf-8'));print({c['name']:len(c['cards']) for c in d['columns']})"
-# {'待认领': 0, '进行中': 237, '待审': 6, '需要人': 0, '受阻': 2, '已完成': 273}
+# {'待认领': 1, '进行中': 238, '待审': 3, '需要人': 0, '受阻': 2, '已完成': 275}（当次实时量；首轮快照 0/237/6/0/2/273）
 
 # B. B 表 22 行的当前行号（本文件）
 grep -n '^| `openmir2-' docs/rewrite-remaining-inventory-20261022.md | sed -n '/castle-pure/,/party-attribution/p'
@@ -475,7 +475,7 @@ grep -n 'let _tax' mir2-rs/bins/game-svr/src/shop.rs mir2-rs/bins/game-svr/src/l
 
 # B-2) openmir2-script-playdice-openybdeal（doc:420）→ 描述失真（bins 接线已落地）
 grep -n 'seed_player_gold_deal(' mir2-rs/bins/game-svr/src/lib.rs
-# 6661:fn seed_player_gold_deal(  /  7281 / 28769 两路调用；T-142 生产路径用例 lib.rs:29191
+# 6661:fn seed_player_gold_deal(  /  7281 / 28902 两路调用（master 3e9007638；base 为 28769，+133）；T-142 生产路径用例 lib.rs:29324（`t142_merchant_dlg_select_openybdeal_and_playdice_through_production_path`） / :30627（`t142_click_npc_main_seeds_and_writes_back_gold_deal`，base 30494，+133）
 
 # B-3) openmir2-market-def-design（doc:421）→ 已实现，欠窗口
 grep -n 'ActionOfOpenSaleDeal\|ActionOfPlayDice' mir2-rs/crates/script/src/engine/actions.rs
@@ -608,7 +608,7 @@ print('A rows', len(rows), 'on board', sum(1 for r in rows if r in by),
 PY
 # A rows 152 on board 152 not on board []
 
-# C-2) 非窗口关键词筛查（15 行需人眼核）；口径：只看「余量/剩余」里的接线·实现·前置类词
+# C-2) 非窗口关键词筛查（现文件实跑 16 行需人眼核；首轮 15 行漏计 :278）；口径：只看「余量/剩余」里的接线·实现·前置类词
 python - <<'PY'
 doc = open('docs/rewrite-remaining-inventory-20261022.md', encoding='utf-8').read().split('\n')
 a = next(i for i,l in enumerate(doc) if l.startswith('### A. 真机窗口欠账'))
@@ -624,8 +624,35 @@ for i in range(a+3, b):
         print(i+1, p[1].strip('`'), hit)
 print('hits', n)
 PY
-# 15 行（282/286/289/294/311/366/367/372/374/380/382/384/394/396/406）；
-# 其中 9 行经代码核验判「描述失真」，已就地标注（见 D）
+# 16 行（278/282/286/289/294/311/366/367/372/374/380/382/384/394/396/406）；
+# 标注集 = 278/286/289/366/367/388/393/394/406（9 行），与命中集**交集 7 行**；388/393 在标注集但不在命中集
+```
+
+```sh
+# C-3) 把 C-2 的 16 行按「窗口 / 非窗口残余 / 已实现+已登记残余」三分类
+# 分类表显式给出（逐行核过内容），脚本只复算归属与总数，防止手抄走样
+python - <<'PY'
+doc = open('docs/rewrite-remaining-inventory-20261022.md', encoding='utf-8').read().split(chr(10))
+a = next(i for i,l in enumerate(doc) if l.startswith('### A. 真机窗口欠账'))
+b = next(i for i,l in enumerate(doc) if l.startswith('### B. 代码未开工'))
+kw = ['接线','实现','前置','未开','未移','未建','待补','待接','缺','新开','另开','未接','未移植','未落']
+hits = []
+for i in range(a+3, b):
+    p = [x.strip() for x in doc[i].strip('|').split('|')]
+    if len(p) < 4 or p[0].startswith('---') or p[0].startswith('#'): continue
+    if any(k in p[3] for k in kw): hits.append(i+1)
+win    = [278,286,366,372,380,394,396,406]   # 前置已落地，余量只剩 R 窗口
+nonwin = [282,294,311,374,382,384]           # 仍有实现/接线/建模项，保留原判
+mixed  = [289,367]                           # 已实现，但另有已登记非窗口残余
+print('hits', len(hits), hits)
+print('win', len(win), 'nonwin', len(nonwin), 'mixed', len(mixed), 'sum', len(win)+len(nonwin)+len(mixed))
+print('sets equal:', sorted(hits) == sorted(win+nonwin+mixed))
+print('unhit', 152-len(hits), 'post-annot-not-in-hits', 2, 'original-judgment', 152-len(hits)-2)
+PY
+# hits 16 [278, 282, 286, 289, 294, 311, 366, 367, 372, 374, 380, 382, 384, 394, 396, 406]
+# win 8 nonwin 6 mixed 2 sum 16
+# sets equal: True
+# unhit 136 post-annot-not-in-hits 2 original-judgment 134
 ```
 
 ```sh
@@ -647,6 +674,8 @@ grep -n 'pub fn place_fixed_npcs_with_scripts' mir2-rs/bins/game-svr/src/npcs.rs
 # 298
 LC_ALL=C.UTF-8 grep -nP '(*UTF)Npc_def 脚本' mir2-rs/bins/game-svr/src/lib.rs | head -2
 # 5725 / 20521（装载完成日志）
+sed -n '620p' mir2-rs/tests/parity/whitelist.md | grep -o '④ 装载次序.*⑤ 脚本目录名' | cut -c1-200
+# ④ 装载次序相对 oracle 的差异…当前 0 抽数、不可观测；⑤ 脚本目录名（Npc_Def 依赖 Windows 大小写不敏感）
 
 # D-4 doc:366 openmir2-buff-producer-wiring → 四块 snap 已改忠实镜像
 git log --oneline -1 befd3ad7c
@@ -657,6 +686,10 @@ grep -n 'pub fn cetin_near_xy' mir2-rs/bins/game-svr/src/queryuser.rs
 # D-5 doc:367 openmir2-buff-system → A-5 生产接线已合入
 git log --oneline -1 68b0730df
 # 68b0730df feat(world): buff 生产者接线（麻痹/防御系）+ 补技能距离门与主机层三牙（A-5，tier=R）
+git show --name-only --format='' 68b0730df
+# mir2-rs/bins/game-svr/src/main.rs / crates/world/src/combat.rs / crates/world/src/world.rs / recon_gates.py（**无 buff.rs**）
+git show -s --format=%B 68b0730df | grep -n '登记的残余' -A3
+# F2 `is_proper_is_friend` 取上界 / `DoSpell:159` 的 `RM_SPELL` 在 14/15/31 无生产者
 
 # D-6 doc:388 openmir2-m3-shop-fixture-botsrv → 世界侧 ⑤-2/⑤-4/⑤-5 已合入
 for c in 8e245c44e ba72bb81d 0b731d1de; do git log --oneline -1 $c; done
@@ -688,15 +721,22 @@ LC_ALL=C.UTF-8 grep -cP '(*UTF)城.状态' mir2-rs/bins/game-svr/src/lib.rs
 
 # F. 收尾门禁（主检出 / 本分支）
 python tools/hygiene/stale_pointer_gate.py --path docs/rewrite-remaining-inventory-20261022.md
-# stale-pointer gate: OK (1 files / 1424 lines scanned under docs; 0 green pointer(s),
+# stale-pointer gate: OK (1 files / 1457 lines scanned under docs; 0 green pointer(s),
 #   1 correction-marker line(s), 1 allow-listed line(s), 0 unresolved;
-#   0 card-status hit(s), 1 card id(s) judged, 1 card-bearing line(s); ref=3fa6899a9…)
+#   0 card-status hit(s), 1 card id(s) judged, 1 card-bearing line(s); ref=dc6e9699…)
+#   —— ref 是运行时 HEAD，复跑以当次输出为准；本文件逐行未靠「」/『』/去掉引号过门。
 git diff --check; echo "diff-check rc=$?"
 # diff-check rc=0（无空白/冲突标记问题）
 python tools/whitelist/t_reservation_gate.py check
-# T_RESERVATION_GATE GREEN（①-⑤ 与 ⓪ 全过：预约表 255 行 / whitelist 255 号）
+# T_RESERVATION_GATE GREEN（①-⑤ 与 ⓪ 全过：rows=255 whitelist=255 live=64 landed=191
+#   released=0 malformed=0 wl_dups=0 fence_ok=True/True max=T-267）
 python tools/hygiene/conflict_marker_gate.py
+# conflict-marker gate: OK (0 markers across 7460 tracked files)
 git merge-tree --write-tree walgit/master HEAD >/dev/null; echo "merge-tree rc=$?"
+# merge-tree rc=0
+# 注意：全仓 stale_pointer_gate（不带 --path）仍 rc=1——4 处命中全在 docs/session-digest-20261024.md
+#   （他人写集、base 既有：卡 openmir2-goal-gate-unmerged-selftest / openmir2-gate-baseline-snapshot
+#   的 status 与 head 已过期）。本卡写集只有本文件，--path rc=0；不代改他人写集。
 ```
 
 > **判不准项（如实登记）**：① `openmir2-run-gap-mb2` 的「车道在飞」需进程/心跳才能判，仓库内无法机判；
@@ -985,7 +1025,7 @@ PY
 |---:|---|---|---|
 | 1 | `openmir2-orphan-encoder-batch-a` | **部分解决（复核 @ `3738ad234`：与原文一致）**：卡已 closed @ `f164ccd20`；审计 `6d79be4da` 改判 0 可直接接线 / 8 需补上游 / 4 不可达；第 13 帧转卡 `openmir2-sm-closehealth-wire` @ `e0114909e`（该卡现 `in-progress`）。证据：`git log -1 --format='%h %s' f164ccd20 6d79be4da` → 两条 merge 均在；board 查该卡 → `closed`。 | 剩余 = **8 帧需补上游** + **4 帧登记不接**；**原文括号里的编号只列了 6 个（T-174/178/180/181/182/183）与 3 个（T-175/176/179），与 8/4 不一致——编号映射本轮未重算，以审计报告 `docs/orphan-encoder-trigger-audit-20261023.md` 的 0/8/4 为准**。 |
 | 2 | `openmir2-unbindlist-consumer` | **已接线（复核 @ `3738ad234`：与原文一致）** @ `4c983375c`（merge `f796eaeed`）；board 该卡仍 `in-progress`。证据：`git log -1 --format='%h %s' 4c983375c f796eaeed` → feat + merge 两条；board → `in-progress`。 | 剩余 = **R 窗口真机**：6 条 `SM_ADDITEM(200)` + `SM_EAT_OK(635)` + `SM_WEIGHTCHANGED(622)`，以及断线存档 `hum_items` 含 6 件。 |
-| 3 | `openmir2-minimap-consumer-wire` | **已解决 @ `4d9bab444`（merge `8889f7f28`；卡 `closed`）**。证据：`python -I -B mir2-rs/tests/parity/coverage/recon_gates.py dispatch | tail -1` → `summary: {"n/a-oracle-noop": 1, "implemented": 179, "n/a-unreachable": 11, "tracked": 0}`（`tracked=0`⇒ 原文「已离开 tracked」成立）；`grep -n CM_WANTMINIMAP mir2-rs/bins/game-svr/src/lib.rs` → `2857` 行 handler。 | 剩余 = 无。 |
+| 3 | `openmir2-minimap-consumer-wire` | **已解决 @ `4d9bab444`（merge `8889f7f28`；卡 `closed`）**。证据：`python -I -B mir2-rs/tests/parity/coverage/recon_gates.py dispatch \| tail -1` → `summary: {"n/a-oracle-noop": 1, "implemented": 179, "n/a-unreachable": 11, "tracked": 0}`（`tracked=0`⇒ 原文「已离开 tracked」成立）；`grep -n CM_WANTMINIMAP mir2-rs/bins/game-svr/src/lib.rs` → `2857` 行 handler。 | 剩余 = 无。 |
 | 4 | `openmir2-merchant-script-load`（A-08 / T-47③） | **已合入 `460691b24`（merge `d494c9d23`；tier=R；卡 `in-progress`、不 `closed`）**：`Market_Def` 商人脚本装载与 `~@repair`/`~@s_repair`、`~@upgradenow_*`、`~@getbackupgnow_*` 执行已落地——`shop.rs:35-39` 的「已落地（卡 `openmir2-merchant-script-load`）」段、`lib.rs:7224`（`run_merchant_goto`）、`:7357`（`emit_merchant_goto_result`）、`:5956`（`@upgradenow` 臂）、`:6053`（`@getbackupgnow` 臂）；whitelist T-47③ 已改「2026-10-24 已实现」。board 实查：`in-progress`（owner `openmir2-orchestrator`，last_ts `1792802841`）。原文「未装载三处仍在」「剩余 = 实现装载」是 `3738ad234` 时点的事实，已作废（旧串扫法见 §12.5，count=0）。 | 剩余 = **R 真机窗口**（`SM_MERCHANTSAY(643)` 说词帧集合/字节序/帧序）+ 关卡；**不再建议新卡**。 |
 | 5 | `openmir2-adjust-bonus-wire` | **已解决 @ `89254a0e8`（merge `a0a5dd21f`，tier=R）**。证据：`grep -n client_adjust_bonus mir2-rs/bins/game-svr/src/lib.rs` → `2887: let out = inbound::client_adjust_bonus(cmd.recog, sg.bonus_point);`（原文 2383-2385 的 `, 0)` 已不存在）；模块注释 `lib.rs:2808`、常量 `:2780`、非法支 `:2890`、合法支起于 `:2887`（`recalc_session_ability` @ `:2917`，657 帧 @ `:2983`）、逻辑 `inbound.rs:263/933/938`、牙 `lib.rs:47360`（第 5 轮写 46806，master 前进后漂移）；board 查 `openmir2-adjust-bonus-wire` → **不存在**（不用再建卡）。 | 剩余 = **R 窗口真机**（`SM_ABILITY(52)`/`SM_SUBABILITY(752)` 帧级 diff）。 |
 
