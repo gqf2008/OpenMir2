@@ -35,3 +35,7 @@ status = "blocked"
 [[column]]
 name = "已完成"
 status = "closed"
+
+[[column]]
+name = "已合并未收口"
+status = "merged"
