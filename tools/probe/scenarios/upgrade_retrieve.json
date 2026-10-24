@@ -1,8 +1,32 @@
 {
   "name": "upgrade_retrieve",
-  "description": "R2 武器升级 NPC 全链（沙巴克铁匠：盟重省 map 3 (332,317)，MerChant.txt:82）：CM_CLICKNPC(1010) -> 643 @main -> @upgrade -> 643 -> @confirmupgrade -> 643（说词含 <请求修炼/@upgradenow>）-> @upgradenow 提交（成功首帧 SM_DELITEM(202)，紧跟 52/41/653/657×2/709；失败或已在升级中只回 643）-> sleep 660000ms 过取回时效门（Server.conf:331 UPgradeWeaponGetBackTime=600000）-> @main -> @getbackupgnow 取回（成功首帧 SM_ADDITEM(200)，含 Desc[10]；未到期/无记录只回 643）。为 openmir2-upgrade-npc / openmir2-weapon-upgrade-values / openmir2-a09-upgrade-item 三张 R 卡提供「同一串 CM_* 把两侧推到同一条链」的夹具；抽数序 A(耐久)→B(Random(3))→C/D/E 的逐抽对拍要窗口双开 MIR2_RNG_LOG，本场景不负责判定。逐条 oracle 出处与夹具前置见 docs/upgrade-retrieve-scenario-20261023.md",
+  "description": "R2 武器升级 NPC 全链（沙巴克铁匠：盟重省 map 3 (332,317)，MerChant.txt:82）：CM_CLICKNPC(1010) -> 643 @main -> @upgrade -> 643 -> @confirmupgrade -> 643（说词含 <请求修炼/@upgradenow>）-> @upgradenow 提交（成功首帧 SM_DELITEM(202)，紧跟 52/41/653/657×2/709；失败或已在升级中只回 643）-> sleep 660000ms 过取回时效门（Server.conf:331 UPgradeWeaponGetBackTime=600000）-> @main -> @getbackupgnow 取回（成功首帧 SM_ADDITEM(200)，含 Desc[10]；未到期/无记录只回 643）。为 openmir2-upgrade-npc / openmir2-weapon-upgrade-values / openmir2-a09-upgrade-item 三张 R 卡提供「同一串 CM_* 把两侧推到同一条链」的夹具；抽数序 A(耐久)→B(Random(3))→C/D/E 的逐抽对拍要窗口双开 MIR2_RNG_LOG，本场景不负责判定。逐条 oracle 出处与夹具前置见 docs/upgrade-retrieve-scenario-20261023.md。2026-10-24 部署前置批次（卡 openmir2-window-deploy-prereq-batch1）：三前置改为场景自描述——steps[0..1] 用夹具木剑 CM_TAKEONITEM 上手（param=ItemLocation.Weapon=1，StdMode5 经 M2Share.CheckUserItems 逆表），inventory 声明 木剑#5001@40 + 黑铁矿石#5003@41（=UpgradeWapon 的 CheckItems(BlackStone) 前置）；金币前置（Gold ≥ UpgradeWeaponPrice=10000，Server.conf:333）暂无声明通道（characters.Gold 列不在 placement 三列/inventory 背包夹具通道内），落地前第 9 步 wait_idents[709] 预期超时（fail-closed 残留，非假绿），归金币夹具通道的后续卡。",
   "required": [
     "merchant_actor"
+  ],
+  "params": {
+    "make_index": 5001,
+    "takeon_where": 1,
+    "item_name": "木剑"
+  },
+  "inventory": [
+    {
+      "index": 207,
+      "make_index": 5001,
+      "position": 40,
+      "std_mode": 5,
+      "ani_count": 0,
+      "dura": 4000,
+      "dura_max": 4000,
+      "note": "木剑（stditems#207，StdMode=5，mir2_data 实测行与 sql/mir2_data.sql:1197 一致）——steps[0] CM_TAKEONITEM 上手成为 UseItems[ItemLocation.Weapon]（@confirmupgrade 的 CHECKUSEITEM 1 与 UpgradeWapon 的 UseItems[Weapon] 前置）；MakeIndex 夹具钉死 5001（两侧同值 => C2S 字节可比）"
+    },
+    {
+      "index": 68,
+      "make_index": 5003,
+      "position": 41,
+      "std_mode": 43,
+      "note": "黑铁矿石（stditems#68，StdMode=43，mir2_data 实测行与 sql/mir2_data.sql:1058 一致）——UpgradeWapon 的 user.CheckItems(BlackStone='黑铁矿石')（Server.conf:87）背包前置，提交成功支被吃并发 709；dura 不声明（矿石纯度只进升级数值数学，不影响链路可达）"
+    }
   ],
   "placement": {
     "map": "3",
@@ -11,6 +35,20 @@
     "note": "沙巴克铁匠 (332,317)（E:/MirServer/Mir200/Envir/MerChant.txt:82，GBK）的西南邻格（Chebyshev 距离 (12,11)，在 CM_CLICKNPC 的 |dx|<=15&&|dy|<=15 门内，PlayObject.Base.cs:691）。**不能站铁匠正旁边**：部署 MonGen.txt 在 (325,311)/(336,321)/(339,313) 刷了 3 只弓箭护卫（Race=112 ArcherGuard，ViewRange=12），GuardUnit.IsProperTarget 对普通玩家 return true（src/M2Server/Monster/Monsters/GuardUnit.cs:108-121）⇒ 站近处会被持续射杀（11 分钟取回等待内必死，Death 门会让 UserSelect 整段不执行）。本格到三只护卫的 Chebyshev 分别是 17/16/19，均在 ViewRange 12 之外；同时铁匠正好落在本格 view_range=12 的最后一列 x=px+12（PlayObject.cs:904 与 3087-3090 的闭区间扫描），使 discovery(npc_click_auto 的 auto:last_turn) 取到的「最后一条非己 SM_TURN」是铁匠而不是同屏的 传送员(327,327)/足球场(318,332)/会战(318,336)——外观帧按 VisibleActors 追加序（x 升序、同 x 按 y 升序）发出（PlayObject.cs:3220-3243），x=332 的铁匠排在最后。3.map 该格 bk=671/fr=0，无 bit15（card_window.read_map_cell 口径 = oracle CanWalk(x,y,true)）"
   },
   "steps": [
+    {
+      "send": {
+        "ident": 1003,
+        "recog": "make_index",
+        "param": "takeon_where",
+        "text_from": "item_name"
+      },
+      "note": "CM_TAKEONITEM(1003)（Messages.cs；oracle PlayObject.Message.cs:819-822 => ClientTakeOnItems((byte)nParam2, nParam1, Msg)）：recog=MakeIndex=5001（夹具钉死）、param=takeon_where=1（ItemLocation.Weapon，src/OpenMir2/Enums/ItemLocation.cs:12；StdMode 5 => Weapon(1) 是 M2Share.CheckUserItems 的逆表映射，与 bag_equip 的发现口径同源）、body=物品名。武器必须经真实装备链上手：UpgradeWapon 检查的是 UseItems[ItemLocation.Weapon]（Merchant.cs:548），背包夹具只写 characters_bagitem => 必须先穿"
+    },
+    {
+      "wait_for": 615,
+      "timeout_ms": 3000,
+      "note": "SM_TAKEON_OK(615)（bag_equip 同口径：615=OK/616=FAIL）。只等 615：装备失败（616）不在集合 => 本步响亮超时，不会带着空手进升级链假绿"
+    },
     {
       "click_npc": "merchant_actor",
       "note": "CM_CLICKNPC(1010)（src/OpenMir2/Messages.cs:62）；recog=商人 ActorId（由 param_discovery 从 643.recog 发现，不写死）。oracle：PlayObject Click -> normNpc.Click（src/M2Server/Npc/NormNpc.cs:67-73：清 ScriptGotoCount/ScriptGoBackLable/ScriptCurrLable 后 GotoLable(@main)）"
@@ -57,7 +95,7 @@
         ],
         "timeout_ms": 5000
       },
-      "note": "SM_DELITEMS(709)（Messages.cs:357；RM_SENDDELITEMLIST -> PlayObject.Base.cs:1636-1646，Series=条数、尾=EncodeString(\"名/makeindex/…\")）只在提交成功支出现（黑铁/首饰被吃时由 UpgradeWaponAddValue 组 delItemList，Merchant.cs:512-521）。累计口径 => 把「提交真的成功」钉死：夹具缺武器 / 金币 < 10000 / 背包无黑铁矿时本步必红，不会靠 643 假绿"
+      "note": "SM_DELITEMS(709)（Messages.cs:357；RM_SENDDELITEMLIST -> PlayObject.Base.cs:1636-1646，Series=条数、尾=EncodeString(\"名/makeindex/…\")）只在提交成功支出现（黑铁/首饰被吃时由 UpgradeWaponAddValue 组 delItemList，Merchant.cs:512-521）。累计口径 => 把「提交真的成功」钉死：夹具缺武器 / 金币 < 10000 / 背包无黑铁矿时本步必红，不会靠 643 假绿。2026-10-24 部署前置批次后：武器（steps[0..1] 上手）与黑铁（inventory #5003@41）已声明；金币（Gold ≥ UpgradeWeaponPrice=10000，Server.conf:333，基线 winplay0 Gold=100）暂无声明通道——characters.Gold 不在 placement（只写 MapName/CX/CY）与 inventory（只写 characters_bagitem）两通道内 => 金币夹具通道落地前本步在本部署预期超时（fail-closed 残留，卡 openmir2-window-deploy-prereq-batch1 交付注记）"
     },
     {
       "sleep": {

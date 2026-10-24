@@ -1,11 +1,21 @@
 {
   "name": "move_walk",
-  "description": "走到相邻格：CM_WALK(3011) 的 **X/Y 都打包在 recog**（`recog = (move_y<<16) | move_x`；服务端取 LoWord=X、HiWord=Y），`param` 服务端不读（恒 0） -> 等 SM_WALK(11)/SM_RUN(13)/SM_TURN(10)/SM_SYSMESSAGE(100)",
+  "description": "走到相邻格：CM_WALK(3011) 的 **X/Y 都打包在 recog**（`recog = (move_y<<16) | move_x`；服务端取 LoWord=X、HiWord=Y），`param` 服务端不读（恒 0） -> 等 SM_WALK(11)/SM_RUN(13)/SM_TURN(10)/SM_SYSMESSAGE(100)。run1 UNDECIDABLE 的根因是走位目标格与部署不符（参数发现正常 move_x=8，但该格不可走 => 无走路回声）；本版以 `placement` 钉死起点 (320,328)（盟重省，东侧 (321,328) 实测可走），`computed` 不变 => 目标格确定可走。",
   "required": [
     "move_x",
     "move_y",
     "move_xy"
   ],
+  "params": {
+    "self_x": 320,
+    "self_y": 328
+  },
+  "placement": {
+    "map": "3",
+    "x": 320,
+    "y": 328,
+    "note": "盟重省土城街区（与 pickup_item / upgrade_retrieve 同格）。走位终点 = computed(self_x+1, self_y) = (321,328)：3.map 两侧逐字节同源（sha256 5bb37afef0bb827e0ee47b71ed455d737ebd503917fabad4407d7361f0ca694f），(320,328)/(321,328) 两格 walkable（card_window.read_map_cell 口径 bk=671/0、fr=0，起栈前 placement 校验会重验起点格）；MapInfo.txt:705 [3 盟重省] 仅 DAY flag、无阻挡类 flag；守卫弓手 (325,311)/(336,321)/(339,313)（ViewRange=12）与本格 Chebyshev 17/16/19 在射程外；传送员(327,327)/足球(318,332)/铁匠(332,317) 在视距 12 内 => discovery(npc_click_auto) 有商人可点、能收 643。"
+  },
   "computed": {
     "move_x": {
       "derived_from": "self_x",
@@ -29,7 +39,7 @@
         "recog": "move_xy",
         "param": 0
       },
-      "note": "oracle：`src/GameSrv/Word/WorldServer.cs:831-851`（CM_WALK 与 CM_HIT 同 case 组）同样只读 `LoWord/HiWord(Recog)`，`Param` 不读；`src/M2Server/Player/PlayObject.Message.cs:1060` `ClientWalkXY(wIdent, nX=nParam1=LoWord(Recog), nY=nParam2=HiWord(Recog))`，目标格是绝对坐标。`move_x`/`move_y` 由场景 `computed`（self_x+1 / self_y+0）推导；`move_xy` 由 `computed.pack {lo: move_x, hi: move_y}` 算成 `(move_y<<16)|move_x`（卡 `openmir2-probe-computed-pack`），调用方无需手工打包。"
+      "note": "oracle：`src/GameSrv/Word/WorldServer.cs:831-851`（CM_WALK 与 CM_HIT 同 case 组）同样只读 `LoWord/HiWord(Recog)`，`Param` 不读；`src/M2Server/Player/PlayObject.Message.cs:1060` `ClientWalkXY(wIdent, nX=nParam1=LoWord(Recog), nY=nParam2=HiWord(Recog))`，目标格是绝对坐标。`move_x`/`move_y` 由场景 `computed`（self_x+1 / self_y+0）推导；`move_xy` 由 `computed.pack {lo: move_x, hi: move_y}` 算成 `(move_y<<16)|move_x`（卡 `openmir2-probe-computed-pack`），调用方无需手工打包。`params.self_x/self_y` 与 `placement` 由 probe R5 在加载期互证（321,328 终点可走性见 placement.note）。"
     },
     {
       "wait_for": [
@@ -39,7 +49,7 @@
         100
       ],
       "timeout_ms": 3000,
-      "note": "走成功看 SM_WALK；被挡则本节可能超时（fail-loud）"
+      "note": "走成功看 SM_WALK；被挡则本节可能超时（fail-loud）。run1 超时根因即终点格与部署不符，placement 后终点 (321,328) 实测可走"
     }
   ]
 }
