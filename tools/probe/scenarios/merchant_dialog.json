@@ -1,11 +1,31 @@
 {
   "name": "merchant_dialog",
-  "description": "点击商人/修理 NPC -> 等 SM_MERCHANTSAY(643) -> 选 @buy -> 等 SM_SENDGOODSLIST(645) 或 643/100",
+  "description": "点商人 -> 等 SM_MERCHANTSAY(643) @main -> 选 @buy -> 等 SM_SENDGOODSLIST(645)。run1 UNDECIDABLE 根因：discovery 在默认出生位只能点中赌场庄家（〖庄〗…@kaiz），其 @main 没有 @buy 链接 ⇒ dlg_select 零帧 ⇒ steps[3] 等 [645,643,100] 超时（window-run-1 §表 6 行）。本版以 placement 钉死铁器店 map 0103 (19,19)——「卫家店」(19,18) 的南邻格；map 0103 全图唯一 actor = 卫家店（Npcs.txt 无 0103 行、MonGen.txt 0103 零行、MerChant.txt:26 仅此一行，部署件两侧逐字节同源）⇒ discovery(npc_click_auto) 点出的 merchant_actor 必然是卫家店，假设逐条可离线机判。生产链：卫家店脚本头 (@buy @sell @repair @s_repair) ⇒ IsBuy=true（src/Modules/ScriptEngine/ScriptParsers.cs:713）；[@main] 的 check [105] 1 对新角色恒假 ⇒ #elsesay 分支同样含 <买/@buy> ⇒ CanJmp；CM_CLICKNPC 邻近门 Chebyshev<=15（src/M2Server/Player/PlayObject.Base.cs:674-698）相邻必过。dlg_select @buy（src/M2Server/Player/PlayObject.Operate.cs:114-128 ClientMerchantDlgSelect -> src/GameSrv/Npc/Merchant.cs:816-821）：先 GotoLable([@buy]) 回 643 面板、再 IsBuy => UserSelectBuyItem（Merchant.cs:961-991）=> RM_SENDGOODSLIST => SM_SENDGOODSLIST(645)（src/M2Server/Player/PlayObject.Message.cs:1809-1810；帧恒发，货架空也发：Recog=ActorId、Param=货物条数；Merchant.Run 每 30s RefillGoods 回货架，src/GameSrv/Npc/Merchant.cs:124-130）。硬门只认 645。",
   "required": ["merchant_actor"],
+  "placement": {
+    "map": "0103",
+    "x": 19,
+    "y": 19,
+    "note": "铁器店 map 0103（MapInfo.txt:293 [0103 铁器店] FIGHT，服务器号 0），目标商人「卫家店」在 (19,18)（MerChant.txt:26，GBK：`比奇城/卫家店 0103 19 18 卫家店 0 1 0`，脚本 Market_Def/比奇城/卫家店-0103.txt）。本格是其正南邻格。可机判依据：两侧 0103.map 逐字节同源，(19,19) walkable（card_window.read_map_cell 口径 bk=0/fr=3722，fr 无 bit15；起栈前 placement 校验会重验本格）；**全图唯一 actor**：Npcs.txt 无 0103 行（全部 4 行是国王 0122/沙巴克管理 0150/老人 3）、MonGen.txt 0103 零行（无刷怪箱）、MerChant.txt 0103 仅 :26 一行 ⇒ discovery 点出的 643.recog 必然是卫家店；卫家店周期性转身出 SM_TURN（Merchant.Run：Random(50)==0 => TurnTo，src/GameSrv/Npc/Merchant.cs:132-136）⇒ npc_click_auto 的 auto:last_turn 有帧可取。与 equip_struck_save 同格（那张用 CM_HIT 打它测武器磨损，本张纯点击对话，互不依赖）。"
+  },
   "steps": [
-    {"click_npc": "merchant_actor", "note": "recog=商人 ActorId"},
-    {"wait_for": 643, "timeout_ms": 3000, "note": "@main 的说词面板"},
-    {"dlg_select": "@buy", "note": "label 取自部署脚本 Market_Def（如 封魔谷/恶魔修理师-d2008.txt: <买/@buy>）"},
-    {"wait_for": [645, 643, 100], "timeout_ms": 3000, "note": "@buy 支回 SM_SENDGOODSLIST(645)"}
+    {
+      "click_npc": "merchant_actor",
+      "note": "recog=商人 ActorId（discovery 从 643.recog 推出；在 placement 单 actor 证明下必然是卫家店）。oracle：CM_CLICKNPC(1010) -> PlayObject.Message.cs:885-887 -> ClientClickNpc（PlayObject.Base.cs:674-698）：FindMerchant??FindNpc + 同图 + Chebyshev<=15 => NormNpc.Click（src/M2Server/Npc/NormNpc.cs:68-74，清 ScriptCurrLable/GoBack 后 GotoLable(@main)）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "@main 说词面板：GotoLableSendMerChantSayMsg（src/Modules/ScriptEngine/ScriptEngine.cs:987-993）=> SendMsgToUser（NormNpc.cs:1613-1616）RM_MERCHANTSAY => SM_MERCHANTSAY(643)，recog=发送者 ActorId（PlayObject.Message.cs:1723-1724）；check [105] 1 恒假走 #elsesay，两支都有 <买/@buy> => GetScriptLabel 把 @buy 放进 CanJmpScriptLableMap（src/M2Server/Player/PlayObject.Base.cs:2775-2811）。被拒/点错 actor 时零帧 => 响亮超时"
+    },
+    {
+      "dlg_select": "@buy",
+      "note": "菜单选择回包 = CM_MERCHANTDLGSELECT(1011)（src/OpenMir2/Messages.cs:63），recog 自动取最近一条 643。oracle：ClientMerchantDlgSelect（PlayObject.Operate.cs:114-128）同图+视距内 => Merchant.UserSelect（src/GameSrv/Npc/Merchant.cs:800-821）：CanJmp(@buy) 成立 => GotoLable([@buy]) 发 643 面板，再进 sBUY 分支"
+    },
+    {
+      "wait_for": 645,
+      "timeout_ms": 3000,
+      "note": "SM_SENDGOODSLIST(645)：sBUY 分支 IsBuy=true（脚本头 (@buy ...) => ScriptParsers.cs:713）=> UserSelectBuyItem（Merchant.cs:961-991）无条件发 RM_SENDGOODSLIST（nParam1=ActorId、nParam2=货物条数）=> PlayObject.Message.cs:1809-1810 => 645。旧版点庄家（无 @buy）在此恒超时；本版经 643 => @buy 两级同步后按生产链必达。货架空（冷启动 30s 内）也发本帧，只是 Param=0 => 判定不受货架预热影响"
+    }
   ]
 }

@@ -1,11 +1,33 @@
 {
   "name": "king_dialog",
-  "description": "点比奇国王 -> 等 SM_MERCHANTSAY(643) -> 选 @@buildguildnow -> 等 643/100",
-  "required": ["king_actor"],
+  "description": "点比奇国王 -> 等 SM_MERCHANTSAY(643) @main -> 选 @@buildguildnow -> 等 SM_BUILDGUILD_FAIL(763)。run1 UNDECIDABLE 根因（runbook §4.5 预言命中）：king_actor 是 rule 级部署假设，默认 discovery 在出生位点中的是赌场庄家，@@buildguildnow 只存在于比奇国王脚本 ⇒ 零帧 ⇒ steps[3] 等 [643,100] 超时。本版以 placement 钉死王宫 map 0122 (29,33)——国王 (29,32) 的南邻格；map 0122 全图唯一 actor = 国王（Npcs.txt:3 是唯一 0122 行、MerChant.txt 无 0122 行、MonGen.txt 0122 零行）⇒ discovery 点出的 king_actor 必然是国王，部署假设变成可离线机判。旧期望 [643,100] 是错的：@@buildguildnow 走 GuildOfficial 专支（Npcs.txt type=1 => LocalDB.cs:694 new GuildOfficial()），ReQuestBuildGuild 空行会名/金币不足/无沃玛号角都只发 RM_BUILDGUILD_FAIL => SM_BUILDGUILD_FAIL(763)，gm01（无行会、Gold 444993 < BuildGuild=1000000，Server.conf:303）失败码=-2；[@main] 里没有 [@@buildguildnow] 标签段 ⇒ GotoLable 零帧，643/100 都不该来。生产链与失败码逐条出处见各步 note。",
+  "required": [
+    "king_actor"
+  ],
+  "placement": {
+    "map": "0122",
+    "x": 29,
+    "y": 33,
+    "note": "比奇王宫 map 0122，目标「比奇国王」在 (29,32)（Npcs.txt:3，GBK：`比奇国王 1 0122 29 32 0 8`，type=1 => GuildOfficial，src/GameSrv/DB/LocalDB.cs:694）。本格是其正南邻格。可机判依据：两侧 0122.map 逐字节同源（51x55），(29,33) walkable（card_window.read_map_cell 口径 bk=0/fr=0；起栈前 placement 校验会重验本格）；**全图唯一 actor**：Npcs.txt 只有 :3 一行 0122、MerChant.txt 零行、MonGen.txt 0122 零行（无刷怪箱）⇒ discovery 点出的 643.recog 必然是国王；国王周期性转身出 SM_TURN（GuildOfficial.Run：Random(40)==0 => TurnTo，src/GameSrv/Npc/GuildOfficial.cs:36-47）⇒ npc_click_auto 的 auto:last_turn 有帧可取。与 npc_script_chain 同格（那张走多步脚本链，本张只验 @@buildguildnow 失败支，互不依赖）。"
+  },
   "steps": [
-    {"click_npc": "king_actor", "note": "recog=国王 ActorId"},
-    {"wait_for": 643, "timeout_ms": 3000, "note": "[@main] 说词面板（含 <请求创建行会./@@buildguildnow>）"},
-    {"dlg_select": "@@buildguildnow", "note": "label 逐字取自 Npc_Def/比奇国王-0122.txt；@@ 是 oracle 的双 @ 语义"},
-    {"wait_for": [643, 100], "timeout_ms": 3000}
+    {
+      "click_npc": "king_actor",
+      "note": "recog=国王 ActorId（discovery 从 643.recog 推出；在 placement 单 actor 证明下必然是国王）。oracle：CM_CLICKNPC(1010) -> PlayObject.Message.cs:885-887 -> ClientClickNpc（src/M2Server/Player/PlayObject.Base.cs:674-698）：FindMerchant??FindNpc + 同图 + Chebyshev<=15 => NormNpc.Click（src/M2Server/Npc/NormNpc.cs:68-74）"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "[@main] 说词面板：GotoLableSendMerChantSayMsg（src/Modules/ScriptEngine/ScriptEngine.cs:987-993）=> SM_MERCHANTSAY(643)，recog=国王 ActorId（PlayObject.Message.cs:1723-1724）。check [105] 1 对新角色恒假走 #elsesay，两支都有 <请求创建行会./@@buildguildnow> => GetScriptLabel 把 @@buildguildnow 放进 CanJmpScriptLableMap（src/M2Server/Player/PlayObject.Base.cs:2775-2811）"
+    },
+    {
+      "dlg_select": "@@buildguildnow",
+      "note": "菜单选择回包 = CM_MERCHANTDLGSELECT(1011)（src/OpenMir2/Messages.cs:63），recog 自动取最近一条 643。oracle：ClientMerchantDlgSelect（src/M2Server/Player/PlayObject.Operate.cs:114-128）=> GuildOfficial.UserSelect（src/GameSrv/Npc/GuildOfficial.cs:55-104）：CanJmp 成立 => GotoLable([@@buildguildnow])——脚本里没有该标签段 => 零帧；随后命中 sBUILDGUILDNOW='@@buildguildnow'（src/Modules/SystemModule/Const/ScriptFlagConst.cs:68）=> ReQuestBuildGuild（GuildOfficial.cs:112-172）"
+    },
+    {
+      "wait_for": 763,
+      "timeout_ms": 3000,
+      "note": "SM_BUILDGUILD_FAIL(763)（src/OpenMir2/Messages.cs:376）：ReQuestBuildGuild 空行会名 result=-4（:127-130）、无行会且 Gold<BuildGuildPrice result=-2（:131-143，部署 Server.conf:303 BuildGuild=1000000 > gm01 Gold 444993 => 命中 -2）、无沃玛号角 -3、已有行会 -1；result<0 => SendMsg(RM_BUILDGUILD_FAIL, 0, result, 0, 0)（:167-170）=> 泵 SendDefMessage(SM_BUILDGUILD_FAIL, nParam1=result)（src/M2Server/Player/PlayObject.Message.cs:1940-1942）=> **Recog=失败码、永不为 0**（成功支 RM_BUILDGUILD_OK=762 不可达）。旧期望 [643,100] 在此恒超时：643 只在点错 NPC/标签可跳时出现，100 无生产点。注意比较器 global 掩码默认掩 recog，窗口要比失败码需给 763 加 head_compare:[recog]（与 npc_script_chain docs §6 同注）"
+    }
   ]
 }
