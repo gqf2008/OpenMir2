@@ -131,39 +131,58 @@ if ($Plan) {
   Write-Host ("BUILD_STAMP " + $Stamp)
 }
 
-# ---- 同步 start-rust.ps1 的 -ServerExe 默认值 -----------------------------
+# ---- 同步 start-rust.ps1 的两个默认值 -------------------------------------
+#   -ServerExe : 本检出的 release 二进制（run-2 遗留 wt-worker-73 路径会 pid/exe 对账红）
+#   $starter   : 本检出的 tools/m2-acceptance/start_mir2_server.ps1（避免主检出旧启动器）
 $syncResult = 'skipped'
 if ($SyncStartRust) {
   if (-not (Test-Path -LiteralPath $StartRustScript -PathType Leaf)) {
     Fail ("-SyncStartRust 但找不到 " + $StartRustScript)
   }
   $text = [System.IO.File]::ReadAllText($StartRustScript)
-  $pattern = "(\[string\]\s*\`$\s*ServerExe\s*=\s*')([^']*)(')"
-  $hits = [regex]::Matches($text, $pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
-  if ($hits.Count -ne 1) {
-    Fail ("start-rust.ps1 里 `$ServerExe 默认值匹配 " + $hits.Count + " 处（应恰好 1 处），拒绝改写")
-  }
-  $current = $hits[0].Groups[2].Value
-  $want = $Exe
   $norm = { param($p) $p.Replace('/', '\').TrimEnd('\').ToLowerInvariant() }
-  if ((& $norm $current) -eq (& $norm $want)) {
+  $starterPath = Join-Path $RepoRoot 'tools\m2-acceptance\start_mir2_server.ps1'
+  $specs = @(
+    @{ Label='ServerExe'; Pattern="(\[string\]\s*\`$\s*ServerExe\s*=\s*')([^']*)(')"; Want=$Exe },
+    @{ Label='starter';   Pattern="(\`$starter\s*=\s*')([^']*)(')"; Want=$starterPath }
+  )
+  $changes = @()
+  foreach ($spec in $specs) {
+    $hits = [regex]::Matches($text, $spec.Pattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+    if ($hits.Count -ne 1) {
+      Fail ("start-rust.ps1 里 " + $spec.Label + " 匹配 " + $hits.Count + " 处（应恰好 1 处），拒绝改写")
+    }
+    $current = $hits[0].Groups[2].Value
+    if ((& $norm $current) -ne (& $norm $spec.Want)) {
+      $changes += ,@{ Label=$spec.Label; Pattern=$spec.Pattern; Want=$spec.Want; Current=$current }
+    }
+  }
+  if ($changes.Count -eq 0) {
     $syncResult = 'unchanged'
-    Write-Host ("START_RUST_SERVER_EXE unchanged (" + $current + ")")
+    Write-Host ("START_RUST_SERVER_EXE unchanged (" + $Exe + ")")
+    Write-Host ("START_RUST_STARTER unchanged (" + $starterPath + ")")
   } elseif ($Plan) {
     $syncResult = 'plan'
-    Write-Host ("PLAN: " + $StartRustScript + "  -ServerExe '" + $current + "' -> '" + $want + "'")
+    foreach ($c in $changes) {
+      Write-Host ("PLAN: " + $StartRustScript + "  " + $c.Label + " '" + $c.Current + "' -> '" + $c.Want + "'")
+    }
   } else {
     $bak = $StartRustScript + '.bak-' + (Get-Date).ToString('yyyyMMdd-HHmmss')
     Copy-Item -LiteralPath $StartRustScript -Destination $bak -Force
-    $replacement = [System.Text.RegularExpressions.MatchEvaluator]{
-      param($m)
-      $m.Groups[1].Value + $want + $m.Groups[3].Value
+    $new = $text
+    foreach ($c in $changes) {
+      $want = $c.Want
+      $replacement = [System.Text.RegularExpressions.MatchEvaluator]{
+        param($m)
+        $m.Groups[1].Value + $want + $m.Groups[3].Value
+      }
+      $new = [regex]::Replace($new, $c.Pattern, $replacement, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+      Write-Host ("START_RUST_" + $c.Label.ToUpperInvariant() + " updated (" + $c.Current + " -> " + $c.Want + ")")
     }
-    $new = [regex]::Replace($text, $pattern, $replacement, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
     $utf8n = New-Object System.Text.UTF8Encoding($false)
     [System.IO.File]::WriteAllText($StartRustScript, $new, $utf8n)
     $syncResult = 'updated'
-    Write-Host ("START_RUST_SERVER_EXE updated (" + $current + " -> " + $want + ")，备份：" + $bak)
+    Write-Host ("备份：" + $bak)
   }
 } else {
   Write-Host "START_RUST_SERVER_EXE skipped（未给 -SyncStartRust）"

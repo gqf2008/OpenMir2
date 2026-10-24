@@ -471,13 +471,13 @@ def check_start_rust(path, exe, repo=None):
         return FAIL, "start-rust.ps1 -ServerExe=%r ≠ 本检出 release %r" % (raw, exe), \
             "powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/rebuild-server.ps1 -SyncStartRust"
     if inner:
+        want = os.path.join(repo, "tools", "m2-acceptance", "start_mir2_server.ps1")
         if not os.path.isfile(inner):
             return WARN, "-ServerExe 已对齐；但 $starter 不存在：%s" % inner, \
                 "确认 start_mir2_server.ps1 路径（私栈模板从主检出复制）"
-        want = os.path.join(repo, "tools", "m2-acceptance", "start_mir2_server.ps1")
-        if norm_path(inner) != norm_path(want):
-            return WARN, "-ServerExe 已对齐；$starter 指向其它检出：%s" % inner, \
-                "建议改成本检出路径，避免用旧启动器解释新二进制"
+        if norm_path(inner) != norm_path(want) and sha256_file(inner) != sha256_file(want):
+            return WARN, "-ServerExe 已对齐；$starter 指向其它检出且内容不同：%s" % inner, \
+                "powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/rebuild-server.ps1 -SyncStartRust"
     return OK, "-ServerExe 已对齐：%s" % exe, None
 
 
