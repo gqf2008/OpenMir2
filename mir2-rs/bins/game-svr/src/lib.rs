@@ -5617,23 +5617,30 @@ fn handle_shop_cmd(
                     let _ = tx.send(SimToGate::SendFrame { socket, body });
                 }
             }
-            emit_merchant_goto_result(
-                "CM_MERCHANTDLGSELECT",
-                label,
-                chr_name,
-                merchant_id,
-                &says,
-                &script_frames,
-                &script_broadcasts,
-                session,
-                sg,
-                &*world,
-                online,
-                gates,
-                gate_idx,
-                socket,
-                npc_vars,
-            );
+            // **T-142 ⑩（@back 合并排水）**：`@back` 在 oracle 里是**同一个 handler 内两次
+            // `GotoLable`**，所有 `SendMsg` 进同一个 `MsgQueue`、handler 末尾才按 `(byte)wIdent`
+            // 出队 ⇒ 第一轮的说词必须与第二轮的说词一起排在脚本帧之前。这里把 `@back` 的
+            // 第一次输出延后到第二次之后合并排水；其余 label 仍即时排水（行为不变）。
+            let is_back = game_svr::shop::eq_label(label, "@back");
+            if !is_back {
+                emit_merchant_goto_result(
+                    "CM_MERCHANTDLGSELECT",
+                    label,
+                    chr_name,
+                    merchant_id,
+                    &says,
+                    &script_frames,
+                    &script_broadcasts,
+                    session,
+                    sg,
+                    &*world,
+                    online,
+                    gates,
+                    gate_idx,
+                    socket,
+                    npc_vars,
+                );
+            }
             if !bo_can_jmp {
                 glog!(
                     "DBG",
@@ -5650,8 +5657,8 @@ fn handle_shop_cmd(
                 };
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
-                let mut script_broadcasts: Vec<String> = Vec::new();
-                let (says, script_frames, use_slots) = run_merchant_goto(
+                let mut script_broadcasts2: Vec<String> = Vec::new();
+                let (says2, script_frames2, use_slots2) = run_merchant_goto(
                     merchant_book,
                     merchant_id,
                     &target,
@@ -5670,10 +5677,10 @@ fn handle_shop_cmd(
                     // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图（`world` 只读借一次）。
                     Some(&*world),
                     gm,
-                    &mut script_broadcasts,
+                    &mut script_broadcasts2,
                 );
                 world.rng = rng;
-                for slot in use_slots {
+                for slot in use_slots2 {
                     sync_use_item_slot_to_entity(world, sg, slot);
                 }
 
@@ -5687,33 +5694,32 @@ fn handle_shop_cmd(
                         let _ = tx.send(SimToGate::SendFrame { socket, body });
                     }
                 }
-                for say in &says {
-                    session.can_jmp_labels = game_svr::shop::get_script_label(&say.raw_msg);
-                }
-                if !says.is_empty() {
-                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "商人 @back 说词")
-                    {
-                        emit_npc_says(tx, socket, actor_id, &says);
-                    }
-                }
-                // 卡 `openmir2-script-sendmsg-host`：脚本帧 + `SENDMSG 0-4` 的世界侧扇出。
-                if !script_frames.is_empty() || !script_broadcasts.is_empty() {
-                    let tx = route_to_gate(gates, gate_idx, socket, "商人 @back 脚本帧");
-                    drain_script_frames_with_host(
-                        tx,
-                        socket,
-                        merchant_id,
-                        sg,
-                        &script_frames,
-                        &script_broadcasts,
-                        &*world,
-                        online,
-                        gates,
-                        sg.actor_id,
-                        Some(merchant_id),
-                        npc_vars.sys_msg.red,
-                    );
-                }
+                // **T-142 ⑩**：两轮 `GotoLable` 的输出合并成**一次** handler 级排水
+                //（说词按出现序全部先于脚本帧；帧内部由 `emit_script_frames` 的
+                // `NetPriorityQueue` 按 `(byte)wIdent` 出队）。第一轮输出未提前发。
+                let mut back_says = says;
+                back_says.extend(says2);
+                let mut back_frames = script_frames;
+                back_frames.extend(script_frames2);
+                let mut back_broadcasts = script_broadcasts;
+                back_broadcasts.extend(script_broadcasts2);
+                emit_merchant_goto_result(
+                    "CM_MERCHANTDLGSELECT/@back",
+                    label,
+                    chr_name,
+                    merchant_id,
+                    &back_says,
+                    &back_frames,
+                    &back_broadcasts,
+                    session,
+                    sg,
+                    &*world,
+                    online,
+                    gates,
+                    gate_idx,
+                    socket,
+                    npc_vars,
+                );
             }
             if is_fixed_npc {
                 // `Merchant.UserSelect`（`Merchant.cs:805-940`）的其余分支：全部以 `Is* == false`
@@ -6687,6 +6693,8 @@ fn write_back_player_gold_deal(
     sell_off.sale_deal = p.sale_deal;
     session.play_dice_label = p.play_dice_label.clone();
     sg.game_gold = p.game_gold;
+    // `GAMEPOINT` 动作（`ExecutionProcessingSys.cs:3095-3122`）写同一个 `PlayObject.GamePoint`。
+    sg.game_point = p.game_point;
     // `GotoLableTakeItem`/`GotoLableGiveItem` 的金币支（`ScriptEngine.cs:657-660/694-697`）走
     // `DecGold`/`IncGold`，改的是同一个 `PlayObject.Gold`（`MakeSaveRcd` 读它落库）；本仓
     // `NpcPlayer.gold` 是快照 ⇒ 与 `GameGold` 同一位置回写（`take 金币` / `GIVE 金币`）。
@@ -8695,6 +8703,8 @@ fn build_save_record(
     }
     rec.data.gold = sg.state.gold;
     rec.data.game_gold = sg.game_gold;
+    // `WorldServer.cs:1293`：`playerInfo.GamePoint = playObject.GamePoint`（`$GAMEPOINT` 落库）。
+    rec.data.game_point = sg.game_point;
     // `MakeSaveRcd` `:1285`：`playerInfo.BonusPoint = playObject.BonusPoint`（唯一写点=CM_ADJUST_BONUS）。
     rec.data.bonus_point = sg.bonus_point;
     // `MakeSaveRcd` `:1236`：`playerInfo.ServerIndex = M2Share.ServerIndex`。
@@ -69364,6 +69374,184 @@ GMEXECUTE 禁言 self 20
             "触发者网关线缺席时，other 仍须收到 `@StdModeFunc14` 的 `SENDMSG 0`"
         );
     }
+    /// **T-142 ⑨（R）**：`GAMEPOINT` 动作必须写回会话（`NpcPlayer::set_game_point` +
+    /// `write_back_player_gold_deal`）并落存档（`WorldServer.cs:1293`
+    /// `playerInfo.GamePoint = playObject.GamePoint`），且变更时排 `RM_GAMEGOLDCHANGED`
+    /// （`BaseObject.cs:593-599`）⇒ `SM_GAMEGOLDNAME(5008)` 的 Param/Tag = Lo/Hi(GamePoint)。
+    ///
+    /// oracle：`ExecutionProcessingSys.cs:3095-3122`（`GamePoint - n` 钳 0；old != new 才
+    /// `GameGoldChanged()`）。
+    #[test]
+    fn t142_game_point_action_writes_back_save_and_emits_5008() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![t142_act(217, "-", 0, "3")],
+        )]);
+        assert_eq!(rig.sessions["hero"].game_point, 0x0001_0002);
+        rig.dlg_select("@main");
+        let frames = rig.drain();
+        // 0x0001_0002 - 3 = 0x0000_FFFF。
+        assert_eq!(
+            rig.sessions["hero"].game_point, 0x0000_FFFF,
+            "GAMEPOINT - 3 必须写回 SessionGround（旧 trait 默认 no-op ⇒ 恒登录值）"
+        );
+        let f = frames
+            .iter()
+            .find(|b| hdr(b).0 == mir2_protocol::messages::SM_GAMEGOLDNAME)
+            .expect("GamePoint 变更必须排 SM_GAMEGOLDNAME(5008)");
+        let (_, param, tag, _) = hdr(f);
+        assert_eq!(
+            (param, tag),
+            (0xFFFF, 0),
+            "5008 Param/Tag = Lo/Hi(GamePoint)"
+        );
+        let saved = SavedHuman {
+            account: "ua".to_string(),
+            record: Default::default(),
+            enter_map: "0".to_string(),
+        };
+        let rec = build_save_record(&saved, "hero", &rig.world, &rig.sessions["hero"], None);
+        assert_eq!(
+            rec.data.game_point, 0x0000_FFFF,
+            "存档记录必须带 GamePoint（WorldServer.cs:1293）"
+        );
+    }
+
+    /// **T-142 ⑩（R，可观测子集）**：`@back` 在 oracle 里是**同一个 handler 内两次
+    /// `GotoLable`**，所有 `SendMsg` 进同一个 `MsgQueue`，handler 末尾按 `(byte)wIdent`
+    /// 一次出队（`BaseObject.Message.cs:181/334`）⇒ 两轮说词（优先级 1）都必须先于
+    /// 两轮 `RM_GAMEGOLDCHANGED`（148）。旧实现每轮各自排水 ⇒ 首轮 5008 插在第二轮说词之前。
+    ///
+    /// 牙：把 `@back` 的第一次输出改回即时排水 ⇒ 断言红（首轮 5008 出现在第二条 643 之前）。
+    #[test]
+    fn t142_back_merges_two_goto_batches_into_one_handler_drain() {
+        let mut rig = T142Rig::new(vec![
+            t142_record("@back", "back-say", vec![t142_act(191, "+", 0, "1")]),
+            t142_record("@main", "main-say", vec![t142_act(191, "+", 0, "1")]),
+        ]);
+        {
+            let session = rig.shop_sessions.entry("hero".to_string()).or_default();
+            session.can_jmp_labels = vec!["@back".to_string()];
+            session.script_curr_lable = "@back".to_string();
+            session.script_go_back_lable = "@main".to_string();
+        }
+        rig.dlg_select("@back");
+        let frames = rig.drain();
+        let idents: Vec<u16> = frames.iter().map(|b| hdr(b).0).collect();
+        let say_positions: Vec<usize> = idents
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| **id == mir2_protocol::messages::SM_MERCHANTSAY)
+            .map(|(i, _)| i)
+            .collect();
+        let gold_positions: Vec<usize> = idents
+            .iter()
+            .enumerate()
+            .filter(|(_, id)| **id == mir2_protocol::messages::SM_GAMEGOLDNAME)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(say_positions.len(), 2, "两轮说词各一条：{idents:?}");
+        assert_eq!(gold_positions.len(), 2, "两轮 GAMEGOLD 各一帧：{idents:?}");
+        assert!(
+            say_positions[1] < gold_positions[0],
+            "两轮说词（优先级 1）必须先于两轮 5008（148）；实际 {idents:?}"
+        );
+    }
+
+    /// **T-142 ⑪**：`lable_is_can_jmp` 只允许**一份实现**（引擎），宿主 `shop` 只 re-export。
+    /// 源码序门：`shop.rs` 不得再出现 `pub fn lable_is_can_jmp`；引擎恰好一份。
+    #[test]
+    fn t142_lable_is_can_jmp_has_single_definition() {
+        let shop = include_str!("shop.rs");
+        assert!(
+            !shop.contains("pub fn lable_is_can_jmp"),
+            "shop.rs 不得再有第二份 lable_is_can_jmp 实现（T-142 ⑪）"
+        );
+        let engine = include_str!("../../../crates/script/src/engine/mod.rs");
+        assert_eq!(
+            engine.matches("pub fn lable_is_can_jmp").count(),
+            1,
+            "引擎必须恰好一份 lable_is_can_jmp 实现"
+        );
+    }
+}
+
+#[cfg(test)]
+mod castle_shift_order_tests {
+    //! 车道 castlewar：进图改写必须发生在 `Random(6)` 移位环之前（生产 `mapwire::shift_enter_position`）。
+    use crate::mapwire;
+    use mir2_shared::rng::RandomNumber;
+    use mir2_world::castle::{CastleSiegeConfig, EnterRelocateInput, UserCastle};
+    use mir2_world::map::CellAttribute;
+
+    /// 期望（独立复算 seed=20261021）：`Random(5)` 前两抽 = [4,2] ⇒ 非成员落点 (646,290)；
+    /// 随后 `Random(6)`（第 3 抽起）= [0,1,1,2,0,3,3,0,5,1] ⇒ (643,288)→(641,287)→(638,287)
+    /// →(638,284)→(640,282)（第 5 轮命中 Walk）。第 13 抽 = 5。
+    ///
+    /// 牙：把城堡改写挪到移位环之后 ⇒ 起点 (644,290) 的路径不命中、轮数/坐标/后续抽数红。
+    #[test]
+    fn relocation_precedes_shift_ring_and_consumes_rng_ledger() {
+        const SEED: i32 = 20261021;
+        let mut world = mir2_world::World::with_maps(vec![(800, 400)]);
+        {
+            let (w, h) = {
+                let m = &world.maps[0];
+                (m.width, m.height)
+            };
+            let mut attrs = vec![CellAttribute::HighWall; (w * h) as usize];
+            attrs[(640 * h + 282) as usize] = CellAttribute::Walk;
+            assert_eq!(world.maps[0].set_cell_attributes(&attrs), (w * h) as usize);
+        }
+        world.rng = RandomNumber::with_seed(SEED);
+        let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        castle.map_name = Some("3".to_string());
+        castle.home_map = "3".to_string();
+        castle.palace_map_id = Some(1);
+        castle.home_x = 644;
+        castle.home_y = 290;
+        castle.war_range_x = 100;
+        castle.war_range_y = 100;
+
+        let reloc = mir2_world::castle::relocate_on_enter(
+            &EnterRelocateInput {
+                castle: Some(&castle),
+                map_id: 1,
+                x: 644,
+                y: 290,
+                my_guild_name: None,
+                home_map: "0",
+                home_x: 644,
+                home_y: 290,
+            },
+            &mut world.rng,
+        )
+        .expect("非成员进皇宫改写");
+        assert_eq!((reloc.x, reloc.y), (646, 290), "R5=[4,2]");
+
+        let shift = mapwire::shift_enter_position(
+            &mut world,
+            mapwire::EnterTarget {
+                map_name: "0",
+                map_id: 0,
+                x: i32::from(reloc.x),
+                y: i32::from(reloc.y),
+            },
+            mapwire::HomePoint {
+                map_name: "3",
+                map_id: Some(0),
+                x: 644,
+                y: 290,
+            },
+        );
+        assert_eq!(shift.attempts, 5, "R6 第 5 轮命中 Walk");
+        assert_eq!((shift.x, shift.y), (640, 282));
+        assert_eq!(
+            world.rng.random_below(6),
+            5,
+            "第 13 抽 = R6[12] = 5（恰 12 抽）"
+        );
+    }
 }
 
 /// **C9 `castle_spawn_startup_order_before_merchant`**（L 子项）：启动插入点的**源码序门**。
@@ -69942,83 +70130,6 @@ mod castle_frame_tests {
         assert_eq!(
             u16::from_le_bytes([frames[1][4], frames[1][5]]),
             mir2_protocol::messages::SM_FEATURECHANGED
-        );
-    }
-}
-
-#[cfg(test)]
-mod castle_shift_order_tests {
-    //! 车道 castlewar：进图改写必须发生在 `Random(6)` 移位环之前（生产 `mapwire::shift_enter_position`）。
-    use crate::mapwire;
-    use mir2_shared::rng::RandomNumber;
-    use mir2_world::castle::{CastleSiegeConfig, EnterRelocateInput, UserCastle};
-    use mir2_world::map::CellAttribute;
-
-    /// 期望（独立复算 seed=20261021）：`Random(5)` 前两抽 = [4,2] ⇒ 非成员落点 (646,290)；
-    /// 随后 `Random(6)`（第 3 抽起）= [0,1,1,2,0,3,3,0,5,1] ⇒ (643,288)→(641,287)→(638,287)
-    /// →(638,284)→(640,282)（第 5 轮命中 Walk）。第 13 抽 = 5。
-    ///
-    /// 牙：把城堡改写挪到移位环之后 ⇒ 起点 (644,290) 的路径不命中、轮数/坐标/后续抽数红。
-    #[test]
-    fn relocation_precedes_shift_ring_and_consumes_rng_ledger() {
-        const SEED: i32 = 20261021;
-        let mut world = mir2_world::World::with_maps(vec![(800, 400)]);
-        {
-            let (w, h) = {
-                let m = &world.maps[0];
-                (m.width, m.height)
-            };
-            let mut attrs = vec![CellAttribute::HighWall; (w * h) as usize];
-            attrs[(640 * h + 282) as usize] = CellAttribute::Walk;
-            assert_eq!(world.maps[0].set_cell_attributes(&attrs), (w * h) as usize);
-        }
-        world.rng = RandomNumber::with_seed(SEED);
-        let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
-        castle.map_name = Some("3".to_string());
-        castle.home_map = "3".to_string();
-        castle.palace_map_id = Some(1);
-        castle.home_x = 644;
-        castle.home_y = 290;
-        castle.war_range_x = 100;
-        castle.war_range_y = 100;
-
-        let reloc = mir2_world::castle::relocate_on_enter(
-            &EnterRelocateInput {
-                castle: Some(&castle),
-                map_id: 1,
-                x: 644,
-                y: 290,
-                my_guild_name: None,
-                home_map: "0",
-                home_x: 644,
-                home_y: 290,
-            },
-            &mut world.rng,
-        )
-        .expect("非成员进皇宫改写");
-        assert_eq!((reloc.x, reloc.y), (646, 290), "R5=[4,2]");
-
-        let shift = mapwire::shift_enter_position(
-            &mut world,
-            mapwire::EnterTarget {
-                map_name: "0",
-                map_id: 0,
-                x: i32::from(reloc.x),
-                y: i32::from(reloc.y),
-            },
-            mapwire::HomePoint {
-                map_name: "3",
-                map_id: Some(0),
-                x: 644,
-                y: 290,
-            },
-        );
-        assert_eq!(shift.attempts, 5, "R6 第 5 轮命中 Walk");
-        assert_eq!((shift.x, shift.y), (640, 282));
-        assert_eq!(
-            world.rng.random_below(6),
-            5,
-            "第 13 抽 = R6[12] = 5（恰 12 抽）"
         );
     }
 }

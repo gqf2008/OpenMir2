@@ -855,8 +855,8 @@ where
 /// `sData` 以 `@` 开头后进入本判定，生产上 `label` 非空。
 #[must_use]
 pub fn lable_is_can_jmp(
-    player: &mut dyn ScriptPlayer,
     can_jmp_labels: &[String],
+    play_dice_label: &mut Option<String>,
     label: &str,
 ) -> bool {
     if label.eq_ignore_ascii_case("@main") {
@@ -865,9 +865,9 @@ pub fn lable_is_can_jmp(
     if can_jmp_labels.iter().any(|l| l.eq_ignore_ascii_case(label)) {
         return true;
     }
-    if let Some(dice_label) = player.play_dice_label() {
-        if label.eq_ignore_ascii_case(&dice_label) {
-            player.set_play_dice_label("");
+    if let Some(dice_label) = play_dice_label.as_deref() {
+        if label.eq_ignore_ascii_case(dice_label) {
+            *play_dice_label = Some(String::new());
             return true;
         }
     }
@@ -1616,8 +1616,8 @@ mod default_hooks_tests {
         // C# `PlayDiceLabel` 未初始化 = null；`string.Compare("", null, OrdinalIgnoreCase)`
         // 返回 1（任何非 null 串都大于 null）⇒ 第三支**不**命中。
         // `None` 与 `Some("")` 不等价（后者见 `engine_tests` 的显式覆盖）。
-        let mut p = NoopPlayer;
-        assert!(!lable_is_can_jmp(&mut p, &[], ""));
+        let mut none: Option<String> = None;
+        assert!(!lable_is_can_jmp(&[], &mut none, ""));
     }
 }
 

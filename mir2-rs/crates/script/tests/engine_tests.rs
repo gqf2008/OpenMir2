@@ -1982,25 +1982,37 @@ fn lable_is_can_jmp_three_branches_and_play_dice_is_one_shot() {
     let table = vec!["@Table".to_string()];
     // 第一支：@main 恒可跳（大小写不敏感），且**不消费** PlayDiceLabel。
     player.play_dice_label = Some("@main".into());
-    assert!(lable_is_can_jmp(&mut player, &[], "@MAIN"));
+    assert!(lable_is_can_jmp(&[], &mut player.play_dice_label, "@MAIN"));
     assert_eq!(
         player.play_dice_label.as_deref(),
         Some("@main"),
         "@main 先命中，不消费骰标"
     );
     // 第二支：CanJmpScriptLableMap 命中（OrdinalIgnoreCase）。
-    assert!(lable_is_can_jmp(&mut player, &table, "@table"));
+    assert!(lable_is_can_jmp(
+        &table,
+        &mut player.play_dice_label,
+        "@table"
+    ));
     // 第三支：PlayDiceLabel 命中 ⇒ **一次性**（命中即 `string.Empty`）。
     player.play_dice_label = Some("@dice".into());
-    assert!(lable_is_can_jmp(&mut player, &table, "@DICE"));
+    assert!(lable_is_can_jmp(
+        &table,
+        &mut player.play_dice_label,
+        "@DICE"
+    ));
     assert_eq!(player.play_dice_label.as_deref(), Some(""));
     assert!(
-        !lable_is_can_jmp(&mut player, &table, "@dice"),
+        !lable_is_can_jmp(&table, &mut player.play_dice_label, "@dice"),
         "第二次不可跳"
     );
     // 三支都不命中 ⇒ false，且不清空骰标。
     player.play_dice_label = Some("@dice".into());
-    assert!(!lable_is_can_jmp(&mut player, &table, "@other"));
+    assert!(!lable_is_can_jmp(
+        &table,
+        &mut player.play_dice_label,
+        "@other"
+    ));
     assert_eq!(player.play_dice_label.as_deref(), Some("@dice"));
 }
 
@@ -2011,14 +2023,14 @@ fn lable_is_can_jmp_none_and_some_empty_are_not_equivalent() {
     let mut player = MockPlayer::new();
     assert_eq!(player.play_dice_label, None);
     assert!(
-        !lable_is_can_jmp(&mut player, &[], ""),
+        !lable_is_can_jmp(&[], &mut player.play_dice_label, ""),
         "None 与空 label 不等价"
     );
     assert_eq!(player.play_dice_label, None, "未命中不消费");
     player.set_play_dice_label("");
     assert_eq!(player.play_dice_label.as_deref(), Some(""));
     assert!(
-        lable_is_can_jmp(&mut player, &[], ""),
+        lable_is_can_jmp(&[], &mut player.play_dice_label, ""),
         "Some(\"\") 与空 label 等价"
     );
     assert_eq!(
@@ -2034,9 +2046,15 @@ fn action_of_play_dice_label_is_consumed_once_by_jmp_gate() {
     let errors = run_act(&mut npc, &mut player, act(42, "", "@dice", 3, 0));
     assert!(errors.is_empty(), "{errors:?}");
     assert_eq!(player.play_dice_label.as_deref(), Some("@dice"));
-    assert!(lable_is_can_jmp(&mut player, &[], "@dice"), "第一次可跳");
+    assert!(
+        lable_is_can_jmp(&[], &mut player.play_dice_label, "@dice"),
+        "第一次可跳"
+    );
     assert_eq!(player.play_dice_label.as_deref(), Some(""));
-    assert!(!lable_is_can_jmp(&mut player, &[], "@dice"), "第二次不可跳");
+    assert!(
+        !lable_is_can_jmp(&[], &mut player.play_dice_label, "@dice"),
+        "第二次不可跳"
+    );
 }
 
 #[test]
