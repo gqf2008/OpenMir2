@@ -1,6 +1,6 @@
 # 需要 owner 决策/授权的事项（2026-10-24 刷新）
 
-> **快照戳**：`master = 55a8e7fca`（2026-10-24，返工 v2；此前两版分别基于 `8dcb8c8ca` / `7bb48239a`）。本文件取代 `docs/needs-human-20261023-night.md`
+> **快照戳**：`master = 917376a45` @ 2026-10-24 11:16:55 +0800（旧：`master = 55a8e7fca`；本版 v3，卡 `openmir2-needs-human-refresh`；此前三版分别基于 `55a8e7fca` / `8dcb8c8ca` / `7bb48239a`）。本文件取代 `docs/needs-human-20261023-night.md`
 > （后者保留为只读历史；里面多条结论已过期，见各节「旧结论订正」）。
 > 所有数字都可用节内命令现算；引用别处数字的均标了来源。**本文件只列循环内无权自决的事**。
 > 判级口径按 AGENTS.md「判据分级」；本卡为文档类改动，`tier=L`。
@@ -9,18 +9,18 @@
 
 | # | 一句话 | 预计成本 | 不做的后果 |
 |---:|---|---|---|
-| 1 | **窗口授权**：批一轮真机窗口（或指定车道去跑），先跑 60 秒 `preflight`，再按 §1.2 逐场景跑 | 一轮 ≈ 240 GB 磁盘写入 + 数十分钟（`docs/window-runbook-20261023.md:42`）；前置见 §1 | 条件② 的 **123** 张 `window_required`（其中未合并 2）证据永远拿不到；`merged 未 closed` 的 **172** 张只能继续「登记型 PASS」挂着 |
-| 2 | **`rules.json` 裁定**：PENDING 总数 **50**（`global` **4** + rules 数组 **45** + `db` **1**）。分类（rules 数组 **42** 时快照）：**44** 可批 / **3** 需返工或 owner 明确裁定；另 **3** 条（`53/638/639`，`89a3d02fd`）**未归类**，待 owner 一并裁定（旧文档的 33/10 已不成立） | 1 次评审 + 1 个提交（含 53/638/639 的归类裁定）；全批要同步改 **22 条** selftest 断言（否则 240/262 红），只解 ident 14 只需改 **1 条**（261/262） | 每轮窗口报告都带 `rules_pending_review=true`，不能当 R 级已复核证据；两侧一旦出现 `SM_HIT(14)` 整轮判 `UNDECIDABLE(rc=2)` |
-| 3 | **`T-161..T-222` 复核口径**：58 行里只有 2 行有可核的非作者 approve | 一句话定口径（§4 给 3 个选项）；逐号复核则至少看 5 个文件 + 8 张卡 | 条件② 的 whitelist 支永远停在「待复核」；`goal_gate` 卫生清单只能按「有登记」记账，不能按「已复核」 |
-| 4 | **三张卡的替代判据**：`run-gap-checkdupobj` / `disappear-recipients-gridscan` / `enter-map-cell-rejected-vs-oracle` 各等一句话 | 每张 1 句话（§3 给了每张的两个选项） | 三张永久挂 `in-progress`，`goal_gate` 的「需人工 10 张」常驻 |
-| 5 | **私有 C# 栈去留**：`E:/tmp/conformance/csharp-root` 是否长期保留（低优先级） | 保留=0；归档/退役需先安排重建 | 不表态=默认保留，占 `E:/tmp/conformance` 共 **699 MB** |
+| 1 | **窗口授权**：批一轮真机窗口（或指定车道去跑），先跑 60 秒 `preflight`，再按 §1.2 逐场景跑 | 一轮 ≈ 240 GB 磁盘写入 + 数十分钟（`docs/window-runbook-20261023.md:42`）；前置见 §1 | 条件② 的 **133** 张 `window_required`（131 已合并 + 2 未合并；旧：123）证据永远拿不到；`merged 未 closed` 的 **180** 张只能继续「登记型 PASS」挂着（旧：172；本版实测 @ `917376a45`，2026-10-24 订正） |
+| 2 | **`rules.json` 裁定**：PENDING 总数 **50**（`global` **4** + rules 数组 **45** + `db` **1**）。分类（rules 数组 **42** 时快照）：**44** 可批 / **3** 需返工或 owner 明确裁定；另 **3** 条（`53/638/639`，`89a3d02fd`）**未归类**，待 owner 一并裁定（旧文档的 33/10 已不成立；本版复核 @ `917376a45`：PENDING 50/50、`sha256=4bfde363…` 未变） | 1 次评审 + 1 个提交（含 53/638/639 的归类裁定）；全批要同步改 **22 条** selftest 断言（否则 240/262 红），只解 ident 14 只需改 **1 条**（261/262） | 每轮窗口报告都带 `rules_pending_review=true`，不能当 R 级已复核证据；两侧一旦出现 `SM_HIT(14)` 整轮判 `UNDECIDABLE(rc=2)` |
+| 3 | **`T-161..T-222` 复核口径**：58 行里只有 2 行有可核的非作者 approve（本版复核 @ `917376a45`：rows=58、approve=2 未变） | 一句话定口径（§4 给 3 个选项）；逐号复核则至少看 5 个文件 + 8 张卡 | 条件② 的 whitelist 支永远停在「待复核」；`goal_gate` 卫生清单只能按「有登记」记账，不能按「已复核」 |
+| 4 | **三张卡的替代判据**：`run-gap-checkdupobj` / `disappear-recipients-gridscan` / `enter-map-cell-rejected-vs-oracle` 各等一句话 | 每张 1 句话（§3 给了每张的两个选项） | 三张永久挂 `in-progress`，`goal_gate` 的「需人工 5 张」常驻（旧：10；本版实测 @ `917376a45`） |
+| 5 | **私有 C# 栈去留**：`E:/tmp/conformance/csharp-root` 是否长期保留（低优先级） | 保留=0；归档/退役需先安排重建 | 不表态=默认保留，占 `E:/tmp/conformance` 共 **699 MB**（本版复核 @ `917376a45`：仍 699 MB） |
 
-**从 owner 清单里可以关闭的两条**（详见 §5）：`@upgradenow/@getbackupgnow` 已实现（`35c039c8d`）；
-`DoDamageWeapon/642` 已合入 master `8dcb8c8ca`（复审 `dbcf22f8e`，R 卡窗口未跑）——两者都**不再需要 owner 一句话**。
+**从 owner 清单里可以关闭的两条**（详见 §5；本版复核 @ `917376a45`：两条仍成立，旧值不变）：`@upgradenow/@getbackupgnow` 已实现（`35c039c8d`）；
+`DoDamageWeapon/642` 已合入 master `8dcb8c8ca`（复审 `dbcf22f8e`，R 卡窗口未跑）——两者都**不再需要 owner 一句话**（两提交仍均为 master 祖先；两卡 `openmir2-upgrade-npc` / `openmir2-attack-weapon-wear-642` 仍为 in-progress R 卡，窗口未跑）。
 
 > 另有一条**不是 owner 的事**：`openmir2-ability-weaponstrong` 已随 `d38acf25b` 合入 master（tier=R），
 > `goal_gate` 里现为 `state=pass / category=window_required / merged=true`（不是 FAIL，也不再是
-> `window_required_unmerged`）；该卡按 R 级规则保持 `in-progress` 等真机窗口，归入 §1 的窗口排期。
+> `window_required_unmerged`）；该卡按 R 级规则保持 `in-progress` 等真机窗口，归入 §1 的窗口排期（本版复核 @ `917376a45`：此分类未变）。
 
 ---
 
@@ -28,18 +28,21 @@
 
 ### 现状
 
+> **取数时点**：2026-10-24 **11:16:55 +08**（master=917376a45）；命令 `python -I tools/goal/goal_gate.py --json --skip-tests --skip-script`。
+
 - 循环硬约束是「不起服务端、不占端口」，窗口只能由被授权的人/车道跑。
-- **条件② 当前是 `need_human`，FAIL 卡 0，三者皆无 0**（本卡在 master `55a8e7fca` 实跑，原文见 §1.5）。
+- **条件② 本版仍是 `need_human`，FAIL 卡 0，三者皆无 0**（本版在 master `917376a45` 实跑，原文见 §1.5；旧快照见本节末历史留存）。
   `openmir2-ability-weaponstrong` 现为 `state=pass / category=window_required / merged=true`（已合入 `d38acf25b`，
   R 卡等真机窗口），**不是 FAIL**。
-- **这次「假 FAIL」的因果要记下来（本卡第一版就踩了）**：Leader 建 `openmir2-ability-weaponstrong` 卡时 issue body
+- 本版快照：`master=917376a45`，`generated_ts=1792811815`；R 卡 200 张 @ `917376a45`、`window_required` 131（已合并）+ 2（未合并，合计 133）、
+  `merged 未 closed 但已凭登记 PASS=180`、`whitelist_t_rows=255`。
+  （旧值 @ `55a8e7fca`，2026-10-24 订正：R 卡 198 / `window_required` 123（含未合并 2）/ `merged 未 closed` 但已凭登记 PASS 172 / `whitelist_t_rows` 255。）
+  （R 卡计数与「未开工/未合并」随 collab 看板漂移：本版 `openmir2-weaponstrong-dura-zero-skip` 已转 `in-progress`，
+  故「未开工或未合并」= 0、「其它需人工」= 0、「需人工」= 5。复算一律以命令现取为准。）
+- **这次「假 FAIL」的因果要记下来（首版就踩了）**：Leader 建 `openmir2-ability-weaponstrong` 卡时 issue body
   只写了 `tier=R`、**没写 `window_required`** ⇒ `goal_gate` 把它归入「三者皆无」⇒ 条件② 从 `need_human` 掉成 `fail`；
   交付后 Leader 用签名 comment `c7f43850`（`verified=true`，`body.window_required=true`）补登记，条件② 才修回 `need_human`。
   `goal_gate` 扫**任意 kind** 的 `body.window_required`，一条 comment 即可消除「三者皆无」。
-  快照：`master=55a8e7fca`，`generated_ts=1792791977`；R 卡 198 张、`window_required=123`（其中未合并 2）、
-  `merged 未 closed 但已凭登记 PASS=172`、`whitelist_t_rows=255`。
-  （R 卡计数与「未开工/未合并」随 collab 看板漂移：本卡窗口内新开出 `openmir2-weaponstrong-dura-zero-skip`
-  （open/待认领，不计缺口），使 R 卡 197→198、未开工 0→1；复算一律以命令现取为准。）
 - 工具已就绪：`preflight.py` 已合入 master（最新 commit `deea8d3d0`，`git merge-base --is-ancestor deea8d3d0 master` 为真）；
   `docs/window-batch-plan-20261023.md` §7.1 里「preflight 在办（未合）」**已过期**。
 - 场景：`tools/probe/scenarios/` 现 20 个，2 个仍 `blocked`（`combat_hit` / `combat_strike`）；
@@ -47,6 +50,13 @@
   枚举 **12 行 / 18 场景**；跑前 profile 需 `magic` 段 **且** `sides.rust.env.MIR2_CLIENT_ABILITY_LAYOUT="0"`，
   写法引用 `tools/probe/scenarios/README.md:240`），`equip_struck_save` 因 `642` 合入（`8dcb8c8ca`）解锁。
   **「今天能跑」的集合不在本文件定义**——逐行枚举见 §1.2 引用的 batch-plan §7.4。
+
+**上一版原文（@ `55a8e7fca` @ 2026-10-24 05:46:17 +08；历史留存，勿当现值；2026-10-24 订正）**：
+
+```
+- **条件② 当前是 `need_human`，FAIL 卡 0，三者皆无 0**（本卡在 master `55a8e7fca` 实跑，原文见 §1.5）。
+  快照：`master=55a8e7fca`，`generated_ts=1792791977`；R 卡 198 张、`window_required=123`（其中未合并 2）、
+```
 
 ### 证据
 
@@ -62,11 +72,33 @@
 1. owner 授权（或指派车道）开窗；2. 开窗前 60 秒自查必须 rc=0；3. 逐场景产物归档 + 独立 reviewer 复核；
 4. R 级卡窗口后**仍不 closed**（保持 `in-progress` 并在 `work` 写明窗口项）——这是 AGENTS.md 的硬规则。
 
-### 1.5 条件② 原文（本卡在 `55a8e7fca` 实跑，`generated_ts=1792791977`；逐字复制，未删节）
+### 1.5 条件② 原文（本版 @ `917376a45` @ 2026-10-24 11:16:55 +0800；逐字复制，未删节）
+
+> **取数时点**：2026-10-24 **11:16:55 +08**（master=917376a45）；命令 `python -I tools/goal/goal_gate.py --json --skip-tests --skip-script`（快速模式，跳过 tests / script）。
 
 ```sh
-python -I -B tools/goal/goal_gate.py --json
+python -I tools/goal/goal_gate.py --json --skip-tests --skip-script
 ```
+
+```
+overall = need_human（需人工）
+conditions[1].id = 2
+conditions[1].state = need_human
+conditions[1].detail = R 卡 200 张：已完成 11 / window_required 131（其中未合并 2） /
+  whitelist 48 / 已裁定登记 3 / comment 证据 0 / 三者皆无 0 /
+  merged 未 closed 且无登记(需人工) 5 / 未开工或未合并 0（不计缺口）/ 其它需人工 0；
+  需人工 5 张（按 last_status_ts 最旧优先，见 JSON need_items）；
+  merged 未 closed 但已凭登记 PASS：180 张（卫生清单，见 evidence.merged_open_hygiene；登记型 PASS ≠ 已有真机证据）
+fail_items = []          # FAIL 卡 0
+conditions[1].evidence.whitelist_t_rows = 255
+```
+
+- 「**未开工或未合并 0（不计缺口）**」与「**其它需人工 0**」是两行：本版「需人工 **5** 张」= 5 + 0（旧：10 = 5 + 5）。
+- `openmir2-ability-weaponstrong` 在 `evidence.r_cards` 里是
+  `state=pass / category=window_required / merged=true / window_required=true / strong_t=["T-266"] / weak_t=["T-141","T-267"] / board_status=in-progress`
+  ——**不是 FAIL**（已随 `d38acf25b` 合入，R 卡等窗口）。它当初被修回 PASS 靠的是 Leader 的签名 comment `c7f43850`（`body.window_required=true`）。
+
+**上一版原文（@ `55a8e7fca` @ 2026-10-24 05:46:17 +08；历史留存，勿当现值；2026-10-24 订正）**：
 
 ```
 overall = need_human（需人工）
@@ -81,12 +113,6 @@ fail_items = []          # FAIL 卡 0
 conditions[1].evidence.whitelist_t_rows = 255
 ```
 
-- 「**未开工或未合并 1（不计缺口）**」与「**其它需人工 5**」是两行：前者**不计入**「需人工 10 张」（10 = 5 + 5）；
-  这 1 张是本次快照窗口内新开的 `openmir2-weaponstrong-dura-zero-skip`（`board_status=open`，无 patch/merge_result）。
-- `openmir2-ability-weaponstrong` 在 `evidence.r_cards` 里是
-  `state=pass / category=window_required / merged=true / window_required=true / strong_t=["T-266"] / weak_t=["T-141","T-267"] / board_status=in-progress`
-  ——**不是 FAIL**（已随 `d38acf25b` 合入，R 卡等窗口）。它当初被修回 PASS 靠的是 Leader 的签名 comment `c7f43850`（`body.window_required=true`）。
-
 ### owner 的选项（一句话）
 
 - **A**：批一轮窗口，按 §1.2 引用的 batch-plan §7.4 枚举（见 batch-plan §7.4 @ `81ecc0d28`，枚举 **12 行 / 18 场景**）逐场景跑——成本与前置见下表；
@@ -99,7 +125,7 @@ conditions[1].evidence.whitelist_t_rows = 255
 ### 1.1 第①步：60 秒自查（可直接执行）
 
 ```sh
-cd E:/Users/gxh/Documents/GitHub/OpenMir2     # 或任意 master=55a8e7fca 的检出
+cd E:/Users/gxh/Documents/GitHub/OpenMir2     # 或任意 master=917376a45 的检出
 python -I -B tools/conformance/preflight.py --profile alt
 ```
 
@@ -164,7 +190,7 @@ batch-plan 原排除理由「Rust 侧魔法落点 + 第二观察者仍未接」�
 `"requires": ["magic"]`，**默认 `alt` profile 直接 rc=2 fail-closed**（不再是静默假绿）：
 
 ```sh
-# 默认 alt 没有 magic 段 → 明确拒绝（本卡在 master 55a8e7fca 实跑）
+# 默认 alt 没有 magic 段 → 明确拒绝（上一版在 master 55a8e7fca 实跑；2026-10-24 订正）
 python -I -B tools/conformance/card_window.py --scenario tools/probe/scenarios/spell_cast.json \
   --out E:/tmp/conformance/runs/20261024/spell_cast --profile alt --dry-run
 # → rc=2「card_window.py: 场景 `spell_cast` 要求 `magic` 夹具，但 profile `alt` 未声明 `magic` 段…」
@@ -250,7 +276,7 @@ python -I -B -c "import json;d=json.load(open('tools/conformance/rules.json',enc
 | 草稿人分组（现算 @ `478ff9a33`） | worker-4 23、worker-70 13、worker-66 4、worker-58 3、worker-68 1、worker-26 1（合计 rules 数组 45） | 同一命令的变体（按 `approved_by` 里的 `draft:` 字段分组） |
 | 文件指纹 | `sha256=4bfde36357e9b68ce5fa3b409d3513b9e76b91f354f0472cd0c7028a0085d258` | 引用时带指纹（@ `478ff9a33`） |
 
-> 本卡在 master `478ff9a33` 复算：**50/50**（`global` 4 + rules 数组 45 + `db` 1），`sha256=4bfde363…`；相对上一版快照 rules 数组 42→45（`89a3d02fd` 新增 53/638/639 三条）。
+> 本卡在 master `478ff9a33` 复算：**50/50**（`global` 4 + rules 数组 45 + `db` 1），`sha256=4bfde363…`；相对上一版快照 rules 数组 42→45（`89a3d02fd` 新增 53/638/639 三条）；本版复核 @ `917376a45`：仍 50/50，`sha256` 未变。
 
 **为什么从 33/10 变成 44/3**：旧文档列的 10 条「需证据」里，7 条（54/5008/1106/752/811/766/213）
 已按 `b42f20a28`（merge `card/rules-recog-unmask`）补上 `head_compare:["recog"]`（本卡逐条核 `rules.json` 确有该键）；同时新增 `202/203/642/709` 四条
@@ -316,7 +342,7 @@ python -I -B -c "import json;d=json.load(open('tools/conformance/rules.json',enc
 | 只有「待独立 principal 复核」字样 | **48** | 其余 |
 | 无痕（无字样、无可解析 review） | **2** | `T-172`（写「已获口头批准，需在本行留痕」）、`T-208`（`window_required`，行内 `bdddbeba` 是 issue 不是 review） |
 
-> 全文 T 行现在是 **255**（`t_reservation_gate check`：rows=255 whitelist=255 max=T-267；`goal_gate --json` 的 `whitelist_t_rows` 同值）；
+> 全文 T 行现在是 **255**（`t_reservation_gate check`：rows=255 whitelist=255 max=T-267；`goal_gate --json` 的 `whitelist_t_rows` 同值；本版复核 @ `917376a45`：rows=255 / whitelist=255 / max=T-267 未变）；
 > 上文 58 只覆盖 `T-161..T-222`。
 > 四档口径与逐号 evidence 见 `docs/whitelist-review-status-audit-20261024.md` §2–§4
 > （该审计快照为 head `151a7e822`，全表计数会漂，但**四档判定方法可复算**）。
@@ -369,11 +395,11 @@ owner 的一句话「复核口径」：是接受「有可核非作者 approve �
 
 | 旧条目 | 现状 | 证据（可复跑） | 还差什么 | 结论 |
 |---|---|---|---|---|
-| `@upgradenow` / `@getbackupgnow` 只 `glog` 不执行 | **已实现**：卡 `openmir2-upgrade-npc` 已合入 master，只剩 5 项真机窗口判据（R 卡保留 `in-progress`） | `git merge-base --is-ancestor 35c039c8d master` → 真；`mir2-rs/bins/game-svr/src/shop.rs:1288-1307`（标签接缝）/ `:1346 upgrade_request_for` / `:1369 upgrade_wapon_outcome`；宿主调用在 `mir2-rs/bins/game-svr/src/lib.rs:5809`（Lane A）/ `:5908`（提交）/ `:5949/5959`（取回）——行号取自 master `55a8e7fca` | 只剩窗口（同 §1） | **本条可关闭（不是 owner 的事）** |
-| `DoDamageWeapon` / `SM_DURACHANGE(642)`（旧记「未接」） | **已合入 master `8dcb8c8ca`**（合并提交即该条）；卡 `openmir2-attack-weapon-wear-642` 为 R 卡，**真机窗口未跑**（保持 `in-progress`） | `git merge-base --is-ancestor 0a0655c24 master` → 真；`git grep -c attack_success_weapon_wear master -- mir2-rs/crates/world/src/combat.rs` → 9；`grep -cE '642\|DURACHANGE' mir2-rs/crates/world/src/combat.rs` → 23；复审 `dbcf22f8e`（reviewer-6，approve / tier=R / `window_required=true`） | 只剩窗口（`equip_struck_save` 已解锁） | **本条可关闭（只剩窗口，不是 owner 的事）** |
+| `@upgradenow` / `@getbackupgnow` 只 `glog` 不执行 | **已实现**：卡 `openmir2-upgrade-npc` 已合入 master，只剩 5 项真机窗口判据（R 卡保留 `in-progress`） | `git merge-base --is-ancestor 35c039c8d master` → 真；`mir2-rs/bins/game-svr/src/shop.rs:1290-1313`（标签接缝）/ `:1349 upgrade_request_for` / `:1372 upgrade_wapon_outcome`；宿主调用在 `mir2-rs/bins/game-svr/src/lib.rs:5802`（Lane A）/ `:5899`（提交）/ `:5995/6006`（取回）——行号取自 master `917376a45`（2026-10-24 订正；旧行号 @ `55a8e7fca`：1288-1307 / 1346 / 1369 / 5809 / 5908 / 5949/5959） | 只剩窗口（同 §1） | **本条可关闭（不是 owner 的事）** |
+| `DoDamageWeapon` / `SM_DURACHANGE(642)`（旧记「未接」） | **已合入 master `8dcb8c8ca`**（合并提交即该条）；卡 `openmir2-attack-weapon-wear-642` 为 R 卡，**真机窗口未跑**（保持 `in-progress`） | `git merge-base --is-ancestor 0a0655c24 master` → 真；`git grep -c attack_success_weapon_wear master -- mir2-rs/crates/world/src/combat.rs` → 9；`grep -cE '642\|DURACHANGE' mir2-rs/crates/world/src/combat.rs` → 23；复审 `dbcf22f8e`（reviewer-6，approve / tier=R / `window_required=true`）；本版复核 @ `917376a45`：9 / 23 未变（2026-10-24 订正） | 只剩窗口（`equip_struck_save` 已解锁） | **本条可关闭（只剩窗口，不是 owner 的事）** |
 
 > 两句提醒：① `openmir2-ability-weaponstrong` 已合入 master `d38acf25b`（tier=R）；`goal_gate` 里现为
-> `state=pass / category=window_required / merged=true`，**不是 FAIL**，只剩真机窗口（R 卡不 closed）。
+> `state=pass / category=window_required / merged=true`，**不是 FAIL**，只剩真机窗口（R 卡不 closed；本版复核 @ `917376a45`）。
 > ② 642 的尾桶门保留了 oracle 的 `Math.Abs(nDura/1.03) != nDuraPoint` 怪癖（未取整 double vs int），返工说明见卡面 `765b21c4`。
 
 ---
@@ -409,7 +435,7 @@ owner 的一句话「复核口径」：是接受「有可核非作者 approve �
 ## 附：本卡的复算与残留
 
 - 复算命令均在本文件各节内；`goal_gate --json` 较慢（>120s），建议直接读 `conditions[1].detail`。
-- 本卡（`openmir2-needs-human-refresh-20261024`，`tier=L`）只改 `docs/`：新增本文件 + 在
-  `docs/needs-human-20261023-night.md` 顶部加一行互指。未碰 `rules.json` / `whitelist.md` / 工具 / 场景 / 任何卡片状态。
-- 本轮 v2 基于 master `55a8e7fca` 重打快照；动态数字现算值见 §1.5（`goal_gate`）与 §4（`whitelist`）。
-- 残留物：无（批处理模拟副本、生成的 magic profile、dry-run 输出均在提交前删除，不留在 `E:/tmp` 专属路径）。
+- 本卡（`openmir2-needs-human-refresh`，`tier=L`）只改 `docs/needs-human-20261024.md`：按当次 `goal_gate` 实测重算 §0/§1 数字并保留「旧 → 新」痕迹；
+  **未**新增 owner 决策项，未改 `rules.json` / `whitelist.md` / 工具 / 场景 / 任何卡片状态。
+- 本轮 v3 基于 master `917376a45` 重打快照（旧：`55a8e7fca`）；动态数字现算值见 §1.5（`goal_gate`）与 §4（`whitelist`）。
+- 残留物：无（本版只产生 `E:/tmp/gg67.json` / `E:/tmp/gg67.err` 两份临时输出，收尾已删除）。
