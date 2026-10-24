@@ -445,6 +445,7 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
   `probe_timeout_ms` 设到 **720000**（profile JSON 顶层，或命令行 `--timeout-ms 720000`，`:696-697` 等价）。
   **在 profile 里写 `"timeout_ms"` 会被静默忽略**（profile 顶层没有白名单校验）——这正是「白跑一轮」的经典成因。
 - **参数发现**：11 个场景声明了 `required`（`npc_actor`/`merchant_actor`/`make_index`/自身坐标…；2026-10-24 实测：`bag_equip`、`combat_hit`、`eat_item`、`king_castle_war`、`king_dialog`、`merchant_dialog`、`move_walk`、`npc_click`、`npc_script_chain`、`pickup_item`、`upgrade_retrieve`）。两侧**各自发现各自的值**，某侧推不出 ⇒ fail-closed，不许拿一侧的值跑另一侧。
+- **封存提醒（2026-10-24，卡 `openmir2-pickup-item-reachability`）**：`pickup_item` 的参数发现能力仍在，但场景已因 T-19/T-25（`MapItem.ItemId` 恒 0 ⇒ 地面永远无物）封存为「结构性不可判」，`--dry-run` 按设计 rc=2 BLOCKED（不起栈）；不要把它排进窗口，除非 oracle 出现新的、可复跑证明的 `ItemId` 赋值生产路径。
 - **手动步骤不要漏**：`login_only.json` 这类**不含发客户端命令的步骤**。若卡面要求「客户端直呼 `@禁言 <名> 1`」之类的探针，必须由操作者在真实客户端手动输入，脚本不会替你做。漏了不会报错，只会让这条判据看起来没红。
   **角色预置位不再是手动步骤**：场景声明 `placement` 即可（见 §1.5），`card_window.py` 在起栈前自动改库并在 `placement.json` 留证；预置不成就 rc=2，不会带着错位去跑。
 
@@ -490,7 +491,7 @@ db 规格展开后命中生产库：prod(sides.csharp.db.preset), mir2_db(sides.
 |---|---|---|
 | `merchant_dialog` | merchant_actor | ✅（derived，643） |
 | `npc_click` | npc_actor | ✅（derived，643） |
-| `pickup_item` | self_x, self_y | ✅（derived，SM_LOGON） |
+| `pickup_item` | self_x, self_y | ✅（derived，SM_LOGON）〔2026-10-24 勾注，卡 `openmir2-pickup-item-reachability`：场景已封存为结构性不可判（T-19/T-25），`card_window --dry-run` 按设计 rc=2 BLOCKED，不再作为窗口输入；见 `docs/pickup-item-reachability-20261024.md`〕 |
 | `king_dialog` / `king_castle_war` | king_actor | ⚠️ **rule（部署假设，不计入发现能力）**：643 只证明「该 actor 应答了点击」，**不证明是国王**——仓库里全部 643 录制都是赌场庄家（`〖庄〗…@kaiz`），且默认 discovery 点的是「最近的非自己 `SM_TURN`」（录制里就是庄家），**没有可执行步骤能让 discovery 点中国王**。点错的后果是末步响亮超时（`@@buildguildnow` 只存在于`比奇国王-0122.txt`，查不到 label ⇒ 零帧）。**〔2026-10-24 勾注，卡 `openmir2-window-deploy-prereq-batch2`〕「点中国王」已由 placement 闭合，不需要新 discovery 步骤**：discovery probe 与真场景共用同一角色（restore→placement→起栈→discovery→probe，`card_window.py` run_side 同栈两跑），场景声明 `placement(0122,29,33)` 后 discovery 也落在王宫 (29,33)；0122 全图唯一 actor=国王（Npcs.txt 仅 :3 一行 0122、MerChant/MonGen 零行，两 Envir 逐字节同源）⇒ 点出的 643.recog 必然是国王，rule 从「赌运气」降为「可离线机判的部署假设」。场景侧同步更新：`king_dialog` 末步期望改 [763]（GuildOfficial.ReQuestBuildGuild 失败支，旧 [643,100] 无生产点）、`king_castle_war` 改走 @requestcastlewarA→@requestcastlewar 缴金条门（644+767） |
 | `move_walk` | move_x, move_y | ✅（**computed**：`self_x+1` / `self_y+0`，delta 写在场景 JSON 的 `computed` 里） |
 | `bag_equip` | make_index, takeon_where, item_name | ✅（**derived，201**）：三变量取自同一槽——`MakeIndex`@100 / `Name`@0（帧里就有，不查 StdItems）/ `StdMode`@15 → `ItemLocation`（`M2Share.CheckUserItems` 逆表） |

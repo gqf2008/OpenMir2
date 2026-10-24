@@ -8,6 +8,11 @@
   同一组数字在 tip `7cc81fbfa` 上复验一致；卡 `openmir2-window-profile-testdb-preset`，只加 profile 数据，
   见 §2.1）。两套 profile 各跑一遍；rc 与关键输出均可按 §4 命令复跑。
 
+> **2026-10-24 后续变更（卡 `openmir2-pickup-item-reachability`）**：`pickup_item` 已加顶层
+> `blocked`（结构性不可判，T-19/T-25）。本文件 §1 矩阵中该行的 `rc=0 / 可跑` 是 09:58 的历史快照，
+> **现已作废**：`--dry-run` 会按设计返回 `rc=2 BLOCKED`（不起栈、不建 out），其余场景的 rc 不受影响。
+> 证据链见 `docs/pickup-item-reachability-20261024.md`。
+
 ## 1. 矩阵（rc 与结论）
 
 | 场景 | profile | rc | 结论 | 关键输出 / 依据 |

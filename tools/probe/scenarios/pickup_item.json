@@ -1,6 +1,10 @@
 {
   "name": "pickup_item",
-  "description": "脚下拾取全链：CM_DROPITEM(1000) 把夹具木剑丢到地面（oracle GetDropPosition 扫描序 i=0 首候选 (self_x+1,self_y+1)，该格可走且空 => 确定落点）-> 等 SM_DROPITEM_SUCCESS(600) -> CM_WALK(3011) 斜走到落点格 -> 等 SM_WALK(11)/SM_RUN(13) -> CM_PICKUP(1001) param=落点X tag=落点Y（oracle 要求 CurrX==nParam2 && CurrY==nParam3）-> 等 SM_ADDITEM(200)/SM_BAGITEMS(201)。原版单步 CM_PICKUP 在无同格地物时两侧都静默（PlayObject.Base.cs:55 ClientPickUpItem 首行 Envir.GetItem 失败即 return）=> run1 双侧等 [200,201] 超时（window-run-1 §2 表 2 行）；本版用「夹具背包物品 => 丢 => 走 => 拾」把地物经真实生产链造出来，让 [200,201] 可达。地物格/摆位假设见 placement.note，全部可离线机判。",
+  "description": "【BLOCKED — T-19/T-25 结构性不可判，2026-10-24 卡 openmir2-pickup-item-reachability】原设计：夹具背包物品 => CM_DROPITEM(1000) 丢地 => 600 => CM_WALK(3011) => CM_PICKUP(1001) => 200/201。取证结论：oracle 全仓无 MapItem.ItemId 赋值点（MapItem.cs:41 被注释）⇒ Envirnoment.AddItemToMap 首行 ItemId==0 恒 return false（Envirnoment.cs:88-92）⇒ 普通丢弃恒 601、任何生产路径（DropItemDown/BaseObject.cs:551-568、DropGoldDown/:740-750、脚本 @throwitem ExecutionProcessingSys.cs:5694-5754）都造不出地面物；唯一 600 成功支 ControlDropItem+便宜物（PlayObject.Operate.cs:284-289）把物品 Dispose 掉、不产生 MapItem ⇒ 200/201 两侧结构性不可达。步骤与 placement 保留作证据/回归标本；不进入窗口。详见 docs/pickup-item-reachability-20261024.md。",
+  "blocked": {
+    "reason": "结构性不可判（T-19/T-25）：oracle 全仓无 MapItem.ItemId 赋值点（MapItem.cs:41 是注释）⇒ Envirnoment.AddItemToMap 首行 ItemId==0 恒 return false（Envirnoment.cs:88-92）⇒ 普通 CM_DROPITEM 恒 601、地面永远无物；唯一 600 支 ControlDropItem+便宜物（PlayObject.Operate.cs:284-289）只 Dispose 背包物品、不造 MapItem ⇒ 后续 CM_PICKUP 无物可拾，SM_ADDITEM(200)/SM_BAGITEMS(201) 两侧结构性不可达。Rust 1:1 复刻同一门（bins/game-svr/src/ground.rs:276 put_item item_id==0）。",
+    "missing_fixture": "需要「地面已存在且 MapItem.ItemId != 0」的地物；oracle 没有任何生产路径能创建它（掉落/金币/脚本四条 new MapItem 路径都未赋 ItemId；ControlDropItem 便宜物支只删包不落地）。夹具若出现，必须同时证明它是 oracle 可达的生产路径，而不是在 Rust 侧补一个 oracle 没有的赋值点。"
+  },
   "required": ["pickup_x", "pickup_y", "pickup_xy"],
   "params": {
     "self_x": 320,
@@ -68,7 +72,7 @@
     {
       "wait_for": [200, 201],
       "timeout_ms": 3000,
-      "note": "SM_ADDITEM(200)（拾取成功首帧，PlayObject.Base.cs:101-121 SendAddItem）/SM_BAGITEMS(201) 兜底。旧版原地拾空格在此恒超时（run1 实测）；本版经 600 => 11 两级同步后按生产链必达"
+      "note": "SM_ADDITEM(200)（PlayObject.Base.cs:198-226 SendAddItem，MakeMessage(200, ActorId, 0, 0, 1)）/SM_BAGITEMS(201) 兜底。**本步两侧结构性不可达（T-19/T-25，见 blocked）**：丢弃恒 601、地面无物 ⇒ ClientPickUpItem 的 Envir.GetItem（PlayObject.Base.cs:62）恒失败并静默返回；scenario 封存后不会跑到本步。"
     }
   ]
 }
