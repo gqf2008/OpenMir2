@@ -975,8 +975,13 @@ def load_profile(value):
         validate_db_client(sides[side].get("db_client"),
                            "profile.sides.%s.db_client" % side)
     # 魔法夹具声明（卡 `openmir2-window-magic-fixture`）：加载期 fail-closed。
+    fixtures_by_side = {}
     for side in SIDES:
         profile_magic(prof, side)
+        # 卡 `openmir2-window-fixture-castle`：窗口夹具（怪物 + 配置覆盖 + 城堡前置）加载期
+        # fail-closed（未知字段/键、越界值、坏城名）；`castle_list` 还要两侧一致（review F-1）。
+        fixtures_by_side[side] = profile_fixtures(prof, side)
+    _check_fixture_symmetry(fixtures_by_side)
     return prof
 
 
@@ -3327,7 +3332,11 @@ def check_rng_ledger(path):
     return True, "%d 行（含 INJECT_OK + SEED_PROBE；site 齐）" % len(lines)
 
 
-FIXTURE_KEYS = ("monsters",)
+#: `profile.fixtures` 顶层允许的键。**两份能力合并**：
+#:   * `monsters` —— 声明式怪物夹具（卡 `openmir2-window-fixture-corpse`）；
+#:   * `config_overrides` / `castle_list` / `castle_files` —— 配置文件与城堡前置
+#:     （卡 `openmir2-window-fixture-castle`）。
+FIXTURE_KEYS = ("monsters", "config_overrides", "castle_list", "castle_files", "note")
 
 #: 夹具行的第 7 列 `ZenTime`（分钟）**必须 > 0**：两端解析器都按 `ZenTime = 列值*60*1000` 后
 #: `ZenTime <= 0 => 丢弃`（C# `LocalDB.cs:555-558`；Rust `crates/envir/src/mongen.rs:147-150`），
@@ -3335,72 +3344,265 @@ FIXTURE_KEYS = ("monsters",)
 #: `WorldServer.MonGen.cs:228` 在 `StartTick == 0` 时立即首刷。
 FIXTURE_MONGEN_ZEN_TIME = 360
 
+#: 配置覆盖白名单：键 → (lo, hi)。**未知文件/键/越界值一律 fail-closed**。
+FIXTURE_CONFIG_KEYS = {
+    "CastleGetAllNpcTax": (0, 1),
+    "CastleTaxRate": (0, 100),
+    "CastleOneDayGold": (0, 0x7FFFFFFF),
+    "CastleGoldMax": (0, 0x7FFFFFFF),
+    "UpgradeWeaponPrice": (0, 0x7FFFFFFF),
+    "ConsoleShowUserCountTime": (0, 0x7FFFFFFF),
+}
+#: 允许覆盖的配置文件（都在 `<envir_root>/` 下）。
+FIXTURE_CONFIG_FILES = ("Server.conf", "Server1.conf")
+#: `Castle/<n>/SabukW.txt` 的 `[Setup]` 键白名单：键 → 值类型。
+FIXTURE_CASTLE_KEYS = {
+    "OwnGuild": "str",
+    "NextWar": "int",
+    "TotalGold": "int",
+    "TodayIncome": "int",
+}
+FIXTURE_CASTLE_MAX = 8
+#: 生产内容根：窗口夹具只许写私有根（写到这里 = 改冻结内容，直接拒绝）。
+FIXTURE_PROD_ROOT = "E:/MirServer"
+#: 单个怪物夹具条目的字段白名单。
+FIXTURE_MONSTER_ALLOWED = {"map", "x", "y", "name", "count"}
 
-def profile_fixtures(prof, side):
-    """读 profile 的 `sides.<side>.fixtures`（**声明式怪物夹具**，卡 openmir2-window-fixture-corpse）。
 
-    当前支持：
-      "fixtures": {"monsters": [{"map": "0", "x": 330, "y": 331, "name": "鸡", "count": 1}]}
-
-    语义（重要，见 docs/window-fixture-corpse-20261025.md）：oracle **不持久化怪物/尸体**
-    （`monsters` 表只是定义；尸体是运行时对象）⇒ 本夹具做的是「起栈前往本侧私有 Envir 的
-    `MonGen.txt` 追加一条**单点刷怪**（range=0）」，让动物一进图就站在指定格；**不是**直接造尸体。
-    要得到可屠宰尸体，场景需先击杀该动物（场景侧另改）。
-    """
-    sc = prof["sides"][side]
-    fx = sc.get("fixtures")
-    if fx is None:
-        return None
-    if not isinstance(fx, dict) or not fx:
-        raise ConfigError("profile.sides.%s.fixtures 必须是非空对象（当前支持 keys=%s）"
-                          % (side, list(FIXTURE_KEYS)))
-    bad = set(fx) - set(FIXTURE_KEYS)
-    if bad:
-        raise ConfigError("profile.sides.%s.fixtures 有未知字段 %s（fail-closed；只允许 %s）"
-                          % (side, sorted(bad), list(FIXTURE_KEYS)))
-    mons = fx.get("monsters")
+def _validate_monsters(mons, where):
+    """怪物夹具 schema（原卡 `openmir2-window-fixture-corpse`，语义原样保留）。"""
     if not isinstance(mons, list) or not mons:
-        raise ConfigError("profile.sides.%s.fixtures.monsters 必须是非空数组" % side)
-    allowed = {"map", "x", "y", "name", "count"}
+        raise ConfigError("%s 必须是非空数组" % where)
     out = []
     for i, m in enumerate(mons):
-        where = "profile.sides.%s.fixtures.monsters[%d]" % (side, i)
+        w = "%s[%d]" % (where, i)
         if not isinstance(m, dict):
-            raise ConfigError("%s 必须是对象" % where)
-        unknown = set(m) - allowed
+            raise ConfigError("%s 必须是对象" % w)
+        unknown = set(m) - FIXTURE_MONSTER_ALLOWED
         if unknown:
             raise ConfigError("%s 有未知字段 %s（只允许 %s）"
-                              % (where, sorted(unknown), sorted(allowed)))
+                              % (w, sorted(unknown), sorted(FIXTURE_MONSTER_ALLOWED)))
         for k in ("map", "x", "y", "name"):
             if k not in m:
-                raise ConfigError("%s 缺字段 %s" % (where, k))
+                raise ConfigError("%s 缺字段 %s" % (w, k))
         mp = m["map"]
         if not isinstance(mp, str) or not mp.strip():
-            raise ConfigError("%s.map 必须是非空字符串" % where)
+            raise ConfigError("%s.map 必须是非空字符串" % w)
         for k in ("x", "y"):
             v = m[k]
             if not isinstance(v, int) or isinstance(v, bool) or not (0 <= v <= 65535):
-                raise ConfigError("%s.%s 必须是 0..65535 的整数（实际 %r）" % (where, k, v))
+                raise ConfigError("%s.%s 必须是 0..65535 的整数（实际 %r）" % (w, k, v))
         name = m["name"]
         if not isinstance(name, str) or not name.strip():
-            raise ConfigError("%s.name 必须是非空字符串" % where)
+            raise ConfigError("%s.name 必须是非空字符串" % w)
         try:
             name.encode("gbk")
         except UnicodeEncodeError:
-            raise ConfigError("%s.name 不能编码为 GBK：%r" % (where, name))
+            raise ConfigError("%s.name 不能编码为 GBK：%r" % (w, name))
         count = m.get("count", 1)
         if not isinstance(count, int) or isinstance(count, bool) or not (1 <= count <= 100):
-            raise ConfigError("%s.count 必须是 1..100 的整数（实际 %r）" % (where, count))
+            raise ConfigError("%s.count 必须是 1..100 的整数（实际 %r）" % (w, count))
         out.append({"map": mp.strip(), "x": m["x"], "y": m["y"],
                     "name": name, "count": count})
-    return {"monsters": out}
+    return out
+
+
+def _fixture_int(value, where, lo, hi):
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ConfigError("%s 必须是整数（实际 %r）" % (where, value))
+    if value < lo or value > hi:
+        raise ConfigError("%s=%r 越界（允许 %d..%d；fail-closed）"
+                          % (where, value, lo, hi))
+    return value
+
+
+def _fixture_castle_name(name, where):
+    if not isinstance(name, str) or not name.isdigit():
+        raise ConfigError("%s 必须是十进制城目录名（如 \"0\"，实际 %r）" % (where, name))
+    if str(int(name)) != name:
+        raise ConfigError("%s=%r 不是规范十进制写法（前导零/负号都拒）" % (where, name))
+    if int(name) > 99:
+        raise ConfigError("%s=%r 越界（城目录名只允许 0..99）" % (where, name))
+    return name
+
+
+def _validate_fixture_files(fx, where):
+    """文件夹具（配置覆盖 + 城堡前置）schema；返回归一化三件套。"""
+    out = {"config_overrides": {}, "castle_list": None, "castle_files": {}}
+    cfg = fx.get("config_overrides")
+    if cfg is not None:
+        if not isinstance(cfg, dict) or not cfg:
+            raise ConfigError("%s.config_overrides 必须是非空对象（文件 → 键→值）" % where)
+        for fname in sorted(cfg):
+            w = "%s.config_overrides.%s" % (where, fname)
+            if fname not in FIXTURE_CONFIG_FILES:
+                raise ConfigError("%s: 未白名单的配置文件 %r（只认 %s）"
+                                  % (w, fname, list(FIXTURE_CONFIG_FILES)))
+            edits = cfg[fname]
+            if not isinstance(edits, dict) or not edits:
+                raise ConfigError("%s 必须是非空对象（键 → 目标值）" % w)
+            norm = {}
+            for key in sorted(edits):
+                wk = "%s.%s" % (w, key)
+                if key not in FIXTURE_CONFIG_KEYS:
+                    raise ConfigError("%s: 未白名单的配置键 %r（白名单 %s）"
+                                      % (wk, key, sorted(FIXTURE_CONFIG_KEYS)))
+                lo, hi = FIXTURE_CONFIG_KEYS[key]
+                norm[key] = _fixture_int(edits[key], wk, lo, hi)
+            out["config_overrides"][fname] = norm
+    cl = fx.get("castle_list")
+    if cl is not None:
+        if not isinstance(cl, list) or not cl:
+            raise ConfigError("%s.castle_list 必须是非空数组" % where)
+        if len(cl) > FIXTURE_CASTLE_MAX:
+            raise ConfigError("%s.castle_list 最多 %d 座城（实际 %d）"
+                              % (where, FIXTURE_CASTLE_MAX, len(cl)))
+        names = [_fixture_castle_name(x, "%s.castle_list[%d]" % (where, i))
+                 for i, x in enumerate(cl)]
+        if len(set(names)) != len(names):
+            raise ConfigError("%s.castle_list 有重复城：%s" % (where, names))
+        out["castle_list"] = names
+    cf = fx.get("castle_files")
+    if cf is not None:
+        if not isinstance(cf, dict) or not cf:
+            raise ConfigError("%s.castle_files 必须是非空对象（城目录名 → 键值）" % where)
+        for cname in sorted(cf):
+            w = "%s.castle_files.%s" % (where, cname)
+            _fixture_castle_name(cname, w)
+            if out["castle_list"] is not None and cname not in out["castle_list"]:
+                raise ConfigError("%s: 城 %r 不在同一 fixtures 的 castle_list %s 里"
+                                  "（先列进 castle_list，否则目录可能不存在）"
+                                  % (w, cname, out["castle_list"]))
+            edits = cf[cname]
+            if not isinstance(edits, dict) or not edits:
+                raise ConfigError("%s 必须是非空对象（[Setup] 键 → 目标值）" % w)
+            norm = {}
+            for key in sorted(edits):
+                wk = "%s.%s" % (w, key)
+                if key not in FIXTURE_CASTLE_KEYS:
+                    raise ConfigError("%s: 未白名单的 SabukW 键 %r（白名单 %s）"
+                                      % (wk, key, sorted(FIXTURE_CASTLE_KEYS)))
+                if FIXTURE_CASTLE_KEYS[key] == "int":
+                    norm[key] = _fixture_int(edits[key], wk, 0, 0x7FFFFFFF)
+                else:
+                    val = edits[key]
+                    if not isinstance(val, str):
+                        raise ConfigError("%s 必须是字符串（实际 %r）" % (wk, val))
+                    if "\r" in val or "\n" in val:
+                        raise ConfigError("%s 不许含换行（会破坏 SabukW.txt）" % wk)
+                    try:
+                        raw = val.encode("gbk")
+                    except UnicodeEncodeError as e:
+                        raise ConfigError("%s=%r 不能编成 GBK：%s" % (wk, val, e))
+                    if len(raw) > 32:
+                        raise ConfigError("%s 的 GBK 字节数 %d > 32（超长会被 oracle 截断）"
+                                          % (wk, len(raw)))
+                    norm[key] = val
+            out["castle_files"][cname] = norm
+    return out
+
+
+def _validate_fixture_decl(decl, where):
+    """统一 schema：`monsters` + 文件三件套 + `note`（至少给一个实体键）。"""
+    if not isinstance(decl, dict) or not decl:
+        raise ConfigError("%s 必须是非空对象（允许 keys=%s）" % (where, list(FIXTURE_KEYS)))
+    unknown = sorted(set(decl) - set(FIXTURE_KEYS))
+    if unknown:
+        raise ConfigError("%s 有未知字段 %s（fail-closed；只允许 %s）"
+                          % (where, unknown, list(FIXTURE_KEYS)))
+    note = decl.get("note") or ""
+    if not isinstance(note, str):
+        raise ConfigError("%s.note 必须是字符串" % where)
+    out = {"monsters": None, "config_overrides": {}, "castle_list": None,
+           "castle_files": {}, "note": note}
+    if "monsters" in decl:
+        out["monsters"] = _validate_monsters(decl["monsters"], where + ".monsters")
+    out.update(_validate_fixture_files(decl, where))
+    if not (out["monsters"] or out["config_overrides"]
+            or out["castle_list"] is not None or out["castle_files"]):
+        raise ConfigError("%s 只声明了 note：至少要给 monsters / config_overrides / "
+                          "castle_list / castle_files 之一" % where)
+    return out
+
+
+def profile_fixtures(prof, side=None):
+    """读窗口夹具声明：**顶层 `fixtures` 应用于两侧**；`sides.<side>.fixtures`
+    **整体覆盖**本侧（不做深合并——免得两侧声明混在一起看不出谁生效）。
+
+    形状非法 => ConfigError（`load_profile` 加载期就拒，与 `profile_magic` 同口径）。
+    """
+    if side is None:
+        decl = prof.get("fixtures")
+        where = "profile.fixtures"
+    else:
+        sc = (prof.get("sides") or {}).get(side) or {}
+        if "fixtures" in sc:
+            decl = sc["fixtures"]
+            where = "profile.sides.%s.fixtures" % side
+        else:
+            decl = prof.get("fixtures")
+            where = "profile.fixtures"
+    if decl is None:
+        return None
+    return _validate_fixture_decl(decl, where)
+
+
+def _fixture_symmetry_key(decl):
+    """两侧必须一致的部分：`castle_list` / `castle_files` / `config_overrides`。
+
+    `monsters` **不**在这些里（怪物夹具允许按侧独立声明；其语义是「往本侧 MonGen 追加」，
+    不改变两侧配置基线）。文件三件套则直接决定两侧运行时的城堡/配置状态——不同就是对拍
+    无效（W-TAX-2 尤其要求同值）。
+    """
+    decl = decl or {}
+    cl = decl.get("castle_list")
+    return (tuple(cl) if cl is not None else None,
+            json.dumps(decl.get("castle_files") or {}, sort_keys=True,
+                       ensure_ascii=False),
+            json.dumps(decl.get("config_overrides") or {}, sort_keys=True,
+                       ensure_ascii=False))
+
+
+def _check_fixture_symmetry(fixtures_by_side):
+    """文件类夹具（`castle_list` / `castle_files` / `config_overrides`）必须两侧一致。
+
+    为什么必须在这里拦：`castle_list_symmetry` 门（preflight）跑在**起栈前**，看的是夹具
+    写盘**之前**的 `Castle/List.txt`；而夹具在 `run_side` 里 restore 之后、起栈之前才按侧写，
+    且 `sides.<side>.fixtures` **整体覆盖**顶层 ⇒ 两侧各写不同内容时，门永远看不到。
+    ⇒ 门守「文件现状」，本函数守「声明未来」，两者缺一不可。两侧值不同 ⇒ 对拍无效（假绿），
+    必须 fail-closed（review F-1；reviewer-20 的 supersede 建议把三件套一起比）。
+    """
+    keys = {}
+    for side in sorted(fixtures_by_side):
+        keys[side] = _fixture_symmetry_key(fixtures_by_side[side])
+    if len(set(keys.values())) > 1:
+        shown = []
+        for side in sorted(keys):
+            decl = fixtures_by_side[side] or {}
+            shown.append("%s{castle_list=%r, castle_files=%r, config_overrides=%r}"
+                         % (side, decl.get("castle_list"),
+                            decl.get("castle_files") or {},
+                            decl.get("config_overrides") or {}))
+        raise ConfigError(
+            "fixtures 文件三件套两侧不一致（%s）：`castle_list` 会让 "
+            "`castle_list_symmetry` 门失效（门在写盘**之前**检查，夹具在写**之后**生效）；"
+            "`castle_files`/`config_overrides` 不同则两侧运行时状态不同、对拍无效 ⇒ "
+            "把这三件套只写在**顶层 fixtures**（两侧同值）；若某侧必须用 "
+            "`sides.<side>.fixtures` 覆盖，也要把同一份三件套一起带上"
+            % ", ".join(shown))
 
 
 def _fixture_envir_root(sc):
     root = sc.get("envir_root")
     if not root:
         raise ConfigError("fixtures 需要 profile.sides.*.envir_root（当前未声明）")
-    return str(root)
+    root = str(root)
+    real = os.path.realpath(root)
+    prod = os.path.realpath(FIXTURE_PROD_ROOT)
+    if real == prod or real.startswith(prod + os.sep):
+        raise ConfigError(
+            "envir_root 指向生产内容根（%s）：窗口夹具只许写私有根（内容冻结）" % root)
+    return root
 
 
 def _fixture_envir_roots(sc):
@@ -3415,6 +3617,7 @@ def _fixture_envir_roots(sc):
     parent = os.path.dirname(os.path.abspath(base))
     shadow = os.path.join(parent, "M2GameSvr-hook")
     if os.path.isdir(shadow) and os.path.isfile(os.path.join(shadow, "Envir", "MonGen.txt")):
+        _fixture_envir_root({"envir_root": shadow})  # 影子同样过生产根守卫
         roots.append(shadow)
     return roots
 
@@ -3440,104 +3643,324 @@ def _fixture_map_names(root):
     return names
 
 
-def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
-    """起栈前把声明式怪物夹具写进**本侧私有 Envir** 的 `MonGen.txt`（备份 + 校验 + 可还原）。
+def _fixture_targets(decl):
+    """文件夹具 → [(rel, kind, payload)]；rel 一律 `/` 分隔（备份文件名可移植）。"""
+    out = []
+    for fname in sorted(decl["config_overrides"]):
+        out.append((fname, "ini", sorted(decl["config_overrides"][fname].items())))
+    if decl["castle_list"] is not None:
+        out.append(("Castle/List.txt", "castle_list", list(decl["castle_list"])))
+    for cname in sorted(decl["castle_files"]):
+        out.append(("Castle/%s/SabukW.txt" % cname, "ini",
+                    sorted(decl["castle_files"][cname].items())))
+    return out
 
-    返回证据 dict：path/backup/before_sha256/after_sha256/appended/action/rc/error。
-    失败（缺文件/地图不存在/GBK 不可编码/写失败）一律 rc=2，绝不静默跳过。
+
+def _fixture_ini_replace(data, edits, where):
+    """只替换 `Key=Value` 行的值（保留 key 原文/缩进/行尾）。
+
+    要求该键在**整个文件里恰好出现 1 次**，且值后没有空白/注释——否则 fail-closed
+    （不替操作者猜要保留什么）。
     """
-    res = {"side": side, "declared": decl, "path": None, "backup": None,
+    lines = data.splitlines(keepends=True)
+    out = list(lines)
+    diffs = []
+    for key, value in edits:
+        pat = key.encode("ascii") + b"="
+        hits = [i for i, ln in enumerate(out) if ln.lstrip(b" \t").startswith(pat)]
+        if len(hits) != 1:
+            raise ConfigError("%s: 键 %s 在文件里出现 %d 次（要求恰好 1 次；不猜）"
+                              % (where, key, len(hits)))
+        i = hits[0]
+        ln = out[i]
+        stripped = ln.lstrip(b" \t")
+        lead = ln[:len(ln) - len(stripped)]
+        body = stripped[len(pat):]
+        m = re.search(br"(\r\n|\n|\r)?$", body)
+        ending = m.group(1) or b""
+        raw_val = body[:len(body) - len(ending)]
+        if raw_val != raw_val.strip() or b";" in raw_val or b"#" in raw_val:
+            raise ConfigError("%s: 键 %s 的值后带空白/注释（%r）——不替操作者猜，"
+                              "先把它清成裸 `Key=Value` 再声明覆盖"
+                              % (where, key, raw_val))
+        raw_new = (value.encode("gbk") if isinstance(value, str)
+                   else str(value).encode("ascii"))
+        out[i] = lead + pat + raw_new + ending
+        diffs.append((ln.decode("gbk", "replace").rstrip("\r\n"),
+                      out[i].decode("gbk", "replace").rstrip("\r\n")))
+    return b"".join(out), diffs
+
+
+def _fixture_new_bytes(kind, payload, data, where):
+    if kind == "castle_list":
+        nl = b"\r\n" if b"\r\n" in data else b"\n"
+        body = nl.join(n.encode("ascii") for n in payload)
+        if data.endswith((b"\n", b"\r")):
+            body += nl
+        old = data.decode("ascii", "replace").split()
+        return body, [("castle_list=%r" % old, "castle_list=%r" % list(payload))]
+    return _fixture_ini_replace(data, payload, where)
+
+
+def _fixture_atomic_write(path, data):
+    tmp = path + ".fixture-tmp"
+    with open(tmp, "wb") as f:
+        f.write(data)
+    os.replace(tmp, path)
+
+
+def _rollback_file_recs(recs):
+    """把已写文件按备份回滚并核对 sha256（就地回滚用）。返回错误列表。"""
+    errs = []
+    for rec in recs:
+        if not rec.get("backup"):
+            continue
+        try:
+            with open(rec["backup"], "rb") as f:
+                data = f.read()
+            if hashlib.sha256(data).hexdigest() != rec["sha256_before"]:
+                errs.append("%s 的备份 sha256 不符" % rec["rel"])
+                continue
+            _fixture_atomic_write(rec["path"], data)
+            with open(rec["path"], "rb") as f:
+                got = hashlib.sha256(f.read()).hexdigest()
+            rec["restore_sha256"] = got
+            if got != rec["sha256_before"]:
+                errs.append("%s 回滚后 sha256=%s != 写前 %s"
+                            % (rec["rel"], got, rec["sha256_before"]))
+                continue
+            os.remove(rec["backup"])
+            rec["backup"] = None
+            rec["action"] = "rolled-back"
+        except OSError as e:
+            errs.append("%s 回滚失败：%s" % (rec["rel"], e))
+    return errs
+
+
+def _apply_files(runner, side, root, decl, side_dir, tag):
+    """在**一个根**上写配置覆盖/城堡前置（备份 + 原子写 + 读回）；失败就地回滚后抛。
+
+    返回 (targets, backup_dir)：targets 每项带 `target`（baseline/shadow）、`rel`、
+    before/after sha256、`changed`、`diff`，与怪物夹具的 targets 同形状（fixtures.json 合一）。
+    """
+    planned = []
+    for rel, kind, payload in _fixture_targets(decl):
+        path = os.path.join(root, *rel.split("/"))
+        if not os.path.isfile(path):
+            raise ConfigError("夹具目标文件不存在：%s（不创建/不猜；先建私有根夹具）"
+                              % path)
+        with open(path, "rb") as f:
+            data = f.read()
+        new, diffs = _fixture_new_bytes(kind, payload, data, "%s:%s" % (side, rel))
+        planned.append({"rel": rel, "path": path, "old": data, "new": new,
+                        "diff": diffs})
+    if getattr(runner, "dry_run", False):
+        for p in planned:
+            for old, new in p["diff"]:
+                runner.log("[%s] 夹具 %s/%s: - %s" % (side, tag, p["rel"], old))
+                runner.log("[%s] 夹具 %s/%s: + %s" % (side, tag, p["rel"], new))
+        return ([{"target": tag, "rel": p["rel"], "path": p["path"],
+                  "backup": None,
+                  "before_sha256": hashlib.sha256(p["old"]).hexdigest(),
+                  "after_sha256": hashlib.sha256(p["new"]).hexdigest(),
+                  "changed": p["old"] != p["new"], "diff": p["diff"],
+                  "action": "dry-run", "restore_sha256": None}
+                 for p in planned], None)
+    backup_dir = os.path.join(side_dir, "fixtures", "backup")
+    os.makedirs(backup_dir, exist_ok=True)
+    recs = []
+    try:
+        for p in planned:
+            bpath = os.path.join(backup_dir, "%s__%s" % (tag,
+                                                         p["rel"].replace("/", "__")))
+            with open(bpath, "wb") as f:
+                f.write(p["old"])
+            rec = {"target": tag, "rel": p["rel"], "path": p["path"],
+                   "backup": bpath,
+                   "before_sha256": hashlib.sha256(p["old"]).hexdigest(),
+                   "after_sha256": None, "changed": p["old"] != p["new"],
+                   "diff": p["diff"], "action": "applied", "restore_sha256": None}
+            recs.append(rec)
+            if rec["changed"]:
+                _fixture_atomic_write(p["path"], p["new"])
+            with open(p["path"], "rb") as f:
+                got = f.read()
+            rec["after_sha256"] = hashlib.sha256(got).hexdigest()
+            rec["sha256_before"] = rec["before_sha256"]
+            rec["sha256_after"] = rec["after_sha256"]
+            if got != p["new"]:
+                raise ConfigError("%s 写后读回与目标不符（sha %s != %s）"
+                                  % (p["path"], rec["after_sha256"],
+                                     hashlib.sha256(p["new"]).hexdigest()))
+    except (ConfigError, OSError) as e:
+        # review F1：逐文件写时第 N 个失败，前 N-1 个已经落盘；外层只能看到函数返回后的
+        # 记录 ⇒ 必须在这里就地回滚（`restore-baseline*.sh` 只管 DB，不覆盖配置文件）。
+        rollback_errs = _rollback_file_recs(recs)
+        if rollback_errs:
+            raise ConfigError("%s；且就地回滚不完整：%s" % (e, "；".join(rollback_errs)))
+        raise
+    runner.log("[%s] 文件夹具（起栈前写 %s）：%d 个文件；备份目录=%s"
+               % (side, tag, len(recs), backup_dir))
+    for rec in recs:
+        runner.log("[%s]   %s/%s sha256 %s -> %s%s"
+                   % (side, tag, rec["rel"], rec["before_sha256"][:12],
+                      rec["after_sha256"][:12],
+                      "" if rec["changed"] else "（noop）"))
+    return recs, backup_dir
+
+
+def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
+    """起栈前应用**全部**窗口夹具（怪物 + 文件），对**每个根**（基线 + hook 影子）各写一份。
+
+    返回证据 dict：`targets[]`（怪物/文件统一形状：target/path/backup/before/after）、
+    `monsters`/`files` 便捷视图、`action`（appended / applied / appended+applied / dry-run）。
+    失败 fail-closed（rc=2 + 就地回滚已写项）；停栈后的最终还原由 `restore_fixtures` 负责。
+    """
+    res = {"side": side, "source": "profile", "declared": decl, "envir_root": None,
+           "roots": [], "backup_dir": None, "path": None, "backup": None,
            "before_sha256": None, "after_sha256": None, "appended": [],
-           "targets": [], "action": None, "rc": None, "error": None}
+           "files": [], "targets": [], "action": None, "rc": None, "error": None}
+    dry = getattr(runner, "dry_run", False)
     try:
         roots = _fixture_envir_roots(sc)
-        base = roots[0]
-        maps = _fixture_map_names(base)
-        lines = []
-        for spec in decl["monsters"]:
-            if spec["map"] not in maps:
-                raise ConfigError("fixtures 指定的地图 %r 不在本侧 MapInfo.txt（fail-closed）"
-                                  % spec["map"])
-            lines.append("\t".join([spec["map"], str(spec["x"]), str(spec["y"]),
-                                    spec["name"], "0", str(spec["count"]),
-                                    str(FIXTURE_MONGEN_ZEN_TIME)]))
-        res["appended"] = lines
-        if getattr(runner, "dry_run", False):
-            for root in roots:
-                for ln in lines:
-                    runner.log("[%s] 怪物夹具（dry-run 不写 Envir）：%s/Envir/MonGen.txt + %s"
-                               % (side, root, ln))
+        res["envir_root"] = roots[0]
+        res["roots"] = list(roots)
+        did_m = did_f = False
+        monster_lines = []
+        if decl.get("monsters"):
+            base = roots[0]
+            maps = _fixture_map_names(base)
+            for spec in decl["monsters"]:
+                if spec["map"] not in maps:
+                    raise ConfigError("fixtures 指定的地图 %r 不在本侧 MapInfo.txt"
+                                      "（fail-closed）" % spec["map"])
+                monster_lines.append("\t".join([
+                    spec["map"], str(spec["x"]), str(spec["y"]), spec["name"], "0",
+                    str(spec["count"]), str(FIXTURE_MONGEN_ZEN_TIME)]))
+            res["appended"] = monster_lines
+            if dry:
+                for root in roots:
+                    for ln in monster_lines:
+                        runner.log("[%s] 怪物夹具（dry-run 不写 Envir）：%s/Envir/"
+                                   "MonGen.txt + %s" % (side, root, ln))
+            else:
+                backup_dir = os.path.join(side_dir, "fixtures")
+                os.makedirs(backup_dir, exist_ok=True)
+                for i, root in enumerate(roots):
+                    path = os.path.join(root, "Envir", "MonGen.txt")
+                    if not os.path.exists(path):
+                        raise ConfigError("MonGen.txt 不存在：%s" % path)
+                    with open(path, "rb") as f:
+                        raw = f.read()
+                    before = hashlib.sha256(raw).hexdigest()
+                    nl = b"\r\n" if b"\r\n" in raw else b"\n"
+                    head = raw if (not raw or raw.endswith(b"\n")) else raw + nl
+                    append = b"".join(ln.encode("gbk") + nl for ln in monster_lines)
+                    tag = "shadow" if i else "baseline"
+                    backup = os.path.join(backup_dir, "MonGen.txt.%s.bak" % tag)
+                    with open(backup, "wb") as f:
+                        f.write(raw)
+                    with open(path, "wb") as f:
+                        f.write(head + append)
+                    with open(path, "rb") as f:
+                        after = f.read()
+                    tgt = {"target": tag, "path": path, "backup": backup,
+                           "before_sha256": before,
+                           "after_sha256": hashlib.sha256(after).hexdigest()}
+                    res["targets"].append(tgt)
+                    runner.log("[%s] 怪物夹具（起栈前写 %s/Envir/MonGen.txt）：追加 %d 行；"
+                               "sha256 %s -> %s；备份=%s"
+                               % (side, tag, len(monster_lines), before[:12],
+                                  tgt["after_sha256"][:12], backup))
+                    for ln in monster_lines:
+                        runner.log("[%s]   + %s" % (side, ln))
+                first = res["targets"][0]
+                res.update({"path": first["path"], "backup": first["backup"],
+                            "before_sha256": first["before_sha256"],
+                            "after_sha256": first["after_sha256"]})
+            did_m = True
+        if (decl.get("config_overrides") or decl.get("castle_list") is not None
+                or decl.get("castle_files")):
+            for i, root in enumerate(roots):
+                tag = "shadow" if i else "baseline"
+                recs, bdir = _apply_files(runner, side, root, decl, side_dir, tag)
+                res["targets"].extend(recs)
+                res["files"].extend(recs)
+                if bdir:
+                    res["backup_dir"] = bdir
+            did_f = True
+        if dry:
             res["action"] = "dry-run"
-            res["rc"] = 0
-            return res
-        backup_dir = os.path.join(side_dir, "fixtures")
-        os.makedirs(backup_dir, exist_ok=True)
-        for i, root in enumerate(roots):
-            path = os.path.join(root, "Envir", "MonGen.txt")
-            if not os.path.exists(path):
-                raise ConfigError("MonGen.txt 不存在：%s" % path)
-            with open(path, "rb") as f:
-                raw = f.read()
-            before = hashlib.sha256(raw).hexdigest()
-            nl = b"\r\n" if b"\r\n" in raw else b"\n"
-            head = raw if (not raw or raw.endswith(b"\n")) else raw + nl
-            append = b"".join(ln.encode("gbk") + nl for ln in lines)
-            tag = "shadow" if i else "baseline"
-            backup = os.path.join(backup_dir, "MonGen.txt.%s.bak" % tag)
-            with open(backup, "wb") as f:
-                f.write(raw)
-            with open(path, "wb") as f:
-                f.write(head + append)
-            with open(path, "rb") as f:
-                after = f.read()
-            tgt = {"target": tag, "path": path, "backup": backup,
-                   "before_sha256": before,
-                   "after_sha256": hashlib.sha256(after).hexdigest()}
-            res["targets"].append(tgt)
-            runner.log("[%s] 怪物夹具（起栈前写 %s/Envir/MonGen.txt）：追加 %d 行；地图=%s；"
-                       "sha256 %s -> %s；备份=%s"
-                       % (side, tag, len(lines),
-                          ",".join(sorted({x["map"] for x in decl["monsters"]})),
-                          before[:12], tgt["after_sha256"][:12], backup))
-            for ln in lines:
-                runner.log("[%s]   + %s" % (side, ln))
-        first = res["targets"][0]
-        res.update({"path": first["path"], "backup": first["backup"],
-                    "before_sha256": first["before_sha256"],
-                    "after_sha256": first["after_sha256"]})
-        res["action"] = "appended"
+        else:
+            res["action"] = ("appended+applied" if (did_m and did_f)
+                             else "appended" if did_m else "applied")
         res["rc"] = 0
         return res
     except (ConfigError, OSError) as e:
-        res["error"] = "怪物夹具失败：%s" % e
+        res["error"] = "窗口夹具失败：%s" % e
         res["rc"] = 2
+        err2 = restore_fixtures(res)
+        res["rollback_error"] = err2
+        if err2:
+            res["error"] += "；回滚也不完整：%s" % err2
         return res
 
 
+def preview_fixtures(runner, side, prof, sc, decl, ctx):
+    """`--dry-run`：只打印 planned diff（`run_fixtures` 的 dry-run 分支不写文件）。"""
+    res = run_fixtures(runner, side, prof, sc, decl, os.environ.copy(), None)
+    return res, res.get("rc") != 0
+
+
 def restore_fixtures(res):
-    """把 `run_fixtures` 的备份写回并校验 sha256（停栈后调用；失败只记录不改 rc）。"""
-    if not res or res.get("action") != "appended":
+    """按 `targets[]` 逐个还原（怪物 + 文件；基线 + 影子），重读磁盘核对 sha256。
+
+    返回 None（成功）或错误字符串。**rc 由调用方决定**（`run_side` 的 finally 把
+    还原失败升级为 rc=2）。
+    """
+    if not res:
         return None
-    errors = []
-    targets = res.get("targets") or [{"path": res.get("path"), "backup": res.get("backup"),
-                                      "before_sha256": res.get("before_sha256"),
-                                      "target": "baseline"}]
+    targets = res.get("targets") or []
+    if not targets and res.get("backup"):
+        targets = [{"target": "baseline", "path": res.get("path"),
+                    "backup": res.get("backup"),
+                    "before_sha256": res.get("before_sha256")}]
+    errs = []
     for tgt in targets:
+        if not tgt.get("backup"):
+            # dry-run / 已回滚 / noop 记录
+            continue
+        name = tgt.get("rel") or "MonGen.txt"
+        label = "%s/%s" % (tgt.get("target") or "baseline", name)
         try:
             with open(tgt["backup"], "rb") as f:
-                raw = f.read()
-            with open(tgt["path"], "wb") as f:
-                f.write(raw)
-            # F2（review）：必须**重读磁盘**再比，不能拿刚写进去的内存字节自证。
+                data = f.read()
+            sha = hashlib.sha256(data).hexdigest()
+            if sha != tgt["before_sha256"]:
+                errs.append("%s 的备份 sha256=%s 与写前 %s 不符（备份被改过）"
+                            % (label, sha, tgt["before_sha256"]))
+                continue
+            _fixture_atomic_write(tgt["path"], data)
             with open(tgt["path"], "rb") as f:
-                disk = f.read()
-            got = hashlib.sha256(disk).hexdigest()
-            if got != tgt.get("before_sha256"):
-                errors.append("%s 还原 sha256 不符：%s != %s"
-                              % (tgt.get("target"), got, tgt.get("before_sha256")))
+                got = hashlib.sha256(f.read()).hexdigest()
+            tgt["restore_sha256"] = got
+            if got != tgt["before_sha256"]:
+                errs.append("%s 还原后 sha256=%s != 写前 %s"
+                            % (label, got, tgt["before_sha256"]))
+                continue
+            os.remove(tgt["backup"])
+            tgt["backup"] = None
+            tgt["action"] = "restored"
         except OSError as e:
-            errors.append("%s 还原 MonGen.txt 失败：%s" % (tgt.get("target"), e))
-    return "；".join(errors) if errors else None
+            errs.append("%s 还原失败：%s" % (label, e))
+    if not errs:
+        if res.get("targets"):
+            first = next((t for t in res["targets"] if t.get("restore_sha256")),
+                         None)
+            if first:
+                res["restore_sha256"] = first["restore_sha256"]
+        res["backup"] = None
+    return ("；".join(errs) if errs else None)
 
 
 def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
@@ -3661,12 +4084,13 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                 res["error"] = mres.get("error") or "魔法夹具失败"
                 return res
 
-        # 1d) 声明式怪物夹具（profile.sides.<side>.fixtures）：起栈前写本侧私有 Envir 的
-        # MonGen.txt（备份 + 可还原）；失败 fail-closed。
+        # 1d) 窗口夹具（`profile.fixtures`，可被 `sides.<side>.fixtures` 整体覆盖）：
+        # 怪物（MonGen.txt）+ 配置覆盖 + 城堡前置；**每个根**（基线 + hook 影子）各写一份，
+        # 停栈后由 finally 的 restore_fixtures 按 sha256 还原；失败 fail-closed。
         try:
             fixtures_decl = profile_fixtures(prof, side)
         except ConfigError as e:
-            res["error"] = "怪物夹具声明非法：%s" % e
+            res["error"] = "窗口夹具声明非法：%s" % e
             return res
         if fixtures_decl:
             fres = run_fixtures(runner, side, prof, sc, fixtures_decl, env, side_dir)
@@ -3678,7 +4102,7 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                 fres["rc"] = 2
             res["fixtures"] = fres
             if fres.get("rc") != 0:
-                res["error"] = fres.get("error") or "怪物夹具失败"
+                res["error"] = fres.get("error") or "窗口夹具失败"
                 return res
 
         # 2) 起栈前端口检查（有人占 => rc=2 并点名 pid；不启动栈）
@@ -3842,13 +4266,22 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
             if res["rc"] == 0:
                 res["rc"] = 2
-        # 8b) 还原怪物夹具（只还原已追加的 MonGen.txt；失败记录但不改 rc）
+        # 8b) 还原窗口夹具（怪物 + 文件；**停栈之后**——服务端运行时会改写
+        # `Castle/<n>/SabukW.txt`，栈没停就还原会被覆盖）。还原失败 => 该侧 rc=2
+        # （配置文件留在被改状态会污染下一轮）。
         if res.get("fixtures"):
             ferr = restore_fixtures(res["fixtures"])
             res["fixtures"]["restore_error"] = ferr
+            try:
+                write_json_file(os.path.join(side_dir, "fixtures.json"),
+                                res["fixtures"])
+            except OSError:
+                pass
             if ferr:
-                msg = "怪物夹具还原失败：%s" % ferr
+                msg = "窗口夹具还原失败：%s" % ferr
                 res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
+                if res["rc"] == 0:
+                    res["rc"] = 2
 
 
 def run_compare(runner, out_dir, prof, rules):
@@ -4250,6 +4683,16 @@ def execute(cfg):
                      "characters_bagitem 写到位；完成不了 rc=2（不让 probe 超时）"
                      if inventory else None),
         },
+        "fixtures": {
+            "enabled": any(profile_fixtures(prof, s) for s in SIDES),
+            "declared": profile_fixtures(prof),
+            "sides": {},
+            "note": ("profile.fixtures => 每侧 restore 之后、起栈之前应用声明式夹具"
+                     "（monsters 单点刷怪 + 配置覆盖 + 城堡前置；对基线 + hook 影子各写一份；"
+                     "写前备份 sha256、写后读回）；停栈后按 sha256 还原；未知字段/键/越界值"
+                     "加载期 fail-closed"
+                     if any(profile_fixtures(prof, s) for s in SIDES) else None),
+        },
         "assets": {
             "enabled": bool(assets),
             "declared": assets,
@@ -4421,6 +4864,24 @@ def execute(cfg):
                         preview_failed = True
                         side_failed = True
             if not side_failed:
+                try:
+                    fixture_side = profile_fixtures(prof, side)
+                except ConfigError as e:
+                    runner.log("[%s] 窗口夹具声明非法 ⇒ 真跑 rc=2：%s" % (side, e))
+                    summary["notes"].append("窗口夹具声明非法：%s" % e)
+                    preview_failed = True
+                    side_failed = True
+                    fixture_side = None
+                if fixture_side:
+                    fprev, ffailed = preview_fixtures(runner, side, prof, sc,
+                                                      fixture_side, ctx)
+                    summary["fixtures"]["sides"][side] = fprev
+                    if ffailed:
+                        runner.log("[%s] 窗口夹具不可行 ⇒ 真跑 rc=2（不起栈、不跑场景）：%s"
+                                   % (side, fprev.get("error")))
+                        preview_failed = True
+                        side_failed = True
+            if not side_failed:
                 runner.log("[%s] 端口预检：%s" % (side, sc.get("ports") or []))
                 runner.log("[%s] 就绪等待：%s（timeout %ss）"
                            % (side, sc.get("ready_ports") or [],
@@ -4534,6 +4995,8 @@ def execute(cfg):
             summary["inventory"]["sides"][side] = res["inventory"]
         if res.get("assets"):
             summary["assets"]["sides"][side] = res["assets"]
+        if res.get("fixtures"):
+            summary["fixtures"]["sides"][side] = res["fixtures"]
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -5636,6 +6099,356 @@ def _selftest_rng_ledger(tmp):
     return out
 
 
+def _selftest_fixtures_files(tmp, stub=None, log=None, base_cfg=None):
+    """卡 `openmir2-window-fixture-castle`：配置覆盖 + 城堡前置（离线，不碰真实部署）。
+
+    与 `_selftest_fixtures`（怪物夹具）共用同一 `profile.fixtures` schema 与 `targets[]`
+    证据；本函数覆盖文件侧、F-1 对称性、F1 部分回滚、G-1 影子根（文件）。
+    """
+    out = []
+    root = os.path.join(tmp, "fixture-deploy")
+    os.makedirs(os.path.join(root, "Castle", "0"), exist_ok=True)
+    os.makedirs(os.path.join(root, "Envir"), exist_ok=True)
+    conf = os.path.join(root, "Server.conf")
+    conf_body = (b"[Setup]\r\nCastleTaxRate=5\r\nCastleGetAllNpcTax=0\r\n"
+                 b"ConsoleShowUserCountTime=600000\r\n")
+    with open(conf, "wb") as f:
+        f.write(conf_body)
+    list_path = os.path.join(root, "Castle", "List.txt")
+    with open(list_path, "wb") as f:
+        f.write(b"0\r\n")
+    sabuk = os.path.join(root, "Castle", "0", "SabukW.txt")
+    sabuk_body = ("[Setup]\r\nCastleName=沙巴克\r\nOwnGuild=\r\nTotalGold=0\r\n"
+                  "TodayIncome=0\r\n\r\n[Defense]\r\nCastleMap=3\r\n").encode("gbk")
+    with open(sabuk, "wb") as f:
+        f.write(sabuk_body)
+    with open(os.path.join(root, "Envir", "MapInfo.txt"), "wb") as f:
+        f.write("[0 主城]\n[0153 药品店]\n".encode("gbk"))
+    with open(os.path.join(root, "Envir", "MonGen.txt"), "wb") as f:
+        f.write("3\t294\t341\t神鹰\t10\t1\t360\n".encode("gbk"))
+    sc = {"envir_root": root}
+    side_dir = os.path.join(tmp, "fixture-side")
+    os.makedirs(side_dir, exist_ok=True)
+
+    def readb(path):
+        with open(path, "rb") as f:
+            return f.read()
+
+    raw_decl = {"config_overrides": {"Server.conf": {"CastleGetAllNpcTax": 1}},
+                "castle_list": ["0"],
+                "castle_files": {"0": {"OwnGuild": "沙巴克行会", "TotalGold": 4}},
+                "note": "W-TAX-2 窗口副本"}
+    decl = _validate_fixture_decl(raw_decl, "selftest.fixtures")
+    dry_runner = Runner(tmp, None, dry_run=True)
+    pre_sha = hashlib.sha256(conf_body).hexdigest()
+
+    # ① dry-run：只打印 diff，不写文件、不建备份
+    dres = run_fixtures(dry_runner, "rust", {}, sc, decl, {}, side_dir)
+    out.append((dres.get("rc") == 0 and dres.get("action") == "dry-run",
+                "FX1 dry-run 合法声明 => rc=0（action=dry-run）"))
+    out.append((readb(conf) == conf_body
+                and not os.path.exists(os.path.join(side_dir, "fixtures")),
+                "FX2 dry-run 不写文件、不建备份目录"))
+
+    # ② 真写：只改目标行；写前/写后 sha256 可复核
+    runner = Runner(tmp, None, dry_run=False)
+    res = run_fixtures(runner, "rust", {}, sc, decl, {}, side_dir)
+    out.append((res.get("rc") == 0 and res.get("action") == "applied",
+                "FX4 apply rc=0（action=applied）"))
+    expect_conf = conf_body.replace(b"CastleGetAllNpcTax=0", b"CastleGetAllNpcTax=1")
+    out.append((readb(conf) == expect_conf,
+                "FX5 Server.conf 只改目标值（其余字节逐字节不变，含 CRLF）"))
+    rec0 = res["files"][0]
+    out.append((rec0["before_sha256"] == pre_sha
+                and rec0["after_sha256"] == hashlib.sha256(expect_conf).hexdigest()
+                and [t for t in res["targets"] if t.get("rel") == "Server.conf"],
+                "FX6 写前/写后 sha256 与实测一致（且进 targets[]）"))
+    new_sabuk = readb(sabuk)
+    out.append((b"OwnGuild=" + "沙巴克行会".encode("gbk") + b"\r\n" in new_sabuk
+                and b"TotalGold=4\r\n" in new_sabuk
+                and new_sabuk.endswith(b"CastleMap=3\r\n"),
+                "FX7 SabukW OwnGuild 按 GBK 写入、TotalGold=4、[Defense] 段未动"))
+    out.append((readb(list_path) == b"0\r\n"
+                and any(r["rel"] == "Castle/List.txt" and r["changed"] is False
+                        for r in res["files"]),
+                "FX8 List.txt 同城集合 => 内容不变但仍留 sha 记录（changed=False）"))
+
+    # ③ 期间被第三方改写（模拟服务端 10 分钟存档）+ restore：按备份还原到写前字节
+    with open(conf, "ab") as f:
+        f.write(b"CastleTaxRate=9\r\n")
+    err = restore_fixtures(res)
+    out.append((err is None, "FX9 restore 成功（%s）" % (err,)))
+    out.append((readb(conf) == conf_body
+                and hashlib.sha256(readb(conf)).hexdigest() == pre_sha,
+                "FX10 Server.conf 按 sha256 还原到写前字节（即使期间被外部改过）"))
+    out.append((readb(sabuk) == sabuk_body, "FX11 SabukW 还原到写前字节"))
+    out.append((all(r.get("backup") is None for r in res["files"]),
+                "FX12 还原后备份文件已清理（backup=None）"))
+
+    # ④ no-op：值已等于目标
+    res2 = run_fixtures(runner, "rust", {}, sc, _validate_fixture_decl(
+        {"config_overrides": {"Server.conf": {"CastleGetAllNpcTax": 0}}},
+        "selftest.fixtures"), {}, side_dir)
+    out.append((res2.get("rc") == 0 and res2["files"][0]["changed"] is False
+                and res2["files"][0]["before_sha256"]
+                == res2["files"][0]["after_sha256"],
+                "FX13 值已等于目标 => changed=False（sha 不变）"))
+    restore_fixtures(res2)
+
+    # ⑤ 声明校验：未知文件/键、越界、坏城名、重复、空、只有 note
+    def rejects(body, needle):
+        try:
+            _validate_fixture_decl(body, "profile.fixtures")
+            return False
+        except ConfigError as e:
+            return needle in str(e)
+
+    out.append((rejects({"config_overrides": {"Server.conf": {"BogusKey": 1}}},
+                        "未白名单的配置键"), "FX14 未知配置键 => ConfigError"))
+    out.append((rejects({"config_overrides": {"Other.conf": {"CastleTaxRate": 5}}},
+                        "未白名单的配置文件"), "FX15 未知配置文件 => ConfigError"))
+    out.append((rejects({"config_overrides": {"Server.conf": {"CastleGetAllNpcTax": 2}}},
+                        "越界"), "FX16 越界值（CastleGetAllNpcTax=2）=> ConfigError"))
+    out.append((rejects({"castle_list": ["0", "0"]}, "重复"), "FX17 重复城 => ConfigError"))
+    out.append((rejects({"castle_list": []}, "非空"), "FX18 空城列表 => ConfigError"))
+    out.append((rejects({"castle_list": ["00"]}, "规范十进制"),
+                "FX19 前导零城名 => ConfigError"))
+    out.append((rejects({"castle_files": {"1": {"TotalGold": 1}}, "castle_list": ["0"]},
+                        "不在同一 fixtures"),
+                "FX20 castle_files 城不在 castle_list => ConfigError"))
+    out.append((rejects({"castle_files": {"0": {"OwnGuild": "甲" * 40}}}, "> 32"),
+                "FX21 OwnGuild 超 32 字节 => ConfigError"))
+    out.append((rejects({"castle_files": {"0": {"OwnGuild": "a\nb"}}}, "换行"),
+                "FX22 OwnGuild 含换行 => ConfigError"))
+    out.append((rejects({"note": "只有 note"}, "至少要给"),
+                "FX23 只有 note => ConfigError"))
+    out.append((rejects({"fixtures_typo": {}}, "未知字段"),
+                "FX24 顶层未知字段 => ConfigError"))
+
+    # ⑥ 文件缺失 / 键不唯一 / 生产根守卫
+    rmiss = run_fixtures(runner, "rust", {}, sc, _validate_fixture_decl(
+        {"config_overrides": {"Server1.conf": {"CastleTaxRate": 5}}},
+        "selftest.fixtures"), {}, side_dir)
+    out.append((rmiss.get("rc") == 2 and "不存在" in (rmiss.get("error") or ""),
+                "FX25 目标文件缺失 => rc=2（不创建/不猜）"))
+    with open(conf, "wb") as f:
+        f.write(conf_body + b"CastleGetAllNpcTax=0\r\n")
+    rdup = run_fixtures(runner, "rust", {}, sc, decl, {}, side_dir)
+    out.append((rdup.get("rc") == 2 and "出现 2 次" in (rdup.get("error") or ""),
+                "FX26 键出现 2 次 => rc=2（不猜）"))
+    with open(conf, "wb") as f:
+        f.write(conf_body)
+    rprod = run_fixtures(runner, "rust", {}, {"envir_root": FIXTURE_PROD_ROOT},
+                         decl, {}, side_dir)
+    out.append((rprod.get("rc") == 2 and "生产内容根" in (rprod.get("error") or ""),
+                "FX27 envir_root 指向 E:/MirServer => rc=2（内容冻结）"))
+
+    # ⑦ sides.<side>.fixtures 整体覆盖顶层
+    prof_both = {"fixtures": {"config_overrides":
+                              {"Server.conf": {"CastleGetAllNpcTax": 1}}},
+                 "sides": {"rust": {"fixtures": {"config_overrides":
+                                                 {"Server.conf":
+                                                  {"CastleGetAllNpcTax": 0}}}}}}
+    out.append((profile_fixtures(prof_both, "rust")["config_overrides"]["Server.conf"]
+                ["CastleGetAllNpcTax"] == 0
+                and profile_fixtures(prof_both, "csharp")["config_overrides"]
+                ["Server.conf"]["CastleGetAllNpcTax"] == 1,
+                "FX28 sides.<side>.fixtures 整体覆盖顶层（对 config_overrides 成立；"
+                "castle_list 受加载期对称性约束，见 FX36）"))
+
+    # ⑫ castle_list 两侧对称（review F-1）：门在写前、夹具在写后 ⇒ 加载期必须拦
+    def sym(decls):
+        try:
+            _check_fixture_symmetry(decls)
+            return None
+        except ConfigError as e:
+            return str(e)
+
+    err36 = sym({"csharp": {"castle_list": ["0"]},
+                 "rust": {"castle_list": ["0", "1"]}})
+    out.append((err36 is not None and "不一致" in err36,
+                "FX36 两侧 castle_list 不同 => ConfigError（加载期拦，不靠门）"))
+    out.append((sym({"csharp": {"castle_list": ["0"]},
+                     "rust": {"castle_list": ["0"]}}) is None
+                and sym({"csharp": None, "rust": None}) is None,
+                "FX37 两侧相同 / 两侧都不声明 => 通过"))
+    err38 = sym({"csharp": {"castle_list": ["0"]}, "rust": None})
+    out.append((err38 is not None and "不一致" in err38,
+                "FX38 一侧声明/一侧不声明 => ConfigError（避免只写一侧造成不对称）"))
+    bad_prof = {"fixtures": {"castle_list": ["0"]},
+                "sides": {"csharp": {},
+                          "rust": {"fixtures": {"castle_list": ["0", "1"]}}}}
+    err40 = sym({sd: profile_fixtures(bad_prof, sd) for sd in SIDES})
+    out.append((err40 is not None and "不一致" in err40,
+                "FX40 复现 reviewer 的绕过声明经 profile_fixtures 后仍被拒"))
+    err48 = sym({sd: profile_fixtures(
+        {"fixtures": {"config_overrides": {"Server.conf": {"CastleTaxRate": 5}}},
+         "sides": {"rust": {"fixtures": {"config_overrides":
+                                         {"Server.conf": {"CastleTaxRate": 9}}}}}},
+        sd) for sd in SIDES})
+    out.append((err48 is not None and "不一致" in err48,
+                "FX48 config_overrides 两侧不同 => ConfigError（对拍无效，不沉默）"))
+    err49 = sym({sd: profile_fixtures(
+        {"fixtures": {"castle_files": {"0": {"TotalGold": 0}}},
+         "sides": {"rust": {"fixtures": {"castle_files": {"0": {"TotalGold": 7}}}}}},
+        sd) for sd in SIDES})
+    out.append((err49 is not None and "不一致" in err49,
+                "FX49 castle_files 两侧不同 => ConfigError（对拍无效，不沉默）"))
+
+    # ⑬ review F1：逐文件写时第 2 个失败 ⇒ 第 1 个必须已就地回滚（不留污染）
+    conf_before = readb(conf)
+    sabuk_before = readb(sabuk)
+    saved_w = globals()["_fixture_atomic_write"]
+    state = {"hit": 0}
+
+    def _bad_write(path, data):
+        if path.endswith("SabukW.txt") and state["hit"] == 0:
+            state["hit"] += 1
+            with open(path, "wb") as f:
+                f.write(b"CORRUPT")
+            return
+        saved_w(path, data)
+
+    globals()["_fixture_atomic_write"] = _bad_write
+    try:
+        res_bad = run_fixtures(runner, "rust", {}, sc, decl, {}, side_dir)
+    finally:
+        globals()["_fixture_atomic_write"] = saved_w
+    leftover = []
+    bdir = os.path.join(side_dir, "fixtures", "backup")
+    if os.path.isdir(bdir):
+        leftover = sorted(os.listdir(bdir))
+    out.append((res_bad.get("rc") == 2
+                and "写后读回与目标不符" in (res_bad.get("error") or "")
+                and readb(conf) == conf_before and readb(sabuk) == sabuk_before
+                and not leftover and not res_bad.get("files"),
+                "FX42 第 2 个文件写坏 ⇒ rc=2 且**已写的第 1 个文件就地回滚**"
+                "（conf/sabuk 回原字节、无备份残留）"))
+
+    # ⑭ G-1 影子根（文件侧）：基线 + M2GameSvr-hook 两个根都写、都还原、都进 targets[]
+    sp = os.path.join(tmp, "shadow-deploy")
+    base = os.path.join(sp, "M2GameSvr")
+    shadow = os.path.join(sp, "M2GameSvr-hook")
+    shadow_before = {}
+    crlf = bytes([13, 10])
+    for r in (base, shadow):
+        os.makedirs(os.path.join(r, "Castle", "0"), exist_ok=True)
+        os.makedirs(os.path.join(r, "Envir"), exist_ok=True)
+        with open(os.path.join(r, "Server.conf"), "wb") as f:
+            f.write(conf_body)
+        with open(os.path.join(r, "Castle", "List.txt"), "wb") as f:
+            f.write(b"0" + crlf)
+        with open(os.path.join(r, "Castle", "0", "SabukW.txt"), "wb") as f:
+            f.write(sabuk_body)
+        with open(os.path.join(r, "Envir", "MapInfo.txt"), "wb") as f:
+            f.write("[0 主城]".encode("gbk") + bytes([10]))
+        with open(os.path.join(r, "Envir", "MonGen.txt"), "wb") as f:
+            f.write(("3" + chr(9) + "294" + chr(9) + "341" + chr(9) + "神鹰"
+                     + chr(9) + "10" + chr(9) + "1" + chr(9) + "360").encode("gbk")
+                    + bytes([10]))
+        shadow_before[r] = (readb(os.path.join(r, "Server.conf")),
+                            readb(os.path.join(r, "Castle", "0", "SabukW.txt")))
+    sc2 = {"envir_root": base}
+    decl2 = _validate_fixture_decl(
+        {"config_overrides": {"Server.conf": {"CastleGetAllNpcTax": 1}},
+         "castle_files": {"0": {"TotalGold": 4}}}, "selftest.fixtures")
+    res_s = run_fixtures(runner, "csharp", {}, sc2, decl2, {}, side_dir)
+    file_tgts = [t for t in res_s.get("targets") or [] if t.get("rel")]
+    both_conf_ok = all(readb(os.path.join(r, "Server.conf")) == expect_conf
+                       for r in (base, shadow))
+    both_sabuk_ok = all(b"TotalGold=4" in readb(os.path.join(r, "Castle", "0",
+                                                             "SabukW.txt"))
+                        for r in (base, shadow))
+    out.append((res_s.get("rc") == 0
+                and res_s.get("roots") == [base, shadow]
+                and {t.get("target") for t in file_tgts} == {"baseline", "shadow"}
+                and len(file_tgts) == 4 and both_conf_ok and both_sabuk_ok,
+                "FX43 影子根：M2GameSvr 与 M2GameSvr-hook 写同一内容"
+                "（targets[] 含 baseline/shadow 各 2 个文件）"))
+    err_s = restore_fixtures(res_s)
+    out.append((err_s is None
+                and all(readb(os.path.join(r, "Server.conf")) == shadow_before[r][0]
+                        and readb(os.path.join(r, "Castle", "0", "SabukW.txt"))
+                        == shadow_before[r][1] for r in (base, shadow)),
+                "FX44 影子根还原：两个根的 Server.conf 与 SabukW 都回到写前字节"))
+    res_d = run_fixtures(dry_runner, "csharp", {}, sc2, decl2, {}, side_dir)
+    out.append((res_d.get("action") == "dry-run"
+                and res_d.get("roots") == [base, shadow]
+                and all(readb(os.path.join(r, "Server.conf"))
+                        == shadow_before[r][0] for r in (base, shadow)),
+                "FX45 影子根 dry-run：预览两个根、两个根都不落盘"))
+
+    # ⑮ 合并声明（monsters + 文件）：action=appended+applied，两类各自还原
+    conf_before2 = readb(conf)
+    mongen_path = os.path.join(root, "Envir", "MonGen.txt")
+    mongen_before2 = readb(mongen_path)
+    decl3 = _validate_fixture_decl(
+        {"monsters": [{"map": "0153", "x": 3, "y": 4, "name": "鸡"}],
+         "config_overrides": {"Server.conf": {"CastleGetAllNpcTax": 1}}},
+        "selftest.fixtures")
+    res3 = run_fixtures(runner, "rust", {}, sc, decl3, {}, side_dir)
+    want_m = ("0153" + chr(9) + "3" + chr(9) + "4" + chr(9) + "鸡" + chr(9)
+              + "0" + chr(9) + "1" + chr(9) + "360").encode("gbk")
+    out.append((res3.get("rc") == 0 and res3.get("action") == "appended+applied"
+                and want_m in readb(mongen_path) and readb(conf) == expect_conf
+                and any(not t.get("rel") for t in res3.get("targets") or [])
+                and any(t.get("rel") == "Server.conf"
+                        for t in res3.get("targets") or []),
+                "FX46 合并声明：MonGen 追加 + Server.conf 覆盖，action=appended+applied，"
+                "targets[] 同时含怪物与文件"))
+    err3 = restore_fixtures(res3)
+    out.append((err3 is None and readb(mongen_path) == mongen_before2
+                and readb(conf) == conf_before2,
+                "FX47 合并声明的还原：MonGen 与配置文件都回到写前字节"))
+
+    # ⑨ 牙：白名单摘掉 CastleGetAllNpcTax => 同一份合法声明必须被拒
+    saved = dict(FIXTURE_CONFIG_KEYS)
+    try:
+        FIXTURE_CONFIG_KEYS.pop("CastleGetAllNpcTax")
+        tooth_red = False
+        try:
+            _validate_fixture_decl(raw_decl, "profile.fixtures")
+        except ConfigError as e:
+            tooth_red = "未白名单的配置键" in str(e)
+    finally:
+        FIXTURE_CONFIG_KEYS.clear()
+        FIXTURE_CONFIG_KEYS.update(saved)
+    out.append((tooth_red,
+                "FX 牙 白名单摘掉 CastleGetAllNpcTax => 同一声明被拒（白名单承重）"))
+
+    # ⑩ 生产接线（源码级）
+    import inspect
+    src_side = inspect.getsource(run_side)
+    out.append(("run_fixtures(" in src_side
+                and src_side.index("run_fixtures(") < src_side.index("# 2) 起栈前端口检查"),
+                "FX29 run_side 生产接线：夹具在起栈之前应用"))
+    out.append(("restore_fixtures(res[\"fixtures\"])" in src_side
+                and src_side.index("restore_fixtures(res[\"fixtures\"])")
+                > src_side.index("finally:"),
+                "FX30 run_side finally 在停栈之后还原夹具"))
+    out.append(("profile_fixtures(prof, side)" in inspect.getsource(load_profile),
+                "FX31 load_profile 加载期校验 profile_fixtures"))
+    out.append(("_check_fixture_symmetry(fixtures_by_side)"
+                in inspect.getsource(load_profile),
+                "FX41 load_profile 实际调用 castle_list 对称性检查（接线，不只是函数存在）"))
+
+    # ⑪ execute 级（dry-run）
+    if base_cfg is not None:
+        prof = _selftest_profile(tmp, stub, log,
+                                 envir_roots={"csharp": root, "rust": root})
+        prof["fixtures"] = {"config_overrides":
+                            {"Server.conf": {"CastleGetAllNpcTax": 1}}}
+        summary = execute(base_cfg(os.path.join(tmp, "fx-exec"), prof, dry_run=True))
+        fside = ((summary.get("fixtures") or {}).get("sides") or {}).get("rust") or {}
+        out.append((summary.get("exit_code") == 0
+                    and (summary.get("fixtures") or {}).get("enabled") is True
+                    and fside.get("rc") == 0 and fside.get("action") == "dry-run",
+                    "FX32 execute(dry-run) 走通夹具预览：summary.fixtures 有证据"))
+        out.append((readb(conf) == conf_body,
+                    "FX33 execute(dry-run) 之后 Server.conf 未被改写"))
+    return out
+
+
 def _selftest_fixtures(tmp):
     """卡 openmir2-window-fixture-corpse：声明式怪物夹具（解析/负例/写+还原/接线）。"""
     import json as _json
@@ -5654,9 +6467,13 @@ def _selftest_fixtures(tmp):
                                  "fixtures": {"monsters": [
                                      {"map": "0", "x": 330, "y": 331, "name": "鸡"}]}}}}
     decl = profile_fixtures(prof, "csharp")
-    out.append((decl == {"monsters": [{"map": "0", "x": 330, "y": 331,
-                                       "name": "鸡", "count": 1}]},
-                "FIX1 合法声明（map/x/y/name，count 缺省 1）=> 解析透传"))
+    # 卡 openmir2-window-fixture-castle：schema 与文件夹具合并后，归一化结果同时含文件三件套
+    # （未声明时为空集）——断言收敛到 monsters 本体 + 文件侧为空。
+    out.append((decl["monsters"] == [{"map": "0", "x": 330, "y": 331,
+                                     "name": "鸡", "count": 1}]
+                and decl["config_overrides"] == {} and decl["castle_list"] is None
+                and decl["castle_files"] == {},
+                "FIX1 合法声明（map/x/y/name，count 缺省 1）=> 解析透传（文件侧为空）"))
     out.append((profile_fixtures({"sides": {"csharp": {}}}, "csharp") is None,
                 "FIX1b 未声明 fixtures => None（不使用夹具的场景行为不变）"))
 
@@ -7432,6 +8249,8 @@ def selftest():
         for cond, msg in _selftest_assets(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_fixtures(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_fixtures_files(tmp, stub, log, base_cfg):
             chk(cond, msg)
         for cond, msg in _selftest_rng_ledger(tmp):
             chk(cond, msg)
