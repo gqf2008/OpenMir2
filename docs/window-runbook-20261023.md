@@ -627,3 +627,60 @@ oracle 的 `ActionOfGmExecute`（以及多数脚本动作）**直接拼 `sParam1
 > **悬空引用（不算行号漂移）**：§0.5 第 1 步原写「见 §1.1 的解析口径」，但本文件**没有** `## 1.1`（也无 `### 1.1`）；
 > 被指的「注意解析口径」实际在 **§1 第 1 步**（`## 1. 开跑前必做` 下第 1 条的加粗小标题）。2026-10-24 已就地
 > 改为「见 §1 第 1 步『注意解析口径』」——这是**悬空引用**，不是行号漂移，故单列在此。
+
+## 6. 故障期卫生门禁口径：**带 ref 的两项必须显式 `--ref master`**（2026-10-25；卡 `openmir2-runbook-stale-ref-master`）
+
+> 背景（tester-1 2026-10-25 实证）：walgit 故障期 `refs/remotes/walgit/master` **冻结**在 `4ae3dc810`。
+> `stale_pointer_gate` 默认取这个远端 ref 做祖先判定 ⇒ 会把**当前本地 head** 的快照声明误拒
+> （`f08496192` 上实测 1 处红；同一命令加 `--ref master` 即绿）。
+
+**① 口径（按 `--ref` 行为分三类；7 项卫生门禁 + 1 项台账门）**
+
+| 门 | `--ref` 行为 | 故障期口径 |
+|---|---|---|
+| `tools/hygiene/stale_pointer_gate.py` | **接受**（默认 `refs/remotes/walgit/master`） | 显式 `--ref master` |
+| `tools/hygiene/dynamic_count_stamp_gate.py` | **接受** | 显式 `--ref master` |
+| `tools/whitelist/t_reservation_gate.py` | 硬传 **rc=2**（argparse 子命令 `unrecognized arguments`） | 不传 |
+| `mir2-rs/tests/parity/m3/whitelist_anchor_gate.py` | 硬传 **rc=2**（同上） | 不传 |
+| `mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py` | 硬传 **rc=2**（同上） | 不传 |
+| `tools/hygiene/board_coverage_gate.py` | 硬传 **rc=2**（`unknown argument '--ref'`） | 不传 |
+| `tools/hygiene/conflict_marker_gate.py` | **静默忽略（rc=0 假绿）**：只认 `-h/--help`/`--selftest`，其余 argv 直接忽略 | 不传；默认 ref 口径靠 ② 确认 |
+| `mir2-rs/tests/parity/coverage/script_host_noop_audit.py`（台账门） | **静默忽略（rc=0 假绿）**：`check` 前先丢弃所有 `--` 开头的 token | 不传；同上 |
+
+⇒ 三类行为**不能互相替代**：① 2 项接受 `--ref`；② 4 项硬传 rc=2（能看见报错）；③ **2 项静默忽略**——
+传了照样 rc=0，是**假绿**（比报错危险：会让人误以为 ref 已钉到本地 master）。故对 ②③ 两类，
+故障期的唯一正确做法是 **不传 `--ref`**，并用 ② 的 `git rev-parse` 对照确认**默认 ref 已指向本地
+`master`**；CI 侧另有 `refs/heads/master` 约束兜底。恢复默认口径后（③）不要给这两门补 `--ref`，它不会生效。
+
+**② 可复算对照（跑门之前 1 秒判一次）**
+
+```sh
+git rev-parse master refs/remotes/walgit/master
+```
+
+- 两 sha **相同** ⇒ 默认口径与 `--ref master` 等价，按 CI 原样跑（无需显式 ref）；
+- 两 sha **不同**（故障期常态）⇒ 两项 ref 门必须带 `--ref master`，否则判定基准是冻结的旧远端。
+
+**③ 恢复后回归默认**
+
+`git fetch walgit master` 成功且 `refs/remotes/walgit/master` 与本地 `master` 同 sha 之后，**去掉**
+`--ref master`，回到 CI（`.walgit/ci.toml`）的默认口径；不要把 `--ref master` 长期写进脚本/文档命令。
+
+**故障期整套（可直接复制；`--ref` 只出现在前两条）**
+
+```sh
+python -I tools/whitelist/t_reservation_gate.py check
+python -I tools/hygiene/conflict_marker_gate.py
+python -I -B tools/hygiene/stale_pointer_gate.py --ref master
+python -I mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check
+python -I mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit
+python -I -B tools/hygiene/dynamic_count_stamp_gate.py --ref master
+python -I -B tools/hygiene/board_coverage_gate.py --board .walgit/board.toml
+python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py check   # 台账门（静默忽略 --ref）
+python -I -B tools/hygiene/merge_tree_helper.py --selftest               # CI 第 8 项：不吃 --ref，resolve_master 自解到本地 master
+git diff --check
+```
+
+**判据（本卡实测，master=`263e77d7e`）**：`stale_pointer_gate --ref master` ⇒ rc=0（`ref=263e77d7e…`，
+0 处红）；`dynamic_count_stamp_gate --ref master` ⇒ rc=0（0 缺戳）；`conflict_marker_gate` ⇒ rc=0；
+`git diff --check` ⇒ rc=0。
