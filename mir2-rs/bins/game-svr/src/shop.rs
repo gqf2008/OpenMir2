@@ -1570,32 +1570,70 @@ pub fn get_script_label(say_text: &str) -> Vec<String> {
     out
 }
 
-/// 把 [`MerchantTaxIntent`] 落到城堡金库（oracle `Castle.IncRateGold` / `CastleMgr.IncRateGold`）。
+/// 商税入账目的地（**显式**；与 `merchant_tax_intent` 的税额计算分离）。
 ///
-/// - `Castle`：只入 `castle_index` 指向的那座城（`CastleManager.GetCastle` 口径；下标越界 ⇒ 无副作用）；
+/// `Castle(i)` **自带下标** ⇒ 「intent=Castle 但下标指向另一座城」这种误用不再可表达；
+/// `CastleManager` 无下标（oracle `CastleMgr` 恒升序入全部城，与任何具体城无关）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MerchantTaxDestination {
+    /// 只入下标 `i` 的城；`None` = 无城可入（无副作用，绝不猜 0 号城）。
+    Castle(Option<usize>),
+    /// `CastleManager.cs:209-215`：**升序**入全部城，与任何下标无关。
+    CastleManager,
+}
+
+/// 一次商税入账（目的地 + 金额），由 [`posting_for`] 从纯计算层**唯一**转换得到。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MerchantTaxPosting {
+    pub destination: MerchantTaxDestination,
+    pub amount: i32,
+}
+
+/// 纯计算层 `MerchantTaxIntent` ⇒ 显式入账参数（**唯一转换点**，卡 C-1）。
+///
+/// `Castle` 目标吞掉调用方的 `castle_index`（`None` 合法）；`CastleManager` 目标**丢弃**下标
+/// （oracle 不看具体城）。`intent == None`（无税/前置不满足）⇒ `None`，绝不猜测目的地。
+#[must_use]
+pub fn posting_for(
+    intent: Option<&MerchantTaxIntent>,
+    castle_index: Option<usize>,
+) -> Option<MerchantTaxPosting> {
+    let intent = intent?;
+    let destination = match intent.target {
+        MerchantTaxTarget::Castle => MerchantTaxDestination::Castle(castle_index),
+        MerchantTaxTarget::CastleManager => MerchantTaxDestination::CastleManager,
+    };
+    Some(MerchantTaxPosting {
+        destination,
+        amount: intent.amount,
+    })
+}
+
+/// 把 [`MerchantTaxPosting`] 落到城堡金库（oracle `Castle.IncRateGold` / `CastleMgr.IncRateGold`）。
+///
+/// - `Castle(i)`：只入第 `i` 座城（`CastleManager.GetCastle` 口径；下标越界/`None` ⇒ 无副作用）；
 /// - `CastleManager`：**升序**遍历全部城（`CastleManager.cs:209-215`）；
 /// - `tick_ms` = `HUtil32.GetTickCount()` 口径；生产传 `world.clock_ms`（虚拟时钟）。
 ///
-/// `intent == None`（无税/前置不满足）⇒ 返回空表，绝不猜测目的地。
+/// `posting == None`（无税/前置不满足）⇒ 返回空表，绝不猜测目的地。
 #[must_use]
 pub fn apply_merchant_tax(
     castles: &mut [UserCastle],
-    castle_index: Option<usize>,
-    intent: Option<MerchantTaxIntent>,
+    posting: Option<MerchantTaxPosting>,
     cfg: &CastleTaxConfig,
     tick_ms: i64,
 ) -> Vec<IncRateGoldOutcome> {
-    let Some(intent) = intent else {
+    let Some(posting) = posting else {
         return Vec::new();
     };
-    match intent.target {
-        MerchantTaxTarget::Castle => castle_index
+    match posting.destination {
+        MerchantTaxDestination::Castle(index) => index
             .and_then(|i| castles.get_mut(i))
-            .map(|c| vec![c.inc_rate_gold(cfg, intent.amount, tick_ms)])
+            .map(|c| vec![c.inc_rate_gold(cfg, posting.amount, tick_ms)])
             .unwrap_or_default(),
-        MerchantTaxTarget::CastleManager => castles
+        MerchantTaxDestination::CastleManager => castles
             .iter_mut()
-            .map(|c| c.inc_rate_gold(cfg, intent.amount, tick_ms))
+            .map(|c| c.inc_rate_gold(cfg, posting.amount, tick_ms))
             .collect(),
     }
 }
@@ -2866,7 +2904,12 @@ mod tests {
             })
         );
         let mut castles = vec![castle("沙巴克")];
-        let applied = apply_merchant_tax(&mut castles, Some(0), r.tax, &tax_cfg(), 0);
+        let applied = apply_merchant_tax(
+            &mut castles,
+            posting_for(r.tax.as_ref(), Some(0)),
+            &tax_cfg(),
+            0,
+        );
         assert_eq!(applied.len(), 1);
         assert_eq!(applied[0].n_in_gold, 3);
         assert_eq!(castles[0].total_gold, 3);
@@ -2903,7 +2946,12 @@ mod tests {
             })
         );
         let mut castles = vec![castle("沙巴克")];
-        let applied = apply_merchant_tax(&mut castles, Some(0), r.tax, &tax_cfg(), 0);
+        let applied = apply_merchant_tax(
+            &mut castles,
+            posting_for(r.tax.as_ref(), Some(0)),
+            &tax_cfg(),
+            0,
+        );
         assert_eq!(applied[0].n_in_gold, 5);
         assert_eq!(castles[0].total_gold, 5);
     }
@@ -2939,7 +2987,12 @@ mod tests {
             "税基 = Round(10000*5/100)=500，**不是**交易价 100 的 5"
         );
         let mut castles = vec![castle("沙巴克"), castle("沙巴克二")];
-        let applied = apply_merchant_tax(&mut castles, None, r.tax, &tax_cfg(), 0);
+        let applied = apply_merchant_tax(
+            &mut castles,
+            posting_for(r.tax.as_ref(), None),
+            &tax_cfg(),
+            0,
+        );
         assert_eq!(applied.len(), 2, "CastleManager 升序遍历全部城");
         assert_eq!(castles[0].total_gold, 500);
         assert_eq!(castles[1].total_gold, 500);
@@ -2979,7 +3032,12 @@ mod tests {
             })
         );
         let mut castles = vec![castle("沙巴克")];
-        let applied = apply_merchant_tax(&mut castles, Some(0), r.tax, &tax_cfg(), 0);
+        let applied = apply_merchant_tax(
+            &mut castles,
+            posting_for(r.tax.as_ref(), Some(0)),
+            &tax_cfg(),
+            0,
+        );
         assert_eq!(applied[0].n_in_gold, 1);
         assert_eq!(castles[0].total_gold, 1);
     }
@@ -3006,14 +3064,117 @@ mod tests {
         assert!(r.ok);
         assert_eq!(r.tax, None, "缺 Castle 且不全局收税 ⇒ 不猜目的地");
         let mut castles = vec![castle("沙巴克")];
-        assert!(apply_merchant_tax(&mut castles, None, r.tax, &tax_cfg(), 0).is_empty());
+        assert!(apply_merchant_tax(
+            &mut castles,
+            posting_for(r.tax.as_ref(), None),
+            &tax_cfg(),
+            0
+        )
+        .is_empty());
         assert_eq!(castles[0].total_gold, 0);
         // `CastleManager.GetCastle` 前置：越界下标 ⇒ 无副作用（不 panic、不猜 0 号城）。
         let stray = Some(MerchantTaxIntent {
             target: MerchantTaxTarget::Castle,
             amount: 50,
         });
-        assert!(apply_merchant_tax(&mut castles, Some(9), stray, &tax_cfg(), 0).is_empty());
+        assert!(apply_merchant_tax(
+            &mut castles,
+            posting_for(stray.as_ref(), Some(9)),
+            &tax_cfg(),
+            0
+        )
+        .is_empty());
         assert_eq!(castles[0].total_gold, 0);
+    }
+    /// **C-1 牙 1（目的地映射）**：`posting_for` 是纯计算层 → 显式目的地的唯一转换点；
+    /// Castle 目标吞下标、CastleManager 丢弃下标、`None` intent ⇒ `None`。
+    ///
+    /// 红检（改坏必红）：把两个 `match` 分支对调（Castle↔CastleManager）或让 `None` 也返回
+    /// posting ⇒ 断言必红。
+    #[test]
+    fn posting_for_maps_intent_target_to_explicit_destination() {
+        let castle = MerchantTaxIntent {
+            target: MerchantTaxTarget::Castle,
+            amount: 7,
+        };
+        assert_eq!(
+            posting_for(Some(&castle), Some(3)),
+            Some(MerchantTaxPosting {
+                destination: MerchantTaxDestination::Castle(Some(3)),
+                amount: 7,
+            })
+        );
+        assert_eq!(
+            posting_for(Some(&castle), None),
+            Some(MerchantTaxPosting {
+                destination: MerchantTaxDestination::Castle(None),
+                amount: 7,
+            })
+        );
+        let mgr = MerchantTaxIntent {
+            target: MerchantTaxTarget::CastleManager,
+            amount: 9,
+        };
+        assert_eq!(
+            posting_for(Some(&mgr), Some(3)),
+            Some(MerchantTaxPosting {
+                destination: MerchantTaxDestination::CastleManager,
+                amount: 9,
+            }),
+            "CastleManager 丢弃下标（oracle 不看具体城）"
+        );
+        assert_eq!(posting_for(None, Some(3)), None);
+    }
+
+    /// **C-1 牙 2（目的地是唯一路由源）**：`Castle(Some(i))` 只入第 i 座城、`Castle(None)` /
+    /// 越界无副作用、`CastleManager` 升序入全部城；目的地参数错即错账。
+    ///
+    /// 红检（改坏必红）：把 `Castle` 分支改成遍历全部城（或把 `CastleManager` 分支改成只入
+    /// 0 号城）⇒ 断言必红。
+    #[test]
+    fn apply_merchant_tax_routes_only_by_explicit_destination() {
+        let cfg = tax_cfg();
+        let mut castles = vec![castle("沙巴克"), castle("沙巴克二")];
+        let posting = |destination| {
+            Some(MerchantTaxPosting {
+                destination,
+                amount: 100,
+            })
+        };
+        let one = apply_merchant_tax(
+            &mut castles,
+            posting(MerchantTaxDestination::Castle(Some(1))),
+            &cfg,
+            0,
+        );
+        assert_eq!(one.len(), 1, "Castle(i) 只入一座城");
+        assert_eq!(castles[0].total_gold, 0, "0 号城不得被动");
+        assert_eq!(castles[1].total_gold, 5);
+        let all = apply_merchant_tax(
+            &mut castles,
+            posting(MerchantTaxDestination::CastleManager),
+            &cfg,
+            0,
+        );
+        assert_eq!(all.len(), 2, "CastleManager 升序入全部城");
+        assert_eq!(castles[0].total_gold, 5);
+        assert_eq!(castles[1].total_gold, 10);
+        // 越界 / None：不猜 0 号城。
+        let mut c2 = vec![castle("沙巴克")];
+        assert!(apply_merchant_tax(
+            &mut c2,
+            posting(MerchantTaxDestination::Castle(Some(9))),
+            &cfg,
+            0,
+        )
+        .is_empty());
+        assert!(apply_merchant_tax(
+            &mut c2,
+            posting(MerchantTaxDestination::Castle(None)),
+            &cfg,
+            0,
+        )
+        .is_empty());
+        assert_eq!(c2[0].total_gold, 0);
     }
 }
