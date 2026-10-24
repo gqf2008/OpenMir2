@@ -686,7 +686,7 @@ oracle 的 `ActionOfGmExecute`（以及多数脚本动作）**直接拼 `sParam1
 ⇒ 三类行为**不能互相替代**：① 2 项接受 `--ref`；② 4 项硬传 rc=2（能看见报错）；③ **2 项静默忽略**——
 传了照样 rc=0，是**假绿**（比报错危险：会让人误以为 ref 已钉到本地 master）。故对 ②③ 两类，
 故障期的唯一正确做法是 **不传 `--ref`**，并用 ② 的 `git rev-parse` 对照确认**默认 ref 已指向本地
-`master`**；CI 侧另有 `refs/heads/master` 约束兜底。恢复默认口径后（③）不要给这两门补 `--ref`，它不会生效。
+`master`**（CI 的 `refs` 字段只决定任务对哪些 ref 生效，**不改变**门的 `--ref` 默认解析——仍是冻结的 `refs/remotes/walgit/master` ⇒ 故障期 CI 的 `fast-stale-pointer` 同样会误红，本节口径需手动复核）。恢复默认口径后（③）不要给这两门补 `--ref`，它不会生效。
 
 **② 可复算对照（跑门之前 1 秒判一次）**
 

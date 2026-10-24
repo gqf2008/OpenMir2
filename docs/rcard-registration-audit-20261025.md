@@ -51,7 +51,7 @@
 | 1 商税 | W-TAX-1..3 | 四路径双栈金币帧 / `SabukW.txt` 三字段 diff=0 / `CastleGetAllNpcTax=1` 多城升序 / 前置两态 | **缺（手工可跑）**：无城堡商人场景（`merchant_dialog` 点的是 0103 铁器店），需窗口专用配置副本 + 客户端四操作 | kit 文档 §1.1；`E:/MirServer` 无城堡商人场景 |
 | 1 商税 | W-TAX-4 | 日上限 + `SaveTick` 10min 门逐位 | **缺（被 C# 时钟注入阻塞）**：`grep -rIl MIR2_CLOCK src/` = **0** ⇒ 只能观察「同窗口不刷新」 | 我亲验：`src/` 0 命中 |
 | 2 loader | W-LF-1 | 出生点 11 键/落点/朝向首包 | **部分/缺**：`login_only` 用既有角色；probe 无 `CM_NEWCHR`（我亲验 `mir2_probe.py` 0 命中）⇒ 手工建号 | 我亲验 |
-| 2 loader | W-LF-2 | 5 个新列的消费（`MakeSafePkZone`/`InSafeZone`） | **构造级（非窗口）**：本片无消费点 ⇒ 建议从 `window_gap` 移出，挂后继接线段 | 卡面自述 + kit §1.2 |
+| 2 loader | W-LF-2 | 5 个新列的消费（`MakeSafePkZone`/`InSafeZone`） | **构造级（非窗口）**：本片无消费点 ⇒ 建议从 `window_gap` 移出，挂后继接线段（**归宿**：若采纳移出，须在该卡留 comment 记「W-LF-2 → 后继接线片」；等价收口见 reviewer-21 `6071715a` I-3「保留登记 + 注明消费点接线后需重新申报」——两种收口都不改本卡 `window_required` 判定） | 卡面自述 + kit §1.2 |
 | 3 playdice | W-PD-1 | GAMEPOINT 落库 + `5008` 字节 + 重连读值 | **缺**：无 `真爱-G002` 场景；`ASSETS_COLUMNS = ("Gold",)`（我亲验 `card_window.py:2980`）⇒ 前置 `GamePoint≥9` 无声明通道 | 我亲验 + kit §1.3 |
 | 3 playdice | W-PD-2 | `@back` 排水帧序 | **字面不可执行**：部署件 `grep -rIl '@back>' Envir` = **0**；只有 `@back2>` **2 处**（`真爱-G002`/`真爱666-G002`，我亲验） ⇒ 须澄清是 `@back2` 还是构造级（与台账 errata `de37987d` 一致） | 我亲验 |
 | 4 CLEARMAPMON | W-CM-1/2 | T118/Q001 帧序/实体/AOI | **部分（手工可跑）**：触发点存在（`武士-0114.txt` / `老人-1.txt`），无现成场景 | kit §1.4；我复读两处脚本 |
@@ -61,8 +61,8 @@
 
 **与 tester kit 文档的关系**：`docs/window-kit-coverage-20261025.md`（已合 `1c605ca4a`）给出同一批 W 项的
 「现成/部分/缺」划分；我逐条对照后**结论一致**，并另行亲验了其中 5 条事实（`@back>`=0/`@back2>`=2、
-`ASSETS_COLUMNS=("Gold",)`、C# `MIR2_CLOCK`=0、probe 无 `newchr`、`run3-scenarios.json` 共 17 场景且
-`king_castle_war` 条目无 castlewar 步骤）。本文**不重复**该文档的场景提案，只做登记层判定。
+`ASSETS_COLUMNS=("Gold",)`、C# `MIR2_CLOCK`=0、probe 无 `newchr`、`run3-scenarios.json` 共 17 场景（条目只含 name/profile/extra、**不内联 steps**；真正的步骤在
+`tools/probe/scenarios/king_castle_war.json`，只到 `@requestcastlewarA → @requestcastlewar` 缴金条门、不进 UnderWar））。本文**不重复**该文档的场景提案，只做登记层判定。
 
 ## 4. goal_gate 分桶对账（`--skip-tests --skip-script`，快照 `1c605ca4a`）
 
@@ -85,7 +85,7 @@ merged_not_closed 1 / 其它需人工 0 / 未开工或未合并 1（不计缺口
 
 | # | 级别 | 内容 | 建议 |
 |---|---|---|---|
-| **F1** | **Important（登记卫生）** | `openmir2-m3-castle-siege-state` 的 T-127 片 `merge_result`（`c8a74b72`）写成 `oid: "T127_MERGE"`、`merge_commit: "见 master tip"` ⇒ **机器不可判**：审计/台账/复算都无法从条目直接对到 `263e77d7e`（本次靠 `git log --first-parent --merges` 反查）。其余 5 张卡的 `merge_result.oid` 都是真 commit。 | 由卡片 owner 补一条 `comment`（不改 status）写明真实 merge oid `263e77d7e` 与 branch `card/castle-siege-t127`；以后 merge_result 的 `oid` 只写 commit。 |
+| **F1** | **Important（登记卫生）** | `openmir2-m3-castle-siege-state` 的 T-127 片 `merge_result`（`c8a74b72`）写成 `oid: "T127_MERGE"`、`merge_commit: "见 master tip"` ⇒ **机器不可判**：审计/台账/复算都无法从条目直接对到 `263e77d7e`（本次靠 `git log --first-parent --merges` 反查）。其余 5 张卡的 `merge_result.oid` 都是真 commit。 | 由卡片 owner 补一条 `comment`（不改 status）写明真实 merge oid `263e77d7e` 与 branch `card/castle-siege-t127`；以后 merge_result 的 `oid` 只写 commit。同类 F1 correction 批量覆盖 **23 张卡**（reviewer-21 `2790fe80` A-8；T-127 那条未用 `real_merge_oid` 字段、亦在其列）。 |
 | **F2** | Minor（弱登记） | §3 的 10 条 W 项：**6 张卡**都存在「有文本、当前不可当场执行」的情形（缺场景/夹具、C# 时钟注入未落地、RNG 账本未接线、资产白名单只有 `Gold`）。**其中两处性质更硬**：① `loader W-LF-2` 本片无消费点 ⇒ 应移出窗口项；② `playdice W-PD-2` 的 `@back` 字面在部署件 **0 命中**（只有 `@back2`）⇒ 要么改指 `@back2`，要么标构造级。 | 逐条按 §3「依据」列收口：能手工跑的在窗口 kit 里补手工步骤（tester 已做）；不能跑的改登记（移出/挂后继片/标观察项）。 |
 | **F3** | Minor（口径） | 5/6 卡的**最后 status** 是合并后的 `in-progress`，**不带** `tier`/`window_required`；字段实际在 `merge_result` 与更早的 needs-review status 上。`goal_gate` 采「**任一**条目的 `window_required=true`」⇒ 桶正确；但若有人按「最后 status」核对会误判缺登记。 | 审计/复核口径统一写成「以 merge_result（或任一 needs-review status）为准」；不建议为此回填旧 status。 |
 | **F4** | 红线（自检） | 本文全部表述遵守：不把「登记型 PASS」写成「已有真机证据」（§0/§4 明写 194 张卫生清单只是登记型 PASS）；本文不对任何卡作审查结论（复核由 reviewer-21 出）。 | — |
