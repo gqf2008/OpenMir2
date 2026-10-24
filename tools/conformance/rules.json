@@ -388,6 +388,13 @@
       "tier": "L",
       "reason": "SM_MAGICFIRE_FAIL(639)（src/OpenMir2/Messages.cs:301）是真协议帧。oracle 发点：ClientSpellXY 的 default 支在 MagicManager.DoSpell 返回 false（含距离门 MagicManager.cs:155-157）时 `SendRefMsg(RM_MAGICFIREFAIL, 0, 0, 0, 0, \"\")`（src/M2Server/Player/PlayObject.Attack.cs:1278-1281）；收件人 PlayObject.Message.cs:1794-1796 `SendDefMessage(SM_MAGICFIRE_FAIL, processMsg.ActorId, 0, 0, 0)` ⇒ PlayObject.Socket.cs:17-26 的 5 参 SendDefMessage = MakeMessage + `SendSocket(ClientMsg)`（无尾）。**字段口径**：ident=639；**param=tag=series=0 逐字节**；recog=施法者 ActorId（会话作用域）⇒ 全局掩码，不取回；**body 为空（header-only，0B）**，无 EDCode 尾、无拼接。Rust 同形：smframe_ext.rs:297-302 `sm_magicfire_fail(actor_id)`（金标准 header_only_frames_self_computed_golden 钉 12B 头：`c80000007f02000000000000`）。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-58)"
+    },
+    {
+      "ident": 211,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_SENDMYMAGIC(211) 是真实协议帧（src/OpenMir2/Messages.cs:225）。下行链：登录魔法同步 PlayObject.cs:1390 `SendPriorityMsg(RM_SENDMYMAGIC=10122, …, High)` → PlayObject.Message.cs:1797-1800 `case RM_SENDMYMAGIC: SendUseMagic()` → src/M2Server/Player/PlayObject.Base.cs:1052-1070 SendUseMagic()：`MakeMessage(SM_SENDMYMAGIC, 0, 0, 0, (short)MagicList.Count)` + 逐条 `EDCode.EncodeBuffer(ClientMagic) + '/'`；魔法列表为空时整帧不发（IsNullOrEmpty 门）。头部 recog/param/tag 恒 0（源码常量，全局 recog 掩码无副作用）、series=MagicList.Count 是语义值照常比。body 为玩家已学魔法列表，**逐字节比、不登记任何掩码**：内容全部来自魔法库静态定义与玩家持久化状态（Key/Level/CurTrain + MagicInfo），无墙钟/会话成分。单条 ClientMagic 84B（ClientMagic.cs WritePacket：Key(1)+Level(1)+pad(2)+CurTrain(4)+MagicInfo 76B；MagicInfo.cs WritePacket：MagicId(2)+MagicName(1+14)+EffectType(1)+Effect(1)+pad(1)+Spell(2)+Power(2)+TrainLevel(4×1)+MaxTrain(4×4)+TrainLv(1)+Job(1)+pad(2)+DelayTime(4)+DefSpell(1)+DefPower(1)+MaxPower(2)+DefMaxPower(1)+Desc(1+15)+pad(3)），84B→EDCode 112 字符+'/'=113 与 spell_cast 冻结 fixture seq18 body_len 吻合。Rust 同形：mir2-rs/bins/game-svr/src/smframe.rs:225-231 sm_sendmymagic(count,tail)。冻结 fixture 两侧 seq18 body_sha256 相等（bd17f4f6…）⇒ 登记后该帧 0 diff，从唯一残余 UNDECIDABLE（卡 openmir2-compare-ident211-classification）转为已比。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-74)"
     }
   ],
   "db": {

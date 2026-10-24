@@ -1968,11 +1968,12 @@ class Selftest(object):
 
         # ⑤ 真机冻结 fixture（tools/conformance/fixtures/spell_cast/）：修复前必红
         #   （input/Undecidable 缺合法 ident）；修复后必须出确定性 verdict：
-        #   两侧各滤 2 条控制帧（oracle 行 31/34、rust 行 33/36）、34 条协议帧全部比较、
-        #   UNDECIDABLE 只剩「ident 211 未分类」（真发现，属后续规则卡，不是输入问题）。
-        #   注：钉死 rc/undecidable 是**冻结 fixture + 冻结 rules.json** 下的确定性结论；
-        #   若将来规则表把 211 分类，须随该规则卡一起更新这里的期望（与 baseline 钉
-        #   ignored_ident_rules==[14] 同理）。
+        #   两侧各滤 2 条控制帧（oracle 行 31/34、rust 行 33/36）、34 条协议帧全部比较。
+        #   注：钉死 rc/diffs/undecidable 是**冻结 fixture + 冻结 rules.json** 下的确定性
+        #   结论。ident 211（SM_SENDMYMAGIC）已随规则卡 openmir2-compare-ident211-
+        #   classification 入表（action=compare 全字节比，见 ⑥）；残余 rc=1 是已知真差异
+        #   ident 53 ×3（该红仍红，归 SM_HEALTHSPELLCHANGED 卡；与 baseline 钉
+        #   ignored_ident_rules==[14] 同理，规则再变时随该规则卡更新这里）。
         fix_o = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
                              "spell_cast", "csharp")
         fix_r = os.path.join(self.api.REPO_ROOT, "tools", "conformance", "fixtures",
@@ -1999,13 +2000,33 @@ class Selftest(object):
                     and (rep or {}).get("frames", {}).get("rust_total") == 34
                     and (rep or {}).get("frames", {}).get("compared") == 34),
                    (rep or {}).get("frames"))
+        # ⑥ 211 规则卡（openmir2-compare-ident211-classification）：211 = SM_SENDMYMAGIC
+        #   （Messages.cs:225，发送点 PlayObject.Base.cs:1052-1070 SendUseMagic，series=
+        #   MagicList.Count，body=逐条 EDCode(ClientMagic 84B)+'/'）已按**全字节比**入表
+        #   ——不登记 ignore/掩码：body 是魔法库静态定义 + 玩家持久化状态，无墙钟/会话成分。
+        #   冻结 fixture 上该帧从唯一残余 UNDECIDABLE 转为已比（两侧 seq18 同形 ⇒ 0 diff），
+        #   而已知真差异 ident 53 ×3 该红仍红。
         und = (rep or {}).get("undecidable", [])
-        self.check("控制帧 ⑤ 唯一 UNDECIDABLE = ident 211 未分类（真发现；211 入规则表后"
-                   "本断言随规则卡更新）",
-                   rc == 2 and len(und) == 1
-                   and und[0].get("kind") == "unclassified_ident"
-                   and und[0].get("ident") == 211,
-                   (rc, und))
+        diffs = (rep or {}).get("diffs", []) or []
+        rule211 = [x for x in ((rep or {}).get("coverage", {}) or {})
+                   .get("ident_rules") or [] if x.get("ident") == 211]
+        d211 = [d for d in diffs if d.get("ident") == 211]
+        self.check("控制帧 ⑥ ident 211 已入规则表（action=compare 全字节比）",
+                   rc == 1 and len(rule211) == 1
+                   and rule211[0].get("action") == "compare",
+                   (rc, rule211))
+        self.check("控制帧 ⑥ 211 帧已比且 0 diff：UNDECIDABLE/unclassified 清零"
+                   "（两侧 seq18 body_sha256 同形）",
+                   not d211 and not und
+                   and not ((rep or {}).get("coverage", {}) or {})
+                   .get("unclassified_idents"),
+                   (d211, und,
+                    ((rep or {}).get("coverage", {}) or {}).get("unclassified_idents")))
+        self.check("控制帧 ⑥ 残余 diffs = 已知真差异 ident 53 ×3（该红仍红，不许被 211 "
+                   "登记掩掉）",
+                   len(diffs) == 3 and all(d.get("ident") == 53 for d in diffs),
+                   [(d.get("ident"), d.get("field"), d.get("frame_index"))
+                    for d in diffs])
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
         cols = list(dp.TABLE_SPECS["mir2_db.characters_ablity"]["columns"])
