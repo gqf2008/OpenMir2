@@ -71378,6 +71378,132 @@ fn ",
             "同优先级 3 条 ⇒ 四叉堆序 [0,2,1]"
         );
     }
+
+    /// **卡 `openmir2-butch-rng-contract-hardening`（L；review `e26812b48` R-4）**：`CM_BUTCH` 效果体
+    /// 的**逐位** RNG 合同改**硬编码字面量**（不再用同实现反推），并加第二个 seed：
+    /// 两个 seed 都满足 `next_max(16) ≠ next_max(15)` 且 `next_max(201) ≠ next_max(200)`，
+    /// 因此把 `random_below(16)` 改成 `(15)` 或 `(201)` 改成 `(200)` 必红。
+    ///
+    /// oracle：`PlayObject.Operate.cs:722-723` 先 `Random(16)+5`、后 `Random(201)+100`；
+    /// 本文的 d1/d2 是 `with_seed` 下**前两抽**的字面量（seed 20261015: 13/166 ⇒ 18/266；
+    /// seed 20261028: 10/129 ⇒ 15/229）。
+    ///
+    /// 牙（实测）：模数 16→15 ⇒ 本用例红（d1 少 1）；201→200 ⇒ 红（d2 少 1）；两抽对调 ⇒ 红。
+    #[test]
+    fn butch_effect_draw_values_are_hardcoded_for_two_seeds() {
+        // (seed, 第 1 抽 Random(16)+5, 第 2 抽 Random(201)+100, 其后 3 抽的硬编码值)
+        const CASES: [(i32, u8, u16, [i32; 3]); 2] = [
+            (20_261_015, 18, 266, [927_908, 976_396, 551_707]),
+            (20_261_028, 15, 229, [14_752, 751_154, 421_021]),
+        ];
+        for (seed, draw1, draw2, tail) in CASES {
+            let (
+                mut world,
+                _hero,
+                corpse,
+                mut sessions,
+                online,
+                gates,
+                _rx,
+                cfg,
+                displays,
+                mut pwd,
+            ) = dropgold_butch_rig(seed, true);
+            {
+                let e = world.entities.get_mut(corpse).unwrap();
+                e.ai.body_leathery = 255;
+                e.ai.meat_quality = 2_000;
+            }
+            handle_inbound_cmd(
+                &CommandMessage {
+                    recog: corpse,
+                    ident: mir2_protocol::messages::CM_BUTCH,
+                    param: 12,
+                    tag: 9,
+                    series: 4,
+                },
+                None,
+                "hero",
+                901,
+                &online,
+                &mut world,
+                &mut sessions,
+                &gates,
+                None,
+                None,
+                &mut pwd,
+                &cfg,
+                &displays,
+                &test_frames_ctx(&game_svr::ability::StdItemCatalog::new()),
+            );
+            let rec = world.tick();
+            assert!(
+                rec.skeletons.is_empty(),
+                "seed={seed}: 皮革未归零 ⇒ 不出骨架"
+            );
+
+            let e = world.entities.get(corpse).unwrap();
+            assert_eq!(
+                e.ai.body_leathery,
+                255u8.wrapping_sub(draw1),
+                "seed={seed}：第 1 抽必须是 Random(16)+5 = {draw1}（硬编码；模数 15 会给 {}）",
+                draw1 - 1
+            );
+            assert_eq!(
+                e.ai.meat_quality,
+                2_000u16.wrapping_sub(draw2),
+                "seed={seed}：第 2 抽必须是 Random(201)+100 = {draw2}（硬编码；模数 200 会给 {}）",
+                draw2 - 1
+            );
+            // 区间合同（`Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`）。
+            let got1 = 255u8 - e.ai.body_leathery;
+            let got2 = 2_000u16 - e.ai.meat_quality;
+            assert!(
+                (5..=20).contains(&got1),
+                "seed={seed}: 第 1 抽 {got1} 越界 [5,20]"
+            );
+            assert!(
+                (100..=300).contains(&got2),
+                "seed={seed}: 第 2 抽 {got2} 越界 [100,300]"
+            );
+
+            // 流位：恰好两次抽数；其后 3 抽与硬编码字面量逐位相同。
+            let got_tail: Vec<i32> = (0..3).map(|_| world.rng.random_below(1_000_000)).collect();
+            assert_eq!(
+                got_tail,
+                tail.to_vec(),
+                "seed={seed}：流位必须恰停在第 2 抽之后（后续抽数逐位硬编码）"
+            );
+        }
+    }
+
+    /// **模数边界合同（review R-4 ③）**：把 15/16 与 200/201 两侧的字面量都钉死，
+    /// 使「模数选错」在**同一断言面**上可见。
+    ///
+    /// 牙（实测）：把 `random_below(16)` 改成 `(15)` ⇒ 第一条红；`(201)`→`(200)` ⇒ 第二条红。
+    #[test]
+    fn butch_draw_modulus_boundaries_are_pinned() {
+        const SEED: i32 = 20_261_015;
+        let mut a = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        assert_eq!(
+            a.random_below(16),
+            13,
+            "第 1 抽模数 = 16（模数 15 会给 12）"
+        );
+        assert_eq!(
+            a.random_below(201),
+            166,
+            "第 2 抽模数 = 201（模数 200 会给 165）"
+        );
+        assert_eq!(
+            mir2_shared::rng::RandomNumber::with_seed(SEED).random_below(15),
+            12,
+            "15 侧字面量（对照）"
+        );
+        let mut c = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let _ = c.random_below(16);
+        assert_eq!(c.random_below(200), 165, "200 侧字面量（对照）");
+    }
 }
 
 #[cfg(test)]
