@@ -96,7 +96,7 @@
 
 | # | 缺口 | 证据 | 不解封时的行为 |
 |---|---|---|---|
-| ① | **升级腿已拆成独立场景** | 唯一带 `@upgradenow` 的脚本 = `Market_Def/沙巴克铁匠-3.txt`；`MerChant.txt:82` IsCastle=**0**；map 3 (332,317) 距 `Home(644,290)` |Δx|=312 ≥ `WarRangeX=100` ⇒ `Castle=null` ⇒ 只有 `CastleGetAllNpcTax=1` 走 Manager 分支（税基恒 `UpgradeWeaponPrice=10000` ⇒ 每城 `Round(500)`）。本卡已拆出 **`castle_merchant_tax_upgrade.json`**（12 步，upgrade_retrieve 前 11 步 + 落盘观察 sleep），在 run3 暂保持 blocked：**内置 profile 不能声明 config_overrides**（见 §4.2） | 升级腿不进批次；用**自定义 profile 文件**（`fixtures.config_overrides`）手工可跑，实测记录见 §4.2 |
+| ① | **升级腿已拆成独立场景** | 唯一带 `@upgradenow` 的脚本 = `Market_Def/沙巴克铁匠-3.txt`；`MerChant.txt:82` IsCastle=**0**；map 3 (332,317) 距 `Home(644,290)` |Δx|=312 ≥ `WarRangeX=100` ⇒ `Castle=null` ⇒ 只有 `CastleGetAllNpcTax=1` 走 Manager 分支（税基恒 `UpgradeWeaponPrice=10000` ⇒ 每城 `Round(500)`）。本卡已拆出 **`castle_merchant_tax_upgrade.json`**（12 步，upgrade_retrieve 前 11 步 + 落盘观察 sleep），在 run3 暂保持 blocked：**run3 批次只认内置 profile 名**（手工窗口可用 `--profile <path>.json` 声明 config_overrides，见 §4.2） | 升级腿不进批次；用**自定义 profile 文件**（`fixtures.config_overrides`）手工可跑，实测记录见 §4.2 |
 | ② | **W-TAX-4 `SaveTick` 不可观测** | `SaveTick` 不落盘（§2.3）；C# `MIR2_CLOCK_*` 零实现（`grep -rIl MIR2_CLOCK src/` = 0） | 只能真实时点复拍；「同 tick 逐位」需 ⑧-1 时钟注入片 |
 
 **备注（工具缺口，不阻断买腿）**：买**武器**需要运行时 `MakeIndex`——货架全 StdMode>4，645 载荷只有 `名/submenu/价格/库存/`
