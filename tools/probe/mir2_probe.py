@@ -4745,6 +4745,23 @@ def _selftest_npc_discovery():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
+    # ---- 第 4 颗牙：消失后**再来移动帧**不得复活（卡 openmir2-probe-npc-doc-teeth-followups 的 F2）----
+    # 正确行为：移动帧只更新「动过」证据，**不**清 disappeared；否则加一行 `cur["disappeared"] = False`
+    # 到移动分支，作者 selftest 会全绿。
+    run, conn, tmpd = run_with([turn_frame(921, 7, 16, "商人"),
+                                build_s2c_frame(921, SM_DISAPPEAR, 0, 0, 0, b""),
+                                build_s2c_frame(921, SM_WALK, 7, 16, 0, b"")])
+    try:
+        err = None
+        try:
+            click(run, conn, "name:商人")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "消失后的一帧移动把对象复活了（移动分支不得清 disappeared）"
+        assert conn.sock.sent == [], "对已消失对象发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
     # ---- SM_DISAPPEAR(30)：已消失对象不再是候选 ----
     run, conn, tmpd = run_with([turn_frame(901, 7, 16, "商人"),
                                 build_s2c_frame(901, SM_DISAPPEAR, 0, 0, 0, b"")])

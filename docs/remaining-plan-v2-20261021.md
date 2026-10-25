@@ -126,7 +126,7 @@ walgit collab board --format json                      # 309 卡：165 in-progre
 
 | 卡 / 车道 | 写集 | 状态 |
 | --- | --- | --- |
-| `openmir2-account-protection-13`（`wt-acctprot`，wave14） | `crates/storage/src/account.rs`（**接口冻结面**） | 实现中；INSERT 13 列/UPDATE 字段级 |
+| `openmir2-account-protection-13`（`wt-acctprot`，wave14） | `mir2-rs/crates/storage/src/account.rs`（**接口冻结面**） | 实现中；INSERT 13 列/UPDATE 字段级 |
 | `openmir2-market-def-impl`（`wt-marketdef2`，wave13） | `crates/envir/src/merchant.rs`、`crates/script/**`、`bins/game-svr/{merchant.rs,npc.rs,shop.rs,main.rs}` | 实现中；含共用 `NpcDialogHost` 前置（T-137 的落点） |
 | `openmir2-mb7-monsters`（`wt-mb7`，wave14） | `crates/world/src/{monai.rs,entity.rs}` | 实现中；MB-7（134/113/114） |
 | `openmir2-strlist-bom`（`wt-strbom`，wave13） | `crates/data/src/{lists.rs,monitems.rs,guild.rs}` | 实现中；StringList 读侧 BOM |
@@ -221,7 +221,7 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
   - E-3 合入后可按 L 收卡；E-7 合入后 `status` 保持 `in-progress`，窗口用 E1-a 测试库
     做「建角/取档/改名/重登」四步的字段级 diff（`dbsnap_pair`）；
   - 5100 请求级夹具可选：账号/角色名含 `81 2F` 的登录帧两侧接受/拒绝 + 回包字节一致。
-- **规模**：1 波。注意 `crates/storage` 是冻结面，**本车道不碰它**（A-04 由 `wt-acctprot` 负责）。
+- **规模**：1 波。注意 `mir2-rs/crates/storage` 是冻结面，**本车道不碰它**（A-04 由 `wt-acctprot` 负责）。
 
 ### 3.3 车道 P3：`fixtures-window-prep`（R-06 工具面 + R-07 命令面）
 
@@ -261,7 +261,7 @@ C 表 20 条结论不变（`docs/m3-remaining-inventory-20261022.md` §C）。�
 | 车道 | tier | 必须绿 | 不得触碰 | 收卡 |
 | --- | --- | --- | --- | --- |
 | P1 castle-pure | L（R-03 持久化语义按 R） | C1/C2/C3/C4/C6/C7/C8/C9/C12/C13/C14 + G-T1a；变异必红 | `bins/**`、`crates/envir/**`、`monai.rs`、`combat.rs` | 仅 R-01/R-02 可 `closed`；**R-03 保持 `in-progress` 待窗口** |
-| P2 db-encoding | E-3=L / E-7=R | 20+ 向量 + arrest/split；DB 无 `CONVERT` | `crates/storage`、`crates/encoding` 源码 | E-3 可 `closed`；E-7 保持 `in-progress` |
+| P2 db-encoding | E-3=L / E-7=R | 20+ 向量 + arrest/split；DB 无 `CONVERT` | `mir2-rs/crates/storage`、`crates/encoding` 源码 | E-3 可 `closed`；E-7 保持 `in-progress` |
 | P3 fixtures | L（工具） / R（real-run） | marker gate + drop-exp 自检 + LB-10 命令 + preflight 快照 | 任何 `src/bins/crates` | 工具面可 `closed`；real-run 保持 `in-progress` |
 
 ---

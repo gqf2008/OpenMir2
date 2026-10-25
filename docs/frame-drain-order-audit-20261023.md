@@ -146,7 +146,7 @@ python -I -B tools/gw-capture/gate_shadow_proxy.py --verify E:/tmp/w208/rust/sel
 | ① | 角色带 9/10（地狱火/疾光电影）技能，对**同一视野内 ≥3 只怪**施放（B2 块） | 观察者侧 `ident=31` 的**出现次序** = 堆序（不是目标枚举序）；条数 = 命中目标数 | #2 `SpellFrameBuf::flush` |
 | ② | ~~桃源-N109 的 9 条连续 `SendMsg`~~ **已撤回**：那是 `SENDMSG 0` ⇒ `WorldEngine.SendBroadCastMsg` ⇒ `RM_SYSMESSAGE(252)`，**不是** `RM_MERCHANTSAY`；且宿主 `world_broadcast`/`send_say_msg` 目前是 no-op（`crates/script/src/engine/mod.rs`，`NpcPlayer` 未覆写）⇒ 当前产 0 帧。**真说词路径在部署无 ≥2 同优先级实例**（§1 #10）⇒ 本项**无窗口场景**，由构造级判据兜底；接上 `SENDMSG` 宿主（承接卡 `openmir2-script-sendmsg-host`，issue `bdddbeba`）后，`world_broadcast` 的逐玩家 `SM_SYSMESSAGE` 会**新增一个同 ident 排水点，必须按四叉堆序处理**，届时另开窗口。 | — | #10（构造级） |
 | ③ | 两账号交易，双方背包/金币同时越界使 `DealSuccess` 的**四个前置检查全部失败** | 接收侧 `ident=100`（`SM_SYSMESSAGE`）红字的**次序** = 该玩家队列的堆序（4 条 ⇒ `[0,3,2,1]`），不是提示语序 | #11 `trade::Emitter::finish` |
-| ④ | 元宝寄售：同一玩家**连续取消 ≥3 条**寄售（多条 `SM_MENU_OK`）；另跑「一次买多颗金刚石」（多条 `SM_SYSMESSAGE`） | `ident=767`（`SM_MENU_OK`，`crates/protocol/src/messages.rs:354`；**不是** 769 = `SM_GUILDMAKEALLY_FAIL`）/`ident=100` 的条数与次序 = 堆序；`Recog` 均为该玩家 | #12 `selloff::Emitter::finish` |
+| ④ | 元宝寄售：同一玩家**连续取消 ≥3 条**寄售（多条 `SM_MENU_OK`）；另跑「一次买多颗金刚石」（多条 `SM_SYSMESSAGE`） | `ident=767`（`SM_MENU_OK`，`mir2-rs/crates/protocol/src/messages.rs:354`；**不是** 769 = `SM_GUILDMAKEALLY_FAIL`）/`ident=100` 的条数与次序 = 堆序；`Recog` 均为该玩家 | #12 `selloff::Emitter::finish` |
 | ⑤ | 3 人组（L/T/U）由团长 L 死亡触发散组 | 每名成员收到的 `ident=100`（`RM_GROUPMESSAGE`）条数 = 退组事件数；同一成员的**次序** = 其队列堆序 | #13 `party::Emitter::finish` |
 
 ### 6.3 本卡不覆盖 / 承接
@@ -208,7 +208,7 @@ python -I -B tools/gw-capture/gate_shadow_proxy.py --verify E:/tmp/w208/rust/sel
 
 | 项 | 处置 |
 |---|---|
-| **M-4r**（important）窗口④ 的 `ident=769` | **订正为 `ident=767`（`SM_MENU_OK`，`crates/protocol/src/messages.rs:354`）；769 = `SM_GUILDMAKEALLY_FAIL`**。三处同步：台账 §6.2 ④、whitelist T-208、返工 status 的窗口列表（新 status）。 |
+| **M-4r**（important）窗口④ 的 `ident=769` | **订正为 `ident=767`（`SM_MENU_OK`，`mir2-rs/crates/protocol/src/messages.rs:354`）；769 = `SM_GUILDMAKEALLY_FAIL`**。三处同步：台账 §6.2 ④、whitelist T-208、返工 status 的窗口列表（新 status）。 |
 | **m-1** 「.NET 八叉堆序」 | 改为**四叉**（8 处堆都是 Arity=4）。 |
 | **m-2** §2 第 5 条残留「点名部署里 9 条连续 `SendMsg`」 | **删除**（该点名在 I-1 已撤回且从未成立，台账里只保留 §6.2/I-1 的「撤回记录」，不再作为修复理由出现）。 |
 | **m-3** useitem 可达组合漏纯 `{131}` | 已补：五组合 `{252}` / `{68,131}` / `{155,166,131}` / **`{131}`**（StdMode 2、StdMode 31 解包成功、StdMode 0 shape 非 1/3 的 default 支）/ `{69}`；台账 #15 同步。 |
