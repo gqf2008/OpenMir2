@@ -4527,6 +4527,7 @@ def _selftest_kill():
       没刷出来（窗口内目标格零帧）——错误串各不相同。
     """
     import argparse as _argparse
+    import time as _time
     import tempfile as _tempfile
     import shutil as _shutil
 
@@ -4779,6 +4780,7 @@ def _selftest_track_adjacency():
     import argparse as _argparse
     import tempfile as _tempfile
     import shutil as _shutil
+    import time as _time
 
     self_xy = (330 | (330 << 16))
     checks = []
@@ -4802,6 +4804,42 @@ def _selftest_track_adjacency():
 
         def close(self):
             pass
+
+    class _TimedSock(object):
+        """**定时交付**的假 socket：`items=[(at_ms, bytes)]`，到点才给。
+
+        为什么不用预置帧：预置帧会在 `execute_step` 前被一次 `pump` 全消费 ⇒ 牙 b 根本进不到
+        等待分支（reviewer-20 F1）。这里首帧立刻给、后续帧 250/300ms 才给，模拟「鸡走进邻格」。
+        """
+
+        def __init__(self, timed):
+            self.items = sorted(timed, key=lambda it: it[0])
+            self.sent = []                      # [(t_ms, bytes)]
+            self.t0 = _time.time()
+
+        def _now(self):
+            return (_time.time() - self.t0) * 1000.0
+
+        def recv(self, n):
+            if self.items and self._now() >= self.items[0][0]:
+                return self.items.pop(0)[1]
+            raise socket.timeout()
+
+        def sendall(self, data):
+            self.sent.append((self._now(), bytes(data)))
+
+        def close(self):
+            pass
+
+    def run_timed(timed):
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-adj-")
+        args = _argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _TimedSock(list(timed))
+        return run, conn, tmpd
+
 
     def run_with(chunks):
         tmpd = _tempfile.mkdtemp(prefix="mir2probe-adj-")
@@ -4838,25 +4876,34 @@ def _selftest_track_adjacency():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
-    # 牙 b：初始只有 2 格外的目标，**等待期内**它走进邻格 ⇒ 应选中并出手。
-    # 不给死亡帧：本牙只证明「等待后选中并出手」，死亡/存活由别的牙覆盖。
-    run, conn, tmpd = run_with([turn_frame(701, 332, 330),
-                                build_s2c_frame(701, SM_WALK, 331, 330, 0, b""),
-                                build_s2c_frame(701, SM_WALK, 331, 331, 0, b"")])
+    # 牙 b（reviewer-20 F1）：**定时交付**——首帧「2 格外」立刻给、两只 SM_WALK 在 250/300ms 才给
+    # （模拟鸡走进邻格）⇒ 应等待后出手，且**等待期一帧都不写**（只允许 TURN/HIT）。
+    run, conn, tmpd = run_timed([
+        (0, turn_frame(701, 332, 330)),
+        (250, build_s2c_frame(701, SM_WALK, 331, 330, 0, b"")),
+        (300, build_s2c_frame(701, SM_WALK, 331, 331, 0, b"")),
+    ])
     try:
-        conn.pump(50)          # 先收首帧（同 _selftest_kill_track 的口径）
-        sent_before = len(conn.sock.sent)
-        plan_b = kill_plan(max_retries=3, interval_ms=450)
+        conn.pump(50)                      # 只拿到「2 格外」那一帧
+        base = len(conn.sock.sent)
         err = None
         try:
-            run.execute_step(conn, plan_b)
+            run.execute_step(conn, kill_plan(max_retries=3, interval_ms=450))
         except StepFailure as ex:
             err = str(ex)
-        swung = len(conn.sock.sent) >= sent_before + 2   # TURN + 至少 1 次 HIT
-        no_adj = err is not None and "都不在八向相邻格" in err
-        checks.append((swung and not no_adj,
-                       "牙b 目标 2 格外→等待期内走进邻格 ⇒ 不注入移动帧、等待后选中并出手"
-                       "（sent=%d，err=%r）" % (len(conn.sock.sent) - sent_before, err)))
+        sent = conn.sock.sent[base:]
+        first_t = sent[0][0] if sent else -1
+        # 等待期零 write：每条发送都必须**逐字节等于** TURN 或 HIT 的期望帧（方向 = 走到 (331,331) 后的 Dir）
+        d = DIRECTION_BY_DELTA[(1, 1)]
+        turn_expect = build_c2s_frame(self_xy, CM_TURN, 0, d, 0, b"")
+        hit_expect = build_c2s_frame(self_xy, CM_HIT, 0, d, 0, b"")
+        only_turn_hit = bool(sent) and all(raw in (turn_expect, hit_expect)
+                                           for _, raw in sent)
+        checks.append((not (err is not None and "都不在八向相邻格" in err)
+                       and len(sent) >= 2 and first_t >= 200 and only_turn_hit,
+                       "牙b 定时交付：等 ≥250ms 才出手（首个发送 t=%.0fms）、等待期零 write"
+                       "（逐字节只发 TURN/HIT=%s，共 %d 帧；err=%r）"
+                       % (first_t, only_turn_hit, len(sent), err)))
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
@@ -4872,7 +4919,7 @@ def _selftest_track_adjacency():
             err = str(ex)
         rec = run.steps[-1] if run.steps else {}
         checks.append((err is not None and "都不在八向相邻格" in err
-                       and "cheb=2" in err and "(332,330)" in err
+                       and "cheb=2" in err and "manhattan=2" in err and "(332,330)" in err
                        and rec.get("result") == "no-adjacent",
                        "牙c 始终不相邻 ⇒ fail-closed 且报错含坐标与 cheb 距离（%r）" % (err,)))
     finally:
