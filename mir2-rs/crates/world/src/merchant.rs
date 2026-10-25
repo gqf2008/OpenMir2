@@ -152,6 +152,10 @@ pub struct MerchantState {
     pub price_rate: i32,
     /// `IMerchant.ItemTypeList`（脚本 `+StdMode`）。
     pub item_type_list: Vec<i32>,
+    /// `Merchant.ItemPriceList`（`Merchant.cs:46`）：`AddItemPrice` 追加的 `(wIndex, nPrice)`。
+    /// 由补货路径的 `CheckItemPrice(nIndex)` 填充（`Merchant.cs:230-235`，**只在这一支**），
+    /// 买家取价走 `GetItemPrice` 的「`ItemPriceList` 命中优先」。
+    pub item_price_list: Vec<(u16, i32)>,
     /// `IMerchant.RefillGoodsList`（脚本 `[goods]`）。
     pub refill_goods: Vec<MerchantGoods>,
     /// `IMerchant.GoodsList`（`IList<IList<UserItem>>`，`Merchant.cs:34`）——在售库存。
@@ -238,6 +242,7 @@ impl MerchantState {
             flags,
             price_rate,
             item_type_list,
+            item_price_list: Vec::new(),
             refill_goods,
             goods_list: Vec::new(),
             castle_merchant,
@@ -479,6 +484,16 @@ impl World {
     #[must_use]
     pub fn merchant_goods_groups(&self, id: i32) -> Option<&[Vec<MerchantItem>]> {
         Some(&self.entities.get(id)?.merchant.as_ref()?.goods_list)
+    }
+
+    /// `Merchant.ItemPriceList`（`Merchant.cs:46/184-204`）：补货时 `CheckItemPrice` 填入的
+    /// `(wIndex, nPrice)`（`nPrice` 已按 `HUtil32.Round(Price*1.1)` 取整）。
+    #[must_use]
+    pub fn merchant_item_price_list(&self, id: i32) -> &[(u16, i32)] {
+        self.entities
+            .get(id)
+            .and_then(|e| e.merchant.as_ref())
+            .map_or(&[], |st| st.item_price_list.as_slice())
     }
 
     /// [`World::merchant_goods_groups`] 的可变版（⑤-4 买/卖直接改在售库存）。
@@ -1717,7 +1732,30 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
                 let n_refill_count = world.merchant_goods_count(actor_id, index);
                 let target = usize::try_from(count).unwrap_or(0);
                 if target > n_refill_count {
-                    // `CheckItemPrice(nIndex)`（`ItemPriceList` 空 ⇒ no-op）。
+                    // oracle `CheckItemPrice(nIndex)`（`Merchant.cs:184-204`，调用点 `:233`）：
+                    // **只在「真要补货」这一支**调（对称支 `target < n_refill_count` **不调**）；
+                    // 无条目 ⇒ `AddItemPrice(index, HUtil32.Round(stdItem.Price * 1.1))`——
+                    // **不判 StdMode**（`ItemTypeList` 缺 StdMode 31 的商品也必须拿到价，
+                    // 否则 `GetItemPrice` 回落 `-1`、买入被 `n_price > 0` 挡掉）；
+                    // 已有条目分支在 oracle 里只算不回写（死代码），此处保持「已有即不动」。
+                    let has_price = world
+                        .entities
+                        .get(actor_id)
+                        .and_then(|e| e.merchant.as_ref())
+                        .is_some_and(|st| st.item_price_list.iter().any(|(i, _)| *i == index));
+                    if !has_price {
+                        let price = world
+                            .std_item_by_idx(usize::from(index))
+                            .map_or(0, |t| t.price);
+                        let n_price = mir2_shared::hutil32::round(f64::from(price) * 1.1);
+                        if let Some(st) = world
+                            .entities
+                            .get_mut(actor_id)
+                            .and_then(|e| e.merchant.as_mut())
+                        {
+                            st.item_price_list.push((index, n_price));
+                        }
+                    }
                     for _ in 0..(target - n_refill_count) {
                         if let Some(item) = world.make_merchant_item_by_name(&item_name) {
                             // oracle `RefillGoodsItems`：**无条件 Insert(0)**（不过 Dura 过滤）。
@@ -1997,6 +2035,80 @@ mod tests {
             groups[0][0].make_index > groups[0][2].make_index,
             "组内 Insert(0) ⇒ make_index 递减（got {:?})",
             groups[0].iter().map(|it| it.make_index).collect::<Vec<_>>()
+        );
+    }
+
+    /// 卡 `openmir2-merchant-price-list-and-weight-frame` C 阶段：
+    /// ① 新建商人 `item_price_list` **必须为空**（空表有语义：首次补货才补 ×1.1）；
+    /// ② 补货一次 ⇒ 追加 `(Index, HUtil32.Round(Price*1.1))`，`80 → 88`；
+    /// ③ **StdMode 不在 ItemTypeList**（31 ∉ [1,2]）也必须补价——否则 `get_item_price` 回落
+    ///    `-1`、买入被 `n_price > 0` 挡掉（reviewer-20 的「买不成」形态）。
+    /// 两向牙（Leader 追加）：`ItemPriceList` 是**每商人实例**的——
+    /// ① 没触发过补货的商人 ⇒ 价格表仍为空（取价回落原始价，不 panic）；
+    /// ② 补过货的商人 ⇒ 有 `(1, 88)`；
+    /// ③ **两个商人互不串表**（只补 a ⇒ b 仍空）。
+    #[test]
+    fn item_price_list_is_per_merchant_and_only_refill_fills_it() {
+        let mut w = World::new(16, 16);
+        w.set_item_catalog(vec![StdItem {
+            name: "potion".to_string(),
+            price: 80,
+            dura_max: 10,
+            std_mode: 31,
+            ..StdItem::default()
+        }]);
+        let mut a = spawn_at(2, 2);
+        a.state.refill_goods = vec![MerchantGoods {
+            item_name: "potion".to_string(),
+            count: 1,
+            refill_time: 0,
+            refill_tick: 0,
+        }];
+        let mut b = spawn_at(3, 3);
+        b.state.refill_goods = Vec::new(); // 永不补货
+        let ia = w.spawn_merchant(a).expect("挂图成功");
+        let ib = w.spawn_merchant(b).expect("挂图成功");
+        assert!(w.merchant_item_price_list(ia).is_empty());
+        assert!(w.merchant_item_price_list(ib).is_empty());
+        assert!(w.merchant_refill_goods_now(ia), "a 应补货");
+        assert_eq!(w.merchant_item_price_list(ia), &[(1u16, 88i32)]);
+        assert!(
+            !w.merchant_refill_goods_now(ib),
+            "b 没有 [goods] ⇒ 不产生变动"
+        );
+        assert!(
+            w.merchant_item_price_list(ib).is_empty(),
+            "未补货商人不得拿到别的商人的价格表"
+        );
+    }
+
+    #[test]
+    fn refill_adds_item_price_rounding_away_from_zero_without_std_mode_filter() {
+        let mut w = World::new(16, 16);
+        w.set_item_catalog(vec![StdItem {
+            name: "potion".to_string(),
+            price: 80,
+            dura_max: 10,
+            std_mode: 31,
+            ..StdItem::default()
+        }]);
+        let mut sp = spawn_at(2, 2);
+        sp.state.refill_goods = vec![MerchantGoods {
+            item_name: "potion".to_string(),
+            count: 1,
+            refill_time: 0,
+            refill_tick: 0,
+        }];
+        let id = w.spawn_merchant(sp).expect("挂图成功");
+        assert!(
+            w.merchant_item_price_list(id).is_empty(),
+            "初始价格表必须为空"
+        );
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发");
+        assert_eq!(
+            w.merchant_item_price_list(id),
+            &[(1u16, 88i32)],
+            "Price=80 ⇒ Round(80*1.1)=88（AwayFromZero；且不判 StdMode=31）"
         );
     }
 

@@ -55,7 +55,7 @@
 
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
-use mir2_formula::shop::{self, PriceTables, ShopConfig, StdItemSource};
+use mir2_formula::shop::{self, ItemPrice, PriceTables, ShopConfig, StdItemSource};
 use mir2_world::castle::UserCastle;
 use mir2_world::castle_tax::{
     merchant_tax_intent, CastleTaxConfig, IncRateGoldOutcome, MerchantTaxIntent, MerchantTaxTarget,
@@ -232,6 +232,9 @@ pub struct MerchantView {
     /// 商税目的地判定用它（`Merchant.cs:546/1257/1392/1644` 的 `Castle != null`）。
     pub castle_index: Option<usize>,
     pub item_type_list: Vec<i32>,
+    /// `Merchant.ItemPriceList`（`Merchant.cs:46`）：补货时 `CheckItemPrice` 填的 `(wIndex, nPrice)`。
+    /// `PriceTables` 从这里取「已补过价的条目」（`get_item_price` 命中优先）。
+    pub item_price_list: Vec<ItemPrice>,
     /// 商人实体 `ChrName`（`BaseObject.ChrName`）。`SendMsgToUser`（`NormNpc.cs:1613-1616`）
     /// 的 `RM_MERCHANTSAY` 尾 = `ChrName + '/' + sMsg` ⇒ 宿主必须把商人名传进来。
     pub chr_name: String,
@@ -312,15 +315,31 @@ pub fn item_name(catalog: &dyn ItemCatalog, item: &BagItem) -> Option<String> {
     Some(crate::bag::item_display_name(catalog, item))
 }
 
-/// 建 `PriceTables`（`ItemPriceList` 空：oracle `LoadGoodPriceRecord` 是空壳，`LocalDB.cs:1111`）。
+/// 建 `PriceTables`：`item_price_list` = 商人自己的 `ItemPriceList`（补货时由 `CheckItemPrice`
+/// 填入；`Merchant.cs:46/184-204`）。空表是**有语义**的初值——首次补货才补 ×1.1。
 ///
-/// `source` 由调用方持有（`PriceTables.source` 的 `&dyn StdItemSource` 只活到本函数返回）。
-fn price_tables<'a>(source: &'a CatalogSource<'a>, item_type_list: &'a [i32]) -> PriceTables<'a> {
+/// `source`/`item_price_list` 由调用方持有（`PriceTables` 只活到本函数返回）。
+fn price_tables<'a>(
+    source: &'a CatalogSource<'a>,
+    item_type_list: &'a [i32],
+    item_price_list: &'a [ItemPrice],
+) -> PriceTables<'a> {
     PriceTables {
         source,
-        item_price_list: &[],
+        item_price_list,
         item_type_list,
     }
+}
+
+/// 把世界侧 `(u16, i32)` 价格表转成公式层的 [`ItemPrice`]（`n_price` 已是取整后的整数）。
+#[must_use]
+pub fn price_list_from(rows: &[(u16, i32)]) -> Vec<ItemPrice> {
+    rows.iter()
+        .map(|(w_index, n_price)| ItemPrice {
+            w_index: *w_index,
+            n_price: f64::from(*n_price),
+        })
+        .collect()
 }
 
 /// `PlayObject.IncGold`（`PlayObject.Base.cs:168`）：超 `HumanMaxGold` ⇒ 失败（不动余额）。
@@ -359,7 +378,7 @@ pub fn user_select(
     if eq_label(label, LABEL_BUY) && m.flags.is_buy {
         // `UserSelectBuyItem`（`Merchant.cs:962`）：`名/子菜单/价/库存/`。价 = `GetUserPrice(GetItemPrice(Index))`。
         let source = CatalogSource(ctx.catalog);
-        let t = price_tables(&source, &m.item_type_list);
+        let t = price_tables(&source, &m.item_type_list, &m.item_price_list);
         let mut s_send = String::new();
         let mut n10 = 0i32;
         for group in goods {
@@ -741,7 +760,7 @@ pub fn detail_goods_list(
     ctx: &ShopContext<'_>,
 ) -> ShopFrame {
     let source = CatalogSource(ctx.catalog);
-    let t = price_tables(&source, &m.item_type_list);
+    let t = price_tables(&source, &m.item_type_list, &m.item_price_list);
     let mut n_int = n_int_in;
     let mut s_send_msg: Vec<u8> = Vec::new();
     let mut n_item_count: u16 = 0;
@@ -1030,7 +1049,7 @@ pub fn take_back_storage_item(
 #[must_use]
 pub fn query_sell_price(m: &MerchantView, item: &mut BagItem, ctx: &ShopContext<'_>) -> ShopFrame {
     let source = CatalogSource(ctx.catalog);
-    let t = price_tables(&source, &m.item_type_list);
+    let t = price_tables(&source, &m.item_type_list, &m.item_price_list);
     let mut it = to_merchant(item);
     let price = shop::get_user_item_price(&t, &mut it);
     item.dura_max = it.dura_max; // BUG-REPLICA：StdMode 43 的写回
@@ -1082,7 +1101,7 @@ pub fn sell_item(
         };
     };
     let source = CatalogSource(ctx.catalog);
-    let t = price_tables(&source, &m.item_type_list);
+    let t = price_tables(&source, &m.item_type_list, &m.item_price_list);
     let mut it = to_merchant(&state.item_list[pos]);
     let n_price = shop::get_sell_item_price(shop::get_user_item_price(&t, &mut it));
     state.item_list[pos].dura_max = it.dura_max; // BUG-REPLICA 写回
@@ -1192,7 +1211,7 @@ pub fn buy_item(
     let mut frames = Vec::new();
     let mut tax = None;
     let source = CatalogSource(ctx.catalog);
-    let t = price_tables(&source, &m.item_type_list);
+    let t = price_tables(&source, &m.item_type_list, &m.item_price_list);
     let mut n1c = 1i32;
     let mut bo29 = false;
     let mut i = 0usize;
@@ -1320,7 +1339,7 @@ pub fn buy_item(
 #[must_use]
 pub fn query_repair_cost(m: &MerchantView, item: &mut BagItem, ctx: &ShopContext<'_>) -> ShopFrame {
     let source = CatalogSource(ctx.catalog);
-    let t = price_tables(&source, &m.item_type_list);
+    let t = price_tables(&source, &m.item_type_list, &m.item_price_list);
     let mut it = to_merchant(item);
     let is_super = eq_label(ctx.script_lable, LABEL_SUPER_REPAIR);
     let n_repair_price = shop::query_repair_cost(
@@ -1386,7 +1405,7 @@ pub fn repair_item(
         };
     }
     let source = CatalogSource(ctx.catalog);
-    let t = price_tables(&source, &m.item_type_list);
+    let t = price_tables(&source, &m.item_type_list, &m.item_price_list);
     let out = shop::repair_item(
         &t,
         &ctx.cfg,
@@ -1789,6 +1808,7 @@ mod tests {
             castle_merchant: false,
             castle_index: None,
             item_type_list: Vec::new(),
+            item_price_list: Vec::new(),
             chr_name: "铁匠".to_string(),
         };
         let off = view(MerchantFlags::default());
@@ -1977,6 +1997,7 @@ mod tests {
             castle_merchant: false,
             castle_index: None,
             item_type_list: vec![0, 5],
+            item_price_list: Vec::new(),
             chr_name: "商人".to_string(),
         }
     }
@@ -2240,6 +2261,48 @@ mod tests {
         assert_eq!(full.gold, 10_000, "金币未扣");
     }
 
+    /// 卡 `openmir2-merchant-price-list-and-weight-frame` C 阶段：宿主 `MerchantView.item_price_list`
+    /// 必须**真的**传给 `PriceTables`（`get_item_price` 命中 `ItemPriceList` 优先于 `StdItem.Price`）。
+    ///
+    /// 牙：把 `price_tables(&source, &m.item_type_list, &m.item_price_list)` 改回第三参数 `&[]`
+    /// ⇒ 买价回落 100 ⇒ 金币 400（而非 412）、650.Recog 也差 12 ⇒ 本用例红。
+    #[test]
+    fn merchant_item_price_list_drives_buy_price_and_gold() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let mut m = merchant(mflags(true, false));
+        // 补货路径会写的就是这条：`CheckItemPrice` ⇒ `Round(StdItem.Price 100 * 1.1) = 110`。
+        // 价格表内容由世界侧补齐（另有世界侧牙），本用例只验「宿主把它传进公式」。
+        m.item_price_list = vec![mir2_formula::shop::ItemPrice {
+            w_index: 1,
+            n_price: 110.0,
+        }];
+        let mut state = GroundState {
+            item_list: Vec::new(),
+            gold: 500,
+            wabil: ability(0, 100),
+        };
+        let mut goods = vec![vec![MerchantItem {
+            make_index: 7,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0; 14],
+        }]];
+        let r = buy_item(&m, &mut state, &mut goods, "金创药(小量)", 0, &c);
+        assert!(r.ok);
+        assert_eq!(
+            state.gold, 390,
+            "500 - ItemPriceList 的 110（不是 StdItem.Price 的 100）"
+        );
+        let ok650 = r
+            .frames
+            .iter()
+            .find(|f| f.ident == mir2_protocol::messages::SM_BUYITEM_SUCCESS)
+            .expect("成功必须发 650");
+        assert_eq!(ok650.recog, 390, "650.Recog = 扣款后 Gold（随价格表走）");
+    }
+
     #[test]
     fn query_sell_price_and_repair_cost_frames() {
         let cat = catalog();
@@ -2313,6 +2376,7 @@ mod tests {
             castle_merchant: false,
             castle_index: None,
             item_type_list: vec![0, 5],
+            item_price_list: Vec::new(),
             chr_name: "商人乙".to_string(),
         };
         let mut state2 = GroundState {
@@ -3097,6 +3161,7 @@ mod tests {
             castle_merchant,
             castle_index,
             item_type_list: vec![0, 5],
+            item_price_list: Vec::new(),
             chr_name: "城堡商人".to_string(),
         }
     }
