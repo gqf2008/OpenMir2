@@ -12,6 +12,15 @@
   },
   "steps": [
     {
+      "click_npc": "pos:19,18",
+      "note": "目标存在性前置（卡 openmir2-scenario-fixture-migration）：先确认 (19,18) 上有**固定 NPC 卫家店**（MerChant.txt:26）。`pos:` 命中前过静态对象门；目标格空 ⇒ fail-closed 并列出该格 ±3 邻近可见对象（便于直接改坐标）；**不静默跳过、不加大超时**。"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 5000,
+      "note": "643 = 点击应答面板：证明 (19,18) 的 NPC 真的在、且应答了点击；超时 = 该格没有可点的固定 NPC（与「打了没打到 actor」同因）"
+    },
+    {
       "send": {
         "ident": 3010,
         "recog": "self_pos",

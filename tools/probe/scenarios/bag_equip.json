@@ -6,18 +6,6 @@
     "takeon_where",
     "item_name"
   ],
-  "inventory": [
-      {
-          "index": 207,
-          "make_index": 5001,
-          "position": 40,
-          "std_mode": 5,
-          "ani_count": 0,
-          "dura": 4000,
-          "dura_max": 4000,
-          "note": "木剑（StdMode5，可装备）——与 --var make_index=5001 配套"
-      }
-  ],
   "steps": [
     {
       "send": {

@@ -1,0 +1,167 @@
+{
+  "format": "card-window-profile/1",
+  "name": "bag_equip",
+  "description": "alt 的副本 + 背包替换夹具（卡 `openmir2-scenario-fixture-migration` 的预置件）。唯一差异：`fixtures.inventory_replace` 覆盖槽 40（旧 `inventory` 通道在基线背包 46/46 全占时 fail-closed）。",
+  "login_gate": "127.0.0.1:17000",
+  "account": "winplay0",
+  "server_name": "热血传奇",
+  "char_name": "winplay0",
+  "probe_timeout_ms": 20000,
+  "ready_timeout_s": 120,
+  "compare_extra": [],
+  "db_client": {
+    "mysql": [
+      "D:\\mysql\\mariadb-10.11.19-winx64\\bin\\mysql.exe"
+    ],
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": ""
+  },
+  "sides": {
+    "csharp": {
+      "label": "C# oracle",
+      "stack": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/tools/window/start-stack-wmi.ps1",
+        "-Script",
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/tools/window/start-csharp.ps1",
+        "-ReadyPorts",
+        "15000,17000,17100,17200"
+      ],
+      "stop": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like 'E:\\tmp\\conformance\\csharp-root\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+      ],
+      "restore": [
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "E:/tmp/conformance/restore-baseline.sh"
+      ],
+      "ports": [
+        15000,
+        15100,
+        15500,
+        15600,
+        15700,
+        16000,
+        17000,
+        17100,
+        17200,
+        17201,
+        17202
+      ],
+      "ready_ports": [
+        15000,
+        17000,
+        17100
+      ],
+      "probe_extra": [],
+      "binaries": [
+        "E:/tmp/conformance/csharp-root/M2GameSvr/GameSrv.exe"
+      ],
+      "envir_root": "E:/tmp/conformance/csharp-root/M2GameSvr",
+      "db": {
+        "preset": "test",
+        "characters_db": "mir2_test_db"
+      }
+    },
+    "rust": {
+      "label": "Rust",
+      "stack": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/tools/window/start-stack-wmi.ps1",
+        "-Script",
+        "E:/tmp/conformance/start-rust.ps1",
+        "-ReadyPorts",
+        "15000,17000,17100,17600"
+      ],
+      "stop": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "E:/tmp/conformance/stop-rust.ps1"
+      ],
+      "restore": [
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "E:/tmp/conformance/restore-baseline-r.sh"
+      ],
+      "ports": [
+        15000,
+        15100,
+        15500,
+        15600,
+        15700,
+        16000,
+        17000,
+        17100,
+        17600
+      ],
+      "ready_ports": [
+        15000,
+        17000,
+        17100
+      ],
+      "probe_extra": [
+        "--game-gate",
+        "127.0.0.1:17600"
+      ],
+      "binaries": [
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/mir2-rs/target/release/mir2-server.exe"
+      ],
+      "require_pid_binaries": true,
+      "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
+      "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
+      "db": {
+        "tables": [
+          "mir2_test_account_r.account",
+          "mir2_test_account_r.account_protection",
+          "mir2_test_db_r.characters",
+          "mir2_test_db_r.characters_ablity",
+          "mir2_test_db_r.characters_bonusability",
+          "mir2_test_db_r.characters_item",
+          "mir2_test_db_r.characters_item_attr",
+          "mir2_test_db_r.characters_magic",
+          "mir2_test_db_r.characters_bagitem",
+          "mir2_test_db_r.characters_storageitem",
+          "mir2_test_db_r.characters_status",
+          "mir2_test_db_r.characters_quest",
+          "mir2_test_db_r.characters_indexes"
+        ],
+        "characters_db": "mir2_test_db_r",
+        "allow_db": [
+          "mir2_test_db_r",
+          "mir2_test_account_r"
+        ]
+      }
+    }
+  },
+  "fixtures": {
+    "inventory_replace": [
+      {
+        "position": 40,
+        "index": 207,
+        "make_index": 5001,
+        "std_mode": 5,
+        "ani_count": 0,
+        "dura": 4000,
+        "dura_max": 4000,
+        "note": "木剑（StdMode5，可装备）——与 --var make_index=5001 配套"
+      }
+    ],
+    "note": "只替换本场景真实需要的那一槽；不动其它槽。"
+  }
+}
