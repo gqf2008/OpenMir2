@@ -1091,6 +1091,10 @@ def plan_step(step, index, params, depth=0):
             if not name:
                 raise ScenarioError(
                     "%s.click_npc: `name:` 后必须跟 NPC 名（fail-closed）" % where)
+            if "?allow_any" in name:
+                raise ScenarioError(
+                    "%s.click_npc: `allow_any` 只适用于 `pos:`（`name:%s` 不接受查询参数）"
+                    % (where, name))
             out.update(ident=CM_CLICKNPC, recog=None, param=0, tag=0, series=0, body=b"",
                        _npc_selector={"kind": "name", "value": name})
         elif isinstance(val, str) and val.startswith("pos:"):
@@ -4489,7 +4493,8 @@ def _selftest_npc_discovery():
            ({"click_npc": "pos:7"}, "pos:<x>,<y>"),
            ({"click_npc": "pos:-1,2"}, "pos:<x>,<y>"),
            ({"click_npc": "pos:7,70000"}, "越界"),
-           ({"click_npc": "auto:lastturn"}, "未知寻址写法")]
+           ({"click_npc": "auto:lastturn"}, "未知寻址写法"),
+           ({"click_npc": "name:商人?allow_any=1"}, "allow_any` 只适用于 `pos:")]
     for step, needle in bad:
         err = None
         try:
@@ -4700,6 +4705,46 @@ def _selftest_npc_discovery():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
+    # ---- 静态判据的三颗**不可替代**牙（卡 openmir2-probe-npc-teeth）----
+    # 牙 i：同格 SM_RUSH(6) —— 坐标没变，但**有移动帧** ⇒ 必须是「活动」（咬 `moves`）
+    run, conn, tmpd = run_with([turn_frame(911, 7, 16, "怪"),
+                                build_s2c_frame(911, SM_RUSH, 7, 16, 0, b"")])
+    try:
+        err = None
+        try:
+            click(run, conn, "pos:7,16")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "同格 SM_RUSH 被判成静态（moves 判据失效）"
+        assert "不是固定/静态形态" in err and "移动帧 1 条" in err, err
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 j：两条 SM_TURN 报不同坐标、**无移动帧** ⇒ 必须是「活动」（咬 `coords`）
+    run, conn, tmpd = run_with([turn_frame(912, 7, 16, "怪"),
+                                turn_frame(912, 8, 16, "怪")])
+    try:
+        err = None
+        try:
+            click(run, conn, "pos:8,16")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "坐标变过仍被判成静态（coords 判据失效）"
+        assert "不是固定/静态形态" in err and "坐标变过" in err, err
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 k：出现 → SM_DISAPPEAR → **再出现** ⇒ 再现后能命中（咬「再出现重加」）
+    run, conn, tmpd = run_with([turn_frame(913, 7, 16, "商人"),
+                                build_s2c_frame(913, SM_DISAPPEAR, 0, 0, 0, b""),
+                                turn_frame(913, 7, 16, "商人")])
+    try:
+        click(run, conn, "name:商人")
+        assert len(conn.sock.sent) == 1, conn.sock.sent
+        assert encode_bytes(pack_header(913, CM_CLICKNPC)) in conn.sock.sent[0], conn.sock.sent
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
     # ---- SM_DISAPPEAR(30)：已消失对象不再是候选 ----
     run, conn, tmpd = run_with([turn_frame(901, 7, 16, "商人"),
                                 build_s2c_frame(901, SM_DISAPPEAR, 0, 0, 0, b"")])
@@ -4716,7 +4761,8 @@ def _selftest_npc_discovery():
 
     return ("name:/pos: schema 2 正 6 反；牙 a/b/c/d + 同格多对象；"
             "N2 活动对象/allow_any/晚于初始快照 3 例；N1 name:/pos: 自身过滤 2 例；"
-            "N3 名含/与无名尾 2 例；DISAPPEAR 剔除 1 例")
+            "N3 名含/与无名尾 2 例；DISAPPEAR 剔除 1 例；"
+            "静态三颗独立牙（同格 SM_RUSH / 双 TURN 换格 / 消失再出现）+ name?allow_any 加载期拒")
 
 
 def run_selftest():
