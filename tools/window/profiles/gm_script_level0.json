@@ -1,7 +1,7 @@
 {
   "format": "card-window-profile/1",
   "name": "gm_script_level0",
-  "description": "卡 `openmir2-gm-script-fixture` A1 示范：用 `fixtures.files` 在**两侧**注入同一段脚本片段（替换 `Envir/Market_Def/沙巴克/药店-0153.txt` 的 `[@main]` 并追加 `[@gmlevel]`，其中 `GMEXECUTE Level0 Self 5`），经 NPC 对话触发 ⇒ `Permission` 临时抬到 10、进命令体、`@Level0` 写等级并落 45/52/752 三帧，finally 还原。**本 profile 只是通道示范**；行为判据（两侧 Level=5 + 帧面一致）由真机窗口验。",
+  "description": "卡 `openmir2-gm-script-fixture` A1 示范：用 `fixtures.files` 在**两侧**注入同一段脚本片段（替换 `Envir/Market_Def/沙巴克/药店-0153.txt` 的 `[@main]` 并追加 `[@gmlevel]`，其中 `GMEXECUTE Level0 5`），经 NPC 对话触发 ⇒ `Permission` 临时抬到 10、进命令体、`@Level0` 写等级并落 45/52/752 三帧，finally 还原。**本 profile 只是通道示范**；行为判据（两侧 Level=5 + 帧面一致）由真机窗口验。",
   "login_gate": "127.0.0.1:17000",
   "account": "winplay0",
   "server_name": "热血传奇",
@@ -151,7 +151,7 @@
   },
   "fixtures": {
     "files": {
-      "Envir/Market_Def/沙巴克/药店-0153.txt": "(@buy @sell)\n%100\n+0\n[@main]\n欢迎, 您想要些什么? \\n<买/@buy> 药品\\n<GM/@gmlevel>\\n<离 开/@exit>\n\n[@buy]\n你想买点什么药品？\\ \\ \\n <返 回/@Main>\n[@sell]\n给我看看你的东西。\\ \\ \\n <返 回/@Main>\n[@gmlevel]\n#ACT\nGMEXECUTE Level0 Self 5\n[goods]\n金创药(小量)          100       3\n"
+      "Envir/Market_Def/沙巴克/药店-0153.txt": "(@buy @sell)\n%100\n+0\n[@main]\n欢迎, 您想要些什么? \\n<买/@buy> 药品\\n<GM/@gmlevel>\\n<离 开/@exit>\n\n[@buy]\n你想买点什么药品？\\ \\ \\n <返 回/@Main>\n[@sell]\n给我看看你的东西。\\ \\ \\n <返 回/@Main>\n[@gmlevel]\n#ACT\nGMEXECUTE Level0 5\n[goods]\n金创药(小量)          100       3\n"
     },
     "note": "files 通道（卡 openmir2-gm-script-fixture A5）；两侧逐字节相同，restore 后 before_sha==restored_sha"
   }

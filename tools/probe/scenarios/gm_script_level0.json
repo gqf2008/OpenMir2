@@ -1,7 +1,9 @@
 {
   "name": "gm_script_level0",
-  "description": "卡 `openmir2-gm-script-fixture` A1 示范：脚本 `GMEXECUTE` 抬权路径。`fixtures.files` 在两侧注入同一段脚本（替换 `Envir/Market_Def/沙巴克/药店-0153.txt`，`[@main]` 加 `<GM/@gmlevel>`，`[@gmlevel]` 的 `#ACT` 执行 `GMEXECUTE Level0 Self 5`）。oracle 链：脚本动作 `ActionOfGmExecute`（`ExecutionProcessingSys.cs:4938-4947`）把 `Permission` 抬到 10、拼出 `@Level0 <ChrName> 5 0 0 0` 调 `ProcessUserLineMsg`、**finally 还原**；`@Level0` 命令体写 `Abil.Level = (byte)MIN(255,5) = 5` 并触发 `HasLevelUp(1)` ⇒ 泵发 `SM_LEVELUP(45)` + `SM_ABILITY(52)`（带 `EncodeMessage(WAbil)` 尾）+ `SM_SUBABILITY(752)`。判据：两侧 `characters_ablity.Level` 都变 5；两侧帧面 45→52→752 逐字段一致（顺序 + Recog/Param/Tag）。**本场景必须在窗口里跑**（要起双栈 + 注入脚本）。",
-  "required": ["merchant_actor"],
+  "description": "卡 `openmir2-gm-script-fixture` A1 示范：脚本 `GMEXECUTE` 抬权路径。`fixtures.files` 在两侧注入同一段脚本（替换 `Envir/Market_Def/沙巴克/药店-0153.txt`，`[@main]` 加 `<GM/@gmlevel>`，`[@gmlevel]` 的 `#ACT` 执行 `GMEXECUTE Level0 5`）。oracle 链：脚本动作 `ActionOfGmExecute`（`ExecutionProcessingSys.cs:4938-4947`）把 `Permission` 抬到 10、拼出 `@Level0 5`（不带 Self） 调 `ProcessUserLineMsg`、**finally 还原**；`@Level0` 命令体写 `Abil.Level = (byte)MIN(255,5) = 5` 并触发 `HasLevelUp(1)` ⇒ 泵发 `SM_LEVELUP(45)` + `SM_ABILITY(52)`（带 `EncodeMessage(WAbil)` 尾）+ `SM_SUBABILITY(752)`。判据：两侧 `characters_ablity.Level` 都变 **5**。**为什么判据必须钉 5、不能只写「两侧相等」**：`GMEXECUTE` 拼 `@{p1} {p2} …`，`Self` 只在 `sParam2==Self` 时替换成 ChrName；若误写 `GMEXECUTE Level0 Self 5` ⇒ `@Level0 Self 5` ⇒ `params[0]=Self` ⇒ `StrToInt(Self,1)=1` ⇒ Level=1，两侧都为 1 时「相等」会假绿。故脚本必须是 `GMEXECUTE Level0 5`（`@Level0` 不吃名字参数），判据钉具体值 **5**。；两侧帧面 45→52→752 逐字段一致（顺序 + Recog/Param/Tag）。**本场景必须在窗口里跑**（要起双栈 + 注入脚本）。",
+  "required": [
+    "merchant_actor"
+  ],
   "params": {
     "level_arg": 5
   },
@@ -23,11 +25,15 @@
     },
     {
       "dlg_select": "@gmlevel",
-      "note": "CM_MERCHANTDLGSELECT(1011) ⇒ 脚本 `[@gmlevel]` 的 `#ACT` 执行 `GMEXECUTE Level0 Self 5`：抬权 → `@Level0` 命令体 → finally 还原。"
+      "note": "CM_MERCHANTDLGSELECT(1011) ⇒ 脚本 `[@gmlevel]` 的 `#ACT` 执行 `GMEXECUTE Level0 5`：抬权 → `@Level0` 命令体 → finally 还原。"
     },
     {
       "wait_idents": {
-        "idents": [45, 52, 752],
+        "idents": [
+          45,
+          52,
+          752
+        ],
         "timeout_ms": 5000
       },
       "note": "`RM_LEVELUP` 泵分支的三条直连帧（顺序固定）。用 `wait_idents` 钉三帧，避免命中 45 就提前返回。"
