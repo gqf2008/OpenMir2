@@ -115,26 +115,16 @@
 
 ---
 
-## 4. ④ walgit 主源故障与恢复途径（今天仍 500）
+## 4. ④ walgit 主源——**已恢复（迁到 `OpenMir2-recover`），无需你回复**
 
-- **现状**：`git fetch walgit` 仍 `HTTP 500`（`repos/gqf2008/OpenMir2/log/0000000000003000.pb not found`），
-  今天每轮 cron 都复现；全员本地模式（`entry` 只写本地 ref、不 `--push`、不重试）。
-- **两份兜底 bundle 都在**（`E:/tmp/openmir2-fallback/`，**恢复请用最新一份**）：
-
-| 份 | 路径 | 大小 | sha256 | 包内 master |
-|---|---|---:|---|---|
-| 1 | `openmir2-20261025.bundle` | 166132533 | `24d39dac…306e927` | `dc0430eda` |
-| **2（最新）** | `openmir2-2135f6154.bundle` | 167098305 | `34f65797…a5a857` | `2135f6154` |
-
-> bundle 是**时点快照**：`2135f6154` 之后的新提交/协作条目不在包内，恢复后从本地 `.git` 补推即可。
-
-- **恢复后 Leader 统一补推**：`git push walgit master` + `git push walgit 'refs/collab/inbox/*:refs/collab/inbox/*'`
-  （本地条目已 9k+）+ 各 worktree 的 `card/*` 分支；GitHub `origin` 只是镜像。
-- **owner 只需决定**：继续等 R2 恢复（推荐），还是**以 GitHub `origin` 为临时主源**（需 owner 明确批准，本仓默认不推 origin）。
-
-> **回复**：`⑦walgit=等恢复`（推荐）／`⑦walgit=GitHub 临时主源`
-
----
+- **原仓库 `gqf2008/OpenMir2` 已不可修复**：故障是**服务端自己写、5 秒后自己删**了 head WAL 段
+  `…/log/0000000000003000.pb`（`store.put` 16:06:22 → `closed bundle slots settled` 16:06:26 →
+  `store.delete` 16:06:27），WAL 头断 ⇒ 全部命令 500。根因取证见 `docs/walgit-outage-rootcause-20261025.md`（合并 `77ef50ddf`）。
+- **已迁**：`gqf2008/OpenMir2-recover`，master / `main` / 10384 条 `refs/collab/*` / 101 分支 / 12 tag 全量补推，
+  `ls-remote`、`fetch`、`push` 均 rc=0；本机 `remote walgit` 已指向新仓库（worktree 共享 config，各车道无需改动）。
+- **原仓库原地保留只读**（不删、不写、不用空对象补 WAL）。
+- **仍建议你做一件事（可选）**：两台机器（本 Windows + macOS 部署）**共用同一个 R2 桶**且都开 `maintain`
+  ⇒ 有二次踩踏风险。要么本机 `walgit.toml` 的 `[server].roles` 改成 `["serve"]`，要么换独立桶/前缀。**我不擅自改环境配置。**
 
 ## 5. ⑤ 状态快照（`goal_gate` 实测 @ `27a6f27e0`）
 
