@@ -58,7 +58,8 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mir2frame import (FrameError, FrameSplitter, build_c2s_frame, build_legacy_c2s_frame,
-                       build_s2c_frame, decode_text, encode_text)
+                       build_s2c_frame, decode_bytes, decode_text, encode_bytes, encode_text,
+                       pack_header)
 
 TOOL = "tools/probe/mir2_probe.py"
 SCHEMA_VERSION = 1
@@ -422,6 +423,67 @@ def resolve_str_param(value, params, where):
                                 % (where, value, v))
         return v
     return value
+
+
+# ---- NPC 按名/按坐标寻址（卡 openmir2-probe-npc-discovery）------------------------------
+#
+# `click_npc` 除 actor id / `auto:last_turn` 外新增两种**按可见对象**寻址：
+#   * `name:<NPC 名>` —— 匹配 `SM_TURN(10)` 出现帧的名尾 `ShowName`；
+#   * `pos:<x>,<y>`   —— 匹配该格的可见对象（`SM_TURN` 的 `Param=x` / `Tag=y`）。
+# 两者都必须**唯一命中**：0 个或多于 1 个一律 StepFailure 并列出候选（fail-closed，
+# 绝不「挑第一个」，也不回落到 `auto:last_turn`）。
+#
+# 名尾口径（oracle 同源）：`SM_TURN` 体 = `Encode(8B CharDesc)` [ + `Encode("ShowName/Color")` ]，
+# 两段**各自** EDCode（`src/M2Server/Player/PlayObject.Message.cs:1549-1555`；
+# Rust 侧 `mir2-rs/bins/game-svr/src/downlink.rs` 的 `turn_pair`）。`CM_TURN` 下行路径无名尾
+# （`turn_pair_nameless`）⇒ 该对象 `name=None`，只能按 pos/actor 寻址。
+SM_TURN_DESC_CHARS = 11   # Encode(8B CharDesc) = 11 字符（mir2frame.encode_bytes 的可逆长度）
+
+
+def actor_show_name(frame):
+    """从 `SM_TURN(10)` 的体里取 `ShowName`；无名尾 ⇒ None。"""
+    body = frame.body or b""
+    if len(body) <= SM_TURN_DESC_CHARS:
+        return None
+    try:
+        raw = decode_bytes(body[SM_TURN_DESC_CHARS:], strict=False)
+    except FrameError:
+        return None
+    text = decode_text(raw, "gbk", "replace")
+    name = text.rsplit("/", 1)[0] if "/" in text else text
+    name = name.strip()
+    return name or None
+
+
+def visible_actors(frames, self_actor):
+    """可见对象清单：按 actor id 去重（保留最后一次 SM_TURN 的坐标/名字）。
+
+    `frames` 是 `Conn.frames`（`[(seq, Frame), ...]`）。只认 `SM_TURN(10)`——它的
+    `Recog=actor id`、`Param=x`、`Tag=y`，是 oracle 的「出现帧」。
+    """
+    rows = {}
+    order = []
+    for seq, fr in frames:
+        if fr.ident != SM_TURN or fr.recog == self_actor:
+            continue
+        name = actor_show_name(fr)
+        cur = rows.get(fr.recog)
+        if cur is None:
+            rows[fr.recog] = {"actor": fr.recog, "name": name, "x": fr.param, "y": fr.tag,
+                              "seq": seq}
+            order.append(fr.recog)
+        else:
+            if name:
+                cur["name"] = name
+            cur["x"], cur["y"], cur["seq"] = fr.param, fr.tag, seq
+    return [rows[a] for a in order]
+
+
+def format_actors(rows):
+    """候选清单（错误信息用）：name/(x,y)/actor 三元组，无名写 <无名>。"""
+    return "; ".join("name=%s (%d,%d) actor=%d"
+                     % (r.get("name") or "<无名>", r["x"], r["y"], r["actor"])
+                     for r in rows) or "<无可见对象>"
 
 
 # ---- 多会话：会话标注与收件人集合断言（卡 openmir2-multi-session-probe）-----------------
@@ -941,6 +1003,30 @@ def plan_step(step, index, params, depth=0):
         if val == "auto:last_turn":
             out.update(ident=CM_CLICKNPC, recog=0, param=0, tag=0, series=0, body=b"",
                        _auto_recog="last_turn")
+        elif isinstance(val, str) and val.startswith("name:"):
+            name = val[len("name:"):].strip()
+            if not name:
+                raise ScenarioError(
+                    "%s.click_npc: `name:` 后必须跟 NPC 名（fail-closed）" % where)
+            out.update(ident=CM_CLICKNPC, recog=None, param=0, tag=0, series=0, body=b"",
+                       _npc_selector={"kind": "name", "value": name})
+        elif isinstance(val, str) and val.startswith("pos:"):
+            spec = val[len("pos:"):]
+            m = re.match(r"^(\d{1,5}),(\d{1,5})$", spec)
+            if m is None:
+                raise ScenarioError(
+                    "%s.click_npc: `pos:` 必须写成 pos:<x>,<y>（十进制非负整数），得到 %r"
+                    % (where, spec))
+            x, y = int(m.group(1)), int(m.group(2))
+            if x > 0xFFFF or y > 0xFFFF:
+                raise ScenarioError(
+                    "%s.click_npc: pos 坐标越界（0..65535）：%r" % (where, spec))
+            out.update(ident=CM_CLICKNPC, recog=None, param=0, tag=0, series=0, body=b"",
+                       _npc_selector={"kind": "pos", "x": x, "y": y})
+        elif isinstance(val, str) and ":" in val:
+            raise ScenarioError(
+                "%s.click_npc: 未知寻址写法 %r（只认 auto:last_turn / name:<名> / pos:<x>,<y>；"
+                "其余按 params 名或数字）" % (where, val))
         else:
             out.update(ident=CM_CLICKNPC, recog=resolve_param(val, params, where + ".click_npc"),
                        param=0, tag=0, series=0, body=b"")
@@ -1236,7 +1322,8 @@ def _var_refs(data):
                 if isinstance(v, str):
                     refs.append((where + ".send.text_from", v))
             v = step.get("click_npc")
-            if isinstance(v, str) and v != "auto:last_turn":
+            if (isinstance(v, str) and v != "auto:last_turn"
+                    and not v.startswith(("name:", "pos:"))):
                 refs.append((where + ".click_npc", v))
             v = step.get("dlg_select")
             if isinstance(v, dict) and isinstance(v.get("recog"), str):
@@ -1586,6 +1673,35 @@ class Run:
             "note": plan.get("note", ""),
         })
 
+    def _resolve_npc_selector(self, conn, sel, idx):
+        """`click_npc` 的 name:/pos: 寻址：唯一命中原样返回；0/多命中一律 StepFailure。"""
+        actors = visible_actors(conn.frames, self.state.get("self_actor"))
+        if sel["kind"] == "name":
+            hits = [a for a in actors if a.get("name") == sel["value"]]
+            what = "name=%s" % sel["value"]
+        else:
+            hits = [a for a in actors if a["x"] == sel["x"] and a["y"] == sel["y"]]
+            what = "pos=(%d,%d)" % (sel["x"], sel["y"])
+        if len(hits) == 1:
+            return hits[0]["actor"], hits[0]
+        if not actors:
+            raise StepFailure(
+                "steps[%s].click_npc: 还没看到任何非己对象（无 SM_TURN(10)）⇒ 无法用 %s 寻址"
+                "（fail-closed；先 wait_for 等到出现帧）" % (idx, what))
+        if not hits:
+            near = actors
+            if sel["kind"] == "pos":
+                near = [a for a in actors
+                        if abs(a["x"] - sel["x"]) <= 3 and abs(a["y"] - sel["y"]) <= 3]
+            raise StepFailure(
+                "steps[%s].click_npc: 没有对象匹配 %s；%s%s"
+                % (idx, what,
+                   "该格邻近(±3)可见对象：" if (sel["kind"] == "pos" and near) else "可见对象：",
+                   format_actors(near if near else actors)))
+        raise StepFailure(
+            "steps[%s].click_npc: %s 命中 %d 个对象（歧义，fail-closed，不挑第一个）：%s"
+            % (idx, what, len(hits), format_actors(hits)))
+
     def _recog_filter(self, plan, idx):
         """把 plan 里的 ``recog`` / ``recog_is`` 编译成 ``frame -> bool``（None = 不过滤）。
 
@@ -1767,6 +1883,12 @@ class Run:
                     raise ScenarioError(
                         "steps[%s].click_npc: no non-self SM_TURN(10) seen yet; "
                         "cannot infer NPC recog (fail-closed)" % idx)
+            if kind == "click_npc" and plan.get("_npc_selector"):
+                recog, picked = self._resolve_npc_selector(conn, plan["_npc_selector"], idx)
+                self.steps.append({"index": idx, "kind": "click_npc",
+                                   "selector": plan["_npc_selector"], "actor": recog,
+                                   "name": picked.get("name"), "x": picked["x"],
+                                   "y": picked["y"], "note": plan.get("note", "")})
             if kind == "dlg_select" and plan.get("_needs_merchant_recog"):
                 recog = self.state["last_merchant_recog"]
                 if recog is None:
@@ -4219,6 +4341,145 @@ def _selftest_kill():
     return "schema 正/反例 + 八向 + check 方向 3 例 + 运行期 dead/alive/no-target 3 态"
 
 
+def _selftest_npc_discovery():
+    """卡 openmir2-probe-npc-discovery：`click_npc` 的 name:/pos: 寻址（4 牙，构造级）。
+
+    * schema：name:/pos: 展开成 `_npc_selector`（recog=None）；未知前缀/空名/坏坐标 ⇒
+      ScenarioError；`check_scenario` 不把 name:/pos: 当 params 名（否则 R2 误报缺参）；
+    * 运行期（合成 SM_TURN 出现帧，不连网、不占端口）：
+      a. 同名两处 ⇒ StepFailure 且列出两处；b. 坐标格空 ⇒ StepFailure 且给邻近对象；
+      c. 名字不存在 ⇒ StepFailure（**不回落 auto:last_turn**，且一帧都不发）；
+      d. 唯一匹配 ⇒ 真的发出 `CM_CLICKNPC`，recog=该 actor id；
+      另加同格多对象（pos 歧义）一例。
+    """
+    import argparse as _argparse
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    def turn_frame(actor, x, y, name=None):
+        """oracle 同形出现帧：'#' + Encode(12B 头) + Encode(8B CharDesc) [+ Encode("名/色")] + '!'。"""
+        body = encode_bytes(bytes(8))            # Encode(8B CharDesc) = 11 字符
+        if name is not None:
+            body += encode_text(name + "/255")   # Encode("ShowName/Color")，两段各自编码
+        return b"#" + encode_bytes(pack_header(actor, SM_TURN, x, y, 0)) + body + b"!"
+
+    # ① schema 正例
+    p_name = plan_step({"click_npc": "name:沙巴克城堡管理"}, 0, {})
+    p_pos = plan_step({"click_npc": "pos:7,16"}, 0, {})
+    assert p_name["_npc_selector"] == {"kind": "name", "value": "沙巴克城堡管理"}, p_name
+    assert p_pos["_npc_selector"] == {"kind": "pos", "x": 7, "y": 16}, p_pos
+    assert p_name["ident"] == CM_CLICKNPC and p_name["recog"] is None, p_name
+    # ② schema 反例（fail-closed）
+    bad = [({"click_npc": "name:"}, "必须跟 NPC 名"),
+           ({"click_npc": "name:   "}, "必须跟 NPC 名"),
+           ({"click_npc": "pos:7"}, "pos:<x>,<y>"),
+           ({"click_npc": "pos:-1,2"}, "pos:<x>,<y>"),
+           ({"click_npc": "pos:7,70000"}, "越界"),
+           ({"click_npc": "auto:lastturn"}, "未知寻址写法")]
+    for step, needle in bad:
+        err = None
+        try:
+            plan_step(step, 0, {})
+        except ScenarioError as ex:
+            err = str(ex)
+        assert err is not None, "accepted bad click_npc: %r" % (step,)
+        assert needle in err, (needle, err)
+    # ③ check_scenario：name:/pos: 不是 params 名，不得报缺参
+    messages = load_message_constants()
+    doc = {"name": "selftest_npc_discovery", "steps": [
+        {"click_npc": "name:沙巴克城堡管理"}, {"wait_for": 643},
+        {"click_npc": "pos:7,16"}, {"wait_for": 643}]}
+    plans, _ = expand_scenario(doc, {})
+    check_scenario(doc, plans, None, messages)
+
+    def run_with(frames):
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-npc-")
+        args = _argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock(list(frames))
+        conn.pump(100)
+        return run, conn, tmpd
+
+    def click(run, conn, spec):
+        run.execute_step(conn, plan_step({"click_npc": spec}, 0, {}))
+
+    # 牙 a：同名两处 ⇒ 红且列出两处
+    run, conn, tmpd = run_with([turn_frame(101, 7, 16, "守卫"),
+                                turn_frame(102, 9, 16, "守卫")])
+    try:
+        err = None
+        try:
+            click(run, conn, "name:守卫")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "同名两处未被拒（会挑第一个）"
+        assert "歧义" in err and "actor=101" in err and "actor=102" in err, err
+        assert "(7,16)" in err and "(9,16)" in err, err
+        assert conn.sock.sent == [], "歧义却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 b：坐标格空 ⇒ 红且给出该格邻近可见对象
+    run, conn, tmpd = run_with([turn_frame(201, 7, 16, "商人")])
+    try:
+        err = None
+        try:
+            click(run, conn, "pos:8,17")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "空格坐标未被拒"
+        assert "邻近" in err and "actor=201" in err, err
+        assert conn.sock.sent == [], "空坐标却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 c：名字不存在 ⇒ 红（**不许**静默回落到 auto:last_turn）
+    run, conn, tmpd = run_with([turn_frame(201, 7, 16, "商人")])
+    try:
+        err = None
+        try:
+            click(run, conn, "name:不存在的NPC")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "不存在的名字未被拒"
+        assert "没有对象匹配" in err and "actor=201" in err, err
+        assert "last_turn" not in err, err
+        assert conn.sock.sent == [], "名字不存在却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 d：唯一匹配 ⇒ 真的发出 CM_CLICKNPC，recog = 该 actor id
+    run, conn, tmpd = run_with([turn_frame(301, 7, 16, "沙巴克城堡管理")])
+    try:
+        click(run, conn, "name:沙巴克城堡管理")
+        assert len(conn.sock.sent) == 1, conn.sock.sent
+        assert encode_bytes(pack_header(301, CM_CLICKNPC)) in conn.sock.sent[0], conn.sock.sent
+        step = [x for x in run.steps if x.get("kind") == "click_npc"][-1]
+        assert step["actor"] == 301 and step["name"] == "沙巴克城堡管理", step
+        assert (step["x"], step["y"]) == (7, 16), step
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 另：pos 上多个对象 ⇒ 同样红（fail-closed，不挑「第一个」）
+    run, conn, tmpd = run_with([turn_frame(401, 7, 16, "甲"),
+                                turn_frame(402, 7, 16, "乙")])
+    try:
+        err = None
+        try:
+            click(run, conn, "pos:7,16")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "同格多对象未被拒"
+        assert "actor=401" in err and "actor=402" in err and "歧义" in err, err
+        assert conn.sock.sent == [], "歧义却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    return "name:/pos: schema 2 正 6 反；牙 a/b/c/d + 同格多对象"
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -4248,6 +4509,7 @@ def run_selftest():
     check("dsl-dlg-select-any", _selftest_dlg_select_any)
     check("dsl-newchr", _selftest_newchr)
     check("dsl-kill", _selftest_kill)
+    check("dsl-npc-discovery", _selftest_npc_discovery)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)
