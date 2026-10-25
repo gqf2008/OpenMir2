@@ -1,9 +1,8 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
 > **快照戳**：`master = 2cb84220f` @ 2026-10-25 13:47 +0800（walgit 主源 = 原仓库，已恢复）。
-> 06:40 那版（`27a6f27e0`）之后合入的 2 笔均为文档/工具面，**未改动任何 R 卡窗口项**；四条件口径未变，故 §5 的 `goal_gate` 数字沿用原快照并标注。
-> `goal_gate` 取数：`python -I tools/goal/goal_gate.py --skip-tests --script-bin <release mir2-script-tool> --json`
-> （generated_ts `1792881659`，2026-10-25 06:40 +0800；**全量 `cargo test` 本轮未跑**，见 §5 口径）。
+> `goal_gate` 取数：`python -I tools/goal/goal_gate.py --full --script-bin <release mir2-script-tool> --json`，
+> 快照 `2cb84220f` @ 13:47（**含全量 `cargo test`**：3252 passed / 3315 running / 63 ignored、rc=0；①③④ 均在该 tip 实跑）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`，其中「开窗前置缺口」今天已全部解决，照旧读会误导）。
 > 只列循环内无权自决的事；每项 ≤3 行，可按 §0 模板一行回复。
 
