@@ -21,7 +21,10 @@ oracle `src/M2Server/Player/PlayObject.Operate.cs:702 ClientGetButchItem`：**�
 - 两侧同场景、同种子（`-Seed 42`）、同参数；C# 侧由 `start-csharp.ps1` 注入
   `DOTNET_STARTUP_HOOKS` + `MIR2_RNG_SEED` + `MIR2_RNG_LOG` + `MIR2_RNG_SITE=1`。
 - 场景：仓库版 `butch_two_draws.json` 仍带 `blocked`（card_window 见 `blocked` 即 rc=2），本轮用
-  **去 `blocked` 的窗口副本** `E:/tmp/window/butch-run/scenario.json`（其余逐字一致，`--check-scenario` rc=0）。
+  **仅删 `blocked` 的窗口副本** `E:/tmp/window/butch-run/scenario.json`
+  （sha256 `127ea1b191dbcf184618d6f85695691f7cdee1149c1fe8a7836abd030de15055`；
+  `steps` / `params` / `placement` 与仓库版逐字相同，**`description` 因带「已解」状态文字而与仓库版不同**；
+  `--check-scenario` rc=0）。
 - 命令：
 
   ```powershell
@@ -68,11 +71,43 @@ Rust `seq=110 / t=10949ms / recog=605 / param=330 / tag=330`。
 | Rust | `dead` | `(x=329, y=330)` | 3 / 0 / 0 | `ident=34` | `recog=199`（ActorId）、`param=329`、`tag=330` |
 
 - `recog` 是**目标 ActorId**、`param/tag` 是**尸体格 X/Y**——与 `PlayObject.Message.cs:830` 的
-  `ClientGetButchItem(nParam1, nParam2, nParam3, wParam)` 一致；旧口径「recog=MakeLong(X,Y)」在这两行数据上被直接否证。
+  `ClientGetButchItem(nParam1, nParam2, nParam3, wParam)` 一致。
+  **旧口径「recog=MakeLong(X,Y)」的否证依据**是：`run.json` 的发送记录里 `recog` = 目标 ActorId
+  （C# 1013013390 / Rust 199），而 `MakeLong(329,330) = 21627209` **不等于任一 recog**；
+  且两侧账本**两抽真的发生**（若 recog 塞的是坐标，`ActorMgr.Get` 必失败、两抽不会出现）。
+  **不是**「账本那两行」——账本行里没有 recog 字段。
 - `waited=0`：开局 32 只鸡里就有相邻目标，等待分支未触发（与 `openmir2-probe-track-target-adjacency` 的分析一致）。
 - `SM_SKELETON(33)` 两侧 0 条（`BodyLeathery` 未归零），符合「33 只在 `BodyLeathery<=0` 时发」。
 
-## 4. 帧面对比是 UNDECIDABLE（与账本判据无关，但必须写清）
+## 4. DB 面：两条差异，都给归属
+
+`report.json` 的 `db.state = compared`，两侧快照有 **2 条**字段差异。**都不是本卡判据**，但必须记账。
+
+### 4.1 `characters.Dir`：C# `0` / Rust `3`（PlayerId 6228）—— **新差异（存档面），跨场景复现**
+
+| 事实 | 值 |
+|---|---|
+| 两侧 XY | `Map=0, CX=330, CY=330`（**都正确落库**，与实时位置一致） |
+| C# `Dir` | **0** = `btDir`（`CM_BUTCH` 的 `series`；oracle `Operate.cs:736` 在位置支内无条件 `Dir = btDir`） |
+| Rust `Dir` | **3** = **基线值**（基线 dump 里 winplay0 是 `B013 / (7,12) / Dir=3`） |
+| 帧面 | Rust 的 `SM_BUTCH(637)` 携带 `Dir=0`，与 C# 相同 ⇒ **命令时刻方向是对的** |
+
+判定：**不是「帧/实体未供给方向」**——帧上 `Dir` 两侧一致且为 0；差异只出现在**持久化**：
+Rust 把**载入值**（3）写回了 `characters.Dir`，C# 写的是 butch 后的 `Dir`（0）。
+因此**不能**归到 `openmir2-player-dir-supply`（那张保证的是 `dir_updated ⇒ e.ai.dir = bt_dir` 与帧/展示一致）。
+
+**同一签名在别的场景也出现**：W1 的 `move_walk` 当时记过 `Dir 2 → 3`（本目录旧报告 `docs/window-evidence-backfill-20261025.md` §6.2 判为 flaky），
+而基线同样是 `Dir=3` ⇒ 同一形态：**Rust 的 `characters.Dir` 落的是载入值**。
+⇒ 归为**存档面通用差异**（不是 butch 专属），建议另开卡：定位需要带 `CM_BUTCH ... dir_updated=` 与服务端存档链路的日志，
+候选机制两条——(a) `dir_updated` 在运行时未置位（但帧上 `Dir=0` 又提示置位过）、(b) 命令之后实体 `ai.dir` 被重置。
+
+### 4.2 `characters_item.Dura`：C# `3993` / Rust `3989`（item 106）—— **已登记 T-266**
+
+每刀磨损 `Random(5) + 2 - AddAbil.WeaponStrong`，两侧 RNG 流本就分叉；`T-266`
+（卡 `openmir2-attack-weapon-wear-642`，tier R）**明写「真机窗口未采」**，本条即其真机样本。
+按登记处理，**不重复判**。
+
+## 5. 帧面对比是 UNDECIDABLE（与账本判据无关，但必须写清）
 
 `report.json`：`verdict=UNDECIDABLE`、`frames.compared=75`。原因两类：
 
@@ -82,7 +117,7 @@ Rust `seq=110 / t=10949ms / recog=605 / param=330 / tag=330`。
 ⇒ **帧面判据尚不具备**（这是规则表覆盖问题，需另卡），但它**不影响**本卡判据（账本两抽）。
 不得把这条 UNDECIDABLE 写成 PASS，也不得写成 FAIL。
 
-## 5. 残留与复现
+## 6. 残留与复现
 
 - 证据根 `E:/tmp/window/butch-run/out`（两侧 frames / run.json / db 快照 / rng-stream.tsv / two-draws.json / report.json）。
 - 窗口临时物：`profile.json`（含 `-ServerExe`）、`scenario.json`（去 blocked 的副本）——不入库，路径已登记。
