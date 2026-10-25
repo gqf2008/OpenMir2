@@ -4,6 +4,22 @@
 - 基线：`master a60e04ad9`；写集：`tools/conformance/rules.json`、`tools/conformance/rules_approve.py`（新增）、`tools/conformance/selftest_impl.py`、`tools/conformance/compare_runs.py`（新增 `pending_review_used` 附属证据）、本文件。
 - **裁定人**：`openmir2-orchestrator`（Leader/coordinator，2026-10-25）。**不是 owner 的裁定**；owner 可推翻（见 §3）。
 
+
+## 6b. 后续裁定：ident 14 **保持 PENDING，不转正**（2026-10-25）
+
+**背景**：`openmir2-ignore-rule-count-compare`（合入 `e335578bc`）给 `ignore` 规则加了**形态多重集比较**（键含 `param/tag/series|body_sha256`、两侧补 0 侧）。原计划是「计数牙绿 ⇒ 转正 14」，后经 reviewer-21 第二意见实测推翻：
+
+| 14 的状态 | 计数/形态**相等** | 计数/形态**不等** |
+|---|---|---|
+| **PENDING（现行）** | 放行（记为 `ignored_ident_rules_counted`） | **整轮 UNDECIDABLE** 并点名差额 |
+| 已转正 | 放行 | 仅进 census，**verdict 仍可绿** |
+
+⇒ **保持 PENDING 更严**：把「可判」与「可放行」分开。转正等于取消兜底。
+
+**代价（必须一起接受）**：保持 PENDING 时，**任何** 14 的计数/形态差（包括随机支合法地多触发一次）都会让该轮**仍是 UNDECIDABLE**——那不是「绿」，是「判不了」。写判据时按「**可判 = 变成 PASS/FAIL；不可判 = 仍 UNDECIDABLE 并点名**」表述，**不要**承诺「C 类场景从此都能判」。
+
+**残余风险（reviewer-21 N1）**：形态比较是**顺序无关的多重集** ⇒ 剔帧的相对顺序差异不会触发 UNDECIDABLE，只能靠 census 观察。
+
 ## 1. 裁定
 
 | 组 | 条数 | 裁定 |
@@ -92,7 +108,7 @@ openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4f
 
 | ident | 为什么保留 | 解封条件 |
 |---|---|---|
-| 14（ignore） | reviewer-2 在 `46e479fc`/`2f4b311f` 明写须等 `openmir2-castle-merchant-fixedhide-hit` 的 R 级窗口⑧；代码虽已合 `0119e47b9`，窗口未跑 | 该窗口通过后（或工具支持计数/形态比较）再单独复核 |
+| 14（ignore） | reviewer-2 在 `46e479fc`/`2f4b311f` 明写须等 `openmir2-castle-merchant-fixedhide-hit` 的 R 级窗口⑧；代码虽已合 `0119e47b9`，窗口未跑 | **2026-10-25 裁定：暂不转正（见 §6b）**——工具侧「计数/形态比较」已落地（`e335578bc`，reviewer-2 保留条件的后半句已满足），但转正会**取消**「形态不等 ⇒ 整轮 UNDECIDABLE」的兜底，反而更松 |
 | 10（compare + head_mask:[series]） | 掩掉整个 `MakeWord(Dir,Light)`，连 Dir 一起丢 ⇒ 原地转身缺帧级判据 | 工具支持「只掩 Light 半字节」后重评 |
 | 50（mask_fields:[series]） | reason 只论证 Light 是墙钟、没论证 Dir | 同上 |
 
