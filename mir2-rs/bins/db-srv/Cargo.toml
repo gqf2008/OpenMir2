@@ -27,6 +27,8 @@ futures-util = "0.3"
 # `mir2-script` 的 `cp936::encode_gb2312_dotnet`；这里保留 `encoding_rs` 只用于**解码**近似
 # （差异登记同 whitelist A-14）。
 encoding_rs = "0.8"
+# `MySqlConnectOptions::from_url` 需要 `&url::Url`（卡 openmir2-dbsrv-session-timezone）。
+url = "2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "sync", "macros", "time", "process"] }
