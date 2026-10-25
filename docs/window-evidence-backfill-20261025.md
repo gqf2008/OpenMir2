@@ -33,7 +33,7 @@ def row(base, name):
 
 **列口径**：`compare_rc` = compare 阶段自己的 `exit_code`（0/1/2）；`outer_rc` = `card_window` 的
 `exit_code`（它在 compare 之外还会因编排/DB 面升到 2）；`帧 diff` 拆成 `f`(frame) / `d`(db)；
-`未跑到 compare` 的场景（W1 中 11 条）帧数记为 `—`、`outer_rc=2`。
+`未跑到 compare` 的场景（W1 中 **12 条**）帧数记为 `—`、`outer_rc=2`。
 
 ## 1. W1（21 条，旧工具链）
 
@@ -65,7 +65,7 @@ def row(base, name):
 | `spell_cast` | PASS | 0 | 0 | 34/34/34 | 0（f0/d0） | **不可用**（存档时机） | `E:\tmp\window\w1c\spell_cast` |
 | `upgrade_retrieve` | UNDECIDABLE | 2 | 2 | —/—/— | 0（f0/d0） | — | `E:\tmp\window\w1c\upgrade_retrieve` |
 
-**W1 小结**（我自己数的，2+5+14=21）：**PASS 2**（`gm_time` / `spell_cast`）；**FAIL 5**
+**W1 小结**（我自己数的，2+5+14=21）：**PASS 2**（快照 57d506fa9 @ 2026-10-25 11:05；`gm_time` / `spell_cast`）；**FAIL 5**（快照 57d506fa9）
 （`gm_batch` / `login_only` / `merchant_dialog` / `npc_click` / `npc_click_auto`）；**UNDECIDABLE 14**，
 其中 **12 条根本没跑到 compare**（`oracle=None`：`bag_equip` / `castle_merchant_tax_potion` /
 `clearmapmon_q001` / `dice_chain` / `dropgold_zero_draw` / `eat_item` / `equip_struck_save` /
@@ -78,6 +78,8 @@ def row(base, name):
 ## 2. db-rerun `run`（6 条，**旧口径**）
 
 > **标「旧口径，被 `run2` 取代」**：这一批在时间列见证与部分判据口径更新之前跑的。
+> **注**：三条 PASS 的 `outer_rc=0` 里，**`gm_batch` 只在 `run` 这批成立**（`run2` 因 ident 100 条数差 FAIL）；
+> `gm_time` / `npc_click_auto` 两批都 `outer_rc=0`。
 > **但它的三条 PASS（`gm_batch` / `gm_time` / `npc_click_auto`）全部 `outer_rc=0`，是 rc 修复的首批
 > 批次级证据**（此前只有单场景自证）——这一条价值独立于口径，保留。
 
@@ -102,7 +104,7 @@ def row(base, name):
 | `npc_click_auto` | PASS | 0 | 0 | 30/30/30 | 0（f0/d0） | compared/0 | `E:\tmp\window\db-rerun\run2\npc_click_auto` |
 
 **run2 小结**：PASS 3（`gm_time` / `login_only` / `npc_click_auto`，均 `outer_rc=0` 且 DB 记录 0）；
-FAIL 3（`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20 条帧差 + 5 条 DB 记录）。
+FAIL 3（快照 57d506fa9 @ 2026-10-25 11:05；`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20 条帧差 + 5 条 DB 记录）。
 **`login_only` 在 `run` 里是 UNDECIDABLE（未跑到 compare），`run2` 里 PASS** ⇒ 这一格是「工具链修好后
 同一场景变得可判」的直接对照。
 
@@ -128,7 +130,7 @@ FAIL 3（`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20
 | `castle_merchant_tax_potion` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | **未覆盖**（未跑到 compare） |
 | `clearmapmon_q001` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | **未覆盖**（未跑到 compare） |
 | `dice_chain` | `openmir2-menu-ok-unify-pickwire`（§2 L122）、`openmir2-script-playdice-openybdeal`（§2 L128）、`openmir2-script-take-persist`（§2 L129）、`openmir2-ya52-menu-ok-missing`（§2 L140） | **未覆盖**（未跑到 compare） |
-| `dice_chain_auto` | `openmir2-menu-ok-unify-pickwire`（§2 L122）、`openmir2-ya52-menu-ok-missing`（§2 L140） | 已采集、**未过**（见差异明细） |
+| `dice_chain_auto` | `openmir2-menu-ok-unify-pickwire`（§2 L122）、`openmir2-ya52-menu-ok-missing`（§2 L140） | **规则面 UNDECIDABLE**（`pending_ignore_rule` ident 14），非帧差异（本批 0 diff） |
 | `dropgold_zero_draw` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | **未覆盖**（未跑到 compare） |
 | `eat_item` | `openmir2-spell-fill-projection-mirror`（§2 L131）、`openmir2-unbindlist-consumer`（§2 L134） | **未覆盖**（未跑到 compare） |
 | `equip_struck_save` | `openmir2-attack-weapon-wear-642`（§2 L94） | **未覆盖**（未跑到 compare） |
@@ -141,7 +143,7 @@ FAIL 3（`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20
 | `merchant_dialog` | `openmir2-encoding-core-e1-e2`（§2 L101）、`openmir2-market-def-impl`（§2 L120） | 已采集、**未过**（见差异明细） |
 | `move_walk` | `openmir2-transmap-maptrigger`（§2 L133） | 已采集、**未过**（见差异明细） |
 | `npc_click` | `openmir2-click-path-bag-writeback`（§2 L97）、`openmir2-encoding-core-e1-e2`（§2 L101）、`openmir2-npc-click-frame-seq-fix`（§2 L124）、`openmir2-npc-display-table`（§2 L126） | 已采集、**未过**（见差异明细） |
-| `npc_click_auto` | `openmir2-npc-click-frame-seq-fix`（§2 L124） | 已采集、**未过**（见差异明细） |
+| `npc_click_auto` | `openmir2-npc-click-frame-seq-fix`（§2 L124） | 帧面 **0 diff**（W1 唯一差异是 DB 面，已按 §1 作废）；`run2` 已 PASS |
 | `npc_script_chain` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | **未覆盖**（未跑到 compare） |
 | `spell_cast` | `openmir2-buff-system`（§2 L95）、`openmir2-compare-ident53-diff-triage`（§2 L98）、`openmir2-healthspell-emission-model`（§2 L107）、`openmir2-mb8-9-monsters`（§2 L121）、`openmir2-mp-session-projection-clobber`（§2 L123）、`openmir2-spell-fill-projection-mirror`（§2 L131） | 已证（帧面；DB 面不可用） |
 | `upgrade_retrieve` | `openmir2-a09-upgrade-item`（§2 L92）、`openmir2-outbound-encoders-red-batch`（§2 L127）、`openmir2-upgrade-npc`（§2 L135）、`openmir2-weapon-upgrade-values`（§2 L137） | **未覆盖**（未跑到 compare） |
