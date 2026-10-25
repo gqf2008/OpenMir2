@@ -45,7 +45,7 @@ python -I -B tools/conformance/compare_runs.py \
 | --- | --- | --- |
 | 0 | `PASS` | 帧流与库后态在规则范围内全等 |
 | 1 | `FAIL` | 有真实差异（帧 body/头部、帧数、库单元格/行） |
-| 2 | `UNDECIDABLE` | **判不了**：缺产物、解析失败、规则没覆盖（UNCLASSIFIED）、40/58 解不出、只一侧有库快照、库快照结构问题；以及空运行（`empty_run`）、两侧都缺同一头部字段、PENDING 的 ignore 真剔了帧 |
+| 2 | `UNDECIDABLE` | **判不了**：缺产物、解析失败、规则没覆盖（UNCLASSIFIED）、40/58 解不出、只一侧有库快照、库快照结构问题；以及空运行（`empty_run`）、两侧都缺同一头部字段、PENDING 的 ignore 剔除后**两侧计数/形态（含 body）对不上** |
 
 **同时出现差异与「判不了」时取 2。** 未完成的判据优先，绝不用「有差异」掩盖「没判完」；
 也绝不在缺规则/缺数据时静默当绿。
@@ -115,8 +115,12 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 1. **对齐按文件顺序**，不按 `seq` 建键。默认**没有** ignore 规则：`action=ignore` 只能来自
    规则表或显式 `--ignore-idents`，被剔除的消息号在两侧**先各自剔除**，剩余序列逐位对齐。
    10=`SM_TURN` / 41=`SM_FEATURECHANGED` 是真实协议帧（`Messages.cs:161/202`，downlink 有逐字节
-   黄金断言），默认 `compare` 逐字节比。规则表里 `approved_by` 仍是 `PENDING` 的 `ignore`
-   若真的剔了帧 ⇒ `UNDECIDABLE(pending_ignore_rule)`，不许直接判绿。
+   黄金断言），默认 `compare` 逐字节比。规则表里 `approved_by` 仍是 `PENDING` 的 `ignore`，
+   按**每侧每规则计数 + 形态**判：两侧计数相等且形态（`param/tag/series` + `body_sha256`
+   的多重集）相等 ⇒ 记「已计数、形态已比」放行（`frames.ignored_rule_census` /
+   `ignored_ident_rules_counted`）；计数或形态对不上 ⇒ `UNDECIDABLE(pending_ignore_rule)`，
+   点名 `oracle/rust/delta`——保护没有取消，只是升级成可比判据（卡
+   `openmir2-ignore-rule-count-compare`）。`frames.ignored_counts` 两侧都补 0（单侧命中也能直读）。
    两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
 2. `ident` 永远比较（即使其余字段被掩码）；错位即 `ident` 差异。
 3. 头部字段 `recog/param/tag/series` + 驱动器字段 `phase/seq/t_ms/conn`：
@@ -140,7 +144,7 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 | `mask_fields` | `fields` 里的头部字段不比（如 46 的 param/tag = 墙钟小时位）；body 仍逐字节比 |
 | `mask_body_ranges` | body 的 `[start,end)` 区间（`end:null` = 到末尾）不比；长度必须相等，否则 body_len 差异。区间内若确有不同，仍登记 `mask_body_ranges` |
 | `multiset_by_tick` | **同 ident 连续段**（被别的 ident 隔开不合并）内的帧按 `(param,tag,series,body_hex,phase)` 多重集比（排序后逐项）。顺序不同但集合相同 ⇒ rc 0 并登记 `masked_order`；集合不同 ⇒ rc 1 并给出缺失/多余的具体帧。`tick_tolerance_ms` 只用于标注 tick 窗口（`tick_split`），`t_ms` 不作判定边界；任一帧缺 `t_ms` ⇒ rc 2。**只允许用于无因果序的帧**（当前仅 ident 100） |
-| `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；PENDING 复核的 ignore 真剔了帧 ⇒ UNDECIDABLE |
+| `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；PENDING 复核的 ignore 只在「两侧计数相等且形态（`param/tag/series`+`body_sha256` 多重集）相等」时放行（记 `ignored_ident_rules_counted`），否则 UNDECIDABLE 并点名差额 |
 | `ability_layout` | 52 SM_ABILITY：`{40,58}` 明文布局对按 18 个语义字段逐项比（布局表从 `tools/loginfixture/capture_login_compare.py` 导入，**不抄第二份**）；线缆字节先按 `54→40 / 78→58` 归一（EDCode，见下）；同长度同布局退回逐字节（归一过的在明文空间比）；未登记长度对 ⇒ UNDECIDABLE |
 | `bagitems_records` | 200 `SM_ADDITEM` / 201 `SM_BAGITEMS`：包体按 **124B `ClientItem` 记录**（`'/'` 分隔）逐条比；`record_mask` 登记过的字段（默认 `["MakeIndex"]`，偏移 100..104）允许不同并**显式登记** `bagitems_masked_field`，其余每个字节都必须相同（`bagitems_record` 报 slot+offset）。条数不同 ⇒ `bagitems_count`；**记录解不开 / 不是 124B ⇒ UNDECIDABLE**（`bagitems_decode`，绝不按通过处理）。依据：`ClientItem.WritePacket`（`src/OpenMir2/Packets/ClientPackets/ClientItem.cs`）+ `M2Share.GetItemNumber()` = 计数器 + `GetTickCount()`（`M2Share.cs:547-555`）⇒ MakeIndex 跨进程不可复现 |
 
@@ -231,7 +235,7 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 * 某头部字段只有一侧给了（含被掩码字段）；两侧都缺同一头部字段（默认）；body 两侧都缺；
   52 的 body 长度不在已知布局表；
 * 两侧可比较帧数都是 0（`empty_run`，除非 `--allow-empty`）；
-* 规则表里 PENDING 的 `ignore` 真的剔了帧（`pending_ignore_rule`）；
+* 规则表里 PENDING 的 `ignore` 剔除后两侧计数/形态（含 `body_sha256`）对不上（`pending_ignore_rule`，点名 `oracle/rust/delta`；两侧同量同形 ⇒ 记「已计数」放行）；
 * 依赖模块缺失/加载失败（`capture_login_compare.py` / `dbsnap_pair.py`）；
 * 库快照：只有一侧有、缺 manifest、未知表、列不符、快照被事后改动、行数不符、重复主键；
 * 规则表缺失/非法。
@@ -319,7 +323,7 @@ python -I -B tools/conformance/compare_runs.py selftest
 全离线合成两次运行，**198 条断言**，覆盖：全等 ⇒ 0；改一个字节 ⇒ 1 且定位 ident+offset；
 未覆盖 ident ⇒ 2（`--allow-unclassified` 放行）；缺规则表/坏规则/坏 JSON ⇒ 2；
 52 的 40/58 语义比（一致 ⇒ 0、改 hp ⇒ 1）；头部掩码不吞 body 差异；显式剔除后仍能定位真差异；
-10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore 且 PENDING 剔帧 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
+10/41 默认参与比较、只有 ident=14（RNG 支）是默认 ignore：两侧同量同形 ⇒ 0（记已计数）、单侧多/少帧或形态不同 ⇒ 2；`--ignore-idents` 可剔除未登记 ident；空运行、两侧都缺头部字段、被掩码字段单侧缺失 ⇒ 2；
 块数不同（`block_align`；两侧帧数相同也不谎报帧数差）；缺 body；产物自相矛盾；
 库逐列 diff、跨库前缀、单侧缺快照、`--require-db`。
 

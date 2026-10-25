@@ -17,8 +17,13 @@
 1) 帧对齐：**按序**对齐（不是按 seq 找键）。默认**没有** ignore 规则：10=SM_TURN、
    41=SM_FEATURECHANGED 是真实协议帧（downlink 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」，
    有逐字节黄金断言），必须比。确需剔除只能用显式 `--ignore-idents`；规则表里的
-   `action=ignore` 若 `approved_by` 仍是 PENDING 且真的剔了帧 ⇒ 本次 UNDECIDABLE
-   （PENDING 的 ignore 不许直接判绿）。被剔除的消息号在两侧先各自剔除再逐位对齐。
+   `action=ignore` 若 `approved_by` 仍是 PENDING，则按**每侧每规则计数 + 形态**判：
+   两侧计数相等**且**形态（param/tag/series + body_sha256 的多重集；recog 是 ActorId
+   性质，不参与）相等 ⇒ 记为
+   「已计数、形态已比」放行（report `frames.ignored_rule_census` /
+   `ignored_ident_rules_counted`）；计数或形态对不上 ⇒ 仍 UNDECIDABLE
+   （`pending_ignore_rule`，点名 oracle/rust/delta）——**保护没有取消，只是升级成可比判据**
+   （卡 openmir2-ignore-rule-count-compare）。被剔除的消息号在两侧先各自剔除再逐位对齐。
    `ident` 永远参与比较（即使该帧其余字段被掩码）。
    例外（输入层，非 ignore 规则）：`ident` 为空（null/缺键）的**控制帧**（如 GameGate
    `+GD/<rtime>` 时间应答，frame_class=server_ack_time）在 load_stream 剔除并逐帧留痕
@@ -93,6 +98,24 @@ DB_INLINE_FORMAT = "dbsnap-inline/1"
 
 HEAD_FIELDS = ("recog", "param", "tag", "series")
 STREAM_FIELDS = ("phase", "seq", "t_ms", "conn") + HEAD_FIELDS
+#: `ignore` 规则的**形态**比较字段（卡 openmir2-ignore-rule-count-compare）。
+#: **不含 `recog`**：`SM_HIT(14)` 的 recog 是攻击者 **ActorId**
+#: （`PlayObject.Message.cs:1436` `MakeMessage(SM_HIT, processMsg.ActorId, …)`），
+#: 两侧 ActorId 分配互不相关 ⇒ 比 recog 只会制造假红。残余风险已在
+#: `docs/ignore-rule-count-compare-20261025.md` §4 登记（「同量不同攻击者」不算差异）。
+#: **body 另算**（见 `_ignore_shape_key`）：帧体本来就在 `fr["body"]` /
+#: `fr["body_sha256"]` 里（`load_stream`），不拿它比形态会漏掉「同量同头、体不同」。
+IGNORE_SHAPE_FIELDS = ("param", "tag", "series")
+
+
+def _ignore_shape_key(fr):
+    """一帧的形态键：`param,tag,series|<body_sha256>`（多重集用，见 `ignore_rule_census`）。
+
+    body 优先用驱动器声明的 `body_sha256`（`load_stream` 已校验与 `body_hex` 一致），
+    缺失时按帧体现算——两者同源，取哪个都不改变结论。
+    """
+    body_sha = fr.get("body_sha256") or sha256_bytes(fr.get("body") or b"")
+    return (",".join(str(fr.get(f)) for f in IGNORE_SHAPE_FIELDS) + "|" + body_sha)
 ACTIONS = ("compare", "mask_fields", "mask_body_ranges", "ignore", "ability_layout",
            "multiset_by_tick", "bagitems_records")
 #: SM_ADDITEM(200)/SM_BAGITEMS(201) 的包体 = 逐条 `ClientItem`（定长 124B）+ '/' 分隔。
@@ -1188,6 +1211,42 @@ def _compare_multiset_block(ob, rb, head_compare, diffs, whitelisted, undecidabl
     return matched
 
 
+def ignore_rule_census(counts, shapes, rules):
+    """`ignore` 规则的**每侧计数 + 形态**普查（卡 openmir2-ignore-rule-count-compare）。
+
+    `counts` = {"oracle": {ident: n}, "rust": {...}}；`shapes` = 同形，值是
+    {"param,tag,series": n}（见 `IGNORE_SHAPE_FIELDS`）。只统计**真的剔了帧**的规则
+    （任一侧 hit > 0）；每条给两侧计数、差值、计数是否相等、形态是否相等，
+    以及规则自身的 `pending`（`approved_by` 以 PENDING 开头）。
+
+    判定语义（main 里用）：PENDING 规则只有在「计数相等 **且** 形态相等」时才不再
+    整轮 UNDECIDABLE（记为「已计数、形态已比」）；否则仍点名差额（fail-closed）。
+    非 PENDING 的 ignore 规则只做留痕，不影响判定。
+    """
+    rows = []
+    for ident in sorted(set(counts["oracle"]) | set(counts["rust"])):
+        rule = rules.by_ident.get(ident) or {}
+        o_n = counts["oracle"].get(ident, 0)
+        r_n = counts["rust"].get(ident, 0)
+        o_s = shapes["oracle"].get(ident) or {}
+        r_s = shapes["rust"].get(ident) or {}
+        rows.append({
+            "ident": ident,
+            "action": rule.get("action"),
+            "approved_by": rule.get("approved_by"),
+            "pending": str(rule.get("approved_by", "")).upper().startswith("PENDING"),
+            "oracle": o_n,
+            "rust": r_n,
+            "delta": o_n - r_n,
+            "counts_equal": o_n == r_n,
+            "shape_equal": o_s == r_s,
+            "shape_fields": list(IGNORE_SHAPE_FIELDS),
+            "shapes": {"oracle": dict(sorted(o_s.items())),
+                       "rust": dict(sorted(r_s.items()))},
+        })
+    return rows
+
+
 def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     diffs = []
     whitelisted = []
@@ -1195,8 +1254,12 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     missing_fields = []
     masked_ranges_note = []
     pending_ignore = set()
+    # 每侧每条 ignore 规则剔了多少帧 + 这些帧的形态分布（卡 openmir2-ignore-rule-count-compare）。
+    # 计数是硬判据；形态是加强项（见 IGNORE_SHAPE_FIELDS 为什么不含 recog）。
+    ignore_counts = {"oracle": {}, "rust": {}}
+    ignore_shapes = {"oracle": {}, "rust": {}}
 
-    def split(frames):
+    def split(side, frames):
         kept, ignored, ignored_cli = [], [], []
         for fr in frames:
             ident = fr["ident"]
@@ -1206,14 +1269,18 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
             rule = rules.by_ident.get(ident)
             if rule and rule["action"] == "ignore":
                 ignored.append(ident)
+                ignore_counts[side][ident] = ignore_counts[side].get(ident, 0) + 1
+                shape = _ignore_shape_key(fr)
+                bucket = ignore_shapes[side].setdefault(ident, {})
+                bucket[shape] = bucket.get(shape, 0) + 1
                 if str(rule.get("approved_by", "")).upper().startswith("PENDING"):
                     pending_ignore.add(ident)
                 continue
             kept.append(fr)
         return kept, ignored, ignored_cli
 
-    o_kept, o_ign, o_ign_cli = split(o_stream.frames)
-    r_kept, r_ign, r_ign_cli = split(r_stream.frames)
+    o_kept, o_ign, o_ign_cli = split("oracle", o_stream.frames)
+    r_kept, r_ign, r_ign_cli = split("rust", r_stream.frames)
 
     # multiset_by_tick 需要 t_ms 标注 tick 窗口：**任一侧任一帧**缺 t_ms 都判不了。
     # 必须预扫整条流，不能在块首判——缺的是运行中的后续帧时会被漏判，进而误报
@@ -1330,6 +1397,13 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
                                 "尾部多出的 ident：%s%s"
                                 % ([fr["ident"] for fr in tail[:10]], extra)})
 
+    # F3（reviewer-20）：单侧命中时另一侧也必须**有键**（补 0），
+    # 否则读 `ignored_counts["rust"]["658"]` 会 KeyError。census 里两侧计数也一并对齐。
+    for _ident in sorted(set(ignore_counts["oracle"]) | set(ignore_counts["rust"])):
+        for _side in ("oracle", "rust"):
+            ignore_counts[_side].setdefault(_ident, 0)
+            ignore_shapes[_side].setdefault(_ident, {})
+    census = ignore_rule_census(ignore_counts, ignore_shapes, rules)
     return {
         "diffs": diffs,
         "whitelisted": whitelisted,
@@ -1337,7 +1411,16 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
         "missing_fields": missing_fields,
         "ignored": ignored,
         "ignored_cli": ignored_cli,
+        "ignored_counts": ignore_counts,
+        "ignored_shapes": ignore_shapes,
+        "ignored_rule_census": census,
         "pending_ignore_hits": sorted(pending_ignore),
+        "pending_ignore_counted": sorted(
+            row["ident"] for row in census
+            if row["pending"] and row["counts_equal"] and row["shape_equal"]),
+        "pending_ignore_mismatch": sorted(
+            row["ident"] for row in census
+            if row["pending"] and not (row["counts_equal"] and row["shape_equal"])),
         "kept_frames": {"oracle": len(o_kept), "rust": len(r_kept)},
         "present_idents": present,
         "unclassified": unclassified,
@@ -1644,6 +1727,13 @@ def compare_main(args):
             i for i, r in rules.by_ident.items()
             if r["action"] == "ignore"
             and str(r.get("approved_by", "")).upper().startswith("PENDING")),
+        # 卡 openmir2-ignore-rule-count-compare：ignore 不能只留「剔了几帧」的总数，
+        # 必须给**每侧每条规则**的计数与形态，并明确哪些 PENDING 规则已计数放行。
+        "ignored_counts": {side: {str(i): n for i, n in sorted(v.items())}
+                           for side, v in cmp["ignored_counts"].items()},
+        "ignored_rule_census": cmp["ignored_rule_census"],
+        "ignored_ident_rules_counted": cmp["pending_ignore_counted"],
+        "ignored_ident_rules_mismatch": cmp["pending_ignore_mismatch"],
     }
     report["coverage"] = {
         "present_idents": cmp["present_idents"],
@@ -1698,12 +1788,25 @@ def compare_main(args):
                                           "（确需放行用 --allow-missing-fields）"})
 
     # CH-2：PENDING 的 ignore 规则真的剔了帧 ⇒ 不许直接判绿。
-    for ident in cmp["pending_ignore_hits"]:
-        undecidable.append({"source": "coverage", "kind": "pending_ignore_rule",
-                            "ident": ident,
-                            "detail": "ident %d 的 ignore 规则 approved_by 仍为 PENDING，"
-                                      "本次确实剔除了帧 ⇒ 判不了（先复核该规则，或用显式 "
-                                      "--ignore-idents 承担剔除）" % ident})
+    # 卡 openmir2-ignore-rule-count-compare：保护**不从「整轮 UNDECIDABLE」减弱成「取消」**，
+    # 而是升级判据 —— 只有「两侧计数相等 **且** 形态相等」才算「已计数、形态已比」放行；
+    # 计数或形态对不上仍整轮 UNDECIDABLE，并点名差多少（fail-closed）。
+    for row in cmp["ignored_rule_census"]:
+        if not row["pending"]:
+            continue
+        if row["counts_equal"] and row["shape_equal"]:
+            continue
+        undecidable.append({
+            "source": "coverage", "kind": "pending_ignore_rule", "ident": row["ident"],
+            "oracle": row["oracle"], "rust": row["rust"], "delta": row["delta"],
+            "counts_equal": row["counts_equal"], "shape_equal": row["shape_equal"],
+            "shape_fields": row["shape_fields"], "shapes": row["shapes"],
+            "detail": ("ident %d 的 ignore 规则 approved_by 仍为 PENDING，且本次剔除"
+                       "两侧对不上：oracle=%d / rust=%d（差 %+d），形态（%s）%s ⇒ 判不了"
+                       "（先复核该规则，或用显式 --ignore-idents 承担剔除）"
+                       % (row["ident"], row["oracle"], row["rust"], row["delta"],
+                          "/".join(row["shape_fields"]),
+                          "相同" if row["shape_equal"] else "不同"))})
 
     db_opts = dict(rules.db)
     if args.db_time_mode:
@@ -1789,6 +1892,20 @@ def human_summary(report):
         if any(v["count"] for v in igc.values()):
             lines.append("ignored(CLI): " + ", ".join(
                 "%s=%d" % (k, v["count"]) for k, v in sorted(igc.items())))
+        census = fr.get("ignored_rule_census") or []
+        if census:
+            # 卡 openmir2-ignore-rule-count-compare：每条 ignore 规则一行，两侧同量同形
+            # 才算 counted；否则在 undecidable 里点名差额（这里也先给一眼可见的行）。
+            parts = []
+            for row in census:
+                if row["counts_equal"] and row["shape_equal"]:
+                    verdict = "counted" + ("(pending)" if row["pending"] else "")
+                else:
+                    verdict = "MISMATCH"
+                parts.append("ident=%d oracle=%d rust=%d delta=%+d shape=%s => %s"
+                             % (row["ident"], row["oracle"], row["rust"], row["delta"],
+                                "same" if row["shape_equal"] else "diff", verdict))
+            lines.append("ignore 规则普查（每侧计数/形态）: " + "; ".join(parts))
         fcf = fr.get("filtered_control_frames") or {}
         if any(v["count"] for v in fcf.values()):
             lines.append("filtered(控制帧 ident=null, 见 filtered_control_frames): "
