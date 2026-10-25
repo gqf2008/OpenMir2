@@ -1,19 +1,19 @@
 # OpenMir2 交付报告（2026-10-25 终版）
 
-- **快照**：`a1576af35`（2026-10-25 13:10 +08）。**四条件中 ①③④ 已 PASS，仅 ② 待 owner 对 G11 的一句话。**
+- **快照**：`2cb84220f`（2026-10-25 13:47 +08，最终 tip）。**四条件中 ①③④ 已 PASS，仅 ② 待 owner 对 G11 的一句话。**
 - **口径**：条件定义与判据见 `docs/leader-goal-20261023.md` §1；本节数字全部可由
   `python -I -B tools/goal/goal_gate.py --full --script-bin <mir2-script-tool>` 复算。
 
 ## 1. 四条件状态
 
-- **快照**：`a1576af35`（2026-10-25 13:10 +08）
+- **快照**：`2cb84220f`（2026-10-25 13:47 +08）
 
 | 条件 | 状态 | 证据 |
 |---|---|---|
 | ① 脚本派发 100% | **PASS** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**已在 `9a966b04b` 上用新构建有效重验**（`mir2-script-tool` = `/e/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/release/mir2-script-tool.exe`，mtime 12:46、sha256 `34ac7680b2be1d691a2991948389902f11dceed520f07e6322d58b122fabcb3e`；窗口侧留痕 `/e/tmp/final-window/script-tool.sha256`）；此前用 00:44 的旧二进制得出的同数结论曾作废（其后 3 笔改了 `crates/script`） |
-| ② R 卡证据 | **待 owner 裁决** | R 卡 **222**：closed 14 / `window_required` **154**（另未合并 2）/ whitelist 48 / 已裁定登记 **3** / **`merged_not_closed` 仅 1**（`openmir2-gm-batch-5b-cross-server`，G11 跨服，仓内无实现）/ 其余缺口 0。加总 14+154+2+48+3+1 = 222 ✓（**逐卡重数 `conditions[1].evidence.r_cards` 得到，不是读 `detail` 字符串**） | 3 张 `adjudicated` 均为**审查者签署**的 `no_window`（`m3-fixture-marker-prefix-bug` ← reviewer-6；`m3-pet-slave-summon` / `m3-rng-trace-scene-groups` ← reviewer-5），**无作者代签**。 |
+| ② R 卡证据 | **待 owner 裁决** | R 卡 **223**：closed 14 / `window_required` **155**（另未合并 2）/ whitelist 48 / 已裁定登记 **3** / **`merged_not_closed` 仅 1**（`openmir2-gm-batch-5b-cross-server`，G11 跨服，仓内无实现）/ 其余缺口 0。加总 14+155+2+48+3+1 = 223 ✓（**逐卡重数 `conditions[1].evidence.r_cards` 得到，不是读 `detail` 字符串**） | 3 张 `adjudicated` 均为**审查者签署**的 `no_window`（`m3-fixture-marker-prefix-bug` ← reviewer-6；`m3-pet-slave-summon` / `m3-rng-trace-scene-groups` ← reviewer-5），**无作者代签**。 |
 | ③ B 类清零 | **PASS** | recon `tracked=0`（rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **PASS** | `goal_gate --full` 的 `conditions[3]` = **门禁 7 项：绿 7 / 红 0 / 需人工 0**（fmt / clippy / msgcodegen / whitelist_anchor_gate / m3 audit / `cargo_test_workspace` rc=0 / `master_sync`）。手工全量 `CARGO_BUILD_JOBS=2 cargo test --workspace --locked`：**running 3314 = passed 3251 + failed 0 + ignored 63，rc=0**，逐包自洽 `mismatches=0`；相对基线（141/3217/62）**+34 passed / +1 ignored / suite 数不变**。**两次 cargo test（手工与 `--full` 内部）rc 均为 0 ⇒ 一致 ⇒ 非 flaky**。`master_sync`：`local_master == remote_master == a1576af3577d`。窗口完整性：`PRE_HEAD == WANT == POST_HEAD = a1576af3577d`、pre/post `git status` 均空 ⇒ 窗口内无漂移；`stale .d` 检索为空（未 clean）。**计数差值可独立解释**（无需 `--list`）：`git diff 139d7b5e4 a1576af35 -- mir2-rs/` ⇒ 新增 `#[test]` 类属性 **35**、删除 **0**，其中 **1 条带 `#[ignore]`** ⇒ 预期 **+34 passed / +1 ignored**，与实测逐项吻合、suite 数不变。**跟踪文件普查**：`git ls-files` **7602** == `git ls-tree -r HEAD` **7602**（脚本里的 `TRACKED_FILE_OK` 只是单哨兵文件存在性检查、未落产物，**不得**据此写「全仓跟踪完整」）。**保管链**：证据包内 `cargo-test.log` 与运行日志逐字节相同、`goal-full.json` 两份 sha256 相同。 |
+| ④ 门禁恒绿 | **PASS** | **最终 tip `2cb84220f`** 上 `goal_gate --full` 的 `conditions[3]` = **门禁 7 项：绿 7 / 红 0 / 需人工 0**（fmt / clippy / msgcodegen / whitelist_anchor_gate / m3 audit / `cargo_test_workspace` rc=0 / `master_sync`）。手工全量 `CARGO_BUILD_JOBS=2 cargo test --workspace --locked`（**最终 tip 实跑**）：**running 3315 = passed 3252 + failed 0 + ignored 63，rc=0**（对窗口 tip `a1576af35` 的 3251 只 **+1**，即 `bag-weight-sink` 新增的那颗牙；suite 数 141 与 ignored 63 均未变），逐包自洽 `mismatches=0`；相对基线（141/3217/62）**+34 passed / +1 ignored / suite 数不变**。**两次 cargo test（手工与 `--full` 内部）rc 均为 0 ⇒ 一致 ⇒ 非 flaky**。`master_sync`：`local_master == remote_master == a1576af3577d`。窗口完整性：`PRE_HEAD == WANT == POST_HEAD = a1576af3577d`、pre/post `git status` 均空 ⇒ 窗口内无漂移；`stale .d` 检索为空（未 clean）。**计数差值可独立解释**（无需 `--list`）：`git diff 139d7b5e4 a1576af35 -- mir2-rs/` ⇒ 新增 `#[test]` 类属性 **35**、删除 **0**，其中 **1 条带 `#[ignore]`** ⇒ 预期 **+34 passed / +1 ignored**，与实测逐项吻合、suite 数不变。**跟踪文件普查**：`git ls-files` **7602** == `git ls-tree -r HEAD` **7602**（脚本里的 `TRACKED_FILE_OK` 只是单哨兵文件存在性检查、未落产物，**不得**据此写「全仓跟踪完整」）。**保管链**：证据包内 `cargo-test.log` 与运行日志逐字节相同、`goal-full.json` 两份 sha256 相同。 |
 
 **交付的真缺口只剩一处**：② 的 G11 一张需 owner 裁决（列基础设施阻塞排除项 / 保持 need_human / 实施 G11）。
 
@@ -47,7 +47,7 @@
 
 ## 4. 证据重算的结论（诚实版）
 
-- **快照**：`a1576af35`（2026-10-25 13:10 +08）
+- **快照**：`2cb84220f`（2026-10-25 13:47 +08）
 
 - **`card_evidence` 重算**（行 = **证据根 × 判据**，且只取 `判据.scenario == 根的 run.json scenario` 的组合；68 个根里**仅 20 个有匹配判据**，其余贡献 0 行）：
   **runner 原样输出 82 行 = PASS 29 / FAIL 1 / UNDECIDABLE 52**（投影式：逐根跑 `card_evidence` 后只数 `detail` 不以「场景不符」开头的行；68 根里仅 20 根有匹配行）。**旧→新 transitions = 0** ⇒ 判据收紧未改变任何既有判据的 verdict。
