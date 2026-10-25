@@ -1,6 +1,6 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = 06b7fcb36` @ 2026-10-25 14:50 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
+> **快照戳**：`master = f72dbce7` @ 2026-10-25 14:57 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
 > `goal_gate` 取数：`python -I tools/goal/goal_gate.py --full --script-bin <release mir2-script-tool> --json`，
 > 快照 `2cb84220f` @ 13:47（**含全量 `cargo test`**：3252 passed / 3315 running / 63 ignored、rc=0；①③④ 均在该 tip 实跑）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`，其中「开窗前置缺口」今天已全部解决，照旧读会误导）。
@@ -127,14 +127,14 @@
 
 ## 5. ⑤ 状态快照（`goal_gate` 实测）
 
-- **快照**：`06b7fcb36`（2026-10-25 14:50 +08）
+- **快照**：`f72dbce7`（2026-10-25 14:57 +08，`goal_gate --full` 实跑）
 
 | 条件 | 状态 | 实测（可复算） |
 |---|---|---|
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
-| ② R 卡证据 | **need_human** | R 卡 **226 张**：已完成 **15** / `window_required` **154**（另未合并 **4**）/ whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 未开工或未合并 **1**（`openmir2-gm-script-fixture`，今天新开）/ 其余缺口 **0**。加总 15+154+4+48+3+1+1 = 226 ✓ |
+| ② R 卡证据 | **need_human** | R 卡 **227 张**：已完成 **15** / `window_required` **154**（另未合并 **5**）/ whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 未开工或未合并 **1**（`openmir2-gm-script-fixture`，今天新开）/ 其余缺口 **0**。加总 15+154+5+48+3+1+1 = 227 ✓ |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **pass（需在最终 tip 复跑一次）** | 全量 `--full` 最近一次实跑在 `2cb84220f`：7 项绿 7 / 红 0 / 需人工 0，`cargo_test_workspace` rc=0（running **3315 = passed 3252 + ignored 63**、两次 rc 一致 ⇒ 非 flaky）。**此后 master 又前进 7 个提交**（含一笔 `shop.rs`），按「门禁恒绿」口径需在新 tip 再跑一次 `--full`；本页 14:50 的快速模式（`--skip-tests`）为 **绿 6 / 红 0 / 需人工 1**，唯一未判项就是 `cargo_test_workspace`。`master_sync` local==remote==`06b7fcb36` ✓ |
+| ④ 门禁恒绿 | **pass** | **最终 tip `f72dbce7`** 上 `goal_gate --full` 复跑：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（总 144s）。逐项：fmt / clippy / msgcodegen / whitelist_anchor_gate / m3 audit / `master_sync` 全 rc=0，`cargo_test_workspace` **rc=0 @117.0s**；`master_sync` local==remote==`f72dbce7`。产物 `E:/tmp/window/goal-full-fd08ff3a9.json`（`.meta`：`GOAL_RC=2` 来自 ② 的 need_human、不是红门）。此前在 `2cb84220f` 的全量结论（绿 7/0/0、running 3315 = passed 3252 + ignored 63、两次 rc 一致非 flaky）仍作对照保留 |
 
 > **四条件现在的真缺口只剩一处**：② 的 G11 1 张（§1 需你裁决）。①③ PASS；④ 在 `2cb84220f` 已 PASS、**最终 tip 待复跑一次 `--full`**（只是复跑，不是新缺口）。证据与可复算口径见 `docs/delivery-report-20261025-final.md`。
 
