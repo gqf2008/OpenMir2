@@ -134,16 +134,36 @@
      在 (320,328)/(331,317) 都点到「装备回收」NPC（643 body_text 实测），`@upgrade` 无链接 ⇒
      `dlg_select @upgrade` 后 643 超时。**铁匠在 map 3 与其它可转身 NPC 同图**，`last_turn`
      不保证是铁匠；解封需要「按坐标/名字选 NPC」的 discovery 能力（工具卡）。
-  3. **税入账未观测到**：一次成功提交后 `Castle/0/SabukW.txt` 的 `TotalGold` 仍为 0——`CastleMgr.Save`
-     只在 `SystemProcessor` 的 `ConsoleShowUserCountTime` 门后写盘（已覆盖 5s 仍未见），且
-     `SaveTick`/内存态不可读；⇒ 以**帧+DB 为主、文件为辅**的口径下，无法仅凭本次文件证明
-     `Round(10000*5/100)=500/城` 入账。
+  3. **税入账未观测到（原因未定位；已排除 `SaveTick` 与 600s 门两项假设）**：一次成功提交
+     （帧 `SM_DELITEM(202)`/`SM_DELITEMS(709)`，角色 Gold 10000→3）后，`Castle/0/SabukW.txt` 的
+     `TotalGold` 仍为 0。**观测是写实的**：四份根（生产 `E:/MirServer/M2GameSvr`、私栈 baseline、
+     hook 影子、Rust 根）的 `Castle/0/SabukW.txt`（1748B）与 `Castle/1/SabukW.txt`（0B）mtime
+     全部仍是 2026-10-09 01:32 / 2026-10-10 22:21 ⇒ **文件零写入**；`Castle/List.txt` 的 mtime
+     变化（06:32/07:41/07:52/07:58）来自夹具写入与事后手工还原，内容已回到 6 字节
+     `0\r\n1\r\n`，**不是服务端写的**。
+     **归因：原因未定位**。两条假设已排除：
+     - `SaveTick` **不控制写盘**——`UserCastle.IncRateGold` 只更新内存 tick
+       （`src/GameSrv/CastleManager/UserCastle.cs:796-805`），不是落盘门；
+     - 600s 门不是拦路者——`ConsoleShowUserCountTime` 已覆盖为 5000ms，且
+       `SystemProcessor.ExecuteInternal` **每 tick 都调 `ShowOnline()`**
+       （`ShowOnlineTick` 在 Startup 置初值）⇒ 8s 窗口足够触发一次 `CastleMgr.Save()`。
+     帧 `202/709` + `Gold 10000→3` 已证明升级成功支真实执行 ⇒ `IncRateGold(10000)` 被调用，
+     两个上限（5e6/2e6）也不截断。⇒ 「文件零写入」是观测事实，但**为什么没落盘尚未定位**。
+     **待补的两行诊断**（下次受控重跑从该轮 `GameSvr.out.log` 抓）：`已读取 [N] 个城堡信息`
+     （CastleList 实际条数）与 `在线数: <N>`（`ShowOnline()` 是否按预期走到）——若 N 与夹具
+     不符、或 `在线数` 行缺失，即可把问题钉到「加载/ShowOnline 未按预期执行」。
+     **W-TAX 判据暂不改**：在诊断补齐并定位前，不得据此把判据缩成「只判帧」。
 - **结论**：升级腿**保持 blocked**，缺口收窄为两项 + 一条批次限制：
   ① `inventory.replace/drop`（另卡，dev-1 已知）；
   ② 按名字/坐标 discovery 铁匠（`auto:last_turn` 在密集 NPC 区不可靠——以后同类场景应显式给坐标/名字，不要靠 discovery）；
   ③ **批次限制**：手工窗口可用 `--profile <path>.json` 声明 config_overrides（已实测），
   但 run3/`run_batch` 只认内置 profile 名，进批需工具卡。**不声称可跑**。
 - 证据目录：`E:/tmp/scriptcov/taxleg/`（profile、临时场景、card 日志、frames、fixtures diff）。
+- **重跑尝试与处置（traceability）**：用于抓上述两行诊断的受控重跑**未能启动**——15xxx 私栈端口
+  被另一线（dev-1）占用，`retry1..5` 一律 `UNDECIDABLE`（观测记录见 `E:/tmp/scriptcov/taxleg/retry*.log`）；
+  本线**未杀他人进程**，按栈互斥签 `release-without-start`。期间 hook 影子 `Castle/List.txt` 曾被
+  运行期改写，由 Leader 手工还原为 6 字节，四份根现有 sha/内容一致（复核口径见 runbook §0.9/§0.10）。
+  重跑本身仍待端口释放后进行；其证据将作为本卡后续 `comment` 挂上，不再开新版本。
 
 ---
 
@@ -158,10 +178,9 @@
 
 ## 6. 解封条件（写在场景 `blocked.missing_fixture`）
 
-1. **W-TAX-2 / 升级腿**：`card_window` **无配置覆盖通道**（restore→起栈之间没有手工窗口），需该通道，
-   或两侧 conformance 副本（`E:/tmp/conformance/{csharp-root,rust-root}/M2GameSvr/Server.conf`）**同值**置
-   `CastleGetAllNpcTax=1` 并重启（`restore-baseline*.sh` 只回滚 DB 不覆盖配置 ⇒ 需登记并在跑完还原）；
-   再加一条 **map 3 铁匠**的独立场景（单场景一个 placement ⇒ 另开卡）。
+1. **W-TAX-2 / 升级腿**：配置覆盖**已有通道**（`fixtures.config_overrides`，`--profile <path>.json`
+   可用；见 §4.2 第 1 条与本卡 F3 订正），未解的是**进批**（`run_batch` 只认内置 profile 名）与
+   **map 3 铁匠**的独立场景（单场景一个 placement ⇒ 另开卡）；另有上条「税入账原因未定位」。
 2. **买武器腿**：解析 `SM_SENDDETAILGOODSLIST(652)` 的 ClientItem buffer（EDCode）取 `MakeIndex`，喂给第 19 步
    （需改 `tools/probe/mir2_probe.py`，本卡写集外）。
 3. **Castle 夹具对齐**：两侧 `Castle/List.txt` 同值（建议都 `0`），`Castle/0/SabukW.txt` 初值同源（现已是）。
