@@ -16,6 +16,9 @@
     7. 牙（隔离）：新映射被改坏（dx/dy 交换）时，未启用 -AttackTurnMap 的旧路径输出不变；
        新映射缺格偏移时 fail-closed。
     8. 源码静态检查：旧攻击块的字面量 512+dx*48 / 304+dy*32 仍在（未被新映射替换）。
+    9. 成因三档（卡 openmir2-mirflow-verdict-cause-split）：同一假产物只改成因 =>
+       missing_prereq(6)/spawn_failed(7)/out_of_range(8)；单因子矩阵 + Resolve-CombatCause 真值表；
+       A7 参数名写错 => rc=2 USAGE（不落任何 verdict）。
   退出码：0 全 PASS；1 有 FAIL。
 #>
 $ErrorActionPreference = "Stop"
@@ -524,8 +527,12 @@ try {
     @{ dir = "s2c"; ident = 201; recog = 6496; param = 0; tag = 0; series = 5; ts = 1100 },
     @{ dir = "c2s"; ident = 1001; recog = 0; param = 330; tag = 331; series = 0; ts = 2000 })
   $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkRed, "-OutDir", (New-StageOutDir "pickup-red"))
-  Check "stages pickup TOOTH: no side effect => RED named pickup" (
-    $r.Code -eq 1 -and $r.Out.Contains("category=pickup verdict=RED") -and $r.Out.Contains("无入包")) ($r.Out + " rc=" + $r.Code)
+  # 卡 openmir2-mirflow-verdict-cause-split：地面物按 96ad82a37 裁决结构性不可达 ⇒「没生效」且前置缺失
+  # 必须是 UNDECIDABLE(missing_prereq, floor_item)，不是 RED（那是把环境伪差异记成 FAIL）。
+  Check "stages pickup: no effect + structural floor_item => UNDECIDABLE (kind=missing_prereq rc=6)" (
+    $r.Code -eq 6 -and
+    $r.Out.Contains("category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=floor_item") -and
+    $r.Out.Contains("无入包") -and -not $r.Out.Contains("verdict=GREEN")) ($r.Out + " rc=" + $r.Code)
 
   # 牙 2：CM_PICKUP 目标格 != 角色格（服务端 oracle 直接忽略）
   $pkCell = New-TestDir "pickup-cell"
@@ -656,9 +663,11 @@ try {
   # 牙：不刷怪（profile 的靶子在别的图）⇒ RED，点名 combat
   $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbGreen, "-OutDir", (New-StageOutDir "combat-notarget"),
     "-Profile", $profOther, "-PlayerMap", "0")
-  Check "stages combat TOOTH: no same-map fixture => RED named combat" (
-    $r.Code -eq 1 -and $r.Out.Contains("category=combat verdict=RED") -and
-    $r.Out.Contains("没有靶子")) ($r.Out + " rc=" + $r.Code)
+  # 声明在、但只在别的图 ⇒ 刷出也不在可测位置：RED(out_of_range, rc=8)，不是 missing_prereq。
+  Check "stages combat TOOTH: declared only on other map => RED out_of_range (rc=8)" (
+    $r.Code -eq 8 -and
+    $r.Out.Contains("category=combat verdict=RED kind=out_of_range rc=8") -and
+    $r.Out.Contains("不同图") -and -not $r.Out.Contains("kind=spawn_failed")) ($r.Out + " rc=" + $r.Code)
 
   # 牙：攻击方向没指向靶子
   $cbDir = New-TestDir "combat-wrongdir"
@@ -668,9 +677,10 @@ try {
     @{ dir = "s2c"; ident = 31; recog = 8888; param = 8; tag = 10; series = 2; ts = 2200 })
   $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbDir, "-OutDir", (New-StageOutDir "combat-dir-red"),
     "-Profile", $profGood, "-PlayerMap", "0")
-  Check "stages combat TOOTH: hit not aimed at target => RED" (
-    $r.Code -eq 1 -and $r.Out.Contains("category=combat verdict=RED") -and
-    $r.Out.Contains("未指向靶子")) ($r.Out + " rc=" + $r.Code)
+  Check "stages combat TOOTH: hit not aimed at an in-AP target => RED aim_mismatch (rc=1)" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=combat verdict=RED kind=aim_mismatch rc=1") -and
+    $r.Out.Contains("未指向靶子") -and -not $r.Out.Contains("kind=spawn_failed") -and
+    -not $r.Out.Contains("kind=out_of_range")) ($r.Out + " rc=" + $r.Code)
 
   # 牙：靶子没刷出（CM_HIT 指向靶子格，但没有任何掉血/死亡）
   $cbNoFx = New-TestDir "combat-noeffect"
@@ -679,9 +689,11 @@ try {
     @{ dir = "c2s"; ident = 3014; recog = $ownW; param = 0; tag = 2; series = 0; ts = 2000 })
   $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbNoFx, "-OutDir", (New-StageOutDir "combat-fx-red"),
     "-Profile", $profGood, "-PlayerMap", "0")
-  Check "stages combat TOOTH: no HP drop/death (monster not spawned) => RED" (
-    $r.Code -eq 1 -and $r.Out.Contains("category=combat verdict=RED") -and
-    $r.Out.Contains("无掉血")) ($r.Out + " rc=" + $r.Code)
+  # 夹具已声明（正前方）却无掉血/死亡 ⇒ 控输入没兑现：RED(spawn_failed, rc=7)。
+  Check "stages combat TOOTH: declared but not spawned => RED spawn_failed (rc=7)" (
+    $r.Code -eq 7 -and
+    $r.Out.Contains("category=combat verdict=RED kind=spawn_failed rc=7") -and
+    $r.Out.Contains("无掉血") -and -not $r.Out.Contains("kind=out_of_range")) ($r.Out + " rc=" + $r.Code)
 
   # ---- 14e. A6：日志目录参数化（空目录 ⇒ 显式 SKIP；-RequireLogEvidence ⇒ RED）----
   $emptyLog = New-TestDir "log-empty"
@@ -788,6 +800,201 @@ try {
   Check "stages A6 source: no hardcoded MirServer logs path" (
     -not ($srcStages -match 'E:[/\\]MirServer[/\\]logs') -and -not ($srcStages -match 'MirServer\\\\logs')) $null
 
+  # ---- 14g. 成因三档（卡 openmir2-mirflow-verdict-cause-split）----
+  # A6：**同一份假产物（$cbNoFx 的帧完全相同），只改一个成因（profile）**，三种结果各自成立。
+  #   帧：own=(330,331) CM_HIT dir=2(Right) -> front=(331,331)；没有任何 SM_STRUCK/SM_DEATH。
+  $profNoDecl = Join-Path (New-TestDir "verdict-nodecl") "profile.json"
+  [IO.File]::WriteAllText($profNoDecl, '{"fixtures":{"monsters":[]}}', (New-Object Text.UTF8Encoding($false)))
+  $profFar = Join-Path (New-TestDir "verdict-far") "profile.json"
+  [IO.File]::WriteAllText($profFar, '{"fixtures":{"monsters":[{"map":"0","x":338,"y":331,"name":"鸡","count":1}]}}', (New-Object Text.UTF8Encoding($false)))
+  $v1 = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbNoFx, "-OutDir", (New-StageOutDir "verdict-nodecl"), "-Profile", $profNoDecl, "-PlayerMap", "0")
+  $v2 = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbNoFx, "-OutDir", (New-StageOutDir "verdict-spawn"), "-Profile", $profGood, "-PlayerMap", "0")
+  $v3 = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbNoFx, "-OutDir", (New-StageOutDir "verdict-far"), "-Profile", $profFar, "-PlayerMap", "0")
+  Write-Output ("A6_CAUSE_SPLIT cause=no_declaration      verdict=UNDECIDABLE kind=missing_prereq rc=" + $v1.Code)
+  Write-Output ("A6_CAUSE_SPLIT cause=declared_not_spawned verdict=RED kind=spawn_failed rc=" + $v2.Code)
+  Write-Output ("A6_CAUSE_SPLIT cause=declared_out_of_ap  verdict=RED kind=out_of_range rc=" + $v3.Code)
+  Check "A6 same artifact, 3 causes => rc 6/7/8 all distinct" (
+    $v1.Code -eq 6 -and $v2.Code -eq 7 -and $v3.Code -eq 8) ("rc=" + $v1.Code + "/" + $v2.Code + "/" + $v3.Code)
+  $kinds3 = @()
+  if ($v1.Out.Contains("kind=missing_prereq")) { $kinds3 += "missing_prereq" }
+  if ($v2.Out.Contains("kind=spawn_failed")) { $kinds3 += "spawn_failed" }
+  if ($v3.Out.Contains("kind=out_of_range")) { $kinds3 += "out_of_range" }
+  $rcs3 = @($v1.Code, $v2.Code, $v3.Code)
+  Check "A6 three kinds and three rc are pairwise distinct" (
+    $kinds3.Count -eq 3 -and (@($kinds3 | Select-Object -Unique)).Count -eq 3 -and
+    (@($rcs3 | Select-Object -Unique)).Count -eq 3) ("kinds=" + ($kinds3 -join ",") + " rc=" + ($rcs3 -join ","))
+
+  # A3 三颗独立牙（互不覆盖）：每颗都断言另外两档没出现。
+  # 牙 1：删掉夹具声明 => UNDECIDABLE 且点名（不是 RED、不是绿）。
+  Check "A3 TOOTH1: delete fixture declaration => UNDECIDABLE named, not RED/GREEN" (
+    $v1.Code -eq 6 -and
+    $v1.Out.Contains("category=combat verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=monster_fixture") -and
+    -not $v1.Out.Contains("verdict=RED") -and -not $v1.Out.Contains("verdict=GREEN")) $v1.Out
+  # 牙 2：声明了却刷不出 => RED spawn_failed。
+  Check "A3 TOOTH2: declared but not spawned => RED spawn_failed, not out_of_range" (
+    $v2.Code -eq 7 -and
+    $v2.Out.Contains("category=combat verdict=RED kind=spawn_failed rc=7") -and
+    $v2.Out.Contains("无掉血") -and -not $v2.Out.Contains("kind=out_of_range") -and
+    -not $v2.Out.Contains("verdict=UNDECIDABLE")) $v2.Out
+  # 牙 3：声明了但在 AP 外 => RED out_of_range。
+  Check "A3 TOOTH3: declared but outside AP => RED out_of_range, not spawn_failed" (
+    $v3.Code -eq 8 -and
+    $v3.Out.Contains("category=combat verdict=RED kind=out_of_range rc=8") -and
+    $v3.Out.Contains("AP 外") -and -not $v3.Out.Contains("kind=spawn_failed") -and
+    -not $v3.Out.Contains("verdict=UNDECIDABLE")) $v3.Out
+
+  # A6 第 4 行：三因全假（声明在 AP 内 + 有副作用）=> PASS。
+  $v4 = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbGreen, "-OutDir", (New-StageOutDir "verdict-pass"), "-Profile", $profGood, "-PlayerMap", "0")
+  Check "A6 row4: all three causes false => PASS (rc=0, kind=ok)" (
+    $v4.Code -eq 0 -and $v4.Out.Contains("category=combat verdict=GREEN kind=ok rc=0")) $v4.Out
+
+  # A6/step-5 的结构前提：三因是三个**独立输入**，由 Resolve-CombatCause 纯函数汇合。
+  # 真值表直接证明「只开一因」时只落对应那一档（审者会按此矩阵做单因子变异）。
+  # 8 行真值表：单因子 + 两两/三三组合，验证「显式优先级」而不是「任一为真都落同一档」。
+  $truth = @(
+    @{ P = $false; O = $false; S = $false; Want = "ok" },
+    @{ P = $true;  O = $false; S = $false; Want = "missing_prereq" },
+    @{ P = $false; O = $true;  S = $false; Want = "out_of_range" },
+    @{ P = $false; O = $false; S = $true;  Want = "spawn_failed" },
+    @{ P = $true;  O = $true;  S = $false; Want = "missing_prereq" },
+    @{ P = $true;  O = $false; S = $true;  Want = "missing_prereq" },
+    @{ P = $false; O = $true;  S = $true;  Want = "out_of_range" },
+    @{ P = $true;  O = $true;  S = $true;  Want = "missing_prereq" }
+  )
+  $truthBad = @()
+  foreach ($t in $truth) {
+    $got = Resolve-CombatCause $t.P $t.O $t.S
+    if ($got -ne $t.Want) {
+      $truthBad += ("P" + [int]$t.P + "O" + [int]$t.O + "S" + [int]$t.S + "=" + $got + "!=" + $t.Want)
+    }
+  }
+  Check "A6 resolver 8-row truth table (priority prereq>range>spawn>ok)" ($truthBad.Count -eq 0) ($truthBad -join "; ")
+  # 单因子矩阵：每行只允许出现自己的 kind。
+  $rowKinds = @(
+    @{ Name = "row1-missing"; Out = $v1.Out; Want = "missing_prereq"; Other = @("spawn_failed", "out_of_range") },
+    @{ Name = "row2-spawn";   Out = $v2.Out; Want = "spawn_failed";   Other = @("missing_prereq", "out_of_range") },
+    @{ Name = "row3-range";   Out = $v3.Out; Want = "out_of_range";   Other = @("missing_prereq", "spawn_failed") },
+    @{ Name = "row4-pass";    Out = $v4.Out; Want = "ok";             Other = @("missing_prereq", "spawn_failed", "out_of_range") }
+  )
+  $matrixBad = @()
+  foreach ($rk in $rowKinds) {
+    if (-not $rk.Out.Contains("kind=" + $rk.Want)) { $matrixBad += ($rk.Name + ":missing-" + $rk.Want) }
+    foreach ($o in $rk.Other) {
+      if ($rk.Out.Contains("kind=" + $o)) { $matrixBad += ($rk.Name + ":leaked-" + $o) }
+    }
+  }
+  Check "A6 single-factor matrix: each row carries only its own kind" ($matrixBad.Count -eq 0) ($matrixBad -join "; ")
+  Check "source: three combat causes are independently-evaluated booleans + one resolver" (
+    $srcStages.Contains('function Resolve-CombatCause') -and
+    $srcStages.Contains('$prereqMissing = $false') -and $srcStages.Contains('$outOfRange = $false') -and
+    $srcStages.Contains('$spawnFailed = $false')) $null
+
+  # ---- 14h. A7：用法错与任何 verdict 区分（rc=2 + 显式 USAGE）----
+  $vTypo = Invoke-Flow @("-StageEvidenceChek", "-ProxyDir", $cbNoFx, "-OutDir", (New-StageOutDir "a7-typo"))
+  Check "A7 TOOTH: mistyped -StageEvidenceChek => rc=2 USAGE, no verdict" (
+    $vTypo.Code -eq 2 -and $vTypo.Out.Contains("MIRFLOW USAGE") -and
+    -not $vTypo.Out.Contains("STAGE_EVIDENCE category=") -and
+    -not $vTypo.Out.Contains("kind=") -and
+    -not $vTypo.Out.Contains("verdict=")) ($vTypo.Out + " rc=" + $vTypo.Code)
+  Check "A7 control: correct entry is not USAGE" (
+    $v2.Code -ne 2 -and $v2.Out.Contains("STAGE_EVIDENCE category=combat")) ("rc=" + $v2.Code)
+  $vMissArg = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-OutDir", (New-StageOutDir "a7-missing-proxy"))
+  Check "A7 TOOTH2: missing required arg => rc=2 USAGE (not RED)" (
+    $vMissArg.Code -eq 2 -and $vMissArg.Out.Contains("MIRFLOW USAGE") -and
+    -not $vMissArg.Out.Contains("verdict=")) ($vMissArg.Out + " rc=" + $vMissArg.Code)
+
+  # ---- 14i. A2：动作前显式前置门（只读 provision --gate 的 JSON）----
+  $gateTrade = Join-Path (New-TestDir "gate-trade") "gate.json"
+  [IO.File]::WriteAllText($gateTrade,
+    '{"kind":"missing_prereq","verdict":"UNDECIDABLE","need":["gold","sellable_item","npc","floor_item","monsters"],"missing":["gold","npc"],"reasons":{"gold":"characters.Gold=0 < 500","npc":"no npc"}}',
+    (New-Object Text.UTF8Encoding($false)))
+  # 14c 的「不点 NPC 直接交易」帧（$trRed）+ 门说 gold/npc 缺 ⇒ UNDECIDABLE 并点名 gold。
+  $vGateTrade = Invoke-Flow @("-StageEvidenceCheck", "-TradeStage", "-ProxyDir", $trRed, "-OutDir", (New-StageOutDir "gate-trade"),
+    "-PrereqGateJson", $gateTrade)
+  Check "A2 gate TOOTH: missing gold => trade UNDECIDABLE named (rc=6)" (
+    $vGateTrade.Code -eq 6 -and
+    $vGateTrade.Out.Contains("category=trade verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=gold")) $vGateTrade.Out
+  # 负例：门说全备齐（missing=[]）时，同样的失败帧必须仍是 RED（门不得掩盖真 RED）。
+  $gateOk = Join-Path (New-TestDir "gate-ok") "gate.json"
+  [IO.File]::WriteAllText($gateOk,
+    '{"kind":"prereq_ok","verdict":"PASS","need":["gold","sellable_item","npc","floor_item","monsters"],"missing":[],"reasons":{}}',
+    (New-Object Text.UTF8Encoding($false)))
+  $vGateOk = Invoke-Flow @("-StageEvidenceCheck", "-TradeStage", "-ProxyDir", $trRed, "-OutDir", (New-StageOutDir "gate-ok"),
+    "-PrereqGateJson", $gateOk)
+  Check "A2 gate NEGATIVE: gate present => still RED (must not mask a real RED)" (
+    $vGateOk.Code -eq 1 -and $vGateOk.Out.Contains("verdict=RED") -and
+    -not $vGateOk.Out.Contains("kind=missing_prereq")) $vGateOk.Out
+  # NPC 门：没有 npc 时，点不出对话 => UNDECIDABLE 且点名 npc。
+  $gateNpc = Join-Path (New-TestDir "gate-npc") "gate.json"
+  [IO.File]::WriteAllText($gateNpc,
+    '{"kind":"missing_prereq","verdict":"UNDECIDABLE","need":["npc"],"missing":["npc"],"reasons":{"npc":"no scripted npc"}}',
+    (New-Object Text.UTF8Encoding($false)))
+  $vGateNpc = Invoke-Flow @("-StageEvidenceCheck", "-NpcDialogStage", "-ProxyDir", $ndRed, "-OutDir", (New-StageOutDir "gate-npc"),
+    "-PrereqGateJson", $gateNpc)
+  Check "A2 gate TOOTH: missing npc => npcdialog UNDECIDABLE named (rc=6)" (
+    $vGateNpc.Code -eq 6 -and
+    $vGateNpc.Out.Contains("category=npcdialog verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=npc")) $vGateNpc.Out
+  # 门文件不存在 => 用法错 rc=2（不能静默当作「门全过」）。
+  $vGateMissing = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkGreen, "-OutDir", (New-StageOutDir "gate-missing"),
+    "-PrereqGateJson", (Join-Path (New-TestDir "gate-none") "nope.json"))
+  Check "A2 gate USAGE: missing gate file => rc=2 (not silently pass)" (
+    $vGateMissing.Code -eq 2 -and $vGateMissing.Out.Contains("MIRFLOW USAGE")) $vGateMissing.Out
+
+  # ---- 14j. B1/F1/N3（review ab7054f2 返工）----
+  # B1：「读不到输入」= USAGE(rc=2)，不是 rc=1 崩溃、也不是任何 verdict（rc=1 只留给人判出的 RED）。
+  $b1NoPath = Join-Path (New-TestDir "b1-nopath") "no-such-proxy"
+  $b1a = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $b1NoPath, "-OutDir", (New-StageOutDir "b1-nopath"))
+  Check "B1 TOOTH1: nonexistent -ProxyDir => rc=2 USAGE, no kind" (
+    $b1a.Code -eq 2 -and $b1a.Out.Contains("MIRFLOW USAGE") -and $b1a.Out.Contains("不存在") -and
+    -not $b1a.Out.Contains("kind=") -and -not $b1a.Out.Contains("STAGE_EVIDENCE category=")) $b1a.Out
+  $b1Empty = New-TestDir "b1-empty-proxy"
+  $b1b = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $b1Empty, "-OutDir", (New-StageOutDir "b1-nochunks"))
+  Check "B1 TOOTH2: proxy dir without chunks.ndjson => rc=2 USAGE, no kind" (
+    $b1b.Code -eq 2 -and $b1b.Out.Contains("MIRFLOW USAGE") -and $b1b.Out.Contains("chunks.ndjson") -and
+    -not $b1b.Out.Contains("kind=")) $b1b.Out
+  # 同类输入错不许两套并存：capture 不存在 / 两个证据源互斥，也必须是 USAGE。
+  $b1c = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-CapturePath", (Join-Path (New-TestDir "b1-nocap") "no.jsonl"), "-OutDir", (New-StageOutDir "b1-nocap"))
+  Check "B1 TOOTH3: nonexistent -CapturePath => rc=2 USAGE" (
+    $b1c.Code -eq 2 -and $b1c.Out.Contains("MIRFLOW USAGE") -and -not $b1c.Out.Contains("kind=")) $b1c.Out
+  $b1d = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $b1Empty, "-CapturePath", "E:/x.jsonl", "-OutDir", (New-StageOutDir "b1-mutex"))
+  Check "B1 TOOTH4: -ProxyDir + -CapturePath mutex => rc=2 USAGE" (
+    $b1d.Code -eq 2 -and $b1d.Out.Contains("MIRFLOW USAGE") -and -not $b1d.Out.Contains("kind=")) $b1d.Out
+
+  # F1/N3：门在动作之前求值并落进证据（path + sha256 + 生成命令 + 缺项名）。
+  $gateEvDir = New-TestDir "gate-evidence"
+  $gateEvPath = Join-Path $gateEvDir "gate.json"
+  [IO.File]::WriteAllText($gateEvPath,
+    '{"kind":"missing_prereq","verdict":"UNDECIDABLE","need":["gold","npc"],"missing":["gold"],"reasons":{"gold":"Gold=0"}}',
+    (New-Object Text.UTF8Encoding($false)))
+  $gateEvCmd = "python -I -B tools/client/provision_real_machine_fixtures.py --gate --db mir2_test_db_r --char aaa --map 3 --profile p.json"
+  $gateEvOut = New-StageOutDir "gate-evidence"
+  $rGateEv = Invoke-Flow @("-StageEvidenceCheck", "-TradeStage", "-ProxyDir", $trRed, "-OutDir", $gateEvOut,
+    "-PrereqGateJson", $gateEvPath, "-PrereqGateCmd", $gateEvCmd)
+  $gd = Get-EvidenceDoc $gateEvOut
+  $wantGateSha = Get-Sha256Hex $gateEvPath
+  Check "N3 TOOTH: evidence records gate path + sha256 + generation command" (
+    $null -ne $gd -and $null -ne $gd.prereq_gate -and
+    ([string]$gd.prereq_gate.path -eq (Resolve-Path -LiteralPath $gateEvPath).Path) -and
+    ([string]$gd.prereq_gate.sha256 -eq $wantGateSha) -and
+    ([string]$gd.prereq_gate.generated_by -eq $gateEvCmd) -and
+    ([string]$gd.prereq_gate.generated_by_source -eq "operator") -and
+    (@($gd.prereq_gate.missing) -contains "gold")) (
+    ($gd.prereq_gate | ConvertTo-Json -Compress -Depth 6))
+  Check "F1 TOOTH: gate evaluated before actions, recorded with missing names" (
+    $null -ne $gd -and $null -ne $gd.prereq_gate -and
+    [bool]$gd.prereq_gate.evaluated_before_actions -and
+    [long]$gd.prereq_gate.evaluated_at_wall_ms -gt 0 -and
+    (@($gd.prereq_gate.missing) -contains "gold")) (
+    ($gd.prereq_gate | ConvertTo-Json -Compress -Depth 6))
+  # F1 源序：门求值行必须出现在 live 动作块之前（不是动作失败后回头补算）。
+  $gateEvalPos = $srcStages.IndexOf('$script:prereqGate = Read-PrereqGateJson')
+  $liveActionPos = $srcStages.IndexOf('Stage "pickup"')
+  Check "F1 source order: gate evaluated before the live action block" (
+    $gateEvalPos -ge 0 -and $liveActionPos -gt $gateEvalPos) ("gate_pos=" + $gateEvalPos + " live_pos=" + $liveActionPos)
+  Check "F1 stdout order: PREREQ_GATE precedes STAGE_EVIDENCE" (
+    $rGateEv.Out.IndexOf("PREREQ_GATE") -ge 0 -and
+    $rGateEv.Out.IndexOf("STAGE_EVIDENCE category=") -gt $rGateEv.Out.IndexOf("PREREQ_GATE")) $rGateEv.Out
+
   # ---- 13. 源码/参数断言 ----
   $src2 = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
   Check "source: 12x blind notice loop removed" (-not ($src2 -match 'for \(\$i = 0; \$i -lt 12; \$i\+\+\)')) $null
@@ -798,6 +1005,14 @@ try {
     -not ($src2 -match 'Send-Click\s+512\s+227') -and -not $src2.Contains('$NpcClick = "512,227"')) $null
   # A1/F1 的 live 面只能靠源码锚（离线跑不出真客户端点击）：stdout 必须带 pixel_source，
   # 证据字段必须来自同一个 resolver（点击与证据不允许两处各自算像素）。
+  Check "source: verdict rc contract (0/1/2/6/7/8) present" (
+    $src2.Contains('$script:RC_UNDECIDABLE = 6') -and $src2.Contains('$script:RC_SPAWN_FAILED = 7') -and
+    $src2.Contains('$script:RC_OUT_OF_RANGE = 8') -and $src2.Contains('$script:RC_USAGE = 2')) $null
+  Check "source: A7 unknown named params are a USAGE error before any side effect" (
+    $src2.Contains('if ($args.Count -gt 0)') -and $src2.Contains('MIRFLOW USAGE')) $null
+  Check "source: cause split helpers present" (
+    $src2.Contains('function Get-VerdictRc') -and $src2.Contains('function Set-EvVerdict') -and
+    $src2.Contains('function Read-PrereqGateJson') -and $src2.Contains('function Get-RcAggregate')) $null
   Check "source: A1 combat prints pixel_source and reuses one resolver" (
     $src2.Contains('$tp = Resolve-CombatTargetPixel $CombatTargetPixel $dx $dy') -and
     $src2.Contains('" pixel_source=" + $tp.Source') -and
