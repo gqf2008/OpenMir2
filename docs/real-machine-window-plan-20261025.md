@@ -12,8 +12,22 @@
 |---:|---|---|---|
 | 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ 47 项全绿；`--inventory` rc=0 | **已绿**（`8b7c9c281`：47/47、`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
 | 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **未合**（`openmir2-mirflow-verdict-cause-split`） |
-| 3 | 夹具 | `provision_...py --gate --need gold --need sellable_item --need npc --need monsters` | **已实测（2026-10-26 00:50）**：`kind=missing_prereq / rc=6`，**缺 `gold`（`characters.Gold=0 < 500`）与 `monsters`（未给 `--profile`）**；`sellable_item` 与 `npc` 已备齐 ⇒ **开窗前必须跑一次 `--apply` 置金币 + 提供带怪物夹具的 profile** |
+| 3 | 夹具 | `provision_...py --gate ...`（逐阶段求值，见下） | **已实测**：动作分布在**两张图**上 ⇒ 需两次 `--apply`，详见本节下的「夹具实测」 |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；mysqld 2580 在 | 当前满足 |
+
+### 夹具实测（2026-10-26 00:50 / 01:02，只读 `--gate`）
+
+| 跑法 | 结果 |
+|---|---|
+| `--map 3 --npc-script 盟重土城/药店` | `missing = [gold, monsters]`：`characters.Gold=0 < 500`；该图无靶子 |
+| `--map 0 --profile tools/window/profiles/butch_monsters.json` | `missing = [gold, npc]`：**靶子有了**（该 profile 在 map 0 的 (330,331) 刷 1 只鸡），但「药店」脚本在 map 3 |
+
+⇒ **G3 必须逐阶段求值**：
+- **阶段 A（买卖 / NPC 对话）**：`--map 3`，药店 NPC 在 (361,335)
+- **阶段 B（有目标战斗）**：`--map 0`，靶子在 (330,331)，角色需定位到其相邻格
+
+开窗前要跑**两次** `--apply`（置金币 + 分别定位），**每次各自保存一份 gate JSON**——其 sha256 会由 `mir_flow` 的证据记录下来，事后可对账（`-PrereqGateCmd` 记生成命令）。
+侧证：`bag_rows=46 / bag_items=3`，与此前订正的「46 槽位、3 件真物品」一致。
 
 **开窗当天用它认树**（数字对不上就说明不在预期 master 上）：
 - `python -I -B tools/goal/goal_gate.py selftest` ⇒ **79 条断言 79 通过**
