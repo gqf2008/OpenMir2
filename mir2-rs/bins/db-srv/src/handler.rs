@@ -766,7 +766,7 @@ mod fault_path_tests {
     //!   （oracle `NewChrData` 忽略 `Add` 返回值 ⇒ 仍回成功）。
     //!
     //! 跑法（需本机 MySQL；各用例独立 `mir2_test_*` 库，自建自删）：
-    //! `cargo test -p db-srv --bins fault_path_tests -- --ignored --nocapture`
+    //! `cargo test -p db-srv --lib fault_path_tests -- --ignored --nocapture`
 
     use super::dispatch;
     use crate::server::{GateUser, Server};

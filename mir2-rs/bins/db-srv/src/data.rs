@@ -641,7 +641,7 @@ mod save_failure_tests {
     //! `StorageContext.Open` 失败/`Update` 抛异常的可达场景（MySQL 瞬断/池耗尽/死锁）。
     //!
     //! 跑法（需本机 MySQL；三个用例各用独立 `mir2_test_*` 库，自建自删）：
-    //! `cargo test -p db-srv --bins save_failure_tests -- --ignored --nocapture`
+    //! `cargo test -p db-srv --lib save_failure_tests -- --ignored --nocapture`
 
     use super::{save_reply, store_human_rcd, Db, DBR_LOADHUMANRCD, DBR_SAVEHUMANRCD};
     use crate::cache::CacheStore;
@@ -844,7 +844,7 @@ mod db_fault_tests {
     //!   `characters_storageitem` 的失败被吞并提交（它在 try 内）。
     //!
     //! 跑法（需本机 MySQL；各用例独立 `mir2_test_*` 库，自建自删）：
-    //! `cargo test -p db-srv --bins db_fault_tests -- --ignored --nocapture`
+    //! `cargo test -p db-srv --lib db_fault_tests -- --ignored --nocapture`
 
     use super::{load_human_rcd, save_reply, store_human_rcd, DBR_LOADHUMANRCD, DBR_SAVEHUMANRCD};
     use crate::cache::CacheStore;

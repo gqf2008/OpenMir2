@@ -888,7 +888,7 @@ mod create_rows_tests {
     /// c) 二次建角（同名）不产生任何重复行（oracle `Add → CheckChrExists` 语义）。
     ///
     /// 跑法（需本机 MySQL；默认 `root` 空口令、库名 `mir2_test_pcrow_rows`，测试自建自删）：
-    /// `cargo test -p db-srv --bins create_rows_tests -- --ignored --nocapture`
+    /// `cargo test -p db-srv --lib create_rows_tests -- --ignored --nocapture`
     #[tokio::test]
     #[ignore = "需要本机 MySQL；MIR2_TEST_DB_DSN 可覆盖，库名必须以 mir2_test_ 开头"]
     #[allow(clippy::too_many_lines)]
@@ -1082,7 +1082,7 @@ mod create_rows_tests {
     /// 经生产连接写入的时间列落的是**本地墙钟**（不是 UTC）。
     ///
     /// 跑法（需本机 MySQL；默认 `root` 空口令、库名 `mir2_test_dbsrv_tz`，测试自建自删）：
-    /// `cargo test -p db-srv --bins session_time_zone_and_local_wall_clock -- --ignored --nocapture`
+    /// `cargo test -p db-srv --lib session_time_zone_and_local_wall_clock -- --ignored --nocapture`
     ///
     /// 牙：
     ///   a) 生产连接 `SELECT @@session.time_zone` == `SYSTEM`（oracle 的 MySqlConnector 缺省）；
@@ -1168,7 +1168,7 @@ mod create_rows_tests {
 /// `HashMap::insert` 那样静默覆盖后带病运行。
 ///
 /// 跑法（需本机 MySQL；用例自建自删 `mir2_test_*` 库）：
-/// `cargo test -p db-srv --bins index_dup_tests -- --ignored --nocapture`
+/// `cargo test -p db-srv --lib index_dup_tests -- --ignored --nocapture`
 #[cfg(test)]
 mod index_dup_tests {
     use crate::db::Db;
@@ -1243,7 +1243,7 @@ mod index_dup_tests {
     /// 牙：把 INSERT 改回 `CONVERT(? USING gbk)`（或把 `name_text` 换回 GBK 字节键）⇒
     /// `HEX(ChrName)` 或 Id 命中必红。**必须在 R 窗口用 oracle 程序集复测一次**。
     ///
-    /// 跑法：`cargo test -p db-srv --bins e7_chrname_binds_decoded_string -- --ignored`
+    /// 跑法：`cargo test -p db-srv --lib e7_chrname_binds_decoded_string -- --ignored`
     #[tokio::test]
     #[ignore = "R 级：需要本机 MySQL + oracle 对照窗口；自建 mir2_test_* 库"]
     async fn e7_chrname_binds_decoded_string() {

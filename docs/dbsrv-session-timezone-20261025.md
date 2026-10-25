@@ -100,7 +100,7 @@
 | e | **620s 长场景**：运行**开头**写的时间列（距结束 620s）⇒ rc 0（判据是窗口，不是距结束） | 「退回距 `end` ≤ tol」⇒ 红 |
 | f | 窗口**下界**同样承重：比 `start` 早 660s ⇒ rc 1 `time_witness_stale` | — |
 
-**db-srv 侧（`cargo test -p db-srv --bins session_time_zone_and_local_wall_clock -- --ignored`）**
+**db-srv 侧（`cargo test -p db-srv --lib session_time_zone_and_local_wall_clock -- --ignored`）**
 
 - 牙 a：生产连接 `SELECT @@session.time_zone` == `SYSTEM`；
 - 牙 b：经生产连接写 `LASTUPDATE = now()` 后，值与 SYSTEM 参考会话的 `NOW()` 相差 ≤ 120s；

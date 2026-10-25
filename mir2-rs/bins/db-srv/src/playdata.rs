@@ -1228,7 +1228,7 @@ mod item_attr_tests {
     //! d) 存档往返：`save_item_table` 的 `update_item_attr` 更新 14 列，回读按 oracle 映射。
     //!
     //! 跑法（需本机 MySQL；默认 `root` 空口令、库名 `mir2_test_pattr`，测试自建自删）：
-    //! `cargo test -p db-srv --bins item_attr_tests -- --ignored --nocapture`
+    //! `cargo test -p db-srv --lib item_attr_tests -- --ignored --nocapture`
 
     use super::{
         byte_col, create_empty_items, create_item_attr, get_item_slots, query_item_attr,
@@ -1462,7 +1462,7 @@ mod single_sided_column_tests {
     //! - `characters_ablity`：`Ac = Level`、`Hp/Mp` 只写低字（不写 AC/MAC 高字）——照抄。
     //!
     //! 跑法（需本机 MySQL；库名 `mir2_test_single_sided`，自建自删）：
-    //! `cargo test -p db-srv --bins single_sided_column_tests -- --ignored --nocapture`
+    //! `cargo test -p db-srv --lib single_sided_column_tests -- --ignored --nocapture`
 
     use super::{create_ablity_status, create_characters, get_record, save_record};
     use mir2_storage::playerdata::{Ability, CharacterDataInfo};
@@ -1736,7 +1736,7 @@ mod partial_save_tests {
     //! 旧实现四处 `unwrap_or_default()` / 补 0 ⇒ 把等级/HP/AC/状态位/物品属性全部清零。
     //!
     //! 跑法（需本机 MySQL；各用例独立 `mir2_test_*` 库，自建自删）：
-    //! `cargo test -p db-srv --bins partial_save_tests -- --ignored --nocapture`
+    //! `cargo test -p db-srv --lib partial_save_tests -- --ignored --nocapture`
 
     use super::save_record;
     use crate::testsupport as ts;

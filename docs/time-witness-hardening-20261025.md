@@ -62,8 +62,19 @@ reviewer-20 构造的三例（旧写法只看「表里最大值」）：
 
 ## 3. 其它
 
-- **F4（未做，需机器）**：`cargo test -p db-srv --lib session_time_zone_and_local_wall_clock -- --ignored`
-  目前只有作者自述 1 passed，**需要独立复跑**并签回卡；本卡未重复跑（本期机器归 dev-2）。
+- **F4（已由 reviewer-20 独立复跑，`52f67e5831d9`）**：`cargo test -p db-srv --lib
+  session_time_zone_and_local_wall_clock -- --ignored --nocapture` ⇒ **1 passed**（含负向对照
+  「不带本卡选项的 sqlx 默认会话时区 == `+00:00`」）。
+- **CMD-1（reviewer-20）已修**：文档/注释里写的 `cargo test -p db-srv --bins …` **跑不到**这些牙
+  ——db-srv 是「lib + 瘦 bin」，测试编进 **lib** 目标，`--bins` 会输出 `running 0 tests … ok` 的假绿。
+  已把 `db-srv` 下全部 **12 处** `--bins` 改成 `--lib`（`db.rs` 4 / `data.rs` 2 / `handler.rs` 1 /
+  `lb08_tests.rs` 1 / `playdata.rs` 3 / `testsupport.rs` 1）与本文件、`docs/dbsrv-session-timezone-20261025.md`
+  的同类写法。
+- **CMD-1′（reviewer-20）**：`testsupport.rs` 原来写的过滤名 `load_fault_tests` **全仓不存在**
+  （既无 `mod` 也无 `fn`）——照它跑同样是 `running 0 tests / ok` 的假绿。已改成
+  **全量 ignored**：`cargo test -p db-srv --lib -- --ignored --nocapture`。
+  **口径**：文档里写的每个过滤名都必须能在目标里解析到（`mod`/`fn` 至少一个）；共享夹具文件
+  没有自己的模块时，写全量而不是编一个名字。
 - **依赖对齐**：`url = "2.5"`（与 lock 一致；它本来就是 sqlx 的传递依赖，本条只是提成直接边，无新增 crate）。
 - `docs/dbsrv-session-timezone-20261025.md` §3b 的反向对照在本改动下更强：r1 的 rust 侧
   本角色行 `LASTUPDATE=02:10:25` 会落在窗口外 ⇒ 仍 `time_witness_stale`；csharp 侧本角色行
