@@ -10936,7 +10936,6 @@ def selftest():
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
-    total = pass_n + fail_n
     # H1（merge_result d9a0dd2fe）：生产 sha 牙必须在 `if fail_n: return 1` **之前**判定，
     # 否则一有其它失败就永远跑不到它（同 review c866f358 B-1 的形态）。
     if _prod_mon_sha0 is not None:
@@ -10953,6 +10952,8 @@ def selftest():
         # 不是「跳过不查」——没有靶就没有可查对象，且 `_prod_mon_sha0 is None` 本身可判。
         chk(True, "FX-MON 无部署环境（无真实生产根）⇒ 不适用（有部署时按 sha 比对）")
 
+    # J1：total 必须在 H1 块（FX-MON/FX-CONF）之后计算，否则计数自相矛盾。
+    total = pass_n + fail_n
     if fail_n:
         print("RED: card_window.py selftest %d/%d" % (pass_n, total))
         return 1
