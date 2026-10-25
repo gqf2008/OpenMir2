@@ -1729,6 +1729,35 @@ def compare_main(args):
     finally:
         shutil.rmtree(tmp_root, ignore_errors=True)
 
+    # 卡 `openmir2-rules-pending-adjudication` ④（Leader 裁定 2026-10-25）：
+    #   * `rules_pending_review` = **保守主标志**：规则文件里只要还有任何 PENDING
+    #     （global/rules/db 任一，含本卡保留的 ident 10/14/50）就是 true。读者据此判断
+    #     「这份报告的判据是否已全部审过」；宁可恒真，也不让读者误以为全审过。
+    #   * `pending_review_used` = 附属证据：本次**实际涉及**的 PENDING 项
+    #     （global 恒计入；db 仅在本次比了库时计入；ident 规则与两侧出现过的 ident 求交集）。
+    #   * `pending_review` = 全量清单（审计用）。
+    report["rules"]["pending_review_used"] = []
+    if rules.pending_review:
+        seen = {fr.get("ident") for fr in (o_stream.frames + r_stream.frames)}
+        used = []
+        for p in rules.pending_review:
+            if str(p).startswith("global"):
+                used.append(p)
+            elif str(p) == "db":
+                if report.get("db"):
+                    used.append(p)
+            else:
+                mm = re.search(r"ident=\[([0-9, ]*)\]", str(p))
+                if mm:
+                    ids = {int(x) for x in mm.group(1).split(",") if x.strip().isdigit()}
+                    if ids & seen:
+                        used.append(p)
+        # **保守主标志**（Leader 裁定 2026-10-25）：只要规则文件里还有 PENDING，就是
+        # true——读者据此判断「这份报告的判据是否全部审过」。按需的「本次影响面」降级为
+        # 附属证据 `pending_review_used`，**不能**替代主标志（否则一份 20 条 UNDECIDABLE
+        # 的报告可能因为没碰到 10/14/50 而显示 false，误导读者）。
+        report["rules"]["pending_review_used"] = used
+
     if report["undecidable"]:
         report["verdict"] = "UNDECIDABLE"
         report["exit_code"] = 2
