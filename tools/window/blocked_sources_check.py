@@ -108,12 +108,13 @@ def scene_blocked(scene):
 def token_present(text, tok):
     """token 是否出现在文案里。
 
-    **数字 token 用词边界**（`(?<![0-9])616(?![0-9])`）：`616` 不能被 `6160` 命中、`652` 不能被 `1652`、
-    `3081` 不能被 `30810` ——否则数字一漂（多一位/少一位）门禁仍绿。非数字 token 保持**子串**语义
+    **数字 token 用词边界**（`(?<![0-9.,])616(?![0-9.,])`）：相邻字符是数字（或小数点/千分位 `.`/`,`）
+    就算**缺失** ⇒ `616` 不被 `6160`/`616.5`/`1,616` 命中，`652` 不被 `1652`、`3081` 不被 `30810`；
+    字母/单位/标点/中文都算命中（`≈616s` 命中）。非数字 token 保持**子串**语义
     （长标识符里出现即算，如 `ProcessMonsterMultiThreadLimit`）。
     """
     if tok.isdigit():
-        return re.search(r"(?<![0-9])%s(?![0-9])" % re.escape(tok), text) is not None
+        return re.search(r"(?<![0-9.,])%s(?![0-9.,])" % re.escape(tok), text) is not None
     return tok in text
 
 
@@ -311,6 +312,16 @@ def selftest():
         probs, _ = run([{'name': 'a', 'blocked': '清单：1652'}, row_ok], {'a'},
                        reason='场景：1652', table_=table5)
         chk(any("'652'" in p for p in probs), '牙i：token 652 不被 1652 命中 ⇒ 红')
+        # 牙 g2：小数点/千分位不是边界（616.5 / 1,616 都不算命中）
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOKX 在，数 616.5'}, row_ok], {'a'},
+                       reason='场景：TOKX 在，数 616.5', table_=table3)
+        chk(any("'616'" in p for p in probs), '牙g2：616 不被 616.5 命中 ⇒ 红')
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOKX 在，数 1,616'}, row_ok], {'a'},
+                       reason='场景：TOKX 在，数 1,616', table_=table3)
+        chk(any("'616'" in p for p in probs), '牙g3：616 不被 1,616 命中 ⇒ 红')
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOKX 在，≈616s'}, row_ok], {'a'},
+                       reason='场景：TOKX 在，≈616s', table_=table3)
+        chk(probs == [], '牙g4-对照：≈616s（字母边界）仍命中 ⇒ 绿')
         # 非数字 token 仍是子串语义：含在长标识符里也算
         table6 = {'a': {'source': 'audit §1', 'tokens': ('ProcessMonsterMultiThreadLimit',)}}
         probs, _ = run([{'name': 'a', 'blocked': '清单：x ProcessMonsterMultiThreadLimit x'},
