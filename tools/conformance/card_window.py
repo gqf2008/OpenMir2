@@ -3587,7 +3587,7 @@ def _save_settle_witness(fingerprint):
     只在样本里留 `witness_error`。留原始值是给真机轮次看的：变化来自哪一列、基线是不是
     NULL、两次变化是否落在同一秒（`LASTUPDATE` 是 `datetime`，秒粒度）。
     """
-    parts = (fingerprint or "").strip().split("\t")
+    parts = (fingerprint or "").strip("\r\n").split("\t")
     if len(parts) != 3:
         return None, "列数 %d != 3（原始 %r）" % (len(parts), (fingerprint or "")[:120])
     return parts, None
@@ -3687,7 +3687,9 @@ def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
     try:
         while True:
             t = _now_ms()
-            fp = sql_fn(sql).strip()
+            # 只去行尾换行：\t1\tts（LASTUPDATE 为 NULL）与 ts\t1\t（无 ablity 行）里的
+            # 空列必须留着——那正是本 residual 要诊断的形态；.strip() 会把它们吃成 2 列。
+            fp = sql_fn(sql).strip("\r\n")
             witness, werr = _save_settle_witness(fp)
             sample = {"t_ms": t - t_start,
                       "sha256_12": hashlib.sha256(fp.encode("utf-8")).hexdigest()[:12],
@@ -8703,6 +8705,16 @@ def _selftest_save_settle():
                 and "witness_error" not in resw["samples"][0],
                 "SETTLE17 每条采样带原始见证 [lastupdate,count,abil_modifytime]，首末见证另有"
                 " witness_first/witness_last"))
+    # 空首列（LASTUPDATE 为 NULL）与空末列（无 characters_ablity 行）都必须拆得出空串列，
+    # 否则真机碰到 NULL 只会看到 witness=null，看不出「是哪一列空」。
+    null_first = tab + "1" + tab + "2026-10-25 09:00:01"
+    seqn = iter([null_first] * 5)
+    resn = wait_save_settled(_R(), "csharp", prof, sc,
+                             dict(settle, require_changes=False), {},
+                             sql_fn=lambda _s: next(seqn), clock=make_clock())
+    out.append((resn["samples"][0].get("witness") == ["", "1", "2026-10-25 09:00:01"]
+                and "witness_error" not in resn["samples"][0],
+                "SETTLE17b 空首列（LASTUPDATE=NULL）=> witness ['', '1', ts]，不许退化成 null"))
     resx = wait_save_settled(_R(), "rust", prof, sc,
                              dict(settle, require_changes=False), {},
                              sql_fn=constant, clock=make_clock())
