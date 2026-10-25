@@ -24330,7 +24330,13 @@ fn sim_loop(
             &gates,
         );
         // oracle `PlayObject.Message.cs:262-266`：3s `CheckDupObjTick` 支里的 `GetStartPoint()`。
-        apply_get_start_point_after_tick(&world, &mut saves, &online, registry.as_ref(), &enter_cfg);
+        apply_get_start_point_after_tick(
+            &world,
+            &mut saves,
+            &online,
+            registry.as_ref(),
+            &enter_cfg,
+        );
         // **T-127 / 返工 F1 · 相位③（252）**：`SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）
         // ——每个 `!Ghost` 在线玩家一条 `SM_SYSMESSAGE(100)`（`Recog` = 收件人自己、
         // `Param = MakeWord(RedF,RedB)`）；不拼 `SysMsgPreFix`、不排除任何收件人。

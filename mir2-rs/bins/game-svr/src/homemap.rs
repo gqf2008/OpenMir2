@@ -511,9 +511,7 @@ mod tests {
     /// 变异：把 `pvp_level >= 2` 常量删掉 / 把匹配改成忽略 map（永远命中）⇒ 前两条红。
     #[test]
     fn get_start_point_matches_current_map_or_red_home() {
-        let sp = parse_start_points("0 289 618
-3 330 330
-");
+        let sp = parse_start_points("0 289 618\n3 330 330\n");
         // ① 命中当前地图 ⇒ 覆盖成该条目（map 3 ⇒ 330/330）
         assert_eq!(
             get_start_point(0, "3", &sp, "3", 845, 674),
@@ -534,8 +532,7 @@ mod tests {
         );
         // 大小写不敏感（oracle `StringComparison.OrdinalIgnoreCase`）
         assert_eq!(
-            get_start_point(0, "b013", &parse_start_points("b013 7 9
-"), "3", 845, 674),
+            get_start_point(0, "b013", &parse_start_points("b013 7 9\n"), "3", 845, 674),
             Some(("b013".to_string(), 7, 9))
         );
     }
