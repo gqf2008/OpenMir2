@@ -100,6 +100,7 @@
 2. **DB 面证据暂时全部不可用**：实测根因是 **harness 的存档时机不对称**——Rust 在断线时**同步**落库（`mir2-rs/bins/game-svr/src/lib.rs:22452`），C# 走异步离线支（`src/GameSrv/Word/WorldServer.cs:710-715` → FrontEngine→DBSrv→MySQL），而两侧的 DB 快照都在**停栈之前**拍，随后 C# 还被强杀。
    ⇒ 表现是「只有一侧的 DB 变了、另一侧仍是基线值」（典型：`characters_ablity.Weight` C#=14 / Rust=0，但两侧 `SM_ABILITY(52)` 帧里的 weight **都是 0**）。
    ⇒ **这不是行为差异**。修法与真机自证已在办（卡 `openmir2-harness-save-time-symmetry`，tier=R）；修好后 **DB 面需重跑一遍**。
+   ⇒ **注意连「DB 面 PASS」也不可信**：`gm_time` 与 `spell_cast` 的 DB diff 都是 0，但 0 也可能只是「**两侧都没落库**」（都停在基线）——与 FAIL 同一根因的另一面。所以本轮的 DB 面**既不能用来判红、也不能用来判绿**，只有加装「存档落定」证据之后才有意义。
 
 > 换句话说：**今天这批能立刻用于收卡的是帧面判据；DB 面要等 harness 修好后的重跑。** 我不会拿 DB 面的 FAIL 去关任何 R 卡。
 
