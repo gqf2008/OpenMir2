@@ -5138,6 +5138,87 @@ def _selftest_kill_track():
             "e(等距按 actor 决胜)/f(只发死亡帧不空打)/g(max_retries 差一语义)")
 
 
+def _selftest_discovery_addressing():
+    """卡 `openmir2-discovery-deterministic-addressing`：discovery 的确定性寻址（3 牙，构造级）。
+
+    a. `npc_click_king.json`（`name:比奇国王`）在目标格有固定 NPC 时**不发任何等待帧**直接点；
+    b. 目标不存在 ⇒ fail-closed 点名，**不静默回落到 `auto:last_turn`**；
+    c. 既有 `npc_click_auto.json`（`auto:last_turn`）仍能跑（通用路径不破坏）。
+    """
+    import argparse as _argparse
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    def turn_frame(actor, x, y, name=None):
+        body = encode_bytes(bytes(8))
+        if name is not None:
+            body += encode_text(name + "/255")
+        return b"#" + encode_bytes(pack_header(actor, SM_TURN, x, y, 0)) + body + b"!"
+
+    def say_frame(actor):
+        return build_s2c_frame(actor, SM_MERCHANTSAY, 0, 0, 0, b"")
+
+    def run_doc(path, chunks, late=()):
+        with open(path, "r", encoding="utf-8") as fh:
+            doc = json.load(fh)
+        plans, _ = expand_scenario(doc, {})
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-disc-")
+        run = Run(_argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200))
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock(list(chunks))
+        conn.pump(100)
+        conn.sock.chunks.extend(late)   # 点击**之后**才到的应答帧（wait_for 只认 after 之后的帧）
+        return run, conn, tmpd, plans
+
+    king_path = os.path.join("tools", "probe", "scenarios", "npc_click_king.json")
+    auto_path = os.path.join("tools", "probe", "scenarios", "npc_click_auto.json")
+
+    # 牙 a：固定 NPC 在场 ⇒ 直接点，**零等待帧**
+    run, conn, tmpd, plans = run_doc(king_path, [turn_frame(500, 29, 32, "比奇国王")],
+                                     late=[say_frame(500)])
+    try:
+        for plan in plans:
+            run.execute_step(conn, plan)
+        assert len(conn.sock.sent) == 1, conn.sock.sent
+        assert encode_bytes(pack_header(500, CM_CLICKNPC)) in conn.sock.sent[0], conn.sock.sent
+        turn_header = encode_bytes(pack_header(29 | (32 << 16), CM_TURN))
+        assert all(turn_header not in x for x in conn.sock.sent), "discovery 发了 CM_TURN（应零等待）"
+        kinds = [x.get("kind") for x in run.steps]
+        assert "send" in kinds, kinds
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 b：目标不存在（但另有别的可见对象）⇒ fail-closed，且**不回落**到别的对象/auto:last_turn
+    run, conn, tmpd, plans = run_doc(king_path, [turn_frame(600, 10, 10, "商人")])
+    try:
+        err = None
+        try:
+            for plan in plans:
+                run.execute_step(conn, plan)
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "无目标时没有失败"
+        assert "没有对象匹配" in err, err
+        assert "auto" not in err, err
+        assert conn.sock.sent == [], "无目标却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 c：既有 auto:last_turn 仍可用
+    run, conn, tmpd, plans = run_doc(auto_path, [turn_frame(701, 10, 10, "商人")],
+                                     late=[say_frame(701)])
+    try:
+        for plan in plans:
+            run.execute_step(conn, plan)
+        assert len(conn.sock.sent) == 1, conn.sock.sent
+        assert encode_bytes(pack_header(701, CM_CLICKNPC)) in conn.sock.sent[0], conn.sock.sent
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    return "牙 a(king 零等待直接点)/b(无目标 fail-closed 不回落)/c(auto:last_turn 仍可跑)"
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -5169,6 +5250,7 @@ def run_selftest():
     check("dsl-kill", _selftest_kill)
     check("dsl-kill-track", _selftest_kill_track)
     check("dsl-npc-discovery", _selftest_npc_discovery)
+    check("discovery-addressing", _selftest_discovery_addressing)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
     check("conn-semantics", _selftest_conn_semantics)

@@ -1,0 +1,14 @@
+{
+  "name": "npc_click_elder",
+  "description": "确定性 discovery：按**名字**点固定 NPC「老人」（`click_npc: name:老人`，`npc_script_chain`/清怪链需要的 NPC），收 `SM_MERCHANTSAY(643)`/`SM_SYSMESSAGE(100)` 即成功。**0 等待、不依赖 RNG**；与 `npc_click_king.json` 同一机制（`name:` 唯一命中，否则 fail-closed，不回落到 `auto:last_turn`）。",
+  "steps": [
+    {
+      "click_npc": "name:老人",
+      "note": "按名字唯一命中固定 NPC；多命中/无命中都 fail-closed"
+    },
+    {
+      "wait_for": [643, 100],
+      "timeout_ms": 5000
+    }
+  ]
+}

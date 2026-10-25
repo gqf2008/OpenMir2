@@ -1,0 +1,15 @@
+{
+  "name": "npc_click_king",
+  "description": "确定性 discovery：按**名字**点固定 NPC「比奇国王」（`click_npc: name:比奇国王`），收到 `SM_MERCHANTSAY(643)`/`SM_SYSMESSAGE(100)` 即算发现成功。**0 等待、不依赖 RNG**：`auto:last_turn` 需要先看到一条非己 `SM_TURN(10)`，而国王的转身是 `GuildOfficial.Run` 的 `Random(40)==0`（`src/GameSrv/Npc/GuildOfficial.cs:36-47`），期望 ≈10s > 原 5s ⇒ 概率性失败。本场景改用已合入的 `name:` 寻址（卡 `openmir2-probe-npc-discovery`；对象类别门见卡 `openmir2-probe-npc-addressing-followups`），目标格/名字必须唯一命中，否则 fail-closed（绝不回落到 `auto:last_turn`）。",
+  "steps": [
+    {
+      "click_npc": "name:比奇国王",
+      "note": "按名字唯一命中固定 NPC；命中前会过 `pos:`/`name:` 的歧义门（多命中⇒红）与可见集剔除（`SM_DISAPPEAR`）。**不等待任何转身帧**"
+    },
+    {
+      "wait_for": [643, 100],
+      "timeout_ms": 5000,
+      "note": "643 = 点击应答面板（NPC 应答点击才发）；100 = GMEXECUTE 回执（若该 NPC 走脚本）。任一到达即 discovery 成功"
+    }
+  ]
+}
