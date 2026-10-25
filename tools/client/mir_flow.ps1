@@ -807,6 +807,17 @@ function ConvertFrom-PixelSpec([string]$name, [string]$spec) {
   return ,@([int]$p[0].Trim(), [int]$p[1].Trim())
 }
 
+function Resolve-CombatTargetPixel([string]$explicitSpec, [int]$dx, [int]$dy) {
+  # A1/F1：combat 用**显式像素**还是**48x32 格心投影**，必须由这**唯一一处**决定，
+  # 并随证据/ stdout 记账 —— 真机 RED 时才能区分「靶子没刷出」与「未证实的投影点歪」。
+  # Source ∈ explicit|projected（本函数不打印；调用方按各自输出格式记账）。
+  if ([string]$explicitSpec -ne "") {
+    $p = ConvertFrom-PixelSpec "CombatTargetPixel" $explicitSpec
+    return [pscustomobject][ordered]@{ X = [int]$p[0]; Y = [int]$p[1]; Source = "explicit" }
+  }
+  return [pscustomobject][ordered]@{ X = [int](512 + $dx * 48); Y = [int](304 + $dy * 32); Source = "projected" }
+}
+
 function Get-StageFramesSorted($source, [long]$sinceMs, [long]$atMs) {
   # 只取 ts ∈ [sinceMs, atMs] 的帧，按 (ts, conn, off) 排序 —— 遍历顺序是**显式**的键，
   # 不依赖 Query/哈希顺序（确定性）。
@@ -1098,7 +1109,7 @@ function Get-TradeEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [strin
   return $ev
 }
 
-function Get-CombatEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [string]$profile, [string]$playerMap, [int]$rangeCells, [long]$atMs) {
+function Get-CombatEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [string]$profile, [string]$playerMap, [int]$rangeCells, [long]$atMs, [string]$explicitPixelSpec = "") {
   # 前提（A2/A3）：profile 的 fixtures.monsters 必须有**同图**靶子（刷不出即 RED，不静默跳过）；
   #   且这次 CM_HIT 的 Dir 必须让「前方一格」正好落在某个同图靶子上（服务端 GetPoseCreate 解析），
   #   距离必须 <= AP 范围（默认 1 格近战）。
@@ -1108,6 +1119,9 @@ function Get-CombatEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [stri
     profile = $profile; player_map = $playerMap; range_cells = $rangeCells
     target = $null; hit = $null; effect = $null
     hp_before = $null; hp_after = $null; max_hp = $null; damage = $null; actor = $null
+    # A1/F1：这次 combat 用的是显式像素还是 48x32 投影（走到靶子匹配后回填；live 侧
+    # 由调用方用**实际点击**的像素覆盖）。unknown = 没走到靶子匹配，无法给出。
+    pixel_source = "unknown"; pixel = $null
   }
   if ($playerMap -eq "") { $ev.reason = "-PlayerMap 未给出（经典协议线上没有图名，无法证明靶子同图）"; return $ev }
   $fx = $null
@@ -1142,6 +1156,11 @@ function Get-CombatEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [stri
     $ev.reason = ("靶子距角色 " + $dist + " 格 > AP 范围 " + $rangeCells)
     return $ev
   }
+  # A1/F1：像素决策与 live 路径共用 Resolve-CombatTargetPixel（check 模式按 CM_HIT 自身坐标回放；
+  # live 模式以实际点击像素为准，调用方会再用 click 的 X/Y 覆盖这两个字段）。
+  $pix = Resolve-CombatTargetPixel $explicitPixelSpec ([int]$target.X - $ownX) ([int]$target.Y - $ownY)
+  $ev.pixel_source = $pix.Source
+  $ev.pixel = [ordered]@{ x = [int]$pix.X; y = [int]$pix.Y }
   $selfActor = 0
   foreach ($f in (Get-StageFramesSorted $source $sinceMs ([long]$hit.ts_ms))) {
     if ($f.dir -eq "s2c" -and [int]$f.ident -eq 50) { $selfActor = [int]$f.recog }
@@ -1705,7 +1724,12 @@ if ($StageEvidenceCheck) {
     if (-not $ev.ok) { $red++ }
   }
   if ($CombatStage) {
-    $ev = Get-CombatEvidence $evidenceSource $threshold $threshold $Profile $PlayerMap $AttackRangeCells $atMs
+    $ev = Get-CombatEvidence $evidenceSource $threshold $threshold $Profile $PlayerMap $AttackRangeCells $atMs $CombatTargetPixel
+    if ($null -ne $ev.pixel) {
+      Write-Output ("COMBAT_PIXEL pixel_source=" + $ev.pixel_source + " x=" + $ev.pixel.x + " y=" + $ev.pixel.y)
+    } else {
+      Write-Output "COMBAT_PIXEL pixel_source=unknown（未走到靶子匹配，无法给出本次像素）"
+    }
     Add-StageEvidence "combat" $ev
     if (-not $ev.ok) { $red++ }
   }
@@ -2565,21 +2589,28 @@ if ($CombatStage) {
   }
   Write-Output ("COMBAT_TARGET map=" + $target.Map + " x=" + $target.X + " y=" + $target.Y +
     " name=" + $target.Name + " own=" + $self.X + "," + $self.Y + " dist=" + $bestDist)
-  # 像素：显式 -CombatTargetPixel 优先；否则沿用既有格心投影（512,304）+ (dx*48, dy*32)。
+  # 像素：显式 -CombatTargetPixel 优先；否则沿用格心投影（512,304）+ (dx*48, dy*32)。
   # ⚠ 48x32 步长在本部署未被证实（docs/window-shrink-run-20261019.md §F2）；真机建议给显式像素。
-  if ($CombatTargetPixel -ne "") {
-    $tp = ConvertFrom-PixelSpec "CombatTargetPixel" $CombatTargetPixel
-  } else {
-    $tp = @((512 + $dx * 48), (304 + $dy * 32))
-  }
+  # A1/F1：pixel_source(explicit|projected) 必须同时出现在 stdout 与证据里，否则真机 combat RED
+  # 时没法区分「靶子没刷出」与「投影点歪」。
+  $tp = Resolve-CombatTargetPixel $CombatTargetPixel $dx $dy
   Stage "combat"
-  Write-Output ("COMBAT_ACTION x=" + $tp[0] + " y=" + $tp[1] + "（先右键转向，再左键攻击）")
+  Write-Output ("COMBAT_ACTION x=" + $tp.X + " y=" + $tp.Y + " pixel_source=" + $tp.Source + "（先右键转向，再左键攻击）")
+  if ($tp.Source -eq "projected") {
+    Write-Output "WARN COMBAT_PIXEL_SOURCE projected（48x32 步长未证实 —— 见 docs/client-flow-stages-20261025.md §7.3；真机建议给 -CombatTargetPixel）"
+  }
   $actMs = Get-TurnNowMs
-  Send-RightClick $tp[0] $tp[1]
+  Send-RightClick $tp.X $tp.Y
   Start-Sleep -Milliseconds 400
-  Send-Click $tp[0] $tp[1] 1
+  Send-Click $tp.X $tp.Y 1
   Start-Sleep -Seconds $ActionWaitSec
-  $ev = Get-CombatEvidence $evidenceSource $evidenceSource.SinceMs $actMs $Profile $PlayerMap $AttackRangeCells (Get-TurnNowMs)
+  $ev = Get-CombatEvidence $evidenceSource $evidenceSource.SinceMs $actMs $Profile $PlayerMap $AttackRangeCells (Get-TurnNowMs) $CombatTargetPixel
+  # 证据里的像素必须是**这次真正点下去**的那一个（check 模式按 CM_HIT 坐标回放，可能与 live 不同 ⇒ 先提示再覆盖）。
+  if ($null -ne $ev.pixel -and ([int]$ev.pixel.x -ne [int]$tp.X -or [int]$ev.pixel.y -ne [int]$tp.Y)) {
+    Write-Output ("WARN COMBAT_PIXEL 回放=" + $ev.pixel.x + "," + $ev.pixel.y + " 实际点击=" + $tp.X + "," + $tp.Y + "（SM_LOGON 与 CM_HIT 之间角色移动？以点击为准）")
+  }
+  $ev["pixel_source"] = $tp.Source
+  $ev["pixel"] = [ordered]@{ x = [int]$tp.X; y = [int]$tp.Y }
   Add-StageEvidence "combat" $ev
   Write-StageEvidenceFile "live" $evidenceSource $Profile $PlayerMap $AttackRangeCells
   if (-not $ev.ok) { throw ("STAGE_EVIDENCE RED category=combat " + $ev.reason) }

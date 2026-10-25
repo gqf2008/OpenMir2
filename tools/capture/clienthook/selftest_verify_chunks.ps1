@@ -9,7 +9,11 @@
     2. 篡改某个 bin 的 **1 个字节** ⇒ RED（rc=1），且输出点名该 conn/dir/off；
     3. `sha256` 写成空串（旧 DLL 行为）⇒ RED（rc=1），理由是「空串」；
     4. data 事件 0 条（空扫描）⇒ RED，不得假绿；
-    5. 缺 chunks.ndjson ⇒ USAGE rc=2。
+    5. 缺 chunks.ndjson ⇒ USAGE rc=2；
+    6. **A5 牙①**：错参数名（`-Dir`，历史事故原样）⇒ 必须报 USAGE rc=2，**不得**落成 RED rc=1；
+    7. **A5 牙②**：真篡改仍是 RED rc=1 且输出里没有 USAGE 标记（两态可区分）；
+    8. **A3/F4 接线牙**：窗口 runbook（`docs/client-flow-stages-20261025.md` §2.1 + 操作单 3b）
+       必须把 `verify_chunks.ps1 -CaptureDir` 写成**显式步骤**；删掉那一步 ⇒ 本自检必须红。
 
   退出码：0 全 PASS；1 有 FAIL。临时目录失败也会清理。
 #>
@@ -24,14 +28,17 @@ function Check([string]$name, [bool]$ok, [string]$detail = "") {
   else { $script:fails += $name; Write-Output ("FAIL " + $name + "  " + $detail) }
 }
 
-function Invoke-Verifier([string]$dir) {
+function Invoke-VerifierArgs([string[]]$argv) {
   $old = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
   try {
-    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $verifier -CaptureDir $dir 2>&1
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $verifier @argv 2>&1
     $code = $LASTEXITCODE
   } finally { $ErrorActionPreference = $old }
   return [pscustomobject]@{ Code = $code; Out = (($out | ForEach-Object { [string]$_ }) -join "`n") }
+}
+function Invoke-Verifier([string]$dir) {
+  return Invoke-VerifierArgs @("-CaptureDir", $dir)
 }
 
 function Get-Sha256Hex([byte[]]$bytes, [int]$off, [int]$n) {
@@ -41,6 +48,46 @@ function Get-Sha256Hex([byte[]]$bytes, [int]$off, [int]$n) {
     [Array]::Copy($bytes, $off, $part, 0, $n)
     return ([BitConverter]::ToString($sha.ComputeHash($part))).Replace('-', '').ToLowerInvariant()
   } finally { $sha.Dispose() }
+}
+
+function Test-RunbookStep([string]$path) {
+  # 结构判据：`### 2.1 ... 指纹 ...` 小节里必须真有一行 verify_chunks.ps1 -CaptureDir <dir> 命令，
+  # 且该小节文本同时出现 rc=2/USAGE 与 rc=1/RED（A5 的文档面）。
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    return [pscustomobject]@{ Ok = $false; RcTable = $false; Detail = ("缺文件：" + $path) }
+  }
+  $lines = [IO.File]::ReadAllLines($path, [Text.Encoding]::UTF8)
+  $h = -1
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '^###\s+2\.1\s.*指纹') { $h = $i; break }
+  }
+  if ($h -lt 0) { return [pscustomobject]@{ Ok = $false; RcTable = $false; Detail = "2.1「指纹」小节标题缺失" } }
+  $end = $lines.Count - 1
+  for ($i = $h + 1; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '^#{1,3}\s') { $end = $i - 1; break }
+  }
+  $cmd = -1
+  for ($i = $h + 1; $i -le $end; $i++) {
+    if ($lines[$i] -match 'verify_chunks\.ps1\s+-CaptureDir\s+\S') { $cmd = $i; break }
+  }
+  if ($cmd -lt 0) {
+    return [pscustomobject]@{ Ok = $false; RcTable = $false; Detail = ("2.1 内没有 verify_chunks.ps1 -CaptureDir 命令行（行 " + ($h + 1) + "-" + ($end + 1) + "）") }
+  }
+  $sect = ($lines[$h..$end] -join "`n")
+  $rc = ($sect.Contains("rc=2") -and $sect.Contains("USAGE") -and $sect.Contains("rc=1") -and $sect.Contains("RED"))
+  return [pscustomobject]@{ Ok = $true; RcTable = $rc; Detail = ("标题行 " + ($h + 1) + " / 命令行 " + ($cmd + 1)) }
+}
+
+function Test-WindowSheetWiring([string]$path) {
+  # 操作单的收窗步骤必须指向同一条接线（含 hook 目录的 verify 命令 + 指回 2.1 的四态判读）。
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+    return [pscustomobject]@{ Ok = $false; Detail = ("缺文件：" + $path) }
+  }
+  $text = [IO.File]::ReadAllText($path, [Text.Encoding]::UTF8)
+  $hasCmd = [regex]::IsMatch($text, 'verify_chunks\.ps1\s+-CaptureDir\s+\S')
+  $hasRef = $text.Contains("client-flow-stages-20261025.md") -and $text.Contains("§2.1")
+  $hasRc = $text.Contains("rc=0") -and $text.Contains("rc=2")
+  return [pscustomobject]@{ Ok = ($hasCmd -and $hasRef -and $hasRc); Detail = ("cmd=" + $hasCmd + " ref=" + $hasRef + " rc=" + $hasRc) }
 }
 
 function New-FakeChunks([string]$dir, [string]$connDir, [byte[]]$payload, [string]$sha) {
@@ -70,8 +117,9 @@ try {
   $tampered[3] = [byte]($tampered[3] -bxor 0x01)     # 只翻 1 个字节
   [IO.File]::WriteAllBytes((Join-Path $d2 "conn-0001.s2c.bin"), $tampered)
   $r = Invoke-Verifier $d2
-  Check "1-byte tamper => RED rc=1" ($r.Code -eq 1 -and $r.Out.Contains("CHUNKS_VERIFY RED")) ($r.Out + " rc=" + $r.Code)
+  Check "1-byte tamper => RED rc=1 (A5 tooth 2)" ($r.Code -eq 1 -and $r.Out.Contains("CHUNKS_VERIFY RED")) ($r.Out + " rc=" + $r.Code)
   Check "1-byte tamper names conn=1 dir=s2c off=0" ($r.Out.Contains("conn=1 dir=s2c off=0") -and $r.Out.Contains("指纹不符")) $r.Out
+  Check "1-byte tamper RED carries no USAGE marker" (-not $r.Out.Contains("CHUNKS_VERIFY USAGE")) $r.Out
 
   # 3. 空 sha256（旧 DLL 行为）⇒ RED
   $d3 = Join-Path $root "emptysha"
@@ -91,6 +139,30 @@ try {
   New-Item -ItemType Directory -Force -Path $d5 | Out-Null
   $r = Invoke-Verifier $d5
   Check "missing chunks.ndjson => USAGE rc=2" ($r.Code -eq 2 -and $r.Out.Contains("CHUNKS_VERIFY USAGE")) ($r.Out + " rc=" + $r.Code)
+
+  # 6. A5 牙①：错参数名（历史事故原样 `-Dir ...`）⇒ USAGE rc=2，绝不许落成 RED rc=1。
+  #    旧版是 param() **绑定阶段** rc=1，与「指纹不符」撞车；现在脚本无 param() 块、手动解析 $args。
+  $r = Invoke-VerifierArgs @("-Dir", $d1)
+  Check "A5 TOOTH 1: wrong param name (-Dir) => USAGE rc=2 (not RED rc=1)" (
+    $r.Code -eq 2 -and $r.Out.Contains("CHUNKS_VERIFY USAGE") -and
+    -not $r.Out.Contains("CHUNKS_VERIFY RED")) ($r.Out + " rc=" + $r.Code)
+  Check "A5 TOOTH 1: usage error names the offending parameter" ($r.Out.Contains("-Dir")) $r.Out
+
+  # 7. A5 牙①（续）：-CaptureDir 缺取值 ⇒ USAGE rc=2（不是「目录不存在」也不是 RED）
+  $r = Invoke-VerifierArgs @("-CaptureDir")
+  Check "A5 TOOTH 1b: -CaptureDir without value => USAGE rc=2" (
+    $r.Code -eq 2 -and $r.Out.Contains("CHUNKS_VERIFY USAGE") -and
+    -not $r.Out.Contains("CHUNKS_VERIFY RED")) ($r.Out + " rc=" + $r.Code)
+
+  # 8. A3/F4：窗口 runbook 必须把「跑完校验指纹」写成**显式步骤**（机器判据，不靠人眼）。
+  #    判据落在结构上：指定小节标题 + 该小节内真的有一行 `verify_chunks.ps1 -CaptureDir <dir>` 命令，
+  #    并且那一节写清 rc=2(USAGE) 与 rc=1(RED) 的区别（A5 的文档面）。
+  $docsRoot = Join-Path $here "..\..\..\docs"
+  $rb = Test-RunbookStep (Join-Path $docsRoot "client-flow-stages-20261025.md")
+  Check "A3 runbook: client-flow-stages 2.1 has verify_chunks -CaptureDir step" $rb.Ok $rb.Detail
+  Check "A3 runbook: step documents rc=2 USAGE vs rc=1 RED" $rb.RcTable $rb.Detail
+  $sh = Test-WindowSheetWiring (Join-Path $docsRoot "window-exec-sheet-20261025.md")
+  Check "A3 runbook: window exec sheet closing step cross-links it" $sh.Ok $sh.Detail
 }
 finally {
   Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue

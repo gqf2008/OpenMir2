@@ -631,6 +631,28 @@ try {
     [int]$doc.categories.combat.hp_before -eq 10 -and [int]$doc.categories.combat.hp_after -eq 8) (
     ($doc.categories.combat | ConvertTo-Json -Compress -Depth 6))
 
+  # A1/F1：combat 证据必须记录这次用的是**显式像素**还是**48x32 格心投影**。
+  # 没有它，真机 combat RED 时分不清「靶子没刷出」与「未证实的投影点歪」。
+  Check "stages combat A1: default path records pixel_source=projected (560,304)" (
+    $null -ne $doc -and [string]$doc.categories.combat.pixel_source -eq "projected" -and
+    [int]$doc.categories.combat.pixel.x -eq 560 -and [int]$doc.categories.combat.pixel.y -eq 304) (
+    ($doc.categories.combat | ConvertTo-Json -Compress -Depth 6))
+  Check "stages combat A1: stdout prints pixel_source=projected" (
+    $r.Out.Contains("COMBAT_PIXEL pixel_source=projected x=560 y=304")) $r.Out
+  $cbPixOut = New-StageOutDir "combat-pixel-explicit"
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbGreen, "-OutDir", $cbPixOut,
+    "-Profile", $profGood, "-PlayerMap", "0", "-CombatTargetPixel", "600,320")
+  $docPix = Get-EvidenceDoc $cbPixOut
+  Check "stages combat A1: -CombatTargetPixel => pixel_source=explicit (600,320)" (
+    $r.Code -eq 0 -and $null -ne $docPix -and
+    [string]$docPix.categories.combat.pixel_source -eq "explicit" -and
+    [int]$docPix.categories.combat.pixel.x -eq 600 -and [int]$docPix.categories.combat.pixel.y -eq 320 -and
+    $r.Out.Contains("COMBAT_PIXEL pixel_source=explicit x=600 y=320")) (
+    $r.Out + " rc=" + $r.Code + " " + ($docPix.categories.combat | ConvertTo-Json -Compress -Depth 6))
+  Check "stages combat A1 TOOTH: explicit vs projected pixels actually differ" (
+    [int]$doc.categories.combat.pixel.x -ne [int]$docPix.categories.combat.pixel.x) (
+    "projected=" + $doc.categories.combat.pixel.x + " explicit=" + $docPix.categories.combat.pixel.x)
+
   # 牙：不刷怪（profile 的靶子在别的图）⇒ RED，点名 combat
   $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbGreen, "-OutDir", (New-StageOutDir "combat-notarget"),
     "-Profile", $profOther, "-PlayerMap", "0")
@@ -681,36 +703,88 @@ try {
     $r.Code -eq 0 -and $r.Out.Contains("LOG_EVIDENCE status=RED") -and $r.Out.Contains("err=1")) ($r.Out + " rc=" + $r.Code)
 
   # ---- 14f. A5：既有 25 阶段名称与相对顺序不变（新阶段只能追加）----
+  # F3（A2）：`IndexOf` 只给**首次出现**的位置 ⇒ 只有「该 needle 恰出现 1 次」时位置才有意义。
+  # 只要有人在注释/文档字符串里先写一句同名 `Stage "pickup"`，位置就会前移、顺序牙静默错判。
+  # 所以位置一律经 Get-StageOccurrence（Count≠1 ⇒ Ok=$false），顺序判据只在 Ok 时成立。
   $srcStages = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
-  function Stage-Pos([string]$needle) {
-    $i = $srcStages.IndexOf($needle)
-    return $i
+  function Get-StageNeedles {
+    $l = @()
+    foreach ($n in @("start", "inject_hook", "login_id", "login_pwd", "login_submit", "charsel", "enter_game",
+                     "notice_wait", "notice_poll", "ingame", "talk", "talk_sent")) { $l += ('Stage "' + $n + '"') }
+    $l += 'Stage ("attack_" + ($i + 1))'
+    $l += 'Stage ("walk_" + $i)'
+    foreach ($n in @("logout_button", "logout_alt_x", "logout_menu", "logout_confirm", "back_charsel",
+                     "reenter", "reentered", "done")) { $l += ('Stage "' + $n + '"') }
+    return ,$l
   }
-  $canon = @("start", "inject_hook", "login_id", "login_pwd", "login_submit", "charsel", "enter_game",
-             "notice_wait", "notice_poll", "ingame", "talk", "talk_sent")
-  $positions = @()
-  foreach ($n in $canon) { $positions += (Stage-Pos ('Stage "' + $n + '"')) }
-  $attackPos = Stage-Pos 'Stage ("attack_" + ($i + 1))'
-  $walkPos = Stage-Pos 'Stage ("walk_" + $i)'
-  $positions += $attackPos
-  $positions += $walkPos
-  foreach ($n in @("logout_button", "logout_alt_x", "logout_menu", "logout_confirm", "back_charsel",
-                   "reenter", "reentered", "done")) {
-    $positions += (Stage-Pos ('Stage "' + $n + '"'))
+  function Get-StageOccurrence([string]$src, [string]$needle) {
+    if ([string]::IsNullOrEmpty($needle)) { return [pscustomobject][ordered]@{ Ok = $false; Pos = -1; Count = 0 } }
+    $n = ([regex]::Matches($src, [regex]::Escape($needle))).Count
+    if ($n -ne 1) { return [pscustomobject][ordered]@{ Ok = $false; Pos = -1; Count = $n } }
+    return [pscustomobject][ordered]@{ Ok = $true; Pos = $src.IndexOf($needle); Count = 1 }
   }
-  $ordered = $true
-  for ($i = 1; $i -lt $positions.Count; $i++) {
-    if ($positions[$i] -le $positions[$i - 1]) { $ordered = $false }
+  function Measure-StageOrder([string]$src) {
+    $positions = @()
+    $bad = @()
+    foreach ($nd in (Get-StageNeedles)) {
+      $o = Get-StageOccurrence $src $nd
+      if (-not $o.Ok) { $bad += ($nd + " x" + $o.Count) }
+      $positions += $o.Pos
+    }
+    if ($bad.Count -gt 0) {
+      return [pscustomobject][ordered]@{ Ok = $false; Reason = "non_unique"; Detail = ($bad -join "; "); Positions = $positions }
+    }
+    foreach ($p in $positions) {
+      if ($p -lt 0) { return [pscustomobject][ordered]@{ Ok = $false; Reason = "missing"; Detail = ""; Positions = $positions } }
+    }
+    for ($i = 1; $i -lt $positions.Count; $i++) {
+      if ($positions[$i] -le $positions[$i - 1]) {
+        return [pscustomobject][ordered]@{ Ok = $false; Reason = "out_of_order"; Detail = ""; Positions = $positions }
+      }
+    }
+    return [pscustomobject][ordered]@{ Ok = $true; Reason = "ok"; Detail = ""; Positions = $positions }
   }
-  $allPresent = $true
-  foreach ($p in $positions) { if ($p -lt 0) { $allPresent = $false } }
-  Check "stages A5: canonical 25-stage subsequence present and ordered" ($ordered -and $allPresent) (
-    ($positions -join ","))
-  $newPos = @((Stage-Pos 'Stage "pickup"'), (Stage-Pos 'Stage "npc_dialog"'), (Stage-Pos 'Stage "trade"'),
-              (Stage-Pos 'Stage "combat_target"'), (Stage-Pos 'Stage "combat"'))
-  $newOk = $true
-  foreach ($p in $newPos) { if ($p -lt 0 -or $p -lt $attackPos -or $p -gt $walkPos) { $newOk = $false } }
-  Check "stages A5: new stages appended after attack, before walk (25-order intact)" $newOk ($newPos -join ",")
+  $order = Measure-StageOrder $srcStages
+  Check "stages A5: canonical 25-stage subsequence present and ordered" $order.Ok (
+    $order.Reason + " " + ($order.Positions -join ","))
+  $nonUnique = @()
+  foreach ($nd in (Get-StageNeedles)) {
+    $o = Get-StageOccurrence $srcStages $nd
+    if ($o.Count -ne 1) { $nonUnique += ($nd + " x" + $o.Count) }
+  }
+  Check "stages A5: every stage needle occurs exactly once (IndexOf precondition)" ($nonUnique.Count -eq 0) (
+    $nonUnique -join "; ")
+  $attackPos = (Get-StageOccurrence $srcStages 'Stage ("attack_" + ($i + 1))').Pos
+  $walkPos = (Get-StageOccurrence $srcStages 'Stage ("walk_" + $i)').Pos
+  $newPos = @()
+  $newBad = @()
+  foreach ($nd in @('Stage "pickup"', 'Stage "npc_dialog"', 'Stage "trade"',
+                    'Stage "combat_target"', 'Stage "combat"')) {
+    $o = Get-StageOccurrence $srcStages $nd
+    $newPos += $o.Pos
+    if (-not $o.Ok -or $o.Pos -lt 0 -or $o.Pos -lt $attackPos -or $o.Pos -gt $walkPos) {
+      $newBad += ($nd + " x" + $o.Count + " pos=" + $o.Pos)
+    }
+  }
+  Check "stages A5: new stages appended after attack, before walk (25-order intact)" ($newBad.Count -eq 0) (
+    ($newBad -join "; ") + " | positions=" + ($newPos -join ","))
+  # 牙（F3）：构造一个**含重复阶段名**的假源 ⇒ 唯一性判据必须红。
+  # 重复行插在真出现**之前**且只是一条注释：朴素 IndexOf 会把它当成首次出现，
+  # 但因为紧挨着真行，顺序判据**仍会绿** ⇒ 这颗牙抓的是「唯一性」本身，不是顺序。
+  # （新阶段 pickup/npc_dialog/trade/combat_target/combat 的唯一性由上面 newPos 循环各自断言。）
+  $dupRx = [regex]([regex]::Escape('Stage "talk"'))
+  $dupSrc = $dupRx.Replace($srcStages, ('# Stage "talk"（重复出现的注释）' + "`n" + 'Stage "talk"'), 1)
+  $dupOrder = Measure-StageOrder $dupSrc
+  Check "stages A5 TOOTH: duplicated stage name => uniqueness RED" (
+    -not $dupOrder.Ok -and $dupOrder.Reason -eq "non_unique" -and
+    $dupOrder.Detail.Contains('Stage "talk" x2')) ($dupOrder.Reason + " " + $dupOrder.Detail)
+  $rawPos = @()
+  foreach ($nd in (Get-StageNeedles)) { $rawPos += $dupSrc.IndexOf($nd) }
+  $rawOrdered = $true
+  foreach ($p in $rawPos) { if ($p -lt 0) { $rawOrdered = $false } }
+  for ($i = 1; $i -lt $rawPos.Count; $i++) { if ($rawPos[$i] -le $rawPos[$i - 1]) { $rawOrdered = $false } }
+  Check "stages A5 TOOTH control: naive IndexOf would still call the duplicate ordered" $rawOrdered (
+    $rawPos -join ",")
   Check "stages A6 source: no hardcoded MirServer logs path" (
     -not ($srcStages -match 'E:[/\\]MirServer[/\\]logs') -and -not ($srcStages -match 'MirServer\\\\logs')) $null
 
@@ -722,6 +796,14 @@ try {
   Check "source: NPC click default 512,263" ($src2.Contains('$NpcClick = "512,263"')) $null
   Check "source: no code click at 512,227 (comment-only mention allowed)" (
     -not ($src2 -match 'Send-Click\s+512\s+227') -and -not $src2.Contains('$NpcClick = "512,227"')) $null
+  # A1/F1 的 live 面只能靠源码锚（离线跑不出真客户端点击）：stdout 必须带 pixel_source，
+  # 证据字段必须来自同一个 resolver（点击与证据不允许两处各自算像素）。
+  Check "source: A1 combat prints pixel_source and reuses one resolver" (
+    $src2.Contains('$tp = Resolve-CombatTargetPixel $CombatTargetPixel $dx $dy') -and
+    $src2.Contains('" pixel_source=" + $tp.Source') -and
+    $src2.Contains('WARN COMBAT_PIXEL_SOURCE projected') -and
+    $src2.Contains('$ev["pixel_source"] = $tp.Source') -and
+    $src2.Contains('COMBAT_PIXEL pixel_source=')) $null
   Check "source: mir_flow manifest records client sha256" (
     $src2.Contains('client_exe_sha256') -and $src2.Contains('Get-ClientProvenance')) $null
   Check "source: live proxy evidence source present (-ProxyDir + EDCode)" (
