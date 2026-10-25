@@ -26,7 +26,9 @@
 //! - `PayMent == 1 && !Config.TryModeUseStorage` 门（`Operate.cs:1615/1664`）：部署 `TestServer=TRUE`
 //!   （`E:\\MirServer\\M2GameSvr\\Server.conf:11`）⇒ oracle `PlayObject.cs:1168-1171` 把 `PayMent` 置 **3**
 //!   ⇒ 该门在本部署**恒假**；本宿主未把 `PayMent` 落到会话（登记，行为暂等价）。
-//! - `SM_WEIGHTCHANGED`（`BaseObject.cs:1771`）未发（T-47 ⑤）；`SM_ADDITEM` 尾（T-24）。
+//! - `SM_WEIGHTCHANGED`（`BaseObject.cs:1771`）：**买入路径已发**（[`weight_changed_frame`]，
+//!   卡 `openmir2-merchant-price-list-and-weight-frame` B 阶段）；`make_drug_item` /
+//!   `take_back_storage_item` 仍缺（T-47 ⑤ 残留）。`SM_ADDITEM` 尾（T-24）。
 //! - `CustomItemSystem.GetItemName`/`GetUpgradeStdItem` 的物品展示层（T-47 ⑥/T-24）：
 //!   **已实现**——名称走 [`crate::bag::item_display_name`]（`Desc[13]==1` ⇒ 自定义名），
 //!   升级差量由 [`crate::itemwire::encode_client_item`] 统一叠加。详情列表照 oracle
@@ -188,6 +190,36 @@ impl ShopFrame {
         self.atomic_batch = true;
         self
     }
+}
+
+/// `WeightChanged()`（`BaseObject.cs:1771-1774`）：先 `WAbil.Weight = RecalcBagWeight()`，
+/// 再 `SendUpdateMsg(RM_WEIGHTCHANGED)`；泵分支（`PlayObject.Message.cs:1760`）产出
+/// `SM_WEIGHTCHANGED(622)`：`Recog=Weight`、`Param=WearWeight`、`Tag=HandWeight`、
+/// `Series=((W+A+H)^0x3A5F)^0x1F35^0xaa21`（用**当下** `WAbil`）。
+///
+/// 线上位置由 `MsgQueue` 优先级 `(byte)RM_WEIGHTCHANGED = 131` 决定：`SM_ADDITEM` 走
+/// `SendSocket` 直连 ⇒ 先出；622(131) 早于 650（`RM_BUYITEM_SUCCESS` 低字节 149）。
+/// 真机证据（`E:/tmp/window/e23-reshot`，卡 `openmir2-merchant-price-list-and-weight-frame`）：
+/// C# 是 `200 → 622 → 650`，Rust 此前缺 622。
+///
+/// 只在**卡内实测的买入路径**发射；`make_drug_item` / `take_back_storage_item` 同样缺 622，
+/// 补它们要先补各自的重量重算 / 换队列感知发射器 ⇒ 登记为 T-47 ⑤ 残留，不在本卡夹带。
+#[must_use]
+fn weight_changed_frame(state: &GroundState) -> ShopFrame {
+    let w = state.wabil.weight;
+    let a = state.wabil.wear_weight;
+    let h = state.wabil.hand_weight;
+    let sum = i32::from(w) + i32::from(a) + i32::from(h);
+    let chk = ((sum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21;
+    frame(
+        mir2_protocol::messages::SM_WEIGHTCHANGED,
+        i32::from(w),
+        u16::from(a),
+        u16::from(h),
+        chk as u16,
+        Vec::new(),
+    )
+    .queued(mir2_protocol::messages::RM_WEIGHTCHANGED)
 }
 
 /// `Merchant` 实例上本片读到的字段（宿主从世界实体取）。
@@ -606,7 +638,8 @@ pub fn make_drug_item(
                     crate::trade::add_item_tail(&user_item, ctx.catalog).unwrap_or_default();
                 // `AddItemToBag`（`BaseObject.cs:1241`）：`ItemList.Count >= MaxBagItem(46)` ⇒ false。
                 if add_item_to_bag(&mut state.item_list, user_item, MAX_BAG_ITEM) {
-                    // `WeightChanged()`（T-47 ⑤ 未发 `SM_WEIGHTCHANGED`，与 `buy_item` 同口径）。
+                    // `WeightChanged()` 未发（T-47 ⑤ 残留）：本路径没有重量重算、宿主发射器
+                    // 虽同队列但缺 622 的实测证据 ⇒ 留到后继卡（`buy_item` 已发）。
                     state.gold -= ctx.make_durg_price;
                     // 尾已是 `EDCode.EncodeBuffer(ClientItem)` ⇒ 不能再 `EncodeString`。
                     frames.push(frame_encoded(
@@ -1217,6 +1250,9 @@ pub fn buy_item(
                                     add_tail,
                                 ));
                                 state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
+                                // `WeightChanged()`（`BaseObject.cs:1771-1774`）在 `AddItemToBag` 内、
+                                // `SendAddItem` 之前触发；线上 622 排在直连的 200 之后、650(149) 之前。
+                                frames.push(weight_changed_frame(state));
                                 let g = &mut goods[i];
                                 g.remove(j);
                                 if g.is_empty() {
@@ -2128,10 +2164,80 @@ mod tests {
             "G-1：尾 = EncodeBuffer(ClientItem 124B)"
         );
         assert_eq!(add.tail.len(), 166, "encode_len(124)=166");
+        // 622 夹在 200 与 650 之间（直连 200 先出；622 优先级 131 < 650 的 149）。
+        let idents: Vec<u16> = r.frames.iter().map(|f| f.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
+                mir2_protocol::messages::SM_BUYITEM_SUCCESS,
+            ],
+            "帧序：SM_ADDITEM（直连）→ SM_WEIGHTCHANGED(131) → SM_BUYITEM_SUCCESS(149)"
+        );
+        let changed = &r.frames[1];
+        assert_eq!(
+            changed.recog,
+            i32::from(state.wabil.weight),
+            "622.Recog = 重算后 WAbil.Weight"
+        );
+        assert_eq!(
+            (changed.param, changed.tag),
+            (
+                u16::from(state.wabil.wear_weight),
+                u16::from(state.wabil.hand_weight)
+            ),
+            "622.Param/Tag = WearWeight/HandWeight"
+        );
+        let sum = i32::from(state.wabil.weight)
+            + i32::from(state.wabil.wear_weight)
+            + i32::from(state.wabil.hand_weight);
+        assert_eq!(
+            changed.series,
+            (((sum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21) as u16,
+            "622.Series = ((W+A+H)^0x3A5F)^0x1F35^0xaa21"
+        );
+        assert_eq!(
+            changed.queue_priority,
+            Some((mir2_protocol::messages::RM_WEIGHTCHANGED & 0xFF) as u8),
+            "622 走 RM_WEIGHTCHANGED 队列（131）"
+        );
         assert_eq!(r.frames.last().unwrap().ident, 650);
         assert_eq!(state.gold, 400);
         assert_eq!(state.item_list.len(), 1);
         assert!(goods.is_empty(), "空组移除");
+
+        // **负例（满包）**：`AddItemToBag` 的 `return false` 在 `ItemList.Add` 之前
+        // （`BaseObject.cs:1241-1242`）⇒ 既不入包、也不 `WeightChanged` ⇒ **不得发 622**。
+        let mut full = GroundState {
+            item_list: (0..game_svr::bag::MAX_BAG_ITEM)
+                .map(|i| bag(2000 + i as i32, 1))
+                .collect(),
+            gold: 10_000,
+            wabil: ability(0, 1000),
+        };
+        let mut goods_full = vec![vec![MerchantItem {
+            make_index: 9,
+            index: 1,
+            dura: 10,
+            dura_max: 10,
+            desc: [0; 14],
+        }]];
+        let rf = buy_item(&m, &mut full, &mut goods_full, "金创药(小量)", 0, &c);
+        assert!(!rf.ok);
+        assert!(
+            rf.frames
+                .iter()
+                .all(|f| f.ident != mir2_protocol::messages::SM_WEIGHTCHANGED),
+            "满包失败不得发 622"
+        );
+        assert_eq!(rf.frames[0].recog, 2, "背包满 ⇒ n1C=2");
+        assert_eq!(
+            full.item_list.len(),
+            game_svr::bag::MAX_BAG_ITEM,
+            "背包未被改动"
+        );
+        assert_eq!(full.gold, 10_000, "金币未扣");
     }
 
     #[test]
