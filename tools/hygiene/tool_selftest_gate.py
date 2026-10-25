@@ -14,11 +14,11 @@
   * 判定：任一注册项 rc≠0 ⇒ 本门 RED（rc=2）；全 0 ⇒ GREEN（rc=0）；用法错误 ⇒ rc=2。
   * `--skip <name,...>` 必须**打印 SKIP**（不许静默）；`--only` 用于变异自证/快跑。
 
-**为什么只收这些**（`--inventory` 可看全量清点）：仓库里还有若干历史/别域工具的
-`--selftest`（`tools/capture`、`tools/gw-capture`、`tools/m1-acceptance` 等）——它们
-不在合并判据的消费链上，逐个纳入会让门禁时间翻倍且噪声大；本门禁收的是
-**合入判定会让它们失真的工具**（conformance 驱动器、probe、db 对拍、窗口工具与
-本仓库 hygiene 门自身）。清单在 `REGISTRY`，新增工具按同一格式登记即可。
+**收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
+——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
+「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
+当前 43 项在门内；出域只有 6 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
+部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
 
 用法：
   python -I -B tools/hygiene/tool_selftest_gate.py [--repo .] [--only a,b]
@@ -52,6 +52,8 @@ REGISTRY = [
     ("board_coverage_gate", ["tools/hygiene/board_coverage_gate.py", "--selftest"], False),
     ("t_reservation_gate", ["tools/whitelist/t_reservation_gate.py", "selftest"], False),
     ("next_t", ["tools/whitelist/next_t.py", "selftest"], False),
+    # dbsnap 的自测会连**本机 MySQL** 读 13 张库表（mir2_account.* / mir2_db.*，mysql.exe 路径硬编码）
+    # ⇒ 无库环境下的红属**环境**而非工具回归（runbook §7「判定域」F2）。
     ("dbsnap", ["tools/dbsnap/dbsnap.py", "selftest"], False),
     ("param_discovery", ["tools/probe/param_discovery.py", "selftest"], False),
     ("mir2frame", ["tools/probe/mir2frame.py", "selftest"], False),
@@ -59,36 +61,47 @@ REGISTRY = [
     ("check_client_ability_layout_doc_counts",
      ["tools/m2-acceptance/check_client_ability_layout_doc_counts.py", "--selftest"], False),
     ("verify_sha256sums", ["tools/evidence-hash/verify_sha256sums.py", "selftest"], False),
+    # --- 2026-10-25 扩容（Leader 裁定：「一次性/人工使用」不是出域理由；离线可判红的一律接入）---
+    # 每一项都在本机实测：离线、确定性、rc 为 pass/fail（见 runbook §7 的表）。
+    ("review_principal_check", ["tools/hygiene/review_principal_check.py", "--selftest"], False),
+    ("scenario_undecidable_audit", ["tools/hygiene/scenario_undecidable_audit.py", "selftest"], False),
+    ("rules_approve", ["tools/conformance/rules_approve.py", "--selftest"], False),
+    ("capture_login_compare", ["tools/loginfixture/capture_login_compare.py", "--selftest"], False),
+    ("s2c_diff", ["tools/m2-acceptance/s2c_diff.py", "--selftest"], False),
+    ("error_curve", ["tools/logdiff/error_curve.py", "selftest"], False),
+    ("timeline", ["tools/logdiff/timeline.py", "selftest"], False),
+    ("world_sampler", ["tools/worldsample/world_sampler.py", "selftest"], False),
+    ("preflight", ["tools/conformance/preflight.py", "--selftest"], False),
+    ("gate_shadow_proxy", ["tools/gw-capture/gate_shadow_proxy.py", "--selftest"], False),
+    ("gate_timer_gate", ["tools/gw-capture/gate_timer_gate.py", "--selftest"], False),
+    ("count_m1_logs", ["tools/m1-acceptance/count_m1_logs.py", "--selftest"], False),
+    ("selftest_proxy", ["tools/capture/selftest_proxy.py", "--selftest"], False),
+    ("selftest_gate_shadow", ["tools/gw-capture/selftest_gate_shadow.py", "--selftest"], False),
+    ("load_report", ["tools/botload/load_report.py", "selftest"], False),
+    ("prepare_safe_login", ["tools/loginfixture/prepare_safe_login.py", "--selftest"], False),
+    ("preflight_private_stack", ["tools/window/preflight_private_stack.py", "--selftest"], False),
+    ("selftest_mutations", ["tools/conformance/selftest_mutations.py", "--selfcheck"], False),
+    ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
     ("tool_selftest_gate", ["tools/hygiene/tool_selftest_gate.py", "--selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
 OUT_OF_SCOPE = {
-    "tools/capture/golden_fresh_check.py": "捕获/别域工具，不在合并判据消费链",
-    "tools/client/dlg_links.py": "客户端对话框链，别域",
-    "tools/conformance/preflight.py": "部署前置探测，需外部环境；其判据由 preflight_private_stack 覆盖",
-    "tools/conformance/rules_approve.py": "rules 转正一次性工具",
-    "tools/gw-capture/gate_shadow_proxy.py": "网关抓包代理，别域",
-    "tools/gw-capture/gate_timer_gate.py": "网关定时门，别域",
-    "tools/loginfixture/capture_login_compare.py": "登录抓包/对照，别域",
-    "tools/loginfixture/prepare_safe_login.py": "登录前置，别域",
-    "tools/m1-acceptance/count_m1_logs.py": "M1 日志计数，别域",
-    "tools/m2-acceptance/s2c_diff.py": "M2 客户端差分，别域",
-    "tools/window/preflight_private_stack.py": "需要私有栈部署件的现场检查，不适合无环境门禁",
-    "tools/hygiene/review_principal_check.py": "局部审计脚本（被 review 流程手动使用）",
-    "tools/hygiene/scenario_undecidable_audit.py": "一次性审计脚本",
-    "tools/window/alt_port_profile.py": "selftest 只打印 roundtrip/IV 且 rc=1，非 pass/fail 自测",
-    "tools/window/startup_param.py": "selftest 只打印 IV/地址端口，非 pass/fail 自测",
-    "tools/botload/in_world_stability.py": "负载模拟，需运行环境/别域",
-    "tools/botload/load_report.py": "负载报告，别域",
-    "tools/capture/selftest_proxy.py": "抓包代理自测，别域",
-    "tools/conformance/selftest_impl.py": "conformance 内部实现模块（由 compare_runs/card_window 自测间接覆盖）",
-    "tools/conformance/selftest_mutations.py": "一次性变异脚本（人工使用）",
-    "tools/db-parity/newchr_delchr_selchr_probe.py": "建/删/选角色探针，需真库，别域",
-    "tools/gw-capture/selftest_gate_shadow.py": "网关影子自测，别域",
-    "tools/logdiff/error_curve.py": "日志差分，别域",
-    "tools/logdiff/timeline.py": "日志差分，别域",
-    "tools/worldsample/world_sampler.py": "世界采样，别域",
+    # 2026-10-25 Leader 裁定后重审：只保留**真的无法离线自动判红**的 7 项，理由必须是
+    # 「需要交互/外部产物/真实环境」，不能是「一次性/人工使用/别域」（那等于垃圾桶）。
+    "tools/client/dlg_links.py":
+        "selftest 需外部截图 E:/tmp/window/r7/shot-dice5.png；缺失时打印 SKIP 且 rc=0 ⇒ 接入会永远假绿（要接须先有人给该产物或改工具）",
+    "tools/window/alt_port_profile.py":
+        "`selftest` 需要**主检出构建产物/部署配置** `src/DBSrv/bin/Release/dbsvr.conf`（实测 `RED: db-srv: 找不到源配置，候选 …` ⇒ rc=1）；"
+        "干净 CI 上没有该产物 ⇒ 红属环境、不能当工具回归（不是「只打印」）",
+    "tools/botload/in_world_stability.py":
+        "无 selftest 入口：`stats <file>` 需要真实 load_stats.ndjson 产物 ⇒ 无法离线自动判红",
+    "tools/capture/golden_fresh_check.py":
+        "需要先 `dotnet build` 出 GoldenExport.exe（实测 rc=2「前置不满足」）⇒ 依赖外部构建产物",
+    "tools/conformance/selftest_impl.py":
+        "无独立 CLI 入口（`--selftest` 空转 rc=0、无输出）：它是 `compare_runs selftest` 的实现模块，已被 compare_runs 覆盖 ⇒ 单列会假绿",
+    "tools/db-parity/newchr_delchr_selchr_probe.py":
+        "需要真实 MySQL 与建/删/选角色状态（真机），不能离线判红",
 }
 
 
@@ -233,6 +246,13 @@ def selftest():
             _res, rc = run(tmp, only=["ok"])
         chk(rc == 0 and "ok" in buf.getvalue() and "bad" not in buf.getvalue(),
             "TSG 牙5 --only 只跑指定项")
+        # 牙6：未知条目 ⇒ rc=2（用法错不许被当成「有红」，也不许假绿）
+        import contextlib
+        with contextlib.redirect_stderr(io.StringIO()):
+            r6 = main(["--repo", tmp, "--only", "no-such-entry"])
+            r6b = main(["--repo", tmp, "--skip", "no-such-entry"])
+        chk(r6 == 2, "TSG 牙6 未知条目 ⇒ rc=2（用法错）")
+        chk(r6b == 2, "TSG 牙6b --skip 未知条目 ⇒ rc=2")
     finally:
         REGISTRY = saved
     print("%s: tool_selftest_gate selftest %d/%d"
@@ -258,6 +278,13 @@ def main(argv=None):
         return 0
     only = [x for x in args.only.split(",") if x]
     skip = [x for x in args.skip.split(",") if x]
+    known = {n for n, _a, _s in REGISTRY}
+    unknown = sorted((set(only) | set(skip)) - known)
+    if unknown:
+        # 用法错 ⇒ rc=2（F3：此前 raise SystemExit(str) 会得到 rc=1，与文档不一致）
+        print("tool_selftest_gate: 未知条目 %s（可用：--inventory 或 REGISTRY）"
+              % ", ".join(unknown), file=sys.stderr)
+        return 2
     results, rc = run(repo, only=only, skip=skip, timeout=args.timeout)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:

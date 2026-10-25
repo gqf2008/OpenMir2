@@ -872,48 +872,88 @@ git diff --check
 ```sh
 python -I -B tools/hygiene/tool_selftest_gate.py                       # 全量；rc=0 全绿，rc=2 有红/用法错
 python -I -B tools/hygiene/tool_selftest_gate.py --only card_window    # 只跑一项（排障/变异自证）
-python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点：哪些带 selftest、谁在门内/出域
+python -I -B tools/hygiene/tool_selftest_gate.py --skip <name,...>     # 显式跳过（必打印 SKIP）
+python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点：谁在门内/出域，出域带理由
 ```
 
 **判定域**（写清判定域才不会假绿）：
 
-- 扫什么：脚本内 `REGISTRY` 的**固定 24 项**——conformance 驱动器（`card_window`/`compare_runs`）、
-  `card_evidence`、probe（`mir2_probe`/`param_discovery`/`mir2frame`）、db 对拍（`dbsnap_pair`/`dbsnap`）、
-  窗口工具（`rc_attribution`/`butch_ledger`/`frame_drift_report`/`window_criteria_lint`/`blocked_sources_check`）、
-  本仓库 hygiene 门自身（conflict_marker / stale_pointer / dynamic_count_stamp / board_coverage /
-  merge_tree_helper / t_reservation / next_t）、`goal_gate`、m2 文档计数、证据哈希校验，以及**本门自己**；
+- 扫什么：脚本内 `REGISTRY` 的**固定 43 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
+  M1/M2 验收、日志差分、世界采样、本仓库 hygiene 门自身，以及本门自己）；
 - 在哪跑：仓库根（`--repo`，默认本脚本上溯两级），`python -I -B`，**每项独立子进程**；
 - rc 从哪取：**子进程退出码**（不经管道/`tail`，否则拿到的是 `tail` 的 rc）；
-- 判红：任一注册项 rc≠0 ⇒ 本门 rc=2；全 0 ⇒ rc=0；用法错（未知条目）⇒ rc=2；
+- 判红：任一注册项 rc≠0 ⇒ 本门 rc=2；全 0 ⇒ rc=0；**用法错（未知条目 / 参数）⇒ rc=2**（与红区分不开，
+  但都不会假绿；牙 TSG6/6b 钉住）；
 - `--skip <name,...>` **必须打印 `SKIP`**（显式跳过，不许静默放水）；`--only` 只跑指定项；
-- **不在判定域**：`--inventory` 列出的 25 个已分类出域工具（抓包/负载/M1/M2 验收/一次性审计/
-  需外部环境的 preflight 等），它们不在合并判据的消费链上。新增工具按 `REGISTRY` 同一格式登记。
+- **不是 hermetic（F2，reviewer-21 2026-10-25）**：`dbsnap` 项的 selftest 会连**本机 MySQL**，读
+  `mir2_account.*` / `mir2_db.*` 共 13 张表，`mysql.exe` 路径硬编码（`D:\mysql\…`）。因此
+  **「找不到 mysql 客户端 / 连不上 127.0.0.1:3306」导致的红属于环境，不是工具回归**；CI 每小时在
+  master 上跑也继承这个依赖——runner 机器没有这套 MySQL 时，该项必红，要么给 runner 配库、要么后续
+  改合成夹具（另开卡）。判定方法：看该行 tail 是 `mysql`/连接类错误还是 `RED: … selftest` 断言类错误。
 
-**本机实测（2026-10-25，24 项）**：
+**收哪些、不收哪些**（`--inventory` 可看全量）：**只要自带 selftest 且能离线判红，就收**——不按
+「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛。Leader 2026-10-25 裁定：
+**「一次性 / 人工使用 / 别域」都不是合法出域理由**，只有「**需要交互式输入、外部产物或真实环境**」才算。
+出域仅 **6** 项（49 = 43 门内 + 6 出域 + 0 未分类），逐项有实跑证据：
+
+| 出域项 | 真实原因（实跑证据） |
+|---|---|
+| `client/dlg_links.py` | selftest 需外部截图 `E:/tmp/window/r7/shot-dice5.png`（人产出）；缺失时打印 **SKIP 且 rc=0** ⇒ 接入会永远假绿 |
+| `window/alt_port_profile.py` | `selftest` 需要**主检出构建产物/部署配置** `src/DBSrv/bin/Release/dbsvr.conf`；缺失 ⇒ `RED: db-srv: 找不到源配置…` rc=1（环境相关，不是「只打印」） |
+| `botload/in_world_stability.py` | 无 selftest 入口；`stats <file>` 需要真实 `load_stats.ndjson` 产物 |
+| `capture/golden_fresh_check.py` | 需要先 `dotnet build` 出 `GoldenExport.exe`（实测 rc=2「前置不满足」） |
+| `conformance/selftest_impl.py` | 无独立 CLI 入口（`--selftest` 空转 rc=0、无输出）；它是 `compare_runs selftest` 的实现模块，已被 compare_runs 覆盖 |
+| `db-parity/newchr_delchr_selchr_probe.py` | 需要真实 MySQL 与建/删/选角色状态（真机） |
+
+**本机实测（2026-10-25，43 项）**：
 
 | 项 | 结果 |
 |---|---|
-| 全量 | **绿 24 / 红 0 / 跳过 0，rc=0，87s**（`card_window` 36.7s、`mir2_probe` 29.4s，其余 ≤5s） |
-| 本门自测 | `--selftest` **7/7**（假·绿 / 假·红 / 一绿一红⇒rc=2 / `--skip` 打印 `SKIP` / `--only` 只跑指定项） |
-| 清点 | 49 个带 selftest 的工具：门内 24 / 已分类出域 25 / **未分类 0** |
-| 变异自证 | **24/24**（逐项「改坏被测实现 ⇒ 该门必须红」，见下） |
+| 全量 | **绿 43 / 红 0 / 跳过 0，rc=0，90s**（reviewer-21 冷跑同门 **101s** ⇒ 写作 **90–101s**，机器/冷热相关；`card_window` 36.7–40.3s、`mir2_probe` 29.4s，其余 ≤2s） |
+| 本门自测 | `--selftest` **9/9**（假·绿 / 假·红 / 一绿一红⇒rc=2 / `--skip` 打印 `SKIP` / `--only` / 未知条目⇒rc=2 ×2） |
+| 清点 | 49 个带 selftest 的工具：门内 **43** / 已分类出域 **6** / **未分类 0** |
+| 变异自证 | **43/43**（逐项「改坏被测实现 ⇒ 该门必须红」，见下） |
+
+**本轮扩容（19 项，Leader/reviewer-21 裁定「离线可判红的一律接入」）**：
+`review_principal_check`(1.0s) / `scenario_undecidable_audit` / `rules_approve` / `capture_login_compare` /
+`s2c_diff` / `error_curve` / `timeline` / `world_sampler` / `preflight`(0.6s) / `gate_shadow_proxy`(1.7s) /
+`gate_timer_gate` / `count_m1_logs` / `selftest_proxy`(1.0s) / `selftest_gate_shadow`(1.7s) / `load_report` /
+`prepare_safe_login` / `preflight_private_stack` / `selftest_mutations`(--selfcheck) / `startup_param`。
+`startup_param` 先前被我误记为「rc 恒 0」——源码是 `return 0 if (plaintext_ok and base64_ok) else 1`，
+**是真 pass/fail**，已接入（reviewer-21 F 项）。
 
 **变异自证怎么复现**：对每一项注入一处看似无害的改动（让 `sha256_bytes` 恒返回 0、让 `first_mismatch`
-恒 `None`、让 `--skip` 不打印…），跑 `tool_selftest_gate --only <name>`，**必须 rc=2**；跑完按原字节还原，
-再用 `git status --porcelain -- <path>` 复核干净。证据：`E:/tmp/final-recheck/mutate_gate.py`（24 条变异
-定义）、`mutations.json`（逐条 rc）、`mutations-proof.log`（24/24）。
+恒 `None`、让 `--skip` 不打印、让 `roundtrip_check` 恒失败…），跑 `tool_selftest_gate --only <name>`，
+**必须 rc=2**；跑完按原字节还原，再用 `git status --porcelain -- <path>` 复核干净。证据：
+`E:/tmp/final-recheck/mutate_gate.py`（43 条变异定义）、`mutations.json`（逐条 rc）、`mutations-proof.log`。
 
-> **教训（本次自证当场抓到的真缺陷）**：`tools/dbsnap/dbsnap.py` 的自测把「篡改后仍判绿」写成
-> `sys.exit(1)`，而它正好被本函数的 `except SystemExit` 当成「篡改后判红」接住 ⇒ **把实现改坏也照样绿**。
-> 已改为 `raise AssertionError(...)`。这种洞只有「改坏实现」才能暴露，把自测跑一遍全绿是发现不了的。
+> **反例（今天最好的教学材料：既打印 RED 又返回 GREEN）**——`tools/dbsnap/dbsnap.py` 的旧写法在
+> 「篡改后仍判绿」分支里写 `print("RED: 篡改快照后仍判绿——红检失效"); sys.exit(1)`，而这段正处在
+> `try: cmd_diff(...) except SystemExit as e:` 里：那个 `sys.exit(1)` 被自己的异常处理器当成
+> **「篡改后判红」接住**。把 `cmd_diff` 改坏后实测得到：
+>
+> ```
+> RED: 篡改快照后仍判绿——红检失效
+> PASS 2/2 篡改快照后判红（改坏必红成立）
+> GREEN: dbsnap selftest 2/2        ← 进程 rc=0
+> ```
+>
+> **同一次输出里既有 RED 又有 PASS/GREEN，rc=0** ——「自相矛盾还判绿」。改成
+> `raise AssertionError("…")` 后，同一变异的对照是 **rc=1 + traceback 点名 AssertionError**。
+> 这种洞只有「改坏实现」才能暴露，把自测跑一遍全绿是发现不了的。
+>
+> **同类扫描**：AST 扫「`sys.exit(...)` 出现在含 `except SystemExit` 的 `try` 体内」，全仓又找到 2 处——
+> `tools/logdiff/timeline.py`、`tools/worldsample/world_sampler.py`（都离线，已同样改成
+> `raise AssertionError` 并用变异自证 rc=2）；第 3 处 `dbsnap.py restore-selftest` **需要真实 MySQL**，
+> 做了同类修正但**未做变异实证**（如实登记）。
 
 **接入合并**：合并前与「本地门禁」四条一起跑（见 `AGENTS.md`「本地门禁」；reviewer 自己重跑，不采信作者
-自述）。全量 ~90s：快循环用 `--only <改动的工具>`，交付前跑全量（**不许 `--skip` 掉慢项了事**）。
-CI 若加一项，用上面同一命令（不带 `--skip`）。
+自述）。全量 ~90–101s：快循环用 `--only <改动的工具>`，交付前跑全量（**不许 `--skip` 掉慢项了事**）。
 
 **CI 已接**：`.walgit/ci.toml` 第 9 个 `fast-*` 任务 `fast-tool-selftest`
 （`command = "python -I -B tools/hygiene/tool_selftest_gate.py"`，`@hourly`，`refs=[refs/heads/master]`，
-`timeout = "8m"` = 87s 实测 + 门内单项上限 300s + 余量；`walgit ci validate` rc=0）。
+`timeout = "8m"` = 101s 上界 + 门内单项上限 300s + 余量；`walgit ci validate` rc=0）。
+**注意 F2**：runner 机器没有本机 MySQL 时 `dbsnap` 项会红——那是环境，不是工具回归。
 
 **与开窗自检的关系**：§0.5 / §2 的 `card_window --selftest` 单跑仍然有用（快、只查一个工具），但
 「计数变小」这类回归现在由本门统一兜住。门里的数字以**实跑**为准——本节上方旧段落里的 240/240、

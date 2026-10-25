@@ -586,8 +586,10 @@ def cmd_restore_selftest(args):
         cmd_snap(ns3)
         try:
             cmd_diff(argparse.Namespace(a=ref, b=got2, max_diffs=5))
-            print("RED: 篡改一行后仍判绿——红检失效")
-            sys.exit(1)
+            # 不能 sys.exit(1)：会被下面的 except SystemExit 当成「篡改后判红」接住
+            # ⇒ 改坏必绿（卡 openmir2-tool-selftest-gate 的 AST 扫描同型发现；
+            # restore-selftest 需要真实 MySQL，本卡未做变异实证，仅同类修正）。
+            raise AssertionError("篡改一行后仍判绿——红检失效")
         except SystemExit as e:
             if e.code != 1:
                 print("RED: 篡改后退出码异常:", e.code)
