@@ -565,6 +565,8 @@ def format_actors(rows, snapshot_end_seq=None):
         if snapshot_end_seq is not None:
             ok, why = actor_static(r, snapshot_end_seq)
             seg += " 类别=%s（%s）" % ("静态" if ok else "活动", why)
+        if r.get("dead"):
+            seg += " [已死]"
         parts.append(seg)
     return "; ".join(parts) or "<无可见对象>"
 
@@ -1090,6 +1092,12 @@ def plan_step(step, index, params, depth=0):
         # 被「攻击忙」节流吃掉一半挥击。允许覆盖，但下限仍是不同 ident 的 ActionIntervalTime=350。
         out["interval_ms"] = _need_int(val.get("interval_ms", 1000),
                                        where + ".kill.interval_ms", 350, 60000)
+        if "track" in out and out["interval_ms"] < 450:
+            raise ScenarioError(
+                "%s.kill.interval_ms=%d 对 track 模式太小：track 每轮 = 选靶→TURN→pump(interval)→"
+                "复核→HIT→pump(interval)，相邻两次 CM_HIT 间隔 ≈ 2×interval_ms；必须 ≥ 部署 "
+                "HitIntervalTime=850（PlayObject.Attack.cs:850）⇒ interval_ms ≥ 450"
+                % (where, out["interval_ms"]))
         wi = val.get("wait_ident", [SM_NOWDEATH, SM_DEATH])
         if isinstance(wi, int) and not isinstance(wi, bool):
             wi = [wi]
@@ -1920,10 +1928,12 @@ class Run:
                                    "selector": plan["track"], "result": "target-gone",
                                    "last_known": last_known, "swings": swings,
                                    "retries": retries, "note": plan.get("note", "")})
+                vis = visible_actors(conn.frames, self.state.get("self_actor"))
+                for r in vis:
+                    r["dead"] = self._actor_dead(conn, r["actor"])
                 raise StepFailure(
                     "steps[%s].kill(track): 目标已消失/死亡，拒绝空打；最后已知 %s；可见集：%s"
-                    % (idx, last_known,
-                       format_actors(visible_actors(conn.frames, self.state.get("self_actor")))))
+                    % (idx, last_known, format_actors(vis)))
             last = row
             tx, ty = row["x"], row["y"]
             direction = DIRECTION_BY_DELTA.get((tx - sx, ty - sy))
@@ -5004,7 +5014,7 @@ def _selftest_kill_track():
     def kill_plan(max_swings=1, max_retries=3):
         return plan_step({"kill": {"track": "nearest:鸡", "self_pos": self_xy,
                                    "max_swings": max_swings, "max_retries": max_retries,
-                                   "interval_ms": 350}}, 0, {})
+                                   "interval_ms": 450}}, 0, {})
 
     # 牙 a：t0 在 A=(331,330)、t1 走到 B=(330,331) ⇒ 出手朝向必须是 B 的 Dir(4)
     run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡"), walk_frame(701, 330, 331)])
@@ -5105,6 +5115,7 @@ def _selftest_kill_track():
         except StepFailure as ex:
             err = str(ex)
         assert err is not None and "目标已消失/死亡" in err, err
+        assert "[已死]" in err, err
         assert conn.sock.sent == [], "目标已死却发了帧：%r" % (conn.sock.sent,)
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
@@ -5134,8 +5145,62 @@ def _selftest_kill_track():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
-    return ("schema 4 反 + 牙 a(打新格)/b(消失不空打)/c(同名选最近)/d(复核用尽带坐标)；"
-            "e(等距按 actor 决胜)/f(只发死亡帧不空打)/g(max_retries 差一语义)")
+    # 牙 h（T7）：**距离优先于 actor**——近者 702、远者 701 ⇒ 必须选近的 702（tag=2）
+    run, conn, tmpd = run_with([turn_frame(701, 329, 329, "鸡"),   # 远：距离 2
+                                turn_frame(702, 331, 330, "鸡")])  # 近：距离 1
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "两只却成功（不应有死亡帧）"
+        turns = [x for x in run.steps if x.get("kind") == "send" and x.get("ident") == CM_TURN]
+        assert turns and turns[-1]["tag"] == 2, turns   # 近者 702 在 (331,330) ⇒ Dir=2
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 i（T8）：成功路径——发 CM_HIT 后注入死亡帧 ⇒ result=dead 且不再重算
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡")])
+    try:
+        orig_send = conn.send
+        injected = {"n": 0}
+
+        def hooked(recog, ident, param=0, tag=0, series=0, body=b""):
+            raw = orig_send(recog, ident, param, tag, series, body)
+            if ident == CM_HIT:
+                injected["n"] += 1
+                conn.sock.chunks.append(build_s2c_frame(701, SM_NOWDEATH, 331, 330, 0, b""))
+            return raw
+
+        conn.send = hooked
+        run.execute_step(conn, kill_plan(max_swings=5))
+        rec = [x for x in run.steps if x.get("kind") == "kill"][-1]
+        assert rec.get("result") == "dead", rec
+        assert rec.get("swings") == 1, rec
+        assert injected["n"] == 1, injected
+        assert rec.get("retries") == 0, rec
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 j：track 模式的 interval_ms 下限（有效间隔 = 2×interval ≥ HitIntervalTime 850）
+    err = None
+    try:
+        plan_step({"kill": {"track": "nearest:鸡", "self_pos": self_xy,
+                            "interval_ms": 350}}, 0, {})
+    except ScenarioError as ex:
+        err = str(ex)
+    assert err is not None and "interval_ms ≥ 450" in err, err
+    ok_plan = plan_step({"kill": {"track": "nearest:鸡", "self_pos": self_xy,
+                                  "interval_ms": 450}}, 0, {})
+    assert ok_plan["interval_ms"] == 450, ok_plan
+    old_mode = plan_step({"kill": {"target_xy": self_xy | (1 << 16), "self_pos": self_xy,
+                                   "interval_ms": 350}}, 0, {})
+    assert old_mode["interval_ms"] == 350, old_mode   # 旧固定格模式不受影响
+
+    return ("schema 4 反 + 牙 a(打新格)/b(消失不空打 + [已死] 标注)/c(同名选最近)/d(复核用尽带坐标)；"
+            "e(等距按 actor 决胜)/f(只发死亡帧不空打)/g(max_retries 差一语义)/"
+            "h(距离优先于 actor)/i(成功路径 result=dead 不重算)/j(track interval 下限)")
 
 
 def run_selftest():

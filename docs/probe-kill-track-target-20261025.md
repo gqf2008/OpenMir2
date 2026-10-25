@@ -57,6 +57,12 @@ dev-1 第三轮的帧证据（`comment 9a53f980`）：两只鸡在 `seq20 @(331,
 tester 的 run5 成功 / run6 `no target` 是同一竞态。寻靶模式在这两段录制上会先重算到 `(328,331)` 再出手，
 但它**不消除**残余窗口，也不能保证「一次就中」。
 
+**出手间隔口径（钉死）**：track 模式每轮 = 选靶 → `CM_TURN` → `pump(interval_ms)` → 复核 → `CM_HIT` →
+`pump(interval_ms)` ⇒ 相邻两次 `CM_HIT` 的实际间隔 ≈ **2×interval_ms**。必须 ≥ 部署 `HitIntervalTime=850`
+（`src/M2Server/Player/PlayObject.Attack.cs:850`），否则一部分挥击会被「攻击忙」节流吃掉。
+⇒ **track 的 `interval_ms` 下限 = 450**（加载期校验，报错串直接给出 2× 关系与 850）；默认 1000 ⇒ 实际 2000ms，安全。
+旧的固定格模式不受影响（每轮只 `pump(interval)` 一次，下限仍是 350）。
+
 `max_retries` 的语义（钉死）：**N = 允许的重算次数**；第 N+1 次复核仍不一致才报错。所以 `max_retries=3`
 意味着一轮里最多重算 3 次、第 4 次失败才 `StepFailure`（报错串会同时写出「允许 N 次重算，第 N+1 次仍不一致」）。
 
@@ -101,6 +107,11 @@ python -I -B tools/probe/mir2_probe.py --selftest
 - **牙 e**：两只**等距**同名（帧序 702 在前）⇒ 稳定按 actor id 选 701（`tag=2`）；
 - **牙 f**：目标只发 `SM_NOWDEATH(34)`、不发 `SM_DISAPPEAR` ⇒ 不得再被选中、一帧不发；
 - **牙 g**：`max_retries=1` 且目标只走开一次后稳定 ⇒ 应继续出手（`alive`），不得报「复核用尽」（`>`↔`>=` 分界）；
+- **牙 h（T7）**：近者 actor=702、远者 actor=701 ⇒ 必须选**近的 702**（`tag=2`）——「距离优先于 actor」；
+- **牙 i（T8）**：hook `Conn.send`，在 `CM_HIT` 后注入 `SM_NOWDEATH(34)` ⇒ 必须返回 `result=dead`、`swings=1`、
+  **不再重算**（成功路径的牙；此前把 `death` 集合清空 selftest 仍全绿）；
+- **牙 j**：track 模式的 `interval_ms` 下限（350 ⇒ 加载期拒；450 ⇒ 通过；旧模式 350 不受影响）；
+- **牙 f 扩展**：target-gone 的可见集对「已死未消失」的对象加 `[已死]` 标注；
 - **牙 d**：复核永远失败（stub 每次换格）⇒ 用尽 `max_retries`，错误串带最后已知 `(330,331)` + `seq=`，
   且**一次 `CM_HIT` 都没发**。
 
@@ -115,6 +126,10 @@ python -I -B tools/probe/mir2_probe.py --selftest
 | 去掉 actor 决胜键（等距平手） | 牙 e：等距两只的选中对象随帧序漂移 |
 | 已死目标仍可选（只看 `disappeared`） | 牙 f：对只发死亡帧的目标出手 |
 | `retries > max_retries` 改成 `>=`（差一） | 牙 g：允许的一次重算被误报成「复核用尽」 |
+| `death = set(plan["wait_idents"])` 清空（T8） | 牙 i：成功路径不再认死亡帧（`result` 变 `alive`） |
+| 排序键 `(dist, actor)` 改成 `(actor, dist)`（T7） | 牙 h：选了远的那只 |
+| 去掉 track 的 `interval_ms ≥ 450` 加载期校验 | 牙 j：350 被放行 |
+| 去掉 `[已死]` 标注 | 牙 f：错误串看不出目标是死的 |
 
 ## 7. 残留物清单
 
