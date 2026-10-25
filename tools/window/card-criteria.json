@@ -19,7 +19,8 @@
         "fields": [
           {"path": "param", "expect": 0, "cmp": "eq"}
         ]
-      }
+      },
+      "narrowed": "买价 88 / 税 4 与 620s 后 SabukW 字段属 W-TAX-2（文件面，另条机器不可判）；本条只判 650 帧的 recog/param"
     },
     {
       "card": "openmir2-castle-merchant-tax-wiring",
@@ -68,8 +69,10 @@
       "source": "docs/window-closure-ledger-20261025.md §1 第 3 行（SM_GAMEGOLDNAME(5008) 必须出现）",
       "assert": {
         "ident": "SM_GAMEGOLDNAME",
-        "min_count": 1
-      }
+        "min_count": 1,
+        "match": "any"
+      },
+      "narrowed": "source 还有 5008 的 Param/Tag 逐字节与 characters.GamePoint 落库（另条 machine=false 登记）；本条只判出现，且条件门 SoftVersionDateEx!=0 未满足时只会 UNDECIDABLE/FAIL 不会假 PASS"
     },
     {
       "card": "openmir2-script-playdice-openybdeal",
@@ -91,11 +94,9 @@
       "card": "openmir2-clearmapmon-impl",
       "w_item": "W-CM-2",
       "scenario": "clearmapmon_q001",
-      "source": "docs/window-closure-ledger-20261025.md §1 第 4 行（Q001 骷髅精灵5、(10,10)、TimeRecall 5 回收 ⇒ SM_DISAPPEAR(30)）",
-      "assert": {
-        "ident": "SM_DISAPPEAR",
-        "min_count": 1
-      }
+      "source": "docs/window-closure-ledger-20261025.md §1 第 4 行；**已合并文档订正**：docs/window-exec-sheet-20261025.md:31（master）与 docs/window-scenes-clearmapmon-20261025.md:110-111（master）",
+      "machine": false,
+      "reason": "**判据与已合并文档相反，故不机判**：Q001 在冻结内容里没有 MonGen 行（清场时地图为空），`docs/window-scenes-clearmapmon-20261025.md:111` 明确「不会有 SM_DISAPPEAR(30)」，`docs/window-exec-sheet-20261025.md:31` 亦把 #19 收窄为「只验刷怪」⇒ 不期望 30 帧。#19 只验 MONGENEX 刷怪帧（序号/坐标交给证据层差集），30 帧属 t118 清场腿而 t118 永久不可达（exec-sheet:47）。登记为人工项，避免「哪天出现一条无关 30 帧」被判假 PASS。"
     },
     {
       "card": "openmir2-clearmapmon-impl",
@@ -130,10 +131,12 @@
         "ident": "SM_GOLDCHANGED",
         "recog": 100,
         "min_count": 1,
+        "max_count": 1,
         "fields": [
           {"path": "param", "expect": 0, "cmp": "eq"}
         ]
-      }
+      },
+      "narrowed": "source 的「653 一条、Recog 同源」由 min_count=max_count=1 + recog 过滤覆盖；金币净差/地面物件/RNG 流位另条 machine=false 登记"
     },
     {
       "card": "openmir2-inbound-dispatch-red-batch",
@@ -175,7 +178,8 @@
       "assert": {
         "ident": "SM_MERCHANTSAY",
         "order": ["SM_MERCHANTSAY", "SM_MENU_OK", "SM_WINEXP", "SM_SENDGOODSLIST", "SM_GAMEGOLDNAME"]
-      }
+      },
+      "narrowed": "帧序用各 ident 的**首个** seq 判（docs/script-handler-msgqueue-20261025.md:73 的 643→767→44→645→5008）；同优先级重排细节与负载文本未覆盖"
     },
     {
       "card": "openmir2-script-handler-msgqueue",
@@ -187,27 +191,30 @@
     },
     {
       "card": "openmir2-login-charstatus-657",
-      "w_item": "A-class",
+      "w_item": "plan-§2:657×2",
       "scenario": "login_only",
       "source": "docs/rcard-evidence-plan-20261025.md §2（657×2 与邻居相对序）",
       "assert": {
         "ident": "SM_CHARSTATUSCHANGED",
-        "min_count": 2
-      }
+        "min_count": 2,
+        "max_count": 2
+      },
+      "narrowed": "source 是「657×2 与**邻居相对序**」：本条只覆盖次数（且钉住恰 2 条），邻居相对序未机判（缺钉住的邻居 ident 列表）"
     },
     {
       "card": "openmir2-login-frame-order-52-752",
-      "w_item": "A-class",
+      "w_item": "plan-§2:52→621→211",
       "scenario": "login_only",
       "source": "docs/rcard-evidence-plan-20261025.md §2（52 布局(54,78)/621/211 相对序）",
       "assert": {
         "ident": "SM_ABILITY",
         "order": ["SM_ABILITY", "SM_SENDUSEITEMS", "SM_SENDMYMAGIC"]
-      }
+      },
+      "narrowed": "source 还含「52 布局(54,78)」的字段面；本条只覆盖 52/621/211 三个 ident 的首帧相对序，字段布局未机判"
     },
     {
       "card": "openmir2-guild-g2-dispatch",
-      "w_item": "A-class",
+      "w_item": "plan-§2:46→750→654",
       "scenario": "login_only",
       "source": "docs/rcard-evidence-plan-20261025.md §2（750 出队序：46 之后、654 之前）",
       "assert": {
@@ -217,17 +224,18 @@
     },
     {
       "card": "openmir2-login-529-status-text",
-      "w_item": "A-class",
+      "w_item": "plan-§2:529",
       "scenario": "login_only",
       "source": "docs/rcard-evidence-plan-20261025.md §2（必跑 ident 529；同 gamesvr-serverinfo-report 的 529 逐字节）",
       "assert": {
         "ident": "SM_PASSOK_SELECTSERVER",
         "min_count": 1
-      }
+      },
+      "narrowed": "source 要求「ident 529 逐字节（body_hex 对照）」；plan 未给钉住字节值 ⇒ 本条只覆盖出现，字节面待钉值后补"
     },
     {
       "card": "openmir2-ya52-menu-ok-missing",
-      "w_item": "A-class",
+      "w_item": "plan-§2:767(ya52)",
       "scenario": "dice_chain_auto",
       "source": "docs/rcard-evidence-plan-20261025.md §2（末步断言 SM_MENU_OK(767)）",
       "assert": {
@@ -237,7 +245,7 @@
     },
     {
       "card": "openmir2-menu-ok-unify-pickwire",
-      "w_item": "A-class",
+      "w_item": "plan-§2:767(pickwire)",
       "scenario": "dice_chain_auto",
       "source": "docs/rcard-evidence-plan-20261025.md §2（767 分支；回稿后同场景复跑）",
       "assert": {
@@ -247,7 +255,7 @@
     },
     {
       "card": "openmir2-npc-ctor-constants",
-      "w_item": "A-class",
+      "w_item": "plan-§2:SM_TURN series",
       "scenario": "login_only",
       "source": "docs/rcard-evidence-plan-20261025.md §2（SM_TURN series 低=4 高=2、Merchant 格 30s 续期）",
       "machine": false,

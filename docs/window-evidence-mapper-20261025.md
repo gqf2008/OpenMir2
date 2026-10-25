@@ -20,7 +20,9 @@
       "assert": {
         "ident": "SM_GOLDCHANGED",     // 消息名（由 mir2-rs/crates/protocol/src/messages.rs 解析）或数字
         "recog": 9912,                 // 可选：帧的 recog 必须等于此值
-        "min_count": 2,                // 可选：该 ident 至少出现几次
+        "min_count": 2,                // 可选：该 ident 至少出现几次（不足 ⇒ UNDECIDABLE）
+        "max_count": 2,                // 可选：至多几次（超出 ⇒ FAIL，用来表达「恰一条」）
+        "match": "last",               // 可选：last（默认，只判最后一帧）/ any / all
         "order": ["SM_A", "SM_B"],     // 可选：这些 ident 的**首个** seq 必须严格递增（同一证据文件内）
         "fields": [                    // 可空；空 = 只断言 ident 存在/次数/序
           {"path": "param", "expect": 0, "cmp": "eq"},
@@ -33,6 +35,7 @@
       "w_item": "W-…",
       "scenario": "…",
       "source": "docs/…§…",
+      "narrowed": "相对 source 收窄了什么",   // 可选；machine=true 但只覆盖 source 的一部分时必须写
       "machine": false,                // 本轮不可机判：必须带 reason（否则表不合法，rc=2）
       "reason": "缺什么 / 为什么"       // 运行器输出 UNDECIDABLE + 该原因，**不许静默跳过**
     }
@@ -42,13 +45,17 @@
 
 - `cmp ∈ {eq, ne, ge, le, contains, regex}`；`mask ∈ {datetime, digits, none}`。
   `datetime` 把 `YYYY-MM-DD[ HH:MM:SS]` 抹成 `<DATETIME>` 再比（`$DATETIME` 类字段必须用它）；`digits` 抹掉所有数字串。
-- 字段比较取**该 ident 最后一帧**；`recog` 过滤发生在字段比较之前。
+- 计数：先按 ident（+ `only_when`）取帧，再按 `recog`（若声明）过滤；`min_count` 不足 ⇒ **UNDECIDABLE**，
+  `max_count` 超出 ⇒ **FAIL**（多出来的帧是回归，不是缺数据）；`recog` 不命中仍按原语义判 **FAIL**。
+- 字段比较默认取**最后一帧**（`match: last`）；`match: any` = 任一帧满足即 PASS；`match: all` = 每帧都必须满足。
+  「最后一帧」是**钉死的默认**，不再由调用者脑补。
+- `narrowed`：machine=true 但只覆盖 source 的一部分时**必须**写明收窄了什么（审查据此判断判据是否够）。
 - 表不合法（缺字段、未知 `cmp`/`mask`、`machine:false` 无 `reason`）⇒ 运行器 **rc=2**（fail-closed，不会退化成「全 UNDECIDABLE」）。
 
 ## 2. 运行器用法与退出码
 
 ```sh
-python -I -B tools/window/card_evidence.py --run-dir <证据根> [--scenario <名>] \
+python -I -B tools/window/card_evidence.py --run-dir <证据根> [--scenario <名>] [--allow-unverified] \
     [--criteria tools/window/card-criteria.json] [--json out.json]
 python -I -B tools/window/card_evidence.py --selftest
 ```
@@ -64,16 +71,17 @@ python -I -B tools/window/card_evidence.py --selftest
 
 **场景归属（防「拿 A 场景的证据判 B 场景的卡」）**：
 - 优先读证据根的 `run.json` 的 `scenario.name`（探针产物自带，**不从目录名猜**）；没有则需 `--scenario`；
-- 两者皆无 ⇒ 打印警告，结果标 `provenance: unverified`，**不得当窗口证据**；
+- 两者皆无 ⇒ **全部 UNDECIDABLE**（fail-closed）；确需放行必须显式加 `--allow-unverified`，
+  此时结果标 `provenance: unverified`，**不得当窗口证据**；
 - 判据的 `scenario` 与证据根不一致 ⇒ 该条 **UNDECIDABLE「场景不符」**（不是 PASS，也不是 FAIL）。
 
 ## 3. 三态语义（钉死）
 
 | verdict | 触发条件 |
 |---|---|
-| PASS | 场景相符；`order` 成立；该 ident 达到 `min_count`；`recog`（若声明）命中；**所有**字段存在且比较成立 |
-| FAIL | 场景相符、数据齐，但 `order` 不成立 / `recog` 不命中 / 任一字段比较不成立 |
-| UNDECIDABLE | `machine:false`（人工判据）；场景不符；ident 不在证据根；次数不足 `min_count`；字段缺失、`null`、空串；无法比较（如对非数字做 `ge`）；`order` 里任一 ident 缺 |
+| PASS | 场景相符；`order` 成立；`min_count ≤ 次数 ≤ max_count`；`recog`（若声明）命中；按 `match` 语义，字段存在且比较成立 |
+| FAIL | 场景相符、数据齐，但 `order` 不成立 / `recog` 不命中 / **次数超过 `max_count`** / 任一（按 `match`）字段比较不成立 |
+| UNDECIDABLE | `machine:false`（人工判据）；场景不符；**证据根场景未声明且未放行**；ident 不在证据根；次数不足 `min_count`；字段缺失、`null`、空串；无法比较（如对非数字做 `ge`）；`order` 里任一 ident 缺 |
 
 **注意 `0` 不是空值**：字段值 `0` 是有效数据，照常比较（selftest 有对照牙）。
 唯一无法用本运行器表达的是「null 与 0 的语义区分」——帧里缺该键才记缺失。
@@ -100,10 +108,10 @@ python -I -B tools/window/card_evidence.py --selftest
 | 2 | `openmir2-loader-fields` | W-LF-1 / W-LF-2 | 人工 | 需 `newchr` 步（probe 无）+ 出生点 11 键钉值；W-LF-2 消费点未接线 |
 | 3 | `openmir2-script-playdice-openybdeal` | W-PD-1 | **机判**：`SM_GAMEGOLDNAME` 出现（scenario `gamepoint_exchange`）+ 人工 1 条（DB 后态 / 5008 字节未钉值） | 5008 的 `Param/Tag` 台账只写「逐字节」未给值 ⇒ 先钉值 |
 | 3 | 同上 | W-PD-2 | 人工 | 部署无 `@back`（非目标）；`@back2` 属部署内容差异 |
-| 4 | `openmir2-clearmapmon-impl` | W-CM-2 | **机判**：`SM_DISAPPEAR` 出现（scenario `clearmapmon_q001`）+ 人工 1 条（实体/AOI 差集、坐标） | 坐标/实体面需按 oracle 口径解码帧尾（本轮无解码器） |
+| 4 | `openmir2-clearmapmon-impl` | W-CM-2 | **人工（2 条）**：① Q001 判 30 帧与已合并文档**相反**，按 `exec-sheet:31` / `scenes doc:110-111`（master）改判人工；② 实体/AOI 差集与坐标 | 30 帧属 t118 清场腿（该场景永久不可达）；坐标/实体面需按 oracle 口径解码帧尾 |
 | 4 | 同上 | W-CM-1 | 人工 | 场景 blocked（`t118` 的 `movr M3` 不可注入）⇒ 无证据可采 |
 | 5 | `openmir2-m3-castle-siege-state` | W-T127-1 | 人工 | `castle_zone` fixture 未建；相对序需与文本/收件人绑定且未钉字面值 |
-| 6 | `openmir2-inbound-dispatch-red-batch` | W-DG-1 | **机判**：`SM_GOLDCHANGED.recog=100` 且 `param=0`（scenario `dropgold_zero_draw`）+ 人工 1 条（金币净差/地面物件/RNG 账本） | 金币差与地面物件在 DB/地图侧；RNG 流位需 `MIR2_RNG_LOG` |
+| 6 | `openmir2-inbound-dispatch-red-batch` | W-DG-1 | **机判**：`SM_GOLDCHANGED.recog=100`、`param=0` 且**恰一条**（`min_count=max_count=1`，scenario `dropgold_zero_draw`）+ 人工 1 条（金币净差/地面物件/RNG 账本） | 金币差与地面物件在 DB/地图侧；RNG 流位需 `MIR2_RNG_LOG` |
 | 6 | 同上 | W-DG-2 | 人工 | 场景 blocked（唯一缺口 = 场景内击杀步） |
 | 7 | `openmir2-castle-official-design` | W-CO-1 | 人工 | `@main` 说词字面未钉住（只给 mask 规则）+ castle fixture 未建 |
 | 8 | `openmir2-castle-official-actions` | W-CO-6 | 人工 | 需 owner 批准测试专用城主注入 + 可注入时钟（60s 严格 `>`） |
@@ -189,7 +197,7 @@ PASS         openmir2-login-charstatus-657 A-class   ident=657 ×2 断言全部�
 PASS         openmir2-login-529-status-text A-class   ident=529 ×1 断言全部成立
 ```
 
-判据共 27 条：PASS 数 2、UNDECIDABLE 25、FAIL 数为 0（快照 @ `176501d11`；证据根 `E:/tmp/window/run2/cs-probe`，29 帧）。
+判据共 27 条：PASS 数 2、UNDECIDABLE 25、FAIL 数为 0（快照 @ 2026-10-25；证据根 `E:/tmp/window/run2/cs-probe`，29 帧）。
 
 **判读（不许往大里说）**：
 
@@ -198,43 +206,39 @@ PASS         openmir2-login-529-status-text A-class   ident=529 ×1 断言全部
   这两条是**结构存在性**判据，**不是** 657 邻居相对序 / 529 逐字节文本的窗口收口结论。
 - 其余 25 条全是 UNDECIDABLE，且原因可核：场景不符（`castle_*`/`dice_chain_auto`/`getbackupgnow`/`dropgold_zero_draw`）、
   人工判据（台账未给钉值/需 DB·文件·时钟）、`order` ident 未齐（52 有、621/211 无）、ident 未出现。
-- **一条失败都没有**是诚实结果（快照 @ `176501d11`），不是「都过了」：本根根本不含 650/653/30/767 等帧，任何把它们判成 PASS 的实现都是错的。
+- **一条失败都没有**是诚实结果（快照 @ 2026-10-25），不是「都过了」：本根根本不含 650/653/30/767 等帧，任何把它们判成 PASS 的实现都是错的。
 
 | 文件 | sha256 |
 |---|---|
 | `E:/tmp/window/run2/cs-probe/frames.ndjson`（29 帧，证据） | `1a5fd75f6e6eafbd494d0cb6f26c6df4851733626262c3821922fb3cec134d0f` |
 | `E:/tmp/window/run2/cs-probe/run.json`（场景归属来源） | `6b17f39bf25ec753615b96779b3b6d4e810c7351283abda863249d98b0abe091` |
-| `tools/window/card-criteria.json`（判据表） | `044ac164c365c9ec2b76f6d5e73deae4ac221327b27bc377c2557c89e2e79585` |
-| `tools/window/card_evidence.py`（运行器） | `9970e9d9bf59e8e83011d7155f18487fb7a18c82225f8012622aa7e2e2ad0d94` |
-| `E:/tmp/card-evidence-run2-cs.json`（逐条结果） | `0943892c2189873e6fe93798a62ff26cfe45884f565698a3130d388378b0a8f3` |
-| `E:/tmp/card-evidence-run2-cs.txt`（stdout 全文） | `22be4e0c569b336ce2663829bd415d142af80d87b8dcf4becd93d3e5c22621a6` |
+| `tools/window/card-criteria.json`（判据表） | `45dc30b3412ace727160bab804177816f0a5b43c93644ac950f15d4bdff0bee2` |
+| `tools/window/card_evidence.py`（运行器） | `991a366e0227a90620ba5501c091c00c76a646f9574b1bc5030d43c1017f11c3` |
+| `E:/tmp/card-evidence-run2-cs.json`（逐条结果） | `7c1d0637c1a5645bece4b054dd5d15812b026b9dbb7c7a65b473ff2831484b59` |
+| `E:/tmp/card-evidence-run2-cs.txt`（stdout 全文） | `bb3bbf672408da3555d0a518ee9f01a765e69342e717431febf6a9ce2bda212e` |
 
-另一根 `E:/tmp/scriptcov/t118/autoA-main`（`run.json` 场景 = `t118auto`）同命令跑过：判据 27 条，PASS 数为 0、UNDECIDABLE 27 条、失败 0 条（快照 @ `176501d11`），
+另一根 `E:/tmp/scriptcov/t118/autoA-main`（`run.json` 场景 = `t118auto`）同命令跑过：判据 27 条，PASS 数为 0、UNDECIDABLE 27 条、失败 0 条（快照 @ 2026-10-25），
 rc=0——因为判据表里没有 `t118auto` 场景的行，全部「场景不符」。这正是场景归属校验该有的行为（不张冠李戴）。
 
-## 8. 牙：4 条变异「绿 → 红 → 还原绿」
+## 8. 牙：9 条变异「绿 → 红 → 还原绿」
 
-`--selftest` 自带 14 项断言（含 4 条牙）。为证明牙**真的会咬人**，把实现逐条打坏再跑（每次跑完从 HEAD 还原）：
+`--selftest` 共 **23 项**断言（A–J 十组牙 + schema 负例）。为证明牙真的会咬人，把实现逐条打坏再跑
+（每次跑完从 HEAD 还原，并确认再次 `GREEN 23/23`）：
 
-```sh
-python -I -B tools/window/card_evidence.py --selftest                     # rc=0  GREEN 14/14
-# T1 cmp 恒真 → 牙a 红；T2 缺 ident 判 PASS → 牙b 红；T3 空值不再 UNDECIDABLE → 牙c 红；T4 掩码失效 → 牙d2 红
-```
+| 变异 | 咬哪颗牙（红行） |
+|---|---|
+| M1 `cmp=='eq'` 恒真 | `牙a：期望值改错 ⇒ FAIL` |
+| M2 缺 ident 判 PASS | `牙b：ident 不在帧里 ⇒ UNDECIDABLE` |
+| M3 空串不再 UNDECIDABLE | `牙c：字段为空串 ⇒ UNDECIDABLE` |
+| M4 掩码失效 | `牙d2：同一条加 datetime mask ⇒ PASS（掩码生效）` |
+| M5 关掉场景归属 | `牙h：证据根场景 A ≠ 判据场景 B ⇒ UNDECIDABLE` |
+| M6 关掉 `min_count` | `牙g：次数 < min_count ⇒ UNDECIDABLE` |
+| M7 关掉 `max_count` | `牙f：帧数超 max_count ⇒ FAIL（恰一条）` |
+| M8 关掉「未验归属」闸门 | `牙j：缺 run.json + 无 --scenario ⇒ 全 UNDECIDABLE` |
+| M9 `match=any` 退化 | `牙i-对照：match=any 有帧满足 ⇒ PASS` |
 
-实测输出：
-
-```text
-T1 期望值比较恒真 | rc=1 | 红牙行=['FAIL 牙a：期望值改错 ⇒ FAIL']
-   还原后 | rc=0 | GREEN: card_evidence selftest 14/14
-T2 缺 ident 当 PASS | rc=1 | 红牙行=['FAIL 牙b：ident 不在帧里 ⇒ UNDECIDABLE']
-   还原后 | rc=0 | GREEN: card_evidence selftest 14/14
-T3 空值不再 UNDECIDABLE | rc=1 | 红牙行=['FAIL 牙c：字段为空串 ⇒ UNDECIDABLE']
-   还原后 | rc=0 | GREEN: card_evidence selftest 14/14
-T4 掩码失效 | rc=1 | 红牙行=['FAIL 牙d2：同一条加 datetime mask ⇒ PASS（掩码生效）']
-   还原后 | rc=0 | GREEN: card_evidence selftest 14/14
-```
-
-变异结束后 `git status` 干净（每次从 HEAD 还原后比对一致）；变异脚本为一次性工具，未入库。
+实现里没有「看起来对但无人守」的核心谓词：三态判定、场景归属、计数上下界、`match` 语义、掩码、
+未验证据闸门都有对应的红行。变异脚本为一次性工具，未入库。
 
 ## 9. 仍不可机判的卡与「缺什么」（下一步输入）
 
@@ -247,8 +251,31 @@ T4 掩码失效 | rc=1 | 红牙行=['FAIL 牙d2：同一条加 datetime mask ⇒
 | 分组语义缺失 | W-MQ-2（同标签 3 帧出队序） | runner 增加 `tag`+负载分组断言 |
 | word 选择器缺失 | `npc-ctor-constants`（series 低=4 高=2） | runner 增加 `field:word:low|high` 断言 |
 | 非帧证据 | A 类「pair 夹具」8 张、DB 后态 5 张 | 走 `run_*.ps1` 输出 / DB 快照比对，本工具不覆盖（见 §4 分工） |
+| 30 帧判据 | W-CM-2 的 Q001 腿 | **已改人工项**（与已合并文档相反，见 §10 F1），不是缺口而是口径订正 |
 
-## 10. 残留物清单
+## 10. 复审修复记录（reviewer-21 `b663dae5` request_changes + reviewer-20 `3da0792a` info）
+
+按「判据对不对 > 工具跑得干净」重审了一遍**每条 machine=true 的判据**，逐条对已合并文档原文（master，不是台账摘要）：
+
+| 项 | 处置 | 落点 |
+|---|---|---|
+| **F1**（判据错） | W-CM-2 的 `clearmapmon_q001` **不再判 `SM_DISAPPEAR(30)`**：`docs/window-exec-sheet-20261025.md:31` 已把 #19 收窄为「只验刷怪」，`docs/window-scenes-clearmapmon-20261025.md:110-111` 明写「不会有 `SM_DISAPPEAR(30)`」；30 帧属 t118 清场腿（`exec-sheet:47` 已定性永久不可达）⇒ 改 `machine:false + reason`，报告 §5 第 4 行同步 | `card-criteria.json`、本文 §5 |
+| **F2**（表达力） | schema 加 `max_count`（超出 ⇒ FAIL）；W-DG-1 改 `min_count=1, max_count=1`（台账「653 **一条**」，`exec-sheet:32` 逐字） | `card_evidence.py`、判据表、牙 f + M7 |
+| **F3**（缺牙） | 场景归属补牙：`run.json=A`、判据=`B` ⇒ UNDECIDABLE（牙 h）；关掉该行 ⇒ 红（M5） | 牙 h、M5 |
+| F4（minor） | 4 条比 source 弱的判据加 `narrowed` 逐条写明收窄：657（只判次数、邻居相对序未判）、529（只判出现、字节未判）、52/621/211（只判相对序、字段布局未判）、W-PD-1（只判 5008 出现，Param/Tag 与落库另条）、W-TAX-1（88/4 与文件面属 W-TAX-2）、W-MQ-1（用首帧 seq） | 判据表 `narrowed` |
+| F5（minor） | `min_count` 补牙（牙 g）+ M6 | 牙 g、M6 |
+| F6（info） | 同 ident 多帧语义钉死为 `match: last`（默认），可选 `any`/`all`；schema 与本文同步（牙 i + M9） | 牙 i、M9 |
+| F7（info） | 证据根无 `run.json` 且无 `--scenario` ⇒ **全部 UNDECIDABLE**；`--allow-unverified` 才放行并标 `provenance=unverified`（牙 j + M8） | `main`、牙 j、M8 |
+| reviewer-20 info | A 类 7 条的 `w_item` 从同一个 `A-class` 改成可区分的 `plan-§2:<卡/序>` | 判据表 |
+
+**machine=true 判据复核结论**（对 master 文档原文）：W-TAX-1（`exec-sheet:34` 的 `650.recog = Gold 9912`）✓；
+W-DG-1（`exec-sheet:32` 的「恰一条」⇒ 已加 max_count）✓；W-MQ-1（`docs/script-handler-msgqueue-20261025.md:73`
+的 643→767→44→645→5008）✓；W-PD-1（出现性判据，条件门 `SoftVersionDateEx != 0` 只会让它缺席 ⇒ 不假 PASS，已加 `narrowed`）✓；
+A 类 6 条按 §6 的选取规则，均已加 `narrowed` 说明覆盖范围。
+
+修复后 selftest **23/23 绿**，真机根复跑仍是 27 条 = PASS 2 / UNDECIDABLE 25 / 失败 0（快照 @ 2026-10-25 的基线不变）。
+
+## 11. 残留物清单
 
 - 入库：`tools/window/card_evidence.py`、`tools/window/card-criteria.json`、本文件。
 - 未入库（临时物，路径登记于此）：`E:/tmp/card-evidence-run2-cs.{txt,json}`（本次实跑输出，供审查复现）、

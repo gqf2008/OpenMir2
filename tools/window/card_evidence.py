@@ -127,6 +127,16 @@ def load_criteria(path):
             raise UsageError('%s.assert 缺 ident' % where)
         if 'order' in a and (not isinstance(a['order'], list) or len(a['order']) < 2):
             raise UsageError('%s.assert.order 必须是 ≥2 项的 ident 列表' % where)
+        if 'max_count' in a:
+            mc = a['max_count']
+            if not isinstance(mc, int) or isinstance(mc, bool) or mc < 1:
+                raise UsageError('%s.assert.max_count 必须是 ≥1 的整数' % where)
+            if mc < int(a.get('min_count', 1)):
+                raise UsageError('%s.assert.max_count 不能小于 min_count' % where)
+        if a.get('match', 'last') not in ('last', 'any', 'all'):
+            raise UsageError('%s.assert.match 只认 last/any/all' % where)
+        if 'narrowed' in c and not isinstance(c['narrowed'], str):
+            raise UsageError('%s.narrowed 必须是字符串（说明该判据相对 source 收窄了什么）' % where)
         for f in a.get('fields') or []:
             if 'path' not in f or 'expect' not in f:
                 raise UsageError('%s.assert.fields 每项要 path/expect' % where)
@@ -238,7 +248,11 @@ def check_order(order, frames, names):
 
 
 def evaluate(item, frames, names, scenario=None):
-    """返回 (verdict, detail)。scenario = 证据根声明的场景名（None = 未声明，不做场景归属校验）。"""
+    """返回 (verdict, detail)。
+
+    scenario = 证据根声明的场景名；None 表示未声明（由 main 按 --allow-unverified 决定是否放行）。
+    条目可带 `match`：`last`（默认，只判最后一帧）/ `any`（任一帧满足即 PASS）/ `all`（每帧都必须满足）。
+    """
     if scenario is not None and item.get('scenario') != scenario:
         return 'UNDECIDABLE', '场景不符：证据根=%s，判据场景=%s' % (scenario, item.get('scenario'))
     if item.get('machine', True) is False:
@@ -255,32 +269,64 @@ def evaluate(item, frames, names, scenario=None):
         sel = [f for f in sel if path_matches(f['__file'], pat)]
     if not sel:
         return 'UNDECIDABLE', 'ident=%d 不在证据根里（该场景没跑到/帧未采）' % ident
-    min_count = int(a.get('min_count', 1))
-    if len(sel) < min_count:
-        return 'UNDECIDABLE', 'ident=%d 只出现 %d 次 < min_count=%d' % (ident, len(sel), min_count)
     if 'recog' in a:
         rec = [f for f in sel if f.get('recog') == a['recog']]
         if not rec:
             return 'FAIL', 'ident=%d 的 recog 均 != %r（实得 %r）' % (
                 ident, a['recog'], sorted({f.get('recog') for f in sel}))
         sel = rec
-    problems = []
-    for f in a.get('fields') or []:
-        path = f['path']
-        cmp = f.get('cmp', 'eq')
-        mask = f.get('mask', 'none')
-        got = sel[-1].get(path)
-        if got is None or (isinstance(got, str) and not got.strip()):
-            return 'UNDECIDABLE', 'ident=%d 的字段 %s 缺失/为空（帧 seq=%s）' % (
-                ident, path, sel[-1].get('seq'))
-        ok = compare(got, f['expect'], cmp, mask)
-        if ok is None:
-            return 'UNDECIDABLE', '字段 %s 无法比较（got=%r cmp=%s）' % (path, got, cmp)
-        if not ok:
-            problems.append('%s: got=%r expect=%r cmp=%s mask=%s' % (path, got, f['expect'], cmp, mask))
-    if problems:
-        return 'FAIL', '; '.join(problems)
-    return 'PASS', 'ident=%d ×%d 断言全部成立' % (ident, len(sel))
+    min_count = int(a.get('min_count', 1))
+    if len(sel) < min_count:
+        return 'UNDECIDABLE', 'ident=%d 只出现 %d 次 < min_count=%d' % (ident, len(sel), min_count)
+    if a.get('max_count') is not None and len(sel) > int(a['max_count']):
+        return 'FAIL', 'ident=%d 出现 %d 次 > max_count=%d（多出的帧是回归，不是缺数据）' % (
+            ident, len(sel), int(a['max_count']))
+    fields = a.get('fields') or []
+    match = a.get('match', 'last')
+    results = []
+    for fr in ([sel[-1]] if match == 'last' else sel):
+        problems = []
+        und = None
+        for f in fields:
+            path = f['path']
+            cmp = f.get('cmp', 'eq')
+            mask = f.get('mask', 'none')
+            got = fr.get(path)
+            if got is None or (isinstance(got, str) and not got.strip()):
+                und = 'ident=%d 的字段 %s 缺失/为空（帧 seq=%s）' % (ident, path, fr.get('seq'))
+                break
+            ok = compare(got, f['expect'], cmp, mask)
+            if ok is None:
+                und = '字段 %s 无法比较（got=%r cmp=%s）' % (path, got, cmp)
+                break
+            if not ok:
+                problems.append('%s: got=%r expect=%r cmp=%s mask=%s'
+                                % (path, got, f['expect'], cmp, mask))
+        results.append((fr, problems, und))
+    if match == 'last':
+        _fr, problems, und = results[0]
+        if und:
+            return 'UNDECIDABLE', und
+        if problems:
+            return 'FAIL', '; '.join(problems)
+        return 'PASS', 'ident=%d ×%d 断言全部成立（match=last）' % (ident, len(sel))
+    if match == 'any':
+        for fr, problems, und in results:
+            if und is None and not problems:
+                return 'PASS', 'ident=%d ×%d 有帧满足（match=any，seq=%s）' % (
+                    ident, len(sel), fr.get('seq'))
+        if all(und is not None for _fr, _problems, und in results):
+            return 'UNDECIDABLE', results[-1][2]
+        bad = [r for r in results if r[1]][-1]
+        return 'FAIL', 'ident=%d ×%d 无帧满足（match=any）；最后一帧不满足：%s' % (
+            ident, len(sel), '; '.join(bad[1]))
+    for fr, problems, und in results:
+        if und:
+            return 'UNDECIDABLE', und
+        if problems:
+            return 'FAIL', 'ident=%d 帧 seq=%s 不满足（match=all）：%s' % (
+                ident, fr.get('seq'), '; '.join(problems))
+    return 'PASS', 'ident=%d ×%d 每帧断言成立（match=all）' % (ident, len(sel))
 
 
 # ---------------------------------------------------------------- selftest（4 牙）
@@ -366,6 +412,57 @@ def selftest():
         v, d = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's', 'machine': False,
                          'reason': '需 DB 后态快照'}, got, {})
         chk(v == 'UNDECIDABLE' and 'DB' in d, '人工条目 ⇒ UNDECIDABLE + 原因')
+        # 牙 f：max_count 超限 ⇒ FAIL（让「恰一条」可表达）
+        two = [dict(frames[0], seq=1), dict(frames[0], seq=2)]
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's',
+                         'assert': {'ident': 653, 'min_count': 1, 'max_count': 1}}, two, {})
+        chk(v == 'FAIL', '牙f：帧数超 max_count ⇒ FAIL（恰一条）')
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's',
+                         'assert': {'ident': 653, 'min_count': 1, 'max_count': 1}}, got, {})
+        chk(v == 'PASS', '牙f-对照：恰一帧 ⇒ PASS')
+        # 牙 g：min_count 不足 ⇒ UNDECIDABLE
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's',
+                         'assert': {'ident': 653, 'min_count': 2}}, got, {})
+        chk(v == 'UNDECIDABLE', '牙g：次数 < min_count ⇒ UNDECIDABLE')
+        # 牙 h：场景归属不符 ⇒ UNDECIDABLE（防张冠李戴）
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 'B',
+                         'assert': {'ident': 653}}, got, {}, 'A')
+        chk(v == 'UNDECIDABLE', '牙h：证据根场景 A ≠ 判据场景 B ⇒ UNDECIDABLE')
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 'A',
+                         'assert': {'ident': 653}}, got, {}, 'A')
+        chk(v == 'PASS', '牙h-对照：场景相符 ⇒ PASS')
+        # 牙 i：match=last / any 的语义分歧（同 ident 多帧）
+        multi = [dict(frames[0], seq=1, param=6), dict(frames[0], seq=2, param=5)]
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 653, 'fields': [{'path': 'param', 'expect': 6}]}}, multi, {})
+        chk(v == 'FAIL', '牙i：match=last 只判最后一帧 ⇒ FAIL')
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 653, 'match': 'any',
+            'fields': [{'path': 'param', 'expect': 6}]}}, multi, {})
+        chk(v == 'PASS', '牙i-对照：match=any 有帧满足 ⇒ PASS')
+        # 牙 j：证据根无 run.json 且未给 --scenario ⇒ 全 UNDECIDABLE（F7）
+        import contextlib
+        import io as _io
+        norun = os.path.join(tmp, 'norun')
+        os.makedirs(norun)
+        with open(os.path.join(norun, 'frames.ndjson'), 'w', encoding='utf-8') as fh:
+            fh.write(json.dumps({'seq': 1, 'ident': 653, 'param': 4}) + chr(10))
+        crit2 = os.path.join(tmp, 'crit2.json')
+        with open(crit2, 'w', encoding='utf-8') as fh:
+            json.dump({'format': 'card-criteria/1', 'criteria': [
+                {'card': 'c', 'w_item': 'w', 'scenario': 's',
+                 'assert': {'ident': 653, 'fields': [{'path': 'param', 'expect': 4}]}}]}, fh)
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(['--run-dir', norun, '--criteria', crit2])
+        out = buf.getvalue()
+        chk(rc == 0 and not any(l.startswith('PASS') for l in out.splitlines()),
+            '牙j：缺 run.json + 无 --scenario ⇒ 全 UNDECIDABLE')
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = main(['--run-dir', norun, '--criteria', crit2, '--allow-unverified'])
+        chk(rc == 0 and any(l.startswith('PASS') for l in buf.getvalue().splitlines()),
+            '牙j-对照：--allow-unverified ⇒ 放行判 PASS')
         # 判据表校验 fail-closed
         bad = os.path.join(tmp, 'bad.json')
         open(bad, 'w', encoding='utf-8').write(json.dumps({'format': 'card-criteria/1', 'criteria': [
@@ -389,6 +486,9 @@ def main(argv=None):
     ap.add_argument('--run-dir', help='证据根（其下有 frames.ndjson）')
     ap.add_argument('--criteria', default=os.path.join('tools', 'window', 'card-criteria.json'))
     ap.add_argument('--scenario', help='证据根所属场景名；给了就核每条判据的 scenario，不符即 UNDECIDABLE')
+    ap.add_argument('--allow-unverified', action='store_true',
+                    help='证据根无 run.json 且未给 --scenario 时仍逐条判（provenance=unverified）；'
+                         '缺省则全部 UNDECIDABLE（fail-closed）')
     ap.add_argument('--json', help='把逐条 verdict 写成 JSON')
     ap.add_argument('--selftest', action='store_true')
     args = ap.parse_args(argv)
@@ -411,17 +511,27 @@ def main(argv=None):
     else:
         scenario = scenario_from_run_json(args.run_dir)
         provenance = ('run.json:' + scenario) if scenario else 'unverified'
+    gated = False
     if scenario is None:
-        print('注意：未声明 --scenario 且证据根无 run.json ⇒ 场景归属未校验，'
-              'PASS 只说明「该证据根里出现了这些帧」，不得当窗口证据。')
+        if args.allow_unverified:
+            print('注意：未声明 --scenario 且证据根无 run.json；--allow-unverified 已放行，'
+                  'provenance=unverified——PASS 只说明「该证据根里出现了这些帧」，不得当窗口证据。')
+        else:
+            gated = True
+            print('证据根场景未声明（缺 run.json 且无 --scenario）⇒ **全部 UNDECIDABLE**（fail-closed）；'
+                  '确需放行请显式加 --allow-unverified。')
     else:
         print('证据根场景 = %s（来源 %s）' % (scenario, provenance))
     for it in items:
-        try:
-            verdict, detail = evaluate(it, frames, names, scenario)
-        except UsageError as ex:
-            print('card_evidence: 判据 %s/%s：%s' % (it.get('card'), it.get('w_item'), ex), file=sys.stderr)
-            return 2
+        if gated:
+            verdict, detail = 'UNDECIDABLE', '证据根场景未声明（缺 run.json 且无 --scenario）'
+        else:
+            try:
+                verdict, detail = evaluate(it, frames, names, scenario)
+            except UsageError as ex:
+                print('card_evidence: 判据 %s/%s：%s'
+                      % (it.get('card'), it.get('w_item'), ex), file=sys.stderr)
+                return 2
         results.append({'card': it['card'], 'w_item': it['w_item'], 'scenario': it.get('scenario'),
                         'source': it.get('source'), 'provenance': provenance,
                         'verdict': verdict, 'detail': detail})
