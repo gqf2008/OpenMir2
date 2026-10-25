@@ -81,6 +81,27 @@ W-MQ-1 的 `643→767→44→645→5008`。这些帧是**状态同步**，断言
 - `SM_MENU_OK(767)`：全仓 **28 处**发射、多数是错误弹窗（`Operate.cs:226/231/236/256/261/685/915/924/929/1005/1053`、`Sale.cs:371/550/585`）⇒ 出现不能证成功。
 - `SM_BUTCH(637)`：`Operate.cs:749` 在函数尾、所有门之外（卡 `openmir2-butch-637-criterion-fix`）。
 
+### 3D 3A 的实测结果（2026-10-25 12:2x 执行，reviewer-20 comment `434f6c81`；逐根 `E:/tmp/rev20-npc/recompare/summary.json`）
+
+37 个配对根（31 有旧报告：30 份当前 schema + 1 份旧格式 stub；6 无旧报告），基线 master `704842738`、rules 51 条。
+
+1. **帧面零变化**：30 个根的 `frame diffs` 数**逐个未变**（含 `e23-reshot` 的 48 条）
+   ⇒ **规则改动对帧面结论零影响，3A 的「帧面重算」这部分可以跳过**。
+2. 16 个根三元组有变化，**全部源于非帧面**：
+   - **DB 时间见证**：25 个根出现 `time_witness_stale`，delta 集中在 **28762–28770s ≈ 8h**（TZ bug 指纹），另 3 个根有 24 万秒级更旧行
+     ⇒ 10 个根 PASS→FAIL 而 **frame diffs 仍为 0**。这是**工具现在把旧 DB 证据正确标红**，不是新缺陷。
+   - **反证**：**12 个根完全没有见证红**（`db-rerun/run2/*` 六条、`e23-reshot`、五个 rules-teeth 夹具）⇒ 见证门在修后证据上不误报。
+   - **`ident 14`（`SM_HIT`）的 ignore 规则仍 `approved_by: PENDING`**，本次两侧剔除数对不上（如 oracle=27 / rust=0）
+     ⇒ 9 个根新增 `pending_ignore_rule`、其中 5 个 FAIL→UNDECIDABLE（**frame diffs 一条没变**）。
+     该规则的转正**仍需 R 级窗口证据**（reviewer-2 的原裁定），本轮**不转正**；已登记进交付收口清单，代价是这 5 个根暂时停在 UNDECIDABLE。
+3. **唯一帧面变多的根**：`w1c/castle_merchant_tax_potion` —— 旧 `report.json` 是**旧格式 stub**（frames 段空、rules=null），
+   「旧 0 diffs」不是真结论。新跑 4 条：645 `param` 14 vs 0（Rust 空货架，E 类缺陷已由 castle-potion 卡修）、645 body_len 414 vs 0、
+   ident 200 vs 651（错位）、block_align（oracle 112 vs rust 33）。
+   ⇒ **不必重跑**，交付表里标「修前快照，已被 `e23-reshot` 取代」。
+
+**对 §5 重跑清单的修订**：离屏「帧面」项可**跳过**（实测零变化）；仍必须重跑栈的是 ①DB 面 ②butch 链 ③`bag_equip`/`eat_item` ④home 卡合并后的 `move_walk`/`login_only`。
+`card_evidence` 需在 `29cfa197`（criteria follow-up 落地）之后重算一次（判据 27→30 条）。
+
 ## 4. 结构性风险（未修，登记）
 
 1. **`MakeIndex` 没有在 DB 段掩掉**：`characters_bagitem.MakeIndex` 属 D-1（`mir2-rs/tests/parity/whitelist.md`：
