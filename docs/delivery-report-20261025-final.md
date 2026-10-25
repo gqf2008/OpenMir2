@@ -2,6 +2,7 @@
 
 - **快照**：`f72dbce7`（2026-10-25 14:57 +08，最终 tip）。**四条件中 ①③④ 已 PASS，仅 ② 待 owner 对 G11 的一句话。**
 - ④ 在最终 tip 用 `goal_gate --full` 复跑过：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（144s；`cargo_test_workspace` rc=0 @117.0s；`master_sync` local==remote==`f72dbce7`），产物 `E:/tmp/window/goal-full-fd08ff3a9.json`（`.meta` 记 `GOAL_RC=2 / TIME_S=144 / HEAD=f72dbce7`；rc=2 来自 ② 的 need_human，不是红门）。
+  `cargo test --workspace` 三段数：**running 3315 = passed 3252 + failed 0 + ignored 63**，**141 个 suite 全部 `ok`**。**透明记录**：门内那次（117.0s，`run_head=fd08ff3a9`）json 里只有 rc/耗时没有计数，tester 又**在 `f72dbce7` 上单独跑了一次**（100s，rc=0）取计数；两次 rc 一致、耗时相近 ⇒ 非 flaky。日志 `E:/tmp/window/cargo-test-f72dbce73.log`（sha256 `edf3a742…`）与逐行提取 `cargo-test-f72dbce73.results.txt`（141 行 `test result:`，sha256 `d18e1435…`）。
 - **口径**：条件定义与判据见 `docs/leader-goal-20261023.md` §1；本节数字全部可由
   `python -I -B tools/goal/goal_gate.py --full --script-bin <mir2-script-tool>` 复算。
 
