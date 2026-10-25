@@ -1,0 +1,257 @@
+{
+  "format": "card-criteria/1",
+  "notes": [
+    "W 编号逐字取自 docs/window-closure-ledger-20261025.md §1（台账不自造编号）；卡 id 取该表「卡 id」列。",
+    "A 类卡取 docs/rcard-evidence-plan-20261025.md §2（49 行）中「依据要点」含钉住数字/帧序的行；其余 A 类卡的处置见 docs/window-evidence-mapper-20261025.md §4。",
+    "machine=false 的条目 = 本轮不可机判，必须带 reason；运行器输出 UNDECIDABLE + 原因，绝不静默跳过、绝不默认 PASS。",
+    "expected 值只来自 oracle/台账（C# 代码或已合并 R 片结论），不得按实得帧回填。"
+  ],
+  "criteria": [
+    {
+      "card": "openmir2-castle-merchant-tax-wiring",
+      "w_item": "W-TAX-1",
+      "scenario": "castle_merchant_tax_potion",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 1 行（买价 88 = Round(80×1.1)、税 4 = Round(88×5/100)、650.recog = Gold 9912、param = LoWord(MakeIndex) = 0）",
+      "assert": {
+        "ident": "SM_BUYITEM_SUCCESS",
+        "recog": 9912,
+        "min_count": 1,
+        "fields": [
+          {"path": "param", "expect": 0, "cmp": "eq"}
+        ]
+      }
+    },
+    {
+      "card": "openmir2-castle-merchant-tax-wiring",
+      "w_item": "W-TAX-2",
+      "scenario": "castle_merchant_tax",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 1 行（CastleGetAllNpcTax=1 配置副本 + 620s 后 SabukW TotalGold/TodayIncome 各 +4 + SaveTick 10min 门）",
+      "machine": false,
+      "reason": "判据落在配置副本（Castle/List.txt 两城 0,1）与 620s 后的 SabukW.txt 字段，属文件/时钟面；C# 无 MIR2_CLOCK_* 注入 ⇒ 帧内不可判，需窗口手工 + 文件 sha256/字段比对"
+    },
+    {
+      "card": "openmir2-castle-merchant-tax-wiring",
+      "w_item": "W-TAX-3",
+      "scenario": "castle_merchant_tax",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 1 行（CastleMerchant=1 不在攻城区 ⇒ 零税；非城主仍收税）",
+      "machine": false,
+      "reason": "部署内容里没有「不在攻城区」的城堡商人（冻结内容不可加）⇒ 该前半只能构造级；后半需注入非城主身份的第二个连接"
+    },
+    {
+      "card": "openmir2-castle-merchant-tax-wiring",
+      "w_item": "W-TAX-4",
+      "scenario": "castle_merchant_tax",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 1 行（日上限/金库上限/SaveTick 10min 门）",
+      "machine": false,
+      "reason": "跨 10min 时间边界 + 日切（0 点）边界，需可注入时钟；C# 侧无 MIR2_CLOCK_* ⇒ 只能真实时间点复拍并登记降级"
+    },
+    {
+      "card": "openmir2-loader-fields",
+      "w_item": "W-LF-1",
+      "scenario": "login_only",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 2 行（出生点 11 键 map/x/y/朝向，朝向来自 humData.Dir）",
+      "machine": false,
+      "reason": "需新建角色路径：probe 无 newchr 步（CM_NEWCHR=101 只是协议常量），且 11 键无钉住字面值；login_only 是既有角色登录（winplay0），不触发出生点计算"
+    },
+    {
+      "card": "openmir2-loader-fields",
+      "w_item": "W-LF-2",
+      "scenario": "login_only",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 2 行（MakeSafePkZone/InSafeZone 消费）",
+      "machine": false,
+      "reason": "消费点尚未接线（台账写「待接线后按安全区判定行为对拍」）⇒ 现在没有可观测差异，不列窗口"
+    },
+    {
+      "card": "openmir2-script-playdice-openybdeal",
+      "w_item": "W-PD-1",
+      "scenario": "gamepoint_exchange",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 3 行（SM_GAMEGOLDNAME(5008) 必须出现）",
+      "assert": {
+        "ident": "SM_GAMEGOLDNAME",
+        "min_count": 1
+      }
+    },
+    {
+      "card": "openmir2-script-playdice-openybdeal",
+      "w_item": "W-PD-1",
+      "scenario": "gamepoint_exchange",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 3 行（characters.GamePoint 落库差 0 + 5008 Param/Tag 逐字节 + 重连读值）",
+      "machine": false,
+      "reason": "DB 九表后态与「重连后 $GAMEPOINT」不在帧里；5008 的 Param/Tag 台账未给钉住字节值（只有「逐字节」要求）⇒ 先钉值才能机判"
+    },
+    {
+      "card": "openmir2-script-playdice-openybdeal",
+      "w_item": "W-PD-2",
+      "scenario": "gamepoint_exchange",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 3 行（@back 部署 0 处 = 非目标，@back2 2 处）",
+      "machine": false,
+      "reason": "部署无 @back 标签（grep=0）⇒ 按字面为构造级/非目标；@back2 需新场景且属部署内容差异，非协议面"
+    },
+    {
+      "card": "openmir2-clearmapmon-impl",
+      "w_item": "W-CM-2",
+      "scenario": "clearmapmon_q001",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 4 行（Q001 骷髅精灵5、(10,10)、TimeRecall 5 回收 ⇒ SM_DISAPPEAR(30)）",
+      "assert": {
+        "ident": "SM_DISAPPEAR",
+        "min_count": 1
+      }
+    },
+    {
+      "card": "openmir2-clearmapmon-impl",
+      "w_item": "W-CM-2",
+      "scenario": "clearmapmon_q001",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 4 行（实体集合/AOI 差集逐字节 + 刷怪位置 ±2 格/数量 diff=0）",
+      "machine": false,
+      "reason": "实体/AOI 差集与坐标面需要两侧实体快照或 map 帧解码；帧内只有 ident 级证据，坐标需按 oracle 口径解码尾字段 ⇒ 需单独解码器，本轮不做"
+    },
+    {
+      "card": "openmir2-clearmapmon-impl",
+      "w_item": "W-CM-1",
+      "scenario": "clearmapmon_t118",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 4 行（T118 清场 + MONGENEX 刷怪；场景 blocked：不可注入 M3 movr 分支）",
+      "machine": false,
+      "reason": "场景 blocked（[@st] movr M3 3 分支随机 + 输分支扣佛牌/写名单）⇒ 无证据可采；解封需 C# 栈接 hook/seed 且两侧同 seed"
+    },
+    {
+      "card": "openmir2-m3-castle-siege-state",
+      "w_item": "W-T127-1",
+      "scenario": "castle_zone",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 5 行（开战链 SM_SYSMESSAGE/SM_DIGDOWN/SM_USERNAME 及相对序）",
+      "machine": false,
+      "reason": "castle_zone fixture 未建（台账 §2「不进 run-3 首轮」），且三帧的相对序需与文本/收件人绑定，台账未钉住字面值"
+    },
+    {
+      "card": "openmir2-inbound-dispatch-red-batch",
+      "w_item": "W-DG-1",
+      "scenario": "dropgold_zero_draw",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 6 行 + tools/probe/scenarios/dropgold_zero_draw.json（CM_DROPGOLD recog=100 ⇒ SM_GOLDCHANGED(653) 恰一条、Recog 同源）",
+      "assert": {
+        "ident": "SM_GOLDCHANGED",
+        "recog": 100,
+        "min_count": 1,
+        "fields": [
+          {"path": "param", "expect": 0, "cmp": "eq"}
+        ]
+      }
+    },
+    {
+      "card": "openmir2-inbound-dispatch-red-batch",
+      "w_item": "W-DG-1",
+      "scenario": "dropgold_zero_draw",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 6 行（金币净差 0 与地面无金币 = BUG-REPLICA 2 的回滚等价行为）",
+      "machine": false,
+      "reason": "金币净差与地面物件在 DB/地图侧（assets 快照 + 地面物品集合），帧内 653 只能证明 GoldChanged 触发；RNG 流位另需 MIR2_RNG_LOG 账本"
+    },
+    {
+      "card": "openmir2-inbound-dispatch-red-batch",
+      "w_item": "W-DG-2",
+      "scenario": "butch_two_draws",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 6 行 + tools/probe/scenarios/butch_two_draws.json（SM_SKELETON(33) → SM_BUTCH(637)、两抽值域 [5,20]/[100,300]）",
+      "machine": false,
+      "reason": "场景仍 blocked：唯一缺口 = 场景内击杀步（活体夹具与 C# RNG 已落地）⇒ 无证据可采；解封前不得声称可跑"
+    },
+    {
+      "card": "openmir2-castle-official-design",
+      "w_item": "W-CO-1",
+      "scenario": "castle_official_main",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 7 行（@main 页逐字节，mask $DATETIME）",
+      "machine": false,
+      "reason": "说词字面值未钉住（台账只给 mask 规则），且需固定 NPC「沙巴克城堡管理」夹具（castle fixture 未建）⇒ 先钉字面 + 建夹具"
+    },
+    {
+      "card": "openmir2-castle-official-actions",
+      "w_item": "W-CO-6",
+      "scenario": "castle_official_actions",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 8 行（注入城主/CanJmpScriptLableMap 后复拍 open/close/repair 帧与 60s 门）",
+      "machine": false,
+      "reason": "需 owner 批准测试专用城主注入（台账 §2：不解决则只能验「不可达确认」），且 60s 严格 > 时序需可注入时钟"
+    },
+    {
+      "card": "openmir2-script-handler-msgqueue",
+      "w_item": "W-MQ-1",
+      "scenario": "getbackupgnow",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 9 行（SM_MERCHANTSAY(643) → SM_MENU_OK(767) → SM_WINEXP(44) → SM_SENDGOODSLIST(645) → SM_GAMEGOLDNAME(5008)）",
+      "assert": {
+        "ident": "SM_MERCHANTSAY",
+        "order": ["SM_MERCHANTSAY", "SM_MENU_OK", "SM_WINEXP", "SM_SENDGOODSLIST", "SM_GAMEGOLDNAME"]
+      }
+    },
+    {
+      "card": "openmir2-script-handler-msgqueue",
+      "w_item": "W-MQ-2",
+      "scenario": "getbackupgnow",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 9 行（同标签 3 条同 ident 脚本帧出队序 [0,2,1]，四叉堆序）",
+      "machine": false,
+      "reason": "需按「同一标签」定位三条同 ident 帧并比较其负载文本，runner 目前只有 ident/字段/相对序断言，没有标签+负载的分组语义"
+    },
+    {
+      "card": "openmir2-login-charstatus-657",
+      "w_item": "A-class",
+      "scenario": "login_only",
+      "source": "docs/rcard-evidence-plan-20261025.md §2（657×2 与邻居相对序）",
+      "assert": {
+        "ident": "SM_CHARSTATUSCHANGED",
+        "min_count": 2
+      }
+    },
+    {
+      "card": "openmir2-login-frame-order-52-752",
+      "w_item": "A-class",
+      "scenario": "login_only",
+      "source": "docs/rcard-evidence-plan-20261025.md §2（52 布局(54,78)/621/211 相对序）",
+      "assert": {
+        "ident": "SM_ABILITY",
+        "order": ["SM_ABILITY", "SM_SENDUSEITEMS", "SM_SENDMYMAGIC"]
+      }
+    },
+    {
+      "card": "openmir2-guild-g2-dispatch",
+      "w_item": "A-class",
+      "scenario": "login_only",
+      "source": "docs/rcard-evidence-plan-20261025.md §2（750 出队序：46 之后、654 之前）",
+      "assert": {
+        "ident": "SM_CHANGEGUILDNAME",
+        "order": ["SM_DAYCHANGING", "SM_CHANGEGUILDNAME", "SM_CHANGELIGHT"]
+      }
+    },
+    {
+      "card": "openmir2-login-529-status-text",
+      "w_item": "A-class",
+      "scenario": "login_only",
+      "source": "docs/rcard-evidence-plan-20261025.md §2（必跑 ident 529；同 gamesvr-serverinfo-report 的 529 逐字节）",
+      "assert": {
+        "ident": "SM_PASSOK_SELECTSERVER",
+        "min_count": 1
+      }
+    },
+    {
+      "card": "openmir2-ya52-menu-ok-missing",
+      "w_item": "A-class",
+      "scenario": "dice_chain_auto",
+      "source": "docs/rcard-evidence-plan-20261025.md §2（末步断言 SM_MENU_OK(767)）",
+      "assert": {
+        "ident": "SM_MENU_OK",
+        "min_count": 1
+      }
+    },
+    {
+      "card": "openmir2-menu-ok-unify-pickwire",
+      "w_item": "A-class",
+      "scenario": "dice_chain_auto",
+      "source": "docs/rcard-evidence-plan-20261025.md §2（767 分支；回稿后同场景复跑）",
+      "assert": {
+        "ident": "SM_MENU_OK",
+        "min_count": 1
+      }
+    },
+    {
+      "card": "openmir2-npc-ctor-constants",
+      "w_item": "A-class",
+      "scenario": "login_only",
+      "source": "docs/rcard-evidence-plan-20261025.md §2（SM_TURN series 低=4 高=2、Merchant 格 30s 续期）",
+      "machine": false,
+      "reason": "series 是 MakeWord(Dir,Light) 打包值，runner 目前没有 32 位 low/high word 提取断言（需先补 word 选择器，再钉 4/2）"
+    }
+  ]
+}

@@ -138,6 +138,17 @@ def load_criteria(path):
 
 
 # ---------------------------------------------------------------- 证据读取
+def scenario_from_run_json(run_dir):
+    """探针产物 `run.json` 里的 `scenario.name`（保留现场的真实场景名，避免手填错）。"""
+    p = os.path.join(run_dir, 'run.json')
+    try:
+        doc = json.load(open(p, encoding='utf-8'))
+    except (OSError, ValueError):
+        return None
+    name = (doc.get('scenario') or {}).get('name')
+    return name if isinstance(name, str) and name else None
+
+
 def load_frames(run_dir):
     files = []
     top = os.path.join(run_dir, 'frames.ndjson')
@@ -226,8 +237,10 @@ def check_order(order, frames, names):
     return 'PASS', '帧序成立（%d 个证据文件各检 1 次）' % checked
 
 
-def evaluate(item, frames, names):
-    """返回 (verdict, detail)。"""
+def evaluate(item, frames, names, scenario=None):
+    """返回 (verdict, detail)。scenario = 证据根声明的场景名（None = 未声明，不做场景归属校验）。"""
+    if scenario is not None and item.get('scenario') != scenario:
+        return 'UNDECIDABLE', '场景不符：证据根=%s，判据场景=%s' % (scenario, item.get('scenario'))
     if item.get('machine', True) is False:
         return 'UNDECIDABLE', '人工判据（不可机判）：' + item['reason']
     a = item['assert']
@@ -375,6 +388,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description='卡面判据机判器（只读）')
     ap.add_argument('--run-dir', help='证据根（其下有 frames.ndjson）')
     ap.add_argument('--criteria', default=os.path.join('tools', 'window', 'card-criteria.json'))
+    ap.add_argument('--scenario', help='证据根所属场景名；给了就核每条判据的 scenario，不符即 UNDECIDABLE')
     ap.add_argument('--json', help='把逐条 verdict 写成 JSON')
     ap.add_argument('--selftest', action='store_true')
     args = ap.parse_args(argv)
@@ -391,14 +405,26 @@ def main(argv=None):
         return 2
 
     results = []
+    scenario = args.scenario
+    if scenario:
+        provenance = 'declared:' + scenario
+    else:
+        scenario = scenario_from_run_json(args.run_dir)
+        provenance = ('run.json:' + scenario) if scenario else 'unverified'
+    if scenario is None:
+        print('注意：未声明 --scenario 且证据根无 run.json ⇒ 场景归属未校验，'
+              'PASS 只说明「该证据根里出现了这些帧」，不得当窗口证据。')
+    else:
+        print('证据根场景 = %s（来源 %s）' % (scenario, provenance))
     for it in items:
         try:
-            verdict, detail = evaluate(it, frames, names)
+            verdict, detail = evaluate(it, frames, names, scenario)
         except UsageError as ex:
             print('card_evidence: 判据 %s/%s：%s' % (it.get('card'), it.get('w_item'), ex), file=sys.stderr)
             return 2
         results.append({'card': it['card'], 'w_item': it['w_item'], 'scenario': it.get('scenario'),
-                        'source': it.get('source'), 'verdict': verdict, 'detail': detail})
+                        'source': it.get('source'), 'provenance': provenance,
+                        'verdict': verdict, 'detail': detail})
 
     for r in results:
         print('%-12s %s %-22s %s' % (r['verdict'], r['card'][:40], r['w_item'], r['detail']))
@@ -407,7 +433,8 @@ def main(argv=None):
           % (len(results), counts['PASS'], counts['FAIL'], counts['UNDECIDABLE'],
              args.run_dir, len(frames)))
     if args.json:
-        json.dump({'format': 'card-evidence/1', 'run_dir': args.run_dir, 'frames': len(frames),
+        json.dump({'format': 'card-evidence/1', 'run_dir': args.run_dir, 'scenario': scenario,
+                   'provenance': provenance, 'frames': len(frames),
                    'files': files, 'counts': counts, 'results': results},
                   open(args.json, 'w', encoding='utf-8'), ensure_ascii=False, indent=2)
         print('json => %s' % args.json)
