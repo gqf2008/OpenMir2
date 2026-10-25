@@ -2582,13 +2582,35 @@ def _selftest_inventory_reachability(tmp):
     here = os.path.dirname(os.path.abspath(__file__))
     scen_dir = os.path.join(here, "..", "probe", "scenarios")
     decl = {}
+    have_replace = {}
+    bad_decl = {}
+    prof_dir = os.path.join(here, "..", "window", "profiles")
     for name in ("bag_equip", "eat_item"):
+        # 卡 `openmir2-scenario-fixture-migration` F2：**「没有 inventory」与「inventory 声明坏」
+        # 必须分开**——前者迁移后合法（改由 profile 的 fixtures.inventory_replace），后者是真错，
+        # 混成同一个 None 会让自查牙变钝。
         try:
             decl[name] = scenario_inventory(os.path.join(scen_dir, name + ".json"))
-        except ConfigError:
+        except ConfigError as e:
             decl[name] = None
-    out.append((bool(decl.get("bag_equip")) and bool(decl.get("eat_item")),
-                "① bag_equip/eat_item 均声明 inventory 且可解析"))
+            bad_decl[name] = str(e)
+        # 卡 `openmir2-scenario-fixture-migration`：迁移后这两条改由 profile 的
+        # `fixtures.inventory_replace` 声明（旧 `inventory` 通道在 46/46 满包上 fail-closed）。
+        have_replace[name] = False
+        pf = os.path.join(prof_dir, name + ".json")
+        if os.path.isfile(pf):
+            try:
+                with open(pf, "r", encoding="utf-8-sig") as f:
+                    pdoc = json.load(f)
+                fx = pdoc.get("fixtures") or {}
+                have_replace[name] = bool(fx.get("inventory_replace"))
+            except (OSError, ValueError):
+                have_replace[name] = False
+    out.append((not bad_decl
+                and (bool(decl.get("bag_equip")) or have_replace["bag_equip"])
+                and (bool(decl.get("eat_item")) or have_replace["eat_item"]),
+                "① bag_equip/eat_item 声明了 inventory 或 profile 的 fixtures.inventory_replace；"
+                "且没有坏的 inventory 声明（%s）" % (sorted(bad_decl) or "无")))
 
     class _DryRunner:
         dry_run = True
@@ -2614,7 +2636,10 @@ def _selftest_inventory_reachability(tmp):
         try:
             for side in ("csharp", "rust"):
                 dr = _DryRunner()
-                res, failed = preview_inventory(dr, side, prof, cur, decl["bag_equip"], {})
+                synth = [{"index": 207, "make_index": 5001, "position": 40,
+                          "std_mode": 5, "ani_count": 0, "dura": 4000,
+                          "dura_max": 4000, "note": "selftest 合成声明"}]
+                res, failed = preview_inventory(dr, side, prof, cur, synth, {})
                 logs.extend(dr.lines)
                 if failed or res.get("rc") != 0:
                     ok_dry = False
@@ -2625,6 +2650,27 @@ def _selftest_inventory_reachability(tmp):
         ok_dry = False
     out.append((ok_dry and any("背包夹具（dry-run 不连库）" in l for l in logs),
                 "② dry-run 两侧打印「背包夹具（dry-run 不连库）」预览且 rc=0"))
+
+    # ④ `inventory_replace` 的 dry-run 预览（卡 `openmir2-scenario-fixture-migration`）：
+    #    此前只有 selftest 调用 `run_inventory_fixture` 的 dry-run 分支，主 CLI dry-run 一行不打。
+    logs4 = []
+    ok4 = True
+    try:
+        cur = {"db": {"characters_db": "mir2_test_db"}, "envir_root": None}
+        for side in ("csharp", "rust"):
+            dr = _DryRunner()
+            res = run_inventory_fixture(dr, side, prof, cur,
+                                        {"inventory_replace": [{"position": 40, "index": 207,
+                                                                "make_index": 5001}]},
+                                        {}, None)
+            logs4.extend(dr.lines)
+            if res.get("rc") != 0:
+                ok4 = False
+    except Exception:
+        ok4 = False
+    out.append((ok4 and any("背包替换/丢弃夹具（dry-run 不连库）" in l for l in logs4)
+                and any("replace Position=40" in l for l in logs4),
+                "④ dry-run 打印 inventory_replace 预览（replace Position=40）且 rc=0"))
 
     # ③ probe 加载放行：临时场景带 inventory + 必需 --var ⇒ rc=0
     import subprocess, sys as _sys, tempfile
@@ -6044,6 +6090,25 @@ def execute(cfg):
                                % (side, iprev.get("error")))
                     preview_failed = True
                     side_failed = True
+            if not side_failed:
+                # 卡 `openmir2-scenario-fixture-migration`：把 profile 的
+                # `fixtures.inventory_replace`/`inventory_drop` 预览接进**主 CLI dry-run**
+                # （此前只有 selftest 调用该 dry-run 分支，主 dry-run 一行不打 ⇒ 误以为场景写错）。
+                try:
+                    fdecl = profile_fixtures(prof, side) or profile_fixtures(prof)
+                except ConfigError as e:
+                    runner.log("[%s] 窗口夹具声明非法 ⇒ 真跑 rc=2：%s" % (side, e))
+                    preview_failed = True
+                    side_failed = True
+                    fdecl = None
+                if fdecl and (fdecl.get("inventory_replace") or fdecl.get("inventory_drop")):
+                    frev = run_inventory_fixture(runner, side, prof, sc, fdecl, {}, None)
+                    summary.setdefault("fixtures", {}).setdefault("sides", {})[side] = frev
+                    if frev.get("rc") != 0:
+                        runner.log("[%s] 背包替换夹具不可行 ⇒ 真跑 rc=2：%s"
+                                   % (side, frev.get("error")))
+                        preview_failed = True
+                        side_failed = True
             if not side_failed and assets:
                 aprev, afailed = preview_assets(runner, side, prof, sc, assets, ctx)
                 summary.setdefault("assets", {}).setdefault("sides", {})[side] = aprev
