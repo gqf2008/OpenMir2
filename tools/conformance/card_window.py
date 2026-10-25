@@ -9004,7 +9004,14 @@ def selftest():
     _prod_conf_sha0 = (hashlib.sha256(open(_prod_conf_real, "rb").read()).hexdigest()
                        if os.path.isfile(_prod_conf_real) else None)
     _prod_fake = os.path.join(tmp, "fake-prod-root")
-    os.makedirs(os.path.join(_prod_fake, "M2GameSvr", "Envir"), exist_ok=True)
+    _prod_fake_env = os.path.join(_prod_fake, "M2GameSvr", "Envir")
+    os.makedirs(_prod_fake_env, exist_ok=True)
+    # G2（review 404c26b8）：假根内容**自己合成**（最小合法 MapInfo/MonGen），不从真实部署
+    # 复制 —— 自测不该依赖部署存在，也不该把生产内容读进 temp。
+    with open(os.path.join(_prod_fake_env, "MapInfo.txt"), "w", encoding="gbk") as _fh:
+        _fh.write("[0 test]" + chr(10))
+    with open(os.path.join(_prod_fake_env, "MonGen.txt"), "w", encoding="gbk") as _fh:
+        _fh.write("")
     globals()["FIXTURE_PROD_ROOT"] = _prod_fake
     stub = os.path.join(tmp, "stub.py")
     with open(stub, "w", encoding="utf-8", newline="\n") as f:
@@ -9080,6 +9087,12 @@ def selftest():
         else:
             fail_n += 1
             print("FAIL %s" % msg)
+
+    # G1（review 404c26b8）：**切换生效牙**。删掉 selftest 开头那句
+    # `globals()["FIXTURE_PROD_ROOT"] = _prod_fake` ⇒ 本断言必红。
+    # 注：它**故意**放在 `chk` 定义之后而不是函数最开头——最开头处 `chk` 还没定义。
+    chk(os.path.realpath(FIXTURE_PROD_ROOT) != os.path.realpath(_prod_root_saved),
+        "FX-FAKE-SWITCH 守卫牙必须以假根为靶（切换生效）")
 
     def fresh_log():
         try:
@@ -11005,10 +11018,13 @@ def selftest():
     _fake_prod = os.path.join(fr, "fake-prod")
     _fake_env = os.path.join(_fake_prod, "M2GameSvr", "Envir")
     os.makedirs(_fake_env, exist_ok=True)
-    _real_env = os.path.join(_saved_prod, "M2GameSvr", "Envir")
-    for _n in ("MapInfo.txt", "MonGen.txt"):
-        _shutil.copyfile(os.path.join(_real_env, _n), os.path.join(_fake_env, _n))
+    with open(os.path.join(_fake_env, "MapInfo.txt"), "w", encoding="gbk") as _fh:
+        _fh.write("[0 test]" + chr(10))
+    with open(os.path.join(_fake_env, "MonGen.txt"), "w", encoding="gbk") as _fh:
+        _fh.write("")
     globals()["FIXTURE_PROD_ROOT"] = _fake_prod
+    chk(os.path.realpath(FIXTURE_PROD_ROOT) != os.path.realpath(_saved_prod),
+        "FX-FAKE-SWITCH(局部) 守卫牙必须以假根为靶（切换生效）")
     try:
         prod_res = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
                                 {"envir_root": _fake_prod + "/M2GameSvr"},
@@ -11073,7 +11089,9 @@ def selftest():
                 "FX-CONF 真实生产 Server.conf sha256 全程未变（%s）"
                 % _prod_conf_sha0[:12])
     else:
-        chk(True, "FX-MON 跳过（本机无真实生产根）")
+        # G2 之后这条**可达**（假根不再依赖真实部署）：语义是「无部署环境 ⇒ 本牙不适用」，
+        # 不是「跳过不查」——没有靶就没有可查对象，且 `_prod_mon_sha0 is None` 本身可判。
+        chk(True, "FX-MON 无部署环境（无真实生产根）⇒ 不适用（有部署时按 sha 比对）")
 
     print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
