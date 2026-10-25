@@ -71,7 +71,7 @@
 | 7 | 怪物夹具**写盘位置错**（追加到 MonGen.txt 末尾 ⇒ 窗口内刷不出） | **已解（合入 `6f35b049f`）** | 卡 `openmir2-fixture-monsters-prepend`：改为**前插**（index 0、首个闸门即取到）；真机已验证 prepend 生效（靶子刷出、5 条 `SM_STRUCK(31)`），kill→butch 三段结论复跑中 |
 | 8 | 背包满导致「装武器」类前置无法声明 | **已解** | `a60e04ad9`：`fixtures.inventory_replace` / `inventory_drop`（真机往返两侧已 PASS，before/restored sha256 逐字节相同） |
 
-**当前实况**：run3 = **24 条（blocked 3 ⇒ 入批 21）**（`run_batch --list` 实测 @ `362254623`）；操作单
+**当前实况**：run3 = **24 条（blocked 2 ⇒ 入批 22）**（`run_batch --list` 实测 @ `39d2f03ab`；blocked 计数随卡收口会变，**以开窗当天 `--list` 实况为准**）；操作单
 `docs/window-exec-sheet-20261025.md` 已按 23 条刷新（`1af9d6647`）；台账
 `docs/window-closure-ledger-20261025.md` 已二次刷新（`e3ac7c121`）。
 
@@ -79,13 +79,13 @@
 
 - [ ] `powershell -File E:/MirServer/port-status.ps1` ⇒ 5000–7200 全 DOWN、mysqld 3306 UP
 - [ ] `python -I -B tools/window/preflight_private_stack.py` ⇒ 全绿（含新的 `castle_list_symmetry`）
-- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 24（blocked 3 ⇒ 入批 21）`
+- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 24（blocked 2 ⇒ 入批 22）`（**数字不符不必慌，先看是不是 blocked 又少了一张**：今天从 3 降到 2 就是因为一张卡解封）
 - [ ] `bash tools/window/run_batch.sh --dry-run` ⇒ 自检全绿、不起栈
 - [ ] 专用测试账号 + `assets`/`inventory`/`fixtures` 声明（`card_window` 在 restore 后、起栈前应用）
 
 | 选项 | 含义 | 代价 |
 |---|---|---|
-| **A（推荐）** | 开一轮**全量**：23 条入批 21 条（含 `castle_merchant_tax_potion` 的 620s 落盘等待），独占机器 1.5–3 小时 | 需 disk + 独占；直接覆盖台账 #1/#3/#4/#6 的窗口行 |
+| **A（推荐）** | 开一轮**全量**：24 条入批 22 条（含 `castle_merchant_tax_potion` 的 620s 落盘等待），独占机器 1.5–3 小时 | 需 disk + 独占；直接覆盖台账 #1/#3/#4/#6 的窗口行 |
 | B | 最小集：`login_only + upgrade_retrieve + equip_struck_save + spell_cast + gamepoint_exchange` | 1 小时内可跑完，覆盖骨架 |
 | C | 暂不开窗 | 条件② 的 gate 口径仍 PASS，但 196 张「登记型 PASS」继续没有真机证据 |
 
