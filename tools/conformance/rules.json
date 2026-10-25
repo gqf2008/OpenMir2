@@ -124,9 +124,12 @@
     {
       "ident": 658,
       "action": "compare",
-      "reason": "SM_SENDNOTICE 系统公告：body 文本 + 头部全部按规则比（recog 走全局掩码）",
+      "reason": "SM_SENDNOTICE 系统公告：body 文本 + 头部全部按规则比（recog 走全局掩码）（本帧 recog 是 oracle `PlayObject.cs:1076` 的字面常量 **2000**，被全局掩码后 Rust 写什么都看不见 ⇒ 用 head_compare 取回逐值比较。）",
       "tier": "L",
-      "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-4)"
+      "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-4)",
+      "head_compare": [
+        "recog"
+      ]
     },
     {
       "ident": 42,
@@ -198,7 +201,7 @@
     {
       "ident": 11029,
       "action": "compare",
-      "reason": "SM_SERVERCONFIG 服务端配置文本逐字节比",
+      "reason": "SM_SERVERCONFIG 服务端配置文本逐字节比（recog 恒 0 常量：本帧不参与 recog 比较，保持全局掩码；此处只登记，不加 head_compare 以免引入噪声。）",
       "tier": "L",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-4)"
     },
@@ -233,14 +236,14 @@
     {
       "ident": 525,
       "action": "compare",
-      "reason": "SM_STARTPLAY：body = GameGate 的 ip/port 文本（首跑两侧都是 `127.0.0.1/17200`，同端口方案下应逐字节相同 ⇒ 地址/端口必须比、不做掩码）；recog/param/tag/series 全 0（C# src/DBSrv/Services/Impl/UserService.cs:719 `MakeMessage(SM_STARTPLAY, 0, 0, 0, 0)`），recog 只走全局会话掩码",
+      "reason": "SM_STARTPLAY：body = GameGate 的 ip/port 文本（首跑两侧都是 `127.0.0.1/17200`，同端口方案下应逐字节相同 ⇒ 地址/端口必须比、不做掩码）；recog/param/tag/series 全 0（C# src/DBSrv/Services/Impl/UserService.cs:719 `MakeMessage(SM_STARTPLAY, 0, 0, 0, 0)`），recog 只走全局会话掩码（recog 恒 0 常量：本帧不参与 recog 比较，保持全局掩码；此处只登记，不加 head_compare 以免引入噪声。）",
       "tier": "L",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-4)"
     },
     {
       "ident": 529,
       "action": "compare",
-      "reason": "SM_PASSOK_SELECTSERVER：body = `服务器名/服务器状态/` 文本。首跑已暴露真差异 C#「热血传奇/Idle/」vs Rust「热血传奇/0/」（docs/conformance-first-dual-run-20261023.md §2.1，另卡修 `Idle` vs `0`）；本规则让该差异继续以 body 差异被定位，**绝不用掩码盖掉**。series = 服务器列表条数（C# src/LoginSrv/Services/ClientSession.cs:271 `MakeMessage(SM_PASSOK_SELECTSERVER, 0, 0, 0, ServerNameList.Count)`）照常比；recog 走全局掩码",
+      "reason": "SM_PASSOK_SELECTSERVER：body = `服务器名/服务器状态/` 文本。首跑已暴露真差异 C#「热血传奇/Idle/」vs Rust「热血传奇/0/」（docs/conformance-first-dual-run-20261023.md §2.1，另卡修 `Idle` vs `0`）；本规则让该差异继续以 body 差异被定位，**绝不用掩码盖掉**。series = 服务器列表条数（C# src/LoginSrv/Services/ClientSession.cs:271 `MakeMessage(SM_PASSOK_SELECTSERVER, 0, 0, 0, ServerNameList.Count)`）照常比；recog 走全局掩码（recog 恒 0 常量：本帧不参与 recog 比较，保持全局掩码；此处只登记，不加 head_compare 以免引入噪声。）",
       "tier": "L",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-4)"
     },
@@ -336,14 +339,14 @@
       "ident": 635,
       "action": "compare",
       "tier": "L",
-      "reason": "SM_EAT_OK 是真实协议帧（src/OpenMir2/Messages.cs:297）。下行点 src/M2Server/Player/PlayObject.Operate.cs:690：`SendDefMessage(SM_EAT_OK, 0, 0, 0, 0)` —— 四个头部字段全 0、无 body ⇒ 逐字节比即全部判据（全局 recog 掩码对它没有副作用，因为本来两边都是 0）。不登记 ignore：本帧出现与否本身就是「吃得下」的判据。",
+      "reason": "SM_EAT_OK 是真实协议帧（src/OpenMir2/Messages.cs:297）。下行点 src/M2Server/Player/PlayObject.Operate.cs:690：`SendDefMessage(SM_EAT_OK, 0, 0, 0, 0)` —— 四个头部字段全 0、无 body ⇒ 逐字节比即全部判据（全局 recog 掩码对它没有副作用，因为本来两边都是 0）。不登记 ignore：本帧出现与否本身就是「吃得下」的判据。（recog 恒 0 常量：本帧不参与 recog 比较，保持全局掩码；此处只登记，不加 head_compare 以免引入噪声。）",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-70)"
     },
     {
       "ident": 636,
       "action": "compare",
       "tier": "L",
-      "reason": "SM_EAT_FAIL 是真实协议帧（src/OpenMir2/Messages.cs:298）。下行点 src/M2Server/Player/PlayObject.Operate.cs:698：`SendDefMessage(SM_EAT_FAIL, 0, 0, 0, 0)` —— 同 635，字段全 0、无 body，逐字节比；出现与否是「吃不下」的判据。",
+      "reason": "SM_EAT_FAIL 是真实协议帧（src/OpenMir2/Messages.cs:298）。下行点 src/M2Server/Player/PlayObject.Operate.cs:698：`SendDefMessage(SM_EAT_FAIL, 0, 0, 0, 0)` —— 同 635，字段全 0、无 body，逐字节比；出现与否是「吃不下」的判据。（recog 恒 0 常量：本帧不参与 recog 比较，保持全局掩码；此处只登记，不加 head_compare 以免引入噪声。）",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-70)"
     },
     {
@@ -418,7 +421,7 @@
       "ident": 709,
       "action": "compare",
       "tier": "L",
-      "reason": "SM_DELITEMS 是真实协议帧（src/OpenMir2/Messages.cs:357）。下行 `SendDelItemList`（src/M2Server/Player/PlayObject.Base.cs:1637-1646）：`MakeMessage(SM_DELITEMS, 0, 0, 0, itemList.Count)` + `SendSocket(ClientMsg, EDCode.EncodeString(s10))`，s10 = 逐项 `ItemName + '/' + MakeIndex + '/'`（`:1640-1643`）；触发 `RM_SENDDELITEMLIST`（`PlayObject.Message.cs:1870-1873`，如 `Merchant.UpgradeWapon` 吃黑铁/首饰）。⇒ **Recog=Param=Tag=0（常量）、Series=条目数、body=逐项「名称/MakeIndex/」文本**。**本规则不加任何掩码、逐字节比**：名称串与条数是语义判据；MakeIndex 在这里是**被删物品的身份**（来自 DB 持久值，两侧同基线一致）⇒ 照比；若运行期新建物品进入删除列表导致 MakeIndex 差异，本规则会红——这是有意的 fail-closed（不放宽、不整帧 ignore）。卡 `openmir2-conformance-rules-updateitem-durachg`（`upgrade_retrieve` 的成功硬门 709）。",
+      "reason": "SM_DELITEMS 是真实协议帧（src/OpenMir2/Messages.cs:357）。下行 `SendDelItemList`（src/M2Server/Player/PlayObject.Base.cs:1637-1646）：`MakeMessage(SM_DELITEMS, 0, 0, 0, itemList.Count)` + `SendSocket(ClientMsg, EDCode.EncodeString(s10))`，s10 = 逐项 `ItemName + '/' + MakeIndex + '/'`（`:1640-1643`）；触发 `RM_SENDDELITEMLIST`（`PlayObject.Message.cs:1870-1873`，如 `Merchant.UpgradeWapon` 吃黑铁/首饰）。⇒ **Recog=Param=Tag=0（常量）、Series=条目数、body=逐项「名称/MakeIndex/」文本**。**本规则不加任何掩码、逐字节比**：名称串与条数是语义判据；MakeIndex 在这里是**被删物品的身份**（来自 DB 持久值，两侧同基线一致）⇒ 照比；若运行期新建物品进入删除列表导致 MakeIndex 差异，本规则会红——这是有意的 fail-closed（不放宽、不整帧 ignore）。卡 `openmir2-conformance-rules-updateitem-durachg`（`upgrade_retrieve` 的成功硬门 709）。（recog 恒 0 常量：本帧不参与 recog 比较，保持全局掩码；此处只登记，不加 head_compare 以免引入噪声。）",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-66)"
     },
     {
@@ -446,7 +449,7 @@
       "ident": 211,
       "action": "compare",
       "tier": "L",
-      "reason": "SM_SENDMYMAGIC(211) 是真实协议帧（src/OpenMir2/Messages.cs:225）。下行链：登录魔法同步 PlayObject.cs:1390 `SendPriorityMsg(RM_SENDMYMAGIC=10122, …, High)` → PlayObject.Message.cs:1797-1800 `case RM_SENDMYMAGIC: SendUseMagic()` → src/M2Server/Player/PlayObject.Base.cs:1052-1070 SendUseMagic()：`MakeMessage(SM_SENDMYMAGIC, 0, 0, 0, (short)MagicList.Count)` + 逐条 `EDCode.EncodeBuffer(ClientMagic) + '/'`；魔法列表为空时整帧不发（IsNullOrEmpty 门）。头部 recog/param/tag 恒 0（源码常量，全局 recog 掩码无副作用）、series=MagicList.Count 是语义值照常比。body 为玩家已学魔法列表，**逐字节比、不登记任何掩码**：内容全部来自魔法库静态定义与玩家持久化状态（Key/Level/CurTrain + MagicInfo），无墙钟/会话成分。单条 ClientMagic 84B（ClientMagic.cs WritePacket：Key(1)+Level(1)+pad(2)+CurTrain(4)+MagicInfo 76B；MagicInfo.cs WritePacket：MagicId(2)+MagicName(1+14)+EffectType(1)+Effect(1)+pad(1)+Spell(2)+Power(2)+TrainLevel(4×1)+MaxTrain(4×4)+TrainLv(1)+Job(1)+pad(2)+DelayTime(4)+DefSpell(1)+DefPower(1)+MaxPower(2)+DefMaxPower(1)+Desc(1+15)+pad(3)），84B→EDCode 112 字符+'/'=113 与 spell_cast 冻结 fixture seq18 body_len 吻合。Rust 同形：mir2-rs/bins/game-svr/src/smframe.rs:225-231 sm_sendmymagic(count,tail)。冻结 fixture 两侧 seq18 body_sha256 相等（bd17f4f6…）⇒ 登记后该帧 0 diff，从唯一残余 UNDECIDABLE（卡 openmir2-compare-ident211-classification）转为已比。",
+      "reason": "SM_SENDMYMAGIC(211) 是真实协议帧（src/OpenMir2/Messages.cs:225）。下行链：登录魔法同步 PlayObject.cs:1390 `SendPriorityMsg(RM_SENDMYMAGIC=10122, …, High)` → PlayObject.Message.cs:1797-1800 `case RM_SENDMYMAGIC: SendUseMagic()` → src/M2Server/Player/PlayObject.Base.cs:1052-1070 SendUseMagic()：`MakeMessage(SM_SENDMYMAGIC, 0, 0, 0, (short)MagicList.Count)` + 逐条 `EDCode.EncodeBuffer(ClientMagic) + '/'`；魔法列表为空时整帧不发（IsNullOrEmpty 门）。头部 recog/param/tag 恒 0（源码常量，全局 recog 掩码无副作用）、series=MagicList.Count 是语义值照常比。body 为玩家已学魔法列表，**逐字节比、不登记任何掩码**：内容全部来自魔法库静态定义与玩家持久化状态（Key/Level/CurTrain + MagicInfo），无墙钟/会话成分。单条 ClientMagic 84B（ClientMagic.cs WritePacket：Key(1)+Level(1)+pad(2)+CurTrain(4)+MagicInfo 76B；MagicInfo.cs WritePacket：MagicId(2)+MagicName(1+14)+EffectType(1)+Effect(1)+pad(1)+Spell(2)+Power(2)+TrainLevel(4×1)+MaxTrain(4×4)+TrainLv(1)+Job(1)+pad(2)+DelayTime(4)+DefSpell(1)+DefPower(1)+MaxPower(2)+DefMaxPower(1)+Desc(1+15)+pad(3)），84B→EDCode 112 字符+'/'=113 与 spell_cast 冻结 fixture seq18 body_len 吻合。Rust 同形：mir2-rs/bins/game-svr/src/smframe.rs:225-231 sm_sendmymagic(count,tail)。冻结 fixture 两侧 seq18 body_sha256 相等（bd17f4f6…）⇒ 登记后该帧 0 diff，从唯一残余 UNDECIDABLE（卡 openmir2-compare-ident211-classification）转为已比。（recog 恒 0 常量：本帧不参与 recog 比较，保持全局掩码；此处只登记，不加 head_compare 以免引入噪声。）",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-74)"
     },
     {
@@ -468,6 +471,36 @@
       ],
       "reason": "SM_DROPITEM_FAIL(601) 是真实协议帧（src/OpenMir2/Messages.cs:278）。与 600 同一条 `case Messages.CM_DROPITEM`（src/M2Server/Player/PlayObject.Message.cs:801-810）的失败支：`SendDefMessage(SM_DROPITEM_FAIL, processMsg.nParam1, 0, 0, 0, processMsg.Msg)`（:808）。下行编码同 6 参 `SendDefMessage`（PlayObject.Socket.cs:27-38）⇒ `MakeMessage(601, nRecog=nParam1, nParam=0, nTag=0, nSeries=0)` + `SendSocket(ClientMsg, EDCode.EncodeString(sMsg))`（sMsg 为空则不带尾，:32-37）⇒ **Recog=MakeIndex（语义值，不是会话 ActorId）、Param=Tag=Series=0（源码常量）、body=EDCode(GBK(请求物品名))**（EDCode.cs:175-186）。源侧字段映射同 600：src/GameSrv/Word/WorldServer.cs:796-820 的 CM_DROPITEM 分支 `SendMsg(…, nParam1=Recog, …)` ⇒ processMsg.nParam1 = 线缆 Recog = 请求 MakeIndex。oracle 真机证据：`mir2-rs/tests/parity/m3/fixtures/ground_vectors.json` case `drop_fail_item_id_zero`（ground-probe 实测，request={make_index:51, name:\"ring\"}）⇒ `immediate_frames=[{ident:601, recog:51, param:0, tag:0, series:0}]`；同批七个 `drop_fail_*`（control_price_too_high/safe_zone/no_throw_item/is_can_drop_false/deal_tick_guard/name_with_space/makeindex_mismatch）全部 601 同形，recog 分别等于各自请求的 make_index（54/55/56/57/58/59/99）⇒ 回帧 Recog=请求 MakeIndex 再次钉死。Rust 同形：`mir2-rs/bins/game-svr/src/ground.rs:746-765` 失败支 `fail_frame(make_index)` = {ident:601, recog:make_index, param:tag:series:0}（普通丢弃因 MapItem.ItemId 恒 0 恒走此支，T-19），`pickwire.rs:66-79 immediate_frame` 分派到 `smframe.rs:399-406 sm_dropitem_reply(false, make_index, msg)` = `command_header(make_index, 601, 0, 0, 0)` + `gm_data_body(edcode::encode(msg))`。**登记方式：全字节比，不掩码**（同 600）——head 与 body 全为语义/常量，无墙钟/RNG/会话成分。**Recog 必须取回**（`head_compare:[\"recog\"]`）：全局 recog 掩码是为会话 ActorId 设的，601 的 recog 是 MakeIndex，不取回会把两侧 MakeIndex 差异静默吞掉。冻结夹具 `tools/conformance/fixtures/dropitem_ack/` 新增 601 case（seq=2；请求参数取向量 request（make_index=51/name=\"ring\"），头部复刻向量 immediate_frames，body 按 EDCode 算法由 request.name 推出 = 726d3e796f3e）⇒ 两侧 0 diff，601 由 UNCLASSIFIED 转为已比。",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-74)"
+    },
+    {
+      "ident": 99,
+      "action": "compare",
+      "reason": "99=真实下行帧：2026-10-25 #23 复拍（E:/tmp/window/e23-reshot）两侧各 1 条、逐字段可比，此前 UNCLASSIFIED 会让整轮 UNDECIDABLE。**recog 在本帧是会话 ActorId**（不是语义值），全局 recog 掩码对它正确；param/tag/series/body 仍逐字节比。确需剔除只能用显式 --ignore-idents（登记为 cli_ignore）。",
+      "tier": "L",
+      "approved_by": "openmir2-orchestrator (card openmir2-rules-ident-99-622-650, decision 64ed759ce884fb1077f3e421b9b48a7f1f80ff5e)"
+    },
+    {
+      "ident": 622,
+      "action": "compare",
+      "reason": "622=SM_WEIGHTCHANGED（Messages.cs:289；oracle BaseObject.cs:1774 SendWeightChanged → SendDefMessage(SM_WEIGHTCHANGED, WAbil.Weight, WAbil.WearWeight, WAbil.HandWeight, 校验字)）：**recog=WAbil.Weight（语义值，不是 ActorId）**，必须从全局 recog 掩码取回逐值比较；param=WearWeight、tag=HandWeight、series=校验字 `(((W+WW+HW)^0x3A5F)^0x1F35)^0xaa21`（确定性派生，必须比）。oracle 1 条 / Rust 0 条（AddItemToBag 后未发）是待修真实差异，不得 ignore。",
+      "tier": "L",
+      "approved_by": "openmir2-orchestrator (card openmir2-rules-ident-99-622-650, decision 64ed759ce884fb1077f3e421b9b48a7f1f80ff5e)",
+      "head_compare": [
+        "recog"
+      ]
+    },
+    {
+      "ident": 650,
+      "action": "compare",
+      "reason": "650=SM_BUYITEM_SUCCESS（Messages.cs:312；oracle Merchant.cs:1303 → PlayObject.Message.cs:1825）：**recog=买入后 Gold**（语义值，不是 ActorId），必须从全局 recog 掩码取回逐值比较——C# 9912=10000−88（ItemPriceList 首次补货 ×1.1，Merchant.cs:184-204 CheckItemPrice）vs Rust 9920=10000−80（回落 stdItem.Price，shop.rs:283-292 硬编码空 price 表）⇒ 买价 88/80 的真实差异；ignore/掩 recog 都会把它吞掉。param/tag/body 一并比；series 在该帧无意义故掩。",
+      "tier": "L",
+      "approved_by": "openmir2-orchestrator (card openmir2-rules-ident-99-622-650, decision 64ed759ce884fb1077f3e421b9b48a7f1f80ff5e)",
+      "head_mask": [
+        "series"
+      ],
+      "head_compare": [
+        "recog"
+      ]
     }
   ],
   "db": {
