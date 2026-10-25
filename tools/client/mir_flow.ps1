@@ -13,6 +13,9 @@
     → notice_poll → ingame → talk → talk_sent → see_others_wait → see_others
     → logout_alt_x → logout_confirm → back_charsel → reenter → reentered → done
     （-ClickNpc 时另有 npc_click；公告/坐标门的证据源见 -ProxyDir / -CapturePath。）
+    四类玩家动作（卡 openmir2-mirflow-combat-pickup-stages，只追加）：pickup / npc_dialog /
+    trade / combat_target / combat —— 由 -PickupStage / -NpcDialogStage / -TradeStage /
+    -CombatStage 开启；证据落 <OutDir>/flow-stages-evidence.json（判据见 Get-*Evidence 注释）。
 
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File mir_flow.ps1 -OutDir E:\tmp\flow1
@@ -161,7 +164,30 @@ param(
   [switch]$FixtureDryRun,            # 离线自检：不启动客户端；-NoticePollSim / -ExpectPos / -NoticeEvidenceCheck
   [switch]$FixturePreflight,         # 与 -FixtureDryRun 联用：跑 live 证据源前置门（proxy 存活/旧 capture RED），仍不启客户端
   [string]$NoticePollSim = "",       # dismiss1 | slow | absent | nosignal：模拟公告轮询控制流（与 -FixtureDryRun 联用）
-  [switch]$NoticeEvidenceCheck       # 离线：只查证据源里本场的 s2c SM_SENDNOTICE(658)（F1/F2 自检）
+  [switch]$NoticeEvidenceCheck,      # 离线：只查证据源里本场的 s2c SM_SENDNOTICE(658)（F1/F2 自检）
+  # ---- 四类玩家动作阶段（卡 openmir2-mirflow-combat-pickup-stages；只追加，既有 25 阶段名与相对顺序不动）----
+  # 每类都产出 before/after 可机判证据（背包行数 / 金币 / 怪物 HP 或死亡 / 对话帧），
+  # 落到 <OutDir>/flow-stages-evidence.json；判据见 Get-*Evidence 注释。
+  # 真机验证需独占窗口（卡上先签 comment 声明时段），本轮只做离线性/构造级验证。
+  [switch]$PickupStage,             # 捡物：点脚下物品 → 服务端入包（SM_ADDITEM）或金币变化
+  [string]$PickupPixel = "",        # 物品的屏幕像素 "x,y"（服务端只处理**角色格**上的物品）
+  [switch]$NpcDialogStage,          # NPC 对话：点 NPC → 脚本说词/菜单帧（643/767 且 body 非空）
+  [string]$NpcDialogPixel = "",     # NPC 像素 "x,y"；留空回落到 -NpcClick
+  [switch]$TradeStage,              # 买卖：先开商人对话，再点菜单项 → 成功帧 + 金币按方向变化
+  [string]$TradeNpcPixel = "",      # 商人 NPC 像素 "x,y"
+  [string]$TradeMenuPixel = "",     # 商人物品/出售菜单项像素 "x,y"
+  [ValidateSet("buy", "sell")][string]$TradeKind = "buy",
+  [switch]$CombatStage,             # 有目标战斗：profile 的 fixtures.monsters 前置刷怪 → 打向靶子 → 掉血/死亡
+  [string]$Profile = "",            # card-window profile（读 fixtures.monsters；同 tools/window/profiles/*.json）
+  [string]$PlayerMap = "",          # 角色所在图（经典协议线上没有图名；必须显式给，否则 combat RED）
+  [int]$AttackRangeCells = 1,       # AP/近战攻击范围（切比雪夫格数）
+  [string]$CombatTargetPixel = "",  # 靶子的屏幕像素 "x,y"；留空按格心投影 (512,304)+(dx*48,dy*32)
+  [int]$ActionWaitSec = 8,          # 每个动作后等服务端副作用落地的秒数
+  [int]$TradeDialogMaxAgeSec = 60,  # 商人对话必须在这个窗口内打开（否则算「前置缺失」）
+  [string]$LogDir = "",             # 服务端日志目录（可选；**不在脚本里硬编码任何日志路径**）
+  [switch]$RequireLogEvidence,      # 给了 -LogDir 但为空/无日志时 RED（否则显式 SKIP 并说明）
+  [string]$EvidenceOut = "",        # 默认 <OutDir>/flow-stages-evidence.json
+  [switch]$StageEvidenceCheck       # 离线：不启动客户端，只按 -ProxyDir/-CapturePath 评估四类动作（牙靠它重放）
 )
 
 $ErrorActionPreference = "Stop"
@@ -443,6 +469,9 @@ function ConvertFrom-ProxyFrame([byte[]]$raw, [string]$dir) {
     param  = [int][BitConverter]::ToUInt16($head, 6)
     tag    = [int][BitConverter]::ToUInt16($head, 8)
     series = [int][BitConverter]::ToUInt16($head, 10)
+    # body 长度（编码后字节数）：header 固定 16 个编码字符（12B）。>0 = 有报文 body。
+    # 643/767 的「脚本确实说了话」判据需要它；不能只看「某帧出现」。
+    body_len = [int]($end - $start - 16)
   }
 }
 
@@ -552,6 +581,7 @@ function Update-ProxyFrameCache([string]$dir) {
           dir = $dir2; ts_ms = $ts; conn = $conn; off = $frameOff
           ident = [int]$dec.ident; recog = [long]$dec.recog
           param = [int]$dec.param; tag = [int]$dec.tag; series = [int]$dec.series
+          body_len = [int]$dec.body_len
         })
       }
       $i = $end
@@ -588,6 +618,7 @@ function Get-CaptureFrames([string]$path) {
     [void]$frames.Add([pscustomobject]@{
       dir = $dir; ts_ms = $ts; conn = $conn; off = [long]0
       ident = [int]$r.ident; recog = $recog; param = $param; tag = $tag; series = $series
+      body_len = 0   # capture.jsonl 不带编码后 body 长度；对话帧判据需要 -ProxyDir（live）
     })
   }
   $script:CaptureCache[$key] = [pscustomobject]@{ Stamp = $stamp; Frames = $frames }
@@ -748,6 +779,479 @@ function Wait-EvidenceFrame($source, [string]$dir, [int]$ident, [int]$timeoutSec
     if ((Get-Date) -ge $deadline) { return $null }
     Start-Sleep -Milliseconds 250
   }
+}
+
+# ==== 四类玩家动作阶段：证据评估（纯函数；live 与离线自检共用同一份实现）========
+# 判据一律落在**可观察副作用**上（入包 SM_ADDITEM、金币 SM_GOLDCHANGED、怪物 SM_STRUCK/
+# SM_DEATH、脚本说词/菜单帧且 body 非空），**不以「某帧出现」当成功**（5008/767/637 三例在案）。
+# 协议口径（oracle，见 src/M2Server/Player/*.cs 与 src/GameSrv/Word/WorldServer.cs）：
+#   CM_PICKUP(1001)      header param=ownX tag=ownY（服务端 `CurrX==nParam2 && CurrY==nParam3` 才处理，
+#                        PlayObject.Message.cs CM_PICKUP）
+#   CM_HIT(3014)         header recog=MakeLong(ownX,ownY) tag=Dir（服务端 ClientHitXY 要求 nX==CurrX；
+#                        WorldServer.cs ProcessUserMessage 把 Tag→wParam、Recog→nParam1/2）
+#   攻击目标解析         GetPoseCreate() = 角色**前方一格**（由 Dir 决定，BaseObject.cs GetFrontPosition）
+#   SM_ADDITEM(200)      series=1；SM_BAGITEMS(201) series=ItemList.Count；SM_DELITEM(202) series=1
+#   SM_GOLDCHANGED(653)  recog=当前 Gold（PlayObject.Message.cs:1834）
+#   SM_STRUCK(31)        recog=受击者 param=HP(之后) tag=MaxHP series=本次伤害（:1601）
+#   SM_DEATH(32)         recog=死亡者（:1644）
+#   SM_LOGON(50)         recog=ActorId param=X tag=Y
+#   CM_CLICKNPC(1010)    recog=NPC ActorId
+#   SM_MERCHANTSAY(643) / SM_MENU_OK(767)：**body 非空**才说明脚本确实说了话/给了菜单。
+#   CM_USERBUYITEM(1014) / CM_USERSELLITEM(1013)：买卖请求；成功帧 650 / 648。
+
+function ConvertFrom-PixelSpec([string]$name, [string]$spec) {
+  $p = ([string]$spec).Split(",")
+  if ($p.Count -ne 2 -or -not (Test-TurnIntLiteral $p[0].Trim()) -or -not (Test-TurnIntLiteral $p[1].Trim())) {
+    throw ("-" + $name + " 须为 'x,y'（两个整数），当前：'" + $spec + "'")
+  }
+  return ,@([int]$p[0].Trim(), [int]$p[1].Trim())
+}
+
+function Get-StageFramesSorted($source, [long]$sinceMs, [long]$atMs) {
+  # 只取 ts ∈ [sinceMs, atMs] 的帧，按 (ts, conn, off) 排序 —— 遍历顺序是**显式**的键，
+  # 不依赖 Query/哈希顺序（确定性）。
+  $rows = @((Get-EvidenceFrames $source) | Where-Object {
+      [long]$_.ts_ms -ge $sinceMs -and [long]$_.ts_ms -le $atMs
+    })
+  return @($rows | Sort-Object @{ Expression = { [long]$_.ts_ms }; Ascending = $true },
+                          @{ Expression = { [int]$_.conn }; Ascending = $true },
+                          @{ Expression = { [long]$_.off }; Ascending = $true })
+}
+
+function Get-SelfStateAt($source, [long]$sinceMs, [long]$atMs) {
+  # 与 Get-SelfCellEvidence 同口径，但**截到 atMs**（动作发生时刻）：SM_LOGON(50)/SM_NEWMAP(51)
+  # 给出锚点；c2s CM_WALK(3011) 的 recog 是**目标格**，只接受切比雪夫 <=1 的下一步。
+  $cell = $null
+  $actor = 0
+  $src = ""
+  foreach ($f in (Get-StageFramesSorted $source $sinceMs $atMs)) {
+    if ($f.dir -eq "s2c" -and ([int]$f.ident -eq 50 -or [int]$f.ident -eq 51)) {
+      $actor = [int]$f.recog
+      $cell = [pscustomobject]@{ X = [int]$f.param; Y = [int]$f.tag }
+      $src = if ([int]$f.ident -eq 50) { "s2c SM_LOGON(50)" } else { "s2c SM_NEWMAP(51)" }
+    } elseif ($f.dir -eq "c2s" -and [int]$f.ident -eq 3011 -and $null -ne $cell) {
+      $tx = Get-TurnLoWord ([long]$f.recog)
+      $ty = Get-TurnHiWord ([long]$f.recog)
+      if ([Math]::Max([Math]::Abs($tx - [int]$cell.X), [Math]::Abs($ty - [int]$cell.Y)) -le 1) {
+        $cell = [pscustomobject]@{ X = [int]$tx; Y = [int]$ty }
+        $src = "c2s CM_WALK(3011)"
+      }
+    }
+  }
+  if ($null -eq $cell) { return $null }
+  return [pscustomobject]@{ ActorId = $actor; X = [int]$cell.X; Y = [int]$cell.Y; Source = $src }
+}
+
+function Get-BagStateAt($source, [long]$sinceMs, [long]$atMs) {
+  # 背包行数：SM_BAGITEMS(201).series 是登录/变更时的**全量行数**，SM_ADDITEM(200)/SM_DELITEM(202)
+  # 各带 series（通常 1）。没有 201 基线时 Rows=$null（不拿 0 冒充已知）。
+  $rows = $null
+  $baseline = $false
+  $adds = 0
+  $dels = 0
+  foreach ($f in (Get-StageFramesSorted $source $sinceMs $atMs)) {
+    if ($f.dir -ne "s2c") { continue }
+    switch ([int]$f.ident) {
+      201 {
+        $rows = [int]$f.series
+        $baseline = $true
+      }
+      200 {
+        $adds++
+        if ($null -ne $rows) { $rows += [Math]::Max(1, [int]$f.series) }
+      }
+      202 {
+        $dels++
+        if ($null -ne $rows) {
+          $rows -= [Math]::Max(1, [int]$f.series)
+          if ($rows -lt 0) { $rows = 0 }
+        }
+      }
+    }
+  }
+  return [pscustomobject]@{ Rows = $rows; Baseline = $baseline; Adds = $adds; Dels = $dels }
+}
+
+function Get-GoldAt($source, [long]$sinceMs, [long]$atMs) {
+  # 金币基线有两个来源（都是 recog=Gold 的绝对值）：
+  #   · s2c SM_ABILITY(52)      —— 登录 / 属性重算时下发（oracle PlayObject.Message.cs RM_ABILITY，
+  #                                `MakeMessage(SM_ABILITY, Gold, MakeWord(Job,99), ...)`；实测登录帧在）；
+  #   · s2c SM_GOLDCHANGED(653) —— 金币变化时下发。
+  # 取窗口内**最后一条**，保证 before/after 都用同一口径。
+  $gold = $null
+  foreach ($f in (Get-StageFramesSorted $source $sinceMs $atMs)) {
+    if ($f.dir -eq "s2c" -and ([int]$f.ident -eq 653 -or [int]$f.ident -eq 52)) { $gold = [long]$f.recog }
+  }
+  return $gold
+}
+
+function Read-MonsterFixtures([string]$path) {
+  # 读 card-window profile 的 fixtures.monsters（schema 见 tools/conformance/card_window.py
+  # `_validate_monsters`：map 非空 / x,y 0..65535 / name 非空可 GBK / count 1..100）。
+  if ($path -eq "") { throw "combat 需要 -Profile（card-window profile）" }
+  if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { throw ("profile 不存在：" + $path) }
+  $doc = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path).Path, [Text.Encoding]::UTF8) | ConvertFrom-Json
+  $mon = $null
+  if ($null -ne $doc.PSObject.Properties["fixtures"] -and $null -ne $doc.fixtures -and
+      $null -ne $doc.fixtures.PSObject.Properties["monsters"]) {
+    $mon = @($doc.fixtures.monsters)
+  }
+  if ($null -eq $mon) { throw ("profile 没有 fixtures.monsters：" + $path + "（有目标战斗必须先声明靶子）") }
+  $out = New-Object System.Collections.ArrayList
+  $i = 0
+  foreach ($m in $mon) {
+    $w = "fixtures.monsters[" + $i + "]"
+    $i++
+    foreach ($k in @("map", "x", "y", "name")) {
+      if ($null -eq $m.PSObject.Properties[$k]) { throw ($w + " 缺字段 " + $k) }
+    }
+    $map = [string]$m.map
+    if ($map.Trim() -eq "") { throw ($w + ".map 必须非空") }
+    foreach ($k in @("x", "y")) {
+      $v = $m.$k
+      if ($null -eq $v -or [int]$v -lt 0 -or [int]$v -gt 65535) { throw ($w + "." + $k + " 越界") }
+    }
+    if ([string]$m.name -eq "") { throw ($w + ".name 必须非空") }
+    $cnt = 1
+    if ($null -ne $m.PSObject.Properties["count"] -and $null -ne $m.count) { $cnt = [int]$m.count }
+    if ($cnt -lt 1 -or $cnt -gt 100) { throw ($w + ".count 越界") }
+    [void]$out.Add([pscustomobject]@{ Map = $map; X = [int]$m.x; Y = [int]$m.y; Name = [string]$m.name; Count = $cnt })
+  }
+  return ,$out.ToArray()
+}
+
+function Get-TurnFrontCell([int]$x, [int]$y, [int]$dir) {
+  # 服务端 GetFrontPosition（BaseObject.cs:977）的 8 方向；0=Up..7=UpLeft。
+  $dx = 0
+  $dy = 0
+  switch ($dir) {
+    0 { $dy = -1 }
+    1 { $dx = 1; $dy = -1 }
+    2 { $dx = 1 }
+    3 { $dx = 1; $dy = 1 }
+    4 { $dy = 1 }
+    5 { $dx = -1; $dy = 1 }
+    6 { $dx = -1 }
+    7 { $dx = -1; $dy = -1 }
+    default { throw ("非法方向：" + $dir) }
+  }
+  return [pscustomobject]@{ X = $x + $dx; Y = $y + $dy }
+}
+
+function Get-PickupEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [long]$atMs) {
+  # 前提：客户端发出 CM_PICKUP(1001) 且目标格 == 角色格（否则服务端直接 return，什么都不会发生）。
+  # 判据：动作之后出现 SM_ADDITEM(200)（背包行数**增加**）或 SM_GOLDCHANGED(653)（金币变化）。
+  $ev = [ordered]@{
+    category = "pickup"; verdict = "RED"; ok = $false; reason = ""
+    action = $null; before = [ordered]@{}; after = [ordered]@{}; effect = $null
+  }
+  $picks = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "c2s" -and [int]$_.ident -eq 1001 -and [long]$_.ts_ms -ge $actionFloorMs
+    })
+  if ($picks.Count -eq 0) { $ev.reason = "无 c2s CM_PICKUP(1001)（未发出取物请求）"; return $ev }
+  $pick = $picks[$picks.Count - 1]
+  $self = Get-SelfStateAt $source $sinceMs ([long]$pick.ts_ms)
+  $ev.action = [ordered]@{ ident = 1001; ts_ms = [long]$pick.ts_ms; param_x = [int]$pick.param; param_y = [int]$pick.tag; own = $null }
+  if ($null -eq $self) { $ev.reason = "无自身坐标证据（SM_LOGON/51），无法核对 CM_PICKUP 目标格"; return $ev }
+  $ev.action.own = [ordered]@{ actor_id = [int]$self.ActorId; x = [int]$self.X; y = [int]$self.Y; source = $self.Source }
+  if ([int]$pick.param -ne [int]$self.X -or [int]$pick.tag -ne [int]$self.Y) {
+    $ev.reason = ("CM_PICKUP 目标格 (" + [int]$pick.param + "," + [int]$pick.tag + ") != 角色格 (" +
+      [int]$self.X + "," + [int]$self.Y + ")（服务端 oracle 会直接忽略）")
+    return $ev
+  }
+  $b0 = Get-BagStateAt $source $sinceMs ([long]$pick.ts_ms)
+  $b1 = Get-BagStateAt $source $sinceMs $atMs
+  $g0 = Get-GoldAt $source $sinceMs ([long]$pick.ts_ms)
+  $g1 = Get-GoldAt $source $sinceMs $atMs
+  $ev.before = [ordered]@{ bag_rows = $b0.Rows; bag_baseline = $b0.Baseline; gold = $g0 }
+  $ev.after = [ordered]@{ bag_rows = $b1.Rows; bag_baseline = $b1.Baseline; gold = $g1 }
+
+  $adds = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "s2c" -and [int]$_.ident -eq 200 -and [long]$_.ts_ms -ge [long]$pick.ts_ms
+    })
+  $goldFrames = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "s2c" -and [int]$_.ident -eq 653 -and [long]$_.ts_ms -ge [long]$pick.ts_ms
+    })
+  $goldChanged = ($null -ne $g0 -and $null -ne $g1 -and [long]$g0 -ne [long]$g1)
+  if ($adds.Count -eq 0 -and -not $goldChanged) {
+    $ev.reason = "取物后无入包（SM_ADDITEM 200）也无金币变化（SM_GOLDCHANGED 653）"
+    return $ev
+  }
+  if ($adds.Count -gt 0) {
+    if ($b0.Baseline -and $null -ne $b0.Rows -and $null -ne $b1.Rows -and [int]$b1.Rows -le [int]$b0.Rows) {
+      $ev.reason = ("有 SM_ADDITEM 但背包行数未增加（before=" + $b0.Rows + " after=" + $b1.Rows + "）")
+      return $ev
+    }
+    $ev.effect = [ordered]@{ kind = "bag_add"; ident = 200; ts_ms = [long]$adds[0].ts_ms; count = $adds.Count }
+  } else {
+    $ev.effect = [ordered]@{ kind = "gold_changed"; ident = 653; ts_ms = [long]$goldFrames[0].ts_ms; delta = [long]$g1 - [long]$g0 }
+  }
+  $ev.verdict = "GREEN"
+  $ev.ok = $true
+  $ev.reason = "取物副作用成立"
+  return $ev
+}
+
+function Get-NpcDialogEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [long]$atMs) {
+  # 前提：客户端确实发出 CM_CLICKNPC(1010)（点 NPC 的前置动作）。
+  # 判据：点击之后出现 **body 非空** 的 SM_MERCHANTSAY(643)（脚本说词）或 SM_MENU_OK(767)（菜单文本）。
+  #       767 本身「成功/失败共用」（不能当成功帧），这里只把它当**对话内容帧**：
+  #       body 非空 = 服务端确实给了脚本说词/菜单，而不是空回帧。
+  $ev = [ordered]@{
+    category = "npcdialog"; verdict = "RED"; ok = $false; reason = ""
+    click = $null; dialogue = [ordered]@{ say_frames = 0; menu_frames = 0; max_body_len = 0; first_ts_ms = $null }
+  }
+  $clicks = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "c2s" -and [int]$_.ident -eq 1010 -and [long]$_.ts_ms -ge $actionFloorMs
+    })
+  if ($clicks.Count -eq 0) { $ev.reason = "未发出 c2s CM_CLICKNPC(1010)（点 NPC 前置动作缺失）"; return $ev }
+  $click = $clicks[$clicks.Count - 1]
+  $ev.click = [ordered]@{ ident = 1010; ts_ms = [long]$click.ts_ms; npc_actor = [int]$click.recog }
+  $dlg = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "s2c" -and ([int]$_.ident -eq 643 -or [int]$_.ident -eq 767) -and
+      [int]$_.body_len -gt 0 -and [long]$_.ts_ms -ge [long]$click.ts_ms
+    })
+  if ($dlg.Count -eq 0) {
+    $ev.reason = "CM_CLICKNPC 后无脚本说词/菜单帧（643/767 且 body_len>0）"
+    return $ev
+  }
+  $say = 0
+  $menu = 0
+  $maxBody = 0
+  $firstTs = [long]::MaxValue
+  foreach ($f in $dlg) {
+    if ([int]$f.ident -eq 643) { $say++ } else { $menu++ }
+    if ([int]$f.body_len -gt $maxBody) { $maxBody = [int]$f.body_len }
+    if ([long]$f.ts_ms -lt $firstTs) { $firstTs = [long]$f.ts_ms }
+  }
+  $ev.dialogue = [ordered]@{ say_frames = $say; menu_frames = $menu; max_body_len = $maxBody; first_ts_ms = $firstTs }
+  $ev.verdict = "GREEN"
+  $ev.ok = $true
+  $ev.reason = "点 NPC 后出现脚本说词/菜单帧"
+  return $ev
+}
+
+function Get-TradeEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [string]$kind, [int]$dialogMaxAgeSec, [long]$atMs) {
+  # 前提（A3 牙齿）：买卖请求之前**必须**先打开商人对话 —— c2s CM_CLICKNPC(1010)/CM_MERCHANTDLGSELECT(1011)
+  #        且 s2c 643/767 body 非空，二者都在 dialogMaxAgeSec 窗口内。
+  # 判据：成功帧（买 650 / 卖 648）+ 金币按方向变化（买减少 / 卖增加）。
+  $ev = [ordered]@{
+    category = "trade"; verdict = "RED"; ok = $false; reason = ""
+    kind = $kind; request = $null; dialogue = [ordered]@{ opens = 0; dialogue_frames = 0 }
+    success = $null; before = [ordered]@{}; after = [ordered]@{}; gold_delta = $null; item_effect = $null
+  }
+  $reqs = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "c2s" -and ([int]$_.ident -eq 1014 -or [int]$_.ident -eq 1013) -and [long]$_.ts_ms -ge $actionFloorMs
+    })
+  if ($reqs.Count -eq 0) { $ev.reason = "无买卖请求（CM_USERBUYITEM 1014 / CM_USERSELLITEM 1013）"; return $ev }
+  $req = $reqs[$reqs.Count - 1]
+  $reqIdent = [int]$req.ident
+  $wantIdent = if ($kind -eq "sell") { 1013 } else { 1014 }
+  $ev.request = [ordered]@{ ident = $reqIdent; ts_ms = [long]$req.ts_ms }
+  if ($reqIdent -ne $wantIdent) {
+    $ev.reason = ("交易请求 ident=" + $reqIdent + " 与 -TradeKind=" + $kind + " 不符")
+    return $ev
+  }
+  $maxAgeMs = [long]$dialogMaxAgeSec * 1000
+  $lo = [Math]::Max([long]$sinceMs, [long]$req.ts_ms - $maxAgeMs)
+  $opens = @(Get-StageFramesSorted $source $sinceMs ([long]$req.ts_ms) | Where-Object {
+      $_.dir -eq "c2s" -and ([int]$_.ident -eq 1010 -or [int]$_.ident -eq 1011) -and [long]$_.ts_ms -ge $lo
+    })
+  $dlgs = @(Get-StageFramesSorted $source $sinceMs ([long]$req.ts_ms) | Where-Object {
+      $_.dir -eq "s2c" -and ([int]$_.ident -eq 643 -or [int]$_.ident -eq 767) -and
+      [int]$_.body_len -gt 0 -and [long]$_.ts_ms -ge $lo
+    })
+  $ev.dialogue = [ordered]@{ opens = $opens.Count; dialogue_frames = $dlgs.Count; window_ms = $maxAgeMs }
+  if ($opens.Count -eq 0 -or $dlgs.Count -eq 0) {
+    $ev.reason = "未先打开商人对话（前置缺失：不点 NPC 直接交易 / 无脚本说词帧）"
+    return $ev
+  }
+  $successIdent = if ($kind -eq "sell") { 648 } else { 650 }
+  $success = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "s2c" -and [int]$_.ident -eq $successIdent -and [long]$_.ts_ms -ge [long]$req.ts_ms
+    })
+  if ($success.Count -eq 0) {
+    $ev.reason = ("无交易成功帧（ident=" + $successIdent + "）")
+    return $ev
+  }
+  $ev.success = [ordered]@{ ident = $successIdent; ts_ms = [long]$success[0].ts_ms }
+  $g0 = Get-GoldAt $source $sinceMs ([long]$req.ts_ms)
+  $g1 = Get-GoldAt $source $sinceMs $atMs
+  $ev.before = [ordered]@{ gold = $g0 }
+  $ev.after = [ordered]@{ gold = $g1 }
+  if ($null -eq $g0 -or $null -eq $g1) {
+    $ev.reason = "缺金币证据（SM_GOLDCHANGED 653 基线或变化）"
+    return $ev
+  }
+  $delta = [long]$g1 - [long]$g0
+  $ev.gold_delta = $delta
+  if ($kind -eq "buy" -and $delta -ge 0) { $ev.reason = ("买后金币未减少（before=" + $g0 + " after=" + $g1 + "）"); return $ev }
+  if ($kind -eq "sell" -and $delta -le 0) { $ev.reason = ("卖后金币未增加（before=" + $g0 + " after=" + $g1 + "）"); return $ev }
+  $itemIdent = if ($kind -eq "sell") { 202 } else { 200 }
+  $items = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "s2c" -and [int]$_.ident -eq $itemIdent -and [long]$_.ts_ms -ge [long]$req.ts_ms
+    })
+  $ev.item_effect = [ordered]@{ ident = $itemIdent; count = $items.Count }
+  $ev.verdict = "GREEN"
+  $ev.ok = $true
+  $ev.reason = "商人对白前置成立 + 成功帧 + 金币按方向变化"
+  return $ev
+}
+
+function Get-CombatEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [string]$profile, [string]$playerMap, [int]$rangeCells, [long]$atMs) {
+  # 前提（A2/A3）：profile 的 fixtures.monsters 必须有**同图**靶子（刷不出即 RED，不静默跳过）；
+  #   且这次 CM_HIT 的 Dir 必须让「前方一格」正好落在某个同图靶子上（服务端 GetPoseCreate 解析），
+  #   距离必须 <= AP 范围（默认 1 格近战）。
+  # 判据：CM_HIT 之后，**非自己**的 actor 出现 SM_STRUCK（HP 下降 / 伤害>0）或 SM_DEATH。
+  $ev = [ordered]@{
+    category = "combat"; verdict = "RED"; ok = $false; reason = ""
+    profile = $profile; player_map = $playerMap; range_cells = $rangeCells
+    target = $null; hit = $null; effect = $null
+    hp_before = $null; hp_after = $null; max_hp = $null; damage = $null; actor = $null
+  }
+  if ($playerMap -eq "") { $ev.reason = "-PlayerMap 未给出（经典协议线上没有图名，无法证明靶子同图）"; return $ev }
+  $fx = $null
+  # 注意：Read-MonsterFixtures 用 `return ,$arr` 保住空数组；这里**不能再套 @()**，
+  # 否则会变成「数组套数组」——多靶子时会退化成 1 个元素（Count=1 / 成员枚举假象）。
+  try { $fx = Read-MonsterFixtures $profile }
+  catch { $ev.reason = ("profile 读取失败：" + $_.Exception.Message); return $ev }
+  $same = @($fx | Where-Object { $_.Map -ieq $playerMap })
+  if ($same.Count -eq 0) {
+    $ev.reason = ("profile 在 map=" + $playerMap + " 没有靶子（刷不出即 RED，不静默跳过）")
+    return $ev
+  }
+  $hits = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "c2s" -and [int]$_.ident -eq 3014 -and [long]$_.ts_ms -ge $actionFloorMs
+    })
+  if ($hits.Count -eq 0) { $ev.reason = "无 c2s CM_HIT(3014)（攻击未发出）"; return $ev }
+  $hit = $hits[$hits.Count - 1]
+  $ownX = Get-TurnLoWord ([long]$hit.recog)
+  $ownY = Get-TurnHiWord ([long]$hit.recog)
+  $dir = [int]$hit.tag
+  $front = Get-TurnFrontCell $ownX $ownY $dir
+  $match = @($same | Where-Object { [int]$_.X -eq [int]$front.X -and [int]$_.Y -eq [int]$front.Y })
+  $ev.hit = [ordered]@{ ident = 3014; ts_ms = [long]$hit.ts_ms; own_x = $ownX; own_y = $ownY; dir = $dir; front_x = [int]$front.X; front_y = [int]$front.Y }
+  if ($match.Count -eq 0) {
+    $ev.reason = ("CM_HIT 朝向 dir=" + $dir + " 的前方格 (" + $front.X + "," + $front.Y + ") 与同图靶子不匹配（攻击未指向靶子）")
+    return $ev
+  }
+  $target = $match[0]
+  $dist = [Math]::Max([Math]::Abs([int]$target.X - $ownX), [Math]::Abs([int]$target.Y - $ownY))
+  $ev.target = [ordered]@{ map = $target.Map; x = [int]$target.X; y = [int]$target.Y; name = $target.Name; count = [int]$target.Count; distance = $dist }
+  if ($dist -gt $rangeCells) {
+    $ev.reason = ("靶子距角色 " + $dist + " 格 > AP 范围 " + $rangeCells)
+    return $ev
+  }
+  $selfActor = 0
+  foreach ($f in (Get-StageFramesSorted $source $sinceMs ([long]$hit.ts_ms))) {
+    if ($f.dir -eq "s2c" -and [int]$f.ident -eq 50) { $selfActor = [int]$f.recog }
+  }
+  $struck = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "s2c" -and [int]$_.ident -eq 31 -and [long]$_.ts_ms -ge [long]$hit.ts_ms -and
+      ($selfActor -eq 0 -or [int]$_.recog -ne $selfActor) -and
+      ([long]$_.series -gt 0 -or [int]$_.param -lt [int]$_.tag)
+    })
+  $death = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
+      $_.dir -eq "s2c" -and [int]$_.ident -eq 32 -and [long]$_.ts_ms -ge [long]$hit.ts_ms -and
+      ($selfActor -eq 0 -or [int]$_.recog -ne $selfActor)
+    })
+  if ($struck.Count -eq 0 -and $death.Count -eq 0) {
+    $ev.reason = "CM_HIT 后目标无掉血(SM_STRUCK 31)也无死亡(SM_DEATH 32)（靶子可能没刷出）"
+    return $ev
+  }
+  $useDeath = ($death.Count -gt 0 -and ($struck.Count -eq 0 -or [long]$death[0].ts_ms -le [long]$struck[0].ts_ms))
+  if ($useDeath) {
+    $ev.effect = "death"
+    $ev.actor = [int]$death[0].recog
+    $ev.hp_after = 0
+    $ev.hp_before = $null
+    $ev.damage = $null
+    $ev.effect_ts_ms = [long]$death[0].ts_ms
+  } else {
+    $s = $struck[0]
+    $ev.effect = "hp"
+    $ev.actor = [int]$s.recog
+    $ev.hp_after = [int]$s.param
+    $ev.max_hp = [int]$s.tag
+    $ev.damage = [int]$s.series
+    $ev.hp_before = [int]$s.param + [int]$s.series
+    $ev.effect_ts_ms = [long]$s.ts_ms
+  }
+  $ev.verdict = "GREEN"
+  $ev.ok = $true
+  $ev.reason = "靶子同图且在 AP 内 + 攻击指向靶子 + 目标掉血/死亡"
+  return $ev
+}
+
+function Get-LogEvidence([string]$dir, [bool]$require) {
+  # A6：日志目录**参数化**（脚本内不出现任何硬编码日志路径）。
+  #   未给 -LogDir            ⇒ SKIP（只靠协议证据）并写明原因；
+  #   给了但目录不存在/0 个 *.log ⇒ 默认 SKIP 并说明；-RequireLogEvidence 时 RED（空扫描不得当绿）；
+  #   有日志 ⇒ 扫 [ERR]/panic（同时报 files_scanned/lines_scanned，防止「扫了 0 个」假绿）。
+  $r = [ordered]@{
+    schema = "openmir2.mirflow-log-evidence/1"; status = "SKIP"; dir = $dir
+    files_scanned = 0; lines_scanned = 0; err_lines = 0; samples = @(); reason = ""
+  }
+  if ($dir -eq "") {
+    $r.reason = "-LogDir 未提供（阶段脚本不硬编码日志路径；本判据只用协议证据）"
+    return $r
+  }
+  if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+    if ($require) { $r.status = "RED"; $r.reason = ("日志目录不存在：" + $dir) }
+    else { $r.reason = ("日志目录不存在（SKIP）：" + $dir) }
+    return $r
+  }
+  $files = @(Get-ChildItem -LiteralPath $dir -File -Filter "*.log" -ErrorAction SilentlyContinue)
+  if ($files.Count -eq 0) {
+    if ($require) {
+      $r.status = "RED"
+      $r.reason = ("空日志目录：0 个 *.log（扫了 0 个对象，不得当绿）：" + $dir)
+    } else {
+      $r.reason = ("空日志目录：0 个 *.log（SKIP，未使用日志证据）：" + $dir)
+    }
+    return $r
+  }
+  $err = 0
+  $lines = 0
+  foreach ($f in $files) {
+    foreach ($line in [IO.File]::ReadLines($f.FullName)) {
+      $lines++
+      if ($line -match '\[ERR\]|panic') {
+        $err++
+        if ($r.samples.Count -lt 5) { $r.samples += ($f.Name + ": " + $line) }
+      }
+    }
+  }
+  $r.files_scanned = $files.Count
+  $r.lines_scanned = $lines
+  $r.err_lines = $err
+  if ($err -gt 0) {
+    $r.status = "RED"
+    $r.reason = ("日志出现 " + $err + " 行 [ERR]/panic（扫了 " + $files.Count + " 个文件 / " + $lines + " 行）")
+  } else {
+    $r.status = "GREEN"
+    $r.reason = ("日志无 [ERR]/panic（扫了 " + $files.Count + " 个文件 / " + $lines + " 行）")
+  }
+  return $r
+}
+
+function Add-StageEvidence([string]$category, $ev) {
+  $script:stageEvidence[$category] = $ev
+  Write-Output ("STAGE_EVIDENCE category=" + $category + " verdict=" + $ev.verdict + " reason=" + $ev.reason)
+}
+
+function Write-StageEvidenceFile([string]$mode, $source, [string]$profilePath, [string]$playerMap, [int]$rangeCells) {
+  $doc = [ordered]@{
+    schema = "openmir2.mirflow-stages/1"
+    created_utc = [DateTimeOffset]::UtcNow.ToString("o")
+    mode = $mode
+    evidence_source = [ordered]@{ kind = $source.Kind; path = $source.Path; since_ms = [long]$source.SinceMs }
+    profile = [ordered]@{ path = $profilePath; player_map = $playerMap; range_cells = $rangeCells }
+    log_evidence = $script:logEvidence
+    categories = $script:stageEvidence
+  }
+  [IO.File]::WriteAllText($EvidenceOut, (($doc | ConvertTo-Json -Depth 12) + "`r`n"), (New-Object Text.UTF8Encoding($false)))
+  Write-Output ("STAGE_EVIDENCE_FILE " + $EvidenceOut)
 }
 
 function Invoke-NoticePollCore {
@@ -1130,12 +1634,94 @@ if ($ClickNpc -and $ProxyDir -eq "" -and $CapturePath -eq "") {
   throw "-ClickNpc 需要证据源 -ProxyDir 或 -CapturePath：坐标门没有取证就不得盲点世界区（fail-closed）"
 }
 # 证据源在启动客户端之前就建好：CapturePath 若是旧证据会在这里 RED（F2），不会等登录完才报废。
-$evidenceOffline = ($FixtureDryRun -and -not $FixturePreflight)
+$evidenceOffline = ($FixtureDryRun -and -not $FixturePreflight) -or $StageEvidenceCheck
 $evidenceSource = New-EvidenceSource $ProxyDir $CapturePath $EvidenceSinceMs $script:flowStartMs -Offline:$evidenceOffline
 $turnMapTable = $null
 if ($AttackTurnMap -ne "") { $turnMapTable = Read-TurnCalibrationMap $AttackTurnMap }
 
+# ---- 四类动作阶段参数门（fail-closed；都在启动客户端之前）----
+$script:stageEvidence = [ordered]@{}
+$script:logEvidence = $null
+if ($EvidenceOut -eq "") { $EvidenceOut = Join-Path $OutDir "flow-stages-evidence.json" }
+if ($ActionWaitSec -lt 1) { throw "-ActionWaitSec 至少 1（要给服务端副作用落地时间）" }
+if ($AttackRangeCells -lt 1 -or $AttackRangeCells -gt 8) { throw "-AttackRangeCells 须在 1..8" }
+if ($TradeDialogMaxAgeSec -lt 1) { throw "-TradeDialogMaxAgeSec 至少 1" }
+foreach ($spec in @(@("PickupPixel", $PickupPixel), @("NpcDialogPixel", $NpcDialogPixel),
+                    @("TradeNpcPixel", $TradeNpcPixel), @("TradeMenuPixel", $TradeMenuPixel),
+                    @("CombatTargetPixel", $CombatTargetPixel))) {
+  if ([string]$spec[1] -ne "") { [void](ConvertFrom-PixelSpec ([string]$spec[0]) ([string]$spec[1])) }
+}
+if (-not $StageEvidenceCheck) {
+  # 像素坐标只在**真机驱动**时需要；-StageEvidenceCheck 只读证据，不点任何东西。
+  if ($PickupStage -and $PickupPixel -eq "") { throw "-PickupStage 需要 -PickupPixel 'x,y'（脚下物品的屏幕像素）" }
+  if ($NpcDialogStage -and $NpcDialogPixel -eq "" -and $NpcClick -eq "") {
+    throw "-NpcDialogStage 需要 -NpcDialogPixel 或 -NpcClick"
+  }
+  if ($TradeStage -and ($TradeNpcPixel -eq "" -or $TradeMenuPixel -eq "")) {
+    throw "-TradeStage 需要 -TradeNpcPixel 与 -TradeMenuPixel（先开商人对话，再点菜单项）"
+  }
+}
+if ($StageEvidenceCheck) {
+  if ($ProxyDir -eq "" -and $CapturePath -eq "") { throw "-StageEvidenceCheck 需要 -ProxyDir 或 -CapturePath" }
+  if (-not ($PickupStage -or $TradeStage -or $NpcDialogStage -or $CombatStage)) {
+    throw "-StageEvidenceCheck 至少要开一类阶段开关（-PickupStage/-NpcDialogStage/-TradeStage/-CombatStage）"
+  }
+}
+if (-not $StageEvidenceCheck -and ($PickupStage -or $TradeStage -or $NpcDialogStage -or $CombatStage)) {
+  if ($evidenceSource.Kind -eq "none") {
+    throw "四类动作阶段需要证据源 -ProxyDir（没有证据就无法机判，fail-closed）"
+  }
+  if ($evidenceSource.Kind -ne "proxy") {
+    throw "四类动作阶段需要 -ProxyDir（live hook dump）：capture.jsonl 不含编码后 body 长度，无法判对话/交易前置"
+  }
+  if ($CombatStage -and $Profile -eq "") { throw "-CombatStage 需要 -Profile（fixtures.monsters）" }
+  if ($CombatStage -and $PlayerMap -eq "") { throw "-CombatStage 需要 -PlayerMap（经典协议线上没有图名）" }
+}
+
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+# ---- 离线证据自检：按证据源评估四类动作（不启动客户端；A3 牙齿靠它重放）----
+if ($StageEvidenceCheck) {
+  $threshold = [long]$evidenceSource.SinceMs
+  $atMs = [long]::MaxValue
+  $script:logEvidence = Get-LogEvidence $LogDir ([bool]$RequireLogEvidence)
+  Write-Output ("LOG_EVIDENCE status=" + $script:logEvidence.status + " files=" + $script:logEvidence.files_scanned +
+    " lines=" + $script:logEvidence.lines_scanned + " err=" + $script:logEvidence.err_lines +
+    " reason=" + $script:logEvidence.reason)
+  $red = 0
+  if ($PickupStage) {
+    $ev = Get-PickupEvidence $evidenceSource $threshold $threshold $atMs
+    Add-StageEvidence "pickup" $ev
+    if (-not $ev.ok) { $red++ }
+  }
+  if ($NpcDialogStage) {
+    $ev = Get-NpcDialogEvidence $evidenceSource $threshold $threshold $atMs
+    Add-StageEvidence "npcdialog" $ev
+    if (-not $ev.ok) { $red++ }
+  }
+  if ($TradeStage) {
+    $ev = Get-TradeEvidence $evidenceSource $threshold $threshold $TradeKind $TradeDialogMaxAgeSec $atMs
+    Add-StageEvidence "trade" $ev
+    if (-not $ev.ok) { $red++ }
+  }
+  if ($CombatStage) {
+    $ev = Get-CombatEvidence $evidenceSource $threshold $threshold $Profile $PlayerMap $AttackRangeCells $atMs
+    Add-StageEvidence "combat" $ev
+    if (-not $ev.ok) { $red++ }
+  }
+  Write-StageEvidenceFile "evidence-check" $evidenceSource $Profile $PlayerMap $AttackRangeCells
+  if ($red -gt 0) {
+    Write-Output ("STAGE_EVIDENCE_TOTAL RED=" + $red + " log=" + $script:logEvidence.status)
+    exit 1
+  }
+  if ($RequireLogEvidence -and $script:logEvidence.status -eq "RED") {
+    Write-Output ("STAGE_EVIDENCE_TOTAL RED=0 log=RED（-RequireLogEvidence：日志证据 RED 即整体 RED）")
+    exit 1
+  }
+  Write-Output ("STAGE_EVIDENCE_TOTAL RED=0 log=" + $script:logEvidence.status)
+  exit 0
+}
+
 
 # ---- 离线干跑：不启动客户端（语法/参数解析/标定表格式自检都靠它）----
 if ($AttackTurnDryRun) {
@@ -1874,6 +2460,131 @@ if ($AttackClicks -gt 0) {
     Start-Sleep -Milliseconds 900
   }
   Shot "06_attack.png"
+}
+
+# ==== 四类玩家动作阶段（卡 openmir2-mirflow-combat-pickup-stages；只追加）============
+# 既有 25 阶段的名称与相对顺序不变；本块只新增阶段名（pickup / npc_dialog / trade /
+# combat_target / combat）。每个阶段都按证据判 RED/GREEN，RED ⇒ throw（不在坏状态上继续）。
+if ($PickupStage -or $TradeStage -or $NpcDialogStage -or $CombatStage) {
+  $script:logEvidence = Get-LogEvidence $LogDir ([bool]$RequireLogEvidence)
+  Write-Output ("LOG_EVIDENCE status=" + $script:logEvidence.status + " files=" + $script:logEvidence.files_scanned +
+    " lines=" + $script:logEvidence.lines_scanned + " err=" + $script:logEvidence.err_lines +
+    " reason=" + $script:logEvidence.reason)
+  if ($RequireLogEvidence -and $script:logEvidence.status -eq "RED") {
+    throw ("LOG_EVIDENCE RED " + $script:logEvidence.reason)
+  }
+}
+
+if ($PickupStage) {
+  Stage "pickup"
+  $px = ConvertFrom-PixelSpec "PickupPixel" $PickupPixel
+  Write-Output ("PICKUP_ACTION x=" + $px[0] + " y=" + $px[1] + "（物品必须在角色格上）")
+  $actMs = Get-TurnNowMs
+  Send-Click $px[0] $px[1] 1
+  Start-Sleep -Seconds $ActionWaitSec
+  $ev = Get-PickupEvidence $evidenceSource $evidenceSource.SinceMs $actMs (Get-TurnNowMs)
+  Add-StageEvidence "pickup" $ev
+  Write-StageEvidenceFile "live" $evidenceSource $Profile $PlayerMap $AttackRangeCells
+  if (-not $ev.ok) { throw ("STAGE_EVIDENCE RED category=pickup " + $ev.reason) }
+  Shot "08a_pickup.png"
+  Move-Mouse $noticePark[0] $noticePark[1]
+}
+
+if ($NpcDialogStage) {
+  Stage "npc_dialog"
+  $np = if ($NpcDialogPixel -ne "") { $NpcDialogPixel } else { $NpcClick }
+  $px = ConvertFrom-PixelSpec "NpcDialogPixel" $np
+  Write-Output ("NPC_DIALOG_ACTION x=" + $px[0] + " y=" + $px[1])
+  $actMs = Get-TurnNowMs
+  Send-Click $px[0] $px[1] 1
+  Start-Sleep -Seconds $ActionWaitSec
+  $ev = Get-NpcDialogEvidence $evidenceSource $evidenceSource.SinceMs $actMs (Get-TurnNowMs)
+  Add-StageEvidence "npcdialog" $ev
+  Write-StageEvidenceFile "live" $evidenceSource $Profile $PlayerMap $AttackRangeCells
+  if (-not $ev.ok) { throw ("STAGE_EVIDENCE RED category=npcdialog " + $ev.reason) }
+  Shot "08b_npc_dialog.png"
+  Move-Mouse $noticePark[0] $noticePark[1]
+}
+
+if ($TradeStage) {
+  Stage "trade"
+  $npcPx = ConvertFrom-PixelSpec "TradeNpcPixel" $TradeNpcPixel
+  $menuPx = ConvertFrom-PixelSpec "TradeMenuPixel" $TradeMenuPixel
+  Write-Output ("TRADE_ACTION kind=" + $TradeKind + " npc=" + $npcPx[0] + "," + $npcPx[1] +
+    " menu=" + $menuPx[0] + "," + $menuPx[1])
+  $actMs = Get-TurnNowMs
+  # 前置动作 1：先点 NPC 打开商人对话（A3 牙齿：删掉这一步 ⇒ trade 必 RED）
+  Send-Click $npcPx[0] $npcPx[1] 1
+  Start-Sleep -Milliseconds 1500
+  # 前置动作 2：点菜单项/物品触发 CM_USERBUYITEM(1014) 或 CM_USERSELLITEM(1013)
+  Send-Click $menuPx[0] $menuPx[1] 1
+  Start-Sleep -Seconds $ActionWaitSec
+  $ev = Get-TradeEvidence $evidenceSource $evidenceSource.SinceMs $actMs $TradeKind $TradeDialogMaxAgeSec (Get-TurnNowMs)
+  Add-StageEvidence "trade" $ev
+  Write-StageEvidenceFile "live" $evidenceSource $Profile $PlayerMap $AttackRangeCells
+  if (-not $ev.ok) { throw ("STAGE_EVIDENCE RED category=trade " + $ev.reason) }
+  Shot "08c_trade.png"
+  Move-Mouse $noticePark[0] $noticePark[1]
+}
+
+if ($CombatStage) {
+  Stage "combat_target"
+  # A2：靶子必须来自 profile 的 fixtures.monsters（6f35b049f 的前插），且**同图 + AP 范围内**；
+  # 刷不出/不在范围内 ⇒ RED（throw），绝不静默跳过。
+  if ($PlayerMap -eq "") { throw "STAGE_EVIDENCE RED category=combat -PlayerMap 未给出（无法证明同图）" }
+  $fx = Read-MonsterFixtures $Profile   # 不要套 @()（见 Get-CombatEvidence 的说明）
+  # 自身坐标可能比 proxy 落盘晚一拍：轮询最多 5s，仍没有就 RED（fail-closed，不盲点）。
+  $self = $null
+  $selfDeadline = (Get-Date).AddSeconds(5)
+  while ($true) {
+    $self = Get-SelfStateAt $evidenceSource $evidenceSource.SinceMs (Get-TurnNowMs)
+    if ($null -ne $self -or (Get-Date) -ge $selfDeadline) { break }
+    Start-Sleep -Milliseconds 250
+  }
+  if ($null -eq $self) {
+    throw "STAGE_EVIDENCE RED category=combat 证据源里没有自身坐标（s2c SM_LOGON(50)/SM_NEWMAP(51)）"
+  }
+  $same = @($fx | Where-Object { $_.Map -ieq $PlayerMap })
+  if ($same.Count -eq 0) {
+    throw ("STAGE_EVIDENCE RED category=combat profile 在 map=" + $PlayerMap + " 没有靶子（刷不出即 RED，不静默跳过）")
+  }
+  $target = $null
+  $bestDist = [int]::MaxValue
+  foreach ($m in $same) {
+    $d = [Math]::Max([Math]::Abs([int]$m.X - [int]$self.X), [Math]::Abs([int]$m.Y - [int]$self.Y))
+    if ($d -le $AttackRangeCells -and $d -lt $bestDist) { $bestDist = $d; $target = $m }
+  }
+  if ($null -eq $target) {
+    throw ("STAGE_EVIDENCE RED category=combat 角色(" + $self.X + "," + $self.Y + ") AP<=" + $AttackRangeCells +
+      " 格内没有同图靶子（刷不出即 RED，不静默跳过）")
+  }
+  $dx = [int]$target.X - [int]$self.X
+  $dy = [int]$target.Y - [int]$self.Y
+  if ($dx -eq 0 -and $dy -eq 0) {
+    throw ("STAGE_EVIDENCE RED category=combat 靶子与角色同格（" + $target.X + "," + $target.Y + "），无法定向攻击")
+  }
+  Write-Output ("COMBAT_TARGET map=" + $target.Map + " x=" + $target.X + " y=" + $target.Y +
+    " name=" + $target.Name + " own=" + $self.X + "," + $self.Y + " dist=" + $bestDist)
+  # 像素：显式 -CombatTargetPixel 优先；否则沿用既有格心投影（512,304）+ (dx*48, dy*32)。
+  # ⚠ 48x32 步长在本部署未被证实（docs/window-shrink-run-20261019.md §F2）；真机建议给显式像素。
+  if ($CombatTargetPixel -ne "") {
+    $tp = ConvertFrom-PixelSpec "CombatTargetPixel" $CombatTargetPixel
+  } else {
+    $tp = @((512 + $dx * 48), (304 + $dy * 32))
+  }
+  Stage "combat"
+  Write-Output ("COMBAT_ACTION x=" + $tp[0] + " y=" + $tp[1] + "（先右键转向，再左键攻击）")
+  $actMs = Get-TurnNowMs
+  Send-RightClick $tp[0] $tp[1]
+  Start-Sleep -Milliseconds 400
+  Send-Click $tp[0] $tp[1] 1
+  Start-Sleep -Seconds $ActionWaitSec
+  $ev = Get-CombatEvidence $evidenceSource $evidenceSource.SinceMs $actMs $Profile $PlayerMap $AttackRangeCells (Get-TurnNowMs)
+  Add-StageEvidence "combat" $ev
+  Write-StageEvidenceFile "live" $evidenceSource $Profile $PlayerMap $AttackRangeCells
+  if (-not $ev.ok) { throw ("STAGE_EVIDENCE RED category=combat " + $ev.reason) }
+  Shot "08d_combat.png"
+  Move-Mouse $noticePark[0] $noticePark[1]
 }
 
 # ---- 走路 ----

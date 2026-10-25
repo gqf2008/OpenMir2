@@ -10,7 +10,7 @@ library Mir2ClientHook;
 
   产物与 tools/capture/mir2_proxy.py 同构，便于复用下游（segment_frames /
   GoldenExport 无需改动）：
-    <out>/chunks.ndjson      open/data/close 事件（t_wall_ms / t_rel_us / off / n / sha256）
+    <out>/chunks.ndjson      open/data/close 事件（t_wall_ms / off / n / sha256=真实指纹）
     <out>/conn-NNNN.c2s.bin  客户端→服务端 原始字节（含 `#1…!` 帧）
     <out>/conn-NNNN.s2c.bin  服务端→客户端 原始字节
   输出目录取环境变量 MIR2_HOOK_OUT（由编排脚本在启动客户端前设好，子进程继承）。
@@ -21,7 +21,7 @@ library Mir2ClientHook;
 {$APPTYPE CONSOLE}
 
 uses
-  Windows, SysUtils, Classes, Winsock;
+  Windows, SysUtils, Classes, Winsock, Sha256;
 
 const
   MAX_CONNS = 4096;
@@ -92,13 +92,8 @@ begin
   WriteAll(GList, PAnsiChar(s)^, Length(s));
 end;
 
-function Sha256Hex(const buf; n: Integer): string;
-begin
-  // 不在客户端进程里算 sha256：Windows 单元的 CryptoAPI 符号依赖额外单元，
-  // 而完整性 hash 下游（segment_frames.py / verify_golden.py）会从 .bin 重算。
-  // 这里留空串，schema 字段保留，便于与代理 dump 同构。
-  Result := '';
-end;
+{ sha256 由 Sha256.pas 计算（纯 Pascal，不依赖 CryptoAPI，见该单元头注）。
+  口径与 mir2_proxy.py 相同：同一次 send/recv 的原始 n 字节 ⇒ 小写十六进制。 }
 
 function HopOfPort(port: Integer): string;
 begin
@@ -153,6 +148,7 @@ begin
     h := rec.fS2C; off := rec.offS2C;
   end;
   WriteAll(h, buf^, n);
+  sha := string(Sha256Hex(buf^, n));
   hop := HopOfPort(rec.port);
   AppendLine(Format('{"event":"data","conn":%d,"port":%d,"hop":"%s","dir":"%s","off":%d,"n":%d,"sha256":"%s","t_wall_ms":%d}' + #10,
     [idx + 1, rec.port, hop, dir, off, n, sha, NowWallMs]));

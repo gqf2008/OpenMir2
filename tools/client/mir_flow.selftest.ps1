@@ -452,6 +452,268 @@ try {
   Check "fixture Low(truncated): 1018 after click time is accepted" (
     $null -ne $rNew -and [long]$rNew.ts_ms -eq 3000) ("rNew=" + ($rNew | ConvertTo-Json -Compress))
 
+  # ---- 14. 四类玩家动作阶段（卡 openmir2-mirflow-combat-pickup-stages）----
+  # 全部在 **$env:TEMP 假根** 里造 hook 产物（chunks.ndjson + conn-*.bin），不碰生产/真实 capture。
+  # 牙（A3）：删掉该类的前置动作/副作用 ⇒ 对应判据 RED 且点名类别；四类各自独立。
+  function Add-ProxyFrameBody($list, [string]$dir, [int]$ident, [long]$recog, [int]$param, [int]$tag, [int]$series, [int]$bodyLen = 0) {
+    $h = New-Object byte[] 12
+    [Array]::Copy([BitConverter]::GetBytes([int]$recog), 0, $h, 0, 4)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$ident), 0, $h, 4, 2)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$param), 0, $h, 6, 2)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$tag), 0, $h, 8, 2)
+    [Array]::Copy([BitConverter]::GetBytes([uint16]$series), 0, $h, 10, 2)
+    $enc = ConvertTo-EDCode $h
+    $list.Add([byte]0x23)
+    if ($dir -eq "c2s") { $list.Add([byte]0x31) }
+    foreach ($x in $enc) { $list.Add([byte]$x) }
+    for ($bi = 0; $bi -lt $bodyLen; $bi++) { $list.Add([byte]0x41) }   # 'A' = 非空 body
+    $list.Add([byte]0x21)
+    if ($dir -eq "s2c") { $list.Add([byte]0x24) }
+  }
+  function New-StageProxyDir([string]$dir, [object[]]$frames) {
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $bins = @{}
+    $rows = New-Object System.Collections.ArrayList
+    foreach ($f in $frames) {
+      $key = [string]$f.dir
+      if (-not $bins.ContainsKey($key)) { $bins[$key] = New-Object System.Collections.Generic.List[byte] }
+      $lst = $bins[$key]
+      $off = [long]$lst.Count
+      $bodyLen = 0
+      if ($f.ContainsKey("body")) { $bodyLen = [int]$f.body }
+      Add-ProxyFrameBody $lst ([string]$f.dir) ([int]$f.ident) ([long]$f.recog) ([int]$f.param) ([int]$f.tag) ([int]$f.series) $bodyLen
+      $n = [long]$lst.Count - $off
+      [void]$rows.Add([ordered]@{ event = "data"; conn = 1; port = 7200; hop = "game"; dir = [string]$f.dir; off = $off; n = $n; sha256 = "fixture"; t_wall_ms = [long]$f.ts })
+    }
+    foreach ($k in $bins.Keys) {
+      [IO.File]::WriteAllBytes((Join-Path $dir ("conn-0001." + $k + ".bin")), $bins[$k].ToArray())
+    }
+    $sb = New-Object Text.StringBuilder
+    foreach ($r in $rows) { [void]$sb.Append(($r | ConvertTo-Json -Compress)); [void]$sb.Append("`n") }
+    [IO.File]::WriteAllText((Join-Path $dir "chunks.ndjson"), $sb.ToString(), (New-Object Text.UTF8Encoding($false)))
+  }
+  function New-StageOutDir([string]$name) { return (New-TestDir ("stage-" + $name)) }
+  function Get-EvidenceDoc([string]$outDir) {
+    $p = Join-Path $outDir "flow-stages-evidence.json"
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    return ([IO.File]::ReadAllText($p, [Text.Encoding]::UTF8) | ConvertFrom-Json)
+  }
+  $ownW = [long](New-Word 330 331)
+
+  # ---- 14a. 捡物 ----
+  $pkGreen = New-TestDir "pickup-green"
+  New-StageProxyDir $pkGreen @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 201; recog = 6496; param = 0; tag = 0; series = 5; ts = 1100 },
+    @{ dir = "s2c"; ident = 653; recog = 1000; param = 0; tag = 0; series = 0; ts = 1200 },
+    @{ dir = "c2s"; ident = 1001; recog = 0; param = 330; tag = 331; series = 0; ts = 2000 },
+    @{ dir = "s2c"; ident = 200; recog = 777; param = 0; tag = 0; series = 1; body = 40; ts = 2200 })
+  $pkOut = New-StageOutDir "pickup-green"
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkGreen, "-OutDir", $pkOut)
+  Check "stages pickup: GREEN with SM_ADDITEM after CM_PICKUP" (
+    $r.Code -eq 0 -and $r.Out.Contains("STAGE_EVIDENCE category=pickup verdict=GREEN")) ($r.Out + " rc=" + $r.Code)
+  $doc = Get-EvidenceDoc $pkOut
+  Check "stages pickup: before/after bag rows 5 -> 6" (
+    $null -ne $doc -and [int]$doc.categories.pickup.before.bag_rows -eq 5 -and
+    [int]$doc.categories.pickup.after.bag_rows -eq 6) (($doc.categories.pickup | ConvertTo-Json -Compress -Depth 6))
+
+  # 牙 1：删掉副作用（有 CM_PICKUP，但服务端没有入包/金币变化）
+  $pkRed = New-TestDir "pickup-noeffect"
+  New-StageProxyDir $pkRed @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 201; recog = 6496; param = 0; tag = 0; series = 5; ts = 1100 },
+    @{ dir = "c2s"; ident = 1001; recog = 0; param = 330; tag = 331; series = 0; ts = 2000 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkRed, "-OutDir", (New-StageOutDir "pickup-red"))
+  Check "stages pickup TOOTH: no side effect => RED named pickup" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=pickup verdict=RED") -and $r.Out.Contains("无入包")) ($r.Out + " rc=" + $r.Code)
+
+  # 牙 2：CM_PICKUP 目标格 != 角色格（服务端 oracle 直接忽略）
+  $pkCell = New-TestDir "pickup-cell"
+  New-StageProxyDir $pkCell @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 201; recog = 6496; param = 0; tag = 0; series = 5; ts = 1100 },
+    @{ dir = "c2s"; ident = 1001; recog = 0; param = 331; tag = 331; series = 0; ts = 2000 },
+    @{ dir = "s2c"; ident = 200; recog = 777; param = 0; tag = 0; series = 1; body = 40; ts = 2200 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkCell, "-OutDir", (New-StageOutDir "pickup-cell-red"))
+  Check "stages pickup TOOTH: pickup at wrong cell => RED" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=pickup verdict=RED") -and $r.Out.Contains("!= 角色格")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 14b. NPC 对话 ----
+  $ndGreen = New-TestDir "npcdialog-green"
+  New-StageProxyDir $ndGreen @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "c2s"; ident = 1010; recog = 5001; param = 0; tag = 0; series = 0; ts = 2000 },
+    @{ dir = "s2c"; ident = 643; recog = 5001; param = 0; tag = 0; series = 1; body = 60; ts = 2100 })
+  $ndOut = New-StageOutDir "npcdialog-green"
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-NpcDialogStage", "-ProxyDir", $ndGreen, "-OutDir", $ndOut)
+  Check "stages npcdialog: GREEN with script say after CM_CLICKNPC" (
+    $r.Code -eq 0 -and $r.Out.Contains("STAGE_EVIDENCE category=npcdialog verdict=GREEN")) ($r.Out + " rc=" + $r.Code)
+  $doc = Get-EvidenceDoc $ndOut
+  Check "stages npcdialog: say_frames=1 max_body_len=60" (
+    $null -ne $doc -and [int]$doc.categories.npcdialog.dialogue.say_frames -eq 1 -and
+    [int]$doc.categories.npcdialog.dialogue.max_body_len -eq 60) (($doc.categories.npcdialog | ConvertTo-Json -Compress -Depth 6))
+
+  # 牙：删掉前置动作（有对话帧，但客户端没发 CM_CLICKNPC）
+  $ndRed = New-TestDir "npcdialog-noclick"
+  New-StageProxyDir $ndRed @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 643; recog = 5001; param = 0; tag = 0; series = 1; body = 60; ts = 2100 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-NpcDialogStage", "-ProxyDir", $ndRed, "-OutDir", (New-StageOutDir "npcdialog-red"))
+  Check "stages npcdialog TOOTH: no CM_CLICKNPC => RED named npcdialog" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=npcdialog verdict=RED") -and
+    $r.Out.Contains("未发出 c2s CM_CLICKNPC")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 14c. 买卖 ----
+  $trGreen = New-TestDir "trade-green"
+  New-StageProxyDir $trGreen @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 653; recog = 1000; param = 0; tag = 0; series = 0; ts = 1100 },
+    @{ dir = "c2s"; ident = 1010; recog = 5001; param = 0; tag = 0; series = 0; ts = 2000 },
+    @{ dir = "s2c"; ident = 643; recog = 5001; param = 0; tag = 0; series = 1; body = 60; ts = 2100 },
+    @{ dir = "c2s"; ident = 1014; recog = 5001; param = 207; tag = 1; series = 0; ts = 3000 },
+    @{ dir = "s2c"; ident = 650; recog = 0; param = 0; tag = 0; series = 0; body = 10; ts = 3200 },
+    @{ dir = "s2c"; ident = 653; recog = 900; param = 0; tag = 0; series = 0; ts = 3300 })
+  $trOut = New-StageOutDir "trade-green"
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-TradeStage", "-ProxyDir", $trGreen, "-OutDir", $trOut)
+  Check "stages trade: GREEN with dialogue + success + gold delta" (
+    $r.Code -eq 0 -and $r.Out.Contains("STAGE_EVIDENCE category=trade verdict=GREEN")) ($r.Out + " rc=" + $r.Code)
+  $doc = Get-EvidenceDoc $trOut
+  Check "stages trade: gold_delta=-100, opens>=1" (
+    $null -ne $doc -and [long]$doc.categories.trade.gold_delta -eq -100 -and
+    [int]$doc.categories.trade.dialogue.opens -ge 1) (($doc.categories.trade | ConvertTo-Json -Compress -Depth 6))
+
+  # 牙：删掉前置动作（不点 NPC 直接交易）
+  $trRed = New-TestDir "trade-nodialog"
+  New-StageProxyDir $trRed @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 653; recog = 1000; param = 0; tag = 0; series = 0; ts = 1100 },
+    @{ dir = "c2s"; ident = 1014; recog = 5001; param = 207; tag = 1; series = 0; ts = 3000 },
+    @{ dir = "s2c"; ident = 650; recog = 0; param = 0; tag = 0; series = 0; body = 10; ts = 3200 },
+    @{ dir = "s2c"; ident = 653; recog = 900; param = 0; tag = 0; series = 0; ts = 3300 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-TradeStage", "-ProxyDir", $trRed, "-OutDir", (New-StageOutDir "trade-red"))
+  Check "stages trade TOOTH: no merchant dialogue => RED named trade" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=trade verdict=RED") -and
+    $r.Out.Contains("未先打开商人对话")) ($r.Out + " rc=" + $r.Code)
+
+  # 牙：对话 + 成功帧都在，但金币没变化
+  $trGold = New-TestDir "trade-nogold"
+  New-StageProxyDir $trGold @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 653; recog = 1000; param = 0; tag = 0; series = 0; ts = 1100 },
+    @{ dir = "c2s"; ident = 1010; recog = 5001; param = 0; tag = 0; series = 0; ts = 2000 },
+    @{ dir = "s2c"; ident = 643; recog = 5001; param = 0; tag = 0; series = 1; body = 60; ts = 2100 },
+    @{ dir = "c2s"; ident = 1014; recog = 5001; param = 207; tag = 1; series = 0; ts = 3000 },
+    @{ dir = "s2c"; ident = 650; recog = 0; param = 0; tag = 0; series = 0; body = 10; ts = 3200 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-TradeStage", "-ProxyDir", $trGold, "-OutDir", (New-StageOutDir "trade-gold-red"))
+  Check "stages trade TOOTH: no gold change => RED" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=trade verdict=RED") -and
+    $r.Out.Contains("金币未减少")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 14d. 有目标战斗 ----
+  $profGood = Join-Path (New-TestDir "profile-good") "profile.json"
+  [IO.File]::WriteAllText($profGood, '{"fixtures":{"monsters":[{"map":"0","x":331,"y":331,"name":"鸡","count":4}]}}', (New-Object Text.UTF8Encoding($false)))
+  $profOther = Join-Path (New-TestDir "profile-other") "profile.json"
+  [IO.File]::WriteAllText($profOther, '{"fixtures":{"monsters":[{"map":"1","x":331,"y":331,"name":"鸡","count":4}]}}', (New-Object Text.UTF8Encoding($false)))
+  $cbGreen = New-TestDir "combat-green"
+  New-StageProxyDir $cbGreen @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "c2s"; ident = 3014; recog = $ownW; param = 0; tag = 2; series = 0; ts = 2000 },
+    @{ dir = "s2c"; ident = 31; recog = 8888; param = 8; tag = 10; series = 2; ts = 2200 })
+  $cbOut = New-StageOutDir "combat-green"
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbGreen, "-OutDir", $cbOut,
+    "-Profile", $profGood, "-PlayerMap", "0")
+  Check "stages combat: GREEN with fixture target + front cell + SM_STRUCK" (
+    $r.Code -eq 0 -and $r.Out.Contains("STAGE_EVIDENCE category=combat verdict=GREEN")) ($r.Out + " rc=" + $r.Code)
+  $doc = Get-EvidenceDoc $cbOut
+  Check "stages combat: target 331,331 / count 4 / hp 10 -> 8" (
+    $null -ne $doc -and [int]$doc.categories.combat.target.x -eq 331 -and
+    [int]$doc.categories.combat.target.count -eq 4 -and
+    [int]$doc.categories.combat.hp_before -eq 10 -and [int]$doc.categories.combat.hp_after -eq 8) (
+    ($doc.categories.combat | ConvertTo-Json -Compress -Depth 6))
+
+  # 牙：不刷怪（profile 的靶子在别的图）⇒ RED，点名 combat
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbGreen, "-OutDir", (New-StageOutDir "combat-notarget"),
+    "-Profile", $profOther, "-PlayerMap", "0")
+  Check "stages combat TOOTH: no same-map fixture => RED named combat" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=combat verdict=RED") -and
+    $r.Out.Contains("没有靶子")) ($r.Out + " rc=" + $r.Code)
+
+  # 牙：攻击方向没指向靶子
+  $cbDir = New-TestDir "combat-wrongdir"
+  New-StageProxyDir $cbDir @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "c2s"; ident = 3014; recog = $ownW; param = 0; tag = 6; series = 0; ts = 2000 },
+    @{ dir = "s2c"; ident = 31; recog = 8888; param = 8; tag = 10; series = 2; ts = 2200 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbDir, "-OutDir", (New-StageOutDir "combat-dir-red"),
+    "-Profile", $profGood, "-PlayerMap", "0")
+  Check "stages combat TOOTH: hit not aimed at target => RED" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=combat verdict=RED") -and
+    $r.Out.Contains("未指向靶子")) ($r.Out + " rc=" + $r.Code)
+
+  # 牙：靶子没刷出（CM_HIT 指向靶子格，但没有任何掉血/死亡）
+  $cbNoFx = New-TestDir "combat-noeffect"
+  New-StageProxyDir $cbNoFx @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "c2s"; ident = 3014; recog = $ownW; param = 0; tag = 2; series = 0; ts = 2000 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-CombatStage", "-ProxyDir", $cbNoFx, "-OutDir", (New-StageOutDir "combat-fx-red"),
+    "-Profile", $profGood, "-PlayerMap", "0")
+  Check "stages combat TOOTH: no HP drop/death (monster not spawned) => RED" (
+    $r.Code -eq 1 -and $r.Out.Contains("category=combat verdict=RED") -and
+    $r.Out.Contains("无掉血")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 14e. A6：日志目录参数化（空目录 ⇒ 显式 SKIP；-RequireLogEvidence ⇒ RED）----
+  $emptyLog = New-TestDir "log-empty"
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkGreen, "-OutDir", (New-StageOutDir "log-skip"),
+    "-LogDir", $emptyLog)
+  Check "stages A6: empty LogDir => explicit SKIP (not silent)" (
+    $r.Code -eq 0 -and $r.Out.Contains("LOG_EVIDENCE status=SKIP") -and
+    $r.Out.Contains("空日志目录")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkGreen, "-OutDir", (New-StageOutDir "log-red"),
+    "-LogDir", $emptyLog, "-RequireLogEvidence")
+  Check "stages A6 TOOTH: empty LogDir + RequireLogEvidence => RED" (
+    $r.Code -eq 1 -and $r.Out.Contains("log=RED")) ($r.Out + " rc=" + $r.Code)
+
+  $errLog = New-TestDir "log-err"
+  [IO.File]::WriteAllText((Join-Path $errLog "game-svr.out.log"), "[ERR] boom`n", (New-Object Text.UTF8Encoding($false)))
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkGreen, "-OutDir", (New-StageOutDir "log-err-red"),
+    "-LogDir", $errLog)
+  Check "stages A6 TOOTH: [ERR] in log => LOG_EVIDENCE RED" (
+    $r.Code -eq 0 -and $r.Out.Contains("LOG_EVIDENCE status=RED") -and $r.Out.Contains("err=1")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 14f. A5：既有 25 阶段名称与相对顺序不变（新阶段只能追加）----
+  $srcStages = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
+  function Stage-Pos([string]$needle) {
+    $i = $srcStages.IndexOf($needle)
+    return $i
+  }
+  $canon = @("start", "inject_hook", "login_id", "login_pwd", "login_submit", "charsel", "enter_game",
+             "notice_wait", "notice_poll", "ingame", "talk", "talk_sent")
+  $positions = @()
+  foreach ($n in $canon) { $positions += (Stage-Pos ('Stage "' + $n + '"')) }
+  $attackPos = Stage-Pos 'Stage ("attack_" + ($i + 1))'
+  $walkPos = Stage-Pos 'Stage ("walk_" + $i)'
+  $positions += $attackPos
+  $positions += $walkPos
+  foreach ($n in @("logout_button", "logout_alt_x", "logout_menu", "logout_confirm", "back_charsel",
+                   "reenter", "reentered", "done")) {
+    $positions += (Stage-Pos ('Stage "' + $n + '"'))
+  }
+  $ordered = $true
+  for ($i = 1; $i -lt $positions.Count; $i++) {
+    if ($positions[$i] -le $positions[$i - 1]) { $ordered = $false }
+  }
+  $allPresent = $true
+  foreach ($p in $positions) { if ($p -lt 0) { $allPresent = $false } }
+  Check "stages A5: canonical 25-stage subsequence present and ordered" ($ordered -and $allPresent) (
+    ($positions -join ","))
+  $newPos = @((Stage-Pos 'Stage "pickup"'), (Stage-Pos 'Stage "npc_dialog"'), (Stage-Pos 'Stage "trade"'),
+              (Stage-Pos 'Stage "combat_target"'), (Stage-Pos 'Stage "combat"'))
+  $newOk = $true
+  foreach ($p in $newPos) { if ($p -lt 0 -or $p -lt $attackPos -or $p -gt $walkPos) { $newOk = $false } }
+  Check "stages A5: new stages appended after attack, before walk (25-order intact)" $newOk ($newPos -join ",")
+  Check "stages A6 source: no hardcoded MirServer logs path" (
+    -not ($srcStages -match 'E:[/\\]MirServer[/\\]logs') -and -not ($srcStages -match 'MirServer\\\\logs')) $null
+
   # ---- 13. 源码/参数断言 ----
   $src2 = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
   Check "source: 12x blind notice loop removed" (-not ($src2 -match 'for \(\$i = 0; \$i -lt 12; \$i\+\+\)')) $null
