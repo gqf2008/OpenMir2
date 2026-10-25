@@ -192,3 +192,64 @@ cargo run -p msgcodegen -- --check
 
 **真机复拍**（R 卡必须）：窗口内跑「walk+turn 后 soft_close」与普通 disconnect 各一次，
 判 `characters.Dir/CX/CY/attack_mode` 两侧相等（`characters_item.Dura` 按 T-266 不判）。
+
+## 13. 落地结果回填（dev 交接执行记录，2026-10-25）
+
+> 本节是 §12 的**实际执行结果**（谁做了、做到哪、证据在哪、还缺什么）。判据仍未完成的项显式留白，
+> 不许读成「已完成」。
+
+### 13.1 代码改动（只改 Rust，`src/**` 零改动）
+
+| 位置 | 改动 |
+|---|---|
+| `mir2-rs/bins/game-svr/src/lib.rs` `EntityDerived` / `entity_derived_snapshot` | 新增**单一接缝**：五项 `x / y / dir / attack_mode / use_items` 一次取全。**签名是 `entity_derived_snapshot(&Entity)`**（不是 §12 写的 `(&Entity, &SessionGround)`——五项全在实体上，会话输入是多余的；以 Leader 派单口径为准）。 |
+| `SavedHuman`（`lib.rs` 的 `struct SavedHuman`） | 新增 `derived: Option<EntityDerived>`；43 处构造点补 `derived: None`（生产 1 处 + 测试 42 处）。 |
+| `handle_soft_close_cmd` | 在 `world.soft_close(chr_name)` **之前**调 `entity_derived_snapshot` 写入 `saves[chr].derived`；函数签名新增 `saves` 形参（`dispatch_inbound_p0` 同步透传，9 个测试调用点补空表）。 |
+| `build_save_record` | 四标量改「实体 → `saved.derived` → `rec`」，第三档调 `warn_save_fallback`；`use_items` 改「实体（且装载过）→ `saved.derived`（且装载过）→ 会话克隆」，**仍按 §11.1 定性为「覆盖 ≤1 tick 漂移」，未扩大改动面**。 |
+| `warn_save_fallback` / `save_fallback_warns` | WRN 的触发门控在 `build_save_record`：**只在 `world.session(chr_name)` 存在**时发（普通断线存档在 `world.disconnect` 之前、实体仍在；从未进世界无会话）。为让「删 WRN ⇒ 牙红」可判，测试构建里有一个线程局部计数器，**计数点就写在 `glog!` 的格式实参里**（只删打印行也会让计数消失）。 |
+
+**未做（明确留给别的卡）**：`displays.remove` / `party_del_member` 那块 `GateEvent::Closed` 清理在
+`CM_SOFTCLOSE` 之后被跳过的问题**不在本卡**（Leader 已单开 `openmir2-softclose-cleanup-residue`，
+issue `f83966d1`）；本卡**没有**动 `displays`、组队清理，也**没有**把 `actor_id` 改成「软关时保留」
+（那等于做 (b′) 半成品，与 `openmir2-makeghost-lifecycle` 冲突）。
+
+### 13.2 牙与变异（构造级，全部已跑）
+
+夹具 `SoftCloseRig`：世界 `(100,100)`，角色在 `(11,22)`、`dir=0`、`attack_mode=0`，佩戴武器
+`Index=207/Dura=4000`；载入记录故意写成 **`cur=(7,12) / dir=3 / attatck_mode=1`**（与实时值全不同）。
+
+| 牙 | 内容 | 绿 | 删对应实现 ⇒ 红 |
+|---|---|---|---|
+| T1 | `CM_WALK` 到 `(12,22)` → `CM_SOFTCLOSE` → 存档 ⇒ `CX/CY=(12,22)` | ✓ | ✓（优先级变异后 `(7,12)`） |
+| T2 | `CM_TURN` 到 2 → soft_close → 存档 ⇒ `Dir=2` | ✓ | ✓（回落 3） |
+| T3 | `@AttackMode`（生产入口 `handle_say`）0→2 → soft_close → 存档 ⇒ `attatck_mode=2` | ✓ | ✓（回落 1） |
+| T4 | 实体磨损 `Dura=1234`（会话仍 4000）→ soft_close → 存档 ⇒ `Index=207/Dura=1234` | ✓ | ✓（回落 4000） |
+| T5 | 变异：`let derived = live.as_ref();`（快照降到记录之后） | — | ✓ **T1/T2/T3 三条红**（T4 走独立的 `use_items` 支，另由 T4 自身变异覆盖） |
+| T6 | 变异：删 `warn_save_fallback(chr_name)` ⇒ 计数断言红（`left: 0, right: 1`） | ✓ 三门控（实体在 / 无会话 / 二缺一） | ✓ |
+| T7 | **负例**：普通断线路径（不经 `CM_SOFTCLOSE`，存档在 `world.disconnect` 之前）同样取实时 `(12,22)/dir=2`，`derived` 保持 `None` | ✓ | ✓（删实体优先支 ⇒ 回落 `(7,12)`） |
+
+补充：**删掉 `handle_soft_close_cmd` 里的 `saved.derived = Some(d)` 一行 ⇒ T1–T4 四条全红**（已实测）。
+
+### 13.3 门禁（本地，单次顺序执行）
+
+```
+cargo fmt --all -- --check                            rc=0
+cargo clippy --workspace --all-targets -- -D warnings rc=0
+cargo test -p game-svr --lib                          1508 passed / 0 failed / 4 ignored（含本卡 6 条新牙）
+cargo test --workspace                                rc=0（全绿）
+cargo run -p msgcodegen -- --check                    rc=0（604 条常量一致）
+7 卫生门（t_reservation / conflict_marker / stale_pointer / whitelist_anchor /
+        m3_registry / dynamic_count_stamp / board_coverage）+ merge_tree_helper --selftest  全 rc=0
+```
+
+> 工具链记录：clippy 0.1.98 在 `thread_local!` 宏调用处误报 `missing_const_for_thread_local`
+>（初值已是 `const { … }`，同 `chat.rs:50` 的既有登记）；逐项 `#[allow]` 会被判 `unused-attributes`，
+> 故把计数器收进 `#[cfg(test)] mod save_fallback_warns` 并在模块内放行。
+
+### 13.4 仍未完成（R 卡不走掉）
+
+- **真机复拍（本卡的判据主体）**：窗口内跑「walk + turn 后 `CM_SOFTCLOSE`」与**普通 disconnect** 各一次，
+  两侧比 `characters.CX/CY/Dir/AttatckMode`；`characters_item.Dura` 按 **T-266** 不判。
+  未跑 ⇒ 本卡 `window_required=true` 继续保持，不得 `closed`。
+- `use_items` 的**同 tick 残余**（最后一刀磨损与 soft_close 落在同一 tick 且会话回写先于 inbound）仍按
+  §11.1 登记为「最多丢 1 tick」，本卡未覆盖。
