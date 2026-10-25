@@ -1466,6 +1466,10 @@ def _var_refs(data):
                 for key in ("recog", "param", "tag", "series"):
                     v = send.get(key)
                     if isinstance(v, str):
+                        # 运行期令牌（`@last_kill_xy`）不是 params 名：只有 `send.recog` 支持，
+                        # 交给 `plan_step` 校验令牌名（拼错在那里拒并列出可用令牌）。
+                        if key == "recog" and v.startswith("@"):
+                            continue
                         refs.append((where + ".send." + key, v))
                 v = send.get("text_from")
                 if isinstance(v, str):
@@ -4836,6 +4840,45 @@ def _selftest_runtime_token():
     # 本套的 5 条**必须承重**：selftest harness 只看**异常**（返回值只当明细打印），
     # 所以套内自己把 False 聚合成 AssertionError —— 与 `_selftest_kill` 结尾的
     # `for cond, msg in checks: assert cond, msg` 同口径。
+    # 牙 a/b/d（卡 `openmir2-probe-check-runtime-token`）：`check_scenario` 的变量引用检查
+    # 必须放行运行期令牌（令牌名仍由 plan_step 校验），同时仍要拦真正未声明的参数。
+    msgs = load_message_constants()
+
+    def check_doc(doc):
+        plans, _ = expand_scenario(doc, {})
+        check_scenario(doc, plans, {}, msgs)
+
+    tok_doc = {"name": "selftest_token_ok", "params": {"self_pos": self_xy},
+               "steps": [{"kill": {"track": "nearest:鸡", "interval_ms": 1000}},
+                         {"send": {"ident": 1007, "recog": "@last_kill_xy"}}]}
+    try:
+        check_doc(tok_doc)
+        tok_err = None
+    except ScenarioError as ex:
+        tok_err = str(ex)
+    checks.append((tok_err is None,
+                   "牙CS-a check_scenario 放行运行期令牌 @last_kill_xy（%r）" % (tok_err,)))
+
+    bad_doc = {"name": "selftest_token_bad", "params": {"self_pos": self_xy},
+               "steps": [{"send": {"ident": 1007, "recog": "no_such_param"}}]}
+    try:
+        check_doc(bad_doc)
+        bad_err = "accepted"
+    except ScenarioError as ex:
+        bad_err = str(ex)
+    checks.append(("no_such_param" in bad_err,
+                   "牙CS-b 未声明的普通 params 名仍被拦（%r）" % (bad_err,)))
+
+    typo_doc = {"name": "selftest_token_typo", "params": {"self_pos": self_xy},
+                "steps": [{"send": {"ident": 1007, "recog": "@last_kill_x"}}]}
+    try:
+        check_doc(typo_doc)
+        typo_err = "accepted"
+    except ScenarioError as ex:
+        typo_err = str(ex)
+    checks.append(("未知运行期令牌" in typo_err and "@last_kill_xy" in typo_err,
+                   "牙CS-d 拼错令牌 @last_kill_x 仍拒并列出可用令牌（%r）" % (typo_err,)))
+
     bad = [msg for ok, msg in checks if not ok]
     if bad:
         raise AssertionError("%d/%d 牙红：%s" % (len(bad), len(checks), "；".join(bad)))
