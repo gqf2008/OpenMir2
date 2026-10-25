@@ -546,3 +546,27 @@ path = "docs/board-merged-column-20261024.md"
 line_sha256 = "9c1889eddb641214115df3e9cae0c7b8ddb829bb28fc8954daccc49c5a7df65e"
 reason = "实时看板对比表的说明句（计数相对 reviewer 复核时 521→532，因看板实时翻动）：段内已声明 2.26s 内两次 board 调用的逐字对比；该文件是另一张卡的写集，本卡不改。"
 added = "2026-10-24"
+
+# --- 2026-10-25 追加（Leader 裁定；两条结构性无法用单一声明满足的段） ---------
+# 说明：这三行不是「懒得补戳」，而是段落的声明模型表达不了它的计数形态：
+# ① 一行里对比**两个不同 commit** 的桶计数（列头就是 oid），段落只能声明一个时点；
+# ② 计数与声明写在同一行（board 快照句），门禁的「声明须在命中行之前」无法满足。
+# 判据收紧（支持多 commit 声明 / 同行声明）留待后续卡；本轮如实登记。
+
+[[allow]]
+path = "docs/goal-gate-full-20261024.md"
+line_sha256 = "ea7eebce0297c7c929a7c3d0b480c06f47b12fe1b8d985121405bf8ce25b567a"
+reason = "历史对照表的一行：同一行对比 `55a8e7fca` 与 `81ecc0d28` 两个 commit 的桶计数（列头即 oid），段落声明只能给一个时点 ⇒ 结构上必然超 --paragraph-tol。不是实时量。"
+added = "2026-10-25"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "378d9c97304c104f05a6cf8a32615eac2405bc9b859cd4c7744f26cf05190ed6"
+reason = "board 快照句：计数与声明（`6d79be4da` @ 2026-10-23T07:31+08:00）写在**同一行**，门禁要求声明在命中行之前 ⇒ 结构上无法满足；句内已给 oid 与时点。"
+added = "2026-10-25"
+
+[[allow]]
+path = "docs/rewrite-remaining-inventory-20261022.md"
+line_sha256 = "0b97dcfc4418833e6d0ad97b6c657088493c4c1f118e227eb9bc4378d29c5e7a"
+reason = "同上（同一段落的第二处计数行），计数与声明同行，结构上无法满足「声明须在命中行之前」。"
+added = "2026-10-25"
