@@ -6,6 +6,7 @@
 > 产物：`E:/tmp/window/goal-full-2667aaa25.json`（内容对应 `681a59def`）、`goal-full-681a59def.meta`、`cargo-test-681a59def.{log,results.txt}`（均带 sha256）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`）。
 > **现在只剩两件事需要你**：**① `G11` 一句话**（§1，推荐 A；这是条件② 唯一的缺口）、**② 给窗口时段**（§2，五张 R 卡的真机项都已写好跑法，不占你的注意力，只占机器）。
+> **另有一件可选但建议做**：**授权一次异地备份**（§4）——今天的工作目前只有「本地 + 今早刚出过故障的自建实例」两份副本，GitHub 落后 140 个提交。
 > 只列循环内无权自决的事；每项 ≤3 行，可按 §0 模板一行回复。
 
 ## 0. 一行回复模板
@@ -116,16 +117,14 @@
 
 ---
 
-## 4. ④ walgit 主源——**已恢复（迁到 `OpenMir2-recover`），无需你回复**
+## 4. ④ walgit 主源——已恢复；**但今天的工作只有两份副本，建议你授权一次异地备份**
 
-- **原仓库 `gqf2008/OpenMir2` 已不可修复**：故障是**服务端自己写、5 秒后自己删**了 head WAL 段
-  `…/log/0000000000003000.pb`（`store.put` 16:06:22 → `closed bundle slots settled` 16:06:26 →
-  `store.delete` 16:06:27），WAL 头断 ⇒ 全部命令 500。根因取证见 `docs/walgit-outage-rootcause-20261025.md`（合并 `77ef50ddf`）。
-- **已迁**：`gqf2008/OpenMir2-recover`，master / `main` / 10384 条 `refs/collab/*` / 101 分支 / 12 tag 全量补推，
-  `ls-remote`、`fetch`、`push` 均 rc=0；本机 `remote walgit` 已指向新仓库（worktree 共享 config，各车道无需改动）。
-- **原仓库原地保留只读**（不删、不写、不用空对象补 WAL）。
-- **仍建议你做一件事（可选）**：两台机器（本 Windows + macOS 部署）**共用同一个 R2 桶**且都开 `maintain`
-  ⇒ 有二次踩踏风险。要么本机 `walgit.toml` 的 `[server].roles` 改成 `["serve"]`，要么换独立桶/前缀。**我不擅自改环境配置。**
+- **当前主源 = 原仓库 `gqf2008/OpenMir2`**（今早故障后先迁 `-recover`，原仓库恢复后已迁回；`remote walgit` 指向它、`pushDefault=walgit`）。
+- **故障根因**：服务端**自己写、5 秒后自己删**了 head WAL 段（`store.put` 16:06:22 → `bundle slots settled` 16:06:26 → `store.delete` 16:06:27），WAL 头断 ⇒ 全部命令 500。取证见 `docs/walgit-outage-rootcause-20261025.md`。
+- **⚠ 当前备份暴露（本轮实测）**：`master = be47c16a6`，**GitHub `origin` 落后 140 个提交** ⇒ **今天全部合入都不在 GitHub 上**。也就是说今天的产出只有**两份副本：本地磁盘 + 今早刚出过故障的自建实例**。
+  - **建议（需你一句话）**：授权我把当前 `master` + `refs/collab/*` 推到 GitHub `origin` 作异地备份。规则写的是「GitHub 只是镜像、需要时人工同步」——**今天正是那个「需要时」**。不擅自推。
+- **仍建议的环境加固（可选）**：两台机器共用同一个 R2 桶且都开 `maintain` ⇒ 有二次踩踏风险。要么本机 `walgit.toml` 的 `[server].roles` 改成 `["serve"]`，要么换独立桶/前缀。**我不擅自改环境配置。**
+- **一处待修（已通知本人）**：`openmir2-tester-1` 有 **3 条 comment 条目只在本地未推 walgit**（不影响合并判定，但远端看不到）；已请其本人推并复核 `unpushed: 0`。
 
 ## 5. ⑤ 状态快照（`goal_gate` 实测）
 
