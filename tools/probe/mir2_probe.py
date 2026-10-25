@@ -1953,9 +1953,10 @@ class Run:
                                        "swings": swings, "retries": retries,
                                        "note": plan.get("note", "")})
                     raise StepFailure(
-                        "steps[%s].kill(track): 出手前复核 %d 次仍未命中（max_retries=%d）——"
-                        "目标最后已知 (%d,%d) actor=%d seq=%s"
-                        % (idx, retries, plan["max_retries"], lastn["x"], lastn["y"],
+                        "steps[%s].kill(track): 出手前复核失败 %d 次（max_retries=%d：允许 %d 次"
+                        "重算，第 %d 次仍不一致才报错）——目标最后已知 (%d,%d) actor=%d seq=%s"
+                        % (idx, retries, plan["max_retries"], plan["max_retries"],
+                           plan["max_retries"] + 1, lastn["x"], lastn["y"],
                            lastn["actor"], lastn["last_seq"]))
                 continue
             raw = conn.send(plan["self_pos"], plan["ident"], 0, direction, 0, b"")
@@ -5062,7 +5063,62 @@ def _selftest_kill_track():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
-    return "schema 4 反 + 牙 a(打新格)/b(消失不空打)/c(同名选最近)/d(复核用尽带坐标)"
+    # 牙 e：两只**等距**同名 ⇒ 必须稳定按 actor id 决胜（帧序换了也选同一只）
+    run, conn, tmpd = run_with([turn_frame(702, 329, 330, "鸡"),
+                                turn_frame(701, 331, 330, "鸡")])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "等距两只却成功（不应有死亡帧）"
+        turns = [x for x in run.steps if x.get("kind") == "send" and x.get("ident") == CM_TURN]
+        assert turns and turns[-1]["tag"] == 2, turns   # 701 在 (331,330) ⇒ Dir=2（actor id 决胜）
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 f：目标**只发死亡帧**（无 DISAPPEAR） ⇒ 不得再被选中、不得空打
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡"),
+                                build_s2c_frame(701, SM_NOWDEATH, 331, 330, 0, b"")])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "目标已消失/死亡" in err, err
+        assert conn.sock.sent == [], "目标已死却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 g：差一语义——max_retries=1 允许**一次**重算；只走开一次后稳定 ⇒ 应继续出手（alive），
+    # 而不是在第一次复核失败就报「复核用尽」（`>` 改 `>=` 会红）
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡")])
+    try:
+        cells = [(331, 330), (330, 331)]
+        calls = {"n": 0}
+
+        def one_hop(conn_, plan_):
+            rows, _order = scan_actors(conn_.frames, run.state.get("self_actor"))
+            row = dict(rows[701])
+            row["x"], row["y"] = cells[0] if calls["n"] == 0 else cells[1]
+            calls["n"] += 1
+            return row
+
+        run._pick_track_target = one_hop
+        err = None
+        try:
+            run.execute_step(conn, kill_plan(max_retries=1))
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "alive" in err, err
+        assert "复核失败" not in err, err   # 允许 1 次重算 ⇒ 不应报复核用尽
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    return ("schema 4 反 + 牙 a(打新格)/b(消失不空打)/c(同名选最近)/d(复核用尽带坐标)；"
+            "e(等距按 actor 决胜)/f(只发死亡帧不空打)/g(max_retries 差一语义)")
 
 
 def run_selftest():
