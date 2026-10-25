@@ -166,7 +166,8 @@ DB_UNDECIDABLE_KINDS = frozenset({
     "column_count", "duplicate_key", "input_error",
     # 时间列见证（卡 openmir2-dbsrv-session-timezone）：未登记 / 无墙钟 / 值不可识别 ⇒ 判不了；
     # `time_witness_stale` 是**差异**（不进这个集合）。
-    "time_witness_unregistered", "time_witness_no_clock", "time_witness_unparsable",
+    "time_witness_unregistered", "time_witness_unscoped", "time_witness_no_clock",
+    "time_witness_unparsable",
 })
 
 
@@ -375,7 +376,14 @@ class RuleSet(object):
             out["time_mode"] = db["time_mode"]
         # 卡 openmir2-dbsrv-session-timezone ④：时间列**逐列登记**（presence 只比存在性，
         # 曾经把「两侧会话时区差 8h」藏了整整一轮）。形状非法一律加载期拒。
-        tc = db.get("time_columns", {})
+        # G1（review `df349949`，blocking）：**缺键不许静默关掉整层见证**。
+        # `db.get(...)` 的默认值会让「没登记任何时间列」= 「不做任何见证」而 rc 0 PASS——
+        # 与本日另外两次同源（`or 2`、`characters.ModifyTime` 不存在）：**看不见 ≠ 没问题**。
+        if "time_columns" not in db:
+            raise InputError(
+                "db.time_columns 缺失：时间列见证层会被静默关掉（fail-open）。"
+                "必须显式登记（可为空 dict，但那时被快照表的时间列一律判 unregistered）")
+        tc = db["time_columns"]
         if not isinstance(tc, dict):
             raise InputError("db.time_columns 必须是 {表: {列: {mode, why}}}")
         norm = {}
@@ -400,6 +408,11 @@ class RuleSet(object):
         if not is_int(tol) or tol < 0 or tol > 86400:
             raise InputError("db.time_tolerance_s 必须是 0..86400 的整数")
         out["time_tolerance_s"] = int(tol)
+        # 窗口**下界**的 slack 要小：`start - 300s` 的写法会让「上一次运行写的行」误绿（F1-C）。
+        lead = db.get("time_lead_s", 30)
+        if not is_int(lead) or lead < 0 or lead > 3600:
+            raise InputError("db.time_lead_s 必须是 0..3600 的整数")
+        out["time_lead_s"] = int(lead)
         if "key_mode" in db:
             if db["key_mode"] not in ("pk", "multiset"):
                 raise InputError("db.key_mode 必须是 pk/multiset")
@@ -1630,6 +1643,33 @@ def _side_run_clock(o_dir, r_dir):
     return out
 
 
+def _side_char_name(o_dir, r_dir):
+    """两侧 `run.json` argv 里的 `--char-name` → {"oracle": name, "rust": name}（缺失则不收）。
+
+    见证限定到**本角色行**：`max(时间列)` 落在窗口内，也可能来自别人的写入（F1-A/C）——
+    用本次运行实际登录的角色名收窄范围，才是「本次运行有没有写这一行」的等价判据。
+    """
+    out = {}
+    for side, d in (("oracle", o_dir), ("rust", r_dir)):
+        path = os.path.join(d, "run.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            meta = read_json(path, "run.json")
+        except (InputError, Undecidable):
+            continue
+        argv = meta.get("argv") if isinstance(meta, dict) else None
+        if not isinstance(argv, list):
+            continue
+        for i, item in enumerate(argv):
+            if item in ("--char-name", "--char_name") and i + 1 < len(argv):
+                name = argv[i + 1]
+                if isinstance(name, str) and name.strip():
+                    out[side] = name.strip()
+                break
+    return out
+
+
 def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
     o_path = overrides.get("oracle") or find_snapshot(o_dir)
     r_path = overrides.get("rust") or find_snapshot(r_dir)
@@ -1665,7 +1705,9 @@ def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
             allow_unknown_table=bool(db_opts["allow_unknown_table"]),
             time_witness=db_opts.get("time_columns"),
             time_ref=_side_run_clock(o_dir, r_dir),
-            time_tolerance_s=db_opts.get("time_tolerance_s", 600), quiet=True)
+            time_scope=_side_char_name(o_dir, r_dir),
+            time_tolerance_s=db_opts.get("time_tolerance_s", 600),
+            time_lead_s=db_opts.get("time_lead_s", 30), quiet=True)
     except (InputError, Undecidable):
         raise
     except Exception as e:  # dbsnap_pair.InputError 等：一律 fail-closed

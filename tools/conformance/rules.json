@@ -475,7 +475,7 @@
     "key_mode": "pk",
     "ignore_columns": [],
     "allow_unknown_table": false,
-    "reason": "两次独立运行的墙钟必然不同：时间列默认只比 NULL/非 NULL（presence）。**范围内（被快照的 13 张表）的每个 SQL 时间列（DATETIME/TIMESTAMP）都必须在本块 time_columns 里登记**：登记 plausible 的按「落在本次运行窗口 [start_wall−tol, end_wall+tol] 内」判值；登记 presence 的必须写 why。未登记 ⇒ UNDECIDABLE(time_witness_unregistered)，不许全域豁免。**不在范围内的**：不可快照的表（account_friend/tbl_connectlogs 等）与**非 SQL 时间类型**的列（如 account_protection.Birthday 是 char(11)）——前者不参与本判据，后者不是时间列。plausible 的用途：抓住「db-srv 会话时区与 oracle 不一致」这类**跨运行看不见**的持久化差异（卡 openmir2-dbsrv-session-timezone）。跨运行自增 Id 不同时用 --db-key-mode multiset --db-ignore-columns Id,PlayerId",
+    "reason": "两次独立运行的墙钟必然不同：时间列默认只比 NULL/非 NULL（presence）。**范围内（被快照的 13 张表）的每个 SQL 时间列（DATETIME/TIMESTAMP）都必须在本块 time_columns 里登记**：登记 plausible 的按「落在本次运行窗口 [start_wall−tol, end_wall+tol] 内」判值；登记 presence 的必须写 why。未登记 ⇒ UNDECIDABLE(time_witness_unregistered)，不许全域豁免。**不在范围内的**：不可快照的表（account_friend/tbl_connectlogs 等）与**非 SQL 时间类型**的列（如 account_protection.Birthday 是 char(11)）——前者不参与本判据，后者不是时间列。plausible 的用途：抓住「db-srv 会话时区与 oracle 不一致」这类**跨运行看不见**的持久化差异（卡 openmir2-dbsrv-session-timezone）。跨运行自增 Id 不同时用 --db-key-mode multiset --db-ignore-columns Id,PlayerId **窗口** = [start_wall − time_lead_s(默认 30s), end_wall + time_tolerance_s(默认 600s)]；判据限定到**本角色行**（run.json argv 的 --char-name）且窗口内至少一行 ⇒ 消灭「别人/上一次运行写的行」造成的误绿与「表里有更晚的行」造成的误红；拿不到角色名 ⇒ UNDECIDABLE(time_witness_unscoped)。**缺 `time_columns` 键 ⇒ 加载期拒**（fail-open 会被静默当成「不做见证」）。",
     "tier": "L",
     "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-4)",
     "time_columns": {
@@ -532,6 +532,7 @@
         }
       }
     },
-    "time_tolerance_s": 600
+    "time_tolerance_s": 600,
+    "time_lead_s": 30
   }
 }
