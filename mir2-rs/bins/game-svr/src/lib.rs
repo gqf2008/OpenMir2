@@ -20304,29 +20304,65 @@ fn apply_get_start_point_after_tick(
     enter_cfg: &EnterConfig,
 ) {
     let now = world.clock_ms;
+    // 采集本 tick 每个在线玩家的 (chr, check_dup_obj_tick, 当前地图名)，再交给纯核心。
+    let mut players: Vec<(String, i64, String)> = Vec::with_capacity(online.len());
     for entry in online.iter() {
         let Some(e) = world.entities.get(entry.actor_id) else {
             continue;
         };
-        // 只在**本 tick 命中 3s 门**时应用（world 在门内把 tick 置为 now）。
-        if !dup_tick_fired(e, now) {
-            continue;
-        }
         let Some(map_name) = registry.and_then(|r| r.name_of(e.map_id)) else {
             continue;
         };
-        let Some(saved) = saves.get_mut(&entry.chr_name) else {
+        players.push((
+            entry.chr_name.clone(),
+            e.check_dup_obj_tick,
+            map_name.to_string(),
+        ));
+    }
+    let _ = apply_start_point_for_fired_players(
+        now,
+        &players,
+        saves,
+        &enter_cfg.home_start_points,
+        &enter_cfg.red_home_map,
+        enter_cfg.red_home_x,
+        enter_cfg.red_home_y,
+    );
+}
+
+/// **端到端核心**（3s 支的「串起来」那段，纯数据进/纯数据出，供单测直接喂数组）：
+/// 对每个 `(chr_name, check_dup_obj_tick, 当前地图名)`，**只有 tick == now** 的玩家才
+/// 用 [`apply_get_start_point_to_record`] 覆盖 `saves[chr].record.data.home_*`。
+/// 返回实际写入的玩家数（0 = 本 tick 无人命中/无匹配）。
+fn apply_start_point_for_fired_players(
+    now: i64,
+    players: &[(String, i64, String)],
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    start_points: &[mir2_envir::startpoint::StartPoint],
+    red_home_map: &str,
+    red_home_x: i16,
+    red_home_y: i16,
+) -> usize {
+    let mut applied = 0usize;
+    for (chr_name, tick, map_name) in players {
+        if *tick != now {
+            continue;
+        }
+        let Some(saved) = saves.get_mut(chr_name) else {
             continue;
         };
-        apply_get_start_point_to_record(
+        if apply_get_start_point_to_record(
             &mut saved.record,
             map_name,
-            &enter_cfg.home_start_points,
-            &enter_cfg.red_home_map,
-            enter_cfg.red_home_x,
-            enter_cfg.red_home_y,
-        );
+            start_points,
+            red_home_map,
+            red_home_x,
+            red_home_y,
+        ) {
+            applied += 1;
+        }
     }
+    applied
 }
 
 /// `tick_world_with_specials` 的**前半段**：`tick_head()` + 专用怪的两条排水。
@@ -65260,6 +65296,54 @@ mod tests {",
     /// 红检：调用点改回 `if is_new_human` ⇒ 第二条断言红；删掉调用 ⇒ 出现次数断言红；
     /// 调用移出 `home_empty` 块（如无条件调用）⇒ 第一条断言红。
     /// 做法同 `p31_space_move_does_not_reset_tick_anchor`（对生产切片做源码断言）。
+    /// 卡 `openmir2-home-coords-divergence`：**端到端牙**——3s 支「遍历 → 谓词筛 → 写回」整段。
+    ///
+    /// 两个玩家：A 的 `check_dup_obj_tick == now`、B 的差 1。断言 A 被覆盖成 StartPoint 命中值、
+    /// B **一字不变**；起始值显式设为 `0/289/618` 并断言非全 0（否则分不出「没动」与「写成 0」）。
+    #[test]
+    fn apply_start_point_for_fired_players_writes_only_the_fired_player() {
+        let sp = mir2_envir::startpoint::parse_start_points("0 289 618\n3 330 330\n");
+        let mut saves = std::collections::HashMap::new();
+        for (chr, account) in [("A", "a"), ("B", "b")] {
+            let mut rec = record::PlayerRecord::default();
+            rec.data.home_map = Some("0".to_string());
+            rec.data.home_x = 289;
+            rec.data.home_y = 618;
+            assert_ne!(
+                (rec.data.home_x, rec.data.home_y),
+                (0, 0),
+                "起始值必须非全 0，才能区分「没动」与「写成 0」"
+            );
+            saves.insert(
+                chr.to_string(),
+                SavedHuman {
+                    account: account.to_string(),
+                    record: rec,
+                    enter_map: "0".to_string(),
+                },
+            );
+        }
+        let players = vec![
+            ("A".to_string(), 5000i64, "3".to_string()),
+            ("B".to_string(), 4999i64, "3".to_string()),
+        ];
+        let applied =
+            apply_start_point_for_fired_players(5000, &players, &mut saves, &sp, "9", 845, 674);
+        assert_eq!(applied, 1, "只有 A 命中本 tick");
+        let a = &saves.get("A").expect("A 在").record.data;
+        assert_eq!(
+            (a.home_map.clone(), a.home_x, a.home_y),
+            (Some("3".to_string()), 330, 330),
+            "A 必须被 StartPoint(3) 覆盖"
+        );
+        let b = &saves.get("B").expect("B 在").record.data;
+        assert_eq!(
+            (b.home_map.clone(), b.home_x, b.home_y),
+            (Some("0".to_string()), 289, 618),
+            "未命中的 B 一字不变"
+        );
+    }
+
     /// 卡 `openmir2-home-coords-divergence`：登录与 3s 支**共用**的 `GetStartPoint()`
     /// 记录级应用——三向行为牙（不需要源码文本锚点）。
     #[test]
