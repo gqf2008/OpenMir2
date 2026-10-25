@@ -1,6 +1,6 @@
 {
   "name": "castle_merchant_tax_upgrade",
-  "description": "W-TAX-1 第 4 路径（武器升级）的商税腿：沙巴克铁匠（map 3 (332,317)，MerChant.txt:82，IsCastle=0、距 CastleHome(644,290) 312≥WarRange 100 ⇒ NPC.Castle=null）**只能**走 `CastleGetAllNpcTax=1` 的 CastleManager 分支（税基恒 UpgradeWeaponPrice=10000 ⇒ 每城 Round(500)；CastleMgr 升序遍历全表 ⇒ 两城共 1000）。步序 = upgrade_retrieve 的前 11 步（上手木剑→点击→@upgrade→@confirmupgrade→@upgradenow→提交帧→709），**不含 660s 取回腿**。**profile 前置**：两侧同值 `config_overrides.Server.conf.CastleGetAllNpcTax=1`（`_check_fixture_symmetry` 校验）；run3 内置 profile（alt/window-magic）无法表达该覆盖 ⇒ 本场景在 run3 保持 blocked，解封需新 profile 或 run_batch 支持 profile 文件（另卡）。证据：帧（202/709 等）+ DB 后态为主；`Castle/<0,1>/SabukW.txt` 的 TotalGold/TodayIncome **只在 SystemProcessor 的 ConsoleShowUserCountTime 门（生产 600000ms）后**才变，文件字段为辅（可通过 profile 覆盖 `ConsoleShowUserCountTime` 缩短以观察）。",
+  "description": "W-TAX-1 第 4 路径（武器升级）的商税腿：沙巴克铁匠（map 3 (332,317)，MerChant.txt:82，IsCastle=0、距 CastleHome(644,290) 312≥WarRange 100 ⇒ NPC.Castle=null）**只能**走 `CastleGetAllNpcTax=1` 的 CastleManager 分支（税基恒 UpgradeWeaponPrice=10000 ⇒ 每城 Round(500)；CastleMgr 升序遍历全表 ⇒ 两城共 1000）。步序 = upgrade_retrieve 的前 11 步（上手木剑→点击→@upgrade→@confirmupgrade→@upgradenow→提交帧→709），**不含 660s 取回腿**。**profile 前置**：两侧同值 `config_overrides.Server.conf.CastleGetAllNpcTax=1`（`_check_fixture_symmetry` 校验）；run3 内置 profile（alt/window-magic）无法表达该覆盖 ⇒ 本场景在 run3 保持 blocked：真缺口是按名字/坐标选 NPC（进批通道已通，见 `blocked`）。证据：帧（202/709 等）+ DB 后态为主；`Castle/<0,1>/SabukW.txt` 的 TotalGold/TodayIncome **只在 SystemProcessor 的 ConsoleShowUserCountTime 门（生产 600000ms）后**才变，文件字段为辅（可通过 profile 覆盖 `ConsoleShowUserCountTime` 缩短以观察）。",
   "required": [
     "merchant_actor"
   ],
@@ -107,7 +107,7 @@
     }
   ],
   "blocked": {
-    "reason": "**run3 批次装载通道缺失（能力已有）**：`card_window.load_profile` 支持 **profile JSON 路径**（`--profile <path>.json`）⇒ 手工窗口可声明 `fixtures.config_overrides.Server.conf.CastleGetAllNpcTax=1`（本轮实测生效并已验证还原）；但 `run_batch.sh` 的清单只认内置名 `alt`/`window-magic`，场景本身无法携带 profile ⇒ 本场景暂不进批次。解封进批次需 run_batch 支持 profile 路径（工具卡，另开）。",
-    "missing_fixture": "① 手工跑：dump BUILTIN alt 为 JSON + 加 `fixtures.config_overrides`，传 `--profile <path>`（推荐用法，见 doc §4.2）；② 进 run3：run_batch 需支持自定义 profile（另卡）。"
+    "reason": "**「进批通道缺失」已证伪**（`run_batch.sh` 的 `extra` 拼在 `--profile` 之后，且 `load_profile` 接受 profile JSON 路径）⇒ 本场景**可以**带自定义 profile。**真缺口 = 按名字/坐标选 NPC**：`click_npc` 只认 actor id / `auto:last_turn`，实测 map 3 两处都点到「装备回收」⇒ `@upgrade` 无链接、643 超时。profile 预置已入库 `tools/window/profiles/castle_tax_upgrade.json`（本卡新增，**未接进 run3**）。保持 blocked 直到 `openmir2-probe-npc-discovery` 合并。",
+    "missing_fixture": "① 按名字/坐标选 NPC（卡 `openmir2-probe-npc-discovery`，已交付待审）；② 合并后把本行 `extra` 加 `--profile tools/window/profiles/castle_tax_upgrade.json`，并**同步清掉两处 blocked**（另一张卡）。"
   }
 }
