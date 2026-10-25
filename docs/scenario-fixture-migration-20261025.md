@@ -20,9 +20,8 @@ run3 的 `extra` 追加 `--profile tools/window/profiles/<name>.json`（`--profi
 与 #24 的 profile 通道同型）。**只替换本场景真实需要的那一槽**，不动其它槽。
 
 `card_window.py` 的 `--selftest` 原自查 ①/② **把「bag_equip/eat_item 必须声明旧 `inventory`」写死了**
-⇒ 迁移后必红。Leader 裁决授权严格范围修改；**但该文件同期有 tester 的 rc 修复（`card_window.py:10172`
-的 `0 or 2` bug），为避免两条线同改一个文件，本卡的 `card_window.py` 改动暂缓、等她的修复合入后再补**。
-已完成并保存的补丁：`E:/tmp/cw-replace-dryrun.patch`（sha256 见卡），内容是：
+⇒ 迁移后必红。Leader 裁决授权严格范围修改；tester 的 rc 修复（`card_window.py:10172` 的 `0 or 2`）
+先合入（`d858508a1`），本卡随后 rebase 并应用已保存补丁（`E:/tmp/cw-replace-dryrun.patch`，sha256 见卡）：
 
 1. 自查 ① 改为「场景有 `inventory` **或** profile 有 `fixtures.inventory_replace`」；
 2. 自查 ② 继续验证**旧通道** dry-run 预览（改用合成声明，用例不删）；
@@ -67,7 +66,7 @@ dry-run 实测（两侧都打）：
 
 | 项 | 结果 |
 |---|---|
-| `card_window.py --selftest` | **暂缓**：本分支把场景迁走后，原自查 ①② 会红（394/396），属预期；等 tester 的 `card_window.py` 修复合入后按 `/e/tmp/cw-replace-dryrun.patch` 补上，再报实数（补丁实测过 **397/397**） |
+| `card_window.py --selftest` | **GREEN 397/397**（补丁应用后实测） |
 | `mir2_probe --selftest` | OK 19 checks |
 | 三场景 `--check-scenario` | 全 OK（bag/eat 带 `--var`；equip 7 步） |
 | `run_batch --list` | 24（blocked 3 ⇒ 入批 21），#14/#15 的 `extra` 显示 `--profile …` |
