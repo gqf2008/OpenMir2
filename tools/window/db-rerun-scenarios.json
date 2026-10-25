@@ -1,0 +1,60 @@
+{
+ "format": "window-scenarios/1",
+ "note": "DB 面复跑清单（harness 卡的后续）：W1 里走到比较器且 DB 面有用例的 6 条；13/14/15/17 等夹具迁移后补跑，#23 属 E 类另行复拍；compare_extra 由 profile 加 --ignore-idents 14。",
+ "scenarios": [
+  {
+   "n": 1,
+   "name": "login_only",
+   "profile": "alt",
+   "extra": [
+    "--profile",
+    "tools/window/profiles/db_rerun.json"
+   ]
+  },
+  {
+   "n": 2,
+   "name": "npc_click_auto",
+   "profile": "alt",
+   "extra": [
+    "--profile",
+    "tools/window/profiles/db_rerun.json"
+   ]
+  },
+  {
+   "n": 3,
+   "name": "gm_time",
+   "profile": "alt",
+   "extra": [
+    "--profile",
+    "tools/window/profiles/db_rerun.json"
+   ]
+  },
+  {
+   "n": 4,
+   "name": "gm_batch",
+   "profile": "alt",
+   "extra": [
+    "--profile",
+    "tools/window/profiles/db_rerun.json"
+   ]
+  },
+  {
+   "n": 5,
+   "name": "move_walk",
+   "profile": "alt",
+   "extra": [
+    "--profile",
+    "tools/window/profiles/db_rerun.json"
+   ]
+  },
+  {
+   "n": 6,
+   "name": "merchant_dialog",
+   "profile": "alt",
+   "extra": [
+    "--profile",
+    "tools/window/profiles/db_rerun.json"
+   ]
+  }
+ ]
+}
