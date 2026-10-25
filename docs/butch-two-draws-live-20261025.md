@@ -98,8 +98,12 @@ Rust 把**载入值**（3）写回了 `characters.Dir`，C# 写的是 butch 后�
 
 **同一签名在别的场景也出现**：W1 的 `move_walk` 当时记过 `Dir 2 → 3`（本目录旧报告 `docs/window-evidence-backfill-20261025.md` §6.2 判为 flaky），
 而基线同样是 `Dir=3` ⇒ 同一形态：**Rust 的 `characters.Dir` 落的是载入值**。
-⇒ 归为**存档面通用差异**（不是 butch 专属），建议另开卡：定位需要带 `CM_BUTCH ... dir_updated=` 与服务端存档链路的日志，
-候选机制两条——(a) `dir_updated` 在运行时未置位（但帧上 `Dir=0` 又提示置位过）、(b) 命令之后实体 `ai.dir` 被重置。
+⇒ 归为**存档面通用差异**（不是 butch 专属）。已开卡归属：**`openmir2-dir-persistence-writeback`**
+（issue `2d76ef7a`，tier **R**，`window_required`）——本节的证据链即该卡的输入；定位需要带
+`CM_BUTCH … dir_updated=` 与服务端存档链路的日志，候选机制两条：
+(a) `dir_updated` 在运行时未置位（但帧上 `Dir=0` 又提示置位过）、(b) 命令之后实体 `ai.dir` 被重置。
+**并订正**：W1 `move_walk` 的 `Dir 2→3` 当时被判 flaky（`docs/window-evidence-backfill-20261025.md` §6.2），
+按本条证据应改判为**稳定差异**（同一签名、同一基线值）。
 
 ### 4.2 `characters_item.Dura`：C# `3993` / Rust `3989`（item 106）—— **已登记 T-266**
 
