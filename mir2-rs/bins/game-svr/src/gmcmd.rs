@@ -582,6 +582,10 @@ pub struct GmEntityState {
     pub slave_relax: Option<bool>,
     /// `@AttackMode` 写回 `PlayObject.AttatckMode`（`ChangeAttackModeCommand.cs:18-40`）。
     pub attack_mode: Option<u8>,
+    /// `@Level0` 写回 `PlayObject.Abil.Level`（`ChangeLevelCommand.cs:23`：
+    /// `(byte)HUtil32._MIN(MessageSettings.MAXUPLEVEL(255), nLevel)`，**unchecked 强转**）。
+    /// 卡 `openmir2-gm-target-state-write`。
+    pub level: Option<u8>,
 }
 
 impl GmEntityState {
@@ -608,6 +612,9 @@ impl GmEntityState {
         }
         if let Some(v) = self.attack_mode {
             e.attack_mode = v;
+        }
+        if let Some(v) = self.level {
+            e.level = v;
         }
     }
 }
@@ -708,6 +715,12 @@ pub struct GmSession {
     /// 目标 `ChrName`。oracle 命令体直接清目标 `ItemList` 并给目标发 `RM_SENDDELITEMLIST`；
     /// 本仓命令体纯 ⇒ 只登记目标，宿主收口（空包 ⇒ 不发帧，与 oracle 同）。
     pub pending_clear_bag: Option<String>,
+    /// **`@Level0` 的 `HasLevelUp(1)` 待落地**（卡 `openmir2-gm-target-state-write`）：
+    /// oracle 命令体写完 `Abil.Level` 后当场调 `HasLevelUp(1)`（`PlayObject.cs:5242-5252`）
+    /// ⇒ `MaxExp = GetLevelExp(level)` + `RecalcLevelAbilitys()` + `RecalcAbilitys()` +
+    /// `SendMsg(RM_LEVELUP)`（泵发 `SM_LEVELUP`/`SM_ABILITY`/`SM_SUBABILITY` 三条直连帧）。
+    /// 本仓命令体纯 ⇒ 宿主在同一事件内按本标记落地。
+    pub pending_level_up: Option<u8>,
 }
 
 impl Default for GmSession {
@@ -744,6 +757,7 @@ impl Default for GmSession {
             pending_kick: None,
             pending_use_item: None,
             pending_clear_bag: None,
+            pending_level_up: None,
         }
     }
 }
@@ -2518,7 +2532,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::ChangeGender => change_gender(parameters, world),
         Imp::ChangeItemName => change_item_name(parameters),
         Imp::ChangeJob => change_job(parameters, world),
-        Imp::ChangeLevel => change_level(parameters),
+        Imp::ChangeLevel => change_level(parameters, sess, world),
         Imp::ChangeMasterName => change_master_name(parameters, world),
         Imp::ChangeObMode => change_ob_mode(sess, world),
         Imp::ChangeSalveStatus => change_salve_status(sess, world),
@@ -3873,6 +3887,8 @@ const NOTE_GM4_NOOP: &str = "批次 4：oracle 命令体为空/只有权限自�
 // 必须 1:1，逐行照抄对应 `.cs`。
 // ============================================================================================
 
+const NOTE_CHANGE_LEVEL_PENDING: &str =
+    "@Level0：命令体只登记等级写（写实体 + HasLevelUp 语义由宿主同事件落地）；oracle 命令体自身零 SysMsg、零帧";
 const NOTE_GM4_TARGET_STATE: &str =
     "批次 4：目标角色数值态无读取/写回通道（真值在 SessionGround；Entity.gold 恒 0 不可读，T-186）⇒ 效果与依赖该值的文本未接";
 const NOTE_GM4_TARGET_SYSMSG: &str =
@@ -4180,11 +4196,24 @@ fn change_job(parameters: &str, world: &GmWorld<'_>) -> GmResult {
 }
 
 /// `ChangeLevelCommand`（现网 `@Level0`）：只改自己等级，无可观察帧。
-fn change_level(parameters: &str) -> GmResult {
+/// `ChangeLevelCommand`（现网 `@Level0`，`ChangeLevelCommand.cs:10-33`）。
+///
+/// oracle 逐行：`nLevel = HUtil32.StrToInt(sParam1, 1)`（`:21`，`int.TryParse` 失败才用 1）；
+/// `Abil.Level = (byte)HUtil32._MIN(MessageSettings.MAXUPLEVEL(255), nLevel)`（`:23`，**unchecked
+/// 强转** ⇒ `-1` 得 255、`-300` 得 212，**不得**先钳 0）；随后 `HasLevelUp(1)`（`:24`）；
+/// 命令体自身**不发任何 SysMsg/帧**（只写控制台日志，`ShowMakeItemMsg` 门内）。
+///
+/// 本仓命令体纯：只把等级装进 `pending_entity.level`（写实体）与 `pending_level_up`
+/// （宿主落地 `HasLevelUp` 语义 + `RM_LEVELUP` 三帧）。
+fn change_level(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
     let params = split_params(parameters);
-    // `nLevel = StrToInt(sParam1, 1)`；等级写值与 `HasLevelUp(1)` 未接（零帧）。
-    let _ = str_to_int(params.first().copied().unwrap_or(""), 1);
-    no_frames(NOTE_GM4_TARGET_STATE)
+    let n_level = str_to_int(params.first().copied().unwrap_or(""), 1);
+    // `(byte)HUtil32._MIN(255, n)`：`min` 之后再 `as u8`，负数按二进制补码截断（= C# unchecked）。
+    let level = n_level.min(255) as u8;
+    let pending = sess.entity_write(world);
+    sess.stash(pending, |st| st.level = Some(level));
+    sess.pending_level_up = Some(level);
+    no_frames(NOTE_CHANGE_LEVEL_PENDING)
 }
 
 /// `ChangeMasterNameCommand`（现网 `@MasterName`）。
