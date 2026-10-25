@@ -132,3 +132,18 @@
   语料是部署件 `E:\MirServer\M2GameSvr\Envir`），但 **`evidence` 里没有二进制的内容指纹（sha256）** ⇒ 路径上的文件可被后续重建覆盖，
   事后无法自证「当时的结论是哪个二进制跑出来的」。本次由窗口侧自留痕 `/e/tmp/final-window/script-tool.sha256` 补上这一环。
   **建议**：gate 在跑 `parse-stats` **前后各算一次 exe 的 sha256** 写进 `evidence.command_sha256`，前后不一致即判该次结论作废。
+
+## 6. 收尾清单（DoD，逐项实测）
+
+| # | 项 | 结果 | 证据 |
+|---:|---|---|---|
+| 1 | worktree | **7 个**：主检出 + 5 条车道 + `E:/tmp/rev20-m2`（reviewer-20 的临时 detached） | `git worktree list`；**一个未删**（含身份与密钥） |
+| 2 | 分支 | 本地已合并分支删 **24** 个（105→81）；今日合并的 9 张卡**远端分支全删** | `git branch --merged master` 逐个判定「已合并 ∧ 未被 worktree 占用」；`git ls-remote --heads walgit` 对 9 张卡的模式**无残留** |
+| 3 | 看板 | 9 张已合卡终态正确：**4 张 L 全 `closed`、5 张 R 全 `in-progress` + `window_required=true`** | 逐卡读线程末条 status（脚本汇总，非眼看） |
+| 4 | 进程 / 端口 | `E:/MirServer` **十个端口全部在监听**，进程 pid 与开工前一致（GameSrv 14040 / DBSrv 6808 / LoginSrv 7732 / gates 5832·22248·16280）；**无客户端进程** | `E:/MirServer/port-status.ps1` §3 |
+| 5 | 临时物 | 7 处保留项已登记（含**事故留证** `E:/tmp/rev20-fixture/MonGen.dirty.bak`） | 上文「临时物清单」表 |
+| 6 | 冻结基线 | `git status` **干净**；`git diff --stat 6b3aee870 HEAD -- src/ sql/` **为空** | 两条命令实跑 |
+| 7 | 报告 | 本文 + `docs/needs-human-20261025.md`（owner 面），每项带证据四件套 | — |
+
+> **未推送提交 134**（`port-status.ps1` 报）是相对 **GitHub `origin`** 的——按项目规定日常只推 `walgit`，GitHub 仅人工镜像，**不是缺陷**。
+
