@@ -1,6 +1,6 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = 6370b2019` @ 2026-10-25 16:40 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
+> **快照戳**：`master = 2119f817a` @ 2026-10-25 16:50 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
 > `goal_gate` 取数：`--skip-tests` 于本 tip 实跑（①③ 与 ② 桶）；**④ 的全量 `--full` 在 `52be82700`**（绿 7/红 0/需人工 0，`cargo test` rc=0 @109.3s、running 3325 = passed 3262 + ignored 63、141 suite 全 ok），
 > 其后至本 tip 的改动**不含任何 `.rs` / `Cargo.*`**（可复算：`git diff --name-only 52be82700 HEAD | grep -E "\.rs$|Cargo\.(toml|lock)$"` 为空）⇒ ④ 结论继续成立。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`）。
@@ -133,12 +133,12 @@
 | 条件 | 状态 | 实测（可复算） |
 |---|---|---|
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
-| ② R 卡证据 | **need_human** | R 卡 **228 张**：已完成 **15** / `window_required` **157**（已合并）/ `window_required` **未合并 4** / whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 15+157+4+48+3+1 = 228 ✓ |
+| ② R 卡证据 | **need_human** | R 卡 **228 张**：已完成 **15** / `window_required` **158**（已合并）/ `window_required` **未合并 3** / whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 15+158+3+48+3+1 = 228 ✓ |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
 | ④ 门禁恒绿 | **pass** | **最终 tip `52be82700`** 上 `goal_gate --full` 实跑：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（146s；fmt 3.2s / clippy 2.9s / msgcodegen 0.3s / whitelist_anchor 5.0s / m3_registry 0.1s / **cargo_test_workspace rc=0 @109.3s** / master_sync PASS）。三段数：**running 3325 = passed 3262 + ignored 63 + failed 0**，**141 suites 全 ok**；对照上一轮 `f72dbce7`（3315/3252/63）**passed +10**（`--lib` 1503→1512 的 +9 加上其它包 +1），**高于判停线 ⇒ 没有吞测试**。`overall=need_human` 仅因条件②，`fail_items=[]`。**溯源**：`.meta` 记 `RUN_ATTEMPT=2` / `CARGO_BUILD_JOBS=2` / `PREBUILD_RC` / `HEAD_START==HEAD_END==52be82700`，附 `cargo-test-52be82700.log`（sha256 `890cb6e2…`）与 141 行 `test result:`（sha256 `495c6036…`）；`PEAK_MEM=n/a`（本轮未采样，如实登记）。**本轮前情**：第一次 `--full` 被宿主内存守卫杀掉、产物 0 字节 ⇒ 不记失败也不记通过；加 `CARGO_BUILD_JOBS=2` + 预构建后重跑通过。**热跑通过不等于冷跑通过。** 该次之后 master 继续前进，但**只用一条命令即可判定不失效**：`git diff --name-only 52be82700 HEAD | grep -E "\.rs$|Cargo\.(toml|lock)$"` **为空**（截至 `e61a68cc6` 只动 `tools/probe`、`tools/window`、`tools/hygiene` 与 `docs/`）⇒ `cargo_test_workspace` 结论继续成立；文档/卫生门已在新 tip 重跑全绿（六门 + `blocked_sources_check selftest` 39/39 + 工具门 registry 45/未分类 0）。 |
 
 - **② 的两个口径注记**（`master 574a49e7f` 上实跑）：
-  1. **未合并 4 张** = `gm-batch-5-guild-castle` / `gm-script-fixture` / `makeghost-lifecycle` / `window-gate-two-runs`（`dir-persistence-writeback` 与 `gm-target-state-write` 今日已合，故 6⇒4）。
+  1. **未合并 3 张** = `gm-batch-5-guild-castle` / `makeghost-lifecycle` / `window-gate-two-runs`（今日已合：`dir-persistence-writeback`、`gm-target-state-write`、`gm-script-fixture`；6⇒4⇒3）。
   2. **「已完成 15」里有 6 张 `merged=False`**（`ability-weight-login-writeback`、`dualrun-triage-enterworld-frames`、`gm-integration`、`m3hp-lane-repin`、`script-user-account-host`、`window-529-dualrun`）⇒ 这 6 张**没有 `merge_result` 佐证**；`gm-integration` 还是「closed + merged=False + 裁定 window_required」的组合。读「15 张已完成」时须按此折扣。
 
 > **四条件现在的真缺口只剩一处**：② 的 G11 1 张（§1 需你裁决）。①③ PASS；④ 已在最终 tip `f72dbce7` 用 `--full` 复跑 PASS（绿 7/红 0/需人工 0）。证据与可复算口径见 `docs/delivery-report-20261025-final.md`。
