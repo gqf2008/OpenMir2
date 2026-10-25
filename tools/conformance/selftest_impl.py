@@ -207,6 +207,7 @@ class Selftest(object):
         self.t_batch2_rules()
         self.t_batch2_diff()
         self.t_struck31_rules()
+        self.t_pending_review_scope()
         self.t_struck31_diff()
         self.t_ability_wire(o, r)
         self.t_ability_unknown_pair(o, r)
@@ -342,6 +343,20 @@ class Selftest(object):
     # -- 首次双栈对拍暴露的 8 条规则缺口（100/520/525/529/530/654/657 + 52 线缆布局对）--
     # 530 = SM_SELECTSERVER_OK：body 末段是 LoginSrv 进程内 SessionID（跨进程必然不同）
     # ⇒ action=mask_body_ranges（只掩偏移 16..end，ip/端口仍逐字节比）；其余 6 条 compare。
+    @staticmethod
+    def _approved_ok(meta):
+        """approved_by 是否为本裁定的正式批准（卡 openmir2-rules-pending-adjudication）。
+
+        断言必须同时看到：① 不是 PENDING；② coordinator 复核标记（日期）；
+        ③ 裁定 decision oid；④ 保留原草稿人（draft: ...）。缺一条即视为未批准。
+        """
+        ab = str((meta or {}).get("approved_by") or "")
+        return (ab.strip().upper().startswith("PENDING") is False
+                and "coordinator review 2026-10-25" in ab
+                and "decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce" in ab
+                and "draft:" in ab
+                and ab.split("draft:", 1)[1].strip(" )").strip() != "")
+
     NEW_IDENTS = ((100, "multiset_by_tick"), (520, "compare"), (525, "compare"),
                   (529, "compare"), (530, "mask_body_ranges"), (654, "compare"),
                   (657, "compare"))
@@ -354,11 +369,23 @@ class Selftest(object):
                        rule is not None and rule["action"] == want_action,
                        rule and rule.get("action"))
             meta = rule or {}
-            self.check("ident=%d 规则带 reason/tier/approved_by=PENDING" % ident,
+            # 卡 openmir2-rules-pending-adjudication：这些 ident 已按 Leader 裁定转正
+            # ⇒ 断言改瞄为「正式批准格式」（不是删掉 PENDING 检查，而是要求更多字段）。
+            self.check("ident=%d 规则带 reason/tier 且 approved_by 为正式批准（coordinator + decision + 草稿人）" % ident,
                        all(str(meta.get(k, "")).strip()
                            for k in ("reason", "tier", "approved_by"))
-                       and str(meta.get("approved_by", "")).upper().startswith("PENDING"),
+                       and self._approved_ok(meta),
                        {k: meta.get(k) for k in ("tier", "approved_by")})
+        # 裁定「保留 PENDING」的三条（10/14/50）：必须仍是 PENDING，且 reason 写明原因。
+        for ident in (10, 14, 50):
+            r = rs.by_ident.get(ident) or {}
+            ab = str(r.get("approved_by") or "")
+            reason = str(r.get("reason") or "")
+            self.check("ident=%d 保留 PENDING（Leader 裁定 keep_pending）且 reason 写明原因" % ident,
+                       ab.strip().upper().startswith("PENDING")
+                       and len(reason.strip()) >= 20,
+                       {"approved_by": ab[:40], "reason_len": len(reason)})
+
         self.check("520 的 recog 从全局掩码取回比较（=nChrCount，协议内容）",
                    rs.by_ident[520].get("head_compare") == ["recog"],
                    rs.by_ident[520].get("head_compare"))
@@ -521,10 +548,10 @@ class Selftest(object):
                        rule is not None and rule["action"] == want[ident],
                        rule and rule.get("action"))
             meta = rule or {}
-            self.check("ident=%d 带 reason/tier/approved_by=PENDING" % ident,
+            self.check("ident=%d 带 reason/tier 且 approved_by 为正式批准（coordinator + decision + 草稿人）" % ident,
                        all(str(meta.get(k, "")).strip()
                            for k in ("reason", "tier", "approved_by"))
-                       and str(meta.get("approved_by", "")).upper().startswith("PENDING"),
+                       and self._approved_ok(meta),
                        {k: meta.get(k) for k in ("tier", "approved_by")})
         self.check("616/763 的 recog(失败码) 用 head_compare 取回（全局 recog 掩码会永远吞掉失败码）",
                    rs.by_ident[616].get("head_compare") == ["recog"]
@@ -845,6 +872,52 @@ class Selftest(object):
                           t_ms=1000 if side == "o" else 1001,
                           conn="o" if side == "o" else "r", **heads)
 
+    def t_pending_review_scope(self):
+        """卡 `openmir2-rules-pending-adjudication` ④（Leader 裁定 2026-10-25）：
+
+        `rules_pending_review` 是**保守主标志**——规则文件里只要还有任何 PENDING
+        （含本卡保留的 10/14/50）就是 True。**为什么必须保守**：读者用这个标志判断
+        「这份报告的判据是否全部审过」；若改成「本次涉及才 True」，一份藏着未审规则的
+        报告会显示 False，正是要堵的假绿。本次影响面单列在 `pending_review_used`。
+
+        * 只用已批准规则（520）⇒ 主标志 **True**（文件里仍有 10/14/50）+ `pending_review_used` 为空；
+        * 出现保留 PENDING 的 ident（10）⇒ 主标志 True + `pending_review_used` 命中该条；
+        * `pending_review`（全量清单）仍保留三条，供审计。
+        """
+        def mk(side, ident, body):
+            # 全局掩码字段（t_ms/conn/seq）两侧给不同值 + 必填头部齐 ⇒ 两侧都缺字段的
+            # UNDECIDABLE 不会掩盖本测试要看的 rules_pending_review 语义。
+            return self.frame(ident, body, recog=1, param=2, tag=3, series=0,
+                              t_ms=1000 if side == "o" else 1001,
+                              conn="o" if side == "o" else "r", seq=1,
+                              phase="gamegate")
+
+        od = self.write_run("t-pr-scope-o", [mk("o", 520, b"1/2")])
+        rd = self.write_run("t-pr-scope-r", [mk("r", 520, b"1/2")])
+        rc, rep = self.compare(od, rd)
+        rs = (rep or {}).get("rules") or {}
+        # Leader 裁定：主标志是**保守闸门**——文件里还有 10/14/50 PENDING ⇒ 恒 true；
+        # 「本次影响面」降到 pending_review_used（520 不涉及任何 PENDING => 空）。
+        self.check("只碰已批准规则（520）=> rules_pending_review 仍为 True（保守闸门）"
+                   "且 pending_review_used 为空",
+                   rc == 0 and rs.get("rules_pending_review") is True
+                   and (rs.get("pending_review_used") or []) == [],
+                   (rc, rs.get("rules_pending_review"), rs.get("pending_review_used")))
+        self.check("全量 pending_review 清单仍保留 10/14/50（审计用，不受本次涉及与否影响）",
+                   {10, 14, 50} == {int(x.split("ident=[")[1].rstrip("]"))
+                                    for x in (rs.get("pending_review") or [])
+                                    if "ident=[" in x},
+                   rs.get("pending_review"))
+        od2 = self.write_run("t-pr-scope2-o", [mk("o", 10, b"")])
+        rd2 = self.write_run("t-pr-scope2-r", [mk("r", 10, b"")])
+        rc2, rep2 = self.compare(od2, rd2)
+        rs2 = (rep2 or {}).get("rules") or {}
+        self.check("出现保留 PENDING 的 ident=10 => 主标志 True 且 used 命中该条",
+                   rc2 == 0 and rs2.get("rules_pending_review") is True
+                   and any("ident=[10]" in x for x in (rs2.get("pending_review_used") or [])),
+                   (rc2, rs2.get("rules_pending_review"),
+                    rs2.get("pending_review_used")))
+
     def t_struck31_rules(self):
         rs = self.api.RuleSet(self.builtin_rules, "builtin", "0" * 64)
         rule = rs.by_ident.get(31)
@@ -857,9 +930,9 @@ class Selftest(object):
                    (rule.get("head_mask"), rule.get("head_compare")))
         self.check("31 的 body 窄区间 = [[10,16)]（线缆空间，只覆盖 Tag1=攻击者 ActorId 足迹）",
                    rule.get("ranges") == [[10, 16]], rule.get("ranges"))
-        self.check("31 的 reason/tier/approved_by=PENDING 齐全",
+        self.check("31 的 reason/tier 齐全且 approved_by 为正式批准（coordinator + decision + 草稿人）",
                    all(str(rule.get(k, "")).strip() for k in ("reason", "tier", "approved_by"))
-                   and str(rule.get("approved_by", "")).upper().startswith("PENDING"),
+                   and self._approved_ok(rule),
                    {k: rule.get(k) for k in ("tier", "approved_by")})
         masks = rs.mask_for(31)
         self.check("31 的有效头部掩码 = {param + 全局 recog/t_ms/conn/seq}（tag/series 不掩）",
