@@ -1919,11 +1919,15 @@ mod tests {
             refill_tick: 0,
         }];
         let id = w.spawn_merchant(sp).expect("可走格应挂图成功");
-        assert!(w.merchant_goods_groups(id).expect("商人状态").is_empty(),
-                "旧行为：spawn 后货架为空");
+        assert!(
+            w.merchant_goods_groups(id).expect("商人状态").is_empty(),
+            "旧行为：spawn 后货架为空"
+        );
         assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
-        assert!(!w.merchant_goods_groups(id).expect("商人状态").is_empty(),
-                "初始装货后货架必须非空");
+        assert!(
+            !w.merchant_goods_groups(id).expect("商人状态").is_empty(),
+            "初始装货后货架必须非空"
+        );
     }
 
     #[test]

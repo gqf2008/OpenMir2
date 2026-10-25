@@ -2078,15 +2078,32 @@ mod tests {
         assert!(!r.ok);
         assert_eq!(r.frames[0].ident, 651);
         assert_eq!(r.frames[0].recog, 2);
+        assert!(
+            r.frames.iter().all(|f| f.ident != 650),
+            "失败分支不得发 SM_BUYITEM_SUCCESS(650)"
+        );
         // 钱不够 ⇒ n1C = 3。
         state.wabil = ability(0, 100);
         state.gold = 0;
         let r = buy_item(&m, &mut state, &mut goods, "金创药(小量)", 0, &c);
         assert_eq!(r.frames[0].recog, 3);
+        assert!(
+            r.frames.iter().all(|f| f.ident != 650),
+            "金币不足分支不得发 SM_BUYITEM_SUCCESS(650)"
+        );
         // 成功 ⇒ n1C = 0，金币扣、库存减、背包加。
         state.gold = 500;
         let r = buy_item(&m, &mut state, &mut goods, "金创药(小量)", 0, &c);
         assert!(r.ok);
+        let ok650 = r
+            .frames
+            .iter()
+            .find(|f| f.ident == 650)
+            .expect("成功购买必须发 SM_BUYITEM_SUCCESS(650)（oracle Merchant.cs:1303）");
+        assert_eq!(
+            ok650.recog, state.gold,
+            "650.recog = Gold（PlayObject.Message.cs:1825）"
+        );
         let add = r
             .frames
             .iter()
