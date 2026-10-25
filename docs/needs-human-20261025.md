@@ -1,10 +1,11 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = 2119f817a` @ 2026-10-25 16:50 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
-> `goal_gate` 取数：`--skip-tests` 于本 tip 实跑（①③ 与 ② 桶）；**④ 的全量 `--full` 在 `52be82700`**（绿 7/红 0/需人工 0，`cargo test` rc=0 @109.3s、running 3325 = passed 3262 + ignored 63、141 suite 全 ok），
-> 其后至本 tip 的改动**不含任何 `.rs` / `Cargo.*`**（可复算：`git diff --name-only 52be82700 HEAD | grep -E "\.rs$|Cargo\.(toml|lock)$"` 为空）⇒ ④ 结论继续成立。
+> **快照戳**：`master = 681a59def` @ 2026-10-25 18:10 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
+> `goal_gate` 取数：**`--full` 于本 tip 单次全量实跑**——七项门禁**绿 7 / 红 0 / 需人工 0**，`cargo test --workspace` rc=0（159.7s），
+> 三段数 **running 3329 = passed 3266 + ignored 63 + failed 0**、**141 suite 全 ok**；`fail_items=[]`，`overall=need_human` **仅因条件② 的 G11**。
+> 产物：`E:/tmp/window/goal-full-2667aaa25.json`（内容对应 `681a59def`）、`goal-full-681a59def.meta`、`cargo-test-681a59def.{log,results.txt}`（均带 sha256）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`）。
-> **现在只剩两件事需要你**：**① `G11` 一句话**（§1，推荐 A；这是条件② 唯一的缺口）、**② 给窗口时段**（§2，四张 R 卡的真机项都已写好跑法，不占你的注意力，只占机器）。
+> **现在只剩两件事需要你**：**① `G11` 一句话**（§1，推荐 A；这是条件② 唯一的缺口）、**② 给窗口时段**（§2，五张 R 卡的真机项都已写好跑法，不占你的注意力，只占机器）。
 > 只列循环内无权自决的事；每项 ≤3 行，可按 §0 模板一行回复。
 
 ## 0. 一行回复模板
@@ -135,7 +136,7 @@
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
 | ② R 卡证据 | **need_human** | R 卡 **228 张**：已完成 **15** / `window_required` **158**（已合并）/ `window_required` **未合并 3** / whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 15+158+3+48+3+1 = 228 ✓ |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **pass（证据待汇成单一 artifact）** | `52be82700` 的 `--full`（绿 7/0/0，3262 passed）**已不覆盖当前 tip**：此后 `softclose-teeth` 改了 Rust（`lib.rs` +288/−33、`guild_runtime/tests.rs` +129），合并在 **`bd1a03c5e`**。**但这些改动已在 `bd1a03c5e` 上实测**：fmt / clippy / `--lib` **1514** / **`--workspace` rc=0、3264 passed、0 failed** / msgcodegen / 六卫生门全绿；`m3_registry` 由 tester 在 `f7ef8955a` 跑绿，而 `bd1a03c5e..f7ef8955a` 仅 1 个 docs 文件 1 行 ⇒ **七项门禁都有对应 tip 的实测**。**待办**：机器空后 tester 跑一次 `goal_gate --full` 生成单一权威产物；`.last-tested` 在那之前不动 |
+| ④ 门禁恒绿 | **pass** | **最终 tip `681a59def`** 上 `goal_gate --full` 单次全量实跑：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（185s；fmt 2.7s / clippy 0.6s / msgcodegen 0.2s / whitelist_anchor 5.5s / **m3_registry 0.1s（本 tip 上跑）** / **`cargo_test_workspace` rc=0 @159.7s** / master_sync PASS）。三段数：**running 3329 = passed 3266 + ignored 63 + failed 0**，**141 suites 全 ok**（= 上轮 3262 + kick 卡 2 + 其余 2 自洽）。`overall=need_human` **仅因条件②**，`fail_items=[]`。**产物**：`E:/tmp/window/goal-full-2667aaa25.json`（文件名沿用请求 tip，**内容对应 `681a59def`**，`.meta` 内 `REQUESTED_TARGET` + `TIP_DELTA` 已写明）、`goal-full-681a59def.meta`、`cargo-test-681a59def.log`（sha256 `19d6cffa…`）、`cargo-test-681a59def.results.txt`（sha256 `12faf10f…`）。**执行方式**：前台 + `CARGO_BUILD_JOBS=1`（前两次后台运行被宿主「内存压力 + 会话空闲」守卫杀掉，产物 0 字节 ⇒ 既不记失败也不记通过）；`PEAK_MEM=n/a` 如实登记。**判「要不要重跑」的口径**：`git diff --stat <被测 tip> <当前 tip> -- mir2-rs src sql` 为空/仅 docs ⇒ 证据可复用。 |
 
 - **② 的两个口径注记**（`master 574a49e7f` 上实跑）：
   1. **未合并 3 张** = `gm-batch-5-guild-castle` / `makeghost-lifecycle` / `window-gate-two-runs`（今日已合：`dir-persistence-writeback`、`gm-target-state-write`、`gm-script-fixture`；6⇒4⇒3）。
