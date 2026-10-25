@@ -886,7 +886,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 
 **判定域**（写清判定域才不会假绿）：
 
-- 扫什么：脚本内 `REGISTRY` 的**固定 45 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
+- 扫什么：脚本内 `REGISTRY` 的**固定 46 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
   M1/M2 验收、日志差分、世界采样、botload、本仓库 hygiene 门自身，以及本门自己）；
 - 在哪跑：仓库根（`--repo`，默认本脚本上溯两级），`python -I -B`，**每项独立子进程**；
 - rc 从哪取：**子进程退出码**（不经管道/`tail`，否则拿到的是 `tail` 的 rc）；
@@ -924,8 +924,8 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 |---|---|
 | 全量 | **绿 45 / 红 0 / 跳过 0，rc=0，120s**（`E:/tmp/final-recheck/gate-full-45.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 18.0s，其余 ≤2s） |
 | 本门自测 | `--selftest` **16/16**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2/未分类 rc） |
-| 清点 | 50 个带 selftest 的工具：门内 **45** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3） |
-| 变异自证 | 门注册项 **46/46**（45 项 + 门自身进程树变异；`mutations-proof.log`）；另本卡谓词级否证 **7/7**（5 条 blocked 判据 + `--inventory` rc + gm 判据；`orphan-mutations.json`） |
+| 清点 | **51** 个带 selftest 的工具：门内 **46** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3）。**卡 `openmir2-docs-delivery-gate` 接入后**由 50/45/0 变为 51/46/0；本行是活口径，上一版快照的 45 项实测数据见同表其余行 |
+| 变异自证 | 门注册项 **47/47**（46 项 + 门自身进程树变异；`mutations-proof.log`；`docs_delivery_gate` 接入后由 46/46 变为 47/47）；另本卡谓词级否证 **7/7**（5 条 blocked 判据 + `--inventory` rc + gm 判据；`orphan-mutations.json`） |
 
 **能力扩容（两轮共 20 项）**：第二轮 19 项（`review_principal_check` / `scenario_undecidable_audit` /
 `rules_approve` / `capture_login_compare` / `s2c_diff` / `error_curve` / `timeline` / `world_sampler` /

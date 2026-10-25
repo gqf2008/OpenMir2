@@ -355,7 +355,7 @@ batch-plan 完全无登记）。B 类内部按「缺什么」再分 6 组；每�
 - **推荐 A**，但**必须保留 `goal_gate` 的卫生清单口径**：186 张「登记型 PASS ≠ 真机证据」这句话不能删，
   否则条件② 会从「证据齐」退化成「登记齐」。
 
-## 7. 与 `docs/window-run-2` 卡面预期的一致性（对应 acceptance ②）
+## 7. 与 `openmir2-window-run-2` 卡面预期的一致性（对应 acceptance ②）
 
 run-2 卡面（issue `bb330d432`）预期「18 场景」，并在 `status 89a07872a` 记录了已完成的有效证据：
 `login_only` FAIL（唯一差 Weight 14vs0 → `login-numeric-gaps`）、`npc_click_auto` PASS（30/30 diff=0）。

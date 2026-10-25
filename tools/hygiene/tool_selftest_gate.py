@@ -20,7 +20,7 @@
 **收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
 ——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
 「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
-当前 44 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
+当前 46 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
 部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
 
 用法：
@@ -91,6 +91,9 @@ REGISTRY = [
     # M3 落地时由「未分类>0 ⇒ rc≠0」当场抓到的第一例（master 新工具，2026-10-25 合入）。
     ("gm_gate_check", ["tools/window/gm_gate_check.py", "selftest"], False),
     ("tool_selftest_gate", ["tools/hygiene/tool_selftest_gate.py", "--selftest"], False),
+    # 卡 `openmir2-docs-delivery-gate`：交付文档的结构性门（hex / 表格 / 路径 / 命令期望值）。
+    # 自测 25 项、离线、临时 git 仓库；<2s。
+    ("docs_delivery_gate", ["tools/hygiene/docs_delivery_gate.py", "--selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
