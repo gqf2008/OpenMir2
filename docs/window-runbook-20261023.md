@@ -966,6 +966,8 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 `next_t` 并发 4 进程 `communicate(120)`、本门 `run_one` 与自测 `_bounded`（超时+树终止）。
 `param_discovery` 另有用例 ㉙ 钉住「超时⇒rc=2/cls=error」。
 
+> 2026-10-26 起，`goal_gate` 的条件④ 已从七项扩到**八项**（+`tool_selftest_gate`，含 `--inventory`），三态 PASS/FAIL/NEED；产物里的 `门禁 N 项` 现在应为 8。
+
 **`goal_gate --skip-tests` 仍会跑 fmt/clippy/msgcodegen**（`run_gate_checks:899-920`，只有
 `cargo test` 受 `with_tests` 控制）⇒ **别人在构建时不要跑它**；核 R 卡桶/条件②直接调 goal_gate 的纯函数。
 
