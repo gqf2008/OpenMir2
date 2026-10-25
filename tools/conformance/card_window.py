@@ -2685,12 +2685,17 @@ def _selftest_inventory_reachability(tmp):
     try:
         with open(path, "w", encoding="utf-8") as f:
             _json.dump(body, f)
-        r = subprocess.run([_sys.executable, "-I", "-B", probe, "--check-scenario",
-                            "--scenario", path, "--var", "make_index=5001",
-                            "--var", "takeon_where=1", "--var", "item_name=x"],
-                           capture_output=True, text=True)
-        out.append((r.returncode == 0, "③ mir2_probe --check-scenario 接受 inventory 声明（rc=%s）"
-                    % r.returncode))
+        try:
+            r = subprocess.run([_sys.executable, "-I", "-B", probe, "--check-scenario",
+                                "--scenario", path, "--var", "make_index=5001",
+                                "--var", "takeon_where=1", "--var", "item_name=x"],
+                               capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                               timeout=120)
+            rc_probe = r.returncode
+        except subprocess.TimeoutExpired:
+            rc_probe = 124
+        out.append((rc_probe == 0, "③ mir2_probe --check-scenario 接受 inventory 声明（rc=%s）"
+                    % rc_probe))
     finally:
         try:
             os.unlink(path)

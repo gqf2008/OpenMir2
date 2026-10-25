@@ -118,7 +118,11 @@ def parse_whatif(stdout):
 
 def _run_ps(argv):
     """默认 runner：起 powershell 跑 `-WhatIf`，返回 (rc, stdout, stderr)。"""
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              timeout=120)
+    except subprocess.TimeoutExpired:
+        return 124, "", "TIMEOUT>120s"
     return proc.returncode, proc.stdout, proc.stderr
 
 
@@ -329,7 +333,11 @@ def check_pin_wiring(prof):
 def check_dry_run(profile_value, scenario, out_dir):
     argv = [sys.executable, "-I", "-B", CARD_WINDOW, "--profile", profile_value,
             "--scenario", scenario, "--out", out_dir, "--dry-run"]
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              timeout=300)
+    except subprocess.TimeoutExpired:
+        raise StepFail("card_window --dry-run 超时（>300s）")
     if proc.returncode != 0:
         raise StepFail("card_window --dry-run rc=%d：%s"
                        % (proc.returncode, (proc.stderr or proc.stdout).strip()[-300:]))
@@ -338,7 +346,11 @@ def check_dry_run(profile_value, scenario, out_dir):
 
 def check_selftest():
     argv = [sys.executable, "-I", "-B", CARD_WINDOW, "--selftest"]
-    proc = subprocess.run(argv, capture_output=True, text=True)
+    try:
+        proc = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL,
+                              timeout=300)
+    except subprocess.TimeoutExpired:
+        raise StepFail("card_window --selftest 超时（>300s）")
     if proc.returncode != 0:
         raise StepFail("card_window --selftest rc=%d：%s"
                        % (proc.returncode, (proc.stdout or proc.stderr).strip()[-300:]))

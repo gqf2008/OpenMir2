@@ -149,9 +149,16 @@ def _builder_guard_tooth(repo_root):
             with open(os.path.join(rd, "batch.jsonl"), "w", encoding="utf-8") as fh:
                 for r in rows:
                     fh.write(json.dumps(r) + "\n")
-            p = subprocess.run([sys.executable, "-I", "-B", bpath, rd, manifest,
-                                "card", "head"], capture_output=True, text=True,
-                               cwd=repo_root)
+            try:
+                p = subprocess.run([sys.executable, "-I", "-B", bpath, rd, manifest,
+                                    "card", "head"], capture_output=True, text=True,
+                                   stdin=subprocess.DEVNULL, timeout=120, cwd=repo_root)
+            except subprocess.TimeoutExpired:
+                class _Timeout:  # 与真实 builder 的 rc 通道同形
+                    returncode = 124
+                    stdout = ""
+                    stderr = "TIMEOUT>120s"
+                p = _Timeout()
             return p, os.path.join(rd, "batch-summary.json")
 
         bad = [{"n": 1, "name": "a", "verdict": "BOGUS", "skipped": False},

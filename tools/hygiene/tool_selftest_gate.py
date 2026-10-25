@@ -13,11 +13,14 @@
   * rc 从哪取：子进程退出码（不经管道/`tail`，避免取到 tail 的 rc）；
   * 判定：任一注册项 rc≠0 ⇒ 本门 RED（rc=2）；全 0 ⇒ GREEN（rc=0）；用法错误 ⇒ rc=2。
   * `--skip <name,...>` 必须**打印 SKIP**（不许静默）；`--only` 用于变异自证/快跑。
+  * **门自己必须先能超时退出**：单项超时按**进程树**终止（Windows `taskkill /T /F`、POSIX `killpg`），
+    再以 10s 兜底 `communicate()`；另有**总墙钟**（`--total-timeout`，默认 420s < CI 480s）——
+    超时/兜底 ⇒ rc=2 并**点名滞留项**，绝不允许「挂住」冒充「跑完」。牙 TSG7/8/9/10 钉住。
 
 **收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
 ——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
 「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
-当前 43 项在门内；出域只有 6 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
+当前 44 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
 部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
 
 用法：
@@ -28,6 +31,7 @@
 import argparse
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -82,20 +86,20 @@ REGISTRY = [
     ("preflight_private_stack", ["tools/window/preflight_private_stack.py", "--selftest"], False),
     ("selftest_mutations", ["tools/conformance/selftest_mutations.py", "--selfcheck"], False),
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
+    # reviewer-21 实跑：`in_world_stability.py selftest` ⇒ rc=0、7/7（纯合成数据，0.1s）。
+    ("in_world_stability", ["tools/botload/in_world_stability.py", "selftest"], False),
     ("tool_selftest_gate", ["tools/hygiene/tool_selftest_gate.py", "--selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
 OUT_OF_SCOPE = {
-    # 2026-10-25 Leader 裁定后重审：只保留**真的无法离线自动判红**的 7 项，理由必须是
+    # 2026-10-25 Leader 裁定后重审：只保留**真的无法离线自动判红**的项（当前 6 项；以 `--inventory` 实测为准），理由必须是
     # 「需要交互/外部产物/真实环境」，不能是「一次性/人工使用/别域」（那等于垃圾桶）。
     "tools/client/dlg_links.py":
         "selftest 需外部截图 E:/tmp/window/r7/shot-dice5.png；缺失时打印 SKIP 且 rc=0 ⇒ 接入会永远假绿（要接须先有人给该产物或改工具）",
     "tools/window/alt_port_profile.py":
         "`selftest` 需要**主检出构建产物/部署配置** `src/DBSrv/bin/Release/dbsvr.conf`（实测 `RED: db-srv: 找不到源配置，候选 …` ⇒ rc=1）；"
         "干净 CI 上没有该产物 ⇒ 红属环境、不能当工具回归（不是「只打印」）",
-    "tools/botload/in_world_stability.py":
-        "无 selftest 入口：`stats <file>` 需要真实 load_stats.ndjson 产物 ⇒ 无法离线自动判红",
     "tools/capture/golden_fresh_check.py":
         "需要先 `dotnet build` 出 GoldenExport.exe（实测 rc=2「前置不满足」）⇒ 依赖外部构建产物",
     "tools/conformance/selftest_impl.py":
@@ -131,31 +135,75 @@ def discover():
     return sorted(out)
 
 
+#: 自测用「会挂住的项」：自己睡 600s，并起一个同样睡 600s 的**孙进程**（继承 stdout）。
+#: 专门复现「只杀直接子进程 ⇒ 第二次 communicate() 等管道 EOF ⇒ 门挂住」。
+_HANG_CODE = ("import os, subprocess, sys, time\n"
+              "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+              "_pf = os.environ.get('TSG_HANG_PIDFILE')\n"
+              "if _pf:\n"
+              "    open(_pf, 'w').write(str(p.pid))\n"
+              "time.sleep(30)\n")
+
+
+#: 仅供自测：关掉进程树终止，模拟「只 kill 直接子进程」⇒ 验证 10s 兜底本身能返回。
+_TREE_KILL_DISABLED = False
+
+
+def _kill_tree(proc):
+    """终止 proc **及其所有后代**。只杀直接子进程会留下孙进程占着 stdout 管道 ⇒ 门挂住。"""
+    if _TREE_KILL_DISABLED:
+        proc.kill()   # 自测路径：故意只杀直接子进程
+        return
+    if os.name == "nt":
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, text=True, timeout=10)
+        except subprocess.TimeoutExpired:
+            proc.kill()  # taskkill 自己挂住也不许拖住门
+            return
+    else:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            proc.kill()
+
+
 def run_one(repo, name, argv, timeout):
     cmd = [sys.executable, "-I", "-B"] + list(argv)
     t0 = time.time()
+    kw = {"start_new_session": True} if os.name != "nt" else {}
+    proc = subprocess.Popen(cmd, cwd=repo, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, encoding="utf-8", errors="replace", **kw)
+    timed_out = False
     try:
-        p = subprocess.run(cmd, cwd=repo, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=timeout)
-        rc = p.returncode
-        tail = ((p.stdout or "") + (p.stderr or "")).strip().splitlines()[-1:] or [""]
+        out, err = proc.communicate(timeout=timeout)
+        rc = proc.returncode
     except subprocess.TimeoutExpired:
+        # subprocess.run(timeout=…) 只 kill 直接子进程：孙进程继承 stdout 后，超时路径的
+        # 第二次 communicate() 一直等 EOF ⇒ **门可无限挂住、300s 上限形同虚设**（本卡实证）。
+        timed_out = True
+        _kill_tree(proc)
         rc = 124
-        tail = ["TIMEOUT %ss" % timeout]
-    elapsed = time.time() - t0
-    return {"name": name, "argv": list(argv), "rc": rc, "elapsed_s": round(elapsed, 1),
-            "tail": tail[0][:160]}
+        try:
+            out, err = proc.communicate(timeout=10)
+        except subprocess.TimeoutExpired:
+            out, err = "", ""   # 树仍没收干净：照样判红，绝不许挂住
+    if timed_out:
+        text = ["TIMEOUT %ss（已按进程树终止）" % timeout]
+    else:
+        text = ((out or "") + (err or "")).strip().splitlines()[-1:] or [""]
+    return {"name": name, "argv": list(argv), "rc": rc,
+            "elapsed_s": round(time.time() - t0, 1), "tail": text[0][:160],
+            "timed_out": timed_out}
 
 
-def run(repo, only=None, skip=None, timeout=300):
-    names = {n for n, _a, _s in REGISTRY}
+def run(repo, only=None, skip=None, timeout=300, total_timeout=420):
     only = set(only or [])
     skip = set(skip or [])
-    unknown = (only | skip) - names
-    if unknown:
-        raise SystemExit("tool_selftest_gate: 未知条目 %s（可用：%s）"
-                         % (sorted(unknown), sorted(names)))
+    # 未知条目的 rc=2 由 main() 前置校验（F4：原先这里还有一条不可达的 raise）
     results = []
+    deadline = (time.time() + total_timeout) if total_timeout and total_timeout > 0 else None
     for name, argv, _slow in REGISTRY:
         if only and name not in only:
             continue
@@ -163,7 +211,19 @@ def run(repo, only=None, skip=None, timeout=300):
             print("SKIP %-24s（--skip 显式跳过）" % name)
             results.append({"name": name, "skipped": True})
             continue
-        r = run_one(repo, name, argv, timeout)
+        eff = timeout
+        if deadline is not None:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                # 总墙钟兜底：没跑到的项也判红并点名——「跑没跑完」必须可区分，
+                # 不许静默退出、更不许挂住（卡 openmir2-tool-selftest-gate 的 F5）。
+                r = {"name": name, "rc": 124, "elapsed_s": 0.0, "timed_out": True,
+                     "tail": "NOT-RUN：总墙钟 %ss 已尽（滞留项）" % total_timeout}
+                results.append(r)
+                print("FAIL %-24s rc=124        %s" % (name, r["tail"]))
+                continue
+            eff = min(timeout, max(1, int(remaining)))
+        r = run_one(repo, name, argv, eff)
         results.append(r)
         print("%-4s %-24s rc=%-3s %5.1fs  %s"
               % ("PASS" if r["rc"] == 0 else "FAIL", name, r["rc"],
@@ -253,6 +313,89 @@ def selftest():
             r6b = main(["--repo", tmp, "--skip", "no-such-entry"])
         chk(r6 == 2, "TSG 牙6 未知条目 ⇒ rc=2（用法错）")
         chk(r6b == 2, "TSG 牙6b --skip 未知条目 ⇒ rc=2")
+        # 牙7/牙8：**门自己必须先能超时退出**。只杀直接子进程时，孙进程占着 stdout ⇒
+        # 第二次 communicate() 等 EOF ⇒ 门无限挂住（本卡实证 pid 1772）/ 300s 上限形同虚设。
+
+        def _bounded(cmd, secs, env=None):
+            """跑子进程并按**进程树**终止；返回 (rc|None, out, elapsed)。"""
+            t0 = time.time()
+            pr = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, env=env,
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                  text=True, encoding="utf-8", errors="replace")
+            try:
+                o, e = pr.communicate(timeout=secs)
+                return pr.returncode, (o or "") + (e or ""), time.time() - t0
+            except subprocess.TimeoutExpired:
+                _kill_tree(pr)
+                try:
+                    o, e = pr.communicate(timeout=10)
+                except subprocess.TimeoutExpired:
+                    o, e = "", ""
+                return None, (o or "") + (e or ""), time.time() - t0
+
+        gate_py = os.path.join(root, "tools", "hygiene", "tool_selftest_gate.py")
+        rc7, out7, el7 = _bounded([sys.executable, "-I", "-B", gate_py, "--repo", tmp,
+                                   "--selftest-hang-probe", "--timeout", "2"], 25)
+        # 墙钟必须≈单项超时（2s）；若进程树没杀掉，会退到 10s 兜底 → ~12s ⇒ 牙红。
+        chk(rc7 == 2 and "hang" in out7 and "TIMEOUT" in out7 and el7 < 8,
+            "TSG 牙7 挂住的项 ⇒ 进程树终止 + rc=2 + 点名（%.1fs < 8s）" % el7)
+        rc8, out8, el8 = _bounded([sys.executable, "-I", "-B", gate_py, "--repo", tmp,
+                                   "--selftest-hang-probe", "--timeout", "300",
+                                   "--total-timeout", "3"], 25)
+        chk(rc8 == 2 and "总墙钟" in out8 and el8 < 20,
+            "TSG 牙8 总墙钟 3s ⇒ rc=2 且点名滞留项（%.1fs）" % el8)
+        # 牙9：**关掉进程树终止**（只 kill 直接子进程）⇒ 孙进程仍持 stdout，门必须靠
+        # 10s 兜底返回 rc=2，**不许挂住**。这条把「兜底」本身钉住，与牙7（树终止生效）可区分。
+        pidfile = os.path.join(tmp, "hang-grand.pid")
+        env9 = dict(os.environ)
+        env9["TSG_HANG_PIDFILE"] = pidfile
+        grand = ""
+        try:
+            rc9, out9, el9 = _bounded([sys.executable, "-I", "-B", gate_py, "--repo", tmp,
+                                       "--selftest-hang-probe", "--timeout", "2",
+                                       "--selftest-no-tree-kill"], 35, env=env9)
+        finally:
+            # 失败路径也必须收尾：断言先红时不许把孙进程留在机器上
+            try:
+                with open(pidfile, encoding="utf-8") as fh:
+                    grand = fh.read().strip()
+            except OSError:
+                grand = ""
+            if grand.isdigit():
+                if os.name == "nt":
+                    _bounded(["taskkill", "/F", "/PID", grand], 10)
+                else:
+                    try:
+                        os.kill(int(grand), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
+        # 收尾后再断言：pidfile 里的 PID 必须已经不存在
+        alive9 = False
+        if grand.isdigit():
+            if os.name == "nt":
+                tl = _bounded(["tasklist", "/FI", "PID eq %s" % grand], 10)[1]
+                alive9 = grand in (tl or "")
+            else:
+                try:
+                    os.kill(int(grand), 0)
+                    alive9 = True
+                except (ProcessLookupError, PermissionError):
+                    alive9 = False
+        chk(rc9 == 2 and "TIMEOUT" in out9 and 10 <= el9 < 30 and grand.isdigit()
+            and not alive9,
+            "TSG 牙9 关掉树终止 ⇒ 10s 兜底生效：rc=2、%.1fs 返回、孙进程已清理（%s）"
+            % (el9, grand or "无孙PID"))
+        # 牙10：隐藏开关**不许**在真实门跑里生效（防「牙自己变成漏洞」）
+        import contextlib
+        import io as _io
+        saved_flag = _TREE_KILL_DISABLED
+        buf10 = _io.StringIO()
+        with contextlib.redirect_stderr(buf10):
+            rc10 = main(["--repo", tmp, "--selftest-no-tree-kill",
+                         "--only", "no-such-entry"])
+        chk(rc10 == 2 and "WARN" in buf10.getvalue()
+            and _TREE_KILL_DISABLED == saved_flag,
+            "TSG 牙10 非自测路径的隐藏开关 ⇒ 忽略 + WARN（树终止不被静默关掉）")
     finally:
         REGISTRY = saved
     print("%s: tool_selftest_gate selftest %d/%d"
@@ -261,17 +404,37 @@ def selftest():
 
 
 def main(argv=None):
+    global REGISTRY
     ap = argparse.ArgumentParser(description="工具自测门禁（跑注册表里的 selftest）")
     ap.add_argument("--repo", default=None)
     ap.add_argument("--only", default="")
     ap.add_argument("--skip", default="")
-    ap.add_argument("--timeout", type=int, default=300)
+    ap.add_argument("--timeout", type=int, default=300,
+                    help="单项墙钟（秒），超时按进程树终止并判红，默认 300")
+    ap.add_argument("--total-timeout", type=int, default=420,
+                    help="总墙钟（秒），超时后未跑的项判红并点名，默认 420（< CI 任务 480s）；0=不限")
     ap.add_argument("--json", default=None)
     ap.add_argument("--inventory", action="store_true")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--selftest-hang-probe", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--selftest-no-tree-kill", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.selftest:
         return selftest()
+    if args.selftest_hang_probe:
+        # 仅供自测：把注册表换成「一个会挂住的项 + 一个正常项」，复现挂住与总墙钟两条路径。
+        print("WARN: --selftest-hang-probe 是自测夹具，不是一次真实的门跑", file=sys.stderr)
+        REGISTRY = [("hang", ["-c", _HANG_CODE], False),
+                    ("after", ["-c", "print('ok')"], False)]
+    if args.selftest_no_tree_kill:
+        # 防「牙自己变漏洞」：该开关只允许出现在自测路径（--selftest / 挂住夹具）里；
+        # 其它情况**忽略并告警**，绝不许一次真实门跑被静默关掉进程树终止。
+        if args.selftest or args.selftest_hang_probe:
+            global _TREE_KILL_DISABLED
+            _TREE_KILL_DISABLED = True
+        else:
+            print("WARN: --selftest-no-tree-kill 只在 --selftest/--selftest-hang-probe "
+                  "下生效，本次已忽略", file=sys.stderr)
     repo = repo_root(args.repo)
     if args.inventory:
         inventory(repo)
@@ -285,7 +448,8 @@ def main(argv=None):
         print("tool_selftest_gate: 未知条目 %s（可用：--inventory 或 REGISTRY）"
               % ", ".join(unknown), file=sys.stderr)
         return 2
-    results, rc = run(repo, only=only, skip=skip, timeout=args.timeout)
+    results, rc = run(repo, only=only, skip=skip, timeout=args.timeout,
+                      total_timeout=args.total_timeout)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
             json.dump({"format": "tool-selftest-gate/1", "repo": repo,
