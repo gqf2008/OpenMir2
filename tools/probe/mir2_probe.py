@@ -1903,8 +1903,12 @@ class Run:
                 return True
         return False
 
-    def _pick_track_target(self, conn, plan):
-        """按 `track` 选目标：**当前可见、未死、最近**的同名对象或指定 actor；没有 ⇒ None。"""
+    def _track_candidates(self, conn, plan):
+        """`track` 的候选集：当前可见、未死、匹配选择器的对象，带两种距离。
+
+        `_cheb` = 八向距离（`max(|dx|,|dy|)`；**只有 ==1 才是 `CM_HIT` 能打到的邻格**）；
+        `_dist` = 曼哈顿距离（仅用于同层内排序，沿用既有排序口径）。
+        """
         rows, order = scan_actors(conn.frames, self.state.get("self_actor"))
         sx = plan["self_pos"] & 0xFFFF
         sy = (plan["self_pos"] >> 16) & 0xFFFF
@@ -1919,12 +1923,34 @@ class Run:
                     continue
             elif r.get("name") != tr["name"]:
                 continue
-            r["_dist"] = abs(r["x"] - sx) + abs(r["y"] - sy)
+            dx, dy = abs(r["x"] - sx), abs(r["y"] - sy)
+            r["_cheb"] = max(dx, dy)
+            r["_dist"] = dx + dy
             cands.append(r)
+        return cands
+
+    def _pick_track_target(self, conn, plan):
+        """按 `track` 选目标：**只在八向相邻（`_cheb==1`）的候选里取最近**。
+
+        为什么不是「先选最近、再看是否相邻」（卡 `openmir2-probe-track-target-adjacency`，真机轮实测）：
+        `CM_HIT` 只能打 `GetPoseCreate()` 的**正前方格**，所以「最近」若落在 2 格外、甚至玩家
+        **自己那格**（距离 0 反而最"近"），选它必然空打。butch 真机轮三种形态都出现过：
+        nearest 分别落在 (334,331)（4 格）、(330,328)（2 格）、(330,330)（同格）。
+
+        返回相邻候选里最近的那个；**没有相邻候选 ⇒ None**（调用方 fail-closed 并列出候选与距离）。
+        """
+        cands = [r for r in self._track_candidates(conn, plan) if r["_cheb"] == 1]
         if not cands:
             return None
         cands.sort(key=lambda r: (r["_dist"], r["actor"]))
         return cands[0]
+
+    @staticmethod
+    def _format_track_candidates(cands, limit=5):
+        """把候选按「八向距离 → 曼哈顿 → actor」排序后打印坐标与距离（报错/证据共用）。"""
+        rows = sorted(cands, key=lambda r: (r["_cheb"], r["_dist"], r["actor"]))[:limit]
+        return "、".join("actor=%s@(%d,%d) cheb=%d manhattan=%d"
+                         % (r["actor"], r["x"], r["y"], r["_cheb"], r["_dist"]) for r in rows)
 
     def _execute_kill_track(self, conn, plan, idx):
         """寻靶模式（卡 `openmir2-probe-kill-track-target`）：按目标**当前**坐标转身 → 出手前复核 → 连击。
@@ -1943,12 +1969,34 @@ class Run:
         last = None
         while True:
             row = self._pick_track_target(conn, plan)
+            cands = self._track_candidates(conn, plan)
+            waited = 0
+            # 没有相邻目标时**只等不追**（不注入任何移动帧）：每轮 pump(interval) 后重读帧，
+            # 最多等 max_retries 轮——鸡会自己走进邻格；等不到才 fail-closed。
+            while row is None and cands and waited < plan["max_retries"]:
+                waited += 1
+                conn.pump(interval)
+                row = self._pick_track_target(conn, plan)
+                cands = self._track_candidates(conn, plan)
             if row is None:
                 last_known = ("(%d,%d) actor=%d seq=%s"
                               % (last["x"], last["y"], last["actor"], last["last_seq"])
                               if last else "无任何帧")
+                if cands:
+                    near = self._format_track_candidates(cands)
+                    self.steps.append({"index": idx, "kind": "kill", "mode": "track",
+                                       "selector": plan["track"], "result": "no-adjacent",
+                                       "candidates": near, "waited": waited,
+                                       "swings": swings, "retries": retries,
+                                       "note": plan.get("note", "")})
+                    raise StepFailure(
+                        "steps[%s].kill(track): 有 %d 个匹配目标但**都不在八向相邻格**"
+                        "（CM_HIT 只能打 GetPoseCreate() 的正前方格）；已等 %d 轮（每轮 %dms，"
+                        "不注入移动帧）仍无相邻；最近的：%s；最后已出手目标 %s"
+                        % (idx, len(cands), waited, interval, near, last_known))
                 self.steps.append({"index": idx, "kind": "kill", "mode": "track",
                                    "selector": plan["track"], "result": "target-gone",
+                                   "waited": waited,
                                    "last_known": last_known, "swings": swings,
                                    "retries": retries, "note": plan.get("note", "")})
                 vis = visible_actors(conn.frames, self.state.get("self_actor"))
@@ -4701,6 +4749,120 @@ def _selftest_kill():
     return "schema 正/反例 + 八向 + check 方向 3 例 + 运行期 dead/alive/no-target 3 态"
 
 
+def _selftest_track_adjacency():
+    """`track` 选靶：**只在八向相邻（cheb==1）的候选里取最近**（卡 `openmir2-probe-track-target-adjacency`）。
+
+    背景（butch 真机轮实测）：旧实现「先选最近、再要求相邻」⇒ nearest 落在 4 格 / 2 格 / **玩家同格**
+    时立刻 StepFailed，而鸡会走位，选它必然空打。
+    """
+    import argparse as _argparse
+    import tempfile as _tempfile
+    import shutil as _shutil
+
+    self_xy = (330 | (330 << 16))
+    checks = []
+
+    def turn_frame(actor, x, y, name="鸡"):
+        body = encode_bytes(bytes(8)) + encode_text(name + "/255")
+        return b"#" + encode_bytes(pack_header(actor, SM_TURN, x, y, 0)) + body + b"!"
+
+    class _Sock(object):
+        def __init__(self, chunks):
+            self.chunks = list(chunks)
+            self.sent = []
+
+        def recv(self, n):
+            if not self.chunks:
+                raise socket.timeout()
+            return self.chunks.pop(0)
+
+        def sendall(self, data):
+            self.sent.append(bytes(data))
+
+        def close(self):
+            pass
+
+    def run_with(chunks):
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-adj-")
+        args = _argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _Sock(list(chunks))
+        return run, conn, tmpd
+
+    def kill_plan(max_retries=1, interval_ms=450):
+        return plan_step({"kill": {"track": "nearest:鸡", "self_pos": self_xy,
+                                   "max_swings": 2, "max_retries": max_retries,
+                                   "interval_ms": interval_ms}}, 0, {})
+
+    plan = kill_plan()
+
+    # 牙 a/d：同格候选（cheb=0）**永不选中**，相邻候选（cheb=1）优先。
+    run, conn, tmpd = run_with([turn_frame(700, 330, 330), turn_frame(701, 331, 331)])
+    try:
+        conn.pump(50)
+        picked = run._pick_track_target(conn, plan)
+        checks.append((picked is not None and picked["actor"] == 701
+                       and picked["_cheb"] == 1,
+                       "牙a 同格(700@330,330)与相邻(701@331,331)并存 ⇒ 选相邻的 701（旧 nearest 会选同格）"))
+        run2, conn2, tmpd2 = run_with([turn_frame(700, 330, 330)])
+        try:
+            conn2.pump(50)
+            none_row = run2._pick_track_target(conn2, kill_plan())
+            checks.append((none_row is None,
+                           "牙d 只有同格候选 ⇒ _pick_track_target 返回 None（cheb=0 不算相邻）"))
+        finally:
+            _shutil.rmtree(tmpd2, ignore_errors=True)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 b：初始只有 2 格外的目标，**等待期内**它走进邻格 ⇒ 应选中并出手。
+    # 不给死亡帧：本牙只证明「等待后选中并出手」，死亡/存活由别的牙覆盖。
+    run, conn, tmpd = run_with([turn_frame(701, 332, 330),
+                                build_s2c_frame(701, SM_WALK, 331, 330, 0, b""),
+                                build_s2c_frame(701, SM_WALK, 331, 331, 0, b"")])
+    try:
+        conn.pump(50)          # 先收首帧（同 _selftest_kill_track 的口径）
+        sent_before = len(conn.sock.sent)
+        plan_b = kill_plan(max_retries=3, interval_ms=450)
+        err = None
+        try:
+            run.execute_step(conn, plan_b)
+        except StepFailure as ex:
+            err = str(ex)
+        swung = len(conn.sock.sent) >= sent_before + 2   # TURN + 至少 1 次 HIT
+        no_adj = err is not None and "都不在八向相邻格" in err
+        checks.append((swung and not no_adj,
+                       "牙b 目标 2 格外→等待期内走进邻格 ⇒ 不注入移动帧、等待后选中并出手"
+                       "（sent=%d，err=%r）" % (len(conn.sock.sent) - sent_before, err)))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 c：始终不相邻 ⇒ fail-closed，报错**列出坐标与距离**、step 结果 no-adjacent。
+    run, conn, tmpd = run_with([turn_frame(701, 332, 330)])
+    try:
+        conn.pump(50)          # 先收首帧
+        plan_c = kill_plan(max_retries=1, interval_ms=450)
+        err = None
+        try:
+            run.execute_step(conn, plan_c)
+        except StepFailure as ex:
+            err = str(ex)
+        rec = run.steps[-1] if run.steps else {}
+        checks.append((err is not None and "都不在八向相邻格" in err
+                       and "cheb=2" in err and "(332,330)" in err
+                       and rec.get("result") == "no-adjacent",
+                       "牙c 始终不相邻 ⇒ fail-closed 且报错含坐标与 cheb 距离（%r）" % (err,)))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    bad = [msg for ok, msg in checks if not ok]
+    if bad:
+        raise AssertionError("%d/%d 牙红：%s" % (len(bad), len(checks), "；".join(bad)))
+    return checks
+
+
 def _selftest_runtime_token():
     """运行期令牌 `@last_kill_xy`（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
 
@@ -5566,6 +5728,7 @@ def run_selftest():
     check("dsl-kill", _selftest_kill)
     check("dsl-kill-track", _selftest_kill_track)
     check("dsl-runtime-token", _selftest_runtime_token)
+    check("dsl-track-adjacency", _selftest_track_adjacency)
     check("dsl-npc-discovery", _selftest_npc_discovery)
     check("discovery-addressing", _selftest_discovery_addressing)
     check("scenario-validation", _selftest_scenario_validation)
