@@ -6725,7 +6725,11 @@ def main():
         d = rest[0]
         os.makedirs(d, exist_ok=True)
         cols = ["Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax"]
-        payload = ("1\t1\t0\t0\t0\t0\t0\n").encode("utf-8")
+        # 合成夹具要**反映真实形态**（卡 `openmir2-db-makeindex-mask` 的 post-merge 修复）：
+        # 真机 `characters_bagitem` 的占用槽 `MakeIndex` 非 0；旧夹具写 0 是**空壳行**，
+        # 会让已登记掩码列的 `nonzero_both_sides` 判红（「声明了掩码却证明不了这列被填过」）
+        # ——那是**夹具不真实**，不是判据过严。行数保持 1（其余自测按单行夹具断言行数/恢复）。
+        payload = ("1\t1\t0\t5001\t0\t0\t0\n").encode("utf-8")
         fname = "mir2_db__characters_bagitem.tsv"
         with open(os.path.join(d, fname), "wb") as f:
             f.write(payload)
