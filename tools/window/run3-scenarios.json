@@ -23,8 +23,8 @@
     {"n": 18, "name": "gamepoint_exchange", "profile": "alt",         "extra": []},
     {"n": 19, "name": "clearmapmon_q001",     "profile": "alt",          "extra": []},
     {"n": 20, "name": "dropgold_zero_draw", "profile": "alt",        "extra": []},
-    {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": ["--timeout-ms", "60000", "--profile", "tools/window/profiles/butch_monsters.json"],
-     "blocked": "**已解**：前置插入（原缺口 3081 行 × 200ms ≈ 616s、`ProcessMonsterMultiThreadLimit` 未配=1；卡 `6f35b049f`）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**选靶已修**（相邻优先，实验轮 `kill=dead`、`matched_ident=34`）。**当前缺口 = 字段映射与判据**：原稿把 `recog` 当尸体坐标发，实测账本 `max=16` 0 条 ⇒ 两抽从未发生；**判据 = RNG 账本恰 2 条**（`PlayObject.Operate.cs:722` 的 `Random(16)+5` 与 `:723` 的 `Random(201)+100` 各 1 条，site 归属该两行）；`SM_BUTCH(637)` 只作**伴随**证据——`Operate.cs:749` 在函数尾部**无条件**发（只有速度门 `return false` 会跳过）⇒ **637 不判成功**；`SM_SKELETON(33)` 仅在 `BodyLeathery<=0` 时发，作加强项。 **取值门**：`Operate.cs:716` 每轴 ≤2 格 → `:718` `IsValidObject(nX,nY,2)` → `:720` `Death && !Skeleton && Animal`（**不是**八向相邻门——八向相邻是 probe 出手的要求）。 修好后重跑一次真机核对账本两抽。未打通前不得声称可跑。"},
+    {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": ["--timeout-ms", "60000", "--profile", "tools/window/profiles/butch_monsters.json"]
+     },
     {"n": 22, "name": "castle_merchant_tax", "profile": "alt",       "extra": [],
      "blocked": "① 买武器腿缺 652 ClientItem buffer 解码取 MakeIndex（645 不含，运行时计数推不出）；②「SaveTick/600s 门不可观测」已证伪（SaveTick 只写时间戳，ConsoleShowUserCountTime 可被 profile 覆盖到 5s）；**真缺口=税入账原因未定位**。买药腿已由 #23 覆盖（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
     {"n": 23, "name": "castle_merchant_tax_potion", "profile": "alt", "extra": ["--timeout-ms", "700000"]},
