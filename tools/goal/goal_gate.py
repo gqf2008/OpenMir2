@@ -1709,6 +1709,32 @@ def selftest(verbose=False):
             tool_gate_check(_tg_root, run=_fake_run({"rc": None, "timed_out": True}))["state"] == NEED,
             "timeout"))
 
+        # ---------- 组装级牙（A1，卡 openmir2-goalgate-quickmode-tooth）----------
+        # 6 条三态牙都直接调 tool_gate_check()；这里钉「run_gate_checks 的组装顺序」：
+        # 第 8 项必须与 with_tests 无关（--skip-tests 也跑）。把 append 缩进进
+        # `if with_tests:` ⇒ 本牙红（其余 77 条仍绿，正是要抓的盲区）。
+        _orig_run_cmd = globals()["run_cmd"]
+        _gate_calls = []
+
+        def _fake_gate_run(cmd, cwd, to):
+            _gate_calls.append(list(cmd))
+            return {"rc": 0, "duration_s": 0.0, "stdout": "", "stderr": "",
+                    "cmd": list(cmd), "cwd": str(cwd)}
+
+        globals()["run_cmd"] = _fake_gate_run
+        try:
+            _checks_quick = run_gate_checks(Path(_tg_root), Path(_tg_root),
+                                            with_tests=False, timeout=5, test_timeout=5)
+        finally:
+            globals()["run_cmd"] = _orig_run_cmd
+        _by = {c["name"]: c for c in _checks_quick}
+        check("条件4 组装牙：快速模式仍跑第 8 项 tool_selftest_gate 且 PASS", lambda: (
+            "tool_selftest_gate" in _by and _by["tool_selftest_gate"]["state"] == PASS,
+            str(sorted(_by))))
+        check("条件4 组装牙：快速模式 cargo_test_workspace 仍是 NEED", lambda: (
+            _by.get("cargo_test_workspace", {}).get("state") == NEED,
+            str(_by.get("cargo_test_workspace"))))
+
         check("总体状态优先级 FAIL > 需人工 > PASS", lambda: (
             overall_state([PASS, NEED]) == NEED
             and overall_state([PASS, NEED, FAIL]) == FAIL
