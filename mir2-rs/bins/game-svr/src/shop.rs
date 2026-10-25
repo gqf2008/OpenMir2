@@ -64,8 +64,10 @@ use mir2_world::merchant::{
     GetBackupgWeaponOutcome, MerchantFlags, MerchantItem, UpgradeWaponOutcome,
 };
 
-use crate::ability::ItemCatalog;
-use crate::bag::{add_item_to_bag, BagItem, MAX_BAG_ITEM};
+use crate::ability::{Ability, ItemCatalog};
+use crate::bag::{
+    add_item_to_bag, add_item_to_bag_with_sink, BagItem, WeightChanged, WeightSink, MAX_BAG_ITEM,
+};
 use crate::downlink;
 use crate::ground::GroundState;
 use crate::itemwire::{encode_client_item, ClientItem};
@@ -204,22 +206,40 @@ impl ShopFrame {
 ///
 /// 只在**卡内实测的买入路径**发射；`make_drug_item` / `take_back_storage_item` 同样缺 622，
 /// 补它们要先补各自的重量重算 / 换队列感知发射器 ⇒ 登记为 T-47 ⑤ 残留，不在本卡夹带。
+///
+/// 卡 `openmir2-bag-weight-sink`：**「发不发」已收进单点**（[`BuyWeightSink`] 只会在
+/// `add_item_to_bag_with_sink` 成功入包后收到一次快照）；本函数只负责把快照编成帧。
 #[must_use]
-fn weight_changed_frame(state: &GroundState) -> ShopFrame {
-    let w = state.wabil.weight;
-    let a = state.wabil.wear_weight;
-    let h = state.wabil.hand_weight;
-    let sum = i32::from(w) + i32::from(a) + i32::from(h);
-    let chk = ((sum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21;
+fn weight_changed_frame(snapshot: WeightChanged) -> ShopFrame {
     frame(
         mir2_protocol::messages::SM_WEIGHTCHANGED,
-        i32::from(w),
-        u16::from(a),
-        u16::from(h),
-        chk as u16,
+        i32::from(snapshot.weight),
+        u16::from(snapshot.wear_weight),
+        u16::from(snapshot.hand_weight),
+        snapshot.series(),
         Vec::new(),
     )
     .queued(mir2_protocol::messages::RM_WEIGHTCHANGED)
+}
+
+/// 买入路径的 [`WeightSink`]：`WeightChanged()`（`BaseObject.cs:1771-1774`）的「重算
+/// `WAbil.Weight` + 取快照」在单点的成功回调里做；帧仍由调用方在**既有位置**（200 之后、
+/// 650 之前）生成 ⇒ 向量序与线上序都不变。
+struct BuyWeightSink<'a> {
+    catalog: &'a dyn ItemCatalog,
+    wabil: &'a mut Ability,
+    snapshot: &'a mut Option<WeightChanged>,
+}
+
+impl WeightSink for BuyWeightSink<'_> {
+    fn on_item_added(&mut self, items: &[BagItem]) {
+        self.wabil.weight = recalc_weight(self.catalog, items);
+        *self.snapshot = Some(WeightChanged {
+            weight: self.wabil.weight,
+            wear_weight: self.wabil.wear_weight,
+            hand_weight: self.wabil.hand_weight,
+        });
+    }
 }
 
 /// `Merchant` 实例上本片读到的字段（宿主从世界实体取）。
@@ -1248,7 +1268,20 @@ pub fn buy_item(
                             let bought = to_bag(&price_item);
                             let add_tail = crate::trade::add_item_tail(&bought, ctx.catalog)
                                 .unwrap_or_default();
-                            if add_item_to_bag(&mut state.item_list, bought, MAX_BAG_ITEM) {
+                            // 卡 `openmir2-bag-weight-sink`：`WeightChanged()` 由单点在成功入包后
+                            // 回调一次（满包不回调）；这里只接快照，帧仍在既有位置生成。
+                            let mut weight_after: Option<WeightChanged> = None;
+                            let mut sink = BuyWeightSink {
+                                catalog: ctx.catalog,
+                                wabil: &mut state.wabil,
+                                snapshot: &mut weight_after,
+                            };
+                            if add_item_to_bag_with_sink(
+                                &mut state.item_list,
+                                bought,
+                                MAX_BAG_ITEM,
+                                &mut sink,
+                            ) {
                                 // `AddItemToBag` 成功：金币/税/出包 + 从库存移除。
                                 state.gold -= n_price;
                                 // `Merchant.cs:1257-1266`：Castle 分支用 `nPrice`；CastleManager 分支用
@@ -1268,10 +1301,11 @@ pub fn buy_item(
                                     1,
                                     add_tail,
                                 ));
-                                state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
                                 // `WeightChanged()`（`BaseObject.cs:1771-1774`）在 `AddItemToBag` 内、
                                 // `SendAddItem` 之前触发；线上 622 排在直连的 200 之后、650(149) 之前。
-                                frames.push(weight_changed_frame(state));
+                                if let Some(snapshot) = weight_after {
+                                    frames.push(weight_changed_frame(snapshot));
+                                }
                                 let g = &mut goods[i];
                                 g.remove(j);
                                 if g.is_empty() {

@@ -187,7 +187,52 @@ impl BagItem {
     }
 }
 
-/// `AddItemToBag(userItem)`（`src/M2Server/Actor/BaseObject.cs:1241-1252`）的**入包半边**。
+/// `WeightChanged()`（`BaseObject.cs:1771-1774`）的快照：`WAbil.Weight/WearWeight/HandWeight`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WeightChanged {
+    pub weight: u16,
+    pub wear_weight: u8,
+    pub hand_weight: u8,
+}
+
+impl WeightChanged {
+    /// `SM_WEIGHTCHANGED(622).Series`
+    /// （`PlayObject.Message.cs:1760`：`((W+A+H)^0x3A5F)^0x1F35^0xaa21`，`u16` 回写）。
+    #[must_use]
+    pub fn series(&self) -> u16 {
+        let sum =
+            i32::from(self.weight) + i32::from(self.wear_weight) + i32::from(self.hand_weight);
+        (((sum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21) as u16
+    }
+}
+
+/// `AddItemToBag` 成功后的 `WeightChanged()` 出口（卡 `openmir2-bag-weight-sink`）。
+///
+/// **单点决定「发不发」**：只有 [`add_item_to_bag_with_sink`] 会调它，且**只在成功入包后
+/// 恰一次**；满包（`ItemList.Count >= MaxBagItem`）在 `ItemList.Add` 之前 `return false`
+/// ⇒ **一次都不调**（oracle `BaseObject.cs:1241-1248`）。
+///
+/// **调用方决定「怎么发」**：载荷怎么算（`RecalcBagWeight` 要 catalog）、发到哪条通道
+/// （`ShopFrame` 队列 / ground 通知队列 / immediate + flag）、排在什么位置。
+///
+/// **未 opt-in 的调用点走 [`NoWeightSink`]，仍然不发 622**：`bag` 的 take_on 换下件 /
+/// take_off 卸下、`lib.rs` 的构造期新手物品与脚本 GIVE。现状登记在
+/// `mir2-rs/tests/parity/whitelist.md` T-47 ⑤；要改「发不发」需各自开卡，
+/// **不要**以为换成单点就自动补上了。
+pub trait WeightSink {
+    /// 成功入包后调一次；`items` 是**已含新件**的背包（载荷按它重算）。
+    fn on_item_added(&mut self, items: &[BagItem]);
+}
+
+/// 不发声的 [`WeightSink`]（未 opt-in 的调用点用它）。
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoWeightSink;
+
+impl WeightSink for NoWeightSink {
+    fn on_item_added(&mut self, _items: &[BagItem]) {}
+}
+
+/// `AddItemToBag(userItem)`（`src/M2Server/Actor/BaseObject.cs:1241-1252`）的**单一实现**。
 ///
 /// oracle 逐行：
 ///
@@ -198,17 +243,27 @@ impl BagItem {
 /// return true;
 /// ```
 ///
-/// 本函数只承载「容量门 + 追加」；`WeightChanged()` 的帧发射由调用方按各自的帧队列形态接
-/// （`ShopFrame` / `Frame` 通知 / immediate 帧互不相同）。卡
-/// `openmir2-merchant-price-list-and-weight-frame` 的 A 阶段（tier=L）把**所有**入包点收敛到
-/// 这里且行为零变化；B 阶段（tier=R）再在单点内补 `SM_WEIGHTCHANGED(622)`。
+/// 本函数承载「容量门 + 追加 + 是否触发 `WeightChanged`」；载荷与通道由调用方注入的
+/// [`WeightSink`] 决定（见 trait 文档）。
 #[must_use]
-pub fn add_item_to_bag(items: &mut Vec<BagItem>, item: BagItem, max_bag_item: usize) -> bool {
+pub fn add_item_to_bag_with_sink<S: WeightSink>(
+    items: &mut Vec<BagItem>,
+    item: BagItem,
+    max_bag_item: usize,
+    sink: &mut S,
+) -> bool {
     if items.len() >= max_bag_item {
         return false;
     }
     items.push(item);
+    sink.on_item_added(items);
     true
+}
+
+/// 不带 sink 的调用形态（= [`NoWeightSink`] ⇒ 不发 `SM_WEIGHTCHANGED`）。
+#[must_use]
+pub fn add_item_to_bag(items: &mut Vec<BagItem>, item: BagItem, max_bag_item: usize) -> bool {
+    add_item_to_bag_with_sink(items, item, max_bag_item, &mut NoWeightSink)
 }
 
 /// 装卸动作作用的两个集合：`ItemList`（背包）+ `UseItems[13]`（身上）。
@@ -2062,5 +2117,54 @@ mod tests {
             MAX_BAG_ITEM
         ));
         assert_eq!(full.len(), MAX_BAG_ITEM);
+    }
+
+    /// 卡 `openmir2-bag-weight-sink`：单点**只在成功入包后**调 sink，且**恰好一次**；
+    /// 满包（`>=` 上限）在 `ItemList.Add` 之前返回 ⇒ 一次都不调（oracle `BaseObject.cs:1241-1248`）。
+    ///
+    /// 变异必红：① 把 sink 调用挪到容量门之前（无条件发）⇒ 满包断言红；
+    /// ② 成功支调两次 sink ⇒ 恰一次断言红。
+    #[test]
+    fn add_item_to_bag_with_sink_fires_exactly_once_only_on_success() {
+        #[derive(Default)]
+        struct Counting {
+            calls: usize,
+            seen_index: Vec<u16>,
+        }
+        impl WeightSink for Counting {
+            fn on_item_added(&mut self, items: &[BagItem]) {
+                self.calls += 1;
+                self.seen_index.push(items.last().map_or(0, |i| i.index));
+            }
+        }
+        let mut items: Vec<BagItem> = Vec::new();
+        let mut sink = Counting::default();
+        assert!(add_item_to_bag_with_sink(
+            &mut items,
+            BagItem::new(1, 7),
+            2,
+            &mut sink
+        ));
+        assert_eq!(sink.calls, 1, "成功入包 ⇒ 恰一次回调");
+        assert_eq!(sink.seen_index, vec![7], "载荷看到的是**已含新件**的背包");
+        assert!(add_item_to_bag_with_sink(
+            &mut items,
+            BagItem::new(2, 8),
+            2,
+            &mut sink
+        ));
+        assert_eq!(sink.calls, 2, "两次成功 = 两次回调");
+        // 满包：不追加、不回调。
+        assert!(!add_item_to_bag_with_sink(
+            &mut items,
+            BagItem::new(3, 9),
+            2,
+            &mut sink
+        ));
+        assert_eq!(sink.calls, 2, "满包不得回调");
+        assert_eq!(items.len(), 2);
+        // `NoWeightSink` 形态与不带 sink 的包装等价（返回值一致）。
+        assert!(add_item_to_bag(&mut items, BagItem::new(4, 9), 3));
+        assert!(!add_item_to_bag(&mut items, BagItem::new(5, 9), 3));
     }
 }
