@@ -3,7 +3,10 @@
   "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位；收官帧 `SM_BUTCH(637)`（33 需 BodyLeathery<=0，`PlayObject.Operate.cs:731-738`）。两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。**工具面已就绪**：kill 寻靶（`track: nearest:鸡`）+ 运行期令牌 `@last_kill_xy`（屠宰用的尸体格）。**剩余缺口 = 真机实测**，见 `blocked`。`target_xy` 仍是夹具落点（profile 把鸡刷在该格），kill 不再依赖它。",
   "params": {
     "self_pos": 21627210,
-    "target_xy": 21692746
+    "target_xy": 21692746,
+    "item_make_index": 5001,
+    "item_name": "木剑",
+    "takeon_where": 1
   },
   "blocked": {
     "reason": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合，首个闸门 StartTick==0 立即刷）。**剩余缺口 = 真机实测**（装备 Dc>0 → 寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本）。未打通前不得声称可跑。",
@@ -16,6 +19,24 @@
     "note": "玩家站位（与目标相邻格）；`target_xy` = 目标所在格 `MakeLong(X,Y)`（由活体夹具提供，勿写死）；`self_pos = MakeLong(330,330) = 21627210`（R5 与 placement 自洽）。"
   },
   "steps": [
+    {
+      "send": {
+        "ident": 1003,
+        "recog": "item_make_index",
+        "param": "takeon_where",
+        "text_from": "item_name"
+      },
+      "note": "`CM_TAKEONITEM(1003)`：把背包里的木剑装到武器位。**必须**——基线 `Dc=0`，空手对鸡 AC=0 也打 0 伤，kill 永远等不到死亡帧。"
+    },
+    {
+      "wait_for": 615,
+      "timeout_ms": 3000,
+      "note": "`SM_TAKEON_OK(615)`；616/超时 ⇒ 装备失败，后续 kill 必红"
+    },
+    {
+      "sleep": 1500,
+      "note": "装备后 settle（服务端会用 SM_TURN 重置朝向）；再交给 kill 的寻靶转身"
+    },
     {
       "kill": {
         "track": "nearest:鸡",
