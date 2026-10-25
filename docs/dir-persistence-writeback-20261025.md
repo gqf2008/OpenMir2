@@ -154,3 +154,41 @@ oracle `WorldServer.cs:1100 GetHumData` 的调用点只有**两处**：`:248`（
 测试库的 placement 已把角色写成 `map 0 / (330,330)`（基线是 `B013 / (7,12)`），且 `attack_mode=0`、全程未移动
 ⇒ 其余字段的「回落载入值」**恰好等于实时值**，所以只有 `Dir`（基线 `3`、butch 后 `0`）显形。
 **结论：存档面所有实体派生字段都会在「先离世后存档」路径上回落**，`Dir` 只是这次的显影剂。
+
+## 11. 契约细化的两处（编排方 `6fdf…` 答复，写入供接手者）
+
+**11.1 `use_items` 的档位降级（别与 `Dir`/坐标/`attack_mode` 同级）**
+
+`build_save_record` 里 `use_items` 的**回落源是会话克隆**（`let mut save_use_items = sg.use_items.clone();`），
+实体在才按实体覆盖（全零视为「未同步」不覆盖）⇒ 实体缺失时它回落 `sg.use_items`（**每 tick 回写的实时值**），
+**只丢最多一个 tick**。与 `dir/坐标/attack_mode`（直接回落到**载入记录**）不同。
+⇒ 契约：`use_items` **仍进快照**（要「离世那一刻的精确值」），但**优先级排在四个标量之后**，
+定性为「覆盖一个 tick 的漂移」，**改动面不得被读成「必须整块拷实体」**。
+
+**11.2 `SavedHuman.derived` 与 WRN 判定点**
+
+- 落点：`SavedHuman`（`lib.rs:9082`）加 `derived: Option<EntityDerived>`，不新开结构；
+- `build_save_record`（`:9404`）优先级：**实体 → `saved.derived` → `rec`**；第三档 WRN；
+- WRN 判定放在 `world.session(chr_name)` 判定**之后**：「session 在 ∧ 实体无 ∧ derived 无」才发；
+  普通 disconnect 必走实体支 ⇒ 不刷屏（牙④的可注入点）。
+
+## 12. 接手者最短路径（体力活清单）
+
+```bash
+git status                                   # 必须干净；若脏先查，勿覆盖
+git log --oneline -1                         # 期望 a9309b5ba（或其后）
+git fetch walgit master && git rebase master # 需要时
+# 1) 写 EntityDerived + entity_derived_snapshot(&Entity, &SessionGround)
+# 2) SavedHuman.derived；build_save_record 三档优先级 + WRN
+# 3) 四颗牙：walk 后 CX/CY、turn 后 Dir、@AttackMode 后 attack_mode、磨损后 Dura；
+#    变异①优先级改 记录→快照 ⇒ 必红；变异②删 WRN ⇒ 必红；牙③普通 disconnect 负例
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test -p game-svr --lib <新测试过滤名>   # 先局部，再全量
+cargo test --workspace
+cargo run -p msgcodegen -- --check
+# 7 卫生门 + git diff --check <base> <head> + merge_tree_helper
+```
+
+**真机复拍**（R 卡必须）：窗口内跑「walk+turn 后 soft_close」与普通 disconnect 各一次，
+判 `characters.Dir/CX/CY/attack_mode` 两侧相等（`characters_item.Dura` 按 T-266 不判）。
