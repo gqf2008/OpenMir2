@@ -136,6 +136,8 @@
 
 ## 5. ⑤ 状态快照（`goal_gate` 实测）
 
+> **刷新（2026-10-26 01:0x）**：`master = e7fb3e78d`（开窗前最终 tip）上 `goal_gate --full` ⇒ `GOAL_RC=0 / overall=PASS`，`HEAD_START==HEAD_END`，四条件全 PASS；**条件④ 首次为「门禁 8 项：绿 8 / 红 0 / 需人工 0」**（第 8 项 = 工具自测门，含 `--inventory`），`running 3329 = passed 3266 + ignored 63`、141 suites。产物 `E:/tmp/window/goal-full-e7fb3e78d.{json,meta}`。下表是更早一次的实测，**以这条刷新为准**。
+
 > **刷新（2026-10-26 00:0x）**：`master = 8b7c9c281` 上 `goal_gate --full` 复跑 `GOAL_RC=0 / overall=PASS`，`HEAD_START==HEAD_END`，四条件全 PASS，`running 3329 = passed 3266 + ignored 63`、141 suites。产物 `E:/tmp/window/goal-full-8b7c9c281.{json,meta}`。下表是更早一次的实测，**以这条刷新为准**。
 
 

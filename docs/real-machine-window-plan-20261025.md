@@ -4,14 +4,14 @@
 > 每次都靠回忆必然会漏。这里只做**索引 + 顺序 + 已知坑**，判据正文在别处（每节都有指针）。
 >
 > **当前状态**：**未开窗**。前置里「夹具」已合（`96ad82a37`）、「指纹四态」已合（`d161c3ee0`），
-> 「判定三档成因」尚未合（`openmir2-mirflow-verdict-cause-split`）。
+> 「判定三档成因」**已合**（`openmir2-mirflow-verdict-cause-split` → `e7fb3e78d`）⇒ **四条前置已全绿**，只剩两件具体操作（置金币、定位到靶子旁）。
 
 ## 0. 开窗前必须全绿的条目
 
 | # | 项 | 判据 | 现状 |
 |---:|---|---|---|
 | 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ 47 项全绿；`--inventory` rc=0 | **已绿**（`8b7c9c281`：47/47、`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
-| 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **未合**（`openmir2-mirflow-verdict-cause-split`） |
+| 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **已绿**（`e7fb3e78d`：三档 kind/rc=6/7/8，`selftest 148/148`；用法错 rc=2 与判据彻底分家） |
 | 3 | 夹具 | `provision_...py --gate ...`（逐阶段求值，见下） | **已实测**：动作分布在**两张图**上 ⇒ 需两次 `--apply`，详见本节下的「夹具实测」 |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；mysqld 2580 在 | 当前满足 |
 
