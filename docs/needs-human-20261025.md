@@ -126,20 +126,19 @@
 - **仍建议你做一件事（可选）**：两台机器（本 Windows + macOS 部署）**共用同一个 R2 桶**且都开 `maintain`
   ⇒ 有二次踩踏风险。要么本机 `walgit.toml` 的 `[server].roles` 改成 `["serve"]`，要么换独立桶/前缀。**我不擅自改环境配置。**
 
-## 5. ⑤ 状态快照（`goal_gate` 实测 @ `27a6f27e0`）
+## 5. ⑤ 状态快照（`goal_gate` 实测）
 
-| 条件 | 状态 | 实测（复算口径） |
+- **快照**：`9a966b04b`（2026-10-25 12:49 +08）
+
+| 条件 | 状态 | 实测（可复算） |
 |---|---|---|
-| ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**（语料 639/639/0/0） |
-| ② R 卡证据 | **need_human** | R 卡 **213 张**（快照 @ `27a6f27e0`）：closed **12** / `window_required` **147**（另**未合并 2**）/ whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ `not_merged` **0**；卫生清单「登记型 PASS ≠ 真机证据」**196** 张 |
-| ③ B 类清零 | **pass** | recon `tracked=0`（快照 @ 27a6f27e0；rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **need_human** | 7 项：绿 **5** / 红 **0** / 需人工 **2** —— `master_sync`（walgit 500）+ `cargo_test_workspace`（**本轮未跑**；最近一次全量证据为 tester 在 `2eb147e6e` 的 **3237 passed / 0 failed**，其后 **27 笔**合并（至 `27a6f27e0`）我逐笔扫过 `mir2-rs/bins/**/*.rs` 与 `crates/**/*.rs`，**只有 `b42a8701d`** 命中且只加两条 `#[cfg(test)]`） |
+| ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
+| ② R 卡证据 | **need_human** | R 卡 **222 张**：closed **14** / `window_required` **153**（另未合并 **2**）/ whitelist **48** / 已裁定登记 **4** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 14+153+2+48+4+1 = 222 ✓ |
+| ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
+| ④ 门禁恒绿 | **need_human** | 7 项：绿 **6** / 红 **0** / 需人工 **1** = `cargo_test_workspace`（**待最终窗口跑**）。`master_sync` 已随 walgit 切回原仓库变绿 |
 
-> 口径：walgit 故障期 `master_sync` 必然 `need_human`；②的「未合并 2」按规则单列、不计 FAIL。
-> **四条件的真缺口只有 ② 的 G11 1 张（§1）**；另有一条仓内不一致已开卡处理（`script_host_noop_audit --strict-lines`
-> 行号基线，卡 `openmir2-ledger-line-baseline-resync`，已合 `b06040264`）。
-
----
+> **四条件现在的真缺口只有两处**：② 的 G11 1 张（§1 需你裁决）、④ 的一次全量 `cargo test --workspace --locked`。
+> 后者已排入独占窗口，窗口内同时复确认 ①（若 `crates/script` 无新提交则复用同一二进制）。
 
 ## 6. 本轮 `blocked` 项与解封条件（新表；每项写谁在做）
 
