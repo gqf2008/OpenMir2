@@ -38,10 +38,13 @@ $ErrorActionPreference = "Stop"
 function Write-VerifierUsage([string]$why) {
   Write-Output ("CHUNKS_VERIFY USAGE " + $why)
   Write-Output "CHUNKS_VERIFY USAGE 用法：verify_chunks.ps1 -CaptureDir <hook 产物目录> [-Quiet]"
+  Write-Output "CHUNKS_VERIFY USAGE -Quiet：只打摘要（末行 GREEN/RED 与 0 事件行）；逐事件明细不出屏；退出码不变"
   Write-Output "CHUNKS_VERIFY USAGE 退出码：0=GREEN 1=RED(证据被证伪) 2=USAGE(用法错，未校验) 3=ERROR(内部异常)"
 }
 
-function Invoke-ChunkVerify([string]$captureDir) {
+function Invoke-ChunkVerify([string]$captureDir, [switch]$Quiet) {
+  # F4：`-Quiet` 只抑制**逐事件明细**；摘要（末行 GREEN/RED、0 事件、ERROR）与退出码不变。
+  function Write-Detail([string]$s) { if (-not $Quiet) { Write-Output $s } }
   if (-not (Test-Path -LiteralPath $captureDir -PathType Container)) {
     Write-VerifierUsage ("目录不存在：" + $captureDir)
     exit 2
@@ -68,7 +71,7 @@ function Invoke-ChunkVerify([string]$captureDir) {
       $r = $null
       try { $r = $line | ConvertFrom-Json } catch {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " 解析失败：" + $_.Exception.Message)
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " 解析失败：" + $_.Exception.Message)
         continue
       }
       $missing = $null
@@ -77,7 +80,7 @@ function Invoke-ChunkVerify([string]$captureDir) {
       }
       if ($null -ne $missing) {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " 缺字段 " + $missing)
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " 缺字段 " + $missing)
         continue
       }
       try {
@@ -87,7 +90,7 @@ function Invoke-ChunkVerify([string]$captureDir) {
         $n = [long]$r.n
       } catch {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " 字段类型非法：" + $_.Exception.Message)
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " 字段类型非法：" + $_.Exception.Message)
         continue
       }
       $got = ""
@@ -97,22 +100,22 @@ function Invoke-ChunkVerify([string]$captureDir) {
 
       if ($dir -ne "c2s" -and $dir -ne "s2c") {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " 未知 dir")
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " 未知 dir")
         continue
       }
       if ($n -le 0) {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " n<=0")
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " n<=0")
         continue
       }
       if ([string]::IsNullOrEmpty($got)) {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " sha256 为空串（旧产物/DLL 未计算）")
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " sha256 为空串（旧产物/DLL 未计算）")
         continue
       }
       if ($got -notmatch '^[0-9A-Fa-f]{64}$') {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " sha256 不是 64 位十六进制：" + $got)
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " sha256 不是 64 位十六进制：" + $got)
         continue
       }
 
@@ -128,13 +131,13 @@ function Invoke-ChunkVerify([string]$captureDir) {
       $data = $binCache[$binPath]
       if ($null -eq $data) {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " bin 缺失：" + $binName)
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " bin 缺失：" + $binName)
         continue
       }
       $distinct[$binName] = $true
       if (($off + $n) -gt [long]$data.Length) {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " 区间越界（bin=" + $data.Length + " B）")
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " 区间越界（bin=" + $data.Length + " B）")
         continue
       }
       $slice = New-Object byte[] ([int]$n)
@@ -143,7 +146,7 @@ function Invoke-ChunkVerify([string]$captureDir) {
       $bytes += $n
       if ($actual -ne $got.ToLowerInvariant()) {
         $bad++
-        Write-Output ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " 指纹不符：记录=" + $got.Substring(0, [Math]::Min(16, $got.Length)) + "… 实际=" + $actual.Substring(0, 16) + "…")
+        Write-Detail ("CHUNKS_VERIFY RED line=" + $lineNo + " " + $tag + " 指纹不符：记录=" + $got.Substring(0, [Math]::Min(16, $got.Length)) + "… 实际=" + $actual.Substring(0, 16) + "…")
       }
     }
   }
@@ -196,7 +199,7 @@ if ($captureDir -eq "") {
 
 $script:verifyCode = 1
 try {
-  Invoke-ChunkVerify $captureDir
+  Invoke-ChunkVerify $captureDir -Quiet:$quiet
 } catch {
   Write-Output ("CHUNKS_VERIFY ERROR 内部异常（校验没跑完，不等于 RED）：" + $_.Exception.Message)
   exit 3
