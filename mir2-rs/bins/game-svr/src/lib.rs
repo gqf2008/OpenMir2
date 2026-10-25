@@ -5834,6 +5834,11 @@ fn handle_shop_cmd_inner(
         castle_merchant: mcastle,
         castle_index: mcastle_index,
         item_type_list: mitem_type,
+        // oracle `Merchant.ItemPriceList`：补货时 `CheckItemPrice` 填入（`Merchant.cs:230-235`）；
+        // 买入取价优先命中它（`get_item_price`），未命中才回落 `StdItem.Price`。
+        item_price_list: game_svr::shop::price_list_from(
+            world.merchant_item_price_list(merchant_id),
+        ),
         chr_name: mchr_name.clone(),
     };
     let mut out: Vec<game_svr::shop::ShopFrame> = Vec::new();
