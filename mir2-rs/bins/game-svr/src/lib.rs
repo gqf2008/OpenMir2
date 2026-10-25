@@ -1965,15 +1965,42 @@ fn close_cleanup_residue(
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     displays: &mut downlink::DisplayTable,
 ) -> Option<i32> {
-    // world aid 先读（本函数不碰 world，读一次即可）；host aid **只能**来自 remove 的返回值。
-    let world_aid = world.session(chr_name).and_then(|s| s.actor_id);
+    // host aid **只能**来自 remove 的返回值（取下即用，见 [`cleanup_display_for_closed`]）。
     let closed_sg = ground_sessions.remove(chr_name);
-    let closed_aid = closed_cleanup_actor_id(world_aid, closed_sg.as_ref().map(|s| s.actor_id));
-    // 其余三个会话容器与展示表：顺序无所谓，但**一个都不能漏**（逐个点名的锚见
+    let closed_aid = cleanup_display_for_closed(world, chr_name, closed_sg.as_ref(), displays);
+    // 其余三个会话容器：顺序无所谓，但**一个都不能漏**（逐个点名的锚见
     // `guild_runtime::tests::g3_anchor_a1_four_disconnect_calls_and_order`）。
     saves.remove(chr_name);
     shop_sessions.remove(chr_name);
     sell_off_sessions.remove(chr_name);
+    closed_aid
+}
+
+/// **同一接缝**：由「world 侧 aid + **已摘下的** host 会话」算本次离线的 actor id，并摘掉
+/// 它在该 id 上的展示表条目。
+///
+/// 三条退出路径共用：
+/// - `GateEvent::Closed` 臂（经 [`close_cleanup_residue`]）；
+/// - [`drain_kicks`]（账号级顶号 / `BoKickFlag`）；
+/// - [`drain_soft_close`]（账号级顶号 / `BoSoftClose`）。
+///
+/// **为什么顶号路径必须自己摘**（卡 `openmir2-kick-display-residue`）：那两条 drain 在
+/// `world.disconnect(&chr)` 之后就摘掉 `ground_sessions` ⇒ 稍后到达的 `Closed` 臂两个 id
+/// 来源**都空**（`closed_aid = None`）⇒ 展示表不清理；ActorId 被 ActorMgr 回收复用时，
+/// 新占用者会带着旧名字/行会上屏（与 `openmir2-softclose-cleanup-residue` 修的软关路径
+/// **同缺陷类、不同路径**）。
+///
+/// **顺序仍是结构性的**：host aid 只来自调用方 `ground_sessions.remove()` 的返回值——
+/// 本函数收的是「已摘下的 `SessionGround`」，所以「先 remove 后取值」在写法上不可能出现。
+/// 清理相对 `world.disconnect` 的先后**不承重**（`disconnect` 不碰 `ground_sessions`）。
+fn cleanup_display_for_closed(
+    world: &mir2_world::World,
+    chr_name: &str,
+    closed_sg: Option<&SessionGround>,
+    displays: &mut downlink::DisplayTable,
+) -> Option<i32> {
+    let world_aid = world.session(chr_name).and_then(|s| s.actor_id);
+    let closed_aid = closed_cleanup_actor_id(world_aid, closed_sg.map(|s| s.actor_id));
     cleanup_closed_display(displays, closed_aid);
     closed_aid
 }
@@ -17861,6 +17888,8 @@ fn drain_kicks(
     engine: &mut load::FrontEngine,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    // 卡 `openmir2-kick-display-residue`：顶号路径也必须能摘展示表（见函数尾部）。
+    displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
     guilds: &mut mir2_world::GuildManager,
     guild_store: Option<&mir2_data::guild::GuildStore>,
@@ -17927,7 +17956,11 @@ fn drain_kicks(
             ),
         }
         saves.remove(&chr);
-        ground_sessions.remove(&chr);
+        // 卡 `openmir2-kick-display-residue`：**在这里**摘展示表——`ground_sessions.remove`
+        // 的返回值是 host aid 的最后一处来源；再晚（`Closed` 臂）两个来源都空，摘不掉。
+        // 与 `Closed` 臂、`drain_soft_close` 共用 [`cleanup_display_for_closed`] 一个接缝。
+        let closed_sg = ground_sessions.remove(&chr);
+        cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
 
@@ -18033,6 +18066,8 @@ fn drain_soft_close(
     engine: &mut load::FrontEngine,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    // 卡 `openmir2-kick-display-residue`：账号级顶号（`BoSoftClose` 支）同样要摘展示表。
+    displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
     guilds: &mut mir2_world::GuildManager,
     guild_store: Option<&mir2_data::guild::GuildStore>,
@@ -18102,7 +18137,9 @@ fn drain_soft_close(
             Err(e) => glog!("WRN", "账号级顶号：旧会话离开世界失败 ChrName:{chr}：{e:?}"),
         }
         saves.remove(&chr);
-        ground_sessions.remove(&chr);
+        // 卡 `openmir2-kick-display-residue`：同 [`drain_kicks`]，host aid 取自 `remove` 的返回值。
+        let closed_sg = ground_sessions.remove(&chr);
+        cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
 
@@ -24377,6 +24414,7 @@ fn sim_loop(
             &mut engine,
             &mut saves,
             &mut ground_sessions,
+            &mut displays,
             registry.as_ref(),
             &mut guilds,
             guild_store.as_ref(),
@@ -24428,6 +24466,7 @@ fn sim_loop(
             &mut engine,
             &mut saves,
             &mut ground_sessions,
+            &mut displays,
             registry.as_ref(),
             &mut guilds,
             guild_store.as_ref(),
@@ -36954,6 +36993,7 @@ break
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
             None,
@@ -37010,6 +37050,7 @@ break
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
             None,
@@ -37023,6 +37064,150 @@ break
         );
         assert!(kick_pending.is_empty(), "待踢名单必须被消费掉（幂等）");
         assert!(world.session("ghost").is_none());
+    }
+
+    /// 卡 `openmir2-kick-display-residue` A1/A2：**账号级顶号**（`drain_kicks`）必须摘掉
+    /// 该 actor 的展示表条目。
+    ///
+    /// 改前：`drain_kicks` 没有 `displays` 形参，且在 `world.disconnect` 之后立刻摘掉
+    /// `ground_sessions` ⇒ 稍后到达的 `Closed` 臂算 `closed_aid` 时 world/host **两个来源都空**
+    /// ⇒ `None` ⇒ 展示表不清理；ActorId 被 ActorMgr 回收复用时，新占用者带旧名字/行会上屏。
+    ///
+    /// 牙（行为牙，不是文本锚）：删掉 `drain_kicks` 尾部的 `cleanup_display_for_closed(...)`
+    /// 调用 ⇒ 第一条断言红（`displays.get(actor)` 仍是带 old 名的那条）。
+    /// 第二条是**误摘负例**（别的 actor 的展示必须留着）。
+    #[test]
+    fn drain_kicks_clears_display_for_kicked_actor_only() {
+        use std::collections::HashMap;
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        world.open_session("lb1a");
+        let actor = world
+            .enter_map(
+                "lb1a",
+                mir2_world::Entity::new(0, "lb1a".to_string(), 10, 20),
+                0,
+            )
+            .expect("旧会话在世界里");
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("acct1", "lb1a", 77, 0, 901, actor));
+        let mut ground: HashMap<String, SessionGround> = HashMap::new();
+        ground.insert("lb1a".to_string(), test_session_ground(actor));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            actor,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"old".to_vec()),
+        );
+        let bystander = actor + 100;
+        displays.set(
+            bystander,
+            downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, b"keep".to_vec()),
+        );
+        let mut kick_pending = vec!["lb1a".to_string()];
+
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut HashMap::new(),
+            &mut ground,
+            &mut displays,
+            None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
+        );
+
+        assert!(
+            displays.get(actor).is_none(),
+            "顶号必须摘掉该 actor 的展示表（否则 ActorId 复用时新玩家带旧名字/行会上屏）"
+        );
+        assert!(
+            displays.get(bystander).is_some(),
+            "误摘负例：别的 actor 的展示必须留着"
+        );
+        assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
+    }
+
+    /// 卡 `openmir2-kick-display-residue` A1/A2：**账号级顶号的 `BoSoftClose` 支**
+    /// （`drain_soft_close`）同样必须摘展示表——它与 `drain_kicks` 是两条独立路径，
+    /// 只修一条不算完。
+    ///
+    /// 牙（行为牙）：删掉 `drain_soft_close` 尾部的 `cleanup_display_for_closed(...)` 调用
+    /// ⇒ 第一条断言红；第二条是误摘负例。
+    #[test]
+    fn drain_soft_close_clears_display_for_kicked_actor_only() {
+        use std::collections::HashMap;
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        world.open_session("lb1b");
+        let actor = world
+            .enter_map(
+                "lb1b",
+                mir2_world::Entity::new(0, "lb1b".to_string(), 10, 20),
+                0,
+            )
+            .expect("旧会话在世界里");
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("acct2", "lb1b", 78, 0, 902, actor));
+        let mut ground: HashMap<String, SessionGround> = HashMap::new();
+        ground.insert("lb1b".to_string(), test_session_ground(actor));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            actor,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"old".to_vec()),
+        );
+        let bystander = actor + 100;
+        displays.set(
+            bystander,
+            downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, b"keep".to_vec()),
+        );
+        let mut soft_close_pending = vec!["lb1b".to_string()];
+
+        drain_soft_close(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut soft_close_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut HashMap::new(),
+            &mut ground,
+            &mut displays,
+            None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
+        );
+
+        assert!(
+            displays.get(actor).is_none(),
+            "BoSoftClose 支顶号也必须摘掉该 actor 的展示表（只修 drain_kicks 不算完）"
+        );
+        assert!(
+            displays.get(bystander).is_some(),
+            "误摘负例：别的 actor 的展示必须留着"
+        );
+        assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
     }
 
     /// **卡 `openmir2-gm-impl-kick`**：GM 命令登记的踢人目标在宿主 tick 内并入 `kick_pending`，
@@ -37066,6 +37251,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
             None,
@@ -37144,6 +37330,7 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
             None,
@@ -39855,6 +40042,7 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
             None,
@@ -39936,6 +40124,7 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut downlink::DisplayTable::new(),
             None,
             &mut guilds,
             None,
@@ -40043,6 +40232,7 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
             None,
@@ -40113,6 +40303,7 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
             None,
