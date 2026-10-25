@@ -1776,6 +1776,19 @@ fn after_contains(src: &[&str], from: usize, needle: &str) -> Option<usize> {
     (from..src.len()).find(|&i| src[i].contains(needle))
 }
 
+/// **去注释视图**（与 `lib.rs` 的 `strip_line_comments` 同口径）：删掉每行 `//` 之后的内容。
+///
+/// 源码文本锚必须走这个视图——注释里出现的 `.remove(` / 函数名不算代码，否则把实现删掉、
+/// 只在注释里留一句「这里原本有 remove」仍能绿（`source-text-tooth-bypass`）。
+fn code_lines(src: &str) -> Vec<String> {
+    src.lines()
+        .map(|line| match line.find("//") {
+            Some(pos) => line[..pos].to_string(),
+            None => line.to_string(),
+        })
+        .collect()
+}
+
 #[test]
 fn g3_anchor_a1_four_disconnect_calls_and_order() {
     let l = lines(MAIN_SRC);
@@ -1795,8 +1808,62 @@ fn g3_anchor_a1_four_disconnect_calls_and_order() {
     let deal = after(&l, closed, "deal_cancel_between(").expect("arm 内 deal_cancel");
     assert!(closed < deal, "104 必须先于 deal_cancel_between（N-10）");
     assert!(after(&l, closed, "online_take(&mut online, &chr_name);").is_some());
-    assert!(after(&l, closed, "ground_sessions.remove(&chr_name);").is_some());
-    let _ = arm;
+
+    // ---- 卡 `openmir2-softclose-cleanup-residue` 返工：清理尾段收敛后的两条**独立承重** ----
+    // 旧断言 `after(closed, "ground_sessions.remove(&chr_name);")` 随抽取失效（那条 remove 已
+    // 移进 `close_cleanup_residue`）。它原本守的两件事由下面两条**分别**承担，
+    // **不许合并成「函数被调用过」**——那是锚变软的标准形态（删掉一个容器的 remove 仍绿）。
+    let code = code_lines(MAIN_SRC);
+
+    // ① save 必须在清理调用**之前**（否则存档拿不到实时态）。save 块是
+    //    `if let (Some(saved), Some(sg))`，静默跳过不会 panic ⇒ 只能靠下标比较。
+    let disc_code = (arm..code.len())
+        .find(|&i| {
+            code[i]
+                .trim()
+                .starts_with("match world.disconnect(&chr_name)")
+        })
+        .expect("Closed 臂内的 world.disconnect");
+    let save_code = (arm..disc_code)
+        .find(|&i| code[i].trim() == "save_human_rcd(")
+        .expect("Closed 臂内必须有 save_human_rcd（存档必须在清理之前）");
+    let cleanup_code = (arm..disc_code)
+        .find(|&i| code[i].trim() == "close_cleanup_residue(")
+        .expect("Closed 臂内必须有 close_cleanup_residue 调用（调用点锚；整行被删 ⇒ 这里红）");
+    assert!(
+        save_code < cleanup_code,
+        "save_human_rcd 必须在 close_cleanup_residue 之前（save={save_code} cleanup={cleanup_code}）"
+    );
+
+    // ② 四个容器**逐个点名**各恰好一处 `.remove(`（在 `close_cleanup_residue` 函数体内）：
+    //    删掉其中任何一个 ⇒ 对应那一条**单独**红，而不是只红在顺序上。
+    let fn_code = code
+        .iter()
+        .position(|l| l.trim().starts_with("fn close_cleanup_residue("))
+        .expect("close_cleanup_residue 定义");
+    let fn_end_code = (fn_code..code.len())
+        .find(|&i| code[i] == "}")
+        .expect("close_cleanup_residue 函数体结束");
+    // `ground_sessions` 那一条**连「取自 remove 的返回值」一起钉**：写成 `get(...)` 先取再
+    // `remove` 是本次返工要消灭的写法，针面必须跟着变，否则改回去了仍绿。
+    for (container, needle) in [
+        ("saves", "saves.remove(chr_name);"),
+        (
+            "ground_sessions",
+            "let closed_sg = ground_sessions.remove(chr_name);",
+        ),
+        ("shop_sessions", "shop_sessions.remove(chr_name);"),
+        ("sell_off_sessions", "sell_off_sessions.remove(chr_name);"),
+    ] {
+        let hits: Vec<usize> = (fn_code..fn_end_code)
+            .filter(|&i| code[i].trim() == needle)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "`close_cleanup_residue` 内必须恰好一处 `{container}` 的 `.remove(`（四容器逐个点名；             0 = 该容器被漏摘/改回先 get 后 remove，>1 = 重复）命中={hits:?}"
+        );
+    }
 
     let kick_fn = l
         .iter()
@@ -1826,6 +1893,49 @@ fn g3_anchor_a1_four_disconnect_calls_and_order() {
     assert!(sc_fn < sc && sc < sc_end);
     let sc_call = after_contains(&l, sc_fn, "world.soft_close(chr_name)").unwrap();
     assert!(sc_call < sc, "guild_softcmd 在 world.soft_close 之后");
+}
+
+/// 卡 `openmir2-softclose-cleanup-residue` 返工：**调用点锚**（去注释视图）。
+///
+/// 抽取之后「函数本身对」不等于「`sim_loop` 真的调了它」——删掉 Closed 臂里的调用行，
+/// 只测函数的用例仍会全绿（reviewer-20 F2 里登记的已知盲区）。本锚钉：**生产代码**里
+/// `close_cleanup_residue(` 调用恰好一处，且落在 `GateEvent::Closed` 臂内。
+///
+/// 只扫生产面（首处 `mod tests {` 之前）：测试夹具自己也调用该函数，不切会让计数变成 2。
+///
+/// 牙：删掉 `sim_loop` 的调用行 ⇒ 本用例红。已知边界：把调用换成一层间接包装仍能绿
+/// （源码文本锚的通用边界，登记在卡上）。
+#[test]
+fn closed_arm_calls_close_cleanup_residue_once_in_decommented_production_view() {
+    let prod = &MAIN_SRC[..MAIN_SRC.find("mod tests {").expect("`mod tests {` 行")];
+    let code = code_lines(prod);
+    let calls: Vec<usize> = code
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.trim() == "close_cleanup_residue(")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        calls.len(),
+        1,
+        "生产代码里必须恰好一处 `close_cleanup_residue(` 调用行；命中 {calls:?}         （0 = 调用点被删 ⇒ Cleaned 不过就不再清理；>1 = 重复调用）"
+    );
+    let call = calls[0];
+    let arm = (0..call)
+        .rev()
+        .find(|&i| code[i].trim() == "GateEvent::Closed {")
+        .expect("调用点必须在 `GateEvent::Closed` 臂内");
+    let disc = (call..code.len())
+        .find(|&i| {
+            code[i]
+                .trim()
+                .starts_with("match world.disconnect(&chr_name)")
+        })
+        .expect("Closed 臂内的 world.disconnect");
+    assert!(
+        arm < call && call < disc,
+        "调用必须在 Closed 臂内（arm={arm} call={call} disconnect={disc}；这里只用 disconnect 定位，         不是顺序判据——清理相对 disconnect 的先后不承重）"
+    );
 }
 
 #[test]
