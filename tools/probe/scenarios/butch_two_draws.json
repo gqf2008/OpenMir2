@@ -40,13 +40,13 @@
     {
       "kill": {
         "track": "nearest:鸡",
-        "max_retries": 3,
+        "max_retries": 6,
         "self_pos": "self_pos",
         "max_swings": 20,
         "interval_ms": 1000,
         "wait_ident": 34
       },
-      "note": "**击杀步（寻靶模式）**：目标会走位（鸡 `WalkStep=1`），固定格会空打 ⇒ 每轮按最新帧取目标当前格、出手前复核，走开就重算（`max_retries=3`）。`interval_ms=1000` 是下限以上的安全值：track 每轮 = 选靶→`CM_TURN`→pump→复核→`CM_HIT`→pump ⇒ 相邻 `CM_HIT` 真实间隔 ≈ 2×interval，必须高于部署 `HitIntervalTime=850`。 **注意**：改用 track 后 `target_xy` **不再参与八向相邻校验**（假值也不会在加载期被拒），它只是窗口 profile 的夹具落点；鸡刷错位置会在 kill 的「目标与自身不八向相邻 ⇒ 需手动站位」处 fail-closed。"
+      "note": "**击杀步（寻靶模式）**：目标会走位（鸡 `WalkStep=1`），固定格会空打 ⇒ 每轮按最新帧取目标当前格、出手前复核，走开就重算（`max_retries=3`）。`interval_ms=1000` 是下限以上的安全值：track 每轮 = 选靶→`CM_TURN`→pump→复核→`CM_HIT`→pump ⇒ 相邻 `CM_HIT` 真实间隔 ≈ 2×interval，必须高于部署 `HitIntervalTime=850`。 **注意**：改用 track 后 `target_xy` **不再参与八向相邻校验**（假值也不会在加载期被拒），它只是窗口 profile 的夹具落点；鸡刷错位置会在 kill 的「目标与自身不八向相邻 ⇒ 需手动站位」处 fail-closed。 **等待窗推算**：`max_retries` 同时决定「相邻等待」与「出手前复核重算」上限；本轮显式取 **6**（窗 = 6 × `interval_ms`1000 = **6s**）。依据（reviewer-21 实测）：鸡 `WALK_SPD=500`（`WalkSpeed=max(200,500)`，`MySqlDB.cs:213`；`MonsterObject.cs:267` 按 `> WalkSpeed` 走一步）⇒ 位置变化间隔 698/850ms、单只 2.7s 走 4 格（≈0.68s/格）；从 cheb=2 走进邻格期望 **2–7s**、散开尾部 >10s ⇒ 原来的 3s 只是边际，6s 有余。**32 只配置下开局就有约 6 只 cheb=1，等待通常根本不发生**，6s 是给「单只/猎物散开」留余量。"
     },
     {
       "send": {
