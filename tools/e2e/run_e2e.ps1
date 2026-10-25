@@ -27,7 +27,9 @@ param(
   [switch]$SkipFlow,
   [switch]$SkipBots,
   [switch]$SelfTestRed,
-  [switch]$FailOnSkip          # 严格模式：SKIP（前置不满足）也算失败
+  [switch]$FailOnSkip,          # 严格模式：SKIP（前置不满足）也算失败
+  [string]$ErrLogDir = "E:\MirServer\logs",
+  [switch]$GateSelfTest        # 离线自检：阶段表点名（A2）+ 空日志目录必须暴露（A4）
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,7 +49,22 @@ function Add-Result([string]$Name, [bool]$Ok, [string]$Detail = "", [string]$Sta
   Write-Output ($State + "  " + $Name + $suffix)
 }
 
+function Get-ErrLogScan([string]$Dir) {
+  # A3：ERR 水位扫描的**目录门**——目录不存在或无 *.err.log ⇒ Ok=$false（旧实现静默 0）。
+  $files = @()
+  if (Test-Path -LiteralPath $Dir) {
+    $files = @(Get-ChildItem -LiteralPath $Dir -Filter *.err.log -ErrorAction SilentlyContinue)
+  }
+  $detail = if ($files.Count -gt 0) {
+    "目录 $Dir；扫描 $($files.Count) 个 *.err.log"
+  } else {
+    "目录不存在或无 *.err.log：$Dir（扫描 0 个文件 ⇒ 该项不能判绿）"
+  }
+  return [pscustomobject]@{ Ok = ($files.Count -gt 0); Count = $files.Count; Files = $files; Detail = $detail }
+}
+
 function Test-FlowStages([string]$StagesFile, [string[]]$Required) {
+  $script:FlowMissingStage = ""
   # 阶段序列断言：必需阶段必须按序出现；返回 $true/$false
   if (-not (Test-Path $StagesFile)) { return $false }
   $stages = @()
@@ -60,7 +77,11 @@ function Test-FlowStages([string]$StagesFile, [string[]]$Required) {
     for ($i = $pos; $i -lt $stages.Count; $i++) {
       if ($stages[$i] -eq $req) { $found = $true; $pos = $i + 1; break }
     }
-    if (-not $found) { Write-Host "  缺阶段(或乱序): $req"; return $false }   # Write-Host：别污染返回值
+    if (-not $found) {
+      $script:FlowMissingStage = $req          # A2：RED 必须**点名**缺的阶段
+      Write-Host "  缺阶段(或乱序): $req"
+      return $false
+    }
   }
   return $true
 }
@@ -92,6 +113,39 @@ function Test-NotBlackScreen([string]$PngPath, [double]$MinNonBlackRatio = 0.01)
   }
 }
 
+
+# ---- 4c. 门禁离线自检（A2/A4；不起客户端、不依赖栈） ----
+if ($GateSelfTest) {
+  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("e2e-gate-selftest-" + [guid]::NewGuid().ToString("N"))
+  New-Item -ItemType Directory -Path $tmp | Out-Null
+  $selfOk = $true
+  # A2：阶段表里有一个流程永不发的阶段 ⇒ 必须 RED 且**点名**该阶段
+  $realOrder = @("start","login_id","login_pwd","login_submit","charsel","enter_game",
+                 "notice_wait","notice_poll","ingame","logout_alt_x","logout_confirm",
+                 "back_charsel","reenter","reentered","done")
+  $missing = "notice_poll"
+  $lines = @()
+  foreach ($st in $realOrder) { if ($st -ne $missing) { $lines += ('{"stage":"' + $st + '"}') } }
+  $sf = Join-Path $tmp "stages.ndjson"
+  Set-Content -LiteralPath $sf -Value $lines -Encoding UTF8
+  $r = Test-FlowStages $sf $realOrder
+  if ($r -or $script:FlowMissingStage -ne $missing) {
+    Write-Output ("FAIL A2: 缺阶段未点名（got r={0} missing='{1}'）" -f $r, $script:FlowMissingStage)
+    $selfOk = $false
+  } else {
+    Write-Output ("PASS A2: 缺阶段判 RED 且点名 '{0}'" -f $script:FlowMissingStage)
+  }
+  # A4：日志目录指到空目录 ⇒ 扫描必须暴露（Ok=$false），不得判绿
+  $empty = Join-Path $tmp "empty-logs"
+  New-Item -ItemType Directory -Path $empty | Out-Null
+  $scan = Get-ErrLogScan $empty
+  if ($scan.Ok) { Write-Output "FAIL A4: 空日志目录被判绿"; $selfOk = $false }
+  else { Write-Output ("PASS A4: 空日志目录暴露为 RED（{0}）" -f $scan.Detail) }
+  Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
+  if (-not $selfOk) { exit 1 }
+  Write-Output "GATE-SELFTEST GREEN"
+  exit 0
+}
 
 python (Join-Path $CaptureDir "selftest_proxy.py")
 Add-Result "proxy-selftest" ($LASTEXITCODE -eq 0)
@@ -154,15 +208,24 @@ if (Test-Path $latestFile) {
 # ---- 5. 真实客户端流程 ----
 if (-not $SkipFlow) {
   $flowOut = Join-Path $RepoRoot ("tests\e2e\flow-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-  $required = @("start","login_id","login_pwd","login_submit","charsel","enter_game","ingame",
-                "notice_dismiss","logout_alt_x","logout_confirm","back_charsel","reenter","reentered","done")
+  # A1（方案①，卡 `openmir2-e2e-flow-stack-coupling`）：必需阶段表必须能由 `mir_flow.ps1` **实际产生**。
+  # 实测阶段序（`tools/client/mir_flow.ps1` 的 Stage 调用序）：enter_game → notice_wait → notice_poll → ingame。
+  # `notice_dismiss` **从未实装**（弹窗关闭是 `ingame` 的一部分）⇒ 旧表在任何栈上都恒 RED。
+  # 选方案①（只改本表）而不是给 mir_flow 补 `notice_dismiss`：`mir_flow.ps1` 归 dev-1 卡
+  # `openmir2-mirflow-combat-pickup-stages`（写集不重叠），且「公告阶段已发生」的 oracle 语义
+  # 由 `notice_wait`+`notice_poll` 表达，新增阶段反而是发明。
+  $required = @("start","login_id","login_pwd","login_submit","charsel","enter_game",
+                "notice_wait","notice_poll","ingame",
+                "logout_alt_x","logout_confirm","back_charsel","reenter","reentered","done")
   if ($SelfTestRed) { $required += "stage_that_does_not_exist" }   # 红检：必缺
 
-  # 记录服务端 err 日志水位，跑完对比是否暴涨
+  # 记录服务端 err 日志水位，跑完对比是否暴涨。
+  # A3（卡 `openmir2-e2e-flow-stack-coupling`）：目录参数化（默认保持 C# 栈的 `E:\MirServer\logs`）；
+  # **目录不存在 / 无 *.err.log 文件 ⇒ RED**（旧实现静默 0 = 「没在看」，不是「没问题」）。
+  $errScan = Get-ErrLogScan $ErrLogDir
+  Add-Result "err-log-scan" $errScan.Ok $errScan.Detail
   $errMark = @{}
-  foreach ($f in (Get-ChildItem "E:\MirServer\logs" -Filter *.err.log -ErrorAction SilentlyContinue)) {
-    $errMark[$f.FullName] = $f.Length
-  }
+  foreach ($f in $errScan.Files) { $errMark[$f.FullName] = $f.Length }
   & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tools\client\mir_flow.ps1") `
     -OutDir $flowOut | Out-Null
   $flowOk = ($LASTEXITCODE -eq 0)
@@ -174,7 +237,9 @@ if (-not $SkipFlow) {
     if (Test-Path $f) { $errGrowth += ((Get-Item $f).Length - $errMark[$f]) }
   }
   $ok = $flowOk -and $stagesOk -and $shotsOk
-  Add-Result "flow-e2e" $ok ("stages=$stagesOk shots=$($shots.Count) errlog+${errGrowth}B")
+  $stageDetail = "stages=$stagesOk"
+  if (-not $stagesOk -and $script:FlowMissingStage) { $stageDetail += "(缺:$($script:FlowMissingStage))" }
+  Add-Result "flow-e2e" $ok ("{0} shots={1} errlog+{2}B" -f $stageDetail, $shots.Count, $errGrowth)
   # 单独一条：进世界必须真画出画面（黑屏 = 没进世界，服务端侧问题）
   $renderOk = Test-NotBlackScreen (Join-Path $flowOut "05b_after_notice.png")
   Add-Result "flow-world-render" $renderOk "05b_after_notice.png 非黑占比 >=1%"
