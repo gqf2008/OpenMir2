@@ -5036,6 +5036,7 @@ struct GuildDisconnect<'a> {
     gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn handle_soft_close_cmd(
     w_param: u16,
     chr_name: &str,
@@ -5044,6 +5045,8 @@ fn handle_soft_close_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mut mir2_world::World,
     guild: Option<&mut GuildDisconnect<'_>>,
+    // 卡 `openmir2-dir-persistence-writeback`：离世快照的落点（见函数内的快照段）。
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
 ) {
     if online.iter().all(|e| e.chr_name != chr_name) {
         glog!(
@@ -5062,6 +5065,22 @@ fn handle_soft_close_cmd(
     let emergency = w_param == 1;
     if emergency {
         sg.bo_emergency_close = true;
+    }
+    // **卡 `openmir2-dir-persistence-writeback`（修法 (a)）**：`world.soft_close` 会销毁实体并把
+    // `sess.actor_id` 置 `None`（= oracle `MakeGhost` 的世界侧等价物），而存档由 ~402ms 后网关的
+    // `GateEvent::Closed` 臂发出 ⇒ 那时实体解析链已断，`cur_x/cur_y/dir/attatck_mode` 会静默
+    // 回落到**载入记录**。离世**之前**取一份实体派生快照挂到 `SavedHuman.derived`；
+    // `build_save_record` 的优先级是 实体 → 快照 → 载入记录（第三档 WRN）。
+    // 快照只经 [`entity_derived_snapshot`] 一个接缝产出（五项全取，禁止在此散写）。
+    if let Some(d) = world
+        .session(chr_name)
+        .and_then(|s| s.actor_id)
+        .and_then(|id| world.entities.get(id))
+        .map(entity_derived_snapshot)
+    {
+        if let Some(saved) = saves.get_mut(chr_name) {
+            saved.derived = Some(d);
+        }
     }
     // `RunNotice` 的 `BoSoftClose` 支 ⇒ `MakeGhost()`（同 tick 后段）。
     match world.soft_close(chr_name) {
@@ -5133,6 +5152,9 @@ fn dispatch_inbound_p0(
     // `M2Share.GetItemNumber()` 计数器（`CM_CLICKNPC` 的 `@main` 脚本 `GIVE` 件走它，
     // 见 [`handle_click_npc_cmd`]）。
     item_number: &mut i32,
+    // `CM_SOFTCLOSE` 要在 `world.soft_close` **之前**把实体派生快照写入 `SavedHuman.derived`
+    //（卡 `openmir2-dir-persistence-writeback`）；其余命令不读。
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
 ) -> bool {
     if cmd.ident == mir2_protocol::messages::CM_QUERYUSERNAME {
         // 线缆映射（`WorldServer.cs:793-794`）：`Recog=targetId`、`Param=x`、`Tag=y`。
@@ -5158,7 +5180,9 @@ fn dispatch_inbound_p0(
         true
     } else if cmd.ident == mir2_protocol::messages::CM_SOFTCLOSE {
         // `wParam`（= 线缆 `Series`）== 1 ⇒ `BoEmergencyClose`。
-        handle_soft_close_cmd(cmd.series, chr_name, socket, online, sessions, world, guild);
+        handle_soft_close_cmd(
+            cmd.series, chr_name, socket, online, sessions, world, guild, saves,
+        );
         true
     } else if cmd.ident == mir2_protocol::messages::CM_CLICKNPC {
         // 线缆映射：`Recog=npcActorId`。
@@ -9165,6 +9189,99 @@ fn use_items_from(
     out
 }
 
+/// **离世那一刻的实体派生快照**（卡 `openmir2-dir-persistence-writeback`，修法 (a)）。
+///
+/// 成因：`CM_SOFTCLOSE` 先 `world.soft_close`（= oracle `MakeGhost` 的世界侧等价物，销毁实体
+/// 并把 `sess.actor_id` 置 `None`），而存档由 ~402ms 后网关的 `GateEvent::Closed` 臂发出
+/// ⇒ `build_save_record` 的实体解析链返回 `None`，`cur_x/cur_y/dir/attatck_mode` **静默回落
+/// 到载入记录**（真机：`characters.Dir` 写成载入值 3 而不是实时值 0）。
+///
+/// 修法：soft-close **之前**取一份快照挂到 [`SavedHuman::derived`]；存档取值优先级
+/// **实体 → 快照 → 载入记录**（第三档 WRN，见 [`warn_save_fallback`]）。
+/// (b′) 的 MakeGhost 非销毁改造另开卡 `openmir2-makeghost-lifecycle`，它落地后本快照层可删。
+///
+/// **五项全取**（只快照 `Dir` = 只修今天现形的那一个；同族字段只是被 placement 掩盖了）：
+/// `x/y/dir/attack_mode` 回落的是**载入记录**；`use_items` 的兜底是会话克隆（每 tick 回写，
+/// 只丢 ≤1 tick），快照只为覆盖离世那一刻的精确值（§11.1）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct EntityDerived {
+    x: i32,
+    y: i32,
+    dir: u8,
+    attack_mode: u8,
+    /// ⚠ **可能是全零**（该路径的实体块从未同步装备）⇒ 消费端**必须先过
+    /// [`use_items_loaded`]** 再采用，禁止直接写库——否则会把会话里已装备的物品写成
+    /// `Index=0/Dura=0`（G-06 物资丢失形态）。接缝无条件拷 `e.use_items`，本不变量不在接缝里。
+    use_items: [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
+}
+
+/// **单一接缝**：实体 → 派生快照。五项一次取全。
+///
+/// 禁止在 soft-close / 存档处散写这五个字段（散写必然与实体漂移，也必然漏字段）。
+fn entity_derived_snapshot(e: &mir2_world::Entity) -> EntityDerived {
+    EntityDerived {
+        x: e.x,
+        y: e.y,
+        dir: e.dir(),
+        attack_mode: e.attack_mode,
+        use_items: e.use_items,
+    }
+}
+
+/// 实体 `use_items` 是否「装载过装备」：有任一非零槽（含破零后保留的 `DuraMax/Desc`）即视为已装载。
+///
+/// 全零实体 = 本路径从未同步（单测/旧路径）⇒ 不能拿它覆盖会话，否则会把会话里已装备的物品
+/// 清零（G-06 的既有口径）。
+fn use_items_loaded(
+    items: &[mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
+) -> bool {
+    items
+        .iter()
+        .any(|s| s.index > 0 || s.dura_max != 0 || s.desc != [0u8; 14])
+}
+
+#[cfg(test)]
+mod save_fallback_warns {
+    //! 存档第三档（回落载入记录）WRN 的**测试侧计数器**：`glog!` 直接打印到 stdout，用例读不到；
+    //! 把计数放进 `glog!` 的格式实参 ⇒ 整行 WRN 被删时计数调用一并消失，变异牙 T6（删 WRN ⇒ 必红）
+    //! 才咬得住。线程局部 = 每个 `#[test]` 一条线程，互不污染。
+    //!
+    //! 本工具链 clippy 0.1.98 在 `thread_local!` 宏调用处误报 `missing_const_for_thread_local`
+    //!（初值已是 `const { … }`）⇒ 模块级放行（同 `chat.rs:50` 的既有登记；逐项 `#[allow]` 会因
+    //! 「attribute 作用于宏调用」被 rustc 判 `unused-attributes`）。
+    #![allow(clippy::missing_const_for_thread_local)]
+
+    thread_local! {
+        pub(crate) static SAVE_FALLBACK_WARNS: std::cell::Cell<usize> =
+            const { std::cell::Cell::new(0) };
+    }
+}
+
+/// 存档第三档（实体与离世快照都缺失）的 WRN。
+///
+/// **调用点门控在 [`build_save_record`]**：只在 `world.session(chr_name)` 存在时发
+/// ⇒ 普通断线（存档在 `world.disconnect` 之前、实体仍在）与「从未进世界」（无会话）都不刷屏。
+fn warn_save_fallback(chr_name: &str) {
+    glog!(
+        "WRN",
+        "存档：ChrName={chr_name} 会话在但实体与离世快照均缺失 ⇒ x/y/dir/attack_mode 回落载入记录（第三档；疑似先离世后存档）{}",
+        save_fallback_mark()
+    );
+}
+
+/// 见 [`save_fallback_warns::SAVE_FALLBACK_WARNS`]：计数随 `glog!` 的实参一起被求值。
+#[cfg(test)]
+fn save_fallback_mark() -> &'static str {
+    save_fallback_warns::SAVE_FALLBACK_WARNS.with(|c| c.set(c.get() + 1));
+    ""
+}
+
+/// 非测试构建零成本（计数器只在 `#[cfg(test)]` 存在）。
+#[cfg(not(test))]
+fn save_fallback_mark() -> &'static str {
+    ""
+}
+
 /// 登入时留下的「原始记录 + 进图逻辑名」——存档（`WorldServer.SaveHumanRcd` → `MakeSaveRcd`）
 /// 在它之上叠加会话实时增量（坐标/Gold/Abil/物品族表）。
 struct SavedHuman {
@@ -9174,6 +9291,10 @@ struct SavedHuman {
     record: record::PlayerRecord,
     /// `playObject.MapName`（进图时 `resolve_enter_map` 定的逻辑名）。
     enter_map: String,
+    /// **离世那一刻的实体派生快照**（见 [`EntityDerived`]）：`CM_SOFTCLOSE` 在
+    /// `world.soft_close` **之前**由 [`entity_derived_snapshot`] 取，供之后 `GateEvent::Closed`
+    /// 臂的存档在实体已销毁时仍写出实时值（取值优先级：实体 → 本快照 → 载入记录）。
+    derived: Option<EntityDerived>,
 }
 
 /// `HUtil32.DelfautItem.ToServerItem()`（`HUtil32.cs:14`）：空槽用的**非 null** 默认物品
@@ -9505,22 +9626,37 @@ fn build_save_record(
         .and_then(|s| registry.and_then(|r| r.name_of(s.map_id)))
         .unwrap_or(saved.enter_map.as_str());
     rec.data.cur_map = Some(cur_map.to_string());
-    if let Some(e) = world
+    // ---- 实体派生标量：**实体 → 离世快照 → 载入记录** -------------------------------
+    // 卡 `openmir2-dir-persistence-writeback`：`CM_SOFTCLOSE` 先 `world.soft_close`（销毁实体、
+    // 清 `sess.actor_id`），~402ms 后 `GateEvent::Closed` 臂才存档 ⇒ 只看实体时这四个标量会
+    // **静默回落载入记录**（真机：`characters.Dir` 写成载入值 3 而非实时值 0；同族字段同理，
+    // 本轮只有 `Dir` 显形是因为测试库 placement 让其余回落值恰好等于实时值，§10.2）。
+    // 取值优先级：实体在 ⇒ 实体；实体不在 ⇒ 离世快照（[`SavedHuman::derived`]）；两者都无 ⇒
+    // 回落 `rec` 并 **WRN**（第三档；门控 = `world.session` 存在，普通断线/未进世界不刷屏）。
+    let live = world
         .session(chr_name)
         .and_then(|s| s.actor_id)
         .and_then(|id| world.entities.get(id))
-    {
-        rec.data.cur_x = i16::try_from(e.x).unwrap_or(rec.data.cur_x);
-        rec.data.cur_y = i16::try_from(e.y).unwrap_or(rec.data.cur_y);
+        .map(entity_derived_snapshot);
+    // 两源**同时存在不可达**：正常路径 soft-close 必销毁实体、普通断线必无快照；只有
+    // `world.soft_close` 返回 `Err` 且此前已写过快照才会两源同存 ⇒ 此时以**实体**为准
+    // （实体是权威，快照只是离世那一刻的替身）。这条顺序没有牙，故写进代码而非只留在文档。
+    let derived = live.as_ref().or(saved.derived.as_ref());
+    if let Some(d) = derived {
+        rec.data.cur_x = i16::try_from(d.x).unwrap_or(rec.data.cur_x);
+        rec.data.cur_y = i16::try_from(d.y).unwrap_or(rec.data.cur_y);
         // `MakeSaveRcd` `:1241`：`playerInfo.Dir = playObject.Dir`（**当前**朝向）。
         // 实体 `dir` 在所有会改 oracle `Dir` 的落点同步：`CM_TURN`、`CM_WALK/RUN/HORSERUN`
         // （**判定前**，失败也保留尝试方向）、9 条攻击命令（含挥空）、`CM_SPELL` default 支。
         // 旧实现只改显示表，存档写的是载入值（G-09 / F1）。
-        rec.data.dir = e.dir();
+        rec.data.dir = d.dir;
         // `MakeSaveRcd` `:1296`：`playerInfo.AttatckMode = (byte)playObject.AttatckMode`。
         // 实体是权威（登录装入 + `@AttackMode` 写穿）⇒ 记录随会话实时值落库，
         // 否则 `@AttackMode` 只在本会话生效、登出即丢（review `2c5cb955` m-1）。
-        rec.data.attatck_mode = e.attack_mode;
+        rec.data.attatck_mode = d.attack_mode;
+    } else if world.session(chr_name).is_some() {
+        // 第三档：会话在、实体无、快照无 ⇒ 只能回落载入记录（必须留 WRN 痕迹）。
+        warn_save_fallback(chr_name);
     }
     rec.data.gold = sg.state.gold;
     rec.data.game_gold = sg.game_gold;
@@ -9575,27 +9711,35 @@ fn build_save_record(
     // 覆盖 `Index/Dura` 两列；`MakeIndex/DuraMax/Desc` 仍取会话对象（oracle 是同一个 `UserItem`
     // 实例，破零只清 `Index`/`Dura`，其余字段原样写回）。
     let mut save_use_items = sg.use_items.clone();
-    if let Some(e) = world
+    // 权威源优先级：实体（且确实装载过装备）→ 离世快照 → 会话克隆。
+    // **§11.1 定级**：`use_items` 与上面四个标量不同级——它的兜底是**会话实时值**（每 tick
+    // 回写，只丢 ≤1 tick），不是载入记录；快照只为覆盖「离世那一刻的精确值」（如最后一刀磨损）。
+    let entity_use_items = world
         .session(chr_name)
         .and_then(|s| s.actor_id)
         .and_then(|id| world.entities.get(id))
-    {
+        .map(|e| e.use_items);
+    let authoritative_use_items = match entity_use_items {
         // 只有「实体确实装载过装备」时才以实体为权威：全零实体 = 本路径从未同步（单测/旧路径），
-        // 此时会话是唯一真源。有任一非零槽（含破零后保留的 `DuraMax/Desc`）即视为已装载。
-        let loaded = e
-            .use_items
-            .iter()
-            .any(|s| s.index > 0 || s.dura_max != 0 || s.desc != [0u8; 14]);
-        if loaded {
-            for (i, cell) in save_use_items
-                .iter_mut()
-                .enumerate()
-                .take(mir2_world::entity::USE_ITEM_SLOTS)
-            {
-                if let Some(it) = cell {
-                    it.index = e.use_items[i].index;
-                    it.dura = e.use_items[i].dura;
-                }
+        // 此时会话是唯一真源。
+        Some(items) if use_items_loaded(&items) => Some(items),
+        Some(_) => None,
+        // 实体已离世（soft-close / 顶号）⇒ 用离世那一刻的快照；同样要求「装载过」。
+        None => saved
+            .derived
+            .as_ref()
+            .map(|d| d.use_items)
+            .filter(use_items_loaded),
+    };
+    if let Some(items) = authoritative_use_items {
+        for (i, cell) in save_use_items
+            .iter_mut()
+            .enumerate()
+            .take(mir2_world::entity::USE_ITEM_SLOTS)
+        {
+            if let Some(it) = cell {
+                it.index = items[i].index;
+                it.dura = items[i].dura;
             }
         }
     }
@@ -22336,6 +22480,7 @@ fn sim_loop(
                         &mut sell_off_sessions,
                         &npc_vars_base,
                         &mut item_number,
+                        &mut saves,
                     ) {
                         // 入站 P0 批（R1 前六条：CM_QUERYUSERNAME/CM_QUERYUSERSTATE/CM_QUERYUSERSET/
                         // CM_QUERYVAL/CM_SOFTCLOSE/CM_CLICKNPC）：派发与线缆字段映射见
@@ -23595,6 +23740,7 @@ fn sim_loop(
                                                                 account: account.clone(),
                                                                 record: r.clone(),
                                                                 enter_map: final_map_name.clone(),
+                                                                derived: None,
                                                             },
                                                         );
                                                     }
@@ -27244,6 +27390,7 @@ mod tests {
                 account: "a".into(),
                 record: record::PlayerRecord::default(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -31411,6 +31558,7 @@ break
             account: "ua".to_string(),
             record: record::PlayerRecord::default(),
             enter_map: "0".to_string(),
+            derived: None,
         };
         let rec = build_save_record(&saved, "hero", &rig.world, &rig.sessions["hero"], None);
         assert_eq!(
@@ -31532,6 +31680,7 @@ break
             account: "ua".to_string(),
             record: record::PlayerRecord::default(),
             enter_map: "0".to_string(),
+            derived: None,
         };
         saved.record.data.abil = Some(record::Ability {
             exp: 500,
@@ -31564,6 +31713,7 @@ break
             account: "ua".to_string(),
             record: record::PlayerRecord::default(),
             enter_map: "0".to_string(),
+            derived: None,
         };
         saved.record.data.abil = Some(record::Ability {
             exp: 500,
@@ -32947,6 +33097,7 @@ break
             account: "acct".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
         let weapon = game_svr::bag::BagItem {
             make_index: 9001,
@@ -33105,6 +33256,7 @@ break
             account: "acct".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
         let mut sg = test_session_ground(1);
         sg.recovery.inc_healing = 300;
@@ -33173,6 +33325,7 @@ break
             account: "ua".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
         let catalog = game_svr::ability::StdItemCatalog::new();
 
@@ -33283,6 +33436,7 @@ break
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -33377,6 +33531,7 @@ break
             account: "ua".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
 
         // 前置：先成功向右走一步到 (11,10)（Dir 2）。这样后面的失败支与「起始朝向」
@@ -33468,6 +33623,7 @@ break
             account: "acct".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
         let mut sg = test_session_ground(1);
         sg.storage.items = vec![
@@ -33809,6 +33965,7 @@ break
             account: "acct".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
         let mut sg = test_session_ground(1);
         sg.use_items[SLOT_WEAPON] = Some(game_svr::bag::BagItem {
@@ -33865,6 +34022,415 @@ break
             "HumItems[Necklace] = UseItems[Necklace]（1:1）"
         );
         assert_eq!(hum[SLOT_NECKLACE].as_ref().unwrap().make_index, 9002);
+    }
+
+    /// **卡 `openmir2-dir-persistence-writeback` 的夹具**：模拟「已进世界 + 已登录的存档记录」。
+    ///
+    /// 载入记录的四标量与实时值**故意全都不同**（`7 / 12 / dir 3 / attack_mode 1`），
+    /// 会话佩戴一把 `Dura=4000` 的武器且已同步到实体（`Index=207`）。
+    /// `soft_close()` 走生产入口 [`handle_soft_close_cmd`]（内含离世快照段），
+    /// `save()` 走生产入口 [`build_save_record`]（实体 → 快照 → 记录）。
+    struct SoftCloseRig {
+        world: mir2_world::World,
+        sessions: HashMap<String, SessionGround>,
+        saves: HashMap<String, SavedHuman>,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        displays: downlink::DisplayTable,
+        actor: i32,
+    }
+
+    impl SoftCloseRig {
+        fn new() -> Self {
+            use game_svr::ability::SLOT_WEAPON;
+            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            world.open_session("hero");
+            let mut ent = mir2_world::Entity::new(0, "hero".to_string(), 11, 22);
+            ent.race = mir2_world::ACTOR_RACE_PLAY;
+            ent.ai.dir = 0; // 实时朝向；载入值在下面写成 3
+            let actor = world.enter_map("hero", ent, 0).expect("进世界");
+            world.tick();
+            let mut sg = test_session_ground(actor);
+            sg.gm.permission = 10; // `@AttackMode` 的 GM 门
+            sg.use_items[SLOT_WEAPON] = Some(game_svr::bag::BagItem {
+                make_index: 9001,
+                index: 207,
+                dura: 4000,
+                dura_max: 4000,
+                desc: [0; 14],
+            });
+            {
+                let e = world.entities.get_mut(actor).expect("实体在场");
+                apply_use_items_to_entity(e, &sg.use_items);
+            }
+            let mut sessions = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let mut record = stage6_record();
+            // 载入记录：与实时值全部不同 ⇒ 走「第三档」时一眼就能认出来。
+            record.data.cur_x = 7;
+            record.data.cur_y = 12;
+            record.data.dir = 3;
+            record.data.attatck_mode = 1;
+            let mut saves = HashMap::new();
+            saves.insert(
+                "hero".to_string(),
+                SavedHuman {
+                    account: "ua".into(),
+                    record,
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(&mut online, entry("ua", "hero", 1, 0, 901, actor));
+            // 通道接收端不参与断言（帧面不是本卡写集）；丢弃 ⇒ `send` 的 `Err` 被既有 `let _ =` 吞掉。
+            let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates = HashMap::new();
+            gates.insert(0, tx0);
+            let mut displays = downlink::DisplayTable::new();
+            displays.set(
+                actor,
+                downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"hero".to_vec()),
+            );
+            Self {
+                world,
+                sessions,
+                saves,
+                online,
+                gates,
+                displays,
+                actor,
+            }
+        }
+
+        /// 走生产入口 `CM_WALK`（实时坐标变化的真实来源）。
+        fn walk(&mut self, x: u16, y: u16) {
+            handle_move_cmd(
+                mir2_protocol::messages::CM_WALK,
+                game_svr::feature::make_long(x, y),
+                0,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                &mut self.displays,
+                &self.gates,
+                None,
+            );
+        }
+
+        /// 走生产入口 `CM_TURN`（目标 = 当前位置才转身）。
+        fn turn(&mut self, dir: u16) {
+            let (x, y) = {
+                let e = self.world.entities.get(self.actor).expect("实体在场");
+                (
+                    u16::try_from(e.x).expect("坐标在 u16"),
+                    u16::try_from(e.y).expect("坐标在 u16"),
+                )
+            };
+            handle_move_cmd(
+                mir2_protocol::messages::CM_TURN,
+                game_svr::feature::make_long(x, y),
+                dir,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                &mut self.displays,
+                &self.gates,
+                None,
+            );
+        }
+
+        /// 走生产入口 `@AttackMode`（`handle_say` ⇒ `gmcmd` ⇒ `apply_pending_gm_entity` 写穿实体）。
+        fn gm_attack_mode(&mut self) {
+            let colors = MsgColors {
+                red_f: 255,
+                red_b: 56,
+                hear_f: 0,
+                hear_b: 255,
+                whisper_f: 0,
+                whisper_b: 0,
+                green_f: 219,
+                green_b: 255,
+                blue_f: 251,
+                blue_b: 252,
+            };
+            {
+                let ctx = TestChatCtx::new();
+                let host = ctx.host(&self.online, &self.world, &self.gates, &colors);
+                let _ = handle_say(&host, &mut self.sessions, "hero", 901, Some("@AttackMode"));
+            }
+            apply_pending_gm_entity(&mut self.sessions, "hero", &mut self.world);
+        }
+
+        /// 走生产入口 `CM_SOFTCLOSE`（快照发生在 `world.soft_close` 之前）。
+        fn soft_close(&mut self) {
+            handle_soft_close_cmd(
+                0,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                None,
+                &mut self.saves,
+            );
+        }
+
+        fn save(&self) -> record::PlayerRecord {
+            build_save_record(
+                &self.saves["hero"],
+                "hero",
+                &self.world,
+                &self.sessions["hero"],
+                None,
+            )
+        }
+    }
+
+    /// **T1**（卡 `openmir2-dir-persistence-writeback`，R 级）：`walk` → `CM_SOFTCLOSE` → 存档
+    /// ⇒ 落库 `CX/CY` 必须是**实时**坐标 `(12,22)`，不是载入记录 `(7,12)`。
+    ///
+    /// 牙：删掉 `handle_soft_close_cmd` 里的快照段（或 `build_save_record` 的 `saved.derived` 支）
+    /// ⇒ `soft_close` 已销毁实体 ⇒ 回落 `(7,12)` ⇒ 必红。
+    #[test]
+    fn soft_close_snapshot_keeps_live_xy_after_walk() {
+        let mut rig = SoftCloseRig::new();
+        rig.walk(12, 22);
+        {
+            let e = rig.world.entities.get(rig.actor).expect("实体在场");
+            assert_eq!((e.x, e.y), (12, 22), "前置：走成功到 (12,22)");
+        }
+        rig.soft_close();
+        assert!(
+            rig.world.entities.get(rig.actor).is_none(),
+            "前置：CM_SOFTCLOSE 已销毁实体（本卡要修的正是这个窗口）"
+        );
+        let rec = rig.save();
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (12, 22),
+            "T1：离世后存档的 CX/CY 必须是实时坐标（不是载入值 7/12）"
+        );
+    }
+
+    /// **T2**：`turn` → `CM_SOFTCLOSE` → 存档 ⇒ `Dir` 等于实时朝向 `2`（载入值 `3`）。
+    ///
+    /// 牙：删快照段 ⇒ 回落载入值 `3` ⇒ 必红（这就是真机 `characters.Dir` 写 `3` 的同一个形态）。
+    #[test]
+    fn soft_close_snapshot_keeps_live_dir_after_turn() {
+        let mut rig = SoftCloseRig::new();
+        rig.turn(2);
+        assert_eq!(
+            rig.world.entities.get(rig.actor).expect("实体在场").dir(),
+            2,
+            "前置：转身到 2（载入值 3）"
+        );
+        rig.soft_close();
+        let rec = rig.save();
+        assert_eq!(
+            rec.data.dir, 2,
+            "T2：离世后存档的 Dir 必须是实时朝向（不是载入值 3）"
+        );
+    }
+
+    /// **T3**：`@AttackMode` → `CM_SOFTCLOSE` → 存档 ⇒ `attack_mode` 等于实时值 `2`（载入值 `1`）。
+    ///
+    /// 牙：删快照段 ⇒ 回落载入值 `1` ⇒ 必红。
+    #[test]
+    fn soft_close_snapshot_keeps_live_attack_mode_after_gm_command() {
+        let mut rig = SoftCloseRig::new();
+        rig.gm_attack_mode();
+        assert_eq!(
+            rig.world
+                .entities
+                .get(rig.actor)
+                .expect("实体在场")
+                .attack_mode,
+            2,
+            "前置：@AttackMode 0→2"
+        );
+        rig.soft_close();
+        let rec = rig.save();
+        assert_eq!(
+            rec.data.attatck_mode, 2,
+            "T3：离世后存档的 attack_mode 必须是实时值（不是载入值 1）"
+        );
+    }
+
+    /// **T4**：磨损后 → `CM_SOFTCLOSE` → 存档 ⇒ `use_items` 的 `Index/Dura` 等于**离世那一刻**的
+    /// 实体值（`207 / 1234`），而不是会话克隆里滞后一 tick 的 `4000`。
+    ///
+    /// 牙：删快照里的 `use_items`（或 `build_save_record` 的 derived 支）⇒ 回落会话 `4000` ⇒ 必红。
+    #[test]
+    fn soft_close_snapshot_keeps_live_item_durability() {
+        use game_svr::ability::SLOT_WEAPON;
+        let mut rig = SoftCloseRig::new();
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .expect("实体在场")
+            .use_items[SLOT_WEAPON]
+            .dura = 1234; // 世界侧磨损（会话回写尚未发生）
+        assert_eq!(
+            rig.sessions["hero"].use_items[SLOT_WEAPON]
+                .as_ref()
+                .expect("会话佩戴")
+                .dura,
+            4000,
+            "前置：会话副本仍滞后（本卡要证明快照比它更准）"
+        );
+        rig.soft_close();
+        let rec = rig.save();
+        let hum = rec.data.hum_items.as_ref().expect("hum_items 非 null");
+        assert_eq!(
+            hum[SLOT_WEAPON].as_ref().expect("武器槽").index,
+            207,
+            "T4：Index 取离世那一刻的实体值"
+        );
+        assert_eq!(
+            hum[SLOT_WEAPON].as_ref().expect("武器槽").dura,
+            1234,
+            "T4：Dura 取离世那一刻的实体值（不是会话滞后值 4000）"
+        );
+    }
+
+    /// **T8（返工 R-1 的负例牙）**：derived 侧 `use_items_loaded` 过滤。
+    ///
+    /// 场景：离世那一刻实体 `use_items` **全零**（= 该路径从未同步装备），而会话里已装备武器
+    /// （`Index=207/Dura=4000`）。`build_save_record` 的 `None => saved.derived…filter(use_items_loaded)`
+    /// 必须**拒绝**全零快照、回落到会话；否则会把已装备物品写成 `Index=0/Dura=0`
+    ///（G-06 物资丢失形态）。
+    ///
+    /// 牙：删掉 derived 支的 `.filter(use_items_loaded)` ⇒ 本用例红（`0/0`）。
+    /// **与实体侧哨兵互不替代**：删实体支的 `Some(_) => None` ⇒ 既有用例
+    /// `save_record_reflects_live_state_and_item_layout` 红（`left: 0 / right: 207`）。
+    #[test]
+    fn derived_use_items_all_zero_must_not_overwrite_session_equipment() {
+        use game_svr::ability::SLOT_WEAPON;
+        let mut rig = SoftCloseRig::new();
+        // ① 实体 use_items 清零（模拟「实体块未装载」）；会话仍是 207/4000。
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .expect("实体在场")
+            .use_items =
+            [mir2_world::entity::UseItemSlot::default(); mir2_world::entity::USE_ITEM_SLOTS];
+        assert_eq!(
+            rig.world
+                .entities
+                .get(rig.actor)
+                .expect("实体在场")
+                .use_items[SLOT_WEAPON]
+                .index,
+            0,
+            "前置：实体武器槽全零（未装载）"
+        );
+        // ② 走生产入口 soft_close ⇒ 快照里正是这块全零。
+        rig.soft_close();
+        let derived = rig.saves["hero"].derived.expect("soft_close 必须留下快照");
+        assert!(
+            derived
+                .use_items
+                .iter()
+                .all(|s| *s == mir2_world::entity::UseItemSlot::default()),
+            "前置：快照的 use_items 全零（接缝无条件拷贝，未装载块照样进快照）"
+        );
+        // ③④ 存档必须回落到会话装备，而不是把全零写库。
+        let rec = rig.save();
+        let hum = rec.data.hum_items.as_ref().expect("hum_items 非 null");
+        assert_eq!(
+            hum[SLOT_WEAPON].as_ref().expect("武器槽").index,
+            207,
+            "derived 全零不得覆盖会话 Index（删 .filter(use_items_loaded) ⇒ 0）"
+        );
+        assert_eq!(
+            hum[SLOT_WEAPON].as_ref().expect("武器槽").dura,
+            4000,
+            "derived 全零不得覆盖会话 Dura（删 .filter(use_items_loaded) ⇒ 0）"
+        );
+    }
+
+    /// **T7（负例）**：不经过 `CM_SOFTCLOSE` 的普通断线路径同样取到实时值。
+    ///
+    /// `GateEvent::Closed` 臂的顺序是 **存档 → `world.disconnect`** ⇒ 实体仍在 ⇒ 第一档（实体）
+    /// 命中，`derived` 保持 `None` 也照样正确——证明修法不是只对 soft-close 一条路有效，
+    /// 也没有把「实体优先」这条主路径改坏。
+    #[test]
+    fn plain_disconnect_save_still_takes_live_values() {
+        let mut rig = SoftCloseRig::new();
+        rig.walk(12, 22);
+        rig.turn(2);
+        assert!(
+            rig.saves["hero"].derived.is_none(),
+            "未走 CM_SOFTCLOSE ⇒ 无离世快照（只可能走实体支）"
+        );
+        let rec = rig.save();
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (12, 22),
+            "T7：普通断线的实体支写实时坐标"
+        );
+        assert_eq!(rec.data.dir, 2, "T7：普通断线的实体支写实时朝向");
+        // Closed 臂在存档**之后**才摘世界（oracle `CloseUser` → `MakeGhost`）。
+        assert!(
+            rig.world.disconnect("hero").is_ok(),
+            "前置：存档后 disconnect 成功"
+        );
+    }
+
+    /// **T6（变异牙）**：第三档 WRN 只在「会话在 ∧ 实体无 ∧ 快照无」时发；
+    /// 实体在（普通断线的存档时刻）与从未进世界（无会话）都**不**发。
+    ///
+    /// 牙：删掉 `build_save_record` 里的 `warn_save_fallback(chr_name)`（或其 `else if` 分支）
+    /// ⇒ ③ 的计数断言必红。计数点就在 `glog!` 的格式实参里（见 [`save_fallback_warns`]），
+    /// 所以「只删打印行」也会让计数消失。
+    #[test]
+    fn save_fallback_warns_only_when_session_has_neither_entity_nor_snapshot() {
+        let warns = || save_fallback_warns::SAVE_FALLBACK_WARNS.with(|c| c.get());
+        let mut rig = SoftCloseRig::new();
+
+        // ① 实体在（= 普通断线的存档时刻）⇒ 第一档命中，不 WRN。
+        let base = warns();
+        let rec = rig.save();
+        assert_eq!((rec.data.cur_x, rec.data.cur_y, rec.data.dir), (11, 22, 0));
+        assert_eq!(warns(), base, "实体在 ⇒ 不发第三档 WRN（普通断线不刷屏）");
+
+        // ② 从未进世界（无会话）⇒ session 门控拦下，不 WRN。
+        let world = mir2_world::World::with_maps(vec![(10, 10)]);
+        let saved = SavedHuman {
+            account: "ua".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+            derived: None,
+        };
+        let _ = build_save_record(&saved, "ghost", &world, &test_session_ground(1), None);
+        assert_eq!(warns(), base, "无会话 ⇒ 不发第三档 WRN（未进世界不刷屏）");
+
+        // ③ 会话在、实体无、快照无（= 修复前的故障态）⇒ 必须 WRN 且回落载入记录。
+        rig.world
+            .soft_close("hero")
+            .expect("直接软关（绕过 handle_soft_close_cmd ⇒ 无快照）");
+        assert!(rig.saves["hero"].derived.is_none(), "前置：无快照");
+        let rec = rig.save();
+        assert_eq!(
+            (
+                rec.data.cur_x,
+                rec.data.cur_y,
+                rec.data.dir,
+                rec.data.attatck_mode
+            ),
+            (7, 12, 3, 1),
+            "第三档：回落载入记录"
+        );
+        assert_eq!(
+            warns(),
+            base + 1,
+            "T6：会话在但实体与快照均无 ⇒ 必须发一次第三档 WRN"
+        );
     }
 
     /// 判据⑥：阴性对照——无装备的玩家目标**零 `Random(8)`**（oracle `:2957` 的无条件
@@ -34117,6 +34683,7 @@ break
                 account: "acct".into(),
                 record: stage6_record(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let state = dbclient::DbLinkState::new();
@@ -34218,6 +34785,7 @@ break
                 account: "acct".into(),
                 record: stage6_record(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
 
@@ -34356,6 +34924,7 @@ break
                     account: account.into(),
                     record: stage6_record(),
                     enter_map: "0".into(),
+                    derived: None,
                 },
             );
         }
@@ -37598,6 +38167,7 @@ break
             account: "acct".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
         let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
         world.open_session("atk");
@@ -41670,6 +42240,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         const FIREBALL: u16 = 1;
@@ -41947,6 +42518,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         // `GetMagicInfo(魔法号)` 的表项（A-5 支取 `magic_table.get(req.magic_id)`）。
@@ -42107,6 +42679,7 @@ SendRefMsgRange=15
                     account: "uc".into(),
                     record,
                     enter_map: "0".into(),
+                    derived: None,
                 },
             );
             let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
@@ -43394,6 +43967,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -43567,6 +44141,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -43754,6 +44329,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -44986,6 +45562,7 @@ SendRefMsgRange=15
             account: "acct".into(),
             record: stage6_record(),
             enter_map: "0".into(),
+            derived: None,
         };
         let out = build_save_record(&saved, "killer", &world, sg, None);
         assert_eq!(
@@ -47985,7 +48562,16 @@ SendRefMsgRange=15
         online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
 
         // ① wParam=1 ⇒ 三标志全置真 + 离开世界。
-        handle_soft_close_cmd(1, "hero", 901, &online, &mut sessions, &mut world, None);
+        handle_soft_close_cmd(
+            1,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            None,
+            &mut HashMap::new(),
+        );
         let sg = sessions.get("hero").unwrap();
         assert!(sg.bo_reconnection, "BoReconnection=true");
         assert!(sg.bo_soft_close, "BoSoftClose=true");
@@ -48004,7 +48590,16 @@ SendRefMsgRange=15
             .unwrap();
         sessions.get_mut("hero").unwrap().actor_id = hero2;
         sessions.get_mut("hero").unwrap().bo_emergency_close = false;
-        handle_soft_close_cmd(0, "hero", 901, &online, &mut sessions, &mut world, None);
+        handle_soft_close_cmd(
+            0,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            None,
+            &mut HashMap::new(),
+        );
         let sg = sessions.get("hero").unwrap();
         assert!(sg.bo_reconnection && sg.bo_soft_close);
         assert!(!sg.bo_emergency_close, "wParam==0 ⇒ 不置 BoEmergencyClose");
@@ -48121,7 +48716,16 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        handle_soft_close_cmd(0, "hero", 901, &online, &mut sessions, &mut world, None);
+        handle_soft_close_cmd(
+            0,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            None,
+            &mut HashMap::new(),
+        );
         assert!(
             sessions["hero"].bo_reconnection,
             "软关照样置 BoReconnection（两链共享的**唯一**东西）"
@@ -48602,6 +49206,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &mut 0,
+                &mut HashMap::new(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -48642,6 +49247,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &mut 0,
+                &mut HashMap::new(),
             ),
             "CM_SOFTCLOSE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -48711,6 +49317,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &mut 0,
+                &mut HashMap::new(),
             ),
             "CM_QUERYUSERNAME 属 P0 批"
         );
@@ -48751,6 +49358,7 @@ SendRefMsgRange=15
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
             &mut 0,
+            &mut HashMap::new(),
         ));
         let frames = drain_frames(&mut rx0);
         assert_eq!(frames.len(), 1, "近窗 ⇒ 恰好一帧 SM_USERNAME");
@@ -48829,6 +49437,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &mut 0,
+                &mut HashMap::new(),
             ),
             "CM_QUERYUSERSTATE 属 P0 批 ⇒ 派发返回 true"
         );
@@ -48930,6 +49539,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &mut 0,
+                &mut HashMap::new(),
             ),
             "CM_CLICKNPC 属 P0 批 ⇒ 派发返回 true"
         );
@@ -48983,6 +49593,7 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &game_svr::npc::NpcVars::default(),
                 &mut 0,
+                &mut HashMap::new(),
             ),
             "非 P0 ident ⇒ 返回 false"
         );
@@ -49012,6 +49623,7 @@ SendRefMsgRange=15
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
             &mut 0,
+            &mut HashMap::new(),
         ));
         assert_eq!(
             sessions.get("hero").unwrap().mns_val[3],
@@ -49047,6 +49659,7 @@ SendRefMsgRange=15
             &mut HashMap::new(),
             &game_svr::npc::NpcVars::default(),
             &mut 0,
+            &mut HashMap::new(),
         ));
         let sg = sessions.get("hero").unwrap();
         assert_eq!(sg.mns_val[3], "hello", "CM_QUERYVAL 尾经派发落 MNSval[3]");
@@ -50120,6 +50733,7 @@ SendRefMsgRange=15
                     account: "uc".into(),
                     record,
                     enter_map: "0".into(),
+                    derived: None,
                 },
             );
             let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -50658,6 +51272,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         // `train_level` 全部拉高 ⇒ 训练尾 `TrainLevel[Level] <= Abil.Level` 恒假 ⇒ 尾**不抽**
@@ -50815,6 +51430,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         // `train_level = 255` ⇒ 训练尾 `TrainLevel[Level] <= Abil.Level` 恒假（不混入尾抽数）。
@@ -51133,6 +51749,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
@@ -51416,6 +52033,7 @@ SendRefMsgRange=15
                 account: "uc".into(),
                 record,
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         // spell=0、def_spell=2、learned level=1 ⇒ GetSpellPoint = Round(0/4*(1+1)) + 2 = 2/发。
@@ -52210,6 +52828,7 @@ SendRefMsgRange=15
                 account: "ua".into(),
                 record: stage6_record(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let saved = saves.get("hero").expect("存档在册");
@@ -52411,6 +53030,7 @@ SendRefMsgRange=15
                 account: "ua".into(),
                 record: stage6_record(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let saved = saves.get("hero").expect("存档在册");
@@ -56009,6 +56629,7 @@ SendRefMsgRange=15
                     account: "u0".into(),
                     record,
                     enter_map: "0".into(),
+                    derived: None,
                 },
             );
             let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -57944,6 +58565,7 @@ SendRefMsgRange=15
                     account: "u0".into(),
                     record,
                     enter_map: "0".into(),
+                    derived: None,
                 },
             );
             let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -59529,6 +60151,7 @@ SendRefMsgRange=15
                     account: "u0".into(),
                     record,
                     enter_map: "0".into(),
+                    derived: None,
                 },
             );
             let mut catalog = game_svr::ability::StdItemCatalog::new();
@@ -63691,6 +64314,7 @@ SendRefMsgRange=15
             account: "acct".to_string(),
             record: record::PlayerRecord::default(),
             enter_map: "A".to_string(),
+            derived: None,
         };
         let sg = sessions.get("p26a").unwrap();
         let rec = build_save_record(&saved, "p26a", &world, sg, None);
@@ -64238,6 +64862,7 @@ SendRefMsgRange=15
             account: "a".into(),
             record: record::PlayerRecord::default(),
             enter_map: "0".into(),
+            derived: None,
         };
         saved.record.data.magic = Some(vec![magic(1), magic(2)]);
         let mut sg = test_session_ground(9);
@@ -64368,6 +64993,7 @@ SendRefMsgRange=15
             account: "a".into(),
             record: record::PlayerRecord::default(),
             enter_map: "0".into(),
+            derived: None,
         };
         saved.record.data.magic = Some(Vec::new());
         let mut sg = test_session_ground(11);
@@ -65269,6 +65895,7 @@ mod tests {",
             account: "a".into(),
             record: rec,
             enter_map: home_map.to_string(),
+            derived: None,
         }
     }
 
@@ -65622,6 +66249,7 @@ mod tests {",
                     account: account.to_string(),
                     record: rec,
                     enter_map: "0".to_string(),
+                    derived: None,
                 },
             );
         }
@@ -67066,6 +67694,7 @@ GMEXECUTE 禁言 self 20
                 account: "a".into(),
                 record: record::PlayerRecord::default(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -67200,6 +67829,7 @@ GMEXECUTE 禁言 self 20
                 account: "a".into(),
                 record: record::PlayerRecord::default(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -67378,6 +68008,7 @@ GMEXECUTE 禁言 self 20
                 account: login_account.into(),
                 record: record::PlayerRecord::default(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -70756,6 +71387,7 @@ GMEXECUTE 禁言 self 20
                 account: "acc-hero".into(),
                 record: record::PlayerRecord::default(),
                 enter_map: "0".into(),
+                derived: None,
             },
         );
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -71039,6 +71671,7 @@ GMEXECUTE 禁言 self 20
             account: "ua".to_string(),
             record: Default::default(),
             enter_map: "0".to_string(),
+            derived: None,
         };
         let rec = build_save_record(&saved, "hero", &rig.world, &rig.sessions["hero"], None);
         assert_eq!(

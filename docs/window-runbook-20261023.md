@@ -292,6 +292,14 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 
 ---
 
+## 0.12 环境状态伪差异（2026-10-25；先查这三条再解释差异）
+
+**入口指针**：见 `docs/window-environment-traps-20261025.md` —— 存档在途 / 账本被裁 / 检出构建不全，
+每条带**可判处置命令**（`grep -c '角色数据保存中'`、`rng_log_trim.trimmed`、pid.json 的 `roles[].exe` + mtime）。
+
+纪律：**先确认环境状态，再解释差异**。三者都是「工具没报错、只是没检查/没保留」，
+看上去像行为不符；对应轮次应按 **UNDECIDABLE / 证据作废重跑** 处理，**不得记 FAIL**。
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。
