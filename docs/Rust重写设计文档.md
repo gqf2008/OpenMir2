@@ -426,7 +426,7 @@ mir2-rs/
   tools/                # 抓包、回放、假人驱动、截图脚本（把 E:\tmp 那几支搬进来）
 ```
 
-`crates/storage` 的依赖（数据层统一走 sqlx，理由与配置见 §5.1）：
+`mir2-rs/crates/storage` 的依赖（数据层统一走 sqlx，理由与配置见 §5.1）：
 
 ```toml
 [dependencies]
@@ -447,12 +447,12 @@ thiserror = "1"
 
 | 关注点 | C# 文件 | Rust 侧目标 |
 | --- | --- | --- |
-| 消息号表 | `src/OpenMir2/Messages.cs` | `crates/protocol/messages.rs` |
-| 报文结构/工具 | `src/OpenMir2/Grobal2.cs`、`SerializerUtil.cs`、`MemoryCopy.cs` | `crates/protocol/frame.rs` |
-| EDCode | `src/OpenMir2/EDcode.cs`、`EncryptUtil.cs`、`MD5.cs` | `crates/protocol/edcode.rs` |
+| 消息号表 | `src/OpenMir2/Messages.cs` | `mir2-rs/crates/protocol/messages.rs` |
+| 报文结构/工具 | `src/OpenMir2/Grobal2.cs`、`SerializerUtil.cs`、`MemoryCopy.cs` | `mir2-rs/crates/protocol/frame.rs` |
+| EDCode | `src/OpenMir2/EDcode.cs`、`EncryptUtil.cs`、`MD5.cs` | `mir2-rs/crates/protocol/edcode.rs` |
 | 随机数 | `src/OpenMir2/RandomNumber.cs` | `crates/shared/rng.rs` |
 | 登录服务 | `src/LoginSrv/**` | `bins/login-srv` |
-| 数据库服务 | `src/DBSrv/**` + `src/Storeages/DBSvr.Storage.MySQL/**` | `bins/db-srv` + `crates/storage` |
+| 数据库服务 | `src/DBSrv/**` + `src/Storeages/DBSvr.Storage.MySQL/**` | `bins/db-srv` + `mir2-rs/crates/storage` |
 | 网关 | `src/LoginGate`、`src/SelGate`、`src/GameGate` | `bins/*-gate` |
 | 世界引擎 | `src/GameSrv/**`、`src/M2Server/**` | `bins/game-svr` |
 | 脚本引擎 | `src/Modules/ScriptEngine/**` | `crates/script` |
@@ -493,7 +493,7 @@ thiserror = "1"
 
 | 线 | 等什么 |
 | --- | --- |
-| M1 网关 / LoginSrv / DBSrv | A 线的协议类型 + `crates/storage`（sqlx）接口 |
+| M1 网关 / LoginSrv / DBSrv | A 线的协议类型 + `mir2-rs/crates/storage`（sqlx）接口 |
 | M2 世界最小闭环 | 上述两项 + 世界数据结构（实体/地图/会话）定义 |
 | M3 系统对齐 | 上述全部 + 各系统与 C# 的模块边界 |
 
@@ -570,7 +570,7 @@ D（数据与公式）───────────────────�
 | **B2 / M4 续** | 实现 93 个派发目标语义，收敛"未实现命令清单"到 0，跑通六类关键 NPC | §6 M4 四条（口径已修订） | 批次 2 已合并 |
 | **D2** | ① 为 M3 准备"同库同脚本对拍"夹具（用 C 线 DB 快照 + 假人）；② RNG 同种子注入方案设计（解决 D-3 的 M3 缺口） | §6 M3（掉落/经验逐项相同）的准备项 | 无 |
 
-**并行前提照 §12.4**：接口只有 A 线能改（M1 期间 `crates/protocol`、`crates/storage` 的改动必须通知 B2/D2）；一线一判据；一模块一 owner。
+**并行前提照 §12.4**：接口只有 A 线能改（M1 期间 `mir2-rs/crates/protocol`、`mir2-rs/crates/storage` 的改动必须通知 B2/D2）；一线一判据；一模块一 owner。
 
 ---
 
@@ -688,7 +688,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 | 里程碑 | 状态 | 证据（协调者复跑，非自述） |
 | --- | --- | --- |
 | **M0 协议层** | ✅ **GREEN（2026-10-10）** | `cargo run -p replay -- mir2-rs/tests/golden/c-line-baseline-c3-20261010.jsonl`：382 帧 → ① 逐字节 0 差异、② 字段 0 差异、unknown idents = 0、**八阶段全覆盖**（登录/选服/选角/建角/进世界/移动/攻击/小退）；红检三连（包号 +1 / 截断 1 字节 / 密钥错 1 位）全部 RED exit 1 ⇒ 判据可证伪。旧 16 帧金标准 ①② 仍 0（无回归）；oracle 向量 1072 条仍 GREEN。**收卡锚**：卡 `openmir2-a4-m0-green` 已 `closed`（merged head `ba9db4af`，merge_result `7acd7858`） |
-| **M1 边界服务** | ✅ **达成（2026-10-12，收口片 `71bdb040`）**（细节见 §17.4） | Rust `LoginGate`/`SelGate`/`LoginSrv`（merge `e7949ced`）与 `DBSrv`（merge `4e395fd4`）两块均经 **reviewer-1 approve** 合入 master；卡 `openmir2-a2-m1-services` 已 `closed`，合并后四门禁全绿。**缺口①（owner 2026-10-11 更正）**：M1⑤「200 假人同登+选角」**至今无证据**——A2/M1 收口时记的「转 C6 tier-200 覆盖」**不成立**：C6 的 gate 起的是 `E:/MirServer/start-all.ps1`（**C# 部署栈**，`tools/e2e/stack_e2e.ps1:51` / `tools/botload/load_gate.ps1:96`）⇒ 它的 tier-200 测的是 C# 服务，**没有一个字节经过 Rust 边界服务**（更正见 A2/M1 卡 comment `8501b153`）⇒ 已开卡 **`openmir2-m1-boundary-load-200`**（全 Rust 边界链 + 200 假人 + 红检；同时是 M5 灰度第一步），配 `m1load` 车道排队。**缺口②（owner 2026-10-11 记）**：`DBSrv` 只落了 **5100 面**（`bins/db-srv/src/main.rs` 头部自登记），`DataService`(6000)/`MarketService`(5700)/`TimedService` 缓存回写**未做**（`mir2-rs/docs/M1-边界服务移植计划.md` §5 的 **S4b**；此前只登记在已 closed 卡的 patch body `e01462d8`/`058066bd` 里，**看板无卡**）⇒ 已开卡 **`openmir2-m1-dbsrv-6000-face`**（含前置 S4a：`crates/storage` 记录字段 + `crates/protocol` 向量），配 `dbsrv6k` 车道排队 —— **M5 灰度**在 DBSrv 这一步要它。**（2026-10-13 对账）**上段两个缺口均已收口：① 全 Rust 边界链 200/200（卡 `openmir2-m1-boundary-load-200` `closed`，merge `cc6518c6`）；② S4a/6000 `DataService`/5700 `MarketService`/`TimedService`/③ 跨实现互读均已落地（卡 `openmir2-m1-dbsrv-6000-face` `closed`，merge `8708ac49` + `71bdb040`）；M1 仅剩 §17.4 登记的遗留（Rust 6000 取档日志 `not_verified`） |
+| **M1 边界服务** | ✅ **达成（2026-10-12，收口片 `71bdb040`）**（细节见 §17.4） | Rust `LoginGate`/`SelGate`/`LoginSrv`（merge `e7949ced`）与 `DBSrv`（merge `4e395fd4`）两块均经 **reviewer-1 approve** 合入 master；卡 `openmir2-a2-m1-services` 已 `closed`，合并后四门禁全绿。**缺口①（owner 2026-10-11 更正）**：M1⑤「200 假人同登+选角」**至今无证据**——A2/M1 收口时记的「转 C6 tier-200 覆盖」**不成立**：C6 的 gate 起的是 `E:/MirServer/start-all.ps1`（**C# 部署栈**，`tools/e2e/stack_e2e.ps1:51` / `tools/botload/load_gate.ps1:96`）⇒ 它的 tier-200 测的是 C# 服务，**没有一个字节经过 Rust 边界服务**（更正见 A2/M1 卡 comment `8501b153`）⇒ 已开卡 **`openmir2-m1-boundary-load-200`**（全 Rust 边界链 + 200 假人 + 红检；同时是 M5 灰度第一步），配 `m1load` 车道排队。**缺口②（owner 2026-10-11 记）**：`DBSrv` 只落了 **5100 面**（`bins/db-srv/src/main.rs` 头部自登记），`DataService`(6000)/`MarketService`(5700)/`TimedService` 缓存回写**未做**（`mir2-rs/docs/M1-边界服务移植计划.md` §5 的 **S4b**；此前只登记在已 closed 卡的 patch body `e01462d8`/`058066bd` 里，**看板无卡**）⇒ 已开卡 **`openmir2-m1-dbsrv-6000-face`**（含前置 S4a：`mir2-rs/crates/storage` 记录字段 + `mir2-rs/crates/protocol` 向量），配 `dbsrv6k` 车道排队 —— **M5 灰度**在 DBSrv 这一步要它。**（2026-10-13 对账）**上段两个缺口均已收口：① 全 Rust 边界链 200/200（卡 `openmir2-m1-boundary-load-200` `closed`，merge `cc6518c6`）；② S4a/6000 `DataService`/5700 `MarketService`/`TimedService`/③ 跨实现互读均已落地（卡 `openmir2-m1-dbsrv-6000-face` `closed`，merge `8708ac49` + `71bdb040`）；M1 仅剩 §17.4 登记的遗留（Rust 6000 取档日志 `not_verified`） |
 | M2 世界引擎 | ✅ **达成并收卡（2026-10-12，合并 `73fd521b`）**（细节见 §17.3/§17.4） | Rust `GameGate`(7200，字节级 oracle 回归；3 个独立 approve `2d04e0cf`/`764ead14`/`7a103213`) 与 `GameSvr` 世界宿主（S1→S2b-4：网关链路+`GM_*`、认证链、IDS、取档控制流、DB 请求/应答、进世界、**16 条 `SM_*` 入图帧**编码与生产路径；approve `0d0da1ed`/`ac17e73c`）；`crates/envir` 地图加载器 `2a2e8d03` 与角色记录全字段 `353a28e2` 已集成进 `bins/game-svr`（替占位图 + `CurMap`→`map_id`）。**真机首跑**（approve reviewer-2 `bce5d2c2`）：①**GREEN**（5000/7000/7100/7200 全 Rust）；当场收口两条真缺陷——网关线号恒 0（**黑屏路由根因**，照 oracle `AllocGateSlot` 改按连接唯一分配+断线释放）与 `portclassify.ps1` 误判 Rust 入口。**M2 真机前置① `WorldMaps` 可选化已落地**（owner 裁决 `272582e1`「Rust 改可选、**不改现网配置**」：真 `Server.conf` 无此键也能起；无 Envir 且无 WorldMaps 仍 fail-closed）。**顺序判据②**：658 `SM_SENDNOTICE` 接入生产路径（approve reviewer-1 `4f5005f3`；金标准 #1 尾解出 320B 公告 = `Notice.txt` 逐字节）+ 其三条 findings（空公告仍发 header-only 658 / `/r/n/r/n ` 字面量 1:1 / `NoticeDir` 手册坑）与 W-1 flaky 修复随整头 `f37ca6fa` 入库（approve reviewer-3 `b6f8b581`）。**前置② 会话生命周期 ②③ 已落地**（断线清世界幂等 + 重复进世界按 oracle **踢旧(`BoKickFlag`)+关新(`CloseUser`)**，approve reviewer-3 `67932e63`；**DoD ① 夹具已交（`dd6ca066`，待审）**——**① 实测更正（2026-10-11）**：旧连接收的是 **`SM_SYSMESSAGE`**（账号级 kick 文案，**非 528**）且不立即断开；新连接「放行 vs 被 `CloseUser` 关」**由 `ProcessHumansIsLogined`（`InSaveRcdList`/`PlayObjectList`）的竞态决定** ⇒ 原『踢旧+关新、两边都不放行』**只覆盖命中支**。**按实测对齐 Rust 列为本 lane 的独立片**（含旧会话 kick 语义与竞态复刻；`brief-m2svr-next.md` §8）。**验收②③ 仍 RED 待清**：生产路径当前 `{658,51}`/16 ⇒ **下一片 = 补帧**（`50/41/10/213` 等 `m3bag` 装备层接缝：`GetFeatureToLong()` = `PlayObject.cs:3395` → `M2Share.MakeHumanFeature`、`GetFeatureEx()` = `CharacterObject.cs:146`；`766/54/46`+配置层等 `m2env`；`52/752` 等 world 触发点）；④ 依赖②未采。**里程碑级依赖**：②③ 的完整达成依赖 **M3 ① 装备层**。每笔合并的 master oid/证据见 `handover-to-pi.md` 对应轮次。**（2026-10-13 对账）**：本行已按 §17.3/§17.4 收口（merge `73fd521b`，卡 `openmir2-m2-gamesvr-host` `closed`）；上段「验收②③ 仍 RED 待清」「④ 依赖②未采」等均为历史描述，勿再按此判 M2 未达成 |
 | M3 系统对齐 | 🔄 **逐系统对齐进行中**（首验已达成并收卡 `b218eb15`；**2026-10-13 十项逐项状态见 §17.5**） | Rust 顶住 7000/7100/7200：`run_m3_gate.ps1 -Side rust` 在 `--fixed-newchr` 与默认两场景 **GREEN、跨侧作用域内字段级 diff=0**；C# 基线（含 RNG `-VerifyRepeat`）GREEN，`prefix_sha256` 与 D 线 golden 逐位相同。**两个独立审查者均 approve**：reviewer-3 `4bffcf99`（自跑四门禁 351 passed）、reviewer-4 `55116105`（自己重跑固定场景 C# 基线 + 自己的 Rust 会话，并按 baseline.json 核对 peer 场景一致）。合并顺序按审查要求：先合 GB2312 修复（`677678c2`）再合首验片（`b218eb15`），并**丢弃 m3 分支的重复 hunk**（master 只留一份配置解码实现）。为跑通修掉两处前置缺陷：Rust game-gate 读现网 GBK 配置、`run_m3_gate.ps1` 第 3 步跨侧比对路径拼接。剩余 findings 转卡 `openmir2-m3-gate-script-hardening`（peer 场景机判 / `$sessionDir` 空值 fail-open / 入口护栏强化）。后续按 §6 逐系统推进。**逐系统对齐①（背包/装备）** 与 **门禁脚本加固** 已各开卡并配车道（`openmir2-m3-bag-equip-alignment` / `openmir2-m3-gate-script-hardening`，受 cap=3 排队等空槽）——**（历史，2026-10-12）**：本句描述的「只到①、两卡排队等空槽」已过时（① 与加固两卡均已 `closed`：① merge `bbf63fb0` / 加固 merge `3bd90763`）；**十条系统 2026-10-13 的逐项状态见 §17.5** |
 | M4 脚本引擎 | ✅ **达成并收卡（2026-10-12，合并 `c87d4d16`）**（细节见 §17.4） | **判据①口径已修订**（2026-10-10）："解析错误 = 0" 不可达（同一语料下 C# 参照自身也产 427 条）⇒ 改为"**双侧逐行多重集差 = 0**"。**派发目标覆盖已清零**：`crates/script-tool` 覆盖率台账 23→106（11829 次调用）**已实现、未实现 0**（`tests/parity/evidence/B2/coverage-var-after.txt`）；`未注册（C# 静默忽略）130 次` 与 C# 同口径，不算缺口。批次已合入 master `971b354e`，卡 `openmir2-b2-script-dispatch` 已收卡。**（历史，2026-10-12；以下三项已在 §17.4 收口——M4 卡 `openmir2-m4-parity-cases` 已 `closed`，merge `c87d4d16`）剩余**：② 语句/条件/动作/宏展开的 parsecount 两侧对拍数表；③ 6 类关键 NPC 用例（商店/传送/修理/仓库/行会/任务）；④ "双侧逐行多重集差 = 0" 门禁落地并入库。 |
@@ -775,7 +775,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
   **③ s2c diff / ④ 三路径 DB diff 未跑并如实报 PREREQ**（不伪造 GREEN）。报告 `docs/M2验收真机报告-20261011-2.md`、证据 `tools/m2-acceptance/evidence/real-run-20261011-2/`。
   **新 finding（下一片第 1 条）**：世界 tick 之后的出帧带 `SessionIndex=1 socket=0` ⇒「用户不存在」被丢——大概率是"看见别人/后续出包"上不来的根因（判据 = 进程级 + 双客户端互相看见）。
 - **M1⑤ 的缺陷已修（待审）**：`dbsrv6k` 交 `openmir2-m1-dbsrv-selchr-queryed` 的修复（`c3fa48a2 → c95e14c8`）：`CM_QUERYCHR` 成功即置 `u.chr_queryed = true`（对齐 `UserService.cs:356-361`）+ 进程级 `QUERYCHR→SELCHR` 断言回 `SM_STARTPLAY(525)` 且体 `127.0.0.1/7200`；红检撤回该行 ⇒ FAILED。
-  同批还交了 **S4b 的第 1 片（S4a）**：`master f5170a8e → c3fa48a2`（`crates/storage` 记录字段全量 + C# oracle 向量，重生成 LF 归一化后**逐字节一致** `4e76d755…`；共享向量文件改成 `protocol`/`replay` 可消费，未知 kind 仍报错）。
+  同批还交了 **S4b 的第 1 片（S4a）**：`master f5170a8e → c3fa48a2`（`mir2-rs/crates/storage` 记录字段全量 + C# oracle 向量，重生成 LF 归一化后**逐字节一致** `4e76d755…`；共享向量文件改成 `protocol`/`replay` 可消费，未知 kind 仍报错）。
   **S4b 的 ② 6000 `DataService` 面 / ③ 跨实现互读 / ④ 5700·`TimedService` 仍未做**（卡上登记；②③ 需完整 `PlayDataStorage`/`CacheStorage` 移植 + 真 C# 对端，③ 等 M2 窗口）。
 - **同批三片合入 master `bea34684`**（2026-10-11 22:00，均经 reviewer-2 独立 approve）：
   ① **装备⇒能力接缝** `090add78`（`bins/game-svr/src/ability.rs`：`StdItemCatalog`/`equipped_feature`/`recalc_abilitys`（`WAbil` 22 + `SubAbility` 7 + `AddAbil`）/`SubAbility::to_frame_bytes`）；
@@ -823,7 +823,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 
 > 目的：把上表几行**已经过期**的措辞改到与现场一致（尤其 M2 不再是"卡在出图/黑屏"）。每条都给了 master 上的 oid，便于独立复核。
 
-- **M1（网关 / LoginSrv / DBSrv）**：S4a（`crates/storage` 记录字段 + `protocol` 向量）`1ba53292` → ② 6000 `DataService` + ④ `TimedService` 缓存回写 `96d03db5` → ④ 5700 `MarketService` `ca11a1a8` → **③ 跨实现互读证据片** `83471539`（approve reviewer-3 `3a2778d0`）已入 master **`8708ac49`**：07/08 双向 `in_world=1`、两侧 baseline 与归一化 scoped 数据 + 09 运行时实现归属 + 13 红检；证据目录加 `.gitattributes`（`* -text`）冻结字节 ⇒ 全新检出 `sha256sum -c` = 51/51 OK（对照父提交 50/51，牙齿成立）。
+- **M1（网关 / LoginSrv / DBSrv）**：S4a（`mir2-rs/crates/storage` 记录字段 + `protocol` 向量）`1ba53292` → ② 6000 `DataService` + ④ `TimedService` 缓存回写 `96d03db5` → ④ 5700 `MarketService` `ca11a1a8` → **③ 跨实现互读证据片** `83471539`（approve reviewer-3 `3a2778d0`）已入 master **`8708ac49`**：07/08 双向 `in_world=1`、两侧 baseline 与归一化 scoped 数据 + 09 运行时实现归属 + 13 红检；证据目录加 `.gitattributes`（`* -text`）冻结字节 ⇒ 全新检出 `sha256sum -c` = 51/51 OK（对照父提交 50/51，牙齿成立）。
   **剩**：③ 的 **softclose（小退）/ shutdown（服务关闭）** 两条退出路径 DB diff（要 5000/7000/7100/7200 窗口；runbook 见该卡 comment `77c30175`）+ Rust 6000 侧对角色取档日志 `not_verified`（README §5）。
 - **M2（Rust 世界宿主 + 真机验收）**：✅ **达成并收卡（2026-10-12，合并 `73fd521b`）**——卡 `openmir2-m2-gamesvr-host` 已 closed（收尾两片：feature `4c15a8f6` approve `aa95df27`；C-1 修复 `fe930be6` approve `b5fb9583`；卡上 DoD ①–⑤ 逐条审计见 `status 9aa39ddf`）。② 真机 **6/7**（进图 / 走路 / 说话 / 攻击 / 小退再进 / **看到别人**；缺 `pickup`）、③ `658→46` 同序 + 等长 **GREEN**（4 条环境相关白名单：`46.param`/`50.series` 及各自 `raw_hex`，owner §25.3 裁决，两条独立 approve `3d38ce2e`/`c7b85a5e` 覆盖）、④ **三路径 DB diff（softclose / disconnect / shutdown）GREEN**（`E:\tmp\m2acc\rust4\db-paths.json`：三条 `state=GREEN`、`failed=[]`；两侧 `csharp4`/`rust4` + dbsnap）。
   `52` 的 `WAbil.max_hp/max_mp=0` 真缺陷已由 m3bag 修（`3434f219` + `511d575b` → master `15cec558`）。**`pickup` 的判据正在被重新裁定**：oracle 里**地面物不可达**（`MapItem.cs:41` 是全仓唯一 `ItemId` 赋值点且被注释；`Envirnoment.cs:88-93` 的 `AddItemToMap` 在 `ItemId==0` 时直接 `return false`；`DeleteFromMap` 的匹配夹在 `CellObjId>0` 内）⇒ owner 预先裁两支：确认不可达 ⇒ **不批**世界写分片、第 7 格判据改为"无地面物形态两侧一致"、登记 T-25；若 C# 栈上确能落地 ⇒ 批**最小**写分片（含"重进世界不再下发" + 红检）。

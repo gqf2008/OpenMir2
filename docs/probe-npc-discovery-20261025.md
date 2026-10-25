@@ -40,7 +40,7 @@
 
 | # | 判据 | 依据 |
 |---:|---|---|
-| 1 | 该 actor **没有任何移动帧**（`SM_WALK/SM_RUN/SM_HORSERUN/SM_BACKSTEP/SM_RUSH/SM_RUSHKUNG`） | 移动帧族 = 对象动过的直接证据（值见 `crates/protocol/src/messages.rs`） |
+| 1 | 该 actor **没有任何移动帧**（`SM_WALK/SM_RUN/SM_HORSERUN/SM_BACKSTEP/SM_RUSH/SM_RUSHKUNG`） | 移动帧族 = 对象动过的直接证据（值见 `mir2-rs/crates/protocol/src/messages.rs`） |
 | 2 | 坐标从未变过（全部 `SM_TURN` 的 `Param/Tag` 同一格） | 同帧字段 |
 | 3 | **首见于玩家登录后的第一份可见快照内**（`first_seq ≤ snapshot_end_seq`） | 固定 NPC 随地图加载下发；怪由 MonGen 后来刷出。`snapshot_end_seq` = **第一个场景步执行前**的帧序号（进世界 + dwell 之后） |
 
@@ -148,7 +148,12 @@ python -I -B tools/probe/mir2_probe.py --selftest
   `pos:8,16?allow_any=1` ⇒ 放行并选中该 actor；对象首见于**初始快照之后** ⇒ 红（`晚于初始快照界`）；
 - **N1**：自身 actor 在目标格/同名时，`name:` 与 `pos:` 各一例都**不把自己当候选**（去掉自身过滤即红，见变异）；
 - **N3**：名尾 `GM/测试/255` ⇒ `name:GM/测试` 命中；名尾无颜色段（`A/B`）⇒ 不截断、列 `<无名>` + 原始名尾；
-- **DISAPPEAR**：对象出现后收到 `SM_DISAPPEAR(30)` ⇒ 不再是候选。
+- **DISAPPEAR**：对象出现后收到 `SM_DISAPPEAR(30)` ⇒ 不再是候选；**消失后再来一帧移动**
+  （`SM_WALK/SM_RUN/SM_RUSH`）也**不得复活**（移动帧只更新「动过」证据，不清 `disappeared`）。
+
+> 牙 j（两条 `SM_TURN` 报不同坐标）的帧序列是**合成**的：oracle 真实移动必发 `RM_WALK`/`RM_RUN`
+> （`src/M2Server/Actor/BaseObject.cs:1572`），所以这条序列证明的是「`coords` 判据可被独立触发」，
+> **不代表真机常见形态**。
 
 变异（每条都从 HEAD 还原后重跑确认 `OK (18 checks)`）：
 

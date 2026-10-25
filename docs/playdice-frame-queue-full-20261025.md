@@ -82,7 +82,7 @@
 - 若 owner 要收口 ⑩ ①：另开一张 **R** 卡，内容 = `handle_shop_cmd` 的 `out`（§3.2 的 **6 个发射点**）
   + `says`（`emit_npc_says`，§3.2 #7）+ `script_frames` 合并进同一 per-recipient
   `NetPriorityQueue`，并补「面板帧 + 脚本帧同 handler」的构造级判据与真机窗口。
-- 判据输入（`(byte)RM_*` 优先级，低字节；`RM_*` 常量见 `crates/protocol/src/messages.rs`）：
+- 判据输入（`(byte)RM_*` 优先级，低字节；`RM_*` 常量见 `mir2-rs/crates/protocol/src/messages.rs`）：
   `RM_PLAYDICE=10500→4`、`RM_MENU_OK=10309→69`、`RM_MERCHANTDLGCLOSE=10127→143`、
   `RM_SENDGOODSLIST=10128→144`、`RM_SENDUSERSELL=10129→145`、`RM_GAMEGOLDCHANGED=8084→148`、
   `RM_SENDUSERREPAIR=10141→157`、`RM_USERSTORAGEITEM=10146→162`、

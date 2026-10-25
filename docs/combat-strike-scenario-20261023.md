@@ -149,7 +149,7 @@ playObject.SendMsg(playObject, defMsg.Ident, defMsg.Tag,
 
 ### 2.2 `CM_TURN(3010)` —— 先定朝向（不可省）
 
-- 命令号：`crates/protocol/src/messages.rs:103`；oracle `src/OpenMir2/Messages.cs:120`。
+- 命令号：`mir2-rs/crates/protocol/src/messages.rs:103`；oracle `src/OpenMir2/Messages.cs:120`。
 - 派发：`PlayObject.Message.cs:1008-1013` → `ClientChangeDir(wIdent, nParam1, nParam2, (byte)wParam, ref delayTime)`。
 - 实现：`PlayObject.Operate.cs:310-339`，`if (nX == CurrX && nY == CurrY) { Dir = nDir; … }`。
 - **为什么必须先转身**：取目标用 `GetPoseCreate()`（`PlayObject.Attack.cs:26`），读的是**状态化 `Dir`**
@@ -257,7 +257,7 @@ sha256（提交后的树）：见 §9 与 patch 条目（T1~T5 每次改坏后�
 
 | # | 现状 | 说明 |
 |---|---|---|
-| T4 | **已覆盖** | 该卡 **R3**：`wait_for` 的 ident 必须存在于 `crates/protocol/src/messages.rs` 的 `CM_*`/`SM_*` ⇒ `4095` rc=2 并点名。 |
+| T4 | **已覆盖** | 该卡 **R3**：`wait_for` 的 ident 必须存在于 `mir2-rs/crates/protocol/src/messages.rs` 的 `CM_*`/`SM_*` ⇒ `4095` rc=2 并点名。 |
 | T5 | **已覆盖** | 该卡 **R5**：声明了 `placement` 时，`self_pos`（`MakeLong(X,Y)=(Y<<16)|X`）与 `self_x`/`self_y` 必须与 `placement.x/y` 一致 ⇒ `placement.y=233` 而 `self_pos` 不动 rc=2。 |
 | T3 | **仍未覆盖（本判据不达成）** | 该卡 **R2** 只保证「`wait_for` 之前**存在过**发帧步」。删掉攻击步 `CM_HIT(3014)`、保留 `CM_TURN(3010)` ⇒ **rc=0**；只有把**全部** send 删掉才 rc=2。 |
 

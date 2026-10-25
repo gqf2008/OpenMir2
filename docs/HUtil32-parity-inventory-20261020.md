@@ -106,8 +106,8 @@ StrPas(41 00 42) = "A\0B"      SpanToStr(80 FF) = "??"
 |---:|---|---|---|---|
 | 1 | `Backslash` | 常量 `'/'`（正斜杠） | ❌ | ✅ `BACKSLASH` |
 | 2 | `Separator` | `{' ', ',', '\t'}` | ❌ | ✅ `SEPARATOR` |
-| 3 | `DelfautItem` | `UserItem` 包类型 | ❌ | — 属 `crates/protocol` |
-| 4 | `DetailtMagicRcd` | `MagicRcd` 包类型 | ❌ | — 属 `crates/protocol` |
+| 3 | `DelfautItem` | `UserItem` 包类型 | ❌ | — 属 `mir2-rs/crates/protocol` |
+| 4 | `DetailtMagicRcd` | `MagicRcd` 包类型 | ❌ | — 属 `mir2-rs/crates/protocol` |
 | 5 | `Sequence()` | `Guid.NewGuid` 取正 int | ❌ | — 运行期随机；调用方用确定性计数器 |
 | 6 | `GetTickCount()` | `Environment.TickCount`（开机毫秒） | ❌ | — 运行期；bins `clock` 抽象（白名单 D-1） |
 | 7 | `GetTimestamp()` | Unix 毫秒 | ❌ | ✅ `get_timestamp` |
@@ -238,7 +238,7 @@ TEETH_RC=0
    （`crates/world/tests/no_parallel.rs:181`）禁止引入 `encoding_rs`；bins 的 `gbk.rs` 已有等价实现。
    若后续要把它们上收共享层，需要 owner 先裁决「shared 零依赖」例外或采用生成表方案。
 2. **平台/类型不适用 12 个**（#3–6、#29–32、#38–39、#46、#71）：包类型/运行期时钟/锁/`DateTime`/`unsafe`，
-   不在 `shared` 职责内；对应的 Rust 形态已由 `crates/protocol`、bins `clock`、chrono、tokio 承担。
+   不在 `shared` 职责内；对应的 Rust 形态已由 `mir2-rs/crates/protocol`、bins `clock`、chrono、tokio 承担。
 3. 探针工程 `E:\tmp\hutil-probe`（含 `probe-output*.txt`）为**本线临时物**，按收尾清单登记保留，
    便于复查实测值；不属于仓库写集。
 4. **`get_valid_str3(src, &[])` 与 oracle 不等价（Minor 3，已登记）**：.NET

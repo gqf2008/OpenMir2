@@ -15,7 +15,7 @@
 
 1. **城堡持久化不是数据库**：`sql/` 三个库对 `castle` / `sabuk` 的命中数都是 **0**（§2.1）。
    城堡状态全部落在 `Envir/Castle/` 下的**三个文本文件**：`List.txt`、`<N>/SabukW.txt`、`<N>/AttackSabukWall.txt`。
-   ⇒ 本卡**不动 DB、不动 `crates/storage`**（该 crate 城堡相关命中 0，§2.2），因此**不触发 storage 接口冻结通知**。
+   ⇒ 本卡**不动 DB、不动 `mir2-rs/crates/storage`**（该 crate 城堡相关命中 0，§2.2），因此**不触发 storage 接口冻结通知**。
 2. **oracle 有 6 个写触发点、没有退出存档**（§1.4）。最主要的是 `SystemProcessor.ShowOnline` 里
    `ConsoleShowUserCountTime`（默认 10 分钟）门的 `CastleMgr.Save()`。
 3. **同一个 `Save()` 里两条路径口径不同**：`SaveConfigFile` 写 **ctor 时绑定**的 `Castle/<CastleDir>/SabukW.txt`
@@ -204,7 +204,7 @@ sql/mir2_db.sql      castle=0 sabuk=0
 `stditems`/`upgradeinfo*`）。
 ⇒ **结论：不得新增城堡表**（违反"内容冻结"）。任何"把城堡改存 DB"的方案直接否决。
 
-### 2.2 `crates/storage`：城堡相关 API = 0
+### 2.2 `mir2-rs/crates/storage`：城堡相关 API = 0
 
 ```
 $ grep -rn "castle" mir2-rs/crates/storage/src | wc -l
@@ -213,14 +213,14 @@ $ grep -rn "fn .*castle" mir2-rs/crates/storage/src -i | wc -l
 0
 ```
 
-`crates/storage` 只镜像 DBSrv 的四个接口（`PlayRecordStorage` / `PlayDataStorage` / `CacheStorage` / `MarketStorage`，
-`crates/storage/src/lib.rs:1-22`），与城堡无关。
+`mir2-rs/crates/storage` 只镜像 DBSrv 的四个接口（`PlayRecordStorage` / `PlayDataStorage` / `CacheStorage` / `MarketStorage`，
+`mir2-rs/crates/storage/src/lib.rs:1-22`），与城堡无关。
 ⇒ **缺口不是"storage 少了一套 API"，而是"写文件这一层根本还没实现"**；正确落点是
 `crates/envir`（路径/序列化）+ `bins/game-svr`（定时器与 IO），与行会文件层 `crates/data/src/guild.rs` 同构。
 
 ### 2.3 冻结通知义务
 
-接口冻结线只覆盖 `crates/protocol`、`crates/storage`（AGENTS「编码约定」）。本设计两者都不动
+接口冻结线只覆盖 `mir2-rs/crates/protocol`、`mir2-rs/crates/storage`（AGENTS「编码约定」）。本设计两者都不动
 ⇒ **无需通知**。真正需要通知的是 `crates/envir` 的公开面变化：`SabukWConfig` 被 `bins/game-svr/src/castle.rs:73-99`
 消费，若增删字段须同步适配层（非冻结面，但属跨 crate 写集）。
 
@@ -434,7 +434,7 @@ $ grep -rn "fn .*castle" mir2-rs/crates/storage/src -i | wc -l
 
 ### 5.2 冻结与通知义务
 
-- `crates/protocol`、`crates/storage` **不动** ⇒ 无冻结通知。
+- `mir2-rs/crates/protocol`、`mir2-rs/crates/storage` **不动** ⇒ 无冻结通知。
 - `crates/envir` 的 `SabukWConfig` 增字段（若需要）⇒ 同步 `bins/game-svr/src/castle.rs::specs_from_sabuk`；
   这是跨 crate 写集，P2 合入时必须通知 P3 owner。
 - **禁止**新增 SQL 表/列（§2.1）。
@@ -521,5 +521,5 @@ file E:/MirServer/M2GameSvr/Server.conf                                         
 | `1/SabukW.txt` | 0 B / mtime 2026-10-10 |
 | `Castle/AttackSabukWall.txt` | 不存在 |
 | `sql/` castle 命中 | 0 |
-| `crates/storage` castle 命中 | 0 |
+| `mir2-rs/crates/storage` castle 命中 | 0 |
 | `ConsoleShowUserCountTime`（Rust 解析） | 0 命中 |

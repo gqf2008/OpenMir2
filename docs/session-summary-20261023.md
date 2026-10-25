@@ -102,7 +102,7 @@
 - **真实 rc（我在树外副本复跑）**：把 `combat_strike.json` 的 `CM_HIT(3014).send.tag` 改成 `99` 存到 `E:/tmp/w67-scratch/r6_tag99.json`：
   - `1c9753803` 版本：`scenario-error: steps[2].send.tag 99 … never hits, so the wait can only time out`，**rc=2**；
   - `1893470a0`（现行）：`WARN: steps[2].send.tag 99 …` + `scenario OK: combat_strike (4 steps…)`，**rc=0**。
-  - 复跑注意：老版本要一份带 `mir2-rs/{crates/protocol/src/messages.rs,bins/game-svr/src/attackwire.rs}` 的树（我用 `E:/tmp/w67-scratch/fake`），否则先死在读表。
+  - 复跑注意：老版本要一份带 `mir2-rs/{mir2-rs/crates/protocol/src/messages.rs,bins/game-svr/src/attackwire.rs}` 的树（我用 `E:/tmp/w67-scratch/fake`），否则先死在读表。
 - **因果核对（逐跳，oracle ↔ Rust）**：两侧都是**先用状态化 Dir 取目标、后写 nDir**：
   - C#：`src/GameSrv/Player/PlayObject.Attack.cs:26` `IActor attackTarget = targetObject ?? GetPoseCreate();`（用**当前** Dir）→ `:75` `AttackDir(attackTarget, nPower, nDir);` → `src/GameSrv/Actor/BaseObject.Attack.cs:12` `Dir = nDir;` → `:13` `_Attack(nPower, attackTarget)` 用的是**已经选好的** target。
   - Rust：`mir2-rs/bins/game-svr/src/lib.rs:8828` `let pose_dir = …e.ai.dir`；`:8834` 用 `pose_dir` 算出 `(fx, fy)`；`:8840` `e.ai.dir = dir;`；`:8846` `front_target(…, fx, fy)`。
