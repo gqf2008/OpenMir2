@@ -87,7 +87,7 @@
 |---|---|---|
 | **A（推荐）** | 开一轮**全量**：24 条入批 22 条（含 `castle_merchant_tax_potion` 的 620s 落盘等待），独占机器 1.5–3 小时 | 需 disk + 独占；直接覆盖台账 #1/#3/#4/#6 的窗口行 |
 | B | 最小集：`login_only + upgrade_retrieve + equip_struck_save + spell_cast + gamepoint_exchange` | 1 小时内可跑完，覆盖骨架 |
-| C | 暂不开窗 | 条件② 的 gate 口径仍 PASS，但 196 张「登记型 PASS」继续没有真机证据 |
+| C | 暂不开窗 | 条件② 的 gate 口径仍 PASS，但 **`window_required` 159 张 + 未合并 3 张**这批判据继续没有真机证据（数字取自 `681a59def` 的全量门禁） |
 
 > **回复**：`②Q1=A`（推荐，请给时段）／`②Q1=B`／`②Q1=C`
 
@@ -134,11 +134,11 @@
 | 条件 | 状态 | 实测（可复算） |
 |---|---|---|
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
-| ② R 卡证据 | **need_human** | R 卡 **228 张**：已完成 **15** / `window_required` **158**（已合并）/ `window_required` **未合并 3** / whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 15+158+3+48+3+1 = 228 ✓ |
+| ② R 卡证据 | **need_human** | R 卡 **230 张**：已完成 **15** / `window_required` **159**（已合并）/ `window_required` **未合并 3** / whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 未开工或未合并 **1** / 其余缺口 **0**。加总 15+159+3+48+3+1+1 = 230 ✓（`681a59def` 上 `goal_gate --full` 实跑） |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
 | ④ 门禁恒绿 | **pass** | **最终 tip `681a59def`** 上 `goal_gate --full` 单次全量实跑：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（185s；fmt 2.7s / clippy 0.6s / msgcodegen 0.2s / whitelist_anchor 5.5s / **m3_registry 0.1s（本 tip 上跑）** / **`cargo_test_workspace` rc=0 @159.7s** / master_sync PASS）。三段数：**running 3329 = passed 3266 + ignored 63 + failed 0**，**141 suites 全 ok**（= 上轮 3262 + kick 卡 2 + 其余 2 自洽）。`overall=need_human` **仅因条件②**，`fail_items=[]`。**产物**：`E:/tmp/window/goal-full-2667aaa25.json`（文件名沿用请求 tip，**内容对应 `681a59def`**，`.meta` 内 `REQUESTED_TARGET` + `TIP_DELTA` 已写明）、`goal-full-681a59def.meta`、`cargo-test-681a59def.log`（sha256 `19d6cffa…`）、`cargo-test-681a59def.results.txt`（sha256 `12faf10f…`）。**执行方式**：前台 + `CARGO_BUILD_JOBS=1`（前两次后台运行被宿主「内存压力 + 会话空闲」守卫杀掉，产物 0 字节 ⇒ 既不记失败也不记通过）；`PEAK_MEM=n/a` 如实登记。**判「要不要重跑」的口径**：`git diff --stat <被测 tip> <当前 tip> -- mir2-rs src sql` 为空/仅 docs ⇒ 证据可复用。 |
 
-- **② 的两个口径注记**（`master 574a49e7f` 上实跑）：
+- **② 的两个口径注记**（`681a59def` 上 `goal_gate --full` 实跑）：
   1. **未合并 3 张** = `gm-batch-5-guild-castle` / `makeghost-lifecycle` / `window-gate-two-runs`（今日已合：`dir-persistence-writeback`、`gm-target-state-write`、`gm-script-fixture`；6⇒4⇒3）。
   2. **「已完成 15」里有 6 张 `merged=False`**（`ability-weight-login-writeback`、`dualrun-triage-enterworld-frames`、`gm-integration`、`m3hp-lane-repin`、`script-user-account-host`、`window-529-dualrun`）⇒ 这 6 张**没有 `merge_result` 佐证**；`gm-integration` 还是「closed + merged=False + 裁定 window_required」的组合。读「15 张已完成」时须按此折扣。
 
