@@ -1,16 +1,12 @@
 {
   "name": "butch_two_draws",
-  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位。oracle：`PlayObject.Message.cs:830` ⇒ `ClientGetButchItem(**charId**, nX, nY, btDir)`（`Operate.cs:702`）⇒ 场景发 `recog=@last_kill_actor`、`param=@last_kill_x`、`tag=@last_kill_y`（**Recog 是 ActorId，不是坐标**）。**判据 = RNG 账本恰 2 条**（`PlayObject.Operate.cs:722` 的 `Random(16)+5` 与 `:723` 的 `Random(201)+100` 各 1 条，site 归属该两行）；`SM_BUTCH(637)` 只作**伴随**证据——`Operate.cs:749` 在函数尾部**无条件**发（只有速度门 `return false` 会跳过）⇒ **637 不判成功**；`SM_SKELETON(33)` 仅在 `BodyLeathery<=0` 时发，作加强项。 两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。 **取值门**：`Operate.cs:716` 每轴 ≤2 格 → `:718` `IsValidObject(nX,nY,2)` → `:720` `Death && !Skeleton && Animal`（**不是**八向相邻门——八向相邻是 probe 出手的要求）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**选靶已修**（`openmir2-probe-track-target-adjacency`：相邻优先）；剩余 = 用新字段映射跑一次真机并核对账本两抽，见 `blocked`。",
+  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位。oracle：`PlayObject.Message.cs:830` ⇒ `ClientGetButchItem(**charId**, nX, nY, btDir)`（`Operate.cs:702`）⇒ 场景发 `recog=@last_kill_actor`、`param=@last_kill_x`、`tag=@last_kill_y`（**Recog 是 ActorId，不是坐标**）。**判据 = RNG 账本恰 2 条**（`PlayObject.Operate.cs:722` 的 `Random(16)+5` 与 `:723` 的 `Random(201)+100` 各 1 条，site 归属该两行）；`SM_BUTCH(637)` 只作**伴随**证据——`Operate.cs:749` 在函数尾部**无条件**发（只有速度门 `return false` 会跳过）⇒ **637 不判成功**；`SM_SKELETON(33)` 仅在 `BodyLeathery<=0` 时发，作加强项。 两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。 **取值门**：`Operate.cs:716` 每轴 ≤2 格 → `:718` `IsValidObject(nX,nY,2)` → `:720` `Death && !Skeleton && Animal`（**不是**八向相邻门——八向相邻是 probe 出手的要求）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**选靶已修**（`openmir2-probe-track-target-adjacency`：相邻优先）；真机轮已跑通（2026-10-25，master `64f49e902`）：两侧账本均 `TWO_DRAWS_OK`（`max=16`×1 @ `Operate.cs:722` / `world.rs:7756`、`max=201`×1 @ `:723` / `:7757`，16 在前），637 各 1 条作伴随；证据与数字见 `docs/butch-two-draws-live-20261025.md`。",
   "params": {
     "self_pos": 21627210,
     "target_xy": 21692746,
     "item_make_index": 5001,
     "item_name": "木剑",
     "takeon_where": 1
-  },
-  "blocked": {
-    "reason": "**已解**：前置插入（原缺口 3081 行 × 200ms ≈ 616s、`ProcessMonsterMultiThreadLimit` 未配=1；卡 `6f35b049f`）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**选靶已修**（相邻优先，实验轮 `kill=dead`、`matched_ident=34`）。**当前缺口 = 字段映射与判据**：原稿把 `recog` 当尸体坐标发，实测账本 `max=16` 0 条 ⇒ 两抽从未发生；**判据 = RNG 账本恰 2 条**（`PlayObject.Operate.cs:722` 的 `Random(16)+5` 与 `:723` 的 `Random(201)+100` 各 1 条，site 归属该两行）；`SM_BUTCH(637)` 只作**伴随**证据——`Operate.cs:749` 在函数尾部**无条件**发（只有速度门 `return false` 会跳过）⇒ **637 不判成功**；`SM_SKELETON(33)` 仅在 `BodyLeathery<=0` 时发，作加强项。 **取值门**：`Operate.cs:716` 每轴 ≤2 格 → `:718` `IsValidObject(nX,nY,2)` → `:720` `Death && !Skeleton && Animal`（**不是**八向相邻门——八向相邻是 probe 出手的要求）。 修好后重跑一次真机核对账本两抽。未打通前不得声称可跑。",
-    "missing_fixture": "① 用新字段映射（recog=@last_kill_actor/param=@last_kill_x/tag=@last_kill_y）跑真机；② **判据看账本**：`Operate.cs:722/723` 的 site 各 1 条（637 只作伴随、33 只在 BodyLeathery<=0 时作加强）；③ 账本限时 ≤5 分钟并当场裁剪；④ 装备腿不必重复证明。"
   },
   "placement": {
     "map": "0",
