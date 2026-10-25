@@ -925,10 +925,10 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 
 | 项 | 结果 |
 |---|---|
-| 全量 | **绿 47 / 红 0 / 跳过 0，rc=0，124s**（`provision_real_machine_fixtures` 接入后复跑；旧 45/46 项快照 `gate-full-45.json` 等保留对照；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 17.9s，其余 ≤2s） |
-| 本门自测 | `--selftest` **17/17**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2/未分类 rc ×2/全跑 inventory 检查） |
+| 全量 | **绿 47 / 红 0 / 跳过 0，rc=0，140s**（`provision_real_machine_fixtures` 接入后复跑；旧 45/46 项快照 `gate-full-45.json` 等保留对照；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 17.9s，其余 ≤2s） |
+| 本门自测 | `--selftest` **18/18**（…既有 17 条 + **牙12b 接线牙**：假 discover + 真 `run()`，删掉 inventory 接线即红） |
 | 清点 | **52** 个带 selftest 的工具：门内 **47** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3）。`provision_real_machine_fixtures` 由 `--inventory` 当场抓到（卡 `openmir2-tool-selftest-registry-sync`）后由 51/46/0 变为 52/47/0 |
-| 变异自证 | 门注册项 **48/48**（47 项 + 门自身进程树/inventory 变异；`mutations-proof.log`）；另 blocked 卡谓词级否证 **7/7**（`orphan-mutations.json`） |
+| 变异自证 | 门注册项 **49/49**（47 项 + 门自身进程树/inventory/接线/隐藏开关变异；`mutations-proof.log`）；另 blocked 卡谓词级否证 **7/7**（`orphan-mutations.json`） |
 
 **能力扩容（两轮共 20 项）**：第二轮 19 项（`review_principal_check` / `scenario_undecidable_audit` /
 `rules_approve` / `capture_login_compare` / `s2c_diff` / `error_curve` / `timeline` / `world_sampler` /

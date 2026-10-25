@@ -20,7 +20,7 @@
 **收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
 ——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
 「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
-当前 46 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
+当前 47 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
 部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
 
 用法：
@@ -516,9 +516,13 @@ def selftest():
         chk(rc11b == 0 and "UNCLASSIFIED" not in buf11b.getvalue(),
             "TSG 牙11b（合成 discover）无未分类 ⇒ rc=0（不看真实仓库）")
 
-        # 牙12（A3）：全跑末尾的显式 inventory 检查——未分类>0 ⇒ 全跑判红并点名
+        # 牙12（A3/F1）：全跑末尾的显式 inventory 检查——**纯合成 discover**（不并真实仓库），
+        # 否则「仓库多出一个未分类工具」会把本牙弄红，重演 A2 要消灭的失效模式。
+        def _fake_unc_discover():
+            return list(_gate_files) + ["tools/__fake_unclassified__.py"]
+
         globals()["REGISTRY"] = saved
-        globals()["discover"] = _fake_discover
+        globals()["discover"] = _fake_unc_discover
         try:
             buf12 = _io.StringIO()
             with contextlib.redirect_stdout(buf12):
@@ -529,6 +533,24 @@ def selftest():
         chk(rc12 == 2 and un12 == ["tools/__fake_unclassified__.py"]
             and "UNCLASSIFIED tools/__fake_unclassified__.py" in buf12.getvalue(),
             "TSG 牙12 全跑 inventory 检查：未分类>0 ⇒ rc=2 并单独点名（A3）")
+        # 牙12b（F2 接线）：假 discover + **真 run()**；把 run() 末尾的 inventory 接线删掉 ⇒ 本牙红。
+        _reg_before12b = REGISTRY
+
+        def _fake_unc_discover2():
+            return [okf, "tools/__fake_unclassified__.py"]
+
+        globals()["REGISTRY"] = [("ok", [okf], False)]
+        globals()["discover"] = _fake_unc_discover2
+        try:
+            buf12b = _io.StringIO()
+            with contextlib.redirect_stdout(buf12b):
+                _res12b, rc12b = run(tmp, timeout=30)
+        finally:
+            globals()["discover"] = _orig_discover
+            globals()["REGISTRY"] = _reg_before12b
+        chk(rc12b == 2
+            and "UNCLASSIFIED tools/__fake_unclassified__.py" in buf12b.getvalue(),
+            "TSG 牙12b（F2）真 run() + 假未分类 ⇒ rc=2 且打印 UNCLASSIFIED（接线牙）")
     finally:
         REGISTRY = saved
     print("%s: tool_selftest_gate selftest %d/%d"
