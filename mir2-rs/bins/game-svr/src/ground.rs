@@ -128,7 +128,7 @@
 //! - **收包接线**（把 `CM_PICKUP`/`CM_DROPITEM` 派发进世界循环）归 m2-svr 车道（`lib.rs`/`smframe.rs`）。
 
 use crate::ability::{Ability, ItemCatalog};
-use crate::bag::{item_display_name, BagItem, Frame, MAX_BAG_ITEM};
+use crate::bag::{add_item_to_bag, item_display_name, BagItem, Frame, MAX_BAG_ITEM};
 use crate::useitem::QueuedNotice;
 use mir2_shared::rng::RandomNumber;
 
@@ -511,12 +511,11 @@ pub fn pick_up(
                 ctx.curr_y,
             ));
             // `AddItemToBag`：满包不追加、也不 WeightChanged；本分支已过 `IsEnoughBag`。
-            if state.item_list.len() < MAX_BAG_ITEM {
+            if add_item_to_bag(&mut state.item_list, u, MAX_BAG_ITEM) {
                 // `SendAddItem(userItem)` 的尾需要**实际入包**的 `UserItem`（G-1）。
                 if ctx.race_is_play {
-                    added_item = Some(u.clone());
+                    added_item = state.item_list.last().cloned();
                 }
-                state.item_list.push(u);
                 state.wabil.weight = recalc_bag_weight(ctx.catalog, &state.item_list);
                 update(&mut notices, RM_WEIGHTCHANGED);
             }
