@@ -1,0 +1,69 @@
+{
+  "name": "softclose_relogin",
+  "description": "`CM_SOFTCLOSE`（小退）后**同一 account 再登录**：为 `openmir2-softclose-cleanup-residue` 的两项真机判据造前置。段1 = 登录（等自身的出现帧 `SM_FEATURECHANGED(41)`，recog=自己）+ 走一格到 (321,328)；然后发 `CM_SOFTCLOSE(1009)` 并断开；段2 = **同一 account/角色**再登录。**判据前提**：两段的 ActorId 必须相同——由 `relogin.assert_same_actor`（默认 true）在 run 内断言；id 不同时「重连后名字/行会是新值」恒真（旧展示表根本没命中）⇒ 假绿。**注意（证据边界）**：本场景单客户端只能钉「id 复用 + 两段帧面」，「出现帧携带的 name/guild 取自新实体」需**观察者**客户端（oracle 给自己的 41 无 name 尾，`PlayObject.cs:1145`），不在本场景范围内。placement 复用 `move_walk` 的已验格（3.map 的 (320,328)→(321,328) 两格可走）；profile 用内置 `alt`（account/char = winplay0），不新增夹具。",
+  "params": {
+    "self_x": 320,
+    "self_y": 328,
+    "walk_xy": 21496129
+  },
+  "placement": {
+    "map": "3",
+    "x": 320,
+    "y": 328,
+    "note": "盟重省土城街区，与 `move_walk` / `pickup_item` / `upgrade_retrieve` 同格（复用既有 placement，不新增夹具）。走位终点 = (321,328)：`3.map` 两侧逐字节同源（sha256 5bb37afef0bb827e0ee47b71ed455d737ebd503917fabad4407d7361f0ca694f），两格 walkable（card_window.read_map_cell 口径 bk=671/0、fr=0；起栈前 placement 校验会重验起点格）。"
+  },
+  "steps": [
+    {
+      "wait_idents": {
+        "idents": [41],
+        "recog_is": "self"
+      },
+      "timeout_ms": 8000,
+      "note": "**段1 出现帧**：`SM_FEATURECHANGED(41)`，`recog_is=self`（= `SM_LOGON(50).recog`）。oracle 在 `SendLogon` 里 `SM_LOGON` 之后**同组无条件下发**（`PlayObject.cs:1145`：`SendDefMessage(SM_FEATURECHANGED, ActorId, …)`）；本仓 `enter.rs` 的 50/41/213 同组三条。用 `wait_idents`（累计口径）——登录时这条在场景步骤开始之前就到了，`wait_for` 的下界会把它排除。"
+    },
+    {
+      "send": {
+        "ident": 3011,
+        "recog": "walk_xy",
+        "param": 0
+      },
+      "note": "`CM_WALK(3011)`：X/Y 都打包在 recog（`recog = (y<<16)|x`，服务端取 LoWord=X、HiWord=Y），`param` 不读。走一格到 (321,328)：登录→走→小退→重连这条链上每一步都要有可观测动作，走位同时把「段2 的 SM_LOGON x/y」与起点区分开（否则位移帧面全为常量、判据没有区分力）。"
+    },
+    {
+      "wait_for": [11, 13, 10, 100],
+      "timeout_ms": 5000,
+      "note": "走成功看 `SM_WALK(11)`（被挡则 10/100）；超时 fail-loud，不静默继续。"
+    },
+    {
+      "send": {
+        "ident": 1009,
+        "recog": 0,
+        "param": 0
+      },
+      "note": "`CM_SOFTCLOSE(1009)`：`series(wParam)=0` ⇒ 不置 BoEmergencyClose（普通小退）。服务端在同一 tick 后段 `MakeGhost`（离开世界），随后 socket 断开。"
+    },
+    {
+      "sleep": 300,
+      "note": "留出 soft-close 的收帧/清场时间；真正的等待在 `relogin.settle_ms`。"
+    },
+    {
+      "relogin": {
+        "settle_ms": 1500,
+        "assert_same_actor": true
+      },
+      "note": "**段2**：关掉当前 GameGate 连接 → settle 1500ms（oracle「角色数据保存中」窗口）→ 用**同一 account / 同一角色**重跑 login→selgate→gamegate 链。`assert_same_actor: true` 把「两段 ActorId 相同」做成 in-process 断言：这是「重连后名字/行会是新值」判据的**前提**；id 不同时那条判据恒真（假绿），所以前提不成立必须让 run 红。两段的 actor id / SM_LOGON 字段落进 `run.json` 的 `steps[]` 与 `chain.segments`。"
+    },
+    {
+      "wait_for": {
+        "idents": [41],
+        "recog_is": "self"
+      },
+      "timeout_ms": 8000,
+      "note": "**段2 出现帧**：重连后新会话的 `SM_FEATURECHANGED(41)`（`recog_is=self` = **新的** self actor id）。`wait_for` 的下界保证这是 relogin 之后的新帧，不是段1 那条的回声。消费方（cleanup-residue 的真机判据）应把本帧与段1 的 41 对齐比较；name/guild 面需观察者客户端，见 description 的证据边界。"
+    },
+    {
+      "sleep": 500,
+      "note": "收尾收帧窗口（让段2 的延迟帧落地再断开）。"
+    }
+  ]
+}
