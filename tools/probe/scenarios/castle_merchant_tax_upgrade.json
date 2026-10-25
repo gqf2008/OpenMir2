@@ -107,7 +107,7 @@
     }
   ],
   "blocked": {
-    "reason": "**「进批通道缺失」已证伪**（`run_batch.sh` 的 `extra` 拼在 `--profile` 之后，且 `load_profile` 接受 profile JSON 路径）⇒ 本场景**可以**带自定义 profile。**真缺口 = 按名字/坐标选 NPC**：`click_npc` 只认 actor id / `auto:last_turn`，实测 map 3 两处都点到「装备回收」⇒ `@upgrade` 无链接、643 超时。profile 预置已入库 `tools/window/profiles/castle_tax_upgrade.json`（本卡新增，**未接进 run3**）。保持 blocked 直到 `openmir2-probe-npc-discovery` 合并。",
-    "missing_fixture": "① 按名字/坐标选 NPC（卡 `openmir2-probe-npc-discovery`，已交付待审）；② 合并后把本行 `extra` 加 `--profile tools/window/profiles/castle_tax_upgrade.json`，并**同步清掉两处 blocked**（另一张卡）。"
+    "reason": "**「进批通道缺失」已证伪**（`run_batch.sh` 的 `extra` 拼在 `--profile` 之后，且 `load_profile` 接受 profile JSON 路径）⇒ 本场景**可以**带自定义 profile。**剩余缺口 = NPC 寻址的对象类别**：`click_npc` 的 `name:`/`pos:` 已合（`ee1a0a18f`），但 `pos:` 尚未校验「该格对象是固定 NPC」，且可见集未剔除 `SM_DISAPPEAR(30)`——两项归后续卡 `openmir2-probe-npc-addressing-followups`（未合）。profile 预置已入库 `tools/window/profiles/castle_tax_upgrade.json`（本卡新增，**尚未接入 run3**）。",
+    "missing_fixture": "① 等 `openmir2-probe-npc-addressing-followups` 合并（pos 类别校验 + DISAPPEAR 剔除）；② 另一张卡把本行 `extra` 加 `--profile tools/window/profiles/castle_tax_upgrade.json`，并**同步清掉两处 blocked**。"
   }
 }
