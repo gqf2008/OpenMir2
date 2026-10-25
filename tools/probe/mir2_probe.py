@@ -1025,18 +1025,47 @@ def plan_step(step, index, params, depth=0):
         # `nX == CurrX && nY == CurrY`），`tag` 是朝向；目标由 `GetPoseCreate()` 按**状态化
         # Dir** 取正前方格（PlayObject.Attack.cs:26）。所以本步先 `CM_TURN` 转身、再按同一
         # 朝向连击；`target_xy` 必须与 `self_pos` 八向相邻，否则加载期就拒（不猜）。
-        _need_keys(val, where + ".kill", required=("target_xy",),
-                   optional=("self_pos", "ident", "turn_ident", "max_swings",
-                             "interval_ms", "wait_ident"))
+        _need_keys(val, where + ".kill", required=(),
+                   optional=("target_xy", "track", "max_retries", "self_pos", "ident",
+                             "turn_ident", "max_swings", "interval_ms", "wait_ident"))
+        if "track" in val and "target_xy" in val:
+            raise ScenarioError(
+                "%s.kill: target_xy（固定格）与 track（按目标当前坐标寻靶）互斥，选一种" % where)
+        if "track" not in val and "target_xy" not in val:
+            raise ScenarioError(
+                "%s.kill missing key: target_xy（固定前方格，旧模式）或 track（nearest:<名>/actor:<id>，"
+                "寻靶模式）之一" % where)
+        if "track" in val:
+            t = val["track"]
+            if not isinstance(t, str):
+                raise ScenarioError("%s.kill.track 必须是字符串（nearest:<名> / actor:<id>）" % where)
+            if t.startswith("nearest:"):
+                nm = t[len("nearest:"):].strip()
+                if not nm:
+                    raise ScenarioError("%s.kill.track: `nearest:` 后必须跟名字" % where)
+                out["track"] = {"kind": "nearest", "name": nm}
+            elif t.startswith("actor:"):
+                aid = _need_int(resolve_param(t[len("actor:"):], params, where + ".kill.track"),
+                                where + ".kill.track", -0x80000000, 0x7FFFFFFF)
+                out["track"] = {"kind": "actor", "actor": aid}
+            else:
+                raise ScenarioError(
+                    "%s.kill.track 只认 nearest:<名> 或 actor:<id>，得到 %r" % (where, t))
+            # 出手前复核「目标走开」时重算的次数上限（卡 openmir2-probe-kill-track-target）。
+            out["max_retries"] = _need_int(val.get("max_retries", 3),
+                                           where + ".kill.max_retries", 0, 10)
         # review `ad28d643` F1：kill 的时长只由 max_swings×interval_ms 决定；通用
         # `timeout_ms` 在这里**不被读取**——静默收下会让人以为它生效（与 repeat 同口径：拒）。
         if timeout_ms is not None:
             raise ScenarioError(
                 "%s.kill does not accept timeout_ms (duration = max_swings × interval_ms); "
                 "删掉它或改用 max_swings/interval_ms" % where)
-        out["target_xy"] = _need_int(
-            resolve_param(val["target_xy"], params, where + ".kill.target_xy"),
-            where + ".kill.target_xy", 0, 0xFFFFFFFF)
+        if "target_xy" in val:
+            out["target_xy"] = _need_int(
+                resolve_param(val["target_xy"], params, where + ".kill.target_xy"),
+                where + ".kill.target_xy", 0, 0xFFFFFFFF)
+        else:
+            out["target_xy"] = 0   # 寻靶模式：运行期按目标当前帧解析
         raw_self = val.get("self_pos")
         if raw_self is None:
             if "self_pos" not in params:
@@ -1069,6 +1098,11 @@ def plan_step(step, index, params, depth=0):
         out["wait_idents"] = [_need_int(x, where + ".kill.wait_ident[]") for x in wi]
         tx, ty = out["target_xy"] & 0xFFFF, (out["target_xy"] >> 16) & 0xFFFF
         sx, sy = out["self_pos"] & 0xFFFF, (out["self_pos"] >> 16) & 0xFFFF
+        if "track" in out:
+            out["recog"] = out["self_pos"]
+            out["param"] = 0
+            out["tag"] = 0          # 朝向在运行期按目标当前格算
+            return out
         if (tx - sx, ty - sy) not in DIRECTION_BY_DELTA:
             raise ScenarioError(
                 "%s.kill: target_xy (%d,%d) 与 self_pos (%d,%d) 不是八向相邻格——CM_HIT 只打 "
@@ -1831,6 +1865,136 @@ class Run:
             return lambda fr: fr.recog == want
         return None
 
+    def _actor_dead(self, conn, actor):
+        """目标是否已死：出现 `SM_DEATH(32)`/`SM_NOWDEATH(34)` 且 `recog == actor`。"""
+        for _seq, fr in conn.frames:
+            if fr.ident in (SM_DEATH, SM_NOWDEATH) and fr.recog == actor:
+                return True
+        return False
+
+    def _pick_track_target(self, conn, plan):
+        """按 `track` 选目标：**当前可见、未死、最近**的同名对象或指定 actor；没有 ⇒ None。"""
+        rows, order = scan_actors(conn.frames, self.state.get("self_actor"))
+        sx = plan["self_pos"] & 0xFFFF
+        sy = (plan["self_pos"] >> 16) & 0xFFFF
+        tr = plan["track"]
+        cands = []
+        for a in order:
+            r = rows[a]
+            if r["disappeared"] or self._actor_dead(conn, a):
+                continue
+            if tr["kind"] == "actor":
+                if a != tr["actor"]:
+                    continue
+            elif r.get("name") != tr["name"]:
+                continue
+            r["_dist"] = abs(r["x"] - sx) + abs(r["y"] - sy)
+            cands.append(r)
+        if not cands:
+            return None
+        cands.sort(key=lambda r: (r["_dist"], r["actor"]))
+        return cands[0]
+
+    def _execute_kill_track(self, conn, plan, idx):
+        """寻靶模式（卡 `openmir2-probe-kill-track-target`）：按目标**当前**坐标转身 → 出手前复核 → 连击。
+
+        与固定格模式（`target_xy`）的区别：目标会走位，固定格会空打；这里每次出手前都用**最新帧**
+        复核目标仍在预期格，走开就重算（最多 `max_retries` 次），用尽 ⇒ `StepFailure` 并打印目标
+        最后已知坐标与帧 seq。**不走位**：角色不在 8 邻格 ⇒ fail-closed 提示手动站位。
+        """
+        interval = plan["interval_ms"]
+        death = set(plan["wait_idents"])
+        sx = plan["self_pos"] & 0xFFFF
+        sy = (plan["self_pos"] >> 16) & 0xFFFF
+        retries = 0
+        swings = 0
+        turns = []
+        last = None
+        while True:
+            row = self._pick_track_target(conn, plan)
+            if row is None:
+                last_known = ("(%d,%d) actor=%d seq=%s"
+                              % (last["x"], last["y"], last["actor"], last["last_seq"])
+                              if last else "无任何帧")
+                self.steps.append({"index": idx, "kind": "kill", "mode": "track",
+                                   "selector": plan["track"], "result": "target-gone",
+                                   "last_known": last_known, "swings": swings,
+                                   "retries": retries, "note": plan.get("note", "")})
+                raise StepFailure(
+                    "steps[%s].kill(track): 目标已消失/死亡，拒绝空打；最后已知 %s；可见集：%s"
+                    % (idx, last_known,
+                       format_actors(visible_actors(conn.frames, self.state.get("self_actor")))))
+            last = row
+            tx, ty = row["x"], row["y"]
+            direction = DIRECTION_BY_DELTA.get((tx - sx, ty - sy))
+            if direction is None:
+                raise StepFailure(
+                    "steps[%s].kill(track): 目标 actor=%d 当前在 (%d,%d)，与自身 (%d,%d) 不八向相邻"
+                    " ⇒ 需手动站位（本步不走位；用 send/move 步把角色挪到目标邻格后重跑）"
+                    % (idx, row["actor"], tx, ty, sx, sy))
+            raw = conn.send(plan["self_pos"], plan["turn_ident"], 0, direction, 0, b"")
+            turns.append(direction)
+            self._log_send(conn, raw, {"index": idx, "kind": "kill.track_turn",
+                                       "ident": plan["turn_ident"], "recog": plan["self_pos"],
+                                       "tag": direction, "target": row["actor"],
+                                       "note": plan.get("note", "")}, now_ms() - self.t0_ms)
+            conn.pump(interval)
+            again = self._pick_track_target(conn, plan)
+            if again is None or again["actor"] != row["actor"] \
+                    or (again["x"], again["y"]) != (tx, ty):
+                retries += 1
+                if retries > plan["max_retries"]:
+                    lastn = again or last
+                    self.steps.append({"index": idx, "kind": "kill", "mode": "track",
+                                       "selector": plan["track"], "result": "retries-exhausted",
+                                       "last_known": "(%d,%d) actor=%d seq=%s"
+                                                     % (lastn["x"], lastn["y"], lastn["actor"],
+                                                        lastn["last_seq"]),
+                                       "swings": swings, "retries": retries,
+                                       "note": plan.get("note", "")})
+                    raise StepFailure(
+                        "steps[%s].kill(track): 出手前复核失败 %d 次（max_retries=%d：允许 %d 次"
+                        "重算，第 %d 次仍不一致才报错）——目标最后已知 (%d,%d) actor=%d seq=%s"
+                        % (idx, retries, plan["max_retries"], plan["max_retries"],
+                           plan["max_retries"] + 1, lastn["x"], lastn["y"],
+                           lastn["actor"], lastn["last_seq"]))
+                continue
+            raw = conn.send(plan["self_pos"], plan["ident"], 0, direction, 0, b"")
+            swings += 1
+            self._log_send(conn, raw, {"index": idx, "kind": "kill.swing",
+                                       "ident": plan["ident"], "recog": plan["self_pos"],
+                                       "tag": direction, "swing": swings,
+                                       "target": row["actor"], "note": plan.get("note", "")},
+                           now_ms() - self.t0_ms)
+            before = conn.recorder.seq
+            conn.pump(interval)
+            matched = None
+            for seq, fr in conn.frames:
+                if seq > before and fr.ident in death and (
+                        fr.recog == row["actor"] or (fr.param == tx and fr.tag == ty)):
+                    matched = (seq, fr)
+                    break
+            if matched:
+                seq, fr = matched
+                self.steps.append({"index": idx, "kind": "kill", "mode": "track",
+                                   "selector": plan["track"], "result": "dead",
+                                   "target": row["actor"], "target_xy": tx | (ty << 16),
+                                   "direction": direction, "swings": swings,
+                                   "retries": retries, "turns": turns,
+                                   "matched_seq": seq, "matched_ident": fr.ident,
+                                   "matched_recog": fr.recog, "note": plan.get("note", "")})
+                return
+            if swings >= plan["max_swings"]:
+                self.steps.append({"index": idx, "kind": "kill", "mode": "track",
+                                   "selector": plan["track"], "result": "alive",
+                                   "target": row["actor"], "target_xy": tx | (ty << 16),
+                                   "swings": swings, "retries": retries,
+                                   "note": plan.get("note", "")})
+                raise StepFailure(
+                    "steps[%s].kill(track): target alive after %d swing(s) (actor=%d at (%d,%d)); "
+                    "no death frame among %s"
+                    % (idx, swings, row["actor"], tx, ty, sorted(death)))
+
     def _execute_kill(self, conn, plan):
         """击杀步（卡 `openmir2-probe-kill-step`）：转身 → 连击 → 等死亡帧。
 
@@ -1843,6 +2007,8 @@ class Run:
           ③ 「死了但屠宰不接受」不在本步——由后续 `wait_for(33/637)` 超时表达（不同的步）。
         """
         idx = plan["index"]
+        if plan.get("track"):
+            return self._execute_kill_track(conn, plan, idx)
         tx = plan["target_xy"] & 0xFFFF
         ty = (plan["target_xy"] >> 16) & 0xFFFF
         sx = plan["self_pos"] & 0xFFFF
@@ -4765,6 +4931,196 @@ def _selftest_npc_discovery():
             "静态三颗独立牙（同格 SM_RUSH / 双 TURN 换格 / 消失再出现）+ name?allow_any 加载期拒")
 
 
+def _selftest_kill_track():
+    """卡 `openmir2-probe-kill-track-target`：kill 的寻靶模式（4 牙 + schema）。
+
+    构造级（合成 SM_TURN/SM_WALK/SM_DISAPPEAR/死亡帧，不连网）：
+      a. 目标 t0 在 A、t1 移到 B ⇒ 出手朝向是 **B**（若仍按首次出现格 A 出手必红）；
+      b. 目标消失（SM_DISAPPEAR）⇒ 不空打、直接 StepFailure；
+      c. 同名两只 ⇒ 选**最近**（断朝向/actor）；
+      d. 复核次数用尽 ⇒ StepFailure 并带目标最后已知坐标与帧 seq（且一次 CM_HIT 都没发）。
+    """
+    import argparse as _argparse
+    import shutil as _shutil
+    import tempfile as _tempfile
+
+    def turn_frame(actor, x, y, name=None):
+        body = encode_bytes(bytes(8))
+        if name is not None:
+            body += encode_text(name + "/255")
+        return b"#" + encode_bytes(pack_header(actor, SM_TURN, x, y, 0)) + body + b"!"
+
+    def walk_frame(actor, x, y):
+        return build_s2c_frame(actor, SM_WALK, x, y, 0, b"")
+
+    self_xy = 330 | (330 << 16)
+
+    # ① schema：track 与 target_xy 二选一；nearest/actor 两种写法；坏值加载期拒
+    p1 = plan_step({"kill": {"track": "nearest:鸡", "self_pos": self_xy}}, 0, {})
+    assert p1["track"] == {"kind": "nearest", "name": "鸡"}, p1
+    assert p1["max_retries"] == 3 and p1["recog"] == self_xy, p1
+    p2 = plan_step({"kill": {"track": "actor:701", "self_pos": self_xy}}, 0, {})
+    assert p2["track"] == {"kind": "actor", "actor": 701}, p2
+    bad = [({"kill": {"target_xy": self_xy, "track": "nearest:鸡", "self_pos": self_xy}}, "互斥"),
+           ({"kill": {"track": "foo:1", "self_pos": self_xy}}, "只认 nearest"),
+           ({"kill": {"track": "nearest:", "self_pos": self_xy}}, "必须跟名字"),
+           ({"kill": {"track": "nearest:鸡", "max_retries": 99, "self_pos": self_xy}}, "max_retries")]
+    for step, needle in bad:
+        err = None
+        try:
+            plan_step(step, 0, {})
+        except ScenarioError as ex:
+            err = str(ex)
+        assert err is not None, "accepted bad kill track: %r" % (step,)
+        assert needle in err, (needle, err)
+
+    def run_with(chunks):
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-kt-")
+        args = _argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock(list(chunks))
+        conn.pump(100)
+        return run, conn, tmpd
+
+    def kill_plan(max_swings=1, max_retries=3):
+        return plan_step({"kill": {"track": "nearest:鸡", "self_pos": self_xy,
+                                   "max_swings": max_swings, "max_retries": max_retries,
+                                   "interval_ms": 350}}, 0, {})
+
+    # 牙 a：t0 在 A=(331,330)、t1 走到 B=(330,331) ⇒ 出手朝向必须是 B 的 Dir(4)
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡"), walk_frame(701, 330, 331)])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "alive" in err, err
+        turns = [x for x in run.steps if x.get("kind") == "send" and x.get("ident") == CM_TURN]
+        swings = [x for x in run.steps if x.get("kind") == "send" and x.get("ident") == CM_HIT]
+        assert turns and turns[-1]["tag"] == 4, turns
+        assert swings and swings[-1]["tag"] == 4, swings
+        assert all(x["tag"] != 2 for x in turns), turns   # 绝不按首次出现格 A 出手
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 b：目标消失 ⇒ 不空打、直接报错
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡"),
+                                build_s2c_frame(701, SM_DISAPPEAR, 0, 0, 0, b"")])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "目标已消失/死亡" in err, err
+        assert conn.sock.sent == [], "目标已消失却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 c：同名两只 ⇒ 选最近（701 在 (331,330) 距离 1；702 在 (329,329) 距离 2）
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡"),
+                                turn_frame(702, 329, 329, "鸡")])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "同名两只却成功（不应有死亡帧）"
+        turns = [x for x in run.steps if x.get("kind") == "send" and x.get("ident") == CM_TURN]
+        swings = [x for x in run.steps if x.get("kind") == "send" and x.get("ident") == CM_HIT]
+        assert turns and turns[-1]["tag"] == 2, turns     # 最近的是 701(331,330) ⇒ Dir=2
+        assert swings and swings[-1]["tag"] == 2, swings
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 d：出手前复核永远失败 ⇒ 用尽 max_retries，报最后已知坐标 + seq，且一次 CM_HIT 都没发
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡")])
+    try:
+        cells = [(331, 330), (330, 331)]
+        calls = {"n": 0}
+
+        def fake_pick(conn_, plan_):
+            rows, _order = scan_actors(conn_.frames, run.state.get("self_actor"))
+            row = dict(rows[701])
+            row["x"], row["y"] = cells[calls["n"] % 2]
+            calls["n"] += 1
+            return row
+
+        run._pick_track_target = fake_pick
+        err = None
+        try:
+            run.execute_step(conn, kill_plan(max_retries=1))
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "复核" in err and "max_retries=1" in err, err
+        assert "(330,331)" in err and "seq=" in err, err
+        hit_header = encode_bytes(pack_header(self_xy, CM_HIT))
+        assert all(hit_header not in x for x in conn.sock.sent), "复核未过却发了 CM_HIT"
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 e：两只**等距**同名 ⇒ 必须稳定按 actor id 决胜（帧序换了也选同一只）
+    run, conn, tmpd = run_with([turn_frame(702, 329, 330, "鸡"),
+                                turn_frame(701, 331, 330, "鸡")])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "等距两只却成功（不应有死亡帧）"
+        turns = [x for x in run.steps if x.get("kind") == "send" and x.get("ident") == CM_TURN]
+        assert turns and turns[-1]["tag"] == 2, turns   # 701 在 (331,330) ⇒ Dir=2（actor id 决胜）
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 f：目标**只发死亡帧**（无 DISAPPEAR） ⇒ 不得再被选中、不得空打
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡"),
+                                build_s2c_frame(701, SM_NOWDEATH, 331, 330, 0, b"")])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, kill_plan())
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "目标已消失/死亡" in err, err
+        assert conn.sock.sent == [], "目标已死却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 牙 g：差一语义——max_retries=1 允许**一次**重算；只走开一次后稳定 ⇒ 应继续出手（alive），
+    # 而不是在第一次复核失败就报「复核用尽」（`>` 改 `>=` 会红）
+    run, conn, tmpd = run_with([turn_frame(701, 331, 330, "鸡")])
+    try:
+        cells = [(331, 330), (330, 331)]
+        calls = {"n": 0}
+
+        def one_hop(conn_, plan_):
+            rows, _order = scan_actors(conn_.frames, run.state.get("self_actor"))
+            row = dict(rows[701])
+            row["x"], row["y"] = cells[0] if calls["n"] == 0 else cells[1]
+            calls["n"] += 1
+            return row
+
+        run._pick_track_target = one_hop
+        err = None
+        try:
+            run.execute_step(conn, kill_plan(max_retries=1))
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None and "alive" in err, err
+        assert "复核失败" not in err, err   # 允许 1 次重算 ⇒ 不应报复核用尽
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    return ("schema 4 反 + 牙 a(打新格)/b(消失不空打)/c(同名选最近)/d(复核用尽带坐标)；"
+            "e(等距按 actor 决胜)/f(只发死亡帧不空打)/g(max_retries 差一语义)")
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -4794,6 +5150,7 @@ def run_selftest():
     check("dsl-dlg-select-any", _selftest_dlg_select_any)
     check("dsl-newchr", _selftest_newchr)
     check("dsl-kill", _selftest_kill)
+    check("dsl-kill-track", _selftest_kill_track)
     check("dsl-npc-discovery", _selftest_npc_discovery)
     check("scenario-validation", _selftest_scenario_validation)
     check("helpers", _selftest_helpers)
