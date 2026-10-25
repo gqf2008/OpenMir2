@@ -62,6 +62,15 @@ schedule = "@hourly"
 timeout = "2m"
 
 [[task]]
+# 交付文档结构性门（卡 openmir2-docs-delivery-gate）：hex 引用 / 表格结构 / 路径引用 / 命令期望值。
+# 只读 git + 一条 run_batch --list（<1s）；只扫交付域（delivery-*/needs-human-*/three-day-report-*/rcard-*）。
+name = "fast-docs-delivery"
+command = "python -I -B tools/hygiene/docs_delivery_gate.py"
+refs = ["refs/heads/master", "refs/heads/card/ci-gate-declaration-rework"]
+schedule = "@hourly"
+timeout = "2m"
+
+[[task]]
 name = "fast-merge-tree-helper"
 command = "python -I -B tools/hygiene/merge_tree_helper.py --selftest"
 refs = ["refs/heads/master"]
@@ -70,7 +79,7 @@ timeout = "2m"
 
 [[task]]
 # 工具自测门（卡 openmir2-tool-selftest-gate）：一次跑 REGISTRY 里的全部工具 selftest。
-# 实测 100–120s（44 项：本机 111s，含门自测 18s；上一版 43 项 reviewer 冷跑 101s vs 本机 89s；card_window 36.7–40.3s、
+# 实测 100–120s（46 项：本机 111s，含门自测 18s；上一版 43 项 reviewer 冷跑 101s vs 本机 89s；card_window 36.7–40.3s、
 # mir2_probe 29.4s，其余 ≤5s）；门内单项上限 300s，
 # 故 task timeout 取 8m（= 120s 上界 + 一个卡住的项 300s + 余量），不沿用顶层 30m；
 # 门自身另有总墙钟 420s < 480s，卡住的项会被点名判红而不是拖到 CI 杀进程。

@@ -33,6 +33,7 @@ tools/e2e/stack_e2e.ps1       **整栈 E2E 一条命令**（停栈→开号→�
 tools/oracle/                 S1 线：oracle 部署件对账 / 铺部署 / 网关重连门禁（见 tools/oracle/README.md）  -SelfTestRed
 tools/worldsample/world_sampler.py  世界态采样/对拍（位置·AOI·背包·金币·tick）  selftest（确定性 + 改坏必红）
 tools/hygiene/conflict_marker_gate.py  被跟踪文件的冲突标记门禁（扫 <</>>/= 行）  --selftest（6 项：有标记红、干净绿、Markdown 的 '=' 不误报）
+tools/hygiene/docs_delivery_gate.py  交付文档结构性门（hex 引用 / 表格列数 / 路径引用 / 命令期望值）  --selftest（38 项：临时 git 仓库；块注释/代码块里的 `|`、`\\|` 转义、白名单 rot 都有牙）
 ```
 
 冲突标记门禁（合并前可跑，零依赖）：`python -I tools/hygiene/conflict_marker_gate.py`

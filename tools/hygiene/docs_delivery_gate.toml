@@ -1,0 +1,172 @@
+# docs_delivery_gate 登记表（卡 `openmir2-docs-delivery-gate`）
+#
+# 三条铁律：
+#   1) 每条登记都必须带 reason；
+#   2) 登记表有 **rot 检测**：条目不再被引用 / 对象性质变了 ⇒ 门 rc=2（白名单不许腐烂）；
+#   3) 非 commit 的 hex 引用（协作条目 blob）与解析不到的 oid **必须**逐条登记，不得静默放行。
+
+[domain]
+# owner 开窗前会**照做**的收口/清单文档；历史叙事文档不在域内（它们引用的是当时的记录）。
+globs = [
+  "docs/delivery-*.md",
+  "docs/needs-human-*.md",
+  "docs/three-day-report-*.md",
+  "docs/rcard-*.md",
+]
+
+[hex_allow]
+# 非 commit 或已不可解析的 hex 引用，逐 oid 登记。
+items = [
+  "02dce445",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:32
+  "03e75fef71",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:40
+  "05b17a75",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:32
+  "062972b6",  # blob（协作条目 oid）；引用见 docs/needs-human-20261025.md:49
+  "0e6452a4",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:78
+  "1575e7fe",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:50
+  "1a837e79",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:31
+  "1de72e17",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:391
+  "1e4ca2af",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:56
+  "1ec19eae",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:153
+  "241dbd81",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:36
+  "257c915c",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:55
+  "2790fe80",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:88
+  "29cbb7a5e8",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:24
+  "2c5cb955",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:391
+  "2d6db6ed",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:34
+  "2dd7913c70",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:27
+  "2f4b311f",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:308
+  "3730b07aa6",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:348
+  "39262b65",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:391
+  "3fcaaaa0",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:34
+  "40514dd66f",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:346
+  "40568adb92",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:36
+  "44c8806f",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:34
+  "46e479fc",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:308
+  "48eae6ce",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:391
+  "4b573434e",  # blob（协作条目 oid）；引用见 docs/rcard-evidence-plan-20261025.md:5
+  "4e95fd56",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:125
+  "54d915d765",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:26
+  "54eeabc3c4",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:33
+  "5bc7a49f87",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:42
+  "5d89759b",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:83
+  "6071715a",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:54
+  "637aa96b5",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:153
+  "71af59d5a1",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:43
+  "765b21c4",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:424
+  "79b5bf41",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:39
+  "7e200fff",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:31
+  "7e5bed75",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:106
+  "80ee1a9ca8f18f02cc95086230ca8822c157c866",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:106
+  "81f09bfb",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:79
+  "83a81b08",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:40
+  "83d0f30753",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:45
+  "84c3b7d7",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:119
+  "869a3ab12c",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:30
+  "8ab09811",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:389
+  "8c4da05a",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:391
+  "8e3b0286",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:200
+  "925a3243",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:54
+  "93ac6550",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:35
+  "95ba4409",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:41
+  "96967e0729",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:35
+  "9f3754f1",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:36
+  "9fcd40ca91",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:44
+  "a3f97eda",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:136
+  "a7b15764d9",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:38
+  "a939d623",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:32
+  "acf9b8ed",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:31
+  "ad99d16642",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:29
+  "b06a52dee3",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:37
+  "b1edb045",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:40
+  "b2cbddda",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:80
+  "b3e8db7d5c",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:39
+  "b515023e",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:33
+  "b9c4d872",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:33
+  "bb330d432",  # blob（协作条目 oid）；引用见 docs/rcard-evidence-plan-20261025.md:360
+  "bdddbeba",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:364
+  "c278fe217a",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:28
+  "c6b8aa36db",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:47
+  "c7f43850",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:65
+  "c8a74b72",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:35
+  "c9089db97f",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:32
+  "c9a30a90",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:33
+  "ca5af2b67b",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:48
+  "cbb94fb1",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:35
+  "cff88bf134",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:347
+  "d482e428",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:136
+  "d822fbcf7a",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:50
+  "da06ee4945",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:52
+  "dbcf22f8e",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:40
+  "de37987d",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:56
+  "e26812b48",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:53
+  "e33fc801",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:117
+  "e523aacee1",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:31
+  "ea00d7c7",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:34
+  "ea4c42d4f8",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:51
+  "ea6ae394",  # blob（协作条目 oid）；引用见 docs/delivery-report-20261025-final.md:155
+  "ec6c8d88df",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:25
+  "ef4aa9b3",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:57
+  "f015343d",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:392
+  "f2da46e8d8",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:34
+  "f6509d9a",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:390
+  "fa86b35b51",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:46
+  "b42f20a8",  # 已不可解析（fold/GC 后的条目 oid）；引用见 docs/needs-human-20261023-night.md:38
+]
+
+[[non_ancestor_commits]]
+oid = "30c6de6f1"
+file = "docs/three-day-report-20261025.md"
+reason = "未合并分支的 head / 历史 tip：文档该处已显式标注「未合并」（docs/three-day-report-20261025.md 第 154,188,212 行）。合入后本条目会因 rot 检测转红，届时更新文档。"
+
+[[non_ancestor_commits]]
+oid = "911e17d8e"
+file = "docs/three-day-report-20261025.md"
+reason = "未合并分支的 head / 历史 tip：文档该处已显式标注「未合并」（docs/three-day-report-20261025.md 第 184,208 行）。合入后本条目会因 rot 检测转红，届时更新文档。"
+
+[[non_ancestor_commits]]
+oid = "b62c5c429"
+file = "docs/three-day-report-20261025.md"
+reason = "未合并分支的 head / 历史 tip：文档该处已显式标注「未合并」（docs/three-day-report-20261025.md 第 210 行）。合入后本条目会因 rot 检测转红，届时更新文档。"
+
+# 本仓当前没有「不存在但必须引用」的路径；出现时在这里逐条登记（带 reason）。
+# [[external_paths]]
+# path = "docs/foo"
+# reason = "..."
+
+[[claims]]
+id = "delivery-report-cond6-freeze-baseline"
+file = "docs/delivery-report-20261025-final.md"
+# anchor 取**稳定部分**（命令本身），不含期望值——否则数字一变就变成 rot 而不是 claim-stale。
+anchor = "git diff --stat 6b3aee870 HEAD -- src/ sql/"
+title = "条件⑥ 冻结基线：git diff --stat 6b3aee870 HEAD -- src/ sql/ 为空"
+kind = "diff_empty"
+base = "6b3aee870"
+head = "HEAD"
+paths = ["src/", "sql/"]
+
+[[claims]]
+id = "needs-human-run3-list-count"
+file = "docs/needs-human-20261025.md"
+anchor = "bash tools/window/run_batch.sh --list"
+title = "owner 开窗勾选项：run_batch --list ⇒ 24（blocked 2 ⇒ 入批 22）"
+kind = "command_output"
+# `--list` 只读、<1s；`bash` 不可用时本门 fail-closed（rc=2，登记表 rot 文案里说明）。
+argv = ["bash", "tools/window/run_batch.sh", "--list"]
+expect = "场景数 24（blocked 2 ⇒ 入批 22）"
+
+# 做不到的形态：**显式登记，不假装覆盖**（卡 known_limits）。
+[[unsupported_claims]]
+form = "任意 shell 管道 / 重定向 / 多命令串联（如 `git log … | wc -l ⇒ 33`）"
+reason = "本门不解释 shell；要覆盖请把命令改成自身输出可比对串（kind=command_output）或按 diff_empty 的 name_regex 表达，不要指望本门解析管道"
+
+[[unsupported_claims]]
+form = "散文式断言（「已完成」「全绿」且无命令可复算）"
+reason = "「一段散文是否仍然为真」无法通用机判（卡 known_limits）——本门只做结构性、可证伪的检查，不做语义判断"
+
+[[unsupported_claims]]
+form = "需要真窗口 / 外部产物 / 网络的命令（goal_gate --full、run3 实跑、E:/tmp 产物哈希）"
+reason = "没有证据就不能判；本门在合并门上跑，不能起栈、不能依赖 E:/tmp"
+
+[[unsupported_claims]]
+form = "域外历史叙事文档里的过时数字（如 4 份旧报告仍写 `场景数 24（blocked 3 ⇒ 入批 21）`）"
+reason = "历史叙事文档不在判定域（它们引用的是当时的记录）——**本门 GREEN ≠ 全仓没有过时数字**，别把它当全仓保证"
