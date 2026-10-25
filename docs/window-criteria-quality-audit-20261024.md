@@ -20,11 +20,12 @@
 `r_category(ev) == "window_required"`（见 `tools/goal/goal_gate.py` 的 `r_category`/`classify_r_evidence`），
 语义是「有 `window_required=true` 登记 ⇒ 条件② PASS」，**不等于**「所有 `window_required=true` 的卡」。
 
+> 动态数字一律带「截至 `2a5101606` @ 2026-10-24 01:03:38」；重跑后桶大小可能变化。
+
 - 本快照下 `r_cards` 共 193 条，其中 `category == "window_required"` 的 **121 张**（卡面写的「约 122 张」，差 1 属快照时刻/归类漂移）；
 - 另有 **131 条**记录的 `window_required` 布尔为真，但其中 4 张已 `closed`、4 张 `not_in_board`、2 张被「最新 approve + `window_required=false` + 理由」改判为 `adjudicated` ⇒ 不计入本桶；
 - 桶内 121 张的 board 分布：`in-progress` 118、`needs-review` 2、`blocked` 1；`merged=true` 116、**未合并 5**（详见 §6-F1）。
 
-> 动态数字一律带「截至 `2a5101606` @ 2026-10-24 01:03:38」；重跑后桶大小可能变化。
 
 ## 2. 抽样规则（先定规则，后抽样）
 
