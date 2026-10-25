@@ -181,3 +181,5 @@
 - 部署件：只**只读**核对 `E:/MirServer/**/Server.conf:720-723`，未改、未起栈、未碰 mysqld。
 - 场景封存后 `--dry-run` 的 rc 由 0 变 2 是**设计内 BLOCKED**，不是回归；已在 §3 的三份文档中注明。
 - 未修：F1（另有建议卡）、§1.3 的 600/601 帧登记（600/601 已由 master `152d9e985` 前的两张卡完成）。
+
+> **交叉引用（2026-10-25）**：`docs/real-machine-fixtures-20261025.md` §4 与卡 `openmir2-mirflow-real-machine-prereqs` 用**另一条独立推导**（`MapItem.cs:41` 的 `ItemId` 赋值被注释、`Envirnoment.cs:88-92` 的 `ItemId==0` 门、`ground.rs:276` Rust 复刻同门）得出同一结论：**地面物品不可达，pickup 阶段无法在真机验证**。两条推导互为独立证据；任一事实变化时以工具 `--a2-evidence` 的 `REEVALUATE rc=2` 为准。

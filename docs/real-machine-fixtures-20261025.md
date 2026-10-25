@@ -15,7 +15,7 @@ characters_bagitem：46 个**槽位**，其中 `StdIndex<>0` 的**真物品 3 �
 > 口径提醒：冒烟证据文件里的「背包 1 行」是**帧基线**（`SM_BAGITEMS(201).series`）口径，不是 DB 行数；
 > DB 侧 `characters_bagitem` 恒有 46 个槽位，空槽 `StdIndex=0` **不算物品**（本工具按 `StdIndex<>0` 判）。
 
-Gold=0 ⇒ 买不了；背包只有 1 行 ⇒ 卖不出东西；没有地板物 ⇒ 捡物无物可捡；位置不在任何商店旁边
+Gold=0 ⇒ 买不了；背包 46 个槽位里 `StdIndex<>0` 的真物品 **3 件**（**不是「1 行」**——那是冒烟快照文件的帧基线字段，作者与 reviewer 均已订正）⇒ 可卖物品其实已备齐；没有地板物 ⇒ 捡物无物可捡（**结构性，见 §4**）；位置不在任何商店旁边
 ⇒ NPC 阶段还得多走一段路。本工具把这三件事（钱、货、位置）+ 一个**会发 643 的商店 NPC** 一次备好。
 
 ## 1. 红线与守卫（A4）
@@ -50,6 +50,8 @@ python -I -B tools/client/provision_real_machine_fixtures.py --apply \
 （`WHERE Id=? AND ChrName=? AND Gold=<before> AND MapName=<before>` 乐观锁）→ **再 SELECT 证结果**。
 报告里同时落 `before` / `after` / `statements` / `rollback`；任何一步失败 ⇒ 发 `ROLLBACK;`、
 `state=rolled_back`、rc=5（自检有对应牙）。
+
+> **顺序事实（reviewer-21 F4）**：`COMMIT` 发生在「写后再 SELECT 核对」**之前** ⇒ 若核对不等（`state=MISMATCH` rc=4），**库已经被改过**，此时需要**手动执行 `--rollback <报告>`** 才能回到 before。别把 rc=4 当成「事务已回滚」。
 
 **登录后核对（判据是客户端帧，不是 DB）**：
 
@@ -126,7 +128,13 @@ python -I -B tools/client/provision_real_machine_fixtures.py --rollback E:/tmp/f
 
 ```sh
 python -I -B tools/client/provision_real_machine_fixtures.py --gate     --db mir2_test_db_r --char aaa --map 3 --npc-script "盟重土城/药店" [--profile <profile.json>]
-```
+
+
+> **用法提醒（reviewer-20 N2）**：`--gate` **默认逐项全查，含 `floor_item`**，而 floor_item 结构性永远缺 ⇒ 不带 `--need` 的调用会**恒 rc=6**。窗口当天请用只针对三类可验动作的形态：
+> ```
+python -I -B tools/client/provision_real_machine_fixtures.py --gate --db mir2_test_db_r --char aaa --map 3 \n  --npc-script "盟重土城/药店" --need gold --need sellable_item --need npc --need monsters
+> ```
+> pickup 那档按裁决记为**结构性不可达**（见 §4），不进窗口判据。```
 
 输出（实测，2026-10-25，只读）：
 
