@@ -444,11 +444,18 @@ def masked_column_checks(fq, cols, a_rows, b_rows, masked, records,
         if "nonzero_both_sides" in checks:
             na, nb = len(occ["a"]), len(occ["b"])
             if na == 0 or nb == 0 or na != nb:
+                # 可诊断性（reviewer-20 要求）：两种形态分开写——「两侧都空」不是「一侧没写」。
+                if na == 0 and nb == 0:
+                    why = ("**整列无占用**（a=0、b=0）⇒ 掩码无意义/夹具不真实"
+                           "（真机此列恒有占用槽；若真是合法的「角色无背包物品」场景，"
+                           "应显式登记 per-scenario 豁免，而不是削弱这条牙）")
+                else:
+                    why = ("**一侧没写或两侧不等**（a=%d、b=%d）⇒ 真放水"
+                           "（掩码会把「这列根本没被写」永久藏起来）" % (na, nb))
                 records.append({"table": fq, "kind": "masked_column_violation",
                                 "column": col, "check": "nonzero_both_sides",
                                 "occupied_a": na, "occupied_b": nb,
-                                "detail": "%s.%s 的**占用槽**两侧不等或为 0（a=%d、b=%d）"
-                                          "⇒ 掩码放水（某一侧可能根本没写）" % (fq, col, na, nb)})
+                                "detail": "%s.%s %s" % (fq, col, why)})
         if "distinct_per_player" in checks and group_by and group_by in idx:
             # **不是「全不相同」**：真机上同一 PlayerId 会有合法重复（同名/同批生成的物品共享
             # MakeIndex；实测 run2 login_only 的 PlayerId=6227 有 28 个占用槽、25 个不同值）。
@@ -1632,6 +1639,20 @@ def cmd_selftest(args):
                               "--baseline-a", before_d, "--baseline-b", before_d,
                               "--quiet", "--jsonl", ""])
         rc_cli_plain = main(["diff", after_chg, diff_dirs, "--quiet", "--jsonl", ""])
+        # 牙：合成夹具填**非零占用槽但全填同一个常量** ⇒ `distinct_per_player` 必须红
+        # （卡 `openmir2-db-makeindex-mask` 的 post-merge 修复：证明「把夹具改真实」没有顺手把牙绕过去）。
+        const_dir = os.path.join(tmp, "mc-const")
+        write_snapshot(const_dir, {"mir2_db.characters_bagitem":
+                                   [_bag(1, 0, 5001), _bag(2, 1, 5001)]})
+        rc_c_, recs_c_, _ = run_pair(const_dir, const_dir, quiet=True, masked_columns=mc)
+        viol_c = [r for r in recs_c_ if r.get("kind") == "masked_column_violation"
+                  and r.get("check") == "distinct_per_player"]
+        okc = rc_c_ == 1 and bool(viol_c)
+        passed += 1 if okc else 0
+        failed += 0 if okc else 1
+        print("%s %-42s rc=%d viol=%d（占用槽非零但同一常量 5001/5001）"
+              % ("PASS" if okc else "FAIL", "masked_distinct_per_player_constant", rc_c_, len(viol_c)))
+
         ok11 = rc_cli_masked == 0 and rc_cli_plain == 1
         passed += 1 if ok11 else 0
         failed += 0 if ok11 else 1

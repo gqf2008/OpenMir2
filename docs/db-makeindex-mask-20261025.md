@@ -169,3 +169,29 @@ python -I -B tools/conformance/compare_runs.py --oracle <run2>/<场景>/csharp  
 - **不掩帧面**：只动 DB 列；`SM_ADDITEM(200)`/`SM_BAGITEMS(201)` 的 `MakeIndex` 判据（规则表 `bagitems_records`）未改。
 - **不顺手掩其它列**：`masked_columns` 只登记了 `characters_bagitem.MakeIndex`；新增列必须同样带 reason/ref/牙。
 - 未做：真机复跑（本卡纯工具面；将来有「新生成物品」的窗口证据时，掩码才会真正生效）。
+
+## 9. Post-merge 修复：合成夹具不真实（master 红 `card_window --selftest` 412/435）
+
+**症状**：master `60051a068` 上 `card_window --selftest` **412/435**，23 条「期望 PASS」的用例变成 FAIL。
+失败记录统一是 `{"check":"nonzero_both_sides","column":"MakeIndex","table":"mir2_db.characters_bagitem","occupied_a":0,"occupied_b":0}`。
+
+**根因**（不是判据过严）：`card_window` 自测桩写出的合成 DB 快照是一行 `MakeIndex = 0` 的**空壳行**，
+而 `nonzero_both_sides` 的语义就是「**声明了掩码，就要证明这一列真的被填过**」。真机上此列**永远有占用槽**
+（`run2` 六场景各 **6938**、`e23` **6939**），0/0 只可能出现在合成夹具里 ⇒ **撞到它说明夹具不真实**。
+
+**修法**：只改**夹具**，`masked_column_checks` 的语义**一行不动**（没有放宽 `require`、没有加「仅真实 dbsnap 生效」
+的环境开关——那会让自测与真实路径行为分叉）：
+
+- `tools/conformance/card_window.py` 的自测桩：`characters_bagitem` 那一行改成 **`MakeIndex = 5001`**（非零占用槽），行数仍为 1；
+- **牙**（`dbsnap_pair` selftest 新增 `masked_distinct_per_player_constant`）：合成夹具填**非零占用槽但全填同一个常量**
+  （`5001/5001`）⇒ `distinct_per_player` **必须红**（`rc=1`、2 条 violation）。这条用来区分「把夹具改真实」与
+  「顺手把牙绕过去」——后者在这颗牙下会立刻暴露。
+- **可诊断性**：`nonzero_both_sides` 的 violation 文案拆成两种——`na == 0 and nb == 0` ⇒
+  「**整列无占用** ⇒ 掩码无意义/夹具不真实」；否则 ⇒ 「**一侧没写或两侧不等**（真放水）」。
+
+**运维后果（必须记住）**：这条牙是**全局登记**（`rules.json` 的 `db.masked_columns`），所以
+**任何「该列整列为空」的场景都会 fail-closed**。当前真实数据不会触发；将来若出现**合法**的
+「角色无背包物品」场景，**正确处置是显式登记 per-scenario 豁免（带 reason/ref）**，
+而不是削弱这条牙——削弱等于允许「一个从来没被写过的列被永久掩掉」。
+
+**回归证据**：`card_window --selftest` **435/435 GREEN**；`dbsnap_pair selftest` **36/36 GREEN**。
