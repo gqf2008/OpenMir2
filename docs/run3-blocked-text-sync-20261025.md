@@ -13,7 +13,7 @@
 |---|---|---|
 | #21 `butch_two_draws` | 「能力齐（活体夹具 + kill 步 + C# RNG 接线），只缺一次实操」 | **真因=刷怪顺序**：夹具行被 `head + append` 落到 `MonGen.txt` **表尾**，`RegenMonstersTime=200ms` 且 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 3081 行一轮 ≈ **616s** ≫ 本行 60s ⇒ `kill` 步稳定 `no target frames`。解封=**前置插入**（`openmir2-fixture-monsters-prepend`） |
 | #22 `castle_merchant_tax` | 「买武器腿需 652 解码；**W-TAX-4 SaveTick 不落盘**」 | ① 买武器腿缺 **652 ClientItem buffer 解码**（`MakeIndex = GetItemNumber()` 运行时计数，645 不含）；② **「SaveTick/600s 门不可观测」已证伪**（SaveTick 只写时间戳；`ConsoleShowUserCountTime` 可被 profile 覆盖到 5s）；**真缺口=税入账原因未定位** |
-| #24 `castle_merchant_tax_upgrade` | 「run3 内置 profile 不能声明 config_overrides ……用自定义 profile 可手工跑」 | **「不能进批」已证伪**（`extra` 拼在 `--profile` 之后 + `load_profile` 收 JSON 路径）；剩余缺口 = NPC 寻址的**对象类别校验**与 `SM_DISAPPEAR` 剔除（后续卡 `openmir2-probe-npc-addressing-followups`，未合）。profile 预置已入库（本卡），**尚未接入 run3** |
+| #24 `castle_merchant_tax_upgrade` | 「run3 内置 profile 不能声明 config_overrides ……用自定义 profile 可手工跑」 | **「不能进批」已证伪**（`extra` 拼在 `--profile` 之后 + `load_profile` 收 JSON 路径）；NPC 寻址的**对象类别校验**与 `SM_DISAPPEAR` 剔除已由 `openmir2-probe-npc-addressing-followups` 合入（`c5ec908e1`）。profile 预置已入库（本卡）。 |
 
 NPC 寻址能力本身已合入（`openmir2-probe-npc-discovery` @ `ee1a0a18f`）；#24 剩余动作 = 另一张卡清两处 blocked + 接 `extra`。
 
