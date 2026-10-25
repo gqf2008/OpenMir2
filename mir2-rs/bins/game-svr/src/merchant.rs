@@ -434,9 +434,11 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
             }];
         }
         let mut world = mir2_world::World::new(64, 64);
+        // DuraMax 必须 >0：`AddItemToGoodsList` 对 `Dura == 0` 直接丢。
         world.set_item_catalog(vec![StdItem {
             name: "potion".to_string(),
             price: 10,
+            dura_max: 10,
             ..StdItem::default()
         }]);
         let mut displays = DisplayTable::new();
@@ -445,9 +447,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
         assert_eq!(kept, 2);
         assert!(failed.is_empty());
         for id in world.merchant_ids_sorted() {
-            let groups = world
-                .merchant_goods_groups(id)
-                .expect("商人状态存在");
+            let groups = world.merchant_goods_groups(id).expect("商人状态存在");
             assert_eq!(groups.len(), 1, "每条 [goods] ⇒ 1 组（挂图后即装货）");
             assert_eq!(groups[0].len(), 2, "组内条数 = 声明 count");
         }

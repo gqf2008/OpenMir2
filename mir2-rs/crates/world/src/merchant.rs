@@ -1911,9 +1911,24 @@ mod tests {
     #[test]
     fn merchant_refill_goods_now_fills_goods_list_at_spawn() {
         let mut w = World::new(20, 20);
-        w.set_item_catalog(upgrade_catalog());
-        let name1 = w.std_item_by_idx(1).expect("目录第 1 项").name.clone();
-        let name2 = w.std_item_by_idx(2).expect("目录第 2 项").name.clone();
+        // 用两份**非零 DuraMax** 的药：`AddItemToGoodsList` 对 `Dura == 0` 直接丢，
+        // 首饰类模板（DuraMax=0）会被静默丢弃，测不出「补完所有条」。
+        w.set_item_catalog(vec![
+            StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "魔法药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+        ]);
+        let name1 = "金创药(小量)".to_string();
+        let name2 = "魔法药(小量)".to_string();
         let mut sp = spawn_at(3, 4);
         sp.state.refill_goods = vec![
             MerchantGoods {
@@ -2534,11 +2549,13 @@ mod tests {
             StdItem {
                 name: "金创药(小量)".to_string(),
                 price: 100,
+                dura_max: 10,
                 ..StdItem::default()
             },
             StdItem {
                 name: "魔法药(小量)".to_string(),
                 price: 100,
+                dura_max: 10,
                 ..StdItem::default()
             },
         ];
@@ -2932,7 +2949,8 @@ mod tests {
             ..StdItem::default()
         }];
         let id = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
-        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
+        // 夹具 `[goods]` 的 `RefillTime=5`（分钟）⇒ 逐条门是 5min；Run 门 30s 只负责「多久检查一次」。
+        w.clock_ms = 5 * 60 * 1000 + 1;
         set_run_tick_stale(&mut w, id);
         let out = merchant_run(&mut w, id);
         assert!(out.refilled, "到期应补货");
@@ -2962,9 +2980,9 @@ mod tests {
         for i in 0..7 {
             w.merchant_add_item_to_goods_list(id, item(1, 100 + i, 5));
         }
-        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
+        w.clock_ms = 5 * 60 * 1000 + 1; // 夹具 `[goods]` 的 RefillTime=5min
         set_run_tick_stale(&mut w, id);
-        // oracle `<` 支不 `return`（继续循环）⇒ `refilled` 为 false，库存被删到目标 5。
+        // 旧实现 `<` 支不 `return` ⇒ `refilled` 为 false；现在 `refilled` 反映「有任何变动」。
         let _ = merchant_run(&mut w, id);
         assert_eq!(w.merchant_goods_count(id, 1), 5, "删到目标 5 件");
     }
