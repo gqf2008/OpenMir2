@@ -96,9 +96,6 @@ pub const MERCHANT_TURN_RANDOM_MOD: i32 = 50;
 /// `Merchant.Run` 的转向方向：`RandomByte(8)`（`Merchant.cs:134`）。
 pub const MERCHANT_TURN_DIR_MAX: u8 = 8;
 
-/// `Merchant.Run` 的补货延时步长：`ProcessRefillIndex * 500` ms（`Merchant.cs:117`）。
-pub const MERCHANT_REFILL_DELAY_STEP_MS: i64 = 500;
-
 /// `Merchant` 脚本头 `(...)` 命令位（`ScriptFlagConst`；与 `crates/script::MerchantFlags` 同形）。
 ///
 /// `crates/world` **不依赖** `crates/script`（模拟层不引脚本引擎）⇒ 本片定义同形结构，
@@ -532,6 +529,27 @@ impl World {
         }
     }
 
+    /// `Merchant.RefillGoodsItems`（`Merchant.cs:300-316`）：补货路径**无条件** `Insert(0)`。
+    ///
+    /// 与 [`World::merchant_add_item_to_goods_list`]（卖出回货架，`Merchant.cs:1417-1426`，
+    /// 对 `Dura <= 0` 直接 return）**不同**：补货**不过** `Dura` 过滤——冻结数据
+    /// `Market_Def/沙巴克/药店-0153.txt` 的 14 条 `[goods]` 里有 8 条 `DuraMax=0`
+    /// （包 13/14/15/16、超级金创药 17、超级魔法药 18、太阳水 23、强效太阳水 24），
+    /// 走带过滤的那条会静默丢掉 ⇒ `645` 会 `param=6` 而不是 C# 的 14。
+    pub fn merchant_refill_goods_items(&mut self, id: i32, item: MerchantItem) {
+        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+            return;
+        };
+        match st
+            .goods_list
+            .iter_mut()
+            .find(|g| g.first().is_some_and(|it| it.index == item.index))
+        {
+            Some(group) => group.insert(0, item),
+            None => st.goods_list.push(vec![item]),
+        }
+    }
+
     /// `ClientBuyItem` 的取件：`list20.RemoveAt(j)`，空组再 `GoodsList.RemoveAt(i)`
     /// （`Merchant.cs:1269-1273`）。返回被取走的库存件；`group`/`item` 越界 ⇒ `None`。
     pub fn merchant_take_goods_item(
@@ -791,8 +809,6 @@ pub struct MerchantRunOutcome {
     pub space_moved: bool,
     /// 本趟触发了补货（`RefillGoods` 有 due 条目且命中 `>` 分支）。
     pub refilled: bool,
-    /// 本趟补货门的 `dwDelayTick`（`ProcessRefillIndex * 500`；证据用）。
-    pub refill_delay_ms: i64,
 }
 
 /// `ProcessMerchants` 一趟的结果（`World::tick` 写进 [`crate::world::TickRecord`]）。
@@ -1527,7 +1543,6 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
             st.refill_goods_tick = now;
         }
         outcome.refilled = refill_goods(world, actor_id);
-        outcome.refill_delay_ms = 0;
     }
     // `Merchant.cs:126-131`：清理门（`ClearExpreUpgradeListData`）。
     //
@@ -1705,7 +1720,8 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
                     // `CheckItemPrice(nIndex)`（`ItemPriceList` 空 ⇒ no-op）。
                     for _ in 0..(target - n_refill_count) {
                         if let Some(item) = world.make_merchant_item_by_name(&item_name) {
-                            world.merchant_add_item_to_goods_list(actor_id, item);
+                            // oracle `RefillGoodsItems`：**无条件 Insert(0)**（不过 Dura 过滤）。
+                            world.merchant_refill_goods_items(actor_id, item);
                         }
                     }
                     changed = true;
@@ -1908,6 +1924,65 @@ mod tests {
     /// 旧行为：`spawn_merchant` 后货架为空（只有 `Run` 的 30s 计时支会补）⇒ 进图几秒内
     /// `SM_SENDGOODSLIST(645)` 是空货架。牙：把 `merchant_refill_goods_now` 的调用删掉/改成 no-op，
     /// 本用例最后一个断言必红。
+    /// 卡 `openmir2-castle-potion-buy-response` **P2**：补货**不过** `Dura` 过滤。
+    ///
+    /// 用**真实药店分布**（`Market_Def/沙巴克/药店-0153.txt` 的 14 条 `[goods]`）：
+    /// 前 6 条模板 `DuraMax=1`（金创药/魔法药 小/中量、强效金/魔法药），
+    /// 后 8 条 `DuraMax=0`（金创药(小)包/魔法药(小)包/金创药(中)包/魔法药(中)包、
+    /// 超级金创药/超级魔法药、太阳水/强效太阳水）。
+    /// 若补货误走 `merchant_add_item_to_goods_list`（`Dura==0` 直接丢）⇒ 只剩 6 组 ⇒
+    /// 本断言（恰好 14 组）必红——reviewer-21 实测 `left: 6, right: 14`。
+    #[test]
+    fn merchant_refill_keeps_zero_dura_goods_groups() {
+        const DURA_ONE: [&str; 6] = [
+            "金创药(小量)",
+            "魔法药(小量)",
+            "金创药(中量)",
+            "魔法药(中量)",
+            "强效金创药",
+            "强效魔法药",
+        ];
+        const DURA_ZERO: [&str; 8] = [
+            "金创药(小)包",
+            "魔法药(小)包",
+            "金创药(中)包",
+            "魔法药(中)包",
+            "超级金创药",
+            "超级魔法药",
+            "太阳水",
+            "强效太阳水",
+        ];
+        let mut w = World::new(20, 20);
+        let mut catalog = Vec::new();
+        let mut refill = Vec::new();
+        for (names, dura_max) in [(DURA_ONE.as_slice(), 1u16), (DURA_ZERO.as_slice(), 0u16)] {
+            for name in names {
+                catalog.push(StdItem {
+                    name: (*name).to_string(),
+                    price: 10,
+                    dura_max,
+                    ..StdItem::default()
+                });
+                refill.push(MerchantGoods {
+                    item_name: (*name).to_string(),
+                    count: 3,
+                    refill_time: 0,
+                    refill_tick: 0,
+                });
+            }
+        }
+        w.set_item_catalog(catalog);
+        let mut sp = spawn_at(3, 4);
+        sp.state.refill_goods = refill;
+        let id = w.spawn_merchant(sp).expect("挂图成功");
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        assert_eq!(
+            w.merchant_goods_groups(id).expect("商人状态").len(),
+            14,
+            "真实药店 14 条 [goods]（6×DuraMax=1 + 8×DuraMax=0）必须成 14 组"
+        );
+    }
+
     #[test]
     fn merchant_refill_goods_now_fills_goods_list_at_spawn() {
         let mut w = World::new(20, 20);
