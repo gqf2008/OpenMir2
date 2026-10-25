@@ -530,10 +530,19 @@ mod tests {
             Some(("3".to_string(), 845, 674)),
             "PvpLevel>=2 ⇒ RedHome*"
         );
-        // 大小写不敏感（oracle `StringComparison.OrdinalIgnoreCase`）
+        // 大小写不敏感（oracle `StringComparison.OrdinalIgnoreCase`）：**条目小写、查询大写**，
+        // 写回的是**条目**里的名字（不是查询串）。
+        // 红检：`eq_ignore_ascii_case` → `==` ⇒ 本断言必红（旧写法两侧同为 `b013`，变异后仍绿 = 空转）。
+        let sp_case = parse_start_points("b013 7 9\n");
         assert_eq!(
-            get_start_point(0, "b013", &parse_start_points("b013 7 9\n"), "3", 845, 674),
+            get_start_point(0, "B013", &sp_case, "3", 845, 674),
             Some(("b013".to_string(), 7, 9))
+        );
+        // 负例：只有「仅大小写不同」才算命中（名字真不同 ⇒ 不写）。
+        assert_eq!(
+            get_start_point(0, "B014", &sp_case, "3", 845, 674),
+            None,
+            "名字真不同 ⇒ 不得命中（防「大小写比较被写成恒真」）"
         );
     }
 }

@@ -1074,9 +1074,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 registry,
                 EnterConfig {
                     home_start_points: home_fallback.start_points.clone(),
-                    red_home_map: cfg.red_home_map.clone(),
-                    red_home_x: cfg.red_home_x,
-                    red_home_y: cfg.red_home_y,
                     guild_store: Some(mir2_data::guild::GuildStore::new(
                         &guild_castle_cfg.guild_dir,
                         &guild_castle_cfg.guild_file,
@@ -9304,7 +9301,10 @@ fn apply_get_start_point_to_record(
     red_home_x: i16,
     red_home_y: i16,
 ) -> bool {
-    let pvp = u8::try_from(rec.data.pk_point.max(0) / 100).unwrap_or(255);
+    // `PvpLevel()`（`PlayObject.cs:4352-4355`）= C# `(byte)(PkPoint / 100)`：除法向零截断、
+    // 强转 **unchecked 取低 8 位**（负值 ⇒ 231..255 仍红名；25600 ⇒ 256&0xFF = 0 不红）。
+    // `rem_euclid(256)` 与 unchecked 强转逐位等价（`u8::try_from`/`max(0)` 在两侧边界都不是 oracle）。
+    let pvp = (rec.data.pk_point / 100).rem_euclid(256) as u8;
     match homemap::get_start_point(
         pvp,
         current_map,
@@ -9323,6 +9323,22 @@ fn apply_get_start_point_to_record(
     }
 }
 
+/// `PvpLevel() >= 2` 时 `GetStartPoint()` 用的红名回城点（`PlayObject.Base.cs:704-712`）。
+///
+/// oracle 的来源是 `SystemShare.Config.RedHome*`：`GameSvrConf.cs:1377-1379` 的 `3/845/674`
+/// **只是 ctor 默认值**，启动时由 `ServerConf.LoadConfig()`（`ServerConf.cs:136-138`）从
+/// `[Setup] RedHomeMap / RedHomeX / RedHomeY` 覆盖（`GameShare.cs:88-90` 调 `LoadConfig`）。
+/// 本仓唯一配置源 = [`mir2_envir::GameSvrConf`]（`crates/envir/src/conf.rs:305-307` 解析同键）⇒
+/// 这里只从 `enter_cfg.game_conf` 取，**game-svr 不再另存第二份**。
+/// `game_conf = None`（`Server.conf` 读不到，`lib.rs` 已记 WRN）⇒ 取 ctor 默认值 `3/845/674`
+/// （该情形 oracle 根本起不来，这里是宿主容错路径）。
+fn red_home_of(enter_cfg: &EnterConfig) -> (&str, i16, i16) {
+    match enter_cfg.game_conf.as_ref() {
+        Some(conf) => (conf.red_home_map.as_str(), conf.red_home_x, conf.red_home_y),
+        None => ("3", 845, 674),
+    }
+}
+
 /// 登录路径的 `GetStartPoint()` 包装（`PlayObject.cs:1199`）。**只有登录调用点用它**：
 /// 删掉那处调用 ⇒ 本函数变 `dead_code`，`clippy -D warnings` 直接红（行为牙之外的编译期守卫）。
 fn apply_get_start_point_on_login(
@@ -9330,13 +9346,14 @@ fn apply_get_start_point_on_login(
     current_map: &str,
     enter_cfg: &EnterConfig,
 ) -> bool {
+    let (red_home_map, red_home_x, red_home_y) = red_home_of(enter_cfg);
     apply_get_start_point_to_record(
         rec,
         current_map,
         &enter_cfg.home_start_points,
-        &enter_cfg.red_home_map,
-        enter_cfg.red_home_x,
-        enter_cfg.red_home_y,
+        red_home_map,
+        red_home_x,
+        red_home_y,
     )
 }
 
@@ -18492,10 +18509,6 @@ struct EnterConfig {
     /// `M2Share.StartPointList`（`Envir/StartPoint.txt`）：`GetStartPoint()` 的匹配表
     /// （`PlayObject.Base.cs:704-721`；登录 `PlayObject.cs:1199` + 3s `CheckDupObjTick` 支）。
     home_start_points: Vec<mir2_envir::startpoint::StartPoint>,
-    /// `Config.RedHomeMap/RedHomeX/RedHomeY`（oracle ctor 字面量 `3/845/674`），`PvpLevel>=2` 用。
-    red_home_map: String,
-    red_home_x: i16,
-    red_home_y: i16,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
     /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
@@ -18701,12 +18714,9 @@ impl EnterConfig {
             game_conf: None,
             castle_name_colors: mir2_world::castle::CastleNameColors::default(),
             red_die_home: mir2_world::castle::RedDieHome::default(),
-            // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint +
-            // oracle `GameSvrConf` ctor 字面量（`3/845/674`）。
+            // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint。
+            // RedHome* 不在这里存 —— 唯一配置源是 `game_conf`（`None` ⇒ ctor 默认值）。
             home_start_points: Vec::new(),
-            red_home_map: "3".to_string(),
-            red_home_x: 845,
-            red_home_y: 674,
             string_conf,
             show_rank_level_name: false,
             server_index: 0,
@@ -20325,14 +20335,15 @@ fn apply_get_start_point_after_tick(
             map_name.to_string(),
         ));
     }
+    let (red_home_map, red_home_x, red_home_y) = red_home_of(enter_cfg);
     let _ = apply_start_point_for_fired_players(
         now,
         &players,
         saves,
         &enter_cfg.home_start_points,
-        &enter_cfg.red_home_map,
-        enter_cfg.red_home_x,
-        enter_cfg.red_home_y,
+        red_home_map,
+        red_home_x,
+        red_home_y,
     );
 }
 
@@ -65386,6 +65397,43 @@ mod tests {",
         assert_eq!(
             (rec.data.home_map.clone(), rec.data.home_x, rec.data.home_y),
             (Some("9".to_string()), 845, 674)
+        );
+        // ④ `PvpLevel()` 的 C# 语义 = `(byte)(PkPoint / 100)`（`PlayObject.cs:4352-4355`，
+        //    unchecked 取低 8 位）：负值 ⇒ 231..255 仍红名；25600 ⇒ 256&0xFF = 0 不红。
+        //    红检：改回 `u8::try_from(pk_point.max(0)/100).unwrap_or(255)` ⇒ 下面两条必红。
+        rec.data.pk_point = -100;
+        assert!(
+            apply_get_start_point_to_record(&mut rec, "B013", &sp, "9", 845, 674),
+            "PkPoint=-100 ⇒ C# (byte)(-1)=255 ⇒ 走 RedHome 支"
+        );
+        rec.data.pk_point = 25600;
+        assert!(
+            !apply_get_start_point_to_record(&mut rec, "B013", &sp, "9", 845, 674),
+            "PkPoint=25600 ⇒ C# (byte)256=0 ⇒ 不走 RedHome 支"
+        );
+    }
+
+    /// **F1（review `e150bae9`）**：RedHome* 的**唯一**配置源是 `mir2_envir::GameSvrConf`
+    /// （oracle `ServerConf.cs:136-138` 读 `[Setup] RedHomeMap/RedHomeX/RedHomeY`），
+    /// 不是 game-svr 里的常量；`game_conf = None` 时才回落到 oracle ctor 默认值 `3/845/674`
+    /// （`GameSvrConf.cs:1377-1379`）。
+    ///
+    /// 牙：把 `red_home_of` 改成恒返回 `("3", 845, 674)`（= 旧实现写死常量）⇒ 第二条断言必红。
+    #[test]
+    fn red_home_comes_from_envir_conf_not_a_local_constant() {
+        let mut cfg = EnterConfig::for_test(crate::strings::StringConf::defaults());
+        assert_eq!(
+            red_home_of(&cfg),
+            ("3", 845, 674),
+            "无 Server.conf ⇒ oracle ctor 默认值"
+        );
+        cfg.game_conf = Some(mir2_envir::GameSvrConf::from_bytes(
+            b"[Setup]\nRedHomeMap=D701\nRedHomeX=5\nRedHomeY=6\n",
+        ));
+        assert_eq!(
+            red_home_of(&cfg),
+            ("D701", 5, 6),
+            "[Setup] 覆盖必须生效（不得是 game-svr 自带的常量）"
         );
     }
 
