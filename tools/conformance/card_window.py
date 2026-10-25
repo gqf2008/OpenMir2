@@ -2583,12 +2583,17 @@ def _selftest_inventory_reachability(tmp):
     scen_dir = os.path.join(here, "..", "probe", "scenarios")
     decl = {}
     have_replace = {}
+    bad_decl = {}
     prof_dir = os.path.join(here, "..", "window", "profiles")
     for name in ("bag_equip", "eat_item"):
+        # 卡 `openmir2-scenario-fixture-migration` F2：**「没有 inventory」与「inventory 声明坏」
+        # 必须分开**——前者迁移后合法（改由 profile 的 fixtures.inventory_replace），后者是真错，
+        # 混成同一个 None 会让自查牙变钝。
         try:
             decl[name] = scenario_inventory(os.path.join(scen_dir, name + ".json"))
-        except ConfigError:
+        except ConfigError as e:
             decl[name] = None
+            bad_decl[name] = str(e)
         # 卡 `openmir2-scenario-fixture-migration`：迁移后这两条改由 profile 的
         # `fixtures.inventory_replace` 声明（旧 `inventory` 通道在 46/46 满包上 fail-closed）。
         have_replace[name] = False
@@ -2601,9 +2606,11 @@ def _selftest_inventory_reachability(tmp):
                 have_replace[name] = bool(fx.get("inventory_replace"))
             except (OSError, ValueError):
                 have_replace[name] = False
-    out.append(((bool(decl.get("bag_equip")) or have_replace["bag_equip"])
+    out.append((not bad_decl
+                and (bool(decl.get("bag_equip")) or have_replace["bag_equip"])
                 and (bool(decl.get("eat_item")) or have_replace["eat_item"]),
-                "① bag_equip/eat_item 声明了 inventory 或 profile 的 fixtures.inventory_replace"))
+                "① bag_equip/eat_item 声明了 inventory 或 profile 的 fixtures.inventory_replace；"
+                "且没有坏的 inventory 声明（%s）" % (sorted(bad_decl) or "无")))
 
     class _DryRunner:
         dry_run = True

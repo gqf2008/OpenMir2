@@ -1,6 +1,10 @@
 # run3 场景夹具迁移（inventory → fixtures.inventory_replace）— 2026-10-25
 
 - 卡：`openmir2-scenario-fixture-migration`（tier **L**，owner `openmir2-dev-2`，branch `card/scenario-fixture-migration`）。
+- **一句话摘要**：本卡修的不是「夹具写法」，而是**发现的输入源**——旧 `inventory` 通道在
+  46/46 满包上写不进背包 ⇒ `SM_BAGITEMS(201)` 里没有该物品 ⇒ `make_index`/`item_name`/`takeon_where`
+  **推不出** ⇒ discovery 必失败；迁移到 `fixtures.inventory_replace` 后物品落在槽 40/41 ⇒ 201 带它 ⇒
+  派生成立（run3 不需要再加 `--var`）。
 - 背景（W1 的 B 类：「场景侧问题，不是 Rust 差异」）：
   - **#14 `bag_equip` / #15 `eat_item`** 仍走旧 `inventory` 通道；基线背包 **46/46 全占** ⇒
     旧通道在声明槽位时 fail-closed（「声明槽位里已有 1 行」）。
@@ -66,8 +70,8 @@ dry-run 实测（两侧都打）：
 
 | 项 | 结果 |
 |---|---|
-| `card_window.py --selftest` | **GREEN 397/397**（补丁应用后实测） |
-| `mir2_probe --selftest` | OK 19 checks |
+| `card_window.py --selftest` | **GREEN 435/435**（本 head 实测） |
+| `mir2_probe --selftest` | OK 21 checks（本 head 实测） |
 | 三场景 `--check-scenario` | 全 OK（bag/eat 带 `--var`；equip 7 步） |
 | `run_batch --list` | 24（blocked 3 ⇒ 入批 21），#14/#15 的 `extra` 显示 `--profile …` |
 | `blocked_sources_check check` | rc=0（两来源一致） |
