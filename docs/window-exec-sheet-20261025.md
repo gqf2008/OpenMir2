@@ -43,7 +43,7 @@
 
 | 项 | 为什么不可跑 | 解封条件 |
 |---|---|---|
-| `butch_two_draws`（run3 #21，清单标 `YES`） | **未跑真机整轮**——夹具、C# RNG 接线（`15dbbe843`）、**场景击杀步均已落地**（实验轮 `kill result=dead`、`matched_ident=34`，`E:/tmp/window/butch-run2`）；缺的只是**账本两抽**的窗口证据 | 跑一轮真机并采到账本（`@ 7181bac23`）：`Operate.cs:722 Random(16)` 与 `:723 Random(201)` **各 1 条**（**按 site 过滤**——真机账本里 `max=201` 另有 206 条来自 `MonGen.cs:815`）、`max=16` 在前、值域 `[5,20]`/`[100,300]`；**`SM_BUTCH(637)` 只作伴随**（`:749` 无条件发，不是成功判据）；跑完先看 `rng_log_trim.trimmed=false`（台账被裁 ⇒ 证据作废、**不得判 FAIL**）。判据工具 `tools/window/butch_ledger.py`、执行清单 `docs/butch-ledger-run-checklist-20261025.md`；源卡 `openmir2-butch-two-draws-unblock` |
+| `butch_two_draws`（run3 #21，清单标 `YES`） | **未跑真机整轮**——夹具、C# RNG 接线（`15dbbe843`）、**场景击杀步均已落地**（实验轮 `kill result=dead`、`matched_ident=34`，`E:/tmp/window/butch-run2`）；缺的只是**账本两抽**的窗口证据 | 跑一轮真机并采到账本（工具与清单见 `69bffc9b0`）：`Operate.cs:722 Random(16)` 与 `:723 Random(201)` **各 1 条**（**按 site 过滤**——真机账本里 `max=201` 另有 206 条来自 `MonGen.cs:815`）、`max=16` 在前、值域 `[5,20]`/`[100,300]`；**`SM_BUTCH(637)` 只作伴随**（`:749` 无条件发，不是成功判据）；跑完先看 `rng_log_trim.trimmed=false`（台账被裁 ⇒ 证据作废、**不得判 FAIL**）。判据工具 `tools/window/butch_ledger.py`、执行清单 `docs/butch-ledger-run-checklist-20261025.md`；源卡 `openmir2-butch-two-draws-unblock` |
 | `clearmapmon_t118`（**不在 run3**；**已定性永久不可达**，截至 `92682d3fb`） | ① `[@main]` 要 `checkitem 佛牌 1` + `checklevel 43`，但三库 `stditems` 均无「佛牌」、`characters.Level=1` 且 `ASSETS_COLUMNS` 无 `Level` ⇒ `@rw01` 对正常客户端**不可达**；② 同 seed（42/43）跨全新起栈 `movr` 实抽仍漂移 ⇒ 无稳定赢页 seed。**替代判据**：W-CM-1 = `clearmapmon_q001` 真机（#19）+ t118 构造级/单测覆盖（见台账第 4 行）。原 blocking 记录保留为历史 |
 
 **P0/P1 缺口的当前状态**（源：`docs/window-kit-coverage-20261025.md` §2 + 各修复卡）：

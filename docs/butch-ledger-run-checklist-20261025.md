@@ -4,6 +4,8 @@
 - 本文件是**离线准备件**：把真机那一轮要做什么、按什么顺序做、判据用哪条命令判，先写死；
   真机证据另存证据根，本文件不预填任何真机结论。
 - 状态：真机轮**未跑**（等窗口）。本文件与 `tools/window/butch_ledger.py` 均不含真机数据。
+- **tier = R**（编排方裁决 comment `506b61e4`；issue 原文写的 L **作废**，以该裁决为准——本卡已在
+  `goal_gate` 的 R 桶里，且产出 `window_required` 证据）。
 
 ## 1. 判据（唯一成功口径）
 
@@ -81,12 +83,28 @@ python -I -B tools/window/butch_ledger.py --selftest     # 5/5 GREEN
 `values.n10`/`values.meat`、`order_ok`、`sites`。
 
 **必须按 site 过滤**：`max=201` 在真机账本里有 **206 条来自 `MonGen.cs:815`**（run2 实测），
-只看 max 会把刷怪算成屠宰。Rust 侧对应站点今天是 `crates\world\src\world.rs:7756`（`max=16`）与 `:7757`
-（`max=201`）——**行号会随重构漂**，`EXPECT_LINE` 只是参考值，判据以 `site` 命中屠宰函数为准。
+只看 max 会把刷怪算成屠宰。
 
-自检牙（`--selftest`）：a 两抽成立（含 MonGen 干扰）、b 次序反 ⇒ FAIL、c `max=16` 两条 ⇒ FAIL、
-d 只有 MonGen ⇒ FAIL、e Rust 侧同口径。**变异**：把 site 过滤去掉 ⇒ a/d/e 三条同时红
-（说明「按 site 过滤」是承重逻辑，不是装饰）。
+**「命中屠宰函数」怎么判（两侧不同，别混）**：
+
+- **C#**：账本 site 形如 `Class.Method@File.cs:LINE`，**函数名本身就是身份** ⇒ 要求含
+  `ClientGetButchItem` 且文件名含 `PlayObject.Operate.cs`；
+- **Rust**：账本 site 只有 `file:line` ⇒ **必须把行号对到 `butch_effect_now` 的定义区间**（工具现场
+  解析 `mir2-rs/crates/world/src/world.rs`，括号配平取 span）。**今天**是 `:7756`（`max=16`）与
+  `:7757`（`max=201`），但**行号会漂**——判据是「落在 span 内」，不是钉死行号。
+  拿不到 span ⇒ **UNDECIDABLE**（不许退化成「文件对就行」：那正是 reviewer-21 的 F2——
+  `world.rs:1234` 这种同文件非屠宰行会被误判成 OK）。
+
+自检牙（`--selftest`，**12 颗**）：a 两抽成立（含 MonGen 干扰）、b 次序反 ⇒ FAIL、c `max=16` 两条 ⇒ FAIL、
+d 只有 MonGen ⇒ FAIL、e Rust 两抽落在 span 内 ⇒ OK、**f Rust 同文件但 span 外 ⇒ FAIL**（F2 的洞）、
+**g site 未开（4 列）⇒ UNDECIDABLE**（F1）、**h 账本有坏行 ⇒ UNDECIDABLE**（F3）、
+**i 拿不到 span ⇒ UNDECIDABLE**、j 仓库源码能解析出 butch 函数区间、
+**k 静态牙（Rust）**：剥注释与字符串、去掉 `#[cfg(test)]` 后，`random_below(16)`/`random_below(201)`
+全文件各恰 1 处且都在 butch 函数内（裸 grep 会误报——注释里就写着这两个串）、
+**l 静态牙（C#）**：屠宰函数内 `Random(16)`/`Random(201)` 各恰 1 处（文件内别处还有 `Random(201)`）。
+
+**退出码**：`0` = 两抽成立；`1` = 不成立（FAIL）；**`2` = 不可判**（site 未开 / 有坏行 / 拿不到 span）。
+**「不可判」不得写成 FAIL**——它与「行为不符」是两件事。
 
 ## 6. 这一轮要记进证据根的字段
 
