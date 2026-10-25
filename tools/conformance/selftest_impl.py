@@ -2755,6 +2755,74 @@ class Selftest(object):
                                       for u in (rep_ns or {}).get("undecidable", [])),
                    (rc_ns, (rep_ns or {}).get("undecidable")))
 
+        # ---- 掩码列 + 结构牙（卡 openmir2-db-makeindex-mask）----------------------
+        bag_cols = ["Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax"]
+
+        def bag_row(i_, pid, pos, mi):
+            return [str(i_), str(pid), str(pos), str(mi), "207", "4000", "4000"]
+
+        def bag_snap(prefix, rows):
+            return {"format": "dbsnap-inline/1",
+                    "tables": [{"table": prefix + ".characters_bagitem",
+                                "columns": bag_cols, "rows": [list(r) for r in rows]}]}
+
+        bag_ok = [bag_row(1, 1, 0, 101), bag_row(2, 1, 1, 102)]
+        odb = self.write_run("mi-o", frames, db=bag_snap("mir2_test_db", bag_ok))
+        rdb_ok = self.write_run("mi-r", frames, db=bag_snap("mir2_test_db_r", bag_ok))
+        rules_mi = json.loads(json.dumps(self.builtin_rules))
+        rules_mi.setdefault("db", {})["masked_columns"] = {
+            "mir2_db.characters_bagitem": {"MakeIndex": {
+                "reason": "selftest", "ref": "D-1 / whitelist.md:24", "group_by": "PlayerId",
+                "require": ["nonzero_both_sides", "distinct_per_player"]}}}
+        rules_no = json.loads(json.dumps(self.builtin_rules))
+        rules_no["db"] = {k: v for k, v in (rules_no.get("db") or {}).items()
+                          if k != "masked_columns"}
+        p_mi = self.rules_file("mi-mask.json", rules_mi)
+        p_no = self.rules_file("mi-nomask.json", rules_no)
+
+        rdb_diff = self.write_run("mi-r-diff", frames, db=bag_snap(
+            "mir2_test_db_r", [bag_row(1, 1, 0, 201), bag_row(2, 1, 1, 202)]))
+        rc_b, rep_b = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_no])
+        rc_a, rep_a = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_mi])
+        wl_a = [w for w in (rep_a or {}).get("whitelisted") or []
+                if w.get("kind") == "db_column_masked"]
+        self.check("牙MI-1 无掩码 ⇒ MakeIndex 差异出现（rc1）；加掩码 ⇒ 差异消失且 whitelisted 显式登记 D-1",
+                   rc_b == 1 and any(d.get("source") == "db"
+                                     for d in (rep_b or {}).get("diffs") or [])
+                   and rc_a == 0 and len(wl_a) == 1 and "D-1" in (wl_a[0].get("ref") or ""),
+                   (rc_b, rc_a, wl_a))
+
+        rdb_zero = self.write_run("mi-r-zero", frames, db=bag_snap(
+            "mir2_test_db_r", [bag_row(1, 1, 0, 0), bag_row(2, 1, 1, 0)]))
+        rc_z, rep_z = self.compare(odb, rdb_zero, ["--allow-missing-fields", "--rules", p_mi])
+        self.check("牙MI-2 一侧占用槽为 0 ⇒ nonzero_both_sides 判红（rc1）",
+                   rc_z == 1 and any(d.get("kind") == "masked_column_violation"
+                                     for d in (rep_z or {}).get("diffs") or []),
+                   (rc_z, (rep_z or {}).get("diffs")))
+
+        rdb_const = self.write_run("mi-r-const", frames, db=bag_snap(
+            "mir2_test_db_r", [bag_row(1, 1, 0, 777), bag_row(2, 1, 1, 777)]))
+        rc_c, rep_c = self.compare(odb, rdb_const, ["--allow-missing-fields", "--rules", p_mi])
+        self.check("牙MI-3 同一玩家两槽同值（常量填充）⇒ distinct_per_player 判红（rc1）",
+                   rc_c == 1 and any((d.get("record") or {}).get("check") == "distinct_per_player"
+                                     for d in (rep_c or {}).get("diffs") or []),
+                   (rc_c, (rep_c or {}).get("diffs")))
+
+        mi_same = [bag_row(1, 1, 0, 101), bag_row(2, 1, 1, 102)]
+        mi_changed = [bag_row(1, 1, 0, 901), bag_row(2, 1, 1, 102)]
+        decl_mi = {"MakeIndex": {"reason": "selftest", "ref": "D-1", "group_by": "PlayerId",
+                                 "require": ["changes_on_mutation"]}}
+        recs_same, recs_ch = [], []
+        dp.masked_column_checks("mir2_db.characters_bagitem", bag_cols, mi_same, mi_same,
+                                    decl_mi, recs_same, before_a=mi_same, before_b=mi_same)
+        dp.masked_column_checks("mir2_db.characters_bagitem", bag_cols, mi_same, mi_same,
+                                    decl_mi, recs_ch, before_a=mi_changed, before_b=mi_changed)
+        self.check("牙MI-4 before/after 有变化 ⇒ 通过；完全相同 ⇒ changes_on_mutation 判红",
+                   not any(r.get("kind") == "masked_column_violation" for r in recs_ch)
+                   and any(r.get("kind") == "masked_column_violation" for r in recs_same),
+                   (recs_same, recs_ch))
+
+
     def finish(self):
         total = len(self.passed) + len(self.failed)
         shutil.rmtree(self.root, ignore_errors=True)
