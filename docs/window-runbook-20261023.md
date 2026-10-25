@@ -911,6 +911,10 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 自述）。全量 ~90s：快循环用 `--only <改动的工具>`，交付前跑全量（**不许 `--skip` 掉慢项了事**）。
 CI 若加一项，用上面同一命令（不带 `--skip`）。
 
+**CI 已接**：`.walgit/ci.toml` 第 9 个 `fast-*` 任务 `fast-tool-selftest`
+（`command = "python -I -B tools/hygiene/tool_selftest_gate.py"`，`@hourly`，`refs=[refs/heads/master]`，
+`timeout = "8m"` = 87s 实测 + 门内单项上限 300s + 余量；`walgit ci validate` rc=0）。
+
 **与开窗自检的关系**：§0.5 / §2 的 `card_window --selftest` 单跑仍然有用（快、只查一个工具），但
 「计数变小」这类回归现在由本门统一兜住。门里的数字以**实跑**为准——本节上方旧段落里的 240/240、
 262/262 是 2026-10-24 的历史实测，不是当前期望值。
