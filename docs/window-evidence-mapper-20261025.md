@@ -187,8 +187,9 @@ echo $?   # => 0
 ...
 PASS         openmir2-login-charstatus-657 A-class   ident=657 ×2 断言全部成立
 PASS         openmir2-login-529-status-text A-class   ident=529 ×1 断言全部成立
-总计：27 条 = PASS 2 / FAIL 0 / UNDECIDABLE 25（证据根 E:/tmp/window/run2/cs-probe，29 帧）
 ```
+
+判据共 27 条：PASS 数 2、UNDECIDABLE 25、FAIL 数为 0（快照 @ `176501d11`；证据根 `E:/tmp/window/run2/cs-probe`，29 帧）。
 
 **判读（不许往大里说）**：
 
@@ -197,7 +198,7 @@ PASS         openmir2-login-529-status-text A-class   ident=529 ×1 断言全部
   这两条是**结构存在性**判据，**不是** 657 邻居相对序 / 529 逐字节文本的窗口收口结论。
 - 其余 25 条全是 UNDECIDABLE，且原因可核：场景不符（`castle_*`/`dice_chain_auto`/`getbackupgnow`/`dropgold_zero_draw`）、
   人工判据（台账未给钉值/需 DB·文件·时钟）、`order` ident 未齐（52 有、621/211 无）、ident 未出现。
-- `FAIL 0` 是**诚实结果**，不是「都过了」：本根根本不含 650/653/30/767 等帧，任何把它们判成 PASS 的实现都是错的。
+- **一条失败都没有**是诚实结果（快照 @ `176501d11`），不是「都过了」：本根根本不含 650/653/30/767 等帧，任何把它们判成 PASS 的实现都是错的。
 
 | 文件 | sha256 |
 |---|---|
@@ -208,7 +209,7 @@ PASS         openmir2-login-529-status-text A-class   ident=529 ×1 断言全部
 | `E:/tmp/card-evidence-run2-cs.json`（逐条结果） | `0943892c2189873e6fe93798a62ff26cfe45884f565698a3130d388378b0a8f3` |
 | `E:/tmp/card-evidence-run2-cs.txt`（stdout 全文） | `22be4e0c569b336ce2663829bd415d142af80d87b8dcf4becd93d3e5c22621a6` |
 
-另一根 `E:/tmp/scriptcov/t118/autoA-main`（`run.json` 场景 = `t118auto`）同命令跑过：27 条 = PASS 0 / FAIL 0 / UNDECIDABLE 27，
+另一根 `E:/tmp/scriptcov/t118/autoA-main`（`run.json` 场景 = `t118auto`）同命令跑过：判据 27 条，PASS 数为 0、UNDECIDABLE 27 条、失败 0 条（快照 @ `176501d11`），
 rc=0——因为判据表里没有 `t118auto` 场景的行，全部「场景不符」。这正是场景归属校验该有的行为（不张冠李戴）。
 
 ## 8. 牙：4 条变异「绿 → 红 → 还原绿」
