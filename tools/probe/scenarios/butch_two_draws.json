@@ -1,14 +1,12 @@
 {
   "name": "butch_two_draws",
   "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位；收官帧 `SM_BUTCH(637)`（33 需 BodyLeathery<=0，`PlayObject.Operate.cs:731-738`）。两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。**工具面已就绪**：kill 寻靶（`track: nearest:鸡`）+ 运行期令牌 `@last_kill_xy`（屠宰用的尸体格）。**剩余缺口 = 真机实测**，见 `blocked`。`target_xy` 仍是夹具落点（profile 把鸡刷在该格），kill 不再依赖它。",
-  "required": [
-    "target_xy"
-  ],
   "params": {
-    "self_pos": 21627210
+    "self_pos": 21627210,
+    "target_xy": 21692746
   },
   "blocked": {
-    "reason": "**工具面已齐，只差真机窗口**：走位由寻靶解决，屠宰坐标由 `@last_kill_xy` 解决；剩下的是一次真机实测（装备 → 寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本）。未打通前不得声称可跑。",
+    "reason": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合，首个闸门 StartTick==0 立即刷）。**剩余缺口 = 真机实测**（装备 Dc>0 → 寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本）。未打通前不得声称可跑。",
     "missing_fixture": "① 窗口按 port-status → stack-claim → 跑 → -Stop → stack-release；② 前置门 `Dc>0` 自证（装备后态快照）；③ 三段判据分开写：刷出（目标格活动帧）/ 命中扣血（SM_STRUCK 或 SM_HIT 计数）/ 死亡+637；④ 账本限时 ≤5 分钟并当场裁剪。"
   },
   "placement": {
@@ -27,7 +25,7 @@
         "interval_ms": 1000,
         "wait_ident": 34
       },
-      "note": "**击杀步（寻靶模式）**：目标会走位（鸡 `WalkStep=1`），固定格会空打 ⇒ 每轮按最新帧取目标当前格、出手前复核，走开就重算（`max_retries=3`）。`interval_ms=1000` 是下限以上的安全值：track 每轮 = 选靶→`CM_TURN`→pump→复核→`CM_HIT`→pump ⇒ 相邻 `CM_HIT` 真实间隔 ≈ 2×interval，必须高于部署 `HitIntervalTime=850`。"
+      "note": "**击杀步（寻靶模式）**：目标会走位（鸡 `WalkStep=1`），固定格会空打 ⇒ 每轮按最新帧取目标当前格、出手前复核，走开就重算（`max_retries=3`）。`interval_ms=1000` 是下限以上的安全值：track 每轮 = 选靶→`CM_TURN`→pump→复核→`CM_HIT`→pump ⇒ 相邻 `CM_HIT` 真实间隔 ≈ 2×interval，必须高于部署 `HitIntervalTime=850`。 **注意**：改用 track 后 `target_xy` **不再参与八向相邻校验**（假值也不会在加载期被拒），它只是窗口 profile 的夹具落点；鸡刷错位置会在 kill 的「目标与自身不八向相邻 ⇒ 需手动站位」处 fail-closed。"
     },
     {
       "send": {

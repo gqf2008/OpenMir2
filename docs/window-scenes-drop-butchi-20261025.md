@@ -183,7 +183,9 @@ SELECT Idx,Name,HP,AC,MAC,DC,DCMAX,SPEED,WalkStep FROM monsters WHERE WalkStep=0
      （数 `SM_HIT` 与实际 `CM_HIT` 发送数对比）；
    - **死亡 + 屠宰**：`SM_NOWDEATH(34)`/`SM_DEATH(32)`（`param/tag` = 目标格）⇒ `CM_BUTCH` ⇒ **`SM_BUTCH(637)`**
      （收官帧；33 需 `BodyLeathery<=0`，不是首刀判据） + 两抽（`Random(16)+5`、`Random(201)+100`）的 site/order；
-4. **`CM_BUTCH` 的坐标**依赖 §2c.4b 的方案 A（`@last_kill_xy`）——未解决前不要用 track 跑 butch；
+4. **`CM_BUTCH` 的坐标**由 §2c.4b 的方案 A 解决（`@last_kill_xy`，已随 probe 卡合入）：场景已改为
+   **kill 用 track + `CM_BUTCH recog=@last_kill_xy`**，`--check-scenario` rc 0；`target_xy` 只剩
+   「夹具落点」语义，**不再参与八向相邻校验**（鸡刷错位置会在 kill 处 fail-open 到 StepFailure）；
 5. 账本限时（≤5 分钟）并当场裁剪。
 
 ## 3. run3 注册（只追加两行）
@@ -201,9 +203,15 @@ SELECT Idx,Name,HP,AC,MAC,DC,DCMAX,SPEED,WalkStep FROM monsters WHERE WalkStep=0
 ```text
 $ bash tools/window/run_batch.sh --list
 ...
-21  butch_two_draws      alt           YES      | blocked: 无「单只固定动物尸体」夹具 + RNG 面未接线（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）
-场景数 21（blocked 1 ⇒ 入批 20）
+21  butch_two_draws      alt           YES      | blocked: **已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 ProcessMonsterMultiThreadLimit 未配=1 ⇒ 60s 内轮不到追加行）；**剩余缺口 = 真机实测**
+22  castle_merchant_tax  alt           YES      | blocked: ...
+23  castle_merchant_tax_potion …
+24  castle_merchant_tax_upgrade …
+场景数 24（blocked 3 ⇒ 入批 21）
 ```
+
+（文案与场景 JSON 的 `blocked.reason` **同源**：`blocked_sources_check` 要求两侧含齐
+`3081` / `616` / `ProcessMonsterMultiThreadLimit` 三个 token，改一侧必须同步另一侧。）
 
 ## 4. 依赖与降级总表
 

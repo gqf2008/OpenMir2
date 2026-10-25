@@ -3,32 +3,176 @@
   "card": "openmir2-window-run-2",
   "note": "run3 一键续跑的固定 17 场景清单：`pickup_item` 已封存为结构性不可判（T-19/T-25），不进入窗口；顺序 = window-run-2 batch.log 的实际执行顺序去掉 pickup_item 后重排为 1..17。extra 是 card_window.py 的参数（原样追加）。升级场景 upgrade_retrieve 必须 --timeout-ms 720000（场景第 9 步 sleep 660000，默认 20000 会 180s 杀 probe）。",
   "scenarios": [
-    {"n": 1,  "name": "login_only",        "profile": "alt",          "extra": []},
-    {"n": 2,  "name": "npc_click_auto",    "profile": "alt",          "extra": []},
-    {"n": 3,  "name": "npc_click",         "profile": "alt",          "extra": []},
-    {"n": 4,  "name": "dice_chain_auto",   "profile": "alt",          "extra": []},
-    {"n": 5,  "name": "dice_chain",        "profile": "alt",          "extra": []},
-    {"n": 6,  "name": "gm_time",           "profile": "alt",          "extra": []},
-    {"n": 7,  "name": "gm_batch",          "profile": "alt",          "extra": []},
-    {"n": 8,  "name": "move_walk",         "profile": "alt",          "extra": []},
-    {"n": 9,  "name": "merchant_dialog",   "profile": "alt",          "extra": []},
-    {"n": 10, "name": "king_dialog",       "profile": "alt",          "extra": ["--discovery-scenario", "tools/probe/scenarios/npc_click_king.json"]},
-    {"n": 11, "name": "king_castle_war",   "profile": "alt",          "extra": ["--discovery-scenario", "tools/probe/scenarios/npc_click_king.json"]},
-    {"n": 12, "name": "npc_script_chain",  "profile": "alt",          "extra": ["--discovery-scenario", "tools/probe/scenarios/npc_click_elder.json"]},
-    {"n": 13, "name": "equip_struck_save", "profile": "alt",          "extra": []},
-    {"n": 14, "name": "bag_equip",         "profile": "alt",          "extra": ["--profile", "tools/window/profiles/bag_equip.json"]},
-    {"n": 15, "name": "eat_item",          "profile": "alt",          "extra": ["--profile", "tools/window/profiles/eat_item.json"]},
-    {"n": 16, "name": "spell_cast",        "profile": "window-magic", "extra": []},
-    {"n": 17, "name": "upgrade_retrieve",  "profile": "alt",          "extra": ["--timeout-ms", "720000"]},
-    {"n": 18, "name": "gamepoint_exchange", "profile": "alt",         "extra": []},
-    {"n": 19, "name": "clearmapmon_q001",     "profile": "alt",          "extra": []},
-    {"n": 20, "name": "dropgold_zero_draw", "profile": "alt",        "extra": []},
-    {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": ["--timeout-ms", "60000"],
-     "blocked": "**真因：夹具行被追加到 MonGen.txt 表尾——3081 行 × RegenMonstersTime=200ms ≈616s，且部署 ProcessMonsterMultiThreadLimit 未配=1 ⇒ 60s 内轮不到追加行**。解封=前置插入（卡 openmir2-fixture-monsters-prepend），不是加大超时（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）"},
-    {"n": 22, "name": "castle_merchant_tax", "profile": "alt",       "extra": [],
-     "blocked": "① 买武器腿缺 652 ClientItem buffer 解码取 MakeIndex（645 不含，运行时计数推不出）；②「SaveTick/600s 门不可观测」已证伪（SaveTick 只写时间戳，ConsoleShowUserCountTime 可被 profile 覆盖到 5s）；**真缺口=税入账原因未定位**。买药腿已由 #23 覆盖（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
-    {"n": 23, "name": "castle_merchant_tax_potion", "profile": "alt", "extra": ["--timeout-ms", "700000"]},
-    {"n": 24, "name": "castle_merchant_tax_upgrade", "profile": "alt", "extra": [],
-     "blocked": "**「不能进批」已证伪**（extra 拼在 --profile 之后 + load_profile 收 JSON 路径）；NPC 寻址的对象类别校验与 SM_DISAPPEAR 剔除已由 openmir2-probe-npc-addressing-followups 合入 c5ec908e1。profile 预置 tools/window/profiles/castle_tax_upgrade.json 尚未接入 run3（详见 tools/probe/scenarios/castle_merchant_tax_upgrade.json 的 blocked）"}
+    {
+      "n": 1,
+      "name": "login_only",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 2,
+      "name": "npc_click_auto",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 3,
+      "name": "npc_click",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 4,
+      "name": "dice_chain_auto",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 5,
+      "name": "dice_chain",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 6,
+      "name": "gm_time",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 7,
+      "name": "gm_batch",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 8,
+      "name": "move_walk",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 9,
+      "name": "merchant_dialog",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 10,
+      "name": "king_dialog",
+      "profile": "alt",
+      "extra": [
+        "--discovery-scenario",
+        "tools/probe/scenarios/npc_click_king.json"
+      ]
+    },
+    {
+      "n": 11,
+      "name": "king_castle_war",
+      "profile": "alt",
+      "extra": [
+        "--discovery-scenario",
+        "tools/probe/scenarios/npc_click_king.json"
+      ]
+    },
+    {
+      "n": 12,
+      "name": "npc_script_chain",
+      "profile": "alt",
+      "extra": [
+        "--discovery-scenario",
+        "tools/probe/scenarios/npc_click_elder.json"
+      ]
+    },
+    {
+      "n": 13,
+      "name": "equip_struck_save",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 14,
+      "name": "bag_equip",
+      "profile": "alt",
+      "extra": [
+        "--profile",
+        "tools/window/profiles/bag_equip.json"
+      ]
+    },
+    {
+      "n": 15,
+      "name": "eat_item",
+      "profile": "alt",
+      "extra": [
+        "--profile",
+        "tools/window/profiles/eat_item.json"
+      ]
+    },
+    {
+      "n": 16,
+      "name": "spell_cast",
+      "profile": "window-magic",
+      "extra": []
+    },
+    {
+      "n": 17,
+      "name": "upgrade_retrieve",
+      "profile": "alt",
+      "extra": [
+        "--timeout-ms",
+        "720000"
+      ]
+    },
+    {
+      "n": 18,
+      "name": "gamepoint_exchange",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 19,
+      "name": "clearmapmon_q001",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 20,
+      "name": "dropgold_zero_draw",
+      "profile": "alt",
+      "extra": []
+    },
+    {
+      "n": 21,
+      "name": "butch_two_draws",
+      "profile": "alt",
+      "extra": [
+        "--timeout-ms",
+        "60000"
+      ],
+      "blocked": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合，首个闸门 StartTick==0 立即刷）。**剩余缺口 = 真机实测**（装备 Dc>0 → 寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本）。未打通前不得声称可跑。"
+    },
+    {
+      "n": 22,
+      "name": "castle_merchant_tax",
+      "profile": "alt",
+      "extra": [],
+      "blocked": "① 买武器腿缺 652 ClientItem buffer 解码取 MakeIndex（645 不含，运行时计数推不出）；②「SaveTick/600s 门不可观测」已证伪（SaveTick 只写时间戳，ConsoleShowUserCountTime 可被 profile 覆盖到 5s）；**真缺口=税入账原因未定位**。买药腿已由 #23 覆盖（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"
+    },
+    {
+      "n": 23,
+      "name": "castle_merchant_tax_potion",
+      "profile": "alt",
+      "extra": [
+        "--timeout-ms",
+        "700000"
+      ]
+    },
+    {
+      "n": 24,
+      "name": "castle_merchant_tax_upgrade",
+      "profile": "alt",
+      "extra": [],
+      "blocked": "**「不能进批」已证伪**（extra 拼在 --profile 之后 + load_profile 收 JSON 路径）；NPC 寻址的对象类别校验与 SM_DISAPPEAR 剔除已由 openmir2-probe-npc-addressing-followups 合入 c5ec908e1。profile 预置 tools/window/profiles/castle_tax_upgrade.json 尚未接入 run3（详见 tools/probe/scenarios/castle_merchant_tax_upgrade.json 的 blocked）"
+    }
   ]
 }
