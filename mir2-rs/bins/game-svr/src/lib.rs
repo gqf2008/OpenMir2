@@ -9292,6 +9292,59 @@ fn write_home_fallback_to_record(
     rec.data.cur_y = cur_y;
 }
 
+/// `GetStartPoint()`（`PlayObject.Base.cs:704-721`）的**记录级应用**：
+/// `pvp_level = PkPoint / 100`；命中 ⇒ 覆盖 `HomeMap/HomeX/HomeY` 并返回 `true`，否则不动。
+///
+/// 抽成纯函数是为了让「登录」与「3s 支」共用同一段行为，并能用构造级记录直接测。
+fn apply_get_start_point_to_record(
+    rec: &mut record::PlayerRecord,
+    current_map: &str,
+    start_points: &[mir2_envir::startpoint::StartPoint],
+    red_home_map: &str,
+    red_home_x: i16,
+    red_home_y: i16,
+) -> bool {
+    let pvp = u8::try_from(rec.data.pk_point.max(0) / 100).unwrap_or(255);
+    match homemap::get_start_point(
+        pvp,
+        current_map,
+        start_points,
+        red_home_map,
+        red_home_x,
+        red_home_y,
+    ) {
+        Some((hm, hx, hy)) => {
+            rec.data.home_map = Some(hm);
+            rec.data.home_x = hx;
+            rec.data.home_y = hy;
+            true
+        }
+        None => false,
+    }
+}
+
+/// 登录路径的 `GetStartPoint()` 包装（`PlayObject.cs:1199`）。**只有登录调用点用它**：
+/// 删掉那处调用 ⇒ 本函数变 `dead_code`，`clippy -D warnings` 直接红（行为牙之外的编译期守卫）。
+fn apply_get_start_point_on_login(
+    rec: &mut record::PlayerRecord,
+    current_map: &str,
+    enter_cfg: &EnterConfig,
+) -> bool {
+    apply_get_start_point_to_record(
+        rec,
+        current_map,
+        &enter_cfg.home_start_points,
+        &enter_cfg.red_home_map,
+        enter_cfg.red_home_x,
+        enter_cfg.red_home_y,
+    )
+}
+
+/// 3s 门的行为谓词：本 tick 是否命中 `CheckDupObjTick`（world 在门内把它置为 `now`）。
+fn dup_tick_fired(entity: &mir2_world::Entity, now: i64) -> bool {
+    entity.check_dup_obj_tick == now
+}
+
 /// `WorldServer.GetHumData`（`:1100-1229`）的恢复计数器登录初始化。
 ///
 /// - `:1151`：`playObject.IncHealing = humanRcd.Data.IncHealing`（**G-19**：旧实现漏拷 ⇒
@@ -20256,7 +20309,7 @@ fn apply_get_start_point_after_tick(
             continue;
         };
         // 只在**本 tick 命中 3s 门**时应用（world 在门内把 tick 置为 now）。
-        if e.check_dup_obj_tick != now {
+        if !dup_tick_fired(e, now) {
             continue;
         }
         let Some(map_name) = registry.and_then(|r| r.name_of(e.map_id)) else {
@@ -20265,19 +20318,14 @@ fn apply_get_start_point_after_tick(
         let Some(saved) = saves.get_mut(&entry.chr_name) else {
             continue;
         };
-        let pvp = u8::try_from(saved.record.data.pk_point.max(0) / 100).unwrap_or(255);
-        if let Some((hm, hx, hy)) = homemap::get_start_point(
-            pvp,
+        apply_get_start_point_to_record(
+            &mut saved.record,
             map_name,
             &enter_cfg.home_start_points,
             &enter_cfg.red_home_map,
             enter_cfg.red_home_x,
             enter_cfg.red_home_y,
-        ) {
-            saved.record.data.home_map = Some(hm);
-            saved.record.data.home_x = hx;
-            saved.record.data.home_y = hy;
-        }
+        );
     }
 }
 
@@ -23001,24 +23049,11 @@ fn sim_loop(
                                                 // **当前** `Envir.MapName` 命中 `StartPointList` 就**覆盖**
                                                 // Home*（覆盖值随存档落库）。
                                                 if let Some(r) = full.as_mut() {
-                                                    let pvp = u8::try_from(
-                                                        r.data.pk_point.max(0) / 100,
-                                                    )
-                                                    .unwrap_or(255);
-                                                    if let Some((hm, hx, hy)) =
-                                                        homemap::get_start_point(
-                                                            pvp,
-                                                            &final_map_name,
-                                                            &enter_cfg.home_start_points,
-                                                            &enter_cfg.red_home_map,
-                                                            enter_cfg.red_home_x,
-                                                            enter_cfg.red_home_y,
-                                                        )
-                                                    {
-                                                        r.data.home_map = Some(hm);
-                                                        r.data.home_x = hx;
-                                                        r.data.home_y = hy;
-                                                    }
+                                                    apply_get_start_point_on_login(
+                                                        r,
+                                                        &final_map_name,
+                                                        &enter_cfg,
+                                                    );
                                                 }
                                                 // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化：
                                                 // 随后的 `RecalcLevelAbilitys()/RecalcAbilitys()`（本宿主在
@@ -65225,6 +65260,55 @@ mod tests {",
     /// 红检：调用点改回 `if is_new_human` ⇒ 第二条断言红；删掉调用 ⇒ 出现次数断言红；
     /// 调用移出 `home_empty` 块（如无条件调用）⇒ 第一条断言红。
     /// 做法同 `p31_space_move_does_not_reset_tick_anchor`（对生产切片做源码断言）。
+    /// 卡 `openmir2-home-coords-divergence`：登录与 3s 支**共用**的 `GetStartPoint()`
+    /// 记录级应用——三向行为牙（不需要源码文本锚点）。
+    #[test]
+    fn apply_get_start_point_to_record_covers_three_ways() {
+        let sp = mir2_envir::startpoint::parse_start_points("0 289 618\n3 330 330\n");
+        let mut rec = record::PlayerRecord::default();
+        rec.data.home_map = Some("0".to_string());
+        rec.data.home_x = 289;
+        rec.data.home_y = 618;
+        // ① 命中当前地图 ⇒ 覆盖成该条目
+        assert!(apply_get_start_point_to_record(
+            &mut rec, "3", &sp, "9", 845, 674
+        ));
+        assert_eq!(
+            (rec.data.home_map.clone(), rec.data.home_x, rec.data.home_y),
+            (Some("3".to_string()), 330, 330)
+        );
+        // ② 无匹配 ⇒ 原值不动
+        rec.data.home_map = Some("0".to_string());
+        rec.data.home_x = 289;
+        rec.data.home_y = 618;
+        assert!(!apply_get_start_point_to_record(
+            &mut rec, "B013", &sp, "9", 845, 674
+        ));
+        assert_eq!(
+            (rec.data.home_map.clone(), rec.data.home_x, rec.data.home_y),
+            (Some("0".to_string()), 289, 618)
+        );
+        // ③ PvpLevel>=2（pk_point/100）⇒ RedHome*
+        rec.data.pk_point = 200;
+        assert!(apply_get_start_point_to_record(
+            &mut rec, "B013", &sp, "9", 845, 674
+        ));
+        assert_eq!(
+            (rec.data.home_map.clone(), rec.data.home_x, rec.data.home_y),
+            (Some("9".to_string()), 845, 674)
+        );
+    }
+
+    /// 卡同上：3s 门谓词——只有 `check_dup_obj_tick == now` 才应用
+    /// （`PlayObject.Message.cs:263` 的 `>` 门在 world 侧置 tick）。
+    #[test]
+    fn dup_tick_fired_matches_only_current_tick() {
+        let mut e = mir2_world::Entity::new(1, "hero".to_string(), 3, 3);
+        e.check_dup_obj_tick = 5000;
+        assert!(dup_tick_fired(&e, 5000), "同 tick ⇒ 应用");
+        assert!(!dup_tick_fired(&e, 5001), "其它 tick ⇒ 不应用");
+    }
+
     #[test]
     fn p22_home_fallback_writeback_is_gated_by_home_empty() {
         let src = include_str!("lib.rs");
