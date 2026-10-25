@@ -35,8 +35,10 @@ run3 接线（`run3-scenarios.json` 的 `extra`，`--discovery-scenario` 是 `ca
 |---|---|---|---|---|
 | #10 `king_dialog` / #11 `king_castle_war` | `king_actor` | 默认 `npc_click_auto`（auto:last_turn） | **是**（国王转身 `Random(40)`） | 改 `npc_click_king.json` |
 | #12 `npc_script_chain` | `npc_actor`（老人） | 默认 `npc_click_auto` | **是**（同上，且最近对象未必是老人） | 改 `npc_click_elder.json` |
+| #3 `npc_click` | `npc_actor` | 默认 `npc_click_auto` | 同类形态（最近 NPC 转身走 Run+RNG）；但它**发现谁就点谁**（自洽：失败形态是超时，不是点错对象），W1 未报 | **暂不改**（在入批 21 内）；若窗口出现超时，按同一机制换成该场景要点的 `name:` |
 | #9 `merchant_dialog` / #17 `upgrade_retrieve` | `merchant_actor` | 默认 `npc_click_auto` | 同类形态（最近商人转身也是 Run+RNG），W1 目前未报 | **暂不改**，等实证；若 flaky 再按名字点具体商人 |
-| #18 `gamepoint_exchange` / #19 `clearmapmon_q001` / #23–#24 castle 税 | `npc_actor` / `merchant_actor` | 默认 `npc_click_auto` | 同上 | 暂不改（同上） |
+| #18 `gamepoint_exchange` / #19 `clearmapmon_q001` / #23 castle 税 potion | `npc_actor` / `merchant_actor` | 默认 `npc_click_auto` | 同上 | 暂不改（同上） |
+| #22 `castle_merchant_tax`（**blocked**，未入批） | `merchant_actor` | 默认 `npc_click_auto` | 同类 | 解封时一并改 `name:沙巴克城堡管理`（该场景还需 profile 副本，另一张卡） |
 | #14 `bag_equip` / #15 `eat_item` | `make_index`/`item_name`/`takeon_where` | **不走点击 discovery**（param_discovery 从 `SM_BAGITEMS(201)` 帧推导） | 否 | 不在本类 |
 | #8 `move_walk` / #16 `spell_cast` / #20 `dropgold_zero_draw` / #21 `butch_two_draws` | 无 `required` 或非点击类 | — | 否 | 不在本类 |
 
