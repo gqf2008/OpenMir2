@@ -644,14 +644,37 @@ def selftest(args):
     tmp = tempfile.mkdtemp(prefix="prov-fixtures-")
     ok_all = True
     try:
-        # ---- A4 守卫三颗牙：拒绝且**一条 SQL 都没发出**
-        for db, tag in (("mir2_db", "生产库"), ("mir2_test_db", "C# 测试库"), ("mir2_test_db_r; DROP", "注入")):
+        # ---- A4/F2 守卫三颗牙：经 main() 真走一遍——被拒时 build_mysql **不得被调用**、零 SQL。
+        # 牙：把 `guard_db(args.db)` 挪到 `build_mysql(args)` **之后** ⇒ 下面三条必红
+        # （calls 变 1 且 FakeMysql 被查询）。旧写法只调 guard_db、fake 从不参与 ⇒ 空断言。
+        import contextlib
+        import io
+
+        def guard_probe(db_name):
+            """跑一次 --gate（guard 在 build 之前），返回 (rc, build 调用次数, SQL 条数)。"""
             fake = FakeMysql([])
+            calls = {"n": 0}
+            real = globals()["build_mysql"]
+
+            def fake_build(_args):
+                calls["n"] += 1
+                return fake
+
+            globals()["build_mysql"] = fake_build
             try:
-                guard_db(db)
-                ok_all &= _chk(False, "A4/%s 未被拒" % tag, db)
-            except DbRefused as e:
-                ok_all &= _chk(fake.executed == [], "A4/%s 硬拒且零 SQL" % tag, str(e)[:60])
+                buf = io.StringIO()
+                with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
+                    rc = main(["--gate", "--db", db_name, "--char", "aaa", "--map", "9"])
+            finally:
+                globals()["build_mysql"] = real
+            return rc, calls["n"], len(fake.executed)
+
+        for db_name, tag in (("mir2_db", "生产库"), ("mir2_test_db", "C# 测试库"),
+                             ("mir2_test_db_r; DROP", "注入")):
+            rc_g, calls_g, sql_g = guard_probe(db_name)
+            ok_all &= _chk(rc_g == RC_REFUSED and calls_g == 0 and sql_g == 0,
+                           "A4/%s 硬拒 + 未连库 + 零 SQL" % tag,
+                           "rc=%s build=%s sql=%s" % (rc_g, calls_g, sql_g))
         ok_all &= _chk(guard_db("mir2_test_db_r") == "mir2_test_db_r", "A4/白名单库放行")
 
         # ---- A1 事务：before 登记 → 写 → after 核对；回滚语句还原 before
@@ -666,6 +689,26 @@ def selftest(args):
         ok_all &= _chk("ROLLBACK" not in rep and "COMMIT;" in fake.batches[0], "A1 单事务提交")
         rb = rep["rollback"][1]
         ok_all &= _chk("`Gold`=0" in rb and "`MapName`='0'" in rb, "A1 回滚语句带 before 值")
+        # F3：UPDATE 的 WHERE 必须带**四个**谓词（Id/ChrName/Gold/MapName）——退回 Id+ChrName ⇒ 必红
+        upd = [q for q in rep["statements"] if q.startswith("UPDATE")][0]
+        cond = upd.split(" WHERE ", 1)[1]
+        ok_all &= _chk(all(t in cond for t in ("`Id`=7", "`ChrName`='aaa'", "`Gold`=0", "`MapName`='0'")),
+                       "F3 乐观锁四谓词（Id+ChrName+Gold+MapName）", cond)
+
+        # ---- F1 dry-run 两颗牙：变异 `if dry_run:` → `if False:` ⇒ 对应那条必红
+        fake_dry = FakeMysql([("`characters` WHERE `ChrName`", [[before_row]])])
+        rep_d, rc_d = apply_plan(fake_dry, plan, dry_run=True)
+        ok_all &= _chk(rc_d == RC_OK and rep_d["dry_run"] is True and fake_dry.batches == []
+                       and not any("UPDATE" in q for q in fake_dry.executed),
+                       "F1 apply dry-run 零 exec_batch（不写库）",
+                       "batches=%d" % len(fake_dry.batches))
+        # 给 fake 备好应答：变异（`if False:`）后 rollback 会真的 SELECT+exec ⇒ 断言以 FAIL 报出，
+        # 而不是在 FakeMysql 里抛 PREREQ 把整个自检崩掉（红要红在断言上）。
+        fake_rbd = FakeMysql([("`characters` WHERE `ChrName`", [[before_row], [before_row]])])
+        out_rbd, rc_rbd = rollback_plan(fake_rbd, rep_d, dry_run=True)
+        ok_all &= _chk(rc_rbd == RC_OK and fake_rbd.executed == [] and fake_rbd.batches == [],
+                       "F1 rollback dry-run 零 SQL（连 SELECT 都不发）",
+                       "executed=%d" % len(fake_rbd.executed))
 
         # ---- 失败 ⇒ ROLLBACK 且 rc≠0
         fake_fail = FakeMysql([("`characters` WHERE `ChrName`", [[before_row]])])

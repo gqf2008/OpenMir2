@@ -1,7 +1,7 @@
 # 真机夹具 provisioning（2026-10-25）
 
 卡 `openmir2-mirflow-real-machine-prereqs`（tier L，离线，不占窗口、不起任何进程）。
-工具：`tools/client/provision_real_machine_fixtures.py`（自检 29 条，`--selftest`）。
+工具：`tools/client/provision_real_machine_fixtures.py`（自检 32 条，`--selftest`）。
 
 ## 0. 为什么需要
 
@@ -29,11 +29,14 @@ Gold=0 ⇒ 买不了；背包 46 个槽位里 `StdIndex<>0` 的真物品 **3 件
 自检里的牙（都在 `--selftest` 里、可随时复跑）：
 
 ```
-PASS A4/生产库 硬拒且零 SQL
-PASS A4/C# 测试库 硬拒且零 SQL      # mir2_test_db（C# 侧）也不在白名单，只有 _r
-PASS A4/注入 硬拒且零 SQL
+PASS A4/生产库 硬拒 + 未连库 + 零 SQL
+PASS A4/C# 测试库 硬拒 + 未连库 + 零 SQL   # mir2_test_db（C# 侧）也不在白名单，只有 _r
+PASS A4/注入 硬拒 + 未连库 + 零 SQL
 PASS A4/白名单库放行
 ```
+
+「未连库 + 零 SQL」是**承重**的：牙经 `main()` 真走一遍（`--gate`），并断言 `build_mysql` **一次都没被调用**。
+把 `guard_db(args.db)` 挪到 `build_mysql(args)` 之后 ⇒ 三条同时变红（`build=1`）。
 
 ## 2. A1 金币（+ 可选可卖物品）
 
@@ -155,6 +158,17 @@ python -I -B tools/client/provision_real_machine_fixtures.py --gate --db mir2_te
   `--min-gold` 默认 500。
 - `floor_item` **永远**报缺（结构性不可达，见 §3），直到 §3 的三条事实有一条改变。
 
+## 4c. 三颗承重牙（卡 `openmir2-provision-teeth`）
+
+reviewer-21 用变异发现：下面三处**行为对、但没有牙**（改坏了自检仍全绿）。现已补上，且各自独立。
+
+| 牙 | 断言 | 变异（只在已提交的 head 上做） | 预期 |
+|---|---|---|---|
+| **F1a** apply dry-run | `apply_plan(dry_run=True)` ⇒ `fake.batches == []` 且没有 `UPDATE` 语句 | `apply_plan` 里 `if dry_run:` → `if False:` | 只有 F1a 红 |
+| **F1b** rollback dry-run | `rollback_plan(dry_run=True)` ⇒ `fake.executed == []`（连 SELECT 都不发） | `rollback_plan` 里 `if dry_run:` → `if False:` | 只有 F1b 红 |
+| **F2** 零 SQL | 经 `main(--gate --db <坏库>)` ⇒ `rc=3`、`build_mysql` 调用数 0、SQL 条数 0 | `guard_db` 移到 `build_mysql` 之后 | 三条 A4 牙同时红（`build=1`） |
+| **F3** 乐观锁 | 生成的 `UPDATE ... WHERE` 含 `Id`/`ChrName`/`Gold`/`MapName` 四个谓词 | WHERE 退回 `Id+ChrName` | 只有 F3 红 |
+
 ## 5. A5 窗口当天 runbook
 
 ```sh
@@ -183,11 +197,12 @@ python -I -B tools/client/provision_real_machine_fixtures.py --rollback E:/tmp/f
 python -I -B tools/client/provision_real_machine_fixtures.py --selftest
 ```
 
-29 条 PASS，覆盖：A4 三颗拒绝牙 + 白名单放行；A1 事务提交 / before 登记 / 失败 ROLLBACK /
+32 条 PASS，覆盖：A4 三颗拒绝牙 + 白名单放行；A1 事务提交 / before 登记 / 失败 ROLLBACK /
 MakeIndex 占用拦截 / 帧一致与不一致 / 无帧 PREREQ；A3 商店优先与指定脚本 / 文件:行号 /
 只有 `#ACT` 的脚本不算 643 / 缺脚本不选 / 落点跳过墙格 / 缺地图 PREREQ；A6 缺项 ⇒ UNDECIDABLE
 且点名 / 备齐 ⇒ PASS / 46 个空槽不算物品 / 地板物永远报缺 / profile 无靶子报缺；A2 三事实 BLOCKED +
-事实被改 ⇒ REEVALUATE + SQL 无 `mapitem/ground`。
+事实被改 ⇒ REEVALUATE + SQL 无 `mapitem/ground`；F1 两颗 dry-run 牙 / F2 未连库+零 SQL 承重 /
+F3 乐观锁四谓词。
 
 ## 7. 残留物
 
