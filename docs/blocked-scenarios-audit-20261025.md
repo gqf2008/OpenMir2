@@ -19,7 +19,7 @@ blocked = `#21 butch_two_draws` / `#22 castle_merchant_tax` / `#24 castle_mercha
 | # | 场景 | blocked 理由（一句） | 裁定 | 关键依据 |
 |---|---|---|---|---|
 | 21 | `butch_two_draws` | 「能力齐、只差实测」击杀→屠宰链 | **已证伪**（现工具构造下跑不通） | `fixtures.monsters` **追加**到 MonGen.txt 末尾（`card_window.py:4472`）；刷怪线程 200ms/条、部署 `ProcessMonsterMultiThreadLimit` 缺省 **1** ⇒ 单表 3081 行 ⇒ 追加行首次评估 ≈ **616s**，而 #21 是 `--timeout-ms 60000` |
-| 22 | `castle_merchant_tax` | ①买武器腿缺 652 ClientItem 解码 ②`SaveTick`/600s 门不可观测 | ①**成立**（工具缺口）②**已证伪** | `MakeIndex` 是运行时计数（`GameItemSystem.cs:133-136`）⇒ 不可由内容推出；`SaveTick` 段只更新内存 tick（`UserCastle.cs:798-805`），写盘门是 `ConsoleShowUserCountTime`（可覆盖 5s） |
+| 22 | `castle_merchant_tax` | ①买武器腿缺 652 ClientItem 解码 ②`SaveTick`/600s 门不可观测 | ①**成立**（工具缺口）②**已证伪**；**真缺口=税入账原因未定位**（§2.3） | `MakeIndex` 是运行时计数（`GameItemSystem.cs:133-136`）⇒ 不可由内容推出；`SaveTick` 段只更新内存 tick（`UserCastle.cs:798-805`），写盘门是 `ConsoleShowUserCountTime`（可覆盖 5s） |
 | 24 | `castle_merchant_tax_upgrade` | 「run3 内置 profile 不能声明 ⇒ 不能进批」 | **部分成立**：进批通道**已证伪**（有构造）；真缺口是 NPC 选择 | `run_batch.sh:409-421` 把 `extra` 追加在 `--profile "$prof"` **之后**；`--profile` 接受 JSON 路径（`card_window.py:857-872`）⇒ `extra:["--profile","<path>.json"]` 生效 |
 
 ---
@@ -35,7 +35,7 @@ blocked = `#21 butch_two_draws` / `#22 castle_merchant_tax` / `#24 castle_mercha
 ### 1.2 A1 的证据链（同一「错误假设」：往 MonGen.txt 末尾追加就能刷）
 
 1. 夹具写盘形态：`card_window.py:4440-4474` —— `head + append`，日志原文「**追加** N 行」，写在整个文件**末尾**。
-2. 加载顺序：`LocalDB.cs:533-560` 顺序解析 `MonGen.txt` ⇒ `MonGenList` 与文件行序一一对应 ⇒ 追加行落在**表尾**。
+2. 加载顺序：`src/GameSrv/DB/LocalDB.cs:531-560`（`LoadMonGen` 在 `:501`）顺序解析 `MonGen.txt` ⇒ `MonGenList` 与文件行序一一对应 ⇒ 追加行落在**表尾**。
 3. 刷怪节奏：`WorldServer.MonGen.cs:196-230` —— 每 `(now - RegenMonstersTick) > RegenMonstersTime` 只处理
    `mongenList[CurrMonGenIdx]` 一条，然后 `CurrMonGenIdx++`（到尾回 0）；Rust 侧同构
    （`mir2-rs/crates/world/src/mongen.rs:723-768` 的 docstring 逐条对齐 `:207/:209/:211-230`）。
@@ -123,6 +123,9 @@ blocked = `#21 butch_two_draws` / `#22 castle_merchant_tax` / `#24 castle_mercha
 - `card_window.py:9796-9798`：`--profile` 的帮助写着「`alt` | `<profile.json 路径>`」；
   `load_profile`（`:857-872`）对 `os.path.isfile(name)` 走 JSON 路径分支。
 - argparse 同一选项重复出现时**后者覆盖** ⇒ `extra: ["--profile", "<path>.json"]` 能让该行用自定义 profile。
+- **前置约束（Leader 补充，2026-10-25）**：blocked 场景**整行不进批次**（`run_batch.sh:107-114`、`:152-158` 的 skip 分支），
+  且 blocked 有**两个来源**（清单行的 `blocked` 管批次排除；场景 JSON 的 `blocked` 管直接跑 card_window，见 `:108-112`）
+  ⇒ 只给 `extra` 加 `--profile` **不够**，必须**同时**清掉该行的 `blocked`（两处都清）才谈得上进批。
 - 构造（需另卡改 run3，本卡按 ⑥ 不改）：
   1. 提交一个 profile JSON（dump `alt` + 加 `fixtures.config_overrides.Server.conf.CastleGetAllNpcTax=1`），
      建议放 `tools/window/profiles/castle_tax_upgrade.json`；
@@ -132,7 +135,7 @@ blocked = `#21 butch_two_draws` / `#22 castle_merchant_tax` / `#24 castle_mercha
 
 ### 3.3 C2 仍成立的部分
 
-- `click_npc` 只接受 **actor id**（params 名解析）或 `auto:last_turn`（`mir2_probe.py:1015-1021`），
+- `click_npc` 只接受 **actor id**（params 名解析）或 `auto:last_turn`（`mir2_probe.py:940-945`：`:940` `elif action == "click_npc"`、`:941` `auto:last_turn`、`:945` `resolve_param`；`refs` 收集器 `:1238-1240`），
   **不能**按名字/坐标点名；`--discovery-scenario` 只能换「发现用场景」，而发现结果仍取自
   「点一次 NPC → 643 → recog」这条固定逻辑。
 - 实测记录（castle 卡 §4.2，实测）：map 3 在 (320,328)/(331,317) 都点到「装备回收」，`@upgrade` 无链接 ⇒ 643 超时。
