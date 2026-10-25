@@ -69,6 +69,16 @@
   （`characters.Gold 9912/9920` + `characters_bagitem.MakeIndex 645768579/16281`）；新 rules ⇒ **1 条**（Gold）+ 1 条 masked
   （occupied 6939/6939）。
 
+### 4b. 一条会影响真机判据的 harness 风险（2026-10-25 发现，登记）
+
+`card_window.trim_rng_ledger` 超限时**只保留 head**（200,000 行 / 64 MiB），而 butch 的两抽发生在运行**后半段**。
+实测 C# 账本 **151,877 行 / 11.9 MB / 21 s ≈ 7.2k 行/s** ⇒ **C# 运行超过约 28 s 就可能把两抽裁掉**，
+届时账本看起来「没有两抽」——那是**证据被裁掉，不是行为不符**。
+
+⇒ **凡是靠 RNG 账本判定的场景（butch / dropgold / 抽数类），跑完必须先看 `rng_log_trim.trimmed`**：
+为 `true` ⇒ **该次证据作废、需重跑，不得判 FAIL**。清单写在 `docs/butch-ledger-run-checklist-20261025.md` §4。
+把裁剪策略改成「保留 head + 关键段」属 harness 改动，**登记未做**。
+
 ## 5. 残留物与待办
 
 - **G11**（`openmir2-gm-batch-5b-cross-server`）：条件② 唯一 `merged_not_closed`，需 owner 裁决是否列基础设施阻塞排除项。
