@@ -1916,6 +1916,31 @@ impl DynVarStore {
     }
 }
 
+/// `GateEvent::Closed` 清理块用的 actor id：**world session 优先，回落到 host 侧会话**。
+///
+/// 卡 `openmir2-softclose-cleanup-residue` A1：`CM_SOFTCLOSE` 走 `world.soft_close` 后，
+/// world session 的 `actor_id` 已被置 None（`crates/world/src/session.rs:540`），而 host 侧
+/// `SessionGround.actor_id` 仍然有效 ⇒ 展示表清理必须用后者兜底，否则整块被跳过、
+/// actor id 被内核回收复用时新占用者会带旧展示值上屏。
+fn closed_cleanup_actor_id(world_aid: Option<i32>, host_aid: Option<i32>) -> Option<i32> {
+    world_aid.or(host_aid)
+}
+
+/// `GateEvent::Closed` 的**展示表清理一整步**（A1 的落地点）：按 [`closed_cleanup_actor_id`]
+/// 取 id 并 `displays.remove`。返回是否真的摘了（`false` = 两侧都没有 id）。
+///
+/// 抽成函数是为了让「soft-close 路径也会摘」可构造级验证——只测 id 选择函数证明不了
+/// 这一步真的调了 `remove`。
+fn cleanup_closed_display(displays: &mut downlink::DisplayTable, aid: Option<i32>) -> bool {
+    match aid {
+        Some(aid) => {
+            displays.remove(aid);
+            true
+        }
+        None => false,
+    }
+}
+
 fn apply_pending_gm_entity(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
@@ -22638,6 +22663,15 @@ fn sim_loop(
                             &enter_cfg.catalog,
                         );
                         online_take(&mut online, &chr_name);
+                        // 卡 `openmir2-softclose-cleanup-residue` A1：`CM_SOFTCLOSE` 走
+                        // `world.soft_close` 时已把 **world session** 的 `actor_id` 置 None
+                        //（`crates/world/src/session.rs:540`），而 **host 侧**
+                        // `SessionGround.actor_id` 仍然有效。`ground_sessions.remove` 在本段
+                        // **之后**执行 ⇒ 必须在这里（任何 remove 之前）先把 id 取出来。
+                        let closed_aid = closed_cleanup_actor_id(
+                            world.session(&chr_name).and_then(|s| s.actor_id),
+                            ground_sessions.get(&chr_name).map(|s| s.actor_id),
+                        );
                         // 存档：oracle `CloseUser` 后的 `MakeGhost()` 里调 `SaveHumanRcd`
                         //（`WorldServer.cs:1077`）——必须在摘世界/移除会话态前拿实时态。
                         if let (Some(saved), Some(sg)) =
@@ -22662,8 +22696,13 @@ fn sim_loop(
                         // `M2Share.SellOffItemList`（进程级）保留（oracle 不断线清理）。
                         sell_off_sessions.remove(&chr_name);
                         // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
+                        //
+                        // 卡 `openmir2-softclose-cleanup-residue` A1：`CM_SOFTCLOSE` 后 world
+                        // session 的 `actor_id` 已置 None，但 host 侧会话仍有效 ⇒ 统一用开头的
+                        // `closed_aid`（world 优先、host 兜底）摘展示，soft-close 不再整块跳过。
+                        // 普通断线路径的调用次数与 id 都不变（`closed_aid == world aid`）。
+                        cleanup_closed_display(&mut displays, closed_aid);
                         if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
-                            displays.remove(aid);
                             // `openmir2-m3-party-group-state`：oracle `Disappear()`
                             // （`PlayObject.Message.cs:2138-2142`）在 `MakeGhost` 里调
                             // `groupOwnerPlay.DelMember(this)`（离线即退组 / 团长离线整组散）。
@@ -29813,6 +29852,58 @@ mod tests {
             hits.len(),
             1,
             "`{want}` 必须在 `drain_run_downlinks_with_magic` 体内恰好出现一次且未被注释；命中 {hits:?}（0 = 发射点被撤 ⇒ 804/805 永不出现；>1 = 重复发帧）"
+        );
+    }
+
+    /// 卡 `openmir2-softclose-cleanup-residue` A1：`GateEvent::Closed` 的展示表清理 id
+    /// **world 优先、host 兜底**；再钉住「摘除后同 id 复用不残留」。
+    ///
+    /// 牙：① 普通断线（两侧都有 id）⇒ 用 world 的 id；② **soft-close**（world 侧 None、
+    /// host 侧仍有）⇒ 仍能取到 id（改名前这里返回 None ⇒ 整块跳过）；③ 两侧都无 ⇒ None；
+    /// ④ 展示表：旧值 `set` 后 `remove` ⇒ `get == None`，同 id 再 `set` 新值 ⇒ `get` 是新值。
+    #[test]
+    fn closed_cleanup_actor_id_falls_back_to_host_session_and_display_is_not_stale() {
+        assert_eq!(
+            closed_cleanup_actor_id(Some(7), Some(7)),
+            Some(7),
+            "普通断线"
+        );
+        assert_eq!(
+            closed_cleanup_actor_id(None, Some(7)),
+            Some(7),
+            "soft-close：world 侧已置 None，host 侧仍有效"
+        );
+        assert_eq!(
+            closed_cleanup_actor_id(Some(7), None),
+            Some(7),
+            "只有 world"
+        );
+        assert_eq!(closed_cleanup_actor_id(None, None), None, "两侧都无 ⇒ 不摘");
+
+        // soft-close 端到端：world=None / host=Some ⇒ 组合后**必须**把该 id 的展示摘掉。
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            7,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"old".to_vec()),
+        );
+        assert!(
+            cleanup_closed_display(&mut displays, closed_cleanup_actor_id(None, Some(7))),
+            "soft-close 路径必须真的走到 remove"
+        );
+        assert!(displays.get(7).is_none(), "摘除后不得残留（旧展示值）");
+        displays.set(
+            7,
+            downlink::ActorDisplay::new(0, 0, 222, 0, 0, 255, b"new".to_vec()),
+        );
+        assert_eq!(
+            displays.get(7).map(|d| d.feature),
+            Some(222),
+            "同 id 复用后 feature 是新值"
+        );
+        assert_eq!(
+            displays.get(7).map(|d| d.show_name.clone()),
+            Some(b"new".to_vec()),
+            "同 id 复用后展示名是新值"
         );
     }
 
