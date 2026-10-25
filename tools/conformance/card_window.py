@@ -4434,7 +4434,8 @@ def _validate_fixture_raw_files(fl, where):
             raw = text.encode("gbk")
         except UnicodeEncodeError as e:
             raise ConfigError("%s 的文本不能编成 GBK：%s" % (w, e))
-        out["/".join(parts)] = raw
+        # **存 text 不存 bytes**（review C1/C2）：对称性与 summary 都会 json 序列化 decl。
+        out["/".join(parts)] = text
     return out
 
 
@@ -4559,6 +4560,15 @@ def _check_fixture_symmetry(fixtures_by_side):
             % ", ".join(shown))
 
 
+def _guard_prod_target(path):
+    """**逐目标**生产根守卫（卡 `openmir2-gm-script-fixture` F1）：files 与 monsters 复用。"""
+    real_path = os.path.realpath(path)
+    real_prod = os.path.realpath(FIXTURE_PROD_ROOT)
+    if real_path == real_prod or real_path.startswith(real_prod + os.sep):
+        raise ConfigError("夹具目标解析到生产内容根（%s ⇒ %s）⇒ 拒绝（内容冻结）"
+                          % (path, real_path))
+
+
 def _fixture_envir_root(sc):
     root = sc.get("envir_root")
     if not root:
@@ -4669,15 +4679,23 @@ def _fixture_new_bytes(kind, payload, data, where):
         old = data.decode("ascii", "replace").split()
         return body, [("castle_list=%r" % old, "castle_list=%r" % list(payload))]
     if kind == "raw":
-        return payload, [("raw(%dB)" % len(data), "raw(%dB)" % len(payload))]
+        raw = payload.encode("gbk") if isinstance(payload, str) else payload
+        return raw, [("raw(%dB)" % len(data), "raw(%dB)" % len(raw))]
     return _fixture_ini_replace(data, payload, where)
 
 
 def _fixture_atomic_write(path, data):
     tmp = path + ".fixture-tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "wb") as f:
+            f.write(data)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
 
 
 def _rollback_file_recs(recs):
@@ -4731,13 +4749,7 @@ def _apply_files(runner, side, root, decl, side_dir, tag, sink_targets=None,
     planned = []
     for rel, kind, payload in _fixture_targets(decl):
         path = os.path.join(root, *rel.split("/"))
-        # 卡 `openmir2-gm-script-fixture`：**逐文件**再过一次生产根守卫（不只靠 envir_root 的
-        # 那一道）——若中间目录是符号链接指向生产内容根，仅校验 envir_root 拦不住。
-        real_path = os.path.realpath(path)
-        real_prod = os.path.realpath(FIXTURE_PROD_ROOT)
-        if real_path == real_prod or real_path.startswith(real_prod + os.sep):
-            raise ConfigError("夹具目标解析到生产内容根（%s ⇒ %s）⇒ 拒绝（内容冻结）"
-                              % (path, real_path))
+        _guard_prod_target(path)
         created = False
         if not os.path.isfile(path):
             # 卡 `openmir2-gm-script-fixture` A5：`files`（raw）允许**新建**脚本文件；
@@ -4992,6 +5004,7 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
                     path = os.path.join(root, "Envir", "MonGen.txt")
                     if not os.path.exists(path):
                         raise ConfigError("MonGen.txt 不存在：%s" % path)
+                    _guard_prod_target(path)
                     with open(path, "rb") as f:
                         raw = f.read()
                     before = hashlib.sha256(raw).hexdigest()
@@ -5090,6 +5103,9 @@ def restore_fixtures(res):
                 if os.path.exists(tgt["path"]):
                     errs.append("%s 还原失败：删除后仍存在" % label)
                 else:
+                    if tgt.get("backup") and os.path.isfile(tgt["backup"]):
+                        os.remove(tgt["backup"])
+                    tgt["backup"] = None
                     tgt["restore_sha256"] = "absent"
                     tgt["action"] = "restored-created-removed"
             except OSError as e:
@@ -10983,6 +10999,35 @@ def selftest():
             "FX-F14 Envir 为指向生产的符号链接 => 逐文件 realpath 守卫 rc=2")
     except OSError:
         chk(True, "FX-F14 跳过（本机无法建符号链接）")
+
+    _prof_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                              "..", "window", "profiles", "gm_script_level0.json")
+    try:
+        with open(_prof_path, encoding="utf-8") as fh:
+            _p = json.load(fh)
+        load_profile(_p)
+        chk(True, "FX-F15 load_profile 能加载声明 files 的 profile（C1）")
+    except Exception as exc:  # noqa: BLE001
+        chk(False, "FX-F15 load_profile 能加载声明 files 的 profile（C1）：%r" % (exc,))
+    try:
+        json.dumps(fres)
+        chk(True, "FX-F16 含 files 的 summary 可 json 序列化（C2）")
+    except TypeError as exc:
+        chk(False, "FX-F16 含 files 的 summary 可 json 序列化（C2）：%r" % (exc,))
+
+    mroot = os.path.join(fr, "M2GameSvr-mongen")
+    os.makedirs(mroot, exist_ok=True)
+    try:
+        os.symlink(FIXTURE_PROD_ROOT + "/M2GameSvr/Envir",
+                   os.path.join(mroot, "Envir"), target_is_directory=True)
+        mon_decl = _validate_fixture_decl(
+            {"monsters": [{"map": "0", "x": 1, "y": 1, "name": "x"}]}, "t")
+        mres = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
+                            {"envir_root": mroot}, mon_decl, {}, fside)
+        chk(mres.get("rc") == 2 and "生产内容根" in (mres.get("error") or ""),
+            "FX-F17 monsters 目标指向生产 => 逐目标守卫 rc=2")
+    except OSError:
+        chk(True, "FX-F17 跳过（本机无法建符号链接）")
 
     print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
