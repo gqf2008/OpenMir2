@@ -60,7 +60,14 @@
 
 **要采的日志行**（下一轮窗口）：
 
+**窗口执行顺序（先做这一步，否则动作会被服务端拒）**：起栈 → 登录 → **确认日志里不再出现
+「角色数据保存中,稍后重新读取」**（`InSaveRcdList` 清空）→ 再发第一条动作命令。
+`move_walk` 那次 UNDECIDABLE（C# 侧 `CM_WALK` 无 `SM_WALK`、只有 `SM_TURN` + `SYSMESSAGE`）就是踩了这条：
+存档在途时服务端拒动作，表现为「移动不生效」，看起来像行为差异。
+
 ```text
+# 0) 存档在途门：出现即等待/重来
+grep -c '角色数据保存中' game-svr.out.log
 # 1) butch 决策面：确认 dir_updated=true、bt_dir=0
 grep 'CM_BUTCH：' game-svr.out.log
 # 2) 存档请求面：每次存档一条（含 ChrName/queryId）
