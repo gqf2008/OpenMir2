@@ -79,13 +79,15 @@
 - **真机 butch 链**（`kill(track)` → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)`）：归
   `openmir2-butch-two-draws-unblock`，等窗口；本卡只保证 DSL 侧的取值正确（构造级牙已证）。
 - 其它动作的令牌接线（若将来需要，按 `send.recog` 同一形态加，并在 §2 表格登记）。
-- 顺带发现（非本卡）：`tools/probe/scenarios/npc_click_king_slow.json` 在 `--check-scenario` 下
-  被拒（`steps[0].wait_for [10]` 之前没有 send 步；该文件来自 `ff2fb1e5d`）——**先于本卡存在**，
-  本卡未改。要不要保留这个「兜底变体」由卡主决定。
+- **删除不可运行的兜底场景**（Leader 裁决，并入本卡）：`tools/probe/scenarios/npc_click_king_slow.json`
+  在 `--check-scenario` 下必然被拒（`steps[0].wait_for [10]` 之前没有 send 步，来自 `ff2fb1e5d`）；
+  既然 `name:` 已是确定性寻址，兜底不再需要——留着会让人误以为有兜底，比没有更糟。已删文件，
+  并把 `docs/probe-discovery-addressing-20261025.md` 的对应表行/说明改成「曾考虑、因确定性未采用」。
 
 ## 8. 门禁
 
 `mir2_probe --selftest` 21 checks OK；`tools/probe/scenarios/*.json` 的 `--check-scenario`：
-按各场景 `required` 补 `--var` 后 **31/32 rc=0**（唯一例外是上面那个先于本卡存在的
-`npc_click_king_slow`）；7 项卫生门 + `git diff --check <base> <head>` + `merge_tree_helper` 见 patch body。
+按各场景 `required` 补 `--var` 后 **31/31 rc=0**（不可运行的 `npc_click_king_slow` 已按 Leader
+裁决删除；补 var 时 `butch_two_draws` 的 `target_xy` 要给**真实相邻格**——随便填 `1` 会被
+八向相邻门按设计拒掉，那不是场景缺陷）；7 项卫生门 + `git diff --check <base> <head>` + `merge_tree_helper` 见 patch body。
 **未跑 cargo、未起栈、未占端口。**
