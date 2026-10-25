@@ -2755,6 +2755,117 @@ class Selftest(object):
                                       for u in (rep_ns or {}).get("undecidable", [])),
                    (rc_ns, (rep_ns or {}).get("undecidable")))
 
+        # ---- 掩码列 + 结构牙（卡 openmir2-db-makeindex-mask）----------------------
+        bag_cols = ["Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax"]
+
+        def bag_row(i_, pid, pos, mi):
+            return [str(i_), str(pid), str(pos), str(mi), "207", "4000", "4000"]
+
+        def bag_snap(prefix, rows):
+            return {"format": "dbsnap-inline/1",
+                    "tables": [{"table": prefix + ".characters_bagitem",
+                                "columns": bag_cols, "rows": [list(r) for r in rows]}]}
+
+        bag_ok = [bag_row(1, 1, 0, 101), bag_row(2, 1, 1, 102)]
+        odb = self.write_run("mi-o", frames, db=bag_snap("mir2_test_db", bag_ok))
+        rdb_ok = self.write_run("mi-r", frames, db=bag_snap("mir2_test_db_r", bag_ok))
+        rules_mi = json.loads(json.dumps(self.builtin_rules))
+        rules_mi.setdefault("db", {})["masked_columns"] = {
+            "mir2_db.characters_bagitem": {"MakeIndex": {
+                "reason": "selftest", "ref": "D-1 / whitelist.md:24", "group_by": "PlayerId",
+                "require": ["nonzero_both_sides", "distinct_per_player"]}}}
+        rules_no = json.loads(json.dumps(self.builtin_rules))
+        rules_no["db"] = {k: v for k, v in (rules_no.get("db") or {}).items()
+                          if k != "masked_columns"}
+        p_mi = self.rules_file("mi-mask.json", rules_mi)
+        p_no = self.rules_file("mi-nomask.json", rules_no)
+
+        rdb_diff = self.write_run("mi-r-diff", frames, db=bag_snap(
+            "mir2_test_db_r", [bag_row(1, 1, 0, 201), bag_row(2, 1, 1, 202)]))
+        rc_b, rep_b = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_no])
+        rc_a, rep_a = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_mi])
+        wl_a = [w for w in (rep_a or {}).get("whitelisted") or []
+                if w.get("kind") == "db_column_masked"]
+        self.check("牙MI-1 无掩码 ⇒ MakeIndex 差异出现（rc1）；加掩码 ⇒ 差异消失且 whitelisted 显式登记 D-1",
+                   rc_b == 1 and any(d.get("source") == "db"
+                                     for d in (rep_b or {}).get("diffs") or [])
+                   and rc_a == 0 and len(wl_a) == 1 and "D-1" in (wl_a[0].get("ref") or ""),
+                   (rc_b, rc_a, wl_a))
+
+        rdb_zero = self.write_run("mi-r-zero", frames, db=bag_snap(
+            "mir2_test_db_r", [bag_row(1, 1, 0, 0), bag_row(2, 1, 1, 0)]))
+        rc_z, rep_z = self.compare(odb, rdb_zero, ["--allow-missing-fields", "--rules", p_mi])
+        self.check("牙MI-2 一侧占用槽为 0 ⇒ nonzero_both_sides 判红（rc1）",
+                   rc_z == 1 and any(d.get("kind") == "masked_column_violation"
+                                     for d in (rep_z or {}).get("diffs") or []),
+                   (rc_z, (rep_z or {}).get("diffs")))
+
+        rdb_const = self.write_run("mi-r-const", frames, db=bag_snap(
+            "mir2_test_db_r", [bag_row(1, 1, 0, 777), bag_row(2, 1, 1, 777)]))
+        rc_c, rep_c = self.compare(odb, rdb_const, ["--allow-missing-fields", "--rules", p_mi])
+        self.check("牙MI-3 同一玩家两槽同值（常量填充）⇒ distinct_per_player 判红（rc1）",
+                   rc_c == 1 and any((d.get("record") or {}).get("check") == "distinct_per_player"
+                                     for d in (rep_c or {}).get("diffs") or []),
+                   (rc_c, (rep_c or {}).get("diffs")))
+
+        mi_same = [bag_row(1, 1, 0, 101), bag_row(2, 1, 1, 102)]
+        mi_changed = [bag_row(1, 1, 0, 901), bag_row(2, 1, 1, 102)]
+        decl_mi = {"MakeIndex": {"reason": "selftest", "ref": "D-1", "group_by": "PlayerId",
+                                 "require": ["changes_on_mutation"]}}
+        recs_same, recs_ch = [], []
+        dp.masked_column_checks("mir2_db.characters_bagitem", bag_cols, mi_same, mi_same,
+                                    decl_mi, recs_same, before_a=mi_same, before_b=mi_same)
+        dp.masked_column_checks("mir2_db.characters_bagitem", bag_cols, mi_same, mi_same,
+                                    decl_mi, recs_ch, before_a=mi_changed, before_b=mi_changed)
+        self.check("牙MI-4 before/after 有变化 ⇒ 通过；完全相同 ⇒ changes_on_mutation 判红",
+                   not any(r.get("kind") == "masked_column_violation" for r in recs_ch)
+                   and any(r.get("kind") == "masked_column_violation" for r in recs_same),
+                   (recs_same, recs_ch))
+
+        # 牙MI-5：**用仓库里那份 `rules.json` 本身**（不传 --rules，走 DEFAULT_RULES）——
+        # 否则「有人把 db.masked_columns 登记删了」时上面几颗牙全绿（登记表被删仍全绿 = 没牙）。
+        rc_s, rep_s = self.compare(odb, rdb_diff, ["--allow-missing-fields"])
+        wl_s = [w for w in (rep_s or {}).get("whitelisted") or []
+                if w.get("kind") == "db_column_masked"
+                and w.get("table") == "mir2_db.characters_bagitem"
+                and w.get("field") == "MakeIndex"]
+        occ_a = wl_s[0].get("occupied_a") if len(wl_s) == 1 else None
+        occ_b = wl_s[0].get("occupied_b") if len(wl_s) == 1 else None
+        self.check("牙MI-5 仓库 rules.json 自身的登记生效：MakeIndex-only 差异 ⇒ rc 0 且 whitelisted 点名 D-1"
+                   "（删掉登记 ⇒ 本条红，回到旧的「每次都报一条」）",
+                   rc_s == 0 and len(wl_s) == 1 and "D-1" in (wl_s[0].get("ref") or "")
+                   and "changes_on_mutation" in (wl_s[0].get("skipped") or []),
+                   (rc_s, wl_s or (rep_s or {}).get("diffs")))
+        # F2（reviewer-21 f41dbaa2）：文档承诺「带两侧占用行数」⇒ 记录里必须真有，且两侧相等非 0
+        # （占用行数正是「nonzero_both_sides 真的看过数据」的证据）。F1 裁决后作用域也要随记录走。
+        self.check("牙MI-6 whitelisted 带两侧占用行数（相等且 >0）+ applies_to=dbsnap-direct"
+                   "（管道无 baseline ⇒ 该牙恒 skipped，必须登记作用域）",
+                   isinstance(occ_a, int) and occ_a > 0 and occ_a == occ_b
+                   and wl_s[0].get("applies_to") == "dbsnap-direct",
+                   (occ_a, occ_b, wl_s[0].get("applies_to") if len(wl_s) == 1 else None))
+
+        # 牙MI-7：**声明 changes_on_mutation 却不登记作用域 ⇒ 加载期 rc 2**。
+        # 没有这条时「三牙」可以退化成一个永远 skipped 的名字而全绿（reviewer-21 F1 的正式化）。
+        rules_scope = json.loads(json.dumps(self.builtin_rules))
+        del rules_scope["db"]["masked_columns"]["mir2_db.characters_bagitem"]["MakeIndex"]["applies_to"]
+        p_scope = self.rules_file("mi-noscope.json", rules_scope)
+        rc_sc, rep_sc = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_scope])
+        self.check("牙MI-7 声明 changes_on_mutation 但缺 applies_to ⇒ rc 2（不许退化成永远 skipped）",
+                   rc_sc == 2, (rc_sc, (rep_sc or {}).get("undecidable")))
+
+        # 牙MI-12（F11b）：`applies_to` **非法值** ⇒ rc 2（不是「随便写个值就当域外」）。
+        # 注意：require 里**不带** changes_on_mutation，否则另一条约束（缺作用域）会替它兜住，
+        # 这条牙就测不到 applies_to 的**取值校验**本身（变异「放宽取值校验」时仍绿）。
+        rules_bad_scope = json.loads(json.dumps(self.builtin_rules))
+        decl_bs = rules_bad_scope["db"]["masked_columns"]["mir2_db.characters_bagitem"]["MakeIndex"]
+        decl_bs["applies_to"] = "pipeline"
+        decl_bs["require"] = ["nonzero_both_sides"]
+        p_bad_scope = self.rules_file("mi-badscope.json", rules_bad_scope)
+        rc_bs, rep_bs = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_bad_scope])
+        self.check("牙MI-12 applies_to 非法值（\"pipeline\"，且 require 不含 changes_on_mutation）⇒ rc 2",
+                   rc_bs == 2, (rc_bs, (rep_bs or {}).get("undecidable")))
+
+
     def finish(self):
         total = len(self.passed) + len(self.failed)
         shutil.rmtree(self.root, ignore_errors=True)

@@ -404,6 +404,52 @@ class RuleSet(object):
                                      % (table, col))
                 norm[table][col] = {"mode": mode, "why": why.strip()}
         out["time_columns"] = norm
+        # 已登记的**掩码列**（卡 `openmir2-db-makeindex-mask`）：必须带 reason + ref + 结构牙清单。
+        mc = db.get("masked_columns", {})
+        if not isinstance(mc, dict):
+            raise InputError("db.masked_columns 必须是 {表: {列: {reason, ref, group_by, require}}}")
+        norm_mc = {}
+        allowed_checks = {"nonzero_both_sides", "distinct_per_player", "changes_on_mutation"}
+        for table, cols_decl in mc.items():
+            if not isinstance(cols_decl, dict):
+                raise InputError("db.masked_columns[%r] 必须是 {列: …}" % (table,))
+            norm_mc[table] = {}
+            for col, decl in cols_decl.items():
+                if not isinstance(decl, dict):
+                    raise InputError("db.masked_columns[%r][%r] 必须是对象" % (table, col))
+                reason = decl.get("reason")
+                ref = decl.get("ref")
+                if not isinstance(reason, str) or not reason.strip():
+                    raise InputError("db.masked_columns[%r][%r] 必须写 reason" % (table, col))
+                if not isinstance(ref, str) or not ref.strip():
+                    raise InputError("db.masked_columns[%r][%r] 必须写 ref（登记编号 + 行号）"
+                                     % (table, col))
+                req = decl.get("require")
+                if not isinstance(req, list) or not req:
+                    raise InputError("db.masked_columns[%r][%r].require 必须是非空结构牙清单"
+                                     "（掩掉一列必须带牙，缺了就是放水）" % (table, col))
+                bad = sorted(set(req) - allowed_checks)
+                if bad:
+                    raise InputError("db.masked_columns[%r][%r].require 有未知检查 %s（允许 %s）"
+                                     % (table, col, bad, sorted(allowed_checks)))
+                # 作用域（F1 裁决 244d9f39）：`changes_on_mutation` 需要 before 快照，而窗口管道
+                # （本工具）没有 `--db-baseline-*` ⇒ 该检查**只在 dbsnap 直连**可跑，管道侧恒 skipped。
+                # 把这条作用域做成**加载期硬约束**，别让「三牙承重」变成「两牙 + 一个永远跳过的名字」。
+                applies = decl.get("applies_to")
+                if applies not in (None, "dbsnap-direct"):
+                    raise InputError("db.masked_columns[%r][%r].applies_to 只允许 \"dbsnap-direct\""
+                                     "（其它值没有实现）" % (table, col))
+                if "changes_on_mutation" in req and applies != "dbsnap-direct":
+                    raise InputError(
+                        "db.masked_columns[%r][%r] 声明了 changes_on_mutation，但没有登记 "
+                        "applies_to=\"dbsnap-direct\"：该检查需要 before 快照，而 compare_runs "
+                        "没有 --db-baseline-* 透传（F1 裁决 244d9f39）⇒ 管道里它恒 skipped。"
+                        "要么登记作用域，要么把它从 require 里去掉。" % (table, col))
+                norm_mc[table][col] = {"reason": reason.strip(), "ref": ref.strip(),
+                                       "group_by": decl.get("group_by"),
+                                       "applies_to": applies,
+                                       "require": list(req)}
+        out["masked_columns"] = norm_mc
         tol = db.get("time_tolerance_s", 600)
         if not is_int(tol) or tol < 0 or tol > 86400:
             raise InputError("db.time_tolerance_s 必须是 0..86400 的整数")
@@ -1703,6 +1749,7 @@ def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
             key_mode=db_opts["key_mode"], time_mode=db_opts["time_mode"],
             null_token="NULL", ignore_columns=list(db_opts["ignore_columns"]),
             allow_unknown_table=bool(db_opts["allow_unknown_table"]),
+            masked_columns=db_opts.get("masked_columns"),
             time_witness=db_opts.get("time_columns"),
             time_ref=_side_run_clock(o_dir, r_dir),
             time_scope=_side_char_name(o_dir, r_dir),
@@ -1720,6 +1767,17 @@ def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
     info["records"] = records
     und = []
     for rec in records:
+        if rec.get("kind") == "masked_column_applied":
+            # 掩码必须**显式**出现在报告的 whitelisted 里（卡 openmir2-db-makeindex-mask ①）。
+            info.setdefault("masked_columns", []).append({
+                "table": rec.get("table"), "column": rec.get("column"),
+                "reason": rec.get("reason"), "ref": rec.get("ref"),
+                "checks": rec.get("checks"), "group_by": rec.get("group_by"),
+                # F2（reviewer-21 f41dbaa2）：文档承诺「带两侧占用行数」，这里必须真带（否则删文档）。
+                "occupied_a": rec.get("occupied_a"), "occupied_b": rec.get("occupied_b"),
+                "applies_to": rec.get("applies_to"),
+                "skipped": rec.get("skipped") or []})
+            continue
         if rec.get("kind") in DB_UNDECIDABLE_KINDS:
             und.append({"source": "db", "kind": "db_" + str(rec.get("kind")), "record": rec})
         else:
@@ -1947,6 +2005,15 @@ def compare_main(args):
         report["db"] = db_info
         report["diffs"].extend(db_info.get("diffs") or [])
         report["undecidable"].extend(db_und)
+        # 掩码列必须**显式**进 whitelisted（卡 openmir2-db-makeindex-mask ①：不许静默丢弃）。
+        for m in (db_info.get("masked_columns") or []):
+            report["whitelisted"].append({
+                "source": "db", "field": m["column"], "table": m["table"],
+                "kind": "db_column_masked", "reason": m["reason"], "ref": m["ref"],
+                "checks": m["checks"], "group_by": m.get("group_by"),
+                "occupied_a": m.get("occupied_a"), "occupied_b": m.get("occupied_b"),
+                "applies_to": m.get("applies_to"),
+                "skipped": m.get("skipped") or [], "tier": "L", "approved_by": m["ref"]})
     except (InputError, Undecidable) as e:
         report["db"] = {"state": "error", "detail": str(e), "diffs": [], "undecidable": []}
         report["undecidable"].append({"source": "db", "kind": "db_input_error",

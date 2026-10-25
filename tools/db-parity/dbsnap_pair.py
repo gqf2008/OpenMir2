@@ -396,7 +396,118 @@ def normalized_row(row, col_index, compare_cols, time_cols, time_mode, null_toke
     return tuple(vals)
 
 
-def compare_tables(fq, a_entry, b_entry, opts, records):
+MASK_CHECK_KINDS = ("nonzero_both_sides", "distinct_per_player", "changes_on_mutation")
+
+
+def masked_column_checks(fq, cols, a_rows, b_rows, masked, records,
+                         before_a=None, before_b=None):
+    """**已登记掩码列的结构牙**（卡 `openmir2-db-makeindex-mask`）。
+
+    前提事实（复算 `E:/tmp/window/db-rerun/run2` 得出，写进文档）：`characters_bagitem` 把**空槽**
+    也物化成行，且 `MakeIndex=0`（实测 330,702 / 337,640 行是 0）⇒ 「每一行都非 0」在数据上
+    **不可能成立**，那不是判据。真正的三条性质按「**占用的槽**」定义：
+
+      * `nonzero_both_sides`：**两侧都有占用的槽**（`MakeIndex != 0` 的行数 > 0 且两侧相等）
+        —— 防「一侧根本没写」（一侧全 0 ⇒ 占用 0 行，判红）；
+      * `distinct_per_player`：同一 `group_by`（如 PlayerId）内，**占用槽**的取值互不相同
+        —— 防全填同一个常量；
+      * `changes_on_mutation`：若给了 before 快照（`--baseline-*`），占用集合或取值必须变化
+        —— 防写死常量；没有 before 快照时该条记 `skipped` 并在报告里写明。
+
+    任一不成立 ⇒ `masked_column_violation`（**差异**，不是「判不了」）。
+    每条掩码另发一条 `masked_column_applied` 证据（reason/ref/实际跑的检查 + 两侧占用行数），
+    由上层放进 `whitelisted` —— **不许静默丢弃**。
+    """
+    idx = {c: i for i, c in enumerate(cols)}
+    for col, decl in sorted(masked.items()):
+        if col not in idx:
+            continue
+        checks = list(decl.get("require") or [])
+        group_by = decl.get("group_by")
+
+        def _occ(rows):
+            out = []
+            for r in rows:
+                v = r[idx[col]] if idx[col] < len(r) else None
+                if v is None or v in ("", "NULL"):
+                    continue
+                try:
+                    if int(v) == 0:
+                        continue
+                except ValueError:
+                    pass
+                out.append((r, v))
+            return out
+
+        occ = {"a": _occ(a_rows), "b": _occ(b_rows)}
+
+        if "nonzero_both_sides" in checks:
+            na, nb = len(occ["a"]), len(occ["b"])
+            if na == 0 or nb == 0 or na != nb:
+                records.append({"table": fq, "kind": "masked_column_violation",
+                                "column": col, "check": "nonzero_both_sides",
+                                "occupied_a": na, "occupied_b": nb,
+                                "detail": "%s.%s 的**占用槽**两侧不等或为 0（a=%d、b=%d）"
+                                          "⇒ 掩码放水（某一侧可能根本没写）" % (fq, col, na, nb)})
+        if "distinct_per_player" in checks and group_by and group_by in idx:
+            # **不是「全不相同」**：真机上同一 PlayerId 会有合法重复（同名/同批生成的物品共享
+            # MakeIndex；实测 run2 login_only 的 PlayerId=6227 有 28 个占用槽、25 个不同值）。
+            # 牙要防的是「**全填同一个常量**」⇒ 占用槽 ≥2 时，不同取值数必须 ≥2。
+            for side in ("a", "b"):
+                per = {}
+                for r, v in occ[side]:
+                    g = r[idx[group_by]] if idx[group_by] < len(r) else None
+                    per.setdefault(g, []).append(v)
+                for g, vals in sorted(per.items()):
+                    # 只看**占用槽 ≥2** 的玩家（只装了 1 件的玩家本来就只有 1 个取值）
+                    if len(vals) >= 2 and len(set(vals)) < 2:
+                        records.append({"table": fq, "kind": "masked_column_violation",
+                                        "column": col, "side": side,
+                                        "check": "distinct_per_player", "group": g,
+                                        "distinct": len(set(vals)), "occupied": len(vals), "value": sorted(set(vals))[0],
+                                        "detail": "%s.%s 在 %s=%s 的占用槽里只有 **1 个取值**（%s）"
+                                                  "⇒ 掩码放水（像是常量填充）"
+                                                  % (fq, col, group_by, g, sorted(set(vals))[0])})
+        skipped = []
+        if "changes_on_mutation" in checks:
+            if before_a is None or before_b is None:
+                skipped.append("changes_on_mutation")
+            else:
+                # F10（reviewer-20 49e75392）：**必须看两侧的对称差**——只遍历 before 的键会把
+                # 「纯新增一个槽」误判成「前后没变化」（那正是卡面 ②(c)「**增**删物品」的常见形态）。
+                # 键里带 `Position`：**槽位置换**（同值换槽）也要算变化，否则换个槽位就绕过这条牙。
+                pos_i = idx.get("Position")
+
+                def _keyset(rows):
+                    out = set()
+                    for r, v in _occ(rows):
+                        g = r[idx[group_by]] if group_by in idx and idx[group_by] < len(r) else ""
+                        pos = r[pos_i] if pos_i is not None and pos_i < len(r) else ""
+                        out.add((g, pos, v))
+                    return out
+
+                changed_rows, delta_total = 0, 0
+                for after_rows, before_rows in ((a_rows, before_a), (b_rows, before_b)):
+                    delta = _keyset(after_rows) ^ _keyset(before_rows)
+                    if delta:
+                        changed_rows += 1
+                        delta_total += len(delta)
+                if not changed_rows:
+                    records.append({"table": fq, "kind": "masked_column_violation",
+                                    "column": col, "check": "changes_on_mutation",
+                                    "detail": "%s.%s 在 before/after 之间**没有任何变化**"
+                                              "（两侧对称差均为空）⇒ 掩码放水（像是写死常量）" % (fq, col)})
+        records.append({"table": fq, "kind": "masked_column_applied", "column": col,
+                        "checks": checks, "group_by": group_by, "skipped": skipped,
+                        "occupied_a": len(occ["a"]), "occupied_b": len(occ["b"]),
+                        # F1 裁决（orchestrator 244d9f39，(b)）：`changes_on_mutation` 需要 before
+                        # 快照，而窗口管道（compare_runs）没有 `--db-baseline-*` ⇒ 该牙**仅 dbsnap
+                        # 直连可用**，管道侧恒 `skipped`。`applies_to` 把作用域写进记录本身。
+                        "applies_to": decl.get("applies_to"),
+                        "reason": decl.get("reason"), "ref": decl.get("ref")})
+
+
+def compare_tables(fq, a_entry, b_entry, opts, records, before_a=None, before_b=None):
     """比较一张表；把差异 append 到 records，返回该表差异数。"""
     spec = TABLE_SPECS.get(fq)
     if spec is None and not opts["allow_unknown_table"]:
@@ -435,13 +546,16 @@ def compare_tables(fq, a_entry, b_entry, opts, records):
     pk = (spec or {}).get("pk", [])
     time_cols = set((spec or {}).get("time_columns", []))
     # ignore 是全局参数；只对本表实际存在的列生效（不同表列集不同）。
-    ignore = set(opts["ignore_columns"]) & set(cols)
+    explicit_ignore = set(opts["ignore_columns"]) & set(cols)
+    # 已登记的**掩码列**（`db.masked_columns`）也进 ignore，但它们有独立的结构牙（不许放水）。
+    masked_here = (opts.get("masked_columns") or {}).get(fq) or {}
+    ignore = explicit_ignore | (set(masked_here) & set(cols))
 
     # ignore 白名单校验：只允许已登记易变列；否则拒绝（不悄悄不比）。
     if spec is not None:
         # 已登记时间列允许显式忽略（--ignore-time-columns 会展开到这些列）。
         allowed_ignore = set(spec["volatile"]) | set(spec["time_columns"]) | set(pk)
-        bad = sorted(ignore - allowed_ignore)
+        bad = sorted(explicit_ignore - allowed_ignore)
         if bad:
             raise InputError("表 %s 的 --ignore-columns %s 不是已登记易变列/时间列/主键；"
                              "行为列不许静默忽略（先登记理由）" % (fq, bad))
@@ -463,6 +577,34 @@ def compare_tables(fq, a_entry, b_entry, opts, records):
                             "detail": "manifest.rows 与 tsv 逻辑行数不符（坏快照/值内换行）"})
     if len(records) > n_before:
         return len(records) - n_before
+
+    if masked_here:
+        # `changes_on_mutation` 需要 before 行；**只有 dbsnap 直连（给了 --baseline-a/b）才拿得到**，
+        # 窗口管道（compare_runs）没有这个口 ⇒ 那里恒 `skipped`（F1 裁决 244d9f39）。
+        before_rows_a = before_rows_b = None
+        if before_a is not None and before_b is not None:
+            bcols_a = [c if isinstance(c, str) else c.get("name")
+                       for c in (before_a.get("columns") or [])]
+            bcols_b = [c if isinstance(c, str) else c.get("name")
+                       for c in (before_b.get("columns") or [])]
+            if bcols_a == list(cols) and bcols_b == list(cols):
+                before_rows_a, err_ba = read_rows(before_a, cols)
+                before_rows_b, err_bb = read_rows(before_b, cols)
+                for e in err_ba + err_bb:
+                    e["table"] = fq
+                    e["kind"] = "masked_baseline_" + str(e.get("kind"))
+                    records.append(e)
+                if err_ba or err_bb:
+                    before_rows_a = before_rows_b = None
+            else:
+                # 列不符 ⇒ **不能**静默当成 skipped（那会让「防写死常量」这条牙消失）。
+                records.append({"table": fq, "kind": "masked_column_violation",
+                                "column": ",".join(sorted(masked_here)),
+                                "check": "changes_on_mutation",
+                                "detail": "before 快照列与 after 不符（before=%s / after=%s）"
+                                          "⇒ 无法证明「增删后该列变化」" % (bcols_a, list(cols))})
+        masked_column_checks(fq, cols, a_rows, b_rows, masked_here, records,
+                             before_a=before_rows_a, before_b=before_rows_b)
 
     if opts["key_mode"] == "pk":
         if not pk:
@@ -791,15 +933,61 @@ def check_time_witness(side, fq, entry, spec, opts, records, scope=None, cap=5):
                                   % (fq, col, latest, window[0], window[1], lead, tol)})
 
 
+MASK_CHECK_KINDS_FOR_LOAD = ("nonzero_both_sides", "distinct_per_player",
+                              "changes_on_mutation")
+
+
+def load_masked_columns(path):
+    """读 `--masked-columns FILE` 并做与 `compare_runs` 同口径的 fail-closed 校验。
+
+    F12（reviewer-20 49e75392）：上一轮文档说「dbsnap 直连可跑」，但 CLI **没有**掩码入口
+    （只有 `run_pair()` API 能传）⇒ 照文档用 CLI 试会得到「没有掩码」的假象。这里补上入口。
+    """
+    if not path:
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as e:
+        raise InputError("--masked-columns 读不了 %s: %s" % (path, e))
+    if not isinstance(data, dict):
+        raise InputError("--masked-columns 必须是 {库.表: {列: {...}}} 的对象")
+    out = {}
+    for table, cols_decl in data.items():
+        if not isinstance(cols_decl, dict):
+            raise InputError("--masked-columns[%r] 必须是 {列: {...}}" % (table,))
+        for col, decl in cols_decl.items():
+            if not isinstance(decl, dict):
+                raise InputError("--masked-columns[%r][%r] 必须是对象" % (table, col))
+            for key in ("reason", "ref"):
+                if not isinstance(decl.get(key), str) or not decl[key].strip():
+                    raise InputError("--masked-columns[%r][%r] 必须写 %s" % (table, col, key))
+            req = decl.get("require")
+            if not isinstance(req, list) or not req:
+                raise InputError("--masked-columns[%r][%r].require 必须是非空结构牙清单"
+                                 "（掩掉一列必须带牙）" % (table, col))
+            bad = sorted(set(req) - set(MASK_CHECK_KINDS_FOR_LOAD))
+            if bad:
+                raise InputError("--masked-columns[%r][%r].require 有未知检查 %s（允许 %s）"
+                                 % (table, col, bad, list(MASK_CHECK_KINDS_FOR_LOAD)))
+            applies = decl.get("applies_to")
+            if applies not in (None, "dbsnap-direct"):
+                raise InputError("--masked-columns[%r][%r].applies_to 只允许 \"dbsnap-direct\""
+                                 % (table, col))
+            out.setdefault(table, {})[col] = dict(decl)
+    return out
+
+
 def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
              time_mode="exact", null_token=NULL_TOKEN_DEFAULT, ignore_columns=(),
              allow_unknown_table=False, baseline_a=None, baseline_b=None,
-             time_witness=None, time_ref=None, time_scope=None, time_lead_s=30,
+             masked_columns=None, time_witness=None, time_ref=None, time_scope=None, time_lead_s=30,
              time_tolerance_s=600, quiet=False):
     """核心入口（不 sys.exit）。返回 (rc, records, summary)。"""
     opts = {"key_mode": key_mode, "time_mode": time_mode,
             "null_token": null_token, "ignore_columns": list(ignore_columns),
             "allow_unknown_table": allow_unknown_table, "stats": {},
+            "masked_columns": dict(masked_columns or {}),
             "time_witness": dict(time_witness or {}),
             "time_ref": dict(time_ref or {}),
             "time_scope": dict(time_scope or {}),
@@ -848,7 +1036,8 @@ def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
             records.append(rec)
             per_table[fq] = 1
             continue
-        n = compare_tables(fq, A[fq], B[fq], opts, records)
+        n = compare_tables(fq, A[fq], B[fq], opts, records,
+                           before_a=(BA or {}).get(fq), before_b=(BB or {}).get(fq))
         per_table[fq] = n
         if BA is not None and BB is not None:
             if fq not in BA or fq not in BB:
@@ -886,10 +1075,16 @@ def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
                 if entry is not None:
                     check_time_witness(side, fq, entry, spec, opts, records, scope=scope)
 
+    # **证据记录不是差异**：`masked_column_applied` 只证明「掩码已登记并跑了哪些牙」，
+    # 把它算进 `red` 会让「掩码生效」本身变成 rc=1（`masked_column_violation` 仍照常算差异）。
+    NOT_DIFF_KINDS = ("masked_column_applied",)
     counts = {}
     for r in records:
+        if r["kind"] in NOT_DIFF_KINDS:
+            continue
         counts[r["kind"]] = counts.get(r["kind"], 0) + 1
-    red = len(records) > 0
+    evidence = {k: sum(1 for r in records if r["kind"] == k) for k in NOT_DIFF_KINDS}
+    red = any(r["kind"] not in NOT_DIFF_KINDS for r in records)
     unknown_tables = sorted(t for t in names if t not in TABLE_SPECS)
     unrecognized = opts["stats"].get("unrecognized_time_values", 0)
     summary = {
@@ -903,7 +1098,8 @@ def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
                     "baseline_b": os.path.abspath(baseline_b) if baseline_b else None},
         "tables": per_table,
         "diff_counts": counts,
-        "diff_records": len(records),
+        "diff_records": sum(counts.values()),
+        "masked_column_evidence": evidence,
         "red": red,
         # 低层行为显式登记：未登记表（仅在 --allow-unknown-table 下放行）
         # 与 normalized 下无法识别、按 exact 比较的时间值数量。
@@ -1337,6 +1533,110 @@ def cmd_selftest(args):
                                              "allow_unknown_table_annotated", rc,
                                              summary.get("unknown_tables")))
 
+        # 掩码列结构牙的**直连实证**（F1 裁决 244d9f39：管道恒 skipped，必须在 dbsnap 直连里
+        # 证明 `changes_on_mutation` 真的会咬）。三态：
+        #   ① 不给 baseline ⇒ skipped（与管道侧同形，说明管道里为何恒 skipped）；
+        #   ② 给了 baseline 且前后**完全没变** ⇒ masked_column_violation（防写死常量）⇒ rc 1；
+        #   ③ 给了 baseline 且某个占用槽真的变了 ⇒ 无违规 ⇒ rc 0。
+        def _bag(i_, pos, mi):
+            return [str(i_), "1", str(pos), str(mi), "207", "4000", "4000"]
+
+        decl_mc = {"MakeIndex": {"reason": "selftest F1", "ref": "D-1",
+                                 "group_by": "PlayerId",
+                                 "require": ["nonzero_both_sides", "distinct_per_player",
+                                             "changes_on_mutation"],
+                                 "applies_to": "dbsnap-direct"}}
+        mc = {"mir2_db.characters_bagitem": decl_mc}
+        before_d = os.path.join(tmp, "mc-before")
+        after_same = os.path.join(tmp, "mc-same")
+        after_chg = os.path.join(tmp, "mc-changed")
+        write_snapshot(before_d, {"mir2_db.characters_bagitem": [_bag(1, 0, 101), _bag(2, 1, 102)]})
+        write_snapshot(after_same, {"mir2_db.characters_bagitem": [_bag(1, 0, 101), _bag(2, 1, 102)]})
+        write_snapshot(after_chg, {"mir2_db.characters_bagitem": [_bag(1, 0, 901), _bag(2, 1, 102)]})
+
+        rc0_, recs0_, _ = run_pair(after_same, after_same, quiet=True, masked_columns=mc)
+        applied0 = [r for r in recs0_ if r.get("kind") == "masked_column_applied"]
+        skip0 = (applied0[0].get("skipped") if applied0 else None) or []
+        rc1_, recs1_, _ = run_pair(after_same, after_same, quiet=True, masked_columns=mc,
+                                   baseline_a=before_d, baseline_b=before_d)
+        viol = [r for r in recs1_ if r.get("kind") == "masked_column_violation"]
+        rc2_, recs2_, _ = run_pair(after_chg, after_chg, quiet=True, masked_columns=mc,
+                                   baseline_a=before_d, baseline_b=before_d)
+        viol2 = [r for r in recs2_ if r.get("kind") == "masked_column_violation"]
+        ok = (rc0_ == 0 and "changes_on_mutation" in skip0
+              and rc1_ == 1 and any(v.get("check") == "changes_on_mutation" for v in viol)
+              and rc2_ == 0 and not viol2)
+        passed += 1 if ok else 0
+        failed += 0 if ok else 1
+        print("%s %-42s no-baseline rc=%d skip=%s / same rc=%d viol=%s / changed rc=%d viol=%d"
+              % ("PASS" if ok else "FAIL", "masked_changes_on_mutation_direct",
+                 rc0_, skip0, rc1_, [v.get("check") for v in viol], rc2_, len(viol2)))
+
+        # 牙MI-8（F10，reviewer-20 49e75392）：**纯新增**一个占用槽 ⇒ 必须 rc 0。
+        # 旧实现只遍历 before 的键 ⇒ 纯新增被判成「前后没变化」（卡面 ②(c)「增删物品」的常见形态）。
+        after_add = os.path.join(tmp, "mc-added")
+        write_snapshot(after_add, {"mir2_db.characters_bagitem":
+                                   [_bag(1, 0, 101), _bag(2, 1, 102), _bag(3, 2, 103)]})
+        rc3_, recs3_, _ = run_pair(after_add, after_add, quiet=True, masked_columns=mc,
+                                   baseline_a=before_d, baseline_b=before_d)
+        viol3 = [r for r in recs3_ if r.get("kind") == "masked_column_violation"]
+        ok8 = rc3_ == 0 and not viol3
+        passed += 1 if ok8 else 0
+        failed += 0 if ok8 else 1
+        print("%s %-42s rc=%d viol=%s（纯新增 101,102 -> 101,102,103）"
+              % ("PASS" if ok8 else "FAIL", "masked_changes_on_mutation_add_only",
+                 rc3_, [v.get("check") for v in viol3]))
+
+        # 牙MI-9：**同值换槽**（Position 0/1 互换）⇒ 必须 rc 0（键里不带 Position 会被当成没变化）。
+        after_swap = os.path.join(tmp, "mc-swap")
+        write_snapshot(after_swap, {"mir2_db.characters_bagitem":
+                                    [_bag(1, 1, 101), _bag(2, 0, 102)]})
+        rc4_, recs4_, _ = run_pair(after_swap, after_swap, quiet=True, masked_columns=mc,
+                                   baseline_a=before_d, baseline_b=before_d)
+        viol4 = [r for r in recs4_ if r.get("kind") == "masked_column_violation"]
+        ok9 = rc4_ == 0 and not viol4
+        passed += 1 if ok9 else 0
+        failed += 0 if ok9 else 1
+        print("%s %-42s rc=%d viol=%s（槽位互换 0<->1）"
+              % ("PASS" if ok9 else "FAIL", "masked_changes_on_mutation_slot_swap",
+                 rc4_, [v.get("check") for v in viol4]))
+
+        # 牙MI-10（F11a）：before 快照**列不符** ⇒ 必须报 masked_column_violation，不许静默 skipped。
+        bad_before = os.path.join(tmp, "mc-badcols")
+        write_snapshot(bad_before, {"mir2_db.characters_bagitem": [_bag(1, 0, 101)]})
+        manbp = os.path.join(bad_before, "manifest.json")
+        manb = json.load(open(manbp, encoding="utf-8"))
+        for t in manb["tables"]:
+            t["columns"] = [c for c in t["columns"] if c["name"] != "DuraMax"]
+        json.dump(manb, open(manbp, "w", encoding="utf-8", newline=""),
+                  ensure_ascii=False, indent=2)
+        rc5_, recs5_, _ = run_pair(after_same, after_same, quiet=True, masked_columns=mc,
+                                   baseline_a=bad_before, baseline_b=bad_before)
+        viol5 = [r for r in recs5_ if r.get("kind") == "masked_column_violation"
+                 and r.get("check") == "changes_on_mutation"]
+        ok10 = rc5_ == 1 and bool(viol5)
+        passed += 1 if ok10 else 0
+        failed += 0 if ok10 else 1
+        print("%s %-42s rc=%d check=%s（before 列不符 ⇒ 不许静默 skipped）"
+              % ("PASS" if ok10 else "FAIL", "masked_baseline_column_mismatch_red",
+                 rc5_, [v.get("check") for v in viol5]))
+
+        # 牙MI-11（F12）：CLI 的 `--masked-columns FILE` 真的生效——同一对快照，
+        # 带掩码 rc 0（差异被掩 + 牙过后），不带掩码 rc 1（MakeIndex 差异暴露）。
+        mc_path = os.path.join(tmp, "mc.json")
+        with open(mc_path, "w", encoding="utf-8", newline="") as f:
+            json.dump(mc, f, ensure_ascii=False, indent=2)
+        diff_dirs = os.path.join(tmp, "mc-diffpair")
+        write_snapshot(diff_dirs, {"mir2_db.characters_bagitem": [_bag(1, 0, 201), _bag(2, 1, 102)]})
+        rc_cli_masked = main(["diff", after_chg, diff_dirs, "--masked-columns", mc_path,
+                              "--baseline-a", before_d, "--baseline-b", before_d,
+                              "--quiet", "--jsonl", ""])
+        rc_cli_plain = main(["diff", after_chg, diff_dirs, "--quiet", "--jsonl", ""])
+        ok11 = rc_cli_masked == 0 and rc_cli_plain == 1
+        passed += 1 if ok11 else 0
+        failed += 0 if ok11 else 1
+        print("%s %-42s masked rc=%d / plain rc=%d"
+              % ("PASS" if ok11 else "FAIL", "masked_columns_cli_entry", rc_cli_masked, rc_cli_plain))
         drift = check_spec_drift()
         if drift and not drift[0].startswith("SKIP"):
             failed += 1
@@ -1412,6 +1712,9 @@ def build_parser():
     d.add_argument("--allow-unknown-table", action="store_true")
     d.add_argument("--baseline-a")
     d.add_argument("--baseline-b")
+    d.add_argument("--masked-columns", metavar="FILE",
+                   help="已登记掩码列的 JSON（形如 {\"库.表\": {列: {reason, ref, group_by, "
+                        "applies_to, require}}}）；不给=不掩码")
     d.add_argument("--jsonl", default="", help="差异 JSONL 输出路径（- = stdout；默认不输出）")
     d.add_argument("--summary-out", help="摘要 JSON 输出路径")
     d.add_argument("--quiet", action="store_true")
@@ -1425,6 +1728,7 @@ def main(argv=None):
     if args.cmd == "selftest":
         return cmd_selftest(args)
     if args.cmd == "check-spec":
+
         drift = check_spec_drift()
         for x in drift:
             print(x)
@@ -1447,6 +1751,7 @@ def main(argv=None):
             null_token=args.null_token, ignore_columns=ignore,
             allow_unknown_table=args.allow_unknown_table,
             baseline_a=args.baseline_a, baseline_b=args.baseline_b,
+            masked_columns=load_masked_columns(args.masked_columns),
             quiet=args.quiet)
     except InputError as e:
         print("RED: %s" % e, file=sys.stderr)

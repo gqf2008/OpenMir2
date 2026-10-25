@@ -21,7 +21,7 @@
 
 | 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |
 | --- | --- | --- | --- |
-| D-1 | 掉落对拍不含 `UserItem.MakeIndex` | C# `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回 `计数器 + HUtil32.GetTickCount()`，含墙钟，**两次 C# 运行都不一致**，不存在可对拍的真值。字段本身只是唯一 ID，不影响掉落内容（物品/持久/极品属性已对拍，diff=0） | D 线（待 owner 复核） |
+| D-1 | 掉落对拍不含 `UserItem.MakeIndex`；**同一依据现已推广到 DB 列**（`characters_bagitem.MakeIndex` 在 `rules.json` 的 `db.masked_columns` 里登记掩码 + 三条结构牙，卡 `openmir2-db-makeindex-mask`） | C# `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回 `计数器 + HUtil32.GetTickCount()`，含墙钟，**两次 C# 运行都不一致**，不存在可对拍的真值。字段本身只是唯一 ID，不影响掉落内容（物品/持久/极品属性已对拍，diff=0） | D 线（待 owner 复核） |
 | D-2 | `equals_ordinal_ignore_case` 用 Unicode 大写折叠近似 .NET `OrdinalIgnoreCase` | 仅影响物品名匹配；现网物品名为中文 + ASCII，两种规则在 ASCII/中文域内判定相同，实测 1000 物品名 + 全部掉落表对拍 diff=0。若未来引入土耳其语 i 等特殊字符需重审 | D 线（待 owner 复核） |
 | D-3 | 固定种子 RNG 复刻的是 legacy 减法算法；C# 生产路径 `new Random()`（无参）在 .NET 6+ 是 xoshiro256**。可对拍的边界 = **带种子构造**（legacy 减法，固定种子下两侧序列已证 0 差异；B 线脚本改名用的 `RandomNumber.GetRandomNumber` 同属此列） | 无参序列**无法**做固定种子对拍（两次运行不同）。这是"统计手感"层面的已知风险而非可测差异：固定种子下两侧算法与序列已证逐项相同（门禁②）。M3 若要求与现网逐次掉落一致，需另立"同种子注入"方案（C# 侧无法注入种子到无参 Random，届时不等价是 C# 自身的限制） | D 线（待 owner 复核） |
 | D-4 | 掉落门禁对"只改概率数值"的篡改存在漏检窗口（N=100 采样踩不中翻转区间，实测 `10/100→10/101` 未变红） | 已如实记录；序列级错误（种子/顺序/次数）与内容级差异（物品、持久、属性）100% 可检出。提高 N 可缩小窗口，成本是运行时间 | D 线（待 owner 复核） |
