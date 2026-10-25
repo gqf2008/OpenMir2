@@ -153,10 +153,71 @@
     "monsters": [
       {
         "map": "0",
+        "x": 329,
+        "y": 329,
+        "name": "鸡",
+        "count": 4
+      },
+      {
+        "map": "0",
+        "x": 330,
+        "y": 329,
+        "name": "鸡",
+        "count": 4
+      },
+      {
+        "map": "0",
+        "x": 331,
+        "y": 329,
+        "name": "鸡",
+        "count": 4
+      },
+      {
+        "map": "0",
+        "x": 329,
+        "y": 330,
+        "name": "鸡",
+        "count": 4
+      },
+      {
+        "map": "0",
+        "x": 331,
+        "y": 330,
+        "name": "鸡",
+        "count": 4
+      },
+      {
+        "map": "0",
+        "x": 329,
+        "y": 331,
+        "name": "鸡",
+        "count": 4
+      },
+      {
+        "map": "0",
         "x": 330,
         "y": 331,
         "name": "鸡",
-        "count": 1
+        "count": 4
+      },
+      {
+        "map": "0",
+        "x": 331,
+        "y": 331,
+        "name": "鸡",
+        "count": 4
+      }
+    ],
+    "inventory_replace": [
+      {
+        "position": 40,
+        "index": 207,
+        "make_index": 5001,
+        "std_mode": 5,
+        "ani_count": 1,
+        "dura": 4000,
+        "dura_max": 4000,
+        "note": "木剑（StdMode5，Shape=1 ⇒ ani_count 必须写 1）；供 CM_TAKEONITEM 装备，Dc>0"
       }
     ]
   }

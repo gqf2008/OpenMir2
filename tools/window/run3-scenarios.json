@@ -24,7 +24,7 @@
     {"n": 19, "name": "clearmapmon_q001",     "profile": "alt",          "extra": []},
     {"n": 20, "name": "dropgold_zero_draw", "profile": "alt",        "extra": []},
     {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": ["--timeout-ms", "60000", "--profile", "tools/window/profiles/butch_monsters.json"],
-     "blocked": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合，首个闸门 StartTick==0 立即刷）。**剩余缺口 = 真机实测**（装备 Dc>0 → 寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本）。未打通前不得声称可跑。"},
+     "blocked": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合）。**装备腿已绿**：`CM_TAKEONITEM(1003, recog=5001)` → **`SM_TAKEON_OK(615)`** 实测命中（Dc>0）。**当前缺口 = 选靶规则**：`track: nearest:鸡` 先选最近、再要求八向相邻；真机轮 5 次里 nearest 分别落在 4 格 / 2 格 / **玩家同格** ⇒ `StepFailed`。正由卡 `openmir2-probe-track-target-adjacency` 修（相邻优先 + 等不到时列出坐标与距离）。修好后跑：寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本。未打通前不得声称可跑。"},
     {"n": 22, "name": "castle_merchant_tax", "profile": "alt",       "extra": [],
      "blocked": "① 买武器腿缺 652 ClientItem buffer 解码取 MakeIndex（645 不含，运行时计数推不出）；②「SaveTick/600s 门不可观测」已证伪（SaveTick 只写时间戳，ConsoleShowUserCountTime 可被 profile 覆盖到 5s）；**真缺口=税入账原因未定位**。买药腿已由 #23 覆盖（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
     {"n": 23, "name": "castle_merchant_tax_potion", "profile": "alt", "extra": ["--timeout-ms", "700000"]},
