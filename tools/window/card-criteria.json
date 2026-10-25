@@ -132,11 +132,12 @@
         "recog": 100,
         "min_count": 1,
         "max_count": 1,
+        "count_scope": "all",
         "fields": [
           {"path": "param", "expect": 0, "cmp": "eq"}
         ]
       },
-      "narrowed": "source 的「653 一条、Recog 同源」由 min_count=max_count=1 + recog 过滤覆盖；金币净差/地面物件/RNG 流位另条 machine=false 登记"
+      "narrowed": "source 的「653 **一条**、Recog 同源」= `count_scope=all` 下的总帧数恰 1（多出任何 recog 的 653 都算回归）+ recog 过滤后的 param 断言；金币净差/地面物件/RNG 流位另条 machine=false 登记"
     },
     {
       "card": "openmir2-inbound-dispatch-red-batch",
@@ -150,9 +151,21 @@
       "card": "openmir2-inbound-dispatch-red-batch",
       "w_item": "W-DG-2",
       "scenario": "butch_two_draws",
-      "source": "docs/window-closure-ledger-20261025.md §1 第 6 行 + tools/probe/scenarios/butch_two_draws.json（SM_SKELETON(33) → SM_BUTCH(637)、两抽值域 [5,20]/[100,300]）",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 6 行；**oracle 订正**：`src/M2Server/Player/PlayObject.Operate.cs:731-738`（仅 `BodyLeathery <= 0` 才置 `Skeleton=true` 并发 `RM_SKELETON`）⇒ `SM_DEATH(32)` → **`SM_BUTCH(637)` 收官**，`SM_SKELETON(33)` **不是每刀必发**",
+      "assert": {
+        "ident": "SM_BUTCH",
+        "min_count": 1,
+        "order": ["SM_DEATH", "SM_BUTCH"]
+      },
+      "narrowed": "只覆盖帧面收官（死亡帧在 637 之前、637 至少一条）；**不要求 33**（要多次屠宰把 BodyLeathery 打到 ≤0 才出现）。两抽值域 [5,20]/[100,300] 需 RNG 账本（另条 machine=false 登记）"
+    },
+    {
+      "card": "openmir2-inbound-dispatch-red-batch",
+      "w_item": "W-DG-2-rng",
+      "scenario": "butch_two_draws",
+      "source": "docs/window-closure-ledger-20261025.md §1 第 6 行（两抽值域 [5,20]/[100,300] + 同 seed 流水账本 site/order）",
       "machine": false,
-      "reason": "场景仍 blocked：唯一缺口 = 场景内击杀步（活体夹具与 C# RNG 已落地）⇒ 无证据可采；解封前不得声称可跑"
+      "reason": "两抽值域与流位（site/order）只能靠 MIR2_RNG_LOG 账本 + 同 seed 复跑判；帧面只看得到 637 出现（另有 machine=true 的 W-DG-2 条目）"
     },
     {
       "card": "openmir2-castle-official-design",

@@ -133,6 +133,9 @@ def load_criteria(path):
                 raise UsageError('%s.assert.max_count 必须是 ≥1 的整数' % where)
             if mc < int(a.get('min_count', 1)):
                 raise UsageError('%s.assert.max_count 不能小于 min_count' % where)
+        if a.get('count_scope', 'filtered') not in ('filtered', 'all'):
+            raise UsageError("%s.assert.count_scope 只认 filtered/all（实得 %r）"
+                             % (where, a.get('count_scope')))
         if a.get('match', 'last') not in ('last', 'any', 'all'):
             raise UsageError('%s.assert.match 只认 last/any/all' % where)
         if 'narrowed' in c and not isinstance(c['narrowed'], str):
@@ -269,6 +272,7 @@ def evaluate(item, frames, names, scenario=None):
         sel = [f for f in sel if path_matches(f['__file'], pat)]
     if not sel:
         return 'UNDECIDABLE', 'ident=%d 不在证据根里（该场景没跑到/帧未采）' % ident
+    ident_sel = sel          # 该 ident 在证据根里的**全量**（仅受 only_when 约束）
     if 'recog' in a:
         rec = [f for f in sel if f.get('recog') == a['recog']]
         if not rec:
@@ -276,11 +280,18 @@ def evaluate(item, frames, names, scenario=None):
                 ident, a['recog'], sorted({f.get('recog') for f in sel}))
         sel = rec
     min_count = int(a.get('min_count', 1))
-    if len(sel) < min_count:
-        return 'UNDECIDABLE', 'ident=%d 只出现 %d 次 < min_count=%d' % (ident, len(sel), min_count)
-    if a.get('max_count') is not None and len(sel) > int(a['max_count']):
-        return 'FAIL', 'ident=%d 出现 %d 次 > max_count=%d（多出的帧是回归，不是缺数据）' % (
-            ident, len(sel), int(a['max_count']))
+    # 计数口径（卡 `openmir2-card-evidence-count-scope`）：
+    #   filtered（默认）= 按 `recog` 过滤后的帧数（原语义）；
+    #   all           = 按 ident 的**总帧数**（不受 recog 过滤影响）——「653 总帧数恰一条」用它。
+    scope = a.get('count_scope', 'filtered')
+    counted = ident_sel if scope == 'all' else sel
+    if len(counted) < min_count:
+        return 'UNDECIDABLE', 'ident=%d %s出现 %d 次 < min_count=%d' % (
+            ident, '' if scope == 'filtered' else '（count_scope=all）', len(counted), min_count)
+    if a.get('max_count') is not None and len(counted) > int(a['max_count']):
+        return 'FAIL', 'ident=%d %s出现 %d 次 > max_count=%d（多出的帧是回归，不是缺数据）' % (
+            ident, '' if scope == 'filtered' else '（count_scope=all）',
+            len(counted), int(a['max_count']))
     fields = a.get('fields') or []
     match = a.get('match', 'last')
     results = []
@@ -463,6 +474,42 @@ def selftest():
             rc = main(['--run-dir', norun, '--criteria', crit2, '--allow-unverified'])
         chk(rc == 0 and any(l.startswith('PASS') for l in buf.getvalue().splitlines()),
             '牙j-对照：--allow-unverified ⇒ 放行判 PASS')
+        # 牙 k：count_scope=all ⇒ 「653 总帧数恰 1」；两帧（recog 100/999）必须 FAIL
+        scope_all = {'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 653, 'recog': 100, 'min_count': 1, 'max_count': 1,
+            'count_scope': 'all'}}
+        scope_filt = {'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 653, 'recog': 100, 'min_count': 1, 'max_count': 1}}
+        two653 = [dict(frames[0], seq=1, recog=100), dict(frames[0], seq=2, recog=999)]
+        v, d = evaluate(scope_all, two653, {})
+        chk(v == 'FAIL' and 'count_scope=all' in d,
+            '牙k：count_scope=all 且 653 总帧数=2 ⇒ FAIL（原假 PASS）')
+        v, _ = evaluate(scope_filt, two653, {})
+        chk(v == 'PASS', '牙k-对照：默认 filtered 只数 recog=100 ⇒ PASS')
+        one653 = [dict(frames[0], seq=1, recog=100)]
+        v, _ = evaluate(scope_all, one653, {})
+        chk(v == 'PASS', '牙k2：count_scope=all 且总帧数=1 ⇒ PASS')
+        bad_scope = os.path.join(tmp, 'badscope.json')
+        with open(bad_scope, 'w', encoding='utf-8') as fh:
+            json.dump({'format': 'card-criteria/1', 'criteria': [
+                {'card': 'c', 'w_item': 'w', 'scenario': 's',
+                 'assert': {'ident': 653, 'count_scope': 'nope'}}]}, fh)
+        try:
+            load_criteria(bad_scope)
+            chk(False, '牙m：count_scope 非法 ⇒ 加载期拒')
+        except UsageError:
+            chk(True, '牙m：count_scope 非法 ⇒ 加载期拒（点名）')
+        # 牙 n：W-DG-2 的 oracle 口径——637 收官、**不要求 33**
+        wdg2 = {'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 637, 'min_count': 1, 'order': [32, 637]}}
+        death_butch = [dict(frames[0], seq=1, ident=32, recog=100),
+                       dict(frames[0], seq=2, ident=637, recog=100)]
+        v, _ = evaluate(wdg2, death_butch, {})
+        chk(v == 'PASS', '牙n：SM_DEATH(32) → SM_BUTCH(637) ⇒ PASS')
+        only33 = [dict(frames[0], seq=1, ident=32, recog=100),
+                  dict(frames[0], seq=2, ident=33, recog=100)]
+        v, _ = evaluate(wdg2, only33, {})
+        chk(v != 'PASS', '牙n-对照：只有 33 没有 637 ⇒ 不得 PASS（33 非每刀必发）')
         # 判据表校验 fail-closed
         bad = os.path.join(tmp, 'bad.json')
         open(bad, 'w', encoding='utf-8').write(json.dumps({'format': 'card-criteria/1', 'criteria': [
