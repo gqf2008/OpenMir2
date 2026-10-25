@@ -8724,6 +8724,69 @@ def _selftest_save_settle():
     return out
 
 
+def _falsy_or_exit_code_nodes(src):
+    """AST 扫描：找出 `... exit_code ... or 2` 形态的 `BoolOp(Or)`（review F2）。
+
+    文本匹配两头都坏（注释误报 / 换引号与分支后假绿），所以只认语法树：
+    `Or` 的右值是常量 `2`、左值文本里出现 `exit_code`。
+    """
+    import ast
+    out = []
+    tree = ast.parse(src)
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.BoolOp) and isinstance(node.op, ast.Or)):
+            continue
+        vals = node.values
+        right = vals[-1]
+        if not (isinstance(right, ast.Constant) and right.value == 2):
+            continue
+        left_dump = " ".join(ast.dump(v) for v in vals[:-1])
+        if "exit_code" in left_dump:
+            out.append(node)
+    return out
+
+
+def _selftest_main_exit_code(tmp):
+    """卡 openmir2-runbatch-rc-attribution：PASS=>0 / FAIL=>2 / DRY-RUN=>0 / None=>2。"""
+    import inspect
+    out = []
+    out.append((main_exit_code({"exit_code": 0}) == 0,
+                "RC1 PASS（exit_code=0）=> 进程 rc=0（旧实现 `0 or 2` 会返回 2）"))
+    out.append((main_exit_code({"exit_code": 2}) == 2,
+                "RC2 FAIL/UNDECIDABLE（exit_code=2）=> rc=2"))
+    out.append((main_exit_code({}) == 2 and main_exit_code({"exit_code": None}) == 2,
+                "RC3 缺 exit_code / None => rc=2（只有 None 才回落）"))
+    src = inspect.getsource(main)
+    out.append(("main_exit_code(summary)" in src
+                and not _falsy_or_exit_code_nodes(src),
+                "RC4 接线：main() 走 main_exit_code，且 AST 扫描无 `exit_code … or 2` 形态"))
+    NL = "\n"
+    comment_src = (
+        "def f(summary):" + NL
+        + "    # 历史写法 return int(summary.get('exit_code') or 2) 已废弃" + NL
+        + "    return 0" + NL)
+    out.append((_falsy_or_exit_code_nodes(comment_src) == [],
+                "RC 牙1 AST 扫描不误报注释里的旧写法（文本匹配会红）"))
+    bad_src = (
+        "def f(summary):" + NL
+        + "    if summary.get('exit_code') is not None:" + NL
+        + "        return 0" + NL
+        + "    return int(summary.get('exit_code') or 2)" + NL)
+    out.append((len(_falsy_or_exit_code_nodes(bad_src)) == 1,
+                "RC 牙1b AST 扫描能抓住「条件分支里保留 `or 2`」的换形（文本匹配会漏）"))
+    out.append((main_exit_code({"exit_code": True}) == 2,
+                "RC 牙1c bool True 不当作 0/1（fail-closed 到 2）"))
+    out.append((main_exit_code({"exit_code": False}) == 2,
+                "RC 牙1d **bool False 不得当成 0**（review F1：False 被 int() 会假绿）"))
+    sql = _save_settle_sql("mir2_test_db", "winplay0")
+    out.append(("c.`LASTUPDATE`" in sql and "characters_ablity" in sql
+                and "characters`.`ModifyTime" not in sql
+                and "MAX(`ModifyTime`)" not in sql,
+                "RC 牙2 存档落定 SQL 用 characters.LASTUPDATE + characters_ablity.ModifyTime，"
+                "且不出现 characters.ModifyTime（防旧版错列回归）"))
+    return out
+
+
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
     stub = os.path.join(tmp, "stub.py")
@@ -10391,6 +10454,8 @@ def selftest():
             chk(cond, msg)
         for cond, msg in _selftest_inventory_fixture(tmp):
             chk(cond, msg)
+        for cond, msg in _selftest_main_exit_code(tmp):
+            chk(cond, msg)
         for cond, msg in _selftest_fixtures(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_monsters_prepend(tmp):
@@ -10690,6 +10755,21 @@ def build_parser():
     return ap
 
 
+def main_exit_code(summary):
+    """真实进程退出码（卡 `openmir2-runbatch-rc-attribution`）。
+
+    **`0` 是合法值**：历史实现 `int(summary.get("exit_code") or 2)` 在 PASS（0）时
+    因 `0 or 2` 求值为 2，导致**每个非 DRY-RUN 运行都以 rc=2 退出**（实测见
+    docs/runbatch-rc-attribution-20261025.md）。这里只在 **None** 时回落到 2。
+    """
+    code = summary.get("exit_code")
+    # `None` 与 `bool` 都视为「没有合法退出码」：`False` 若被 int() 会变成 0（假绿），
+    # `True` 会变成 1（非法含义）——两者都 fail-closed 到 2（review `ee0122a8` F1）。
+    if code is None or isinstance(code, bool):
+        return 2
+    return int(code)
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.selftest:
@@ -10738,7 +10818,7 @@ def main(argv=None):
     print("VERDICT: %s (compare_rc=%s, exit=%s)  out=%s"
           % (summary.get("verdict"), summary.get("compare_rc"),
              summary.get("exit_code"), summary.get("out")))
-    return int(summary.get("exit_code") or 2)
+    return main_exit_code(summary)
 
 
 if __name__ == "__main__":

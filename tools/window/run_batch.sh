@@ -461,29 +461,45 @@ PY
         verdict="-"; cmp_rc="-"; cw_exit="-"; o_fr="-"; r_fr="-"; cmp_fr="-"
     fi
 
+    # 外层 rc 归因（卡 openmir2-runbatch-rc-attribution）：124=>TIMEOUT / 137=>KILLED；
+    # PASS 但外侧非 0（含历史 falsy-zero 的 2）=> PASS(outer_rc_exception) 或 UNDECIDABLE。
+    local vnote=""
+    if [ "$skipped" -eq 0 ] && [ "$verdict" != "-" ]; then
+        local attr
+        attr=$("$PY" -I -B tools/window/rc_attribution.py \
+            --outer-rc "$outer_rc" --self-exit "$cw_exit" \
+            --verdict "$verdict" --compare-rc "$cmp_rc" 2>/dev/null)
+        if [ -n "$attr" ]; then
+            verdict=$(printf '%s' "$attr" | cut -f1)
+            vnote=$(printf '%s' "$attr" | cut -f2-)
+        fi
+    fi
+
     if [ "$skipped" -eq 0 ]; then
-        log "RESULT n=$n name=$name verdict=$verdict outer_rc=$outer_rc compare_rc=$cmp_rc exit_code=$cw_exit frames=${o_fr}/${r_fr}/${cmp_fr} duration=${duration}s"
+        log "RESULT n=$n name=$name verdict=$verdict outer_rc=$outer_rc compare_rc=$cmp_rc exit_code=$cw_exit frames=${o_fr}/${r_fr}/${cmp_fr} duration=${duration}s verdict_note=${vnote:-none}"
     fi
 
     local json
     json=$("$PY" -I -B - "$n" "$name" "$prof" "$extra" "$verdict" "$cmp_rc" "$cw_exit" \
         "$o_fr" "$r_fr" "$cmp_fr" "$outer_rc" "$duration" "$skipped" "$skip_reason" \
-        "$out" "$logf" <<'PY'
+        "$out" "$logf" "$vnote" <<'PY'
 import json, sys
 (n, name, prof, extra, verdict, cmp_rc, cw_exit, o_fr, r_fr, cmp_fr,
- outer_rc, duration, skipped, skip_reason, out, logf) = sys.argv[1:17]
+ outer_rc, duration, skipped, skip_reason, out, logf, vnote) = sys.argv[1:18]
 
 def maybe_int(v):
     return int(v) if v.lstrip("-").isdigit() else None
 
+skipped_i = int(skipped) if str(skipped).strip() in ("0", "1") else 0
+
 print(json.dumps({
     "n": int(n), "name": name, "profile": prof,
     "extra": extra.split() if extra else [],
-    "verdict": verdict, "compare_rc": maybe_int(cmp_rc),
-    "exit_code": maybe_int(cw_exit), "outer_rc": maybe_int(outer_rc) if not skipped else None,
+    "verdict": verdict, "verdict_note": vnote or None, "compare_rc": maybe_int(cmp_rc),
+    "exit_code": maybe_int(cw_exit), "outer_rc": maybe_int(outer_rc) if not skipped_i else None,
     "frames": {"oracle": maybe_int(o_fr), "rust": maybe_int(r_fr), "compared": maybe_int(cmp_fr)},
-    "duration_s": None if skipped else int(duration),
-    "skipped": bool(int(skipped)), "skip_reason": skip_reason or None,
+    "duration_s": None if skipped_i else int(duration),
+    "skipped": bool(skipped_i), "skip_reason": skip_reason or None,
     "dir": out, "log": logf,
     "evidence": {"card_window_json": out + "/card-window.json",
                  "report_json": out + "/report.json",
@@ -492,9 +508,9 @@ print(json.dumps({
 PY
 )
     record_row "$json"
-    if [ "$verdict" = "UNDECIDABLE" ] || [ "$verdict" = "-" ]; then
-        return 2
-    fi
+    case "$verdict" in
+        UNDECIDABLE|-|TIMEOUT|KILLED) return 2 ;;
+    esac
     return 0
 }
 
@@ -549,13 +565,16 @@ ordered = []
 for name in order:
     ordered.append(last.get(name) or {"name": name, "verdict": "NOT_RUN", "skipped": False})
 
-tot = {"PASS": 0, "FAIL": 0, "UNDECIDABLE": 0, "NOT_RUN": 0}
-for d in ordered:
-    v = d.get("verdict")
-    if v in tot:
-        tot[v] += 1
-    elif v == "-":
-        tot["UNDECIDABLE"] += 1
+sys.path.insert(0, os.path.join(os.getcwd(), "tools", "window"))
+from rc_attribution import totals_for  # noqa: E402
+
+tot = totals_for([d.get("verdict") for d in ordered])
+# review F1（`33309b67`）：不能只断言 sum(totals)==rows（OTHER 兜底会让它恒真）。
+# 真检测器 = OTHER>0（未知 verdict 字符串）；此时 RED + 非 0 退出。
+if tot.get("OTHER", 0) > 0 or sum(tot.values()) != len(ordered):
+    print("RED: totals 不自洽/含未知 verdict rows=%d sum=%d tot=%r"
+          % (len(ordered), sum(tot.values()), tot))
+    raise SystemExit(3)
 
 stamp = {}
 # batch 的 cwd 就是检出根：相对当前目录读 build stamp
@@ -577,6 +596,9 @@ doc = {
         "build_stamp": stamp or None,
     },
     "totals": tot,
+    "rows": len(ordered),
+    "totals_consistent": (tot.get("OTHER", 0) == 0
+                          and sum(tot.values()) == len(ordered)),
     "scenarios": ordered,
 }
 path = os.path.join(run_dir, "batch-summary.json")
