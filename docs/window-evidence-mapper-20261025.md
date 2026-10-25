@@ -6,6 +6,12 @@
 - 红线：**UNDECIDABLE 绝不是 PASS**；缺数据/缺字段/空值一律不通过；不按实得帧回填期望值；
   运行器**只读**（不起服务端、不占端口、不写证据根）。本卡不判 `closed`，只交付工具与判据表。
 
+> **红线（同步点 ≠ 成功判据）**：审「某帧出现 = 成功」时，必须先到 oracle 看该帧是在**成功分支**里发，
+> 还是在**函数尾部/无条件路径**里发——例如 `SM_GAMEGOLDNAME(5008)` 每次登录必发
+> （`PlayObject.Message.cs:1689` RM_LOGON）、`SM_MENU_OK(767)` 全仓 28 处多数是 `[错误]` 弹窗、
+> `SM_BUTCH(637)` 是函数尾部无条件回帧。这类 ident 的机判条目**必须带 `fields` 或 `order`**，
+> 否则判据表不合法（运行器 rc=2，卡 `openmir2-criteria-table-hardening` 的结构性守卫）。
+
 ## 1. 判据表 schema（`card-criteria/1`）
 
 ```json
@@ -112,13 +118,13 @@ python -I -B tools/window/card_evidence.py --selftest
 | 1 | `openmir2-castle-merchant-tax-wiring` | W-TAX-1 | **机判**：`SM_BUYITEM_SUCCESS.recog=9912` 且 `param=0`（scenario `castle_merchant_tax_potion`） | 已有证据根即可判；买价 88 / 税 4 在文件面，见 W-TAX-2 |
 | 1 | 同上 | W-TAX-2 / W-TAX-3 / W-TAX-4 | 人工（3 条各带原因） | 需配置副本（`Castle/List.txt` 两城 0,1）+ 620s 后 `SabukW.txt` 字段 + 可注入时钟（C# 无 `MIR2_CLOCK_*`）；W-TAX-3 前半冻结内容无「不在攻城区」商人 ⇒ 只能构造级 |
 | 2 | `openmir2-loader-fields` | W-LF-1 / W-LF-2 | 人工 | 需 `newchr` 步（probe 无）+ 出生点 11 键钉值；W-LF-2 消费点未接线 |
-| 3 | `openmir2-script-playdice-openybdeal` | W-PD-1 | **机判**：`SM_GAMEGOLDNAME` 出现（scenario `gamepoint_exchange`）+ 人工 1 条（DB 后态 / 5008 字节未钉值） | 5008 的 `Param/Tag` 台账只写「逐字节」未给值 ⇒ 先钉值 |
+| 3 | `openmir2-script-playdice-openybdeal` | W-PD-1 | **机判（已收紧）**：`SM_GAMEGOLDNAME` **≥2 帧**（登录 + 兑换后 `GameGoldChanged`）且**最后一帧** `param=LoWord(GamePoint)=0` / `tag=HiWord(GamePoint)=0`（前置 GamePoint=9，兑换后 9→0）；登录必发帧（`:1689`）不再单独构成 PASS + 人工 1 条（DB 后态） | 只判「出现」会因每次登录必发而假绿（卡 `openmir2-criteria-table-hardening`） |
 | 3 | 同上 | W-PD-2 | 人工 | 部署无 `@back`（非目标）；`@back2` 属部署内容差异 |
 | 4 | `openmir2-clearmapmon-impl` | W-CM-2 | **人工（2 条）**：① Q001 判 30 帧与已合并文档**相反**，按 `exec-sheet:31` / `scenes doc:110-111`（master）改判人工；② 实体/AOI 差集与坐标 | 30 帧属 t118 清场腿（该场景永久不可达）；坐标/实体面需按 oracle 口径解码帧尾 |
 | 4 | 同上 | W-CM-1 | 人工 | 场景 blocked（`t118` 的 `movr M3` 不可注入）⇒ 无证据可采 |
 | 5 | `openmir2-m3-castle-siege-state` | W-T127-1 | 人工 | `castle_zone` fixture 未建；相对序需与文本/收件人绑定且未钉字面值 |
 | 6 | `openmir2-inbound-dispatch-red-batch` | W-DG-1 | **机判**：`SM_GOLDCHANGED` **总帧数恰 1**（`count_scope=all`，`min_count=max_count=1`）、且 `recog=100`、`param=0`（scenario `dropgold_zero_draw`）+ 人工 1 条（金币净差/地面物件/RNG 账本） | 金币差与地面物件在 DB/地图侧；RNG 流位需 `MIR2_RNG_LOG` |
-| 6 | 同上 | W-DG-2 | **机判**：`SM_DEATH(32)` → **`SM_BUTCH(637)` 收官**（637 至少一条、死亡帧在其前）；**不要求 `SM_SKELETON(33)`**（`PlayObject.Operate.cs:731-738`：仅 `BodyLeathery<=0` 才发）+ 人工 1 条（两抽值域的 RNG 账本） | 两抽值域/流位需 `MIR2_RNG_LOG`；场景 blocked 清理与进批归另一张卡 |
+| 6 | 同上 | W-DG-2 | **机判（订正）**：`SM_DEATH(32)` → **RNG 账本恰两抽**（`max=16` ×1 @ `Operate.cs:722`、`max=201` ×1 @ `:723`）；`SM_BUTCH(637)` 降为**伴随证据**（仍在 `order` 里，不许删）；`SM_SKELETON(33)` 仅 `BodyLeathery<=0` 才发，是加强项而非必需（注意拼写是 `BodyLeathery`）。证据根无 `rng-stream.tsv` ⇒ UNDECIDABLE | 账本由 `--rng-log` 产出；场景 blocked 清理与进批归另一张卡 |
 | 7 | `openmir2-castle-official-design` | W-CO-1 | 人工 | `@main` 说词字面未钉住（只给 mask 规则）+ castle fixture 未建 |
 | 8 | `openmir2-castle-official-actions` | W-CO-6 | 人工 | 需 owner 批准测试专用城主注入 + 可注入时钟（60s 严格 `>`） |
 | 9 | `openmir2-script-handler-msgqueue` | W-MQ-1 | **机判**：帧序 `643 → 767 → 44 → 645 → 5008`（scenario `getbackupgnow`） | 有该场景证据根即可判；本轮无该根 ⇒ UNDECIDABLE「ident 未齐」 |
@@ -274,7 +280,7 @@ rc=0——因为判据表里没有 `t118auto` 场景的行，全部「场景不�
 | F7（info） | 证据根无 `run.json` 且无 `--scenario` ⇒ **全部 UNDECIDABLE**；`--allow-unverified` 才放行并标 `provenance=unverified`（牙 j + M8） | `main`、牙 j、M8 |
 | reviewer-20 info | A 类 7 条的 `w_item` 从同一个 `A-class` 改成可区分的 `plan-§2:<卡/序>` | 判据表 |
 | **N1/I1（本卡）** | 计数口径歧义：`min/max_count` 原来只数 `recog` 过滤后的帧 ⇒「653 **总帧数**恰 1」不可表达（两帧 653、recog 100/999 仍 PASS）。新增 `count_scope: filtered(默认)/all`；W-DG-1 改 `all`；非法值加载期拒（牙 k/k2/k 对照/m + 变异 C1/C2） | `card_evidence.py`、判据表 |
-| **W-DG-2 oracle 订正（本卡）** | 收官帧是 **`SM_BUTCH(637)`**；`SM_SKELETON(33)` 不是每刀必发（`PlayObject.Operate.cs:731-738`）。该条从 `machine:false` 改为可机判（死亡帧→637、不要求 33，牙 n/n 对照），两抽值域的 RNG 面单列 `W-DG-2-rng` 人工项 | 判据表、本文 §5 |
+| **W-DG-2 再订正（`openmir2-criteria-table-hardening`）** | 主判据搬到**账本恰两抽**（`max=16`×1 @ `Operate.cs:722`、`max=201`×1 @ `:723`）；637 降伴随证据（仍在 order，不许删）；33 为 `BodyLeathery<=0` 加强项。无账本 ⇒ UNDECIDABLE；`card-criteria.json` 同条已同步 | 判据表、本文 §5 |
 
 **machine=true 判据复核结论**（对 master 文档原文）：W-TAX-1（`exec-sheet:34` 的 `650.recog = Gold 9912`）✓；
 W-DG-1（`exec-sheet:32` 的「恰一条」⇒ 已加 max_count）✓；W-MQ-1（`docs/script-handler-msgqueue-20261025.md:73`
