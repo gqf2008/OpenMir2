@@ -33,7 +33,10 @@ A1 金币（+ 可选可卖物品）、A3 能发 643（`SM_MERCHANTSAY`）的 NPC
     # 4) 回滚
     python -I -B tools/client/provision_real_machine_fixtures.py --rollback E:/tmp/fixtures-apply.json --yes
 
-    # 5) 自检（离线：假 mysql + 合成 frames + 真 repo 取证）
+    # 5) 动作前的前置门（A6）：备齐=PASS；缺项=UNDECIDABLE(kind=missing_prereq) 且点名缺哪项
+    python -I -B tools/client/provision_real_machine_fixtures.py --gate         --db mir2_test_db_r --char aaa --map 3 --profile <profile.json>
+
+    # 6) 自检（离线：假 mysql + 合成 frames + 真 repo 取证）
     python -I -B tools/client/provision_real_machine_fixtures.py --selftest
 """
 
@@ -343,6 +346,109 @@ def a2_evidence(repo_root):
     }
 
 
+# ---------------------------------------------------------------- 动作前的前置门（A6）
+
+
+RC_UNDECIDABLE = 6
+
+
+def load_profile(path):
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def profile_monsters(profile, map_name):
+    """profile `fixtures.monsters` 里该图的靶子（schema 见 card_window `_validate_monsters`）。"""
+    fixtures = (profile or {}).get("fixtures") or {}
+    mons = fixtures.get("monsters") or []
+    return [m for m in mons if str(m.get("map")) == str(map_name)]
+
+
+def prereq_gate(args, mysql):
+    """A6：动作前的显式门。**能不能测 = UNDECIDABLE（kind=missing_prereq，点名缺项）；
+    全备齐 = PASS。** 不得把「缺夹具」记成 RED（那是「该发生却没发生」的档）。
+
+    检查项（`--need`，缺省全查）：
+      gold          金币 >= --min-gold（读库）
+      sellable_item 背包行数 >= 1（读库）
+      npc           同图有「脚本确有 [@main] 说词（⇒ 643）」的商人（读 Envir）
+      floor_item    **结构性不可达**（见 `--a2-evidence`）⇒ 永远报缺，供 pickup 阶段判 UNDECIDABLE
+      monsters      profile `fixtures.monsters` 在该图有靶子（读 profile）
+    """
+    need = args.need or ["gold", "sellable_item", "npc", "floor_item", "monsters"]
+    missing, reasons, details = [], {}, {}
+
+    char_row = None
+    if "gold" in need or "sellable_item" in need:
+        char_row = select_character(mysql, args.db, args.char)
+        details["char"] = char_row
+
+    if "gold" in need:
+        gold = int(char_row["Gold"])
+        details["gold"] = gold
+        if gold < int(args.min_gold):
+            missing.append("gold")
+            reasons["gold"] = "characters.Gold=%d < 要求的 %d（买卖无钱）" % (gold, int(args.min_gold))
+
+    if "sellable_item" in need:
+        # 背包 46 行是**槽位**，空槽 `StdIndex=0` 不算物品 ⇒ 只看 `StdIndex<>0` 的行
+        rows = mysql.query(
+            "SELECT COUNT(*) FROM %s.`characters_bagitem` WHERE `PlayerId`=%s"
+            % (ident(args.db), sql_int(char_row["Id"])))
+        items = mysql.query(
+            "SELECT COUNT(*) FROM %s.`characters_bagitem` WHERE `PlayerId`=%s AND `StdIndex`<>0"
+            % (ident(args.db), sql_int(char_row["Id"])))
+        details["bag_rows"] = int(rows[0][0])
+        details["bag_items"] = int(items[0][0])
+        if int(items[0][0]) < 1:
+            missing.append("sellable_item")
+            reasons["sellable_item"] = ("characters_bagitem 有 %d 个槽位但 `StdIndex<>0` 的 0 行"
+                                        "（没有可卖物品）" % int(rows[0][0]))
+
+    if "npc" in need:
+        try:
+            npc = pick_npc(args.envir_root, args.map, args.npc_script)
+            details["npc"] = {k: npc[k] for k in ("script", "map", "x", "y", "chr_name",
+                                                  "script_file", "main_say_count", "is_shop")}
+        except Prereq as e:
+            missing.append("npc")
+            reasons["npc"] = str(e)
+
+    if "floor_item" in need:
+        ev = a2_evidence(args.repo_root)
+        details["floor_item"] = ev["verdict"]
+        missing.append("floor_item")
+        reasons["floor_item"] = ("地面物结构性不可达（%s）⇒ pickup 阶段这一轮不能测"
+                                 % ev["conclusion"])
+
+    if "monsters" in need:
+        if not args.profile:
+            missing.append("monsters")
+            reasons["monsters"] = "未给 --profile（无法证明该图有靶子夹具）"
+        else:
+            try:
+                mons = profile_monsters(load_profile(args.profile), args.map)
+            except (OSError, ValueError) as e:
+                missing.append("monsters")
+                reasons["monsters"] = "profile 读不了：%s" % e
+            else:
+                details["monsters_for_map"] = len(mons)
+                if not mons:
+                    missing.append("monsters")
+                    reasons["monsters"] = "profile fixtures.monsters 在 map=%s 没有靶子" % args.map
+
+    out = {
+        "mode": "gate",
+        "kind": "missing_prereq" if missing else "prereq_ok",
+        "verdict": "UNDECIDABLE" if missing else "PASS",
+        "need": list(need),
+        "missing": missing,
+        "reasons": reasons,
+        "details": details,
+    }
+    return out, (RC_UNDECIDABLE if missing else RC_OK)
+
+
 # ---------------------------------------------------------------- 计划/写入
 
 
@@ -639,6 +745,49 @@ def selftest(args):
         except Prereq:
             ok_all &= _chk(True, "A3 缺地图 ⇒ PREREQ（不猜落点）")
 
+        # ---- A6 前置门：缺项 ⇒ UNDECIDABLE(kind=missing_prereq) 并点名；备齐 ⇒ PASS
+        poor = ["7", "aaa", "0", "289", "618", "0", "0", "1"]
+        rich = ["7", "aaa", "3", "360", "334", "5000", "10", "1"]
+        prof = os.path.join(tmp, "profile.json")
+        with open(prof, "w", encoding="utf-8") as f:
+            json.dump({"fixtures": {"monsters": [{"map": "9", "x": 5, "y": 5, "name": "鸡", "count": 1}]}}, f)
+        ga = argparse.Namespace(db="mir2_test_db_r", char="aaa", envir_root=envir, map="9",
+                                npc_script=None, profile=prof, repo_root=args.repo_root,
+                                min_gold=500, need=["gold", "sellable_item", "monsters"])
+        fake_gate = FakeMysql([("`characters` WHERE `ChrName`", [[poor]]),
+                               ("`StdIndex`<>0", [[["0"]]]),
+                               ("COUNT(*) FROM", [[["46"]]])])
+        out, rc = prereq_gate(ga, fake_gate)
+        ok_all &= _chk(rc == RC_UNDECIDABLE and out["kind"] == "missing_prereq"
+                       and set(out["missing"]) == {"gold", "sellable_item"},
+                       "A6 缺金币/可卖物 ⇒ UNDECIDABLE 且点名（不是 RED）", str(out["missing"]))
+        fake_ok = FakeMysql([("`characters` WHERE `ChrName`", [[rich]]),
+                             ("`StdIndex`<>0", [[["3"]]]),
+                             ("COUNT(*) FROM", [[["46"]]])])
+        out, rc = prereq_gate(ga, fake_ok)
+        ok_all &= _chk(rc == RC_OK and out["verdict"] == "PASS" and out["missing"] == [],
+                       "A6 备齐 ⇒ PASS（missing 为空）")
+        ga_bag = argparse.Namespace(**dict(vars(ga), need=["sellable_item"]))
+        empty_bag = FakeMysql([("`characters` WHERE `ChrName`", [[rich]]),
+                               ("`StdIndex`<>0", [[["0"]]]),
+                               ("COUNT(*) FROM", [[["46"]]])])
+        out, rc = prereq_gate(ga_bag, empty_bag)
+        ok_all &= _chk(rc == RC_UNDECIDABLE and out["missing"] == ["sellable_item"]
+                       and out["details"]["bag_rows"] == 46 and out["details"]["bag_items"] == 0,
+                       "A6 46 个空槽不算可卖物品（StdIndex<>0 才算）",
+                       "rows=%s items=%s" % (out["details"]["bag_rows"], out["details"]["bag_items"]))
+
+        ga_all = argparse.Namespace(**dict(vars(ga), need=None, map="9"))
+        g = FakeMysql([("`characters` WHERE `ChrName`", [[rich]]),
+                       ("`StdIndex`<>0", [[["3"]]]), ("COUNT(*) FROM", [[["46"]]])])
+        out, rc = prereq_gate(ga_all, g)
+        ok_all &= _chk("floor_item" in out["missing"] and "结构性不可达" in out["reasons"].get("floor_item", ""),
+                       "A6 地板物永远报缺且给结构性原因", str(out["missing"]))
+        ga_mon = argparse.Namespace(**dict(vars(ga), need=["monsters"], map="8"))
+        out, rc = prereq_gate(ga_mon, FakeMysql([]))
+        ok_all &= _chk(rc == RC_UNDECIDABLE and out["missing"] == ["monsters"],
+                       "A6 profile 该图无靶子 ⇒ 报缺 monsters")
+
         # ---- A2：真 repo 三事实成立 ⇒ BLOCKED；把之一改坏 ⇒ REEVALUATE
         repo = args.repo_root
         ev = a2_evidence(repo)
@@ -709,12 +858,19 @@ def main(argv=None):
     mode.add_argument("--rollback", metavar="REPORT", help="按 apply 报告回滚")
     mode.add_argument("--verify", action="store_true", help="核对登录帧里的金币")
     mode.add_argument("--a2-evidence", action="store_true", help="A2 地面物结构性不可达取证")
+    mode.add_argument("--gate", action="store_true",
+                      help="A6 动作前的前置门：备齐=PASS；缺项=UNDECIDABLE(kind=missing_prereq) rc=6")
     mode.add_argument("--selftest", action="store_true")
 
     ap.add_argument("--db", default="mir2_test_db_r")
     ap.add_argument("--frames", default=None)
     ap.add_argument("--expect-gold", type=int, default=None)
     ap.add_argument("--expect-rows", type=int, default=None)
+    ap.add_argument("--need", action="append", default=[],
+                    choices=["gold", "sellable_item", "npc", "floor_item", "monsters"],
+                    help="--gate 的检查项，可多次；缺省全查")
+    ap.add_argument("--min-gold", type=int, default=500, help="--gate 的金币下限（默认 500）")
+    ap.add_argument("--profile", default=None, help="--gate 查 monsters 用的 card-window profile")
     ap.add_argument("--report", default=None, help="apply 报告输出路径")
     ap.add_argument("--yes-apply", action="store_true")
     ap.add_argument("--yes", action="store_true", help="rollback 真写")
@@ -729,6 +885,12 @@ def main(argv=None):
             ev = a2_evidence(args.repo_root)
             print(json.dumps(ev, ensure_ascii=False, indent=1))
             return RC_OK if ev["verdict"] == "BLOCKED" else RC_PREREQ
+
+        if args.gate:
+            guard_db(args.db)
+            out, rc = prereq_gate(args, build_mysql(args))
+            print(json.dumps(out, ensure_ascii=False, indent=1))
+            return rc
 
         if args.verify:
             if not args.frames or args.expect_gold is None:

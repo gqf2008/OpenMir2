@@ -1,7 +1,7 @@
 # 真机夹具 provisioning（2026-10-25）
 
 卡 `openmir2-mirflow-real-machine-prereqs`（tier L，离线，不占窗口、不起任何进程）。
-工具：`tools/client/provision_real_machine_fixtures.py`（自检 24 条，`--selftest`）。
+工具：`tools/client/provision_real_machine_fixtures.py`（自检 29 条，`--selftest`）。
 
 ## 0. 为什么需要
 
@@ -9,7 +9,11 @@
 
 ```
 Id=12215 ChrName=aaa MapName=0 CX=286 CY=649 Gold=0 GamePoint=0 Level=1
+characters_bagitem：46 个**槽位**，其中 `StdIndex<>0` 的**真物品 3 件**
 ```
+
+> 口径提醒：冒烟证据文件里的「背包 1 行」是**帧基线**（`SM_BAGITEMS(201).series`）口径，不是 DB 行数；
+> DB 侧 `characters_bagitem` 恒有 46 个槽位，空槽 `StdIndex=0` **不算物品**（本工具按 `StdIndex<>0` 判）。
 
 Gold=0 ⇒ 买不了；背包只有 1 行 ⇒ 卖不出东西；没有地板物 ⇒ 捡物无物可捡；位置不在任何商店旁边
 ⇒ NPC 阶段还得多走一段路。本工具把这三件事（钱、货、位置）+ 一个**会发 643 的商店 NPC** 一次备好。
@@ -114,9 +118,41 @@ python -I -B tools/client/provision_real_machine_fixtures.py --rollback E:/tmp/f
 `tools/conformance/card_window.py:1831` `read_map_cell`：越界或 `bk`/`fr` 的 bit15 ⇒ 不可走）；
 找不到可走格或地图文件缺失 ⇒ PREREQ，**不猜**。
 
+## 4b. A6 动作前的前置门（`--gate`，Leader 裁决新增）
+
+判据：**能不能测 = UNDECIDABLE（`kind=missing_prereq`，点名缺项）；该发生却没发生 = RED**。
+本卡负责把「金币 / 可卖物品 / NPC / 地板物 / 怪物夹具**是否备齐**」变成动作前可机判的一道门，
+**不把「缺夹具」记成 RED**（真机那轮同一现象只能有一种判法）。
+
+```sh
+python -I -B tools/client/provision_real_machine_fixtures.py --gate     --db mir2_test_db_r --char aaa --map 3 --npc-script "盟重土城/药店" [--profile <profile.json>]
+```
+
+输出（实测，2026-10-25，只读）：
+
+```json
+{ "kind": "missing_prereq", "verdict": "UNDECIDABLE",
+  "missing": ["gold", "floor_item", "monsters"],
+  "reasons": {
+    "gold": "characters.Gold=0 < 要求的 500（买卖无钱）",
+    "floor_item": "地面物结构性不可达（…）⇒ pickup 阶段这一轮不能测",
+    "monsters": "未给 --profile（无法证明该图有靶子夹具）" },
+  "details": { "char": {...}, "gold": 0, "bag_rows": 46, "bag_items": 3, "npc": {...} } }
+```
+
+- `rc=0` + `verdict=PASS`（`missing` 为空）⇒ 动作可跑；
+- `rc=6` + `kind=missing_prereq` ⇒ **UNDECIDABLE**，调用方必须把 `missing` 写进证据，不许静默 skip；
+- 与 RED（rc≠0 且 `verdict` 非 UNDECIDABLE）**是两种 kind**，不许混。
+- 检查项可用 `--need`（`gold`/`sellable_item`/`npc`/`floor_item`/`monsters`）逐项点；
+  `--min-gold` 默认 500。
+- `floor_item` **永远**报缺（结构性不可达，见 §3），直到 §3 的三条事实有一条改变。
+
 ## 5. A5 窗口当天 runbook
 
 ```sh
+# ⓪ 动作前的前置门（只读）：PASS 才往下跑；UNDECIDABLE 就把 missing 记进证据
+python -I -B tools/client/provision_real_machine_fixtures.py --gate --db mir2_test_db_r     --char aaa --map 3 --npc-script "盟重土城/药店" --profile <profile.json>
+
 # ① 备夹具（只写 mir2_test_db_r）
 python -I -B tools/client/provision_real_machine_fixtures.py --apply --db mir2_test_db_r \
     --char aaa --gold 5000 --game-point 10 --map 3 --npc-script "盟重土城/药店" \
@@ -139,9 +175,10 @@ python -I -B tools/client/provision_real_machine_fixtures.py --rollback E:/tmp/f
 python -I -B tools/client/provision_real_machine_fixtures.py --selftest
 ```
 
-24 条 PASS，覆盖：A4 三颗拒绝牙 + 白名单放行；A1 事务提交 / before 登记 / 失败 ROLLBACK /
+29 条 PASS，覆盖：A4 三颗拒绝牙 + 白名单放行；A1 事务提交 / before 登记 / 失败 ROLLBACK /
 MakeIndex 占用拦截 / 帧一致与不一致 / 无帧 PREREQ；A3 商店优先与指定脚本 / 文件:行号 /
-只有 `#ACT` 的脚本不算 643 / 缺脚本不选 / 落点跳过墙格 / 缺地图 PREREQ；A2 三事实 BLOCKED +
+只有 `#ACT` 的脚本不算 643 / 缺脚本不选 / 落点跳过墙格 / 缺地图 PREREQ；A6 缺项 ⇒ UNDECIDABLE
+且点名 / 备齐 ⇒ PASS / 46 个空槽不算物品 / 地板物永远报缺 / profile 无靶子报缺；A2 三事实 BLOCKED +
 事实被改 ⇒ REEVALUATE + SQL 无 `mapitem/ground`。
 
 ## 7. 残留物
