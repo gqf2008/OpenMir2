@@ -133,7 +133,7 @@ FAIL 3（`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20
 | `eat_item` | `openmir2-spell-fill-projection-mirror`（§2 L131）、`openmir2-unbindlist-consumer`（§2 L134） | **未覆盖**（未跑到 compare） |
 | `equip_struck_save` | `openmir2-attack-weapon-wear-642`（§2 L94） | **未覆盖**（未跑到 compare） |
 | `gamepoint_exchange` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | **未覆盖**（未跑到 compare） |
-| `gm_batch` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | 已采集、**未过**（见差异明细） |
+| `gm_batch` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | 已采集、**未定性（flaky 候选）**——见 §6.3 |
 | `gm_time` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | 已证（帧面；DB 面不可用） |
 | `king_castle_war` | `openmir2-t138-request-castle-war`（§2 L132） | **未覆盖**（未跑到 compare） |
 | `king_dialog` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | **未覆盖**（未跑到 compare） |
@@ -150,7 +150,7 @@ FAIL 3（`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20
 
 | 场景 | 服务的 R 卡 | 本批三态 |
 |---|---|---|
-| `gm_batch` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | 已采集、**未过**（见差异明细） |
+| `gm_batch` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | 已采集、**未定性（flaky 候选）**——见 §6.3 |
 | `gm_time` | 未在 `docs/rcard-evidence-plan-20261025.md` §2 表内（属 W 项/工具面，需 Leader 归口） | 已证（帧面 + DB 面） |
 | `login_only` | `openmir2-db-encoding`（§2 L99）、`openmir2-gamesvr-serverinfo-report`（§2 L102）、`openmir2-gm-impl-shutup`（§2 L103）、`openmir2-gm-script-host-seam`（§2 L104）、`openmir2-guard-ctor-constants`（§2 L105）、`openmir2-guild-g2-dispatch`（§2 L106）、`openmir2-login-529-status-text`（§2 L108）、`openmir2-login-654-order`（§2 L109）、`openmir2-login-charstatus-657`（§2 L110）、`openmir2-login-frame-order-52-752`（§2 L111）、`openmir2-login-numeric-gaps`（§2 L112）、`openmir2-npc-ctor-constants`（§2 L125）、`openmir2-npc-display-table`（§2 L126）、`openmir2-searchtick-origin-parity`（§2 L130）、`openmir2-verify-tick-base`（§2 L136）、`openmir2-window-collector-preflight`（§2 L138）、`openmir2-world-tick-expansion`（§2 L139） | 已证（帧面 + DB 面） |
 | `merchant_dialog` | `openmir2-encoding-core-e1-e2`（§2 L101）、`openmir2-market-def-impl`（§2 L120） | 已采集、**未过**（见差异明细） |
@@ -166,11 +166,12 @@ FAIL 3（`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20
    rust **`body_len=17`**（seq 33/36，t=2316/4647ms）。这些帧**不参与比较**，两侧 body 长度不同
    也**不会被判红**。
 2. **证据折扣（掩码）**：`rules.pending_review = ['rules[0]:ident=[10]', 'rules[2]:ident=[14]',
-   'rules[5]:ident=[50]']` 仍是 PENDING；实际命中的**掩码**里，`series` 字段只在 **ident 10** 上被掩
-   （`masked_head` 命中集：`series` → {10}）⇒ **`SM_TURN(10)` 的 Dir/朝向无判据**。
-   （ident 50 的 `series` 本批未命中差异，不等于「比过且相同」，只是没有差异记录。）
+   'rules[5]:ident=[50]']` 仍是 PENDING。其中 `series` 字段的**实际命中**是：
+   - 本批 `masked_head` 里 **`series` 只出现在 ident 10**；
+   - **ident 50 本批无差异记录 ⇒ 未比过**，不等于「比过且相同」。
 
-⇒ 结论口径：`spell_cast` 的 PASS 覆盖的是**除上述两项之外**的帧面；**Dir/朝向与两条控制帧不在判据内**。
+⇒ 结论口径：`spell_cast` 的 PASS 覆盖的是**除上述两项之外**的帧面；**ident 10 的 Dir/朝向与两条控制帧
+不在判据内**（范围**只对 ident 10 成立**，不要扩读成全局）。
 
 ## 6. 稳定差异 vs flaky（三类分开）
 
@@ -190,7 +191,7 @@ FAIL 3（`gm_batch` 6 条帧差、`merchant_dialog` 2 条帧差、`move_walk` 20
 且它们随「走位」变化 ⇒ 归 **flaky 类**（与卡 `openmir2-neighbor-actor-frame-drift` 的
 「同场景重复跑 ≥3 轮」同族），**不并入 Home\* 的稳定结论**。
 
-### 6.3 `gm_batch` 的 6 处帧差：**不是** 10/41 的 F 类形态（需 Leader 复核归属）
+### 6.3 `gm_batch`：**flaky 候选**（未定性；不进台账、不带判据）
 
 `run2` 的 6 条 = **5 条 `multiset_extra`（ident **100** `SM_SYSMESSAGE`，全部 `absent_on=oracle`，
 即 **rust 多 5 帧**）+ 1 条 `block_align`**（尾部多出 ident `[10, 41, 100, 100, 100, 100, 100]`，
@@ -198,9 +199,13 @@ kept 帧数 oracle 36 / rust 34）。
 W1 的 2 条是 `block_align`（尾部多出 `[10, 41]`）+ 1 条 DB `Weight 14→0`（**W1 DB 面已作废**）；
 `run` 是 **PASS（0 diff）**。
 
-⇒ `gm_batch` 的差异主体是 **ident=100 的条数差**，与 `openmir2-neighbor-actor-frame-drift` 记账的
-「邻怪 `SM_TURN(10)`/`SM_FEATURECHANGED(41)` 单侧多帧」**形态不同**；本文件按事实登记为
-**`gm_batch` 专有：GM 命令回显（100）条数不稳**，归属请 Leader 定（可考虑并入 F 类卡或另开一张）。
+**判定（Leader 裁决）：`gm_batch` 记为「flaky 候选」，未定性**——
+- 三次真跑形态各不相同（`run` PASS → W1 `block_align` + DB `Weight` → run2 5 条 `multiset_extra`
+  ident 100）⇒ **不是稳定差异**；
+- 差异主体是 **ident=100 的条数差**，与 `openmir2-neighbor-actor-frame-drift` 记账的 10/41 **稳定**多帧
+  是两回事，**不并入**那张卡（混在一起会互相污染证据），**也不新开卡**；
+- **原因子**：ident 100 回显条数 / 帧块对齐；
+- **解封**：同一场景 **≥3 轮真机**（窗口）；本轮**不进台账、不带判据**。
 
 ## 7. 未覆盖清单（避免后来人以为覆盖过）
 
