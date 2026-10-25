@@ -122,3 +122,35 @@ oracle `WorldServer.cs:1100 GetHumData` 的调用点只有**两处**：`:248`（
 | 1 | **存档在途** | C# `CM_WALK` 无 `SM_WALK`，只有 `SM_TURN`×N + `SYSMESSAGE`×N | 登录期间 `InSaveRcdList` 未清，服务端拒动作（日志「角色数据保存中,稍后重新读取」） | 起栈/登录后先等该行消失再动作（`grep -c '角色数据保存中'`） |
 | 2 | **RNG 账本被裁** | 账本里「两抽没发生」 | `trim_rng_ledger` 超限只留 head，而抽数在后半段（实测 7.2k 行/s） | 跑完先看 `rng_log_trim.trimmed`；为 `true` ⇒ 证据作废、重跑，**不判 FAIL** |
 | 3 | **检出不全** | `oracle_vectors` 假红 | 检出里缺文件/构建陈旧 | 起栈前核 pid 的 `exe` 路径与构建时间；`require_pid_binaries` fail-closed 不要绕过 |
+
+## 9. 修法裁决（`5b0fb93a`）：本卡走 (a) 快照；(b′) 另开 `openmir2-makeghost-lifecycle`（issue `c86e86b4`）
+
+**成因订正**：发存档的是 `GateEvent::Closed` 臂（日志 L149 `06:38:54.986 用户关闭：socket=400 index=1 在线=0 槽=1` ⇒ 已摘），
+**不是** `drain_soft_close`；同一角色 402ms 内走了**两条退出路径**，先走的那条已把实体销毁。
+(b)「把存档挪到 `soft_close` 之前」被**否决**：Closed 臂会再存一次，二次存档在 DB 上可观测。
+
+**实施契约（每条都要有牙）**：
+
+1. **单一接缝**：快照只由一个函数 `entity_derived_snapshot(&Entity)` 产出，禁止在 soft-close 处散写（散写必然漂移）；
+2. **五项全取**：`x / y / dir / attack_mode / use_items(Index, Dura)`——只覆盖 `Dir` 等于只修今天现形的那一个；
+3. **优先级**：**实体 → 快照 → 记录**；第三档**必须 WRN**，且只在「会话存在却既无实体也无快照」时发（不让普通断线/未进世界刷屏）；
+4. **牙**：① 逐字段：walk 后 `CX/CY`、turn 后 `Dir`、`@AttackMode` 后 `attack_mode`、磨损后 `Dura` 各一条；
+   ② 变异：优先级改成 `记录→快照` ⇒ 必红；③ 删 WRN ⇒ 必红；④ **负例**：普通 `disconnect` 路径同样成立（只修 soft_close 支不算完）。
+
+## 10. 卡面补注（两条，供审阅与后续人）
+
+**10.1 T-266 不并入本卡的依据（两轮符号相反）**
+
+| 轮次 | 物品 | C# `Dura` | Rust `Dura` | 解释 |
+|---|---|---|---|---|
+| butch 真机轮（13:53–13:56） | `Id` 见该轮快照 | `3993` | `3989` | Rust 差分更大（两侧 RNG 分叉，磨损量不同） |
+| Dir 诊断轮（本文件 §7/§8 那轮，14:38） | `Id=106 StdIndex=5001`（夹具注入 `dura=4000`） | `3984` | `3985` | Rust 差分更小 |
+
+两轮**符号相反** ⇒ 不是「Rust 恒静默回落到载入值」（那会恒为 `4000`/`∞`）；且本卡若同根，Rust 应停在注入值。
+⇒ `characters_item.Dura` 的差异属 **T-266（每刀磨损 `Random(5)+2-AddAbil.WeaponStrong`，两侧 RNG 流分叉）**，**不并入本卡**。
+
+**10.2 为什么本轮只有 `Dir` 现形（不是只有 `Dir` 会坏）**
+
+测试库的 placement 已把角色写成 `map 0 / (330,330)`（基线是 `B013 / (7,12)`），且 `attack_mode=0`、全程未移动
+⇒ 其余字段的「回落载入值」**恰好等于实时值**，所以只有 `Dir`（基线 `3`、butch 后 `0`）显形。
+**结论：存档面所有实体派生字段都会在「先离世后存档」路径上回落**，`Dir` 只是这次的显影剂。
