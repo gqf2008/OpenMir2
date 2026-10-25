@@ -1073,6 +1073,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 map_sizes,
                 registry,
                 EnterConfig {
+                    home_start_points: home_fallback.start_points.clone(),
+                    red_home_map: cfg.red_home_map.clone(),
+                    red_home_x: cfg.red_home_x,
+                    red_home_y: cfg.red_home_y,
                     guild_store: Some(mir2_data::guild::GuildStore::new(
                         &guild_castle_cfg.guild_dir,
                         &guild_castle_cfg.guild_file,
@@ -18432,6 +18436,13 @@ struct EnterConfig {
     castle_name_colors: mir2_world::castle::CastleNameColors,
     /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
     red_die_home: mir2_world::castle::RedDieHome,
+    /// `M2Share.StartPointList`（`Envir/StartPoint.txt`）：`GetStartPoint()` 的匹配表
+    /// （`PlayObject.Base.cs:704-721`；登录 `PlayObject.cs:1199` + 3s `CheckDupObjTick` 支）。
+    home_start_points: Vec<mir2_envir::startpoint::StartPoint>,
+    /// `Config.RedHomeMap/RedHomeX/RedHomeY`（oracle ctor 字面量 `3/845/674`），`PvpLevel>=2` 用。
+    red_home_map: String,
+    red_home_x: i16,
+    red_home_y: i16,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
     /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
@@ -20224,6 +20235,50 @@ fn tick_world_with_specials(
         tick_world_head_with_specials(world, host, table, registry, displays, online, gates);
     world.tick_tail(&mut rec);
     rec
+}
+
+/// oracle `PlayObject.Message.cs:262-266`（`CheckDupObjTick` 3s 支）里的 `GetStartPoint()`：
+/// 本 tick 命中 3s 门的在线玩家，按**当前地图**用 [`homemap::get_start_point`] 覆盖记录里的
+/// `HomeMap/HomeX/HomeY`（PvpLevel `pk_point/100` >= 2 时走 RedHome*）。
+///
+/// 与 world 侧 `check_dup_obj`（`mir2-rs/crates/world/src/world.rs:5706`，其 `:5731` 原为
+/// 「处置（登记）」）配对；`GetXYObjCount`/`BoDuplication` 的顺序**不动**。
+fn apply_get_start_point_after_tick(
+    world: &mir2_world::World,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    online: &OnlineRegistry,
+    registry: Option<&mir2_envir::MapRegistry>,
+    enter_cfg: &EnterConfig,
+) {
+    let now = world.clock_ms;
+    for entry in online.iter() {
+        let Some(e) = world.entities.get(entry.actor_id) else {
+            continue;
+        };
+        // 只在**本 tick 命中 3s 门**时应用（world 在门内把 tick 置为 now）。
+        if e.check_dup_obj_tick != now {
+            continue;
+        }
+        let Some(map_name) = registry.and_then(|r| r.name_of(e.map_id)) else {
+            continue;
+        };
+        let Some(saved) = saves.get_mut(&entry.chr_name) else {
+            continue;
+        };
+        let pvp = u8::try_from(saved.record.data.pk_point.max(0) / 100).unwrap_or(255);
+        if let Some((hm, hx, hy)) = homemap::get_start_point(
+            pvp,
+            map_name,
+            &enter_cfg.home_start_points,
+            &enter_cfg.red_home_map,
+            enter_cfg.red_home_x,
+            enter_cfg.red_home_y,
+        ) {
+            saved.record.data.home_map = Some(hm);
+            saved.record.data.home_x = hx;
+            saved.record.data.home_y = hy;
+        }
+    }
 }
 
 /// `tick_world_with_specials` 的**前半段**：`tick_head()` + 专用怪的两条排水。
@@ -22954,10 +23009,10 @@ fn sim_loop(
                                                         homemap::get_start_point(
                                                             pvp,
                                                             &final_map_name,
-                                                            &start_points,
-                                                            &cfg.red_home_map,
-                                                            cfg.red_home_x,
-                                                            cfg.red_home_y,
+                                                            &enter_cfg.home_start_points,
+                                                            &enter_cfg.red_home_map,
+                                                            enter_cfg.red_home_x,
+                                                            enter_cfg.red_home_y,
                                                         )
                                                     {
                                                         r.data.home_map = Some(hm);
@@ -24274,6 +24329,8 @@ fn sim_loop(
             &online,
             &gates,
         );
+        // oracle `PlayObject.Message.cs:262-266`：3s `CheckDupObjTick` 支里的 `GetStartPoint()`。
+        apply_get_start_point_after_tick(&world, &mut saves, &online, registry.as_ref(), &enter_cfg);
         // **T-127 / 返工 F1 · 相位③（252）**：`SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）
         // ——每个 `!Ghost` 在线玩家一条 `SM_SYSMESSAGE(100)`（`Recog` = 收件人自己、
         // `Param = MakeWord(RedF,RedB)`）；不拼 `SysMsgPreFix`、不排除任何收件人。
