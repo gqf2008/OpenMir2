@@ -156,7 +156,7 @@
         "index": 207,
         "make_index": 5001,
         "std_mode": 5,
-        "ani_count": 0,
+        "ani_count": 1,
         "dura": 4000,
         "dura_max": 4000,
         "note": "木剑（StdMode5，可装备）——与 --var make_index=5001 配套"

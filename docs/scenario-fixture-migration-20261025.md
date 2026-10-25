@@ -20,6 +20,8 @@
 | #14 | `bag_equip` | `tools/window/profiles/bag_equip.json` | `position=40, index=207, make_index=5001, std_mode=5`（木剑） |
 | #15 | `eat_item` | `tools/window/profiles/eat_item.json` | `position=41, index=3, make_index=5002, std_mode=0, ani_count=102`（金创药(小量)） |
 
+> 订正（2026-10-25）：上表 `ani_count` 两处记录值有误——`#15` 金创药应为 **0**（冻结 `sql/mir2_data.sql`：Id 3 `Shape=0`），`#14` 木剑应为 **1**（Id 207 `Shape=1`）。校验点是 `card_window.py:3241`「`ani_count` 必须等于 `Shape`」；见卡 `openmir2-bag-equip-ani-count`。
+
 run3 的 `extra` 追加 `--profile tools/window/profiles/<name>.json`（`--profile` 后者覆盖前者，
 与 #24 的 profile 通道同型）。**只替换本场景真实需要的那一槽**，不动其它槽。
 
