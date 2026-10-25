@@ -2853,6 +2853,18 @@ class Selftest(object):
         self.check("牙MI-7 声明 changes_on_mutation 但缺 applies_to ⇒ rc 2（不许退化成永远 skipped）",
                    rc_sc == 2, (rc_sc, (rep_sc or {}).get("undecidable")))
 
+        # 牙MI-12（F11b）：`applies_to` **非法值** ⇒ rc 2（不是「随便写个值就当域外」）。
+        # 注意：require 里**不带** changes_on_mutation，否则另一条约束（缺作用域）会替它兜住，
+        # 这条牙就测不到 applies_to 的**取值校验**本身（变异「放宽取值校验」时仍绿）。
+        rules_bad_scope = json.loads(json.dumps(self.builtin_rules))
+        decl_bs = rules_bad_scope["db"]["masked_columns"]["mir2_db.characters_bagitem"]["MakeIndex"]
+        decl_bs["applies_to"] = "pipeline"
+        decl_bs["require"] = ["nonzero_both_sides"]
+        p_bad_scope = self.rules_file("mi-badscope.json", rules_bad_scope)
+        rc_bs, rep_bs = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_bad_scope])
+        self.check("牙MI-12 applies_to 非法值（\"pipeline\"，且 require 不含 changes_on_mutation）⇒ rc 2",
+                   rc_bs == 2, (rc_bs, (rep_bs or {}).get("undecidable")))
+
 
     def finish(self):
         total = len(self.passed) + len(self.failed)

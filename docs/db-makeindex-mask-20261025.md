@@ -50,17 +50,22 @@ oracle `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回「计数器 + `HUti
 2. 同一 `PlayerId` 内**合法重复**确实存在（run2 `login_only` 的 PlayerId=6227：28 个占用槽、25 个不同值）
    ⇒ 「各槽互不相同」同样不成立。改为 `distinct_per_player`：**占用槽 ≥2 的玩家，不同取值数必须 ≥2**
    （防「全填同一个常量」）；
-3. `changes_on_mutation`：给了 before 快照（`--baseline-a/b`）时，占用集合或取值必须变化（防写死常量）；
+3. `changes_on_mutation`：给了 before 快照（`--baseline-a/b`）时，**每侧取 `before_keys ^ after_keys`
+   的对称差**，键 = `(group_by 值, Position, 取值)`，两侧对称差都为空才判红（防写死常量）。
+   用对称差而不是「只遍历 before 的键」，是因为**纯新增一个槽**（卡面 ②(c)「增删物品」的常见形态）
+   在旧写法下会被误判成「没变化」；键里带 `Position` 是为了抓住**同值换槽**（F10，reviewer-20 `49e75392`）。
    没有 before 快照时记 `skipped` 并在报告里写明。
    **作用域**：`compare_runs` 管道**恒无** before 快照 ⇒ 这条牙在窗口跑批里永远 `skipped`；
-   它**只在 dbsnap 直连**（真给了 `--baseline-a/b`）时可跑。这条不是纸面声明——见 §4.2 的直连实证，
-   以及为让它真能咬而修的两处实现（before 行透传 + `masked_column_applied` 不算差异）。
+   它**只在 dbsnap 直连**（真给了 `--baseline-a/b`）时可跑。**「直连」指 CLI + API 两处都行**：
+   `dbsnap_pair diff --masked-columns FILE`（F12 新增；在此之前只有 `run_pair()` API 能传掩码，
+   照文档用 CLI 试会得到「没有掩码」的假象）。这条不是纸面声明——见 §4.2 的直连实证，
+   以及为让它真能咬而修的实现（before 行透传 + `masked_column_applied` 不算差异）。
 
 任一不成立 ⇒ `masked_column_violation`（**差异**，不是「判不了」）。
 
 ## 4. 牙与变异
 
-`compare_runs selftest` **342/342**（新增七颗）：
+`compare_runs selftest` **343/343**（新增八颗）：
 
 | 牙 | 断言 |
 |---|---|
@@ -71,6 +76,10 @@ oracle `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回「计数器 + `HUti
 | MI-5 | **用仓库 `rules.json` 本身**（不传 `--rules`）跑同一构造：rc 0 且 `whitelisted` 点名 `D-1`、`skipped` 含 `changes_on_mutation` |
 | MI-6 | `whitelisted` 真带 `occupied_a`/`occupied_b`（相等且 >0；run2 实测 6938/6938）且 `applies_to=dbsnap-direct` |
 | MI-7 | 声明 `changes_on_mutation` 却不登记 `applies_to` ⇒ **加载期 rc 2**（不许退化成永远 skipped） |
+| MI-8 | **纯新增**一个占用槽（`[101,102] → [101,102,103]`）⇒ rc 0（旧「只看 before 键」写法会判红） |
+| MI-9 | **同值换槽**（Position 0/1 互换）⇒ rc 0（键里不带 Position 会被当成没变化） |
+| MI-10 | before 快照**列不符** ⇒ `masked_column_violation(check=changes_on_mutation)`、rc 1（不许静默 skipped） |
+| MI-12 | `applies_to` **非法值**（`"pipeline"`，且 require 不含 `changes_on_mutation`）⇒ rc 2 |
 
 > **为什么有 MI-5**：MI-1 用的是自造规则文件，它证明「机制生效」，但**删掉 `rules.json` 里那条登记后
 > MI-1..4 仍全绿**（登记被删没人发现 = 没牙）。MI-5 把牙咬在**仓库登记表**上。
@@ -85,8 +94,12 @@ oracle `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回「计数器 + `HUti
 | D **去掉 `rules.json` 的 `db.masked_columns`**（反向） | `FAIL 牙MI-5`，`rc=1`，差异记录 `{"kind":"value","record":{"column":"MakeIndex","a":"101","b":"201"}}` ⇒ 正是「每次都报一条 MakeIndex 差异」的旧行为；`RED: 339/340` |
 | E 去掉 `occupied_a/occupied_b` 的透传（F2 承诺落空） | `FAIL 牙MI-6`（`(None, None, 'dbsnap-direct')`）；`RED: 341/342` |
 | F 去掉「声明 `changes_on_mutation` 必须登记 `applies_to`」的加载期拒绝 | `FAIL 牙MI-7`（`rc=0`，本该 2）；`RED: 341/342` |
+| G 还原「只看 before 的键」（F10 修法回退） | `FAIL masked_changes_on_mutation_add_only`：纯新增被判 `rc=1 violation`；`RED: 34/35` |
+| H CLI 不接线（`load_masked_columns` 恒返回空） | `FAIL masked_columns_cli_entry`（masked rc=1 / plain rc=1）；`RED: 34/35` |
+| I 删掉 before 列不符的 violation 分支 | `FAIL masked_baseline_column_mismatch_red`（rc=1 但 check=[]）；`RED: 34/35` |
+| J 放宽 `applies_to` 取值校验 | `FAIL 牙MI-12`（`rc=0`，本该 2）；`RED: 342/343` |
 
-回归后 `GREEN: compare_runs selftest 342/342`。
+回归后 `GREEN: compare_runs selftest 343/343`；`GREEN: dbsnap_pair selftest 35/35`。
 
 ### 4.2 F1 实证：dbsnap **直连**的 before/after 三态（`changes_on_mutation` 真会咬）
 
@@ -95,8 +108,17 @@ oracle `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回「计数器 + `HUti
 ```text
 PASS masked_changes_on_mutation_direct      no-baseline rc=0 skip=['changes_on_mutation'] /
      same rc=1 viol=['changes_on_mutation'] / changed rc=0 viol=0
-GREEN: dbsnap_pair selftest 31/31
+PASS masked_changes_on_mutation_add_only    rc=0 viol=[]（纯新增 101,102 -> 101,102,103）
+PASS masked_changes_on_mutation_slot_swap   rc=0 viol=[]（槽位互换 0<->1）
+PASS masked_baseline_column_mismatch_red    rc=1 check=['changes_on_mutation']
+PASS masked_columns_cli_entry               masked rc=0 / plain rc=1
+GREEN: dbsnap_pair selftest 35/35
 ```
+
+同一个块里还有：`masked_changes_on_mutation_add_only`（**纯新增** ⇒ rc 0，F10）、
+`masked_changes_on_mutation_slot_swap`（同值换槽 ⇒ rc 0）、`masked_baseline_column_mismatch_red`
+（before 列不符 ⇒ violation，F11a）、`masked_columns_cli_entry`（**CLI `--masked-columns FILE`**
+带掩码 rc 0 / 不带 rc 1，F12）。
 
 三态 = ① 不给 `--baseline-*` ⇒ `skipped`（与管道侧同形）；② 给了 baseline 且**前后完全没变**
 （把占用槽 `MakeIndex` 写成与前次相同）⇒ `masked_column_violation(check=changes_on_mutation)`、`rc=1`；
@@ -133,8 +155,14 @@ python -I -B tools/conformance/compare_runs.py --oracle <run2>/<场景>/csharp  
 每条 `whitelisted` 记录现在带 `occupied_a = occupied_b = 6938`（六场景同值，即两侧占用槽数相等且非 0）。
 
 **如实说明**：run2 这批里 `MakeIndex` 差异**改前就是 0**（两侧 DB 都是同一次 restore 的基线，
-物品的 MakeIndex 未被重新生成）⇒ 本轮掩码在这批证据上是**无操作**；「掩码真生效」由 **牙 MI-1**
-（构造级：仅 MakeIndex 不同 ⇒ 无掩码 rc1、有掩码 rc0）实证。其余差异条数**改前=改后**（0/0/0/0/5/0 不变）。
+物品的 MakeIndex 未被重新生成；进一步核对：六场景 6938 个占用槽**逐 Id 完全相同**）⇒ 本轮掩码在这批
+证据上**只能证明「rc/差异条数不变」，不能当「掩码必要性」的证据**。「掩码真生效」由构造级
+**牙 MI-1/MI-5** 实证。
+
+**必要性/真实效果的反向证据**在 `e23-reshot`（orchestrator 记录，见 review `49e75392` 的引述）：
+旧规则下该场景有 **2 条** db 差异——`characters.Gold 9912/9920` + `characters_bagitem.MakeIndex
+645768579/16281`；新规则下剩 **1 条**（Gold）+ 1 条 `masked`（occupied 6939/6939）
+⇒ 掩码确实吃掉了一条**只为 D-1 墙钟差**而存在的差异，且没有连带吞掉 Gold。
 
 ## 6. 红线与未做
 
