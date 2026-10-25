@@ -25,9 +25,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 触发 | `CM_BUTCH(1007)`（`Messages.cs:57`）→ `PlayObject.Message.cs:829-831` 的 `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`；成功出 `SM_SKELETON(33)` → `SM_BUTCH(637)` |
-| 线上字段 | `recog = MakeLong(尸体X,尸体Y)` ⇒ `nParam1=X`、`nParam2=Y`（由夹具提供，场景用变量 `target_xy`，不写死） |
-| 期望证据 | `33` → `637` 帧序；两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`；**流位恰停第二抽** + site/order 账本 |
+| 触发 | `CM_BUTCH(1007)`（`Messages.cs:57`）→ `PlayObject.Message.cs:829-831` 的 `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`；成功出 **`SM_BUTCH(637)`**（收官帧）；`SM_SKELETON(33)` **不是每刀必发**（只有 `BodyLeathery<=0` 才发，见 §2c.3b） |
+| 线上字段 | `recog = MakeLong(尸体X,尸体Y)` ⇒ `nParam1=X`、`nParam2=Y`——尸体格由**运行期令牌 `@last_kill_xy`** 提供（寻靶击杀后尸体不一定在静态 `target_xy`） |
+| 期望证据 | **`SM_BUTCH(637)`** 收官（`33` 非必发、**不作判据**）；两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`；**流位恰停第二抽** + site/order 账本 |
 | 失败形态 | 第 1 步后面超时 ⇒ `ClientGetButchItem` false（无尸体/距离/速度门），不是抽数问题 |
 
 **为什么 blocked（双缺口）**：
@@ -70,7 +70,7 @@
 2. **打了没死**：`kill: target alive after N swing(s)` —— 收到过目标格活动帧（`SM_TURN/DEATH` 带坐标）
    或带伤害的他人 `SM_STRUCK`，但没等到死亡帧；错误串带帧摘要。
 3. **死了但屠宰不接受**：不在 `kill` 内——由紧随其后的 `wait_for(637)` 超时表达（死亡帧已到，
-   说明击杀成功；33 不来 = 尸体被清/距离或速度门）。
+   说明击杀成功；**637 不来** = 屠宰被拒（尸体被清/距离或速度门））。
 
 ### 2b.3 场景与状态
 
@@ -80,7 +80,7 @@
   **`SM_SKELETON(33)` 不是必现**：`PlayObject.Operate.cs:731-738` 只有 `BodyLeathery<=0` 才发，
   每次屠宰随机扣 5–20 ⇒ 首刀远到不了 0；**不得把它写进步序当判据**（见 §2.3 第 3 条）。
   run3 `#21` 的 `extra` 现在是 `["--timeout-ms","60000","--profile","tools/window/profiles/butch_monsters.json"]`
-  （后者提供活体夹具，见 §2b.4）。
+  （后者提供活体夹具：`tools/window/profiles/butch_monsters.json`，map 0 的 (330,331) 刷 1 只「鸡」）。
 - **`target_xy`/`self_pos` 放 `params`（默认 21692746/21627210），不要放 `required`**：`card_window` 见到任何
   `required` 会先跑 discovery（`npc_click_auto`），map 0 无 NPC ⇒ 必然超时（实测踩到，rc=2）。
 - **状态：仍 `blocked`**，`blocked.reason` 已改为「能力齐、只差实测」；解封条件（实测步骤 +
