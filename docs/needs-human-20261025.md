@@ -65,7 +65,7 @@
 | 4 | C# 栈无 seed/hook（RNG 类 R 卡不可验） | **已解** | `15dbbe843`：仓库版 `start-csharp.ps1` + `RngSeedHook.dll` + `MIR2_RNG_SITE` |
 | 5 | 两侧 `Castle/List.txt` 可能不对称 | **已解** | `9c17e8eab`：`preflight` 新增 `castle_list_symmetry`（含 `M2GameSvr-hook` 影子）fail-closed |
 | 6 | 动物/尸体夹具 | **已解（活体）** | `13013389e`：`profile fixtures.monsters` 单点刷怪（MonGen 第 7 列 `ZenTime=360>0`） |
-| 7 | 怪物夹具**写盘位置错**（追加到 MonGen.txt 末尾 ⇒ 窗口内刷不出） | **已修待合并** | 卡 `openmir2-fixture-monsters-prepend`：改为**前插**（index 0、首个闸门即取到）；tester 已交 `5af1068c4`，双审中 |
+| 7 | 怪物夹具**写盘位置错**（追加到 MonGen.txt 末尾 ⇒ 窗口内刷不出） | **已解（合入 `6f35b049f`）** | 卡 `openmir2-fixture-monsters-prepend`：改为**前插**（index 0、首个闸门即取到）；真机已验证 prepend 生效（靶子刷出、5 条 `SM_STRUCK(31)`），kill→butch 三段结论复跑中 |
 | 8 | 背包满导致「装武器」类前置无法声明 | **已解** | `a60e04ad9`：`fixtures.inventory_replace` / `inventory_drop`（真机往返两侧已 PASS，before/restored sha256 逐字节相同） |
 
 **当前实况**：run3 = **24 条（blocked 3 ⇒ 入批 21）**（`run_batch --list` 实测 @ `362254623`）；操作单
