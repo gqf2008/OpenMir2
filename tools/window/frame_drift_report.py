@@ -7,7 +7,9 @@
   * 每侧 ident 计数、**单侧多出的 ident 与条数**（`extra(oracle)` / `extra(rust)`）；
   * **首个顺序错位下标**与错位处两侧的 ident 序列（对齐口径与 `compare_runs.py` 相同：按文件顺序）；
   * 分类提示：`extra_tail`（多出帧全在尾部）/ `extra_mid`（多出帧在中间 ⇒ 后续整段错位）/
-    `order_only`（两侧计数相同但顺序不同）/ `clean`（无差异）。
+    `order_only`（两侧计数相同但顺序不同）/ `clean`（无差异）；
+  * `extra_side` ∈ `oracle` / `rust` / **`both`**（两侧都多帧时必须报 `both`，否则 JSON 消费方
+    会以为另一侧没多帧）。
 
 **只读证据、只做分类**：不判「flaky vs 稳定差异」——那需要同一场景重复跑 ≥3 次，机器由 tester 排期；
 本脚本的输出正是那 3 次重复要填的表。控制帧（ident 为 null 且 `frame_class=server_ack_time`）与
@@ -67,7 +69,14 @@ def drift_row(name, o, r):
     extra_r = {i: cr[i] - co.get(i, 0) for i in sorted(cr) if cr[i] - co.get(i, 0) > 0}
     at = first_mismatch(o, r)
     if extra_o or extra_r:
-        side = "oracle" if extra_o else "rust"
+        # F3（review）：两侧都多帧时必须报 `both`——只报 oracle 会让 JSON 消费方
+        # 以为 rust 没多帧（move_walk 就是两侧各多一条不同来源的帧）。
+        if extra_o and extra_r:
+            side = "both"
+        elif extra_o:
+            side = "oracle"
+        else:
+            side = "rust"
         kind = "extra_tail" if at is None else "extra_mid"
     elif at is not None:
         side, kind = None, "order_only"
@@ -121,7 +130,7 @@ def render(rows):
 
 
 # ---------------------------------------------------------------------------
-# selftest：四颗牙（多出在尾 / 多出在中 / 仅顺序不同 / 完全一致）
+# selftest：六颗牙（尾多 / 尾多(另一侧) / 两侧都多 / 仅顺序不同 / 完全一致 / 中间多）
 # ---------------------------------------------------------------------------
 def _f(ident):
     return {"ident": ident}
@@ -148,6 +157,14 @@ def _selftest():
     chk(row["kind"] == "extra_tail" and row["extra_side"] == "rust"
         and row["extra_rust"] == {10: 1, 41: 1},
         "牙2 rust 尾部多 10/41 => extra_tail / extra(rust)")
+
+    # 牙6（F3）：两侧各多一条**不同 ident** 的帧 => extra_side 必须是 both
+    o = base + [f(10), f(41)]
+    r = base + [f(14)]
+    row = drift_row("t6", o, r)
+    chk(row["extra_side"] == "both" and row["extra_oracle"] == {10: 1, 41: 1}
+        and row["extra_rust"] == {14: 1},
+        "牙6 两侧都多帧（oracle +10/41、rust +14）=> extra_side=both（不误报成 oracle）")
 
     # 牙3：两侧计数相同、顺序不同（npc_click 的形态：643 提前）
     o = [f(10), f(41), f(643), f(654)]
