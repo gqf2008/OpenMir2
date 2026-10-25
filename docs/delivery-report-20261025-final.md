@@ -97,6 +97,13 @@
     唯一可达路径是脚本 `GMEXECUTE` 抬权（`ExecutionProcessingSys.cs:4938-4947`）。
     ⇒ **任何用聊天 `say` 驱动非零权限 GM 命令的场景/夹具都结构性地跑不出东西**，P21 只是第一个撞上的；
     本卡裁决改为「命令体 + 构造级牙 + 权限门等价真机判据（两侧都记拒绝）」，脚本夹具另卡。裁决 `4e95fd56`。
+- **剩余窗口队列（两张 R 卡，都很便宜；均需 owner 给时段，我不自行起栈）**：
+  | 卡 | 跑什么 | 判据 | 代价 |
+  |---|---|---|---|
+  | `openmir2-gm-target-state-write` | `card_window.py --profile alt.json --scenario gm_level0_gate.json --out …` → `gm_gate_check.py check --run-dir … --before/--after --chr-name winplay0` | 逐侧恰 1 条 `权限不够!!!`（Red 255/56）、零 200/202/622/45/52/752、`characters_ablity.Level` 跑前后逐字节相同；**只跑 frames 会判 UNDECIDABLE(rc=2)**，G3 必须带前后 DB 快照 | 零夹具、~2 分钟 |
+  | `openmir2-dir-persistence-writeback` | 与今天 `dir-diag` **同一条命令**：`card_window.py --card openmir2-dir-persistence-writeback --profile E:/tmp/window/butch-run/profile.json --scenario tools/probe/scenarios/butch_two_draws.json --rng-log --out …` | 两侧 `characters.Dir` 相等，且 `CX/CY`＝实时坐标（不是载入值）；另核 `characters_item.Dura` 仍归 T-266 磨损 RNG | 复用现成场景与 profile，~3 分钟 |
+  > 为什么列出来：这两项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
+
 - **工具面待办（均 L，交付后）**：
   - ✅ `openmir2-tool-selftest-gate`：**已合并 `24248798a` 并 closed**（tier L，approve `637aa96b5` delta + `1ec19eae`）。工具自测门 44 项入 merge 门禁；门自超时硬化（进程树终止 + 10s 兜底 + 420s 总墙钟 + NOT-RUN 点名）；`--inventory` 49 = 门内 44 / 出域 5 / 未分类 0；合并后产物 `--selftest` **14/14 GREEN**。**留三条 carry-over**（`merge_result 9f742dc7`）：M1 计数缺「计数规则」定义（按调用点 `timeout=` 计 35，按进程是否有界计 31，两者都对）、TSG10c 缺牙（守卫位置可静默回归）、M3 超时文案纯观感。
   - `openmir2-orphan-scenario-gate`：`blocked_sources_check` **只扫 run3 行、不扫场景目录** ⇒ 5 个 blocked 孤儿永不被校验而门仍 rc=0（P21 标本是活样本）。
