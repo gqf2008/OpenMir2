@@ -292,6 +292,13 @@ pub struct GateConfig {
     /// `GetHomeInfo` 的 `Random(StartPointSize)` 上限（`WorldServer.cs:1388-1392`）。本宿主取
     /// `I=0`（见 `homemap` 模块头），该键只用于日志/复核。
     pub start_point_size: u8,
+    /// `[Config] RedHomeMap`（oracle `GameSvrConf.cs:195/1377-1379` 的**ctor 字面量** `"3"`；
+    /// 该构建**不从配置文件读**这三项）。`PvpLevel() >= 2` 时 `GetStartPoint()` 用它覆盖 Home*。
+    pub red_home_map: String,
+    /// `RedHomeX`（oracle ctor 字面量 `845`）。
+    pub red_home_x: i16,
+    /// `RedHomeY`（oracle ctor 字面量 `674`）。
+    pub red_home_y: i16,
     /// `[Setup] HomeMap`（oracle `GameSvrConf.cs:1374`，缺省 `"0"`）——`StartPointList` 为空时
     /// `GetHomeInfo` 的回落地图（`WorldServer.cs:1403`）。
     pub home_map: String,
@@ -1282,6 +1289,10 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         castle_get_all_npc_tax: castle_get_all_npc_tax.unwrap_or(false),
         // oracle 缺省值（`GameSvrConf.cs:1400/1374/1375/1376`）：`[Setup]` 里没写不算错。
         start_point_size: start_point_size.unwrap_or(2),
+        // oracle `GameSvrConf.cs:1377-1379`：这三项是 **ctor 字面量**，`LoadConfig` 不读它们。
+        red_home_map: "3".to_string(),
+        red_home_x: 845,
+        red_home_y: 674,
         home_map: home_map.unwrap_or_else(|| "0".to_string()),
         home_x: home_x.unwrap_or(289),
         home_y: home_y.unwrap_or(618),

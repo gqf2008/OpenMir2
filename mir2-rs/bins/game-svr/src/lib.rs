@@ -22940,6 +22940,31 @@ fn sim_loop(
                                                         );
                                                     }
                                                 }
+                                                // oracle `PlayObject.cs:1199`：登录后**无条件**
+                                                // `GetStartPoint()`（`PlayObject.Base.cs:704-721`）——
+                                                // `PvpLevel()>=2`（`PkPoint/100`）走 `RedHome*`；否则按
+                                                // **当前** `Envir.MapName` 命中 `StartPointList` 就**覆盖**
+                                                // Home*（覆盖值随存档落库）。
+                                                if let Some(r) = full.as_mut() {
+                                                    let pvp = u8::try_from(
+                                                        r.data.pk_point.max(0) / 100,
+                                                    )
+                                                    .unwrap_or(255);
+                                                    if let Some((hm, hx, hy)) =
+                                                        homemap::get_start_point(
+                                                            pvp,
+                                                            &final_map_name,
+                                                            &start_points,
+                                                            &cfg.red_home_map,
+                                                            cfg.red_home_x,
+                                                            cfg.red_home_y,
+                                                        )
+                                                    {
+                                                        r.data.home_map = Some(hm);
+                                                        r.data.home_x = hx;
+                                                        r.data.home_y = hy;
+                                                    }
+                                                }
                                                 // oracle `WorldServer.cs:262-275` 的新角色 `Abil` 初始化：
                                                 // 随后的 `RecalcLevelAbilitys()/RecalcAbilitys()`（本宿主在
                                                 // `enter::recalc_for_session` 里）按 `Job` 覆盖等级派生字段。
