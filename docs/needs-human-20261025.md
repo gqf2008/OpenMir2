@@ -1,6 +1,6 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = f72dbce7` @ 2026-10-25 14:57 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
+> **快照戳**：`master = 574a49e7f` @ 2026-10-25 16:05 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
 > `goal_gate` 取数：`python -I tools/goal/goal_gate.py --full --script-bin <release mir2-script-tool> --json`，
 > 快照 `2cb84220f` @ 13:47（**含全量 `cargo test`**：3252 passed / 3315 running / 63 ignored、rc=0；①③④ 均在该 tip 实跑）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`，其中「开窗前置缺口」今天已全部解决，照旧读会误导）。
@@ -127,17 +127,17 @@
 
 ## 5. ⑤ 状态快照（`goal_gate` 实测）
 
-- **快照**：`f72dbce7`（2026-10-25 14:57 +08，`goal_gate --full` 实跑）
+- **快照**：`574a49e7f`（2026-10-25 16:05 +08，`goal_gate --skip-tests` 实跑；`--full` 最近一次在 `f72dbce7`）
 
 | 条件 | 状态 | 实测（可复算） |
 |---|---|---|
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
-| ② R 卡证据 | **need_human** | R 卡 **227 张**：已完成 **15** / `window_required` **154**（已合并）/ `window_required` **未合并 6** / whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 15+154+6+48+3+1 = 227 ✓ |
+| ② R 卡证据 | **need_human** | R 卡 **228 张**：已完成 **15** / `window_required` **157**（已合并）/ `window_required` **未合并 4** / whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 15+157+4+48+3+1 = 228 ✓ |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **pass** | **最终 tip `f72dbce7`** 上 `goal_gate --full` 复跑：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（总 144s）。逐项：fmt / clippy / msgcodegen / whitelist_anchor_gate / m3 audit / `master_sync` 全 rc=0，`cargo_test_workspace` **rc=0 @117.0s**，三段数 **running 3315 = passed 3252 + failed 0 + ignored 63**、**141 个 suite 全 `ok`**（门内那次无计数，tester 在 `f72dbce7` 另跑一次 100s 取数，两次 rc 一致 ⇒ 非 flaky）；`master_sync` local==remote==`f72dbce7`。产物 `E:/tmp/window/goal-full-fd08ff3a9.json`（`.meta`：`GOAL_RC=2` 来自 ② 的 need_human、不是红门）。此前在 `2cb84220f` 的全量结论（绿 7/0/0、running 3315 = passed 3252 + ignored 63、两次 rc 一致非 flaky）仍作对照保留 |
+| ④ 门禁恒绿 | **pass（需在最终 tip 复跑）** | 全量 `--full` 最近一次在 **`f72dbce7`**：门禁 7 项 绿 7 / 红 0 / 需人工 0（144s；`cargo test` rc=0 @117s；三段数 running 3315 = passed 3252 + ignored 63；141 suite 全 ok）。**此后 master 前进 6 个提交、其中 3 笔改 Rust**（GM 命令体 `a5407e2be`、softclose A1 `9224c2ebd`、Dir 快照 `574a49e7f`）⇒ 按「门禁恒绿」口径**必须在最终 tip 再跑一次 `--full`**。本页 16:05 的快速模式（`--skip-tests`）为 绿 6 / 红 0 / 需人工 1（唯一未判 = `cargo_test_workspace`），`master_sync` local==remote==`574a49e7f` ✓；三个 Rust 合并各自的局部门禁均已实跑（`--lib` 1504 / 1505 / 1512 passed） |
 
-- **② 的两个口径注记**（`openmir2-reviewer-21` 独立复算 `978fb821`，master `2a3be98c`）：
-  1. **未合并 6 张已点名**：`dir-persistence-writeback`、`gm-batch-5-guild-castle`、`gm-script-fixture`、`gm-target-state-write`、`makeghost-lifecycle`、`window-gate-two-runs`；与已合并的 154 张**不重叠**（后者 `merged=True`）。
+- **② 的两个口径注记**（`master 574a49e7f` 上实跑）：
+  1. **未合并 4 张** = `gm-batch-5-guild-castle` / `gm-script-fixture` / `makeghost-lifecycle` / `window-gate-two-runs`（`dir-persistence-writeback` 与 `gm-target-state-write` 今日已合，故 6⇒4）。
   2. **「已完成 15」里有 6 张 `merged=False`**（`ability-weight-login-writeback`、`dualrun-triage-enterworld-frames`、`gm-integration`、`m3hp-lane-repin`、`script-user-account-host`、`window-529-dualrun`）⇒ 这 6 张**没有 `merge_result` 佐证**；`gm-integration` 还是「closed + merged=False + 裁定 window_required」的组合。读「15 张已完成」时须按此折扣。
 
 > **四条件现在的真缺口只剩一处**：② 的 G11 1 张（§1 需你裁决）。①③ PASS；④ 已在最终 tip `f72dbce7` 用 `--full` 复跑 PASS（绿 7/红 0/需人工 0）。证据与可复算口径见 `docs/delivery-report-20261025-final.md`。
