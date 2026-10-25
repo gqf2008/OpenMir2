@@ -38,6 +38,13 @@ $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 $CaptureDir = Join-Path $RepoRoot "tools\capture"
 $results = @()
 
+# 必需阶段表：**单一来源**（卡 `openmir2-e2e-errscan-semantics` A1）。
+# 此前自检里另有一份字面量 ⇒ 只改真表、不改自检仍 GREEN（reviewer-20 报的 F1）。
+# 现在 `-GateSelfTest` 拿一份**硬编码 gold** 与本表逐项比对：只改真表不改 gold ⇒ 自检必红。
+$script:RequiredStages = @("start","login_id","login_pwd","login_submit","charsel","enter_game",
+                           "notice_wait","notice_poll","ingame",
+                           "logout_alt_x","logout_confirm","back_charsel","reenter","reentered","done")
+
 function Add-Result([string]$Name, [bool]$Ok, [string]$Detail = "", [string]$State = "") {
   # State 可显式给 "SKIP"（前置不满足）；默认按 Ok 判 GREEN/RED。
   # SKIP 在汇总里单独计数（不许静默当 GREEN），-FailOnSkip 时折算成 RED。
@@ -50,17 +57,29 @@ function Add-Result([string]$Name, [bool]$Ok, [string]$Detail = "", [string]$Sta
 }
 
 function Get-ErrLogScan([string]$Dir) {
-  # A3：ERR 水位扫描的**目录门**——目录不存在或无 *.err.log ⇒ Ok=$false（旧实现静默 0）。
-  $files = @()
-  if (Test-Path -LiteralPath $Dir) {
-    $files = @(Get-ChildItem -LiteralPath $Dir -Filter *.err.log -ErrorAction SilentlyContinue)
+  # ERR 水位扫描（卡 `openmir2-e2e-errscan-semantics` A2）：**三档语义**。
+  # 把「判不了」和「看过且干净」混成一个红，会让干净栈的 e2e 恒红；
+  # 下一次有人就会为了消红去放宽判据（与 docs 门 N1 同一族）。
+  #   MISSING：目录不存在 ⇒ 判不了 ⇒ RED（Ok=$false）
+  #   CLEAN  ：目录存在、扫描完成、0 个 *.err.log ⇒ 看过且干净 ⇒ GREEN，detail 报路径 + 扫描 0 个
+  #   PRESENT：目录存在且有 *.err.log ⇒ GREEN，进入正常水位比对
+  if (-not (Test-Path -LiteralPath $Dir)) {
+    $d = "目录不存在：$Dir（判不了 ⇒ 按红）"
+    return [pscustomobject]@{ State = "MISSING"; Ok = $false; Count = 0; Files = @(); Detail = $d }
   }
-  $detail = if ($files.Count -gt 0) {
-    "目录 $Dir；扫描 $($files.Count) 个 *.err.log"
-  } else {
-    "目录不存在或无 *.err.log：$Dir（扫描 0 个文件 ⇒ 该项不能判绿）"
+  $files = @(Get-ChildItem -LiteralPath $Dir -Filter *.err.log -ErrorAction SilentlyContinue)
+  if ($files.Count -eq 0) {
+    $d = "目录 $Dir 存在；扫描 0 个 *.err.log（看过且干净）"
+    return [pscustomobject]@{ State = "CLEAN"; Ok = $true; Count = 0; Files = @(); Detail = $d }
   }
-  return [pscustomobject]@{ Ok = ($files.Count -gt 0); Count = $files.Count; Files = $files; Detail = $detail }
+  $d = "目录 $Dir；扫描 $($files.Count) 个 *.err.log"
+  return [pscustomobject]@{ State = "PRESENT"; Ok = $true; Count = $files.Count; Files = $files; Detail = $d }
+}
+
+function Test-StageListEqual([string[]]$A, [string[]]$B) {
+  # 逐项 + **顺序**相等：阶段必须按序发生，顺序本身就是断言的一部分。
+  if ($null -eq $A -or $null -eq $B) { return $false }
+  return ((@($A) -join "|") -ceq (@($B) -join "|"))
 }
 
 function Test-FlowStages([string]$StagesFile, [string[]]$Required) {
@@ -114,33 +133,74 @@ function Test-NotBlackScreen([string]$PngPath, [double]$MinNonBlackRatio = 0.01)
 }
 
 
-# ---- 4c. 门禁离线自检（A2/A4；不起客户端、不依赖栈） ----
+# ---- 4c. 门禁离线自检（A1/A2/A3；离线秒级：不起客户端、不连库、不起栈、不碰 E:/MirServer） ----
 if ($GateSelfTest) {
   $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("e2e-gate-selftest-" + [guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Path $tmp | Out-Null
   $selfOk = $true
-  # A2：阶段表里有一个流程永不发的阶段 ⇒ 必须 RED 且**点名**该阶段
-  $realOrder = @("start","login_id","login_pwd","login_submit","charsel","enter_game",
-                 "notice_wait","notice_poll","ingame","logout_alt_x","logout_confirm",
-                 "back_charsel","reenter","reentered","done")
-  $missing = "notice_poll"
-  $lines = @()
-  foreach ($st in $realOrder) { if ($st -ne $missing) { $lines += ('{"stage":"' + $st + '"}') } }
-  $sf = Join-Path $tmp "stages.ndjson"
-  Set-Content -LiteralPath $sf -Value $lines -Encoding UTF8
-  $r = Test-FlowStages $sf $realOrder
-  if ($r -or $script:FlowMissingStage -ne $missing) {
-    Write-Output ("FAIL A2: 缺阶段未点名（got r={0} missing='{1}'）" -f $r, $script:FlowMissingStage)
+
+  # A1：gold 是独立写死的期望表；真表 $script:RequiredStages 必须与它逐项相等。
+  # 牙 = 只改真表不改 gold ⇒ FAIL A1（reviewer-20 报的原始变异）。
+  $gold = @("start","login_id","login_pwd","login_submit","charsel","enter_game",
+            "notice_wait","notice_poll","ingame",
+            "logout_alt_x","logout_confirm","back_charsel","reenter","reentered","done")
+  if (Test-StageListEqual $gold $script:RequiredStages) {
+    Write-Output ("PASS A1: 真表与 gold 逐项相等（{0} 阶段）" -f $gold.Count)
+  } else {
+    Write-Output ("FAIL A1: 真表与 gold 不一致 gold=[{0}] real=[{1}]" -f ($gold -join ","), (@($script:RequiredStages) -join ","))
+    $selfOk = $false
+  }
+  # A1 负例：变异表必须判不等 ⇒ 上面的谓词不是恒真（谓词要有负例）。
+  $mutant = @($script:RequiredStages) + "notice_dismiss"
+  if (Test-StageListEqual $gold $mutant) {
+    Write-Output "FAIL A1-NEG: 只改真表仍被判与 gold 相等（比较谓词无牙）"
     $selfOk = $false
   } else {
-    Write-Output ("PASS A2: 缺阶段判 RED 且点名 '{0}'" -f $script:FlowMissingStage)
+    Write-Output "PASS A1-NEG: 只改真表（gold 不动）即判不等"
   }
-  # A4：日志目录指到空目录 ⇒ 扫描必须暴露（Ok=$false），不得判绿
+
+  # A3：既有 RED 不退化——缺阶段仍 RED 且**点名**该阶段
+  $missing = "notice_poll"
+  $stageLines = @()
+  foreach ($st in $gold) { if ($st -ne $missing) { $stageLines += ('{"stage":"' + $st + '"}') } }
+  $sf = Join-Path $tmp "stages.ndjson"
+  Set-Content -LiteralPath $sf -Value $stageLines -Encoding UTF8
+  $r = Test-FlowStages $sf $gold
+  if ($r -or $script:FlowMissingStage -ne $missing) {
+    Write-Output ("FAIL A3: 缺阶段未点名（got r={0} missing='{1}'）" -f $r, $script:FlowMissingStage)
+    $selfOk = $false
+  } else {
+    Write-Output ("PASS A3: 缺阶段判 RED 且点名 '{0}'" -f $script:FlowMissingStage)
+  }
+
+  # A2 三档各一颗牙
+  $absent = Join-Path $tmp "no-such-dir"
+  $s1 = Get-ErrLogScan $absent
+  if ($s1.Ok -or $s1.State -ne "MISSING") {
+    Write-Output ("FAIL A2/MISSING: 目录不存在未判 RED（Ok={0} State={1}）" -f $s1.Ok, $s1.State); $selfOk = $false
+  } else {
+    Write-Output ("PASS A2/MISSING: 目录不存在 ⇒ RED（{0}）" -f $s1.Detail)
+  }
   $empty = Join-Path $tmp "empty-logs"
   New-Item -ItemType Directory -Path $empty | Out-Null
-  $scan = Get-ErrLogScan $empty
-  if ($scan.Ok) { Write-Output "FAIL A4: 空日志目录被判绿"; $selfOk = $false }
-  else { Write-Output ("PASS A4: 空日志目录暴露为 RED（{0}）" -f $scan.Detail) }
+  $s2 = Get-ErrLogScan $empty
+  if (-not $s2.Ok -or $s2.State -ne "CLEAN") {
+    Write-Output ("FAIL A2/CLEAN: 存在且 0 个未判 GREEN（Ok={0} State={1}）" -f $s2.Ok, $s2.State); $selfOk = $false
+  } elseif ($s2.Detail -notlike "*扫描 0 个*" -or $s2.Detail -notlike "*$empty*") {
+    Write-Output ("FAIL A2/CLEAN: detail 未同时报「扫描 0 个」与路径（{0}）" -f $s2.Detail); $selfOk = $false
+  } else {
+    Write-Output ("PASS A2/CLEAN: 存在且 0 个 ⇒ GREEN 且报路径（{0}）" -f $s2.Detail)
+  }
+  $some = Join-Path $tmp "some-logs"
+  New-Item -ItemType Directory -Path $some | Out-Null
+  Set-Content -LiteralPath (Join-Path $some "a.err.log") -Value "x" -Encoding UTF8
+  $s3 = Get-ErrLogScan $some
+  if (-not $s3.Ok -or $s3.State -ne "PRESENT" -or $s3.Count -ne 1) {
+    Write-Output ("FAIL A2/PRESENT: 有文件未走正常档（Ok={0} State={1} Count={2}）" -f $s3.Ok, $s3.State, $s3.Count); $selfOk = $false
+  } else {
+    Write-Output ("PASS A2/PRESENT: 有 *.err.log ⇒ 正常比对（{0}）" -f $s3.Detail)
+  }
+
   Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
   if (-not $selfOk) { exit 1 }
   Write-Output "GATE-SELFTEST GREEN"
@@ -214,14 +274,13 @@ if (-not $SkipFlow) {
   # 选方案①（只改本表）而不是给 mir_flow 补 `notice_dismiss`：`mir_flow.ps1` 归 dev-1 卡
   # `openmir2-mirflow-combat-pickup-stages`（写集不重叠），且「公告阶段已发生」的 oracle 语义
   # 由 `notice_wait`+`notice_poll` 表达，新增阶段反而是发明。
-  $required = @("start","login_id","login_pwd","login_submit","charsel","enter_game",
-                "notice_wait","notice_poll","ingame",
-                "logout_alt_x","logout_confirm","back_charsel","reenter","reentered","done")
+  # 表本身在顶层 `$script:RequiredStages`（卡 `openmir2-e2e-errscan-semantics` A1：单一来源）。
+  $required = @($script:RequiredStages)
   if ($SelfTestRed) { $required += "stage_that_does_not_exist" }   # 红检：必缺
 
   # 记录服务端 err 日志水位，跑完对比是否暴涨。
-  # A3（卡 `openmir2-e2e-flow-stack-coupling`）：目录参数化（默认保持 C# 栈的 `E:\MirServer\logs`）；
-  # **目录不存在 / 无 *.err.log 文件 ⇒ RED**（旧实现静默 0 = 「没在看」，不是「没问题」）。
+  # 卡 `openmir2-e2e-errscan-semantics` A2：**三档**语义——目录不存在 ⇒ RED（判不了）；
+  # 有 *.err.log ⇒ 正常比对；目录存在且 0 个 ⇒ GREEN 且 detail 报「扫描 0 个 + 路径」。
   $errScan = Get-ErrLogScan $ErrLogDir
   Add-Result "err-log-scan" $errScan.Ok $errScan.Detail
   $errMark = @{}
