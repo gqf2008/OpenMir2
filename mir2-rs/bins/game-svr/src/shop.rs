@@ -1303,9 +1303,13 @@ pub fn buy_item(
                                 ));
                                 // `WeightChanged()`（`BaseObject.cs:1771-1774`）在 `AddItemToBag` 内、
                                 // `SendAddItem` 之前触发；线上 622 排在直连的 200 之后、650(149) 之前。
-                                if let Some(snapshot) = weight_after {
-                                    frames.push(weight_changed_frame(snapshot));
-                                }
+                                //
+                                // 走单点 ⇒ 成功入包**必**回调一次（满包不回调）⇒ 快照必在：
+                                // 用 `expect` 把「sink 没触发 ⇒ 静默少一帧」变成大声失败
+                                // （行为与旧的无条件 push 一致，review post-merge `bca8074bf` O2）。
+                                let snapshot =
+                                    weight_after.expect("单点成功入包 ⇒ WeightSink 必已回调一次");
+                                frames.push(weight_changed_frame(snapshot));
                                 let g = &mut goods[i];
                                 g.remove(j);
                                 if g.is_empty() {

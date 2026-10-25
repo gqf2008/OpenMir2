@@ -219,6 +219,11 @@ impl WeightChanged {
 /// take_off 卸下、`lib.rs` 的构造期新手物品与脚本 GIVE。现状登记在
 /// `mir2-rs/tests/parity/whitelist.md` T-47 ⑤；要改「发不发」需各自开卡，
 /// **不要**以为换成单点就自动补上了。
+///
+/// ⚠️ **不要照抄 `selloff.rs::add_item_to_bag`**：那是寄售取消路径的**模块内等价物**
+/// （自带 `weight_changed`、绕开本单点）。它本身已发 622、不在上面的「未 opt-in」名单里，
+/// 但照抄它会再造一个**绕过单点**的入包点（第 10 个点，review post-merge `bca8074bf` O1）。
+/// 新路径一律走 `bag::add_item_to_bag_with_sink`。
 pub trait WeightSink {
     /// 成功入包后调一次；`items` 是**已含新件**的背包（载荷按它重算）。
     fn on_item_added(&mut self, items: &[BagItem]);
