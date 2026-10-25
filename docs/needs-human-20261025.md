@@ -1,6 +1,7 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = 27a6f27e0` @ 2026-10-25 06:40 +0800（本地；walgit 主源仍故障）。
+> **快照戳**：`master = 362254623` @ 2026-10-25 08:35 +0800（本地；walgit 主源仍故障）。
+> 06:40 那版（`27a6f27e0`）之后合入的 2 笔均为文档/工具面，**未改动任何 R 卡窗口项**；四条件口径未变，故 §5 的 `goal_gate` 数字沿用原快照并标注。
 > `goal_gate` 取数：`python -I tools/goal/goal_gate.py --skip-tests --script-bin <release mir2-script-tool> --json`
 > （generated_ts `1792881659`，2026-10-25 06:40 +0800；**全量 `cargo test` 本轮未跑**，见 §5 口径）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`，其中「开窗前置缺口」今天已全部解决，照旧读会误导）。
@@ -37,6 +38,21 @@
 
 ---
 
+## 1b. ①b `rules.json` 判据裁定的报告（**Leader 已裁定，owner 可推翻**）
+
+**为什么它属于「条件②」**：`tools/conformance/rules.json` 是双栈对拍的判据表。08:25 实测：**53 行全部 `approved_by=PENDING`**
+（global 4 + rules 48 + db 1）⇒ 每份窗口报告恒带 `rules_pending_review=true`，**窗口跑出来的 PASS/FAIL 不能当 R 级已复核证据**。
+这是条件② 一直存在但未计入的一层折扣。
+
+**Leader 裁定（2026-10-25，卡 `openmir2-rules-pending-adjudication`，issue `062972b6`）**：
+- **转正 50 条**：global 4 + rules 45 + db 1（逐条校验 `tier`/`reason`/草稿人格式后才翻，任一不过不写）。
+- **保留 PENDING 3 条**：`14`（reviewer-2 明文要求等 R 级窗口⑧，不能凭合并算落地）、`10`/`50`（`head_mask:["series"]` 把 `MakeWord(Dir,Light)` 整字掩掉、连 Dir 一起丢 ⇒ 证据等级不足；解法是工具支持只掩 Light，另卡）。
+- 主标志 `rules_pending_review` **保持保守口径**（文件里还有任何 PENDING 就 true），另加附属证据 `pending_review_used`（本次实际涉及面）。
+
+> **你要做的**：**不需要回复**——除非你不同意。不同意请一句话「rules=不同意（理由）」，我按 `docs/rules-pending-adjudication-20261025.md` 的回滚方式整体回退。
+
+---
+
 ## 2. ② Q1 窗口授权 —— **前置已全解，只差你给时段**
 
 **上一版列的「开窗前置缺口」今天已全部关闭**（每项都有合并 oid）：
@@ -49,8 +65,10 @@
 | 4 | C# 栈无 seed/hook（RNG 类 R 卡不可验） | **已解** | `15dbbe843`：仓库版 `start-csharp.ps1` + `RngSeedHook.dll` + `MIR2_RNG_SITE` |
 | 5 | 两侧 `Castle/List.txt` 可能不对称 | **已解** | `9c17e8eab`：`preflight` 新增 `castle_list_symmetry`（含 `M2GameSvr-hook` 影子）fail-closed |
 | 6 | 动物/尸体夹具 | **已解（活体）** | `13013389e`：`profile fixtures.monsters` 单点刷怪（MonGen 第 7 列 `ZenTime=360>0`） |
+| 7 | 怪物夹具**写盘位置错**（追加到 MonGen.txt 末尾 ⇒ 窗口内刷不出） | **已修待合并** | 卡 `openmir2-fixture-monsters-prepend`：改为**前插**（index 0、首个闸门即取到）；tester 已交 `5af1068c4`，双审中 |
+| 8 | 背包满导致「装武器」类前置无法声明 | **已解** | `a60e04ad9`：`fixtures.inventory_replace` / `inventory_drop`（真机往返两侧已 PASS，before/restored sha256 逐字节相同） |
 
-**当前实况**：run3 = **23 条（blocked 2 ⇒ 入批 21）**（`run_batch --list` 实测）；操作单
+**当前实况**：run3 = **24 条（blocked 3 ⇒ 入批 21）**（`run_batch --list` 实测 @ `362254623`）；操作单
 `docs/window-exec-sheet-20261025.md` 已按 23 条刷新（`1af9d6647`）；台账
 `docs/window-closure-ledger-20261025.md` 已二次刷新（`e3ac7c121`）。
 
@@ -58,7 +76,7 @@
 
 - [ ] `powershell -File E:/MirServer/port-status.ps1` ⇒ 5000–7200 全 DOWN、mysqld 3306 UP
 - [ ] `python -I -B tools/window/preflight_private_stack.py` ⇒ 全绿（含新的 `castle_list_symmetry`）
-- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 23（blocked 2 ⇒ 入批 21）`
+- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 24（blocked 3 ⇒ 入批 21）`
 - [ ] `bash tools/window/run_batch.sh --dry-run` ⇒ 自检全绿、不起栈
 - [ ] 专用测试账号 + `assets`/`inventory`/`fixtures` 声明（`card_window` 在 restore 后、起栈前应用）
 
@@ -121,9 +139,9 @@
 
 | 场景（run3） | 为什么还 blocked | 缺什么 | 谁在做 / 预计产出 |
 |---|---|---|---|
-| `butch_two_draws`（**#21**） | 需要先有**尸体**，而 oracle 不持久化尸体 | **场景内击杀步**：`CM_HIT(1004)` 打到死 + `wait_for` 死亡帧，再发 `CM_BUTCH(1007, recog=MakeLong(X,Y))`；profile 同格声明 1 只活体 | 卡 `openmir2-probe-kill-step`（`openmir2-dev-2` 在办）；活体夹具已合 `13013389e`，C# RNG 已合 `15dbbe843` |
+| `butch_two_draws`（**#21**） | **击杀步已合**（`2c271ddb9`）；真原因是**怪物夹具追加到 MonGen.txt 末尾**：刷怪线程每 `RegenMonstersTime=200ms` 只前进一条（部署 `ProcessMonsterMultiThreadLimit` 未配=1），单表 3081 行 ⇒ 一轮 ≈616s，而 #21 只给 60s ⇒ 追加行永远轮不到 | **前置插入**（不是加大超时） | 卡 `openmir2-fixture-monsters-prepend`（tester，`5af1068c4` 双审中）；解封后 dev-1 复跑 kill→butch（`openmir2-butch-two-draws-unblock`） |
 | `clearmapmon_t118`（**不在 run3**） | `movr M3 3` 分支随机；输支会扣佛牌 + 写名单（终局） | 两侧同 `-Seed N` 且确认 `movr=2` → 记 seed → **owner/Leader 裁决入批** | 夹具与 hook 已合 `15dbbe843`；判 seed 的生命周期归窗口执行（`docs/window-scenes-clearmapmon-20261025.md` §1.6） |
-| `castle_merchant_tax`（**#22**） | 升级腿要 `CastleGetAllNpcTax=1` 的**配置覆盖通道** + 与武器铺不同图的**第二个 placement**；且税只经 600s 存档落盘 | 配置覆盖通道（`card_window` 现无）+ `castle_merchant_tax` 的第二腿场景 | 卡 `openmir2-window-fixture-castle`（`openmir2-dev-1` 在办）；买腿已可跑（**#23** `castle_merchant_tax_potion`，税 **4** / 判据 `650.recog=9912`） |
+| `castle_merchant_tax`（**#22**） | ① 买**武器**腿需 652 的 ClientItem buffer 取 `MakeIndex`（运行时计数，内容推不出）；② 「`SaveTick`/600s 门不可观测」**已证伪**（SaveTick 不落盘；写盘门 `ConsoleShowUserCountTime` 可被 `config_overrides` 覆盖）⇒ 真缺口是**税入账原因未定位** | ① probe 的 EDCode buffer 解码（另卡）；② 两行诊断日志 `已读取 [N] 个城堡信息` / `在线数: <N>` | 买药腿已可跑（**#23**，税 4 / 判据 `650.recog=9912`）；② 归 castle 卡 |
 
 > **红线（本表遵守）**：不把「等 owner / 等卡」写成已解决；不把**登记型 PASS** 写成真机证据；
 > 上表三行都是**当前真跑不了**的场景，解封后须按 `openmir2-blocked-two-sources-doc` 同时改**场景 JSON 与 run3 清单行**两处。
