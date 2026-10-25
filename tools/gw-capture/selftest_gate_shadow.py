@@ -134,10 +134,17 @@ def _read_frames(out_dir):
 
 
 def _run_verify(out_dir):
-    return subprocess.run(
-        [sys.executable, "-I", "-B", PROXY, "--verify", out_dir],
-        capture_output=True, text=True,
-    )
+    try:
+        return subprocess.run(
+            [sys.executable, "-I", "-B", PROXY, "--verify", out_dir],
+            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        class _Timeout:  # 与 verify 的 rc 通道同形（非 0 即「未通过」）
+            returncode = 124
+            stdout = ""
+            stderr = "TIMEOUT>120s"
+        return _Timeout()
 
 
 def _run_proxy(out_dir, pairs, direction="both", gate="login"):

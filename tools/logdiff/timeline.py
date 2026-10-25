@@ -177,8 +177,9 @@ def cmd_selftest():
             f.write(json.dumps(r) + "\n")
     try:
         cmd_diff(ns)
-        print("RED: 抽掉一个事件后仍判绿——红检失效")
-        sys.exit(1)
+        # 不能 sys.exit(1)：会被下面的 except SystemExit 当成「篡改后判红」接住
+        # ⇒ 改坏必绿（卡 openmir2-tool-selftest-gate 的变异自证发现）。
+        raise AssertionError("抽掉一个事件后仍判绿——红检失效")
     except SystemExit as e:
         if e.code != 1:
             print("RED: 篡改后退出码异常:", e.code)

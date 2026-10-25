@@ -863,6 +863,13 @@ def _run_board(top):
             ["walgit", "collab", "board", "--format", "json", "--repo", top],
             capture_output=True,
             check=False,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        raise GateError(
+            "stale-pointer gate: `walgit collab board --format json` 超时（>120s）"
+            "（fail-closed; use --no-ledger to skip the card-status check）",
+            rc=2,
         )
     except FileNotFoundError:
         raise GateError(
@@ -2008,6 +2015,7 @@ def selftest():
             cwd=repo,
             capture_output=True,
             check=False,
+            timeout=120,
         )
         cli_text = (cli.stdout + cli.stderr).decode("utf-8", "replace")
         check(
@@ -2222,9 +2230,11 @@ def selftest():
             "--ledger-json",
             empty_board,
         ]
-        empty_run = subprocess.run(empty_args, cwd=empty_repo, capture_output=True, check=False)
+        empty_run = subprocess.run(empty_args, cwd=empty_repo, capture_output=True,
+                                   check=False, timeout=120)
         empty_run_allowed = subprocess.run(
-            empty_args + ["--allow-empty-ledger"], cwd=empty_repo, capture_output=True, check=False
+            empty_args + ["--allow-empty-ledger"], cwd=empty_repo, capture_output=True,
+            check=False, timeout=120
         )
         empty_text = (empty_run.stdout + empty_run.stderr).decode("utf-8", "replace")
         allowed_text = (empty_run_allowed.stdout + empty_run_allowed.stderr).decode(
@@ -2319,6 +2329,7 @@ def selftest():
             cwd=repo,
             capture_output=True,
             check=False,
+            timeout=120,
         )
         unreadable_text = (unreadable.stdout + unreadable.stderr).decode(
             "utf-8", "replace"

@@ -263,8 +263,9 @@ def cmd_selftest():
     cmd_sample(argparse.Namespace(capture=bad, out=o3))
     try:
         cmd_compare(argparse.Namespace(a=outs[0], b=o3, max_diffs=3))
-        print("RED: 坐标改了却判绿 —— 对拍失效")
-        sys.exit(1)
+        # 不能 sys.exit(1)：会被下面的 except SystemExit 当成「改坏后判红」接住
+        # ⇒ 改坏必绿（卡 openmir2-tool-selftest-gate 的变异自证发现）。
+        raise AssertionError("坐标改了却判绿 —— 对拍失效")
     except SystemExit as e:
         if e.code != 1:
             print("RED: 退出码异常", e.code)

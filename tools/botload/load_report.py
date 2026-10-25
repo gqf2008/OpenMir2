@@ -543,10 +543,18 @@ def cmd_selftest(_args):
         def _cli_mem(_extra):
             _tag = ("_".join(_extra) or "default").replace("-", "")
             _out = os.path.join(_td, "r_%s.json" % _tag)
-            _p = subprocess.run([sys.executable, "-I", "-B", os.path.abspath(__file__),
-                                 "summarize", "--stats", _stats, "--count", "100",
-                                 "--mem", _mem, "--out", _out] + _extra,
-                                capture_output=True, text=True)
+            try:
+                _p = subprocess.run([sys.executable, "-I", "-B", os.path.abspath(__file__),
+                                     "summarize", "--stats", _stats, "--count", "100",
+                                     "--mem", _mem, "--out", _out] + _extra,
+                                    capture_output=True, text=True,
+                                    stdin=subprocess.DEVNULL, timeout=120)
+            except subprocess.TimeoutExpired:
+                class _Timeout:  # 与 rc 判据同形：非 0/1 即「真崩溃」
+                    returncode = 124
+                    stdout = ""
+                    stderr = "TIMEOUT>120s"
+                _p = _Timeout()
             # rc=0/1 = 正常退出（1 只是 judge 判 RED，与本节所钉的接线/默认无关）；其它值 = 真崩溃。
             expect(_p.returncode in (0, 1),
                    "CLI summarize 应 rc in (0,1)，实得 " + str(_p.returncode) + "；stderr 尾部=" + _p.stderr[-200:])

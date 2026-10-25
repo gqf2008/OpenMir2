@@ -90,6 +90,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I 下脚本�
 import mir2frame  # noqa: E402  （EDCode 解码：201 包体是逐记录 EDCode 编码 + '/' 分隔）
 
 SM_TURN = 10
+#: 单场景 `mir2_probe --check-scenario` 的上限（正常 <1s；挂住按 error 行处理，整体 rc≠0）。
+PROBE_TIMEOUT_S = 120
 SM_LOGON = 50
 SM_MERCHANTSAY = 643
 SM_BAGITEMS = 201
@@ -776,7 +778,14 @@ def check_all(frames_path, scenarios_dir):
             continue
         cmd = [sys.executable, "-I", "-B", probe, "--check-scenario", "--scenario", path]
         cmd += render_vars(values)
-        proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+        try:
+            proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                                  stdin=subprocess.DEVNULL, timeout=PROBE_TIMEOUT_S)
+        except subprocess.TimeoutExpired:
+            # 外部调用必须有上限：挂住 ⇒ 这一行按 error 记（整体 rc=2），不许把门拖住。
+            rows.append((name, 2, "probe --check-scenario 超时（>%ss）" % PROBE_TIMEOUT_S,
+                         CLS_ERROR))
+            continue
         detail = (proc.stdout or proc.stderr or "").strip().splitlines()
         detail = detail[-1] if detail else ""
         if proc.returncode == 0:
@@ -1689,6 +1698,27 @@ def selftest():
 
     case("㉘ computed 文案与 oracle 一致（CM_WALK 目标格 / CM_HIT 自身格 / Y=HiWord(Recog)）",
          case_computed_oracle_text)
+
+    def case_timeout():
+        # 外部调用超时 ⇒ 该行 rc=2 / cls=error（reviewer-21 F3 同批修：补 timeout 必须配判据）
+        import subprocess as _sp
+        real = _sp.run
+
+        def _fake(*a, **k):
+            raise _sp.TimeoutExpired(cmd=a[0] if a else "x", timeout=k.get("timeout", 0))
+
+        _sp.run = _fake
+        try:
+            rows = _tmp_check_all({
+                "t.json": {"name": "tto", "required": ["self_x"],
+                           "steps": _synth_steps(50)},
+            })
+        finally:
+            _sp.run = real
+        assert rows["t.json"][1] == 2 and rows["t.json"][3] == CLS_ERROR, rows["t.json"]
+        assert "超时" in rows["t.json"][2], rows["t.json"]
+
+    case("㉙ 子进程超时 ⇒ 该行 rc=2 / cls=error 且点名「超时」", case_timeout)
     if fails:
         print("param_discovery selftest: FAIL")
         for item in fails:
