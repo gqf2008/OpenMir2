@@ -18,6 +18,7 @@ globs = [
 # 非 commit 或已不可解析的 hex 引用，逐 oid 登记。
 items = [
   "02dce445",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:32
+  "ab2a1cf8",  # blob（协作条目 oid）；G11 基础设施阻塞豁免的 **owner 裁定条目**；引用见 docs/delivery-report-20261025-final.md:16 与 docs/needs-human-20261025.md:8,144
   "03e75fef71",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:40
   "05b17a75",  # blob（协作条目 oid）；引用见 docs/rcard-registration-audit-20261025.md:32
   "062972b6",  # blob（协作条目 oid）；引用见 docs/needs-human-20261025.md:49

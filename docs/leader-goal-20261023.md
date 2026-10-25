@@ -13,6 +13,12 @@
 
 进度来源：`walgit collab board --format json`（A/B/待审/在跑/待认领 五个数）+ `docs/rewrite-remaining-inventory-20261022.md`。
 
+### 1.0 基础设施阻塞排除项（2026-10-25，owner 裁定）
+
+- **owner 2026-10-25 裁定「先跳过」**：`openmir2-gm-batch-5b-cross-server` 依赖的**跨服传输与拓扑**（`PlanesServer`/`PlanesClient` + 主/分服）**在仓库内从未实现**，其 6 条 GM 命令的 oracle 清单已合入 `99a4d30c4`，实现部分 blocked-by G11。⇒ 该卡列入**基础设施阻塞排除项**，条件② 不再把它计入缺口；G11 作为独立基础设施卡另行排期。
+- **实现方式（显式、非静默）**：`tools/goal/goal_gate.py` 的 `MERGED_NOT_CLOSED_EXEMPT` 表，**每项必须带 `adjudication_oid`** —— 本项为裁定条目 **`ab2a1cf8d37cc3ae02dc1297d4520193fbcaffe8`**（`walgit collab thread openmir2-gm-batch-5b-cross-server`）。条件② 的 `detail` 每次运行都会打印「**另排除 N 张基础设施阻塞：<卡 id>**（owner 裁定，裁定条目 …）」；**豁免项若不再是 `merged_not_closed`，detail 会打 ⚠ 提醒同步删除该条目**（防腐烂）。
+- **不影响**：R 卡总数、`window_required` 桶、tier 政策、任何其它卡的归类。**条件② 绿的语义仍只是「没有无证据无登记的卡」，不等于「R 卡都验过了」**（见下方 1.1）。
+
 ### 1.1 判读口径（2026-10-23 补充，必读）
 
 - **「条件② PASS」= 有登记，不等于已验证。** 机判 `tools/goal/goal_gate.py` 的条件②只判断「每张 R 卡要么有真机/对拍证据，要么有显式登记 + 明确理由」。当前 ~90 张 R 卡是

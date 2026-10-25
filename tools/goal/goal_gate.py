@@ -651,6 +651,18 @@ def collect_r_evidence(card, index, board_cards, whitelist, allow_verdict_grep=F
             "entries": len(entries)}
 
 
+#: **基础设施阻塞排除项**（owner 裁定；只在有签名裁定时填充，**不是静默豁免**）。
+#: 每项必须带 `adjudication_oid` —— 指向一条记录 owner 裁定的 collab 条目，可复核。
+#: 判据口径见 `docs/leader-goal-20261023.md` §1。
+MERGED_NOT_CLOSED_EXEMPT = {
+    "openmir2-gm-batch-5b-cross-server": {
+        "blocked_by": "G11（跨服 PlanesServer/PlanesClient + 主/分服拓扑；仓内无实现）",
+        "adjudication_oid": "ab2a1cf8d37cc3ae02dc1297d4520193fbcaffe8",
+        "owner_decision": "先跳过（owner 2026-10-25 会话内直接回复，orchestrator 记录）",
+    },
+}
+
+
 def r_category(ev):
     """单卡归类（顺序即判据优先级）。
 
@@ -678,6 +690,8 @@ def r_category(ev):
         return "whitelist_t"
     if ev.get("evidence_entries"):
         return "comment_evidence"
+    if ev.get("merged") and ev["card"] in MERGED_NOT_CLOSED_EXEMPT:
+        return "merged_not_closed_exempt"
     if ev.get("merged"):
         return "merged_not_closed"
     if ev.get("weak_t"):
@@ -724,6 +738,10 @@ def classify_r_evidence(ev):
     if category == "comment_evidence":
         return PASS, "comment/review 内有 VERDICT=PASS 证据（%s；--allow-verdict-grep 开启）" % ",".join(
             oid[:8] for oid in ev["evidence_entries"])
+    if category == "merged_not_closed_exempt":
+        ex = MERGED_NOT_CLOSED_EXEMPT[ev["card"]]
+        return PASS, ("**基础设施阻塞排除项**：blocked_by=%s；owner 裁定「%s」；裁定条目 %s"
+                      % (ex["blocked_by"], ex["owner_decision"], ex["adjudication_oid"][:8]))
     if category == "merged_not_closed":
         return NEED, ("merge_result merged=true 但 board 状态=%s（非 closed）且无显式登记；"
                       "需确认未重开新工作或无证据" % (ev.get("board_status") or ev.get("board_column") or "?"))
@@ -772,6 +790,17 @@ def judge_r_cards(evidence_list):
                   counts.get("merged_not_closed", 0), counts.get("not_merged", 0),
                   counts.get("not_in_board", 0) + counts.get("unverified", 0)
                   + counts.get("weak_t", 0)))
+    exempt_now = [t for t in MERGED_NOT_CLOSED_EXEMPT
+                  if next((c for c in per_card if c["card"] == t), None) is not None
+                  and next(c for c in per_card if c["card"] == t)["category"] == "merged_not_closed_exempt"]
+    if exempt_now:
+        detail += ("；**另排除 %d 张基础设施阻塞：%s**（owner 裁定，裁定条目 %s）"
+                   % (len(exempt_now), ", ".join(exempt_now),
+                      MERGED_NOT_CLOSED_EXEMPT[exempt_now[0]]["adjudication_oid"][:8]))
+    stale_exempt = [t for t in MERGED_NOT_CLOSED_EXEMPT if t not in exempt_now]
+    if stale_exempt:
+        detail += ("；**⚠ 豁免项已失效**：%s 不再是 merged_not_closed ⇒ 请同步删除 "
+                   "MERGED_NOT_CLOSED_EXEMPT 条目" % ", ".join(stale_exempt))
     if fail_items:
         detail += "；FAIL 卡：" + ", ".join(x["card"] for x in fail_items)
     if need_items:

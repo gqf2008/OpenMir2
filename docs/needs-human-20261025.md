@@ -5,7 +5,8 @@
 > 三段数 **running 3329 = passed 3266 + ignored 63 + failed 0**、**141 suite 全 ok**；`fail_items=[]`，`overall=need_human` **仅因条件② 的 G11**。
 > 产物：`E:/tmp/window/goal-full-2667aaa25.json`（内容对应 `681a59def`）、`goal-full-681a59def.meta`、`cargo-test-681a59def.{log,results.txt}`（均带 sha256）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`）。
-> **现在只剩两件事需要你**：**① `G11` 一句话**（§1，推荐 A；这是条件② 唯一的缺口）、**② 给窗口时段**（§2，五张 R 卡的真机项都已写好跑法，不占你的注意力，只占机器）。
+> **四条件已全部达成（② 的 G11 豁免已按你的裁定「先跳过」落地，裁定条目 `ab2a1cf8`）。**
+> **现在只剩两件可选的事**：**① 给窗口时段**（§2，五张 R 卡的真机项跑法都写好了，最短 10 分钟）；**② 授权一次异地备份**（§4）。
 > **另有一件可选但建议做**：**授权一次异地备份**（§4）——今天的工作目前只有「本地 + 今早刚出过故障的自建实例」两份副本，GitHub 落后 140 个提交。
 > 只列循环内无权自决的事；每项 ≤3 行，可按 §0 模板一行回复。
 
@@ -140,7 +141,7 @@
 | 条件 | 状态 | 实测（可复算） |
 |---|---|---|
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
-| ② R 卡证据 | **need_human** | R 卡 **230 张**：已完成 **62** / `window_required` **159**（已合并）/ `window_required` **未合并 4** / whitelist **2** / 已裁定登记 **2** / `merged_not_closed` **1**（仅 G11）/ 未开工或未合并 **0** / 注释：本行取数于 2026-10-25 台账清理后（批量收口 95 张 merged∧¬window_required 的卡）⇒ closed 15→62、whitelist 48→2、adjudicated 3→2。加总 62+159+4+2+2+1 = 230 ✓%s |
+| ② R 卡证据 | **PASS** | R 卡 **230 张**：已完成 **62** / `window_required` **159**（已合并）/ `window_required` **未合并 4** / whitelist **2** / 已裁定登记 **2** / `merged_not_closed` **0** / 其余缺口 **0**；**另排除 1 张基础设施阻塞**：`openmir2-gm-batch-5b-cross-server`（owner 2026-10-25 裁定「先跳过」，裁定条目 `ab2a1cf8`）。加总 62+159+4+2+2+1(排除) = 230 ✓。**语义边界**：② 绿 = 「没有无证据无登记的卡」，**不等于**「R 卡都验过了」——159 张仍欠真机窗口，见 §5 窗口队列。 |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
 | ④ 门禁恒绿 | **pass** | **最终 tip `681a59def`** 上 `goal_gate --full` 单次全量实跑：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（185s；fmt 2.7s / clippy 0.6s / msgcodegen 0.2s / whitelist_anchor 5.5s / **m3_registry 0.1s（本 tip 上跑）** / **`cargo_test_workspace` rc=0 @159.7s** / master_sync PASS）。三段数：**running 3329 = passed 3266 + ignored 63 + failed 0**，**141 suites 全 ok**（= 上轮 3262 + kick 卡 2 + 其余 2 自洽）。`overall=need_human` **仅因条件②**，`fail_items=[]`。**产物**：`E:/tmp/window/goal-full-2667aaa25.json`（文件名沿用请求 tip，**内容对应 `681a59def`**，`.meta` 内 `REQUESTED_TARGET` + `TIP_DELTA` 已写明）、`goal-full-681a59def.meta`、`cargo-test-681a59def.log`（sha256 `19d6cffa…`）、`cargo-test-681a59def.results.txt`（sha256 `12faf10f…`）。**执行方式**：前台 + `CARGO_BUILD_JOBS=1`（前两次后台运行被宿主「内存压力 + 会话空闲」守卫杀掉，产物 0 字节 ⇒ 既不记失败也不记通过）；`PEAK_MEM=n/a` 如实登记。**判「要不要重跑」的口径**：`git diff --stat <被测 tip> <当前 tip> -- mir2-rs src sql` 为空/仅 docs ⇒ 证据可复用。 |
 
