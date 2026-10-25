@@ -12,7 +12,7 @@
 |---:|---|---|---|
 | 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ 47 项全绿；`--inventory` rc=0 | **已绿**（`8b7c9c281`：47/47、`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
 | 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **未合**（`openmir2-mirflow-verdict-cause-split`） |
-| 3 | 夹具 | `provision_...py --gate --need gold --need sellable_item --need npc --need monsters` | 已合，**需实跑一次** |
+| 3 | 夹具 | `provision_...py --gate --need gold --need sellable_item --need npc --need monsters` | **已实测（2026-10-26 00:50）**：`kind=missing_prereq / rc=6`，**缺 `gold`（`characters.Gold=0 < 500`）与 `monsters`（未给 `--profile`）**；`sellable_item` 与 `npc` 已备齐 ⇒ **开窗前必须跑一次 `--apply` 置金币 + 提供带怪物夹具的 profile** |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；mysqld 2580 在 | 当前满足 |
 
 **开窗当天用它认树**（数字对不上就说明不在预期 master 上）：
