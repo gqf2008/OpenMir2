@@ -886,7 +886,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 
 **判定域**（写清判定域才不会假绿）：
 
-- 扫什么：脚本内 `REGISTRY` 的**固定 44 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
+- 扫什么：脚本内 `REGISTRY` 的**固定 45 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
   M1/M2 验收、日志差分、世界采样、botload、本仓库 hygiene 门自身，以及本门自己）；
 - 在哪跑：仓库根（`--repo`，默认本脚本上溯两级），`python -I -B`，**每项独立子进程**；
 - rc 从哪取：**子进程退出码**（不经管道/`tail`，否则拿到的是 `tail` 的 rc）；
@@ -908,7 +908,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 **收哪些、不收哪些**（`--inventory` 可看全量）：**只要自带 selftest 且能离线判红，就收**——不按
 「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛。Leader 2026-10-25 裁定：
 **「一次性 / 人工使用 / 别域」都不是合法出域理由**，只有「**需要交互式输入、外部产物或真实环境**」才算。
-出域仅 **5** 项（49 = 44 门内 + 5 出域 + 0 未分类），逐项有实跑证据：
+出域仅 **5** 项（50 = 45 门内 + 5 出域 + 0 未分类），逐项有实跑证据：
 
 | 出域项 | 真实原因（实跑证据） |
 |---|---|
@@ -918,21 +918,21 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 | `conformance/selftest_impl.py` | 无独立 CLI 入口（`--selftest` 空转 rc=0、无输出）；它是 `compare_runs selftest` 的实现模块，已被 compare_runs 覆盖 |
 | `db-parity/newchr_delchr_selchr_probe.py` | 需要真实 MySQL 与建/删/选角色状态（真机） |
 
-**本机实测（2026-10-25，44 项）**：
+**本机实测（2026-10-25，45 项）**：
 
 | 项 | 结果 |
 |---|---|
-| 全量 | **绿 44 / 红 0 / 跳过 0，rc=0，111s**（`E:/tmp/final-recheck/gate-full-44.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 17.7s，其余 ≤2s） |
-| 本门自测 | `--selftest` **14/14**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2） |
-| 清点 | 49 个带 selftest 的工具：门内 **44** / 已分类出域 **5** / **未分类 0** |
-| 变异自证 | **45/45**（44 项 + 门自身进程树变异；逐项「改坏被测实现 ⇒ 该门必须红」） |
+| 全量 | **绿 45 / 红 0 / 跳过 0，rc=0，120s**（`E:/tmp/final-recheck/gate-full-45.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 18.0s，其余 ≤2s） |
+| 本门自测 | `--selftest` **16/16**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2/未分类 rc） |
+| 清点 | 50 个带 selftest 的工具：门内 **45** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3） |
+| 变异自证 | 门注册项 **46/46**（45 项 + 门自身进程树变异；`mutations-proof.log`）；另本卡谓词级否证 **7/7**（5 条 blocked 判据 + `--inventory` rc + gm 判据；`orphan-mutations.json`） |
 
 **能力扩容（两轮共 20 项）**：第二轮 19 项（`review_principal_check` / `scenario_undecidable_audit` /
 `rules_approve` / `capture_login_compare` / `s2c_diff` / `error_curve` / `timeline` / `world_sampler` /
 `preflight` / `gate_shadow_proxy` / `gate_timer_gate` / `count_m1_logs` / `selftest_proxy` /
 `selftest_gate_shadow` / `load_report` / `prepare_safe_login` / `preflight_private_stack` /
 `selftest_mutations` / `startup_param`）+ 第三轮 `in_world_stability`（reviewer-21 实跑 7/7——
-我先前写「无 selftest 入口」是**事实错误**，第三轮被打回后订正）。
+我先前写「无 selftest 入口」是**事实错误**，第三轮被打回后订正）+ 第四轮 `gm_gate_check`（master 新工具；**由 M3 的「`--inventory` 未分类>0 ⇒ rc≠0」当场抓到**，接入后门内 45）。
 
 **同型缺陷（变异自证/AST 扫描发现，比新增清单更重要）**：`sys.exit(N)` 写在含 `except SystemExit`
 的 `try` 体内 ⇒ 失败分支被自己的处理器当成「预期判红」接住，**改坏必绿**。
@@ -962,6 +962,16 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 且不依赖网络；**另有 5 处非 git `Popen`** 均有显式终止路径：2 个抓包代理 `terminate/wait(5)/kill`、
 `next_t` 并发 4 进程 `communicate(120)`、本门 `run_one` 与自测 `_bounded`（超时+树终止）。
 `param_discovery` 另有用例 ㉙ 钉住「超时⇒rc=2/cls=error」。
+
+**`goal_gate --skip-tests` 仍会跑 fmt/clippy/msgcodegen**（`run_gate_checks:899-920`，只有
+`cargo test` 受 `with_tests` 控制）⇒ **别人在构建时不要跑它**；核 R 卡桶/条件②直接调 goal_gate 的纯函数。
+
+**blocked 孤儿/证据门（`tools/window/blocked_sources_check.py`，卡 `openmir2-orphan-scenario-gate`）**：
+除原有「两来源一致 + token」外，现在**扫全部场景**——blocked 场景必须命中 (a) run3 行 + token 或
+(b) **结构化** `blocked.not_in_run3_reason{reason, evidence[]}`；证据 `kind ∈ {card, commit, path}`，
+commit 已成 master 祖先 / card 已 closed 且无结构化 `still_blocked_because` ⇒ **rc=1（证伪）**；
+纯文本/缺结构 ⇒ **rc=2（判不了）**；既有 `{missing_fixture, reason}` 旧形态不迁移、不因缺新字段被判
+UNCLASSIFIED（D9 承重牙把当前 7 个 blocked 场景喂进来验证）。本工具自测 **39/39**。
 
 **接入合并**：合并前与「本地门禁」四条一起跑（见 `AGENTS.md`「本地门禁」；reviewer 自己重跑，不采信作者
 自述）。全量 ~110s：快循环用 `--only <改动的工具>`，交付前跑全量（**不许 `--skip` 掉慢项了事**）。

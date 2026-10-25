@@ -2,7 +2,14 @@
   "name": "combat_strike",
   "description": "【BLOCKED-FIXTURE，暂不可作窗口输入；且**跑绿 ≠ 玩家命中**】主动发起一次普通攻击（CM_HIT 3014）并等命中帧 SM_STRUCK(31)：预置到 map 4 封魔谷 (256,232)，先 CM_TURN(3010) 把状态化朝向转成正上，再打正上方格 (256,231) 的固定刷怪点「恶魔弓箭手」（Race=112 ArcherGuard，非 FixedHideMode）。目标不走发现：param_discovery 没有 target_* 规则，坐标由 placement + MonGen.txt:90 钉死（Range=0/数量=1）。**两条必须知道的前提**：① 这条场景现在跑必然 wait_for 超时——伤害扣的是 [AC,2AC-1] 的随机护甲（BaseObject.Base.cs:789-806），必伤害要 DC_min > 2*AC-1，而基线角色没有一档同时满足它与 HitPoint ≥ SPEED-1（最好的一对 joint 只有 24%，见 docs §6）；② 目标是敌对守卫，它打玩家也会让玩家收到 SM_STRUCK(31) 且 recog=玩家自己（GuardUnit.cs:120-124 + ArcherGuard.cs:39-81），而等待现已带来源过滤（本卡）⇒ `{\"idents\": 31, \"recog_is\": \"other\"}` 可排除「自己被守卫打」的 31（recog=self）；但伤害/配装夹具仍缺 ⇒ **即使跑绿也证明不了「玩家主动一击命中」，窗口批次不得消费本场景的任何 PASS**（docs §7.0）。选它而不是掘尸僵尸的理由、以及订正后的夹具规格见 docs/combat-strike-scenario-20261023.md §1/§6",
   "params": {"self_pos": 15204608},
-  "blocked": {"reason": "BLOCKED-FIXTURE：全库 7338 角色 × 95409 件装备 × 5 个确定性目标没有一对同时满足 DC_min > 2*AC-1 与 HitPoint ≥ SPEED-1（最好的一对 joint 只有 24%）；且目标「恶魔弓箭手」是敌对守卫，玩家挨打同样产生 SM_STRUCK(31)（recog=self），DSL 的 wait_for 现已支持 recog 来源过滤（本卡 `openmir2-probe-waitfor-recog-filter`），本场景等待改为 `{\"idents\": 31, \"recog_is\": \"other\"}` ⇒ 「自己被守卫打」的 31（recog=self）不会再被误认；但仍缺伤害门槛/配装夹具 ⇒ 保持 BLOCKED（过滤已具备、夹具仍缺）。详见 docs/combat-strike-scenario-20261023.md §6/§7.0。", "missing_fixture": "需要 DC_min ≥ 36..60 且 HitPoint ≥ 17..34 的角色配装（门槛随 5 个确定性目标的 AC/SPEED 而定，精确矩阵见 docs/combat-strike-scenario-20261023.md §6.2/§6.3），**已具备**：DSL 的 wait_for recog 来源过滤（本卡；本场景已改用 `{\"idents\": 31, \"recog_is\": \"other\"}`，排除自己被打的 31）⇒ 仍缺配装/伤害夹具。"},
+  "blocked": {
+    "not_in_run3_reason": {
+      "reason": "全库 7338 角色 × 95409 装备 × 5 目标无一对同时满足 DC_min > 2*AC-1 与 HitPoint ≥ SPEED-1，缺配装夹具，故不进 run3。",
+      "evidence": [
+        {"kind": "path", "value": "docs/combat-strike-scenario-20261023.md"}
+      ]
+    },
+    "reason": "BLOCKED-FIXTURE：全库 7338 角色 × 95409 件装备 × 5 个确定性目标没有一对同时满足 DC_min > 2*AC-1 与 HitPoint ≥ SPEED-1（最好的一对 joint 只有 24%）；且目标「恶魔弓箭手」是敌对守卫，玩家挨打同样产生 SM_STRUCK(31)（recog=self），DSL 的 wait_for 现已支持 recog 来源过滤（本卡 `openmir2-probe-waitfor-recog-filter`），本场景等待改为 `{\"idents\": 31, \"recog_is\": \"other\"}` ⇒ 「自己被守卫打」的 31（recog=self）不会再被误认；但仍缺伤害门槛/配装夹具 ⇒ 保持 BLOCKED（过滤已具备、夹具仍缺）。详见 docs/combat-strike-scenario-20261023.md §6/§7.0。", "missing_fixture": "需要 DC_min ≥ 36..60 且 HitPoint ≥ 17..34 的角色配装（门槛随 5 个确定性目标的 AC/SPEED 而定，精确矩阵见 docs/combat-strike-scenario-20261023.md §6.2/§6.3），**已具备**：DSL 的 wait_for recog 来源过滤（本卡；本场景已改用 `{\"idents\": 31, \"recog_is\": \"other\"}`，排除自己被打的 31）⇒ 仍缺配装/伤害夹具。"},
   "placement": {"map": "4", "x": 256, "y": 232, "note": "封魔谷 (map 4) 恶魔弓箭手固定刷怪点 (256,231) 的正南邻格；MonGen.txt:90 =『4 256 231 恶魔弓箭手 0 1 10』（Range 0 / 数量 1 / 10 分钟重生 / 集中刷几率 0）；(256,231) 与 (256,232) 的 .map 均 500x500 可走。「弓箭护卫」那批不在 monsters 表里（Race=-1 不刷），别拿它们当目标"},
   "steps": [
     {"send": {"ident": 3010, "recog": "self_pos", "tag": 0},

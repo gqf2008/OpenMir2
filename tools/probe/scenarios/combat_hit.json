@@ -2,6 +2,12 @@
   "name": "combat_hit",
   "description": "朝自己所在格砍一刀：CM_HIT(3014) 的 **X/Y 是攻击者自己的坐标**（`ClientHitXY` 只在 `nX==CurrX && nY==CurrY` 时执行，`PlayObject.Attack.cs:883`；同 `CM_TURN` 的 `MakeLong(X,Y)` 口径，`RobotPlayer.cs:358`），打包进 `recog`（`(self_y<<16)|self_x`），`tag`=方向。**BLOCKED 的理由是「不保证命中 + 不可归因」，不是「收不到任何 SM 帧」**：① 自己动作的 `SM_HIT(14)`/`SM_TURN(10)` 有 self 过滤（`ActorId != ActorId`，`PlayObject.Message.cs:1433-1437` / `:1528`）⇒ 攻击者收不到**自己砍出的** 14；② 打中怪物时，受害者的 `RM_STRUCK` 广播会以**怪物**为 ActorId 给攻击者发 `SM_STRUCK(31)`（`:1562 → :1593 → :1601 → :1614`，只有「自己=受害者」才按 `DisableSelfStruck` 过滤）；③ 等待已改用可归因口径 `{\"idents\": 31, \"recog_is\": \"other\"}`（卡 `openmir2-probe-waitfor-recog-filter`）：玩家自己被怪打时 31 的 recog=自己，会被滤掉；④ 但本场景**没有 `placement`/怪物夹具** ⇒ 前方不保证有目标、随机护甲还可能把伤害吃成 0 ⇒ 仍不可判定。⇒ 登记 BLOCKED，不参与窗口批次。",
   "blocked": {
+    "not_in_run3_reason": {
+      "reason": "缺同屏怪物与伤害夹具（随机护甲可能把伤害吃成 0 ⇒ 零帧），recog 过滤已具备但不能保证命中，故不进 run3。",
+      "evidence": [
+        {"kind": "path", "value": "src/M2Server/Player/PlayObject.Message.cs"}
+      ]
+    },
     "reason": "无 placement/怪物夹具时**不保证前方有目标、也不保证打出伤害**；不过等待帧本身**已可归因**（卡 `openmir2-probe-waitfor-recog-filter` 已给 DSL 加来源过滤）：本场景等待改为 `{\"idents\": 31, \"recog_is\": \"other\"}` —— 只认 recog=他人（=被打的怪物）的 `SM_STRUCK(31)`；玩家自己被怪打时经 `RM_STRUCK` 收到的 31 recog=**自己**，会被过滤掉。原 `wait_for 14` 不可归因：`SM_HIT` 的 recog 是**攻击者** ActorId（怪打谁都是同一个 recog），且本方攻击的 14 被 oracle 自我过滤（`PlayObject.Message.cs:1433-1437`）⇒ 换成 31 才谈得上「我砍中了」。**仍 BLOCKED**：缺同屏怪物夹具（保证正前方确有目标）与伤害夹具（随机护甲 `[AC,2AC-1]` 可能把伤害吃成 0，零帧）——过滤已具备、夹具仍缺。",
     "missing_fixture": "① 同屏怪物夹具（保证正前方确有目标，且不还手）；② **已具备**：`wait_for` 的 recog/来源过滤（卡 `openmir2-probe-waitfor-recog-filter`；本场景 `steps[1]` 已改用 `{\"idents\": 31, \"recog_is\": \"other\"}`，可排除「自己被打」的 31）。仍缺 ① 与伤害（护甲随机）夹具 ⇒ 保持 BLOCKED。"
   },

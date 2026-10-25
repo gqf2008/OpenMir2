@@ -88,6 +88,8 @@ REGISTRY = [
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
     # reviewer-21 实跑：`in_world_stability.py selftest` ⇒ rc=0、7/7（纯合成数据，0.1s）。
     ("in_world_stability", ["tools/botload/in_world_stability.py", "selftest"], False),
+    # M3 落地时由「未分类>0 ⇒ rc≠0」当场抓到的第一例（master 新工具，2026-10-25 合入）。
+    ("gm_gate_check", ["tools/window/gm_gate_check.py", "selftest"], False),
     ("tool_selftest_gate", ["tools/hygiene/tool_selftest_gate.py", "--selftest"], False),
 ]
 
@@ -277,11 +279,13 @@ def inventory(repo):
     for r in rows:
         print("%-12s %s" % (r["status"].split(":")[0], r["tool"])
               + (("  （%s）" % r["status"].split(": ", 1)[1]) if ": " in r["status"] else ""))
+    n_unclassified = sum(1 for r in rows if r["status"] == "UNCLASSIFIED")
     print("清点：%d 个带 selftest 的工具；门禁内 %d；已分类出域 %d；未分类 %d"
           % (len(rows), sum(1 for r in rows if r["status"] == "IN_GATE"),
              sum(1 for r in rows if r["status"].startswith("OUT_OF_SCOPE")),
-             sum(1 for r in rows if r["status"] == "UNCLASSIFIED")))
-    return rows
+             n_unclassified))
+    # M3（2026-10-25 裁定）：未分类 > 0 ⇒ rc≠0。清点是判据，不是打印。
+    return rows, (2 if n_unclassified else 0)
 
 
 def selftest():
@@ -446,6 +450,31 @@ def selftest():
         chk(rc10 == 2 and "WARN" in buf10.getvalue()
             and _TREE_KILL_DISABLED == saved_flag,
             "TSG 牙10b 真实路径 --only 未知项：开关被忽略 + WARN，rc=2")
+        # 牙11（M3）：--inventory 出现 UNCLASSIFIED ⇒ rc=2（不再恒 0），并点名
+        _orig_discover = discover
+
+        def _fake_discover():
+            return sorted(set(_orig_discover()) | {"tools/__fake_unclassified__.py"})
+
+        globals()["discover"] = _fake_discover
+        _reg_before11 = REGISTRY
+        globals()["REGISTRY"] = saved      # 上面为牙1-6 换成了假注册表，这里必须换回真表
+        try:
+            buf11 = _io.StringIO()
+            with contextlib.redirect_stdout(buf11):
+                _rows11, rc11 = inventory(root)
+        finally:
+            globals()["discover"] = _orig_discover
+        chk(rc11 == 2 and "UNCLASSIFIED" in buf11.getvalue(),
+            "TSG 牙11 --inventory 有 UNCLASSIFIED ⇒ rc=2 并点名（M3）")
+        try:
+            buf11b = _io.StringIO()
+            with contextlib.redirect_stdout(buf11b):
+                _rows11b, rc11b = inventory(root)
+        finally:
+            globals()["REGISTRY"] = _reg_before11   # 交回牙1-6 的假注册表，保持外层 finally 语义
+        chk(rc11b == 0 and "UNCLASSIFIED" not in buf11b.getvalue(),
+            "TSG 牙11b --inventory 无未分类 ⇒ rc=0")
     finally:
         REGISTRY = saved
     print("%s: tool_selftest_gate selftest %d/%d"
@@ -480,8 +509,8 @@ def main(argv=None):
                     ("after", ["-c", "print('ok')"], False)]
     repo = repo_root(args.repo)
     if args.inventory:
-        inventory(repo)
-        return 0
+        _rows, inv_rc = inventory(repo)
+        return inv_rc
     only = [x for x in args.only.split(",") if x]
     skip = [x for x in args.skip.split(",") if x]
     known = {n for n, _a, _s in REGISTRY}

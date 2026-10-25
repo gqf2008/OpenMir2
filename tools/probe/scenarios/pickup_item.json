@@ -2,6 +2,13 @@
   "name": "pickup_item",
   "description": "【BLOCKED — T-19/T-25 结构性不可判，2026-10-24 卡 openmir2-pickup-item-reachability】原设计：夹具背包物品 => CM_DROPITEM(1000) 丢地 => 600 => CM_WALK(3011) => CM_PICKUP(1001) => 200/201。取证结论：oracle 全仓无 MapItem.ItemId 赋值点（MapItem.cs:41 被注释）⇒ Envirnoment.AddItemToMap 首行 ItemId==0 恒 return false（Envirnoment.cs:88-92）⇒ 普通丢弃恒 601、任何生产路径（DropItemDown/BaseObject.cs:551-568、DropGoldDown/:740-750、脚本 @throwitem ExecutionProcessingSys.cs:5694-5754）都造不出地面物；唯一 600 成功支 ControlDropItem+便宜物（PlayObject.Operate.cs:284-289）把物品 Dispose 掉、不产生 MapItem ⇒ 200/201 两侧结构性不可达。步骤与 placement 保留作证据/回归标本；不进入窗口。详见 docs/pickup-item-reachability-20261024.md。",
   "blocked": {
+    "not_in_run3_reason": {
+      "reason": "结构性不可判（T-19/T-25）：oracle 全仓无 MapItem.ItemId 赋值点 ⇒ AddItemToMap 恒 false、地面永远无物；不是夹具可补，故不进 run3。",
+      "evidence": [
+        {"kind": "path", "value": "src/M2Server/Maps/Envirnoment.cs"},
+        {"kind": "path", "value": "src/Modules/SystemModule/Data/MapItem.cs"}
+      ]
+    },
     "reason": "结构性不可判（T-19/T-25）：oracle 全仓无 MapItem.ItemId 赋值点（MapItem.cs:41 是注释）⇒ Envirnoment.AddItemToMap 首行 ItemId==0 恒 return false（Envirnoment.cs:88-92）⇒ 普通 CM_DROPITEM 恒 601、地面永远无物；唯一 600 支 ControlDropItem+便宜物（PlayObject.Operate.cs:284-289）只 Dispose 背包物品、不造 MapItem ⇒ 后续 CM_PICKUP 无物可拾，SM_ADDITEM(200)/SM_BAGITEMS(201) 两侧结构性不可达。Rust 1:1 复刻同一门（bins/game-svr/src/ground.rs:276 put_item item_id==0）。",
     "missing_fixture": "需要「地面已存在且 MapItem.ItemId != 0」的地物；oracle 没有任何生产路径能创建它（掉落/金币/脚本四条 new MapItem 路径都未赋 ItemId；ControlDropItem 便宜物支只删包不落地）。夹具若出现，必须同时证明它是 oracle 可达的生产路径，而不是在 Rust 侧补一个 oracle 没有的赋值点。"
   },
