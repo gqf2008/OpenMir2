@@ -1762,6 +1762,19 @@ fn after(src: &[&str], from: usize, needle: &str) -> Option<usize> {
     (from..src.len()).find(|&i| src[i].trim() == needle)
 }
 
+/// [`after`] 的 `Vec<String>` 版：给**去注释视图**（[`code_lines`]）用。
+/// 文本锚一律走这个视图——块注释里的「假代码」不算数（review K1）。
+fn after_owned(src: &[String], from: usize, needle: &str) -> Option<usize> {
+    (from..src.len()).find(|&i| src[i].trim() == needle)
+}
+
+/// [`block_end`] 的 `Vec<String>` 版（去注释视图用）：顶层函数的收尾 `}` 在行首。
+fn block_end_owned(src: &[String], start: usize) -> usize {
+    (start + 1..src.len())
+        .find(|&i| src[i] == "}")
+        .unwrap_or(src.len() - 1)
+}
+
 fn block_end(src: &[&str], start: usize) -> usize {
     (start + 1..src.len())
         .find(|&i| src[i] == "}")
@@ -1792,6 +1805,8 @@ fn code_lines(src: &str) -> Vec<String> {
 #[test]
 fn g3_anchor_a1_four_disconnect_calls_and_order() {
     let l = lines(MAIN_SRC);
+    // 去注释视图（同时剥 `//` 与 `/* … */`）：本卡改动的文本锚都走它（A4 / review K1）。
+    let code = code_lines(MAIN_SRC);
     for needle in [
         "let guild_closed = guild_runtime::on_disconnect(",
         "let guild_kick = guild_runtime::on_disconnect(",
@@ -1813,7 +1828,6 @@ fn g3_anchor_a1_four_disconnect_calls_and_order() {
     // 旧断言 `after(closed, "ground_sessions.remove(&chr_name);")` 随抽取失效（那条 remove 已
     // 移进 `close_cleanup_residue`）。它原本守的两件事由下面两条**分别**承担，
     // **不许合并成「函数被调用过」**——那是锚变软的标准形态（删掉一个容器的 remove 仍绿）。
-    let code = code_lines(MAIN_SRC);
 
     // ① save 必须在清理调用**之前**（否则存档拿不到实时态）。save 块是
     //    `if let (Some(saved), Some(sg))`，静默跳过不会 panic ⇒ 只能靠下标比较。
@@ -1879,10 +1893,29 @@ fn g3_anchor_a1_four_disconnect_calls_and_order() {
     assert!(soft_fn < soft);
     assert!(after_contains(&l, kick_fn, "online_take(online, &chr)").unwrap() < kick);
     assert!(after_contains(&l, kick, "world.disconnect(&chr)").unwrap() > kick);
-    assert!(after(&l, kick, "ground_sessions.remove(&chr);").unwrap() > kick);
+    // 卡 `openmir2-kick-display-residue`：drain 尾部的 ground 摘除改成「取下即用」——
+    // `remove()` 的返回值就是 host aid 的**唯一**来源（原意图「guild 通知后才摘」不变）。
+    //
+    // **必须限定在 `drain_kicks` 函数体内**：`after_owned(.., kick, ..)` 不设上界时会命中
+    // 下一个函数（`drain_soft_close`）里的同名行 ⇒ 把本函数内的实现块注释掉仍然绿（已实证）。
+    let kick_end = block_end_owned(&code, kick_fn);
+    let kick_remove = after_owned(&code, kick, "let closed_sg = ground_sessions.remove(&chr);")
+        .expect("drain_kicks 尾部必须摘下 ground 会话（取下即用，见 cleanup_display_for_closed）");
+    assert!(
+        kick_remove < kick_end,
+        "`drain_kicks` 内的 ground 摘除必须在 guild 通知之后、且**在本函数体内**\
+         （命中 {kick_remove}，函数体 {kick_fn}..{kick_end}）"
+    );
     assert!(after_contains(&l, soft_fn, "online_take(online, &chr)").unwrap() < soft);
     assert!(after_contains(&l, soft, "world.disconnect(&chr)").unwrap() > soft);
-    assert!(after(&l, soft, "ground_sessions.remove(&chr);").unwrap() > soft);
+    let soft_end = block_end_owned(&code, soft_fn);
+    let soft_remove = after_owned(&code, soft, "let closed_sg = ground_sessions.remove(&chr);")
+        .expect("drain_soft_close 尾部必须摘下 ground 会话（取下即用）");
+    assert!(
+        soft_remove < soft_end,
+        "`drain_soft_close` 内的 ground 摘除必须在 guild 通知之后、且**在本函数体内**\
+         （命中 {soft_remove}，函数体 {soft_fn}..{soft_end}）"
+    );
 
     let sc_fn = l
         .iter()
