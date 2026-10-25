@@ -84,9 +84,15 @@
 - **G11**（`openmir2-gm-batch-5b-cross-server`）：条件② 唯一 `merged_not_closed`，需 owner 裁决是否列基础设施阻塞排除项。
 - **真机窗口已开始收口**（交付后推进，不影响四条件）：
   - ✅ **`openmir2-butch-two-draws-unblock` 已 `closed`** —— 今天第一张凭真机证据收口的 R 卡（账本恰两抽 + site + 次序 + 值域，三重独立验证）。
-  - `openmir2-bag-weight-sink`（L）：主体与 O1/O2 follow-up 已合；**真机 buy 帧序比对进行中**（`buy` 可验；`pick_up` 结构性不可达 T-19/T-25；`P21` 待 GM 写通道）。
-  - `openmir2-dir-persistence-writeback`（**R**）：`characters.Dir` 存档写回不随实体更新 —— 假说已压到「逐字段刷新清单漏了 Dir」（同行 `Map/CX/CY` 已刷新、独 `Dir` 取载入值）。
-  - `openmir2-gm-target-state-write`（**R**）：Rust 侧 `@Level0` 一族 16 条 GM 命令是 no-op，挡着所有「靠 GM 改数值再验行为」的场景。
+  - `openmir2-bag-weight-sink`（L）：主体与 O1/O2 follow-up 已合；**真机 buy 帧序比对已完成，四项判据全 PASS**（622 各 1 条、帧序 `[200,622,650]` 两侧一致、622 四字段逐字节相同、`650.recog` 9912 两侧）。**最有力的证据形态**：同一场景在 B/C 修复前（`e23-reshot`）的 50 条 diffs 含 622/645/650，本次这三条已从 diffs 消失 ⇒ 修复由同一比对器见证。`pick_up` 结构性不可达（T-19/T-25）；`P21` 的 GM 前置**不是「未实现」而是「生产权限下不可达」**（见下条）。
+  - `openmir2-dir-persistence-writeback`（**R**）：`characters.Dir` 存档写回不随实体更新。**真机判别已排除 M1/M2/M3**（`dir_updated=true` 证 handler 写了；只有 1 条存档且在 butch 之后；`CX/CY` 是实时值 ⇒ 实体解析成功），进入 **M5**（handler 写的实体 ≠ save 读的实体）。代码面发现：**`actor_id` 有两个事实源**（handler 用 game-svr 本地会话表、save 用世界侧会话），**全仓无一处断言二者相等**，而 `session.rs:114` 明写重登录会换 id。
+  - `openmir2-gm-target-state-write`（**R**）：Rust 侧 `@Level0` 一族 16 条 GM 命令是 no-op，挡着「靠 GM 改数值再验行为」的场景。
+    **但 2026-10-25 复核出一条比「未实现」更要紧的事实：这些命令在 oracle 生产路径上本来就不可达。**
+    `GetHumPermission` 全仓仅一个调用点且被注释（`PlayObject.cs:1188-1194`）⇒ `Permission` 永不被写，`StartPermission=0`；
+    部署 `Command.conf` 171 条命令里 **157 条 `PermissionMin=10`** ⇒ `say "@…"` 一律停在 `权限不够!!!`（Red 255/56）。
+    唯一可达路径是脚本 `GMEXECUTE` 抬权（`ExecutionProcessingSys.cs:4938-4947`）。
+    ⇒ **任何用聊天 `say` 驱动非零权限 GM 命令的场景/夹具都结构性地跑不出东西**，P21 只是第一个撞上的；
+    本卡裁决改为「命令体 + 构造级牙 + 权限门等价真机判据（两侧都记拒绝）」，脚本夹具另卡。裁决 `4e95fd56`。
 - **工具面待办（均 L，交付后）**：
   - `openmir2-tool-selftest-gate`：把工具自测纳入门禁（**评审 RC**：25 项「出域」里 6 项其实可自动判红）。
   - `openmir2-orphan-scenario-gate`：`blocked_sources_check` **只扫 run3 行、不扫场景目录** ⇒ 5 个 blocked 孤儿永不被校验而门仍 rc=0（P21 标本是活样本）。
