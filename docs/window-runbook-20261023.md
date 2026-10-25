@@ -123,6 +123,7 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 ```
 失败含义：计数**变小** ⇒ 有判据被删（先查最近提交）；变红 ⇒ 工具坏了，别开窗。
 **注**：两个自检的计数都随夹具与规则表变更而变（`compare_runs` 侧实测：`4e0bfd2b8` 198 ⇒ `b42f20a28` recog-unmask +40 = 238 ⇒ `c8473b344` 补 202/203/642/709 四条规则 +24 = 262）⇒ 以**实跑**为准，别抄本文的数字（本文的 240/240、262/262 是 2026-10-24 实测）。
+> 2026-10-25 起：**全部工具自测由 `tools/hygiene/tool_selftest_gate.py` 统一跑**（见 §7），上面两条仍可用于只查单个工具。
 
 ---
 
@@ -857,3 +858,59 @@ git diff --check
 **判据（本卡实测，master=`263e77d7e`）**：`stale_pointer_gate --ref master` ⇒ rc=0（`ref=263e77d7e…`，
 0 处红）；`dynamic_count_stamp_gate --ref master` ⇒ rc=0（0 缺戳）；`conflict_marker_gate` ⇒ rc=0；
 `git diff --check` ⇒ rc=0。
+
+---
+
+## 7. 工具自测也是合并门禁的一部分（2026-10-25；卡 `openmir2-tool-selftest-gate`）
+
+**由来（真实漏网）**：`openmir2-db-makeindex-mask` 合入后，master 上 `card_window.py --selftest` 是
+**412/435**，而 `goal_gate` 七项全绿——因为**工具自测从来不在合并门禁里**。工具自己坏了，后面所有
+「对拍全绿 / 门禁全绿」都可能是假绿，所以工具自测与 fmt / clippy / msgcodegen / cargo test 同级。
+
+**一条命令**：
+
+```sh
+python -I -B tools/hygiene/tool_selftest_gate.py                       # 全量；rc=0 全绿，rc=2 有红/用法错
+python -I -B tools/hygiene/tool_selftest_gate.py --only card_window    # 只跑一项（排障/变异自证）
+python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点：哪些带 selftest、谁在门内/出域
+```
+
+**判定域**（写清判定域才不会假绿）：
+
+- 扫什么：脚本内 `REGISTRY` 的**固定 24 项**——conformance 驱动器（`card_window`/`compare_runs`）、
+  `card_evidence`、probe（`mir2_probe`/`param_discovery`/`mir2frame`）、db 对拍（`dbsnap_pair`/`dbsnap`）、
+  窗口工具（`rc_attribution`/`butch_ledger`/`frame_drift_report`/`window_criteria_lint`/`blocked_sources_check`）、
+  本仓库 hygiene 门自身（conflict_marker / stale_pointer / dynamic_count_stamp / board_coverage /
+  merge_tree_helper / t_reservation / next_t）、`goal_gate`、m2 文档计数、证据哈希校验，以及**本门自己**；
+- 在哪跑：仓库根（`--repo`，默认本脚本上溯两级），`python -I -B`，**每项独立子进程**；
+- rc 从哪取：**子进程退出码**（不经管道/`tail`，否则拿到的是 `tail` 的 rc）；
+- 判红：任一注册项 rc≠0 ⇒ 本门 rc=2；全 0 ⇒ rc=0；用法错（未知条目）⇒ rc=2；
+- `--skip <name,...>` **必须打印 `SKIP`**（显式跳过，不许静默放水）；`--only` 只跑指定项；
+- **不在判定域**：`--inventory` 列出的 25 个已分类出域工具（抓包/负载/M1/M2 验收/一次性审计/
+  需外部环境的 preflight 等），它们不在合并判据的消费链上。新增工具按 `REGISTRY` 同一格式登记。
+
+**本机实测（2026-10-25，24 项）**：
+
+| 项 | 结果 |
+|---|---|
+| 全量 | **绿 24 / 红 0 / 跳过 0，rc=0，87s**（`card_window` 36.7s、`mir2_probe` 29.4s，其余 ≤5s） |
+| 本门自测 | `--selftest` **7/7**（假·绿 / 假·红 / 一绿一红⇒rc=2 / `--skip` 打印 `SKIP` / `--only` 只跑指定项） |
+| 清点 | 49 个带 selftest 的工具：门内 24 / 已分类出域 25 / **未分类 0** |
+| 变异自证 | **24/24**（逐项「改坏被测实现 ⇒ 该门必须红」，见下） |
+
+**变异自证怎么复现**：对每一项注入一处看似无害的改动（让 `sha256_bytes` 恒返回 0、让 `first_mismatch`
+恒 `None`、让 `--skip` 不打印…），跑 `tool_selftest_gate --only <name>`，**必须 rc=2**；跑完按原字节还原，
+再用 `git status --porcelain -- <path>` 复核干净。证据：`E:/tmp/final-recheck/mutate_gate.py`（24 条变异
+定义）、`mutations.json`（逐条 rc）、`mutations-proof.log`（24/24）。
+
+> **教训（本次自证当场抓到的真缺陷）**：`tools/dbsnap/dbsnap.py` 的自测把「篡改后仍判绿」写成
+> `sys.exit(1)`，而它正好被本函数的 `except SystemExit` 当成「篡改后判红」接住 ⇒ **把实现改坏也照样绿**。
+> 已改为 `raise AssertionError(...)`。这种洞只有「改坏实现」才能暴露，把自测跑一遍全绿是发现不了的。
+
+**接入合并**：合并前与「本地门禁」四条一起跑（见 `AGENTS.md`「本地门禁」；reviewer 自己重跑，不采信作者
+自述）。全量 ~90s：快循环用 `--only <改动的工具>`，交付前跑全量（**不许 `--skip` 掉慢项了事**）。
+CI 若加一项，用上面同一命令（不带 `--skip`）。
+
+**与开窗自检的关系**：§0.5 / §2 的 `card_window --selftest` 单跑仍然有用（快、只查一个工具），但
+「计数变小」这类回归现在由本门统一兜住。门里的数字以**实跑**为准——本节上方旧段落里的 240/240、
+262/262 是 2026-10-24 的历史实测，不是当前期望值。

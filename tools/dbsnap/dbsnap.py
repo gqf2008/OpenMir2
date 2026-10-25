@@ -392,8 +392,9 @@ def cmd_selftest(args):
         f.write(b"\ttampered\n")
     try:
         cmd_diff(ns2)
-        print("RED: 篡改快照后仍判绿——红检失效")
-        sys.exit(1)
+        # 不能 `sys.exit(1)`：它会被本函数的 `except SystemExit` 当成 diff 的
+        # 「篡改后判红」接住 ⇒ 改坏必红失效（卡 openmir2-tool-selftest-gate 的变异自证发现）。
+        raise AssertionError("篡改快照后仍判绿——红检失效")
     except SystemExit as e:
         if e.code != 1:
             print("RED: 篡改后退出码异常:", e.code)
