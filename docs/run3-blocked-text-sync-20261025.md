@@ -83,13 +83,18 @@ python -I -B tools/window/blocked_sources_check.py selftest
 | `card_window.py --selftest` | **GREEN 382/382**（base `2abc84efe`；本卡不碰 `card_window.py`） |
 | `blocked_sources_check.py selftest` | GREEN 8/8 |
 
-> 注：派单里写的「396/396」在本 base 上不成立——`2abc84efe` 的 `card_window.py --selftest` 实测 **382/382**；
-> 396 应是 tester 的 `card/fixture-monsters-prepend`（未合）或其它分支上的计数。以本卡实测为准，不抄数。
+> 注：`card_window.py --selftest` 的计数随 master 前进：本卡 base `2abc84efe` 上实测 **382/382**；
+> `openmir2-fixture-monsters-prepend` 合入（`6f35b049f`）之后的 master 为 **396/396**（Leader 2026-10-25 更正）。
+> 两个数都对，取决于 base；本卡不碰 `card_window.py`，故报告的是本 base 上的 382/382。
 
 > `--dry-run` **带 preflight** 时本检出 rc=2：`binary_stamp`（release 二进制 stamp 指向 `7cf77712a9ac` ≠ HEAD）
 > 与 `start_rust_exe`（`start-rust.ps1` 指向 `.worktrees/tester-1` 的 exe）两项失败——属台账 §5 已登记的
 > 「preflight 由 run_batch 首步 rebuild 覆盖」类**环境项**，且当前 tester 私栈在跑、本卡禁止 rebuild/占端口，
 > 故用 `--no-preflight` 验证计划面；两处失败与本次改动无关（失败项都不读 run3/scenarios）。
+
+> `stale_pointer --ref master` 的既有红已由 Leader 在 `03f19c1f7` 收口（`docs/needs-human-20261025.md:68` 的 prepend 状态改为「已解（合入 `6f35b049f`）+ 真机证据」）；
+> 本卡不修改该文件。本分支 base 仍是 `2abc84efe`（未 rebase），所以在**本分支树**上该门仍会红一次——
+> 这是 base 落后于 master 的既有项，不是本卡引入的差异；合入后的 master 上 rc=0。
 
 ## 5. 验证记录
 
