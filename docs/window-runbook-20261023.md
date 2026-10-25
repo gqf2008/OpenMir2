@@ -914,7 +914,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 
 | 项 | 结果 |
 |---|---|
-| 全量 | **绿 45 / 红 0 / 跳过 0，rc=0，120s**（`E:/tmp/final-recheck/gate-full-44.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 18.0s，其余 ≤2s） |
+| 全量 | **绿 45 / 红 0 / 跳过 0，rc=0，120s**（`E:/tmp/final-recheck/gate-full-45.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 18.0s，其余 ≤2s） |
 | 本门自测 | `--selftest` **16/16**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2/未分类 rc） |
 | 清点 | 50 个带 selftest 的工具：门内 **45** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3） |
 | 变异自证 | 门注册项 **46/46**（45 项 + 门自身进程树变异；`mutations-proof.log`）；另本卡谓词级否证 **7/7**（5 条 blocked 判据 + `--inventory` rc + gm 判据；`orphan-mutations.json`） |

@@ -16,6 +16,10 @@
      `reason` 保持自由文本、**不参与判据**；纯文本 `not_in_run3_reason` ⇒ 判不了（rc=2）。
   4. **前提已落地/已结 ⇒ 证伪**：evidence 的 commit 已是 master 祖先、或 card 在账本里 closed，
      且没有**结构化** `still_blocked_because` ⇒ rc=1；still 自身也必须 `{reason, evidence}`。
+     **已知边界（reviewer-21 F2，2026-10-25）**：card 证据只认 `status == closed`；
+     **merged 但 in-progress 的卡不触发**（`openmir2-gm-target-state-write` 正是这种形态，
+     p21_unequip 的过时理由曾躲在这个盲区里）。补法（follow-up 牙，不在本卡改判定逻辑）：
+     card 证据应同时给 commit 指针，才能判「已合入」；届时应加一条「merged-but-in-progress ⇒ rc=1」的牙。
   5. **兼容基线**：既有 `{missing_fixture, reason}` 旧形态不迁移，不因缺新字段被判 UNCLASSIFIED
      （D9 承重牙把 7 个既有 blocked 场景喂进来验证这条）。
 

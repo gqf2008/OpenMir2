@@ -3,14 +3,15 @@
   "description": "【BLOCKED — 两条前置未解，2026-10-25 卡 openmir2-bag-weight-sink】原设计：用 GM 降级把「已装备但不再满足 NeedLevel」的物品逼出装备位，触发 P21（`PlayObject.Message.cs:403-441`）的 `AddItemToBag` + `SendDelItems` + `WeightChanged`，取帧序 `[SM_ADDITEM(200), SM_DELITEM(202), SM_WEIGHTCHANGED(622)]`。**今天两侧都跑不成**，原因见 blocked。步骤与素材保留作证据/回归标本；不要加入 run3 清单，直到前置解除。\n【设计注记】\n- item：血饮（`stditems` id=235、`StdMode=5`、**`NeedLevel=2`**、`Price=27`；取自冻结 `sql/mir2_data.sql` 的 `INSERT INTO stditems` 行，可机判）。用 NeedLevel 而不是 Need（行会）是为了单角色可造。\n- permission：C# `[Command(\"ChangeLevel\", …, 10)]` ⇒ **Permission ≥ 10**；probe 账号（winplay0）的权限位未核，若 <10 则 C# 侧也不生效（命令静默无帧）⇒ 解除时一并核。\n- frames：**P21 本段**期望 `[200, 202, 622]`：200 与 202 都是 `SendSocket` 直连（`smframe::sm_delitem` 已登记为立即帧），622 走 `RM_WEIGHTCHANGED`（低字节 131）⇒ 这三帧的顺序是 200 → 202 → 622。**但整条脚本不止这三帧**：`@Level0` 会经 `HasLevelUp(1)` 发 `SendMsg(RM_LEVELUP=8086, 低字节 150)`，泵分支（`PlayObject.Message.cs:1670-1677`）产出**三条直连帧** `SM_LEVELUP` + `SM_ABILITY`(带 `EncodeMessage(WAbil)` 尾) + `SM_SUBABILITY`；这些与 P21 三帧的相对位置**必须在真机上定序**（同 tick 的泵排水与下一 Run 的 P21 谁先谁后，不能靠源码推），本场景的 `wait_idents` 只钉 `[200,202,622]` 三者都在、且相对顺序为 200→202→622，**不主张与 LEVELUP 三帧的全序——全序待真机确认后定稿**。\n- levelup_frames：**`@Level0` 不是零帧命令**（2026-10-25 订正）：`ChangeLevelCommand.Execute` 自身不调 SendMsg，但它调的 `HasLevelUp(1)`（`PlayObject.cs:5242-5249`）里有 `SendMsg(RM_LEVELUP=8086, …)`，泵分支（`PlayObject.Message.cs:1670-1677`）产出 `SM_LEVELUP` + `SM_ABILITY`（带 `EncodeMessage(WAbil)` 尾）+ `SM_SUBABILITY` 三条直连帧；同一调用的 `RecalcLevelAbilitys()`/`RecalcAbilitys()` 另会被 P21 读到。⇒ 卡 `openmir2-gm-target-state-write` 的「无帧子集」**不能把 @Level0 算进去**，子集要按「命令 + 其调用的 helper 是否发帧」重新划；P21 场景的全序也必须在真机定序。\n- negative_cases：只降级不装备 ⇒ 零帧（UseItems 里没有会失败件）；装备后不降级 ⇒ 零帧（P21 的 CheckItemsNeed 仍通过）；背包满（46）⇒ 走 DropItemDown（T-19 恒失败）⇒ 物品留在装备位、无 200/202/622\n- unblock_evidence：解除时需附：Rust `@Level0` 写实体的代码路径与用例（或夹具通道的 dry-run 预览），以及两侧首次 Run 均产出 200/202/622 的证据。",
   "blocked": {
     "not_in_run3_reason": {
-      "reason": "Rust 侧 @Level0 是 no-op（不写等级）+ 无装备槽夹具通道，两条前置未解，故不进 run3（卡 openmir2-gm-target-state-write）。",
+      "reason": "前置只剩 ②：无 UseItems（装备槽）夹具通道（card_window 的 fixtures 只有 inventory_replace/inventory_drop）；@Level0 自 4f06e85cc 起已实现（写实体 + pending_level_up，a5407e2be 并入 master），不再是前置。",
       "evidence": [
         {"kind": "card", "value": "openmir2-gm-target-state-write"},
-        {"kind": "path", "value": "mir2-rs/bins/game-svr/src/gmcmd.rs"}
+        {"kind": "path", "value": "mir2-rs/bins/game-svr/src/gmcmd.rs"},
+        {"kind": "path", "value": "tools/conformance/card_window.py"}
       ]
     },
-    "reason": "两条前置未解：① **Rust 侧 `@Level0` 是 no-op**——`bins/game-svr/src/gmcmd.rs:4183-4188` 的 `change_level` 只 `let _ = str_to_int(...)` 后 `no_frames(NOTE_GM4_TARGET_STATE)`，**不写等级**（NOTE_GM4_TARGET_STATE 指向批次 4「目标角色数值态无读取/写回通道」，T-186 同族）；C# 侧 `ChangeLevelCommand.Execute` 直接 `PlayerActor.Abil.Level = MIN(MAXUPLEVEL, nLevel)` 且**不发任何网络帧**（只写控制台日志）。⇒ 同一段脚本 C# 会弹装备、Rust 不会弹，帧序差异来自「GM 命令未实现」，**不是 622 路径差异**，混在一起会把结论污染。② **无装备槽夹具通道**：`tools/conformance/card_window.py` 的 fixtures 只支持 `inventory_replace`/`inventory_drop`（背包槽），没有 `UseItems`（装备槽）种子通道；因此也无法绕过 GM、直接在登录时把「NeedLevel 不满足的装备」放到身上。",
-    "missing_fixture": "二选一：① `@Level0`（ChangeLevel）在 Rust 侧实现到「写实体 Abil.Level」（属 T-186 批次 4 的目标角色数值写通道，应单独开卡）；② 或给 card_window 增加 `use_items_replace` 夹具通道，在登录前把装备槽写死为一件 NeedLevel 超标的物品（两侧同夹具 ⇒ 首次 Run 的 P21 同触发）。"
+    "reason": "**前置只剩 ②**（`@Level0` 自 `4f06e85cc` 起已实现：写实体 + `pending_level_up`，`a5407e2be` 并入 master；旧文案「Rust no-op」已失效）：**无装备槽夹具通道**：`tools/conformance/card_window.py` 的 fixtures 只支持 `inventory_replace`/`inventory_drop`（背包槽），没有 `UseItems`（装备槽）种子通道；因此也无法绕过 GM、直接在登录时把「NeedLevel 不满足的装备」放到身上。",
+    "missing_fixture": "只缺 `card_window` 的 `use_items_replace`（装备槽）夹具通道：登录前把装备槽写死为一件 NeedLevel 超标的物品（两侧同夹具 ⇒ 首次 Run 的 P21 同触发）。`@Level0` 已实现（4f06e85cc），不再需要。"
   },
   "required": [
     "make_index",
