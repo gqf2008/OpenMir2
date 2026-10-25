@@ -98,15 +98,15 @@
     唯一可达路径是脚本 `GMEXECUTE` 抬权（`ExecutionProcessingSys.cs:4938-4947`）。
     ⇒ **任何用聊天 `say` 驱动非零权限 GM 命令的场景/夹具都结构性地跑不出东西**，P21 只是第一个撞上的；
     本卡裁决改为「命令体 + 构造级牙 + 权限门等价真机判据（两侧都记拒绝）」，脚本夹具另卡。裁决 `4e95fd56`。
-- **剩余窗口队列（三张 R 卡，都很便宜；均需 owner 给时段，我不自行起栈）**：
+- **剩余窗口队列（四张 R 卡，都不贵；均需 owner 给时段，我不自行起栈）**：
   | 卡 | 跑什么 | 判据 | 代价 |
   |---|---|---|---|
   | `openmir2-gm-target-state-write` | `card_window.py --profile alt --scenario gm_level0_gate.json --out …` → `gm_gate_check.py check --run-dir … --before/--after --chr-name winplay0` | 逐侧恰 1 条 `权限不够!!!`（Red 255/56）、零 200/202/622/45/52/752、`characters_ablity.Level` 跑前后逐字节相同；**只跑 frames 会判 UNDECIDABLE(rc=2)**，G3 必须带前后 DB 快照 | 零夹具、~2 分钟 |
   | `openmir2-dir-persistence-writeback` | 与今天 `dir-diag` **同一条命令**：`card_window.py --card openmir2-dir-persistence-writeback --profile E:/tmp/window/butch-run/profile.json --scenario tools/probe/scenarios/butch_two_draws.json --rng-log --out …` | 两侧 `characters.Dir` 相等，且 `CX/CY`＝实时坐标（不是载入值）；另核 `characters_item.Dura` 仍归 T-266 磨损 RNG | 复用现成场景与 profile，~3 分钟 |
   | `openmir2-softclose-cleanup-residue`（仅 A1） | **场景已就绪**（`e57024dbc` 合入 `softclose_relogin.json` + probe `relogin` 步：等自身 41 → walk → `CM_SOFTCLOSE` → 重连 → 段2 等新的 41，`assert_same_actor` 默认 true）；**但可观测面只到条件 ①**——条件 ②（名字/行会取自新实体）**单客户端看不到**（oracle 给自身的 `SM_FEATURECHANGED` 五参、无名字尾；带名尾只走观察者 `RM_TURN`+`GetShowName()`） | ① 两段 ActorId 相同 + 展示表清空；② **需观察者客户端**（另开卡） | ① 本窗口可跑；② 未就绪 |
-
+  | `openmir2-gm-script-fixture`（A1 示范） | `card_window.py --profile tools/window/profiles/gm_script_level0.json --scenario gm_script_level0.json --out …` | **每侧 `characters_ablity.Level == 5`（期望值，不是两侧相等）** + 帧面 `45→52→752` 逐字段 + A2 权限门对照同轮复跑 | 需 `files` 夹具注入（已合 `d9a0dd2fe`），~3 分钟 |
   > **用法订正（2026-10-25 复核）**：`--profile` 的取值是**内置 profile 名**（`alt` / `window-magic` / `window-testdb`，`card_window.py:460`）**或一个 `.json` 路径**；`--profile alt.json` 这种写法**不存在该文件**（`tools/window/profiles/` 下只有 `bag_equip` / `butch_monsters` / `castle_tax_upgrade` / `eat_item` 等派生件）。GM 那行用内置 `alt`，Dir 那行用现存的 `E:/tmp/window/butch-run/profile.json`。
-  > 为什么列出来：这三项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
+  > 为什么列出来：这四项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
   > softclose 那张的 **A1（展示表）已在 `9224c2ebd` 合并**；**A2 组队归 `makeghost`**（成员关系挂团长实体 `party.rs:428-456` + 退组时点晚 ~402ms）。**关闭前还差 4 项**（`merge_result 19dd38e4`）：两项真机 + 两颗牙（F1 world/host 优先级无牙；**F2 接线点无牙——删掉 `:22704` 调用后 1505 全绿**）。
 
 - **临时物清单（DoD 要求：清掉或登记；下列均**保留**，因为它们是证据）**：
@@ -121,6 +121,7 @@
   | `E:/tmp/window/reviewer-21-review/buckets.py` | R 卡分桶复算脚本（直调 goal_gate 纯函数、零 cargo） | ② 桶数字可复算；`goal_gate --skip-tests` 仍跑 cargo 的替代法 |
   > 生产侧当前核对（内容级，2026-10-25）：`M2GameSvr/Envir/MonGen.txt` = `e5c39fb7…`、`M2GameSvr/Server.conf` = `ce5e3ce9…`、`Envir/x.txt` 不存在、无 `.bak`/`.fixture-tmp` 残留。
 
+  - `openmir2-gm-script-fixture`（**R**，已合并 `d9a0dd2fe`，保持 `in-progress` + `window_required`）：给 `card_window` 加 `fixtures.files` 通道（往 `Envir/` 注入脚本，逐目标 realpath 生产根守卫 + 写前登记 + 失败回滚 + 两侧对称），加示范 profile/场景走脚本 `GMEXECUTE` 抬权，并复用 GM 卡判据（钉 commit `a5407e2be` + 机判器 sha256）。**期间发生过一次「测试写生产」**：`FX-F14`/`FX-F17` 拿**真实生产根**当靶，变异重放时把 1 行刷怪数据写进了 `Envir/MonGen.txt`、并创建了 `Envir/x.txt`（作者自查与 reviewer 重放各中一次）。**已恢复**（内容级：`MonGen` `e5c39fb7…` 与 10-09 hook 副本逐字节一致、`x.txt` 已删），并把修法做成三重：假根全局切换 + 还原断言 + 假根自合成（不 copyfile 生产）。**教训**：破坏性测试必须以假目标为靶——**测试的安全性不能依赖被测代码是正确的**；且「已还原」必须用**内容 sha** 证明（`E:/MirServer` 不在 git 里，`git status` 看不见）。**关闭前还差**：真机每侧 `Level == 5`（**期望值**不是两侧相等）、帧面 45→52→752、A2 权限门对照；以及 H1（`FX-MON/FX-CONF` 应移到 `if fail_n` 之前，否则前半段一红就不检查生产）。
 - **工具面待办（均 L，交付后）**：
   - ✅ `openmir2-tool-selftest-gate`：**已合并 `24248798a` 并 closed**（tier L，approve `637aa96b5` delta + `1ec19eae`）。工具自测门 44 项入 merge 门禁；门自超时硬化（进程树终止 + 10s 兜底 + 420s 总墙钟 + NOT-RUN 点名）；`--inventory` 49 = 门内 44 / 出域 5 / 未分类 0；合并后产物 `--selftest` **14/14 GREEN**。**留三条 carry-over**（`merge_result 9f742dc7`）：M1 计数缺「计数规则」定义（按调用点 `timeout=` 计 35，按进程是否有界计 31，两者都对）、TSG10c 缺牙（守卫位置可静默回归）、M3 超时文案纯观感。
   - `openmir2-orphan-scenario-gate`：`blocked_sources_check` **只扫 run3 行、不扫场景目录** ⇒ 5 个 blocked 孤儿永不被校验而门仍 rc=0（P21 标本是活样本）。
