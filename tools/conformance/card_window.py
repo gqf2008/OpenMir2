@@ -10937,6 +10937,22 @@ def selftest():
         shutil.rmtree(tmp, ignore_errors=True)
 
     total = pass_n + fail_n
+    # H1（merge_result d9a0dd2fe）：生产 sha 牙必须在 `if fail_n: return 1` **之前**判定，
+    # 否则一有其它失败就永远跑不到它（同 review c866f358 B-1 的形态）。
+    if _prod_mon_sha0 is not None:
+        _sha_now = hashlib.sha256(open(_prod_mon_real, "rb").read()).hexdigest()
+        chk(_sha_now == _prod_mon_sha0,
+            "FX-MON 真实生产 MonGen.txt sha256 全程未变（%s）" % _prod_mon_sha0[:12])
+        if _prod_conf_sha0 is not None:
+            _cnow = hashlib.sha256(open(_prod_conf_real, "rb").read()).hexdigest()
+            chk(_cnow == _prod_conf_sha0,
+                "FX-CONF 真实生产 Server.conf sha256 全程未变（%s）"
+                % _prod_conf_sha0[:12])
+    else:
+        # G2 之后这条**可达**（假根不再依赖真实部署）：语义是「无部署环境 ⇒ 本牙不适用」，
+        # 不是「跳过不查」——没有靶就没有可查对象，且 `_prod_mon_sha0 is None` 本身可判。
+        chk(True, "FX-MON 无部署环境（无真实生产根）⇒ 不适用（有部署时按 sha 比对）")
+
     if fail_n:
         print("RED: card_window.py selftest %d/%d" % (pass_n, total))
         return 1
@@ -11013,7 +11029,6 @@ def selftest():
     # ③ monsters 的 MonGen.txt 目标指向生产。**C3（review 62ac57e1）**：这三条牙一律把模块
     # 全局 `FIXTURE_PROD_ROOT` 临时改成**假根**——守卫坏掉时变异也只写 temp，绝不可能写真实
     # 生产（「一个测试的安全性不能依赖被测代码是正确的」）。
-    import shutil as _shutil
     _saved_prod = globals()["FIXTURE_PROD_ROOT"]
     _fake_prod = os.path.join(fr, "fake-prod")
     _fake_env = os.path.join(_fake_prod, "M2GameSvr", "Envir")
@@ -11079,19 +11094,6 @@ def selftest():
     except TypeError as exc:
         chk(False, "FX-F16 含 files 的 summary 可 json 序列化（C2）：%r" % (exc,))
 
-    if _prod_mon_sha0 is not None:
-        _sha_now = hashlib.sha256(open(_prod_mon_real, "rb").read()).hexdigest()
-        chk(_sha_now == _prod_mon_sha0,
-            "FX-MON 真实生产 MonGen.txt sha256 全程未变（%s）" % _prod_mon_sha0[:12])
-        if _prod_conf_sha0 is not None:
-            _cnow = hashlib.sha256(open(_prod_conf_real, "rb").read()).hexdigest()
-            chk(_cnow == _prod_conf_sha0,
-                "FX-CONF 真实生产 Server.conf sha256 全程未变（%s）"
-                % _prod_conf_sha0[:12])
-    else:
-        # G2 之后这条**可达**（假根不再依赖真实部署）：语义是「无部署环境 ⇒ 本牙不适用」，
-        # 不是「跳过不查」——没有靶就没有可查对象，且 `_prod_mon_sha0 is None` 本身可判。
-        chk(True, "FX-MON 无部署环境（无真实生产根）⇒ 不适用（有部署时按 sha 比对）")
 
     print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
