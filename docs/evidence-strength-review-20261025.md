@@ -1,7 +1,7 @@
 # 条件② 证据强度盘点（2026-10-25）
 
 - 作者：`openmir2-reviewer-20`（只读盘点；未跑 cargo、未起栈、未改任何文件）
-- **快照戳**：`master = ecf13b1cf`（2026-10-25 12:15 +08）；本文数字取自该时点的现有证据根与判据表。
+- **快照**：`ecf13b1cf`（2026-10-25 12:15 +08，整体基线）；各节另有自己的时点戳。
 - 收录：由 `openmir2-reviewer-20` 撰写并签 comment `1541db4e9b`，Leader 原样搬入仓库（仅加本两行头部）。
 - 定位：今天两轮审计（`recog` 全局掩码吞语义值 / 无条件回帧当成功判据）动摇了「既有证据可信」这个前提。
   本文把窗口证据按**三档**归类，并明确**哪些已跑过的证据因今天的改动必须重跑**。
@@ -101,6 +101,42 @@ W-MQ-1 的 `643→767→44→645→5008`。这些帧是**状态同步**，断言
 
 **对 §5 重跑清单的修订**：离屏「帧面」项可**跳过**（实测零变化）；仍必须重跑栈的是 ①DB 面 ②butch 链 ③`bag_equip`/`eat_item` ④home 卡合并后的 `move_walk`/`login_only`。
 `card_evidence` 需在 `29cfa197`（criteria follow-up 落地）之后重算一次（判据 27→30 条）。
+
+### 3E `card_evidence` 重算（master `c7ce673a9` 的 runner+表，含 F1–F4；旧判定用 `90572f5e2` 整套重跑，未混用）
+
+产物 `E:/tmp/window/recompute/`；68 个保留根、81 行 scenario-matching。
+
+- **快照**：`c7ce673a9`（2026-10-25 12:34 +08）；本节全部数字取自该时点。
+
+| | PASS | FAIL | UNDECIDABLE |
+|---|---:|---:|---:|
+| 旧 | 29 | 1 | 51 |
+| 新 | 29 | 1 | 51 |
+
+⇒ **transitions = 0**：判据表收紧在**现有保留证据根**上**没有改变任何 verdict**。原因是没有任何保留根落在
+「登录单帧 5008 / 767 无前置 643 / 657 无 52 前序 / 需账本」这些形态上。
+**它的价值在结构守卫与构造复现**（`f4-repro/root` 单帧 5008：旧 PASS / 新 UNDECIDABLE / 新 runner+旧表 rc=2），
+**不在回溯纠错**——这一点必须写清楚，否则会让人以为 29 个 PASS 被重新验证过。
+
+UNDECIDABLE 51 行的构成：**人工（`machine=false`）31** / **帧序 ident 未齐 18** / ident 未齐或计数不足 2。
+后两类（20 行）属**证据缺口**（帧对齐未落地，见 §3A 第四行），不是判据缺陷。
+
+- **快照**：`c7ce673a9`（2026-10-25 12:34 +08）
+
+`run2`（唯一新口径 DB 面证据，12 根）14 行：新 **PASS 4 / UNDECIDABLE 10 / 失败 0**（与旧一致）；4 个 PASS = 每侧 `529` 与 `657×2`。
+
+`ident 14` 第三态：扫到 4 个 compare report 带 `pending_ignore_rule`（`e23-reshot`、`harness-proof/r2`、
+`w1c/dice_chain_auto`、`w1c/move_walk`），**单列为「因已知未决规则而不可判」**，既不记缺陷也不记通过。
+
+**`ident 14`（`SM_HIT`）的性质已查明（reviewer-20 comment `54fcdc51`）：(b) 纯 RNG + 「修前截断伪影」，不是行为缺口。**
+
+- Rust **并非恒 0**：`e23-reshot/rust` 有 **38 条**（recog=80 商人）、`db-rerun/run2/move_walk/rust` 有 2 条（该根反过来 csharp=0 / rust=2）⇒ **不对称两个方向都出现过**，是 RNG 特征。
+- 同场景同时长对照：`e23-reshot` 两侧各 ≈625s ⇒ C# 31 / Rust 38 条。
+- 所谓 `oracle=27 / rust=0` 出在 `w1c/castle_merchant_tax_potion`：**C# wall=626s、Rust wall=8.2s**——Rust 在 step 5（`wait_idents [650,200]`）就收工，因为**修前**货架为空买不成。商人受击是 `Random(50)==0` 每次 `Run` 抽一次，8s ≈ 26 次 Run ⇒ 零命中概率 ≈ 59%。**是截断造成的伪影。**
+- 代码面三条产出路径齐备（`lib.rs:18903` / `:19010` / `world/merchant.rs` 的随机支 + 城堡商人 `FixedHideMode` 解除的**确定性**补发，配两颗牙）。`lib.rs:14902`「无展示表 ⇒ 跳过」只是登记兜底，**AOI 假说被 e23 的 38 条否掉**。
+
+⇒ **不开卡**；`ident 14` 保持 PENDING 的裁决不受影响（9 个根的 UNDECIDABLE 是 fail-closed，没有任何 PASS 依赖它）。
+两条待办（已派 tester）：① PENDING ignore 的 `reason` 补一句「计数不可比——两侧 `wall_ms` 可差两个数量级，随机支要跑够久才累积；`27/0` 已查明为修前截断伪影」；② 工具侧建议「两侧 `wall_ms` 相差 > N 倍 ⇒ 直接 `undecidable(时长不可比)`」。
 
 ## 4. 结构性风险（未修，登记）
 
