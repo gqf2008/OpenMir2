@@ -1976,10 +1976,27 @@ mod tests {
         sp.state.refill_goods = refill;
         let id = w.spawn_merchant(sp).expect("挂图成功");
         assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        let groups = w.merchant_goods_groups(id).expect("商人状态");
         assert_eq!(
-            w.merchant_goods_groups(id).expect("商人状态").len(),
+            groups.len(),
             14,
             "真实药店 14 条 [goods]（6×DuraMax=1 + 8×DuraMax=0）必须成 14 组"
+        );
+        // **A1（组序牙）**：组序 = `[goods]` 首次出现序（C# `GoodsList.Add` 顺序；
+        // Rust 新组 `push` 顺序），组内 `Insert(0)` ⇒ 后补的在前 ⇒ `make_index` 递减。
+        // 只断言「组数」抓不到顺序漂移（例如把新组插到头部 / 用 push 而非 insert(0)）。
+        assert_eq!(
+            groups[0][0].index, 1,
+            "第 1 组 = 第 1 条 [goods] 的模板 Index"
+        );
+        assert_eq!(
+            groups[13][0].index, 14,
+            "末组 = 第 14 条 [goods] 的模板 Index"
+        );
+        assert!(
+            groups[0][0].make_index > groups[0][2].make_index,
+            "组内 Insert(0) ⇒ make_index 递减（got {:?})",
+            groups[0].iter().map(|it| it.make_index).collect::<Vec<_>>()
         );
     }
 
