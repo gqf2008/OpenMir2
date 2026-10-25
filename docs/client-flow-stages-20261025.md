@@ -64,6 +64,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/ver
 脚本**故意没有 `param()` 块**（手动解析 `$args`）：PowerShell 的参数绑定发生在脚本体之前，
 绑定失败会直接以 rc=1 退出，正好与「指纹不符」的 rc=1 撞车（实测 `-Dir` 错参数名即如此）。
 现在任何用法错误固定 rc=2，只有真复算不符才是 rc=1。
+> **rc=1 的第三来源（reviewer-20 N1）**：`chunks.ndjson` 里字段**类型非法**（如 `"n":"abc"`）也判 rc=1（归「证据被证伪」）——真机上见到 rc=1 时先看前缀：`USAGE`=调用错、`RED …指纹不符`=篡改、`RED …字段类型非法`=产物坏了。
 机器判据在 `selftest_verify_chunks.ps1`（含「删掉本节步骤 ⇒ 自检报红」的牙），不靠人眼。
 
 离线复算（不启动客户端；牙就是靠它重放）：
