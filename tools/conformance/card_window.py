@@ -2961,6 +2961,372 @@ def _parse_inventory_fp(out):
 
 
 # ---------------------------------------------------------------------------
+# 背包替换/丢弃夹具（`fixtures.inventory_replace` / `fixtures.inventory_drop`）
+#
+# 卡 `openmir2-window-fixture-inventory`。缺口（dev-1 butch 实测）：基线 `winplay0` 背包
+# **46/46 满**且无武器 ⇒ 既有场景顶层 `inventory` 通道（要求空槽、fail-closed）写不进去，
+# 「装武器打怪」（`CM_TAKEONITEM`）类前置无法声明。
+#
+# 本通道走**既有 `fixtures`**（与 `level` 同款）：
+#   - 声明期：`_validate_fixture_decl` 校验形状/越界/重复；`_check_fixture_symmetry`
+#     要求两侧声明逐字节相同（否则两侧基线不同，parity 无意义）；
+#   - 运行期（restore 之后、起栈之前）：逐槽「写前快照整行 → DELETE(+INSERT) → 读回断言」，
+#     并对**未声明槽位**做行数 + MD5 指纹对比（只许动声明槽）；
+#   - 停栈后 `restore_inventory_fixture` 按快照**整行**（含 `Id`）写回并重读校验；
+#     还原失败该侧 rc=2（绝不静默跳过）。
+#
+# 语义要点：
+#   - `inventory_replace`: 覆盖/新增某槽（原有行被快照，整行还原）；
+#   - `inventory_drop`: 清空某槽；**该槽本来为空即报错**（夹具没生效，不许假绿）。
+#   - `std_mode` / `ani_count` 若声明，则与 `mir2_data.stditems` 的 `StdMode` / `Shape`
+#     交叉核对；`index`（= `StdIndex`）必须存在于模板表。
+# ---------------------------------------------------------------------------
+#: 背包行整行快照的列（还原时连 `Id` 一起写回，保证行与指纹逐字节复原）。
+INVENTORY_FIXTURE_ROW_COLUMNS = ("Id", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax")
+
+
+def _fixture_inventory_ops(decl):
+    """把 fixtures.inventory_replace / inventory_drop 归一成有序操作列表。"""
+    out = []
+    for it in decl.get("inventory_replace") or []:
+        out.append({"op": "replace", "position": int(it["position"]),
+                    "std_index": int(it["index"]), "make_index": int(it["make_index"]),
+                    "std_mode": it.get("std_mode"), "ani_count": it.get("ani_count"),
+                    "dura": int(it.get("dura") or 0),
+                    "dura_max": int(it.get("dura_max") or 0),
+                    "note": it.get("note") or ""})
+    for it in decl.get("inventory_drop") or []:
+        out.append({"op": "drop", "position": int(it["position"]),
+                    "note": it.get("note") or ""})
+    return out
+
+
+def _inv_row_sql(db, player_id, positions):
+    return ("SELECT `Position`, `Id`, `MakeIndex`, `StdIndex`, `Dura`, `DuraMax`\n"
+            "FROM `%s`.`characters_bagitem`\n"
+            " WHERE `PlayerId` = %d AND `Position` IN (%s)\n"
+            " ORDER BY `Position`, `Id`;\n"
+            % (db, int(player_id), ", ".join(str(int(p)) for p in positions)))
+
+
+def _parse_inv_rows(out):
+    """解析 `_inv_row_sql` 的输出；同槽多行/列数不对 => ConfigError（拒绝在有脏数据的槽上动手）。"""
+    rows = {}
+    for ln in (out or "").splitlines():
+        if not ln.strip():
+            continue
+        parts = ln.split("\t")
+        if len(parts) != len(INVENTORY_FIXTURE_ROW_COLUMNS):
+            raise ConfigError("背包行读回列数不是 %d：%r"
+                              % (len(INVENTORY_FIXTURE_ROW_COLUMNS), ln[:200]))
+        try:
+            row = {"Position": int(parts[0]), "Id": int(parts[1]),
+                   "MakeIndex": int(parts[2]), "StdIndex": int(parts[3]),
+                   "Dura": int(parts[4]), "DuraMax": int(parts[5])}
+        except ValueError:
+            raise ConfigError("背包行读回含非整数/NULL：%r" % ln[:200])
+        pos = row["Position"]
+        if pos in rows:
+            raise ConfigError("Position=%d 在背包读回里出现多行（脏数据，拒绝预置）" % pos)
+        rows[pos] = row
+    return rows
+
+
+def _inv_write_sql(db, player_id, op):
+    pos = int(op["position"])
+    text = ("DELETE FROM `%s`.`characters_bagitem`\n"
+            " WHERE `PlayerId` = %d AND `Position` = %d;\n" % (db, int(player_id), pos))
+    if op["op"] == "replace":
+        text += ("INSERT INTO `%s`.`characters_bagitem`\n"
+                 " (`PlayerId`, `Position`, `MakeIndex`, `StdIndex`, `Dura`, `DuraMax`)\n"
+                 " VALUES (%d, %d, %d, %d, %d, %d);\n"
+                 % (db, int(player_id), pos, int(op["make_index"]), int(op["std_index"]),
+                    int(op["dura"]), int(op["dura_max"])))
+    return text
+
+
+def _inv_restore_sql(db, player_id, position, row):
+    text = ("DELETE FROM `%s`.`characters_bagitem`\n"
+            " WHERE `PlayerId` = %d AND `Position` = %d;\n"
+            % (db, int(player_id), int(position)))
+    if row:
+        text += ("INSERT INTO `%s`.`characters_bagitem`\n"
+                 " (`Id`, `PlayerId`, `Position`, `MakeIndex`, `StdIndex`, `Dura`, `DuraMax`)\n"
+                 " VALUES (%d, %d, %d, %d, %d, %d, %d);\n"
+                 % (db, int(row["Id"]), int(player_id), int(position),
+                    int(row["MakeIndex"]), int(row["StdIndex"]),
+                    int(row["Dura"]), int(row["DuraMax"])))
+    return text
+
+
+def _inv_resolve_player(runner, side, prof, sc, env, timeout):
+    """解析目标库/角色行（与 `run_inventory` 同口径：ChrName+LoginID、唯一、未删除）。"""
+    db = placement_characters_db(side, sc)
+    pairing = _check_db_pairing(side, placement_envir_root(side, sc), db)
+    client = placement_db_client(prof, side)
+    argv = _mysql_argv(client)
+    chr_name = str(prof.get("char_name") or "")
+    login_id = str(prof.get("account") or "")
+    if not chr_name or not login_id:
+        raise ConfigError("背包夹具需要 profile 的 char_name/account")
+
+    def sql(tag, text):
+        rc, out, err = runner.run(side, tag, argv, env=env, timeout=timeout,
+                                  stdin_text=text, capture=True)
+        if rc != 0:
+            raise ConfigError("%s 执行失败（mysql rc=%s）：%s"
+                              % (tag, rc, (err or out or "").strip()[:400]))
+        return out
+
+    char_cols_out = sql("inventory_fixture.character.columns",
+                        "SHOW COLUMNS FROM `%s`.`characters`;\n" % db)
+    char_columns = [ln.split("\t")[0] for ln in char_cols_out.splitlines() if ln.strip()]
+    char_missing = [c for c in ("Id", "ChrName", "LoginID") if c not in char_columns]
+    if char_missing:
+        raise ConfigError("%s.characters 缺列 %s：表结构与预期不符" % (db, char_missing))
+    char_sql = _inventory_char_sql(db, chr_name, login_id, "Deleted" in char_columns)
+    parts = (sql("inventory_fixture.character", char_sql) or "").strip().split("\t")
+    try:
+        count = int(parts[0])
+        player_id = int(parts[1])
+        deleted = int(parts[2]) if len(parts) > 2 else 0
+    except (ValueError, IndexError):
+        raise ConfigError("inventory_fixture.character 返回无法解析：%r" % (parts,))
+    if count == 0:
+        raise ConfigError("角色不存在：%s.characters 无 ChrName=%r LoginID=%r 的行"
+                          % (db, chr_name, login_id))
+    if count > 1:
+        raise ConfigError("角色行不唯一：ChrName=%r LoginID=%r 命中 %d 行"
+                          % (chr_name, login_id, count))
+    if deleted:
+        raise ConfigError("角色已删除（Deleted=%d）：ChrName=%r" % (deleted, chr_name))
+    cols_out = sql("inventory_fixture.columns",
+                   "SHOW COLUMNS FROM `%s`.`characters_bagitem`;\n" % db)
+    columns = [ln.split("\t")[0] for ln in cols_out.splitlines() if ln.strip()]
+    for need in ("PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax"):
+        if need not in columns:
+            raise ConfigError("%s.characters_bagitem 缺列 %s（表结构与预期不符，拒绝）"
+                              % (db, need))
+    return {"db": db, "pairing": pairing, "client": client, "argv": argv,
+            "chr_name": chr_name, "player_id": player_id, "columns": columns,
+            "sql": sql, "char_sql": char_sql}
+
+
+def run_inventory_fixture(runner, side, prof, sc, decl, env, side_dir, timeout=120):
+    """起栈前应用 `fixtures.inventory_replace` / `fixtures.inventory_drop`（返回证据 dict）。
+
+    fail-closed：目标角色/模板不存在、drop 空槽、写后读回不符、其它槽位指纹变化 ⇒ rc=2；
+    已写项**就地回滚**。停栈后的最终还原由 `restore_inventory_fixture` 负责。
+    """
+    ops = _fixture_inventory_ops(decl)
+    res = {"side": side,
+           "declared": {"inventory_replace": decl.get("inventory_replace"),
+                        "inventory_drop": decl.get("inventory_drop")},
+           "action": None, "db": None, "player_id": None,
+           "fingerprint": {"before": None, "after": None},
+           "targets": [], "sql": {}, "rc": None, "error": None}
+    if not ops:
+        res["action"] = "noop"
+        res["rc"] = 0
+        return res
+    if getattr(runner, "dry_run", False):
+        res["action"] = "dry-run"
+        res["sql"]["write"] = [_inv_write_sql("<db>", -1, op).strip() for op in ops]
+        positions = [op["position"] for op in ops]
+        runner.log("[%s] 背包替换/丢弃夹具（dry-run 不连库）：%d 项 positions=%s"
+                   % (side, len(ops), positions))
+        for op in ops:
+            if op["op"] == "replace":
+                runner.log("[%s]   replace Position=%d StdIndex=%d MakeIndex=%d"
+                           % (side, op["position"], op["std_index"], op["make_index"]))
+            else:
+                runner.log("[%s]   drop    Position=%d" % (side, op["position"]))
+        res["rc"] = 0
+        return res
+    try:
+        ctx = _inv_resolve_player(runner, side, prof, sc, env, timeout)
+    except ConfigError as e:
+        res["error"] = "背包替换/丢弃夹具前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    # 凭据只放内存 `_session`；写盘一律经 `level_evidence()` 过滤（与 level/assets 同款）。
+    res["_session"] = {"client": ctx["client"], "argv": ctx["argv"]}
+    res["db"] = ctx["db"]
+    res["db_pairing"] = ctx["pairing"]
+    res["player_id"] = ctx["player_id"]
+    sql = ctx["sql"]
+    db, pid = ctx["db"], ctx["player_id"]
+    positions = [op["position"] for op in ops]
+    try:
+        fp_sql = inventory_fingerprint_sql(db, pid, ctx["columns"],
+                                           exclude_positions=positions)
+        res["sql"]["read"] = fp_sql.strip()
+        res["fingerprint"]["before"] = _parse_inventory_fp(
+            sql("inventory_fixture.read", fp_sql))
+        snap_sql = _inv_row_sql(db, pid, positions)
+        res["sql"]["snapshot"] = snap_sql.strip()
+        before_rows = _parse_inv_rows(sql("inventory_fixture.snapshot", snap_sql))
+
+        # 先把全部模板/drop 前置校验完，一个字节都不写。
+        for op in ops:
+            ev = {"position": op["position"], "op": op["op"],
+                  "before": before_rows.get(op["position"]), "after": None}
+            if op["op"] == "replace":
+                tpl = sql("inventory_fixture.template",
+                          "SELECT `StdMode`, `Shape` FROM `mir2_data`.`stditems`\n"
+                          " WHERE `Id` = %d;\n" % op["std_index"]).strip().splitlines()
+                if not tpl:
+                    raise ConfigError("inventory_replace: 物品模板 index=%d 不存在"
+                                      "（mir2_data.stditems）" % op["std_index"])
+                tparts = tpl[0].split("\t")
+                try:
+                    std_mode = (int(tparts[0])
+                                if tparts[0] not in ("", "NULL") else None)
+                    shape = (int(tparts[1])
+                             if len(tparts) > 1 and tparts[1] not in ("", "NULL") else None)
+                except ValueError:
+                    raise ConfigError(
+                        "inventory_replace: 模板 index=%d 的 StdMode/Shape 无法解析：%r"
+                        % (op["std_index"], tpl[0][:200]))
+                if op["std_mode"] is not None and std_mode != op["std_mode"]:
+                    raise ConfigError(
+                        "inventory_replace: index=%d 的 StdMode=%r 与声明 %r 不符"
+                        % (op["std_index"], std_mode, op["std_mode"]))
+                if op["ani_count"] is not None and shape != op["ani_count"]:
+                    raise ConfigError(
+                        "inventory_replace: index=%d 的 Shape=%r 与声明 ani_count=%r 不符"
+                        % (op["std_index"], shape, op["ani_count"]))
+                ev.update({"std_index": op["std_index"], "make_index": op["make_index"],
+                           "dura": op["dura"], "dura_max": op["dura_max"]})
+            else:
+                if ev["before"] is None:
+                    raise ConfigError(
+                        "inventory_drop: Position=%d 本来为空——夹具没生效，拒绝"
+                        % op["position"])
+            res["targets"].append(ev)
+
+        for op, ev in zip(ops, res["targets"]):
+            pos = op["position"]
+            write_sql = _inv_write_sql(db, pid, op)
+            res["sql"]["write_%d" % pos] = write_sql.strip()
+            sql("inventory_fixture.write_%d" % pos, write_sql)
+            ev["applied"] = True
+            got = _parse_inv_rows(sql("inventory_fixture.verify_%d" % pos,
+                                      _inv_row_sql(db, pid, [pos])))
+            ev["after"] = got.get(pos)
+            if op["op"] == "replace":
+                row = ev["after"]
+                want = {"Position": pos, "MakeIndex": op["make_index"],
+                        "StdIndex": op["std_index"], "Dura": op["dura"],
+                        "DuraMax": op["dura_max"]}
+                if row is None:
+                    raise ConfigError("inventory_replace: Position=%d 写后读不到行" % pos)
+                for k, v in want.items():
+                    if row.get(k) != v:
+                        raise ConfigError(
+                            "inventory_replace: Position=%d 读回 %s=%r != %r"
+                            % (pos, k, row.get(k), v))
+            else:
+                if ev["after"] is not None:
+                    raise ConfigError("inventory_drop: Position=%d 写后仍有行：%r"
+                                      % (pos, ev["after"]))
+        after_fp = _parse_inventory_fp(sql("inventory_fixture.verify", fp_sql))
+        res["fingerprint"]["after"] = after_fp
+        b, a = res["fingerprint"]["before"], after_fp
+        if a["count"] != b["count"]:
+            raise ConfigError(
+                "背包替换/丢弃: 其它槽位的行数变了（%d → %d）——动到了未声明的行"
+                % (b["count"], a["count"]))
+        if a["fp"] != b["fp"]:
+            raise ConfigError("背包替换/丢弃: 其它槽位的指纹变了（%r → %r）"
+                              % (b["fp"], a["fp"]))
+        res["action"] = "applied"
+        res["rc"] = 0
+        return res
+    except (ConfigError, OSError) as e:
+        rb = _rollback_inventory_fixture(runner, res, env, timeout)
+        res["rollback_error"] = rb
+        res["error"] = "背包替换/丢弃夹具失败：%s" % e
+        res["rc"] = 2
+        return res
+
+
+def _rollback_inventory_fixture(runner, res, env, timeout=120):
+    """就地回滚已应用项（写后校验失败时用）；返回错误串或 None。"""
+    sess = res.get("_session") or {}
+    argv = sess.get("argv")
+    db = res.get("db")
+    pid = res.get("player_id")
+    if not argv or not db or pid is None:
+        return "背包夹具回滚缺少连接信息"
+    errs = []
+    for ev in reversed(res.get("targets") or []):
+        if not ev.get("applied"):
+            continue
+        pos = ev["position"]
+        try:
+            text = _inv_restore_sql(db, pid, pos, ev.get("before"))
+            rc, out, e = runner.run(res["side"], "inventory_fixture.rollback_%d" % pos,
+                                    argv, env=env, timeout=timeout,
+                                    stdin_text=text, capture=True)
+            if rc != 0:
+                errs.append("Position=%d 回滚 mysql rc=%s：%s"
+                            % (pos, rc, (e or out or "").strip()[:200]))
+                continue
+            rc, out, e = runner.run(
+                res["side"], "inventory_fixture.rollback_verify_%d" % pos, argv,
+                env=env, timeout=timeout,
+                stdin_text=_inv_row_sql(db, pid, [pos]), capture=True)
+            if rc != 0:
+                errs.append("Position=%d 回滚后读回失败（mysql rc=%s）" % (pos, rc))
+                continue
+            got = _parse_inv_rows(out)
+            if got.get(pos) != ev.get("before"):
+                errs.append("Position=%d 回滚后行 %r != 写前 %r"
+                            % (pos, got.get(pos), ev.get("before")))
+        except (ConfigError, OSError) as e:
+            errs.append("Position=%d 回滚异常：%s" % (pos, e))
+    return "；".join(errs) if errs else None
+
+
+def restore_inventory_fixture(runner, res, env, timeout=120):
+    """停栈后按快照整行还原，并**重读**逐槽校验；失败返回错误串（调用方升级 rc=2）。"""
+    if not res or res.get("action") not in ("applied",):
+        return None
+    errs = []
+    sess = res.get("_session") or {}
+    argv = sess.get("argv")
+    db, pid = res.get("db"), res.get("player_id")
+    if not argv or not db or pid is None:
+        return "背包夹具还原缺少连接信息"
+    for ev in reversed(res.get("targets") or []):
+        pos = ev["position"]
+        try:
+            text = _inv_restore_sql(db, pid, pos, ev.get("before"))
+            rc, out, e = runner.run(res["side"], "inventory_fixture.restore_%d" % pos,
+                                    argv, env=env, timeout=timeout,
+                                    stdin_text=text, capture=True)
+            if rc != 0:
+                errs.append("Position=%d 还原 mysql rc=%s：%s"
+                            % (pos, rc, (e or out or "").strip()[:200]))
+                continue
+            rc, out, e = runner.run(
+                res["side"], "inventory_fixture.restore_verify_%d" % pos, argv,
+                env=env, timeout=timeout,
+                stdin_text=_inv_row_sql(db, pid, [pos]), capture=True)
+            if rc != 0:
+                errs.append("Position=%d 还原后读回失败（mysql rc=%s）" % (pos, rc))
+                continue
+            got = _parse_inv_rows(out)
+            if got.get(pos) != ev.get("before"):
+                errs.append("Position=%d 还原后行 %r != 写前 %r"
+                            % (pos, got.get(pos), ev.get("before")))
+        except (ConfigError, OSError) as e:
+            errs.append("Position=%d 还原异常：%s" % (pos, e))
+    return "；".join(errs) if errs else None
+
+
+# ---------------------------------------------------------------------------
 # 资产声明通道（assets）：restore 之后、起栈之前把「角色资产列」UPDATE 到目标值
 #
 # 卡 `openmir2-window-gold-declaration-channel`。部署前置卡
@@ -3336,7 +3702,83 @@ def check_rng_ledger(path):
 #:   * `monsters` —— 声明式怪物夹具（卡 `openmir2-window-fixture-corpse`）；
 #:   * `config_overrides` / `castle_list` / `castle_files` —— 配置文件与城堡前置
 #:     （卡 `openmir2-window-fixture-castle`）。
-FIXTURE_KEYS = ("monsters", "config_overrides", "castle_list", "castle_files", "level", "note")
+FIXTURE_KEYS = ("monsters", "config_overrides", "castle_list", "castle_files", "level",
+                "inventory_replace", "inventory_drop", "note")
+
+#: `fixtures.inventory_replace` 条目的键白名单（槽位 → 物品）。
+FIXTURE_INV_REPLACE_KEYS = {"position", "index", "make_index", "std_mode",
+                            "ani_count", "dura", "dura_max", "note"}
+
+
+def _validate_fixture_inv_replace(value, where):
+    if not isinstance(value, list) or not value:
+        raise ConfigError("%s.inventory_replace 必须是非空数组" % where)
+    out, seen = [], set()
+    for i, it in enumerate(value):
+        w = "%s.inventory_replace[%d]" % (where, i)
+        if not isinstance(it, dict):
+            raise ConfigError("%s 必须是对象" % w)
+        bad = set(it) - FIXTURE_INV_REPLACE_KEYS
+        if bad:
+            raise ConfigError("%s 有未知键 %s（allow=%s）"
+                              % (w, sorted(bad), sorted(FIXTURE_INV_REPLACE_KEYS)))
+        for k in ("position", "index", "make_index"):
+            if k not in it:
+                raise ConfigError("%s 缺必填键 %s" % (w, k))
+        vals = {}
+        for k in ("position", "index", "make_index", "std_mode", "ani_count",
+                  "dura", "dura_max"):
+            if k not in it or it[k] is None:
+                continue
+            v = it[k]
+            if not isinstance(v, int) or isinstance(v, bool):
+                raise ConfigError("%s.%s 必须是整数（实际 %r）" % (w, k, v))
+            if v < 0 or v > 0xFFFFFFFF:
+                raise ConfigError("%s.%s=%r 越界（0..4294967295）" % (w, k, v))
+            vals[k] = v
+        pos = vals["position"]
+        if pos >= INVENTORY_MAX_BAG:
+            raise ConfigError("%s.position=%d 越界（0..%d）"
+                              % (w, pos, INVENTORY_MAX_BAG - 1))
+        if pos in seen:
+            raise ConfigError("%s.position=%d 重复（同一槽位只能声明一次）" % (w, pos))
+        seen.add(pos)
+        if vals["make_index"] <= 0:
+            raise ConfigError("%s.make_index 必须 >0" % w)
+        if it.get("note") is not None and not isinstance(it["note"], str):
+            raise ConfigError("%s.note 必须是字符串" % w)
+        out.append({"position": pos, "index": vals["index"],
+                    "make_index": vals["make_index"],
+                    "std_mode": vals.get("std_mode"),
+                    "ani_count": vals.get("ani_count"),
+                    "dura": vals.get("dura", 0), "dura_max": vals.get("dura_max", 0),
+                    "note": it.get("note") or ""})
+    return out
+
+
+def _validate_fixture_inv_drop(value, where):
+    if not isinstance(value, list) or not value:
+        raise ConfigError("%s.inventory_drop 必须是非空数组" % where)
+    out, seen = [], set()
+    for i, it in enumerate(value):
+        w = "%s.inventory_drop[%d]" % (where, i)
+        if isinstance(it, dict):
+            if set(it) - {"position", "note"} or "position" not in it:
+                raise ConfigError("%s 只允许 {position, note}" % w)
+            pos = it["position"]
+            note = it.get("note") or ""
+        else:
+            pos, note = it, ""
+        if not isinstance(pos, int) or isinstance(pos, bool):
+            raise ConfigError("%s position 必须是整数（实际 %r）" % (w, pos))
+        if pos < 0 or pos >= INVENTORY_MAX_BAG:
+            raise ConfigError("%s.position=%d 越界（0..%d）"
+                              % (w, pos, INVENTORY_MAX_BAG - 1))
+        if pos in seen:
+            raise ConfigError("%s.position=%d 重复" % (w, pos))
+        seen.add(pos)
+        out.append({"position": pos, "note": note})
+    return out
 
 #: 夹具行的第 7 列 `ZenTime`（分钟）**必须 > 0**：两端解析器都按 `ZenTime = 列值*60*1000` 后
 #: `ZenTime <= 0 => 丢弃`（C# `LocalDB.cs:555-558`；Rust `crates/envir/src/mongen.rs:147-150`），
@@ -3514,10 +3956,21 @@ def _validate_fixture_decl(decl, where):
     if not isinstance(note, str):
         raise ConfigError("%s.note 必须是字符串" % where)
     out = {"monsters": None, "config_overrides": {}, "castle_list": None,
-           "castle_files": {}, "level": None, "note": note}
+           "castle_files": {}, "level": None, "inventory_replace": None,
+           "inventory_drop": None, "note": note}
     if "monsters" in decl:
         out["monsters"] = _validate_monsters(decl["monsters"], where + ".monsters")
     out.update(_validate_fixture_files(decl, where))
+    if "inventory_replace" in decl:
+        out["inventory_replace"] = _validate_fixture_inv_replace(
+            decl["inventory_replace"], where)
+    if "inventory_drop" in decl:
+        out["inventory_drop"] = _validate_fixture_inv_drop(decl["inventory_drop"], where)
+    pos_r = {it["position"] for it in (out["inventory_replace"] or [])}
+    pos_d = {it["position"] for it in (out["inventory_drop"] or [])}
+    if pos_r & pos_d:
+        raise ConfigError("%s: inventory_replace 与 inventory_drop 槽位重叠 %s"
+                          % (where, sorted(pos_r & pos_d)))
     if "level" in decl:
         lv = decl["level"]
         if not isinstance(lv, int) or isinstance(lv, bool) or not (1 <= lv <= 255):
@@ -3526,7 +3979,8 @@ def _validate_fixture_decl(decl, where):
         out["level"] = lv
     if not (out["monsters"] or out["config_overrides"]
             or out["castle_list"] is not None or out["castle_files"]
-            or out["level"] is not None):
+            or out["level"] is not None or out["inventory_replace"]
+            or out["inventory_drop"]):
         raise ConfigError("%s 只声明了 note：至少要给 monsters / config_overrides / "
                           "castle_list / castle_files / level 之一" % where)
     return out
@@ -3568,7 +4022,11 @@ def _fixture_symmetry_key(decl):
                        ensure_ascii=False),
             json.dumps(decl.get("config_overrides") or {}, sort_keys=True,
                        ensure_ascii=False),
-            decl.get("level"))
+            decl.get("level"),
+            json.dumps(decl.get("inventory_replace") or [], sort_keys=True,
+                       ensure_ascii=False),
+            json.dumps(decl.get("inventory_drop") or [], sort_keys=True,
+                       ensure_ascii=False))
 
 
 def _check_fixture_symmetry(fixtures_by_side):
@@ -4153,6 +4611,7 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
 
     stack_attempted = False
     level_state = None  # 等级夹具的内存态（含凭据）；落盘只用 level_evidence()
+    inventory_fixture_state = None  # 背包替换/丢弃夹具内存态（含凭据）
     try:
         # 1) 恢复基线
         restore_argv = expand_argv(sc["restore"], ctx)
@@ -4260,6 +4719,25 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                 res["level"] = level_evidence(lres)
                 if lres.get("rc") != 0:
                     res["error"] = lres.get("error") or "等级夹具失败"
+                    return res
+            # 背包替换/丢弃夹具（DB 侧，卡 openmir2-window-fixture-inventory）：同款
+            # 「起栈前写 + 停栈后整行还原」；失败 fail-closed。
+            if (fixtures_decl.get("inventory_replace")
+                    or fixtures_decl.get("inventory_drop")):
+                inventory_fixture_state = run_inventory_fixture(
+                    runner, side, prof, sc, fixtures_decl, env, side_dir)
+                try:
+                    write_json_file(os.path.join(side_dir, "inventory_fixture.json"),
+                                    level_evidence(inventory_fixture_state))
+                except OSError as e:
+                    inventory_fixture_state["error"] = (
+                        (inventory_fixture_state.get("error") or "")
+                        + "；写 inventory_fixture.json 失败：%s" % e).strip("；")
+                    inventory_fixture_state["rc"] = 2
+                res["inventory_fixture"] = level_evidence(inventory_fixture_state)
+                if inventory_fixture_state.get("rc") != 0:
+                    res["error"] = (inventory_fixture_state.get("error")
+                                    or "背包替换/丢弃夹具失败")
                     return res
 
         # 2) 起栈前端口检查（有人占 => rc=2 并点名 pid；不启动栈）
@@ -4449,6 +4927,20 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                 pass
             if lerr:
                 msg = "等级夹具还原失败：%s" % lerr
+                res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
+                if res["rc"] == 0:
+                    res["rc"] = 2
+        # 8d) 还原背包替换/丢弃夹具（DB）：停栈后按快照整行写回并重读；失败该侧 rc=2。
+        if res.get("inventory_fixture"):
+            ierr = restore_inventory_fixture(runner, inventory_fixture_state, env)
+            res["inventory_fixture"]["restore_error"] = ierr
+            try:
+                write_json_file(os.path.join(side_dir, "inventory_fixture.json"),
+                                res["inventory_fixture"])
+            except OSError:
+                pass
+            if ierr:
+                msg = "背包替换/丢弃夹具还原失败：%s" % ierr
                 res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
                 if res["rc"] == 0:
                     res["rc"] = 2
