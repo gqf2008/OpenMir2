@@ -1,6 +1,6 @@
 {
   "name": "butch_two_draws",
-  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位。oracle：`PlayObject.Message.cs:829-…` ⇒ `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`；宰杀成功出 `SM_SKELETON(33)`，拿到骨架后出 `SM_BUTCH(637)`。两抽值域：`Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f` 的合同），并要求**流位恰停在第二抽**（site/order 账本）。**依赖现状**：活体夹具（`fixtures.monsters`，`ZenTime=360>0`）、C# RNG 接线（`15dbbe843`）与 **kill 步**（卡 `openmir2-probe-kill-step`，`CM_TURN(3010)`+`CM_HIT(3014)`、死亡帧 `SM_NOWDEATH(34)` 带目标坐标）**均已落地**；**剩余缺口 = 实测**（红线：必须起私有栈真跑「击杀→屠宰」链，见 `blocked`）。**未实测前保持 blocked，不得声称可跑**。",
+  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位。oracle：`PlayObject.Message.cs:829-…` ⇒ `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`；屠宰成功出 `SM_BUTCH(637)`（**收官帧**）；`SM_SKELETON(33)` **不是每刀必发**（`PlayObject.Operate.cs:731-738`：仅 `BodyLeathery <= 0` 时置 `Skeleton=true` 并发 `RM_SKELETON`，而每次屠宰随机扣 5–20）。两抽值域：`Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f` 的合同），并要求**流位恰停在第二抽**（site/order 账本）。**依赖现状**：活体夹具（`fixtures.monsters`，`ZenTime=360>0`）、C# RNG 接线（`15dbbe843`）与 **kill 步**（卡 `openmir2-probe-kill-step`，`CM_TURN(3010)`+`CM_HIT(3014)`、死亡帧 `SM_NOWDEATH(34)` 带目标坐标）**均已落地**；**剩余缺口 = 刷怪顺序**（夹具被追加到 MonGen.txt 表尾，60s 内轮不到；见 `blocked` 与 `docs/blocked-scenarios-audit-20261025.md` §1.2）。**解封前保持 blocked，不得声称可跑**。",
   "required": [
     "target_xy"
   ],
@@ -8,8 +8,8 @@
     "self_pos": 21627210
   },
   "blocked": {
-    "reason": "**能力齐、只差实测**：kill 步与活体夹具、C# RNG 账本接线都已落地，但卡面红线要求**实测**击杀→屠宰链（起私有栈跑一遍并贴攻击/死亡/33/637 关键帧与账本片段）才可去掉 blocked；本轮无私有栈窗口，故保持 blocked。",
-    "missing_fixture": "跑一次私有栈：① profile 声明 `fixtures.monsters=[{map:\"0\",x:330,y:331,name:<动物>,count:1}]`（与 `CM_BUTCH` 同格）；② 两侧同 `-Seed 42` + `MIR2_RNG_SITE=1`（C# hook 已接线）；③ 贴证据：`kill` 步的 swings/matched_ident、`SM_NOWDEATH(34)` 帧、`SM_SKELETON(33)`、`SM_BUTCH(637)`、RNG 账本两抽（site/order）与 DB/背包后态。**失败分流**：`kill: no target frames` ⇒ 活体夹具/落点；`kill: target alive after N swing(s)` ⇒ 伤害不足（`HitIntervalTime - HitSpeed*ItemSpeed` 节流或 AC 门）；`33 超时` ⇒ 尸体已被清/距离或速度门。实测通过后：去掉 `blocked`、run3 行去掉 blocked 文案。"
+    "reason": "**真因（audit §1.2）：怪物夹具追加在 MonGen.txt 末尾，刷怪线程轮不到它**，不是「只缺一次实操」。`card_window` 的夹具写盘是 `head + append`（追加行落在 3081 行表尾）；`RegenMonstersTime=200ms`（部署 `Server.conf`）且 `ProcessMonsterMultiThreadLimit` 未配 ⇒ 取缺省 1（全表一张表）⇒ 一轮 ≈ 3081 × 0.2s ≈ **616s** ≫ 本行 60s 超时 ⇒ `kill` 步稳定落在 `no target frames at (330,331)`。解封 = **前置插入**（卡 `openmir2-fixture-monsters-prepend`）；**不要**用加大 `--timeout-ms` 掩盖（616s 级等待既不可接受，也会让批次时长失控）。",
+    "missing_fixture": "等 `openmir2-fixture-monsters-prepend` 的**前置插入**生效后（两侧 MonGen.txt 头部同格式行），两侧同 `-Seed 42` + `MIR2_RNG_SITE=1`，再复跑击杀→屠宰链并贴 33/637 帧与 RNG 账本。"
   },
   "placement": {
     "map": "0",
@@ -26,7 +26,7 @@
         "interval_ms": 1000,
         "wait_ident": 34
       },
-      "note": "**击杀步**（卡 `openmir2-probe-kill-step`）：先 `CM_TURN(3010, tag=Dir, recog=自身坐标)` 转身，再按同一朝向连 `CM_HIT(3014)`（recog=自身坐标；目标由 `GetPoseCreate()` 取正前方格，`PlayObject.Attack.cs:26/883`）。等 `SM_NOWDEATH(34)`（`BaseObject.Base.cs:351` 的 RM_DEATH nParam3=1 → `PlayObject.Message.cs:1632-1634`，**帧里 param/tag = 目标 X/Y**）。`interval_ms=1000` ≥ 部署 `HitIntervalTime=850`（`Server.conf:325`；同 ident 连击另有 `HitIntervalTime - HitSpeed*ItemSpeed`，`PlayObject.Attack.cs:850`）。失败三态：`no target frames` / `target alive after N swing(s)`（本步）/ 后续 `33` 超时（屠宰不接受）。**场景总时长**：20×1s + 余量 ⇒ `--timeout-ms 60000`。"
+      "note": "**击杀步**（卡 `openmir2-probe-kill-step`）：先 `CM_TURN(3010, tag=Dir, recog=自身坐标)` 转身，再按同一朝向连 `CM_HIT(3014)`（recog=自身坐标；目标由 `GetPoseCreate()` 取正前方格，`PlayObject.Attack.cs:26/883`）。等 `SM_NOWDEATH(34)`（`BaseObject.Base.cs:351` 的 RM_DEATH nParam3=1 → `PlayObject.Message.cs:1632-1634`，**帧里 param/tag = 目标 X/Y**）。`interval_ms=1000` ≥ 部署 `HitIntervalTime=850`（`Server.conf:325`；同 ident 连击另有 `HitIntervalTime - HitSpeed*ItemSpeed`，`PlayObject.Attack.cs:850`）。失败三态：`no target frames` / `target alive after N swing(s)`（本步）/ 后续 `637` 超时（屠宰不接受）。**场景总时长**：20×1s + 余量 ⇒ `--timeout-ms 60000`。"
     },
     {
       "send": {
@@ -35,17 +35,12 @@
         "param": 0,
         "tag": 0
       },
-      "note": "`CM_BUTCH(1007)`：`recog=MakeLong(尸体X,尸体Y)` ⇒ `nParam1=LoWord=X`、`nParam2=HiWord=Y`（`PlayObject.Message.cs:829-831`）。**失败形态**：若 `ClientGetButchItem` 返回 false（无尸体/距离/速度门），服务端不出 33/637，下一步超时"
-    },
-    {
-      "wait_for": 33,
-      "timeout_ms": 3000,
-      "note": "`SM_SKELETON(33)`（`Messages.cs:199`）：屠宰第一段（尸体 → 骨架）。**超时 = 没有可屠宰的尸体/被速度门挡**（死亡帧已到 ⇒ 与「打了没死」可区分）"
+      "note": "`CM_BUTCH(1007)`：`recog=MakeLong(尸体X,尸体Y)` ⇒ `nParam1=LoWord=X`、`nParam2=HiWord=Y`（`PlayObject.Message.cs:829-831`）。**失败形态**：若 `ClientGetButchItem` 返回 false（无尸体/距离/速度门），服务端不出 637，下一步超时"
     },
     {
       "wait_for": 637,
       "timeout_ms": 3000,
-      "note": "`SM_BUTCH(637)`（`Messages.cs:299`）：拿到骨架/肉的回帧。**超时 = 第一段未成功**"
+      "note": "`SM_BUTCH(637)`（`Messages.cs:299`）：屠宰成功的回帧，**本链收官帧**。**不要等 `SM_SKELETON(33)`**：`PlayObject.Operate.cs:731-738` 只有 `BodyLeathery <= 0` 时才置 `Skeleton=true` 并发 `RM_SKELETON`，而每次屠宰随机扣 5–20 ⇒ 首刀远到不了 0，33 **不是每刀必发**。超时 = 没有可屠宰的尸体/被速度门挡（死亡帧已到 ⇒ 与「打了没死」可区分）"
     },
     {
       "sleep": 500,

@@ -159,7 +159,7 @@
     }
   ],
   "blocked": {
-    "reason": "**两个剩余缺口（升级腿已拆到独立场景 `castle_merchant_tax_upgrade`）**：① **买武器腿**：`SM_SENDDETAILGOODSLIST(652)` 的 ClientItem buffer 需要解码取 MakeIndex 才能填第 19 步 param/tag（645 载荷不含 MakeIndex；`Merchant.cs:1241` 的 `StdMode<=4` 支只放过药品/杂物）⇒ 当前场景末两步会用占位 0 失败；**买腿已由 `castle_merchant_tax_potion` 覆盖**，不阻断整卡。② **W-TAX-4 的 `SaveTick` 10 分钟门不可观测**：`SaveTick` 只在内存（不落盘），C# 无 `MIR2_CLOCK_*` ⇒ 只能真实时点复拍；`Castle/0/SabukW.txt` 的 `TotalGold/TodayIncome` 要等 `ConsoleShowUserCountTime` 门（生产 600000ms）才写盘，判据以帧+DB 为主、文件字段为辅。③ 本场景的买/卖/修三腿在 0151 城堡武器铺（`Castle` 经 EnvirList 恒非空），**不需要** `CastleGetAllNpcTax`。",
-    "missing_fixture": "① **升级腿**：已拆成 `castle_merchant_tax_upgrade`（map 3 铁匠 + `config_overrides.CastleGetAllNpcTax=1`；run3 内置 profile 不能表达 ⇒ 该场景在 run3 保持 blocked）。② **买武器腿**：解析 652 的 ClientItem buffer（EDCode）取 MakeIndex——需改 `tools/probe/mir2_probe.py`（本卡写集外，另开工具卡）；买药品腿已可跑。③ **城堡夹具对齐**：已由 preflight `castle_list_symmetry` 门固化（两侧含影子必须同为 `0,1`）。④ **W-TAX-4**：真实时点 + C# 时钟注入片未落地，按降级口径登记。"
+    "reason": "**① 买武器腿缺 652 的 ClientItem buffer 解码**：`Merchant.cs:1249` 要求武器 `MakeIndex` 精确相等，而货架货的 `MakeIndex = M2Share.GetItemNumber()`（运行时递增计数，`Merchant.cs:309-312`）⇒ 无法从冻结内容推导；645 载荷不含它。**②「SaveTick / 600s 门不可观测」已证伪**：`UserCastle.cs:798-805` 的 SaveTick 只写时间戳，写盘由 `SystemProcessor.ShowOnline()` 的 `ConsoleShowUserCountTime` 门控、且**可被 profile 覆盖**（`fixtures.config_overrides.Server.conf`，castle 卡已实测生效）——**真缺口 = 税入账原因未定位**（覆盖到 5s 后 `SabukW.txt` 仍零写入）。买药腿已由 `castle_merchant_tax_potion` 覆盖。",
+    "missing_fixture": "① 另卡给 probe 加 EDCode buffer 解码 + 从句柄取 `ClientItem.MakeIndex`，喂 `CM_USERBUYITEM(1014, param/tag = Lo/Hi(MakeIndex))`；② 先用 `ConsoleShowUserCountTime=5000` 覆盖复现，再定位税为何不落盘。"
   }
 }

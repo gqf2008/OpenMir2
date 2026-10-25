@@ -24,11 +24,11 @@
     {"n": 19, "name": "clearmapmon_q001",     "profile": "alt",          "extra": []},
     {"n": 20, "name": "dropgold_zero_draw", "profile": "alt",        "extra": []},
     {"n": 21, "name": "butch_two_draws",    "profile": "alt",        "extra": ["--timeout-ms", "60000"],
-     "blocked": "能力齐（活体夹具 + kill 步 + C# RNG 接线），**只差实测**击杀→屠宰链（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）"},
+     "blocked": "**真因：夹具行被追加到 MonGen.txt 表尾——3081 行 × RegenMonstersTime=200ms ≈616s，且部署 ProcessMonsterMultiThreadLimit 未配=1 ⇒ 60s 内轮不到追加行**。解封=前置插入（卡 openmir2-fixture-monsters-prepend），不是加大超时（详见 tools/probe/scenarios/butch_two_draws.json 的 blocked）"},
     {"n": 22, "name": "castle_merchant_tax", "profile": "alt",       "extra": [],
-     "blocked": "买武器腿需 652 ClientItem 解码（买药品腿由 #23 覆盖）；W-TAX-4 SaveTick 不落盘；升级腿已拆到 #24（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
+     "blocked": "① 买武器腿缺 652 ClientItem buffer 解码取 MakeIndex（645 不含，运行时计数推不出）；②「SaveTick/600s 门不可观测」已证伪（SaveTick 只写时间戳，ConsoleShowUserCountTime 可被 profile 覆盖到 5s）；**真缺口=税入账原因未定位**。买药腿已由 #23 覆盖（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
     {"n": 23, "name": "castle_merchant_tax_potion", "profile": "alt", "extra": ["--timeout-ms", "700000"]},
     {"n": 24, "name": "castle_merchant_tax_upgrade", "profile": "alt", "extra": [],
-     "blocked": "run3 内置 profile 不能声明 config_overrides.CastleGetAllNpcTax=1（默认零税）；用自定义 profile 文件可手工跑"}
+     "blocked": "**「不能进批」已证伪**（extra 拼在 --profile 之后 + load_profile 收 JSON 路径）；剩余缺口=NPC 寻址的对象类别校验与 SM_DISAPPEAR 剔除（卡 openmir2-probe-npc-addressing-followups，未合）。profile 预置 tools/window/profiles/castle_tax_upgrade.json 尚未接入 run3（详见 tools/probe/scenarios/castle_merchant_tax_upgrade.json 的 blocked）"}
   ]
 }
