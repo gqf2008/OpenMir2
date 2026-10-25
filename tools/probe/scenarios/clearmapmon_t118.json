@@ -71,6 +71,12 @@
     }
   ],
   "blocked": {
+    "not_in_run3_reason": {
+      "reason": "分支随机 movr M3 3 只能靠两侧同一 RNG seed；当前无稳定的同 seed 通道（跨全新起栈实抽不同），故不进 run3。",
+      "evidence": [
+        {"kind": "path", "value": "tools/conformance/card_window.py"}
+      ]
+    },
     "reason": "分支随机 `movr M3 3`（武士-0114.txt:27）在动作点覆盖任何预置 ⇒ M3 不可注入；只能靠**两侧同一 RNG seed**。而窗口的 C# 栈（`card_window.py` 的 `alt.sides.csharp.stack` = `E:/tmp/conformance/start-csharp3.ps1`）**没有任何 `-Seed`/`MIR2_RNG_SEED`/`DOTNET_STARTUP_HOOKS`** ⇒ oracle 仍按时间种子，M3 不可能与 Rust 对齐。（注：`card_window.py:3305` 是 `env = os.environ.copy()`，父进程的 `MIR2_RNG_SEED`/`MIR2_RNG_SITE` 会透传；缺的是 **oracle 侧 hook 接线**，不是环境变量通道。） **2026-10-25 实测（卡 openmir2-clearmapmon-t118-unblock）**：C# hook 已接线，但同 seed（42/43）跨全新起栈的 movr 实抽并不同（seed42 auto 1/1、disc 2/0；seed43 auto 2/2/0）⇒ seed 不能保证「首掷即赢」，解封条件②不成立。另发现内容前置缺口：三库 stditems 均无「佛牌」定义、winplay0 等级 1，@rw01 不可达。详见 docs/window-scenes-clearmapmon-20261025.md §1.7。",
     "missing_fixture": "**DSL 改造不解封**（`dlg_select_any`/`repeat` 只解决『读哪一页/选哪个链接』，不解决分支可复现；未接 C# hook 时每轮真随机，约一半窗口会失败，且输支 `take 佛牌 + addnamelist` 是终局并烧夹具 ⇒ 仍按本字段三步解封，本轮不进 run3 #20）。解封三步：① 窗口 C# 栈接 hook/seed（改用 mir2-rs/tests/parity/m3/start-csharp-hook.ps1 + RngSeedHook.dll，输出 INJECT_OK <seed>；工具面归卡 openmir2-window-csharp-rng）；② 两侧同 -Seed N + MIR2_RNG_SITE=1 且 INJECT_OK，确认该 seed 下 movr 取到 2；③ 记 seed 号后解封。**操作约束（破坏性副作用，务必遵守）**：`[@st]` 的 M3=0（输）分支在 #SAY 之前先执行 `#act take 佛牌 1; set [105] 0; addnamelist 命运之刃名单.txt`（武士-0114.txt:37-43）⇒ 一次「抽出 0」的尝试会**扣掉佛牌并把角色写进名单**，之后点该 NPC 只会命中 @main 的 CHECKNAMELIST（只得 767、没有 @rw01）⇒ **永久卡住**。因此：**先用离线/`MIR2_RNG_SITE` 流水确认 seed，再跑第一次**；**每次尝试前恢复夹具**（佛牌×1 + 把角色从 `命运之刃名单.txt` 移除）。 **新增（2026-10-25）**：除 RNG 流位 flaky 外，还需① stditems 补「佛牌」定义（或改脚本前置）② 可声明的 Level≥43/任务道具夹具；两者属内容/夹具卡，不在 openmir2-clearmapmon-t118-unblock 写集。"
   }
