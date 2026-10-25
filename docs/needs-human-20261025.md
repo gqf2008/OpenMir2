@@ -135,10 +135,9 @@
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
 | ② R 卡证据 | **need_human** | R 卡 **222 张**：closed **14** / `window_required` **153**（另未合并 **2**）/ whitelist **48** / 已裁定登记 **4** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 14+153+2+48+4+1 = 222 ✓ |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **need_human** | 7 项：绿 **6** / 红 **0** / 需人工 **1** = `cargo_test_workspace`（**待最终窗口跑**）。`master_sync` 已随 walgit 切回原仓库变绿 |
+| ④ 门禁恒绿 | **pass** | 7 项：**绿 7 / 红 0 / 需人工 0**（最终窗口 @ `a1576af35` 实跑）。`cargo_test_workspace` rc=0（手工全量 running 3314 = passed 3251 + failed 0 + ignored 63、rc=0；两次 rc 一致 ⇒ 非 flaky）；`master_sync` local==remote |
 
-> **四条件现在的真缺口只有两处**：② 的 G11 1 张（§1 需你裁决）、④ 的一次全量 `cargo test --workspace --locked`。
-> 后者已排入独占窗口，窗口内同时复确认 ①（若 `crates/script` 无新提交则复用同一二进制）。
+> **四条件现在的真缺口只剩一处**：② 的 G11 1 张（§1 需你裁决）。①③④ 均已 PASS，证据与可复算口径见 `docs/delivery-report-20261025-final.md`。
 
 ## 6. 本轮 `blocked` 项与解封条件（新表；每项写谁在做）
 
