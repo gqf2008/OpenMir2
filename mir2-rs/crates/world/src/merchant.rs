@@ -487,6 +487,28 @@ impl World {
         Some(&mut self.entities.get_mut(id)?.merchant.as_mut()?.goods_list)
     }
 
+    /// **初始装货**：等价 oracle `Merchant.LoadNpcData` 末尾的 `RefillGoods()`（`Merchant.cs:1070`）。
+    ///
+    /// 宿主在挂图成功后对每个商人调用一次。不加这一下，`Run` 的计时支要等
+    /// `RefillGoodsTick + MERCHANT_REFILL_GOODS_INTERVAL_MS`（ctor 把 tick 置 now）才首次补货，
+    /// 进图后几秒内 `UserSelectBuyItem` 读到**空货架** ⇒ `SM_SENDGOODSLIST(645)` `param=0/body=0`
+    /// （W1 实测 C# `param=7/143B` vs Rust `param=0/0`；卡 `openmir2-castle-potion-buy-response`）。
+    ///
+    /// sim 时钟与 oracle 墙钟的差：oracle 的 `goods.RefillTick` 缺省 0 而 `GetTickCount()` 是开机毫秒
+    /// （很大）⇒ 首次必然 due；本侧 `clock_ms` 从 0 起 ⇒ 需要把「从未补过」的条目视作 due
+    /// （把 `refill_tick` 调到刚好过门），否则初始装货会被计时门挡掉。
+    pub fn merchant_refill_goods_now(&mut self, id: i32) -> bool {
+        let now = self.clock_ms;
+        if let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+            for g in st.refill_goods.iter_mut() {
+                if g.refill_tick == 0 {
+                    g.refill_tick = now.saturating_sub(i64::from(g.refill_time) * 60 * 1000 + 1);
+                }
+            }
+        }
+        refill_goods(self, id)
+    }
+
     /// `Merchant.AddItemToGoodsList`（`Merchant.cs:1417`）：`Dura <= 0` 不收；否则
     /// `GetRefillList(Index)` 命中就 `Insert(0)`，未命中就新建组（组序 = 首次出现序）。
     pub fn merchant_add_item_to_goods_list(&mut self, id: i32, item: MerchantItem) {
@@ -1876,6 +1898,32 @@ mod tests {
             map_id: 0,
             state: sample_state(),
         }
+    }
+
+    /// 卡 `openmir2-castle-potion-buy-response`：**初始装货**（oracle `Merchant.LoadNpcData`
+    /// 末尾的 `RefillGoods()`，`Merchant.cs:1070`）。
+    ///
+    /// 旧行为：`spawn_merchant` 后货架为空（只有 `Run` 的 30s 计时支会补）⇒ 进图几秒内
+    /// `SM_SENDGOODSLIST(645)` 是空货架。牙：把 `merchant_refill_goods_now` 的调用删掉/改成 no-op，
+    /// 本用例最后一个断言必红。
+    #[test]
+    fn merchant_refill_goods_now_fills_goods_list_at_spawn() {
+        let mut w = World::new(20, 20);
+        w.set_item_catalog(upgrade_catalog());
+        let item_name = w.std_item_by_idx(1).expect("目录第 1 项").name.clone();
+        let mut sp = spawn_at(3, 4);
+        sp.state.refill_goods = vec![MerchantGoods {
+            item_name,
+            count: 3,
+            refill_time: 0,
+            refill_tick: 0,
+        }];
+        let id = w.spawn_merchant(sp).expect("可走格应挂图成功");
+        assert!(w.merchant_goods_groups(id).expect("商人状态").is_empty(),
+                "旧行为：spawn 后货架为空");
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        assert!(!w.merchant_goods_groups(id).expect("商人状态").is_empty(),
+                "初始装货后货架必须非空");
     }
 
     #[test]

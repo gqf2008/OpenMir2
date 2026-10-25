@@ -343,6 +343,10 @@ pub fn spawn_merchants_with_scripts(
                     let appr = e.merchant.as_ref().map_or(0, |m| m.appr);
                     displays.set(id, npc_display(e.ai.dir, e.race_img, appr, &name));
                 }
+                // **卡 `openmir2-castle-potion-buy-response`**：等价 oracle `Merchant.LoadNpcData`
+                // 末尾的一次性 `RefillGoods()`（`Merchant.cs:1070`）——挂图成功即把脚本 `[goods]`
+                // 装进在售货架；否则要等 `Run` 的 30s 计时支，进图几秒内 `645` 是空货架。
+                world.merchant_refill_goods_now(id);
                 if let Some(seed) = seed {
                     book.insert(MerchantNpc {
                         def: NpcDef {
