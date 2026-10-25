@@ -8993,6 +8993,19 @@ def _selftest_main_exit_code(tmp):
 
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
+    # **C3（review 62ac57e1）**：本函数里所有「拿生产根当靶」的用例（FX27 / FX-F13 / F14 / F17）
+    # 一律改指**假根**——守卫坏掉时变异也只写 tmp，绝不可能写真实生产。
+    # 「一个测试的安全性不能依赖被测代码是正确的」。
+    _prod_root_saved = globals()["FIXTURE_PROD_ROOT"]
+    _prod_mon_real = os.path.join(_prod_root_saved, "M2GameSvr", "Envir", "MonGen.txt")
+    _prod_mon_sha0 = (hashlib.sha256(open(_prod_mon_real, "rb").read()).hexdigest()
+                      if os.path.isfile(_prod_mon_real) else None)
+    _prod_conf_real = os.path.join(_prod_root_saved, "M2GameSvr", "Server.conf")
+    _prod_conf_sha0 = (hashlib.sha256(open(_prod_conf_real, "rb").read()).hexdigest()
+                       if os.path.isfile(_prod_conf_real) else None)
+    _prod_fake = os.path.join(tmp, "fake-prod-root")
+    os.makedirs(os.path.join(_prod_fake, "M2GameSvr", "Envir"), exist_ok=True)
+    globals()["FIXTURE_PROD_ROOT"] = _prod_fake
     stub = os.path.join(tmp, "stub.py")
     with open(stub, "w", encoding="utf-8", newline="\n") as f:
         f.write(STUB_SOURCE)
@@ -10901,6 +10914,12 @@ def selftest():
 
     finally:
         holder.close()
+        # C3：还原模块全局（否则后续 selftest/真实路径会读到假根——那又是一个新洞）。
+        globals()["FIXTURE_PROD_ROOT"] = _prod_root_saved
+        # 还原本身要有牙：写错（还原成别的假值/只还原一半）会让后续用例读到假根，
+        # 同样以「selftest 全绿」的形式存在。
+        chk(globals()["FIXTURE_PROD_ROOT"] == _prod_root_saved,
+            "FX-PROD-RESTORE selftest 结束必须还原真实生产根")
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -10977,28 +10996,57 @@ def selftest():
         "FX-F11 替换型还原后 sha256 == 写前")
     chk(not os.path.exists(newp), "FX-F12 新建型还原后文件不存在")
 
-    # 生产根守卫（A4/内容冻结）：① envir_root 直指生产；② envir_root 私有但 Envir 是
-    # 指向生产的符号链接 ⇒ **逐文件 realpath 守卫**必须拦（只靠 envir_root 挡不住 ②）。
-    prod_res = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
-                            {"envir_root": FIXTURE_PROD_ROOT + "/M2GameSvr"},
-                            _validate_fixture_decl(
-                                {"files": {"Envir/x.txt": "a"}}, "t"), {}, fside)
-    chk(prod_res.get("rc") == 2 and "生产内容根" in (prod_res.get("error") or ""),
-        "FX-F13 envir_root 指向生产根 => rc=2 拒绝")
-    link_root = os.path.join(fr, "M2GameSvr-link")
-    os.makedirs(link_root, exist_ok=True)
+    # 生产根守卫（A4/内容冻结）：① envir_root 直指生产；② Envir 为指向生产的符号链接；
+    # ③ monsters 的 MonGen.txt 目标指向生产。**C3（review 62ac57e1）**：这三条牙一律把模块
+    # 全局 `FIXTURE_PROD_ROOT` 临时改成**假根**——守卫坏掉时变异也只写 temp，绝不可能写真实
+    # 生产（「一个测试的安全性不能依赖被测代码是正确的」）。
+    import shutil as _shutil
+    _saved_prod = globals()["FIXTURE_PROD_ROOT"]
+    _fake_prod = os.path.join(fr, "fake-prod")
+    _fake_env = os.path.join(_fake_prod, "M2GameSvr", "Envir")
+    os.makedirs(_fake_env, exist_ok=True)
+    _real_env = os.path.join(_saved_prod, "M2GameSvr", "Envir")
+    for _n in ("MapInfo.txt", "MonGen.txt"):
+        _shutil.copyfile(os.path.join(_real_env, _n), os.path.join(_fake_env, _n))
+    globals()["FIXTURE_PROD_ROOT"] = _fake_prod
     try:
-        os.symlink(FIXTURE_PROD_ROOT + "/M2GameSvr/Envir",
-                   os.path.join(link_root, "Envir"), target_is_directory=True)
-        link_res = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
-                                {"envir_root": link_root},
+        prod_res = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
+                                {"envir_root": _fake_prod + "/M2GameSvr"},
                                 _validate_fixture_decl(
                                     {"files": {"Envir/x.txt": "a"}}, "t"), {}, fside)
-        chk(link_res.get("rc") == 2
-            and "解析到生产内容根" in (link_res.get("error") or ""),
-            "FX-F14 Envir 为指向生产的符号链接 => 逐文件 realpath 守卫 rc=2")
-    except OSError:
-        chk(True, "FX-F14 跳过（本机无法建符号链接）")
+        chk(prod_res.get("rc") == 2 and "生产内容根" in (prod_res.get("error") or ""),
+            "FX-F13 envir_root 指向生产根 => rc=2 拒绝")
+
+        link_root = os.path.join(fr, "M2GameSvr-link")
+        os.makedirs(link_root, exist_ok=True)
+        try:
+            os.symlink(_fake_prod + "/M2GameSvr/Envir",
+                       os.path.join(link_root, "Envir"), target_is_directory=True)
+            link_res = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
+                                    {"envir_root": link_root},
+                                    _validate_fixture_decl(
+                                        {"files": {"Envir/x.txt": "a"}}, "t"), {}, fside)
+            chk(link_res.get("rc") == 2
+                and "解析到生产内容根" in (link_res.get("error") or ""),
+                "FX-F14 Envir 为指向生产的符号链接 => 逐文件 realpath 守卫 rc=2")
+        except OSError:
+            chk(True, "FX-F14 跳过（本机无法建符号链接）")
+
+        mroot = os.path.join(fr, "M2GameSvr-mongen")
+        os.makedirs(mroot, exist_ok=True)
+        try:
+            os.symlink(_fake_prod + "/M2GameSvr/Envir",
+                       os.path.join(mroot, "Envir"), target_is_directory=True)
+            mon_decl = _validate_fixture_decl(
+                {"monsters": [{"map": "0", "x": 1, "y": 1, "name": "x"}]}, "t")
+            mres = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
+                                {"envir_root": mroot}, mon_decl, {}, fside)
+            chk(mres.get("rc") == 2 and "生产内容根" in (mres.get("error") or ""),
+                "FX-F17 monsters 目标指向生产 => 逐目标守卫 rc=2")
+        except OSError:
+            chk(True, "FX-F17 跳过（本机无法建符号链接）")
+    finally:
+        globals()["FIXTURE_PROD_ROOT"] = _saved_prod
 
     _prof_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                               "..", "window", "profiles", "gm_script_level0.json")
@@ -11015,19 +11063,17 @@ def selftest():
     except TypeError as exc:
         chk(False, "FX-F16 含 files 的 summary 可 json 序列化（C2）：%r" % (exc,))
 
-    mroot = os.path.join(fr, "M2GameSvr-mongen")
-    os.makedirs(mroot, exist_ok=True)
-    try:
-        os.symlink(FIXTURE_PROD_ROOT + "/M2GameSvr/Envir",
-                   os.path.join(mroot, "Envir"), target_is_directory=True)
-        mon_decl = _validate_fixture_decl(
-            {"monsters": [{"map": "0", "x": 1, "y": 1, "name": "x"}]}, "t")
-        mres = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
-                            {"envir_root": mroot}, mon_decl, {}, fside)
-        chk(mres.get("rc") == 2 and "生产内容根" in (mres.get("error") or ""),
-            "FX-F17 monsters 目标指向生产 => 逐目标守卫 rc=2")
-    except OSError:
-        chk(True, "FX-F17 跳过（本机无法建符号链接）")
+    if _prod_mon_sha0 is not None:
+        _sha_now = hashlib.sha256(open(_prod_mon_real, "rb").read()).hexdigest()
+        chk(_sha_now == _prod_mon_sha0,
+            "FX-MON 真实生产 MonGen.txt sha256 全程未变（%s）" % _prod_mon_sha0[:12])
+        if _prod_conf_sha0 is not None:
+            _cnow = hashlib.sha256(open(_prod_conf_real, "rb").read()).hexdigest()
+            chk(_cnow == _prod_conf_sha0,
+                "FX-CONF 真实生产 Server.conf sha256 全程未变（%s）"
+                % _prod_conf_sha0[:12])
+    else:
+        chk(True, "FX-MON 跳过（本机无真实生产根）")
 
     print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
