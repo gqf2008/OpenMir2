@@ -29,14 +29,19 @@ Gold=0 ⇒ 买不了；背包 46 个槽位里 `StdIndex<>0` 的真物品 **3 件
 自检里的牙（都在 `--selftest` 里、可随时复跑）：
 
 ```
-PASS A4/生产库 硬拒 + 未连库 + 零 SQL
-PASS A4/C# 测试库 硬拒 + 未连库 + 零 SQL   # mir2_test_db（C# 侧）也不在白名单，只有 _r
-PASS A4/注入 硬拒 + 未连库 + 零 SQL
+PASS A4/生产库 硬拒（理由含「是生产库」）+ 未连库 + 零 SQL
+PASS A4/C# 测试库 硬拒（理由含「不在测试库白名单」）+ 未连库 + 零 SQL   # 只有 _r 在白名单
+PASS A4/注入 硬拒（理由含「不是合法标识符」）+ 未连库 + 零 SQL
 PASS A4/白名单库放行
 ```
 
 「未连库 + 零 SQL」是**承重**的：牙经 `main()` 真走一遍（`--gate`），并断言 `build_mysql` **一次都没被调用**。
 把 `guard_db(args.db)` 挪到 `build_mysql(args)` 之后 ⇒ 三条同时变红（`build=1`）。
+
+「**为什么被拒**」也是承重的（卡 `openmir2-provision-refusal-reason`）：三条牙各自钉一条判词分支，
+断言输出里分别含 `是生产库` / `不在测试库白名单` / `不是合法标识符`。只钉「被拒」会漏掉两类变异：
+① `guard_db(args.db)` 换成 `raise DbRefused("MUT-stub")`（守卫一次没跑）② 删掉 `PROD_DBS` 分支
+（生产库被白名单兜住，红线判词静默消失）——两者以前都 32/32 全绿。
 
 ## 2. A1 金币（+ 可选可卖物品）
 
@@ -166,7 +171,8 @@ reviewer-21 用变异发现：下面三处**行为对、但没有牙**（改坏�
 |---|---|---|---|
 | **F1a** apply dry-run | `apply_plan(dry_run=True)` ⇒ `fake.batches == []` 且没有 `UPDATE` 语句 | `apply_plan` 里 `if dry_run:` → `if False:` | 只有 F1a 红 |
 | **F1b** rollback dry-run | `rollback_plan(dry_run=True)` ⇒ `fake.executed == []`（连 SELECT 都不发） | `rollback_plan` 里 `if dry_run:` → `if False:` | 只有 F1b 红 |
-| **F2** 零 SQL | 经 `main(--gate --db <坏库>)` ⇒ `rc=3`、`build_mysql` 调用数 0、SQL 条数 0 | `guard_db` 移到 `build_mysql` 之后 | 三条 A4 牙同时红（`build=1`） |
+| **F2a** 未连库 + 零 SQL | 经 `main(--gate --db <坏库>)` ⇒ `rc=3`、`build_mysql` 调用数 0、SQL 条数 0 | `guard_db` 移到 `build_mysql` 之后 | 三条 A4 牙同时红（`build=1`） |
+| **F2b** 判词分支 | 三个坏库各自的拒绝理由分别含 `是生产库` / `不在测试库白名单` / `不是合法标识符` | ① `guard_db` 换 `raise DbRefused("MUT-stub")` ⇒ 三条全红；② 删 `PROD_DBS` 分支 ⇒ 只红「生产库」那条 | 见左 |
 | **F3** 乐观锁 | 生成的 `UPDATE ... WHERE` 含 `Id`/`ChrName`/`Gold`/`MapName` 四个谓词 | WHERE 退回 `Id+ChrName` | 只有 F3 红 |
 
 ## 5. A5 窗口当天 runbook
