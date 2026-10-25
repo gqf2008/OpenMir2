@@ -1,4 +1,4 @@
-# probe 运行期参数令牌：`@last_kill_xy`（卡 `openmir2-probe-runtime-param-last-kill-xy`，tier L）
+# probe 运行期参数令牌：`@last_kill_actor` / `@last_kill_x` / `@last_kill_y` / `@last_kill_xy`（卡 `openmir2-probe-runtime-param-last-kill-xy`，tier L）
 
 - 卡：`openmir2-probe-runtime-param-last-kill-xy`（issue `093f6561`；owner `openmir2-dev-1`；
   branch `card/probe-runtime-param-last-kill-xy`；base = 本 patch 的 `--base`）。
@@ -9,7 +9,9 @@
 
 ## 1. 为什么需要
 
-`CM_BUTCH(1007)` 的 `recog = MakeLong(尸体X, 尸体Y)`（`PlayObject.Message.cs:829-831`）必须是**尸体所在格**。
+`CM_BUTCH(1007)` 的字段映射（`PlayObject.Message.cs:830` 传 `ClientGetButchItem(nParam1, nParam2, nParam3, wParam)`，签名 `(charId, nX, nY, btDir)`，`Operate.cs:702`）是
+**recog=charId、param=X、tag=Y、series=Dir**——尸体格必须由 **X/Y 两个字段**给出（门是每轴 ≤2 格，`Operate.cs:716`）。
+旧口径「`recog = MakeLong(尸体X, 尸体Y)`」已作废（它把 X/Y 打包塞进 charId 槽）。
 固定格 `kill` 时尸体就在 `params.target_xy`；但**寻靶（`track`）击杀**后尸体不一定还在那个格子
 （鸡会走位），而场景里 `send.recog` 只能写**静态** `params`（`resolve_param` 只查 `params`/字面量）
 ⇒ 写死旧格必错。**数据其实已经在运行期存在**：死亡帧 `SM_NOWDEATH(34)`/`SM_DEATH(32)` 的
@@ -19,17 +21,22 @@
 
 | 令牌 | 取值 | 何时可引用 |
 |---|---|---|
-| `@last_kill_xy` | 最近一次 `kill` 成功（`result=dead`）的**尸体格** `MakeLong(X,Y)` | 该 `kill` 步执行成功之后；否则报错 |
+| `@last_kill_actor` | 最近一次 `kill` 成功（`result=dead`）的**目标 ActorId**（`CM_BUTCH.recog`） | 该 `kill` 步执行成功之后；否则报错 |
+| `@last_kill_x` | 尸体格 **X**（`CM_BUTCH.param`） | 同上 |
+| `@last_kill_y` | 尸体格 **Y**（`CM_BUTCH.tag`） | 同上 |
+| `@last_kill_xy` | 尸体格打包 `MakeLong(X,Y)`（**兼容保留**；**不要**再用于 `CM_BUTCH.recog`） | 同上 |
 
-- **只在 `send.recog` 上解析**（运行期）。其它动作（`dlg_select` / `click_npc` / `wait_for` 的
-  `recog` 等）仍走加载期 `resolve_param`，写 `@...` 会被当成无法解析的名字报 `scenario-error`——
-  这是刻意的：**没有接线的地方不要假装支持**。将来要扩，按同样方式加。
-- 场景里写字符串即可：`{"send": {"ident": 1007, "recog": "@last_kill_xy"}}`。
+- **只在 `send` 的 `recog`/`param`/`tag`/`series` 四个字段上解析**（运行期）。其它动作
+  （`dlg_select` / `click_npc` / `wait_for` 的 `recog` 等）仍走加载期 `resolve_param`，写 `@...`
+  会被当成无法解析的名字报 `scenario-error`——这是刻意的：**没有接线的地方不要假装支持**。
+  将来要扩，按同样方式加（`_var_refs` 放行 + `_resolve_token` fail-closed 两处一起改）。
+- 场景里写字符串即可：`{"send": {"ident": 1007, "recog": "@last_kill_actor", "param": "@last_kill_x", "tag": "@last_kill_y"}}`。
 - 典型用法（butch 链）：
 
   ```json
-  [{"kill": {"track": "nearest:鸡", "max_retries": 3, "interval_ms": 1000}},
-   {"send": {"ident": 1007, "recog": "@last_kill_xy"}}]
+  [{"kill": {"track": "nearest:鸡", "max_retries": 6, "interval_ms": 1000}},
+   {"send": {"ident": 1007, "recog": "@last_kill_actor",
+             "param": "@last_kill_x", "tag": "@last_kill_y"}}]
   ```
 
 ## 3. 取值来源与一致性检查（不猜）
@@ -48,7 +55,8 @@
 - **kill 未执行 / 未成功就引用令牌** ⇒ `ScenarioError` 点名令牌与「尚未成功执行」，
   `sent` 一帧都不发；**不回落 0、不用静态 `params` 顶替**——回落等于退回「固定格打空」的形态，
   那正是本卡要消灭的假绿。
-- **令牌拼写错**（如 `@last_kill_x`）⇒ **加载期** `ScenarioError`，并列出可用令牌。
+- **令牌拼写错**（如 `@last_kill_bogus`）⇒ **加载期** `ScenarioError`，并列出可用令牌
+  （`@last_kill_actor, @last_kill_x, @last_kill_xy, @last_kill_y`）。
 - `state` 里的键不带 `@`（引擎内部用 `last_kill_xy`），`@` 只出现在场景文本里。
 
 ## 5. 与静态 `params` 的关系
@@ -56,27 +64,28 @@
 | | 静态 `params` | 运行期令牌 |
 |---|---|---|
 | 定值时机 | 加载期（`--var` / 场景 `params`） | 执行到该步时从 `state` 取 |
-| 可用位置 | 所有走 `resolve_param` 的字段 | 目前仅 `send.recog` |
+| 可用位置 | 所有走 `resolve_param` 的字段 | 目前仅 `send` 的 `recog`/`param`/`tag`/`series` |
 | 失败形态 | 缺 `required` ⇒ 加载期拒 | 值未产生 ⇒ 运行期 `ScenarioError`（一帧不发） |
 
 ## 6. 牙（`_selftest_runtime_token`，5 条，**承重**）
 
 | 牙 | 断言 | 变异实测（改坏 ⇒ 红） |
 |---|---|---|
-| a | kill 成功 ⇒ `last_kill_xy`=尸体格，且后续 `send` 真发出该 recog | 「不写 state」⇒ ScenarioError（红） |
+| a | kill 成功 ⇒ 四个令牌都有值（actor/x/y/xy），且后续 `send` 真发出 recog=actor、param=X、tag=Y | 「不写 state」⇒ ScenarioError（红） |
 | b | kill 失败（打了没死）⇒ 引用令牌 `ScenarioError` 且**一帧不发** | 「回落 0」⇒ 牙b 红 |
 | c | 未执行 kill ⇒ 同上、零发送 | 「回落 0」⇒ 牙c 红 |
 | d | 令牌拼写错 ⇒ **加载期**拒并列出可用令牌 | 「去掉加载期校验」⇒ 牙d 红 |
 | e | 死亡帧 `param/tag` 与目标格不一致 ⇒ 拒绝写并打印两值 | 「去掉坐标一致性检查」⇒ 牙e 红 |
 
-`mir2_probe --selftest`：**21 checks OK**（原 20 + 本套 1 组）。
+`mir2_probe --selftest`：**22 checks OK**（原 20 + 本套 1 组 + track 邻格等待组）。
 注意：probe 的 selftest harness 只看**异常**（各套的返回值只当明细打印）——所以本套在末尾把
 `False` 聚合成 `AssertionError`，与 `_selftest_kill` 的 `for cond, msg in checks: assert cond, msg`
 同口径。少了这一步，五颗牙就只是装饰（改坏也不会红）。
 
 ## 7. 未做
 
-- **真机 butch 链**（`kill(track)` → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)`）：归
+- **真机 butch 链**（`kill(track)` → `CM_BUTCH(recog=@last_kill_actor, param=@last_kill_x,
+  tag=@last_kill_y)` → **RNG 账本恰两抽**；`SM_BUTCH(637)` 只作伴随证据）：归
   `openmir2-butch-two-draws-unblock`，等窗口；本卡只保证 DSL 侧的取值正确（构造级牙已证）。
 - 其它动作的令牌接线（若将来需要，按 `send.recog` 同一形态加，并在 §2 表格登记）。
 - **删除不可运行的兜底场景**（Leader 裁决，并入本卡）：`tools/probe/scenarios/npc_click_king_slow.json`
@@ -86,7 +95,7 @@
 
 ## 8. 门禁
 
-`mir2_probe --selftest` 21 checks OK；`tools/probe/scenarios/*.json` 的 `--check-scenario`：
+`mir2_probe --selftest` 22 checks OK；`tools/probe/scenarios/*.json` 的 `--check-scenario`：
 按各场景 `required` 补 `--var` 后 **31/31 rc=0**（不可运行的 `npc_click_king_slow` 已按 Leader
 裁决删除；补 var 时 `butch_two_draws` 的 `target_xy` 要给**真实相邻格**——随便填 `1` 会被
 八向相邻门按设计拒掉，那不是场景缺陷）；7 项卫生门 + `git diff --check <base> <head>` + `merge_tree_helper` 见 patch body。

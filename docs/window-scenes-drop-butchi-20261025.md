@@ -25,10 +25,10 @@
 
 | 项 | 内容 |
 |---|---|
-| 触发 | `CM_BUTCH(1007)`（`Messages.cs:57`）→ `PlayObject.Message.cs:829-831` 的 `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`；成功出 **`SM_BUTCH(637)`**（收官帧）；`SM_SKELETON(33)` **不是每刀必发**（只有 `BodyLeathery<=0` 才发，见 §2c.3b） |
-| 线上字段 | `recog = MakeLong(尸体X,尸体Y)` ⇒ `nParam1=X`、`nParam2=Y`——尸体格由**运行期令牌 `@last_kill_xy`** 提供（寻靶击杀后尸体不一定在静态 `target_xy`） |
-| 期望证据 | **`SM_BUTCH(637)`** 收官（`33` 非必发、**不作判据**）；两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`；**流位恰停第二抽** + site/order 账本 |
-| 失败形态 | 第 1 步后面超时 ⇒ `ClientGetButchItem` false（无尸体/距离/速度门），不是抽数问题 |
+| 触发 | `CM_BUTCH(1007)`（`Messages.cs:57`）→ `PlayObject.Message.cs:830` 的 `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`（签名 `(charId, nX, nY, btDir)`，`Operate.cs:702`）；**637 只是无条件回帧**；`SM_SKELETON(33)` **不是每刀都发**（只有 `BodyLeathery<=0` 才发，见 §2c.3b） |
+| 线上字段 | `PlayObject.Message.cs:830` 传 `ClientGetButchItem(nParam1, nParam2, nParam3, wParam)`，签名 `(charId, nX, nY, btDir)`（`Operate.cs:702`）⇒ **recog=charId（`@last_kill_actor`）、param=X（`@last_kill_x`）、tag=Y（`@last_kill_y`）、series=Dir（客户端未发时 0）**。尸体格必须由 X/Y 两字段给出，**不是** recog 打包（旧口径「recog=MakeLong(X,Y)」已作废；`@last_kill_xy` 仅为兼容保留，**不要**再用于 recog） |
+| 期望证据 | **RNG 账本恰 2 条**（`Operate.cs:722`/`:723`，判据变更见卡 `openmir2-butch-637-criterion-fix`）；`33` 不一定发、`637` 不作判据；两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`；**流位恰停第二抽** + site/order 账本 |
+| 失败形态 | 第 1 步后面超时 ⇒ `ClientGetButchItem` 在**速度门**提前 `return false`（`Operate.cs:709-712`，**唯一**早退点；函数末尾本来也 `return false`，返回值不代表成功）。**其余三道门（`:716` 每轴≤2 / `:718` `IsValidObject` / `:720` `Death && !Skeleton && Animal`）不过只是跳过两抽，仍然落到 `:749` 无条件发 637** ⇒ 尸体被清/距离不符/已骨架**都不会让 637 缺席**；判成功只看**账本两抽** |
 
 **为什么 blocked（双缺口）**：
 
@@ -69,14 +69,19 @@
    `wParam>0` 时发，`PlayObject.Message.cs:1564`）。
 2. **打了没死**：`kill: target alive after N swing(s)` —— 收到过目标格活动帧（`SM_TURN/DEATH` 带坐标）
    或带伤害的他人 `SM_STRUCK`，但没等到死亡帧；错误串带帧摘要。
-3. **死了但屠宰不接受**：不在 `kill` 内——由紧随其后的 `wait_for(637)` 超时表达（死亡帧已到，
-   说明击杀成功；**637 不来** = 屠宰被拒（尸体被清/距离或速度门））。
+3. **屠宰了但没抽成**：**不能用 `wait_for(637)` 超时来表达**——`ClientGetButchItem` 里唯一的早退是
+   速度门（`PlayObject.Operate.cs:709-712`），`:716` 每轴 ≤2、`:718` `IsValidObject`、`:720`
+   `Death && !Skeleton && Animal` 都是**嵌套 if、不早退**，门不过只跳过两抽，照样落到 `:749`
+   `SendRefMsg(RM_BUTCH, …)` ⇒ **637 恒定到达**（除非被速度门挡下）。这一项只能由**账本**判：
+   `:722` `Random(16)+5` 与 `:723` `Random(201)+100` 是否各 1 条、site 是否归属该两行；
+   637 到达只证「请求被受理」，**不证成功**。
 
 ### 2b.3 场景与状态
 
-- `butch_two_draws` 步序（**现行版**）：`kill`（**寻靶** `track: nearest:鸡`，`max_retries=3`、
+- `butch_two_draws` 步序（**现行版**）：`kill`（**寻靶** `track: nearest:鸡`，`max_retries=6`、
   `interval_ms=1000`；`self_pos=21627210`，`target_xy` 只是夹具落点）→ `send CM_BUTCH(1007,
-  recog=@last_kill_xy)` → `wait_for(637)` → `sleep 500`。
+  recog=@last_kill_actor, param=@last_kill_x, tag=@last_kill_y)` → `wait_for(637)` → `sleep 500`
+  （637 只是无条件回帧，**不是**判据；判据是两抽账本，见 §2 表「期望证据」）。
   **`SM_SKELETON(33)` 不是必现**：`PlayObject.Operate.cs:731-738` 只有 `BodyLeathery<=0` 才发，
   每次屠宰随机扣 5–20 ⇒ 首刀远到不了 0；**不得把它写进步序当判据**（见 §2.3 第 3 条）。
   run3 `#21` 的 `extra` 现在是 `["--timeout-ms","60000","--profile","tools/window/profiles/butch_monsters.json"]`
@@ -123,7 +128,7 @@
   ⇒ **「没有 SM_TURN 回帧」不能当作朝向未生效的判据**；场景里「等自己的 SM_TURN(10)」那一步已删。
 - **`SM_SKELETON(33)` 不是首刀就发**（oracle 真相）：`PlayObject.Operate.cs:731-738` 只有
   `BodyLeathery <= 0` 才置 `Skeleton=true` 并发 `RM_SKELETON`；每次屠宰随机扣 5–20，首刀远到不了 0。
-  ⇒ **不得把「33 未出现」判成失败**；butch 的**收官帧是 `SM_BUTCH(637)`**，场景只等 637。
+  ⇒ **不得把「33 未出现」判成失败**；**但 `SM_BUTCH(637)` 也不能单独判成功**（`:749` 无条件发，卡 `openmir2-butch-637-criterion-fix`）——判据看账本两抽，场景只等 637。
   要验 33 必须把 `BodyLeathery` 打到 ≤0（多次屠宰或夹具预置），并单独写依据。
 - run5（tester，C# 侧）已打通：`kill result=dead`、**4 刀**打死，帧序
   `34(SM_NOWDEATH, recog=target, 330/331) → 31(SM_STRUCK, series=5) → 32(SM_DEATH, 330/331) → 637(SM_BUTCH)`。
@@ -135,7 +140,7 @@ C# `-RngLog` 每抽数都落盘：~~10 分钟即 **397,951,366 字节**（上一
 ### 2c.4b 走位问题的确定性解法，以及一个**未解的接口缺口**（2026-10-25 复测前分析）
 
 **已有解法（已合入 master）**：卡 `openmir2-probe-kill-track-target` 落地 `kill: {track: "nearest:<名>"}`
-——每轮按**最新帧**取目标当前坐标与 actor，出手前复核，走开就重算（`max_retries`，默认 3）。
+——每轮按**最新帧**取目标当前坐标与 actor，出手前复核，走开就重算（`max_retries` 默认 3；本场景显式取 **6**，等待窗 ≈6s）。
 
 **节流口径（别为了快把挥击压没）**：track 每轮 = 选靶 → `CM_TURN` → `pump(interval)` → 复核 →
 `CM_HIT` → `pump(interval)`，所以**相邻两次 `CM_HIT` 的真实间隔 ≈ 2 × interval_ms**；
@@ -145,7 +150,7 @@ C# `-RngLog` 每抽数都落盘：~~10 分钟即 **397,951,366 字节**（上一
 
 **新发现（本轮实测前的静态核查）：track 模式下 `CM_BUTCH` 拿不到尸体格。**
 
-- `CM_BUTCH(1007)` 的 `recog = MakeLong(尸体X, 尸体Y)`（`PlayObject.Message.cs:829-831`），必须是**尸体所在格**；
+- `CM_BUTCH(1007)` 的 **recog=charId、param=X、tag=Y**（`PlayObject.Message.cs:830` 传 `(nParam1, nParam2, nParam3, wParam)` → 签名 `(charId, nX, nY, btDir)`；`Operate.cs:716` 门是**每轴 ≤2 格**，不是八向相邻）——尸体格必须由 X/Y 给出；
 - track 击杀结束时，尸体格 = 杀步记录的 `run.steps[i].target_xy`（死亡帧 `param/tag` 也带该格，
   见 `_execute_kill_track` 的匹配条件）——**数据在运行期确实存在**；
 - 但场景里后续 `send` 的 `recog` 只能写**静态** params（`resolve_param` 只查 `params`/字面量，
@@ -157,11 +162,11 @@ C# `-RngLog` 每抽数都落盘：~~10 分钟即 **397,951,366 字节**（上一
 
 | # | 方案 | 代价 / 结论 |
 |---|---|---|
-| A | probe 加运行期令牌：kill 成功时写 `state["last_kill_xy"]`，`send.recog` 允许 `"@last_kill_xy"` 在运行期解析 | 最小改（约 10 行 + 牙），但**属 probe 写集**，要 Leader 派给写集 owner |
+| A | probe 加运行期令牌：kill 成功时写 `state["last_kill_xy"/"_x"/"_y"/"_actor"]`，`send` 的 `recog/param/tag/series` 允许 `"@…"` 在运行期解析 | 最小改（约 10 行 + 牙），但**属 probe 写集**，要 Leader 派给写集 owner |
 | B | 换成**不走位**的怪 | **已排除**：`WalkStep=0` 只有 36 行，除 `HP=0` 的占位 `558` 外全是 卧龙守将/魔将/道尊/战将（HP 1000–3000、AC 0–10），没有「低血量站桩怪」可打（证据见 §2c.4c） |
 | C | 8 邻格扫 `CM_BUTCH`（尸体必在自身 8 邻里） | **不采用**：错格的 `CM_BUTCH` 依赖未登记的服务端行为（可能只少一条回帧、也可能有副作用），拿它当判据会把「猜」写进场景 |
 
-⇒ **已解决**：Leader 裁决方案 A 归本线，已开卡 `openmir2-probe-runtime-param-last-kill-xy` 并合入 master `83799acc9`；本卡场景已改为 **kill 用 `track`（`nearest:鸡`，`max_retries=3`，`interval_ms=1000`）+ `CM_BUTCH recog=@last_kill_xy`**，`--check-scenario` rc=0（依赖 `card/probe-runtime-param-check` 的 `_var_refs` 放行令牌，见该卡 follow-up）。
+⇒ **已解决**：Leader 裁决方案 A 归本线，已开卡 `openmir2-probe-runtime-param-last-kill-xy` 并合入 master `83799acc9`；本卡场景已改为 **kill 用 `track`（`nearest:鸡`，`max_retries=6`，`interval_ms=1000`）+ `CM_BUTCH recog=@last_kill_actor, param=@last_kill_x, tag=@last_kill_y`**，`--check-scenario` rc=0（依赖 `card/probe-runtime-param-check` 的 `_var_refs` 放行令牌，见该卡 follow-up）。
 
 ### 2c.4c 「换站桩怪」的数据证据（只读 SELECT，未起栈）
 
@@ -180,15 +185,16 @@ SELECT Idx,Name,HP,AC,MAC,DC,DCMAX,SPEED,WalkStep FROM monsters WHERE WalkStep=0
    `Dc=0` 时空手对 AC=0 也是 0 伤，kill 永远等不到死亡帧（第一轮实测）；
 1. 用 tester 的 **prepend 夹具**（`5b8aac21` 合入后走声明式 `fixtures.monsters`，不再手工插首行）；
 2. 场景保留 `CM_TAKEONITEM(1003)+SM_TAKEON_OK(615)` 前置 + `sleep 1500` settle；
-3. **kill 用 track**（`track: "nearest:鸡"`, `max_retries: 3`, `interval_ms: 1000`——有效 2s，安全高于
+3. **kill 用 track**（`track: "nearest:鸡"`, `max_retries: 6`，`interval_ms: 1000`——有效 2s，安全高于
    `HitIntervalTime=850`）；三段判据分开写：
    - **刷出**：目标格出现活动帧（`SM_TURN/APPEAR`）；
    - **命中扣血**：`SM_STRUCK(31)`（`param=HP`）或 `SM_HIT(14)` 计数 > 0，且非「被吃掉的挥击」
      （数 `SM_HIT` 与实际 `CM_HIT` 发送数对比）；
-   - **死亡 + 屠宰**：`SM_NOWDEATH(34)`/`SM_DEATH(32)`（`param/tag` = 目标格）⇒ `CM_BUTCH` ⇒ **`SM_BUTCH(637)`**
-     （收官帧；33 需 `BodyLeathery<=0`，不是首刀判据） + 两抽（`Random(16)+5`、`Random(201)+100`）的 site/order；
-4. **`CM_BUTCH` 的坐标**由 §2c.4b 的方案 A 解决（`@last_kill_xy`，已随 probe 卡合入）：场景已改为
-   **kill 用 track + `CM_BUTCH recog=@last_kill_xy`**，`--check-scenario` rc 0；`target_xy` 只剩
+   - **死亡 + 屠宰**：`SM_NOWDEATH(34)`/`SM_DEATH(32)`（`param/tag` = 目标格）⇒ `CM_BUTCH` ⇒ **RNG 账本恰两抽**
+     （`Operate.cs:722` `Random(16)+5`、`:723` `Random(201)+100`，各 1 条，site 归属该两行）——**这才是判据**；
+     `SM_BUTCH(637)` 在 `:749` **无条件**发（零信息量）⇒ 只作伴随证据；33 需 `BodyLeathery<=0`，不是首刀判据；
+4. **`CM_BUTCH` 的坐标**由 §2c.4b 的方案 A 解决（四个运行期令牌 `@last_kill_actor/x/y`，已随 probe 卡合入）：场景已改为
+   **kill 用 track + `CM_BUTCH recog=@last_kill_actor, param=@last_kill_x, tag=@last_kill_y`**，`--check-scenario` rc 0；`target_xy` 只剩
    「夹具落点」语义，**不再参与八向相邻校验**（鸡刷错位置会在 kill 处 **fail-closed**：`StepFailure` 报「目标与自身不八向相邻 ⇒ 需手动站位」）；
 5. 账本限时（≤5 分钟）并当场裁剪。
 

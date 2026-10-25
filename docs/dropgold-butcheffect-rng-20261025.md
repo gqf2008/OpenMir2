@@ -59,6 +59,8 @@
 
 两抽与 DROPGOLD 同一条 `M2Share.RandomNumber` ⇒ 这就是本卡 R 判据的落点。
 
+> **口径漂移备忘（卡 `openmir2-butch-637-criterion-fix`）**：本文 §? 的 `:749` 一行**早就写明** `SendRefMsg(RM_BUTCH, …)` 是**无条件**发的；后续文档复述时把 `SM_BUTCH(637)` 当成了「屠宰成功/落点」，是本轮真机实验（账本 `max=16` 0 条、`max=201` 全来自 `MonGen.cs:815`）才把它纠正回来——**已记录的原文没错，是复述漂移**。
+
 ## 4. 判据（实测）
 
 | 用例（`bins/game-svr/src/lib.rs`，均从 `handle_inbound_cmd` 生产派发面进入） | 钉什么 |

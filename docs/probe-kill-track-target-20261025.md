@@ -23,7 +23,7 @@
 | `self_pos` | 必填/来自 params | 同左（`CM_TURN`/`CM_HIT` 的 `recog` 都是自身坐标） |
 | `max_swings` / `interval_ms` / `wait_ident` / `ident` / `turn_ident` | 同左 | 同左 |
 
-`nearest:<名>` 取**当前可见、未死、曼哈顿距离最近**的同名对象（`SM_TURN(10)` 名尾的 `ShowName`）；
+`nearest:<名>` 取**当前可见、未死、且八向相邻（cheb==1）**的同名对象里曼哈顿距离最近的那个（`SM_TURN(10)` 名尾的 `ShowName`）；**同格（cheb=0）不选**；没有相邻目标时**只等不追**（最多 `max_retries` 轮，不注入移动帧），等不到则 fail-closed 并列出坐标与 cheb 距离（卡 `openmir2-probe-track-target-adjacency`）；
 同名两只按 `(距离, actor id)` 稳定排序。目标检测复用探针的 `scan_actors`（含 `SM_DISAPPEAR(30)` 剔除）。
 
 ## 2. 为什么固定格模式天然 flaky
@@ -87,7 +87,7 @@ tester 的 run5 成功 / run6 `no target` 是同一竞态。寻靶模式在这�
 | 目标类别 | `nearest:<名>` 不区分玩家/怪/NPC；`actor:<id>` 完全不做名字校验 |
 | 死亡判定 | 只认 `SM_DEATH(32)`/`SM_NOWDEATH(34)` 且 `recog == actor`（同格坐标帧作为补充不用于此判定） |
 | 目标彻底不见了 | 若在**第一击之前**就消失 ⇒ 直接报错（不空打）；若中途消失 ⇒ 同上（`target-gone`），不会改打别的同名对象 |
-| 同名多只 | 只按最近；「相距相同」时按 actor id 稳定取小 |
+| 同名多只 | **相邻优先**（cheb==1），同层按曼哈顿距离最近；「相距相同」时按 actor id 稳定取小；同格不选 |
 | 真机 | 本卡只到构造级（合成帧）；真机由测试窗口负责，未起服务端 |
 
 ## 6. 验证

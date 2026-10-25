@@ -39,7 +39,7 @@ W-MQ-1 的 `643→767→44→645→5008`。这些帧是**状态同步**，断言
 | 夹具 `ani_count` 取了 AniCount（`bag_equip` 207、`eat_item` 3） | 按冻结 `Shape` 修正 | merge `062d6beb5` | 已合 master（**真机未复跑**） |
 | butch 场景缺装备前置 + 8 格×4 多点夹具 | 场景/profile 改 | merge `9f0208157` | 已合 master（**真机未复跑**） |
 | track 选靶「先最近再要求相邻」 | 相邻优先 + 有界等待 | merge `ecf13b1cf` | 已合 master（牙缺口见 `a10db670`） |
-| **`SM_BUTCH(637)` 被当成功判据** | 判据改「账本恰两抽」 | 卡 `openmir2-butch-637-criterion-fix`（dev-1） | **in-progress，未合** |
+| **`SM_BUTCH(637)` 被当成功判据** | 判据改「账本恰两抽」 | 卡 `openmir2-butch-637-criterion-fix`（dev-1） | **in-progress，未合**。**本条为已修缺陷的记录，不是判据**（验收 grep 的允许命中项） |
 | **`SM_GAMEGOLDNAME(5008)` 登录必发** | 改 `match:last` + `param/tag=0` | 卡 `openmir2-criteria-table-hardening`（tester） | **in-progress，未合** |
 | **`SM_MENU_OK(767)` 成功/失败共用提示通道** | 补 `body_text`/`order` | 同上 | **in-progress，未合** |
 | 判据表 `count_scope` / W-DG-2 旧口径 | 表更新 | `45e4bff33`、`8ddeca838`、`f56ae7a17`、`cfe03685b` | 已合 master |

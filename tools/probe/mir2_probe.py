@@ -395,10 +395,16 @@ def _need_keys(obj, where, required=(), optional=()):
 
 #: 场景里可用的**运行期令牌**（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
 #: 与静态 `params` 的区别：`params` 在加载期定值；令牌在**执行到该步时**从 `self.state` 取值。
-#: 目前只有 `send.recog` 会在运行期解析令牌（其它动作收到令牌按「无法解析」报 scenario-error）。
+#: 目前 `send` 的 `recog`/`param`/`tag`/`series` 四个字段会在运行期解析令牌
+#: （其它动作收到令牌按「无法解析」报 scenario-error）。
 RUNTIME_TOKENS = {
     "@last_kill_xy": "最近一次 kill 成功（result=dead）的尸体格 MakeLong(X,Y)；"
                      "kill 未成功/未执行时引用 ⇒ 报错（绝不回落 0、不用静态 params 顶替）",
+    "@last_kill_x": "同一尸体格的 X（`LowWord`）——`CM_BUTCH` 的 nParam2",
+    "@last_kill_y": "同一尸体格的 Y（`HighWord`）——`CM_BUTCH` 的 nParam3",
+    "@last_kill_actor": "被击杀目标的 **ActorId**——`CM_BUTCH` 的 nParam1（Recog）。"
+                        "`PlayObject.Operate.cs:702` 的签名是 `(charId, nX, nY, btDir)`，"
+                        "Recog **不是**坐标；发坐标进去 `ActorMgr.Get()` 必失败",
 }
 
 
@@ -1021,23 +1027,22 @@ def plan_step(step, index, params, depth=0):
         # recog/param/tag/series 与其它动作同口径：先 resolve_param（可写 params 名），
         # 再在 plan 期做范围校验（recog=i32，其余 u16）。否则要等到发送时 pack_header
         # 才抛 FrameError，被归类成 frame-parse(2) 而不是 scenario-error(2)。PRB-4。
-        recog = val.get("recog", 0)
-        if isinstance(recog, str) and recog.startswith("@"):
-            # 运行期令牌：加载期只校验**名字**（值要等 kill 步真的跑过），
-            # 拼错在这里就拒，并列出可用令牌（牙 d）。
-            if recog not in RUNTIME_TOKENS:
-                raise ScenarioError(
-                    "%s.send.recog: 未知运行期令牌 %r（可用：%s）"
-                    % (where, recog, ", ".join(sorted(RUNTIME_TOKENS))))
-            out["recog_token"] = recog
-            out["recog"] = None
-        else:
-            out["recog"] = _need_int(resolve_param(recog, params, where + ".send.recog"),
-                                     where + ".send.recog", -0x80000000, 0x7FFFFFFF)
-        for name in ("param", "tag", "series"):
-            out[name] = _need_int(
-                resolve_param(val.get(name, 0), params, where + ".send." + name),
-                where + ".send." + name)
+        # `recog` / `param` / `tag` / `series` 都可以写**运行期令牌**（`@last_kill_*`）：
+        # 加载期只校验**名字**（值要等 kill 步真的跑过），拼错在这里就拒并列出可用令牌。
+        ranges = {"recog": (-0x80000000, 0x7FFFFFFF), "param": (0, 0xFFFF),
+                  "tag": (0, 0xFFFF), "series": (0, 0xFFFF)}
+        for name, (lo, hi) in ranges.items():
+            v = val.get(name, 0)
+            if isinstance(v, str) and v.startswith("@"):
+                if v not in RUNTIME_TOKENS:
+                    raise ScenarioError(
+                        "%s.send.%s: 未知运行期令牌 %r（可用：%s）"
+                        % (where, name, v, ", ".join(sorted(RUNTIME_TOKENS))))
+                out[name + "_token"] = v
+                out[name] = None
+            else:
+                out[name] = _need_int(resolve_param(v, params, where + ".send." + name),
+                                      where + ".send." + name, lo, hi)
         out["body"] = (_encode_send_body(val, where + ".send", params)
                        if ("text" in val or "raw_hex" in val or "text_from" in val) else b"")
     elif action == "kill":
@@ -1466,9 +1471,9 @@ def _var_refs(data):
                 for key in ("recog", "param", "tag", "series"):
                     v = send.get(key)
                     if isinstance(v, str):
-                        # 运行期令牌（`@last_kill_xy`）不是 params 名：只有 `send.recog` 支持，
+                        # 运行期令牌（`@last_kill_*`）不是 params 名：`send` 的四个字段都支持，
                         # 交给 `plan_step` 校验令牌名（拼错在那里拒并列出可用令牌）。
-                        if key == "recog" and v.startswith("@"):
+                        if v.startswith("@"):
                             continue
                         refs.append((where + ".send." + key, v))
                 v = send.get("text_from")
@@ -2057,12 +2062,14 @@ class Run:
                     break
             if matched:
                 seq, fr = matched
-                self._write_last_kill_xy(conn, idx, tx | (ty << 16), fr, death, before)
+                self._write_last_kill_xy(conn, idx, tx | (ty << 16), fr, death, before,
+                                         actor=row.get("actor"))
                 self.steps.append({"index": idx, "kind": "kill", "mode": "track",
                                    "selector": plan["track"], "result": "dead",
                                    "target": row["actor"], "target_xy": tx | (ty << 16),
                                    "direction": direction, "swings": swings,
                                    "retries": retries, "turns": turns,
+                                   "waited": waited,
                                    "matched_seq": seq, "matched_ident": fr.ident,
                                    "matched_recog": fr.recog, "note": plan.get("note", "")})
                 return
@@ -2077,7 +2084,8 @@ class Run:
                     "no death frame among %s"
                     % (idx, swings, row["actor"], tx, ty, sorted(death)))
 
-    def _write_last_kill_xy(self, conn, idx, step_xy, matched, death_idents, since_seq):
+    def _write_last_kill_xy(self, conn, idx, step_xy, matched, death_idents, since_seq,
+                            actor=None):
         """写 `self.state["last_kill_xy"]`（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
 
         取值规则（**不许猜**）：
@@ -2090,15 +2098,21 @@ class Run:
         def cell(fr):
             return (fr.param & 0xFFFF) | ((fr.tag & 0xFFFF) << 16)
 
-        if matched is not None and cell(matched) == step_xy:
+        def _store():
             self.state["last_kill_xy"] = step_xy
+            self.state["last_kill_x"] = step_xy & 0xFFFF
+            self.state["last_kill_y"] = (step_xy >> 16) & 0xFFFF
+            self.state["last_kill_actor"] = actor
+
+        if matched is not None and cell(matched) == step_xy:
+            _store()
             return
         seen = []
         for seq, fr in conn.frames:
             if seq > since_seq and fr.ident in death_idents:
                 seen.append((seq, fr.ident, fr.param, fr.tag))
                 if cell(fr) == step_xy:
-                    self.state["last_kill_xy"] = step_xy
+                    _store()
                     return
         raise StepFailure(
             "steps[%s].kill: 死亡帧的 param/tag 与击杀步目标格 (%d,%d) 对不上 ⇒ 拒绝写 "
@@ -2169,7 +2183,8 @@ class Run:
                "note": plan.get("note", "")}
         if matched:
             seq, fr = matched
-            self._write_last_kill_xy(conn, idx, plan["target_xy"], fr, death, start_seq)
+            self._write_last_kill_xy(conn, idx, plan["target_xy"], fr, death, start_seq,
+                                     actor=fr.recog)
             rec.update(result="dead", matched_seq=seq, matched_ident=fr.ident,
                        matched_recog=fr.recog)
             self.steps.append(rec)
@@ -2270,17 +2285,24 @@ class Run:
                 "per-attempt pages (links/selected)=%r"
                 % (plan["index"], plan.get("stop_on_select"), plan["times"], attempts))
         if kind == "send" or kind in ("say", "click_npc", "dlg_select"):
-            recog = plan.get("recog")
-            token = plan.get("recog_token")
-            if token:
+            def _resolve_token(name):
+                token = plan.get(name + "_token")
+                if not token:
+                    return plan.get(name)
                 # 令牌名带 `@`（场景里可读），state 里的键不带 `@`。
-                recog = self.state.get(token[1:])
-                if recog is None:
+                v = self.state.get(token[1:])
+                if v is None:
                     raise ScenarioError(
-                        "steps[%s].send: 运行期令牌 %r 没有值——本轮 kill 尚未成功执行"
+                        "steps[%s].send.%s: 运行期令牌 %r 没有值——本轮 kill 尚未成功执行"
                         "（fail-closed：**不回落 0，也不拿静态 params 顶替**，否则会退回"
                         "「固定格打空」的形态）。可用令牌：%s"
-                        % (idx, token, ", ".join(sorted(RUNTIME_TOKENS))))
+                        % (idx, name, token, ", ".join(sorted(RUNTIME_TOKENS))))
+                return v
+
+            recog = _resolve_token("recog")
+            _tok_param = _resolve_token("param")
+            _tok_tag = _resolve_token("tag")
+            _tok_series = _resolve_token("series")
             if kind == "click_npc" and plan.get("_auto_recog") == "last_turn":
                 recog = self.state.get("last_turn_recog")
                 if recog is None:
@@ -2303,10 +2325,11 @@ class Run:
                     raise ScenarioError(
                         "steps[%s].dlg_select: no SM_MERCHANTSAY(643) seen yet; "
                         "cannot infer NPC recog (fail-closed)" % idx)
-            raw = conn.send(recog, plan["ident"], plan.get("param", 0),
-                            plan.get("tag", 0), plan.get("series", 0),
+            raw = conn.send(recog, plan["ident"], _tok_param, _tok_tag, _tok_series,
                             plan.get("body") or b"")
-            self._log_send(conn, raw, dict(plan, recog=recog), now_ms() - self.t0_ms)
+            self._log_send(conn, raw, dict(plan, recog=recog, param=_tok_param,
+                                           tag=_tok_tag, series=_tok_series),
+                           now_ms() - self.t0_ms)
             return
         if kind == "wait_for":
             after = conn.recorder.seq
@@ -4506,6 +4529,7 @@ def _selftest_kill():
       没刷出来（窗口内目标格零帧）——错误串各不相同。
     """
     import argparse as _argparse
+    import time as _time
     import tempfile as _tempfile
     import shutil as _shutil
 
@@ -4758,6 +4782,7 @@ def _selftest_track_adjacency():
     import argparse as _argparse
     import tempfile as _tempfile
     import shutil as _shutil
+    import time as _time
 
     self_xy = (330 | (330 << 16))
     checks = []
@@ -4781,6 +4806,42 @@ def _selftest_track_adjacency():
 
         def close(self):
             pass
+
+    class _TimedSock(object):
+        """**定时交付**的假 socket：`items=[(at_ms, bytes)]`，到点才给。
+
+        为什么不用预置帧：预置帧会在 `execute_step` 前被一次 `pump` 全消费 ⇒ 牙 b 根本进不到
+        等待分支（reviewer-20 F1）。这里首帧立刻给、后续帧 250/300ms 才给，模拟「鸡走进邻格」。
+        """
+
+        def __init__(self, timed):
+            self.items = sorted(timed, key=lambda it: it[0])
+            self.sent = []                      # [(t_ms, bytes)]
+            self.t0 = _time.time()
+
+        def _now(self):
+            return (_time.time() - self.t0) * 1000.0
+
+        def recv(self, n):
+            if self.items and self._now() >= self.items[0][0]:
+                return self.items.pop(0)[1]
+            raise socket.timeout()
+
+        def sendall(self, data):
+            self.sent.append((self._now(), bytes(data)))
+
+        def close(self):
+            pass
+
+    def run_timed(timed):
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-adj-")
+        args = _argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=200)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _TimedSock(list(timed))
+        return run, conn, tmpd
+
 
     def run_with(chunks):
         tmpd = _tempfile.mkdtemp(prefix="mir2probe-adj-")
@@ -4817,25 +4878,44 @@ def _selftest_track_adjacency():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
-    # 牙 b：初始只有 2 格外的目标，**等待期内**它走进邻格 ⇒ 应选中并出手。
-    # 不给死亡帧：本牙只证明「等待后选中并出手」，死亡/存活由别的牙覆盖。
-    run, conn, tmpd = run_with([turn_frame(701, 332, 330),
-                                build_s2c_frame(701, SM_WALK, 331, 330, 0, b""),
-                                build_s2c_frame(701, SM_WALK, 331, 331, 0, b"")])
+    # 牙 b（reviewer-20 F1）：**定时交付**——首帧「2 格外」立刻给、两只 SM_WALK 在 250/300ms 才给
+    # （模拟鸡走进邻格）⇒ 应等待后出手，且**等待期一帧都不写**（只允许 TURN/HIT）。
+    run, conn, tmpd = run_timed([
+        (0, turn_frame(701, 332, 330)),
+        (250, build_s2c_frame(701, SM_WALK, 331, 330, 0, b"")),
+        (300, build_s2c_frame(701, SM_WALK, 331, 331, 0, b"")),
+        # 死亡帧放在**首次 HIT 之后**（HIT 约 t≈950ms）⇒ 死亡发生在「等过一轮」的那次迭代里，
+        # 成功记录带着 waited>=1；放更早会被 `seq > before` 排除、放更晚会落到下一轮（waited=0）。
+        (1000, build_s2c_frame(701, SM_DEATH, 331, 331, 0, b"")),
+    ])
     try:
-        conn.pump(50)          # 先收首帧（同 _selftest_kill_track 的口径）
-        sent_before = len(conn.sock.sent)
-        plan_b = kill_plan(max_retries=3, interval_ms=450)
+        conn.pump(50)                      # 只拿到「2 格外」那一帧
+        base = len(conn.sock.sent)
         err = None
         try:
-            run.execute_step(conn, plan_b)
+            run.execute_step(conn, kill_plan(max_retries=3, interval_ms=450))
         except StepFailure as ex:
             err = str(ex)
-        swung = len(conn.sock.sent) >= sent_before + 2   # TURN + 至少 1 次 HIT
-        no_adj = err is not None and "都不在八向相邻格" in err
-        checks.append((swung and not no_adj,
-                       "牙b 目标 2 格外→等待期内走进邻格 ⇒ 不注入移动帧、等待后选中并出手"
-                       "（sent=%d，err=%r）" % (len(conn.sock.sent) - sent_before, err)))
+        sent = conn.sock.sent[base:]
+        first_t = sent[0][0] if sent else -1
+        # 等待期零 write：每条发送都必须**逐字节等于** TURN 或 HIT 的期望帧（方向 = 走到 (331,331) 后的 Dir）
+        d = DIRECTION_BY_DELTA[(1, 1)]
+        turn_expect = build_c2s_frame(self_xy, CM_TURN, 0, d, 0, b"")
+        hit_expect = build_c2s_frame(self_xy, CM_HIT, 0, d, 0, b"")
+        only_turn_hit = bool(sent) and all(raw in (turn_expect, hit_expect)
+                                           for _, raw in sent)
+        # 阈值取**第二只 SM_WALK 的交付时刻**（300ms），并直接断言 step 记录里 `waited >= 1`
+        # （reviewer-21 F6：旧阈值 200 抓不到「相邻目标在 wait 前就可用」——pump(450) 到窗口末才
+        # 返回，帧提前到 100/120ms 时首个发送仍是 ~501ms，只靠 first_t 分辨不出；`waited` 才准。
+        # 负例：帧提前到 30/40ms（落进 execute_step 前的 pump(50)）⇒ waited=0、first_t≈51ms ⇒ 本牙红。）
+        rec_b = run.steps[-1] if run.steps else {}
+        waited_b = rec_b.get("waited")
+        checks.append((not (err is not None and "都不在八向相邻格" in err)
+                       and len(sent) >= 2 and first_t >= 300 and only_turn_hit
+                       and waited_b is not None and waited_b >= 1,
+                       "牙b 定时交付：等 ≥300ms 才出手（首个发送 t=%.0fms）、等待期零 write"
+                       "（逐字节只发 TURN/HIT=%s，共 %d 帧）、step.waited=%r（>=1）；err=%r"
+                       % (first_t, only_turn_hit, len(sent), waited_b, err)))
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
@@ -4851,7 +4931,7 @@ def _selftest_track_adjacency():
             err = str(ex)
         rec = run.steps[-1] if run.steps else {}
         checks.append((err is not None and "都不在八向相邻格" in err
-                       and "cheb=2" in err and "(332,330)" in err
+                       and "cheb=2" in err and "manhattan=2" in err and "(332,330)" in err
                        and rec.get("result") == "no-adjacent",
                        "牙c 始终不相邻 ⇒ fail-closed 且报错含坐标与 cheb 距离（%r）" % (err,)))
     finally:
@@ -4864,10 +4944,11 @@ def _selftest_track_adjacency():
 
 
 def _selftest_runtime_token():
-    """运行期令牌 `@last_kill_xy`（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
+    """运行期令牌 `@last_kill_actor` / `@last_kill_x` / `@last_kill_y` / `@last_kill_xy`
+    （卡 `openmir2-probe-runtime-param-last-kill-xy`）。
 
     牙：
-      a. kill 成功 ⇒ `state["last_kill_xy"]` = 尸体格，且后续 `send.recog` 发出去的就是它；
+      a. kill 成功 ⇒ 四个令牌都有值，且后续 `send` 发出去的就是 recog=ActorId、param=X、tag=Y；
       b. kill 失败 ⇒ 引用令牌报错且**一帧不发**（不回落 0、不拿静态 params 顶替）；
       c. 未执行 kill ⇒ 同上；
       d. 令牌拼写错 ⇒ **加载期**拒并列出可用令牌；
@@ -4919,7 +5000,9 @@ def _selftest_runtime_token():
 
     kill_plan = plan_step({"kill": {"target_xy": tgt_xy, "max_swings": 6,
                                     "interval_ms": 350}}, 0, {"self_pos": self_xy})
-    butch_plan = plan_step({"send": {"ident": 1007, "recog": "@last_kill_xy"}}, 1,
+    # 用**四个令牌**拼 `CM_BUTCH`（Recog=charId、Param=X、Tag=Y）——这正是真机轮踩到的字段映射。
+    butch_plan = plan_step({"send": {"ident": 1007, "recog": "@last_kill_actor",
+                                     "param": "@last_kill_x", "tag": "@last_kill_y"}}, 1,
                            {"self_pos": self_xy})
 
     # a) kill 成功 ⇒ 令牌取到尸体格，后续 send 的 recog 就是它
@@ -4930,10 +5013,14 @@ def _selftest_runtime_token():
         run.execute_step(conn, butch_plan)
         sent = run.steps[-1]
         checks.append((run.state.get("last_kill_xy") == tgt_xy
-                       and sent["recog"] == tgt_xy
+                       and run.state.get("last_kill_x") == 330
+                       and run.state.get("last_kill_y") == 331
+                       and run.state.get("last_kill_actor") == 800
+                       and sent["recog"] == 800 and sent["param"] == 330
+                       and sent["tag"] == 331
                        and len(conn.sock.sent) == before + 1,
-                       "牙a kill 成功 ⇒ last_kill_xy=尸体格(330,331)，send.recog(@last_kill_xy)"
-                       " 发出的帧 recog 也是它（%r）" % (run.state.get("last_kill_xy"),)))
+                       "牙a kill 成功 ⇒ 四个令牌都有值；send 发出 recog=actor(800)/param=330/"
+                       "tag=331（%r / %r）" % (run.state.get("last_kill_actor"), sent)))
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
@@ -4974,13 +5061,13 @@ def _selftest_runtime_token():
     # d) 拼写错 ⇒ 加载期拒并列出可用令牌
     err = None
     try:
-        plan_step({"send": {"ident": 1007, "recog": "@last_kill_x"}}, 0,
+        plan_step({"send": {"ident": 1007, "recog": "@last_kill_bogus"}}, 0,
                   {"self_pos": self_xy})
     except ScenarioError as ex:
         err = str(ex)
     checks.append((err is not None and "未知运行期令牌" in err
                    and "@last_kill_xy" in err,
-                   "牙d 令牌拼写错 ⇒ 加载期拒并列出可用令牌（%r）" % (err,)))
+                   "牙d 令牌拼写错（@last_kill_bogus）⇒ 加载期拒并列出可用令牌（%r）" % (err,)))
 
     # e) 死亡帧坐标与目标格不一致 ⇒ 拒绝写（不猜）
     run, conn, tmpd = mk([[], [struck()], [struck()], [struck(), death(x=331, y=331)]])
@@ -5032,14 +5119,15 @@ def _selftest_runtime_token():
                    "牙CS-b 未声明的普通 params 名仍被拦（%r）" % (bad_err,)))
 
     typo_doc = {"name": "selftest_token_typo", "params": {"self_pos": self_xy},
-                "steps": [{"send": {"ident": 1007, "recog": "@last_kill_x"}}]}
+                "steps": [{"send": {"ident": 1007, "recog": "@last_kill_bogus"}},
+                          {"wait_for": 637, "timeout_ms": 1000}]}
     try:
         check_doc(typo_doc)
         typo_err = "accepted"
     except ScenarioError as ex:
         typo_err = str(ex)
     checks.append(("未知运行期令牌" in typo_err and "@last_kill_xy" in typo_err,
-                   "牙CS-d 拼错令牌 @last_kill_x 仍拒并列出可用令牌（%r）" % (typo_err,)))
+                   "牙CS-d 拼错令牌 @last_kill_bogus 仍拒并列出可用令牌（%r）" % (typo_err,)))
 
     bad = [msg for ok, msg in checks if not ok]
     if bad:
