@@ -395,7 +395,8 @@ def _need_keys(obj, where, required=(), optional=()):
 
 #: 场景里可用的**运行期令牌**（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
 #: 与静态 `params` 的区别：`params` 在加载期定值；令牌在**执行到该步时**从 `self.state` 取值。
-#: 目前只有 `send.recog` 会在运行期解析令牌（其它动作收到令牌按「无法解析」报 scenario-error）。
+#: 目前 `send` 的 `recog`/`param`/`tag`/`series` 四个字段会在运行期解析令牌
+#: （其它动作收到令牌按「无法解析」报 scenario-error）。
 RUNTIME_TOKENS = {
     "@last_kill_xy": "最近一次 kill 成功（result=dead）的尸体格 MakeLong(X,Y)；"
                      "kill 未成功/未执行时引用 ⇒ 报错（绝不回落 0、不用静态 params 顶替）",
@@ -2068,6 +2069,7 @@ class Run:
                                    "target": row["actor"], "target_xy": tx | (ty << 16),
                                    "direction": direction, "swings": swings,
                                    "retries": retries, "turns": turns,
+                                   "waited": waited,
                                    "matched_seq": seq, "matched_ident": fr.ident,
                                    "matched_recog": fr.recog, "note": plan.get("note", "")})
                 return
@@ -4882,6 +4884,9 @@ def _selftest_track_adjacency():
         (0, turn_frame(701, 332, 330)),
         (250, build_s2c_frame(701, SM_WALK, 331, 330, 0, b"")),
         (300, build_s2c_frame(701, SM_WALK, 331, 331, 0, b"")),
+        # 死亡帧放在**首次 HIT 之后**（HIT 约 t≈950ms）⇒ 死亡发生在「等过一轮」的那次迭代里，
+        # 成功记录带着 waited>=1；放更早会被 `seq > before` 排除、放更晚会落到下一轮（waited=0）。
+        (1000, build_s2c_frame(701, SM_DEATH, 331, 331, 0, b"")),
     ])
     try:
         conn.pump(50)                      # 只拿到「2 格外」那一帧
@@ -4899,11 +4904,18 @@ def _selftest_track_adjacency():
         hit_expect = build_c2s_frame(self_xy, CM_HIT, 0, d, 0, b"")
         only_turn_hit = bool(sent) and all(raw in (turn_expect, hit_expect)
                                            for _, raw in sent)
+        # 阈值取**第二只 SM_WALK 的交付时刻**（300ms），并直接断言 step 记录里 `waited >= 1`
+        # （reviewer-21 F6：旧阈值 200 抓不到「相邻目标在 wait 前就可用」——pump(450) 到窗口末才
+        # 返回，帧提前到 100/120ms 时首个发送仍是 ~501ms，只靠 first_t 分辨不出；`waited` 才准。
+        # 负例：帧提前到 30/40ms（落进 execute_step 前的 pump(50)）⇒ waited=0、first_t≈51ms ⇒ 本牙红。）
+        rec_b = run.steps[-1] if run.steps else {}
+        waited_b = rec_b.get("waited")
         checks.append((not (err is not None and "都不在八向相邻格" in err)
-                       and len(sent) >= 2 and first_t >= 200 and only_turn_hit,
-                       "牙b 定时交付：等 ≥250ms 才出手（首个发送 t=%.0fms）、等待期零 write"
-                       "（逐字节只发 TURN/HIT=%s，共 %d 帧；err=%r）"
-                       % (first_t, only_turn_hit, len(sent), err)))
+                       and len(sent) >= 2 and first_t >= 300 and only_turn_hit
+                       and waited_b is not None and waited_b >= 1,
+                       "牙b 定时交付：等 ≥300ms 才出手（首个发送 t=%.0fms）、等待期零 write"
+                       "（逐字节只发 TURN/HIT=%s，共 %d 帧）、step.waited=%r（>=1）；err=%r"
+                       % (first_t, only_turn_hit, len(sent), waited_b, err)))
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
@@ -4932,10 +4944,11 @@ def _selftest_track_adjacency():
 
 
 def _selftest_runtime_token():
-    """运行期令牌 `@last_kill_xy`（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
+    """运行期令牌 `@last_kill_actor` / `@last_kill_x` / `@last_kill_y` / `@last_kill_xy`
+    （卡 `openmir2-probe-runtime-param-last-kill-xy`）。
 
     牙：
-      a. kill 成功 ⇒ `state["last_kill_xy"]` = 尸体格，且后续 `send.recog` 发出去的就是它；
+      a. kill 成功 ⇒ 四个令牌都有值，且后续 `send` 发出去的就是 recog=ActorId、param=X、tag=Y；
       b. kill 失败 ⇒ 引用令牌报错且**一帧不发**（不回落 0、不拿静态 params 顶替）；
       c. 未执行 kill ⇒ 同上；
       d. 令牌拼写错 ⇒ **加载期**拒并列出可用令牌；

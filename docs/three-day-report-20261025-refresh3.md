@@ -19,7 +19,7 @@
 3. **harness 存档落定**（`7e2d04b6c` + `a07930f90`）：probe 后、拍库前等 `characters.LASTUPDATE` + `characters_ablity.ModifyTime` 指纹连续静默且 `changes>=1`，否则 `save_unsettled` rc=2 且不拍库。**真机四项判据 ①②③④ 通过**（双人独立复核），W1 的 `Weight 14/0` 假差异消失。
 4. **TZ-1 会话时区**（`059babb83`）+ **硬化**（`6286d3666`）：sqlx 默认 `+00:00` vs C# `SYSTEM` ⇒ 同刻落库差 8h；改为贴 oracle，并把时间列见证从「全域 presence 豁免」改成**逐列登记 + 限定本角色行 + 窗口 `[start−600s, end+600s]`**，缺 `db.time_columns` 键 ⇒ rc 2（fail-closed）。
 5. **`rules.json` 判据裁定**（`721ea45b8`）：53 条 PENDING ⇒ **50 转正 / 3 保留**（10/14/50），主标志保持保守口径；`ignore` 规则加**形态多重集比较**（`e335578bc`），**ident 14 裁定保持 PENDING**（转正会取消「形态不等 ⇒ UNDECIDABLE」的兜底）。
-6. **夹具与场景**：`fixtures.monsters` 改**前插**（`6f35b049f`，追加到 39020/3081 行表尾在窗口内永远轮不到）；`inventory_replace/drop`；`#14/#15` 迁到 replace（修的是「**发现的输入源**」：`SM_BAGITEMS(201)` 里没该物品 ⇒ 变量推不出）；`discovery` 改 `name:/pos:` 确定性寻址；probe 加 `track` 寻靶与 `@last_kill_xy` 运行期令牌。
+6. **夹具与场景**：`fixtures.monsters` 改**前插**（`6f35b049f`，追加到 39020/3081 行表尾在窗口内永远轮不到）；`inventory_replace/drop`；`#14/#15` 迁到 replace（修的是「**发现的输入源**」：`SM_BAGITEMS(201)` 里没该物品 ⇒ 变量推不出）；`discovery` 改 `name:/pos:` 确定性寻址；probe 加 `track` 寻靶与 `@last_kill_actor/x/y` 运行期令牌（`@last_kill_xy` 兼容保留）。
 7. **两处真实行为差异修复**：`SM_SKELETON(33)` 不是每刀都发（**637 也只是无条件回帧、不判成功**——见卡 `openmir2-butch-637-criterion-fix`）；**商人挂图空货架**（oracle `LoadNpcData` 末 `RefillGoods()`；Rust 只在 30s+ 计时支，且走过 `Dura==0` 过滤的路径 ⇒ 14 条 `[goods]` 只得 6 组）。
 
 ### 真机结果（今日）
@@ -37,7 +37,7 @@
 
 1. **真机窗口时段**（owner）：Q1 全量 21 条；G11 裁决是条件② 唯一 `merged_not_closed` 卡。
 2. **DB 面证据回填台账**：`run2` 3 条 PASS + 3 条 FAIL 的逐卡映射（`move_walk` 的 `HomeMap/HomeX/HomeY` 稳定差异已开卡 `openmir2-home-coords-divergence`）。
-3. **butch 真机链**（装备 Dc>0 → track 三段 → `@last_kill_xy` → 637 → 两抽账本）、ignore-count / neighbor-drift 的 ≥3 轮复跑。
+3. **butch 真机链**（装备 Dc>0 → track 三段 → `@last_kill_actor`/`@last_kill_x`/`@last_kill_y` → **RNG 账本恰两抽**；`SM_BUTCH(637)` 只作伴随证据）、ignore-count / neighbor-drift 的 ≥3 轮复跑。
 4. **`cargo_test_workspace`** 一次 `goal_gate --tests`。
 
 ---
