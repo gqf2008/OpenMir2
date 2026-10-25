@@ -14,7 +14,7 @@
 | 证据产物 | `<OutDir>/flow-stages-evidence.json`（schema `openmir2.mirflow-stages/1`） |
 | 抓包指纹 | `tools/capture/clienthook/Sha256.pas` + `Mir2ClientHook.dpr`（data 事件写**真实** sha256） |
 | 指纹校验 | `tools/capture/clienthook/verify_chunks.ps1`（逐 data 事件复算） |
-| 离线自检 | `tools/client/mir_flow.selftest.ps1`（新增 14a–14f）、`tools/capture/clienthook/selftest_verify_chunks.ps1`、`selftest_sha256.ps1` |
+| 离线自检 | `tools/client/mir_flow.selftest.ps1`（新增 14a–14i；含 A2/A3/A6/A7 牙）、`tools/capture/clienthook/selftest_verify_chunks.ps1`、`selftest_sha256.ps1` |
 
 **判据一律落在可观察副作用**，不用「某帧出现」当成功：
 
@@ -26,6 +26,10 @@
 | 有目标战斗 `combat` | profile `fixtures.monsters` 有**同图**靶子；`CM_HIT(3014)` 的 `Dir` 使「前方一格」正好是靶子格；距离 ≤ AP 范围 | `CM_HIT` 之后**非自己**的 actor 出现 `SM_STRUCK(31)`（HP 下降/伤害>0）或 `SM_DEATH(32)` |
 
 四类**各自独立**：每类的 RED 都由自己的前置/副作用判定，不共用一颗牙。
+
+> **「没生效」按成因归类**（卡 `openmir2-mirflow-verdict-cause-split`）：`missing_prereq ⇒ UNDECIDABLE(rc 6)` /
+> `spawn_failed ⇒ RED(rc 7)` / `out_of_range ⇒ RED(rc 8)`；「生效」时上表的证据字段**逐字不变**。
+> 用法错单独 `rc=2`，不落任何 verdict。详见 §11。
 
 ## 2. 用法
 
@@ -148,23 +152,31 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
 {
   "schema": "openmir2.mirflow-stages/1",
   "mode": "live | evidence-check",
+  "verdict_model": { "cause_driven": true, "kinds": ["missing_prereq", "spawn_failed", "out_of_range"],
+                     "rc": { "pass": 0, "red": 1, "usage": 2, "missing_prereq": 6, "spawn_failed": 7, "out_of_range": 8 } },
   "evidence_source": { "kind": "proxy", "path": "...", "since_ms": 0 },
   "profile": { "path": "...", "player_map": "0", "range_cells": 1 },
   "log_evidence": { "status": "SKIP|GREEN|RED", "files_scanned": 0, "lines_scanned": 0, "err_lines": 0, "reason": "..." },
   "categories": {
-    "pickup":    { "verdict": "GREEN|RED", "before": { "bag_rows": 5, "gold": 1000 },
+    "pickup":    { "verdict": "GREEN|RED|UNDECIDABLE", "verdict_kind": "ok|missing_prereq|wrong_cell|...", "rc": 0, "missing": [],
+                   "before": { "bag_rows": 5, "gold": 1000 },
                    "after": { "bag_rows": 6, "gold": 1000 }, "effect": { "kind": "bag_add", "...": "..." }, "reason": "..." },
     "npcdialog": { "click": { "ident": 1010, "ts_ms": 2000 },
                    "dialogue": { "say_frames": 1, "menu_frames": 0, "max_body_len": 60, "first_ts_ms": 2100 } },
     "trade":     { "kind": "buy", "request": { "ident": 1014 }, "dialogue": { "opens": 1, "dialogue_frames": 1 },
                    "success": { "ident": 650 }, "before": { "gold": 1000 }, "after": { "gold": 900 }, "gold_delta": -100 },
-    "combat":    { "target": { "map": "0", "x": 331, "y": 331, "name": "鸡", "count": 4, "distance": 1 },
+    "combat":    { "verdict": "GREEN|RED|UNDECIDABLE", "verdict_kind": "ok|missing_prereq|spawn_failed|out_of_range|aim_mismatch",
+                   "rc": 0, "missing": [],
+                   "target": { "map": "0", "x": 331, "y": 331, "name": "鸡", "count": 4, "distance": 1 },
                    "hit": { "own_x": 330, "own_y": 331, "dir": 2, "front_x": 331, "front_y": 331 },
                    "pixel_source": "explicit|projected|unknown", "pixel": { "x": 560, "y": 304 },
                    "effect": "hp", "hp_before": 10, "hp_after": 8, "max_hp": 10, "damage": 2, "actor": 8888 }
   }
 }
 ```
+
+> 成因字段是 `verdict_kind`（不是 `kind`）：`trade.kind` 仍是 `buy|sell`，**不覆盖既有字段**。
+> `verdict_kind`/`rc`/`missing` 只在「没生效」或「判不了」时有诊断意义；GREEN 时既有证据字段逐字不变。
 
 复算：`evidence_source.path` 指向的 hook 目录（`chunks.ndjson` + `conn-*.bin`）+ `-Profile`/`-PlayerMap` 就是全部输入；
 用同一条 `-StageEvidenceCheck` 命令重跑即得到同一份判定（无隐藏状态、无客户端）。
@@ -184,23 +196,28 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
-# => SELFTEST_PASS=121 SELFTEST_FAIL=0 ; SELFTEST_OK
+# => SELFTEST_PASS=140 SELFTEST_FAIL=0 ; SELFTEST_OK
 ```
 
 四类牙的原始输出（删掉前置/副作用 ⇒ 对应类别 RED 且点名）：
 
 | 牙 | 构造 | 原始输出（节选） |
 |---|---|---|
-| 捡物 | 有 `CM_PICKUP`，删掉 `SM_ADDITEM`/金币变化 | `STAGE_EVIDENCE category=pickup verdict=RED reason=取物后无入包（SM_ADDITEM 200）也无金币变化（SM_GOLDCHANGED 653）` |
-| 捡物② | `CM_PICKUP` 目标格 ≠ 角色格 | `... category=pickup verdict=RED ... != 角色格（服务端 oracle 会直接忽略）` |
-| NPC 对话 | 有 643 对话帧，删掉 `CM_CLICKNPC` | `STAGE_EVIDENCE category=npcdialog verdict=RED reason=未发出 c2s CM_CLICKNPC(1010)（点 NPC 前置动作缺失）` |
-| 买卖 | 有 1014+650+金币变化，删掉商人对话 | `STAGE_EVIDENCE category=trade verdict=RED reason=未先打开商人对话（前置缺失：不点 NPC 直接交易 / 无脚本说词帧）` |
-| 买卖② | 对话+650 都在，金币未变 | `... category=trade verdict=RED ... 金币未减少` |
-| 战斗 | profile 靶子在别的图（=没刷出） | `STAGE_EVIDENCE category=combat verdict=RED reason=profile 在 map=0 没有靶子（刷不出即 RED，不静默跳过）` |
-| 战斗② | `CM_HIT` 方向没指向靶子 | `... category=combat verdict=RED ... CM_HIT 朝向 dir=6 的前方格 (329,331) 与同图靶子不匹配（攻击未指向靶子）` |
-| 战斗③ | 打向靶子格但无任何掉血/死亡 | `... category=combat verdict=RED ... 无掉血(SM_STRUCK 31)也无死亡(SM_DEATH 32)（靶子可能没刷出）` |
+| 捡物 | 有 `CM_PICKUP`，删掉 `SM_ADDITEM`/金币变化 | `STAGE_EVIDENCE category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=floor_item ...`（96ad82a37：地面物结构性不可达） |
+| 捡物② | `CM_PICKUP` 目标格 ≠ 角色格 | `... category=pickup verdict=RED kind=wrong_cell rc=1 ... != 角色格（服务端 oracle 会直接忽略）` |
+| NPC 对话 | 有 643 对话帧，删掉 `CM_CLICKNPC` | `STAGE_EVIDENCE category=npcdialog verdict=RED kind=action_missing rc=1 reason=未发出 c2s CM_CLICKNPC(1010)（点 NPC 前置动作缺失）` |
+| 买卖 | 有 1014+650+金币变化，删掉商人对话 | `STAGE_EVIDENCE category=trade verdict=RED kind=no_dialogue rc=1 reason=未先打开商人对话（前置缺失：不点 NPC 直接交易 / 无脚本说词帧）` |
+| 买卖② | 对话+650 都在，金币未变 | `... category=trade verdict=RED kind=no_gold_change rc=1 ... 金币未减少` |
+| 战斗（不同图） | profile 靶子只在别的图 | `STAGE_EVIDENCE category=combat verdict=RED kind=out_of_range rc=8 ... 不同图` |
+| 战斗② | `CM_HIT` 方向没指向 AP 内的靶子 | `... category=combat verdict=RED kind=aim_mismatch rc=1 ... 攻击未指向靶子` |
+| 战斗③ | 声明在正前方但无任何掉血/死亡 | `... category=combat verdict=RED kind=spawn_failed rc=7 ... 无掉血(SM_STRUCK 31)也无死亡(SM_DEATH 32)` |
 | 战斗④（A1） | 把「显式像素」分支改成走投影（变异） | `FAIL stages combat A1: -CombatTargetPixel => pixel_source=explicit (600,320)` ⇒ 证据字段从 `explicit` 变 `projected` 即红 |
-| 阶段序（A2） | 假源里把 `Stage "talk"` 复制成两条（一条注释） | `FAIL stages A5 TOOTH: duplicated stage name => uniqueness RED  non_unique Stage "talk" x2`；同一假源上朴素 `IndexOf` 仍判有序（阳性对照 `PASS ... naive IndexOf would still call the duplicate ordered`） |
+| A3 牙1 | 删掉 `fixtures.monsters` 声明 | `verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=monster_fixture`（不是 RED、不是绿） |
+| A3 牙2 | 声明在正前方、刷不出 | `verdict=RED kind=spawn_failed rc=7`（不是 out_of_range） |
+| A3 牙3 | 声明在 AP 外 | `verdict=RED kind=out_of_range rc=8`（不是 spawn_failed） |
+| A7 牙 | `-StageEvidenceChek` 拼错 | `MIRFLOW USAGE: ... rc=2`，输出不含 `STAGE_EVIDENCE`/`kind=`/`verdict=` |
+| A2 门牙 | `-PrereqGateJson` 报 `gold` 缺 + 交易没生效 | `verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=gold`；门全备齐时同一失败帧仍 RED（负例牙） |
+| 阶段序（A2） | 假源里把 `Stage "talk"` 复制成两条（一条注释） | `FAIL stages A5 TOOTH: duplicated stage name => uniqueness RED  non_unique Stage "talk" x2`；同一假源上朴素 `IndexOf` 仍判有序（阳性对照） |
 
 对应 GREEN 反例（同一假根 + 补齐前置/副作用）：
 `category=pickup verdict=GREEN reason=取物副作用成立`、`npcdialog ... GREEN`、`trade ... GREEN reason=商人对白前置成立 + 成功帧 + 金币按方向变化`、`combat ... GREEN reason=靶子同图且在 AP 内 + 攻击指向靶子 + 目标掉血/死亡`。
@@ -259,10 +276,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
    **像素依赖窗口位置/尺寸/DPI（开放问题）**：这些值都是**绝对屏幕坐标**，「按 1024×768 标定」只说了一半——
    窗口必须固定在标定时的位置、缩放必须 100%（非 DPI 虚拟化）、不能改分辨率；窗口移动/换缩放后必须**重新标定**，
    否则同一组像素会落到别的格。真机若同时改了窗口，先复位窗口再判 RED。
-4. **同图证明**：经典协议线上没有图名；`-PlayerMap` 是**操作者断言**，不是机判。真机必须确认角色与 `fixtures.monsters` 的 map 一致（否则靶子在同格也打不到）。
-5. **刷怪是否真的刷出**：判据的最终防线是 `SM_STRUCK`/`SM_DEATH`；但「fixture 写了、服务器真刷了、玩家同屏」三者只能靠真机组合验证。若靶子没刷出，表现是 `combat RED：无掉血/死亡`。
+4. **同图证明**：经典协议线上没有图名；`-PlayerMap` 是**操作者断言**，不是机判。真机必须确认角色与 `fixtures.monsters` 的 map 一致（否则靶子在同格也打不到）。若 profile 只声明在别的图，判定会落 `RED kind=out_of_range rc=8`；但 `-PlayerMap` 本身写错时工具**无法**识别（仍是操作者责任）。
+5. **刷怪是否真的刷出**：判据的最终防线是 `SM_STRUCK`/`SM_DEATH`；但「fixture 写了、服务器真刷了、玩家同屏」三者只能靠真机组合验证。声明了同图靶子却无副作用 ⇒ `RED kind=spawn_failed rc=7`（离线只用假产物造过，真机需确认 MonGen 前置与同屏）。
 6. **服务端副作用形态**：`SM_ADDITEM/SM_GOLDCHANGED/SM_STRUCK/SM_DEATH` 的 header 口径已按 oracle 源码核对，但**未在 Rust 栈上实跑确认**（尤其是 `SM_ABILITY(52).recog=Gold` 的登录基线）。
-7. **交易成功条件**：买需要角色有足够金币；卖需要背包有可卖物品。冒烟角色金币为 0（`SM_ABILITY recog=0`），真机脚本要先备好金币/物品。
+7. **交易成功条件**：买需要角色有足够金币；卖需要背包有可卖物品。冒烟角色金币为 0（`SM_ABILITY recog=0`），真机脚本要先备好金币/物品。备不齐时把 `provision --gate` 的 JSON 传给 `-PrereqGateJson`，判定会落 `UNDECIDABLE kind=missing_prereq` 并点名（离线只验证了 JSON 消费，未连库）。
 8. **地板物品来源**：服务端只处理**角色格**上的物品。当前 profile 没有「地板物品」夹具；真机需先用怪物掉落/GM 放置，并让角色站上去。
 9. **NPC 脚本内容**：比奇国王等 NPC 必须真的发 643（#SAY）或 767（菜单，body 非空）；空回帧会 RED（这是故意的）。
 10. **时序参数**：`-ActionWaitSec=8`、`-TradeDialogMaxAgeSec=60`、右键→左键 400ms 都是保守值，未按真机延迟调过。
@@ -281,7 +298,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 ```powershell
 # 1) mir_flow 全套离线自检（含四类牙、A5/A6）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
-#    => SELFTEST_PASS=121 SELFTEST_FAIL=0 / SELFTEST_OK
+#    => SELFTEST_PASS=140 SELFTEST_FAIL=0 / SELFTEST_OK
 
 # 2) SHA-256 构造级自检（编译 Sha256.pas + FIPS/.NET 交叉）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/selftest_sha256.ps1
@@ -303,3 +320,92 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/bui
 
 - `tools/capture/clienthook/bin/`（`Mir2ClientHook.dll` / `Inject.exe` / `*.build.log`）：`build.ps1` 产物，**已在 `.gitignore`**；本批未删除（下一轮真机注入直接用）。
 - 无临时目录、无 worktree、无服务端进程；未改 `tools/e2e/run_e2e.ps1`、`mir2-rs/**`、`src/**`、`sql/`、`Envir/`。
+
+## 11. 成因驱动三档（卡 `openmir2-mirflow-verdict-cause-split`）
+
+> 裁决：**能不能测 = UNDECIDABLE；该发生却没发生 = RED。** 同一现象（动作没生效 / 靶子刷不出）按**成因**落到不同 `kind`，
+> `kind` 与退出码一一对应；用法错单独成码。本节是 §1/§5 判读口径的唯一来源。
+
+### 11.1 三档 kind / rc 契约
+
+| kind | verdict | rc | 含义 | 例子 |
+|---|---|---:|---|---|
+| `missing_prereq` | `UNDECIDABLE` | **6** | 前置夹具/配置没备齐 ⇒ 这一轮**根本没测**，不算 FAIL；输出必须点名 `missing=<项>` | `-Profile` 没声明 `fixtures.monsters`；`provision --gate` 报 `gold/npc/...` 缺 |
+| `spawn_failed` | `RED` | **7** | 夹具**已声明**（自认可控的输入）却刷不出/无副作用 | 靶子写在正前方，`CM_HIT` 后无 `SM_STRUCK`/`SM_DEATH` |
+| `out_of_range` | `RED` | **8** | 刷出但在 AP 外 / 不同图 ⇒ 夹具写错 | 靶子声明在 8 格外；`fixtures.monsters` 只在别的 `map` |
+| 其它 RED 成因 | `RED` | 1 | 旧口径/确定性驱动错误 | `kind=aim_mismatch` / `wrong_cell` / `no_dialogue` / `no_gold_change` |
+| 用法错 | —（不落任何 verdict） | **2** | 参数名/取值错，脚本没按意图跑 | `-StageEvidenceChek` 拼错；缺 `-ProxyDir`；`-PrereqGateJson` 文件不存在 |
+| PASS | `GREEN` | 0 | 副作用成立；既有证据字段**逐字不变** | — |
+
+- 机器判读：`STAGE_EVIDENCE category=<c> verdict=<v> kind=<k> rc=<n> missing=<a,b> reason=<...>`。
+  证据文件每个 category 同步带 `verdict_kind`（trade 的 `kind` 仍是 `buy|sell`，**不覆盖**既有字段）与 `missing`；
+  顶层新增 `verdict_model`。
+- 多类同跑聚合优先级：`out_of_range(8) > spawn_failed(7) > 其它 RED(1) > missing_prereq(6) > PASS(0)`——
+  只要有一类「该发生却没发生」，整体就不能算「判不了」。
+
+### 11.2 动作前显式前置门（A2）
+
+- `-PrereqGateJson <path>`：只读消费 `provision_real_machine_fixtures.py --gate` 的 JSON（`need/missing/reasons`）。
+  窗口当天生成（只读、只连测试库）：
+  ```powershell
+  python -I -B tools/client/provision_real_machine_fixtures.py --gate `
+    --db mir2_test_db_r --char aaa --map 3 --profile <profile.json> > E:\tmp\gate.json
+  ```
+- 门仅在**动作没生效**时参与归类：门说缺 `gold` + 交易无副作用 ⇒ `UNDECIDABLE missing=gold`；
+  门说全备齐（`missing=[]`）⇒ 同样的失败帧仍是 RED（门不得掩盖真 RED，selftest 有负例牙）。
+- 未给 `-PrereqGateJson` 时：monster 夹具从 `-Profile/-PlayerMap` 自行推导；`floor_item` 按 96ad82a37 裁决默认结构性缺失；
+  其它前置（gold/sellable_item/npc）**不臆断**，沿用 RED。
+
+### 11.3 A6：同一份假产物、只改一个成因
+
+真机最怕「同一种现象两种判法」。selftest 用**同一份** `$cbNoFx` 帧（`CM_HIT` own=(330,331) dir=2、无任何掉血/死亡），
+只改 profile（成因），三种结果必须各自成立、`kind` 与 `rc` 两两不同：
+
+```text
+A6_CAUSE_SPLIT cause=no_declaration      verdict=UNDECIDABLE kind=missing_prereq rc=6
+A6_CAUSE_SPLIT cause=declared_not_spawned verdict=RED kind=spawn_failed rc=7
+A6_CAUSE_SPLIT cause=declared_out_of_ap  verdict=RED kind=out_of_range rc=8
+```
+
+**单因子变异矩阵（reviewer-20 的验收方式）**：用同一份帧（`CM_HIT` own=(330,331) dir=2、无掉血/死亡），
+只改 profile 造四行；再逐条删掉 `Resolve-CombatCause` 里对应的一行，必须**只改那一行**：
+
+| 行 | 只开哪一因 | 基线 | 删掉该因条件后 |
+|---|---|---|---|
+| row1 | 夹具缺失 | `UNDECIDABLE kind=missing_prereq rc=6` | 变 `ok/0`；row2/3/4 不变 |
+| row2 | 该刷没刷 | `RED kind=spawn_failed rc=7` | 变 `ok/0`；row1/3/4 不变 |
+| row3 | 刷了但在 AP 外/异图 | `RED kind=out_of_range rc=8` | 变 `ok/0`；row1/2/4 不变 |
+| row4 | 三因全假 | `GREEN kind=ok rc=0` | 任何单因删除都不变 |
+
+三个成因是 `Get-CombatEvidence` 里三个**独立求值的布尔量**（`$prereqMissing` / `$outOfRange` / `$spawnFailed`），
+在单一分类点由纯函数 `Resolve-CombatCause` 汇合；**显式优先级** `missing_prereq > out_of_range > spawn_failed > ok`
+（没声明就无从判后两档；够不着时「没掉血」由距离解释，不能记成 `spawn_failed`）。
+`Resolve-CombatCause` 是三条独立 `if`，不是 `switch (cause)` 单分支枚举 ⇒「删该档谓词」有下手处。
+真值表（8 行，含两两/三三组合）：`000=ok`；`100=101=110=111=missing_prereq`；`010=011=out_of_range`；`001=spawn_failed`。
+
+变异在两处都验过（6 颗，全部还原）：① 删 `Resolve-CombatCause` 里该档那一行；② 把 `Get-CombatEvidence`
+里该档的谓词赋值改成 `$false`。两种做法都只改对应行，另外两行与 PASS 行不变。
+selftest 的 `A6 single-factor matrix` 与 `A6 resolver 8-row truth table` 两条即此矩阵的离线版。
+
+其它变异同样全部还原并自证：把 `out_of_range` 的 rc 改成 1、关掉 floor_item 结构性缺失、把 A7 的用法错 rc 改成 1、
+把 `missing_prereq` 改成 RED、把前置门改成「永远缺」——selftest 分别在 A6/A3/A7/A2 对应牙上报红；
+还原后 `git hash-object tools/client/mir_flow.ps1` 回到变异前 blob。
+
+### 11.4 A7：用法错 ≠ verdict
+
+PowerShell **简单脚本**（无 `[CmdletBinding()]`）对未知命名参数不报绑定错，而是塞进 `$args` 后继续执行——
+`-StageEvidenceChek` 会被静默忽略并继续跑（旧行为下甚至可能进 live 流程）。现在脚本体第一件事就是
+`$args.Count -gt 0 ⇒ MIRFLOW USAGE + rc=2`，在任何副作用/判定之前退出；缺必需参数同样 rc=2。
+牙：错参数名 ⇒ `rc=2` + `MIRFLOW USAGE` 且输出**不含** `STAGE_EVIDENCE`/`kind=`/`verdict=`；
+正确入口为阳性对照（不得 rc=2）。
+
+### 11.5 只有真机才能验的项（本轮离线不覆盖）
+
+1. **`spawn_failed` 的真实形态**：离线用「profile 声明了正前方靶子 + 无 `SM_STRUCK/DEATH`」造；真机要确认
+   服务端确实按 `fixtures.monsters`/MonGen 刷了怪、玩家同屏，才能把「刷不出」归到 `spawn_failed` 而不是「动作没打到」。
+2. **`out_of_range` 的真实形态**：离线用声明坐标与 `CM_HIT` 自身坐标算距离；真机要确认 `-PlayerMap` 与靶子图一致
+   （协议上没有图名，`-PlayerMap` 是操作者断言）。
+3. **前置门的真实取值**：`gold/sellable_item/npc/floor_item` 只能由 `provision --gate` 连测试库/读 Envir 得出；
+   离线只验证了 JSON 消费与归类，没有连库。
+4. **live 路径的 rc**：`Stop-StageEvidence` / 前置门 `exit 6/7/8` 在真机上是否按预期中止（离线只覆盖 `-StageEvidenceCheck`）。
+5. **`CM_HIT` 自身坐标与角色的关系**：离线以 `CM_HIT.recog=(x,y)` 为角色位；真机若二者不一致，`out_of_range` 的距离口径需复核。
