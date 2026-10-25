@@ -165,7 +165,7 @@
 | # | 项 | 结果 | 证据 |
 |---:|---|---|---|
 | 1 | worktree | **7 个**：主检出 + 5 条车道 + `E:/tmp/rev20-m2`（reviewer-20 的临时 detached） | `git worktree list`；**一个未删**（含身份与密钥） |
-| 2 | 分支 | **本地仅剩 `master`**（105 → 1）；**远端仅剩 4 个**：`master`、`main`、`backup/fixtures-mine`、`card/db-rerun`（后两者含**内容无法证明已在 master** 的提交，保留待人工判） | 本地删除全部非 master 分支（含先 `checkout --detach master` 释放 4 条车道占用的分支）；远端按「已合并」+「提交主题在 master 同名」+「`review/*` 检出分支（用途由签名 review 条目里的 sha 承担）」三道判据删除；**删除清单逐条记 `branch @ sha` 于 `E:/backup/branches-deleted-20261025.txt`（94 行）** |
+| 2 | 分支 | **本地只剩 `master`、远端也只剩 `master`**（本地 105→1；远端 126→1） | 本地：先 `checkout --detach master` 释放 5 条车道占用的分支再删；远端按「已合并」「提交主题在 master 同名」「`review/*` 检出分支」三道判据删。**唯一有独有内容的分支 `card/db-rerun` 走 `openmir2-db-rerun-salvage` 逐字节搬入 master（`b56ac6282`）后删除**——那两个 JSON 是今天 DB 面证据的复现工具，见 `docs/evidence-strength-review-20261025.md` §3B。删除清单 `E:/backup/branches-deleted-20261025.txt`（逐条 `branch @ sha`） |
 | 3 | 看板 | 9 张已合卡终态正确：**4 张 L 全 `closed`、5 张 R 全 `in-progress` + `window_required=true`** | 逐卡读线程末条 status（脚本汇总，非眼看） |
 | 4 | 进程 / 端口 | `E:/MirServer` **十个端口全部在监听**，进程 pid 与开工前一致（GameSrv 14040 / DBSrv 6808 / LoginSrv 7732 / gates 5832·22248·16280）；**无客户端进程** | `E:/MirServer/port-status.ps1` §3 |
 | 5 | 临时物 | 7 处保留项已登记（含**事故留证** `E:/tmp/rev20-fixture/MonGen.dirty.bak`） | 上文「临时物清单」表 |
