@@ -5,7 +5,10 @@
 //! **构造级**故障注入，再直接调用生产函数断言帧/库后态。
 //!
 //! 跑法（需本机 MySQL）：
-//! `cargo test -p db-srv --lib load_fault_tests -- --ignored --nocapture`
+//! `cargo test -p db-srv --lib -- --ignored --nocapture`
+//!
+//! （这里用**全量 ignored**，不写过滤名：本文件只是共享夹具，没有自己的 `mod`/`fn`，
+//! 写一个不存在的过滤名会得到 `running 0 tests / ok` 的假绿——正是 CMD-1 那类形态。）
 
 #![allow(clippy::doc_markdown)]
 
