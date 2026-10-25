@@ -98,15 +98,16 @@
     唯一可达路径是脚本 `GMEXECUTE` 抬权（`ExecutionProcessingSys.cs:4938-4947`）。
     ⇒ **任何用聊天 `say` 驱动非零权限 GM 命令的场景/夹具都结构性地跑不出东西**，P21 只是第一个撞上的；
     本卡裁决改为「命令体 + 构造级牙 + 权限门等价真机判据（两侧都记拒绝）」，脚本夹具另卡。裁决 `4e95fd56`。
-- **剩余窗口队列（四张 R 卡，都不贵；均需 owner 给时段，我不自行起栈）**：
+- **剩余窗口队列（五张 R 卡，都不贵；均需 owner 给时段，我不自行起栈）**：
   | 卡 | 跑什么 | 判据 | 代价 |
   |---|---|---|---|
   | `openmir2-gm-target-state-write` | `card_window.py --profile alt --scenario gm_level0_gate.json --out …` → `gm_gate_check.py check --run-dir … --before/--after --chr-name winplay0` | 逐侧恰 1 条 `权限不够!!!`（Red 255/56）、零 200/202/622/45/52/752、`characters_ablity.Level` 跑前后逐字节相同；**只跑 frames 会判 UNDECIDABLE(rc=2)**，G3 必须带前后 DB 快照 | 零夹具、~2 分钟 |
   | `openmir2-dir-persistence-writeback` | 与今天 `dir-diag` **同一条命令**：`card_window.py --card openmir2-dir-persistence-writeback --profile E:/tmp/window/butch-run/profile.json --scenario tools/probe/scenarios/butch_two_draws.json --rng-log --out …` | 两侧 `characters.Dir` 相等，且 `CX/CY`＝实时坐标（不是载入值）；另核 `characters_item.Dura` 仍归 T-266 磨损 RNG | 复用现成场景与 profile，~3 分钟 |
   | `openmir2-softclose-cleanup-residue`（仅 A1） | **场景已就绪**（`e57024dbc` 合入 `softclose_relogin.json` + probe `relogin` 步：等自身 41 → walk → `CM_SOFTCLOSE` → 重连 → 段2 等新的 41，`assert_same_actor` 默认 true）；**但可观测面只到条件 ①**——条件 ②（名字/行会取自新实体）**单客户端看不到**（oracle 给自身的 `SM_FEATURECHANGED` 五参、无名字尾；带名尾只走观察者 `RM_TURN`+`GetShowName()`） | ① 两段 ActorId 相同 + 展示表清空；② **需观察者客户端**（另开卡） | ① 本窗口可跑；② 未就绪 |
   | `openmir2-gm-script-fixture`（A1 示范） | `card_window.py --profile tools/window/profiles/gm_script_level0.json --scenario gm_script_level0.json --out …` | **每侧 `characters_ablity.Level == 5`（期望值，不是两侧相等）** + 帧面 `45→52→752` 逐字段 + A2 权限门对照同轮复跑 | 需 `files` 夹具注入（已合 `d9a0dd2fe`），~3 分钟 |
+  | `openmir2-kick-display-residue`（顶号展示表） | 与软关卡同一轮：走 `softclose_relogin` 或顶号场景，**看第二段 `SM_TURN` 携带的 `GetShowName()`** | 顶号后 actor id 被复用 ⇒ 屏上名字/行会取自**新实体**（需观察者客户端，同下条 ②） | 构造级已证（`displays` 条目被摘、bystander 保留）；屏面需观察者 |
   > **用法订正（2026-10-25 复核）**：`--profile` 的取值是**内置 profile 名**（`alt` / `window-magic` / `window-testdb`，`card_window.py:460`）**或一个 `.json` 路径**；`--profile alt.json` 这种写法**不存在该文件**（`tools/window/profiles/` 下只有 `bag_equip` / `butch_monsters` / `castle_tax_upgrade` / `eat_item` 等派生件）。GM 那行用内置 `alt`，Dir 那行用现存的 `E:/tmp/window/butch-run/profile.json`。
-  > 为什么列出来：这四项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
+  > 为什么列出来：这五项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
   > softclose 那张已分三次落地：**A1（展示表）`9224c2ebd`** → **F1/F2 两颗牙 + K1 `bd1a03c5e`**（`close_cleanup_residue` 接缝、既有锚按「顺序 + 四容器逐个点名」两件独立承重改写、三态行为牙、调用点锚）；**A2 组队归 `makeghost`**（成员关系挂团长实体 `party.rs:428-456` + 退组时点晚 ~402ms）。**K1 教训**：调用点锚原本只剥 `//` ⇒ 把调用整块 `/* … */` 注释掉（一行未删）测试仍全绿，**5 个字符摘掉了整个修复**；现 `strip_rust_comments` 同时剥 `//` 与块注释（含跨行、保留换行），且**仓库级同形写法（`castle_insertion_tests::strip_line_comments`）一并修**。**关闭前还差三项**：① 真机展示表内容 ② 观察者客户端（另卡 `a3f97eda`）③ **`openmir2-kick-display-residue`**（issue `d482e428`：顶号路径 `drain_kicks` 签名无 `displays` 且提前摘 `ground_sessions` ⇒ 同一残留）。
 
 - **临时物清单（DoD 要求：清掉或登记；下列均**保留**，因为它们是证据）**：
