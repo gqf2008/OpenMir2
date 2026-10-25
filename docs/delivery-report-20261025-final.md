@@ -82,10 +82,16 @@
 ## 5. 残留物与待办
 
 - **G11**（`openmir2-gm-batch-5b-cross-server`）：条件② 唯一 `merged_not_closed`，需 owner 裁决是否列基础设施阻塞排除项。
-- **真机窗口项**（不在代码交付范围内，按 `docs/window-closure-ledger-20261025.md` 执行）。
-- **`openmir2-bag-weight-sink`**（L）：把 622 发射规则收进单点，排在交付窗口之后。
-- **帧对齐改进**（`ea6ae394` 规格）：`compare_runs` 现按位置配对，一侧缺帧会整段错位（实测 50 条 diff 里 44 条是错位噪声）；实现在交付后评估。
-
+- **真机窗口已开始收口**（交付后推进，不影响四条件）：
+  - ✅ **`openmir2-butch-two-draws-unblock` 已 `closed`** —— 今天第一张凭真机证据收口的 R 卡（账本恰两抽 + site + 次序 + 值域，三重独立验证）。
+  - `openmir2-bag-weight-sink`（L）：主体与 O1/O2 follow-up 已合；**真机 buy 帧序比对进行中**（`buy` 可验；`pick_up` 结构性不可达 T-19/T-25；`P21` 待 GM 写通道）。
+  - `openmir2-dir-persistence-writeback`（**R**）：`characters.Dir` 存档写回不随实体更新 —— 假说已压到「逐字段刷新清单漏了 Dir」（同行 `Map/CX/CY` 已刷新、独 `Dir` 取载入值）。
+  - `openmir2-gm-target-state-write`（**R**）：Rust 侧 `@Level0` 一族 16 条 GM 命令是 no-op，挡着所有「靠 GM 改数值再验行为」的场景。
+- **工具面待办（均 L，交付后）**：
+  - `openmir2-tool-selftest-gate`：把工具自测纳入门禁（**评审 RC**：25 项「出域」里 6 项其实可自动判红）。
+  - `openmir2-orphan-scenario-gate`：`blocked_sources_check` **只扫 run3 行、不扫场景目录** ⇒ 5 个 blocked 孤儿永不被校验而门仍 rc=0（P21 标本是活样本）。
+  - **帧对齐改进**（`ea6ae394` 规格）：`compare_runs` 现按位置配对，一侧缺帧会整段错位（实测 50 条 diff 里 44 条是错位噪声）。
+  - **harness 前置建议**：`move_walk` 那次 UNDECIDABLE 是「存档在途 ⇒ 服务端拒动作」，与「RNG 账本被裁」同族——**环境状态伪装成行为差异**，建议加 pre-action「存档已落定」前置。
 - **工具缺口（登记）**：`goal_gate` 的 `conditions[0].evidence.command` 记了 `parse-stats` 的**完整 argv**（含 exe 绝对路径，
   语料是部署件 `E:\MirServer\M2GameSvr\Envir`），但 **`evidence` 里没有二进制的内容指纹（sha256）** ⇒ 路径上的文件可被后续重建覆盖，
   事后无法自证「当时的结论是哪个二进制跑出来的」。本次由窗口侧自留痕 `/e/tmp/final-window/script-tool.sha256` 补上这一环。
