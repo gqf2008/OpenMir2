@@ -101,6 +101,13 @@
 为 `true` ⇒ **该次证据作废、需重跑，不得判 FAIL**。清单写在 `docs/butch-ledger-run-checklist-20261025.md` §4。
 把裁剪策略改成「保留 head + 关键段」属 harness 改动，**登记未做**。
 
+### 4b. 独立方的签名汇总（报告只引用，不复制过程记录）
+
+- **tester-1 整合循环汇总**：条目 **`80ee1a9ca8f18f02cc95086230ca8822c157c866`**（线程 `openmir2-tester-integration-loop`，根 issue `7e5bed75`，`verified=true`，推送后 `unpushed=0`）：
+  > tester-1 整合循环：产物 tip=`681a59def` 单次 --full 绿（running 3329 = passed 3266 + ignored 63 / 141 suite，门禁 7/7）；`681a59def..eef41a335` 仅 docs，文档敏感门逐 tip 复跑全绿；`.last-tested` 追到 docs-only tip `eef41a335` 仅为记账，非全量 tip。
+
+> **引用而不是复制**的理由：过程记录会随状态变化而过期，**带 oid 的签名条目不会**——它指向的那一刻永远可复现（`walgit collab thread` + 该 oid）。
+
 ## 5. 残留物与待办
 
 - **G11**（`openmir2-gm-batch-5b-cross-server`）：条件② 唯一 `merged_not_closed`，需 owner 裁决是否列基础设施阻塞排除项。
