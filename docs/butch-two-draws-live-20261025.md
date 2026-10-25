@@ -83,27 +83,33 @@ Rust `seq=110 / t=10949ms / recog=605 / param=330 / tag=330`。
 
 `report.json` 的 `db.state = compared`，两侧快照有 **2 条**字段差异。**都不是本卡判据**，但必须记账。
 
-### 4.1 `characters.Dir`：C# `0` / Rust `3`（PlayerId 6228）—— **新差异（存档面），跨场景复现**
+### 4.1 `characters.Dir`：C# `0` / Rust `3`（PlayerId 6228）—— **存档面稳定签名（机制待新卡定位）**
 
 | 事实 | 值 |
 |---|---|
 | 两侧 XY | `Map=0, CX=330, CY=330`（**都正确落库**，与实时位置一致） |
 | C# `Dir` | **0** = `btDir`（`CM_BUTCH` 的 `series`；oracle `Operate.cs:736` 在位置支内无条件 `Dir = btDir`） |
-| Rust `Dir` | **3** = **基线值**（基线 dump 里 winplay0 是 `B013 / (7,12) / Dir=3`） |
-| 帧面 | Rust 的 `SM_BUTCH(637)` 携带 `Dir=0`，与 C# 相同 ⇒ **命令时刻方向是对的** |
+| Rust `Dir` | **3** = **基线/种子值**（基线 dump 里 winplay0 是 `B013 / (7,12) / Dir=3`） |
+| 帧面 | 两侧 `SM_BUTCH(637)` 的 `Dir` 同为 `0`——**这只证「帧上方向一致」**：帧的 dir 取 `if dir_updated { bt_dir } else { cur_dir }`，**不证明实体已被写** |
 
-判定：**不是「帧/实体未供给方向」**——帧上 `Dir` 两侧一致且为 0；差异只出现在**持久化**：
-Rust 把**载入值**（3）写回了 `characters.Dir`，C# 写的是 butch 后的 `Dir`（0）。
-因此**不能**归到 `openmir2-player-dir-supply`（那张保证的是 `dir_updated ⇒ e.ai.dir = bt_dir` 与帧/展示一致）。
+**稳定签名 = 「Rust 从不更新该列」**（本场景 `0/3`；见下方跨四根证据），**不是**「Rust 把载入值写回」这种
+对机制已有定论的表述。机制至少三候选，由新卡定位：
 
-**同一签名在别的场景也出现**：W1 的 `move_walk` 当时记过 `Dir 2 → 3`（本目录旧报告 `docs/window-evidence-backfill-20261025.md` §6.2 判为 flaky），
-而基线同样是 `Dir=3` ⇒ 同一形态：**Rust 的 `characters.Dir` 落的是载入值**。
-⇒ 归为**存档面通用差异**（不是 butch 专属）。已开卡归属：**`openmir2-dir-persistence-writeback`**
-（issue `2d76ef7a`，tier **R**，`window_required`）——本节的证据链即该卡的输入；定位需要带
-`CM_BUTCH … dir_updated=` 与服务端存档链路的日志，候选机制两条：
-(a) `dir_updated` 在运行时未置位（但帧上 `Dir=0` 又提示置位过）、(b) 命令之后实体 `ai.dir` 被重置。
-**并订正**：W1 `move_walk` 的 `Dir 2→3` 当时被判 flaky（`docs/window-evidence-backfill-20261025.md` §6.2），
-按本条证据应改判为**稳定差异**（同一签名、同一基线值）。
+- **(a)** `dir_updated` 在运行时未置位；
+- **(b)** 命令之后实体 `ai.dir` 被重置；
+- **(c)** **存档投影时会话/实体不可解析 ⇒ 整块跳过、保留载入值**：`build_save_record` 里
+  `if let Some(e) = world.session(chr_name)…entities.get(id)` 才写 `rec.data.dir = e.dir()`，
+  解析不到就整块跳过（`lib.rs:9416-9437`）——这条**代码可直接指认**，reviewer-20 补入。
+
+**跨四根证据（比单场景强）**：`db-rerun/run` 与 `db-rerun/run2` 的 `move_walk` 都是 **C# `2` / Rust `3`**；
+`w1c/move_walk` **两侧都 `3`** ⇒ **Rust 侧 `Dir` 恒为 `3`（种子值），C# 随场景变（`0`/`2`/`3`）**
+⇒ 「该列从不更新」是**跨场景稳定签名**，不是 butch 专属。
+
+因此**不能**归到 `openmir2-player-dir-supply`（那张保证 `dir_updated ⇒ e.ai.dir = bt_dir` 与帧/展示一致）。
+归属：**`openmir2-dir-persistence-writeback`**（**issue `f72e479f`**，tier **R**，`window_required`）。
+
+**引用订正**：`Dir 2→3` 出现在 **`db-rerun/run{,2}/move_walk`**，**不在 `w1c/move_walk`**（那里两侧都是 3）；
+`docs/window-evidence-backfill-20261025.md` §6.2 当时把 `Dir 2→3` 判为 flaky，按本条跨四根证据**改判为稳定差异**。
 
 ### 4.2 `characters_item.Dura`：C# `3993` / Rust `3989`（item 106）—— **已登记 T-266**
 
