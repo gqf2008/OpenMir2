@@ -47,14 +47,17 @@ LIST_ROW_RE = re.compile(r'^\s*(\d+)\s+(\S+)\s+(\S+)\s+(YES|-)\s*(.*)$')
 BLOCKED_TOKENS = {
     'butch_two_draws': {
         'source': 'docs/blocked-scenarios-audit-20261025.md §1.2',
+        'absent': ('未合',),
         'tokens': ('3081', '616', 'ProcessMonsterMultiThreadLimit'),
     },
     'castle_merchant_tax': {
         'source': 'docs/blocked-scenarios-audit-20261025.md §2.2/§2.3',
+        'absent': ('未合',),
         'tokens': ('652', '原因未定位', '已证伪'),
     },
     'castle_merchant_tax_upgrade': {
         'source': 'docs/blocked-scenarios-audit-20261025.md §3.2/§3.3',
+        'absent': ('未合',),
         'tokens': ('已证伪', 'NPC'),
     },
 }
@@ -119,8 +122,14 @@ def token_present(text, tok):
 
 
 def scene_text(scene):
+    """场景 JSON 里参与 token/禁用词判定的文本：**description + reason + missing_fixture**。
+
+    `description` 必须纳入（卡 `openmir2-run3-stale-card-status-json` 的 N1）：上一张卡的陈旧文案
+    恰好写在 description 里，只扫 blocked 字段会漏。
+    """
     b = scene.get('blocked') or {}
-    return '%s\n%s' % (b.get('reason') or '', b.get('missing_fixture') or '')
+    return '%s\n%s\n%s' % (scene.get('description') or '',
+                             b.get('reason') or '', b.get('missing_fixture') or '')
 
 
 def scene_reason_ok(scene):
@@ -144,6 +153,12 @@ def validate_tokens_table(tokens):
             raise UsageError('断言表 %r.tokens 必须是非空字符串数组' % name)
         if not isinstance(src, str) or not src.strip():
             raise UsageError('断言表 %r 缺 source 锚（表也要可追溯）' % name)
+        absent = entry.get('absent')
+        if not isinstance(absent, (list, tuple)) or not absent or any(
+                not isinstance(w, str) or not w for w in absent):
+            raise UsageError(
+                '断言表 %r 缺 absent（禁用词，如 未合/尚未合）——必须显式登记，'
+                '不得因缺省而漏（fail-closed）' % name)
 
 
 def parse_list_output(path):
@@ -202,6 +217,16 @@ def check(run3_path, scenes_dir, list_output=None, tokens=None):
                 'blocked_sources_check.BLOCKED_TOKENS 登记 tokens + source，不得绕过检查）' % name)
         row_text = row.get('blocked') or ''
         stext = scene_text(scene)
+        for word in entry['absent']:
+            where = []
+            if word in row_text:
+                where.append('清单行')
+            if word in stext:
+                where.append('场景 JSON')
+            if where:
+                problems.append(
+                    '%s：%s 文案含禁用词 %r（已关闭/已合入的卡不得写成未合；断言表 source=%s）'
+                    % (name, '+'.join(where), word, entry['source']))
         for tok in entry['tokens']:
             where = []
             if not token_present(row_text, tok):
@@ -249,24 +274,27 @@ def selftest():
         scenes = os.path.join(tmp, 'scenarios')
         os.makedirs(scenes)
         run3 = os.path.join(tmp, 'run3.json')
-        table = {'a': {'source': 'audit §1', 'tokens': ('TOK1', 'TOK2')}}
+        table = {'a': {'source': 'audit §1', 'absent': ('未合',),
+                       'tokens': ('TOK1', 'TOK2')}}
         row_b = {'name': 'a', 'blocked': '清单：TOK1 与 TOK2 都在'}
         row_ok = {'name': 'b'}
 
-        def write(rows, scene_block, reason='场景：TOK1 TOK2 都在'):
+        def write(rows, scene_block, reason='场景：TOK1 TOK2 都在', description=None):
             json.dump({'format': 'run3/1', 'scenarios': rows},
                       open(run3, 'w', encoding='utf-8'), ensure_ascii=False)
             for row in rows:
                 name = row['name']
                 sdoc = {'name': name, 'steps': []}
+                if description is not None:
+                    sdoc['description'] = description
                 if name in scene_block:
                     sdoc['blocked'] = {'reason': reason, 'missing_fixture': '夹具'}
                 json.dump(sdoc, open(os.path.join(scenes, name + '.json'), 'w',
                                      encoding='utf-8'), ensure_ascii=False)
 
         def run(rows, scene_block, reason='场景：TOK1 TOK2 都在', table_=None, extra_rows=None,
-                list_path=None):
-            write(rows, scene_block, reason)
+                list_path=None, description=None):
+            write(rows, scene_block, reason, description)
             try:
                 return check(run3, scenes, list_path, table_ if table_ is not None else table)
             except UsageError as ex:
@@ -290,12 +318,14 @@ def selftest():
         chk(isinstance(out, tuple) and out[0] == 'USAGE' and 'c' in out[1],
             '牙e：未登记的 blocked 场景 ⇒ rc=2 点名')
         # 牙 f：表里的 token 从两侧文案里都删掉（表不改）⇒ 红（自一致性）
-        table2 = {'a': {'source': 'audit §1', 'tokens': ('TOK1', 'GONE')}}
+        table2 = {'a': {'source': 'audit §1', 'absent': ('未合',),
+                        'tokens': ('TOK1', 'GONE')}}
         probs, _ = run([{'name': 'a', 'blocked': '清单：TOK1 在'}, row_ok], {'a'},
                        reason='场景：TOK1 在', table_=table2)
         chk(any("'GONE'" in p for p in probs), '牙f：表 token 与两侧文案不一致 ⇒ 红')
         # 牙 g：数字 token 词边界（616 不应被 6160 命中）
-        table3 = {'a': {'source': 'audit §1', 'tokens': ('616', 'TOKX')}}
+        table3 = {'a': {'source': 'audit §1', 'absent': ('未合',),
+                        'tokens': ('616', 'TOKX')}}
         probs, _ = run([{'name': 'a', 'blocked': '清单：TOKX 在，数 6160'}, row_ok], {'a'},
                        reason='场景：TOKX 在，数 6160', table_=table3)
         chk(any("'616'" in p for p in probs), '牙g：token 616 不被 6160 命中 ⇒ 红')
@@ -303,12 +333,14 @@ def selftest():
                        reason='场景：TOKX 在，数 616', table_=table3)
         chk(probs == [], '牙g-对照：token 616 正常出现 ⇒ 绿')
         # 牙 h：3081 vs 30810
-        table4 = {'a': {'source': 'audit §1', 'tokens': ('3081',)}}
+        table4 = {'a': {'source': 'audit §1', 'absent': ('未合',),
+                        'tokens': ('3081',)}}
         probs, _ = run([{'name': 'a', 'blocked': '清单：30810'}, row_ok], {'a'},
                        reason='场景：30810', table_=table4)
         chk(any("'3081'" in p for p in probs), '牙h：token 3081 不被 30810 命中 ⇒ 红')
         # 牙 i：652 vs 1652
-        table5 = {'a': {'source': 'audit §1', 'tokens': ('652',)}}
+        table5 = {'a': {'source': 'audit §1', 'absent': ('未合',),
+                        'tokens': ('652',)}}
         probs, _ = run([{'name': 'a', 'blocked': '清单：1652'}, row_ok], {'a'},
                        reason='场景：1652', table_=table5)
         chk(any("'652'" in p for p in probs), '牙i：token 652 不被 1652 命中 ⇒ 红')
@@ -323,11 +355,36 @@ def selftest():
                        reason='场景：TOKX 在，≈616s', table_=table3)
         chk(probs == [], '牙g4-对照：≈616s（字母边界）仍命中 ⇒ 绿')
         # 非数字 token 仍是子串语义：含在长标识符里也算
-        table6 = {'a': {'source': 'audit §1', 'tokens': ('ProcessMonsterMultiThreadLimit',)}}
+        table6 = {'a': {'source': 'audit §1', 'absent': ('未合',),
+                        'tokens': ('ProcessMonsterMultiThreadLimit',)}}
         probs, _ = run([{'name': 'a', 'blocked': '清单：x ProcessMonsterMultiThreadLimit x'},
                         row_ok], {'a'},
                        reason='场景：x ProcessMonsterMultiThreadLimit x', table_=table6)
         chk(probs == [], '非数字 token 维持子串语义 ⇒ 绿')
+        # 牙 j：禁用词「未合」出现在清单行 ⇒ 红
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOK1 TOK2，卡未合'}, row_ok], {'a'})
+        chk(any('未合' in p and '清单行' in p for p in probs),
+            '牙j：清单行含禁用词「未合」⇒ 红')
+        # 牙 k：禁用词只出现在场景 JSON ⇒ 红
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOK1 TOK2'}, row_ok], {'a'},
+                       reason='场景：TOK1 TOK2，卡未合')
+        chk(any('未合' in p and '场景 JSON' in p for p in probs),
+            '牙k：场景 JSON 含禁用词「未合」⇒ 红')
+        # 牙 k2：禁用词只出现在 **description** ⇒ 红（N1：只扫 blocked 会漏）
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOK1 TOK2'}, row_ok], {'a'},
+                       description='描述：这张卡未合，先别用')
+        chk(any('未合' in p and '场景 JSON' in p for p in probs),
+            '牙k2：description 含禁用词「未合」⇒ 红')
+        # 牙 l：合法文案（已合入 + 尚未接入 run3）⇒ 绿
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOK1 TOK2，已合入 c5ec908e1，尚未接入 run3'},
+                        row_ok], {'a'},
+                       reason='场景：TOK1 TOK2，已合入 c5ec908e1，尚未接入 run3')
+        chk(probs == [], '牙l：合法文案（已合入/尚未接入）⇒ 绿')
+        # 牙 m：表项缺 absent ⇒ rc=2（不得因缺省而漏）
+        out = run([row_b, row_ok], {'a'},
+                  table_={'a': {'source': 'audit §1', 'tokens': ('TOK1', 'TOK2')}})
+        chk(isinstance(out, tuple) and out[0] == 'USAGE' and 'absent' in out[1],
+            '牙m：表项缺 absent ⇒ rc=2')
         # 表项缺 source ⇒ rc=2
         out = run([row_b, row_ok], {'a'},
                   table_={'a': {'tokens': ('TOK1',)}})
