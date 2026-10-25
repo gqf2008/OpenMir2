@@ -128,7 +128,9 @@
 //! - **收包接线**（把 `CM_PICKUP`/`CM_DROPITEM` 派发进世界循环）归 m2-svr 车道（`lib.rs`/`smframe.rs`）。
 
 use crate::ability::{Ability, ItemCatalog};
-use crate::bag::{add_item_to_bag, item_display_name, BagItem, Frame, MAX_BAG_ITEM};
+use crate::bag::{
+    add_item_to_bag_with_sink, item_display_name, BagItem, Frame, WeightSink, MAX_BAG_ITEM,
+};
 use crate::useitem::QueuedNotice;
 use mir2_shared::rng::RandomNumber;
 
@@ -420,6 +422,28 @@ fn dequeue_order(mut notices: Vec<QueuedNotice>) -> Vec<QueuedNotice> {
     notices
 }
 
+/// [`pick_up`] 的 [`WeightSink`]：`WeightChanged()`（`BaseObject.cs:1771-1774`）
+/// = 重算 `WAbil.Weight` + 入队 `RM_WEIGHTCHANGED`。
+///
+/// 顺序与收敛前逐行一致：`added_item`（`SendAddItem` 的尾要用实际入包的件）→ 重算 → 通知。
+struct PickUpWeightSink<'a> {
+    catalog: &'a dyn ItemCatalog,
+    notices: &'a mut Vec<QueuedNotice>,
+    wabil: &'a mut Ability,
+    race_is_play: bool,
+    added_item: &'a mut Option<BagItem>,
+}
+
+impl WeightSink for PickUpWeightSink<'_> {
+    fn on_item_added(&mut self, items: &[BagItem]) {
+        if self.race_is_play {
+            *self.added_item = items.last().cloned();
+        }
+        self.wabil.weight = recalc_bag_weight(self.catalog, items);
+        update(self.notices, RM_WEIGHTCHANGED);
+    }
+}
+
 /// `PlayObject.ClientPickUpItem()`（`PlayObject.Base.cs:55`）的纯函数等价物。
 ///
 /// 原地改 `state`（`item_list`/`gold`/`wabil`）与 `map`（删除/放回地面物品）。
@@ -511,14 +535,16 @@ pub fn pick_up(
                 ctx.curr_y,
             ));
             // `AddItemToBag`：满包不追加、也不 WeightChanged；本分支已过 `IsEnoughBag`。
-            if add_item_to_bag(&mut state.item_list, u, MAX_BAG_ITEM) {
-                // `SendAddItem(userItem)` 的尾需要**实际入包**的 `UserItem`（G-1）。
-                if ctx.race_is_play {
-                    added_item = state.item_list.last().cloned();
-                }
-                state.wabil.weight = recalc_bag_weight(ctx.catalog, &state.item_list);
-                update(&mut notices, RM_WEIGHTCHANGED);
-            }
+            // 卡 `openmir2-bag-weight-sink`：`WeightChanged()` 收进单点经 sink 回调，
+            // 三行副作用（added_item → 重算 → 通知）的顺序与收敛前**逐行一致**。
+            let mut sink = PickUpWeightSink {
+                catalog: ctx.catalog,
+                notices: &mut notices,
+                wabil: &mut state.wabil,
+                race_is_play: ctx.race_is_play,
+                added_item: &mut added_item,
+            };
+            let _ = add_item_to_bag_with_sink(&mut state.item_list, u, MAX_BAG_ITEM, &mut sink);
             if ctx.race_is_play {
                 immediate_frames.push(Frame {
                     ident: SM_ADDITEM,

@@ -19259,6 +19259,23 @@ fn hutil_round(v: f64) -> i32 {
     v.round() as i32
 }
 
+/// P21（[`drain_player_need_recheck_with_magic`]）的 [`game_svr::bag::WeightSink`]：
+/// `AddItemToBag` 内的 `WeightChanged()`（`BaseObject.cs:1771-1774`）在这里只做两件事——
+/// 重算 `WAbil.Weight`、置 `weight_changed` 标志；622 仍由本段**之后**统一发，
+/// 线上位置与收敛前一致（同 ident 的 `SendUpdateMsg` 去重 ⇒ 只有一条）。
+struct P21WeightSink<'a> {
+    catalog: &'a dyn game_svr::ability::ItemCatalog,
+    wabil: &'a mut game_svr::ability::Ability,
+    fired: &'a mut bool,
+}
+
+impl game_svr::bag::WeightSink for P21WeightSink<'_> {
+    fn on_item_added(&mut self, items: &[game_svr::bag::BagItem]) {
+        self.wabil.weight = game_svr::ground::recalc_bag_weight(self.catalog, items);
+        *self.fired = true;
+    }
+}
+
 /// **PL-1 / P21**：玩家 `Run` 的装备需求每-Run 复检（`PlayObject.Message.cs:403-441`）。
 ///
 /// 逐行口径（**连 bug 一起搬**）：
@@ -19373,10 +19390,18 @@ fn drain_player_need_recheck_with_magic(
             // 本宿主克隆进包，故要记下入包位置，在下面的 `UseItems[i].Index = 0` 处模拟别名。
             let mut bag_pos: Option<usize> = None;
             let item = sg.use_items[i].clone().expect("index > 0 ⇒ Some");
-            if game_svr::bag::add_item_to_bag(
+            // 卡 `openmir2-bag-weight-sink`：`WeightChanged()` 收进单点经 sink 回调
+            // （重算 `WAbil.Weight` + 置 `weight_changed`）；622 仍在本段之后统一发。
+            let mut sink = P21WeightSink {
+                catalog,
+                wabil: &mut sg.state.wabil,
+                fired: &mut weight_changed,
+            };
+            if game_svr::bag::add_item_to_bag_with_sink(
                 &mut sg.state.item_list,
                 item,
                 game_svr::bag::MAX_BAG_ITEM,
+                &mut sink,
             ) {
                 bag_pos = Some(sg.state.item_list.len() - 1);
                 // `SendAddItem` 即时帧（模板必存在，因为上面 `catalog.get` 成功）。
@@ -19385,11 +19410,6 @@ fn drain_player_need_recheck_with_magic(
                 {
                     immediate.push(game_svr::smframe::sm_additem(actor_id, &tail));
                 }
-                // `AddItemToBag` 内部 `WeightChanged()` + P21 再调一次：同 ident 的
-                // `SendUpdateMsg` 去重 ⇒ 线上只有一条。
-                sg.state.wabil.weight =
-                    game_svr::ground::recalc_bag_weight(catalog, &sg.state.item_list);
-                weight_changed = true;
                 bo_take_item = true;
             } else {
                 let std_mode = tpl.std_mode;
