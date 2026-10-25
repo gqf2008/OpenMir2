@@ -91,3 +91,34 @@ grep -i 'SaveHumanRcdTime' !Abc.txt ; grep '周期存档' game-svr.out.log
 - 构造级：`apply/变更 e.ai.dir` 后调用 `build_save_record` ⇒ 取到**新值**；
   变异：把投影改成读 `saved.record.data.dir` ⇒ 必红。
 - 若机制为 M1：再加一条「重复装载标量后 `ai.dir` 不被覆盖」的构造牙（变异：去掉防护 ⇒ 红）。
+
+## 7. 修法边界表（oracle `GetHumData` 口径，离线已定）
+
+oracle `WorldServer.cs:1100 GetHumData` 的调用点只有**两处**：`:248`（无 switchData 支）与 `:412`（switchData 支），
+**都在「进入世界」流程里、对新建的 `PlayObject` 执行**；函数体对下表字段**一律无条件装载**（`playObject.Dir = humData.Dir` 等）。
+
+| 字段 | oracle 装载时机 | 进图后是否被后置覆盖 | 运行期写点（oracle） | Rust 对应 |
+|---|---|---|---|---|
+| `Dir` | 进入世界时（`GetHumData`） | 否 | 转向/走跑/9 条攻击/`CM_SPELL` default/`CM_BUTCH` 的 `Dir=btDir` | `apply_login_record_scalars`（`lib.rs:14181`，首进图 `:23053`） |
+| `AttackMode` | 同上 | 否 | `@AttackMode` 等 | `attack_mode`（登录装载） |
+| `Gold` | 同上 | 否 | 交易/掉落/`CM_DROPGOLD` | `sg.state.gold`（会话态） |
+| 位置 `CurrX/CurrY` | 同上 | **是**：switch 支用 `switchDataInfo` 覆盖（`:414-416`） | 走/跑/传送 | 实体 `e.x/e.y` |
+| `Abil` | 同上 | **是**：switch 支用 `switchDataInfo.Abil` 覆盖 | 战斗/升级 | `sg.recovery` 等 |
+
+**⇒ 由 oracle 推出的修法边界（判完 M1/M3 后按此落地）**：
+
+1. oracle **不存在**「对**已在世界里**的对象重装全量标量」的路径——`GetHumData` 只在新建对象时执行一次；
+   所以若判为 **M1（会话中重装）**，正确修法是**让装载只发生在首次进图/新建实体上**，
+   （或只补未建模字段），**不是**给 `Dir` 打特判；
+2. 若判为 **M3（存档投影整块跳过）**，修法不涉及装载口径，而是**存档分支的实体解析**（`lib.rs:9416-9437`）；
+3. 无论哪种，**都不要**把 `Dir` 加进忽略列。
+
+## 8. 「环境状态伪装成行为差异」清单（harness runbook 素材）
+
+同类样例已有三个，全部指向同一纪律：**先确认环境状态，再解释差异**。
+
+| # | 形态 | 观测 | 真相 | 判据化处置 |
+|---|---|---|---|---|
+| 1 | **存档在途** | C# `CM_WALK` 无 `SM_WALK`，只有 `SM_TURN`×N + `SYSMESSAGE`×N | 登录期间 `InSaveRcdList` 未清，服务端拒动作（日志「角色数据保存中,稍后重新读取」） | 起栈/登录后先等该行消失再动作（`grep -c '角色数据保存中'`） |
+| 2 | **RNG 账本被裁** | 账本里「两抽没发生」 | `trim_rng_ledger` 超限只留 head，而抽数在后半段（实测 7.2k 行/s） | 跑完先看 `rng_log_trim.trimmed`；为 `true` ⇒ 证据作废、重跑，**不判 FAIL** |
+| 3 | **检出不全** | `oracle_vectors` 假红 | 检出里缺文件/构建陈旧 | 起栈前核 pid 的 `exe` 路径与构建时间；`require_pid_binaries` fail-closed 不要绕过 |
