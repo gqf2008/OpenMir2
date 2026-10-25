@@ -117,7 +117,8 @@ class Selftest(object):
                     f.write(json.dumps(fr, ensure_ascii=True, sort_keys=True) + "\n")
         if run_meta:
             with open(os.path.join(d, "run.json"), "w", encoding="utf-8", newline="\n") as f:
-                json.dump({"argv": ["synth", name], "started_at": "2026-01-01T00:00:00",
+                json.dump({"argv": ["synth", name, "--char-name", "winplay0"],
+                           "started_at": "2026-01-01T00:00:00",
                            "ended_at": "2026-01-01T00:00:10", "steps": []},
                           f, ensure_ascii=False, indent=2)
                 f.write("\n")
@@ -2538,6 +2539,15 @@ class Selftest(object):
     def t_db(self):
         dp = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
         cols = list(dp.TABLE_SPECS["mir2_db.characters_ablity"]["columns"])
+        # 列集必须与登记表一致（否则 `db_schema` 结构漂移先红，测不到见证本身）。
+        char_cols = list(dp.TABLE_SPECS["mir2_db.characters"]["columns"])
+        i_id, i_name, i_upd = (char_cols.index("Id"), char_cols.index("ChrName"),
+                               char_cols.index("LASTUPDATE"))
+
+        def char_row(cid, name, mt):
+            r = ["0"] * len(char_cols)
+            r[i_id], r[i_name], r[i_upd] = cid, name, mt
+            return r
 
         def rows(level):
             row = ["0"] * len(cols)
@@ -2553,9 +2563,11 @@ class Selftest(object):
             r[0][cols.index("ModifyTime")] = "2025-12-31 16:00:05"   # 早 8h = UTC 落库形态
             return r
 
-        def snap(prefix, level):
+        def snap(prefix, level, mt="2026-01-01 00:00:05", char="winplay0"):
             return {"format": "dbsnap-inline/1",
-                    "tables": [{"table": prefix + ".characters_ablity",
+                    "tables": [{"table": prefix + ".characters", "columns": char_cols,
+                                "rows": [char_row("1", char, mt)]},
+                               {"table": prefix + ".characters_ablity",
                                 "columns": cols, "rows": rows(level)}]}
 
         frames = [self.frame(50, b"", phase="login"), self.frame(658, b"x", phase="notice")]
@@ -2595,92 +2607,153 @@ class Selftest(object):
                                     for u in (rep5 or {}).get("undecidable", [])),
                    (rc5, (rep5 or {}).get("undecidable")))
 
-        # ---- 时间列见证（卡 openmir2-dbsrv-session-timezone ④）----------------------
+        # ---- 时间列见证（卡 openmir2-dbsrv-session-timezone / follow-up `...-hardening`）----
+        # 判据：**本角色行**在运行窗口 [start − lead, end + tol] 内有写入；不能只看表内最大值
+        # （别人的行 / 上一次运行的行会误绿），也不能逐行判（历史行永远 stale）。
+        def snap_tz(prefix, mt, extra_chars=(), char_name="winplay0", char_id="1", level=7):
+            """characters（本角色 1 行 + 可选的「别人」行）+ characters_ablity（本角色 1 行）。"""
+            chars = [char_row(char_id, char_name, mt)] + [list(r) for r in extra_chars]
+            r = rows(level)
+            r[0][cols.index("PlayerId")] = char_id
+            r[0][cols.index("ModifyTime")] = mt
+            return {"format": "dbsnap-inline/1",
+                    "tables": [{"table": prefix + ".characters", "columns": char_cols,
+                                "rows": chars},
+                               {"table": prefix + ".characters_ablity", "columns": cols,
+                                "rows": r}]}
+
+        def with_clock(d, start, end, char="winplay0"):
+            path = os.path.join(d, "run.json")
+            argv = ["probe"] + (["--char-name", char] if char else [])
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                json.dump({"argv": argv, "started_at": start, "ended_at": end}, f)
+                f.write("\n")
+            return d
+
+        def tz_pair(tag, mt_o, mt_r, start="2026-01-01T00:00:00", end="2026-01-01T00:00:10",
+                    extra_chars=(), **kw):
+            ex = [char_row(*r) for r in extra_chars]
+            od_ = self.write_run("tz-%s-o" % tag, frames,
+                                 db=snap_tz("mir2_test_db", mt_o, extra_chars=ex, **kw))
+            rd_ = self.write_run("tz-%s-r" % tag, frames,
+                                 db=snap_tz("mir2_test_db_r", mt_r, extra_chars=ex, **kw))
+            with_clock(od_, start, end)
+            with_clock(rd_, start, end)
+            return self.compare(od_, rd_, ["--allow-missing-fields"])
+
         def rules_with(db_patch, name):
             data = json.loads(json.dumps(self.builtin_rules))
             data["db"] = dict(data.get("db") or {})
             data["db"].update(db_patch)
             return self.rules_file(name, data)
 
-        # 牙a：rust 侧写 UTC（比运行墙钟早 8h）⇒ 必须红（这正是 TZ-1 的形态）
-        rd_tz = self.write_run("t15-r-tz", frames, db={
-            "format": "dbsnap-inline/1",
-            "tables": [{"table": "mir2_test_db_rust.characters_ablity", "columns": cols,
-                        "rows": [list(r) for r in rows_utc(7)]}]})
-        rc_tz, rep_tz = self.compare(od, rd_tz, ["--allow-missing-fields"])
-        self.check("牙a 时间列 plausible：rust 写 UTC（早 8h）=> rc 1 time_witness_stale",
+        # 基线：两侧都在窗口内写 ⇒ rc 0
+        rc_tz, rep_tz = tz_pair("base", "2026-01-01 00:00:05", "2026-01-01 00:00:05")
+        self.check("牙TZ-a 本角色行在窗口内写（两侧）=> rc 0", rc_tz == 0,
+                   (rc_tz, (rep_tz or {}).get("diffs")))
+
+        # 8h 偏移（TZ-1 形态）⇒ stale
+        rc_tz, rep_tz = tz_pair("utc", "2026-01-01 00:00:05", "2025-12-31 16:00:05")
+        self.check("牙TZ-b rust 写 UTC（早 8h）=> rc 1 time_witness_stale",
                    rc_tz == 1 and any(d.get("source") == "db"
                                       and d.get("kind") == "time_witness_stale"
                                       for d in (rep_tz or {}).get("diffs", [])),
                    (rc_tz, (rep_tz or {}).get("diffs")))
 
-        # 牙b：未登记的时间列 ⇒ rc 2 time_witness_unregistered（不许全域豁免）
-        rp_unreg = rules_with({"time_columns": {
-            "mir2_account.account": {}, "mir2_account.account_protection": {},
-            "mir2_db.characters": {}, "mir2_db.characters_indexes": {},
-            "mir2_db.characters_ablity": {}}}, "t15-rules-unregistered.json")
-        rc_un, rep_un = self.compare(od, rd, ["--allow-missing-fields", "--rules", rp_unreg])
-        self.check("牙b 时间列未登记 => rc 2 time_witness_unregistered（点名 characters_ablity.ModifyTime）",
+        # G2：历史行（2022）+ 窗口内一行 ⇒ 绿（证明不是逐行判）
+        rc_tz, rep_tz = tz_pair("hist", "2026-01-01 00:00:05", "2026-01-01 00:00:05",
+                                extra_chars=[["9", "someone", "2022-12-22 00:00:02"]])
+        self.check("牙TZ-g 历史行(2022) + 窗口内本角色行 => rc 0（逐行判会多一条 stale）",
+                   rc_tz == 0, (rc_tz, (rep_tz or {}).get("diffs")))
+
+        # F1-A：5 分钟前**别人**写的行 + 本角色行停在旧值 ⇒ 必须红（原来的 max-only 会误绿）
+        rc_tz, rep_tz = tz_pair("f1a", "2022-12-22 00:00:02", "2022-12-22 00:00:02",
+                                start="2026-01-01T00:05:00", end="2026-01-01T00:05:10",
+                                extra_chars=[["9", "someone", "2026-01-01 00:04:30"]])
+        self.check("牙TZ-h F1-A 只别人 5 分钟前写过、本角色没写 => rc 1（不许误绿）",
+                   rc_tz == 1 and any(d.get("source") == "db"
+                                      and d.get("kind") == "time_witness_stale"
+                                      for d in (rep_tz or {}).get("diffs", [])),
+                   (rc_tz, (rep_tz or {}).get("diffs")))
+
+        # F1-C：本角色行是「上一次运行」写的（比 start 早 300s）⇒ 必须红（下界 slack 只有 lead）
+        rc_tz, rep_tz = tz_pair("f1c", "2026-01-01 00:00:00", "2026-01-01 00:00:00",
+                                start="2026-01-01T00:05:00", end="2026-01-01T00:05:10")
+        self.check("牙TZ-i F1-C 本角色行写于 start 前 300s => rc 1（下界 slack=lead=30s）",
+                   rc_tz == 1 and any(d.get("source") == "db"
+                                      and d.get("kind") == "time_witness_stale"
+                                      for d in (rep_tz or {}).get("diffs", [])),
+                   (rc_tz, (rep_tz or {}).get("diffs")))
+
+        # F1-B：本角色写了、且表里有更晚的「别人」行 ⇒ 仍绿（不许误红）
+        # F1-B：本次写了（在窗口内），但**同一角色**还有一行更晚的（窗口外）⇒ 仍绿。
+        # 「只看最大值」的写法会把这一行误判成 stale（窗口外）⇒ 用 any-in-window 才不会误红。
+        rc_tz, rep_tz = tz_pair("f1b", "2026-01-01 00:00:05", "2026-01-01 00:00:05",
+                                start="2026-01-01T00:00:00", end="2026-01-01T00:00:10",
+                                extra_chars=[["9", "winplay0", "2026-06-01 00:00:00"]])
+        self.check("牙TZ-j F1-B 本角色窗口内写过 + 同行更晚的一行（窗口外）=> rc 0（不许误红）",
+                   rc_tz == 0, (rc_tz, (rep_tz or {}).get("diffs")))
+
+        # 620s 长场景：运行**开头**写（距结束 620s）⇒ 绿（窗口口径，不是「距 end」）
+        rc_tz, rep_tz = tz_pair("win", "2026-01-01 00:00:00", "2026-01-01 00:00:00",
+                                start="2026-01-01T00:00:00", end="2026-01-01T00:10:20")
+        self.check("牙TZ-e 620s 长场景：运行开头写的时间列 => rc 0（判据是窗口）",
+                   rc_tz == 0, (rc_tz, (rep_tz or {}).get("diffs")))
+
+        # 窗口下界：比 start 早 660s ⇒ 红
+        rc_tz, rep_tz = tz_pair("early", "2025-12-31 23:49:00", "2025-12-31 23:49:00",
+                                start="2026-01-01T00:00:00", end="2026-01-01T00:10:20")
+        self.check("牙TZ-f 比 start 早 660s => rc 1 time_witness_stale", rc_tz == 1,
+                   (rc_tz, (rep_tz or {}).get("diffs")))
+
+        # 未登记 ⇒ rc 2；presence 显式放行 ⇒ rc 0；缺墙钟 ⇒ rc 2；缺键（G1）⇒ rc 2
+        rp_unreg = rules_with({"time_columns": {}}, "tz-rules-unregistered.json")
+        od_u = self.write_run("tz-un-o", frames, db=snap_tz("mir2_test_db", "2026-01-01 00:00:05"))
+        rd_u = self.write_run("tz-un-r", frames, db=snap_tz("mir2_test_db_r", "2026-01-01 00:00:05"))
+        with_clock(od_u, "2026-01-01T00:00:00", "2026-01-01T00:00:10")
+        with_clock(rd_u, "2026-01-01T00:00:00", "2026-01-01T00:00:10")
+        rc_un, rep_un = self.compare(od_u, rd_u, ["--allow-missing-fields", "--rules", rp_unreg])
+        self.check("牙TZ-k 时间列未登记 => rc 2 time_witness_unregistered",
                    rc_un == 2 and any(u.get("kind") == "db_time_witness_unregistered"
-                                      and (u.get("record") or {}).get("column") == "ModifyTime"
                                       for u in (rep_un or {}).get("undecidable", [])),
                    (rc_un, (rep_un or {}).get("undecidable")))
 
-        # 牙c：同一列登记成 presence ⇒ 8h 差异被显式放行（不再有隐式豁免）
         rp_pres = rules_with({"time_columns": {
-            "mir2_account.account": {}, "mir2_account.account_protection": {},
-            "mir2_db.characters": {}, "mir2_db.characters_indexes": {},
-            "mir2_db.characters_ablity": {"ModifyTime": {"mode": "presence", "why": "selftest"}}}},
-            "t15-rules-presence.json")
-        rc_pr, rep_pr = self.compare(od, rd_tz, ["--allow-missing-fields", "--rules", rp_pres])
-        self.check("牙c 登记 presence => rc 0（放行是显式登记的结果，不是隐式豁免）",
-                   rc_pr == 0, (rc_pr, (rep_pr or {}).get("diffs")))
+            "mir2_db.characters": {"CREATEDATE": {"mode": "presence", "why": "selftest"},
+                                   "LASTUPDATE": {"mode": "presence", "why": "selftest"}},
+            "mir2_db.characters_ablity": {"ModifyTime": {"mode": "presence", "why": "selftest"}},
+            "mir2_db.characters_indexes": {},
+            "mir2_account.account": {}}}, "tz-rules-presence.json")
+        rc_pr, rep_pr = self.compare(od_u, rd_u, ["--allow-missing-fields", "--rules", rp_pres])
+        self.check("牙TZ-c 登记 presence => rc 0（放行是显式登记的结果）", rc_pr == 0,
+                   (rc_pr, (rep_pr or {}).get("diffs")))
 
-        # 牙d：plausible 但该侧 run.json 没有墙钟 ⇒ rc 2 time_witness_no_clock
-        rd_noclk = self.write_run("t15-r-noclk", frames, run_meta=False, db={
-            "format": "dbsnap-inline/1",
-            "tables": [{"table": "mir2_test_db_rust.characters_ablity", "columns": cols,
-                        "rows": rows(7)}]})
-        rc_nc, rep_nc = self.compare(od, rd_noclk, ["--allow-missing-fields"])
-        self.check("牙d plausible 但缺 run.json 墙钟 => rc 2 time_witness_no_clock",
+        rd_noclk = self.write_run("tz-noclk-r", frames,
+                                  run_meta=False, db=snap_tz("mir2_test_db_r", "2026-01-01 00:00:05"))
+        rc_nc, rep_nc = self.compare(od_u, rd_noclk, ["--allow-missing-fields"])
+        self.check("牙TZ-d plausible 但缺 run.json 墙钟 => rc 2 time_witness_no_clock",
                    rc_nc == 2 and any(u.get("kind") == "db_time_witness_no_clock"
                                       for u in (rep_nc or {}).get("undecidable", [])),
                    (rc_nc, (rep_nc or {}).get("undecidable")))
 
-        # 牙e/f（reviewer-20）：判据是**运行窗口**，不是「距结束 ≤ 600s」。
-        # 长场景（#23 带 620s sleep）里，运行途中写的时间列距结束可 >600s —— 必须放行。
-        def snap_at(mt):
-            r = rows(7)
-            r[0][cols.index("ModifyTime")] = mt
-            return {"format": "dbsnap-inline/1",
-                    "tables": [{"table": "mir2_test_db_r.characters_ablity",
-                                "columns": cols, "rows": r}]}
+        rules_no_key = json.loads(json.dumps(self.builtin_rules))
+        rules_no_key["db"] = {k: v for k, v in (rules_no_key.get("db") or {}).items()
+                              if k != "time_columns"}
+        rp_nokey = self.rules_file("tz-rules-no-key.json", rules_no_key)
+        rc_nk, rep_nk = self.compare(od_u, rd_u, ["--allow-missing-fields", "--rules", rp_nokey])
+        self.check("牙TZ-l G1：db.time_columns 缺键 => rc 2（不许静默关掉见证后 PASS）",
+                   rc_nk == 2, (rc_nk, (rep_nk or {}).get("verdict")))
 
-        def with_window(d, start, end):
-            path = os.path.join(d, "run.json")
-            with open(path, "w", encoding="utf-8", newline="\n") as f:
-                json.dump({"argv": ["synth"], "started_at": start, "ended_at": end}, f)
-                f.write("\n")
-            return d
-
-        # 写入时刻取**运行开头**（距结束 620s）——「距结束 ≤ tol」的旧口径会判它 stale，
-        # 窗口口径必须放行；这正是带 620s sleep 的场景会遇到的情形。
-        o_win = self.write_run("t15-o-window", frames, db=snap_at("2026-01-01 00:00:00"))
-        r_win = self.write_run("t15-r-window", frames, db=snap_at("2026-01-01 00:00:00"))
-        with_window(o_win, "2026-01-01T00:00:00", "2026-01-01T00:10:20")   # 620s 长跑
-        with_window(r_win, "2026-01-01T00:00:00", "2026-01-01T00:10:20")
-        rc_w, rep_w = self.compare(o_win, r_win, ["--allow-missing-fields"])
-        self.check("牙TZ-e 620s 长场景：运行**开头**写的时间列（距结束 620s）=> rc 0（判据是窗口，不是距结束）",
-                   rc_w == 0, (rc_w, (rep_w or {}).get("diffs")))
-
-        r_early = self.write_run("t15-r-early", frames, db=snap_at("2025-12-31 23:49:00"))
-        with_window(r_early, "2026-01-01T00:00:00", "2026-01-01T00:10:20")
-        rc_e, rep_e = self.compare(o_win, r_early, ["--allow-missing-fields"])
-        self.check("牙TZ-f 窗口**下界**同样承重：比 start 早 660s => rc 1 time_witness_stale",
-                   rc_e == 1 and any(d.get("source") == "db"
-                                     and d.get("kind") == "time_witness_stale"
-                                     for d in (rep_e or {}).get("diffs", [])),
-                   (rc_e, (rep_e or {}).get("diffs")))
+        # 名称未声明（无 --char-name）⇒ unscope ⇒ 判不了（fail-closed）
+        od_ns = self.write_run("tz-noscope-o", frames, db=snap_tz("mir2_test_db", "2026-01-01 00:00:05"))
+        rd_ns = self.write_run("tz-noscope-r", frames, db=snap_tz("mir2_test_db_r", "2026-01-01 00:00:05"))
+        with_clock(od_ns, "2026-01-01T00:00:00", "2026-01-01T00:00:10", char=None)
+        with_clock(rd_ns, "2026-01-01T00:00:00", "2026-01-01T00:00:10", char=None)
+        rc_ns, rep_ns = self.compare(od_ns, rd_ns, ["--allow-missing-fields"])
+        self.check("牙TZ-m 缺 --char-name 无法限定到本角色行 => rc 2 time_witness_unscoped",
+                   rc_ns == 2 and any(u.get("kind") == "db_time_witness_unscoped"
+                                      for u in (rep_ns or {}).get("undecidable", [])),
+                   (rc_ns, (rep_ns or {}).get("undecidable")))
 
     def finish(self):
         total = len(self.passed) + len(self.failed)
