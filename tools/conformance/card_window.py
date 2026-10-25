@@ -3786,6 +3786,116 @@ def _validate_fixture_inv_drop(value, where):
 #: `WorldServer.MonGen.cs:228` 在 `StartTick == 0` 时立即首刷。
 FIXTURE_MONGEN_ZEN_TIME = 360
 
+#: 怪物夹具行的落盘位置。**必须是 prepend**（卡 `openmir2-fixture-monsters-prepend`）：
+#: 刷怪线程按 `RegenMonstersTime=200ms` **每次只前进一条** MonGen
+#: （C# `WorldServer.MonGen.cs:205-230` 取 `mongenList[CurrMonGenIdx]` 后 `CurrMonGenIdx++`；
+#: Rust `crates/world/src/mongen.rs` 同构）⇒ 追加到单表 3081 行末尾 ≈ 616s（≈10 分钟）才轮得到，
+#: 窗口内**永远不刷**。前插 = index 0，第一个闸门（约 200ms、`StartTick==0`）就取到。
+FIXTURE_MONGEN_LAYOUT = "prepend"
+
+
+def _mongen_write_layout(path, body, block):
+    """把夹具块写到文件**头部**（prepend）。**测试变异点**：改成 `body + block`
+    即 append 实现，用来复现 review F1（机判失败后必须按备份回滚）。"""
+    with open(path, "wb") as f:
+        f.write(block + body)
+
+
+def _mongen_fixture_layout(raw_before, raw_after, lines):
+    """机判夹具行是否在**头部**、且原内容字节整体后移未变。
+
+    返回 `(ok, why)`。`why` 在失败时点名形态（append / 头部缺失 / 原内容被改），
+    供 selftest 的「改回 append 必须红」牙齿使用（卡 `openmir2-fixture-monsters-prepend` ②）。
+    """
+    nl = b"\r\n" if b"\r\n" in raw_before else b"\n"
+    body = raw_before if (not raw_before or raw_before.endswith(b"\n")) else raw_before + nl
+    block = b"".join(ln.encode("gbk") + nl for ln in lines)
+    if raw_after == body:
+        return False, "夹具行没有写进文件"
+    if raw_after.endswith(block) and raw_after[:-len(block)] == body:
+        n_lines = raw_before.count(b"\n")
+        if raw_before and not raw_before.endswith(b"\n"):
+            n_lines += 1
+        secs = n_lines * 0.2
+        return False, ("夹具行位于文件末尾（append 布局）：刷怪线程每 200ms 只前进一条，"
+                       "本文件 %d 行扫一轮 ≈ %.0fs（≈%.1f 分钟），窗口内轮不到"
+                       % (n_lines, secs, secs / 60.0))
+    if not raw_after.startswith(block):
+        return False, "夹具行不在文件头部"
+    if raw_after[len(block):] != body:
+        return False, "前插后原文件内容字节不一致（不得改动原有行）"
+    return True, "prepend：%d 行位于文件头，原内容字节整体后移" % len(lines)
+
+
+#: RNG 台账（`MIR2_RNG_LOG`）体积上限：超过就**跑后**裁剪（只留 head + 统计）。
+#: 背景（卡 `openmir2-fixture-monsters-prepend` ③）：C# 钩子每次抽数都落盘，
+#: 20 分钟实测 899MB ⇒ 不裁剪会写满磁盘/拖垮传输。默认 64MiB / 20 万行。
+RNG_LEDGER_MAX_BYTES = 64 * 1024 * 1024
+RNG_LEDGER_HEAD_LINES = 200000
+
+
+def rng_ledger_trim_allowed(stack_attempted, stop_rc):
+    """只有**确认本侧栈已停**才允许裁剪台账（review F2：栈还在写时 os.replace 会丢/竞态）。"""
+    return stop_ok(stack_attempted, stop_rc)
+
+
+def trim_rng_ledger(path, max_bytes=None, head_lines=None):
+    """台账超过上限 ⇒ 记录原始 size/行数/sha256，只保留前 `head_lines` 行。
+
+    返回证据 dict（未超限时 `trimmed=False` 并给出 size/sha256/行数）。
+    先写 `.head` 临时文件再 `os.replace`，避免半截文件。head 里保留
+    `INJECT_OK`/`SEED_PROBE`（都在最前面），裁剪后 `check_rng_ledger` 仍可复核。
+    """
+    max_bytes = RNG_LEDGER_MAX_BYTES if max_bytes is None else int(max_bytes)
+    head_lines = RNG_LEDGER_HEAD_LINES if head_lines is None else int(head_lines)
+    stats = {"path": path, "trimmed": False, "original_bytes": 0,
+             "original_lines": 0, "original_sha256": None,
+             "kept_lines": 0, "kept_bytes": 0, "error": None}
+    try:
+        size = os.path.getsize(path)
+    except OSError as e:
+        stats["error"] = "台账不存在/不可读：%s" % e
+        return stats
+    stats["original_bytes"] = size
+    h = hashlib.sha256()
+    lines = 0
+    try:
+        with open(path, "rb") as f:
+            for chunk in iter(lambda: f.read(1 << 20), b""):
+                h.update(chunk)
+                lines += chunk.count(b"\n")
+    except OSError as e:
+        stats["error"] = "读台账失败：%s" % e
+        return stats
+    stats["original_lines"] = lines
+    stats["original_sha256"] = h.hexdigest()
+    if size <= max_bytes:
+        stats["kept_lines"] = lines
+        stats["kept_bytes"] = size
+        return stats
+    tmp = path + ".head"
+    kept = 0
+    kept_bytes = 0
+    try:
+        with open(path, "rb") as src, open(tmp, "wb") as dst:
+            for ln in src:
+                if kept >= head_lines:
+                    break
+                dst.write(ln)
+                kept += 1
+                kept_bytes += len(ln)
+        os.replace(tmp, path)
+    except OSError as e:
+        stats["error"] = "裁剪台账失败：%s" % e
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+        return stats
+    stats.update({"trimmed": True, "kept_lines": kept, "kept_bytes": kept_bytes})
+    return stats
+
 #: 配置覆盖白名单：键 → (lo, hi)。**未知文件/键/越界值一律 fail-closed**。
 FIXTURE_CONFIG_KEYS = {
     "CastleGetAllNpcTax": (0, 1),
@@ -4009,11 +4119,12 @@ def profile_fixtures(prof, side=None):
 
 
 def _fixture_symmetry_key(decl):
-    """两侧必须一致的部分：`castle_list` / `castle_files` / `config_overrides`。
+    """两侧必须一致的**六项**：castle 三件套（`castle_list` / `castle_files` /
+    `config_overrides`）+ `level` + `inventory_replace` + `inventory_drop`。
 
-    `monsters` **不**在这些里（怪物夹具允许按侧独立声明；其语义是「往本侧 MonGen 追加」，
-    不改变两侧配置基线）。文件三件套则直接决定两侧运行时的城堡/配置状态——不同就是对拍
-    无效（W-TAX-2 尤其要求同值）。
+    `monsters` **不**在这些里（怪物夹具允许按侧独立声明；其语义是「往本侧 MonGen 前插」，
+    不改变两侧配置基线）。其余六项直接决定两侧运行时的城堡/配置/角色状态——不同就是对拍
+    无效（W-TAX-2 尤其要求同值；inventory 写的是同一角色的背包槽）。
     """
     decl = decl or {}
     cl = decl.get("castle_list")
@@ -4030,13 +4141,14 @@ def _fixture_symmetry_key(decl):
 
 
 def _check_fixture_symmetry(fixtures_by_side):
-    """文件类夹具（`castle_list` / `castle_files` / `config_overrides`）必须两侧一致。
+    """两侧**夹具声明**（castle 三件套 / `level` / `inventory_replace` / `inventory_drop`）
+    必须一致。
 
     为什么必须在这里拦：`castle_list_symmetry` 门（preflight）跑在**起栈前**，看的是夹具
     写盘**之前**的 `Castle/List.txt`；而夹具在 `run_side` 里 restore 之后、起栈之前才按侧写，
     且 `sides.<side>.fixtures` **整体覆盖**顶层 ⇒ 两侧各写不同内容时，门永远看不到。
     ⇒ 门守「文件现状」，本函数守「声明未来」，两者缺一不可。两侧值不同 ⇒ 对拍无效（假绿），
-    必须 fail-closed（review F-1；reviewer-20 的 supersede 建议把三件套一起比）。
+    必须 fail-closed（review F-1；reviewer-20 的 supersede 建议把六项一起比）。
     """
     keys = {}
     for side in sorted(fixtures_by_side):
@@ -4054,11 +4166,11 @@ def _check_fixture_symmetry(fixtures_by_side):
                             decl.get("inventory_replace"),
                             decl.get("inventory_drop")))
         raise ConfigError(
-            "fixtures 文件三件套两侧不一致（%s）：`castle_list` 会让 "
+            "两侧夹具不一致（castle 三件套 / level / inventory）（%s）：`castle_list` 会让 "
             "`castle_list_symmetry` 门失效（门在写盘**之前**检查，夹具在写**之后**生效）；"
-            "`castle_files`/`config_overrides` 不同则两侧运行时状态不同、对拍无效 ⇒ "
-            "把这三件套只写在**顶层 fixtures**（两侧同值）；若某侧必须用 "
-            "`sides.<side>.fixtures` 覆盖，也要把同一份三件套一起带上"
+            "`castle_files`/`config_overrides`/`level`/`inventory_*` 不同则两侧运行时状态"
+            "不同、对拍无效 ⇒ 把这些项只写在**顶层 fixtures**（两侧同值）；若某侧必须用 "
+            "`sides.<side>.fixtures` 覆盖，也要把同一份声明一起带上"
             % ", ".join(shown))
 
 
@@ -4414,12 +4526,14 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
     """起栈前应用**全部**窗口夹具（怪物 + 文件），对**每个根**（基线 + hook 影子）各写一份。
 
     返回证据 dict：`targets[]`（怪物/文件统一形状：target/path/backup/before/after）、
-    `monsters`/`files` 便捷视图、`action`（appended / applied / appended+applied / dry-run）。
+    `monsters`/`files` 便捷视图、`action`（prepended / applied / prepended+applied / dry-run）。
+    怪物行**前插**到 `MonGen.txt` 头部（`FIXTURE_MONGEN_LAYOUT`）：追加到单表 3081 行末尾
+    扫一轮 ≈ 616s，窗口内轮不到（刷怪线程每 200ms 只前进一条）。
     失败 fail-closed（rc=2 + 就地回滚已写项）；停栈后的最终还原由 `restore_fixtures` 负责。
     """
     res = {"side": side, "source": "profile", "declared": decl, "envir_root": None,
            "roots": [], "backup_dir": None, "path": None, "backup": None,
-           "before_sha256": None, "after_sha256": None, "appended": [],
+           "before_sha256": None, "after_sha256": None, "prepend": [],
            "files": [], "targets": [], "action": None, "rc": None, "error": None}
     dry = getattr(runner, "dry_run", False)
     try:
@@ -4438,12 +4552,13 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
                 monster_lines.append("\t".join([
                     spec["map"], str(spec["x"]), str(spec["y"]), spec["name"], "0",
                     str(spec["count"]), str(FIXTURE_MONGEN_ZEN_TIME)]))
-            res["appended"] = monster_lines
+            res["prepend"] = monster_lines
             if dry:
                 for root in roots:
                     for ln in monster_lines:
-                        runner.log("[%s] 怪物夹具（dry-run 不写 Envir）：%s/Envir/"
-                                   "MonGen.txt + %s" % (side, root, ln))
+                        runner.log("[%s] 怪物夹具（dry-run 不写 Envir，布局=%s）："
+                                   "%s/Envir/MonGen.txt ⇤ %s"
+                                   % (side, FIXTURE_MONGEN_LAYOUT, root, ln))
             else:
                 backup_dir = os.path.join(side_dir, "fixtures")
                 os.makedirs(backup_dir, exist_ok=True)
@@ -4455,22 +4570,29 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
                         raw = f.read()
                     before = hashlib.sha256(raw).hexdigest()
                     nl = b"\r\n" if b"\r\n" in raw else b"\n"
-                    head = raw if (not raw or raw.endswith(b"\n")) else raw + nl
-                    append = b"".join(ln.encode("gbk") + nl for ln in monster_lines)
+                    body = raw if (not raw or raw.endswith(b"\n")) else raw + nl
+                    block = b"".join(ln.encode("gbk") + nl for ln in monster_lines)
                     tag = "shadow" if i else "baseline"
                     backup = os.path.join(backup_dir, "MonGen.txt.%s.bak" % tag)
                     with open(backup, "wb") as f:
                         f.write(raw)
-                    with open(path, "wb") as f:
-                        f.write(head + append)
+                    tgt = {"target": tag, "path": path, "backup": backup,
+                           "layout": FIXTURE_MONGEN_LAYOUT,
+                           "before_sha256": before, "after_sha256": None}
+                    # review F1：**先登记后写**——写失败/机判失败时外层 except 的
+                    # restore_fixtures 才能按这份备份回滚（否则文件静默残留新内容）。
+                    res["targets"].append(tgt)
+                    # prepend（关键）：夹具行在 index 0，首个刷怪闸门就取到。
+                    _mongen_write_layout(path, body, block)
                     with open(path, "rb") as f:
                         after = f.read()
-                    tgt = {"target": tag, "path": path, "backup": backup,
-                           "before_sha256": before,
-                           "after_sha256": hashlib.sha256(after).hexdigest()}
-                    res["targets"].append(tgt)
-                    runner.log("[%s] 怪物夹具（起栈前写 %s/Envir/MonGen.txt）：追加 %d 行；"
-                               "sha256 %s -> %s；备份=%s"
+                    tgt["after_sha256"] = hashlib.sha256(after).hexdigest()
+                    ok, why = _mongen_fixture_layout(raw, after, monster_lines)
+                    if not ok:
+                        raise ConfigError("MonGen.txt 夹具布局机判失败（%s）：%s"
+                                          "（已按备份回滚）" % (tag, why))
+                    runner.log("[%s] 怪物夹具（起栈前**前插** %s/Envir/MonGen.txt）："
+                               "%d 行位于文件头；sha256 %s -> %s；备份=%s"
                                % (side, tag, len(monster_lines), before[:12],
                                   tgt["after_sha256"][:12], backup))
                     for ln in monster_lines:
@@ -4493,8 +4615,8 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
         if dry:
             res["action"] = "dry-run"
         else:
-            res["action"] = ("appended+applied" if (did_m and did_f)
-                             else "appended" if did_m else "applied")
+            res["action"] = ("prepended+applied" if (did_m and did_f)
+                             else "prepended" if did_m else "applied")
         res["rc"] = 0
         return res
     except (ConfigError, OSError) as e:
@@ -4947,6 +5069,19 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                 res["error"] = (res["error"] + "；" + msg) if res["error"] else msg
                 if res["rc"] == 0:
                     res["rc"] = 2
+        # 8e) RNG 台账体积控制（卡 openmir2-fixture-monsters-prepend ③）：栈已停 ⇒ 台账
+        # 不再增长；超限则只留 head（INJECT_OK/SEED_PROBE 在最前）+ 记录原始 size/行数/sha256。
+        if res.get("rng_log") and rng_ledger_trim_allowed(stack_attempted,
+                                                          res.get("stop_rc")):
+            trim = trim_rng_ledger(res["rng_log"])
+            res["rng_log_trim"] = trim
+            if trim.get("trimmed"):
+                runner.log("[%s] RNG 台账超限已裁剪：%d 行/%.1f MiB -> %d 行/%.1f MiB"
+                           "（原始 sha256=%s）"
+                           % (side, trim["original_lines"],
+                              trim["original_bytes"] / 1048576.0,
+                              trim["kept_lines"], trim["kept_bytes"] / 1048576.0,
+                              trim["original_sha256"][:16]))
 
 
 def run_compare(runner, out_dir, prof, rules):
@@ -7141,7 +7276,7 @@ def _selftest_fixtures_files(tmp, stub=None, log=None, base_cfg=None):
                         == shadow_before[r][0] for r in (base, shadow)),
                 "FX45 影子根 dry-run：预览两个根、两个根都不落盘"))
 
-    # ⑮ 合并声明（monsters + 文件）：action=appended+applied，两类各自还原
+    # ⑮ 合并声明（monsters + 文件）：action=prepended+applied，两类各自还原
     conf_before2 = readb(conf)
     mongen_path = os.path.join(root, "Envir", "MonGen.txt")
     mongen_before2 = readb(mongen_path)
@@ -7152,12 +7287,12 @@ def _selftest_fixtures_files(tmp, stub=None, log=None, base_cfg=None):
     res3 = run_fixtures(runner, "rust", {}, sc, decl3, {}, side_dir)
     want_m = ("0153" + chr(9) + "3" + chr(9) + "4" + chr(9) + "鸡" + chr(9)
               + "0" + chr(9) + "1" + chr(9) + "360").encode("gbk")
-    out.append((res3.get("rc") == 0 and res3.get("action") == "appended+applied"
+    out.append((res3.get("rc") == 0 and res3.get("action") == "prepended+applied"
                 and want_m in readb(mongen_path) and readb(conf) == expect_conf
                 and any(not t.get("rel") for t in res3.get("targets") or [])
                 and any(t.get("rel") == "Server.conf"
                         for t in res3.get("targets") or []),
-                "FX46 合并声明：MonGen 追加 + Server.conf 覆盖，action=appended+applied，"
+                "FX46 合并声明：MonGen 前插 + Server.conf 覆盖，action=prepended+applied，"
                 "targets[] 同时含怪物与文件"))
     err3 = restore_fixtures(res3)
     out.append((err3 is None and readb(mongen_path) == mongen_before2
@@ -7286,11 +7421,11 @@ def _selftest_fixtures(tmp):
     side_dir = os.path.join(d, "side")
     res = run_fixtures(r, "csharp", prof, prof["sides"]["csharp"], decl, {}, side_dir)
     raw_after = io.open(mongen, "rb").read()
-    out.append((res.get("rc") == 0 and res.get("action") == "appended"
+    out.append((res.get("rc") == 0 and res.get("action") == "prepended"
                 and "0\t330\t331\t鸡\t0\t1\t360".encode("gbk") in raw_after
                 and os.path.exists(res.get("backup") or ""),
                 "FIX2 写 Envir/MonGen.txt：追加单点刷怪行、备份存在、rc=0"))
-    line = res["appended"][0]
+    line = res["prepend"][0]
     cols = line.split("\t")
     zen_min = int(cols[6]) if len(cols) >= 7 and cols[6].lstrip("-").isdigit() else -1
     zen_ms = zen_min * 60 * 1000
@@ -7867,6 +8002,165 @@ def _selftest_inventory_fixture(tmp):
     i_restore = src.index("restore_inventory_fixture(")
     out.append((i_fix < i_stack < i_restore,
                 "INV8 接线：run_side 起栈前应用、finally 停栈后还原"))
+    return out
+
+
+def _selftest_monsters_prepend(tmp):
+    """卡 openmir2-fixture-monsters-prepend：前插布局（含反 append 牙）+ RNG 台账裁剪。"""
+    out = []
+    lines = ["3\t330\t331\t鸡\t0\t1\t360"]
+    body = "3\t294\t341\t神鹰\t10\t1\t360\r\n3\t295\t341\t鹿\t10\t1\t360\r\n"
+    raw = body.encode("gbk")
+    block = "".join(ln + "\r\n" for ln in lines).encode("gbk")
+
+    ok, why = _mongen_fixture_layout(raw, block + raw, lines)
+    out.append((ok and "prepend" in why,
+                "MERGE1 前插布局 => 机判通过（夹具行在头，原内容字节后移）"))
+    ok, why = _mongen_fixture_layout(raw, raw + block, lines)
+    out.append((not ok and "append" in why,
+                "MERGE 牙1 追加布局 => 机判红（点名 append：200ms/条，窗口内轮不到）"))
+    ok, why = _mongen_fixture_layout(raw, raw[:10] + block + raw[10:], lines)
+    out.append((not ok and "不在文件头部" in why,
+                "MERGE 牙2 插在文件中间 => 机判红"))
+    ok, why = _mongen_fixture_layout(raw, block + raw[:-1], lines)
+    out.append((not ok and "字节不一致" in why,
+                "MERGE 牙3 前插但原内容被改一个字节 => 机判红"))
+    ok, why = _mongen_fixture_layout(raw, raw, lines)
+    out.append((not ok and "没有写进" in why,
+                "MERGE 牙4 什么都没写 => 机判红"))
+
+    # 端到端：run_fixtures 写文件 → 头块断言 → restore 逐字节复原
+    root = os.path.join(tmp, "merge-deploy")
+    os.makedirs(os.path.join(root, "Envir"), exist_ok=True)
+    with open(os.path.join(root, "Envir", "MapInfo.txt"), "wb") as f:
+        f.write("[3 主城]\r\n".encode("gbk"))
+    mp = os.path.join(root, "Envir", "MonGen.txt")
+    with open(mp, "wb") as f:
+        f.write(raw)
+    side_dir = os.path.join(tmp, "merge-side")
+    os.makedirs(side_dir, exist_ok=True)
+    decl = _validate_fixture_decl(
+        {"monsters": [{"map": "3", "x": 330, "y": 331, "name": "鸡"}]}, "x")
+    runner = Runner(tmp, None, dry_run=False)
+    res = run_fixtures(runner, "rust", {}, {"envir_root": root}, decl, {}, side_dir)
+    after = open(mp, "rb").read()
+    out.append((res.get("rc") == 0 and res.get("action") == "prepended"
+                and res.get("prepend") == lines
+                and res["targets"][0].get("layout") == "prepend"
+                and after.startswith(("3\t330\t331\t鸡\t0\t1\t360\r\n").encode("gbk")),
+                "MERGE2 端到端：MonGen.txt 头部即夹具行、tail 为原文件字节未变、"
+                "action=prepended"))
+    before_sha = hashlib.sha256(raw).hexdigest()
+    err = restore_fixtures(res)
+    out.append((err is None and open(mp, "rb").read() == raw
+                and hashlib.sha256(open(mp, "rb").read()).hexdigest() == before_sha,
+                "MERGE3 restore 逐字节复原（sha256 与写前一致）"))
+
+    # RNG 台账裁剪
+    good = (b"INJECT_OK 42\n" + b"SEED_PROBE 1002\n"
+            + b"".join(b"%d\tmovr\t10\t%d\tsite\n" % (i, i) for i in range(1, 200)))
+    small = os.path.join(tmp, "rng-small.tsv")
+    with open(small, "wb") as f:
+        f.write(good)
+    st = trim_rng_ledger(small, max_bytes=10 * 1024 * 1024, head_lines=10)
+    out.append((st["trimmed"] is False and st["original_lines"] == 201
+                and st["original_bytes"] == len(good)
+                and st["original_sha256"] == hashlib.sha256(good).hexdigest()
+                and open(small, "rb").read() == good,
+                "MERGE4 未超限 => 不裁剪，但仍记录 size/行数/sha256"))
+
+    big = os.path.join(tmp, "rng-big.tsv")
+    with open(big, "wb") as f:
+        f.write(good)
+    st = trim_rng_ledger(big, max_bytes=100, head_lines=3)
+    head = b"".join(good.splitlines(True)[:3])
+    ok_head, detail = check_rng_ledger(big)
+    out.append((st["trimmed"] is True and st["kept_lines"] == 3
+                and st["kept_bytes"] == len(head)
+                and st["original_lines"] == 201
+                and st["original_sha256"] == hashlib.sha256(good).hexdigest()
+                and open(big, "rb").read() == head
+                and ok_head,
+                "MERGE5 超限 => 只留前 3 行 + 原始 size/行数/sha256；head 仍过账本校验"
+                "（%s）" % detail))
+    miss = trim_rng_ledger(os.path.join(tmp, "rng-missing.tsv"))
+    out.append((miss["trimmed"] is False and "不存在" in (miss.get("error") or ""),
+                "MERGE 牙5 台账不存在 => 记 error、不抛异常"))
+
+    # review F1：布局机判失败 => 文件必须按备份回滚（不得静默残留）
+    root2 = os.path.join(tmp, "merge-fail")
+    os.makedirs(os.path.join(root2, "Envir"), exist_ok=True)
+    with open(os.path.join(root2, "Envir", "MapInfo.txt"), "wb") as f:
+        f.write(("[3 主城]" + "\r\n").encode("gbk"))
+    mp2 = os.path.join(root2, "Envir", "MonGen.txt")
+    with open(mp2, "wb") as f:
+        f.write(raw)
+    side2 = os.path.join(tmp, "merge-fail-side")
+    os.makedirs(side2, exist_ok=True)
+    orig_layout = globals()["_mongen_fixture_layout"]
+    globals()["_mongen_fixture_layout"] = lambda *a, **k: (False, "模拟机判失败")
+    try:
+        res_bad = run_fixtures(Runner(tmp, None, dry_run=False), "rust", {},
+                               {"envir_root": root2}, decl, {}, side2)
+    finally:
+        globals()["_mongen_fixture_layout"] = orig_layout
+    out.append((res_bad.get("rc") == 2 and open(mp2, "rb").read() == raw
+                and bool(res_bad.get("targets"))
+                and res_bad["targets"][0].get("backup") is None
+                and res_bad["targets"][0].get("action") == "restored",
+                "MERGE 牙6 review-F1：布局机判失败 => rc=2 且文件按备份回滚为写前字节"
+                "（targets 非空、backup 已清、action=restored）"))
+
+    # review F1（reviewer-21 同结论）：把**写盘实现**变异成 append ⇒ rc=2 且文件字节不变
+    root3 = os.path.join(tmp, "merge-append-mut")
+    os.makedirs(os.path.join(root3, "Envir"), exist_ok=True)
+    with open(os.path.join(root3, "Envir", "MapInfo.txt"), "wb") as f:
+        f.write(("[3 主城]").encode("gbk"))
+    mp3 = os.path.join(root3, "Envir", "MonGen.txt")
+    with open(mp3, "wb") as f:
+        f.write(raw)
+    side3 = os.path.join(tmp, "merge-append-mut-side")
+    os.makedirs(side3, exist_ok=True)
+    orig_write = globals()["_mongen_write_layout"]
+
+    def _append_write(path, body, block):
+        with open(path, "wb") as f:
+            f.write(body + block)  # 变异：append（窗口内轮不到）
+
+    globals()["_mongen_write_layout"] = _append_write
+    try:
+        res_mut = run_fixtures(Runner(tmp, None, dry_run=False), "rust", {},
+                               {"envir_root": root3}, decl, {}, side3)
+    finally:
+        globals()["_mongen_write_layout"] = orig_write
+    mut_bytes = open(mp3, "rb").read()
+    out.append((res_mut.get("rc") == 2
+                and "append 布局" in (res_mut.get("error") or "")
+                and mut_bytes == raw
+                and bool(res_mut.get("targets"))
+                and res_mut["targets"][0].get("action") == "restored",
+                "MERGE 牙7 把写盘变异成 append => rc=2（点名 append 布局）且文件字节"
+                "回滚为写前（不留半改状态）"))
+
+    # review F2：栈没停成不许裁台账
+    ok_guard = (rng_ledger_trim_allowed(True, 0) is True
+                and rng_ledger_trim_allowed(True, 2) is False
+                and rng_ledger_trim_allowed(True, None) is False
+                # 没起过栈 => 没有写入者，裁剪安全（stop_ok 的既定语义）
+                and rng_ledger_trim_allowed(False, None) is True)
+    import inspect as _inspect_rs
+    src_rs = _inspect_rs.getsource(run_side)
+    out.append((ok_guard
+                and "rng_ledger_trim_allowed(stack_attempted" in src_rs,
+                "MERGE7 review-F2：裁剪守卫——只有 stop_ok(stack_attempted, stop_rc) "
+                "才裁（栈没停成 => 不裁）"))
+
+    import inspect
+    src = inspect.getsource(run_side)
+    i_stop = src.index('res["stop_rc"] = runner.run(side, "stop"')
+    i_trim = src.index("trim_rng_ledger(res[\"rng_log\"])")
+    out.append((i_stop < i_trim,
+                "MERGE6 接线：停栈之后才裁剪台账（进程退出前台账仍在增长）"))
     return out
 
 
@@ -9529,6 +9823,8 @@ def selftest():
         for cond, msg in _selftest_inventory_fixture(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_fixtures(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_monsters_prepend(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_fixtures_files(tmp, stub, log, base_cfg):
             chk(cond, msg)

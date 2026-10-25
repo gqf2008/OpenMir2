@@ -47,7 +47,7 @@
 - **顶层 `fixtures` = 两侧同值**；`sides.<side>.fixtures` **整体覆盖**本侧（不做深合并——免得
   两侧声明混在一起看不出谁生效）。W-TAX-2 要求两侧同值 ⇒ 用顶层写。
 - `monsters`（卡 `openmir2-window-fixture-corpse`）与文件三件套可**同时声明**：MonGen 追加与配置/城堡
-  写入各用各的备份，停栈后一起还原（action=`appended+applied`）。
+  写入各用各的备份，停栈后一起还原（action=`prepended+applied`）。
 - 名字注意：`card_window` 里已有一个 `apply_overrides(prof, cfg)`，它是**profile/CLI 字段**覆盖
   （account/char_name/timeout 等），与本卡的**文件**覆盖无关；所以本通道叫 `fixtures`，不叫 `overrides`。
 
@@ -176,8 +176,8 @@ finally:
   - restore：**期间被第三方改写**后仍按备份还原到写前字节、备份清理、`restore_sha256` 记录；
   - 生产根守卫、目标文件缺失、键出现 2 次；
   - 源码级接线：`run_side` 在起栈前应用、`finally` 停栈后还原、`load_profile` 加载期校验；
-  - 合并语义：`monsters` + 文件三件套同一份声明（action=`appended+applied`），两类备份互不干扰、双双还原；
-  - 合并语义（FX46/FX47）：`monsters` + 文件三件套同一份声明（action=`appended+applied`），`targets[]` 同时含怪物与文件，双双还原；
+  - 合并语义：`monsters` + 文件三件套同一份声明（action=`prepended+applied`），两类备份互不干扰、双双还原；
+  - 合并语义（FX46/FX47）：`monsters` + 文件三件套同一份声明（action=`prepended+applied`），`targets[]` 同时含怪物与文件，双双还原；
   - 影子根（FX43–FX45）：基线 + `M2GameSvr-hook` 写同一内容、都进 `targets[]`、都回到写前字节；dry-run 两个根都不落盘；
   - execute 级（dry-run）：`summary.fixtures` 有该侧证据、文件未被改写。
 - 既有怪物夹具自测唯一改动：`FIX1` 的断言从「整对象相等」收敛到「`decl["monsters"]` 相等 + 文件侧为空」

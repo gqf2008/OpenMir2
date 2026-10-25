@@ -194,6 +194,14 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 - 账本口径：头两行 `INJECT_OK <seed>` + `SEED_PROBE`；数据行 5 列且 `site` 非空。
   Rust 侧同 seed 由 `start_mir2_server.ps1 -RngLog` 注入。实测证据与复算命令见
   `docs/window-csharp-rng-20261025.md`。
+- **台账体积上限（2026-10-25，卡 `openmir2-fixture-monsters-prepend` ③）**：C# 钩子**每次抽数都落盘**，
+  20 分钟实测 **899MB** ⇒ 不裁剪会写满磁盘/拖垮传输。`card_window.py` 在**停栈之后**调用
+  `trim_rng_ledger()`：超过 **64MiB** 就记录**裁剪前全量**的 `bytes/行数/sha256`
+  （`original_sha256` = 裁剪前整文件哈希，不是 head 的哈希），只保留**前 20 万行**
+  （`INJECT_OK`/`SEED_PROBE` 都在最前，裁剪后仍过 `check_rng_ledger`）；证据写在本侧结果
+  `rng_log_trim`（`trimmed/original_bytes/original_lines/original_sha256/kept_lines/kept_bytes`）。
+  未超限也记录 size/行数/sha256。窗口本身仍应**限时**（`--timeout-ms` / 场景步数），
+  裁剪是兜底不是许可证。
 - 提醒：不要从交互 shell 直接 `powershell -File start-csharp.ps1` 后等返回（子进程继承管道会挂）；
   窗口路径走 WMI 包装，手工排查用 `-Plan`。
 
@@ -262,6 +270,24 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
   ```
   若 `SabukW` 的 `TotalGold/TodayIncome` 也被上一轮写脏，按 `window-fixture-config-castle`
   的 `castle_files` 夹具把两侧初始值显式声明（`TotalGold=0`、`TodayIncome=0`）。
+
+---
+
+## 0.11 怪物夹具必须**前插** MonGen.txt 头部（2026-10-25；卡 `openmir2-fixture-monsters-prepend`）
+
+- **机制**：刷怪线程每 `RegenMonstersTime=200ms` 只前进**一条** MonGen（C#
+  `WorldServer.MonGen.cs:205-230`；Rust `crates/world/src/mongen.rs:723-768` 同构）。
+  单表 3081 行扫一轮 ≈ **616s（≈10.3 分钟）**（部署未配 `ProcessMonsterMultiThreadLimit`，缺省 1）
+  ⇒ **追加**在末尾的夹具行窗口内永远轮不到（dev-1 那轮日志口径 39020 行 ≈130 分钟）：
+  dev-1 第一轮实测 20 次 `CM_HIT` 全部被接受却无 `SM_STRUCK`、无死亡帧（`kill: no target frames`）。
+- **修法**：`fixtures.monsters` 现在把行**前插**到文件头（index 0，首个闸门 ≈200ms 就刷，
+  `StartTick==0`）；原 39020 行**字节序不动**；写后机判 `_mongen_fixture_layout`（append 形态直接 rc=2）；
+  restore 仍是「备份字节写回 + 重读 sha256 等于写前值」。
+- **判据/细节/影响面**见 `docs/window-fixture-corpse-20261025.md` §2.5。
+- **受影响的卡**：`openmir2-window-fixture-corpse`（夹具语义不变，位置改为前插）、
+  `openmir2-butch-two-draws-unblock`（首个真机用户，修好）、后续 drop/combat 类；
+  没有场景依赖「末尾追加不刷出」。
+- **RNG**：前插让夹具怪更早进入随机流（更早消耗抽数）；台账上限/裁剪见 §0.8。
 
 ---
 
