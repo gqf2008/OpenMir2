@@ -6,7 +6,18 @@
 - 写集：本文件（只写文档；未改代码/规则/卡片状态；未起栈/连库）。
 - 复算口径：所有数字可由 §1/§2/§4 的命令现取；walgit 故障期 master 为本地主源；refs 计数为**活量**，以补推时重数为准。
 
-## 0a. **第 3 次刷新（最新，取代下方 §0 的数字）**
+## 0. 摘要
+
+| 项 | 结果（快照 @ `4ae90226b` @ 2026-10-25 06:15:48） |
+|---|---|
+| 今日合并 | **60 笔**（`git log --first-parent --merges --since="2026-10-24 23:40" 1c605ca4a | wc -l` = 60（**终点钉 `4ae90226b`**）；§1 逐条） |
+| 条件① 脚本派发 | **pass**（第三方复核 `docs/four-condition-independent-check-20261025.md` @ `2135f6154`）：目标 106/106、调用 11829、未实现 0 |
+| 条件② R 卡证据 | **need_human**（第三方复核 @ `2135f6154`）：R 卡 **213** 张（快照 @ `2135f6154`） = 已完成 12 / `window_required` **147**（另未合并 2）/ whitelist 48 / 已裁定 3 / `merged_not_closed` **1**（唯一 = `openmir2-gm-batch-5b-cross-server`/G11）/ 未开工或未合并 **0**（注：「另未合并 2」= `window_required_unmerged`，与「未开工或未合并」**不是同一桶**）；**登记型 PASS ≠ 真机证据**；R 桶是**活量**，复算见 §2.4 |
+| 条件③ B 类清零 | **pass**（第三方复核 @ `2135f6154`）：recon `tracked` 桶 0（`implemented 179 / n/a-unreachable 11 / n/a-oracle-noop 1`，rows 191 条非空、counts 一致） |
+| 条件④ 门禁恒绿 | **need_human**（第三方复核 @ `2135f6154`）：7 项 = 金 5 / 红 0 / 需人工 2（`cargo_test_workspace` 未跑、`master_sync` walgit 500）；第三方的 fmt/clippy/msgcodegen/7 项卫生门/`merge_tree_helper --selftest 12/12` 全 rc=0，`cargo test` 引 tester 在 `2eb147e6e` 的分包结论 |
+| 剩余 owner 决策 | G11 裁决 / Q1 窗口 / Q2–Q5 口径 / walgit 恢复（`docs/needs-human-20261025.md` §1–§4） |
+
+## 0b. **第 3 次刷新（最新，取代上方 §0 的数字）**
 
 - 数据时点：**刷新快照 commit = `6bb1f9839`**（2026-10-25 11:13 +08，本地 master，与远端 `walgit` 一致）。
 - **今日合并**：**110 笔**（`git log --first-parent --merges --since="2026-10-24 23:40"`）；相对上一版快照 `1c605ca4a` 后新增 **77 笔**。§1 的逐条清单截至 `4ae90226b`，**未回填新版 50 笔**，以 `git log` 为准。
@@ -46,17 +57,6 @@
 4. **`cargo_test_workspace`** 一次 `goal_gate --tests`。
 
 ---
-
-## 0. 摘要
-
-| 项 | 结果（快照 @ `4ae90226b` @ 2026-10-25 06:15:48） |
-|---|---|
-| 今日合并 | **60 笔**（`git log --first-parent --merges --since="2026-10-24 23:40" 1c605ca4a | wc -l` = 60（**终点钉 `4ae90226b`**）；§1 逐条） |
-| 条件① 脚本派发 | **pass**（第三方复核 `docs/four-condition-independent-check-20261025.md` @ `2135f6154`）：目标 106/106、调用 11829、未实现 0 |
-| 条件② R 卡证据 | **need_human**（第三方复核 @ `2135f6154`）：R 卡 **213** 张（快照 @ `2135f6154`） = 已完成 12 / `window_required` **147**（另未合并 2）/ whitelist 48 / 已裁定 3 / `merged_not_closed` **1**（唯一 = `openmir2-gm-batch-5b-cross-server`/G11）/ 未开工或未合并 **0**（注：「另未合并 2」= `window_required_unmerged`，与「未开工或未合并」**不是同一桶**）；**登记型 PASS ≠ 真机证据**；R 桶是**活量**，复算见 §2.4 |
-| 条件③ B 类清零 | **pass**（第三方复核 @ `2135f6154`）：recon `tracked` 桶 0（`implemented 179 / n/a-unreachable 11 / n/a-oracle-noop 1`，rows 191 条非空、counts 一致） |
-| 条件④ 门禁恒绿 | **need_human**（第三方复核 @ `2135f6154`）：7 项 = 金 5 / 红 0 / 需人工 2（`cargo_test_workspace` 未跑、`master_sync` walgit 500）；第三方的 fmt/clippy/msgcodegen/7 项卫生门/`merge_tree_helper --selftest 12/12` 全 rc=0，`cargo test` 引 tester 在 `2eb147e6e` 的分包结论 |
-| 剩余 owner 决策 | G11 裁决 / Q1 窗口 / Q2–Q5 口径 / walgit 恢复（`docs/needs-human-20261025.md` §1–§4） |
 
 ## 1. 合并清单（60 笔）
 
