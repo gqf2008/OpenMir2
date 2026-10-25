@@ -14,12 +14,12 @@
 | `click_npc: 12345` 或 params 名 | 直接给 actor id（既有行为） | 不校验 | 与 oracle 的 `CM_CLICKNPC.recog = ActorId` 同口径 |
 | `click_npc: auto:last_turn` | 最近一个非己 `SM_TURN(10)` 的 `recog` | 无兜底 | 既有行为；**只在没有更精确写法时用** |
 | `click_npc: name:沙巴克城堡管理` | 按**名尾 `ShowName`** 精确匹配可见对象 | **恰好 1 个** | 名尾口径见 §2 |
-| `click_npc: pos:7,16` | 按**坐标**（`SM_TURN` 的 `Param=x`/`Tag=y`）匹配可见对象 | **恰好 1 个** | 空格/多对象都算不中 ⇒ 红 |
+| `click_npc: pos:7,16` | 按**坐标**匹配**当前可见的固定/静态对象**（启发式，见 §2.5） | **恰好 1 个静态对象** | 空格/多对象/活动对象都算不中 ⇒ 红；逃生阀 `pos:7,16?allow_any=1`（默认关） |
 
 - 三种新写法都**仍发 `CM_CLICKNPC`**，`recog` 取该对象 actor id，`param/tag/series/body` 全 0 —— **不新造协议**。
 - 未知写法（如 `auto:lastturn`、`foo:bar`）在**加载期**就 `ScenarioError`（退出码 2），不会拖到运行期：
   错误串写明只认 `auto:last_turn` / `name:<名>` / `pos:<x>,<y>`。
-- `name:` 空名、`pos:` 非「十进制 x,y」或坐标越界（>65535）同样加载期拒绝。
+- `name:` 空名、`pos:` 非「十进制 x,y」或坐标越界（>65535）同样加载期拒绝；`?allow_any` 只认 `0`/`1`。
 
 ## 2. 名字从哪来（oracle 口径，不是猜）
 
@@ -34,6 +34,30 @@
 
 实测样例（`E:/tmp/window/run2/cs-probe` 的一条出现帧）：帧体解码后名尾 = `〖庄〗/255` ⇒ `name=〖庄〗`。
 
+## 2.5 `pos:` 的对象类别门（启发式，**不是协议级类型判定**）
+
+`pos:` 只接受**固定/静态对象**，命中之前判定、不满足即 fail-closed。三条同时满足才算静态：
+
+| # | 判据 | 依据 |
+|---:|---|---|
+| 1 | 该 actor **没有任何移动帧**（`SM_WALK/SM_RUN/SM_HORSERUN/SM_BACKSTEP/SM_RUSH/SM_RUSHKUNG`） | 移动帧族 = 对象动过的直接证据（值见 `crates/protocol/src/messages.rs`） |
+| 2 | 坐标从未变过（全部 `SM_TURN` 的 `Param/Tag` 同一格） | 同帧字段 |
+| 3 | **首见于玩家登录后的第一份可见快照内**（`first_seq ≤ snapshot_end_seq`） | 固定 NPC 随地图加载下发；怪由 MonGen 后来刷出。`snapshot_end_seq` = **第一个场景步执行前**的帧序号（进世界 + dwell 之后） |
+
+**为什么只能做启发式**：`SM_TURN` 体只有 `Encode(8B CharDesc)` + 可选 `Encode("ShowName/Color")`
+（`src/M2Server/Player/PlayObject.Message.cs:1549-1555`；Rust `mir2-rs/bins/game-svr/src/downlink.rs::turn_pair`），
+**协议里没有对象类别字段**；probe 的可见集也只认 `SM_TURN`。⇒ 本判据是「按可观测行为推断静态」，
+不能当权威类型系统用；写场景的人仍需保证目标格上只有那一个固定 NPC。
+
+- **当前可见**语义：`SM_DISAPPEAR(30)` 会把对象移出候选集（再出现则重新加入）——此前只增不减，等于「曾出现」。
+- **分类证据进日志**：命中/未命中的错误串与 `steps[]` 记录都带
+  `name/(x,y)/actor/首见 seq/移动帧数/类别=静态|活动（原因）`；无名对象另附**原始名尾**。
+- **逃生阀**：`pos:<x>,<y>?allow_any=1`（**默认关闭**）。只在确知该格上就是目标、且它被误判为活动对象时才用；
+  它会关掉类别门、仍保留「恰好 1 个」的歧义门。降级理由写进场景 `note`，不得当默认玩法。
+- **名字含 `/`（N3）**：名尾按**最后一个** `/` 切，且最后一段必须是十进制颜色（`ShowName/Color`）；
+  末段不是颜色 ⇒ `name=None`（**不截断成前缀名**），错误串里显示 `<无名>` + 原始名尾。所以 `name:GM/测试` 能选中
+  名尾 `GM/测试/255` 的对象；而名尾 `A/B` 不会被当成名字 `A`。
+
 ## 3. 歧义三态（fail-closed，绝不「挑第一个」）
 
 | 命中数 | 结果 | 错误串里给什么 |
@@ -41,6 +65,7 @@
 | 1 | 正常发帧，`recog` = 该对象 actor id | 运行记录多一条 `kind=click_npc`（`selector`/`actor`/`name`/`x`/`y`） |
 | 0 | `StepFailure`（rc=1） | `name:` ⇒ 列出**全部**可见对象；`pos:` ⇒ 列出该格 **±3** 邻近可见对象（若邻域没有，退回全量） |
 | ≥2 | `StepFailure`（rc=1） | 「命中 N 个对象（歧义，fail-closed，不挑第一个）」+ 每个候选的 `name/(x,y)/actor` |
+| 该格只有**活动对象**（`pos:`） | `StepFailure`（rc=1），**命中之前**判定 | 「都**不是固定/静态形态**」+ 每个候选的 `类别=活动（原因）`；提示 `?allow_any=1` |
 
 候选格式统一为 `name=<名或 <无名>> (x,y) actor=<id>`，操作者可直接把 `actor=<id>` 抄回 `click_npc` 重跑。
 **没有任何一步会回落到 `auto:last_turn`**：名字不存在就是不存在（selftest 牙 c 钉住这一点）。
@@ -90,8 +115,8 @@
 | 无名尾对象（`CM_TURN` 路径的 `SM_TURN`） | `name=None`，`name:` 匹配不到 | 该类对象只能用 `pos:`/actor id |
 | 还没收到 `SM_TURN` | 红（「还没看到任何非己对象…先 wait_for」），不猜 | 场景需在 `click_npc` 前等到出现帧（进图 AOI 内通常已有） |
 | 同一 actor 的多条出现帧 | 按 actor id **去重**（保留最后坐标/名字） | 不会把「同一个人转身两次」误判成歧义 |
-| 怪物/玩家也有名尾 | `name:` 不区分对象类别 | 是特性不是缺陷：按名点怪也成立；要限定 NPC 由调用方保证 |
-| 坐标语义 | `pos:` 只匹配 `SM_TURN` 的 `Param/Tag`，不做寻路/相邻/朝向校验 | 点到之后是否够得着由 oracle 的点击门决定（超时响亮失败） |
+| 对象类别无协议字段 | `pos:` 用**启发式**静态判定（无移动帧 + 坐标不变 + 首见于初始快照）；`name:` 仍不区分类别 | 一只能说不动、且首见于初始快照活动的对象理论上可骗过 `pos:`；要绝对限定由调用方保证/用 `name:` |
+| 坐标语义 | `pos:` 只匹配当前可见对象的 `Param/Tag`，不做寻路/相邻/朝向校验 | 点到之后是否够得着由 oracle 的点击门决定（超时响亮失败） |
 | `pos:` 与 params | 只收字面十进制坐标，不收 `--var` 名 | 需要动态坐标时先用 `send` 或扩展（未做，避免半吊子语义） |
 | 真机 | **未做真机**（本轮只做到构造级 selftest；宿主内存紧张、私栈在 tester 手里） | 需要在窗口轮次里抽样冒烟一次（见卡面 ④） |
 
@@ -99,22 +124,38 @@
 
 ```sh
 python -I -B tools/probe/mir2_probe.py --selftest
-# => mir2_probe selftest: OK (18 checks; ...)   新增 dsl-npc-discovery
+# => mir2_probe selftest: OK (18 checks; ...)   dsl-npc-discovery 内含下列全部用例
 ```
 
-新增自测覆盖：schema 2 正 6 反、`check_scenario` 不把 `name:/pos:` 当 params 名、运行期 5 例（牙 a–d + 同格多对象）。
-**4 条变异逐条变红再还原**（每条都从 HEAD 还原后重跑确认 `OK (18 checks)`）：
+`dsl-npc-discovery` 覆盖（全部构造级、不连网）：
 
-| 变异 | 红在哪 |
+- schema：2 正 6 反（未知前缀 / 空名 / 坏坐标 / 越界 / `auto:lastturn` 等）；
+- 寻址三态：同名两处去重后仍歧义、零命中列全部可见对象、`pos:` 空格给 ±3 邻近；
+- **N2**：格上有活动对象（有移动帧）⇒ 红且列 `类别=活动（有移动帧 N 条）`、提示 `allow_any`；
+  `pos:8,16?allow_any=1` ⇒ 放行并选中该 actor；对象首见于**初始快照之后** ⇒ 红（`晚于初始快照界`）；
+- **N1**：自身 actor 在目标格/同名时，`name:` 与 `pos:` 各一例都**不把自己当候选**（去掉自身过滤即红，见变异）；
+- **N3**：名尾 `GM/测试/255` ⇒ `name:GM/测试` 命中；名尾无颜色段（`A/B`）⇒ 不截断、列 `<无名>` + 原始名尾；
+- **DISAPPEAR**：对象出现后收到 `SM_DISAPPEAR(30)` ⇒ 不再是候选。
+
+变异（每条都从 HEAD 还原后重跑确认 `OK (18 checks)`）：
+
+| 变异 | 咬哪颗牙 |
 |---|---|
-| 多命中 `if len(hits)==1` → `if hits`（挑第一个） | 「同名两处未被拒（会挑第一个）」 |
-| 零命中不再早报（`if not hits and False`） | 牙 b：错误串不再给邻近对象 |
-| 运行期不解析选择器（`if False and …_npc_selector`） | 牙 d：`FrameError: recog must be int, got NoneType` |
-| 名字匹配恒真（`hits = list(actors)`） | 牙 c：「不存在的名字未被拒」 |
+| 去掉自身过滤（`self_actor` 一行） | N1：按名/按坐标把自己当候选 |
+| `pos:` 的静态门整条关掉 | N2：活动对象被直接命中 |
+| `DISAPPEAR` 不剔除（`disappeared` 恒 False） | 已消失对象仍可被 `name:` 选中 |
+| 名尾颜色不校验（退回按 `/` 直接切） | N3：无名尾被截断成前缀名 `A` |
+| `allow_any` 默认开 | N2：活动对象无需逃生阀即被选中 |
+| 去重键从 actor id 改成名字（reviewer 的变异） | 同名两处被合并成一个 ⇒ 歧义门失效 |
+| 多命中挑第一个（`if len(hits)==1` → `if hits`） | 同名两处未被拒 |
+| 零命中不再早报 | 邻近对象不再被列出 |
+| 运行期不解析选择器 | 发出 `recog=None` 的帧（FrameError） |
+| 名字匹配恒真 | 不存在的名字未被拒 |
 
 ## 8. 残留物清单
 
 - 入库：`tools/probe/mir2_probe.py`（+ 本文件）。
-- 未入库：`E:/tmp/npc_a.py`、`E:/tmp/npc_b.py`、`E:/tmp/npc_c1.py`、`E:/tmp/mutate_npc.py`（一次性补丁/变异脚本）。
+- 未入库（一次性补丁/变异/证据脚本）：`E:/tmp/npc_a.py`、`E:/tmp/npc_b.py`、`E:/tmp/npc_c1.py`、`E:/tmp/mutate_npc.py`、
+  `E:/tmp/f1_a.py`、`E:/tmp/f1_b.py`、`E:/tmp/f1_c.py`、`E:/tmp/f1_d.py`、`E:/tmp/mut_follow.py`、`E:/tmp/follow_doc*.py`。
 - 未触碰：`run3-scenarios.json`、`card_window.py`、`run_batch.sh`、`src/**`、mysqld；
   未起服务端、未占端口、未申请 `stack-claim`。

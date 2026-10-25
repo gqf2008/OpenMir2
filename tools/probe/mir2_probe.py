@@ -439,9 +439,23 @@ def resolve_str_param(value, params, where):
 # （`turn_pair_nameless`）⇒ 该对象 `name=None`，只能按 pos/actor 寻址。
 SM_TURN_DESC_CHARS = 11   # Encode(8B CharDesc) = 11 字符（mir2frame.encode_bytes 的可逆长度）
 
+# 移动帧族（服务端广播某对象移动）：对象**动过**的证据。值取自 `crates/protocol/src/messages.rs`。
+SM_RUSH = 6
+SM_RUSHKUNG = 7
+SM_BACKSTEP = 9
+SM_WALK = 11
+SM_RUN = 13
+SM_DISAPPEAR = 30
+SM_HORSERUN = 5010
+MOVE_IDENTS = frozenset({SM_RUSH, SM_RUSHKUNG, SM_BACKSTEP, SM_WALK, SM_RUN, SM_HORSERUN})
 
-def actor_show_name(frame):
-    """从 `SM_TURN(10)` 的体里取 `ShowName`；无名尾 ⇒ None。"""
+# 名尾 = `ShowName/Color`；颜色段必须是十进制（`$X/255`）。**最后一段不是颜色 ⇒ 整个名尾不可信**
+# （宁可 `<无名>` 也不截断成前缀名；卡 `openmir2-probe-npc-addressing-followups` 的 N3）。
+NAME_TAIL_RE = re.compile(r"^(?P<name>.*)/(?P<color>\d{1,3})$")
+
+
+def actor_name_tail(frame):
+    """`SM_TURN(10)` 体里的原始名尾文本（诊断用；无名尾 ⇒ None）。"""
     body = frame.body or b""
     if len(body) <= SM_TURN_DESC_CHARS:
         return None
@@ -450,40 +464,109 @@ def actor_show_name(frame):
     except FrameError:
         return None
     text = decode_text(raw, "gbk", "replace")
-    name = text.rsplit("/", 1)[0] if "/" in text else text
-    name = name.strip()
+    return text or None
+
+
+def actor_show_name(frame):
+    """从 `SM_TURN(10)` 的体里取 `ShowName`；无名尾或名尾无颜色段 ⇒ None（不截断）。"""
+    text = actor_name_tail(frame)
+    if text is None:
+        return None
+    m = NAME_TAIL_RE.match(text)
+    if m is None:
+        return None
+    name = m.group("name").strip()
     return name or None
 
 
-def visible_actors(frames, self_actor):
-    """可见对象清单：按 actor id 去重（保留最后一次 SM_TURN 的坐标/名字）。
+def scan_actors(frames, self_actor):
+    """扫一遍帧流，返回 `(rows, order)`：**当前可见**对象 + 每对象的动态证据。
 
-    `frames` 是 `Conn.frames`（`[(seq, Frame), ...]`）。只认 `SM_TURN(10)`——它的
-    `Recog=actor id`、`Param=x`、`Tag=y`，是 oracle 的「出现帧」。
+    `frames` 是 `Conn.frames`（`[(seq, Frame), ...]`）。口径（**启发式，不是协议级类型判定**）：
+      * `SM_TURN(10)` = 出现/刷新帧（`Recog=actor id`、`Param=x`、`Tag=y`、可选名尾）；
+      * `MOVE_IDENTS` 任一 = 该对象**动过**（`moves += 1`，坐标取该帧 `Param/Tag`）；
+      * `SM_DISAPPEAR(30)` = 该对象从**当前**可见集移除（再出现则重新加入）；
+      * 自身（`self_actor`）永不入集。
     """
     rows = {}
     order = []
     for seq, fr in frames:
-        if fr.ident != SM_TURN or fr.recog == self_actor:
+        if fr.recog == self_actor:
             continue
-        name = actor_show_name(fr)
-        cur = rows.get(fr.recog)
-        if cur is None:
-            rows[fr.recog] = {"actor": fr.recog, "name": name, "x": fr.param, "y": fr.tag,
-                              "seq": seq}
-            order.append(fr.recog)
-        else:
-            if name:
-                cur["name"] = name
-            cur["x"], cur["y"], cur["seq"] = fr.param, fr.tag, seq
-    return [rows[a] for a in order]
+        if fr.ident == SM_TURN:
+            cur = rows.get(fr.recog)
+            if cur is None:
+                rows[fr.recog] = {
+                    "actor": fr.recog, "name": actor_show_name(fr), "tail": actor_name_tail(fr),
+                    "x": fr.param, "y": fr.tag, "first_seq": seq, "last_seq": seq,
+                    "moves": 0, "coords": {(fr.param, fr.tag)}, "disappeared": False,
+                }
+                order.append(fr.recog)
+            else:
+                cur["name"] = actor_show_name(fr) or cur["name"]
+                cur["tail"] = actor_name_tail(fr) or cur["tail"]
+                cur["x"], cur["y"], cur["last_seq"] = fr.param, fr.tag, seq
+                cur["coords"].add((fr.param, fr.tag))
+                cur["disappeared"] = False
+        elif fr.ident in MOVE_IDENTS:
+            cur = rows.get(fr.recog)
+            if cur is not None:
+                cur["moves"] += 1
+                cur["coords"].add((fr.param, fr.tag))
+                cur["x"], cur["y"], cur["last_seq"] = fr.param, fr.tag, seq
+        elif fr.ident == SM_DISAPPEAR:
+            cur = rows.get(fr.recog)
+            if cur is not None:
+                cur["disappeared"] = True
+                cur["last_seq"] = seq
+    return rows, order
 
 
-def format_actors(rows):
-    """候选清单（错误信息用）：name/(x,y)/actor 三元组，无名写 <无名>。"""
-    return "; ".join("name=%s (%d,%d) actor=%d"
-                     % (r.get("name") or "<无名>", r["x"], r["y"], r["actor"])
-                     for r in rows) or "<无可见对象>"
+def visible_actors(frames, self_actor):
+    """**当前可见**对象清单（剔除已 `SM_DISAPPEAR` 的；按 actor id 去重）。"""
+    rows, order = scan_actors(frames, self_actor)
+    return [rows[a] for a in order if not rows[a]["disappeared"]]
+
+
+def actor_static(row, snapshot_end_seq):
+    """启发式「固定/静态对象」判定 ⇒ `(ok, why)`。
+
+    **三条同时满足**（卡 `openmir2-probe-npc-addressing-followups` 的 N2；协议里没有对象类别字段，
+    依据是 `SM_TURN` 体只有 `CharDesc + 名尾`）：
+      1. 没有任何移动帧（`moves == 0`）；
+      2. 坐标从未变过（出现帧只给过一个格子）；
+      3. **首见于玩家登录后的第一份可见快照内**（`first_seq < snapshot_end_seq`，固定 NPC 随地图加载下发，
+         怪是后来刷的）。
+    """
+    if row["moves"]:
+        return False, "有移动帧 %d 条" % row["moves"]
+    if len(row["coords"]) > 1:
+        return False, "坐标变过 %d 处" % len(row["coords"])
+    if snapshot_end_seq is None:
+        return False, "初始快照界未知（snapshot_end_seq=None）"
+    if row["first_seq"] > snapshot_end_seq:
+        return False, "首见于 seq=%d，晚于初始快照界 seq=%d" % (row["first_seq"], snapshot_end_seq)
+    return True, "静态（无移动帧、坐标不变、首见 seq=%d ≤ 快照界 seq=%d）" % (
+        row["first_seq"], snapshot_end_seq)
+
+
+def format_actors(rows, snapshot_end_seq=None):
+    """候选清单（错误信息用）：name/(x,y)/actor + 首见 seq + 移动帧数 (+ 类别/原始名尾)。
+
+    无名对象写 `<无名>` 并附**原始名尾**（N3：名尾没有颜色段时一眼可见，而不是被截断成前缀名）。
+    """
+    parts = []
+    for r in rows:
+        seg = "name=%s (%d,%d) actor=%d 首见=seq%d 移动帧=%d" % (
+            r.get("name") or "<无名>", r["x"], r["y"], r["actor"],
+            r.get("first_seq", -1), r.get("moves", 0))
+        if not r.get("name") and r.get("tail"):
+            seg += " 原始名尾=%r" % r["tail"][:40]
+        if snapshot_end_seq is not None:
+            ok, why = actor_static(r, snapshot_end_seq)
+            seg += " 类别=%s（%s）" % ("静态" if ok else "活动", why)
+        parts.append(seg)
+    return "; ".join(parts) or "<无可见对象>"
 
 
 # ---- 多会话：会话标注与收件人集合断言（卡 openmir2-multi-session-probe）-----------------
@@ -1012,17 +1095,18 @@ def plan_step(step, index, params, depth=0):
                        _npc_selector={"kind": "name", "value": name})
         elif isinstance(val, str) and val.startswith("pos:"):
             spec = val[len("pos:"):]
-            m = re.match(r"^(\d{1,5}),(\d{1,5})$", spec)
+            m = re.match(r"^(\d{1,5}),(\d{1,5})(?:\?allow_any=([01]))?$", spec)
             if m is None:
                 raise ScenarioError(
-                    "%s.click_npc: `pos:` 必须写成 pos:<x>,<y>（十进制非负整数），得到 %r"
-                    % (where, spec))
+                    "%s.click_npc: `pos:` 必须写成 pos:<x>,<y>（可选 `?allow_any=1`），"
+                    "得到 %r" % (where, spec))
             x, y = int(m.group(1)), int(m.group(2))
             if x > 0xFFFF or y > 0xFFFF:
                 raise ScenarioError(
                     "%s.click_npc: pos 坐标越界（0..65535）：%r" % (where, spec))
             out.update(ident=CM_CLICKNPC, recog=None, param=0, tag=0, series=0, body=b"",
-                       _npc_selector={"kind": "pos", "x": x, "y": y})
+                       _npc_selector={"kind": "pos", "x": x, "y": y,
+                                      "allow_any": m.group(3) == "1"})
         elif isinstance(val, str) and ":" in val:
             raise ScenarioError(
                 "%s.click_npc: 未知寻址写法 %r（只认 auto:last_turn / name:<名> / pos:<x>,<y>；"
@@ -1674,15 +1758,35 @@ class Run:
         })
 
     def _resolve_npc_selector(self, conn, sel, idx):
-        """`click_npc` 的 name:/pos: 寻址：唯一命中原样返回；0/多命中一律 StepFailure。"""
-        actors = visible_actors(conn.frames, self.state.get("self_actor"))
+        """`click_npc` 的 name:/pos: 寻址：唯一命中原样返回；0/多命中一律 StepFailure。
+
+        `pos:` 追加**对象类别门**（N2）：只接受启发式的「固定/静态对象」（无移动帧、坐标不变、
+        首见于初始快照），否则 fail-closed 并列出该格对象与类别；命中之前判定，**绝不先选中再报错**。
+        `pos:<x>,<y>?allow_any=1` = 默认关闭的显式逃生阀（文档写清降级理由）。
+        """
+        snap = self.state.get("snapshot_end_seq")
+        rows, order = scan_actors(conn.frames, self.state.get("self_actor"))
+        actors = [rows[a] for a in order if not rows[a]["disappeared"]]
+        allow_any = bool(sel.get("allow_any"))
         if sel["kind"] == "name":
             hits = [a for a in actors if a.get("name") == sel["value"]]
             what = "name=%s" % sel["value"]
         else:
-            hits = [a for a in actors if a["x"] == sel["x"] and a["y"] == sel["y"]]
+            cell = [a for a in actors if a["x"] == sel["x"] and a["y"] == sel["y"]]
             what = "pos=(%d,%d)" % (sel["x"], sel["y"])
+            static_cell = [a for a in cell if actor_static(a, snap)[0]]
+            if cell and not static_cell and not allow_any:
+                raise StepFailure(
+                    "steps[%s].click_npc: %s 上的对象都**不是固定/静态形态**"
+                    "（启发式：无移动帧 + 坐标不变 + 首见于初始快照；SM_TURN 体没有类别字段）"
+                    "⇒ fail-closed，不选中：%s。确需按坐标选中活动对象请显式写 "
+                    "`pos:%d,%d?allow_any=1`（默认关闭）"
+                    % (idx, what, format_actors(cell, snap), sel["x"], sel["y"]))
+            hits = cell if allow_any else static_cell
         if len(hits) == 1:
+            ok, why = actor_static(hits[0], snap)
+            hits[0]["_static_why"] = why if ok else "allow_any 放行（不是静态）"
+            hits[0]["_allow_any"] = allow_any
             return hits[0]["actor"], hits[0]
         if not actors:
             raise StepFailure(
@@ -1697,10 +1801,10 @@ class Run:
                 "steps[%s].click_npc: 没有对象匹配 %s；%s%s"
                 % (idx, what,
                    "该格邻近(±3)可见对象：" if (sel["kind"] == "pos" and near) else "可见对象：",
-                   format_actors(near if near else actors)))
+                   format_actors(near if near else actors, snap)))
         raise StepFailure(
             "steps[%s].click_npc: %s 命中 %d 个对象（歧义，fail-closed，不挑第一个）：%s"
-            % (idx, what, len(hits), format_actors(hits)))
+            % (idx, what, len(hits), format_actors(hits, snap)))
 
     def _recog_filter(self, plan, idx):
         """把 plan 里的 ``recog`` / ``recog_is`` 编译成 ``frame -> bool``（None = 不过滤）。
@@ -1810,6 +1914,11 @@ class Run:
     def execute_step(self, conn, plan):
         idx = plan["index"]
         kind = plan["kind"]
+        # 「玩家登录后的第一份可见快照」界：进世界 + dwell 之后、**第一个场景步**执行前的帧序号。
+        # 固定 NPC 随地图加载下发（早于此刻），怪是后来刷的（晚于此刻）——`pos:` 的静态判定用它
+        # （卡 `openmir2-probe-npc-addressing-followups` 的 N2；启发式，不是协议级类别）。
+        if "snapshot_end_seq" not in self.state and conn is not None:
+            self.state["snapshot_end_seq"] = getattr(conn.recorder, "seq", None)
         default_timeout = self.args.timeout_ms
         if kind == "kill":
             self._execute_kill(conn, plan)
@@ -1888,7 +1997,11 @@ class Run:
                 self.steps.append({"index": idx, "kind": "click_npc",
                                    "selector": plan["_npc_selector"], "actor": recog,
                                    "name": picked.get("name"), "x": picked["x"],
-                                   "y": picked["y"], "note": plan.get("note", "")})
+                                   "y": picked["y"], "tail": picked.get("tail"),
+                                   "first_seq": picked.get("first_seq"),
+                                   "moves": picked.get("moves"),
+                                   "static_why": picked.get("_static_why"),
+                                   "note": plan.get("note", "")})
             if kind == "dlg_select" and plan.get("_needs_merchant_recog"):
                 recog = self.state["last_merchant_recog"]
                 if recog is None:
@@ -4367,7 +4480,8 @@ def _selftest_npc_discovery():
     p_name = plan_step({"click_npc": "name:沙巴克城堡管理"}, 0, {})
     p_pos = plan_step({"click_npc": "pos:7,16"}, 0, {})
     assert p_name["_npc_selector"] == {"kind": "name", "value": "沙巴克城堡管理"}, p_name
-    assert p_pos["_npc_selector"] == {"kind": "pos", "x": 7, "y": 16}, p_pos
+    assert p_pos["_npc_selector"] == {"kind": "pos", "x": 7, "y": 16,
+                                   "allow_any": False}, p_pos
     assert p_name["ident"] == CM_CLICKNPC and p_name["recog"] is None, p_name
     # ② schema 反例（fail-closed）
     bad = [({"click_npc": "name:"}, "必须跟 NPC 名"),
@@ -4477,7 +4591,132 @@ def _selftest_npc_discovery():
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
-    return "name:/pos: schema 2 正 6 反；牙 a/b/c/d + 同格多对象"
+    # ---- N2（卡 openmir2-probe-npc-addressing-followups）：pos: 的对象类别门 ----
+    # 造一个「动过」的对象：先出现，再一条移动帧
+    def moved_frame(actor, x, y):
+        return build_s2c_frame(actor, SM_WALK, x, y, 0, b"")
+
+    run, conn, tmpd = run_with([turn_frame(601, 7, 16, "野怪"),
+                                moved_frame(601, 8, 16)])
+    try:
+        err = None
+        try:
+            click(run, conn, "pos:8,16")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "活动对象被 pos: 直接命中（N2 未修）"
+        assert "不是固定/静态形态" in err and "移动帧" in err, err
+        assert "类别=活动" in err and "allow_any=1" in err, err
+        assert conn.sock.sent == [], "活动对象却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 逃生阀：显式 ?allow_any=1 才按坐标选中活动对象（默认关闭）
+    run, conn, tmpd = run_with([turn_frame(601, 7, 16, "野怪"),
+                                moved_frame(601, 8, 16)])
+    try:
+        click(run, conn, "pos:8,16?allow_any=1")
+        assert len(conn.sock.sent) == 1, conn.sock.sent
+        assert encode_bytes(pack_header(601, CM_CLICKNPC)) in conn.sock.sent[0], conn.sock.sent
+        step = [x for x in run.steps if x.get("kind") == "click_npc"][-1]
+        assert step["actor"] == 601 and step["selector"]["allow_any"] is True, step
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 「首见于初始快照之后」的对象同样不是静态：先执行一步钉住快照界，再让对象出现
+    run, conn, tmpd = run_with([])
+    try:
+        run.execute_step(conn, plan_step({"sleep": 1}, 0, {}))
+        assert "snapshot_end_seq" in run.state
+        conn.sock.chunks.append(turn_frame(701, 7, 16, "后来刷的"))
+        conn.pump(100)
+        err = None
+        try:
+            click(run, conn, "pos:7,16")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "晚于初始快照的对象被 pos: 命中"
+        assert "不是固定/静态形态" in err and "晚于初始快照" in err, err
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # ---- N1：自身过滤的牙（name: 与 pos: 各一颗；去掉 self 过滤 ⇒ 变绿 ⇒ 必须红）----
+    # 自身 actor=900 在 (7,16)、名字「守卫」；NPC=901 在 (9,16)、名字「商人」
+    run, conn, tmpd = run_with([turn_frame(900, 7, 16, "守卫"),
+                                turn_frame(901, 9, 16, "商人")])
+    try:
+        run.state["self_actor"] = 900
+        err = None
+        try:
+            click(run, conn, "name:守卫")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "把自己当成按名候选（N1 未修）"
+        assert "actor=900" in err or "没有对象匹配" in err, err
+        assert conn.sock.sent == [], "按名命中自己却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    run, conn, tmpd = run_with([turn_frame(900, 7, 16, "守卫"),
+                                turn_frame(901, 9, 16, "商人")])
+    try:
+        run.state["self_actor"] = 900
+        err = None
+        try:
+            click(run, conn, "pos:7,16")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "把自己当成按坐标候选（N1 pos: 未修）"
+        assert "没有对象匹配" in err, err
+        assert conn.sock.sent == [], "按坐标命中自己却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # ---- N3：名字含 '/' 的边界 ----
+    # 正确：名尾是 "GM/测试/255" ⇒ 名字 = "GM/测试"（按最后一个 '/' 切，且最后一段是颜色）
+    run, conn, tmpd = run_with([turn_frame(801, 7, 16, "GM/测试")])
+    try:
+        click(run, conn, "name:GM/测试")
+        step = [x for x in run.steps if x.get("kind") == "click_npc"][-1]
+        assert step["actor"] == 801 and step["name"] == "GM/测试", step
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 名尾没有颜色段（"A/B"）⇒ `<无名>` + 原始名尾，不得被截断成 "A"
+    run, conn, tmpd = run_with([])
+    try:
+        body = encode_bytes(bytes(8)) + encode_text("A/B")
+        conn.sock.chunks.append(b"#" + encode_bytes(pack_header(802, SM_TURN, 7, 16, 0))
+                                + body + b"!")
+        conn.pump(100)
+        err = None
+        try:
+            click(run, conn, "name:A")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "无名尾被截断成前缀名（N3 未修）"
+        assert "没有对象匹配" in err and "<无名>" in err and "原始名尾" in err, err
+        assert conn.sock.sent == [], "把无名对象当成 A 却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # ---- SM_DISAPPEAR(30)：已消失对象不再是候选 ----
+    run, conn, tmpd = run_with([turn_frame(901, 7, 16, "商人"),
+                                build_s2c_frame(901, SM_DISAPPEAR, 0, 0, 0, b"")])
+    try:
+        err = None
+        try:
+            click(run, conn, "name:商人")
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "已消失对象仍被当成候选（DISAPPEAR 未剔除）"
+        assert conn.sock.sent == [], "点已消失对象却发了帧：%r" % (conn.sock.sent,)
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    return ("name:/pos: schema 2 正 6 反；牙 a/b/c/d + 同格多对象；"
+            "N2 活动对象/allow_any/晚于初始快照 3 例；N1 name:/pos: 自身过滤 2 例；"
+            "N3 名含/与无名尾 2 例；DISAPPEAR 剔除 1 例")
 
 
 def run_selftest():
