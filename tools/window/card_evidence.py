@@ -60,6 +60,11 @@ import sys
 import tempfile
 
 MESSAGES_RS = os.path.join('mir2-rs', 'crates', 'protocol', 'src', 'messages.rs')
+#: 状态同步/无条件回帧：只凭「帧出现」不能判成功，机判条目**必须**带 fields 或 order
+#: （卡 `openmir2-criteria-table-hardening`；下一个「637 类假绿」在写表时就被拦住）。
+GUARD_IDENTS = {767, 5008, 637, 653, 654, 657, 52}
+GUARD_NAMES = {'SM_MENU_OK', 'SM_GAMEGOLDNAME', 'SM_BUTCH', 'SM_GOLDCHANGED',
+               'SM_CHANGELIGHT', 'SM_CHARSTATUSCHANGED', 'SM_ABILITY'}
 CMP = ('eq', 'ne', 'ge', 'le', 'contains', 'regex')
 MASKS = ('datetime', 'digits', 'none')
 
@@ -138,6 +143,24 @@ def load_criteria(path):
                              % (where, a.get('count_scope')))
         if a.get('match', 'last') not in ('last', 'any', 'all'):
             raise UsageError('%s.assert.match 只认 last/any/all' % where)
+        forbid = a.get('forbid')
+        if forbid is not None:
+            if not isinstance(forbid, list) or not forbid:
+                raise UsageError('%s.assert.forbid 必须是非空 ident 列表' % where)
+        rng = a.get('rng_ledger')
+        if rng is not None:
+            if not isinstance(rng, dict) or not isinstance(rng.get('draws'), list)                     or not rng['draws']:
+                raise UsageError('%s.assert.rng_ledger 必须是 {draws:[{max,count}],site_substr:[…]}'
+                                 % where)
+            for d in rng['draws']:
+                if not isinstance(d, dict) or 'max' not in d or 'count' not in d:
+                    raise UsageError('%s.assert.rng_ledger.draws 每项要 max/count' % where)
+        guard = (isinstance(a['ident'], int) and a['ident'] in GUARD_IDENTS)             or (isinstance(a['ident'], str) and a['ident'] in GUARD_NAMES)
+        if guard and not (a.get('fields') or a.get('order')):
+            raise UsageError(
+                '%s：ident=%r 属状态同步/无条件回帧，machine 判据必须带 fields 或 order'
+                '（只凭帧出现会假绿；见 card-criteria-hardening）'
+                % (where, a['ident']))
         if 'narrowed' in c and not isinstance(c['narrowed'], str):
             raise UsageError('%s.narrowed 必须是字符串（说明该判据相对 source 收窄了什么）' % where)
         for f in a.get('fields') or []:
@@ -168,7 +191,10 @@ def load_frames(run_dir):
     if os.path.isfile(top):
         files.append(top)
     files.extend(sorted(glob.glob(os.path.join(run_dir, '**', 'frames.ndjson'), recursive=True)))
-    files = sorted(set(files))
+    # 排除 `discovery/` 子根：那是参数发现跑的**另一个场景**，混入会让计数/帧序假绿
+    # （卡 `openmir2-criteria-table-hardening`：e23 根里 discovery 的登录帧曾让 5008 计数 1→2）。
+    files = sorted(f for f in set(files)
+                   if '/discovery/' not in f.replace(os.sep, '/'))
     if not files:
         raise UsageError('证据根 %s 下没有 frames.ndjson' % run_dir)
     frames = []
@@ -250,7 +276,48 @@ def check_order(order, frames, names):
     return 'PASS', '帧序成立（%d 个证据文件各检 1 次）' % checked
 
 
-def evaluate(item, frames, names, scenario=None):
+def _count_ledger(ledger, rng):
+    """按 max 计账本行数；site_substr 给出时每类还要有任一命中该子串。"""
+    rows = []
+    for d in rng['draws']:
+        want_max = int(d['max'])
+        sel = [e for e in ledger if e.get('max') == want_max]
+        subs = [s2 for s2 in (rng.get('site_substr') or [])]
+        detail = []
+        if subs:
+            matched = [e for e in sel if any(s2 in str(e.get('site', '')) for s2 in subs)]
+            if not matched:
+                return None, 'max=%d 的账本行 site 不含 %r' % (want_max, subs)
+            detail = matched
+        if len(sel) != int(d['count']):
+            return None, 'max=%d 账本计数 %d != %d' % (want_max, len(sel), int(d['count']))
+        rows.extend(sel)
+    return rows, None
+
+
+def load_rng_ledger(run_dir):
+    """读证据根下所有 `rng-stream.tsv`（5 列 seq/kind/max/result/site）；无则 None。"""
+    out = []
+    found = False
+    for path in glob.glob(os.path.join(run_dir, '**', 'rng-stream.tsv'), recursive=True):
+        found = True
+        try:
+            for ln in open(path, encoding='utf-8', errors='replace'):
+                cols = ln.rstrip('\r\n').split('\t')
+                if len(cols) < 5:
+                    continue
+                try:
+                    mx = int(cols[2])
+                except ValueError:
+                    continue
+                out.append({'seq': cols[0], 'kind': cols[1], 'max': mx,
+                            'result': cols[3], 'site': cols[4]})
+        except OSError:
+            continue
+    return out if found else None
+
+
+def evaluate(item, frames, names, scenario=None, ledger=None):
     """返回 (verdict, detail)。
 
     scenario = 证据根声明的场景名；None 表示未声明（由 main 按 --allow-unverified 决定是否放行）。
@@ -261,6 +328,12 @@ def evaluate(item, frames, names, scenario=None):
     if item.get('machine', True) is False:
         return 'UNDECIDABLE', '人工判据（不可机判）：' + item['reason']
     a = item['assert']
+    if a.get('rng_ledger'):
+        if ledger is None:
+            return 'UNDECIDABLE', 'rng_ledger 断言需要 --run-dir 下有 rng-stream.tsv（本证据根未找到账本）'
+        got_rows, err = _count_ledger(ledger, a['rng_ledger'])
+        if err:
+            return 'FAIL', 'rng_ledger 不成立：' + err
     if a.get('order'):
         verdict, detail = check_order(a['order'], frames, names)
         if verdict != 'PASS':
@@ -273,6 +346,14 @@ def evaluate(item, frames, names, scenario=None):
     if not sel:
         return 'UNDECIDABLE', 'ident=%d 不在证据根里（该场景没跑到/帧未采）' % ident
     ident_sel = sel          # 该 ident 在证据根里的**全量**（仅受 only_when 约束）
+    for spec in a.get('forbid') or []:
+        fid = resolve_ident(spec, names)
+        fsel = [f for f in frames if f.get('ident') == fid]
+        if pat:
+            fsel = [f for f in fsel if path_matches(f['__file'], pat)]
+        if fsel:
+            return 'FAIL', 'forbid 帧 ident=%d 出现了 %d 次（成对 FAIL 帧不得出现）' % (
+                fid, len(fsel))
     if 'recog' in a:
         rec = [f for f in sel if f.get('recog') == a['recog']]
         if not rec:
@@ -520,6 +601,80 @@ def selftest():
             chk(False, '判据表：未知 cmp ⇒ UsageError')
         except UsageError:
             chk(True, '判据表：未知 cmp ⇒ UsageError')
+
+        # 牙 g：结构性守卫——machine=true + 受守卫 ident + 无 fields/order ⇒ 判据表不合法
+        guard_bad = {'format': 'card-criteria/1', 'criteria': [
+            {'card': 'c', 'w_item': 'w', 'scenario': 's',
+             'assert': {'ident': 'SM_BUTCH', 'min_count': 1}}]}
+        gb = os.path.join(tmp, 'crit-bad.json')
+        with open(gb, 'w', encoding='utf-8') as fh:
+            json.dump(guard_bad, fh, ensure_ascii=False)
+        try:
+            load_criteria(gb)
+            chk(False, '牙g：machine + SM_BUTCH(637) 无 fields/order ⇒ 判据表不合法')
+        except UsageError as ex:
+            chk('fields 或 order' in str(ex),
+                '牙g：machine + SM_BUTCH(637) 无 fields/order ⇒ UsageError（%s）' % str(ex)[:40])
+        guard_ok = {'format': 'card-criteria/1', 'criteria': [
+            {'card': 'c', 'w_item': 'w', 'scenario': 's',
+             'assert': {'ident': 'SM_BUTCH', 'min_count': 1,
+                        'fields': [{'path': 'param', 'expect': 1}]}}]}
+        go = os.path.join(tmp, 'crit-ok.json')
+        with open(go, 'w', encoding='utf-8') as fh:
+            json.dump(guard_ok, fh, ensure_ascii=False)
+        try:
+            chk(len(load_criteria(go)) == 1, '牙g-对照：补上 fields 后判据表合法')
+        except UsageError as ex:
+            chk(False, '牙g-对照：补上 fields 仍报错：%s' % ex)
+
+        # 牙 g2：657（SM_CHARSTATUSCHANGED，登录必发状态同步帧）同样受守卫
+        g657_bad = {'format': 'card-criteria/1', 'criteria': [
+            {'card': 'c', 'w_item': 'w', 'scenario': 's',
+             'assert': {'ident': 657, 'min_count': 2}}]}
+        b657 = os.path.join(tmp, 'crit-657-bad.json')
+        with open(b657, 'w', encoding='utf-8') as fh:
+            json.dump(g657_bad, fh, ensure_ascii=False)
+        try:
+            load_criteria(b657)
+            chk(False, '牙g2：machine + 657 无 fields/order ⇒ 必须 UsageError')
+        except UsageError:
+            chk(True, '牙g2：machine + 657 无 fields/order ⇒ UsageError')
+        g657_ok = {'format': 'card-criteria/1', 'criteria': [
+            {'card': 'c', 'w_item': 'w', 'scenario': 's',
+             'assert': {'ident': 657, 'min_count': 2,
+                        'order': ['SM_ABILITY', 'SM_CHARSTATUSCHANGED']}}]}
+        o657 = os.path.join(tmp, 'crit-657-ok.json')
+        with open(o657, 'w', encoding='utf-8') as fh:
+            json.dump(g657_ok, fh, ensure_ascii=False)
+        try:
+            chk(len(load_criteria(o657)) == 1, '牙g2-对照：657 补 order 后合法')
+        except UsageError as ex:
+            chk(False, '牙g2-对照：657 补 order 仍报错：%s' % ex)
+
+        # 牙 f：成对帧 forbid —— FAIL 帧出现即失败
+        pair_frames = [dict(frames[0], seq=1, ident=615, param=0)]
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 615, 'min_count': 1, 'forbid': [616]}},
+            pair_frames, {})
+        chk(v == 'PASS', '牙f：615 出现且 616 缺席 ⇒ PASS')
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 615, 'min_count': 1, 'forbid': [616]}},
+            pair_frames + [dict(frames[0], seq=2, ident=616, param=0)], {})
+        chk(v == 'FAIL' and 'forbid' in _, '牙f：616 出现 ⇒ FAIL（成对 FAIL 帧不得出现）')
+
+        # 牙 r：rng_ledger —— 恰两抽 + site 归属；无账本 ⇒ UNDECIDABLE
+        rng_item = {'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 32, 'min_count': 1,
+            'rng_ledger': {'draws': [{'max': 16, 'count': 1}, {'max': 201, 'count': 1}],
+                           'site_substr': ['Operate.cs:722', 'Operate.cs:723']}}}
+        ok_ledger = [{'max': 16, 'site': 'Operate.cs:722'}, {'max': 201, 'site': 'Operate.cs:723'}]
+        v, _ = evaluate(rng_item, [dict(frames[0], ident=32)], {}, ledger=ok_ledger)
+        chk(v == 'PASS', '牙r：账本恰两抽（16×1、201×1）且 site 正确 ⇒ PASS')
+        v, _ = evaluate(rng_item, [dict(frames[0], ident=32)], {},
+                        ledger=[ok_ledger[0]])
+        chk(v == 'FAIL', '牙r：缺 201 抽 ⇒ FAIL')
+        v, _ = evaluate(rng_item, [dict(frames[0], ident=32)], {}, ledger=None)
+        chk(v == 'UNDECIDABLE', '牙r：证据根无 rng-stream.tsv ⇒ UNDECIDABLE（不是 PASS）')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -547,6 +702,7 @@ def main(argv=None):
         items = load_criteria(args.criteria)
         names = load_ident_names('.')
         files, frames = load_frames(args.run_dir)
+        ledger = load_rng_ledger(args.run_dir)
     except UsageError as ex:
         print('card_evidence: %s' % ex, file=sys.stderr)
         return 2
@@ -574,7 +730,7 @@ def main(argv=None):
             verdict, detail = 'UNDECIDABLE', '证据根场景未声明（缺 run.json 且无 --scenario）'
         else:
             try:
-                verdict, detail = evaluate(it, frames, names, scenario)
+                verdict, detail = evaluate(it, frames, names, scenario, ledger)
             except UsageError as ex:
                 print('card_evidence: 判据 %s/%s：%s'
                       % (it.get('card'), it.get('w_item'), ex), file=sys.stderr)

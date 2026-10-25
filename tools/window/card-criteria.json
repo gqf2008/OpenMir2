@@ -17,7 +17,11 @@
         "recog": 9912,
         "min_count": 1,
         "fields": [
-          {"path": "param", "expect": 0, "cmp": "eq"}
+          {
+            "path": "param",
+            "expect": 0,
+            "cmp": "eq"
+          }
         ]
       },
       "narrowed": "买价 88 / 税 4 与 620s 后 SabukW 字段属 W-TAX-2（文件面，另条机器不可判）；本条只判 650 帧的 recog/param"
@@ -69,10 +73,22 @@
       "source": "docs/window-closure-ledger-20261025.md §1 第 3 行（SM_GAMEGOLDNAME(5008) 必须出现）",
       "assert": {
         "ident": "SM_GAMEGOLDNAME",
-        "min_count": 1,
-        "match": "any"
+        "min_count": 2,
+        "match": "last",
+        "fields": [
+          {
+            "path": "param",
+            "expect": 0,
+            "cmp": "eq"
+          },
+          {
+            "path": "tag",
+            "expect": 0,
+            "cmp": "eq"
+          }
+        ]
       },
-      "narrowed": "source 还有 5008 的 Param/Tag 逐字节与 characters.GamePoint 落库（另条 machine=false 登记）；本条只判出现，且条件门 SoftVersionDateEx!=0 未满足时只会 UNDECIDABLE/FAIL 不会假 PASS"
+      "narrowed": "登录必发该帧（PlayObject.Message.cs:1689 SendGoldInfo(true)）⇒ 只凭出现会假绿；要求 ≥2 帧（登录 + 兑换后 GameGoldChanged→SendGoldInfo(false)）且**最后一帧** param=LoWord(GamePoint)=0、tag=HiWord(GamePoint)=0（前置 GamePoint=9，兑换后 9→0）。"
     },
     {
       "card": "openmir2-script-playdice-openybdeal",
@@ -134,7 +150,11 @@
         "max_count": 1,
         "count_scope": "all",
         "fields": [
-          {"path": "param", "expect": 0, "cmp": "eq"}
+          {
+            "path": "param",
+            "expect": 0,
+            "cmp": "eq"
+          }
         ]
       },
       "narrowed": "source 的「653 **一条**、Recog 同源」= `count_scope=all` 下的总帧数恰 1（多出任何 recog 的 653 都算回归）+ recog 过滤后的 param 断言；金币净差/地面物件/RNG 流位另条 machine=false 登记"
@@ -151,13 +171,32 @@
       "card": "openmir2-inbound-dispatch-red-batch",
       "w_item": "W-DG-2",
       "scenario": "butch_two_draws",
-      "source": "docs/window-closure-ledger-20261025.md §1 第 6 行；**oracle 订正**：`src/M2Server/Player/PlayObject.Operate.cs:731-738`（仅 `BodyLeathery <= 0` 才置 `Skeleton=true` 并发 `RM_SKELETON`）⇒ `SM_DEATH(32)` → **`SM_BUTCH(637)` 收官**，`SM_SKELETON(33)` **不是每刀必发**",
+      "source": "docs/window-closure-ledger-20261025.md §W-DG-2 + src/M2Server/Player/PlayObject.Operate.cs:722-723（butch 的两抽 Random(16)+5 / Random(201)+100）",
       "assert": {
-        "ident": "SM_BUTCH",
+        "ident": "SM_DEATH",
         "min_count": 1,
-        "order": ["SM_DEATH", "SM_BUTCH"]
+        "order": [
+          "SM_DEATH",
+          "SM_BUTCH"
+        ],
+        "rng_ledger": {
+          "draws": [
+            {
+              "max": 16,
+              "count": 1
+            },
+            {
+              "max": 201,
+              "count": 1
+            }
+          ],
+          "site_substr": [
+            "Operate.cs:722",
+            "Operate.cs:723"
+          ]
+        }
       },
-      "narrowed": "只覆盖帧面收官（死亡帧在 637 之前、637 至少一条）；**不要求 33**（要多次屠宰把 BodyLeathery 打到 ≤0 才出现）。两抽值域 [5,20]/[100,300] 需 RNG 账本（另条 machine=false 登记）"
+      "narrowed": "机判 = 死亡帧(SM_DEATH) → 账本**恰两抽**（max=16 一次、max=201 一次，site 归属 Operate.cs:722/723），SM_BUTCH(637) 降为伴随证据（仍在 order 里，不许删）；SM_SKELETON(33) 仅 BodyLeathery<=0 才发（加强项，不作必需）。没有 rng-stream.tsv 的证据根 ⇒ UNDECIDABLE。"
     },
     {
       "card": "openmir2-inbound-dispatch-red-batch",
@@ -190,7 +229,13 @@
       "source": "docs/window-closure-ledger-20261025.md §1 第 9 行（SM_MERCHANTSAY(643) → SM_MENU_OK(767) → SM_WINEXP(44) → SM_SENDGOODSLIST(645) → SM_GAMEGOLDNAME(5008)）",
       "assert": {
         "ident": "SM_MERCHANTSAY",
-        "order": ["SM_MERCHANTSAY", "SM_MENU_OK", "SM_WINEXP", "SM_SENDGOODSLIST", "SM_GAMEGOLDNAME"]
+        "order": [
+          "SM_MERCHANTSAY",
+          "SM_MENU_OK",
+          "SM_WINEXP",
+          "SM_SENDGOODSLIST",
+          "SM_GAMEGOLDNAME"
+        ]
       },
       "narrowed": "帧序用各 ident 的**首个** seq 判（docs/script-handler-msgqueue-20261025.md:73 的 643→767→44→645→5008）；同优先级重排细节与负载文本未覆盖"
     },
@@ -210,9 +255,13 @@
       "assert": {
         "ident": "SM_CHARSTATUSCHANGED",
         "min_count": 2,
-        "max_count": 2
+        "max_count": 2,
+        "order": [
+          "SM_ABILITY",
+          "SM_CHARSTATUSCHANGED"
+        ]
       },
-      "narrowed": "source 是「657×2 与**邻居相对序**」：本条只覆盖次数（且钉住恰 2 条），邻居相对序未机判（缺钉住的邻居 ident 列表）"
+      "narrowed": "source 是「657×2 与**邻居相对序**」：本条只覆盖次数（且钉住恰 2 条），邻居相对序未机判（缺钉住的邻居 ident 列表） ; 守卫：654 属状态同步帧，补 ABILITY→CHARSTATUSCHANGED 帧序断言。"
     },
     {
       "card": "openmir2-login-frame-order-52-752",
@@ -221,7 +270,11 @@
       "source": "docs/rcard-evidence-plan-20261025.md §2（52 布局(54,78)/621/211 相对序）",
       "assert": {
         "ident": "SM_ABILITY",
-        "order": ["SM_ABILITY", "SM_SENDUSEITEMS", "SM_SENDMYMAGIC"]
+        "order": [
+          "SM_ABILITY",
+          "SM_SENDUSEITEMS",
+          "SM_SENDMYMAGIC"
+        ]
       },
       "narrowed": "source 还含「52 布局(54,78)」的字段面；本条只覆盖 52/621/211 三个 ident 的首帧相对序，字段布局未机判"
     },
@@ -232,7 +285,11 @@
       "source": "docs/rcard-evidence-plan-20261025.md §2（750 出队序：46 之后、654 之前）",
       "assert": {
         "ident": "SM_CHANGEGUILDNAME",
-        "order": ["SM_DAYCHANGING", "SM_CHANGEGUILDNAME", "SM_CHANGELIGHT"]
+        "order": [
+          "SM_DAYCHANGING",
+          "SM_CHANGEGUILDNAME",
+          "SM_CHANGELIGHT"
+        ]
       }
     },
     {
@@ -253,8 +310,13 @@
       "source": "docs/rcard-evidence-plan-20261025.md §2（末步断言 SM_MENU_OK(767)）",
       "assert": {
         "ident": "SM_MENU_OK",
-        "min_count": 1
-      }
+        "min_count": 1,
+        "order": [
+          "SM_MERCHANTSAY",
+          "SM_MENU_OK"
+        ]
+      },
+      "narrowed": "767 全仓 28 处发射、多数是 [错误] 弹窗（Operate.cs:226/231/236/256/261/685/915/924/929/1005/1053、Sale.cs:371/550/585）⇒ 只凭出现不能判成功/菜单打开；本判据改为要求它出现在 SM_MERCHANTSAY(643) 之后（帧序绑定）。"
     },
     {
       "card": "openmir2-menu-ok-unify-pickwire",
@@ -263,8 +325,13 @@
       "source": "docs/rcard-evidence-plan-20261025.md §2（767 分支；回稿后同场景复跑）",
       "assert": {
         "ident": "SM_MENU_OK",
-        "min_count": 1
-      }
+        "min_count": 1,
+        "order": [
+          "SM_MERCHANTSAY",
+          "SM_MENU_OK"
+        ]
+      },
+      "narrowed": "767 全仓 28 处发射、多数是 [错误] 弹窗（Operate.cs:226/231/236/256/261/685/915/924/929/1005/1053、Sale.cs:371/550/585）⇒ 只凭出现不能判成功/菜单打开；本判据改为要求它出现在 SM_MERCHANTSAY(643) 之后（帧序绑定）。"
     },
     {
       "card": "openmir2-npc-ctor-constants",
@@ -273,6 +340,34 @@
       "source": "docs/rcard-evidence-plan-20261025.md §2（SM_TURN series 低=4 高=2、Merchant 格 30s 续期）",
       "machine": false,
       "reason": "series 是 MakeWord(Dir,Light) 打包值，runner 目前没有 32 位 low/high word 提取断言（需先补 word 选择器，再钉 4/2）"
+    },
+    {
+      "card": "openmir2-criteria-table-hardening",
+      "w_item": "pair-615-616",
+      "scenario": "bag_equip",
+      "source": "Messages.cs:261-262 SM_TAKEON_OK/SM_TAKEON_FAIL 互斥成对",
+      "assert": {
+        "ident": "SM_TAKEON_OK",
+        "min_count": 1,
+        "forbid": [
+          "SM_TAKEON_FAIL"
+        ]
+      },
+      "narrowed": "OK 帧出现且 FAIL 帧**一次都不许出现**（原先 wait_for:[615,616] 会把失败当同步成功）。"
+    },
+    {
+      "card": "openmir2-criteria-table-hardening",
+      "w_item": "pair-635-636",
+      "scenario": "eat_item",
+      "source": "Messages.cs:272-273 SM_EAT_OK/SM_EAT_FAIL 互斥成对",
+      "assert": {
+        "ident": "SM_EAT_OK",
+        "min_count": 1,
+        "forbid": [
+          "SM_EAT_FAIL"
+        ]
+      },
+      "narrowed": "OK 帧出现且 FAIL 帧**一次都不许出现**。"
     }
   ]
 }
