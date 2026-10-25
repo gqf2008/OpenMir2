@@ -149,6 +149,31 @@ _HANG_CODE = ("import os, subprocess, sys, time\n"
 _TREE_KILL_DISABLED = False
 
 
+def _apply_test_flag(args, err=None):
+    """隐藏自测开关的生效规则（防「牙自己变成漏洞」）。
+
+    * 只有和 `--selftest-hang-probe` 同用才真正关掉进程树终止；
+    * `--selftest` 下**不生效**并 WARN（自测本身需要真树终止）；
+    * 其它路径一律**忽略并 WARN**，绝不许一次真实门跑被静默关掉防护。
+    返回是否真的开启了「关掉树终止」。
+    """
+    global _TREE_KILL_DISABLED
+    if err is None:
+        err = sys.stderr          # 不能在 def 默认值绑定：重定向 stderr 时默认值仍是旧对象
+    if not getattr(args, "selftest_no_tree_kill", False):
+        return False
+    if getattr(args, "selftest_hang_probe", False):
+        _TREE_KILL_DISABLED = True
+        return True
+    if getattr(args, "selftest", False):
+        print("WARN: --selftest-no-tree-kill 不作用于 --selftest（自测需要真树终止），已忽略",
+              file=err)
+    else:
+        print("WARN: --selftest-no-tree-kill 只在 --selftest-hang-probe 下生效，本次已忽略",
+              file=err)
+    return False
+
+
 def _kill_tree(proc):
     """终止 proc **及其所有后代**。只杀直接子进程会留下孙进程占着 stdout 管道 ⇒ 门挂住。"""
     if _TREE_KILL_DISABLED:
@@ -190,7 +215,9 @@ def run_one(repo, name, argv, timeout):
         except subprocess.TimeoutExpired:
             out, err = "", ""   # 树仍没收干净：照样判红，绝不许挂住
     if timed_out:
-        text = ["TIMEOUT %ss（已按进程树终止）" % timeout]
+        how = ("树终止已被自测关闭，走兜底" if _TREE_KILL_DISABLED
+               else "已按进程树终止")
+        text = ["TIMEOUT %ss（%s）" % (timeout, how)]
     else:
         text = ((out or "") + (err or "")).strip().splitlines()[-1:] or [""]
     return {"name": name, "argv": list(argv), "rc": rc,
@@ -342,8 +369,10 @@ def selftest():
         rc8, out8, el8 = _bounded([sys.executable, "-I", "-B", gate_py, "--repo", tmp,
                                    "--selftest-hang-probe", "--timeout", "300",
                                    "--total-timeout", "3"], 25)
-        chk(rc8 == 2 and "总墙钟" in out8 and el8 < 20,
-            "TSG 牙8 总墙钟 3s ⇒ rc=2 且点名滞留项（%.1fs）" % el8)
+        # 未跑项必须**可 grep**：点名（after）+ 标记 NOT-RUN + 原因「总墙钟」，不能只有 rc=124。
+        chk(rc8 == 2 and "总墙钟" in out8 and "NOT-RUN" in out8 and "after" in out8
+            and el8 < 20,
+            "TSG 牙8 总墙钟 3s ⇒ rc=2，滞留项点名可 grep（NOT-RUN + after，%.1fs）" % el8)
         # 牙9：**关掉进程树终止**（只 kill 直接子进程）⇒ 孙进程仍持 stdout，门必须靠
         # 10s 兜底返回 rc=2，**不许挂住**。这条把「兜底」本身钉住，与牙7（树终止生效）可区分。
         pidfile = os.path.join(tmp, "hang-grand.pid")
@@ -385,17 +414,38 @@ def selftest():
             and not alive9,
             "TSG 牙9 关掉树终止 ⇒ 10s 兜底生效：rc=2、%.1fs 返回、孙进程已清理（%s）"
             % (el9, grand or "无孙PID"))
-        # 牙10：隐藏开关**不许**在真实门跑里生效（防「牙自己变成漏洞」）
+        # 牙10：隐藏开关**不许**在真实门跑/`--selftest` 里生效（防「牙自己变成漏洞」）
+        import argparse as _ap
         import contextlib
         import io as _io
         saved_flag = _TREE_KILL_DISABLED
+
+        def _flag_case(**kw):
+            a = _ap.Namespace(selftest=False, selftest_hang_probe=False,
+                              selftest_no_tree_kill=True)
+            for k, v in kw.items():
+                setattr(a, k, v)
+            buf = _io.StringIO()
+            with contextlib.redirect_stderr(buf):
+                got = _apply_test_flag(a, err=buf)
+            globals()["_TREE_KILL_DISABLED"] = False   # 每个分支后复位
+            return got, buf.getvalue()
+
+        got_probe, _ = _flag_case(selftest_hang_probe=True)
+        got_self, warn_self = _flag_case(selftest=True)
+        got_none, warn_none = _flag_case()
+        globals()["_TREE_KILL_DISABLED"] = saved_flag
+        chk(got_probe is True and got_self is False and got_none is False
+            and "不作用于 --selftest" in warn_self
+            and "只在 --selftest-hang-probe" in warn_none,
+            "TSG 牙10 隐藏开关：仅挂住夹具生效；--selftest/真实路径 ⇒ 忽略 + WARN")
         buf10 = _io.StringIO()
         with contextlib.redirect_stderr(buf10):
             rc10 = main(["--repo", tmp, "--selftest-no-tree-kill",
                          "--only", "no-such-entry"])
         chk(rc10 == 2 and "WARN" in buf10.getvalue()
             and _TREE_KILL_DISABLED == saved_flag,
-            "TSG 牙10 非自测路径的隐藏开关 ⇒ 忽略 + WARN（树终止不被静默关掉）")
+            "TSG 牙10b 真实路径 --only 未知项：开关被忽略 + WARN，rc=2")
     finally:
         REGISTRY = saved
     print("%s: tool_selftest_gate selftest %d/%d"
@@ -419,6 +469,8 @@ def main(argv=None):
     ap.add_argument("--selftest-hang-probe", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--selftest-no-tree-kill", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
+    # 守卫必须在 `--selftest` 分支之前：否则 `--selftest --selftest-no-tree-kill` 会被静默忽略。
+    _apply_test_flag(args)
     if args.selftest:
         return selftest()
     if args.selftest_hang_probe:
@@ -426,15 +478,6 @@ def main(argv=None):
         print("WARN: --selftest-hang-probe 是自测夹具，不是一次真实的门跑", file=sys.stderr)
         REGISTRY = [("hang", ["-c", _HANG_CODE], False),
                     ("after", ["-c", "print('ok')"], False)]
-    if args.selftest_no_tree_kill:
-        # 防「牙自己变漏洞」：该开关只允许出现在自测路径（--selftest / 挂住夹具）里；
-        # 其它情况**忽略并告警**，绝不许一次真实门跑被静默关掉进程树终止。
-        if args.selftest or args.selftest_hang_probe:
-            global _TREE_KILL_DISABLED
-            _TREE_KILL_DISABLED = True
-        else:
-            print("WARN: --selftest-no-tree-kill 只在 --selftest/--selftest-hang-probe "
-                  "下生效，本次已忽略", file=sys.stderr)
     repo = repo_root(args.repo)
     if args.inventory:
         inventory(repo)

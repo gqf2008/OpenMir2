@@ -890,7 +890,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
   - **总墙钟** `--total-timeout`（默认 **420s** < CI 480s）：超时后未跑的项判 `NOT-RUN/rc=124` 并**点名**；
   - 牙：**TSG7**（挂住项 ⇒ 2.2s rc=2 点名，断言 <8s）、**TSG9**（隐藏开关 `--selftest-no-tree-kill`
     只杀直接子进程 ⇒ 断言 10s ≤ 耗时 <30s 返回 rc=2、孙进程已清理）、**TSG8**（总墙钟 3s ⇒ 点名滞留项）、
-    **TSG10**（隐藏开关在非自测路径被忽略 + WARN，防止「牙自己变成漏洞」）；
+    **TSG10/10b**（隐藏开关只对挂住夹具生效：`--selftest` 与真实路径都**忽略 + WARN**，且守卫必须在 `if args.selftest` **之前**——否则 `--selftest --selftest-no-tree-kill` 会被静默忽略）；
 - **不是 hermetic（F2，reviewer-21）**：`dbsnap` 项的 selftest 会连**本机 MySQL**，读
   `mir2_account.*` / `mir2_db.*` 共 13 张表，`mysql.exe` 路径硬编码（`D:\mysql\…`）。因此
   **「找不到 mysql 客户端 / 连不上 127.0.0.1:3306」导致的红属于环境，不是工具回归**；CI 每小时在
@@ -915,7 +915,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 | 项 | 结果 |
 |---|---|
 | 全量 | **绿 44 / 红 0 / 跳过 0，rc=0，111s**（`E:/tmp/final-recheck/gate-full-44.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 17.7s，其余 ≤2s） |
-| 本门自测 | `--selftest` **13/13**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关） |
+| 本门自测 | `--selftest` **14/14**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2） |
 | 清点 | 49 个带 selftest 的工具：门内 **44** / 已分类出域 **5** / **未分类 0** |
 | 变异自证 | **45/45**（44 项 + 门自身进程树变异；逐项「改坏被测实现 ⇒ 该门必须红」） |
 
@@ -946,12 +946,14 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 > （`capture_login_compare` 的最终锚点是**判据失效** `elif False and …`，避免 TypeError 崩出来的红。）
 
 **外部子进程的上限（F3）**：44 个注册文件里 `subprocess.*` 一律要有上限或显式终止路径——
-已补 **13 处非 git 调用**（`param_discovery:779` 120s 且超时⇒该行 rc=2、`rc_attribution:152`、
+已补 **13 处非 git 的 `subprocess.run` 上限**（`param_discovery:779` 120s 且超时⇒该行 rc=2、`rc_attribution:152`、
 `card_window:2688`、`load_report:546`、`preflight:121/332/341`、`selftest_gate_shadow:137`、
-`stale_pointer:862/1995/2225/2226/2305`）；**30 处 git 调用保持原样**（本地只读 `rev-parse/log/cat-file/show/
-for-each-ref`，且门内已被单项超时+进程树终止兜住、整轮被总墙钟兜住，不依赖网络）；**5 处 `Popen` 均有显式
-终止路径**（2 个抓包代理 `terminate/wait(5)/kill`、`next_t` 并发 4 进程 `communicate(120)`、本门 run_one 与
-自测 `_bounded`）。`param_discovery` 另有用例 ㉙ 钉住「超时⇒rc=2/cls=error」。
+`stale_pointer:862/1995/2225/2226/2305`），本门 `taskkill` 也带 10s ⇒ **非 git 的 `run` 现已 0 处无上限**。
+**不带 timeout 的只剩 35 处**：**29 处 `subprocess.run("git", …)` + 1 处 `subprocess.Popen(["git", …])`**
+（board_coverage 的 `cat-file --batch`）——本地只读 git，门内已被单项超时+进程树终止兜住、整轮被总墙钟兜住，
+且不依赖网络；**另有 5 处非 git `Popen`** 均有显式终止路径：2 个抓包代理 `terminate/wait(5)/kill`、
+`next_t` 并发 4 进程 `communicate(120)`、本门 `run_one` 与自测 `_bounded`（超时+树终止）。
+`param_discovery` 另有用例 ㉙ 钉住「超时⇒rc=2/cls=error」。
 
 **接入合并**：合并前与「本地门禁」四条一起跑（见 `AGENTS.md`「本地门禁」；reviewer 自己重跑，不采信作者
 自述）。全量 ~110s：快循环用 `--only <改动的工具>`，交付前跑全量（**不许 `--skip` 掉慢项了事**）。
