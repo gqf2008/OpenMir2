@@ -1,9 +1,10 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = 574a49e7f` @ 2026-10-25 16:05 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
-> `goal_gate` 取数：`python -I tools/goal/goal_gate.py --full --script-bin <release mir2-script-tool> --json`，
-> 快照 `2cb84220f` @ 13:47（**含全量 `cargo test`**：3252 passed / 3315 running / 63 ignored、rc=0；①③④ 均在该 tip 实跑）。
-> 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`，其中「开窗前置缺口」今天已全部解决，照旧读会误导）。
+> **快照戳**：`master = 6370b2019` @ 2026-10-25 16:40 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
+> `goal_gate` 取数：`--skip-tests` 于本 tip 实跑（①③ 与 ② 桶）；**④ 的全量 `--full` 在 `52be82700`**（绿 7/红 0/需人工 0，`cargo test` rc=0 @109.3s、running 3325 = passed 3262 + ignored 63、141 suite 全 ok），
+> 其后至本 tip 的改动**不含任何 `.rs` / `Cargo.*`**（可复算：`git diff --name-only 52be82700 HEAD | grep -E "\.rs$|Cargo\.(toml|lock)$"` 为空）⇒ ④ 结论继续成立。
+> 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`）。
+> **现在只剩两件事需要你**：**① `G11` 一句话**（§1，推荐 A；这是条件② 唯一的缺口）、**② 给窗口时段**（§2，四张 R 卡的真机项都已写好跑法，不占你的注意力，只占机器）。
 > 只列循环内无权自决的事；每项 ≤3 行，可按 §0 模板一行回复。
 
 ## 0. 一行回复模板
