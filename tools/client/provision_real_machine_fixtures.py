@@ -651,7 +651,12 @@ def selftest(args):
         import io
 
         def guard_probe(db_name):
-            """跑一次 --gate（guard 在 build 之前），返回 (rc, build 调用次数, SQL 条数)。"""
+            """跑一次 --gate（guard 在 build 之前），返回 (rc, build 调用次数, SQL 条数, 输出)。
+
+            输出里带 `REFUSED: <理由>`——三条牙要钉**判词分支**，不只钉「被拒」。
+            （reviewer-21：把 guard_db 换成 `raise DbRefused("MUT-stub")` ⇒ 旧牙全绿；
+              reviewer-20：删掉 PROD_DBS 分支 ⇒ 被白名单兜住 ⇒ 旧牙仍全绿。）
+            """
             fake = FakeMysql([])
             calls = {"n": 0}
             real = globals()["build_mysql"]
@@ -667,14 +672,19 @@ def selftest(args):
                     rc = main(["--gate", "--db", db_name, "--char", "aaa", "--map", "9"])
             finally:
                 globals()["build_mysql"] = real
-            return rc, calls["n"], len(fake.executed)
+            return rc, calls["n"], len(fake.executed), buf.getvalue()
 
-        for db_name, tag in (("mir2_db", "生产库"), ("mir2_test_db", "C# 测试库"),
-                             ("mir2_test_db_r; DROP", "注入")):
-            rc_g, calls_g, sql_g = guard_probe(db_name)
-            ok_all &= _chk(rc_g == RC_REFUSED and calls_g == 0 and sql_g == 0,
-                           "A4/%s 硬拒 + 未连库 + 零 SQL" % tag,
-                           "rc=%s build=%s sql=%s" % (rc_g, calls_g, sql_g))
+        # 三条牙各钉一条**判词分支**：生产库 / 不在白名单 / 非法标识符。
+        # 牙 = ① 删掉 PROD_DBS 分支 ⇒ 第一条红（落到白名单，理由是另一句）；
+        #       ② `guard_db(args.db)` 换成 `raise DbRefused("MUT-stub")` ⇒ 三条全红（理由对不上）。
+        for db_name, tag, need in (("mir2_db", "生产库", "是生产库"),
+                                   ("mir2_test_db", "C# 测试库", "不在测试库白名单"),
+                                   ("mir2_test_db_r; DROP", "注入", "不是合法标识符")):
+            rc_g, calls_g, sql_g, out_g = guard_probe(db_name)
+            ok_all &= _chk(rc_g == RC_REFUSED and calls_g == 0 and sql_g == 0 and need in out_g,
+                           "A4/%s 硬拒（理由含「%s」）+ 未连库 + 零 SQL" % (tag, need),
+                           "rc=%s build=%s sql=%s reason=%s"
+                           % (rc_g, calls_g, sql_g, out_g.strip().replace("\n", " ")[:70]))
         ok_all &= _chk(guard_db("mir2_test_db_r") == "mir2_test_db_r", "A4/白名单库放行")
 
         # ---- A1 事务：before 登记 → 写 → after 核对；回滚语句还原 before
