@@ -42,6 +42,16 @@ python -I -B tools/window/blocked_sources_check.py selftest
 | `castle_merchant_tax` | `652`、`原因未定位`、`已证伪` | 同上 §2.2/§2.3 |
 | `castle_merchant_tax_upgrade` | `已证伪`、`NPC` | 同上 §3.2/§3.3 |
 
+**token 匹配语义**（卡 `openmir2-blocked-token-boundary`）：
+
+- **纯数字 token 用词边界**：`(?<![0-9])616(?![0-9])`。所以 `616` 不会被文案里的 `6160` 命中、
+  `652` 不会被 `1652`、`3081` 不会被 `30810` —— 数字多一位/少一位（`3081`→`30810`、`616`→`616s` 以外）
+  一律算**缺失**并判红。
+- **非数字 token 保持子串**：`ProcessMonsterMultiThreadLimit` / `原因未定位` / `已证伪` / `NPC` 这类是标识符或短语，
+  出现在更长的文本里也算命中（例如「…ProcessMonsterMultiThreadLimit 未配=1」）。
+- 为什么必须分两种：数字是最容易「漂一位」还看起来对的东西（`616` vs `6160`、`3081` vs `30810`），
+  子串匹配会把它当命中 ⇒ 门禁假绿；而标识符用词边界反而会漏（后面紧跟下划线/中文/`=` 时边界不成立）。
+
 判据（确定性、无阈值、不要求逐字）：
 
 1. 逐场景比 **blocked 真假**（清单行 vs 场景 JSON）；

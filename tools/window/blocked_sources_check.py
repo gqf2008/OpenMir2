@@ -105,6 +105,18 @@ def scene_blocked(scene):
     return isinstance(scene.get('blocked'), dict) and bool(scene['blocked'])
 
 
+def token_present(text, tok):
+    """token 是否出现在文案里。
+
+    **数字 token 用词边界**（`(?<![0-9])616(?![0-9])`）：`616` 不能被 `6160` 命中、`652` 不能被 `1652`、
+    `3081` 不能被 `30810` ——否则数字一漂（多一位/少一位）门禁仍绿。非数字 token 保持**子串**语义
+    （长标识符里出现即算，如 `ProcessMonsterMultiThreadLimit`）。
+    """
+    if tok.isdigit():
+        return re.search(r"(?<![0-9])%s(?![0-9])" % re.escape(tok), text) is not None
+    return tok in text
+
+
 def scene_text(scene):
     b = scene.get('blocked') or {}
     return '%s\n%s' % (b.get('reason') or '', b.get('missing_fixture') or '')
@@ -191,9 +203,9 @@ def check(run3_path, scenes_dir, list_output=None, tokens=None):
         stext = scene_text(scene)
         for tok in entry['tokens']:
             where = []
-            if tok not in row_text:
+            if not token_present(row_text, tok):
                 where.append('清单行')
-            if tok not in stext:
+            if not token_present(stext, tok):
                 where.append('场景 JSON')
             if where:
                 problems.append(
@@ -281,6 +293,30 @@ def selftest():
         probs, _ = run([{'name': 'a', 'blocked': '清单：TOK1 在'}, row_ok], {'a'},
                        reason='场景：TOK1 在', table_=table2)
         chk(any("'GONE'" in p for p in probs), '牙f：表 token 与两侧文案不一致 ⇒ 红')
+        # 牙 g：数字 token 词边界（616 不应被 6160 命中）
+        table3 = {'a': {'source': 'audit §1', 'tokens': ('616', 'TOKX')}}
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOKX 在，数 6160'}, row_ok], {'a'},
+                       reason='场景：TOKX 在，数 6160', table_=table3)
+        chk(any("'616'" in p for p in probs), '牙g：token 616 不被 6160 命中 ⇒ 红')
+        probs, _ = run([{'name': 'a', 'blocked': '清单：TOKX 在，数 616'}, row_ok], {'a'},
+                       reason='场景：TOKX 在，数 616', table_=table3)
+        chk(probs == [], '牙g-对照：token 616 正常出现 ⇒ 绿')
+        # 牙 h：3081 vs 30810
+        table4 = {'a': {'source': 'audit §1', 'tokens': ('3081',)}}
+        probs, _ = run([{'name': 'a', 'blocked': '清单：30810'}, row_ok], {'a'},
+                       reason='场景：30810', table_=table4)
+        chk(any("'3081'" in p for p in probs), '牙h：token 3081 不被 30810 命中 ⇒ 红')
+        # 牙 i：652 vs 1652
+        table5 = {'a': {'source': 'audit §1', 'tokens': ('652',)}}
+        probs, _ = run([{'name': 'a', 'blocked': '清单：1652'}, row_ok], {'a'},
+                       reason='场景：1652', table_=table5)
+        chk(any("'652'" in p for p in probs), '牙i：token 652 不被 1652 命中 ⇒ 红')
+        # 非数字 token 仍是子串语义：含在长标识符里也算
+        table6 = {'a': {'source': 'audit §1', 'tokens': ('ProcessMonsterMultiThreadLimit',)}}
+        probs, _ = run([{'name': 'a', 'blocked': '清单：x ProcessMonsterMultiThreadLimit x'},
+                        row_ok], {'a'},
+                       reason='场景：x ProcessMonsterMultiThreadLimit x', table_=table6)
+        chk(probs == [], '非数字 token 维持子串语义 ⇒ 绿')
         # 表项缺 source ⇒ rc=2
         out = run([row_b, row_ok], {'a'},
                   table_={'a': {'tokens': ('TOK1',)}})
