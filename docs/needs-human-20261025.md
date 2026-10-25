@@ -49,6 +49,8 @@
 - **保留 PENDING 3 条**：`14`（reviewer-2 明文要求等 R 级窗口⑧，不能凭合并算落地）、`10`/`50`（`head_mask:["series"]` 把 `MakeWord(Dir,Light)` 整字掩掉、连 Dir 一起丢 ⇒ 证据等级不足；解法是工具支持只掩 Light，另卡）。
 - 主标志 `rules_pending_review` **保持保守口径**（文件里还有任何 PENDING 就 true），另加附属证据 `pending_review_used`（本次实际涉及面）。
 
+**落实情况（2026-10-25 09:00）**：已落地并合入 master `721ea45b8`。机判复核：`rules.json` 走行级最小 diff（50 insertions / 50 deletions，只动 `approved_by`）；剥掉 `approved_by` 后递归比对 `identical=True`；PENDING **53 → 恰 3**（10/14/50）；22 条「必须 PENDING」的自测牙改瞄未删；`compare_runs selftest` 316/316。
+
 > **你要做的**：**不需要回复**——除非你不同意。不同意请一句话「rules=不同意（理由）」，我按 `docs/rules-pending-adjudication-20261025.md` 的回滚方式整体回退。
 
 ---
@@ -87,6 +89,19 @@
 | C | 暂不开窗 | 条件② 的 gate 口径仍 PASS，但 196 张「登记型 PASS」继续没有真机证据 |
 
 > **回复**：`②Q1=A`（推荐，请给时段）／`②Q1=B`／`②Q1=C`
+
+---
+
+## 2b. ②a 窗口首轮（W1）的两个**口径前提**——读证据前必须先看这两条
+
+**本页写于 W1 开跑后 20 分钟**（master `cb65a9d34`）。W1 的 21 条正在跑，两类证据的可用性**不同**：
+
+1. **帧面证据有效**：ident/字段/帧序/收件人集合等，逐帧对拍产出的判定可直接用于 R 卡收口。
+2. **DB 面证据暂时全部不可用**：实测根因是 **harness 的存档时机不对称**——Rust 在断线时**同步**落库（`mir2-rs/bins/game-svr/src/lib.rs:22452`），C# 走异步离线支（`src/GameSrv/Word/WorldServer.cs:710-715` → FrontEngine→DBSrv→MySQL），而两侧的 DB 快照都在**停栈之前**拍，随后 C# 还被强杀。
+   ⇒ 表现是「只有一侧的 DB 变了、另一侧仍是基线值」（典型：`characters_ablity.Weight` C#=14 / Rust=0，但两侧 `SM_ABILITY(52)` 帧里的 weight **都是 0**）。
+   ⇒ **这不是行为差异**。修法与真机自证已在办（卡 `openmir2-harness-save-time-symmetry`，tier=R）；修好后 **DB 面需重跑一遍**。
+
+> 换句话说：**今天这批能立刻用于收卡的是帧面判据；DB 面要等 harness 修好后的重跑。** 我不会拿 DB 面的 FAIL 去关任何 R 卡。
 
 ---
 
