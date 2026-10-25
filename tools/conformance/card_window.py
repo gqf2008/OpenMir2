@@ -3450,6 +3450,295 @@ def _parse_assets_row(out, n_decl):
         raise ConfigError("资产读行结果无法解析：%r（%s）" % (lines[0][:300], e))
 
 
+# ---------------------------------------------------------------------------
+# 存档落定等待（卡 `openmir2-harness-save-time-symmetry`）
+#
+# 背景（实验 A，dev-1 comment `19f12a34`）：`run_side` 的 DB 快照在 probe 之后、停栈之前
+# 无条件执行（对称），但**运行期断线存档的同步性不对称**——Rust 在 gate 事件里同步
+# `save_human_rcd`（`lib.rs:22452`），C# 走 `WorldServer.cs:710-715` 离线支 → 异步
+# FrontEngine→DBSrv→MySQL；harness 立刻拍库、随后 finally 强杀 C# ⇒ 「Rust 已落库、
+# C# 仍是基线值」，DB 面被误读成行为差异（W1 `characters_ablity.Weight a=14/b=0`）。
+#
+# 本段在 **probe 之后、dbsnap 之前**插入可观测的「存档落定」等待：
+#   * 判据是**静默检测**：轮询目标行（`characters.LASTUPDATE` + 行数 +
+#     `characters_ablity.ModifyTime` 第二见证）指纹，连续两次
+#     采样相同且时间跨度 >= `quiet_ms` 才认为落定；**不用固定 sleep 充当证据**；
+#   * 窗口 `window_ms`（默认 5000，上限 5000）内不落定 ⇒ **fail-closed**：该侧 rc=2 并记
+#     `save_unsettled`（点名前后的采样），绝不回退成「等够了就当成功」；
+#   * `--dry-run` 只打印计划、不连库。
+#
+# 证据：`<side>/save_settle.json` = {side,db,enabled,window_ms,quiet_ms,poll_ms,
+# require_changes, samples:[{t_ms,sha256_12}], changes, settled, elapsed_ms, action, rc, error}。
+SAVE_SETTLE_DEFAULTS = {"enabled": True, "window_ms": 5000, "quiet_ms": 800,
+                        "poll_ms": 200, "require_changes": True}
+SAVE_SETTLE_KEYS = ("enabled", "window_ms", "quiet_ms", "poll_ms", "require_changes")
+SAVE_SETTLE_MAX_WINDOW_MS = 5000
+
+
+def profile_save_settle(prof, side=None):
+    """读 `save_settle` 配置（顶层默认，`sides.<side>.save_settle` 覆盖本侧）。
+
+    形状非法 fail-closed：未知键、`enabled`/`require_changes` 非 bool、`window_ms` 越界
+    （0..5000）、`quiet_ms` 越界（0..window_ms）、`poll_ms` 越界（50..1000）。
+
+    `require_changes`（**默认 true**）：静默是**负向判据**——恒定指纹同样会被 `settle_decision`
+    判成落定（`changes == 0` 也 settled，reviewer-21 实测）。所以默认要求**从 arm 点起至少
+    观测到 1 次变化**，否则该侧 DB 面不采信（rc=2 / `no_change_observed`）。
+    **静默 != 存档已触发。** 确实不写库的只读场景才可显式 `require_changes: false`，
+    并在该线程 `comment` 里写明「本场景不产生状态变化」。
+    """
+    decl = prof.get("save_settle")
+    if side is not None:
+        sc = (prof.get("sides") or {}).get(side) or {}
+        if "save_settle" in sc:
+            decl = sc["save_settle"]
+    out = dict(SAVE_SETTLE_DEFAULTS)
+    if decl is None:
+        return out
+    if not isinstance(decl, dict):
+        raise ConfigError("save_settle 必须是对象（可被 sides.<side>.save_settle 覆盖）")
+    bad = sorted(set(decl) - set(SAVE_SETTLE_KEYS))
+    if bad:
+        raise ConfigError("save_settle 有未知键 %s（只允许 %s）" % (bad, list(SAVE_SETTLE_KEYS)))
+    for key in ("enabled", "require_changes"):
+        if key not in decl:
+            continue
+        if not isinstance(decl[key], bool):
+            raise ConfigError("save_settle.%s 必须是 bool（实际 %r）" % (key, decl[key]))
+        out[key] = decl[key]
+    for key, lo, hi in (("window_ms", 0, SAVE_SETTLE_MAX_WINDOW_MS),
+                        ("quiet_ms", 0, SAVE_SETTLE_MAX_WINDOW_MS),
+                        ("poll_ms", 50, 1000)):
+        if key not in decl:
+            continue
+        v = decl[key]
+        if not isinstance(v, int) or isinstance(v, bool):
+            raise ConfigError("save_settle.%s 必须是整数（实际 %r）" % (key, v))
+        if v < lo or v > hi:
+            raise ConfigError("save_settle.%s=%r 越界（允许 %d..%d）" % (key, v, lo, hi))
+        out[key] = v
+    if out["quiet_ms"] > out["window_ms"]:
+        raise ConfigError("save_settle.quiet_ms=%d > window_ms=%d（永远不可能落定）"
+                          % (out["quiet_ms"], out["window_ms"]))
+    return out
+
+
+def summary_save_settle_decl(prof):
+    """summary 用：合法则给出每侧生效的 `save_settle` 配置，非法则 None。
+
+    真正的 fail-closed 在 `run_side`（`profile_save_settle` 抛 ConfigError ⇒ 该侧 rc=2）；
+    这里只是为了在报告里如实展示声明，**不吞掉**那边的报错。
+    """
+    try:
+        return dict((side, profile_save_settle(prof, side)) for side in SIDES)
+    except ConfigError:
+        return None
+
+
+def settle_decision(samples, quiet_ms):
+    """静默检测：`samples` = [(t_ms, fingerprint)] 按时间升序。
+
+    返回 (settled, changes, elapsed_ms)。**落定 = 存在相邻两次采样指纹相同且时间跨度
+    >= quiet_ms**（即连续 quiet_ms 内没有任何变化）；固定 sleep 不参与判定。
+    """
+    if not samples:
+        return False, 0, 0
+    changes = 0
+    for i in range(1, len(samples)):
+        if samples[i][1] != samples[i - 1][1]:
+            changes += 1
+    # 落定 = **当前这段「指纹不变」的连续区间**已持续 >= quiet_ms（不是相邻采样间隔）。
+    settled = False
+    run_start = samples[0][0]
+    for i in range(1, len(samples)):
+        if samples[i][1] != samples[i - 1][1]:
+            run_start = samples[i][0]
+        elif (samples[i][0] - run_start) >= quiet_ms:
+            settled = True
+            break
+    return settled, changes, samples[-1][0] - samples[0][0]
+
+
+def _save_settle_sql(db, chr_name):
+    """目标行指纹：`characters.LASTUPDATE` + 行数 + `characters_ablity.ModifyTime`。
+
+    两列都是**两侧存档都会刷新**的时间戳（C# `PlayDataStorage.Save.cs:85-88`、
+    Rust `playdata.rs:423-427`；ablitity 侧 `:141` / `:486`，逐字同形），所以给
+    `LASTUPDATE` 配一个第二见证：任一列变了，指纹就变。
+
+    列名以**冻结 schema** 为准（`sql/mir2_db.sql`）：`characters` 的时间列是 `LASTUPDATE`，
+    **没有** `ModifyTime`（那在 `characters_ablity` / `account` 上）——写错会让每侧 mysql 报
+    Unknown column、两侧都 rc=2（review `b48197f6` F1）。离线牙 `SETTLE13/13b/14` 把 SQL 里
+    出现的标识符逐个对 `sql/mir2_db.sql` 解析出的列集校验。
+    """
+    return ("/* save_settle */ SELECT COALESCE(MAX(c.`LASTUPDATE`), ''), "
+            "COUNT(DISTINCT c.`Id`), COALESCE(MAX(a.`ModifyTime`), '') "
+            "FROM `%s`.`characters` AS c "
+            "LEFT JOIN `%s`.`characters_ablity` AS a ON a.`PlayerId` = c.`Id` "
+            "WHERE c.`ChrName` = %s;\n"
+            % (db, db, _sql_quote(chr_name)))
+
+
+def _save_settle_witness(fingerprint):
+    """把一次采样的原始返回值拆成见证三元组 `[lastupdate, count, abil_modifytime]`。
+
+    返回 (witness, error)。`mysql --batch --skip-column-names` 给的是**一行制表符分隔**的
+    三列（见 `_save_settle_sql`）。解析失败**不改变判据**（判据仍是整行指纹的 sha256），
+    只在样本里留 `witness_error`。留原始值是给真机轮次看的：变化来自哪一列、基线是不是
+    NULL、两次变化是否落在同一秒（`LASTUPDATE` 是 `datetime`，秒粒度）。
+    """
+    parts = (fingerprint or "").strip().split("\t")
+    if len(parts) != 3:
+        return None, "列数 %d != 3（原始 %r）" % (len(parts), (fingerprint or "")[:120])
+    return parts, None
+
+
+def _schema_columns(table, sql_path=None):
+    """从**冻结 schema** `sql/mir2_db.sql` 解析 `table` 的列名集合（离线，不连库）。
+
+    只认 `CREATE TABLE `<t>` (` 之后到首个顶格 `)` 之间的、行首缩进后的第一个反引号标识符
+    ——足够挡住「把不存在的列写进指纹 SQL」这类错误（review `b48197f6` F1：`characters` 上
+    没有 `ModifyTime`），不假装是完整 SQL 解析器。离线牙 `SETTLE13/13b/14` 用它。
+    """
+    path = sql_path or os.path.join(REPO_ROOT, "sql", "mir2_db.sql")
+    cols = set()
+    inside = False
+    with io.open(path, encoding="utf-8") as f:
+        for line in f:
+            if not inside:
+                if re.match(r"CREATE TABLE `%s`\s*\(" % re.escape(table), line):
+                    inside = True
+                continue
+            if line.startswith(")"):
+                break
+            m = re.match(r"\s+`([^`]+)`", line)
+            if m:
+                cols.add(m.group(1))
+    return cols
+
+
+def _sql_identifiers(sql):
+    """取出 SQL 里的反引号标识符（先剥掉块注释，`/* save_settle */` 不是标识符）。"""
+    body = sql.split("*/", 1)[-1]
+    return set(re.findall(r"`([^`]+)`", body))
+
+
+def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
+                      timeout=120, clock=None):
+    """probe 之后、dbsnap 之前的「存档落定」等待（卡 `openmir2-harness-save-time-symmetry`）。
+
+    `sql_fn(sql_text) -> str` 可用测试夹具注入；生产路径走该侧 mysql 客户端。
+    失败（DB 不可用 / 窗口内不落定）⇒ rc=2 + `save_unsettled`，调用方不得继续拍库。
+    """
+    import time as _time
+
+    def _now_ms():
+        return clock() if clock is not None else int(_time.monotonic() * 1000)
+
+    def _sleep(ms):
+        if clock is None:
+            _time.sleep(max(0, ms) / 1000.0)
+
+    res = {"side": side, "db": None, "enabled": bool(settle.get("enabled")),
+           "window_ms": settle.get("window_ms"), "quiet_ms": settle.get("quiet_ms"),
+           "poll_ms": settle.get("poll_ms"),
+           # 缺键必须落到**安全侧**（True）：不经过 profile_save_settle() 的调用（测试、
+           # 将来新加的路径）若默认 False，就会把「静默是负向判据」这道门静默关掉
+           # （reviewer-21 delta 实测：不带该键 + 恒定指纹 => rc=0 settled / changes=0）。
+           "require_changes": bool(settle.get("require_changes", True)),
+           "samples": [], "changes": 0,
+           "witness_first": None, "witness_last": None,
+           "settled": False, "elapsed_ms": 0, "action": None, "rc": None,
+           "error": None}
+    if not res["enabled"]:
+        res["action"] = "disabled"
+        res["rc"] = 0
+        return res
+    chr_name = str(prof.get("char_name") or "")
+    try:
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        if not chr_name:
+            raise ConfigError("存档落定等待需要 profile 的 char_name（定位 characters 行）")
+        if sql_fn is None:
+            client = placement_db_client(prof, side)
+            argv = _mysql_argv(client)
+
+            def sql_fn(text):
+                rc, out, err = runner.run(side, "save_settle", argv, env=env,
+                                          timeout=timeout, stdin_text=text, capture=True)
+                if rc != 0:
+                    raise ConfigError("save_settle 查询失败（mysql rc=%s）：%s"
+                                      % (rc, (err or out or "").strip()[:300]))
+                return out
+    except ConfigError as e:
+        res["error"] = "存档落定等待前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    if getattr(runner, "dry_run", False):
+        res["action"] = "dry-run"
+        runner.log("[%s] 存档落定等待（dry-run 不连库）：db=%s 行=%s window=%dms quiet=%dms "
+                   "poll=%dms" % (side, db, chr_name, res["window_ms"], res["quiet_ms"],
+                                  res["poll_ms"]))
+        res["rc"] = 0
+        return res
+    sql = _save_settle_sql(db, chr_name)
+    t_start = _now_ms()
+    try:
+        while True:
+            t = _now_ms()
+            fp = sql_fn(sql).strip()
+            witness, werr = _save_settle_witness(fp)
+            sample = {"t_ms": t - t_start,
+                      "sha256_12": hashlib.sha256(fp.encode("utf-8")).hexdigest()[:12],
+                      "witness": witness}
+            if werr:
+                sample["witness_error"] = werr
+            res["samples"].append(sample)
+            if res.get("witness_first") is None:
+                res["witness_first"] = witness
+            res["witness_last"] = witness
+            settled, changes, _ = settle_decision(
+                [(s["t_ms"], s["sha256_12"]) for s in res["samples"]], res["quiet_ms"])
+            res["changes"] = changes
+            elapsed = t - t_start
+            if settled:
+                res["settled"] = True
+                res["elapsed_ms"] = elapsed
+                res["action"] = "settled"
+                if res["require_changes"] and res["changes"] == 0:
+                    # **静默 != 存档已触发**：本轮应有状态变化却一次都没观测到 ⇒ 存档很可能
+                    # 还没到（或根本没触发）。落定只证明「此刻没人在写」，不能当证据用。
+                    res["action"] = "no_change_observed"
+                    res["error"] = ("save_unsettled: no_change_observed —— require_changes=true "
+                                    "但实际观测的 %dms 内没有任何变化（changes=0，采样 %d 次；"
+                                    "db=%s 行=%s；window 上限 %dms）—— 静默 != 存档已触发，"
+                                    "该侧 DB 面不采信"
+                                    % (elapsed, len(res["samples"]), db, chr_name,
+                                       res["window_ms"]))
+                    res["rc"] = 2
+                    return res
+                res["rc"] = 0
+                runner.log("[%s] 存档落定：db=%s 行=%s changes=%d elapsed=%dms samples=%d"
+                           % (side, db, chr_name, changes, elapsed, len(res["samples"])))
+                return res
+            if elapsed >= res["window_ms"]:
+                break
+            _sleep(min(res["poll_ms"], max(0, res["window_ms"] - elapsed)))
+        res["action"] = "timeout"
+        res["elapsed_ms"] = _now_ms() - t_start
+        res["error"] = ("save_unsettled: %dms 窗口内未观测到 %dms 静默（changes=%d，采样 %d 次；"
+                        "db=%s 行=%s）—— 存档可能仍在途或未触发，拒绝把本次 DB 快照当证据"
+                        % (res["window_ms"], res["quiet_ms"], res["changes"],
+                           len(res["samples"]), db, chr_name))
+        res["rc"] = 2
+        return res
+    except ConfigError as e:
+        res["error"] = "save_unsettled: %s" % e
+        res["rc"] = 2
+        return res
+
+
 def run_assets(runner, side, prof, sc, assets, env, timeout=120):
     """在一侧执行资产声明通道：restore 之后、起栈之前。返回证据 dict（rc=0 才算完成）。
 
@@ -4971,6 +5260,27 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             vars_argv=list(vars_argv) + list(user_vars or []))
         res["probe_rc"] = runner.run(side, "probe", probe_argv, env=env,
                                      timeout=probe_timeout)
+        # 6b) 存档落定等待（卡 `openmir2-harness-save-time-symmetry`）：probe 关连接后，
+        #     Rust 在 gate 事件里同步存档、C# 走异步 FrontEngine→DBSrv；拍库前必须两侧都
+        #     到「可观测静默」，否则会把「一侧已落库、另一侧仍是基线」误读成行为差异。
+        #     窗口内不落定 ⇒ fail-closed（rc=2 save_unsettled），**不拍库**。
+        try:
+            settle_cfg = profile_save_settle(prof, side)
+        except ConfigError as e:
+            res["error"] = "存档落定等待配置非法：%s" % e
+            return res
+        sres = wait_save_settled(runner, side, prof, sc, settle_cfg, env)
+        try:
+            write_json_file(os.path.join(side_dir, "save_settle.json"), sres)
+        except OSError as e:
+            sres["error"] = ((sres.get("error") or "") + "；写 save_settle.json 失败：%s"
+                             % e).strip("；")
+            sres["rc"] = 2
+        res["save_settle"] = sres
+        if sres.get("rc") != 0:
+            res["error"] = sres.get("error") or "存档落定等待失败"
+            return res
+
         # 7) 抓库（probe 失败也拍，保留现场；缺快照 => 失败）
         db_argv = build_db_argv(sc, ctx)
         res["db_rc"] = runner.run(side, "db", db_argv, env=env, timeout=600)
@@ -5516,6 +5826,7 @@ def execute(cfg):
                      "computed": computed,
                      "frames": cfg.get("discovery_frames")}
 
+    _ss_decl = summary_save_settle_decl(prof)   # 存档落定等待：每侧生效配置（非法则 None）
     started_at = iso_now()
     t0 = time.monotonic()
     summary = {
@@ -5576,6 +5887,16 @@ def execute(cfg):
                      "写前备份 sha256、写后读回）；停栈后按 sha256 还原；未知字段/键/越界值"
                      "加载期 fail-closed"
                      if any(profile_fixtures(prof, s) for s in SIDES) else None),
+        },
+        "save_settle": {
+            "enabled": bool(_ss_decl and any(c.get("enabled") for c in _ss_decl.values())),
+            "declared": _ss_decl,
+            "sides": {},
+            "note": ("probe 之后、DB 快照之前等两侧「存档落定」：轮询 characters.LASTUPDATE "
+                     "+ 行数 + characters_ablity.ModifyTime（第二见证）指纹，静默 >= quiet_ms "
+                     "才算落定；窗口内不落定，或 require_changes（默认 true）下窗口内一次变化都"
+                     "没观测到 ⇒ 该侧 rc=2 save_unsettled、不拍库。**静默 != 存档已触发**"
+                     "（卡 openmir2-harness-save-time-symmetry）"),
         },
         "assets": {
             "enabled": bool(assets),
@@ -5802,6 +6123,20 @@ def execute(cfg):
                     runner.log("[%s] 未给 --discovery-frames：--var 以 <discovered:NAME> 占位预览"
                                % side)
             if not side_failed:
+                try:
+                    settle_side = profile_save_settle(prof, side)
+                except ConfigError as e:
+                    runner.log("[%s] 存档落定等待配置非法 ⇒ 真跑 rc=2：%s" % (side, e))
+                    summary["notes"].append("存档落定等待配置非法：%s" % e)
+                    preview_failed = True
+                    side_failed = True
+                    settle_side = None
+                if settle_side and settle_side.get("enabled"):
+                    runner.log("[%s] 存档落定等待：window=%dms quiet=%dms poll=%dms"
+                               "（probe 后、dbsnap 前；超时 => save_unsettled rc=2）"
+                               % (side, settle_side["window_ms"], settle_side["quiet_ms"],
+                                  settle_side["poll_ms"]))
+            if not side_failed:
                 runner.run(side, "probe",
                            build_probe_argv(sc, ctx, prof, password,
                                             vars_argv=list(vars_argv)
@@ -5881,6 +6216,14 @@ def execute(cfg):
             summary["assets"]["sides"][side] = res["assets"]
         if res.get("fixtures"):
             summary["fixtures"]["sides"][side] = res["fixtures"]
+        if res.get("save_settle"):
+            # review `b48197f6` F2①：窗口报告必须能直接看出每侧「有没有真的等到存档」
+            # （changes/settled/elapsed_ms），否则 DB 面 diff 无从判断是真差异还是快照早拍。
+            _ss = res["save_settle"]
+            summary["save_settle"]["sides"][side] = {
+                "changes": _ss.get("changes"), "settled": _ss.get("settled"),
+                "elapsed_ms": _ss.get("elapsed_ms"), "action": _ss.get("action"),
+                "rc": _ss.get("rc"), "error": _ss.get("error")}
         if res.get("rc") != 0:
             sides_ok = False
             summary["notes"].append("%s 侧未完成：%s"
@@ -6386,6 +6729,10 @@ def _selftest_profile(tmp, stub, log, mutate_rust=False, stack_fail=None,
         "probe_timeout_ms": 1000,
         "ready_timeout_s": 0.8,
         "compare_extra": [],
+        # 卡 openmir2-harness-save-time-symmetry：自测用**快档**落定参数（默认 5000/800/200
+        # 会让每个走 run_side 的用例真等 ~0.8s）；语义仍由 SETTLE1..16 覆盖。
+        "save_settle": {"window_ms": 300, "quiet_ms": 100, "poll_ms": 50,
+                        "require_changes": False},
         "sides": {"csharp": side("csharp"), "rust": side("rust")},
     }
 
@@ -8164,6 +8511,219 @@ def _selftest_monsters_prepend(tmp):
     return out
 
 
+def _selftest_save_settle():
+    """卡 `openmir2-harness-save-time-symmetry`：存档落定等待（离线，不连库）。
+
+    * 配置 fail-closed（未知键 / window>5000 / quiet>window / poll<50 / bool 非 bool）；
+    * 静默判定：恒定或「变化后静默」=> settled；持续变化或静默不足 => 未落定；
+    * wait_save_settled（注入 sql_fn + 假时钟）：落定 rc=0 / 窗口内不落定 rc=2 save_unsettled /
+      DB 错误 rc=2 / disabled 不连库 / require_changes 且零变化 => rc=2；
+    * **schema 牙**：指纹 SQL 里的标识符必须都在 `sql/mir2_db.sql` 解析出的
+      `characters` ∪ `characters_ablity` 列集里（review `b48197f6` F1：曾写
+      `characters.ModifyTime`，该列不存在）；
+    * 源码级接线：run_side 在「# 7) 抓库」之前调用。
+    """
+    out = []
+    out.append((profile_save_settle({}) == {"enabled": True, "window_ms": 5000,
+                                           "quiet_ms": 800, "poll_ms": 200,
+                                           "require_changes": True},
+                "SETTLE1 缺省配置（enabled/window=5000/quiet=800/poll=200/require_changes=True）"))
+    out.append((profile_save_settle({"save_settle": {"window_ms": 3000}})["window_ms"] == 3000,
+                "SETTLE2 顶层 save_settle 可覆盖"))
+    prof_side = {"save_settle": {"window_ms": 3000},
+                 "sides": {"rust": {"save_settle": {"enabled": False}}}}
+    out.append((profile_save_settle(prof_side, "rust")["enabled"] is False
+                and profile_save_settle(prof_side, "csharp")["window_ms"] == 3000,
+                "SETTLE3 sides.<side>.save_settle 覆盖本侧"))
+
+    def bad(decl, needle):
+        try:
+            profile_save_settle({"save_settle": decl})
+            return False
+        except ConfigError as e:
+            return needle in str(e)
+
+    out.append((bad({"bogus": 1}, "未知键"), "SETTLE 牙1 未知键 => 拒"))
+    out.append((bad({"window_ms": 6000}, "越界"), "SETTLE 牙2 window_ms>5000 => 拒"))
+    out.append((bad({"quiet_ms": 900, "window_ms": 800}, "quiet_ms"),
+                "SETTLE 牙3 quiet_ms>window_ms => 拒"))
+    out.append((bad({"poll_ms": 10}, "越界"), "SETTLE 牙4 poll_ms<50 => 拒"))
+    out.append((bad({"enabled": "yes"}, "bool"), "SETTLE 牙5 enabled 非 bool => 拒"))
+    out.append((bad({"require_changes": "yes"}, "bool"),
+                "SETTLE 牙6 require_changes 非 bool => 拒"))
+
+    def mk(seq):
+        return [(i * 200, fp) for i, fp in enumerate(seq)]
+
+    out.append((settle_decision(mk(["a"] * 6), 800)[0] is True,
+                "SETTLE4 恒定指纹 >= quiet(800) => settled"))
+    out.append((settle_decision(mk(["a"] * 6), 1200)[0] is False,
+                "SETTLE5 静默跨度不足（1000<1200）=> 未落定"))
+    out.append((settle_decision(mk(["a", "a", "b", "b", "b", "b", "b"]), 800)[0] is True,
+                "SETTLE6 变化后静默 => settled（changes 计入）"))
+    out.append((settle_decision(mk(list("abcdefg")), 800)[0] is False,
+                "SETTLE7 持续变化 => 未落定"))
+
+    class _R(object):
+        dry_run = False
+
+        def log(self, *_a, **_k):
+            pass
+
+    prof = {"char_name": "winplay0"}
+    sc = {"db": {"characters_db": "mir2_test_db"}}
+    settle = {"enabled": True, "window_ms": 1200, "quiet_ms": 400, "poll_ms": 200}
+
+    def make_clock():
+        t = {"ms": 0}
+
+        def clk():
+            v = t["ms"]
+            t["ms"] += 200
+            return v
+        return clk
+
+    seq = iter(["A\n46", "A\n46", "B\n46", "B\n46", "B\n46", "B\n46"])
+    res = wait_save_settled(_R(), "csharp", prof, sc, settle, {},
+                            sql_fn=lambda _s: next(seq), clock=make_clock())
+    out.append((res["rc"] == 0 and res["settled"] is True and res["changes"] == 1
+                and res["action"] == "settled",
+                "SETTLE8 注入 sql：变化后静默 => rc=0 settled changes=1"))
+
+    counter = {"n": 0}
+
+    def always(_s):
+        counter["n"] += 1
+        return "X%d\n46" % counter["n"]
+
+    res2 = wait_save_settled(_R(), "rust", prof, sc, settle, {},
+                             sql_fn=always, clock=make_clock())
+    out.append((res2["rc"] == 2 and "save_unsettled" in (res2["error"] or "")
+                and len(res2["samples"]) >= 2,
+                "SETTLE9 窗口内不落定 => rc=2 save_unsettled（含采样）"))
+
+    def boom(_s):
+        raise ConfigError("mysql down")
+
+    res3 = wait_save_settled(_R(), "rust", prof, sc, settle, {},
+                             sql_fn=boom, clock=make_clock())
+    out.append((res3["rc"] == 2 and "save_unsettled" in (res3["error"] or ""),
+                "SETTLE10 DB 错误 => rc=2 save_unsettled（fail-closed）"))
+
+    res4 = wait_save_settled(_R(), "rust", prof, sc, dict(settle, enabled=False), {},
+                             sql_fn=boom)
+    out.append((res4["rc"] == 0 and res4["action"] == "disabled",
+                "SETTLE11 enabled=false => 不连库、rc=0"))
+
+    import inspect
+    src = inspect.getsource(run_side)
+    out.append(("wait_save_settled(" in src
+                and src.index("wait_save_settled(") < src.index("# 7) 抓库"),
+                "SETTLE12 接线：run_side 在「# 7) 抓库」之前调用 wait_save_settled"))
+
+    # --- schema 牙（review `b48197f6` F1；两颗表都验）--------------------------
+    cols = _schema_columns("characters")
+    cols_a = _schema_columns("characters_ablity")
+    sql = _save_settle_sql("mir2_test_db", "winplay0")
+    idents = _sql_identifiers(sql)
+    allowed = cols | cols_a | {"characters", "characters_ablity", "mir2_test_db"}
+    out.append((len(cols) >= 30 and len(cols_a) >= 5
+                and "LASTUPDATE" in cols and "ModifyTime" not in cols
+                and "ModifyTime" in cols_a and "PlayerId" in cols_a
+                and {"LASTUPDATE", "ModifyTime", "ChrName"} <= idents
+                and idents <= allowed,
+                "SETTLE13 指纹 SQL 标识符 ⊆ 冻结 schema 列集（characters ∪ characters_ablity"
+                " + 库/表名）：%s" % sorted(idents - allowed)))
+    out.append(("characters_ablity" in sql and "LEFT JOIN" in sql
+                and "MAX(a.`ModifyTime`)" in sql,
+                "SETTLE13b 指纹带第二见证：LEFT JOIN characters_ablity 取 MAX(a.ModifyTime)"))
+    bad_sql = "SELECT MAX(`Nonsense`), COUNT(*) FROM `mir2_test_db`.`characters`;"
+    out.append((not (_sql_identifiers(bad_sql) <= allowed),
+                "SETTLE14 牙7 同一判据对不存在的列 Nonsense 判红（牙本身不恒绿）"))
+
+    # --- require_changes（review `b48197f6` F2②）：静默 != 存档已触发 ----------
+    fixed = {"n": 0}
+
+    def constant(_s):
+        fixed["n"] += 1
+        return "A\n46"
+
+    ss = dict(settle, require_changes=True)
+    res5 = wait_save_settled(_R(), "csharp", prof, sc, ss, {},
+                             sql_fn=constant, clock=make_clock())
+    # 报错串必须用**实际 elapsed**（settle 时约 800ms），不能拿 window 上限 1200ms 冒充，
+    # 否则真机读到会以为「等满窗口才判无变化」。
+    err5 = res5["error"] or ""
+    out.append((res5["rc"] == 2 and res5["action"] == "no_change_observed"
+                and res5["settled"] is True and res5["changes"] == 0
+                and "no_change_observed" in err5
+                and "静默 != 存档已触发" in err5
+                and ("实际观测的 %dms" % res5["elapsed_ms"]) in err5
+                and res5["elapsed_ms"] < 1200
+                and "window 上限 1200ms" in err5,
+                "SETTLE15 牙8 require_changes 且零变化 => rc=2 no_change_observed"
+                "（且报错用实际 elapsed=%dms、不拿 window 上限冒充）"
+                % res5["elapsed_ms"]))
+    seq2 = iter(["A\n46", "B\n46", "B\n46", "B\n46", "B\n46"])
+    res6 = wait_save_settled(_R(), "csharp", prof, sc, ss, {},
+                             sql_fn=lambda _s: next(seq2), clock=make_clock())
+    out.append((res6["rc"] == 0 and res6["settled"] is True and res6["changes"] == 1,
+                "SETTLE15b require_changes 但观测到变化 => rc=0 settled"))
+    res7 = wait_save_settled(_R(), "csharp", prof, sc,
+                             dict(settle, require_changes=False), {},
+                             sql_fn=constant, clock=make_clock())
+    out.append((res7["rc"] == 0 and res7["settled"] is True and res7["changes"] == 0,
+                "SETTLE15c 显式 require_changes=false（只读场景逃生阀）=> 零变化也 rc=0"))
+
+    # --- 边界语义（F5）：quiet_ms=0 约 poll_ms 后落定；window_ms=0 必 timeout ----
+    b0 = wait_save_settled(_R(), "rust", prof, sc,
+                           {"enabled": True, "window_ms": 1200, "quiet_ms": 0,
+                            "poll_ms": 200, "require_changes": False}, {},
+                           sql_fn=constant, clock=make_clock())
+    b1 = wait_save_settled(_R(), "rust", prof, sc,
+                           {"enabled": True, "window_ms": 0, "quiet_ms": 0,
+                            "poll_ms": 200, "require_changes": False}, {},
+                           sql_fn=constant, clock=make_clock())
+    out.append((b0["rc"] == 0 and len(b0["samples"]) == 2 and b1["rc"] == 2
+                and b1["action"] == "timeout" and len(b1["samples"]) == 1,
+                "SETTLE16 边界：quiet_ms=0 => 第 2 次采样即落定；window_ms=0 => 必 timeout"))
+
+    # --- 原始见证（真机轮次要能看出「变化来自哪一列 / 基线是不是 NULL / 是否同一秒」）---
+    tab = chr(9)
+    w_a = ("2026-10-25 09:00:00" + tab + "1" + tab + "2026-10-25 09:00:01")
+    w_b = ("2026-10-25 09:05:00" + tab + "1" + tab + "2026-10-25 09:05:01")
+    seqw = iter([w_a, w_b, w_b, w_b, w_b, w_b])
+    resw = wait_save_settled(_R(), "csharp", prof, sc, settle, {},
+                             sql_fn=lambda _s: next(seqw), clock=make_clock())
+    out.append((resw["rc"] == 0 and resw["changes"] == 1
+                and resw["samples"][0]["witness"] == w_a.split(tab)
+                and resw["samples"][-1]["witness"] == w_b.split(tab)
+                and resw["witness_first"] == w_a.split(tab)
+                and resw["witness_last"] == w_b.split(tab)
+                and "witness_error" not in resw["samples"][0],
+                "SETTLE17 每条采样带原始见证 [lastupdate,count,abil_modifytime]，首末见证另有"
+                " witness_first/witness_last"))
+    resx = wait_save_settled(_R(), "rust", prof, sc,
+                             dict(settle, require_changes=False), {},
+                             sql_fn=constant, clock=make_clock())
+    bx = resx["samples"][0]
+    out.append((bx.get("witness") is None and "witness_error" in bx
+                and resx["rc"] == 0,
+                "SETTLE18 见证解析不了时不改判据：witness=null + witness_error，判据仍是整行 sha256"))
+
+    # --- 缺键必须落安全侧（reviewer-21 delta：不带 require_changes + 恒定指纹曾放行）-----
+    resd = wait_save_settled(_R(), "csharp", prof, sc,
+                             {"enabled": True, "window_ms": 1200, "quiet_ms": 400,
+                              "poll_ms": 200}, {},
+                             sql_fn=constant, clock=make_clock())
+    out.append((resd["require_changes"] is True and resd["rc"] == 2
+                and resd["action"] == "no_change_observed"
+                and resd["changes"] == 0,
+                "SETTLE19 牙9 settle 不带 require_changes（不经 profile 层）=> 默认 true、"
+                "恒定指纹必须 rc=2 no_change_observed（不许静默降级放行）"))
+    return out
+
+
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
     stub = os.path.join(tmp, "stub.py")
@@ -8281,8 +8841,12 @@ def selftest():
                     "db rust", "stop rust"]
         chk(summary["exit_code"] == 0, "全流程 => 退出码 0（实际 %s）" % summary["exit_code"])
         chk(summary["verdict"] == "PASS", "compare verdict=PASS（实际 %s）" % summary["verdict"])
-        chk(order == expected,
-            "编排顺序 = restore/stack/probe/db/stop x2（实际 %s）" % order)
+        # settle 走 stub 的 mysql 分支：stub 自己记 "mysql <side>" 行（step 名不落日志），
+        # 与 rest/stack/probe/db/stop 的断言无关 ⇒ 一并剔除。
+        order_core = [x for x in order if not x.startswith("mysql ")]
+        chk(order_core == expected,
+            "编排顺序 = restore/stack/probe/save_settle*/db/stop x2（剔除 settle 轮询后实际 %s）"
+            % order_core)
         rep = read_report(os.path.join(out, "report.json")) or {}
         fr = rep.get("frames") or {}
         chk(fr.get("oracle_total") == 1 and fr.get("rust_total") == 1
@@ -8406,9 +8970,10 @@ def selftest():
         chk(s_disc["exit_code"] == 0 and s_disc["verdict"] == "PASS",
             "DISC-1 可推导场景 => rc=0/PASS（实际 %s/%s）"
             % (s_disc["exit_code"], s_disc["verdict"]))
-        chk(disc_steps == ["restore", "stack", "discover", "probe", "db", "stop"] * 2
+        disc_core = [x for x in disc_steps if x != "save_settle"]
+        chk(disc_core == ["restore", "stack", "discover", "probe", "db", "stop"] * 2
             + ["compare"],
-            "DISC-1 命令序列 discover 先于 probe（实际 %s）" % disc_steps)
+            "DISC-1 命令序列 discover 先于 probe（剔除 settle 轮询后实际 %s）" % disc_core)
         argv_c = probe_argv_of(out_disc, "csharp")
         argv_r = probe_argv_of(out_disc, "rust")
         chk("--var" in argv_c and "npc_actor=119" in argv_c,
@@ -8748,15 +9313,17 @@ def selftest():
         orig_runner_run = Runner.run
         stop_state = {"value": "orig"}
 
-        def patched_runner_run(self, side, step, argv, env=None, timeout=600):
+        def patched_runner_run(self, side, step, argv, env=None, timeout=600,
+                               stdin_text=None, capture=False):
             if step == "stop" and stop_state["value"] != "orig":
                 safe = _redact_argv(argv)
                 self.commands.append({"side": side, "step": step, "argv": safe})
                 self.steps.append("%s:%s" % (side, step))
                 self.log("== %s/%s :: %s" % (side, step, _join_argv(safe)))
                 self.log("   %s/%s rc=%s" % (side, step, stop_state["value"]))
-                return stop_state["value"]
-            return orig_runner_run(self, side, step, argv, env=env, timeout=timeout)
+                return (stop_state["value"], "", "") if capture else stop_state["value"]
+            return orig_runner_run(self, side, step, argv, env=env, timeout=timeout,
+                                   stdin_text=stdin_text, capture=capture)
 
         Runner.run = patched_runner_run
         try:
@@ -9815,6 +10382,8 @@ def selftest():
         for cond, msg in _selftest_inventory_reachability(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_assets(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_save_settle():
             chk(cond, msg)
         for cond, msg in _selftest_level_fixture(tmp):
             chk(cond, msg)
