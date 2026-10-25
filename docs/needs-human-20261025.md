@@ -1,6 +1,6 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = 2cb84220f` @ 2026-10-25 13:47 +0800（walgit 主源 = 原仓库，已恢复）。
+> **快照戳**：`master = 06b7fcb36` @ 2026-10-25 14:50 +0800（walgit 主源 = 原仓库，已恢复；本页 §5 已按此 tip 重数）。
 > `goal_gate` 取数：`python -I tools/goal/goal_gate.py --full --script-bin <release mir2-script-tool> --json`，
 > 快照 `2cb84220f` @ 13:47（**含全量 `cargo test`**：3252 passed / 3315 running / 63 ignored、rc=0；①③④ 均在该 tip 实跑）。
 > 本页**就地取代**同路径的上一版（`bff927e11 @ 01:18`，其中「开窗前置缺口」今天已全部解决，照旧读会误导）。
@@ -127,16 +127,16 @@
 
 ## 5. ⑤ 状态快照（`goal_gate` 实测）
 
-- **快照**：`2cb84220f`（2026-10-25 13:47 +08）
+- **快照**：`06b7fcb36`（2026-10-25 14:50 +08）
 
 | 条件 | 状态 | 实测（可复算） |
 |---|---|---|
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
-| ② R 卡证据 | **need_human** | R 卡 **223 张**：closed **14** / `window_required` **155**（另未合并 **2**）/ whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 14+153+2+48+4+1 = 222 ✓ |
+| ② R 卡证据 | **need_human** | R 卡 **226 张**：已完成 **15** / `window_required` **154**（另未合并 **4**）/ whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 未开工或未合并 **1**（`openmir2-gm-script-fixture`，今天新开）/ 其余缺口 **0**。加总 15+154+4+48+3+1+1 = 226 ✓ |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **pass** | 7 项：**绿 7 / 红 0 / 需人工 0**（**最终 tip `2cb84220f`** 实跑）。`cargo_test_workspace` rc=0（手工全量 running **3315 = passed 3252 + failed 0 + ignored 63**、rc=0；两次 rc 一致 ⇒ 非 flaky）；`master_sync` local==remote==`2cb84220f` |
+| ④ 门禁恒绿 | **pass（需在最终 tip 复跑一次）** | 全量 `--full` 最近一次实跑在 `2cb84220f`：7 项绿 7 / 红 0 / 需人工 0，`cargo_test_workspace` rc=0（running **3315 = passed 3252 + ignored 63**、两次 rc 一致 ⇒ 非 flaky）。**此后 master 又前进 7 个提交**（含一笔 `shop.rs`），按「门禁恒绿」口径需在新 tip 再跑一次 `--full`；本页 14:50 的快速模式（`--skip-tests`）为 **绿 6 / 红 0 / 需人工 1**，唯一未判项就是 `cargo_test_workspace`。`master_sync` local==remote==`06b7fcb36` ✓ |
 
-> **四条件现在的真缺口只剩一处**：② 的 G11 1 张（§1 需你裁决）。①③④ 均已 PASS，证据与可复算口径见 `docs/delivery-report-20261025-final.md`。
+> **四条件现在的真缺口只剩一处**：② 的 G11 1 张（§1 需你裁决）。①③ PASS；④ 在 `2cb84220f` 已 PASS、**最终 tip 待复跑一次 `--full`**（只是复跑，不是新缺口）。证据与可复算口径见 `docs/delivery-report-20261025-final.md`。
 
 ## 6. 本轮 `blocked` 项与解封条件（新表；每项写谁在做）
 
