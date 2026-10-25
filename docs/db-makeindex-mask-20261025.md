@@ -49,7 +49,7 @@ oracle `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回「计数器 + `HUti
 
 ## 4. 牙与变异
 
-`compare_runs selftest` **339/339**（新增四颗）：
+`compare_runs selftest` **340/340**（新增五颗）：
 
 | 牙 | 断言 |
 |---|---|
@@ -57,17 +57,42 @@ oracle `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回「计数器 + `HUti
 | MI-2 | 一侧占用槽全 0 ⇒ `nonzero_both_sides` 判红 |
 | MI-3 | 同一玩家两槽同值 ⇒ `distinct_per_player` 判红 |
 | MI-4 | before/after 有变化 ⇒ 通过；完全相同 ⇒ `changes_on_mutation` 判红 |
+| MI-5 | **用仓库 `rules.json` 本身**（不传 `--rules`）跑同一构造：rc 0 且 `whitelisted` 点名 `D-1`、`skipped` 含 `changes_on_mutation` |
+
+> **为什么有 MI-5**：MI-1 用的是自造规则文件，它证明「机制生效」，但**删掉 `rules.json` 里那条登记后
+> MI-1..4 仍全绿**（登记被删没人发现 = 没牙）。MI-5 把牙咬在**仓库登记表**上。
+
+### 4.1 变异实证（逐条放宽 ⇒ 对应牙红；输出为当次实跑）
+
+| 变异 | 结果 |
+|---|---|
+| A `nonzero_both_sides` 放宽为 `if False` | `FAIL 牙MI-2`，`RED: 338/339` |
+| B `distinct_per_player` 放宽为 `if False` | `FAIL 牙MI-3`，`RED: 338/339` |
+| C `changes_on_mutation` 放宽为 `if False` | `FAIL 牙MI-4`，`RED: 338/339` |
+| D **去掉 `rules.json` 的 `db.masked_columns`**（反向） | `FAIL 牙MI-5`，`rc=1`，差异记录 `{"kind":"value","record":{"column":"MakeIndex","a":"101","b":"201"}}` ⇒ 正是「每次都报一条 MakeIndex 差异」的旧行为；`RED: 339/340` |
+
+回归后 `GREEN: compare_runs selftest 340/340`。
 
 ## 5. 复算影响面（`E:/tmp/window/db-rerun/run2`，唯一按新口径跑的 DB 证据）
 
-| 场景 | 改前（无掩码）rc/DB 差异/MakeIndex 差异 | 改后（掩码）rc/DB 差异/MakeIndex 差异/whitelist |
+复现命令（当次实跑；`--ignore-idents 14` 与本批原始 argv 一致；「改前」= 把 `rules.json`
+的 `db.masked_columns` 摘掉后另存一份传入）：
+
+```sh
+python -I -B tools/conformance/compare_runs.py --oracle <run2>/<场景>/csharp   --rust <run2>/<场景>/rust --out /tmp/x.json --quiet --ignore-idents 14 [--rules <无掩码副本>]
+```
+
+| 场景 | 改前：rc / db 差异 / MakeIndex 差异 | 改后：rc / db 差异 / MakeIndex 差异 / whitelist |
 |---|---|---|
-| gm_batch | 2 / 0 / 0 | 2 / 0 / 0 / 1 |
+| gm_batch | 1 / 0 / 0 | 1 / 0 / 0 / 1 |
 | gm_time | 0 / 0 / 0 | 0 / 0 / 0 / 1 |
 | login_only | 0 / 0 / 0 | 0 / 0 / 0 / 1 |
 | merchant_dialog | 1 / 0 / 0 | 1 / 0 / 0 / 1 |
-| move_walk | 2 / 5 / 0 | 2 / **5** / 0 / 1 |
+| move_walk | 1 / 5 / 0 | 1 / **5** / 0 / 1 |
 | npc_click_auto | 0 / 0 / 0 | 0 / 0 / 0 / 1 |
+
+（`rc` 非 0 的 3 条是**帧面**差异：`gm_batch` / `merchant_dialog` / `move_walk`，与本卡无关；
+**其余差异条数改前=改后**。）
 
 **如实说明**：run2 这批里 `MakeIndex` 差异**改前就是 0**（两侧 DB 都是同一次 restore 的基线，
 物品的 MakeIndex 未被重新生成）⇒ 本轮掩码在这批证据上是**无操作**；「掩码真生效」由 **牙 MI-1**

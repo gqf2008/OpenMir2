@@ -2822,6 +2822,19 @@ class Selftest(object):
                    and any(r.get("kind") == "masked_column_violation" for r in recs_same),
                    (recs_same, recs_ch))
 
+        # 牙MI-5：**用仓库里那份 `rules.json` 本身**（不传 --rules，走 DEFAULT_RULES）——
+        # 否则「有人把 db.masked_columns 登记删了」时上面几颗牙全绿（登记表被删仍全绿 = 没牙）。
+        rc_s, rep_s = self.compare(odb, rdb_diff, ["--allow-missing-fields"])
+        wl_s = [w for w in (rep_s or {}).get("whitelisted") or []
+                if w.get("kind") == "db_column_masked"
+                and w.get("table") == "mir2_db.characters_bagitem"
+                and w.get("field") == "MakeIndex"]
+        self.check("牙MI-5 仓库 rules.json 自身的登记生效：MakeIndex-only 差异 ⇒ rc 0 且 whitelisted 点名 D-1"
+                   "（删掉登记 ⇒ 本条红，回到旧的「每次都报一条」）",
+                   rc_s == 0 and len(wl_s) == 1 and "D-1" in (wl_s[0].get("ref") or "")
+                   and "changes_on_mutation" in (wl_s[0].get("skipped") or []),
+                   (rc_s, wl_s or (rep_s or {}).get("diffs")))
+
 
     def finish(self):
         total = len(self.passed) + len(self.failed)
