@@ -20,7 +20,7 @@
 **收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
 ——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
 「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
-当前 46 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
+当前 47 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
 部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
 
 用法：
@@ -90,6 +90,9 @@ REGISTRY = [
     ("in_world_stability", ["tools/botload/in_world_stability.py", "selftest"], False),
     # M3 落地时由「未分类>0 ⇒ rc≠0」当场抓到的第一例（master 新工具，2026-10-25 合入）。
     ("gm_gate_check", ["tools/window/gm_gate_check.py", "selftest"], False),
+    # 2026-10-25 mirflow-teeth 合入时由 --inventory 抓到（未分类 1）；离线假 mysql + 合成 frames，0.0s。
+    ("provision_real_machine_fixtures",
+     ["tools/client/provision_real_machine_fixtures.py", "--selftest"], False),
     ("tool_selftest_gate", ["tools/hygiene/tool_selftest_gate.py", "--selftest"], False),
     # 卡 `openmir2-docs-delivery-gate`：交付文档的结构性门（hex / 表格 / 路径 / 命令期望值）。
     # 自测 38 项、离线、临时 git 仓库；<2s。
@@ -230,7 +233,8 @@ def run_one(repo, name, argv, timeout):
             "timed_out": timed_out}
 
 
-def run(repo, only=None, skip=None, timeout=300, total_timeout=420):
+def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
+        check_inventory=True):
     only = set(only or [])
     skip = set(skip or [])
     # 未知条目的 rc=2 由 main() 前置校验（F4：原先这里还有一条不可达的 raise）
@@ -261,17 +265,20 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420):
               % ("PASS" if r["rc"] == 0 else "FAIL", name, r["rc"],
                  r["elapsed_s"], r["tail"]))
     bad = [r for r in results if not r.get("skipped") and r["rc"] != 0]
-    print("TOTAL %d 项：绿 %d / 红 %d / 跳过 %d"
+    # A3：全跑末尾**显式**检查 inventory（不看牙的副作用）；`--only` 等调试跑同样适用。
+    inv_rc, unclassified = inventory_gate_rc() if check_inventory else (0, [])
+    print("TOTAL %d 项：绿 %d / 红 %d / 跳过 %d%s"
           % (len(results), sum(1 for r in results if not r.get("skipped") and r["rc"] == 0),
-             len(bad), sum(1 for r in results if r.get("skipped"))))
-    return results, (2 if bad else 0)
+             len(bad), sum(1 for r in results if r.get("skipped")),
+             ("；**未分类 %d**" % len(unclassified)) if unclassified else ""))
+    return results, (2 if (bad or inv_rc == 2) else 0)
 
 
-def inventory(repo):
-    disc = discover()
+def inventory_rows():
+    """分类全部带 selftest 的工具（不打印）：IN_GATE / OUT_OF_SCOPE / UNCLASSIFIED。"""
     in_gate = {a[0] for _n, a, _s in REGISTRY}
     rows = []
-    for rel in disc:
+    for rel in discover():
         if rel in in_gate:
             status = "IN_GATE"
         elif rel in OUT_OF_SCOPE:
@@ -279,6 +286,28 @@ def inventory(repo):
         else:
             status = "UNCLASSIFIED"
         rows.append({"tool": rel, "status": status})
+    return rows
+
+
+def unclassified_tools():
+    return [r["tool"] for r in inventory_rows() if r["status"] == "UNCLASSIFIED"]
+
+
+def inventory_gate_rc():
+    """A3：全跑末尾**显式**检查 inventory。未分类>0 ⇒ 2 并点名。
+
+    不再依赖 selftest 里的「仓库无未分类」断言（那会把仓库变化伪装成门坏了）。
+    """
+    un = unclassified_tools()
+    for t in un:
+        print("UNCLASSIFIED %s（未登记：加进 REGISTRY 或 OUT_OF_SCOPE）" % t)
+    if un:
+        print("未分类 %d 项 ⇒ 全跑判红（A3：inventory 是判据，不靠牙的副作用）" % len(un))
+    return (2 if un else 0), un
+
+
+def inventory(repo):
+    rows = inventory_rows()
     for r in rows:
         print("%-12s %s" % (r["status"].split(":")[0], r["tool"])
               + (("  （%s）" % r["status"].split(": ", 1)[1]) if ": " in r["status"] else ""))
@@ -327,17 +356,17 @@ def selftest():
         from contextlib import redirect_stdout
         buf = io.StringIO()
         with redirect_stdout(buf):
-            _res, rc = run(tmp)
+            _res, rc = run(tmp, check_inventory=False)
         chk(rc == 2, "TSG 牙3 一绿一红 ⇒ 门 rc=2")
         buf = io.StringIO()
         with redirect_stdout(buf):
-            _res, rc = run(tmp, skip=["bad"])
+            _res, rc = run(tmp, skip=["bad"], check_inventory=False)
         out = buf.getvalue()
         chk(rc == 0 and "SKIP bad" in out,
             "TSG 牙4 --skip 打印 SKIP 且不放水（rc=0 仅因显式跳过）")
         buf = io.StringIO()
         with redirect_stdout(buf):
-            _res, rc = run(tmp, only=["ok"])
+            _res, rc = run(tmp, only=["ok"], check_inventory=False)
         chk(rc == 0 and "ok" in buf.getvalue() and "bad" not in buf.getvalue(),
             "TSG 牙5 --only 只跑指定项")
         # 牙6：未知条目 ⇒ rc=2（用法错不许被当成「有红」，也不许假绿）
@@ -470,14 +499,58 @@ def selftest():
             globals()["discover"] = _orig_discover
         chk(rc11 == 2 and "UNCLASSIFIED" in buf11.getvalue(),
             "TSG 牙11 --inventory 有 UNCLASSIFIED ⇒ rc=2 并点名（M3）")
+        # 牙11b（A2）：**合成 discover**——只返回 REGISTRY 里的文件，不依赖真实仓库状态。
+        _gate_files = sorted({a[0] for _n, a, _s in saved})
+
+        def _fake_clean_discover():
+            return list(_gate_files)
+
+        globals()["discover"] = _fake_clean_discover
         try:
             buf11b = _io.StringIO()
             with contextlib.redirect_stdout(buf11b):
                 _rows11b, rc11b = inventory(root)
         finally:
+            globals()["discover"] = _orig_discover
             globals()["REGISTRY"] = _reg_before11   # 交回牙1-6 的假注册表，保持外层 finally 语义
         chk(rc11b == 0 and "UNCLASSIFIED" not in buf11b.getvalue(),
-            "TSG 牙11b --inventory 无未分类 ⇒ rc=0")
+            "TSG 牙11b（合成 discover）无未分类 ⇒ rc=0（不看真实仓库）")
+
+        # 牙12（A3/F1）：全跑末尾的显式 inventory 检查——**纯合成 discover**（不并真实仓库），
+        # 否则「仓库多出一个未分类工具」会把本牙弄红，重演 A2 要消灭的失效模式。
+        def _fake_unc_discover():
+            return list(_gate_files) + ["tools/__fake_unclassified__.py"]
+
+        globals()["REGISTRY"] = saved
+        globals()["discover"] = _fake_unc_discover
+        try:
+            buf12 = _io.StringIO()
+            with contextlib.redirect_stdout(buf12):
+                rc12, un12 = inventory_gate_rc()
+        finally:
+            globals()["discover"] = _orig_discover
+            globals()["REGISTRY"] = _reg_before11
+        chk(rc12 == 2 and un12 == ["tools/__fake_unclassified__.py"]
+            and "UNCLASSIFIED tools/__fake_unclassified__.py" in buf12.getvalue(),
+            "TSG 牙12 全跑 inventory 检查：未分类>0 ⇒ rc=2 并单独点名（A3）")
+        # 牙12b（F2 接线）：假 discover + **真 run()**；把 run() 末尾的 inventory 接线删掉 ⇒ 本牙红。
+        _reg_before12b = REGISTRY
+
+        def _fake_unc_discover2():
+            return [okf, "tools/__fake_unclassified__.py"]
+
+        globals()["REGISTRY"] = [("ok", [okf], False)]
+        globals()["discover"] = _fake_unc_discover2
+        try:
+            buf12b = _io.StringIO()
+            with contextlib.redirect_stdout(buf12b):
+                _res12b, rc12b = run(tmp, timeout=30)
+        finally:
+            globals()["discover"] = _orig_discover
+            globals()["REGISTRY"] = _reg_before12b
+        chk(rc12b == 2
+            and "UNCLASSIFIED tools/__fake_unclassified__.py" in buf12b.getvalue(),
+            "TSG 牙12b（F2）真 run() + 假未分类 ⇒ rc=2 且打印 UNCLASSIFIED（接线牙）")
     finally:
         REGISTRY = saved
     print("%s: tool_selftest_gate selftest %d/%d"

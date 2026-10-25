@@ -886,12 +886,15 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 
 **判定域**（写清判定域才不会假绿）：
 
-- 扫什么：脚本内 `REGISTRY` 的**固定 46 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
+- 扫什么：脚本内 `REGISTRY` 的**固定 47 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
   M1/M2 验收、日志差分、世界采样、botload、本仓库 hygiene 门自身，以及本门自己）；
 - 在哪跑：仓库根（`--repo`，默认本脚本上溯两级），`python -I -B`，**每项独立子进程**；
 - rc 从哪取：**子进程退出码**（不经管道/`tail`，否则拿到的是 `tail` 的 rc）；
 - 判红：任一注册项 rc≠0 ⇒ 本门 rc=2；全 0 ⇒ rc=0；**用法错（未知条目 / 参数）⇒ rc=2**；
 - `--skip <name,...>` **必须打印 `SKIP`**（显式跳过，不许静默放水）；`--only` 只跑指定项；
+- **inventory 是判据**（A3，2026-10-25）：**全跑末尾显式检查 inventory**，未分类>0 ⇒ 全跑 rc=2 并单独打印
+  `UNCLASSIFIED <path>` 行。牙11b 已改为**合成 discover**（只喂 REGISTRY 的文件），不再断言真实仓库状态——
+  否则「仓库出现新工具」会伪装成「门自测坏了」。CI 的 `fast-tool-selftest` 跑普通门即覆盖此检查，无需另加命令；
 - **门自己必须先能超时退出**（2026-10-25 实证 pid 1772 挂住 30+ 分钟）：
   - 单项超时 ⇒ 按**进程树**终止（Windows `taskkill /T /F`，POSIX `killpg`）再 `communicate()` 兜底 10s；
     只 kill 直接子进程时，孙进程继承 stdout ⇒ 超时路径的第二次 `communicate()` **永远等 EOF**；
@@ -908,7 +911,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 **收哪些、不收哪些**（`--inventory` 可看全量）：**只要自带 selftest 且能离线判红，就收**——不按
 「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛。Leader 2026-10-25 裁定：
 **「一次性 / 人工使用 / 别域」都不是合法出域理由**，只有「**需要交互式输入、外部产物或真实环境**」才算。
-出域仅 **5** 项（**51 = 46 门内 + 5 出域 + 0 未分类**；`docs_delivery_gate` 接入后由 50/45 变来），逐项有实跑证据：
+出域仅 **5** 项（**52 = 47 门内 + 5 出域 + 0 未分类**；`docs_delivery_gate`/`provision_real_machine_fixtures` 接入后由 50/45 变来），逐项有实跑证据：
 
 | 出域项 | 真实原因（实跑证据） |
 |---|---|
@@ -918,21 +921,21 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 | `conformance/selftest_impl.py` | 无独立 CLI 入口（`--selftest` 空转 rc=0、无输出）；它是 `compare_runs selftest` 的实现模块，已被 compare_runs 覆盖 |
 | `db-parity/newchr_delchr_selchr_probe.py` | 需要真实 MySQL 与建/删/选角色状态（真机） |
 
-**本机实测（2026-10-25；下表除「清点」行外是 45 项快照，「清点」行与「变异自证」行已更新到 `docs_delivery_gate` 接入后的 46 项）**：
+**本机实测（2026-10-25，47 项；`provision_real_machine_fixtures` 接入后复跑）**：
 
 | 项 | 结果 |
 |---|---|
-| 全量 | **绿 46 / 红 0 / 跳过 0，rc=0**（`docs_delivery_gate` 接入后复跑；旧 45 项快照 `gate-full-45.json` 与 100–120s 口径沿用，本轮未单独计时）（`E:/tmp/final-recheck/gate-full-45.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 18.0s，其余 ≤2s） |
-| 本门自测 | `--selftest` **16/16**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2/未分类 rc） |
-| 清点 | **51** 个带 selftest 的工具：门内 **46** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3）。**卡 `openmir2-docs-delivery-gate` 接入后**由 50/45/0 变为 51/46/0；本行是活口径，上一版快照的 45 项实测数据见同表其余行 |
-| 变异自证 | 门注册项 **47/47**（46 项 + 门自身进程树变异；`mutations-proof.log`；`docs_delivery_gate` 接入后由 46/46 变为 47/47）；另本卡谓词级否证 **7/7**（5 条 blocked 判据 + `--inventory` rc + gm 判据；`orphan-mutations.json`） |
+| 全量 | **绿 47 / 红 0 / 跳过 0，rc=0，140s**（`provision_real_machine_fixtures` 接入后复跑；旧 45/46 项快照 `gate-full-45.json` 等保留对照；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 17.9s，其余 ≤2s） |
+| 本门自测 | `--selftest` **18/18**（…既有 17 条 + **牙12b 接线牙**：假 discover + 真 `run()`，删掉 inventory 接线即红） |
+| 清点 | **52** 个带 selftest 的工具：门内 **47** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3）。`provision_real_machine_fixtures` 由 `--inventory` 当场抓到（卡 `openmir2-tool-selftest-registry-sync`）后由 51/46/0 变为 52/47/0 |
+| 变异自证 | 门注册项 **49/49**（47 项 + 门自身进程树/inventory/接线/隐藏开关变异；`mutations-proof.log`）；另 blocked 卡谓词级否证 **7/7**（`orphan-mutations.json`） |
 
 **能力扩容（两轮共 20 项）**：第二轮 19 项（`review_principal_check` / `scenario_undecidable_audit` /
 `rules_approve` / `capture_login_compare` / `s2c_diff` / `error_curve` / `timeline` / `world_sampler` /
 `preflight` / `gate_shadow_proxy` / `gate_timer_gate` / `count_m1_logs` / `selftest_proxy` /
 `selftest_gate_shadow` / `load_report` / `prepare_safe_login` / `preflight_private_stack` /
 `selftest_mutations` / `startup_param`）+ 第三轮 `in_world_stability`（reviewer-21 实跑 7/7——
-我先前写「无 selftest 入口」是**事实错误**，第三轮被打回后订正）+ 第四轮 `gm_gate_check`（master 新工具；**由 M3 的「`--inventory` 未分类>0 ⇒ rc≠0」当场抓到**，接入后门内 45）。
+我先前写「无 selftest 入口」是**事实错误**，第三轮被打回后订正）+ 第四轮 `gm_gate_check`（master 新工具；**由 M3 的「`--inventory` 未分类>0 ⇒ rc≠0」当场抓到**）+ 第五轮 `provision_real_machine_fixtures`（mirflow-teeth 合入时再次由 `--inventory` 抓到：未分类 1、工具门 45/46 红；接入后 47/47 绿，卡 `openmir2-tool-selftest-registry-sync`）。
 
 **同型缺陷（变异自证/AST 扫描发现，比新增清单更重要）**：`sys.exit(N)` 写在含 `except SystemExit`
 的 `try` 体内 ⇒ 失败分支被自己的处理器当成「预期判红」接住，**改坏必绿**。
