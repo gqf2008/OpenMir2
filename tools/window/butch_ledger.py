@@ -43,8 +43,40 @@ C_FN_SIG = "ClientGetButchItem("
 C_SITE_MARK = ("ButchItem", "PlayObject.Operate.cs")
 
 
+def _strip_test_modules(text):
+    """删掉**所有** `#[cfg(test)]` 属性所修饰的块（不假定它们都在文件末尾）。
+
+    reviewer-21 N1：早先只截「第一个 `#[cfg(test)]` 之前的前缀」⇒ 在文件**末尾**追加一个生产函数，
+    计数仍是 1，牙照样绿——牙的自述（「全文件」）与实际覆盖不符。这里按块删，覆盖全文件。
+    """
+    out = text
+    while True:
+        at = out.find("#[cfg(test)]")
+        if at == -1:
+            return out
+        # 从属性之后找第一个 '{'，再括号配平到它的闭合
+        i = out.find("{", at)
+        if i == -1:
+            return out[:at]
+        depth = 0
+        for j in range(i, len(out)):
+            if out[j] == "{":
+                depth += 1
+            elif out[j] == "}":
+                depth -= 1
+                if depth == 0:
+                    out = out[:at] + out[j + 1:]
+                    break
+        else:
+            return out[:at]
+
 def _strip_code(text):
     """去掉注释与字符串字面量（保留换行），供括号配平用。
+
+    **已知脆弱点（N2，登记不改）**：Rust 生命周期写法和字符字面量同形（`'a`），本函数会把
+    `'a` 当成字符字面量、一直吞到下一个 `'`，**原理上**可能吞掉一段代码。当前实测无实害
+    （剥注释前后行数一致、15 处 `random_below` 行仍在、`fn_span` 得到的 `(7712, 7791)` 与真实边界一致）；
+    若将来 world.rs 里出现成对的生命周期标注紧邻抽数行，先复核这颗牙再信结论。
 
     注意：**裸 grep 会误报**——注释里就写着 `Random(16)`/`Random(201)`（reviewer-21 提醒过），
     所以任何「按源码判站点」的牙都必须先剥注释/字符串。
@@ -316,9 +348,7 @@ def _selftest():
         except OSError:
             return None, None
         # 测试模块（`#[cfg(test)]` 起）不算生产代码——reviewer-21 提到的「10184+ 都在 cfg(test)」正是这里。
-        cut = text.find("#[cfg(test)]")
-        if cut != -1:
-            text = text[:cut]
+        text = _strip_test_modules(text)
         lines = text.split(chr(10))
         rx = re.compile(pattern)
         total = sum(len(rx.findall(l)) for l in lines)
@@ -340,6 +370,40 @@ def _selftest():
     c201, c201_in = _occurrences(C_SRC, cspan, _cx201)
     ok("l 静态牙（C#）：屠宰函数内 Random(16)/(201) 各恰 1 处（文件内其它 Random(201) 不算）",
        cspan is not None and c16_in == 1 and c201_in == 1, (c16, c16_in, c201, c201_in, cspan))
+
+    # N1：静态牙的覆盖必须真是「全文件」——旧实现只截「首个 #[cfg(test)] 之前的前缀」，
+    # 在文件末尾追加一个生产函数时计数仍为 1（牙照样绿）。这里用合成文本钉住：
+    # test 模块**之后**再追加一处 random_below(16) ⇒ 总数必须变 2。
+    def _count_text(text, span, pattern):
+        lines2 = text.split(chr(10))
+        rx2 = re.compile(pattern)
+        tot = sum(len(rx2.findall(l)) for l in lines2)
+        ins = sum(len(rx2.findall(l)) for i2, l in enumerate(lines2)
+                  if span and span[0] - 1 <= i2 <= span[1] - 1)
+        return tot, ins
+
+    _prod = ("fn a() { r.random_below(16); }" + chr(10) +
+             "fn b() { r.random_below(201); }" + chr(10))
+    _tests = ("#[cfg(test)]" + chr(10) + "mod t {" + chr(10) +
+              "    fn z() { r.random_below(16); r.random_below(201); }" + chr(10) + "}" + chr(10))
+    _extra = "fn c() { r.random_below(16); }" + chr(10)
+    t1, i1 = _count_text(_strip_test_modules(_prod + _tests), (1, 2), _rx16)
+    t2, i2 = _count_text(_strip_test_modules(_prod + _tests + _extra), (1, 2), _rx16)
+    ok("m 静态牙覆盖全文件（test 模块之后的追加生产函数也计数；旧「前缀截断」会漏）",
+       t1 == 1 and i1 == 1 and t2 == 2, (t1, i1, t2, i2))
+
+    # N2 不变量牙：剥注释/字符串**不得改变行数**（`_strip_code` 保留换行）。
+    # 若将来 `'a` 生命周期吞段，行数会掉 —— 这条会先红，而不是等到误判站点。
+    try:
+        _raw = io.open(RUST_SRC, "r", encoding="utf-8", errors="replace").read()
+        _stripped = _strip_code(_raw)
+        _nraw = len(_raw.split(chr(10)))
+        _nstrip = len(_stripped.split(chr(10)))
+        _keep = (_stripped.count("random_below"))
+    except OSError:
+        _nraw = _nstrip = _keep = -1
+    ok("n 不变量：剥注释/字符串前后行数一致（N2 的 `'a` 吞噬会先撞这条）",
+       _nraw == _nstrip and _nraw > 10000 and _keep >= 15, (_nraw, _nstrip, _keep))
 
     bad = [c for c in checks if not c[0]]
     for cond, name, detail in checks:

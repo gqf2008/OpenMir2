@@ -95,7 +95,7 @@ python -I -B tools/window/butch_ledger.py --selftest     # 5/5 GREEN
   拿不到 span ⇒ **UNDECIDABLE**（不许退化成「文件对就行」：那正是 reviewer-21 的 F2——
   `world.rs:1234` 这种同文件非屠宰行会被误判成 OK）。
 
-自检牙（`--selftest`，**12 颗**）：a 两抽成立（含 MonGen 干扰）、b 次序反 ⇒ FAIL、c `max=16` 两条 ⇒ FAIL、
+自检牙（`--selftest`，**14 颗**）：a 两抽成立（含 MonGen 干扰）、b 次序反 ⇒ FAIL、c `max=16` 两条 ⇒ FAIL、
 d 只有 MonGen ⇒ FAIL、e Rust 两抽落在 span 内 ⇒ OK、**f Rust 同文件但 span 外 ⇒ FAIL**（F2 的洞）、
 **g site 未开（4 列）⇒ UNDECIDABLE**（F1）、**h 账本有坏行 ⇒ UNDECIDABLE**（F3）、
 **i 拿不到 span ⇒ UNDECIDABLE**、j 仓库源码能解析出 butch 函数区间、
@@ -103,7 +103,25 @@ d 只有 MonGen ⇒ FAIL、e Rust 两抽落在 span 内 ⇒ OK、**f Rust 同文
 全文件各恰 1 处且都在 butch 函数内（裸 grep 会误报——注释里就写着这两个串）、
 **l 静态牙（C#）**：屠宰函数内 `Random(16)`/`Random(201)` 各恰 1 处（文件内别处还有 `Random(201)`）。
 
+**m**：静态牙的覆盖是**全文件**——`#[cfg(test)]` 模块按块剔除（不是「截到第一个 test 属性之前」），
+模块**之后**再追加一处生产抽数也会被计入。
+
+**n**：不变量——`_strip_code` 剥注释/字符串**前后行数必须一致**（`'a` 生命周期吞噬会先撞这条，
+不会等到误判站点才发现）。
+
+**两条已登记的实现脆弱点**（不阻塞，改动时先看这里）：
+
+- **`_strip_code` 与 Rust 生命周期**：`'a` 与字符字面量同形，剥字符串时会把 `'a` 后的内容吞到下一个 `'`。
+  当前实测无实害（剥注释前后行数一致、15 处 `random_below` 行仍在、`fn_span` 与真实函数边界一致）；
+  若 `world.rs` 出现成对生命周期标注紧邻抽数行，先复核静态牙再信结论。
+- **span 依赖源码**：Rust 判据要现场解析 `world.rs`；源码缺失/签名改名 ⇒ **UNDECIDABLE**（不是 PASS）。
+
 **退出码**：`0` = 两抽成立；`1` = 不成立（FAIL）；**`2` = 不可判**（site 未开 / 有坏行 / 拿不到 span）。
+
+> **交付注意（本卡踩过两次）**：文档里引用 **sha 指代**（9–40 位十六进制）在 `rebase` /
+> `force-with-lease` 之后会**悬空**，而且更糟的是可能指向**旧实现**（本卡的 上一版引用的那个 sha 就是
+> 177 行的缺陷版、当前 381 行）。交付前请把 delta 文件里所有 sha 逐个
+> `git merge-base --is-ancestor <sha> <head>` 核一遍；**能用路径就别写 sha**。
 **「不可判」不得写成 FAIL**——它与「行为不符」是两件事。
 
 ## 6. 这一轮要记进证据根的字段
