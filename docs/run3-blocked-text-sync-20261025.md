@@ -54,6 +54,26 @@ python -I -B tools/window/blocked_sources_check.py selftest
 - 已知边界：`.`,`,` 已按缺失处理（`616.5`/`1,616` 不算命中）；**不要把边界放宽成 `[0-9A-Za-z]`**——
   那会把 `≈616s` 误伤成缺失（真实语料会红，但单靠 selftest 不一定能发现，别依赖巧合）。
 
+**负向 token（`absent`）**（卡 `openmir2-run3-stale-card-status-json`）：
+
+- `BLOCKED_TOKENS` 每条除 `tokens`（必须出现）外，还必须显式登记 `absent`（**禁止出现**的词，如 `未合`/`尚未合`/
+  `已具备但未合`）。缺省登记 ⇒ **rc=2**，不允许「因为没写所以不查」。
+- 扫描面：清单行 `blocked` 全文 + 场景 JSON 的 **`description` + `blocked.reason` + `missing_fixture`**
+  （`description` 必须在内——陈旧文案正好写在里面的那次就漏了）。
+- 命中禁用词 ⇒ rc≠0 并点名「清单行/场景 JSON 文案含禁用词 '未合'」。
+- `尚未接入 run3` 这类**真实状态**是允许的（它不是卡状态，是进批状态）；禁的是把**已关闭/已合入**的卡写成「未合」。
+
+**为什么这类漂移「三道门禁全绿也看不见」**：
+
+| 门 | 它看什么 | 盲点 |
+|---|---|---|
+| `stale_pointer_gate` | **只扫 `docs/`** 里「卡名 + 待定词」同现 | JSON（`run3-scenarios.json` / 场景 JSON）根本不在扫描面 |
+| `blocked_sources_check` 的 `tokens` | 只断言**必须出现**的短语（`3081`/`652`/`NPC`…） | 不关心「是否还写着未合」 |
+| `run_batch --list` | 只是把清单行文案**打印**出来 | 打印的是事实还是旧文案，它不判 |
+
+⇒ 卡 `c5ec908e1` 合入并 closed 后，两份 JSON 仍写「（未合）」而三处检查全绿。现由 `absent` 补上 JSON 面的
+负向断言；`docs/` 面仍由 `stale_pointer` 负责——两层分工：**docs 看卡状态词，JSON 看禁用词**，两边都在 `merge_result`/`closed` 之后重跑。
+
 判据（确定性、无阈值、不要求逐字）：
 
 1. 逐场景比 **blocked 真假**（清单行 vs 场景 JSON）；
