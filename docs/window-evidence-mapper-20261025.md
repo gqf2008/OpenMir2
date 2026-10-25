@@ -22,6 +22,7 @@
         "recog": 9912,                 // 可选：帧的 recog 必须等于此值
         "min_count": 2,                // 可选：该 ident 至少出现几次（不足 ⇒ UNDECIDABLE）
         "max_count": 2,                // 可选：至多几次（超出 ⇒ FAIL，用来表达「恰一条」）
+        "count_scope": "all",          // 可选：filtered（默认，按 recog 过滤后计数）/ all（按 ident 总帧数）
         "match": "last",               // 可选：last（默认，只判最后一帧）/ any / all
         "order": ["SM_A", "SM_B"],     // 可选：这些 ident 的**首个** seq 必须严格递增（同一证据文件内）
         "fields": [                    // 可空；空 = 只断言 ident 存在/次数/序
@@ -47,6 +48,11 @@
   `datetime` 把 `YYYY-MM-DD[ HH:MM:SS]` 抹成 `<DATETIME>` 再比（`$DATETIME` 类字段必须用它）；`digits` 抹掉所有数字串。
 - 计数：先按 ident（+ `only_when`）取帧，再按 `recog`（若声明）过滤；`min_count` 不足 ⇒ **UNDECIDABLE**，
   `max_count` 超出 ⇒ **FAIL**（多出来的帧是回归，不是缺数据）；`recog` 不命中仍按原语义判 **FAIL**。
+- **计数口径 `count_scope`**（卡 `openmir2-card-evidence-count-scope`）：
+  `filtered`（默认）= 只数 `recog` 过滤后的帧；`all` = 数该 ident 的**总帧数**（不受 recog 过滤影响）。
+  典型用途：台账 W-DG-1 的「653 **一条**」——若另有 `recog=999` 的 653，`filtered` 会放过，`all` 判 FAIL。
+  当前判据表里：**只有 W-DG-1 用 `all`**；其余带计数的条目（W-TAX-1、W-PD-1 的 5008、A 类 657×2/529/767×2、
+  W-DG-2 的 637）都是 `filtered`（即默认）。
 - 字段比较默认取**最后一帧**（`match: last`）；`match: any` = 任一帧满足即 PASS；`match: all` = 每帧都必须满足。
   「最后一帧」是**钉死的默认**，不再由调用者脑补。
 - `narrowed`：machine=true 但只覆盖 source 的一部分时**必须**写明收窄了什么（审查据此判断判据是否够）。
@@ -111,8 +117,8 @@ python -I -B tools/window/card_evidence.py --selftest
 | 4 | `openmir2-clearmapmon-impl` | W-CM-2 | **人工（2 条）**：① Q001 判 30 帧与已合并文档**相反**，按 `exec-sheet:31` / `scenes doc:110-111`（master）改判人工；② 实体/AOI 差集与坐标 | 30 帧属 t118 清场腿（该场景永久不可达）；坐标/实体面需按 oracle 口径解码帧尾 |
 | 4 | 同上 | W-CM-1 | 人工 | 场景 blocked（`t118` 的 `movr M3` 不可注入）⇒ 无证据可采 |
 | 5 | `openmir2-m3-castle-siege-state` | W-T127-1 | 人工 | `castle_zone` fixture 未建；相对序需与文本/收件人绑定且未钉字面值 |
-| 6 | `openmir2-inbound-dispatch-red-batch` | W-DG-1 | **机判**：`SM_GOLDCHANGED.recog=100`、`param=0` 且**恰一条**（`min_count=max_count=1`，scenario `dropgold_zero_draw`）+ 人工 1 条（金币净差/地面物件/RNG 账本） | 金币差与地面物件在 DB/地图侧；RNG 流位需 `MIR2_RNG_LOG` |
-| 6 | 同上 | W-DG-2 | 人工 | 场景 blocked（唯一缺口 = 场景内击杀步） |
+| 6 | `openmir2-inbound-dispatch-red-batch` | W-DG-1 | **机判**：`SM_GOLDCHANGED` **总帧数恰 1**（`count_scope=all`，`min_count=max_count=1`）、且 `recog=100`、`param=0`（scenario `dropgold_zero_draw`）+ 人工 1 条（金币净差/地面物件/RNG 账本） | 金币差与地面物件在 DB/地图侧；RNG 流位需 `MIR2_RNG_LOG` |
+| 6 | 同上 | W-DG-2 | **机判**：`SM_DEATH(32)` → **`SM_BUTCH(637)` 收官**（637 至少一条、死亡帧在其前）；**不要求 `SM_SKELETON(33)`**（`PlayObject.Operate.cs:731-738`：仅 `BodyLeathery<=0` 才发）+ 人工 1 条（两抽值域的 RNG 账本） | 两抽值域/流位需 `MIR2_RNG_LOG`；场景 blocked 清理与进批归另一张卡 |
 | 7 | `openmir2-castle-official-design` | W-CO-1 | 人工 | `@main` 说词字面未钉住（只给 mask 规则）+ castle fixture 未建 |
 | 8 | `openmir2-castle-official-actions` | W-CO-6 | 人工 | 需 owner 批准测试专用城主注入 + 可注入时钟（60s 严格 `>`） |
 | 9 | `openmir2-script-handler-msgqueue` | W-MQ-1 | **机判**：帧序 `643 → 767 → 44 → 645 → 5008`（scenario `getbackupgnow`） | 有该场景证据根即可判；本轮无该根 ⇒ UNDECIDABLE「ident 未齐」 |
@@ -197,7 +203,7 @@ PASS         openmir2-login-charstatus-657 A-class   ident=657 ×2 断言全部�
 PASS         openmir2-login-529-status-text A-class   ident=529 ×1 断言全部成立
 ```
 
-判据共 27 条：PASS 数 2、UNDECIDABLE 25、FAIL 数为 0（快照 @ 2026-10-25；证据根 `E:/tmp/window/run2/cs-probe`，29 帧）。
+判据共 28 条：PASS 数 2、UNDECIDABLE 26、FAIL 数为 0（快照 @ 2026-10-25；证据根 `E:/tmp/window/run2/cs-probe`，29 帧）。
 
 **判读（不许往大里说）**：
 
@@ -212,12 +218,12 @@ PASS         openmir2-login-529-status-text A-class   ident=529 ×1 断言全部
 |---|---|
 | `E:/tmp/window/run2/cs-probe/frames.ndjson`（29 帧，证据） | `1a5fd75f6e6eafbd494d0cb6f26c6df4851733626262c3821922fb3cec134d0f` |
 | `E:/tmp/window/run2/cs-probe/run.json`（场景归属来源） | `6b17f39bf25ec753615b96779b3b6d4e810c7351283abda863249d98b0abe091` |
-| `tools/window/card-criteria.json`（判据表） | `45dc30b3412ace727160bab804177816f0a5b43c93644ac950f15d4bdff0bee2` |
-| `tools/window/card_evidence.py`（运行器） | `991a366e0227a90620ba5501c091c00c76a646f9574b1bc5030d43c1017f11c3` |
-| `E:/tmp/card-evidence-run2-cs.json`（逐条结果） | `7c1d0637c1a5645bece4b054dd5d15812b026b9dbb7c7a65b473ff2831484b59` |
-| `E:/tmp/card-evidence-run2-cs.txt`（stdout 全文） | `bb3bbf672408da3555d0a518ee9f01a765e69342e717431febf6a9ce2bda212e` |
+| `tools/window/card-criteria.json`（判据表） | `b48827dcf41ada572624e93e227f5c20bab406c122266424f51770e3a95cb037` |
+| `tools/window/card_evidence.py`（运行器） | `cde21829c3537435c0b15b3e3558eab1fb164e2d97c84536f857b205230b5df6` |
+| `E:/tmp/card-evidence-run2-cs.json`（逐条结果） | `804bb51cb3a50a844de05a32ca9bc1306ce0292dec7092582568f03f7db0504b` |
+| `E:/tmp/card-evidence-run2-cs.txt`（stdout 全文） | `4fabc81d81b9ea04a7836618598b6fef49adee82b9b9fd4140856ffa4aca9312` |
 
-另一根 `E:/tmp/scriptcov/t118/autoA-main`（`run.json` 场景 = `t118auto`）同命令跑过：判据 27 条，PASS 数为 0、UNDECIDABLE 27 条、失败 0 条（快照 @ 2026-10-25），
+另一根 `E:/tmp/scriptcov/t118/autoA-main`（`run.json` 场景 = `t118auto`）同命令跑过：判据 28 条，PASS 数为 0、UNDECIDABLE 28 条、失败 0 条（快照 @ 2026-10-25），
 rc=0——因为判据表里没有 `t118auto` 场景的行，全部「场景不符」。这正是场景归属校验该有的行为（不张冠李戴）。
 
 ## 8. 牙：9 条变异「绿 → 红 → 还原绿」
@@ -245,7 +251,7 @@ rc=0——因为判据表里没有 `t118auto` 场景的行，全部「场景不�
 | 缺口类别 | 影响的 W 项 / 卡 | 缺什么（补上即可机判） |
 |---|---|---|
 | 钉值缺失 | W-PD-1（5008 Param/Tag）、W-CO-1（`@main` 说词）、A 类「字节未钉」2 张 | 在卡线程里把 oracle 字面值钉进判据表（**从 C# 代码取，不从实得帧取**） |
-| 场景/夹具缺失 | W-CM-1、W-DG-2、W-T127-1、W-CO-1/6、A 类「场景未建」7 张 | 建 `castle_zone`/castle fixture、补 butch 击杀步、`t118` 同 seed 注入 |
+| 场景/夹具缺失 | W-CM-1、W-T127-1、W-CO-1/6、A 类「场景未建」7 张 | 建 `castle_zone`/castle fixture、`t118` 同 seed 注入 |
 | 时钟不可注入 | W-TAX-4、W-CO-6 | C# 侧 `MIR2_CLOCK_*`（与 `window-kit-coverage` P0 同源） |
 | 解码器缺失 | W-CM-2 的实体/AOI 坐标、W-DG-1 的金币净差 | 帧尾按 oracle 口径解码 / DB-assets 快照读法 |
 | 分组语义缺失 | W-MQ-2（同标签 3 帧出队序） | runner 增加 `tag`+负载分组断言 |
@@ -267,13 +273,15 @@ rc=0——因为判据表里没有 `t118auto` 场景的行，全部「场景不�
 | F6（info） | 同 ident 多帧语义钉死为 `match: last`（默认），可选 `any`/`all`；schema 与本文同步（牙 i + M9） | 牙 i、M9 |
 | F7（info） | 证据根无 `run.json` 且无 `--scenario` ⇒ **全部 UNDECIDABLE**；`--allow-unverified` 才放行并标 `provenance=unverified`（牙 j + M8） | `main`、牙 j、M8 |
 | reviewer-20 info | A 类 7 条的 `w_item` 从同一个 `A-class` 改成可区分的 `plan-§2:<卡/序>` | 判据表 |
+| **N1/I1（本卡）** | 计数口径歧义：`min/max_count` 原来只数 `recog` 过滤后的帧 ⇒「653 **总帧数**恰 1」不可表达（两帧 653、recog 100/999 仍 PASS）。新增 `count_scope: filtered(默认)/all`；W-DG-1 改 `all`；非法值加载期拒（牙 k/k2/k 对照/m + 变异 C1/C2） | `card_evidence.py`、判据表 |
+| **W-DG-2 oracle 订正（本卡）** | 收官帧是 **`SM_BUTCH(637)`**；`SM_SKELETON(33)` 不是每刀必发（`PlayObject.Operate.cs:731-738`）。该条从 `machine:false` 改为可机判（死亡帧→637、不要求 33，牙 n/n 对照），两抽值域的 RNG 面单列 `W-DG-2-rng` 人工项 | 判据表、本文 §5 |
 
 **machine=true 判据复核结论**（对 master 文档原文）：W-TAX-1（`exec-sheet:34` 的 `650.recog = Gold 9912`）✓；
 W-DG-1（`exec-sheet:32` 的「恰一条」⇒ 已加 max_count）✓；W-MQ-1（`docs/script-handler-msgqueue-20261025.md:73`
 的 643→767→44→645→5008）✓；W-PD-1（出现性判据，条件门 `SoftVersionDateEx != 0` 只会让它缺席 ⇒ 不假 PASS，已加 `narrowed`）✓；
 A 类 6 条按 §6 的选取规则，均已加 `narrowed` 说明覆盖范围。
 
-修复后 selftest **23/23 绿**，真机根复跑仍是 27 条 = PASS 2 / UNDECIDABLE 25 / 失败 0（快照 @ 2026-10-25 的基线不变）。
+修复后 selftest **29/29 绿**，真机根复跑 28 条 = PASS 2 / UNDECIDABLE 26 / 失败 0（新增的两条是真机根缺帧 ⇒ UNDECIDABLE，**不是** PASS）。
 
 ## 11. 残留物清单
 
