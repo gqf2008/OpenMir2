@@ -367,7 +367,7 @@ class Conn:
 STEP_META_KEYS = {"timeout_ms", "note", "delay_ms"}
 ACTION_KEYS = {"send", "wait_for", "wait_frames", "wait_idents", "sleep",
                "say", "click_npc", "dlg_select", "dlg_select_any", "repeat", "newchr",
-               "kill"}
+               "kill", "relogin"}
 # 场景顶层 `requires` 只认这些夹具值（卡 `openmir2-scenario-fixture-precondition`）：
 # 目前只有 `magic`（characters_magic 预置）。未知值 fail-closed，避免「加了值却没生效」假绿。
 REQUIRES_KNOWN = ("magic",)
@@ -1020,7 +1020,31 @@ def plan_step(step, index, params, depth=0):
            "delay_ms": delay_ms, "note": note}
 
     val = step[action]
-    if action == "send":
+    if action == "relogin":
+        # **「同一账号再登录」驱动步**（卡 `openmir2-softclose-reconnect-scenario`）。
+        #
+        # 为什么需要它：`CM_SOFTCLOSE` 之后客户端 socket 断开，而本驱动器一次 run 只有**一条**
+        # login→selgate→gamegate 链 ⇒ 场景 DSL 无法表达「断开后用同一 account 再登录」，
+        # `openmir2-softclose-cleanup-residue` 的两项真机判据永远跑不了。
+        #
+        # **不改协议语义**：运行期只是关掉当前 GameGate 连接、settle 一下、把**与首登完全相同**
+        # 的三条链函数再走一遍（`do_login_gate`/`do_select_char`/`do_enter_world`），不构造任何
+        # 新帧。第二段的 conn 打 `phase="login2"/"selgate2"/"gamegate2"`，`frames.ndjson` 的
+        # `phase` 列因此能区分两段（`conn` 标签保持 `gamegate`，自动握手与首登同路径）。
+        #
+        # **`assert_same_actor`（默认 true）是判据的前提断言**：若第二段拿到的 ActorId 与第一段
+        # 不同，「重连后名字/行会是新值」这条判据**恒真**（旧展示表根本没命中）⇒ 假绿。
+        # 前提不成立必须让 run 红，而不是留给人事后看。
+        _need_keys(val, where + ".relogin", required=(),
+                   optional=("settle_ms", "assert_same_actor"))
+        out["settle_ms"] = _need_int(val.get("settle_ms", 1500),
+                                     where + ".relogin.settle_ms", 0, 600000)
+        asa = val.get("assert_same_actor", True)
+        if not isinstance(asa, bool):
+            raise ScenarioError("%s.relogin.assert_same_actor must be a bool, got %r"
+                                % (where, asa))
+        out["assert_same_actor"] = asa
+    elif action == "send":
         _need_keys(val, where + ".send", required=("ident",),
                    optional=("recog", "param", "tag", "series", "text", "raw_hex", "text_from"))
         out["ident"] = _need_int(val["ident"], where + ".send.ident")
@@ -1267,6 +1291,12 @@ def plan_step(step, index, params, depth=0):
                 "(give the wait_for steps their own timeout_ms); fail-closed" % where)
         subplans = [plan_step(x, "%s.%d" % (index, j), params, depth + 1)
                     for j, x in enumerate(sub)]
+        # `relogin` 会换掉「当前连接」并把整条登录链重走一遍；塞进 `repeat` 里语义含混
+        #（每轮都换连接、还会反复断言同一 actor id）⇒ fail-closed，只允许顶层。
+        if any(leaf["kind"] == "relogin" for leaf in _iter_plan_leaves(subplans)):
+            raise ScenarioError(
+                "%s.repeat: `relogin` is only allowed at top level (it swaps the live "
+                "connection); nesting it is refused (fail-closed)" % where)
         if stop is not None:
             cands = set()
             for leaf in _iter_plan_leaves(subplans):
@@ -1554,6 +1584,17 @@ def check_scenario(data, plans, params=None, messages=None):
     name = data.get("name")
     if messages is None:
         messages = load_message_constants()
+    # R7（`relogin`）：最后一个 `relogin` 之后必须至少有一条等待步。
+    # 否则第二段（重连后）的帧面**没有任何人收** —— 「重连后的出现帧」这条证据是空的（假绿）。
+    rel = [i for i, p in enumerate(plans) if p["kind"] == "relogin"]
+    if rel:
+        after = list(_iter_plan_leaves(plans[rel[-1] + 1:]))
+        if not any(leaf["kind"] in WAIT_KINDS for leaf in after):
+            raise ScenarioError(
+                "scenario %r: the last relogin (steps[%s]) is not followed by any wait step; "
+                "the second segment's frames would never be collected (fail-closed)"
+                % (name, plans[rel[-1]]["index"]))
+
     # `newchr` 只能在 steps[0] 且至多一次（它在选角相位执行，之后的 waits 才有意义）。
     nc_idx = [i for i, p in enumerate(plans) if p["kind"] == "newchr"]
     if len(nc_idx) > 1:
@@ -2211,6 +2252,61 @@ class Run:
             "fixtures.monsters 未生效/落点不同格（或 0 伤害打空：SM_STRUCK 只在 wParam>0 "
             "时才发，PlayObject.Message.cs:1564）" % (idx, tx, ty, swings))
 
+    # ---- 「同一账号再登录」驱动步（卡 openmir2-softclose-reconnect-scenario） ----
+    def relogin(self, conn, plan):
+        """关掉当前 GameGate 连接 → settle → **重跑首登同一条链** → 断言两段 ActorId 相同。
+
+        返回新的 GameGate 连接（主循环后续步骤都改用它）。
+
+        * 协议语义零改动：只调用 [`do_login_gate`]/[`do_select_char`]/[`do_enter_world`]；
+        * 第二段 conn 的 `phase` = `login2`/`selgate2`/`gamegate2`（帧行可分段）；
+        * `assert_same_actor`（默认 true）把「两段 ActorId 相同」做成 in-process 断言：
+          这是「重连后名字/行会是新值」判据的**前提**，前提不成立时那条判据恒真（假绿）；
+        * `chain["segments"]` 记两段的 ActorId / SM_LOGON 字段 / settle，供证据侧复核。
+        """
+        prev_actor = self.state.get("self_actor")
+        prev_world = dict(self.chain.get("world_entered") or {})
+        prev_phase = conn.phase
+        conn.close()
+        self.chain.setdefault("closed", []).append(conn.label)
+        settle = plan["settle_ms"]
+        if settle:
+            # 等 server 侧把 soft-close 的存档/清场跑完（oracle 的「角色数据保存中」窗口）。
+            time.sleep(settle / 1000.0)
+        login_conn, selgate_addr, session = do_login_gate(self, self.args, phase="login2")
+        sg_conn, char_name, gg_addr = do_select_char(
+            self, self.args, selgate_addr, session, None, phase="selgate2")
+        gg = do_enter_world(self, self.args, gg_addr, char_name, session, phase="gamegate2")
+        for c in (login_conn, sg_conn):
+            c.close()
+            self.chain.setdefault("closed", []).append(c.label)
+        self.gamegate = gg
+        new_actor = self.state.get("self_actor")
+        row = {
+            "index": plan["index"], "kind": "relogin",
+            "t_ms": now_ms() - self.t0_ms,
+            "settle_ms": settle,
+            "prev_phase": prev_phase, "prev_actor": prev_actor,
+            "new_phase": gg.phase, "new_actor": new_actor,
+            "char_name": char_name,
+            "assert_same_actor": plan["assert_same_actor"],
+            "same_actor": prev_actor == new_actor,
+            "prev_world_entered": prev_world,
+            "new_world_entered": dict(self.chain.get("world_entered") or {}),
+            "note": plan.get("note", ""),
+        }
+        self.steps.append(row)
+        self.chain.setdefault("segments", []).append(
+            {k: row[k] for k in ("kind", "t_ms", "prev_phase", "prev_actor",
+                                 "new_phase", "new_actor", "same_actor", "char_name")})
+        if plan["assert_same_actor"] and prev_actor != new_actor:
+            raise StepFailure(
+                "steps[%s]: relogin 后 ActorId 变了（prev=%r new=%r）⇒「重连后名字/行会是新值」"
+                "这条判据的前提不成立：id 不同时它恒真（假绿）。若本场景不判 id 复用，"
+                "请显式写 \"assert_same_actor\": false 并说明理由"
+                % (plan["index"], prev_actor, new_actor))
+        return gg
+
     def execute_step(self, conn, plan):
         idx = plan["index"]
         kind = plan["kind"]
@@ -2419,11 +2515,15 @@ def _decode_body_text(frame, what):
         raise ProbeError("%s: body is not valid GBK: %s" % (what, ex))
 
 
-def do_login_gate(run, args):
-    """登录 + 选服，返回 (login_conn, selgate_addr, session)。"""
+def do_login_gate(run, args, phase="login"):
+    """登录 + 选服，返回 (login_conn, selgate_addr, session)。
+
+    `phase` 只影响 `frames.ndjson` 的段标注（`relogin` 步传 `"login2"`，见 [Run.relogin]）；
+    连接标签仍是 `login`，行为与首登逐字节相同。
+    """
     conn = Conn("login", run.recorder)
     run.conns.append(conn)
-    conn.phase = "login"
+    conn.phase = phase
     host, port = parse_hostport(args.login_gate, "--login-gate")
     try:
         conn.connect(host, port, args.timeout_ms / 1000.0)
@@ -2544,14 +2644,15 @@ def _do_newchr(run, conn, args, session, plan, names):
                          newchr_fail_message(n_code, frames)))
 
 
-def do_select_char(run, args, selgate_addr, session, plans=None):
+def do_select_char(run, args, selgate_addr, session, plans=None, phase="selgate"):
     """SelGate 查询/选择角色，返回 (selgate_conn, char_name, gamegate_addr)。
 
     `plans` 里的 `newchr` 步在**这里**执行（进世界之前）；主步骤循环会跳过它。
+    `relogin` 重跑本链时传 `plans=None`（不许重复建号）与 `phase="selgate2"`。
     """
     conn = Conn("selgate", run.recorder)
     run.conns.append(conn)
-    conn.phase = "selgate"
+    conn.phase = phase
     sg_ip, sg_port = selgate_addr
     try:
         conn.connect(sg_ip, sg_port, args.timeout_ms / 1000.0)
@@ -2615,11 +2716,15 @@ def do_select_char(run, args, selgate_addr, session, plans=None):
     return conn, char_name, (gg_ip, gg_port)
 
 
-def do_enter_world(run, args, gamegate_addr, char_name, session):
-    """GameGate 登录 + 等 SM_LOGON；返回 gamegate Conn。"""
+def do_enter_world(run, args, gamegate_addr, char_name, session, phase="gamegate"):
+    """GameGate 登录 + 等 SM_LOGON；返回 gamegate Conn。
+
+    `phase` 只做段标注（`relogin` 传 `"gamegate2"`）；**连接标签仍是 `gamegate`**——
+    `Run.on_frame` 的自动握手与首包采集按标签门控，第二段必须走同一条路径。
+    """
     conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
     run.conns.append(conn)
-    conn.phase = "gamegate"
+    conn.phase = phase
     if args.game_gate:
         gg_ip, gg_port = parse_hostport(args.game_gate, "--game-gate")
         run.chain["gamegate"] = {"from": "argv", "addr": "%s:%d" % (gg_ip, gg_port)}
@@ -2893,7 +2998,11 @@ def main(argv=None):
                 delay = plan["delay_ms"] if plan["delay_ms"] is not None else args.between_ms
                 if delay:
                     time.sleep(delay / 1000.0)
-            run.execute_step(gg, plan)
+            if plan["kind"] == "relogin":
+                # 换连接：`relogin` 之后所有步骤都跑在第二条 GameGate 上。
+                gg = run.relogin(gg, plan)
+            else:
+                run.execute_step(gg, plan)
         do_finish(run, args, gg)
         run.exit_code, run.exit_reason = 0, "completed"
     except ScenarioError as ex:
@@ -5785,6 +5894,162 @@ def _selftest_discovery_addressing():
     return "牙 a(king 零等待直接点)/b(无目标 fail-closed 不回落)/c(auto:last_turn 仍可跑)"
 
 
+def _selftest_relogin():
+    """`relogin` 步（卡 `openmir2-softclose-reconnect-scenario`）：形状 + 语义牙（不连网）。
+
+    * 默认值：`settle_ms`=1500、**`assert_same_actor` 默认 true**（前提断言默认开）；
+    * 硬牙①：`assert_same_actor` 非 bool / `settle_ms` 越界 / 未知键 ⇒ ScenarioError；
+    * 硬牙②：`relogin` 嵌进 `repeat` ⇒ ScenarioError（它换连接，嵌套语义含混）；
+    * 硬牙③（check_scenario R7）：最后一个 `relogin` **之后没有等待步** ⇒ ScenarioError
+      —— 否则第二段的帧面没有任何人收，「重连后的出现帧」这条证据是空的（假绿）；
+    * 真实场景 `scenarios/softclose_relogin.json` 必须过与 `--check-scenario` 同一条链。
+    """
+    import tempfile
+    import shutil
+
+    def scn(steps):
+        return {
+            "name": "relogin-probe",
+            "placement": {"map": "3", "x": 320, "y": 328},
+            "params": {"walk_xy": 21496129},
+            "steps": steps,
+        }
+
+    seg1 = {"wait_idents": {"idents": [41], "recog_is": "self"}, "timeout_ms": 1000}
+    walk = {"send": {"ident": 3011, "recog": "walk_xy", "param": 0}}
+    rel = {"relogin": {"settle_ms": 7}}
+    seg2 = {"wait_for": {"idents": [41], "recog_is": "self"}, "timeout_ms": 1000}
+
+    good = scn([seg1, walk, rel, seg2])
+    plans, _ = expand_scenario(good)
+    check_scenario(good, plans)
+    rp = [x for x in plans if x["kind"] == "relogin"]
+    assert len(rp) == 1 and rp[0]["settle_ms"] == 7, rp
+    assert rp[0]["assert_same_actor"] is True, rp
+
+    # 默认值
+    dflt = plan_step({"relogin": {}}, 0, {})
+    assert (dflt["settle_ms"], dflt["assert_same_actor"]) == (1500, True), dflt
+
+    # 硬牙①：形状 fail-closed
+    for bad, why in (
+        ({"relogin": {"assert_same_actor": 1}}, "assert_same_actor 非 bool"),
+        ({"relogin": {"settle_ms": -1}}, "settle_ms 负数"),
+        ({"relogin": {"typo": 1}}, "未知键"),
+    ):
+        try:
+            plan_step(bad, 0, {})
+        except ScenarioError:
+            pass
+        else:
+            raise AssertionError("应拒绝：%s" % why)
+
+    # 硬牙②：嵌套
+    try:
+        plan_step({"repeat": {"times": 2, "steps": [{"relogin": {}}]}}, 0, {})
+    except ScenarioError:
+        pass
+    else:
+        raise AssertionError("relogin 嵌进 repeat 必须拒绝")
+
+    # 硬牙③：R7
+    no_wait = scn([seg1, walk, rel])
+    try:
+        pl, _ = expand_scenario(no_wait)
+        check_scenario(no_wait, pl)
+    except ScenarioError:
+        pass
+    else:
+        raise AssertionError("R7 失效：最后一个 relogin 之后没有等待步仍放行")
+
+    # 硬牙④（运行期，假连接 + 替换三条链函数）：**前提断言真的会红**。
+    # 红的是「id 变了」这条断言本身：同一组输入把 assert_same_actor 显式关掉 ⇒ 不红。
+    # 注意：本函数体内**不得直接赋值**这三个名字（Python 会判定为局部变量）⇒ 一律走 globals()。
+    real = (globals()["do_login_gate"], globals()["do_select_char"],
+            globals()["do_enter_world"])
+    tmpd = tempfile.mkdtemp(prefix="mir2probe-relogin-")
+
+    class _FakeConn:
+        def __init__(self, phase):
+            self.phase = phase
+            self.label = "gamegate"
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    def fake_login(run, args, phase="login"):
+        return _FakeConn(phase), ("127.0.0.1", 1), {"session": 1}
+
+    def fake_select(run, args, addr, session, plans=None, phase="selgate"):
+        return _FakeConn(phase), "winplay0", ("127.0.0.1", 2)
+
+    def fake_enter(run, args, addr, char_name, session, phase="gamegate"):
+        run.state["self_actor"] = fake_enter.actor
+        run.chain["world_entered"] = {"actor_id": fake_enter.actor,
+                                      "x": 321, "y": 328}
+        c = _FakeConn(phase)
+        run.conns.append(c)
+        return c
+
+    def mkrun(name):
+        d = os.path.join(tmpd, name)
+        os.makedirs(d, exist_ok=True)
+        run = Run(argparse.Namespace(out=d, timeout_ms=1000))
+        run.state["self_actor"] = 7
+        run.chain["world_entered"] = {"actor_id": 7}
+        return run
+
+    globals()["do_login_gate"] = fake_login
+    globals()["do_select_char"] = fake_select
+    globals()["do_enter_world"] = fake_enter
+    try:
+        plan_on = plan_step({"relogin": {"settle_ms": 0}}, 0, {})
+        plan_off = plan_step({"relogin": {"settle_ms": 0, "assert_same_actor": False}}, 0, {})
+
+        # ① 同 id ⇒ 通过，第二段 phase=gamegate2，segment 落账
+        fake_enter.actor = 7
+        run = mkrun("same")
+        gg = run.relogin(_FakeConn("gamegate"), plan_on)
+        assert gg.phase == "gamegate2", gg.phase
+        rec = run.steps[-1]
+        assert rec["kind"] == "relogin" and rec["same_actor"] is True, rec
+        assert run.chain["segments"][-1]["new_actor"] == 7, run.chain["segments"]
+        run.recorder.close()
+
+        # ② id 变了 ⇒ StepFailure（前提不成立必须显式红）
+        fake_enter.actor = 8
+        run = mkrun("diff")
+        err = None
+        try:
+            run.relogin(_FakeConn("gamegate"), plan_on)
+        except StepFailure as ex:
+            err = str(ex)
+        assert err is not None, "前提断言失效：ActorId 变了仍放行（判据会恒真 = 假绿）"
+        assert "ActorId 变了" in err and "假绿" in err, err
+        run.recorder.close()
+
+        # ③ 同一组输入 + 显式关断言 ⇒ 不红（红的是断言本身，不是别的路径）
+        run = mkrun("off")
+        gg3 = run.relogin(_FakeConn("gamegate"), plan_off)
+        assert run.steps[-1]["same_actor"] is False and gg3.phase == "gamegate2"
+        run.recorder.close()
+    finally:
+        (globals()["do_login_gate"], globals()["do_select_char"],
+         globals()["do_enter_world"]) = real
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 真实场景文件必须自洽
+    data = load_scenario(os.path.join(SCENARIO_DIR, "softclose_relogin.json"))
+    pl, _ = expand_scenario(data)
+    check_scenario(data, pl)
+    kinds = [x["kind"] for x in pl]
+    assert "relogin" in kinds, kinds
+    assert kinds.index("relogin") < len(kinds) - 0 and any(
+        k in ("wait_for", "wait_idents", "wait_frames") for k in kinds[kinds.index("relogin") + 1:]), kinds
+    return "默认断言开 / 3 形状牙 / 嵌套牙 / R7 牙 / 运行期前提断言(同id绿·异id红·关断言不红) / 场景文件自洽"
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -5815,6 +6080,7 @@ def run_selftest():
     check("dsl-newchr", _selftest_newchr)
     check("dsl-kill", _selftest_kill)
     check("dsl-kill-track", _selftest_kill_track)
+    check("dsl-relogin", _selftest_relogin)
     check("dsl-runtime-token", _selftest_runtime_token)
     check("dsl-track-adjacency", _selftest_track_adjacency)
     check("dsl-npc-discovery", _selftest_npc_discovery)
