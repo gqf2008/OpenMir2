@@ -183,16 +183,18 @@
           "draws": [
             {
               "max": 16,
-              "count": 1
+              "count": 1,
+              "site_substr": [
+                "Operate.cs:722"
+              ]
             },
             {
               "max": 201,
-              "count": 1
+              "count": 1,
+              "site_substr": [
+                "Operate.cs:723"
+              ]
             }
-          ],
-          "site_substr": [
-            "Operate.cs:722",
-            "Operate.cs:723"
           ]
         }
       },
@@ -261,7 +263,7 @@
           "SM_CHARSTATUSCHANGED"
         ]
       },
-      "narrowed": "source 是「657×2 与**邻居相对序**」：本条只覆盖次数（且钉住恰 2 条），邻居相对序未机判（缺钉住的邻居 ident 列表） ; 守卫：654 属状态同步帧，补 ABILITY→CHARSTATUSCHANGED 帧序断言。"
+      "narrowed": "source 是「657×2 与**邻居相对序**」：本条只覆盖次数（且钉住恰 2 条），邻居相对序未机判（缺钉住的邻居 ident 列表） ; 守卫：657 属状态同步帧（SM_CHARSTATUSCHANGED；654 是 SM_CHANGELIGHT），补 ABILITY→CHARSTATUSCHANGED 帧序断言。"
     },
     {
       "card": "openmir2-login-frame-order-52-752",
