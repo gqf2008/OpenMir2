@@ -155,6 +155,10 @@ def load_criteria(path):
             for d in rng['draws']:
                 if not isinstance(d, dict) or 'max' not in d or 'count' not in d:
                     raise UsageError('%s.assert.rng_ledger.draws 每项要 max/count' % where)
+                if 'site_substr' in d and (not isinstance(d['site_substr'], list)
+                                           or not d['site_substr']):
+                    raise UsageError('%s.assert.rng_ledger.draws[].site_substr 必须是非空列表'
+                                     % where)
         guard = (isinstance(a['ident'], int) and a['ident'] in GUARD_IDENTS)             or (isinstance(a['ident'], str) and a['ident'] in GUARD_NAMES)
         if guard and not (a.get('fields') or a.get('order')):
             raise UsageError(
@@ -277,18 +281,23 @@ def check_order(order, frames, names):
 
 
 def _count_ledger(ledger, rng):
-    """按 max 计账本行数；site_substr 给出时每类还要有任一命中该子串。"""
+    """按 max 计账本行数；site 绑定到**每一抽**（review F1：整组共用可被互换骗过）。
+
+    `draws[i].site_substr` 优先；条目级 `site_substr` 仅作向后兼容的「任一行命中」兜底。
+    """
     rows = []
     for d in rng['draws']:
         want_max = int(d['max'])
         sel = [e for e in ledger if e.get('max') == want_max]
-        subs = [s2 for s2 in (rng.get('site_substr') or [])]
-        detail = []
+        subs = (d.get('site_substr')
+                or rng.get('site_substr') or [])
         if subs:
             matched = [e for e in sel if any(s2 in str(e.get('site', '')) for s2 in subs)]
             if not matched:
                 return None, 'max=%d 的账本行 site 不含 %r' % (want_max, subs)
-            detail = matched
+            if d.get('site_substr') and len(matched) != int(d['count']):
+                return None, 'max=%d 的 site=%r 命中 %d != %d' % (
+                    want_max, subs, len(matched), int(d['count']))
         if len(sel) != int(d['count']):
             return None, 'max=%d 账本计数 %d != %d' % (want_max, len(sel), int(d['count']))
         rows.extend(sel)
@@ -296,10 +305,16 @@ def _count_ledger(ledger, rng):
 
 
 def load_rng_ledger(run_dir):
-    """读证据根下所有 `rng-stream.tsv`（5 列 seq/kind/max/result/site）；无则 None。"""
+    """读**证据根自身**的 `rng-stream.tsv`（5 列 seq/kind/max/result/site）；无则 None。
+
+    review F2：不递归——`--run-dir` 指到批次目录时把多份账本相加是错的；`discovery/`
+    子根的账本同样属于另一个场景，必须排除。
+    """
     out = []
     found = False
-    for path in glob.glob(os.path.join(run_dir, '**', 'rng-stream.tsv'), recursive=True):
+    top = os.path.join(run_dir, 'rng-stream.tsv')
+    paths = [top] if os.path.isfile(top) else []
+    for path in paths:
         found = True
         try:
             for ln in open(path, encoding='utf-8', errors='replace'):
@@ -343,9 +358,7 @@ def evaluate(item, frames, names, scenario=None, ledger=None):
     pat = (a.get('only_when') or {}).get('file_glob')
     if pat:
         sel = [f for f in sel if path_matches(f['__file'], pat)]
-    if not sel:
-        return 'UNDECIDABLE', 'ident=%d 不在证据根里（该场景没跑到/帧未采）' % ident
-    ident_sel = sel          # 该 ident 在证据根里的**全量**（仅受 only_when 约束）
+    # review F3：forbid 先判——只有 FAIL 帧的根必须 FAIL（「吃了药失败」不是「不可判」）
     for spec in a.get('forbid') or []:
         fid = resolve_ident(spec, names)
         fsel = [f for f in frames if f.get('ident') == fid]
@@ -354,6 +367,9 @@ def evaluate(item, frames, names, scenario=None, ledger=None):
         if fsel:
             return 'FAIL', 'forbid 帧 ident=%d 出现了 %d 次（成对 FAIL 帧不得出现）' % (
                 fid, len(fsel))
+    if not sel:
+        return 'UNDECIDABLE', 'ident=%d 不在证据根里（该场景没跑到/帧未采）' % ident
+    ident_sel = sel          # 该 ident 在证据根里的**全量**（仅受 only_when 约束）
     if 'recog' in a:
         rec = [f for f in sel if f.get('recog') == a['recog']]
         if not rec:
@@ -651,6 +667,12 @@ def selftest():
         except UsageError as ex:
             chk(False, '牙g2-对照：657 补 order 仍报错：%s' % ex)
 
+        # 牙 f3（review F3）：只有 FAIL 帧的根必须 FAIL（不是 UNDECIDABLE）
+        v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
+            'ident': 615, 'min_count': 1, 'forbid': [616]}},
+            [dict(frames[0], seq=1, ident=616, param=0)], {})
+        chk(v == 'FAIL', '牙f3：只有 616（FAIL 帧）⇒ FAIL（不得退化成 UNDECIDABLE）')
+
         # 牙 f：成对帧 forbid —— FAIL 帧出现即失败
         pair_frames = [dict(frames[0], seq=1, ident=615, param=0)]
         v, _ = evaluate({'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
@@ -665,8 +687,9 @@ def selftest():
         # 牙 r：rng_ledger —— 恰两抽 + site 归属；无账本 ⇒ UNDECIDABLE
         rng_item = {'card': 'c', 'w_item': 'w', 'scenario': 's', 'assert': {
             'ident': 32, 'min_count': 1,
-            'rng_ledger': {'draws': [{'max': 16, 'count': 1}, {'max': 201, 'count': 1}],
-                           'site_substr': ['Operate.cs:722', 'Operate.cs:723']}}}
+            'rng_ledger': {'draws': [
+                {'max': 16, 'count': 1, 'site_substr': ['Operate.cs:722']},
+                {'max': 201, 'count': 1, 'site_substr': ['Operate.cs:723']}]}}}
         ok_ledger = [{'max': 16, 'site': 'Operate.cs:722'}, {'max': 201, 'site': 'Operate.cs:723'}]
         v, _ = evaluate(rng_item, [dict(frames[0], ident=32)], {}, ledger=ok_ledger)
         chk(v == 'PASS', '牙r：账本恰两抽（16×1、201×1）且 site 正确 ⇒ PASS')
@@ -675,6 +698,22 @@ def selftest():
         chk(v == 'FAIL', '牙r：缺 201 抽 ⇒ FAIL')
         v, _ = evaluate(rng_item, [dict(frames[0], ident=32)], {}, ledger=None)
         chk(v == 'UNDECIDABLE', '牙r：证据根无 rng-stream.tsv ⇒ UNDECIDABLE（不是 PASS）')
+        # 牙 r2（review F1）：site 绑定到每一抽——把 16/201 的 site 互换必须 FAIL
+        swapped = [{'max': 16, 'site': 'Operate.cs:723'}, {'max': 201, 'site': 'Operate.cs:722'}]
+        v, _ = evaluate(rng_item, [dict(frames[0], ident=32)], {}, ledger=swapped)
+        chk(v == 'FAIL', '牙r2：max=16/201 的 site 互换 ⇒ FAIL（site 必须按抽绑定）')
+        # 牙 r3（review F2）：嵌套/批次的账本不参与——只有子目录账本时视为无账本
+        tmp_run = os.path.join(tmp, 'rng-root')
+        os.makedirs(os.path.join(tmp_run, 'discovery'), exist_ok=True)
+        for sub in ('discovery',):
+            with open(os.path.join(tmp_run, sub, 'rng-stream.tsv'), 'w', encoding='utf-8') as fh:
+                fh.write('1\tmovr\t16\t5\tOperate.cs:722\n')
+        chk(load_rng_ledger(tmp_run) is None,
+            '牙r3：账本只在 discovery/ 子根 ⇒ 不读（排除另一场景）')
+        with open(os.path.join(tmp_run, 'rng-stream.tsv'), 'w', encoding='utf-8') as fh:
+            fh.write('1\tmovr\t16\t5\tOperate.cs:722\n')
+        chk(len(load_rng_ledger(tmp_run) or []) == 1,
+            '牙r3b：根自身那一份账本 ⇒ 正常读到 1 行（不递归）')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
