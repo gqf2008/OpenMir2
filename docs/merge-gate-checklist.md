@@ -21,6 +21,8 @@
 
 ## 3. 工具自测门（**2026-10-25 漏过这条**）
 
+> 2026-10-26 起它已是 `goal_gate` 条件④ 的**第 8 项**（含 `--inventory` 未分类检查），`--full`/快速模式都会跑；本清单保留为**手工复核**入口（reviewer 自己重跑，不采信作者自述）。
+
 ```sh
 python -I -B tools/hygiene/tool_selftest_gate.py --inventory   # 必须 rc=0：无「未分类」
 python -I -B tools/hygiene/tool_selftest_gate.py               # 全跑必须全绿

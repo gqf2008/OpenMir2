@@ -9,7 +9,7 @@
 1. **脚本派发**：部署语料用到的派发目标 **100% 已实现**（当前 106/106，保持）；
 2. **R 卡证据**：所有 R 级卡要么有真机/协议对拍证据，要么有**显式登记 + 明确理由**（`window_required` 或 whitelist `T-*` 且 owner 复核过）；不允许「代码已合但无证据且无登记」；
 3. **B 类清零**：盘点里的 B 类（未接线/未实现）卡全部关闭或有 owner 裁决的替代方案；
-4. **门禁恒绿**：`cargo fmt/clippy/test --workspace/msgcodegen` + `whitelist_anchor_gate` + `m3_whitelist_registry_audit` 全绿，且 `walgit` 上 master 与本地一致。
+4. **门禁恒绿**：`cargo fmt/clippy/test --workspace/msgcodegen` + `whitelist_anchor_gate` + `m3_whitelist_registry_audit` + **`tool_selftest_gate`（含 `--inventory` 未分类检查）** 全绿，且 `walgit` 上 master 与本地一致。
 
 进度来源：`walgit collab board --format json`（A/B/待审/在跑/待认领 五个数）+ `docs/rewrite-remaining-inventory-20261022.md`。
 
@@ -202,15 +202,21 @@ python tools/goal/goal_gate.py --full
    `cargo clippy --workspace --all-targets --locked -- -D warnings`、
    `cargo run --locked -p msgcodegen -- --check`、
    `python -I -B tests/parity/m3/whitelist_anchor_gate.py check`、
-   `python -I -B tests/parity/m3/m3_whitelist_registry_audit.py audit`，
+   `python -I -B tests/parity/m3/m3_whitelist_registry_audit.py audit`、
+   **`python -I -B tools/hygiene/tool_selftest_gate.py`（2026-10-26 起，第 8 项；普通全跑已含
+   `--inventory` 未分类检查）**，
    加上 `git ls-remote walgit refs/heads/master` 与本地 `master` 的 sha 比对。
+   > **为什么之前是「假绿面」**：工具门此前**不在条件④ 内**（`goal_gate` 全文件 grep `tool_selftest` 命中 0），
+   > 所以一份 `overall=PASS` 的权威产物可以在工具门红着（52 个工具里 1 个未分类、rc=2）时照样产出。
+   > 卡 `openmir2-goal-gate-include-tool-selftest` 把第 8 项接进条件④，三态：rc=0 ⇒ PASS；
+   > rc≠0 ⇒ FAIL 且 `fail_items` 点名（哪个工具未分类/哪条自测红）；工具缺失/无法启动/超时 ⇒ **NEED，不是 PASS**。
    `cargo test --workspace --locked` **只在 `--tests`/`--full` 时跑**；跳过时条件4 =「需人工」，不冒充 PASS。
 
 ### 5.4 `--skip-tests` 与完整模式的区别（务必分清）
 
 | | 快速（默认 / `--skip-tests`） | 完整（`--full` 或 `--tests --script`） |
 | --- | --- | --- |
-| fmt / clippy / msgcodegen / anchor / registry / master 比对 | 跑 | 跑 |
+| fmt / clippy / msgcodegen / anchor / registry / tool_selftest / master 比对 | 跑（工具门约 +120s） | 跑（同左） |
 | `cargo test --workspace` | **跳过** ⇒ 条件4 「需人工」 | 跑（数千用例；冷 target 实测 433.5s，全量 `--full` 约 10.5 分钟） |
 | parse-stats 覆盖率 | **跳过** ⇒ 条件1 「需人工」 | 跑（首次 `--release` 构建较慢；可用 `--script-bin` 复用已有二进制） |
 | 适用 | 巡检、每次合并前快手 | **宣告终点 `DONE` 前必须跑一次**（四条都要有实测结论） |

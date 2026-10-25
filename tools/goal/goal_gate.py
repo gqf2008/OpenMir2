@@ -925,6 +925,44 @@ def judge_remote(local_master, remote_sha, remote_rec):
     return FAIL, "本地 master %s != walgit master %s" % (local_master[:12], remote_sha[:12])
 
 
+TOOL_GATE_REL = "tools/hygiene/tool_selftest_gate.py"
+
+
+def tool_gate_check(repo, run=None, timeout=600):
+    """条件④ 的工具自测门（2026-10-26，卡 openmir2-goal-gate-include-tool-selftest）。
+
+    三态（**不许把「跑不了」当 PASS**）：
+      * rc=0 ⇒ PASS（普通全跑已含 `--inventory` 未分类检查，A3）；
+      * rc≠0 ⇒ FAIL，detail 从输出里点名 `FAIL <tool>` / `UNCLASSIFIED <path>`；
+      * 工具缺失 / 无法启动 / 超时 ⇒ NEED（判不了）。
+
+    `run` 可注入（selftest 用假 runner 验三态）；默认 `run_cmd`。
+    """
+    run = run_cmd if run is None else run
+    path = Path(repo) / TOOL_GATE_REL
+    if not path.is_file():
+        return {"name": "tool_selftest_gate", "state": NEED, "rc": None,
+                "detail": "工具缺失：%s（判不了，不是 PASS）" % TOOL_GATE_REL}
+    rec = run([sys.executable, "-I", "-B", TOOL_GATE_REL], repo, timeout)
+    if rec.get("timed_out"):
+        return {"name": "tool_selftest_gate", "state": NEED, "rc": rec.get("rc"),
+                "detail": "tool_selftest_gate 超时（%ss）：判不了，不是 PASS" % timeout}
+    if rec.get("error"):
+        return {"name": "tool_selftest_gate", "state": NEED, "rc": rec.get("rc"),
+                "detail": "tool_selftest_gate 无法启动：%s（判不了，不是 PASS）" % rec["error"]}
+    if rec.get("rc") == 0:
+        return {"name": "tool_selftest_gate", "state": PASS, "rc": 0,
+                "detail": "tool_selftest_gate rc=0（%.1fs；含 --inventory 未分类检查）"
+                          % rec.get("duration_s", 0.0)}
+    lines = ((rec.get("stdout") or "") + "\n" + (rec.get("stderr") or "")).splitlines()
+    named = [ln.strip() for ln in lines
+             if ln.strip().startswith(("FAIL ", "UNCLASSIFIED "))]
+    detail = "tool_selftest_gate rc=%s（%.1fs）" % (rec.get("rc"), rec.get("duration_s", 0.0))
+    detail += ("；点名：" + " | ".join(named[:6])[:520]) if named else "；输出无 FAIL/UNCLASSIFIED 行"
+    return {"name": "tool_selftest_gate", "state": FAIL, "rc": rec.get("rc"),
+            "detail": detail}
+
+
 def run_gate_checks(repo: Path, mir2_root: Path, with_tests: bool, timeout, test_timeout):
     checks = []
     gates = [
@@ -947,6 +985,9 @@ def run_gate_checks(repo: Path, mir2_root: Path, with_tests: bool, timeout, test
         else:
             state, detail = FAIL, "%s rc=%s（%.1fs）" % (name, rec["rc"], rec["duration_s"])
         checks.append({"name": name, "state": state, "detail": detail, "rc": rec.get("rc")})
+
+    # 第 8 项：工具自测门（cwd=仓库根；工具门自身总墙钟 420s，外层给 600s）
+    checks.append(tool_gate_check(repo, run=run_cmd, timeout=600))
 
     if with_tests:
         rec = run_cmd(["cargo", "test", "--workspace", "--locked"], mir2_root, test_timeout)
@@ -1626,6 +1667,48 @@ def selftest(verbose=False):
             judge_remote("a" * 40, "b" * 40, {"rc": 0})[0] == FAIL, "drift"))
         check("条件4 ls-remote 不可用 -> 需人工", lambda: (
             judge_remote("a" * 40, "", {"rc": 1})[0] == NEED, "no remote"))
+        # ---------- 条件4 工具自测门（三态牙；卡 openmir2-goal-gate-include-tool-selftest）----------
+        import tempfile as _tempfile
+
+        _tg_root = _tempfile.mkdtemp(prefix="goal-toolgate-")
+        _tg_tool = Path(_tg_root, "tools", "hygiene", "tool_selftest_gate.py")
+        _tg_tool.parent.mkdir(parents=True, exist_ok=True)
+        _tg_tool.write_text("", encoding="utf-8")
+        _tg_missing_root = _tempfile.mkdtemp(prefix="goal-toolgate-miss-")
+
+        def _fake_run(rec):
+            return lambda cmd, cwd, to: rec
+
+        def _no_run(cmd, cwd, to):
+            raise AssertionError("工具缺失时不应尝试运行")
+
+        _tg_red = {"rc": 2, "duration_s": 9.0,
+                   "stdout": "FAIL card_window rc=2  x\nUNCLASSIFIED tools/x.py\nTOTAL\n",
+                   "stderr": ""}
+        check("条件4 工具门 rc=0 -> PASS", lambda: (
+            tool_gate_check(_tg_root, run=_fake_run(
+                {"rc": 0, "duration_s": 0.1, "stdout": "GREEN\n", "stderr": ""}))["state"] == PASS,
+            "green"))
+        check("条件4 工具门 rc≠0 -> FAIL 且点名工具/未分类项", lambda: (
+            tool_gate_check(_tg_root, run=_fake_run(_tg_red))["state"] == FAIL
+            and "card_window" in tool_gate_check(_tg_root, run=_fake_run(_tg_red))["detail"]
+            and "UNCLASSIFIED tools/x.py" in tool_gate_check(_tg_root, run=_fake_run(_tg_red))["detail"],
+            "red"))
+        check("条件4 工具门红 -> 条件④整体 FAIL（可进 fail_items）", lambda: (
+            judge_gate_checks([tool_gate_check(_tg_root, run=_fake_run(_tg_red))]) == FAIL,
+            "propagate"))
+        check("条件4 工具缺失 -> NEED（不是 PASS）", lambda: (
+            tool_gate_check(_tg_missing_root, run=_no_run)["state"] == NEED
+            and "工具缺失" in tool_gate_check(_tg_missing_root, run=_no_run)["detail"],
+            "missing"))
+        check("条件4 工具无法启动 -> NEED", lambda: (
+            tool_gate_check(_tg_root, run=_fake_run(
+                {"rc": None, "error": "OSError: python 不可用"}))["state"] == NEED,
+            "unavailable"))
+        check("条件4 工具门超时 -> NEED", lambda: (
+            tool_gate_check(_tg_root, run=_fake_run({"rc": None, "timed_out": True}))["state"] == NEED,
+            "timeout"))
+
         check("总体状态优先级 FAIL > 需人工 > PASS", lambda: (
             overall_state([PASS, NEED]) == NEED
             and overall_state([PASS, NEED, FAIL]) == FAIL
