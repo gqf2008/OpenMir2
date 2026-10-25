@@ -1,6 +1,6 @@
 {
   "name": "butch_two_draws",
-  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位；收官帧 `SM_BUTCH(637)`（33 需 BodyLeathery<=0，`PlayObject.Operate.cs:731-738`）。两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。**工具面已就绪**：kill 寻靶（`track: nearest:鸡`）+ 运行期令牌 `@last_kill_xy`（屠宰用的尸体格）。**剩余缺口 = 真机实测**，见 `blocked`。`target_xy` 仍是夹具落点（profile 把鸡刷在该格），kill 不再依赖它。",
+  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位；收官帧 `SM_BUTCH(637)`（33 需 BodyLeathery<=0，`PlayObject.Operate.cs:731-738`）。两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**当前缺口 = 选靶规则**（`nearest` 先选最近再要求相邻；真机 5 次全 StepFailed，由卡 `openmir2-probe-track-target-adjacency` 修），详见 `blocked`。`params.target_xy` 现仅作**历史落点记录**：profile `butch_monsters` 已在玩家周围 8 格铺 32 只鸡，选靶与夹具都不再依赖它。",
   "params": {
     "self_pos": 21627210,
     "target_xy": 21692746,
@@ -9,14 +9,14 @@
     "takeon_where": 1
   },
   "blocked": {
-    "reason": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合，首个闸门 StartTick==0 立即刷）。**剩余缺口 = 真机实测**（装备 Dc>0 → 寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本）。未打通前不得声称可跑。",
-    "missing_fixture": "① 窗口按 port-status → stack-claim → 跑 → -Stop → stack-release；② 前置门 `Dc>0` 自证（装备后态快照）；③ 三段判据分开写：刷出（目标格活动帧）/ 命中扣血（SM_STRUCK 或 SM_HIT 计数）/ 死亡+637；④ 账本限时 ≤5 分钟并当场裁剪。"
+    "reason": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合）。**装备腿已绿**：`CM_TAKEONITEM(1003, recog=5001)` → **`SM_TAKEON_OK(615)`** 实测命中（Dc>0）。**当前缺口 = 选靶规则**：`track: nearest:鸡` 先选最近、再要求八向相邻；真机轮 5 次里 nearest 分别落在 4 格 / 2 格 / **玩家同格** ⇒ `StepFailed`。正由卡 `openmir2-probe-track-target-adjacency` 修（相邻优先 + 等不到时列出坐标与距离）。修好后跑：寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本。未打通前不得声称可跑。",
+    "missing_fixture": "① 选靶修复合入后（相邻优先）跑真机三段：寻靶击杀（刷出/命中扣血/死亡三段分记）→ `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本；② 装备腿已绿，**不必重复证明**；③ 账本限时 ≤5 分钟并当场裁剪；④ 收官判据是 637（33 需 BodyLeathery<=0）。"
   },
   "placement": {
     "map": "0",
     "x": 330,
     "y": 330,
-    "note": "玩家站位（与目标相邻格）；`target_xy` = 目标所在格 `MakeLong(X,Y)`（由活体夹具提供，勿写死）；`self_pos = MakeLong(330,330) = 21627210`（R5 与 placement 自洽）。"
+    "note": "玩家站位 `self_pos = MakeLong(330,330) = 21627210`；`target_xy` **仅保留为历史落点记录**（现 profile 在玩家周围 8 格铺 32 只鸡，选靶用 `track: nearest:鸡`、夹具也不再看它）。"
   },
   "steps": [
     {
