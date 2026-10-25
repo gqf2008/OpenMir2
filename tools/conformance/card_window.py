@@ -4045,7 +4045,11 @@ def check_rng_ledger(path):
 #:   * `config_overrides` / `castle_list` / `castle_files` —— 配置文件与城堡前置
 #:     （卡 `openmir2-window-fixture-castle`）。
 FIXTURE_KEYS = ("monsters", "config_overrides", "castle_list", "castle_files", "level",
-                "inventory_replace", "inventory_drop", "note")
+                "inventory_replace", "inventory_drop", "files", "note")
+
+#: 卡 `openmir2-gm-script-fixture` A5：`fixtures.files` 的白名单根 —— 只许写
+#: `<envir_root>/Envir/` 下的相对路径（脚本注入面），禁绝对路径与 `..`。
+FIXTURE_FILES_ROOT = "Envir"
 
 #: `fixtures.inventory_replace` 条目的键白名单（槽位 → 物品）。
 FIXTURE_INV_REPLACE_KEYS = {"position", "index", "make_index", "std_mode",
@@ -4322,7 +4326,7 @@ def _fixture_castle_name(name, where):
 
 def _validate_fixture_files(fx, where):
     """文件夹具（配置覆盖 + 城堡前置）schema；返回归一化三件套。"""
-    out = {"config_overrides": {}, "castle_list": None, "castle_files": {}}
+    out = {"config_overrides": {}, "castle_list": None, "castle_files": {}, "files": {}}
     cfg = fx.get("config_overrides")
     if cfg is not None:
         if not isinstance(cfg, dict) or not cfg:
@@ -4393,6 +4397,44 @@ def _validate_fixture_files(fx, where):
                                           % (wk, len(raw)))
                     norm[key] = val
             out["castle_files"][cname] = norm
+    fl = fx.get("files")
+    if fl is not None:
+        out["files"] = _validate_fixture_raw_files(fl, where)
+    return out
+
+
+def _validate_fixture_raw_files(fl, where):
+    """`fixtures.files`：`{相对 Envir 的路径: 文本}` → `{rel: GBK 字节}`（卡 `openmir2-gm-script-fixture` A5）。
+
+    约束（与审计 `9627d8cf` 一致）：
+      * 相对路径，`/` 分隔，必须以 `Envir/` 开头；**禁绝对路径 / 盘符 / `..` 段**；
+      * 文本必须能编成 **GBK**（线上脚本是 GBK 字节流），且非空；
+      * 两侧声明同一份 ⇒ 由对称性检查兜底（`_fixture_symmetry` 已把 `files` 纳入比较）。
+    """
+    if not isinstance(fl, dict) or not fl:
+        raise ConfigError("%s.files 必须是非空对象（相对 Envir 路径 → 文本）" % where)
+    out = {}
+    for rel in sorted(fl):
+        w = "%s.files.%s" % (where, rel)
+        if not isinstance(rel, str) or not rel.strip():
+            raise ConfigError("%s 的路径必须是非空字符串" % w)
+        norm = rel.replace("\\", "/").strip()
+        if norm.startswith("/") or (len(norm) > 1 and norm[1] == ":"):
+            raise ConfigError("%s: 不许绝对路径/盘符（只认相对 Envir 的路径）：%r" % (w, rel))
+        parts = norm.split("/")
+        if any(seg in ("", ".", "..") for seg in parts):
+            raise ConfigError("%s: 路径段不许为空/`.`/`..`：%r" % (w, rel))
+        if parts[0] != FIXTURE_FILES_ROOT:
+            raise ConfigError("%s: 只许写 %s/ 下的文件（实际 %r）"
+                              % (w, FIXTURE_FILES_ROOT, rel))
+        text = fl[rel]
+        if not isinstance(text, str) or not text:
+            raise ConfigError("%s 的文本必须是非空字符串" % w)
+        try:
+            raw = text.encode("gbk")
+        except UnicodeEncodeError as e:
+            raise ConfigError("%s 的文本不能编成 GBK：%s" % (w, e))
+        out["/".join(parts)] = raw
     return out
 
 
@@ -4430,7 +4472,7 @@ def _validate_fixture_decl(decl, where):
                               "int(11)，部署最大 255）" % (where, lv))
         out["level"] = lv
     if not (out["monsters"] or out["config_overrides"]
-            or out["castle_list"] is not None or out["castle_files"]
+            or out["castle_list"] is not None or out["castle_files"] or out["files"]
             or out["level"] is not None or out["inventory_replace"]
             or out["inventory_drop"]):
         raise ConfigError("%s 只声明了 note：至少要给 monsters / config_overrides / "
@@ -4471,6 +4513,7 @@ def _fixture_symmetry_key(decl):
     decl = decl or {}
     cl = decl.get("castle_list")
     return (tuple(cl) if cl is not None else None,
+            json.dumps(decl.get("files") or {}, sort_keys=True),
             json.dumps(decl.get("castle_files") or {}, sort_keys=True,
                        ensure_ascii=False),
             json.dumps(decl.get("config_overrides") or {}, sort_keys=True,
@@ -4577,6 +4620,8 @@ def _fixture_targets(decl):
     for cname in sorted(decl["castle_files"]):
         out.append(("Castle/%s/SabukW.txt" % cname, "ini",
                     sorted(decl["castle_files"][cname].items())))
+    for rel in sorted(decl.get("files") or {}):
+        out.append((rel, "raw", decl["files"][rel]))
     return out
 
 
@@ -4623,6 +4668,8 @@ def _fixture_new_bytes(kind, payload, data, where):
             body += nl
         old = data.decode("ascii", "replace").split()
         return body, [("castle_list=%r" % old, "castle_list=%r" % list(payload))]
+    if kind == "raw":
+        return payload, [("raw(%dB)" % len(data), "raw(%dB)" % len(payload))]
     return _fixture_ini_replace(data, payload, where)
 
 
@@ -4638,6 +4685,19 @@ def _rollback_file_recs(recs):
     errs = []
     for rec in recs:
         if not rec.get("backup"):
+            continue
+        if rec.get("created"):
+            # 新建型：回滚 = 删除（写前状态是「不存在」）。
+            try:
+                if os.path.isfile(rec["path"]):
+                    os.remove(rec["path"])
+                if rec.get("backup") and os.path.isfile(rec["backup"]):
+                    os.remove(rec["backup"])
+                rec["backup"] = None
+                rec["restore_sha256"] = "absent"
+                rec["action"] = "rolled-back-created-removed"
+            except OSError as e:
+                errs.append("%s 回滚失败（删除新建文件）：%s" % (rec["rel"], e))
             continue
         try:
             with open(rec["backup"], "rb") as f:
@@ -4661,7 +4721,8 @@ def _rollback_file_recs(recs):
     return errs
 
 
-def _apply_files(runner, side, root, decl, side_dir, tag):
+def _apply_files(runner, side, root, decl, side_dir, tag, sink_targets=None,
+                 sink_files=None):
     """在**一个根**上写配置覆盖/城堡前置（备份 + 原子写 + 读回）；失败就地回滚后抛。
 
     返回 (targets, backup_dir)：targets 每项带 `target`（baseline/shadow）、`rel`、
@@ -4670,14 +4731,22 @@ def _apply_files(runner, side, root, decl, side_dir, tag):
     planned = []
     for rel, kind, payload in _fixture_targets(decl):
         path = os.path.join(root, *rel.split("/"))
+        created = False
         if not os.path.isfile(path):
-            raise ConfigError("夹具目标文件不存在：%s（不创建/不猜；先建私有根夹具）"
-                              % path)
-        with open(path, "rb") as f:
-            data = f.read()
+            # 卡 `openmir2-gm-script-fixture` A5：`files`（raw）允许**新建**脚本文件；
+            # 其余类仍要求目标已存在（不创建/不猜）。
+            if kind != "raw":
+                raise ConfigError("夹具目标文件不存在：%s（不创建/不猜；先建私有根夹具）"
+                                  % path)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            data = b""
+            created = True
+        else:
+            with open(path, "rb") as f:
+                data = f.read()
         new, diffs = _fixture_new_bytes(kind, payload, data, "%s:%s" % (side, rel))
         planned.append({"rel": rel, "path": path, "old": data, "new": new,
-                        "diff": diffs})
+                        "diff": diffs, "created": created})
     if getattr(runner, "dry_run", False):
         for p in planned:
             for old, new in p["diff"]:
@@ -4699,12 +4768,20 @@ def _apply_files(runner, side, root, decl, side_dir, tag):
                                                          p["rel"].replace("/", "__")))
             with open(bpath, "wb") as f:
                 f.write(p["old"])
+            before_sha = hashlib.sha256(p["old"]).hexdigest()
             rec = {"target": tag, "rel": p["rel"], "path": p["path"],
+                   "created": p.get("created", False),
                    "backup": bpath,
-                   "before_sha256": hashlib.sha256(p["old"]).hexdigest(),
+                   "before_sha256": before_sha, "sha256_before": before_sha,
                    "after_sha256": None, "changed": p["old"] != p["new"],
                    "diff": p["diff"], "action": "applied", "restore_sha256": None}
             recs.append(rec)
+            # 卡 `openmir2-gm-script-fixture` A4：**先登记后写**——即使第 N 个写失败、
+            # 就地回滚，证据里仍有逐文件记录（before/after/restore sha 可对账）。
+            if sink_targets is not None:
+                sink_targets.append(rec)
+            if sink_files is not None:
+                sink_files.append(rec)
             if rec["changed"]:
                 _fixture_atomic_write(p["path"], p["new"])
             with open(p["path"], "rb") as f:
@@ -4945,12 +5022,12 @@ def run_fixtures(runner, side, prof, sc, decl, env, side_dir, timeout=120):
                             "after_sha256": first["after_sha256"]})
             did_m = True
         if (decl.get("config_overrides") or decl.get("castle_list") is not None
-                or decl.get("castle_files")):
+                or decl.get("castle_files") or decl.get("files")):
             for i, root in enumerate(roots):
                 tag = "shadow" if i else "baseline"
-                recs, bdir = _apply_files(runner, side, root, decl, side_dir, tag)
-                res["targets"].extend(recs)
-                res["files"].extend(recs)
+                _recs, bdir = _apply_files(runner, side, root, decl, side_dir, tag,
+                                           sink_targets=res["targets"],
+                                           sink_files=res["files"])
                 if bdir:
                     res["backup_dir"] = bdir
             did_f = True
@@ -4997,6 +5074,20 @@ def restore_fixtures(res):
             continue
         name = tgt.get("rel") or "MonGen.txt"
         label = "%s/%s" % (tgt.get("target") or "baseline", name)
+        if tgt.get("created"):
+            # 卡 `openmir2-gm-script-fixture` A4：夹具新建的文件，还原 = **删除**并断言不存在
+            # （写前状态就是「不存在」⇒ before_sha 不存在，restore 后必须仍不存在）。
+            try:
+                if os.path.isfile(tgt["path"]):
+                    os.remove(tgt["path"])
+                if os.path.exists(tgt["path"]):
+                    errs.append("%s 还原失败：删除后仍存在" % label)
+                else:
+                    tgt["restore_sha256"] = "absent"
+                    tgt["action"] = "restored-created-removed"
+            except OSError as e:
+                errs.append("%s 还原失败（删除新建文件）：%s" % (label, e))
+            continue
         try:
             with open(tgt["backup"], "rb") as f:
                 data = f.read()
@@ -7639,10 +7730,14 @@ def _selftest_fixtures_files(tmp, stub=None, log=None, base_cfg=None):
     bdir = os.path.join(side_dir, "fixtures", "backup")
     if os.path.isdir(bdir):
         leftover = sorted(os.listdir(bdir))
+    rolled = [r for r in (res_bad.get("files") or [])
+              if r.get("action") == "rolled-back"]
     out.append((res_bad.get("rc") == 2
                 and "写后读回与目标不符" in (res_bad.get("error") or "")
                 and readb(conf) == conf_before and readb(sabuk) == sabuk_before
-                and not leftover and not res_bad.get("files"),
+                and not leftover and rolled
+                and all(r.get("restore_sha256") == r.get("before_sha256")
+                        for r in rolled),
                 "FX42 第 2 个文件写坏 ⇒ rc=2 且**已写的第 1 个文件就地回滚**"
                 "（conf/sabuk 回原字节、无备份残留）"))
 
@@ -10790,6 +10885,74 @@ def selftest():
     if fail_n:
         print("RED: card_window.py selftest %d/%d" % (pass_n, total))
         return 1
+
+    # 卡 `openmir2-gm-script-fixture` A5：`fixtures.files`（脚本注入通道）
+    CRLF = bytes((13, 10))
+    NL = chr(13) + chr(10)
+    fr = tempfile.mkdtemp(prefix="cw_files_")
+    froot = os.path.join(fr, "M2GameSvr")
+    os.makedirs(os.path.join(froot, "Envir", "Market_Def", "shabake"), exist_ok=True)
+    existing = os.path.join(froot, "Envir", "Market_Def", "shabake", "shop-0153.txt")
+    OLD = b"(@buy @sell)" + CRLF + b"%100" + CRLF + b"+0" + CRLF
+    with open(existing, "wb") as fh:
+        fh.write(OLD)
+    fsc = {"envir_root": froot}
+    fside = os.path.join(fr, "side")
+    os.makedirs(fside, exist_ok=True)
+
+    def _fv(decl):
+        try:
+            return _validate_fixture_decl(decl, "t"), None
+        except ConfigError as exc:
+            return None, str(exc)
+
+    okA, _errA = _fv({"files": {"Envir/Market_Def/shabake/shop-0153.txt": "new" + NL}})
+    chk(okA is not None, "FX-F1 files 合法声明 => 通过")
+    for bad, tag in (
+        ({"files": {"Envir/../x.txt": "a"}}, "FX-F2 禁 `..`"),
+        ({"files": {"/abs.txt": "a"}}, "FX-F3 禁绝对路径"),
+        ({"files": {"Castle/List.txt": "a"}}, "FX-F4 只许 Envir/ 下"),
+        ({"files": {"Envir/x.txt": ""}}, "FX-F5 文本非空"),
+    ):
+        got, berr = _fv(bad)
+        chk(got is None and bool(berr), tag + " => ConfigError")
+
+    fdecl = _validate_fixture_decl({"files": {
+        "Envir/Market_Def/shabake/shop-0153.txt": "changed" + NL,
+        "Envir/QuestDiary/new_script.txt": "GMEXECUTE @Level0 Self 5" + NL,
+    }}, "t")
+    fres = run_fixtures(Runner(fr, None, dry_run=False), "rust", {}, fsc, fdecl, {}, fside)
+    newp = os.path.join(froot, "Envir", "QuestDiary", "new_script.txt")
+    chk(fres.get("rc") == 0 and os.path.isfile(newp), "FX-F6 files 可新建脚本文件")
+    recs = {r["rel"]: r for r in fres.get("files") or []}
+    chk(recs["Envir/Market_Def/shabake/shop-0153.txt"]["before_sha256"]
+        == hashlib.sha256(OLD).hexdigest(), "FX-F7 替换型记录写前 sha256")
+    chk(recs["Envir/QuestDiary/new_script.txt"].get("created") is True,
+        "FX-F8 新建型记录 created=True")
+
+    root2 = os.path.join(fr, "M2GameSvr2")
+    os.makedirs(os.path.join(root2, "Envir", "Market_Def", "shabake"), exist_ok=True)
+    with open(os.path.join(root2, "Envir", "Market_Def", "shabake", "shop-0153.txt"),
+              "wb") as fh:
+        fh.write(OLD)
+    side2 = os.path.join(fr, "side2")
+    os.makedirs(side2, exist_ok=True)
+    fres2 = run_fixtures(Runner(fr, None, dry_run=False), "csharp",
+                         {}, {"envir_root": root2}, fdecl, {}, side2)
+    sha_a = [r["after_sha256"] for r in fres["files"]
+             if r["rel"].endswith("shop-0153.txt")][0]
+    sha_b = [r["after_sha256"] for r in fres2["files"]
+             if r["rel"].endswith("shop-0153.txt")][0]
+    chk(sha_a == sha_b, "FX-F9 两侧写后 sha256 相同（逐字节相同）")
+
+    ferr = restore_fixtures(fres)
+    chk(ferr is None, "FX-F10 还原无错")
+    with open(existing, "rb") as fh:
+        cur = fh.read()
+    chk(hashlib.sha256(cur).hexdigest()
+        == recs["Envir/Market_Def/shabake/shop-0153.txt"]["before_sha256"],
+        "FX-F11 替换型还原后 sha256 == 写前")
+    chk(not os.path.exists(newp), "FX-F12 新建型还原后文件不存在")
 
     print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
