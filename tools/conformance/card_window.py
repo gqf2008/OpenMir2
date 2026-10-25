@@ -4731,6 +4731,13 @@ def _apply_files(runner, side, root, decl, side_dir, tag, sink_targets=None,
     planned = []
     for rel, kind, payload in _fixture_targets(decl):
         path = os.path.join(root, *rel.split("/"))
+        # 卡 `openmir2-gm-script-fixture`：**逐文件**再过一次生产根守卫（不只靠 envir_root 的
+        # 那一道）——若中间目录是符号链接指向生产内容根，仅校验 envir_root 拦不住。
+        real_path = os.path.realpath(path)
+        real_prod = os.path.realpath(FIXTURE_PROD_ROOT)
+        if real_path == real_prod or real_path.startswith(real_prod + os.sep):
+            raise ConfigError("夹具目标解析到生产内容根（%s ⇒ %s）⇒ 拒绝（内容冻结）"
+                              % (path, real_path))
         created = False
         if not os.path.isfile(path):
             # 卡 `openmir2-gm-script-fixture` A5：`files`（raw）允许**新建**脚本文件；
@@ -10953,6 +10960,29 @@ def selftest():
         == recs["Envir/Market_Def/shabake/shop-0153.txt"]["before_sha256"],
         "FX-F11 替换型还原后 sha256 == 写前")
     chk(not os.path.exists(newp), "FX-F12 新建型还原后文件不存在")
+
+    # 生产根守卫（A4/内容冻结）：① envir_root 直指生产；② envir_root 私有但 Envir 是
+    # 指向生产的符号链接 ⇒ **逐文件 realpath 守卫**必须拦（只靠 envir_root 挡不住 ②）。
+    prod_res = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
+                            {"envir_root": FIXTURE_PROD_ROOT + "/M2GameSvr"},
+                            _validate_fixture_decl(
+                                {"files": {"Envir/x.txt": "a"}}, "t"), {}, fside)
+    chk(prod_res.get("rc") == 2 and "生产内容根" in (prod_res.get("error") or ""),
+        "FX-F13 envir_root 指向生产根 => rc=2 拒绝")
+    link_root = os.path.join(fr, "M2GameSvr-link")
+    os.makedirs(link_root, exist_ok=True)
+    try:
+        os.symlink(FIXTURE_PROD_ROOT + "/M2GameSvr/Envir",
+                   os.path.join(link_root, "Envir"), target_is_directory=True)
+        link_res = run_fixtures(Runner(fr, None, dry_run=False), "rust", {},
+                                {"envir_root": link_root},
+                                _validate_fixture_decl(
+                                    {"files": {"Envir/x.txt": "a"}}, "t"), {}, fside)
+        chk(link_res.get("rc") == 2
+            and "解析到生产内容根" in (link_res.get("error") or ""),
+            "FX-F14 Envir 为指向生产的符号链接 => 逐文件 realpath 守卫 rc=2")
+    except OSError:
+        chk(True, "FX-F14 跳过（本机无法建符号链接）")
 
     print("GREEN: card_window.py selftest %d/%d" % (pass_n, pass_n + fail_n))
     return 0
