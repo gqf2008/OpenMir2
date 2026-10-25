@@ -4045,11 +4045,14 @@ def _check_fixture_symmetry(fixtures_by_side):
         shown = []
         for side in sorted(keys):
             decl = fixtures_by_side[side] or {}
-            shown.append("%s{castle_list=%r, castle_files=%r, config_overrides=%r, level=%r}"
+            shown.append("%s{castle_list=%r, castle_files=%r, config_overrides=%r, "
+                         "level=%r, inventory_replace=%r, inventory_drop=%r}"
                          % (side, decl.get("castle_list"),
                             decl.get("castle_files") or {},
                             decl.get("config_overrides") or {},
-                            decl.get("level")))
+                            decl.get("level"),
+                            decl.get("inventory_replace"),
+                            decl.get("inventory_drop")))
         raise ConfigError(
             "fixtures 文件三件套两侧不一致（%s）：`castle_list` 会让 "
             "`castle_list_symmetry` 门失效（门在写盘**之前**检查，夹具在写**之后**生效）；"
@@ -7557,6 +7560,316 @@ def _selftest_postrun_symmetry(tmp):
     return out
 
 
+def _selftest_inventory_fixture(tmp):
+    """卡 openmir2-window-fixture-inventory：replace/drop 声明、写读回、回滚、还原。"""
+    import re as _re
+    out = []
+
+    # ---- 声明期 ----
+    raw = {"inventory_replace": [
+               {"position": 40, "index": 207, "make_index": 5001,
+                "std_mode": 5, "ani_count": 0, "dura": 10, "dura_max": 20},
+               {"position": 41, "index": 68, "make_index": 5003}],
+           "inventory_drop": [42, {"position": 43, "note": "清空"}]}
+    decl = _validate_fixture_decl(dict(raw), "selftest.fixtures")
+    out.append(([it["position"] for it in decl["inventory_replace"]] == [40, 41]
+                and [it["position"] for it in decl["inventory_drop"]] == [42, 43]
+                and decl["inventory_replace"][0]["dura"] == 10
+                and decl["inventory_drop"][1]["note"] == "清空",
+                "INV1 声明解析：replace 2 件 + drop 2 槽（int 与对象两种写法）"))
+
+    bad_ok = True
+    for bad in ({"inventory_replace": []},
+                {"inventory_replace": [{"position": 0, "index": 1}]},
+                {"inventory_replace": [{"position": 0, "index": 1, "make_index": 1,
+                                        "bogus": 1}]},
+                {"inventory_replace": [{"position": 46, "index": 1, "make_index": 1}]},
+                {"inventory_replace": [{"position": 0, "index": 1, "make_index": 0}]},
+                {"inventory_replace": [{"position": 0, "index": 1, "make_index": 1},
+                                       {"position": 0, "index": 2, "make_index": 2}]},
+                {"inventory_drop": []},
+                {"inventory_drop": [46]},
+                {"inventory_drop": ["3"]},
+                {"inventory_drop": [{"slot": 3}]},
+                {"inventory_replace": [{"position": 5, "index": 1, "make_index": 1}],
+                 "inventory_drop": [5]}):
+        try:
+            _validate_fixture_decl(dict(bad), "x")
+            bad_ok = False
+        except ConfigError:
+            pass
+    out.append((bad_ok, "INV 牙1 空数组/缺键/未知键/越界/make_index=0/同槽重复/"
+                        "replace 与 drop 重叠 => ConfigError"))
+
+    # ---- 对称性（两侧声明必须逐字节相同） ----
+    d1 = _validate_fixture_decl(dict(raw), "a")
+    d2 = _validate_fixture_decl(
+        {"inventory_replace": [{"position": 40, "index": 207, "make_index": 9999}]}, "b")
+    try:
+        _check_fixture_symmetry({"csharp": d1, "rust": d2})
+        sym_ok = False
+    except ConfigError as ex:
+        sym_ok = "不一致" in str(ex) and "inventory_replace" in str(ex)
+    out.append((sym_ok, "INV 牙2 两侧 inventory_replace 不同 => ConfigError（对拍无效）"))
+    try:
+        _check_fixture_symmetry({"csharp": d1, "rust": _validate_fixture_decl(
+            dict(raw), "a2")})
+        same_ok = True
+    except ConfigError:
+        same_ok = False
+    out.append((same_ok, "INV2b 两侧声明相同 => 通过"))
+
+    # ---- SQL 构造/解析 ----
+    w = _inv_write_sql("mir2_test_db", 6228, {"op": "replace", "position": 40,
+                                             "make_index": 5001, "std_index": 207,
+                                             "dura": 10, "dura_max": 20})
+    wd = _inv_write_sql("mir2_test_db", 6228, {"op": "drop", "position": 42})
+    rs = _inv_restore_sql("mir2_test_db", 6228, 40,
+                          {"Id": 9, "Position": 40, "MakeIndex": 5001,
+                           "StdIndex": 207, "Dura": 10, "DuraMax": 20})
+    rs_empty = _inv_restore_sql("mir2_test_db", 6228, 42, None)
+    out.append(("INSERT INTO" in w and "`Position`, `MakeIndex`" in w
+                and "DELETE FROM" in wd and "INSERT INTO" not in wd
+                and "`Id`, `PlayerId`" in rs and "9, 6228, 40" in rs
+                and "INSERT INTO" not in rs_empty,
+                "INV3 SQL 形态：replace=DELETE+INSERT，drop 只 DELETE，还原连 Id 写回"))
+    dup_ok = True
+    for bad_rows in ("1\t2\t3\t4\t5\n", "0\t1\t2\t3\t4\t5\n0\t6\t2\t3\t4\t5\n",
+                     "0\t1\t2\t3\t4\tNULL\n"):
+        try:
+            _parse_inv_rows(bad_rows)
+            dup_ok = False
+        except ConfigError:
+            pass
+    out.append((dup_ok, "INV 牙3 行读回列数不对/同槽多行/NULL => ConfigError"))
+
+    # ---- 运行期：有状态假栈（模拟 characters_bagitem） ----
+    class _Bag:
+        def __init__(self):
+            self.bag = {p: {"Id": 100 + p, "Position": p, "MakeIndex": 9000 + p,
+                            "StdIndex": 0, "Dura": 0, "DuraMax": 0}
+                        for p in range(46)}
+            self.next_id = 900
+            self.tags = []
+            self.fail_verify_pos = None
+            self.drift_after_write = False
+            self.written = 0
+
+        def _rows(self, positions):
+            return "".join("%d\t%d\t%d\t%d\t%d\t%d\n"
+                           % (p, r["Id"], r["MakeIndex"], r["StdIndex"],
+                              r["Dura"], r["DuraMax"])
+                           for p, r in sorted(self.bag.items())
+                           if p in positions)
+
+        def _fp(self, excluded):
+            rows = [r for p, r in sorted(self.bag.items()) if p not in excluded]
+            blob = "|".join("%d:%d:%d:%d:%d" % (r["Position"], r["MakeIndex"],
+                                                r["StdIndex"], r["Dura"], r["DuraMax"])
+                            for r in rows)
+            h = hashlib.md5(blob.encode("utf-8")).hexdigest()
+            if self.drift_after_write and self.written:
+                h = "deadbeef" * 4
+            return "%d\t%s\n" % (len(rows), h)
+
+        def _apply_write(self, pos, text):
+            self.written += 1
+            self.bag.pop(pos, None)
+            m = _re.search(r"VALUES \((\d+), (\d+), (\d+), (\d+), (\d+), (\d+)\)\s*;\s*$",
+                           text)
+            if m:
+                _pid, p, mk, idx, dura, dmax = (int(x) for x in m.groups())
+                self.bag[p] = {"Id": self.next_id, "Position": p, "MakeIndex": mk,
+                               "StdIndex": idx, "Dura": dura, "DuraMax": dmax}
+                self.next_id += 1
+
+        def _apply_restore(self, pos, text):
+            self.bag.pop(pos, None)
+            m = _re.search(
+                r"VALUES \((\d+), (\d+), (\d+), (\d+), (\d+), (\d+), (\d+)\)\s*;\s*$",
+                text)
+            if m:
+                rid, _pid, p, mk, idx, dura, dmax = (int(x) for x in m.groups())
+                self.bag[p] = {"Id": rid, "Position": p, "MakeIndex": mk,
+                               "StdIndex": idx, "Dura": dura, "DuraMax": dmax}
+
+        def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None,
+                capture=True):
+            self.tags.append(tag)
+            text = stdin_text or ""
+            if tag == "inventory_fixture.character.columns":
+                return 0, "Id\nChrName\nLoginID\nDeleted\n", ""
+            if tag == "inventory_fixture.character":
+                return 0, "1\t6228\t0\n", ""
+            if tag == "inventory_fixture.columns":
+                return 0, "Id\nPlayerId\nPosition\nMakeIndex\nStdIndex\nDura\nDuraMax\n", ""
+            if tag == "inventory_fixture.read":
+                return 0, self._fp(self.excluded), ""
+            if tag == "inventory_fixture.verify":
+                return 0, self._fp(self.excluded), ""
+            if tag == "inventory_fixture.snapshot":
+                m = _re.search(r"IN \(([^)]*)\)", text)
+                positions = {int(x) for x in m.group(1).split(",")} if m else set()
+                return 0, self._rows(positions), ""
+            if tag == "inventory_fixture.template":
+                return 0, "5\t0\n", ""
+            m = _re.match(r"inventory_fixture\.(write|verify|restore|restore_verify|"
+                          r"rollback|rollback_verify)_(\d+)$", tag)
+            if m:
+                kind, pos = m.group(1), int(m.group(2))
+                if kind == "write":
+                    self._apply_write(pos, text)
+                elif kind == "restore":
+                    self._apply_restore(pos, text)
+                elif kind == "rollback":
+                    self._apply_restore(pos, text)
+                if kind in ("verify",):
+                    if self.fail_verify_pos == pos:
+                        r = dict(self.bag[pos])
+                        r["MakeIndex"] = 1
+                        return 0, "%d\t%d\t%d\t%d\t%d\t%d\n" % (
+                            pos, r["Id"], r["MakeIndex"], r["StdIndex"],
+                            r["Dura"], r["DuraMax"]), ""
+                return 0, self._rows({pos}), ""
+            return 1, "", "unexpected tag %s" % tag
+
+    class _Dry:
+        dry_run = True
+
+        def __init__(self):
+            self.lines = []
+            self.calls = []
+
+        def log(self, t):
+            self.lines.append(t)
+
+        def run(self, *a, **k):
+            self.calls.append(a)
+            return 0, "", ""
+
+    prof = {"char_name": "winplay0", "account": "winplay0",
+            "sides": {"csharp": {"db": {"characters_db": "mir2_test_db"}}}}
+    sc = prof["sides"]["csharp"]
+    orig = (globals()["_check_db_pairing"], globals()["placement_envir_root"],
+            globals()["placement_characters_db"], globals()["placement_db_client"])
+    globals()["_check_db_pairing"] = lambda *a, **k: None
+    globals()["placement_envir_root"] = lambda *a, **k: tmp
+    globals()["placement_characters_db"] = lambda side, sc_: "mir2_test_db"
+    globals()["placement_db_client"] = lambda prof_, side_: {
+        "mysql": [DEFAULT_MYSQL], "host": "127.0.0.1", "port": 3306,
+        "user": "root", "password": "SECRETPW"}
+
+    def make_bag():
+        b = _Bag()
+        b.excluded = {40, 41, 42, 43}
+        return b
+
+    try:
+        dr = _Dry()
+        dres = run_inventory_fixture(dr, "csharp", prof, sc, decl, {}, tmp)
+        out.append((dres.get("rc") == 0 and dres.get("action") == "dry-run"
+                    and any("dry-run 不连库" in l for l in dr.lines)
+                    and any("replace Position=40" in l for l in dr.lines)
+                    and any("drop    Position=42" in l for l in dr.lines)
+                    and not dr.calls,
+                    "INV4 dry-run：打印 replace/drop 预览且不执行任何 mysql"))
+
+        b = make_bag()
+        before = {p: dict(r) for p, r in b.bag.items()}
+        res = run_inventory_fixture(b, "csharp", prof, sc, decl, {}, tmp)
+        ev = level_evidence(res)
+        blob = json.dumps(ev, ensure_ascii=False)
+        applied_ok = (res.get("rc") == 0 and res.get("action") == "applied"
+                      and b.bag[40]["MakeIndex"] == 5001
+                      and b.bag[40]["StdIndex"] == 207
+                      and 41 in b.bag and 42 not in b.bag
+                      and "SECRETPW" not in blob and "_session" not in ev
+                      and "_session" in res)
+        out.append((applied_ok,
+                    "INV5 生产路径：40/41 被替换、42 被 drop；证据不含凭据（_session 只在内存）"))
+        err = restore_inventory_fixture(b, res, {})
+        out.append((err is None and b.bag == before,
+                    "INV6 还原：按快照整行写回（含 Id），背包与写前逐字段相同"))
+
+        b = make_bag()
+        b.excluded = {7}  # 只 drop 7 ⇒ 指纹排除集必须跟着声明走
+        orig_bag = {p: dict(r) for p, r in b.bag.items()}
+        res_drop = run_inventory_fixture(
+            b, "csharp", prof, sc,
+            _validate_fixture_decl({"inventory_drop": [7]}, "x"), {}, tmp)
+        dropped = 7 not in b.bag  # 还原前先取证（还原后该行会回来）
+        err_drop = restore_inventory_fixture(b, res_drop, {})
+        out.append((res_drop.get("rc") == 0 and dropped
+                    and err_drop is None and b.bag == orig_bag,
+                    "INV7 drop 单槽：写后该槽为空，还原后整行（含 Id）复原"))
+
+        b = make_bag()
+        b.fail_verify_pos = 41
+        orig_bag = {p: dict(r) for p, r in b.bag.items()}
+        res_fail = run_inventory_fixture(b, "csharp", prof, sc, decl, {}, tmp)
+        out.append((res_fail.get("rc") == 2
+                    and "读回" in (res_fail.get("error") or "")
+                    and res_fail.get("rollback_error") is None
+                    and b.bag == orig_bag,
+                    "INV 牙4 写后读回不符 => rc=2，且已写项就地回滚到写前"))
+
+        b = make_bag()
+        b.drift_after_write = True
+        res_fp = run_inventory_fixture(b, "csharp", prof, sc, decl, {}, tmp)
+        out.append((res_fp.get("rc") == 2 and "指纹变了" in (res_fp.get("error") or ""),
+                    "INV 牙5 其它槽位指纹变化 => rc=2（动到了未声明的行）"))
+
+        b = make_bag()
+        empty_drop = _validate_fixture_decl({"inventory_drop": [45]}, "x")
+        del b.bag[45]
+        res_empty = run_inventory_fixture(b, "csharp", prof, sc, empty_drop, {}, tmp)
+        out.append((res_empty.get("rc") == 2
+                    and "本来为空" in (res_empty.get("error") or ""),
+                    "INV 牙6 drop 空槽 => rc=2（夹具没生效，不许假绿）"))
+
+        b_bad_tpl = _validate_fixture_decl(
+            {"inventory_replace": [{"position": 3, "index": 999999,
+                                    "make_index": 1}]}, "x")
+
+        class _NoTpl(_Bag):
+            def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None,
+                    capture=True):
+                if tag == "inventory_fixture.template":
+                    return 0, "", ""
+                return _Bag.run(self, side, tag, argv, env=env, timeout=timeout,
+                                stdin_text=stdin_text, capture=capture)
+
+        nb = _NoTpl()
+        nb.excluded = {3}
+        nb.bag = {3: {"Id": 1, "Position": 3, "MakeIndex": 9003, "StdIndex": 0,
+                      "Dura": 0, "DuraMax": 0}}
+        res_tpl = run_inventory_fixture(nb, "csharp", prof, sc, b_bad_tpl, {}, tmp)
+        out.append((res_tpl.get("rc") == 2 and "模板" in (res_tpl.get("error") or "")
+                    and not any(t.startswith("inventory_fixture.write_") for t in nb.tags),
+                    "INV 牙7 模板不存在 => rc=2，且一个写语句都没发（先校验后写）"))
+
+        b = make_bag()
+        mm = _validate_fixture_decl(
+            {"inventory_replace": [{"position": 3, "index": 207, "make_index": 1,
+                                    "std_mode": 9}]}, "x")
+        res_mm = run_inventory_fixture(b, "csharp", prof, sc, mm, {}, tmp)
+        out.append((res_mm.get("rc") == 2
+                    and "StdMode" in (res_mm.get("error") or ""),
+                    "INV 牙8 声明 std_mode 与模板不符 => rc=2"))
+    finally:
+        (globals()["_check_db_pairing"], globals()["placement_envir_root"],
+         globals()["placement_characters_db"], globals()["placement_db_client"]) = orig
+
+    import inspect
+    src = inspect.getsource(run_side)
+    i_fix = src.index("run_inventory_fixture(")
+    i_stack = src.index('stack_argv = expand_argv(sc["stack"], ctx)')
+    i_restore = src.index("restore_inventory_fixture(")
+    out.append((i_fix < i_stack < i_restore,
+                "INV8 接线：run_side 起栈前应用、finally 停栈后还原"))
+    return out
+
+
 def selftest():
     tmp = tempfile.mkdtemp(prefix="card-window-selftest-")
     stub = os.path.join(tmp, "stub.py")
@@ -9212,6 +9525,8 @@ def selftest():
         for cond, msg in _selftest_level_fixture(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_postrun_symmetry(tmp):
+            chk(cond, msg)
+        for cond, msg in _selftest_inventory_fixture(tmp):
             chk(cond, msg)
         for cond, msg in _selftest_fixtures(tmp):
             chk(cond, msg)
