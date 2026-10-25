@@ -1,7 +1,7 @@
 {
   "format": "card-window-profile/1",
   "name": "butch_monsters",
-  "description": "alt 的副本 + 屠宰链的活体夹具（卡 `openmir2-butch-two-draws-unblock`）：唯一差异 = `fixtures.monsters` 在 map 0 的 (330,331) 刷 1 只「鸡」（`params.target_xy` 同格）。ZenTime 由实现按 >0 生成（本块不允许显式写 zen_time）。",
+  "description": "alt 的副本 + 屠宰链的活体夹具（卡 `openmir2-butch-two-draws-unblock`）：唯一差异 = `fixtures.monsters` 在 map 0 的 (330,331) 刷 1 只「鸡」（`params.target_xy` 同格）。ZenTime 由实现按 >0 生成（本块不允许显式写 zen_time）。 **路径说明（review A1）**：本 profile 沿用 `alt` 的写法，`sides.*.stack` 与 `sides.rust.binaries` 写的是**某个车道的绝对路径**（这里是 `.worktrees/dev-1`）；`card_window` 会把 `sides.<side>.binaries` 重解析到**本检出**的 release 构建，所以换 worktree 不影响运行；若 dev-1 的 worktree 被清理，只需把这两处路径改成当前检出的同名文件（脚本内容与 master 一致）。",
   "login_gate": "127.0.0.1:17000",
   "account": "winplay0",
   "server_name": "热血传奇",
