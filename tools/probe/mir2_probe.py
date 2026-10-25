@@ -393,6 +393,15 @@ def _need_keys(obj, where, required=(), optional=()):
         raise ScenarioError("%s has unknown key(s): %s (fail-closed)" % (where, sorted(unknown)))
 
 
+#: 场景里可用的**运行期令牌**（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
+#: 与静态 `params` 的区别：`params` 在加载期定值；令牌在**执行到该步时**从 `self.state` 取值。
+#: 目前只有 `send.recog` 会在运行期解析令牌（其它动作收到令牌按「无法解析」报 scenario-error）。
+RUNTIME_TOKENS = {
+    "@last_kill_xy": "最近一次 kill 成功（result=dead）的尸体格 MakeLong(X,Y)；"
+                     "kill 未成功/未执行时引用 ⇒ 报错（绝不回落 0、不用静态 params 顶替）",
+}
+
+
 def resolve_param(value, params, where):
     """把场景参数解析成 int：int 原样；str 先查 params，再按十进制数字。"""
     if isinstance(value, int) and not isinstance(value, bool):
@@ -1013,8 +1022,18 @@ def plan_step(step, index, params, depth=0):
         # 再在 plan 期做范围校验（recog=i32，其余 u16）。否则要等到发送时 pack_header
         # 才抛 FrameError，被归类成 frame-parse(2) 而不是 scenario-error(2)。PRB-4。
         recog = val.get("recog", 0)
-        out["recog"] = _need_int(resolve_param(recog, params, where + ".send.recog"),
-                                 where + ".send.recog", -0x80000000, 0x7FFFFFFF)
+        if isinstance(recog, str) and recog.startswith("@"):
+            # 运行期令牌：加载期只校验**名字**（值要等 kill 步真的跑过），
+            # 拼错在这里就拒，并列出可用令牌（牙 d）。
+            if recog not in RUNTIME_TOKENS:
+                raise ScenarioError(
+                    "%s.send.recog: 未知运行期令牌 %r（可用：%s）"
+                    % (where, recog, ", ".join(sorted(RUNTIME_TOKENS))))
+            out["recog_token"] = recog
+            out["recog"] = None
+        else:
+            out["recog"] = _need_int(resolve_param(recog, params, where + ".send.recog"),
+                                     where + ".send.recog", -0x80000000, 0x7FFFFFFF)
         for name in ("param", "tag", "series"):
             out[name] = _need_int(
                 resolve_param(val.get(name, 0), params, where + ".send." + name),
@@ -1986,6 +2005,7 @@ class Run:
                     break
             if matched:
                 seq, fr = matched
+                self._write_last_kill_xy(conn, idx, tx | (ty << 16), fr, death, before)
                 self.steps.append({"index": idx, "kind": "kill", "mode": "track",
                                    "selector": plan["track"], "result": "dead",
                                    "target": row["actor"], "target_xy": tx | (ty << 16),
@@ -2004,6 +2024,38 @@ class Run:
                     "steps[%s].kill(track): target alive after %d swing(s) (actor=%d at (%d,%d)); "
                     "no death frame among %s"
                     % (idx, swings, row["actor"], tx, ty, sorted(death)))
+
+    def _write_last_kill_xy(self, conn, idx, step_xy, matched, death_idents, since_seq):
+        """写 `self.state["last_kill_xy"]`（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
+
+        取值规则（**不许猜**）：
+          * 匹配到的那帧死亡帧的 `param/tag` 恰为击杀步目标格 ⇒ 采纳（两种 kill 模式的常态）；
+          * 它不是带坐标的形态时（例如 `SM_DEATH(32)` 的可见性刷新），在本次 kill 窗口内
+            的死亡帧里找一帧 `param/tag == 目标格`；
+          * 都找不到 ⇒ **fail-closed**：打印 matched 帧的 param/tag、步目标格、窗口内全部
+            死亡帧的 (seq, ident, param, tag)，**绝不写一个猜出来的值**。
+        """
+        def cell(fr):
+            return (fr.param & 0xFFFF) | ((fr.tag & 0xFFFF) << 16)
+
+        if matched is not None and cell(matched) == step_xy:
+            self.state["last_kill_xy"] = step_xy
+            return
+        seen = []
+        for seq, fr in conn.frames:
+            if seq > since_seq and fr.ident in death_idents:
+                seen.append((seq, fr.ident, fr.param, fr.tag))
+                if cell(fr) == step_xy:
+                    self.state["last_kill_xy"] = step_xy
+                    return
+        raise StepFailure(
+            "steps[%s].kill: 死亡帧的 param/tag 与击杀步目标格 (%d,%d) 对不上 ⇒ 拒绝写 "
+            "last_kill_xy（matched 帧 ident=%s param=%s tag=%s；本次窗口内死亡帧"
+            "(seq,ident,param,tag)=%r；step_xy=%d）——不允许猜：先用帧序确认尸体格"
+            % (idx, step_xy & 0xFFFF, (step_xy >> 16) & 0xFFFF,
+               matched.ident if matched is not None else None,
+               matched.param if matched is not None else None,
+               matched.tag if matched is not None else None, seen[:8], step_xy))
 
     def _execute_kill(self, conn, plan):
         """击杀步（卡 `openmir2-probe-kill-step`）：转身 → 连击 → 等死亡帧。
@@ -2065,6 +2117,7 @@ class Run:
                "note": plan.get("note", "")}
         if matched:
             seq, fr = matched
+            self._write_last_kill_xy(conn, idx, plan["target_xy"], fr, death, start_seq)
             rec.update(result="dead", matched_seq=seq, matched_ident=fr.ident,
                        matched_recog=fr.recog)
             self.steps.append(rec)
@@ -2166,6 +2219,16 @@ class Run:
                 % (plan["index"], plan.get("stop_on_select"), plan["times"], attempts))
         if kind == "send" or kind in ("say", "click_npc", "dlg_select"):
             recog = plan.get("recog")
+            token = plan.get("recog_token")
+            if token:
+                # 令牌名带 `@`（场景里可读），state 里的键不带 `@`。
+                recog = self.state.get(token[1:])
+                if recog is None:
+                    raise ScenarioError(
+                        "steps[%s].send: 运行期令牌 %r 没有值——本轮 kill 尚未成功执行"
+                        "（fail-closed：**不回落 0，也不拿静态 params 顶替**，否则会退回"
+                        "「固定格打空」的形态）。可用令牌：%s"
+                        % (idx, token, ", ".join(sorted(RUNTIME_TOKENS))))
             if kind == "click_npc" and plan.get("_auto_recog") == "last_turn":
                 recog = self.state.get("last_turn_recog")
                 if recog is None:
@@ -4634,6 +4697,151 @@ def _selftest_kill():
     return "schema 正/反例 + 八向 + check 方向 3 例 + 运行期 dead/alive/no-target 3 态"
 
 
+def _selftest_runtime_token():
+    """运行期令牌 `@last_kill_xy`（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
+
+    牙：
+      a. kill 成功 ⇒ `state["last_kill_xy"]` = 尸体格，且后续 `send.recog` 发出去的就是它；
+      b. kill 失败 ⇒ 引用令牌报错且**一帧不发**（不回落 0、不拿静态 params 顶替）；
+      c. 未执行 kill ⇒ 同上；
+      d. 令牌拼写错 ⇒ **加载期**拒并列出可用令牌；
+      e. 死亡帧 param/tag 与击杀步目标格不一致 ⇒ 拒绝写（fail-closed，打印两值）。
+    """
+    import argparse as _argparse
+    import tempfile as _tempfile
+    import shutil as _shutil
+
+    checks = []
+    self_xy = (330 | (330 << 16))
+    tgt_xy = (330 | (331 << 16))          # 正下方一格 ⇒ Dir=4
+
+    class _TSock(object):
+        def __init__(self, replies):
+            self.replies = list(replies)
+            self.chunks = []
+            self.sent = []
+
+        def recv(self, n):
+            if not self.chunks:
+                raise socket.timeout()
+            return self.chunks.pop(0)
+
+        def sendall(self, data):
+            self.sent.append(bytes(data))
+            if self.replies:
+                self.chunks.extend(self.replies.pop(0))
+
+        def close(self):
+            pass
+
+    def mk(replies):
+        tmpd = _tempfile.mkdtemp(prefix="mir2probe-token-")
+        args = _argparse.Namespace(out=tmpd, no_auto_handshake=True, timeout_ms=800,
+                                   account="ua", char_name=None)
+        run = Run(args)
+        run.state["self_actor"] = 700
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _TSock(replies)
+        return run, conn, tmpd
+
+    def struck(actor=800, dmg=9):
+        return build_s2c_frame(actor, SM_STRUCK, 100, 200, dmg, b"")
+
+    def death(ident=SM_NOWDEATH, x=330, y=331, actor=800):
+        return build_s2c_frame(actor, ident, x, y, 4, b"")
+
+    kill_plan = plan_step({"kill": {"target_xy": tgt_xy, "max_swings": 6,
+                                    "interval_ms": 350}}, 0, {"self_pos": self_xy})
+    butch_plan = plan_step({"send": {"ident": 1007, "recog": "@last_kill_xy"}}, 1,
+                           {"self_pos": self_xy})
+
+    # a) kill 成功 ⇒ 令牌取到尸体格，后续 send 的 recog 就是它
+    run, conn, tmpd = mk([[], [struck()], [struck()], [struck(), death()]])
+    try:
+        run.execute_step(conn, kill_plan)
+        before = len(conn.sock.sent)
+        run.execute_step(conn, butch_plan)
+        sent = run.steps[-1]
+        checks.append((run.state.get("last_kill_xy") == tgt_xy
+                       and sent["recog"] == tgt_xy
+                       and len(conn.sock.sent) == before + 1,
+                       "牙a kill 成功 ⇒ last_kill_xy=尸体格(330,331)，send.recog(@last_kill_xy)"
+                       " 发出的帧 recog 也是它（%r）" % (run.state.get("last_kill_xy"),)))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # b) kill 失败（打了没死）⇒ 引用令牌报错且一帧不发
+    run, conn, tmpd = mk([[struck()] for _ in range(8)])
+    try:
+        try:
+            run.execute_step(conn, kill_plan)
+        except StepFailure:
+            pass
+        before = len(conn.sock.sent)
+        err = None
+        try:
+            run.execute_step(conn, butch_plan)
+        except ScenarioError as ex:
+            err = str(ex)
+        checks.append((err is not None and "@last_kill_xy" in err
+                       and "尚未成功执行" in err and len(conn.sock.sent) == before
+                       and "last_kill_xy" not in run.state,
+                       "牙b kill 失败 ⇒ 引用令牌 ScenarioError 且**一帧不发**（sent 不变、state 无值）"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # c) 未执行 kill ⇒ 同上
+    run, conn, tmpd = mk([])
+    try:
+        err = None
+        try:
+            run.execute_step(conn, butch_plan)
+        except ScenarioError as ex:
+            err = str(ex)
+        checks.append((err is not None and "@last_kill_xy" in err
+                       and len(conn.sock.sent) == 0,
+                       "牙c 未执行 kill ⇒ 引用令牌 ScenarioError 且零发送"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+
+    # d) 拼写错 ⇒ 加载期拒并列出可用令牌
+    err = None
+    try:
+        plan_step({"send": {"ident": 1007, "recog": "@last_kill_x"}}, 0,
+                  {"self_pos": self_xy})
+    except ScenarioError as ex:
+        err = str(ex)
+    checks.append((err is not None and "未知运行期令牌" in err
+                   and "@last_kill_xy" in err,
+                   "牙d 令牌拼写错 ⇒ 加载期拒并列出可用令牌（%r）" % (err,)))
+
+    # e) 死亡帧坐标与目标格不一致 ⇒ 拒绝写（不猜）
+    run, conn, tmpd = mk([[], [struck()], [struck()], [struck(), death(x=331, y=331)]])
+    try:
+        err2 = None
+        try:
+            run._write_last_kill_xy(conn, 0, tgt_xy,
+                                    type("F", (), {"ident": SM_DEATH, "param": 331,
+                                                   "tag": 331})(),
+                                    {SM_NOWDEATH, SM_DEATH}, -1)
+        except StepFailure as ex:
+            err2 = str(ex)
+        checks.append((err2 is not None and "对不上" in err2
+                       and "331" in err2 and str(tgt_xy) in err2
+                       and "last_kill_xy" not in run.state,
+                       "牙e 死亡帧 param/tag 与目标格不一致 ⇒ 拒绝写并打印两值（不猜）"))
+    finally:
+        _shutil.rmtree(tmpd, ignore_errors=True)
+    # 本套的 5 条**必须承重**：selftest harness 只看**异常**（返回值只当明细打印），
+    # 所以套内自己把 False 聚合成 AssertionError —— 与 `_selftest_kill` 结尾的
+    # `for cond, msg in checks: assert cond, msg` 同口径。
+    bad = [msg for ok, msg in checks if not ok]
+    if bad:
+        raise AssertionError("%d/%d 牙红：%s" % (len(bad), len(checks), "；".join(bad)))
+    return checks
+
+
 def _selftest_npc_discovery():
     """卡 openmir2-probe-npc-discovery：`click_npc` 的 name:/pos: 寻址（4 牙，构造级）。
 
@@ -5314,6 +5522,7 @@ def run_selftest():
     check("dsl-newchr", _selftest_newchr)
     check("dsl-kill", _selftest_kill)
     check("dsl-kill-track", _selftest_kill_track)
+    check("dsl-runtime-token", _selftest_runtime_token)
     check("dsl-npc-discovery", _selftest_npc_discovery)
     check("discovery-addressing", _selftest_discovery_addressing)
     check("scenario-validation", _selftest_scenario_validation)

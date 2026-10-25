@@ -17,7 +17,6 @@ RNG 决定，所以「有没有可点的 actor」是概率事件。`name:` 寻�
 |---|---|---|
 | `tools/probe/scenarios/npc_click_king.json` | `click_npc: name:比奇国王` | run3 #10 `king_dialog` / #11 `king_castle_war` |
 | `tools/probe/scenarios/npc_click_elder.json` | `click_npc: name:老人` | run3 #12 `npc_script_chain` |
-| `tools/probe/scenarios/npc_click_king_slow.json` | **兜底变体**：先 `wait_for SM_TURN(10)` 15s 再 `auto:last_turn` | 仅在部署命名不一致、name: 不可用时 |
 
 run3 接线（`run3-scenarios.json` 的 `extra`，`--discovery-scenario` 是 `card_window.py:10101` 的既有参数）：
 
@@ -25,7 +24,10 @@ run3 接线（`run3-scenarios.json` 的 `extra`，`--discovery-scenario` 是 `ca
 {"n": 10, "name": "king_dialog", "extra": ["--discovery-scenario", "tools/probe/scenarios/npc_click_king.json"]}
 ```
 
-**兜底不是解法**：15s 只是把 flaky 概率压低（期望 10s 附近仍会失败），文档与场景 `description` 都写明了这一点。
+**曾考虑兜底变体**（`npc_click_king_slow`：先等 15s 的非己 `SM_TURN(10)` 再 `auto:last_turn`），
+**因 `name:` 已是确定性寻址而未采用**——15s 只是把 flaky 概率压低，不是解法；该场景本身也过不了
+`--check-scenario`（`steps[0].wait_for` 之前没有 send 步），留着会让人误以为有兜底，**已删除**
+（卡 `openmir2-probe-runtime-param-last-kill-xy` 一并清理）。
 
 ## 2. 排查：哪些 discovery 仍是概率性的
 
@@ -74,7 +76,7 @@ python -I -B tools/probe/mir2_probe.py --selftest
 
 ## 5. 残留物清单
 
-- 入库：`tools/probe/scenarios/npc_click_king.json`、`npc_click_elder.json`、`npc_click_king_slow.json`、
+- 入库：`tools/probe/scenarios/npc_click_king.json`、`npc_click_elder.json`、
   `tools/probe/mir2_probe.py`（selftest）、`tools/window/run3-scenarios.json`（10/11/12 的 `extra`）、本文件。
 - 未入库：`E:/tmp/king.json`、`E:/tmp/elder.json`、`E:/tmp/slow.json`、`E:/tmp/probe_wip.py`（rebase 时的临时物）。
 - 未触碰：`card_window.py`、`run_batch.sh` 执行逻辑、`src/**`、mysqld；未起服务端、未占端口、未跑 cargo。
