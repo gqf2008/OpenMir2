@@ -82,6 +82,7 @@
 `--rules FILE` 覆盖。
 """
 import argparse
+import datetime
 import hashlib
 from collections import Counter
 import importlib.util
@@ -163,6 +164,9 @@ DBSNAP_PAIR = os.path.join(REPO_ROOT, "tools", "db-parity", "dbsnap_pair.py")
 DB_UNDECIDABLE_KINDS = frozenset({
     "unknown_table", "missing_table", "schema", "tamper", "row_count",
     "column_count", "duplicate_key", "input_error",
+    # 时间列见证（卡 openmir2-dbsrv-session-timezone）：未登记 / 无墙钟 / 值不可识别 ⇒ 判不了；
+    # `time_witness_stale` 是**差异**（不进这个集合）。
+    "time_witness_unregistered", "time_witness_no_clock", "time_witness_unparsable",
 })
 
 
@@ -369,6 +373,33 @@ class RuleSet(object):
             if db["time_mode"] not in ("exact", "presence", "normalized"):
                 raise InputError("db.time_mode 必须是 exact/presence/normalized")
             out["time_mode"] = db["time_mode"]
+        # 卡 openmir2-dbsrv-session-timezone ④：时间列**逐列登记**（presence 只比存在性，
+        # 曾经把「两侧会话时区差 8h」藏了整整一轮）。形状非法一律加载期拒。
+        tc = db.get("time_columns", {})
+        if not isinstance(tc, dict):
+            raise InputError("db.time_columns 必须是 {表: {列: {mode, why}}}")
+        norm = {}
+        for table, cols in tc.items():
+            if not isinstance(cols, dict):
+                raise InputError("db.time_columns[%r] 必须是 {列: {mode, why}}" % (table,))
+            norm[table] = {}
+            for col, decl in cols.items():
+                if not isinstance(decl, dict):
+                    raise InputError("db.time_columns[%r][%r] 必须是对象" % (table, col))
+                mode = decl.get("mode")
+                if mode not in ("plausible", "presence"):
+                    raise InputError("db.time_columns[%r][%r].mode 必须是 plausible/presence，得到 %r"
+                                     % (table, col, mode))
+                why = decl.get("why")
+                if not isinstance(why, str) or not why.strip():
+                    raise InputError("db.time_columns[%r][%r] 必须写 why（为什么这个判据）"
+                                     % (table, col))
+                norm[table][col] = {"mode": mode, "why": why.strip()}
+        out["time_columns"] = norm
+        tol = db.get("time_tolerance_s", 600)
+        if not is_int(tol) or tol < 0 or tol > 86400:
+            raise InputError("db.time_tolerance_s 必须是 0..86400 的整数")
+        out["time_tolerance_s"] = int(tol)
         if "key_mode" in db:
             if db["key_mode"] not in ("pk", "multiset"):
                 raise InputError("db.key_mode 必须是 pk/multiset")
@@ -1557,6 +1588,48 @@ def prepare_snapshot(path, label, workdir):
     return _materialize_inline(data, "%s db_snapshot.json" % label, workdir)
 
 
+def _side_run_clock(o_dir, r_dir):
+    """两侧 `run.json` 的运行窗口 → {"oracle": (start_epoch, end_epoch), ...}（缺失/非法则不收）。
+
+    **字段名以 probe 实际产物为准**：`start_wall` / `end_wall`（ISO 带 `+0800`）——`started_at`/
+    `ended_at` 是 selftest 合成 run.json 与旧口径的字段名，这里作为退路保留（review 实测四份
+    真机 run.json 都只有 `*_wall`）。
+
+    返回**窗口**而不是一个时刻：长场景（例如带 620s sleep 的场景）允许在运行途中写时间列，
+    「距结束 ≤ 600s」会把合法值判成 stale。
+    """
+    out = {}
+    for side, d in (("oracle", o_dir), ("rust", r_dir)):
+        path = os.path.join(d, "run.json")
+        if not os.path.exists(path):
+            continue
+        try:
+            meta = read_json(path, "run.json")
+        except (InputError, Undecidable):
+            continue
+        if not isinstance(meta, dict):
+            continue
+
+        def epoch(*names):
+            for name in names:
+                raw = meta.get(name)
+                if isinstance(raw, str) and raw.strip():
+                    try:
+                        return datetime.datetime.fromisoformat(raw.strip()).timestamp()
+                    except ValueError:
+                        continue
+            return None
+
+        start = epoch("start_wall", "started_at")
+        end = epoch("end_wall", "ended_at")
+        if start is None or end is None:
+            continue
+        if end < start:
+            start, end = end, start
+        out[side] = (start, end)
+    return out
+
+
 def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
     o_path = overrides.get("oracle") or find_snapshot(o_dir)
     r_path = overrides.get("rust") or find_snapshot(r_dir)
@@ -1589,7 +1662,10 @@ def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
             o_snap, r_snap,
             key_mode=db_opts["key_mode"], time_mode=db_opts["time_mode"],
             null_token="NULL", ignore_columns=list(db_opts["ignore_columns"]),
-            allow_unknown_table=bool(db_opts["allow_unknown_table"]), quiet=True)
+            allow_unknown_table=bool(db_opts["allow_unknown_table"]),
+            time_witness=db_opts.get("time_columns"),
+            time_ref=_side_run_clock(o_dir, r_dir),
+            time_tolerance_s=db_opts.get("time_tolerance_s", 600), quiet=True)
     except (InputError, Undecidable):
         raise
     except Exception as e:  # dbsnap_pair.InputError 等：一律 fail-closed

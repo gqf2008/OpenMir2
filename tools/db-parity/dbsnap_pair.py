@@ -73,6 +73,7 @@ manifest 的每个表项至少要有 `table` / `file` / `sha256` / `rows` / `col
 指定断言必须红（见末尾 PASS 列表）。
 """
 import argparse
+import datetime
 import hashlib
 import json
 import os
@@ -101,7 +102,9 @@ TABLE_SPECS = {
                     "MobilePhone", "ADDRESS1", "ADDRESS2", "EMail", "Quiz1",
                     "Answer1", "Quiz2", "Answer2"],
         "pk": ["AccountId"],
-        "time_columns": ["Birthday"],
+        # `Birthday` 是 `char(11)`（业务日期存字符串），**不是** DATETIME/TIMESTAMP；
+        # 本清单的口径只收 SQL 时间类型列（卡 openmir2-dbsrv-session-timezone）。
+        "time_columns": [],
         "volatile": {"AccountId": "FK = account.Id（自增）"},
     },
     "mir2_db.characters": {
@@ -655,14 +658,125 @@ def compare_changed(fq, base_a, after_a, base_b, after_b, opts, records):
     return len(records) - n_before
 
 
+def witness_epoch(value):
+    """时间列值 → epoch 秒（float）；无法识别返回 None。
+
+    **复用本模块既有口径**（`parse_time_value` 返回 `('dt', 归一文本)` / `('unix', int)`），
+    保证见证用的解析与 exact/normalized 比较同源；不另造一套格式判断。
+    """
+    key = parse_time_value(value)
+    if key is None:
+        return None
+    if key[0] == "unix":
+        return float(key[1])
+    return datetime.datetime.strptime(key[1], "%Y-%m-%d %H:%M:%S.%f").timestamp()
+
+
+def check_time_witness(side, fq, entry, spec, opts, records, cap=5):
+    """时间列**逐列见证**（卡 `openmir2-dbsrv-session-timezone` ④）。
+
+    `time_mode=presence` 只比 NULL/非 NULL —— 这正是「db-srv 会话时区差 8h」长期看不见的原因。
+    这里把每个时间列都逼到**显式登记**（不许全域豁免），登记成 `plausible` 的再按
+    「写入时刻应贴近本次运行的墙钟」判值（跨两侧运行时刻本就不同，不能直接比值）。
+
+    记录 kind：
+      * `time_witness_unregistered`（判不了）：该时间列没有登记；
+      * `time_witness_no_clock`（判不了）：登记成 plausible 但该侧 `run.json` 没有墙钟；
+      * `time_witness_unparsable`（判不了）：值不是可识别的时间文本/unix 秒；
+      * `time_witness_stale`（差异）：值与本次运行墙钟相差超过 `time_tolerance_s`。
+    """
+    # manifest 的 columns 可能是字符串数组，也可能是 `{name,type}` 对象数组 —— 先归一成名字。
+    raw_cols = entry.get("columns") or []
+    entry_cols = [c if isinstance(c, str) else (c.get("name") if isinstance(c, dict) else None)
+                  for c in raw_cols]
+    cols = [c for c in (spec.get("time_columns") or []) if c in entry_cols]
+    if not cols:
+        return
+    registry = (opts.get("time_witness") or {}).get(fq) or {}
+    ref = (opts.get("time_ref") or {}).get(side)
+    tol = int(opts.get("time_tolerance_s") or 600)
+    rows = None
+    for col in cols:
+        decl = registry.get(col)
+        if not decl:
+            records.append({"table": fq, "kind": "time_witness_unregistered", "side": side,
+                            "column": col,
+                            "detail": "时间列 %s.%s 没有登记见证方式（db.time_columns）："
+                                      "presence 下它只比 NULL/非 NULL，值差多少都看不见" % (fq, col)})
+            continue
+        if decl.get("mode") == "presence":
+            continue
+        if decl.get("mode") != "plausible":
+            records.append({"table": fq, "kind": "time_witness_unregistered", "side": side,
+                            "column": col,
+                            "detail": "时间列 %s.%s 的登记 mode=%r 非法（只允许 plausible/presence）"
+                                      % (fq, col, decl.get("mode"))})
+            continue
+        if ref is None:
+            records.append({"table": fq, "kind": "time_witness_no_clock", "side": side,
+                            "column": col,
+                            "detail": "登记成 plausible 但该侧 run.json 没有可用墙钟"
+                                      "（start_wall/end_wall，缺失时退回 started_at/ended_at）"
+                                      "⇒ 判不了（补齐 run.json 或改登记为 presence 并写明到期条件）"})
+            continue
+        win_start, win_end = ref
+        if rows is None:
+            # `read_rows` 返回 `(rows, problems)`；见证只关心行值，problems 由比较主路径负责。
+            rows, _row_problems = read_rows(entry, entry_cols)
+        idx = entry_cols.index(col)
+        # 只看**本列最大值**：快照里还躺着几万行历史角色（restore 基线，2022 年的时间戳），
+        # 逐行判会把它们全判 stale。「本次运行有没有写入」等价于「本列最大值是否落在运行窗口内」。
+        best = None
+        best_ts = None
+        for row in rows:
+            raw = row[idx] if idx < len(row) else None
+            if raw is None or raw == opts["null_token"]:
+                continue
+            ts = witness_epoch(raw)
+            if ts is None:
+                records.append({"table": fq, "kind": "time_witness_unparsable", "side": side,
+                                "column": col, "value": raw,
+                                "detail": "时间列值 %r 无法识别（既非 datetime 文本也非 unix 秒）"
+                                          % (raw,)})
+                continue
+            if best_ts is None or ts > best_ts:
+                best_ts, best = ts, raw
+        if best_ts is None:
+            continue
+        # 判据是**窗口**而不是「距结束 ≤ tol」：长场景（例如带 620s sleep 的场景）
+        # 允许在运行途中写时间列，只要落在 [start - tol, end + tol] 之内即可。
+        delta = 0.0
+        if best_ts < win_start - tol:
+            delta = (win_start - tol) - best_ts
+        elif best_ts > win_end + tol:
+            delta = best_ts - (win_end + tol)
+        if delta > 0:
+            fmt = "%Y-%m-%d %H:%M:%S"
+            records.append({"table": fq, "kind": "time_witness_stale", "side": side,
+                            "column": col, "value": best,
+                            "run_window": [datetime.datetime.fromtimestamp(win_start).strftime(fmt),
+                                           datetime.datetime.fromtimestamp(win_end).strftime(fmt)],
+                            "delta_s": int(delta),
+                            "detail": "%s.%s 的最大值 %s 落在运行窗口 [%s, %s] ±%ds 之外 %ds："
+                                      "本次运行很可能没有真正写入该列，或会话时区与 oracle 不一致"
+                                      % (fq, col, best,
+                                         datetime.datetime.fromtimestamp(win_start).strftime(fmt),
+                                         datetime.datetime.fromtimestamp(win_end).strftime(fmt),
+                                         tol, int(delta))})
+
+
 def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
              time_mode="exact", null_token=NULL_TOKEN_DEFAULT, ignore_columns=(),
              allow_unknown_table=False, baseline_a=None, baseline_b=None,
+             time_witness=None, time_ref=None, time_tolerance_s=600,
              quiet=False):
     """核心入口（不 sys.exit）。返回 (rc, records, summary)。"""
     opts = {"key_mode": key_mode, "time_mode": time_mode,
             "null_token": null_token, "ignore_columns": list(ignore_columns),
-            "allow_unknown_table": allow_unknown_table, "stats": {}}
+            "allow_unknown_table": allow_unknown_table, "stats": {},
+            "time_witness": dict(time_witness or {}),
+            "time_ref": dict(time_ref or {}),
+            "time_tolerance_s": int(time_tolerance_s)}
     if time_mode not in ("exact", "presence", "normalized"):
         raise InputError("未知 --time-mode: %s" % time_mode)
     if key_mode not in ("pk", "multiset"):
@@ -716,6 +830,19 @@ def run_pair(a_dir, b_dir, *, tables=None, require_tables=None, key_mode="pk",
                 continue
             n += compare_changed(fq, BA[fq], A[fq], BB[fq], B[fq], opts, records)
             per_table[fq] = n
+
+    # 时间列逐列见证（卡 openmir2-dbsrv-session-timezone ④）：**在 comparisons 之外**，
+    # 每侧独立判「写进去的值贴不贴近本次运行墙钟」——presence 模式下这是唯一能发现
+    # 「会话时区差 8h」的判据。
+    if time_witness:
+        for fq in names:
+            spec = TABLE_SPECS.get(fq)
+            if not spec:
+                continue
+            for side, tables_map in (("oracle", A), ("rust", B)):
+                entry = tables_map.get(fq)
+                if entry is not None:
+                    check_time_witness(side, fq, entry, spec, opts, records)
 
     counts = {}
     for r in records:

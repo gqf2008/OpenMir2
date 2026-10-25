@@ -28,8 +28,8 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
-use sqlx::mysql::{MySqlPool, MySqlPoolOptions, MySqlRow};
-use sqlx::{Column, MySql, Row, Transaction};
+use sqlx::mysql::{MySqlConnectOptions, MySqlPool, MySqlPoolOptions, MySqlRow};
+use sqlx::{Column, ConnectOptions, MySql, Row, Transaction};
 use tokio::sync::{Mutex, RwLock};
 
 use crate::gbk::{fold_key, fold_text};
@@ -183,6 +183,28 @@ impl Db {
         &self.create_gates[create_gate_shard(name_text)]
     }
 
+    /// sqlx 连接选项：**会话时区必须是 `SYSTEM`**（卡 `openmir2-dbsrv-session-timezone`）。
+    ///
+    /// C#（MySqlConnector）不改会话时区 ⇒ `SYSTEM`（部署本机 +08:00），SQL `now()` 落库的是
+    /// **本地墙钟文本**；而 sqlx 的 `MySqlConnectOptions::timezone` **默认 `+00:00`**
+    /// （`sqlx-mysql`：`Defaults to Some("+00:00") to ensure all timestamps are in UTC`）⇒ 同一时刻
+    /// 两侧会落成差 8 小时的文本（真机实测 TZ-1：`characters.LASTUPDATE` 10:09:21 vs 02:10:25，
+    /// `characters_ablity.ModifyTime` 同形）。这里显式贴 oracle。
+    ///
+    /// 关于 sqlx 的「改 `timezone` 会让 `DateTime<Utc>` 偏移」警告：本进程**不把任何 DATETIME
+    /// 列解码成 Rust 时间类型**（生产路径只写 `now()`；`SELECT *` 仅出现在测试且只取整数列），
+    /// 所以本设置只改变服务端 SQL `now()` 的语义，不影响任何参数/返回值解码。
+    /// 时间列测试（`session_time_zone_*` / `stored_lastupdate_*`）锁住这一点。
+    pub(crate) fn connect_options(dsn: &LegacyDsn) -> Result<MySqlConnectOptions> {
+        // 仍走 `to_sqlx_url` 的 URL 解析（空口令/转义/端口缺省都与既有行为逐字一致），
+        // 只在其后挂上 `timezone`。
+        //
+        // Errors: DSN 拼成的 URL 非法时返回错误（理论上不可能：`LegacyDsn` 已做过校验）。
+        let url = url::Url::parse(&dsn.to_sqlx_url())
+            .with_context(|| format!("测试/生产 DSN URL 非法：{}", dsn.to_sqlx_url()))?;
+        Ok(MySqlConnectOptions::from_url(&url)?.timezone(String::from("SYSTEM")))
+    }
+
     /// 连接 `mir2_db` 并建立连接池（连不上即报错，M1 验收④）。
     ///
     /// 池参数对齐 oracle 的 MySqlConnector 缺省（`design-dbsrv-connection-20261021.md` §4.2）：
@@ -211,7 +233,7 @@ impl Db {
             .idle_timeout(Some(Duration::from_secs(180)))
             .max_lifetime(None)
             .test_before_acquire(true)
-            .connect(&dsn.to_sqlx_url())
+            .connect_with(Self::connect_options(dsn)?)
             .await
             .with_context(|| {
                 format!(
@@ -744,6 +766,7 @@ async fn create_character(
 #[cfg(test)]
 mod create_rows_tests {
     use super::{int_col, Db};
+    use crate::testsupport as ts;
     use mir2_storage::playerdata::{Ability, CharacterDataInfo};
     use mir2_storage::LegacyDsn;
     use sqlx::{Connection, MySqlConnection, Row};
@@ -816,7 +839,7 @@ mod create_rows_tests {
             "/../../../sql/mir2_db.sql"
         ))
         .expect("读 sql/mir2_db.sql 失败");
-        let mut conn = MySqlConnection::connect(&dsn.to_sqlx_url())
+        let mut conn = MySqlConnection::connect_with(&Db::connect_options(dsn).expect("连接选项"))
             .await
             .expect("连测试库失败");
         for table in TABLES {
@@ -1053,6 +1076,90 @@ mod create_rows_tests {
             .execute(&mut conn)
             .await
             .expect("清理测试库失败");
+    }
+
+    /// 卡 `openmir2-dbsrv-session-timezone` 的牙（a/b/c）：会话时区与 oracle 一致，且
+    /// 经生产连接写入的时间列落的是**本地墙钟**（不是 UTC）。
+    ///
+    /// 跑法（需本机 MySQL；默认 `root` 空口令、库名 `mir2_test_dbsrv_tz`，测试自建自删）：
+    /// `cargo test -p db-srv --bins session_time_zone_and_local_wall_clock -- --ignored --nocapture`
+    ///
+    /// 牙：
+    ///   a) 生产连接 `SELECT @@session.time_zone` == `SYSTEM`（oracle 的 MySqlConnector 缺省）；
+    ///   b) 经生产连接写 `LASTUPDATE = now()` 后读出的文本，与 SYSTEM 参考会话的 `NOW()` 相差
+    ///      ≤ 120s（若会话时区是 UTC，这里会差 28800s）；
+    ///   c) 负向对照：**不带**本选项时 sqlx 默认就是 `+00:00` —— 证明 a/b 承重。
+    #[tokio::test]
+    #[ignore = "需要本机 MySQL；MIR2_TEST_DB_DSN 可覆盖，库名必须以 mir2_test_ 开头"]
+    async fn session_time_zone_and_local_wall_clock_match_oracle() {
+        let text = std::env::var("MIR2_TEST_DB_DSN").unwrap_or_else(|_| {
+            "server=127.0.0.1;uid=root;pwd=;database=mir2_test_dbsrv_tz;".to_string()
+        });
+        let dsn = LegacyDsn::parse(&text).expect("测试 DSN 非法");
+        assert!(
+            dsn.database.starts_with("mir2_test_"),
+            "拒绝写非测试库：{}",
+            dsn.database
+        );
+        setup(&dsn).await;
+        let db = Db::connect(&dsn).await.expect("连测试库失败");
+
+        // 牙 a：生产连接的会话时区（贴 oracle）
+        let (tz,): (String,) = sqlx::query_as("SELECT @@session.time_zone")
+            .fetch_one(&db.pool)
+            .await
+            .expect("查会话时区失败");
+        assert_eq!(
+            tz, "SYSTEM",
+            "会话时区必须贴 oracle（SYSTEM）；sqlx 默认是 +00:00（卡 openmir2-dbsrv-session-timezone）"
+        );
+
+        // 牙 c：负向对照——不带本卡选项的 sqlx 缺省确实是 +00:00，证明牙 a 承重
+        let mut plain = MySqlConnection::connect(&dsn.to_sqlx_url())
+            .await
+            .expect("默认连接失败");
+        let (tz_default,): (String,) = sqlx::query_as("SELECT @@session.time_zone")
+            .fetch_one(&mut plain)
+            .await
+            .expect("查默认会话时区失败");
+        assert_eq!(
+            tz_default, "+00:00",
+            "sqlx 默认会话时区不再是 +00:00？本牙的前提变了，需复核（卡 openmir2-dbsrv-session-timezone）"
+        );
+
+        // 牙 b：经**生产连接**写时间列，读出的文本必须是本地墙钟
+        let id = db
+            .data_add("tzprobe", "tzacct", 1, 2, 3)
+            .await
+            .expect("建角失败")
+            .expect("首次建角应成功");
+        sqlx::query("UPDATE characters SET LASTUPDATE = now() WHERE Id=?")
+            .bind(id)
+            .execute(&db.pool)
+            .await
+            .expect("写时间列失败");
+        let (stored,): (String,) = sqlx::query_as(
+            "SELECT DATE_FORMAT(LASTUPDATE, '%Y-%m-%d %H:%i:%s') FROM characters WHERE Id=?",
+        )
+        .bind(id)
+        .fetch_one(&db.pool)
+        .await
+        .expect("读时间列失败");
+        let mut refc = MySqlConnection::connect_with(&Db::connect_options(&dsn).expect("连接选项"))
+            .await
+            .expect("参考连接失败");
+        let (delta,): (i64,) = sqlx::query_as("SELECT ABS(TIMESTAMPDIFF(SECOND, ?, NOW()))")
+            .bind(&stored)
+            .fetch_one(&mut refc)
+            .await
+            .expect("算时间差失败");
+        assert!(
+            delta <= 120,
+            "写入的时间列 {stored} 与 SYSTEM 会话的 NOW() 相差 {delta}s（>120s 说明会话时区不是本地墙钟）"
+        );
+
+        drop(db);
+        ts::drop_db(&dsn).await;
     }
 }
 
