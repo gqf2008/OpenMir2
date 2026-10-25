@@ -29,7 +29,7 @@
 //! [`COMMANDS`] 是**按部署 `M2GameSvr/Command.conf` 算好的常量表**（185 行 = `Commands/` 下 185 个
 //! 命令类，不含内建 `help`/`commands`）。生成口径与逐行对照见
 //! `mir2-rs/tests/parity/m3/design-gm-commands-20261023.md` §4.3；`@sadasd`/`@df56dfs`/`@天地合一`
-//! 这类混淆名与 `Level0`/`MasterName` 等「配置缺键回落构造默认名」都已按 oracle 解析结果落表
+//! 这类混淆名与 `Level0`/`ChangeMasterName` 等「配置缺键回落构造默认名」都已按 oracle 解析结果落表
 //! （配置死键照抄，见设计件 §3.2/§3.3 —— **不修**，属内容冻结）。
 //!
 //! ## 现网可达性（设计件 §2）
@@ -167,7 +167,7 @@ pub const CHANGE_ITEM_NAME_HELP: &str = "命令格式: @ChangeItemName 物品编
 pub const CHANGE_JOB_HELP: &str = "命令格式: @职业变更  人物名称 职业类型(Warr Wizard Taos)";
 pub const CHANGE_LEVEL_HELP: &str = "命令格式: @Level0 等级(1-65535)";
 pub const CHANGE_MASTER_NAME_HELP: &str =
-    "命令格式: @MasterName 人物名称 师徒名称(如果为 无 则清除)";
+    "命令格式: @ChangeMasterName 人物名称 师徒名称(如果为 无 则清除)";
 pub const CHANGE_OB_MODE_HELP: &str = "命令格式: @2 ";
 pub const CHANGE_SALVE_STATUS_HELP: &str = "命令格式: @Rest ";
 pub const CHANGE_SUPER_MAN_MODE_HELP: &str = "命令格式: @3 ";
@@ -307,7 +307,7 @@ pub enum Imp {
     DenyIp,
     /// `ShowDenyAccountLogonCommand`（`@+-jid`）。
     ShowDenyAccount,
-    /// `ShowDenyChrNameLogonCommand`（`@ShowDenyCharNameLogon`）。
+    /// `ShowDenyChrNameLogonCommand`（`@ShowDenyChrNameLogon`；注意文件名是 Char、**命令名是 Chr**）。
     ShowDenyChrName,
     /// `ShowDenyIPaddrLogonCommand`（`@+-jip`）。
     ShowDenyIp,
@@ -408,7 +408,7 @@ pub enum Imp {
     ChangeJob,
     /// `ChangeLevelCommand`（现网 `@Level0`）。
     ChangeLevel,
-    /// `ChangeMasterNameCommand`（现网 `@MasterName`）。
+    /// `ChangeMasterNameCommand`（现网 `@ChangeMasterName`：conf 无键 ⇒ 取类属性默认名）。
     ChangeMasterName,
     /// `ChangeObModeCommand`（现网 `@2`）。
     ChangeObMode,
@@ -1471,7 +1471,7 @@ fn show_deny_account(sess: &GmSession) -> GmResult {
     GmResult::one(GmColor::Green, "禁止登录帐号列表为空。".to_string())
 }
 
-/// `ShowDenyChrNameLogonCommand`（现网 `@ShowDenyCharNameLogon`）：无权限二次校验，表空即提示。
+/// `ShowDenyChrNameLogonCommand`（现网 `@ShowDenyChrNameLogon`）：无权限二次校验，表空即提示。
 fn show_deny_chr_name() -> GmResult {
     GmResult::one(GmColor::Green, "禁止登录角色列表为空。".to_string())
 }
@@ -3130,7 +3130,11 @@ pub const COMMANDS: &[CommandDef] = &[
         imp: Imp::Unimplemented,
     },
     CommandDef {
-        name: "MasterName",
+        // oracle 活名 = **类属性默认名** `ChangeMasterName`（`ChangeMasterNameCommand.cs:10`；
+        // conf `[Command]` 无此键，`GameCmdConf.cs:313-314` 读不到 ⇒ 回落默认名）。
+        // 部署 conf 里 `ChangeMasterrName=MasterName`（`:178`）是**拼错的死键**、
+        // `ChangeMasterName=10`（`:349`）只是权限键 ⇒ 两者都不构成命令名。卡 `openmir2-gm-command-name-typos`。
+        name: "ChangeMasterName",
         perm_min: 10,
         params: 2,
         imp: Imp::ChangeMasterName,
@@ -3340,7 +3344,11 @@ pub const COMMANDS: &[CommandDef] = &[
         imp: Imp::Unimplemented,
     },
     CommandDef {
-        name: "ShowDenyCharNameLogon",
+        // oracle 活名 = `ShowDenyChrNameLogon`（`ShowDenyCharNameLogonCommand.cs:7` 的命令名，
+        // **文件名是 Char、命令名是 Chr**；`GameCmdConf.cs:339-340` 同）。conf 里的
+        // `ShowDenyCharNameLogon=+-jww`（`:191`）是死键（名字与权限都不读）。
+        // 卡 `openmir2-gm-command-name-typos`。
+        name: "ShowDenyChrNameLogon",
         perm_min: 10,
         params: 1,
         imp: Imp::ShowDenyChrName,
@@ -4187,7 +4195,7 @@ fn change_level(parameters: &str) -> GmResult {
     no_frames(NOTE_GM4_TARGET_STATE)
 }
 
-/// `ChangeMasterNameCommand`（现网 `@MasterName`）。
+/// `ChangeMasterNameCommand`（现网 `@ChangeMasterName`）。
 fn change_master_name(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     let params = split_params(parameters);
     let name = params.first().copied().unwrap_or("");
@@ -5146,7 +5154,7 @@ mod tests {
             ("DenyChrNameLogon", Imp::DenyChrName),
             ("+jip", Imp::DenyIp),
             ("+-jid", Imp::ShowDenyAccount),
-            ("ShowDenyCharNameLogon", Imp::ShowDenyChrName),
+            ("ShowDenyChrNameLogon", Imp::ShowDenyChrName),
             ("+-jip", Imp::ShowDenyIp),
             ("Backstep", Imp::BackStep),
             ("TestFire", Imp::TestFire),
@@ -5162,6 +5170,59 @@ mod tests {
             assert_eq!(def.imp, *imp, "{name} 的实现标签");
             assert_eq!(def.perm_min, 10, "{name} 现网权限 = 10");
         }
+    }
+
+    /// 卡 `openmir2-gm-command-name-typos`：名字必须与 oracle **活名**一致，且**不得**把
+    /// conf 死键拼写留作别名（负例是承重的——只有正例的话「加个别名」也能全绿）。
+    ///
+    /// 四条牙（正负各二）：
+    /// ① `@ChangeMasterName` 命中（未接线世界 ⇒ 目标离线红字，**不是**未知命令）；
+    /// ② `@MasterName` **未知命令**（改名前会命中）；
+    /// ③ `@ShowDenyChrNameLogon` 命中（绿字「禁止登录角色列表为空。」）；
+    /// ④ `@ShowDenyCharNameLogon` **未知命令**。
+    ///
+    /// 变异：任一名字改回死键拼写 ⇒ 对应正/负牙互换而红。
+    #[test]
+    fn command_names_use_oracle_live_keys_without_dead_key_aliases() {
+        // 表级：两个活名在表、两个死键拼写**不在**表。
+        let has = |n: &str| COMMANDS.iter().any(|c| c.name.eq_ignore_ascii_case(n));
+        assert!(has("ChangeMasterName"), "oracle 活名（类属性默认名）");
+        assert!(!has("MasterName"), "死键拼写不得作为别名");
+        assert!(
+            has("ShowDenyChrNameLogon"),
+            "oracle 活名（文件名 Char / 命令名 Chr）"
+        );
+        assert!(!has("ShowDenyCharNameLogon"), "死键拼写不得作为别名");
+
+        // 派发级：正例命中、负例落未知命令。
+        let (r, _) = run_gm("@ChangeMasterName aaa 无");
+        assert!(r.found, "@ChangeMasterName 必须被识别");
+        assert!(
+            !texts(&r).iter().any(|(_, t)| t.contains("未知命令")),
+            "{:?}",
+            texts(&r)
+        );
+        assert_eq!(texts(&r)[0].1, "aaa 现在不在线，或在其它服务器上!!!");
+
+        let (r, _) = run_gm("@MasterName aaa 无");
+        assert!(!r.found, "@MasterName 必须不可达（无别名）");
+        assert!(
+            texts(&r).iter().any(|(_, t)| t.contains("未知命令")),
+            "{:?}",
+            texts(&r)
+        );
+
+        let (r, _) = run_gm("@ShowDenyChrNameLogon");
+        assert!(r.found);
+        assert_eq!(texts(&r), vec![(GmColor::Green, "禁止登录角色列表为空。")]);
+
+        let (r, _) = run_gm("@ShowDenyCharNameLogon");
+        assert!(!r.found);
+        assert!(
+            texts(&r).iter().any(|(_, t)| t.contains("未知命令")),
+            "{:?}",
+            texts(&r)
+        );
     }
 
     /// 封禁名单 9 条的文本（含「表恒空」与复制粘贴怪癖）。
@@ -5197,7 +5258,7 @@ mod tests {
             ),
             // Show 族：三表恒空；`ShowDenyIPaddr` 的表空提示沿用角色文案。
             ("@+-jid", Green, "禁止登录帐号列表为空。"),
-            ("@ShowDenyCharNameLogon", Green, "禁止登录角色列表为空。"),
+            ("@ShowDenyChrNameLogon", Green, "禁止登录角色列表为空。"),
             ("@+-jip", Green, "禁止登录角色列表为空。"),
         ];
         for (line, color, text) in cases {
@@ -6292,7 +6353,7 @@ mod tests {
             "ChangeItemName",
             "职业变更",
             "Level0",
-            "MasterName",
+            "ChangeMasterName",
             "2",
             "Rest",
             "3",
