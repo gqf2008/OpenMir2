@@ -136,6 +136,9 @@
 
 ## 5. ⑤ 状态快照（`goal_gate` 实测）
 
+> **刷新（2026-10-26 00:0x）**：`master = 8b7c9c281` 上 `goal_gate --full` 复跑 `GOAL_RC=0 / overall=PASS`，`HEAD_START==HEAD_END`，四条件全 PASS，`running 3329 = passed 3266 + ignored 63`、141 suites。产物 `E:/tmp/window/goal-full-8b7c9c281.{json,meta}`。下表是更早一次的实测，**以这条刷新为准**。
+
+
 - **快照**：`574a49e7f`（2026-10-25 16:05 +08，`goal_gate --skip-tests` 实跑；`--full` 最近一次在 `f72dbce7`）
 
 | 条件 | 状态 | 实测（可复算） |

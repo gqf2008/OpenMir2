@@ -3,6 +3,12 @@
 - **快照**：`f72dbce7`（2026-10-25 14:57 +08，最终 tip）。**四条件中 ①③④ 已 PASS，仅 ② 待 owner 对 G11 的一句话。**
 - ④ 在最终 tip 用 `goal_gate --full` 复跑过：**门禁 7 项 绿 7 / 红 0 / 需人工 0**（144s；`cargo_test_workspace` rc=0 @117.0s；`master_sync` local==remote==`f72dbce7`），产物 `E:/tmp/window/goal-full-fd08ff3a9.json`（`.meta` 记 `GOAL_RC=2 / TIME_S=144 / HEAD=f72dbce7`；rc=2 来自 ② 的 need_human，不是红门）。
   `cargo test --workspace` 三段数：**running 3315 = passed 3252 + failed 0 + ignored 63**，**141 个 suite 全部 `ok`**。**透明记录**：门内那次（117.0s，`run_head=fd08ff3a9`）json 里只有 rc/耗时没有计数，tester 又**在 `f72dbce7` 上单独跑了一次**（100s，rc=0）取计数；两次 rc 一致、耗时相近 ⇒ 非 flaky。日志 `E:/tmp/window/cargo-test-f72dbce73.log`（sha256 `edf3a742…`）与逐行提取 `cargo-test-f72dbce73.results.txt`（141 行 `test result:`，sha256 `d18e1435…`）。
+> **交付后复核（2026-10-26 00:0x +08，`master = 8b7c9c281`）**：`goal_gate --full` 再次 `GOAL_RC=0 / overall=PASS`，
+> **`HEAD_START == HEAD_END == 8b7c9c281`**（运行中树未移动），四条件 ①PASS ②PASS（仍排除 G11）③PASS ④PASS（门禁 7/7），
+> `fail_items=[]`、`need_items=[]`；`cargo test --workspace` rc=0 @114.1s，**running 3329 = passed 3266 + ignored 63 + failed 0，141 suites**。
+> 产物 `E:/tmp/window/goal-full-8b7c9c281.{json,meta}`（`.meta` 记 `RUN_ATTEMPT=1 / CARGO_BUILD_JOBS=1 / TIME_S=135`，计数日志 sha256 `78fc83fc…`、结果件 sha256 `8f2940aa…`）。
+> **注意**：本次条件④ 仍是「门禁 7 项」，**不含工具自测门**——该覆盖缺口由 `openmir2-goal-gate-include-tool-selftest` 负责修复（今晚已实测：工具门红着时条件④ 照样 PASS）。
+
 - **口径**：条件定义与判据见 `docs/leader-goal-20261023.md` §1；本节数字全部可由
   `python -I -B tools/goal/goal_gate.py --full --script-bin <mir2-script-tool>` 复算。
 
