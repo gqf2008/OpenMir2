@@ -1776,16 +1776,16 @@ fn after_contains(src: &[&str], from: usize, needle: &str) -> Option<usize> {
     (from..src.len()).find(|&i| src[i].contains(needle))
 }
 
-/// **去注释视图**（与 `lib.rs` 的 `strip_line_comments` 同口径）：删掉每行 `//` 之后的内容。
+/// **去注释视图**：委托 [`crate::strip_rust_comments`]（同时剥 `//` 与 `/* … */`，保留换行）。
 ///
 /// 源码文本锚必须走这个视图——注释里出现的 `.remove(` / 函数名不算代码，否则把实现删掉、
-/// 只在注释里留一句「这里原本有 remove」仍能绿（`source-text-tooth-bypass`）。
+/// 只在注释里留一句仍能绿（`source-text-tooth-bypass`）。
+/// **块注释尤其致命**（review K1）：`/* close_cleanup_residue(...) */` 一行未删就能让
+/// 调用点锚继续命中，而线上清理根本不执行 ⇒ 必须连 `/* … */` 一起剥。
 fn code_lines(src: &str) -> Vec<String> {
-    src.lines()
-        .map(|line| match line.find("//") {
-            Some(pos) => line[..pos].to_string(),
-            None => line.to_string(),
-        })
+    crate::strip_rust_comments(src)
+        .lines()
+        .map(str::to_string)
         .collect()
 }
 
@@ -1935,6 +1935,21 @@ fn closed_arm_calls_close_cleanup_residue_once_in_decommented_production_view() 
     assert!(
         arm < call && call < disc,
         "调用必须在 Closed 臂内（arm={arm} call={call} disconnect={disc}；这里只用 disconnect 定位，         不是顺序判据——清理相对 disconnect 的先后不承重）"
+    );
+
+    // **视图自检（review K1）**：去注释视图必须同时剥 `/* … */`（含跨行）。只剥 `//` 时，
+    // 把上面那次调用整块用 `/* … */` 包起来（一行未删）仍然「命中 1 处」，而线上根本不执行。
+    // 牙：把 `strip_rust_comments` 退回只剥 `//` ⇒ 这里红（`x(` 仍可见）。
+    let probe = "a(\n/* x(\n*/\n";
+    let stripped = crate::strip_rust_comments(probe);
+    assert!(
+        !stripped.contains("x("),
+        "去注释视图必须剥块注释（含跨行）；否则 `/* close_cleanup_residue( */` 能骗过调用点锚（K1）"
+    );
+    assert_eq!(
+        stripped.lines().count(),
+        probe.lines().count(),
+        "剥注释必须保留行数（锚点按下标比较，行号不能漂）"
     );
 }
 

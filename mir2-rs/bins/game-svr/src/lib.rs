@@ -25680,6 +25680,63 @@ pub fn run_with_args(args: &[String]) -> i32 {
     code
 }
 
+/// **去注释视图**（`#[cfg(test)]`）：同时剥掉 `//` 行注释与 `/* … */` 块注释（含跨行）。
+///
+/// 为什么需要（review K1）：源码文本锚只能看代码。只剥 `//` 时，把整段实现用 `/* … */`
+/// 包起来（**一行未删**）仍然「看起来像代码」⇒ 调用点锚照旧命中、而线上路径根本不执行。
+/// 这是 5 个字符就能造出的绕过，且行为牙（直接调函数的用例）**看不见**它。
+///
+/// 约定：
+/// - 块注释里的**换行保留** ⇒ 剥完行数/行号不变，锚点可以直接按下标比较；
+/// - 不做词法级处理：字符串字面量里的 `//` / `/*` 也会被剥（本仓锚点只扫生产代码，
+///   这类字面量不出现在被扫的片段里；将来若要扫含此类字面量的代码，需先过词法）。
+#[cfg(test)]
+pub(crate) fn strip_rust_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let mut in_line = false;
+    let mut in_block = false;
+    while i < chars.len() {
+        let c = chars[i];
+        let n = chars.get(i + 1).copied();
+        if in_line {
+            if c == '\n' {
+                in_line = false;
+                out.push(c);
+            }
+            i += 1;
+            continue;
+        }
+        if in_block {
+            if c == '*' && n == Some('/') {
+                in_block = false;
+                i += 2;
+                continue;
+            }
+            // 保留换行：行号/行数与原文一致（锚点按下标比较的前提）。
+            if c == '\n' {
+                out.push(c);
+            }
+            i += 1;
+            continue;
+        }
+        if c == '/' && n == Some('/') {
+            in_line = true;
+            i += 2;
+            continue;
+        }
+        if c == '/' && n == Some('*') {
+            in_block = true;
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -72992,13 +73049,10 @@ mod castle_shift_order_tests {
 mod castle_insertion_tests {
     /// 剥掉 `//` 行注释（保留换行），避免文档里的同一标识符误命中（「守卫扫代码不扫注释」同口径）。
     fn strip_line_comments(src: &str) -> String {
-        src.lines()
-            .map(|line| match line.find("//") {
-                Some(pos) => &line[..pos],
-                None => line,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        // 卡 `openmir2-softclose-cleanup-residue` 返工 K1（Leader 指出的仓库级同形绕过）：
+        // 只剥 `//` 时 `/* … */` 里的代码会被当成真代码。统一走 [`crate::strip_rust_comments`]
+        //（同时剥 `//` 与 `/* … */`，保留换行）。
+        crate::strip_rust_comments(src)
     }
 
     #[test]
