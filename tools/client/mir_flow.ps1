@@ -194,7 +194,10 @@ param(
   #     --db mir2_test_db_r --char aaa --map 3 --profile <profile.json> > gate.json
   # 门不过（missing 非空）⇒ 对应阶段在「没生效」时归 UNDECIDABLE(missing_prereq) 并点名；
   # 未给本参数时：monster 夹具由 -Profile/-PlayerMap 自行推导，其余前置缺项不臆断（沿用 RED）。
-  [string]$PrereqGateJson = ""
+  [string]$PrereqGateJson = "",
+  # N3：生成该 gate JSON 的**实际命令**（可选）。写进证据后可与现场 `provision --gate` 对账；
+  # 不给则记模板并标 generated_by_source=template（sha256 仍然绑定文件字节）。
+  [string]$PrereqGateCmd = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -695,13 +698,13 @@ function Assert-CaptureFresh([string]$path, [long]$sinceMs) {
 function New-EvidenceSource([string]$proxyDir, [string]$capturePath, [long]$sinceOverride, [long]$flowStartMs, [switch]$Offline) {
   $source = [pscustomobject]@{ Kind = "none"; Path = ""; SinceMs = [long]0; SessionStartMs = [long]0 }
   if ($proxyDir -ne "" -and $capturePath -ne "") {
-    throw "-ProxyDir 与 -CapturePath 互斥（证据源只能有一个；live 用 -ProxyDir，事后回填用 -CapturePath）"
+    Stop-Usage "-ProxyDir 与 -CapturePath 互斥（证据源只能有一个；live 用 -ProxyDir，事后回填用 -CapturePath）"
   }
   if ($proxyDir -ne "") {
-    if (-not (Test-Path -LiteralPath $proxyDir)) { throw "proxy 输出目录不存在：$proxyDir" }
+    if (-not (Test-Path -LiteralPath $proxyDir)) { Stop-Usage ("proxy 输出目录不存在：" + $proxyDir) }
     $full = (Resolve-Path -LiteralPath $proxyDir).Path
     if (-not (Test-Path -LiteralPath (Join-Path $full "chunks.ndjson"))) {
-      throw ("proxy 目录里没有 chunks.ndjson：$full")
+      Stop-Usage ("proxy 目录里没有 chunks.ndjson：" + $full)
     }
     $sessionStart = Read-ProxySessionStart $full
     $since = $sessionStart
@@ -710,7 +713,7 @@ function New-EvidenceSource([string]$proxyDir, [string]$capturePath, [long]$sinc
     $source.Kind = "proxy"; $source.Path = $full; $source.SinceMs = [long]$since; $source.SessionStartMs = $sessionStart
     if (-not $Offline) { Assert-ProxyLive $full }
   } elseif ($capturePath -ne "") {
-    if (-not (Test-Path -LiteralPath $capturePath -PathType Leaf)) { throw "capture.jsonl 不存在（须是文件）：$capturePath" }
+    if (-not (Test-Path -LiteralPath $capturePath -PathType Leaf)) { Stop-Usage ("capture.jsonl 不存在（须是文件）：" + $capturePath) }
     $full = (Resolve-Path -LiteralPath $capturePath).Path
     $since = [long]0
     if ($sinceOverride -gt 0) { $since = $sinceOverride }
@@ -1020,20 +1023,37 @@ function Set-EvVerdict($ev, [string]$kind, [string]$missing, [string]$reason) {
 
 function New-PrereqGate {
   # 前置门的可机判载体。source=none => 未提供 provision --gate 产物。
+  # N3：sha256 绑定 gate JSON 的精确字节；generated_by 记生成命令，便于与现场对账。
+  # F1：evaluated_at_wall_ms 在读入时立即打戳（调用方必须在任何动作之前调用本函数）。
   return [ordered]@{
     source = "none"; path = ""; kind = ""; verdict = ""
+    sha256 = ""; generated_by = ""; generated_by_source = "none"
+    evaluated_at_wall_ms = 0; evaluated_before_actions = $false
     need = @(); missing = @(); reasons = [ordered]@{}
   }
 }
 
-function Read-PrereqGateJson([string]$path) {
+function Read-PrereqGateJson([string]$path, [string]$cmd = "") {
   # 只读对接 `provision_real_machine_fixtures.py --gate` 的 JSON（schema 见该脚本 prereq_gate）。
   # 不连库、不改它；只读白名单字段 need/missing/reasons/kind/verdict。
+  # F1：本函数由调用方在**任何动作之前**调用一次；时间戳在这里打，避免事后补算。
   $gate = New-PrereqGate
+  $gate.evaluated_at_wall_ms = Get-TurnNowMs
   if ($path -eq "") { return $gate }
-  $doc = [IO.File]::ReadAllText((Resolve-Path -LiteralPath $path).Path, [Text.Encoding]::UTF8) | ConvertFrom-Json
+  $resolved = (Resolve-Path -LiteralPath $path).Path
+  $doc = [IO.File]::ReadAllText($resolved, [Text.Encoding]::UTF8) | ConvertFrom-Json
   $gate.source = "provision_gate_json"
-  $gate.path = $path
+  $gate.path = $resolved
+  # N3：手写一份 missing=["gold"] 就能把 RED 翻成 UNDECIDABLE；记 sha256 + 生成命令才可对账。
+  $gate.sha256 = Get-Sha256Hex $resolved
+  if ($cmd -ne "") {
+    $gate.generated_by = $cmd
+    $gate.generated_by_source = "operator"
+  } else {
+    $gate.generated_by = "python -I -B tools/client/provision_real_machine_fixtures.py --gate --db <db> --char <char> --map <map> --profile <profile.json> > <gate.json>"
+    $gate.generated_by_source = "template"
+  }
+  $gate.evaluated_before_actions = $true
   if ($null -ne $doc.PSObject.Properties["kind"]) { $gate.kind = [string]$doc.kind }
   if ($null -ne $doc.PSObject.Properties["verdict"]) { $gate.verdict = [string]$doc.verdict }
   if ($null -ne $doc.PSObject.Properties["need"]) { $gate.need = @($doc.need | ForEach-Object { [string]$_ }) }
@@ -1538,6 +1558,8 @@ function Write-StageEvidenceFile([string]$mode, $source, [string]$profilePath, [
     }
     evidence_source = [ordered]@{ kind = $source.Kind; path = $source.Path; since_ms = [long]$source.SinceMs }
     profile = [ordered]@{ path = $profilePath; player_map = $playerMap; range_cells = $rangeCells }
+    # F1/N3：门在任何动作之前求值；证据里记缺项名 + 路径 + sha256 + 生成命令。
+    prereq_gate = $script:prereqGate
     log_evidence = $script:logEvidence
     categories = $script:stageEvidence
   }
@@ -1916,7 +1938,7 @@ if ($ExpectPos -ne "") {
   }
 }
 if ($ProxyDir -ne "" -and $CapturePath -ne "") {
-  throw "-ProxyDir 与 -CapturePath 互斥（live 用 -ProxyDir；事后回填/离线才用 -CapturePath）"
+  Stop-Usage "-ProxyDir 与 -CapturePath 互斥（live 用 -ProxyDir；事后回填/离线才用 -CapturePath）"
 }
 if ($FixturePreflight -and -not $FixtureDryRun) { throw "-FixturePreflight 只能与 -FixtureDryRun 联用（不启动客户端）" }
 if ($NoticeEvidenceCheck -and -not $FixtureDryRun) { throw "-NoticeEvidenceCheck 只能与 -FixtureDryRun 联用（不启动客户端）" }
@@ -1977,7 +1999,13 @@ if (-not $StageEvidenceCheck -and ($PickupStage -or $TradeStage -or $NpcDialogSt
 if ($PrereqGateJson -ne "" -and -not (Test-Path -LiteralPath $PrereqGateJson -PathType Leaf)) {
   Stop-Usage ("-PrereqGateJson 不存在：" + $PrereqGateJson)
 }
-$script:prereqGate = Read-PrereqGateJson $PrereqGateJson
+# F1：门在**任何动作之前**求值一次；结果连同缺项名/路径/sha256/生成命令落进证据。
+$script:prereqGate = Read-PrereqGateJson $PrereqGateJson $PrereqGateCmd
+Write-Output ("PREREQ_GATE source=" + $script:prereqGate.source + " missing=" +
+  (Get-MissingText $script:prereqGate.missing) + " kind=" + $script:prereqGate.kind +
+  " path=" + $script:prereqGate.path + " sha256=" + $script:prereqGate.sha256 +
+  " generated_by_source=" + $script:prereqGate.generated_by_source +
+  " evaluated_at_wall_ms=" + $script:prereqGate.evaluated_at_wall_ms)
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
@@ -1989,9 +2017,6 @@ if ($StageEvidenceCheck) {
   Write-Output ("LOG_EVIDENCE status=" + $script:logEvidence.status + " files=" + $script:logEvidence.files_scanned +
     " lines=" + $script:logEvidence.lines_scanned + " err=" + $script:logEvidence.err_lines +
     " reason=" + $script:logEvidence.reason)
-  Write-Output ("PREREQ_GATE source=" + $script:prereqGate.source + " missing=" +
-    (Get-MissingText $script:prereqGate.missing) + " kind=" + $script:prereqGate.kind +
-    " path=" + $script:prereqGate.path)
   $rcs = @()
   $red = 0
   $und = 0

@@ -940,6 +940,61 @@ try {
   Check "A2 gate USAGE: missing gate file => rc=2 (not silently pass)" (
     $vGateMissing.Code -eq 2 -and $vGateMissing.Out.Contains("MIRFLOW USAGE")) $vGateMissing.Out
 
+  # ---- 14j. B1/F1/N3（review ab7054f2 返工）----
+  # B1：「读不到输入」= USAGE(rc=2)，不是 rc=1 崩溃、也不是任何 verdict（rc=1 只留给人判出的 RED）。
+  $b1NoPath = Join-Path (New-TestDir "b1-nopath") "no-such-proxy"
+  $b1a = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $b1NoPath, "-OutDir", (New-StageOutDir "b1-nopath"))
+  Check "B1 TOOTH1: nonexistent -ProxyDir => rc=2 USAGE, no kind" (
+    $b1a.Code -eq 2 -and $b1a.Out.Contains("MIRFLOW USAGE") -and $b1a.Out.Contains("不存在") -and
+    -not $b1a.Out.Contains("kind=") -and -not $b1a.Out.Contains("STAGE_EVIDENCE category=")) $b1a.Out
+  $b1Empty = New-TestDir "b1-empty-proxy"
+  $b1b = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $b1Empty, "-OutDir", (New-StageOutDir "b1-nochunks"))
+  Check "B1 TOOTH2: proxy dir without chunks.ndjson => rc=2 USAGE, no kind" (
+    $b1b.Code -eq 2 -and $b1b.Out.Contains("MIRFLOW USAGE") -and $b1b.Out.Contains("chunks.ndjson") -and
+    -not $b1b.Out.Contains("kind=")) $b1b.Out
+  # 同类输入错不许两套并存：capture 不存在 / 两个证据源互斥，也必须是 USAGE。
+  $b1c = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-CapturePath", (Join-Path (New-TestDir "b1-nocap") "no.jsonl"), "-OutDir", (New-StageOutDir "b1-nocap"))
+  Check "B1 TOOTH3: nonexistent -CapturePath => rc=2 USAGE" (
+    $b1c.Code -eq 2 -and $b1c.Out.Contains("MIRFLOW USAGE") -and -not $b1c.Out.Contains("kind=")) $b1c.Out
+  $b1d = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $b1Empty, "-CapturePath", "E:/x.jsonl", "-OutDir", (New-StageOutDir "b1-mutex"))
+  Check "B1 TOOTH4: -ProxyDir + -CapturePath mutex => rc=2 USAGE" (
+    $b1d.Code -eq 2 -and $b1d.Out.Contains("MIRFLOW USAGE") -and -not $b1d.Out.Contains("kind=")) $b1d.Out
+
+  # F1/N3：门在动作之前求值并落进证据（path + sha256 + 生成命令 + 缺项名）。
+  $gateEvDir = New-TestDir "gate-evidence"
+  $gateEvPath = Join-Path $gateEvDir "gate.json"
+  [IO.File]::WriteAllText($gateEvPath,
+    '{"kind":"missing_prereq","verdict":"UNDECIDABLE","need":["gold","npc"],"missing":["gold"],"reasons":{"gold":"Gold=0"}}',
+    (New-Object Text.UTF8Encoding($false)))
+  $gateEvCmd = "python -I -B tools/client/provision_real_machine_fixtures.py --gate --db mir2_test_db_r --char aaa --map 3 --profile p.json"
+  $gateEvOut = New-StageOutDir "gate-evidence"
+  $rGateEv = Invoke-Flow @("-StageEvidenceCheck", "-TradeStage", "-ProxyDir", $trRed, "-OutDir", $gateEvOut,
+    "-PrereqGateJson", $gateEvPath, "-PrereqGateCmd", $gateEvCmd)
+  $gd = Get-EvidenceDoc $gateEvOut
+  $wantGateSha = Get-Sha256Hex $gateEvPath
+  Check "N3 TOOTH: evidence records gate path + sha256 + generation command" (
+    $null -ne $gd -and $null -ne $gd.prereq_gate -and
+    ([string]$gd.prereq_gate.path -eq (Resolve-Path -LiteralPath $gateEvPath).Path) -and
+    ([string]$gd.prereq_gate.sha256 -eq $wantGateSha) -and
+    ([string]$gd.prereq_gate.generated_by -eq $gateEvCmd) -and
+    ([string]$gd.prereq_gate.generated_by_source -eq "operator") -and
+    (@($gd.prereq_gate.missing) -contains "gold")) (
+    ($gd.prereq_gate | ConvertTo-Json -Compress -Depth 6))
+  Check "F1 TOOTH: gate evaluated before actions, recorded with missing names" (
+    $null -ne $gd -and $null -ne $gd.prereq_gate -and
+    [bool]$gd.prereq_gate.evaluated_before_actions -and
+    [long]$gd.prereq_gate.evaluated_at_wall_ms -gt 0 -and
+    (@($gd.prereq_gate.missing) -contains "gold")) (
+    ($gd.prereq_gate | ConvertTo-Json -Compress -Depth 6))
+  # F1 源序：门求值行必须出现在 live 动作块之前（不是动作失败后回头补算）。
+  $gateEvalPos = $srcStages.IndexOf('$script:prereqGate = Read-PrereqGateJson')
+  $liveActionPos = $srcStages.IndexOf('Stage "pickup"')
+  Check "F1 source order: gate evaluated before the live action block" (
+    $gateEvalPos -ge 0 -and $liveActionPos -gt $gateEvalPos) ("gate_pos=" + $gateEvalPos + " live_pos=" + $liveActionPos)
+  Check "F1 stdout order: PREREQ_GATE precedes STAGE_EVIDENCE" (
+    $rGateEv.Out.IndexOf("PREREQ_GATE") -ge 0 -and
+    $rGateEv.Out.IndexOf("STAGE_EVIDENCE category=") -gt $rGateEv.Out.IndexOf("PREREQ_GATE")) $rGateEv.Out
+
   # ---- 13. 源码/参数断言 ----
   $src2 = [IO.File]::ReadAllText($flow, [Text.Encoding]::UTF8)
   Check "source: 12x blind notice loop removed" (-not ($src2 -match 'for \(\$i = 0; \$i -lt 12; \$i\+\+\)')) $null

@@ -156,6 +156,11 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
                      "rc": { "pass": 0, "red": 1, "usage": 2, "missing_prereq": 6, "spawn_failed": 7, "out_of_range": 8 } },
   "evidence_source": { "kind": "proxy", "path": "...", "since_ms": 0 },
   "profile": { "path": "...", "player_map": "0", "range_cells": 1 },
+  "prereq_gate": { "source": "provision_gate_json|none", "path": "...", "sha256": "...",
+                   "generated_by": "python -I -B tools/client/provision_real_machine_fixtures.py --gate ...",
+                   "generated_by_source": "operator|template|none",
+                   "evaluated_at_wall_ms": 0, "evaluated_before_actions": true,
+                   "need": ["gold"], "missing": ["gold"], "reasons": { "gold": "..." } },
   "log_evidence": { "status": "SKIP|GREEN|RED", "files_scanned": 0, "lines_scanned": 0, "err_lines": 0, "reason": "..." },
   "categories": {
     "pickup":    { "verdict": "GREEN|RED|UNDECIDABLE", "verdict_kind": "ok|missing_prereq|wrong_cell|...", "rc": 0, "missing": [],
@@ -196,7 +201,7 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
-# => SELFTEST_PASS=140 SELFTEST_FAIL=0 ; SELFTEST_OK
+# => SELFTEST_PASS=148 SELFTEST_FAIL=0 ; SELFTEST_OK
 ```
 
 四类牙的原始输出（删掉前置/副作用 ⇒ 对应类别 RED 且点名）：
@@ -217,6 +222,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 | A3 牙3 | 声明在 AP 外 | `verdict=RED kind=out_of_range rc=8`（不是 spawn_failed） |
 | A7 牙 | `-StageEvidenceChek` 拼错 | `MIRFLOW USAGE: ... rc=2`，输出不含 `STAGE_EVIDENCE`/`kind=`/`verdict=` |
 | A2 门牙 | `-PrereqGateJson` 报 `gold` 缺 + 交易没生效 | `verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=gold`；门全备齐时同一失败帧仍 RED（负例牙） |
+| B1 牙1 | `-ProxyDir` 指向不存在的路径 | `MIRFLOW USAGE: proxy 输出目录不存在...` rc=**2**，无 `kind=` |
+| B1 牙2 | proxy 目录存在但缺 `chunks.ndjson` | `MIRFLOW USAGE: proxy 目录里没有 chunks.ndjson...` rc=**2**，无 `kind=` |
+| B1 牙3/4 | `-CapturePath` 不存在 / `-ProxyDir`+`-CapturePath` 互斥 | 同样是 `MIRFLOW USAGE` rc=**2**（同类输入错，不许两套并存） |
+| F1 牙 | gate JSON + 失败帧；把证据里的 `prereq_gate` 删掉或 `evaluated_before_actions` 改 false | 证据 `prereq_gate.missing`/`evaluated_before_actions`/源序/输出序断言变红 |
+| N3 牙 | gate JSON；把 `sha256` 清空 | 证据 `prereq_gate.sha256` 断言变红（无法与现场 `provision --gate` 对账） |
 | 阶段序（A2） | 假源里把 `Stage "talk"` 复制成两条（一条注释） | `FAIL stages A5 TOOTH: duplicated stage name => uniqueness RED  non_unique Stage "talk" x2`；同一假源上朴素 `IndexOf` 仍判有序（阳性对照） |
 
 对应 GREEN 反例（同一假根 + 补齐前置/副作用）：
@@ -298,7 +308,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 ```powershell
 # 1) mir_flow 全套离线自检（含四类牙、A5/A6）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
-#    => SELFTEST_PASS=140 SELFTEST_FAIL=0 / SELFTEST_OK
+#    => SELFTEST_PASS=148 SELFTEST_FAIL=0 / SELFTEST_OK
 
 # 2) SHA-256 构造级自检（编译 Sha256.pas + FIPS/.NET 交叉）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/selftest_sha256.ps1
@@ -334,7 +344,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/bui
 | `spawn_failed` | `RED` | **7** | 夹具**已声明**（自认可控的输入）却刷不出/无副作用 | 靶子写在正前方，`CM_HIT` 后无 `SM_STRUCK`/`SM_DEATH` |
 | `out_of_range` | `RED` | **8** | 刷出但在 AP 外 / 不同图 ⇒ 夹具写错 | 靶子声明在 8 格外；`fixtures.monsters` 只在别的 `map` |
 | 其它 RED 成因 | `RED` | 1 | 旧口径/确定性驱动错误 | `kind=aim_mismatch` / `wrong_cell` / `no_dialogue` / `no_gold_change` |
-| 用法错 | —（不落任何 verdict） | **2** | 参数名/取值错，脚本没按意图跑 | `-StageEvidenceChek` 拼错；缺 `-ProxyDir`；`-PrereqGateJson` 文件不存在 |
+| 用法错 | —（不落任何 verdict） | **2** | 参数名/取值/**输入路径**错，脚本没按意图跑 | `-StageEvidenceChek` 拼错；缺 `-ProxyDir`；**`-ProxyDir` 不存在 / 缺 `chunks.ndjson`**；`-CapturePath` 不存在；两个证据源互斥；`-PrereqGateJson` 文件不存在 |
 | PASS | `GREEN` | 0 | 副作用成立；既有证据字段**逐字不变** | — |
 
 - 机器判读：`STAGE_EVIDENCE category=<c> verdict=<v> kind=<k> rc=<n> missing=<a,b> reason=<...>`。
@@ -351,6 +361,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/bui
   python -I -B tools/client/provision_real_machine_fixtures.py --gate `
     --db mir2_test_db_r --char aaa --map 3 --profile <profile.json> > E:\tmp\gate.json
   ```
+- **门在动作之前求值并落证（F1）**：`Read-PrereqGateJson` 在任何动作块之前调用一次；证据文件 `prereq_gate`
+  记 `path / sha256 / generated_by / generated_by_source / evaluated_at_wall_ms / evaluated_before_actions / missing / reasons`。
+  `-PrereqGateCmd "<实际命令>"` 把生成命令原样记入证据（`generated_by_source=operator`；不给则记模板并标 `template`）。
+- **N3**：`sha256` 绑定 gate JSON 的精确字节，便于与现场 `provision --gate` 输出对账，防止「手写 `missing=["gold"]`」
+  把 RED 翻成 UNDECIDABLE 后无法追溯。
+- 门**只参与归类，不阻断动作**（Leader 92b32a23 裁决）：动作照发（可观测面更大），门只解释「为什么什么都没发生」。
 - 门仅在**动作没生效**时参与归类：门说缺 `gold` + 交易无副作用 ⇒ `UNDECIDABLE missing=gold`；
   门说全备齐（`missing=[]`）⇒ 同样的失败帧仍是 RED（门不得掩盖真 RED，selftest 有负例牙）。
 - 未给 `-PrereqGateJson` 时：monster 夹具从 `-Profile/-PlayerMap` 自行推导；`floor_item` 按 96ad82a37 裁决默认结构性缺失；
