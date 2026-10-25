@@ -6,6 +6,8 @@
 
 ## 1. 四条件状态
 
+- **快照**：`a1576af35`（2026-10-25 13:10 +08）
+
 | 条件 | 状态 | 证据 |
 |---|---|---|
 | ① 脚本派发 100% | **PASS** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**已在 `9a966b04b` 上用新构建有效重验**（`mir2-script-tool` = `/e/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/release/mir2-script-tool.exe`，mtime 12:46、sha256 `34ac7680b2be1d691a2991948389902f11dceed520f07e6322d58b122fabcb3e`；窗口侧留痕 `/e/tmp/final-window/script-tool.sha256`）；此前用 00:44 的旧二进制得出的同数结论曾作废（其后 3 笔改了 `crates/script`） |
