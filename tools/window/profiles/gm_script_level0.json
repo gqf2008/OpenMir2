@@ -1,0 +1,158 @@
+{
+  "format": "card-window-profile/1",
+  "name": "gm_script_level0",
+  "description": "卡 `openmir2-gm-script-fixture` A1 示范：用 `fixtures.files` 在**两侧**注入同一段脚本片段（替换 `Envir/Market_Def/沙巴克/药店-0153.txt` 的 `[@main]` 并追加 `[@gmlevel]`，其中 `GMEXECUTE Level0 Self 5`），经 NPC 对话触发 ⇒ `Permission` 临时抬到 10、进命令体、`@Level0` 写等级并落 45/52/752 三帧，finally 还原。**本 profile 只是通道示范**；行为判据（两侧 Level=5 + 帧面一致）由真机窗口验。",
+  "login_gate": "127.0.0.1:17000",
+  "account": "winplay0",
+  "server_name": "热血传奇",
+  "char_name": "winplay0",
+  "probe_timeout_ms": 20000,
+  "ready_timeout_s": 120,
+  "compare_extra": [],
+  "db_client": {
+    "mysql": [
+      "D:\\mysql\\mariadb-10.11.19-winx64\\bin\\mysql.exe"
+    ],
+    "host": "127.0.0.1",
+    "port": 3306,
+    "user": "root",
+    "password": ""
+  },
+  "sides": {
+    "csharp": {
+      "label": "C# oracle",
+      "stack": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/tools/window/start-stack-wmi.ps1",
+        "-Script",
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/tools/window/start-csharp.ps1",
+        "-ReadyPorts",
+        "15000,17000,17100,17200"
+      ],
+      "stop": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like 'E:\\tmp\\conformance\\csharp-root\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+      ],
+      "restore": [
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "E:/tmp/conformance/restore-baseline.sh"
+      ],
+      "ports": [
+        15000,
+        15100,
+        15500,
+        15600,
+        15700,
+        16000,
+        17000,
+        17100,
+        17200,
+        17201,
+        17202
+      ],
+      "ready_ports": [
+        15000,
+        17000,
+        17100
+      ],
+      "probe_extra": [],
+      "binaries": [
+        "E:/tmp/conformance/csharp-root/M2GameSvr/GameSrv.exe"
+      ],
+      "envir_root": "E:/tmp/conformance/csharp-root/M2GameSvr",
+      "db": {
+        "preset": "test",
+        "characters_db": "mir2_test_db"
+      }
+    },
+    "rust": {
+      "label": "Rust",
+      "stack": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/tools/window/start-stack-wmi.ps1",
+        "-Script",
+        "E:/tmp/conformance/start-rust.ps1",
+        "-ReadyPorts",
+        "15000,17000,17100,17600"
+      ],
+      "stop": [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "E:/tmp/conformance/stop-rust.ps1"
+      ],
+      "restore": [
+        "C:/Program Files/Git/usr/bin/bash.exe",
+        "E:/tmp/conformance/restore-baseline-r.sh"
+      ],
+      "ports": [
+        15000,
+        15100,
+        15500,
+        15600,
+        15700,
+        16000,
+        17000,
+        17100,
+        17600
+      ],
+      "ready_ports": [
+        15000,
+        17000,
+        17100
+      ],
+      "probe_extra": [
+        "--game-gate",
+        "127.0.0.1:17600"
+      ],
+      "binaries": [
+        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-2/mir2-rs/target/release/mir2-server.exe"
+      ],
+      "require_pid_binaries": true,
+      "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
+      "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
+      "db": {
+        "tables": [
+          "mir2_test_account_r.account",
+          "mir2_test_account_r.account_protection",
+          "mir2_test_db_r.characters",
+          "mir2_test_db_r.characters_ablity",
+          "mir2_test_db_r.characters_bonusability",
+          "mir2_test_db_r.characters_item",
+          "mir2_test_db_r.characters_item_attr",
+          "mir2_test_db_r.characters_magic",
+          "mir2_test_db_r.characters_bagitem",
+          "mir2_test_db_r.characters_storageitem",
+          "mir2_test_db_r.characters_status",
+          "mir2_test_db_r.characters_quest",
+          "mir2_test_db_r.characters_indexes"
+        ],
+        "characters_db": "mir2_test_db_r",
+        "allow_db": [
+          "mir2_test_db_r",
+          "mir2_test_account_r"
+        ]
+      }
+    }
+  },
+  "fixtures": {
+    "files": {
+      "Envir/Market_Def/沙巴克/药店-0153.txt": "(@buy @sell)\n%100\n+0\n[@main]\n欢迎, 您想要些什么? \\n<买/@buy> 药品\\n<GM/@gmlevel>\\n<离 开/@exit>\n\n[@buy]\n你想买点什么药品？\\ \\ \\n <返 回/@Main>\n[@sell]\n给我看看你的东西。\\ \\ \\n <返 回/@Main>\n[@gmlevel]\n#ACT\nGMEXECUTE Level0 Self 5\n[goods]\n金创药(小量)          100       3\n"
+    },
+    "note": "files 通道（卡 openmir2-gm-script-fixture A5）；两侧逐字节相同，restore 后 before_sha==restored_sha"
+  }
+}

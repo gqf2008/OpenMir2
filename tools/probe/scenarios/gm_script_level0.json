@@ -1,0 +1,36 @@
+{
+  "name": "gm_script_level0",
+  "description": "卡 `openmir2-gm-script-fixture` A1 示范：脚本 `GMEXECUTE` 抬权路径。`fixtures.files` 在两侧注入同一段脚本（替换 `Envir/Market_Def/沙巴克/药店-0153.txt`，`[@main]` 加 `<GM/@gmlevel>`，`[@gmlevel]` 的 `#ACT` 执行 `GMEXECUTE Level0 Self 5`）。oracle 链：脚本动作 `ActionOfGmExecute`（`ExecutionProcessingSys.cs:4938-4947`）把 `Permission` 抬到 10、拼出 `@Level0 <ChrName> 5 0 0 0` 调 `ProcessUserLineMsg`、**finally 还原**；`@Level0` 命令体写 `Abil.Level = (byte)MIN(255,5) = 5` 并触发 `HasLevelUp(1)` ⇒ 泵发 `SM_LEVELUP(45)` + `SM_ABILITY(52)`（带 `EncodeMessage(WAbil)` 尾）+ `SM_SUBABILITY(752)`。判据：两侧 `characters_ablity.Level` 都变 5；两侧帧面 45→52→752 逐字段一致（顺序 + Recog/Param/Tag）。**本场景必须在窗口里跑**（要起双栈 + 注入脚本）。",
+  "required": ["merchant_actor"],
+  "params": {
+    "level_arg": 5
+  },
+  "placement": {
+    "map": "0153",
+    "x": 15,
+    "y": 7,
+    "note": "与 `castle_merchant_tax_potion` 同格：城堡药店（`MerChant.txt:90`）正东邻格，Chebyshev 1（`CM_CLICKNPC` 门 15）。"
+  },
+  "steps": [
+    {
+      "click_npc": "merchant_actor",
+      "note": "CM_CLICKNPC(1010)：脚本 `[@main]` 里新增了 `<GM/@gmlevel>` 链接（`fixtures.files` 注入）。"
+    },
+    {
+      "wait_for": 643,
+      "timeout_ms": 3000,
+      "note": "SM_MERCHANTSAY(643)：`@main` 说词（含 `<GM/@gmlevel>`）。"
+    },
+    {
+      "dlg_select": "@gmlevel",
+      "note": "CM_MERCHANTDLGSELECT(1011) ⇒ 脚本 `[@gmlevel]` 的 `#ACT` 执行 `GMEXECUTE Level0 Self 5`：抬权 → `@Level0` 命令体 → finally 还原。"
+    },
+    {
+      "wait_idents": {
+        "idents": [45, 52, 752],
+        "timeout_ms": 5000
+      },
+      "note": "`RM_LEVELUP` 泵分支的三条直连帧（顺序固定）。用 `wait_idents` 钉三帧，避免命中 45 就提前返回。"
+    }
+  ]
+}
