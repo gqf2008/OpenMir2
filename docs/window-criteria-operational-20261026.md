@@ -72,7 +72,7 @@ $CombatTargetPixel = "464,272" # 阶段 B：char(330,330) -> 靶(329,329)，旧�
 |---|---|
 | `tools/client/mir_flow.ps1` | `-OutDir -RunDir -ProxyDir -CapturePath -EvidenceSinceMs -ExpectPos -LogDir -RequireLogEvidence -InjectDll -InjectExe -HookOut -WalkClicks -SkipTalk -SkipLogout -SkipReenter -LeaveClientRunning -StageEvidenceCheck -PickupStage -PickupPixel -NpcDialogStage -NpcDialogPixel -TradeStage -TradeNpcPixel -TradeMenuPixel -TradeKind(buy\|sell) -CombatStage -Profile -PlayerMap -AttackRangeCells -CombatTargetPixel -ActionWaitSec -TradeDialogMaxAgeSec -PrereqGateJson -PrereqGateCmd -EvidenceOut`（param 块 `:28-200`；`-StageEvidenceCheck` 离线分支 `:1980/:2013`；live 四阶段 `:2818/:2833/:2849/:2870/:2932`） |
 | `tools/client/provision_real_machine_fixtures.py` | `--check --apply --rollback REPORT --verify --a2-evidence --gate --selftest`；`--db --char --map --char-x --char-y --npc-script --gold --game-point --profile --need {gold,sellable_item,npc,floor_item,monsters} --min-gold --report --yes-apply --yes --frames --expect-gold --expect-rows`（`argparse` `:880-929`；`--apply` 默认 dry-run，真写要 `--yes-apply`） |
-| `tools/capture/clienthook/verify_chunks.ps1` | `-CaptureDir <dir> [-Quiet]`；四态 rc `0/1/2/3`（头部注释 + `:173-215`）。**`-Quiet` 被解析但全文未使用（死参数）** |
+| `tools/capture/clienthook/verify_chunks.ps1` | `-CaptureDir <dir> [-Quiet]`；四态 rc `0/1/2/3`（头部注释 + `:173-215`）。`-Quiet` 已实现为**真静默**（只打摘要，逐事件明细不出屏；退出码不变） |
 | `tools/db-parity/dbsnap_pair.py` | `diff A B`；`--tables --scope --require-tables --key-mode --time-mode --null-token --ignore-columns --allow-unknown-table --baseline-a --baseline-b --masked-columns --jsonl --summary-out --quiet`；另有 `check-spec` / `selftest`（`build_parser` `:1720-1742`） |
 | `E:/MirServer/port-status.ps1` | `-Out <file>`；第 3 节输出 `- <进程> pid=… port=…`，缺失时打 `- **缺失端口**: …`，全在时打 `- 十个端口全部在监听`（脚本源码；本机实测） |
 
@@ -371,14 +371,18 @@ $outA1 | Tee-Object "$W/flow-A1-buy.log"
 
 - **② 看哪个字段**：
   - stdout：`PREREQ_GATE source=provision_gate_json … sha256=… evaluated_at_wall_ms=…`、`STAGE_EVIDENCE category=trade verdict=GREEN kind=ok rc=0`、`FLOW_OK`；
-  - 证据 JSON `<runA1>/flow-stages-evidence.json` 的 `categories.trade`：`verdict` / `verdict_kind` / `kind`（方向）/ `success.ident` / `gold_delta` / `dialogue` / `item_effect`，以及 `prereq_gate.evaluated_before_actions` / `sha256`。
+  - 证据 JSON `<runA1>/flow-stages-evidence.json` 的 `categories.trade`：`verdict` / `verdict_kind` / `kind`（方向）/ `success{ident,ts_ms}`（**`ident` 是 `-TradeKind` 的常量回显；证据面看 `ts_ms`**）/ `gold_delta` / `dialogue` / `item_effect`，以及 `prereq_gate.evaluated_before_actions` / `sha256`。
 - **③ 通过阈值**（工具实际口径）：
 
 ```powershell
 $ev = Get-Content -LiteralPath "$runA1/flow-stages-evidence.json" -Raw -Encoding UTF8 | ConvertFrom-Json
 $t  = $ev.categories.trade
+# F2（`openmir2-window-criteria-doc-followups`）：不再判 `success.ident` 的等值——该字段是
+# `-TradeKind` 选出的**常量回显**（`mir_flow.ps1:1289`），恒真、不构成证据。改用**实测帧时间**
+# 与请求时间的先后关系；产物里没有 `success` 对象（伪造/缺帧）⇒ RED。
 $passA1 = ($t.verdict -eq 'GREEN') -and ($t.verdict_kind -eq 'ok') -and ($t.kind -eq 'buy') -and
-          ($t.success.ident -eq 650) -and ($t.gold_delta -lt 0) -and
+          ($null -ne $t.success) -and ([long]$t.success.ts_ms -gt 0) -and
+          ([long]$t.success.ts_ms -ge [long]$t.request.ts_ms) -and ($t.gold_delta -lt 0) -and
           ($t.dialogue.opens -ge 1) -and ($t.dialogue.dialogue_frames -ge 1) -and
           ($ev.prereq_gate.evaluated_before_actions -eq $true) -and
           ($ev.prereq_gate.sha256 -match '^[0-9a-f]{64}$')
@@ -423,14 +427,16 @@ $outA2 | Tee-Object "$W/flow-A2-sell.log"
 "FLOW_A2_RC=$rcA2" | Add-Content -LiteralPath "$W/flow-A2-sell.log"
 ```
 
-- **② 看哪个字段**：同 A1，`categories.trade`（`kind="sell"`）、`success.ident`、`gold_delta`、`item_effect`。
+- **② 看哪个字段**：同 A1，`categories.trade`（`kind="sell"`）、`success{ident,ts_ms}`（`ident` 是常量回显）、`gold_delta`、`item_effect`。
 - **③ 通过阈值**：
 
 ```powershell
 $ev2 = Get-Content -LiteralPath "$runA2/flow-stages-evidence.json" -Raw -Encoding UTF8 | ConvertFrom-Json
 $t2  = $ev2.categories.trade
+# F2：同 A1——`success.ident` 是常量回显（这里恒为 648），改判实测 `ts_ms` 与请求的先后。
 $passA2 = ($t2.verdict -eq 'GREEN') -and ($t2.verdict_kind -eq 'ok') -and ($t2.kind -eq 'sell') -and
-          ($t2.success.ident -eq 648) -and ($t2.gold_delta -gt 0) -and
+          ($null -ne $t2.success) -and ([long]$t2.success.ts_ms -gt 0) -and
+          ([long]$t2.success.ts_ms -ge [long]$t2.request.ts_ms) -and ($t2.gold_delta -gt 0) -and
           ($t2.dialogue.opens -ge 1) -and ($t2.dialogue.dialogue_frames -ge 1) -and
           ($ev2.prereq_gate.evaluated_before_actions -eq $true) -and
           ($ev2.prereq_gate.sha256 -match '^[0-9a-f]{64}$')
@@ -506,6 +512,19 @@ $outA4 = & powershell -NoProfile -ExecutionPolicy Bypass -File "$REPO/tools/clie
 $rcA4 = $LASTEXITCODE
 $outA4 | Tee-Object "$W/flow-A4-combat.log"
 "FLOW_A4_RC=$rcA4" | Add-Content -LiteralPath "$W/flow-A4-combat.log"
+
+# F1（`openmir2-window-criteria-doc-followups`）：A4 的「同图」**不是线上证据**——经典协议没有图名，
+# 工具拿 -PlayerMap 与 profile 的 fixtures.monsters[].map 比较，而这个值是**操作者断言**。
+# 必须同跑一份来源记录；缺来源 ⇒ 该项 UNDECIDABLE（见下面 ③ 与 §5 / §8-P14）。
+$pmaA4 = [ordered]@{
+  map          = "0"       # 必须与上面的 -PlayerMap 逐字相同
+  source_kind  = "db"      # db | screenshot | other
+  source_cmd   = "SELECT MapName FROM mir2_test_db_r.characters WHERE ChrName='aaa'"
+  source_value = "0"       # 上面命令/截图**实际读到的值**
+  by           = $env:USERNAME
+  ts_wall_ms   = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+}
+$pmaA4 | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath "$W/player-map-assertion-A4.json" -Encoding UTF8
 ```
 
 - **② 看哪个字段**：stdout `COMBAT_TARGET map=… x=… y=… own=… dist=…`、`COMBAT_ACTION x=… y=… pixel_source=explicit|projected`、`STAGE_EVIDENCE category=combat …`；证据 `categories.combat` 的 `target{distance}` / `hit{own_x,own_y,dir,front_x,front_y}` / `effect` / `hp_before,hp_after,max_hp,damage` / `actor` / `pixel_source` / `pixel{x,y}`。
@@ -520,7 +539,17 @@ $passA4 = ($c.verdict -eq 'GREEN') -and ($c.verdict_kind -eq 'ok') -and
           ($c.pixel_source -in @('explicit','projected')) -and ($null -ne $c.pixel.x) -and
           ($c.hit.front_x -eq $c.target.x) -and ($c.hit.front_y -eq $c.target.y)
 if ($c.effect -eq 'hp') { $passA4 = $passA4 -and ($c.damage -gt 0) }
-"A4 PASS=$passA4 effect=$($c.effect) dmg=$($c.damage) pixel_source=$($c.pixel_source) dist=$($c.target.distance)"
+# F1：同图前提 = 操作者断言。缺断言文件 / 缺来源字段 / 断言的 map 与证据里的 -PlayerMap 不同
+# ⇒ **UNDECIDABLE**（这一项本轮没测：既不是 GREEN，也不是 RED）。
+$pmaPath = "$W/player-map-assertion-A4.json"
+$pma = if (Test-Path -LiteralPath $pmaPath) { Get-Content -LiteralPath $pmaPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
+$pmaOk = ($null -ne $pma) -and
+         (-not [string]::IsNullOrWhiteSpace([string]$pma.map)) -and
+         (-not [string]::IsNullOrWhiteSpace([string]$pma.source_cmd)) -and
+         (-not [string]::IsNullOrWhiteSpace([string]$pma.source_value)) -and
+         ([string]$pma.map -eq [string]$ev4.profile.player_map)
+$a4Verdict = if (-not $pmaOk) { 'UNDECIDABLE' } elseif ($passA4) { 'PASS' } else { 'RED' }
+"A4 VERDICT=$a4Verdict PASS=$passA4 effect=$($c.effect) dmg=$($c.damage) pixel_source=$($c.pixel_source) dist=$($c.target.distance) player_map=$($ev4.profile.player_map) pma_ok=$pmaOk"
 ```
 
   `effect=hp` 时 `hp_before = param + series`、`hp_after = param`，工具已保证 `series>0`；`effect=death` 时必须有非自己的 `SM_DEATH(32)`。
@@ -542,6 +571,9 @@ if ($c.effect -eq 'hp') { $passA4 = $passA4 -and ($c.damage -gt 0) }
 - **部分机判 / 不可机判**：
   - 基线「**尸体仍在 AP 范围内**」：证据里没有尸体坐标，工具不判 ⇒ **只有人能判**（看截图/帧）。
   - `spawn_failed` 的**可达性前提**是客户端先发了 `CM_HIT`。如果靶子根本没刷出/没同屏，客户端点击会落成 `CM_WALK/RUN`，于是先看到 `action_missing rc=1`，而不是 `rc=7`。这正是已知的 attack-vs-walk 根因（`docs/client-flow-stages-20261025.md` §7.2）——**从「没有 3014」的帧里无法区分「没刷出」「点歪」「转向错」**，工具不判 ⇒ 只有人能判（需先录「点击坐标 + 客户端落点」）。见 §8-P7。
+  - **「同图」= 操作者断言**：`out_of_range` / `spawn_failed` 的同图判定用 `-PlayerMap`（`mir_flow.ps1:1381/:2899`），
+    而它由操作者给（`:182` 注释原文「经典协议线上没有图名；必须显式给」）⇒ 这一半不是机判。
+    本单要求同跑 `player-map-assertion-A4.json` 记 `map` + 来源；缺来源 ⇒ 该项 **UNDECIDABLE**。见 §5 / §8-P14。
   - 像素（`-CombatTargetPixel`）：依赖窗口位置/尺寸/DPI，48×32 投影未被证实 ⇒ 只有人能标定，见 §5。
 
 ---
@@ -588,7 +620,7 @@ $f1rc = $LASTEXITCODE
 | A1 | 成功帧 650 + 金币**方向** + 对话前置 + 物品帧计数 | 金币差**等于价格**、目标槽**同一 StdIndex**；像素/DPI ⇒ §8-P4/P10 |
 | A2 | 成功帧 648 + 金币方向 + 物品帧计数 | 金币差**等于售价**、该槽**消失**、与 A1 共用同一物品（两次 run）；像素/DPI ⇒ §8-P3/P4/P10 |
 | A3 | **进入**（1010 + body>0 的 643/767） | **退出**（退出后不再收）；像素/DPI ⇒ §8-P6/P10 |
-| A4 | HP 递减/死亡帧 + 三档 kind（6/7/8）+ `pixel_source` 记账 | **尸体在 AP 内**；attack-vs-walk 根因；像素/DPI ⇒ §8-P7/P10 |
+| A4 | HP 递减/死亡帧 + 三档 kind（6/7/8）+ `pixel_source` 记账 | **尸体在 AP 内**；attack-vs-walk 根因；**「同图」= 操作者断言 `-PlayerMap`（须带来源，缺 ⇒ UNDECIDABLE）**；像素/DPI ⇒ §8-P7/P10/P14 |
 | F1 | chunks 逐事件 sha256 + 块数/bytes | **对话阶段的 `pixel_source`**（字段不存在）⇒ §8-P8 |
 
 ---
@@ -631,7 +663,7 @@ $f1rc = $LASTEXITCODE
 | | `--game-point` | 随 apply 一起写（10），不是 G3 判据 |
 | | `--frames` / `--expect-gold` / `--expect-rows`（`--verify`） | **本窗口没有合法输入**：它要 `frames.ndjson`，而 `mir2_proxy` 只产 `chunks.ndjson`+`conn-*.bin`；转换工具不在五入口内 ⇒ §8-P4 |
 | | `--map-root/--envir-root/--repo-root/--mysql/--host/--port/--user/--password` | 默认已解析到本机测试栈；窗口不写生产库口令 |
-| `verify_chunks.ps1` | `-Quiet` | **被解析但全文未使用（死参数）**，不指望它降噪 |
+| `verify_chunks.ps1` | `-Quiet` | 本单已把它改成**真静默**（只打摘要行，逐事件明细不出屏；退出码不变）。窗口默认不加，排障降噪时才加；自检有 6 颗牙（rc 不变 / 明细消失 / 行数减少 / 摘要仍在 / GREEN 侧 / USAGE 串） |
 | `dbsnap_pair.py` | `--baseline-a/--baseline-b`、`--key-mode`、`--time-mode`、`--tables/--require-tables/--scope`、`--ignore-columns`、`--masked-columns`、`--jsonl`、`--summary-out`、`check-spec`、`selftest` | 全部读过；但**没有任何允许入口能产出它的输入快照目录**（`dbsnap.py` 不在五入口内，`provision` 不产快照）⇒ 本窗口用不上，见 §8-P4 |
 | `start_mir2_server.ps1` | `-RequireRelease` | 与显式 `-ServerExe` 同给会因 `BuildType=Explicit` 直接 RED（§2-G2 注意） |
 | | `-Roles/-WaitSeconds/-DbName/-RngLog/-Ports/-Seed` | G2 不需要；`-Seed 42` 属于第 3 步起栈参数 |
@@ -666,7 +698,9 @@ $f1rc = $LASTEXITCODE
 ### P4 A1/A2 的 DB 面（差=价格 / StdIndex / 槽消失）在本窗口不可机判
 
 - `Get-TradeEvidence` 只判：成功帧（650/648）+ 金币**方向**（`gold_delta` 正负）+ 对话前置；物品帧只记 `item_effect.count`，**不核 StdIndex/槽位**。
-- 能读 DB 的入口只有 `provision --gate`（只给 `Gold` 与 `bag_rows/bag_items` 计数，不给 `Position/StdIndex`）和 `dbsnap_pair.py`（只 diff 已有快照目录）。**没有任何五入口内的工具能产生 dbsnap 快照**（`dbsnap.py` 不在清单；`provision --verify` 要 `frames.ndjson`，`mir2_proxy` 不产）。
+- 能读 DB 的入口只有 `provision --gate`（`--need gold|sellable_item` 会给出**整行角色** `details.char`
+  —— `Id/ChrName/MapName/CX/CY/Gold/GamePoint/Level` —— 以及 `bag_rows`/`bag_items` 计数；仍**不给**
+  `Position/StdIndex`）和 `dbsnap_pair.py`（只 diff 已有快照目录）。**没有任何五入口内的工具能产生 dbsnap 快照**（`dbsnap.py` 不在清单；`provision --verify` 要 `frames.ndjson`，`mir2_proxy` 不产）。
 - 影响：基线「差 = 价格」「目标槽出现同一 StdIndex」「该槽消失」**本轮不可机判**；工具 GREEN 只是必要不充分。`docs/real-machine-window-plan-20261025.md` §4 已声明「R 卡收口走 `card_window` 两侧口径」，那才是这些 DB 子句的归宿。
 - 需要裁决：接受「本窗口只判方向/成功帧，DB 子句留给 card_window」，或把 `tools/dbsnap/dbsnap.py` 加入允许入口（同时补快照的 before/after 时点与 G1 的 save settle）。
 
@@ -712,6 +746,15 @@ $f1rc = $LASTEXITCODE
 
 - `report.json` 是 `card_window` 的证据包件（`docs/window-runbook-20261023.md` §3：`report.json`+`README.txt`+`card-window.json`+两侧 `frames.ndjson`）。七步冒烟流程不跑 `card_window`，本窗口的等价件是 `flow-stages-evidence.json` + `stages.ndjson` + `provision` apply 报告 + 截图。
 - 影响：第 6 步的「存 `report.json`」在本流程落空；本单按等价件记账，不伪造 `report.json`。
+
+### P14 A4 的「同图」是操作者断言，不是线上/DB 证据
+
+- `mir_flow.ps1` 判 `out_of_range` 的「同图」= profile `fixtures.monsters[].map` vs **`-PlayerMap`**
+  （`:1381` / `:2899`）；`-PlayerMap` 由操作者给（`:182` 注释原文「经典协议线上没有图名；必须显式给」）。
+- 影响：`-PlayerMap` 给错会让「靶子在别的图」「真的刷不出」两种归因互相串台；这一半不是机判。
+- 处置（本单已落地）：§3.4 要求同跑 `player-map-assertion-A4.json`（`map` + `source_kind/source_cmd/source_value/by`），
+  ③ 阈值在**缺来源**或**断言的 map 与证据 `profile.player_map` 不一致**时判 **UNDECIDABLE**；§5 已点名。
+- 备注：`card_window` 那条路不走 `-PlayerMap`，不受此影响。
 
 ### P13 G2 的「本检出产物」只到 path+mtime，不含内容一致性
 
