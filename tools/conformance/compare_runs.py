@@ -1215,7 +1215,8 @@ def ignore_rule_census(counts, shapes, rules):
     """`ignore` 规则的**每侧计数 + 形态**普查（卡 openmir2-ignore-rule-count-compare）。
 
     `counts` = {"oracle": {ident: n}, "rust": {...}}；`shapes` = 同形，值是
-    {"param,tag,series": n}（见 `IGNORE_SHAPE_FIELDS`）。只统计**真的剔了帧**的规则
+    {"param,tag,series|<body_sha256>": n}（见 `IGNORE_SHAPE_FIELDS` 与 `_ignore_shape_key`）。
+    只统计**真的剔了帧**的规则
     （任一侧 hit > 0）；每条给两侧计数、差值、计数是否相等、形态是否相等，
     以及规则自身的 `pending`（`approved_by` 以 PENDING 开头）。
 
@@ -1240,7 +1241,10 @@ def ignore_rule_census(counts, shapes, rules):
             "delta": o_n - r_n,
             "counts_equal": o_n == r_n,
             "shape_equal": o_s == r_s,
-            "shape_fields": list(IGNORE_SHAPE_FIELDS),
+            # F7（review 后 follow-up）：形态**实际**还含 body_sha256——只报
+            # param/tag/series 会让「体不同」的差额显示成「形态（param/tag/series）不同」，
+            # 而这三项完全相同 ⇒ 误导排障的人。
+            "shape_fields": list(IGNORE_SHAPE_FIELDS) + ["body_sha256"],
             "shapes": {"oracle": dict(sorted(o_s.items())),
                        "rust": dict(sorted(r_s.items()))},
         })

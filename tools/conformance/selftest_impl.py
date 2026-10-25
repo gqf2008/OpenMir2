@@ -1537,6 +1537,14 @@ class Selftest(object):
                    rc == 2 and bool(mism6) and mism6[0].get("counts_equal") is True
                    and mism6[0].get("shape_equal") is False,
                    (rc, mism6))
+        # F7（follow-up）：报告与报错串必须**如实**列出形态含 body_sha256，
+        # 否则「体不同」会被读成「param/tag/series 不同」（而三项完全相同）。
+        self.check("牙g 形态字段如实报 body_sha256（shape_fields 含 body_sha256、"
+                   "undecidable.detail 也点名）",
+                   bool(mism6)
+                   and "body_sha256" in (mism6[0].get("shape_fields") or [])
+                   and "body_sha256" in (mism6[0].get("detail") or ""),
+                   (mism6[:1],))
 
     def t_masked_missing(self, o, r):
         # 46 的 param 被规则掩码；只给一侧 => 不能静默跳过（CH-4）

@@ -20,6 +20,8 @@ reviewer-2 当年的保留条件是「**直到 fixedhide 卡落地 或 工具加
   - `frames.ignored_counts = {"oracle": {"14": n}, "rust": {...}}`；
   - `frames.ignored_rule_census[*]`：`{ident, action, approved_by, pending, oracle, rust, delta,
     counts_equal, shape_equal, shape_fields, shapes:{oracle:{...}, rust:{...}}}`；
+    `shape_fields` **如实**列出 `param/tag/series` + **`body_sha256`**（follow-up F7：
+    只报前三级会让「体不同」被读成「param/tag/series 不同」，而这三项完全相同）；
   - 终端摘要每个有命中的规则打一行（`ident=14 oracle=1 rust=1 delta=+0 shape=same => counted`）。
 - **形态（④d 加强项）**：`IGNORE_SHAPE_FIELDS = ("param", "tag", "series")` **+ `body_sha256`**，
   每条规则按「形态串 → 次数」**多重集**比较（键 = `"param,tag,series|<body_sha256>"`，
@@ -57,13 +59,15 @@ reviewer-2 当年的保留条件是「**直到 fixedhide 卡落地 或 工具加
 - **牙e（F6）**：两侧各 3 帧、总数相同、分布**互换**（`{1×2,2×1}` vs `{1×1,2×2}`）⇒ **rc 2**
   ——锁住「只比 distinct 集合」的退化（变异实测：把 `o_s == r_s` 改成 `set(o_s) == set(r_s)` ⇒ 牙e 红）；
 - **牙f（F2）**：计数与头部形态相同但 **body 不同** ⇒ **rc 2**（形态含 `body_sha256`；
-  变异实测：把形态键里的 body 去掉 ⇒ 牙f 红）。
+  变异实测：把形态键里的 body 去掉 ⇒ 牙f 红）；
+- **牙g（F7）**：同一例里 `shape_fields` 与 `undecidable.detail` 都必须点名 `body_sha256`
+  （变异实测：`shape_fields` 退回只报 `param/tag/series` ⇒ 牙g 红——报错串会误导成「三项不同，而它们相同」）。
 
 守护「ignore 真在剔帧」的既有牙不变且仍绿：把 14 改回 `compare` ⇒ rc 1；
 已批准 ignore 下多出的 14 ⇒ rc 0 且 `ignored` 记 1 条；
 内置 14 为 PENDING 且两侧不同量（1 vs 0）⇒ 仍 rc 2（这正是牙c 的真实形态）。
 
-`python -I -B tools/conformance/compare_runs.py selftest` ⇒ **321/321 GREEN**（改动前 316/316）。
+`python -I -B tools/conformance/compare_runs.py selftest` ⇒ **322/322 GREEN**（改动前 316/316）。
 
 ## 4. 残余风险（登记，不隐瞒）
 
@@ -74,7 +78,10 @@ reviewer-2 当年的保留条件是「**直到 fixedhide 卡落地 或 工具加
    写明「形态未含 recog」**，否则读文档的人会以为 recog 也受保护。
 2. ~~body 不参与~~（**已修**，reviewer-20 F2）：`body_sha256` 现在进形态多重集，
    因此「同量同头、体不同」会红；仍未比的是 body **内容本身的可读差异**（只比哈希）。
-3. **形态相等 ≠ 逐帧同源**：两侧各剔 1 帧 SM_HIT，也可能是「不同时刻、不同来源」的两帧；
+3. **形态是顺序无关的多重集**（reviewer-21 N1，登记）：同一组形态、**顺序互换** ⇒ `rc 0`，
+   不会触发 UNDECIDABLE。对 14 这类「被剔除、不进有序对齐」的帧可辩护（它们本来就不参与序列比较），
+   但要知道：剔帧的**相对顺序差异**只能靠 `census` 的形态分布观察，不是判据。
+4. **形态相等 ≠ 逐帧同源**：两侧各剔 1 帧 SM_HIT，也可能是「不同时刻、不同来源」的两帧；
    本判据保证的是**量级 + 头部形态 + body 哈希多重集**一致，不是逐帧同源。
 4. **跨侧巧合**：两侧都因随机支触发同一 ident 时计数可能偶然相等（应然情况）；若一侧随机支触发、
    另一侧因 bug 多打帧，计数大概率不等就会被抓；但**理论上**存在「多打一次 + 少打一次」相互抵消的
@@ -84,7 +91,11 @@ reviewer-2 当年的保留条件是「**直到 fixedhide 卡落地 或 工具加
 
 - **真机复跑（⑥）**：W1 的 n=4 `dice_chain_auto`（应转为 PASS/FAIL 可判）与 n=8 `move_walk`
   （应给出可读差异）——机器由 tester 排期（本卡不占窗口）。
-- **ident 14 转正（⑤）**：计数牙已绿，但 `rules.json` 里 14 仍保持 PENDING。
+- **ident 14 转正（⑤）—— 已由 Leader 裁定「不转正」（2026-10-25，master `0f172ee7c`）**：
+  reviewer-21 第二意见实测——计数/形态比较**只对 PENDING 生效**；一旦转正，「形态不等」也只进
+  census、verdict 仍可绿 ⇒ **保持 PENDING 反而更严**。所以 `rules.json` 的 14 **不动**，
+  原 ⑤ 作废；`docs/rules-pending-adjudication-20261025.md` §6b 已记录该裁定与残余风险。
+  以下为原计划，保留作历史说明：
   转正要按 Leader 的裁定流程另出一份决定（并在 `rules.json` 的 note、
   `docs/rules-pending-adjudication-20261025.md` 里写明「转正依据 = 计数/形态比较已落地」并保留
   §4 的残余风险）。**本卡未擅自翻 `approved_by`**——那不是作者能自签的决定。
