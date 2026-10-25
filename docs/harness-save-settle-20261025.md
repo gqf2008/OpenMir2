@@ -121,7 +121,7 @@
 
 ## 5. 测试与牙
 
-- `card_window.py --selftest` ⇒ **424/424 GREEN**（本卡新增 `SETTLE1..19`，共 26 条含牙）；
+- `card_window.py --selftest` ⇒ **425/425 GREEN**（本卡新增 `SETTLE1..19`，共 27 条含牙）；
 - 牙（离线）：
   1. 未知键 / `window_ms>5000` / `quiet_ms>window_ms` / `poll_ms<50` / `enabled` 非 bool / `require_changes` 非 bool ⇒ 各一条拒；
   2. 静默判定四例（恒定、静默不足、变化后静默、持续变化）；
@@ -140,6 +140,9 @@
   7. **缺键落安全侧（F2 补）**：`settle` 不带 `require_changes` + 恒定指纹 ⇒ 必须 `rc=2
      no_change_observed`（不许静默降级放行）；
   8. **原始见证**：合法三列 ⇒ `samples[*].witness` 与 `witness_first/last` 逐字保留；
+     **空列必须留住**——`'\t1\tts'`（`LASTUPDATE` 为 NULL）⇒ `['', '1', 'ts']`，
+     不许因为 `.strip()` 把行首/行尾制表符吃掉而退化成 `witness=null`（`SETTLE17b`；
+     变异：把 `strip("\r\n")` 改回 `strip()` ⇒ 红）。正常行没有前后空白 ⇒ **sha256 与判定逐字节不变**；
      解析不了 ⇒ `witness=null` + `witness_error`，判据（整行 sha256）不受影响；
   9. **报错串用实际 `elapsed_ms`**：`no_change_observed` 里的「实际观测的 Nms」必须是真实
      经过的时间（< `window_ms`），不许拿窗口上限冒充「等满了」；
