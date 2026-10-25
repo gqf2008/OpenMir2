@@ -90,7 +90,7 @@
   - `openmir2-gm-target-state-write`（**R**）：Rust 侧 `@Level0` 一族 16 条 GM 命令是 no-op，挡着「靠 GM 改数值再验行为」的场景。
     **但 2026-10-25 复核出一条比「未实现」更要紧的事实：这些命令在 oracle 生产路径上本来就不可达。**
     `GetHumPermission` 全仓仅一个调用点且被注释（`PlayObject.cs:1188-1194`）⇒ `Permission` 永不被写，`StartPermission=0`；
-    部署 `Command.conf` 171 条命令里 **157 条 `PermissionMin=10`** ⇒ `say "@…"` 一律停在 `权限不够!!!`（Red 255/56）。
+    有效命令表 **185 条 = 180×`perm=10` + 5×`perm=0`**（`Command.conf` 的 171 个 `[Permission]` 键里只有 148 个被 loader 读，其余是死键；命令数三方一致 185 = oracle 属性类 = Rust `COMMANDS` = 有效表）⇒ `say "@…"` 只有那 5 条能进命令体，其余一律停在 `权限不够!!!`（Red 255/56）。
     唯一可达路径是脚本 `GMEXECUTE` 抬权（`ExecutionProcessingSys.cs:4938-4947`）。
     ⇒ **任何用聊天 `say` 驱动非零权限 GM 命令的场景/夹具都结构性地跑不出东西**，P21 只是第一个撞上的；
     本卡裁决改为「命令体 + 构造级牙 + 权限门等价真机判据（两侧都记拒绝）」，脚本夹具另卡。裁决 `4e95fd56`。
