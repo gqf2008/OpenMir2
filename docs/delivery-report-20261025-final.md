@@ -145,6 +145,7 @@
   | `E:/tmp/final-recheck/{orphan-mutations.json,gate-full-45.json,run3-list.txt}` | orphan 门禁卡证据 | `--inventory` 45 项、9/9 谓词变异、`--list` 对齐 |
   | `E:/tmp/dev1-patch/*.log` | Dir 卡门禁日志（clippy/fmt/msgcodegen/workspace） | 门禁 rc 的原始输出 |
   | `E:/tmp/window/reviewer-21-review/buckets.py` | R 卡分桶复算脚本（直调 goal_gate 纯函数、零 cargo） | ② 桶数字可复算；`goal_gate --skip-tests` 仍跑 cargo 的替代法 |
+  | `E:/tmp/smoke/`（301 MB） | 真客户端冒烟全套：`rust-root/`(282M，部署件副本，只按字节改 11 个 conf 的端口) + `logs/`(74K，六角色 out/err) + `hook/`(32K，五连接的 c2s/s2c 原始 bin + chunks.ndjson) + `shots/`(19M，25 阶段 19 张截图) + `port-status-{before,after-stop,restored}.txt` + `aaa-{before,after}.txt` | **证据**（`docs/smoke-real-client-20261025.md` 全篇引它）；`rust-root` 同时是下一轮冒烟/窗口的现成根，删了要重建 282M |
   | **本地保留分支 47 个**（`git branch`） | 每个含 ~1 个未进 master 的提交（合计 **48** 个），提交信息与 master 中已有特性同名（如 `feat(window): card_window 声明式窗口夹具`、`feat(castle-official)…`）⇒ 判为 **rebase 前快照**，内容应已被 master 的改写版覆盖 | **未删**：`git cherry` 报 `+`（patch-id 不等），**无法证明零损失**。逐条人工判后即可删；在此之前保留，避免「清干净了但丢了东西」 |
   | `E:/backup/openmir2-20261025.bundle` | **本地全量副本**（`git bundle create --all`，约 170 MB） | **内含 tip 与指纹现查**（`git bundle list-heads` / `sha256sum`），不写死；`bundle verify` = 「complete history」。**恢复须 `clone` + 显式 `fetch refs/collab/*`**——只 clone 会丢 10720 条 inbox。**挡 walgit 故障，挡不住磁盘故障** |
   > 生产侧当前核对（内容级，2026-10-25）：`M2GameSvr/Envir/MonGen.txt` = `e5c39fb7…`、`M2GameSvr/Server.conf` = `ce5e3ce9…`、`Envir/x.txt` 不存在、无 `.bak`/`.fixture-tmp` 残留。
