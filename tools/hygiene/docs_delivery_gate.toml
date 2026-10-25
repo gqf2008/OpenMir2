@@ -166,3 +166,7 @@ reason = "「一段散文是否仍然为真」无法通用机判（卡 known_lim
 [[unsupported_claims]]
 form = "需要真窗口 / 外部产物 / 网络的命令（goal_gate --full、run3 实跑、E:/tmp 产物哈希）"
 reason = "没有证据就不能判；本门在合并门上跑，不能起栈、不能依赖 E:/tmp"
+
+[[unsupported_claims]]
+form = "域外历史叙事文档里的过时数字（如 4 份旧报告仍写 `场景数 24（blocked 3 ⇒ 入批 21）`）"
+reason = "历史叙事文档不在判定域（它们引用的是当时的记录）——**本门 GREEN ≠ 全仓没有过时数字**，别把它当全仓保证"

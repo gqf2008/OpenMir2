@@ -15,6 +15,10 @@
   * 扫什么：`docs/delivery-*.md`、`docs/needs-human-*.md`、`docs/three-day-report-*.md`、
     `docs/rcard-*.md`——这些是 **owner 开窗前会照做的收口/清单文档**，其中的现在时断言会被**执行**。
     历史叙事文档**不在域内**：它们引用的是「当时的记录」，不是「现在的状态」（`--path` 可覆盖）。
+  * **rc 语义**：`1` = 证伪（文档确实错了）；`2` = **判不了**（git 失败 / 命令跑不起来 / 登记表 rot）。
+    git 自己失败（`cat-file` 的非「对象不存在」错误、`--is-ancestor` 的 rc>1、`ls-files` 失败）
+    一律走 `GitUnavailable` ⇒ rc=2，**绝不**降级成 findings——那会把「我没法判断」说成「你错了」。
+  * `command_output` 的 `argv[0]` 有白名单（bash/git/python/python3），且**禁 `bash -c`**。
   * 在哪跑：仓库根，只用只读 git 命令（`cat-file` / `merge-base --is-ancestor` / `ls-files` / `diff`）；
     `command_output` 里若 argv[0] 是裸 `bash`，本门会解析成 **Git bash 绝对路径**
     （Windows 上 System32 的 `bash.exe` 是 WSL stub，跑脚本 rc=1；找不到则 fail-closed）。
@@ -43,12 +47,17 @@
 **显式不支持（不假装覆盖，卡 `known_limits`）**
   * 「一段散文是否仍然为真」——**无法通用机判**，本门不做语义判断；
   * 需要网络 / 真窗口 / 外部产物的命令（没有证据就不能判）；
-  * 任意 shell 管道 / 重定向（除 `diff_empty` 的 `name_regex` 形态）；多命令串联。
+  * 任意 shell 管道 / 重定向（除 `diff_empty` 的 `name_regex` 形态）；多命令串联；
+  * **本门 GREEN ≠「全仓没有过时数字」**：域外的历史叙事文档（如仍写着
+    `场景数 24（blocked 3 ⇒ 入批 21）` 的 4 份旧报告）**不被检查**——「历史叙事不在判定域」
+    是刻意的，但别把本门的 GREEN 当成全仓保证。
   以上在登记表 `[unsupported_claims]` 里逐条写明，且**允许为空只是暂时的**——新增 claim 若不属于
   两种受支持形态，必须落进该表（本门会打印，不判红）。
 
 **登记表 rot 检测**（防止白名单变成垃圾桶）
-  * `[hex_allow]` 里的 oid 必须**仍被引用**且**仍是非 commit**；否则 rc=2；
+  * `[hex_allow]` 里的 oid 必须**仍被引用**；否则 rc=2。
+    （「仍是非 commit」**不复核**：git 对象不可变；而误登记的 commit 会先走祖先检查、
+    永远不会被标记 used ⇒ 同样命中这条 rot，不必另写一条。）
   * `[[non_ancestor_commits]]` 必须仍未合并（若已变成 HEAD 祖先 ⇒ 文档里的「未合并」已过时）⇒ rc=2；
   * `[external_paths]` 登记的路径必须**仍然不存在**（若出现了 ⇒ 该登记过期）⇒ rc=2；
   * `[[claims]]` 的 anchor 必须仍在文档里，且对应命令必须能跑通。
@@ -82,6 +91,11 @@ DEFAULT_GLOBS = (
     "docs/rcard-*.md",
 )
 
+#: `command_output` 允许的 argv[0]（basename，小写）。白名单优先于「能跑就跑」：
+#: 登记表是仓库内文件，但它也可能被一次坏 PR 改掉——不能让门变成任意命令执行入口。
+ALLOWED_ARGV0 = frozenset(("bash", "bash.exe", "git", "git.exe", "python", "python.exe",
+                           "python3", "python3.exe"))
+
 HEX_RE = re.compile(r"`([0-9a-f]{7,40})`")
 HEX_HAS_LETTER_RE = re.compile(r"[a-f]")
 PATH_RE = re.compile(r"(?<![\w/])((?:docs|tools|mir2-rs|src)/[0-9A-Za-z_.\-/*]*)")
@@ -91,6 +105,14 @@ PATH_TRAIL = ".,;:!?)]}>'\"`，。；：！？）】》、"
 
 class GateError(Exception):
     """用法错 / 登记表问题（rc=2）。"""
+
+
+class GitUnavailable(GateError):
+    """git 自己失败 ⇒ **判不了**（rc=2）。
+
+    review ba964a07 N1：`cat-file` 的 rc≠0 与 `merge-base --is-ancestor` 的 rc>1 不能当成
+    「对象不存在 / 不是祖先」——那会把「我没法判断」说成「你文档错了」（findings, rc=1）。
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +155,16 @@ def git(repo, *args):
 
 
 class GitCache:
-    """`cat-file -t` / `merge-base --is-ancestor` 的记忆化（同一 oid 在文档里出现很多次）。"""
+    """`cat-file -t` / `merge-base --is-ancestor` 的记忆化（同一 oid 在文档里出现很多次）。
+
+    **rc 语义（review ba964a07 N1）**：`cat-file` 只有在 git 明确说「对象不存在」时才算
+    `None`（= 证伪）；其它非零 rc（仓库坏了 / GIT_DIR 指错 / 磁盘问题）一律 `GitUnavailable`
+    （= 判不了，rc=2）。`merge-base --is-ancestor` 的 `0=祖先 / 1=不是祖先` 是**答案**，
+    `2+` 是**判不了**。绝不能把环境抖动报成「文档引了野 oid」。
+    """
+
+    #: git 各版本对「对象确实不存在」的文案（小写匹配）。
+    _MISSING_MARKERS = ("not a valid object name", "invalid object name", "bad object")
 
     def __init__(self, repo):
         self.repo = repo
@@ -143,14 +174,28 @@ class GitCache:
     def kind(self, oid):
         if oid not in self._kind:
             r = git(self.repo, "cat-file", "-t", oid)
-            self._kind[oid] = r.stdout.strip() if r.returncode == 0 else None
+            if r.returncode == 0:
+                self._kind[oid] = r.stdout.strip()
+            else:
+                err = ((r.stderr or "") + (r.stdout or "")).lower()
+                if any(m in err for m in self._MISSING_MARKERS):
+                    self._kind[oid] = None
+                else:
+                    raise GitUnavailable(
+                        "git cat-file -t %s 失败（rc=%d）：%s —— 这是**判不了**（环境/仓库问题），"
+                        "不是「文档引了野 oid」" % (oid, r.returncode, err.strip()[:200]))
         return self._kind[oid]
 
     def is_ancestor(self, oid, ref="HEAD"):
         key = (oid, ref)
         if key not in self._anc:
-            self._anc[key] = git(self.repo,
-                                 "merge-base", "--is-ancestor", oid, ref).returncode == 0
+            r = git(self.repo, "merge-base", "--is-ancestor", oid, ref)
+            if r.returncode not in (0, 1):
+                raise GitUnavailable(
+                    "git merge-base --is-ancestor %s %s 失败（rc=%d）：%s —— 判不了，"
+                    "不是「不是祖先」" % (oid, ref, r.returncode,
+                                        (r.stderr or "").strip()[:200]))
+            self._anc[key] = r.returncode == 0
         return self._anc[key]
 
 
@@ -245,12 +290,18 @@ def check_hex(repo, docs, registry, cache):
     rot = []
     for oid in sorted(allow - used_allow):
         rot.append("hex_allow 里的 `%s` 未被任何交付文档引用（白名单过期）" % oid)
+    # N4：若某个登记已经并入 HEAD，只报「已是祖先」那条（可操作：更新文档 + 删/刷登记）；
+    # 同时再报「未被引用」会把人引去删登记、而不是改文档。
+    now_anc = {(e["oid"], e["file"]) for e in registry.get("non_ancestor_commits", [])
+               if cache.kind(e["oid"]) == "commit" and cache.is_ancestor(e["oid"])}
     for (oid, path) in sorted(non_anc - used_non_anc):
+        if (oid, path) in now_anc:
+            continue
         rot.append("non_ancestor_commits 里的 `%s`@%s 未被引用（白名单过期）" % (oid, path))
-    for e in registry.get("non_ancestor_commits", []):
-        if cache.kind(e["oid"]) == "commit" and cache.is_ancestor(e["oid"]):
+    for entry in registry.get("non_ancestor_commits", []):
+        if (entry["oid"], entry["file"]) in now_anc:
             rot.append("non_ancestor_commits 里的 `%s`@%s 已是 HEAD 祖先 ⇒ 文档里的「未合并」过时了"
-                       % (e["oid"], e["file"]))
+                       "（更新文档后删除/刷新该登记）" % (entry["oid"], entry["file"]))
     return findings, rot
 
 
@@ -371,7 +422,17 @@ def check_claims(repo, docs, registry):
                            ", ".join(files[:5]) + (" …" if len(files) > 5 else ""))))
         elif kind == "command_output":
             argv = list(claim["argv"])
-            if os.path.basename(argv[0]).lower() in ("bash", "bash.exe") and not os.path.dirname(argv[0]):
+            base0 = os.path.basename(argv[0]).lower()
+            if base0 not in ALLOWED_ARGV0:
+                rot.append("claim %s：argv[0]=%r 不在白名单 %s ⇒ 拒绝执行"
+                           "（防登记表变成任意命令入口）"
+                           % (cid, argv[0], sorted(ALLOWED_ARGV0)))
+                continue
+            if base0 in ("bash", "bash.exe") and any(
+                    a in ("-c", "--command") for a in argv[1:]):
+                rot.append("claim %s：禁 `bash -c`（会绕过 argv 白名单跑任意 shell）" % cid)
+                continue
+            if base0 in ("bash", "bash.exe") and not os.path.dirname(argv[0]):
                 bash = detect_git_bash()
                 if not bash:
                     rot.append("claim %s：本机找不到 Git bash（裸 `bash` 是 WSL stub）——"
@@ -442,8 +503,17 @@ def resolve_docs(repo, paths, registry):
 
 
 def check(repo, docs, registry):
+    wt = git(repo, "rev-parse", "--is-inside-work-tree")
+    if wt.returncode != 0 or wt.stdout.strip() != "true":
+        raise GitUnavailable(
+            "git 不可用（`rev-parse --is-inside-work-tree` rc=%d：%s）⇒ **判不了**（rc=2）；"
+            "本次不产出任何 findings" % (wt.returncode, (wt.stderr or "").strip()[:200]))
+    ls = git(repo, "ls-files")
+    if ls.returncode != 0:
+        raise GitUnavailable("git ls-files 失败（rc=%d）：%s ⇒ 判不了（rc=2）"
+                             % (ls.returncode, (ls.stderr or "").strip()[:200]))
     cache = GitCache(repo)
-    tracked = set(git(repo, "ls-files").stdout.splitlines())
+    tracked = set(ls.stdout.splitlines())
     findings, rot = [], []
     for fn in (lambda: check_hex(repo, docs, registry, cache),
                lambda: check_tables(docs),
@@ -551,6 +621,9 @@ def selftest():
         g("commit", "-q", "-am", "side")
         side = g("rev-parse", "HEAD")
         g("checkout", "-q", "master")
+        # fixture 守卫：切回失败会让 `side` 变成 HEAD 祖先，表现为 HEX-1/HEX-7 间歇红
+        # （review ba964a07 观察到的「3 次里 1 次」形态）⇒ 这里显式钉住，别让它伪装成检查缺陷。
+        assert g("rev-parse", "--abbrev-ref", "HEAD") == "master", "fixture：必须切回 master"
         # HEAD 上再提交一次（只改 docs/tools ⇒ 便于 diff_empty 用例）
         with open(os.path.join(tmp, "docs", "tracked.md"), "w", encoding="utf-8") as fh:
             fh.write("base2\n")
@@ -589,10 +662,37 @@ def selftest():
         chk(any("hex_allow" in x and "未被" in x for x in r), "HEX-5 白名单 rot ⇒ rc=2")
         f, r = run([("docs/delivery-x.md", "ref `deadbeef`\n")], base_reg)
         chk(any(x["check"] == "hex-missing" for x in f), "HEX-6 解析不到的 oid ⇒ hex-missing")
+        # 缺失但已登记（本仓真实形态：fold/GC 后的协作条目 b42f20a8）⇒ 绿，且不能变成 rot。
+        # 删掉 missing 分支里的 `used_allow.add(oid)` ⇒ 白名单会被判「未被引用」⇒ 本条红。
+        f, r = run([("docs/delivery-x.md", "ref `deadbeef`\n")],
+                   dict(base_reg, hex_allow={"items": ["deadbeef"]}))
+        chk(not f and not r, "HEX-11 缺失但已登记 ⇒ 绿（不再报 hex-missing、也不算白名单 rot）")
         f, r = run([("docs/delivery-x.md", "ref `%s`\n" % side[:9])],
                    dict(base_reg, non_ancestor_commits=[
                        {"oid": side[:9], "file": "docs/delivery-x.md", "reason": "未合并"}]))
         chk(not f and not r, "HEX-7 已登记的未合并 head ⇒ 绿")
+        # K1（review 83645e5f）：`[[non_ancestor_commits]]` 的两条 rot 分支各一颗牙。
+        # 无牙时「某 head 合入后文档仍写未合并」会被静默放过——正是本门要防的方向。
+        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % c1[:9])],
+                   dict(base_reg, non_ancestor_commits=[
+                       {"oid": c1[:9], "file": "docs/delivery-x.md",
+                        "reason": "fixture：登记的其实是祖先"}]))
+        chk(any("已是 HEAD 祖先" in x for x in r),
+            "HEX-8 登记的「未合并 head」其实已并入 ⇒ rot（文档「未合并」过时）")
+        f, r = run([("docs/delivery-x.md", "no refs here\n")],
+                   dict(base_reg, non_ancestor_commits=[
+                       {"oid": side[:9], "file": "docs/delivery-x.md",
+                        "reason": "fixture：登记了但文档不再引用"}]))
+        chk(any("未被引用" in x for x in r),
+            "HEX-9 登记的未合并 head 未被任何文档引用 ⇒ rot（白名单过期）")
+        # N4（review ba964a07）：已并入 HEAD 的登记若同时「未被引用」，**只报可操作的那条**
+        # （「已是祖先 ⇒ 更新文档 + 删/刷登记」），不要再报「未被引用」把人引去删登记。
+        f, r = run([("docs/delivery-x.md", "no refs here\n")],
+                   dict(base_reg, non_ancestor_commits=[
+                       {"oid": c1[:9], "file": "docs/delivery-x.md",
+                        "reason": "fixture：已并入且文档不再引用"}]))
+        chk(any("已是 HEAD 祖先" in x for x in r) and not any("未被引用" in x for x in r),
+            "HEX-10 已并入 + 未被引用 ⇒ 只报「已是祖先」（N4 不误导）")
 
         # ---- A2 表格：fenced code / /* */ / 内联代码 里的 `|` 不算 ----
         good = "| a | b |\n|---|---|\n| 1 | 2 |\n"
@@ -603,12 +703,18 @@ def selftest():
         f, _ = run([("docs/delivery-x.md",
                      "| a | b |\n|---|---|\n| 1 | 2 |\n```\n| x | y | z |\n```\n")], base_reg)
         chk(not f, "TBL-3 fenced code 里的 `|` 不算")
+        # 真正的**多行块**（review 83645e5f K2：旧用例通过的原因不对——那行不以 `|` 开始，
+        # 且 `/*` 与 `*/` 同行 ⇒ `in_block` 从未置真）。这里块在**表行末尾**打开，块内两行都以
+        # `|` 开头且列数不同 ⇒ 消费分支或 `/*` 检测分支任一失效，两行都会成组并判红。
         f, _ = run([("docs/delivery-x.md",
-                     "| a | b |\n|---|---|\n/* | x | y | z | */\n| 1 | 2 |\n")], base_reg)
-        chk(not f, "TBL-4 /* */ 包住的表格行跳过")
+                     "| a | b | /*\n| 1 | 2 | 3 |\n| 4 | 5 |\n*/\n| 9 | 8 |\n")], base_reg)
+        chk(not f, "TBL-4 多行 /* */ 块（块在表行末尾打开、块内两行列数不等）整块跳过")
         f, _ = run([("docs/delivery-x.md",
                      "| a | b |\n|---|---|\n| `x | y` | 2 |\n")], base_reg)
         chk(not f, "TBL-5 内联代码里的 `|` 不算")
+        f, _ = run([("docs/delivery-x.md",
+                     "| a | b |\n|---|---|\n| x \\| y | 2 |\n")], base_reg)
+        chk(not f, "TBL-6 单元格里的 `\\|` 是转义，不算分隔符")
 
         # ---- A3 路径 ----
         f, _ = run([("docs/delivery-x.md", "见 `docs/tracked.md`\n")], base_reg)
@@ -665,7 +771,98 @@ def selftest():
             "kind": "shell_pipe", "base": c1[:9]}])
         f, r = run([("docs/delivery-x.md", "print\n")], reg9)
         chk(any("未知 kind" in x for x in r), "CLAIM-6 不支持的形态 ⇒ rot（不假装覆盖）")
+        # N2（review ba964a07）：argv 白名单 + 禁 `bash -c`（防登记表变成任意命令入口）。
+        reg10 = dict(base_reg, claims=[{
+            "id": "evil", "file": "docs/delivery-x.md", "anchor": "print",
+            "kind": "command_output", "argv": ["cmd.exe", "/c", "echo 1"], "expect": "1"}])
+        f, r = run([("docs/delivery-x.md", "print\n")], reg10)
+        chk(any("不在白名单" in x for x in r), "CLAIM-7 argv[0] 不在白名单 ⇒ rot（拒绝执行）")
+        reg11 = dict(base_reg, claims=[{
+            "id": "shellc", "file": "docs/delivery-x.md", "anchor": "print",
+            "kind": "command_output", "argv": ["bash", "-c", "echo 1"], "expect": "1"}])
+        f, r = run([("docs/delivery-x.md", "print\n")], reg11)
+        chk(any("bash -c" in x for x in r), "CLAIM-8 `bash -c` ⇒ rot（绕过白名单）")
+        # N1 同型：claim 的 git 命令自己失败（比如 base 写错）⇒ **判不了**（rot），不是「断言过时」。
+        reg12 = dict(base_reg, claims=[{
+            "id": "badbase", "file": "docs/delivery-x.md",
+            "anchor": "git diff --name-only deadbeef HEAD", "kind": "diff_empty",
+            "base": "deadbeef", "head": "HEAD"}])
+        f, r = run([("docs/delivery-x.md", "git diff --name-only deadbeef HEAD\n")], reg12)
+        chk(any("跑失败" in x for x in r) and not f,
+            "CLAIM-9 claim 的 git 跑失败 ⇒ rot（判不了），不产出 findings")
         chk(len(head) == 40, "fixture：HEAD 是完整 oid")
+
+        # ---- N1（review ba964a07）：git 自己失败 ⇒ **判不了**（rc=2），不是 findings（rc=1） ----
+        # 三条**互不替代**的牙：cat-file 失败 / merge-base rc=2 / 整体 git 挂。
+        import contextlib
+        import io
+        real_git = globals()["git"]
+        doc_ref = [("docs/delivery-main.md", ["ref `%s`" % c1[:9]])]
+
+        def run_with(stub):
+            globals()["git"] = stub
+            try:
+                try:
+                    check(tmp, doc_ref, base_reg)
+                    return None
+                except GateError as ex:
+                    return str(ex)
+            finally:
+                globals()["git"] = real_git
+
+        def cat_file_broken(repo, *args):
+            if args and args[0] == "cat-file":
+                return subprocess.CompletedProcess(list(args), 128, "",
+                                                   "fatal: unable to read tree (corrupt)")
+            return real_git(repo, *args)
+
+        err = run_with(cat_file_broken)
+        chk(err is not None and "判不了" in err,
+            "N1a `cat-file` 非「对象不存在」失败 ⇒ 判不了（不降级成野 oid）")
+
+        def merge_base_broken(repo, *args):
+            if args and args[0] == "merge-base":
+                return subprocess.CompletedProcess(list(args), 2, "", "fatal: bad revision")
+            return real_git(repo, *args)
+
+        err = run_with(merge_base_broken)
+        chk(err is not None and "判不了" in err,
+            "N1b `merge-base --is-ancestor` rc=2 ⇒ 判不了（不是「不是祖先」）")
+
+        def all_broken(repo, *args):
+            return subprocess.CompletedProcess(list(args), 128, "",
+                                               "fatal: not a git repository (or any parent)")
+
+        regfile = os.path.join(tmp, "reg-main.toml")
+        with open(regfile, "w", encoding="utf-8") as fh:
+            fh.write('[domain]\nglobs = ["docs/delivery-main.md"]\n'
+                     '[hex_allow]\nitems = []\n')
+        with open(os.path.join(tmp, "docs", "delivery-main.md"), "w", encoding="utf-8") as fh:
+            fh.write("ref `%s`\n" % c1[:9])
+        globals()["git"] = all_broken
+        try:
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                rc_n1 = main(["--repo", tmp, "--registry", regfile])
+            chk(rc_n1 == 2 and "RED " not in buf.getvalue(),
+                "N1c main()：git 全挂 ⇒ rc=2 且**没有** RED 行（不把判不了说成文档错）")
+        finally:
+            globals()["git"] = real_git
+
+        # ---- rc 语义：1 = 证伪 / 0 = 绿（配合 N1 的 2 = 判不了） ----
+        with open(os.path.join(tmp, "docs", "delivery-main.md"), "w", encoding="utf-8") as fh:
+            fh.write("| a | b |\n|---|---|\n| 1 | 2 | 3 |\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc_bad = main(["--repo", tmp, "--registry", regfile])
+        chk(rc_bad == 1 and "RED   table-pipes" in buf.getvalue(),
+            "RC-1 有 findings ⇒ rc=1（证伪）")
+        with open(os.path.join(tmp, "docs", "delivery-main.md"), "w", encoding="utf-8") as fh:
+            fh.write("nothing here\n")
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc_ok = main(["--repo", tmp, "--registry", regfile])
+        chk(rc_ok == 0 and "GREEN" in buf.getvalue(), "RC-2 干净 ⇒ rc=0（绿）")
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

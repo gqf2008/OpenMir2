@@ -92,7 +92,7 @@ REGISTRY = [
     ("gm_gate_check", ["tools/window/gm_gate_check.py", "selftest"], False),
     ("tool_selftest_gate", ["tools/hygiene/tool_selftest_gate.py", "--selftest"], False),
     # 卡 `openmir2-docs-delivery-gate`：交付文档的结构性门（hex / 表格 / 路径 / 命令期望值）。
-    # 自测 25 项、离线、临时 git 仓库；<2s。
+    # 自测 38 项、离线、临时 git 仓库；<2s。
     ("docs_delivery_gate", ["tools/hygiene/docs_delivery_gate.py", "--selftest"], False),
 ]
 

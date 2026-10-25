@@ -908,7 +908,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 **收哪些、不收哪些**（`--inventory` 可看全量）：**只要自带 selftest 且能离线判红，就收**——不按
 「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛。Leader 2026-10-25 裁定：
 **「一次性 / 人工使用 / 别域」都不是合法出域理由**，只有「**需要交互式输入、外部产物或真实环境**」才算。
-出域仅 **5** 项（50 = 45 门内 + 5 出域 + 0 未分类），逐项有实跑证据：
+出域仅 **5** 项（**51 = 46 门内 + 5 出域 + 0 未分类**；`docs_delivery_gate` 接入后由 50/45 变来），逐项有实跑证据：
 
 | 出域项 | 真实原因（实跑证据） |
 |---|---|
@@ -918,11 +918,11 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 | `conformance/selftest_impl.py` | 无独立 CLI 入口（`--selftest` 空转 rc=0、无输出）；它是 `compare_runs selftest` 的实现模块，已被 compare_runs 覆盖 |
 | `db-parity/newchr_delchr_selchr_probe.py` | 需要真实 MySQL 与建/删/选角色状态（真机） |
 
-**本机实测（2026-10-25，45 项）**：
+**本机实测（2026-10-25；下表除「清点」行外是 45 项快照，「清点」行与「变异自证」行已更新到 `docs_delivery_gate` 接入后的 46 项）**：
 
 | 项 | 结果 |
 |---|---|
-| 全量 | **绿 45 / 红 0 / 跳过 0，rc=0，120s**（`E:/tmp/final-recheck/gate-full-45.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 18.0s，其余 ≤2s） |
+| 全量 | **绿 46 / 红 0 / 跳过 0，rc=0**（`docs_delivery_gate` 接入后复跑；旧 45 项快照 `gate-full-45.json` 与 100–120s 口径沿用，本轮未单独计时）（`E:/tmp/final-recheck/gate-full-45.json`；上一版 43 项本机 89s、reviewer-21 冷跑 101s ⇒ 机器/冷热相关，按 **100–120s** 记；`card_window` 36.7–40.3s、`mir2_probe` 29.4s、本门自测 18.0s，其余 ≤2s） |
 | 本门自测 | `--selftest` **16/16**（假·绿/假·红/一绿一红/`--skip` 打印 `SKIP`/`--only`/未知条目 rc=2 ×2/挂住项/总墙钟/兜底/隐藏开关 ×2/未分类 rc） |
 | 清点 | **51** 个带 selftest 的工具：门内 **46** / 已分类出域 **5** / **未分类 0**（`--inventory` 未分类>0 ⇒ rc=2，M3）。**卡 `openmir2-docs-delivery-gate` 接入后**由 50/45/0 变为 51/46/0；本行是活口径，上一版快照的 45 项实测数据见同表其余行 |
 | 变异自证 | 门注册项 **47/47**（46 项 + 门自身进程树变异；`mutations-proof.log`；`docs_delivery_gate` 接入后由 46/46 变为 47/47）；另本卡谓词级否证 **7/7**（5 条 blocked 判据 + `--inventory` rc + gm 判据；`orphan-mutations.json`） |
