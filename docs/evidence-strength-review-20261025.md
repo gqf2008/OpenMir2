@@ -74,6 +74,10 @@ W-MQ-1 的 `643→767→44→645→5008`。这些帧是**状态同步**，断言
 | `bag_equip` / `eat_item` 的历史跑 | 全部 | 夹具 `ani_count` 在 `062d6beb5`（12:02）才修 | **必须重跑** |
 | `move_walk` / `login_only` 的 `characters.Home*` | 全部 | home 卡（`openmir2-home-coords-divergence`，head `45a6b377e`）**尚未合并** | 合并后重跑 DB 面 |
 
+> **DB 面复跑的复现工具（已入 master，2026-10-25）**：清单 `tools/window/db-rerun-scenarios.json`（6 条场景，每条 `--profile tools/window/profiles/db_rerun.json`）+ 专用 profile `tools/window/profiles/db_rerun.json`（`compare_extra: --ignore-idents 14`）。
+> 用法：`WINDOW_MANIFEST=tools/window/db-rerun-scenarios.json bash tools/window/run_batch.sh --list` ⇒ `场景数 6（blocked 0 ⇒ 入批 6）`；起跑去掉 `--list` 即可。
+> 来源：临时分支 `card/db-rerun`（**已删除**；以 `openmir2-db-rerun-salvage` 逐字节搬运入 master）。**这里不写来源 commit sha**——分支删除后它不可达、写下来就是悬空引用；以 blob `1f71011b43d0` / `47116dd2e614` 作内容寻址锚点（这两个 blob 在 master 里，可 `git cat-file -p` 复核）。
+
 ### 3C 判据本身的弱项（已开卡，落地前不要拿它当证据）
 
 - `SM_GAMEGOLDNAME(5008)`：现判据 `min_count:1, match:any` **无字段** ⇒ 登录帧就能满足。实证：三个证据根
