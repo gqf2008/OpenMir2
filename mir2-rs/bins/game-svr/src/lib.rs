@@ -37504,7 +37504,7 @@ break
         "DenyChrNameLogon",
         "+jip",
         "+-jid",
-        "ShowDenyCharNameLogon",
+        "ShowDenyChrNameLogon",
         "+-jip",
         // 重载/管理（14）
         "LoadAdmin",
@@ -37576,7 +37576,7 @@ break
             // 4 参才轮到 `@params[3]`。
             ("@+jip 1.2.3.4 a b 1", 0xFFDB, "1.2.3.4已加入禁止登录IP列表"),
             ("@+-jid", 0xFFDB, "禁止登录帐号列表为空。"),
-            ("@ShowDenyCharNameLogon", 0xFFDB, "禁止登录角色列表为空。"),
+            ("@ShowDenyChrNameLogon", 0xFFDB, "禁止登录角色列表为空。"),
             ("@+-jip", 0xFFDB, "禁止登录角色列表为空。"),
         ];
         for (line, param, text) in cases {
