@@ -1933,6 +1933,69 @@ fn apply_pending_gm_entity(
     }
 }
 
+/// **`@Level0` 的 `HasLevelUp(1)` 落地**（卡 `openmir2-gm-target-state-write`）。
+///
+/// oracle `ChangeLevelCommand.Execute`（`ChangeLevelCommand.cs:23-24`）：写完 `Abil.Level` 后
+/// **当场** `HasLevelUp(1)`（`PlayObject.cs:5242-5252`）= `Abil.MaxExp = GetLevelExp(level)` +
+/// `RecalcLevelAbilitys()` + `RecalcAbilitys()` + `SendMsg(RM_LEVELUP)`（泵发 45/52/752 三帧）。
+/// 命令体自身零 SysMsg、零帧。
+///
+/// **写读同一 id**（与 `Dir` 卡的教训同族）：实体写用 `GmEntityState.actor_id`
+///（= `OnlineEntry.actor_id`），会话按 `chr_name` 取；两者不一致时**以会话 id 为准**并记 WRN，
+/// 避免把等级写到另一个 actor 上。
+fn apply_pending_level_up(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    need_exps: &[i32],
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> bool {
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        return false;
+    };
+    let Some(level) = sg.gm.pending_level_up.take() else {
+        return false;
+    };
+    if let Some(st) = sg.gm.pending_entity.as_mut() {
+        if st.level.is_some() && st.actor_id != sg.actor_id {
+            glog!(
+                "WRN",
+                "@Level0：OnlineEntry.actor_id={} 与会话 actor_id={} 不一致 ⇒ 实体写改按会话 id",
+                st.actor_id,
+                sg.actor_id
+            );
+            st.actor_id = sg.actor_id;
+        }
+    }
+    // `Abil.Level = (byte)MIN(255, n)`（命令体已按 unchecked 截断）；随后 `HasLevelUp(1)`。
+    //
+    // **源在 `sg.equip.abil`（oracle `PlayObject.Abil`），`wabil` 是派生值**：`recalc_abilitys`
+    // 以 `inputs.abil`（= `sg.equip.abil`）为基，只改 `wabil.level` 会被重算覆盖 ⇒ 必须写源，
+    // 再让重算把 `level/max_exp` 带进派生值。
+    sg.equip.abil.level = level;
+    // `Abil.MaxExp = GetLevelExp(Abil.Level)`（`PlayObject.cs:5244`；本仓登录期同源，
+    // 见 `refresh_login_max_exp`）。
+    sg.equip.abil.max_exp =
+        mir2_formula::exp::get_level_exp(need_exps, mir2_data::models::MAX_LEVEL, i32::from(level));
+    let max_exp = sg.equip.abil.max_exp;
+    // `RecalcLevelAbilitys()` + `RecalcAbilitys()`：本仓 `recalc_abilitys_with_prior` 内部
+    // 先跑等级派生（`level_ability_base`）再叠装备/加成，与 oracle 同序。
+    recalc_session_ability(sg, catalog, None, None);
+    // 实体侧：`level` 已由 `GmEntityState::apply` 写入；`max_exp` 这里补（oracle 是同一个
+    // `PlayObject`，战斗经验读 `Abil.MaxExp`）。
+    if let Some(e) = world.entities.get_mut(sg.actor_id) {
+        e.level = level;
+        e.max_exp = max_exp;
+    }
+    if let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) {
+        let client_layout = game_svr::smframe::client_layout_enabled();
+        send_levelup_frames(sg, entry, gates, client_layout);
+    }
+    true
+}
+
 /// **卡 `openmir2-gm-impl-smake`**：把 `@改属性` 的待落地佩戴位写
 /// （[`gmcmd::GmSession::pending_use_item`]）落到会话 + 世界实体，按 oracle `RecalcAbilitys()`
 /// 重算 WAbil，并返回 `SM_UPDATEITEM(203)` 的帧体。
@@ -15972,6 +16035,50 @@ fn drain_levelup_healthspell_with_magic(
     }
 }
 
+/// `RM_LEVELUP` 泵分支（`PlayObject.Message.cs:1670-1677`）的三条**直连**帧：
+/// `SM_LEVELUP` → `SM_ABILITY`（带 `EncodeMessage(WAbil)` 尾）→ `SM_SUBABILITY`。
+///
+/// **顺序是多帧判据的承重点**：升级路径（[`drain_levelup_downlink`]）与 `@Level0`
+/// （[`apply_pending_level_up`]）共用本函数 ⇒ 任何顺序改动都会同时体现在两处，不会再各写一份漂移。
+///
+/// 取值源全在会话侧：`sg.state.wabil`（exp/level/WAbil 尾）、`sg.state.gold`、`sg.equip.job`、
+/// `sg.game_gold`、`sg.sub`。
+fn send_levelup_frames(
+    sg: &SessionGround,
+    entry: &OnlineEntry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    client_layout: bool,
+) {
+    let send = |body: Vec<u8>| {
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "升级回帧") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+    };
+    send(game_svr::smframe::sm_levelup(
+        sg.state.wabil.exp,
+        sg.state.wabil.level,
+    ));
+    send(game_svr::smframe::sm_ability(
+        sg.state.gold,
+        sg.equip.job,
+        sg.game_gold,
+        &ability_tail(&sg.state.wabil, client_layout),
+    ));
+    let sb = sg.sub.to_frame_bytes();
+    send(game_svr::smframe::sm_subability(
+        sb[0],
+        u8::try_from(sb[1]).unwrap_or(0),
+        u8::try_from(sb[2]).unwrap_or(0),
+        u8::try_from(sb[3]).unwrap_or(0),
+        u8::try_from(sb[4]).unwrap_or(0),
+        u8::try_from(sb[5]).unwrap_or(0),
+        u8::try_from(sb[6]).unwrap_or(0),
+    ));
+}
+
 /// **D②（升级链下行 · 第 2 段 = `SM_LEVELUP(45)` / `SM_ABILITY(52)` / `SM_SUBABILITY(752)`）**：
 /// oracle `RM_LEVELUP` 处理器（`PlayObject.Message.cs:1670-1676`）在**出队到 `RM_LEVELUP` 时**
 /// 即时 `SendSocket` 三条 ⇒ 线上序固定在 44 **之后**、53 **之后**
@@ -15997,34 +16104,7 @@ fn drain_levelup_downlink(
         let Some(sg) = sessions.get_mut(&entry.chr_name) else {
             continue;
         };
-        let send = |body: Vec<u8>| {
-            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "升级回帧") {
-                let _ = tx.send(SimToGate::SendFrame {
-                    socket: entry.socket,
-                    body,
-                });
-            }
-        };
-        send(game_svr::smframe::sm_levelup(
-            sg.state.wabil.exp,
-            sg.state.wabil.level,
-        ));
-        send(game_svr::smframe::sm_ability(
-            sg.state.gold,
-            sg.equip.job,
-            sg.game_gold,
-            &ability_tail(&sg.state.wabil, client_layout),
-        ));
-        let sb = sg.sub.to_frame_bytes();
-        send(game_svr::smframe::sm_subability(
-            sb[0],
-            u8::try_from(sb[1]).unwrap_or(0),
-            u8::try_from(sb[2]).unwrap_or(0),
-            u8::try_from(sb[3]).unwrap_or(0),
-            u8::try_from(sb[4]).unwrap_or(0),
-            u8::try_from(sb[5]).unwrap_or(0),
-            u8::try_from(sb[6]).unwrap_or(0),
-        ));
+        send_levelup_frames(sg, entry, gates, client_layout);
     }
 }
 
@@ -21928,6 +22008,17 @@ fn sim_loop(
                         // 读的是 `Entity`。命令处理完在**同一事件内**把权威值落到实体，
                         // 仍在本次 `world.tick()` 之前 ⇒ 与 oracle「命令体直接写字段」同拍。
                         apply_pending_gm_entity(&mut ground_sessions, &chr_name, &mut world);
+                        // **卡 `openmir2-gm-target-state-write`**：`@Level0` 的 `HasLevelUp(1)`
+                        // 语义（MaxExp + 重算 + `RM_LEVELUP` 三帧）在同一事件内落地。
+                        apply_pending_level_up(
+                            &mut ground_sessions,
+                            &chr_name,
+                            &enter_cfg.catalog,
+                            &enter_cfg.need_exps,
+                            &mut world,
+                            &online,
+                            &gates,
+                        );
                         // **卡 `openmir2-gm-impl-smake`**：`@改属性` 的佩戴位写 + 重算 +
                         // `SM_UPDATEITEM(203)`（oracle 命令体内当场发 ⇒ 先于蓝字 100）。
                         if let Some(body) = apply_pending_gm_use_item(
@@ -36265,6 +36356,8 @@ break
         actor: i32,
         /// `@改属性` 的 `SendUpdateItem` 需要物品模板（`GetStdItem`）。
         catalog: game_svr::ability::StdItemCatalog,
+        /// `@Level0` 的 `MaxExp = GetLevelExp(level)` 数据源（`Exps.conf`；这里用常量表）。
+        need_exps: Vec<i32>,
     }
 
     impl GmRig {
@@ -36288,6 +36381,9 @@ break
                 sessions,
                 actor,
                 catalog: game_svr::ability::StdItemCatalog::new(),
+                // `GetLevelExp` 的索引上界是 255（`Grobal2.MaxLevel = byte.MaxValue`），
+                // 这里给 256 项常量表 ⇒ `level=255` 时取 `need_exps[255]`（不触发越界支）。
+                need_exps: vec![10i32; 256],
             }
         }
 
@@ -36323,6 +36419,17 @@ break
             // 与生产 `sim_loop` 的 `CM_SAY` 支同一步：命令体装填的权威写在**同一事件内**
             // 落到 `Entity`（卡 `openmir2-gm-admin-mode-entity-seam`）。
             apply_pending_gm_entity(&mut self.sessions, "aaa", &mut self.world);
+            // 与生产 `sim_loop` 的 `CM_SAY` 支同一步（卡 `openmir2-gm-target-state-write`）：
+            // `@Level0` 的 `HasLevelUp(1)` 语义在同一事件内落地并发 45/52/752。
+            apply_pending_level_up(
+                &mut self.sessions,
+                "aaa",
+                &self.catalog,
+                &self.need_exps,
+                &mut self.world,
+                &self.online,
+                &self.gates,
+            );
             // 卡 `openmir2-gm-impl-smake`（复审 important-2）：`SM_UPDATEITEM(203)` 先发
             // （oracle `SendDefMessage` 立即），GM 的蓝字 `SM_SYSMESSAGE(100)` 后发。
             if let Some(body) =
@@ -36379,6 +36486,55 @@ break
         let param = u16::from_le_bytes([body[6], body[7]]);
         let text = gbk_decode(&mir2_protocol::edcode::decode(&body[12..]));
         (param, text)
+    }
+
+    /// 卡 `openmir2-gm-target-state-write`：`@Level0` 逐行（`ChangeLevelCommand.cs:21-24`）。
+    ///
+    /// 牙：① `-1 ⇒ 255`、`300 ⇒ 255`（`(byte)HUtil32._MIN(MAXUPLEVEL=255, n)` 的 unchecked 回绕，
+    /// **不得先钳 0**）；② `0 ⇒ 0`、`7 ⇒ 7`；③ 成功路径恰发
+    /// `SM_LEVELUP(45) → SM_ABILITY(52) → SM_SUBABILITY(752)` 三条、顺序固定；
+    /// ④ `wabil.level` / `max_exp` / 实体 `level`·`max_exp` 四处一致；
+    /// ⑤ **只发给发起者**：第二个在线角色（socket 902）收不到任何帧
+    ///（`GmRig::say` 对任何非 901 socket 直接 panic）；
+    /// ⑥ 负例：**权限 0（现网生产值）** ⇒ 只回 1 条 `权限不够!!!`、会话与实体等级都不变。
+    #[test]
+    fn level0_writes_level_and_emits_three_levelup_frames_to_self_only() {
+        for (arg, want) in [("-1", 255u8), ("300", 255), ("0", 0), ("7", 7)] {
+            let mut rig = GmRig::new();
+            // 第二个在线角色：只用于证明「不广播」（任何发给 902 的帧会让 `GmRig::say` panic）。
+            online_set(&mut rig.online, entry("b", "bbb", 2, 0, 902, 999));
+            let frames = rig.say_gm(&format!("@Level0 {arg}"));
+            let idents: Vec<u16> = frames
+                .iter()
+                .map(|b| u16::from_le_bytes([b[4], b[5]]))
+                .collect();
+            assert_eq!(idents, vec![45, 52, 752], "arg={arg}：恰 45→52→752 三条");
+            let sg = &rig.sessions["aaa"];
+            assert_eq!(sg.state.wabil.level, want, "arg={arg} ⇒ level={want}");
+            assert_eq!(
+                sg.state.wabil.max_exp, 10,
+                "max_exp = GetLevelExp(level)（夹具 NeedExps 恒 10）"
+            );
+            let e = rig.world.entities.get(rig.actor).expect("实体");
+            assert_eq!(e.level, want, "实体 level 同步");
+            assert_eq!(e.max_exp, 10, "实体 max_exp 同步");
+        }
+        // 负例：权限 0（= 现网 `PlayObject.Permission`）⇒ 权限门拦下，命令体不执行。
+        let mut rig = GmRig::new();
+        let frames = rig.say("@Level0 7");
+        assert_eq!(frames.len(), 1, "只有 1 条 SM_SYSMESSAGE");
+        assert_eq!(u16::from_le_bytes([frames[0][4], frames[0][5]]), 100);
+        let (_param, text) = sysmsg_of(&rig, &frames[0]);
+        assert_eq!(
+            text, "权限不够!!!",
+            "CommandHelp.GameCommandPermissionTooLow"
+        );
+        assert_eq!(
+            rig.sessions["aaa"].state.wabil.level, 1,
+            "权限门 ⇒ 会话等级不变（夹具初值 1）"
+        );
+        let e = rig.world.entities.get(rig.actor).expect("实体");
+        assert_eq!(e.level, 1, "实体等级不变");
     }
 
     /// 帧头 `Ident`（12B 头：[0..4]=Recog、[4..6]=Ident）。

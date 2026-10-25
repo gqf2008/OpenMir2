@@ -1,0 +1,18 @@
+{
+  "name": "gm_level0_gate",
+  "description": "卡 `openmir2-gm-target-state-write` 的真机 G-gate：`say \"@Level0 <n>\"` 在**生产权限**（两侧 Permission 恒 0）下必然被权限门拦下。期望（逐侧）：① 恰 1 条 `SM_SYSMESSAGE(100)`，正文 `权限不够!!!`、`Param = MakeWord(Red 255, RedB 56) = 65336`；② **零** `SM_ADDITEM(200)` / `SM_DELITEM(202)` / `SM_WEIGHTCHANGED(622)` / `SM_LEVELUP(45)` / `SM_ABILITY(52)` / `SM_SUBABILITY(752)`；③ 跑前后 `characters_ablity.Level` 逐字节相同。判据机判器：`tools/window/gm_gate_check.py`。oracle 依据：`ChangeLevelCommand.cs:10`（PermissionMin=10）+ `GameCommand.cs:37`（权限门）+ `CommandHelp.GameCommandPermissionTooLow`（`权限不够!!!`）+ `PlayObject.cs:1188-1194`（`GetHumPermission` 唯一调用点被注释 ⇒ Permission 恒 0）。**本场景不依赖命令体实现**：未实现与已实现两侧都必须在权限门被拦（反向对照）。",
+  "params": {
+    "level_arg": 5
+  },
+  "steps": [
+    {
+      "say": "@Level0 5",
+      "note": "CM_SAY(2000)。oracle 链：`ProcessUserLineMsg`（`PlayObject.Chat.cs:234` 起 try）→ `CommandSystem.Execute`（`:171`）→ `ExtractCommandAndParameters`（`:228-253`，只 split 空格）→ `CommandMaps` 命中 → `GameCommand.Handle`（`:29-48`）先过 `Permission < PermissionMin(10)` ⇒ 返回 `权限不够!!!`，**不进命令体**。"
+    },
+    {
+      "wait_for": 100,
+      "timeout_ms": 3000,
+      "note": "`SM_SYSMESSAGE(100)`（`CommandSystem.cs:191-194`：`Handle` 返回非空 ⇒ `PlayerActor.SysMsg(output, Red, Hint)`）。红字 Param = `MakeWord(255, 56)` = 65336（部署 `Server.conf` 的 RedMsgFColor/RedMsgBColor）。**本步不判条数/正文**——那由 `gm_gate_check.py` 机判。"
+    }
+  ]
+}
