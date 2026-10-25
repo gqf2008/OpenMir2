@@ -343,6 +343,10 @@ pub fn spawn_merchants_with_scripts(
                     let appr = e.merchant.as_ref().map_or(0, |m| m.appr);
                     displays.set(id, npc_display(e.ai.dir, e.race_img, appr, &name));
                 }
+                // **卡 `openmir2-castle-potion-buy-response`**：等价 oracle `Merchant.LoadNpcData`
+                // 末尾的一次性 `RefillGoods()`（`Merchant.cs:1070`）——挂图成功即把脚本 `[goods]`
+                // 装进在售货架；否则要等 `Run` 的 30s 计时支，进图几秒内 `645` 是空货架。
+                world.merchant_refill_goods_now(id);
                 if let Some(seed) = seed {
                     book.insert(MerchantNpc {
                         def: NpcDef {
@@ -402,6 +406,52 @@ mod tests {
 smith/repair 0 9 12 repairman 0 9 0\n\
 fengmo/smith 0139 16 20 smith 0 27 0\n\
 DB/script jiaren 1 1 dummy 0 3 0\n";
+
+    /// 卡 `openmir2-castle-potion-buy-response`：**调用点牙**——`spawn_merchants_with_scripts`
+    /// 必须在挂图成功后**逐商人**初始装货（等价 oracle `LoadNpcData` 末的 `RefillGoods()`）。
+    /// 牙：删掉挂图后的 `world.merchant_refill_goods_now(id)` 那一行 ⇒ 两个商人货架都空 ⇒ 红。
+    #[test]
+    fn spawn_with_scripts_fills_every_merchant_goods_list() {
+        use mir2_data::models::StdItem;
+        let dir = temp_envir("goods-init", MERCHANT_TXT);
+        let loader = loader_for(&dir);
+        let mut rng = RandomNumber::with_seed(42);
+        let (mut spawns, _, _seeds) = load_merchant_spawns(
+            &loader,
+            |name| match name {
+                "0" | "0139" => Some(0),
+                _ => None,
+            },
+            &mut rng,
+        )
+        .expect("装载不应失败");
+        for sp in spawns.iter_mut() {
+            sp.state.refill_goods = vec![MerchantGoods {
+                item_name: "potion".to_string(),
+                count: 2,
+                refill_time: 0,
+                refill_tick: 0,
+            }];
+        }
+        let mut world = mir2_world::World::new(64, 64);
+        // DuraMax 必须 >0：`AddItemToGoodsList` 对 `Dura == 0` 直接丢。
+        world.set_item_catalog(vec![StdItem {
+            name: "potion".to_string(),
+            price: 10,
+            dura_max: 10,
+            ..StdItem::default()
+        }]);
+        let mut displays = DisplayTable::new();
+        let (kept, failed, _book) =
+            spawn_merchants_with_scripts(&mut world, spawns, Vec::new(), &mut displays);
+        assert_eq!(kept, 2);
+        assert!(failed.is_empty());
+        for id in world.merchant_ids_sorted() {
+            let groups = world.merchant_goods_groups(id).expect("商人状态存在");
+            assert_eq!(groups.len(), 1, "每条 [goods] ⇒ 1 组（挂图后即装货）");
+            assert_eq!(groups[0].len(), 2, "组内条数 = 声明 count");
+        }
+    }
 
     /// O-1 正例：`FindMap` 命中 2 条、未命中 1 条（`jiaren` 被丢）⇒ `records=3, kept=2`。
     #[test]

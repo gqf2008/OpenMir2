@@ -82,7 +82,10 @@ pub const MERCHANT_RUN_DELAY_MAX: i32 = 1500;
 pub const MERCHANT_RUN_TICK_UNSET: i64 = i64::MIN;
 
 /// `Merchant.Run` 的补货间隔基数：`5 * 60 * 1000` ms（`Merchant.cs:119`）。
-pub const MERCHANT_REFILL_GOODS_INTERVAL_MS: i64 = 5 * 60 * 1000;
+/// `Merchant.Run` 的补货节拍：oracle `fb2824b6b` 起为 **30 秒**
+/// （`src/GameSrv/Npc/Merchant.cs:118-121`：`GetTickCount - RefillGoodsTick > 30000`），
+/// 且**没有** `ProcessRefillIndex * 500` 错峰。
+pub const MERCHANT_REFILL_GOODS_INTERVAL_MS: i64 = 30 * 1000;
 
 /// `Merchant.Run` 的武器升级清理间隔：`10 * 60 * 1000` ms（`Merchant.cs:126`）。
 pub const MERCHANT_CLEAR_EXPRE_UPGRADE_INTERVAL_MS: i64 = 10 * 60 * 1000;
@@ -92,9 +95,6 @@ pub const MERCHANT_TURN_RANDOM_MOD: i32 = 50;
 
 /// `Merchant.Run` 的转向方向：`RandomByte(8)`（`Merchant.cs:134`）。
 pub const MERCHANT_TURN_DIR_MAX: u8 = 8;
-
-/// `Merchant.Run` 的补货延时步长：`ProcessRefillIndex * 500` ms（`Merchant.cs:117`）。
-pub const MERCHANT_REFILL_DELAY_STEP_MS: i64 = 500;
 
 /// `Merchant` 脚本头 `(...)` 命令位（`ScriptFlagConst`；与 `crates/script::MerchantFlags` 同形）。
 ///
@@ -487,6 +487,28 @@ impl World {
         Some(&mut self.entities.get_mut(id)?.merchant.as_mut()?.goods_list)
     }
 
+    /// **初始装货**：等价 oracle `Merchant.LoadNpcData` 末尾的 `RefillGoods()`（`Merchant.cs:1070`）。
+    ///
+    /// 宿主在挂图成功后对每个商人调用一次。不加这一下，`Run` 的计时支要等
+    /// `RefillGoodsTick + MERCHANT_REFILL_GOODS_INTERVAL_MS`（ctor 把 tick 置 now）才首次补货，
+    /// 进图后几秒内 `UserSelectBuyItem` 读到**空货架** ⇒ `SM_SENDGOODSLIST(645)` `param=0/body=0`
+    /// （W1 实测 C# `param=7/143B` vs Rust `param=0/0`；卡 `openmir2-castle-potion-buy-response`）。
+    ///
+    /// sim 时钟与 oracle 墙钟的差：oracle 的 `goods.RefillTick` 缺省 0 而 `GetTickCount()` 是开机毫秒
+    /// （很大）⇒ 首次必然 due；本侧 `clock_ms` 从 0 起 ⇒ 需要把「从未补过」的条目视作 due
+    /// （把 `refill_tick` 调到刚好过门），否则初始装货会被计时门挡掉。
+    pub fn merchant_refill_goods_now(&mut self, id: i32) -> bool {
+        let now = self.clock_ms;
+        if let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+            for g in st.refill_goods.iter_mut() {
+                if g.refill_tick == 0 {
+                    g.refill_tick = now.saturating_sub(i64::from(g.refill_time) * 60 * 1000 + 1);
+                }
+            }
+        }
+        refill_goods(self, id)
+    }
+
     /// `Merchant.AddItemToGoodsList`（`Merchant.cs:1417`）：`Dura <= 0` 不收；否则
     /// `GetRefillList(Index)` 命中就 `Insert(0)`，未命中就新建组（组序 = 首次出现序）。
     pub fn merchant_add_item_to_goods_list(&mut self, id: i32, item: MerchantItem) {
@@ -494,6 +516,27 @@ impl World {
         if item.dura == 0 {
             return;
         }
+        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+            return;
+        };
+        match st
+            .goods_list
+            .iter_mut()
+            .find(|g| g.first().is_some_and(|it| it.index == item.index))
+        {
+            Some(group) => group.insert(0, item),
+            None => st.goods_list.push(vec![item]),
+        }
+    }
+
+    /// `Merchant.RefillGoodsItems`（`Merchant.cs:300-316`）：补货路径**无条件** `Insert(0)`。
+    ///
+    /// 与 [`World::merchant_add_item_to_goods_list`]（卖出回货架，`Merchant.cs:1417-1426`，
+    /// 对 `Dura <= 0` 直接 return）**不同**：补货**不过** `Dura` 过滤——冻结数据
+    /// `Market_Def/沙巴克/药店-0153.txt` 的 14 条 `[goods]` 里有 8 条 `DuraMax=0`
+    /// （包 13/14/15/16、超级金创药 17、超级魔法药 18、太阳水 23、强效太阳水 24），
+    /// 走带过滤的那条会静默丢掉 ⇒ `645` 会 `param=6` 而不是 C# 的 14。
+    pub fn merchant_refill_goods_items(&mut self, id: i32, item: MerchantItem) {
         let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
             return;
         };
@@ -766,8 +809,6 @@ pub struct MerchantRunOutcome {
     pub space_moved: bool,
     /// 本趟触发了补货（`RefillGoods` 有 due 条目且命中 `>` 分支）。
     pub refilled: bool,
-    /// 本趟补货门的 `dwDelayTick`（`ProcessRefillIndex * 500`；证据用）。
-    pub refill_delay_ms: i64,
 }
 
 /// `ProcessMerchants` 一趟的结果（`World::tick` 写进 [`crate::world::TickRecord`]）。
@@ -1490,21 +1531,18 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     let move_time = st.move_time;
     let move_tick = st.move_tick;
 
-    // `Merchant.cs:117-121`：`dwDelayTick = ProcessRefillIndex * 500`；`now < dwDelayTick ⇒ 0`。
-    let mut delay = i64::from(process_refill_index) * MERCHANT_REFILL_DELAY_STEP_MS;
-    if now < delay {
-        delay = 0;
-    }
-    if (now - refill_goods_tick) > MERCHANT_REFILL_GOODS_INTERVAL_MS + delay {
+    // oracle `fb2824b6b`：Run 门 = 30s，**没有** `ProcessRefillIndex * 500` 的错峰；
+    // `ProcessRefillIndex` 仍保留在状态里（脚本字段），但不再参与计时。
+    let _ = process_refill_index;
+    if (now - refill_goods_tick) > MERCHANT_REFILL_GOODS_INTERVAL_MS {
         if let Some(st) = world
             .entities
             .get_mut(actor_id)
             .and_then(|e| e.merchant.as_mut())
         {
-            st.refill_goods_tick = now + delay;
+            st.refill_goods_tick = now;
         }
         outcome.refilled = refill_goods(world, actor_id);
-        outcome.refill_delay_ms = delay;
     }
     // `Merchant.cs:126-131`：清理门（`ClearExpreUpgradeListData`）。
     //
@@ -1652,6 +1690,7 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
         .get(actor_id)
         .and_then(|e| e.merchant.as_ref())
         .map_or(0, |st| st.refill_goods.len());
+    let mut changed = false;
     for i in 0..len {
         let Some((item_name, count, refill_time, refill_tick)) = world
             .entities
@@ -1681,14 +1720,15 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
                     // `CheckItemPrice(nIndex)`（`ItemPriceList` 空 ⇒ no-op）。
                     for _ in 0..(target - n_refill_count) {
                         if let Some(item) = world.make_merchant_item_by_name(&item_name) {
-                            world.merchant_add_item_to_goods_list(actor_id, item);
+                            // oracle `RefillGoodsItems`：**无条件 Insert(0)**（不过 Dura 过滤）。
+                            world.merchant_refill_goods_items(actor_id, item);
                         }
                     }
-                    // oracle `return`（一次 Run 最多处理一条 `[goods]`）。
-                    return true;
+                    changed = true;
                 }
                 if target < n_refill_count {
                     world.merchant_del_items_from_end(actor_id, index, n_refill_count - target);
+                    changed = true;
                 }
             }
         }
@@ -1722,7 +1762,7 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
             }
         }
     }
-    false
+    changed
 }
 
 /// `BaseObject.MapRandomMove`（`BaseObject.cs:1235-1236`）的**两次初始取数**：
@@ -1876,6 +1916,121 @@ mod tests {
             map_id: 0,
             state: sample_state(),
         }
+    }
+
+    /// 卡 `openmir2-castle-potion-buy-response`：**初始装货**（oracle `Merchant.LoadNpcData`
+    /// 末尾的 `RefillGoods()`，`Merchant.cs:1070`）。
+    ///
+    /// 旧行为：`spawn_merchant` 后货架为空（只有 `Run` 的 30s 计时支会补）⇒ 进图几秒内
+    /// `SM_SENDGOODSLIST(645)` 是空货架。牙：把 `merchant_refill_goods_now` 的调用删掉/改成 no-op，
+    /// 本用例最后一个断言必红。
+    /// 卡 `openmir2-castle-potion-buy-response` **P2**：补货**不过** `Dura` 过滤。
+    ///
+    /// 用**真实药店分布**（`Market_Def/沙巴克/药店-0153.txt` 的 14 条 `[goods]`）：
+    /// 前 6 条模板 `DuraMax=1`（金创药/魔法药 小/中量、强效金/魔法药），
+    /// 后 8 条 `DuraMax=0`（金创药(小)包/魔法药(小)包/金创药(中)包/魔法药(中)包、
+    /// 超级金创药/超级魔法药、太阳水/强效太阳水）。
+    /// 若补货误走 `merchant_add_item_to_goods_list`（`Dura==0` 直接丢）⇒ 只剩 6 组 ⇒
+    /// 本断言（恰好 14 组）必红——reviewer-21 实测 `left: 6, right: 14`。
+    #[test]
+    fn merchant_refill_keeps_zero_dura_goods_groups() {
+        const DURA_ONE: [&str; 6] = [
+            "金创药(小量)",
+            "魔法药(小量)",
+            "金创药(中量)",
+            "魔法药(中量)",
+            "强效金创药",
+            "强效魔法药",
+        ];
+        const DURA_ZERO: [&str; 8] = [
+            "金创药(小)包",
+            "魔法药(小)包",
+            "金创药(中)包",
+            "魔法药(中)包",
+            "超级金创药",
+            "超级魔法药",
+            "太阳水",
+            "强效太阳水",
+        ];
+        let mut w = World::new(20, 20);
+        let mut catalog = Vec::new();
+        let mut refill = Vec::new();
+        for (names, dura_max) in [(DURA_ONE.as_slice(), 1u16), (DURA_ZERO.as_slice(), 0u16)] {
+            for name in names {
+                catalog.push(StdItem {
+                    name: (*name).to_string(),
+                    price: 10,
+                    dura_max,
+                    ..StdItem::default()
+                });
+                refill.push(MerchantGoods {
+                    item_name: (*name).to_string(),
+                    count: 3,
+                    refill_time: 0,
+                    refill_tick: 0,
+                });
+            }
+        }
+        w.set_item_catalog(catalog);
+        let mut sp = spawn_at(3, 4);
+        sp.state.refill_goods = refill;
+        let id = w.spawn_merchant(sp).expect("挂图成功");
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        assert_eq!(
+            w.merchant_goods_groups(id).expect("商人状态").len(),
+            14,
+            "真实药店 14 条 [goods]（6×DuraMax=1 + 8×DuraMax=0）必须成 14 组"
+        );
+    }
+
+    #[test]
+    fn merchant_refill_goods_now_fills_goods_list_at_spawn() {
+        let mut w = World::new(20, 20);
+        // 用两份**非零 DuraMax** 的药：`AddItemToGoodsList` 对 `Dura == 0` 直接丢，
+        // 首饰类模板（DuraMax=0）会被静默丢弃，测不出「补完所有条」。
+        w.set_item_catalog(vec![
+            StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "魔法药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+        ]);
+        let name1 = "金创药(小量)".to_string();
+        let name2 = "魔法药(小量)".to_string();
+        let mut sp = spawn_at(3, 4);
+        sp.state.refill_goods = vec![
+            MerchantGoods {
+                item_name: name1,
+                count: 3,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+            MerchantGoods {
+                item_name: name2,
+                count: 4,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+        ];
+        let id = w.spawn_merchant(sp).expect("可走格应挂图成功");
+        assert!(
+            w.merchant_goods_groups(id).expect("商人状态").is_empty(),
+            "旧行为：spawn 后货架为空"
+        );
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        // **量**的牙（不是 `!is_empty`）：两条 `[goods]` ⇒ 恰好两组，每组条数 = 声明 count。
+        // 若 `refill_goods` 里保留「补一条就 return」，这里会是 1 组 ⇒ 本断言必红。
+        let groups = w.merchant_goods_groups(id).expect("商人状态");
+        assert_eq!(groups.len(), 2, "两条 [goods] ⇒ 恰好两组");
+        assert_eq!(groups[0].len(), 3, "第 1 组条数 = 声明 count");
+        assert_eq!(groups[1].len(), 4, "第 2 组条数 = 声明 count");
     }
 
     #[test]
@@ -2458,25 +2613,58 @@ mod tests {
         );
     }
 
-    /// `RefillGoods` 计时：到期命中 `>` 分支 ⇒ 置 `RefillTick` 并（oracle `return`）
-    /// **一次 Run 最多补一件**；紧接着的第二次 Run 不再补。
+    /// `RefillGoods` 计时（oracle `fb2824b6b`）：到期命中 `>` 分支 ⇒ 置 `RefillTick`，
+    /// 并**一次 Run 补完所有 `[goods]` 条**（不再「补一条就 return」，也不再 5min/错峰）；
+    /// 紧接着的第二次 Run 不再补。
     #[test]
-    fn merchant_refill_once_per_run_and_advances_tick() {
+    fn merchant_refill_run_processes_all_goods_and_advances_tick() {
         let mut w = World::new(64, 64);
         w.rng = RandomNumber::with_seed(3);
-        w.item_catalog = vec![StdItem {
-            name: "金创药(小量)".to_string(),
-            price: 100,
-            ..StdItem::default()
-        }];
+        w.item_catalog = vec![
+            StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "魔法药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+        ];
         w.clock_ms = 0;
-        let a = w.spawn_merchant(spawn_at(6, 6)).expect("挂图成功");
-        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1; // 300001 > 300000
+        let mut sp = spawn_at(6, 6);
+        sp.state.refill_goods = vec![
+            MerchantGoods {
+                item_name: "金创药(小量)".to_string(),
+                count: 2,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+            MerchantGoods {
+                item_name: "魔法药(小量)".to_string(),
+                count: 2,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+        ];
+        let a = w.spawn_merchant(sp).expect("挂图成功");
+        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
         set_run_tick_stale(&mut w, a);
         let out = merchant_run(&mut w, a);
         assert!(out.refilled, "到期应命中补货");
+        // `Merchant.cs` 注释里的「14 种商品 70 分钟」正是「补一条就 return」的后果；这里钉死
+        // 「一次 Run 补完所有条」。
+        assert_eq!(
+            w.merchant_goods_groups(a).expect("商人状态").len(),
+            2,
+            "两条 [goods] 必须一次补完 ⇒ 两组"
+        );
         let st = w.entities.get(a).unwrap().merchant.as_ref().unwrap();
         assert_eq!(st.refill_goods[0].refill_tick, w.clock_ms, "补货门推进");
+        assert_eq!(st.refill_goods[1].refill_tick, w.clock_ms, "第二条也推进");
         // 同一时刻再来一次：补货门不满足 ⇒ 不补（oracle 口径）。
         set_run_tick_stale(&mut w, a);
         assert!(!merchant_run(&mut w, a).refilled, "同一 tick 不重复补货");
@@ -2836,7 +3024,8 @@ mod tests {
             ..StdItem::default()
         }];
         let id = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
-        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
+        // 夹具 `[goods]` 的 `RefillTime=5`（分钟）⇒ 逐条门是 5min；Run 门 30s 只负责「多久检查一次」。
+        w.clock_ms = 5 * 60 * 1000 + 1;
         set_run_tick_stale(&mut w, id);
         let out = merchant_run(&mut w, id);
         assert!(out.refilled, "到期应补货");
@@ -2866,9 +3055,9 @@ mod tests {
         for i in 0..7 {
             w.merchant_add_item_to_goods_list(id, item(1, 100 + i, 5));
         }
-        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
+        w.clock_ms = 5 * 60 * 1000 + 1; // 夹具 `[goods]` 的 RefillTime=5min
         set_run_tick_stale(&mut w, id);
-        // oracle `<` 支不 `return`（继续循环）⇒ `refilled` 为 false，库存被删到目标 5。
+        // 旧实现 `<` 支不 `return` ⇒ `refilled` 为 false；现在 `refilled` 反映「有任何变动」。
         let _ = merchant_run(&mut w, id);
         assert_eq!(w.merchant_goods_count(id, 1), 5, "删到目标 5 件");
     }
