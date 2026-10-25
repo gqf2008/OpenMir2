@@ -107,7 +107,7 @@
   | `openmir2-gm-script-fixture`（A1 示范） | `card_window.py --profile tools/window/profiles/gm_script_level0.json --scenario gm_script_level0.json --out …` | **每侧 `characters_ablity.Level == 5`（期望值，不是两侧相等）** + 帧面 `45→52→752` 逐字段 + A2 权限门对照同轮复跑 | 需 `files` 夹具注入（已合 `d9a0dd2fe`），~3 分钟 |
   > **用法订正（2026-10-25 复核）**：`--profile` 的取值是**内置 profile 名**（`alt` / `window-magic` / `window-testdb`，`card_window.py:460`）**或一个 `.json` 路径**；`--profile alt.json` 这种写法**不存在该文件**（`tools/window/profiles/` 下只有 `bag_equip` / `butch_monsters` / `castle_tax_upgrade` / `eat_item` 等派生件）。GM 那行用内置 `alt`，Dir 那行用现存的 `E:/tmp/window/butch-run/profile.json`。
   > 为什么列出来：这四项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
-  > softclose 那张的 **A1（展示表）已在 `9224c2ebd` 合并**；**A2 组队归 `makeghost`**（成员关系挂团长实体 `party.rs:428-456` + 退组时点晚 ~402ms）。**关闭前还差 4 项**（`merge_result 19dd38e4`）：两项真机 + 两颗牙（F1 world/host 优先级无牙；**F2 接线点无牙——删掉 `:22704` 调用后 1505 全绿**）。
+  > softclose 那张已分三次落地：**A1（展示表）`9224c2ebd`** → **F1/F2 两颗牙 + K1 `bd1a03c5e`**（`close_cleanup_residue` 接缝、既有锚按「顺序 + 四容器逐个点名」两件独立承重改写、三态行为牙、调用点锚）；**A2 组队归 `makeghost`**（成员关系挂团长实体 `party.rs:428-456` + 退组时点晚 ~402ms）。**K1 教训**：调用点锚原本只剥 `//` ⇒ 把调用整块 `/* … */` 注释掉（一行未删）测试仍全绿，**5 个字符摘掉了整个修复**；现 `strip_rust_comments` 同时剥 `//` 与块注释（含跨行、保留换行），且**仓库级同形写法（`castle_insertion_tests::strip_line_comments`）一并修**。**关闭前还差三项**：① 真机展示表内容 ② 观察者客户端（另卡 `a3f97eda`）③ **`openmir2-kick-display-residue`**（issue `d482e428`：顶号路径 `drain_kicks` 签名无 `displays` 且提前摘 `ground_sessions` ⇒ 同一残留）。
 
 - **临时物清单（DoD 要求：清掉或登记；下列均**保留**，因为它们是证据）**：
   | 路径 | 是什么 | 为什么留 |
