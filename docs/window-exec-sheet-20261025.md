@@ -2,7 +2,7 @@
 
 - 卡：`openmir2-window-exec-sheet`（tier L，owner `openmir2-dev-2`，branch `card/window-exec-sheet`，base `14ec2e943`）。
 - 定位：**owner 开窗当天照着做的单页**。数据来源（不复制原文，只指回）：
-  `docs/window-closure-ledger-20261025.md`（台账 9 行）、`tools/window/run3-scenarios.json`（**23 条，含 2 条 blocked**）、
+  `docs/window-closure-ledger-20261025.md`（台账 9 行）、`tools/window/run3-scenarios.json`（**24 条，含 2 条 blocked**）、
   `docs/window-kit-coverage-20261025.md` §2（P0/P1 缺口）、`docs/window-runbook-20261023.md` **§0.5（开窗前 60 秒自查）/ §6**、`docs/delivery-acceptance-runbook-20261025.md` §2/§3。
 - **红线**（每条都在源文档有出处）：不跑 `E:/MirServer/start-all.ps1`、不用 `start-all -Stop`（会连 mysqld 一起停）、
   不假设任何未复算字段（含 `cleared`）、**登记型 PASS ≠ 已有真机证据**。
@@ -16,7 +16,7 @@
 | 2b | 城表对齐 | preflight 的 `castle_list_symmetry` 必须 OK（两侧含 `M2GameSvr-hook` 影子内容/sha256 一致） | 不一致 ⇒ 按 `window-runbook` §0.9 用 `Copy-Item` 对齐（W-TAX-2 需两城 `0,1`），**不碰 `E:/MirServer`**；否则城堡税/多城项必假红 |
 | 2c | 影子=基线 | preflight 的 `envir_shadow_symmetry` 必须 OK（`csharp-root/M2GameSvr/Envir` vs `M2GameSvr-hook/Envir` vs `rust-root` 逐文件 sha256；实测 642 文件 0 差异） | 不一致 ⇒ 用基线 Envir 覆盖影子（或删影子 `GameSvr.exe` 让部署重建）；否则 `--rng-log` 窗口会用被改过的 oracle 脚本（内容冻结风险） |
 | 2d | 写后复核（G-2） | 夹具应用后/收工后**重跑 preflight**（或比对基线/影子 sha）；preflight 是**写前**检查，绿 ≠ 运行期一致（runbook §0.9） | 任一 Envir/影子 sha 变化 ⇒ 先还原再到 2c；`--rng-log` 下夹具必须同时写基线+影子（G-1） |
-| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 23（blocked 2 ⇒ 入批 21）`**，#21/#22 标 `YES` | 数量不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ 清单行的 `blocked` 字段被动过 |
+| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 24（blocked 2 ⇒ 入批 22）`**（**以开窗当天实况为准**；blocked 数随卡收口会变），#21/#22 标 `YES` | 数量不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ 清单行的 `blocked` 字段被动过 |
 | 4 | 门禁基线 | `python -I -B tools/goal/goal_gate.py --skip-tests --json`（全量版需低负载时段） | 红 ⇒ 先修再开窗（`window-runbook` §6） |
 
 > blocked 语义（已实测）：**blocked 场景只在 `--list` 标注、不进批次**；普通批次自动跳过并打印 `blocked B ⇒ 入批 N−B`；

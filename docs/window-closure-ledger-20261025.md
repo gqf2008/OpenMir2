@@ -36,7 +36,7 @@
 
 ## 2. W 项与计划轮次对齐（acceptance ②）
 
-- **W1（场景数以 `run_batch --list` 实况为准；现 23 条、blocked 2 ⇒ 入批 21）覆盖结论**：本 6 张**没有一张能被 W1 完整覆盖**——#2 的 `login_only` 是既有角色登录（W-LF-1 需 `CM_NEWCHR`/手工建号）；#3 的 GAMEPOINT 需新场景、`@back` 为部署非目标。W1 只提供「既有角色进图」腿（#2 的部分）与 `npc_script_chain` 语境（#3 的相邻腿，不含 `@back`）。
+- **W1（场景数以 `run_batch --list` 实况为准；**W1 当时** 23 条、blocked 2 ⇒ 入批 21；**当前为 24/2/22**）覆盖结论**：本 6 张**没有一张能被 W1 完整覆盖**——#2 的 `login_only` 是既有角色登录（W-LF-1 需 `CM_NEWCHR`/手工建号）；#3 的 GAMEPOINT 需新场景、`@back` 为部署非目标。W1 只提供「既有角色进图」腿（#2 的部分）与 `npc_script_chain` 语境（#3 的相邻腿，不含 `@back`）。
 - **W2（新场景/夹具第一批）**：#1 商税（castle 税场景）、#3 GAMEPOINT（单卡新场景）、#4 CLEARMAPMON（GM/脚本路径）。
 - **W3（夹具/不可达第二批）**：#5 T-127（`castle_zone`）、#6 DROPGOLD/BUTCH（drop 场景）。
 - **追加 3 行的轮次**：#7/#8 归 **W3**（castle fixture / 城主注入未解封）；#9 归 **W3**（帧序桶）。
