@@ -20,7 +20,7 @@
 4. **TZ-1 会话时区**（`059babb83`）+ **硬化**（`6286d3666`）：sqlx 默认 `+00:00` vs C# `SYSTEM` ⇒ 同刻落库差 8h；改为贴 oracle，并把时间列见证从「全域 presence 豁免」改成**逐列登记 + 限定本角色行 + 窗口 `[start−600s, end+600s]`**，缺 `db.time_columns` 键 ⇒ rc 2（fail-closed）。
 5. **`rules.json` 判据裁定**（`721ea45b8`）：53 条 PENDING ⇒ **50 转正 / 3 保留**（10/14/50），主标志保持保守口径；`ignore` 规则加**形态多重集比较**（`e335578bc`），**ident 14 裁定保持 PENDING**（转正会取消「形态不等 ⇒ UNDECIDABLE」的兜底）。
 6. **夹具与场景**：`fixtures.monsters` 改**前插**（`6f35b049f`，追加到 39020/3081 行表尾在窗口内永远轮不到）；`inventory_replace/drop`；`#14/#15` 迁到 replace（修的是「**发现的输入源**」：`SM_BAGITEMS(201)` 里没该物品 ⇒ 变量推不出）；`discovery` 改 `name:/pos:` 确定性寻址；probe 加 `track` 寻靶与 `@last_kill_xy` 运行期令牌。
-7. **两处真实行为差异修复**：`SM_SKELETON(33)` 非首刀必发（收官帧是 637）；**商人挂图空货架**（oracle `LoadNpcData` 末 `RefillGoods()`；Rust 只在 30s+ 计时支，且走过 `Dura==0` 过滤的路径 ⇒ 14 条 `[goods]` 只得 6 组）。
+7. **两处真实行为差异修复**：`SM_SKELETON(33)` 不是每刀都发（**637 也只是无条件回帧、不判成功**——见卡 `openmir2-butch-637-criterion-fix`）；**商人挂图空货架**（oracle `LoadNpcData` 末 `RefillGoods()`；Rust 只在 30s+ 计时支，且走过 `Dura==0` 过滤的路径 ⇒ 14 条 `[goods]` 只得 6 组）。
 
 ### 真机结果（今日）
 

@@ -1,6 +1,6 @@
 {
   "name": "butch_two_draws",
-  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位；收官帧 `SM_BUTCH(637)`（33 需 BodyLeathery<=0，`PlayObject.Operate.cs:731-738`）。两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**当前缺口 = 选靶规则**（`nearest` 先选最近再要求相邻；真机 5 次全 StepFailed，由卡 `openmir2-probe-track-target-adjacency` 修），详见 `blocked`。`params.target_xy` 现仅作**历史落点记录**：profile `butch_monsters` 已在玩家周围 8 格铺 32 只鸡，选靶与夹具都不再依赖它。",
+  "description": "W-DG-2：`CM_BUTCH`（`Messages.cs:57`，`=1007`）屠宰到骨架的两抽流位。oracle：`PlayObject.Message.cs:830` ⇒ `ClientGetButchItem(**charId**, nX, nY, btDir)`（`Operate.cs:702`）⇒ 场景发 `recog=@last_kill_actor`、`param=@last_kill_x`、`tag=@last_kill_y`（**Recog 是 ActorId，不是坐标**）。**判据 = RNG 账本恰 2 条**（`PlayObject.Operate.cs:722` 的 `Random(16)+5` 与 `:723` 的 `Random(201)+100` 各 1 条，site 归属该两行）；`SM_BUTCH(637)` 只作**伴随**证据——`Operate.cs:749` 在函数尾部**无条件**发（只有速度门 `return false` 会跳过）⇒ **637 不判成功**；`SM_SKELETON(33)` 仅在 `BodyLeathery<=0` 时发，作加强项。 两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`（R 片 `a3bf5340f`）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**选靶已修**（`openmir2-probe-track-target-adjacency`：相邻优先）；剩余 = 用新字段映射跑一次真机并核对账本两抽，见 `blocked`。",
   "params": {
     "self_pos": 21627210,
     "target_xy": 21692746,
@@ -9,8 +9,8 @@
     "takeon_where": 1
   },
   "blocked": {
-    "reason": "**已解：前置插入生效**（原缺口 = MonGen 追加到表尾：3081 行 × RegenMonstersTime=200ms ≈ 616s，且部署 `ProcessMonsterMultiThreadLimit` 未配=1 ⇒ 60s 内轮不到追加行；前置插入卡 `6f35b049f` 已合）。**装备腿已绿**：`CM_TAKEONITEM(1003, recog=5001)` → **`SM_TAKEON_OK(615)`** 实测命中（Dc>0）。**当前缺口 = 选靶规则**：`track: nearest:鸡` 先选最近、再要求八向相邻；真机轮 5 次里 nearest 分别落在 4 格 / 2 格 / **玩家同格** ⇒ `StepFailed`。正由卡 `openmir2-probe-track-target-adjacency` 修（相邻优先 + 等不到时列出坐标与距离）。修好后跑：寻靶击杀 → `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本。未打通前不得声称可跑。",
-    "missing_fixture": "① 选靶修复合入后（相邻优先）跑真机三段：寻靶击杀（刷出/命中扣血/死亡三段分记）→ `CM_BUTCH(@last_kill_xy)` → `SM_BUTCH(637)` → 两抽账本；② 装备腿已绿，**不必重复证明**；③ 账本限时 ≤5 分钟并当场裁剪；④ 收官判据是 637（33 需 BodyLeathery<=0）。"
+    "reason": "**已解**：前置插入（原缺口 3081 行 × 200ms ≈ 616s、`ProcessMonsterMultiThreadLimit` 未配=1；卡 `6f35b049f`）。**装备腿已绿**（`SM_TAKEON_OK(615)` 实测）。**选靶已修**（相邻优先，实验轮 `kill=dead`、`matched_ident=34`）。**当前缺口 = 字段映射与判据**：原稿把 `recog` 当尸体坐标发，实测账本 `max=16` 0 条 ⇒ 两抽从未发生；**判据 = RNG 账本恰 2 条**（`PlayObject.Operate.cs:722` 的 `Random(16)+5` 与 `:723` 的 `Random(201)+100` 各 1 条，site 归属该两行）；`SM_BUTCH(637)` 只作**伴随**证据——`Operate.cs:749` 在函数尾部**无条件**发（只有速度门 `return false` 会跳过）⇒ **637 不判成功**；`SM_SKELETON(33)` 仅在 `BodyLeathery<=0` 时发，作加强项。 修好后重跑一次真机核对账本两抽。未打通前不得声称可跑。",
+    "missing_fixture": "① 用新字段映射（recog=@last_kill_actor/param=@last_kill_x/tag=@last_kill_y）跑真机；② **判据看账本**：`Operate.cs:722/723` 的 site 各 1 条（637 只作伴随、33 只在 BodyLeathery<=0 时作加强）；③ 账本限时 ≤5 分钟并当场裁剪；④ 装备腿不必重复证明。"
   },
   "placement": {
     "map": "0",
@@ -51,16 +51,16 @@
     {
       "send": {
         "ident": 1007,
-        "recog": "@last_kill_xy",
-        "param": 0,
-        "tag": 0
+        "recog": "@last_kill_actor",
+        "param": "@last_kill_x",
+        "tag": "@last_kill_y"
       },
-      "note": "`CM_BUTCH(1007)`：`recog=MakeLong(尸体X,尸体Y)`（`PlayObject.Message.cs:829-831`）必须是尸体格——寻靶击杀后尸体不一定在 `params.target_xy`，故用运行期令牌 `@last_kill_xy`（kill 成功时写入；未成功/未执行即引用 ⇒ fail-closed）。"
+      "note": "`CM_BUTCH(1007)`：字段映射按 `PlayObject.Message.cs:830` ⇒ `ClientGetButchItem(**charId**, nX, nY, btDir)`；场景用 `recog=@last_kill_actor`（**ActorId**）、`param=@last_kill_x`、`tag=@last_kill_y`。旧稿把 `recog` 当成 `MakeLong(x,y)` 是错的（真机轮账本 0 抽反证）。"
     },
     {
       "wait_for": 637,
       "timeout_ms": 3000,
-      "note": "`SM_BUTCH(637)`（`Messages.cs:299`）：屠宰成功的回帧，**本链收官帧**。**不要等 `SM_SKELETON(33)`**：`PlayObject.Operate.cs:731-738` 只有 `BodyLeathery <= 0` 时才置 `Skeleton=true` 并发 `RM_SKELETON`，而每次屠宰随机扣 5–20 ⇒ 首刀远到不了 0，33 **不是每刀必发**。超时 = 没有可屠宰的尸体/被速度门挡（死亡帧已到 ⇒ 与「打了没死」可区分）"
+      "note": "`SM_BUTCH(637)`：**只是「请求被受理并回帧」**——`Operate.cs:749` 的 `SendRefMsg(RM_BUTCH,…)` 在函数尾部**无条件**发送（仅速度门会跳过），**不能单独作判据**；要看 RNG 账本两抽（`Operate.cs:722/723`）。"
     },
     {
       "sleep": 500,

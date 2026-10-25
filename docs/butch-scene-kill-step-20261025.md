@@ -9,7 +9,7 @@
 |---|---|---|
 | 活体夹具（`fixtures.monsters`） | **已落地** | `card_window.py:3339-3367` 的 `profile_fixtures`；`docs/window-fixture-corpse-20261025.md` §2/§3（写 MonGen 行 `map x y name 0 count 360`，**第 7 列 ZenTime=360>0**；`=0` 会被两端解析器丢弃） |
 | C# 栈 RNG 接线 | **已落地** | `15dbbe843`（`start-csharp.ps1` + `RngSeedHook.dll` + `MIR2_RNG_SITE`） |
-| `CM_BUTCH(1007)` 两段帧 | 参数口径已写死 | `butch_two_draws.json`：`recog=MakeLong(X,Y)` → `SM_SKELETON(33)` → `SM_BUTCH(637)`（`PlayObject.Message.cs:829-831`、`Messages.cs:199/299`） |
+| `CM_BUTCH(1007)` 两段帧 | 参数口径已写死 | `butch_two_draws.json`：`CM_BUTCH` 的 **Recog 是 charId**（`ClientGetButchItem(charId, nX, nY, btDir)`，`Operate.cs:702`；`Message.cs:830` 传 nParam1..3+wParam）⇒ 场景用 `@last_kill_actor/@last_kill_x/@last_kill_y`；**637 不判成功**（`Operate.cs:749` 无条件发），判据看账本两抽（卡 `openmir2-butch-637-criterion-fix`）（`Messages.cs:199/299`） |
 
 ## 2. 唯一缺口：场景击杀步（本轮未做，原因）
 

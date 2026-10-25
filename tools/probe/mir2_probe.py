@@ -399,6 +399,11 @@ def _need_keys(obj, where, required=(), optional=()):
 RUNTIME_TOKENS = {
     "@last_kill_xy": "最近一次 kill 成功（result=dead）的尸体格 MakeLong(X,Y)；"
                      "kill 未成功/未执行时引用 ⇒ 报错（绝不回落 0、不用静态 params 顶替）",
+    "@last_kill_x": "同一尸体格的 X（`LowWord`）——`CM_BUTCH` 的 nParam2",
+    "@last_kill_y": "同一尸体格的 Y（`HighWord`）——`CM_BUTCH` 的 nParam3",
+    "@last_kill_actor": "被击杀目标的 **ActorId**——`CM_BUTCH` 的 nParam1（Recog）。"
+                        "`PlayObject.Operate.cs:702` 的签名是 `(charId, nX, nY, btDir)`，"
+                        "Recog **不是**坐标；发坐标进去 `ActorMgr.Get()` 必失败",
 }
 
 
@@ -1021,23 +1026,22 @@ def plan_step(step, index, params, depth=0):
         # recog/param/tag/series 与其它动作同口径：先 resolve_param（可写 params 名），
         # 再在 plan 期做范围校验（recog=i32，其余 u16）。否则要等到发送时 pack_header
         # 才抛 FrameError，被归类成 frame-parse(2) 而不是 scenario-error(2)。PRB-4。
-        recog = val.get("recog", 0)
-        if isinstance(recog, str) and recog.startswith("@"):
-            # 运行期令牌：加载期只校验**名字**（值要等 kill 步真的跑过），
-            # 拼错在这里就拒，并列出可用令牌（牙 d）。
-            if recog not in RUNTIME_TOKENS:
-                raise ScenarioError(
-                    "%s.send.recog: 未知运行期令牌 %r（可用：%s）"
-                    % (where, recog, ", ".join(sorted(RUNTIME_TOKENS))))
-            out["recog_token"] = recog
-            out["recog"] = None
-        else:
-            out["recog"] = _need_int(resolve_param(recog, params, where + ".send.recog"),
-                                     where + ".send.recog", -0x80000000, 0x7FFFFFFF)
-        for name in ("param", "tag", "series"):
-            out[name] = _need_int(
-                resolve_param(val.get(name, 0), params, where + ".send." + name),
-                where + ".send." + name)
+        # `recog` / `param` / `tag` / `series` 都可以写**运行期令牌**（`@last_kill_*`）：
+        # 加载期只校验**名字**（值要等 kill 步真的跑过），拼错在这里就拒并列出可用令牌。
+        ranges = {"recog": (-0x80000000, 0x7FFFFFFF), "param": (0, 0xFFFF),
+                  "tag": (0, 0xFFFF), "series": (0, 0xFFFF)}
+        for name, (lo, hi) in ranges.items():
+            v = val.get(name, 0)
+            if isinstance(v, str) and v.startswith("@"):
+                if v not in RUNTIME_TOKENS:
+                    raise ScenarioError(
+                        "%s.send.%s: 未知运行期令牌 %r（可用：%s）"
+                        % (where, name, v, ", ".join(sorted(RUNTIME_TOKENS))))
+                out[name + "_token"] = v
+                out[name] = None
+            else:
+                out[name] = _need_int(resolve_param(v, params, where + ".send." + name),
+                                      where + ".send." + name, lo, hi)
         out["body"] = (_encode_send_body(val, where + ".send", params)
                        if ("text" in val or "raw_hex" in val or "text_from" in val) else b"")
     elif action == "kill":
@@ -1466,9 +1470,9 @@ def _var_refs(data):
                 for key in ("recog", "param", "tag", "series"):
                     v = send.get(key)
                     if isinstance(v, str):
-                        # 运行期令牌（`@last_kill_xy`）不是 params 名：只有 `send.recog` 支持，
+                        # 运行期令牌（`@last_kill_*`）不是 params 名：`send` 的四个字段都支持，
                         # 交给 `plan_step` 校验令牌名（拼错在那里拒并列出可用令牌）。
-                        if key == "recog" and v.startswith("@"):
+                        if v.startswith("@"):
                             continue
                         refs.append((where + ".send." + key, v))
                 v = send.get("text_from")
@@ -2057,7 +2061,8 @@ class Run:
                     break
             if matched:
                 seq, fr = matched
-                self._write_last_kill_xy(conn, idx, tx | (ty << 16), fr, death, before)
+                self._write_last_kill_xy(conn, idx, tx | (ty << 16), fr, death, before,
+                                         actor=row.get("actor"))
                 self.steps.append({"index": idx, "kind": "kill", "mode": "track",
                                    "selector": plan["track"], "result": "dead",
                                    "target": row["actor"], "target_xy": tx | (ty << 16),
@@ -2077,7 +2082,8 @@ class Run:
                     "no death frame among %s"
                     % (idx, swings, row["actor"], tx, ty, sorted(death)))
 
-    def _write_last_kill_xy(self, conn, idx, step_xy, matched, death_idents, since_seq):
+    def _write_last_kill_xy(self, conn, idx, step_xy, matched, death_idents, since_seq,
+                            actor=None):
         """写 `self.state["last_kill_xy"]`（卡 `openmir2-probe-runtime-param-last-kill-xy`）。
 
         取值规则（**不许猜**）：
@@ -2090,15 +2096,21 @@ class Run:
         def cell(fr):
             return (fr.param & 0xFFFF) | ((fr.tag & 0xFFFF) << 16)
 
-        if matched is not None and cell(matched) == step_xy:
+        def _store():
             self.state["last_kill_xy"] = step_xy
+            self.state["last_kill_x"] = step_xy & 0xFFFF
+            self.state["last_kill_y"] = (step_xy >> 16) & 0xFFFF
+            self.state["last_kill_actor"] = actor
+
+        if matched is not None and cell(matched) == step_xy:
+            _store()
             return
         seen = []
         for seq, fr in conn.frames:
             if seq > since_seq and fr.ident in death_idents:
                 seen.append((seq, fr.ident, fr.param, fr.tag))
                 if cell(fr) == step_xy:
-                    self.state["last_kill_xy"] = step_xy
+                    _store()
                     return
         raise StepFailure(
             "steps[%s].kill: 死亡帧的 param/tag 与击杀步目标格 (%d,%d) 对不上 ⇒ 拒绝写 "
@@ -2169,7 +2181,8 @@ class Run:
                "note": plan.get("note", "")}
         if matched:
             seq, fr = matched
-            self._write_last_kill_xy(conn, idx, plan["target_xy"], fr, death, start_seq)
+            self._write_last_kill_xy(conn, idx, plan["target_xy"], fr, death, start_seq,
+                                     actor=fr.recog)
             rec.update(result="dead", matched_seq=seq, matched_ident=fr.ident,
                        matched_recog=fr.recog)
             self.steps.append(rec)
@@ -2270,17 +2283,24 @@ class Run:
                 "per-attempt pages (links/selected)=%r"
                 % (plan["index"], plan.get("stop_on_select"), plan["times"], attempts))
         if kind == "send" or kind in ("say", "click_npc", "dlg_select"):
-            recog = plan.get("recog")
-            token = plan.get("recog_token")
-            if token:
+            def _resolve_token(name):
+                token = plan.get(name + "_token")
+                if not token:
+                    return plan.get(name)
                 # 令牌名带 `@`（场景里可读），state 里的键不带 `@`。
-                recog = self.state.get(token[1:])
-                if recog is None:
+                v = self.state.get(token[1:])
+                if v is None:
                     raise ScenarioError(
-                        "steps[%s].send: 运行期令牌 %r 没有值——本轮 kill 尚未成功执行"
+                        "steps[%s].send.%s: 运行期令牌 %r 没有值——本轮 kill 尚未成功执行"
                         "（fail-closed：**不回落 0，也不拿静态 params 顶替**，否则会退回"
                         "「固定格打空」的形态）。可用令牌：%s"
-                        % (idx, token, ", ".join(sorted(RUNTIME_TOKENS))))
+                        % (idx, name, token, ", ".join(sorted(RUNTIME_TOKENS))))
+                return v
+
+            recog = _resolve_token("recog")
+            _tok_param = _resolve_token("param")
+            _tok_tag = _resolve_token("tag")
+            _tok_series = _resolve_token("series")
             if kind == "click_npc" and plan.get("_auto_recog") == "last_turn":
                 recog = self.state.get("last_turn_recog")
                 if recog is None:
@@ -2303,10 +2323,11 @@ class Run:
                     raise ScenarioError(
                         "steps[%s].dlg_select: no SM_MERCHANTSAY(643) seen yet; "
                         "cannot infer NPC recog (fail-closed)" % idx)
-            raw = conn.send(recog, plan["ident"], plan.get("param", 0),
-                            plan.get("tag", 0), plan.get("series", 0),
+            raw = conn.send(recog, plan["ident"], _tok_param, _tok_tag, _tok_series,
                             plan.get("body") or b"")
-            self._log_send(conn, raw, dict(plan, recog=recog), now_ms() - self.t0_ms)
+            self._log_send(conn, raw, dict(plan, recog=recog, param=_tok_param,
+                                           tag=_tok_tag, series=_tok_series),
+                           now_ms() - self.t0_ms)
             return
         if kind == "wait_for":
             after = conn.recorder.seq
@@ -4919,7 +4940,9 @@ def _selftest_runtime_token():
 
     kill_plan = plan_step({"kill": {"target_xy": tgt_xy, "max_swings": 6,
                                     "interval_ms": 350}}, 0, {"self_pos": self_xy})
-    butch_plan = plan_step({"send": {"ident": 1007, "recog": "@last_kill_xy"}}, 1,
+    # 用**四个令牌**拼 `CM_BUTCH`（Recog=charId、Param=X、Tag=Y）——这正是真机轮踩到的字段映射。
+    butch_plan = plan_step({"send": {"ident": 1007, "recog": "@last_kill_actor",
+                                     "param": "@last_kill_x", "tag": "@last_kill_y"}}, 1,
                            {"self_pos": self_xy})
 
     # a) kill 成功 ⇒ 令牌取到尸体格，后续 send 的 recog 就是它
@@ -4930,10 +4953,14 @@ def _selftest_runtime_token():
         run.execute_step(conn, butch_plan)
         sent = run.steps[-1]
         checks.append((run.state.get("last_kill_xy") == tgt_xy
-                       and sent["recog"] == tgt_xy
+                       and run.state.get("last_kill_x") == 330
+                       and run.state.get("last_kill_y") == 331
+                       and run.state.get("last_kill_actor") == 800
+                       and sent["recog"] == 800 and sent["param"] == 330
+                       and sent["tag"] == 331
                        and len(conn.sock.sent) == before + 1,
-                       "牙a kill 成功 ⇒ last_kill_xy=尸体格(330,331)，send.recog(@last_kill_xy)"
-                       " 发出的帧 recog 也是它（%r）" % (run.state.get("last_kill_xy"),)))
+                       "牙a kill 成功 ⇒ 四个令牌都有值；send 发出 recog=actor(800)/param=330/"
+                       "tag=331（%r / %r）" % (run.state.get("last_kill_actor"), sent)))
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
@@ -4974,13 +5001,13 @@ def _selftest_runtime_token():
     # d) 拼写错 ⇒ 加载期拒并列出可用令牌
     err = None
     try:
-        plan_step({"send": {"ident": 1007, "recog": "@last_kill_x"}}, 0,
+        plan_step({"send": {"ident": 1007, "recog": "@last_kill_bogus"}}, 0,
                   {"self_pos": self_xy})
     except ScenarioError as ex:
         err = str(ex)
     checks.append((err is not None and "未知运行期令牌" in err
                    and "@last_kill_xy" in err,
-                   "牙d 令牌拼写错 ⇒ 加载期拒并列出可用令牌（%r）" % (err,)))
+                   "牙d 令牌拼写错（@last_kill_bogus）⇒ 加载期拒并列出可用令牌（%r）" % (err,)))
 
     # e) 死亡帧坐标与目标格不一致 ⇒ 拒绝写（不猜）
     run, conn, tmpd = mk([[], [struck()], [struck()], [struck(), death(x=331, y=331)]])
@@ -5032,14 +5059,15 @@ def _selftest_runtime_token():
                    "牙CS-b 未声明的普通 params 名仍被拦（%r）" % (bad_err,)))
 
     typo_doc = {"name": "selftest_token_typo", "params": {"self_pos": self_xy},
-                "steps": [{"send": {"ident": 1007, "recog": "@last_kill_x"}}]}
+                "steps": [{"send": {"ident": 1007, "recog": "@last_kill_bogus"}},
+                          {"wait_for": 637, "timeout_ms": 1000}]}
     try:
         check_doc(typo_doc)
         typo_err = "accepted"
     except ScenarioError as ex:
         typo_err = str(ex)
     checks.append(("未知运行期令牌" in typo_err and "@last_kill_xy" in typo_err,
-                   "牙CS-d 拼错令牌 @last_kill_x 仍拒并列出可用令牌（%r）" % (typo_err,)))
+                   "牙CS-d 拼错令牌 @last_kill_bogus 仍拒并列出可用令牌（%r）" % (typo_err,)))
 
     bad = [msg for ok, msg in checks if not ok]
     if bad:

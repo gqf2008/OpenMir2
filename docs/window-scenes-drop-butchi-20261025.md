@@ -25,9 +25,9 @@
 
 | 项 | 内容 |
 |---|---|
-| 触发 | `CM_BUTCH(1007)`（`Messages.cs:57`）→ `PlayObject.Message.cs:829-831` 的 `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`；成功出 **`SM_BUTCH(637)`**（收官帧）；`SM_SKELETON(33)` **不是每刀必发**（只有 `BodyLeathery<=0` 才发，见 §2c.3b） |
+| 触发 | `CM_BUTCH(1007)`（`Messages.cs:57`）→ `PlayObject.Message.cs:830` 的 `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`（签名 `(charId, nX, nY, btDir)`，`Operate.cs:702`）；**637 只是无条件回帧**；`SM_SKELETON(33)` **不是每刀都发**（只有 `BodyLeathery<=0` 才发，见 §2c.3b） |
 | 线上字段 | `recog = MakeLong(尸体X,尸体Y)` ⇒ `nParam1=X`、`nParam2=Y`——尸体格由**运行期令牌 `@last_kill_xy`** 提供（寻靶击杀后尸体不一定在静态 `target_xy`） |
-| 期望证据 | **`SM_BUTCH(637)`** 收官（`33` 非必发、**不作判据**）；两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`；**流位恰停第二抽** + site/order 账本 |
+| 期望证据 | **RNG 账本恰 2 条**（`Operate.cs:722`/`:723`，判据变更见卡 `openmir2-butch-637-criterion-fix`）；`33` 不一定发、`637` 不作判据；两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`；**流位恰停第二抽** + site/order 账本 |
 | 失败形态 | 第 1 步后面超时 ⇒ `ClientGetButchItem` false（无尸体/距离/速度门），不是抽数问题 |
 
 **为什么 blocked（双缺口）**：
@@ -123,7 +123,7 @@
   ⇒ **「没有 SM_TURN 回帧」不能当作朝向未生效的判据**；场景里「等自己的 SM_TURN(10)」那一步已删。
 - **`SM_SKELETON(33)` 不是首刀就发**（oracle 真相）：`PlayObject.Operate.cs:731-738` 只有
   `BodyLeathery <= 0` 才置 `Skeleton=true` 并发 `RM_SKELETON`；每次屠宰随机扣 5–20，首刀远到不了 0。
-  ⇒ **不得把「33 未出现」判成失败**；butch 的**收官帧是 `SM_BUTCH(637)`**，场景只等 637。
+  ⇒ **不得把「33 未出现」判成失败**；**但 `SM_BUTCH(637)` 也不能单独判成功**（`:749` 无条件发，卡 `openmir2-butch-637-criterion-fix`）——判据看账本两抽，场景只等 637。
   要验 33 必须把 `BodyLeathery` 打到 ≤0（多次屠宰或夹具预置），并单独写依据。
 - run5（tester，C# 侧）已打通：`kill result=dead`、**4 刀**打死，帧序
   `34(SM_NOWDEATH, recog=target, 330/331) → 31(SM_STRUCK, series=5) → 32(SM_DEATH, 330/331) → 637(SM_BUTCH)`。
