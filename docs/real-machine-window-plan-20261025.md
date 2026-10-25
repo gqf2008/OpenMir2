@@ -10,7 +10,7 @@
 
 | # | 项 | 判据 | 现状 |
 |---:|---|---|---|
-| 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ 47 项全绿；`--inventory` rc=0 | **红**（未分类工具 1；修复卡 `openmir2-tool-selftest-registry-sync` 在审） |
+| 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ 47 项全绿；`--inventory` rc=0 | **已绿**（`8b7c9c281`：47/47、`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
 | 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **未合**（`openmir2-mirflow-verdict-cause-split`） |
 | 3 | 夹具 | `provision_...py --gate --need gold --need sellable_item --need npc --need monsters` | 已合，**需实跑一次** |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；mysqld 2580 在 | 当前满足 |
