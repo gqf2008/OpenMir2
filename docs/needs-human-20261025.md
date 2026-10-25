@@ -121,10 +121,13 @@
 
 - **当前主源 = 原仓库 `gqf2008/OpenMir2`**（今早故障后先迁 `-recover`，原仓库恢复后已迁回；`remote walgit` 指向它、`pushDefault=walgit`）。
 - **故障根因**：服务端**自己写、5 秒后自己删**了 head WAL 段（`store.put` 16:06:22 → `bundle slots settled` 16:06:26 → `store.delete` 16:06:27），WAL 头断 ⇒ 全部命令 500。取证见 `docs/walgit-outage-rootcause-20261025.md`。
-- **✅ 已做本地异地副本（不需要你授权，未对外发布）**：`E:/backup/openmir2-20261025.bundle`（**169.5 MB**，sha256 `96a68d02890aa0bba0d1a67b…`）——`git bundle create --all` 打包 **master `89b4ee469` + 10720 条 `refs/collab/inbox/*` + `refs/collab/meta/*`**，`git bundle verify` 报 **「records a complete history」**（无前置依赖）。⇒ 今天的工作现在是**三份副本**：本地仓库 / `walgit` / 这个 bundle。
-  - **恢复步骤（已实测）**：`git clone <bundle> <dir>` **只带回 `master`，不带 collab refs**（`inbox` 为 0）；必须再跑
-    `git fetch <bundle> "+refs/collab/*:refs/collab/*"` ⇒ 实测恢复出 **10720 条 inbox + 99 条 meta**。**只 clone 不 fetch = 代码回来了、审计链丢了。**
-
+- **✅ 已做本地全量副本（不需要你授权，未对外发布）**：`E:/backup/openmir2-20261025.bundle`（`git bundle create --all` 生成，约 **170 MB**）。
+  - **内含哪一版、文件指纹多少，一律现查，不写死在文档里**（今天教训：写死的数字迟早失真）：
+    `git bundle list-heads <bundle> | grep "refs/heads/master$"` ⇒ 内含 tip；`sha256sum <bundle>` ⇒ 文件指纹；
+    `git bundle verify <bundle>` ⇒ 应报 **「records a complete history」**（无前置依赖）。
+  - **恢复步骤（已实战演练过一次，不是只跑 verify）**：`git clone <bundle> <dir>` **只带回 `master`**（`refs/collab/inbox` 为 0），
+    还必须 `git fetch <bundle> "+refs/collab/*:refs/collab/*"` ⇒ 实测恢复出 **10720 条 inbox + 99 条 meta**。
+    **只 clone 不 fetch = 代码回来了、审计链丢了。**
 - **⚠ 仍存在的暴露**：GitHub `origin` 落后 **140 个提交**（今天全部合入都不在其中）。bundle 在**同一块磁盘**上，挡得住 walgit 故障，挡不住磁盘故障。
   - **建议（需你一句话）**：授权我把当前 `master` + `refs/collab/*` 推到 GitHub `origin` 作异地备份。规则写的是「GitHub 只是镜像、需要时人工同步」——**今天正是那个「需要时」**。不擅自推。
 - **仍建议的环境加固（可选）**：两台机器共用同一个 R2 桶且都开 `maintain` ⇒ 有二次踩踏风险。要么本机 `walgit.toml` 的 `[server].roles` 改成 `["serve"]`，要么换独立桶/前缀。**我不擅自改环境配置。**
