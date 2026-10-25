@@ -9341,8 +9341,8 @@ fn apply_get_start_point_on_login(
 }
 
 /// 3s 门的行为谓词：本 tick 是否命中 `CheckDupObjTick`（world 在门内把它置为 `now`）。
-fn dup_tick_fired(entity: &mir2_world::Entity, now: i64) -> bool {
-    entity.check_dup_obj_tick == now
+fn dup_tick_fired(check_dup_obj_tick: i64, now: i64) -> bool {
+    check_dup_obj_tick == now
 }
 
 /// `WorldServer.GetHumData`（`:1100-1229`）的恢复计数器登录初始化。
@@ -18701,6 +18701,12 @@ impl EnterConfig {
             game_conf: None,
             castle_name_colors: mir2_world::castle::CastleNameColors::default(),
             red_die_home: mir2_world::castle::RedDieHome::default(),
+            // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint +
+            // oracle `GameSvrConf` ctor 字面量（`3/845/674`）。
+            home_start_points: Vec::new(),
+            red_home_map: "3".to_string(),
+            red_home_x: 845,
+            red_home_y: 674,
             string_conf,
             show_rank_level_name: false,
             server_index: 0,
@@ -20345,7 +20351,7 @@ fn apply_start_point_for_fired_players(
 ) -> usize {
     let mut applied = 0usize;
     for (chr_name, tick, map_name) in players {
-        if *tick != now {
+        if !dup_tick_fired(*tick, now) {
             continue;
         }
         let Some(saved) = saves.get_mut(chr_name) else {
@@ -65387,10 +65393,8 @@ mod tests {",
     /// （`PlayObject.Message.cs:263` 的 `>` 门在 world 侧置 tick）。
     #[test]
     fn dup_tick_fired_matches_only_current_tick() {
-        let mut e = mir2_world::Entity::new(1, "hero".to_string(), 3, 3);
-        e.check_dup_obj_tick = 5000;
-        assert!(dup_tick_fired(&e, 5000), "同 tick ⇒ 应用");
-        assert!(!dup_tick_fired(&e, 5001), "其它 tick ⇒ 不应用");
+        assert!(dup_tick_fired(5000, 5000), "同 tick ⇒ 应用");
+        assert!(!dup_tick_fired(5000, 5001), "其它 tick ⇒ 不应用");
     }
 
     #[test]
