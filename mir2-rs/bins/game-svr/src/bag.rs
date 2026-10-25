@@ -187,6 +187,30 @@ impl BagItem {
     }
 }
 
+/// `AddItemToBag(userItem)`（`src/M2Server/Actor/BaseObject.cs:1241-1252`）的**入包半边**。
+///
+/// oracle 逐行：
+///
+/// ```text
+/// if (ItemList.Count >= Grobal2.MaxBagItem) return false;   // 满包：不入包、不 WeightChanged
+/// ItemList.Add(userItem);
+/// WeightChanged();
+/// return true;
+/// ```
+///
+/// 本函数只承载「容量门 + 追加」；`WeightChanged()` 的帧发射由调用方按各自的帧队列形态接
+/// （`ShopFrame` / `Frame` 通知 / immediate 帧互不相同）。卡
+/// `openmir2-merchant-price-list-and-weight-frame` 的 A 阶段（tier=L）把**所有**入包点收敛到
+/// 这里且行为零变化；B 阶段（tier=R）再在单点内补 `SM_WEIGHTCHANGED(622)`。
+#[must_use]
+pub fn add_item_to_bag(items: &mut Vec<BagItem>, item: BagItem, max_bag_item: usize) -> bool {
+    if items.len() >= max_bag_item {
+        return false;
+    }
+    items.push(item);
+    true
+}
+
 /// 装卸动作作用的两个集合：`ItemList`（背包）+ `UseItems[13]`（身上）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EquipState {
@@ -844,9 +868,9 @@ pub fn take_on(
                         }
                         state.item_list.remove(item_index);
                         if let Some(out) = swapped_out.clone() {
-                            if state.item_list.len() < MAX_BAG_ITEM {
-                                state.item_list.push(out);
-                            }
+                            // oracle `AddItemToBag(out)` 的返回值被忽略（`PlayObject.Operate.cs:460-478`）：
+                            // 满包 ⇒ 旧件**不**回背包（也不 WeightChanged）。
+                            let _ = add_item_to_bag(&mut state.item_list, out, MAX_BAG_ITEM);
                         }
                         // `Operate.cs:460-478`：只有衣服（`StdMode 10/11`）在成功后发
                         // `SM_UPDATEITEM`（按 `Shape` 选 plain/WithLevel/ByJob）。
@@ -914,8 +938,7 @@ pub fn take_off(
             return fail(SM_TAKEOFF_FAIL, code);
         }
         if item_display_name(ctx.catalog, &existing).eq_ignore_ascii_case(item_name) {
-            if state.item_list.len() < MAX_BAG_ITEM {
-                state.item_list.push(existing.clone());
+            if add_item_to_bag(&mut state.item_list, existing.clone(), MAX_BAG_ITEM) {
                 state.use_items[slot_idx] = None;
                 let f = feature_to_long(ctx, state);
                 // ⚠️ oracle 的成功分支**没有** `n10 = 1`（`PlayObject.Operate.cs:540-556`）⇒ 控制流
@@ -2010,5 +2033,34 @@ mod tests {
             "新名",
             "倒序扫描取最后一条（CustomItemSystem.cs:28-41）"
         );
+    }
+
+    /// 卡 `openmir2-merchant-price-list-and-weight-frame` A 阶段：单点 `add_item_to_bag` 的
+    /// 容量门与追加语义（oracle `BaseObject.cs:1241-1252` 的前半）。
+    ///
+    /// 变异牙：把 `items.len() >= max_bag_item` 改成 `>` ⇒ 满包（len == max）仍追加 ⇒ 本用例红。
+    #[test]
+    fn add_item_to_bag_gates_at_max_and_appends_in_order() {
+        let mut items: Vec<BagItem> = Vec::new();
+        assert!(add_item_to_bag(&mut items, BagItem::new(1, 11), 2));
+        assert!(add_item_to_bag(&mut items, BagItem::new(2, 22), 2));
+        // 满包（len == max）：不追加、返回 false（oracle 的 `Count >= MaxBagItem`）。
+        assert!(!add_item_to_bag(&mut items, BagItem::new(3, 33), 2));
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items.iter().map(|i| i.make_index).collect::<Vec<_>>(),
+            vec![1, 2],
+            "追加保序"
+        );
+        // 具体上限：契约是 `>= MAX_BAG_ITEM`（不是 `>`），满 46 后一件也进不去。
+        let mut full: Vec<BagItem> = (0..MAX_BAG_ITEM as i32)
+            .map(|i| BagItem::new(i, 1))
+            .collect();
+        assert!(!add_item_to_bag(
+            &mut full,
+            BagItem::new(99, 1),
+            MAX_BAG_ITEM
+        ));
+        assert_eq!(full.len(), MAX_BAG_ITEM);
     }
 }

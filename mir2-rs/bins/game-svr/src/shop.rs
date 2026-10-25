@@ -63,7 +63,7 @@ use mir2_world::merchant::{
 };
 
 use crate::ability::ItemCatalog;
-use crate::bag::{BagItem, MAX_BAG_ITEM};
+use crate::bag::{add_item_to_bag, BagItem, MAX_BAG_ITEM};
 use crate::downlink;
 use crate::ground::GroundState;
 use crate::itemwire::{encode_client_item, ClientItem};
@@ -599,13 +599,13 @@ pub fn make_drug_item(
                         };
                     }
                 }
+                // `SendAddItem`（`PlayObject.Base.cs:198-227`）⇒ `SM_ADDITEM(Recog=ActorId, Series=1)`
+                // + 尾 `EncodeBuffer(clientItem)`（G-1：复用 `trade::add_item_tail`）。
+                // 尾按**入包前**的 `user_item` 编码（纯计算，无副作用）。
+                let add_tail =
+                    crate::trade::add_item_tail(&user_item, ctx.catalog).unwrap_or_default();
                 // `AddItemToBag`（`BaseObject.cs:1241`）：`ItemList.Count >= MaxBagItem(46)` ⇒ false。
-                if state.item_list.len() < MAX_BAG_ITEM {
-                    // `SendAddItem`（`PlayObject.Base.cs:198-227`）⇒ `SM_ADDITEM(Recog=ActorId, Series=1)`
-                    // + 尾 `EncodeBuffer(clientItem)`（G-1：复用 `trade::add_item_tail`）。
-                    let add_tail =
-                        crate::trade::add_item_tail(&user_item, ctx.catalog).unwrap_or_default();
-                    state.item_list.push(user_item);
+                if add_item_to_bag(&mut state.item_list, user_item, MAX_BAG_ITEM) {
                     // `WeightChanged()`（T-47 ⑤ 未发 `SM_WEIGHTCHANGED`，与 `buy_item` 同口径）。
                     state.gold -= ctx.make_durg_price;
                     // 尾已是 `EDCode.EncodeBuffer(ClientItem)` ⇒ 不能再 `EncodeString`。
@@ -934,7 +934,8 @@ pub fn take_back_storage_item(
                             1,
                             add_tail,
                         ));
-                        state.item_list.push(moved);
+                        // 上面已过容量门 ⇒ 单点必返回 true（返回值与 oracle 一样被忽略）。
+                        let _ = add_item_to_bag(&mut state.item_list, moved, MAX_BAG_ITEM);
                         state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
                         // `SM_TAKEBACKSTORAGEITEM_OK(Recog=nItemIdx)`。
                         frames.push(frame(
@@ -1191,7 +1192,11 @@ pub fn buy_item(
                             shop::get_user_item_price(&t, &mut price_item),
                         );
                         if state.gold >= n_price && n_price > 0 {
-                            if state.item_list.len() < MAX_BAG_ITEM {
+                            // `SendAddItem` 的尾按**入包前**的件编码（纯计算，无副作用）。
+                            let bought = to_bag(&price_item);
+                            let add_tail = crate::trade::add_item_tail(&bought, ctx.catalog)
+                                .unwrap_or_default();
+                            if add_item_to_bag(&mut state.item_list, bought, MAX_BAG_ITEM) {
                                 // `AddItemToBag` 成功：金币/税/出包 + 从库存移除。
                                 state.gold -= n_price;
                                 // `Merchant.cs:1257-1266`：Castle 分支用 `nPrice`；CastleManager 分支用
@@ -1203,9 +1208,6 @@ pub fn buy_item(
                                     m.castle_index.is_some(),
                                     ctx.upgrade_weapon_price,
                                 );
-                                let bought = to_bag(&price_item);
-                                let add_tail = crate::trade::add_item_tail(&bought, ctx.catalog)
-                                    .unwrap_or_default();
                                 frames.push(frame_encoded(
                                     mir2_protocol::messages::SM_ADDITEM,
                                     ctx.player_actor_id,
@@ -1214,7 +1216,6 @@ pub fn buy_item(
                                     1,
                                     add_tail,
                                 ));
-                                state.item_list.push(bought);
                                 state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
                                 let g = &mut goods[i];
                                 g.remove(j);

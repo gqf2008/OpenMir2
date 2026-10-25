@@ -4104,13 +4104,18 @@ fn add_newbie_items(
             Some(index) => {
                 if let Some(tpl) = game_svr::ability::ItemCatalog::get(catalog, index) {
                     *item_number += 1;
-                    item_list.push(game_svr::bag::BagItem {
-                        make_index: *item_number,
-                        index,
-                        dura: tpl.dura_max,
-                        dura_max: tpl.dura_max,
-                        desc: [0; 14],
-                    });
+                    // oracle `AddItemToBag`：满包 ⇒ `false`（构造期背包为空 ⇒ 门不可达；返回值被忽略）。
+                    let _ = game_svr::bag::add_item_to_bag(
+                        item_list,
+                        game_svr::bag::BagItem {
+                            make_index: *item_number,
+                            index,
+                            dura: tpl.dura_max,
+                            dura_max: tpl.dura_max,
+                            desc: [0; 14],
+                        },
+                        game_svr::bag::MAX_BAG_ITEM,
+                    );
                 }
             }
             None => warns.push(format!("新手物品模板缺失（Name={name}）")),
@@ -7222,13 +7227,18 @@ fn write_back_player_bag(
                 break;
             }
             *item_number += 1;
-            sg.state.item_list.push(game_svr::bag::BagItem {
-                make_index: *item_number,
-                index,
-                dura,
-                dura_max,
-                desc: [0; 14],
-            });
+            // 上面已过 `IsEnoughBag()` 等价门 ⇒ 单点必返回 true（返回值与 oracle 一样被忽略）。
+            let _ = game_svr::bag::add_item_to_bag(
+                &mut sg.state.item_list,
+                game_svr::bag::BagItem {
+                    make_index: *item_number,
+                    index,
+                    dura,
+                    dura_max,
+                    desc: [0; 14],
+                },
+                game_svr::bag::MAX_BAG_ITEM,
+            );
             left -= 1;
         }
     }
@@ -19357,10 +19367,13 @@ fn drain_player_need_recheck_with_magic(
             // **复验 F4**：oracle `UserItem` 是 class，`ItemList`/`UseItems` 存的是**同一引用**；
             // 本宿主克隆进包，故要记下入包位置，在下面的 `UseItems[i].Index = 0` 处模拟别名。
             let mut bag_pos: Option<usize> = None;
-            if sg.state.item_list.len() < game_svr::bag::MAX_BAG_ITEM {
-                let item = sg.use_items[i].clone().expect("index > 0 ⇒ Some");
-                bag_pos = Some(sg.state.item_list.len());
-                sg.state.item_list.push(item);
+            let item = sg.use_items[i].clone().expect("index > 0 ⇒ Some");
+            if game_svr::bag::add_item_to_bag(
+                &mut sg.state.item_list,
+                item,
+                game_svr::bag::MAX_BAG_ITEM,
+            ) {
+                bag_pos = Some(sg.state.item_list.len() - 1);
                 // `SendAddItem` 即时帧（模板必存在，因为上面 `catalog.get` 成功）。
                 if let Some(tail) =
                     game_svr::trade::add_item_tail(sg.use_items[i].as_ref().unwrap(), catalog)
