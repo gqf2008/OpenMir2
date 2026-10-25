@@ -6,7 +6,7 @@
 //! 独立的 `mir2_test_lb8_*` 库（禁止 `mir2_db`）。
 //!
 //! 跑法（需本机 MySQL）：
-//! `cargo test -p db-srv --bins lb08_tests -- --ignored --test-threads=1`
+//! `cargo test -p db-srv --lib lb08_tests -- --ignored --test-threads=1`
 //!
 //! 判据 → 用例：
 //! - 慢存档不阻塞 QUERYCHR / SELCHR / LOAD → 三个 `slow_save_*`；

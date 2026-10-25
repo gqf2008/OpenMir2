@@ -5,7 +5,7 @@
 //! **构造级**故障注入，再直接调用生产函数断言帧/库后态。
 //!
 //! 跑法（需本机 MySQL）：
-//! `cargo test -p db-srv --bins load_fault_tests -- --ignored --nocapture`
+//! `cargo test -p db-srv --lib load_fault_tests -- --ignored --nocapture`
 
 #![allow(clippy::doc_markdown)]
 
