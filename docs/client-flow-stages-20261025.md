@@ -42,6 +42,30 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
   -CombatTargetPixel "560,304" -ActionWaitSec 8
 ```
 
+### 2.1 跑完必须校验指纹（显式步骤，A3/F4）
+
+**任何产生了 hook 产物（`chunks.ndjson` + `conn-*.bin`）的跑法，都要把这一步做完才算跑完**——
+漏掉它等于这批产物**没有指纹证据**（旧 DLL 的 `sha256` 恒空串，也不会有人发现）。
+步骤位置：真机跑完、把 `-ProxyDir`/hook 目录交给证据链**之前**。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/verify_chunks.ps1 -CaptureDir <hook 产物目录>
+```
+
+判读（四态：**「没校验」不许当成「校验过」，也不许当成红**）：
+
+| rc | 输出前缀 | 含义 | 下一步 |
+|---:|---|---|---|
+| 0 | `CHUNKS_VERIFY GREEN` | 每条 data 事件的 `sha256` 都按 `.bin` 切片复算一致 | 继续写证据（`frames`/`chunks` 可作为指纹证据引用） |
+| 1 | `CHUNKS_VERIFY RED` | **证据被证伪**：指纹不符 / 空串（旧 DLL）/ 越界 / 0 条 data 事件 | 停跑；查 hook DLL 是否新构建、产物是否被改写 |
+| 2 | `CHUNKS_VERIFY USAGE` | **用法错，压根没校验**（错参数名、缺参数值、目录不存在、缺 `chunks.ndjson`） | 按提示改命令重跑（**这不是 RED**） |
+| 3 | `CHUNKS_VERIFY ERROR` | **校验没跑完**（脚本内部异常） | 查文件权限/产物完整性后重跑 |
+
+脚本**故意没有 `param()` 块**（手动解析 `$args`）：PowerShell 的参数绑定发生在脚本体之前，
+绑定失败会直接以 rc=1 退出，正好与「指纹不符」的 rc=1 撞车（实测 `-Dir` 错参数名即如此）。
+现在任何用法错误固定 rc=2，只有真复算不符才是 rc=1。
+机器判据在 `selftest_verify_chunks.ps1`（含「删掉本节步骤 ⇒ 自检报红」的牙），不靠人眼。
+
 离线复算（不启动客户端；牙就是靠它重放）：
 
 ```powershell
@@ -62,7 +86,7 @@ powershell -ExecutionPolicy Bypass -File tools/client/mir_flow.ps1 `
 | `-Profile` | 空 | card-window profile（读 `fixtures.monsters`） |
 | `-PlayerMap` | 空 | 角色所在图；**必须显式给**（经典协议线上没有图名，无法自行证明同图） |
 | `-AttackRangeCells` | 1 | AP/近战范围（切比雪夫格数） |
-| `-CombatTargetPixel "x,y"` | 空 | 靶子屏幕像素；留空用格心投影 `(512,304)+(dx*48,dy*32)`（该步长**未被证实**，见 §7） |
+| `-CombatTargetPixel "x,y"` | 空 | 靶子屏幕像素；留空用格心投影 `(512,304)+(dx*48,dy*32)`（该步长**未被证实**，见 §7）。**选了哪条路会记进 stdout 与证据**：`pixel_source=explicit|projected` + `pixel=x,y`（走投影时另打 `WARN COMBAT_PIXEL_SOURCE projected`） |
 | `-ActionWaitSec` | 8 | 动作后等服务端副作用的秒数 |
 | `-TradeDialogMaxAgeSec` | 60 | 商人对话必须在窗口内打开 |
 | `-LogDir` | 空 | 服务端日志目录（可选；脚本内**不硬编码**任何日志路径） |
@@ -135,6 +159,7 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
                    "success": { "ident": 650 }, "before": { "gold": 1000 }, "after": { "gold": 900 }, "gold_delta": -100 },
     "combat":    { "target": { "map": "0", "x": 331, "y": 331, "name": "鸡", "count": 4, "distance": 1 },
                    "hit": { "own_x": 330, "own_y": 331, "dir": 2, "front_x": 331, "front_y": 331 },
+                   "pixel_source": "explicit|projected|unknown", "pixel": { "x": 560, "y": 304 },
                    "effect": "hp", "hp_before": 10, "hp_after": 8, "max_hp": 10, "damage": 2, "actor": 8888 }
   }
 }
@@ -143,6 +168,14 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
 复算：`evidence_source.path` 指向的 hook 目录（`chunks.ndjson` + `conn-*.bin`）+ `-Profile`/`-PlayerMap` 就是全部输入；
 用同一条 `-StageEvidenceCheck` 命令重跑即得到同一份判定（无隐藏状态、无客户端）。
 
+`combat.pixel_source` 的两种模式口径（A1/F1）：
+- **live**：记的是**这次真正点下去的**像素（点击与证据由同一个 `Resolve-CombatTargetPixel` 决定；
+  若 check 模式按 `CM_HIT` 坐标回放出的像素与点击不同，stdout 会打 `WARN COMBAT_PIXEL 回放=… 实际点击=…`）；
+- **evidence-check**：没有点击，按 `CM_HIT` 的自身坐标 + 靶子坐标**回放**这次会走哪条路（`unknown` = 没走到靶子匹配）。
+
+真机 combat RED 时先看这个字段：`projected` 意味着 48×32 步长这条**未证实的假设**也在可疑名单里，
+`explicit` 则把嫌疑收敛到「靶子没刷出 / 方向不对」。
+
 ## 5. 牙（A3）与原始输出
 
 全部牙用 **$env:TEMP 假根**（`New-StageProxyDir` 造 `chunks.ndjson` + `conn-*.bin`），不写任何生产/Capture 目录。
@@ -150,7 +183,7 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
-# => SELFTEST_PASS=113 SELFTEST_FAIL=0 ; SELFTEST_OK
+# => SELFTEST_PASS=121 SELFTEST_FAIL=0 ; SELFTEST_OK
 ```
 
 四类牙的原始输出（删掉前置/副作用 ⇒ 对应类别 RED 且点名）：
@@ -165,6 +198,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 | 战斗 | profile 靶子在别的图（=没刷出） | `STAGE_EVIDENCE category=combat verdict=RED reason=profile 在 map=0 没有靶子（刷不出即 RED，不静默跳过）` |
 | 战斗② | `CM_HIT` 方向没指向靶子 | `... category=combat verdict=RED ... CM_HIT 朝向 dir=6 的前方格 (329,331) 与同图靶子不匹配（攻击未指向靶子）` |
 | 战斗③ | 打向靶子格但无任何掉血/死亡 | `... category=combat verdict=RED ... 无掉血(SM_STRUCK 31)也无死亡(SM_DEATH 32)（靶子可能没刷出）` |
+| 战斗④（A1） | 把「显式像素」分支改成走投影（变异） | `FAIL stages combat A1: -CombatTargetPixel => pixel_source=explicit (600,320)` ⇒ 证据字段从 `explicit` 变 `projected` 即红 |
+| 阶段序（A2） | 假源里把 `Stage "talk"` 复制成两条（一条注释） | `FAIL stages A5 TOOTH: duplicated stage name => uniqueness RED  non_unique Stage "talk" x2`；同一假源上朴素 `IndexOf` 仍判有序（阳性对照 `PASS ... naive IndexOf would still call the duplicate ordered`） |
 
 对应 GREEN 反例（同一假根 + 补齐前置/副作用）：
 `category=pickup verdict=GREEN reason=取物副作用成立`、`npcdialog ... GREEN`、`trade ... GREEN reason=商人对白前置成立 + 成功帧 + 金币按方向变化`、`combat ... GREEN reason=靶子同图且在 AP 内 + 攻击指向靶子 + 目标掉血/死亡`。
@@ -176,6 +211,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 - `Sha256.pas`：纯 Pascal SHA-256（FIPS 180-4），不依赖 CryptoAPI；`Mir2ClientHook.dpr` 的 `LogData` 对**本次 send/recv 的 n 字节**计算并写入 `sha256`。
 - 自检：`selftest_sha256.ps1` —— FIPS 向量（空串/abc/56B）+ 与 .NET 交叉（1000×'a'、0..255×4 二进制）⇒ `SHA256_SELFTEST_PASS=7 FAIL=0`。
 - 校验：`verify_chunks.ps1 -CaptureDir <dir>` 逐 data 事件复算；**空串 / 越界 / 不符 / 0 条事件**都是 RED。
+- **调用失败 ≠ 校验 RED（A5）**：退出码四态 `0 GREEN / 1 RED / 2 USAGE / 3 ERROR`。
+  历史缺陷：`-Dir …`（错参数名）在旧版是 `param()` **绑定阶段** rc=1，脚本内部那条
+  「目录不存在 ⇒ rc=2」根本没执行 ⇒ 同一 rc=1 两个含义。现在改为手动解析 `$args`，
+  用法错固定 rc=2 + `CHUNKS_VERIFY USAGE`；两支牙在 `selftest_verify_chunks.ps1`：
+  ① 错参数名 ⇒ rc=2/USAGE 且输出**不含** `CHUNKS_VERIFY RED`；② 真篡改 1 字节 ⇒ 仍 `CHUNKS_VERIFY RED` rc=1。
 - 牙（A4）：`selftest_verify_chunks.ps1` 原始输出：
   - 正确：`CHUNKS_VERIFY GREEN events=1 bins=1 bytes=8`
   - 篡改 1 字节：`CHUNKS_VERIFY RED line=1 conn=1 dir=s2c off=0 n=8 指纹不符：记录=9ac2197d9258257b… 实际=c456027337364ca9…`（rc=1）
@@ -186,6 +226,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 ### A5：既有 25 阶段不变
 
 `mir_flow.selftest.ps1` 静态断言：`start → inject_hook → … → ingame → talk → talk_sent → attack_N → walk_N → logout_button → … → done` 作为**子序列**存在且严格有序；新阶段 `pickup/npc_dialog/trade/combat_target/combat` 的位置都在 `attack` 之后、`walk` 之前（不插入/不重命名任何既有阶段）。
+
+**A2/F3（IndexOf 的前提）**：位置一律经 `Get-StageOccurrence` —— 先断言该 needle 在源码中
+**恰出现 1 次**（`Count -ne 1 ⇒ Ok=$false`），顺序判据只在成立时才下结论。理由：`IndexOf` 只给
+首次出现的位置，将来有人在注释里先写一句同名 `Stage "..."`，位置会前移而顺序牙仍绿。
+牙：把 `Stage "talk"` 复制成两条注释+真行构造假源 ⇒ 唯一性判据必须红；
+**阳性对照**同源上朴素 `IndexOf` 仍判有序（证明这颗牙抓的是唯一性本身，不是顺序判据顺带）。
 
 ### A6：日志目录参数化
 
@@ -203,9 +249,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 2. **客户端动作本身**：
    - 点脚下物品是否真发 `CM_PICKUP`（且 `param/tag` = 角色格）；
    - 点商人 → 菜单 → 物品是否真发 `CM_CLICKNPC` / `CM_MERCHANTDLGSELECT` / `CM_USERBUYITEM|SELLITEM`；
-   - 右键转向 + 左键是否真发 `CM_HIT`（冒烟产物里**没有** 3014，三次点击落成了 3011/3013）；
+   - 右键转向 + 左键是否真发 `CM_HIT`（冒烟产物里**没有** 3014，三次点击落成了 3011/3013）。
+     **根因未定位（开放问题）**：是①点击目标格不可直达 ⇒ 客户端按走路处理、②点在怪物所在格的**邻格**、
+     ③窗口坐标偏移导致落点不在目标格、④客户端需要先转向/等冷却——四者均未证实。
+     真机需先录一帧「点击坐标 + 客户端落点」，并用证据里的 `pixel_source` 先把 ②/③ 与 ①/④ 分开；
    - 点 NPC 是否真打开脚本对话（643/767 且 body 非空）。
 3. **像素标定**：`-PickupPixel` / `-TradeNpcPixel` / `-TradeMenuPixel` / `-NpcDialogPixel` / `-CombatTargetPixel` 全需按实际 1024×768 窗口标定；默认格心投影「512,304 + dx*48/dy*32」的 48×32 步长**未被证实**（`docs/window-shrink-run-20261019.md` §F2 有反例）。
+   **像素依赖窗口位置/尺寸/DPI（开放问题）**：这些值都是**绝对屏幕坐标**，「按 1024×768 标定」只说了一半——
+   窗口必须固定在标定时的位置、缩放必须 100%（非 DPI 虚拟化）、不能改分辨率；窗口移动/换缩放后必须**重新标定**，
+   否则同一组像素会落到别的格。真机若同时改了窗口，先复位窗口再判 RED。
 4. **同图证明**：经典协议线上没有图名；`-PlayerMap` 是**操作者断言**，不是机判。真机必须确认角色与 `fixtures.monsters` 的 map 一致（否则靶子在同格也打不到）。
 5. **刷怪是否真的刷出**：判据的最终防线是 `SM_STRUCK`/`SM_DEATH`；但「fixture 写了、服务器真刷了、玩家同屏」三者只能靠真机组合验证。若靶子没刷出，表现是 `combat RED：无掉血/死亡`。
 6. **服务端副作用形态**：`SM_ADDITEM/SM_GOLDCHANGED/SM_STRUCK/SM_DEATH` 的 header 口径已按 oracle 源码核对，但**未在 Rust 栈上实跑确认**（尤其是 `SM_ABILITY(52).recog=Gold` 的登录基线）。
@@ -228,7 +280,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 ```powershell
 # 1) mir_flow 全套离线自检（含四类牙、A5/A6）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
-#    => SELFTEST_PASS=113 SELFTEST_FAIL=0 / SELFTEST_OK
+#    => SELFTEST_PASS=121 SELFTEST_FAIL=0 / SELFTEST_OK
 
 # 2) SHA-256 构造级自检（编译 Sha256.pas + FIPS/.NET 交叉）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/selftest_sha256.ps1
@@ -236,7 +288,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/sel
 
 # 3) chunks 指纹校验的牙（含 1 字节篡改）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/selftest_verify_chunks.ps1
-#    => VERIFY_CHUNKS_SELFTEST_PASS=6 FAIL=0 / VERIFY_CHUNKS_SELFTEST_OK
+#    => VERIFY_CHUNKS_SELFTEST_PASS=13 FAIL=0 / VERIFY_CHUNKS_SELFTEST_OK
 
 # 4) 对真实（旧）hook 产物验证「空 sha 会 RED」
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/verify_chunks.ps1 -CaptureDir E:\tmp\smoke\hook

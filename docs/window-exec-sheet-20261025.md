@@ -62,6 +62,11 @@
 2. **台账回填**：逐卡填证据路径 / 帧 sha256 / DB 快照；**只填证据 + 在卡线程签 `comment`**，
    **不要把台账状态写成 `verified`**（不在 ledger 词表；`closed` 由 `delivery-acceptance-runbook` 的 **B7** 判定）。
 3. **收窗**：停两侧栈（**不含 mysqld**）→ `port-status.ps1` 复核 5000–7200 恢复 DOWN → 证据清单进卡 comment。
+3b. **跑过 clienthook 的窗口（client 真机 / mir_flow）**：收窗前必须
+   `powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/verify_chunks.ps1 -CaptureDir <hook 目录>`
+   是 **`CHUNKS_VERIFY GREEN`（rc=0）**。只有 rc=1(`RED`) 是「指纹被证伪」；
+   rc=2(`USAGE`)/rc=3(`ERROR`) 是**没校验**，不得当通过、也不得当 RED。四态判读与显式步骤见
+   `docs/client-flow-stages-20261025.md` §2.1（机器判据在 `tools/capture/clienthook/selftest_verify_chunks.ps1`，删掉那一步自检会红）。
 4. **谁定 closed**：`window_required` 的 R 卡由 owner/coordinator 按 B7 判据收口；作者不自签。
 
 ## ⑤ 红线（重复一遍，逐条有源）
