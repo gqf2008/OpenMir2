@@ -108,6 +108,18 @@
   > 为什么列出来：这三项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
   > softclose 那张的 **A1（展示表）已在 `9224c2ebd` 合并**；**A2 组队归 `makeghost`**（成员关系挂团长实体 `party.rs:428-456` + 退组时点晚 ~402ms）。**关闭前还差 4 项**（`merge_result 19dd38e4`）：两项真机 + 两颗牙（F1 world/host 优先级无牙；**F2 接线点无牙——删掉 `:22704` 调用后 1505 全绿**）。
 
+- **临时物清单（DoD 要求：清掉或登记；下列均**保留**，因为它们是证据）**：
+  | 路径 | 是什么 | 为什么留 |
+  |---|---|---|
+  | `E:/tmp/window/dir-diag/` | Dir 根因诊断轮（日志 + 双栈帧 + 报告） | 证明「存档晚于离世 402ms」的原始日志在 `logs/rust-game-svr.log` L148–L150 |
+  | `E:/tmp/window/bws-p622/castle_merchant_tax_potion/` | buy 帧序证据根（14:35） | 四项判据与 19 条 diffs 归属的原始 `report.json` |
+  | `E:/tmp/window/goal-full-52be82700.{json,err,meta}` + `cargo-test-52be82700.{log,results.txt}` | 条件④ 全量实跑产物 | `.meta` 记 `RUN_ATTEMPT=2 / CARGO_BUILD_JOBS=2 / HEAD_START==HEAD_END`；两份日志带 sha256 |
+  | `E:/tmp/rev20-fixture/MonGen.dirty.bak` | **事故留证**：被夹具变异写脏的生产 MonGen 内容 | 证明「生产确曾被写入」，不是仅凭口述；生产已恢复为 `e5c39fb7…`（与 10-09 hook 副本一致） |
+  | `E:/tmp/final-recheck/{orphan-mutations.json,gate-full-45.json,run3-list.txt}` | orphan 门禁卡证据 | `--inventory` 45 项、9/9 谓词变异、`--list` 对齐 |
+  | `E:/tmp/dev1-patch/*.log` | Dir 卡门禁日志（clippy/fmt/msgcodegen/workspace） | 门禁 rc 的原始输出 |
+  | `E:/tmp/window/reviewer-21-review/buckets.py` | R 卡分桶复算脚本（直调 goal_gate 纯函数、零 cargo） | ② 桶数字可复算；`goal_gate --skip-tests` 仍跑 cargo 的替代法 |
+  > 生产侧当前核对（内容级，2026-10-25）：`M2GameSvr/Envir/MonGen.txt` = `e5c39fb7…`、`M2GameSvr/Server.conf` = `ce5e3ce9…`、`Envir/x.txt` 不存在、无 `.bak`/`.fixture-tmp` 残留。
+
 - **工具面待办（均 L，交付后）**：
   - ✅ `openmir2-tool-selftest-gate`：**已合并 `24248798a` 并 closed**（tier L，approve `637aa96b5` delta + `1ec19eae`）。工具自测门 44 项入 merge 门禁；门自超时硬化（进程树终止 + 10s 兜底 + 420s 总墙钟 + NOT-RUN 点名）；`--inventory` 49 = 门内 44 / 出域 5 / 未分类 0；合并后产物 `--selftest` **14/14 GREEN**。**留三条 carry-over**（`merge_result 9f742dc7`）：M1 计数缺「计数规则」定义（按调用点 `timeout=` 计 35，按进程是否有界计 31，两者都对）、TSG10c 缺牙（守卫位置可静默回归）、M3 超时文案纯观感。
   - `openmir2-orphan-scenario-gate`：`blocked_sources_check` **只扫 run3 行、不扫场景目录** ⇒ 5 个 blocked 孤儿永不被校验而门仍 rc=0（P21 标本是活样本）。
