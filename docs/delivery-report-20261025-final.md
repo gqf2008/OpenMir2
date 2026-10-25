@@ -100,9 +100,10 @@
 - **剩余窗口队列（三张 R 卡，都很便宜；均需 owner 给时段，我不自行起栈）**：
   | 卡 | 跑什么 | 判据 | 代价 |
   |---|---|---|---|
-  | `openmir2-gm-target-state-write` | `card_window.py --profile alt.json --scenario gm_level0_gate.json --out …` → `gm_gate_check.py check --run-dir … --before/--after --chr-name winplay0` | 逐侧恰 1 条 `权限不够!!!`（Red 255/56）、零 200/202/622/45/52/752、`characters_ablity.Level` 跑前后逐字节相同；**只跑 frames 会判 UNDECIDABLE(rc=2)**，G3 必须带前后 DB 快照 | 零夹具、~2 分钟 |
+  | `openmir2-gm-target-state-write` | `card_window.py --profile alt --scenario gm_level0_gate.json --out …` → `gm_gate_check.py check --run-dir … --before/--after --chr-name winplay0` | 逐侧恰 1 条 `权限不够!!!`（Red 255/56）、零 200/202/622/45/52/752、`characters_ablity.Level` 跑前后逐字节相同；**只跑 frames 会判 UNDECIDABLE(rc=2)**，G3 必须带前后 DB 快照 | 零夹具、~2 分钟 |
   | `openmir2-dir-persistence-writeback` | 与今天 `dir-diag` **同一条命令**：`card_window.py --card openmir2-dir-persistence-writeback --profile E:/tmp/window/butch-run/profile.json --scenario tools/probe/scenarios/butch_two_draws.json --rng-log --out …` | 两侧 `characters.Dir` 相等，且 `CX/CY`＝实时坐标（不是载入值）；另核 `characters_item.Dura` 仍归 T-266 磨损 RNG | 复用现成场景与 profile，~3 分钟 |
   | `openmir2-softclose-cleanup-residue`（仅 A1） | 与 Dir 同一条 `butch_two_draws` + `butch-run` profile，但**判的是展示表**：soft-close 后同名重连，看 `SM_APPEAR` 的名字/行会 | 新实体占同一 actor id 时 `SM_APPEAR` 为新值（不是旧展示值残留） | 复用同一轮，~1 分钟 |
+  > **用法订正（2026-10-25 复核）**：`--profile` 的取值是**内置 profile 名**（`alt` / `window-magic` / `window-testdb`，`card_window.py:460`）**或一个 `.json` 路径**；`--profile alt.json` 这种写法**不存在该文件**（`tools/window/profiles/` 下只有 `bag_equip` / `butch_monsters` / `castle_tax_upgrade` / `eat_item` 等派生件）。GM 那行用内置 `alt`，Dir 那行用现存的 `E:/tmp/window/butch-run/profile.json`。
   > 为什么列出来：这三项是 ② 里**仅剩的「已有实现、只差真机」**的 R 卡；其余未合并 R 卡要么 blocked（`makeghost`/`gm-script-fixture`）、要么在 dev 手上。
   > softclose 那张的 **A1（展示表）已在 `9224c2ebd` 合并**；**A2 组队归 `makeghost`**（成员关系挂团长实体 `party.rs:428-456` + 退组时点晚 ~402ms）。**关闭前还差 4 项**（`merge_result 19dd38e4`）：两项真机 + 两颗牙（F1 world/host 优先级无牙；**F2 接线点无牙——删掉 `:22704` 调用后 1505 全绿**）。
 
