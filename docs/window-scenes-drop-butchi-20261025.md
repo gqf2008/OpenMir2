@@ -28,7 +28,7 @@
 | 触发 | `CM_BUTCH(1007)`（`Messages.cs:57`）→ `PlayObject.Message.cs:830` 的 `ClientGetButchItem(nParam1,nParam2,nParam3,wParam)`（签名 `(charId, nX, nY, btDir)`，`Operate.cs:702`）；**637 只是无条件回帧**；`SM_SKELETON(33)` **不是每刀都发**（只有 `BodyLeathery<=0` 才发，见 §2c.3b） |
 | 线上字段 | `PlayObject.Message.cs:830` 传 `ClientGetButchItem(nParam1, nParam2, nParam3, wParam)`，签名 `(charId, nX, nY, btDir)`（`Operate.cs:702`）⇒ **recog=charId（`@last_kill_actor`）、param=X（`@last_kill_x`）、tag=Y（`@last_kill_y`）、series=Dir（客户端未发时 0）**。尸体格必须由 X/Y 两字段给出，**不是** recog 打包（旧口径「recog=MakeLong(X,Y)」已作废；`@last_kill_xy` 仅为兼容保留，**不要**再用于 recog） |
 | 期望证据 | **RNG 账本恰 2 条**（`Operate.cs:722`/`:723`，判据变更见卡 `openmir2-butch-637-criterion-fix`）；`33` 不一定发、`637` 不作判据；两抽值域 `Random(16)+5 ∈ [5,20]`、`Random(201)+100 ∈ [100,300]`；**流位恰停第二抽** + site/order 账本 |
-| 失败形态 | 第 1 步后面超时 ⇒ `ClientGetButchItem` false（无尸体/距离/速度门），不是抽数问题 |
+| 失败形态 | 第 1 步后面超时 ⇒ `ClientGetButchItem` 在**速度门**提前 `return false`（`Operate.cs:709-712`，**唯一**早退点；函数末尾本来也 `return false`，返回值不代表成功）。**其余三道门（`:716` 每轴≤2 / `:718` `IsValidObject` / `:720` `Death && !Skeleton && Animal`）不过只是跳过两抽，仍然落到 `:749` 无条件发 637** ⇒ 尸体被清/距离不符/已骨架**都不会让 637 缺席**；判成功只看**账本两抽** |
 
 **为什么 blocked（双缺口）**：
 
@@ -69,8 +69,12 @@
    `wParam>0` 时发，`PlayObject.Message.cs:1564`）。
 2. **打了没死**：`kill: target alive after N swing(s)` —— 收到过目标格活动帧（`SM_TURN/DEATH` 带坐标）
    或带伤害的他人 `SM_STRUCK`，但没等到死亡帧；错误串带帧摘要。
-3. **死了但屠宰不接受**：不在 `kill` 内——由紧随其后的 `wait_for(637)` 超时表达（死亡帧已到，
-   说明击杀成功；**637 不来** = 屠宰被拒（尸体被清/距离或速度门））。
+3. **屠宰了但没抽成**：**不能用 `wait_for(637)` 超时来表达**——`ClientGetButchItem` 里唯一的早退是
+   速度门（`PlayObject.Operate.cs:709-712`），`:716` 每轴 ≤2、`:718` `IsValidObject`、`:720`
+   `Death && !Skeleton && Animal` 都是**嵌套 if、不早退**，门不过只跳过两抽，照样落到 `:749`
+   `SendRefMsg(RM_BUTCH, …)` ⇒ **637 恒定到达**（除非被速度门挡下）。这一项只能由**账本**判：
+   `:722` `Random(16)+5` 与 `:723` `Random(201)+100` 是否各 1 条、site 是否归属该两行；
+   637 到达只证「请求被受理」，**不证成功**。
 
 ### 2b.3 场景与状态
 
