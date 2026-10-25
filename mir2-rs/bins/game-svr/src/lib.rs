@@ -1941,6 +1941,43 @@ fn cleanup_closed_display(displays: &mut downlink::DisplayTable, aid: Option<i32
     }
 }
 
+/// `GateEvent::Closed` 的**清理尾段**：四个会话容器 + 同屏展示表（卡
+/// `openmir2-softclose-cleanup-residue` 返工：把原先散在 Closed 臂里的五个 remove 收敛成
+/// 一个接缝，让顺序变成结构性约束而不是靠夹具保证）。
+///
+/// **结构性约束**：host aid 的**唯一**来源是 `ground_sessions.remove()` 的返回值 ⇒
+/// 「先 `remove` 后取值」在写法上不可能出现。旧写法是「先 `get` 拿 host aid、再 `remove`」，
+/// 而 `CM_SOFTCLOSE` 已经把 world session 的 `actor_id` 置 None（`crates/world/src/session.rs`），
+/// 所以 soft-close 路径只能靠 host 兜底——谁先谁后就决定了展示表摘不摘得掉。
+///
+/// **不承重的顺序**：本函数相对 `world.disconnect(&chr_name)` 的先后**不承重**——
+/// `world.disconnect` 不碰 `ground_sessions`，把清理挪到它之后取到的仍是同一 id、摘的仍是
+/// 同一条展示（所以不要为这个方向造牙，那只会是假牙）。真正的顺序约束只有一条：
+/// **`save_human_rcd` 必须在本函数之前**（存档要拿实时态；见 Closed 臂的调用点）。
+///
+/// 返回摘掉的 actor id（`None` = 两侧都没有 id ⇒ 展示表没动）。
+fn close_cleanup_residue(
+    world: &mir2_world::World,
+    chr_name: &str,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
+    displays: &mut downlink::DisplayTable,
+) -> Option<i32> {
+    // world aid 先读（本函数不碰 world，读一次即可）；host aid **只能**来自 remove 的返回值。
+    let world_aid = world.session(chr_name).and_then(|s| s.actor_id);
+    let closed_sg = ground_sessions.remove(chr_name);
+    let closed_aid = closed_cleanup_actor_id(world_aid, closed_sg.as_ref().map(|s| s.actor_id));
+    // 其余三个会话容器与展示表：顺序无所谓，但**一个都不能漏**（逐个点名的锚见
+    // `guild_runtime::tests::g3_anchor_a1_four_disconnect_calls_and_order`）。
+    saves.remove(chr_name);
+    shop_sessions.remove(chr_name);
+    sell_off_sessions.remove(chr_name);
+    cleanup_closed_display(displays, closed_aid);
+    closed_aid
+}
+
 fn apply_pending_gm_entity(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
@@ -22899,17 +22936,11 @@ fn sim_loop(
                             &enter_cfg.catalog,
                         );
                         online_take(&mut online, &chr_name);
-                        // 卡 `openmir2-softclose-cleanup-residue` A1：`CM_SOFTCLOSE` 走
-                        // `world.soft_close` 时已把 **world session** 的 `actor_id` 置 None
-                        //（`crates/world/src/session.rs:540`），而 **host 侧**
-                        // `SessionGround.actor_id` 仍然有效。`ground_sessions.remove` 在本段
-                        // **之后**执行 ⇒ 必须在这里（任何 remove 之前）先把 id 取出来。
-                        let closed_aid = closed_cleanup_actor_id(
-                            world.session(&chr_name).and_then(|s| s.actor_id),
-                            ground_sessions.get(&chr_name).map(|s| s.actor_id),
-                        );
                         // 存档：oracle `CloseUser` 后的 `MakeGhost()` 里调 `SaveHumanRcd`
                         //（`WorldServer.cs:1077`）——必须在摘世界/移除会话态前拿实时态。
+                        // **必须留在清理之前**：`close_cleanup_residue` 会把 `saves`/
+                        // `ground_sessions` 的条目摘掉（顺序锚见
+                        // `g3_anchor_a1_four_disconnect_calls_and_order` 的 ①）。
                         if let (Some(saved), Some(sg)) =
                             (saves.get(&chr_name), ground_sessions.get(&chr_name))
                         {
@@ -22923,21 +22954,22 @@ fn sim_loop(
                                 registry.as_ref(),
                             );
                         }
-                        saves.remove(&chr_name);
-                        // 地面交互会话态随断线一并移除（否则重进后还带着旧 `ItemList`/`Gold`）。
-                        ground_sessions.remove(&chr_name);
-                        // 商店会话态（`ScriptLable`）随之移除。
-                        shop_sessions.remove(&chr_name);
-                        // 元宝寄售会话态（`SellOffConfirm`/`SellOffItemList`）随之移除；
-                        // `M2Share.SellOffItemList`（进程级）保留（oracle 不断线清理）。
-                        sell_off_sessions.remove(&chr_name);
-                        // 同屏展示表随实体一并摘除（ActorId 槽位会被内核回收复用，避免旧展示值残留）。
-                        //
-                        // 卡 `openmir2-softclose-cleanup-residue` A1：`CM_SOFTCLOSE` 后 world
-                        // session 的 `actor_id` 已置 None，但 host 侧会话仍有效 ⇒ 统一用开头的
-                        // `closed_aid`（world 优先、host 兜底）摘展示，soft-close 不再整块跳过。
-                        // 普通断线路径的调用次数与 id 都不变（`closed_aid == world aid`）。
-                        cleanup_closed_display(&mut displays, closed_aid);
+                        // 卡 `openmir2-softclose-cleanup-residue`（返工）：断线清理尾段收敛成
+                        // [`close_cleanup_residue`] 一次调用（四个会话容器 + 同屏展示表）。
+                        // **host aid 只能来自该函数内 `ground_sessions.remove()` 的返回值**
+                        // ⇒「先 remove 后取值」在写法上不可能出现；`CM_SOFTCLOSE` 后 world 侧
+                        // `actor_id` 已 None 时由 host 兜底，普通断线与 soft-close 走同一条路。
+                        // 清理相对 `world.disconnect` 的先后**不承重**（`disconnect` 不碰
+                        // `ground_sessions`），真正的顺序约束只有「save 在清理之前」。
+                        close_cleanup_residue(
+                            &world,
+                            &chr_name,
+                            &mut saves,
+                            &mut ground_sessions,
+                            &mut shop_sessions,
+                            &mut sell_off_sessions,
+                            &mut displays,
+                        );
                         if let Some(aid) = world.session(&chr_name).and_then(|s| s.actor_id) {
                             // `openmir2-m3-party-group-state`：oracle `Disappear()`
                             // （`PlayObject.Message.cs:2138-2142`）在 `MakeGhost` 里调
@@ -25646,6 +25678,63 @@ pub fn run_with_args(args: &[String]) -> i32 {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     code
+}
+
+/// **去注释视图**（`#[cfg(test)]`）：同时剥掉 `//` 行注释与 `/* … */` 块注释（含跨行）。
+///
+/// 为什么需要（review K1）：源码文本锚只能看代码。只剥 `//` 时，把整段实现用 `/* … */`
+/// 包起来（**一行未删**）仍然「看起来像代码」⇒ 调用点锚照旧命中、而线上路径根本不执行。
+/// 这是 5 个字符就能造出的绕过，且行为牙（直接调函数的用例）**看不见**它。
+///
+/// 约定：
+/// - 块注释里的**换行保留** ⇒ 剥完行数/行号不变，锚点可以直接按下标比较；
+/// - 不做词法级处理：字符串字面量里的 `//` / `/*` 也会被剥（本仓锚点只扫生产代码，
+///   这类字面量不出现在被扫的片段里；将来若要扫含此类字面量的代码，需先过词法）。
+#[cfg(test)]
+pub(crate) fn strip_rust_comments(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let mut in_line = false;
+    let mut in_block = false;
+    while i < chars.len() {
+        let c = chars[i];
+        let n = chars.get(i + 1).copied();
+        if in_line {
+            if c == '\n' {
+                in_line = false;
+                out.push(c);
+            }
+            i += 1;
+            continue;
+        }
+        if in_block {
+            if c == '*' && n == Some('/') {
+                in_block = false;
+                i += 2;
+                continue;
+            }
+            // 保留换行：行号/行数与原文一致（锚点按下标比较的前提）。
+            if c == '\n' {
+                out.push(c);
+            }
+            i += 1;
+            continue;
+        }
+        if c == '/' && n == Some('/') {
+            in_line = true;
+            i += 2;
+            continue;
+        }
+        if c == '/' && n == Some('*') {
+            in_block = true;
+            i += 2;
+            continue;
+        }
+        out.push(c);
+        i += 1;
+    }
+    out
 }
 
 #[cfg(test)]
@@ -30143,6 +30232,146 @@ mod tests {
             Some(b"new".to_vec()),
             "同 id 复用后展示名是新值"
         );
+    }
+
+    /// 卡 `openmir2-softclose-cleanup-residue` 返工牙的夹具：世界 + 四个会话容器 + 展示表。
+    ///
+    /// `world_id` = 进世界时给 hero 的实体 id（生产里由 ActorMgr 分配）；`host_id` = host 侧
+    /// `SessionGround.actor_id`（soft-close 后 world 侧已是 None，只有它还留着）。
+    /// 展示表里预置 `world_id` 与 `host_id` 两条，用来判「摘的是哪一个」。
+    struct ResidueRig {
+        world: mir2_world::World,
+        saves: HashMap<String, SavedHuman>,
+        ground: HashMap<String, SessionGround>,
+        shop: HashMap<String, ShopSession>,
+        sell_off: HashMap<String, game_svr::selloff::SellOffState>,
+        displays: downlink::DisplayTable,
+    }
+
+    impl ResidueRig {
+        fn new(world_id: i32, host_id: i32) -> Self {
+            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            world.open_session("hero");
+            let mut ent = mir2_world::Entity::new(0, "hero".to_string(), 11, 22);
+            ent.id = world_id; // 正数 id 会被 `enter_map_at` 原样采用
+            world.enter_map("hero", ent, 0).expect("进世界");
+            assert_eq!(
+                world.session("hero").and_then(|s| s.actor_id),
+                Some(world_id),
+                "前置：world 侧 actor_id = {world_id}"
+            );
+            let mut saves = HashMap::new();
+            saves.insert(
+                "hero".to_string(),
+                SavedHuman {
+                    account: "ua".into(),
+                    record: record::PlayerRecord::default(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+            let mut ground = HashMap::new();
+            ground.insert("hero".to_string(), test_session_ground(host_id));
+            let mut shop = HashMap::new();
+            shop.insert("hero".to_string(), ShopSession::default());
+            let mut sell_off = HashMap::new();
+            sell_off.insert(
+                "hero".to_string(),
+                game_svr::selloff::SellOffState::default(),
+            );
+            let mut displays = downlink::DisplayTable::new();
+            for id in [world_id, host_id] {
+                displays.set(
+                    id,
+                    downlink::ActorDisplay::new(
+                        0,
+                        0,
+                        111,
+                        0,
+                        0,
+                        255,
+                        format!("n{id}").into_bytes(),
+                    ),
+                );
+            }
+            Self {
+                world,
+                saves,
+                ground,
+                shop,
+                sell_off,
+                displays,
+            }
+        }
+
+        fn cleanup(&mut self) -> Option<i32> {
+            close_cleanup_residue(
+                &self.world,
+                "hero",
+                &mut self.saves,
+                &mut self.ground,
+                &mut self.shop,
+                &mut self.sell_off,
+                &mut self.displays,
+            )
+        }
+
+        fn containers_cleared(&self) -> bool {
+            !self.saves.contains_key("hero")
+                && !self.ground.contains_key("hero")
+                && !self.shop.contains_key("hero")
+                && !self.sell_off.contains_key("hero")
+        }
+    }
+
+    /// 卡 `openmir2-softclose-cleanup-residue` 返工牙：`close_cleanup_residue` 的三态 +
+    /// 「四个容器一个都不许漏」。
+    ///
+    /// 牙：
+    /// 1. 普通断线（world=7 / host=9）⇒ 摘 **7**、9 仍在（world 优先；同时是 host 兜底的负例）；
+    /// 2. soft-close（world 侧 None / host=9）⇒ 摘 9、7 仍在（`CM_SOFTCLOSE` 后唯一的 id 来源）；
+    /// 3. 两侧都无 ⇒ 返回 None、展示表一条都不动；
+    /// 4. 三态都要求四个容器（`saves`/`ground`/`shop`/`sell_off`）清名。
+    ///
+    /// 变异：把 `closed_cleanup_actor_id` 改成 host 优先（`host_aid.or(world_aid)`）⇒ 1 红
+    /// （摘 9 留 7）。
+    #[test]
+    fn close_cleanup_residue_three_states_and_four_containers() {
+        // 1. world=7 / host=9 ⇒ 摘 7 留 9。
+        let mut rig = ResidueRig::new(7, 9);
+        assert_eq!(rig.cleanup(), Some(7), "world 优先");
+        assert!(rig.displays.get(7).is_none(), "摘的必须是 world 的 7");
+        assert!(
+            rig.displays.get(9).is_some(),
+            "host 的 9 与本次会话无关，必须留着（改 host 优先 ⇒ 这里红）"
+        );
+        assert!(rig.containers_cleared(), "四个容器都必须清名");
+
+        // 2. soft-close：world 侧 actor_id 已 None、host 仍是 9 ⇒ 摘 9 留 7。
+        let mut rig = ResidueRig::new(7, 9);
+        rig.world.soft_close("hero").expect("soft_close");
+        assert!(
+            rig.world.session("hero").and_then(|s| s.actor_id).is_none(),
+            "前置：soft-close 已把 world 侧 actor_id 置 None"
+        );
+        assert_eq!(rig.cleanup(), Some(9), "host 兜底");
+        assert!(rig.displays.get(9).is_none(), "摘的必须是 host 的 9");
+        assert!(
+            rig.displays.get(7).is_some(),
+            "7 不是本次会话的 id，必须留着"
+        );
+        assert!(rig.containers_cleared(), "四个容器都必须清名");
+
+        // 3. 两侧都无 id ⇒ 不摘任何展示（四容器仍要清名）。
+        let mut rig = ResidueRig::new(7, 9);
+        rig.ground.remove("hero");
+        rig.world.soft_close("hero").expect("soft_close");
+        assert_eq!(rig.cleanup(), None, "两侧都无 ⇒ 不摘");
+        assert!(
+            rig.displays.get(7).is_some() && rig.displays.get(9).is_some(),
+            "没有可信 id ⇒ 展示表一条都不许动"
+        );
+        assert!(rig.containers_cleared(), "四个容器仍必须清名");
     }
 
     /// **orphan 接线第二批（验证者一号 must_fix#1）**：`SM_DISAPPEAR(30)` 的**第二个 oracle 发点**——
@@ -72820,13 +73049,10 @@ mod castle_shift_order_tests {
 mod castle_insertion_tests {
     /// 剥掉 `//` 行注释（保留换行），避免文档里的同一标识符误命中（「守卫扫代码不扫注释」同口径）。
     fn strip_line_comments(src: &str) -> String {
-        src.lines()
-            .map(|line| match line.find("//") {
-                Some(pos) => &line[..pos],
-                None => line,
-            })
-            .collect::<Vec<_>>()
-            .join("\n")
+        // 卡 `openmir2-softclose-cleanup-residue` 返工 K1（Leader 指出的仓库级同形绕过）：
+        // 只剥 `//` 时 `/* … */` 里的代码会被当成真代码。统一走 [`crate::strip_rust_comments`]
+        //（同时剥 `//` 与 `/* … */`，保留换行）。
+        crate::strip_rust_comments(src)
     }
 
     #[test]
