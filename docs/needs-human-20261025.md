@@ -1,6 +1,6 @@
 # 需要 owner 决策 / 授权（2026-10-25，第 2 次刷新）
 
-> **快照戳**：`master = 362254623` @ 2026-10-25 08:35 +0800（本地；walgit 主源仍故障）。
+> **快照戳**：`master = 2cb84220f` @ 2026-10-25 13:47 +0800（walgit 主源 = 原仓库，已恢复）。
 > 06:40 那版（`27a6f27e0`）之后合入的 2 笔均为文档/工具面，**未改动任何 R 卡窗口项**；四条件口径未变，故 §5 的 `goal_gate` 数字沿用原快照并标注。
 > `goal_gate` 取数：`python -I tools/goal/goal_gate.py --skip-tests --script-bin <release mir2-script-tool> --json`
 > （generated_ts `1792881659`，2026-10-25 06:40 +0800；**全量 `cargo test` 本轮未跑**，见 §5 口径）。
@@ -133,9 +133,9 @@
 | 条件 | 状态 | 实测（可复算） |
 |---|---|---|
 | ① 脚本派发 100% | **pass** | `parse-stats`：目标 **106/106**、调用 **11829**、未实现 **0**。**本轮已用最终 master 的新构建有效重验**（`mir2-script-tool` 于 `9a966b04b` 重建，sha256 `34ac7680…`）——此前的 PASS 用的是 00:44 的旧二进制、而之后有 3 笔改 `crates/script`，故旧证据曾作废 |
-| ② R 卡证据 | **need_human** | R 卡 **222 张**：closed **14** / `window_required` **153**（另未合并 **2**）/ whitelist **48** / 已裁定登记 **4** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 14+153+2+48+4+1 = 222 ✓ |
+| ② R 卡证据 | **need_human** | R 卡 **223 张**：closed **14** / `window_required` **155**（另未合并 **2**）/ whitelist **48** / 已裁定登记 **3** / `merged_not_closed` **1**（仅 G11）/ 其余缺口 **0**。加总 14+153+2+48+4+1 = 222 ✓ |
 | ③ B 类清零 | **pass** | recon `tracked=0`（rows 191 条非空、counts 一致） |
-| ④ 门禁恒绿 | **pass** | 7 项：**绿 7 / 红 0 / 需人工 0**（最终窗口 @ `a1576af35` 实跑）。`cargo_test_workspace` rc=0（手工全量 running 3314 = passed 3251 + failed 0 + ignored 63、rc=0；两次 rc 一致 ⇒ 非 flaky）；`master_sync` local==remote |
+| ④ 门禁恒绿 | **pass** | 7 项：**绿 7 / 红 0 / 需人工 0**（**最终 tip `2cb84220f`** 实跑）。`cargo_test_workspace` rc=0（手工全量 running **3315 = passed 3252 + failed 0 + ignored 63**、rc=0；两次 rc 一致 ⇒ 非 flaky）；`master_sync` local==remote==`2cb84220f` |
 
 > **四条件现在的真缺口只剩一处**：② 的 G11 1 张（§1 需你裁决）。①③④ 均已 PASS，证据与可复算口径见 `docs/delivery-report-20261025-final.md`。
 
