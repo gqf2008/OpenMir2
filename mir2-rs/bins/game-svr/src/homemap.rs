@@ -204,6 +204,28 @@ pub fn resolve_move_home(
     }
 }
 
+/// `GetStartPoint()`（oracle `PlayObject.Base.cs:704-721`）的纯函数等价物。
+///
+/// `PvpLevel() >= 2`（`PkPoint / 100`，`PlayObject.cs:4352-4355`）⇒ 红名回城点；
+/// 否则在 `StartPointList` 里按 **`Envir.MapName`** 匹配（`OrdinalIgnoreCase`）——
+/// 命中即**覆盖**调用方 Home*，无匹配 ⇒ `None`（调用方保留原值）。
+pub fn get_start_point(
+    pvp_level: u8,
+    current_map: &str,
+    start_points: &[StartPoint],
+    red_home_map: &str,
+    red_home_x: i16,
+    red_home_y: i16,
+) -> Option<(String, i16, i16)> {
+    if pvp_level >= 2 {
+        return Some((red_home_map.to_string(), red_home_x, red_home_y));
+    }
+    start_points
+        .iter()
+        .find(|p| p.map_name.eq_ignore_ascii_case(current_map))
+        .map(|p| (p.map_name.clone(), p.x, p.y))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -483,6 +505,44 @@ mod tests {
         assert!(
             sp[1].not_allow_say,
             "allSay=-1 非 0 ⇒ true（Convert.ToBoolean）"
+        );
+    }
+    /// 卡 `openmir2-home-coords-divergence`：`GetStartPoint()` 三向牙。
+    /// 变异：把 `pvp_level >= 2` 常量删掉 / 把匹配改成忽略 map（永远命中）⇒ 前两条红。
+    #[test]
+    fn get_start_point_matches_current_map_or_red_home() {
+        let sp = parse_start_points("0 289 618\n3 330 330\n");
+        // ① 命中当前地图 ⇒ 覆盖成该条目（map 3 ⇒ 330/330）
+        assert_eq!(
+            get_start_point(0, "3", &sp, "3", 845, 674),
+            Some(("3".to_string(), 330, 330)),
+            "当前地图在 StartPoint 表内 ⇒ 用该条目覆盖"
+        );
+        // ② 无匹配 ⇒ 保留原值（None）
+        assert_eq!(
+            get_start_point(0, "B013", &sp, "3", 845, 674),
+            None,
+            "当前地图不在表内 ⇒ 不写（保留 DB 原值）"
+        );
+        // ③ PvP>=2 ⇒ 红名回城点（与当前地图无关）
+        assert_eq!(
+            get_start_point(2, "B013", &sp, "3", 845, 674),
+            Some(("3".to_string(), 845, 674)),
+            "PvpLevel>=2 ⇒ RedHome*"
+        );
+        // 大小写不敏感（oracle `StringComparison.OrdinalIgnoreCase`）：**条目小写、查询大写**，
+        // 写回的是**条目**里的名字（不是查询串）。
+        // 红检：`eq_ignore_ascii_case` → `==` ⇒ 本断言必红（旧写法两侧同为 `b013`，变异后仍绿 = 空转）。
+        let sp_case = parse_start_points("b013 7 9\n");
+        assert_eq!(
+            get_start_point(0, "B013", &sp_case, "3", 845, 674),
+            Some(("b013".to_string(), 7, 9))
+        );
+        // 负例：只有「仅大小写不同」才算命中（名字真不同 ⇒ 不写）。
+        assert_eq!(
+            get_start_point(0, "B014", &sp_case, "3", 845, 674),
+            None,
+            "名字真不同 ⇒ 不得命中（防「大小写比较被写成恒真」）"
         );
     }
 }
