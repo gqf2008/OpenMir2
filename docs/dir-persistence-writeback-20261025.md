@@ -208,6 +208,11 @@ cargo run -p msgcodegen -- --check
 | `build_save_record` | 四标量改「实体 → `saved.derived` → `rec`」，第三档调 `warn_save_fallback`；`use_items` 改「实体（且装载过）→ `saved.derived`（且装载过）→ 会话克隆」，**仍按 §11.1 定性为「覆盖 ≤1 tick 漂移」，未扩大改动面**。 |
 | `warn_save_fallback` / `save_fallback_warns` | WRN 的触发门控在 `build_save_record`：**只在 `world.session(chr_name)` 存在**时发（普通断线存档在 `world.disconnect` 之前、实体仍在；从未进世界无会话）。为让「删 WRN ⇒ 牙红」可判，测试构建里有一个线程局部计数器，**计数点就写在 `glog!` 的格式实参里**（只删打印行也会让计数消失）。 |
 
+**登记（`review 0eaf6afa` m-3）**：`#[allow(clippy::too_many_arguments)]` 加在**生产**函数
+`handle_soft_close_cmd` 上（7→8 参跨过阈值）——本卡写集约束下接受；**下次动这个函数时收成 ctx 结构**，
+别让参数继续长。`#[cfg(test)] mod save_fallback_warns` 的模块级 `#![allow]` 只影响测试构建（生产侧
+`save_fallback_mark` 是另一个 `#[cfg(not(test))]` 函数）。
+
 **未做（明确留给别的卡）**：`displays.remove` / `party_del_member` 那块 `GateEvent::Closed` 清理在
 `CM_SOFTCLOSE` 之后被跳过的问题**不在本卡**（Leader 已单开 `openmir2-softclose-cleanup-residue`，
 issue `f83966d1`）；本卡**没有**动 `displays`、组队清理，也**没有**把 `actor_id` 改成「软关时保留」
@@ -223,12 +228,21 @@ issue `f83966d1`）；本卡**没有**动 `displays`、组队清理，也**没�
 | T1 | `CM_WALK` 到 `(12,22)` → `CM_SOFTCLOSE` → 存档 ⇒ `CX/CY=(12,22)` | ✓ | ✓（优先级变异后 `(7,12)`） |
 | T2 | `CM_TURN` 到 2 → soft_close → 存档 ⇒ `Dir=2` | ✓ | ✓（回落 3） |
 | T3 | `@AttackMode`（生产入口 `handle_say`）0→2 → soft_close → 存档 ⇒ `attatck_mode=2` | ✓ | ✓（回落 1） |
-| T4 | 实体磨损 `Dura=1234`（会话仍 4000）→ soft_close → 存档 ⇒ `Index=207/Dura=1234` | ✓ | ✓（回落 4000） |
-| T5 | 变异：`let derived = live.as_ref();`（快照降到记录之后） | — | ✓ **T1/T2/T3 三条红**（T4 走独立的 `use_items` 支，另由 T4 自身变异覆盖） |
+| T4 | **（`use_items` 独立链）** 实体磨损 `Dura=1234`（会话仍 4000）→ soft_close → 存档 ⇒ `Index=207/Dura=1234` | ✓ | ✓（回落 4000） |
+| T5 | 变异：`let derived = live.as_ref();`（快照降到记录之后） | — | ✓ **T1/T2/T3 三条红** |
 | T6 | 变异：删 `warn_save_fallback(chr_name)` ⇒ 计数断言红（`left: 0, right: 1`） | ✓ 三门控（实体在 / 无会话 / 二缺一） | ✓ |
 | T7 | **负例**：普通断线路径（不经 `CM_SOFTCLOSE`，存档在 `world.disconnect` 之前）同样取实时 `(12,22)/dir=2`，`derived` 保持 `None` | ✓ | ✓（删实体优先支 ⇒ 回落 `(7,12)`） |
+| T8 | **（返工 R-1）** 实体 `use_items` **全零** ∧ 会话有装备 ⇒ 存档仍是会话 `207/4000`（derived 侧 `filter(use_items_loaded)`） | ✓ | ✓（删 derived 支的 `.filter(…)` ⇒ `0/0`） |
 
 补充：**删掉 `handle_soft_close_cmd` 里的 `saved.derived = Some(d)` 一行 ⇒ T1–T4 四条全红**（已实测）。
+
+> **两条澄清（Leader 裁定 `ee58c43b`）**：
+> ① **`use_items` 不参与标量 `derived` 优先级**——它有自己的 `sg → 实体 → derived` 链
+>    （`build_save_record` 里用独立的 `entity_use_items` / `saved.derived.use_items` 计算，不经过 `derived` 变量）。
+> ② **T4 钉的是 `use_items` 独立链**（实体/derived 的**装载**值被采用），**不**钉标量 `derived` 优先级；
+>    因此 **T5 变异（标量降序）下 T4 绿是预期行为**，不是漏钉。
+> ③ 实体侧哨兵与 derived 侧哨兵**互不替代**：删实体支的 `Some(_) => None` ⇒ 既有用例
+>    `save_record_reflects_live_state_and_item_layout` 红；删 derived 支的 `.filter(use_items_loaded)` ⇒ T8 红。
 
 ### 13.3 门禁（本地，单次顺序执行）
 
@@ -253,3 +267,15 @@ cargo run -p msgcodegen -- --check                    rc=0（604 条常量一致
   未跑 ⇒ 本卡 `window_required=true` 继续保持，不得 `closed`。
 - `use_items` 的**同 tick 残余**（最后一刀磨损与 soft_close 落在同一 tick 且会话回写先于 inbound）仍按
   §11.1 登记为「最多丢 1 tick」，本卡未覆盖。
+
+### 13.5 返工记录（`review 0eaf6afa` request_changes，head `a7b3bd72d` → 本次）
+
+| 项 | 处置 |
+|---|---|
+| **R-1（阻塞）** derived 侧 `use_items_loaded` 过滤无牙 | 新增 **T8** `derived_use_items_all_zero_must_not_overwrite_session_equipment`：实体 `use_items` 全零 → `soft_close`（快照因此全零）→ 存档必须回落到会话 `207/4000`。**删 derived 支的 `.filter(use_items_loaded)` ⇒ T8 红**；**删实体支的 `Some(_) => None` ⇒ 既有 `save_record_reflects_live_state_and_item_layout` 红**（两条互不替代，均已实测）。 |
+| **R-2（文档）** T4 语义 | §13.2 T4 行标注「`use_items` 独立链」+ 表后两条澄清（不参与标量优先级 / T5 变异下 T4 绿是预期）。T4 docstring 未改（reviewer 认定准确）。 |
+| **m-1** | `EntityDerived.use_items` 字段注释：可能全零 ⇒ 消费端必须先过 `use_items_loaded`，禁止直接写库。 |
+| **m-2** | `let derived = live.as_ref().or(saved.derived.as_ref());` 上方注释：两源同存不可达（只有 `world.soft_close` 返回 `Err` 且此前已写快照），若出现以实体为准。 |
+| **m-3** | 见 §13.1「登记」：`handle_soft_close_cmd` 的 `too_many_arguments` 下次收成 ctx 结构。 |
+
+**返工边界**：只加牙 + 文档 + 两行注释，**实现未改**（`build_save_record` / `handle_soft_close_cmd` / 接缝逻辑逐字未动）。

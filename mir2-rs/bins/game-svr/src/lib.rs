@@ -9121,6 +9121,9 @@ struct EntityDerived {
     y: i32,
     dir: u8,
     attack_mode: u8,
+    /// ⚠ **可能是全零**（该路径的实体块从未同步装备）⇒ 消费端**必须先过
+    /// [`use_items_loaded`]** 再采用，禁止直接写库——否则会把会话里已装备的物品写成
+    /// `Index=0/Dura=0`（G-06 物资丢失形态）。接缝无条件拷 `e.use_items`，本不变量不在接缝里。
     use_items: [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
 }
 
@@ -9547,6 +9550,9 @@ fn build_save_record(
         .and_then(|s| s.actor_id)
         .and_then(|id| world.entities.get(id))
         .map(entity_derived_snapshot);
+    // 两源**同时存在不可达**：正常路径 soft-close 必销毁实体、普通断线必无快照；只有
+    // `world.soft_close` 返回 `Err` 且此前已写过快照才会两源同存 ⇒ 此时以**实体**为准
+    // （实体是权威，快照只是离世那一刻的替身）。这条顺序没有牙，故写进代码而非只留在文档。
     let derived = live.as_ref().or(saved.derived.as_ref());
     if let Some(d) = derived {
         rec.data.cur_x = i16::try_from(d.x).unwrap_or(rec.data.cur_x);
@@ -34107,6 +34113,62 @@ break
             hum[SLOT_WEAPON].as_ref().expect("武器槽").dura,
             1234,
             "T4：Dura 取离世那一刻的实体值（不是会话滞后值 4000）"
+        );
+    }
+
+    /// **T8（返工 R-1 的负例牙）**：derived 侧 `use_items_loaded` 过滤。
+    ///
+    /// 场景：离世那一刻实体 `use_items` **全零**（= 该路径从未同步装备），而会话里已装备武器
+    /// （`Index=207/Dura=4000`）。`build_save_record` 的 `None => saved.derived…filter(use_items_loaded)`
+    /// 必须**拒绝**全零快照、回落到会话；否则会把已装备物品写成 `Index=0/Dura=0`
+    ///（G-06 物资丢失形态）。
+    ///
+    /// 牙：删掉 derived 支的 `.filter(use_items_loaded)` ⇒ 本用例红（`0/0`）。
+    /// **与实体侧哨兵互不替代**：删实体支的 `Some(_) => None` ⇒ 既有用例
+    /// `save_record_reflects_live_state_and_item_layout` 红（`left: 0 / right: 207`）。
+    #[test]
+    fn derived_use_items_all_zero_must_not_overwrite_session_equipment() {
+        use game_svr::ability::SLOT_WEAPON;
+        let mut rig = SoftCloseRig::new();
+        // ① 实体 use_items 清零（模拟「实体块未装载」）；会话仍是 207/4000。
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .expect("实体在场")
+            .use_items =
+            [mir2_world::entity::UseItemSlot::default(); mir2_world::entity::USE_ITEM_SLOTS];
+        assert_eq!(
+            rig.world
+                .entities
+                .get(rig.actor)
+                .expect("实体在场")
+                .use_items[SLOT_WEAPON]
+                .index,
+            0,
+            "前置：实体武器槽全零（未装载）"
+        );
+        // ② 走生产入口 soft_close ⇒ 快照里正是这块全零。
+        rig.soft_close();
+        let derived = rig.saves["hero"].derived.expect("soft_close 必须留下快照");
+        assert!(
+            derived
+                .use_items
+                .iter()
+                .all(|s| *s == mir2_world::entity::UseItemSlot::default()),
+            "前置：快照的 use_items 全零（接缝无条件拷贝，未装载块照样进快照）"
+        );
+        // ③④ 存档必须回落到会话装备，而不是把全零写库。
+        let rec = rig.save();
+        let hum = rec.data.hum_items.as_ref().expect("hum_items 非 null");
+        assert_eq!(
+            hum[SLOT_WEAPON].as_ref().expect("武器槽").index,
+            207,
+            "derived 全零不得覆盖会话 Index（删 .filter(use_items_loaded) ⇒ 0）"
+        );
+        assert_eq!(
+            hum[SLOT_WEAPON].as_ref().expect("武器槽").dura,
+            4000,
+            "derived 全零不得覆盖会话 Dura（删 .filter(use_items_loaded) ⇒ 0）"
         );
     }
 
