@@ -1436,19 +1436,107 @@ class Selftest(object):
                    [(i, rs.by_ident[i]["action"]) for i in (10, 41)])
 
     def t_pending_ignore(self, o, r):
-        rules = json.loads(json.dumps(self.builtin_rules))
-        rules["rules"] = [x for x in rules["rules"] if x.get("ident") != 658]
-        rules["rules"].append({"ident": 658, "action": "ignore",
-                               "reason": "selftest: PENDING 的 ignore 不许直接判绿",
-                               "tier": "L", "approved_by": "PENDING selftest"})
-        rp = self.rules_file("t17-rules.json", rules)
+        # 卡 openmir2-ignore-rule-count-compare：PENDING ignore 的兜底从「一剔就整轮
+        # UNDECIDABLE」升级成「每侧每条规则计数 + 形态」——两侧同量**且**同形才记为
+        # 「已计数」放行；计数或形态对不上仍红，并点名差额（保护机制没有取消，只是升级）。
+        def pending_rules(name="t17-rules.json"):
+            rules = json.loads(json.dumps(self.builtin_rules))
+            rules["rules"] = [x for x in rules["rules"] if x.get("ident") != 658]
+            rules["rules"].append({"ident": 658, "action": "ignore",
+                                   "reason": "selftest: PENDING 的 ignore 需要两侧同量同形才放行",
+                                   "tier": "L", "approved_by": "PENDING selftest"})
+            return self.rules_file(name, rules)
+
+        rp = pending_rules()
         od = self.write_run("t17-o", o)
         rd = self.write_run("t17-r", r)
         rc, rep = self.compare(od, rd, ["--rules", rp])
-        self.check("PENDING ignore 真的剔了帧 => rc 2 (pending_ignore_rule)",
+        frames_rep = (rep or {}).get("frames") or {}
+        row = [x for x in (frames_rep.get("ignored_rule_census") or [])
+               if x.get("ident") == 658]
+        self.check("牙a 两侧各 1 帧 PENDING ignore 且计数/形态相同 => rc 0 且记为已计数",
+                   rc == 0 and bool(row) and row[0]["counts_equal"] and row[0]["shape_equal"]
+                   and frames_rep.get("ignored_ident_rules_counted") == [658]
+                   and (frames_rep.get("ignored_counts") or {}).get("oracle", {})
+                   .get("658") == 1
+                   and (frames_rep.get("ignored_counts") or {}).get("rust", {})
+                   .get("658") == 1
+                   and not any(u.get("kind") == "pending_ignore_rule"
+                               for u in (rep or {}).get("undecidable", [])),
+                   (rc, frames_rep.get("ignored_rule_census"),
+                    (rep or {}).get("undecidable")))
+
+        f658 = [fr for fr in o if fr["ident"] == 658][0]
+        od2 = self.write_run("t17-o2", o + [dict(f658, seq=2099, t_ms=990099)])
+        rc, rep = self.compare(od2, rd, ["--rules", rp])
+        self.check("牙b oracle 侧多 1 帧同 ident => rc 2 且点名 oracle=2/rust=1 差 +1",
                    rc == 2 and any(u.get("kind") == "pending_ignore_rule"
+                                   and u.get("ident") == 658
+                                   and u.get("oracle") == 2 and u.get("rust") == 1
+                                   and u.get("delta") == 1
                                    for u in (rep or {}).get("undecidable", [])),
                    (rc, (rep or {}).get("undecidable")))
+
+        rd3 = self.write_run("t17-r3", [fr for fr in r if fr["ident"] != 658])
+        rc, rep = self.compare(od, rd3, ["--rules", rp])
+        # F3（reviewer-20）：单侧命中时另一侧也要**有键补 0**，否则读 ignored_counts 会 KeyError。
+        counts3 = ((rep or {}).get("frames") or {}).get("ignored_counts") or {}
+        self.check("牙c rust 侧 0 帧 => rc 2 且点名 oracle=1/rust=0 差 +1（不许静默放过）；"
+                   "ignored_counts 两侧都有键（rust 侧补 0）",
+                   rc == 2 and any(u.get("kind") == "pending_ignore_rule"
+                                   and u.get("ident") == 658
+                                   and u.get("oracle") == 1 and u.get("rust") == 0
+                                   and u.get("delta") == 1
+                                   for u in (rep or {}).get("undecidable", []))
+                   and counts3.get("oracle", {}).get("658") == 1
+                   and counts3.get("rust", {}).get("658") == 0,
+                   (rc, (rep or {}).get("undecidable"), counts3))
+
+        o4 = [dict(fr, param=9) if fr["ident"] == 658 else fr for fr in o]
+        od4 = self.write_run("t17-o4", o4)
+        rc, rep = self.compare(od4, rd, ["--rules", rp])
+        mism = [u for u in (rep or {}).get("undecidable", [])
+                if u.get("kind") == "pending_ignore_rule"]
+        self.check("牙d 计数相等但形态不同（param）=> rc 2 且 shape_equal=false",
+                   rc == 2 and bool(mism) and mism[0].get("counts_equal") is True
+                   and mism[0].get("shape_equal") is False
+                   and mism[0].get("shapes", {}).get("oracle")
+                   and mism[0].get("shapes", {}).get("rust"),
+                   (rc, mism))
+
+        # 牙e（reviewer-20 F6）：两侧各 3 帧、总数相同、**分布互换** {1×2,2×1} vs {1×1,2×2}
+        #   —— 只比 distinct 集合（set）会放过，多重集必须红。
+        base658 = [fr for fr in o if fr["ident"] == 658][0]
+
+        def three(params, seq0):
+            return [dict(base658, param=p, seq=seq0 + i, t_ms=100000 + i)
+                    for i, p in enumerate(params)]
+
+        o5 = [fr for fr in o if fr["ident"] != 658] + three([1, 1, 2], 3001)
+        r5 = [fr for fr in r if fr["ident"] != 658] + three([1, 2, 2], 3101)
+        od5 = self.write_run("t17-o5", o5)
+        rd5 = self.write_run("t17-r5", r5)
+        rc, rep = self.compare(od5, rd5, ["--rules", rp])
+        mism5 = [u for u in (rep or {}).get("undecidable", [])
+                 if u.get("kind") == "pending_ignore_rule"]
+        self.check("牙e 两侧同 3 帧但形态分布互换（多重集 vs 集合）=> rc 2 且 shape_equal=false",
+                   rc == 2 and bool(mism5) and mism5[0].get("counts_equal") is True
+                   and mism5[0].get("shape_equal") is False,
+                   (rc, mism5))
+
+        # 牙f（reviewer-20 F2）：计数/头部形态相同但 **body 不同** => 必须红
+        #   （只在 head 上比形态会漏掉这一整类）。
+        o6 = [dict(fr, body_hex=b"AAA".hex(), body_len=3,
+                   body_sha256=_sha(b"AAA")) if fr["ident"] == 658 else fr
+              for fr in o]
+        od6 = self.write_run("t17-o6", o6)
+        rc, rep = self.compare(od6, rd, ["--rules", rp])
+        mism6 = [u for u in (rep or {}).get("undecidable", [])
+                 if u.get("kind") == "pending_ignore_rule"]
+        self.check("牙f 计数与头部形态相同但 body 不同 => rc 2（形态含 body_sha256）",
+                   rc == 2 and bool(mism6) and mism6[0].get("counts_equal") is True
+                   and mism6[0].get("shape_equal") is False,
+                   (rc, mism6))
 
     def t_masked_missing(self, o, r):
         # 46 的 param 被规则掩码；只给一侧 => 不能静默跳过（CH-4）
