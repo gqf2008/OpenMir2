@@ -15,6 +15,12 @@
 | 3 | 夹具 | `provision_...py --gate --need gold --need sellable_item --need npc --need monsters` | 已合，**需实跑一次** |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；mysqld 2580 在 | 当前满足 |
 
+**开窗当天用它认树**（数字对不上就说明不在预期 master 上）：
+- `python -I -B tools/goal/goal_gate.py selftest` ⇒ **79 条断言 79 通过**
+- `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **47 项全绿**；`--inventory` ⇒ 清点 **52 = 47 + 5 + 0**
+- `goal_gate --full` 产物里条件④ 应显示「**门禁 8 项**」（第 8 项 = 工具自测门，约 +120s）
+- `cargo test --workspace` ⇒ **141 suites，running 3329 = passed 3266 + ignored 63**
+
 > 1 与 2 任一未绿就**不要开窗**——否则那天会出现同一现象两种判法，或者跑完才发现门是红的。
 
 ## 1. 判据（8 条，正文见 `openmir2-mirflow-verdict-cause-split` 的 comment `b0c9b9c0`）
