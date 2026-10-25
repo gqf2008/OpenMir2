@@ -432,8 +432,22 @@ class RuleSet(object):
                 if bad:
                     raise InputError("db.masked_columns[%r][%r].require 有未知检查 %s（允许 %s）"
                                      % (table, col, bad, sorted(allowed_checks)))
+                # 作用域（F1 裁决 244d9f39）：`changes_on_mutation` 需要 before 快照，而窗口管道
+                # （本工具）没有 `--db-baseline-*` ⇒ 该检查**只在 dbsnap 直连**可跑，管道侧恒 skipped。
+                # 把这条作用域做成**加载期硬约束**，别让「三牙承重」变成「两牙 + 一个永远跳过的名字」。
+                applies = decl.get("applies_to")
+                if applies not in (None, "dbsnap-direct"):
+                    raise InputError("db.masked_columns[%r][%r].applies_to 只允许 \"dbsnap-direct\""
+                                     "（其它值没有实现）" % (table, col))
+                if "changes_on_mutation" in req and applies != "dbsnap-direct":
+                    raise InputError(
+                        "db.masked_columns[%r][%r] 声明了 changes_on_mutation，但没有登记 "
+                        "applies_to=\"dbsnap-direct\"：该检查需要 before 快照，而 compare_runs "
+                        "没有 --db-baseline-* 透传（F1 裁决 244d9f39）⇒ 管道里它恒 skipped。"
+                        "要么登记作用域，要么把它从 require 里去掉。" % (table, col))
                 norm_mc[table][col] = {"reason": reason.strip(), "ref": ref.strip(),
                                        "group_by": decl.get("group_by"),
+                                       "applies_to": applies,
                                        "require": list(req)}
         out["masked_columns"] = norm_mc
         tol = db.get("time_tolerance_s", 600)
@@ -1759,6 +1773,9 @@ def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
                 "table": rec.get("table"), "column": rec.get("column"),
                 "reason": rec.get("reason"), "ref": rec.get("ref"),
                 "checks": rec.get("checks"), "group_by": rec.get("group_by"),
+                # F2（reviewer-21 f41dbaa2）：文档承诺「带两侧占用行数」，这里必须真带（否则删文档）。
+                "occupied_a": rec.get("occupied_a"), "occupied_b": rec.get("occupied_b"),
+                "applies_to": rec.get("applies_to"),
                 "skipped": rec.get("skipped") or []})
             continue
         if rec.get("kind") in DB_UNDECIDABLE_KINDS:
@@ -1994,6 +2011,8 @@ def compare_main(args):
                 "source": "db", "field": m["column"], "table": m["table"],
                 "kind": "db_column_masked", "reason": m["reason"], "ref": m["ref"],
                 "checks": m["checks"], "group_by": m.get("group_by"),
+                "occupied_a": m.get("occupied_a"), "occupied_b": m.get("occupied_b"),
+                "applies_to": m.get("applies_to"),
                 "skipped": m.get("skipped") or [], "tier": "L", "approved_by": m["ref"]})
     except (InputError, Undecidable) as e:
         report["db"] = {"state": "error", "detail": str(e), "diffs": [], "undecidable": []}

@@ -573,6 +573,7 @@
           "reason": "D-1：oracle `M2Share.GetItemNumber()`（`M2Share.cs:547`）返回「计数器 + HUtil32.GetTickCount()」，含墙钟 ⇒ 两次 C# 运行都不一致，不存在可对拍真值；同一条依据从「掉落对拍」推广到「DB 列」",
           "ref": "D-1 / mir2-rs/tests/parity/whitelist.md:24",
           "group_by": "PlayerId",
+          "applies_to": "dbsnap-direct",
           "require": [
             "nonzero_both_sides",
             "distinct_per_player",

@@ -2829,11 +2829,29 @@ class Selftest(object):
                 if w.get("kind") == "db_column_masked"
                 and w.get("table") == "mir2_db.characters_bagitem"
                 and w.get("field") == "MakeIndex"]
+        occ_a = wl_s[0].get("occupied_a") if len(wl_s) == 1 else None
+        occ_b = wl_s[0].get("occupied_b") if len(wl_s) == 1 else None
         self.check("牙MI-5 仓库 rules.json 自身的登记生效：MakeIndex-only 差异 ⇒ rc 0 且 whitelisted 点名 D-1"
                    "（删掉登记 ⇒ 本条红，回到旧的「每次都报一条」）",
                    rc_s == 0 and len(wl_s) == 1 and "D-1" in (wl_s[0].get("ref") or "")
                    and "changes_on_mutation" in (wl_s[0].get("skipped") or []),
                    (rc_s, wl_s or (rep_s or {}).get("diffs")))
+        # F2（reviewer-21 f41dbaa2）：文档承诺「带两侧占用行数」⇒ 记录里必须真有，且两侧相等非 0
+        # （占用行数正是「nonzero_both_sides 真的看过数据」的证据）。F1 裁决后作用域也要随记录走。
+        self.check("牙MI-6 whitelisted 带两侧占用行数（相等且 >0）+ applies_to=dbsnap-direct"
+                   "（管道无 baseline ⇒ 该牙恒 skipped，必须登记作用域）",
+                   isinstance(occ_a, int) and occ_a > 0 and occ_a == occ_b
+                   and wl_s[0].get("applies_to") == "dbsnap-direct",
+                   (occ_a, occ_b, wl_s[0].get("applies_to") if len(wl_s) == 1 else None))
+
+        # 牙MI-7：**声明 changes_on_mutation 却不登记作用域 ⇒ 加载期 rc 2**。
+        # 没有这条时「三牙」可以退化成一个永远 skipped 的名字而全绿（reviewer-21 F1 的正式化）。
+        rules_scope = json.loads(json.dumps(self.builtin_rules))
+        del rules_scope["db"]["masked_columns"]["mir2_db.characters_bagitem"]["MakeIndex"]["applies_to"]
+        p_scope = self.rules_file("mi-noscope.json", rules_scope)
+        rc_sc, rep_sc = self.compare(odb, rdb_diff, ["--allow-missing-fields", "--rules", p_scope])
+        self.check("牙MI-7 声明 changes_on_mutation 但缺 applies_to ⇒ rc 2（不许退化成永远 skipped）",
+                   rc_sc == 2, (rc_sc, (rep_sc or {}).get("undecidable")))
 
 
     def finish(self):
