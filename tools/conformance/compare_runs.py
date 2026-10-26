@@ -243,11 +243,15 @@ class RuleSet(object):
         self.sha256 = sha256
         self.global_masks = {}      # field -> {reason,tier,approved_by,origin}
         self.by_ident = {}          # ident -> rule dict（已展开、已校验）
+        # 「随机分支成对帧」规则（卡 openmir2-rules-random-idle-frames；见 _parse_random_branch_pairs）
+        self.random_branch_pairs = None
         self.db = {}
         self.pending_review = []
 
         self._parse_global(data.get("global") or [])
         self._parse_rules(data.get("rules") or [])
+        self.random_branch_pairs = self._parse_random_branch_pairs(
+            data.get("random_branch_pairs"))
         self._parse_db(data.get("db") or {})
         self.pending_review = sorted(set(self.pending_review))
 
@@ -364,6 +368,45 @@ class RuleSet(object):
                 if ident in self.by_ident:
                     raise InputError("ident %d 在规则表里出现两次（歧义 ⇒ 拒绝）" % ident)
                 self.by_ident[ident] = expanded
+
+    RANDOM_PAIR_FIELDS = ("param", "tag", "light", "phase")
+
+    def _parse_random_branch_pairs(self, rule):
+        """「随机分支成对帧」规则（卡 openmir2-rules-random-idle-frames）。
+
+        形态：`SM_TURN(10)` **无名尾**（body_len == turn_body_len，本仓库实测 11）
+        **紧随**一条同 recog 的 `SM_FEATURECHANGED(41)`（body_len == feature_body_len，实测 0）。
+        oracle 的随机源是墙钟播种（`src/OpenMir2/RandomNumber.cs:35`），rust 是 `with_seed(42)`
+        ⇒ 「这一轮抽没抽中」不可比（同一二进制同场景 0/1/2 次）；可比的是**配对与形状**：
+        位置(param/tag)、Light（series 高字节）与相位。Dir（series 低字节，`RandomByte(8)`）**不比**。
+        """
+        if rule is None:
+            return None
+        where = "random_branch_pairs"
+        if not isinstance(rule, dict):
+            raise InputError("%s 必须是对象" % where)
+        self._check_meta(rule, where)
+        out = {}
+        for key in ("turn_ident", "feature_ident", "turn_body_len", "feature_body_len"):
+            v = rule.get(key)
+            if not is_int(v) or v < 0 or v > 65535:
+                raise InputError("%s 的 %s 必须是 0..65535 的整数（实际 %r）" % (where, key, v))
+            out[key] = v
+        if out["turn_ident"] == out["feature_ident"]:
+            raise InputError("%s 的 turn_ident 与 feature_ident 不能相同" % where)
+        fields = self._fields_list(rule.get("shape_fields") or list(self.RANDOM_PAIR_FIELDS),
+                                   self.RANDOM_PAIR_FIELDS, where + ".shape_fields")
+        out["shape_fields"] = fields
+        # 两个 ident 必须已有规则：成对摘走之后不许冒出新「没规则的 ident」。
+        for ident in (out["turn_ident"], out["feature_ident"]):
+            if ident not in self.by_ident:
+                raise InputError("%s 的 ident %d 在 rules[] 里没有条目（先登记 ident 规则）"
+                                 % (where, ident))
+        for key in ("reason", "tier", "approved_by"):
+            out[key] = rule[key]
+        if str(rule["approved_by"]).upper().startswith("PENDING"):
+            self.pending_review.append(where)
+        return out
 
     def _parse_db(self, db):
         if not isinstance(db, dict):
@@ -681,6 +724,99 @@ def first_diff_offset(a, b):
 
 def count_diff_bytes(a, b):
     return sum(1 for x, y in zip(a, b) if x != y) + abs(len(a) - len(b))
+
+
+# ---------------------------------------------------------------------------
+# random_branch_pairs：随机分支的「无名 TURN + 紧随 FEATURECHANGED」成对帧
+# ---------------------------------------------------------------------------
+def _random_pair_light(turn):
+    s = turn.get("series")
+    if not is_int(s):
+        return None
+    return (s >> 8) & 0xFF
+
+
+def random_pair_shape(pair, fields):
+    # shape_fields 里的 `phase` 是**驱动侧的连接标签**（login/gamegate/selgate），不是协议字段：
+    # 同一条帧在不同 run 里换标签会假红（F4）。保留它是为了抓「同一对帧跑到另一条连接上」这种
+    # 真实错位；标签体系若改名，需要同步 rules.json 的近似取值。
+    t = pair["turn"]
+    out = []
+    for name in fields:
+        if name == "light":
+            out.append(_ord_token(_random_pair_light(t)))
+        else:
+            out.append(_ord_token(t.get(name)))
+    return tuple(out)
+
+
+def extract_random_pairs(frames, rule):
+    """按**形状**把随机分支成对帧摘出：无名 TURN(10) + 紧随同 recog 的 FEATURECHANGED(41)。
+
+    摘走后其余帧保持原序（对齐不受影响）；不成对/形状不符的帧**留在流里照常比**
+    ⇒ 把尾或 Light 改坏不会被「摘走」，会作为普通帧差异判红。
+    """
+    if not rule:
+        return [], list(frames)
+    pairs, kept = [], []
+    i, n = 0, len(frames)
+    while i < n:
+        a = frames[i]
+        b = frames[i + 1] if i + 1 < n else None
+        if (a["ident"] == rule["turn_ident"] and a["body"] is not None
+                and len(a["body"]) == rule["turn_body_len"]
+                and b is not None and b["ident"] == rule["feature_ident"]
+                and (b["body"] is None or len(b["body"]) == rule["feature_body_len"])
+                and a.get("recog") is not None and a.get("recog") == b.get("recog")):
+            pairs.append({"turn": a, "feature": b})
+            i += 2
+            continue
+        kept.append(a)
+        i += 1
+    return pairs, kept
+
+
+def compare_random_pairs(opairs, rpairs, rule, diffs, whitelisted):
+    """按**多重集**比形状：**次数差不判红**（随机抽数），**形状差判红**（协议形状合同）。"""
+    fields = rule["shape_fields"]
+    oc = Counter(random_pair_shape(p, fields) for p in opairs)
+    rc = Counter(random_pair_shape(p, fields) for p in rpairs)
+    # 一侧**一对都没有**时不存在「形状合同」可比（RNG 没抽中，不是形状差异）⇒ 只登记次数，
+    # 不判红（卡 openmir2-rules-random-idle-frames 的「不判存在性」）。两侧都有对才比形状。
+    only_o = sorted(set(oc) - set(rc)) if rc else []
+    only_r = sorted(set(rc) - set(oc)) if oc else []
+    for shape in only_o:
+        diffs.append({"source": "frame", "kind": "random_pair_shape", "side": "oracle",
+                      "ident": rule["turn_ident"], "shape": [str(x) for x in shape],
+                      "count": oc[shape],
+                      "detail": "oracle 侧出现的随机分支对形状在 rust 侧不存在（形状合同被破坏）"})
+    for shape in only_r:
+        diffs.append({"source": "frame", "kind": "random_pair_shape", "side": "rust",
+                      "ident": rule["turn_ident"], "shape": [str(x) for x in shape],
+                      "count": rc[shape],
+                      "detail": "rust 侧出现的随机分支对形状在 oracle 侧不存在（形状合同被破坏）"})
+    mismatch = bool(only_o or only_r)
+    summary = {
+        "rule": {k: rule[k] for k in ("turn_ident", "feature_ident", "turn_body_len",
+                                       "feature_body_len", "shape_fields")},
+        "oracle_pairs": len(opairs),
+        "rust_pairs": len(rpairs),
+        "counts_equal": len(opairs) == len(rpairs),
+        "shapes": [{"shape": [str(x) for x in s], "oracle": oc.get(s, 0), "rust": rc.get(s, 0)}
+                    for s in sorted(set(oc) | set(rc))],
+        "shape_mismatch": mismatch,
+        "pending": str(rule.get("approved_by", "")).upper().startswith("PENDING"),
+    }
+    if len(opairs) != len(rpairs) or mismatch:
+        whitelisted.append({
+            "source": "frame", "kind": "random_branch_pairs",
+            "ident": rule["turn_ident"],
+            "oracle_pairs": len(opairs), "rust_pairs": len(rpairs),
+            "shape_mismatch": mismatch,
+            "reason": rule["reason"], "tier": rule["tier"],
+            "approved_by": rule["approved_by"],
+            "detail": "随机分支成对帧按形状多重集比：次数差不算差异（RNG 流位不同），形状差算差异"})
+    return summary
 
 
 # ---------------------------------------------------------------------------
@@ -1376,6 +1512,15 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     o_kept, o_ign, o_ign_cli = split("oracle", o_stream.frames)
     r_kept, r_ign, r_ign_cli = split("rust", r_stream.frames)
 
+    # 随机分支成对帧（卡 openmir2-rules-random-idle-frames）：先按形状摘出再对齐；
+    # 次数差不算差异，形状差算差异。kept_frames 用**摘对之前**的长度（空运行判据不变）。
+    o_kept_n, r_kept_n = len(o_kept), len(r_kept)
+    rp_rule = rules.random_branch_pairs
+    o_pairs, o_kept = extract_random_pairs(o_kept, rp_rule)
+    r_pairs, r_kept = extract_random_pairs(r_kept, rp_rule)
+    random_pairs_summary = (compare_random_pairs(o_pairs, r_pairs, rp_rule, diffs, whitelisted)
+                            if rp_rule else None)
+
     # multiset_by_tick 需要 t_ms 标注 tick 窗口：**任一侧任一帧**缺 t_ms 都判不了。
     # 必须预扫整条流，不能在块首判——缺的是运行中的后续帧时会被漏判，进而误报
     # 「多余帧」（reviewer-2 I-2）。
@@ -1497,6 +1642,15 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
         for _side in ("oracle", "rust"):
             ignore_counts[_side].setdefault(_ident, 0)
             ignore_shapes[_side].setdefault(_ident, {})
+    # F3（Leader 裁决 24127cfe）：摘对之后**一条确定性帧都没比**⇒ 判不了，不是绿。
+    # 「整条流全是随机对」时两侧可以完全靠「次数差不算差异」蒙混过关。
+    if compared_frames == 0 and (o_pairs or r_pairs):
+        undecidable.append({
+            "source": "frame", "kind": "random_pairs_only",
+            "oracle_pairs": len(o_pairs), "rust_pairs": len(r_pairs),
+            "detail": "摘掉随机分支成对帧之后没有可比较的确定性帧（compared_frames=0）"
+                      "⇒ 判不了（不是绿）；存在性由构造级用例负责"})
+
     census = ignore_rule_census(ignore_counts, ignore_shapes, rules)
     return {
         "diffs": diffs,
@@ -1515,7 +1669,8 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
         "pending_ignore_mismatch": sorted(
             row["ident"] for row in census
             if row["pending"] and not (row["counts_equal"] and row["shape_equal"])),
-        "kept_frames": {"oracle": len(o_kept), "rust": len(r_kept)},
+        "kept_frames": {"oracle": o_kept_n, "rust": r_kept_n},
+        "random_branch_pairs": random_pairs_summary,
         "present_idents": present,
         "unclassified": unclassified,
         "compared_frames": compared_frames,
@@ -1933,6 +2088,7 @@ def compare_main(args):
     report["missing_fields"] = cmp["missing_fields"]
     report["masked_ranges"] = cmp["masked_ranges"]
     report["masked_order"] = cmp["masked_order"]
+    report["random_branch_pairs"] = cmp["random_branch_pairs"]
     undecidable.extend(cmp["undecidable"])
     for p in o_stream.problems + r_stream.problems:
         undecidable.append({"source": "input", **p})
@@ -2069,6 +2225,18 @@ def human_summary(report):
         lines.append("rules: %s (sha256=%s, ident 规则 %d 条%s)"
                      % (r["path"], r["sha256"][:16], r["ident_rule_count"],
                         "，PENDING 复核" if r.get("rules_pending_review") else ""))
+    rp = report.get("random_branch_pairs")
+    if rp:
+        lines.append("random_branch_pairs(ident=%d↔%d): oracle=%d rust=%d shape_mismatch=%s"
+                     % (rp["rule"]["turn_ident"], rp["rule"]["feature_ident"],
+                        rp["oracle_pairs"], rp["rust_pairs"], rp["shape_mismatch"]))
+        # ①（Leader 裁决 24127cfe）：次数差不改 verdict，但「一侧很多、另一侧 0」要给人看的提示——
+        # 形状合同对「Rust 永远发不出这对帧」是盲的，存在性由构造级用例负责。
+        if rp["oracle_pairs"] >= 3 and rp["rust_pairs"] == 0:
+            lines.append("WARNING random_branch_pairs: oracle=%d 对 vs rust=0 对（不改 verdict；"
+                         "这对帧是否存在由构造级用例 "
+                         "npc_random_idle_frames_through_production_drain_run 负责）"
+                         % rp["oracle_pairs"])
     fr = report.get("frames") or {}
     if fr:
         lines.append("frames: oracle=%d rust=%d compared=%d"
@@ -2201,12 +2369,122 @@ def write_report(report, out):
         f.write("\n")
 
 
+def _selftest_random_pairs(mod):
+    """随机分支成对帧的常驻牙（卡 openmir2-rules-random-idle-frames）。
+
+    ① 少一对 ⇒ 不判红（次数差是 RNG，不是产品差异）；
+    ② 把 TURN 的尾改坏 / 把 Light（series 高字节）改坏 ⇒ 判红（比对的是形状）；
+    ③ 删一条确定性的**带名尾** TURN ⇒ 判红（没把确定性的帧一起掩掉）。
+    """
+    pass_n = fail_n = 0
+
+    def chk(cond, name, detail=""):
+        nonlocal pass_n, fail_n
+        if cond:
+            pass_n += 1
+            print("PASS %s" % name)
+        else:
+            fail_n += 1
+            print("FAIL %s %s" % (name, detail))
+
+    def fr(idx, ident, param=0, tag=0, series=0, phase=0, body=b"", recog=7):
+        return {"index": idx, "line": idx + 1, "ident": ident, "body": body,
+                "body_sha256": None, "param": param, "tag": tag, "series": series,
+                "phase": phase, "recog": recog, "seq": idx, "t_ms": idx,
+                "conn": 1, "raw": {}}
+
+    turn_body = bytes(range(11))          # 无名尾：11B
+    named_body = bytes(range(11)) + b"NAME"   # 带名尾：>11B
+
+    def pair(idx, dirn=3, light=2, param=10, tag=11, recog=7, phase=0):
+        return [fr(idx, 10, param, tag, (light << 8) | dirn, phase, turn_body, recog),
+                fr(idx + 1, 41, 0, 0, 0, 0, b"", recog)]
+
+    rules = mod.load_rules(mod.DEFAULT_RULES)
+    chk(rules.random_branch_pairs is not None, "random_pairs: 规则表已登记 random_branch_pairs")
+
+    def stream(label, frames):
+        return mod.Stream(label, "/dev/null", "/dev/null", frames, [])
+
+    def run(ofl, rfl):
+        return mod.compare_streams(stream("oracle", ofl), stream("rust", rfl), rules)
+
+    base_o = pair(0)
+    # ① 少一对 ⇒ 不判红
+    # 一侧一对都没有 ⇒ 只登记次数，不判红（不判存在性）
+    c = run(base_o, [])
+    chk(c["diffs"] == [] and c["random_branch_pairs"]["shape_mismatch"] is False,
+        "random_pairs: 一侧 0 对 ⇒ 不判红", "diffs=%r" % (c["diffs"][:2],))
+    c = run(base_o + base_o, base_o)
+    chk(c["diffs"] == [], "random_pairs: 少一对不判红",
+        "diffs=%r" % (c["diffs"][:2],))
+    chk(c["random_branch_pairs"]["oracle_pairs"] == 2
+        and c["random_branch_pairs"]["rust_pairs"] == 1
+        and c["random_branch_pairs"]["counts_equal"] is False,
+        "random_pairs: 次数差被如实登记")
+    # ② 尾改坏 ⇒ 不成对，留在流里 ⇒ 判红
+    bad_tail = [fr(0, 10, 10, 11, 0x0203, 0, named_body, 7), fr(1, 41, 0, 0, 0, 0, b"", 7)]
+    c = run(base_o, bad_tail)
+    chk(c["diffs"] != [], "random_pairs: TURN 尾改坏 ⇒ 判红")
+    # ② Light 改坏 ⇒ 形状不同 ⇒ 判红
+    bad_light = pair(0, light=4)
+    c = run(base_o, bad_light)
+    chk(c["diffs"] != [] and c["random_branch_pairs"]["shape_mismatch"] is True,
+        "random_pairs: Light 改坏 ⇒ 判红（形状合同）")
+    # ②' Dir 改（低字节）是随机支本身 ⇒ 不判红
+    c = run(base_o, pair(0, dirn=6))
+    chk(c["diffs"] == [], "random_pairs: Dir 变化不判红（随机分量）")
+    # ②' recog 相同这条条件：一侧 41 的 recog 与 TURN 不同 ⇒ 不是随机对（留在流里照常比）⇒ 判红。
+    #    把条件换成 `and True` ⇒ 两侧都摘走、形状又相同 ⇒ diffs=0 的假绿（recognizer 必须钉住）。
+    mismatch_recog = [fr(0, 10, 10, 11, 0x0203, 0, turn_body, 7),
+                      fr(1, 41, 0, 0, 0, 0, b"", 8)]
+    c = run(mismatch_recog, base_o)
+    chk(c["diffs"] != [], "random_pairs: 41 的 recog 与 TURN 不同 ⇒ 不是随机对 ⇒ 判红",
+        "diffs=%r" % (c["diffs"][:2],))
+
+    # G1（reviewer-20 追加）：形状的每个维度都要有牙——删掉某一维会让「不同位置/相位」被当成同一形状。
+    c = run(base_o, pair(0, param=12))
+    chk(c["diffs"] != [], "random_pairs: param 改 ⇒ 判红（位置维度有牙）")
+    c = run(base_o, pair(0, tag=13))
+    chk(c["diffs"] != [], "random_pairs: tag 改 ⇒ 判红（位置维度有牙）")
+    c = run(base_o, pair(0, phase="selgate"))
+    chk(c["diffs"] != [], "random_pairs: phase 改 ⇒ 判红（驱动侧标签，改名会假红——F4 已知代价）")
+
+    # ③ 删一条确定性带名尾 TURN ⇒ 判红
+    # 真实形态：带名尾 TURN **后面也跟一条 41**（登录期出现帧就是这样）。它不是随机对
+    # （body_len 15 ≠ 11），删掉必须判红；若把「无名尾」判定删掉，这一对会被误当随机对摘走
+    # ⇒ 本牙变红。
+    named_pair = [fr(0, 10, 10, 11, 0x0203, 0, named_body, 7), fr(1, 41, 0, 0, 0, 0, b"", 7)]
+    c = run(base_o + named_pair, base_o)
+    chk(c["diffs"] != [], "random_pairs: 删确定性带名尾 TURN ⇒ 判红")
+
+    # ③ 整条流都是随机对 ⇒ 零比较 ⇒ 不可判（不是绿）
+    c = run(base_o, base_o)
+    kinds = sorted({u.get("kind") for u in c["undecidable"]})
+    chk(c["diffs"] == [] and "random_pairs_only" in kinds,
+        "random_pairs: 只有随机对（零比较）⇒ 不可判，不是绿", "undecidable=%r" % (kinds,))
+
+    # ① 3 对 vs 0 对 ⇒ 人读提示（不改 verdict）
+    fake = {"verdict": "PASS", "exit_code": 0,
+            "random_branch_pairs": {"rule": {"turn_ident": 10, "feature_ident": 41},
+                                    "oracle_pairs": 3, "rust_pairs": 0,
+                                    "shape_mismatch": False}}
+    txt = mod.human_summary(fake)   # 返回字符串（不是行列表）
+    chk("构造级用例" in txt and "WARNING random_branch_pairs" in txt,
+        "random_pairs: 3 对 vs 0 对 有人读提示")
+
+    print("RANDOM_PAIRS_SELFTEST_PASS=%d FAIL=%d" % (pass_n, fail_n))
+    return 0 if fail_n == 0 else 1
+
+
 def cmd_selftest():
     here = os.path.dirname(os.path.abspath(__file__))
+    extra_rc = _selftest_random_pairs(sys.modules[__name__])
     me = sys.modules[__name__]
     mod = load_module("conformance_selftest_impl",
                       os.path.join(here, "selftest_impl.py"))
-    return mod.run(me, here)
+    rc = mod.run(me, here)
+    return rc or extra_rc
 
 
 def main(argv=None):
