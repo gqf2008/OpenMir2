@@ -737,6 +737,9 @@ def _random_pair_light(turn):
 
 
 def random_pair_shape(pair, fields):
+    # shape_fields 里的 `phase` 是**驱动侧的连接标签**（login/gamegate/selgate），不是协议字段：
+    # 同一条帧在不同 run 里换标签会假红（F4）。保留它是为了抓「同一对帧跑到另一条连接上」这种
+    # 真实错位；标签体系若改名，需要同步 rules.json 的近似取值。
     t = pair["turn"]
     out = []
     for name in fields:
@@ -1639,6 +1642,15 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
         for _side in ("oracle", "rust"):
             ignore_counts[_side].setdefault(_ident, 0)
             ignore_shapes[_side].setdefault(_ident, {})
+    # F3（Leader 裁决 24127cfe）：摘对之后**一条确定性帧都没比**⇒ 判不了，不是绿。
+    # 「整条流全是随机对」时两侧可以完全靠「次数差不算差异」蒙混过关。
+    if compared_frames == 0 and (o_pairs or r_pairs):
+        undecidable.append({
+            "source": "frame", "kind": "random_pairs_only",
+            "oracle_pairs": len(o_pairs), "rust_pairs": len(r_pairs),
+            "detail": "摘掉随机分支成对帧之后没有可比较的确定性帧（compared_frames=0）"
+                      "⇒ 判不了（不是绿）；存在性由构造级用例负责"})
+
     census = ignore_rule_census(ignore_counts, ignore_shapes, rules)
     return {
         "diffs": diffs,
@@ -2218,6 +2230,13 @@ def human_summary(report):
         lines.append("random_branch_pairs(ident=%d↔%d): oracle=%d rust=%d shape_mismatch=%s"
                      % (rp["rule"]["turn_ident"], rp["rule"]["feature_ident"],
                         rp["oracle_pairs"], rp["rust_pairs"], rp["shape_mismatch"]))
+        # ①（Leader 裁决 24127cfe）：次数差不改 verdict，但「一侧很多、另一侧 0」要给人看的提示——
+        # 形状合同对「Rust 永远发不出这对帧」是盲的，存在性由构造级用例负责。
+        if rp["oracle_pairs"] >= 3 and rp["rust_pairs"] == 0:
+            lines.append("WARNING random_branch_pairs: oracle=%d 对 vs rust=0 对（不改 verdict；"
+                         "这对帧是否存在由构造级用例 "
+                         "npc_random_idle_frames_through_production_drain_run 负责）"
+                         % rp["oracle_pairs"])
     fr = report.get("frames") or {}
     if fr:
         lines.append("frames: oracle=%d rust=%d compared=%d"
@@ -2377,8 +2396,8 @@ def _selftest_random_pairs(mod):
     turn_body = bytes(range(11))          # 无名尾：11B
     named_body = bytes(range(11)) + b"NAME"   # 带名尾：>11B
 
-    def pair(idx, dirn=3, light=2, param=10, tag=11, recog=7):
-        return [fr(idx, 10, param, tag, (light << 8) | dirn, 0, turn_body, recog),
+    def pair(idx, dirn=3, light=2, param=10, tag=11, recog=7, phase=0):
+        return [fr(idx, 10, param, tag, (light << 8) | dirn, phase, turn_body, recog),
                 fr(idx + 1, 41, 0, 0, 0, 0, b"", recog)]
 
     rules = mod.load_rules(mod.DEFAULT_RULES)
@@ -2415,6 +2434,22 @@ def _selftest_random_pairs(mod):
     # ②' Dir 改（低字节）是随机支本身 ⇒ 不判红
     c = run(base_o, pair(0, dirn=6))
     chk(c["diffs"] == [], "random_pairs: Dir 变化不判红（随机分量）")
+    # ②' recog 相同这条条件：一侧 41 的 recog 与 TURN 不同 ⇒ 不是随机对（留在流里照常比）⇒ 判红。
+    #    把条件换成 `and True` ⇒ 两侧都摘走、形状又相同 ⇒ diffs=0 的假绿（recognizer 必须钉住）。
+    mismatch_recog = [fr(0, 10, 10, 11, 0x0203, 0, turn_body, 7),
+                      fr(1, 41, 0, 0, 0, 0, b"", 8)]
+    c = run(mismatch_recog, base_o)
+    chk(c["diffs"] != [], "random_pairs: 41 的 recog 与 TURN 不同 ⇒ 不是随机对 ⇒ 判红",
+        "diffs=%r" % (c["diffs"][:2],))
+
+    # G1（reviewer-20 追加）：形状的每个维度都要有牙——删掉某一维会让「不同位置/相位」被当成同一形状。
+    c = run(base_o, pair(0, param=12))
+    chk(c["diffs"] != [], "random_pairs: param 改 ⇒ 判红（位置维度有牙）")
+    c = run(base_o, pair(0, tag=13))
+    chk(c["diffs"] != [], "random_pairs: tag 改 ⇒ 判红（位置维度有牙）")
+    c = run(base_o, pair(0, phase="selgate"))
+    chk(c["diffs"] != [], "random_pairs: phase 改 ⇒ 判红（驱动侧标签，改名会假红——F4 已知代价）")
+
     # ③ 删一条确定性带名尾 TURN ⇒ 判红
     # 真实形态：带名尾 TURN **后面也跟一条 41**（登录期出现帧就是这样）。它不是随机对
     # （body_len 15 ≠ 11），删掉必须判红；若把「无名尾」判定删掉，这一对会被误当随机对摘走
@@ -2422,6 +2457,21 @@ def _selftest_random_pairs(mod):
     named_pair = [fr(0, 10, 10, 11, 0x0203, 0, named_body, 7), fr(1, 41, 0, 0, 0, 0, b"", 7)]
     c = run(base_o + named_pair, base_o)
     chk(c["diffs"] != [], "random_pairs: 删确定性带名尾 TURN ⇒ 判红")
+
+    # ③ 整条流都是随机对 ⇒ 零比较 ⇒ 不可判（不是绿）
+    c = run(base_o, base_o)
+    kinds = sorted({u.get("kind") for u in c["undecidable"]})
+    chk(c["diffs"] == [] and "random_pairs_only" in kinds,
+        "random_pairs: 只有随机对（零比较）⇒ 不可判，不是绿", "undecidable=%r" % (kinds,))
+
+    # ① 3 对 vs 0 对 ⇒ 人读提示（不改 verdict）
+    fake = {"verdict": "PASS", "exit_code": 0,
+            "random_branch_pairs": {"rule": {"turn_ident": 10, "feature_ident": 41},
+                                    "oracle_pairs": 3, "rust_pairs": 0,
+                                    "shape_mismatch": False}}
+    txt = mod.human_summary(fake)   # 返回字符串（不是行列表）
+    chk("构造级用例" in txt and "WARNING random_branch_pairs" in txt,
+        "random_pairs: 3 对 vs 0 对 有人读提示")
 
     print("RANDOM_PAIRS_SELFTEST_PASS=%d FAIL=%d" % (pass_n, fail_n))
     return 0 if fail_n == 0 else 1

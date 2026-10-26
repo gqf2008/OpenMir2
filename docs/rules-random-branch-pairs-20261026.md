@@ -37,7 +37,7 @@
 
 ## 3. 牙
 
-常驻牙：`python -I -B tools/conformance/compare_runs.py selftest`（新增 8 条，既有 343 条不放松）。
+常驻牙：`python -I -B tools/conformance/compare_runs.py selftest`（新增 14 条，既有 343 条不放松）。
 
 ```
 PASS random_pairs: 规则表已登记 random_branch_pairs
@@ -48,6 +48,12 @@ PASS random_pairs: TURN 尾改坏 ⇒ 判红
 PASS random_pairs: Light 改坏 ⇒ 判红（形状合同）
 PASS random_pairs: Dir 变化不判红（随机分量）
 PASS random_pairs: 删确定性带名尾 TURN ⇒ 判红
+PASS random_pairs: 41 的 recog 与 TURN 不同 ⇒ 不是随机对 ⇒ 判红
+PASS random_pairs: 只有随机对（零比较）⇒ 不可判，不是绿
+PASS random_pairs: 3 对 vs 0 对 有人读提示
+PASS random_pairs: param 改 ⇒ 判红（位置维度有牙）
+PASS random_pairs: tag 改 ⇒ 判红（位置维度有牙）
+PASS random_pairs: phase 改 ⇒ 判红（驱动侧标签，改名会假红——F4 已知代价）
 ```
 
 对应卡 A2 的三条：①「删一对 ⇒ 不判红」（第二、三条）、②「尾/Series 改坏 ⇒ 必红」（第四、五条，
@@ -60,6 +66,12 @@ Series 的高字节 Light 判、低字节 Dir 不判）、③「删确定性带�
 | 去掉「一侧 0 对」豁免（`if rc else []`） | 只红「一侧 0 对 ⇒ 不判红」 |
 | 从 `shape_fields` 去掉 `light` | 只红「Light 改坏 ⇒ 判红」 |
 | 删掉「无名尾」判定（`body_len == 11`） | 红 3 条：预期的「删确定性带名尾 TURN」＋连带「TURN 尾改坏」＋共享夹具的「控制帧 ⑤ 34 条全部比较」（带名尾对被误当随机对摘走） |
+| 去掉「同 recog」条件（`and True`） | 只红「41 的 recog 与 TURN 不同 ⇒ 不是随机对 ⇒ 判红」（去掉后两侧都摘走、形状相同 ⇒ 假绿） |
+| 去掉「零比较 ⇒ 不可判」 | 只红「只有随机对（零比较）⇒ 不可判，不是绿」 |
+| 去掉「3 对 vs 0 对」提示 | 只红「3 对 vs 0 对 有人读提示」 |
+| `shape_fields` 去掉 `param` | 只红「param 改 ⇒ 判红」 |
+| `shape_fields` 去掉 `tag` | 只红「tag 改 ⇒ 判红」 |
+| `shape_fields` 去掉 `phase` | 只红「phase 改 ⇒ 判红」 |
 
 ## 4. run2 重算（**同一批产物**，旧代码 vs 新代码）
 
@@ -98,6 +110,20 @@ diff 数下降但 verdict 不变的那些，都是同一个原因（随机对造
   PENDING ignore 计数不齐）。
 - `dice_chain_auto` 之外两处 `diffs` 里仍含 `random_pair_shape` 吗？——没有：`shape_mismatch`
   全部为 `false`（一侧 0 对时不比形状；两侧都有对时共享形状集）。
+
+## 4b. 口径裁决与两处兜底（review `24127cfe`）
+
+- **对拍只管形状，存在性由构造级用例负责**：这对帧「到底有没有被发出」由
+  `npc_random_idle_frames_through_production_drain_run`（`mir2-rs/bins/game-svr/src/lib.rs:28317`）
+  钉住。单看对拍，**Rust 永远发不出这对帧也不会红**（形状合同对「一侧恒 0 对」是盲的）；
+  - 兜底①（人读）：`oracle_pairs >= 3 && rust_pairs == 0` 时 `human_summary` 打一行
+    `WARNING random_branch_pairs: …`，**不改 verdict**；规则 reason 里也写清这条分工。
+- **零比较不得判绿**：摘掉随机对之后 `compared_frames == 0` 且确有随机对被摘 ⇒
+  `undecidable(kind=random_pairs_only)`（rc 2），不是 PASS。
+- **形状每个维度都有牙**（reviewer-20 追加 G1）：删掉 `param`/`tag`/`phase` 任一维都会让
+  「不同位置/相位」被当成同一形状 ⇒ 各配一条「改 ⇒ 判红」的牙（第 12–14 条）。
+- **`phase` 是驱动侧连接标签**（login/gamegate/selgate），不是协议字段：标签改名会假红（F4，
+  已登记在 `shape_fields` 的解析注释与 rules.json 的 reason 里）。
 
 ## 5. 边界与残余
 
