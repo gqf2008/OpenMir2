@@ -370,6 +370,84 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 纪律：**先确认环境状态，再解释差异**。三者都是「工具没报错、只是没检查/没保留」，
 看上去像行为不符；对应轮次应按 **UNDECIDABLE / 证据作废重跑** 处理，**不得记 FAIL**。
 
+## 0.13 启动/停止常驻服务：**落盘再读，禁止管道截输出**；mysqld 必须**优雅关闭**（2026-10-26；卡 `openmir2-mirserver-graceful-stop`）
+
+> 两条事故（2026-10-26）：
+> ① **强杀 MySQL**：某车道跑 `start-all.ps1 -Stop`，`Stop-Stack` 对**每个**进程（含 `mysqld`）用
+>    `Stop-Process -Force` ⇒ 22:04:08 停、22:04:18 新实例带
+>    `InnoDB: Starting crash recovery from checkpoint LSN=18996603513` 启动 ⇒ **重启前的 DB 证据与
+>    重启后不可直接对比**（判据见 `docs/real-machine-window-plan-20261025.md` §0「DB 实例边界」）。
+> ② **管道挂死**：另一车道起后台 `pwsh … start-all.ps1 2>&1 | Select-Object -Last 15`，任务
+>    **ELAPSED_S=36755.2（10h12m）** 不返回——常驻服务的子进程**继承了 stdout、持有管道**，调用方
+>    要等 EOF，直到对端强杀子进程管道才关闭。
+
+### 规则（对所有「启动/停止常驻服务」的调用）
+
+1. **禁止** `| Select-Object -Last N` / `| Out-String` / `| Tee-Object` 这类**管道截法**接常驻服务启动器
+   （`start-all.ps1`、`start-stack-wmi.ps1`、`start-csharp.ps1`、`start-rust.ps1` 等）。
+2. 一律 **输出落盘再读文件**：
+
+   ```powershell
+   # 推荐：用仓内封装（硬超时 + 超时杀进程树 + 输出落盘）
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/invoke-bounded.ps1 `
+     -FilePath powershell `
+     -Arguments @('-NoProfile','-ExecutionPolicy','Bypass','-File','E:\MirServer\start-all.ps1') `
+     -OutFile E:\tmp\start-all.out.log -ErrFile E:\tmp\start-all.err.log -TimeoutSec 180
+   Get-Content E:\tmp\start-all.out.log -Tail 40        # 读文件，不截管道
+   ```
+
+   `invoke-bounded.ps1` 的契约：stdout/stderr **重定向到文件**（不是管道）⇒ 子进程/孙进程持有的是
+   **文件句柄**，不存在「等 EOF」；`-TimeoutSec` 到点用 `taskkill /T /F` 杀**整棵进程树**，rc=124
+   （与子进程自己的非零 rc 区分）；超时也会**有界返回**。自检：`… invoke-bounded.ps1 -Selftest`（9 条）。
+
+3. **mysqld 单独走优雅关闭**（`-Stop` 时**不许** `Stop-Process -Force` 它）：
+
+   ```powershell
+   # root 有口令时先设环境变量（**只走环境变量，不写命令行**）：
+   $env:MYSQL_ROOT_PASSWORD = '…'
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/stop-mysql-graceful.ps1 `
+     -MysqlHome 'D:\mysql\mariadb-10.11.19-winx64' -Port 3306 -TimeoutSec 60
+   # rc=0 已停/优雅停止成功；rc=3 超时（进程仍在，**未强杀**，交人决定）；rc=4 mysqladmin 失败
+   ```
+
+   脚本幂等（没在跑 ⇒ `MYSQL_STOP already_stopped` rc=0）、**绝不**调用 `Stop-Process`、
+   `mysqladmin` 原始输出落盘到 `$env:TEMP\mysql-shutdown-<ts>.log`。
+   自检：`… stop-mysql-graceful.ps1 -Selftest`（11 条，含「超时 rc=3 不强杀」「密码不回显」）。
+
+### `E:/MirServer/start-all.ps1` 的接入建议（**只给 diff，由 owner 决定何时应用**）
+
+部署件不在 git 里、影响整个环境，本卡**不直接改**。建议把 `Stop-Stack` 里 mysqld 那一支摘出来、改走优雅关闭：
+
+```diff
+ function Stop-Stack {
+     ...
+     $order = @('LoginGate', 'SelGate', 'GameGate', 'GameSrv', 'LoginSrv', 'DBSrv', 'mysqld')
+     foreach ($n in $order) {
++        if ($n -eq 'mysqld') { continue }          # MySQL 走优雅关闭（下方），不 Force
+         foreach ($t in ($targets | Where-Object { $_.Name -like ($n + '*') })) {
+             try { Stop-Process -Id $t.ProcessId -Force -ErrorAction Stop; Write-Host ("  已停止 " + $t.Name + " (pid " + $t.ProcessId + ")") } catch { }
+         }
+     }
++    # MySQL：优雅关闭并等它退出（超时/失败都**不强杀**，交人决定）
++    $graceful = 'E:\Users\gxh\Documents\GitHub\OpenMir2\tools\window\stop-mysql-graceful.ps1'   # 按部署改
++    & powershell -NoProfile -ExecutionPolicy Bypass -File $graceful -MysqlHome $MySqlHome -Port 3306 -TimeoutSec 60
++    if ($LASTEXITCODE -ne 0) {
++        Write-Host ('  MySQL 未优雅关闭（rc=' + $LASTEXITCODE + '）；见 logs\MySQL.err.log，**不要**用 -Force 补救') -ForegroundColor Red
++    }
+     Start-Sleep -Seconds 2
+ }
+```
+
+启动侧不用改：`start-all.ps1` 起各组件时**已经**是 `Start-Process -RedirectStandardOutput/-RedirectStandardError`
+落盘；挂死的是**调用方**把它接进管道。
+
+### 优雅关闭的牙（**需要真环境，只能由 owner 在窗口内验**）
+
+1. 起 C# 栈 → 用一段带未提交事务的会话（`START TRANSACTION; UPDATE …;` 不提交）；
+2. 用上面的优雅关闭（**不要** `-Force`）停 MySQL；
+3. 重启 MySQL，`logs/MySQL.err.log` **不得**出现 `Starting crash recovery`；
+4. 正常关闭再启动同样**不得**出现；对照组（错误做法）是 `Stop-Process -Force`，它会出现该行。
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。
