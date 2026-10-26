@@ -1,0 +1,46 @@
+# 场景「不在 run3 批次」的人工豁免表（卡 `openmir2-scenario-manifest-gate`）
+#
+# 规则（门内置，见 `scenario_manifest_gate.py` 模块头）：
+#   * 每条**必须**同时有 `card`（真实 card id，且该 id 在 collab 线程里存在）+ `line`（依据行）
+#     + `not_in_run3_reason`；缺任一项 ⇒ 该豁免无效 ⇒ 回落 RED。
+#   * `--audit-exempt` 会把全部豁免连同 card/line/reason 列出来供人复核。
+#   * 登记的豁免若**没有任何来源引用、也不在 manifest** ⇒ 判「腐朽登记」⇒ RED（要删掉它）。
+#
+# 注意：discovery-only 场景（被 manifest 的 `--discovery-scenario` 引用）**不需要**写在这里，
+# 门会自动判为 STRUCT_EXEMPT。
+
+[[exempt]]
+scenario = "clearmapmon_t118"
+card = "openmir2-clearmapmon-t118-unblock"
+line = "tools/probe/scenarios/clearmapmon_t118.json:3"
+not_in_run3_reason = "T-118 专项诊断场景（W-CM-1 的另一半）；批次里由 clearmapmon_q001 覆盖同一面，本场景未列入 run3。"
+
+[[exempt]]
+scenario = "combat_hit"
+card = "openmir2-combat-strike-blocked-marker"
+line = "docs/combat-strike-scenario-20261023.md:467"
+not_in_run3_reason = "该场景的 recog/param 口径是错的，且只等本方看不到的帧（同文档 §2.1）；不可入批。"
+
+[[exempt]]
+scenario = "combat_strike"
+card = "openmir2-combat-strike-blocked-marker"
+line = "docs/combat-strike-scenario-20261023.md:450"
+not_in_run3_reason = "probe R2 阻断（卡 blocked marker 记录）；在阻断解除前不入批。"
+
+[[exempt]]
+scenario = "login_newchar"
+card = "openmir2-probe-newchr-step"
+line = "docs/probe-newchr-20261025.md:5"
+not_in_run3_reason = "`CM_NEWCHR` 驱动步的演示/取证场景；批次不跑建号流程 ⇒ 不入批。"
+
+[[exempt]]
+scenario = "pickup_item"
+card = "openmir2-bag-weight-sink"
+line = "tools/window/run3-scenarios.json:4"
+not_in_run3_reason = "结构性不可判（T-19/T-25：oracle 掉落恒不落地）；清单 note 已封存，不入批。"
+
+[[exempt]]
+scenario = "p21_unequip"
+card = "openmir2-bag-weight-sink"
+line = "tools/probe/scenarios/p21_unequip.json:3"
+not_in_run3_reason = "BLOCKED 场景（两条前置未解，见文件 `blocked` 段）；引用它的卡（`openmir2-gm-target-state-write`）只把它当 P21 前置，不是独立窗口场景 ⇒ 不入批。（review C1 修好后它才第一次被判红，见卡上 N2 处置。）"
