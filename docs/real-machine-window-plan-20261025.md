@@ -19,7 +19,7 @@
 
 > **操作口径（卡 `openmir2-mirserver-graceful-stop`）**：停栈时 **mysqld 必须优雅关闭**（`tools/window/stop-mysql-graceful.ps1`，超时也**不强杀**）；启动/停止常驻服务的调用**一律输出落盘再读文件**（`tools/window/invoke-bounded.ps1`），**禁止** `| Select-Object -Last N` 这类管道截法——2026-10-26 有车道因此挂了 10h12m。细节与 `start-all.ps1 -Stop` 的 diff 建议见 `docs/window-runbook-20261023.md` §0.13。
 > **DB 实例边界（2026-10-26 22:04:18）**：`mysqld` 曾被 `start-all.ps1 -Stop` 的 `Stop-Process -Force` **强杀**，新实例带 `InnoDB: Starting crash recovery from checkpoint LSN=…` 启动。⇒ **该时刻之前取的 DB 证据一律打折/重取**；判据是 `E:/MirServer/logs/MySQL.err.log` 里**有没有 crash recovery 行**，不是 pid 变没变。详见卡 `openmir2-mirserver-graceful-stop`。
-| 5 | **批次自检** | `bash tools/window/run_batch.sh --dry-run` ⇒ **rc=0** | **这是「每次开窗前」的动作，不是常驻属性**：窗口跑过一轮之后必然又有 2 项变红 —— ① `castle_list_symmetry`（C# GameSrv 每 600s 重写 `Castle/List.txt`，跑完就与 rust 侧不一致）② `pin_smoke`（最后一个 Rust 栈日志若来自 alt 剖面则无 `layout=oracle-40` 自证行）。⇒ 开窗第 0 步（停完 C# 之后）三侧对齐 castle 文件，并**先起一次带 pin 的 window-magic 私栈**把自证行跑出来，再 dry-run |
+| 5 | **批次自检** | `bash tools/window/run_batch.sh --dry-run` ⇒ **rc=0** | **这是「每次开窗前」的动作，不是常驻属性**：窗口跑过一轮之后必然又有 2 项变红 —— ① `castle_list_symmetry`（C# GameSrv 每 600s 重写 `Castle/List.txt`，跑完就与 rust 侧不一致）② `pin_smoke`（最后一个 Rust 栈日志若来自 alt 剖面则无 `layout=oracle-40` 自证行）。⇒ 开窗第 0 步（停完 C# 之后）三侧对齐 castle 文件，并**先起一次带 pin 的 window-magic 私栈**把自证行跑出来，再 dry-run。**dry-run 不需要 `CONFORMANCE_PASSWORD`**：缺它时 rc=0 + stdout 一条 `WRN: 缺 CONFORMANCE_PASSWORD`（真跑才 fail-closed rc=2）——卡 `openmir2-runbatch-dryrun-password` |
 
 ### 开窗第 0 步（castle 三侧对齐 + 跑前基线，卡 `openmir2-castle-symmetry-baseline`）
 

@@ -54,6 +54,7 @@ REGISTRY = [
     ("rc_attribution", ["tools/window/rc_attribution.py", "--selftest"], False),
     ("window_criteria_lint", ["tools/goal/window_criteria_lint.py", "--selftest"], False),
     ("blocked_sources_check", ["tools/window/blocked_sources_check.py", "selftest"], False),
+    ("run_batch", ["tools/window/run_batch_selftest.py"], False),
     ("goal_gate", ["tools/goal/goal_gate.py", "selftest"], False),
     ("conflict_marker_gate", ["tools/hygiene/conflict_marker_gate.py", "--selftest"], False),
     ("dynamic_count_stamp_gate", ["tools/hygiene/dynamic_count_stamp_gate.py", "--selftest"], False),

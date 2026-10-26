@@ -258,13 +258,22 @@ if [ "$LIST_ONLY" -eq 1 ]; then
 fi
 [ "${#selected[@]}" -gt 0 ] || die "没有选中任何场景（--from $FROM / 全部 blocked？）"
 
-# ---- ⓪ 探针凭据（卡 openmir2-preflight-password-check）----
+# ---- ⓪ 探针凭据（卡 openmir2-preflight-password-check；dry-run 收窄见卡 openmir2-runbatch-dryrun-password）----
 # 在任何栈启动/任何场景之前就停：缺它时 24 条场景会各自 1s 内 outer_rc=2
 # （`card_window: 缺密码：用环境变量 CONFORMANCE_PASSWORD 提供`），整轮白开。
 # 与 preflight_private_stack.py 的 `conformance_password` 同一判据（那里是报告项，这里是快速门）；
 # **--no-preflight 也不跳过**（它不需要栈/端口，不属于"前置自检"的调试豁免）。
+#
+# **收窄（2026-10-27）**：`--dry-run` 不起栈、不连库、不跑任何场景 ⇒ 它**不可能**「整轮白开」，
+# 所以不该被这条 fail-closed 门挡住（开窗前的「计划自检」必须能在空环境跑）。放行但**必须显式告警**，
+# 且告警走 **stdout**（开窗值守读的是 stdout；只写 stderr 等于静默）。真跑路径一字未改，仍 fail-closed。
+# 标记串 `WRN: 缺 CONFORMANCE_PASSWORD` 由 tools/window/run_batch_selftest.py 的牙钉住（三态：无/有密码）。
 if [ -z "${CONFORMANCE_PASSWORD:-}" ]; then
-    die "缺 CONFORMANCE_PASSWORD（探针连库凭据）：24 个场景会各自 outer_rc=2 空转。export CONFORMANCE_PASSWORD=… 后重跑"
+    if [ "$DRY_RUN" -eq 1 ]; then
+        printf '%s\n' "run_batch: WRN: 缺 CONFORMANCE_PASSWORD（探针连库凭据）——本次是 --dry-run，不连库不跑场景，计划自检不受影响；真跑会因缺凭据整轮白开：export CONFORMANCE_PASSWORD=… 后重跑"
+    else
+        die "缺 CONFORMANCE_PASSWORD（探针连库凭据）：24 个场景会各自 outer_rc=2 空转。export CONFORMANCE_PASSWORD=… 后重跑"
+    fi
 fi
 
 # ---- 日志/证据目录 ----

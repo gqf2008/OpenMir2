@@ -29,7 +29,11 @@
 > 缺它 ⇒ 24 条场景会在 1 秒内各自 `outer_rc=2`（`card_window: 缺密码：用环境变量 CONFORMANCE_PASSWORD 提供`），
 > **整轮窗口白开**（2026-10-26 首轮实测：十项 preflight 全绿、没有一项查凭据）。
 > 现在有两道门：`bash tools/window/run_batch.sh` 在**任何栈/场景之前**先查（缺 ⇒ rc=2 并点名，
-> `--no-preflight` 也不跳过；`--list`/`--help` 不受影响）；`preflight_private_stack.py` 把它作为
+> `--no-preflight` 也不跳过；`--list`/`--help` 不受影响）；**`--dry-run` 同样不受影响**——它不起栈、
+> 不连库、不跑场景，不可能「整轮白开」⇒ 缺密码时**放行并打一条 stdout WRN**
+> （`run_batch: WRN: 缺 CONFORMANCE_PASSWORD …`），真跑路径仍 fail-closed（卡
+> `openmir2-runbatch-dryrun-password`；牙 = `tools/window/run_batch_selftest.py` 的 T1–T4，
+> 已登记进 `tool_selftest_gate`）；`preflight_private_stack.py` 把它作为
 > **第一项** `conformance_password` 报告（缺 ⇒ FAIL；已设置 ⇒ OK，且不记录内容）。
 
 ```sh
