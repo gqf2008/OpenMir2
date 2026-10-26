@@ -1231,6 +1231,24 @@ def selftest():
             empty_ok = True
         chk(empty_ok, "castle_state 牙6: 空基线 => ValueError")
 
+        # 牙7/牙8（卡 openmir2-castle-failclosed-teeth；reviewer-21 F1）：
+        # **「判不了」的判据本身**也要有牙——空 root 与 CLI 的 fail-closed 路径此前零覆盖，
+        # 把 `if not present:` 改成 `if False:` 仍 48/48 全绿。
+        empty_root = os.path.join(tmp, "castle-empty-root")
+        os.makedirs(empty_root, exist_ok=True)
+        st, detail, _fix = check_castle_state_symmetry(empty_root)
+        chk(st == FAIL and empty_root in detail and "三侧都没有" in detail,
+            "castle_state 牙7: 空 root（三侧都缺）=> FAIL 且点名 root")
+        import contextlib
+        import io as _io
+        _buf = _io.StringIO()
+        with contextlib.redirect_stdout(_buf):
+            _rc = main(["--root", empty_root, "--castle-before-only",
+                        "--castle-before", os.path.join(tmp, "castle-empty-before.txt")])
+        _out = _buf.getvalue()
+        chk(_rc == 2 and "CASTLE_BASELINE FAIL" in _out and empty_root in _out,
+            "castle_state 牙8: --castle-before-only + 三侧都缺 => rc=2 且点名 root")
+
         # ---- envir_shadow_symmetry（卡 openmir2-preflight-envir-shadow-symmetry）----
         er = os.path.join(tmp, "envirshadow")
         eb = os.path.join(er, "csharp-root", "M2GameSvr", "Envir")
