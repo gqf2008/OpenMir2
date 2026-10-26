@@ -426,8 +426,13 @@ def _owner_cards(cells, exclude_ids):
 
 
 #: 「本条是旧轮次登记、当前无对应工作项」的显式标记（卡 `openmir2-whitelist-card-link-debt`）。
-#: 认它 = 该行**已被人工处置过**（不是漏填）；条件② 的核算盲区判据按「既无卡号也无 legacy」算。
-LEGACY_MARK_RE = re.compile(r"\blegacy\b", re.I)
+#: 认它 = 该行**已被人工处置过**（不是漏填）；条件② 的核算盲区判据按「既无卡号也无 marker」算。
+#:
+#: **F1（reviewer-21）**：标记必须是**固定形态** `**legacy**：`（或半角冒号），不能「正文出现 legacy
+#: 这个词就算」——否则往判据文件里写一句话（例如「本行描述 legacy 减法行为，没有卡号」）就能把
+#: 核算盲区关掉。收紧前现场已有活口：`legacy` 词出现 **101** 行 vs 真标记 **100** 行（多出来的是 T-12，
+#: 它提到环境变量 `MIR2_BOT_LEGACY_SHARED_AUTOPLAY`；该行另有卡号，所以不影响计数，但形态必须钉死）。
+LEGACY_MARK_RE = re.compile(r"\*\*legacy\*\*\s*[:：]", re.I)
 
 
 def build_whitelist(path: Path, exclude_ids=None):
@@ -1200,6 +1205,7 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         warnings.append(unowned_note)
 
     # ---- 条件2
+    unowned_failed = False  # 由下面的条件② 分支置位；fail_items 汇总段要用（F2）
     r_cards = collect_r_cards(index) if index else []
     evidence_list = [collect_r_evidence(card, index, board_cards, whitelist,
                                           allow_verdict_grep=allow_verdict_grep)
@@ -1217,7 +1223,8 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         state, detail, per_card, r_fails, r_needs = judge_r_cards(evidence_list)
         # 卡 `openmir2-whitelist-card-link-debt`：无归属行是**条件② 自身**的核算盲区 ⇒ 非 NEED 时直接 FAIL
         # （NEED 表示 board/索引不可用、本来就没法判，不能拿它冒充红）。
-        if unowned_note and state != NEED:
+        unowned_failed = bool(unowned_note) and state != NEED
+        if unowned_failed:
             state = FAIL
             detail = (detail + "；" if detail else "") + unowned_note
     # 卡 `openmir2-goal-gate-unmerged-selftest`：把 `window_required_unmerged` 一并纳入。它是
@@ -1255,6 +1262,15 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
     for item in r_fails:
         fail_items.append({"condition": 2, "item": item["card"], "reason": item["reason"],
                            "last_status_ts": item.get("last_status_ts", 0)})
+    # 卡 `openmir2-whitelist-card-link-debt` F2（reviewer-21）：`unowned` 判红时**也要进 fail_items**，
+    # 与其它条件同构；否则 `--json` 消费者与「缺口明细」表里看不到这条红（M-A 实测过 fail_items: 0）。
+    # `item` 用 `whitelist.md:<T-id>`——它不是卡，别让「按卡」的消费者把它当卡。
+    if unowned_failed:
+        for t_id in sorted(set(whitelist.get("unowned") or []), key=_t_sort_key):
+            fail_items.append({
+                "condition": 2, "item": "whitelist.md:%s" % t_id,
+                "reason": "既无『卡 `openmir2-…`』也无 `legacy` 标记（条件② 核算盲区）",
+                "last_status_ts": 0})
     for item in r_needs:
         need_items.append({"condition": 2, "item": item["card"], "reason": item["reason"],
                            "last_status_ts": item.get("last_status_ts", 0)})
@@ -1515,6 +1531,11 @@ def selftest(verbose=False):
             no_mark = "| T-2 | 差异 | 无害 | 作者登记：旧轮次登记，保留作判据 |"
             w2 = _wl_with([owned, no_mark])
             ok = ok and w2["unowned"] == ["T-2"] and w2["legacy"] == []
+            # **F1 第三态（reviewer-21 的致命反例）**：只**提到** legacy 这个词、没有标记形态的行
+            # 仍必须算 `unowned`——否则「写一句话就能把核算盲区关掉」。
+            mention = "| T-4 | 差异 | 无害 | 本行描述 legacy 减法行为，没有卡号（提到词 ≠ 标记） |"
+            w3 = _wl_with([owned, legacy, mention])
+            ok = ok and w3["unowned"] == ["T-4"] and w3["legacy"] == ["T-2"]
             return ok, "unowned=%s legacy=%s note=%r" % (w["unowned"], w["legacy"], note)
 
         check("whitelist: 卡号/legacy/无归属三态分明，且删 legacy 标记即变盲区", _legacy_tooth)
