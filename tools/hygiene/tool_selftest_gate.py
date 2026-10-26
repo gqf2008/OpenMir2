@@ -265,6 +265,40 @@ def build_cmd(argv):
     return [sys.executable, "-I", "-B"] + argv
 
 
+#: 失败诊断行（卡 `openmir2-mir2-probe-selftest-need-flake` A0）——工具打印完失败清单后，
+#: 往往还会再往 stderr 打一句 `note: …`；只留最后一行就把**原因**顶掉了（mir2_probe 实测）。
+FAIL_LINE_RE = re.compile(
+    r"^(FAIL\b|FAILED\b|ERROR\b|Traceback\b|panic(ked)? at |AssertionError\b|- \S)|.*\bFAIL(ED)?\b")
+
+#: 失败时最多保留多少行诊断（够看到失败清单，又不把整屏塞进结果）。
+FAIL_LINES_MAX = 12
+
+
+def _failure_lines(lines, limit=FAIL_LINES_MAX):
+    """从工具输出里**挑出失败诊断行**（而不是只留最后一行）。
+
+    退化输入（规则 19）：没有任何匹配行 ⇒ **不返回空**，退回最后 5 行（宁可粗糙也不能空）；
+    空输入 ⇒ `[]`。去重保序，单行截到 200 字符，最多 `limit` 行。
+    """
+    if not lines:
+        return []
+    picked = [l for l in lines if FAIL_LINE_RE.match(l.strip())] or lines[-5:]
+    seen, out = set(), []
+    for line in picked:
+        if line in seen:
+            continue
+        seen.add(line)
+        out.append(line[:200])
+    return out[-limit:]
+
+
+def failure_report_lines(state, fail_lines):
+    """只有 FAIL / NEED 才回吐诊断行（绿色不许产生噪声）。"""
+    if state not in (FAIL, NEED) or not fail_lines:
+        return []
+    return list(fail_lines[-6:])
+
+
 def run_one(repo, name, argv, timeout):
     try:
         cmd = build_cmd(argv)
@@ -296,11 +330,15 @@ def run_one(repo, name, argv, timeout):
         how = ("树终止已被自测关闭，走兜底" if _TREE_KILL_DISABLED
                else "已按进程树终止")
         text = ["TIMEOUT %ss（%s）" % (timeout, how)]
+        fail_lines = list(text)
     else:
-        text = ((out or "") + (err or "")).strip().splitlines()[-1:] or [""]
+        all_lines = ((out or "") + (err or "")).strip().splitlines()
+        text = all_lines[-1:] or [""]
+        # A0：**多条**诊断行单独存（`tail` 保持单行，打印布局不变）
+        fail_lines = _failure_lines(all_lines)
     return {"name": name, "argv": list(argv), "rc": rc,
             "elapsed_s": round(time.time() - t0, 1), "tail": text[0][:160],
-            "timed_out": timed_out}
+            "fail_lines": fail_lines, "timed_out": timed_out}
 
 
 DOC_ANCHOR_REL = "docs/real-machine-window-plan-20261025.md"
@@ -669,6 +707,9 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
         results.append(r)
         print("%-4s %-24s rc=%-3s %5.1fs  %s"
               % (r["state"], name, r["rc"], r["elapsed_s"], r["tail"]))
+        # A0：失败/判不了时把**原因行**也打出来（否则只看到最后一句 note）
+        for _line in failure_report_lines(r["state"], r.get("fail_lines")):
+            print("       | %s" % _line)
     bad = [r for r in results if not r.get("skipped") and r.get("state") == FAIL]
     need = [r for r in results if not r.get("skipped") and r.get("state") == NEED]
     # A3：全跑末尾**显式**检查 inventory（不看牙的副作用）；`--only` 等调试跑同样适用。
@@ -788,6 +829,44 @@ def selftest():
     chk(r_ok["rc"] == 0, "TSG 牙1 假·绿 ⇒ rc=0")
     r_bad = run_one(tmp, "bad", [badf], 30)
     chk(r_bad["rc"] == 1 and "RED" in r_bad["tail"], "TSG 牙2 假·红 ⇒ rc=1（门会判红）")
+    # 牙A0（卡 `openmir2-mir2-probe-selftest-need-flake`）：失败时**不能只留最后一行**。
+    # 复刻 mir2_probe 的真实形态：stdout 打 FAIL 清单，stderr 再打一句 note（正是它把原因顶掉）。
+    probef = os.path.join(tmp, "probe_like.py")
+    with open(probef, "w", encoding="utf-8") as fh:
+        fh.write("import sys" + chr(10)
+                 + "print('mir2_probe selftest: FAIL')" + chr(10)
+                 + "print('  - dwell-after-enter: late frames missing')" + chr(10)
+                 + "sys.stderr.write('note: scenario.placement ...')" + chr(10)
+                 + "raise SystemExit(2)" + chr(10))
+    r_a0 = run_one(tmp, "probe_like", [probef], 30)
+    chk(r_a0["rc"] == 2 and "note: scenario.placement" in r_a0["tail"],
+        "TSG 牙A0a 前置：最后一行确实是 note（原诊断被顶掉的形态；%r）" % (r_a0["tail"],))
+    chk(any("FAIL" in l for l in r_a0["fail_lines"])
+        and any("dwell-after-enter" in l for l in r_a0["fail_lines"]),
+        "TSG 牙A0b 失败清单整段留在 fail_lines（%r）" % (r_a0["fail_lines"],))
+    chk(failure_report_lines(PASS, r_a0["fail_lines"]) == [],
+        "TSG 牙A0c 绿色不产生噪声（PASS ⇒ 不回吐诊断行）")
+    chk(failure_report_lines(FAIL, r_a0["fail_lines"]) != []
+        and failure_report_lines(NEED, r_a0["fail_lines"]) != [],
+        "TSG 牙A0d 红与判不了都回吐（FAIL/NEED ⇒ 非空）")
+    chk(_failure_lines([]) == [], "TSG 牙A0e 空输入 ⇒ []（规则 19 退化输入）")
+    chk(_failure_lines(["只有一行普通输出"]) == ["只有一行普通输出"],
+        "TSG 牙A0f 没有失败样式的行 ⇒ 退回末尾（不许返回空）")
+    # 端到端接线牙：**只存不打印 = 人还是看不到** ⇒ 真 run() 必须把它打到 stdout。
+    import io as _io_a0
+    from contextlib import redirect_stdout as _rdout_a0
+    saved_a0 = REGISTRY
+    REGISTRY = [("probe_like", [probef], False)]
+    try:
+        buf_a0 = _io_a0.StringIO()
+        with _rdout_a0(buf_a0):
+            _res_a0, rc_a0 = run(tmp, check_inventory=False)
+    finally:
+        REGISTRY = saved_a0
+    out_a0 = buf_a0.getvalue()
+    chk(rc_a0 in (2, 3) and "dwell-after-enter" in out_a0,
+        "TSG 牙A0g 真 run() 把失败原因打出来（否则只剩最后一句 note；输出尾=%r）"
+        % (out_a0.splitlines()[-3:],))
     saved = REGISTRY
     REGISTRY = [("ok", [okf], False), ("bad", [badf], False)]
     try:

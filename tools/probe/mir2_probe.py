@@ -4039,11 +4039,43 @@ def _selftest_dwell():
         conn0.phase = "gamegate"
         conn0.sock = _TimedSock([(0.0, early), (0.15, late)])
         conn0.pump(20)
+        # 卡 `openmir2-mir2-probe-selftest-need-flake` A3：原断言 `actual_ms < 300` 是**墙钟上界**，
+        # 它想表达的其实是「dwell=0 时**一次 pump 都没发生**」；墙钟上界会被调度停顿顶穿
+        # （一次 >300ms 的停顿就翻红 ⇒ 工具门记 NEED）。改成**可观测同步点**：直接数 `pump` 调用；
+        # 墙钟只留一个宽松兜底（5s，抓「等别的东西」的异常实现），失败时两侧数值都打出来。
+        _pumps0 = []
+        _orig_pump0 = conn0.pump
+
+        def _counting_pump(ms, _f=_orig_pump0, _log=_pumps0):
+            _log.append(ms)
+            return _f(ms)
+
+        conn0.pump = _counting_pump
         rec0 = dwell_after_enter(conn0, 0, 0)
         seen0 = set(rec0["idents_after"])
         assert rec0["requested_ms"] == 0, rec0
         assert SM_CHANGELIGHT not in seen0 and SM_SYSMESSAGE not in seen0, seen0
-        assert rec0["actual_ms"] < 300, rec0
+        assert not _pumps0, ("dwell=0 不得 pump（可观测同步点，不是墙钟）：pump 调用=%r，actual_ms=%d"
+                             % (_pumps0, rec0["actual_ms"]))
+        assert rec0["actual_ms"] < 5000, (
+            "dwell=0 的墙钟兜底上界被顶穿（这是异常实现，不是判据）：actual_ms=%d，pump=%r"
+            % (rec0["actual_ms"], _pumps0))
+        # 反向牙（规则 20）：把 legacy pump 打开 ⇒ **必须**观察到一次 pump ——
+        # 证明上面那个计数器真的接在链路上（否则「零次调用」是空断言）。
+        _pumps1 = []
+        conn1 = Conn("gamegate", run0.recorder, on_frame=run0.on_frame)
+        conn1.phase = "gamegate"
+        conn1.sock = _TimedSock([(0.0, early), (0.15, late)])
+        conn1.pump(20)
+        _orig_pump1 = conn1.pump
+
+        def _counting_pump1(ms, _f=_orig_pump1, _log=_pumps1):
+            _log.append(ms)
+            return _f(ms)
+
+        conn1.pump = _counting_pump1
+        rec1 = dwell_after_enter(conn1, 0, 25)
+        assert _pumps1 == [25], ("反向牙：legacy pump 必须被观察到（否则计数器没接上）；实得 %r" % (_pumps1,))
         return "dwell 300ms 收齐 654/657/100；dwell=0 丢帧（牙），默认 %dms" % DEFAULT_DWELL_MS
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
