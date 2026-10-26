@@ -35,6 +35,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -230,6 +231,8 @@ def _kill_tree(proc):
 
 #: 工具自测用 rc=2 表示「判不了」（环境/仓库问题）；与 rc=1（证伪）必须分开。
 NEED_RC = 2
+#: 自测里的「探针」重入标记（F1rev：整跑一次 selftest 验 SKIP 不吞 FAIL）。
+_PROBE = {"active": False}
 PASS, NEED, FAIL = "PASS", "NEED", "FAIL"
 
 
@@ -295,6 +298,112 @@ def run_one(repo, name, argv, timeout):
             "timed_out": timed_out}
 
 
+DOC_ANCHOR_REL = "docs/real-machine-window-plan-20261025.md"
+
+def check_doc_anchors(repo):
+    """R3（卡 openmir2-tool-gate-teeth-residuals）+ F1/F2（review 92f425e9 / Leader 活锚地板）。
+
+    开窗当天会**照抄三处渲染**里的数字确认「开的就是预期那棵树」：
+      ① 表行：`⇒ **N 项全绿**；`
+      ② 正文：`⇒ **N 项全绿**；… 清点 **M = N + K + 0**`
+      ③ 提示行：`（**N 项 / 清点 M = N + K + 0**）`
+    只机判其中一种时，另两种各说各话而门仍绿（review F1：把表行改成 99 仍 rc=0）⇒ 现在**三处都收**：
+    所有 `N 项(全绿|/)` 命中都必须等于 `len(REGISTRY)`；所有 `清点 M = N + K + Z` 命中都必须等于
+    `(total, in_gate, out_scope, 0)`。
+
+    **历史叙事跳过 + 活锚地板**：紧邻前文出现「历史 / 此前 / 原始记录 / 当时 / 曾」的命中是**记录、不是锚**，
+    跳过；但**每一类在排除之后都必须仍有 ≥1 处活锚**——某类被排除到空 ⇒ **rc=2 判不了**
+    （否则「历史」两个字就成了新的万能挡箭牌，和 `LEGACY_MARK_RE` 同族）。
+    被排除的条数与行号**打印在输出里**，让「跳过清单变长」可见。
+
+    **排除项必须严格小于现值**（两类计数只增）：`排除的 N < len(REGISTRY)`、`排除的 M < total`。
+    否则「把写错的锚加个『历史』前缀」就能躲进排除集（review 实测：`历史：**53 项全绿**` 曾 rc=0）。
+    若某天计数真的缩水，别用「历史」标记写法——把旧值写成不带标记的叙述，或改这份 docstring 的契约。
+    """
+    path = os.path.join(str(repo), DOC_ANCHOR_REL)
+    if not os.path.isfile(path):
+        return 2, "认树锚文档缺失：%s" % DOC_ANCHOR_REL
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    n_items = len(REGISTRY)
+    rows = inventory_rows()
+    total = len(rows)
+    in_gate = sum(1 for r in rows if r["status"] == "IN_GATE")
+    out_scope = sum(1 for r in rows if r["status"].startswith("OUT_OF_SCOPE"))
+
+    _HISTORY_MARKERS = ("历史", "此前", "原始记录", "当时", "曾")
+
+    def _is_history(pos):
+        # **行内**判定：标记必须与数字在同一行（早期版本看前 40 字符，会误伤下一行——review 的
+        # `历史：**51 项全绿**` 下一行的三元组被连带当成历史）。
+        line_start = text.rfind(chr(10), 0, pos) + 1
+        return any(w in text[line_start:pos] for w in _HISTORY_MARKERS)
+
+    def _lineno(pos):
+        return text.count("\n", 0, pos) + 1
+
+    n_all = [(int(m.group(1)), m.start())
+             for m in re.finditer(r"\*\*(\d+)\s*项全绿\*\*", text)]
+    n_all += [(int(m.group(1)), m.start())
+              for m in re.finditer(r"\*\*(\d+)\s*项\s*/\s*清点", text)]
+    tri_all = [(tuple(int(x) for x in m.groups()), m.start()) for m in re.finditer(
+        r"清点\s*\*{0,2}\s*(\d+)\s*=\s*(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)", text)]
+
+    n_live = [(v, p) for v, p in n_all if not _is_history(p)]
+    tri_live = [(v, p) for v, p in tri_all if not _is_history(p)]
+    n_excl = [p for _v, p in n_all if _is_history(p)]
+    tri_excl = [p for _v, p in tri_all if _is_history(p)]
+
+    # **伪造历史**（review：多锚情形下的洞）：把写错的锚前缀加个『历史』就能躲进排除集。
+    # 排除项必须**严格小于**现值——本卡两类计数都是只增的，真历史值（47/48、52=47+5+0）都小于现值；
+    # 出现「排除项 ≥ 现值」只可能是伪造（或计数真的缩过水，那就别用历史标记写法，见 docstring）。
+    forged = []
+    for v, p in n_all:
+        if _is_history(p) and v >= n_items:
+            forged.append("N 类排除项 %d ≥ 现值 %d（行 %d）⇒ 不能当历史" % (v, n_items, _lineno(p)))
+    for t, p in tri_all:
+        if _is_history(p) and t[0] >= total:
+            forged.append("三元组类排除项 M=%d ≥ 现值 %d（行 %d）⇒ 不能当历史"
+                          % (t[0], total, _lineno(p)))
+
+    def _excl_note():
+        parts = []
+        if n_excl:
+            parts.append("N 类排除历史 %d 处（行 %s）"
+                         % (len(n_excl), ",".join(str(_lineno(p)) for p in n_excl[:8])))
+        if tri_excl:
+            parts.append("三元组类排除历史 %d 处（行 %s）"
+                         % (len(tri_excl), ",".join(str(_lineno(p)) for p in tri_excl[:8])))
+        return ("；" + "；".join(parts)) if parts else ""
+
+    if forged:
+        return 1, "；".join(forged) + _excl_note()
+
+    missing, wrong = [], []
+    if not n_live:
+        why = ("所有 N 类锚都被历史排除（共 %d 处）⇒ 该类失去判据" % len(n_all)) if n_all \
+            else "找不到任何「**N 项全绿**」或「**N 项 / 清点」锚"
+        missing.append("N 类活锚为空：" + why)
+    if not tri_live:
+        why = ("所有三元组锚都被历史排除（共 %d 处）⇒ 该类失去判据" % len(tri_all)) if tri_all \
+            else "找不到任何「清点 M = N + K + 0」锚"
+        missing.append("三元组类活锚为空：" + why)
+    for v in sorted({v for v, _p in n_live}):
+        if v != n_items:
+            wrong.append("`N 项` 锚写作 %d，实况 len(REGISTRY)=%d" % (v, n_items))
+    want = (total, in_gate, out_scope, 0)
+    for t in sorted({v for v, _p in tri_live}):
+        if t != want:
+            wrong.append("清点锚写作 %d = %d + %d + %d，实况 %d = %d + %d + %d" % (t + want))
+    if missing:
+        return 2, "；".join(missing + wrong) + _excl_note()
+    if wrong:
+        return 1, "；".join(wrong) + _excl_note()
+    return 0, ("认树锚一致：%d 项 / 清点 %d = %d + %d + 0（N 活 %d/共 %d、三元组活 %d/共 %d）%s"
+               % (n_items, total, in_gate, out_scope,
+                  len(n_live), len(n_all), len(tri_live), len(tri_all), _excl_note()))
+
+
 def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
         check_inventory=True):
     only = set(only or [])
@@ -330,6 +439,10 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
     need = [r for r in results if not r.get("skipped") and r.get("state") == NEED]
     # A3：全跑末尾**显式**检查 inventory（不看牙的副作用）；`--only` 等调试跑同样适用。
     inv_rc, unclassified = inventory_gate_rc() if check_inventory else (0, [])
+    doc_rc, doc_detail = check_doc_anchors(repo) if check_inventory else (0, "")
+    if check_inventory:
+        print("%s DOC_ANCHORS %s" % (
+            {0: "PASS", 1: "FAIL", 2: "NEED"}.get(doc_rc, "FAIL"), doc_detail))
     print("TOTAL %d 项：绿 %d / 红 %d / 需人工 %d / 跳过 %d%s"
           % (len(results),
              sum(1 for r in results if not r.get("skipped") and r.get("state") == PASS),
@@ -339,9 +452,9 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
         print("NEED %d 项（工具自述判不了 rc=2，**不是**红；需人工确认环境/仓库）：%s"
               % (len(need), ", ".join(r["name"] for r in need)))
     # 红/未分类 ⇒ 2；只有「判不了」⇒ 3（既不是绿，也不是红）；否则 0。
-    if bad or inv_rc == 2:
+    if bad or inv_rc == 2 or doc_rc == 1:
         return results, 2
-    if need:
+    if need or doc_rc == 2:
         return results, 3
     return results, 0
 
@@ -527,6 +640,91 @@ def selftest():
             r_c3 = run_one(tmp, "ps_noshell", ["tools/window/no-such.ps1"], 5)
         finally:
             globals()["shutil"].which = _real_which
+        # R3（卡 openmir2-tool-gate-teeth-residuals）+ F1（review 92f425e9）：
+        # 认树锚机判必须覆盖**三种渲染**且彼此一致：表行 `**N 项全绿**`、正文三元组、提示行 `**N 项 / 清点 …**`。
+        import tempfile as _tf_r3
+        _r3_root = _tf_r3.mkdtemp(prefix="tsg-docanchor-")
+        _r3_doc = os.path.join(_r3_root, "docs")
+        os.makedirs(_r3_doc, exist_ok=True)
+        _r3_path = os.path.join(_r3_doc, "real-machine-window-plan-20261025.md")
+        _rows = inventory_rows()
+        _m = len(_rows)
+        _g = sum(1 for r in _rows if r["status"] == "IN_GATE")
+        _o = sum(1 for r in _rows if r["status"].startswith("OUT_OF_SCOPE"))
+        _n = len(REGISTRY)
+
+        def _r3_write(table_n=None, tri=None, note_n=None, drop_tri=False):
+            tn = _n if table_n is None else table_n
+            tr = (_m, _g, _o) if tri is None else tri
+            nn = _n if note_n is None else note_n
+            _NL3 = chr(10)
+            body = "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % tn + _NL3
+            if not drop_tri:
+                body += ("- ⇒ **%d 项全绿**；`--inventory` ⇒ 清点 **%d = %d + %d + 0**"
+                         % (_n, tr[0], tr[1], tr[2])) + _NL3
+                body += ("> 提示：**%d 项 / 清点 %d = %d + %d + 0**"
+                         % (nn, tr[0], tr[1], tr[2])) + _NL3
+            with open(_r3_path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+
+        _r3_write()
+        _r3_rc, _r3_dt = check_doc_anchors(_r3_root)
+        chk(_r3_rc == 0 and "一致" in _r3_dt, "R3a 三种渲染都一致 ⇒ rc=0（%r）" % (_r3_dt,))
+
+        _r3_write(table_n=_n + 1)
+        _r3b_rc, _r3b_dt = check_doc_anchors(_r3_root)
+        chk(_r3b_rc == 1 and "实况 len(REGISTRY)=" in _r3b_dt,
+            "R3b 表行写错一项 ⇒ rc=1 并点名（%r）" % (_r3b_dt,))
+
+        _r3_write(note_n=_n + 1)
+        _r3e_rc, _r3e_dt = check_doc_anchors(_r3_root)
+        chk(_r3e_rc == 1 and "实况 len(REGISTRY)=" in _r3e_dt,
+            "R3e 提示行 `**N 项 / 清点 …**` 写错 ⇒ rc=1（%r）" % (_r3e_dt,))
+
+        _r3_write(tri=(_m, _g + 1 if _g < _m else _g, _o))
+        _r3d_rc, _r3d_dt = check_doc_anchors(_r3_root)
+        chk(_r3d_rc == 1 and "清点锚写作" in _r3d_dt,
+            "R3d 紧凑三元组写错 ⇒ rc=1（%r）" % (_r3d_dt,))
+
+        _r3_write(drop_tri=True)
+        _r3c_rc, _r3c_dt = check_doc_anchors(_r3_root)
+        chk(_r3c_rc == 2 and "找不到任何「清点" in _r3c_dt,
+            "R3c 三元组锚被删掉 ⇒ rc=2 判不了（不静默通过；%r）" % (_r3c_dt,))
+        # 活锚地板（Leader 2026-10-27）：某一类被「历史」排除到空 ⇒ rc=2 判不了。
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 项全绿**（旧记录）" % (_n - 1) + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
+        _r3f_rc, _r3f_dt = check_doc_anchors(_r3_root)
+        chk(_r3f_rc == 2 and "N 类活锚为空" in _r3f_dt and "历史" in _r3f_dt,
+            "R3f N 类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3f_dt,))
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("**%d 项全绿**" % _n + chr(10)
+                     + "> 历史：清点 **%d = %d + %d + 0**（旧记录）" % (_m - 1, _g, _o) + chr(10))
+        _r3g_rc, _r3g_dt = check_doc_anchors(_r3_root)
+        chk(_r3g_rc == 2 and "三元组类活锚为空" in _r3g_dt,
+            "R3g 三元组类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3g_dt,))
+        _r3_write()
+        with open(_r3_path, "a", encoding="utf-8") as fh:
+            fh.write("> 历史：清点 52 = 47 + 5 + 0（旧记录）" + chr(10))
+        _r3h_rc, _r3h_dt = check_doc_anchors(_r3_root)
+        chk(_r3h_rc == 0 and "排除历史 1 处（行" in _r3h_dt,
+            "R3h 被排除的条数与行号出现在输出里（%r）" % (_r3h_dt,))
+        # 伪造历史（review 实测的洞）：把写错的锚前缀加「历史」躲进排除集 ⇒ 排除项 ≥ 现值 ⇒ rc=1。
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 项全绿**（伪造）" % (_n + 1) + chr(10)
+                     + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
+        _r3i_rc, _r3i_dt = check_doc_anchors(_r3_root)
+        chk(_r3i_rc == 1 and "不能当历史" in _r3i_dt,
+            "R3i 单锚伪装：`历史：**N+1 项全绿**` ⇒ rc=1（不能当历史；%r）" % (_r3i_dt,))
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 项全绿**（伪造1）" % (_n + 1) + chr(10)
+                     + "- 历史：**%d 项全绿**（伪造2）" % (_n + 2) + chr(10)
+                     + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
+        _r3j_rc, _r3j_dt = check_doc_anchors(_r3_root)
+        chk(_r3j_rc == 1 and "不能当历史" in _r3j_dt,
+            "R3j 多锚伪装（N 活 1/共 3）：两处 53/54 带历史前缀 ⇒ rc=1（%r）" % (_r3j_dt,))
         chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
             and "PowerShell" in r_c3["tail"],
             "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
@@ -556,6 +754,37 @@ def selftest():
             _dg._assert_fixture_consistent = _real_guard
         chk(_f3_rc == 2 and "守卫调用点牙" in _f3_out,
             "TSG 牙F3 docs gate 的守卫**调用点**在链路上（删调用 ⇒ 本牙红；rc=%r）" % (_f3_rc,))
+
+        # F1rev（Leader 2026-10-27 反向要求）：`skip()` 是「把红变不红」的通道，必须证明它**不能**
+        # 掩盖真正的 FAIL——PS 在场（which 假返回）且 PS 牙真失败 ⇒ 自测必须仍红。
+        if not _PROBE["active"]:
+            _PROBE["active"] = True
+            _real_which_f1 = shutil.which
+            _real_run_one_f1 = globals()["run_one"]
+
+            def _fake_which_f1(name, *a, **k):
+                return ("C:/fake/pwsh.exe" if name in ("pwsh", "powershell")
+                        else _real_which_f1(name, *a, **k))
+
+            def _fake_run_one_f1(repo, name, argv, timeout):
+                if name.startswith("ps_"):
+                    return {"name": name, "argv": list(argv), "rc": 1, "elapsed_s": 0.0,
+                            "tail": "fake PS failure（牙注入）", "timed_out": False}
+                return _real_run_one_f1(repo, name, argv, timeout)
+
+            globals()["shutil"].which = _fake_which_f1
+            globals()["run_one"] = _fake_run_one_f1
+            try:
+                _buf_f1 = io.StringIO()
+                with redirect_stdout(_buf_f1):
+                    _rc_f1 = selftest()
+                _out_f1 = _buf_f1.getvalue()
+            finally:
+                globals()["shutil"].which = _real_which_f1
+                globals()["run_one"] = _real_run_one_f1
+                _PROBE["active"] = False
+            chk(_rc_f1 == 1 and any(l.startswith("FAIL TSG 牙14") for l in _out_f1.splitlines()),
+                "TSG 牙F1rev PS 在场且 PS 牙真失败 ⇒ 自测仍红（rc=%r）；SKIP 通道没掩盖 FAIL" % (_rc_f1,))
 
         # ---- 三态（卡 openmir2-docs-gate-rc-semantics）：判不了 ≠ 证伪 ----
         needf = os.path.join(tmp, "need.py")

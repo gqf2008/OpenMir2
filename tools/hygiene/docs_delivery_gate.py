@@ -115,6 +115,9 @@ class GitUnavailable(GateError):
     """
 
 
+#: 自测里的探针重入标记（R1：整跑一次 selftest 验 hexref 调用点）。
+_DG_PROBE = {"r1": False}
+
 #: 自测夹具用的 GIT_* 变量必须**剔除**：合并/门禁 shell 里若导出了
 #: `GIT_DIR` / `GIT_WORK_TREE`，`git init` 会直接 fatal（我们实测过
 #: `GIT_WORK_TREE` 单独存在 ⇒ `git init` 报 "not allowed without specifying GIT_DIR"），
@@ -743,7 +746,10 @@ def _selftest_run():
         head = g("rev-parse", "HEAD")
         # ---- 夹具自洽守卫（卡 openmir2-ps1-tool-registry）----
         # HEX-1/HEX-7 与 N1a/N1b 都依赖「side 不是 HEAD 的祖先、c1 是 HEAD 的祖先」这一夹具事实；
-        # 负载下实测 25 次里有 3 次夹具没落到这个状态，下游就会报出「看起来像门坏了」的 FAIL。
+        # **归因订正（规则 16）**：早期把这里的误红说成「负载/慢盘下的竞态」，实测是**概率性夹具缺陷**——
+        # 门的 HEX_RE 要求引用含 a–f，纯数字前缀（约 0.8%/个）会让整组 hex 用例静默不触发，
+        # 与并发无关（60 次连跑 0 失败的对照见卡 openmir2-ps1-tool-registry）。
+        # 无论哪种原因，夹具一旦没落到这个状态，下游报的都是「看起来像门坏了」的 FAIL。
         # 守卫抽成模块级函数，好让自测**直接单测它**（reviewer-21 C1：只有人读没有机器守 = 假牙）。
         _assert_fixture_consistent(tmp, env, side, c1, head)
         # C6（reviewer-21）：夹具里的 git 调用一律走 _git_run——**rc=2 也是「判不了」**
@@ -930,6 +936,32 @@ def _selftest_run():
         chk(c6b_rc == 2 and "判不了" in c6b_out
             and not any(l.startswith("FAIL ") for l in c6b_out.splitlines()),
             "C6b rc=2 的夹具失败 ⇒ selftest rc=2 且**无 FAIL 行**（假红已消灭）")
+        # R1（卡 openmir2-tool-gate-teeth-residuals）：`hexref` 的**调用点**也要有牙——
+        # 把三处 `hexref(...)` 改回 `c1[:9]` 直切（函数留着不删）时，本牙必须红。
+        # 做法：装**探针**记录 hexref 的入参；夹具构建在最前 ⇒ 头三次调用必须是三个 40 位 oid
+        # （c1 / side / blob）。若调用点被改成切片，头几次记录就变成 F2 牙里的合成字面量（48/40/12 位）⇒ 红。
+        if not _DG_PROBE["r1"]:
+            _DG_PROBE["r1"] = True
+            _real_hexref = globals()["hexref"]
+            _seen_r1 = []
+
+            def _spy_hexref(oid, *a, **k):
+                _seen_r1.append(str(oid))
+                return _real_hexref(oid, *a, **k)
+
+            globals()["hexref"] = _spy_hexref
+            try:
+                import contextlib as _cl_r1
+                import io as _io_r1
+                _buf_r1 = _io_r1.StringIO()
+                with _cl_r1.redirect_stdout(_buf_r1):
+                    selftest()
+            finally:
+                globals()["hexref"] = _real_hexref
+                _DG_PROBE["r1"] = False
+            chk(len(_seen_r1) >= 3 and all(len(x) == 40 for x in _seen_r1[:3]),
+                "R1 hexref 调用点在夹具链路上（头三次入参须是 40 位 oid；实际 %r）"
+                % (_seen_r1[:3],))
         try:
             c4a = _require_branch(fx, env, "master") is True
         except GitUnavailable:
