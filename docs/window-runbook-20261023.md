@@ -1208,7 +1208,7 @@ run2 里 oracle 正是 `matched_ident=10` 假过，rust 3 秒没抽中就超时 
   即使两侧都发 653，`compare_runs` 也按 unclassified 判 UNDECIDABLE（`compare_runs.py:65`）。补 653 规则归
   rules 车道（`openmir2-rules-ident-gaps`）；在那之前本场景 verdict 仍可能 UNDECIDABLE，**但那不是判据的错**。
 
-### 9.3 牙（本卡禁改 probe ⇒ 牙是**可复跑的离线脚本**，不是门内条目）
+### 9.3 牙（**已登记为门内条目**：`tool_selftest_gate` 的 REGISTRY `selftest_bclass`；脚本在仓内、路径由文件位置推导）
 
 ```sh
 python -I -B tools/probe/selftest_bclass.py      # 期望：TOOTH GREEN (0 fail)
