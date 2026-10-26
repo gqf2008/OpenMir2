@@ -1090,3 +1090,62 @@ run2 里 oracle 正是 `matched_ident=10` 假过，rust 3 秒没抽中就超时 
 **下次窗口怎么验**：跑 `move_walk` 后看 `run.json` 的 `steps[1]`：
 `matched=true`、`matched_frame_class=server_ack_time`、`matched_body_text` 以 `+GD/` 开头；
 **不应再出现 `matched_ident=10`**。两侧都过了同步判据后才由 compare 决定 PASS / 真差异。
+
+## 9. 两条 B 类场景的判据订正：`gamepoint_exchange` / `dropgold_zero_draw`（2026-10-26；卡 `openmir2-probe-scenario-bclass-fixes`）
+
+来源：reviewer-20 的 UNDECIDABLE 归因审计（`4f84723f`）判 **B 类（判据 bug）** 两条。两条都**只改场景 JSON**
+（`tools/probe/mir2_probe.py` 本卡禁改）；真机复拍留下一次窗口。
+
+### 9.1 `gamepoint_exchange`：兑换后**不会**有 643
+
+- **事实**：`@9hua` 块（`E:/MirServer/M2GameSvr/Envir/Market_Def/功能NPC/真爱-G002.txt:520-530`）自己没有说词文本，
+  `#act` 的四条命令是 `GAMEPOINT - 9` / `give 一心一意包 1` / `sendmsg 6 …` / `goto @yhua`。
+  本仓库的动作分发 `GotoLableQuestActionProcess`（`src/Modules/ScriptEngine/ScriptEngine.cs:887-893`）对**已注册**命令
+  调用 `ExecutionProcessing.Execute(...)` 后**立刻 `return`** ⇒ 只执行第一条 `GAMEPOINT - 9`；`give` / `sendmsg` / `goto`
+  都不跑 ⇒ **既无 643（goto 回 @yhua 的页说词）也无 100（sendmsg 的系统提示）**。
+- **唯一期望帧**：`SM_GAMEGOLDNAME(5008)`（`ActionOfGamePoint` 的 `GameGoldChanged()`，
+  `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:3095-3131`；泵侧 `case RM_GAMEGOLDCHANGED`，
+  `PlayObject.Message.cs:1836-1838`）。`rules.json` 里 5008 有规则（`head_compare:["recog"]`，param/tag 默认逐字段比）。
+- **run2 实测**（`E:/tmp/window-20261026/run2/gamepoint_exchange/csharp/run.json` + `frames.ndjson`）：
+  两次 643 页说词命中（117ms / 116ms）→ 5008 命中（133ms）→ **再等 643 超时 3058ms**，其间**零帧**。
+- **新判据**：waits 固定为 `[643],[643],[5008]`；末步是 `sleep 800`（只给「多余的 643/100」留出场时间），
+  **不再有第四个 wait**。多出的帧由 `compare_runs` 的帧集差异暴露。
+
+### 9.2 `dropgold_zero_draw`：`ClientDropGold` 有**四道**早退（卡面记三条）
+
+`src/M2Server/Player/PlayObject.Operate.cs:222-248`，逐条 + 本窗口的绕法：
+
+| # | 条件 | 行为 | 本窗口是否命中 |
+|---|---|---|---|
+| ① | `InSafeDisableDrop && InSafeZone()` | 发 `RM_MENU_OK` 提示 | **否**：部署 `InSafeDisableDrop=1`（`Server.conf:721`），但 0 图 `[0 比奇省] DAY` 无 SAFE 旗标，且 (330,330) 距 0 图出生点 (330,266) **64 格** > `SafeZoneSize=10`（`Server.conf:291`）⇒ `InSafeZone()=false` |
+| ② | `ControlDropItem && nGold < CanDropGold` | 发 `RM_MENU_OK` | **否**：`ControlDropItem=0`（`Server.conf:720`） |
+| ③ | `!IsCanDrop \|\| Envir.Flag.NoThrowItem` | 发 `RM_MENU_OK` | **否**：`IsCanDrop` 默认 true（`PlayObject.cs:955`）、`PasswordLockDropAction=0`（`Server.conf:384`）、0 图无 NoThrowItem |
+| ④ | `nGold >= Gold` | **静默 return（零帧）** | **命中**：基线角色 `characters.Gold=100`（基线 dump `mir2_test_db.sql` 的 Id=6228 行），`recog=100` ⇒ `100>=100` |
+
+- **run2 实测**（`E:/tmp/window-20261026/run2/dropgold_zero_draw/csharp/`）：send 之后 **零帧**、653 等待超时 3009ms ⇒ 与 ④ 一致。
+- **修法**：场景声明 `assets: {"Gold": 200}`（由 `card_window` 在 restore 后、起栈前写库）⇒ `100 < 200`，
+  走完整路径：`Gold -= 100` → `DropGoldDown` 因 `MapItem.ItemId==0` 恒失败 → 回滚 → `GoldChanged()` 发 **653**。
+- **期望形态**：653 恰一条（`Recog`=100）、金币前后差 **0**、地面无金币。写「差 = 100」会在正确实现上误判。
+- **已知依赖（不在本卡写集）**：`SM_GOLDCHANGED(653)` 目前**没有** `tools/conformance/rules.json` 规则 ⇒
+  即使两侧都发 653，`compare_runs` 也按 unclassified 判 UNDECIDABLE（`compare_runs.py:65`）。补 653 规则归
+  rules 车道（`openmir2-rules-ident-gaps`）；在那之前本场景 verdict 仍可能 UNDECIDABLE，**但那不是判据的错**。
+
+### 9.3 牙（本卡禁改 probe ⇒ 牙是**可复跑的离线脚本**，不是门内条目）
+
+```sh
+python -I -B E:/tmp/tooth-bclass.py      # 期望：TOOTH GREEN (0 fail)
+```
+
+它只读加载 `tools/probe/mir2_probe.py` + 两个场景 JSON，用合成帧流断言：① waits 被钉住
+（gamepoint `[[643],[643],[5008]]`、dropgold `[[653]]`——把「等不到的 643」加回来立刻红）；
+② 只有无关帧时每个 wait 都超时 `None`（删掉真实回执必红）；③ `SM_TURN(10)` / 41 / 100 / 200 在场不算匹配；④ 正控命中。
+变异自证：M1 把第四个 `wait_for 643` 加回 gamepoint ⇒ 红；M2 把 dropgold 的 wait 改成 `SM_TURN(10)` ⇒ 红；
+两次都按 sha256 还原。**登记为残留**：脚本在 `E:/tmp`（写集不含 `tools/probe/**`），建议后续把这几条断言并入
+`mir2_probe --selftest`（另开 L 卡）。
+
+### 9.4 下次窗口怎么验
+
+1. `gamepoint_exchange`：两侧 waits 均 `[643],[643],[5008]` 命中；`frames.ndjson` 里 5008 之后**没有** 643/100；
+   5008 的 Param/Tag 两侧逐字段一致（rules `head_compare:["recog"]`）。
+2. `dropgold_zero_draw`：两侧各恰一条 653（`recog=100`）、DB `characters.Gold` 前后都是 200、无地面金币；
+   若 653 规则仍未登记 ⇒ 记账写成「帧面 PASS / 比较面 PENDING(653 规则)」，**不得**写成纯 PASS。

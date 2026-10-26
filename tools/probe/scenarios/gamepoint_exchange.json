@@ -1,6 +1,6 @@
 {
   "name": "gamepoint_exchange",
-  "description": "W-PD-1：`真爱-G002` 的 GAMEPOINT 兑换链（Market_Def/功能NPC/真爱-G002.txt）：[@main](:3，<使用[玫瑰花]/@yhua> 链接 :7) → @yhua(:105，<9朵兑换[一心一意]烟花/@9hua> 链接 :107) → @9hua(:520) 的 `CHECKGAMEPOINT > 8` 前置 + `GAMEPOINT - 9`（T-142 ⑨）。验收对象：`SM_GAMEGOLDNAME(5008)` 的 Param/Tag = LoWord/HiWord(GamePoint) + 脚本说词 643 的帧序 + DB `characters.GamePoint` 前后值。**不得假设任何未复算字段**（含 cleared）：前置 GamePoint≥9 由 `assets` 声明（依赖 P0 白名单扩到 GamePoint 的卡 `openmir2-window-kit-p0-unblock`）。 **前置声明走文本**：`CHECKGAMEPOINT > 8` 需测试库角色 GamePoint≥9；runner 侧 `assets` 白名单（`card_window.py` 的 ASSETS_COLUMNS）自 P0 卡起含 `GamePoint`，但 `tools/probe/mir2_probe.py` 的 `_check_assets` 仍只认 `Gold` ⇒ 白名单对齐卡（`openmir2-probe-assets-whitelist`）落地后**写回 `assets` 键**（`GamePoint: 9`），由 card_window 在 restore 后、起栈前应用。",
+  "description": "W-PD-1：`真爱-G002` 的 GAMEPOINT 兑换链（Market_Def/功能NPC/真爱-G002.txt）：[@main](:3，<使用[玫瑰花]/@yhua> 链接 :7) → @yhua(:105，<9朵兑换[一心一意]烟花/@9hua> 链接 :107) → @9hua(:520) 的 `CHECKGAMEPOINT > 8` 前置 + `GAMEPOINT - 9`（T-142 ⑨）。验收对象：`SM_GAMEGOLDNAME(5008)` 的 Param/Tag = LoWord/HiWord(GamePoint) + **兑换后不再出现 643/100**（判据订正见本段末） + DB `characters.GamePoint` 前后值。**不得假设任何未复算字段**（含 cleared）：前置 GamePoint≥9 由 `assets` 声明（依赖 P0 白名单扩到 GamePoint 的卡 `openmir2-window-kit-p0-unblock`）。 **前置声明走文本**：`CHECKGAMEPOINT > 8` 需测试库角色 GamePoint≥9；两侧白名单现已对齐：`card_window.py` 的 ASSETS_COLUMNS 与 `tools/probe/mir2_probe.py` 的 `_check_assets` 都接受 `Gold` / `GamePoint`（`--check-scenario` 已实测放行本文件的 `assets.GamePoint`），由 card_window 在 restore 后、起栈前写库。 **判据订正（2026-10-26，卡 `openmir2-probe-scenario-bclass-fixes`）**：兑换成功后的唯一期望帧是 `SM_GAMEGOLDNAME(5008)`（`ActionOfGamePoint` 的 `GameGoldChanged()`，`src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:3095-3131`）；**不再等 643**——`@9hua` 的 `#act` 只执行第一条（`ScriptEngine.cs:887-893` 的 return），`goto @yhua` 不执行，所以 643 不会来（run2 实测 5008 之后零帧，见末步 note）。",
   "required": [
     "npc_actor"
   ],
@@ -43,9 +43,8 @@
       "note": "`SM_GAMEGOLDNAME(5008)`：oracle `SendGoldInfo`（`PlayObject.Base.cs:927-939`）Param=LoWord(GamePoint)、Tag=HiWord(GamePoint)；扣 9 后 9→0 ⇒ Param=0/Tag=0。**帧序**：优先级按 **RM** 算——该帧由泵 `case RM_GAMEGOLDCHANGED`（`PlayObject.Message.cs:1836-1838`）产出，`RM_GAMEGOLDCHANGED=8084 ⇒ 8084&0xFF=148`；`RM_MERCHANTSAY=11009 ⇒ 1` ⇒ **说词先**（`SM_GAMEGOLDNAME` 自身的 5008&0xFF=144 只是 SM 号，不参与优先级）"
     },
     {
-      "wait_for": 643,
-      "timeout_ms": 3000,
-      "note": "兑换后的脚本说词（同 handler）"
+      "sleep": 800,
+      "note": "**本场景到此结束，最后一个期望帧就是上面的 SM_GAMEGOLDNAME(5008)。**「兑换后的 643 说词」是错的期望：`@9hua` 块（`真爱-G002.txt:520-530`）自己没有说词文本，`#act` 的四条命令里只有第一条执行——本仓库的 `GotoLableQuestActionProcess`（`src/Modules/ScriptEngine/ScriptEngine.cs:887-893`）对**已注册**命令调用 `ExecutionProcessing.Execute(...)` 后**立刻 return**，所以 `GAMEPOINT - 9` 之后的 `give` / `sendmsg 6` / `goto @yhua` 都不执行 ⇒ 既不会有 643（goto 回 @yhua 的页说词）也不会有 100（sendmsg 的系统提示）。run2 oracle 实测吻合：t=5666ms 的 5008 之后 3s 内**零帧**。此 sleep 只给「多余的 643/100」留出场时间；真正的判据是 compare 的帧集差异（哪一侧多发/漏发都会落在 frames.ndjson 里）。"
     }
   ]
 }
