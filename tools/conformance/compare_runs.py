@@ -2477,13 +2477,140 @@ def _selftest_random_pairs(mod):
     return 0 if fail_n == 0 else 1
 
 
+def _selftest_ident_653_head_compare(mod):
+    """SM_GOLDCHANGED(653) 的 `head_compare:["recog"]` 常驻牙（卡 openmir2-rules-653-resident-tooth）。
+
+    653 的 Recog 是**当前 Gold（语义值）**，不是会话 ActorId；全局 recog 掩码会把它掩成
+    「同一对帧 diffs=0」的假绿，`head_compare` 是唯一的取回点。本组牙钉住：
+      A1 仅 recog 不同（200 vs 201）⇒ 判红且 `diffs[0].field == "recog"`；
+      A2 仅 param 不同（7 vs 8）⇒ 判红且 `diffs[0].field == "param"`（param 逐值比）；
+      A3 两侧一致 ⇒ 绿（diffs/undecidable 均为空）；
+      A2 变异：**内存副本**里删掉 653 的 `head_compare` ⇒ 同一对 recog 差异被全局掩码吞掉
+         （`diffs=[]`，即 A1 必红）——证明谁删这个字段，常驻牙就会红。
+    变异只改内存副本（`RuleSet` 直接吃 deep-copy 的 dict），仓内 rules.json 不动
+    （sha256 前后相同，见最后一条牙）。返回 [(name, cond, detail)]，由 cmd_selftest 汇入
+    harness 的计数（既有断言一条不改，新增条目直接进 GREEN 的分子/分母）。
+    """
+    checks = []
+
+    def chk(name, cond, detail=""):
+        checks.append((name, bool(cond), detail))
+
+    def fr(idx, ident, param=0, tag=0, series=0, body=b"", recog=0):
+        return {"index": idx, "line": idx + 1, "ident": ident, "body": body,
+                "body_sha256": None, "param": param, "tag": tag, "series": series,
+                "phase": "gold", "recog": recog, "seq": idx, "t_ms": idx,
+                "conn": 1, "raw": {}}
+
+    def stream(label, frames):
+        return mod.Stream(label, "/dev/null", "/dev/null", frames, [])
+
+    def run(ofl, rfl, rules):
+        return mod.compare_streams(stream("oracle", ofl), stream("rust", rfl), rules)
+
+    rules = mod.load_rules(mod.DEFAULT_RULES)
+
+    def one(o_recog, o_param, r_recog, r_param, ruleset=None):
+        # 两侧各一条 653：除 recog/param 外全部相同（phase/seq/t_ms/conn/标签/body 都是常量）
+        ruleset = ruleset or rules
+        return run([fr(0, 653, param=o_param, recog=o_recog)],
+                   [fr(0, 653, param=r_param, recog=r_recog)], ruleset)
+
+    # 前提：内置规则里 653 仍是 compare + head_compare:["recog"]（字段被删 ⇒ 本条先红）
+    rule653 = rules.by_ident.get(653) or {}
+    chk("ident653 前提：内置规则仍是 compare 且 head_compare=[recog]",
+        rule653.get("action") == "compare"
+        and rule653.get("head_compare") == ["recog"], rule653)
+
+    # A1：仅 recog 不同 ⇒ 判红且定位到 recog（head_compare 把语义值从全局掩码里取回）
+    c = one(200, 7, 201, 7)
+    chk("ident653 A1：仅 recog 不同（200 vs 201）⇒ 判红且 diffs[0].field=recog",
+        len(c["diffs"]) == 1 and c["diffs"][0].get("field") == "recog",
+        c["diffs"][:2])
+
+    # A2：仅 param 不同 ⇒ 判红且定位到 param（取回 recog 不得顺带放宽 param）
+    c = one(200, 7, 200, 8)
+    chk("ident653 A2：仅 param 不同（7 vs 8）⇒ 判红且 diffs[0].field=param",
+        len(c["diffs"]) == 1 and c["diffs"][0].get("field") == "param",
+        c["diffs"][:2])
+
+    # A3：两侧一致 ⇒ 绿（掩码不会无中生有）
+    c = one(200, 7, 200, 7)
+    chk("ident653 A3：两侧一致 ⇒ 绿（diffs/undecidable 均为空）",
+        c["diffs"] == [] and c["undecidable"] == [], (c["diffs"], c["undecidable"]))
+
+    # ---- A2 变异：删掉 653 的 head_compare（内存副本），证明常驻牙「删了就红」 ----
+    sha_before = mod.sha256_file(mod.DEFAULT_RULES)
+    raw = mod.read_json(mod.DEFAULT_RULES, "规则表")
+    mutated = json.loads(json.dumps(raw))
+    for r in mutated.get("rules") or []:
+        if r.get("ident") == 653:
+            r.pop("head_compare", None)
+    mut_rules = mod.RuleSet(mutated, "<selftest:653 删 head_compare>", "")
+
+    # 变异点正确：只影响 653；622/650 的 recog 取回原样保留（否则下面的对照是假的）
+    chk("ident653 变异：只删 653 的 head_compare（622/650 的取回不受影响）",
+        not (mut_rules.by_ident.get(653) or {}).get("head_compare")
+        and (mut_rules.by_ident.get(622) or {}).get("head_compare") == ["recog"]
+        and (mut_rules.by_ident.get(650) or {}).get("head_compare") == ["recog"],
+        (mut_rules.by_ident.get(653), mut_rules.by_ident.get(622),
+         mut_rules.by_ident.get(650)))
+
+    # 删掉 head_compare ⇒ 同一对 recog 差异被全局 recog 掩码吞成 whitelisted ⇒ diffs=[]，
+    # 即上面 A1 的谓词（diffs[0].field == "recog"）会红。这就是「谁删了就红」的护栏。
+    c = one(200, 7, 201, 7, ruleset=mut_rules)
+    chk("ident653 变异：删 head_compare ⇒ 同一对 recog 差异被掩掉（diffs=[]，A1 必红）",
+        c["diffs"] == []
+        and any(w.get("ident") == 653 and w.get("field") == "recog"
+                and w.get("kind") == "masked_head" for w in c["whitelisted"]),
+        (c["diffs"], c["whitelisted"][:2]))
+
+    # 变异不外溢：recog 相同、仅 param 不同 ⇒ 删 head_compare 后仍判红（param 牙独立）
+    c = one(200, 7, 200, 8, ruleset=mut_rules)
+    chk("ident653 变异：删 head_compare 后 param 差异仍判红（与 recog 牙互不依赖）",
+        len(c["diffs"]) == 1 and c["diffs"][0].get("field") == "param",
+        c["diffs"][:2])
+
+    # 变异只碰内存副本：仓内 rules.json 一个字节都没动（sha256 前后相同）
+    chk("ident653 变异只在内存副本：仓内 rules.json sha256 前后相同",
+        mod.sha256_file(mod.DEFAULT_RULES) == sha_before,
+        (sha_before, mod.sha256_file(mod.DEFAULT_RULES)))
+
+    return checks
+
+
 def cmd_selftest():
     here = os.path.dirname(os.path.abspath(__file__))
-    extra_rc = _selftest_random_pairs(sys.modules[__name__])
     me = sys.modules[__name__]
+    extra_rc = _selftest_random_pairs(me)
     mod = load_module("conformance_selftest_impl",
                       os.path.join(here, "selftest_impl.py"))
-    rc = mod.run(me, here)
+    # 653 常驻牙汇入 harness 的计数：既有 343 条一条不改，新增条目直接进 GREEN 的分子/分母。
+    try:
+        teeth = _selftest_ident_653_head_compare(me)
+    except Exception:  # noqa: BLE001 - 自检自身崩了必须是 RED，不能假绿
+        mod.traceback.print_exc()
+        teeth = [("ident653: 常驻牙自身崩溃（INCOMPLETE）", False, "exception")]
+    try:
+        st = mod.Selftest(me, here)
+    except Exception:  # noqa: BLE001 - 构造失败同样是 INCOMPLETE，不能假绿
+        mod.traceback.print_exc()
+        print("RED: compare_runs selftest 未跑完（INCOMPLETE）")
+        return 2
+    original_finish = st.finish
+
+    def finish_with_ident653_teeth():
+        for name, cond, detail in teeth:
+            st.check(name, cond, detail)
+        return original_finish()
+
+    st.finish = finish_with_ident653_teeth
+    try:
+        rc = st.run()
+    except Exception:  # noqa: BLE001 - 与原 mod.run 同一口径：异常 ⇒ RED/INCOMPLETE
+        mod.traceback.print_exc()
+        print("RED: compare_runs selftest 未跑完（INCOMPLETE）")
+        return 2
     return rc or extra_rc
 
 
