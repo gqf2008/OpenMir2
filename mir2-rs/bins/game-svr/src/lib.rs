@@ -3876,6 +3876,13 @@ fn drain_deal_tick(
             // 不在世界（已掉线）⇒ 由掉线路径的 `DealCancelA` 收口。
             continue;
         };
+        // **共同前置（本卡）**：Run 内的自动取消不适用于幽灵——oracle 的幽灵由
+        // `WorldServer.cs:712` 的 `DealCancelA()` 收口（本宿主 = `Closed` 臂的
+        // `deal_cancel_between`）⇒ 这里不再跑（否则同一次取消会在 Run 相位提前发生）。
+        match ground_sessions.get(&chr) {
+            Some(sg) if !session_in_world(world, &chr, sg) => continue,
+            _ => {}
+        }
         let me_id = entry.actor_id;
         let pose = pose_create(world, displays, me_id);
         let deal_creature = trade_sessions.get(&chr).and_then(|s| s.deal_creature);
@@ -16477,6 +16484,59 @@ fn sync_super_man_wabil(
     }
 }
 
+/// **统一判据（卡 `openmir2-softclose-tick-common-gate`）**：会话是否仍在世界里。
+///
+/// oracle 的每 tick 会话推进**全部**门在 `!playObject.Ghost` 分支里：
+/// `src/GameSrv/Word/WorldServer.cs:648` 的 `if (!playObject.Ghost)` →
+/// `:697 playObject.Run()`（+ `:698-703` 的周期存档）；`else` 支（`:709-713`）只做
+/// `PlayObjectList.Remove` + `Disappear` + `DealCancelA` + `SaveHumanRcd` + `CloseUser`。
+/// ⇒ `CM_SOFTCLOSE` / 顶号走 `MakeGhost()` 之后对象**不再 Run**，任何 tick 尾的会话侧
+/// 推进都必须先问这一句（本卡把「每个排水各写一份条件」收敛成这一个函数）。
+///
+/// 本宿主没有 `Ghost` 位，离世证据有两层（任一为真即判离世）：
+/// 1. `bo_soft_close` / `bo_emergency_close`（oracle `PlayObject.cs:364/368`）——
+///    `CM_SOFTCLOSE`（[`handle_soft_close_cmd`]）、`CloseUser`（[`prepare_closed_guild`]）、
+///    账号级顶号（[`drain_soft_close`]）都会先置位；
+/// 2. `World::soft_close()` / `World::disconnect()` 把 `WorldStage` 置 `Left`（实体已销毁）。
+///
+/// **缺失世界会话 ⇒ 视为在世**：构造级用例只建 `ground_sessions`、不经 `enter_map`，
+/// 会话登记缺失是**证据缺失**而不是离世证据；[`drain_recovery`] 的既有口径即如此
+/// （「缺失 world 会话是构造级测试的既有形态，不据此改变恢复语义」），本函数沿用。
+///
+/// # 本卡清单：所有遍历 `sessions` / `ground_sessions` 的 tick 尾排水
+///
+/// | 排水 | 判定 | 理由 |
+/// |---|---|---|
+/// | [`drain_recovery`]（P1） | **加门** | 不依赖世界实体，直接消费会话药池并发 53；`59bda577c` 的真缺陷 |
+/// | [`drain_stamina`]（P7/P8） | **加门** | `stamina_tick` 只读写会话投影：能推进 tick、发 53、写回实体 |
+/// | [`drain_player_need_recheck_with_magic`]（P21） | **加门** | 主体循环只读 `sg.use_items`：幽灵仍会移包/丢地/**抽 RNG**/发 201·622 |
+/// | [`drain_player_game_gold`]（P22） | **加门** | 实体缺失已被 `map_id` 早退；门把「幽灵不推进」写成显式不变量（防未来 MakeGhost 保留实体） |
+/// | [`drain_player_map_hp`]（P25） | **加门** | 同上（`DECHP/INCHP` 改 HP + 53） |
+/// | [`drain_player_hunger`]（P26） | **加门** | 同上（饥饿扣血 / 重算 / 708） |
+/// | [`drain_player_run_rates`]（P27） | **加门** | 同上（倍率到期 ⇒ 红色 SysMsg） |
+/// | [`drain_player_auto_get_exp`]（P31） | **加门** | 同上（幽灵仍发经验 ⇒ `exp_awards` ⇒ 44/45） |
+/// | [`drain_player_revival_with_magic`]（P32） | **加门** | 同上（幽灵仍复活 / 破戒 / 53·141·252） |
+/// | [`drain_deal_tick`]（Run 内自动取消） | **加门** | oracle 幽灵由 `:712` 的 `DealCancelA` 收口（本宿主 = `Closed` 臂的 `deal_cancel_between`），Run 内那趟不得再跑 |
+/// | [`drain_periodic_save`] | **不加门**（反向牙钉住） | oracle **幽灵支也** `SaveHumanRcd`（`:713`）；本宿主每个 ghost 由 [`drain_kicks`]/[`drain_soft_close`]/`Closed` 臂各存一次，保留计时存档 = 同一写入的超集，去掉反而可能漏存 |
+/// | [`drain_extra_abil_expiries`] / [`drain_mag_healing_delivery`] / [`drain_b3_self_deliveries`] / [`drain_b4_with_enter_cfg`] / [`drain_b5_self_deliveries`] / [`drain_buff_downlink`] | **不加门** | 全部由 `TickRecord` 事件驱动；事件源是 world tick，幽灵实体已销毁 ⇒ 无事件可排 |
+/// | [`sync_super_man_wabil`] / [`sync_use_items_to_session`] | **不加门** | 纯实体→会话镜像；无实体 ⇒ 早退，不推进状态 |
+/// | [`process_switch_data`] | **不加门** | oracle 轮询的是 **ghost 自由表**（`WorldServer.cs:583-610`）；本宿主 `switch_data` 无生产写者（G11 闭合）⇒ 零副作用 |
+/// | [`drain_close_health_residual`] / [`flush_healthspell_slots`] / [`flush_run_frames`] | **不加门** | 前者遍历**实体**而非会话；后两者只是已入队帧的 flush（生产者已被门挡住） |
+///
+/// **邻近族（不在本卡写集判据内，另行开卡）**：滚动公告 [`drain_line_notice`] 与天色
+/// [`broadcast_day_changing`] 只遍历 `online`（非会话容器），oracle 同样门在 `!Ghost` 内
+/// （`WorldServer.cs:661-696`）⇒ 同一族风险，但它们的收件人是「即将断开的 socket」，
+/// 改动会动帧面，按 R 级单独对拍。
+fn session_in_world(world: &mir2_world::World, chr_name: &str, sg: &SessionGround) -> bool {
+    if sg.bo_soft_close || sg.bo_emergency_close {
+        return false;
+    }
+    match world.session(chr_name) {
+        Some(s) => s.stage == mir2_world::WorldStage::InWorld,
+        None => true,
+    }
+}
+
 fn drain_recovery(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     world: &mut mir2_world::World,
@@ -16488,20 +16548,15 @@ fn drain_recovery(
     for name in names {
         // **CM_SOFTCLOSE 后的 P1 不得再跑**：oracle 在 `PlayObject.Run()` 的
         // `:70-141`（P1）之后才处理 `CM_SOFTCLOSE`（`:874-884`），随后同一 Run 的
-        // `MakeGhost()` 让对象不再 Run。本宿主的 `CM_SOFTCLOSE` 在 tick 之前派发，
-        // `world.soft_close()` 已把会话置 `stage=Left`；若这里仍按 `ground_sessions`
-        // 名单跑恢复，就会把药池消费掉并多发一条 oracle 不存在的 53（真机 eat_item：
-        // 53 落在 `CM_SOFTCLOSE` 之后，且 `characters.IncHealth` 由 20 变 0）。
+        // `MakeGhost()` 让对象不再 Run（`WorldServer.cs:648/697` 的 `!Ghost` 门）。
+        // 本宿主的 `CM_SOFTCLOSE` 在 tick 之前派发，`world.soft_close()` 已把会话置
+        // `stage=Left`；若这里仍按 `ground_sessions` 名单跑恢复，就会把药池消费掉并多发
+        // 一条 oracle 不存在的 53（真机 eat_item：53 落在 `CM_SOFTCLOSE` 之后，且
+        // `characters.IncHealth` 由 20 变 0）。门已收敛到 [`session_in_world`]。
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
-        // 以 soft-close 标志为**主判据**（oracle 的 `BoSoftClose`/`BoEmergencyClose` 同源）；
-        // `stage=Left` 是 `world.soft_close()` 的直接证据，给未来 MakeGhost 保留实体的
-        // 生命周期也留同一道门。缺失 world 会话是构造级测试的既有形态，不据此改变恢复语义。
-        let left_world = world
-            .session(&name)
-            .is_some_and(|s| s.stage != mir2_world::WorldStage::InWorld);
-        if sg.bo_soft_close || sg.bo_emergency_close || left_world {
+        if !session_in_world(world, &name, sg) {
             continue;
         }
         let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
@@ -16647,6 +16702,11 @@ fn drain_stamina(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：软关/离世后 oracle 不再 `Run()`（`WorldServer.cs:648/697`）
+        // ⇒ P7/P8 体力/魔力段一律不跑（reviewer-21 指出的 `drain_stamina` 缺口）。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         let death = world.entities.get(actor_id).is_some_and(|e| e.death);
         // **卡 `openmir2-monster-showhp-53-broadcast` R3-1**：oracle 的 `SuperMan` 回满
@@ -19720,6 +19780,11 @@ fn drain_player_need_recheck_with_magic(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：幽灵不再 `Run()`。P21 主体只读 `sg.use_items`（移包/丢地/
+        // 抽 RNG/发 201·622 全都不需要实体）⇒ 必须显式挡在这里。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         // 本 tick 战斗磨损在实体上（G-06）；先回写会话，P21 才看到 oracle 同一对象的值。
         sync_use_items_from_entity_if_loaded(world, sg);
@@ -19946,6 +20011,10 @@ fn drain_player_map_hp(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：幽灵不再 `Run()`（`WorldServer.cs:648/697`）。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         let Some(e) = world.entities.get_mut(actor_id) else {
             continue;
@@ -20006,6 +20075,10 @@ fn drain_player_hunger(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：幽灵不再 `Run()`（`WorldServer.cs:648/697`）。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         let Some(hp0) = world.entities.get(actor_id).map(|e| e.hp) else {
             continue;
@@ -20092,6 +20165,10 @@ fn drain_player_run_rates(
         let Some(sg) = sessions.get(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：幽灵不再 `Run()`（`WorldServer.cs:648/697`）。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         let Some(e) = world.entities.get_mut(actor_id) else {
             continue;
@@ -20245,6 +20322,10 @@ fn drain_player_auto_get_exp(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：幽灵不再 `Run()`（`WorldServer.cs:648/697`）。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         if world.entities.get(actor_id).is_none() {
             continue;
@@ -20326,6 +20407,10 @@ fn drain_player_game_gold(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：幽灵不再 `Run()`（`WorldServer.cs:648/697`）。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         let Some(map_id) = world.entities.get(actor_id).map(|e| e.map_id) else {
             continue;
@@ -20530,6 +20615,10 @@ fn drain_player_revival_with_magic(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // **共同前置（本卡）**：幽灵不再 `Run()`（`WorldServer.cs:648/697`）。
+        if !session_in_world(world, &name, sg) {
+            continue;
+        }
         let actor_id = sg.actor_id;
         let Some(entity) = world.entities.get(actor_id) else {
             continue;
@@ -41166,6 +41255,554 @@ SendRefMsgRange=15
         assert!(
             rx0.try_recv().is_err(),
             "CM_SOFTCLOSE 之后不得再发 SM_HEALTHSPELLCHANGED(53)"
+        );
+    }
+
+    // ==================================================================
+    // 卡 `openmir2-softclose-tick-common-gate`：统一判据 [`session_in_world`] 的牙
+    //
+    // 每颗牙的形状固定：**同一夹具、同一调用**，先置离世标志（`bo_soft_close` /
+    // `bo_emergency_close`，或 `World::soft_close()`）⇒ 该排水必须**零副作用**；再清掉
+    // 标志重跑 ⇒ 必须照常推进（反向牙，证明门不是把功能关掉）。
+    // 变异重放：把对应函数里的 `if !session_in_world(...) { continue; }` 整段删掉 ⇒
+    // 该用例前半段的「零副作用」断言必红。
+    // ==================================================================
+
+    /// 本卡牙齿通用夹具：一个**已进世界**的玩家会话 + 在线登记 + 网关通道（HP/MP 满值）。
+    #[allow(clippy::type_complexity)]
+    fn sc_gate_fixture(
+        chr: &str,
+    ) -> (
+        mir2_world::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+    ) {
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.open_session(chr);
+        let mut ent = new_player_entity(chr.to_string(), 10, 10);
+        ent.hp = 100;
+        ent.max_hp = 100;
+        let actor = world.enter_map(chr, ent, 0).expect("进世界");
+        let mut sg = test_session_ground(actor);
+        sg.state.wabil.hp = 100;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.mp = 50;
+        sg.state.wabil.max_mp = 50;
+        let mut sessions = HashMap::new();
+        sessions.insert(chr.to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", chr, 1, 0, 901, actor));
+        let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0u8, tx);
+        (world, sessions, online, gates, rx, actor)
+    }
+
+    /// **牙（`drain_stamina`，P7/P8）**：软关后不得再跑体力/魔力段（reviewer-21 指出的缺口）。
+    ///
+    /// 变异：删 `drain_stamina` 的 `session_in_world` 门 ⇒ 前半段 HP 掉到 99 且多一条 53 ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_stamina_p7_p8_after_soft_close() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) = sc_gate_fixture("sc_sta");
+        {
+            let sg = sessions.get_mut("sc_sta").unwrap();
+            // 负体力扣血支：`HealthTick < 0` + 60ms 前重放 ⇒ 无门必掉 1 HP 并发 53。
+            sg.stamina.health_tick = -400;
+            let base = now_ms() - 60;
+            sg.stamina.replay_cursor = base;
+            sg.stamina.auto_recovery_tick = base;
+            sg.bo_soft_close = true;
+        }
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
+        assert_eq!(
+            world.entities.get(actor).unwrap().hp,
+            100,
+            "软关后的会话不得再被 P7/P8 推进（幽灵不再 Run）"
+        );
+        assert_eq!(sessions["sc_sta"].state.wabil.hp, 100);
+        assert!(rx.try_recv().is_err(), "软关后不得再发 53");
+
+        // 反向牙：清标志后同一夹具照常推进（门不得把功能关掉）。
+        sessions.get_mut("sc_sta").unwrap().bo_soft_close = false;
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_HEALTHSPELLCHANGED],
+            "正常会话必须照常出 53"
+        );
+        assert!(
+            world.entities.get(actor).unwrap().hp < 100,
+            "正常会话照常扣血"
+        );
+    }
+
+    /// **牙（`drain_player_need_recheck_with_magic`，P21）**：幽灵仍会移包/发 201·622
+    /// （主体循环不依赖世界实体）⇒ 必须显式挡住。
+    ///
+    /// 变异：删 P21 的 `session_in_world` 门 ⇒ 前半段装备被移出（`Index` 0）、背包多一件、
+    /// 网关收到 201+622 ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_p21_need_recheck_after_soft_close() {
+        let (mut world, mut sessions, online, gates, mut rx, _actor) = sc_gate_fixture("sc_p21");
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            500,
+            mir2_data::StdItem {
+                name: "guild-only".into(),
+                std_mode: 5,
+                // `Need=6`（行会成员）⇒ 默认 `ItemsNeedContext`（无行会）判 false ⇒ 移除支。
+                need: 6,
+                ..Default::default()
+            },
+        );
+        sessions.get_mut("sc_p21").unwrap().use_items[game_svr::ability::SLOT_WEAPON] =
+            Some(game_svr::bag::BagItem {
+                make_index: 1,
+                index: 500,
+                dura: 1000,
+                dura_max: 1000,
+                desc: [0; 14],
+            });
+        sessions.get_mut("sc_p21").unwrap().bo_soft_close = true;
+
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+        assert_eq!(
+            sessions["sc_p21"].use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            500,
+            "幽灵会话不得被 P21 移出装备"
+        );
+        assert!(
+            sessions["sc_p21"].state.item_list.is_empty(),
+            "幽灵会话不得被 P21 往背包里塞东西"
+        );
+        assert!(rx.try_recv().is_err(), "幽灵会话不得发 201/622");
+
+        // 反向牙：正常会话必须照常移出并回帧（201 → 622）。
+        sessions.get_mut("sc_p21").unwrap().bo_soft_close = false;
+        drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 0);
+        assert_eq!(
+            sessions["sc_p21"].use_items[game_svr::ability::SLOT_WEAPON]
+                .as_ref()
+                .unwrap()
+                .index,
+            0,
+            "正常会话照常清装备位"
+        );
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![
+                mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_DELITEM,
+                // `WeightChanged()`（`Need` 失败件入包后的重量重算）——与 201/202 同批。
+                mir2_protocol::messages::SM_WEIGHTCHANGED
+            ]
+        );
+    }
+
+    /// **牙（`drain_player_game_gold`，P22）**：`bo_emergency_close` 支同样必须挡住。
+    ///
+    /// 变异：删 P22 的门 ⇒ 前半段元宝 100→105 且收到 653 ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_p22_game_gold_after_soft_close() {
+        let (mut world, mut sessions, online, gates, mut rx, _actor) = sc_gate_fixture("sc_p22");
+        {
+            let sg = sessions.get_mut("sc_p22").unwrap();
+            sg.game_gold = 100;
+            sg.p22.bo_inc_game_gold = true;
+            sg.p22.inc_game_gold = 5;
+            sg.p22.inc_game_gold_time = 100;
+            sg.p22.inc_game_gold_tick = 0;
+            sg.bo_emergency_close = true;
+        }
+        let saves: HashMap<String, SavedHuman> = HashMap::new();
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            None,
+            &saves,
+            1_000,
+        );
+        assert_eq!(sessions["sc_p22"].game_gold, 100, "幽灵不得再推进元宝");
+        assert!(rx.try_recv().is_err(), "幽灵不得发 653");
+
+        sessions.get_mut("sc_p22").unwrap().bo_emergency_close = false;
+        drain_player_game_gold(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            None,
+            &saves,
+            1_000,
+        );
+        assert_eq!(sessions["sc_p22"].game_gold, 105, "正常会话照常推进");
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_GOLDCHANGED]
+        );
+    }
+
+    /// **牙（`drain_player_map_hp`，P25）**：`DECHP` 在幽灵上不得再扣血。
+    ///
+    /// 变异：删 P25 的门 ⇒ 前半段 HP 100→90 且收到 53 ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_p25_map_hp_after_soft_close() {
+        let (mut world, mut sessions, online, gates, mut rx, actor, registry, dir) =
+            p25_fixture("DECHP(1/10)", 100, 100, false);
+        sessions.get_mut("p25a").unwrap().bo_soft_close = true;
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(world.entities.get(actor).map(|e| e.hp), Some(100));
+        assert!(take_frame_idents(&mut rx).is_empty(), "幽灵不得发 53");
+
+        sessions.get_mut("p25a").unwrap().bo_soft_close = false;
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_map_hp(
+            &mut world,
+            &mut sessions,
+            &online,
+            Some(&registry),
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(
+            world.entities.get(actor).map(|e| e.hp),
+            Some(90),
+            "正常会话照常扣血"
+        );
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_HEALTHSPELLCHANGED]
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// **牙（`drain_player_hunger`，P26）**：饥饿扣血在幽灵上不得再跑。
+    ///
+    /// 变异：删 P26 的门 ⇒ 前半段 HP 100→99 且收到 53 ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_p26_hunger_after_soft_close() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) = p26_fixture(0, 100, 0);
+        sessions.get_mut("p26a").unwrap().bo_soft_close = true;
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            true,
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(world.entities.get(actor).map(|e| e.hp), Some(100));
+        assert!(take_frame_idents(&mut rx).is_empty(), "幽灵不得发 53");
+
+        sessions.get_mut("p26a").unwrap().bo_soft_close = false;
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_hunger(
+            &mut world,
+            &mut sessions,
+            &online,
+            &p26_catalog(),
+            true,
+            true,
+            1001,
+            &mut frames,
+        );
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(
+            world.entities.get(actor).map(|e| e.hp),
+            Some(99),
+            "正常会话照常掉血"
+        );
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_HEALTHSPELLCHANGED]
+        );
+    }
+
+    /// **牙（`drain_player_run_rates`，P27）**：倍率到期帧在幽灵上不得再出。
+    ///
+    /// 变异：删 P27 的门 ⇒ 前半段 `power_rate` 150→100 且收到红色 SysMsg ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_p27_run_rates_after_soft_close() {
+        let (mut world, mut sessions, online, gates, mut rx, actor) =
+            p27_fixture(200, 2, 150, 1, 0);
+        sessions.get_mut("p27a").unwrap().bo_soft_close = true;
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, 1001, &mut frames);
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(
+            world.entities.get(actor).unwrap().power_rate,
+            150,
+            "幽灵不得递减"
+        );
+        assert!(take_frame_idents(&mut rx).is_empty(), "幽灵不得发 SysMsg");
+
+        sessions.get_mut("p27a").unwrap().bo_soft_close = false;
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        drain_player_run_rates(&mut world, &sessions, 0xFF, 0x38, 1001, &mut frames);
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        assert_eq!(
+            world.entities.get(actor).unwrap().power_rate,
+            100,
+            "正常会话照常递减"
+        );
+        assert_eq!(
+            take_frame_idents(&mut rx),
+            vec![mir2_protocol::messages::SM_SYSMESSAGE]
+        );
+    }
+
+    /// **牙（`drain_player_auto_get_exp`，P31）**：幽灵不得再产 `exp_awards`（否则 44/45 帧）。
+    ///
+    /// 变异：删 P31 的门 ⇒ 前半段 `exp_awards` 非空 ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_p31_auto_get_exp_after_soft_close() {
+        let (mut world, mut sessions, online, _gates, _rx, _actor) = sc_gate_fixture("sc_p31");
+        {
+            let sg = sessions.get_mut("sc_p31").unwrap();
+            sg.auto_get_exp_time = 1;
+            sg.auto_get_exp_point = 10;
+            sg.auto_get_exp_tick = 0;
+            sg.auto_get_exp_envir = None;
+            sg.bo_soft_close = true;
+        }
+        let mut rec = mir2_world::TickRecord::default();
+        drain_player_auto_get_exp(&mut world, &mut sessions, &online, None, 1_000, &mut rec);
+        assert!(rec.exp_awards.is_empty(), "幽灵不得发经验");
+
+        sessions.get_mut("sc_p31").unwrap().bo_soft_close = false;
+        drain_player_auto_get_exp(&mut world, &mut sessions, &online, None, 1_000, &mut rec);
+        assert_eq!(rec.exp_awards.len(), 1, "正常会话照常发经验");
+    }
+
+    /// **牙（`drain_player_revival_with_magic`，P32）**：幽灵不得复活/破戒。
+    ///
+    /// 变异：删 P32 的门 ⇒ 前半段 HP 0→100、戒指耐久 -1000、收到 53/141/252 ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_p32_revival_after_soft_close() {
+        let catalog = p32_catalog();
+        let (mut world, mut sessions, online, gates, mut rx, actor) = p32_fixture(5000, 0);
+        sessions.get_mut("p32a").unwrap().bo_soft_close = true;
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            1_000_000,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        let e = world.entities.get(actor).unwrap();
+        assert_eq!(e.hp, 0, "幽灵不得复活");
+        assert_eq!(e.revival_tick, 0, "幽灵不得推进 RevivalTick");
+        assert_eq!(
+            sessions["p32a"].use_items[game_svr::ability::SLOT_RING_L]
+                .as_ref()
+                .unwrap()
+                .dura,
+            5000,
+            "幽灵不得破戒"
+        );
+        assert!(rx.try_recv().is_err(), "幽灵不得发 53/141/252");
+
+        sessions.get_mut("p32a").unwrap().bo_soft_close = false;
+        drain_player_revival(
+            &mut world,
+            &mut sessions,
+            &online,
+            &gates,
+            &catalog,
+            1_000_000,
+            60_000,
+            0xDB,
+            0xFF,
+            b"revived",
+            12,
+        );
+        assert_eq!(
+            world.entities.get(actor).unwrap().hp,
+            100,
+            "正常会话照常复活"
+        );
+    }
+
+    /// **牙（`drain_deal_tick`，Run 内自动取消）**：幽灵的取消归 `Closed` 臂的
+    /// `DealCancelA`（oracle `WorldServer.cs:712`），Run 相位不得提前取消。
+    ///
+    /// 变异：删 `drain_deal_tick` 的门 ⇒ 前半段 `dealing` 变 false ⇒ 必红。
+    #[test]
+    fn sc_gate_blocks_run_deal_auto_cancel_after_soft_close() {
+        let (world, sessions, online, gates, _rx, _actor) = sc_gate_fixture("sc_deal");
+        let mut sessions = sessions;
+        let mut trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+        trade.insert(
+            "sc_deal".to_string(),
+            game_svr::trade::DealState {
+                dealing: true,
+                ..Default::default()
+            },
+        );
+        sessions.get_mut("sc_deal").unwrap().bo_soft_close = true;
+        let displays = downlink::DisplayTable::default();
+        let cfg = game_svr::trade::DealConfig::default();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut sessions,
+            &mut trade,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert!(
+            trade["sc_deal"].dealing,
+            "幽灵的 DealCancelA 由 Closed 臂收口，Run 相位不得提前取消"
+        );
+
+        sessions.get_mut("sc_deal").unwrap().bo_soft_close = false;
+        drain_deal_tick(
+            &world,
+            &displays,
+            &online,
+            &mut sessions,
+            &mut trade,
+            &gates,
+            &cfg,
+            &catalog,
+        );
+        assert!(!trade["sc_deal"].dealing, "正常会话照常自动取消");
+    }
+
+    /// **反向牙（`drain_periodic_save` 不加门）**：oracle 的**幽灵支也**
+    /// `SaveHumanRcd`（`WorldServer.cs:713`）⇒ 软关会话的计时存档必须照旧触发。
+    ///
+    /// 若给 `drain_periodic_save` 加 `session_in_world` 门 ⇒ `fired` 变 0 ⇒ 必红。
+    #[test]
+    fn sc_gate_periodic_save_still_fires_after_soft_close() {
+        use std::sync::atomic::AtomicI32;
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        let actor_id = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+            .expect("进世界");
+        let mut sg = test_session_ground(actor_id);
+        sg.save_rcd_tick = 1_000;
+        sg.bo_soft_close = true;
+        let mut sessions = HashMap::new();
+        sessions.insert("hero".to_string(), sg);
+        let mut saves = HashMap::new();
+        saves.insert(
+            "hero".to_string(),
+            SavedHuman {
+                account: "acct".into(),
+                record: stage6_record(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        let state = dbclient::DbLinkState::new();
+        state.mark_connected();
+        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+        let mut db = Some(DbWiring {
+            state,
+            req_tx: tx,
+            next_query_id: Arc::new(AtomicI32::new(0)),
+            replies: Arc::new(std::sync::Mutex::new(dbclient::DbReplies::new())),
+            outstanding: Vec::new(),
+            save_outstanding: Vec::new(),
+        });
+        let mut engine = load::FrontEngine::new();
+        let fired = drain_periodic_save(
+            &mut sessions,
+            &saves,
+            &world,
+            &mut db,
+            &mut engine,
+            None,
+            5_000,
+            6_001,
+        );
+        assert_eq!(
+            fired, 1,
+            "oracle 幽灵支（WorldServer.cs:713）也 SaveHumanRcd ⇒ 计时存档不得因软关停掉"
+        );
+        assert!(rx.try_recv().is_ok(), "必须仍发出 DB_SAVEHUMANRCD 请求");
+    }
+
+    /// **反向牙（事件驱动排水不加门）**：幽灵实体已销毁 ⇒ world tick 不再为它产任何
+    /// 事件，P2/B2·B3·B4·B5/毒伤等「由 `TickRecord` 驱动」的排水自然无帧可出；
+    /// 纯镜像（`sync_super_man_wabil` / `sync_use_items_to_session`）在无实体时早退。
+    ///
+    /// 若将来让 world tick 继续处理幽灵（例如保留实体），本用例必红——那时这些排水
+    /// 就必须补 `session_in_world` 门。
+    #[test]
+    fn sc_gate_event_driven_drains_have_no_source_after_soft_close() {
+        let (mut world, mut sessions, _online, _gates, _rx, actor) = sc_gate_fixture("sc_evt");
+        world.soft_close("sc_evt").expect("CM_SOFTCLOSE 等价物");
+        assert!(
+            world.entities.get(actor).is_none(),
+            "前置：soft_close 销毁实体（事件源消失）"
+        );
+        let rec = world.tick();
+        assert!(rec.exp_awards.is_empty(), "P31/击杀链：无事件");
+        assert!(rec.buff_health_changes.is_empty(), "毒伤 53：无事件");
+        assert!(rec.buff_status_changes.is_empty(), "657：无事件");
+        assert!(rec.extra_abil_expiries.is_empty(), "P2：无事件");
+        assert!(rec.slave_self_deliveries.is_empty(), "B2/B4/B5：无事件");
+        assert!(rec.run_state_expiries.is_empty(), "烈火/双龙到期：无事件");
+
+        // 纯镜像：无实体 ⇒ 不得改写会话。
+        sessions.get_mut("sc_evt").unwrap().state.wabil.hp = 7;
+        sync_super_man_wabil(&world, &mut sessions);
+        sync_use_items_to_session(&world, sessions.get_mut("sc_evt").unwrap());
+        assert_eq!(
+            sessions["sc_evt"].state.wabil.hp, 7,
+            "无实体时镜像必须早退（否则等于从幽灵实体回灌会话）"
         );
     }
 
