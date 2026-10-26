@@ -20,8 +20,10 @@
 **收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
 ——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
 「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
-当前 48 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
-部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
+门内条数 = `REGISTRY` 的长度（**不在这里写死**；`--inventory` 会打印实时条数与出域理由）。
+出域项逐条列在 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物 / 部署配置 / 无独立入口的模块）。
+新增工具按 `REGISTRY` 同一格式登记即可；**非 Python 的自测**（如 `-Selftest` 的 .ps1）同样登记，
+由 `build_cmd()` 按扩展名拼出 PowerShell 命令行。
 
 用法：
   python -I -B tools/hygiene/tool_selftest_gate.py [--repo .] [--only a,b]
@@ -33,6 +35,7 @@
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -87,6 +90,11 @@ REGISTRY = [
     ("load_report", ["tools/botload/load_report.py", "selftest"], False),
     ("prepare_safe_login", ["tools/loginfixture/prepare_safe_login.py", "--selftest"], False),
     ("preflight_private_stack", ["tools/window/preflight_private_stack.py", "--selftest"], False),
+    # 卡 openmir2-docs-gate-rc-semantics（Leader 2026-10-27 批准扩写集）：窗口期两个 PowerShell
+    # 自测此前**不在任何门禁里**。二者都离线、确定性、自带 `-Selftest`（stop-mysql 用注入 hook +
+    # 临时 mysqladmin.cmd；invoke-bounded 用临时子进程），且实测**不触碰真实 mysqld**（跑完 pid/StartTime 不变）。
+    ("stop_mysql_graceful", ["tools/window/stop-mysql-graceful.ps1", "-Selftest"], False),
+    ("invoke_bounded", ["tools/window/invoke-bounded.ps1", "-Selftest"], False),
     ("selftest_mutations", ["tools/conformance/selftest_mutations.py", "--selfcheck"], False),
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
     # reviewer-21 实跑：`in_world_stability.py selftest` ⇒ rc=0、7/7（纯合成数据，0.1s）。
@@ -143,6 +151,14 @@ def discover():
                 continue
             if "--selftest" in text or "selftest" in text:
                 out.append(os.path.relpath(path, root).replace(os.sep, "/"))
+    # 非 `.py` 的入口（如 `-Selftest` 的 .ps1）**只收 REGISTRY 显式登记的**：
+    # `tools/**/*.ps1` 里有 20+ 个带 selftest 字样的部署/验收脚本，全局扫描会把它们
+    # 全变成「未分类」⇒ 判红。清点的语义是「谁在门内/谁被显式出域」，不是「目录爆破」。
+    for _n, argv, _slow in REGISTRY:
+        if argv and str(argv[0]).lower().endswith(".ps1"):
+            rel = str(argv[0]).replace(os.sep, "/")
+            if os.path.isfile(os.path.join(root, rel)) and rel not in out:
+                out.append(rel)
     return sorted(out)
 
 
@@ -218,8 +234,23 @@ def classify_rc(rc):
     return FAIL
 
 
+def build_cmd(argv):
+    """注册项 → 真正执行的命令行。
+
+    `.py` ⇒ `python -I -B <script> ...`；`.ps1` ⇒ `pwsh|powershell -NoProfile -ExecutionPolicy Bypass -File <script> ...`。
+    其它（`-c` 片段等自测夹具）一律按 Python 处理。非 `.py` 的入口只允许来自 REGISTRY（不扫目录）。
+    """
+    argv = [str(a) for a in argv]
+    if argv and argv[0].lower().endswith(".ps1"):
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            raise RuntimeError("找不到 PowerShell（pwsh/powershell 都不在 PATH）：%s" % argv[0])
+        return [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] + argv
+    return [sys.executable, "-I", "-B"] + argv
+
+
 def run_one(repo, name, argv, timeout):
-    cmd = [sys.executable, "-I", "-B"] + list(argv)
+    cmd = build_cmd(argv)
     t0 = time.time()
     kw = {"start_new_session": True} if os.name != "nt" else {}
     proc = subprocess.Popen(cmd, cwd=repo, stdin=subprocess.DEVNULL,
@@ -403,6 +434,26 @@ def selftest():
             r6b = main(["--repo", tmp, "--skip", "no-such-entry"])
         chk(r6 == 2, "TSG 牙6 未知条目 ⇒ rc=2（用法错）")
         chk(r6b == 2, "TSG 牙6b --skip 未知条目 ⇒ rc=2")
+
+        # ---- PowerShell 入口（卡 openmir2-docs-gate-rc-semantics 扩写集）----
+        have_ps = bool(shutil.which("pwsh") or shutil.which("powershell"))
+        chk(have_ps, "TSG 牙14 前置：本机有 PowerShell（pwsh 或 powershell）")
+        if have_ps:
+            ok_ps = os.path.join(tmp, "ok.ps1")
+            need_ps = os.path.join(tmp, "need.ps1")
+            with open(ok_ps, "w", encoding="utf-8") as fh:
+                fh.write("Write-Output 'PS GREEN'\nexit 0\n")
+            with open(need_ps, "w", encoding="utf-8") as fh:
+                fh.write("Write-Output 'PS NEED 判不了'\nexit 2\n")
+            chk(build_cmd([ok_ps])[0].lower().endswith(("pwsh", "pwsh.exe", "powershell",
+                                                        "powershell.exe")),
+                "TSG 牙14a .ps1 ⇒ build_cmd 走 PowerShell（不是 python）")
+            r_ps_ok = run_one(tmp, "ps_ok", [ok_ps], 60)
+            chk(r_ps_ok["rc"] == 0 and classify_rc(r_ps_ok["rc"]) == PASS,
+                "TSG 牙14b 真跑临时 .ps1（exit 0）⇒ PASS（rc=0）")
+            r_ps_need = run_one(tmp, "ps_need", [need_ps], 60)
+            chk(r_ps_need["rc"] == 2 and classify_rc(r_ps_need["rc"]) == NEED,
+                "TSG 牙14c 真跑临时 .ps1（exit 2）⇒ NEED（判不了，不是红）")
 
         # ---- 三态（卡 openmir2-docs-gate-rc-semantics）：判不了 ≠ 证伪 ----
         needf = os.path.join(tmp, "need.py")

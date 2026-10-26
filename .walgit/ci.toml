@@ -79,8 +79,8 @@ timeout = "2m"
 
 [[task]]
 # 工具自测门（卡 openmir2-tool-selftest-gate）：一次跑 REGISTRY 里的全部工具 selftest。
-# 实测 120–130s（47 项：本机 124s，含门自测 17.9s；上一版 45/46 项 111–114.9s；card_window 36.7–40.3s、
-# mir2_probe 29.4s，其余 ≤5s）；门内单项上限 300s，
+# 实测：2026-10-27 本机全量 **127s**（门自测 18.6s、card_window 36.7–40.3s、mir2_probe 29.4s、
+# stop_mysql_graceful 2.3s、invoke_bounded 4.0s，其余 ≤5s；**条数以 --inventory 为准**）；门内单项上限 300s，
 # 故 task timeout 取 8m（= 120s 上界 + 一个卡住的项 300s + 余量），不沿用顶层 30m；
 # 门自身另有总墙钟 420s < 480s，卡住的项会被点名判红而不是拖到 CI 杀进程。
 name = "fast-tool-selftest"

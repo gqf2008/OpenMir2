@@ -10,7 +10,7 @@
 
 | # | 项 | 判据 | 现状 |
 |---:|---|---|---|
-| 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **48 项全绿**；`--inventory` rc=0 | **已绿**（历史：`8b7c9c281` 当时 47/47；`26ba230ea` 起为 48 项，`--inventory` 53=48+5+0。原始记录：`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
+| 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **51 项全绿**；`--inventory` rc=0 | **已绿**（历史：`8b7c9c281` 当时 47/47；`26ba230ea` 起 48 项；2026-10-27 起 **51 项**（含 C7 登记的 `mir_flow.selftest.ps1`），`--inventory` **56=51+5+0**。原始记录：`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
 | 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **已绿**（`e7fb3e78d`：三档 kind/rc=6/7/8，`selftest 148/148`；用法错 rc=2 与判据彻底分家） |
 | 3 | 夹具 | `provision_...py --gate ...`（逐阶段求值，见下） | **已实测**：动作分布在**两张图**上 ⇒ 需两次 `--apply`，详见本节下的「夹具实测」 |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；**3306 UP**（pid 现查，**不要写死**） | 当前满足。**注**：`mysqld` pid 会变（2026-10-26 实测由 2580 → 3308，22:04:18 起重启过）⇒ **pid 变化说明 MySQL 重启过，之前取的 DB 基线可能失效，需重取**；判据只看「3306 UP + 能连」，不看 pid |
@@ -54,7 +54,7 @@ SabukW 部署件 9260B→实测 9290B，会变，别写死）见 runbook **§0.9
 
 **开窗当天用它认树**（数字对不上就说明不在预期 master 上）：
 - `python -I -B tools/goal/goal_gate.py selftest` ⇒ **83 条断言 83 通过**（`f0d44ceeb` 实测；`80a820762` 的 rc=3⇒NEED 加了 4 条，此前 79）
-- `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **48 项全绿**；`--inventory` ⇒ 清点 **53 = 48 + 5 + 0**（2026-10-26 `26ba230ea` 起；此前为 47/52）
+- `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **51 项全绿**；`--inventory` ⇒ 清点 **56 = 51 + 5 + 0**（2026-10-27 起，含 C7；此前 50/55、48/53、47/52）
 - `goal_gate --full` 产物里条件④ 应显示「**门禁 8 项**」（第 8 项 = 工具自测门，约 +120s）
 - `cargo test --workspace` ⇒ **141 suites，running 3329 = passed 3266 + ignored 63**
 
