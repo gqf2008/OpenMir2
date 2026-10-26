@@ -28295,6 +28295,185 @@ mod tests {
         assert!(npc_hit > mer_turn && mer_hit > npc_hit);
     }
 
+    /// **卡 `openmir2-frame-turn-featurechanged-follow`（tier=R）· 行为接线牙**：固定 NPC / 商人的
+    /// **随机 idle 动画**（`Merchant.Run` `src/GameSrv/Npc/Merchant.cs:132-141`；`GuildOfficial.Run`
+    /// `src/GameSrv/Npc/GuildOfficial.cs:39-53`）在生产排水函数 [`drain_run_downlinks_with_magic`]
+    /// 里必须被消费成：
+    ///
+    /// * `TurnTo(RandomByte(8))` ⇒ `SM_TURN(10)`（**无名尾**：尾 = `Encode(8B CharDesc)`）+ **紧随**
+    ///   `SM_FEATURECHANGED(41)` 一对——收件人侧 `PlayObject.Message.cs:1524-1560` 的 `RM_TURN` 支在
+    ///   `wIdent == RM_TURN` 时**无条件**补发 41；
+    /// * `RM_HIT` ⇒ **恰一条** `SM_HIT(14)`，**不跟** `SM_FEATURECHANGED`（同文件 `:1433-1440`）。
+    ///
+    /// 与 [`npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks`] 的分工：那是**源码文本牙**
+    /// （`include_str!` 逐行比字面量，换写法即失效）；本用例是**行为牙**，直接跑生产排水函数本体 ⇒
+    /// 删调用行、删 `broadcast_ref_msg`、把 41 从配对里丢掉、或多发一条 `SM_HIT` ⇒ 红。
+    ///
+    /// 真机依据（`E:/tmp/window-20261026/run2/`）：`dice_chain_auto` oracle `10×3 / 41×4` 里多出的两对
+    /// nameless 转身、`move_walk` rust 尾帧 `SM_HIT(14)`。**存在性**由两侧 RNG 流位决定（oracle
+    /// `new Random()` 墙钟播种，`src/OpenMir2/RandomNumber.cs:35`；rust `with_seed(42)`，
+    /// `crates/world/src/world.rs:1301`）⇒ 可判的只有**帧形状 / 配对 / 次序**，不是「这个窗口有没有抽中」。
+    #[test]
+    fn npc_random_idle_frames_through_production_drain_run() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let spawn = MerchantSpawn {
+            name: "沙巴克铁匠".to_string(),
+            x: 10,
+            y: 11,
+            map_id: 0,
+            state: MerchantState::new(
+                "沙巴克铁匠".to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                false,
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![spawn],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 1);
+        assert!(failed.is_empty());
+        let mer_id = world.merchant_ids_sorted()[0];
+        // `TurnTo(6)` 已写进实体（oracle `Dir = nDir` 之后才 `SendRefMsg`）；受击帧取实体 Dir。
+        world.entities.get_mut(mer_id).unwrap().ai.dir = 6;
+
+        let (online, gates, mut rx) = aoi_observer_fixture(p);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+                out.push(body);
+            }
+            out
+        };
+
+        // ① 转身支（`TurnTo`，`Merchant.cs:134` / `GuildOfficial.cs:43`）。
+        let rec_turn = mir2_world::TickRecord {
+            merchant_turns: vec![(mer_id, 6)],
+            ..Default::default()
+        };
+        drain_run_downlinks_with_magic(
+            &rec_turn,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let raws = collect(&mut rx);
+        let msgs: Vec<mir2_protocol::frame::CommandMessage> = raws
+            .iter()
+            .map(|b| mir2_protocol::frame::CommandMessage::from_bytes(b).expect("SM_* 至少 12B"))
+            .collect();
+        let turn = (0..msgs.len())
+            .find(|&i| {
+                msgs[i].ident == mir2_protocol::messages::SM_TURN
+                    && msgs[i].recog == mer_id
+                    && raws[i].len() == 12 + 11
+            })
+            .unwrap_or_else(|| {
+                panic!("转身对缺失：生产排水没有把 merchant_turns 发成 nameless SM_TURN")
+            });
+        assert_eq!(
+            (msgs[turn].param, msgs[turn].tag),
+            (10, 11),
+            "SM_TURN param=CurrX、tag=CurrY"
+        );
+        assert_eq!(
+            msgs[turn].series,
+            game_svr::feature::make_word(6, 2),
+            "Series = MakeWord(Dir=6, Light=2)（固定 NPC/NormNpc ctor Light=2）"
+        );
+        assert_eq!(
+            mir2_protocol::edcode::decode(&raws[turn][12..]).len(),
+            8,
+            "nameless 转身尾解码必须恰为 8B CharDesc（无 `ShowName/Color` 名尾）"
+        );
+        assert!(
+            turn + 1 < msgs.len(),
+            "SM_TURN 后必须紧跟 SM_FEATURECHANGED(41)（oracle `RM_TURN` 支无条件补发，PlayObject.Message.cs:1557-1561）"
+        );
+        assert_eq!(
+            msgs[turn + 1].ident,
+            mir2_protocol::messages::SM_FEATURECHANGED,
+            "RM_TURN 支必须无条件紧发 SM_FEATURECHANGED(41)（PlayObject.Message.cs:1557-1561）"
+        );
+        assert_eq!(
+            (msgs[turn + 1].recog, raws[turn + 1].len()),
+            (mer_id, 12),
+            "41：Recog = 商人 actor、无尾（SendDefMessage 单参）"
+        );
+        assert!(
+            !msgs
+                .iter()
+                .any(|c| c.ident == mir2_protocol::messages::SM_HIT),
+            "转身那次 Run 不得混出 SM_HIT（oracle `if/else` 两支互斥）"
+        );
+
+        // ② 受击支（`RM_HIT`，`Merchant.cs:140`）：恰一条 `SM_HIT(14)`，**不补 41**。
+        let rec_hit = mir2_world::TickRecord {
+            merchant_hits: vec![mer_id],
+            ..Default::default()
+        };
+        drain_run_downlinks_with_magic(
+            &rec_hit,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+            None,
+            None,
+            None,
+        );
+        let hit_raws = collect(&mut rx);
+        assert_eq!(
+            hit_raws.len(),
+            1,
+            "RM_HIT ⇒ 恰 1 条帧（不得重复、不得补 SM_FEATURECHANGED）"
+        );
+        let hit = mir2_protocol::frame::CommandMessage::from_bytes(&hit_raws[0]).expect("12B 头");
+        assert_eq!(
+            (hit.ident, hit.recog),
+            (mir2_protocol::messages::SM_HIT, mer_id),
+            "SM_HIT(14)：Recog = 商人 actor"
+        );
+        assert_eq!(hit.series, 6, "SM_HIT Series = 实体 Dir(6)（不含 Light）");
+        assert_eq!(hit_raws[0].len(), 12, "SM_HIT 无尾（SendSocket 单参）");
+    }
+
     /// **判据（卡 `openmir2-castle-merchant-fixedhide-hit`，tier=R）**：城堡商人
     /// `FixedHideMode` 解除支（`Merchant.cs:152-157`，`SendRefMsg(RM_HIT,…)` 在 `:156`）是
     /// **确定性**发点——与 `tools/conformance/rules.json` 里 ident 14 的 `ignore` 理由
