@@ -301,7 +301,7 @@ def run_one(repo, name, argv, timeout):
 DOC_ANCHOR_REL = "docs/real-machine-window-plan-20261025.md"
 
 def check_doc_anchors(repo):
-    """R3（卡 openmir2-tool-gate-teeth-residuals）+ F1（review 92f425e9）：window-plan 的**认树锚**。
+    """R3（卡 openmir2-tool-gate-teeth-residuals）+ F1/F2（review 92f425e9 / Leader 活锚地板）。
 
     开窗当天会**照抄三处渲染**里的数字确认「开的就是预期那棵树」：
       ① 表行：`⇒ **N 项全绿**；`
@@ -309,7 +309,12 @@ def check_doc_anchors(repo):
       ③ 提示行：`（**N 项 / 清点 M = N + K + 0**）`
     只机判其中一种时，另两种各说各话而门仍绿（review F1：把表行改成 99 仍 rc=0）⇒ 现在**三处都收**：
     所有 `N 项(全绿|/)` 命中都必须等于 `len(REGISTRY)`；所有 `清点 M = N + K + Z` 命中都必须等于
-    `(total, in_gate, out_scope, 0)`。缺某一类锚 ⇒ **rc=2 判不了**；写错 ⇒ **rc=1**。
+    `(total, in_gate, out_scope, 0)`。
+
+    **历史叙事跳过 + 活锚地板**：紧邻前文出现「历史 / 此前 / 原始记录 / 当时 / 曾」的命中是**记录、不是锚**，
+    跳过；但**每一类在排除之后都必须仍有 ≥1 处活锚**——某类被排除到空 ⇒ **rc=2 判不了**
+    （否则「历史」两个字就成了新的万能挡箭牌，和 `LEGACY_MARK_RE` 同族）。
+    被排除的条数与行号**打印在输出里**，让「跳过清单变长」可见。
     """
     path = os.path.join(str(repo), DOC_ANCHOR_REL)
     if not os.path.isfile(path):
@@ -325,37 +330,56 @@ def check_doc_anchors(repo):
     _HISTORY_MARKERS = ("历史", "此前", "原始记录", "当时", "曾")
 
     def _is_history(pos):
-        head = text[max(0, pos - 40):pos]
-        return any(w in head for w in _HISTORY_MARKERS)
+        return any(w in text[max(0, pos - 40):pos] for w in _HISTORY_MARKERS)
 
-    n_hits = [int(m.group(1)) for m in re.finditer(r"\*\*(\d+)\s*项全绿\*\*", text)
-              if not _is_history(m.start())]
-    n_hits += [int(m.group(1)) for m in re.finditer(r"\*\*(\d+)\s*项\s*/\s*清点", text)
-               if not _is_history(m.start())]
-    # 历史叙事里的数字是**记录**、不是锚：紧邻前文出现这些词时跳过（否则老数字会把新版判红）。
+    def _lineno(pos):
+        return text.count("\n", 0, pos) + 1
 
-    tri_hits = [tuple(int(x) for x in m.groups()) for m in re.finditer(
-        r"清点\s*\*{0,2}\s*(\d+)\s*=\s*(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)", text)
-        if not _is_history(m.start())]
+    n_all = [(int(m.group(1)), m.start())
+             for m in re.finditer(r"\*\*(\d+)\s*项全绿\*\*", text)]
+    n_all += [(int(m.group(1)), m.start())
+              for m in re.finditer(r"\*\*(\d+)\s*项\s*/\s*清点", text)]
+    tri_all = [(tuple(int(x) for x in m.groups()), m.start()) for m in re.finditer(
+        r"清点\s*\*{0,2}\s*(\d+)\s*=\s*(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)", text)]
+
+    n_live = [(v, p) for v, p in n_all if not _is_history(p)]
+    tri_live = [(v, p) for v, p in tri_all if not _is_history(p)]
+    n_excl = [p for _v, p in n_all if _is_history(p)]
+    tri_excl = [p for _v, p in tri_all if _is_history(p)]
+
+    def _excl_note():
+        parts = []
+        if n_excl:
+            parts.append("N 类排除历史 %d 处（行 %s）"
+                         % (len(n_excl), ",".join(str(_lineno(p)) for p in n_excl[:8])))
+        if tri_excl:
+            parts.append("三元组类排除历史 %d 处（行 %s）"
+                         % (len(tri_excl), ",".join(str(_lineno(p)) for p in tri_excl[:8])))
+        return ("；" + "；".join(parts)) if parts else ""
 
     missing, wrong = [], []
-    if not n_hits:
-        missing.append("找不到任何「**N 项全绿**」或「**N 项 / 清点」锚")
-    if not tri_hits:
-        missing.append("找不到任何「清点 M = N + K + 0」锚")
-    for n in sorted(set(n_hits)):
-        if n != n_items:
-            wrong.append("`N 项` 锚写作 %d，实况 len(REGISTRY)=%d" % (n, n_items))
+    if not n_live:
+        why = ("所有 N 类锚都被历史排除（共 %d 处）⇒ 该类失去判据" % len(n_all)) if n_all \
+            else "找不到任何「**N 项全绿**」或「**N 项 / 清点」锚"
+        missing.append("N 类活锚为空：" + why)
+    if not tri_live:
+        why = ("所有三元组锚都被历史排除（共 %d 处）⇒ 该类失去判据" % len(tri_all)) if tri_all \
+            else "找不到任何「清点 M = N + K + 0」锚"
+        missing.append("三元组类活锚为空：" + why)
+    for v in sorted({v for v, _p in n_live}):
+        if v != n_items:
+            wrong.append("`N 项` 锚写作 %d，实况 len(REGISTRY)=%d" % (v, n_items))
     want = (total, in_gate, out_scope, 0)
-    for t in sorted(set(tri_hits)):
+    for t in sorted({v for v, _p in tri_live}):
         if t != want:
             wrong.append("清点锚写作 %d = %d + %d + %d，实况 %d = %d + %d + %d" % (t + want))
     if missing:
-        return 2, "；".join(missing + wrong)
+        return 2, "；".join(missing + wrong) + _excl_note()
     if wrong:
-        return 1, "；".join(wrong)
-    return 0, ("认树锚一致：%d 项 / 清点 %d = %d + %d + 0（%d 处 N 命中、%d 处三元组命中）"
-               % (n_items, total, in_gate, out_scope, len(n_hits), len(tri_hits)))
+        return 1, "；".join(wrong) + _excl_note()
+    return 0, ("认树锚一致：%d 项 / 清点 %d = %d + %d + 0（N 活 %d/共 %d、三元组活 %d/共 %d）%s"
+               % (n_items, total, in_gate, out_scope,
+                  len(n_live), len(n_all), len(tri_live), len(tri_all), _excl_note()))
 
 
 def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
@@ -644,6 +668,25 @@ def selftest():
         _r3c_rc, _r3c_dt = check_doc_anchors(_r3_root)
         chk(_r3c_rc == 2 and "找不到任何「清点" in _r3c_dt,
             "R3c 三元组锚被删掉 ⇒ rc=2 判不了（不静默通过；%r）" % (_r3c_dt,))
+        # 活锚地板（Leader 2026-10-27）：某一类被「历史」排除到空 ⇒ rc=2 判不了。
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 项全绿**（旧记录）" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
+        _r3f_rc, _r3f_dt = check_doc_anchors(_r3_root)
+        chk(_r3f_rc == 2 and "N 类活锚为空" in _r3f_dt and "历史" in _r3f_dt,
+            "R3f N 类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3f_dt,))
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("**%d 项全绿**" % _n + chr(10)
+                     + "> 历史：清点 **%d = %d + %d + 0**（旧记录）" % (_m, _g, _o) + chr(10))
+        _r3g_rc, _r3g_dt = check_doc_anchors(_r3_root)
+        chk(_r3g_rc == 2 and "三元组类活锚为空" in _r3g_dt,
+            "R3g 三元组类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3g_dt,))
+        _r3_write()
+        with open(_r3_path, "a", encoding="utf-8") as fh:
+            fh.write("> 历史：清点 52 = 47 + 5 + 0（旧记录）" + chr(10))
+        _r3h_rc, _r3h_dt = check_doc_anchors(_r3_root)
+        chk(_r3h_rc == 0 and "排除历史 1 处（行" in _r3h_dt,
+            "R3h 被排除的条数与行号出现在输出里（%r）" % (_r3h_dt,))
         chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
             and "PowerShell" in r_c3["tail"],
             "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
