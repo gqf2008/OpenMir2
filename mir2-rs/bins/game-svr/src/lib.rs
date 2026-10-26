@@ -42579,6 +42579,170 @@ SendRefMsgRange=15
         );
     }
 
+    // ── 卡 `openmir2-bagitems-201-ordering`（tier=R）：201 与登录尾段的相对序 ──────────────
+    //
+    // **锚点分段结论**（`E:/tmp/window-20261026/run2/bag_equip`、`.../eat_item` 两侧
+    // `frames.ndjson`）：两场景最后一个两侧同位的锚 = `SM_DAYCHANGING(46)`；差异段里
+    // rust 紧接 46 发 `SM_BAGITEMS(201)`，oracle 则把 201 放在登录尾段
+    // （`10,41,654,657,657,42,100×4`）之后。
+    //
+    // **触发方判定**：两侧都只是**查询应答**，没有主动发点。oracle 唯一产出点是
+    // `src/M2Server/Player/PlayObject.Operate.cs:37-64` 的 `ClientQueryBagItems()`
+    // （`MakeMessage(SM_BAGITEMS, ...)` 在 `:61`），唯一调用是
+    // `src/M2Server/Player/PlayObject.Message.cs:784-793` 的 `CM_QUERYBAGITEMS(81)` 臂
+    // （脚本 `QUERYBAGITEMS` 支 `ExecutionProcessingSys.cs:2312` 同源）；本宿主同形
+    // （[`handle_query_bag_cmd`]）。探针两侧都是「收到 `SM_LOGON(50)` 立刻发 81」
+    // （`tools/probe/mir2_probe.py:1907-1911`，`run.json.auto` 两栈均记录
+    // `SM_LOGON->CM_QUERYBAGITEMS`）⇒ **不是驱动侧差异**。
+    //
+    // **序差根因**：oracle 的登录消息与客户端消息走**同一个** per-actor 优先队列
+    // （优先级 = ident 低字节，`src/M2Server/Actor/BaseObject.Message.cs:181` 的
+    // `MsgQueue.Enqueue(sendMessage, (byte)wIdent)`），`CM_QUERYBAGITEMS`(81) 因此排在
+    // 出现帧 `RM_TURN`(17) 之后、`RM_CHANGELIGHT`(153)/`RM_CHARSTATUSCHANGED`(155) 之前；
+    // 但「81 是否赶得上这一轮出队」取决于排水进度（同一次窗口跑里 oracle 自己给出过两种序：
+    // `bag_equip`/`eat_item` 是「尾段之后」，`butch_two_draws` 是「出现帧之后、654 之前」——
+    // `csharp/frames.ndjson` seq 72 t=2581 的 201 夹在 seq 71 `41` 与 seq 73 `654` 之间）。
+    // 本宿主把登录尾段延到会话首次 AOI 扫描（`PLAYER_SEARCH_TIME`=1000ms，见 [`drain_login_tail`]
+    // 与 `crates/world` 的 `first_scan_base_is_playobject_ctor_not_map_entry`），于是下一 tick 的
+    // 201 落进这段窗口。该「登录帧 → 首扫帧」间隔已由 **T-184** 登记为 **T-73**（`RunNotice` →
+    // `CM_LOGINNOTICEOK` → `UserLogon` 等待环未建模，选项 a 的既决设计）的既决偏差，窗口项由
+    // 卡 `openmir2-searchtick-origin-parity` 持有 ⇒ **本卡不改登录/首扫时序**（改它 = 推翻 T-73
+    // 选项 a，并让首扫绝对时刻移出 oracle 的 ctor+1000..1250ms 窗口）。
+    //
+    // 故这里只钉**语义不变量**（两方向都要能红）：201 只能由查询派发本身产出。
+
+    /// 牙（**提前**方向）：`SM_BAGITEMS` 全宿主只有一个产出点，且在 [`handle_query_bag_cmd`] 内；
+    /// 登录尾段（[`drain_login_tail`]）不得补发 201。
+    ///
+    /// 红检：在登录路径（`DBR_LOADHUMANRCD` 分支 / `frames_split` 的 `before`）加一条主动发，
+    /// 或把 201 拼进 `after` ⇒ 下面的计数 / 区段断言必红。
+    #[test]
+    fn bagitems_201_has_no_proactive_send_point() {
+        let src = include_str!("lib.rs");
+        let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
+        // ① 先查登录尾段：`drain_login_tail` 全区段（含文档注释）不得出现 `sm_bagitems`。
+        let tail = prod.find("fn drain_login_tail(").expect("登录尾段必须在");
+        let tail_end = prod[tail..].find("\nfn ").map_or(prod.len(), |o| tail + o);
+        assert!(
+            !prod[tail..tail_end].contains("sm_bagitems"),
+            "登录尾段（drain_login_tail）不得补发 SM_BAGITEMS"
+        );
+        // ② 再查产出点总数与位置：全宿主恰一处，且在 `handle_query_bag_cmd` 内。
+        let hits: Vec<usize> = prod
+            .match_indices("itemwire::sm_bagitems(")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "SM_BAGITEMS 必须只有一个产出点（多一个 = 登录主动发/尾段补发）：{hits:?}"
+        );
+        let handler = prod
+            .find("fn handle_query_bag_cmd(")
+            .expect("派发函数必须在");
+        let next = prod
+            .find("fn handle_query_user_name_cmd(")
+            .expect("后继函数必须在");
+        assert!(
+            hits[0] > handler && hits[0] < next,
+            "唯一产出点必须在 handle_query_bag_cmd 内（offset={}）",
+            hits[0]
+        );
+    }
+
+    /// 牙（**延后**方向）：命令派发当场回 201；登录尾段排水只出尾段帧。
+    ///
+    /// 生产 tick 序（`sim_loop`）= ① inbound 命令分支 → ② `drain_aoi_downlink` →
+    /// ③ `drain_login_tail`。这里按同一序驱动，并在「登录帧已发、尾段未发」的状态下派发查询：
+    /// 201 必须出现在 ①，**不得**被排进 ③。
+    ///
+    /// 红检：把 201 改成「等登录尾段一起发」（排进 `login_tails` 那批）⇒ ①的
+    /// `try_recv` 必红；把 201 提前到进图/登录 ⇒
+    /// `bagitems_201_has_no_proactive_send_point` 必红。
+    #[test]
+    fn bagitems_201_is_answered_by_the_query_tick_not_by_the_login_tail() {
+        use mir2_protocol::frame::CommandMessage;
+        use mir2_protocol::messages::{SM_BAGITEMS, SM_CHANGELIGHT};
+        use std::collections::HashMap;
+
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut list = Vec::new();
+        let mut n = names.item_number;
+        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+
+        // 世界：一个已进世界、且**本 tick 已扫**的玩家（登录尾段可排水）。
+        let mut world = mir2_world::World::new(32, 32);
+        world.open_session("hero");
+        let id = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
+            .unwrap();
+        world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
+
+        let mut sg = test_session_ground(id);
+        sg.state.item_list = list;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), sg);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: id,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // 登录帧已发、尾段未发（= 生产 `login_tails.insert(...)` 之后、首次扫描之前的状态）。
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        let mut inputs = smframe::EnterWorldInputs {
+            actor_id: id,
+            ..Default::default()
+        };
+        inputs.changelight = Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT));
+        assert_eq!(inputs.frames_split().1.len(), 1, "最小 after = 654");
+        pending.insert("hero".to_string(), inputs);
+
+        // ① inbound 命令分支：当场回 201。
+        handle_query_bag_cmd(
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+        );
+        let first = match rx0.try_recv().expect("命令派发必须当场回 SM_BAGITEMS") {
+            SimToGate::SendFrame { body, .. } => CommandMessage::from_bytes(&body).expect("≥12B"),
+            other => panic!("期望 SendFrame，得到 {other:?}"),
+        };
+        assert_eq!(first.ident, SM_BAGITEMS, "201 属于查询 tick");
+
+        // ③ 登录尾段排水：只出尾段帧，绝不产 201。
+        assert_eq!(
+            drain_login_tail(&world, &online, &gates, &mut pending, 12),
+            1,
+            "必须补发 654"
+        );
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("≥12B");
+            assert_ne!(
+                cm.ident, SM_BAGITEMS,
+                "登录尾段不得补发 SM_BAGITEMS（201 属于查询 tick）"
+            );
+            assert_eq!(cm.ident, SM_CHANGELIGHT);
+        }
+        assert!(pending.is_empty(), "补发后必须清缓冲");
+    }
+
     /// **`openmir2-m3-attack-magic-wiring`（第一片）**：`CM_HIT`/`CM_HEAVYHIT` 派发——
     /// `nX==CurrX && nY==CurrY` 成功门、`Death` 守卫、前方格取目标并 `attack_cmd`、
     /// 给附近观察者发 `SM_HIT` 族动作帧（无尾，排除自己）、给自己回 `+GD`。
