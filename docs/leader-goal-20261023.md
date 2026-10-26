@@ -208,8 +208,11 @@ python tools/goal/goal_gate.py --full
    加上 `git ls-remote walgit refs/heads/master` 与本地 `master` 的 sha 比对。
    > **为什么之前是「假绿面」**：工具门此前**不在条件④ 内**（`goal_gate` 全文件 grep `tool_selftest` 命中 0），
    > 所以一份 `overall=PASS` 的权威产物可以在工具门红着（52 个工具里 1 个未分类、rc=2）时照样产出。
-   > 卡 `openmir2-goal-gate-include-tool-selftest` 把第 8 项接进条件④，三态：rc=0 ⇒ PASS；
-   > rc≠0 ⇒ FAIL 且 `fail_items` 点名（哪个工具未分类/哪条自测红）；工具缺失/无法启动/超时 ⇒ **NEED，不是 PASS**。
+   > 卡 `openmir2-goal-gate-include-tool-selftest` 把第 8 项接进条件④；卡 `openmir2-goalgate-need-rc3`
+   > 按工具门的**退出码语义**改成四档判定：rc=0 ⇒ PASS；**rc=3（工具门自报「只有需人工」，即某个
+   > 工具自述判不了/rc=2）⇒ NEED，`need_items` 点名**（不能折叠成红）；rc=2 / 其它 ⇒ FAIL 且
+   > `fail_items` 点名（哪个工具未分类/哪条自测红）；工具缺失/无法启动/超时 ⇒ **NEED，不是 PASS**。
+   > 口径一句话：**「判不了」既不是绿也不是红**——绿会假绿，红会假红，两种都会毁掉门禁可信度。
    `cargo test --workspace --locked` **只在 `--tests`/`--full` 时跑**；跳过时条件4 =「需人工」，不冒充 PASS。
 
 ### 5.4 `--skip-tests` 与完整模式的区别（务必分清）
