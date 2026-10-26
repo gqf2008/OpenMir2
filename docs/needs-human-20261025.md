@@ -73,7 +73,7 @@
 | 7 | 怪物夹具**写盘位置错**（追加到 MonGen.txt 末尾 ⇒ 窗口内刷不出） | **已解（合入 `6f35b049f`）** | 卡 `openmir2-fixture-monsters-prepend`：改为**前插**（index 0、首个闸门即取到）；真机已验证 prepend 生效（靶子刷出、5 条 `SM_STRUCK(31)`），kill→butch 三段结论复跑中 |
 | 8 | 背包满导致「装武器」类前置无法声明 | **已解** | `a60e04ad9`：`fixtures.inventory_replace` / `inventory_drop`（真机往返两侧已 PASS，before/restored sha256 逐字节相同） |
 
-**当前实况**：run3 = **24 条（blocked 4 ⇒ 入批 20）**（`run_batch --list` 实测 @ 分支 `card/npc-no-response`；blocked 计数随卡收口会变——2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10）——**以开窗当天 `--list` 实况为准**）；操作单
+**当前实况**：run3 = **26 条（blocked 4 ⇒ 入批 22）**（`run_batch --list` 实测 @ 分支 `card/npc-no-response`；blocked 计数随卡收口会变——2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10）——**以开窗当天 `--list` 实况为准**）；操作单
 `docs/window-exec-sheet-20261025.md` 已按 23 条刷新（`1af9d6647`）；台账
 `docs/window-closure-ledger-20261025.md` 已二次刷新（`e3ac7c121`）。
 
@@ -81,7 +81,7 @@
 
 - [ ] `powershell -File E:/MirServer/port-status.ps1` ⇒ 5000–7200 全 DOWN、mysqld 3306 UP
 - [ ] `python -I -B tools/window/preflight_private_stack.py` ⇒ 全绿（含新的 `castle_list_symmetry`）
-- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 24（blocked 4 ⇒ 入批 20）`（**数字不符不必慌，先看 blocked 数是不是又变了**：2026-10-24 从 3 降到 2 是一张卡解封；2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10））
+- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 26（blocked 4 ⇒ 入批 22）`（**数字不符不必慌，先看 blocked 数是不是又变了**：2026-10-24 从 3 降到 2 是一张卡解封；2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10）；同日**新增** #25 `softclose_save` / #26 `softclose_relogin`（卡 `openmir2-window-scenarios-for-new-rcards`，见 `docs/window-scenarios-gap-20261027.md`）⇒ 24→26、入批 20→22）
 - [ ] `bash tools/window/run_batch.sh --dry-run` ⇒ 自检全绿、不起栈
 - [ ] 专用测试账号 + `assets`/`inventory`/`fixtures` 声明（`card_window` 在 restore 后、起栈前应用）
 

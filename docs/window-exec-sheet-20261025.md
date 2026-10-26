@@ -2,7 +2,7 @@
 
 - 卡：`openmir2-window-exec-sheet`（tier L，owner `openmir2-dev-2`，branch `card/window-exec-sheet`，base `14ec2e943`）。
 - 定位：**owner 开窗当天照着做的单页**。数据来源（不复制原文，只指回）：
-  `docs/window-closure-ledger-20261025.md`（台账 9 行）、`tools/window/run3-scenarios.json`（**24 条，含 2 条 blocked**）、
+  `docs/window-closure-ledger-20261025.md`（台账 9 行）、`tools/window/run3-scenarios.json`（**26 条，含 4 条 blocked**）、
   `docs/window-kit-coverage-20261025.md` §2（P0/P1 缺口）、`docs/window-runbook-20261023.md` **§0.5（开窗前 60 秒自查）/ §6**、`docs/delivery-acceptance-runbook-20261025.md` §2/§3。
 - **红线**（每条都在源文档有出处）：不跑 `E:/MirServer/start-all.ps1`、不用 `start-all -Stop`（会连 mysqld 一起停）、
   不假设任何未复算字段（含 `cleared`）、**登记型 PASS ≠ 已有真机证据**。
@@ -16,7 +16,7 @@
 | 2b | 城表对齐 | preflight 的 `castle_list_symmetry` 必须 OK（两侧含 `M2GameSvr-hook` 影子内容/sha256 一致） | 不一致 ⇒ 按 `window-runbook` §0.9 用 `Copy-Item` 对齐（W-TAX-2 需两城 `0,1`），**不碰 `E:/MirServer`**；否则城堡税/多城项必假红 |
 | 2c | 影子=基线 | preflight 的 `envir_shadow_symmetry` 必须 OK（`csharp-root/M2GameSvr/Envir` vs `M2GameSvr-hook/Envir` vs `rust-root` 逐文件 sha256；实测 642 文件 0 差异） | 不一致 ⇒ 用基线 Envir 覆盖影子（或删影子 `GameSvr.exe` 让部署重建）；否则 `--rng-log` 窗口会用被改过的 oracle 脚本（内容冻结风险） |
 | 2d | 写后复核（G-2） | 夹具应用后/收工后**重跑 preflight**（或比对基线/影子 sha）；preflight 是**写前**检查，绿 ≠ 运行期一致（runbook §0.9） | 任一 Envir/影子 sha 变化 ⇒ 先还原再到 2c；`--rng-log` 下夹具必须同时写基线+影子（G-1） |
-| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 24（blocked 4 ⇒ 入批 20）`**（**以开窗当天实况为准**；blocked 数随卡收口会变，2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10）），#10/#11/#22/#24 标 `YES` | 场景数不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ **先看是不是又有卡封存/解封**（清单行的 `blocked` 字段），并在开工记录里写明是哪两条、为什么——**不许**为了让数字对上而解封一个「oracle 恒 0 帧」的场景 |
+| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 26（blocked 4 ⇒ 入批 22）`**（**以开窗当天实况为准**；blocked 数随卡收口会变，2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10）），#10/#11/#22/#24 标 `YES` | 场景数不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ **先看是不是又有卡封存/解封**（清单行的 `blocked` 字段），并在开工记录里写明是哪两条、为什么——**不许**为了让数字对上而解封一个「oracle 恒 0 帧」的场景 |
 | 4 | 门禁基线 | `python -I -B tools/goal/goal_gate.py --skip-tests --json`（全量版需低负载时段） | 红 ⇒ 先修再开窗（`window-runbook` §6） |
 
 > blocked 语义（已实测）：**blocked 场景只在 `--list` 标注、不进批次**；普通批次自动跳过并打印 `blocked B ⇒ 入批 N−B`；
@@ -33,8 +33,14 @@
 | W3 | #22 `castle_merchant_tax`（**blocked**） | 台账 #1 **W-TAX-2/3** | 见 ③：本轮不可跑（需配置覆盖通道 + 第二 placement + 600s 落盘） | — |
 | W3 | #23 `castle_merchant_tax_potion` | 台账 #1 **W-TAX-1（买腿）** | 步序：`0153` → 643 → `@buy` → 645 → `CM_USERBUYITEM(1014, 金创药(小量))` → `wait_idents[650,200]` → `sleep 620000`；**期望买价 88、当场 `650.recog` = Gold 9912**、620s 后 `SabukW` 的 `TotalGold`/`TodayIncome` **各 +4** | 650 缺 ⇒ 买卖前置（金币/负重/门槛）不满足；620s 后文件未 +4 ⇒ `SaveTick` 10min 门或税目的地不对（先看台账 #1 的 W-TAX-2 前置） |
 | —（不入批） | #21 `butch_two_draws` | 台账 #6 **W-DG-2** | 见 ③：本轮不可跑 | — |
+| W4 | #25 `softclose_save` | `openmir2-makeghost-lifecycle` **M-3 A1 / M-2 A5**（移除时存档落库） | 两侧 `characters` 行的 `CX/CY` = 走位后的 **(321,328)**（不是基线 320,328）+ `save_settle.json` 两侧 `settled=true` + `db/manifest.json` 两侧齐全 | 行值仍是 320,328 ⇒ 软关存档没发/写的是基线；`save_settle` rc=2 ⇒ 窗口内未落定（**不是**通过）；`require_changes` 无变化 ⇒ 本场景没产生状态变化（不该发生，查 walk 是否成功） |
+| W4 | #26 `softclose_relogin` | `openmir2-makeghost-lifecycle` **M-3 A6（单客户端腿）** + `openmir2-softclose-cleanup-residue` A1 | 两段 `SM_FEATURECHANGED(41)` 各一条且 `recog_is=self`；`relogin.assert_same_actor` 在 run 内断言两段 ActorId 相同；`chain.segments` 两段齐全 | `assert_same_actor` 失败 ⇒ 判据前提不成立（白跑）；段2 等不到 41 ⇒ 重连没进世界 |
 
 **台账里未落到 run3 场景的卡**（窗口需手工/新夹具，按期执行见台账对应行）：
+**2026-10-27 新增两条「需新场景」登记**（卡 `openmir2-window-scenarios-for-new-rcards`，详见
+`docs/window-scenarios-gap-20261027.md` §2）：`openmir2-kick-sessions-residue`（**缺并发第二会话/顶号驱动**，
+probe 单连接且 `relogin` 先关后登）与 `openmir2-merchant-dlgselect-type1`（**缺 type=1 目标的确定性 ActorId
+来源 + 负向帧断言**）——这两条在能力补齐前**开窗也验不了**；
 #1 商税（W-TAX-1..4，需城堡商人配置副本；**跑前先完成 ① 2b 的 `Castle/List.txt` 对齐**，否则 W-TAX-2 必然假红）、#3 的 `@back` 子项（部署非目标）、#5 T-127（`castle_zone`）、
 #7/#8 castle-official(-actions)（W-CO-1..6，**W-CO-6 需 owner 批准测试专用城主注入**）、#9 msgqueue（W-MQ-1..4，含 `getback` 多页）。
 源：`docs/window-closure-ledger-20261025.md` §1。

@@ -1,0 +1,50 @@
+{
+  "name": "softclose_save",
+  "description": "`CM_SOFTCLOSE`（小退）后**不重连**、直接收尾：为 `openmir2-makeghost-lifecycle` 的 **A5 落库面**造证据。段内链 = 登录（等自身出现帧 `SM_FEATURECHANGED(41)`）→ 走一格到 (321,328)（与起点 (320,328) 区分）→ 发 `CM_SOFTCLOSE(1009)`（普通小退，wParam=0）→ sleep 让「移除时存档」落地。`card_window.py` 在 probe 之后**无条件**跑 `wait_save_settled` + `dbsnap`（`tools/conformance/card_window.py:5426-5466`）⇒ 两侧 `characters` 行必须同时是**走位后的实时坐标**，而不是载入基线 —— 这正是 M-3 之后 ghost「移除时存档要发且发的是本人」的可观测面。**证据边界**：① 单客户端看不到观察者视角（A6 的「观察者看 ghost」需并发第二会话，见 `docs/window-scenarios-gap-20261027.md`）；② ghost 的**周期**存档（SaveHumanRcdTime 默认 10 分钟）在窗口内不可观测，本场景只证「移除时那次」。placement 复用 `move_walk` / `softclose_relogin` 的已验两格；profile 用内置 `alt`，不新增夹具。",
+  "params": {
+    "self_x": 320,
+    "self_y": 328,
+    "walk_xy": 21496129
+  },
+  "placement": {
+    "map": "3",
+    "x": 320,
+    "y": 328,
+    "note": "盟重省土城街区，与 `move_walk` / `softclose_relogin` / `pickup_item` / `upgrade_retrieve` 同格（复用既有 placement，不新增夹具）。走位终点 = (321,328)：`3.map` 两侧逐字节同源（sha256 5bb37afef0bb827e0ee47b71ed455d737ebd503917fabad4407d7361f0ca694f），两格 walkable（card_window.read_map_cell 口径 bk=671/0、fr=0；起栈前 placement 校验会重验起点格）。"
+  },
+  "steps": [
+    {
+      "wait_idents": {
+        "idents": [41],
+        "recog_is": "self"
+      },
+      "timeout_ms": 8000,
+      "note": "登录完成锚：`SM_FEATURECHANGED(41)`，`recog_is=self`（= `SM_LOGON(50).recog`）。oracle `PlayObject.cs:1145` 在 `SendLogon` 后同组无条件下发；本仓 `enter.rs` 的 50/41/213 同组三条。用累计口径 `wait_idents`（登录帧早于场景步骤开始）。"
+    },
+    {
+      "send": {
+        "ident": 3011,
+        "recog": "walk_xy",
+        "param": 0
+      },
+      "note": "`CM_WALK(3011)`：X/Y 打包在 recog（`recog = (y<<16)|x`）。走一格到 (321,328) 的目的**只有一个**：让「软关存档写的是实时坐标」与「载入基线」可区分（否则 x/y 全是 320/328，两侧恒等、判据无区分力）。"
+    },
+    {
+      "wait_for": [11, 13, 10, 100],
+      "timeout_ms": 5000,
+      "note": "走成功看 `SM_WALK(11)`（被挡则 10/100）；超时 fail-loud，不静默继续。"
+    },
+    {
+      "send": {
+        "ident": 1009,
+        "recog": 0,
+        "param": 0
+      },
+      "note": "`CM_SOFTCLOSE(1009)`：`recog(wParam)=0` ⇒ 不置 BoEmergencyClose（普通小退）。服务端同 tick 后段 `MakeGhost`（oracle `BaseObject.Base.cs:484-495`；M-3 之后本仓保留 ghost 实体）+ `SaveHumanRcd`（`WorldServer.cs:713`）⇒ 落库坐标应为 (321,328)。"
+    },
+    {
+      "sleep": 3000,
+      "note": "留出「移除时存档」的落库时间（harness 另有 `wait_save_settled` 兜底，见 description）。**本步之后不得再有 send 步**：软关后服务端会关 socket，`Conn.send` 在已关闭连接上直接抛 `ProbeError`（`elements` 见 `mir2_probe.py` 的 `closed` 处理）。"
+    }
+  ]
+}
