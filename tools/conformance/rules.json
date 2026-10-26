@@ -70,7 +70,7 @@
     {
       "ident": 14,
       "action": "ignore",
-      "reason": "SM_HIT：固定 NPC / 商人的受击帧。**两个发点，性质不同**：① 随机支——`GuildOfficial.Run` 的 `Random(30)==0`（src/GameSrv/Npc/GuildOfficial.cs:47 → :49）、`Merchant.Run` 的第二个 `Random(50)==0`（Merchant.cs:138 → :140），oracle 随机源是墙钟播种的 `new Random()`（src/OpenMir2/RandomNumber.cs:35）⇒ **跨进程不可复现**；② **确定性支**——城堡商人 `FixedHideMode` 解除时补发一条（Merchant.cs:152-157，`SendRefMsg(RM_HIT,…)` 在 :156），这一条**不由本规则覆盖、也未被任何帧级判据覆盖**（reviewer-2 F2），须由「城堡商人在战中/战后切换」的场景或构造级用例单独判（已开卡追踪）。**本规则的边界**：`ignore` 在按序对齐前整帧剔除 ⇒ 形态（Recog/Param/Tag/Series）与收件人集合**不由本规则比较**，它们只由单元用例钉死（downlink::hit_frame 黄金用例 npc_hit_frame_is_sm_hit_with_dir_series_and_no_tail + T-154 F1 的 npc_hit_frames_only_for_world_branch_and_never_to_npc）；若 Rust 从确定性路径多发了 14，本规则会把它一并剔掉——这是已知残余风险，缓解手段是上面那条构造级覆盖 + PENDING 状态下的 UNDECIDABLE 兜底（真正剔帧时 compare_runs.py 判不可判）。原始现象：2026-10-23 双栈窗口里 Rust（seed=42）在登录后 0.8s 发了一条 recog=被观察商人、Series=Dir 的 14，oracle 同场景 0 条（两侧 rest 帧逐字节相同）。",
+      "reason": "SM_HIT：固定 NPC / 商人的受击帧。**两个发点，性质不同**：① 随机支——`GuildOfficial.Run` 的 `Random(30)==0`（src/GameSrv/Npc/GuildOfficial.cs:47 → :49）、`Merchant.Run` 的第二个 `Random(50)==0`（Merchant.cs:138 → :140），oracle 随机源是墙钟播种的 `new Random()`（src/OpenMir2/RandomNumber.cs:35）⇒ **跨进程不可复现**；② **确定性支**——城堡商人 `FixedHideMode` 解除时补发一条（Merchant.cs:152-157，`SendRefMsg(RM_HIT,…)` 在 :156），这一条**不由本规则覆盖、也未被任何帧级判据覆盖**（reviewer-2 F2），须由「城堡商人在战中/战后切换」的场景或构造级用例单独判（已开卡追踪）。**本规则的边界**：`ignore` 在按序对齐前整帧剔除 ⇒ 形态（Recog/Param/Tag/Series）与收件人集合**不由本规则比较**，它们只由单元用例钉死（downlink::hit_frame 黄金用例 npc_hit_frame_is_sm_hit_with_dir_series_and_no_tail + T-154 F1 的 npc_hit_frames_only_for_world_branch_and_never_to_npc）；若 Rust 从确定性路径多发了 14，本规则会把它一并剔掉——这是已知残余风险，缓解手段是上面那条构造级覆盖 + PENDING 状态下的 UNDECIDABLE 兜底（真正剔帧时 compare_runs.py 判不可判）。原始现象：2026-10-23 双栈窗口里 Rust（seed=42）在登录后 0.8s 发了一条 recog=被观察商人、Series=Dir 的 14，oracle 同场景 0 条（两侧 rest 帧逐字节相同）。**PENDING 解除条件（卡 openmir2-rules-ident-gaps）**：当前证据只到「**跨轮不可复现**」——同一 oracle 二进制（sha256=ab655008…）+ 同一 `scenario_sha256` 下 castle 14=29 vs 27、dice_chain 0/1/0、move_walk 0/0/1/0 ⇒ 解除理由只能写「不可逐帧对齐」，**绝不能**写成「已比对一致」。要真正解除，必须先有 R 级窗口证据（证明「不该出现的一侧不发」）或把它换成形状级规则。**整帧 ignore 的已知代价**：`RM_HIT` 还有三类**未登记**来源——动物攻击（AnimalObject.cs:171/382）、怪物特殊攻击（11 个 Monsters 文件 + SuperGuard:33）、**玩家攻击**（PlayObject.Attack.cs:45/56/67/82/86）；butch 那 2 条正是**鸡在啄玩家**（recog=199、同坐标 329,330）⇒ 整帧 ignore 会把战斗命中一起吞掉。**因此本卡不从 ignore 改成掩码**（没有 R 证据）。**长期因为本规则判 UNDECIDABLE 的场景**（两侧 14 计数不齐时）：npc_click、merchant_dialog、butch_two_draws、castle_merchant_tax_potion。另：ident 10 与 50 也仍是 PENDING ⇒ 靠它们通过的场景并不是「已批准规则下的绿」，判读时要一起写。**不许为了让场景变绿给 14 加掩码。**",
       "tier": "R",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-worker-4)"
     },
@@ -511,6 +511,37 @@
       "head_compare": [
         "recog"
       ]
+    },
+    {
+      "ident": 32,
+      "action": "compare",
+      "tier": "R",
+      "reason": "SM_DEATH（src/OpenMir2/Messages.cs:198）是真实协议帧。发点 = **可见尸体重显**：`PlayObject.cs:3224-3236` 的可见对象刷新里 `Death && !Skeleton ⇒ SendMsg(RM_DEATH, Dir, X, Y, 0)`（Skeleton ⇒ 33；活着 ⇒ RM_TURN 出现帧），收件人侧 `PlayObject.Message.cs:1631-1645` 按 `nParam3==1` 分流：0 ⇒ 本帧（32）、1 ⇒ 34。帧形：`recog=ActorId`、`param=X`、`tag=Y`、`series=Dir`、尾 = CharDesc 8B。**与 34 分开判**（同一 RM_DEATH 的两种编码）。run2 butch：oracle 1 / rust 0；Rust 已实现（`downlink.rs:469 death_frame` + `appear_frames` 的 dead 分派，红检 `redcheck_appear_dead_uses_sm_death_not_turn`）⇒ 更像「重显没发生」而不是「没实现」，需要构造级用例（让死掉的怪重新进视距）才能定性。**不许掩码**：坐标/朝向/收件人都是判据。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-2)"
+    },
+    {
+      "ident": 34,
+      "action": "compare",
+      "tier": "R",
+      "reason": "SM_NOWDEATH（src/OpenMir2/Messages.cs:200）是真实协议帧：`PlayObject.Message.cs:1631-1635`，`RM_DEATH` 且 `nParam3==1`（真死）⇒ `MakeMessage(SM_NOWDEATH, ActorId, nParam1, nParam2, wParam)`；发点 `BaseObject.Base.cs:351`。帧形与 32 完全相同（recog=ActorId / param=X / tag=Y / series=Dir / 尾 CharDesc 8B）。**32 与 34 必须分开判**：同一 `RM_DEATH` 靠 `nParam3` 分流，合并会把两种语义混在一起。run2 butch：oracle 1 / rust 1，但坐标与朝向不同（oracle 330,329,Dir7 vs rust 329,330,Dir2）——那是**杀了不同的鸡**（8 格内 32 只、nearest 选靶），**不是 X/Y 交换**；先改夹具（固定 1 只、固定坐标）再比坐标，**不许为了过而掩掉坐标**。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-2)"
+    },
+    {
+      "ident": 44,
+      "action": "compare",
+      "head_compare": [
+        "recog"
+      ],
+      "tier": "R",
+      "reason": "SM_WINEXP（src/OpenMir2/Messages.cs:205）是真实协议帧。下行 `PlayObject.Message.cs:1666-1668`（`RM_WINEXP` 支）：`MakeMessage(SM_WINEXP, Abil.Exp, LoWord(nParam1), HiWord(nParam1), 0)` ⇒ **recog = 累计经验（不是 ActorId）**、param/tag = 本次经验增量的低/高 16 位、series=0、无尾；发点 `PlayObject.Base.cs:153`（只发给自己）。全局 recog 掩码会把累计经验吞掉 ⇒ **必须 `head_compare:[\"recog\"]` 取回逐值比**（同 52/600/650 先例）；掩掉它就是把最硬的数值判据变成假绿。run2 butch：两侧逐字段相同（recog=5, param=5, tag=0, series=0）⇒ 现成可比。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-2)"
+    },
+    {
+      "ident": 637,
+      "action": "compare",
+      "tier": "L",
+      "reason": "SM_BUTCH（src/OpenMir2/Messages.cs:299）是真实协议帧。下行 `PlayObject.Message.cs:1781-1788`（`RM_BUTCH` 支，整段只被 `if (processMsg.ActorId != 0)` 门住）：`MakeMessage(SM_BUTCH, ActorId, nParam1, nParam2, wParam)` ⇒ recog=ActorId（走全局掩码）、param=X、tag=Y、series=wParam(Dir)、无尾、**不跟 41**；发点 `PlayObject.Operate.cs:749`。**注意：637 是无条件回帧，不等于挖肉成功**——成功要看 `SM_BAGITEMS(201)`/背包等，别让后来人把 637 当成功判据。run2 butch：两侧各 1 条、param/tag=330,330（夹具坐标）与 series=0 均相同。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-2)"
     }
   ],
   "db": {
