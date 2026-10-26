@@ -43,4 +43,4 @@ not_in_run3_reason = "结构性不可判（T-19/T-25：oracle 掉落恒不落地
 scenario = "p21_unequip"
 card = "openmir2-bag-weight-sink"
 line = "tools/probe/scenarios/p21_unequip.json:3"
-not_in_run3_reason = "BLOCKED 场景（两条前置未解，见文件 `blocked` 段）；引用它的卡（`openmir2-gm-target-state-write`）只把它当 P21 前置，不是独立窗口场景 ⇒ 不入批。（review C1 修好后它才第一次被判红，见卡上 N2 处置。）"
+not_in_run3_reason = "BLOCKED 场景（场景文件 `blocked.reason` 自述：**前置只剩 ②** —— 缺 `card_window` 的 `use_items_replace`（装备槽）夹具通道；`@Level0` 自 `4f06e85cc` 起已实现）；引用它的卡 `openmir2-gm-target-state-write` 只把它当 P21 前置，不是独立窗口场景 ⇒ 不入批。（review C1 修好后它才第一次被判红，见卡上 N2 处置。）"
