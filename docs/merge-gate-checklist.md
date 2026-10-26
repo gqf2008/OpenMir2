@@ -14,6 +14,13 @@
 | 3 | `cargo run -q -p msgcodegen -- --check` | rc=0 |
 | 4 | `cargo test --workspace` | rc=0，并记 **running = passed + ignored** 三元组与 suite 数（单报一个数必对不上） |
 
+> **例外禁止（2026-10-27 教训）**：为了避开与车道并发构建而只跑 `-p <crate> --lib` **不算跑过**。
+> 当天合 M-3（碰 `crates/world` 与 `lib.rs`）时只跑了 `-p game-svr --lib` + `-p mir2-world --lib`，
+> **对拍 crate（`mir2-parity-tests`）不在其中** ⇒ `world_session_parity::session_and_drops_match_csharp`
+> 与冻结 C# golden 不一致，master 红了近半小时才被 tester 车道发现。
+> ⇒ **凡碰 `crates/world` 或 `lib.rs` 的卡，合并门必须含 `cargo test --workspace`**
+> （至少 `-p mir2-parity-tests`）。并发构建的风险用 `CARGO_BUILD_JOBS=1` 控制，不是靠跳过套件。
+
 ## 2. 卫生门（仓库根）
 
 `conflict_marker_gate` / `stale_pointer_gate` / `dynamic_count_stamp_gate` /
