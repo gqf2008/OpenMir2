@@ -2579,6 +2579,57 @@ def _selftest_ident_653_head_compare(mod):
     return checks
 
 
+#: ident653 常驻牙的**冻结名字清单**（卡 openmir2-selftest-teeth-meta-assert）。
+#:
+#: 这 8 条牙此前靠 `st.finish = finish_with_ident653_teeth` 这种 monkey-patch 注入：把那一行
+#: 注释掉，Python 不报错，8 条牙**静默消失**而报告仍是 `GREEN 343/343`、rc=0（reviewer-21 F1 实测）。
+#: 现在接缝有三层护栏，任何一层断了都必须 RED，而不是少数 8 条：
+#:   1. teeth 走**必填构造参数**（`_new_selftest_with_teeth`）——少传就是 TypeError ⇒ INCOMPLETE；
+#:   2. 构造后、跑测试前无条件比对「Selftest 真的收到了这 8 个名字」，缺谁点名谁；
+#:   3. 构造期断言这 8 个名字**确实进了 PASS/FAIL 名单**（集合相等），缺谁点名谁。
+#: 新增/删除/改名 ident653 牙 ⇒ 必须同步更新本清单：这就是防止「牙静默消失」的合同。
+_IDENT653_TEETH_NAMES = (
+    "ident653 前提：内置规则仍是 compare 且 head_compare=[recog]",
+    "ident653 A1：仅 recog 不同（200 vs 201）⇒ 判红且 diffs[0].field=recog",
+    "ident653 A2：仅 param 不同（7 vs 8）⇒ 判红且 diffs[0].field=param",
+    "ident653 A3：两侧一致 ⇒ 绿（diffs/undecidable 均为空）",
+    "ident653 变异：只删 653 的 head_compare（622/650 的取回不受影响）",
+    "ident653 变异：删 head_compare ⇒ 同一对 recog 差异被掩掉（diffs=[]，A1 必红）",
+    "ident653 变异：删 head_compare 后 param 差异仍判红（与 recog 牙互不依赖）",
+    "ident653 变异只在内存副本：仓内 rules.json sha256 前后相同",
+)
+
+
+def _new_selftest_with_teeth(mod, me, here, teeth):
+    """构造携带 ident653 常驻牙的 Selftest（**teeth 是必填构造参数**）。
+
+    Selftest 本体在 `selftest_impl.py`（不在本卡写集），所以用子类承载构造参数：接线写成
+    `_new_selftest_with_teeth(mod, me, here, teeth)`。少传 teeth ⇒ TypeError，由 cmd_selftest
+    既有的构造异常分支判 RED INCOMPLETE——不会再出现「接缝断了、牙静默少跑、报告全绿」。
+    """
+
+    class SelftestWithTeeth(mod.Selftest):
+        def __init__(self, api, here, teeth):
+            super().__init__(api, here)
+            self.teeth = list(teeth)
+            self.teeth_names = [name for name, _cond, _detail in self.teeth]
+            # 牙在**构造期**执行，不覆写 finish：覆写能被整段删掉而不报错（接缝又断了），
+            # 而构造签名里少 teeth 参数是 TypeError。删掉下面这个循环 ⇒ 紧跟着的元断言必红。
+            for name, cond, detail in self.teeth:
+                self.check(name, cond, detail)
+            # 元断言（此刻 passed/failed 里应当只有这 8 条）：名字集合必须与冻结清单**完全相等**，
+            # 缺谁/多谁都逐条点名。既有 343 条断言一条不改，本条与 8 条牙直接进 GREEN 的分子/分母。
+            expected = set(_IDENT653_TEETH_NAMES)
+            checked = set(self.passed) | {name for name, _detail in self.failed}
+            missing = sorted(expected - checked)
+            unexpected = sorted(checked - expected)
+            self.check("ident653 元断言：8 条常驻牙全部出现在 PASS/FAIL 名单（缺一即红并点名）",
+                       not missing and not unexpected,
+                       {"missing": missing, "unexpected": unexpected})
+
+    return SelftestWithTeeth(me, here, teeth)
+
+
 def cmd_selftest():
     here = os.path.dirname(os.path.abspath(__file__))
     me = sys.modules[__name__]
@@ -2592,19 +2643,22 @@ def cmd_selftest():
         mod.traceback.print_exc()
         teeth = [("ident653: 常驻牙自身崩溃（INCOMPLETE）", False, "exception")]
     try:
-        st = mod.Selftest(me, here)
-    except Exception:  # noqa: BLE001 - 构造失败同样是 INCOMPLETE，不能假绿
+        # teeth 是**必填构造参数**；少传（或退回 mod.Selftest(me, here) 的旧写法）走下面的
+        # 构造异常/元断言分支判 RED，而不是让 8 条牙静默消失。
+        st = _new_selftest_with_teeth(mod, me, here, teeth)
+    except Exception:  # noqa: BLE001 - 构造失败（含缺 teeth 的 TypeError）同样是 INCOMPLETE
         mod.traceback.print_exc()
         print("RED: compare_runs selftest 未跑完（INCOMPLETE）")
         return 2
-    original_finish = st.finish
-
-    def finish_with_ident653_teeth():
-        for name, cond, detail in teeth:
-            st.check(name, cond, detail)
-        return original_finish()
-
-    st.finish = finish_with_ident653_teeth
+    # 元断言（跑测试前，**无条件执行**）：Selftest 实例必须真的收到全部 8 条牙。若有人把接线退回
+    # `mod.Selftest(me, here)`，这里逐条点名缺了谁——而不是照旧报 GREEN 343/343。
+    registered = set(getattr(st, "teeth_names", ()) or ())
+    missing = sorted(set(_IDENT653_TEETH_NAMES) - registered)
+    if missing:
+        print("RED: compare_runs selftest 元断言：ident653 常驻牙未接入 Selftest（接缝断了），"
+              "missing=%r" % (missing,))
+        shutil.rmtree(getattr(st, "root", ""), ignore_errors=True)
+        return 2
     try:
         rc = st.run()
     except Exception:  # noqa: BLE001 - 与原 mod.run 同一口径：异常 ⇒ RED/INCOMPLETE
