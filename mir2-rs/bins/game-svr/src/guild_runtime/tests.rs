@@ -1789,7 +1789,7 @@ fn after_contains(src: &[&str], from: usize, needle: &str) -> Option<usize> {
     (from..src.len()).find(|&i| src[i].contains(needle))
 }
 
-/// **去注释视图**：委托 [`crate::strip_rust_comments`]（同时剥 `//` 与 `/* … */`，保留换行）。
+/// **去注释视图**：委托 [`crate::strip_rust_comments`]（全仓唯一一份；剥 `//` 与 `/* … */`，含嵌套；字符串 / raw string / 字符字面量**不剥**；换行保留）。
 ///
 /// 源码文本锚必须走这个视图——注释里出现的 `.remove(` / 函数名不算代码，否则把实现删掉、
 /// 只在注释里留一句仍能绿（`source-text-tooth-bypass`）。
