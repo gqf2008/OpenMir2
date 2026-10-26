@@ -20,7 +20,7 @@
 
 | 类别 | 前置（A3 牙删掉它就 RED） | 成功判据（副作用） |
 |---|---|---|
-| 捡物 `pickup` | 客户端发 `CM_PICKUP(1001)`，且 header `param/tag` == 角色格（服务端 oracle 会直接忽略别格） | 动作后 `SM_ADDITEM(200)` ⇒ 背包行数**增加**；或 `SM_GOLDCHANGED(653)` ⇒ 金币变化 |
+| 捡物 `pickup` | 客户端发 `CM_PICKUP(1001)`，且 header `param/tag` == 角色格（服务端 oracle 会直接忽略别格）。**动作没发出时也先查前置门**（卡 `openmir2-mirflow-pickup-gate-align` A1，与 npc/trade/combat 同口径）：缺 `floor_item`（结构性不可达）⇒ `UNDECIDABLE(missing_prereq, rc=6)`；gate 明确查过 `floor_item` 且备齐 ⇒ `RED(action_missing, rc=1)` | 动作后 `SM_ADDITEM(200)` ⇒ 背包行数**增加**；或 `SM_GOLDCHANGED(653)` ⇒ 金币变化 |
 | NPC 对话 `npcdialog` | 客户端发 `CM_CLICKNPC(1010)` | 点击后出现 **body 非空** 的 `SM_MERCHANTSAY(643)`（脚本说词）或 `SM_MENU_OK(767)`（菜单文本） |
 | 买卖 `trade` | 交易请求前 `dialogMaxAge` 内先有商人对话：`CM_CLICKNPC(1010)`/`CM_MERCHANTDLGSELECT(1011)` + 643/767 body 非空 | 成功帧（买 650 / 卖 648）+ 金币按方向变化（买减 / 卖增） |
 | 有目标战斗 `combat` | profile `fixtures.monsters` 有**同图**靶子；`CM_HIT(3014)` 的 `Dir` 使「前方一格」正好是靶子格；距离 ≤ AP 范围 | `CM_HIT` 之后**非自己**的 actor 出现 `SM_STRUCK(31)`（HP 下降/伤害>0）或 `SM_DEATH(32)` |
@@ -201,7 +201,7 @@ grep -n "GetFrontPosition\|GetPoseCreate" src/M2Server/Actor/BaseObject.cs
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selftest.ps1
-# => SELFTEST_PASS=148 SELFTEST_FAIL=0 ; SELFTEST_OK
+# => SELFTEST_PASS=153 SELFTEST_FAIL=0 ; SELFTEST_OK
 ```
 
 四类牙的原始输出（删掉前置/副作用 ⇒ 对应类别 RED 且点名）：
@@ -210,6 +210,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/client/mir_flow.selfte
 |---|---|---|
 | 捡物 | 有 `CM_PICKUP`，删掉 `SM_ADDITEM`/金币变化 | `STAGE_EVIDENCE category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=floor_item ...`（96ad82a37：地面物结构性不可达） |
 | 捡物② | `CM_PICKUP` 目标格 ≠ 角色格 | `... category=pickup verdict=RED kind=wrong_cell rc=1 ... != 角色格（服务端 oracle 会直接忽略）` |
+| 捡物③（A1，2026-10-27） | **没有** `CM_PICKUP`（动作没发出）+ 无 gate（`floor_item` 结构性恒缺） | `... category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=floor_item ... 未发出 c2s CM_PICKUP(1001)` |
+| 捡物④（A1 反支） | **同一条失败帧**，只把 gate 改成「`floor_item` 备齐」（`need` 含、`missing` 不含） | `... category=pickup verdict=RED kind=action_missing rc=1 ...` ⇒ 两支互不覆盖（只改 gate 一个字段，rc 6→1） |
+| 聚合（A3，2026-10-27） | 同一次运行里两类各落一档：(1,6) / (7,6) / (8,6) | 聚合取更严重的一档 ⇒ `rc=1 / 7 / 8` 且 `STAGE_EVIDENCE_TOTAL` 同步；把 `Get-RcAggregate` 的遍历顺序改成相反（`@(6,1,7,8)`）⇒ 三条全变 6 ⇒ 必红 |
 | NPC 对话 | 有 643 对话帧，删掉 `CM_CLICKNPC` | `STAGE_EVIDENCE category=npcdialog verdict=RED kind=action_missing rc=1 reason=未发出 c2s CM_CLICKNPC(1010)（点 NPC 前置动作缺失）` |
 | 买卖 | 有 1014+650+金币变化，删掉商人对话 | `STAGE_EVIDENCE category=trade verdict=RED kind=no_dialogue rc=1 reason=未先打开商人对话（前置缺失：不点 NPC 直接交易 / 无脚本说词帧）` |
 | 买卖② | 对话+650 都在，金币未变 | `... category=trade verdict=RED kind=no_gold_change rc=1 ... 金币未减少` |
@@ -369,6 +372,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/capture/clienthook/bui
 - 门**只参与归类，不阻断动作**（Leader 92b32a23 裁决）：动作照发（可观测面更大），门只解释「为什么什么都没发生」。
 - 门仅在**动作没生效**时参与归类：门说缺 `gold` + 交易无副作用 ⇒ `UNDECIDABLE missing=gold`；
   门说全备齐（`missing=[]`）⇒ 同样的失败帧仍是 RED（门不得掩盖真 RED，selftest 有负例牙）。
+- **「动作没发出」与「动作发了没生效」同口径**（卡 `openmir2-mirflow-pickup-gate-align` A1，2026-10-27）：npc/trade/combat 一直是两支都查门；`pickup` 此前只在「发了没生效」那支查，「没发出 `CM_PICKUP`」直接落 `RED action_missing` ⇒ 与成因口径不一致。现已对齐：缺 `floor_item` ⇒ `UNDECIDABLE(6)`，gate 说 `floor_item` 备齐 ⇒ `RED(1)`。**pickup 阶段本身仍按结构性不可达裁决不在窗口内使用**（本卡只改判据，不重开窗口用法）。
 - 未给 `-PrereqGateJson` 时：monster 夹具从 `-Profile/-PlayerMap` 自行推导；`floor_item` 按 96ad82a37 裁决默认结构性缺失；
   其它前置（gold/sellable_item/npc）**不臆断**，沿用 RED。
 

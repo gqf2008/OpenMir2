@@ -1089,6 +1089,14 @@ function Get-MissingText($missing) {
   return (@($missing) -join ",")
 }
 
+function Get-PrereqReasonText($gate, [string]$item) {
+  # gate 里给该前置项写了原因就拼成 "：<原因>"，否则空串（拼进 reason 供人看；不参与机判）。
+  if ($null -ne $gate -and $null -ne $gate.reasons -and $gate.reasons.Contains($item)) {
+    return "：" + [string]$gate.reasons[$item]
+  }
+  return ""
+}
+
 function Get-RcAggregate([int[]]$rcs) {
   # 一次跑多类时取最具体/最严重的一档；顺序即优先级：
   #   out_of_range(8) > spawn_failed(7) > 其它 RED(1) > UNDECIDABLE(6) > PASS(0)。
@@ -1123,7 +1131,21 @@ function Get-PickupEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [long
   $picks = @(Get-StageFramesSorted $source $sinceMs $atMs | Where-Object {
       $_.dir -eq "c2s" -and [int]$_.ident -eq 1001 -and [long]$_.ts_ms -ge $actionFloorMs
     })
-  if ($picks.Count -eq 0) { Set-EvVerdict $ev "action_missing" "" "无 c2s CM_PICKUP(1001)（未发出取物请求）"; return $ev }
+  if ($picks.Count -eq 0) {
+    # 卡 `openmir2-mirflow-pickup-gate-align` A1：**动作没发出也要先查前置门**（与 npc/trade/combat 同口径）。
+    # 地面物按 96ad82a37 裁决是**结构性不可达**——`Test-FloorItemMissing` 在「没给 gate」时恒真，
+    # 所以「没发出 CM_PICKUP」在缺 floor_item 时属 UNDECIDABLE(missing_prereq, rc=6)，不是 RED；
+    # 只有 gate **明确查过** floor_item 且不在 missing（罕见，需新证据推翻裁决）时，才是真正的
+    # 「动作缺失」⇒ RED(action_missing, rc=1)。两支互不覆盖（selftest A2①/②）。
+    if (Test-FloorItemMissing $prereqGate) {
+      Set-EvVerdict $ev "missing_prereq" "floor_item" (
+        "未发出 c2s CM_PICKUP(1001)，且地面物前置缺失（floor_item；96ad82a37 裁决：结构性不可达）=> 本轮不可判" +
+        (Get-PrereqReasonText $prereqGate "floor_item"))
+    } else {
+      Set-EvVerdict $ev "action_missing" "" "无 c2s CM_PICKUP(1001)（未发出取物请求）"
+    }
+    return $ev
+  }
   $pick = $picks[$picks.Count - 1]
   $self = Get-SelfStateAt $source $sinceMs ([long]$pick.ts_ms)
   $ev.action = [ordered]@{ ident = 1001; ts_ms = [long]$pick.ts_ms; param_x = [int]$pick.param; param_y = [int]$pick.tag; own = $null }
@@ -1150,13 +1172,9 @@ function Get-PickupEvidence($source, [long]$sinceMs, [long]$actionFloorMs, [long
   $goldChanged = ($null -ne $g0 -and $null -ne $g1 -and [long]$g0 -ne [long]$g1)
   if ($adds.Count -eq 0 -and -not $goldChanged) {
     if (Test-FloorItemMissing $prereqGate) {
-      $why = ""
-      if ($null -ne $prereqGate -and $null -ne $prereqGate.reasons -and
-          $prereqGate.reasons.Contains("floor_item")) {
-        $why = "：" + [string]$prereqGate.reasons["floor_item"]
-      }
       Set-EvVerdict $ev "missing_prereq" "floor_item" (
-        "取物后无入包也无金币变化，且地面物前置缺失（floor_item；96ad82a37 裁决：结构性不可达）=> 本轮不可判" + $why)
+        "取物后无入包也无金币变化，且地面物前置缺失（floor_item；96ad82a37 裁决：结构性不可达）=> 本轮不可判" +
+        (Get-PrereqReasonText $prereqGate "floor_item"))
       return $ev
     }
     Set-EvVerdict $ev "no_effect" "" "取物后无入包（SM_ADDITEM 200）也无金币变化（SM_GOLDCHANGED 653）"
