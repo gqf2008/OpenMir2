@@ -425,6 +425,11 @@ def _owner_cards(cells, exclude_ids):
     return owners
 
 
+#: 「本条是旧轮次登记、当前无对应工作项」的显式标记（卡 `openmir2-whitelist-card-link-debt`）。
+#: 认它 = 该行**已被人工处置过**（不是漏填）；条件② 的核算盲区判据按「既无卡号也无 legacy」算。
+LEGACY_MARK_RE = re.compile(r"\blegacy\b", re.I)
+
+
 def build_whitelist(path: Path, exclude_ids=None):
     """解析 whitelist.md 的 T-* 行（结构化关联，卡号只从固定列/「卡 `X`」写法取）。
 
@@ -441,7 +446,9 @@ def build_whitelist(path: Path, exclude_ids=None):
     exclude_ids = set(exclude_ids or ())
     info = {"path": str(path), "rows": {}, "card_to_t": {}, "duplicates": [],
             "warnings": [], "refs": {}, "unassociated": [], "bad_columns": [],
-            "error": None}
+            # 卡 `openmir2-whitelist-card-link-debt`：`unassociated` = 没有卡号（含已标 legacy 的行）；
+            # `unowned` = **既没卡号也没 legacy** = 条件② 的真核算盲区（必须为 0）。
+            "legacy": [], "unowned": [], "error": None}
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -460,11 +467,16 @@ def build_whitelist(path: Path, exclude_ids=None):
         cards = _owner_cards(cells, exclude_ids)
         all_ids = {c for c in CARD_ID_RE.findall(line) if c not in exclude_ids}
         info["refs"][t_id] = sorted(all_ids - cards)
+        is_legacy = bool(LEGACY_MARK_RE.search(line))
+        if is_legacy:
+            info["legacy"].append(t_id)
         if not cards:
             info["unassociated"].append(t_id)
-            info["warnings"].append(
-                "whitelist 行 %s 无法结构化关联卡号（既无『卡 `openmir2-…`』也不在第二列）：%s"
-                % (t_id, line[:80]))
+            if not is_legacy:
+                info["unowned"].append(t_id)
+                info["warnings"].append(
+                    "whitelist 行 %s 既无『卡 `openmir2-…`』也无 `legacy` 标记（条件② 核算盲区）：%s"
+                    % (t_id, line[:80]))
         row = info["rows"].get(t_id)
         if row is None:
             info["rows"][t_id] = {"line": line, "cards": set(cards),
@@ -482,6 +494,20 @@ def build_whitelist(path: Path, exclude_ids=None):
 
 def _t_sort_key(t_id):
     return int(t_id.split("-", 1)[1])
+
+
+def whitelist_unowned_note(whitelist):
+    """条件② 核算盲区的机判文案：**既无卡号也无 `legacy`** 的行数 > 0 ⇒ 返回点名串，否则 None。
+
+    卡 `openmir2-whitelist-card-link-debt`：条件② 按**卡**核算 R 卡证据，没有归属的行既不算
+    「有证据」也不算「无证据」⇒ 登记可以永远躺着而门仍 PASS。所以这条必须能**判红**，
+    基线是 0（2026-10-27 修完 105 行后）。
+    """
+    unowned = sorted(set(whitelist.get("unowned") or []), key=_t_sort_key)
+    if not unowned:
+        return None
+    return ("whitelist.md 有 %d 行既无卡号也无 `legacy` 标记（条件② 核算盲区：不计入任何卡）：%s"
+            % (len(unowned), ", ".join(unowned)))
 
 
 def _names_in_whitelist_rows(name: str, whitelist):
@@ -1169,9 +1195,9 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
     if whitelist["bad_columns"]:
         warnings.append("whitelist.md 有 %d 行列数≠4（格式异常，按已解析列处理）：%s" % (
             len(whitelist["bad_columns"]), ", ".join(sorted(set(whitelist["bad_columns"]), key=_t_sort_key))))
-    if whitelist["unassociated"]:
-        warnings.append("whitelist.md 有 %d 行无法结构化关联卡号（不计入任何卡，需人工补『卡 `openmir2-…`』）：%s" % (
-            len(whitelist["unassociated"]), ", ".join(sorted(set(whitelist["unassociated"]), key=_t_sort_key))))
+    unowned_note = whitelist_unowned_note(whitelist)
+    if unowned_note:
+        warnings.append(unowned_note)
 
     # ---- 条件2
     r_cards = collect_r_cards(index) if index else []
@@ -1189,6 +1215,11 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         per_card, r_fails, r_needs = [], [], []
     else:
         state, detail, per_card, r_fails, r_needs = judge_r_cards(evidence_list)
+        # 卡 `openmir2-whitelist-card-link-debt`：无归属行是**条件② 自身**的核算盲区 ⇒ 非 NEED 时直接 FAIL
+        # （NEED 表示 board/索引不可用、本来就没法判，不能拿它冒充红）。
+        if unowned_note and state != NEED:
+            state = FAIL
+            detail = (detail + "；" if detail else "") + unowned_note
     # 卡 `openmir2-goal-gate-unmerged-selftest`：把 `window_required_unmerged` 一并纳入。它是
     # `merged=false` 的桶，永远不会命下面 `rec["merged"]` 的门 ⇒ 行为不变；纳入只是让「登记类
     # 分类集合」保持一个枚举（避免下次新增分类时又漏），不在卫生清单里制造条目。
@@ -1461,6 +1492,32 @@ def selftest(verbose=False):
         check("结构化后 gamma 仍只关联 T-3（引用不串卡）", lambda: (
             wl["card_to_t"].get("openmir2-card-gamma") == {"T-3"},
             str(wl["card_to_t"].get("openmir2-card-gamma"))))
+
+        # ---- 卡 openmir2-whitelist-card-link-debt：`legacy` 与「无归属」的牙（合成夹具，不碰真实仓库）----
+        def _wl_with(rows):
+            p = tmpdir / ("wl-%d.md" % abs(hash(tuple(rows))))
+            p.write_text("| 编号 | 差异/豁免点 | 为什么无害 | 谁审的 |\n| --- | --- | --- | --- |\n"
+                         + "\n".join(rows) + "\n", encoding="utf-8")
+            return build_whitelist(p)
+
+        def _legacy_tooth():
+            owned = "| T-1 | 差异 | 无害 | 卡 `openmir2-xx` |"
+            legacy = "| T-2 | 差异 | 无害 | 作者登记；**legacy**：旧轮次登记，保留作判据 |"
+            bare = "| T-3 | 差异 | 无害 | 作者登记 |"
+            w = _wl_with([owned, legacy, bare])
+            ok = (w["unowned"] == ["T-3"] and w["legacy"] == ["T-2"]
+                  and "T-1" not in w["unowned"] and "T-2" not in w["unowned"])
+            note = whitelist_unowned_note(w)
+            ok = ok and note is not None and "T-3" in note and "T-2" not in note
+            clean = whitelist_unowned_note(_wl_with([owned, legacy]))
+            ok = ok and clean is None
+            # 反面：把 legacy 标记删掉 ⇒ 同一行立刻变成盲区（这条钉住「标 legacy 才算出域」）
+            no_mark = "| T-2 | 差异 | 无害 | 作者登记：旧轮次登记，保留作判据 |"
+            w2 = _wl_with([owned, no_mark])
+            ok = ok and w2["unowned"] == ["T-2"] and w2["legacy"] == []
+            return ok, "unowned=%s legacy=%s note=%r" % (w["unowned"], w["legacy"], note)
+
+        check("whitelist: 卡号/legacy/无归属三态分明，且删 legacy 标记即变盲区", _legacy_tooth)
 
         check("J-1 否定不跨转折：『不涉及时序，但涉及 RNG』=> 拒", lambda: (
             _waiver_ok("纯逻辑，不涉及时序，但涉及 RNG") is False, "cross-conjunction RNG"))
