@@ -16,7 +16,7 @@
 | 2b | 城表对齐 | preflight 的 `castle_list_symmetry` 必须 OK（两侧含 `M2GameSvr-hook` 影子内容/sha256 一致） | 不一致 ⇒ 按 `window-runbook` §0.9 用 `Copy-Item` 对齐（W-TAX-2 需两城 `0,1`），**不碰 `E:/MirServer`**；否则城堡税/多城项必假红 |
 | 2c | 影子=基线 | preflight 的 `envir_shadow_symmetry` 必须 OK（`csharp-root/M2GameSvr/Envir` vs `M2GameSvr-hook/Envir` vs `rust-root` 逐文件 sha256；实测 642 文件 0 差异） | 不一致 ⇒ 用基线 Envir 覆盖影子（或删影子 `GameSvr.exe` 让部署重建）；否则 `--rng-log` 窗口会用被改过的 oracle 脚本（内容冻结风险） |
 | 2d | 写后复核（G-2） | 夹具应用后/收工后**重跑 preflight**（或比对基线/影子 sha）；preflight 是**写前**检查，绿 ≠ 运行期一致（runbook §0.9） | 任一 Envir/影子 sha 变化 ⇒ 先还原再到 2c；`--rng-log` 下夹具必须同时写基线+影子（G-1） |
-| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 24（blocked 2 ⇒ 入批 22）`**（**以开窗当天实况为准**；blocked 数随卡收口会变），#21/#22 标 `YES` | 数量不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ 清单行的 `blocked` 字段被动过 |
+| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 24（blocked 4 ⇒ 入批 20）`**（**以开窗当天实况为准**；blocked 数随卡收口会变，2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10）），#10/#11/#22/#24 标 `YES` | 场景数不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ **先看是不是又有卡封存/解封**（清单行的 `blocked` 字段），并在开工记录里写明是哪两条、为什么——**不许**为了让数字对上而解封一个「oracle 恒 0 帧」的场景 |
 | 4 | 门禁基线 | `python -I -B tools/goal/goal_gate.py --skip-tests --json`（全量版需低负载时段） | 红 ⇒ 先修再开窗（`window-runbook` §6） |
 
 > blocked 语义（已实测）：**blocked 场景只在 `--list` 标注、不进批次**；普通批次自动跳过并打印 `blocked B ⇒ 入批 N−B`；

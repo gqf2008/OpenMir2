@@ -1230,3 +1230,171 @@ python -I -B tools/probe/selftest_bclass.py      # 期望：TOOTH GREEN (0 fail)
    5008 的 Param/Tag 两侧逐字段一致（rules `head_compare:["recog"]`）。
 2. `dropgold_zero_draw`：两侧各恰一条 653（`recog=100`）、DB `characters.Gold` 前后都是 200、无地面金币；
    若 653 规则仍未登记 ⇒ 记账写成「帧面 PASS / 比较面 PENDING(653 规则)」，**不得**写成纯 PASS。
+
+## 10. 「点 NPC 后 oracle 0 帧」同族四条：两条是我们点错、两条是 oracle 真的不回（2026-10-27；卡 `openmir2-npc-click-no-response-family`）
+
+来源：reviewer-20 的 UNDECIDABLE 归因审计（`4f84723f`）里 **C 类同族四条**（`dice_chain` / `king_dialog` /
+`king_castle_war` / `clearmapmon_q001`）。本卡把四条在 **window-run2 的 C# 侧产物**逐条定性，
+**只动场景 JSON + 本文**（`src/**`、`mir2-rs/**` 本卡只读）。
+
+### 10.0 一句话结论：四条共用**同一个** oracle 机制
+
+`CM_CLICKNPC(1010)`（`src/M2Server/Player/PlayObject.Message.cs:885-886`）→ `ClientClickNpc`
+（`src/M2Server/Player/PlayObject.Base.cs:674-698`），在 **:688** 是
+
+```csharp
+INormNpc normNpc = FindMerchant(actorId) ?? FindNpc(actorId);
+```
+
+`FindMerchant` = `ActorMgr.Get<IMerchant>`（`src/GameSrv/Word/WorldServer.cs:1446-1449`），实现是
+**`(T)actor` 硬转**（`src/Modules/SystemModule/ActorManager.cs:58-61`）——不是 `as` / `is` 检查。于是：
+
+| 目标 actor 的实际类型 | `(IMerchant)actor` | oracle 行为 |
+|---|---|---|
+| `Merchant : NormNpc, IMerchant`（`MerChant.txt` 行、`Npcs.txt` type=0） | 成功 | 过距离门 ⇒ `NormNpc.Click` ⇒ 643 |
+| `CastleOfficial : Merchant`（`Npcs.txt` type=2） | 成功 | 城堡官员 `Click` 支（红字/授权门，见 `docs/castle-official-gate-20261025.md`） |
+| `GuildOfficial : NormNpc`（`Npcs.txt` **type=1**） | **抛 `InvalidCastException`** | 被 `PlayObject.Run` 的 catch 吞（`src/M2Server/Player/PlayObject.Message.cs:392-400`）⇒ **0 帧** |
+| 怪物 / 玩家 / 其它无 `IMerchant` 的 actor | **抛 `InvalidCastException`** | 同上 ⇒ **0 帧** |
+
+⇒ **`FindNpc` 第二臂在 oracle 里永远到不了**（第一臂要么返回对象、要么抛）。「点了没反应」既不是超时也不是丢包，
+是**抛异常后被 `Run` 的 catch 静默吃掉**：`ident=1010≠0 ⇒ 不 MakeGhost` ⇒ 玩家**不掉线**、客户端**零回执**。
+四条看起来同族，根因就是这一条。**判据层面必须记住**：对非 `IMerchant` 目标，**期望值就是 0 帧**，等 643 必超时。
+
+### 10.0b 与 reviewer-21 的源码穷举（comment `beac3f65`）逐条对表
+
+reviewer-21 独立穷举了 **C1–C5**（点击路径）/ **S1–S5**（`@main` 之后）/ **D1–D4**（选择路径 1011），
+并推「这四条最可能命中 C3/C4」。本卡的帧面 + 本节源码补充把 **C3 拆成两半**：
+
+> `ActorMgr.Get<T>`（`src/Modules/SystemModule/ActorManager.cs:58-61`）是 **`(T)actor` 硬转**：
+> `actor` **不存在** ⇒ 返回 `null`（C3）；`actor` **存在但类型不符** ⇒ **抛 `InvalidCastException`**（下称 **X**），
+> 不会返回 `null`，`?? FindNpc` 的第二臂也就**永不执行**。X 被 `PlayObject.Run` 的 catch 吞掉
+> （`PlayObject.Message.cs:392-400`）⇒ **0 帧**，与 C3 在帧面上**无法区分**——只有源码能分开。
+
+| 场景 | 命中 | 帧面依据 |
+|---|---|---|
+| `dice_chain` | **C3（真·`null`）** | 1010 `recog=119`；同会话 `frames.ndjson` 的 `recog` 全集 = `{-1,0,1,2,100,2000,360258590(自己),1813547218(庄家)}` —— **119 一次都没出现** ⇒ `TryGetValue` 假 |
+| `clearmapmon_q001` | **X（存在但非 `IMerchant`）** | 1010 `recog=1803685956`，该 actor 在同一次 discovery 的 `SM_TURN(10)` 里出现过 @(227,293)；该格在 `MerChant.txt`/`Npcs.txt` 无行 ⇒ 怪 ⇒ 硬转抛（Chebyshev 距玩家 (236,305) = 12 ≤ 15，距离门本来能过） |
+| `king_dialog` | **X** | 1010 `recog=1484467395` = 出现帧里的比奇国王 @(29,32)，`GuildOfficial` 非 `IMerchant` ⇒ 硬转抛 |
+| `king_castle_war` | **X** | 同上，`recog=1237339378 @(29,32)` |
+
+**其余 12 条逐条排除（是「排除」，不是「未判」）**：
+
+| 条目 | 为什么不成立 |
+|---|---|
+| C1 `Death \|\| Ghost` | 四条里玩家都走完登录链、点击前 1.1-1.4s 还对**该玩家**发 `SM_SYSMESSAGE(100)`/`5008`/`654`/`657`（`frames.ndjson` 末条 t=2576 / t=3070）；`Death` 需先有战斗/死亡帧、`Ghost` 需 `MakeGhost()`（小退/踢线支）——帧面都没有。**这是排除，不是证明**：C1 无法解释「换会话仍 0 帧」+ X 的必然性 |
+| C2 1s 节流 | 四条每次运行**只发过 1 次** 1010（`run.json` steps 里 `kind=send` 计数 = 1）——与 reviewer-21 的「共同前提」一致 |
+| C4 同图/±15 | king 距玩家 1 格；clearmapmon 的怪 Chebyshev=12；dice_chain 是 C3 先命中。且 C4 判在**查找之后**，X 已先抛 |
+| C5 `!IsCanDeal` | 该支会发 **1 帧** `SM_MENU_OK(767)`（不是 0 帧）；四条帧面 0 帧 ⇒ 排除（部署 `LockDealAction` 关闭） |
+| S1–S5 / D1–D4 | 全部发生在 `normNpc.Click` **之后**；X 发生在**查找阶段** ⇒ 根本到不了。⇒ **补脚本、补 `@main` 文本、补 `CanJmpScriptLableMap` 都修不好这两条**，`@@buildguildnow`（D4 的 `LableIsCanJmp`）在本条里**永远轮不到** |
+
+**一条可证伪的旁证（下次窗口 3 分钟）**：X 路径**会打日志**——`PlayObject.Run` 的 catch 里有
+`LogService.Error(Format(sExceptionMsg2, ...))`（`PlayObject.Message.cs:398`，模板 `:26`），
+即 `[Exception] PlayObject::Run -> Operate 2 # <ChrName> Ident:1010 ...` + 下一行 `e.Message`。
+**在同一次起栈里**（`logs/GameSvr.out.log` 每次起栈会截断，跑完再停栈才留得住）点一次国王，
+日志里**出现这两行 ⇒ X 证实**；**不出现 ⇒ 本节结论错**，回到 C3/C4 重判。
+
+### 10.1 `dice_chain` / `clearmapmon_q001`：① 场景前置不符（我们点错了对象）
+
+两条都是**目标 actor 寻址**错，不是 oracle 的锅；但它们的「0 帧」现象**正是 10.0 机制**给的（点到了非商人）。
+
+| 场景 | 旧写法 | window-run2 实测（`E:/tmp/window-20261026/run2/<scenario>/`） | 新写法 |
+|---|---|---|---|
+| `dice_chain` | 只有 `params.npc_actor=119`（r9 那一会话的 ActorId），**没有任何发现声明** ⇒ `--var` 永远是别的会话的 id | `card-window.log:14` `steps[1]: timeout waiting for ident(s) [643] after 3000ms`；`csharp/frames.ndjson` 里庄家 `SM_TURN(10) recog=1813547218 @(8,10)` ⇒ 119 是**别的会话**的 id | 加 `required: ["npc_actor"]` ⇒ `card_window` 先跑 discovery（默认 `npc_click_auto.json`：点 → 收 643 ⇒ `npc_actor = 643.recog`）再用 `--var` 覆盖；`params.npc_actor=119` **保留**（见下条，probe 自测钉住它） |
+| `clearmapmon_q001` | `required:["npc_actor"]` ⇒ discovery 退化规则 | `card-window.log:103` `steps[1]: timeout waiting for ident(s) [643, 100] after 5000ms`；`csharp/discovery/run.json` steps[0] 发 1010 到 `recog=1803685956 @(227,293)` —— 该格**没有** `MerChant.txt`/`Npcs.txt` 行（是怪）；真正的 `任务NPC/老人` 在 `(235,305)`、`recog=1311106160`，`seq=20` 就在快照里 | `click_npc: "pos:235,305"`（`Envir/MerChant.txt:155`；玩家在 (236,305)）；**删掉 `required`** ⇒ `card_window` 不再为它跑 discovery |
+
+- **`dice_chain` 为什么不直接写 `pos:8,10`**：`tools/probe/mir2_probe.py` 的自测把**本文件**当夹具钉住了
+  旧形态——`:3243-3248` 断言 `steps[0].recog == params["npc_actor"]`（即第一步必须是 param 寻址）、
+  `:3919-3922` 拿它当「`params` 默认值仍让 `check_scenario` 绿」的样本。本卡禁改 probe ⇒
+  **只能保留 `params.npc_actor` 与 param 寻址，用 `required` 让窗口跑走 discovery 覆盖它**（`--var` 优先于
+  `params`，`expand_scenario` 的 `params_override` 语义，`mir2_probe.py:1416-1422`）。
+  真要改成 `pos:`，得连同 probe 那两处自测一起改（另开卡）。
+- **为什么 `dice_chain` 走 discovery 是安全的、`clearmapmon_q001` 不安全**：discovery 默认场景是
+  `npc_click_auto.json`，它的推导优先取 **`643.recog`**（643 = NPC **应答点击**才发的面板 ⇒ 该 actor 自证是商人）；
+  只有收不到 643 时才退化成「最近一条非 self 的 `SM_TURN`」（`docs/param-discovery-design-20261023.md:23`）。
+  B013 赌场图**只有庄家一个其它 actor** ⇒ 两条路都只会取到庄家（`dice_chain_auto` 同会话 `rc=0` 是旁证）；
+  1 比奇省怪比 NPC 多 ⇒ 退化规则会稳定地点到怪（run2 就是 `recog=1803685956 @(227,293)`）。
+  **规则**：目标图上「非 self 的 actor 不唯一」时，寻址必须能自证是 NPC（`pos:` 的静态门 / `name:` 的唯一命中门），
+  不许依赖 `npc_actor` 的退化规则。
+- `clearmapmon_q001` 的附带效果：删掉 `required` ⇒ `card_window` 不再为它跑 discovery（少一次起栈后的点击/5s 等待），
+  `pos:` 的唯一命中性由 `_resolve_npc_selector` 现场证明（0 命中/多命中都 fail-closed 并列出该格邻近对象）。
+
+### 10.2 `king_dialog` / `king_castle_war`：② oracle 真的不回（type=1 的 GuildOfficial）
+
+两条的点击目标都是 **`Envir/Npcs.txt:3` `比奇国王 1 0122 29 32`（type=1）** ⇒ `LocalDB.cs:693-694` 造 `GuildOfficial`
+⇒ 命中 10.0 表格第 3 行 ⇒ **oracle 0 帧**。run2 实测（两条都**在 discovery 阶段就超时**，连 probe 都没跑起来）：
+
+| 场景 | 点击（`name:比奇国王` 静态唯一命中 (29,32)） | 之后 5s 窗口 | 证据 |
+|---|---|---|---|
+| `king_dialog` | 1010 `recog=1484467395` @t=3882 | **0 条 s2c 帧**（`matched=false`，`waited_ms=5003`；`frames.ndjson` 末条 t=2576，即点击前 1.3s 之后一字未发） | `run2/king_dialog/csharp/discovery/run.json` steps[1] |
+| `king_castle_war` | 1010 `recog=1237339378` @t=4446 | **0 条 s2c 帧**（`matched=false`，`waited_ms=5013`；`frames.ndjson` 末条 t=3070） | `run2/king_castle_war/csharp/discovery/run.json` steps[1] |
+
+⇒ 这两条场景**原样形态下永远跑不出可比帧**：它们的预期链（`king_dialog`：643 → `@@buildguildnow` → 763；
+`king_castle_war`：643 → `@requestcastlewarA` → 644+767）第一步就要求 643，而 oracle 对 type=1 目标**连 643 前的门都过不去**。
+
+**处置**：两来源同时封存（`tools/probe/scenarios/{king_dialog,king_castle_war}.json` 的顶层 `blocked` +
+`tools/window/run3-scenarios.json` 的 n=10/n=11 行 `blocked`；一来源不写 = 假绿，见 `run_batch.sh:107-112`）。
+封存后 `card_window` 一律 `rc=2 / VERDICT: BLOCKED`，**不建 out、不起栈、不写 report**；
+probe 的 `--check-scenario` 仍 rc=0（形状合法）。**禁止**为了让它们变绿去把 wait 改成「等任意帧」或加宽 ident。
+
+> 若将来要真机验 type=1 的**脚本**（`@@buildguildnow` / `ReQuestBuildGuild`），唯一的正路是先由 owner 裁决
+> **复刻异常语义**（见 §10.3）或改用 type=2 的 `沙巴克城堡管理`（`Npcs.txt:4`，`CastleOfficial : Merchant`
+> ⇒ 走得到 `Click`）——后者属 `openmir2-castle-official-actions` 的车道，不在本卡。
+
+### 10.3 随卡登记的 **R 项**：Rust 在 oracle 抛异常处**会回 643**
+
+Rust 侧 `handle_click_npc_cmd` 的寻址门是 `merchant.is_some() || npc.is_some()`
+（`mir2-rs/bins/game-svr/src/lib.rs:4945`），类型门是 `fixed_npc_script_allowed`（同文件 `:4828-4833`），
+**放行 `NPC_TYPE_GUILD_OFFICIAL`（type=1）** ⇒ 对同一目标，Rust 会 `run_merchant_goto("@main")`（`:5038`）
+并回 **643**；oracle 在 `(IMerchant)actor` 就抛了 ⇒ **0 帧**。**这是真差异**，与「行为等价优先」冲突，
+且**不能**在本卡修（写集禁 `mir2-rs/**`，且属协议层行为面 ⇒ 需真机复验）。
+
+- **R 项内容**：`ClientClickNpc` 对 `Npcs.txt` **type=1（`GuildOfficial`，非 `IMerchant`）** 目标，oracle **恒 0 帧**；
+  Rust **恒回 643**。同一条也说明 **oracle 的 `FindNpc` 第二臂不可达**，Rust 的 `FindNpc` 兼容臂（T-137）
+  对 type=1 是**过度实现**。
+- **定性（Leader 2026-10-27 定住，写进交付）**：这是 **Rust「修好」了 oracle 的一个缺陷**——按硬约束 ③
+  「**行为等价优先于修 bug**」，正确做法是**复刻 oracle 的异常语义（type=1 目标零帧）**，把「修」留到对拍全绿
+  之后单开批次。⇒ 本卡 `king_dialog`/`king_castle_war` 的 `blocked` **只是排期手段**，不是「这两条没问题」；
+  **修复方向是 Rust 往 oracle 退**，由 Leader 另开 R 卡承载（本卡只登记 + 给复现方法）。
+- **构造级复现方法**（不占真机窗口，落在 `mir2-rs` 的新卡里）：在 `game-svr` 单测里造一个 `npc_type=1` 的固定 NPC
+  实体（同图、距玩家 ≤15 格）+ 在线玩家会话，直接调 `handle_click_npc_cmd`，断言**零帧**
+  （oracle 口径：`PlayObject.Run` 吞掉 `InvalidCastException` ⇒ 该命令不产生任何 `SimToGate::SendFrame`）。
+  当前实现会产出 643 ⇒ **该用例必红**；红了才允许改 `fixed_npc_script_allowed` / 寻址门。
+- **附带一条同族检查**：怪物 id 的点击两侧都 0 帧（Rust 被寻址门挡、oracle 抛异常）⇒ **碰巧等价**，
+  但等价的原因是「都被挡」，不是「都执行了类型门」——写用例时别把这条当成 Rust 已复刻异常语义的证据。
+- **Rust 侧现状（源码链，本卡只读核过，**不是**推断）**：`fixed_npc_script_allowed`（`lib.rs:4828-4833`）
+  **明确放行 `NPC_TYPE_GUILD_OFFICIAL`**（其 docstring 写的理由正是「`GuildOfficial` 的 `Click` 落在
+  `NormNpc.Click`」——这条推理漏了 oracle 在**查找阶段**就抛异常）；`load_npc_def_scripts`（`npcs.rs:221-263`）
+  **不按 type 过滤**，`比奇国王-0122.txt` 会被装进书（`npcs.rs:791-808` 的用例就是用
+  `NpcType::GuildOfficial` 的比奇国王做样本）⇒ `handle_click_npc_cmd` 会执行 `@main` 并回 643。
+  ⇒ **四条里唯一「oracle 0 帧 / Rust 有帧」的真差异就是这两条**；`dice_chain`/`clearmapmon` 的 Rust 侧同样是 0 帧
+  （`recog` 不在世界 / 无 `merchant`/`npc` 标记 ⇒ `lib.rs:4945` 的寻址门挡住）⇒ **碰巧等价**（原因不同，见 §10.3 末条）。
+- **真机验证口径**（下次窗口，R 级）：① 先按 §10.0b 的日志旁证确认 X；② `king_dialog`/`king_castle_war` 解封前
+  必须先在 Rust 侧看到「点击 type=1 ⇒ 0 帧」；在那之前这两条保持 `blocked`。
+
+### 10.4 下次窗口怎么验（本卡的两条 ①）
+
+1. `dice_chain`：`card-window.log` 里**必须先有** `csharp/discover` / `rust/discover` 两段，且
+   `probe` 命令行带 `--var npc_actor=<探测值>`；该值应等于 `frames.ndjson` 里庄家 `SM_TURN` 的 `recog`
+   （坐标 (8,10)，`Envir/MerChant.txt:145`）。随后 `[643]` 命中。**若 probe 命令行没有 `--var`（= 用了 119）⇒
+   配置回归**，必然 0 帧超时。`dice_chain_auto` 与本条结果应一致（同一庄家）。
+2. `clearmapmon_q001`：两侧 `pos:235,305` 唯一命中（`recog` 的 `SM_TURN` 坐标 = (235,305)，静态），
+   随后 `[643]` 命中且 `@main` 页里有 `@rw01/@rw03` 链接（前置：背包蛇毒×1，见场景 `placement.note`）。
+   若 `pos:` 报「该格邻近(±3)可见对象」清单里**没有** (235,305)，说明该 NPC 没进初始快照 ⇒ 记 UNDECIDABLE 并点名，
+   **不许**退回 `auto:last_turn`。
+3. `clearmapmon_q001` **不再跑 discovery**（`required` 已删）——它的 `card-window.log` 里出现
+   `csharp/discover` 即为配置回归；`dice_chain` 相反，**没有** discovery 才是回归（见 #1）。
+
+### 10.5 本卡动过的仓库文件（含**写集外**，需 reviewer 知悉）
+
+| 文件 | 在卡面 write_set？ | 为什么必须动 |
+|---|---|---|
+| `tools/probe/scenarios/dice_chain.json` | 是 | ① 类修复（加 `required`） |
+| `tools/probe/scenarios/clearmapmon_q001.json` | 是 | ① 类修复（`pos:` 寻址、删 `required`） |
+| `tools/probe/scenarios/king_dialog.json` / `king_castle_war.json` | 是 | ② 类封存（`blocked`） |
+| `tools/window/run3-scenarios.json` | 是 | 两来源规则（批次排除） |
+| `docs/window-runbook-20261023.md` | 是 | 本节 |
+| `tools/window/blocked_sources_check.py` | **否** | 该工具的契约「加 blocked 场景必须同时在 `BLOCKED_TOKENS` 登记 token+source，否则 `check` rc=2」；另把 **牙 n9 的硬编码 `== 7`** 改成与喂进来的集合逐名比对（否则新增两条 ⇒ 整颗牙失效，不是变红而是断言错位） |
+| `tools/hygiene/docs_delivery_gate.toml` | **否**（tester-1 写集） | **只改 `expect` 串**（Leader 2026-10-27 批准的范围）：它是 `run_batch --list` 的实况串，blocked 2→4 后必须同步，否则 `DOCS_DELIVERY_GATE RED`（合并门）；同段的 `title` 仍写 blocked 2，**按约束未动**，由 tester-1 顺手同步 |
+| `docs/needs-human-20261025.md` | **否** | 同上（owner 开窗勾选项里的 `--list` 期望串 2→4、入批 22→20） |
+| `docs/window-exec-sheet-20261025.md` | **否** | 操作单第 3 项同一串，并改掉「blocked 计数不符 ⇒ 清单被改过」的错误处置（现在是「先看有没有新封存」） |
+| `tools/probe/mir2_probe.py` | 禁改（本卡只读） | **未改**：其自测 `:3243-3248` / `:3919-3922` 把 `dice_chain.json` 当夹具钉住了 param 寻址 ⇒ `dice_chain` 只能走 `required` 而不能改 `pos:`（见 §10.1） |

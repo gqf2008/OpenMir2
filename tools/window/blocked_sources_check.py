@@ -75,6 +75,19 @@ BLOCKED_TOKENS = {
         'absent': ('未合',),
         'tokens': ('已证伪', 'NPC'),
     },
+    # 2026-10-27（卡 `openmir2-npc-click-no-response-family`）：oracle 点 `Npcs.txt` type=1 的 `GuildOfficial`
+    # 走 `FindMerchant` 的 `(IMerchant)actor` 硬转 ⇒ `InvalidCastException` ⇒ `PlayObject.Run` 吞掉 ⇒ 0 帧。
+    # token 取「原因侧」三个词：换写法可以，但两侧文案必须同时说清「是类型门 + 是抛异常」。
+    'king_dialog': {
+        'source': 'docs/window-runbook-20261023.md §10.2',
+        'absent': ('未合',),
+        'tokens': ('GuildOfficial', 'IMerchant', 'InvalidCastException'),
+    },
+    'king_castle_war': {
+        'source': 'docs/window-runbook-20261023.md §10.2',
+        'absent': ('未合',),
+        'tokens': ('GuildOfficial', 'IMerchant', 'InvalidCastException'),
+    },
 }
 
 
@@ -735,9 +748,12 @@ def selftest():
                             name='orphanM')
         chk(any('evidence' in u for u in und), '牙n8：evidence 为空 ⇒ UNCLASSIFIED')
 
-        # 牙 n9（D9 承重）：把仓库里**当前 7 个既有 blocked 场景**喂进去——
-        #   去掉新增的 not_in_run3_reason 后，不得因缺结构被批量 UNCLASSIFIED（5 个孤儿按 D2 判红）；
+        # 牙 n9（D9 承重）：把仓库里**当前全部** blocked 场景喂进去——
+        #   去掉新增的 not_in_run3_reason 后，不得因缺结构被批量 UNCLASSIFIED（孤儿按 D2 判红）；
         #   原样（已补结构化理由）⇒ 全绿。
+        #   **计数不写死**：2026-10-27 新增两条 blocked（king_dialog/king_castle_war，卡
+        #   openmir2-npc-click-no-response-family）时，旧断言 `== 7` 让整颗牙失效——改成与喂进来的
+        #   集合逐名比对，条数随真实清单增长而增长（牙的语义不变：**每一个**都要被识别）。
         real_scenes = os.path.join(REPO_ROOT, DEFAULT_SCENES)
         real_run3 = os.path.join(REPO_ROOT, DEFAULT_RUN3)
         real_rows = load_run3(real_run3)
@@ -779,12 +795,13 @@ def selftest():
         probs9a, und9a, info9a = check(
             run3_9, base_a, None, BLOCKED_TOKENS, repo=REPO_ROOT, ledger={},
             commit_check=lambda s: True, landed_check=lambda s: False)
-        chk(len(info9a['blocked_scene']) == 7 and not und9a
+        chk(sorted(info9a['blocked_scene']) == sorted(docs) and not und9a
             and sorted(info9a['orphans']) == sorted(
                 set(blocked_names) - {r['name'] for r in rows9})
             and any('not_in_run3_reason' in p for p in probs9a),
-            '牙n9（D9）：7 个既有 blocked 场景（抹掉新理由）⇒ 无 UNCLASSIFIED，'
-            '孤儿按 D2 判红（%d 个）' % len(info9a['orphans']))
+            '牙n9（D9）：%d 个既有 blocked 场景（抹掉新理由）⇒ 无 UNCLASSIFIED，'
+            '孤儿按 D2 判红（%d 个）'
+            % (len(docs), len(info9a['orphans'])))
         base_b = os.path.join(base, 'asis')
         os.makedirs(base_b, exist_ok=True)
         for nm, d in docs.items():

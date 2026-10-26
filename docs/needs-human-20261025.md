@@ -73,7 +73,7 @@
 | 7 | 怪物夹具**写盘位置错**（追加到 MonGen.txt 末尾 ⇒ 窗口内刷不出） | **已解（合入 `6f35b049f`）** | 卡 `openmir2-fixture-monsters-prepend`：改为**前插**（index 0、首个闸门即取到）；真机已验证 prepend 生效（靶子刷出、5 条 `SM_STRUCK(31)`），kill→butch 三段结论复跑中 |
 | 8 | 背包满导致「装武器」类前置无法声明 | **已解** | `a60e04ad9`：`fixtures.inventory_replace` / `inventory_drop`（真机往返两侧已 PASS，before/restored sha256 逐字节相同） |
 
-**当前实况**：run3 = **24 条（blocked 2 ⇒ 入批 22）**（`run_batch --list` 实测 @ `39d2f03ab`；blocked 计数随卡收口会变，**以开窗当天 `--list` 实况为准**）；操作单
+**当前实况**：run3 = **24 条（blocked 4 ⇒ 入批 20）**（`run_batch --list` 实测 @ 分支 `card/npc-no-response`；blocked 计数随卡收口会变——2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10）——**以开窗当天 `--list` 实况为准**）；操作单
 `docs/window-exec-sheet-20261025.md` 已按 23 条刷新（`1af9d6647`）；台账
 `docs/window-closure-ledger-20261025.md` 已二次刷新（`e3ac7c121`）。
 
@@ -81,13 +81,13 @@
 
 - [ ] `powershell -File E:/MirServer/port-status.ps1` ⇒ 5000–7200 全 DOWN、mysqld 3306 UP
 - [ ] `python -I -B tools/window/preflight_private_stack.py` ⇒ 全绿（含新的 `castle_list_symmetry`）
-- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 24（blocked 2 ⇒ 入批 22）`（**数字不符不必慌，先看是不是 blocked 又少了一张**：今天从 3 降到 2 就是因为一张卡解封）
+- [ ] `bash tools/window/run_batch.sh --list` ⇒ `场景数 24（blocked 4 ⇒ 入批 20）`（**数字不符不必慌，先看 blocked 数是不是又变了**：2026-10-24 从 3 降到 2 是一张卡解封；2026-10-27 由 2 升到 4：`king_dialog` / `king_castle_war` 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10））
 - [ ] `bash tools/window/run_batch.sh --dry-run` ⇒ 自检全绿、不起栈
 - [ ] 专用测试账号 + `assets`/`inventory`/`fixtures` 声明（`card_window` 在 restore 后、起栈前应用）
 
 | 选项 | 含义 | 代价 |
 |---|---|---|
-| **A（推荐）** | 开一轮**全量**：24 条入批 22 条（含 `castle_merchant_tax_potion` 的 620s 落盘等待），独占机器 1.5–3 小时 | 需 disk + 独占；直接覆盖台账 #1/#3/#4/#6 的窗口行 |
+| **A（推荐）** | 开一轮**全量**：24 条入批 20 条（含 `castle_merchant_tax_potion` 的 620s 落盘等待），独占机器 1.5–3 小时 | 需 disk + 独占；直接覆盖台账 #1/#3/#4/#6 的窗口行 |
 | B | 最小集：`login_only + upgrade_retrieve + equip_struck_save + spell_cast + gamepoint_exchange` | 1 小时内可跑完，覆盖骨架 |
 | C | 暂不开窗 | 条件② 的 gate 口径仍 PASS，但 **`window_required` 159 张 + 未合并 3 张**这批判据继续没有真机证据（数字取自 `681a59def` 的全量门禁） |
 
