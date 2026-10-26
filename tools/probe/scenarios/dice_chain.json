@@ -1,13 +1,16 @@
 {
   "name": "dice_chain",
-  "description": "r9 人工窗口的赌场骰子链：点 NPC（CM_CLICKNPC 1010）-> @kaiz -> 643 -> @ya5 -> 643 -> @ya52 -> 643 或 767（有筹码包回 643，无则 MESSAGEBOX 回 767；三步 CM_MERCHANTDLGSELECT 1011）",
+  "description": "r9 人工窗口的赌场骰子链：点 NPC（CM_CLICKNPC 1010）-> @kaiz -> 643 -> @ya5 -> 643 -> @ya52 -> 643 或 767（有筹码包回 643，无则 MESSAGEBOX 回 767；三步 CM_MERCHANTDLGSELECT 1011）。**寻址（2026-10-27 订正，卡 openmir2-npc-click-no-response-family A1/①）**：`npc_actor` 进 `required` ⇒ `card_window` 先跑 discovery（默认 `npc_click_auto.json`：点最近一条非 self 的 `SM_TURN` → 收 643 ⇒ `npc_actor = 643.recog`）再用 `--var npc_actor=<探测值>` 覆盖；`params.npc_actor=119` **只是 r9 那一会话的复放默认值**（probe 的 DSL 自测把本文件当 `params` 默认值的样本，必须留），**在别的会话里 119 不存在 ⇒ oracle 静默 0 帧**（window-run2 实测：真实庄家是 recog=1813547218 @B013 (8,10)）。",
   "params": {
     "npc_actor": 119
   },
+  "required": [
+    "npc_actor"
+  ],
   "steps": [
     {
       "click_npc": "npc_actor",
-      "note": "npc_actor 默认 119 = r9 抓包里赌场 NPC 的 actor id；换实例用 --var npc_actor=N"
+      "note": "recog = `npc_actor`。**窗口跑**：值来自 discovery 的 `643.recog`（`--var` 覆盖 `params`，见 `expand_scenario` 的 params_override 语义）；**手工复放**：不传 `--var` 时用 `params.npc_actor=119`（r9 会话的 ActorId，换会话必错 ⇒ 0 帧，这正是本卡要修的 ① 类）。同会话的 `dice_chain_auto`（`auto:last_turn`）已 rc=0，两条落到的都是 `Envir/MerChant.txt:145` 的庄家 `赌博NPC/赌场 B013 8 10 〖庄〗`。"
     },
     {
       "wait_for": 643,

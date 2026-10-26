@@ -1,9 +1,6 @@
 {
   "name": "clearmapmon_q001",
   "description": "W-CM-2：`CLEARMAPMON Q001` + `MONGENEX Q001 10 10 骷髅精灵5 2 1 1`（老人-1.txt:49-50）。**验收范围（2026-10-25 订正）**：Q001 在冻结内容里**没有任何 MonGen 行**（`MonGen.txt` grep `Q001`=0；`MapQuest.txt` 的 `Q001` 是任务标记），且脚本顺序是**先清场后刷怪** ⇒ 清场那一刻地图是空的、无可清之怪、**不会出 `SM_DISAPPEAR(30)`**。因此本场景只验 **MONGENEX 刷怪 + 同名多只 + 玩家切图**；**清场过滤语义与宠物/召唤物腿仅有构造级覆盖**（`mongen.rs` 用例），不声称真机清场证据。前置（F2）：`[@main]` 分支——`checkitem 精灵头盔` ⇒ 只有 @rw03；`checkitem 蛇毒` ⇒ 才有 @rw01（:20），需 **蛇毒×1**（窗口 DB 预置背包）。",
-  "required": [
-    "npc_actor"
-  ],
   "placement": {
     "map": "1",
     "x": 236,
@@ -12,8 +9,8 @@
   },
   "steps": [
     {
-      "click_npc": "npc_actor",
-      "note": "CM_CLICKNPC(1010) → NormNpc.Click → GotoLable(@main)；recog 从 643.recog 发现，不许写死"
+      "click_npc": "pos:235,305",
+      "note": "按坐标点 `任务NPC/老人`（`Envir/MerChant.txt:155` = `任务NPC/老人 1 235 305 老人`；玩家在 (236,305) ⇒ 相邻格，距离门 1 ≤ 15）。**旧写法（required 声明 npc_actor 走 discovery）在本会话点错了对象**：没有 643 ⇒ 退化规则取「最近一条非 self 的 SM_TURN(10)」⇒ window-run2 命中 recog=1803685956 @(227,293)，而该格在 `MerChant.txt`/`Npcs.txt` 里没有任何 NPC 行（是怪）⇒ oracle 的 `(IMerchant)actor` 硬转抛 InvalidCastException ⇒ 0 帧（同族定性见 docs/window-runbook-20261023.md §10）。改用 `pos:` 后不再依赖发现能力，同时删掉 required ⇒ `card_window` 不再为它跑 discovery。"
     },
     {
       "wait_for": 643,
