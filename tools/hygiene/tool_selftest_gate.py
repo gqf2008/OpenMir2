@@ -162,6 +162,9 @@ def discover():
     return sorted(out)
 
 
+_ORIG_DISCOVER = discover
+
+
 #: 自测用「会挂住的项」：自己睡 600s，并起一个同样睡 600s 的**孙进程**（继承 stdout）。
 #: 专门复现「只杀直接子进程 ⇒ 第二次 communicate() 等管道 EOF ⇒ 门挂住」。
 _HANG_CODE = ("import os, subprocess, sys, time\n"
@@ -370,12 +373,22 @@ def inventory(repo):
         print("%-12s %s" % (r["status"].split(":")[0], r["tool"])
               + (("  （%s）" % r["status"].split(": ", 1)[1]) if ": " in r["status"] else ""))
     n_unclassified = sum(1 for r in rows if r["status"] == "UNCLASSIFIED")
+    n_in_gate = sum(1 for r in rows if r["status"] == "IN_GATE")
     print("清点：%d 个带 selftest 的工具；门禁内 %d；已分类出域 %d；未分类 %d"
-          % (len(rows), sum(1 for r in rows if r["status"] == "IN_GATE"),
+          % (len(rows), n_in_gate,
              sum(1 for r in rows if r["status"].startswith("OUT_OF_SCOPE")),
              n_unclassified))
     # M3（2026-10-25 裁定）：未分类 > 0 ⇒ rc≠0。清点是判据，不是打印。
-    return rows, (2 if n_unclassified else 0)
+    if n_unclassified:
+        return rows, 2
+    # discover() 与 REGISTRY 必须自洽：否则「门内 N」是假的（例如有人给 REGISTRY 加了非 .py
+    # 入口却没同步 discover()，门会在跑它、清点却看不见）。只在**真实** discover 下判——
+    # 自测会替换 discover 做合成清点（牙11/11b），那不是事实源。
+    if globals().get("discover") is _ORIG_DISCOVER and n_in_gate != len(REGISTRY):
+        print("INVENTORY_MISMATCH 门禁内 %d ≠ REGISTRY %d（discover() 与 REGISTRY 不自洽）"
+              % (n_in_gate, len(REGISTRY)))
+        return rows, 2
+    return rows, 0
 
 
 def selftest():
