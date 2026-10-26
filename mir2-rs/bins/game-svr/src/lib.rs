@@ -31305,12 +31305,13 @@ mod tests {
         );
         assert!(rig.containers_cleared(), "四个容器都必须清名");
 
-        // 2. soft-close：world 侧 actor_id 已 None、host 仍是 9 ⇒ 摘 9 留 7。
+        // 2. 掉线（M-3 之后 `soft_close` 会保留 actor_id ⇒ 「world 侧无」只剩 `disconnect` 这一态）：
+        //    world 侧 actor_id 已 None、host 仍是 9 ⇒ 摘 9 留 7。
         let mut rig = ResidueRig::new(7, 9);
-        rig.world.soft_close("hero").expect("soft_close");
+        rig.world.disconnect("hero").expect("disconnect");
         assert!(
             rig.world.session("hero").and_then(|s| s.actor_id).is_none(),
-            "前置：soft-close 已把 world 侧 actor_id 置 None"
+            "前置：disconnect 已把 world 侧 actor_id 置 None"
         );
         assert_eq!(rig.cleanup(), Some(9), "host 兜底");
         assert!(rig.displays.get(9).is_none(), "摘的必须是 host 的 9");
@@ -31323,7 +31324,8 @@ mod tests {
         // 3. 两侧都无 id ⇒ 不摘任何展示（四容器仍要清名）。
         let mut rig = ResidueRig::new(7, 9);
         rig.ground.remove("hero");
-        rig.world.soft_close("hero").expect("soft_close");
+        // M-3：`soft_close` 保留 `actor_id` ⇒ 「两侧都无」要用 `disconnect`（移除门）造。
+        rig.world.disconnect("hero").expect("disconnect");
         assert_eq!(rig.cleanup(), None, "两侧都无 ⇒ 不摘");
         assert!(
             rig.displays.get(7).is_some() && rig.displays.get(9).is_some(),
@@ -35392,15 +35394,30 @@ break
             assert_eq!((e.x, e.y), (12, 22), "前置：走成功到 (12,22)");
         }
         rig.soft_close();
+        // M-3：`MakeGhost` 不销毁 ⇒ 实体仍在（ghost），存档走**实体**那一档；
+        // `handle_soft_close_cmd` 写的离世快照仍是 `disconnect` 之后的兜底。
         assert!(
-            rig.world.entities.get(rig.actor).is_none(),
-            "前置：CM_SOFTCLOSE 已销毁实体（本卡要修的正是这个窗口）"
+            rig.world.entities.get(rig.actor).is_some_and(|e| e.ghost),
+            "前置：CM_SOFTCLOSE ⇒ 实体保留且 ghost=true"
         );
         let rec = rig.save();
         assert_eq!(
             (rec.data.cur_x, rec.data.cur_y),
             (12, 22),
             "T1：离世后存档的 CX/CY 必须是实时坐标（不是载入值 7/12）"
+        );
+        // M-3 之后软关保留实体 ⇒ 上一段走的是**实体**档。本卡的原始修复（离世快照）由
+        // `disconnect` 之后的存档行使：实体已摘、快照仍在 ⇒ 仍须是实时坐标。
+        rig.world.disconnect("hero").expect("移除门");
+        assert!(
+            rig.world.entities.get(rig.actor).is_none(),
+            "前置：disconnect 已摘掉 ghost 实体"
+        );
+        let rec = rig.save();
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (12, 22),
+            "快照支：实体已摘时仍取离世快照的实时坐标（删快照段 ⇒ 回落 7/12 必红）"
         );
     }
 
@@ -35598,9 +35615,10 @@ break
         assert_eq!(warns(), base, "无会话 ⇒ 不发第三档 WRN（未进世界不刷屏）");
 
         // ③ 会话在、实体无、快照无（= 修复前的故障态）⇒ 必须 WRN 且回落载入记录。
+        //    M-3 之后 `soft_close` 保留实体 ⇒ 「实体无」只剩 `disconnect` 这一态。
         rig.world
-            .soft_close("hero")
-            .expect("直接软关（绕过 handle_soft_close_cmd ⇒ 无快照）");
+            .disconnect("hero")
+            .expect("直接掉线（绕过 handle_soft_close_cmd ⇒ 无快照）");
         assert!(rig.saves["hero"].derived.is_none(), "前置：无快照");
         let rec = rig.save();
         assert_eq!(
@@ -42537,9 +42555,11 @@ SendRefMsgRange=15
     fn sc_gate_event_driven_drains_have_no_source_after_soft_close() {
         let (mut world, mut sessions, _online, _gates, _rx, actor) = sc_gate_fixture("sc_evt");
         world.soft_close("sc_evt").expect("CM_SOFTCLOSE 等价物");
+        // M-3：soft_close **保留**实体（ghost=true）⇒ 这条用例从「实体没了所以无事件」
+        // 变成「实体在但 world tick 不得为 ghost 产事件」——正是本卡 A3 ③ 的判据。
         assert!(
-            world.entities.get(actor).is_none(),
-            "前置：soft_close 销毁实体（事件源消失）"
+            world.entities.get(actor).is_some_and(|e| e.ghost),
+            "前置：soft_close 保留实体且 ghost=true"
         );
         let rec = world.tick();
         assert!(rec.exp_awards.is_empty(), "P31/击杀链：无事件");
@@ -51032,7 +51052,16 @@ SendRefMsgRange=15
             "BoSoftClose 支 ⇒ MakeGhost（离开世界）"
         );
         assert_eq!(world.session("hero").unwrap().soft_close_count, 1);
-        assert!(world.entities.get(hero).is_none(), "实体已从世界摘除");
+        // M-3：`MakeGhost` 不销毁对象 ⇒ 实体仍在且 `ghost=true`，`actor_id` 保留。
+        assert!(
+            world.entities.get(hero).is_some_and(|e| e.ghost),
+            "soft_close ⇒ 实体保留且 ghost=true（oracle MakeGhost）"
+        );
+        assert_eq!(
+            world.session("hero").unwrap().actor_id,
+            Some(hero),
+            "A2：stage=Left 与 actor_id=Some 并存"
+        );
 
         // ② 再进世界后 wParam=0 ⇒ 不置 emergency（旧的 emergency 需先清）。
         let hero2 = world

@@ -490,8 +490,24 @@ impl World {
         let Some(sess) = self.sessions.get(chr_name) else {
             return Err(SessionError::NoSession);
         };
+        // **A2 不变量（卡 `openmir2-makeghost-lifecycle-m3`）**：`stage=Left` 与 `actor_id=Some`
+        // **并存是合法的**——`soft_close` 按 oracle `MakeGhost`（`BaseObject.Base.cs:484-495`）
+        // 保留实体与 `actor_id`，只置 `ghost=true` 并摘格；`stage` 只表示「这个会话还接不接收/
+        // 产不产生帧」，`actor_id` 只表示「世界里的实体还在不在」。
+        // ⇒ `disconnect` 在 Left 上仍是**移除门**（oracle `WorldServer.cs:707-716` 的
+        // `PlayObjectList.Remove` + `CloseUser`）：摘掉遗留 ghost 实体并清 `actor_id`。
+        // 重复 `soft_close` 仍报 `NotInWorld`（帧面已在第一次发过，不得重发）。
         if sess.stage != WorldStage::InWorld {
-            return Err(SessionError::NotInWorld);
+            if soft {
+                return Err(SessionError::NotInWorld);
+            }
+            let Some(actor_id) = sess.actor_id else {
+                return Err(SessionError::NotInWorld);
+            };
+            self.entities.remove(actor_id);
+            let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+            sess.actor_id = None;
+            return Ok(());
         }
         let actor_id = sess.actor_id.ok_or(SessionError::NotInWorld)?;
         let map_id = sess.map_id;
@@ -535,12 +551,31 @@ impl World {
             }
         }
         self.remove_from_map(actor_id, map_id);
-        self.entities.remove(actor_id);
-        let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
-        sess.actor_id = None;
-        sess.stage = WorldStage::Left;
         if soft {
+            // oracle `MakeGhost`（`BaseObject.Base.cs:484-495`）：`Ghost = true; GhostTick = now;
+            // DisappearA()` —— **不销毁对象**（它仍留在 `PlayObjectList`，由 `WorldServer.cs:707-716`
+            // 的移除门收走）。本仓对应：实体留在 `entities` 里且 `ghost=true`，`actor_id` 保留；
+            // 移除由 `disconnect`（上面的 Left 分支）承担。
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.ghost = true;
+                // `DeleteFromMap`（`Envirnoment.cs:660-661`）把 `AddToMaped` 置 false；
+                // 视野列表整体失效（ghost 不再 `SearchViewRange`）。
+                e.add_to_mapped = false;
+                e.visible_actors.clear();
+                e.is_visible_active = false;
+            }
+            let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+            sess.stage = WorldStage::Left;
             sess.soft_close_count += 1;
+            // **A2（显式断言）**：`stage=Left` 与 `actor_id=Some` 并存，且实体仍在世界表里。
+            debug_assert_eq!(sess.stage, WorldStage::Left);
+            debug_assert_eq!(sess.actor_id, Some(actor_id));
+            debug_assert!(self.entities.get(actor_id).is_some_and(|e| e.ghost));
+        } else {
+            self.entities.remove(actor_id);
+            let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+            sess.actor_id = None;
+            sess.stage = WorldStage::Left;
         }
         Ok(())
     }

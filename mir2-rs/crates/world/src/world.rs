@@ -9414,17 +9414,29 @@ mod tests {
         assert_eq!(w.entities.get(first).unwrap().map_id, 1);
         assert!(w.entities.get(first).unwrap().visible_actors.is_empty());
 
-        // 小退：离开世界但会话保留（可再进）
+        // 小退（卡 `openmir2-makeghost-lifecycle-m3` A1）：oracle `MakeGhost` **不销毁对象**
+        // ⇒ 实体与 `actor_id` 保留、`ghost=true`、已摘格；`stage=Left` 与 `actor_id=Some` 并存合法（A2）。
         w.soft_close("hero").unwrap();
-        assert!(w.entities.get(first).is_none());
+        {
+            let e = w.entities.get(first).expect("soft_close 之后实体必须仍在");
+            assert!(e.ghost, "MakeGhost ⇒ Ghost=true");
+            assert!(!e.add_to_mapped, "DeleteFromMap ⇒ AddToMaped=false");
+            assert!(e.visible_actors.is_empty(), "视野列表整体失效");
+        }
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(first));
         assert_eq!(w.session("hero").unwrap().soft_close_count, 1);
-        assert_eq!(w.map(1).cell(7, 9).count(), 0);
+        assert_eq!(w.map(1).cell(7, 9).count(), 0, "必须已摘格");
 
-        // 再进：新的 actor_id（C# 侧重新建 PlayObject）
+        // `disconnect` 是移除门（oracle `WorldServer.cs:707-716`）：Left 上仍能把 ghost 收走。
+        w.disconnect("hero").unwrap();
+        assert!(w.entities.get(first).is_none(), "移除门必须摘掉 ghost 实体");
+        assert_eq!(w.session("hero").unwrap().actor_id, None);
+
+        // 再进：会话仍在 Left，可重进（C# 侧重新建 PlayObject）
         let mut e2 = Entity::new(0, "hero", 7, 9);
         e2.race = ACTOR_RACE_PLAY;
         let second = w.enter_map("hero", e2, 1).unwrap();
-        assert_ne!(first, second, "小退再进必须得到新的 ActorId");
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(second));
         assert_eq!(w.map(1).cell(7, 9).count(), 1);
     }
 
