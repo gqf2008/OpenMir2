@@ -185,16 +185,20 @@ def validate_tokens_table(tokens):
             raise UsageError(
                 '断言表 %r 缺 absent（禁用词，如 未合/尚未合）——必须显式登记，'
                 '不得因缺省而漏（fail-closed）' % name)
-        # 卡 openmir2-blocked-token-rot A3：确实要保留**历史表项**时必须显式 legacy + 理由。
+        # 卡 openmir2-blocked-token-rot A3 + review F1：确实要保留**历史表项**时，必须
+        # 显式 legacy + **可核的 legacy_source**（commit / 仓库内路径 / inbox 卡 id 三者任一）。
+        # `legacy_why` 只是人读备注、**不再**充当豁免依据（review F1：一个字符就能关掉判据）。
         legacy = entry.get('legacy')
         if legacy is not None:
             if not isinstance(legacy, bool):
                 raise UsageError('断言表 %r.legacy 必须是布尔' % name)
             if legacy:
-                why = entry.get('legacy_why')
-                if not isinstance(why, str) or not why.strip():
-                    raise UsageError('断言表 %r 标了 legacy 却缺 legacy_why（历史表项也要可追溯）'
-                                     % name)
+                src = entry.get('legacy_source')
+                if not isinstance(src, str) or not src.strip():
+                    raise UsageError(
+                        '断言表 %r 标了 legacy 却缺 legacy_source（可核引用：commit oid / '
+                        '仓库内路径 / refs/collab/inbox 卡 id）——legacy_why 只是备注，不是依据'
+                        % name)
 
 
 
@@ -338,7 +342,78 @@ def _check_structured_reason(value, where, repo, ledger, commit_check, landed_ch
     return und + e_und, vio + e_vio
 
 
-def check_token_rot(tokens, scenes_dir):
+_OID_RE = re.compile(r'^[0-9a-f]{7,40}$')
+
+
+def inbox_card_ids(repo, git_run=None):
+    """读 `refs/collab/inbox/**` 全部条目的 `id` 字段（离线可核，不用 walgit 服务）。"""
+    run = git_run or (lambda a: subprocess.run(['git'] + a, cwd=repo, capture_output=True,
+                                               text=True, encoding='utf-8', errors='replace'))
+    r = run(['for-each-ref', '--format=%(objectname)', 'refs/collab/inbox'])
+    if r.returncode != 0:
+        raise UsageError('读不到 refs/collab/inbox（git rc=%d）：%s'
+                         % (r.returncode, (r.stderr or '').strip()[:200]))
+    oids = (r.stdout or '').split()
+    if not oids:
+        return set()
+    p = subprocess.run(['git', 'cat-file', '--batch'], cwd=repo,
+                       input=('\n'.join(oids) + '\n').encode(), capture_output=True)
+    data = p.stdout or b''
+    pos, ids = 0, set()
+    while pos < len(data):
+        nl = data.find(b'\n', pos)
+        if nl < 0:
+            break
+        header = data[pos:nl].decode('utf-8', 'replace').split()
+        pos = nl + 1
+        if len(header) < 3:
+            break
+        size = int(header[2])
+        body = data[pos:pos + size]
+        pos += size + 1
+        try:
+            d = json.loads(body.decode('utf-8'))
+        except Exception:
+            continue
+        if isinstance(d, dict) and isinstance(d.get('id'), str) and d['id']:
+            ids.add(d['id'])
+    return ids
+
+
+def resolve_legacy_source(src, repo=None, git_run=None, card_ids=None):
+    """把 `legacy_source` 解析成可核引用。返回 (kind, detail) 或 (None, 原因)。
+
+    三种可核形态（卡 openmir2-blocked-token-rot review F1）：
+      ① git 对象：`git cat-file -e <src>^{commit}` rc=0；
+      ② 仓库内存在的路径（文档锚亦可）；
+      ③ `refs/collab/inbox/**` 里存在的卡 id（离线读 refs，不依赖 walgit 服务）。
+    解析不到 ⇒ 调用方按 **rc=2 判不了**（不是 rc=1：这是「豁免依据核不了」，不是证据被证伪）。
+    """
+    if not isinstance(src, str) or not src.strip():
+        return None, 'legacy_source 为空'
+    src = src.strip()
+    if _OID_RE.match(src):
+        run = git_run or (lambda a: subprocess.run(['git'] + a, cwd=repo, capture_output=True,
+                                                   text=True, encoding='utf-8',
+                                                   errors='replace'))
+        r = run(['cat-file', '-e', src + '^{commit}'])
+        if r.returncode == 0:
+            return 'commit', src
+    if repo:
+        candidate = os.path.join(repo, src)
+        if os.path.exists(candidate):
+            return 'path', candidate
+        try:
+            ids = inbox_card_ids(repo, git_run=git_run) if card_ids is None else card_ids
+        except UsageError:
+            ids = set()
+        if src in ids:
+            return 'card', src
+    return None, ('legacy_source 解析不到（既不是存在的 commit、也不是仓库内路径 / inbox 卡 id）：'
+                  '%r' % src[:80])
+
+
+def check_token_rot(tokens, scenes_dir, repo=None, git_run=None, card_ids=None):
     """A1（卡 openmir2-blocked-token-rot）：表项必须仍对应**真实存在且仍 blocked** 的场景。
 
     `check()` 管的是「两来源一致 + token 在两侧文案里」；它管不到**表项本身是否还成立**——
@@ -346,11 +421,13 @@ def check_token_rot(tokens, scenes_dir):
     一个已经不 blocked 的场景。这里补这一面：返回 (problems, legacy_names)。
 
     * 对应不上 ⇒ problems（调用方按 rc=1 处理，fail-closed，**不许**降级成警告）；
-    * 确实要保留历史表项 ⇒ 表项必须显式 `legacy: true` + `legacy_why`（validate_tokens_table 校验），
-      此时不红、名字进 legacy_names 供上层打印。
+    * 确实要保留历史表项 ⇒ 表项必须显式 `legacy: true` + **可核的 `legacy_source`**
+      （commit / 仓库内路径 / inbox 卡 id；`validate_tokens_table` 校验非空，本函数核验可解析），
+      此时不红、名字进 legacy_names；依据**核不了** ⇒ 进 undecidable（rc=2 判不了）。
+      `legacy_why` 只是人读备注——**不是**豁免依据（review F1：一个字符就能关掉判据）。
     """
     scenes = scene_docs(scenes_dir)
-    problems, legacy_names = [], []
+    problems, legacy_names, undecidable = [], [], []
     for name, entry in tokens.items():
         rel = os.path.join(scenes_dir, name + '.json')
         legacy = bool(entry.get('legacy'))
@@ -362,11 +439,17 @@ def check_token_rot(tokens, scenes_dir):
         if reason is None:
             continue
         if legacy:
-            legacy_names.append(name)
+            kind, detail = resolve_legacy_source(entry.get('legacy_source'), repo,
+                                                 git_run=git_run, card_ids=card_ids)
+            if kind is None:
+                # 豁免依据核不了 ⇒ 判不了（rc=2），**不是**证伪
+                undecidable.append('%s：legacy 豁免依据核不了：%s' % (name, detail))
+            else:
+                legacy_names.append('%s(%s)' % (name, kind))
             continue
         problems.append('%s：BLOCKED_TOKENS %s ⇒ 表项腐烂（删表项，或恢复场景；'
-                        '确实要留历史就加 legacy: true + legacy_why）' % (name, reason))
-    return problems, legacy_names
+                        '确实要留历史就加 legacy: true + legacy_source（可核引用））' % (name, reason))
+    return problems, legacy_names, undecidable
 
 
 def parse_list_output(path):
@@ -877,11 +960,12 @@ def selftest():
         if not (os.path.isfile(os.path.join(rot_scenes, 'rot_a.json'))
                 and os.path.isfile(os.path.join(rot_scenes, 'rot_b.json'))):
             raise FixtureInconsistent('rot 夹具场景文件没写出来')
-        rp_ok, rl_ok = check_token_rot(rot_tokens, rot_scenes)
+        rp_ok, rl_ok, ru_ok = check_token_rot(rot_tokens, rot_scenes, repo=rot_root)
+        chk(ru_ok == [], '牙rot-③b 无 legacy 表项 ⇒ undecidable 为空（防恒 NEED）')
         chk(rp_ok == [] and rl_ok == [], '牙rot-③ 表项与场景都对得上 ⇒ 绿（防恒红）')
         tok_ghost = dict(rot_tokens)
         tok_ghost['rot_ghost'] = {'source': 'rot §2', 'absent': ('未合',), 'tokens': (RTOK,)}
-        rp1, _rl1 = check_token_rot(tok_ghost, rot_scenes)
+        rp1, _rl1, _ru1 = check_token_rot(tok_ghost, rot_scenes, repo=rot_root)
         chk(any('rot_ghost' in x and '场景不存在' in x for x in rp1),
             '牙rot-① 表项指向不存在的场景 ⇒ 红并点名（rot_ghost）')
         unblocked_dir = os.path.join(rot_root, 'unblocked')
@@ -889,15 +973,49 @@ def selftest():
         for nm in ('rot_a', 'rot_b'):
             with open(os.path.join(unblocked_dir, nm + '.json'), 'w', encoding='utf-8') as fh:
                 json.dump(_rot_doc(nm, nm != 'rot_b'), fh, ensure_ascii=False)
-        rp2, _rl2 = check_token_rot(rot_tokens, unblocked_dir)
+        rp2, _rl2, _ru2 = check_token_rot(rot_tokens, unblocked_dir, repo=rot_root)
         chk(any('rot_b' in x and '不在 blocked' in x for x in rp2),
             '牙rot-② 场景解封但表项还在 ⇒ 红并点名（rot_b）')
         tok_legacy = dict(rot_tokens)
         tok_legacy['rot_legacy'] = {'source': 'rot §3', 'absent': ('未合',), 'tokens': (RTOK,),
-                                    'legacy': True, 'legacy_why': '历史表项，场景已归档'}
-        rp3, rl3 = check_token_rot(tok_legacy, rot_scenes)
-        chk(rp3 == [] and rl3 == ['rot_legacy'],
-            '牙rot-legacy 显式 legacy + 理由 ⇒ 不红、进 legacy_names')
+                                    'legacy': True, 'legacy_source': 'scenarios/rot_a.json',
+                                    'legacy_why': '历史表项，场景已归档'}
+        rp3, rl3, ru3 = check_token_rot(tok_legacy, rot_scenes, repo=rot_root)
+        chk(rp3 == [] and ru3 == [] and rl3 == ['rot_legacy(path)'],
+            '牙rot-legacy legacy + **可核路径** ⇒ 不红、进 legacy_names（%r）' % (rl3,))
+
+        # F2（review d52cb390）：validator 的 legacy 规则要有**直调断言**（端到端绿不等于牙）。
+        for label, entry_bad, must in (
+                ('legacy 非布尔', {'source': 's', 'absent': ('未合',), 'tokens': ('T',), 'legacy': 'yes'}, 'legacy 必须是布尔'),
+                ('legacy 缺 legacy_source', {'source': 's', 'absent': ('未合',), 'tokens': ('T',), 'legacy': True}, 'legacy_source'),
+                ('legacy_source 空串', {'source': 's', 'absent': ('未合',), 'tokens': ('T',), 'legacy': True, 'legacy_source': '   '}, 'legacy_source'),
+        ):
+            try:
+                validate_tokens_table({'rot_x': entry_bad})
+                got_f2 = 'no-raise'
+            except UsageError as ex:
+                got_f2 = 'ok' if must in str(ex) else 'wrong:%s' % str(ex)[:60]
+            chk(got_f2 == 'ok', '牙F2 %s ⇒ UsageError 且点名（%r）' % (label, got_f2))
+
+        # F1（review d52cb390）：`legacy` 不是万能挡箭牌——依据必须可核，核不了 ⇒ rc=2/undecidable。
+        def _rot_legacy(src, **kw):
+            tk = dict(rot_tokens)
+            tk['rot_legacy'] = {'source': 'rot §3', 'absent': ('未合',), 'tokens': (RTOK,),
+                                'legacy': True, 'legacy_source': src}
+            return check_token_rot(tk, rot_scenes, repo=rot_root, **kw)
+
+        _rp, _rl, _ru = _rot_legacy('f' * 40, git_run=lambda a: type('R', (), {'returncode': 1, 'stdout': '', 'stderr': ''})())
+        chk(any('rot_legacy' in x and '豁免依据核不了' in x for x in _ru),
+            '牙F1a legacy_source 指向不存在的 oid ⇒ undecidable（rc=2 判不了）')
+        _rp, _rl, _ru = _rot_legacy('no/such/file.md')
+        chk(any('rot_legacy' in x and '豁免依据核不了' in x for x in _ru),
+            '牙F1b legacy_source 指向不存在的路径 ⇒ undecidable')
+        _rp, _rl, _ru = _rot_legacy('rot-card-fixture', card_ids={'rot-card-fixture'})
+        chk(_ru == [] and _rl == ['rot_legacy(card)'],
+            '牙F1c legacy_source 命中 inbox 卡 id（注入）⇒ 绿、进 legacy_names（%r）' % (_rl,))
+        _rp, _rl, _ru = _rot_legacy('f' * 40, git_run=lambda a: type('R', (), {'returncode': 0, 'stdout': '', 'stderr': ''})())
+        chk(_ru == [] and _rl == ['rot_legacy(commit)'],
+            '牙F1d legacy_source 指向存在的 commit（注入 git rc=0）⇒ 绿（%r）' % (_rl,))
         # 接线牙：main() 必须真的调用 check_token_rot（把 check 打桩成空 ⇒ 仍因表项腐烂 rc=1）
         _orig_check_rot = globals()['check']
         globals()['check'] = lambda *a, **k: ([], [], {
@@ -936,8 +1054,10 @@ def main(argv=None):
         problems, undecidable, info = check(args.run3, args.scenarios_dir, args.list_output)
         # A1（卡 openmir2-blocked-token-rot）：表项反向校验——只在这里接（fixture 用的 check()
         # 保持原语义，让既有 40+ 颗牙不被新面误伤；本函数的牙直接单测它自己）。
-        rot_problems, legacy_tokens = check_token_rot(BLOCKED_TOKENS, args.scenarios_dir)
+        rot_problems, legacy_tokens, rot_und = check_token_rot(
+            BLOCKED_TOKENS, args.scenarios_dir, repo=REPO_ROOT)
         problems = list(problems) + rot_problems
+        undecidable = list(undecidable) + rot_und
     except UsageError as ex:
         print('blocked_sources_check: %s' % ex, file=sys.stderr)
         return 2
