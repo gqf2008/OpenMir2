@@ -4812,6 +4812,67 @@ fn handle_query_val_cmd(
     true
 }
 
+/// `CM_MERCHANTDLGSELECT(1011)` 的**派发去向**（卡 `openmir2-merchant-dlgselect-type1`）。
+///
+/// oracle `ClientMerchantDlgSelect`（`PlayObject.Operate.cs:114-128`，`nParam1` = NPC ActorId）第一句是
+/// `FindMerchant(nParam1) ?? FindNpc(nParam1)`，而 `FindMerchant` = `ActorMgr.Get<IMerchant>`
+/// （`ActorManager.cs:58-61`）是 **`(T)actor` 硬转**。⇒ 三种结果、两种帧面：
+///
+/// * [`mir2_world::npc::MerchantLookup::NotMerchant`]（`Npcs.txt` **type=1 `GuildOfficial`**、怪物、玩家…）
+///   ⇒ **抛 `InvalidCastException`**，被 `PlayObject.Run` 的 catch 吞（`PlayObject.Message.cs:392-400`；
+///   `Ident != 0` ⇒ 不 `MakeGhost`）⇒ **零帧**，且 `?? FindNpc` 第二臂永不执行 ⇒ **不进任何脚本**；
+/// * [`mir2_world::npc::MerchantLookup::Absent`] ⇒ 两个查找都 `null` ⇒ 静默零帧（C3）；
+/// * [`mir2_world::npc::MerchantLookup::Merchant`] ⇒ 正常按**实际类**虚调用 `UserSelect`：
+///   `Npcs.txt` type 0/2 与 `MerChant` 商人走 `handle_shop_cmd` 的固定 NPC / 商店臂。
+///
+/// **注意（本卡结论）**：`merchant_lookup` 对 `npc_type=1` 返回 `NotMerchant` ⇒
+/// [`DlgSelectRoute::GuildOfficial`] 在当前实体模型下**构造上不可达**（同一实体不会既有
+/// `merchant` 态又是 `npc_type=1`）。保留该分支是为了与 oracle 的类枚举对齐、并标明
+/// `guild_official::handle_select` 已无生产入口（whitelist T-140 已按此重登记为死代码）。
+///
+/// 本函数是**纯函数**（判据 A2③ 的牙直接钉它）：`Absent` 与 `NotMerchant` **不许并成同一臂**——
+/// 帧面都是零帧，但路径不同（null vs 抛异常），合并后这个区别就再也测不出来了。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DlgSelectRoute {
+    /// 非 `IMerchant`：oracle 在 `FindMerchant` 的硬转处抛 ⇒ 零帧
+    NotMerchant,
+    /// id 不在世界：`FindMerchant`/`FindNpc` 都 null ⇒ 零帧
+    Absent,
+    /// `Npcs.txt` type=1 `GuildOfficial` ⇒ `guild_official::handle_select`
+    GuildOfficial,
+    /// 其余 `IMerchant`（`MerChant` 商人、`Npcs.txt` type 0/2）⇒ `handle_shop_cmd`
+    Shop,
+}
+
+fn merchant_dlgselect_route(
+    lookup: mir2_world::npc::MerchantLookup,
+    npc_type: Option<i32>,
+) -> DlgSelectRoute {
+    match lookup {
+        mir2_world::npc::MerchantLookup::NotMerchant => DlgSelectRoute::NotMerchant,
+        mir2_world::npc::MerchantLookup::Absent => DlgSelectRoute::Absent,
+        mir2_world::npc::MerchantLookup::Merchant => {
+            if npc_type == Some(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL) {
+                DlgSelectRoute::GuildOfficial
+            } else {
+                DlgSelectRoute::Shop
+            }
+        }
+    }
+}
+
+/// `sim_loop` 的 1011 派发**决定**：只有 `CM_MERCHANTDLGSELECT` 才做分类，其余命令一律 `Shop`
+/// （= 保持既有派发不变）。单独成函数是为了让「派发决定」可离线钉（`sim_loop` 需要 tokio 事件循环
+/// + DB wiring，无法在单测里跑；帧面由卡面 A4 的真机项覆盖）。
+fn dlgselect_route_for(ident: u16, entity: Option<&mir2_world::Entity>) -> DlgSelectRoute {
+    if ident != game_svr::shop::CM_MERCHANTDLGSELECT {
+        return DlgSelectRoute::Shop;
+    }
+    let lookup = mir2_world::npc::merchant_lookup(entity);
+    let npc_type = entity.and_then(|e| e.npc.as_ref()).map(|st| st.npc_type);
+    merchant_dlgselect_route(lookup, npc_type)
+}
+
 /// 固定 NPC（`Envir/Npcs.txt`）进入脚本虚调用（`Click` / `UserSelect`）的**类型门**。
 ///
 /// `LocalDB.LoadNpcs` 的 `switch`（`LocalDB.cs:688-698`）：`0` ⇒ `Merchant`、`1` ⇒
@@ -22415,17 +22476,11 @@ fn sim_loop(
                     // type 0（Merchant）的脚本半走 `handle_shop_cmd` 的固定 NPC 臂（T-137）；
                     // type 2（CastleOfficial）的 `Click`/`UserSelect` 门未移植（T-40/T-140），
                     // 由两条臂的 `fixed_npc_script_allowed` 类型门拦下 ⇒ 零帧零副作用。
-                    let fixed_npc_type = if cmd.ident == game_svr::shop::CM_MERCHANTDLGSELECT {
-                        world
-                            .entities
-                            .get(cmd.recog)
-                            .and_then(|e| e.npc.as_ref())
-                            .map(|st| st.npc_type)
-                    } else {
-                        None
-                    };
-                    let fixed_npc_dialog =
-                        fixed_npc_type == Some(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL);
+                    // **卡 `openmir2-merchant-dlgselect-type1`**：按 `merchant_lookup`（与点击路径同一
+                    // 分类点）算出去向；`NotMerchant`/`Absent` 两臂**都零帧但路径不同**，不许合并。
+                    let select_route =
+                        dlgselect_route_for(cmd.ident, world.entities.get(cmd.recog));
+                    let fixed_npc_dialog = select_route == DlgSelectRoute::GuildOfficial;
                     // `CM_SAY`：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话（`@` 仍不接）。
                     if cmd.ident == chat::CM_SAY {
                         let host = ChatHost {
@@ -22835,6 +22890,22 @@ fn sim_loop(
                             &mut fixed_script,
                         );
                         world.rng = script_rng;
+                    } else if select_route == DlgSelectRoute::NotMerchant {
+                        // oracle `(IMerchant)actor` 硬转抛 ⇒ `PlayObject.Run` 吞掉 ⇒ 零帧、不进脚本。
+                        glog!(
+                            "DBG",
+                            "CM_MERCHANTDLGSELECT：({}) 不是 IMerchant ⇒ oracle 的 (IMerchant)actor 硬转抛 InvalidCastException、被 PlayObject.Run 吞掉 ⇒ 零帧 ChrName={}",
+                            cmd.recog,
+                            chr_name
+                        );
+                    } else if select_route == DlgSelectRoute::Absent {
+                        // id 不在世界 ⇒ `FindMerchant`/`FindNpc` 都 null ⇒ 静默零帧（C3）。
+                        glog!(
+                            "DBG",
+                            "CM_MERCHANTDLGSELECT：({}) 不在世界 ⇒ FindMerchant/FindNpc 都 null ⇒ 零帧 ChrName={}",
+                            cmd.recog,
+                            chr_name
+                        );
                     } else if matches!(
                         cmd.ident,
                         game_svr::shop::CM_MERCHANTDLGSELECT
@@ -71275,6 +71346,139 @@ GMEXECUTE 禁言 self 20
         assert!(
             back_says.iter().any(|s| s.contains("老人：你需要什么")),
             "`@back` 必须 GotoLable(ScriptGoBackLable=@main) 并产说词：{back_says:?}"
+        );
+    }
+
+    /// **A2①（卡 `openmir2-merchant-dlgselect-type1`）**：type=1（`GuildOfficial`）目标的
+    /// `CM_MERCHANTDLGSELECT` ⇒ 路由 `NotMerchant`（oracle 在 `FindMerchant` 的 `(IMerchant)actor`
+    /// 硬转处抛 `InvalidCastException` ⇒ 零帧、不进任何脚本）。
+    ///
+    /// 红检 M-①：把 `merchant_dlgselect_route` 的 `NotMerchant` 臂改成 `Shop`（= 修复前行为）⇒ 本用例红。
+    #[test]
+    fn merchant_dlgselect_type1_target_routes_zero_frame() {
+        let rig = T137Rig::new();
+        let king_id = rig.king_id;
+        assert_eq!(
+            dlgselect_route_for(
+                game_svr::shop::CM_MERCHANTDLGSELECT,
+                rig.world.entities.get(king_id)
+            ),
+            DlgSelectRoute::NotMerchant,
+            "Npcs.txt type=1（GuildOfficial）只实现 INormNpc ⇒ oracle (IMerchant)actor 抛 ⇒ 零帧"
+        );
+        // 文档牙：`GuildOfficial` 分支本身**构造上不可达**（`merchant_lookup` 对 npc_type=1 返回
+        // `NotMerchant`）——这里钉住它的映射仍在，防止有人误以为「type=1 还会进 handle_select」。
+        assert_eq!(
+            merchant_dlgselect_route(
+                mir2_world::npc::MerchantLookup::Merchant,
+                Some(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL)
+            ),
+            DlgSelectRoute::GuildOfficial,
+            "分支保留（对齐 oracle 类枚举 + 标明 T-140 死代码），但实体模型下不可达"
+        );
+    }
+
+    /// **A2②**：type=0 真商人同路径 ⇒ 仍 `Shop`（走 `handle_shop_cmd`，出 643/脚本帧——行为面由
+    /// `t137_fixed_merchant_select_runs_npc_def_script_and_back` 覆盖）；非 1011 命令一律 `Shop`。
+    /// 专盯「别把正常路径一起封死」这条过度修正。
+    ///
+    /// 红检 M-②：把 `merchant_dlgselect_route` 的 `Merchant` 非 GuildOfficial 分支改成 `NotMerchant` ⇒ 本用例红。
+    #[test]
+    fn merchant_dlgselect_type0_merchant_stays_shop() {
+        let rig = T137Rig::new();
+        let elder_id = rig.elder_id;
+        assert_eq!(
+            dlgselect_route_for(
+                game_svr::shop::CM_MERCHANTDLGSELECT,
+                rig.world.entities.get(elder_id)
+            ),
+            DlgSelectRoute::Shop,
+            "type=0 是 IMerchant ⇒ 仍走 handle_shop_cmd"
+        );
+        assert_eq!(
+            dlgselect_route_for(chat::CM_SAY, rig.world.entities.get(elder_id)),
+            DlgSelectRoute::Shop,
+            "非 CM_MERCHANTDLGSELECT 的命令不参与本分类"
+        );
+    }
+
+    /// **A2③**：`Absent`（id 不在世界 ⇒ 两个查找都 null）与 `NotMerchant`（存在但非 `IMerchant` ⇒ 抛）
+    /// 必须是**两个不同的 route**——帧面都零帧，合并后就再也测不出区别。
+    ///
+    /// 红检 M-③：把 `Absent` 并进 `NotMerchant` ⇒ 本用例红。
+    #[test]
+    fn merchant_dlgselect_absent_differs_from_not_merchant() {
+        let rig = T137Rig::new();
+        let king_id = rig.king_id;
+        let absent = dlgselect_route_for(game_svr::shop::CM_MERCHANTDLGSELECT, None);
+        let not_merchant = dlgselect_route_for(
+            game_svr::shop::CM_MERCHANTDLGSELECT,
+            rig.world.entities.get(king_id),
+        );
+        assert_eq!(absent, DlgSelectRoute::Absent, "id 不存在 ⇒ C3");
+        // ③ **只钉「两支不混」**，不重复钉 type=1 的绝对值（那是 ① 的判据）——否则 ① 的变异
+        // 会连带打红本条，三颗牙就不再独立（实测过：M-① 曾同时红 ① 与 ③）。
+        assert_ne!(
+            absent, not_merchant,
+            "C3（两个查找都 null）与 X（硬转抛）必须可区分，不许并臂"
+        );
+    }
+
+    /// **接线牙（构造级）**：`sim_loop` 必须真的用 `dlgselect_route_for` 的结论，并把
+    /// `NotMerchant` / `Absent` 写成**两条独立**的零帧臂（不许合并成 `!= Shop` 一条），且都在
+    /// 商店匹配臂之前。`sim_loop` 需要 tokio 事件循环 + DB wiring，单测跑不起来 ⇒ 这一层用
+    /// `include_str!` 源码锚（口径同 `drain_deal_tick_production_call_is_wired_in_sim_loop`；
+    /// **非行为覆盖**，帧面由卡面 A4 的真机项承担）。
+    ///
+    /// 红检：删掉 `NotMerchant` 臂（或把两支并成一条「不等于 Shop」的合并臂）⇒ 本用例红。
+    /// **自指坑**：本文件被 `include_str!` 收进 `src`，所以判据里的 needle 一律用拼接构造，
+    /// 注释/断言里也不许原样出现那个 needle（否则命中自己 ⇒ 假红，第一版就踩过）。
+    #[test]
+    fn dlgselect_zero_frame_arms_are_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let find_once = |needle: &str| -> usize {
+            let hits: Vec<usize> = lines
+                .iter()
+                .enumerate()
+                .filter(|(_, l)| l.trim() == needle)
+                .map(|(i, _)| i)
+                .collect();
+            assert_eq!(hits.len(), 1, "必须恰有一处 `{}`，实际 {hits:?}", needle);
+            hits[0]
+        };
+        let route_call = find_once("let select_route =");
+        assert!(
+            lines[route_call + 1]
+                .trim()
+                .starts_with("dlgselect_route_for(cmd.ident, world.entities.get(cmd.recog));"),
+            "派发决定必须来自 `dlgselect_route_for(...)`：{:?}",
+            lines[route_call + 1]
+        );
+        let fixed_npc =
+            find_once("let fixed_npc_dialog = select_route == DlgSelectRoute::GuildOfficial;");
+        let not_merchant = find_once("} else if select_route == DlgSelectRoute::NotMerchant {");
+        let absent = find_once("} else if select_route == DlgSelectRoute::Absent {");
+        assert!(
+            route_call < fixed_npc && fixed_npc < not_merchant && not_merchant < absent,
+            "顺序：决定({route_call}) → fixed_npc_dialog({fixed_npc}) → NotMerchant({not_merchant}) → Absent({absent})"
+        );
+        // 两支必须**分开**：出现过合并写法就成了「分类不混」的反例。
+        // 注意：本用例自身也被 `include_str!` 收进 `src`，所以 needle 用拼接构造，
+        // 否则断言会命中自己的字面量（自指假红）。
+        let merged_needle = format!("select_route {} DlgSelectRoute::Shop", "!=");
+        assert!(
+            !src.contains(&merged_needle),
+            "NotMerchant 与 Absent 不许合并成一条 `!= Shop` 臂（A2③）"
+        );
+        // 零帧臂必须落在 sim_loop 体内。
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        assert!(
+            not_merchant > sim_loop && absent > sim_loop,
+            "两条零帧臂必须在 `fn sim_loop(` 之后"
         );
     }
 
