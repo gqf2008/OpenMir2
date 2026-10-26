@@ -20,8 +20,10 @@
 **收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
 ——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
 「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
-当前 48 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
-部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
+门内条数 = `REGISTRY` 的长度（**不在这里写死**；`--inventory` 会打印实时条数与出域理由）。
+出域项逐条列在 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物 / 部署配置 / 无独立入口的模块）。
+新增工具按 `REGISTRY` 同一格式登记即可；**非 Python 的自测**（如 `-Selftest` 的 .ps1）同样登记，
+由 `build_cmd()` 按扩展名拼出 PowerShell 命令行。
 
 用法：
   python -I -B tools/hygiene/tool_selftest_gate.py [--repo .] [--only a,b]
@@ -33,6 +35,7 @@
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -87,6 +90,15 @@ REGISTRY = [
     ("load_report", ["tools/botload/load_report.py", "selftest"], False),
     ("prepare_safe_login", ["tools/loginfixture/prepare_safe_login.py", "--selftest"], False),
     ("preflight_private_stack", ["tools/window/preflight_private_stack.py", "--selftest"], False),
+    # 卡 openmir2-docs-gate-rc-semantics（Leader 2026-10-27 批准扩写集）：窗口期两个 PowerShell
+    # 自测此前**不在任何门禁里**。二者都离线、确定性、自带 `-Selftest`（stop-mysql 用注入 hook +
+    # 临时 mysqladmin.cmd；invoke-bounded 用临时子进程），且实测**不触碰真实 mysqld**（跑完 pid/StartTime 不变）。
+    ("stop_mysql_graceful", ["tools/window/stop-mysql-graceful.ps1", "-Selftest"], False),
+    # C7（reviewer-21）：`tools/client/mir_flow.selftest.ps1` 有 **153 条断言**却既不在 REGISTRY
+    # 也不在 OUT_OF_SCOPE —— 此前只被手工跑过（Leader 2026-10-27 合并树上手工 `SELFTEST_PASS=153`）。
+    # 依赖 C3：无 PowerShell 的机器会落 NEED（rc=3）而不是把门崩成红。
+    ("mir_flow_selftest", ["tools/client/mir_flow.selftest.ps1"], False),
+    ("invoke_bounded", ["tools/window/invoke-bounded.ps1", "-Selftest"], False),
     ("selftest_mutations", ["tools/conformance/selftest_mutations.py", "--selfcheck"], False),
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
     # reviewer-21 实跑：`in_world_stability.py selftest` ⇒ rc=0、7/7（纯合成数据，0.1s）。
@@ -143,7 +155,18 @@ def discover():
                 continue
             if "--selftest" in text or "selftest" in text:
                 out.append(os.path.relpath(path, root).replace(os.sep, "/"))
+    # 非 `.py` 的入口（如 `-Selftest` 的 .ps1）**只收 REGISTRY 显式登记的**：
+    # `tools/**/*.ps1` 里有 20+ 个带 selftest 字样的部署/验收脚本，全局扫描会把它们
+    # 全变成「未分类」⇒ 判红。清点的语义是「谁在门内/谁被显式出域」，不是「目录爆破」。
+    for _n, argv, _slow in REGISTRY:
+        if argv and str(argv[0]).lower().endswith(".ps1"):
+            rel = str(argv[0]).replace(os.sep, "/")
+            if os.path.isfile(os.path.join(root, rel)) and rel not in out:
+                out.append(rel)
     return sorted(out)
+
+
+_ORIG_DISCOVER = discover
 
 
 #: 自测用「会挂住的项」：自己睡 600s，并起一个同样睡 600s 的**孙进程**（继承 stdout）。
@@ -218,8 +241,29 @@ def classify_rc(rc):
     return FAIL
 
 
+def build_cmd(argv):
+    """注册项 → 真正执行的命令行。
+
+    `.py` ⇒ `python -I -B <script> ...`；`.ps1` ⇒ `pwsh|powershell -NoProfile -ExecutionPolicy Bypass -File <script> ...`。
+    其它（`-c` 片段等自测夹具）一律按 Python 处理。非 `.py` 的入口只允许来自 REGISTRY（不扫目录）。
+    """
+    argv = [str(a) for a in argv]
+    if argv and argv[0].lower().endswith(".ps1"):
+        shell = shutil.which("pwsh") or shutil.which("powershell")
+        if not shell:
+            raise RuntimeError("找不到 PowerShell（pwsh/powershell 都不在 PATH）：%s" % argv[0])
+        return [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"] + argv
+    return [sys.executable, "-I", "-B"] + argv
+
+
 def run_one(repo, name, argv, timeout):
-    cmd = [sys.executable, "-I", "-B"] + list(argv)
+    try:
+        cmd = build_cmd(argv)
+    except RuntimeError as ex:
+        # C3（reviewer-21 7060d720）：拿不到 PowerShell 是**判不了**，不是「工具坏了」。
+        # 记 NEED（rc=2）而不是抛出去把整个门崩成 rc=1。
+        return {"name": name, "argv": [str(a) for a in argv], "rc": NEED_RC,
+                "elapsed_s": 0.0, "tail": "判不了：%s" % ex, "timed_out": False}
     t0 = time.time()
     kw = {"start_new_session": True} if os.name != "nt" else {}
     proc = subprocess.Popen(cmd, cwd=repo, stdin=subprocess.DEVNULL,
@@ -339,17 +383,27 @@ def inventory(repo):
         print("%-12s %s" % (r["status"].split(":")[0], r["tool"])
               + (("  （%s）" % r["status"].split(": ", 1)[1]) if ": " in r["status"] else ""))
     n_unclassified = sum(1 for r in rows if r["status"] == "UNCLASSIFIED")
+    n_in_gate = sum(1 for r in rows if r["status"] == "IN_GATE")
     print("清点：%d 个带 selftest 的工具；门禁内 %d；已分类出域 %d；未分类 %d"
-          % (len(rows), sum(1 for r in rows if r["status"] == "IN_GATE"),
+          % (len(rows), n_in_gate,
              sum(1 for r in rows if r["status"].startswith("OUT_OF_SCOPE")),
              n_unclassified))
     # M3（2026-10-25 裁定）：未分类 > 0 ⇒ rc≠0。清点是判据，不是打印。
-    return rows, (2 if n_unclassified else 0)
+    if n_unclassified:
+        return rows, 2
+    # discover() 与 REGISTRY 必须自洽：否则「门内 N」是假的（例如有人给 REGISTRY 加了非 .py
+    # 入口却没同步 discover()，门会在跑它、清点却看不见）。只在**真实** discover 下判——
+    # 自测会替换 discover 做合成清点（牙11/11b），那不是事实源。
+    if globals().get("discover") is _ORIG_DISCOVER and n_in_gate != len(REGISTRY):
+        print("INVENTORY_MISMATCH 门禁内 %d ≠ REGISTRY %d（discover() 与 REGISTRY 不自洽）"
+              % (n_in_gate, len(REGISTRY)))
+        return rows, 2
+    return rows, 0
 
 
 def selftest():
     global REGISTRY
-    ok = fail = 0
+    ok = fail = skip_n = 0
 
     def chk(cond, name):
         nonlocal ok, fail
@@ -359,6 +413,16 @@ def selftest():
         else:
             fail += 1
             print("FAIL " + name)
+
+    def skip(name):
+        """环境不具备 ⇒ SKIP（**不是** PASS，也**不是** FAIL）。
+
+        F1（review bdd1a28c）：C3 的判据是「**门仍能判**」而不是「门必须绿」——
+        没有 PowerShell 的机器上，`牙14 前置` 不该把门自测判红。
+        """
+        nonlocal skip_n
+        skip_n += 1
+        print("SKIP " + name)
 
     root = repo_root()
     names = [n for n, _a, _s in REGISTRY]
@@ -403,6 +467,94 @@ def selftest():
             r6b = main(["--repo", tmp, "--skip", "no-such-entry"])
         chk(r6 == 2, "TSG 牙6 未知条目 ⇒ rc=2（用法错）")
         chk(r6b == 2, "TSG 牙6b --skip 未知条目 ⇒ rc=2")
+
+        # ---- PowerShell 入口（卡 openmir2-docs-gate-rc-semantics 扩写集）----
+        have_ps = bool(shutil.which("pwsh") or shutil.which("powershell"))
+        if not have_ps:
+            skip("TSG 牙14a/14b/14c（本机无 PowerShell：跳过 PS 分发牙；"
+                 "C3 判据是「门仍能判」，不是「门必须绿」）")
+        if have_ps:
+            ok_ps = os.path.join(tmp, "ok.ps1")
+            need_ps = os.path.join(tmp, "need.ps1")
+            with open(ok_ps, "w", encoding="utf-8") as fh:
+                fh.write("Write-Output 'PS GREEN'\nexit 0\n")
+            with open(need_ps, "w", encoding="utf-8") as fh:
+                fh.write("Write-Output 'PS NEED 判不了'\nexit 2\n")
+            chk(build_cmd([ok_ps])[0].lower().endswith(("pwsh", "pwsh.exe", "powershell",
+                                                        "powershell.exe")),
+                "TSG 牙14a .ps1 ⇒ build_cmd 走 PowerShell（不是 python）")
+            r_ps_ok = run_one(tmp, "ps_ok", [ok_ps], 60)
+            chk(r_ps_ok["rc"] == 0 and classify_rc(r_ps_ok["rc"]) == PASS,
+                "TSG 牙14b 真跑临时 .ps1（exit 0）⇒ PASS（rc=0）")
+            r_ps_need = run_one(tmp, "ps_need", [need_ps], 60)
+            chk(r_ps_need["rc"] == 2 and classify_rc(r_ps_need["rc"]) == NEED,
+                "TSG 牙14c 真跑临时 .ps1（exit 2）⇒ NEED（判不了，不是红）")
+
+        # ---- C2/C3（reviewer-21 7060d720）：自洽判据与 PowerShell 缺失都必须有机器守 ----
+        # 注意：此刻 REGISTRY 还是牙3 的假表（[ok,bad]）——必须换成**真实**表再追加，
+        # 否则 discovered 里的真工具全变 UNCLASSIFIED，判据在 mismatch 之前就先 rc=2 了。
+        _real_reg_c2 = list(saved)
+        REGISTRY[:] = _real_reg_c2 + [("r21_fake", ["tools/__r21_missing__.py", "--selftest"], False)]
+        try:
+            _buf_c2 = io.StringIO()
+            with redirect_stdout(_buf_c2):
+                _rows_c2, rc_c2 = inventory(root)
+            out_c2 = _buf_c2.getvalue()
+        finally:
+            REGISTRY[:] = _real_reg_c2
+        chk(rc_c2 == 2 and "INVENTORY_MISMATCH" in out_c2,
+            "TSG 牙C2a REGISTRY 多一条但 discover 收不到 ⇒ --inventory rc=2 + INVENTORY_MISMATCH"
+            "（rc=%r，输出尾=%r）" % (rc_c2, out_c2.strip().splitlines()[-1:]))
+        # 反例：discover 被替换（合成清点）时**不**套这条判据——判据只在真实 discover 下生效
+        _orig_disc_c2 = globals()["discover"]
+        REGISTRY[:] = _real_reg_c2
+        globals()["discover"] = lambda: []
+        try:
+            _buf_c2b = io.StringIO()
+            with redirect_stdout(_buf_c2b):
+                _rows_c2b, rc_c2b = inventory(root)
+        finally:
+            globals()["discover"] = _orig_disc_c2
+        chk(rc_c2b == 0,
+            "TSG 牙C2b discover 被替换（合成清点）⇒ 不套自洽判据（rc=0，作用域牙）")
+        chk(any(str(a[0]).endswith("mir_flow.selftest.ps1") for _n, a, _s in saved),
+            "TSG 牙C7 tools/client/mir_flow.selftest.ps1 已登记进 REGISTRY（153 条断言不再无人跑）")
+        # C3：拿不到 PowerShell ⇒ run_one 记 NEED（不抛）
+        _real_which = shutil.which
+        globals()["shutil"].which = lambda name, *a, **k: None
+        try:
+            r_c3 = run_one(tmp, "ps_noshell", ["tools/window/no-such.ps1"], 5)
+        finally:
+            globals()["shutil"].which = _real_which
+        chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
+            and "PowerShell" in r_c3["tail"],
+            "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
+        # F3（review bdd1a28c）：`docs_delivery_gate` 的**守卫调用点**也要有牙——
+        # 只删调用、函数留着时，那边的自测仍 52/52 绿（下一个人顺手摘掉链路不会红）。
+        # 做法：把 _assert_fixture_consistent 换成抛异常的探针，再整跑一次 docs gate selftest；
+        # 调用点若被删 ⇒ 探针不触发 ⇒ 那边 rc=0（本牙红）。
+        import importlib.util as _ilu
+        _dg_path = os.path.join(root, "tools", "hygiene", "docs_delivery_gate.py")
+        _spec = _ilu.spec_from_file_location("_dg_probe", _dg_path)
+        _dg = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_dg)
+
+        def _guard_bomb(*a, **k):
+            raise _dg.GitUnavailable("守卫调用点牙（F3）：夹具必须过守卫")
+
+        _real_guard = _dg._assert_fixture_consistent
+        _dg._assert_fixture_consistent = _guard_bomb
+        try:
+            import contextlib as _cl3
+            import io as _io3
+            _buf3 = _io3.StringIO()
+            with _cl3.redirect_stdout(_buf3):
+                _f3_rc = _dg.selftest()
+            _f3_out = _buf3.getvalue()
+        finally:
+            _dg._assert_fixture_consistent = _real_guard
+        chk(_f3_rc == 2 and "守卫调用点牙" in _f3_out,
+            "TSG 牙F3 docs gate 的守卫**调用点**在链路上（删调用 ⇒ 本牙红；rc=%r）" % (_f3_rc,))
 
         # ---- 三态（卡 openmir2-docs-gate-rc-semantics）：判不了 ≠ 证伪 ----
         needf = os.path.join(tmp, "need.py")
@@ -610,8 +762,9 @@ def selftest():
             "TSG 牙12b（F2）真 run() + 假未分类 ⇒ rc=2 且打印 UNCLASSIFIED（接线牙）")
     finally:
         REGISTRY = saved
-    print("%s: tool_selftest_gate selftest %d/%d"
-          % ("GREEN" if not fail else "RED", ok, ok + fail))
+    print("%s: tool_selftest_gate selftest %d/%d%s"
+          % ("GREEN" if not fail else "RED", ok, ok + fail,
+             ("（SKIP %d）" % skip_n) if skip_n else ""))
     return 0 if not fail else 1
 
 

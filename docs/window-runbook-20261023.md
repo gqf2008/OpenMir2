@@ -1034,8 +1034,10 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 
 **判定域**（写清判定域才不会假绿）：
 
-- 扫什么：脚本内 `REGISTRY` 的**固定 47 项**（conformance 驱动器、probe、db 对拍、窗口工具、网关抓包、
-  M1/M2 验收、日志差分、世界采样、botload、本仓库 hygiene 门自身，以及本门自己）；
+- 扫什么：脚本内 `REGISTRY` 的**固定注册项**——**条数以 `--inventory` 的实跑输出为准，不在文档里写死**
+  （历史教训：把「47」写进代码注释/文档，每加一个工具就要追着改，且漏改就是一处假绿）。
+  覆盖面：conformance 驱动器、probe、db 对拍、窗口工具（`.py` **与** 自带 `-Selftest` 的 `.ps1`）、
+  网关抓包、M1/M2 验收、日志差分、世界采样、botload、本仓库 hygiene 门自身，以及本门自己；
 - 在哪跑：仓库根（`--repo`，默认本脚本上溯两级），`python -I -B`，**每项独立子进程**；
 - rc 从哪取：**子进程退出码**（不经管道/`tail`，否则拿到的是 `tail` 的 rc）；
 - 判红：任一注册项 rc≠0 ⇒ 本门 rc=2；全 0 ⇒ rc=0；**用法错（未知条目 / 参数）⇒ rc=2**；
@@ -1059,7 +1061,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 **收哪些、不收哪些**（`--inventory` 可看全量）：**只要自带 selftest 且能离线判红，就收**——不按
 「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛。Leader 2026-10-25 裁定：
 **「一次性 / 人工使用 / 别域」都不是合法出域理由**，只有「**需要交互式输入、外部产物或真实环境**」才算。
-出域仅 **5** 项（**52 = 47 门内 + 5 出域 + 0 未分类**；`docs_delivery_gate`/`provision_real_machine_fixtures` 接入后由 50/45 变来），逐项有实跑证据：
+出域仅 **5** 项（**门内/出域/未分类以 `--inventory` 实跑为准**——2026-10-27 实测 **56 = 51 + 5 + 0**；此前 `docs_delivery_gate`/`provision_real_machine_fixtures` 接入时是 52 = 47 + 5 + 0），逐项有实跑证据：
 
 | 出域项 | 真实原因（实跑证据） |
 |---|---|
