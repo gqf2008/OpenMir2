@@ -55,6 +55,9 @@ REGISTRY = [
     ("rc_attribution", ["tools/window/rc_attribution.py", "--selftest"], False),
     ("window_criteria_lint", ["tools/goal/window_criteria_lint.py", "--selftest"], False),
     ("blocked_sources_check", ["tools/window/blocked_sources_check.py", "selftest"], False),
+    # 卡 openmir2-refs-head-guard（Lead 裁决「只加这一行」）：collab 条目 refs.head/base 的
+    # fail-closed 取值 + 反模式 lint；不登记就是 UNCLASSIFIED rc=2（既有团队规矩：新工具必须进工具门）。
+    ("entryrefs", ["tools/collab/entryrefs.py", "--selftest"], False),
     ("run_batch", ["tools/window/run_batch_selftest.py"], False),
     ("goal_gate", ["tools/goal/goal_gate.py", "selftest"], False),
     ("conflict_marker_gate", ["tools/hygiene/conflict_marker_gate.py", "--selftest"], False),
