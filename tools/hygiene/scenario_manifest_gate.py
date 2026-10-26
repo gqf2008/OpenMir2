@@ -192,6 +192,17 @@ def evaluate(manifest_names, discovery, files, card_refs, doc_refs, exempt, know
             bad_exempt.append({"scenario": name,
                                "why": "豁免登记了，但没有任何来源引用它（腐朽登记）"})
 
+    # **过期豁免**（Leader 派单 `2806dc8b` 的第 ① 条）：豁免所理由消失时必须被点名
+    for name in sorted(manual_names):
+        meta = (exempt or {}).get(name) or {}
+        if name in manifest_names:
+            bad_exempt.append({"scenario": name,
+                               "why": "过期豁免：该场景**已进 manifest** ⇒ 豁免应删除"})
+            continue
+        if str(meta.get("covers") or "") == "missing_file" and name in files:
+            bad_exempt.append({"scenario": name,
+                               "why": "过期豁免：登记理由是「文件不存在」，但文件**已出现** ⇒ 豁免不再适用，按常规规则重判"})
+
     if red or bad_exempt:
         rc = 1
     elif undec:
@@ -235,7 +246,7 @@ def read_collab(repo):
         raise RuntimeError("git for-each-ref 失败：%s" % (r.stderr or "").strip())
     refs = [x for x in r.stdout.split("\n") if x.strip()]
     if not refs:
-        return [], set()
+        return [], set(), 0
     p = subprocess.Popen(["git", "cat-file", "--batch"], cwd=repo, stdin=subprocess.PIPE,
                          stdout=subprocess.PIPE)
     out, _ = p.communicate("".join(x + "\n" for x in refs).encode())
@@ -262,7 +273,7 @@ def read_collab(repo):
             continue
         known.add(tid)
         entries.append((tid, ent.get("kind"), ent.get("body") or {}))
-    return entries, known
+    return entries, known, len(refs)
 
 
 def read_exempt(repo):
@@ -284,8 +295,9 @@ def read_exempt(repo):
 def collect(repo):
     man = read_manifest(repo)
     manifest_names = {s.get("name") for s in (man.get("scenarios") or []) if s.get("name")}
-    entries, known = read_collab(repo)
+    entries, known, n_refs = read_collab(repo)
     return {
+        "refs_scanned": n_refs,
         "manifest_names": manifest_names,
         "discovery": discovery_names(man),
         "files": read_files(repo),
@@ -296,9 +308,14 @@ def collect(repo):
     }
 
 
-def render(rc, red, undec, info, struct_ok, manual_ok, bad_exempt):
+def render(rc, red, undec, info, struct_ok, manual_ok, bad_exempt, scanned=None):
     print("scenario-manifest gate：RED %d / UNDECIDABLE %d / STRUCT_EXEMPT %d / MANUAL_EXEMPT %d / INFO %d"
           % (len(red), len(undec), len(struct_ok), len(manual_ok), len(info)))
+    print("豁免计数：STRUCT %d / MANUAL %d / BAD %d（BAD 含过期/腐朽/无效）"
+          % (len(struct_ok), len(manual_ok), len(bad_exempt)))
+    if scanned is not None:
+        print("扫描：collab refs %d 条（cat-file --batch 一次喂入）/ 场景文件 %d / manifest %d"
+              % (scanned["refs"], scanned["files"], scanned["manifest"]))
     for r in red:
         print("RED      %-28s %s%s" % (r["scenario"], r["why"],
                                        ("  cards=" + ",".join(r.get("cards") or []))
@@ -329,7 +346,9 @@ def main(argv):
     except Exception as e:
         print("scenario-manifest gate：rc=2 取数失败：%s" % e, file=sys.stderr)
         return 2
-    rc, red, undec, info, struct_ok, manual_ok, bad_exempt = evaluate(**data)
+    ev = dict(data)
+    ev.pop("refs_scanned", None)
+    rc, red, undec, info, struct_ok, manual_ok, bad_exempt = evaluate(**ev)
     sym = symmetric_diff(data["files"], data["manifest_names"], data["discovery"],
                          data["card_refs"], data["doc_refs"])
     if "--audit-exempt" in argv:
@@ -351,7 +370,9 @@ def main(argv):
                           "bad_exempt": bad_exempt, "symmetric": sym},
                          ensure_ascii=False, indent=2))
     else:
-        render(rc, red, undec, info, struct_ok, manual_ok, bad_exempt)
+        render(rc, red, undec, info, struct_ok, manual_ok, bad_exempt,
+               {"refs": data["refs_scanned"], "files": len(data["files"]),
+                "manifest": len(data["manifest_names"])})
         print("对称差：file_without_manifest %d（其中未被任何来源引用 %d）/ manifest_without_file %d"
               % (len(sym["file_without_manifest"]), len(sym["file_without_manifest_unreferenced"]),
                  len(sym["manifest_without_file"])))
@@ -480,6 +501,28 @@ def selftest():
     check("对称差孤儿 = 未被引用者", sym["file_without_manifest_unreferenced"] == ["b"], sym)
     sym = symmetric_diff({"a"}, {"a", "zz"}, set(), {}, {})
     check("对称差 manifest_without_file", sym["manifest_without_file"] == ["zz"], sym)
+
+    # 19) 过期豁免 A：场景已进 manifest ⇒ 豁免应删除（rc=1）
+    d = dict(base, manifest_names={"m1", "orphan"}, card_refs={"orphan": {"card-a"}},
+             exempt={"orphan": {"card": "card-a", "line": "x:1", "not_in_run3_reason": "r"}})
+    rc, red, undec, info, st, man, bad = evaluate(**d)
+    check("过期豁免（已入批）⇒ RED", rc == 1 and any("已进 manifest" in b["why"] for b in bad), bad)
+
+    # 20) 过期豁免 B：`covers=missing_file` 但文件已出现 ⇒ rc=1
+    d = dict(base, doc_refs={"late": {"d.md"}},
+             exempt={"late": {"card": "card-a", "line": "x:1",
+                              "not_in_run3_reason": "文件待建", "covers": "missing_file"}},
+             files={"m1", "disc", "orphan", "late"})
+    rc, red, undec, info, st, man, bad = evaluate(**d)
+    check("过期豁免（文件已出现）⇒ RED",
+          rc == 1 and any("已出现" in b["why"] for b in bad), bad)
+
+    # 21) 同一豁免在文件仍缺失时**不是**过期（covers=missing_file 正常生效）
+    d = dict(base, card_refs={"late": {"card-a"}},
+             exempt={"late": {"card": "card-a", "line": "x:1",
+                              "not_in_run3_reason": "文件待建", "covers": "missing_file"}})
+    rc, red, undec, info, st, man, bad = evaluate(**d)
+    check("缺文件 + 有效豁免 ⇒ 过", rc == 0 and not bad, (rc, bad))
 
     fails = [(n, d) for n, good, d in ok if not good]
     for n, good, d in ok:
