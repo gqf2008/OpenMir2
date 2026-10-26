@@ -515,6 +515,39 @@ def whitelist_unowned_note(whitelist):
             % (len(unowned), ", ".join(unowned)))
 
 
+
+
+#: 「无归属行」进 `fail_items` 时的 reason 文案（单一来源：判据与牙共用同一句）。
+UNOWNED_REASON = "既无『卡 `openmir2-…`』也无 `legacy` 标记（条件② 核算盲区）"
+
+
+def unowned_gate_decision(state, detail, note):
+    """条件② 的「无归属行」判据 —— **NEED 不降级**（卡 `openmir2-goal-gate-wiring-teeth` A2）。
+
+    `NEED` 表示 board/索引不可用、本来就没法判 ⇒ 即使 `note` 非空也**保持 NEED**，不许冒充成红；
+    否则 `note` 非空 ⇒ `FAIL`，并把 `note` 以 `；` 接到 `detail`。
+
+    返回 `(state, detail, failed)`；`failed` 供 [`unowned_fail_items`] 决定要不要产出条目。
+    """
+    if not note or state == NEED:
+        return state, detail, False
+    merged = (detail + "；" if detail else "") + note
+    return FAIL, merged, True
+
+
+def unowned_fail_items(failed, unowned):
+    """把「无归属行」转成 `fail_items` 条目（卡 `openmir2-goal-gate-wiring-teeth` A1）。
+
+    **只在 `failed` 为真时**产出（`failed` 由 [`unowned_gate_decision`] 给，NEED 时恒 False）；
+    `item` 用 `whitelist.md:<T-id>`——它不是卡，别让「按卡」的消费者把它当卡。
+    """
+    if not failed:
+        return []
+    return [{"condition": 2, "item": "whitelist.md:%s" % t_id, "reason": UNOWNED_REASON,
+             "last_status_ts": 0}
+            for t_id in sorted(set(unowned or []), key=_t_sort_key)]
+
+
 def _names_in_whitelist_rows(name: str, whitelist):
     """条目名（SM_* / CM_*）是否出现在某个 T-* 登记行里。"""
     if not name:
@@ -1221,12 +1254,9 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
         per_card, r_fails, r_needs = [], [], []
     else:
         state, detail, per_card, r_fails, r_needs = judge_r_cards(evidence_list)
-        # 卡 `openmir2-whitelist-card-link-debt`：无归属行是**条件② 自身**的核算盲区 ⇒ 非 NEED 时直接 FAIL
-        # （NEED 表示 board/索引不可用、本来就没法判，不能拿它冒充红）。
-        unowned_failed = bool(unowned_note) and state != NEED
-        if unowned_failed:
-            state = FAIL
-            detail = (detail + "；" if detail else "") + unowned_note
+        # 卡 `openmir2-whitelist-card-link-debt` / `openmir2-goal-gate-wiring-teeth`：无归属行是**条件② 自身**的
+        # 核算盲区 ⇒ 判据抽成纯函数（`NEED` 不降级；否则 FAIL），牙直接钉它，不再埋在内联代码里。
+        state, detail, unowned_failed = unowned_gate_decision(state, detail, unowned_note)
     # 卡 `openmir2-goal-gate-unmerged-selftest`：把 `window_required_unmerged` 一并纳入。它是
     # `merged=false` 的桶，永远不会命下面 `rec["merged"]` 的门 ⇒ 行为不变；纳入只是让「登记类
     # 分类集合」保持一个枚举（避免下次新增分类时又漏），不在卫生清单里制造条目。
@@ -1262,15 +1292,10 @@ def collect_report(repo: Path, envir: str, script_bin: str, with_tests: bool,
     for item in r_fails:
         fail_items.append({"condition": 2, "item": item["card"], "reason": item["reason"],
                            "last_status_ts": item.get("last_status_ts", 0)})
-    # 卡 `openmir2-whitelist-card-link-debt` F2（reviewer-21）：`unowned` 判红时**也要进 fail_items**，
-    # 与其它条件同构；否则 `--json` 消费者与「缺口明细」表里看不到这条红（M-A 实测过 fail_items: 0）。
-    # `item` 用 `whitelist.md:<T-id>`——它不是卡，别让「按卡」的消费者把它当卡。
-    if unowned_failed:
-        for t_id in sorted(set(whitelist.get("unowned") or []), key=_t_sort_key):
-            fail_items.append({
-                "condition": 2, "item": "whitelist.md:%s" % t_id,
-                "reason": "既无『卡 `openmir2-…`』也无 `legacy` 标记（条件② 核算盲区）",
-                "last_status_ts": 0})
+    # 卡 `openmir2-whitelist-card-link-debt` F2 / `openmir2-goal-gate-wiring-teeth` A1：`unowned` 判红时**也要进
+    # `fail_items`**（与其它条件同构；否则 `--json` 消费者与「缺口明细」表里看不到这条红）。条目形状在
+    # [`unowned_fail_items`] 里单点定义，牙直接钉它。
+    fail_items.extend(unowned_fail_items(unowned_failed, whitelist.get("unowned")))
     for item in r_needs:
         need_items.append({"condition": 2, "item": item["card"], "reason": item["reason"],
                            "last_status_ts": item.get("last_status_ts", 0)})
@@ -1539,6 +1564,43 @@ def selftest(verbose=False):
             return ok, "unowned=%s legacy=%s note=%r" % (w["unowned"], w["legacy"], note)
 
         check("whitelist: 卡号/legacy/无归属三态分明，且删 legacy 标记即变盲区", _legacy_tooth)
+
+        # ---- 卡 `openmir2-goal-gate-wiring-teeth`：两处「接线」的牙（A1/A2 + 接线断言）----
+        def _wiring_teeth():
+            """A1 无归属行 ⇒ `fail_items` 条目（`failed=False`/空 unowned 时不得产出）；
+            A2 `NEED` **不降级**（`state == NEED` 且 `unowned` 非空 ⇒ 仍 NEED、不判红），
+               以及三个常规分支；再加**接线断言**（运行段必须真的调这两个函数，
+               删任一调用 ⇒ 本 check 红）。
+
+            规则 19 退化输入逐条（「还能不能红」）：
+              * **空 unowned**（`note is None`）⇒ A1 的 `failed=False`/空表两支 + A2 的 `(FAIL, d, None)` 支；
+                接线断言仍咬（删调用照样红）。
+              * **NEED**（board/索引不可用）⇒ A2 的 `(NEED, d, "n")` 支：必须**不**判红。
+              * **NEED 与非空 unowned 同时在场**（tester-1 的跨前提负例）⇒ 同上，仍是 `(NEED, …, False)`；
+                把守卫改成恒真（去掉 `state == NEED` 短路）⇒ 该支变 `(FAIL, …)` ⇒ 本 check 红。
+            """
+            items = unowned_fail_items(True, ["T-9", "T-3"])
+            ok = (len(items) == 2
+                  and items[0]["item"] == "whitelist.md:T-3"
+                  and items[1]["item"] == "whitelist.md:T-9"
+                  and all(i["reason"] == UNOWNED_REASON and i["condition"] == 2 for i in items))
+            ok = ok and unowned_fail_items(False, ["T-9"]) == []
+            ok = ok and unowned_fail_items(True, []) == []
+
+            ok = ok and unowned_gate_decision(NEED, "d", "n") == (NEED, "d", False)
+            ok = ok and unowned_gate_decision(PASS, "d", "n") == (FAIL, "d；n", True)
+            ok = ok and unowned_gate_decision(PASS, "", "n") == (FAIL, "n", True)
+            ok = ok and unowned_gate_decision(FAIL, "d", None) == (FAIL, "d", False)
+
+            # 接线断言：needle 用拼接构造（本 check 自己的源码里也会出现这些片段，原样写会命中自己）。
+            src = open(__file__, encoding="utf-8").read()
+            gate_needle = "unowned_" + "gate_decision(state, detail, unowned_note)"
+            ext_needle = "fail_items.extend(" + "unowned_fail_items("
+            ok = ok and src.count(gate_needle) == 1 and src.count(ext_needle) == 1
+            return ok, "items=%d gate=%d ext=%d" % (
+                len(items), src.count(gate_needle), src.count(ext_needle))
+
+        check("goal_gate: 无归属行的两处接线（fail_items 追加 / NEED 不降级 / 调用点仍接）", _wiring_teeth)
 
         check("J-1 否定不跨转折：『不涉及时序，但涉及 RNG』=> 拒", lambda: (
             _waiver_ok("纯逻辑，不涉及时序，但涉及 RNG") is False, "cross-conjunction RNG"))
