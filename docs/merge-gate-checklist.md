@@ -30,6 +30,27 @@ python -I -B tools/hygiene/tool_selftest_gate.py               # 全跑必须全
 
 **新增带 selftest 的脚本 ⇒ 必须同时登记进 REGISTRY**，否则 `--inventory` 报「未分类」rc≠0。
 
+## 3.5 m3 门（**只要改动涉及 `mir2-rs/**` 就必须跑**）
+
+> 2026-10-27 漏过这一节：合 `turn-order-login`（`f0d44ceeb`）时只跑了 §2 的四道门，
+> 而该卡给 `bins/game-svr/src/smframe.rs` 加了约 150 行，把 `sm_skeleton` 从 2012 顶到 2081，
+> `whitelist.md` 的 T-206 锚当场漂移 ⇒ **master 上 `whitelist_anchor_gate` RED**，
+> 由 tester-1 独立复现发现，`1e6ab9f89` 用 follow-up 修掉（不改已推送的合并提交）。
+
+```sh
+python -I -B mir2-rs/tests/parity/m3/whitelist_anchor_gate.py check    # RESULT: ALL PASS + 锚条数
+python -I -B mir2-rs/tests/parity/m3/m3_whitelist_registry_audit.py audit   # WHITELIST_REGISTRY GREEN
+```
+
+判据：
+
+- `check` ⇒ **`RESULT: ALL PASS`**，并**记下锚条数**（与卡的 base 比，只应增加本卡新登记的那些）；
+  出现 `ANCHOR_DRIFT` = 有人的行号锚被别的改动顶走了，**必须当次修**，不能「下次再说」。
+- `audit` ⇒ `WHITELIST_REGISTRY GREEN`（`T-*` 编号不重复）。
+- **`HIGH_CHURN` 清单里有名字的文件禁止写 `path:<line>` 锚**（门会报 `ANCHOR_LINE_NOT_ALLOWED`）——
+  `lib.rs` / `world.rs` / `entity.rs` / `combat.rs` 都在清单里；`smframe.rs` 目前**不在**，
+  但它刚被证明是增长文件（卡 `openmir2-smframe-high-churn-anchor`）。
+
 ## 4. 结构面
 
 ```sh
