@@ -418,12 +418,18 @@ internal static class Program
                     // **模型差（2026-10-27 订正）**：oracle 的 Ghost 玩家不是「当刻」被移除，而是在
                     // `(dwCurTick - RunTick) > RunTime` 的门到点后、由 `WorldServer.cs:707-716` 的
                     // `else` 支摘出 `PlayObjectList` —— `RunTime = 250`（`PlayObject.cs:899`）、
-                    // 驱动是 50ms 定时器（`UserProcessor.cs:7`）⇒ **最后一次 Run 之后 250–300ms**
-                    // （相对 softclose 是 50–300ms）。本 harness 在 softclose **当刻**就把 actor 从
-                    // `actors`/`order` 摘掉（`ApplySoftClose`）⇒ 比 oracle **早 1–2 个窗口**。
-                    // 这只影响对拍模型（`ent` 行要 map id，表达不了 unmapped 实体）；生产面
-                    // （Rust）保留 ghost 到 `Closed`/重进，**更忠实于 oracle**。下面的 `!a.Ghost`
-                    // 门在本 harness 里已不可达（actor 已被摘），保留以防将来改动。
+                    // 驱动是 50ms 定时器（`UserProcessor.cs:7`）⇒「最后一次 Run 之后」250–300ms；
+                    // 而 `:645` 的门通过后**先**在 `:647` 刷 `RunTick`、**再**判 `Ghost`
+                    // ⇒ **相对 softclose ∈ (0, 300] ms**（落在哪个门间隙决定）。
+                    // 本 harness 在 softclose **当刻**就把 actor 从 `actors`/`order` 摘掉
+                    // （`ApplySoftClose`）⇒ 比 oracle **早 1–2 个窗口**。这只影响对拍模型
+                    // （`ent` 行要 map id，表达不了 unmapped 实体）；生产面（Rust）保留 ghost 到
+                    // `Closed`/重进，**更忠实于 oracle**。
+                    //
+                    // 下面这道 `!a.Ghost` 门**仍然可达**：走 `ghost` 夹具命令的 actor 由
+                    // `ApplyGhost`（`:586-591`）只置 `Ghost = true`、**不摘** `actors`/`order`
+                    // ⇒ 它仍在遍历里（`combat_exp_hitter_ghost.json` 正在用这条门）。
+                    // `ApplySoftClose` 摘掉 actor 是**另一条**路径，别把两者混为一谈。
                     if (!a.Ghost && (VirtualClock.Now - a.SearchTick) > a.SearchTime)
                     {
                         // `WorldServer.cs:663`：玩家严格大于 `SearchTime` 才扫；
