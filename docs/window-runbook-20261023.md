@@ -18,6 +18,20 @@
 
 ## 0.5 开窗前 60 秒自查（**一条命令**；手工步骤保留为退路）
 
+> **第 0 步（必须先做；卡 `openmir2-preflight-password-check`）：探针连库凭据**
+>
+> ```sh
+> # 只走环境变量；不要写进命令行历史、脚本或 profile
+> export CONFORMANCE_PASSWORD='…'
+> test -n "$CONFORMANCE_PASSWORD" && echo "CONFORMANCE_PASSWORD 已设置"
+> ```
+>
+> 缺它 ⇒ 24 条场景会在 1 秒内各自 `outer_rc=2`（`card_window: 缺密码：用环境变量 CONFORMANCE_PASSWORD 提供`），
+> **整轮窗口白开**（2026-10-26 首轮实测：十项 preflight 全绿、没有一项查凭据）。
+> 现在有两道门：`bash tools/window/run_batch.sh` 在**任何栈/场景之前**先查（缺 ⇒ rc=2 并点名，
+> `--no-preflight` 也不跳过；`--list`/`--help` 不受影响）；`preflight_private_stack.py` 把它作为
+> **第一项** `conformance_password` 报告（缺 ⇒ FAIL；已设置 ⇒ OK，且不记录内容）。
+
 ```sh
 python -I -B tools/conformance/preflight.py \
   --profile alt \
