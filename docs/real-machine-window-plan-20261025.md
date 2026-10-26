@@ -58,7 +58,7 @@ SabukW 部署件 9260B→实测 9290B，会变，别写死）见 runbook **§0.9
 - `python -I -B tools/goal/goal_gate.py selftest` ⇒ **85 条断言 85 通过**（`cb947d123` 实测；来历：`80a820762` 加 4 条 → 79→83；whitelist 卡（`6f282de2e`）加 1 条 → 84；`goal-gate-wiring-teeth`（`cb947d123`）加 1 条 → 85）
 - `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **53 项全绿**；`--inventory` ⇒ 清点 **58 = 53 + 5 + 0**（2026-10-27 起，含 C7 / run_batch / entryrefs；此前 52/57、51/56、50/55、48/53、47/52）
 - `goal_gate --full` 产物里条件④ 应显示「**门禁 8 项**」（第 8 项 = 工具自测门，约 +120s）
-- `cargo test --workspace` ⇒ **141 suites，running 3366 = passed 3303 + ignored 63**（`79bed3315` 实测；机判对账走测试车道的证据文件 `<git-common-dir>/tester/last-workspace-test.json`，证据缺失/该 tip 无条目 ⇒ 判不了 rc=2）
+- `cargo test --workspace` ⇒ **141 suites，running 3374 = passed 3311 + ignored 63**（`d315471a3` 实测，`--no-fail-fast`；其后只有 tools/docs 提交 ⇒ 同一编译树；机判对账走测试车道的证据文件 `<git-common-dir>/tester/last-workspace-test.json`，证据缺失/该 tip 无条目 ⇒ 判不了 rc=2）
 
 > 1 与 2 任一未绿就**不要开窗**——否则那天会出现同一现象两种判法，或者跑完才发现门是红的。
 
