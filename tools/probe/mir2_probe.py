@@ -306,19 +306,23 @@ class Conn:
     def next_seq(self):
         return self.recorder.seq + 1
 
-    def wait_for(self, idents, timeout_ms, after_seq, recog_filter=None):
-        """等 seq > after_seq 的第一条 ident ∈ idents 且 recog_filter 通过的帧；超时返回 None。
+    def wait_for(self, idents, timeout_ms, after_seq, recog_filter=None, predicate=None):
+        """等 seq > after_seq 的第一条 ident ∈ idents 且 recog_filter / predicate 通过的帧。
 
         ``recog_filter``（可选）是 ``frame -> bool``：只看**来源**（帧头 ``recog``）匹配的帧。
         ``None`` = 旧语义（只按 ident 匹配，不筛来源）。场景 DSL 的 ``recog`` / ``recog_is``
         由 ``Run._recog_filter`` 编译成这个谓词（见 README「等待来源过滤」）。
+        ``predicate``（可选）是 ``frame -> bool`` 的**内容/类别**谓词
+        （卡 `openmir2-move-walk-waitfor-bug`：`frame_class` / `body_text_contains`），
+        与 ident、来源过滤**同时满足**才算命中。idents 为 None 表示不按 ident 限制。
         """
-        wanted = set(idents)
+        wanted = set(idents) if idents is not None else None
         end = time.time() + timeout_ms / 1000.0
         while True:
             for seq, fr in self.frames:
-                if (seq > after_seq and fr.ident in wanted
-                        and (recog_filter is None or recog_filter(fr))):
+                if (seq > after_seq and (wanted is None or fr.ident in wanted)
+                        and (recog_filter is None or recog_filter(fr))
+                        and (predicate is None or predicate(fr))):
                     return seq, fr
             remain = end - time.time()
             if remain <= 0:
@@ -637,6 +641,26 @@ def _row_matches(row, pred):
     if t_to is not None and row.get("t_ms", 0) > t_to:
         return False
     return True
+
+
+def compile_frame_predicate(plan):
+    """把场景 wait 的 `frame_class` / `body_text_contains` 编译成 Frame 谓词。
+
+    与 `_row_matches` 的口径一致：多个条件必须**同时**满足（ident 由 wait_for 另行限制）。
+    只在 plan 里出现谓词键时返回可调用对象，否则 None（旧路径零开销）。
+    """
+    fc = plan.get("frame_class")
+    needle = plan.get("body_text_contains")
+    if fc is None and needle is None:
+        return None
+
+    def match(fr):
+        if fc is not None and fr.frame_class != fc:
+            return False
+        if needle is not None and needle not in decode_text(fr.body_decoded, "gbk", "replace"):
+            return False
+        return True
+    return match
 
 
 def recipients(rows, pred, sessions=None, statuses=None):
@@ -1311,10 +1335,13 @@ def plan_step(step, index, params, depth=0):
     elif action == "wait_for":
         # 旧形状（int / 非空 int 数组）原样保留；要来源过滤才写对象形状：
         #   {"idents": 31 | [31, 642], "recog": <int|params 名> | "recog_is": "self"|"other"}
+        # 2026-10-26（卡 openmir2-move-walk-waitfor-bug）：另允许
+        #   {"frame_class": "server_ack_time", "body_text_contains": "+GD/"}
+        # idents 变成可选，但**三者至少给一个**（不许「等任意帧」）。
         if isinstance(val, dict):
-            _need_keys(val, where + ".wait_for", required=("idents",),
-                       optional=("recog", "recog_is"))
-            idents_val = val["idents"]
+            _need_keys(val, where + ".wait_for", optional=("idents", "recog", "recog_is",
+                                                          "frame_class", "body_text_contains"))
+            idents_val = val.get("idents", [])
         else:
             idents_val = val
         if isinstance(idents_val, int) and not isinstance(idents_val, bool):
@@ -1322,9 +1349,27 @@ def plan_step(step, index, params, depth=0):
         elif isinstance(idents_val, list) and idents_val:
             idents = [_need_int(x, where + ".wait_for[]") for x in idents_val]
         else:
-            raise ScenarioError("%s.wait_for must be an int, a non-empty list, or "
-                                "{idents, recog|recog_is}" % where)
+            idents = []
+        if not isinstance(val, dict):
+            if not idents:
+                raise ScenarioError("%s.wait_for must be an int, a non-empty list, or "
+                                    "{idents, recog|recog_is|frame_class|body_text_contains}" % where)
         out["idents"] = idents
+        if isinstance(val, dict):
+            fc = val.get("frame_class")
+            if fc is not None:
+                if not isinstance(fc, str) or not fc.strip():
+                    raise ScenarioError("%s.wait_for.frame_class must be a non-empty string" % where)
+                out["frame_class"] = fc
+            needle = val.get("body_text_contains")
+            if needle is not None:
+                if not isinstance(needle, str) or not needle:
+                    raise ScenarioError("%s.wait_for.body_text_contains must be a non-empty string" % where)
+                out["body_text_contains"] = needle
+            if not idents and "frame_class" not in out and "body_text_contains" not in out:
+                raise ScenarioError(
+                    "%s.wait_for needs idents / frame_class / body_text_contains "
+                    "(at least one; refusing to wait for any frame)" % where)
         _plan_recog_filter(val, where + ".wait_for", params, out)
     elif action == "wait_frames":
         _need_keys(val, where + ".wait_frames", required=("count",),
@@ -1657,6 +1702,10 @@ def check_scenario(data, plans, params=None, messages=None):
                     "steps[%s].%s.ident %d is not a CM_*/SM_* constant in %s"
                     % (p["index"], p["kind"], ident, MESSAGES_RS_REL))
         elif p["kind"] in WAIT_KINDS:
+            if not p["idents"] and not (p.get("frame_class") or p.get("body_text_contains")):
+                raise ScenarioError(
+                    "steps[%s].%s: wait must constrain idents / frame_class / body_text_contains "
+                    "(at least one; refusing to wait for any frame)" % (p["index"], p["kind"]))
             for ident in p["idents"]:
                 if ident not in messages["SM"]:
                     if ident in messages["CM"]:
@@ -2432,7 +2481,9 @@ class Run:
             t_start = now_ms()
             timeout = plan["timeout_ms"] if plan["timeout_ms"] is not None else default_timeout
             recog_filter = self._recog_filter(plan, idx)
-            got = conn.wait_for(plan["idents"], timeout, after, recog_filter)
+            predicate = compile_frame_predicate(plan)
+            got = conn.wait_for(plan["idents"] if plan["idents"] else None,
+                                timeout, after, recog_filter, predicate)
             rec = {"index": idx, "kind": "wait_for", "idents": plan["idents"],
                    "timeout_ms": timeout, "t_ms": t_start - self.t0_ms,
                    "waited_ms": now_ms() - t_start, "matched": got is not None,
@@ -2448,6 +2499,9 @@ class Run:
             seq, fr = got
             rec.update(matched_seq=seq, matched_ident=fr.ident, matched_recog=fr.recog,
                        matched_body_hex=fr.body.hex())
+            if predicate is not None:
+                rec["matched_frame_class"] = fr.frame_class
+                rec["matched_body_text"] = decode_text(fr.body_decoded, "gbk", "replace")
             self.steps.append(rec)
             return
         if kind == "wait_frames":
@@ -6050,6 +6104,76 @@ def _selftest_relogin():
     return "默认断言开 / 3 形状牙 / 嵌套牙 / R7 牙 / 运行期前提断言(同id绿·异id红·关断言不红) / 场景文件自洽"
 
 
+def _selftest_ack_wait():
+    """A2 牙（卡 openmir2-move-walk-waitfor-bug）：真实回执 `+GD/` 才可匹配。
+
+    ① 含 `+GD/` ack ⇒ 谓词命中；② **删掉 ack、只塞随机 `SM_TURN(10)` ⇒ 必须超时**
+    （证明不再靠随机帧蒙对，这是本卡的核心牙）；③ 文本不匹配（`+FL/`）⇒ 不命中；
+    ④ `frame_class` 单独可用；⑤ 加载期与 `check_scenario`：谓词形状合法、空 wait fail-closed。
+    """
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mir2probe-ackwait-")
+    try:
+        args = argparse.Namespace(out=tmp, no_auto_handshake=True, timeout_ms=8000)
+        run = Run(args)
+
+        def feed(chunks):
+            conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+            conn.phase = "gamegate"
+            conn.sock = _FakeSock(chunks)
+            conn.pump(100)
+            return conn
+
+        ack = b"#+GD/731376687!"
+        conn = feed([ack, build_s2c_frame(119, SM_TURN, 0, 0, 0, b"")])
+        assert conn.frames[0][1].frame_class == "server_ack_time", conn.frames[0][1].frame_class
+        pred = compile_frame_predicate({"frame_class": "server_ack_time",
+                                        "body_text_contains": "+GD/"})
+        got = conn.wait_for(None, 30, 0, predicate=pred)
+        assert got is not None and got[1].body.startswith(b"+GD/"), got
+
+        conn2 = feed([build_s2c_frame(119, SM_TURN, 0, 0, 0, b"")])
+        got = conn2.wait_for(None, 5, 0, predicate=pred)
+        assert got is None, got
+        got = conn.wait_for(None, 5, 0,
+                            predicate=compile_frame_predicate({"body_text_contains": "+FL/"}))
+        assert got is None, got
+        got = conn.wait_for(None, 30, 0,
+                            predicate=compile_frame_predicate({"frame_class": "server_ack_time"}))
+        assert got is not None, "frame_class-only predicate did not match"
+
+        plan = plan_step({"wait_for": {"frame_class": "server_ack_time",
+                                       "body_text_contains": "+GD/"}}, 0, {})
+        assert (plan["idents"] == [] and plan["frame_class"] == "server_ack_time"
+                and plan["body_text_contains"] == "+GD/"), plan
+        for bad in ({}, {"idents": []}, {"body_text_contains": ""},
+                    {"frame_class": "  "}, {"frame_class": 5}):
+            try:
+                plan_step({"wait_for": bad}, 0, {})
+            except ScenarioError:
+                continue
+            raise AssertionError("bad ack wait accepted: %r" % (bad,))
+        data = {"name": "ackwait-ok", "steps": [
+            {"send": {"ident": 3011, "recog": 0}},
+            {"wait_for": {"frame_class": "server_ack_time",
+                          "body_text_contains": "+GD/"}}]}
+        plans, params = expand_scenario(data)
+        check_scenario(data, plans, params)
+        bad_data = {"name": "ackwait-empty", "steps": [
+            {"send": {"ident": 3011, "recog": 0}}, {"wait_for": {}}]}
+        try:
+            plans2, params2 = expand_scenario(bad_data)
+            check_scenario(bad_data, plans2, params2)
+        except ScenarioError:
+            pass
+        else:
+            raise AssertionError("empty wait accepted (any-frame)")
+        return "ack matched; random-turn-only timed out; shape checks ok"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -6091,6 +6215,7 @@ def run_selftest():
     check("multi-session", _selftest_multi_session)
     check("dwell-after-enter", _selftest_dwell)
     check("wait-recog-filter", _selftest_wait_recog_filter)
+    check("ack-predicate-wait", _selftest_ack_wait)
     if fails:
         print("mir2_probe selftest: FAIL")
         for f in fails:

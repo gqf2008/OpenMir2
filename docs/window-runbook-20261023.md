@@ -1003,3 +1003,34 @@ UNCLASSIFIED（D9 承重牙把当前 7 个 blocked 场景喂进来验证）。�
 **与开窗自检的关系**：§0.5 / §2 的 `card_window --selftest` 单跑仍然有用（快、只查一个工具），但
 「计数变小」这类回归现在由本门统一兜住。门里的数字以**实跑**为准——本节上方旧段落里的 240/240、
 262/262 是 2026-10-24 的历史实测，不是当前期望值。
+
+---
+
+## 8. move_walk 的判据：等真实回执 `+GD/`，**不等 SM_WALK**（2026-10-26；卡 `openmir2-move-walk-waitfor-bug`）
+
+**事实（两处 oracle 行）**
+- **自身走路 oracle 不发 `SM_WALK(11)`**：`src/M2Server/Player/PlayObject.Message.cs:1403-1412` 的
+  `case RM_WALK` 有 `if (processMsg.ActorId != ActorId)`——自己走路不回给自己。
+- **真实回执是明文 `+GD/<tick>`**：`PlayObject.Message.cs:1059-1063` 的 `case CM_WALK` 成功后
+  `SendSocket(M2Share.GetGoodTick)`（`M2Share.cs:205`）⇒ `src/Modules/SystemModule/MessageSettings.cs:6` 的
+  `sSTATUS_GOOD = "+GD/{0}"`。该帧在证据里是 `ident=None`、`frame_class=server_ack_time`、body 以 `+GD/` 开头。
+
+**旧判据为什么 flaky**：`wait_for [11,13,10,100]` 只能被**随机 NPC 转身**（`SM_TURN(10)`）误中——
+run2 里 oracle 正是 `matched_ident=10` 假过，rust 3 秒没抽中就超时 ⇒ UNDECIDABLE 的一半是判据的错。
+
+**DSL 扩写（仅加能力，不动旧语义）**：`wait_for` 对象形状新增两个可选键
+`frame_class` 与 `body_text_contains`；`idents` 变为可选，但
+**`idents` / `frame_class` / `body_text_contains` 至少给一个**（不许「等任意帧」，空 wait 在加载期 rc=2）。
+谓词与 ident、`recog`/`recog_is` 来源过滤**同时满足**才命中；`--check-scenario` 的 R3 放行
+「带谓词、无 idents」的 wait，仍受 R2（必须先有发帧步）约束。
+
+**场景**：`tools/probe/scenarios/move_walk.json` 的等待已改为
+`{"wait_for": {"frame_class": "server_ack_time", "body_text_contains": "+GD/"}, "timeout_ms": 3000}`。
+
+**牙（probe selftest 的 `ack-predicate-wait`）**：
+① 含 `+GD/` ack ⇒ 命中；② **删掉 ack、只塞随机 `SM_TURN(10)` ⇒ 必须超时**（证明不再靠随机帧）；
+③ 文本不匹配（`+FL/`）⇒ 不命中；④ `frame_class` 单独可用；⑤ 空 wait / 空谓词加载期 fail-closed。
+
+**下次窗口怎么验**：跑 `move_walk` 后看 `run.json` 的 `steps[1]`：
+`matched=true`、`matched_frame_class=server_ack_time`、`matched_body_text` 以 `+GD/` 开头；
+**不应再出现 `matched_ident=10`**。两侧都过了同步判据后才由 compare 决定 PASS / 真差异。
