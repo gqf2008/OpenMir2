@@ -18129,6 +18129,9 @@ fn drain_kicks(
     engine: &mut load::FrontEngine,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    // 卡 `openmir2-kick-sessions-residue`：这两张宿主会话表必须与 `ground_sessions` **同处**清。
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     // 卡 `openmir2-kick-display-residue`：顶号路径也必须能摘展示表（见函数尾部）。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -18201,6 +18204,12 @@ fn drain_kicks(
         // 的返回值是 host aid 的最后一处来源；再晚（`Closed` 臂）两个来源都空，摘不掉。
         // 与 `Closed` 臂、`drain_soft_close` 共用 [`cleanup_display_for_closed`] 一个接缝。
         let closed_sg = ground_sessions.remove(&chr);
+        // 卡 `openmir2-kick-sessions-residue`：`ScriptLable`/`SellOff` 在 oracle 里是 `PlayObject`
+        // 的字段、随 `MakeGhost` 销毁；而顶号路径稍后的 `Closed` 臂会被 `prepare_closed_guild`
+        // 的陈旧判定**整臂早退** ⇒ `close_cleanup_residue` 不执行 ⇒ 必须在这里（与
+        // `ground_sessions.remove` 同处）自己清，否则跨会话残留。
+        shop_sessions.remove(&chr);
+        sell_off_sessions.remove(&chr);
         cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
@@ -18307,6 +18316,9 @@ fn drain_soft_close(
     engine: &mut load::FrontEngine,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    // 卡 `openmir2-kick-sessions-residue`：与 `drain_kicks` 同一口径（两条路径各一颗牙）。
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     // 卡 `openmir2-kick-display-residue`：账号级顶号（`BoSoftClose` 支）同样要摘展示表。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -18380,6 +18392,12 @@ fn drain_soft_close(
         saves.remove(&chr);
         // 卡 `openmir2-kick-display-residue`：同 [`drain_kicks`]，host aid 取自 `remove` 的返回值。
         let closed_sg = ground_sessions.remove(&chr);
+        // 卡 `openmir2-kick-sessions-residue`：`ScriptLable`/`SellOff` 在 oracle 里是 `PlayObject`
+        // 的字段、随 `MakeGhost` 销毁；而顶号路径稍后的 `Closed` 臂会被 `prepare_closed_guild`
+        // 的陈旧判定**整臂早退** ⇒ `close_cleanup_residue` 不执行 ⇒ 必须在这里（与
+        // `ground_sessions.remove` 同处）自己清，否则跨会话残留。
+        shop_sessions.remove(&chr);
+        sell_off_sessions.remove(&chr);
         cleanup_display_for_closed(world, &chr, closed_sg.as_ref(), displays);
     }
 }
@@ -24694,6 +24712,8 @@ fn sim_loop(
             &mut engine,
             &mut saves,
             &mut ground_sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
             &mut displays,
             registry.as_ref(),
             &mut guilds,
@@ -24746,6 +24766,8 @@ fn sim_loop(
             &mut engine,
             &mut saves,
             &mut ground_sessions,
+            &mut shop_sessions,
+            &mut sell_off_sessions,
             &mut displays,
             registry.as_ref(),
             &mut guilds,
@@ -30956,6 +30978,189 @@ mod tests {
             Some(b"new".to_vec()),
             "同 id 复用后展示名是新值"
         );
+    }
+
+    /// **卡 `openmir2-kick-sessions-residue` A1/A2（顶号路径）**：`drain_kicks` 必须把**被踢角色**的
+    /// `shop_sessions`（oracle `PlayObject.ScriptLable`）与 `sell_off_sessions`（`SellOff`）一并清掉，
+    /// 且**不误删旁观者**。
+    ///
+    /// 为什么必须在这里清：顶号先 `online_take` ⇒ 稍后 `Closed` 臂会被 `prepare_closed_guild` 的陈旧判定
+    /// **整臂早退** ⇒ `close_cleanup_residue`（另一处唯一清理点）不执行。
+    ///
+    /// 牙（A3 第 1 颗）：删掉 `drain_kicks` 里的 `shop_sessions.remove(&chr)` 或
+    /// `sell_off_sessions.remove(&chr)` ⇒ 对应断言红；**另一条** `drain_soft_close` 的牙不受影响。
+    #[test]
+    fn drain_kicks_clears_shop_and_selloff_for_kicked_role_only() {
+        use std::collections::HashMap;
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        world.open_session("lb1a");
+        let actor = world
+            .enter_map(
+                "lb1a",
+                mir2_world::Entity::new(0, "lb1a".to_string(), 10, 20),
+                0,
+            )
+            .expect("旧会话在世界里");
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("acct1", "lb1a", 77, 0, 901, actor));
+        let mut ground: HashMap<String, SessionGround> = HashMap::new();
+        ground.insert("lb1a".to_string(), test_session_ground(actor));
+        let mut shop: HashMap<String, ShopSession> = HashMap::new();
+        shop.insert(
+            "lb1a".to_string(),
+            ShopSession {
+                script_lable: "victim".into(),
+                ..ShopSession::default()
+            },
+        );
+        shop.insert(
+            "bystander".to_string(),
+            ShopSession {
+                script_lable: "keep".into(),
+                ..ShopSession::default()
+            },
+        );
+        let mut sell_off: HashMap<String, game_svr::selloff::SellOffState> = HashMap::new();
+        sell_off.insert(
+            "lb1a".to_string(),
+            game_svr::selloff::SellOffState::default(),
+        );
+        sell_off.insert(
+            "bystander".to_string(),
+            game_svr::selloff::SellOffState::default(),
+        );
+        let mut displays = downlink::DisplayTable::new();
+        let mut kick_pending = vec!["lb1a".to_string()];
+
+        drain_kicks(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut kick_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut HashMap::new(),
+            &mut ground,
+            &mut shop,
+            &mut sell_off,
+            &mut displays,
+            None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
+        );
+
+        assert!(
+            !shop.contains_key("lb1a"),
+            "顶号必须清掉被踢角色的 ScriptLable（否则跨会话残留）"
+        );
+        assert!(
+            !sell_off.contains_key("lb1a"),
+            "顶号必须清掉被踢角色的 SellOff 会话态（否则跨会话残留）"
+        );
+        assert!(
+            shop.get("bystander")
+                .is_some_and(|v| v.script_lable == "keep"),
+            "误删负例：旁观者的 ScriptLable 必须留着且内容不变"
+        );
+        assert!(
+            sell_off.contains_key("bystander"),
+            "误删负例：旁观者的 SellOff 会话态必须留着"
+        );
+        assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
+    }
+
+    /// **卡 `openmir2-kick-sessions-residue` A1/A2（账号级顶号 `BoSoftClose` 支）**：
+    /// `drain_soft_close` 是**另一条**独立路径，同样必须清这两张表且不误删旁观者。
+    ///
+    /// 牙（A3 第 2 颗）：删掉 `drain_soft_close` 里的两行 remove ⇒ 本用例红；
+    /// `drain_kicks` 那颗**不受影响**（两条路径各一颗，互不连带）。
+    #[test]
+    fn drain_soft_close_clears_shop_and_selloff_for_kicked_role_only() {
+        use std::collections::HashMap;
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        world.open_session("lb1b");
+        let actor = world
+            .enter_map(
+                "lb1b",
+                mir2_world::Entity::new(0, "lb1b".to_string(), 10, 20),
+                0,
+            )
+            .expect("旧会话在世界里");
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("acct2", "lb1b", 78, 0, 902, actor));
+        let mut ground: HashMap<String, SessionGround> = HashMap::new();
+        ground.insert("lb1b".to_string(), test_session_ground(actor));
+        let mut shop: HashMap<String, ShopSession> = HashMap::new();
+        shop.insert(
+            "lb1b".to_string(),
+            ShopSession {
+                script_lable: "victim".into(),
+                ..ShopSession::default()
+            },
+        );
+        shop.insert("bystander".to_string(), ShopSession::default());
+        let mut sell_off: HashMap<String, game_svr::selloff::SellOffState> = HashMap::new();
+        sell_off.insert(
+            "lb1b".to_string(),
+            game_svr::selloff::SellOffState::default(),
+        );
+        sell_off.insert(
+            "bystander".to_string(),
+            game_svr::selloff::SellOffState::default(),
+        );
+        let mut displays = downlink::DisplayTable::new();
+        let mut soft_close_pending = vec!["lb1b".to_string()];
+
+        drain_soft_close(
+            &mut world,
+            &gates,
+            &mut online,
+            &mut soft_close_pending,
+            &mut None,
+            &mut load::FrontEngine::new(),
+            &mut HashMap::new(),
+            &mut ground,
+            &mut shop,
+            &mut sell_off,
+            &mut displays,
+            None,
+            &mut mir2_world::GuildManager::new(),
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            &guild_runtime::GuildMsgCfg::from_config(
+                &mir2_world::GuildConfig::default(),
+                false,
+                "",
+            ),
+            0,
+        );
+
+        assert!(
+            !shop.contains_key("lb1b"),
+            "账号级顶号必须清掉被踢角色的 ScriptLable"
+        );
+        assert!(
+            !sell_off.contains_key("lb1b"),
+            "账号级顶号必须清掉被踢角色的 SellOff 会话态"
+        );
+        assert!(
+            shop.contains_key("bystander") && sell_off.contains_key("bystander"),
+            "误删负例：旁观者的两张表都必须留着"
+        );
+        assert!(ground.is_empty(), "前置：ground 会话照旧被摘");
     }
 
     /// 卡 `openmir2-softclose-cleanup-residue` 返工牙的夹具：世界 + 四个会话容器 + 展示表。
@@ -37697,6 +37902,8 @@ break
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
@@ -37752,6 +37959,8 @@ break
             &mut kick_pending,
             &mut None,
             &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
@@ -37820,6 +38029,8 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut ground,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut displays,
             None,
             &mut mir2_world::GuildManager::new(),
@@ -37890,6 +38101,8 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut ground,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut displays,
             None,
             &mut mir2_world::GuildManager::new(),
@@ -37955,6 +38168,8 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
@@ -38034,6 +38249,8 @@ break
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
@@ -40746,6 +40963,8 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
@@ -40828,6 +41047,8 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut HashMap::new(),
             &mut sessions,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut guilds,
@@ -40936,6 +41157,8 @@ SendRefMsgRange=15
             &mut load::FrontEngine::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
             &mut mir2_world::GuildManager::new(),
@@ -41005,6 +41228,8 @@ SendRefMsgRange=15
             &mut kick_pending,
             &mut None,
             &mut load::FrontEngine::new(),
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
