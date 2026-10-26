@@ -635,12 +635,35 @@ def check_envir_shadow_symmetry(root=DEFAULT_PRIVATE_ROOT, limit=20):
                 % (len(base), ", ".join(label for label, _ in pairs))), None
 
 
+def check_conformance_password(env=None):
+    """探针连库凭据：`CONFORMANCE_PASSWORD` 必须存在且非空（卡 `openmir2-preflight-password-check`）。
+
+    2026-10-26 首轮：24 条场景全部 1s 内 `outer_rc=2`，`card_window` 报
+    「缺密码：用环境变量 CONFORMANCE_PASSWORD 提供」⇒ 整轮空转；而 preflight 十项全绿，
+    没有任何一项检查「探针连库的凭据在不在」。
+
+    只读环境变量；**不记录、不回显密码内容**（只报存在性与非空）。
+    """
+    e = os.environ if env is None else env
+    val = e.get("CONFORMANCE_PASSWORD")
+    if val is None or str(val) == "":
+        detail = ("CONFORMANCE_PASSWORD 未设置（探针连库凭据缺失 ⇒ 24 个场景会各自 "
+                  "outer_rc=2 空转，整轮白开）")
+        fix = "export CONFORMANCE_PASSWORD=…（只走环境变量；别写进命令行历史/脚本/profile）"
+        return FAIL, detail, fix
+    return OK, "CONFORMANCE_PASSWORD 已设置（内容不记录）", None
+
+
 # ---------------------------------------------------------------------------
 # 全量检查
 # ---------------------------------------------------------------------------
 def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
             skip_pin_smoke=False, skip_binary=False, report=None, manifest=None):
     rep = report or Report()
+    # 第一项：探针凭据。缺它后面每一项都可能白跑（2026-10-26 首轮整轮空转）。
+    status, detail, fix = check_conformance_password()
+    rep.add("conformance_password", status, detail, fix)
+
     status, detail, fix = check_inventory(root)
     rep.add("inventory", status, detail, fix)
 
@@ -723,6 +746,15 @@ def selftest():
     chk(err is not None, "ServerInfo: 空文件 => 错")
     d, err = parse_server_info("127.0.0.1 127.0.0.1 x\n")
     chk(err is not None, "ServerInfo: 非数字端口 => 错")
+
+    # 探针凭据（卡 openmir2-preflight-password-check）：缺 ⇒ FAIL 并点名；有 ⇒ OK 且不回显内容。
+    st, dt, fx = check_conformance_password({})
+    chk(st == FAIL and "CONFORMANCE_PASSWORD" in dt and fx and "CONFORMANCE_PASSWORD" in fx,
+        "password: 缺 env => FAIL 且 detail/fix 都点名变量")
+    st, dt, fx = check_conformance_password({"CONFORMANCE_PASSWORD": ""})
+    chk(st == FAIL and "CONFORMANCE_PASSWORD" in dt, "password: 空串也算缺")
+    st, dt, fx = check_conformance_password({"CONFORMANCE_PASSWORD": "s3cret-value"})
+    chk(st == OK and "s3cret-value" not in dt, "password: 已设置 => OK 且不回显内容")
 
     ini = parse_ini("[SelGate]\nListenPort=17100\n")
     chk((ini.get("selgate") or {}).get("listenport") == "17100", "INI: [SelGate] ListenPort")

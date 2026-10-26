@@ -258,6 +258,15 @@ if [ "$LIST_ONLY" -eq 1 ]; then
 fi
 [ "${#selected[@]}" -gt 0 ] || die "没有选中任何场景（--from $FROM / 全部 blocked？）"
 
+# ---- ⓪ 探针凭据（卡 openmir2-preflight-password-check）----
+# 在任何栈启动/任何场景之前就停：缺它时 24 条场景会各自 1s 内 outer_rc=2
+# （`card_window: 缺密码：用环境变量 CONFORMANCE_PASSWORD 提供`），整轮白开。
+# 与 preflight_private_stack.py 的 `conformance_password` 同一判据（那里是报告项，这里是快速门）；
+# **--no-preflight 也不跳过**（它不需要栈/端口，不属于"前置自检"的调试豁免）。
+if [ -z "${CONFORMANCE_PASSWORD:-}" ]; then
+    die "缺 CONFORMANCE_PASSWORD（探针连库凭据）：24 个场景会各自 outer_rc=2 空转。export CONFORMANCE_PASSWORD=… 后重跑"
+fi
+
 # ---- 日志/证据目录 ----
 if [ "$DRY_RUN" -eq 1 ]; then
     # dry-run 的日志/计划放到 run3 **旁边**（run3-dry-run），不污染真证据目录
