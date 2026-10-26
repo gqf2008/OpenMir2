@@ -9384,10 +9384,11 @@ fn use_items_from(
 
 /// **离世那一刻的实体派生快照**（卡 `openmir2-dir-persistence-writeback`，修法 (a)）。
 ///
-/// 成因：`CM_SOFTCLOSE` 先 `world.soft_close`（= oracle `MakeGhost` 的世界侧等价物，销毁实体
-/// 并把 `sess.actor_id` 置 `None`），而存档由 ~402ms 后网关的 `GateEvent::Closed` 臂发出
-/// ⇒ `build_save_record` 的实体解析链返回 `None`，`cur_x/cur_y/dir/attatck_mode` **静默回落
-/// 到载入记录**（真机：`characters.Dir` 写成载入值 3 而不是实时值 0）。
+/// 成因：`CM_SOFTCLOSE` 先 `world.soft_close`（= oracle `MakeGhost` 的世界侧等价物），而存档由
+/// ~402ms 后网关的 `GateEvent::Closed` 臂发出。**M-3 起 soft_close 保留 ghost 实体**
+/// （`stage=Left` + `actor_id=Some`）⇒ 该窗口里存档走实体档；但 `disconnect`（移除门）之后
+/// 实体已摘 ⇒ `build_save_record` 的实体解析链返回 `None`，`cur_x/cur_y/dir/attatck_mode`
+/// 会 **静默回落载入记录**（真机：`characters.Dir` 写成载入值 3 而不是实时值 0）。
 ///
 /// 修法：soft-close **之前**取一份快照挂到 [`SavedHuman::derived`]；存档取值优先级
 /// **实体 → 快照 → 载入记录**（第三档 WRN，见 [`warn_save_fallback`]）。
@@ -9486,7 +9487,7 @@ struct SavedHuman {
     enter_map: String,
     /// **离世那一刻的实体派生快照**（见 [`EntityDerived`]）：`CM_SOFTCLOSE` 在
     /// `world.soft_close` **之前**由 [`entity_derived_snapshot`] 取，供之后 `GateEvent::Closed`
-    /// 臂的存档在实体已销毁时仍写出实时值（取值优先级：实体 → 本快照 → 载入记录）。
+    /// 臂的存档在实体已摘（`disconnect` 之后）时仍写出实时值（取值优先级：实体 → 本快照 → 载入记录）。
     derived: Option<EntityDerived>,
 }
 
@@ -9820,10 +9821,12 @@ fn build_save_record(
         .unwrap_or(saved.enter_map.as_str());
     rec.data.cur_map = Some(cur_map.to_string());
     // ---- 实体派生标量：**实体 → 离世快照 → 载入记录** -------------------------------
-    // 卡 `openmir2-dir-persistence-writeback`：`CM_SOFTCLOSE` 先 `world.soft_close`（销毁实体、
-    // 清 `sess.actor_id`），~402ms 后 `GateEvent::Closed` 臂才存档 ⇒ 只看实体时这四个标量会
-    // **静默回落载入记录**（真机：`characters.Dir` 写成载入值 3 而非实时值 0；同族字段同理，
-    // 本轮只有 `Dir` 显形是因为测试库 placement 让其余回落值恰好等于实时值，§10.2）。
+    // 卡 `openmir2-dir-persistence-writeback`：`CM_SOFTCLOSE` 先 `world.soft_close`，~402ms 后
+    // `GateEvent::Closed` 臂才存档。**M-3 起 soft_close 保留 ghost 实体**（`stage=Left` +
+    // `actor_id=Some`）⇒ 该窗口里本函数走**实体**档；`disconnect`（移除门）之后实体才被摘，
+    // 只看实体时这四个标量会**静默回落载入记录**（真机：`characters.Dir` 写成载入值 3 而非
+    // 实时值 0；同族字段同理，本轮只有 `Dir` 显形是因为测试库 placement 让其余回落值恰好
+    // 等于实时值，§10.2）。
     // 取值优先级：实体在 ⇒ 实体；实体不在 ⇒ 离世快照（[`SavedHuman::derived`]）；两者都无 ⇒
     // 回落 `rec` 并 **WRN**（第三档；门控 = `world.session` 存在，普通断线/未进世界不刷屏）。
     let live = world
@@ -9831,9 +9834,10 @@ fn build_save_record(
         .and_then(|s| s.actor_id)
         .and_then(|id| world.entities.get(id))
         .map(entity_derived_snapshot);
-    // 两源**同时存在不可达**：正常路径 soft-close 必销毁实体、普通断线必无快照；只有
-    // `world.soft_close` 返回 `Err` 且此前已写过快照才会两源同存 ⇒ 此时以**实体**为准
-    // （实体是权威，快照只是离世那一刻的替身）。这条顺序没有牙，故写进代码而非只留在文档。
+    // **两源同存是 M-3 之后的正常路径**（不是「不可达」）：`CM_SOFTCLOSE` 写了离世快照，
+    // 而 soft_close 保留 ghost 实体 ⇒ `Closed` 臂存档时实体与快照**同时在场**。
+    // 取**实体**为准（实体是权威，快照只是离世那一刻的替身）。
+    // 牙：`m3_entity_wins_over_snapshot_when_both_present`（把下面的 `or` 顺序对调 ⇒ 红）。
     let derived = live.as_ref().or(saved.derived.as_ref());
     if let Some(d) = derived {
         rec.data.cur_x = i16::try_from(d.x).unwrap_or(rec.data.cur_x);
@@ -16627,7 +16631,8 @@ fn sync_super_man_wabil(
 /// 1. `bo_soft_close` / `bo_emergency_close`（oracle `PlayObject.cs:364/368`）——
 ///    `CM_SOFTCLOSE`（[`handle_soft_close_cmd`]）、`CloseUser`（[`prepare_closed_guild`]）、
 ///    账号级顶号（[`drain_soft_close`]）都会先置位；
-/// 2. `World::soft_close()` / `World::disconnect()` 把 `WorldStage` 置 `Left`（实体已销毁）。
+/// 2. `World::soft_close()` / `World::disconnect()` 把 `WorldStage` 置 `Left`
+///    （**M-3 起**：`soft_close` 只置 `Left` 并保留 ghost 实体，`disconnect` 才摘实体）。
 ///
 /// **缺失世界会话 ⇒ 视为在世**：构造级用例只建 `ground_sessions`、不经 `enter_map`，
 /// 会话登记缺失是**证据缺失**而不是离世证据；[`drain_recovery`] 的既有口径即如此
@@ -16648,7 +16653,7 @@ fn sync_super_man_wabil(
 /// | [`drain_player_revival_with_magic`]（P32） | **加门** | 同上（幽灵仍复活 / 破戒 / 53·141·252） |
 /// | [`drain_deal_tick`]（Run 内自动取消） | **加门** | oracle 幽灵由 `:712` 的 `DealCancelA` 收口（本宿主 = `Closed` 臂的 `deal_cancel_between`），Run 内那趟不得再跑 |
 /// | [`drain_periodic_save`] | **加门**（M-2 改判，取代早先的反向牙） | oracle `WorldServer.cs:648` 的 **`if (!playObject.Ghost)` 是主干**，`:698-703` 周期存档在主干内；ghost 只走 `else` 的 `:707-716`（移除时 `SaveHumanRcd` + `CloseUser`）⇒ 周期路径必须排除 ghost。移除时那次存档仍在 `Closed` 臂 / [`drain_kicks`] / [`drain_soft_close`]（卡 `openmir2-makeghost-lifecycle` M-2 C3，两种路径各一颗牙） |
-/// | [`drain_extra_abil_expiries`] / [`drain_mag_healing_delivery`] / [`drain_b3_self_deliveries`] / [`drain_b4_with_enter_cfg`] / [`drain_b5_self_deliveries`] / [`drain_buff_downlink`] | **不加门** | 全部由 `TickRecord` 事件驱动；事件源是 world tick，幽灵实体已销毁 ⇒ 无事件可排 |
+/// | [`drain_extra_abil_expiries`] / [`drain_mag_healing_delivery`] / [`drain_b3_self_deliveries`] / [`drain_b4_with_enter_cfg`] / [`drain_b5_self_deliveries`] / [`drain_buff_downlink`] | **不加门** | 全部由 `TickRecord` 事件驱动；**M-3 起 ghost 实体仍在**，但 world tick 的 ghost 门（M-2 的十处过滤）保证不为它产事件 ⇒ 无事件可排（用例 `sc_gate_event_driven_drains_have_no_source_after_soft_close` 钉住） |
 /// | [`sync_super_man_wabil`] / [`sync_use_items_to_session`] | **不加门** | 纯实体→会话镜像；无实体 ⇒ 早退，不推进状态 |
 /// | [`process_switch_data`] | **不加门** | oracle 轮询的是 **ghost 自由表**（`WorldServer.cs:583-610`）；本宿主 `switch_data` 无生产写者（G11 闭合）⇒ 零副作用 |
 /// | [`drain_close_health_residual`] / [`drain_close_health_for`] | **加门**（M-2） | 遍历**实体**而非会话，会话门管不到它：ShowHp 到期出 1101 是 `BaseObject.Run()` 的 `:219` 门，ghost 不 Run ⇒ 两处都补 `!e.ghost` |
@@ -35490,7 +35495,8 @@ break
     /// ⇒ 落库 `CX/CY` 必须是**实时**坐标 `(12,22)`，不是载入记录 `(7,12)`。
     ///
     /// 牙：删掉 `handle_soft_close_cmd` 里的快照段（或 `build_save_record` 的 `saved.derived` 支）
-    /// ⇒ `soft_close` 已销毁实体 ⇒ 回落 `(7,12)` ⇒ 必红。
+    /// ⇒ 实体档与快照档都没有实时值 ⇒ `disconnect` 之后那次存档回落 `(7,12)` ⇒ 必红
+    /// （M-3 起 soft_close 保留实体，本用例的红点在 `disconnect` 之后，见用例体的快照支断言）。
     #[test]
     fn soft_close_snapshot_keeps_live_xy_after_walk() {
         let mut rig = SoftCloseRig::new();
@@ -35524,6 +35530,47 @@ break
             (rec.data.cur_x, rec.data.cur_y),
             (12, 22),
             "快照支：实体已摘时仍取离世快照的实时坐标（删快照段 ⇒ 回落 7/12 必红）"
+        );
+    }
+
+    /// **F5 牙（reviewer-21 `993d3e7a`）**：取值优先级「**实体 → 快照 → 载入记录**」的实体优先。
+    ///
+    /// M-3 之后「实体在 **且** 快照也在」是**正常路径**（`CM_SOFTCLOSE` 写了快照、soft_close
+    /// 保留 ghost 实体 ⇒ `Closed` 臂存档时两者同时在场），不再是「不可达」。本用例把它们造成
+    /// **不同值**并断言取实体。
+    ///
+    /// 牙：把 `build_save_record` 的 `live.as_ref().or(saved.derived.as_ref())` 对调成
+    /// `saved.derived.as_ref().or(live.as_ref())` ⇒ 取到快照的 (1,1) ⇒ 红。
+    #[test]
+    fn m3_entity_wins_over_snapshot_when_both_present() {
+        let mut rig = SoftCloseRig::new();
+        rig.walk(12, 22);
+        rig.soft_close();
+        // 两源同存：实体仍 (12,22)（ghost），把快照改成 (1,1)。
+        {
+            let d = rig
+                .saves
+                .get_mut("hero")
+                .expect("存档底稿在")
+                .derived
+                .as_mut();
+            let d = d.expect("CM_SOFTCLOSE 已写快照");
+            d.x = 1;
+            d.y = 1;
+        }
+        assert_eq!(
+            (
+                rig.world.entities.get(rig.actor).expect("实体在").x,
+                rig.world.entities.get(rig.actor).expect("实体在").y
+            ),
+            (12, 22),
+            "前置：实体坐标未变"
+        );
+        let rec = rig.save();
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (12, 22),
+            "两源同存时必须以**实体**为准（快照只是离世那一刻的替身）"
         );
     }
 
@@ -41960,7 +42007,7 @@ SendRefMsgRange=15
     }
 
     /// **本卡（`openmir2-bag-eat-extra-frame`）**：`CM_SOFTCLOSE` 已把会话置
-    /// `stage=Left`/销毁实体（oracle 同一 Run 的 `MakeGhost()` 之后不再 Run）⇒
+    /// `stage=Left`（oracle 同一 Run 的 `MakeGhost()` 之后不再 Run；M-3 起实体保留为 ghost）⇒
     /// 紧随其后的 P1 周期恢复**不得**再消费药池、也不得发 53。
     ///
     /// 真机形态（run2 `eat_item`）：Rust 的 `SM_HEALTHSPELLCHANGED(53)` 落在
@@ -42678,12 +42725,13 @@ SendRefMsgRange=15
         }
     }
 
-    /// **反向牙（事件驱动排水不加门）**：幽灵实体已销毁 ⇒ world tick 不再为它产任何
-    /// 事件，P2/B2·B3·B4·B5/毒伤等「由 `TickRecord` 驱动」的排水自然无帧可出；
-    /// 纯镜像（`sync_super_man_wabil` / `sync_use_items_to_session`）在无实体时早退。
+    /// **事件驱动排水不加门，但 world tick 必须为 ghost 止事件**：M-3 起 soft_close **保留**
+    /// ghost 实体（不再是「实体已销毁」）⇒ 这条用例的判据变成「实体在，但 `TickRecord` 不得为它
+    /// 产任何事件」（P2/B2·B3·B4·B5/毒伤/死亡结算）。夹具带 `die_called=true`，删任何一处
+    /// ghost 门都会让对应记录非空。
     ///
-    /// 若将来让 world tick 继续处理幽灵（例如保留实体），本用例必红——那时这些排水
-    /// 就必须补 `session_in_world` 门。
+    /// 纯镜像：`sync_super_man_wabil` 的门是 `!e.super_man`（**没有** ghost 门，本骨架玩家恒
+    /// 非 super-man）；`sync_use_items_to_session` 会读 ghost 实体（预期行为）。
     #[test]
     fn sc_gate_event_driven_drains_have_no_source_after_soft_close() {
         let (mut world, mut sessions, _online, _gates, _rx, actor) = sc_gate_fixture("sc_evt");

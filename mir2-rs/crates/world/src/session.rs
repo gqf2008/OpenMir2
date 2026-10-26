@@ -508,6 +508,13 @@ impl World {
         // ⇒ `disconnect` 在 Left 上仍是**移除门**（oracle `WorldServer.cs:707-716` 的
         // `PlayObjectList.Remove` + `CloseUser`）：摘掉遗留 ghost 实体并清 `actor_id`。
         // 重复 `soft_close` 仍报 `NotInWorld`（帧面已在第一次发过，不得重发）。
+        //
+        // **这条移除门是谁调用的（F4 订正措辞）**：`drain_soft_close` 消费的
+        // `soft_close_pending` 唯一生产者是 `handle_kick_account`（**账号级顶号**），
+        // **不是** `CM_SOFTCLOSE`；玩家自己小退时，ghost 只能由网关的 `GateEvent::Closed`
+        // 臂（客户端断开 GameGate 连接的副产品）收走。**世界侧没有兜底扫描** ⇒ 这是
+        // 「客户端/协议行为」假设，不是代码结构保证；Closed 事件一旦丢失就是泄漏
+        //（重进路径由 `enter_map_at` 收走，见那里的 F1 修复；既不重进也收不到 Closed 时才会滞留）。
         if sess.stage != WorldStage::InWorld {
             if soft {
                 return Err(SessionError::NotInWorld);
