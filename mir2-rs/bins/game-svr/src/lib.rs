@@ -43248,24 +43248,33 @@ SendRefMsgRange=15
     //
     // 故这里只钉**语义不变量**（两方向都要能红）：201 只能由查询派发本身产出。
 
-    /// 牙（**提前**方向）：`SM_BAGITEMS` 全宿主只有一个产出点，且在 [`handle_query_bag_cmd`] 内；
-    /// 登录尾段（[`drain_login_tail`]）不得补发 201。
+    /// 牙（**提前**方向，文本提醒 + 位置）：`SM_BAGITEMS` 的**文本**产出点只有一处，且在
+    /// [`handle_query_bag_cmd`] 内；登录尾段（[`drain_login_tail`]）不得出现它。
     ///
-    /// 红检：在登录路径（`DBR_LOADHUMANRCD` 分支 / `frames_split` 的 `before`）加一条主动发，
+    /// **文本牙只是提醒，不是判据**（reviewer-20 `f080d2c2`）：花括号 re-export
+    /// `use game_svr::itemwire::{sm_bagitems as bag};` + 尾段 `bag(...)` 躲得掉这里的任何子串计数。
+    /// **真正的判据是行为接缝** [`bagitems_201_login_drains_emit_no_bagitems_frames`]（跑生产排水、
+    /// 看实际发出的帧）——别名/宏/改名/`{… as y}` 都绕不过它。
+    ///
+    /// 文本牙只在**去掉注释后**的代码上跑：只把 `sm_bagitems` 写进注释不该判红
+    /// （reviewer-20 复现过的假红）。
+    ///
+    /// 红检：在登录路径（`DBR_LOADHUMANRCD` 分支 / `frames_split` 的 `before`）加一条**直接**发，
     /// 或把 201 拼进 `after` ⇒ 下面的计数 / 区段断言必红。
     #[test]
     fn bagitems_201_has_no_proactive_send_point() {
         let src = include_str!("lib.rs");
         let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
-        // ① 先查登录尾段：`drain_login_tail` 全区段（含文档注释）不得出现 `sm_bagitems`。
-        let tail = prod.find("fn drain_login_tail(").expect("登录尾段必须在");
-        let tail_end = prod[tail..].find("\nfn ").map_or(prod.len(), |o| tail + o);
+        let code = strip_rust_comments(prod);
+        // ① 先查登录尾段：`drain_login_tail` 全区段不得出现 `sm_bagitems`（去注释后）。
+        let tail = code.find("fn drain_login_tail(").expect("登录尾段必须在");
+        let tail_end = code[tail..].find("\nfn ").map_or(code.len(), |o| tail + o);
         assert!(
-            !prod[tail..tail_end].contains("sm_bagitems"),
+            !code[tail..tail_end].contains("sm_bagitems"),
             "登录尾段（drain_login_tail）不得补发 SM_BAGITEMS"
         );
         // ② 再查产出点总数与位置：全宿主恰一处，且在 `handle_query_bag_cmd` 内。
-        let hits: Vec<usize> = prod
+        let hits: Vec<usize> = code
             .match_indices("itemwire::sm_bagitems(")
             .map(|(i, _)| i)
             .collect();
@@ -43274,19 +43283,18 @@ SendRefMsgRange=15
             1,
             "SM_BAGITEMS 必须只有一个产出点（多一个 = 登录主动发/尾段补发）：{hits:?}"
         );
-        // ②' 卡 `openmir2-tooth-hardening-batch` B：只看 `itemwire::sm_bagitems(` 能被
-        // **函数指针别名**绕过——`static R21_BAG: fn(..) = game_svr::itemwire::sm_bagitems;`
-        // 不含 `(`、不影响上面的计数，随后可在尾段调用。这里按**完整路径**再数一遍：
-        // 别名、`use ...::sm_bagitems;` 导入同样会被数进来。
-        let path_hits = prod.matches("itemwire::sm_bagitems").count();
+        // ②' 完整路径计数（仍是**提醒**）：`static X: fn(..) = game_svr::itemwire::sm_bagitems;`
+        // 不含 `(`、上面数不到，这里能数到；但 `use ...::{sm_bagitems as bag}` 躲得掉 ⇒
+        // **判据不在这里**，见行为牙。
+        let path_hits = code.matches("itemwire::sm_bagitems").count();
         assert_eq!(
             path_hits, 1,
-            "`itemwire::sm_bagitems` 只能出现在唯一产出点（别名/导入也算）：{path_hits}"
+            "`itemwire::sm_bagitems` 文本上只能出现一次（提醒口径；行为判据见行为牙）：{path_hits}"
         );
-        let handler = prod
+        let handler = code
             .find("fn handle_query_bag_cmd(")
             .expect("派发函数必须在");
-        let next = prod
+        let next = code
             .find("fn handle_query_user_name_cmd(")
             .expect("后继函数必须在");
         assert!(
@@ -43294,6 +43302,58 @@ SendRefMsgRange=15
             "唯一产出点必须在 handle_query_bag_cmd 内（offset={}）",
             hits[0]
         );
+    }
+
+    /// 去掉 Rust 注释（`//` 行注释与 `/* … */` 块注释），**保留字符串字面量**。
+    /// 文本牙用它避免「只在注释里写了一个路径就判红」的假红（reviewer-20 `f080d2c2`）。
+    fn strip_rust_comments(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut it = src.chars().peekable();
+        let mut in_block = false;
+        let mut in_str = false;
+        while let Some(c) = it.next() {
+            if in_block {
+                if c == '*' && it.peek() == Some(&'/') {
+                    it.next();
+                    in_block = false;
+                } else if c == '\n' {
+                    out.push('\n');
+                }
+                continue;
+            }
+            if in_str {
+                out.push(c);
+                if c == '\\' {
+                    if let Some(n) = it.next() {
+                        out.push(n);
+                    }
+                } else if c == '"' {
+                    in_str = false;
+                }
+                continue;
+            }
+            if c == '"' {
+                in_str = true;
+                out.push(c);
+                continue;
+            }
+            if c == '/' && it.peek() == Some(&'/') {
+                for n in it.by_ref() {
+                    if n == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+                continue;
+            }
+            if c == '/' && it.peek() == Some(&'*') {
+                it.next();
+                in_block = true;
+                continue;
+            }
+            out.push(c);
+        }
+        out
     }
 
     /// 牙（**延后**方向）：命令派发当场回 201；登录尾段排水只出尾段帧。
