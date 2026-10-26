@@ -172,10 +172,12 @@ ghost 由 ① 网关 `Closed` 的移除门、或 ② 玩家重进时 `enter_map_
 - 驱动是 **50ms** 定时器（`src/GameSrv/Word/Threads/UserProcessor.cs:7` 的
   `base(TimeSpan.FromMilliseconds(50), "UserProcessor")`）；
 
-⇒ oracle 在「**最后一次 Run 之后 250–300ms**」的第一个 50ms 轮、由 `WorldServer.cs:707-716` 的
-`else` 支摘出 `PlayObjectList`；**相对 soft_close 则是 50–300ms**（取决于 soft_close 落在两个门
-之间的位置）。本仓要等 `Closed`（~402ms）⇒ **本仓比 oracle 晚约 100–350ms**。
-这是**相位差**而非口径差（与 T-89 族同形）：A6 窗口的观测者按「**≤300ms**」找那一两帧，并把两侧的
+⇒ oracle 在门到点的第一个 **50ms** 轮摘出 `PlayObjectList`：`WorldServer.cs:645` 的门通过后
+**先**在 `:647` 刷 `RunTick = dwCurTick`、**再**判 `Ghost` 走 `:707-716` 的 `else` 支
+（reviewer-21 的 D1 订正：刷 `RunTick` 在 ghost 判定**之前**）⇒ **相对 soft_close ∈ (0, 300] ms**
+（soft_close 落在两个门之间的位置决定；「最后一次 Run 之后」才是 250–300ms）。
+本仓要等 `Closed`（~402ms）⇒ **本仓比 oracle 晚约 100–400ms**。
+这是**相位差**而非口径差（与 T-89 族同形）：A6 窗口的观测者按「**≤300ms**（下界可到 ~0ms）」找那一两帧，并把两侧的
 `online_play_objects` 读数一起记下来。要消掉这条差需要世界侧「Left+actor_id 超时兜底」
 （M-3 F4 已登记为未做）。
 
@@ -186,7 +188,9 @@ ghost 由 ① 网关 `Closed` 的移除门、或 ② 玩家重进时 `enter_map_
 ⇒ **任何「softclose 当 tick 里看得见 ghost」的场景，拿这份 golden 判会不忠实于 oracle**；
 本轮按禁令**不重生成 golden**，只在 Rust 侧 `snapshot_sorted` 的投影按 `add_to_mapped` 过滤
 （卡 `openmir2-makeghost-lifecycle-m3` 的 parity 修复）。将来若要做「softclose 当 tick」的对拍，
-必须先按 golden 流程（`docs/Rust重写设计文档.md` §7「测试与门禁」）重跑 C# oracle。
+必须先按 `mir2-rs/tests/parity/README.md:26` 的「重新生成金标准」小节重跑 C# oracle
+（注意该节只覆盖 `ParityGolden`；`WorldGolden` 的入口是 `tests/parity/tests/world_session_parity.rs:9-11`
+等模块头里那条 `dotnet run --project … WorldGolden … -- session`）。
 
 ## 7. 与 reviewer-21 `854d0e9a`（`fd08ff3a9` 基线）的差异
 
