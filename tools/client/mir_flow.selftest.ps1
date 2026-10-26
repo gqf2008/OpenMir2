@@ -545,6 +545,34 @@ try {
   Check "stages pickup TOOTH: pickup at wrong cell => RED" (
     $r.Code -eq 1 -and $r.Out.Contains("category=pickup verdict=RED") -and $r.Out.Contains("!= 角色格")) ($r.Out + " rc=" + $r.Code)
 
+  # ---- 14a-2. 卡 openmir2-mirflow-pickup-gate-align A1/A2：**动作没发出也要先查前置门** ----
+  # 与 npc/trade/combat 对齐：缺 floor_item（结构性不可达）⇒ UNDECIDABLE(missing_prereq, rc=6) 并点名；
+  # gate **明确查过** floor_item 且不在 missing ⇒ 才是真正的动作缺失 ⇒ RED(action_missing, rc=1)。
+  # 两支互不覆盖：同一条失败帧（无 CM_PICKUP），只改 gate 一个字段，rc 必须从 6 变 1。
+  $pkNoAction = New-TestDir "pickup-noaction"
+  New-StageProxyDir $pkNoAction @(
+    @{ dir = "s2c"; ident = 50; recog = 6496; param = 330; tag = 331; series = 0; ts = 1000 },
+    @{ dir = "s2c"; ident = 201; recog = 6496; param = 0; tag = 0; series = 5; ts = 1100 })
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkNoAction,
+    "-OutDir", (New-StageOutDir "pickup-noaction-und"))
+  Check "stages pickup A1: no CM_PICKUP + structural floor_item => UNDECIDABLE (kind=missing_prereq rc=6, missing=floor_item)" (
+    $r.Code -eq 6 -and
+    $r.Out.Contains("category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6 missing=floor_item") -and
+    $r.Out.Contains("未发出 c2s CM_PICKUP(1001)") -and -not $r.Out.Contains("kind=action_missing")) (
+    $r.Out + " rc=" + $r.Code)
+
+  $pkGateDir = New-TestDir "pickup-gate-present"
+  $pkGate = Join-Path $pkGateDir "gate.json"
+  [IO.File]::WriteAllText($pkGate,
+    '{"kind":"ok","verdict":"GREEN","need":["floor_item","npc"],"missing":[],"reasons":{}}',
+    (New-Object Text.UTF8Encoding($false)))
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-ProxyDir", $pkNoAction,
+    "-PrereqGateJson", $pkGate, "-OutDir", (New-StageOutDir "pickup-noaction-red"))
+  Check "stages pickup A1 TOOTH: same frames + gate says floor_item ready => RED action_missing (rc=1)" (
+    $r.Code -eq 1 -and
+    $r.Out.Contains("category=pickup verdict=RED kind=action_missing rc=1") -and
+    $r.Out.Contains("未发出") -and -not $r.Out.Contains("kind=missing_prereq")) ($r.Out + " rc=" + $r.Code)
+
   # ---- 14b. NPC 对话 ----
   $ndGreen = New-TestDir "npcdialog-green"
   New-StageProxyDir $ndGreen @(
@@ -694,6 +722,39 @@ try {
     $r.Code -eq 7 -and
     $r.Out.Contains("category=combat verdict=RED kind=spawn_failed rc=7") -and
     $r.Out.Contains("无掉血") -and -not $r.Out.Contains("kind=out_of_range")) ($r.Out + " rc=" + $r.Code)
+
+  # ---- 14d-2. 卡 openmir2-mirflow-pickup-gate-align A3：Get-RcAggregate 的**优先级行为牙** ----
+  # `Get-RcAggregate` 的顺序是 out_of_range(8) > spawn_failed(7) > 其它 RED(1) > UNDECIDABLE(6) > PASS(0)：
+  # 只要有一类「该发生却没发生」，整体就不能算「判不了」。牙的做法：**同一次运行**里让两类各落一档，
+  # 再断言聚合取「更严重」的那一档——把顺序改成相反（@(6,1,7,8)）时三条全部变 6 ⇒ 必红。
+  # 可达组合：(1,6) / (7,6) / (8,6)。**（8,7) 在单次 CLI 里不可达**（同一 combat 阶段只能出其中一档）
+  # ⇒ 这一对只能由 `Resolve-CombatCause` 的 8 行真值表钉住，此处如实登记不覆盖。
+  $aggDir = New-TestDir "aggregate-gate"
+  $aggGate = Join-Path $aggDir "gate.json"
+  [IO.File]::WriteAllText($aggGate,
+    '{"kind":"missing_prereq","verdict":"UNDECIDABLE","need":["floor_item","npc"],"missing":["floor_item"],"reasons":{"floor_item":"selftest: structural"}}',
+    (New-Object Text.UTF8Encoding($false)))
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-NpcDialogStage", "-ProxyDir", $pkNoAction,
+    "-PrereqGateJson", $aggGate, "-OutDir", (New-StageOutDir "aggregate-1-vs-6"))
+  Check "stages aggregate A3: RED(1) beats UNDECIDABLE(6) => rc=1" (
+    $r.Code -eq 1 -and
+    $r.Out.Contains("category=npcdialog verdict=RED kind=action_missing rc=1") -and
+    $r.Out.Contains("category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6") -and
+    $r.Out.Contains("STAGE_EVIDENCE_TOTAL RED=1 UNDECIDABLE=1 rc=1")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-CombatStage", "-ProxyDir", $cbNoFx,
+    "-Profile", $profGood, "-PlayerMap", "0", "-PrereqGateJson", $aggGate,
+    "-OutDir", (New-StageOutDir "aggregate-7-vs-6"))
+  Check "stages aggregate A3: spawn_failed(7) beats UNDECIDABLE(6) => rc=7" (
+    $r.Code -eq 7 -and
+    $r.Out.Contains("category=combat verdict=RED kind=spawn_failed rc=7") -and
+    $r.Out.Contains("category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6")) ($r.Out + " rc=" + $r.Code)
+  $r = Invoke-Flow @("-StageEvidenceCheck", "-PickupStage", "-CombatStage", "-ProxyDir", $cbGreen,
+    "-Profile", $profOther, "-PlayerMap", "0", "-PrereqGateJson", $aggGate,
+    "-OutDir", (New-StageOutDir "aggregate-8-vs-6"))
+  Check "stages aggregate A3: out_of_range(8) beats UNDECIDABLE(6) => rc=8" (
+    $r.Code -eq 8 -and
+    $r.Out.Contains("category=combat verdict=RED kind=out_of_range rc=8") -and
+    $r.Out.Contains("category=pickup verdict=UNDECIDABLE kind=missing_prereq rc=6")) ($r.Out + " rc=" + $r.Code)
 
   # ---- 14e. A6：日志目录参数化（空目录 ⇒ 显式 SKIP；-RequireLogEvidence ⇒ RED）----
   $emptyLog = New-TestDir "log-empty"
