@@ -1,7 +1,7 @@
 {
   "format": "window-batch/1",
   "card": "openmir2-window-run-2",
-  "note": "run3 一键续跑的固定 24 场景清单：`pickup_item` 已封存为结构性不可判（T-19/T-25），不进入窗口；顺序 = window-run-2 batch.log 的实际执行顺序去掉 pickup_item 后重排为 1..24。extra 是 card_window.py 的参数（原样追加）。升级场景 upgrade_retrieve 必须 --timeout-ms 720000（场景第 9 步 sleep 660000，默认 20000 会 180s 杀 probe）。",
+  "note": "run3 一键续跑的固定 24 场景清单：`pickup_item` 已封存为结构性不可判（T-19/T-25），不进入窗口；顺序 = window-run-2 batch.log 的实际执行顺序去掉 pickup_item 后重排为 1..24。extra 是 card_window.py 的参数（原样追加）。升级场景 upgrade_retrieve 必须 --timeout-ms 720000（场景第 9 步 sleep 660000，默认 20000 会 180s 杀 probe）。 2026-10-27（卡 openmir2-window-scenarios-for-new-rcards）：追加 #25 softclose_save（CM_SOFTCLOSE 后不重连 ⇒ 落库面证据，makeghost M-3 A5）与 #26 softclose_relogin（软关→同账号重连；场景早已存在但从未进批次）。",
   "scenarios": [
     {"n": 1,  "name": "login_only",        "profile": "alt",          "extra": []},
     {"n": 2,  "name": "npc_click_auto",    "profile": "alt",          "extra": []},
@@ -31,6 +31,8 @@
      "blocked": "① 买武器腿缺 652 ClientItem buffer 解码取 MakeIndex（645 不含，运行时计数推不出）；②「SaveTick/600s 门不可观测」已证伪（SaveTick 只写时间戳，ConsoleShowUserCountTime 可被 profile 覆盖到 5s）；**真缺口=税入账原因未定位**。买药腿已由 #23 覆盖（详见 tools/probe/scenarios/castle_merchant_tax.json 的 blocked）"},
     {"n": 23, "name": "castle_merchant_tax_potion", "profile": "alt", "extra": ["--timeout-ms", "700000"]},
     {"n": 24, "name": "castle_merchant_tax_upgrade", "profile": "alt", "extra": [],
-     "blocked": "**「不能进批」已证伪**（extra 拼在 --profile 之后 + load_profile 收 JSON 路径）；NPC 寻址的对象类别校验与 SM_DISAPPEAR 剔除已由 openmir2-probe-npc-addressing-followups 合入 c5ec908e1。profile 预置 tools/window/profiles/castle_tax_upgrade.json 尚未接入 run3（详见 tools/probe/scenarios/castle_merchant_tax_upgrade.json 的 blocked）"}
+     "blocked": "**「不能进批」已证伪**（extra 拼在 --profile 之后 + load_profile 收 JSON 路径）；NPC 寻址的对象类别校验与 SM_DISAPPEAR 剔除已由 openmir2-probe-npc-addressing-followups 合入 c5ec908e1。profile 预置 tools/window/profiles/castle_tax_upgrade.json 尚未接入 run3（详见 tools/probe/scenarios/castle_merchant_tax_upgrade.json 的 blocked）"},
+    {"n": 25, "name": "softclose_save",    "profile": "alt",          "extra": []},
+    {"n": 26, "name": "softclose_relogin", "profile": "alt",          "extra": []}
   ]
 }

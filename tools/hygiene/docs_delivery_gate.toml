@@ -149,11 +149,11 @@ paths = ["src/", "sql/"]
 id = "needs-human-run3-list-count"
 file = "docs/needs-human-20261025.md"
 anchor = "bash tools/window/run_batch.sh --list"
-title = "owner 开窗勾选项：run_batch --list ⇒ 24（blocked 2 ⇒ 入批 22）"
+title = "owner 开窗勾选项：run_batch --list ⇒ 26（blocked 4 ⇒ 入批 22）"
 kind = "command_output"
 # `--list` 只读、<1s；`bash` 不可用时本门 fail-closed（rc=2，登记表 rot 文案里说明）。
 argv = ["bash", "tools/window/run_batch.sh", "--list"]
-expect = "场景数 24（blocked 4 ⇒ 入批 20）"
+expect = "场景数 26（blocked 4 ⇒ 入批 22）"
 
 # 做不到的形态：**显式登记，不假装覆盖**（卡 known_limits）。
 [[unsupported_claims]]
