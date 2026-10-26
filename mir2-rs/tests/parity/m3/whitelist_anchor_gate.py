@@ -79,7 +79,7 @@ HIGH_CHURN = (
     ("mir2-rs/crates/world/src/map.rs", 6, "地图格/门/地面物"),
     ("mir2-rs/bins/game-svr/src/mongen.rs", 5, "MonGen 刷怪 sink"),
     ("mir2-rs/bins/game-svr/src/dbclient.rs", 5, "存档 DB 客户端"),
-    ("mir2-rs/bins/game-svr/src/smframe.rs", 22, "出站编码器面（turn-order/骨架/转职帧都在此；2026-10-27 一晚 +150/−46 把 T-206 的锚顶走 69 行）"),
+    ("mir2-rs/bins/game-svr/src/smframe.rs", 13, "出站编码器面（本文件 13 次/10 天；`smframe*.rs` 合计 22。2026-10-27 turn-order 的 +150/−46 把 T-206 锚顶走 69 行）"),
     ("mir2-rs/crates/world/src/npc.rs", 2, "固定 NPC tick（任务点名，contention 区）"),
     ("src/BotSrv/AppService.cs", 20, "BotSrv 装配（工具例外，多夹具卡扩展）"),
     ("src/BotSrv/MShare.cs", 20, "BotSrv 静态位（工具例外，多夹具卡扩展）"),
@@ -215,6 +215,36 @@ def _candidates(sym):
     if "." in sym:
         parts.add(sym.split(".")[-1])
     return {p for p in parts if len(p) >= 3}
+
+
+
+_DECL_KEYWORDS = r"fn|struct|enum|trait|mod|const|static|type|union|macro_rules"
+
+
+def _strip_line_comments(filetxt):
+    """去掉 `//` 之后的注释（行注释整段），保留换行。
+
+    review `4c74851f` 的第二条 fail-open 通道：注释里的 [`sm_skeleton`] 让符号锚假装还在。
+    """
+    out = []
+    for ln in filetxt.split(chr(10)):
+        i = ln.find("//")
+        out.append(ln if i < 0 else ln[:i])
+    return chr(10).join(out)
+
+
+def _declared_in(filetxt, name):
+    """符号是否以**完整标识符**出现在（去掉注释后的）文件里（判据 4b）。
+
+    review `4c74851f`：原实现是**原始子串**匹配 ⇒ 两条 fail-open 通道：
+    ① 同前缀标识符（`fn sm_skeleton_frame()` 兜住 `sm_skeleton`）；
+    ② 注释（`[`sm_skeleton`]`）。⇒ 先去注释，再按「完整标识符」匹配（前后不得是
+    标识符字符）。这样既堵住两条通道，又不误伤对**字段/表达式/变体**的合法引用。
+    """
+    edge = "(?:^|[^A-Za-z0-9_])"
+    tail = "(?:[^A-Za-z0-9_]|$)"
+    pat = edge + re.escape(name) + tail
+    return re.search(pat, _strip_line_comments(filetxt)) is not None
 
 
 def _candidates_filewide(sym):
@@ -401,7 +431,8 @@ def check_doc_text(text, root=REPO_ROOT, whitelist_label="<mem>", idx=None,
             src = os.path.join(root, p)
             if not os.path.isfile(src):
                 continue
-            if not any(c in "\n".join(_read_lines(src)) for c in _candidates_filewide(sym)):
+            _ftxt = chr(10).join(_read_lines(src))
+            if not any(_declared_in(_ftxt, c) for c in _candidates_filewide(sym)):
                 reds.append(("ANCHOR_SYMBOL_MISSING",
                              "高 churn 符号锚 `%s`（`%s`）：声明的符号在文件里不存在（fail-closed）"
                              % (p, sym)))
@@ -540,6 +571,28 @@ def selftest():
         reds, _i, _p = check_doc_text(bad_hc, root=td)
         expect("mutation-highchurn-line-red",
                any(c == "ANCHOR_LINE_NOT_ALLOWED" and "T-92" in m for c, m in reds),
+               "; ".join("%s %s" % (c, m) for c, m in reds))
+
+        # ④b 改坏必红（判据 4b，review `4c74851f` 的两颗牙）：高 churn 符号锚的
+        # 符号整体改名 ⇒ 必须红（原实现是子串匹配，被 `fn sm_skeleton_frame()` 兜住）。
+        # 用独立合成根：lib.rs 里**只剩**同前缀的 `fn step_mon_gen_frame()`
+        # （真实事故形态：`sm_skeleton` 被改名后，`fn sm_skeleton_frame()` 兜住了它）——
+        # 子串匹配会放行，完整标识符匹配必须红。
+        with tempfile.TemporaryDirectory() as td_b:
+            _write(td_b, "mir2-rs/bins/game-svr/src/lib.rs",
+                   "fn step_mon_gen_frame() {}" + chr(10))
+            bad_renamed = ("| T-94 | 宿主 `step_mon_gen`（`mir2-rs/bins/game-svr/src/lib.rs`） |" + chr(10))
+            reds, _i, _p = check_doc_text(bad_renamed, root=td_b)
+            expect("mutation-highchurn-symbol-renamed-red",
+                   any(c == "ANCHOR_SYMBOL_MISSING" and "step_mon_gen" in m for c, m in reds),
+                   "; ".join("%s %s" % (c, m) for c, m in reds))
+
+        # ④c 改坏必红（判据 4b 第二颗）：符号是另一个标识符的**前缀**（`step_mon` 在
+        # `step_mon_gen` 里面）—— 子串匹配会放行，完整标识符匹配必须红。
+        bad_prefix = good.replace("宿主 `step_mon_gen`", "宿主 `step_mon`")
+        reds, _i, _p = check_doc_text(bad_prefix, root=td)
+        expect("mutation-highchurn-symbol-prefix-red",
+               any(c == "ANCHOR_SYMBOL_MISSING" and "step_mon" in m for c, m in reds),
                "; ".join("%s %s" % (c, m) for c, m in reds))
 
         # ⑤ 改坏必红③（判据 1）：源码引用解析不到 ⇒ ANCHOR_FILE_MISSING。
