@@ -25999,61 +25999,169 @@ pub fn run_with_args(args: &[String]) -> i32 {
     code
 }
 
-/// **去注释视图**（`#[cfg(test)]`）：同时剥掉 `//` 行注释与 `/* … */` 块注释（含跨行）。
+/// **去注释视图**（`#[cfg(test)]`）——**全仓唯一一份**（卡 `openmir2-strip-rust-comments-dedupe`）。
 ///
 /// 为什么需要（review K1）：源码文本锚只能看代码。只剥 `//` 时，把整段实现用 `/* … */`
 /// 包起来（**一行未删**）仍然「看起来像代码」⇒ 调用点锚照旧命中、而线上路径根本不执行。
 /// 这是 5 个字符就能造出的绕过，且行为牙（直接调函数的用例）**看不见**它。
 ///
+/// **语义 = 两份历史实现的并集**（卡 `openmir2-strip-rust-comments-dedupe`）：
+/// * 行注释 `// …` 与块注释 `/* … */`（**含跨行与嵌套**）；
+/// * **字符串字面量里的 `//` / `/*` 不剥**（旧实现①的缺口：会把 `"http://x"` 剥掉，
+///   进而让锚点看到「假代码」）；
+/// * **raw string 不剥**：`r"…"` / `r#"…"#` / `r##"…"##` / `br#"…"#`（旧实现②的缺口：
+///   只认双引号，`r#"…"#` 里的 `"` 会让它错位并静默吞掉后面的代码）；
+/// * **字符字面量不剥**：`'x'` / `'\n'` / `'\''` / `'"'`（旧实现②的缺口：`'"'` 里的双引号
+///   会被当成字符串起点）。生命期写法 `'a` 不当作字符字面量（靠「闭引号在附近」判定）。
+///
 /// 约定：
-/// - 块注释里的**换行保留** ⇒ 剥完行数/行号不变，锚点可以直接按下标比较；
-/// - 不做词法级处理：字符串字面量里的 `//` / `/*` 也会被剥（本仓锚点只扫生产代码，
-///   这类字面量不出现在被扫的片段里；将来若要扫含此类字面量的代码，需先过词法）。
+/// - **换行一律保留**（行注释的 `\n`、块注释内的 `\n`、raw string 内的换行都原样留下）
+///   ⇒ 剥完行数/行号不变，锚点可以直接按下标比较；
+/// - 只做**词法级**的这几种状态，不解析宏/属性；锚点扫的是本仓生产代码，够用。
 #[cfg(test)]
 pub(crate) fn strip_rust_comments(src: &str) -> String {
-    let chars: Vec<char> = src.chars().collect();
+    let c: Vec<char> = src.chars().collect();
     let mut out = String::with_capacity(src.len());
-    let mut i = 0;
-    let mut in_line = false;
-    let mut in_block = false;
-    while i < chars.len() {
-        let c = chars[i];
-        let n = chars.get(i + 1).copied();
-        if in_line {
-            if c == '\n' {
-                in_line = false;
-                out.push(c);
+    let mut i = 0usize;
+    while i < c.len() {
+        // ① 行注释：吞到行尾，**换行本身留给下一轮原样 push**（行数不变）。
+        if c[i] == '/' && c.get(i + 1) == Some(&'/') {
+            i += 2;
+            while i < c.len() && c[i] != '\n' {
+                i += 1;
             }
-            i += 1;
             continue;
         }
-        if in_block {
-            if c == '*' && n == Some('/') {
-                in_block = false;
-                i += 2;
+        // ② 块注释：可嵌套（Rust 语义）；**内部换行保留**。
+        if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+            let mut depth = 1usize;
+            i += 2;
+            while i < c.len() && depth > 0 {
+                if c[i] == '\n' {
+                    out.push('\n');
+                }
+                if c[i] == '/' && c.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                    continue;
+                }
+                if c[i] == '*' && c.get(i + 1) == Some(&'/') {
+                    depth -= 1;
+                    i += 2;
+                    continue;
+                }
+                i += 1;
+            }
+            continue;
+        }
+        // ③ raw string（含 `r#"…"#` / `br#"…"#`）：整段原样保留。
+        if let Some(end) = raw_string_end(&c, i) {
+            out.extend(&c[i..end]);
+            i = end;
+            continue;
+        }
+        // ④ 普通字符串 / 字节字符串：整段原样保留（`\\` 与 `\"` 都算转义）。
+        if c[i] == '"' {
+            out.push('"');
+            i += 1;
+            while i < c.len() {
+                let ch = c[i];
+                out.push(ch);
+                i += 1;
+                if ch == '\\' {
+                    if i < c.len() {
+                        out.push(c[i]);
+                        i += 1;
+                    }
+                } else if ch == '"' {
+                    break;
+                }
+            }
+            continue;
+        }
+        // ⑤ 字符字面量（`'x'` / `'\n'` / `'"'`）：原样保留，别让里面的 `"` 开启字符串态。
+        if c[i] == '\'' {
+            if let Some(len) = char_literal_len(&c, i) {
+                out.extend(&c[i..i + len]);
+                i += len;
                 continue;
             }
-            // 保留换行：行号/行数与原文一致（锚点按下标比较的前提）。
-            if c == '\n' {
-                out.push(c);
-            }
-            i += 1;
-            continue;
         }
-        if c == '/' && n == Some('/') {
-            in_line = true;
-            i += 2;
-            continue;
-        }
-        if c == '/' && n == Some('*') {
-            in_block = true;
-            i += 2;
-            continue;
-        }
-        out.push(c);
+        out.push(c[i]);
         i += 1;
     }
     out
+}
+
+/// `chars[i]` 起是否是一个 raw string 的开头；是则返回**闭引号之后**的下标。
+///
+/// 形态：`r"…"` / `r#"…"#` / `r##"…"##`（`#` 任意个），以及字节 raw `br"…"` / `br#"…"#`。
+/// 不是则返回 `None`（调用方按普通字符处理）。
+#[cfg(test)]
+fn raw_string_end(c: &[char], i: usize) -> Option<usize> {
+    let mut p = i;
+    if c.get(p) == Some(&'b') && c.get(p + 1) == Some(&'r') {
+        p += 2;
+    } else if c.get(p) == Some(&'r') {
+        p += 1;
+    } else {
+        return None;
+    }
+    let mut hashes = 0usize;
+    while c.get(p) == Some(&'#') {
+        hashes += 1;
+        p += 1;
+    }
+    if c.get(p) != Some(&'"') {
+        return None;
+    }
+    p += 1;
+    while p < c.len() {
+        if c[p] == '"' {
+            let mut q = p + 1;
+            let mut seen = 0usize;
+            while seen < hashes && c.get(q) == Some(&'#') {
+                seen += 1;
+                q += 1;
+            }
+            if seen == hashes {
+                return Some(q);
+            }
+        }
+        p += 1;
+    }
+    // 未闭合：按到末尾处理（宁可少剥，也不吞代码）。
+    Some(c.len())
+}
+
+/// `chars[i] == '\''` 时判定它是不是**字符字面量**；是则返回总长（含引号），否则 `None`
+/// （`'a` 这类生命期写法返回 `None`，按普通字符处理）。
+///
+/// 判据只看**闭引号是否就在附近**：`'x'`（3）、`'\n'` / `'\''`（4）、`'\u{1F600}'`（多）。
+#[cfg(test)]
+fn char_literal_len(c: &[char], i: usize) -> Option<usize> {
+    let n = c.get(i + 1)?;
+    if *n == '\\' {
+        // 转义：`\x` / `\u{….}` / `\'` / `\"`
+        if c.get(i + 2) == Some(&'u') && c.get(i + 3) == Some(&'{') {
+            let mut p = i + 4;
+            while p < c.len() && c[p] != '}' {
+                p += 1;
+            }
+            if c.get(p + 1) == Some(&'\'') {
+                return Some(p + 2 - i);
+            }
+            return None;
+        }
+        if c.get(i + 3) == Some(&'\'') {
+            return Some(4);
+        }
+        return None;
+    }
+    if c.get(i + 2) == Some(&'\'') {
+        return Some(3);
+    }
+    None
 }
 
 #[cfg(test)]
@@ -43505,6 +43613,67 @@ SendRefMsgRange=15
     //
     // 故这里只钉**语义不变量**（两方向都要能红）：201 只能由查询派发本身产出。
 
+    /// **去注释器自检**（卡 `openmir2-strip-rust-comments-dedupe` A2）：五态 + 规则 19 退化。
+    ///
+    /// 牙（A3，逐支重放见 patch body）：
+    /// ① 改成「只剥行注释」⇒ ②（块注释/嵌套）与 ⑥（行数）必红，且
+    ///    `guild_runtime::tests::g3_anchor_a1...` 的 K1 自检也红；
+    /// ② 改成「连字符串一起剥」（删掉字符串/raw string/字符字面量分支）⇒ ③ ④ ⑤ 必红。
+    #[test]
+    fn strip_rust_comments_union_semantics() {
+        let s = |x: &str| crate::strip_rust_comments(x);
+
+        // ① 行注释：剥内容、保留换行
+        assert_eq!(s("a; // gone\nb;"), "a; \nb;");
+        // ② 块注释（跨行）：内容剥掉、换行保留 ⇒ 行数不变
+        let src = "a;\n/* x\ny\n*/b;\n";
+        let out = s(src);
+        assert!(
+            !out.contains('x') && !out.contains('y'),
+            "块注释必须剥掉：{out:?}"
+        );
+        assert_eq!(
+            out.lines().count(),
+            src.lines().count(),
+            "跨行块注释必须保留换行：{out:?}"
+        );
+        // 嵌套块注释（Rust 语义）
+        assert_eq!(
+            s("a; /* x /* y */ z */ b;"),
+            "a;  b;",
+            "嵌套块注释必须整体剥掉"
+        );
+        // ③ 字符串字面量里的 `//` / `/*` 不得被剥
+        for lit in ["let u = \"http://x\";", "let q = \"a/*b\";"] {
+            assert_eq!(s(lit), lit, "字符串字面量内容不得被剥：{lit}");
+        }
+        // ④ raw string 内容不得被剥（含 `r#"…"#` 与 `br##"…"##`）
+        for lit in [
+            "let r = r\"a//b /* c */\";",
+            "let r = r#\"a \"quoted\" //b\"#;",
+            "let r = br##\"x #\"# //y\"##;",
+        ] {
+            assert_eq!(s(lit), lit, "raw string 内容不得被剥：{lit}");
+        }
+        // ⑤ 字符字面量：`'"'` 里的双引号不得开启字符串态；生命期 `'a` 不当字符字面量
+        assert_eq!(
+            s("let q = '\"'; let u = \"http://x\";"),
+            "let q = '\"'; let u = \"http://x\";"
+        );
+        assert_eq!(s("let c = '\\'';"), "let c = '\\'';");
+        assert_eq!(s("let l: &'a str = \"//x\";"), "let l: &'a str = \"//x\";");
+        // ⑥ 剥后行数保持不变（跨行块注释 / raw string 里的换行都保留）
+        let src = "a;\n/* 1\n2 */\nlet r = r#\"x\ny\"#;\nb;\n";
+        assert_eq!(s(src).lines().count(), src.lines().count(), "行数必须不变");
+
+        // 规则 19 退化自查（逐条：输入 → 结果）
+        assert_eq!(s(""), "", "空输入 ⇒ 空输出");
+        assert_eq!(s("// only\n"), "\n", "全是行注释 ⇒ 只剩换行");
+        assert_eq!(s("/* only */"), "", "全是块注释 ⇒ 空");
+        let plain = "fn f() {}\nlet x = 1;\n";
+        assert_eq!(s(plain), plain, "没有注释 ⇒ 原样");
+    }
+
     /// 牙（**提前**方向，文本提醒 + 位置）：`SM_BAGITEMS` 的**文本**产出点只有一处，且在
     /// [`handle_query_bag_cmd`] 内；登录尾段（[`drain_login_tail`]）不得出现它。
     ///
@@ -43522,7 +43691,7 @@ SendRefMsgRange=15
     fn bagitems_201_has_no_proactive_send_point() {
         let src = include_str!("lib.rs");
         let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
-        let code = strip_rust_comments(prod);
+        let code = crate::strip_rust_comments(prod);
         // ① 先查登录尾段：`drain_login_tail` 全区段不得出现 `sm_bagitems`（去注释后）。
         let tail = code.find("fn drain_login_tail(").expect("登录尾段必须在");
         let tail_end = code[tail..].find("\nfn ").map_or(code.len(), |o| tail + o);
@@ -43559,58 +43728,6 @@ SendRefMsgRange=15
             "唯一产出点必须在 handle_query_bag_cmd 内（offset={}）",
             hits[0]
         );
-    }
-
-    /// 去掉 Rust 注释（`//` 行注释与 `/* … */` 块注释），**保留字符串字面量**。
-    /// 文本牙用它避免「只在注释里写了一个路径就判红」的假红（reviewer-20 `f080d2c2`）。
-    fn strip_rust_comments(src: &str) -> String {
-        let mut out = String::with_capacity(src.len());
-        let mut it = src.chars().peekable();
-        let mut in_block = false;
-        let mut in_str = false;
-        while let Some(c) = it.next() {
-            if in_block {
-                if c == '*' && it.peek() == Some(&'/') {
-                    it.next();
-                    in_block = false;
-                } else if c == '\n' {
-                    out.push('\n');
-                }
-                continue;
-            }
-            if in_str {
-                out.push(c);
-                if c == '\\' {
-                    if let Some(n) = it.next() {
-                        out.push(n);
-                    }
-                } else if c == '"' {
-                    in_str = false;
-                }
-                continue;
-            }
-            if c == '"' {
-                in_str = true;
-                out.push(c);
-                continue;
-            }
-            if c == '/' && it.peek() == Some(&'/') {
-                for n in it.by_ref() {
-                    if n == '\n' {
-                        out.push('\n');
-                        break;
-                    }
-                }
-                continue;
-            }
-            if c == '/' && it.peek() == Some(&'*') {
-                it.next();
-                in_block = true;
-                continue;
-            }
-            out.push(c);
-        }
-        out
     }
 
     /// 牙（**延后**方向）：命令派发当场回 201；登录尾段排水只出尾段帧。
