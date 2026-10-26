@@ -230,6 +230,8 @@ def _kill_tree(proc):
 
 #: 工具自测用 rc=2 表示「判不了」（环境/仓库问题）；与 rc=1（证伪）必须分开。
 NEED_RC = 2
+#: 自测里的「探针」重入标记（F1rev：整跑一次 selftest 验 SKIP 不吞 FAIL）。
+_PROBE = {"active": False}
 PASS, NEED, FAIL = "PASS", "NEED", "FAIL"
 
 
@@ -556,6 +558,37 @@ def selftest():
             _dg._assert_fixture_consistent = _real_guard
         chk(_f3_rc == 2 and "守卫调用点牙" in _f3_out,
             "TSG 牙F3 docs gate 的守卫**调用点**在链路上（删调用 ⇒ 本牙红；rc=%r）" % (_f3_rc,))
+
+        # F1rev（Leader 2026-10-27 反向要求）：`skip()` 是「把红变不红」的通道，必须证明它**不能**
+        # 掩盖真正的 FAIL——PS 在场（which 假返回）且 PS 牙真失败 ⇒ 自测必须仍红。
+        if not _PROBE["active"]:
+            _PROBE["active"] = True
+            _real_which_f1 = shutil.which
+            _real_run_one_f1 = globals()["run_one"]
+
+            def _fake_which_f1(name, *a, **k):
+                return ("C:/fake/pwsh.exe" if name in ("pwsh", "powershell")
+                        else _real_which_f1(name, *a, **k))
+
+            def _fake_run_one_f1(repo, name, argv, timeout):
+                if name.startswith("ps_"):
+                    return {"name": name, "argv": list(argv), "rc": 1, "elapsed_s": 0.0,
+                            "tail": "fake PS failure（牙注入）", "timed_out": False}
+                return _real_run_one_f1(repo, name, argv, timeout)
+
+            globals()["shutil"].which = _fake_which_f1
+            globals()["run_one"] = _fake_run_one_f1
+            try:
+                _buf_f1 = io.StringIO()
+                with redirect_stdout(_buf_f1):
+                    _rc_f1 = selftest()
+                _out_f1 = _buf_f1.getvalue()
+            finally:
+                globals()["shutil"].which = _real_which_f1
+                globals()["run_one"] = _real_run_one_f1
+                _PROBE["active"] = False
+            chk(_rc_f1 == 1 and any(l.startswith("FAIL TSG 牙14") for l in _out_f1.splitlines()),
+                "TSG 牙F1rev PS 在场且 PS 牙真失败 ⇒ 自测仍红（rc=%r）；SKIP 通道没掩盖 FAIL" % (_rc_f1,))
 
         # ---- 三态（卡 openmir2-docs-gate-rc-semantics）：判不了 ≠ 证伪 ----
         needf = os.path.join(tmp, "need.py")
