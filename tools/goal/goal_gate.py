@@ -1431,6 +1431,8 @@ def _synth_index():
                              ent("merge_result", {"merged": True})],
         # I-5：已合并但无任何证据/登记 ⇒ 真 FAIL
         "openmir2-card-omicron": [ent("issue", {"tier": "R"}),
+                                  # 夹具只建模「patch 条目存在」，不看 base/head；真实 patch 的 base/head 在 entry.refs
+                                  # （不是 body——见 docs/team-20261024.md 规则 23 / tools/collab/entryrefs.py）。
                                   ent("patch", {"head": "deadbeef"})],
         # 卡 `openmir2-goal-gate-unmerged-selftest`：窗口登记但**未合并** ⇒ 单列
         # `window_required_unmerged`（pi），补上 `merge_result` 后回到 `window_required`（rho）。
