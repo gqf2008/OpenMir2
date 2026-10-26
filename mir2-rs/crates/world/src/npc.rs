@@ -85,6 +85,58 @@ pub const NPC_TYPE_GUILD_OFFICIAL: i32 = 1;
 /// `case 2` ⇒ `CastleOfficial`（`LocalDB.cs:696-698`）。
 pub const NPC_TYPE_CASTLE_OFFICIAL: i32 = 2;
 
+/// `WorldServer.FindMerchant(npcId)`（`src/GameSrv/Word/WorldServer.cs:1446-1449`）的**三种结果**。
+///
+/// 权威实现是 `ActorMgr.Get<IMerchant>`（`src/Modules/SystemModule/ActorManager.cs:58-61`）的
+/// **`(T)actor` 硬转**——它**不是** `as` / `is`：
+///
+/// ```text
+/// return _actorsMap.TryGetValue(actorId, out IActor actor) ? (T)actor : default;
+/// ```
+///
+/// ⇒ `actor` 不存在 ⇒ `null`（[`MerchantLookup::Absent`]）；
+/// `actor` 存在但不实现 `IMerchant` ⇒ **抛 `InvalidCastException`**（[`MerchantLookup::NotMerchant`]）。
+///
+/// 两个调用点写的都是 `FindMerchant(id) ?? FindNpc(id)`（`PlayObject.Base.cs:688` 点击 /
+/// `PlayObject.Operate.cs:120` 菜单选择）：**第一臂一抛，第二臂永不执行**，异常穿透到
+/// `PlayObject.Run` 的 catch 被吞（`PlayObject.Message.cs:392-400`；`Ident != 0` ⇒ 不 `MakeGhost`）
+/// ⇒ **零帧、玩家不掉线**。所以「不存在」与「类型不符」在**帧面不可区分**，只能靠本枚举分开，
+/// 也不能把 `FindNpc` 当成「固定 NPC 的兜底」——它在这两条链上是死代码。
+///
+/// 类型依据：`IMerchant : INormNpc : IActor`（`IMerchant.cs:6` / `INormNpc.cs:3`）；
+/// `LocalDB.LoadNpcs` 的 `switch`（`LocalDB.cs:690-698`）`0`⇒`Merchant`、`1`⇒`GuildOfficial`、
+/// `2`⇒`CastleOfficial : Merchant` ⇒ **`Npcs.txt` type=1 恒 [`MerchantLookup::NotMerchant`]**。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MerchantLookup {
+    /// `ActorMgr` 里没有这个 id ⇒ `FindMerchant`/`FindNpc` 都返回 `null` ⇒ oracle 静默零帧（C3）。
+    Absent,
+    /// id 存在但不是 `IMerchant` ⇒ `(IMerchant)actor` 抛 `InvalidCastException` ⇒ 零帧（X）。
+    /// 含 `Npcs.txt` type=1（`GuildOfficial`）、怪物、玩家等一切非商人 actor。
+    NotMerchant,
+    /// 命中 `IMerchant`：`MerChant.txt` 商人、`Npcs.txt` type=0（`Merchant`）/ type=2（`CastleOfficial`）。
+    Merchant,
+}
+
+/// 按 oracle `FindMerchant` 的**硬转语义**给一次查找定性（见 [`MerchantLookup`]）。
+#[must_use]
+pub fn merchant_lookup(entity: Option<&Entity>) -> MerchantLookup {
+    let Some(e) = entity else {
+        return MerchantLookup::Absent;
+    };
+    if e.merchant.is_some() {
+        // `MerChant.txt` 行 = `Merchant`（`Merchant : NormNpc, IMerchant`）。
+        return MerchantLookup::Merchant;
+    }
+    match e.npc.as_ref().map(|st| st.npc_type) {
+        // `LocalDB.cs:690-698`：type 0 ⇒ `new Merchant()`；type 2 ⇒ `new CastleOfficial()`
+        // （`CastleOfficial : Merchant`）——两者都实现 `IMerchant`。
+        Some(NPC_TYPE_MERCHANT | NPC_TYPE_CASTLE_OFFICIAL) => MerchantLookup::Merchant,
+        // type 1 ⇒ `new GuildOfficial()`（`GuildOfficial : NormNpc`，**只**实现 `INormNpc`）；
+        // `None`（怪物/玩家等无 `npc` 态的 actor）同样不实现 `IMerchant` ⇒ 硬转抛。
+        _ => MerchantLookup::NotMerchant,
+    }
+}
+
 /// 固定管理 NPC 的状态（`INormNpc`/`BaseObject` 在加载层可对拍的字段子集 + ctor 抽数）。
 ///
 /// `npc_type` 是 `LoadNpcs` 的 `switch` 分支（0 商人 / 1 行会管理 / 2 沙城管理）；
@@ -533,6 +585,56 @@ mod tests {
                 ..NpcState::default()
             },
         }
+    }
+
+    /// **`merchant_lookup` 的三种结果必须分明**（卡 `openmir2-click-npc-guildofficial-cast` A3③）：
+    /// 不存在（`Absent`）/ 存在但非 `IMerchant`（`NotMerchant`）/ `IMerchant`（`Merchant`）。
+    ///
+    /// 帧面三者只有「零帧 / 有帧」两态（`Absent` 与 `NotMerchant` 都是零帧），所以**分类必须单独钉**。
+    ///
+    /// 红检：① 把 `NotMerchant` 臂并进 `Absent` ⇒ `guild`/`monster` 两条断言必红；
+    /// ② 把 `npc_type` 判断改成「有 `npc` 态就算商人」⇒ type=1 断言必红；
+    /// ③ 把 `merchant` 判断删掉 ⇒ `MerchantLookup::Merchant`（`MerChant` 商人）那条必红。
+    #[test]
+    fn merchant_lookup_distinguishes_absent_from_not_merchant() {
+        let mut world = World::with_maps(vec![(8, 8)]);
+        let merchant = world
+            .insert_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 3, 3))
+            .expect("固定商人入世界");
+        let guild = world
+            .insert_npc(spawn_typed("国王", NPC_TYPE_GUILD_OFFICIAL, 0, 4, 3))
+            .expect("行会管理 NPC 入世界");
+        let castle = world
+            .insert_npc(spawn_typed("城堡管理", NPC_TYPE_CASTLE_OFFICIAL, 0, 5, 3))
+            .expect("城堡官入世界");
+        // 怪物/玩家口径：既无 `merchant` 也无 `npc` 态。
+        let monster = world.add_entity(Entity::new(0, "鸡", 6, 3));
+
+        assert_eq!(merchant_lookup(None), MerchantLookup::Absent);
+        assert_eq!(
+            merchant_lookup(world.entities.get(999_999)),
+            MerchantLookup::Absent,
+            "id 不在世界 ⇒ C3（`TryGetValue` 假 ⇒ null）"
+        );
+        assert_eq!(
+            merchant_lookup(world.entities.get(guild)),
+            MerchantLookup::NotMerchant,
+            "Npcs.txt type=1（GuildOfficial）只实现 INormNpc ⇒ (IMerchant)actor 抛"
+        );
+        assert_eq!(
+            merchant_lookup(world.entities.get(monster)),
+            MerchantLookup::NotMerchant,
+            "怪物不实现 IMerchant ⇒ 同样抛（不是「找不到」）"
+        );
+        assert_eq!(
+            merchant_lookup(world.entities.get(merchant)),
+            MerchantLookup::Merchant
+        );
+        assert_eq!(
+            merchant_lookup(world.entities.get(castle)),
+            MerchantLookup::Merchant,
+            "CastleOfficial : Merchant ⇒ 实现 IMerchant"
+        );
     }
 
     /// **RNG 抽数序列（本批最重要的判据）**：脚本化一个 `GuildOfficial`（`npc_type=1`），

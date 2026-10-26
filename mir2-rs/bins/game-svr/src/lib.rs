@@ -4815,8 +4815,16 @@ fn handle_query_val_cmd(
 /// 固定 NPC（`Envir/Npcs.txt`）进入脚本虚调用（`Click` / `UserSelect`）的**类型门**。
 ///
 /// `LocalDB.LoadNpcs` 的 `switch`（`LocalDB.cs:688-698`）：`0` ⇒ `Merchant`、`1` ⇒
-/// `GuildOfficial`、`2` ⇒ `CastleOfficial`。前两者的 `Click` 都落在 `NormNpc.Click`
-/// （`NormNpc.cs:68-73`，`GotoLable("@main")`），脚本型 `UserSelect` 亦已移植（T-137）⇒ 放行。
+/// `GuildOfficial`、`2` ⇒ `CastleOfficial`。
+///
+/// **2026-10-27 订正（卡 `openmir2-click-npc-guildofficial-cast`）**：本门原先的理由是「type 0/1 的
+/// `Click` 都落在 `NormNpc.Click` ⇒ 放行」——**漏了 oracle 在查找阶段就抛异常**。两个调用点
+/// （`ClientClickNpc` / `ClientMerchantDlgSelect`）都先调 `FindMerchant(id)`，而它是
+/// `ActorMgr.Get<IMerchant>` 的 **`(T)actor` 硬转**（`ActorManager.cs:58-61`）⇒ `GuildOfficial`
+/// （只实现 `INormNpc`）**抛 `InvalidCastException`**，`?? FindNpc` 永不执行 ⇒ **type=1 恒零帧**。
+/// 点击臂已改由 `mir2_world::npc::merchant_lookup` 在**查找阶段**收口（`NotMerchant` ⇒ 零帧）；
+/// 本门仍放行 type=1 的**唯一**原因是 `CM_MERCHANTDLGSELECT` 的派发门
+/// （`guild_official::handle_select`）尚未按 oracle 收口——这是本卡的**待裁决项**，不是等价结论。
 ///
 /// `2` = `CastleOfficial` 覆写了 `Click`（`CastleOfficial.cs:20-30`）与 `UserSelect`
 /// （`:93-107`）：`Castle == null` ⇒ 红字 `SysMsg("NPC不属于城堡!!!")` 后 return；否则
@@ -4937,21 +4945,42 @@ fn handle_click_npc_cmd(
     }
     // oracle 在门外立即 `ClickNpcTime = GetTickCount()`（**先于** FindMerchant）。
     sg.click_npc_time = Some(now);
-    // `FindMerchant(actorId) ?? FindNpc(actorId)`（`PlayObject.Message.cs` 的 `Click` 支）：
-    // 商人（`MerchantList`）与固定 NPC（`QuestNpcList`，`Npcs.txt`）都落在 `world.entities`。
-    let Some(ne) = world
-        .entities
-        .get(npc_actor_id)
-        .filter(|e| e.merchant.is_some() || e.npc.is_some())
-    else {
-        glog!(
-            "DBG",
-            "CM_CLICKNPC：FindMerchant/FindNpc({npc_actor_id}) == null ⇒ 忽略"
-        );
+    // `FindMerchant(actorId) ?? FindNpc(actorId)`（`PlayObject.Message.cs` 的 `Click` 支）。
+    // **oracle 的第一臂是硬转**：`ActorMgr.Get<IMerchant>` = `(T)actor`（`ActorManager.cs:58-61`）
+    // ⇒ 三种结果、两种帧面：
+    //   * `Absent`：id 不在 `ActorMgr` ⇒ 两个查找都 `null` ⇒ 静默零帧（**C3**）；
+    //   * `NotMerchant`：id 存在但**不**实现 `IMerchant`（`Npcs.txt` **type=1 `GuildOfficial`**、
+    //     怪物、玩家…）⇒ **抛 `InvalidCastException`**，`?? FindNpc` **永不执行**、异常被
+    //     `PlayObject.Run` 的 catch 吞（`PlayObject.Message.cs:392-400`；`Ident != 0` ⇒ 不
+    //     `MakeGhost`）⇒ **同样零帧（X）**；
+    //   * `Merchant`：`MerChant` 商人 / `Npcs.txt` type 0、type 2 ⇒ 继续走 `normNpc.Click`。
+    // 前两者**都零帧**但路径不同，判据必须分开钉（卡 `openmir2-click-npc-guildofficial-cast`）。
+    match mir2_world::npc::merchant_lookup(world.entities.get(npc_actor_id)) {
+        mir2_world::npc::MerchantLookup::Absent => {
+            glog!(
+                "DBG",
+                "CM_CLICKNPC：FindMerchant/FindNpc({npc_actor_id}) == null（actor 不在世界）⇒ 忽略"
+            );
+            return false;
+        }
+        mir2_world::npc::MerchantLookup::NotMerchant => {
+            glog!(
+                "DBG",
+                "CM_CLICKNPC：({npc_actor_id}) 不是 IMerchant ⇒ oracle 的 (IMerchant)actor 硬转抛 InvalidCastException、被 PlayObject.Run 吞掉 ⇒ 零帧 ChrName={chr_name}"
+            );
+            return false;
+        }
+        mir2_world::npc::MerchantLookup::Merchant => {}
+    }
+    let Some(ne) = world.entities.get(npc_actor_id) else {
+        // `merchant_lookup` 刚判定为 `Merchant` ⇒ 实体必然在；本臂只为结束不可变借用。
         return false;
     };
     let (nx, ny, nmap, ntype) = (ne.x, ne.y, ne.map_id, ne.npc.as_ref().map(|st| st.npc_type));
-    // `normNpc.Click(this)` 是**按实际类**的虚调用 ⇒ 先过类型门（[`fixed_npc_script_allowed`]）。
+    // `normNpc.Click(this)` 是**按实际类**的虚调用。到这里 `merchant_lookup` 已按 oracle 的硬转语义
+    // 收口（`Absent`/`NotMerchant` 都已在上面零帧返回）⇒ 只剩 `IMerchant` 家族：`MerChant` 商人、
+    // `Npcs.txt` type 0（`Merchant`）/ type 2（`CastleOfficial`）。type 2 用下面的城堡官员支处理；
+    // 不再需要 `fixed_npc_script_allowed` 这道类型门（它现在只服务 `CM_MERCHANTDLGSELECT` 的派发路径）。
     // type 2 `CastleOfficial` 的 `Click` 门**已接线**（卡 `openmir2-castle-official-design`）：
     // 无城 ⇒ 一条红字 `SM_SYSMESSAGE`；有城但未授权 ⇒ 零帧；授权 ⇒ `base.Click`（见下）。
     // `ClickNpcTime` 已在门外按 oracle 置位（`PlayObject.Base.cs:678-682`），不属本门。
@@ -5010,12 +5039,6 @@ fn handle_click_npc_cmd(
                 return false;
             }
             // 授权 ⇒ 落到下面的 `base.Click`（`NormNpc.Click` 的 `GotoLable(@main)`）。
-        } else if !fixed_npc_script_allowed(ntype) {
-            glog!(
-                "DBG",
-                "CM_CLICKNPC：固定 NPC type={ntype} 不在 {{0,1}} ⇒ 类型门拒绝 ChrName={chr_name} npc={npc_actor_id}"
-            );
-            return false;
         }
     }
     if nmap == pmap && (nx - px).abs() <= 15 && (ny - py).abs() <= 15 {
@@ -71086,42 +71109,120 @@ GMEXECUTE 禁言 self 20
         }
     }
 
-    /// **判据 (a)**：点击固定 NPC（`Npcs.txt` 的 `国王`，type=1 `GuildOfficial`）⇒ `@main` 说词经
-    /// `SM_MERCHANTSAY` 下发，尾 = `国王/<脚本原文>`；说词里的 `@@buildguildnow`/`@ask` 落进
+    /// **判据 (a)**：点击固定 NPC（`Npcs.txt` 的 `老人`，**type=0 ⇒ `Merchant`**）⇒ `@main` 说词经
+    /// `SM_MERCHANTSAY` 下发，尾 = `老人/<脚本原文>`；说词里的 `@ask`/`@exit` 落进
     /// `CanJmpScriptLableMap`（生产会话态）。
+    ///
+    /// **2026-10-27 订正（卡 `openmir2-click-npc-guildofficial-cast`）**：本条原来点的是 `国王`
+    /// （type=1 `GuildOfficial`）——那是**错的**：oracle 在 `FindMerchant` 的 `(IMerchant)actor`
+    /// 硬转就抛异常（`ActorManager.cs:58-61`）⇒ **type=1 的点击恒零帧**，说词根本不会产生。
+    /// 现改用同夹具里的 type=0 固定 NPC（老人）；type=1 的零帧由
+    /// `click_npc_type1_guild_official_is_zero_frames` 单独钉住。
     ///
     /// 牙（真跑见 whitelist T-137）：
     /// ① 删 `place_fixed_npcs_with_scripts` 里的 `load_npc_def_scripts` ⇒ 脚本表空 ⇒ 零说词；
     /// ② 把脚本名拼接 `{ChrName}-{MapName}` 改成别的分隔 ⇒ `File.Exists` 假 ⇒ 零说词；
-    /// ③ 把 `handle_click_npc_cmd` 的 `|| e.npc.is_some()` 删回 merchant-only ⇒ 点击被拒（零帧）。
+    /// ③ 把 `merchant_lookup` 的 `npc` 支（type 0/2 放行）删掉 ⇒ 点击被拒（零帧）。
     #[test]
     fn t137_click_fixed_npc_main_says_menu_through_production_path() {
         let mut rig = T137Rig::new();
-        let king_id = rig.king_id;
+        let elder_id = rig.elder_id;
         assert!(
-            rig.click(king_id),
-            "固定 NPC 必须走 `FindNpc` 臂到 `normNpc.Click`（`NormNpc.cs:68-73`）"
+            rig.click(elder_id),
+            "type=0 固定 NPC（`IMerchant`）必须走到 `normNpc.Click`（`NormNpc.cs:68-73`）"
         );
         let frames = rig.drain();
         let says = T137Rig::says(&frames);
         assert_eq!(says.len(), 1, "@main 一条说词：{says:?}");
         assert!(
-            says[0].starts_with("国王/"),
+            says[0].starts_with("老人/"),
             "说词尾 = `ChrName + '/' + sMsg`（`ScriptEngine.cs:991`）：{}",
-            says[0]
-        );
-        assert!(
-            says[0].contains("@@buildguildnow"),
-            "菜单标签必须在说词里：{}",
             says[0]
         );
         assert!(says[0].contains("<打听/@ask>"), "说词原文：{}", says[0]);
         let labels = &rig.shop_sessions["hero"].can_jmp_labels;
         assert!(
-            labels.iter().any(|l| l == "@@buildguildnow"),
+            labels.iter().any(|l| l == "@ask"),
             "说词必须重建 `CanJmpScriptLableMap`（`PlayObject.Base.cs:2800-2808`）：{labels:?}"
         );
-        assert!(labels.iter().any(|l| l == "@ask"), "{labels:?}");
+        assert!(labels.iter().any(|l| l == "@exit"), "{labels:?}");
+    }
+
+    /// **A3①（卡 `openmir2-click-npc-guildofficial-cast`）**：点 `Npcs.txt` **type=1**
+    /// （`GuildOfficial`）目标 ⇒ oracle 在 `FindMerchant` 的 `(IMerchant)actor` 硬转就抛
+    /// `InvalidCastException`（`ActorManager.cs:58-61`）⇒ `PlayObject.Run` 吞掉
+    /// （`PlayObject.Message.cs:392-400`）⇒ **零帧**（不得回 643）。
+    ///
+    /// 红检：① 把 `merchant_lookup` 的 `NotMerchant` 臂改成「`npc.is_some()` 就放行」⇒ 本用例红
+    /// （会收到一条 `SM_MERCHANTSAY`）；② 把整个 `match` 换回旧的 `.filter(...)` ⇒ 同上。
+    #[test]
+    fn click_npc_type1_guild_official_is_zero_frames() {
+        let mut rig = T137Rig::new();
+        let king_id = rig.king_id;
+        assert!(
+            !rig.click(king_id),
+            "type=1（GuildOfficial）在 oracle 里抛异常 ⇒ 不得到达 Click 点"
+        );
+        let frames = rig.drain();
+        let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+        assert!(
+            frames.is_empty(),
+            "oracle 零帧（异常被 `PlayObject.Run` 吞），实际出帧 ident={idents:?}"
+        );
+    }
+
+    /// **A3②**：点 `Npcs.txt` **type=0** 固定 NPC（`Merchant`）⇒ **正常** `SM_MERCHANTSAY(643)`。
+    /// 与 A3① 配对，专盯「别把正常路径一起封死」——本卡最容易犯的过度修正。
+    ///
+    /// 红检：把 `merchant_lookup` 的 `Some(NPC_TYPE_MERCHANT | NPC_TYPE_CASTLE_OFFICIAL)` 支删掉
+    /// （或把 `Merchant` 也判成 `NotMerchant`）⇒ 本用例红。
+    #[test]
+    fn click_npc_type0_fixed_npc_still_answers_643() {
+        let mut rig = T137Rig::new();
+        let elder_id = rig.elder_id;
+        assert!(
+            rig.click(elder_id),
+            "type=0 是 `IMerchant` ⇒ 必须到达 Click 点"
+        );
+        let frames = rig.drain();
+        let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+        assert_eq!(
+            idents,
+            vec![mir2_protocol::messages::SM_MERCHANTSAY],
+            "type=0 目标必须恰好一条 643：{idents:?}"
+        );
+        let says = T137Rig::says(&frames);
+        assert!(says[0].starts_with("老人/"), "说词尾：{}", says[0]);
+    }
+
+    /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
+    ///
+    /// 帧面两者都是零帧（所以「只断言零帧」抓不住区别），故此用例钉**分类** + 钉两条路径都可走：
+    /// `merchant_lookup` 对不存在的 id 给 `Absent`、对 type=1 实体给 `NotMerchant`；
+    /// `handle_click_npc_cmd` 在两种输入下都返回 false 且零帧。
+    ///
+    /// 红检：把 `NotMerchant` 支改成 `return MerchantLookup::Absent;`（两条分支合一）⇒ 分类断言红。
+    #[test]
+    fn click_npc_absent_and_not_merchant_are_distinct() {
+        let mut rig = T137Rig::new();
+        let king_id = rig.king_id;
+        assert_eq!(
+            mir2_world::npc::merchant_lookup(rig.world.entities.get(999_999)),
+            mir2_world::npc::MerchantLookup::Absent,
+            "id 不在世界 ⇒ C3"
+        );
+        assert_eq!(
+            mir2_world::npc::merchant_lookup(rig.world.entities.get(king_id)),
+            mir2_world::npc::MerchantLookup::NotMerchant,
+            "type=1 ⇒ X（与 C3 不是同一条分支）"
+        );
+        // 帧面：两条路径都零帧、都不推进 Click 点。
+        assert!(!rig.click(king_id), "type=1 ⇒ 零帧（X）");
+        assert!(rig.drain().is_empty(), "X 路径零帧");
+        // oracle 在**查找之前**就置 `ClickNpcTime`（`PlayObject.Base.cs:678-682`）⇒ 复位后再点。
+        rig.sessions.get_mut("hero").unwrap().click_npc_time = None;
+        assert!(!rig.click(999_999), "id 不存在 ⇒ 零帧（C3）");
+        assert!(rig.drain().is_empty(), "C3 路径零帧");
     }
 
     /// **判据 (b)+(c)**：`CM_MERCHANTDLGSELECT` 命中固定 NPC（`老人`，type=0 ⇒
