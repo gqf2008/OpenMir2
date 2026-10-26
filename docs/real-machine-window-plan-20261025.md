@@ -18,6 +18,14 @@
 > **DB 实例边界（2026-10-26 22:04:18）**：`mysqld` 曾被 `start-all.ps1 -Stop` 的 `Stop-Process -Force` **强杀**，新实例带 `InnoDB: Starting crash recovery from checkpoint LSN=…` 启动。⇒ **该时刻之前取的 DB 证据一律打折/重取**；判据是 `E:/MirServer/logs/MySQL.err.log` 里**有没有 crash recovery 行**，不是 pid 变没变。详见卡 `openmir2-mirserver-graceful-stop`。
 | 5 | **批次自检** | `bash tools/window/run_batch.sh --dry-run` ⇒ **rc=0** | **这是「每次开窗前」的动作，不是常驻属性**：窗口跑过一轮之后必然又有 2 项变红 —— ① `castle_list_symmetry`（C# GameSrv 每 600s 重写 `Castle/List.txt`，跑完就与 rust 侧不一致）② `pin_smoke`（最后一个 Rust 栈日志若来自 alt 剖面则无 `layout=oracle-40` 自证行）。⇒ 开窗第 0 步（停完 C# 之后）三侧对齐 castle 文件，并**先起一次带 pin 的 window-magic 私栈**把自证行跑出来，再 dry-run |
 
+### 开窗第 0 步（castle 三侧对齐 + 跑前基线，卡 `openmir2-castle-symmetry-baseline`）
+
+停完 C# 之后、起私栈之前：把**部署件当时的值**复制到三侧（csharp / csharp-hook / rust）的
+`Castle/List.txt` 与 `Castle/*/SabukW.txt`，再落跑前基线；`run_batch.sh` 会自动写
+`<run_dir>/castle-before.txt`（起栈前）与 `<run_dir>/castle-after.txt`（跑完），并把差异分成
+**「本轮造成」/「开窗前已存在」**两档。命令、文件格式、参考值（`List.txt`=`0\r\n1\r\n`；
+SabukW 部署件 9260B→实测 9290B，会变，别写死）见 runbook **§0.9b**。
+
 ### 开窗当天必读：本机 PowerShell 5.1 **缺 `Get-FileHash`**
 
 `tools/window/rebuild-server.ps1` 在 `powershell`（5.1）下直接报 `Get-FileHash is not recognized`（`PSModulePath` 里 `Microsoft.PowerShell.Utility` 未加载）⇒ **窗口相关脚本一律用 `pwsh`（PowerShell 7）跑**：

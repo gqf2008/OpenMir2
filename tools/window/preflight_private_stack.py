@@ -56,6 +56,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -569,6 +570,172 @@ def check_castle_list(root=DEFAULT_PRIVATE_ROOT):
                 % (rust_sha[:12], rust_raw, ", ".join(label for label, _ in paths))), None
 
 
+# ---------------------------------------------------------------------------
+# castle 状态对称性：跑前基线 + 跑后两档分类（卡 openmir2-castle-symmetry-baseline）
+#
+# 为什么需要：`Castle/List.txt` 被 C# GameSrv 每 600s 重写，`Castle/<n>/SabukW.txt`
+# 也会在运行期落盘 ⇒ **跑后不相等是预期**。没有跑前基线就分不清「本轮造成」与
+# 「开窗前已存在」，只能把「判不了」当结论。这里把三侧（csharp / csharp-hook / rust）
+# 的 sha256+bytes 落盘，跑后按两档归因。
+# ---------------------------------------------------------------------------
+CASTLE_LIST_REL = "Castle/List.txt"
+CASTLE_MISSING = "MISSING"
+
+
+def castle_sides(root):
+    """三侧 envir 根：csharp / csharp-hook（仅当影子存在）/ rust。顺序固定。"""
+    cs = os.path.join(root, "csharp-root", "M2GameSvr")
+    hook = os.path.join(root, "csharp-root", "M2GameSvr-hook")
+    rust = os.path.join(root, "rust-root", "M2GameSvr")
+    sides = [("csharp", cs)]
+    if os.path.isdir(hook):
+        sides.append(("csharp-hook", hook))
+    sides.append(("rust", rust))
+    return sides
+
+
+def castle_state_manifest(root):
+    """{rel: {side: (sha256|None, bytes|None)}}；rel = Castle/List.txt 与 Castle/*/SabukW.txt。
+
+    覆盖 `Castle/<n>/SabukW.txt`（每城一份）与 `Castle/Castle/SabukW.txt`（部署件里
+    确实存在这一层，卡 `openmir2-castle-symmetry-baseline` 的证据就是它）。
+    """
+    sides = castle_sides(root)
+    rels = {CASTLE_LIST_REL}
+    for _label, base in sides:
+        cdir = os.path.join(base, "Castle")
+        if not os.path.isdir(cdir):
+            continue
+        for name in sorted(os.listdir(cdir)):
+            if os.path.isfile(os.path.join(cdir, name, "SabukW.txt")):
+                rels.add("Castle/%s/SabukW.txt" % name)
+    out = {}
+    for rel in sorted(rels):
+        per = {}
+        for label, base in sides:
+            path = os.path.join(base, *rel.split("/"))
+            if os.path.isfile(path):
+                with open(path, "rb") as fh:
+                    raw = fh.read()
+                per[label] = (hashlib.sha256(raw).hexdigest(), len(raw))
+            else:
+                per[label] = (None, None)
+        out[rel] = per
+    return out
+
+
+def write_castle_manifest(path, root, manifest, extra_comments=()):
+    """确定性文本格式：`#` 注释 + `rel<TAB>side<TAB>sha256|MISSING<TAB>bytes|-`。"""
+    d = os.path.dirname(os.path.abspath(path))
+    if d:
+        os.makedirs(d, exist_ok=True)
+    lines = ["# castle-symmetry/1",
+             "# root: %s" % root,
+             "# generated_at: %s" % time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+             "# sides: %s" % ",".join(label for label, _ in castle_sides(root))]
+    for c in extra_comments:
+        lines.append("# %s" % c)
+    for rel in sorted(manifest):
+        for label in sorted(manifest[rel]):
+            sha, n = manifest[rel][label]
+            lines.append("%s\t%s\t%s\t%s" % (rel, label, sha or CASTLE_MISSING,
+                                               "-" if n is None else n))
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines) + "\n")
+    return path
+
+
+def read_castle_manifest(path):
+    """读回 `write_castle_manifest` 的格式；坏行/空文件一律 ValueError（fail-closed）。"""
+    out = {}
+    with open(path, "r", encoding="utf-8", newline="") as fh:
+        for lineno, line in enumerate(fh, 1):
+            line = line.rstrip("\r\n")
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 4:
+                raise ValueError("%s:%d 不是 rel<TAB>side<TAB>sha256<TAB>bytes（%r）"
+                                 % (path, lineno, line))
+            rel, side, sha, nbytes = parts
+            if sha == CASTLE_MISSING:
+                out.setdefault(rel, {})[side] = (None, None)
+                continue
+            if len(sha) != 64:
+                raise ValueError("%s:%d sha256 长度不是 64（%r）" % (path, lineno, sha))
+            try:
+                n = int(nbytes)
+            except ValueError:
+                raise ValueError("%s:%d bytes 不是整数（%r）" % (path, lineno, nbytes))
+            out.setdefault(rel, {})[side] = (sha, n)
+    if not out:
+        raise ValueError("%s 没有任何状态行（只有注释/空行）" % path)
+    return out
+
+
+def _castle_symmetric(values):
+    return len(set(values)) <= 1
+
+
+def classify_castle_drift(before, after):
+    """把跑后差异分两档：`本轮造成` / `开窗前已存在`。
+
+    规则（逐文件，按两侧并集判定）：
+      * 跑后三侧**一致** ⇒ 不是对称性漂移，不记（即使三侧同时变成同一个新值）；
+      * 跑后不一致 且 跑前也**已经**不一致 ⇒ `开窗前已存在`；
+      * 跑后不一致 且 跑前一致          ⇒ `本轮造成`。
+    """
+    recs = []
+    for rel in sorted(set(before) | set(after)):
+        b = before.get(rel) or {}
+        a = after.get(rel) or {}
+        sides = sorted(set(b) | set(a))
+        bvals = [(b.get(side) or (None, None))[0] for side in sides]
+        avals = [(a.get(side) or (None, None))[0] for side in sides]
+        if _castle_symmetric(avals):
+            continue
+        kind = "开窗前已存在" if not _castle_symmetric(bvals) else "本轮造成"
+        recs.append({"file": rel, "kind": kind,
+                     "before": dict(zip(sides, bvals)),
+                     "after": dict(zip(sides, avals))})
+    return recs
+
+
+def check_castle_state_symmetry(root=DEFAULT_PRIVATE_ROOT, baseline=None):
+    """三侧 castle 状态（List.txt + 每个 Castle/*/SabukW.txt）对称性 + 跑前基线落盘。
+
+    与既有 `castle_list_symmetry` 的分工（卡 A5：不改既有判据语义）：
+      * 既有项**语义不变**：List.txt 不一致仍 FAIL；
+      * 本项把 SabukW 也纳入，并把三侧 sha256+bytes 写进基线文件；差异只 **WARN**
+        （内容是冻结件，本轮不能改），跑后由 `--castle-compare` 分两档归因。
+    """
+    manifest = castle_state_manifest(root)
+    present = [rel for rel, per in manifest.items()
+               if any(sha for sha, _n in per.values())]
+    if not present:
+        return FAIL, ("三侧都没有 castle 状态文件（Castle/List.txt 与 Castle/*/SabukW.txt），"
+                      "无法建基线（root=%s）" % root), \
+            "先建私有栈夹具（runbook §0.9）"
+    asym = []
+    for rel in sorted(manifest):
+        shas = [sha for sha, _n in manifest[rel].values()]
+        if not _castle_symmetric(shas):
+            asym.append(rel)
+    base_note = ""
+    if baseline:
+        write_castle_manifest(baseline, root, manifest)
+        base_note = "；三侧 sha256+bytes 已写入 %s" % baseline
+    if asym:
+        return WARN, ("开窗前已存在差异：%s（跑后按「本轮造成 / 开窗前已存在」两档分类%s）"
+                      % (", ".join(asym), base_note)), \
+            ("对齐（内容冻结：只改私有栈副本，不改部署件/Envir）："
+             "把部署件值复制到三侧同名文件；见 runbook 开窗第 0 步")
+    shown = ", ".join("%s=%s" % (rel, (manifest[rel].get("rust") or (None,))[0][:12])
+                      for rel in sorted(manifest)
+                      if (manifest[rel].get("rust") or (None,))[0])
+    return OK, ("三侧一致：%s（%d 个文件）%s" % (shown, len(manifest), base_note)), None
+
+
 def _dir_sha_map(root):
     """递归目录 -> {relpath: sha256}；不跟随符号链接。"""
     out = {}
@@ -658,7 +825,8 @@ def check_conformance_password(env=None):
 # 全量检查
 # ---------------------------------------------------------------------------
 def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
-            skip_pin_smoke=False, skip_binary=False, report=None, manifest=None):
+            skip_pin_smoke=False, skip_binary=False, report=None, manifest=None,
+            castle_before=None):
     rep = report or Report()
     # 第一项：探针凭据。缺它后面每一项都可能白跑（2026-10-26 首轮整轮空转）。
     status, detail, fix = check_conformance_password()
@@ -675,6 +843,11 @@ def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
 
     status, detail, fix = check_castle_list(root)
     rep.add("castle_list_symmetry", status, detail, fix)
+
+    # 卡 openmir2-castle-symmetry-baseline：既有项只看 List.txt 且不落基线；
+    # 这里补 SabukW + 三侧 sha256 基线（差异只 WARN，跑后两档分类）。
+    status, detail, fix = check_castle_state_symmetry(root, castle_before)
+    rep.add("castle_state_symmetry", status, detail, fix)
 
     status, detail, fix = check_envir_shadow_symmetry(root)
     rep.add("envir_shadow_symmetry", status, detail, fix)
@@ -985,6 +1158,79 @@ def selftest():
         chk(st == FAIL and "缺 Castle/List.txt" in detail,
             "castle 牙: 缺侧文件 => FAIL 点名缺失")
 
+        # ---- castle 状态基线 + 跑后两档分类（卡 openmir2-castle-symmetry-baseline）----
+        cb = os.path.join(tmp, "castlestate")
+        cs2 = os.path.join(cb, "csharp-root", "M2GameSvr", "Castle")
+        rs2 = os.path.join(cb, "rust-root", "M2GameSvr", "Castle")
+        hk2 = os.path.join(cb, "csharp-root", "M2GameSvr-hook", "Castle")
+        for d in (cs2, rs2, hk2):
+            os.makedirs(os.path.join(d, "Castle"), exist_ok=True)
+            with open(os.path.join(d, "Castle", "SabukW.txt"), "wb") as fh:
+                fh.write(b"deploy-value")
+            with open(os.path.join(d, "List.txt"), "wb") as fh:
+                fh.write(b"0\r\n1\r\n")
+        base_path = os.path.join(tmp, "castle-before.txt")
+        st, detail, _ = check_castle_state_symmetry(cb, base_path)
+        chk(st == OK and os.path.isfile(base_path) and "三侧一致" in detail
+            and base_path in detail,
+            "castle_state: 三侧一致 => OK 且落基线文件")
+        before = read_castle_manifest(base_path)
+        chk("Castle/List.txt" in before and "Castle/Castle/SabukW.txt" in before
+            and set(before["Castle/List.txt"]) == {"csharp", "csharp-hook", "rust"},
+            "castle_state: 基线含 List.txt + Castle/*/SabukW.txt 三侧")
+
+        # 牙①（卡 A3）：跑前把一侧改一字节 => 必须「开窗前已存在」，不能「本轮造成」
+        with open(os.path.join(rs2, "Castle", "SabukW.txt"), "wb") as fh:
+            fh.write(b"deploy-valuE")
+        st, detail, _ = check_castle_state_symmetry(cb)
+        chk(st == WARN and "开窗前已存在差异" in detail
+            and "Castle/Castle/SabukW.txt" in detail,
+            "castle_state 牙1: 跑前一侧一字节不同 => WARN 点名「开窗前已存在」")
+        base2 = os.path.join(tmp, "castle-before-asym.txt")
+        write_castle_manifest(base2, cb, castle_state_manifest(cb))
+        recs = classify_castle_drift(read_castle_manifest(base2), castle_state_manifest(cb))
+        chk(len(recs) == 1 and recs[0]["kind"] == "开窗前已存在"
+            and recs[0]["file"] == "Castle/Castle/SabukW.txt",
+            "castle_state 牙2: 跑前已差异 + 跑后不变 => 只归「开窗前已存在」")
+
+        # 牙②（卡 A3）：不改 => 必须报无差异
+        with open(os.path.join(rs2, "Castle", "SabukW.txt"), "wb") as fh:
+            fh.write(b"deploy-value")
+        recs = classify_castle_drift(read_castle_manifest(base_path), castle_state_manifest(cb))
+        chk(recs == [], "castle_state 牙3: 跑前跑后一致 => 无差异")
+
+        # 正例：跑前一致 + 跑后一侧变 => 「本轮造成」
+        with open(os.path.join(cs2, "Castle", "SabukW.txt"), "wb") as fh:
+            fh.write(b"deploy-value-X")
+        recs = classify_castle_drift(read_castle_manifest(base_path), castle_state_manifest(cb))
+        chk(len(recs) == 1 and recs[0]["kind"] == "本轮造成",
+            "castle_state 牙4: 跑前一致 + 跑后一侧变 => 「本轮造成」")
+
+        # 牙5/6：坏基线 / 空基线 => ValueError fail-closed
+        with open(os.path.join(cs2, "Castle", "SabukW.txt"), "wb") as fh:
+            fh.write(b"deploy-value")
+        bad1 = os.path.join(tmp, "castle-bad1.txt")
+        with open(bad1, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("Castle/List.txt\tcsharp\tonly-three-fields\n")
+        bad_msg = None
+        try:
+            read_castle_manifest(bad1)
+        except ValueError as e:
+            bad_msg = str(e)
+        # 必须是「点名 文件:行」的诊断，而不是裸的 unpack 报错——否则删掉显式长度检查
+        # 仍会被 `a, b, c, d = parts` 的 ValueError 蒙混过关（变异自证抓到的假牙）。
+        chk(bad_msg is not None and ("%s:1" % bad1) in bad_msg,
+            "castle_state 牙5: 坏基线行 => ValueError 且点名 文件:行")
+        empty = os.path.join(tmp, "castle-empty.txt")
+        with open(empty, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write("# only comments\n")
+        try:
+            read_castle_manifest(empty)
+            empty_ok = False
+        except ValueError:
+            empty_ok = True
+        chk(empty_ok, "castle_state 牙6: 空基线 => ValueError")
+
         # ---- envir_shadow_symmetry（卡 openmir2-preflight-envir-shadow-symmetry）----
         er = os.path.join(tmp, "envirshadow")
         eb = os.path.join(er, "csharp-root", "M2GameSvr", "Envir")
@@ -1044,15 +1290,65 @@ def main(argv=None):
     ap.add_argument("--skip-binary", action="store_true",
                     help="跳过 release 二进制对账（WARN，证据里须登记未验）")
     ap.add_argument("--json", default=None, help="把逐项结果写到 JSON 文件")
+    ap.add_argument("--castle-before", default=None, metavar="PATH",
+                    help="把三侧 castle 状态（List.txt + Castle/*/SabukW.txt）sha256 基线写到该文件")
+    ap.add_argument("--castle-before-only", action="store_true",
+                    help="只写 --castle-before 基线并退出（不起栈、不跑其余前置项）")
+    ap.add_argument("--castle-compare", default=None, metavar="BEFORE",
+                    help="用跑前基线 BEFORE 与当前三侧状态对比，按「本轮造成/开窗前已存在」两档分类")
+    ap.add_argument("--castle-after", default=None, metavar="PATH",
+                    help="与 --castle-compare 搭配：把跑后三侧状态写到该文件（含分类注释）")
     ap.add_argument("--selftest", action="store_true", help="离线自测（临时夹具，不碰真私栈）")
     args = ap.parse_args(argv)
 
     if args.selftest:
         return selftest()
 
+    # 卡 openmir2-castle-symmetry-baseline：跑前基线 / 跑后两档分类（都不起栈、不占端口）
+    if args.castle_before_only:
+        if not args.castle_before:
+            print("CASTLE_BASELINE FAIL 需要 --castle-before PATH")
+            return 2
+        manifest = castle_state_manifest(args.root)
+        if not any(sha for per in manifest.values() for sha, _n in per.values()):
+            print("CASTLE_BASELINE FAIL 三侧都没有 castle 状态文件（root=%s）" % args.root)
+            return 2
+        write_castle_manifest(args.castle_before, args.root, manifest)
+        print("CASTLE_BASELINE wrote=%s files=%d" % (args.castle_before, len(manifest)))
+        for rel in sorted(manifest):
+            print("CASTLE_BASELINE_ITEM file=%s %s" % (rel, " ".join(
+                "%s=%s" % (side, (manifest[rel][side][0] or CASTLE_MISSING)[:12])
+                for side in sorted(manifest[rel]))))
+        return 0
+
+    if args.castle_compare:
+        try:
+            before = read_castle_manifest(args.castle_compare)
+        except (OSError, ValueError) as e:
+            print("CASTLE_COMPARE FAIL 读不了跑前基线 %s：%s" % (args.castle_compare, e))
+            return 2
+        after = castle_state_manifest(args.root)
+        recs = classify_castle_drift(before, after)
+        if args.castle_after:
+            write_castle_manifest(args.castle_after, args.root, after,
+                                  extra_comments=["drift %s %s" % (r["kind"], r["file"])
+                                                  for r in recs])
+        for r in recs:
+            print("CASTLE_DRIFT_ITEM kind=%s file=%s before=%s after=%s"
+                  % (r["kind"], r["file"],
+                     ",".join("%s:%s" % (k, (v or CASTLE_MISSING)[:12])
+                              for k, v in sorted(r["before"].items())),
+                     ",".join("%s:%s" % (k, (v or CASTLE_MISSING)[:12])
+                              for k, v in sorted(r["after"].items()))))
+        new_n = len([r for r in recs if r["kind"] == "本轮造成"])
+        old_n = len([r for r in recs if r["kind"] == "开窗前已存在"])
+        print("CASTLE_DRIFT new=%d existing=%d files=%d before=%s after=%s"
+              % (new_n, old_n, len(after), args.castle_compare, args.castle_after or "-"))
+        return 0
+
     rep = run_all(root=args.root, start_rust=args.start_rust, repo=args.repo,
                   skip_pin_smoke=args.skip_pin_smoke, skip_binary=args.skip_binary,
-                  manifest=args.manifest)
+                  manifest=args.manifest, castle_before=args.castle_before)
     if args.json:
         os.makedirs(os.path.dirname(os.path.abspath(args.json)), exist_ok=True)
         with open(args.json, "w", encoding="utf-8", newline="\n") as fh:
