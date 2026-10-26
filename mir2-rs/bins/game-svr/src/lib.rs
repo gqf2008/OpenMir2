@@ -14917,12 +14917,59 @@ fn drain_depart_downlink(
     sent
 }
 
+/// 本 tick 应给观察者下发的出现帧目标（`VisibleActors` 入队序 = oracle 扫描序）。
+///
+/// 过滤与 oracle `PlayObject.Run()` 的收尾循环同一口径（`PlayObject.cs:3234-3240`）：
+/// `VisibleFlag::Show && target != 自己`。**顺序 = 列表下标升序**（oracle `n18` 升序 =
+/// 扫描序：`x` 升序 → `y` 升序 → 格内 `ObjList` 下标升序）。
+fn aoi_show_targets(entity: &mir2_world::Entity, observer_id: i32) -> Vec<i32> {
+    entity
+        .visible_actors
+        .iter()
+        .filter(|v| v.flag == mir2_world::VisibleFlag::Show && v.target != observer_id)
+        .map(|v| v.target)
+        .collect()
+}
+
+/// 把出现目标翻成**入队槽**（`RM_TURN` 17 / `RM_DEATH` 37 / `RM_SKELETON` 40）。
+///
+/// [`drain_aoi_downlink`]（出帧）与 [`drain_login_tail`]（算 `after` 的堆形）**必须共用**，
+/// 否则出现帧序与 `654` 之后的堆序会来自两个形状不同的队列。
+fn aoi_appearance_slots(world: &mir2_world::World, targets: &[i32]) -> Vec<smframe::OtherAppear> {
+    targets
+        .iter()
+        .map(|id| {
+            if world.entities.get(*id).is_some_and(|t| t.death) {
+                smframe::OtherAppear::Death
+            } else {
+                smframe::OtherAppear::Turn
+            }
+        })
+        .collect()
+}
+
 /// **S3 后半段（第一格）**：把世界 tick 的 AOI 结果（观察者实体 `VisibleActors` 里
 /// `VisibleFlag::Show` 的对象）翻成 `SM_TURN` + `SM_FEATURECHANGED` 回帧，
 /// 按该观察者的 `[GateIdx, Socket]` 路由回**它自己那条**网关线。
 ///
-/// 顺序 = 会话表顺序（`SessionRegistry` 是 `Vec`），内层 = `VisibleActors` 列表顺序
-///（oracle `PlayObject.Run` 的 `n18` 升序）⇒ 确定性。
+/// 顺序 = 会话表顺序（`SessionRegistry` 是 `Vec`），内层 = **oracle 消息队列的出队序**
+///（不是 `VisibleActors` 入队序 —— 见下）。
+///
+/// # 内层顺序（卡 `openmir2-turn-order-login`）
+///
+/// oracle 的 `SearchViewRange` 对每个新见对象 `SendMsg(baseObject, RM_TURN, …)`
+/// （`PlayObject.cs:3240`）⇒ 进**观察者自己的** `PriorityQueue<SendMessage, byte>`
+/// （`ActorEntity.cs:16`），优先级 `(byte)RM_TURN = 17`。`PlayObject.Run()` 的
+/// `while (GetMessage())`（`PlayObject.Message.cs:359-363`）按 **.NET 8 四叉最小堆**出队
+/// （`crates/world/src/msgqueue.rs` 逐位复刻）⇒ **同优先级不是 FIFO**，出队序由堆数组
+/// 与队列里其它条目共同决定。真机 `E:/tmp/window-20261026/run2/move_walk/` 登录期
+/// idx 19–26：入队序 = 玛法足球场→行会争霸→盟重老兵→沙巴克铁匠，oracle 实发序 =
+/// 行会争霸→盟重老兵→玛法足球场→沙巴克铁匠。
+///
+/// - 登录首扫（`login_pending` 里有该角色）：用
+///   [`smframe::EnterWorldInputs::appearance_order`] 复刻「整段登录消息 + 出现槽」的真机堆；
+/// - 其它 tick：混合队列未建模（`msgqueue.rs` 的 `not_verified`，R 级真机窗口）⇒ 保持
+///   `VisibleActors` 入队序（**登记**，不在本卡范围）。
 ///
 /// 两处「不猜」：① 自身不入帧（oracle `if (baseObject != this)`，`PlayObject.cs:3238`）；
 /// ② 展示表缺项（怪物/未登记）⇒ 跳过并记 WRN，不编造 `Dir/Light/Feature`。
@@ -14935,6 +14982,7 @@ fn drain_aoi_downlink(
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    login_pending: Option<&std::collections::HashMap<String, smframe::EnterWorldInputs>>,
 ) -> Vec<(String, usize)> {
     let mut sent: Vec<(String, usize)> = Vec::new();
     for sess in world.sessions.iter() {
@@ -14967,18 +15015,24 @@ fn drain_aoi_downlink(
             continue;
         };
         let mut sent_here = 0usize;
-        for visible in &observer.visible_actors {
-            if visible.flag != mir2_world::VisibleFlag::Show || visible.target == observer_id {
-                continue;
-            }
-            let Some(target) = world.entities.get(visible.target) else {
+        // 本 tick 的 `Show` 目标（`VisibleActors` 入队序）及其入队槽。
+        let targets = aoi_show_targets(observer, observer_id);
+        let slots = aoi_appearance_slots(world, &targets);
+        // 出队序：登录首扫按真机四叉堆（含整段登录消息）；其它 tick 保持入队序（登记，见函数头注）。
+        let order: Vec<usize> = match login_pending.and_then(|m| m.get(&sess.chr_name)) {
+            Some(inputs) => inputs.appearance_order(&slots),
+            None => (0..targets.len()).collect(),
+        };
+        for idx in order {
+            let target_id = targets[idx];
+            let Some(target) = world.entities.get(target_id) else {
                 continue;
             };
-            let Some(display) = displays.get(visible.target) else {
+            let Some(display) = displays.get(target_id) else {
                 glog!(
                     "WRN",
                     "同屏下行：actor={} 无展示表（怪物/未登记）⇒ 跳过（登记）",
-                    visible.target
+                    target_id
                 );
                 continue;
             };
@@ -15475,18 +15529,9 @@ fn drain_login_tail(
         // 本 tick `SearchViewRange` 对其他 actor 的入队槽（`VisibleActors` 顺序）——
         // `RM_TURN`(17) / `RM_DEATH`(37)。它们不产帧（AOI 已发），但改变堆形 ⇒ 决定
         // `654` 之后 `100×4` 的出队序。`Skeleton`(40) 无世界字段（登记），死亡一律按 `RM_DEATH`。
-        let others: Vec<smframe::OtherAppear> = entity
-            .visible_actors
-            .iter()
-            .filter(|v| v.flag == mir2_world::VisibleFlag::Show && v.target != actor_id)
-            .map(|v| {
-                if world.entities.get(v.target).is_some_and(|t| t.death) {
-                    smframe::OtherAppear::Death
-                } else {
-                    smframe::OtherAppear::Turn
-                }
-            })
-            .collect();
+        // 与 [`drain_aoi_downlink`] **同一份**出现槽（同序同形），保证「出现帧序」与
+        // 「`after` 的堆形」出自同一个队列模型。
+        let others = aoi_appearance_slots(world, &aoi_show_targets(entity, actor_id));
         if let Some(inputs) = pending.get(&chr) {
             let (_, after) = inputs.frames_split_with_others(&others);
             let char_status = inputs.char_status.map(|(status, _)| status);
@@ -16987,7 +17032,7 @@ fn drain_run_downlinks_with_magic(
     // `merchant_tick` → AOI，见 `crates/world/src/world.rs` 的 `World::tick`）。
     let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);
     let _disappeared = drain_aoi_disappear(rec, online, gates);
-    let aoi_frames = drain_aoi_downlink(world, displays, online, gates);
+    let aoi_frames = drain_aoi_downlink(world, displays, online, gates, login_tails.as_deref());
     // **卡 `openmir2-map-event-frames`**：地图事件可见性上行（804/805）。oracle `SearchViewRange`
     // 收尾的最后一趟循环（actors → items → events）⇒ 排在 [`drain_aoi_downlink`] 之后。
     let _event_frames = drain_aoi_events(world, rec, online, gates);
@@ -27164,9 +27209,37 @@ mod tests {
             ),
             "生产 drain 调用必须传 Some(&mut login_tails) 与 Some(&mut monster_walk_seen)"
         );
-        let aoi = src
-            .find("let aoi_frames = drain_aoi_downlink(world, displays, online, gates);")
-            .expect("AOI 下行调用");
+        // **参数无关形状**：签名演进（增删/重排实参）是合法变更，本锚不钉整行文本，
+        // 只钉 ① 生产赋值行的绑定名（`aoi_frames` ← `drain_aoi_downlink(`）；② 实参表达式里必须出现的
+        // 关键实参（`world`/`displays`/`online`/`gates`）与登录待定表 `login_tails.as_deref()`
+        // ——后者是 turn-order 行为的**接线**：生产若退回 `None`，本锚必红（否则 14 个行为
+        // 用例可全绿而特性已死）。
+        // `concat!` 拆开字面量 ⇒ 本测试自身的源码文本不会命中锚串，故下面的
+        // 「恰一处」断言能证明锚指的是**生产调用**，而不是被测试内字面量顶替。
+        let aoi_call = concat!("let aoi_frames = drain_aoi_", "downlink(");
+        assert_eq!(
+            src.matches(aoi_call).count(),
+            1,
+            "生产 AOI 下行赋值行（aoi_frames）必须恰一处"
+        );
+        let aoi = src.find(aoi_call).expect("AOI 下行调用");
+        let aoi_end = src[aoi..]
+            .find(");")
+            .map(|i| aoi + i)
+            .expect("AOI 下行调用实参列表");
+        let aoi_args = &src[aoi + aoi_call.len()..aoi_end];
+        for arg in [
+            "world",
+            "displays",
+            "online",
+            "gates",
+            "login_tails.as_deref()",
+        ] {
+            assert!(
+                aoi_args.contains(arg),
+                "AOI 下行调用实参缺少 `{arg}`（实参：{aoi_args}）"
+            );
+        }
         // **卡 `openmir2-monster-smwalk`**：怪物走位帧必须夹在出现帧（17）与 654（153）之间。
         let walk = src
             .find("drain_monster_walk_downlink(rec, world, displays, online, gates, seen);")
@@ -28039,7 +28112,7 @@ mod tests {
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
 
         let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16)> {
             let mut out = Vec::new();
@@ -28065,6 +28138,96 @@ mod tests {
                 (a, mir2_protocol::messages::SM_FEATURECHANGED),
             ],
             "gate1（b 的线）应只收到 a 的一对帧（按 GateIdx 路由）"
+        );
+    }
+
+    /// **卡 `openmir2-turn-order-login`（tier R，生产入口）**：登录首扫的多条出现帧必须按
+    /// **oracle 消息队列出队序**下发，不是 `VisibleActors` 入队序。
+    ///
+    /// 世界直接照抄真机（`E:/tmp/window-20261026/run2/move_walk/` 登录期 idx 19–26）：
+    /// 玩家 (320,328)；扫描序 = 玛法足球场(318,332) → 行会争霸(318,336) → 盟重老兵(327,327)
+    /// → 沙巴克铁匠(332,317)；oracle 实发序 = 行会争霸 → 盟重老兵 → 玛法足球场 → 沙巴克铁匠。
+    ///
+    /// 判据 = **前 4 条 `SM_TURN(10)` 的 `Recog` 序列**（= 具体对象序列）等于期望序 ——
+    /// 不是「4 个 body 都在集合里」。`pending` 给了与真机同形的登录输入（决定堆形）。
+    ///
+    /// 牙（两颗都必须红，已在 `smframe` 单测与本用例同一实现上实测）：
+    /// ① `appearance_order` 反向 ⇒ 序变 S→M→V→H；
+    /// ② 入队槽循环反向 ⇒ 序变 V→H→S→M。
+    #[test]
+    fn turn_order_login_appearance_frames_follow_heap_dequeue_order() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(400, 400);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 320, 328), 0)
+            .expect("玩家进图");
+        // (名字, x, y, dir)：坐标/朝向取自真机帧头。
+        let npcs: [(&str, i32, i32, u8); 4] = [
+            ("玛法足球场", 318, 332, 5),
+            ("行会争霸", 318, 336, 7),
+            ("盟重老兵", 327, 327, 6),
+            ("沙巴克铁匠", 332, 317, 3),
+        ];
+        let mut displays = downlink::DisplayTable::new();
+        let mut ids = Vec::new();
+        for (name, x, y, dir) in npcs {
+            let mut e = mir2_world::Entity::new(0, name, x, y);
+            e.race = mir2_world::ACTOR_RACE_NPC;
+            e.ai.dir = dir;
+            let id = world.add_entity(e);
+            displays.set(
+                id,
+                downlink::ActorDisplay::new(dir, 2, 50, 0, 0, 255, name.as_bytes().to_vec()),
+            );
+            ids.push((name, id));
+        }
+        // 推进到首次 AOI 扫描（`SearchTime = 1000`）。
+        let _ = tick_until_next_player_scan(&mut world);
+        let scan: Vec<i32> = world
+            .entities
+            .get(p)
+            .expect("玩家实体")
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == mir2_world::VisibleFlag::Show && v.target != p)
+            .map(|v| v.target)
+            .collect();
+        assert_eq!(
+            scan,
+            vec![ids[0].1, ids[1].1, ids[2].1, ids[3].1],
+            "`VisibleActors` 入队序必须是扫描序（玛法足球场→行会争霸→盟重老兵→沙巴克铁匠）"
+        );
+
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        pending.insert(
+            "p".to_string(),
+            smframe::EnterWorldInputs {
+                actor_id: p,
+                light: 0,
+                attack_mode: Some(0),
+                test_server: true,
+                pay_ment_three: true,
+                ..Default::default()
+            },
+        );
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending));
+        assert_eq!(sent, vec![("p".to_string(), 8)], "4 对帧 = 8 条");
+
+        let mut turn_recogs = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body).expect(">=12B");
+            if cm.ident == mir2_protocol::messages::SM_TURN {
+                turn_recogs.push(cm.recog);
+            }
+        }
+        // 期望序：行会争霸 → 盟重老兵 → 玛法足球场 → 沙巴克铁匠（= `ids` 下标 1,2,0,3）。
+        assert_eq!(
+            turn_recogs,
+            vec![ids[1].1, ids[2].1, ids[0].1, ids[3].1],
+            "登录首扫 4 条 SM_TURN 的对象序列 = oracle 队列出队序，不是 VisibleActors 入队序"
         );
     }
 
@@ -28157,7 +28320,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
         assert_eq!(
             sent,
             vec![("p".to_string(), 2)],
@@ -28247,7 +28410,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
         assert_eq!(sent, vec![("p".to_string(), 2)]);
         let frames = aoi_collect_frames(&mut rx0);
         let turn = frames
@@ -29412,7 +29575,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
         let frames = aoi_collect_frames(&mut rx0);
 
         let mon_turn = frames
@@ -29563,7 +29726,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -29681,7 +29844,7 @@ mod tests {
         // tick 1：怪物首次出现 ⇒ `new >= 1`，实发 2 帧（SM_TURN + SM_FEATURECHANGED），
         // 累计 `af >= 2`；`vis` 也必须 >= 1。
         let _ = tick_until_next_player_scan(&mut world);
-        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates) {
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
         let mut sent_tick1 = 0usize;
@@ -29706,7 +29869,7 @@ mod tests {
         // tick 2：怪仍在视野 ⇒ `update_visible_gay` 置 `Invisible` ⇒ `new == 0`，
         // 但当前可见集必须仍 >= 1（旧实现这里恒 0，正是 root 误判的来源）。
         let _ = tick_until_next_player_scan(&mut world);
-        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates) {
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
         let mut sent_tick2 = 0usize;
@@ -43509,7 +43672,7 @@ SendRefMsgRange=15
 
         // 登录路径的两类排水（顺序同生产 tick：② aoi → ③ 尾段）；尾段跑两遍覆盖清缓冲。
         let displays = downlink::DisplayTable::new();
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending));
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
 
@@ -62852,7 +63015,7 @@ SendRefMsgRange=15
         let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
         for _ in 0..400 {
             world.tick();
-            let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
             collect_frames(&mut rx, &mut frames);
         }
         assert_eq!(world.clock_ms, 80_000, "400 × 200ms");
@@ -62923,7 +63086,7 @@ SendRefMsgRange=15
         let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
         for _ in 0..149 {
             world.tick();
-            let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
             collect_frames(&mut rx, &mut frames);
         }
         assert_eq!(world.clock_ms, 29_800, "149 × 200ms");
@@ -64728,7 +64891,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {

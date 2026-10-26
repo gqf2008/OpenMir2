@@ -1461,7 +1461,13 @@ enum LoginQueued {
     /// 其他 actor 的出现槽（本宿主由 AOI 侧下发帧，这里只占堆位）。
     /// 优先级随种类由 [`OtherAppear::priority`] 在入队时给出（`RM_TURN` 17 / `RM_DEATH` 37 /
     /// `RM_SKELETON` 40）；出队不产帧。
-    OtherAppear,
+    ///
+    /// 载荷 = 该槽在**入队序**（= `others` 下标，即 oracle `VisibleActors` 顺序）里的位置。
+    /// 出队时据此还原「这些出现帧真实的发送顺序」——见
+    /// [`EnterWorldInputs::appearance_order`]。同优先级槽位在 .NET 四叉堆里不是 FIFO，
+    /// **下标是唯一能把出队序映射回具体对象的键**（不带下标时 4 个 `Turn` 彼此不可区分，
+    /// 排序键就无法被断言）。
+    OtherAppear(usize),
 }
 
 /// `PlayObject.SearchViewRange` 对**其他** actor 入队的出现/死亡帧种类
@@ -1570,50 +1576,21 @@ impl EnterWorldInputs {
         before
     }
 
-    /// 登录帧序的**两段切分**（生产路径）：`before` = 优先级 ≤ `(byte)RM_TURN`(=17) 的出队帧，
-    /// `after` = 其后的一切（`654`/`657×2`/第二 `42`/`100×4`，含优先级 61 的 `750`）。
+    /// 把 `UserLogon` 的全部 `MsgQueue.Enqueue` 按 **oracle 源码执行序**压进四叉最小堆。
     ///
-    /// oracle 的 `PlayObject.Run()` 在**同一次**消息泵里消费整个队列；其他 actor 的出现帧
-    /// （`RM_TURN` 17）由观察者自己的 `SearchViewRange` 入队（`PlayObject.cs:3240`），因此
-    /// 654（153）恒在出现帧**之后**。本宿主的出现帧由世界 tick 的
-    /// [`crate::drain_aoi_downlink`] 下发 ⇒ 登录点先发 `before`，`after` 由
-    /// [`crate::drain_login_tail`] 在该会话首次 `SearchViewRange` 的同 tick 补发
-    /// （C# 抓包实测 `10/41 ×N → 654 → 657,657 → 42 → 100×4`；抓包文件 mtime 2026-10-20，
-    /// 目录名 `20261022`）。
-    #[must_use]
-    pub fn frames_split(&self) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        self.frames_split_with_others(&[])
-    }
-
-    /// [`Self::frames_split`] 的**真机堆布局**版本：`others` = 本 tick `SearchViewRange`
-    /// 对其他 actor 入队的出现/死亡条目（顺序 = `VisibleActors` 顺序）。
+    /// 这是登录帧序与出现帧序的**唯一入队来源**：[`Self::frames_split_with_others`] 与
+    /// [`Self::appearance_order`] 共用它，保证两条判据看的是同一个堆（否则「切分点」与
+    /// 「出现帧序」会来自不同形状的队列）。
     ///
-    /// 这些条目在 `UserLogon` 的全部入队之后、`Run()` 的消息泵之前入队（`SearchViewRange` 在
-    /// `WorldServer.cs:663-666` 先于 `:697` 的 `playObject.Run()`），因此追加到队列尾部即可。
-    /// 它们**不产帧**（AOI 侧下发），但会改变堆形。
-    ///
-    /// **校准边界（reviewer-6 Important 1，2026-10-21）**：真实 oracle 的抓包在 N=0..8
-    /// 个出现对下恒为 `811,46`；而 net8.0.26 实跑表明：若队列里同时存在**自身 17 槽**，
-    /// 任一 N≥1 都会翻成 `46,811`。差异的根因是自身 `RM_TURN` 根本没入队（`FixedHideMode`
-    /// 门，见 `frames` 头注），不是二叉堆。本函数不含该槽位，故与全部抓包一致。
-    #[must_use]
-    pub fn frames_split_with_others(&self, others: &[OtherAppear]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
-        let mut out = Vec::new();
-        let mut split_at: Option<usize> = None;
-        // **R1-1**：oracle `SendNotice` 无条件 `SendDefMessage(..., sNoticeMsg)`；即使
-        // `sNoticeMsg` 为空也照发 header-only 658（`SendDefMessage` 的 `if (!string.IsNullOrEmpty)`
-        // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
-        out.push(sm_sendnotice(&self.notice));
-        // **Lane B**：`UserLogon()` 里 `RecalcAbilitys()` 的直接帧（212/210）先于队列出队
-        // （真机 `658 → 212 → 51`）。顺序 = oracle 调用序（火球分支在前、治愈分支在后）。
-        for event in &self.magic_journal {
-            out.push(magic_event_frame(event));
-        }
-
-        // ---- 入队：按 oracle 调用序把 14 条消息压进四叉最小堆（LOGON 出队时再入 654）----
-        // 顺序 = 源码执行序（见 `LoginQueued` 的逐条行号）。**不要**按「可观测序」重排：
-        // 真机实拍的三段序完全由这个内容 + .NET 8 四叉堆决定。
-        let mut queue: NetPriorityQueue<LoginQueued> = NetPriorityQueue::new();
+    /// `others` = 本 tick `SearchViewRange` 对**其他** actor 入队的出现/死亡槽，
+    /// **顺序 = `VisibleActors` 顺序**（oracle 扫描序 = 格子 `x` 升序 / `y` 升序 / 格内
+    /// `ObjList` 下标升序），入队位置在全部登录消息之后（`PlayObject.cs:3220-3240` 的
+    /// `SearchViewRange` 先于 `Run()` 的消息泵）。
+    fn enqueue_login_queue(
+        &self,
+        others: &[OtherAppear],
+        queue: &mut NetPriorityQueue<LoginQueued>,
+    ) {
         // ① RM_LOGON（High）。自身 `RM_TURN` 不入队：`AddToMap` 的 `SendRefMsg` 被
         //    `FixedHideMode` 门挡住（`BaseObject.cs:1373-1376`；构造置 true
         //    `PlayObject.cs:993`，`UserLogon` 末尾才置 false `PlayObject.cs:1442`）。
@@ -1676,9 +1653,99 @@ impl EnterWorldInputs {
 
         // ⑦ 其他 actor 的出现/死亡槽（`SearchViewRange`，`PlayObject.cs:3220-3240`）：
         //    本 tick 的 `VisibleActors` 里 `Show` 且非自己的对象，按 oracle 顺序入队。
-        for other in others {
-            queue.enqueue(LoginQueued::OtherAppear, other.priority());
+        for (idx, other) in others.iter().enumerate() {
+            queue.enqueue(LoginQueued::OtherAppear(idx), other.priority());
         }
+    }
+
+    /// **其他 actor 出现帧的 oracle 发送顺序**（返回值 = `others` 下标，按出队先后）。
+    ///
+    /// # 为什么不是 `others` 的输入序
+    ///
+    /// oracle 的观察者队列是 `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`），
+    /// 出现帧经 `SendMsg(baseObject, RM_TURN, …)`（`PlayObject.cs:3240`）入队，优先级
+    /// `(byte)RM_TURN = 17`；`PlayObject.Run()` 的 `while (GetMessage())` 按 **.NET 8 四叉
+    /// 最小堆**出队（`crates/world/src/msgqueue.rs` 的逐位复刻）。**同优先级不是 FIFO**：
+    /// 出队序由堆数组在「登录消息 + 这些 17 槽」共同作用下决定 ⇒ 它既不是 `VisibleActors`
+    /// 入队序，也不能用任何「按 body/名字排序」的观测规则凑出来。
+    ///
+    /// 证据（真机 `E:/tmp/window-20261026/run2/move_walk/`，登录期 idx 19–26）：
+    /// `VisibleActors` 入队序 = 玛法足球场(318,332) → 行会争霸(318,336) → 盟重老兵(327,327)
+    /// → 沙巴克铁匠(332,317)；oracle 实发序 = 行会争霸 → 盟重老兵 → 玛法足球场 → 沙巴克铁匠
+    /// ⇒ 下标 `[1, 2, 0, 3]`（同一份登录消息内容下由四叉堆唯一决定）。
+    ///
+    /// **边界**：只建模「登录队列 + 出现槽」这一个堆。其它系统混进同一队列的条目
+    /// （`msgqueue.rs` 的混合队列 `not_verified`）不在本函数范围内。
+    #[must_use]
+    pub fn appearance_order(&self, others: &[OtherAppear]) -> Vec<usize> {
+        let mut queue: NetPriorityQueue<LoginQueued> = NetPriorityQueue::new();
+        self.enqueue_login_queue(others, &mut queue);
+        let mut order = Vec::with_capacity(others.len());
+        while let Some(item) = queue.dequeue() {
+            match item {
+                LoginQueued::OtherAppear(idx) => order.push(idx),
+                // `RM_LOGON` 出队处理时**再入队**一条 `RM_CHANGELIGHT(153)`
+                // （`PlayObject.Message.cs:1683`）——它改变堆数组，必须复刻，
+                // 否则后面 17 槽的出队序可能不同。
+                LoginQueued::Logon => {
+                    queue.enqueue(
+                        LoginQueued::ChangeLight,
+                        (messages::RM_CHANGELIGHT & 0xFF) as u8,
+                    );
+                }
+                _ => {}
+            }
+        }
+        order
+    }
+
+    /// 登录帧序的**两段切分**（生产路径）：`before` = 优先级 ≤ `(byte)RM_TURN`(=17) 的出队帧，
+    /// `after` = 其后的一切（`654`/`657×2`/第二 `42`/`100×4`，含优先级 61 的 `750`）。
+    ///
+    /// oracle 的 `PlayObject.Run()` 在**同一次**消息泵里消费整个队列；其他 actor 的出现帧
+    /// （`RM_TURN` 17）由观察者自己的 `SearchViewRange` 入队（`PlayObject.cs:3240`），因此
+    /// 654（153）恒在出现帧**之后**。本宿主的出现帧由世界 tick 的
+    /// [`crate::drain_aoi_downlink`] 下发 ⇒ 登录点先发 `before`，`after` 由
+    /// [`crate::drain_login_tail`] 在该会话首次 `SearchViewRange` 的同 tick 补发
+    /// （C# 抓包实测 `10/41 ×N → 654 → 657,657 → 42 → 100×4`；抓包文件 mtime 2026-10-20，
+    /// 目录名 `20261022`）。
+    #[must_use]
+    pub fn frames_split(&self) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        self.frames_split_with_others(&[])
+    }
+
+    /// [`Self::frames_split`] 的**真机堆布局**版本：`others` = 本 tick `SearchViewRange`
+    /// 对其他 actor 入队的出现/死亡条目（顺序 = `VisibleActors` 顺序）。
+    ///
+    /// 这些条目在 `UserLogon` 的全部入队之后、`Run()` 的消息泵之前入队（`SearchViewRange` 在
+    /// `WorldServer.cs:663-666` 先于 `:697` 的 `playObject.Run()`），因此追加到队列尾部即可。
+    /// 它们**不产帧**（AOI 侧下发），但会改变堆形。
+    ///
+    /// **校准边界（reviewer-6 Important 1，2026-10-21）**：真实 oracle 的抓包在 N=0..8
+    /// 个出现对下恒为 `811,46`；而 net8.0.26 实跑表明：若队列里同时存在**自身 17 槽**，
+    /// 任一 N≥1 都会翻成 `46,811`。差异的根因是自身 `RM_TURN` 根本没入队（`FixedHideMode`
+    /// 门，见 `frames` 头注），不是二叉堆。本函数不含该槽位，故与全部抓包一致。
+    #[must_use]
+    pub fn frames_split_with_others(&self, others: &[OtherAppear]) -> (Vec<Vec<u8>>, Vec<Vec<u8>>) {
+        let mut out = Vec::new();
+        let mut split_at: Option<usize> = None;
+        // **R1-1**：oracle `SendNotice` 无条件 `SendDefMessage(..., sNoticeMsg)`；即使
+        // `sNoticeMsg` 为空也照发 header-only 658（`SendDefMessage` 的 `if (!string.IsNullOrEmpty)`
+        // 只决定是否追加尾，空时走 `else SendSocket(ClientMsg)`）。故这里**不**用 `if let`。
+        out.push(sm_sendnotice(&self.notice));
+        // **Lane B**：`UserLogon()` 里 `RecalcAbilitys()` 的直接帧（212/210）先于队列出队
+        // （真机 `658 → 212 → 51`）。顺序 = oracle 调用序（火球分支在前、治愈分支在后）。
+        for event in &self.magic_journal {
+            out.push(magic_event_frame(event));
+        }
+
+        // ---- 入队：按 oracle 调用序把 14 条消息压进四叉最小堆（LOGON 出队时再入 654）----
+        // 顺序 = 源码执行序（见 `LoginQueued` 的逐条行号）。**不要**按「可观测序」重排：
+        // 真机实拍的三段序完全由这个内容 + .NET 8 四叉堆决定。
+        // 入队内容与 [`Self::appearance_order`] **共用同一份**（[`Self::enqueue_login_queue`]），
+        // 否则「切分点」与「出现帧序」会来自两个形状不同的堆。
+        let mut queue: NetPriorityQueue<LoginQueued> = NetPriorityQueue::new();
+        self.enqueue_login_queue(others, &mut queue);
 
         // ---- 出队：逐条按堆序处理 ----
         // 登录自身 `RM_TURN` 的帧在 oracle 被 `ActorId != ActorId` 门抑制；本输入集里 `turn`
@@ -1863,7 +1930,9 @@ impl EnterWorldInputs {
                     }
                 }
                 // 其他 actor 的出现槽只占堆位（帧由 AOI 侧下发）。
-                LoginQueued::OtherAppear => {}
+                // 其他 actor 的出现槽只占堆位（帧由 AOI 侧按
+                // [`Self::appearance_order`] 的出队序下发）。
+                LoginQueued::OtherAppear(_) => {}
             }
         }
         let at = split_at.unwrap_or(out.len());
@@ -3031,6 +3100,41 @@ mod tests {
         // 评审员更正 2 的齿：优先级常量必须是 61；改成 0（到 46 前）或 >=154（到 654 后）
         // 上面两条顺序断言必红；改成 1 / 152 不改变出队序，故不是牙。
         assert_eq!(PRIORITY_RM_CHANGEGUILDNAME, 61);
+    }
+
+    /// **卡 `openmir2-turn-order-login`（tier R）**：登录首扫的 4 个 `RM_TURN(17)` 槽出队序 =
+    /// .NET 8 四叉堆序，**不是** `VisibleActors` 入队序（真机
+    /// `E:/tmp/window-20261026/run2/move_walk/` 登录期 idx 19–26）。
+    ///
+    /// 入队序（`VisibleActors` 扫描序：x 升序 → y 升序）：
+    /// 下标 0 玛法足球场(318,332) / 1 行会争霸(318,336) / 2 盟重老兵(327,327) /
+    /// 3 沙巴克铁匠(332,317)；oracle 实发序 = 行会争霸 → 盟重老兵 → 玛法足球场 → 沙巴克铁匠
+    /// = 下标 `[1, 2, 0, 3]`。
+    ///
+    /// 判据是**显式排序键产生的前 N 序列**，不是「集合相同」：`[1,2,0,3]` 的集合恰是
+    /// `{0,1,2,3}`，只断言集合/长度的实现（含「保持入队序」与「反向」）都会漏。
+    ///
+    /// 牙（两颗都必须红，均已实测）：
+    /// ① `appearance_order` 末尾加 `order.reverse()` ⇒ 收到 `[3,0,2,1]`；
+    /// ② `enqueue_login_queue` 的 `others.iter().enumerate()` 改 `.rev()`（打乱入队序）⇒
+    ///    槽下标落位整体反转 ⇒ 收到 `[2,1,3,0]`。
+    #[test]
+    fn turn_order_login_appearance_dequeue_order_matches_oracle() {
+        // 与真机同一份登录消息内容：4 条 SysMsg 槽（攻击模式/帮助/TestServer/免费模式）、
+        // 2 条 657、621/211 空尾槽、无会、无光源 —— 只由这些槽决定堆形。
+        let inputs = EnterWorldInputs {
+            light: 0,
+            attack_mode: Some(0),
+            test_server: true,
+            pay_ment_three: true,
+            ..Default::default()
+        };
+        let others = vec![OtherAppear::Turn; 4];
+        assert_eq!(
+            inputs.appearance_order(&others),
+            vec![1, 2, 0, 3],
+            "登录首扫 4 个出现槽的出队序 = 行会争霸→盟重老兵→玛法足球场→沙巴克铁匠"
+        );
     }
 
     /// **reviewer-6 Important 1 回归（2026-10-21）**：把真机抓包的出现对（`RM_TURN` 17）
