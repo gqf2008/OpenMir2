@@ -176,9 +176,13 @@ def main():
               "card_window 被调用：\n%s" % "\n".join(scenario_calls)[:400])
         check("T2 真跑无密码 ⇒ 垫片里没有 powershell 调用（零起栈/停栈）", not stack_calls,
               "powershell 被调用：\n%s" % "\n".join(stack_calls)[:400])
-        check("T2 真跑无密码 ⇒ 垫片最多一次清单解析、且不是场景执行",
-              len(lines) <= 1 and (not lines or manifest_calls),
-              "垫片调用 %d 次：\n%s" % (len(lines), calls[:400]))
+        # **地板钉死为 1**（reviewer-20 实测：自建垫片直跑真 `run_batch.sh`，清单解析恒调一次 python）。
+        # 只写上限（<= 1）时，**垫片 0 次调用**会让三条新断言全部空过——那正是「PATH 注入失效
+        # （`python3` / 绝对解释器路径 / `exec` 改动）⇒ `card_window` 真的执行」这种假绿。
+        # 0 次调用必须红，不许绿。
+        check("T2 真跑无密码 ⇒ 垫片恰好一次清单解析（地板=1，0 次视为 PATH 注入失效）",
+              len(lines) == 1 and len(manifest_calls) == 1,
+              "垫片调用 %d 次（期望 1 次清单解析）：\n%s" % (len(lines), calls[:400]))
 
         # ---- T3：带密码的 dry-run ⇒ rc=0 且无 WRN（防恒亮）----
         rd3 = os.path.join(tmp, "t3")
