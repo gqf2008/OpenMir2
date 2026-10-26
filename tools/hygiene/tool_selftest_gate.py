@@ -315,6 +315,10 @@ def check_doc_anchors(repo):
     跳过；但**每一类在排除之后都必须仍有 ≥1 处活锚**——某类被排除到空 ⇒ **rc=2 判不了**
     （否则「历史」两个字就成了新的万能挡箭牌，和 `LEGACY_MARK_RE` 同族）。
     被排除的条数与行号**打印在输出里**，让「跳过清单变长」可见。
+
+    **排除项必须严格小于现值**（两类计数只增）：`排除的 N < len(REGISTRY)`、`排除的 M < total`。
+    否则「把写错的锚加个『历史』前缀」就能躲进排除集（review 实测：`历史：**53 项全绿**` 曾 rc=0）。
+    若某天计数真的缩水，别用「历史」标记写法——把旧值写成不带标记的叙述，或改这份 docstring 的契约。
     """
     path = os.path.join(str(repo), DOC_ANCHOR_REL)
     if not os.path.isfile(path):
@@ -330,7 +334,10 @@ def check_doc_anchors(repo):
     _HISTORY_MARKERS = ("历史", "此前", "原始记录", "当时", "曾")
 
     def _is_history(pos):
-        return any(w in text[max(0, pos - 40):pos] for w in _HISTORY_MARKERS)
+        # **行内**判定：标记必须与数字在同一行（早期版本看前 40 字符，会误伤下一行——review 的
+        # `历史：**51 项全绿**` 下一行的三元组被连带当成历史）。
+        line_start = text.rfind(chr(10), 0, pos) + 1
+        return any(w in text[line_start:pos] for w in _HISTORY_MARKERS)
 
     def _lineno(pos):
         return text.count("\n", 0, pos) + 1
@@ -347,6 +354,18 @@ def check_doc_anchors(repo):
     n_excl = [p for _v, p in n_all if _is_history(p)]
     tri_excl = [p for _v, p in tri_all if _is_history(p)]
 
+    # **伪造历史**（review：多锚情形下的洞）：把写错的锚前缀加个『历史』就能躲进排除集。
+    # 排除项必须**严格小于**现值——本卡两类计数都是只增的，真历史值（47/48、52=47+5+0）都小于现值；
+    # 出现「排除项 ≥ 现值」只可能是伪造（或计数真的缩过水，那就别用历史标记写法，见 docstring）。
+    forged = []
+    for v, p in n_all:
+        if _is_history(p) and v >= n_items:
+            forged.append("N 类排除项 %d ≥ 现值 %d（行 %d）⇒ 不能当历史" % (v, n_items, _lineno(p)))
+    for t, p in tri_all:
+        if _is_history(p) and t[0] >= total:
+            forged.append("三元组类排除项 M=%d ≥ 现值 %d（行 %d）⇒ 不能当历史"
+                          % (t[0], total, _lineno(p)))
+
     def _excl_note():
         parts = []
         if n_excl:
@@ -356,6 +375,9 @@ def check_doc_anchors(repo):
             parts.append("三元组类排除历史 %d 处（行 %s）"
                          % (len(tri_excl), ",".join(str(_lineno(p)) for p in tri_excl[:8])))
         return ("；" + "；".join(parts)) if parts else ""
+
+    if forged:
+        return 1, "；".join(forged) + _excl_note()
 
     missing, wrong = [], []
     if not n_live:
@@ -670,14 +692,14 @@ def selftest():
             "R3c 三元组锚被删掉 ⇒ rc=2 判不了（不静默通过；%r）" % (_r3c_dt,))
         # 活锚地板（Leader 2026-10-27）：某一类被「历史」排除到空 ⇒ rc=2 判不了。
         with open(_r3_path, "w", encoding="utf-8") as fh:
-            fh.write("> 历史：**%d 项全绿**（旧记录）" % _n + chr(10)
+            fh.write("> 历史：**%d 项全绿**（旧记录）" % (_n - 1) + chr(10)
                      + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
         _r3f_rc, _r3f_dt = check_doc_anchors(_r3_root)
         chk(_r3f_rc == 2 and "N 类活锚为空" in _r3f_dt and "历史" in _r3f_dt,
             "R3f N 类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3f_dt,))
         with open(_r3_path, "w", encoding="utf-8") as fh:
             fh.write("**%d 项全绿**" % _n + chr(10)
-                     + "> 历史：清点 **%d = %d + %d + 0**（旧记录）" % (_m, _g, _o) + chr(10))
+                     + "> 历史：清点 **%d = %d + %d + 0**（旧记录）" % (_m - 1, _g, _o) + chr(10))
         _r3g_rc, _r3g_dt = check_doc_anchors(_r3_root)
         chk(_r3g_rc == 2 and "三元组类活锚为空" in _r3g_dt,
             "R3g 三元组类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3g_dt,))
@@ -687,6 +709,22 @@ def selftest():
         _r3h_rc, _r3h_dt = check_doc_anchors(_r3_root)
         chk(_r3h_rc == 0 and "排除历史 1 处（行" in _r3h_dt,
             "R3h 被排除的条数与行号出现在输出里（%r）" % (_r3h_dt,))
+        # 伪造历史（review 实测的洞）：把写错的锚前缀加「历史」躲进排除集 ⇒ 排除项 ≥ 现值 ⇒ rc=1。
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 项全绿**（伪造）" % (_n + 1) + chr(10)
+                     + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
+        _r3i_rc, _r3i_dt = check_doc_anchors(_r3_root)
+        chk(_r3i_rc == 1 and "不能当历史" in _r3i_dt,
+            "R3i 单锚伪装：`历史：**N+1 项全绿**` ⇒ rc=1（不能当历史；%r）" % (_r3i_dt,))
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 项全绿**（伪造1）" % (_n + 1) + chr(10)
+                     + "- 历史：**%d 项全绿**（伪造2）" % (_n + 2) + chr(10)
+                     + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
+        _r3j_rc, _r3j_dt = check_doc_anchors(_r3_root)
+        chk(_r3j_rc == 1 and "不能当历史" in _r3j_dt,
+            "R3j 多锚伪装（N 活 1/共 3）：两处 53/54 带历史前缀 ⇒ rc=1（%r）" % (_r3j_dt,))
         chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
             and "PowerShell" in r_c3["tail"],
             "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
