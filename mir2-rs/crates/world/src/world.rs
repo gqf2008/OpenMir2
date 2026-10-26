@@ -9557,6 +9557,37 @@ mod tests {
         assert_eq!(named, vec![third], "正常路径同样恰 1 个同名实体");
     }
 
+    /// **F1 的顺序牙（Leader 派单 `must_added`）**：`enter_map_at` 的「收走遗留 ghost」必须在
+    /// **全部入参校验之后** —— 非法地图入参失败时**不得**顺手摘掉 ghost。
+    ///
+    /// 牙：把 `if let Some(old) = sess.actor_id { … }` 那三行挪到 `if map_id >= self.maps.len()`
+    /// 之**前** ⇒ 本用例红（`Err(NoSuchMap)` 之后实体已消失）。
+    #[test]
+    fn m3_failed_reenter_keeps_leftover_ghost() {
+        // 只建一张图（map 0）⇒ `map_id = 1` 必走 `NoSuchMap`。
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let first = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+
+        let err = w.enter_map("hero", player(0, "hero", 7, 9, 10), 1);
+        assert!(
+            matches!(err, Err(crate::session::SessionError::NoSuchMap)),
+            "前置：非法地图必须 `Err(NoSuchMap)`，实得 {err:?}"
+        );
+        assert!(
+            w.entities.get(first).is_some_and(|e| e.ghost),
+            "入参校验失败时**不得**摘掉遗留 ghost（收走动作必须在全部校验之后）"
+        );
+        assert_eq!(
+            w.session("hero").unwrap().actor_id,
+            Some(first),
+            "校验失败不得清 actor_id"
+        );
+    }
+
     /// **切图成功语义**（oracle `PlayObject.EnterAnotherMap` 的正向支，`PlayObject.cs:3772-3783`）：
     /// 目标格可走 ⇒ 旧图摘除、新图落格、`add_to_mapped` 保持 true、`Session.map_id` 更新、
     /// 记一条 `MapChange`（`space_move_show == None`）。
