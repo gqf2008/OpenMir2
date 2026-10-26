@@ -301,39 +301,61 @@ def run_one(repo, name, argv, timeout):
 DOC_ANCHOR_REL = "docs/real-machine-window-plan-20261025.md"
 
 def check_doc_anchors(repo):
-    """R3（卡 openmir2-tool-gate-teeth-residuals）：window-plan 的**认树锚**必须与实况一致。
+    """R3（卡 openmir2-tool-gate-teeth-residuals）+ F1（review 92f425e9）：window-plan 的**认树锚**。
 
-    开窗当天会照抄 `**N 项全绿**` 与 `清点 **M = N + K + 0**` 两处数字来确认「开的就是预期那棵树」；
-    数字写错 ⇒ 认错树还不自知。这里机判：N == len(REGISTRY)、M == 清点总数、K == 出域数。
-    解析不到锚 ⇒ **判不了**（rc=2）——绝不因为「文档改了措辞」就静默通过。
-    返回 (rc, detail)：0 一致 / 1 不一致 / 2 判不了。
+    开窗当天会**照抄三处渲染**里的数字确认「开的就是预期那棵树」：
+      ① 表行：`⇒ **N 项全绿**；`
+      ② 正文：`⇒ **N 项全绿**；… 清点 **M = N + K + 0**`
+      ③ 提示行：`（**N 项 / 清点 M = N + K + 0**）`
+    只机判其中一种时，另两种各说各话而门仍绿（review F1：把表行改成 99 仍 rc=0）⇒ 现在**三处都收**：
+    所有 `N 项(全绿|/)` 命中都必须等于 `len(REGISTRY)`；所有 `清点 M = N + K + Z` 命中都必须等于
+    `(total, in_gate, out_scope, 0)`。缺某一类锚 ⇒ **rc=2 判不了**；写错 ⇒ **rc=1**。
     """
     path = os.path.join(str(repo), DOC_ANCHOR_REL)
     if not os.path.isfile(path):
         return 2, "认树锚文档缺失：%s" % DOC_ANCHOR_REL
-    with open(path, encoding="utf-8", errors="replace") as _fh:
-        text = _fh.read()
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
     n_items = len(REGISTRY)
     rows = inventory_rows()
     total = len(rows)
     in_gate = sum(1 for r in rows if r["status"] == "IN_GATE")
     out_scope = sum(1 for r in rows if r["status"].startswith("OUT_OF_SCOPE"))
-    nums = {int(m.group(1)) for m in re.finditer(r"\*\*(\d+) 项全绿\*\*", text)}
-    quads = re.findall(r"清点 \*\*(\d+) = (\d+) \+ (\d+) \+ (\d+)\*\*", text)
-    if not nums:
-        return 2, "认树锚里找不到 `**N 项全绿**`（判不了，不是通过）"
-    problems = []
-    if nums != {n_items}:
-        problems.append("`N 项全绿` 写作 %s，实况 len(REGISTRY)=%d" % (sorted(nums), n_items))
-    if not quads:
-        problems.append("找不到 `清点 **M = N + K + 0**` 锚")
-    for (m_s, n_s, k_s, z_s) in quads:
-        if (int(m_s), int(n_s), int(k_s), int(z_s)) != (total, in_gate, out_scope, 0):
-            problems.append("清点锚写作 %s = %s + %s + %s，实况 %d = %d + %d + 0"
-                            % (m_s, n_s, k_s, z_s, total, in_gate, out_scope))
-    if problems:
-        return 1, "；".join(problems)
-    return 0, "认树锚一致：%d 项 / 清点 %d = %d + %d + 0" % (n_items, total, in_gate, out_scope)
+
+    _HISTORY_MARKERS = ("历史", "此前", "原始记录", "当时", "曾")
+
+    def _is_history(pos):
+        head = text[max(0, pos - 40):pos]
+        return any(w in head for w in _HISTORY_MARKERS)
+
+    n_hits = [int(m.group(1)) for m in re.finditer(r"\*\*(\d+)\s*项全绿\*\*", text)
+              if not _is_history(m.start())]
+    n_hits += [int(m.group(1)) for m in re.finditer(r"\*\*(\d+)\s*项\s*/\s*清点", text)
+               if not _is_history(m.start())]
+    # 历史叙事里的数字是**记录**、不是锚：紧邻前文出现这些词时跳过（否则老数字会把新版判红）。
+
+    tri_hits = [tuple(int(x) for x in m.groups()) for m in re.finditer(
+        r"清点\s*\*{0,2}\s*(\d+)\s*=\s*(\d+)\s*\+\s*(\d+)\s*\+\s*(\d+)", text)
+        if not _is_history(m.start())]
+
+    missing, wrong = [], []
+    if not n_hits:
+        missing.append("找不到任何「**N 项全绿**」或「**N 项 / 清点」锚")
+    if not tri_hits:
+        missing.append("找不到任何「清点 M = N + K + 0」锚")
+    for n in sorted(set(n_hits)):
+        if n != n_items:
+            wrong.append("`N 项` 锚写作 %d，实况 len(REGISTRY)=%d" % (n, n_items))
+    want = (total, in_gate, out_scope, 0)
+    for t in sorted(set(tri_hits)):
+        if t != want:
+            wrong.append("清点锚写作 %d = %d + %d + %d，实况 %d = %d + %d + %d" % (t + want))
+    if missing:
+        return 2, "；".join(missing + wrong)
+    if wrong:
+        return 1, "；".join(wrong)
+    return 0, ("认树锚一致：%d 项 / 清点 %d = %d + %d + 0（%d 处 N 命中、%d 处三元组命中）"
+               % (n_items, total, in_gate, out_scope, len(n_hits), len(tri_hits)))
 
 
 def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
@@ -572,7 +594,8 @@ def selftest():
             r_c3 = run_one(tmp, "ps_noshell", ["tools/window/no-such.ps1"], 5)
         finally:
             globals()["shutil"].which = _real_which
-        # R3（卡 openmir2-tool-gate-teeth-residuals）：认树锚机判——三条牙（一致/写错/缺锚）。
+        # R3（卡 openmir2-tool-gate-teeth-residuals）+ F1（review 92f425e9）：
+        # 认树锚机判必须覆盖**三种渲染**且彼此一致：表行 `**N 项全绿**`、正文三元组、提示行 `**N 项 / 清点 …**`。
         import tempfile as _tf_r3
         _r3_root = _tf_r3.mkdtemp(prefix="tsg-docanchor-")
         _r3_doc = os.path.join(_r3_root, "docs")
@@ -582,23 +605,45 @@ def selftest():
         _m = len(_rows)
         _g = sum(1 for r in _rows if r["status"] == "IN_GATE")
         _o = sum(1 for r in _rows if r["status"].startswith("OUT_OF_SCOPE"))
-        _ok_text = (("**%d 项全绿**" % len(REGISTRY)) + chr(10)
-                    + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
-        with open(_r3_path, "w", encoding="utf-8") as fh:
-            fh.write(_ok_text)
+        _n = len(REGISTRY)
+
+        def _r3_write(table_n=None, tri=None, note_n=None, drop_tri=False):
+            tn = _n if table_n is None else table_n
+            tr = (_m, _g, _o) if tri is None else tri
+            nn = _n if note_n is None else note_n
+            _NL3 = chr(10)
+            body = "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % tn + _NL3
+            if not drop_tri:
+                body += ("- ⇒ **%d 项全绿**；`--inventory` ⇒ 清点 **%d = %d + %d + 0**"
+                         % (_n, tr[0], tr[1], tr[2])) + _NL3
+                body += ("> 提示：**%d 项 / 清点 %d = %d + %d + 0**"
+                         % (nn, tr[0], tr[1], tr[2])) + _NL3
+            with open(_r3_path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+
+        _r3_write()
         _r3_rc, _r3_dt = check_doc_anchors(_r3_root)
-        chk(_r3_rc == 0 and "一致" in _r3_dt, "R3a 认树锚与实况一致 ⇒ rc=0（%r）" % (_r3_dt,))
-        with open(_r3_path, "w", encoding="utf-8") as fh:
-            fh.write(_ok_text.replace("**%d 项全绿**" % len(REGISTRY),
-                                      "**%d 项全绿**" % (len(REGISTRY) + 1)))
+        chk(_r3_rc == 0 and "一致" in _r3_dt, "R3a 三种渲染都一致 ⇒ rc=0（%r）" % (_r3_dt,))
+
+        _r3_write(table_n=_n + 1)
         _r3b_rc, _r3b_dt = check_doc_anchors(_r3_root)
         chk(_r3b_rc == 1 and "实况 len(REGISTRY)=" in _r3b_dt,
-            "R3b 认树锚写错一项 ⇒ rc=1 并点名（%r）" % (_r3b_dt,))
-        with open(_r3_path, "w", encoding="utf-8") as fh:
-            fh.write("没有任何锚" + chr(10))
+            "R3b 表行写错一项 ⇒ rc=1 并点名（%r）" % (_r3b_dt,))
+
+        _r3_write(note_n=_n + 1)
+        _r3e_rc, _r3e_dt = check_doc_anchors(_r3_root)
+        chk(_r3e_rc == 1 and "实况 len(REGISTRY)=" in _r3e_dt,
+            "R3e 提示行 `**N 项 / 清点 …**` 写错 ⇒ rc=1（%r）" % (_r3e_dt,))
+
+        _r3_write(tri=(_m, _g + 1 if _g < _m else _g, _o))
+        _r3d_rc, _r3d_dt = check_doc_anchors(_r3_root)
+        chk(_r3d_rc == 1 and "清点锚写作" in _r3d_dt,
+            "R3d 紧凑三元组写错 ⇒ rc=1（%r）" % (_r3d_dt,))
+
+        _r3_write(drop_tri=True)
         _r3c_rc, _r3c_dt = check_doc_anchors(_r3_root)
-        chk(_r3c_rc == 2 and "找不到" in _r3c_dt,
-            "R3c 锚被删掉 ⇒ rc=2 判不了（不静默通过；%r）" % (_r3c_dt,))
+        chk(_r3c_rc == 2 and "找不到任何「清点" in _r3c_dt,
+            "R3c 三元组锚被删掉 ⇒ rc=2 判不了（不静默通过；%r）" % (_r3c_dt,))
         chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
             and "PowerShell" in r_c3["tail"],
             "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
