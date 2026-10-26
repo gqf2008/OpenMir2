@@ -1065,7 +1065,7 @@ python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点�
 **收哪些、不收哪些**（`--inventory` 可看全量）：**只要自带 selftest 且能离线判红，就收**——不按
 「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛。Leader 2026-10-25 裁定：
 **「一次性 / 人工使用 / 别域」都不是合法出域理由**，只有「**需要交互式输入、外部产物或真实环境**」才算。
-出域仅 **5** 项（**门内/出域/未分类以 `--inventory` 实跑为准**——2026-10-27 实测 **56 = 51 + 5 + 0**；此前 `docs_delivery_gate`/`provision_real_machine_fixtures` 接入时是 52 = 47 + 5 + 0），逐项有实跑证据：
+出域仅 **5** 项（**门内/出域/未分类以 `--inventory` 实跑为准**——2026-10-27 实测 **57 = 52 + 5 + 0**；此前 `docs_delivery_gate`/`provision_real_machine_fixtures` 接入时是 52 = 47 + 5 + 0），逐项有实跑证据：
 
 | 出域项 | 真实原因（实跑证据） |
 |---|---|
