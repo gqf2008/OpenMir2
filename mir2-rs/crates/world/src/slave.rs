@@ -867,7 +867,9 @@ pub fn slave_list_cleanup_all(world: &mut World) {
     let ids: Vec<i32> = world
         .entities
         .iter()
-        .filter(|e| !e.slave_list.is_empty())
+        // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B14）：oracle 的宝宝清表在**主人自己的 `Run()`** 里
+        // （`BaseObject.Base.cs:208-217`），ghost 不 `Run` ⇒ 集中扫描也不该替 ghost 主人清表。
+        .filter(|e| !e.slave_list.is_empty() && !e.ghost)
         .map(|e| e.id)
         .collect();
     for id in ids {
@@ -4175,5 +4177,38 @@ mod tests {
         w.entities.get_mut(victim).unwrap().ghost = true;
         w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
         assert!(w.self_delay_msgs.is_empty(), "Ghost ⇒ 不入队");
+    }
+
+    /// **M-2（矩阵 §6#5）`slave_list_cleanup_all` 跳过 ghost 主人**：oracle 的清表跑在各自主人的
+    /// `Run()` 里（`BaseObject.Base.cs:208-217`），ghost 不 `Run` ⇒ 集中扫描不得替 ghost 清表。
+    ///
+    /// 牙：删 `.filter(|e| … && !e.ghost)` ⇒ ghost 主人的表被清（1→0）⇒ 红。
+    /// 规则 19 退化输入：同场活主人必须照常清掉幽灵宝宝（`slave_list_cleanup` 本体不变）。
+    #[test]
+    fn m2_slave_list_cleanup_all_skips_ghost_master() {
+        let mut w = World::new(16, 16);
+        let mut gm = Entity::new(1, "gm", 1, 1);
+        gm.ghost = true;
+        let gmid = w.add_entity(gm);
+        let mut gs = Entity::new(2, "gs", 2, 2);
+        gs.ghost = true;
+        let gsid = w.add_entity(gs);
+        w.entities.get_mut(gmid).unwrap().slave_list.push(gsid);
+        // 对照：活主人 + 幽灵宝宝（cleanup 该摘）
+        let lm = w.add_entity(Entity::new(3, "lm", 3, 3));
+        let mut ls = Entity::new(4, "ls", 4, 4);
+        ls.ghost = true;
+        let lsid = w.add_entity(ls);
+        w.entities.get_mut(lm).unwrap().slave_list.push(lsid);
+        slave_list_cleanup_all(&mut w);
+        assert_eq!(
+            w.entities.get(gmid).unwrap().slave_list,
+            vec![gsid],
+            "ghost 主人的宝宝表不得被集中扫描清掉"
+        );
+        assert!(
+            w.entities.get(lm).unwrap().slave_list.is_empty(),
+            "活主人照常清表（门只挡 ghost 主人）"
+        );
     }
 }

@@ -283,7 +283,10 @@ impl World {
     pub fn party_play_object_by_name(&self, name: &str) -> Option<i32> {
         self.entities
             .iter()
-            .find(|e| e.race == ACTOR_RACE_PLAY && e.name == name)
+            // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B13）：ghost 的世界对象仍可能存在（M-3 后），
+            // 但组队/邀请按名找人**不该命中 ghost**（oracle 的 ghost 名字不再是对外可用的在线对象）。
+            // **依据等级**：没有直接的 oracle 行号（矩阵 §8 已如实登记）⇒ 按卡面「举证不了就按需补过滤」处理。
+            .find(|e| e.race == ACTOR_RACE_PLAY && e.name == name && !e.ghost)
             .map(|e| e.id)
     }
 
@@ -893,5 +896,31 @@ mod tests {
         assert!(matches!(evs[0], PartyEvent::CreateGroupOk { target: 901 }));
         assert!(matches!(evs[1], PartyEvent::AddMemberOk { target: 902 }));
         assert!(matches!(evs[2], PartyEvent::GotoLabel { target: 901, .. }));
+    }
+
+    /// **M-2（矩阵 §6#6）`party_play_object_by_name` 跳过 ghost**：ghost 的世界对象（M-3 后仍在）
+    /// 不该被组队/邀请的按名查找命中。
+    ///
+    /// 牙：删 `.find` 谓词里的 `&& !e.ghost` ⇒ ghost 被命中（`Some(gid)`）⇒ 红。
+    /// 规则 19 退化输入：同名语料里活玩家照常命中（证明门只挡 ghost）。
+    #[test]
+    fn m2_party_play_object_by_name_skips_ghost() {
+        let mut w = World::new(16, 16);
+        let mut g = Entity::new(1, "ghost", 1, 1);
+        g.race = ACTOR_RACE_PLAY;
+        g.ghost = true;
+        let gid = w.add_entity(g);
+        let mut l = Entity::new(2, "ally", 2, 2);
+        l.race = ACTOR_RACE_PLAY;
+        let lid = w.add_entity(l);
+        assert_eq!(w.party_play_object_by_name("ghost"), None, "不得命中 ghost");
+        assert_eq!(
+            w.party_play_object_by_name("ally"),
+            Some(lid),
+            "活玩家照常命中（门只挡 ghost）"
+        );
+        // 负例的负例：清掉 ghost 位 ⇒ 立刻能命中（证明上面 None 确由 ghost 门给出）。
+        w.entities.get_mut(gid).unwrap().ghost = false;
+        assert_eq!(w.party_play_object_by_name("ghost"), Some(gid));
     }
 }

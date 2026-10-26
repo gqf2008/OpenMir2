@@ -16646,11 +16646,12 @@ fn sync_super_man_wabil(
 /// | [`drain_player_auto_get_exp`]（P31） | **加门** | 同上（幽灵仍发经验 ⇒ `exp_awards` ⇒ 44/45） |
 /// | [`drain_player_revival_with_magic`]（P32） | **加门** | 同上（幽灵仍复活 / 破戒 / 53·141·252） |
 /// | [`drain_deal_tick`]（Run 内自动取消） | **加门** | oracle 幽灵由 `:712` 的 `DealCancelA` 收口（本宿主 = `Closed` 臂的 `deal_cancel_between`），Run 内那趟不得再跑 |
-/// | [`drain_periodic_save`] | **不加门**（反向牙钉住） | oracle **幽灵支也** `SaveHumanRcd`（`:713`）；本宿主每个 ghost 由 [`drain_kicks`]/[`drain_soft_close`]/`Closed` 臂各存一次，保留计时存档 = 同一写入的超集，去掉反而可能漏存 |
+/// | [`drain_periodic_save`] | **加门**（M-2 改判，取代早先的反向牙） | oracle `WorldServer.cs:648` 的 **`if (!playObject.Ghost)` 是主干**，`:698-703` 周期存档在主干内；ghost 只走 `else` 的 `:707-716`（移除时 `SaveHumanRcd` + `CloseUser`）⇒ 周期路径必须排除 ghost。移除时那次存档仍在 `Closed` 臂 / [`drain_kicks`] / [`drain_soft_close`]（卡 `openmir2-makeghost-lifecycle` M-2 C3，两种路径各一颗牙） |
 /// | [`drain_extra_abil_expiries`] / [`drain_mag_healing_delivery`] / [`drain_b3_self_deliveries`] / [`drain_b4_with_enter_cfg`] / [`drain_b5_self_deliveries`] / [`drain_buff_downlink`] | **不加门** | 全部由 `TickRecord` 事件驱动；事件源是 world tick，幽灵实体已销毁 ⇒ 无事件可排 |
 /// | [`sync_super_man_wabil`] / [`sync_use_items_to_session`] | **不加门** | 纯实体→会话镜像；无实体 ⇒ 早退，不推进状态 |
 /// | [`process_switch_data`] | **不加门** | oracle 轮询的是 **ghost 自由表**（`WorldServer.cs:583-610`）；本宿主 `switch_data` 无生产写者（G11 闭合）⇒ 零副作用 |
-/// | [`drain_close_health_residual`] / [`flush_healthspell_slots`] / [`flush_run_frames`] | **不加门** | 前者遍历**实体**而非会话；后两者只是已入队帧的 flush（生产者已被门挡住） |
+/// | [`drain_close_health_residual`] / [`drain_close_health_for`] | **加门**（M-2） | 遍历**实体**而非会话，会话门管不到它：ShowHp 到期出 1101 是 `BaseObject.Run()` 的 `:219` 门，ghost 不 Run ⇒ 两处都补 `!e.ghost` |
+/// | [`flush_healthspell_slots`] / [`flush_run_frames`] | **不加门** | 只是已入队帧的 flush（生产者已被门挡住） |
 ///
 /// **邻近族（不在本卡写集判据内，另行开卡）**：滚动公告 [`drain_line_notice`] 与天色
 /// [`broadcast_day_changing`] 只遍历 `online`（非会话容器），oracle 同样门在 `!Ghost` 内
@@ -17005,10 +17006,25 @@ fn drain_close_health_residual(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     // 先收集 id，避免迭代中可变借 `world`。
-    let all_ids: Vec<i32> = world.entities.iter().map(|e| e.id).collect();
-    for actor_id in all_ids {
+    for actor_id in close_health_scan_ids(world) {
         drain_close_health_for(world, online, sessions, gates, actor_id);
     }
+}
+
+/// [`drain_close_health_residual`] 的扫描名单（`EntityStore` 槽位序，**跳过 ghost**）。
+///
+/// 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 §6#1）：周期 ShowHp 扫描不该以 ghost 为 `Recog`
+/// 出帧——oracle 的 ghost 对象不再 `Run`（`PlayObject.Message.cs:360` 起的 `Run` 链路）。
+///
+/// 抽成独立函数是为了让这颗牙**不被 [`drain_close_health_for`] 的实体门遮蔽**：
+/// 两处 `!e.ghost` 语义重叠，若只测帧面，删任一处另一处仍挡住，变异测不出来。
+fn close_health_scan_ids(world: &mir2_world::World) -> Vec<i32> {
+    world
+        .entities
+        .iter()
+        .filter(|e| !e.ghost)
+        .map(|e| e.id)
+        .collect()
 }
 
 /// oracle `WorldServer.ProcessPlayObjectData`（`WorldServer.cs:698`）的周期存档判定：
@@ -17247,6 +17263,17 @@ fn drain_periodic_save(
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 A5 / C3）：oracle `WorldServer.cs:648` 的
+        // **`if (!playObject.Ghost)` 是主干**，周期存档 `:698-702` 在主干内；ghost 走 **`else`**
+        // （`:707-716`：`Remove` + `Disappear()` + `SaveHumanRcd` + `CloseUser`）⇒ **ghost 的存档发生在
+        // 「移除时」**，不是周期存档。本门**只挡周期路径**；移除时那次存档由断线/软关路径
+        // （`GateEvent::Closed` 臂 / `drain_kicks` / `drain_soft_close`）承担，不受影响。
+        // 判定用本卡收敛出来的唯一函数 [`session_in_world`]（`bo_soft_close`/`bo_emergency_close`
+        // 即 oracle 的 `MakeGhost()` 触发点），再叠一层实体 ghost 位（M-3 之后实体仍在的情形）。
+        let ghost = world.entities.get(sg.actor_id).is_some_and(|e| e.ghost);
+        if !session_in_world(world, &name, sg) || ghost {
+            continue;
+        }
         if !periodic_save_due(&mut sg.save_rcd_tick, save_time, now) {
             continue;
         }
@@ -17643,10 +17670,12 @@ fn drain_close_health_for(
     actor_id: i32,
 ) {
     let now = world.clock_ms;
-    let expired = world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.show_hp && now - e.show_hp_tick > i64::from(e.show_hp_interval));
+    // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 §6#1 的第二处落点）：ghost 不 `Run`
+    // ⇒ 走不到 `BaseObject.Run()` 的 ShowHp 到期门（`:219`）⇒ 不该出 1101。
+    // 会话侧调用方（[`drain_stamina`]）已被 [`session_in_world`] 挡住，这里是实体侧的同一条不变量。
+    let expired = world.entities.get(actor_id).is_some_and(|e| {
+        !e.ghost && e.show_hp && now - e.show_hp_tick > i64::from(e.show_hp_interval)
+    });
     if !expired {
         return;
     }
@@ -42308,60 +42337,194 @@ SendRefMsgRange=15
         assert!(!trade["sc_deal"].dealing, "正常会话照常自动取消");
     }
 
-    /// **反向牙（`drain_periodic_save` 不加门）**：oracle 的**幽灵支也**
-    /// `SaveHumanRcd`（`WorldServer.cs:713`）⇒ 软关会话的计时存档必须照旧触发。
+    /// **M-2 C3（矩阵 A5，取代早先的反向牙）**：`drain_periodic_save` 必须按
+    /// [`session_in_world`] / 实体 `ghost` 位跳过，**且**移除时那次存档仍然发生。
     ///
-    /// 若给 `drain_periodic_save` 加 `session_in_world` 门 ⇒ `fired` 变 0 ⇒ 必红。
+    /// oracle `WorldServer.cs:648`：`if (!playObject.Ghost) { … :698-703 周期存档 … } else { :707-716
+    /// Remove + Disappear + SaveHumanRcd + CloseUser }` ⇒ ghost 的存档发生在**移除时**。
+    ///
+    /// 三段（每段都能独立变红）：
+    /// - **A** 软关会话（`bo_soft_close`）到点 ⇒ `fired == 0` 且无 `DB_SAVEHUMANRCD` 请求。
+    ///   删 `!session_in_world(…)` 这一半 ⇒ `fired == 1` ⇒ 红；
+    /// - **B** 会话在世但实体 `ghost = true`（M-3 之后的形态）⇒ 同样 `fired == 0`。
+    ///   删实体 `ghost` 这一半 ⇒ `fired == 1` ⇒ 红（A 段的会话门挡不住它）；
+    /// - **C** 同一 ghost 会话走**移除路径** [`drain_kicks`] ⇒ 仍必须发出 `DB_SAVEHUMANRCD`
+    ///   （别把 ghost 存档整条关掉）。删 `drain_kicks` 里的 `save_human_rcd` ⇒ 红。
     #[test]
-    fn sc_gate_periodic_save_still_fires_after_soft_close() {
+    fn m2_periodic_save_skips_ghost_but_removal_save_still_fires() {
         use std::sync::atomic::AtomicI32;
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
-        world.open_session("hero");
-        let actor_id = world
-            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
-            .expect("进世界");
-        let mut sg = test_session_ground(actor_id);
-        sg.save_rcd_tick = 1_000;
-        sg.bo_soft_close = true;
-        let mut sessions = HashMap::new();
-        sessions.insert("hero".to_string(), sg);
-        let mut saves = HashMap::new();
-        saves.insert(
-            "hero".to_string(),
-            SavedHuman {
-                account: "acct".into(),
-                record: stage6_record(),
-                enter_map: "0".into(),
-                derived: None,
-            },
-        );
-        let state = dbclient::DbLinkState::new();
-        state.mark_connected();
-        let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let mut db = Some(DbWiring {
-            state,
-            req_tx: tx,
-            next_query_id: Arc::new(AtomicI32::new(0)),
-            replies: Arc::new(std::sync::Mutex::new(dbclient::DbReplies::new())),
-            outstanding: Vec::new(),
-            save_outstanding: Vec::new(),
-        });
-        let mut engine = load::FrontEngine::new();
-        let fired = drain_periodic_save(
-            &mut sessions,
-            &saves,
-            &world,
-            &mut db,
-            &mut engine,
-            None,
-            5_000,
-            6_001,
-        );
-        assert_eq!(
-            fired, 1,
-            "oracle 幽灵支（WorldServer.cs:713）也 SaveHumanRcd ⇒ 计时存档不得因软关停掉"
-        );
-        assert!(rx.try_recv().is_ok(), "必须仍发出 DB_SAVEHUMANRCD 请求");
+
+        fn db_rig() -> (Option<DbWiring>, mpsc::UnboundedReceiver<Vec<u8>>) {
+            let state = dbclient::DbLinkState::new();
+            state.mark_connected();
+            let (tx, rx) = mpsc::unbounded_channel::<Vec<u8>>();
+            let db = Some(DbWiring {
+                state,
+                req_tx: tx,
+                next_query_id: Arc::new(AtomicI32::new(0)),
+                replies: Arc::new(std::sync::Mutex::new(dbclient::DbReplies::new())),
+                outstanding: Vec::new(),
+                save_outstanding: Vec::new(),
+            });
+            (db, rx)
+        }
+
+        fn saves_rig() -> HashMap<String, SavedHuman> {
+            let mut saves = HashMap::new();
+            saves.insert(
+                "hero".to_string(),
+                SavedHuman {
+                    account: "acct".into(),
+                    record: stage6_record(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+            saves
+        }
+
+        let saves = saves_rig();
+
+        // ---- A：软关（ghost 等价物）⇒ 周期存档不触发 ----
+        {
+            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            world.open_session("hero");
+            let actor_id = world
+                .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+                .expect("进世界");
+            let mut sg = test_session_ground(actor_id);
+            sg.save_rcd_tick = 1_000;
+            sg.bo_soft_close = true;
+            let mut sessions = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let (mut db, mut rx) = db_rig();
+            let fired = drain_periodic_save(
+                &mut sessions,
+                &saves,
+                &world,
+                &mut db,
+                &mut load::FrontEngine::new(),
+                None,
+                5_000,
+                6_001,
+            );
+            assert_eq!(
+                fired, 0,
+                "ghost 的周期存档在 oracle 主干之外（WorldServer.cs:648 的 !Ghost）"
+            );
+            assert!(
+                rx.try_recv().is_err(),
+                "不得为 ghost 发 DB_SAVEHUMANRCD（周期路径）"
+            );
+        }
+
+        // ---- B：会话在世、实体 ghost 位 ⇒ 周期存档同样不触发 ----
+        {
+            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            world.open_session("hero");
+            let actor_id = world
+                .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+                .expect("进世界");
+            world.entities.get_mut(actor_id).unwrap().ghost = true;
+            let mut sg = test_session_ground(actor_id);
+            sg.save_rcd_tick = 1_000;
+            let mut sessions = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let (mut db, mut rx) = db_rig();
+            let fired = drain_periodic_save(
+                &mut sessions,
+                &saves,
+                &world,
+                &mut db,
+                &mut load::FrontEngine::new(),
+                None,
+                5_000,
+                6_001,
+            );
+            assert_eq!(fired, 0, "实体 ghost 位同样挡周期存档（M-3 形态）");
+            assert!(rx.try_recv().is_err(), "实体 ghost 位不得发周期存档请求");
+        }
+
+        // ---- C：移除时那次存档仍然发生（drain_kicks = oracle :713 的等价物）----
+        {
+            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            world.open_session("hero");
+            let actor_id = world
+                .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+                .expect("进世界");
+            world.entities.get_mut(actor_id).unwrap().ghost = true;
+            let mut sg = test_session_ground(actor_id);
+            sg.bo_soft_close = true;
+            sg.save_rcd_tick = 1_000;
+            let mut sessions = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let mut saves = saves;
+            // 负例：同表里再放一个 decoy 会话（不在 kick 名单、不在在线登记）⇒ 不得被存档。
+            sessions.insert("decoy".to_string(), test_session_ground(999));
+            saves.insert(
+                "decoy".to_string(),
+                SavedHuman {
+                    account: "acct2".into(),
+                    record: stage6_record(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(&mut online, entry("acct", "hero", 77, 0, 901, actor_id));
+            let mut kick_pending = vec!["hero".to_string()];
+            let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            let (mut db, mut rx) = db_rig();
+            let mut engine = load::FrontEngine::new();
+            drain_kicks(
+                &mut world,
+                &gates,
+                &mut online,
+                &mut kick_pending,
+                &mut db,
+                &mut engine,
+                &mut saves,
+                &mut sessions,
+                &mut HashMap::new(),
+                &mut HashMap::new(),
+                &mut downlink::DisplayTable::new(),
+                None,
+                &mut mir2_world::GuildManager::new(),
+                None,
+                &mir2_data::guild::GuildFileSections::oracle_defaults(),
+                &guild_runtime::GuildMsgCfg::from_config(
+                    &mir2_world::GuildConfig::default(),
+                    false,
+                    "",
+                ),
+                0,
+            );
+            let frame = rx
+                .try_recv()
+                .expect("移除路径必须仍发 DB_SAVEHUMANRCD（oracle :713 的 SaveHumanRcd）");
+            assert!(!frame.is_empty(), "请求帧不得为空");
+            assert!(rx.try_recv().is_err(), "不得多发请求");
+            // **身份**：请求体经 `edcode` 编码后不可直读字符串 ⇒ 在**请求登记处**断言对象。
+            // `save_human_rcd` 成功发送时写 `(qid, chr_name)` 到 `save_outstanding`
+            // （oracle `AddToSaveRcdList`，`WorldServer.cs:1091`）⇒ 这里既是「发了一条」，
+            // 也是「发的是**该 ghost 角色自己**的那条」（同表 decoy 不得入表）。
+            let w = db.as_ref().expect("db 在");
+            assert_eq!(
+                w.save_outstanding.len(),
+                1,
+                "只应为该 ghost 角色发一条存档请求"
+            );
+            assert_eq!(
+                w.save_outstanding[0].1, "hero",
+                "移除时存档的对象必须是该 ghost 角色自己（不是同表 decoy）"
+            );
+            assert!(engine.in_save_rcd_list("hero"), "hero 必须进存档在途表");
+            assert!(
+                !engine.in_save_rcd_list("decoy"),
+                "decoy 不得被存档（负例）"
+            );
+            assert!(kick_pending.is_empty(), "名单必须被消费");
+        }
     }
 
     /// **反向牙（事件驱动排水不加门）**：幽灵实体已销毁 ⇒ world tick 不再为它产任何
@@ -60248,6 +60411,193 @@ SendRefMsgRange=15
         );
         let frames = rig.drain();
         assert_eq!(b3_count(&frames, 911, SM_1101), 1, "+1ms 触发");
+    }
+
+    /// **M-2（矩阵 §6#1）`SM_CLOSEHEALTH(1101)` 的 ghost 门（两处各一颗牙）**：
+    /// `drain_close_health_for` 的实体门 + `close_health_scan_ids` 的名单门。
+    ///
+    /// 牙（两处**互不遮蔽**，故拆成两个落点）：
+    /// - 删 `for` 里的 `!e.ghost` ⇒ (i) 段出 1 条 1101、`show_hp` 被清 ⇒ 红；
+    /// - 删 `close_health_scan_ids` 的 `filter(|e| !e.ghost)` ⇒ (ii) 段名单含 ghost ⇒ 红。
+    ///
+    /// 规则 19 退化输入：清掉 ghost 位后同一夹具必须照常出 1101（门只挡 ghost）。
+    #[test]
+    fn m2_close_health_skips_ghost_entity_and_scan_list() {
+        const SM_1101: u16 = mir2_protocol::messages::SM_CLOSEHEALTH;
+        const OPENHEATH: i32 = mir2_world::entity::POISON_OPENHEATH;
+
+        let mut rig = B3Rig::new(18, 2, false);
+        let target = rig.caster;
+        rig.world.clock_ms = 10_000;
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.ghost = true;
+            e.show_hp = true;
+            e.show_hp_tick = 5_000;
+            e.show_hp_interval = 4_000; // 10_000 - 5_000 = 5_000 > 4_000 ⇒ 到期
+            e.char_status_ex |= OPENHEATH;
+        }
+
+        // (i) 帧面门：[`drain_close_health_for`]
+        drain_close_health_for(
+            &mut rig.world,
+            &rig.online,
+            &mut rig.ground_sessions,
+            &rig.gates,
+            target,
+        );
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_1101), 0, "ghost 不得出 1101");
+        {
+            let e = rig.world.entities.get(target).unwrap();
+            assert!(e.show_hp, "ghost 的 ShowHp 不得被 BreakOpenHealth 清掉");
+            assert_ne!(e.char_status_ex & OPENHEATH, 0, "OPENHEATH 位不得被 XOR 掉");
+        }
+
+        // (ii) 名单门：[`close_health_scan_ids`]
+        assert!(
+            !close_health_scan_ids(&rig.world).contains(&target),
+            "ghost 不进周期 ShowHp 扫描名单"
+        );
+
+        // 门只挡 ghost：清位后两处都恢复。
+        rig.world.entities.get_mut(target).unwrap().ghost = false;
+        assert!(
+            close_health_scan_ids(&rig.world).contains(&target),
+            "非 ghost 必须在名单里"
+        );
+        drain_close_health_for(
+            &mut rig.world,
+            &rig.online,
+            &mut rig.ground_sessions,
+            &rig.gates,
+            target,
+        );
+        let frames = rig.drain();
+        assert_eq!(b3_count(&frames, 911, SM_1101), 1, "非 ghost 照常出 1101");
+    }
+
+    /// **M-2 A4 构造牙（矩阵 §6#8）**：`stage = Left` 而实体仍在（`actor_id` 仍指向它）时，
+    /// AOI 下行必须零帧——A1 的 stage 门是「帧面」的唯一闸（M-3 之后 ghost 正是这个形态）。
+    ///
+    /// 牙：删 `drain_aoi_downlink` 里 `sess.stage != InWorld` 的早退 ⇒ Left 段出 2 帧 ⇒ 红。
+    /// 规则 19 退化输入：同一夹具把 stage 还原为 `InWorld` ⇒ 照常出 2 帧（证明零帧确由 stage 门给出）。
+    #[test]
+    fn m2_aoi_downlink_zero_frames_when_stage_left_but_entity_remains() {
+        let mut world = mir2_world::World::new(100, 100);
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家进图");
+        let mut mon = mir2_world::Entity::new(0, "稻草人", 9, 10);
+        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mon_id = world.add_entity(mon);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            mon_id,
+            downlink::monster_display(
+                3,
+                &mir2_data::models::MonsterInfo {
+                    name: "稻草人".to_string(),
+                    race_img: 0x0A,
+                    appr: 0x3344,
+                    mp: 0,
+                    ..mir2_data::models::MonsterInfo::default()
+                },
+            ),
+        );
+        let _ = tick_until_next_player_scan(&mut world);
+        let (online, gates, mut rx0) = aoi_observer_fixture(p);
+
+        let set_stage = |world: &mut mir2_world::World, stage| {
+            world.sessions.get_mut("p").expect("会话在").stage = stage;
+        };
+
+        // A4 形态：stage=Left，实体与 actor_id 都还在。
+        set_stage(&mut world, mir2_world::WorldStage::Left);
+        assert!(
+            world.entities.get(p).is_some(),
+            "夹具前提：stage=Left 时实体仍在（M-3 的 ghost 形态）"
+        );
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let frames = aoi_collect_frames(&mut rx0);
+        assert!(sent.is_empty(), "stage=Left ⇒ 不产出现帧");
+        assert!(frames.is_empty(), "stage=Left ⇒ 零帧（A1 stage 门）");
+
+        // 还原 stage ⇒ 同一夹具照常出帧（门只挡 Left）。
+        set_stage(&mut world, mir2_world::WorldStage::InWorld);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        assert_eq!(
+            sent,
+            vec![("p".to_string(), 2)],
+            "stage 还原 ⇒ SM_TURN + SM_FEATURECHANGED 恰 2 帧"
+        );
+    }
+
+    /// **M-2 A4 构造牙（矩阵 §5）**：`stage=Left` + `actor_id=Some` + `ghost=true` 并存时，
+    /// ① 进世界守卫仍按 **stage** 判（`actor_id` 不是「在世界上」的判据）；
+    /// ② 存档记录构造仍读得到同一份**实体**（不能在 `live` 查找上加 stage 门）。
+    ///
+    /// 牙：
+    /// - 把 `enter_map_at` 的守卫改成 `sess.actor_id.is_some()` ⇒ ① 红（回到 `AlreadyInWorld`）；
+    /// - 把 `build_save_record` 的 `live` 查找加上 `stage == InWorld` ⇒ ② 红（回落到载入记录 5）。
+    ///
+    /// 规则 19 退化输入：同一夹具在 `stage=InWorld` 时 ② 必给实体值（证明红只由 stage 门引起）。
+    #[test]
+    fn m2_a4_left_stage_keeps_stage_guard_and_entity_reads() {
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session("hero");
+        let actor_id = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0)
+            .expect("进世界");
+        let mut saved = SavedHuman {
+            account: "acct".into(),
+            record: stage6_record(),
+            enter_map: "0".into(),
+            derived: None,
+        };
+        saved.record.data.cur_x = 5;
+        saved.record.data.cur_y = 5;
+        let sg = test_session_ground(actor_id);
+
+        // 在世：实体派生值（退化对照）
+        let rec = build_save_record(&saved, "hero", &world, &sg, None);
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (11, 22),
+            "stage=InWorld ⇒ 取实体坐标（不是载入记录的 5）"
+        );
+
+        // A4 形态：stage=Left + actor_id 仍在 + 实体仍在（ghost）
+        {
+            world.sessions.get_mut("hero").unwrap().stage = mir2_world::WorldStage::Left;
+            world.entities.get_mut(actor_id).unwrap().ghost = true;
+        }
+        assert_eq!(
+            world.session("hero").unwrap().actor_id,
+            Some(actor_id),
+            "夹具前提：stage=Left 时 actor_id 仍在"
+        );
+        assert!(
+            world.entities.get(actor_id).is_some(),
+            "夹具前提：实体仍在（M-3 的 ghost 形态）"
+        );
+
+        // ② 存档记录仍读同一份实体
+        let rec = build_save_record(&saved, "hero", &world, &sg, None);
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (11, 22),
+            "stage=Left 但实体在 ⇒ 存档仍取实体坐标（ghost 的移除时存档就靠这条）"
+        );
+
+        // ① 守门用 stage：Left ⇒ 允许重新进世界（oracle 的 ghost 已摘出 PlayObjectList）
+        let t = world.clock_ms;
+        let again = world.enter_map_at("hero", mir2_world::Entity::new(0, "hero", 11, 22), 0, t);
+        assert!(
+            again.is_ok(),
+            "stage=Left ⇒ 守卫不得判 AlreadyInWorld（`actor_id.is_some()` 不是「在世界上」的判据）"
+        );
     }
 
     /// **C1 复核牙：「53 先于 1101」+ `ShowHp` 广播按清位前的会话态计数**。
