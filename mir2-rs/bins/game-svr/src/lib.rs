@@ -27209,9 +27209,37 @@ mod tests {
             ),
             "生产 drain 调用必须传 Some(&mut login_tails) 与 Some(&mut monster_walk_seen)"
         );
-        let aoi = src
-            .find("let aoi_frames = drain_aoi_downlink(world, displays, online, gates, login_tails.as_deref());")
-            .expect("AOI 下行调用");
+        // **参数无关形状**：签名演进（增删/重排实参）是合法变更，本锚不钉整行文本，
+        // 只钉 ① 生产赋值行的绑定名（`aoi_frames` ← `drain_aoi_downlink(`）；② 实参表达式里必须出现的
+        // 关键实参（`world`/`displays`/`online`/`gates`）与登录待定表 `login_tails.as_deref()`
+        // ——后者是 turn-order 行为的**接线**：生产若退回 `None`，本锚必红（否则 14 个行为
+        // 用例可全绿而特性已死）。
+        // `concat!` 拆开字面量 ⇒ 本测试自身的源码文本不会命中锚串，故下面的
+        // 「恰一处」断言能证明锚指的是**生产调用**，而不是被测试内字面量顶替。
+        let aoi_call = concat!("let aoi_frames = drain_aoi_", "downlink(");
+        assert_eq!(
+            src.matches(aoi_call).count(),
+            1,
+            "生产 AOI 下行赋值行（aoi_frames）必须恰一处"
+        );
+        let aoi = src.find(aoi_call).expect("AOI 下行调用");
+        let aoi_end = src[aoi..]
+            .find(");")
+            .map(|i| aoi + i)
+            .expect("AOI 下行调用实参列表");
+        let aoi_args = &src[aoi + aoi_call.len()..aoi_end];
+        for arg in [
+            "world",
+            "displays",
+            "online",
+            "gates",
+            "login_tails.as_deref()",
+        ] {
+            assert!(
+                aoi_args.contains(arg),
+                "AOI 下行调用实参缺少 `{arg}`（实参：{aoi_args}）"
+            );
+        }
         // **卡 `openmir2-monster-smwalk`**：怪物走位帧必须夹在出现帧（17）与 654（153）之间。
         let walk = src
             .find("drain_monster_walk_downlink(rec, world, displays, online, gates, seen);")
@@ -43644,7 +43672,7 @@ SendRefMsgRange=15
 
         // 登录路径的两类排水（顺序同生产 tick：② aoi → ③ 尾段）；尾段跑两遍覆盖清缓冲。
         let displays = downlink::DisplayTable::new();
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending));
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
 
