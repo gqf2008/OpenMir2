@@ -4048,16 +4048,23 @@ fn handle_bag_cmd_with_magic(
     sync_use_items_to_entity(world, sg);
 
     let mut magic_events = Vec::new();
+    let mut recalc_char_status = None;
     if out.recalc {
         let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
         // oracle `Operate.cs:458/538`：`RecalcAbilitys()` 里的 `SendAddMagic/SendDelMagic`
         // 是**直接帧**，排在 `SM_TAKEON_OK/TAKEOFF_OK` 之前（`:459-461` 的 52/752 才是队列消息）。
         let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), magic);
         magic_events = effect.magic_events;
+        // oracle `PlayObject.cs:2873`：`CharStatus = GetCharStatus();`——必须在
+        // `StatusChanged()` 之前取本次重算后的状态。657 的 Param/Tag 与后续帧尾的
+        // `CharDesc.Status` 共用这份值。
+        let char_status = world.get_char_status(sg.actor_id);
+        recalc_char_status = Some(char_status);
         // **PL-1 / A2**：换装重算后整份 `WAbil`（含 HP/MaxHP/MP/MaxMP）与 `SubAbility` 落世界实体
         // （此前只同步 `HitSpeed`——登记缺口；P32 的 `Revival` 也在这里按粘滞锁存落账）。
         if let Some(e) = world.entities.get_mut(sg.actor_id) {
             apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+            e.char_status = char_status;
             if effect.revival {
                 e.revival = true;
             }
@@ -4103,7 +4110,7 @@ fn handle_bag_cmd_with_magic(
     }
     // G-2：`SM_UPDATEITEM(203)`（`Operate.cs:462-478`）：成功穿上**衣服**（`StdMode 10/11`）后
     // 按 `Shape` 选 `SendUpdateItem(WithLevel/ByJob)`。oracle 是立即帧，排在 `SM_TAKEON_OK` 之后、
-    // 队列里的 52/752/41 之前。武器升级路径（`PlayObject.cs:4131`）本仓未建模 ⇒ 登记。
+    // 队列里的 752/52/41/657 之前。武器升级路径（`PlayObject.cs:4131`）本仓未建模 ⇒ 登记。
     if let Some(item) = &out.update_item {
         if let Some(tpl) = catalog.get(item.index) {
             // oracle 顺序：`GetUpgradeStdItem` → `GetItemName` → `ChangeItemWithLevel/ByJob`
@@ -4138,16 +4145,16 @@ fn handle_bag_cmd_with_magic(
     }
     // 成功重算后的 52 `SM_ABILITY` / 752 `SM_SUBABILITY`
     // （oracle `SendMsg(RM_ABILITY/RM_SUBABILITY)`，`Operate.cs:459-460`/`:548-549`）。
+    //
+    // **线上序 = 优先级升序，不是源码序**（`BaseObject.Message.cs:181` 的
+    // `MsgQueue.Enqueue(msg, (byte)wIdent)`）：`RM_SUBABILITY=10302 ⇒ 62 <
+    // RM_ABILITY=10051 ⇒ 67`。`Operate.cs` 虽先 `SendMsg(RM_ABILITY)`，出队仍是
+    // `752 → 52`；后续 `FeatureChanged()` 的 `RM_FEATURECHANGED=10116 ⇒ 132` 与
+    // `StatusChanged()` 的 `RM_CHARSTATUSCHANGED=10139 ⇒ 155` 依次排在后面。
+    // 真机 `bag_equip` 的确定性尾序即 `615 → 752 → 52 → 41 → 657`
+    //（run2 oracle seq31-35）。登录路径的 `52 → 752` 走 `SendPriorityMsg(High=0)`，
+    // 是另一条队列形态，不能类推到本支。
     if out.recalc {
-        let _ = tx.send(SimToGate::SendFrame {
-            socket,
-            body: game_svr::smframe::sm_ability(
-                sg.state.gold,
-                sg.equip.job,
-                sg.game_gold,
-                &ability_tail(&sg.state.wabil, client_layout),
-            ),
-        });
         let sb = sg.sub.to_frame_bytes();
         let _ = tx.send(SimToGate::SendFrame {
             socket,
@@ -4161,12 +4168,21 @@ fn handle_bag_cmd_with_magic(
                 u8::try_from(sb[6]).unwrap_or(0),
             ),
         });
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe::sm_ability(
+                sg.state.gold,
+                sg.equip.job,
+                sg.game_gold,
+                &ability_tail(&sg.state.wabil, client_layout),
+            ),
+        });
     }
     // oracle `FeatureChanged()`（`PlayObject.Operate.cs:459`/`:548` ⇒ `BaseObject.cs:1509`
     // → `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), 0,0)`）：
     // 成功换装后向**周围 `SendRefMsgRange` 格内同图**的玩家（**含自己**）广播 `SM_FEATURECHANGED`。
     // `RM_FEATURECHANGED=10116` 的队列优先级 `(byte)10116=132` 排在 `RM_ABILITY(67)`/`RM_SUBABILITY(62)`
-    // 之后 ⇒ 线上顺序 = `SM_ADDITEM → OK/FAIL → 52 → 752 → 41`（与 oracle 消息泵一致）。
+    // 之后 ⇒ 线上顺序 = `SM_ADDITEM → OK/FAIL → 752 → 52 → 41 → 657`（与 oracle 消息泵一致）。
     if out.recalc {
         let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg
             .use_items
@@ -4221,6 +4237,27 @@ fn handle_bag_cmd_with_magic(
             feature,
             // `GetFeatureEx()` = `MakeWord(OnHorse?HorseType:0, DressEffType)`；本宿主两者未建模 ⇒ 0。
             game_svr::feature::feature_ex(false, 0, 0),
+            ref_msg_range,
+        );
+    }
+    // `RecalcAbilitys()` 尾段（`PlayObject.cs:2874-2876`）：
+    // `CharStatus = GetCharStatus(); StatusChanged(); SendUpdateMsg(RM_CHARSTATUSCHANGED, …)`。
+    // - `StatusChanged()` 的 `SendRefMsg` 给 ±range 内玩家（含自己）各一条；
+    // - 紧随的 `SendUpdateMsg` 对**自己**做头-only 去重（`BaseObject.Message.cs:283-303`）
+    //   ⇒ 自己净 1 条；观察者各 1 条。
+    // - 队列优先级 155 排在 752(62)/52(67)/41(132) 之后 ⇒ 自己线上序
+    //   `615 → 752 → 52 → 41 → 657`（run2 oracle seq31-35）。
+    if let Some(status) = recalc_char_status {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe_ext::sm_charstatuschanged(sg.actor_id, status, sg.hit_speed),
+        });
+        broadcast_charstatuschanged_except_self(
+            world,
+            online,
+            gates,
+            sg.actor_id,
+            status,
             ref_msg_range,
         );
     }
@@ -16449,9 +16486,24 @@ fn drain_recovery(
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
     for name in names {
+        // **CM_SOFTCLOSE 后的 P1 不得再跑**：oracle 在 `PlayObject.Run()` 的
+        // `:70-141`（P1）之后才处理 `CM_SOFTCLOSE`（`:874-884`），随后同一 Run 的
+        // `MakeGhost()` 让对象不再 Run。本宿主的 `CM_SOFTCLOSE` 在 tick 之前派发，
+        // `world.soft_close()` 已把会话置 `stage=Left`；若这里仍按 `ground_sessions`
+        // 名单跑恢复，就会把药池消费掉并多发一条 oracle 不存在的 53（真机 eat_item：
+        // 53 落在 `CM_SOFTCLOSE` 之后，且 `characters.IncHealth` 由 20 变 0）。
         let Some(sg) = sessions.get_mut(&name) else {
             continue;
         };
+        // 以 soft-close 标志为**主判据**（oracle 的 `BoSoftClose`/`BoEmergencyClose` 同源）；
+        // `stage=Left` 是 `world.soft_close()` 的直接证据，给未来 MakeGhost 保留实体的
+        // 生命周期也留同一道门。缺失 world 会话是构造级测试的既有形态，不据此改变恢复语义。
+        let left_world = world
+            .session(&name)
+            .is_some_and(|s| s.stage != mir2_world::WorldStage::InWorld);
+        if sg.bo_soft_close || sg.bo_emergency_close || left_world {
+            continue;
+        }
         let death = world.entities.get(sg.actor_id).is_some_and(|e| e.death);
         if !game_svr::recover::recovery_tick(&mut sg.recovery, &mut sg.state.wabil, death, now) {
             continue;
@@ -36461,7 +36513,7 @@ break
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        // actor 42 不在世界里 ⇒ `FeatureChanged()` 广播无收件人（本用例只断言 52/752 以前的出帧序）。
+        // actor 42 不在世界里 ⇒ `FeatureChanged()` 广播无收件人（本用例只断言自己的出帧序）。
         let mut world = mir2_world::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
@@ -36487,7 +36539,9 @@ break
         );
 
         // 出帧：SM_ADDITEM(200，换下回背包) → SM_TAKEOFF_OK(619) → SM_TAKEOFF_FAIL(620，oracle
-        // 既有形态) → SM_ABILITY(52) → SM_SUBABILITY(752)。
+        // 既有形态) → SM_SUBABILITY(752) → SM_ABILITY(52) → SM_CHARSTATUSCHANGED(657)。
+        // `752` 在 `52` 前 = 队列优先级 `(byte)RM_SUBABILITY(62) < (byte)RM_ABILITY(67)`；
+        // `657` 是 `RecalcAbilitys` 尾段（`PlayObject.cs:2874-2876`）的头-only 去重后净 1 条。
         let mut idents = Vec::new();
         let mut bodies: Vec<Vec<u8>> = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
@@ -36502,10 +36556,11 @@ break
                 200,
                 619,
                 620,
+                mir2_protocol::messages::SM_SUBABILITY,
                 mir2_protocol::messages::SM_ABILITY,
-                mir2_protocol::messages::SM_SUBABILITY
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED
             ],
-            "出帧序：SM_ADDITEM → SM_TAKEOFF_OK/FAIL → SM_ABILITY → SM_SUBABILITY"
+            "出帧序：SM_ADDITEM → SM_TAKEOFF_OK/FAIL → 752 → 52 → 657"
         );
         // **换装后的 52 尾必须是冻结客户端 58B `TAbility`**（生产默认 `client_layout=true`）：
         // 若 `handle_bag_cmd` 漏用 `ability_tail`（退回 oracle 40B）⇒ 本断言必红。
@@ -36859,8 +36914,10 @@ break
     /// 同图 `SendRefMsgRange`(缺省 12) 格内的玩家（**含自己**）广播 `SM_FEATURECHANGED(41)`。
     ///
     /// 造两个玩家 `hero`(10,10)/`watcher`(12,10) 同图，`hero` 卸下一件武器 ⇒ 成功分支
-    /// （`out.recalc`）后：`hero` 线上出帧序 `200 → 619 → 620 → 52 → 752 → 41`，
-    /// `watcher` 只收 `41`（`recog=hero`，`param/tag` = 卸下后的 `GetFeatureToLong()`）。
+    /// （`out.recalc`）后：`hero` 线上出帧序
+    /// `200 → 619 → 620 → 752 → 52 → 41 → 657`（oracle 队列优先级 62/67/132/155）；
+    /// `watcher` 依次收 `41`（`recog=hero`，`param/tag` = 卸下后的 `GetFeatureToLong()`）
+    /// 与 `657`（`StatusChanged()` 的 `SendRefMsg` 近邻副本）。
     ///
     /// 红检：注释掉 `broadcast_feature_changed(...)` ⇒ `watcher` 线收不到 `41` ⇒ 必红；
     /// 把自己从收件人里过滤掉（`e.actor_id != actor_id`）⇒ `hero` 的末条不再为 `41` ⇒ 必红。
@@ -37018,36 +37075,37 @@ break
             false,
         );
 
-        let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, u16, u16)> {
-            let mut out = Vec::new();
-            while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
-                let cm =
-                    mir2_protocol::frame::CommandMessage::from_bytes(&body).expect("body >= 12B");
-                out.push((cm.recog, cm.ident, cm.param, cm.tag));
-            }
-            out
-        };
+        let collect =
+            |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, u16, u16, u16)> {
+                let mut out = Vec::new();
+                while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+                    let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                        .expect("body >= 12B");
+                    out.push((cm.recog, cm.ident, cm.param, cm.tag, cm.series));
+                }
+                out
+            };
         assert_eq!(
             collect(&mut rx0).iter().map(|f| f.1).collect::<Vec<_>>(),
             vec![
                 200,
                 619,
                 620,
-                mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_SUBABILITY,
+                mir2_protocol::messages::SM_ABILITY,
                 mir2_protocol::messages::SM_FEATURECHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
             ],
-            "hero 线上出帧序：200 → 619 → 620 → 52 → 752 → 41"
+            "hero 线上出帧序：200 → 619 → 620 → 752 → 52 → 41 → 657"
         );
         let watcher_frames = collect(&mut rx1);
         assert_eq!(
-            watcher_frames.len(),
-            1,
-            "watcher 只应收一条 SM_FEATURECHANGED"
-        );
-        assert_eq!(
-            watcher_frames[0].1,
-            mir2_protocol::messages::SM_FEATURECHANGED
+            watcher_frames.iter().map(|f| f.1).collect::<Vec<_>>(),
+            vec![
+                mir2_protocol::messages::SM_FEATURECHANGED,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            ],
+            "watcher 依次收 41 与 657（StatusChanged 的近邻副本）"
         );
         assert_eq!(watcher_frames[0].0, hero, "41 的 Recog = 换装者 ActorId");
         // `SM_FEATURECHANGED` 的 Param/Tag = LoWord/HiWord(GetFeatureToLong())（oracle Message.cs:1762-1764）。
@@ -37058,6 +37116,19 @@ break
             "展示表必须用换装后的 GetFeatureToLong 更新"
         );
         assert_ne!(feature, 111, "卸下后 feature 必须变化（不是换装前的值）");
+        // 657：`(Recog=ActorId, Param=LoWord(CharStatus), Tag=HiWord(CharStatus), Series=HitSpeed)`。
+        // oracle 在**出队时**读收件人自己的 `HitSpeed`（`PlayObject.Message.cs:1846`）；
+        // 本用例两个会话初值都是 0。
+        assert_eq!(
+            (
+                watcher_frames[1].0,
+                watcher_frames[1].2,
+                watcher_frames[1].3
+            ),
+            (hero, 0, 0),
+            "657 的 Recog/CharStatus（无 buff ⇒ 0）"
+        );
+        assert_eq!(watcher_frames[1].4, 0, "657 的 Series = watcher.HitSpeed");
     }
 
     /// `bag_items_from`（`CharacterData.bag_items` ⇒ `GroundState.item_list`）：展平非空槽、
@@ -41027,6 +41098,75 @@ SendRefMsgRange=15
         );
         assert_eq!(item_number, 406, "会话计数器被 6 件各消费一次");
         assert_eq!(sg.state.wabil.weight, 12, "`WeightChanged()`：6 × weight 2");
+    }
+
+    /// **本卡（`openmir2-bag-eat-extra-frame`）**：`CM_SOFTCLOSE` 已把会话置
+    /// `stage=Left`/销毁实体（oracle 同一 Run 的 `MakeGhost()` 之后不再 Run）⇒
+    /// 紧随其后的 P1 周期恢复**不得**再消费药池、也不得发 53。
+    ///
+    /// 真机形态（run2 `eat_item`）：Rust 的 `SM_HEALTHSPELLCHANGED(53)` 落在
+    /// `CM_SOFTCLOSE` 之后，且 `characters.IncHealth` 由 oracle 的 20 被清成 0。
+    ///
+    /// 牙：把 [`drain_recovery`] 的 soft-close / `stage=Left` 门禁用 ⇒ 本用例的
+    /// `inc_health == 20` 与「零 53」两条同时红。
+    #[test]
+    fn recovery_tick_skips_session_after_soft_close_and_preserves_pool() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        world.open_session("hero");
+        let hero = world
+            .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
+            .expect("hero 进世界");
+
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.state.wabil.hp = 19;
+        sg.state.wabil.max_hp = 19;
+        sg.state.wabil.mp = 15;
+        sg.state.wabil.max_mp = 15;
+        // 金创药(小量) 的池：`IncHealth += AC = 20`；tick 初值 0 ⇒ 若恢复段仍跑，首轮必命中。
+        sg.recovery.inc_health = 20;
+        sg.recovery.inc_health_spell_tick = 0;
+        sessions.insert("hero".into(), sg);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "hero", 1, 0, 901, hero));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        handle_soft_close_cmd(
+            0,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &mut world,
+            None,
+            &mut HashMap::new(),
+        );
+        assert_eq!(
+            world.session("hero").unwrap().stage,
+            mir2_world::WorldStage::Left,
+            "CM_SOFTCLOSE ⇒ MakeGhost（stage=Left）"
+        );
+
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        drain_recovery(&mut sessions, &mut world, &mut slots);
+        assert!(
+            slots.pending_actors().next().is_none(),
+            "离世会话不得再 mark 53"
+        );
+        assert_eq!(
+            sessions["hero"].recovery.inc_health, 20,
+            "药池必须原样留给存档（oracle 真机 IncHealth=20，不是 0）"
+        );
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
+        assert!(
+            rx0.try_recv().is_err(),
+            "CM_SOFTCLOSE 之后不得再发 SM_HEALTHSPELLCHANGED(53)"
+        );
     }
 
     /// **T-28（卡 `openmir2-m3-recovery-tick`）进程级判据**：吃下 `StdMode 0` 的池药后，
