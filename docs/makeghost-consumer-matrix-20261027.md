@@ -73,7 +73,7 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 | B6 | `world.rs:5923` `verify_players_map_time` | 玩家图时效 | ✅ | filter：`race==PLAY && !e.ghost` |
 | B7 | `world.rs:6542` `expire_hitters` | hiter 过期清理 | ✅（有意） | filter：`e.death || e.ghost` —— ghost 被当作「已消失」，用来清别人的 `last_hiter` |
 | B8 | `world.rs:6755` `settle_deaths` | 死亡结算 | **⚠️ 需补过滤** | filter 只有 `(hp==0 || die_called) && !death_settled && race 匹配`，**无 ghost 门** ⇒ M-3 后「ghost 且 `die_called`」会被结算（掉落/经验/退组），而 oracle 的 ghost 不 `Run` ⇒ 不会走到 `Die()` |
-| B9 | `crates/world/src/monai.rs:4979` `base_object_run_monster`（`PlayObjectCount`） | MonGen 门计数 | ✅（有意不滤） | `race==PLAY` 计数。代码注释（`lib.rs:24762-24767`、`:24965-24967`）明写：oracle `OnlinePlayObject`/`PlayObjectCount` = `PlayObjectList.Count`，**`MakeGhost` 后仍在表里** ⇒ 必须同口径 |
+| B9 | `crates/world/src/monai.rs:4979` `base_object_run_monster`（`PlayObjectCount`） | MonGen 门计数 | ✅（有意不滤） | `race==PLAY` 计数。代码注释（`lib.rs:24762-24767`、`:24965-24967`）明写：oracle `OnlinePlayObject`/`PlayObjectCount` = `PlayObjectList.Count`，**`MakeGhost` 后仍在表里** ⇒ 必须同口径。**M-3 落地后（F1 修复）**：ghost 由 ① 网关 `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost（窗口长度见 §6 的时间口径）；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
 | B10 | `monai.rs:5249` `monster_ai_tick` | 怪物 AI | ✅ | filter：`race > PLAY && merchant.is_none() && npc.is_none() && !e.ghost` |
 | B11 | `crates/world/src/merchant.rs:464` `merchant_ids_sorted` | 商人 tick | 🧱 | 只取 `merchant.is_some()` —— 玩家永不带 `merchant` 态（`insert_merchant` 是唯一写点，`merchant.rs:357`） |
 | B12 | `crates/world/src/npc.rs:316` `npc_ids_sorted` | 固定 NPC tick | 🧱 | 只取 `npc.is_some()` —— 玩家永不带 `npc` 态（`npc.rs:253` 唯一写点） |
@@ -87,7 +87,7 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 | B20 | `lib.rs:14808` / `:14871` `world_aoi_diag` | AOI 诊断 | 🟡 | 只读快照；ghost 会进 `entities` 计数（诊断数值会变） |
 | B21 | `lib.rs:17008` `drain_close_health_residual` | ShowHp 到期扫描 | **⚠️ 需补过滤** | 与 A4 同一处（会话侧看是「名单来自全实体」，实体侧就是这条） |
 | B22 | `lib.rs:19461` `step_mon_gen`（`play_object_count`） | MonGen 门计数 | ✅（有意不滤） | 与 B9 同口径，见 `:24965-24967` 注释 |
-| B23 | `lib.rs:24768` `sim_loop`（`online_play_objects`） | 在线数上报（IDS `SS_SERVERINFO`） | ✅（有意不滤） | 注释 `:24762-24767`：oracle `WorldEngine.OnlinePlayObject` = `PlayObjectList.Count`，**不能排除 ghost** |
+| B23 | `lib.rs:24768` `sim_loop`（`online_play_objects`） | 在线数上报（IDS `SS_SERVERINFO`） | ✅（有意不滤） | 注释 `:24762-24767`：oracle `WorldEngine.OnlinePlayObject` = `PlayObjectList.Count`，**不能排除 ghost**。**M-3 落地后（F1 修复）**：同上 —— ① `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
 | B24 | `lib.rs:24971` `sim_loop`（MonGen 门） | 刷怪门计数 | ✅（有意不滤） | 同上注释（两条 ZenTime 门必须同一口径） |
 
 **已剔除（测试内，不计入矩阵）**：`monai.rs:7444/7470`、`merchant.rs:2191`、`guardlist.rs:281/460`、
@@ -161,6 +161,36 @@ sess.stage == WorldStage::Left   AND   sess.actor_id == Some(id)   （且 entiti
 
 **🟡 需复核但本来就是同口径的两处**：`online_play_objects`（B23）、MonGen 计数（B9/B22）——
 它们都按 `PlayObjectList.Count` 的 oracle 口径**含 ghost**，M-3 后**不要**顺手加 ghost 门，否则反而偏离 oracle。
+**M-3 的 F1 修复之后，这条「含 ghost」只在有限窗口内成立，且窗口长度与 oracle 有既有差**：
+ghost 由 ① 网关 `Closed` 的移除门、或 ② 玩家重进时 `enter_map_at` 收走（`session.rs` 的 F1 修复）
+⇒ **不会永久多算 1**；但**两者都不到时会滞留**（M-3 F4 已把「结构性不可达」降级为
+「客户端/协议行为假设 + 世界侧无兜底」）。
+
+时间口径（逐条核过 oracle；reviewer-21 `e9bc74ba` 订正、owner 复核）：
+- `RunTime = 250`（`src/M2Server/Player/PlayObject.cs:899`）；
+- 门是 `(dwCurTick - playObject.RunTick) > playObject.RunTime`（`src/GameSrv/Word/WorldServer.cs:645`）；
+- 驱动是 **50ms** 定时器（`src/GameSrv/Word/Threads/UserProcessor.cs:7` 的
+  `base(TimeSpan.FromMilliseconds(50), "UserProcessor")`）；
+
+⇒ oracle 在门到点的第一个 **50ms** 轮摘出 `PlayObjectList`：`WorldServer.cs:645` 的门通过后
+**先**在 `:647` 刷 `RunTick = dwCurTick`、**再**判 `Ghost` 走 `:707-716` 的 `else` 支
+（reviewer-21 的 D1 订正：刷 `RunTick` 在 ghost 判定**之前**）⇒ **相对 soft_close ∈ (0, 300] ms**
+（soft_close 落在两个门之间的位置决定；「最后一次 Run 之后」才是 250–300ms）。
+本仓要等 `Closed`（~402ms）⇒ **本仓比 oracle 晚约 100–400ms**。
+这是**相位差**而非口径差（与 T-89 族同形）：A6 窗口的观测者按「**≤300ms**（下界可到 ~0ms）」找那一两帧，并把两侧的
+`online_play_objects` 读数一起记下来。要消掉这条差需要世界侧「Left+actor_id 超时兜底」
+（M-3 F4 已登记为未做）。
+
+**同族登记（对拍 harness 的模型差，2026-10-27）**：`mir2-rs/tests/parity/csharp/WorldGolden` 的
+`ApplySoftClose`（`Program.cs:560-575`）在 **softclose 当刻**就把 actor 从
+`actors`/`ActorMgr.Map`/`envirOf`/`order` 摘掉，比 oracle 的 250–300ms 门**早 1–2 个窗口**；它 `:418`
+的注释（「oracle 的 Ghost 玩家已从 `PlayObjectList` 移除」）同样早了一到两个 tick，已在原处订正。
+⇒ **任何「softclose 当 tick 里看得见 ghost」的场景，拿这份 golden 判会不忠实于 oracle**；
+本轮按禁令**不重生成 golden**，只在 Rust 侧 `snapshot_sorted` 的投影按 `add_to_mapped` 过滤
+（卡 `openmir2-makeghost-lifecycle-m3` 的 parity 修复）。将来若要做「softclose 当 tick」的对拍，
+必须先按 `mir2-rs/tests/parity/README.md:26` 的「重新生成金标准」小节重跑 C# oracle
+（注意该节只覆盖 `ParityGolden`；`WorldGolden` 的入口是 `tests/parity/tests/world_session_parity.rs:9-11`
+等模块头里那条 `dotnet run --project … WorldGolden … -- session`）。
 
 ## 7. 与 reviewer-21 `854d0e9a`（`fd08ff3a9` 基线）的差异
 
