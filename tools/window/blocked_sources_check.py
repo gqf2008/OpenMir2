@@ -60,11 +60,9 @@ LIST_ROW_RE = re.compile(r'^\s*(\d+)\s+(\S+)\s+(\S+)\s+(YES|-)\s*(.*)$')
 #: 每条 blocked 场景**必须**在两侧文案里同时出现的机器可核 token（确定性、无阈值、不要求逐字）。
 #: 加场景必须同时加一条，并写清 source（audit 报告的章节锚）——否则 `check` rc=2。
 BLOCKED_TOKENS = {
-    'butch_two_draws': {
-        'source': 'docs/blocked-scenarios-audit-20261025.md §1.2',
-        'absent': ('未合',),
-        'tokens': ('3081', '616', 'ProcessMonsterMultiThreadLimit'),
-    },
+    # 2026-10-27（卡 openmir2-blocked-token-rot）：`butch_two_draws` 的条目**已删**——
+    # 该卡 `openmir2-butch-two-draws-unblock` 收口后场景与 run3 行都不再 blocked，表项却留了下来；
+    # 新加的反向校验当场抓到（本文件 `check_token_rot`）。这正是本卡要消灭的「表项腐烂」。
     'castle_merchant_tax': {
         'source': 'docs/blocked-scenarios-audit-20261025.md §2.2/§2.3',
         'absent': ('未合',),
@@ -187,6 +185,16 @@ def validate_tokens_table(tokens):
             raise UsageError(
                 '断言表 %r 缺 absent（禁用词，如 未合/尚未合）——必须显式登记，'
                 '不得因缺省而漏（fail-closed）' % name)
+        # 卡 openmir2-blocked-token-rot A3：确实要保留**历史表项**时必须显式 legacy + 理由。
+        legacy = entry.get('legacy')
+        if legacy is not None:
+            if not isinstance(legacy, bool):
+                raise UsageError('断言表 %r.legacy 必须是布尔' % name)
+            if legacy:
+                why = entry.get('legacy_why')
+                if not isinstance(why, str) or not why.strip():
+                    raise UsageError('断言表 %r 标了 legacy 却缺 legacy_why（历史表项也要可追溯）'
+                                     % name)
 
 
 
@@ -328,6 +336,37 @@ def _check_structured_reason(value, where, repo, ledger, commit_check, landed_ch
     e_und, e_vio = _check_evidence(value.get('evidence'), where, repo, ledger,
                                    commit_check, landed_check, landed_rule=landed_rule)
     return und + e_und, vio + e_vio
+
+
+def check_token_rot(tokens, scenes_dir):
+    """A1（卡 openmir2-blocked-token-rot）：表项必须仍对应**真实存在且仍 blocked** 的场景。
+
+    `check()` 管的是「两来源一致 + token 在两侧文案里」；它管不到**表项本身是否还成立**——
+    某个场景解封（或文件被删）后，表里的对应表项没人报错，就那么腐烂，下一个人会按表去查
+    一个已经不 blocked 的场景。这里补这一面：返回 (problems, legacy_names)。
+
+    * 对应不上 ⇒ problems（调用方按 rc=1 处理，fail-closed，**不许**降级成警告）；
+    * 确实要保留历史表项 ⇒ 表项必须显式 `legacy: true` + `legacy_why`（validate_tokens_table 校验），
+      此时不红、名字进 legacy_names 供上层打印。
+    """
+    scenes = scene_docs(scenes_dir)
+    problems, legacy_names = [], []
+    for name, entry in tokens.items():
+        rel = os.path.join(scenes_dir, name + '.json')
+        legacy = bool(entry.get('legacy'))
+        reason = None
+        if name not in scenes:
+            reason = '表项指向的场景不存在（%s）' % rel
+        elif not scene_blocked(scenes[name]):
+            reason = '场景已不在 blocked 状态（%s 的 blocked 字段为空）' % rel
+        if reason is None:
+            continue
+        if legacy:
+            legacy_names.append(name)
+            continue
+        problems.append('%s：BLOCKED_TOKENS %s ⇒ 表项腐烂（删表项，或恢复场景；'
+                        '确实要留历史就加 legacy: true + legacy_why）' % (name, reason))
+    return problems, legacy_names
 
 
 def parse_list_output(path):
@@ -814,6 +853,67 @@ def selftest():
         chk(probs9b == [] and und9b == [],
             '牙n9b（D9）：原样（结构化理由齐）⇒ 全绿')
 
+        # ---- 卡 openmir2-blocked-token-rot：反向校验牙（合成夹具，不碰真实仓库）----
+        rot_root = os.path.join(tmp, 'rot')
+        rot_scenes = os.path.join(rot_root, 'scenarios')
+        os.makedirs(rot_scenes, exist_ok=True)
+        RTOK = 'ROTTOK'
+
+        def _rot_doc(name, blocked):
+            doc = {'name': name}
+            if blocked:
+                doc['blocked'] = {'reason': 'rot fixture'}
+            return doc
+
+        for nm, blocked in (('rot_a', True), ('rot_b', True)):
+            with open(os.path.join(rot_scenes, nm + '.json'), 'w', encoding='utf-8') as fh:
+                json.dump(_rot_doc(nm, blocked), fh, ensure_ascii=False)
+        rot_tokens = {nm: {'source': 'rot §1', 'absent': ('未合',), 'tokens': (RTOK,)}
+                      for nm in ('rot_a', 'rot_b')}
+        rot_run3 = os.path.join(rot_root, 'run3.json')
+        with open(rot_run3, 'w', encoding='utf-8') as fh:
+            json.dump({'format': 'run3/1', 'scenarios': [{'name': n, 'n': i + 1} for i, n in enumerate(('rot_a', 'rot_b'))]}, fh, ensure_ascii=False)
+        # 夹具不变式自证（不成立 ⇒ 判不了，不是红）
+        if not (os.path.isfile(os.path.join(rot_scenes, 'rot_a.json'))
+                and os.path.isfile(os.path.join(rot_scenes, 'rot_b.json'))):
+            raise FixtureInconsistent('rot 夹具场景文件没写出来')
+        rp_ok, rl_ok = check_token_rot(rot_tokens, rot_scenes)
+        chk(rp_ok == [] and rl_ok == [], '牙rot-③ 表项与场景都对得上 ⇒ 绿（防恒红）')
+        tok_ghost = dict(rot_tokens)
+        tok_ghost['rot_ghost'] = {'source': 'rot §2', 'absent': ('未合',), 'tokens': (RTOK,)}
+        rp1, _rl1 = check_token_rot(tok_ghost, rot_scenes)
+        chk(any('rot_ghost' in x and '场景不存在' in x for x in rp1),
+            '牙rot-① 表项指向不存在的场景 ⇒ 红并点名（rot_ghost）')
+        unblocked_dir = os.path.join(rot_root, 'unblocked')
+        os.makedirs(unblocked_dir, exist_ok=True)
+        for nm in ('rot_a', 'rot_b'):
+            with open(os.path.join(unblocked_dir, nm + '.json'), 'w', encoding='utf-8') as fh:
+                json.dump(_rot_doc(nm, nm != 'rot_b'), fh, ensure_ascii=False)
+        rp2, _rl2 = check_token_rot(rot_tokens, unblocked_dir)
+        chk(any('rot_b' in x and '不在 blocked' in x for x in rp2),
+            '牙rot-② 场景解封但表项还在 ⇒ 红并点名（rot_b）')
+        tok_legacy = dict(rot_tokens)
+        tok_legacy['rot_legacy'] = {'source': 'rot §3', 'absent': ('未合',), 'tokens': (RTOK,),
+                                    'legacy': True, 'legacy_why': '历史表项，场景已归档'}
+        rp3, rl3 = check_token_rot(tok_legacy, rot_scenes)
+        chk(rp3 == [] and rl3 == ['rot_legacy'],
+            '牙rot-legacy 显式 legacy + 理由 ⇒ 不红、进 legacy_names')
+        # 接线牙：main() 必须真的调用 check_token_rot（把 check 打桩成空 ⇒ 仍因表项腐烂 rc=1）
+        _orig_check_rot = globals()['check']
+        globals()['check'] = lambda *a, **k: ([], [], {
+            'rows': 0, 'scenes': 0, 'blocked_run3': [], 'blocked_scene': [], 'orphans': []})
+        try:
+            import io as _io_rot
+            import contextlib as _cl_rot
+            _buf_rot = _io_rot.StringIO()
+            with _cl_rot.redirect_stdout(_buf_rot):
+                rc_rot = main(['check', '--run3', rot_run3, '--scenarios-dir', rot_scenes])
+            out_rot = _buf_rot.getvalue()
+        finally:
+            globals()['check'] = _orig_check_rot
+        chk(rc_rot == 1 and 'BLOCKED_TOKENS' in out_rot,
+            '牙rot-wire main() 真调用反向校验（打桩 check 后仍 rc=1 并点名表项腐烂）')
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -834,6 +934,10 @@ def main(argv=None):
         return selftest()
     try:
         problems, undecidable, info = check(args.run3, args.scenarios_dir, args.list_output)
+        # A1（卡 openmir2-blocked-token-rot）：表项反向校验——只在这里接（fixture 用的 check()
+        # 保持原语义，让既有 40+ 颗牙不被新面误伤；本函数的牙直接单测它自己）。
+        rot_problems, legacy_tokens = check_token_rot(BLOCKED_TOKENS, args.scenarios_dir)
+        problems = list(problems) + rot_problems
     except UsageError as ex:
         print('blocked_sources_check: %s' % ex, file=sys.stderr)
         return 2
@@ -841,6 +945,8 @@ def main(argv=None):
         print('UNCLASSIFIED  %s' % u)
     for p in problems:
         print('DRIFT  %s' % p)
+    if legacy_tokens:
+        print('LEGACY  表项显式保留（legacy=true）：%s' % ', '.join(sorted(legacy_tokens)))
     print('清单 %s：%d 行，blocked %d；场景 %d 个，blocked %d，孤儿 %d'
           % (args.run3, info['rows'], len(info['blocked_run3']), info['scenes'],
              len(info['blocked_scene']), len(info['orphans'])))
