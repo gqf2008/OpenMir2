@@ -1249,6 +1249,15 @@ def selftest():
         chk(_rc == 2 and "CASTLE_BASELINE FAIL" in _out and empty_root in _out,
             "castle_state 牙8: --castle-before-only + 三侧都缺 => rc=2 且点名 root")
 
+        # 牙9（卡 openmir2-tooth-hardening-batch C）：第三条 fail-closed 兄弟——
+        # 只给 --castle-before-only、不给 --castle-before PATH ⇒ rc=2 且点名该参数。
+        _buf2 = _io.StringIO()
+        with contextlib.redirect_stdout(_buf2):
+            _rc2 = main(["--root", empty_root, "--castle-before-only"])
+        _out2 = _buf2.getvalue()
+        chk(_rc2 == 2 and "CASTLE_BASELINE FAIL" in _out2 and "--castle-before PATH" in _out2,
+            "castle_state 牙9: --castle-before-only 缺 PATH => rc=2 且点名 --castle-before PATH")
+
         # ---- envir_shadow_symmetry（卡 openmir2-preflight-envir-shadow-symmetry）----
         er = os.path.join(tmp, "envirshadow")
         eb = os.path.join(er, "csharp-root", "M2GameSvr", "Envir")
