@@ -198,6 +198,21 @@ def _assert_fixture_consistent(tmp, env, side, c1, head):
         % (side_rc, c1_rc, c1[:8], side[:8], head[:8], log_dump))
 
 
+def hexref(oid, want=9):
+    """取 oid 前缀，**必须含 a–f**（门的 HEX_RE 要求至少一个字母，纯数字会被当日期跳过）。
+
+    规则 16 + review bdd1a28c F2：这是自测夹具的**关键不变式**，必须是模块级可单测函数；
+    全数字前缀（约 0.8%/个）会让整组 hex 用例静默不触发——那正是 N1a/N1b 与 HEX-1/HEX-7
+    两类假红的共同根因。找不到含字母的前缀（≤ want+6 位）⇒ 判不了（GitUnavailable），
+    **不许**静默返回纯数字前缀。
+    """
+    for n in range(want, min(len(oid), want + 6) + 1):
+        if re.search(r"[a-f]", oid[:n]):
+            return oid[:n]
+    raise GitUnavailable("oid %s 的前 %d 位没有 a–f，构造不出可解析的 hex 锚 ⇒ 判不了"
+                         % (oid[:12], want + 6))
+
+
 def _require_branch(repo, env, want="master"):
     """夹具必须停在 `want` 分支；不是 ⇒ GitUnavailable（判不了），不是裸 assert。"""
     got = _fixture_git(repo, ["rev-parse", "--abbrev-ref", "HEAD"], env)
@@ -742,16 +757,9 @@ def _selftest_run():
         # 直接用 `c1_ref`/`side_ref` 会以约 0.8%/个的概率撞上「前缀全是数字」，于是该轮所有
         # hex 用例静默不触发（实测：30 次里 2 次 N1a/N1b 假红、25 次里 3 次 HEX-1/HEX-7 假红）。
         # 这里把前缀延长到出现字母为止；都到 15 位还没有字母 ⇒ 判不了（rc=2），不是红。
-        def _hexref(oid, want=9):
-            for n in range(want, min(len(oid), want + 6) + 1):
-                if re.search(r"[a-f]", oid[:n]):
-                    return oid[:n]
-            raise GitUnavailable("夹具 oid %s 前 %d 位没有 a–f，构造不出可解析的 hex 锚 ⇒ 判不了"
-                                 % (oid[:12], want + 6))
-
-        c1_ref = _hexref(c1)
-        side_ref = _hexref(side)
-        blob_ref = _hexref(blob, 8)
+        c1_ref = hexref(c1)
+        side_ref = hexref(side)
+        blob_ref = hexref(blob, 8)
         # 未跟踪文件
         with open(os.path.join(tmp, "docs", "untracked.md"), "w", encoding="utf-8") as fh:
             fh.write("nope\n")
@@ -885,6 +893,21 @@ def _selftest_run():
         except Exception as ex:  # noqa: BLE001
             c6a = "other:%s" % ex.__class__.__name__
         chk(c6a == "ok", "C6a 假 git 返回 rc=2 ⇒ GitUnavailable（判不了），实际 %r" % (c6a,))
+        # F2（review bdd1a28c）：`hexref` 的**确定性**单测——不能靠「跑 5 次都绿」。
+        # ① 正常 oid ⇒ 返回值含 a–f 且长度 ≥ want；② 40 位纯数字 ⇒ 判不了；
+        # ③ 短且纯数字（不足 want+6）⇒ 判不了（**不许**静默截断成纯数字前缀）。
+        _ok_ref = hexref("0123456789abcdef" * 3)
+        chk(len(_ok_ref) >= 9 and re.search(r"[a-f]", _ok_ref),
+            "F2a hexref(正常 oid) ⇒ 含 a–f 且 ≥9 位（%r）" % (_ok_ref,))
+        for label, bad_oid in (("40 位纯数字", "1" * 40), ("短且纯数字", "7" * 12)):
+            try:
+                hexref(bad_oid)
+                _f2 = "no-raise"
+            except GitUnavailable as ex:
+                _f2 = "ok" if "判不了" in str(ex) else "no-text"
+            except Exception as ex:  # noqa: BLE001
+                _f2 = "other:%s" % ex.__class__.__name__
+            chk(_f2 == "ok", "F2 %s ⇒ hexref 判不了（GitUnavailable），实际 %r" % (label, _f2))
         chk(all(re.search(r"[a-f]", x) for x in (c1_ref, side_ref, blob_ref))
             and len(c1_ref) >= 9 and len(blob_ref) >= 8,
             "规则16 牙：夹具 hex 锚都含 a–f（%s/%s/%s）——否则门按设计静默跳过"

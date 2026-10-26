@@ -403,7 +403,7 @@ def inventory(repo):
 
 def selftest():
     global REGISTRY
-    ok = fail = 0
+    ok = fail = skip_n = 0
 
     def chk(cond, name):
         nonlocal ok, fail
@@ -413,6 +413,16 @@ def selftest():
         else:
             fail += 1
             print("FAIL " + name)
+
+    def skip(name):
+        """环境不具备 ⇒ SKIP（**不是** PASS，也**不是** FAIL）。
+
+        F1（review bdd1a28c）：C3 的判据是「**门仍能判**」而不是「门必须绿」——
+        没有 PowerShell 的机器上，`牙14 前置` 不该把门自测判红。
+        """
+        nonlocal skip_n
+        skip_n += 1
+        print("SKIP " + name)
 
     root = repo_root()
     names = [n for n, _a, _s in REGISTRY]
@@ -460,7 +470,9 @@ def selftest():
 
         # ---- PowerShell 入口（卡 openmir2-docs-gate-rc-semantics 扩写集）----
         have_ps = bool(shutil.which("pwsh") or shutil.which("powershell"))
-        chk(have_ps, "TSG 牙14 前置：本机有 PowerShell（pwsh 或 powershell）")
+        if not have_ps:
+            skip("TSG 牙14a/14b/14c（本机无 PowerShell：跳过 PS 分发牙；"
+                 "C3 判据是「门仍能判」，不是「门必须绿」）")
         if have_ps:
             ok_ps = os.path.join(tmp, "ok.ps1")
             need_ps = os.path.join(tmp, "need.ps1")
@@ -517,6 +529,32 @@ def selftest():
         chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
             and "PowerShell" in r_c3["tail"],
             "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
+        # F3（review bdd1a28c）：`docs_delivery_gate` 的**守卫调用点**也要有牙——
+        # 只删调用、函数留着时，那边的自测仍 52/52 绿（下一个人顺手摘掉链路不会红）。
+        # 做法：把 _assert_fixture_consistent 换成抛异常的探针，再整跑一次 docs gate selftest；
+        # 调用点若被删 ⇒ 探针不触发 ⇒ 那边 rc=0（本牙红）。
+        import importlib.util as _ilu
+        _dg_path = os.path.join(root, "tools", "hygiene", "docs_delivery_gate.py")
+        _spec = _ilu.spec_from_file_location("_dg_probe", _dg_path)
+        _dg = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_dg)
+
+        def _guard_bomb(*a, **k):
+            raise _dg.GitUnavailable("守卫调用点牙（F3）：夹具必须过守卫")
+
+        _real_guard = _dg._assert_fixture_consistent
+        _dg._assert_fixture_consistent = _guard_bomb
+        try:
+            import contextlib as _cl3
+            import io as _io3
+            _buf3 = _io3.StringIO()
+            with _cl3.redirect_stdout(_buf3):
+                _f3_rc = _dg.selftest()
+            _f3_out = _buf3.getvalue()
+        finally:
+            _dg._assert_fixture_consistent = _real_guard
+        chk(_f3_rc == 2 and "守卫调用点牙" in _f3_out,
+            "TSG 牙F3 docs gate 的守卫**调用点**在链路上（删调用 ⇒ 本牙红；rc=%r）" % (_f3_rc,))
 
         # ---- 三态（卡 openmir2-docs-gate-rc-semantics）：判不了 ≠ 证伪 ----
         needf = os.path.join(tmp, "need.py")
@@ -724,8 +762,9 @@ def selftest():
             "TSG 牙12b（F2）真 run() + 假未分类 ⇒ rc=2 且打印 UNCLASSIFIED（接线牙）")
     finally:
         REGISTRY = saved
-    print("%s: tool_selftest_gate selftest %d/%d"
-          % ("GREEN" if not fail else "RED", ok, ok + fail))
+    print("%s: tool_selftest_gate selftest %d/%d%s"
+          % ("GREEN" if not fail else "RED", ok, ok + fail,
+             ("（SKIP %d）" % skip_n) if skip_n else ""))
     return 0 if not fail else 1
 
 
