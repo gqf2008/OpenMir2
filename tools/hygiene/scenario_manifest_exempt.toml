@@ -38,3 +38,9 @@ scenario = "pickup_item"
 card = "openmir2-bag-weight-sink"
 line = "tools/window/run3-scenarios.json:4"
 not_in_run3_reason = "结构性不可判（T-19/T-25：oracle 掉落恒不落地）；清单 note 已封存，不入批。"
+
+[[exempt]]
+scenario = "p21_unequip"
+card = "openmir2-bag-weight-sink"
+line = "tools/probe/scenarios/p21_unequip.json:3"
+not_in_run3_reason = "BLOCKED 场景（两条前置未解，见文件 `blocked` 段）；引用它的卡（`openmir2-gm-target-state-write`）只把它当 P21 前置，不是独立窗口场景 ⇒ 不入批。（review C1 修好后它才第一次被判红，见卡上 N2 处置。）"

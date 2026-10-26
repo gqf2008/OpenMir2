@@ -50,19 +50,29 @@ REF_RE = re.compile(r"tools/probe/scenarios/([A-Za-z0-9_\-]+)\.json")
 DISC_FLAG = "--discovery-scenario"
 
 
-def _card_surface_strings(body):
-    """卡面条目里视为「窗口项文本」的键：`acceptance` 的值，以及任何键名含 window 的字符串。"""
+def _strings(value):
+    """递归收集 str（list/dict 都下钻）——`acceptance` 是数组、`window*` 是 list/dict 都要认。"""
     out = []
+    if isinstance(value, str):
+        out.append(value)
+    elif isinstance(value, (list, tuple)):
+        for v in value:
+            out.extend(_strings(v))
+    elif isinstance(value, dict):
+        for v in value.values():
+            out.extend(_strings(v))
+    return out
+
+
+def _card_surface_strings(body):
+    """卡面条目里视为「窗口项文本」的键：`acceptance`（dict **或** list）与任何键名含 window 的值
+    （str / list / dict 四种形态都遍历）。"""
     if not isinstance(body, dict):
-        return out
-    acc = body.get("acceptance")
-    if isinstance(acc, dict):
-        for v in acc.values():
-            if isinstance(v, str):
-                out.append(v)
+        return []
+    out = _strings(body.get("acceptance"))
     for k, v in body.items():
-        if "window" in str(k).lower() and isinstance(v, str):
-            out.append(v)
+        if "window" in str(k).lower():
+            out.extend(_strings(v))
     return out
 
 
@@ -267,7 +277,9 @@ def read_collab(repo):
             doc = json.loads(body.decode("utf-8", "replace"))
         except Exception:
             continue
-        ent = doc.get("entry") or {}
+        # **接缝（review C1）**：collab blob 是**扁平**的（顶层 actor/body/id/kind/parent/…），
+        # 没有 `entry` 包层；只有 `walgit collab thread` 的**视图**才有。两种都认。
+        ent = doc.get("entry") or doc
         tid = ent.get("id") or doc.get("id")
         if not tid:
             continue
@@ -523,6 +535,60 @@ def selftest():
                               "not_in_run3_reason": "文件待建", "covers": "missing_file"}})
     rc, red, undec, info, st, man, bad = evaluate(**d)
     check("缺文件 + 有效豁免 ⇒ 过", rc == 0 and not bad, (rc, bad))
+
+    # 22) acceptance 可以是**数组**（review C2）：list 里的引用必须被看见
+    entries = [("card-d", "merge_result", {"merged": True}),
+               ("card-d", "issue", {"acceptance": ["a: tools/probe/scenarios/acc1.json",
+                                                   "b: tools/probe/scenarios/acc2.json"]})]
+    r = refs_from_cards(entries)
+    check("acceptance 数组 ⇒ 两个名字都取到", set(r) == {"acc1", "acc2"}, r)
+
+    # 23) window* 的四种值形态都要遍历（review C3）：str / list / dict / 键名 window_required_items
+    entries = [("card-e", "merge_result", {"merged": True}),
+               ("card-e", "issue", {
+                   "acceptance": {},
+                   "window_items": "tools/probe/scenarios/w_str.json",
+                   "window_missing": ["tools/probe/scenarios/w_list.json"],
+                   "window_item": {"k": "tools/probe/scenarios/w_dict.json"},
+                   "window_required_items": {"k2": ["tools/probe/scenarios/w_nested.json"]},
+                   "notes": "tools/probe/scenarios/w_ignored.json"})]
+    r = refs_from_cards(entries)
+    check("window* 四种形态都遍历、非 window 键不扫",
+          set(r) == {"w_str", "w_list", "w_dict", "w_nested"}, r)
+
+    # 24) **读入接缝（review C1）**：合成一张**扁平** collab blob（顶层 kind/body/id），
+    #     走真正的 git 路径（hash-object -w + update-ref + cat-file --batch）⇒ kind/body 必须非空、
+    #     refs_from_cards 必须取到名字。24 条自测此前全绕过了这一步。
+    import tempfile
+    import shutil
+    tmp = tempfile.mkdtemp(prefix="smg-seam-")
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    try:
+        subprocess.run(["git", "init", "-q", tmp], check=True, env=env)
+        def _put(ref, obj):
+            blob = json.dumps(obj).encode()
+            h = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                               input=blob, capture_output=True, check=True, env=env).stdout
+            subprocess.run(["git", "-C", tmp, "update-ref", ref, h.decode().strip()],
+                           check=True, env=env)
+        _put("refs/collab/inbox/p/card-x-m1",
+             {"version": 1, "kind": "merge_result", "id": "card-x", "actor": "p",
+              "parent": "", "sig": "", "ts": 0, "body": {"merged": True}})
+        _put("refs/collab/inbox/p/card-x-i1",
+             {"version": 1, "kind": "issue", "id": "card-x", "actor": "p",
+              "parent": "", "sig": "", "ts": 1,
+              "body": {"acceptance": ["see tools/probe/scenarios/fromcard.json"]}})
+        got, known2, n2 = read_collab(tmp)
+        kinds = {k for _t, k, _b in got}
+        bodies = [b for _t, _k, b in got if b]
+        check("接缝：扁平 blob 解出 kind", kinds == {"merge_result", "issue"}, kinds)
+        check("接缝：扁平 blob 解出 body", all(b for b in bodies) and len(bodies) == 2, bodies)
+        check("接缝：refs_from_cards 能取到名字",
+              set(refs_from_cards(got)) == {"fromcard"}, refs_from_cards(got))
+        check("接缝：扫描条数 = 2", n2 == 2, n2)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
     fails = [(n, d) for n, good, d in ok if not good]
     for n, good, d in ok:
