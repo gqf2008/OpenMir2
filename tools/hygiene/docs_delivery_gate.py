@@ -115,6 +115,43 @@ class GitUnavailable(GateError):
     """
 
 
+#: 自测夹具用的 GIT_* 变量必须**剔除**：合并/门禁 shell 里若导出了
+#: `GIT_DIR` / `GIT_WORK_TREE`，`git init` 会直接 fatal（我们实测过
+#: `GIT_WORK_TREE` 单独存在 ⇒ `git init` 报 "not allowed without specifying GIT_DIR"），
+#: 于是自测以 rc=1 崩掉，而它其实是**判不了**（环境问题）。
+#: 卡 `openmir2-docs-gate-rc-semantics`：三态里「判不了」不能伪装成「证伪」。
+FIXTURE_ENV_SCRUB = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE",
+                     "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                     "GIT_COMMON_DIR", "GIT_NAMESPACE", "GIT_PREFIX")
+
+
+def _clean_git_env(base=None):
+    """自测夹具的 git 环境：继承 + 固定作者身份 + **剔除 GIT_* 干扰**。"""
+    env = dict(os.environ if base is None else base)
+    for k in FIXTURE_ENV_SCRUB:
+        env.pop(k, None)
+    env.update(GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
+               GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+    return env
+
+
+def _fixture_git(repo, args, env, git_cmd=("git",)):
+    """夹具里的 git 调用：跑不起来 / rc≠0 一律 `GitUnavailable`（判不了，rc=2）。
+
+    绝不用 AssertionError——那会变成未捕获异常（rc=1），把环境问题报成「门坏了」。
+    `git_cmd` 只为自测注入（牙 N2b：给一个不存在的可执行 ⇒ 必须 GitUnavailable）。
+    """
+    try:
+        r = subprocess.run(list(git_cmd) + list(args), cwd=repo, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", env=env)
+    except OSError as ex:
+        raise GitUnavailable("git 跑不起来（%s：%s）⇒ 判不了" % (ex.__class__.__name__, ex))
+    if r.returncode != 0:
+        raise GitUnavailable("git %s rc=%d：%s ⇒ 判不了"
+                             % (" ".join(args), r.returncode, (r.stderr or "").strip()[:200]))
+    return r.stdout.strip()
+
+
 # ---------------------------------------------------------------------------
 # 外部命令解析（Windows 上裸 `bash` 是 System32 的 WSL stub ⇒ rc=1，见 card_window 同口径）
 # ---------------------------------------------------------------------------
@@ -150,8 +187,12 @@ def detect_git_bash():
 # git plumbing
 # ---------------------------------------------------------------------------
 def git(repo, *args):
+    # 卡的 `--repo` 才是事实源：调用方 shell 里若有 GIT_DIR/GIT_WORK_TREE（合并脚本、
+    # 某些门禁包装器会导出），`git -C <repo>` 会被 GIT_DIR 覆盖，读到的就是**别的仓库**
+    # ——那会把「判不了/判错仓库」伪装成 findings。故显式剔除 GIT_*（卡 openmir2-docs-gate-rc-semantics）。
     return subprocess.run(["git"] + list(args), cwd=repo, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace")
+                          text=True, encoding="utf-8", errors="replace",
+                          env=_clean_git_env())
 
 
 class GitCache:
@@ -577,6 +618,23 @@ def main(argv=None):
 # 自测（每类 ≥2 个反例；删掉对应检查分支 ⇒ 这里的断言必红）
 # ---------------------------------------------------------------------------
 def selftest():
+    """自测入口：**环境建不了夹具 ⇒ rc=2（判不了）**，不是 rc=1（证伪）。
+
+    牙 N2c 钉住这条：把 `_selftest_run` 换成「抛 GitUnavailable」⇒ 本函数必须返回 2。
+    """
+    try:
+        return _selftest_run()
+    except GitUnavailable as ex:
+        print("docs_delivery_gate selftest: 判不了（rc=2）—— 环境建不了 git 夹具：%s" % ex)
+        return 2
+    except OSError as ex:
+        # 连临时目录都建不了（TEMP/TMP 不可写、磁盘满等）同样是「判不了」，不是「门坏了」。
+        print("docs_delivery_gate selftest: 判不了（rc=2）—— 环境不能建临时夹具：%s: %s"
+              % (ex.__class__.__name__, ex))
+        return 2
+
+
+def _selftest_run():
     fails = []
     checked = [0]
 
@@ -590,15 +648,10 @@ def selftest():
 
     tmp = tempfile.mkdtemp(prefix="docs-delivery-gate-")
     try:
-        env = dict(os.environ, GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
-                   GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
+        env = _clean_git_env()
 
         def g(*a):
-            r = subprocess.run(["git"] + list(a), cwd=tmp, capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", env=env)
-            if r.returncode != 0:
-                raise AssertionError("git %s 失败: %s" % (" ".join(a), r.stderr))
-            return r.stdout.strip()
+            return _fixture_git(tmp, a, env)
 
         g("init", "-q")
         g("config", "user.name", "t")
@@ -635,6 +688,63 @@ def selftest():
         # 未跟踪文件
         with open(os.path.join(tmp, "docs", "untracked.md"), "w", encoding="utf-8") as fh:
             fh.write("nope\n")
+
+        # ---- N2（卡 openmir2-docs-gate-rc-semantics）：环境问题 ⇒ 判不了（rc=2），不是证伪 ----
+        # 牙必须**行为化**：注入污染 env 再看清洗结果（只断言「env 里没有这些键」在清洗表
+        # 被清空时会**真空通过**——变异自证抓到的假牙）。
+        polluted = dict(os.environ, GIT_DIR="X", GIT_WORK_TREE="Y", GIT_INDEX_FILE="Z")
+        cleaned = _clean_git_env(polluted)
+        chk(all(k not in cleaned for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE"))
+            and cleaned.get("GIT_AUTHOR_NAME") == "t",
+            "N2a 注入 GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE ⇒ 清洗后全剔除、作者身份仍在")
+        # 清空 PATH ⇒ `git` 根本起不来：必须是 GitUnavailable（判不了），不是 AssertionError/OSError
+        bare = _clean_git_env()
+        # 注意：Windows 的 CreateProcess **用父进程的 PATH 找可执行**，改 env["PATH"] 没用
+        # ⇒ 直接注入一个不存在的命令名（与「机器上没装 git」同一条失败路径）。
+        try:
+            _fixture_git(tmp, ["rev-parse", "HEAD"], bare, git_cmd=("no-such-git-binary",))
+            n2b = "no-raise"
+        except GitUnavailable as ex:
+            n2b = "unavailable" if "判不了" in str(ex) else "wrong-text"
+        except Exception as ex:  # noqa: BLE001 - 这里就要抓「任何别的异常」
+            n2b = "other:%s" % ex.__class__.__name__
+        chk(n2b == "unavailable", "N2b git 起不来 ⇒ GitUnavailable（判不了），实际 %r" % n2b)
+
+        real_run = globals()["_selftest_run"]
+
+        def _boom():
+            raise GitUnavailable("fixture boom（牙注入）")
+
+        globals()["_selftest_run"] = _boom
+        try:
+            import contextlib as _cl
+            import io as _io
+            _buf = _io.StringIO()
+            with _cl.redirect_stdout(_buf):
+                n2c = selftest()
+            n2c_out = _buf.getvalue()
+        finally:
+            globals()["_selftest_run"] = real_run
+        chk(n2c == 2 and "判不了" in n2c_out and "rc=2" in n2c_out,
+            "N2c 夹具建不起来 ⇒ selftest rc=2 且输出「判不了（rc=2）」（不是 rc=1）")
+
+        real_mkdtemp = globals()["tempfile"].mkdtemp
+
+        def _no_tmp(*a, **k):
+            raise OSError("TEMP 不可写（牙注入）")
+
+        globals()["tempfile"].mkdtemp = _no_tmp
+        try:
+            import contextlib as _cl2
+            import io as _io2
+            _buf2 = _io2.StringIO()
+            with _cl2.redirect_stdout(_buf2):
+                n2c2 = selftest()
+            n2c2_out = _buf2.getvalue()
+        finally:
+            globals()["tempfile"].mkdtemp = real_mkdtemp
+        chk(n2c2 == 2 and "判不了" in n2c2_out,
+            "N2c2 临时目录建不了（OSError）⇒ selftest rc=2（判不了，不是 rc=1）")
 
         def run(parts, registry):
             """parts: [(rel, text)] → (findings, rot)。"""
@@ -842,10 +952,15 @@ def selftest():
         globals()["git"] = all_broken
         try:
             buf = io.StringIO()
-            with contextlib.redirect_stdout(buf):
+            # stderr 也收进 buf：否则这条**故意注入**的「判不了」会变成工具输出的最后一行，
+            # 在 `tool_selftest_gate` 里看起来像「这个工具红了」（卡 openmir2-docs-gate-rc-semantics
+            # 观察到的误读形态）。
+            with contextlib.redirect_stdout(buf), contextlib.redirect_stderr(buf):
                 rc_n1 = main(["--repo", tmp, "--registry", regfile])
             chk(rc_n1 == 2 and "RED " not in buf.getvalue(),
                 "N1c main()：git 全挂 ⇒ rc=2 且**没有** RED 行（不把判不了说成文档错）")
+            chk("判不了" in buf.getvalue(),
+                "N1c2 该路径的输出**明确说**「判不了」（便于人/门区分 rc=2 与 rc=1）")
         finally:
             globals()["git"] = real_git
 

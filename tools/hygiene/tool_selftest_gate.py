@@ -26,7 +26,9 @@
 用法：
   python -I -B tools/hygiene/tool_selftest_gate.py [--repo .] [--only a,b]
          [--skip a,b] [--timeout 300] [--json out.json] [--inventory] [--selftest]
-退出码：0 全绿（含被 --skip 的项已打印 SKIP）；2 有红/用法错。
+退出码：**0 全绿**（含被 --skip 的项已打印 SKIP）；**3 有「需人工」（NEED）但无红**；**2 有红/用法错**。
+
+三态口径（卡 `openmir2-docs-gate-rc-semantics`）：工具自己用 **rc=2 表示「判不了」**（环境/仓库问题，不是证伪）⇒ 本门记 **NEED**、单独计数、**不并进「红」**；其余非零（含超时 124）才是 **FAIL**。「判不了 ≠ 证伪」——把两者折叠会教人「红了重跑一下」，那会毁掉门禁的可信度。
 """
 import argparse
 import json
@@ -202,6 +204,20 @@ def _kill_tree(proc):
             proc.kill()
 
 
+#: 工具自测用 rc=2 表示「判不了」（环境/仓库问题）；与 rc=1（证伪）必须分开。
+NEED_RC = 2
+PASS, NEED, FAIL = "PASS", "NEED", "FAIL"
+
+
+def classify_rc(rc):
+    """工具自测的 rc → 三态：0 绿 / 2 需人工（判不了） / 其它 红（含 124 超时）。"""
+    if rc == 0:
+        return PASS
+    if rc == NEED_RC:
+        return NEED
+    return FAIL
+
+
 def run_one(repo, name, argv, timeout):
     cmd = [sys.executable, "-I", "-B"] + list(argv)
     t0 = time.time()
@@ -261,18 +277,28 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
                 continue
             eff = min(timeout, max(1, int(remaining)))
         r = run_one(repo, name, argv, eff)
+        r["state"] = classify_rc(r["rc"])
         results.append(r)
         print("%-4s %-24s rc=%-3s %5.1fs  %s"
-              % ("PASS" if r["rc"] == 0 else "FAIL", name, r["rc"],
-                 r["elapsed_s"], r["tail"]))
-    bad = [r for r in results if not r.get("skipped") and r["rc"] != 0]
+              % (r["state"], name, r["rc"], r["elapsed_s"], r["tail"]))
+    bad = [r for r in results if not r.get("skipped") and r.get("state") == FAIL]
+    need = [r for r in results if not r.get("skipped") and r.get("state") == NEED]
     # A3：全跑末尾**显式**检查 inventory（不看牙的副作用）；`--only` 等调试跑同样适用。
     inv_rc, unclassified = inventory_gate_rc() if check_inventory else (0, [])
-    print("TOTAL %d 项：绿 %d / 红 %d / 跳过 %d%s"
-          % (len(results), sum(1 for r in results if not r.get("skipped") and r["rc"] == 0),
-             len(bad), sum(1 for r in results if r.get("skipped")),
+    print("TOTAL %d 项：绿 %d / 红 %d / 需人工 %d / 跳过 %d%s"
+          % (len(results),
+             sum(1 for r in results if not r.get("skipped") and r.get("state") == PASS),
+             len(bad), len(need), sum(1 for r in results if r.get("skipped")),
              ("；**未分类 %d**" % len(unclassified)) if unclassified else ""))
-    return results, (2 if (bad or inv_rc == 2) else 0)
+    if need:
+        print("NEED %d 项（工具自述判不了 rc=2，**不是**红；需人工确认环境/仓库）：%s"
+              % (len(need), ", ".join(r["name"] for r in need)))
+    # 红/未分类 ⇒ 2；只有「判不了」⇒ 3（既不是绿，也不是红）；否则 0。
+    if bad or inv_rc == 2:
+        return results, 2
+    if need:
+        return results, 3
+    return results, 0
 
 
 def inventory_rows():
@@ -377,6 +403,36 @@ def selftest():
             r6b = main(["--repo", tmp, "--skip", "no-such-entry"])
         chk(r6 == 2, "TSG 牙6 未知条目 ⇒ rc=2（用法错）")
         chk(r6b == 2, "TSG 牙6b --skip 未知条目 ⇒ rc=2")
+
+        # ---- 三态（卡 openmir2-docs-gate-rc-semantics）：判不了 ≠ 证伪 ----
+        needf = os.path.join(tmp, "need.py")
+        with open(needf, "w", encoding="utf-8") as fh:
+            fh.write("print('NEED fake: git 不可用 ⇒ 判不了（rc=2）')\nraise SystemExit(2)\n")
+        r_need = run_one(tmp, "need", [needf], 30)
+        chk(r_need["rc"] == 2 and classify_rc(r_need["rc"]) == NEED,
+            "TSG 牙13a 假·判不了（rc=2）⇒ classify=NEED（不是 FAIL）")
+        reg13 = [("ok", [okf], False), ("need", [needf], False)]
+        saved13 = REGISTRY
+        REGISTRY = reg13
+        try:
+            buf = io.StringIO()
+            with redirect_stdout(buf):
+                _res13, rc13 = run(tmp, check_inventory=False)
+            out13 = buf.getvalue()
+        finally:
+            REGISTRY = saved13
+        chk(rc13 == 3 and "NEED" in out13 and "需人工 1" in out13 and "红 0" in out13,
+            "TSG 牙13b 绿+判不了 ⇒ 门 rc=3、NEED 单列、红仍 0（%r）" % rc13)
+        REGISTRY = [("ok", [okf], False), ("need", [needf], False), ("bad", [badf], False)]
+        try:
+            buf13c_ = io.StringIO()
+            with redirect_stdout(buf13c_):
+                _res13c, rc13c = run(tmp, check_inventory=False)
+            out13c = buf13c_.getvalue()
+        finally:
+            REGISTRY = saved13
+        chk(rc13c == 2 and "需人工 1" in out13c and "红 1" in out13c,
+            "TSG 牙13c 绿+判不了+红 ⇒ 门 rc=2（红压过需人工）且两者各自计数")
         # 牙7/牙8：**门自己必须先能超时退出**。只杀直接子进程时，孙进程占着 stdout ⇒
         # 第二次 communicate() 等 EOF ⇒ 门无限挂住（本卡实证 pid 1772）/ 300s 上限形同虚设。
 
