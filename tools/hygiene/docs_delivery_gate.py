@@ -710,6 +710,23 @@ def _selftest_run():
             n2b = "other:%s" % ex.__class__.__name__
         chk(n2b == "unavailable", "N2b git 起不来 ⇒ GitUnavailable（判不了），实际 %r" % n2b)
 
+        # N2b2（review b427aad2 F1）：**git 起来了但 rc≠0** 也必须 GitUnavailable——
+        # 否则夹具带着半成品仓继续跑，产出一堆莫名其妙的 FAIL（看起来像门坏了）。
+        fail_script = os.path.join(tmp, "fake_git_fail.py")
+        with open(fail_script, "w", encoding="utf-8") as fh:
+            fh.write("import sys" + chr(10) + "sys.stderr.write('fake git error')"
+                     + chr(10) + "sys.exit(3)" + chr(10))
+        fake_fail = (sys.executable, fail_script)
+        try:
+            _fixture_git(tmp, ["init"], env, git_cmd=fake_fail)
+            n2b2 = "no-raise"
+        except GitUnavailable as ex:
+            n2b2 = "unavailable" if "rc=3" in str(ex) else "wrong-text:%s" % str(ex)[:60]
+        except Exception as ex:  # noqa: BLE001
+            n2b2 = "other:%s" % ex.__class__.__name__
+        chk(n2b2 == "unavailable",
+            "N2b2（F1）git 起来了但 rc=3 ⇒ GitUnavailable（不吞失败），实际 %r" % n2b2)
+
         real_run = globals()["_selftest_run"]
 
         def _boom():
