@@ -9440,6 +9440,65 @@ mod tests {
         assert_eq!(w.map(1).cell(7, 9).count(), 1);
     }
 
+    /// **M-3 A3 ④：ghost 不占格、不参与碰撞**（oracle `MakeGhost` ⇒ `DeleteFromMap`，
+    /// `Envirnoment.cs:660-661`；`DisappearA` 在 `BaseObject.cs:1519-1522`）。
+    ///
+    /// 牙：软关分支里删掉 `remove_from_map` ⇒ 格子仍被占 ⇒ 红（第二条断言）。
+    /// 规则 19 退化对照：非 ghost 的玩家占着同一格时，第二个人**进不去/走不进去**。
+    #[test]
+    fn m3_soft_close_ghost_frees_the_cell() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let actor = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        assert_eq!(w.map(0).cell(5, 5).count(), 1, "在世人占格");
+
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            0,
+            "ghost 不占格（DeleteFromMap）"
+        );
+        assert!(
+            !w.entities.get(actor).expect("实体保留").add_to_mapped,
+            "AddToMaped 必须为 false"
+        );
+
+        // 另一个玩家能走进该格（碰撞不认 ghost）。
+        w.open_session("other");
+        let other = w
+            .enter_map("other", player(0, "other", 6, 5, 10), 0)
+            .expect("other 进图");
+        assert!(
+            w.try_step_now(other, -1, 0, 1),
+            "ghost 原来的格子必须可走进去"
+        );
+        assert_eq!(
+            (
+                w.entities.get(other).unwrap().x,
+                w.entities.get(other).unwrap().y
+            ),
+            (5, 5)
+        );
+        assert_eq!(w.map(0).cell(5, 5).count(), 1, "走进来的是 other");
+
+        // 退化对照：活玩家占格时，第二个人走不进去。
+        w.open_session("blocker");
+        let blocker = w
+            .enter_map("blocker", player(0, "blocker", 5, 5, 10), 0)
+            .expect("blocker 直接落在 (5,5)（进图不查占格）");
+        let _ = blocker;
+        w.open_session("walker");
+        let walker = w
+            .enter_map("walker", player(0, "walker", 6, 5, 10), 0)
+            .expect("walker 进图");
+        assert!(
+            !w.try_step_now(walker, -1, 0, 1),
+            "活玩家占格时第二个人必须走不进去（证明上面那条不是恒真）"
+        );
+    }
+
     /// **切图成功语义**（oracle `PlayObject.EnterAnotherMap` 的正向支，`PlayObject.cs:3772-3783`）：
     /// 目标格可走 ⇒ 旧图摘除、新图落格、`add_to_mapped` 保持 true、`Session.map_id` 更新、
     /// 记一条 `MapChange`（`space_move_show == None`）。

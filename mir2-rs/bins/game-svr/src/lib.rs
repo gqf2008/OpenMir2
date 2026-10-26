@@ -31398,6 +31398,84 @@ mod tests {
         assert!(to_b.is_empty(), "离开者 `b` 自身收 0 条：{to_b:?}");
     }
 
+    /// **M-3 A3 ③（+ A1 的 `DisappearA` 等价）**：`soft_close` 走**真实世界 API** 之后
+    /// ① 观察者恰收 1 条 `SM_DISAPPEAR`、ghost 自身收 0 条（oracle `MakeGhost ⇒ DisappearA`，
+    /// `BaseObject.cs:1519-1524`）；
+    /// ② ghost 实体**仍在**世界表里（A1 非销毁），但它**不再产生任何帧**：再抽一次离世帧为 0，
+    /// 本 tick 的 AOI 下行也为 0。
+    ///
+    /// 牙：把软关分支的 `remove_from_map` 之后的实体保留改成 `entities.remove` ⇒ ② 的第一条断言红；
+    /// 把 `DisappearA` 的观察者采集挪到 `ghost=true` 之后并在扫描里过滤 `!Ghost` ⇒ ① 红。
+    #[test]
+    fn m3_soft_close_ghost_disappears_once_then_stays_silent() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        let _ = tick_until_next_player_scan(&mut world);
+        assert!(
+            world
+                .entities
+                .get(a)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == b),
+            "前提：`a` 看得见 `b`"
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
+        online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let displays = downlink::DisplayTable::new();
+
+        world.soft_close("b").expect("`b` 在世界上 ⇒ 小退成功");
+
+        // ② A1：实体保留且 ghost，actor_id 保留。
+        assert!(
+            world.entities.get(b).is_some_and(|e| e.ghost),
+            "soft_close 必须保留实体并置 ghost=true（MakeGhost 非销毁）"
+        );
+        assert_eq!(world.session("b").unwrap().actor_id, Some(b));
+
+        // ① DisappearA：观察者 a 恰 1 条，ghost 自身 0 条。
+        let sent = drain_depart_frames(&mut world, &online, &gates);
+        assert_eq!(sent, 1, "恰观察者 `a` 收 1 条离世广播");
+        let mut to_a: Vec<Vec<u8>> = Vec::new();
+        let mut to_b: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            } else if socket == 902 {
+                to_b.push(body);
+            }
+        }
+        assert_eq!(to_a.len(), 1, "观察者 `a` 收 `SM_DISAPPEAR(b)`");
+        assert!(to_b.is_empty(), "ghost 自身收 0 条：{to_b:?}");
+
+        // ② 之后不再产帧：再抽一次离世帧 = 0；本 tick 的 AOI 下行 = 0。
+        assert_eq!(
+            drain_depart_frames(&mut world, &online, &gates),
+            0,
+            "离世帧只发一次（ghost 不重复 DisappearA）"
+        );
+        let sent_aoi = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        assert!(
+            sent_aoi.is_empty(),
+            "ghost 会话不得再产出现帧：{sent_aoi:?}"
+        );
+    }
+
     /// **orphan 接线第二批（验证者一号 must_fix#2，真牙）**：走**生产入口**
     /// [`drain_depart_downlink`]（`sim_loop` 在 `world.tick()` 之前调用的那**一个**函数）的第
     /// 二发点用例——断言**观察者**在目标离世后真收到 `SM_DISAPPEAR`，而**非观察者**（同图远端、
