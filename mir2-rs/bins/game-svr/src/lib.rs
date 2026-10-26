@@ -42694,7 +42694,15 @@ SendRefMsgRange=15
             world.entities.get(actor).is_some_and(|e| e.ghost),
             "前置：soft_close 保留实体且 ghost=true"
         );
+        // **F3（reviewer-21 `993d3e7a`）**：夹具里必须有一个**会产事件**的态，否则这条用例
+        // 对任何 ghost 门都没有判别力（删掉 `settle_deaths` 的 `&& !e.ghost` 也全绿）。
+        // `die_called=true`：只要 ghost 门没了，`settle_deaths` 就会结算它并产出 `rec.deaths`。
+        world.entities.get_mut(actor).unwrap().die_called = true;
         let rec = world.tick();
+        assert!(
+            rec.deaths.is_empty(),
+            "ghost 的 die_called 不得被 settle_deaths 结算（`&& !e.ghost` 门；删它 ⇒ 本行红）"
+        );
         assert!(rec.exp_awards.is_empty(), "P31/击杀链：无事件");
         assert!(rec.buff_health_changes.is_empty(), "毒伤 53：无事件");
         assert!(rec.buff_status_changes.is_empty(), "657：无事件");
@@ -42702,13 +42710,16 @@ SendRefMsgRange=15
         assert!(rec.slave_self_deliveries.is_empty(), "B2/B4/B5：无事件");
         assert!(rec.run_state_expiries.is_empty(), "烈火/双龙到期：无事件");
 
-        // 纯镜像：无实体 ⇒ 不得改写会话。
+        // 纯镜像的**真实**早退理由（F3 订正：原来这里写「无实体」，M-3 之后实体就在）：
+        // `sync_super_man_wabil` 的唯一门是 `!e.super_man`（`lib.rs:16601-16615`），**没有**
+        // ghost/stage 门；本骨架非 GM 玩家 `super_man` 恒 false ⇒ 对 ghost 也是 no-op。
+        // `sync_use_items_to_session` 则**会**读 ghost 实体（它只要 `actor_id` 还在）——
+        // 这不是缺陷：`use_items` 的同步与「是否还在产帧」无关，正本只在 `disconnect` 后失去实体。
         sessions.get_mut("sc_evt").unwrap().state.wabil.hp = 7;
         sync_super_man_wabil(&world, &mut sessions);
-        sync_use_items_to_session(&world, sessions.get_mut("sc_evt").unwrap());
         assert_eq!(
             sessions["sc_evt"].state.wabil.hp, 7,
-            "无实体时镜像必须早退（否则等于从幽灵实体回灌会话）"
+            "非 super-man ⇒ sync_super_man_wabil 早退（该函数没有 ghost 门，靠 super_man 恒 false）"
         );
     }
 
