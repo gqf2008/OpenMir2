@@ -1208,18 +1208,21 @@ run2 里 oracle 正是 `matched_ident=10` 假过，rust 3 秒没抽中就超时 
   即使两侧都发 653，`compare_runs` 也按 unclassified 判 UNDECIDABLE（`compare_runs.py:65`）。补 653 规则归
   rules 车道（`openmir2-rules-ident-gaps`）；在那之前本场景 verdict 仍可能 UNDECIDABLE，**但那不是判据的错**。
 
-### 9.3 牙（本卡禁改 probe ⇒ 牙是**可复跑的离线脚本**，不是门内条目）
+### 9.3 牙（**已登记为门内条目**：`tool_selftest_gate` 的 REGISTRY `selftest_bclass`；脚本在仓内、路径由文件位置推导）
 
 ```sh
-python -I -B E:/tmp/tooth-bclass.py      # 期望：TOOTH GREEN (0 fail)
+python -I -B tools/probe/selftest_bclass.py      # 期望：TOOTH GREEN (0 fail)
+# 路径由脚本自身位置推导 ⇒ 在任意 checkout 上用同一条命令即可复现（不依赖某条 worktree）；
+# 调试可加 --repo <checkout>。
 ```
 
 它只读加载 `tools/probe/mir2_probe.py` + 两个场景 JSON，用合成帧流断言：① waits 被钉住
 （gamepoint `[[643],[643],[5008]]`、dropgold `[[653]]`——把「等不到的 643」加回来立刻红）；
 ② 只有无关帧时每个 wait 都超时 `None`（删掉真实回执必红）；③ `SM_TURN(10)` / 41 / 100 / 200 在场不算匹配；④ 正控命中。
 变异自证：M1 把第四个 `wait_for 643` 加回 gamepoint ⇒ 红；M2 把 dropgold 的 wait 改成 `SM_TURN(10)` ⇒ 红；
-两次都按 sha256 还原。**登记为残留**：脚本在 `E:/tmp`（写集不含 `tools/probe/**`），建议后续把这几条断言并入
-`mir2_probe --selftest`（另开 L 卡）。
+两次都按 sha256 还原。牙脚本已落进仓库（`tools/probe/selftest_bclass.py`，卡 `openmir2-tooth-hardening-batch` A），
+不再放 `E:/tmp`、也不绑定任何 worktree；它测的是**当前 checkout 的场景内容**——
+老 worktree 上跑出 RED 正是它该有的行为（那里的场景还是旧口径）。
 
 ### 9.4 下次窗口怎么验
 

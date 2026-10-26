@@ -20,7 +20,7 @@
 **收哪些、不收哪些**（`--inventory` 可看全量清点）：**只要自带 selftest 且能离线判红，就收**
 ——不按「文件在哪个目录 / 是不是别域 / 是不是一次性脚本」筛（Leader 2026-10-25 裁定：
 「一次性 / 人工使用 / 别域」都不是合法出域理由，除非工具**真的需要交互式输入、外部产物或真实环境**）。
-当前 47 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
+当前 48 项在门内；出域只有 5 项，逐项理由见 `OUT_OF_SCOPE`（外部截图产物 / 需要真库 / 需要构建产物/
 部署配置 / 无独立入口的模块）。新增工具按 `REGISTRY` 同一格式登记即可。
 
 用法：
@@ -44,6 +44,7 @@ REGISTRY = [
     ("compare_runs", ["tools/conformance/compare_runs.py", "selftest"], False),
     ("dbsnap_pair", ["tools/db-parity/dbsnap_pair.py", "selftest"], False),
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
+    ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),
     ("butch_ledger", ["tools/window/butch_ledger.py", "--selftest"], False),
     ("rc_attribution", ["tools/window/rc_attribution.py", "--selftest"], False),
     ("window_criteria_lint", ["tools/goal/window_criteria_lint.py", "--selftest"], False),

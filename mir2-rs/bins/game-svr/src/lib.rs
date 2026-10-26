@@ -43248,24 +43248,33 @@ SendRefMsgRange=15
     //
     // 故这里只钉**语义不变量**（两方向都要能红）：201 只能由查询派发本身产出。
 
-    /// 牙（**提前**方向）：`SM_BAGITEMS` 全宿主只有一个产出点，且在 [`handle_query_bag_cmd`] 内；
-    /// 登录尾段（[`drain_login_tail`]）不得补发 201。
+    /// 牙（**提前**方向，文本提醒 + 位置）：`SM_BAGITEMS` 的**文本**产出点只有一处，且在
+    /// [`handle_query_bag_cmd`] 内；登录尾段（[`drain_login_tail`]）不得出现它。
     ///
-    /// 红检：在登录路径（`DBR_LOADHUMANRCD` 分支 / `frames_split` 的 `before`）加一条主动发，
+    /// **文本牙只是提醒，不是判据**（reviewer-20 `f080d2c2`）：花括号 re-export
+    /// `use game_svr::itemwire::{sm_bagitems as bag};` + 尾段 `bag(...)` 躲得掉这里的任何子串计数。
+    /// **真正的判据是行为接缝** [`bagitems_201_login_drains_emit_no_bagitems_frames`]（跑生产排水、
+    /// 看实际发出的帧）——别名/宏/改名/`{… as y}` 都绕不过它。
+    ///
+    /// 文本牙只在**去掉注释后**的代码上跑：只把 `sm_bagitems` 写进注释不该判红
+    /// （reviewer-20 复现过的假红）。
+    ///
+    /// 红检：在登录路径（`DBR_LOADHUMANRCD` 分支 / `frames_split` 的 `before`）加一条**直接**发，
     /// 或把 201 拼进 `after` ⇒ 下面的计数 / 区段断言必红。
     #[test]
     fn bagitems_201_has_no_proactive_send_point() {
         let src = include_str!("lib.rs");
         let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
-        // ① 先查登录尾段：`drain_login_tail` 全区段（含文档注释）不得出现 `sm_bagitems`。
-        let tail = prod.find("fn drain_login_tail(").expect("登录尾段必须在");
-        let tail_end = prod[tail..].find("\nfn ").map_or(prod.len(), |o| tail + o);
+        let code = strip_rust_comments(prod);
+        // ① 先查登录尾段：`drain_login_tail` 全区段不得出现 `sm_bagitems`（去注释后）。
+        let tail = code.find("fn drain_login_tail(").expect("登录尾段必须在");
+        let tail_end = code[tail..].find("\nfn ").map_or(code.len(), |o| tail + o);
         assert!(
-            !prod[tail..tail_end].contains("sm_bagitems"),
+            !code[tail..tail_end].contains("sm_bagitems"),
             "登录尾段（drain_login_tail）不得补发 SM_BAGITEMS"
         );
         // ② 再查产出点总数与位置：全宿主恰一处，且在 `handle_query_bag_cmd` 内。
-        let hits: Vec<usize> = prod
+        let hits: Vec<usize> = code
             .match_indices("itemwire::sm_bagitems(")
             .map(|(i, _)| i)
             .collect();
@@ -43274,10 +43283,18 @@ SendRefMsgRange=15
             1,
             "SM_BAGITEMS 必须只有一个产出点（多一个 = 登录主动发/尾段补发）：{hits:?}"
         );
-        let handler = prod
+        // ②' 完整路径计数（仍是**提醒**）：`static X: fn(..) = game_svr::itemwire::sm_bagitems;`
+        // 不含 `(`、上面数不到，这里能数到；但 `use ...::{sm_bagitems as bag}` 躲得掉 ⇒
+        // **判据不在这里**，见行为牙。
+        let path_hits = code.matches("itemwire::sm_bagitems").count();
+        assert_eq!(
+            path_hits, 1,
+            "`itemwire::sm_bagitems` 文本上只能出现一次（提醒口径；行为判据见行为牙）：{path_hits}"
+        );
+        let handler = code
             .find("fn handle_query_bag_cmd(")
             .expect("派发函数必须在");
-        let next = prod
+        let next = code
             .find("fn handle_query_user_name_cmd(")
             .expect("后继函数必须在");
         assert!(
@@ -43285,6 +43302,58 @@ SendRefMsgRange=15
             "唯一产出点必须在 handle_query_bag_cmd 内（offset={}）",
             hits[0]
         );
+    }
+
+    /// 去掉 Rust 注释（`//` 行注释与 `/* … */` 块注释），**保留字符串字面量**。
+    /// 文本牙用它避免「只在注释里写了一个路径就判红」的假红（reviewer-20 `f080d2c2`）。
+    fn strip_rust_comments(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut it = src.chars().peekable();
+        let mut in_block = false;
+        let mut in_str = false;
+        while let Some(c) = it.next() {
+            if in_block {
+                if c == '*' && it.peek() == Some(&'/') {
+                    it.next();
+                    in_block = false;
+                } else if c == '\n' {
+                    out.push('\n');
+                }
+                continue;
+            }
+            if in_str {
+                out.push(c);
+                if c == '\\' {
+                    if let Some(n) = it.next() {
+                        out.push(n);
+                    }
+                } else if c == '"' {
+                    in_str = false;
+                }
+                continue;
+            }
+            if c == '"' {
+                in_str = true;
+                out.push(c);
+                continue;
+            }
+            if c == '/' && it.peek() == Some(&'/') {
+                for n in it.by_ref() {
+                    if n == '\n' {
+                        out.push('\n');
+                        break;
+                    }
+                }
+                continue;
+            }
+            if c == '/' && it.peek() == Some(&'*') {
+                it.next();
+                in_block = true;
+                continue;
+            }
+            out.push(c);
+        }
+        out
     }
 
     /// 牙（**延后**方向）：命令派发当场回 201；登录尾段排水只出尾段帧。
@@ -43378,6 +43447,85 @@ SendRefMsgRange=15
             assert_eq!(cm.ident, SM_CHANGELIGHT);
         }
         assert!(pending.is_empty(), "补发后必须清缓冲");
+    }
+
+    /// 牙（**行为接缝**，卡 `openmir2-tooth-hardening-batch` B）：**登录路径的全部排水**
+    /// （`drain_aoi_downlink` + `drain_login_tail`）不得产出任何 `SM_BAGITEMS(201)`。
+    ///
+    /// 与 [`bagitems_201_has_no_proactive_send_point`] 的分工：那条数的是**源码文本**里的
+    /// `itemwire::sm_bagitems` 出现点，可以被函数指针别名绕过
+    /// （`static R21_BAG: fn(..) = game_svr::itemwire::sm_bagitems;` 再在尾段调用）。
+    /// 本用例直接跑**生产排水函数本体**、检查**实际发出的帧** ⇒ 别名/宏/改名都绕不过。
+    ///
+    /// 红检：在 `drain_login_tail` 里（直接调用或经别名）补发一条 201 ⇒ 本用例必红。
+    #[test]
+    fn bagitems_201_login_drains_emit_no_bagitems_frames() {
+        use mir2_protocol::frame::CommandMessage;
+        use mir2_protocol::messages::SM_BAGITEMS;
+        use std::collections::HashMap;
+
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut list = Vec::new();
+        let mut n = names.item_number;
+        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.open_session("hero");
+        let id = world
+            .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
+            .unwrap();
+        world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
+
+        // 注意：本用例只跑排水（world + online + gates），`sessions` 不参与 ⇒ 不建它，
+        // 免得 `unused variable` 让 clippy -D warnings 挂掉（夹具与「查询 tick」用例同形）。
+        let mut sg = test_session_ground(id);
+        sg.state.item_list = list;
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: id,
+            },
+        );
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut pending: HashMap<String, smframe::EnterWorldInputs> = HashMap::new();
+        let mut inputs = smframe::EnterWorldInputs {
+            actor_id: id,
+            ..Default::default()
+        };
+        inputs.changelight = Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT));
+        pending.insert("hero".to_string(), inputs);
+
+        // 登录路径的两类排水（顺序同生产 tick：② aoi → ③ 尾段）；尾段跑两遍覆盖清缓冲。
+        let displays = downlink::DisplayTable::new();
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates);
+        let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
+
+        let mut seen = 0usize;
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
+            let cm = CommandMessage::from_bytes(&body).expect("≥12B");
+            seen += 1;
+            assert_ne!(
+                cm.ident, SM_BAGITEMS,
+                "登录路径不得产出 SM_BAGITEMS（201 属于查询 tick）"
+            );
+        }
+        assert!(
+            seen >= 1,
+            "登录路径至少应发出尾段帧（654）；实际 0 帧 ⇒ 夹具失效"
+        );
     }
 
     /// **`openmir2-m3-attack-magic-wiring`（第一片）**：`CM_HIT`/`CM_HEAVYHIT` 派发——
