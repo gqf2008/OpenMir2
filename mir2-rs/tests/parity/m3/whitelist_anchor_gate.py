@@ -79,6 +79,7 @@ HIGH_CHURN = (
     ("mir2-rs/crates/world/src/map.rs", 6, "地图格/门/地面物"),
     ("mir2-rs/bins/game-svr/src/mongen.rs", 5, "MonGen 刷怪 sink"),
     ("mir2-rs/bins/game-svr/src/dbclient.rs", 5, "存档 DB 客户端"),
+    ("mir2-rs/bins/game-svr/src/smframe.rs", 22, "出站编码器面（turn-order/骨架/转职帧都在此；2026-10-27 一晚 +150/−46 把 T-206 的锚顶走 69 行）"),
     ("mir2-rs/crates/world/src/npc.rs", 2, "固定 NPC tick（任务点名，contention 区）"),
     ("src/BotSrv/AppService.cs", 20, "BotSrv 装配（工具例外，多夹具卡扩展）"),
     ("src/BotSrv/MShare.cs", 20, "BotSrv 静态位（工具例外，多夹具卡扩展）"),
