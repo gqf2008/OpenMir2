@@ -166,7 +166,7 @@ sess.stage == WorldStage::Left   AND   sess.actor_id == Some(id)   （且 entiti
 
 | 项 | reviewer-21 | 本篇 | 理由 |
 |---|---|---|---|
-| 迭代面计数 | 「共 31 处 `entities.iter()`」 | **生产 24 处**（全仓 33，测试内 9） | 本篇按各文件 `mod tests` / `#[cfg(test)]` 行号逐个剔除；reviewer 那版把 `monai.rs:7444/7470`、`merchant.rs:2191`、`guardlist.rs:281/460`、`lib.rs:26081/46322/74208` 记为 ❓/待判，本篇给出剔除依据 |
+| 迭代面计数 | 「共 31 处 `entities.iter()`」 | **生产 25 处**（全仓 33，测试内 8） | 本篇按各文件 `mod tests` / `#[cfg(test)]` 行号逐个剔除；reviewer 那版把 `monai.rs:7444/7470`、`merchant.rs:2191`、`guardlist.rs:281/460`、`lib.rs:26081/46322/74208` 记为 ❓/待判，本篇给出剔除依据 |
 | `settle_deaths` | ❓ 未逐行确认 | **⚠️ 无 ghost 门**（`world.rs:6755`） | 逐行读了 filter：只有 `hp==0 \|\| die_called` + `!death_settled` + race，无 ghost |
 | `mag_make_defence_area` | 未列 | **✅ 已滤**（门在循环体内 `world.rs:1991`） | reviewer-21 C1 订正：我先前只读收集循环的 filter、漏了循环体内的 `if obj.ghost { continue; }` |
 | `monai.rs:7444/7470`、`lib.rs:46322/74208` | ❓ | **剔除（测试内）** | 行号在 `mod tests` 之后 |
