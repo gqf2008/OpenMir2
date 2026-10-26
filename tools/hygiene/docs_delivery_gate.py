@@ -682,6 +682,34 @@ def _selftest_run():
             fh.write("base2\n")
         g("commit", "-q", "-am", "c3")
         head = g("rev-parse", "HEAD")
+        # ---- 夹具自洽守卫（卡 openmir2-ps1-tool-registry 附带发现）----
+        # HEX-1/HEX-7 与 N1a/N1b 都依赖「side 不是 HEAD 的祖先、c1 是 HEAD 的祖先」这一夹具事实。
+        # 实测在**负载下**（并行 cargo + 门禁）25 次里有 3 次夹具没落到这个状态，
+        # 下游就会报出**看起来像门坏了**的 FAIL（HEX-1/N1b…）——那是**判不了**，不是证伪。
+        # 这里显式验夹具；坏 ⇒ GitUnavailable（rc=2，NEED），并把夹具的诊断信息带出来。
+        def _anc_rc(a, b):
+            try:
+                r = subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=tmp,
+                                   capture_output=True, text=True, encoding="utf-8",
+                                   errors="replace", env=env)
+            except OSError as ex:
+                raise GitUnavailable("夹具验自洽时 git 起不来（%s）⇒ 判不了" % ex)
+            return r.returncode
+
+        _side_rc, _c1_rc = _anc_rc(side, head), _anc_rc(c1, head)
+        if (_side_rc, _c1_rc) != (1, 0):
+            log_dump = ""
+            try:
+                log_dump = subprocess.run(
+                    ["git", "log", "--oneline", "--graph", "--all", "--decorate"], cwd=tmp,
+                    capture_output=True, text=True, encoding="utf-8", errors="replace",
+                    env=env).stdout.strip().replace("\n", " / ")[:300]
+            except OSError:
+                pass
+            raise GitUnavailable(
+                "夹具自相矛盾：期望 side 非祖先(rc=1)/c1 祖先(rc=0)，实际 side=%d c1=%d"
+                "（c1=%s side=%s head=%s；graph: %s）⇒ 判不了"
+                % (_side_rc, _c1_rc, c1[:8], side[:8], head[:8], log_dump))
         p = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=tmp, input="x\n",
                            capture_output=True, text=True, encoding="utf-8", env=env)
         blob = p.stdout.strip()
@@ -744,6 +772,27 @@ def _selftest_run():
             globals()["_selftest_run"] = real_run
         chk(n2c == 2 and "判不了" in n2c_out and "rc=2" in n2c_out,
             "N2c 夹具建不起来 ⇒ selftest rc=2 且输出「判不了（rc=2）」（不是 rc=1）")
+
+        # N2d（卡 openmir2-ps1-tool-registry）：**夹具自相矛盾**（side 变成 head 的祖先）
+        # ⇒ 必须判「判不了」，绝不把下游 HEX/N1 的失败当成「门坏了」。
+        _saved_fixture = globals()["_selftest_run"]
+
+        def _bad_fixture():
+            raise GitUnavailable("夹具自相矛盾：side 应为非祖先(rc=1)/c1 应为祖先(rc=0)，"
+                                 "实际 side=0 c1=0（牙注入）⇒ 判不了")
+
+        globals()["_selftest_run"] = _bad_fixture
+        try:
+            import contextlib as _cl3
+            import io as _io3
+            _buf3 = _io3.StringIO()
+            with _cl3.redirect_stdout(_buf3):
+                n2d = selftest()
+            n2d_out = _buf3.getvalue()
+        finally:
+            globals()["_selftest_run"] = _saved_fixture
+        chk(n2d == 2 and "夹具自相矛盾" in n2d_out and "rc=2" in n2d_out,
+            "N2d 夹具自相矛盾 ⇒ selftest rc=2（判不了），不是把 HEX/N1 报成红")
 
         real_mkdtemp = globals()["tempfile"].mkdtemp
 
