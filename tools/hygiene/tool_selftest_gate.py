@@ -253,7 +253,13 @@ def build_cmd(argv):
 
 
 def run_one(repo, name, argv, timeout):
-    cmd = build_cmd(argv)
+    try:
+        cmd = build_cmd(argv)
+    except RuntimeError as ex:
+        # C3（reviewer-21 7060d720）：拿不到 PowerShell 是**判不了**，不是「工具坏了」。
+        # 记 NEED（rc=2）而不是抛出去把整个门崩成 rc=1。
+        return {"name": name, "argv": [str(a) for a in argv], "rc": NEED_RC,
+                "elapsed_s": 0.0, "tail": "判不了：%s" % ex, "timed_out": False}
     t0 = time.time()
     kw = {"start_new_session": True} if os.name != "nt" else {}
     proc = subprocess.Popen(cmd, cwd=repo, stdin=subprocess.DEVNULL,
@@ -467,6 +473,44 @@ def selftest():
             r_ps_need = run_one(tmp, "ps_need", [need_ps], 60)
             chk(r_ps_need["rc"] == 2 and classify_rc(r_ps_need["rc"]) == NEED,
                 "TSG 牙14c 真跑临时 .ps1（exit 2）⇒ NEED（判不了，不是红）")
+
+        # ---- C2/C3（reviewer-21 7060d720）：自洽判据与 PowerShell 缺失都必须有机器守 ----
+        # 注意：此刻 REGISTRY 还是牙3 的假表（[ok,bad]）——必须换成**真实**表再追加，
+        # 否则 discovered 里的真工具全变 UNCLASSIFIED，判据在 mismatch 之前就先 rc=2 了。
+        _real_reg_c2 = list(saved)
+        REGISTRY[:] = _real_reg_c2 + [("r21_fake", ["tools/__r21_missing__.py", "--selftest"], False)]
+        try:
+            _buf_c2 = io.StringIO()
+            with redirect_stdout(_buf_c2):
+                _rows_c2, rc_c2 = inventory(root)
+            out_c2 = _buf_c2.getvalue()
+        finally:
+            REGISTRY[:] = _real_reg_c2
+        chk(rc_c2 == 2 and "INVENTORY_MISMATCH" in out_c2,
+            "TSG 牙C2a REGISTRY 多一条但 discover 收不到 ⇒ --inventory rc=2 + INVENTORY_MISMATCH"
+            "（rc=%r，输出尾=%r）" % (rc_c2, out_c2.strip().splitlines()[-1:]))
+        # 反例：discover 被替换（合成清点）时**不**套这条判据——判据只在真实 discover 下生效
+        _orig_disc_c2 = globals()["discover"]
+        REGISTRY[:] = _real_reg_c2
+        globals()["discover"] = lambda: []
+        try:
+            _buf_c2b = io.StringIO()
+            with redirect_stdout(_buf_c2b):
+                _rows_c2b, rc_c2b = inventory(root)
+        finally:
+            globals()["discover"] = _orig_disc_c2
+        chk(rc_c2b == 0,
+            "TSG 牙C2b discover 被替换（合成清点）⇒ 不套自洽判据（rc=0，作用域牙）")
+        # C3：拿不到 PowerShell ⇒ run_one 记 NEED（不抛）
+        _real_which = shutil.which
+        globals()["shutil"].which = lambda name, *a, **k: None
+        try:
+            r_c3 = run_one(tmp, "ps_noshell", ["tools/window/no-such.ps1"], 5)
+        finally:
+            globals()["shutil"].which = _real_which
+        chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
+            and "PowerShell" in r_c3["tail"],
+            "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
 
         # ---- 三态（卡 openmir2-docs-gate-rc-semantics）：判不了 ≠ 证伪 ----
         needf = os.path.join(tmp, "need.py")

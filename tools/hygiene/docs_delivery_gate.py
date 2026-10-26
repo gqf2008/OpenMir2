@@ -162,6 +162,50 @@ _BASH_CANDIDATES = (
 )
 
 
+def _git_run(repo, args, env, stdin_text=None):
+    """夹具里的 git 调用（返回 CompletedProcess，供需要 rc 的调用方判断）。
+
+    C6（reviewer-21 7060d720）：**rc=2 一律是「判不了」**——并发/慢盘下
+    `merge-base --is-ancestor` 会返回 2（不是「不是祖先」）；进程起不来同理。
+    调用方若拿到 rc=2 必须转 GitUnavailable，不得当成业务答案。
+    """
+    try:
+        return subprocess.run(["git"] + list(args), cwd=repo, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", env=env,
+                              input=stdin_text)
+    except OSError as ex:
+        raise GitUnavailable("git 跑不起来（%s：%s）⇒ 判不了" % (ex.__class__.__name__, ex))
+
+
+def _assert_fixture_consistent(tmp, env, side, c1, head):
+    """夹具自证不变式：`side` 非 head 祖先（rc=1）、`c1` 是 head 祖先（rc=0）。
+
+    这是 HEX-1/HEX-7/N1a/N1b 的前提。夹具在慢盘/并发下偶尔不成立——那时下游的红是
+    **判不了**（rc=2/NEED），不是「门坏了」。守卫本身可被自测直接调用（C1 牙）。
+    """
+    side_rc = _git_run(tmp, ["merge-base", "--is-ancestor", side, head], env).returncode
+    c1_rc = _git_run(tmp, ["merge-base", "--is-ancestor", c1, head], env).returncode
+    if (side_rc, c1_rc) == (1, 0):
+        return True
+    try:
+        log_dump = _git_run(tmp, ["log", "--oneline", "--graph", "--all", "--decorate"],
+                            env).stdout.strip().replace("\n", " / ")[:300]
+    except GitUnavailable:
+        log_dump = ""
+    raise GitUnavailable(
+        "夹具自相矛盾：期望 side 非祖先(rc=1)/c1 祖先(rc=0)，实际 side=%d c1=%d"
+        "（c1=%s side=%s head=%s；graph: %s）⇒ 判不了"
+        % (side_rc, c1_rc, c1[:8], side[:8], head[:8], log_dump))
+
+
+def _require_branch(repo, env, want="master"):
+    """夹具必须停在 `want` 分支；不是 ⇒ GitUnavailable（判不了），不是裸 assert。"""
+    got = _fixture_git(repo, ["rev-parse", "--abbrev-ref", "HEAD"], env)
+    if got != want:
+        raise GitUnavailable("夹具没切回 %s（实际 %r）⇒ 判不了" % (want, got))
+    return True
+
+
 def _is_wsl_stub(path):
     p = os.path.normcase(str(path).replace("/", os.sep))
     return (os.path.basename(p).startswith("bash")
@@ -676,43 +720,38 @@ def _selftest_run():
         g("checkout", "-q", "master")
         # fixture 守卫：切回失败会让 `side` 变成 HEAD 祖先，表现为 HEX-1/HEX-7 间歇红
         # （review ba964a07 观察到的「3 次里 1 次」形态）⇒ 这里显式钉住，别让它伪装成检查缺陷。
-        assert g("rev-parse", "--abbrev-ref", "HEAD") == "master", "fixture：必须切回 master"
+        _require_branch(tmp, env, "master")   # 裸 assert 会把环境问题崩成 rc=1（reviewer-21 C4）
         # HEAD 上再提交一次（只改 docs/tools ⇒ 便于 diff_empty 用例）
         with open(os.path.join(tmp, "docs", "tracked.md"), "w", encoding="utf-8") as fh:
             fh.write("base2\n")
         g("commit", "-q", "-am", "c3")
         head = g("rev-parse", "HEAD")
-        # ---- 夹具自洽守卫（卡 openmir2-ps1-tool-registry 附带发现）----
-        # HEX-1/HEX-7 与 N1a/N1b 都依赖「side 不是 HEAD 的祖先、c1 是 HEAD 的祖先」这一夹具事实。
-        # 实测在**负载下**（并行 cargo + 门禁）25 次里有 3 次夹具没落到这个状态，
-        # 下游就会报出**看起来像门坏了**的 FAIL（HEX-1/N1b…）——那是**判不了**，不是证伪。
-        # 这里显式验夹具；坏 ⇒ GitUnavailable（rc=2，NEED），并把夹具的诊断信息带出来。
-        def _anc_rc(a, b):
-            try:
-                r = subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=tmp,
-                                   capture_output=True, text=True, encoding="utf-8",
-                                   errors="replace", env=env)
-            except OSError as ex:
-                raise GitUnavailable("夹具验自洽时 git 起不来（%s）⇒ 判不了" % ex)
-            return r.returncode
-
-        _side_rc, _c1_rc = _anc_rc(side, head), _anc_rc(c1, head)
-        if (_side_rc, _c1_rc) != (1, 0):
-            log_dump = ""
-            try:
-                log_dump = subprocess.run(
-                    ["git", "log", "--oneline", "--graph", "--all", "--decorate"], cwd=tmp,
-                    capture_output=True, text=True, encoding="utf-8", errors="replace",
-                    env=env).stdout.strip().replace("\n", " / ")[:300]
-            except OSError:
-                pass
-            raise GitUnavailable(
-                "夹具自相矛盾：期望 side 非祖先(rc=1)/c1 祖先(rc=0)，实际 side=%d c1=%d"
-                "（c1=%s side=%s head=%s；graph: %s）⇒ 判不了"
-                % (_side_rc, _c1_rc, c1[:8], side[:8], head[:8], log_dump))
-        p = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=tmp, input="x\n",
-                           capture_output=True, text=True, encoding="utf-8", env=env)
+        # ---- 夹具自洽守卫（卡 openmir2-ps1-tool-registry）----
+        # HEX-1/HEX-7 与 N1a/N1b 都依赖「side 不是 HEAD 的祖先、c1 是 HEAD 的祖先」这一夹具事实；
+        # 负载下实测 25 次里有 3 次夹具没落到这个状态，下游就会报出「看起来像门坏了」的 FAIL。
+        # 守卫抽成模块级函数，好让自测**直接单测它**（reviewer-21 C1：只有人读没有机器守 = 假牙）。
+        _assert_fixture_consistent(tmp, env, side, c1, head)
+        # C6（reviewer-21）：夹具里的 git 调用一律走 _git_run——**rc=2 也是「判不了」**
+        # （并发/慢盘下 merge-base/cat-file 会返回 2；那不是「文档错了」，是环境判不了）。
+        p = _git_run(tmp, ["hash-object", "-w", "--stdin"], env, stdin_text="x" + chr(10))
+        if p.returncode == 2:
+            raise GitUnavailable("夹具 git hash-object rc=2 ⇒ 判不了")
         blob = p.stdout.strip()
+
+        # 规则 16：夹具先自证不变式——门的 HEX_RE 要求引用**至少含一个 a–f**（纯数字当日期跳过）。
+        # 直接用 `c1_ref`/`side_ref` 会以约 0.8%/个的概率撞上「前缀全是数字」，于是该轮所有
+        # hex 用例静默不触发（实测：30 次里 2 次 N1a/N1b 假红、25 次里 3 次 HEX-1/HEX-7 假红）。
+        # 这里把前缀延长到出现字母为止；都到 15 位还没有字母 ⇒ 判不了（rc=2），不是红。
+        def _hexref(oid, want=9):
+            for n in range(want, min(len(oid), want + 6) + 1):
+                if re.search(r"[a-f]", oid[:n]):
+                    return oid[:n]
+            raise GitUnavailable("夹具 oid %s 前 %d 位没有 a–f，构造不出可解析的 hex 锚 ⇒ 判不了"
+                                 % (oid[:12], want + 6))
+
+        c1_ref = _hexref(c1)
+        side_ref = _hexref(side)
+        blob_ref = _hexref(blob, 8)
         # 未跟踪文件
         with open(os.path.join(tmp, "docs", "untracked.md"), "w", encoding="utf-8") as fh:
             fh.write("nope\n")
@@ -794,6 +833,96 @@ def _selftest_run():
         chk(n2d == 2 and "夹具自相矛盾" in n2d_out and "rc=2" in n2d_out,
             "N2d 夹具自相矛盾 ⇒ selftest rc=2（判不了），不是把 HEX/N1 报成红")
 
+        # ---- C1/C4（reviewer-21 7060d720）：守卫与分支检查本身必须有牙 ----
+        fx = os.path.join(tmp, "c1fx")
+        os.makedirs(fx, exist_ok=True)
+
+        def _fg(*a):
+            return _fixture_git(fx, a, env)
+
+        _fg("init", "-q")
+        _fg("config", "user.name", "t")
+        _fg("config", "user.email", "t@t")
+        with open(os.path.join(fx, "a.md"), "w", encoding="utf-8") as fh:
+            fh.write("base\n")
+        _fg("add", "-A")
+        _fg("commit", "-q", "-m", "c1")
+        c1_fx = _fg("rev-parse", "HEAD")
+        _fg("checkout", "-q", "-b", "side")
+        with open(os.path.join(fx, "a.md"), "w", encoding="utf-8") as fh:
+            fh.write("side\n")
+        _fg("commit", "-q", "-am", "side")
+        side_fx = _fg("rev-parse", "HEAD")
+        _fg("checkout", "-q", "master")
+        # 牙的先决夹具本身先自证：分叉形态必须成立（否则这颗牙是假的）
+        if _git_run(fx, ["merge-base", "--is-ancestor", side_fx, c1_fx], env).returncode != 1:
+            raise GitUnavailable("C1 牙的夹具没分叉 ⇒ 判不了")
+        try:
+            c1a = _assert_fixture_consistent(fx, env, side_fx, c1_fx, c1_fx)
+        except GitUnavailable as ex:
+            c1a = "raised:%s" % str(ex)[:80]
+        chk(c1a is True, "C1a 分叉夹具（side 非祖先 / c1 祖先）⇒ 守卫放行")
+        try:
+            _assert_fixture_consistent(fx, env, c1_fx, c1_fx, side_fx)   # side 变成 side_fx 的祖先
+            c1b = "no-raise"
+        except GitUnavailable as ex:
+            msg = str(ex)
+            c1b = "ok" if (c1_fx[:8] in msg and side_fx[:8] in msg) else "missing-oids:%s" % msg[:80]
+        chk(c1b == "ok", "C1b 夹具自相矛盾 ⇒ GitUnavailable 且消息含 oid（机器守）")
+
+        # C6（reviewer-21）：假 git **返回 rc=2**（并发/慢盘下 merge-base 的真实形态）
+        # ⇒ 必须 GitUnavailable；且 selftest 级要 rc=2 且**没有任何 FAIL 行**（假红已消灭）。
+        rc2_git = os.path.join(tmp, "fake_git_rc2.py")
+        with open(rc2_git, "w", encoding="utf-8") as fh:
+            fh.write("import sys" + chr(10) + "sys.stderr.write('fatal: unable to read tree')"
+                     + chr(10) + "sys.exit(2)" + chr(10))
+        try:
+            _fixture_git(tmp, ["merge-base", "--is-ancestor", c1_fx, side_fx], env,
+                         git_cmd=(sys.executable, rc2_git))
+            c6a = "no-raise"
+        except GitUnavailable as ex:
+            c6a = "ok" if ("rc=2" in str(ex) or "判不了" in str(ex)) else "wrong:%s" % str(ex)[:60]
+        except Exception as ex:  # noqa: BLE001
+            c6a = "other:%s" % ex.__class__.__name__
+        chk(c6a == "ok", "C6a 假 git 返回 rc=2 ⇒ GitUnavailable（判不了），实际 %r" % (c6a,))
+        chk(all(re.search(r"[a-f]", x) for x in (c1_ref, side_ref, blob_ref))
+            and len(c1_ref) >= 9 and len(blob_ref) >= 8,
+            "规则16 牙：夹具 hex 锚都含 a–f（%s/%s/%s）——否则门按设计静默跳过"
+            % (c1_ref, side_ref, blob_ref))
+        _saved_run_c6 = globals()["_selftest_run"]
+
+        def _rc2_fixture():
+            raise GitUnavailable("夹具 git rc=2（牙注入）⇒ 判不了")
+
+        globals()["_selftest_run"] = _rc2_fixture
+        try:
+            import contextlib as _cl6
+            import io as _io6
+            _buf6 = _io6.StringIO()
+            with _cl6.redirect_stdout(_buf6):
+                c6b_rc = selftest()
+            c6b_out = _buf6.getvalue()
+        finally:
+            globals()["_selftest_run"] = _saved_run_c6
+        chk(c6b_rc == 2 and "判不了" in c6b_out
+            and not any(l.startswith("FAIL ") for l in c6b_out.splitlines()),
+            "C6b rc=2 的夹具失败 ⇒ selftest rc=2 且**无 FAIL 行**（假红已消灭）")
+        try:
+            c4a = _require_branch(fx, env, "master") is True
+        except GitUnavailable:
+            c4a = False
+        _fg("checkout", "-q", "side")
+        try:
+            _require_branch(fx, env, "master")
+            c4b = "no-raise"
+        except GitUnavailable as ex:
+            c4b = "ok" if "判不了" in str(ex) else "no-text:%s" % str(ex)[:60]
+        except AssertionError:
+            c4b = "assertion"
+        _fg("checkout", "-q", "master")
+        chk(c4a, "C4a 在 master ⇒ _require_branch 放行")
+        chk(c4b == "ok", "C4b 不在 master ⇒ GitUnavailable（判不了），不是 AssertionError")
+
         real_mkdtemp = globals()["tempfile"].mkdtemp
 
         def _no_tmp(*a, **k):
@@ -823,16 +952,16 @@ def _selftest_run():
                     "external_paths": [], "claims": []}
 
         # ---- A1 hex：每类 ≥2 反例 ----
-        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % side[:9])], base_reg)
+        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % side_ref)], base_reg)
         chk(any(x["check"] == "hex-not-ancestor" for x in f),
             "HEX-1 未合并 commit ⇒ hex-not-ancestor")
-        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % c1[:9])], base_reg)
+        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % c1_ref)], base_reg)
         chk(not f and not r, "HEX-2 HEAD 祖先 commit ⇒ 绿")
-        f, r = run([("docs/delivery-x.md", "entry `%s`\n" % blob[:8])], base_reg)
+        f, r = run([("docs/delivery-x.md", "entry `%s`\n" % blob_ref)], base_reg)
         chk(any(x["check"] == "hex-non-commit" for x in f),
             "HEX-3 未登记 blob ⇒ hex-non-commit（不静默放行）")
-        reg2 = dict(base_reg, hex_allow={"items": [blob[:8]]})
-        f, r = run([("docs/delivery-x.md", "entry `%s`\n" % blob[:8])], reg2)
+        reg2 = dict(base_reg, hex_allow={"items": [blob_ref]})
+        f, r = run([("docs/delivery-x.md", "entry `%s`\n" % blob_ref)], reg2)
         chk(not f and not r, "HEX-4 已登记 blob ⇒ 绿")
         f, r = run([("docs/delivery-x.md", "no refs\n")], reg2)
         chk(any("hex_allow" in x and "未被" in x for x in r), "HEX-5 白名单 rot ⇒ rc=2")
@@ -843,21 +972,21 @@ def _selftest_run():
         f, r = run([("docs/delivery-x.md", "ref `deadbeef`\n")],
                    dict(base_reg, hex_allow={"items": ["deadbeef"]}))
         chk(not f and not r, "HEX-11 缺失但已登记 ⇒ 绿（不再报 hex-missing、也不算白名单 rot）")
-        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % side[:9])],
+        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % side_ref)],
                    dict(base_reg, non_ancestor_commits=[
-                       {"oid": side[:9], "file": "docs/delivery-x.md", "reason": "未合并"}]))
+                       {"oid": side_ref, "file": "docs/delivery-x.md", "reason": "未合并"}]))
         chk(not f and not r, "HEX-7 已登记的未合并 head ⇒ 绿")
         # K1（review 83645e5f）：`[[non_ancestor_commits]]` 的两条 rot 分支各一颗牙。
         # 无牙时「某 head 合入后文档仍写未合并」会被静默放过——正是本门要防的方向。
-        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % c1[:9])],
+        f, r = run([("docs/delivery-x.md", "ref `%s`\n" % c1_ref)],
                    dict(base_reg, non_ancestor_commits=[
-                       {"oid": c1[:9], "file": "docs/delivery-x.md",
+                       {"oid": c1_ref, "file": "docs/delivery-x.md",
                         "reason": "fixture：登记的其实是祖先"}]))
         chk(any("已是 HEAD 祖先" in x for x in r),
             "HEX-8 登记的「未合并 head」其实已并入 ⇒ rot（文档「未合并」过时）")
         f, r = run([("docs/delivery-x.md", "no refs here\n")],
                    dict(base_reg, non_ancestor_commits=[
-                       {"oid": side[:9], "file": "docs/delivery-x.md",
+                       {"oid": side_ref, "file": "docs/delivery-x.md",
                         "reason": "fixture：登记了但文档不再引用"}]))
         chk(any("未被引用" in x for x in r),
             "HEX-9 登记的未合并 head 未被任何文档引用 ⇒ rot（白名单过期）")
@@ -865,7 +994,7 @@ def _selftest_run():
         # （「已是祖先 ⇒ 更新文档 + 删/刷登记」），不要再报「未被引用」把人引去删登记。
         f, r = run([("docs/delivery-x.md", "no refs here\n")],
                    dict(base_reg, non_ancestor_commits=[
-                       {"oid": c1[:9], "file": "docs/delivery-x.md",
+                       {"oid": c1_ref, "file": "docs/delivery-x.md",
                         "reason": "fixture：已并入且文档不再引用"}]))
         chk(any("已是 HEAD 祖先" in x for x in r) and not any("未被引用" in x for x in r),
             "HEX-10 已并入 + 未被引用 ⇒ 只报「已是祖先」（N4 不误导）")
@@ -910,22 +1039,22 @@ def _selftest_run():
 
         # ---- A4 命令 ⇒ 期望值 ----
         # fixture：c1 之后只有 `docs/tracked.md` 变过 ⇒ `-- tools/` 为空、`-- .` 非空。
-        claim_doc = "`git diff --name-only %s HEAD -- tools/` **为空**\n" % c1[:9]
+        claim_doc = "`git diff --name-only %s HEAD -- tools/` **为空**\n" % c1_ref
         reg4 = dict(base_reg, claims=[{
             "id": "x", "file": "docs/delivery-x.md",
-            "anchor": "git diff --name-only %s HEAD -- tools/" % c1[:9],
-            "kind": "diff_empty", "base": c1[:9], "head": "HEAD", "paths": ["tools/"]}])
+            "anchor": "git diff --name-only %s HEAD -- tools/" % c1_ref,
+            "kind": "diff_empty", "base": c1_ref, "head": "HEAD", "paths": ["tools/"]}])
         f, r = run([("docs/delivery-x.md", claim_doc)], reg4)
         chk(not f and not r, "CLAIM-1 diff 为空 ⇒ 绿")
         reg5 = dict(base_reg, claims=[{
             "id": "y", "file": "docs/delivery-x.md",
-            "anchor": "git diff --name-only %s HEAD -- tools/" % c1[:9],
-            "kind": "diff_empty", "base": c1[:9], "head": "HEAD", "paths": ["."]}])
+            "anchor": "git diff --name-only %s HEAD -- tools/" % c1_ref,
+            "kind": "diff_empty", "base": c1_ref, "head": "HEAD", "paths": ["."]}])
         f, r = run([("docs/delivery-x.md", claim_doc)], reg5)
         chk(any(x["check"] == "claim-stale" for x in f), "CLAIM-2 diff 非空 ⇒ claim-stale")
         reg6 = dict(base_reg, claims=[{
             "id": "z", "file": "docs/delivery-x.md", "anchor": "不存在的 anchor",
-            "kind": "diff_empty", "base": c1[:9]}])
+            "kind": "diff_empty", "base": c1_ref}])
         f, r = run([("docs/delivery-x.md", claim_doc)], reg6)
         chk(any("找不到 anchor" in x for x in r), "CLAIM-3 anchor 丢了 ⇒ rot")
         reg7 = dict(base_reg, claims=[{
@@ -944,7 +1073,7 @@ def _selftest_run():
         chk(any(x["check"] == "claim-stale" for x in f), "CLAIM-5 command_output 不符 ⇒ claim-stale")
         reg9 = dict(base_reg, claims=[{
             "id": "u", "file": "docs/delivery-x.md", "anchor": "print",
-            "kind": "shell_pipe", "base": c1[:9]}])
+            "kind": "shell_pipe", "base": c1_ref}])
         f, r = run([("docs/delivery-x.md", "print\n")], reg9)
         chk(any("未知 kind" in x for x in r), "CLAIM-6 不支持的形态 ⇒ rot（不假装覆盖）")
         # N2（review ba964a07）：argv 白名单 + 禁 `bash -c`（防登记表变成任意命令入口）。
@@ -973,7 +1102,7 @@ def _selftest_run():
         import contextlib
         import io
         real_git = globals()["git"]
-        doc_ref = [("docs/delivery-main.md", ["ref `%s`" % c1[:9]])]
+        doc_ref = [("docs/delivery-main.md", ["ref `%s`" % c1_ref])]
 
         def run_with(stub):
             globals()["git"] = stub
@@ -1014,7 +1143,7 @@ def _selftest_run():
             fh.write('[domain]\nglobs = ["docs/delivery-main.md"]\n'
                      '[hex_allow]\nitems = []\n')
         with open(os.path.join(tmp, "docs", "delivery-main.md"), "w", encoding="utf-8") as fh:
-            fh.write("ref `%s`\n" % c1[:9])
+            fh.write("ref `%s`\n" % c1_ref)
         globals()["git"] = all_broken
         try:
             buf = io.StringIO()
