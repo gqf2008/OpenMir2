@@ -1036,6 +1036,14 @@ python -I -B tools/hygiene/tool_selftest_gate.py --skip <name,...>     # 显式�
 python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点：谁在门内/出域，出域带理由
 ```
 
+**看到 `NEED`（工具自述 rc=2 ⇒ 整门 rc=3）时怎么判**（2026-10-27，卡 `openmir2-mir2-probe-selftest-need-flake`）：
+NEED **不是绿也不是红**，但**也不许当噪声跳过**——门现在会在该项后面逐行打印该工具的失败诊断
+（`       | - <check>: …`，取自工具输出的 `FAIL` / `- <名字>` 行）。处置顺序：
+① 把那几行 `|` **原样抄进窗口日志**；② `--only <name>` 复跑一次确认能否复现；
+③ 能复现 ⇒ 按缺陷开卡（**不许为了变绿改 rc**）；不能复现 ⇒ 日志保留那几行并注明「一次性」，
+同项下一轮再现即升级为缺陷。（2026-10-27 之前门只留最后一行，`mir2_probe` 的 `note:` 会把失败清单顶掉
+⇒ 那次 NEED 至今不知道是哪颗 check 红；这条就是为它加的。）
+
 **判定域**（写清判定域才不会假绿）：
 
 - 扫什么：脚本内 `REGISTRY` 的**固定注册项**——**条数以 `--inventory` 的实跑输出为准，不在文档里写死**
