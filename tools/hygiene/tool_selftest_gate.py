@@ -94,6 +94,10 @@ REGISTRY = [
     # 自测此前**不在任何门禁里**。二者都离线、确定性、自带 `-Selftest`（stop-mysql 用注入 hook +
     # 临时 mysqladmin.cmd；invoke-bounded 用临时子进程），且实测**不触碰真实 mysqld**（跑完 pid/StartTime 不变）。
     ("stop_mysql_graceful", ["tools/window/stop-mysql-graceful.ps1", "-Selftest"], False),
+    # C7（reviewer-21）：`tools/client/mir_flow.selftest.ps1` 有 **153 条断言**却既不在 REGISTRY
+    # 也不在 OUT_OF_SCOPE —— 此前只被手工跑过（Leader 2026-10-27 合并树上手工 `SELFTEST_PASS=153`）。
+    # 依赖 C3：无 PowerShell 的机器会落 NEED（rc=3）而不是把门崩成红。
+    ("mir_flow_selftest", ["tools/client/mir_flow.selftest.ps1"], False),
     ("invoke_bounded", ["tools/window/invoke-bounded.ps1", "-Selftest"], False),
     ("selftest_mutations", ["tools/conformance/selftest_mutations.py", "--selfcheck"], False),
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
@@ -501,6 +505,8 @@ def selftest():
             globals()["discover"] = _orig_disc_c2
         chk(rc_c2b == 0,
             "TSG 牙C2b discover 被替换（合成清点）⇒ 不套自洽判据（rc=0，作用域牙）")
+        chk(any(str(a[0]).endswith("mir_flow.selftest.ps1") for _n, a, _s in saved),
+            "TSG 牙C7 tools/client/mir_flow.selftest.ps1 已登记进 REGISTRY（153 条断言不再无人跑）")
         # C3：拿不到 PowerShell ⇒ run_one 记 NEED（不抛）
         _real_which = shutil.which
         globals()["shutil"].which = lambda name, *a, **k: None
