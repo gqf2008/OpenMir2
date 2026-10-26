@@ -542,6 +542,16 @@
       "tier": "L",
       "reason": "SM_BUTCH（src/OpenMir2/Messages.cs:299）是真实协议帧。下行 `PlayObject.Message.cs:1781-1788`（`RM_BUTCH` 支，整段只被 `if (processMsg.ActorId != 0)` 门住）：`MakeMessage(SM_BUTCH, ActorId, nParam1, nParam2, wParam)` ⇒ recog=ActorId（走全局掩码）、param=X、tag=Y、series=wParam(Dir)、无尾、**不跟 41**；发点 `PlayObject.Operate.cs:749`。**注意：637 是无条件回帧，不等于挖肉成功**——成功要看 `SM_BAGITEMS(201)`/背包等，别让后来人把 637 当成功判据。run2 butch：两侧各 1 条、param/tag=330,330（夹具坐标）与 series=0 均相同。",
       "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-2)"
+    },
+    {
+      "ident": 653,
+      "action": "compare",
+      "head_compare": [
+        "recog"
+      ],
+      "tier": "L",
+      "reason": "SM_GOLDCHANGED（src/OpenMir2/Messages.cs:315，=653）是真实协议帧、无 body（`SendDefMessage` 5 参版不追加 sMsg）。下行 `src/M2Server/Player/PlayObject.Message.cs:1833-1834`（`RM_GOLDCHANGED` 支）：`SendDefMessage(Messages.SM_GOLDCHANGED, Gold, HUtil32.LoWord(GameGold), HUtil32.HiWord(GameGold), 0)`；字段序见 `src/M2Server/Player/PlayObject.Socket.cs:17` `SendDefMessage(short wIdent, int nRecog, int nParam, int nTag, int nSeries)` ⇒ **recog = 当前 Gold（语义值，不是 ActorId）**、param/tag = GameGold 的低/高 16 位、series = 0。Rust 同形：`mir2-rs/bins/game-svr/src/inbound.rs:440-448` `sm_goldchanged(gold, game_gold)` → `def(SM_GOLDCHANGED, gold, lo_word(game_gold), hi_word(game_gold), 0)`（`def(ident, recog, param, tag, series)` 见 `:90`）。全局 recog 掩码会**永远吞掉金币数**（把唯一机判金币值的字段掩成假绿，同 650/622/44 的坑）⇒ **必须 `head_compare:[\"recog\"]` 取回逐值比**；param/tag 不在全局掩码里、默认逐值比，series 恒 0 也比。反例：`dropgold_zero_draw` 的判据正是「653 恰一条 + recog 与请求同源 + 金币差 0」，掩 recog 会让「金币值不对」也判绿。",
+      "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-1)"
     }
   ],
   "db": {
