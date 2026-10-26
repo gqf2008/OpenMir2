@@ -5201,7 +5201,9 @@ impl World {
         self.tail_phase_log.clear();
         self.player_hiter_snapshot.clear();
         for e in self.entities.iter() {
-            if e.race == crate::entity::ACTOR_RACE_PLAY {
+            // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B2）：快照只服务 P32，而 P32 在会话侧受
+            // stage 门；ghost 不进快照可以让「快照 = 本轮真正会跑的玩家」这条语义成立（低风险项，矩阵 §6#7）。
+            if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
                 self.player_hiter_snapshot.push(PlayerHiterSnapshot {
                     actor_id: e.id,
                     last_hiter: e.last_hiter,
@@ -6760,6 +6762,10 @@ impl World {
                 // 不能只按 `hp == 0` 收集。
                 (e.hp == 0 || e.die_called)
                     && !e.death_settled
+                    // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B8）：oracle 的 ghost 不 `Run`
+                    // （`PlayObject.Message.cs:360` 起的 `Run` 链路）⇒ 走不到 `base.Run` 的 `HP==0 ⇒ Die()`
+                    // （`BaseObject.Base.cs:70-73`）⇒ **ghost 不结算死亡**。
+                    && !e.ghost
                     && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
             })
             .map(|e| e.id)
@@ -8910,6 +8916,53 @@ mod tests {
         e.speed_point = 0;
         e.max_exp = 1000;
         e
+    }
+    /// **M-2（矩阵 §6#2）`settle_deaths` 跳过 ghost**：oracle 的 ghost 不 `Run`
+    /// （`PlayObject.Message.cs:360` 起的 `Run` 链路）⇒ 走不到 `base.Run` 的 `HP==0 ⇒ Die()`
+    /// （`BaseObject.Base.cs:70-73`）⇒ 尸位不结算。
+    ///
+    /// 牙：删 filter 里的 `&& !e.ghost` ⇒ ghost 被结算（`death_settled = true`）⇒ 红。
+    /// 规则 19 退化输入：同场非 ghost 的 `hp==0` 玩家必须照常结算（门只挡 ghost）。
+    #[test]
+    fn m2_settle_deaths_skips_ghost_players() {
+        let mut w = World::new(32, 32);
+        let mut g = player(1, "ghost", 10, 10, 10);
+        g.hp = 0;
+        g.ghost = true;
+        let gid = w.add_entity(g);
+        let mut l = player(2, "live", 11, 10, 10);
+        l.hp = 0;
+        let lid = w.add_entity(l);
+        let mut rec = TickRecord::default();
+        w.settle_deaths(&mut rec, true);
+        let ge = w.entities.get(gid).unwrap();
+        assert!(
+            !ge.death_settled && !ge.death,
+            "ghost 的尸位不得结算（oracle 不 Run ⇒ 不 Die）"
+        );
+        let le = w.entities.get(lid).unwrap();
+        assert!(
+            le.death_settled && le.death,
+            "非 ghost 的 hp==0 玩家照常结算（门只挡 ghost）"
+        );
+    }
+
+    /// **M-2（矩阵 §6#7）`tick_head` 的 `player_hiter_snapshot` 跳过 ghost**：快照只服务 P32，
+    /// 而 P32 在会话侧受 stage 门 ⇒ 快照语义 = 「本轮真正会跑的玩家」。
+    ///
+    /// 牙：删 `&& !e.ghost` ⇒ ghost 进快照 ⇒ 红。
+    /// 规则 19 退化输入：活玩家必须仍在快照里（门只挡 ghost）。
+    #[test]
+    fn m2_tick_head_snapshot_excludes_ghost_players() {
+        let mut w = World::new(32, 32);
+        let live = w.add_entity(player(1, "live", 10, 10, 10));
+        let mut g = player(2, "ghost", 11, 10, 10);
+        g.ghost = true;
+        let ghost = w.add_entity(g);
+        let _ = w.tick_head();
+        let ids: Vec<i32> = w.player_hiter_snapshot.iter().map(|s| s.actor_id).collect();
+        assert!(ids.contains(&live), "活玩家必须在快照里");
+        assert!(!ids.contains(&ghost), "ghost 不得进 P32 快照");
     }
 
     /// 战斗子集：固定种子下攻击结算可复现（判据①「可证伪」）。

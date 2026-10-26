@@ -332,9 +332,15 @@ impl BuffSystem {
         let mut bo_need_recalc = false;
         for i in 0..self.actors.len() {
             let actor_id = self.actors[i];
-            let Some(race) = world.entities.get(actor_id).map(|e| e.race) else {
+            let Some((race, ghost)) = world.entities.get(actor_id).map(|e| (e.race, e.ghost))
+            else {
                 continue;
             };
+            // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B/buff）：ghost 不 `Run` ⇒ buff 的
+            // 递减/到期/DoWork 都不该再发生（否则会出 sysmsg/hear 等帧面副作用）。
+            if ghost {
+                continue;
+            }
             // ---- (a) 递减段：仅 `Race == Play`（怪物 buff 永不到期，见模块头第 3 条）----
             if race == ACTOR_RACE_PLAY {
                 if let Some(list) = self.map.get_mut(&actor_id) {
@@ -956,5 +962,48 @@ mod tests {
             "enable 后每 tick 4 个 pass ⇒ 递减"
         );
         assert_eq!(TICK_INTERVAL_MS, 200);
+    }
+
+    /// **M-2（矩阵 §6#4）`buff::operate` 跳过 ghost**：ghost 不 `Run` ⇒ buff 的递减/到期/DoT
+    /// 都不该再发生（否则会出 sysmsg/hear 等帧面副作用）。
+    ///
+    /// 牙：删 `operate` 里的 `if ghost { continue; }` ⇒ ghost 的毒伤照扣（hp 100→96）⇒ 红。
+    /// 规则 19 退化输入：同场活 actor 必须照常扣血（证明门只挡 ghost，不是把 DoT 整个关掉）。
+    #[test]
+    fn m2_buff_operate_skips_ghost_actor() {
+        let mut w = world_with_players(&[1, 2]);
+        w.poison_dec_health_time = 2500;
+        let base = w.clock_ms + BUFF_EPOCH_MS;
+        w.entities.get_mut(1).unwrap().ghost = true;
+        for id in [1, 2] {
+            let e = w.entities.get_mut(id).unwrap();
+            e.ai.animal = true;
+            e.hp = 100;
+            e.mp = 0;
+            e.green_poisoning_point = 3;
+            // 已存活 3000ms（> PosionDecHealthTime=2500）⇒ 首 pass 跨门触发 DoT。
+            e.poisoning_tick = base - 3000;
+        }
+        w.make_posion(1, BuffType::GreenPoison as u8, 30, 3);
+        w.make_posion(2, BuffType::GreenPoison as u8, 30, 3);
+        let out = w.buff_do_work(base);
+        assert_eq!(
+            w.entities.get(1).unwrap().hp,
+            100,
+            "ghost 的 buff 不得 tick ⇒ 毒伤不扣血"
+        );
+        assert_eq!(
+            w.entities.get(2).unwrap().hp,
+            96,
+            "活 actor 照常扣血（门只挡 ghost）"
+        );
+        assert!(
+            out.health_spell_changes.iter().any(|c| c.0 == 2),
+            "活 actor 必须产生 53 记录"
+        );
+        assert!(
+            !out.health_spell_changes.iter().any(|c| c.0 == 1),
+            "ghost 不得产生 53 记录"
+        );
     }
 }
