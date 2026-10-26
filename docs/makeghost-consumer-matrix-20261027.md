@@ -73,7 +73,7 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 | B6 | `world.rs:5923` `verify_players_map_time` | 玩家图时效 | ✅ | filter：`race==PLAY && !e.ghost` |
 | B7 | `world.rs:6542` `expire_hitters` | hiter 过期清理 | ✅（有意） | filter：`e.death || e.ghost` —— ghost 被当作「已消失」，用来清别人的 `last_hiter` |
 | B8 | `world.rs:6755` `settle_deaths` | 死亡结算 | **⚠️ 需补过滤** | filter 只有 `(hp==0 || die_called) && !death_settled && race 匹配`，**无 ghost 门** ⇒ M-3 后「ghost 且 `die_called`」会被结算（掉落/经验/退组），而 oracle 的 ghost 不 `Run` ⇒ 不会走到 `Die()` |
-| B9 | `crates/world/src/monai.rs:4979` `base_object_run_monster`（`PlayObjectCount`） | MonGen 门计数 | ✅（有意不滤） | `race==PLAY` 计数。代码注释（`lib.rs:24762-24767`、`:24965-24967`）明写：oracle `OnlinePlayObject`/`PlayObjectCount` = `PlayObjectList.Count`，**`MakeGhost` 后仍在表里** ⇒ 必须同口径 |
+| B9 | `crates/world/src/monai.rs:4979` `base_object_run_monster`（`PlayObjectCount`） | MonGen 门计数 | ✅（有意不滤） | `race==PLAY` 计数。代码注释（`lib.rs:24762-24767`、`:24965-24967`）明写：oracle `OnlinePlayObject`/`PlayObjectCount` = `PlayObjectList.Count`，**`MakeGhost` 后仍在表里** ⇒ 必须同口径。**M-3 落地后（F1 修复）**：`enter_map_at` 在**重进时收走**遗留 ghost ⇒「含 ghost」只在**一个 Run 周期内**成立（oracle 的 `WorldServer.cs:707-716` 同样在下一 tick 把它摘出 `PlayObjectList`），**不会永久多算 1** |
 | B10 | `monai.rs:5249` `monster_ai_tick` | 怪物 AI | ✅ | filter：`race > PLAY && merchant.is_none() && npc.is_none() && !e.ghost` |
 | B11 | `crates/world/src/merchant.rs:464` `merchant_ids_sorted` | 商人 tick | 🧱 | 只取 `merchant.is_some()` —— 玩家永不带 `merchant` 态（`insert_merchant` 是唯一写点，`merchant.rs:357`） |
 | B12 | `crates/world/src/npc.rs:316` `npc_ids_sorted` | 固定 NPC tick | 🧱 | 只取 `npc.is_some()` —— 玩家永不带 `npc` 态（`npc.rs:253` 唯一写点） |
@@ -87,7 +87,7 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 | B20 | `lib.rs:14808` / `:14871` `world_aoi_diag` | AOI 诊断 | 🟡 | 只读快照；ghost 会进 `entities` 计数（诊断数值会变） |
 | B21 | `lib.rs:17008` `drain_close_health_residual` | ShowHp 到期扫描 | **⚠️ 需补过滤** | 与 A4 同一处（会话侧看是「名单来自全实体」，实体侧就是这条） |
 | B22 | `lib.rs:19461` `step_mon_gen`（`play_object_count`） | MonGen 门计数 | ✅（有意不滤） | 与 B9 同口径，见 `:24965-24967` 注释 |
-| B23 | `lib.rs:24768` `sim_loop`（`online_play_objects`） | 在线数上报（IDS `SS_SERVERINFO`） | ✅（有意不滤） | 注释 `:24762-24767`：oracle `WorldEngine.OnlinePlayObject` = `PlayObjectList.Count`，**不能排除 ghost** |
+| B23 | `lib.rs:24768` `sim_loop`（`online_play_objects`） | 在线数上报（IDS `SS_SERVERINFO`） | ✅（有意不滤） | 注释 `:24762-24767`：oracle `WorldEngine.OnlinePlayObject` = `PlayObjectList.Count`，**不能排除 ghost**。**M-3 落地后（F1 修复）**：ghost 在**重进**时由 `enter_map_at` 收走 ⇒ 该计数只会在**一个 Run 周期内**含 ghost，不会永久多算 |
 | B24 | `lib.rs:24971` `sim_loop`（MonGen 门） | 刷怪门计数 | ✅（有意不滤） | 同上注释（两条 ZenTime 门必须同一口径） |
 
 **已剔除（测试内，不计入矩阵）**：`monai.rs:7444/7470`、`merchant.rs:2191`、`guardlist.rs:281/460`、
@@ -161,6 +161,13 @@ sess.stage == WorldStage::Left   AND   sess.actor_id == Some(id)   （且 entiti
 
 **🟡 需复核但本来就是同口径的两处**：`online_play_objects`（B23）、MonGen 计数（B9/B22）——
 它们都按 `PlayObjectList.Count` 的 oracle 口径**含 ghost**，M-3 后**不要**顺手加 ghost 门，否则反而偏离 oracle。
+**M-3 的 F1 修复之后这条「含 ghost」仍然只在有限窗口内成立，但窗口长度要与 oracle 对齐着看**：
+soft_close 保留的 ghost 会在 ① 网关 `Closed` 的移除门（~402ms）、或 ② 玩家**重进**时被
+`enter_map_at` 收走（`session.rs` 的 F1 修复）⇒ **不会永久多算 1**（reviewer-21 `993d3e7a` F1 指出的风险，已修）。
+但**窗口长度仍有差**：oracle 在 `WorldServer.cs:707-716` 的**下一 tick**（≈200ms）就把 ghost 摘出
+`PlayObjectList`，本仓要等 `Closed`（~402ms）⇒ 落在该窗口内的那一两个 tick，本仓的
+`online_play_objects` / MonGen 计数可能比 oracle **多 1**。这是**相位差**而非口径差（与 T-89 族同形），
+窗口项（母卡 A6）应顺带记录该读数；若要消掉它，得在世界侧加「Left+actor_id 超时兜底」（M-3 F4 已登记为未做的兜底）。
 
 ## 7. 与 reviewer-21 `854d0e9a`（`fd08ff3a9` 基线）的差异
 
