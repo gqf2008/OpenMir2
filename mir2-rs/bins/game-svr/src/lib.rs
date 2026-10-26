@@ -31475,6 +31475,33 @@ mod tests {
             sent_aoi.is_empty(),
             "ghost 会话不得再产出现帧：{sent_aoi:?}"
         );
+
+        // **F2 牙 ①（reviewer-21 `993d3e7a`）**：重复 `soft_close` 必须 `Err(NotInWorld)`，
+        // 且不重复计数、不重复发离世帧。删掉 `leave_world_inner` 的 Left 早退 ⇒ 变 `Ok` ⇒ 红。
+        assert!(
+            world.soft_close("b").is_err(),
+            "Left 会话重复 soft_close 必须 Err（不得重放 DisappearA）"
+        );
+        assert_eq!(
+            world.session("b").unwrap().soft_close_count,
+            1,
+            "重复 soft_close 不得再加计数"
+        );
+        assert_eq!(
+            drain_depart_frames(&mut world, &online, &gates),
+            0,
+            "重复 soft_close 不得再发离世帧"
+        );
+
+        // **F2 牙 ②**：`disconnect` 是移除门，但它**不得重发** `DisappearA`。
+        // 把 Left 分支的「只摘实体、不发帧」改成落回主路径 ⇒ 这里会多一条 ⇒ 红。
+        world.disconnect("b").expect("移除门");
+        assert!(world.entities.get(b).is_none(), "移除门必须摘掉遗留 ghost");
+        assert_eq!(
+            drain_depart_frames(&mut world, &online, &gates),
+            0,
+            "disconnect（Left 上）不得重发 SM_DISAPPEAR"
+        );
     }
 
     /// **orphan 接线第二批（验证者一号 must_fix#2，真牙）**：走**生产入口**

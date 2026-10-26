@@ -9432,7 +9432,11 @@ mod tests {
         assert!(w.entities.get(first).is_none(), "移除门必须摘掉 ghost 实体");
         assert_eq!(w.session("hero").unwrap().actor_id, None);
 
-        // 再进：会话仍在 Left，可重进（C# 侧重新建 PlayObject）
+        // 再进：会话仍在 Left，可重进（C# 侧重新建 PlayObject）。
+        // **F6（reviewer-21 `993d3e7a`）**：原 `assert_ne!(first, second)` 已删——`entities.alloc_id`
+        // 会复用刚摘掉的槽位，id 相同并不违反语义（C# 的 ActorId 也复用）。本用例只走
+        // 「disconnect 之后重进」这条正常路径；**不 disconnect 直接重进**那条（F1 泄漏路径）由
+        // `m3_reenter_after_soft_close_reaps_leftover_ghost` 覆盖。
         let mut e2 = Entity::new(0, "hero", 7, 9);
         e2.race = ACTOR_RACE_PLAY;
         let second = w.enter_map("hero", e2, 1).unwrap();
@@ -9497,6 +9501,60 @@ mod tests {
             !w.try_step_now(walker, -1, 0, 1),
             "活玩家占格时第二个人必须走不进去（证明上面那条不是恒真）"
         );
+    }
+
+    /// **F1 牙（reviewer-21 `993d3e7a`）**：`soft_close` 之后**不 disconnect 直接重进**，
+    /// `enter_map_at` 必须收走遗留 ghost —— 同名实体恰 **1** 个且是新的。
+    ///
+    /// 为什么需要它：`open_session` 对已有会话是 no-op、`enter_map_at` 只在 `InWorld` 时拒绝，
+    /// Left 放行且过去不清理旧 `actor_id` ⇒ 同名 ghost 永久留在 `entities`（槽位/名字泄漏，
+    /// `online_play_objects` 永久多算 1）。
+    ///
+    /// 牙：删掉 `enter_map_at` 里「收走遗留 `actor_id`」那三行 ⇒ 同名实体 2 个（旧 ghost + 新玩家）⇒ 红。
+    /// 规则 19 退化输入：没有遗留 ghost 的正常重进（先 `disconnect`）⇒ 仍恰 1 个。
+    #[test]
+    fn m3_reenter_after_soft_close_reaps_leftover_ghost() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let first = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        assert!(
+            w.entities.get(first).is_some_and(|e| e.ghost),
+            "前置：soft_close 保留 ghost"
+        );
+
+        // **不 disconnect**，直接重进（F1 路径）。
+        let second = w
+            .enter_map("hero", player(0, "hero", 7, 9, 10), 0)
+            .expect("Left 允许重进");
+        let named: Vec<(i32, bool)> = w
+            .entities
+            .iter()
+            .filter(|e| e.name == "hero")
+            .map(|e| (e.id, e.ghost))
+            .collect();
+        assert_eq!(
+            named,
+            vec![(second, false)],
+            "重进必须收走遗留 ghost：同名实体恰 1 个且是新玩家"
+        );
+        assert!(w.entities.get(first).is_none(), "旧 ghost 必须已被摘除");
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(second));
+
+        // 退化对照：正常路径（先 disconnect 再重进）⇒ 同样恰 1 个。
+        w.disconnect("hero").expect("移除门");
+        let third = w
+            .enter_map("hero", player(0, "hero", 9, 9, 10), 0)
+            .expect("再进");
+        let named: Vec<i32> = w
+            .entities
+            .iter()
+            .filter(|e| e.name == "hero")
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(named, vec![third], "正常路径同样恰 1 个同名实体");
     }
 
     /// **切图成功语义**（oracle `PlayObject.EnterAnotherMap` 的正向支，`PlayObject.cs:3772-3783`）：

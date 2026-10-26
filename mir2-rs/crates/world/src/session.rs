@@ -304,6 +304,17 @@ impl World {
         if map_id >= self.maps.len() {
             return Err(SessionError::NoSuchMap);
         }
+        // **F1（reviewer-21 `993d3e7a`，卡 `openmir2-makeghost-lifecycle-m3` 返工）**：
+        // `soft_close` 之后 `stage=Left` 但 `actor_id=Some`（遗留 ghost，M-3 的 `MakeGhost` 语义）。
+        // **重进之前必须收走它**——否则同名 ghost 会永久留在 `entities` 里：
+        // ① 槽位/名字泄漏；② `online_play_objects`（`race == PLAY` 计数）**永久多算 1**，
+        // 把 M-1 的 🟡（B9/B23「含 ghost 是 oracle **一个 Run 周期内**的口径」）变成永久偏差；
+        // ③ 任何按名/按 id 的读者会命中旧实体。
+        // 位置在**全部入参校验之后**：`NoSuchMap` 之类的失败不得顺手摘掉 ghost。
+        if let Some(old) = sess.actor_id {
+            self.entities.remove(old);
+            sess.actor_id = None;
+        }
         if entity.id <= 0 {
             entity.id = self.entities.alloc_id();
         }
