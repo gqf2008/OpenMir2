@@ -5258,11 +5258,12 @@ fn handle_soft_close_cmd(
     if emergency {
         sg.bo_emergency_close = true;
     }
-    // **卡 `openmir2-dir-persistence-writeback`（修法 (a)）**：`world.soft_close` 会销毁实体并把
-    // `sess.actor_id` 置 `None`（= oracle `MakeGhost` 的世界侧等价物），而存档由 ~402ms 后网关的
-    // `GateEvent::Closed` 臂发出 ⇒ 那时实体解析链已断，`cur_x/cur_y/dir/attatck_mode` 会静默
-    // 回落到**载入记录**。离世**之前**取一份实体派生快照挂到 `SavedHuman.derived`；
-    // `build_save_record` 的优先级是 实体 → 快照 → 载入记录（第三档 WRN）。
+    // **卡 `openmir2-dir-persistence-writeback`（修法 (a)）**：存档由 ~402ms 后网关的
+    // `GateEvent::Closed` 臂发出。M-3 起 `world.soft_close` 不再销毁实体（oracle `MakeGhost`
+    // 保留对象）⇒ 那个窗口里 `build_save_record` 走**实体**档；但 `disconnect`（移除门）之后
+    // 实体已摘，`cur_x/cur_y/dir/attatck_mode` 会回落到**载入记录**。离世**之前**取一份实体
+    // 派生快照挂到 `SavedHuman.derived`（第二档）；`build_save_record` 的优先级是
+    // 实体 → 快照 → 载入记录（第三档 WRN）。
     // 快照只经 [`entity_derived_snapshot`] 一个接缝产出（五项全取，禁止在此散写）。
     if let Some(d) = world
         .session(chr_name)
@@ -35517,6 +35518,14 @@ break
             rec.data.dir, 2,
             "T2：离世后存档的 Dir 必须是实时朝向（不是载入值 3）"
         );
+        // M-3 起软关保留实体 ⇒ 上面走实体档；**离世快照支**由移除门之后的存档行使
+        //（删快照段 ⇒ 这里回落载入值 3 ⇒ 红）。
+        rig.world.disconnect("hero").expect("移除门");
+        let rec = rig.save();
+        assert_eq!(
+            rec.data.dir, 2,
+            "T2 快照支：实体已摘时仍取离世快照的实时朝向"
+        );
     }
 
     /// **T3**：`@AttackMode` → `CM_SOFTCLOSE` → 存档 ⇒ `attack_mode` 等于实时值 `2`（载入值 `1`）。
@@ -35540,6 +35549,13 @@ break
         assert_eq!(
             rec.data.attatck_mode, 2,
             "T3：离世后存档的 attack_mode 必须是实时值（不是载入值 1）"
+        );
+        // 快照支（同 T2）：移除门之后仍取离世那一刻的实时值。
+        rig.world.disconnect("hero").expect("移除门");
+        let rec = rig.save();
+        assert_eq!(
+            rec.data.attatck_mode, 2,
+            "T3 快照支：实体已摘时仍取离世快照的实时 attack_mode"
         );
     }
 
@@ -35577,6 +35593,18 @@ break
             hum[SLOT_WEAPON].as_ref().expect("武器槽").dura,
             1234,
             "T4：Dura 取离世那一刻的实体值（不是会话滞后值 4000）"
+        );
+        // 快照支（同 T2/T3）：移除门之后 use_items 仍取离世快照。
+        rig.world.disconnect("hero").expect("移除门");
+        let rec = rig.save();
+        let hum = rec.data.hum_items.as_ref().expect("hum_items 非 null");
+        assert_eq!(
+            (
+                hum[SLOT_WEAPON].as_ref().expect("武器槽").index,
+                hum[SLOT_WEAPON].as_ref().expect("武器槽").dura
+            ),
+            (207, 1234),
+            "T4 快照支：实体已摘时仍取离世快照的装备值（删 use_items 快照 ⇒ 回落 4000 必红）"
         );
     }
 
