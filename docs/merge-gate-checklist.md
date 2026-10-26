@@ -30,6 +30,11 @@ python -I -B tools/hygiene/tool_selftest_gate.py               # 全跑必须全
 
 **新增带 selftest 的脚本 ⇒ 必须同时登记进 REGISTRY**，否则 `--inventory` 报「未分类」rc≠0。
 
+**记墙钟、不许 `--skip`**（2026-10-27）：跑全量时把耗时记进 `merge_result`（本机当前约 **165s**）。
+接近 `--total-timeout`（420s）或 ci `timeout=8m` 时，**调 timeout**，不是 `--skip` 掉某一项
+—— 跳项会让那一项变回「判据在、没人跑」，正是 `ps1-tool-registry` 那张卡要消灭的形态。
+估算不能代替实测：同一天两台宿主机对同一项给出 37s 与 2–3 分钟的差。
+
 ## 3.5 m3 门（**只要改动涉及 `mir2-rs/**` 就必须跑**）
 
 > 2026-10-27 漏过这一节：合 `turn-order-login`（`f0d44ceeb`）时只跑了 §2 的四道门，
