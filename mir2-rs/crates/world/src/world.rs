@@ -7877,11 +7877,32 @@ impl World {
         out
     }
 
-    /// 对拍用快照：全部实体的 `(id, map, x, y, hp, level, exp, 视野列表)`，**按 id 升序**。
+    /// 对拍用快照：**在地图上的**实体的 `(id, map, x, y, hp, level, exp, 视野列表)`，**按 id 升序**。
+    ///
+    /// **过滤 `add_to_mapped == false` 的理由**（卡 `openmir2-makeghost-lifecycle-m3` 的 parity
+    /// 返工，tester-1 的 `world_session_parity` 红灯）：
+    /// `ent` 行是**地图投影**（`(id, map, x, y, …)`，map id 必填）⇒ 不在任何格表上的实体**表达不出来**；
+    /// oracle 侧 `MakeGhost`（`BaseObject.Base.cs:484-495`）→ `DisappearA` →
+    /// `Envir.DeleteFromMap`（`BaseObject.cs:1519-1522`）之后它就不在任何 Envir 上。
+    /// 本仓 M-3 之后 `soft_close` 保留 ghost 实体（oracle 的 `PlayObjectList` 也保留到
+    /// `RunTime=250` 的门，≈250–300ms）但**已摘格**（`add_to_mapped=false`）⇒ 投影按
+    /// 「在不在格表上」过滤。
+    ///
+    /// **为什么用 `add_to_mapped` 而不是 `ghost`**：
+    /// ① **实测承重的一半**：夹具命令 `ghost`（C# `ApplyGhost`）只置位、仍留在图上，参考侧**照列**它
+    ///    ⇒ 按 `ghost` 过滤会误删（换成 `!e.ghost` ⇒
+    ///    `world_combat_parity::ghosted_hitter_loses_exp_credit_in_same_tick` 红）。
+    /// ② **已登记的边界（不是证据）**：`enter_map` 落格失败但保留的角色（`session.rs` 的未落格注释）
+    ///    同样 `add_to_mapped=false`；按 oracle 的 Envir 语义它不该出现在地图投影里，但**参考 harness
+    ///    对每次 enter 无条件登记**（`WorldGolden/Program.cs:536-543` 的 `ApplyEnter` +
+    ///    `:485-492` 的 `RegisterActor`，**不看 `AddMapObject` 返回值**）⇒ 该形态一旦出现，
+    ///    harness 反而会列它。现有场景没有这种 enter，故**没有比对证据**；将来若出现未落格 enter，
+    ///    本过滤要重新评估。
     pub fn snapshot_sorted(&self) -> Vec<EntitySnapshot> {
         let mut ids = self.entities.ids_sorted();
         ids.sort_unstable();
         ids.into_iter()
+            .filter(|id| self.entities.get(*id).is_some_and(|e| e.add_to_mapped))
             .filter_map(|id| {
                 self.entities.get(id).map(|e| {
                     (
@@ -9585,6 +9606,47 @@ mod tests {
             w.session("hero").unwrap().actor_id,
             Some(first),
             "校验失败不得清 actor_id"
+        );
+    }
+
+    /// **parity 返工牙（tester-1 的 `world_session_parity` 红灯）**：`snapshot_sorted` 只列
+    /// **在图上**（`add_to_mapped`）的实体。
+    ///
+    /// 背景：M-3 之后 `soft_close` 保留 ghost 实体但已摘格；C# 侧 `MakeGhost` 先 `DeleteFromMap`，
+    /// 对拍生成器（`WorldGolden/Program.cs:560-574`）干脆把它从 `actors` 摘掉 ⇒ 输出里没有它。
+    ///
+    /// 牙：删掉 `snapshot_sorted` 的 `filter(|id| … add_to_mapped)` ⇒ soft_close 之后 ghost 重新出现 ⇒ 红。
+    /// 退化对照：夹具命令 `ghost`（C# `ApplyGhost`，只置位不摘格）必须**仍在**快照里 —— 所以
+    /// 过滤条件只能是 `add_to_mapped`，不能是 `ghost`。
+    #[test]
+    fn snapshot_sorted_lists_only_on_map_entities() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let a = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        assert!(w.entities.get(a).unwrap().add_to_mapped, "前置：成功落格");
+        let ids: Vec<i32> = w.snapshot_sorted().iter().map(|s| s.0).collect();
+        assert_eq!(ids, vec![a], "在图上 ⇒ 必须列出");
+
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        let ids: Vec<i32> = w.snapshot_sorted().iter().map(|s| s.0).collect();
+        assert!(
+            ids.is_empty(),
+            "soft_close 之后已摘格 ⇒ 快照不得列出（C# 的 ApplySoftClose 同样摘掉）：{ids:?}"
+        );
+
+        // 退化对照：`ghost` 夹具命令只置位、不摘格 ⇒ 必须仍在快照里。
+        w.disconnect("hero").expect("移除门");
+        let b = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("再进");
+        w.entities.get_mut(b).unwrap().ghost = true;
+        let ids: Vec<i32> = w.snapshot_sorted().iter().map(|s| s.0).collect();
+        assert_eq!(
+            ids,
+            vec![b],
+            "夹具命令 ghost（仍在图上）必须照列（过滤条件只能是 add_to_mapped）"
         );
     }
 
