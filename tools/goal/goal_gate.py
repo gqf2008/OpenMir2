@@ -926,15 +926,23 @@ def judge_remote(local_master, remote_sha, remote_rec):
 
 
 TOOL_GATE_REL = "tools/hygiene/tool_selftest_gate.py"
+#: 工具门的「只有需人工」退出码（卡 openmir2-docs-gate-rc-semantics 定的：红/未分类⇒2、
+#: **只有 NEED⇒3**、否则 0）。goal_gate 必须把它映射成 NEED，不能折叠成 FAIL。
+TOOL_GATE_NEED_RC = 3
 
 
 def tool_gate_check(repo, run=None, timeout=600):
     """条件④ 的工具自测门（2026-10-26，卡 openmir2-goal-gate-include-tool-selftest）。
 
-    三态（**不许把「跑不了」当 PASS**）：
+    四态（**不许把「跑不了」当 PASS，也不许把「判不了」当证伪**）：
       * rc=0 ⇒ PASS（普通全跑已含 `--inventory` 未分类检查，A3）；
-      * rc≠0 ⇒ FAIL，detail 从输出里点名 `FAIL <tool>` / `UNCLASSIFIED <path>`；
+      * rc=3（工具门自报「只有需人工/判不了」）⇒ **NEED**，detail 点名 `NEED <tool>` 行；
+      * rc=2 / 其它 ⇒ FAIL，detail 从输出里点名 `FAIL <tool>` / `UNCLASSIFIED <path>`；
       * 工具缺失 / 无法启动 / 超时 ⇒ NEED（判不了）。
+
+    rc=3 这一档是卡 `openmir2-goalgate-need-rc3` 补的：工具门在「某个工具自述判不了（rc=2）」
+    时只退 3 ⇒ 若这里仍按「非零即红」处理，条件④ 就会把「判不了」报成「证伪」——正是
+    `docs_delivery_gate` 假红那族病的换层复发。
 
     `run` 可注入（selftest 用假 runner 验三态）；默认 `run_cmd`。
     """
@@ -955,6 +963,13 @@ def tool_gate_check(repo, run=None, timeout=600):
                 "detail": "tool_selftest_gate rc=0（%.1fs；含 --inventory 未分类检查）"
                           % rec.get("duration_s", 0.0)}
     lines = ((rec.get("stdout") or "") + "\n" + (rec.get("stderr") or "")).splitlines()
+    if rec.get("rc") == TOOL_GATE_NEED_RC:
+        need_named = [ln.strip() for ln in lines if ln.strip().startswith("NEED ")]
+        detail = ("tool_selftest_gate rc=3（只有「需人工」/判不了，**不是**证伪；%.1fs）"
+                  % rec.get("duration_s", 0.0))
+        detail += ("；点名：" + " | ".join(need_named[:3])[:400]) if need_named else "；见输出"
+        return {"name": "tool_selftest_gate", "state": NEED, "rc": TOOL_GATE_NEED_RC,
+                "detail": detail}
     named = [ln.strip() for ln in lines
              if ln.strip().startswith(("FAIL ", "UNCLASSIFIED "))]
     detail = "tool_selftest_gate rc=%s（%.1fs）" % (rec.get("rc"), rec.get("duration_s", 0.0))
@@ -1708,6 +1723,32 @@ def selftest(verbose=False):
         check("条件4 工具门超时 -> NEED", lambda: (
             tool_gate_check(_tg_root, run=_fake_run({"rc": None, "timed_out": True}))["state"] == NEED,
             "timeout"))
+
+        # ---------- rc=3 ⇒ NEED（卡 openmir2-goalgate-need-rc3）----------
+        _tg_need = {"rc": 3, "duration_s": 7.0,
+                    "stdout": ("NEED docs_delivery_gate rc=2 1.6s  docs_delivery_gate selftest: 判不了\n"
+                               "TOTAL 50 项：绿 49 / 红 0 / 需人工 1 / 跳过 0\n"),
+                    "stderr": ""}
+        check("条件4 工具门 rc=3（只有需人工）-> NEED 且点名 NEED 行", lambda: (
+            tool_gate_check(_tg_root, run=_fake_run(_tg_need))["state"] == NEED
+            and tool_gate_check(_tg_root, run=_fake_run(_tg_need))["rc"] == 3
+            and "需人工" in tool_gate_check(_tg_root, run=_fake_run(_tg_need))["detail"]
+            and "NEED docs_delivery_gate" in tool_gate_check(_tg_root, run=_fake_run(_tg_need))["detail"],
+            "need-rc3"))
+        check("条件4 工具门 rc=3 -> 条件④整体 NEED（不是 FAIL）", lambda: (
+            judge_gate_checks([tool_gate_check(_tg_root, run=_fake_run(_tg_need))]) == NEED,
+            "propagate-need"))
+        check("条件4 rc=3 的归属：进 need_items、不进 fail_items（_cond 生产代码）", lambda: (
+            (lambda c, fi, ni: (_cond(c["state"], 4, c["name"], c["detail"], fi, ni),
+                                (not fi and len(ni) == 1 and ni[0]["item"] == "tool_selftest_gate"
+                                 and ni[0]["condition"] == 4))[1])(
+                tool_gate_check(_tg_root, run=_fake_run(_tg_need)), [], []),
+            "need-attribution"))
+        check("条件4 rc=2 仍 FAIL 且进 fail_items（三态不许把红放宽）", lambda: (
+            (lambda c, fi, ni: (_cond(c["state"], 4, c["name"], c["detail"], fi, ni),
+                                (c["state"] == FAIL and len(fi) == 1 and not ni))[1])(
+                tool_gate_check(_tg_root, run=_fake_run(_tg_red)), [], []),
+            "red-still-red"))
 
         # ---------- 组装级牙（A1，卡 openmir2-goalgate-quickmode-tooth）----------
         # 6 条三态牙都直接调 tool_gate_check()；这里钉「run_gate_checks 的组装顺序」：
