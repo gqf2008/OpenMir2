@@ -70,7 +70,15 @@ exit $code
       return 124
     }
     [void]$p.WaitForExit()
-    $rc = $p.ExitCode
+    # rc 通道：包装器把子进程的 $LASTEXITCODE 写进 <out>.rc；**优先读文件**
+    # （PS 5.1 的 `Start-Process -Redirect*` 不给 ExitCode，见同卡 B1），cmd 退出码只作兜底。
+    $rc = $null
+    $rcPath = $outPath + '.rc'
+    if (Test-Path -LiteralPath $rcPath) {
+      $raw = (Get-Content -LiteralPath $rcPath -Raw).Trim()
+      if ($raw -match '^-?[0-9]+$') { $rc = [int]$raw }
+    }
+    if ($null -eq $rc) { $rc = $p.ExitCode }
     if ($null -eq $rc) { $rc = 3 }
     $sw.Stop()
     Write-Host ("BOUNDED_RUN rc=" + $rc + " elapsed_ms=" + [int]$sw.Elapsed.TotalMilliseconds +
@@ -131,7 +139,16 @@ Write-Output 'launcher-done'
     if (Test-Path $pidFile) {
       $gpid = [int](Get-Content -LiteralPath $pidFile -Raw).Trim()
       try { taskkill /PID $gpid /T /F | Out-Null } catch { }
-      Chk ($true) '（清理）已终止自检制造的孙进程 pid=' ("$gpid")
+      # F1（reviewer-21）：这里是「清理」的唯一判据——必须**断言进程真的没了**。
+      # 原来写的是 `Chk ($true)`：把 taskkill 整行删掉仍 9/9 全绿，孙进程被留在后台。
+      $gone = $false
+      for ($k = 0; $k -lt 25; $k++) {
+        if (-not (Get-Process -Id $gpid -ErrorAction SilentlyContinue)) { $gone = $true; break }
+        Start-Sleep -Milliseconds 200
+      }
+      Chk $gone 'F1: 清理后孙进程真的不在了' ("gpid=" + $gpid)
+    } else {
+      Chk $false 'F1: 启动器没写出孙进程 pid 文件（无法验证清理）'
     }
   } finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
