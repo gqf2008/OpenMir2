@@ -14,7 +14,7 @@
 | 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **已绿**（`e7fb3e78d`：三档 kind/rc=6/7/8，`selftest 148/148`；用法错 rc=2 与判据彻底分家） |
 | 3 | 夹具 | `provision_...py --gate ...`（逐阶段求值，见下） | **已实测**：动作分布在**两张图**上 ⇒ 需两次 `--apply`，详见本节下的「夹具实测」 |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；mysqld 2580 在 | 当前满足 |
-| 5 | **批次自检** | `bash tools/window/run_batch.sh --dry-run` ⇒ **rc=0**（preflight 全 OK） | **FAIL（剩 1 项）**：2026-10-26 02:03 实测 9 pass / 1 fail —— `pin_smoke` 需要「上一轮 window-magic 起栈日志里有 `MIR2_CLIENT_ABILITY_LAYOUT=0` 且 `layout=oracle-40` 自证行」，当前日志是 `<unset>` / `layout=client-58` ⇒ **必须先起一次带 pin 的私栈把自证行跑出来**，否则批次不开跑 |
+| 5 | **批次自检** | `bash tools/window/run_batch.sh --dry-run` ⇒ **rc=0** | **这是「每次开窗前」的动作，不是常驻属性**：窗口跑过一轮之后必然又有 2 项变红 —— ① `castle_list_symmetry`（C# GameSrv 每 600s 重写 `Castle/List.txt`，跑完就与 rust 侧不一致）② `pin_smoke`（最后一个 Rust 栈日志若来自 alt 剖面则无 `layout=oracle-40` 自证行）。⇒ 开窗第 0 步（停完 C# 之后）三侧对齐 castle 文件，并**先起一次带 pin 的 window-magic 私栈**把自证行跑出来，再 dry-run |
 
 ### 开窗当天必读：本机 PowerShell 5.1 **缺 `Get-FileHash`**
 
