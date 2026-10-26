@@ -35,6 +35,7 @@
 import argparse
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -297,6 +298,44 @@ def run_one(repo, name, argv, timeout):
             "timed_out": timed_out}
 
 
+DOC_ANCHOR_REL = "docs/real-machine-window-plan-20261025.md"
+
+def check_doc_anchors(repo):
+    """R3（卡 openmir2-tool-gate-teeth-residuals）：window-plan 的**认树锚**必须与实况一致。
+
+    开窗当天会照抄 `**N 项全绿**` 与 `清点 **M = N + K + 0**` 两处数字来确认「开的就是预期那棵树」；
+    数字写错 ⇒ 认错树还不自知。这里机判：N == len(REGISTRY)、M == 清点总数、K == 出域数。
+    解析不到锚 ⇒ **判不了**（rc=2）——绝不因为「文档改了措辞」就静默通过。
+    返回 (rc, detail)：0 一致 / 1 不一致 / 2 判不了。
+    """
+    path = os.path.join(str(repo), DOC_ANCHOR_REL)
+    if not os.path.isfile(path):
+        return 2, "认树锚文档缺失：%s" % DOC_ANCHOR_REL
+    with open(path, encoding="utf-8", errors="replace") as _fh:
+        text = _fh.read()
+    n_items = len(REGISTRY)
+    rows = inventory_rows()
+    total = len(rows)
+    in_gate = sum(1 for r in rows if r["status"] == "IN_GATE")
+    out_scope = sum(1 for r in rows if r["status"].startswith("OUT_OF_SCOPE"))
+    nums = {int(m.group(1)) for m in re.finditer(r"\*\*(\d+) 项全绿\*\*", text)}
+    quads = re.findall(r"清点 \*\*(\d+) = (\d+) \+ (\d+) \+ (\d+)\*\*", text)
+    if not nums:
+        return 2, "认树锚里找不到 `**N 项全绿**`（判不了，不是通过）"
+    problems = []
+    if nums != {n_items}:
+        problems.append("`N 项全绿` 写作 %s，实况 len(REGISTRY)=%d" % (sorted(nums), n_items))
+    if not quads:
+        problems.append("找不到 `清点 **M = N + K + 0**` 锚")
+    for (m_s, n_s, k_s, z_s) in quads:
+        if (int(m_s), int(n_s), int(k_s), int(z_s)) != (total, in_gate, out_scope, 0):
+            problems.append("清点锚写作 %s = %s + %s + %s，实况 %d = %d + %d + 0"
+                            % (m_s, n_s, k_s, z_s, total, in_gate, out_scope))
+    if problems:
+        return 1, "；".join(problems)
+    return 0, "认树锚一致：%d 项 / 清点 %d = %d + %d + 0" % (n_items, total, in_gate, out_scope)
+
+
 def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
         check_inventory=True):
     only = set(only or [])
@@ -332,6 +371,10 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
     need = [r for r in results if not r.get("skipped") and r.get("state") == NEED]
     # A3：全跑末尾**显式**检查 inventory（不看牙的副作用）；`--only` 等调试跑同样适用。
     inv_rc, unclassified = inventory_gate_rc() if check_inventory else (0, [])
+    doc_rc, doc_detail = check_doc_anchors(repo) if check_inventory else (0, "")
+    if check_inventory:
+        print("%s DOC_ANCHORS %s" % (
+            {0: "PASS", 1: "FAIL", 2: "NEED"}.get(doc_rc, "FAIL"), doc_detail))
     print("TOTAL %d 项：绿 %d / 红 %d / 需人工 %d / 跳过 %d%s"
           % (len(results),
              sum(1 for r in results if not r.get("skipped") and r.get("state") == PASS),
@@ -341,9 +384,9 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
         print("NEED %d 项（工具自述判不了 rc=2，**不是**红；需人工确认环境/仓库）：%s"
               % (len(need), ", ".join(r["name"] for r in need)))
     # 红/未分类 ⇒ 2；只有「判不了」⇒ 3（既不是绿，也不是红）；否则 0。
-    if bad or inv_rc == 2:
+    if bad or inv_rc == 2 or doc_rc == 1:
         return results, 2
-    if need:
+    if need or doc_rc == 2:
         return results, 3
     return results, 0
 
@@ -529,6 +572,33 @@ def selftest():
             r_c3 = run_one(tmp, "ps_noshell", ["tools/window/no-such.ps1"], 5)
         finally:
             globals()["shutil"].which = _real_which
+        # R3（卡 openmir2-tool-gate-teeth-residuals）：认树锚机判——三条牙（一致/写错/缺锚）。
+        import tempfile as _tf_r3
+        _r3_root = _tf_r3.mkdtemp(prefix="tsg-docanchor-")
+        _r3_doc = os.path.join(_r3_root, "docs")
+        os.makedirs(_r3_doc, exist_ok=True)
+        _r3_path = os.path.join(_r3_doc, "real-machine-window-plan-20261025.md")
+        _rows = inventory_rows()
+        _m = len(_rows)
+        _g = sum(1 for r in _rows if r["status"] == "IN_GATE")
+        _o = sum(1 for r in _rows if r["status"].startswith("OUT_OF_SCOPE"))
+        _ok_text = (("**%d 项全绿**" % len(REGISTRY)) + chr(10)
+                    + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write(_ok_text)
+        _r3_rc, _r3_dt = check_doc_anchors(_r3_root)
+        chk(_r3_rc == 0 and "一致" in _r3_dt, "R3a 认树锚与实况一致 ⇒ rc=0（%r）" % (_r3_dt,))
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write(_ok_text.replace("**%d 项全绿**" % len(REGISTRY),
+                                      "**%d 项全绿**" % (len(REGISTRY) + 1)))
+        _r3b_rc, _r3b_dt = check_doc_anchors(_r3_root)
+        chk(_r3b_rc == 1 and "实况 len(REGISTRY)=" in _r3b_dt,
+            "R3b 认树锚写错一项 ⇒ rc=1 并点名（%r）" % (_r3b_dt,))
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("没有任何锚" + chr(10))
+        _r3c_rc, _r3c_dt = check_doc_anchors(_r3_root)
+        chk(_r3c_rc == 2 and "找不到" in _r3c_dt,
+            "R3c 锚被删掉 ⇒ rc=2 判不了（不静默通过；%r）" % (_r3c_dt,))
         chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
             and "PowerShell" in r_c3["tail"],
             "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
