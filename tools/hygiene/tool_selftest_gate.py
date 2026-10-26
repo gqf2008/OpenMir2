@@ -303,7 +303,100 @@ def run_one(repo, name, argv, timeout):
 
 DOC_ANCHOR_REL = "docs/real-machine-window-plan-20261025.md"
 
-def check_doc_anchors(repo):
+# 卡 `openmir2-goal-gate-count-anchor`：同一块文档里的另外两行也要机判——
+#   ① `**N 条断言 N 通过**`（goal_gate selftest 的实跑条数）；
+#   ② `**N suites，running R = passed P + ignored I**（`<tip>` 实测）`（cargo 三元组）。
+# ② 的数值来自**测试车道的实测证据文件**（不在这里跑 workspace：那是几分钟量级）。
+# 证据缺失 / 格式不认识 / 该 tip 没有条目 / 该条目 rc≠0 ⇒ **rc=2 判不了**（不是绿，也不是红）。
+DOC_EVIDENCE_REL = ("tester", "last-workspace-test.json")
+DOC_EVIDENCE_FORMAT = "mir2-tester-workspace-evidence/1"
+
+
+def _clean_git_env():
+    """去掉会让 `git -C <repo>` 指错仓库的变量（与 docs_delivery_gate 同口径）。"""
+    drop = {"GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR",
+            "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES"}
+    return {k: v for k, v in os.environ.items() if k not in drop}
+
+
+def _git_common_dir(repo):
+    """返回 `<repo>` 的 git 公共目录（跨 worktree 共享）；拿不到 ⇒ None。"""
+    try:
+        p = subprocess.run(["git", "-C", str(repo), "rev-parse",
+                            "--path-format=absolute", "--git-common-dir"],
+                           capture_output=True, text=True, timeout=30,
+                           env=_clean_git_env())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    out = (p.stdout or "").strip()
+    return out if p.returncode == 0 and out else None
+
+
+def _default_evidence_path(repo):
+    gcd = _git_common_dir(repo)
+    return os.path.join(gcd, *DOC_EVIDENCE_REL) if gcd else None
+
+
+def _run_goal_assertion_count(repo, goal_cmd=None):
+    """跑 `goal_gate selftest` 取**实跑**断言数；任何失败 ⇒ `(None, 原因)`，由调用方判 rc=2。"""
+    if goal_cmd is None:
+        tool = os.path.normpath(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "..", "goal", "goal_gate.py"))
+        goal_cmd = [sys.executable, "-I", "-B", tool, "selftest"]
+    try:
+        p = subprocess.run(list(goal_cmd), cwd=str(repo), capture_output=True,
+                           text=True, timeout=120)
+    except (OSError, subprocess.SubprocessError) as ex:
+        return None, "`goal_gate selftest` 跑不起来（%s）" % ex
+    if p.returncode != 0:
+        return None, "`goal_gate selftest` rc=%d（判不了，不是红）" % p.returncode
+    m = re.search(r"(\d+)\s*条断言[，,]\s*(\d+)\s*通过", p.stdout or "")
+    if not m:
+        return None, "解析不到 `N 条断言 N 通过`（判不了）"
+    total, passed = int(m.group(1)), int(m.group(2))
+    if total != passed:
+        return None, "`goal_gate selftest` 自报 %d 条断言但只过 %d 条（判不了）" % (total, passed)
+    return total, ""
+
+
+def _tip_distance(repo, tip):
+    """info 用：证据 tip 到 HEAD 之间有多少个提交；查不到 ⇒ None。
+
+    **只作显示、绝不判红**（review/Leader：窗口值守要看得见「这是几个提交前的数」，
+    但每次合并都会拉开距离，若据此判红就会逼人放松判据）。
+    """
+    try:
+        p = subprocess.run(["git", "-C", str(repo), "rev-list", "--count", tip + "..HEAD"],
+                           capture_output=True, text=True, timeout=30, env=_clean_git_env())
+    except (OSError, subprocess.SubprocessError):
+        return None
+    try:
+        return int((p.stdout or "").strip())
+    except ValueError:
+        return None
+
+
+def _load_evidence(path):
+    """读测试车道的 workspace 证据文件；`(entries, 原因)`，第二个非空即判不了。"""
+    if not path:
+        return None, "定位不到证据文件（拿不到 git 公共目录？）"
+    if not os.path.isfile(path):
+        return None, "证据文件缺失：%s" % path
+    try:
+        with open(path, encoding="utf-8") as fh:
+            d = json.load(fh)
+    except (OSError, ValueError) as ex:
+        return None, "证据文件读不了（%s）：%s" % (path, ex)
+    if not isinstance(d, dict) or d.get("format") != DOC_EVIDENCE_FORMAT:
+        return None, "证据文件格式不认识：%r（要 %s）" % (
+            d.get("format") if isinstance(d, dict) else d, DOC_EVIDENCE_FORMAT)
+    entries = d.get("entries")
+    if not isinstance(entries, dict):
+        return None, "证据文件缺 entries（%s）" % path
+    return entries, ""
+
+
+def check_doc_anchors(repo, evidence_path=None, goal_cmd=None):
     """R3（卡 openmir2-tool-gate-teeth-residuals）+ F1/F2（review 92f425e9 / Leader 活锚地板）。
 
     开窗当天会**照抄三处渲染**里的数字确认「开的就是预期那棵树」：
@@ -322,12 +415,22 @@ def check_doc_anchors(repo):
     **排除项必须严格小于现值**（两类计数只增）：`排除的 N < len(REGISTRY)`、`排除的 M < total`。
     否则「把写错的锚加个『历史』前缀」就能躲进排除集（review 实测：`历史：**53 项全绿**` 曾 rc=0）。
     若某天计数真的缩水，别用「历史」标记写法——把旧值写成不带标记的叙述，或改这份 docstring 的契约。
+
+    **另外两类（卡 openmir2-goal-gate-count-anchor）**，同一块文档、同一套「历史排除 + 活锚地板」口径：
+      ④ `**N 条断言 N 通过**` —— 与 `goal_gate selftest` 的**实跑**条数比对；跑不起来 / 解析不到 ⇒ **rc=2**。
+      ⑤ `**N suites，running R = passed P + ignored I**（`<tip>` 实测）` —— 先自洽（R = P + I），
+         再与测试车道的证据文件（`<git-common-dir>/tester/last-workspace-test.json`，
+         format `mir2-tester-workspace-evidence/1`）里**该 tip** 的实测比。
+         证据缺失 / 格式不认识 / 该 tip 无条目 / 该条目 `rc≠0` ⇒ **rc=2**（判不了 ≠ 绿）。
+         ⑤ 的锚**必须标注测量 tip**，否则无从对账 ⇒ 也判 rc=2。
     """
     path = os.path.join(str(repo), DOC_ANCHOR_REL)
     if not os.path.isfile(path):
         return 2, "认树锚文档缺失：%s" % DOC_ANCHOR_REL
     with open(path, encoding="utf-8", errors="replace") as fh:
         text = fh.read()
+    # 早绑定：`_dist_note()` 在「伪造历史」那条提前返回里也会调用，别让 `wrong` 未绑定。
+    missing, wrong = [], []
     n_items = len(REGISTRY)
     rows = inventory_rows()
     total = len(rows)
@@ -369,20 +472,77 @@ def check_doc_anchors(repo):
             forged.append("三元组类排除项 M=%d ≥ 现值 %d（行 %d）⇒ 不能当历史"
                           % (t[0], total, _lineno(p)))
 
+    # ---- ④ 断言数类 / ⑤ cargo 三元组类（卡 openmir2-goal-gate-count-anchor）----
+    # 这两类与上面两类**同一块文档**：历史排除 + 活锚地板 + 「排除项必须能证成历史」同口径。
+    ga_all = [(int(m.group(1)), int(m.group(2)), m.start()) for m in re.finditer(
+        r"\*\*(\d+)\s*条断言\s*(\d+)\s*通过\*\*", text)]
+    car_all = []
+    for m in re.finditer(
+            r"(\d+)\s*suites?[，,]\s*running\s+(\d+)\s*=\s*passed\s+(\d+)\s*\+\s*ignored\s+(\d+)",
+            text):
+        ls = text.rfind(chr(10), 0, m.start()) + 1
+        le = text.find(chr(10), m.end())
+        le = len(text) if le < 0 else le
+        tm = re.search(r"`([0-9a-f]{7,40})`", text[ls:le])
+        car_all.append((tuple(int(x) for x in m.groups()), m.start(),
+                        tm.group(1) if tm else None))
+
+    ga_live = [x for x in ga_all if not _is_history(x[2])]
+    car_live = [x for x in car_all if not _is_history(x[1])]
+    ga_excl = [x[2] for x in ga_all if _is_history(x[2])]
+    car_excl = [x[1] for x in car_all if _is_history(x[1])]
+
+    # ④ 实跑值：**可失败**地取（A2）——跑不起来 / 解析不到 / 自报通过数不等 ⇒ (None, 原因) ⇒ rc=2。
+    # 有锚就取（**即使活锚为空**）：伪造历史（排除值 ≥ 实跑值）要先有实跑值才判得了。
+    ga_actual, ga_err = (None, "")
+    if ga_all:
+        ga_actual, ga_err = _run_goal_assertion_count(repo, goal_cmd)
+    # ⑤ 证据：只在有带 tip 的活锚时才读（否则在「活锚为空 / 无 tip」处已判 rc=2）。
+    entries, ev_err = (None, "")
+    if car_live and any(tip for _t, _p, tip in car_live):
+        entries, ev_err = _load_evidence(
+            evidence_path if evidence_path is not None else _default_evidence_path(repo))
+
+    # 伪造历史（④）：排除值 ≥ 实跑值 ⇒ 只可能是把写错的锚加个「历史」前缀躲进来。
+    if ga_actual is not None:
+        for a, _b, p in ga_all:
+            if _is_history(p) and a >= ga_actual:
+                forged.append("断言数类排除项 %d ≥ 实跑 %d（行 %d）⇒ 不能当历史"
+                              % (a, ga_actual, _lineno(p)))
+    # 伪造历史（⑤）：排除行与活锚**同一 tip** 但数值不同 ⇒ 自相矛盾，不能当历史。
+    _live_by_tip = {}
+    for _t, _p, _tip in car_live:
+        if _tip:
+            _live_by_tip.setdefault(_tip, _t)
+    for t, p, tip in car_all:
+        if _is_history(p) and tip in _live_by_tip and t != _live_by_tip[tip]:
+            forged.append("cargo 类排除项与活锚同一 tip `%s` 但数值不同（行 %d）⇒ 不能当历史"
+                          % (tip, _lineno(p)))
+
+    def _dist_note():
+        """info：每个活锚的 tip 距 HEAD 多少个提交（查不到就不显示，绝不判红）。"""
+        seen, parts = set(), []
+        for _t, _p, tip in car_live:
+            if not tip or tip in seen:
+                continue
+            seen.add(tip)
+            d = _tip_distance(repo, tip)
+            if d is not None:
+                parts.append("证据 tip `%s` 距 HEAD %d 个提交（info，不判红）" % (tip, d))
+        return ("；" + "；".join(parts)) if parts else ""
+
     def _excl_note():
         parts = []
-        if n_excl:
-            parts.append("N 类排除历史 %d 处（行 %s）"
-                         % (len(n_excl), ",".join(str(_lineno(p)) for p in n_excl[:8])))
-        if tri_excl:
-            parts.append("三元组类排除历史 %d 处（行 %s）"
-                         % (len(tri_excl), ",".join(str(_lineno(p)) for p in tri_excl[:8])))
+        for name, exc in (("N 类", n_excl), ("三元组类", tri_excl),
+                          ("断言数类", ga_excl), ("cargo 类", car_excl)):
+            if exc:
+                parts.append("%s排除历史 %d 处（行 %s）"
+                             % (name, len(exc), ",".join(str(_lineno(p)) for p in exc[:8])))
         return ("；" + "；".join(parts)) if parts else ""
 
     if forged:
-        return 1, "；".join(forged) + _excl_note()
+        return 1, "；".join(forged) + _excl_note() + _dist_note()
 
-    missing, wrong = [], []
     if not n_live:
         why = ("所有 N 类锚都被历史排除（共 %d 处）⇒ 该类失去判据" % len(n_all)) if n_all \
             else "找不到任何「**N 项全绿**」或「**N 项 / 清点」锚"
@@ -398,13 +558,82 @@ def check_doc_anchors(repo):
     for t in sorted({v for v, _p in tri_live}):
         if t != want:
             wrong.append("清点锚写作 %d = %d + %d + %d，实况 %d = %d + %d + %d" % (t + want))
+
+    # ④ 断言数类：地板 → 实跑可失败 → 文档值必等于实跑值。
+    if not ga_live:
+        why = ("所有「N 条断言」锚都被历史排除（共 %d 处）⇒ 该类失去判据" % len(ga_all)) if ga_all             else "找不到任何「**N 条断言 N 通过**」锚"
+        missing.append("断言数类活锚为空：" + why)
+    elif ga_actual is None:
+        missing.append("断言数类判不了：" + ga_err)
+    else:
+        for a, b, p in ga_live:
+            if a != b:
+                wrong.append("「N 条断言 N 通过」自相矛盾（行 %d）：%d ≠ %d"
+                             % (_lineno(p), a, b))
+            elif a != ga_actual:
+                wrong.append("「N 条断言」锚写作 %d（行 %d），`goal_gate selftest` 实跑 %d"
+                             % (a, _lineno(p), ga_actual))
+
+    # ⑤ cargo 三元组类：地板 → 每个活锚必须带 tip → 自洽 → 证据可查且数值一致。
+    if not car_live:
+        why = ("所有 cargo 三元组锚都被历史排除（共 %d 处）⇒ 该类失去判据" % len(car_all)) if car_all             else "找不到任何「N suites，running R = passed P + ignored I」锚"
+        missing.append("cargo 类活锚为空：" + why)
+    else:
+        for t, p, tip in car_live:
+            if t[1] != t[2] + t[3]:
+                wrong.append("cargo 三元组不自洽（行 %d）：running %d ≠ passed %d + ignored %d"
+                             % (_lineno(p), t[1], t[2], t[3]))
+            if not tip:
+                missing.append("cargo 锚没有标注测量 tip（行 %d）⇒ 无从与证据对账"
+                               % _lineno(p))
+        if entries is None:
+            missing.append("cargo 类判不了：" + (ev_err or "没有带 tip 的 cargo 锚，无从读证据"))
+        else:
+            for t, p, tip in car_live:
+                if not tip:
+                    continue
+                keys = [k for k in entries if str(k).startswith(tip)]
+                if not keys:
+                    missing.append("证据里没有 tip `%s` 的实测（行 %d）⇒ 证据缺失/过期"
+                                   % (tip, _lineno(p)))
+                    continue
+                if len(keys) > 1:
+                    missing.append("证据里 tip 前缀 `%s` 命中 %d 个条目（行 %d）⇒ 判不了"
+                                   % (tip, len(keys), _lineno(p)))
+                    continue
+                e = entries[keys[0]]
+                if isinstance(e, dict) and all(
+                        isinstance(e.get(k), int) for k in ("suites", "running", "passed", "ignored"))                         and e["running"] != e["passed"] + e["ignored"]:
+                    # **证据不自洽 = 证据坏了**（不是文档写错）⇒ rc=2 判不了，不许拿它去判别人。
+                    missing.append("证据条目（`%s`）不自洽：running %d ≠ passed %d + ignored %d "
+                                   "⇒ 坏证据，判不了" % (tip, e["running"], e["passed"], e["ignored"]))
+                    continue
+                if not isinstance(e, dict) or not all(
+                        isinstance(e.get(k), int) for k in ("suites", "running", "passed", "ignored")):
+                    missing.append("证据条目（`%s`）缺字段或字段不是整数 ⇒ 坏证据，判不了" % tip)
+                    continue
+                if e.get("rc") not in (0, "0"):
+                    missing.append("tip `%s` 的实测 rc=%r（行 %d）⇒ 失败的实跑不能当证据"
+                                   % (tip, (e or {}).get("rc") if isinstance(e, dict) else e,
+                                      _lineno(p)))
+                    continue
+                for idx, name in enumerate(("suites", "running", "passed", "ignored")):
+                    if e.get(name) != t[idx]:
+                        wrong.append("cargo 锚 %s 写作 %d（行 %d），证据（`%s`）是 %r"
+                                     % (name, t[idx], _lineno(p), tip, e.get(name)))
+    # 距离 info 在**判定之前**求值：info 通道自己若写错（比如被改成往 wrong 里塞），
+    # 必须能在下面的 rc 判定里体现出来，而不是在 return 表达式里算完就丢。
+    _dist = _dist_note()
     if missing:
-        return 2, "；".join(missing + wrong) + _excl_note()
+        return 2, "；".join(missing + wrong) + _excl_note() + _dist
     if wrong:
-        return 1, "；".join(wrong) + _excl_note()
-    return 0, ("认树锚一致：%d 项 / 清点 %d = %d + %d + 0（N 活 %d/共 %d、三元组活 %d/共 %d）%s"
+        return 1, "；".join(wrong) + _excl_note() + _dist
+    return 0, ("认树锚一致：%d 项 / 清点 %d = %d + %d + 0（N 活 %d/共 %d、三元组活 %d/共 %d、"
+               "断言数活 %d/共 %d=实跑 %s、cargo 活 %d/共 %d）%s"
                % (n_items, total, in_gate, out_scope,
-                  len(n_live), len(n_all), len(tri_live), len(tri_all), _excl_note()))
+                  len(n_live), len(n_all), len(tri_live), len(tri_all),
+                  len(ga_live), len(ga_all), ga_actual, len(car_live), len(car_all),
+                  _excl_note() + _dist))
 
 
 def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
@@ -656,7 +885,38 @@ def selftest():
         _o = sum(1 for r in _rows if r["status"].startswith("OUT_OF_SCOPE"))
         _n = len(REGISTRY)
 
-        def _r3_write(table_n=None, tri=None, note_n=None, drop_tri=False):
+        # ④⑤（卡 openmir2-goal-gate-count-anchor）夹具：合成证据文件 + 真实的 goal_gate 实跑值。
+        # 夹具里的 tip 是**合成**的（不是真 commit）——⑤ 只认证据里的条目，不查 git 是否存在该 commit；
+        # 「证据缺失/过期 ⇒ rc=2」由 R5c/R5d 钉住。
+        _r3_ev = os.path.join(_r3_root, "evidence.json")
+        _r3_tip = "abc1234de"
+        _r3_car = (141, 3366, 3303, 63)
+        _ga_real, _ga_real_err = _run_goal_assertion_count(_r3_root)
+        chk(_ga_real is not None and _ga_real > 0,
+            "R4pre goal_gate selftest 实跑值可取得（实跑 %r；%s）" % (_ga_real, _ga_real_err))
+
+        def _r3_ev_write(entries=None, drop=False):
+            if drop:
+                try:
+                    os.remove(_r3_ev)
+                except OSError:
+                    pass
+                return
+            d = {"format": DOC_EVIDENCE_FORMAT,
+                 "entries": {_r3_tip: {"suites": _r3_car[0], "running": _r3_car[1],
+                                       "passed": _r3_car[2], "ignored": _r3_car[3], "rc": 0}}
+                 if entries is None else entries}
+            with open(_r3_ev, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(d))
+
+        _r3_ev_write()
+
+        def _r3_check(**kw):
+            kw.setdefault("evidence_path", _r3_ev)
+            return check_doc_anchors(_r3_root, **kw)
+
+        def _r3_write(table_n=None, tri=None, note_n=None, drop_tri=False,
+                      ga=None, car=None, car_tip=_r3_tip, drop_ga=False, drop_car=False):
             tn = _n if table_n is None else table_n
             tr = (_m, _g, _o) if tri is None else tri
             nn = _n if note_n is None else note_n
@@ -667,49 +927,58 @@ def selftest():
                          % (_n, tr[0], tr[1], tr[2])) + _NL3
                 body += ("> 提示：**%d 项 / 清点 %d = %d + %d + 0**"
                          % (nn, tr[0], tr[1], tr[2])) + _NL3
+            # ④⑤：与生产文档同形的两行（不写死 85 —— 跟着实跑值走，否则下次加牙自己就红了）。
+            gv = (_ga_real, _ga_real) if ga is None else ga
+            cv = _r3_car if car is None else car
+            if not drop_ga:
+                body += ("- `goal_gate selftest` ⇒ **%d 条断言 %d 通过**" % gv) + _NL3
+            if not drop_car:
+                body += (("- `cargo test --workspace` ⇒ **%d suites，running %d = passed %d + "
+                          "ignored %d**" % cv)
+                         + (("（`%s` 实测）" % car_tip) if car_tip else "") + _NL3)
             with open(_r3_path, "w", encoding="utf-8") as fh:
                 fh.write(body)
 
         _r3_write()
-        _r3_rc, _r3_dt = check_doc_anchors(_r3_root)
+        _r3_rc, _r3_dt = _r3_check()
         chk(_r3_rc == 0 and "一致" in _r3_dt, "R3a 三种渲染都一致 ⇒ rc=0（%r）" % (_r3_dt,))
 
         _r3_write(table_n=_n + 1)
-        _r3b_rc, _r3b_dt = check_doc_anchors(_r3_root)
+        _r3b_rc, _r3b_dt = _r3_check()
         chk(_r3b_rc == 1 and "实况 len(REGISTRY)=" in _r3b_dt,
             "R3b 表行写错一项 ⇒ rc=1 并点名（%r）" % (_r3b_dt,))
 
         _r3_write(note_n=_n + 1)
-        _r3e_rc, _r3e_dt = check_doc_anchors(_r3_root)
+        _r3e_rc, _r3e_dt = _r3_check()
         chk(_r3e_rc == 1 and "实况 len(REGISTRY)=" in _r3e_dt,
             "R3e 提示行 `**N 项 / 清点 …**` 写错 ⇒ rc=1（%r）" % (_r3e_dt,))
 
         _r3_write(tri=(_m, _g + 1 if _g < _m else _g, _o))
-        _r3d_rc, _r3d_dt = check_doc_anchors(_r3_root)
+        _r3d_rc, _r3d_dt = _r3_check()
         chk(_r3d_rc == 1 and "清点锚写作" in _r3d_dt,
             "R3d 紧凑三元组写错 ⇒ rc=1（%r）" % (_r3d_dt,))
 
         _r3_write(drop_tri=True)
-        _r3c_rc, _r3c_dt = check_doc_anchors(_r3_root)
+        _r3c_rc, _r3c_dt = _r3_check()
         chk(_r3c_rc == 2 and "找不到任何「清点" in _r3c_dt,
             "R3c 三元组锚被删掉 ⇒ rc=2 判不了（不静默通过；%r）" % (_r3c_dt,))
         # 活锚地板（Leader 2026-10-27）：某一类被「历史」排除到空 ⇒ rc=2 判不了。
         with open(_r3_path, "w", encoding="utf-8") as fh:
             fh.write("> 历史：**%d 项全绿**（旧记录）" % (_n - 1) + chr(10)
                      + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
-        _r3f_rc, _r3f_dt = check_doc_anchors(_r3_root)
+        _r3f_rc, _r3f_dt = _r3_check()
         chk(_r3f_rc == 2 and "N 类活锚为空" in _r3f_dt and "历史" in _r3f_dt,
             "R3f N 类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3f_dt,))
         with open(_r3_path, "w", encoding="utf-8") as fh:
             fh.write("**%d 项全绿**" % _n + chr(10)
                      + "> 历史：清点 **%d = %d + %d + 0**（旧记录）" % (_m - 1, _g, _o) + chr(10))
-        _r3g_rc, _r3g_dt = check_doc_anchors(_r3_root)
+        _r3g_rc, _r3g_dt = _r3_check()
         chk(_r3g_rc == 2 and "三元组类活锚为空" in _r3g_dt,
             "R3g 三元组类的唯一活锚被『历史』排除 ⇒ rc=2 判不了（%r）" % (_r3g_dt,))
         _r3_write()
         with open(_r3_path, "a", encoding="utf-8") as fh:
             fh.write("> 历史：清点 52 = 47 + 5 + 0（旧记录）" + chr(10))
-        _r3h_rc, _r3h_dt = check_doc_anchors(_r3_root)
+        _r3h_rc, _r3h_dt = _r3_check()
         chk(_r3h_rc == 0 and "排除历史 1 处（行" in _r3h_dt,
             "R3h 被排除的条数与行号出现在输出里（%r）" % (_r3h_dt,))
         # 伪造历史（review 实测的洞）：把写错的锚前缀加「历史」躲进排除集 ⇒ 排除项 ≥ 现值 ⇒ rc=1。
@@ -717,7 +986,7 @@ def selftest():
             fh.write("> 历史：**%d 项全绿**（伪造）" % (_n + 1) + chr(10)
                      + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
                      + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
-        _r3i_rc, _r3i_dt = check_doc_anchors(_r3_root)
+        _r3i_rc, _r3i_dt = _r3_check()
         chk(_r3i_rc == 1 and "不能当历史" in _r3i_dt,
             "R3i 单锚伪装：`历史：**N+1 项全绿**` ⇒ rc=1（不能当历史；%r）" % (_r3i_dt,))
         with open(_r3_path, "w", encoding="utf-8") as fh:
@@ -725,9 +994,148 @@ def selftest():
                      + "- 历史：**%d 项全绿**（伪造2）" % (_n + 2) + chr(10)
                      + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
                      + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10))
-        _r3j_rc, _r3j_dt = check_doc_anchors(_r3_root)
+        _r3j_rc, _r3j_dt = _r3_check()
         chk(_r3j_rc == 1 and "不能当历史" in _r3j_dt,
             "R3j 多锚伪装（N 活 1/共 3）：两处 53/54 带历史前缀 ⇒ rc=1（%r）" % (_r3j_dt,))
+        # ④⑤（卡 openmir2-goal-gate-count-anchor）：同一块文档的另两行也必须有牙。
+        def _r3_live_lines(ga=None, car=None, tip=_r3_tip):
+            _N = chr(10)
+            g = (_ga_real, _ga_real) if ga is None else ga
+            c = _r3_car if car is None else car
+            return ("| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + _N
+                    + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + _N
+                    + "- `goal_gate selftest` ⇒ **%d 条断言 %d 通过**" % g + _N
+                    + "- `cargo test --workspace` ⇒ **%d suites，running %d = passed %d + "
+                      "ignored %d**%s" % (c + ((("（`%s` 实测）" % tip) if tip else ""),)) + _N)
+
+        _r3_write(ga=(_ga_real + 1, _ga_real + 1))
+        _r4a_rc, _r4a_dt = _r3_check()
+        chk(_r4a_rc == 1 and ("实跑 %d" % _ga_real) in _r4a_dt,
+            "R4a 断言数写成实跑+1 ⇒ rc=1 并点名实跑值（%r）" % (_r4a_dt,))
+
+        _r3_write(ga=(_ga_real, _ga_real - 1))
+        _r4f_rc, _r4f_dt = _r3_check()
+        chk(_r4f_rc == 1 and "自相矛盾" in _r4f_dt,
+            "R4f 「N 条断言 M 通过」两数不等 ⇒ rc=1（自相矛盾；%r）" % (_r4f_dt,))
+
+        _r3_write(drop_ga=True)
+        _r4b_rc, _r4b_dt = _r3_check()
+        chk(_r4b_rc == 2 and "断言数类活锚为空" in _r4b_dt,
+            "R4b 断言数整行删掉 ⇒ rc=2 判不了（退化输入；%r）" % (_r4b_dt,))
+
+        _r3_write()
+        _r4c_rc, _r4c_dt = _r3_check(goal_cmd=[
+            sys.executable, "-I", "-B", os.path.join(_r3_root, "no-such-goal.py"), "selftest"])
+        chk(_r4c_rc == 2 and "断言数类判不了" in _r4c_dt,
+            "R4c `goal_gate selftest` 跑不起来 ⇒ rc=2 判不了（不是绿、也不是红；%r）" % (_r4c_dt,))
+
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 条断言 %d 通过**（旧记录）" % (_ga_real - 1, _ga_real - 1) + chr(10)
+                     + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10)
+                     + "- `cargo test --workspace` ⇒ **%d suites，running %d = passed %d + ignored %d**（`%s` 实测）" % (_r3_car + (_r3_tip,)) + chr(10))
+        _r4d_rc, _r4d_dt = _r3_check()
+        chk(_r4d_rc == 2 and "断言数类活锚为空" in _r4d_dt,
+            "R4d 断言数类的唯一活锚被『历史』排除 ⇒ rc=2（活锚地板；%r）" % (_r4d_dt,))
+
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：**%d 条断言 %d 通过**（伪造）" % (_ga_real + 1, _ga_real + 1) + chr(10)
+                     + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10)
+                     + "- `cargo test --workspace` ⇒ **%d suites，running %d = passed %d + ignored %d**（`%s` 实测）" % (_r3_car + (_r3_tip,)) + chr(10))
+        _r4e_rc, _r4e_dt = _r3_check()
+        chk(_r4e_rc == 1 and "不能当历史" in _r4e_dt,
+            "R4e 伪造历史（断言数排除值 ≥ 实跑）⇒ rc=1（%r）" % (_r4e_dt,))
+
+        _r3_write(car=(141, 3366, 3303, 62))
+        _r5a_rc, _r5a_dt = _r3_check()
+        chk(_r5a_rc == 1 and "不自洽" in _r5a_dt,
+            "R5a cargo 三元组 running ≠ passed+ignored ⇒ rc=1（自洽判据；%r）" % (_r5a_dt,))
+
+        _r3_write(car_tip=None)
+        _r5b_rc, _r5b_dt = _r3_check()
+        chk(_r5b_rc == 2 and "没有标注测量 tip" in _r5b_dt,
+            "R5b cargo 锚不标 tip ⇒ rc=2（无从对账；%r）" % (_r5b_dt,))
+
+        _r3_write()   # 恢复带 tip 的形态：后面的牙只改证据、不改文档
+        _r3_ev_write(drop=True)
+        _r5c_rc, _r5c_dt = _r3_check()
+        chk(_r5c_rc == 2 and "证据文件缺失" in _r5c_dt,
+            "R5c 证据文件缺失 ⇒ rc=2 判不了（不是绿；%r）" % (_r5c_dt,))
+        _r3_ev_write()
+
+        _r3_ev_write(entries={})
+        _r5d_rc, _r5d_dt = _r3_check()
+        chk(_r5d_rc == 2 and ("证据里没有 tip `%s`" % _r3_tip) in _r5d_dt,
+            "R5d 证据里没有该 tip（缺失/过期）⇒ rc=2（%r）" % (_r5d_dt,))
+        _r3_ev_write()
+
+        _r3_ev_write(entries={_r3_tip: {"suites": 141, "running": 3358, "passed": 3295,
+                                        "ignored": 63, "rc": 0}})
+        _r5e_rc, _r5e_dt = _r3_check()
+        chk(_r5e_rc == 1 and "cargo 锚 running 写作 3366" in _r5e_dt,
+            "R5e 证据数值与文档不符 ⇒ rc=1 并点名（%r）" % (_r5e_dt,))
+        _r3_ev_write()
+
+        _r3_ev_write(entries={_r3_tip: {"suites": 141, "running": 3366, "passed": 3303,
+                                        "ignored": 63, "rc": 1}})
+        _r5f_rc, _r5f_dt = _r3_check()
+        chk(_r5f_rc == 2 and "不能当证据" in _r5f_dt,
+            "R5f 该 tip 的实跑 rc≠0 ⇒ rc=2（失败的真跑不能当证据；%r）" % (_r5f_dt,))
+        _r3_ev_write()
+
+        _r3_write(drop_car=True)
+        _r5g_rc, _r5g_dt = _r3_check()
+        chk(_r5g_rc == 2 and "cargo 类活锚为空" in _r5g_dt,
+            "R5g cargo 整行删掉 ⇒ rc=2 判不了（%r）" % (_r5g_dt,))
+
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：`cargo test --workspace` ⇒ **141 suites，running 3358 = passed 3295 + "
+                     "ignored 63**（`%s` 实测）" % _r3_tip + chr(10)
+                     + "| 1 | 工具门 | ⇒ **%d 项全绿**；`--inventory` rc=0 |" % _n + chr(10)
+                     + "清点 **%d = %d + %d + 0**" % (_m, _g, _o) + chr(10)
+                     + "- `goal_gate selftest` ⇒ **%d 条断言 %d 通过**" % (_ga_real, _ga_real) + chr(10))
+        _r5h_rc, _r5h_dt = _r3_check()
+        chk(_r5h_rc == 2 and "cargo 类活锚为空" in _r5h_dt,
+            "R5h cargo 类的唯一活锚被『历史』排除 ⇒ rc=2（活锚地板；%r）" % (_r5h_dt,))
+
+        with open(_r3_path, "w", encoding="utf-8") as fh:
+            fh.write("> 历史：`cargo test --workspace` ⇒ **141 suites，running 3358 = passed 3295 + "
+                     "ignored 63**（`%s` 实测）" % _r3_tip + chr(10)
+                     + _r3_live_lines())
+        _r5i_rc, _r5i_dt = _r3_check()
+        chk(_r5i_rc == 1 and "不能当历史" in _r5i_dt,
+            "R5i 排除行与活锚同一 tip 但数值不同 ⇒ rc=1（不能当历史；%r）" % (_r5i_dt,))
+
+        _r3_write()   # R5i 手写过文档：先恢复干净形态，再单独动证据
+        _r3_ev_write(entries={_r3_tip: {"suites": 141, "running": 3400, "passed": 3303,
+                                        "ignored": 63, "rc": 0}})
+        _r5j_rc, _r5j_dt = _r3_check()
+        chk(_r5j_rc == 2 and ("不自洽" in _r5j_dt) and ("坏证据" in _r5j_dt),
+            "R5j 证据自身 running ≠ passed+ignored ⇒ rc=2（坏证据 = 判不了，不是文档写错）"
+            "（%r）" % (_r5j_dt,))
+        _r3_ev_write(entries={_r3_tip: {"suites": 141, "running": 3366, "passed": 3303, "rc": 0}})
+        _r5k_rc, _r5k_dt = _r3_check()
+        chk(_r5k_rc == 2 and "缺字段" in _r5k_dt,
+            "R5k 证据条目缺 ignored 字段 ⇒ rc=2（坏证据，判不了；%r）" % (_r5k_dt,))
+        _r3_ev_write()
+
+        _r5l_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        _r5l_head = subprocess.run(["git", "-C", _r5l_root, "rev-parse", "HEAD"],
+                                   capture_output=True, text=True).stdout.strip()
+        chk(bool(_r5l_head) and _tip_distance(_r5l_root, _r5l_head[:9]) == 0,
+            "R5l 距离 info：真实 tip（HEAD 前缀）⇒ 0 个提交（实得 %r）"
+            % (_tip_distance(_r5l_root, _r5l_head[:9]),))
+        chk(_tip_distance(_r5l_root, "0" * 9) is None,
+            "R5m 距离 info：查不到的 tip ⇒ None（**不判红**，只是不显示）")
+        _r5y_rc, _r5y_dt = _r3_check()      # 夹具 tip 是合成的 ⇒ 距离显示不出来，但必须仍 rc=0
+        chk(_r5y_rc == 0 and "距 HEAD" not in _r5y_dt,
+            "R5n 合不成的 tip 不显示距离且**不判红**（info 通道不许变成红；%r）" % (_r5y_dt,))
+
+        _r3_write()
+        _r3_ev_write()
+        _r3z_rc, _r3z_dt = _r3_check()
+        chk(_r3z_rc == 0, "R4z/R5z 复原后仍 rc=0（%r）" % (_r3z_dt,))
         chk(r_c3["rc"] == NEED_RC and classify_rc(r_c3["rc"]) == NEED
             and "PowerShell" in r_c3["tail"],
             "TSG 牙C3 找不到 PowerShell ⇒ run_one rc=2/NEED（判不了，不抛异常）")
