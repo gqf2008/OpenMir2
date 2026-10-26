@@ -53,7 +53,7 @@ SabukW 部署件 9260B→实测 9290B，会变，别写死）见 runbook **§0.9
 侧证：`bag_rows=46 / bag_items=3`，与此前订正的「46 槽位、3 件真物品」一致。
 
 **开窗当天用它认树**（数字对不上就说明不在预期 master 上）：
-- `python -I -B tools/goal/goal_gate.py selftest` ⇒ **79 条断言 79 通过**
+- `python -I -B tools/goal/goal_gate.py selftest` ⇒ **83 条断言 83 通过**（`f0d44ceeb` 实测；`80a820762` 的 rc=3⇒NEED 加了 4 条，此前 79）
 - `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **48 项全绿**；`--inventory` ⇒ 清点 **53 = 48 + 5 + 0**（2026-10-26 `26ba230ea` 起；此前为 47/52）
 - `goal_gate --full` 产物里条件④ 应显示「**门禁 8 项**」（第 8 项 = 工具自测门，约 +120s）
 - `cargo test --workspace` ⇒ **141 suites，running 3329 = passed 3266 + ignored 63**
