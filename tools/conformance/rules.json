@@ -39,6 +39,16 @@
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce; draft: openmir2-worker-4)"
     }
   ],
+  "random_branch_pairs": {
+    "turn_ident": 10,
+    "feature_ident": 41,
+    "turn_body_len": 11,
+    "feature_body_len": 0,
+    "shape_fields": ["param", "tag", "light", "phase"],
+    "reason": "随机分支产生的「无名 SM_TURN(10) + 紧随同 recog 的 SM_FEATURECHANGED(41)」成对帧（卡 openmir2-rules-random-idle-frames）。生产点：固定 NPC/商人的 `Random(50)==0 => TurnTo(RandomByte(8))`（src/GameSrv/Npc/Merchant.cs:132-141、src/GameSrv/Npc/GuildOfficial.cs:39-53）与机器人走路卡住分支 `Random(2)=>TurnTo else WalkTo`（src/Modules/RobotSystem/Services/RobotPlayer.Base.cs:982/:997）——**是随机分支，不是「纯 idle 动画」**。收件人侧 RM_TURN 支无条件补发 41（PlayObject.Message.cs:1524-1560）：TURN 无名尾（尾=Encode(8B CharDesc)，body_len=11；带名尾的登录期出现帧 body_len>11，**不在本规则内**）、41 Recog=actor 且无尾。**存在性与次数不可比**：oracle 随机源是墙钟播种的 new Random()（src/OpenMir2/RandomNumber.cs:35），rust 是 with_seed(42)（mir2-rs/crates/world/src/world.rs:1301）⇒ 同一 oracle 二进制、同一场景多轮实测这对帧 0/1/2 次（run2 dice_chain_auto 2 vs 0、move_walk 1 vs 2 vs 1 vs 0）。**可比的是形状**：按多重集比 (param, tag, Light, phase)；**一侧一对都没有时不比形状**（没有合同可比，只登记次数）。Light = series 高字节（固定 NPC/NormNpc ctor Light=2，见 npc_random_idle_frames_through_production_drain_run）；**Dir = series 低字节 = RandomByte(8) 的结果，不比**。**不许用「ident 10 整类 ignore」图省事**：ident 10 有确定性实例（登录期带名尾 4 对），整类掩掉会把真差异一起掩了；也不许整类 ignore 41。",
+    "tier": "L",
+    "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-2)"
+  },
   "rules": [
     {
       "ident": 10,
