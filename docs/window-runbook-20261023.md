@@ -1026,7 +1026,7 @@ git diff --check
 **一条命令**：
 
 ```sh
-python -I -B tools/hygiene/tool_selftest_gate.py                       # 全量；rc=0 全绿，rc=2 有红/用法错
+python -I -B tools/hygiene/tool_selftest_gate.py                       # 全量；rc=0 全绿 / **rc=2 有红或未分类** / **rc=3 只有「需人工」(NEED)**
 python -I -B tools/hygiene/tool_selftest_gate.py --only card_window    # 只跑一项（排障/变异自证）
 python -I -B tools/hygiene/tool_selftest_gate.py --skip <name,...>     # 显式跳过（必打印 SKIP）
 python -I -B tools/hygiene/tool_selftest_gate.py --inventory           # 清点：谁在门内/出域，出域带理由
