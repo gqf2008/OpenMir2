@@ -7056,6 +7056,47 @@ mod tests {
         );
     }
 
+    /// **M-3 A3 ①：ghost 玩家不被怪物选为目标**（oracle `AnimalObject.cs:388-400` 的
+    /// `baseObject.Ghost` 无效判定，逐字对应当前 `search_target` 的 `t.ghost`）。
+    ///
+    /// 牙：删掉 `search_target` 无效判定里的 `|| t.ghost` ⇒ ghost 成为目标 ⇒ 红。
+    /// 规则 19 退化对照：同一条目清掉 ghost 位 ⇒ **立刻**被选中（证明红只由 ghost 门引起）。
+    #[test]
+    fn m3_search_target_never_picks_ghost_player() {
+        let mut world = World::new(60, 60);
+        let mid = monster(&mut world, 10, 10);
+        let ghost = player(&mut world, 12, 10);
+        world.entities.get_mut(ghost).unwrap().ghost = true;
+        let set_vis = |world: &mut World| {
+            world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+                target: ghost,
+                flag: VisibleFlag::Show,
+            }];
+        };
+        set_vis(&mut world);
+        search_target(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            None,
+            "ghost 不得成为怪物目标"
+        );
+        let vis = world.entities.get(mid).unwrap().visible_actors.clone();
+        assert!(
+            vis.iter().all(|v| v.target != ghost),
+            "ghost 应按无效项从 VisibleActors 清除"
+        );
+
+        // 退化对照：清 ghost 位 ⇒ 立刻被选中。
+        world.entities.get_mut(ghost).unwrap().ghost = false;
+        set_vis(&mut world);
+        search_target(&mut world, mid);
+        assert_eq!(
+            world.entities.get(mid).unwrap().ai.target_creature,
+            Some(ghost),
+            "非 ghost ⇒ 同一夹具必被选中（门只挡 ghost）"
+        );
+    }
+
     /// `SearchTarget`：可见集里按曼哈顿距离选最近、且被 `IsProperTarget` 承认的目标；
     /// 死亡/超距者从 `VisibleActors` 清除（`AnimalObject.cs:388-423`）。
     #[test]

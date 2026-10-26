@@ -304,6 +304,17 @@ impl World {
         if map_id >= self.maps.len() {
             return Err(SessionError::NoSuchMap);
         }
+        // **F1（reviewer-21 `993d3e7a`，卡 `openmir2-makeghost-lifecycle-m3` 返工）**：
+        // `soft_close` 之后 `stage=Left` 但 `actor_id=Some`（遗留 ghost，M-3 的 `MakeGhost` 语义）。
+        // **重进之前必须收走它**——否则同名 ghost 会永久留在 `entities` 里：
+        // ① 槽位/名字泄漏；② `online_play_objects`（`race == PLAY` 计数）**永久多算 1**，
+        // 把 M-1 的 🟡（B9/B23「含 ghost 是 oracle **一个 Run 周期内**的口径」）变成永久偏差；
+        // ③ 任何按名/按 id 的读者会命中旧实体。
+        // 位置在**全部入参校验之后**：`NoSuchMap` 之类的失败不得顺手摘掉 ghost。
+        if let Some(old) = sess.actor_id {
+            self.entities.remove(old);
+            sess.actor_id = None;
+        }
         if entity.id <= 0 {
             entity.id = self.entities.alloc_id();
         }
@@ -490,8 +501,31 @@ impl World {
         let Some(sess) = self.sessions.get(chr_name) else {
             return Err(SessionError::NoSession);
         };
+        // **A2 不变量（卡 `openmir2-makeghost-lifecycle-m3`）**：`stage=Left` 与 `actor_id=Some`
+        // **并存是合法的**——`soft_close` 按 oracle `MakeGhost`（`BaseObject.Base.cs:484-495`）
+        // 保留实体与 `actor_id`，只置 `ghost=true` 并摘格；`stage` 只表示「这个会话还接不接收/
+        // 产不产生帧」，`actor_id` 只表示「世界里的实体还在不在」。
+        // ⇒ `disconnect` 在 Left 上仍是**移除门**（oracle `WorldServer.cs:707-716` 的
+        // `PlayObjectList.Remove` + `CloseUser`）：摘掉遗留 ghost 实体并清 `actor_id`。
+        // 重复 `soft_close` 仍报 `NotInWorld`（帧面已在第一次发过，不得重发）。
+        //
+        // **这条移除门是谁调用的（F4 订正措辞）**：`drain_soft_close` 消费的
+        // `soft_close_pending` 唯一生产者是 `handle_kick_account`（**账号级顶号**），
+        // **不是** `CM_SOFTCLOSE`；玩家自己小退时，ghost 只能由网关的 `GateEvent::Closed`
+        // 臂（客户端断开 GameGate 连接的副产品）收走。**世界侧没有兜底扫描** ⇒ 这是
+        // 「客户端/协议行为」假设，不是代码结构保证；Closed 事件一旦丢失就是泄漏
+        //（重进路径由 `enter_map_at` 收走，见那里的 F1 修复；既不重进也收不到 Closed 时才会滞留）。
         if sess.stage != WorldStage::InWorld {
-            return Err(SessionError::NotInWorld);
+            if soft {
+                return Err(SessionError::NotInWorld);
+            }
+            let Some(actor_id) = sess.actor_id else {
+                return Err(SessionError::NotInWorld);
+            };
+            self.entities.remove(actor_id);
+            let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+            sess.actor_id = None;
+            return Ok(());
         }
         let actor_id = sess.actor_id.ok_or(SessionError::NotInWorld)?;
         let map_id = sess.map_id;
@@ -535,12 +569,31 @@ impl World {
             }
         }
         self.remove_from_map(actor_id, map_id);
-        self.entities.remove(actor_id);
-        let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
-        sess.actor_id = None;
-        sess.stage = WorldStage::Left;
         if soft {
+            // oracle `MakeGhost`（`BaseObject.Base.cs:484-495`）：`Ghost = true; GhostTick = now;
+            // DisappearA()` —— **不销毁对象**（它仍留在 `PlayObjectList`，由 `WorldServer.cs:707-716`
+            // 的移除门收走）。本仓对应：实体留在 `entities` 里且 `ghost=true`，`actor_id` 保留；
+            // 移除由 `disconnect`（上面的 Left 分支）承担。
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.ghost = true;
+                // `DeleteFromMap`（`Envirnoment.cs:660-661`）把 `AddToMaped` 置 false；
+                // 视野列表整体失效（ghost 不再 `SearchViewRange`）。
+                e.add_to_mapped = false;
+                e.visible_actors.clear();
+                e.is_visible_active = false;
+            }
+            let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+            sess.stage = WorldStage::Left;
             sess.soft_close_count += 1;
+            // **A2（显式断言）**：`stage=Left` 与 `actor_id=Some` 并存，且实体仍在世界表里。
+            debug_assert_eq!(sess.stage, WorldStage::Left);
+            debug_assert_eq!(sess.actor_id, Some(actor_id));
+            debug_assert!(self.entities.get(actor_id).is_some_and(|e| e.ghost));
+        } else {
+            self.entities.remove(actor_id);
+            let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+            sess.actor_id = None;
+            sess.stage = WorldStage::Left;
         }
         Ok(())
     }

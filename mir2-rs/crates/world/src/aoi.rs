@@ -804,4 +804,42 @@ mod tests {
         );
         assert!(store.get(2).unwrap().visible_actors.is_empty());
     }
+
+    /// **M-3 A3 ②：ghost 不进他人 AOI 可见集**（oracle `BaseObject.ViewRange.cs:105-112` 的
+    /// `!baseObject.Ghost`，对应当前 `search_view_range_with_updates` 的 `!other.ghost`）。
+    ///
+    /// 牙：删掉可见判定里的 `&& !other.ghost` ⇒ ghost 进可见集 ⇒ 红。
+    /// 规则 19 退化对照：把同一目标清掉 ghost 位、重扫 ⇒ 立刻可见。
+    #[test]
+    fn m3_ghost_player_is_not_in_others_view_set() {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        let mut viewer = Entity::new(1, "p", 10, 10);
+        viewer.race = ACTOR_RACE_PLAY;
+        viewer.want_ref_msg = true;
+        viewer.view_range = 5;
+        store.insert(viewer);
+        put(&mut map, 1, 10, 10, 0);
+        let mut ghost = Entity::new(2, "g", 11, 10);
+        ghost.race = ACTOR_RACE_PLAY;
+        ghost.ghost = true;
+        store.insert(ghost);
+        put(&mut map, 2, 11, 10, 0);
+
+        let _ = search_view_range(&mut map, &mut store, 1, 1_000);
+        let snap = visible_snapshot(&store, 1);
+        assert!(
+            !snap.iter().any(|(id, _)| *id == 2),
+            "ghost 不得进他人可见集：{snap:?}"
+        );
+
+        // 退化对照：清 ghost 位 ⇒ 同一夹具立刻可见。
+        store.get_mut(2).unwrap().ghost = false;
+        let _ = search_view_range(&mut map, &mut store, 1, 1_000);
+        let snap = visible_snapshot(&store, 1);
+        assert!(
+            snap.iter().any(|(id, _)| *id == 2),
+            "非 ghost ⇒ 必进可见集（门只挡 ghost）：{snap:?}"
+        );
+    }
 }

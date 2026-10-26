@@ -5258,11 +5258,12 @@ fn handle_soft_close_cmd(
     if emergency {
         sg.bo_emergency_close = true;
     }
-    // **卡 `openmir2-dir-persistence-writeback`（修法 (a)）**：`world.soft_close` 会销毁实体并把
-    // `sess.actor_id` 置 `None`（= oracle `MakeGhost` 的世界侧等价物），而存档由 ~402ms 后网关的
-    // `GateEvent::Closed` 臂发出 ⇒ 那时实体解析链已断，`cur_x/cur_y/dir/attatck_mode` 会静默
-    // 回落到**载入记录**。离世**之前**取一份实体派生快照挂到 `SavedHuman.derived`；
-    // `build_save_record` 的优先级是 实体 → 快照 → 载入记录（第三档 WRN）。
+    // **卡 `openmir2-dir-persistence-writeback`（修法 (a)）**：存档由 ~402ms 后网关的
+    // `GateEvent::Closed` 臂发出。M-3 起 `world.soft_close` 不再销毁实体（oracle `MakeGhost`
+    // 保留对象）⇒ 那个窗口里 `build_save_record` 走**实体**档；但 `disconnect`（移除门）之后
+    // 实体已摘，`cur_x/cur_y/dir/attatck_mode` 会回落到**载入记录**。离世**之前**取一份实体
+    // 派生快照挂到 `SavedHuman.derived`（第二档）；`build_save_record` 的优先级是
+    // 实体 → 快照 → 载入记录（第三档 WRN）。
     // 快照只经 [`entity_derived_snapshot`] 一个接缝产出（五项全取，禁止在此散写）。
     if let Some(d) = world
         .session(chr_name)
@@ -9383,10 +9384,11 @@ fn use_items_from(
 
 /// **离世那一刻的实体派生快照**（卡 `openmir2-dir-persistence-writeback`，修法 (a)）。
 ///
-/// 成因：`CM_SOFTCLOSE` 先 `world.soft_close`（= oracle `MakeGhost` 的世界侧等价物，销毁实体
-/// 并把 `sess.actor_id` 置 `None`），而存档由 ~402ms 后网关的 `GateEvent::Closed` 臂发出
-/// ⇒ `build_save_record` 的实体解析链返回 `None`，`cur_x/cur_y/dir/attatck_mode` **静默回落
-/// 到载入记录**（真机：`characters.Dir` 写成载入值 3 而不是实时值 0）。
+/// 成因：`CM_SOFTCLOSE` 先 `world.soft_close`（= oracle `MakeGhost` 的世界侧等价物），而存档由
+/// ~402ms 后网关的 `GateEvent::Closed` 臂发出。**M-3 起 soft_close 保留 ghost 实体**
+/// （`stage=Left` + `actor_id=Some`）⇒ 该窗口里存档走实体档；但 `disconnect`（移除门）之后
+/// 实体已摘 ⇒ `build_save_record` 的实体解析链返回 `None`，`cur_x/cur_y/dir/attatck_mode`
+/// 会 **静默回落载入记录**（真机：`characters.Dir` 写成载入值 3 而不是实时值 0）。
 ///
 /// 修法：soft-close **之前**取一份快照挂到 [`SavedHuman::derived`]；存档取值优先级
 /// **实体 → 快照 → 载入记录**（第三档 WRN，见 [`warn_save_fallback`]）。
@@ -9485,7 +9487,7 @@ struct SavedHuman {
     enter_map: String,
     /// **离世那一刻的实体派生快照**（见 [`EntityDerived`]）：`CM_SOFTCLOSE` 在
     /// `world.soft_close` **之前**由 [`entity_derived_snapshot`] 取，供之后 `GateEvent::Closed`
-    /// 臂的存档在实体已销毁时仍写出实时值（取值优先级：实体 → 本快照 → 载入记录）。
+    /// 臂的存档在实体已摘（`disconnect` 之后）时仍写出实时值（取值优先级：实体 → 本快照 → 载入记录）。
     derived: Option<EntityDerived>,
 }
 
@@ -9819,10 +9821,12 @@ fn build_save_record(
         .unwrap_or(saved.enter_map.as_str());
     rec.data.cur_map = Some(cur_map.to_string());
     // ---- 实体派生标量：**实体 → 离世快照 → 载入记录** -------------------------------
-    // 卡 `openmir2-dir-persistence-writeback`：`CM_SOFTCLOSE` 先 `world.soft_close`（销毁实体、
-    // 清 `sess.actor_id`），~402ms 后 `GateEvent::Closed` 臂才存档 ⇒ 只看实体时这四个标量会
-    // **静默回落载入记录**（真机：`characters.Dir` 写成载入值 3 而非实时值 0；同族字段同理，
-    // 本轮只有 `Dir` 显形是因为测试库 placement 让其余回落值恰好等于实时值，§10.2）。
+    // 卡 `openmir2-dir-persistence-writeback`：`CM_SOFTCLOSE` 先 `world.soft_close`，~402ms 后
+    // `GateEvent::Closed` 臂才存档。**M-3 起 soft_close 保留 ghost 实体**（`stage=Left` +
+    // `actor_id=Some`）⇒ 该窗口里本函数走**实体**档；`disconnect`（移除门）之后实体才被摘，
+    // 只看实体时这四个标量会**静默回落载入记录**（真机：`characters.Dir` 写成载入值 3 而非
+    // 实时值 0；同族字段同理，本轮只有 `Dir` 显形是因为测试库 placement 让其余回落值恰好
+    // 等于实时值，§10.2）。
     // 取值优先级：实体在 ⇒ 实体；实体不在 ⇒ 离世快照（[`SavedHuman::derived`]）；两者都无 ⇒
     // 回落 `rec` 并 **WRN**（第三档；门控 = `world.session` 存在，普通断线/未进世界不刷屏）。
     let live = world
@@ -9830,9 +9834,10 @@ fn build_save_record(
         .and_then(|s| s.actor_id)
         .and_then(|id| world.entities.get(id))
         .map(entity_derived_snapshot);
-    // 两源**同时存在不可达**：正常路径 soft-close 必销毁实体、普通断线必无快照；只有
-    // `world.soft_close` 返回 `Err` 且此前已写过快照才会两源同存 ⇒ 此时以**实体**为准
-    // （实体是权威，快照只是离世那一刻的替身）。这条顺序没有牙，故写进代码而非只留在文档。
+    // **两源同存是 M-3 之后的正常路径**（不是「不可达」）：`CM_SOFTCLOSE` 写了离世快照，
+    // 而 soft_close 保留 ghost 实体 ⇒ `Closed` 臂存档时实体与快照**同时在场**。
+    // 取**实体**为准（实体是权威，快照只是离世那一刻的替身）。
+    // 牙：`m3_entity_wins_over_snapshot_when_both_present`（把下面的 `or` 顺序对调 ⇒ 红）。
     let derived = live.as_ref().or(saved.derived.as_ref());
     if let Some(d) = derived {
         rec.data.cur_x = i16::try_from(d.x).unwrap_or(rec.data.cur_x);
@@ -16626,7 +16631,8 @@ fn sync_super_man_wabil(
 /// 1. `bo_soft_close` / `bo_emergency_close`（oracle `PlayObject.cs:364/368`）——
 ///    `CM_SOFTCLOSE`（[`handle_soft_close_cmd`]）、`CloseUser`（[`prepare_closed_guild`]）、
 ///    账号级顶号（[`drain_soft_close`]）都会先置位；
-/// 2. `World::soft_close()` / `World::disconnect()` 把 `WorldStage` 置 `Left`（实体已销毁）。
+/// 2. `World::soft_close()` / `World::disconnect()` 把 `WorldStage` 置 `Left`
+///    （**M-3 起**：`soft_close` 只置 `Left` 并保留 ghost 实体，`disconnect` 才摘实体）。
 ///
 /// **缺失世界会话 ⇒ 视为在世**：构造级用例只建 `ground_sessions`、不经 `enter_map`，
 /// 会话登记缺失是**证据缺失**而不是离世证据；[`drain_recovery`] 的既有口径即如此
@@ -16647,7 +16653,7 @@ fn sync_super_man_wabil(
 /// | [`drain_player_revival_with_magic`]（P32） | **加门** | 同上（幽灵仍复活 / 破戒 / 53·141·252） |
 /// | [`drain_deal_tick`]（Run 内自动取消） | **加门** | oracle 幽灵由 `:712` 的 `DealCancelA` 收口（本宿主 = `Closed` 臂的 `deal_cancel_between`），Run 内那趟不得再跑 |
 /// | [`drain_periodic_save`] | **加门**（M-2 改判，取代早先的反向牙） | oracle `WorldServer.cs:648` 的 **`if (!playObject.Ghost)` 是主干**，`:698-703` 周期存档在主干内；ghost 只走 `else` 的 `:707-716`（移除时 `SaveHumanRcd` + `CloseUser`）⇒ 周期路径必须排除 ghost。移除时那次存档仍在 `Closed` 臂 / [`drain_kicks`] / [`drain_soft_close`]（卡 `openmir2-makeghost-lifecycle` M-2 C3，两种路径各一颗牙） |
-/// | [`drain_extra_abil_expiries`] / [`drain_mag_healing_delivery`] / [`drain_b3_self_deliveries`] / [`drain_b4_with_enter_cfg`] / [`drain_b5_self_deliveries`] / [`drain_buff_downlink`] | **不加门** | 全部由 `TickRecord` 事件驱动；事件源是 world tick，幽灵实体已销毁 ⇒ 无事件可排 |
+/// | [`drain_extra_abil_expiries`] / [`drain_mag_healing_delivery`] / [`drain_b3_self_deliveries`] / [`drain_b4_with_enter_cfg`] / [`drain_b5_self_deliveries`] / [`drain_buff_downlink`] | **不加门** | 全部由 `TickRecord` 事件驱动；**M-3 起 ghost 实体仍在**，但 world tick 的 ghost 门（M-2 的十处过滤）保证不为它产事件 ⇒ 无事件可排（用例 `sc_gate_event_driven_drains_have_no_source_after_soft_close` 钉住） |
 /// | [`sync_super_man_wabil`] / [`sync_use_items_to_session`] | **不加门** | 纯实体→会话镜像；无实体 ⇒ 早退，不推进状态 |
 /// | [`process_switch_data`] | **不加门** | oracle 轮询的是 **ghost 自由表**（`WorldServer.cs:583-610`）；本宿主 `switch_data` 无生产写者（G11 闭合）⇒ 零副作用 |
 /// | [`drain_close_health_residual`] / [`drain_close_health_for`] | **加门**（M-2） | 遍历**实体**而非会话，会话门管不到它：ShowHp 到期出 1101 是 `BaseObject.Run()` 的 `:219` 门，ghost 不 Run ⇒ 两处都补 `!e.ghost` |
@@ -31305,12 +31311,13 @@ mod tests {
         );
         assert!(rig.containers_cleared(), "四个容器都必须清名");
 
-        // 2. soft-close：world 侧 actor_id 已 None、host 仍是 9 ⇒ 摘 9 留 7。
+        // 2. 掉线（M-3 之后 `soft_close` 会保留 actor_id ⇒ 「world 侧无」只剩 `disconnect` 这一态）：
+        //    world 侧 actor_id 已 None、host 仍是 9 ⇒ 摘 9 留 7。
         let mut rig = ResidueRig::new(7, 9);
-        rig.world.soft_close("hero").expect("soft_close");
+        rig.world.disconnect("hero").expect("disconnect");
         assert!(
             rig.world.session("hero").and_then(|s| s.actor_id).is_none(),
-            "前置：soft-close 已把 world 侧 actor_id 置 None"
+            "前置：disconnect 已把 world 侧 actor_id 置 None"
         );
         assert_eq!(rig.cleanup(), Some(9), "host 兜底");
         assert!(rig.displays.get(9).is_none(), "摘的必须是 host 的 9");
@@ -31323,7 +31330,8 @@ mod tests {
         // 3. 两侧都无 id ⇒ 不摘任何展示（四容器仍要清名）。
         let mut rig = ResidueRig::new(7, 9);
         rig.ground.remove("hero");
-        rig.world.soft_close("hero").expect("soft_close");
+        // M-3：`soft_close` 保留 `actor_id` ⇒ 「两侧都无」要用 `disconnect`（移除门）造。
+        rig.world.disconnect("hero").expect("disconnect");
         assert_eq!(rig.cleanup(), None, "两侧都无 ⇒ 不摘");
         assert!(
             rig.displays.get(7).is_some() && rig.displays.get(9).is_some(),
@@ -31394,6 +31402,111 @@ mod tests {
         assert_eq!(cm.ident, mir2_protocol::messages::SM_DISAPPEAR);
         assert_eq!(cm.recog, b, "`Recog` = 离开者 `b`");
         assert!(to_b.is_empty(), "离开者 `b` 自身收 0 条：{to_b:?}");
+    }
+
+    /// **M-3 A3 ③（+ A1 的 `DisappearA` 等价）**：`soft_close` 走**真实世界 API** 之后
+    /// ① 观察者恰收 1 条 `SM_DISAPPEAR`、ghost 自身收 0 条（oracle `MakeGhost ⇒ DisappearA`，
+    /// `BaseObject.cs:1519-1524`）；
+    /// ② ghost 实体**仍在**世界表里（A1 非销毁），但它**不再产生任何帧**：再抽一次离世帧为 0，
+    /// 本 tick 的 AOI 下行也为 0。
+    ///
+    /// 牙：把软关分支的 `remove_from_map` 之后的实体保留改成 `entities.remove` ⇒ ② 的第一条断言红；
+    /// 把 `DisappearA` 的观察者采集挪到 `ghost=true` 之后并在扫描里过滤 `!Ghost` ⇒ ① 红。
+    #[test]
+    fn m3_soft_close_ghost_disappears_once_then_stays_silent() {
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(200, 200);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 12, 10), 0)
+            .expect("b 进图");
+        let _ = tick_until_next_player_scan(&mut world);
+        assert!(
+            world
+                .entities
+                .get(a)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == b),
+            "前提：`a` 看得见 `b`"
+        );
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("ua", "a", 1, 0, 901, a));
+        online_set(&mut online, entry("ub", "b", 2, 0, 902, b));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let displays = downlink::DisplayTable::new();
+
+        world.soft_close("b").expect("`b` 在世界上 ⇒ 小退成功");
+
+        // ② A1：实体保留且 ghost，actor_id 保留。
+        assert!(
+            world.entities.get(b).is_some_and(|e| e.ghost),
+            "soft_close 必须保留实体并置 ghost=true（MakeGhost 非销毁）"
+        );
+        assert_eq!(world.session("b").unwrap().actor_id, Some(b));
+
+        // ① DisappearA：观察者 a 恰 1 条，ghost 自身 0 条。
+        let sent = drain_depart_frames(&mut world, &online, &gates);
+        assert_eq!(sent, 1, "恰观察者 `a` 收 1 条离世广播");
+        let mut to_a: Vec<Vec<u8>> = Vec::new();
+        let mut to_b: Vec<Vec<u8>> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            if socket == 901 {
+                to_a.push(body);
+            } else if socket == 902 {
+                to_b.push(body);
+            }
+        }
+        assert_eq!(to_a.len(), 1, "观察者 `a` 收 `SM_DISAPPEAR(b)`");
+        assert!(to_b.is_empty(), "ghost 自身收 0 条：{to_b:?}");
+
+        // ② 之后不再产帧：再抽一次离世帧 = 0；本 tick 的 AOI 下行 = 0。
+        assert_eq!(
+            drain_depart_frames(&mut world, &online, &gates),
+            0,
+            "离世帧只发一次（ghost 不重复 DisappearA）"
+        );
+        let sent_aoi = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        assert!(
+            sent_aoi.is_empty(),
+            "ghost 会话不得再产出现帧：{sent_aoi:?}"
+        );
+
+        // **F2 牙 ①（reviewer-21 `993d3e7a`）**：重复 `soft_close` 必须 `Err(NotInWorld)`，
+        // 且不重复计数、不重复发离世帧。删掉 `leave_world_inner` 的 Left 早退 ⇒ 变 `Ok` ⇒ 红。
+        assert!(
+            world.soft_close("b").is_err(),
+            "Left 会话重复 soft_close 必须 Err（不得重放 DisappearA）"
+        );
+        assert_eq!(
+            world.session("b").unwrap().soft_close_count,
+            1,
+            "重复 soft_close 不得再加计数"
+        );
+        assert_eq!(
+            drain_depart_frames(&mut world, &online, &gates),
+            0,
+            "重复 soft_close 不得再发离世帧"
+        );
+
+        // **F2 牙 ②**：`disconnect` 是移除门，但它**不得重发** `DisappearA`。
+        // 把 Left 分支的「只摘实体、不发帧」改成落回主路径 ⇒ 这里会多一条 ⇒ 红。
+        world.disconnect("b").expect("移除门");
+        assert!(world.entities.get(b).is_none(), "移除门必须摘掉遗留 ghost");
+        assert_eq!(
+            drain_depart_frames(&mut world, &online, &gates),
+            0,
+            "disconnect（Left 上）不得重发 SM_DISAPPEAR"
+        );
     }
 
     /// **orphan 接线第二批（验证者一号 must_fix#2，真牙）**：走**生产入口**
@@ -35382,7 +35495,8 @@ break
     /// ⇒ 落库 `CX/CY` 必须是**实时**坐标 `(12,22)`，不是载入记录 `(7,12)`。
     ///
     /// 牙：删掉 `handle_soft_close_cmd` 里的快照段（或 `build_save_record` 的 `saved.derived` 支）
-    /// ⇒ `soft_close` 已销毁实体 ⇒ 回落 `(7,12)` ⇒ 必红。
+    /// ⇒ 实体档与快照档都没有实时值 ⇒ `disconnect` 之后那次存档回落 `(7,12)` ⇒ 必红
+    /// （M-3 起 soft_close 保留实体，本用例的红点在 `disconnect` 之后，见用例体的快照支断言）。
     #[test]
     fn soft_close_snapshot_keeps_live_xy_after_walk() {
         let mut rig = SoftCloseRig::new();
@@ -35392,15 +35506,71 @@ break
             assert_eq!((e.x, e.y), (12, 22), "前置：走成功到 (12,22)");
         }
         rig.soft_close();
+        // M-3：`MakeGhost` 不销毁 ⇒ 实体仍在（ghost），存档走**实体**那一档；
+        // `handle_soft_close_cmd` 写的离世快照仍是 `disconnect` 之后的兜底。
         assert!(
-            rig.world.entities.get(rig.actor).is_none(),
-            "前置：CM_SOFTCLOSE 已销毁实体（本卡要修的正是这个窗口）"
+            rig.world.entities.get(rig.actor).is_some_and(|e| e.ghost),
+            "前置：CM_SOFTCLOSE ⇒ 实体保留且 ghost=true"
         );
         let rec = rig.save();
         assert_eq!(
             (rec.data.cur_x, rec.data.cur_y),
             (12, 22),
             "T1：离世后存档的 CX/CY 必须是实时坐标（不是载入值 7/12）"
+        );
+        // M-3 之后软关保留实体 ⇒ 上一段走的是**实体**档。本卡的原始修复（离世快照）由
+        // `disconnect` 之后的存档行使：实体已摘、快照仍在 ⇒ 仍须是实时坐标。
+        rig.world.disconnect("hero").expect("移除门");
+        assert!(
+            rig.world.entities.get(rig.actor).is_none(),
+            "前置：disconnect 已摘掉 ghost 实体"
+        );
+        let rec = rig.save();
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (12, 22),
+            "快照支：实体已摘时仍取离世快照的实时坐标（删快照段 ⇒ 回落 7/12 必红）"
+        );
+    }
+
+    /// **F5 牙（reviewer-21 `993d3e7a`）**：取值优先级「**实体 → 快照 → 载入记录**」的实体优先。
+    ///
+    /// M-3 之后「实体在 **且** 快照也在」是**正常路径**（`CM_SOFTCLOSE` 写了快照、soft_close
+    /// 保留 ghost 实体 ⇒ `Closed` 臂存档时两者同时在场），不再是「不可达」。本用例把它们造成
+    /// **不同值**并断言取实体。
+    ///
+    /// 牙：把 `build_save_record` 的 `live.as_ref().or(saved.derived.as_ref())` 对调成
+    /// `saved.derived.as_ref().or(live.as_ref())` ⇒ 取到快照的 (1,1) ⇒ 红。
+    #[test]
+    fn m3_entity_wins_over_snapshot_when_both_present() {
+        let mut rig = SoftCloseRig::new();
+        rig.walk(12, 22);
+        rig.soft_close();
+        // 两源同存：实体仍 (12,22)（ghost），把快照改成 (1,1)。
+        {
+            let d = rig
+                .saves
+                .get_mut("hero")
+                .expect("存档底稿在")
+                .derived
+                .as_mut();
+            let d = d.expect("CM_SOFTCLOSE 已写快照");
+            d.x = 1;
+            d.y = 1;
+        }
+        assert_eq!(
+            (
+                rig.world.entities.get(rig.actor).expect("实体在").x,
+                rig.world.entities.get(rig.actor).expect("实体在").y
+            ),
+            (12, 22),
+            "前置：实体坐标未变"
+        );
+        let rec = rig.save();
+        assert_eq!(
+            (rec.data.cur_x, rec.data.cur_y),
+            (12, 22),
+            "两源同存时必须以**实体**为准（快照只是离世那一刻的替身）"
         );
     }
 
@@ -35421,6 +35591,14 @@ break
         assert_eq!(
             rec.data.dir, 2,
             "T2：离世后存档的 Dir 必须是实时朝向（不是载入值 3）"
+        );
+        // M-3 起软关保留实体 ⇒ 上面走实体档；**离世快照支**由移除门之后的存档行使
+        //（删快照段 ⇒ 这里回落载入值 3 ⇒ 红）。
+        rig.world.disconnect("hero").expect("移除门");
+        let rec = rig.save();
+        assert_eq!(
+            rec.data.dir, 2,
+            "T2 快照支：实体已摘时仍取离世快照的实时朝向"
         );
     }
 
@@ -35445,6 +35623,13 @@ break
         assert_eq!(
             rec.data.attatck_mode, 2,
             "T3：离世后存档的 attack_mode 必须是实时值（不是载入值 1）"
+        );
+        // 快照支（同 T2）：移除门之后仍取离世那一刻的实时值。
+        rig.world.disconnect("hero").expect("移除门");
+        let rec = rig.save();
+        assert_eq!(
+            rec.data.attatck_mode, 2,
+            "T3 快照支：实体已摘时仍取离世快照的实时 attack_mode"
         );
     }
 
@@ -35482,6 +35667,18 @@ break
             hum[SLOT_WEAPON].as_ref().expect("武器槽").dura,
             1234,
             "T4：Dura 取离世那一刻的实体值（不是会话滞后值 4000）"
+        );
+        // 快照支（同 T2/T3）：移除门之后 use_items 仍取离世快照。
+        rig.world.disconnect("hero").expect("移除门");
+        let rec = rig.save();
+        let hum = rec.data.hum_items.as_ref().expect("hum_items 非 null");
+        assert_eq!(
+            (
+                hum[SLOT_WEAPON].as_ref().expect("武器槽").index,
+                hum[SLOT_WEAPON].as_ref().expect("武器槽").dura
+            ),
+            (207, 1234),
+            "T4 快照支：实体已摘时仍取离世快照的装备值（删 use_items 快照 ⇒ 回落 4000 必红）"
         );
     }
 
@@ -35598,9 +35795,10 @@ break
         assert_eq!(warns(), base, "无会话 ⇒ 不发第三档 WRN（未进世界不刷屏）");
 
         // ③ 会话在、实体无、快照无（= 修复前的故障态）⇒ 必须 WRN 且回落载入记录。
+        //    M-3 之后 `soft_close` 保留实体 ⇒ 「实体无」只剩 `disconnect` 这一态。
         rig.world
-            .soft_close("hero")
-            .expect("直接软关（绕过 handle_soft_close_cmd ⇒ 无快照）");
+            .disconnect("hero")
+            .expect("直接掉线（绕过 handle_soft_close_cmd ⇒ 无快照）");
         assert!(rig.saves["hero"].derived.is_none(), "前置：无快照");
         let rec = rig.save();
         assert_eq!(
@@ -41809,7 +42007,7 @@ SendRefMsgRange=15
     }
 
     /// **本卡（`openmir2-bag-eat-extra-frame`）**：`CM_SOFTCLOSE` 已把会话置
-    /// `stage=Left`/销毁实体（oracle 同一 Run 的 `MakeGhost()` 之后不再 Run）⇒
+    /// `stage=Left`（oracle 同一 Run 的 `MakeGhost()` 之后不再 Run；M-3 起实体保留为 ghost）⇒
     /// 紧随其后的 P1 周期恢复**不得**再消费药池、也不得发 53。
     ///
     /// 真机形态（run2 `eat_item`）：Rust 的 `SM_HEALTHSPELLCHANGED(53)` 落在
@@ -42527,21 +42725,32 @@ SendRefMsgRange=15
         }
     }
 
-    /// **反向牙（事件驱动排水不加门）**：幽灵实体已销毁 ⇒ world tick 不再为它产任何
-    /// 事件，P2/B2·B3·B4·B5/毒伤等「由 `TickRecord` 驱动」的排水自然无帧可出；
-    /// 纯镜像（`sync_super_man_wabil` / `sync_use_items_to_session`）在无实体时早退。
+    /// **事件驱动排水不加门，但 world tick 必须为 ghost 止事件**：M-3 起 soft_close **保留**
+    /// ghost 实体（不再是「实体已销毁」）⇒ 这条用例的判据变成「实体在，但 `TickRecord` 不得为它
+    /// 产任何事件」（P2/B2·B3·B4·B5/毒伤/死亡结算）。夹具带 `die_called=true`，删任何一处
+    /// ghost 门都会让对应记录非空。
     ///
-    /// 若将来让 world tick 继续处理幽灵（例如保留实体），本用例必红——那时这些排水
-    /// 就必须补 `session_in_world` 门。
+    /// 纯镜像：`sync_super_man_wabil` 的门是 `!e.super_man`（**没有** ghost 门，本骨架玩家恒
+    /// 非 super-man）；`sync_use_items_to_session` 会读 ghost 实体（预期行为）。
     #[test]
     fn sc_gate_event_driven_drains_have_no_source_after_soft_close() {
         let (mut world, mut sessions, _online, _gates, _rx, actor) = sc_gate_fixture("sc_evt");
         world.soft_close("sc_evt").expect("CM_SOFTCLOSE 等价物");
+        // M-3：soft_close **保留**实体（ghost=true）⇒ 这条用例从「实体没了所以无事件」
+        // 变成「实体在但 world tick 不得为 ghost 产事件」——正是本卡 A3 ③ 的判据。
         assert!(
-            world.entities.get(actor).is_none(),
-            "前置：soft_close 销毁实体（事件源消失）"
+            world.entities.get(actor).is_some_and(|e| e.ghost),
+            "前置：soft_close 保留实体且 ghost=true"
         );
+        // **F3（reviewer-21 `993d3e7a`）**：夹具里必须有一个**会产事件**的态，否则这条用例
+        // 对任何 ghost 门都没有判别力（删掉 `settle_deaths` 的 `&& !e.ghost` 也全绿）。
+        // `die_called=true`：只要 ghost 门没了，`settle_deaths` 就会结算它并产出 `rec.deaths`。
+        world.entities.get_mut(actor).unwrap().die_called = true;
         let rec = world.tick();
+        assert!(
+            rec.deaths.is_empty(),
+            "ghost 的 die_called 不得被 settle_deaths 结算（`&& !e.ghost` 门；删它 ⇒ 本行红）"
+        );
         assert!(rec.exp_awards.is_empty(), "P31/击杀链：无事件");
         assert!(rec.buff_health_changes.is_empty(), "毒伤 53：无事件");
         assert!(rec.buff_status_changes.is_empty(), "657：无事件");
@@ -42549,13 +42758,16 @@ SendRefMsgRange=15
         assert!(rec.slave_self_deliveries.is_empty(), "B2/B4/B5：无事件");
         assert!(rec.run_state_expiries.is_empty(), "烈火/双龙到期：无事件");
 
-        // 纯镜像：无实体 ⇒ 不得改写会话。
+        // 纯镜像的**真实**早退理由（F3 订正：原来这里写「无实体」，M-3 之后实体就在）：
+        // `sync_super_man_wabil` 的唯一门是 `!e.super_man`（`lib.rs:16601-16615`），**没有**
+        // ghost/stage 门；本骨架非 GM 玩家 `super_man` 恒 false ⇒ 对 ghost 也是 no-op。
+        // `sync_use_items_to_session` 则**会**读 ghost 实体（它只要 `actor_id` 还在）——
+        // 这不是缺陷：`use_items` 的同步与「是否还在产帧」无关，正本只在 `disconnect` 后失去实体。
         sessions.get_mut("sc_evt").unwrap().state.wabil.hp = 7;
         sync_super_man_wabil(&world, &mut sessions);
-        sync_use_items_to_session(&world, sessions.get_mut("sc_evt").unwrap());
         assert_eq!(
             sessions["sc_evt"].state.wabil.hp, 7,
-            "无实体时镜像必须早退（否则等于从幽灵实体回灌会话）"
+            "非 super-man ⇒ sync_super_man_wabil 早退（该函数没有 ghost 门，靠 super_man 恒 false）"
         );
     }
 
@@ -51032,7 +51244,16 @@ SendRefMsgRange=15
             "BoSoftClose 支 ⇒ MakeGhost（离开世界）"
         );
         assert_eq!(world.session("hero").unwrap().soft_close_count, 1);
-        assert!(world.entities.get(hero).is_none(), "实体已从世界摘除");
+        // M-3：`MakeGhost` 不销毁对象 ⇒ 实体仍在且 `ghost=true`，`actor_id` 保留。
+        assert!(
+            world.entities.get(hero).is_some_and(|e| e.ghost),
+            "soft_close ⇒ 实体保留且 ghost=true（oracle MakeGhost）"
+        );
+        assert_eq!(
+            world.session("hero").unwrap().actor_id,
+            Some(hero),
+            "A2：stage=Left 与 actor_id=Some 并存"
+        );
 
         // ② 再进世界后 wParam=0 ⇒ 不置 emergency（旧的 emergency 需先清）。
         let hero2 = world

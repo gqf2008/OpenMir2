@@ -9414,18 +9414,178 @@ mod tests {
         assert_eq!(w.entities.get(first).unwrap().map_id, 1);
         assert!(w.entities.get(first).unwrap().visible_actors.is_empty());
 
-        // 小退：离开世界但会话保留（可再进）
+        // 小退（卡 `openmir2-makeghost-lifecycle-m3` A1）：oracle `MakeGhost` **不销毁对象**
+        // ⇒ 实体与 `actor_id` 保留、`ghost=true`、已摘格；`stage=Left` 与 `actor_id=Some` 并存合法（A2）。
         w.soft_close("hero").unwrap();
-        assert!(w.entities.get(first).is_none());
+        {
+            let e = w.entities.get(first).expect("soft_close 之后实体必须仍在");
+            assert!(e.ghost, "MakeGhost ⇒ Ghost=true");
+            assert!(!e.add_to_mapped, "DeleteFromMap ⇒ AddToMaped=false");
+            assert!(e.visible_actors.is_empty(), "视野列表整体失效");
+        }
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(first));
         assert_eq!(w.session("hero").unwrap().soft_close_count, 1);
-        assert_eq!(w.map(1).cell(7, 9).count(), 0);
+        assert_eq!(w.map(1).cell(7, 9).count(), 0, "必须已摘格");
 
-        // 再进：新的 actor_id（C# 侧重新建 PlayObject）
+        // `disconnect` 是移除门（oracle `WorldServer.cs:707-716`）：Left 上仍能把 ghost 收走。
+        w.disconnect("hero").unwrap();
+        assert!(w.entities.get(first).is_none(), "移除门必须摘掉 ghost 实体");
+        assert_eq!(w.session("hero").unwrap().actor_id, None);
+
+        // 再进：会话仍在 Left，可重进（C# 侧重新建 PlayObject）。
+        // **F6（reviewer-21 `993d3e7a`）**：原 `assert_ne!(first, second)` 已删——`entities.alloc_id`
+        // 会复用刚摘掉的槽位，id 相同并不违反语义（C# 的 ActorId 也复用）。本用例只走
+        // 「disconnect 之后重进」这条正常路径；**不 disconnect 直接重进**那条（F1 泄漏路径）由
+        // `m3_reenter_after_soft_close_reaps_leftover_ghost` 覆盖。
         let mut e2 = Entity::new(0, "hero", 7, 9);
         e2.race = ACTOR_RACE_PLAY;
         let second = w.enter_map("hero", e2, 1).unwrap();
-        assert_ne!(first, second, "小退再进必须得到新的 ActorId");
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(second));
         assert_eq!(w.map(1).cell(7, 9).count(), 1);
+    }
+
+    /// **M-3 A3 ④：ghost 不占格、不参与碰撞**（oracle `MakeGhost` ⇒ `DeleteFromMap`，
+    /// `Envirnoment.cs:660-661`；`DisappearA` 在 `BaseObject.cs:1519-1522`）。
+    ///
+    /// 牙：软关分支里删掉 `remove_from_map` ⇒ 格子仍被占 ⇒ 红（第二条断言）。
+    /// 规则 19 退化对照：非 ghost 的玩家占着同一格时，第二个人**进不去/走不进去**。
+    #[test]
+    fn m3_soft_close_ghost_frees_the_cell() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let actor = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        assert_eq!(w.map(0).cell(5, 5).count(), 1, "在世人占格");
+
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            0,
+            "ghost 不占格（DeleteFromMap）"
+        );
+        assert!(
+            !w.entities.get(actor).expect("实体保留").add_to_mapped,
+            "AddToMaped 必须为 false"
+        );
+
+        // 另一个玩家能走进该格（碰撞不认 ghost）。
+        w.open_session("other");
+        let other = w
+            .enter_map("other", player(0, "other", 6, 5, 10), 0)
+            .expect("other 进图");
+        assert!(
+            w.try_step_now(other, -1, 0, 1),
+            "ghost 原来的格子必须可走进去"
+        );
+        assert_eq!(
+            (
+                w.entities.get(other).unwrap().x,
+                w.entities.get(other).unwrap().y
+            ),
+            (5, 5)
+        );
+        assert_eq!(w.map(0).cell(5, 5).count(), 1, "走进来的是 other");
+
+        // 退化对照：活玩家占格时，第二个人走不进去。
+        w.open_session("blocker");
+        let blocker = w
+            .enter_map("blocker", player(0, "blocker", 5, 5, 10), 0)
+            .expect("blocker 直接落在 (5,5)（进图不查占格）");
+        let _ = blocker;
+        w.open_session("walker");
+        let walker = w
+            .enter_map("walker", player(0, "walker", 6, 5, 10), 0)
+            .expect("walker 进图");
+        assert!(
+            !w.try_step_now(walker, -1, 0, 1),
+            "活玩家占格时第二个人必须走不进去（证明上面那条不是恒真）"
+        );
+    }
+
+    /// **F1 牙（reviewer-21 `993d3e7a`）**：`soft_close` 之后**不 disconnect 直接重进**，
+    /// `enter_map_at` 必须收走遗留 ghost —— 同名实体恰 **1** 个且是新的。
+    ///
+    /// 为什么需要它：`open_session` 对已有会话是 no-op、`enter_map_at` 只在 `InWorld` 时拒绝，
+    /// Left 放行且过去不清理旧 `actor_id` ⇒ 同名 ghost 永久留在 `entities`（槽位/名字泄漏，
+    /// `online_play_objects` 永久多算 1）。
+    ///
+    /// 牙：删掉 `enter_map_at` 里「收走遗留 `actor_id`」那三行 ⇒ 同名实体 2 个（旧 ghost + 新玩家）⇒ 红。
+    /// 规则 19 退化输入：没有遗留 ghost 的正常重进（先 `disconnect`）⇒ 仍恰 1 个。
+    #[test]
+    fn m3_reenter_after_soft_close_reaps_leftover_ghost() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let first = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        assert!(
+            w.entities.get(first).is_some_and(|e| e.ghost),
+            "前置：soft_close 保留 ghost"
+        );
+
+        // **不 disconnect**，直接重进（F1 路径）。
+        let second = w
+            .enter_map("hero", player(0, "hero", 7, 9, 10), 0)
+            .expect("Left 允许重进");
+        let named: Vec<(i32, bool)> = w
+            .entities
+            .iter()
+            .filter(|e| e.name == "hero")
+            .map(|e| (e.id, e.ghost))
+            .collect();
+        assert_eq!(
+            named,
+            vec![(second, false)],
+            "重进必须收走遗留 ghost：同名实体恰 1 个且是新玩家"
+        );
+        assert!(w.entities.get(first).is_none(), "旧 ghost 必须已被摘除");
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(second));
+
+        // 退化对照：正常路径（先 disconnect 再重进）⇒ 同样恰 1 个。
+        w.disconnect("hero").expect("移除门");
+        let third = w
+            .enter_map("hero", player(0, "hero", 9, 9, 10), 0)
+            .expect("再进");
+        let named: Vec<i32> = w
+            .entities
+            .iter()
+            .filter(|e| e.name == "hero")
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(named, vec![third], "正常路径同样恰 1 个同名实体");
+    }
+
+    /// **F1 的顺序牙（Leader 派单 `must_added`）**：`enter_map_at` 的「收走遗留 ghost」必须在
+    /// **全部入参校验之后** —— 非法地图入参失败时**不得**顺手摘掉 ghost。
+    ///
+    /// 牙：把 `if let Some(old) = sess.actor_id { … }` 那三行挪到 `if map_id >= self.maps.len()`
+    /// 之**前** ⇒ 本用例红（`Err(NoSuchMap)` 之后实体已消失）。
+    #[test]
+    fn m3_failed_reenter_keeps_leftover_ghost() {
+        // 只建一张图（map 0）⇒ `map_id = 1` 必走 `NoSuchMap`。
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let first = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+
+        let err = w.enter_map("hero", player(0, "hero", 7, 9, 10), 1);
+        assert!(
+            matches!(err, Err(crate::session::SessionError::NoSuchMap)),
+            "前置：非法地图必须 `Err(NoSuchMap)`，实得 {err:?}"
+        );
+        assert!(
+            w.entities.get(first).is_some_and(|e| e.ghost),
+            "入参校验失败时**不得**摘掉遗留 ghost（收走动作必须在全部校验之后）"
+        );
+        assert_eq!(
+            w.session("hero").unwrap().actor_id,
+            Some(first),
+            "校验失败不得清 actor_id"
+        );
     }
 
     /// **切图成功语义**（oracle `PlayObject.EnterAnotherMap` 的正向支，`PlayObject.cs:3772-3783`）：
