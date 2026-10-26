@@ -279,6 +279,9 @@ BATCH_LOG="$LOG_DIR/batch.log"
 BATCH_JSONL="$LOG_DIR/batch.jsonl"
 touch "$BATCH_LOG"
 [ "$DRY_RUN" -eq 1 ] || touch "$BATCH_JSONL"
+# 卡 openmir2-castle-symmetry-baseline：castle 状态基线/跑后两份（命名与位置写进 runbook 开窗第 0 步）
+CASTLE_BEFORE="$LOG_DIR/castle-before.txt"
+CASTLE_AFTER="$LOG_DIR/castle-after.txt"
 
 log() {
     local line
@@ -299,6 +302,18 @@ if command -v timeout >/dev/null 2>&1 && timeout --version 2>/dev/null | grep -q
     USE_TIMEOUT=1
 else
     log "WARNING: 没有 GNU timeout ⇒ 场景不设外层超时（card_window 自己的子进程超时仍生效）"
+fi
+
+# ---- ⓪b castle 状态跑前基线（卡 openmir2-castle-symmetry-baseline）----
+# C# 运行期会按内存重写 `Castle/List.txt` 与 `Castle/<n>/SabukW.txt`（600s 门）
+# ⇒ 跑后三侧不相等是预期。没有**跑前**基线就分不清「本轮造成」与「开窗前已存在」。
+# 这里在三侧（csharp / csharp-hook / rust）落 sha256+bytes；只读私有栈，不起栈/不占端口。
+log "== castle 状态跑前基线（$CASTLE_BEFORE）"
+if "$PY" -I -B "$PREFLIGHT_PRIVATE" --castle-before "$CASTLE_BEFORE" --castle-before-only \
+        >"$LOG_DIR/castle-before.log" 2>&1; then
+    sed 's/^/  /' "$LOG_DIR/castle-before.log" | while IFS= read -r ln; do log "$ln"; done
+else
+    log "WARNING: castle 跑前基线未落盘（见 $LOG_DIR/castle-before.log）—— 跑后差异只能标注、不能两档归因"
 fi
 
 # ---- ① release 重建（对齐 head + sha256）----
@@ -322,6 +337,7 @@ run_preflight() {
     local dir="$LOG_DIR/preflight" rc=0
     mkdir -p "$dir"
     local priv_args=(--json "$dir/preflight-private.json" --manifest "$MANIFEST")
+    [ -n "${CASTLE_BEFORE:-}" ] && priv_args+=(--castle-before "$CASTLE_BEFORE")
     [ "$SKIP_PIN_SMOKE" -eq 1 ] && priv_args+=(--skip-pin-smoke)
     log "== preflight private（$PREFLIGHT_PRIVATE）"
     "$PY" -I -B "$PREFLIGHT_PRIVATE" "${priv_args[@]}" >"$dir/preflight-private.log" 2>&1
@@ -384,6 +400,25 @@ PY
 cleanup_stack() {
     powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.ExecutablePath -like 'E:\\tmp\\conformance\\csharp-root\\*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1 || true
     powershell -NoProfile -ExecutionPolicy Bypass -File E:/tmp/conformance/stop-rust.ps1 >/dev/null 2>&1 || true
+}
+
+# ---- ④b castle 状态对比：跑前基线 vs 跑后，分「本轮造成 / 开窗前已存在」两档 ----
+# 卡 openmir2-castle-symmetry-baseline。只标注、不改本轮 rc（与 postrun 复核同口径）；
+# dry-run 也调一次，用来在没有窗口时验证接线（after 与 before 相同 ⇒ new=0）。
+run_castle_compare() {
+    if [ ! -f "$CASTLE_BEFORE" ]; then
+        log "WARNING: 缺 castle 跑前基线 $CASTLE_BEFORE ⇒ 跑后只做三侧标注，不做两档归因"
+        return 0
+    fi
+    log "== castle 状态对比（before=$CASTLE_BEFORE after=$CASTLE_AFTER）"
+    "$PY" -I -B "$PREFLIGHT_PRIVATE" --castle-compare "$CASTLE_BEFORE" \
+        --castle-after "$CASTLE_AFTER" >"$LOG_DIR/castle-compare.log" 2>&1
+    local rc=$?
+    sed 's/^/  /' "$LOG_DIR/castle-compare.log" | while IFS= read -r ln; do log "$ln"; done
+    if [ "$rc" -ne 0 ]; then
+        log "WARNING: castle 对比自身失败 rc=$rc（见 $LOG_DIR/castle-compare.log）"
+    fi
+    return 0
 }
 
 # ---- ⑤ 单场景 ----
@@ -533,6 +568,8 @@ done
 
 # ---- ⑥ 汇总（batch.jsonl 增量保留；summary 每次重算）----
 if [ "$DRY_RUN" -eq 1 ]; then
+    # 未跑场景 ⇒ after 应与 before 相同；调用一次只为验证接线（new 必须为 0）
+    run_castle_compare
     log "dry-run 完成：未起栈、未占端口、未写场景；计划 $LOG_DIR/batch.log"
     exit 0
 fi
@@ -635,6 +672,8 @@ for s in d["scenarios"]:
         "  (skipped)" if s.get("skipped") else ""))
 PY
 fi
+
+run_castle_compare
 
 # ---- 跑后对称性复核（卡 openmir2-postrun-symmetry-drift）----
 # C# 运行期会按内存重写 Castle/List.txt 与 SabukW ⇒ 跑后漂移是预期行为，只标注（不改本轮 rc）。

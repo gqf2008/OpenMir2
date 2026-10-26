@@ -244,7 +244,7 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
   }
   ```
   最小场景可反向对齐到 `0`（1 城），但 W-TAX-2 与多城项需 `0,1`；对齐后重跑 preflight，
-  `castle_list_symmetry` 必须 OK。`Castle/0|1/SabukW.txt` 两侧本就逐字节同源，无需改。
+  `castle_list_symmetry` 必须 OK。**订正（2026-10-26，卡 `openmir2-castle-symmetry-baseline`）**：`Castle/<n>/SabukW.txt`（每城一份）确实同源，但部署件与私有栈里**还有** `Castle/Castle/SabukW.txt`（实测三侧 `98d9b630…`(10400B) / `18ee5e6a…`(11090B) / `93b6af8b…`(10971B)，部署件 `cec68c8c…`(9290B)，**互不相同**）⇒ 由 §0.9b 的开窗第 0 步统一复制部署件值并落跑前基线。
 - **影响面**：W-TAX-1..4（尤其 W-TAX-2）、T-127 W-T127-4（多城广播次序）、任何按城表遍历的
   城堡工作项。窗口执行单（exec sheet）前置表已同步该步。
 - **影子 Envir 必须等于基线**（卡 `openmir2-preflight-envir-shadow-symmetry`）：`start-csharp.ps1`
@@ -263,6 +263,62 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 
 ---
 
+## 0.9b 开窗第 0 步：三侧 castle 状态统一复制部署件值 + 跑前基线（2026-10-26；卡 `openmir2-castle-symmetry-baseline`）
+
+- **要解决的问题**：`Castle/List.txt` 被 C# GameSrv **每 600s 重写**，`Castle/<n>/SabukW.txt`
+  也会在运行期落盘 ⇒ 跑后三侧（csharp / csharp-hook / rust）**天然不相等**。在这之前只有
+  **跑后**值（`post_run_symmetry_drift`），没有**跑前**基线 ⇒ 三侧互不相同且都不等于部署值时
+  **判不了**是「本轮改的」还是「开窗前就不同」——又是一次「判不了被当成有结论」。
+- **开窗第 0 步（停完 C# 之后、起私栈之前；只动私有栈副本，不动 `E:/MirServer`）**：
+  把**部署件当时的值**复制到三侧同名文件，再生成跑前基线。
+
+  ```powershell
+  # 1) List.txt：部署件当前是 0\r\n1\r\n（2 城，6B）
+  foreach ($d in @("E:/tmp/conformance/csharp-root/M2GameSvr",
+                   "E:/tmp/conformance/csharp-root/M2GameSvr-hook",
+                   "E:/tmp/conformance/rust-root/M2GameSvr")) {
+    if (Test-Path "$d/Castle/List.txt") {
+      Copy-Item -Force E:/MirServer/M2GameSvr/Castle/List.txt "$d/Castle/List.txt"
+    }
+  }
+  # 2) SabukW：三侧都有 `Castle/Castle/SabukW.txt` 这一层（另有每城 `Castle/0|1/SabukW.txt`）
+  foreach ($d in @("E:/tmp/conformance/csharp-root/M2GameSvr",
+                   "E:/tmp/conformance/csharp-root/M2GameSvr-hook",
+                   "E:/tmp/conformance/rust-root/M2GameSvr")) {
+    foreach ($rel in @("Castle/Castle/SabukW.txt", "Castle/0/SabukW.txt", "Castle/1/SabukW.txt")) {
+      if (Test-Path "$d/$rel") { Copy-Item -Force "E:/MirServer/M2GameSvr/$rel" "$d/$rel" }
+    }
+  }
+  # 3) 跑前基线（三侧 sha256+bytes；只读 + 落盘，不起栈、不占端口）
+  python -I -B tools/window/preflight_private_stack.py `
+    --castle-before E:/tmp/window-<date>/castle-before.txt --castle-before-only
+  ```
+
+- **两份 hash 文件（命名与位置固定）**：
+
+  | 文件 | 产生者 | 内容 |
+  |---|---|---|
+  | `<run_dir>/castle-before.txt` | `run_batch.sh` **起栈前**（等价 `preflight_private_stack.py --castle-before … --castle-before-only`；日志 `castle-before.log`） | 三侧 `Castle/List.txt` + `Castle/*/SabukW.txt` 的 `sha256` 与 `bytes` |
+  | `<run_dir>/castle-after.txt` | `run_batch.sh` **跑完**（`preflight_private_stack.py --castle-compare … --castle-after …`；日志 `castle-compare.log`） | 同上格式 + 末尾 `# drift <档> <文件>` 注释 |
+
+  `<run_dir>` 缺省 `E:/tmp/window/run3`（`--run-dir` 可改）；dry-run 写 `run3-dry-run/`。
+  格式是 TSV：`<rel>\t<side>\t<sha256|MISSING>\t<bytes|->`；`#` 开头为注释，两份可直接 diff。
+- **跑后两档分类**（日志里 `CASTLE_DRIFT new=<本轮造成> existing=<开窗前已存在>`）：
+  - 跑后三侧**一致** ⇒ 不算对称性漂移（即使三侧同时变成同一个新值）；
+  - 跑后不一致 且 跑前**已经**不一致 ⇒ **开窗前已存在**；
+  - 跑后不一致 且 跑前一致 ⇒ **本轮造成**。
+
+  只标注、不改本轮 rc（与 §0.10 同口径），但两档是**判据**：出现 `本轮造成` 时，该场景的
+  castle 相关差异不能再被说成「环境噪声」。
+- **参考值（2026-10-26 取证；会变，别写死）**：`Castle/List.txt` = `0\r\n1\r\n`（6B，sha `9b38d284…`）；
+  部署件 `Castle/Castle/SabukW.txt` 卡面记录为 `b6b2b809…`/9260B，同日 22:57 实测已变
+  `cec68c8c…`/9290B（600s 门重写）⇒ **一律以复制当时的值 + `castle-before.txt` 为准**。
+- **牙（`preflight_private_stack.py --selftest`）**：跑前把一侧改一个字节 ⇒ 必须报「开窗前已存在」
+  而**不是**「本轮造成」；不改再跑一轮 ⇒ 必须报无差异。
+- **preflight 报告项**：新增 `castle_state_symmetry`（既有 `castle_list_symmetry` **语义不变**，
+  List.txt 不一致仍 FAIL）：SabukW 差异记 WARN 并点名文件，三侧 sha 写进基线；夹具整体缺失才 FAIL。
+---
+
 ## 0.10 跑后对称性：C# 运行期会重写 Castle 文件（2026-10-25；卡 `openmir2-postrun-symmetry-drift`）
 
 - **事实**：C# 的 `CastleMgr.Save()`/`SaveCastleList()` 会按**内存状态**重写
@@ -272,7 +328,7 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 - **自动复核**：`card_window.py` 在 verdict 定稿后、写产物前做一次跑后对称性复核，结果写
   `card-window.json` 的 **`post_run_symmetry_drift`**（无漂移为 `[]`；有则列 `{file, sha256:{侧:sha}}`）。
   **只标注、不改本轮 parity 结论**。`run_batch.sh` 批次末尾打印一行
-  **`跑后对称性：OK`** 或 **`跑后对称性：DRIFT(n) <文件…>`**。
+  **`跑后对称性：OK`** 或 **`跑后对称性：DRIFT(n) <文件…>`**。另见 §0.9b：`run_batch.sh` 现在起栈前落 `castle-before.txt`、跑后落 `castle-after.txt`，并把差异按「本轮造成 / 开窗前已存在」**两档**归因（`CASTLE_DRIFT`）。
 - **下一轮前必须还原/对齐**（不碰 `E:/MirServer`，只动私有根）：
   ```powershell
   # 以基线为准，把影子与 rust 的 Castle 目录对齐（示例：两城 0,1）
