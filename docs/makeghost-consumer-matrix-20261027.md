@@ -65,30 +65,30 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 
 | # | 位置 | 消费者 | ghost 时 | 依据 / 说明 |
 |---|---|---|---|---|
-| B1 | `world.rs` `mag_make_defence_area` `mag_make_defence_area` | 魔法防御区（按格找对象） | ✅ **已滤（门在循环体内，不在 filter 里）** | 收集循环的 filter **不含** ghost（只判 `map_id`/`x`/`y`/`race`），但门在**循环体内**：`world.rs:1991` `if obj.ghost { continue; }`（函数 docblock `:1949-1955` 也写明「`Ghost` 目标跳过（oracle `!baseObject.Ghost`）」）⇒ ghost 不会被命中。**写法提醒**：这一行读 filter 会误判成「没门」 |
-| B2 | `world.rs` `tick_head` `tick_head`（`player_hiter_snapshot`） | 每玩家 hiter 快照（数据） | 🟡 / **⚠️ 低风险** | 只按 `race==PLAY` 入快照，无 ghost 门。快照只被 P32 消费，而 P32 在会话驱动侧受 stage 门（A1）；但**快照内容会含 ghost** |
-| B3 | `world.rs` `tick_tail` `tick_tail`（by_map 刷新） | AOI 状态刷新（viewer 循环） | ✅ **已滤（收集时不判、但自扫门判了）** | 收集 `(id, map_id)` 时确实**不判** ghost；但**自扫门**在 `world.rs:5435`：`Some(e) if e.race == PLAY => !e.ghost && …`（怪物支同：`Some(e) if !e.ghost && monster_self_scans(e)`）⇒ ghost **不会** `SearchViewRange`、不改 `visible_actors`。target 侧另由 `aoi.rs:228-232` `!other.ghost` 过滤。**这一行值得留在矩阵里的原因**正是「收集处没门、自扫处有门」这个结构 |
-| B4 | `world.rs` `expire_player_run_state` `expire_player_run_state` | 玩家 RunState 过期 | ✅ | filter：`race==PLAY && !e.ghost` |
-| B5 | `world.rs` `check_dup_obj` `check_dup_obj` | 顶号检测 | ✅ | filter：`race==PLAY && !e.ghost`（顶号检测不拿 ghost 当「在线」） |
-| B6 | `world.rs` `verify_players_map_time` `verify_players_map_time` | 玩家图时效 | ✅ | filter：`race==PLAY && !e.ghost` |
-| B7 | `world.rs` `expire_hitters` `expire_hitters` | hiter 过期清理 | ✅（有意） | filter：`e.death || e.ghost` —— ghost 被当作「已消失」，用来清别人的 `last_hiter` |
-| B8 | `world.rs` `settle_deaths` `settle_deaths` | 死亡结算 | **⚠️ 需补过滤** | filter 只有 `(hp==0 || die_called) && !death_settled && race 匹配`，**无 ghost 门** ⇒ M-3 后「ghost 且 `die_called`」会被结算（掉落/经验/退组），而 oracle 的 ghost 不 `Run` ⇒ 不会走到 `Die()` |
-| B9 | `monai.rs` `base_object_run_monster` `base_object_run_monster`（`PlayObjectCount`） | MonGen 门计数 | ✅（有意不滤） | `race==PLAY` 计数。代码注释（`lib.rs:24762-24767`、`:24965-24967`）明写：oracle `OnlinePlayObject`/`PlayObjectCount` = `PlayObjectList.Count`，**`MakeGhost` 后仍在表里** ⇒ 必须同口径。**M-3 落地后（F1 修复）**：ghost 由 ① 网关 `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost（窗口长度见 §6 的时间口径）；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
-| B10 | `monai.rs` `monster_ai_tick` `monster_ai_tick` | 怪物 AI | ✅ | filter：`race > PLAY && merchant.is_none() && npc.is_none() && !e.ghost` |
-| B11 | `merchant.rs` `merchant_ids_sorted` `merchant_ids_sorted` | 商人 tick | 🧱 | 只取 `merchant.is_some()` —— 玩家永不带 `merchant` 态（`insert_merchant` 是唯一写点，`merchant.rs:357`） |
-| B12 | `npc.rs` `npc_ids_sorted` `npc_ids_sorted` | 固定 NPC tick | 🧱 | 只取 `npc.is_some()` —— 玩家永不带 `npc` 态（`npc.rs:253` 唯一写点） |
-| B13 | `party.rs` `party_play_object_by_name` `party_play_object_by_name` | 队伍按名找人 | **⚠️ 需补过滤** | filter 只有 `race==PLAY && name==…`。M-3 后 ghost 的名字仍能被组队/邀请命中。oracle 侧需对照 `GetPlayObject`/`GetPlayObjectByName` 是否排除 ghost —— 本片**给不出行号举证 ⇒ 按「需补过滤」办**（卡面要求：举证不了就按需补） |
-| B14 | `slave.rs` `slave_list_cleanup_all` `slave_list_cleanup_all` | 宝宝表清理（全实体） | **⚠️ 需补过滤** | filter 只有 `!e.slave_list.is_empty()`。oracle 在**主人自己的 `Run()`** 里清表（`BaseObject.Base.cs:208-217`），ghost 不 `Run` ⇒ ghost 主人的宝宝表不该在这种集中扫描里被清（时序/条件都可能不同） |
-| B15 | `chat.rs` `hear_targets_at` `hear_targets_at` | 说话/喊话收件人 | ✅ | filter：`… && !e.ghost && …` |
-| B16 | `chat.rs` `cry_targets` `cry_targets` | 哭（`Cry`）收件人 | ✅ | filter：`… && !e.ghost && …` |
-| B17 | `gmcmd.rs` `play_by_name` `play_by_name` | GM 按名找玩家 | ✅ | filter：`race==PLAY && !e.ghost && name==…` |
-| B18 | `state_log.rs` `record` `record` | 状态日志（诊断） | 🟡 | 全实体 dump，仅日志；无帧面 |
-| B19 | `lib.rs` `front_target` `front_target` | 前端目标选择 | ✅ | filter：`… && !t.ghost && !t.death` |
-| B20 | `lib.rs` `world_aoi_diag` / `:14871` `world_aoi_diag` | AOI 诊断 | 🟡 | 只读快照；ghost 会进 `entities` 计数（诊断数值会变） |
-| B21 | `lib.rs` `drain_close_health_residual` `drain_close_health_residual` | ShowHp 到期扫描 | **⚠️ 需补过滤** | 与 A4 同一处（会话侧看是「名单来自全实体」，实体侧就是这条） |
-| B22 | `lib.rs` `step_mon_gen` `step_mon_gen`（`play_object_count`） | MonGen 门计数 | ✅（有意不滤） | 与 B9 同口径，见 `:24965-24967` 注释 |
-| B23 | `lib.rs` `sim_loop` `sim_loop`（`online_play_objects`） | 在线数上报（IDS `SS_SERVERINFO`） | ✅（有意不滤） | 注释 `:24762-24767`：oracle `WorldEngine.OnlinePlayObject` = `PlayObjectList.Count`，**不能排除 ghost**。**M-3 落地后（F1 修复）**：同上 —— ① `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
-| B24 | `lib.rs` `sim_loop` `sim_loop`（MonGen 门） | 刷怪门计数 | ✅（有意不滤） | 同上注释（两条 ZenTime 门必须同一口径） |
+| B1 | `world.rs` `mag_make_defence_area` | 魔法防御区（按格找对象） | ✅ **已滤（门在循环体内，不在 filter 里）** | 收集循环的 filter **不含** ghost（只判 `map_id`/`x`/`y`/`race`），但门在**循环体内**：`world.rs:1991` `if obj.ghost { continue; }`（函数 docblock `:1949-1955` 也写明「`Ghost` 目标跳过（oracle `!baseObject.Ghost`）」）⇒ ghost 不会被命中。**写法提醒**：这一行读 filter 会误判成「没门」 |
+| B2 | `world.rs` `tick_head`（`player_hiter_snapshot`） | 每玩家 hiter 快照（数据） | 🟡 / **⚠️ 低风险** | 只按 `race==PLAY` 入快照，无 ghost 门。快照只被 P32 消费，而 P32 在会话驱动侧受 stage 门（A1）；但**快照内容会含 ghost** |
+| B3 | `world.rs` `tick_tail`（by_map 刷新） | AOI 状态刷新（viewer 循环） | ✅ **已滤（收集时不判、但自扫门判了）** | 收集 `(id, map_id)` 时确实**不判** ghost；但**自扫门**在 `world.rs:5435`：`Some(e) if e.race == PLAY => !e.ghost && …`（怪物支同：`Some(e) if !e.ghost && monster_self_scans(e)`）⇒ ghost **不会** `SearchViewRange`、不改 `visible_actors`。target 侧另由 `aoi.rs:228-232` `!other.ghost` 过滤。**这一行值得留在矩阵里的原因**正是「收集处没门、自扫处有门」这个结构 |
+| B4 | `world.rs` `expire_player_run_state` | 玩家 RunState 过期 | ✅ | filter：`race==PLAY && !e.ghost` |
+| B5 | `world.rs` `check_dup_obj` | 顶号检测 | ✅ | filter：`race==PLAY && !e.ghost`（顶号检测不拿 ghost 当「在线」） |
+| B6 | `world.rs` `verify_players_map_time` | 玩家图时效 | ✅ | filter：`race==PLAY && !e.ghost` |
+| B7 | `world.rs` `expire_hitters` | hiter 过期清理 | ✅（有意） | filter：`e.death || e.ghost` —— ghost 被当作「已消失」，用来清别人的 `last_hiter` |
+| B8 | `world.rs` `settle_deaths` | 死亡结算 | **⚠️ 需补过滤** | filter 只有 `(hp==0 || die_called) && !death_settled && race 匹配`，**无 ghost 门** ⇒ M-3 后「ghost 且 `die_called`」会被结算（掉落/经验/退组），而 oracle 的 ghost 不 `Run` ⇒ 不会走到 `Die()` |
+| B9 | `monai.rs` `base_object_run_monster`（`PlayObjectCount`） | MonGen 门计数 | ✅（有意不滤） | `race==PLAY` 计数。代码注释（`lib.rs:24762-24767`、`:24965-24967`）明写：oracle `OnlinePlayObject`/`PlayObjectCount` = `PlayObjectList.Count`，**`MakeGhost` 后仍在表里** ⇒ 必须同口径。**M-3 落地后（F1 修复）**：ghost 由 ① 网关 `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost（窗口长度见 §6 的时间口径）；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
+| B10 | `monai.rs` `monster_ai_tick` | 怪物 AI | ✅ | filter：`race > PLAY && merchant.is_none() && npc.is_none() && !e.ghost` |
+| B11 | `merchant.rs` `merchant_ids_sorted` | 商人 tick | 🧱 | 只取 `merchant.is_some()` —— 玩家永不带 `merchant` 态（`insert_merchant` 是唯一写点，`merchant.rs:357`） |
+| B12 | `npc.rs` `npc_ids_sorted` | 固定 NPC tick | 🧱 | 只取 `npc.is_some()` —— 玩家永不带 `npc` 态（`npc.rs:253` 唯一写点） |
+| B13 | `party.rs` `party_play_object_by_name` | 队伍按名找人 | **⚠️ 需补过滤** | filter 只有 `race==PLAY && name==…`。M-3 后 ghost 的名字仍能被组队/邀请命中。oracle 侧需对照 `GetPlayObject`/`GetPlayObjectByName` 是否排除 ghost —— 本片**给不出行号举证 ⇒ 按「需补过滤」办**（卡面要求：举证不了就按需补） |
+| B14 | `slave.rs` `slave_list_cleanup_all` | 宝宝表清理（全实体） | **⚠️ 需补过滤** | filter 只有 `!e.slave_list.is_empty()`。oracle 在**主人自己的 `Run()`** 里清表（`BaseObject.Base.cs:208-217`），ghost 不 `Run` ⇒ ghost 主人的宝宝表不该在这种集中扫描里被清（时序/条件都可能不同） |
+| B15 | `chat.rs` `hear_targets_at` | 说话/喊话收件人 | ✅ | filter：`… && !e.ghost && …` |
+| B16 | `chat.rs` `cry_targets` | 哭（`Cry`）收件人 | ✅ | filter：`… && !e.ghost && …` |
+| B17 | `gmcmd.rs` `play_by_name` | GM 按名找玩家 | ✅ | filter：`race==PLAY && !e.ghost && name==…` |
+| B18 | `state_log.rs` `record` | 状态日志（诊断） | 🟡 | 全实体 dump，仅日志；无帧面 |
+| B19 | `lib.rs` `front_target` | 前端目标选择 | ✅ | filter：`… && !t.ghost && !t.death` |
+| B20 | `lib.rs` `world_aoi_diag` / 同文件 `:14871`（第二处） | AOI 诊断 | 🟡 | 只读快照；ghost 会进 `entities` 计数（诊断数值会变） |
+| B21 | `lib.rs` `drain_close_health_residual` | ShowHp 到期扫描 | **⚠️ 需补过滤** | 与 A4 同一处（会话侧看是「名单来自全实体」，实体侧就是这条） |
+| B22 | `lib.rs` `step_mon_gen`（`play_object_count`） | MonGen 门计数 | ✅（有意不滤） | 与 B9 同口径，见 `:24965-24967` 注释 |
+| B23 | `lib.rs` `sim_loop`（`online_play_objects`） | 在线数上报（IDS `SS_SERVERINFO`） | ✅（有意不滤） | 注释 `:24762-24767`：oracle `WorldEngine.OnlinePlayObject` = `PlayObjectList.Count`，**不能排除 ghost**。**M-3 落地后（F1 修复）**：同上 —— ① `Closed` 移除门 或 ② 重进时 `enter_map_at` 收走 ⇒ 只在**有限窗口**内含 ghost；**两者都不到时仍会滞留**（M-3 F4 已登记为未做的兜底） |
+| B24 | `lib.rs` `sim_loop`（MonGen 门） | 刷怪门计数 | ✅（有意不滤） | 同上注释（两条 ZenTime 门必须同一口径） |
 
 **已剔除（测试内，不计入矩阵）**：`monai.rs:7444/7470`、`merchant.rs:2191`、`guardlist.rs:281/460`、
 `lib.rs:26081`（`tick_until_next_player_scan`）、`lib.rs:46322`、`lib.rs:74208` —— 全部落在各自文件的
@@ -103,12 +103,12 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 | 会话名单 | `world.sessions.iter()`（10 处 `stage==InWorld` 门） | 不会（`stage=Left`） | ✅ |
 | 周期存档名单 | `sessions.keys()`（`lib.rs` `drain_periodic_save`，**无 stage 门**） | 会 | **⚠️ 需补 stage/ghost 门**（§2 A5；oracle `WorldServer.cs:648` 的 `if (!playGhost)` 主干把周期存档挡在 ghost 之外） |
 | 商人/NPC tick 名单 | `merchant_ids_sorted` / `npc_ids_sorted` | 不会（玩家无 merchant/npc 态） | 🧱 |
-| buff 的逐 actor 表 | `buff.rs` `operate` `operate` 遍历的 `self.actors`（**不是 `entities`**，是 buff 自己的 actor 名单） | 会（ghost 仍在 `self.actors` 里，只判实体存在） | ⚠️ 见 §6#4——与 B 表同一条判据的另一种名单形态 |
+| buff 的逐 actor 表 | `buff.rs` `operate` 遍历的 `self.actors`（**不是 `entities`**，是 buff 自己的 actor 名单） | 会（ghost 仍在 `self.actors` 里，只判实体存在） | ⚠️ 见 §6#4——与 B 表同一条判据的另一种名单形态 |
 | 宝宝表 | `slave_list_cleanup_all`（B14）+ 主人自己的 `slave_list` | 会（ghost 主人） | ⚠️ 见 B14 |
 | 队伍/行会成员表 | `party_*` / `guilds` | 成员表里可能有 ghost 名字 | ⚠️ 见 B13（按名找）/ M-2 需按表核 |
 | 地图格 | `MapGrid` 格索引 | **不会**（soft_close 已 `remove_from_map`，`session.rs:537`） | ✅ 移动/占格/拾取/碰撞全部走格索引（`map.rs`/`space_move.rs`）⇒ ghost 不占格 |
 | 展示表 | `DisplayTable`（`downlink`） | 由 AOI 下行驱动；A1 stage 门 + 移除登记 | ✅（M-2 需为「ghost 不登记/及时摘除」补牙） |
-| 战斗目标 | `combat.rs` `is_attack_target` `is_attack_target` | 不会：`target.ghost \|\| target.invisible \|\| target.death` 直接 false | ✅（行号 `combat.rs:712`） |
+| 战斗目标 | `combat.rs` `is_attack_target` | 不会：`target.ghost \|\| target.invisible \|\| target.death` 直接 false | ✅（行号 `combat.rs:712`） |
 | 怪物目标选择 | `monai.rs` 的 `FindTarget` 系（按格扫 + `is_attack_target`） | 不会（同 combat 门） | ✅ |
 | 死亡掉落 | `death_drop.rs`（由死亡事件驱动 + 格扫） | 不会：ghost 不触发死亡（但 B8 今天有个缺口） | ⚠️ 依赖 B8 修好 |
 
@@ -132,7 +132,7 @@ sess.stage == WorldStage::Left   AND   sess.actor_id == Some(id)   （且 entiti
 | 读者 | 位置 | 今天的语义 | M-3 后要确认什么 |
 |---|---|---|---|
 | 进世界/命令派发守卫 | `lib.rs` 各 `dispatch_*` 入口 | `stage==InWorld` 门 | 不变 |
-| 存档记录构造 | `lib.rs` `build_save_record` `build_save_record` | 按 `session.actor_id` 查实体，缺则回落 | ghost 时实体**在** ⇒ 走「在」的分支；与 A5/A6 的存档口径一致 |
+| 存档记录构造 | `lib.rs` `build_save_record` | 按 `session.actor_id` 查实体，缺则回落 | ghost 时实体**在** ⇒ 走「在」的分支；与 A5/A6 的存档口径一致 |
 | AOI/登录尾段/离世 | A1–A3 | stage 门 | 不变 |
 | GM/聊天按名找 | `gmcmd.rs` `play_by_name` / `chat.rs` | 有 ghost 门 | 不变 |
 | 软关自身（`soft_close`） | `session.rs` `soft_close` | 今天直接销毁 | M-3 改为非销毁；`soft_close_count` 语义不变 |
