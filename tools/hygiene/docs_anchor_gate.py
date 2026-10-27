@@ -75,86 +75,178 @@ SYMBOL_ANCHOR_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.(?:rs|cs))`\s+`([A-Za-z_][A
 def strip_rust_comments(text):
     """剥 Rust 注释；**行数不变**（跨行块注释保留换行）。
 
-    语义对齐 `strip_rust_comments`（game-svr `lib.rs`）：
-    ① 行注释 `//` ② 嵌套块注释 `/* */` ③ 字符串里的 `//` 保留 ④ raw string 保留
-    ⑤ 字符字面量 / 生命期区分 ⑥ 行数不变
+    语义对齐 `strip_rust_comments`（game-svr `lib.rs`）：行注释 / 嵌套块注释 /
+    字符串与 raw string 里的 `//` **保留** / 字符字面量与生命期区分 / 行数不变。
+
+    逐字符状态机（NORMAL / LINE / BLOCK(depth) / STR / RAW(hashes) / CHAR）。
+    字符串与字符字面量的**内容保留**（只剥注释文本）。
     """
     out = []
     i, n = 0, len(text)
+    state = 'NORMAL'
+    depth = 0
+    hashes = 0
     while i < n:
         c = text[i]
         two = text[i:i + 2]
-        # 行注释
-        if two == '//':
-            j = text.find('\n', i)
-            if j < 0:
-                break
-            i = j  # 保留换行
+        if state == 'LINE':
+            if c == '\n':
+                out.append(c)
+                state = 'NORMAL'
+            i += 1
             continue
-        # 嵌套块注释
+        if state == 'BLOCK':
+            if two == '/*':
+                depth += 1
+                i += 2
+            elif two == '*/':
+                depth -= 1
+                i += 2
+                if depth == 0:
+                    state = 'NORMAL'
+            else:
+                if c == '\n':
+                    out.append(c)
+                i += 1
+            continue
+        if state == 'STR':
+            out.append(c)
+            if c == '\\' and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == '"':
+                state = 'NORMAL'
+            i += 1
+            continue
+        if state == 'RAW':
+            out.append(c)
+            if c == '"' and text.startswith('#' * hashes, i + 1):
+                out.append('#' * hashes)
+                i += 1 + hashes
+                state = 'NORMAL'
+            else:
+                i += 1
+            continue
+        if state == 'CHAR':
+            out.append(c)
+            if c == '\\' and i + 1 < n:
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if c == "'":
+                state = 'NORMAL'
+            i += 1
+            continue
+
+        # NORMAL
+        if two == '//':
+            state = 'LINE'
+            i += 2
+            continue
         if two == '/*':
+            state = 'BLOCK'
             depth = 1
             i += 2
-            while i < n and depth:
-                if text[i:i + 2] == '/*':
-                    depth += 1
-                    i += 2
-                elif text[i:i + 2] == '*/':
-                    depth -= 1
-                    i += 2
-                else:
-                    if text[i] == '\n':
-                        out.append('\n')  # 行数不变
-                    i += 1
             continue
-        # raw string：r"…" / r#"…"# / br#"…"#
-        m = RAW_STRING_RE.match(text, i)
+        m = RAW_STRING_RE.match(text, i) if (
+            i == 0 or not (text[i - 1].isalnum() or text[i - 1] == '_')) else None
         if m:
-            hashes = m.group(1)
-            start = i + m.end()
-            close = '"' + hashes
-            j = text.find(close, start)
-            if j < 0:
-                out.append(text[i:])
-                break
-            out.append(text[i:j + len(close)])
-            i = j + len(close)
+            # raw string：r" / r#" / br" / br#"（含前缀原文保留）
+            hashes = len(m.group(1))
+            out.append(text[i:i + 2 + hashes])
+            i += 2 + hashes
+            state = 'RAW'
             continue
-        # 普通字符串
         if c == '"':
-            j = i + 1
-            while j < n:
-                if text[j] == '\\':
-                    j += 2
-                    continue
-                if text[j] == '"':
-                    j += 1
-                    break
-                j += 1
-            out.append(text[i:j])
-            i = j
+            out.append(c)
+            i += 1
+            state = 'STR'
             continue
-        # 字符字面量 vs 生命期：`'x'` / `'\n'` / `'\''` / `'"'` / `'\u{…}'`；`'a`（生命期）不算
         if c == "'":
-            if text[i:i + 2] == "'\\":
-                # 转义序列：'\'' / '\n' / '\u{1F600}'
-                j = i + 2
-                if j < n and text[j] == 'u' and j + 1 < n and text[j + 1] == '{':
-                    k = text.find('}', j)
-                    j = (k + 2) if k >= 0 else n
-                else:
-                    j = min(j + 1, n)
-                    if j < n and text[j] == "'":
-                        j += 1
-                out.append(text[i:j])
-                i = j
-                continue
             if i + 2 < n and text[i + 2] == "'":
-                # 'x'（单字符）
+                out.append(text[i:i + 3])   # 'x'
+                i += 3
+                continue
+            if two == "'" + chr(92):
+                out.append(two)
+                i += 2
+                state = 'CHAR'
+                continue
+            out.append(c)                   # 生命期 'a
+            i += 1
+            continue
+        out.append(c)
+        i += 1
+    return ''.join(out)
+
+
+def mask_literals(text):
+    """把字符串/raw string/字符字面量的**内容**替换成等长空格（长度不变）。
+
+    用于花括号配对：否则 `format!("{...}")`、字符串里的 `{`/`}` 会把 item 深度算错。
+    复用与 `strip_rust_comments` 相同的状态机，但**不剥注释**（调用方先剥）。
+    """
+    out = []
+    i, n = 0, len(text)
+    state = 'NORMAL'
+    hashes = 0
+    while i < n:
+        c = text[i]
+        if state == 'STR':
+            if c == chr(92) and i + 1 < n:
+                # 行接续 `\`+换行：**换行本身要保留**，否则 mask 后行号整体漂移
+                out.extend([' ', text[i + 1] if text[i + 1] == chr(10) else ' '])
+                i += 2
+                continue
+            out.append(c if c == '"' else ('\n' if c == '\n' else ' '))
+            if c == '"':
+                state = 'NORMAL'
+            i += 1
+            continue
+        if state == 'RAW':
+            if c == '"' and text.startswith('#' * hashes, i + 1):
+                out.append('"' + '#' * hashes)
+                i += 1 + hashes
+                state = 'NORMAL'
+                continue
+            out.append('\n' if c == '\n' else ' ')
+            i += 1
+            continue
+        if state == 'CHAR':
+            if c == chr(92) and i + 1 < n:
+                # 行接续 `\`+换行：**换行本身要保留**，否则 mask 后行号整体漂移
+                out.extend([' ', text[i + 1] if text[i + 1] == chr(10) else ' '])
+                i += 2
+                continue
+            out.append(c if c == "'" else ('\n' if c == '\n' else ' '))
+            if c == "'":
+                state = 'NORMAL'
+            i += 1
+            continue
+        m = RAW_STRING_RE.match(text, i) if (
+            i == 0 or not (text[i - 1].isalnum() or text[i - 1] == '_')) else None
+        if m:
+            hashes = len(m.group(1))
+            out.append(text[i:i + 2 + hashes])
+            i += 2 + hashes
+            state = 'RAW'
+            continue
+        if c == '"':
+            out.append(c)
+            i += 1
+            state = 'STR'
+            continue
+        if c == "'":
+            if i + 2 < n and text[i + 2] == "'":
                 out.append(text[i:i + 3])
                 i += 3
                 continue
-            # 生命期 'a —— 原样保留，不当字面量
+            if text[i:i + 2] == "'" + chr(92):
+                out.append(text[i:i + 2])
+                i += 2
+                state = 'CHAR'
+                continue
             out.append(c)
             i += 1
             continue
@@ -201,17 +293,24 @@ def item_spans(text):
     （game-svr `lib.rs` ≈7.7 万行 ⇒ 门跑几分钟）。单遍栈式算法：遇到 fn 记起始深度，
     深度回落到起始深度即闭合；未闭合的落到文件尾（不再死等）。
     """
+    text = mask_literals(text)
     spans = []
-    opens = []   # (name, start_depth, start_line)
+    # (name, start_depth, start_line, seen_open)
+    opens = []
     depth = 0
     for i, line in enumerate(text.split(chr(10)), 1):
         for m in FN_RE.finditer(line):
-            opens.append((m.group(2), depth, i))
+            opens.append([m.group(2), depth, i, False])
         depth += _brace_delta(line)
-        while opens and opens[-1][1] >= depth:
-            name, d0, start = opens.pop()
+        # 只有真正进入过 `{ … }` 才允许闭合：**多行签名**里 depth 不变，
+        # 若按「depth 回落」会在声明的下一行就把函数判空（`step_mon_gen` 的 span 曾是 (19498,19499)）。
+        for op in opens:
+            if depth > op[1]:
+                op[3] = True
+        while opens and opens[-1][3] and opens[-1][1] >= depth:
+            name, d0, start, _seen = opens.pop()
             spans.append((name, start, i))
-    for name, _d0, start in opens:
+    for name, _d0, start, _seen in opens:
         spans.append((name, start, len(text.split(chr(10)))))
     return spans
 
@@ -274,6 +373,7 @@ def run(reg_path, repo, list_only=False):
         return 2
     findings, anchors = [], []
     seen_exc_used = set()
+    pos = 2  # 未见表头时的缺省列（B 表）；遇到「位置」表头立即改写
     for f in reg["files"]:
         rel = f["path"]
         p = os.path.join(repo, rel)
@@ -283,14 +383,23 @@ def run(reg_path, repo, list_only=False):
         raw = open(p, encoding="utf-8", errors="replace").read()
         stripped_src_cache = {}
         for lineno, line in enumerate(raw.split("\n"), 1):
-            # **只扫表格的位置列（`split('|')[2]`）**：正文/说明列里的行号是**代码片段定位**
+            # **只扫表格的位置列**：正文/说明列里的行号是**代码片段定位**
             # （如 `` `:15073` `if sess.stage != …` ``），换成符号会丢信息 ⇒ 不在本门判定域（A2）。
+            #
+            # **列索引按表头取**（reviewer-20 F1）：矩阵 A 表的列序是 `| # | 路径 | 位置 | …` ⇒ 位置在
+            # `cells[3]`；B 表是 `| # | 位置 | 消费者 | …` ⇒ `cells[2]`。写死 2 会让 A 表整片漏网。
             if not line.startswith("|"):
                 continue
             cells = line.split("|")
-            if len(cells) <= 2:
+            header_cells = [c.strip() for c in cells]
+            if "位置" in header_cells and any("---" in c for c in cells[1:]):
+                continue  # 分隔行
+            if "位置" in header_cells and any(c == "#" for c in header_cells[1:2]):
+                pos = header_cells.index("位置")
+                continue  # 表头行本身不判
+            if len(cells) <= pos:
                 continue
-            scopes = [cells[2]]
+            scopes = [cells[pos]]
             for scope in scopes:
                 for m in SYMBOL_ANCHOR_RE.finditer(scope):
                     rel_f, sym = m.group(1), m.group(2)
@@ -380,27 +489,52 @@ def _file_data(repo, path, cache):
 
 
 def _check_symbol(repo, reg, rel_f, sym, lineno, cache):
-    # 裸文件名（`lib.rs`）在多个基目录下都有同名文件 ⇒ **逐个候选搜**，全找不到才判红；
-    # 否则 `crates/world/src/lib.rs` 会遮住 `bins/game-svr/src/lib.rs`（B 表全是这个文件名）。
+    # 裸文件名（`lib.rs`）在多个基目录下都有同名文件 ⇒ **逐个候选搜**；
+    # 多个候选文件都含该符号 ⇒ rc=2 多解（F2），**不 first-match-wins**。
     cands = [b + rel_f for b in reg["base_dirs"]]
     cands = [c for c in cands if os.path.isfile(os.path.join(repo, c))]
     if not cands:
         return {"why": "ANCHOR_PATH_MISSING", "path": rel_f, "detail": "符号锚的文件解析不到"}
     undec = False
+    matched = []
     for path in cands:
         text, lines, spans = _file_data(repo, path, cache)
-        # 只算「哪些行命中符号」（O(文件行数)），不要逐 span join 全文（那会变 O(n²)）。
+        # **声明优先**：`fn <sym>(` 才是「这个符号属于哪个 item」的权威；
+        # 落在闭包里的**引用**不构成多解（O1 的护栏只留给真正无声明可查的情形）。
+        # 声明必须是**行首的 fn 声明**（`pub fn`/`async fn`/缩进均可），
+        # 否则测试里的 `assert!(src.contains("fn sim_loop("))` 也会被当成 26 个「声明」。
+        decl = [i for i, line in enumerate(lines, 1)
+                if (m := FN_RE.match(line)) and m.group(2) == sym]
+        if decl:
+            owners = {sp for d in decl for sp in spans if sp[1] <= d <= sp[2]}
+            if len(owners) == 1:
+                matched.append(path)
+            elif len(owners) > 1:
+                return {"why": "UNDECIDABLE", "path": path,
+                        "detail": "多解：`fn %s(` 的声明落在多个 item：%s"
+                                  % (sym, sorted(o[0] for o in owners))}
+            else:
+                return {"why": "UNDECIDABLE", "path": path,
+                        "detail": "声明行 %s 不在任何 item 内（定位器无法归属）" % decl}
+            continue
+        # 没有声明：退到「符号是否出现在某个 item 的正文」
         hits = [i for i, line in enumerate(lines, 1) if symbol_in_text(sym, line)]
         if not hits:
             continue
-        hitset = set(hits)
-        for sp in spans:
-            if any(sp[1] <= h <= sp[2] for h in hitset):
-                return None
+        for h in hits:
+            item, why = locate_item(spans, h)
+            if item is None and why:
+                return {"why": "UNDECIDABLE", "path": path,
+                        "detail": "行 %d 定位不到 item：%s" % (h, why)}
         undec = True
+    if len(matched) > 1:
+        return {"why": "UNDECIDABLE", "path": rel_f,
+                "detail": "多解：`fn %s(` 在多个候选文件里都有声明：%s" % (sym, ", ".join(matched))}
+    if len(matched) == 1:
+        return None
     if undec:
         return {"why": "UNDECIDABLE", "path": rel_f,
-                "detail": "符号在文件里、但不在任何 fn 的正文内（可能是字段/常量/宏）"}
+                "detail": "符号在文件里、但没有 `fn %s(` 声明（可能是字段/常量/宏/引用）" % sym}
     return {"why": "ANCHOR_SYMBOL_MISSING", "path": rel_f,
             "detail": "剥注释后按完整标识符找不到 `%s`（候选文件都搜过）" % sym}
 
