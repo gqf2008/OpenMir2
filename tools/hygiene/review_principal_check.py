@@ -47,6 +47,12 @@ import subprocess
 import sys
 import tempfile
 
+# 卡 `openmir2-entry-shape-consumer-followups`（N1）：读 collab 条目的形状判定只留一处
+# （`tools/collab/entryrefs.py`），本工具不再自己写 `item.get("entry") or {}`。
+sys.path.insert(0, os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "collab"))
+from entryrefs import EntryRefError, entry_of  # noqa: E402
+
 PROCESS_TIMEOUT = 20.0
 BUSY_PROCESS_PREFIXES = ("python", "cargo", "rustc")
 
@@ -102,6 +108,30 @@ def _text(data, errors="replace"):
     return data if isinstance(data, str) else ""
 
 
+class LedgerShapeError(Exception):
+    """线程视图里有**形状不合法**的条目（既不是 `{entry: …}` 也不是 entry 本身）。
+
+    卡 `openmir2-entry-shape-consumer-followups`（N1）：旧实现 `item.get("entry") or {}`
+    会把这种条目当成「空条目」静默跳过——作者列表因此可能少人，且看不出来。现在一律
+    fail-loud：`evaluate()` 把它变成 rc=2 并点名位置/principal。
+    """
+
+
+def _entry_or_shape_error(item, idx):
+    """`entry_of(item)`；形状不合法 ⇒ 抛 `LedgerShapeError`（带 entries[i] 与 principal）。"""
+    try:
+        return entry_of(item)
+    except EntryRefError as ex:
+        who = []
+        if isinstance(item, dict):
+            who.append("principal=%r" % (item.get("principal"),))
+            inner = item.get("entry")
+            if isinstance(inner, dict):
+                who.append("entry.id=%r" % (inner.get("id"),))
+        raise LedgerShapeError(
+            "entries[%d] %s：%s" % (idx, " ".join(who) or "（非 dict）", ex)) from ex
+
+
 def author_from_entries(entries):
     """Return (authors, unverified_skipped, malformed_skipped) from entries.
 
@@ -124,11 +154,12 @@ def author_from_entries(entries):
     seen = set()
     skipped = 0
     malformed = 0
-    for item in entries:
-        entry = item.get("entry") or {}
+    for idx, item in enumerate(entries):
         if item.get("verified") is not True:
             skipped += 1
             continue
+        # N1：形状不合法 ⇒ `LedgerShapeError`（不再 `or {}` 静默丢弃整条）
+        entry = _entry_or_shape_error(item, idx)
         body = entry.get("body") or {}
         kind = entry.get("kind")
         relevant = kind == "patch" or (
@@ -183,10 +214,10 @@ def declared_branch_from_entries(entries):
     """
     patch_branch = None
     status_branch = None
-    for item in entries:
-        entry = item.get("entry") or {}
+    for idx, item in enumerate(entries):
         if item.get("verified") is not True:
             continue
+        entry = _entry_or_shape_error(item, idx)
         body = entry.get("body") or {}
         kind = entry.get("kind")
         value = clean_branch(body.get("branch"))
@@ -543,14 +574,21 @@ def evaluate(repo, card, reviewer, worktree, out=sys.stdout, read_thread=None,
     if message:
         print("review-principal check: %s" % message, file=err)
         return 2
-    authors, skipped, malformed = author_from_entries(entries)
+    try:
+        authors, skipped, malformed = author_from_entries(entries)
+        declared = declared_branch_from_entries(entries)
+    except LedgerShapeError as ex:
+        # N1：形状不合法是**判不了**，不是「这条没有作者」——必须 rc=2 且点名，
+        # 否则一个坏条目会安静地从作者列表里消失（自审检查因此可能放行）。
+        print("review-principal check: 线程视图里有形状不合法的条目：%s" % ex, file=err)
+        return 2
     return report(
         card,
         authors,
         skipped,
         reviewer,
         worktree,
-        declared_branch=declared_branch_from_entries(entries),
+        declared_branch=declared,
         out=out,
         malformed=malformed,
     )
@@ -883,6 +921,33 @@ def selftest():
         "⑳ 账本严格 UTF-8：不可解码 => 不返回文本（走 rc=2 通道）",
         decoded is None and bool(reason)
         and decode_ledger_stdout(b"[]") == ("[]", None),
+    ))
+
+    # ㉑ N1（卡 `openmir2-entry-shape-consumer-followups` A2）：malformed thread 视图
+    #     ⇒ `author_from_entries` **必须抛**（旧实现 `or {}` 会静默跳过它）；
+    #     经 `evaluate` 时必须 rc=2 且点名 principal/位置——不是「没有作者」。
+    malformed_view = [{"oid": "f" * 40, "principal": "openmir2-worker-q", "verified": True}]
+    try:
+        author_from_entries(malformed_view)
+        raise_shape = False
+    except LedgerShapeError as ex:
+        raise_shape = "entries[0]" in str(ex) and "openmir2-worker-q" in str(ex)
+
+    def _fake_read(_repo, _card):
+        return malformed_view, None
+
+    err_buf = io.StringIO()
+    out_buf = io.StringIO()
+    rc_shape = evaluate(".", "openmir2-synthetic-card", "openmir2-reviewer-b", None,
+                        out=out_buf, read_thread=_fake_read, err=err_buf)
+    checks.append((
+        "㉑ malformed thread 视图 ⇒ 抛 LedgerShapeError（不静默丢弃）",
+        raise_shape,
+    ))
+    checks.append((
+        "㉒ malformed thread 视图 ⇒ evaluate rc=2 且点名 principal（不是 UNKNOWN/跳过）",
+        rc_shape == 2 and "openmir2-worker-q" in err_buf.getvalue()
+        and "author=" not in out_buf.getvalue(),
     ))
 
     failed = 0

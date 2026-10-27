@@ -253,8 +253,27 @@ def read_docs(repo):
     return out
 
 
-def read_collab(repo):
-    """`git cat-file --batch` 一次喂入全部 inbox ref（11k+ 个；逐个 `-p` 跑不完）。"""
+def read_collab(repo, stats=None):
+    """`git cat-file --batch` 一次喂入全部 inbox ref（11k+ 个；逐个 `-p` 跑不完）。
+
+    形状口径（卡 `openmir2-entry-shape-consumer-followups` A3，**显式登记**；判定口径本身不变）：
+
+      * 扁平 blob（inbox）与 `{entry: …}` 包层（thread 视图）都由 `entry_of` 统一判定；
+      * **id-only**（扁平、有 `id` 无 `kind`）⇒ `entry_of` 抛 `EntryRefError` ⇒ 计
+        `stats["shape_entry_of"]` 并跳过。团队口径：这类形状在 11,661 条真实语料里 **0 命中**，
+        跳过等于「这条不是条目」，不红、不 rc=2；
+      * **wrapper-inner-no-id**（包层在、内层缺 `id`）⇒ `entry_of` 正常返回内层，随后
+        `if not tid` 计 `stats["shape_no_id"]` 并跳过；
+      * JSON 解不开 ⇒ 计 `stats["bad_json"]` 并跳过（与旧行为一致）；
+      * **只有** `EntryRefError` 会被吞：`entry_of` 抛其它异常（真 bug / 上游契约破坏）必须冒出去，
+        不许当成「不是条目」——牙见 `selftest` 的接缝③。
+
+    `stats` 是可选的累加 dict（只给自测与诊断用）；不传时行为与旧版逐条相同。
+    """
+    if stats is None:
+        stats = {}
+    for _k in ("shape_entry_of", "shape_no_id", "bad_json"):
+        stats.setdefault(_k, 0)
     r = _run(["git", "for-each-ref", "--format=%(refname)", "refs/collab/inbox/"], cwd=repo)
     if r.returncode != 0:
         raise RuntimeError("git for-each-ref 失败：%s" % (r.stderr or "").strip())
@@ -280,17 +299,24 @@ def read_collab(repo):
         try:
             doc = json.loads(body.decode("utf-8", "replace"))
         except Exception:
+            stats["bad_json"] += 1
             continue
         # **接缝（review C1）**：collab blob 是**扁平**的（顶层 actor/body/id/kind/parent/…），
         # 没有 `entry` 包层；只有 `walgit collab thread` 的**视图**才有。
-        # 两态兼容统一走 `tools/collab/entryrefs.entry_of`（卡 `openmir2-entry-shape-dedupe`）——
-        # 形状不对时它抛 `EntryRefError`，这里按「不是条目」跳过（与原实现一致）。
+        # 两态兼容统一走 `tools/collab/entryrefs.entry_of`（卡 `openmir2-entry-shape-dedupe`）。
+        # 卡 `openmir2-entry-shape-consumer-followups` A3：两条人工形态的语义在此**显式**落地并计数
+        # （口径不变，仍然是「跳过」）——
+        #   ① id-only（有 id 无 kind）⇒ entry_of 抛 EntryRefError ⇒ 记 shape_entry_of 跳过；
+        #   ② wrapper-inner-no-id（包层在、内层缺 id）⇒ entry_of 返回内层 ⇒ 记 shape_no_id 跳过。
+        # 只吞 EntryRefError：其它异常是真 bug，必须冒出去（selftest 接缝③）。
         try:
             ent = entry_of(doc)
         except EntryRefError:
+            stats["shape_entry_of"] += 1
             continue
         tid = ent.get("id")
         if not tid:
+            stats["shape_no_id"] += 1
             continue
         known.add(tid)
         entries.append((tid, ent.get("kind"), ent.get("body") or {}))
@@ -603,6 +629,53 @@ def selftest():
         check("接缝：扫描条数 = 3（含包层 blob）", n2 == 3, n2)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # A3（卡 `openmir2-entry-shape-consumer-followups`）：两条**人工形态**的显式语义 + 接缝牙。
+    # 用第二个临时仓库，避免动上面那组「扫描条数 = 3」的断言。
+    tmp2 = tempfile.mkdtemp(prefix="smg-shape-")
+    try:
+        subprocess.run(["git", "init", "-q", tmp2], check=True, env=env)
+
+        def _put2(ref, obj):
+            blob = json.dumps(obj).encode()
+            h = subprocess.run(["git", "-C", tmp2, "hash-object", "-w", "--stdin"],
+                               input=blob, capture_output=True, check=True, env=env).stdout
+            subprocess.run(["git", "-C", tmp2, "update-ref", ref, h.decode().strip()],
+                           check=True, env=env)
+
+        # ① id-only：扁平、有 id 无 kind
+        _put2("refs/collab/inbox/p/card-y-1", {"id": "card-y", "actor": "p", "ts": 3})
+        # ② wrapper-inner-no-id：包层在、内层缺 id
+        _put2("refs/collab/inbox/p/card-z-1",
+              {"entry": {"version": 1, "kind": "status", "actor": "p", "body": {}},
+               "oid": "e" * 40, "principal": "p", "verified": True})
+        stats = {}
+        got2, known2b, n2b = read_collab(tmp2, stats=stats)
+        check("形状①：id-only（有 id 无 kind）⇒ 跳过并计 shape_entry_of",
+              got2 == [] and known2b == set() and stats.get("shape_entry_of") == 1,
+              (got2, stats))
+        check("形状②：wrapper-inner-no-id ⇒ 取到内层但缺 id ⇒ 跳过并计 shape_no_id",
+              stats.get("shape_no_id") == 1, stats)
+        check("形状：两条都被跳过，扫描条数仍是 2（计数不混）", n2b == 2 and stats.get("bad_json") == 0,
+              (n2b, stats))
+
+        # ③ 接缝：entry_of 抛**非 EntryRefError** ⇒ 必须冒出去（不能被「不是条目」吞掉）
+        _orig_entry_of = globals()["entry_of"]
+
+        def _boom(_doc):
+            raise RuntimeError("boom-from-entry_of")
+
+        globals()["entry_of"] = _boom
+        try:
+            read_collab(tmp2)
+            seam_ok = False
+        except RuntimeError as ex:
+            seam_ok = "boom-from-entry_of" in str(ex)
+        finally:
+            globals()["entry_of"] = _orig_entry_of
+        check("接缝③：entry_of 抛非 EntryRefError ⇒ 冒出去（不当作正常跳过）", seam_ok)
+    finally:
+        shutil.rmtree(tmp2, ignore_errors=True)
 
     fails = [(n, d) for n, good, d in ok if not good]
     for n, good, d in ok:
