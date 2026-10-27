@@ -35,6 +35,7 @@
   python -I tools/collab/oid_gate.py --selftest                # 合成夹具自证
 """
 import argparse
+import contextlib
 import io
 import json
 import os
@@ -514,7 +515,23 @@ def _audit_teeth():
         chk(rc_r == 0 and not red_r, "牙⑥：field=refs.head 绑定一致 ⇒ rc=0")
         rc_r2, red_r2, _ = run_with([{"principal": "p", "thread": "card-r", "entry_oid": h_r,
                                       "field": "refs.head", "value": "c" * 40, "reason": "r"}])
-        chk(rc_r2 == 1 and red_r2, "牙⑥b：field=refs.head 值不符 ⇒ rc=1")
+        # 卡 `openmir2-oid-gate-audit-polish` A1：**只断 rc 的牙分不清两种原因**——把审计的
+        # 「值不符」分支删掉后，条目照样被判红（`None` 走「没有字段」那一支），牙仍然绿。
+        # 所以这里同时钉诊断文本：必须点名「字段 refs.head 登记 … ≠ 条目 …」，且**不是**缺字段。
+        chk(rc_r2 == 1 and any("字段 refs.head" in r and "≠ 条目" in r and "没有字段" not in r
+                               for r in red_r2),
+            "牙⑥b：field=refs.head 值不符 ⇒ rc=1 且点名「登记≠条目」（与「没有字段」分开）")
+        # ⑥c：**对照**——条目里根本没有 refs.head（refs 只带 base）⇒ rc=1 且点名缺字段。
+        # ⑥b/⑥c 一起把「值不符」与「字段不存在」两条诊断都钉住。
+        entry_nh = {"version": 1, "kind": "patch", "id": "card-r", "actor": "p",
+                    "parent": "", "sig": "", "ts": 0, "refs": {"base": "a" * 40}, "body": {}}
+        h_nh = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                              input=json.dumps(entry_nh).encode(), capture_output=True,
+                              check=True, env=env).stdout.decode().strip()
+        rc_nh, red_nh, _ = run_with([{"principal": "p", "thread": "card-r", "entry_oid": h_nh,
+                                      "field": "refs.head", "value": "b" * 40, "reason": "r"}])
+        chk(rc_nh == 1 and any("条目里没有字段 refs.head" in r for r in red_nh),
+            "牙⑥c：条目没有 refs.head ⇒ rc=1 且点名「条目里没有字段 refs.head」")
 
         # C1：**不带 `--baseline`** 时，`check --audit-baseline` 的 rc 必须等于审计 rc
         #（旧实现会把 bpath 丢掉 ⇒ 真仓库 check 按「已豁免 0」全红、覆盖审计返回码）
@@ -531,8 +548,16 @@ def _audit_teeth():
                      "w", encoding="utf-8", newline="") as fh:
             fh.write(json.dumps({"format": "oid-gate-baseline/1",
                                  "entries": [dict(good, entry_oid=h_bad)]}))
-        rc_c1 = main(["check", "--audit-baseline", "--repo", tmp])
-        chk(rc_c1 == 0, "C1 牙：不带 --baseline 时 check --audit-baseline 仍 = 审计 rc（0）")
+        # 卡 `openmir2-oid-gate-audit-polish` A2：嵌套调 `main()` 会把 N1 的 `AUDIT-OK` 行混进
+        # **gate 自己的**输出（顶层看起来像「审计跑了两次/自检污染」）。这里把那次调用的 stdout
+        # 收进 StringIO：既不让它漏出去，又能在自检里**断言**它确实打了 AUDIT-OK（收掉 ≠ 关掉）。
+        c1_buf = io.StringIO()
+        with contextlib.redirect_stdout(c1_buf):
+            rc_c1 = main(["check", "--audit-baseline", "--repo", tmp])
+        c1_out = c1_buf.getvalue()
+        chk(rc_c1 == 0 and c1_out.count("AUDIT-OK") == 1,
+            "C1 牙：不带 --baseline 时 check --audit-baseline 仍 = 审计 rc（0），"
+            "且那次调用的 AUDIT-OK 被 redirect 捕获（恰 1 行，不漏进 gate 输出）")
 
         # ⑤ baseline 缺失 ⇒ rc=2
         rc3, red3, undec3 = audit_baseline(tmp, os.path.join(tmp, "no-such.json"))
