@@ -262,3 +262,36 @@ WHERE HEX(Name) IN ('E9B9BF','E7A8BBE88D89E4BABA','E58D8AE585BDE4BABA',
 - **C-6**：B2（怪普攻不发 `SM_HIT(14)`）**成立且未在既有登记中找到**（`monai.rs:486-535` 只写 `pending_ai_attacks`；`drain_combat_downlink` 只出 `SM_STRUCK`）⇒ 单开卡；牙必须断言头部字段/收件人/与 `SM_STRUCK` 的同 tick 顺序，不能只数条数。
 - **C-7**：「主动索敌怪数」是代理指标（按 raceImg 排除 10/11/12，未读 race）⇒ 降级为「与几何一致的解释之一」。
 - **C-8**：`WalkStep/WalkWait` 未接线（`bins/game-svr/src/mongen.rs:803`、`entity.rs:372-373` 缺省 0/0；oracle `MySqlDB.cs:214-215` 是 `MAX(1,WalkStep)`）——本报告未交代，属既有缺口。
+
+---
+
+## 订正 2026-10-27（对账 master d470d7bd1）
+
+> 本节**只追加**，不改写上文历史结论（含 §0 三档与「评审员的更正」）。三态口径同 `audit-baseobject-run-coverage-20261018.md` 的订正节：**已实现** = 有生产调用点；**前提被证伪** = 原文缺口前提在 master 上不成立；**仍成立** = 仍找不到等价物或结论仍有效。判级按 `AGENTS.md`；未改代码/测试。
+
+### 0. 计数口径
+
+- 缺口条目 = §0-B 的两条确证缺陷（B1 / B2）+ §0「评审员的更正」C-1..C-8，共 **10** 行。§3 表的第 14/15 行是 B1/B2 的代码锚，不重复计数；§6 是采样方案（判据建议），不属缺口条目。
+
+### 1. 逐条三态（10 行）
+
+| 条目 | 原文结论 | 三态 | 证据 |
+|---|---|---|---|
+| B1 | 怪物 AI 移动的 `SM_WALK(11)` 完全不下发 | 已实现 | `bins/game-svr/src/lib.rs:15535-15542`：生产排水「怪物走位下行」→ `mir2_protocol::messages::SM_WALK`（`:15542`）；编码器 `bins/game-svr/src/downlink.rs:386` |
+| B2 | 怪物普攻的 `SM_HIT(14)` 不下发 | 已实现 | `crates/world/src/monai.rs:578`：`attack_target`（`:534`）尾 `send_ref_msg(world, actor_id, RM_HIT, …)`；生产用例 `bins/game-svr/src/lib.rs:65205 monster_attack_produces_sm_hit_then_struck_on_production_path` |
+| C-1 | L1 样本并非满 HP，不能归因节拍 | 仍成立（证据学结论，非代码缺口） | 原文统计表未记录起始 HP；本轮未重跑 capture（只读盘点）。该结论与 B1/B2 的实现无冲突 |
+| C-2 | `w02b` 8 次含 2 条死后受击 | 仍成立（证据学结论） | 同上；属历史 capture 的读法结论 |
+| C-3 | 理论节拍不是 3000 ms（Rust ~3200 / oracle ~3120） | 仍成立 | 门与量化口径未变：`crates/world/src/monai.rs:4685`（`now - walk_tick > walk_speed`）、`world.rs:33 TICK_INTERVAL_MS=200`；`bins/game-svr/src/mongen.rs:806-807` 仍写 `WalkSpeed/NextHitTime` |
+| C-4 | 「D04/D05 不改变同怪间隔」过强；正确表述是「门相同、量化差 ~80 ms」 | 仍成立 | D04/D05 仍未修：`crates/world/src/monai.rs:5298` 起每 tick 无条件；`process_monster_interval` 无 AI 消费点（`crates/world/src/mongen.rs:328/353` 仅定义/缺省）。故该表述仍是当前唯一可辩护口径 |
+| C-5 | B1 不是新发现，已在 `monster-ai-frames-20261013/README.md:46` 登记 | 前提被证伪（缺口已闭；归属结论仍真） | 登记残留行仍在（`mir2-rs/tests/parity/world/monster-ai-frames-20261013/README.md`「怪物移动/转向帧」条），但 B1 已在 `lib.rs:15542` 接线 ⇒ 「未做」不再成立 |
+| C-6 | B2 成立且未在既有登记中找到 ⇒ 单开卡 | 前提被证伪 | 已实现：见 B2 行（`monai.rs:578` + 用例 `lib.rs:65205`）。该卡已无须新开，建议把用例作为「改坏必红」回归门 |
+| C-7 | 「主动索敌怪数」是代理指标 | 仍成立（方法学结论） | `is_active_seek_race`（`crates/world/src/monai.rs:709`）现按 race 判定；原文按 `raceImg` 排除 10/11/12 的做法仍只是代理 |
+| C-8 | `WalkStep/WalkWait` 未接线（`mongen.rs:803`、`entity.rs:372-373` 缺省 0/0） | 前提被证伪 | `bins/game-svr/src/mongen.rs:811-812` 已按 oracle 同点写入 `walk_step`/`walk_wait`；消费端 `crates/world/src/monai.rs:4696-4699`（`walk_count > walk_step ⇒ WalkWaitLocked`）。数据层读取 `crates/data/src/loaders.rs` 已在原文注明 |
+
+### 2. 三态统计与后续
+
+统计：**已实现 2 / 前提被证伪 3 / 仍成立 5**（合计 10）。
+
+- B1/B2/C-6/C-8 已闭合：§6「下一步最小采样方案」第 4 条的正向对照（怪走 1 格必出 `SM_WALK`、打 1 次必出 `SM_HIT`）现可改为**回归门**；`SM_HIT` 已有生产用例（`lib.rs:65205`），`SM_WALK` 建议补同形用例（`write_set`：`bins/game-svr/src/lib.rs`，tier=L）。
+- 仍成立的 C-1/C-2/C-3/C-4/C-7 是「证据口径/量化差」结论，不是待实现项；若要把它们收口，需按 §6 的「每侧 3 趟 + 起栈前 `UPDATE` 并校验 `SM_NEWMAP`」方案重采样（`write_set`：`tools/` 下的采样脚本与 `mir2-rs/tests/parity/world/` 证据目录，tier=R——时序/战斗数值，须占窗口）。
+- D04/D05 的残留缺口已并入 `audit-baseobject-run-coverage-20261018.md` 订正节的「卡 B」（per-actor 节拍与可见性降频）。
