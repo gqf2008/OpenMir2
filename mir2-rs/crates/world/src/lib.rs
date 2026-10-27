@@ -79,8 +79,9 @@ pub use combat::{
     ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
 };
 pub use ctor_fold::{
-    CtorFoldEntry, CtorFoldLedger, CtorFoldPlan, CtorFoldSite, CTOR_FOLD_BARRIER_A_DRAWS,
-    CTOR_FOLD_BARRIER_A_MOD, CTOR_FOLD_DRAWS_PER_SITE, CTOR_FOLD_DRAW_KIND,
+    CtorDrawBatch, CtorFoldEntry, CtorFoldLedger, CtorFoldPlan, CtorFoldSite, LoginPlayerCtorDraws,
+    CTOR_FOLD_BARRIER_A_DRAWS, CTOR_FOLD_BARRIER_A_MOD, CTOR_FOLD_DRAWS_PER_SITE,
+    CTOR_FOLD_DRAW_KIND, PLAYER_CTOR_RANDOM_NO_MOD,
 };
 pub use entity::{
     BaseAnimalCtorDraws, Entity, EntityStore, MonsterCtorDraws, VisibleEvent, VisibleFlag,

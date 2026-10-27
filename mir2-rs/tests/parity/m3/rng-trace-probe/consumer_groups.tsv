@@ -61,6 +61,7 @@ construct	csharp	MonsterObject\.\.ctor@MonsterObject\.cs:	src/M2Server/Monster/M
 construct	csharp	Monsters\.\w+\.\.ctor@	src/M2Server/Monster/Monsters/*.cs	各具体怪 ctor（MeatQuality 等）
 construct	csharp	PlayObject\.\.ctor@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:1046	PlayObject ctor
 construct	rust	crates/world/src/entity\.rs:	crates/world/src/entity.rs	已启用：固定 NPC（insert_npc）/商人列表（merchant_ctor_run_delay/spawn_merchant）构造链唯一抽数点 BaseAnimalCtorDraws::draw（4 抽）；**怪物**构造仍折在 mongen 宿主（spawn 组）
+construct	rust	crates/world/src/ctor_fold\.rs:	crates/world/src/ctor_fold.rs	登录 PlayObject ctor 第 5 抽 RandomNo = Random(999999)（PlayObject.cs:1047）；前 4 抽经 entity.rs 的 BaseAnimalCtorDraws::draw（同 construct 组）
 npc_ai	csharp	GuildOfficial\.Run@GuildOfficial\.cs:	src/GameSrv/Npc/GuildOfficial.cs:41	行会 NPC AI（非商人）
 revive	csharp	BaseObject\.ReAliveEx@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:2744	复活点随机
 homemap	csharp	GetHomeInfo@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1413	回城点

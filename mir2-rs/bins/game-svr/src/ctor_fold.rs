@@ -305,7 +305,10 @@ mod tests {
             arg: CTOR_FOLD_BARRIER_A_MOD,
             result: 4242,
         };
-        let ledger = CtorFoldLedger { entries: vec![one] };
+        let ledger = CtorFoldLedger {
+            entries: vec![one],
+            ..Default::default()
+        };
         assert_eq!(
             item_number_counter_init(100, &ledger),
             Ok(4_342),
@@ -329,6 +332,7 @@ mod tests {
         );
         let two = CtorFoldLedger {
             entries: vec![one, one],
+            ..Default::default()
         };
         assert!(item_number_counter_init(100, &two).is_err(), "2 条 ⇒ Err");
         let wrong_site = CtorFoldLedger {
@@ -336,6 +340,7 @@ mod tests {
                 site: CtorFoldSite::MapQuestRow,
                 ..one
             }],
+            ..Default::default()
         };
         assert!(
             item_number_counter_init(100, &wrong_site).is_err(),
@@ -343,6 +348,7 @@ mod tests {
         );
         let wrong_arg = CtorFoldLedger {
             entries: vec![CtorFoldEntry { arg: 1500, ..one }],
+            ..Default::default()
         };
         assert!(
             item_number_counter_init(100, &wrong_arg).is_err(),
@@ -471,6 +477,7 @@ mod tests {
         );
         let short = CtorFoldLedger {
             entries: ledger.entries[start..start + 3].to_vec(),
+            ..Default::default()
         };
         assert_eq!(
             hidden_qfunction_run_tick(&short, 0),
@@ -480,7 +487,13 @@ mod tests {
         let mut wrong_arg = ledger.entries[start..start + 4].to_vec();
         wrong_arg[0].arg = 2000;
         assert_eq!(
-            hidden_qfunction_run_tick(&CtorFoldLedger { entries: wrong_arg }, 0),
+            hidden_qfunction_run_tick(
+                &CtorFoldLedger {
+                    entries: wrong_arg,
+                    ..Default::default()
+                },
+                0
+            ),
             None,
             "第 1 抽 arg 不是 1500 ⇒ None"
         );
@@ -495,7 +508,13 @@ mod tests {
         };
         two.push(e);
         assert_eq!(
-            hidden_qfunction_run_tick(&CtorFoldLedger { entries: two }, 0),
+            hidden_qfunction_run_tick(
+                &CtorFoldLedger {
+                    entries: two,
+                    ..Default::default()
+                },
+                0
+            ),
             None,
             "第二组 HiddenQFunction ⇒ None"
         );
