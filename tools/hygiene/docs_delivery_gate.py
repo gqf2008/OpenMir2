@@ -750,10 +750,12 @@ def _st_exempt(site):
 #:   2. 在**递归发生点**调 `_st_exempt("<site>")`（登记额度；只加名单不调 ⇒ seen 少一项 ⇒ R1k 红）；
 #:   3. 递归点若在 **R1i 之前**，无需额外改动（R1i 用 `_ST_EXEMPT_SEEN` 自比，恒等）；
 #:      在 **R1i 之后**（如 n2c2）也不需改动——R1k 用的是 `_ST_EXEMPT_SITES`；
-#:   4. **元牙不用改**：`元牙 R1-meta①–⑥` 直接喂 `_r1_accounting_ok` 的合成参数，与站点名单长度无关。
+#:   4. **元牙不用改**：`元牙 R1-meta⓪/①–⑧` 直接喂 `_r1_accounting_ok` 的合成参数，与站点名单长度无关。
 #:
-#: 结论（用牙固定）：本模型**支持**合法的递归牙，但**必须**同时满足「登记名单 + 调用 `_st_exempt`」
-#: 两处；只做一处会分别落到 R1k 的两条断言上（集合不等 / 调用数超出），不会静默通过。
+#: **支持范围（按实测收窄，review 89ae2a18 N3）**：本模型**只支持「同一个 `_selftest_run` 内
+#: 经 `_st_exempt` 登记」的递归牙**（即 n2c / n2d / c6b / n2c2 这一模式）。**不支持**「递归整跑
+#: `selftest()` 的牙」——那样会把四处 `_st_exempt` 再登记一遍，`seen` 出现重复项且 `calls` 多 4，
+#: 于是 R1k 必红（`元牙 R1-meta⑧` 用合成参数固定这一结论）。
 
 
 def _r1_accounting_ok(calls, seen, sites):
@@ -768,6 +770,19 @@ def _r1_accounting_ok(calls, seen, sites):
     这一处、并让元牙直接喂合成参数，才能证明软化会红。
     """
     return calls == 1 + len(sites) and sorted(seen) == sorted(sites)
+
+
+#: **R1i/R1k 必须经由 [`_r1_accounting_live`] 读取判定**（review 89ae2a18 C2）：
+#: 有人把两处改回内联判定时，本计数不动 ⇒ 末尾的 `_R1_LIVE_CALLS == 2` 必红。
+#: 这是「守卫要证明自己被调用」，而不是靠源码文本牙（后者可被换写法绕过）。
+_R1_LIVE_CALLS = 0
+
+
+def _r1_accounting_live(calls, seen, sites):
+    """生产路径的唯一读取口：自增调用计数后转调 [`_r1_accounting_ok`]。"""
+    global _R1_LIVE_CALLS
+    _R1_LIVE_CALLS += 1
+    return _r1_accounting_ok(calls, seen, sites)
 
 
 def selftest():
@@ -1126,7 +1141,7 @@ def _selftest_run():
         # **行为牙**（review e4d6546f C1 返工）：`_ST_CALLS` **永不重置**，四处有意递归
         # （n2c/n2d/c6b + 之后的 n2c2）各自先 `_st_exempt(<站点>)` 登记额度。R1i 在此刻核算
         # 「1（本层）+ 已消耗额度」——把整跑偷偷加回**窗口之前**也会让计数超出，不再被清零掩盖。
-        chk(_r1_accounting_ok(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN),
+        chk(_r1_accounting_live(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN),
             "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数（多一次未登记的整跑 ⇒ 红；"
             "实际 calls=%r exempt=%r）" % (_ST_CALLS, list(_ST_EXEMPT_SEEN)))
 
@@ -1404,27 +1419,53 @@ def _selftest_run():
     # R1k（C1 返工的第二半）：豁免额度必须**恰好消耗一次且只消耗登记站点**，且全程调用数
     # == 1 + 额度数。同时钉住三种退化：多跑一次未登记 ⇒ 计数超；登记了却没发生（站点被删/
     # 挪/短路）⇒ 集合少一项；站点名对不上 ⇒ 集合不等。
-    chk(_r1_accounting_ok(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES),
+    chk(_r1_accounting_live(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES),
         "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）"
         % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES)))
 
-    # 元牙（review 15d62f97 N2）：把 `==` 软化成 `<=`、或把多重集比软化成「子集/只看已登记」
-    # ⇒ 本段必须红。三条都走**同一个接缝** `_r1_accounting_ok`，因此生产判定被改动会立刻命中。
-    chk(_r1_accounting_ok(1 + len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES, _ST_EXEMPT_SITES),
-        "元牙 R1-meta① 调用数 == 1 + 站点数且集合相等 ⇒ 绿")
-    chk(not _r1_accounting_ok(len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES, _ST_EXEMPT_SITES),
-        "元牙 R1-meta② **登记了却没有那一次递归**（calls 少 1）⇒ 红；"
-        "把接缝的 `==` 软化成 `<=` 会让本条变绿")
-    chk(not _r1_accounting_ok(1 + len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES[:-1], _ST_EXEMPT_SITES),
-        "元牙 R1-meta③ 登记了但没消耗（seen 少一项）⇒ 红；把多重集比软化会让本条变绿")
-    chk(not _r1_accounting_ok(1 + len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES + ("n2c",),
-                              _ST_EXEMPT_SITES),
-        "元牙 R1-meta④ 多消耗一个站点（seen 多一项）⇒ 红")
-    # A2 退化三态：确认「空集/清零」不会让接缝恒绿。
-    chk(len(_ST_EXEMPT_SITES) >= 1,
-        "元牙 R1-meta⑤ 登记站点集合**不得为空**（空集会让 R1k 恒绿、等于关掉重入记账）")
-    chk(not _r1_accounting_ok(0, (), ()),
-        "元牙 R1-meta⑥ 计数清零（calls=0 且无站点）⇒ 红（`1 + 0` 才是合法值）")
+    # 元牙（review 15d62f97 N2 / 89ae2a18 C1·N2）：全部直接喂 `_r1_accounting_ok` 的**合成参数**。
+    # `_META` 是**唯一**登记处：末尾断言条数，删掉任一颗 ⇒ 条数不等 ⇒ 红（N2 计数元断言）。
+    _S = _ST_EXEMPT_SITES
+    _META = [
+        # ① 恰好相等 ⇒ 绿
+        (_r1_accounting_ok(1 + len(_S), _S, _S),
+         "元牙 R1-meta① 调用数 == 1 + 站点数且集合相等 ⇒ 绿"),
+        # ② 登记了却没有那次递归（calls 少 1）⇒ 红；`==` 软化成 `<=` 会放过
+        (not _r1_accounting_ok(len(_S), _S, _S),
+         "元牙 R1-meta② 少一次整跑 ⇒ 红（`==`→`<=` 会让本条变绿）"),
+        # ③ seen 少一项 ⇒ 红
+        (not _r1_accounting_ok(1 + len(_S), _S[:-1], _S),
+         "元牙 R1-meta③ 登记了但没消耗（seen 少一项）⇒ 红"),
+        # ④ seen 多一项 ⇒ 红
+        (not _r1_accounting_ok(1 + len(_S), _S + ("n2c",), _S),
+         "元牙 R1-meta④ 多消耗一个站点（seen 多一项）⇒ 红"),
+        # ⑤ 站点集合不得为空
+        (len(_S) >= 1,
+         "元牙 R1-meta⑤ 登记站点集合不得为空（空集会让 R1k 恒绿）"),
+        # ⑥ 计数清零 ⇒ 红
+        (not _r1_accounting_ok(0, (), ()),
+         "元牙 R1-meta⑥ 计数清零（calls=0 且无站点）⇒ 红"),
+        # ⑦ **C1 名字敏感性**：长度相同、末项换成已有站点名 ⇒ 多重集不等 ⇒ 红
+        #    （把 `sorted(seen)==sorted(sites)` 换成 `len(seen)==len(sites)` 会让本条变绿）
+        (not _r1_accounting_ok(1 + len(_S), _S[:-1] + ("n2c",), _S),
+         "元牙 R1-meta⑦ 长度相同但名字不对（末项换成已有站点）⇒ 红；"
+         "把多重集比换成 len 比较会让本条变绿"),
+        # ⑧ **N3 结论固定**：整跑 `selftest()` 的递归牙 ⇒ 四处 `_st_exempt` 再登记一遍
+        #    ⇒ seen 出现重复项且 calls 多 4 ⇒ 必红 ⇒ 文档结论「只支持同一 `_selftest_run`
+        #    内经 `_st_exempt` 的递归（n2c/n2d/c6b/n2c2 模式）」有牙。
+        (not _r1_accounting_ok(1 + len(_S) + 4, _S + _S, _S),
+         "元牙 R1-meta⑧ 整跑 selftest 的递归牙（seen/calls 各多一轮）⇒ 红"),
+    ]
+    chk(len(_META) == 8,
+        "元牙条数 == 8（`_META` 是唯一登记处；删掉任一颗 ⇒ 本条红。实际 %d）" % len(_META))
+    for _cond, _msg in _META:
+        chk(_cond, _msg)
+
+    # C2：R1i 与 R1k 必须**都**经由接缝（`_r1_accounting_live`）读取；把任一处改回内联判定
+    # ⇒ 计数不动 ⇒ 本条红。这是「守卫证明自己被调用」的正向证据，不靠源码文本。
+    chk(_R1_LIVE_CALLS == 2,
+        "元牙 R1-meta⓪ R1i/R1k 均经由 `_r1_accounting_live`（计数须为 2，实际 %d；"
+        "改回内联判定 ⇒ 本条红）" % _R1_LIVE_CALLS)
 
     if fails:
         print("docs_delivery_gate selftest: FAIL (%d/%d)" % (len(fails), checked[0]))
