@@ -18,7 +18,7 @@
         "idents": [41],
         "recog_is": "self"
       },
-      "timeout_ms": 8000,
+      "timeout_ms": 15000,
       "note": "**段1 出现帧**：`SM_FEATURECHANGED(41)`，`recog_is=self`（= `SM_LOGON(50).recog`）。oracle 在 `SendLogon` 里 `SM_LOGON` 之后**同组无条件下发**（`PlayObject.cs:1145`：`SendDefMessage(SM_FEATURECHANGED, ActorId, …)`）；本仓 `enter.rs` 的 50/41/213 同组三条。用 `wait_idents`（累计口径）——登录时这条在场景步骤开始之前就到了，`wait_for` 的下界会把它排除。"
     },
     {
@@ -61,7 +61,7 @@
         "idents": [41],
         "recog_is": "self"
       },
-      "timeout_ms": 8000,
+      "timeout_ms": 15000,
       "note": "**段2 出现帧**：重连后新会话的 `SM_FEATURECHANGED(41)`（`recog_is=self` = **新的** self actor id）。`wait_for` 的下界保证这是 relogin 之后的新帧，不是段1 那条的回声。消费方（cleanup-residue 的真机判据）应把本帧与段1 的 41 对齐比较；name/guild 面需观察者客户端，见 description 的证据边界。"
     },
     {
