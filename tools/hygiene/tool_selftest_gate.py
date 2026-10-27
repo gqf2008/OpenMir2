@@ -712,14 +712,23 @@ def run(repo, only=None, skip=None, timeout=300, total_timeout=420,
         if deadline is not None:
             remaining = deadline - time.time()
             if remaining <= 0:
-                # 总墙钟兜底：没跑到的项也判红并点名——「跑没跑完」必须可区分，
-                # 不许静默退出、更不许挂住（卡 openmir2-tool-selftest-gate 的 F5）。
-                r = {"name": name, "rc": 124, "elapsed_s": 0.0, "timed_out": True,
+                # 总墙钟兜底：没跑到的项判「判不了」（NEED, rc=2）并点名——「跑没跑完」必须可
+                # 区分，不许静默退出、更不许挂住（卡 openmir2-tool-selftest-gate 的 F5）。
+                # **卡 `openmir2-tsg-tooth8-wallclock-flake`（A1-③）**：批量 + 并发负载把外层
+                # 预算吃尽时，被 deadline 钳掉的**慢项不是工具缺陷**——按本文件 rc 口径
+                #（:33「判不了 ≠ 证伪」）记 NEED 而不是 FAIL，门整体转 rc=3 需人工；
+                # 真滞留（被钳断 eff 杀掉、rc=124 的那一项）仍由其自身 124 判红。
+                r = {"name": name, "rc": NEED_RC, "elapsed_s": 0.0, "timed_out": True,
                      "tail": "NOT-RUN：总墙钟 %ss 已尽（滞留项）" % total_timeout}
                 results.append(r)
-                print("FAIL %-24s rc=124        %s" % (name, r["tail"]))
+                print("NEED %-24s rc=2          %s" % (name, r["tail"]))
                 continue
-            eff = min(timeout, max(1, int(remaining)))
+            # **浮点 remaining（卡 `openmir2-tsg-tooth8-wallclock-flake`）**：此前的
+            # `max(1, int(remaining))` 把分数秒**截断**——负载下启动慢 1.2s 时，hang 项只拿
+            # `int(1.8)=1`s，下一项重算 remaining≈0.9>0 ⇒ 正常跑完 ⇒ NOT-RUN 不出现，
+            # 牙8 在 `NOT-RUN + after` 上假红（run5 批次 68/69 实录）。改浮点后 kill 精确落在
+            # deadline 上，下一项 remaining≤0 必走 NOT-RUN（3s 预算本身不动）。
+            eff = min(timeout, max(1.0, remaining))
         r = run_one(repo, name, argv, eff)
         r["state"] = classify_rc(r["rc"])
         results.append(r)
