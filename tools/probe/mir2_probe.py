@@ -180,6 +180,7 @@ class Recorder:
         self.capture_c2s = bool(capture_c2s)
         self.c2s_skipped = 0
         self.c2s_written = 0
+        self.s2c_written = 0
         # **方案 (c)**（review C1）：c2s 单独写 `c2s.ndjson`，`frames.ndjson` 保持**纯 s2c**
         # ⇒ `compare_runs.load_stream` / `frame_drift_report` / `param_discovery` **零改动**。
         self.c2s_path = os.path.join(out_dir, "c2s.ndjson")
@@ -187,6 +188,7 @@ class Recorder:
 
     def write_frame(self, phase, conn_label, frame):
         self.seq += 1
+        self.s2c_written += 1
         row = {
             "seq": self.seq,
             "t_ms": now_ms() - self.t0_ms,
@@ -2972,8 +2974,16 @@ def _finish_evidence(run, args, scenario, params, error):
     return path
 
 
+def _frames_total(recorder):
+    """`frames_total` = **s2c + c2s 数据行**；**不含 `direction="meta"` 账目行**（review 86f7ef66 N1）。
+
+    base 曾用 `recorder.seq`（行号，含 1 条 meta）⇒ 报告比实际帧数多 1。
+    """
+    return getattr(recorder, "s2c_written", 0) + getattr(recorder, "c2s_written", 0)
+
+
 def build_run_json(run, args, scenario, params, error):
-    frames_total = run.recorder.seq
+    frames_total = _frames_total(run.recorder)
     by_conn = dict(run.recorder.counts)
     hist = dict(run.recorder.ident_hist)
     return {
@@ -4144,8 +4154,20 @@ def _selftest_c2s_close_hygiene():
         #    recorder.close() 失败**不阻断证据**且**不静默**。
         import types as _types
         out_dir = os.path.join(tmp, "evidence")
+        # **真顺序牙**（review C1）：close 在**被调用那一刻**记录「run.json 是否已存在」。
+        # 把 close 块挪到 build 之前 ⇒ 该记录变 False ⇒ 牙红（不再依赖「抛异常」这种间接证据）。
+        _seen = {"evidence_at_close": None}
+
+        def _close_probe():
+            # **只记第一次调用**：若实现被改成「先 close 一次、之后又 close 一次」，
+            # 只记最后一次会让顺序牙假绿（review C1 就是这种情形）。
+            if _seen["evidence_at_close"] is None:
+                _seen["evidence_at_close"] = os.path.isfile(os.path.join(out_dir, "run.json"))
+            _seen["calls"] = _seen.get("calls", 0) + 1
+            raise OSError("injected: meta failed")
+
         fake_run = _types.SimpleNamespace(
-            recorder=_types.SimpleNamespace(seq=0, close=lambda: (_ for _ in ()).throw(OSError("injected: meta failed"))),
+            recorder=_types.SimpleNamespace(seq=0, close=_close_probe),
             conns=[], exit_code=0, exit_reason="ok")
         fake_args = _types.SimpleNamespace(out=out_dir)
         _real_build = globals()["build_run_json"]
@@ -4157,7 +4179,23 @@ def _selftest_c2s_close_hygiene():
         finally:
             globals()["build_run_json"] = _real_build
         assert os.path.isfile(evidence_path), "close 失败时 run.json 必须已经落盘（%r）" % evidence_path
+        assert _seen.get("calls", 0) >= 1, "close 必须被调用过"
+        assert _seen["evidence_at_close"] is True, (
+            "**顺序牙**：recorder.close() 被调用时 run.json 必须已存在（先 close 后落盘 ⇒ 这里为 False）")
         assert "证据收尾失败" in buf4.getvalue(), "close 失败不得静默：%r" % buf4.getvalue()
+
+        # N1：`frames_total` = s2c + c2s 数据行，**不含 meta 账目行**
+        rec5 = Recorder(os.path.join(tmp, "counts"), now_ms())
+        conn5 = Conn("gamegate", rec5)
+        conn5.phase = "gamegate"
+        conn5.sock = _FakeSock([build_s2c_frame(6930, SM_LOGON, 5, 9, 0, bytes(16))])
+        conn5.pump(20)
+        conn5.send(CM_TURN, 1, 0, 0, 0, b"")
+        rec5.close()
+        total = _frames_total(rec5)
+        assert total == 2, ("frames_total 必须是 s2c+c2s 数据行", total, rec5.s2c_written, rec5.c2s_written)
+        assert rec5.seq == 3, ("seq 是**行号**（1 s2c + 1 c2s + 1 meta）", rec5.seq)
+        assert total != rec5.seq, "frames_total 与 seq 必须不同（meta 行不得计入）"
         return ("正常 close 零 stderr + 双句柄关；写失败 ⇒ 重新抛出；关句柄失败 ⇒ 报告（_BadCloser）；"
                 "收尾失败 ⇒ run.json 已落盘且 stderr 点名")
     finally:
