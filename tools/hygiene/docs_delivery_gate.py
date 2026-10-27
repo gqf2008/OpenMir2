@@ -206,8 +206,8 @@ def hexref(oid, want=9):
 
     规则 16 + review bdd1a28c F2：这是自测夹具的**关键不变式**，必须是模块级可单测函数；
     全数字前缀（约 0.8%/个）会让整组 hex 用例静默不触发——那正是 N1a/N1b 与 HEX-1/HEX-7
-    两类假红的共同根因。找不到含字母的前缀（≤ want+6 位）⇒ 判不了（GitUnavailable），
-    **不许**静默返回纯数字前缀。
+    两类假红的共同根因。上界是**整串**（`len(oid)`，不是 `want+6`）——40 位 sha1 全数字
+    的概率 ≈ 1e-9；找不到含字母的前缀 ⇒ 判不了（GitUnavailable），**不许**静默返回纯数字前缀。
     """
     # review C1（2b1160de）：原来只在 `want..want+6`（9–15 位）里找 `[a-f]`，三个真 sha1 每次约
     # **0.26%** 概率窗口内全数字 ⇒ 偶发 NEED。**上界放宽到整个 oid**：40 位 sha1 全数字的概率
@@ -722,11 +722,26 @@ def main(argv=None):
 # ---------------------------------------------------------------------------
 # 自测（每类 ≥2 个反例；删掉对应检查分支 ⇒ 这里的断言必红）
 # ---------------------------------------------------------------------------
-#: N1（卡 `openmir2-docs-hexref-integration-followup`）：`selftest()` 的**嵌套深度**与
-#: 窗口内最大值。R1i 用它把「禁止再整跑」变成**行为**判据——旧牙只查 `_DG_PROBE` 这个名字
-#: 在不在 `globals()` 里，换个新开关（实测 `_DG_PROBE2`）把整跑原样加回仍然全绿。
-_ST_DEPTH = 0
-_ST_MAX = 0
+#: N1 返工（review e4d6546f C1）：`selftest()` 的**全程调用计数**（**永不重置**）+ 四处
+#: **有意的**递归调用登记表。上一版用「窗口内最大值 + 窗口起点清零」⇒ 把整跑加回**窗口之前**
+#: 时，清零会把证据抹掉（reviewer 实测 R1i 仍 1/1/1 全绿）。计数从不重置 ⇒ 任何未登记的
+#: 递归都会让 `_ST_CALLS` 超出「1 + 已消耗额度」。
+_ST_CALLS = 0
+#: 允许的递归站点（每处**恰好一次**）：n2c / n2d / c6b（都在 R1i 之前）+ n2c2（之后）。
+_ST_EXEMPT_SITES = ("n2c", "n2d", "c6b", "n2c2")
+_ST_EXEMPT_SEEN = []
+
+
+def _st_exempt(site):
+    """登记一次**有意的**递归 `selftest()`（团队规则 20：软化通道必须配反向牙）。
+
+    额度在 R1i 与收尾牙（R1k）两处核算：多一次未登记的整跑 ⇒ `_ST_CALLS` 超出 ⇒ 红；
+    登记了却没有对应递归（站点被删/挪/短路）⇒ 收尾的集合比对红；站点名写错 ⇒ 调用即抛。
+    """
+    if site not in _ST_EXEMPT_SITES:
+        raise AssertionError("未登记的豁免站点：%r（额度只对 _ST_EXEMPT_SITES 生效）"
+                             % (site,))
+    _ST_EXEMPT_SEEN.append(site)
 
 
 def selftest():
@@ -734,10 +749,8 @@ def selftest():
 
     牙 N2c 钉住这条：把 `_selftest_run` 换成「抛 GitUnavailable」⇒ 本函数必须返回 2。
     """
-    global _ST_DEPTH, _ST_MAX
-    _ST_DEPTH += 1
-    if _ST_DEPTH > _ST_MAX:
-        _ST_MAX = _ST_DEPTH
+    global _ST_CALLS
+    _ST_CALLS += 1
     try:
         return _selftest_run()
     except GitUnavailable as ex:
@@ -748,15 +761,11 @@ def selftest():
         print("docs_delivery_gate selftest: 判不了（rc=2）—— 环境不能建临时夹具：%s: %s"
               % (ex.__class__.__name__, ex))
         return 2
-    finally:
-        _ST_DEPTH -= 1
 
 
 def _selftest_run():
     fails = []
     checked = [0]
-    #: N1：R1 重入窗口标记（起点在 R1b 之前赋值；留 `None` 默认值让「标记被删」也判红）。
-    _R1_WIN = None
 
     def chk(cond, name):
         checked[0] += 1
@@ -891,6 +900,7 @@ def _selftest_run():
             import io as _io
             _buf = _io.StringIO()
             with _cl.redirect_stdout(_buf):
+                _st_exempt("n2c")
                 n2c = selftest()
             n2c_out = _buf.getvalue()
         finally:
@@ -912,6 +922,7 @@ def _selftest_run():
             import io as _io3
             _buf3 = _io3.StringIO()
             with _cl3.redirect_stdout(_buf3):
+                _st_exempt("n2d")
                 n2d = selftest()
             n2d_out = _buf3.getvalue()
         finally:
@@ -1001,6 +1012,7 @@ def _selftest_run():
             import io as _io6
             _buf6 = _io6.StringIO()
             with _cl6.redirect_stdout(_buf6):
+                _st_exempt("c6b")
                 c6b_rc = selftest()
             c6b_out = _buf6.getvalue()
         finally:
@@ -1018,12 +1030,6 @@ def _selftest_run():
         #      并钉住「先判记录」：已观测到 3 条合法调用时，内层之后再中断也算绿。
         # 集成层（整跑一次 selftest，**分状态**）：
         #   内层没跑完（rc=2）且记录 <3 ⇒ NEED（判不了）；跑完却 <3 次记录 ⇒ 红。
-        # R1 重入窗口**起点**（N1）：从这里到 R1i 之间不得再整跑 selftest。
-        # 注意 R1a 的**物理位置**在夹具构建段（约 :809），它与 R1b–R1h 之间隔着 n2c/n2d/c6b
-        # 三颗**故意递归**调 `selftest()` 的牙（tester-1 实测嵌套计数 = 3）⇒ 窗口只能卡在
-        # R1b–R1i 这一段；把窗口拉到 R1a 会把那三颗牙误判成「重入」。
-        _R1_WIN = {"base": _ST_DEPTH}
-        globals()["_ST_MAX"] = _ST_DEPTH
         _SYNTH_C1 = "c1" + "0" * 38        # 40 位、含 a–f
         _SYNTH_SIDE = "5d" + "1" * 38      # 40 位、含 a–f
         _SYNTH_BLOB = "b10b" + "0" * 36    # 40 位、含 a–f
@@ -1056,6 +1062,19 @@ def _selftest_run():
         chk(_r1_bad_oid == "ok",
             "R1c 合成 oid 错格式（12 位纯数字）⇒ 调用点抛 GitUnavailable，实际 %r"
             % (_r1_bad_oid,))
+        # R1j（review e4d6546f C2）：**上界必须是整串**——把 `range(want, len(oid)+1)` 退回
+        # 旧的 `want+6`（9–15 位）时，下面这个「第 21 位才有字母」的 oid 会抛 GitUnavailable。
+        _r1j_oid = "1" * 20 + "a" + "0" * 19
+        try:
+            _r1j_got = hexref(_r1j_oid)
+            _r1j_ok = (isinstance(_r1j_got, str) and len(_r1j_got) == 21
+                       and re.search(r"[a-f]", _r1j_got) is not None
+                       and _r1j_oid.startswith(_r1j_got))
+        except GitUnavailable:
+            _r1j_ok, _r1j_got = False, "GitUnavailable"
+        chk(_r1j_ok,
+            "R1j hexref 的 [a-f] 搜索上界是**整串**：'1'*20+'a'+… ⇒ 返 21 位前缀"
+            "（退回 want+6 会抛 GitUnavailable；实际 %r）" % (_r1j_got,))
         _r1_three = [_SYNTH_C1, _SYNTH_SIDE, _SYNTH_BLOB]
         _r1_cases = [
             ("R1d 3 条合法记录 ⇒ 绿", _r1_state(_r1_three, 0)[0], "ok"),
@@ -1078,15 +1097,12 @@ def _selftest_run():
         # 本牙钉住「没人把整跑加回来」：`selftest` 的**最大嵌套深度**必须恒为 1。
         # 钉住「集成层确实被删掉、没有换成另一种整跑」：R1 只剩确定性覆盖，
         # 且旧的探针重入开关 `_DG_PROBE` 必须**从模块命名空间里消失**（删干净，不留死代码）。
-        # **行为牙**（不是名字检查）：窗口内只要发生过一次嵌套 `selftest()`，`_ST_MAX` 就会 >1。
-        # 三种退化都不许空过：窗口标记缺失（`_R1_WIN` 被删）⇒ 红；接缝被绕开（`selftest` 不再
-        # 被调用）⇒ `_ST_DEPTH` 为 0 ⇒ 红；窗口内确实没重入 ⇒ 三值都 == 1 ⇒ 绿。
-        _r1_win = _R1_WIN
-        chk(isinstance(_r1_win, dict) and _r1_win.get("base") == 1
-            and _ST_DEPTH == 1 and globals().get("_ST_MAX") == 1,
-            "R1i R1b–R1h 窗口内 selftest 不得被重入（基准/当前/窗口内最大嵌套深度都要 == 1；"
-            "实际 win=%r depth=%r max=%r）"
-            % (_r1_win, _ST_DEPTH, globals().get("_ST_MAX")))
+        # **行为牙**（review e4d6546f C1 返工）：`_ST_CALLS` **永不重置**，四处有意递归
+        # （n2c/n2d/c6b + 之后的 n2c2）各自先 `_st_exempt(<站点>)` 登记额度。R1i 在此刻核算
+        # 「1（本层）+ 已消耗额度」——把整跑偷偷加回**窗口之前**也会让计数超出，不再被清零掩盖。
+        chk(_ST_CALLS == 1 + len(_ST_EXEMPT_SEEN),
+            "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数（多一次未登记的整跑 ⇒ 红；"
+            "实际 calls=%r exempt=%r）" % (_ST_CALLS, list(_ST_EXEMPT_SEEN)))
 
         try:
             c4a = _require_branch(fx, env, "master") is True
@@ -1115,6 +1131,7 @@ def _selftest_run():
             import io as _io2
             _buf2 = _io2.StringIO()
             with _cl2.redirect_stdout(_buf2):
+                _st_exempt("n2c2")
                 n2c2 = selftest()
             n2c2_out = _buf2.getvalue()
         finally:
@@ -1357,6 +1374,14 @@ def _selftest_run():
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
+
+    # R1k（C1 返工的第二半）：豁免额度必须**恰好消耗一次且只消耗登记站点**，且全程调用数
+    # == 1 + 额度数。同时钉住三种退化：多跑一次未登记 ⇒ 计数超；登记了却没发生（站点被删/
+    # 挪/短路）⇒ 集合少一项；站点名对不上 ⇒ 集合不等。
+    chk(sorted(_ST_EXEMPT_SEEN) == sorted(_ST_EXEMPT_SITES)
+        and _ST_CALLS == 1 + len(_ST_EXEMPT_SITES),
+        "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）"
+        % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES)))
 
     if fails:
         print("docs_delivery_gate selftest: FAIL (%d/%d)" % (len(fails), checked[0]))
