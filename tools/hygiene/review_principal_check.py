@@ -931,7 +931,11 @@ def selftest():
         author_from_entries(malformed_view)
         raise_shape = False
     except LedgerShapeError as ex:
-        raise_shape = "entries[0]" in str(ex) and "openmir2-worker-q" in str(ex)
+        # 卡 `openmir2-entry-principal-assertion`：**不能用裸子串**——`entry_of` 的报错尾部
+        # 带 `str(item)[:120]`，里面本来就有 `'principal': 'openmir2-worker-q'`，所以
+        # 「点名逻辑换成常量」时裸子串仍然命中。只认本工具自己拼的 `principal=%r` 形状。
+        raise_shape = ("entries[0]" in str(ex)
+                       and "principal='openmir2-worker-q'" in str(ex))
 
     def _fake_read(_repo, _card):
         return malformed_view, None
@@ -946,7 +950,9 @@ def selftest():
     ))
     checks.append((
         "㉒ malformed thread 视图 ⇒ evaluate rc=2 且点名 principal（不是 UNKNOWN/跳过）",
-        rc_shape == 2 and "openmir2-worker-q" in err_buf.getvalue()
+        rc_shape == 2
+        and "principal='openmir2-worker-q'" in err_buf.getvalue()
+        and "entries[0]" in err_buf.getvalue()
         and "author=" not in out_buf.getvalue(),
     ))
 
