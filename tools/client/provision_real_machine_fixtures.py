@@ -1110,6 +1110,35 @@ def selftest(args):
                        "两键皆缺 ⇒ 判不了并点名；before_sha256 错 ⇒ 拒绝且目标不动",
                        (ok_fb, err_nokey or raised_nokey, err_bad))
 
+        # ---- P1 牙②g（卡 `openmir2-mirflow-backup-only-evidence-tooth`）：**反向兼容**——
+        #      证据只带 `backup_sha256`、没有 `before_sha256`：
+        #      ① restore 走 backup 并通过（目标 sha == backup_sha256、备份已删）；
+        #      ② 篡改备份内容 ⇒ 拒绝还原、目标不动、点名「备份 sha256」。
+        res_g1 = _prep("EnvirBackupOnly1")
+        ev_bo = {"action": "prepended", "path": res_g1["path"],
+                 "backup": res_g1["backup"],
+                 "backup_sha256": res_g1["before_sha256"]}
+        err_bo = restore_mongen(ev_bo)
+        ok_bo = (err_bo is None
+                 and _sha256_file(ev_bo["path"]) == ev_bo["backup_sha256"]
+                 and not os.path.exists(ev_bo["backup"]))
+
+        res_g2 = _prep("EnvirBackupOnly2")
+        before_g2 = _sha256_file(res_g2["path"])
+        with open(res_g2["backup"], "ab") as fh:
+            fh.write(b"\n#tampered-only\n")
+        ev_bo2 = {"action": "prepended", "path": res_g2["path"],
+                  "backup": res_g2["backup"],
+                  "backup_sha256": res_g2["before_sha256"]}
+        err_bo2 = restore_mongen(ev_bo2)
+        ok_bo2 = (err_bo2 is not None and "备份 sha256" in err_bo2
+                  and _sha256_file(res_g2["path"]) == before_g2)
+
+        ok_all &= _chk(ok_bo and ok_bo2,
+                       "P1 牙②g 反向兼容（只带 backup_sha256）：restore 通过、目标 sha == backup、备份已删；"
+                       "篡改备份 ⇒ 拒绝还原、目标不动并点名",
+                       (ok_bo, err_bo, err_bo2))
+
         # ---- P1 牙②d：`backup_sha256` 必须被**执行**——篡改备份内容 ⇒ restore 拒绝且目标不动
         tamper_env = _mk_env("EnvirTamper", "\n")
         res_t = prepend_mongen(tamper_env, spec, dry_run=False)
