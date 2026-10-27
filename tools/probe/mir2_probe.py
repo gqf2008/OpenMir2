@@ -166,7 +166,7 @@ class Recorder:
     FIELDS = ("seq", "t_ms", "phase", "conn", "ident", "recog", "param", "tag",
               "series", "body_len", "body_hex", "body_sha256")
 
-    def __init__(self, out_dir, t0_ms):
+    def __init__(self, out_dir, t0_ms, capture_c2s=True):
         self.out_dir = out_dir
         os.makedirs(out_dir, exist_ok=True)
         self.path = os.path.join(out_dir, "frames.ndjson")
@@ -175,6 +175,11 @@ class Recorder:
         self.seq = 0
         self.counts = {}
         self.ident_hist = {}
+        # 卡 openmir2-probe-c2s-capture：**方向的采集开关**。关掉不是「静默省略」——
+        # 关闭时 `close()` 会写一条 `direction="meta"` 的账目（`capture="off"` + 跳过条数）。
+        self.capture_c2s = bool(capture_c2s)
+        self.c2s_skipped = 0
+        self.c2s_written = 0
 
     def write_frame(self, phase, conn_label, frame):
         self.seq += 1
@@ -203,11 +208,68 @@ class Recorder:
         self.ident_hist[key] = self.ident_hist.get(key, 0) + 1
         return row
 
+    def write_c2s(self, phase, conn_label, data, ident=None):
+        """记录**客户端→服务端**的原始字节（s2c 行逐字节不变；旧产物没有 `direction` ⇒ 按 s2c 读）。
+
+        `raw_hex` 是**客户原始字节**（不是解码后的字段），`raw_sha256` 供逐字节比对；
+        `t_ms` 与 s2c 行同一时钟原点，方向靠 `direction` 字段区分。
+        """
+        if not self.capture_c2s:
+            self.c2s_skipped += 1
+            return None
+        self.seq += 1
+        self.c2s_written += 1
+        row = {
+            "seq": self.seq,
+            "t_ms": now_ms() - self.t0_ms,
+            "phase": phase,
+            "conn": conn_label,
+            "direction": "c2s",
+            "ident": ident,
+            "raw_len": len(data),
+            "raw_hex": data.hex(),
+            "raw_sha256": sha256_hex(data),
+            "frame_class": "c2s",
+        }
+        self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        return row
+
     def close(self):
+        # 关采集**不许静默省略**：留下一条可审计的账目行。
+        if not self.capture_c2s and self.c2s_skipped:
+            try:
+                self.seq += 1
+                self._fh.write(json.dumps({"seq": self.seq, "direction": "meta",
+                                           "capture": "off",
+                                           "c2s_skipped": self.c2s_skipped},
+                                          ensure_ascii=False) + "\n")
+            except Exception:  # noqa: BLE001
+                pass
         try:
             self._fh.close()
         except Exception:  # noqa: BLE001
             pass
+
+
+def load_frames(path):
+    """读 `frames.ndjson`：**旧产物（没有 `direction`）按 s2c 读**，meta 行保留但标记出来。
+
+    返回 `(rows, meta)`：`rows` 里每行都保证有 `direction`（缺省补 `"s2c"`）。
+    这是 s2c 消费者的兼容入口——`compare_runs.py` 等读旧目录时行为不变。
+    """
+    rows, meta = [], []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            row.setdefault("direction", "s2c")
+            if row["direction"] == "meta":
+                meta.append(row)
+            else:
+                rows.append(row)
+    return rows, meta
 
 
 class Conn:
@@ -242,15 +304,17 @@ class Conn:
         self.closed = True
 
     # ---- 发送 ----
-    def send_raw(self, data):
+    def send_raw(self, data, ident=None):
         if self.sock is None:
             raise ProbeError("send on closed conn %s" % self.label)
         self.sock.sendall(data)
+        if getattr(self, "recorder", None) is not None:
+            self.recorder.write_c2s(self.phase, self.label, data, ident=ident)
         return data
 
     def send(self, recog, ident, param=0, tag=0, series=0, body=b""):
         frame = build_c2s_frame(recog, ident, param, tag, series, body)
-        self.send_raw(frame)
+        self.send_raw(frame, ident=ident)
         return frame
 
     def send_legacy(self, body):
@@ -3969,6 +4033,65 @@ def _delayed_frames():
     return early, late
 
 
+def _selftest_c2s_capture():
+    """卡 `openmir2-probe-c2s-capture`：**双向**采集的牙（全部合成，不起栈、不占端口）。
+
+    ① 合成 socket 双向已知帧：c2s 行的 `raw_hex` 必须与发出的字节**逐字节相等**、`direction="c2s"`；
+       s2c 行仍是旧 schema（无 direction 时按 s2c 读）。
+    ② **关采集不得静默省略**：`capture_c2s=False` 时不写 c2s 行，但 `close()` 必须留下
+       `direction="meta"`、`capture="off"`、`c2s_skipped=N` 的账目行。
+    ③ **旧产物读取兼容**：没有 `direction` 的旧 ndjson 经 `load_frames` 一律补 `"s2c"`。
+    """
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mir2probe-c2s-")
+    try:
+        # ---- ① 双向 ----
+        rec = Recorder(os.path.join(tmp, "a"), now_ms())
+        s2c_bytes = build_s2c_frame(6930, SM_LOGON, 5, 9, 0, bytes(16))
+        conn = Conn("gamegate", rec)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock([s2c_bytes])
+        conn.pump(20)
+        assert conn.frames, "前置：s2c 帧应被解析出来"
+        f1 = conn.send(CM_TURN, 7, 3, 0, 0, b"")
+        f2 = conn.send(CM_SOFTCLOSE, 0, 1, 0, 0, b"")
+        # 注意：`Conn.pump` 已经把收到的帧写进 recorder（经 `on_frame`/recorder 路径），
+        # 这里**不要**再手动 write_frame，否则 s2c 行会重复（本牙第一版就踩到）。
+        rec.close()
+        rows, meta = load_frames(rec.path)
+        c2s = [r for r in rows if r["direction"] == "c2s"]
+        s2c = [r for r in rows if r["direction"] == "s2c"]
+        assert meta == [], meta
+        assert len(c2s) == 2 and len(s2c) == 1, (len(c2s), len(s2c))
+        assert c2s[0]["raw_hex"] == f1.hex() and c2s[1]["raw_hex"] == f2.hex(), "c2s 原始字节必须逐字节相等"
+        assert c2s[0]["ident"] == 7 and c2s[1]["ident"] == 0, (c2s[0]["ident"], c2s[1]["ident"])
+        assert [r["seq"] for r in rows] == sorted(r["seq"] for r in rows), "seq 必须单调"
+        assert c2s[0]["raw_sha256"] == sha256_hex(f1), "raw_sha256 必须是原始字节的哈希"
+
+        # ---- ② 关采集不得静默省略 ----
+        rec2 = Recorder(os.path.join(tmp, "b"), now_ms(), capture_c2s=False)
+        conn2 = Conn("gamegate", rec2)
+        conn2.phase = "gamegate"
+        conn2.sock = _FakeSock([])
+        conn2.send(CM_TURN, 1, 0, 0, 0, b"")
+        conn2.send(CM_TURN, 2, 0, 0, 0, b"")
+        rec2.close()
+        rows2, meta2 = load_frames(rec2.path)
+        assert [r for r in rows2 if r["direction"] == "c2s"] == [], "关采集时不得写 c2s 行"
+        assert len(meta2) == 1 and meta2[0]["capture"] == "off" and meta2[0]["c2s_skipped"] == 2, meta2
+
+        # ---- ③ 旧产物兼容 ----
+        legacy = os.path.join(tmp, "legacy.ndjson")
+        with open(legacy, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"seq": 1, "ident": 654, "body_hex": ""}) + chr(10))
+        old_rows, old_meta = load_frames(legacy)
+        assert old_meta == [] and old_rows[0]["direction"] == "s2c", old_rows
+        return ("c2s 2 条逐字节相等 + s2c 1 条不变；关采集留 meta（skipped=2）；旧产物补 s2c")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _selftest_dwell():
     """dwell 默认值 + 正例 + 牙：dwell>0 收齐延迟段帧，dwell=0（旧行为）丢帧。"""
     import shutil
@@ -6248,6 +6371,7 @@ def run_selftest():
     check("dwell-after-enter", _selftest_dwell)
     check("wait-recog-filter", _selftest_wait_recog_filter)
     check("ack-predicate-wait", _selftest_ack_wait)
+    check("c2s-capture", _selftest_c2s_capture)
     if fails:
         print("mir2_probe selftest: FAIL")
         for f in fails:
@@ -6437,8 +6561,13 @@ def _selftest_conn_semantics():
         assert waited >= 30, waited
         run.recorder.close()
         rows = [json.loads(line) for line in open(run.recorder.path, encoding="utf-8")]
-        assert len(rows) == 4 and rows[0]["frame_class"] == "protocol"
-        return "%d frames, 2 auto replies" % len(rows)
+        # 卡 openmir2-probe-c2s-capture：同一文件里现在**双向**都有行，靠 direction 区分；
+        # 旧的「4 条 s2c」语义不变（缺 direction 的旧产物按 s2c 读）。
+        s2c_rows = [r for r in rows if r.get("direction", "s2c") == "s2c"]
+        c2s_rows = [r for r in rows if r.get("direction") == "c2s"]
+        assert len(s2c_rows) == 4 and s2c_rows[0]["frame_class"] == "protocol"
+        assert len(c2s_rows) >= 1 and all(r["raw_len"] > 0 for r in c2s_rows), c2s_rows
+        return "%d s2c + %d c2s frames, 2 auto replies" % (len(s2c_rows), len(c2s_rows))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

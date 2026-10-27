@@ -307,9 +307,19 @@ restore / stack / probe / db / stop 子进程的环境。**真正必需的只有
 
 ## 证据文件
 
-### `frames.ndjson`（一行一条 s2c 帧）
+### `frames.ndjson`（一行一条帧；**双向**，靠 `direction` 区分）
 
-固定字段：`seq`、`t_ms`（相对本次运行起点）、`phase`（`login`/`selgate`/`gamegate`）、
+**卡 `openmir2-probe-c2s-capture`（2026-10-27）起，同一文件里既有 s2c 也有 c2s**：
+
+* `direction="s2c"`（或**旧产物里没有该字段** —— 一律按 s2c 读，`load_frames()` 负责补默认值）：
+  字段与下面一致，逐字节不变；
+* `direction="c2s"`：客户端→服务端的**原始字节**，字段为
+  `seq`、`t_ms`、`phase`、`conn`、`direction`、`ident`（能解析时）、`raw_len`、`raw_hex`、
+  `raw_sha256`、`frame_class="c2s"`。**`raw_hex` 是线上原样字节**，不是解码后的字段；
+* `direction="meta"`：采集账目行（例如 `capture="off"` + `c2s_skipped=N`）——
+  **关采集时不静默省略，而是留这一行**。消费者应跳过它。
+
+`s2c` 固定字段：`seq`、`t_ms`（相对本次运行起点）、`phase`（`login`/`selgate`/`gamegate`）、
 `conn`、`ident`、`recog`、`param`、`tag`、`series`、`body_len`、`body_hex`、`body_sha256`。
 附加：`frame_class`、`tail`（`!` 或 `!$`）、`raw_len`、`body_text`（GBK 展示，仅供人看）。
 
