@@ -753,7 +753,7 @@ def _st_exempt(site):
 #:   4. **元牙不用改**：`元牙 R1-meta⓪/①–⑧` 直接喂 `_r1_accounting_ok` 的合成参数，与站点名单长度无关。
 #:
 #: **支持范围（按实测收窄，review 89ae2a18 N3）**：本模型**只支持「同一个 `_selftest_run` 内
-#: 经 `_st_exempt` 登记」的递归牙**（即 n2c / n2d / c6b / n2c2 这一模式）。**不支持**「递归整跑
+#: 经 `_st_exempt` 登记、且**内层在到达登记点之前就返回**」的递归牙**（即 n2c / n2d / c6b / n2c2 这一模式；n2c 本身就是「整跑但提前返回」）。**不支持**「递归整跑
 #: `selftest()` 的牙」——那样会把四处 `_st_exempt` 再登记一遍，`seen` 出现重复项且 `calls` 多 4，
 #: 于是 R1k 必红（`元牙 R1-meta⑧` 用合成参数固定这一结论）。
 
@@ -778,11 +778,20 @@ def _r1_accounting_ok(calls, seen, sites):
 _R1_LIVE_CALLS = 0
 
 
-def _r1_accounting_live(calls, seen, sites):
-    """生产路径的唯一读取口：自增调用计数后转调 [`_r1_accounting_ok`]。"""
+def _r1_accounting_guard(calls, seen, sites):
+    """生产路径的唯一读取口，**fail-closed**：不成立就 `raise`（review 1260da60 C1b）。
+
+    为什么「抛」而不是「返回 bool」：只返回 bool 时，调用方**丢弃返回值**再内联一条
+    `<=` 软化判定，洞就回来了（实测 76/76 全绿）。抛错则「丢不丢返回值」都不影响——
+    不成立时根本走不到后续内联判定。`_R1_LIVE_CALLS` 仍自增，作为「两处都真的调了」的正向证据。
+    """
     global _R1_LIVE_CALLS
     _R1_LIVE_CALLS += 1
-    return _r1_accounting_ok(calls, seen, sites)
+    if not _r1_accounting_ok(calls, seen, sites):
+        raise AssertionError(
+            "R1 重入记账不成立：calls=%r seen=%r 登记站点=%r"
+            "（必须 calls == 1 + len(站点) 且**多重集**相等）"
+            % (calls, sorted(seen), sorted(sites)))
 
 
 def selftest():
@@ -1141,9 +1150,13 @@ def _selftest_run():
         # **行为牙**（review e4d6546f C1 返工）：`_ST_CALLS` **永不重置**，四处有意递归
         # （n2c/n2d/c6b + 之后的 n2c2）各自先 `_st_exempt(<站点>)` 登记额度。R1i 在此刻核算
         # 「1（本层）+ 已消耗额度」——把整跑偷偷加回**窗口之前**也会让计数超出，不再被清零掩盖。
-        chk(_r1_accounting_live(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN),
-            "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数（多一次未登记的整跑 ⇒ 红；"
-            "实际 calls=%r exempt=%r）" % (_ST_CALLS, list(_ST_EXEMPT_SEEN)))
+        try:
+            _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN)
+            chk(True, "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数"
+                      "（多一次未登记的整跑 ⇒ 红；实际 calls=%r exempt=%r）"
+                      % (_ST_CALLS, list(_ST_EXEMPT_SEEN)))
+        except AssertionError as _e:
+            chk(False, "R1i（guard 抛错，rc=1 不是判不了）：%s" % (_e,))
 
         try:
             c4a = _require_branch(fx, env, "master") is True
@@ -1419,9 +1432,12 @@ def _selftest_run():
     # R1k（C1 返工的第二半）：豁免额度必须**恰好消耗一次且只消耗登记站点**，且全程调用数
     # == 1 + 额度数。同时钉住三种退化：多跑一次未登记 ⇒ 计数超；登记了却没发生（站点被删/
     # 挪/短路）⇒ 集合少一项；站点名对不上 ⇒ 集合不等。
-    chk(_r1_accounting_live(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES),
-        "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）"
-        % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES)))
+    try:
+        _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES)
+        chk(True, "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）"
+                  % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES)))
+    except AssertionError as _e:
+        chk(False, "R1k（guard 抛错，rc=1 不是判不了）：%s" % (_e,))
 
     # 元牙（review 15d62f97 N2 / 89ae2a18 C1·N2）：全部直接喂 `_r1_accounting_ok` 的**合成参数**。
     # `_META` 是**唯一**登记处：末尾断言条数，删掉任一颗 ⇒ 条数不等 ⇒ 红（N2 计数元断言）。
@@ -1463,6 +1479,19 @@ def _selftest_run():
 
     # C2：R1i 与 R1k 必须**都**经由接缝（`_r1_accounting_live`）读取；把任一处改回内联判定
     # ⇒ 计数不动 ⇒ 本条红。这是「守卫证明自己被调用」的正向证据，不靠源码文本。
+    # 反向牙⑨（review 1260da60 要求）：guard **必须抛错**。若有人把它改成「返回 bool 不抛」，
+    # 「丢弃返回值 + 内联 `<=`」这条退化路径就复活 ⇒ 本牙必须红。
+    global _R1_LIVE_CALLS          # ⑨ 是一次「故意失败」的探测，不得计入两处接线证据
+    _live_before = _R1_LIVE_CALLS
+    try:
+        _r1_accounting_guard(0, (), ())
+        _raised = False
+    except AssertionError:
+        _raised = True
+    _R1_LIVE_CALLS = _live_before
+    chk(_raised, "元牙 R1-meta⑨ guard 在不成立时必须**抛错**（改成返回 bool ⇒ 本条红，"
+                 "因为「丢弃返回值 + 内联 <=」会绕过它）")
+
     chk(_R1_LIVE_CALLS == 2,
         "元牙 R1-meta⓪ R1i/R1k 均经由 `_r1_accounting_live`（计数须为 2，实际 %d；"
         "改回内联判定 ⇒ 本条红）" % _R1_LIVE_CALLS)
