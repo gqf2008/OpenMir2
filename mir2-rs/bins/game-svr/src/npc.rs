@@ -2344,6 +2344,16 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     fn use_items_len(&self) -> i32 {
         i32::try_from(self.use_items.len()).unwrap_or(0)
     }
+    /// `playerActor.UseItems.GetUpperBound(0)`（`PlayObject.UseItems = new UserItem[13]` ⇒ 12）。
+    ///
+    /// **根因修复（卡 `openmir2-npcplayer-use-items-upper-bound`）**：此前未覆写 ⇒ 继承 trait
+    /// 缺省 `-1`（`engine/mod.rs`）⇒ `cond_check_use_item` 的 `nWhere > bound` 恒真 ⇒
+    /// `CHECKUSEITEM` 对任何佩戴位恒走 `ScriptConditionError` 恒假 ⇒ 部署件
+    /// `[@confirmupgrade]` 恒走 `#elsesay`「手上没拿武器」（run4 n17 分诊，triage 卡
+    /// comment `09c813f6`；oracle：`ConditionProcessingSys.cs:4367-4385`）。
+    fn use_items_upper_bound(&self) -> i32 {
+        self.use_items_len() - 1
+    }
     fn use_item_index(&self, i: i32) -> i32 {
         usize::try_from(i)
             .ok()
@@ -4963,6 +4973,122 @@ Other
         assert_eq!(
             golds, 2,
             "oracle Count<=i: 3 条队首同 ident 删 2 留 1 + 新帧 = 2（旧实现 3）"
+        );
+    }
+
+    /// `#if CHECKUSEITEM <n>` 的单条条件脚本（`codes.rs` 的 `CHECKUSEITEM` = 110）。
+    fn check_use_item_def(where_: &str, say: &str, else_say: &str) -> NpcDef {
+        NpcDef {
+            chr_name: "铁匠".to_string(),
+            file_path: "Market_Def".to_string(),
+            script_name: None,
+            is_hide: true,
+            is_quest: false,
+            loaded: true,
+            actor_id: 1,
+            scripts: vec![ScriptInfo {
+                is_quest: false,
+                quest_info: Default::default(),
+                record_list: vec![SayingRecord {
+                    s_label: "@t".to_string(),
+                    procedure_list: vec![SayingProcedure {
+                        condition_list: vec![mir2_script::QuestConditionInfo {
+                            cmd_code: 110,
+                            s_param1: where_.to_string(),
+                            ..Default::default()
+                        }],
+                        action_list: Vec::new(),
+                        else_action_list: Vec::new(),
+                        s_say_msg: say.to_string(),
+                        s_else_say_msg: else_say.to_string(),
+                    }],
+                    bo_ext_jmp: false,
+                }],
+                quest_count: 0,
+            }],
+        }
+    }
+
+    /// **A1 + A2（卡 `openmir2-npcplayer-use-items-upper-bound`）**：`CHECKUSEITEM` 的
+    /// 佩戴位上界与读取。
+    ///
+    /// - 布局等价：oracle `PlayObject.UseItems = new UserItem[13]`
+    ///   （`ConditionProcessingSys.cs:4378` 的 `GetUpperBound(0)` = 12）⇒ 本仓
+    ///   `USE_ITEMS_LEN` 必须 = 13、覆写后 `use_items_upper_bound()` = 12；
+    /// - 位 1（U_WEAPON）有武器 ⇒ 命中页；同位空 ⇒ `#elsesay`（负例：不是「恒真」牙）；
+    /// - 越界（13）⇒ oracle 的 `ScriptConditionError` 早退 ⇒ 判假（不得 panic）。
+    ///
+    /// 牙（红检实测）：删 `use_items_upper_bound` 覆写（回归 trait 缺省 `-1`）⇒
+    /// 位 1 有武器那格恒走错误路径 ⇒ 本用例 RED。
+    #[test]
+    fn check_use_item_in_bound_reads_worn_slot() {
+        use mir2_script::engine::ScriptPlayer;
+        assert_eq!(crate::ability::USE_ITEMS_LEN, 13, "与 oracle 13 槽等价");
+        let mut rng = no_rng();
+        let probe = NpcPlayer::empty(&mut rng);
+        assert_eq!(
+            ScriptPlayer::use_items_upper_bound(&probe),
+            12,
+            "GetUpperBound(0) = Length-1 = 12（缺省 -1 会让 CHECKUSEITEM 恒假）"
+        );
+
+        // 位 1 有武器 ⇒ 命中。
+        let host = host_with(vec![check_use_item_def("1", "HIT", "ELSE")]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.use_items[1] = Some(crate::bag::BagItem::new(5001, 207));
+        let says = host
+            .goto_label("铁匠", &mut player, "@t", false)
+            .expect("脚本可解析");
+        assert_eq!(says.len(), 1);
+        assert_eq!(says[0].raw_msg, "HIT", "位 1 有武器 ⇒ CHECKUSEITEM 判真");
+
+        // 位 1 空 ⇒ #elsesay。
+        let host = host_with(vec![check_use_item_def("1", "HIT", "ELSE")]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        let says = host
+            .goto_label("铁匠", &mut player, "@t", false)
+            .expect("脚本可解析");
+        assert_eq!(says[0].raw_msg, "ELSE", "位 1 空 ⇒ 判假");
+
+        // 越界（13 > 12）⇒ ScriptConditionError 早退 ⇒ 判假（不得 panic）。
+        let host = host_with(vec![check_use_item_def("13", "HIT", "ELSE")]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.use_items[1] = Some(crate::bag::BagItem::new(5001, 207));
+        let says = host
+            .goto_label("铁匠", &mut player, "@t", false)
+            .expect("脚本可解析");
+        assert_eq!(says[0].raw_msg, "ELSE", "越界 ⇒ 错误路径判假");
+    }
+
+    /// **A3（同卡）**：`[@confirmupgrade]` 命中页**逐字节**——C# run4 实测 268B 解码文
+    /// （triage 卡 comment `09c813f6`）：第一处 `$USERWEAPON` 展开「木剑」、第二处
+    /// （`<请求修炼/@upgradenow>` 行内链接之后）保持**未展开字面量** `「<$USERWEAPON>」`
+    /// ——`replace_variable_text` 镜像 C# `IndexOf` 只换第一处，两侧同形。
+    ///
+    /// 期望帧 = C# 268B 命中页原文照抄（禁改写、禁把第二处也展开）。
+    #[test]
+    fn confirmupgrade_hit_page_is_byte_exact() {
+        const RAW_PAGE: &str = r"你当前想要修炼的是你手中的那把「<$USERWEAPON>」吗？\我想从你的包里取得更多的饰品和黑铁矿石。\如果你有重要的物品，在你寄存在仓库后请回来。\ \<请求修炼/@upgradenow>「<$USERWEAPON>」\ \<在安排好以后再回来/@exit>";
+        const CSHARP_268B: &str = r"你当前想要修炼的是你手中的那把「木剑」吗？\我想从你的包里取得更多的饰品和黑铁矿石。\如果你有重要的物品，在你寄存在仓库后请回来。\ \<请求修炼/@upgradenow>「<$USERWEAPON>」\ \<在安排好以后再回来/@exit>";
+        let host = host_with(vec![check_use_item_def(
+            "1",
+            RAW_PAGE,
+            "你的手上没拿任何武器",
+        )]);
+        let mut rng = no_rng();
+        let mut player = NpcPlayer::empty(&mut rng);
+        player.use_items[1] = Some(crate::bag::BagItem::new(5001, 207));
+        player.vars.user_weapon = Some("木剑".to_string());
+        let says = host
+            .goto_label("铁匠", &mut player, "@t", false)
+            .expect("脚本可解析");
+        assert_eq!(says.len(), 1);
+        assert_eq!(
+            says[0].raw_msg, CSHARP_268B,
+            "命中页必须逐字节等于 C# 268B 实测（第一处展开、第二处字面量）"
         );
     }
 }
