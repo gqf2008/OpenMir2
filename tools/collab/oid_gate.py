@@ -43,6 +43,9 @@ import subprocess
 import sys
 
 FULL_OID_RE = re.compile(r"^[0-9a-f]{40}$")
+#: 嵌套自测保护：`gate` 会调 `selfcheck()`，而「接线牙」又要在夹具里调 `main(["gate",…])`——
+#: 不挡住会无限递归。嵌套时跳过夹具（**真仓库 check 仍照常跑**，那才是要验的东西）。
+_IN_SELFTEST = False
 DEFAULT_LIMIT = 200
 COMMIT_FIELDS = ("base", "head", "oid", "merged", "merged.head", "reviewed_head", "merge_oid")
 
@@ -70,7 +73,7 @@ def _git(repo, args, git_cmd=("git",), timeout=120):
     return p
 
 
-def load_entries(repo, limit=DEFAULT_LIMIT, git_cmd=("git",)):
+def load_entries(repo, limit=DEFAULT_LIMIT, git_cmd=("git",), since=None):
     """读最近的条目（按 ts 倒序取 limit 条）。返回 (entries, 库内可读条目总数)。"""
     out = _git(repo, ["for-each-ref", "--format=%(refname) %(objectname)",
                       "refs/collab/inbox/"], git_cmd=git_cmd).stdout
@@ -110,7 +113,7 @@ def load_entries(repo, limit=DEFAULT_LIMIT, git_cmd=("git",)):
         principal = names[idx].split("/")[3] if names[idx].count("/") >= 3 else "?"
         entries.append((principal, e.get("id", "?"), oid, e))
     entries.sort(key=lambda t: int(t[3].get("ts") or 0), reverse=True)
-    return entries[:limit], seen
+    return _window(entries, limit, since), seen
 
 
 #: 这些字段**空了就是错**（一条 patch/review 声称有 base/head 却留空 ⇒ 无从对账）。
@@ -120,11 +123,60 @@ EMPTY_IS_RED = {"refs.base", "refs.head", "body.base", "body.head",
 EMPTY_IS_OK = {"body.merged", "body.merged.head", "parent"}
 
 
+def _window(entries, limit, since):
+    """扫描窗口：`--since` 给定时**绝不按 `--limit` 截断**（A4：窗口缩小也必须抓得到新坏条目）。
+
+    内部先按 ts 倒序（与 `load_entries` 同序），保证 `limit` 截的是「最新的 N 条」。
+    """
+    entries = sorted(entries, key=lambda e: int(e[3].get("ts") or 0), reverse=True)
+    if since is not None:
+        return [e for e in entries if int(e[3].get("ts") or 0) >= int(since)]
+    return entries[:limit]
+
+
 def load_entry_ids(repo, git_cmd=("git",)):
     """所有条目的 **walgit 条目 id**（ref 名末段，32 位 hex；**不是 git 对象名**）。"""
     out = _git(repo, ["for-each-ref", "--format=%(refname)", "refs/collab/inbox/"],
                git_cmd=git_cmd).stdout
     return {ln.rsplit("/", 1)[-1] for ln in out.splitlines() if ln.strip()}
+
+
+def load_baseline(path):
+    """读 baseline 豁免清单（**逐条、可审计**）。
+
+    缺失 / 读不了 / 空清单 ⇒ 抛 `GitUnavailable`（rc=2：**判不了**，不许静默全绿）；
+    非法条目（通配 / 空值 / 缺字段）⇒ 抛 `ValueError`（rc=1：豁免必须带**具体** oid 与理由）。
+    """
+    if not path:
+        raise GitUnavailable("未给 baseline（历史坏条目无处登记，判不了）")
+    if not os.path.isfile(path):
+        raise GitUnavailable("baseline 文件缺失：%s" % path)
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as ex:
+        raise GitUnavailable("baseline 读不了（%s）" % ex)
+    entries = data.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise GitUnavailable("baseline 为空（不知道豁免什么 ⇒ 等于没校验）：%s" % path)
+    out = []
+    for e in entries:
+        if not isinstance(e, dict):
+            raise ValueError("baseline 条目不是对象：%r" % (e,))
+        missing = [k for k in ("principal", "thread", "entry_oid", "field", "value", "reason")
+                   if not e.get(k)]
+        if missing:
+            raise ValueError("baseline 条目缺字段 %s（豁免必须逐条带 principal/thread/entry_oid/"
+                             "field/value/reason）" % missing)
+        if not re.match(r"^[0-9a-f]{40}$", str(e["entry_oid"])):
+            raise ValueError("baseline 的 entry_oid 必须是 40 位 blob oid（%r）" % (e["entry_oid"],))
+        v = str(e["value"])
+        if "*" in v or "…" in v or "..." in v:
+            raise ValueError("baseline 不许通配（%s）" % v)
+        if not re.match(r"^[0-9a-fA-F]{7,40}$", v):
+            raise ValueError("baseline 的 value 不是 hex oid（%r）" % v)
+        out.append((e["principal"], e["thread"], str(e["entry_oid"]), e["field"], v))
+    return out
 
 
 def oid_fields(entry):
@@ -168,11 +220,28 @@ def _resolve(repo, oid, want_commit, git_cmd):
     return "other" if q.returncode == 0 else None
 
 
-def check_entries(entries, repo, git_cmd=("git",), entry_ids=None):
+def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None):
     """四态判定。返回 (rc, detail, stats)。"""
     stats = {"entries": len(entries), "oids": 0, "ok": 0, "short": 0,
-             "non_commit": 0, "bad": 0, "empty": 0}
-    bad, short_hits, skipped = [], [], []
+             "non_commit": 0, "bad": 0, "empty": 0, "exempted": 0}
+    bad, short_hits, skipped, exempt = [], [], [], []
+    baseline = set(baseline or [])
+    used_baseline = set()
+
+    def _flag(principal, thread, entry_oid, field, value, message):
+        """判红前先看这条是不是**逐条登记过**的历史豁免（A1：不许一刀切忽略 parent）。
+
+        **键必须含 `thread` 与 `entry_oid`**（reviewer-21 实测：只按 (principal,field,value)
+        豁免时，**新卡复用旧坏 parent 也被豁免** ⇒ 豁免外溢）。所以豁免精确到「这条条目」。
+        """
+        key = (principal, thread, entry_oid, field, value)
+        if key in baseline:
+            stats["exempted"] += 1
+            used_baseline.add(key)
+            exempt.append("豁免 %s / %s / 条目 %s / %s=%s"
+                          % (principal, thread, entry_oid[:9], field, value))
+        else:
+            bad.append(message)
     oid_re = re.compile(r"[0-9a-f]{7,40}")
     try:
         for principal, thread, eoid, entry in entries:
@@ -184,8 +253,9 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None):
                     elif field in EMPTY_IS_RED:
                         stats["oids"] += 1
                         stats["empty"] += 1
-                        bad.append("空值：%s / %s / %s / 条目 %s ⇒ 空不等于短，判红"
-                                   % (principal, thread, field, str(eoid)[:9]))
+                        _flag(principal, thread, eoid, field, "",
+                              "空值：%s / %s / %s / 条目 %s ⇒ 空不等于短，判红"
+                              % (principal, thread, field, str(eoid)[:9]))
                     continue
                 cands = oid_re.findall(text)
                 if not cands:
@@ -201,8 +271,9 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None):
                         state = _resolve(repo, cand, True, git_cmd)
                     if state is None:
                         stats["bad"] += 1
-                        bad.append("解析不到：%s / %s / %s=%s（条 %s，原文 %r）"
-                                   % (principal, thread, field, cand, str(eoid)[:9], text[:48]))
+                        _flag(principal, thread, eoid, field, cand,
+                              "解析不到：%s / %s / %s=%s（条 %s，原文 %r）"
+                              % (principal, thread, field, cand, str(eoid)[:9], text[:48]))
                     elif state == "other":
                         stats["non_commit"] += 1
                         skipped.append("%s=%s（非 commit ⇒ 跳过计数）" % (field, cand))
@@ -216,9 +287,18 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None):
     if not entries:
         return 2, "扫描到 0 条条目 ⇒ 判不了（扫了 0 个不许算绿）", stats
     detail = ("扫描 %d 条条目 / %d 个 oid：可解析 %d（其中短 oid %d）、非 commit 跳过 %d、"
-              "空值 %d、解析不到 %d"
+              "空值 %d、解析不到 %d（其中已豁免 %d）"
               % (stats["entries"], stats["oids"], stats["ok"], stats["short"],
-                 stats["non_commit"], stats["empty"], stats["bad"]))
+                 stats["non_commit"], stats["empty"], stats["bad"],
+                 len(exempt)))
+    stats["exempted"] = len(exempt)
+    stats["baseline_total"] = len(baseline)
+    stats["baseline_unused"] = len(baseline - used_baseline)
+    if exempt:
+        detail = ("豁免 %d 处（逐条）：%s || " % (len(exempt), "；".join(exempt[:8]))) + detail
+    if baseline:
+        detail += "；baseline 共 %d 条（命中 %d，未命中 %d）" % (
+            stats["baseline_total"], len(used_baseline), stats["baseline_unused"])
     if bad:
         return 1, "；".join(bad[:12]) + ("（共 %d 处）" % len(bad)) + " || " + detail, stats
     if short_hits:
@@ -227,6 +307,25 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None):
     if skipped:
         detail += "；info：跳过 %d 处（根条目无 parent / 未合并 / 自由文本 / 非 commit）" % len(skipped)
     return 0, detail, stats
+
+
+def real_check(repo, limit=DEFAULT_LIMIT, baseline_path=None, since=None, git_cmd=("git",)):
+    """真仓库检查（`check` 与 `gate` 共用）。返回 (rc, detail, stats)。
+
+    **这是合并门真正该调的那条路**：`--selftest` 只跑合成夹具，不等于这条已被调用（规则 36）。
+    """
+    try:
+        entries, total = load_entries(repo, limit, git_cmd=git_cmd, since=since)
+        ids = load_entry_ids(repo, git_cmd)
+        baseline = load_baseline(baseline_path) if baseline_path else []
+    except GitUnavailable as ex:
+        return 2, "判不了：%s" % ex, {}
+    except ValueError as ex:
+        return 1, "baseline 非法：%s" % ex, {}
+    rc, detail, stats = check_entries(entries, repo, entry_ids=ids, baseline=baseline)
+    scope = ("ts >= %s" % since) if since is not None else ("最近 %d 条" % len(entries))
+    detail = "（库内共 %d 条；范围 %s，实扫 %d 条）%s" % (total, scope, len(entries), detail)
+    return rc, detail, stats
 
 
 def verify_oids(repo, values, git_cmd=("git",)):
@@ -272,11 +371,13 @@ def verify_parent(repo, values, git_cmd=("git",)):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description="collab 条目 oid 可解析性门（只读，只报不改）")
-    ap.add_argument("cmd", nargs="?", choices=("check", "verify", "verify-entry"))
+    ap.add_argument("cmd", nargs="?", choices=("check", "gate", "verify", "verify-entry"))
     ap.add_argument("oids", nargs="*")
     ap.add_argument("--repo", default=".")
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     ap.add_argument("--json")
+    ap.add_argument("--baseline", help="逐条豁免清单（历史坏条目）；缺失/空 ⇒ rc=2")
+    ap.add_argument("--since", type=int, default=None, help="只查 ts >= N 的新条目（给了就**不按 --limit 截断**）")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
     if args.selftest:
@@ -289,19 +390,12 @@ def main(argv=None):
         if rc == 0:
             for r in resolved:
                 print(r)
-    elif args.cmd == "check":
-        try:
-            entries, total = load_entries(repo, max(1, args.limit))
-        except GitUnavailable as ex:
-            print("oid_gate: 判不了：%s" % ex)
-            return 2
-        try:
-            ids = load_entry_ids(repo)
-        except GitUnavailable as ex:
-            print("oid_gate: 判不了：%s" % ex)
-            return 2
-        rc, detail, stats = check_entries(entries, repo, entry_ids=ids)
-        detail = "（库内共 %d 条，本次扫最近 %d 条）%s" % (total, len(entries), detail)
+    elif args.cmd in ("check", "gate"):
+        if args.cmd == "gate":
+            st = selfcheck()
+            if st != 0:
+                return st
+        rc, detail, stats = real_check(repo, max(1, args.limit), args.baseline, args.since)
         if args.json:
             with io.open(args.json, "w", encoding="utf-8", newline="") as fh:
                 fh.write(json.dumps({"rc": rc, "detail": detail, "stats": stats},
@@ -315,6 +409,10 @@ def main(argv=None):
 
 def selfcheck():
     """合成夹具自证：临时 git 仓库，**不碰真仓库**。"""
+    global _IN_SELFTEST
+    if _IN_SELFTEST:
+        return 0        # 由 `gate` 间接调用时不再跑夹具（防递归）；真仓库 check 不受影响
+    _IN_SELFTEST = True
     import tempfile
     ok = bad = 0
 
@@ -371,6 +469,127 @@ def selfcheck():
     chk(rc_x == 1 and "非全 oid" in d_x, "写侧 非 hex ⇒ 拒绝（%r）" % (d_x[:60],))
     chk(rc_m == 1 and "解析不到" in d_m, "写侧 解析不到 ⇒ 拒绝（%r）" % (d_m[:60],))
     chk(rc_f == 0 and got == [real], "写侧 全号 ⇒ 通过并回吐全 oid")
+    # ---- baseline（A1/A3）：逐条豁免 + 未豁免的新坏条目仍红 + 缺失/空 ⇒ rc=2 ----
+    import json as _json_b
+    _bad_entry = ("dev", "th-bad", "a" * 40, mk({"head": missing}, {}))
+    _bl_path = os.path.join(tmp, "baseline.json")
+    with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(_json_b.dumps({"entries": [{
+            "principal": "dev", "thread": "th-bad", "entry_oid": "a" * 40, "field": "refs.head",
+            "value": missing, "reason": "历史坏条目（夹具）", "added_at": "2026-10-27",
+            "added_by": "t"}]}))
+    rc_b, detail_b, stats_b = real_check(tmp, baseline_path=_bl_path)
+    chk(rc_b == 2 and "判不了" in detail_b,
+        "baseline 生效前：真仓库没有条目可读 ⇒ rc=2（不是绿；%r）" % (detail_b[:80],))
+    # 直接喂条目：① baseline 命中 ⇒ 豁免可见；② 加一条不在 baseline 的 ⇒ 仍红
+    bl = load_baseline(_bl_path)
+    rc1, d1, st1 = check_entries([_bad_entry], tmp, baseline=bl)
+    chk(rc1 == 0 and "豁免 1 处" in d1 and "baseline 共 1 条" in d1,
+        "A3① baseline 里那条不存在 oid ⇒ 被豁免且审计输出可见（%r）" % (d1[:130],))
+    _new_bad = ("dev", "th-new", "b" * 40, mk({"head": "1" * 40}, {}))
+    rc2, d2, _ = check_entries([_bad_entry, _new_bad], tmp, baseline=bl)
+    chk(rc2 == 1 and ("th-new" in d2) and "1" * 40 in d2,
+        "A3② 不在 baseline 的新坏条目 ⇒ 仍红并点名（%r）" % (d2[:130],))
+    try:
+        load_baseline(os.path.join(tmp, "no-such-baseline.json"))
+        _bl_missing = 0
+    except GitUnavailable:
+        _bl_missing = 2
+    chk(_bl_missing == 2, "A3③ baseline 缺失 ⇒ rc=2 判不了（不许静默全绿）")
+    with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(_json_b.dumps({"entries": []}))
+    try:
+        load_baseline(_bl_path)
+        _bl_empty = 0
+    except GitUnavailable:
+        _bl_empty = 2
+    chk(_bl_empty == 2, "A3③b baseline 为空 ⇒ rc=2（不知道豁免什么等于没校验）")
+    with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(_json_b.dumps({"entries": [{"principal": "*", "thread": "*", "field": "parent",
+                                            "value": "*", "reason": "x"}]}))
+    try:
+        load_baseline(_bl_path)
+        _bl_wild = 0
+    except ValueError:
+        _bl_wild = 1
+    chk(_bl_wild == 1, "红线① 通配豁免（`principal:\"*\"` / `value:\"*\"`）⇒ 拒绝（不许一刀切）")
+
+    # ---- 豁免键必须含 thread + entry_oid（reviewer-21 的「复用旧坏 parent」攻击面）----
+    # ① 同 principal / 同 thread / 同字段 / 同值，**但条目不同**（entry_oid 不同）⇒ 必须仍红。
+    _same_value_other_entry = ("dev", "th-bad", "c" * 40, mk({"head": missing}, {}))
+    rc_e1, d_e1, st_e1 = check_entries([_bad_entry, _same_value_other_entry], tmp, baseline=bl)
+    chk(rc_e1 == 1 and st_e1.get("exempted") == 1,
+        "牙① 同 principal/field/value 但**不同 entry_oid** ⇒ 仍红（豁免只落在这条条目上；rc=%d，豁免 %d）"
+        % (rc_e1, st_e1.get("exempted", -1)))
+    # ② 同 principal / 同 entry_oid / 同字段 / 同值，**但 thread 不同** ⇒ 必须仍红。
+    _same_value_other_thread = ("dev", "th-other", "a" * 40, mk({"head": missing}, {}))
+    rc_e2, d_e2, st_e2 = check_entries([_bad_entry, _same_value_other_thread], tmp, baseline=bl)
+    chk(rc_e2 == 1 and st_e2.get("exempted") == 1,
+        "牙② 同 principal/entry_oid/field/value 但**不同 thread** ⇒ 仍红（rc=%d，豁免 %d）"
+        % (rc_e2, st_e2.get("exempted", -1)))
+    # ③ 对照：键完全相同的同一条 ⇒ 仍然豁免（不是「一律不豁免」）
+    rc_e3, _d3, st_e3 = check_entries([_bad_entry], tmp, baseline=bl)
+    chk(rc_e3 == 0 and st_e3.get("exempted") == 1,
+        "牙③ 对照：键完全相同 ⇒ 豁免仍生效（rc=%d）" % rc_e3)
+
+    # ---- since（A4）：过滤新条目，且**不给 limit 悄悄截断** ----
+    _old = ("dev", "th-old", "c" * 40, dict(mk({"head": missing}, {}), ts=10))
+    _new = ("dev", "th-new2", "d" * 40, dict(mk({"head": "2" * 40}, {}), ts=100))
+    rc_s, d_s, st_s = check_entries([_old, _new], tmp)
+    chk(rc_s == 1, "since 前置：未过滤时两条都红（%r）" % (d_s[:60],))
+
+    _w_all = _window([_old, _new], 1, None)
+    _w_since = _window([_old, _new], 1, 50)
+    chk(len(_w_all) == 1 and _w_all[0][1] == "th-new2",
+        "since 前置②：不给 since 时 `--limit 1` 只留最新一条")
+    chk(len(_w_since) == 1 and _w_since[0][1] == "th-new2",
+        "A4：`--since 50` 过滤掉旧条目；**`--limit 1` 不会把它再截掉**（窗口缩小仍抓得到新坏条目）")
+    _w_since2 = _window([_old, _new], 1, 200)
+    chk(_w_since2 == [], "A4b：`--since` 之后没有条目 ⇒ 空（上层据此 rc=2，不许算绿）")
+
+    # 端到端牙（规则 36 的硬证据）：在**真 git 仓库**里写一条带坏 head 的 collab ref，
+    # `real_check` 必须**读得到并判红**；再把那条逐条写进 baseline ⇒ 变绿且豁免可见。
+    _entry_json = _json_b.dumps({"id": "th-fixture", "ts": 999, "refs": {"head": missing},
+                                 "body": {}}).encode()
+    blob = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                          input=_entry_json, capture_output=True, env=env)
+    assert blob.returncode == 0, blob.stderr
+    blob_oid = blob.stdout.decode().strip()
+    subprocess.run(["git", "-C", tmp, "update-ref", "refs/collab/inbox/dev/fixture-bad-entry",
+                    blob_oid], check=True, env=env)
+    rc_real, d_real, _ = real_check(tmp)
+    chk(rc_real == 1 and "th-fixture" in d_real,
+        "端到端牙：真仓库里带坏 head 的 collab 条目 ⇒ `real_check` 红并点名（%r）" % (d_real[:120],))
+    rc_real2, d_real2, _ = real_check(tmp, baseline_path=_bl_path)
+    chk(rc_real2 == 1, "端到端牙②：baseline 里只有别的条目 ⇒ 这条新坏条目**仍红**（豁免不外溢）")
+    with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:
+        fh.write(_json_b.dumps({"entries": [{
+            "principal": "dev", "thread": "th-fixture", "entry_oid": blob_oid, "field": "refs.head",
+            "value": missing, "reason": "历史坏条目（端到端夹具）", "added_at": "2026-10-27",
+            "added_by": "t"}]}))
+    rc_real3, d_real3, _ = real_check(tmp, baseline_path=_bl_path)
+    chk(rc_real3 == 0 and "豁免 1 处" in d_real3,
+        "端到端牙③：把**这条**逐条登记进 baseline ⇒ 变绿且豁免可见（%r）" % (d_real3[:120],))
+    subprocess.run(["git", "-C", tmp, "update-ref", "-d", "refs/collab/inbox/dev/fixture-bad-entry"],
+                   check=True, env=env)
+
+    # 接线牙（规则 36）：`gate` 子命令**必须真的调用真仓库 check**，不是只跑自测。
+    with io.open(_bl_path, "w", encoding="utf-8", newline="") as fh:   # 恢复成合法 baseline
+        fh.write(_json_b.dumps({"entries": [{
+            "principal": "dev", "thread": "th-bad", "entry_oid": "a" * 40, "field": "refs.head",
+            "value": missing, "reason": "历史坏条目（夹具）", "added_at": "2026-10-27",
+            "added_by": "t"}]}))
+    import contextlib as _cl_gate
+    _orig_check = check_entries
+    try:
+        globals()["check_entries"] = lambda *a, **k: (1, "INJECTED-REAL-CHECK-RED", {})
+        _buf_gate = io.StringIO()
+        with _cl_gate.redirect_stdout(_buf_gate):
+            rc_gate = main(["gate", "--repo", tmp, "--baseline", _bl_path])
+    finally:
+        globals()["check_entries"] = _orig_check
+    chk(rc_gate == 1, "接线牙：把真仓库 check 换成必红 ⇒ `gate` 必须红（只跑自测不算接入；rc=%d）" % rc_gate)
+
     print("%s: oid_gate selftest %d/%d" % ("GREEN" if not bad else "RED", ok, ok + bad))
     return 0 if not bad else 1
 
