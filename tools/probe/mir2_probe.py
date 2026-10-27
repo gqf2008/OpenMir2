@@ -79,6 +79,7 @@ CM_LOGINNOTICEOK = 1018
 CM_SAY = 3030
 
 SM_LOGON = 50                 # PlayObject.cs:1131 MakeMessage(SM_LOGON, ActorId, CurrX, CurrY, MakeWord(Dir,Light))
+SM_FEATURECHANGED = 41        # PlayObject.cs:1145 SendDefMessage(SM_FEATURECHANGED, ActorId, ...)（SM_LOGON 同组）
 SM_NEWMAP = 51                # PlayObject.Message.cs:1680-1684（RM_LOGON 支）：body = Envir.MapFileName
 SM_MAPDESCRIPTION = 54        # PlayObject.Base.cs:894（Envir.MapDesc）
 SM_CHANGEMAP = 634            # 只在 **换图**（RM_CHANGEMAP）发：BaseObject.cs:1134 / PlayObject.cs:3778；
@@ -302,6 +303,11 @@ class Conn:
         self.garbage = []
         self.closed = False
         self.peer = None
+        # relogin 步设置：段2 SM_LOGON 的 seq（卡 openmir2-probe-recog-self-after-relogin）。
+        # wait_for 的下界取 min(步起始, floor)——relogin 内部 settle/dwell 期间到达并被缓冲
+        # 的帧（段2 的 SM_FEATURECHANGED 批等）才可能被后续 wait_for(recog_is=self) 命中。
+        # 其余路径恒 None ⇒ 旧语义零变化。
+        self.match_floor_seq = None
 
     # ---- 生命周期 ----
     def connect(self, host, port, timeout_s):
@@ -2414,6 +2420,9 @@ class Run:
             c.close()
             self.chain.setdefault("closed", []).append(c.label)
         self.gamegate = gg
+        # 下一条 wait_for 的下界降到段2 入场（SM_LOGON）seq：settle/dwell 期间已缓冲的
+        # 段2 帧（SM_FEATURECHANGED 批等）不算「步前历史」。防误匹配由 recog_is 过滤保证。
+        gg.match_floor_seq = (self.chain.get("world_entered") or {}).get("seq")
         new_actor = self.state.get("self_actor")
         row = {
             "index": plan["index"], "kind": "relogin",
@@ -2562,6 +2571,13 @@ class Run:
             return
         if kind == "wait_for":
             after = conn.recorder.seq
+            # relogin 后的连接带 match_floor_seq（段2 入场 seq）：下界降到 floor，让
+            # relogin 步 settle/dwell 期间已缓冲的帧可被本步命中（run5：段2 41 批
+            # t+9447 在 15s 窗内仍超时——步起始下界把它们排除了）。防误匹配由
+            # recog_is 过滤保证（旧 id 帧对 recog_is=self 恒假）。非 relogin 路径
+            # floor=None ⇒ 原语义零变化。
+            if conn.match_floor_seq is not None:
+                after = min(after, conn.match_floor_seq)
             t_start = now_ms()
             timeout = plan["timeout_ms"] if plan["timeout_ms"] is not None else default_timeout
             recog_filter = self._recog_filter(plan, idx)
@@ -4604,6 +4620,76 @@ def newchr_should_reuse(on_exists, n_code, names, target):
             and any(n.lower() == target.lower() for n in names))
 
 
+def _selftest_recog_self_after_relogin():
+    """卡 openmir2-probe-recog-self-after-relogin：relogin 步 settle/dwell 期间到达并被
+    缓冲的段2 SM_FEATURECHANGED(41) 批，下一条 wait_for(recog_is=self) 必须命中。
+
+    run5 实测（E:/tmp/window/run5/softclose_relogin）：段2 41 批 t+9447 在 15s 窗内，
+    step6 仍超时——wait_for 的下界=步起始，把 relogin 步内部缓冲的帧排除了。self id
+    跟踪本身不需要修：do_enter_world 每次进世界都刷新 state["self_actor"]（:2895）。
+    ① floor 路径：relogin 设置 match_floor_seq=段2 SM_LOGON 的 seq ⇒ 下界降级 ⇒ 命中新 id B；
+    ② 负对照（非 relogin 路径语义不变）：不设 floor ⇒ 预缓冲帧仍被排除 ⇒ 超时；
+    ③ 负对照（防误匹配）：floor 已设但只有**旧 id** 的 41 ⇒ recog_is=self 不得误匹配。
+    """
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mir2probe-recog-relogin-")
+    try:
+        new_self, old_self, _bystander = 1022611374, 2097542662, 119
+        args = argparse.Namespace(out=tmp, no_auto_handshake=True, timeout_ms=8000)
+
+        def make_conn(with_floor, only_old):
+            run = Run(args)
+            # do_enter_world 在段2 已把 self_actor 刷新为新 id（:2895），这里直接喂状态。
+            run.state["self_actor"] = new_self
+            conn = Conn("gamegate2", run.recorder, on_frame=run.on_frame)
+            conn.phase = "gamegate2"
+            logon = build_s2c_frame(new_self, SM_LOGON, 321, 328, 0, b"")
+            batch = build_s2c_frame(old_self if only_old else new_self,
+                                    SM_FEATURECHANGED, 0, 2, 0, b"\x00\x00")
+            conn.sock = _FakeSock([logon, batch])
+            conn.pump(100)
+            assert [f.ident for _, f in conn.frames] == [SM_LOGON, SM_FEATURECHANGED], conn.frames
+            if with_floor:
+                # relogin 步在 do_enter_world 返回后设置（=段2 SM_LOGON 的 seq）。
+                conn.match_floor_seq = conn.frames[0][0]
+            return run, conn
+
+        # ① floor 路径：命中**新** self id 的 41（run5 的窗内超时形态被修掉）。
+        run, conn = make_conn(with_floor=True, only_old=False)
+        plan = plan_step({"wait_for": {"idents": SM_FEATURECHANGED, "recog_is": "self"},
+                          "timeout_ms": 200}, 1, {})
+        run.execute_step(conn, plan)
+        step = run.steps[-1]
+        assert step["matched"] and step["matched_recog"] == new_self, step
+        assert step["recog_is"] == "self", step
+
+        # ② 负对照：不设 floor（非 relogin 路径）⇒ 旧语义——预缓冲帧被步起始下界排除 ⇒ 超时。
+        run2, conn2 = make_conn(with_floor=False, only_old=False)
+        plan2 = plan_step({"wait_for": {"idents": SM_FEATURECHANGED, "recog_is": "self"},
+                           "timeout_ms": 200}, 1, {})
+        try:
+            run2.execute_step(conn2, plan2)
+        except StepFailure as ex:
+            assert "timeout" in str(ex), str(ex)
+        else:
+            raise AssertionError("无 floor 时预缓冲帧不应被命中（非 relogin 路径语义必须不变）")
+
+        # ③ 负对照：floor 已设但缓冲里只有**旧 id** 的 41 ⇒ recog_is=self 不得误匹配。
+        run3, conn3 = make_conn(with_floor=True, only_old=True)
+        plan3 = plan_step({"wait_for": {"idents": SM_FEATURECHANGED, "recog_is": "self"},
+                           "timeout_ms": 200}, 1, {})
+        try:
+            run3.execute_step(conn3, plan3)
+        except StepFailure as ex:
+            assert "timeout" in str(ex), str(ex)
+        else:
+            raise AssertionError("旧 id 的 41 帧不得被 recog_is=self 误匹配")
+        return "relogin 后 recog_is=self：floor 命中新 id；无 floor 保持旧语义；旧 id 不误匹配"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _selftest_dlg_select_any():
     """`dlg_select_any`（卡 `openmir2-probe-conditional-dlg-select`）：
 
@@ -6631,6 +6717,7 @@ def run_selftest():
     check("multi-session", _selftest_multi_session)
     check("dwell-after-enter", _selftest_dwell)
     check("wait-recog-filter", _selftest_wait_recog_filter)
+    check("recog-self-after-relogin", _selftest_recog_self_after_relogin)
     check("ack-predicate-wait", _selftest_ack_wait)
     check("c2s-capture", _selftest_c2s_capture)
     check("c2s-close-hygiene", _selftest_c2s_close_hygiene)
