@@ -38,7 +38,18 @@ class EntryRefError(Exception):
 
 
 def entry_of(item):
-    """thread 视图的一条 → `entry` dict。兼容「已拆包的 entry 本身」。形状不对 ⇒ 报错。"""
+    """thread 视图的一条 → `entry` dict。兼容「已拆包的 entry 本身」。形状不对 ⇒ 报错。
+
+    认的形状（其余一律 `EntryRefError`）：
+
+      ① `{"entry": {…}}`                  —— `walgit collab thread` 的视图包层
+      ② `{… "id", "kind" …}`（扁平）       —— inbox blob / 已拆包的 entry 本身
+      ③ `{"entry": <非 dict>, id, kind}`   —— **有意**回落到扁平本身：`entry` 键在但不是
+         dict 时，只要顶层 `id`+`kind` 齐全就当成扁平条目（卡
+         `openmir2-entry-shape-consumer-followups` A4 登记；牙见 `--selftest` 形状⑤）。
+         这不是新形状，是「包层坏了就退回旧读法」的老行为——显式写在这里，免得靠隐式继承。
+      ④ 其它（缺 `id` / 缺 `kind` / 非 dict）—— 报错（`EntryRefError`）
+    """
     if isinstance(item, dict):
         inner = item.get("entry")
         if isinstance(inner, dict):
@@ -138,6 +149,15 @@ def selftest():
             continue
         raise AssertionError("形状④：%r 必须报错，不许静默返回空 dict" % (bad,))
     chk(True, "形状④：既无 entry 也无 id/kind ⇒ EntryRefError（无静默空 dict）")
+    # 形状⑤（卡 `openmir2-entry-shape-consumer-followups` A4）：`entry` 键在但**不是 dict**
+    # ⇒ 只要顶层 id+kind 齐全，就**有意**回落到扁平本身（老行为，已登记进 docstring）。
+    weird = {"entry": "garbage", "id": "card-z", "kind": "status"}
+    try:
+        shape5 = entry_of(weird) is weird
+    except Exception:      # 回落被删时应该是**命名 FAIL**，不是整个 selftest 崩掉
+        shape5 = False
+    chk(shape5,
+        "形状⑤：entry 键存在但非 dict + 顶层 id/kind 齐全 ⇒ 有意回落到扁平本身（已登记）")
 
     # 正例
     item = wrap({"kind": "patch", "refs": {"base": good, "head": other}})
