@@ -988,28 +988,67 @@ def selftest(args):
 
         # ---- P1 牙②c（卡 `openmir2-mirflow-newline-backup-tooth`）：**无尾换行**的夹具。
         #      前插后原文尾部字节必须保留**并补一个 nl**；且与 card_window 的布局机判交叉一致。
-        env_noeol = _mk_env("EnvirNoEOL", "")
-        noeol_path = os.path.join(env_noeol, "MonGen.txt")
-        with open(noeol_path, "rb") as fh:
-            orig_noeol = fh.read()
-        res_noeol = prepend_mongen(env_noeol, spec, dry_run=False)
-        with open(noeol_path, "rb") as fh:
-            raw_noeol = fh.read()
-        ok_tail = (orig_noeol and not orig_noeol.endswith(b"\n")
-                   and raw_noeol.endswith(orig_noeol + b"\n")
-                   and res_noeol.get("eol") == "LF")
-        # 交叉判：直接用 card_window 的 `_mongen_fixture_layout`（同口径的第二意见）。
+        def _mk_env_raw(tag, raw):
+            d = os.path.join(t2, tag)
+            os.makedirs(d)
+            with open(os.path.join(d, "MonGen.txt"), "wb") as fh:
+                fh.write(raw)
+            with open(os.path.join(d, "MapInfo.txt"), "wb") as fh:
+                fh.write("[3 盟重省] FIGHT\n".encode("gbk"))
+            return d
+
+        # 交叉判用 card_window 的 `_mongen_fixture_layout`（同口径第二意见）。
         import sys as _sys
         _cw_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                "conformance")
         if _cw_dir not in _sys.path:
             _sys.path.insert(0, _cw_dir)
         import card_window as _cw
-        ok_layout, why_layout = _cw._mongen_fixture_layout(orig_noeol, raw_noeol,
-                                                           res_noeol["lines"])
-        ok_all &= _chk(ok_tail and ok_layout,
-                       "P1 牙②c 无尾换行：尾部字节保留 + 补 nl，且 card_window 布局机判一致",
-                       (ok_tail, why_layout))
+
+        line1 = "3\t320\t328\t" + "\u9e21" + "\t0\t1\t10"
+        line2 = "4\t0\t0\t" + "\u9e7f" + "\t0\t1\t10"
+        # 两形态矩阵（复审 N1）：**末行不带换行**的 LF 源 与 **CRLF 源**。
+        noeol_cases = [
+            ("EnvirNoEOL", line1.encode("gbk"), b"\n", "LF"),
+            ("EnvirCRLFNoEOL",
+             (line1 + "\r\n" + line2).encode("gbk"), b"\r\n", "CRLF"),
+        ]
+        ok_matrix = True
+        detail_matrix = []
+        for tag, raw_before, want_nl, want_eol in noeol_cases:
+            d = _mk_env_raw(tag, raw_before)
+            res_c = prepend_mongen(d, spec, dry_run=False)
+            with open(os.path.join(d, "MonGen.txt"), "rb") as fh:
+                raw_after = fh.read()
+            tail_ok = (raw_before and not raw_before.endswith(b"\n")
+                       and raw_after.endswith(raw_before + want_nl)
+                       and res_c.get("eol") == want_eol
+                       and raw_after.count(b"\n") == raw_after.count(want_nl))
+            lay_ok, why = _cw._mongen_fixture_layout(raw_before, raw_after, res_c["lines"])
+            ok_matrix = ok_matrix and tail_ok and lay_ok
+            detail_matrix.append((tag, tail_ok, lay_ok, why))
+        ok_all &= _chk(ok_matrix,
+                       "P1 牙②c 无尾换行两形态（LF / CRLF）：尾部字节保留 + 补的换行跟随原文件"
+                       " + 无混排 + card_window 布局机判一致",
+                       detail_matrix)
+
+        # ---- P1 牙②e（复审 C1）：**备份缺失** ⇒ restore 干净报错、目标不动、不抛异常。
+        #      删掉那条守卫会掉进 `_sha256_file(backup)` 的 `FileNotFoundError`（整档崩）。
+        miss_env = _mk_env("EnvirMissBackup", "\n")
+        res_m = prepend_mongen(miss_env, spec, dry_run=False)
+        before_m = _sha256_file(res_m["path"])
+        os.unlink(res_m["backup"])
+        try:
+            err_m = restore_mongen(res_m)
+            raised_m = None
+        except Exception as ex:      # noqa: BLE001 — 崩溃即判红，不许整档挂掉
+            err_m = None
+            raised_m = repr(ex)
+        after_m = _sha256_file(res_m["path"])
+        ok_all &= _chk(raised_m is None and err_m is not None and "备份缺失" in err_m
+                       and after_m == before_m,
+                       "P1 牙②e 备份缺失 ⇒ 返回「备份缺失」错误（不抛异常）且目标文件零字节变化",
+                       (raised_m, err_m, after_m == before_m))
 
         # ---- P1 牙②d：`backup_sha256` 必须被**执行**——篡改备份内容 ⇒ restore 拒绝且目标不动
         tamper_env = _mk_env("EnvirTamper", "\n")
