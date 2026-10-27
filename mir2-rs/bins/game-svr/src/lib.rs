@@ -15995,10 +15995,19 @@ fn drain_skeleton_downlink(
 ///   （与 [`drain_combat_downlink`] 受击同一口径），再出帧；`Race==Play` ⇒ 给自己
 ///   （`SendUpdateMsg`），`ShowHp` ⇒ 再 `SendRefMsg`（±`range` 观察者）。
 ///
+/// **接线（卡 `openmir2-buff-ability-frame-wiring`）**：buff 递减段的 `SysMsg`
+/// （`rec.buff_sysmsgs`，oracle `ActorBuffSystem.cs:191-211` 的绿字提示）与
+/// `boNeedRecalc`（`rec.buff_recalcs` ⇒ `RecalcAbilitys(); SendMsg(RM_ABILITY)`
+/// （`ActorBuffSystem.cs:227-231`））⇒ `SM_ABILITY(52)` 自发。
+///
+/// **同一 tick 内同一线序**（oracle 自队列按 `(byte)ident` 升序出队，`BaseObject.Message.cs:181`）：
+/// `RM_ABILITY(10051)⇒67` < `RM_CHARSTATUSCHANGED(10139)⇒155` < `RM_SYSMESSAGE(11004)⇒252`
+/// ⇒ 先 52、再 657、最后 100——100 在 `Operate` 循环里**最早入队**但**最后出队**，不得按入队序排。
+///
 /// **登记（未接线）**：`HitSpeed`（`CharacterObject.HitSpeed`）本仓未建模其加成源
 /// （`ExtraAbil[EABIL_HITSPEEDUP]`，`PlayObject.cs:2832`）⇒ 基线玩家 `0`（`PlayObject.cs:2024`），
-/// 照 0 发（`SM_CHARSTATUSCHANGED` 的 `Series`）。buff 递减段的 `SysMsg`（`rec.buff_sysmsgs`）
-/// 与 `boNeedRecalc`（`rec.buff_recalcs`，`RM_ABILITY`）帧面 deferred（见 buff 设计件 A-7）。
+/// 照 0 发（`SM_CHARSTATUSCHANGED` 的 `Series`）。
+#[allow(clippy::too_many_arguments)]
 fn drain_buff_downlink(
     rec: &mir2_world::TickRecord,
     world: &mir2_world::World,
@@ -16007,7 +16016,39 @@ fn drain_buff_downlink(
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     range: i32,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    client_layout: bool,
+    green: (u8, u8),
 ) {
+    // **`boNeedRecalc` 支（卡 `openmir2-buff-ability-frame-wiring`）**：`RecalcAbilitys()` +
+    // `SendMsg(RM_ABILITY, 0, 0, 0, 0)`（`ActorBuffSystem.cs:227-231`）⇒ `SM_ABILITY(52)` **只发自己**
+    // （`RM_ABILITY` 是 self 队列消息；无 `RM_SUBABILITY`——那只在 `Operate.cs:458/538` 的穿脱路径）。
+    // 重算走 [`recalc_session_ability`]（= oracle `PlayObject.RecalcAbilitys` 的本仓等价物）；
+    // buff 位不进 `AddAbil` ⇒ 数值通常不变，但仍按 oracle 逐字段重算并发整帧。
+    for actor_id in &rec.buff_recalcs {
+        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            continue;
+        };
+        let name = entry.chr_name.clone();
+        let Some(sg) = ground_sessions.get_mut(&name) else {
+            continue;
+        };
+        let extra_abil = world.entities.get(sg.actor_id).map(|e| e.extra_abil);
+        let _ = recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
+        let body = game_svr::smframe::sm_ability(
+            sg.state.gold,
+            sg.equip.job,
+            sg.game_gold,
+            &ability_tail(&sg.state.wabil, client_layout),
+        );
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "buff 重算 52 自发")
+        {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
+    }
     for (actor_id, status) in &rec.buff_status_changes {
         if let Some(mut d) = displays.get(*actor_id).cloned() {
             d.status = *status;
@@ -16015,6 +16056,35 @@ fn drain_buff_downlink(
         }
         let body = game_svr::smframe_ext::sm_charstatuschanged(*actor_id, *status, 0);
         broadcast_ref_msg_with_self(world, online, gates, *actor_id, &[body]);
+    }
+    // **递减段 `SysMsg`（同卡）**：`SysMsg(msg, MsgColor.Green, MsgType.Hint)`（非 Notice 支）⇒
+    // `SendMsg(RM_SYSMESSAGE, 0, GreenMsgFColor, GreenMsgBColor, 0, msg)`
+    // （`BaseObject.cs:1654-1657`，Hint 支**不拼** `LineNoticePreFix`）⇒ `SM_SYSMESSAGE(100)`、
+    // `Recog` = 自己、`Param = MakeWord(GreenF, GreenB)`、`Series = 1`、尾 = `EncodeString(msg)`。
+    for (actor_id, msg) in &rec.buff_sysmsgs {
+        use mir2_world::buff::BuffSysMsg;
+        let text: &str = match msg {
+            BuffSysMsg::DefensePowerRecovered => "防御力回复正常.",
+            BuffSysMsg::MagicDefensePowerRecovered => "魔法防御力回复正常.",
+            BuffSysMsg::DefensePower10Sec => "防御力10秒后恢复正常。",
+            BuffSysMsg::MagicDefensePower10Sec => "魔法防御力10秒后恢复正常。",
+        };
+        let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
+            continue;
+        };
+        let body = game_svr::smframe::sm_sysmessage(
+            *actor_id,
+            u16::from(green.0),
+            u16::from(green.1),
+            text.as_bytes(),
+        );
+        if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "buff 提示 100 自发")
+        {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: entry.socket,
+                body,
+            });
+        }
     }
     for (actor_id, hp, mp) in &rec.buff_health_changes {
         let Some(entry) = online.iter().find(|e| e.actor_id == *actor_id) else {
@@ -25541,6 +25611,9 @@ fn sim_loop(
             &mut ground_sessions,
             &gates,
             enter_cfg.ref_msg_range,
+            &enter_cfg.catalog,
+            mir2_client_ability_layout(),
+            (colors.green_f, colors.green_b),
         );
         // **卡 `openmir2-monster-showhp-53-broadcast`**：怪/NPC 的 `ShowHp` 恢复/钳制 53
         // （魔法受击与毒伤已分别在 `drain_mag_struck_b2`/`drain_buff_downlink` 出帧）。
@@ -26717,6 +26790,9 @@ mod tests {
             &mut ground_sessions,
             &gates,
             12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
         );
 
         let mut frames: Vec<Vec<u8>> = Vec::new();
@@ -26761,6 +26837,195 @@ mod tests {
             status,
             "drain 应把新 CharStatus 写进展示表"
         );
+    }
+
+    /// **A2（卡 `openmir2-buff-ability-frame-wiring`）**：`boNeedRecalc` ⇒ `RecalcAbilitys()` +
+    /// `SendMsg(RM_ABILITY)` ⇒ `SM_ABILITY(52)` 自发；递减段 `SysMsg` ⇒ `SM_SYSMESSAGE(100)`
+    /// 绿字自发。**线序按 oracle 自队列优先级**（`(byte)ident` 升序）：
+    /// `RM_ABILITY(10051)⇒67` < `RM_CHARSTATUSCHANGED(10139)⇒155` < `RM_SYSMESSAGE(11004)⇒252`
+    /// ⇒ **52 → 657 → 100**（100 入队最早、出队最晚）。
+    ///
+    /// 100 逐字节：`Recog` = 自己、`Param = MakeWord(GreenMsgFColor, GreenMsgBColor)`、
+    /// `Series = 1`、尾 = `EncodeString("防御力回复正常.")`（Hint 支不拼前缀）。
+    ///
+    /// 牙：删 recalcs 排水 ⇒ 无 52 ⇒ 红；删 sysmsgs 排水 ⇒ 无 100 ⇒ 红；文案映射错 ⇒ 解码断言红。
+    #[test]
+    fn drain_buff_downlink_emits_ability_then_657_then_sysmsg() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity(mir2_world::Entity::new(1, "hero", 10, 10));
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let status: i32 = 0x8000_0002u32 as i32;
+        let mut rec = mir2_world::TickRecord::default();
+        rec.buff_recalcs.push(hero);
+        rec.buff_sysmsgs
+            .push((hero, mir2_world::buff::BuffSysMsg::DefensePowerRecovered));
+        rec.buff_status_changes.push((hero, status));
+
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        drain_buff_downlink(
+            &rec,
+            &world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &catalog,
+            false,
+            (0xDB, 0xFF),
+        );
+
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                frames.push(body);
+            }
+        }
+        let idents: Vec<u16> = frames
+            .iter()
+            .filter_map(|b| mir2_protocol::frame::CommandMessage::from_bytes(b).map(|c| c.ident))
+            .collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_ABILITY,
+                mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+                mir2_protocol::messages::SM_SYSMESSAGE,
+            ],
+            "线序必须 52 → 657 → 100（队列优先级 67 < 155 < 252）；实得 {idents:?}"
+        );
+
+        // 52 = 当前 WAbil 的整帧（重算数值不变；映射 gold/job/game_gold/tail）。
+        let sg = ground_sessions.get("hero").unwrap();
+        let want_ability = game_svr::smframe::sm_ability(
+            sg.state.gold,
+            sg.equip.job,
+            sg.game_gold,
+            &ability_tail(&sg.state.wabil, false),
+        );
+        assert_eq!(
+            frames[0], want_ability,
+            "SM_ABILITY(52) 逐字节 = 当前 WAbil"
+        );
+
+        // 100 逐字节：Recog=自己、Param=MakeWord(绿F,绿B)、Series=1、尾=EncodeString(文案)。
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&frames[2]).unwrap();
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_SYSMESSAGE);
+        assert_eq!(cm.recog, hero, "Recog = 自己的 ActorId");
+        assert_eq!(
+            cm.param,
+            u16::from(0xDBu8) | (u16::from(0xFFu8) << 8),
+            "Param = MakeWord(GreenF=0xDB, GreenB=0xFF)"
+        );
+        assert_eq!(cm.series, 1, "Series = 1");
+        let tail = mir2_protocol::edcode::decode(&frames[2][12..]);
+        assert_eq!(
+            String::from_utf8_lossy(&tail),
+            "防御力回复正常.",
+            "文案按 oracle `:191`（Hint 支不拼前缀）"
+        );
+    }
+
+    /// **A3 负例（同卡）**：① `StateTick==10` 的预告文案（`魔法防御力10秒后恢复正常。`）
+    /// 只发 100、**不发 52**（`StateTick==10` 不置 `boNeedRecalc`）；② 空 `rec` ⇒ 零帧
+    /// （「触发放宽」变异——每 tick 都发——在此红）。
+    #[test]
+    fn drain_buff_downlink_sysmsg_ten_sec_and_empty_rec_is_silent() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity(mir2_world::Entity::new(1, "hero", 10, 10));
+        let mut displays = downlink::DisplayTable::new();
+        let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
+        ground_sessions.insert("hero".into(), test_session_ground(hero));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        // ① 预告格：只有 100，无 52（recalcs 空）。
+        let mut rec = mir2_world::TickRecord::default();
+        rec.buff_sysmsgs
+            .push((hero, mir2_world::buff::BuffSysMsg::MagicDefensePower10Sec));
+        drain_buff_downlink(
+            &rec,
+            &world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &catalog,
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut frames: Vec<Vec<u8>> = Vec::new();
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = m {
+                frames.push(body);
+            }
+        }
+        assert_eq!(frames.len(), 1, "恰一条 100；实得 {frames:?}");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(&frames[0]).unwrap();
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_SYSMESSAGE);
+        let tail = mir2_protocol::edcode::decode(&frames[0][12..]);
+        assert_eq!(
+            String::from_utf8_lossy(&tail),
+            "魔法防御力10秒后恢复正常。",
+            "预告文案按 oracle `:211`（StateTick==10 的插值形态）"
+        );
+
+        // ② 空 rec ⇒ 零帧（不得变成每 tick 噪声源）。
+        let rec = mir2_world::TickRecord::default();
+        drain_buff_downlink(
+            &rec,
+            &world,
+            &mut displays,
+            &online,
+            &mut ground_sessions,
+            &gates,
+            12,
+            &catalog,
+            false,
+            (0xDB, 0xFF),
+        );
+        let mut extra = 0;
+        while let Ok(m) = rx0.try_recv() {
+            if let SimToGate::SendFrame { .. } = m {
+                extra += 1;
+            }
+        }
+        assert_eq!(extra, 0, "空 rec ⇒ 零帧（触发放宽的变异在此红）");
     }
 
     /// **卡 `openmir2-monster-showhp-53-broadcast`（生产入口）**：`ShowHp` 怪物受魔法攻击 ⇒
@@ -26968,6 +27233,9 @@ mod tests {
             &mut sessions,
             &gates,
             12,
+            &game_svr::ability::StdItemCatalog::new(),
+            false,
+            (0xDB, 0xFF),
         );
 
         let mut bodies: Vec<Vec<u8>> = Vec::new();
@@ -47139,6 +47407,9 @@ SendRefMsgRange=15
                 &mut ground_sessions,
                 &gates,
                 12,
+                &catalog,
+                false,
+                (0xDB, 0xFF),
             );
             let wire = a5_take_idents(&mut rx0);
             assert!(
@@ -47553,6 +47824,9 @@ SendRefMsgRange=15
                 &mut ground_sessions,
                 &gates,
                 12,
+                &catalog,
+                false,
+                (0xDB, 0xFF),
             );
             if a5_take_idents(&mut rx0).contains(&mir2_protocol::messages::SM_CHARSTATUSCHANGED) {
                 seen = true;
