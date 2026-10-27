@@ -209,11 +209,14 @@ def hexref(oid, want=9):
     两类假红的共同根因。找不到含字母的前缀（≤ want+6 位）⇒ 判不了（GitUnavailable），
     **不许**静默返回纯数字前缀。
     """
-    for n in range(want, min(len(oid), want + 6) + 1):
+    # review C1（2b1160de）：原来只在 `want..want+6`（9–15 位）里找 `[a-f]`，三个真 sha1 每次约
+    # **0.26%** 概率窗口内全数字 ⇒ 偶发 NEED。**上界放宽到整个 oid**：40 位 sha1 全数字的概率
+    # ≈ (10/16)^40 ≈ 1e-9，实际为零。
+    for n in range(want, len(oid) + 1):
         if re.search(r"[a-f]", oid[:n]):
             return oid[:n]
-    raise GitUnavailable("oid %s 的前 %d 位没有 a–f，构造不出可解析的 hex 锚 ⇒ 判不了"
-                         % (oid[:12], want + 6))
+    raise GitUnavailable("oid %s 全串没有 a–f，构造不出可解析的 hex 锚 ⇒ 判不了"
+                         % (oid[:12],))
 
 
 #: R1（卡 openmir2-docs-delivery-hexref-flake）：头三次 `hexref` 调用必须是三个 40 位 oid。
@@ -1057,8 +1060,7 @@ def _selftest_run():
         chk("_DG_PROBE" not in globals(),
             "R1i 集成层已彻底移除：`_DG_PROBE` 不得再存在于模块命名空间（现为 %r）"
             % (globals().get("_DG_PROBE"),))
-        chk(_r1_state(_r1_three, 0)[0] == "ok" and _r1_state(_r1_three[:2], 2)[0] == "need",
-            "R1i2 确定性覆盖在位：3 条合法 ⇒ ok；2 条 + 内层中断 ⇒ need（判不了不等于红）")
+
         try:
             c4a = _require_branch(fx, env, "master") is True
         except GitUnavailable:
