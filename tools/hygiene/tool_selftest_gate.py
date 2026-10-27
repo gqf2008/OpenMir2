@@ -124,6 +124,12 @@ REGISTRY = [
     # 卡 `openmir2-docs-delivery-gate`：交付文档的结构性门（hex / 表格 / 路径 / 命令期望值）。
     # 自测 38 项、离线、临时 git 仓库；<2s。
     ("docs_delivery_gate", ["tools/hygiene/docs_delivery_gate.py", "--selftest"], False),
+    # 卡 `openmir2-rng-ledger-tooth-and-groups`：M3 RNG 消费者站点组表（`consumer_groups.tsv`）
+    # 的自检此前**不在任何门禁里**（复审 N2）。离线、确定性：只读 TSV + 仓内 C# 源码，
+    # `selftest` 27/27、rc 0/1 可判红。路径在 `mir2-rs/tests/…`（不在 `tools/`）⇒ 由 `discover()`
+    # 的「REGISTRY 显式登记的非 `tools/` 入口」分支收进清点（否则会 INVENTORY_MISMATCH）。
+    ("rng_consumer_groups",
+     ["mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py", "selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
@@ -151,7 +157,8 @@ def repo_root(explicit=None):
 
 
 def discover():
-    """扫 tools/**/*.py 里带 selftest 的文件（清点用；不执行）。"""
+    """清点全部「带 selftest 的工具」（不执行）：扫 `tools/**/*.py`，再并上 REGISTRY 里
+    显式登记的、位于 `tools/` 之外的入口（`.ps1` 与 `mir2-rs/tests/…` 的探针 `.py`）。"""
     root = repo_root()
     out = []
     for base, _dirs, files in os.walk(os.path.join(root, "tools")):
@@ -167,14 +174,20 @@ def discover():
                 continue
             if "--selftest" in text or "selftest" in text:
                 out.append(os.path.relpath(path, root).replace(os.sep, "/"))
-    # 非 `.py` 的入口（如 `-Selftest` 的 .ps1）**只收 REGISTRY 显式登记的**：
-    # `tools/**/*.ps1` 里有 20+ 个带 selftest 字样的部署/验收脚本，全局扫描会把它们
-    # 全变成「未分类」⇒ 判红。清点的语义是「谁在门内/谁被显式出域」，不是「目录爆破」。
+    # 非 `tools/` 下的入口（如 `-Selftest` 的 .ps1、`mir2-rs/tests/…` 的探针 .py）**只收
+    # REGISTRY 显式登记的**：`tools/**/*.ps1` 里有 20+ 个带 selftest 字样的部署/验收脚本，
+    # 全局扫描会把它们全变成「未分类」⇒ 判红；`mir2-rs/tests` 探针目录同理不做目录爆破。
+    # 清点的语义是「谁在门内/谁被显式出域」，不是「目录爆破」。`rel not in out` 去重：
+    # `tools/**/*.py` 的已登记项本来就在上面被扫到。
     for _n, argv, _slow in REGISTRY:
-        if argv and str(argv[0]).lower().endswith(".ps1"):
-            rel = str(argv[0]).replace(os.sep, "/")
-            if os.path.isfile(os.path.join(root, rel)) and rel not in out:
-                out.append(rel)
+        if not argv:
+            continue
+        rel = str(argv[0]).replace(os.sep, "/")
+        low = rel.lower()
+        if not (low.endswith(".ps1") or low.endswith(".py")):
+            continue
+        if os.path.isfile(os.path.join(root, rel)) and rel not in out:
+            out.append(rel)
     return sorted(out)
 
 

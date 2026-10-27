@@ -14619,6 +14619,30 @@ fn new_player_entity_with_login_ctor(
     e
 }
 
+/// **登录批 5 抽的分支决策**（卡 `openmir2-rng-ledger-tooth-and-groups` A1；复审 N1）。
+///
+/// oracle `WorldServer.cs:503` 的 `ProcessHumansIsLogined`（= `FrontEngine.InSaveRcdList(chr)` ∨
+/// 同名 `PlayObjectList`）门在 `:518` `ProcessHumansMakeNewHuman` **之前** ⇒ 重复登录
+/// **不构造 `PlayObject`、不抽数**。
+///
+/// 抽与不抽是**同一处**决策：返回 `Some` = 已用共享 `world.rng` 抽满 5 抽并把结果带回；
+/// `None` = **0 抽**。生产 `sim_loop` **只**经本函数进入登录 5 抽（不直接调
+/// [`mir2_world::World::fold_login_player_ctor_draws`]）⇒ 把抽数改成无条件、或把它挪进重复
+/// 分支，都会改变这里的可观测 RNG 行为。行为牙：
+/// `mod tests::login_ctor_draws_only_on_non_duplicate_login`（直接驱动本函数并按流位核算抽数，
+/// 不是源码文本 grep）。
+fn login_ctor_draws_for(
+    world: &mut mir2_world::World,
+    in_save: bool,
+    in_world: bool,
+) -> Option<mir2_world::LoginPlayerCtorDraws> {
+    if in_save || in_world {
+        None
+    } else {
+        Some(world.fold_login_player_ctor_draws())
+    }
+}
+
 /// `WorldServer.GetHumData` 的**记录 → `PlayObject` 标量装载**（登录实体构造点唯一入口）。
 ///
 /// - `Dir`：oracle 把 `CharacterData.Dir` 直接赋给 `PlayObject`（`WorldServer.cs:1113-1125`
@@ -23573,12 +23597,10 @@ fn sim_loop(
                                     // （卡 `openmir2-player-ctor-rng-order`）：位置必须早于
                                     // ① HomeMap 出生点抽数（`:254-259`）②落点改写抽数
                                     // （`:306-307`/`:339-340`/`:346-347`）③移位环（`:380-381`）。
-                                    // 只在非重复登录分支抽（重复支 oracle 不构造）。
-                                    let login_ctor = if in_save || in_world {
-                                        None
-                                    } else {
-                                        Some(world.fold_login_player_ctor_draws())
-                                    };
+                                    // 只在非重复登录分支抽（重复支 oracle 不构造）——判定与抽数
+                                    // 同在一处 [`login_ctor_draws_for`]（行为牙见其 doc）。
+                                    let login_ctor =
+                                        login_ctor_draws_for(&mut world, in_save, in_world);
                                     let (enter_map_name, home_x, home_y, enter_x, enter_y) =
                                         if home_empty {
                                             // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
@@ -29953,13 +29975,93 @@ mod tests {
         );
     }
 
+    /// **登录 5 抽的分支行为牙**（卡 `openmir2-rng-ledger-tooth-and-groups` A1；复审 N1 指出的
+    /// 「分支条件无牙」）：oracle `WorldServer.cs:503` 的 `ProcessHumansIsLogined` 门在
+    /// `:518` `ProcessHumansMakeNewHuman`（⇒ `:234` `new PlayObject()`）之前 ⇒
+    /// **重复登录不构造、不抽；非重复登录恰抽 5 次**。
+    ///
+    /// 直接驱动生产分支函数 [`login_ctor_draws_for`]（不是源码文本 grep），按**共享 RNG 流位**
+    /// 核算抽数：
+    /// - 非重复（`false,false`）⇒ `Some`，且流恰前移 5 抽（模数/次序 `1500/2000/3000/3000/
+    ///   999999`），返回值与孪生世界按该模数重放的 5 抽逐项相等，两条流的下一格也相同；
+    /// - 重复三种组合 ⇒ `None`，且流**一格未动**（与从不动过的孪生世界逐格相同）。
+    ///
+    /// 红检（各自实测）：把 [`login_ctor_draws_for`] 改成无条件抽 ⇒ 重复三组红；
+    /// 把条件反成「只在重复分支抽」⇒ 非重复组红。
+    #[test]
+    fn login_ctor_draws_only_on_non_duplicate_login() {
+        const SEED: i32 = 20261027;
+        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let d = login_ctor_draws_for(&mut world, false, false)
+            .expect("非重复登录必须构造 PlayObject：5 抽");
+
+        // ① 账本：login 批、5 条、site/arg = oracle 继承链逐抽对应。
+        assert_eq!(d.ledger.batch, mir2_world::CtorDrawBatch::Login);
+        let sites: Vec<mir2_world::CtorFoldSite> =
+            d.ledger.entries.iter().map(|e| e.site).collect();
+        assert_eq!(
+            sites,
+            vec![
+                mir2_world::CtorFoldSite::PlayerBaseRunTick,
+                mir2_world::CtorFoldSite::PlayerBaseSearchTime,
+                mir2_world::CtorFoldSite::PlayerAnimalAttackTick,
+                mir2_world::CtorFoldSite::PlayerAnimalWalkTick,
+                mir2_world::CtorFoldSite::PlayerRandomNo,
+            ],
+            "登录批 5 抽的 oracle 次序"
+        );
+        assert_eq!(
+            d.ledger.entries.iter().map(|e| e.arg).collect::<Vec<_>>(),
+            vec![1500, 2000, 3000, 3000, 999_999],
+            "模数/次序 = BaseObject 439/441 + AnimalObject 76/77 + PlayObject 1047"
+        );
+
+        // ② 流位核算：同种子孪生世界按同一模数重放 5 抽 ⇒ 返回值逐项相等、下一格相同
+        //    （证明恰 5 抽：多抽/少抽/换序都会让下面任一条不等）。
+        let mut twin = mir2_world::World::with_maps(vec![(8, 8)]);
+        twin.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        assert_eq!(twin.rng.random_below(1500), d.run_tick_delta);
+        assert_eq!(twin.rng.random_below(2000) + 2000, d.base_search_time);
+        assert_eq!(twin.rng.random_below(3000), d.attack_tick_delta);
+        assert_eq!(twin.rng.random_below(3000), d.walk_tick_delta);
+        assert_eq!(twin.rng.random_below(999_999), d.random_no);
+        const PROBE_MOD: i32 = 1_000_003;
+        assert_eq!(
+            world.rng.random_below(PROBE_MOD),
+            twin.rng.random_below(PROBE_MOD),
+            "非重复登录必须恰抽 5 次：两条流应停在同一点"
+        );
+
+        // ③ 重复登录（in_save ∨ in_world）⇒ 0 抽：流与「从未抽过」的孪生世界逐格相同。
+        for (in_save, in_world) in [(true, false), (false, true), (true, true)] {
+            let mut w = mir2_world::World::with_maps(vec![(8, 8)]);
+            w.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
+            assert!(
+                login_ctor_draws_for(&mut w, in_save, in_world).is_none(),
+                "重复登录 in_save={in_save} in_world={in_world} 不得构造 PlayObject"
+            );
+            let mut fresh = mir2_world::World::with_maps(vec![(8, 8)]);
+            fresh.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
+            for m in [1500, 2000, 3000, 3000, 999_999, 62] {
+                assert_eq!(
+                    w.rng.random_below(m),
+                    fresh.rng.random_below(m),
+                    "重复登录 in_save={in_save} in_world={in_world} 必须 0 抽（RNG 流不得前移）"
+                );
+            }
+        }
+    }
+
     /// **接线点保鲜门**（卡 `openmir2-player-ctor-rng-order` A2/A4）：生产必须
-    /// ① 恰一处 `fold_login_player_ctor_draws(`；
-    /// ② 它早于 `rewrite_enter_position(` 与 `shift_enter_position(`（`WorldServer.cs:234` <
+    /// ① 恰一处 `fold_login_player_ctor_draws(`（唯一抽数点；分支行为另由
+    ///    [`login_ctor_draws_only_on_non_duplicate_login`] 行为牙覆盖）；
+    /// ② 生产**调用点** `login_ctor_draws_for(&mut world` 恰一处，且早于
+    ///    `rewrite_enter_position(` 与 `shift_enter_position(`（`WorldServer.cs:234` <
     ///    `:306/:339/:346/:380`）；
     /// ③ `new_player_entity` 体内**不得**出现抽数（构造点不在那里）。
     ///
-    /// 红检（各自实测）：删掉生产调用行 ⇒ ① 红；把它挪到 `rewrite_enter_position` 之后 ⇒ ② 红；
+    /// 红检（各自实测）：删掉生产调用行 ⇒ ①/② 红；把它挪到 `rewrite_enter_position` 之后 ⇒ ② 红；
     /// 把抽数塞进 `new_player_entity` ⇒ ③ 红。
     #[test]
     fn login_player_ctor_draws_wired_before_position_rewrite() {
@@ -29973,7 +30075,16 @@ mod tests {
             1,
             "生产（去注释后）必须恰一处登录 5 抽调用"
         );
-        let draw_at = src.find(draw).expect("登录 5 抽调用");
+        // 调用点锚（不是 helper 定义）：完整生产调用形 `login_ctor_draws_for(&mut world,
+        // in_save, in_world);` 只在 `sim_loop` 出现。`concat!` 拆开字面量 ⇒ 本测试自身的
+        // 文本与 `mod tests` 里的直接调用（实参不同）都不会命中；定义签名分行写亦不命中。
+        let call = concat!("login_ctor_draws_for(&mut ", "world, in_save, in_world);");
+        assert_eq!(
+            src.matches(call).count(),
+            1,
+            "生产必须恰一处登录 5 抽调用点"
+        );
+        let draw_at = src.find(call).expect("登录 5 抽调用点");
         // 用**调用点**锚，不用函数定义（`fn rewrite_enter_position(` 在文件前部）。
         let rewrite_at = src
             .find("let out = rewrite_enter_position(")
