@@ -2344,13 +2344,14 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
     fn use_items_len(&self) -> i32 {
         i32::try_from(self.use_items.len()).unwrap_or(0)
     }
-    /// `playerActor.UseItems.GetUpperBound(0)`（`PlayObject.UseItems = new UserItem[13]` ⇒ 12）。
+    /// `playerActor.UseItems.GetUpperBound(0)`（声明在基类 `CharacterObject.cs:89` 的
+    /// `UseItems = new UserItem[13]` ⇒ 12）。
     ///
     /// **根因修复（卡 `openmir2-npcplayer-use-items-upper-bound`）**：此前未覆写 ⇒ 继承 trait
     /// 缺省 `-1`（`engine/mod.rs`）⇒ `cond_check_use_item` 的 `nWhere > bound` 恒真 ⇒
     /// `CHECKUSEITEM` 对任何佩戴位恒走 `ScriptConditionError` 恒假 ⇒ 部署件
     /// `[@confirmupgrade]` 恒走 `#elsesay`「手上没拿武器」（run4 n17 分诊，triage 卡
-    /// comment `09c813f6`；oracle：`ConditionProcessingSys.cs:4367-4385`）。
+    /// comment `09c813f6`；oracle 关键行：`ConditionProcessingSys.cs:4378`）。
     fn use_items_upper_bound(&self) -> i32 {
         self.use_items_len() - 1
     }
@@ -5061,6 +5062,23 @@ Other
             .goto_label("铁匠", &mut player, "@t", false)
             .expect("脚本可解析");
         assert_eq!(says[0].raw_msg, "ELSE", "越界 ⇒ 错误路径判假");
+
+        // **review N1 边界格**：位 12 = `GetUpperBound(0)`（最高合法位）必须命中——
+        // 把早退条件 `>` 变异成 `>=`（错误拒绝最高位）时，本格必须红；
+        // 位 0（U_DRESS）为最低合法位，同格覆盖。
+        for slot in [12_u16, 0] {
+            let host = host_with(vec![check_use_item_def(&slot.to_string(), "HIT", "ELSE")]);
+            let mut rng = no_rng();
+            let mut player = NpcPlayer::empty(&mut rng);
+            player.use_items[usize::from(slot)] = Some(crate::bag::BagItem::new(5001, 207));
+            let says = host
+                .goto_label("铁匠", &mut player, "@t", false)
+                .expect("脚本可解析");
+            assert_eq!(
+                says[0].raw_msg, "HIT",
+                "位 {slot}（合法边界）有武器 ⇒ 必须命中（`>=` 变异在此红）"
+            );
+        }
     }
 
     /// **A3（同卡）**：`[@confirmupgrade]` 命中页**逐字节**——C# run4 实测 268B 解码文
