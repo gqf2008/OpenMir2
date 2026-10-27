@@ -58,7 +58,7 @@ SabukW 部署件 9260B→实测 9290B，会变，别写死）见 runbook **§0.9
 - `python -I -B tools/goal/goal_gate.py selftest` ⇒ **85 条断言 85 通过**（`cb947d123` 实测；来历：`80a820762` 加 4 条 → 79→83；whitelist 卡（`6f282de2e`）加 1 条 → 84；`goal-gate-wiring-teeth`（`cb947d123`）加 1 条 → 85）
 - `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **57 项全绿**；`--inventory` ⇒ 清点 **62 = 57 + 5 + 0**（2026-10-27 起，含 C7 / run_batch / entryrefs / rng_consumer_groups；此前 56/61、52/57、51/56、50/55、48/53、47/52）
 - `goal_gate --full` 产物里条件④ 应显示「**门禁 8 项**」（第 8 项 = 工具自测门，约 +120s）
-- `cargo test --workspace` ⇒ **142 suites，running 3389 = passed 3326 + ignored 63**（`58fd2e98d` 实测 2026-10-27，`--no-fail-fast`；其后仅 docs 提交 ⇒ 同一编译树；机判对账走测试车道的证据文件 `<git-common-dir>/tester/last-workspace-test.json`，证据缺失/该 tip 无条目 ⇒ 判不了 rc=2）
+- `cargo test --workspace` ⇒ 三元组以测试车道证据条目为准：截至本行改写时最新条目 `f60dc2959`（`<git-common-dir>/tester/last-workspace-test.json`，2026-10-28 实测 `--no-fail-fast`）= **142 suites，running 3401 = passed 3338 + ignored 63**。滚动口径（卡 `openmir2-windowplan-docs61-qualifier`）：本行**不引用任何固定提交集合**；过期条件机械可判——证据条目键 != 当前 master tip 且其后存在 Rust 面提交 ⇒ 限定语过期，tester 重测登记新条目并刷新本行指针；机判对账走同一证据文件，证据缺失/该 tip 无条目 ⇒ 判不了 rc=2
 
 > 1 与 2 任一未绿就**不要开窗**——否则那天会出现同一现象两种判法，或者跑完才发现门是红的。
 
