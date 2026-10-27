@@ -484,3 +484,184 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 - 本次修订自检：`/e/tmp/rev-audit-check.py`（全文区间校验表）、`/e/tmp/audit-rev.patch`（修订 patch）——临时物，不属于仓库。
 - 审计 worktree：`/e/tmp/impl-runaudit`（detached `e9cc6a8fd`）；修订 worktree：`/e/tmp/rev-audit2`（detached `d3e09228e`）；主检出未动。
 - 未起服务、未占端口、未写库；`E:/MirServer` 未触碰。
+
+---
+
+## 订正 2026-10-27（对账 master d470d7bd1）
+
+> 本节**只追加**，不改写上文历史结论。三态口径：**已实现** = master 上有生产调用点（附实现提交与 `文件:行`）；**前提被证伪** = 原文的缺口前提在 master 上已不成立（附反证）；**仍成立** = master 上仍找不到等价物（附缺失证据与检索命令）。判级仍按 `AGENTS.md`，本节未改任何代码/测试。
+
+### 0. 计数口径（A2：不留未分类项）
+
+- **缺口条目** = §2 覆盖矩阵中状态含「缺失 / 部分」的行，共 **97** 行：`R`41 `P`30 `D`7 `B`6 `O`5 `N`5 `M`2 `A`1（缺失 57 / 部分 40）。复算：对本文 §2 表格行按首列 `[A-Z]\d{2}` + 第三列以「缺失/部分」开头筛选，`len == 97`（脚本见下）。
+- 另加 A1 点名的非矩阵条目：**B08**（§3 第 5 行仍列缺口，矩阵已改判「已实现」）1 条、**§4.4 的「100 / RM_ABILITY 未接线」** 1 条、**§5 机判建议 MCS-1..16** 16 条。
+- 本表共 **115 行 = 97 + 1 + 1 + 16**，逐条给定三态，无未分类项。
+
+### 1. 证据组
+
+| 组 | 事实 | 命令 / 生产点 |
+|---|---|---|
+| E1 | 专用怪 `Run` 覆写已按 race 分派（MB-1..MB-9），由生产 AI tick 调用 | `crates/world/src/monai.rs:1579 monster_class_run`；生产分派 `monai.rs:5298` / `:5350`（`monster_ai_tick`）；各 arm 见 `monai.rs:1583-1747` |
+| E2 | 主动索敌集合已含 82/84/90/91/97/106/118/119/130 | `crates/world/src/monai.rs:709 is_active_seek_race`（调用 `:4632`） |
+| E3 | 城堡门/墙 `Run` 与帧面已接 | `crates/world/src/monai.rs:5155 castle_structure_run`；分派 `monai.rs:5330`（死）/ `:5345`（活） |
+| E4 | BeeQueen / SpiderHouse `Run` 已接 | `crates/world/src/special_monster.rs:299 special_monster_run`；生产前置支 `monai.rs:5350` |
+| E5 | 死类反证：oracle 从不实例化 | `grep -rn "new Clone\b" src --include=*.cs` → 0（同类各行同法） |
+| E6 | `WalkStep/WalkWait` 已接线并被消费 | `bins/game-svr/src/mongen.rs:811-812`；消费 `crates/world/src/monai.rs:4696-4699` |
+| E7 | 怪普攻 `SM_HIT` 已下发 | `crates/world/src/monai.rs:578`（`attack_target` 内 `send_ref_msg(RM_HIT,…)`）；用例 `bins/game-svr/src/lib.rs:65205` |
+| E8 | `VerifyMapTime` 已接四处 | `crates/world/src/monai.rs:5004`、`merchant.rs:1686`、`npc.rs:433`、`world.rs:5406`（玩家） |
+| E9 | `SM_PLAYDICE` 已映射 | `bins/game-svr/src/pickwire.rs:232`（`script_frame`） |
+| E10 | `MakeGhost` 已实现并被 4 处调用 | `crates/world/src/monai.rs:5122`（定义）、`:3122` / `:3765` / `:3834` / `:5000`（调用） |
+| E11 | `SuperMan` 回满已接怪/NPC/商人/玩家 | `crates/world/src/monai.rs:4947-4950`；`world.rs:5392` |
+| E12 | 玩家 Run 段 PL-1..PL-4 已落地并在 `sim_loop` 驱动 | `bins/game-svr/src/lib.rs:25365`(P21) `:25390`(P22) `:25399`(P25) `:25407`(P26) `:25417`(P27) `:25427`(P31) `:25435`(P32) |
+| E13 | 零命中 = 全仓无该符号生产点 | 各行的 `grep` 命令与 `0` 输出 |
+| E14 | buff 递减 `100` / `RM_ABILITY` 仍 deferred | `bins/game-svr/src/lib.rs:16000-16001` 明写 deferred |
+
+### 2. 逐条三态（115 行）
+
+| 条目 | 原文状态 | 三态 | 证据 |
+|---|---|---|---|
+| D01 | 部分 | 仍成立 | 仅恢复/buff 按 50ms 重放（`bins/game-svr/src/stamina.rs:92 RUN_INTERVAL_MS=50`；`crates/world/src/world.rs:33 TICK_INTERVAL_MS=200`），其余「每 Run」效果仍按 200ms 或缺失 |
+| D02 | 缺失 | 仍成立 | 无逐玩家 `RunTick/RunTime` 门；`grep -rn "run_gate" crates/world/src bins/game-svr/src` 仅测试名 |
+| D03 | 缺失 | 已实现 | 玩家自扫已有 `SearchTime` 严格 `>` 门：`crates/world/src/world.rs:5467/5475/5486` |
+| D04 | 缺失 | 仍成立 | `monster_ai_tick` 每 tick 无条件跑全部怪（`crates/world/src/monai.rs:5298` 起） |
+| D05 | 缺失 | 仍成立 | `process_monster_interval` 只在 `crates/world/src/mongen.rs:328/353` 定义/缺省、`bins/game-svr/src/mongen.rs:94` 读入，AI 路径无消费者；`is_visible_active` 只写不读（`crates/world/src/aoi.rs:40/101/176/471`） |
+| D08 | 部分 | 已实现 | `crates/world/src/slave.rs:1741-1757`：未到点 ⇒ `dequeue` + 置 `Lowest` + 重入队 + `break`（oracle「重新入队并 return false」整泵中止） |
+| D09 | 部分 | 仍成立 | 单线程 tick 串行是设计硬约束①，oracle 跨线程交错永久不可复现（已登记） |
+| B01 | 部分 | 仍成立 | 怪物仍只出队 `pending_struck`（`crates/world/src/entity.rs:309`）；玩家仍是命令 FIFO，无 `wIdent` 优先级队 |
+| B02 | 部分 | 已实现 | `SuperMan` 回满在 `base_object_run_monster` 接（`monai.rs:4947-4950`），NPC/商人同点；玩家补 `world.rs:5392`；`Die` 的 `!super_man` 门 `world.rs:5124` |
+| B06 | 部分 | 仍成立 | 玩家死亡仍在 `tick_tail` 统一结算（`crates/world/src/world.rs:5011` 段序注释），时点早于 oracle「下一 Run」 |
+| B10 | 部分 | 仍成立 | `target_cret_cleanup` 只由 `crates/world/src/monai.rs:5076`（`base_object_run_monster`）调用，玩家等价段无入口 |
+| B13 | 缺失 | 仍成立 | `crates/world/src/combat.rs:64` 明写「本骨架无变色逻辑」；`bins/game-svr/src/gmcmd.rs:2269` 同口径 |
+| B15 | 部分 | 已实现 | `bins/game-svr/src/lib.rs:17859`：`!ghost && show_hp && now - show_hp_tick > show_hp_interval` ⇒ `BreakOpenHealth()` |
+| A02 | 部分 | 已实现 | `crates/world/src/monai.rs:620 animal_struck`；定身到期 `monai.rs:4267 animal_run` |
+| M05 | 部分 | 仍成立 | `crates/world/src/entity.rs:230` 明写 `Mission/MissionX/MissionY` 不建模 |
+| M13 | 缺失 | 仍成立 | 同 D04：无每 actor `RunTick/RunTime` + `ProcessRunCount` 降频 |
+| R01 | 部分 | 已实现 | E2：`is_active_seek_race` 已含审计点名的 82/84/90/91/97/130（及 106/118/119） |
+| R02 | 缺失 | 已实现 | E1：`monai.rs:4127 archer_guard_run`；生产分派 race 20/112（`monai.rs:5340`） |
+| R03 | 缺失 | 已实现 | E4：`special_monster.rs:299`（BeeQueen 产卵 + `RM_ZEN_BEE`） |
+| R04 | 缺失 | 已实现 | E1：arm 115 → `monai.rs:2005 big_heart_monster_run` |
+| R05 | 缺失 | 已实现 | E1：arm 134 → `monai.rs:3674 bone_king_run` |
+| R06 | 部分 | 已实现 | E3：race 110 `castle_structure_run`（`door_run` + `RM_TURN`） |
+| R07 | 缺失 | 已实现 | E1：arm 107 → `monai.rs:3274 centipede_king_run` |
+| R08 | 缺失 | 已实现 | E1：arm 52 → `monai.rs:2495 chicken_deer_run` |
+| R09 | 缺失 | 前提被证伪 | E5：`Clone` 在 oracle 全仓零实例化（`grep -rn "new Clone\b" src --include=*.cs` → 0）；`CreateMonster` 只有 `CloneMonster`（race 201） |
+| R10 | 缺失 | 已实现 | E1：arm 92 → `monai.rs:4403 cow_king_run` |
+| R12 | 缺失 | 已实现 | E1：arm 95 → `monai.rs:2679 dig_out_zombi_run` |
+| R13 | 缺失 | 已实现 | E1：arm `87/93/104` → `monai.rs:2290 dual_axe_monster_run`（`dual_axe_attack_max` 按 93/104 取 3/6） |
+| R14 | 缺失 | 已实现 | E1：arm 200 → `monai.rs:1225 electronic_scolpion_run` |
+| R15 | 缺失 | 已实现 | E1：arm 113 → `monai.rs:3746 elf_monster_run`（含 2s `MakeGhost`） |
+| R16 | 缺失 | 已实现 | E1：arm 114 → `monai.rs:3815 elf_warrior_run` |
+| R17 | 缺失 | 已实现 | E1：arm 117 → `monai.rs:5936 explosion_spider_run` |
+| R18 | 缺失 | 已实现 | E1：arm 214（`FireMonster`，MB-8），九格 `FireBurnEvent` 铺格在 arm 体 |
+| R19 | 缺失 | 已实现 | E1：arm 215 → `monai.rs:6841 magic_monster_run`（Pass 1）+ `fireball_monster_run` |
+| R20 | 缺失 | 已实现 | E1：arm 210 → `monai.rs:1104 frost_tiger_run` |
+| R21 | 缺失 | 已实现 | E1：arm 105 → `monai.rs:3372 gas_moth_monster_run` |
+| R22 | 缺失 | 已实现 | E1：arm 208 → `monai.rs:982 green_red_monster_run`（绿毒支） |
+| R23 | 缺失 | 已实现 | E1：arm 206 → `monai.rs:1028 khazard_run` |
+| R24 | 缺失 | 已实现 | E1：arm 94 → `monai.rs:2424 lighting_zombi_run` |
+| R25 | 缺失 | 已实现 | E1：arm 133 → `monai.rs:1354 magic_mon_object_run` |
+| R26 | 部分 | 已实现 | `monai.rs:6841 magic_monster_run` 作为 `ClassRunBase::MagicMonster`（`monai.rs:809/1745`）承接 `FireballMonster(215)` 的 Pass 1；`MagicMonster` 本身零实例化 |
+| R27 | 部分 | 前提被证伪 | E5：`MinorNumaObject` 全仓零实例化（`grep -rn "new MinorNumaObject" src --include=*.cs` → 0），不在 `CreateMonster` switch |
+| R28 | 部分 | 前提被证伪 | E5：`PercentMonster` 全仓零实例化 → 0；不在 `CreateMonster` switch |
+| R29 | 缺失 | 已实现 | E1：arm 209 → `monai.rs:982 green_red_monster_run`（红毒支） |
+| R31 | 缺失 | 已实现 | E1：arm 131 → `monai.rs:1401 ron_object_run` |
+| R32 | 缺失 | 前提被证伪 | E5：`RunAway` 全仓零实例化（`grep -rn "new RunAway" src --include=*.cs` → 0）；`monai.rs:52` 已注「死类」 |
+| R33 | 缺失 | 已实现 | E1：arm 132 → `monai.rs:6523 sand_mob_object_run` |
+| R34 | 缺失 | 已实现 | E1：arm 102 → `monai.rs:3943 sculture_king_run` |
+| R35 | 缺失 | 已实现 | E1：arm 101 → `monai.rs:2791 sculture_monster_run` |
+| R36 | 缺失 | 已实现 | E1：arm 120（`SoccerBall`，MB-8）；`monai.rs:14683` 用例钉 `SuperMan` 回满 |
+| R37 | 缺失 | 已实现 | E4：`special_monster.rs:299`（SpiderHouse `GenBb` + `RM_ZEN_BEE`） |
+| R38 | 缺失 | 已实现 | E1：arm 85 → `monai.rs:1895 stick_monster_run` |
+| R39 | 部分 | 仍成立 | `crates/world/src/monai.rs:747` 明写「登记（本片不建模）」：`SuperGuard.Run` 未建模，race 11/12 仍走静止守卫支 |
+| R40 | 缺失 | 已实现 | E1：arm 203 → `monai.rs:1138 tele_monster_run` |
+| R41 | 部分 | 已实现 | E3：race 111 `castle_structure_run`（`wall_run` + `RM_DIGUP` + `SetMapXyFlag`） |
+| R42 | 缺失 | 已实现 | E1：arm 100（`WhiteSkeleton`，MB-8，首次 `RM_DIGUP`） |
+| R43 | 缺失 | 已实现 | E1：arm 96 → `monai.rs:2629 zil_kin_zombi_run`；死怪支也跑类覆写（`monai.rs:5310`） |
+| O02 | 部分 | 仍成立 | 可见集与 `SearchTime` 门已有（`aoi.rs:82-87`），但 `ProcessRunCount` 降频联动仍缺（同 D05） |
+| O08 | 部分 | 仍成立 | `crates/world/src/slave.rs::spawn_clone` 有生产调用；`PlayCloneObject.Operate` 的受击转发（扣主人 MP、恒 `return false`）仍只覆盖 `CloneMonster`（`slave.rs:1750` 注释） |
+| O09 | 部分 | 仍成立 | `bins/game-svr/src/inbound.rs` 覆盖主要 CM；`wIdent` 优先级队仍未建（B01） |
+| O10 | 缺失 | 仍成立 | E13：`grep -rn "Trainer/trainer" bins/game-svr/src crates/world/src --include=*.rs` → 0 |
+| O11 | 缺失 | 仍成立 | 仅注释命中（`bins/game-svr/src/lib.rs:2970/3268/11559`），无假人实体/AI |
+| P05 | 部分 | 仍成立 | 无 `IsTimeRecall` 字段：`crates/world/src/world.rs:1251/4603` 明写「登记，仅回报 cross_map」 |
+| P07 | 缺失 | 仍成立 | E13：`auto_timer_status` / `on_timer` 全仓 0 命中 |
+| P08 | 缺失 | 仍成立 | E13：`bubble_defence` / `AbilMagBubbleDefence` 0 命中 |
+| P10 | 缺失 | 仍成立 | E13：`play_super_rock` / `super_rock` 0 命中 |
+| P11 | 部分 | 仍成立 | `crates/script/src/engine/mod.rs:604-612` 只置 `IsTimeGoto` 字段，无 per-tick 到点触发 |
+| P12 | 部分 | 仍成立 | `off_line_flag`/`kick_off_line_tick` 只做会话↔实体镜像（`bins/game-svr/src/lib.rs:2595/7317/7335`），无 `> KickOffLineTick ⇒ BoSoftClose` 门 |
+| P13 | 部分 | 仍成立 | `crates/script/src/engine/mod.rs:612 set_delay_call` 是空默认实现；无到点回调驱动 |
+| P14 | 缺失 | 仍成立 | E13：`dec_pk_point` / `DecPkPoint` 0 命中 |
+| P15 | 部分 | 仍成立 | `crates/world/src/world.rs:1778 use_lamps` 有实现与单测（`:13201/13507`），但宿主无调用点（`grep -rn "use_lamps(" bins` → 0） |
+| P17 | 部分 | 仍成立 | `bins/game-svr/src/enter.rs:218-227` 明写 `CastleMgr.InCastleWarArea` 等分支改 `result` 但不触发，`PLAY_NAME_COLOR` 恒 255 |
+| P18 | 部分 | 仍成立 | E13：`LogonTimcCost` / `HalfPrice` / 夜间折扣 0 命中，无 1s 聚合门 |
+| P19 | 部分 | 仍成立 | 命令仍是 tick 边界排空的 FIFO（`bins/game-svr/src/inbound.rs`），无 200ms 预算/优先级队 |
+| P20 | 部分 | 仍成立 | `drain_kicks`/`drain_soft_close` 存在（`bins/game-svr/src/lib.rs`），落地时点仍为「当轮」而非 oracle「≥1 tick」 |
+| P21 | 部分 | 已实现 | E12：`lib.rs:25365 drain_player_need_recheck_with_magic`；实现提交 `9aeab5a15`（PL-1） |
+| P22 | 缺失 | 已实现 | E12：`lib.rs:25390 drain_player_game_gold`；实现提交 `7a7945cb3`（PL-4） |
+| P23 | 缺失 | 仍成立 | E13：`3v3` / `BattleField` 0 命中 |
+| P24 | 缺失 | 仍成立 | 仅注释（`lib.rs:10230/10279/10301`），无 `IncGamePointTick` 消费点 |
+| P25 | 缺失 | 已实现 | E12：`lib.rs:25399 drain_player_map_hp`；`3d2ecbdf5`（PL-3） |
+| P26 | 缺失 | 已实现 | E12：`lib.rs:25407 drain_player_hunger`；`3d2ecbdf5`（部署 `HungerSystem=0` 整段短路，但已实现） |
+| P27 | 缺失 | 已实现 | E12：`lib.rs:25417 drain_player_run_rates`；`3d2ecbdf5`（PL-3） |
+| P28 | 缺失 | 仍成立 | E13：`renew_change_color` / `ReNewChangeColor` 0 命中 |
+| P29 | 部分 | 仍成立 | 仅注释（`lib.rs:2327` 明写「未建模 ⇒ 登记」） |
+| P30 | 部分 | 仍成立 | 死亡/离线为即时事件清理，无 30s 聚合门 |
+| P31 | 部分 | 已实现 | E12：`lib.rs:25427 drain_player_auto_get_exp`；`6734a27c1`（PL-2） |
+| P32 | 缺失 | 已实现 | E12：`lib.rs:25435 drain_player_revival_with_magic`；`9aeab5a15`（PL-1） |
+| P33 | 部分 | 仍成立 | 公共段仍散在宿主/世界两处，无单一 `base.Run()` 等价物 |
+| P34 | 缺失 | 仍成立 | 同 D02：无逐玩家 `RunTick/RunTime` 门 |
+| P35 | 部分 | 仍成立 | 进世界/`drain_periodic_save` 为近似，节拍与 oracle 50ms 不同 |
+| P37 | 缺失 | 已实现 | `bins/game-svr/src/ground.rs:531` 生产发 `RM_ITEMHIDE(8085)`（拾取/消失广播支） |
+| P38 | 部分 | 仍成立 | `crates/world/src/aoi.rs` 直写目标可见集，未发 `RM_UPDATEVIEWRANGE` |
+| N01 | 部分 | 仍成立 | 仅 `crates/world/src/npc.rs:433 verify_map_time`；无 `base.Run` 恢复段（`HealthTick/HP 回填`） |
+| N02 | 部分 | 已实现 | `crates/world/src/merchant.rs:1606 hit_self_only`（`ObMode or FixedHideMode`）+ `:2452/:2473/:2598` 的攻城隐身/解除与 `RM_HIT` 用例 |
+| N04 | 部分 | 仍成立 | `NpcLimit` 墙钟预算仍丢弃（`bins/game-svr/src/lib.rs:21989`；whitelist T-64/T-42） |
+| N05 | 部分 | 仍成立 | 同上（`lib.rs:21979`；T-42） |
+| N06 | 部分 | 仍成立 | 同 N01：`merchant.rs:1686` 只接 `verify_map_time`，恢复段仍缺 |
+| B08 | （矩阵已实现） | 已实现 | E10：`make_ghost` 定义 `monai.rs:5122`，调用点 `:3122/:3765/:3834/:5000`；§3 第 5 行的「未接线」前提已证伪 |
+| §4.4-帧 | 未接线 | 仍成立 | E14：`lib.rs:16000-16001` 明写 `rec.buff_sysmsgs`（100）与 `rec.buff_recalcs`（`RM_ABILITY`）deferred |
+| MCS-1 | 判据 | 前提被证伪 | `VerifyMapTime` 已接（E8）+ 回归用例 `crates/world/src/world.rs:11736-11745` |
+| MCS-2 | 判据 | 仍成立 | D04 未修，判据应红（`monster_run` 每 tick 5 次而非 4 次） |
+| MCS-3 | 判据 | 仍成立 | D05 前置仍未接线（同 D05 证据），两态仍空操作 |
+| MCS-4 | 判据 | 前提被证伪 | A01 已实现：`monai.rs:4267 animal_run` 到期清 `holy_seize` |
+| MCS-5 | 判据 | 前提被证伪 | B08 已实现（E10），可改为回归门 |
+| MCS-6 | 判据 | 仍成立 | `verify_players_map_time`（`world.rs:5406`）未见 HP/MP 夹 `Max-1` 分支 |
+| MCS-7 | 判据 | 仍成立 | B10 玩家入口不存在（同 B10） |
+| MCS-8 | 判据 | 仍成立 | B03/D02 口径仍未裁定；须带时间戳真机 dump |
+| MCS-9 | 判据 | 仍成立 | E14：`100`/`RM_ABILITY` 仍未接线 |
+| MCS-10 | 判据 | 仍成立 | P14 缺；P15 无宿主调用点（同 P14/P15） |
+| MCS-11 | 判据 | 仍成立 | P07 缺 |
+| MCS-12 | 判据 | 前提被证伪 | D08 已实现（`slave.rs:1741-1757`），改为回归门 |
+| MCS-13 | 判据 | 前提被证伪 | D03 已实现：玩家已有 `SearchTime` 门（`world.rs:5467-5486`） |
+| MCS-14 | 判据 | 前提被证伪 | R01..R43 绝大多数已实现/死类（见上表 41 个 R 行），判据应改为「按 race 白名单回归」 |
+| MCS-15 | 判据 | 仍成立 | N01/N06 恢复段仍缺 |
+| MCS-16 | 判据 | 前提被证伪 | O03/O04/O05 原文即「已实现」（矩阵），判据可作回归门 |
+
+### 3. 三态统计与「仍成立」的开卡建议（A4）
+
+统计：**已实现 51 / 前提被证伪 11 / 仍成立 53**（合计 115；已实现含 B08，证伪含 4 个死类 R 行 R09/R27/R28/R32 与 7 条 MCS）。
+
+仍成立项按写集归并为 4 张卡（不得只写「仍缺」）：
+
+1. **卡 A：玩家 `PlayObject.Run` 残段 PL-5**
+   - 覆盖：P05/P07/P08/P10/P11/P12/P13/P14/P18/P19/P23/P24/P28/P29/P30/P33/P34/P35/P38（P15 需先把 `world.use_lamps()` 接进宿主 tick）。
+   - `write_set`：`bins/game-svr/src/lib.rs`、`bins/game-svr/src/chat.rs`、`crates/script/src/engine/{mod.rs,actions.rs}`、`crates/world/src/world.rs`。
+   - 判据：MCS-10（P14/P15）、MCS-11（P07）；其余各段写「固定时钟 + 构造级到点/不出帧」用例；tier=L（纯帧/状态），P14/P18 若改 RNG 则升 R。
+2. **卡 B：per-actor 节拍与可见性降频（D01/D02/D04/D05/M13）**
+   - `write_set`：`crates/world/src/{monai.rs,world.rs,entity.rs}`、`bins/game-svr/src/{stamina.rs,mongen.rs}`。
+   - 判据：MCS-2（1s 内 `monster_run` 次数 = 4）、MCS-3（不可见 3 pass 只 1 次；interval=0 每次都跑）、MCS-13 改为回归门。tier=R（时序/RNG 频率）。
+3. **卡 C：怪物/守卫/AI 残项（R39/O02/O09/O10/O11/B01/B06/B10/B13/N01/N04/N05/N06）**
+   - `write_set`：`crates/world/src/{monai.rs,world.rs,slave.rs,merchant.rs,npc.rs,combat.rs}`、`bins/game-svr/src/{inbound.rs,gmcmd.rs}`。
+   - 判据：R39「SuperGuard 主动攻击 PvP 玩家」帧断言；O10「练功师统计破坏力回话」；O11「假人受击 PK 标记」；N01/N06 复用 MCS-15。tier=R（战斗数值/时序）与 L（帧面）分项标注。
+4. **卡 D：buff 帧面 `SM_SYSMESSAGE(100)` + `RM_ABILITY`（§4.4 / MCS-9）**
+   - `write_set`：`crates/world/src/buff.rs`、`bins/game-svr/src/lib.rs`（`drain_buff_downlink`）。
+   - 判据：MCS-9（`state_tick=2` 两个 pass 后必出 `100` 与 `SM_ABILITY`，且 AC/MAC 到期回落）。tier=R（战斗数值）。
+
+### 4. 已知过期项（Leader 实核 4 条 + 本轮新增）
+
+| 原文条目 | 原判定 | 现判定 | 证据 |
+|---|---|---|---|
+| `WalkStep/WalkWait` 未接线（Lane A 缺口 3 / cadence C-8） | 缺失 | 已实现 | E6：`bins/game-svr/src/mongen.rs:811-812` 写入；`crates/world/src/monai.rs:4696-4699` 消费 |
+| 怪普攻 `SM_HIT(14)` 不下发（cadence §0-B2 / C-6） | 缺失 | 已实现 | E7：`crates/world/src/monai.rs:578`；用例 `bins/game-svr/src/lib.rs:65205` |
+| `VerifyMapTime` 未接 NPC/商人 | 缺失 | 已实现 | E8：`merchant.rs:1686`、`npc.rs:433`、`monai.rs:5004`、`world.rs:5406` |
+| `SM_PLAYDICE(8001)` 未映射 | 缺失 | 已实现 | E9：`bins/game-svr/src/pickwire.rs:232` |
+| 专用怪 `Run` 覆写「34 个未建模」（§2.4 引言） | 缺失 | 大部分已实现 | E1：`monster_class_run` 覆盖 29 个 race + 城堡 110/111 + BeeQueen/SpiderHouse + 20/112；残 R39 与 5 个死类 |

@@ -107,3 +107,53 @@ for t in account_friend tbl_conncheckuser tbl_connectlogs tbl_countlogs tbl_gmip
 ### D-4 多数条目是「已登记未接线」，不是「未审计」
 - #1/#2（行会）、#4/#5（攻城）、#6（N1/N5）、#8（税）、#10（武器升级）、#3 的 `@requestcastlewarnow` 均已在 `M3⑧公会攻城现状盘点报告-20261013.md` 与各模块注释里登记（`guild.rs:44-54`、`castle.rs:963-966`、`shop.rs:935/1040/1215`、`smframe.rs:207`）。
 - 本表的价值是**统一派卡清单**；派卡时请引用既有卡号，不要当新发现重复排队。
+
+---
+
+## 订正 2026-10-27（对账 master d470d7bd1）
+
+> 本节**只追加**，不改写上文「可派卡清单」与「评审员的更正」。三态口径同另两份 m3 审计的订正节：**已实现** = 有生产调用点；**前提被证伪** = 原文缺口前提不成立；**仍成立** = 仍找不到等价物。判级按 `AGENTS.md`；未改代码/测试。
+> 判定按「代码是否接线」；部署可达性另见本文件 D-2（攻城入口 N1 仍 `NotImplementedException`），两者不混用。
+
+### 0. 计数口径
+
+- 缺口条目 = 「可派卡清单」#1..#20，共 **20** 行（附 A/B/C 是已审计/死表/复现命令，不是缺口条目）。
+
+### 1. 逐条三态（20 行）
+
+| # | 面 | 原文结论 | 三态 | 证据 |
+|---|---|---|---|---|
+| 1 | 行会会话层 9 个 `CM_GUILD*` + `SM_GUILD*` 帧 + `MyGuild` | 无派发、无帧 | 已实现 | `bins/game-svr/src/guild_cmd.rs:205 handle_guild_cmd`；生产派发 `bins/game-svr/src/lib.rs:23340-23343`（`GUILD_IDENTS.contains` ⇒ `handle_guild_cmd`）；帧体 `bins/game-svr/src/guild_frames.rs`；`materialize` 于 `lib.rs:23827/24247` |
+| 2 | 行会文件加载/落盘 + `GuildManager.Run` 30s 节流 | `GuildStore` 仅测试引用；启动不加载 | 已实现 | `guild_runtime::startup`（`bins/game-svr/src/lib.rs:21799`）、`step`（`:25069`，30s 节流/到期）、`save_list`（`guild_cmd.rs:392`）；`GuildStore` 生产引用 `guild_cmd.rs:63` |
+| 3 | 建会/宣战 NPC 标签 | 4 支全无 | 已实现 | `bins/game-svr/src/guild_official.rs:201 request_build_guild`、`:468 handle_select`；脚本侧 `FixedNpcScript` 实现在 `lib.rs:8392`；注意点击路径那条 `guild_official::handle_select` 已按 T-140 登记为死代码（`lib.rs:4831`），脚本路径仍活 |
+| 4 | 攻城文件 + 状态机接线（`LoadCastleList`/`UserCastle.Run`） | `bins/game-svr` 零引用 | 已实现 | `CastleStore::from_loader`（`bins/game-svr/src/lib.rs:22174`）、`run_castle_tick`（`:25113`）；落盘 `bins/game-svr/src/castle.rs:749 save_all`；可达性仍受 D-2（N1 未实现）约束 |
+| 5 | 攻城实体挂图（门/墙/12 弓手/守卫） | 不造实体 | 已实现 | `game_svr::castle::initialize_castle`（`bins/game-svr/src/lib.rs:22143`，`load_sabuk_config` + `Castle/Castle/SabukW.txt`）；按名造怪 `bins/game-svr/src/castle.rs:141 regen_monster_by_name` |
+| 6 | 攻城 NPC 标签（open/close/repair/hire/withdrawal/receipts） | `npc.rs` 无 CastleOfficial UserSelect | 仍成立 | `castle_official_action_exec` 仅有定义（`bins/game-svr/src/castle.rs:1532`）与测试调用（`castle/tests.rs:1559/1600/1627`）；`grep -rn "castle_official_action_exec(" bins/game-svr/src` 无生产调用点 |
+| 7 | 攻城区语义（`InCastleWarArea`/落点改写/766 bit4/名字色） | 恒 false、不抽 `Random(9)` | 仍成立（部分已接） | 落点改写已接：`mir2_world::castle::relocate_on_enter`（`bins/game-svr/src/lib.rs:21500`）；但 `bins/game-svr/src/enter.rs:218-227` 明写 `PvpFlag/GetGuildRelation/Fight3Zone/InCastleWarArea` 分支不触发、`PLAY_NAME_COLOR=255`；`766` bit4 无生产置位 |
+| 8 | 城堡税/成员价 | `let _tax` 丢弃 | 已实现 | `bins/game-svr/src/shop.rs:41-44`（卡 `openmir2-castle-merchant-tax-wiring`）回 `MerchantTaxIntent`（`:1095`），宿主 `bins/game-svr/src/lib.rs:5932` 调 `apply_merchant_tax`；`crates/world/src/castle_tax.rs` 公式 |
+| 9 | 频道聊天 `!!`/`!~`/`!` | 喊话/组队/行会未接 | 已实现 | `bins/game-svr/src/chat.rs:251 parse_channel` / `:292 cry_targets` / `:334 shout_decision`；生产调用 `bins/game-svr/src/lib.rs:1612/1712/1748`（行会支 `:1667`） |
+| 10 | 武器升级 NPC（`@upgradenow`/`@getbackupgnow`） | 无状态、无标签处理器 | 仍成立 | 无 `@upgradenow` 处理器：`grep -rn "upgradenow" bins crates --include=*.rs` 仅测试名（`bins/game-svr/src/bag.rs:1632+`）；`UPgradeWeaponGetBackTime` 仅配置读取（`bins/game-svr/src/config.rs:261/1085`） |
+| 11 | GameGate 速度/间隔规则 | 只有 `ChatThrottle` | 已实现 | `bins/game-gate/src/config.rs:222/226` 读 `MoveInterval` 等；`bins/game-gate/src/rules.rs:256` 速度结构、`:455` 门判定 |
+| 12 | LoginGate/SelGate 60s 空闲超时两阶段 | 无定时器 | 已实现 | `bins/login-gate/src/idle_timeout.rs`（`IdleTimer`/`TimeoutAction`/`CHECK_INTERVAL_MS`）；接线 `bins/login-gate/src/lib.rs:19/29/165/206`；严格 `> timeout` 见 `:280` |
+| 13 | 网关 → LoginSrv/DBSrv 的 `Enter` 帧体形状 | 发 `peer` 原文 | 已实现 | LoginGate `"{ip}/{ip}"`：`bins/login-gate/src/lib.rs:271 login_gate_enter_body`（调用 `:312`）；SelGate `"%K{sid}/{ip}/{ip}$"`：`bins/sel-gate/src/lib.rs:166`；消费端 `%…$` 解析 `bins/db-srv/src/gbk.rs:316` |
+| 14 | `account_protection` 13 列字段级 | 只写 `UserName/Quiz2` | 已实现 | `crates/storage/src/account.rs:135`（13 列 INSERT）/`:140`（13 列 UPDATE）；往返用例 `bins/login-srv/src/login_server.rs:1541` |
+| 15 | 交易栏 `GetUpgradeStdItem` desc 差量 + 自定义名 | `trade.rs` 未建模 | 仍成立（部分已接） | `bins/game-svr/src/trade.rs:58/360/968/996/1024` 只用 `item_display_name`；`upgrade_std_item` 生产调用只在入包路径 `bins/game-svr/src/bag.rs:1038`，交易栏未接 `Desc[13]` 差量 |
+| 16 | `OPENYBDEAL` + 登录 `GetSellOffGlod` | `IMPLEMENTED_EXECUTIONS` 不含 | 已实现 | `crates/script/src/engine/dispatch.rs:81` 已含 `ActionOfOpenSaleDeal`；实现 `crates/script/src/engine/actions.rs:905`；生产路径用例 `bins/game-svr/src/lib.rs:32442/32955` |
+| 17 | GM 命令面（`@LetGuild`/`@LetTrade` 等） | `@` 命令全 no-op | 仍成立 | `bins/game-svr/src/guild_cmd.rs:31` 明写 `allow_guild` 唯一生产写点 `@Letguild` 未接 ⇒ 恒 false；其余命令面未接 |
+| 18 | GameGate↔GameSvr 保活/断链重连 | 已修但 3min 分支需竞态 | 已实现 | `bins/game-gate/src/lib.rs:29-34`（B-5/B-4，2026-10-20：10s `GM_CHECKCLIENT`、3min 严格 `>`、15 天清扫、下行重连）；`CHECK_SERVER_TIMEOUT` 注入见 `:522-545` |
+| 19 | 跨服行会/攻城广播 `SS_205/206/207/211/212` | 无发送路径 | 前提被证伪（单服等价） | 单区单服部署无对端：`bins/game-svr/src/castle.rs:1065` 明写 `SS_204/SS_212` 只记日志（同 `SS_205` 先例）；`crates/protocol` 常量仍在。若将来多服需另裁 |
+| 20 | 组队召回 `AllowGroupReCall` | 字段在实体就位但没人读 | 已实现 | `bins/game-svr/src/gmcmd.rs:2078` 读 `member.allow_group_re_call`；列读入 `bins/db-srv/src/playdata.rs:130` |
+
+### 2. 三态统计与「仍成立」的开卡建议（A4）
+
+统计：**已实现 14 / 前提被证伪 1 / 仍成立 5**（合计 20）。
+
+仍成立 5 条各成一卡（沿用原文牙名，写清写集）：
+
+1. **#6 攻城 NPC 标签** — `write_set`：`bins/game-svr/src/npc.rs`、`bins/game-svr/src/castle.rs`；判据 `castle_official_label_vectors`（每标签断言 `CastleOfficialAction` 与金币/城墙 HP 差；N1 金库提取/上缴保持 no-op；`hirearchernowN` 不 panic）。tier=L。
+2. **#7 攻城区语义** — `write_set`：`bins/game-svr/src/enter.rs`、`bins/game-svr/src/lib.rs`、`crates/world/src/castle.rs`；判据 `castle_area_login_vectors`（固定种子，攻城区/皇宫各一例；须同时覆盖 `HomeX-4+Random(9)` 与无城主支 `HomeX-2+Random(5)` 的两次抽取顺序——见 D-3）。tier=R（RNG + 进图时序）。
+3. **#10 武器升级 NPC** — `write_set`：`bins/game-svr/src/merchant.rs`、`bins/game-svr/src/bag.rs`、`crates/script/src`（`@upgradenow`/`@getbackupgnow` 标签）；判据 `weapon_upgrade_vectors`（固定种子，断言升级后 DC/SC/MC/Dura 与 `GetBackTick`；取回时限前/后）。tier=R（RNG + 时序）。
+4. **#15 交易栏 desc 差量/自定义名** — `write_set`：`bins/game-svr/src/trade.rs`、`bins/game-svr/src/bag.rs`；判据 `deal_item_desc_vectors`（带升级属性物品的 `SM_ADDITEM/SM_DEALADDITEM` 的 `ClientItem` 逐字节）。tier=L（帧编码）。
+5. **#17 GM 命令面** — `write_set`：`bins/game-svr/src/gmcmd.rs`、`bins/game-svr/src/chat.rs`、`crates/world/src/party.rs`；判据 `gm_command_vectors`（`@LetGuild` 两次切换 `AllowGuild` 并断言提示帧；`@LetTrade` 后交易被拒）。tier=L。
+
+> #1/#2 的「已实现」含 D-4 提醒：既有 `M3⑧公会攻城现状盘点报告-20261013.md` 的登记项已在本轮落地，派新卡时请引用本表而不是旧登记。
