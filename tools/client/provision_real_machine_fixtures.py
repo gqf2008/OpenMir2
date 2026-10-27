@@ -1070,6 +1070,46 @@ def selftest(args):
                        (raised_m, err_m, after_m == before_m,
                         raised_n, err_n, after_n == before_m))
 
+        # ---- P1 牙②f（卡 `openmir2-mirflow-backup-fallback-tooth`）：
+        #      ① 证据**不带** `backup_sha256`、`before_sha256` 正确 ⇒ 走回落、还原成功；
+        #      ② 两个键都缺 ⇒ 判不了、拒绝还原并点名、目标不动；
+        #      ③ `before_sha256` 写错 ⇒ 拒绝还原、目标不动。
+        def _prep(tag):
+            d = _mk_env(tag, "\n")
+            return prepend_mongen(d, spec, dry_run=False)
+
+        res_f1 = _prep("EnvirFallback1")
+        ev_fb = {"action": "prepended", "path": res_f1["path"],
+                 "backup": res_f1["backup"], "before_sha256": res_f1["before_sha256"]}
+        err_fb = restore_mongen(ev_fb)
+        ok_fb = (err_fb is None and _sha256_file(ev_fb["path"]) == ev_fb["before_sha256"]
+                 and not os.path.exists(ev_fb["backup"]))
+
+        res_f2 = _prep("EnvirFallback2")
+        before_f2 = _sha256_file(res_f2["path"])
+        ev_nokey = {"action": "prepended", "path": res_f2["path"], "backup": res_f2["backup"]}
+        try:
+            err_nokey = restore_mongen(ev_nokey)
+            raised_nokey = None
+        except Exception as ex:      # noqa: BLE001
+            err_nokey, raised_nokey = None, repr(ex)
+        ok_nokey = (raised_nokey is None and err_nokey is not None
+                    and "判不了" in err_nokey and "before_sha256" in err_nokey
+                    and _sha256_file(res_f2["path"]) == before_f2)
+
+        res_f3 = _prep("EnvirFallback3")
+        before_f3 = _sha256_file(res_f3["path"])
+        ev_bad = {"action": "prepended", "path": res_f3["path"],
+                  "backup": res_f3["backup"], "before_sha256": "0" * 64}
+        err_bad = restore_mongen(ev_bad)
+        ok_bad = (err_bad is not None and "备份 sha256" in err_bad
+                  and _sha256_file(res_f3["path"]) == before_f3)
+
+        ok_all &= _chk(ok_fb and ok_nokey and ok_bad,
+                       "P1 牙②f 回落分支：无 backup_sha256 时用 before_sha256 还原成功；"
+                       "两键皆缺 ⇒ 判不了并点名；before_sha256 错 ⇒ 拒绝且目标不动",
+                       (ok_fb, err_nokey or raised_nokey, err_bad))
+
         # ---- P1 牙②d：`backup_sha256` 必须被**执行**——篡改备份内容 ⇒ restore 拒绝且目标不动
         tamper_env = _mk_env("EnvirTamper", "\n")
         res_t = prepend_mongen(tamper_env, spec, dry_run=False)
@@ -1302,6 +1342,10 @@ def restore_mongen(res):
     if not backup or not os.path.isfile(backup):
         return "备份缺失：%r（拒绝还原）" % (backup,)
     want = res.get("backup_sha256") or res.get("before_sha256")
+    if not isinstance(want, str) or not want:
+        # 卡 `openmir2-mirflow-backup-fallback-tooth`：两个键都缺 ⇒ **判不了**，点名拒绝还原
+        # （旧行为会落进下面的 `got != want` 分支，只说「期望 None」，看不出是证据缺键）。
+        return ("证据缺 backup_sha256/before_sha256（判不了，拒绝还原；目标文件未动）")
     got_backup = _sha256_file(backup)
     if got_backup != want:
         return ("备份 sha256=%s != 期望 %s（备份已被改动，拒绝还原；目标文件未动）"
@@ -1311,8 +1355,9 @@ def restore_mongen(res):
     with open(res["path"], "wb") as fh:
         fh.write(original)
     got = _sha256_file(res["path"])
-    if got != res["before_sha256"]:
-        return "还原后 sha256=%s != 写前 %s" % (got, res["before_sha256"])
+    expect_after = res.get("before_sha256") or want   # 旧证据可能只有 backup_sha256
+    if got != expect_after:
+        return "还原后 sha256=%s != 写前 %s" % (got, expect_after)
     os.unlink(res["backup"])
     return None
 
