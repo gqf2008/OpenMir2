@@ -667,3 +667,17 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 | 专用怪 `Run` 覆写「34 个未建模」（§2.4 引言） | 缺失 | 大部分已实现 | E1：`monster_class_run` 覆盖 29 个 race + 城堡 110/111 + BeeQueen/SpiderHouse + 20/112；残 R39 与 5 个死类 |
 
 > **本轮自我订正（同日复跑）**：P15 初判「仍成立·宿主无调用点」有误——早先 `grep … | head -5` 在 `crates/world/src/world.rs` 的 5 条测试命中后截断，漏掉了 `bins/game-svr/src/lib.rs:17662` 的生产调用。无截断复跑后改为**已实现**（见上表 P15 行）。同源教训已用于 `audit-uncovered-surfaces-20261019.md` 的 #10/#15。
+
+
+---
+
+## 订正 2026-10-28（对账 master b5442dbd4）
+
+> 本节**只追加**，不改写上文 §4.4/「订正 2026-10-27」的历史结论（E14/§4.4-帧/MCS-9 的「未接线/仍成立」按 2026-10-27 基线成立，现已由后续卡落地）。判定口径与 smframe 订正节一致：**已接线** = 有生产发射点 + 宿主 tick 调用点。
+
+| 条目 | 原文结论 | 现判定 | 生产链（发出点 → 函数 → 生产调用点） | 证据命令 | 输出摘要 |
+|---|---|---|---|---|---|
+| E14（buff 递减 `100` / `RM_ABILITY`）/ §4.4-帧 / MCS-9 | 未接线（deferred，`lib.rs:16000-16001`） | **已实现** | `bins/game-svr/src/lib.rs:16028` `rec.buff_recalcs` ⇒ `recalc_session_ability` + `sm_ability`（52，自发）→ `fn drain_buff_downlink`（`:16011`）→ `sim_loop` 调用 `:25606`；`:16064` `rec.buff_sysmsgs` ⇒ `sm_sysmessage`（100，绿字自发，Hint 支不拼前缀——冻结配置 `Server.conf:778 ShowPreFixMsg=0`）→ 同一 `drain_buff_downlink`；线序 52(67)→657(155)→100(252) 按 oracle 自队列 `(byte)ident` 升序 | `grep -n "buff_recalcs\|buff_sysmsgs\|drain_buff_downlink" mir2-rs/bins/game-svr/src/lib.rs` | 产出 `world.rs:385-388`、排水 `lib.rs:16028/:16064`、生产调用 `:25606`；构造用例 `lib.rs` `drain_buff_downlink_emits_ability_then_657_then_sysmsg`（线序+逐字节）与 `…_sysmsg_ten_sec_and_empty_rec_is_silent`（负例）；牙 T1/T2（删排水分支）/T3（文案映射错）/T4（触发放宽）+ reviewer Y1（段序互换）/Y2 各 RED 实测 |
+
+- 卡：`openmir2-buff-ability-frame-wiring`（tier=R，head `ff65f0017`，approve `4abf1507`，merge `b5442dbd4`）；分诊出处 `openmir2-window-run3-prereq-triage` comment `09c813f6`。
+- 本节只追加文档；未改代码/测试。

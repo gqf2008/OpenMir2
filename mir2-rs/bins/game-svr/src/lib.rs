@@ -16059,7 +16059,9 @@ fn drain_buff_downlink(
     }
     // **递减段 `SysMsg`（同卡）**：`SysMsg(msg, MsgColor.Green, MsgType.Hint)`（非 Notice 支）⇒
     // `SendMsg(RM_SYSMESSAGE, 0, GreenMsgFColor, GreenMsgBColor, 0, msg)`
-    // （`BaseObject.cs:1654-1657`，Hint 支**不拼** `LineNoticePreFix`）⇒ `SM_SYSMESSAGE(100)`、
+    // （`BaseObject.cs:1654-1657`，Hint 支**不拼** `LineNoticePreFix`；oracle Green 色支本身受
+    // `ShowPreFixMsg` 门控拼前缀——`BaseObject.cs:1645-1649`——冻结部署 `Server.conf:778
+    // ShowPreFixMsg=0` 才是本处裸文案逐字节正确的真因，review `4abf1507` N1）⇒ `SM_SYSMESSAGE(100)`、
     // `Recog` = 自己、`Param = MakeWord(GreenF, GreenB)`、`Series = 1`、尾 = `EncodeString(msg)`。
     for (actor_id, msg) in &rec.buff_sysmsgs {
         use mir2_world::buff::BuffSysMsg;
