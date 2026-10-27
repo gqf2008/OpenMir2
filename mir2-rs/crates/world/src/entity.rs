@@ -559,6 +559,13 @@ pub struct Entity {
     pub special_children: Vec<i32>,
     /// C# `AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
     pub is_slave: bool,
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：是否 `PlayCloneObject`
+    /// （`MagMakeClone` 造出的玩家型克隆体，`PlayCloneObject.cs:5-23`）。
+    ///
+    /// 克隆体 `race == PLAY`、`!ghost`，但**没有真实客户端会话**（不进 `OnlineRegistry`）
+    /// ⇒ AOI 消失帧的观察者分类必须把它与真玩家区分（否则 `missing_online` 假阳性）。
+    /// 纯内存字段：不落库、不进 `EntitySnapshot`、不改协议；随实体移除一起消失。
+    pub is_clone: bool,
     /// C# `AnimalObject.SlaveExpLevel`（`AnimalObject.cs:27`）——宝宝等级（召唤时/跨服时设定；
     /// `MonsterObject.GainSlaveExp` 是死代码，击杀不涨，见盘点报告 §1.C）。
     pub slave_exp_level: u8,
@@ -1087,6 +1094,7 @@ impl Entity {
             stick_mode: false,
             special_children: Vec::new(),
             is_slave: false,
+            is_clone: false,
             slave_exp_level: 0,
             slave_make_level: 0,
             master_royalty_tick: 0,

@@ -14962,28 +14962,81 @@ fn entity_in_cell_index(world: &mir2_world::World, e: &mir2_world::Entity) -> bo
 ///
 /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· 观察者分类计数**。
 ///
-/// `TickRecord::hides` 的观察者有两类（世界侧 [`mir2_world::HideObserverKind`] 标注）：
-/// - `Player`：`race == PLAY && !ghost` 的玩家 ⇒ 必须在 `OnlineRegistry` 里；
+/// `TickRecord::hides` 的观察者有三类（世界侧 [`mir2_world::HideObserverKind`] 标注）：
+/// - `Player`：`race == PLAY && !ghost && !is_clone` 的真玩家 ⇒ 必须在 `OnlineRegistry` 里；
 /// - `NonPlayer`：`monster_self_scans` 的自扫怪（Guard/ArcherGuard/SlaveMonster/下属）
-///   ⇒ **本来就不在** `OnlineRegistry`，此前统一打 WRN 属**预期噪声**（真机 actor=290 已定性）。
+///   ⇒ **本来就不在** `OnlineRegistry`，此前统一打 WRN 属**预期噪声**（真机 actor=290 已定性）；
+/// - `Clone`：`PlayCloneObject`（`spawn_clone`）——`race == PLAY`、`!ghost`、**无真实客户端会话**
+///   ⇒ 同样不在 `OnlineRegistry`；N1 前会被误当玩家 ⇒ `missing_online` 假阳性。
 ///
 /// 本结构只做**可观测性**，不改变发帧集合/顺序：
 /// - `player_observer`：本批 `Player` 观察者事件数；
 /// - `nonplayer_observer`：本批 `NonPlayer` 观察者事件数（不发帧、不查 online）；
-/// - `missing_online`：**玩家**观察者在 `online` 无登记 ⇒ 真丢帧风险（loud WRN + 计数）；
-/// - `emitted`：实际发出的 `SM_DISAPPEAR(30)` 条数（成功路由到网关）。
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// - `clone_observer`：本批 `Clone` 观察者事件数（不发帧、不查 online、不算 missing）；
+/// - `missing_online`：**真玩家**观察者在 `online` 无登记 ⇒ 真丢帧风险（loud WRN + 计数）；
+/// - `emitted`：实际发出的 `SM_DISAPPEAR(30)` 条数（成功路由到网关）；
+/// - `nonplayer_ids` / `clone_ids`：被跳过的 observer id（首次出现序、去重；DBG 日志带出，
+///   供真机回答「290 到底是不是非玩家」）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct DisappearObserverCounts {
     player_observer: usize,
     nonplayer_observer: usize,
+    clone_observer: usize,
     missing_online: usize,
     emitted: usize,
+    nonplayer_ids: Vec<i32>,
+    clone_ids: Vec<i32>,
+}
+
+fn push_unique_id(ids: &mut Vec<i32>, id: i32) {
+    if !ids.contains(&id) {
+        ids.push(id);
+    }
+}
+
+/// 日志里最多列**前 8 个** observer id（去重保序），其余以 `…(+N)` 收尾。
+///
+/// 真机一条 WRN/DBG 要能直接回答「是哪些 observer」；全量列会刷屏，故设上限。
+fn summarize_observer_ids(ids: &[i32]) -> String {
+    const MAX: usize = 8;
+    let mut uniq: Vec<i32> = Vec::new();
+    for &id in ids {
+        push_unique_id(&mut uniq, id);
+    }
+    let shown: Vec<String> = uniq.iter().take(MAX).map(i32::to_string).collect();
+    if uniq.len() > MAX {
+        format!("{}…(+{})", shown.join(","), uniq.len() - MAX)
+    } else {
+        shown.join(",")
+    }
+}
+
+/// 非玩家/Clone 的 DBG 汇总行（**纯函数**：测试可直接断言文案含 observer id）。
+///
+/// 与玩家缺失的 `WRN` 文案**不同**（类别名 + `observer=[ids]`），真机可区分三类。
+fn skip_observer_dbg_lines(counts: &DisappearObserverCounts) -> Vec<String> {
+    let mut lines = Vec::new();
+    if counts.nonplayer_observer > 0 {
+        lines.push(format!(
+            "消失帧：{} 条非玩家自扫观察者事件（monster_self_scans；不在 OnlineRegistry 属预期）⇒ 未发 SM_DISAPPEAR(30)；observer=[{}]",
+            counts.nonplayer_observer,
+            summarize_observer_ids(&counts.nonplayer_ids)
+        ));
+    }
+    if counts.clone_observer > 0 {
+        lines.push(format!(
+            "消失帧：{} 条 PlayCloneObject 观察者事件（无真实客户端会话，属预期）⇒ 未发 SM_DISAPPEAR(30)；observer=[{}]",
+            counts.clone_observer,
+            summarize_observer_ids(&counts.clone_ids)
+        ));
+    }
+    lines
 }
 
 /// 查 `(observer, target)` 的观察者类别。
 ///
 /// **缺标注 ⇒ 按 `Player` 处理**（fail-safe loud）：漏标/旧构造不得把玩家缺失静音成
-/// 「非玩家预期噪声」。顺序不是契约，按二元组查而非下标对齐。
+/// 「非玩家/克隆体预期噪声」。顺序不是契约，按二元组查而非下标对齐。
 fn hide_observer_kind(
     rec: &mir2_world::TickRecord,
     observer_id: i32,
@@ -14996,8 +15049,9 @@ fn hide_observer_kind(
 }
 
 /// 去程守卫：观察者不在线（`online` 无登记）⇒ 跳过。**按类别分流**：
-/// - 非玩家自扫怪 ⇒ `DBG`（预期：它们不在 `OnlineRegistry`）；
-/// - 玩家 ⇒ `WRN` + `missing_online`（真丢帧风险，**不得**静默降级）。
+/// - 非玩家自扫怪 / `PlayCloneObject` ⇒ `DBG`（预期：它们不在 `OnlineRegistry`），
+///   汇总行带 observer id（去重、前 8）；
+/// - 真玩家 ⇒ `WRN` + `missing_online`（真丢帧风险，**不得**静默降级）。
 ///
 /// 离开者是否 `FixedHideMode`/`Ghost` 已在世界侧 `search_view_range` 过滤，此处不再查实体
 /// （实体可能已被移除）。
@@ -15013,6 +15067,13 @@ fn drain_aoi_disappear_with_counts(
             mir2_world::HideObserverKind::NonPlayer => {
                 // 自扫怪不在 OnlineRegistry 是**预期**：不发帧、不打 WRN、不查路由。
                 counts.nonplayer_observer += 1;
+                push_unique_id(&mut counts.nonplayer_ids, *observer_id);
+                continue;
+            }
+            mir2_world::HideObserverKind::Clone => {
+                // 克隆体 race=PLAY 但无真实会话（N1）：同样预期，且**不得**算 missing_online。
+                counts.clone_observer += 1;
+                push_unique_id(&mut counts.clone_ids, *observer_id);
                 continue;
             }
             mir2_world::HideObserverKind::Player => {
@@ -15023,7 +15084,7 @@ fn drain_aoi_disappear_with_counts(
             counts.missing_online += 1;
             glog!(
                 "WRN",
-                "消失帧：玩家观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)（missing_online；非「非玩家自扫怪」，是真丢帧风险）"
+                "消失帧：玩家观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)（missing_online；非「非玩家自扫怪」/「PlayCloneObject」，是真丢帧风险）"
             );
             continue;
         };
@@ -15037,13 +15098,9 @@ fn drain_aoi_disappear_with_counts(
         sent += 1;
         counts.emitted += 1;
     }
-    if counts.nonplayer_observer > 0 {
-        // 汇总一条 DBG（不逐条刷屏）；与上面玩家缺失的 WRN 文案**不同**，便于真机区分。
-        glog!(
-            "DBG",
-            "消失帧：{} 条非玩家自扫观察者事件（不在 OnlineRegistry 属预期）⇒ 未发 SM_DISAPPEAR(30)",
-            counts.nonplayer_observer
-        );
+    // 汇总 DBG（不逐条刷屏）；带 observer id，与玩家缺失的 WRN 文案不同。
+    for line in skip_observer_dbg_lines(&counts) {
+        glog!("DBG", "{line}");
     }
     (sent, counts)
 }
@@ -30626,12 +30683,20 @@ mod tests {
             DisappearObserverCounts {
                 player_observer: 1,
                 nonplayer_observer: 1,
+                clone_observer: 0,
                 missing_online: 0,
                 emitted: 1,
+                nonplayer_ids: vec![guard],
+                clone_ids: Vec::new(),
             },
             "分类计数（非玩家不查 online、不发帧）"
         );
         assert_eq!(sent, 1, "只发玩家观察者那 1 条");
+        let dbg = skip_observer_dbg_lines(&counts);
+        assert!(
+            dbg.iter().any(|l| l.contains("observer=[9001]")),
+            "N2：非玩家汇总 DBG 必须带 observer id：{dbg:?}"
+        );
 
         let mut routed: Vec<(i32, Vec<u8>)> = Vec::new();
         while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
@@ -30685,17 +30750,138 @@ mod tests {
         let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
         assert_eq!(sent, 0);
         assert_eq!(counts.nonplayer_observer, 1);
+        assert_eq!(counts.nonplayer_ids, vec![guard], "DBG 数据面保留 id");
         assert_eq!(
             counts.missing_online, 0,
             "非玩家自扫怪不在 online 是预期，不得混进 missing_online"
         );
         assert!(rx0.try_recv().is_err(), "非玩家不发帧");
+
+        // ③ 克隆体（Clone）同样不在 online ⇒ 单独计数，不算 missing_online。
+        let clone = 8_001;
+        let rec = mir2_world::TickRecord {
+            hides: vec![(clone, target)],
+            hide_observer_kinds: vec![(clone, target, HideObserverKind::Clone)],
+            ..Default::default()
+        };
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        assert_eq!(sent, 0, "克隆体不发帧");
+        assert_eq!(counts.clone_observer, 1);
+        assert_eq!(counts.clone_ids, vec![clone]);
+        assert_eq!(
+            counts.missing_online, 0,
+            "克隆体 race=PLAY 但无真实会话 ⇒ 不得混进 missing_online"
+        );
+        assert!(rx0.try_recv().is_err(), "克隆体不发帧");
+    }
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· N1/Y1**：`PlayCloneObject`
+    /// （`HideObserverKind::Clone`）**不发帧、不 WRN、不算 `missing_online`**，单独计数且 DBG
+    /// 带 observer id；同一批里**真玩家**缺失仍进 `missing_online`（两类必须可区分）。
+    ///
+    /// **合成牙**：把 clone id 也放进 `online`（生产不可能；构造级只为让「误当玩家发帧」可观测）。
+    /// 红检：忽略 `is_clone` 把 clone 分类为 Player（或 drain 里 Clone 臂去掉 `continue`）⇒
+    /// clone 会走 online 分支发帧 ⇒ `emitted==0`/`clone_observer==1`/「903 无帧」断言必红。
+    #[test]
+    fn aoi_disappear_clone_observer_is_skipped_and_separate_from_missing_player() {
+        use mir2_world::HideObserverKind;
+        use std::collections::HashMap;
+
+        let player = 1_001; // 真玩家，且**不在** online ⇒ missing_online
+        let clone = 8_001; // PlayCloneObject，无真实会话
+        let target = 2_002;
+
+        let rec = mir2_world::TickRecord {
+            hides: vec![(clone, target), (player, target)],
+            hide_observer_kinds: vec![
+                (clone, target, HideObserverKind::Clone),
+                (player, target, HideObserverKind::Player),
+            ],
+            ..Default::default()
+        };
+
+        let mut online: OnlineRegistry = Vec::new();
+        // 合成：clone 也在 online（只为让「误当玩家」发得出帧）。
+        online_set(&mut online, entry("uc", "c", 3, 0, 903, clone));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        assert_eq!(counts.clone_observer, 1, "Clone 单独计数");
+        assert_eq!(counts.clone_ids, vec![clone]);
+        assert_eq!(counts.player_observer, 1);
+        assert_eq!(
+            counts.missing_online, 1,
+            "真玩家缺失仍必须计入 missing_online（不得被 Clone 分支掩盖）"
+        );
+        assert_eq!(counts.emitted, 0);
+        assert_eq!(sent, 0);
+        assert!(
+            rx0.try_recv().is_err(),
+            "克隆体不得发帧（即使 id 在 online）"
+        );
+
+        let dbg = skip_observer_dbg_lines(&counts);
+        assert!(
+            dbg.iter()
+                .any(|l| l.contains("PlayCloneObject") && l.contains("observer=[8001]")),
+            "N2：Clone 汇总 DBG 必须带 observer id：{dbg:?}"
+        );
+        assert!(
+            dbg.iter().all(|l| !l.contains("1001")),
+            "真玩家缺失走 WRN，不得被 Clone 的 DBG 汇总掩盖：{dbg:?}"
+        );
+    }
+
+    /// **N2 文案牙**：非玩家/Clone 的 DBG 汇总行必须**去重**、**最多前 8** 个 observer id。
+    ///
+    /// 红检：去掉 `push_unique_id` 去重 ⇒ 重复 id 出现；去掉 `take(8)` 上限 ⇒ 第 9 个 id
+    /// 出现在行里；不拼 `observer_ids` ⇒ 两条断言必红。
+    #[test]
+    fn skip_observer_dbg_lines_dedup_and_cap_observer_ids() {
+        let ids = [7, 7, 5, 9, 11, 13, 15, 17, 19, 21, 23];
+        assert_eq!(
+            summarize_observer_ids(&ids),
+            "7,5,9,11,13,15,17,19…(+2)",
+            "去重保序 + 前 8 + 余数"
+        );
+        let counts = DisappearObserverCounts {
+            nonplayer_observer: ids.len(),
+            nonplayer_ids: ids.to_vec(),
+            clone_observer: 1,
+            clone_ids: vec![42],
+            ..Default::default()
+        };
+        let lines = skip_observer_dbg_lines(&counts);
+        assert_eq!(lines.len(), 2, "非玩家 + Clone 各一条汇总：{lines:?}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("observer=[7,5,9,11,13,15,17,19…(+2)]")),
+            "非玩家行带去重前 8 id：{lines:?}"
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains("PlayCloneObject") && l.contains("observer=[42]")),
+            "Clone 行带 id：{lines:?}"
+        );
+        assert!(
+            lines.iter().all(|l| !l.contains("21") && !l.contains("23")),
+            "第 9 个起的 id 不得出现在行里：{lines:?}"
+        );
     }
 
     /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· 不变量（构造级）**：
-    /// 在构造的「玩家 + 自扫怪」场景里，每个 drain 点的
-    /// `world.entities` 中 `race == PLAY && !ghost` 的实体都必须在 `online.actor_id` 集合内；
+    /// 在构造的「玩家 + 自扫怪」场景里，每个 drain 点的 `world.entities` 中
+    /// `race == PLAY && !ghost && !is_clone` 的**真玩家**都必须在 `online.actor_id` 集合内；
     /// 且 `hides` 里 `Player` 类别的观察者也必须在 online。
+    ///
+    /// **N1/Y1 反例（必须如实登记）**：`PlayCloneObject` 也是 `race == PLAY && !ghost`，但
+    /// `is_clone=true`、无真实会话、不在 `OnlineRegistry` ⇒ 原表述「所有 race==PLAY && !ghost」
+    /// **不成立**；本用例显式把克隆体排除在该集合外（克隆体由
+    /// `aoi_disappear_clone_observer_is_skipped_and_separate_from_missing_player` 单独覆盖）。
     ///
     /// **边界（必须如实登记）**：这只是**构造级**不变量，不是对生产全部 `online_take`
     /// （顶号踢旧 / 账号级顶号 / 人物关闭）与 gate 事件跨轮窗口的穷举证明。⇒ 卡保持
@@ -30732,7 +30918,10 @@ mod tests {
         for tick in 0..12 {
             let rec = world.tick();
             for e in world.entities.iter() {
-                if e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost {
+                // **N1**：`PlayCloneObject` 也是 `race == PLAY && !ghost`，但无真实会话、
+                // 不在 `OnlineRegistry` —— 它是这条「玩家 ⊆ online」不变量的**已知反例**
+                // （Y1）；故只对 `!is_clone` 的真玩家断言。
+                if e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost && !e.is_clone {
                     assert!(
                         online.iter().any(|o| o.actor_id == e.id),
                         "tick {tick}: live player {} 不在 online.actor_id 集合内",

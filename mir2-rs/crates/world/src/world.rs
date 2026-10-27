@@ -196,18 +196,21 @@ fn hutil_round(v: f64) -> i32 {
 
 /// `TickRecord::hides` 观察者类别（**可观测性标注**；不参与帧集合/顺序）。
 ///
-/// `hides` 的生产点 = [`World::tick_tail`] 的 AOI 自扫循环，观察者只有两类：
-/// - `Player`：`race == ACTOR_RACE_PLAY && !ghost` 且过 `SearchTime` 门的玩家；
+/// `hides` 的生产点 = [`World::tick_tail`] 的 AOI 自扫循环，观察者分三类：
+/// - `Player`：`race == ACTOR_RACE_PLAY && !ghost && !is_clone` 且过 `SearchTime` 门的真玩家；
 /// - `NonPlayer`：`!ghost && crate::monai::monster_self_scans(e)` 的自扫怪
-///   （Guard / ArcherGuard / SlaveMonster / 下属；`WorldServer.MonGen.cs:300-313`）。
+///   （Guard / ArcherGuard / SlaveMonster / 下属；`WorldServer.MonGen.cs:300-313`）；
+/// - `Clone`：`PlayCloneObject`（`spawn_clone` 造出，`race == PLAY`、`!ghost`、`is_clone`）
+///   ——**玩家型但无真实客户端会话**，不进 `OnlineRegistry`。
 ///
-/// 只有玩家会在 `OnlineRegistry` 里登记；非玩家自扫怪**不在** ⇒ 宿主对「无在线网关坐标」
-/// 的处理必须按类别分流：非玩家是预期噪声，玩家缺失才是真丢帧（卡
+/// 只有真玩家会在 `OnlineRegistry` 里登记；非玩家自扫怪与克隆体**不在** ⇒ 宿主对
+/// 「无在线网关坐标」的处理必须按类别分流：后两类是预期噪声，玩家缺失才是真丢帧（卡
 /// `openmir2-aoi-disappear-observer-scope`，tier=R）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HideObserverKind {
     Player,
     NonPlayer,
+    Clone,
 }
 
 /// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
@@ -5462,7 +5465,11 @@ impl World {
                     let (scan, observer_kind) = match self.entities.get(*id) {
                         Some(e) if e.race == crate::entity::ACTOR_RACE_PLAY => (
                             !e.ghost && self.clock_ms - e.ai.search_tick > e.ai.search_time,
-                            HideObserverKind::Player,
+                            if e.is_clone {
+                                HideObserverKind::Clone
+                            } else {
+                                HideObserverKind::Player
+                            },
                         ),
                         Some(e) if !e.ghost && crate::monai::monster_self_scans(e) => (
                             self.clock_ms - e.ai.search_tick > e.ai.search_time,
@@ -12038,6 +12045,90 @@ mod tests {
             w.entities.get(q).unwrap().hp,
             u16::MAX,
             "ushort 回绕：(ushort)(0-1) = 65535（照抄 oracle 缺陷）"
+        );
+    }
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· N1/Y1**：
+    /// `PlayCloneObject`（`spawn_clone`，`race==PLAY`、`!ghost`、**无真实会话**）的 hides
+    /// 观察者必须标 `Clone`，**不得**与真玩家 `Player` 混淆（否则 drain 的 `missing_online`
+    /// 会把克隆体当玩家缺失打 WRN）。
+    ///
+    /// 场景：真玩家 `caster` 与它造出的克隆体同格，二者都能看见玩家 `target`；`target` 走出
+    /// 视野后，两边的 hides 事件同时出现，类别分别为 `Player` / `Clone`。
+    ///
+    /// 红检：把生产点分类改回「race==PLAY ⇒ Player」（忽略 `is_clone`）⇒ 本用例
+    /// `kind_of(clone) == Some(Clone)` 必红。
+    #[test]
+    fn hides_classify_play_clone_observer_as_clone_not_player() {
+        let mut w = World::new(64, 64);
+        w.open_session("caster");
+        let caster = w
+            .enter_map(
+                "caster",
+                {
+                    let mut e = Entity::new(0, "caster", 10, 10);
+                    e.view_range = 12;
+                    e.want_ref_msg = true;
+                    e
+                },
+                0,
+            )
+            .expect("caster 进图");
+        w.open_session("target");
+        let target = w
+            .enter_map("target", Entity::new(0, "target", 12, 10), 0)
+            .expect("target 进图");
+        let clone = crate::slave::spawn_clone(&mut w, caster, 2)
+            .expect("主人在世界 ⇒ 应造出克隆体")
+            .clone_id;
+        assert!(
+            w.entities
+                .get(clone)
+                .is_some_and(|e| e.is_clone && !e.is_slave),
+            "前提：克隆体是 is_clone（不是 slave）"
+        );
+
+        // 首轮扫描：caster 与 clone 都看见 target（克隆体走 PlayObject ctor 的 1000ms 节拍）。
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert!(
+            w.entities
+                .get(clone)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == target),
+            "前提：克隆体首轮看得见 target"
+        );
+
+        // target 向东走 20 格出视野。
+        assert!(w.try_step_now(target, 1, 0, 20), "target 应能向东走 20 格");
+        let mut hides = Vec::new();
+        let mut kinds = Vec::new();
+        for _ in 0..6 {
+            let rec = w.tick();
+            hides.extend(rec.hides);
+            kinds.extend(rec.hide_observer_kinds);
+        }
+        assert!(
+            hides.contains(&(caster, target)),
+            "真玩家 caster 的消失事件：{hides:?}"
+        );
+        assert!(
+            hides.contains(&(clone, target)),
+            "克隆体观察者的消失事件：{hides:?}"
+        );
+        let kind_of = |observer: i32| {
+            kinds
+                .iter()
+                .find_map(|&(o, t, kind)| (o == observer && t == target).then_some(kind))
+        };
+        assert_eq!(kind_of(caster), Some(HideObserverKind::Player));
+        assert_eq!(
+            kind_of(clone),
+            Some(HideObserverKind::Clone),
+            "克隆体必须是 Clone（不是 Player）"
         );
     }
 
