@@ -531,10 +531,12 @@ fn command_frame(decoded: &[u8]) -> Vec<u8> {
 /// 判据 6：登录校验失败 ⇒ 剔除（客户端被断开），且 5000 侧除 `GM_OPEN`/`GM_CLOSE` 外没有别的帧。
 #[tokio::test]
 async fn bad_login_is_kicked_and_nothing_is_forwarded() {
-    let (srv_port, srv_task) = fake_game_svr().await;
+    let (srv_port, witness, srv_task) = fake_game_svr_witness().await;
     let gate_port = support::next_port();
     let gate = Gate::start("gg-kick", srv_port, gate_port).await;
+    let t_start = ms_since(witness.t0);
     let mut client = gate.connect().await;
+    let t_connect = ms_since(witness.t0);
 
     // 前两位不是 `**` ⇒ 照 oracle 的 Kicked 1（本次实机取证里真网关就是这条）
     client
@@ -546,6 +548,7 @@ async fn bad_login_is_kicked_and_nothing_is_forwarded() {
     // 紧接着发一帧"数据"：登录没过，它**不该**被转发
     client.write_all(&[0u8; 32]).await.unwrap();
     client.flush().await.unwrap();
+    let t_write = ms_since(witness.t0);
 
     // 网关应主动断开
     let mut buf = [0u8; 1];
@@ -553,7 +556,24 @@ async fn bad_login_is_kicked_and_nothing_is_forwarded() {
         .await
         .expect("5s 内网关应剔除该连接")
         .expect("读应成功（EOF=0 也算）");
+    let t_eof = ms_since(witness.t0);
     assert_eq!(n, 0, "网关必须剔除（读到 EOF）");
+
+    // A2/A3（卡 openmir2-game-gate-relay-kick-race）：10-27 的真实红是 `left: [1]`（缺
+    // GM_CLOSE，不是转发 GM_DATA——issue 转录有误）。与 header_prefixed 同族：EOF 即 kill
+    // 会跟上行写任务落盘竞速。等「GM_CLOSE 已到达假 GameSvr」这一可观测事件再收工；超时
+    // panic 打两侧时间线 + 已见帧序 + 网关日志尾（kill 前取证）。同步离开路径下正常立即
+    // 返回；链接死亡重连（新 socket 落在假 GameSvr 未 accept 的 backlog）或进程崩溃时，
+    // 这里按物证红。
+    let gate_log = gate.log_tail(4096);
+    if let Err(diag) = wait_uplink_close(&witness, Duration::from_secs(5)).await {
+        panic!(
+            "剔除路径 5s 内未把 GM_CLOSE 送到假 GameSvr：{diag}
+             client: start={t_start}ms connect={t_connect}ms write={t_write}ms eof={t_eof}ms
+             gate 日志尾（kill 前）：
+{gate_log}"
+        );
+    }
     gate.shutdown().await;
     drop(client);
 
@@ -566,6 +586,78 @@ async fn bad_login_is_kicked_and_nothing_is_forwarded() {
         idents,
         vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
         "登录失败时除 GM_OPEN/GM_CLOSE 外不得有别的帧（尤其不能有 GM_DATA）"
+    );
+}
+
+/// A3 的牙（卡 openmir2-game-gate-relay-kick-race）：把 GM_CLOSE 的**写出**人为延迟
+/// 2s（测试 env，见 src `GM_CLOSE_DELAY_ENV`），把「剔除已决定、收尾未落盘」的窗口从
+/// 微秒级拉到秒级 ⇒ 在窗口内**确定性**断言同批后续帧绝不被转发（登录前任何缓冲在
+/// `classify_frame` 都是 Login ⇒ kick，`Forward` 需 logged_in；谁把它改成可转发，
+/// GM_DATA 会在窗口内立刻出现在上行 ⇒ 本用例红）。收尾后帧序恒 [GM_OPEN, GM_CLOSE]；
+/// 有界等待超时红必须点名 GM_CLOSE 缺席（延迟非丢失——放宽后必达）。
+#[tokio::test]
+async fn bad_login_forward_window_stays_shut_under_gm_close_delay() {
+    let (srv_port, witness, srv_task) = fake_game_svr_witness().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-kick-delay",
+        srv_port,
+        gate_port,
+        &[("MIR2_GATE_TEST_GM_CLOSE_DELAY_MS", "2000")],
+    )
+    .await;
+    let mut client = gate.connect().await;
+    let bs = char::from_u32(0x5C).unwrap();
+    let bad = format!("XXloadbot1{bs}lb1a{bs}1{bs}120020522{bs}1200205220{bs}AABB");
+    client.write_all(&login_frame(&bad)).await.unwrap();
+    // 同批后续帧：登录没过，它**不该**被转发——剔除决定在登录解析失败那一刻已作出。
+    client.write_all(&[0u8; 32]).await.unwrap();
+    client.flush().await.unwrap();
+
+    // GM_CLOSE 被延迟 2s ⇒ 500ms 有界等待必须按预期原因超时，且窗口内已见帧序恰为
+    // [GM_OPEN]：剔除决定早已作出（登录在 ~t+50ms 已失败），同批 zeros 没有被转发。
+    let diag = wait_uplink_close(&witness, Duration::from_millis(500))
+        .await
+        .expect_err("GM_CLOSE 写出被延迟 2s ⇒ 500ms 有界等待必须按预期原因超时红");
+    assert!(
+        diag.contains("GM_CLOSE") && diag.contains("超时"),
+        "诊断必须点名缺席帧与超时原因：{diag}"
+    );
+    let open_ident = u16::from(grobal2::GM_OPEN).to_string();
+    assert!(
+        diag.contains(&format!("[{open_ident}]")),
+        "剔除窗口内已见帧序必须恰为 [GM_OPEN]（同批 zeros 不得转发）：{diag}"
+    );
+
+    // 网关仍应主动断开（同步离开路径等写完延迟帧才放行 ⇒ EOF 在 ~2s 处）
+    let mut buf = [0u8; 1];
+    let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+        .await
+        .expect("5s 内网关应剔除该连接")
+        .expect("读应成功（EOF=0 也算）");
+    assert_eq!(n, 0, "网关必须剔除（读到 EOF）");
+
+    // 延迟 ≠ 丢帧：放宽到 5s 内必须等到，且全程没有任何 GM_DATA。
+    wait_uplink_close(&witness, Duration::from_secs(5))
+        .await
+        .expect("放宽等待后 GM_CLOSE 必须到达（注入的是延迟不是丢失）");
+    let ever: Vec<u16> = witness.snapshot().iter().map(|(i, _)| *i).collect();
+    assert_eq!(
+        ever,
+        vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
+        "全程帧序恒 [GM_OPEN, GM_CLOSE]：剔除窗口里同批 zeros 没有被转发"
+    );
+    gate.shutdown().await;
+    drop(client);
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未结束")
+        .unwrap();
+    let idents: Vec<u16> = got.iter().map(|(m, _)| m.ident).collect();
+    assert_eq!(
+        idents,
+        vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
+        "延迟路径的最终帧序不变：GM_OPEN + GM_CLOSE，且不得出现 GM_DATA"
     );
 }
 
