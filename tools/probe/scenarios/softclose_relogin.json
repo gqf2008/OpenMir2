@@ -30,9 +30,12 @@
       "note": "`CM_WALK(3011)`：X/Y 都打包在 recog（`recog = (y<<16)|x`，服务端取 LoWord=X、HiWord=Y），`param` 不读。走一格到 (321,328)：登录→走→小退→重连这条链上每一步都要有可观测动作，走位同时把「段2 的 SM_LOGON x/y」与起点区分开（否则位移帧面全为常量、判据没有区分力）。"
     },
     {
-      "wait_for": [11, 13, 10, 100],
+      "wait_for": {
+        "frame_class": "server_ack_time",
+        "body_text_contains": "+GD/"
+      },
       "timeout_ms": 5000,
-      "note": "走成功看 `SM_WALK(11)`（被挡则 10/100）；超时 fail-loud，不静默继续。"
+      "note": "**回执判据（2026-10-26 订正，同 `move_walk`）**：自身走路 oracle **不发** `SM_WALK(11)`（`PlayObject.Message.cs:1403-1412` 的 `ActorId != ActorId` 守卫），真实回执是明文 `+GD/<tick>`（`PlayObject.Message.cs:1059-1063` → `M2Share.cs:205` → `MessageSettings.cs:6` 的 `sSTATUS_GOOD`）。旧判据 `[11,13,10,100]` 只能被**随机 NPC 转身**误中（两侧都可假过）⇒ 已改为等 `frame_class=server_ack_time` 且 `body_text_contains=\"+GD/\"`；超时 fail-loud。**覆盖说明（N3）**：该谓词由 `mir2_probe` 既有 selftest **`ack-predicate-wait`** 覆盖（实跑输出 `ack matched; random-turn-only timed out; shape checks ok`）——**本场景未新增负例**，负例由那颗既有自检承担。"
     },
     {
       "send": {
@@ -48,10 +51,9 @@
     },
     {
       "relogin": {
-        "settle_ms": 1500,
-        "assert_same_actor": true
+        "settle_ms": 1500
       },
-      "note": "**段2**：关掉当前 GameGate 连接 → settle 1500ms（oracle「角色数据保存中」窗口）→ 用**同一 account / 同一角色**重跑 login→selgate→gamegate 链。`assert_same_actor: true` 把「两段 ActorId 相同」做成 in-process 断言：这是「重连后名字/行会是新值」判据的**前提**；id 不同时那条判据恒真（假绿），所以前提不成立必须让 run 红。两段的 actor id / SM_LOGON 字段落进 `run.json` 的 `steps[]` 与 `chain.segments`。"
+      "note": "**段2（2026-10-27 改写）**：关掉当前 GameGate 连接 → settle 1500ms → 用**同一 account / 同一角色**重跑 login→selgate→gamegate 链。**判据语义改为「同账号、新对象」**（**N2 订正**）：`world.soft_close` 只置 ghost + `add_to_mapped=false`，**实体仍在**；真正的摘除发生在断线（`GateEvent::Closed`）或重进路径——本场景由 step5 断线 + 重连触发。因此 `assert_same_actor: true`（假设 id 复用）与实现不符，已删除。**注意这是概率事实、不是不变量**：C# `GetNextIdentity` 的随机池只排除**当前在用**的 id，**已释放的 id 可以复用**；Rust `alloc_id` 单调递增。碰撞概率极低（实测 `981561271 → 718963883`），但**不得**把「id 必不同 / 相同即判红」写成机器判据——消费方（`openmir2-softclose-cleanup-residue`）应把两次 ActorId 当**观测值**记录并对齐，**不假设**复用或必变。两段的 actor id / SM_LOGON 字段仍落进 `run.json` 的 `steps[]` 与 `chain.segments`。"
     },
     {
       "wait_for": {

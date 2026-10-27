@@ -30,9 +30,12 @@
       "note": "`CM_WALK(3011)`：X/Y 打包在 recog（`recog = (y<<16)|x`）。走一格到 (321,328) 的目的**只有一个**：让「软关存档写的是实时坐标」与「载入基线」可区分（否则 x/y 全是 320/328，两侧恒等、判据无区分力）。"
     },
     {
-      "wait_for": [11, 13, 10, 100],
+      "wait_for": {
+        "frame_class": "server_ack_time",
+        "body_text_contains": "+GD/"
+      },
       "timeout_ms": 5000,
-      "note": "走成功看 `SM_WALK(11)`（被挡则 10/100）；超时 fail-loud，不静默继续。"
+      "note": "**回执判据（2026-10-26 订正，同 `move_walk`）**：自身走路 oracle **不发** `SM_WALK(11)`（`PlayObject.Message.cs:1403-1412` 的 `ActorId != ActorId` 守卫），真实回执是明文 `+GD/<tick>`（`PlayObject.Message.cs:1059-1063` → `M2Share.cs:205` → `MessageSettings.cs:6` 的 `sSTATUS_GOOD`）。旧判据 `[11,13,10,100]` 只能被**随机 NPC 转身**误中（两侧都可假过）⇒ 已改为等 `frame_class=server_ack_time` 且 `body_text_contains=\"+GD/\"`；超时 fail-loud。**覆盖说明（N3）**：该谓词由 `mir2_probe` 既有 selftest **`ack-predicate-wait`** 覆盖（实跑输出 `ack matched; random-turn-only timed out; shape checks ok`）——**本场景未新增负例**，负例由那颗既有自检承担。"
     },
     {
       "send": {
