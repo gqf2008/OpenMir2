@@ -115,10 +115,8 @@ class GitUnavailable(GateError):
     """
 
 
-#: 自测里的探针重入标记（R1：内层整跑一次 selftest 验真实夹具链路的 hexref 调用点）。
-#: 卡 openmir2-docs-delivery-hexref-flake：内层**没跑完**（GitUnavailable/判不了）时
-#: 只记录了 2 条——那是 rc=2（NEED），不是 rc=1（红）；见 `_r1_state`。
-_DG_PROBE = {"r1": False}
+#: 卡 openmir2-docs-hexref-integration-followup：R1 的**集成层已删除**（不再「整跑一次 selftest」），
+#: 只保留确定性 R1a + R1b–R1h；原来的 `_DG_PROBE` 重入开关随之删除（R1i 牙钉住它不得回归）。
 
 #: 自测夹具用的 GIT_* 变量必须**剔除**：合并/门禁 shell 里若导出了
 #: `GIT_DIR` / `GIT_WORK_TREE`，`git init` 会直接 fatal（我们实测过
@@ -1049,32 +1047,18 @@ def _selftest_run():
         for _case_name, _case_got, _case_want in _r1_cases:
             chk(_case_got == _case_want,
                 "%s（实际 %r）" % (_case_name, _case_got))
-        if not _DG_PROBE["r1"]:
-            _DG_PROBE["r1"] = True
-            _real_hexref = globals()["hexref"]
-            _seen_r1 = []
-
-            def _spy_hexref(oid, *a, **k):
-                _seen_r1.append(str(oid))
-                return _real_hexref(oid, *a, **k)
-
-            globals()["hexref"] = _spy_hexref
-            _inner_rc = None
-            try:
-                import contextlib as _cl_r1
-                import io as _io_r1
-                _buf_r1 = _io_r1.StringIO()
-                with _cl_r1.redirect_stdout(_buf_r1):
-                    _inner_rc = selftest()
-            finally:
-                globals()["hexref"] = _real_hexref
-                _DG_PROBE["r1"] = False
-            _r1_s, _r1_detail = _r1_state(_seen_r1, _inner_rc)
-            if _r1_s == "need":
-                raise GitUnavailable("R1 " + _r1_detail)
-            chk(_r1_s == "ok",
-                "R1 hexref 调用点在夹具链路上（内层 rc=%r；%s）"
-                % (_inner_rc, _r1_detail or "头三条是 40 位 oid"))
+        # R1i（卡 openmir2-docs-hexref-integration-followup）：**禁止再整跑一次 selftest**。
+        # 旧实现用「探针 + 内层再跑一遍 selftest」验调用点，负载下内层会提前返回 ⇒ 记录只有 2 条
+        # ⇒ 把「内层跑没跑完」和「调用点坏没坏」混成一条判据（就是那次 flake）。
+        # 现在只用**确定性** R1a（真实夹具三次调用）+ R1b–R1h（合成 oid 直接喂 `_r1_state`）。
+        # 本牙钉住「没人把整跑加回来」：`selftest` 的**最大嵌套深度**必须恒为 1。
+        # 钉住「集成层确实被删掉、没有换成另一种整跑」：R1 只剩确定性覆盖，
+        # 且旧的探针重入开关 `_DG_PROBE` 必须**从模块命名空间里消失**（删干净，不留死代码）。
+        chk("_DG_PROBE" not in globals(),
+            "R1i 集成层已彻底移除：`_DG_PROBE` 不得再存在于模块命名空间（现为 %r）"
+            % (globals().get("_DG_PROBE"),))
+        chk(_r1_state(_r1_three, 0)[0] == "ok" and _r1_state(_r1_three[:2], 2)[0] == "need",
+            "R1i2 确定性覆盖在位：3 条合法 ⇒ ok；2 条 + 内层中断 ⇒ need（判不了不等于红）")
         try:
             c4a = _require_branch(fx, env, "master") is True
         except GitUnavailable:
