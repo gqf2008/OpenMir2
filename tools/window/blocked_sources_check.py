@@ -612,6 +612,7 @@ def check(run3_path, scenes_dir, list_output=None, tokens=None, repo=None,
 # ---------------------------------------------------------------- selftest
 def selftest():
     ok = fail = 0
+    need_n = [0]
 
     def chk(cond, name):
         nonlocal ok, fail
@@ -621,6 +622,11 @@ def selftest():
         else:
             fail += 1
             print('FAIL %s' % name)
+
+    def need(name):
+        """规则 16：**夹具坏了判不了（rc=2）**，不是红——红只留给「判据被证伪」。"""
+        need_n[0] += 1
+        print('NEED %s' % name)
 
     tmp = tempfile.mkdtemp(prefix='blocked-sources-selftest.')
     try:
@@ -870,71 +876,76 @@ def selftest():
                             name='orphanM')
         chk(any('evidence' in u for u in und), '牙n8：evidence 为空 ⇒ UNCLASSIFIED')
 
-        # 牙 n9（D9 承重）：把仓库里**当前全部** blocked 场景喂进去——
-        #   去掉新增的 not_in_run3_reason 后，不得因缺结构被批量 UNCLASSIFIED（孤儿按 D2 判红）；
-        #   原样（已补结构化理由）⇒ 全绿。
-        #   **计数不写死**：2026-10-27 新增两条 blocked（king_dialog/king_castle_war，卡
-        #   openmir2-npc-click-no-response-family）时，旧断言 `== 7` 让整颗牙失效——改成与喂进来的
-        #   集合逐名比对，条数随真实清单增长而增长（牙的语义不变：**每一个**都要被识别）。
-        real_scenes = os.path.join(REPO_ROOT, DEFAULT_SCENES)
-        real_run3 = os.path.join(REPO_ROOT, DEFAULT_RUN3)
-        real_rows = load_run3(real_run3)
-        base = os.path.join(tmp, 'base9')
-        os.makedirs(base, exist_ok=True)
-        blocked_names = []
-        docs = {}
-        for row in real_rows:
-            nm = row['name']
-            doc = json.load(open(os.path.join(real_scenes, nm + '.json'), encoding='utf-8'))
-            if 'blocked' in doc:
-                blocked_names.append(nm)
-                docs[nm] = doc
-        for fn in sorted(os.listdir(real_scenes)):
-            if not fn.endswith('.json'):
-                continue
-            nm = fn[:-5]
-            if nm in docs:
-                continue
-            d = json.load(open(os.path.join(real_scenes, fn), encoding='utf-8'))
-            if 'blocked' in d:
-                blocked_names.append(nm)
-                docs[nm] = d
-        rows9 = [r for r in real_rows if r['name'] in docs]
-        run3_9 = os.path.join(tmp, 'run3-9.json')
-        json.dump({'format': 'run3/1', 'scenarios': rows9},
-                  open(run3_9, 'w', encoding='utf-8'), ensure_ascii=False)
-        stripped = {}
-        for nm, d in docs.items():
-            d2 = json.loads(json.dumps(d, ensure_ascii=False))
-            if isinstance(d2.get('blocked'), dict):
-                d2['blocked'].pop('not_in_run3_reason', None)
-            stripped[nm] = d2
-        base_a = os.path.join(base, 'stripped')
-        os.makedirs(base_a, exist_ok=True)
-        for nm, d in stripped.items():
-            json.dump(d, open(os.path.join(base_a, nm + '.json'), 'w',
-                              encoding='utf-8'), ensure_ascii=False)
-        probs9a, und9a, info9a = check(
-            run3_9, base_a, None, BLOCKED_TOKENS, repo=REPO_ROOT, ledger={},
-            commit_check=lambda s: True, landed_check=lambda s: False)
-        chk(sorted(info9a['blocked_scene']) == sorted(docs) and not und9a
-            and sorted(info9a['orphans']) == sorted(
-                set(blocked_names) - {r['name'] for r in rows9})
-            and any('not_in_run3_reason' in p for p in probs9a),
-            '牙n9（D9）：%d 个既有 blocked 场景（抹掉新理由）⇒ 无 UNCLASSIFIED，'
-            '孤儿按 D2 判红（%d 个）'
-            % (len(docs), len(info9a['orphans'])))
-        base_b = os.path.join(base, 'asis')
-        os.makedirs(base_b, exist_ok=True)
-        for nm, d in docs.items():
-            json.dump(d, open(os.path.join(base_b, nm + '.json'), 'w',
-                              encoding='utf-8'), ensure_ascii=False)
-        probs9b, und9b, _i9b = check(
-            run3_9, base_b, None, BLOCKED_TOKENS, repo=REPO_ROOT,
-            ledger={'openmir2-gm-target-state-write': 'in-progress'},
-            commit_check=lambda s: True, landed_check=lambda s: False)
-        chk(probs9b == [] and und9b == [],
-            '牙n9b（D9）：原样（结构化理由齐）⇒ 全绿')
+        # 牙 n9（D9 承重）——**规则 16**：只用**合成夹具**，不枚举真实 scenarios / run3。
+        # 夹具不变式（自证）：3 个 blocked（2 个带结构化 not_in_run3_reason + 1 个孤儿）+ 1 个非 blocked；
+        # run3 只列那 2 个带理由的 + 非 blocked 的。**不变式不成立 ⇒ NEED（rc=2），不判红。**
+        n9_root = os.path.join(tmp, 'n9')
+        n9_scenes = os.path.join(n9_root, 'scenarios')
+        os.makedirs(n9_scenes, exist_ok=True)
+        n9_struct = ['blk_struct_a', 'blk_struct_b']
+        n9_orphan = ['blk_orphan']
+        n9_free = 'free_ok'
+        n9_docs = {}
+        for nm in n9_struct:
+            n9_docs[nm] = {'blocked': {
+                'reason': '夹具 TOK9：%s 未入批' % nm,
+                'missing_fixture': nm + '.json',
+                'not_in_run3_reason': {'reason': '卡在办',
+                                       'evidence': [{'kind': 'card', 'value': 'card-1'}]}}}
+        n9_docs[n9_orphan[0]] = {'blocked': {'reason': '夹具 TOK9：孤儿（无结构化理由）',
+                                             'missing_fixture': n9_orphan[0] + '.json'}}
+        n9_docs[n9_free] = {'maps': [{'width': 8, 'height': 8}], 'ticks': 2, 'commands': []}
+        for nm, d in n9_docs.items():
+            with open(os.path.join(n9_scenes, nm + '.json'), 'w', encoding='utf-8') as fh:
+                json.dump(d, fh, ensure_ascii=False)
+        # 断言表：blocked 场景必须有表项（fail-closed），表项里的 token 必须出现在 run3 行的 blocked 文本里
+        n9_table = {n: {'source': '夹具 §n9', 'absent': ('未合',), 'tokens': ('TOK9',)}
+                    for n in n9_struct}
+        n9_rows = [{'name': n9_free}]     # blocked 场景 = 未入批 ⇒ 不进 run3（与真实语义一致）
+        n9_run3 = os.path.join(n9_root, 'run3-9.json')
+        with open(n9_run3, 'w', encoding='utf-8') as fh:
+            json.dump({'format': 'run3/1', 'scenarios': n9_rows}, fh, ensure_ascii=False)
+
+        blocked_all = sorted(n9_struct + n9_orphan)
+        seen_blocked = sorted(n for n, d in n9_docs.items() if 'blocked' in d)
+        seen_struct = sorted(n for n, d in n9_docs.items()
+                             if isinstance(d.get('blocked'), dict)
+                             and 'not_in_run3_reason' in d['blocked'])
+        if seen_blocked != blocked_all or seen_struct != sorted(n9_struct):
+            need('牙n9 前置：合成夹具不符合不变式（blocked=%r 期望 %r；结构化=%r 期望 %r）⇒ 判不了'
+                 % (seen_blocked, blocked_all, seen_struct, sorted(n9_struct)))
+        else:
+            base = os.path.join(tmp, 'base9')
+            stripped_root = os.path.join(base, 'stripped')
+            asis_root = os.path.join(base, 'asis')
+            os.makedirs(stripped_root, exist_ok=True)
+            os.makedirs(asis_root, exist_ok=True)
+            for nm, d in n9_docs.items():
+                d2 = json.loads(json.dumps(d, ensure_ascii=False))
+                if isinstance(d2.get('blocked'), dict):
+                    d2['blocked'].pop('not_in_run3_reason', None)
+                with open(os.path.join(stripped_root, nm + '.json'), 'w', encoding='utf-8') as fh:
+                    json.dump(d2, fh, ensure_ascii=False)
+                with open(os.path.join(asis_root, nm + '.json'), 'w', encoding='utf-8') as fh:
+                    json.dump(d, fh, ensure_ascii=False)
+
+            probs9a, und9a, info9a = check(
+                n9_run3, stripped_root, None, n9_table, repo=REPO_ROOT, ledger={},
+                commit_check=lambda s: True, landed_check=lambda s: False)
+            chk(sorted(info9a['blocked_scene']) == blocked_all and not und9a
+                and sorted(info9a['orphans']) == blocked_all
+                and any('not_in_run3_reason' in p for p in probs9a),
+                '牙n9（D9）：%d 个**合成** blocked 场景（抹掉结构化理由）⇒ 无 UNCLASSIFIED，'
+                '孤儿按 D2 判红（%d 个）'
+                % (len(blocked_all), len(info9a['orphans'])))
+            probs9b, und9b, info9b = check(
+                n9_run3, asis_root, None, n9_table, repo=REPO_ROOT,
+                ledger={'card-1': 'in-progress'},
+                commit_check=lambda s: True, landed_check=lambda s: False)
+            chk(und9b == [] and len(probs9b) == 1 and n9_orphan[0] in probs9b[0]
+                and sorted(info9b['blocked_scene']) == blocked_all,
+                '牙n9b（D9）：合成夹具原样 ⇒ 只有那个故意没理由的场景判红，其余全绿（probs=%r）'
+                % (probs9b,))
 
         # ---- 卡 openmir2-blocked-token-rot：反向校验牙（合成夹具，不碰真实仓库）----
         rot_root = os.path.join(tmp, 'rot')
@@ -1035,9 +1046,14 @@ def selftest():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    print('%s: blocked_sources_check selftest %d/%d'
-          % ('GREEN' if not fail else 'RED', ok, ok + fail))
-    return 0 if not fail else 1
+    print('%s: blocked_sources_check selftest %d/%d%s'
+          % ('GREEN' if not fail else 'RED', ok, ok + fail,
+             ('（NEED %d）' % need_n[0]) if need_n[0] else ''))
+    if fail:
+        return 1
+    if need_n[0]:
+        return 2        # 夹具坏了 ⇒ 判不了（规则 16），不是红
+    return 0
 
 
 # ---------------------------------------------------------------- main
