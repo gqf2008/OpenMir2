@@ -239,21 +239,34 @@ class Recorder:
         return row
 
     def close(self):
-        # 关采集**不许静默省略**：留下一条可审计的账目行。
-        if True:   # meta **永远**写（关采集时尤其不能丢；开着也记条数便于审计）
-            try:
-                self.seq += 1
-                self._c2s_fh.write(json.dumps({"seq": self.seq, "direction": "meta",
-                                           "capture": "on" if self.capture_c2s else "off",
-                                           "c2s_written": self.c2s_written, "c2s_skipped": self.c2s_skipped},
-                                          ensure_ascii=False) + "\n")
-                self._c2s_fh.close()
-            except Exception:  # noqa: BLE001
-                pass
+        """收尾：**账目行永远写**；写失败**不静默**（stderr + 重新抛出）；两个句柄都在 finally 里关。
+
+        卡 `openmir2-probe-c2s-close-hygiene`：原实现把 meta 写入包在 `if True:` 里、
+        并 `except Exception: pass` 吞掉一切——账目写失败时**产物看起来完整、实际没有账目行**。
+        现在：① 注入异常 ⇒ `close()` 重新抛出（调用方看得见）；② 无论成败，`c2s.ndjson`
+        与 `frames.ndjson` 的句柄都关掉（句柄泄漏比异常更糟）；③ 正常路径零 stderr。
+        """
+        err = None
         try:
-            self._fh.close()
-        except Exception:  # noqa: BLE001
-            pass
+            self.seq += 1
+            self._c2s_fh.write(json.dumps({
+                "seq": self.seq, "direction": "meta",
+                "capture": "on" if self.capture_c2s else "off",
+                "c2s_written": self.c2s_written, "c2s_skipped": self.c2s_skipped,
+            }, ensure_ascii=False) + "\n")
+        except Exception as ex:  # noqa: BLE001
+            err = ex
+            print("mir2_probe: c2s 账目行写入失败：%r" % (ex,), file=sys.stderr)
+        finally:
+            for fh, name in ((self._c2s_fh, "c2s.ndjson"), (self._fh, "frames.ndjson")):
+                try:
+                    fh.close()
+                except Exception as ex:  # noqa: BLE001
+                    if err is None:
+                        err = ex
+                    print("mir2_probe: %s 关闭失败：%r" % (name, ex), file=sys.stderr)
+        if err is not None:
+            raise err
 
 
 def load_c2s(path):
@@ -4033,6 +4046,59 @@ def _delayed_frames():
     return early, late
 
 
+def _selftest_c2s_close_hygiene():
+    """卡 `openmir2-probe-c2s-close-hygiene`：`Recorder.close()` 的三条不变量。
+
+    ① **不吞异常**：账目行写入失败 ⇒ `close()` 必须**重新抛出**（调用方看得见），并至少写 stderr；
+    ② **句柄仍关**：即使写入失败，`c2s.ndjson` 与 `frames.ndjson` 的句柄也必须关闭（泄漏比异常更糟）；
+    ③ **正常路径零 stderr**：不失败时不得往 stderr 输出任何东西。
+    """
+    import shutil
+    import tempfile
+    from contextlib import redirect_stderr
+    import io as _io
+    tmp = tempfile.mkdtemp(prefix="mir2probe-close-")
+    try:
+        # ③ 正常路径
+        rec = Recorder(os.path.join(tmp, "ok"), now_ms())
+        buf = _io.StringIO()
+        with redirect_stderr(buf):
+            rec.close()
+        assert buf.getvalue() == "", "正常 close 不得写 stderr：%r" % buf.getvalue()
+        assert rec._fh.closed and rec._c2s_fh.closed, "两个句柄都必须关闭"
+
+        # ①② 注入写入异常
+        rec2 = Recorder(os.path.join(tmp, "bad"), now_ms())
+        real = rec2._c2s_fh
+
+        class _BadWriter(object):
+            def write(self, _s):
+                raise OSError("injected: disk full")
+
+            def close(self):
+                return real.close()
+
+            @property
+            def closed(self):
+                return real.closed
+
+        rec2._c2s_fh = _BadWriter()
+        buf2 = _io.StringIO()
+        raised = None
+        with redirect_stderr(buf2):
+            try:
+                rec2.close()
+            except Exception as ex:  # noqa: BLE001
+                raised = ex
+        assert isinstance(raised, OSError) and "disk full" in str(raised), (
+            "close 必须重新抛出账目写入错误（不吞），实得 %r" % (raised,))
+        assert rec2._fh.closed and rec2._c2s_fh.closed, "写入失败时句柄也必须关闭"
+        assert "账目行写入失败" in buf2.getvalue(), "至少写 stderr：%r" % buf2.getvalue()
+        return "正常 close 零 stderr + 双句柄关；注入写失败 ⇒ 重新抛出 + 双句柄仍关 + stderr 点名"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def _selftest_c2s_capture():
     """卡 `openmir2-probe-c2s-capture`（**方案 c**：c2s 单文件）的牙——全部合成，不起栈不占端口。
 
@@ -6370,6 +6436,7 @@ def run_selftest():
     check("wait-recog-filter", _selftest_wait_recog_filter)
     check("ack-predicate-wait", _selftest_ack_wait)
     check("c2s-capture", _selftest_c2s_capture)
+    check("c2s-close-hygiene", _selftest_c2s_close_hygiene)
     if fails:
         print("mir2_probe selftest: FAIL")
         for f in fails:
