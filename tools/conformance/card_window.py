@@ -2578,7 +2578,9 @@ def _pick_occupancy_pred(text):
     多加一个 AND 组（例如 `AND (` + BT + 'Position' + BT + ' <> -1)`）就会静默改去求值新那组：
     两颗占用牙仍然绿，却已不再钉占用规则。
 
-    规则：从右往左逐个 `AND (` 候选，**只认 body 里含 `StdIndex` 的那组**，并按括号配平截取
+    规则：从右往左逐个 `AND (` 候选，**只认 body 里同时含 `StdIndex` 与 `MakeIndex` 的那组**
+    （占用谓词就是 `StdIndex <> 0 OR MakeIndex <> 0` 这两列；只认 `StdIndex` 会被
+    「只提 StdIndex 的新组」骗走），并按括号配平截取
     （谓词里再套一层括号也截得对）。一个都找不到 ⇒ 返回 None——调用方按「数所有行」退化成
     修复前的语义，空占位行会被算成占用 ⇒ ⑲ 立刻红，**不静默**。
     """
@@ -7332,6 +7334,17 @@ def _selftest_inventory(tmp):
         rc_e, out_e, _ = probe_eq.run("csharp", "inventory.occupancy", [], stdin_text=eq_sql)
         out.append((out_e.strip() == "1",
                     "㉒d 谓词用 `=` 也能求值（译成 ==）：StdIndex=0 的行被算为占用"))
+        # ㉓（卡 `openmir2-occupancy-none-behavior-tooth` A1）：**None ⇒ 上游 fail-closed 的直接行为牙**。
+        # `_pick_occupancy_pred` 认不出占用谓词时返回 None，消费侧必须退化成「数所有行」
+        # ——空占位行也被算成占用 ⇒ `run_inventory` 报 rc=2「已有 N 行」而拒绝；
+        # **不得静默当成空表返回 0**——后者会把「谓词解析失配」变成「槽位空闲」⇒ 覆盖真物品。
+        no_pred_sql = ("SELECT COUNT(*) FROM `db`.`characters_bagitem`" + chr(10) +
+                       " WHERE `PlayerId` = 6228 AND `Position` IN (3)")
+        probe_none = _OccupancyRunner([(3, 0, 0)])
+        rc_n, out_n, _ = probe_none.run("csharp", "inventory.occupancy", [],
+                                        stdin_text=no_pred_sql)
+        out.append((_pick_occupancy_pred(no_pred_sql) is None and out_n.strip() == "1",
+                    "㉓ 认不出谓词（None）⇒ 退化成数所有行（空占位行也算占用，fail-closed），不是静默 0"))
     finally:
         globals()["_check_db_pairing"] = orig_pair
         globals()["placement_envir_root"] = orig_root
