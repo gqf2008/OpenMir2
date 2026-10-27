@@ -115,7 +115,9 @@ class GitUnavailable(GateError):
     """
 
 
-#: 自测里的探针重入标记（R1：整跑一次 selftest 验 hexref 调用点）。
+#: 自测里的探针重入标记（R1：内层整跑一次 selftest 验真实夹具链路的 hexref 调用点）。
+#: 卡 openmir2-docs-delivery-hexref-flake：内层**没跑完**（GitUnavailable/判不了）时
+#: 只记录了 2 条——那是 rc=2（NEED），不是 rc=1（红）；见 `_r1_state`。
 _DG_PROBE = {"r1": False}
 
 #: 自测夹具用的 GIT_* 变量必须**剔除**：合并/门禁 shell 里若导出了
@@ -214,6 +216,46 @@ def hexref(oid, want=9):
             return oid[:n]
     raise GitUnavailable("oid %s 的前 %d 位没有 a–f，构造不出可解析的 hex 锚 ⇒ 判不了"
                          % (oid[:12], want + 6))
+
+
+#: R1（卡 openmir2-docs-delivery-hexref-flake）：头三次 `hexref` 调用必须是三个 40 位 oid。
+_R1_MIN_RECORDS = 3
+_R1_OID_LEN = 40
+
+
+def _fixture_hexrefs(c1, side, blob):
+    """夹具构建处**仅有的三处** `hexref` 调用点（R1 牙的保护对象）。
+
+    抽成模块级函数，好让 R1 用**合成 oid 直接调用**它（确定性、不依赖把整个 selftest
+    再跑一遍）；把这里的 `hexref(...)` 改成 `c1[:9]` 直切 ⇒ 探针一条也记不到 ⇒ 红。
+    """
+    return hexref(c1), hexref(side), hexref(blob, 8)
+
+
+def _r1_state(records, inner_rc=None):
+    """R1 两态判定：**判不了 ≠ 红**（rc=2 vs rc=1）。
+
+    `records` = 内层 selftest 期间 `hexref` 探针记到的入参；`inner_rc` = 内层返回码
+    （None = 没返回）。返回 `(state, detail)`，state ∈ {"ok", "need", "bad"}：
+
+      * ``ok``  ：记录了 ≥3 条且前三条都是 40 位 oid ⇒ 契约成立（**先判记录**：
+        内层即使之后因环境中断，只要已经观测到三次合法调用，调用点就已证明）；
+      * ``need``：<3 条**且**内层**没跑完**（rc=2 / 提前返回）⇒ 判不了，
+        绝不把环境问题说成「调用点坏了」；
+      * ``bad`` ：<3 条但内层**跑完了**（rc≠2），或前三条不是 40 位 oid ⇒ 证伪。
+    """
+    if len(records) >= _R1_MIN_RECORDS:
+        if not all(isinstance(x, str) and len(x) == _R1_OID_LEN
+                   for x in records[:_R1_MIN_RECORDS]):
+            return "bad", ("头三次入参须是 %d 位 oid；实际 %r"
+                           % (_R1_OID_LEN, records[:_R1_MIN_RECORDS]))
+        return "ok", ""
+    if inner_rc is None or inner_rc == 2:
+        return "need", ("内层未跑完（rc=%r，hexref 只记录 %d/%d 次）⇒ 判不了"
+                        % (inner_rc, len(records), _R1_MIN_RECORDS))
+    return "bad", ("内层 selftest 已跑完（rc=%r）却只记录 %d/%d 次 hexref 调用"
+                   " ⇒ 调用点不在夹具链路上"
+                   % (inner_rc, len(records), _R1_MIN_RECORDS))
 
 
 def _require_branch(repo, env, want="master"):
@@ -763,9 +805,23 @@ def _selftest_run():
         # 直接用 `c1_ref`/`side_ref` 会以约 0.8%/个的概率撞上「前缀全是数字」，于是该轮所有
         # hex 用例静默不触发（实测：30 次里 2 次 N1a/N1b 假红、25 次里 3 次 HEX-1/HEX-7 假红）。
         # 这里把前缀延长到出现字母为止；都到 15 位还没有字母 ⇒ 判不了（rc=2），不是红。
-        c1_ref = hexref(c1)
-        side_ref = hexref(side)
-        blob_ref = hexref(blob, 8)
+        # R1a（卡 openmir2-docs-delivery-hexref-flake）：探针只包住**这一次**真实夹具调用，
+        # 逐条核对「恰好三次、入参就是 c1/side/blob」——确定性，不依赖「把整个 selftest 再跑一遍」。
+        _seen_fx = []
+        _real_fx = globals()["hexref"]
+
+        def _spy_fx(oid, *a, **k):
+            _seen_fx.append(str(oid))
+            return _real_fx(oid, *a, **k)
+
+        globals()["hexref"] = _spy_fx
+        try:
+            c1_ref, side_ref, blob_ref = _fixture_hexrefs(c1, side, blob)
+        finally:
+            globals()["hexref"] = _real_fx
+        chk(_seen_fx == [c1, side, blob],
+            "R1a 真实夹具构建处恰好三次 hexref 调用（c1/side/blob；实际 %r）"
+            % (_seen_fx,))
         # 未跟踪文件
         with open(os.path.join(tmp, "docs", "untracked.md"), "w", encoding="utf-8") as fh:
             fh.write("nope\n")
@@ -936,10 +992,63 @@ def _selftest_run():
         chk(c6b_rc == 2 and "判不了" in c6b_out
             and not any(l.startswith("FAIL ") for l in c6b_out.splitlines()),
             "C6b rc=2 的夹具失败 ⇒ selftest rc=2 且**无 FAIL 行**（假红已消灭）")
-        # R1（卡 openmir2-tool-gate-teeth-residuals）：`hexref` 的**调用点**也要有牙——
-        # 把三处 `hexref(...)` 改回 `c1[:9]` 直切（函数留着不删）时，本牙必须红。
-        # 做法：装**探针**记录 hexref 的入参；夹具构建在最前 ⇒ 头三次调用必须是三个 40 位 oid
-        # （c1 / side / blob）。若调用点被改成切片，头几次记录就变成 F2 牙里的合成字面量（48/40/12 位）⇒ 红。
+        # R1（卡 openmir2-tool-gate-teeth-residuals；重写：卡 openmir2-docs-delivery-hexref-flake）
+        # `hexref` 的**调用点**要有牙：三处 `hexref(...)` 改回 `c1[:9]` 直切（函数留着不删）必须红。
+        #
+        # 确定性层（不依赖整跑、不受负载影响）：
+        #   ① R1a（夹具构建处，见上）真实 c1/side/blob 恰好被调用三次；
+        #   ② R1b 用**合成 40 位 oid** 直接调用同一个被保护函数，逐条校验探针记录；
+        #   ③ R1c–R1h 直接喂 `_r1_state` 的 3 条 / 2 条 / 错格式记录，钉住「绿 / NEED / 红」，
+        #      并钉住「先判记录」：已观测到 3 条合法调用时，内层之后再中断也算绿。
+        # 集成层（整跑一次 selftest，**分状态**）：
+        #   内层没跑完（rc=2）且记录 <3 ⇒ NEED（判不了）；跑完却 <3 次记录 ⇒ 红。
+        _SYNTH_C1 = "c1" + "0" * 38        # 40 位、含 a–f
+        _SYNTH_SIDE = "5d" + "1" * 38      # 40 位、含 a–f
+        _SYNTH_BLOB = "b10b" + "0" * 36    # 40 位、含 a–f
+        _seen_synth = []
+        _real_synth = globals()["hexref"]
+
+        def _spy_synth(oid, *a, **k):
+            _seen_synth.append(str(oid))
+            return _real_synth(oid, *a, **k)
+
+        globals()["hexref"] = _spy_synth
+        try:
+            _synth_refs = _fixture_hexrefs(_SYNTH_C1, _SYNTH_SIDE, _SYNTH_BLOB)
+        finally:
+            globals()["hexref"] = _real_synth
+        _want_refs = (_real_synth(_SYNTH_C1), _real_synth(_SYNTH_SIDE),
+                      _real_synth(_SYNTH_BLOB, 8))
+        chk(_seen_synth == [_SYNTH_C1, _SYNTH_SIDE, _SYNTH_BLOB]
+            and _synth_refs == _want_refs
+            and all(re.search(r"[a-f]", x) for x in _synth_refs),
+            "R1b 合成 oid 直接走调用点 ⇒ 逐条命中且返回值含 a–f（记录 %r）"
+            % (_seen_synth,))
+        try:
+            _fixture_hexrefs("7" * 12, _SYNTH_SIDE, _SYNTH_BLOB)
+            _r1_bad_oid = "no-raise"
+        except GitUnavailable as ex:
+            _r1_bad_oid = "ok" if "判不了" in str(ex) else "no-text"
+        except Exception as ex:  # noqa: BLE001
+            _r1_bad_oid = "other:%s" % ex.__class__.__name__
+        chk(_r1_bad_oid == "ok",
+            "R1c 合成 oid 错格式（12 位纯数字）⇒ 调用点抛 GitUnavailable，实际 %r"
+            % (_r1_bad_oid,))
+        _r1_three = [_SYNTH_C1, _SYNTH_SIDE, _SYNTH_BLOB]
+        _r1_cases = [
+            ("R1d 3 条合法记录 ⇒ 绿", _r1_state(_r1_three, 0)[0], "ok"),
+            ("R1e 2 条记录 + 内层未跑完(rc=2) ⇒ NEED（判不了，不是红）",
+             _r1_state(_r1_three[:2], 2)[0], "need"),
+            ("R1f 2 条记录 + 内层已跑完 ⇒ 红（调用点缺失）",
+             _r1_state(_r1_three[:2], 0)[0], "bad"),
+            ("R1g 第三条错格式（12 位）⇒ 红",
+             _r1_state(_r1_three[:2] + ["z" * 12], 0)[0], "bad"),
+            ("R1h 已观测到 3 条合法记录（内层之后才中断 rc=2）⇒ 绿（先判记录）",
+             _r1_state(_r1_three, 2)[0], "ok"),
+        ]
+        for _case_name, _case_got, _case_want in _r1_cases:
+            chk(_case_got == _case_want,
+                "%s（实际 %r）" % (_case_name, _case_got))
         if not _DG_PROBE["r1"]:
             _DG_PROBE["r1"] = True
             _real_hexref = globals()["hexref"]
@@ -950,18 +1059,22 @@ def _selftest_run():
                 return _real_hexref(oid, *a, **k)
 
             globals()["hexref"] = _spy_hexref
+            _inner_rc = None
             try:
                 import contextlib as _cl_r1
                 import io as _io_r1
                 _buf_r1 = _io_r1.StringIO()
                 with _cl_r1.redirect_stdout(_buf_r1):
-                    selftest()
+                    _inner_rc = selftest()
             finally:
                 globals()["hexref"] = _real_hexref
                 _DG_PROBE["r1"] = False
-            chk(len(_seen_r1) >= 3 and all(len(x) == 40 for x in _seen_r1[:3]),
-                "R1 hexref 调用点在夹具链路上（头三次入参须是 40 位 oid；实际 %r）"
-                % (_seen_r1[:3],))
+            _r1_s, _r1_detail = _r1_state(_seen_r1, _inner_rc)
+            if _r1_s == "need":
+                raise GitUnavailable("R1 " + _r1_detail)
+            chk(_r1_s == "ok",
+                "R1 hexref 调用点在夹具链路上（内层 rc=%r；%s）"
+                % (_inner_rc, _r1_detail or "头三条是 40 位 oid"))
         try:
             c4a = _require_branch(fx, env, "master") is True
         except GitUnavailable:
