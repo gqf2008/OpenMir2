@@ -613,7 +613,8 @@ def verify_frames(path, expect_gold, expect_rows=None):
 
 
 def _chk(ok, name, detail=""):
-    print(("PASS " if ok else "FAIL ") + name + (("  (" + detail + ")") if detail else ""))
+    print(("PASS " if ok else "FAIL ") + name
+          + (("  (" + str(detail) + ")") if detail else ""))
     return ok
 
 
@@ -865,6 +866,151 @@ def selftest(args):
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # =====================================================================
+    # 真机流程三缺口的牙（卡 `openmir2-mirflow-realmachine-flow-runnable` A4）
+    # 每颗牙独立：拆掉对应实现 ⇒ 只有它红。
+    # =====================================================================
+    import shutil
+    import tempfile
+    t2 = tempfile.mkdtemp(prefix="prov-gaps-")
+    try:
+        env = os.path.join(t2, "Envir")
+        os.makedirs(env)
+        mongen = os.path.join(env, "MonGen.txt")
+        original = "3\t320\t328\t鸡\t0\t1\t10\n".encode("gbk")
+        with open(mongen, "wb") as fh:
+            fh.write(original)
+        with open(os.path.join(env, "MapInfo.txt"), "wb") as fh:
+            fh.write("[3 盟重省] FIGHT\n[0103 铁器店] FIGHT\n".encode("gbk"))
+
+        # ---- P1 牙①：前插落在**头部**、留下 backup、before/after sha 都记
+        spec = [{"map": "3", "x": 331, "y": 331, "name": "鸡", "count": 1}]
+        dry = prepend_mongen(env, spec, dry_run=True)
+        ok_dry = (dry["action"] == "dry-run" and dry["lines"]
+                  and _sha256_file(mongen) == dry["before_sha256"])
+        ok_all &= _chk(ok_dry, "P1 牙① dry-run 不写文件、但给出将要前插的行",
+                       dry["lines"])
+        res = prepend_mongen(env, spec, dry_run=False)
+        head = open(mongen, "rb").read().split(b"\n")[0].decode("gbk")
+        ok_all &= _chk(res["action"] == "prepended" and head.startswith("3\t331\t331\t鸡")
+                       and res["backup"] and os.path.isfile(res["backup"])
+                       and res["after_sha256"] != res["before_sha256"],
+                       "P1 牙② 前插到 MonGen 头部 + backup + 前后 sha 可区分",
+                       head)
+        # ---- P1 牙③：还原回写前字节（sha 相等）并删掉 backup
+        err = restore_mongen(res)
+        ok_all &= _chk(err is None and _sha256_file(mongen) == res["before_sha256"]
+                       and not os.path.exists(res["backup"]),
+                       "P1 牙③ 还原后 sha256 == 写前、backup 已清", err)
+
+        # ---- P1 牙④：生产根 fail-closed —— 用**假靶**（把 PROD_ENVIR_ROOTS 指到临时根）
+        saved_roots = globals()["PROD_ENVIR_ROOTS"]
+        globals()["PROD_ENVIR_ROOTS"] = (env,)
+        try:
+            try:
+                prepend_mongen(env, spec, dry_run=False)
+                refused = False
+            except EnvirRefused:
+                refused = True
+        finally:
+            globals()["PROD_ENVIR_ROOTS"] = saved_roots
+        ok_all &= _chk(refused and _sha256_file(mongen) == res["before_sha256"],
+                       "P1 牙④ 「生产根」fail-closed 且一个字节都没写", refused)
+
+        # ---- P1 牙⑤：spawned / spawn_failed / undecidable 三态可区分
+        frames = os.path.join(t2, "frames.ndjson")
+        with open(frames, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps({"seq": 9, "t_ms": 1, "ident": 41,
+                                 "param": 331, "tag": 331,
+                                 "body_hex": "鸡".encode("gbk").hex()}) + "\n")
+        sc = spawn_check(frames, "鸡", 331, 331)
+        sc_bad = spawn_check(frames, "鸡", 340, 340)
+        sc_none = spawn_check(os.path.join(t2, "nope.ndjson"), "鸡", 331, 331)
+        ok_all &= _chk(sc["verdict"] == "spawned" and sc_bad["verdict"] == "spawn_failed"
+                       and sc_none["verdict"] == "undecidable",
+                       "P1 牙⑤ 刷出证明三态可区分（spawned/spawn_failed/undecidable）",
+                       (sc["verdict"], sc_bad["verdict"], sc_none["verdict"]))
+
+        # ---- P2 牙⑥：合法剖面 pass；监听落在默认段 / 客户端连错口 ⇒ fail（fail-closed 不放宽）
+        good = {"proxy": {"listen": 18600, "upstream_host": "127.0.0.1",
+                          "upstream_port": 7200},
+                "client": {"gate_port": 18600}}
+        bad_port = {"proxy": dict(good["proxy"], listen=5000),
+                    "client": {"gate_port": 5000}}
+        bad_gate = {"proxy": good["proxy"], "client": {"gate_port": 7200}}
+        r_good = check_proxy_profile(good)
+        r_port = check_proxy_profile(bad_port)
+        r_gate = check_proxy_profile(bad_gate)
+        ok_all &= _chk(r_good["verdict"] == "pass" and r_port["verdict"] == "fail"
+                       and r_gate["verdict"] == "fail"
+                       and any("5000–7200" in p for p in r_port["problems"]),
+                       "P2 牙⑥ proxy 监听默认段 5000–7200 ⇒ fail（不放开 fail-closed）",
+                       r_port["problems"])
+
+        # ---- P4 牙⑦：两侧快照 ⇒ 金币差/同一 StdIndex/槽消失 三事实 pass
+        def _mk_snap(dirp, gold, rows):
+            os.makedirs(dirp, exist_ok=True)
+            ct = os.path.join(dirp, "mir2_test_db.characters.tsv")
+            bt = os.path.join(dirp, "mir2_test_db.characters_bagitem.tsv")
+            with open(ct, "w", encoding="utf-8", newline="\n") as fh:
+                fh.write("7\taaa\t%d\n" % gold)
+            with open(bt, "w", encoding="utf-8", newline="\n") as fh:
+                for r in rows:
+                    fh.write("7\t%d\t%d\t%d\n" % r)
+            man = {"tool": "dbsnap", "tables": [
+                {"table": "mir2_test_db.characters", "rows": 1, "sha256": "aa",
+                 "file": "mir2_test_db.characters.tsv",
+                 "columns": ["Id", "ChrName", "Gold"]},
+                {"table": "mir2_test_db.characters_bagitem", "rows": len(rows),
+                 "sha256": "bb", "file": "mir2_test_db.characters_bagitem.tsv",
+                 "columns": ["PlayerId", "Position", "StdIndex", "MakeIndex"]}]}
+            with open(os.path.join(dirp, "manifest.json"), "w", encoding="utf-8",
+                      newline="\n") as fh:
+                json.dump(man, fh, ensure_ascii=False)
+            return dirp
+
+        bag_before = [(40, 207, 900001), (41, 3, 900002)]
+        bag_after = [(41, 3, 900002)]
+        cb = _mk_snap(os.path.join(t2, "cb"), 5000, bag_before)
+        ca = _mk_snap(os.path.join(t2, "ca"), 4500, bag_after)
+        rb = _mk_snap(os.path.join(t2, "rb"), 5000, bag_before)
+        ra = _mk_snap(os.path.join(t2, "ra"), 4500, bag_after)
+        ev = db_evidence(cb, ca, rb, ra, 7, expect_slot=40, expect_gold_delta=-500)
+        ok_all &= _chk(ev["verdict"] == "pass" and ev["rc"] == RC_OK
+                       and all(f["verdict"] == "pass" for f in ev["facts"].values())
+                       and all(v["manifest_sha256"] for v in ev["snapshots"].values()),
+                       "P4 牙⑦ 三事实可机判 + 四份快照都带 sha256", ev["facts"])
+
+        # ---- P4 牙⑧：两侧金币差不同 ⇒ gold_delta fail（rc=4，不绿）
+        ra_bad = _mk_snap(os.path.join(t2, "ra2"), 4900, bag_after)
+        ev2 = db_evidence(cb, ca, rb, ra_bad, 7, expect_slot=40)
+        ok_all &= _chk(ev2["facts"]["gold_delta"]["verdict"] == "fail"
+                       and ev2["rc"] == RC_MISMATCH,
+                       "P4 牙⑧ 两侧金币差不同 ⇒ gold_delta fail", ev2["facts"]["gold_delta"])
+
+        # ---- P4 牙⑨：缺一侧快照 ⇒ 三事实全部 undecidable（不是绿）
+        try:      # 异常安全：缺快照分支被删时应该是**命名 FAIL**，不是整档崩
+            ev3 = db_evidence(cb, ca, rb, None, 7, expect_slot=40)
+        except Exception:  # noqa: BLE001
+            ev3 = None
+        ok_all &= _chk(bool(ev3) and ev3["verdict"] == "undecidable"
+                       and ev3["rc"] == RC_UNDECIDABLE
+                       and all(f["verdict"] == "undecidable" for f in ev3["facts"].values()),
+                       "P4 牙⑨ 缺快照 ⇒ 三事实判不了（不给绿）",
+                       ev3["verdict"] if ev3 else None)
+
+        # ---- 漂移牙⑩：本文件的 MonGen 布局常量必须与 card_window 一致
+        import re as _re
+        cw = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "conformance", "card_window.py")
+        m = _re.search(r"^FIXTURE_MONGEN_ZEN_TIME = (\d+)$", open(cw, encoding="utf-8").read(),
+                       _re.M)
+        ok_all &= _chk(m and int(m.group(1)) == FIXTURE_MONGEN_ZEN_TIME,
+                       "漂移牙⑩ FIXTURE_MONGEN_ZEN_TIME 与 card_window 一致",
+                       m.group(1) if m else "未找到")
+    finally:
+        shutil.rmtree(t2, ignore_errors=True)
+
     print("SELFTEST " + ("PASS" if ok_all else "FAIL"))
     return RC_OK if ok_all else RC_PREREQ
 
@@ -882,6 +1028,312 @@ def add_db_args(ap):
     ap.add_argument("--port", type=int, default=3306)
     ap.add_argument("--user", default="root")
     ap.add_argument("--password", default="")
+
+
+# ===========================================================================
+# 真机流程三缺口（卡 `openmir2-mirflow-realmachine-flow-runnable`）
+#   P1 夹具前插 MonGen（刷出证明与失败可区分）
+#   P2 proxy 端口剖面（不得占默认 5000–7200；-ProxyDir 仍是唯一 fail-closed 证据源）
+#   P4 两侧 dbsnap 证据（金币差 / 同一 StdIndex / 槽消失，可机判）
+# 离线实现 + 单测；真机验证另列 window_required。
+# ===========================================================================
+
+# 与 `card_window.py` 的 `FIXTURE_MONGEN_ZEN_TIME` **同值**（自检里做漂移牙：两边不一致 ⇒ FAIL）。
+FIXTURE_MONGEN_ZEN_TIME = 360
+PROD_ENVIR_ROOTS = (r"E:\MirServer", "E:/MirServer")
+# 默认部署占用的端口段（proxy **不得监听**在这里；作为客户端连出去不受限）
+DEFAULT_PORT_RANGE = (5000, 7200)
+
+
+class EnvirRefused(Exception):
+    """拒绝写生产 Envir 根（内容冻结红线）。"""
+
+
+def _is_prod_envir(root):
+    real = os.path.normcase(os.path.abspath(root))
+    return any(real.startswith(os.path.normcase(os.path.abspath(p)))
+               for p in PROD_ENVIR_ROOTS)
+
+
+def _sha256_file(path):
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 16), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def prepend_mongen(envir_root, specs, dry_run=True):
+    """把怪物行**前插**到 `<envir_root>/MonGen.txt` 头部（与 card_window 同布局）。
+
+    ``specs`` = [{"map","x","y","name","count"}]。返回证据 dict：
+      ``action`` ∈ {``dry-run``, ``prepended``}；``before_sha256`` / ``after_sha256``；
+      ``backup``（原文件副本，还原用）；``lines``（实际前插的行）。
+    失败 fail-closed：生产根 ⇒ ``EnvirRefused``；地图不在 MapInfo.txt ⇒ ``Prereq``；
+    MonGen.txt 缺失 ⇒ ``Prereq``。
+    """
+    if _is_prod_envir(envir_root):
+        raise EnvirRefused("拒绝写生产 Envir 根（内容冻结）：%s" % envir_root)
+    mongen = os.path.join(envir_root, "MonGen.txt")
+    mapinfo = os.path.join(envir_root, "MapInfo.txt")
+    if not os.path.isfile(mongen):
+        raise Prereq("MonGen.txt 不存在：%s" % mongen)
+    res = {"envir_root": envir_root, "path": mongen, "action": "dry-run",
+           "before_sha256": None, "after_sha256": None, "backup": None,
+           "lines": [], "rc": RC_OK, "error": None}
+    res["before_sha256"] = _sha256_file(mongen)
+    maps = set()
+    if os.path.isfile(mapinfo):
+        with open(mapinfo, "rb") as fh:
+            for raw in fh:
+                line = raw.decode("gbk", "replace").strip()
+                if not line or line.startswith(";") or not line.startswith("["):
+                    continue
+                maps.add(line[1:].split()[0].strip())
+    lines = []
+    for spec in specs:
+        if spec["map"] not in maps:
+            raise Prereq("fixtures 指定的地图 %r 不在 MapInfo.txt（fail-closed）" % spec["map"])
+        lines.append("\t".join([spec["map"], str(spec["x"]), str(spec["y"]),
+                                spec["name"], "0", str(spec.get("count", 1)),
+                                str(FIXTURE_MONGEN_ZEN_TIME)]))
+    res["lines"] = lines
+    if dry_run:
+        return res
+    with open(mongen, "rb") as fh:
+        original = fh.read()
+    backup = mongen + ".pre-fixture.bak"
+    with open(backup, "wb") as fh:
+        fh.write(original)
+    payload = ("\n".join(lines) + "\n").encode("gbk")
+    with open(mongen, "wb") as fh:
+        fh.write(payload + original)
+    res["backup"] = backup
+    res["after_sha256"] = _sha256_file(mongen)
+    res["action"] = "prepended"
+    return res
+
+
+def restore_mongen(res):
+    """按证据把 MonGen.txt 还原成写前字节，并核对 sha256。"""
+    if not res or res.get("action") != "prepended":
+        return None
+    with open(res["backup"], "rb") as fh:
+        original = fh.read()
+    with open(res["path"], "wb") as fh:
+        fh.write(original)
+    got = _sha256_file(res["path"])
+    if got != res["before_sha256"]:
+        return "还原后 sha256=%s != 写前 %s" % (got, res["before_sha256"])
+    os.unlink(res["backup"])
+    return None
+
+
+def spawn_check(frames_path, name, x, y):
+    """从 `frames.ndjson` 判「靶子刷出」——三种结论**可区分**（A4）。
+
+    * 无 frames / 文件不存在 ⇒ ``undecidable``（**不是**绿）；
+    * 有 frames 但(`x`,`y`)格从未出现该名字的 actor ⇒ ``spawn_failed``；
+    * 出现 ⇒ ``spawned``，并记录首见 seq/t_ms。
+    名字来自 oracle 帧体的 GBK 文本；本检查只按 `body_text_contains` 的等价物做**宽松**匹配：
+    帧里 `body_hex` 解出的 GBK 文本含名字即算出现。
+    """
+    out = {"frames": frames_path, "name": name, "x": int(x), "y": int(y),
+           "verdict": "undecidable", "detail": "", "first_seq": None, "first_t_ms": None}
+    if not frames_path or not os.path.isfile(frames_path):
+        out["detail"] = "没有 frames.ndjson（证据缺失 ⇒ 判不了）"
+        return out
+    want = name.encode("gbk", "replace")
+    seen_any = False
+    with open(frames_path, encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            seen_any = True
+            try:
+                fr = json.loads(line)
+            except ValueError:
+                out["detail"] = "frames.ndjson 有坏行（判不了）"
+                out["verdict"] = "undecidable"
+                return out
+            body = fr.get("body_hex") or ""
+            try:
+                raw = bytes.fromhex(body) if body else b""
+            except ValueError:
+                raw = b""
+            named = want in raw
+            pos_ok = (fr.get("param") == int(x) and fr.get("tag") == int(y))
+            if named and pos_ok:
+                out.update({"verdict": "spawned", "first_seq": fr.get("seq"),
+                            "first_t_ms": fr.get("t_ms"), "detail": "靶子出现在约定格"})
+                return out
+    out["verdict"] = "spawn_failed"
+    out["detail"] = ("有 %d 帧，但 (%d,%d) 上没有名为 %r 的 actor"
+                     % (1 if seen_any else 0, int(x), int(y), name)) if seen_any else "frames 为空（判不了）"
+    if not seen_any:
+        out["verdict"] = "undecidable"
+    return out
+
+
+def _load_snap(dirpath):
+    """读 dbsnap 目录：返回 {"manifest":…, "sha256":…, "tables": {fq: (columns, rows)}}。"""
+    man_path = os.path.join(dirpath, "manifest.json")
+    if not os.path.isfile(man_path):
+        return None
+    with open(man_path, encoding="utf-8") as fh:
+        man = json.load(fh)
+    tables = {}
+    for t in man.get("tables") or []:
+        fq = t.get("table")
+        fpath = os.path.join(dirpath, t.get("file") or "")
+        rows = []
+        if os.path.isfile(fpath):
+            with open(fpath, encoding="utf-8", errors="replace") as fh:
+                for line in fh:
+                    line = line.rstrip("\n")
+                    if line == "":
+                        continue
+                    rows.append(line.split("\t"))
+        tables[fq] = (t.get("columns") or [], rows)
+    return {"manifest": man, "sha256": _sha256_file(man_path),
+            "path": os.path.abspath(dirpath), "tables": tables}
+
+
+def _cell(tables, fq, row, column):
+    cols, rows = tables[fq]
+    if column not in cols:
+        raise Prereq("快照表 %s 缺列 %r" % (fq, column))
+    return rows[row][cols.index(column)]
+
+
+def _char_row(tables, fq, player_id):
+    cols, rows = tables[fq]
+    if "Id" not in cols:
+        raise Prereq("快照表 %s 缺列 Id" % fq)
+    idx = cols.index("Id")
+    for i, r in enumerate(rows):
+        if r[idx] == str(player_id):
+            return i
+    return None
+
+
+def db_evidence(csharp_before, csharp_after, rust_before, rust_after,
+                player_id, expect_slot=None, expect_gold_delta=None):
+    """两侧 dbsnap → 三条**可机判**事实（A3）：金币差 / 同一 StdIndex / 槽消失。
+
+    任一侧快照缺失或读不了 ⇒ 三条都判 ``undecidable``（**不是**绿）。
+    """
+    out = {"verdict": "undecidable", "facts": {}, "snapshots": {}, "rc": RC_UNDECIDABLE}
+    snaps = {}
+    for key, d in (("csharp_before", csharp_before), ("csharp_after", csharp_after),
+                   ("rust_before", rust_before), ("rust_after", rust_after)):
+        loaded = _load_snap(d) if d else None
+        snaps[key] = loaded
+        out["snapshots"][key] = ({"path": loaded["path"], "manifest_sha256": loaded["sha256"]}
+                                 if loaded else {"path": d, "manifest_sha256": None})
+    missing = [k for k, v in snaps.items() if v is None]
+    if missing:
+        for f in ("gold_delta", "same_std_index", "slot_disappeared"):
+            out["facts"][f] = {"verdict": "undecidable",
+                               "detail": "缺快照 %s（判不了）" % ",".join(missing)}
+        return out
+
+    ct = "mir2_test_db.characters"
+
+    def gold(snap):
+        row = _char_row(snap["tables"], ct, player_id)
+        if row is None:
+            raise Prereq("快照里找不到 Id=%s 的角色行" % player_id)
+        return int(_cell(snap["tables"], ct, row, "Gold"))
+
+    try:
+        deltas = {"csharp": gold(snaps["csharp_after"]) - gold(snaps["csharp_before"]),
+                  "rust": gold(snaps["rust_after"]) - gold(snaps["rust_before"])}
+    except (Prereq, ValueError, IndexError) as ex:
+        out["facts"]["gold_delta"] = {"verdict": "undecidable", "detail": str(ex)}
+        deltas = None
+    if deltas is not None:
+        ok = deltas["csharp"] == deltas["rust"]
+        if expect_gold_delta is not None:
+            ok = ok and deltas["csharp"] == int(expect_gold_delta)
+        out["facts"]["gold_delta"] = {
+            "verdict": "pass" if ok else "fail",
+            "detail": "两侧金币差 csharp=%d rust=%d%s"
+                      % (deltas["csharp"], deltas["rust"],
+                         "" if expect_gold_delta is None else " expect=%d" % expect_gold_delta)}
+
+    bt = "mir2_test_db.characters_bagitem"
+
+    def slots(snap):
+        cols, rows = snap["tables"][bt]
+        pid = cols.index("PlayerId")
+        pos = cols.index("Position")
+        std = cols.index("StdIndex")
+        return {(r[pos], r[std]) for r in rows if r[pid] == str(player_id)}
+
+    gone = {"csharp": slots(snaps["csharp_before"]) - slots(snaps["csharp_after"]),
+            "rust": slots(snaps["rust_before"]) - slots(snaps["rust_after"])}
+    stds = {"csharp": sorted({s for _p, s in gone["csharp"] if s != "0"}),
+            "rust": sorted({s for _p, s in gone["rust"] if s != "0"})}
+    ok_std = bool(stds["csharp"]) and stds["csharp"] == stds["rust"]
+    out["facts"]["same_std_index"] = {
+        "verdict": "pass" if ok_std else "fail",
+        "detail": "消失行的 StdIndex csharp=%s rust=%s" % (stds["csharp"], stds["rust"])}
+    if expect_slot is not None:
+        slot = str(expect_slot)
+        gone_pos = {"csharp": {p for p, _s in gone["csharp"]},
+                    "rust": {p for p, _s in gone["rust"]}}
+        ok_slot = slot in gone_pos["csharp"] and slot in gone_pos["rust"]
+        out["facts"]["slot_disappeared"] = {
+            "verdict": "pass" if ok_slot else "fail",
+            "detail": "槽 %s 消失：csharp=%s rust=%s"
+                      % (slot, slot in gone_pos["csharp"], slot in gone_pos["rust"])}
+    else:
+        out["facts"]["slot_disappeared"] = {"verdict": "undecidable",
+                                            "detail": "未给 --expect-slot（判不了）"}
+
+    verdicts = {f["verdict"] for f in out["facts"].values()}
+    if verdicts == {"pass"}:
+        out.update({"verdict": "pass", "rc": RC_OK})
+    elif "fail" in verdicts:
+        out.update({"verdict": "fail", "rc": RC_MISMATCH})
+    return out
+
+
+def check_proxy_profile(data):
+    """proxy 端口剖面校验（P2）：**proxy 不得监听默认 5000–7200**，fail-closed。"""
+    problems = []
+    if not isinstance(data, dict):
+        return {"verdict": "fail", "problems": ["profile 不是对象"], "rc": RC_PREREQ}
+    proxy = data.get("proxy") or {}
+    client = data.get("client") or {}
+
+    def port(v, label):
+        if not isinstance(v, int) or isinstance(v, bool) or not (1 <= v <= 65535):
+            problems.append("%s 不是合法端口：%r" % (label, v))
+            return None
+        return v
+
+    listen = port(proxy.get("listen"), "proxy.listen")
+    upstream = port(proxy.get("upstream_port"), "proxy.upstream_port")
+    gate_port = port(client.get("gate_port"), "client.gate_port")
+    host = proxy.get("upstream_host")
+    if not isinstance(host, str) or not host.strip():
+        problems.append("proxy.upstream_host 必须是非空字符串")
+    if listen is not None and DEFAULT_PORT_RANGE[0] <= listen <= DEFAULT_PORT_RANGE[1]:
+        problems.append("proxy.listen=%d 落在默认端口段 %d–%d（proxy 不得占用；"
+                        "默认段留给 oracle/rust 自身监听）"
+                        % (listen, DEFAULT_PORT_RANGE[0], DEFAULT_PORT_RANGE[1]))
+    if listen is not None and upstream == listen:
+        problems.append("proxy.listen 与 upstream_port 相同（%d）：会把上游打回自己" % listen)
+    if listen is not None and gate_port is not None and gate_port != listen:
+        problems.append("client.gate_port=%d ≠ proxy.listen=%d（客户端要连 proxy）"
+                        % (gate_port, listen))
+    return {"verdict": "pass" if not problems else "fail", "problems": problems,
+            "rc": RC_OK if not problems else RC_PREREQ,
+            "ports": {"listen": listen, "upstream": upstream, "gate_port": gate_port}}
 
 
 def main(argv=None):
@@ -913,6 +1365,10 @@ def main(argv=None):
     mode.add_argument("--a2-evidence", action="store_true", help="A2 地面物结构性不可达取证")
     mode.add_argument("--gate", action="store_true",
                       help="A6 动作前的前置门：备齐=PASS；缺项=UNDECIDABLE(kind=missing_prereq) rc=6")
+    mode.add_argument("--prepend-mongen", action="store_true", help="P1: prepend monsters into MonGen.txt")
+    mode.add_argument("--spawn-check", action="store_true", help="P1: spawn proof from frames")
+    mode.add_argument("--db-evidence", action="store_true", help="P4: two-side dbsnap facts")
+    mode.add_argument("--proxy-profile-check", action="store_true", help="P2: proxy port profile")
     mode.add_argument("--selftest", action="store_true")
 
     ap.add_argument("--db", default="mir2_test_db_r")
@@ -925,6 +1381,19 @@ def main(argv=None):
     ap.add_argument("--min-gold", type=int, default=500, help="--gate 的金币下限（默认 500）")
     ap.add_argument("--profile", default=None, help="--gate 查 monsters 用的 card-window profile")
     ap.add_argument("--report", default=None, help="apply 报告输出路径")
+    ap.add_argument("--mon-map", default=None, help="--prepend-mongen 的地图号")
+    ap.add_argument("--mon-x", type=int, default=None)
+    ap.add_argument("--mon-y", type=int, default=None)
+    ap.add_argument("--mon-name", default=None, help="--prepend-mongen 的怪物名（GBK 落地）")
+    ap.add_argument("--mon-count", type=int, default=1)
+    ap.add_argument("--player-id", type=int, default=None, help="--db-evidence 的角色 Id")
+    ap.add_argument("--expect-slot", type=int, default=None)
+    ap.add_argument("--expect-gold-delta", type=int, default=None)
+    ap.add_argument("--csharp-before", default=None)
+    ap.add_argument("--csharp-after", default=None)
+    ap.add_argument("--rust-before", default=None)
+    ap.add_argument("--rust-after", default=None)
+    ap.add_argument("--proxy-profile", default=None, help="--proxy-profile-check 的 JSON 路径")
     ap.add_argument("--yes-apply", action="store_true")
     ap.add_argument("--yes", action="store_true", help="rollback 真写")
     add_db_args(ap)
@@ -933,6 +1402,49 @@ def main(argv=None):
     try:
         if args.selftest:
             return selftest(args)
+
+        if args.prepend_mongen:
+            for need in ("mon_map", "mon_x", "mon_y", "mon_name"):
+                if getattr(args, need) in (None, ""):
+                    raise Prereq("--prepend-mongen 需要 --mon-map/--mon-x/--mon-y/--mon-name")
+            res = prepend_mongen(args.envir_root,
+                                 [{"map": args.mon_map, "x": args.mon_x, "y": args.mon_y,
+                                   "name": args.mon_name, "count": args.mon_count}],
+                                 dry_run=not args.yes_apply)
+            if args.frames:
+                res["spawn_check"] = spawn_check(args.frames, args.mon_name,
+                                                 args.mon_x, args.mon_y)
+            print(json.dumps(res, ensure_ascii=False, indent=1))
+            return res["rc"]
+
+        if args.spawn_check:
+            if not args.frames or args.mon_name is None:
+                raise Prereq("--spawn-check 需要 --frames 与 --mon-name（以及 --mon-x/--mon-y）")
+            out = spawn_check(args.frames, args.mon_name,
+                              args.mon_x if args.mon_x is not None else 0,
+                              args.mon_y if args.mon_y is not None else 0)
+            print(json.dumps(out, ensure_ascii=False, indent=1))
+            return {"spawned": RC_OK, "spawn_failed": RC_PREREQ}.get(out["verdict"],
+                                                                     RC_UNDECIDABLE)
+
+        if args.db_evidence:
+            if args.player_id is None:
+                raise Prereq("--db-evidence 需要 --player-id")
+            out = db_evidence(args.csharp_before, args.csharp_after,
+                              args.rust_before, args.rust_after, args.player_id,
+                              expect_slot=args.expect_slot,
+                              expect_gold_delta=args.expect_gold_delta)
+            print(json.dumps(out, ensure_ascii=False, indent=1))
+            return out["rc"]
+
+        if args.proxy_profile_check:
+            if not args.proxy_profile:
+                raise Prereq("--proxy-profile-check 需要 --proxy-profile <json>")
+            with open(args.proxy_profile, encoding="utf-8") as fh:
+                data = json.load(fh)
+            out = check_proxy_profile(data)
+            print(json.dumps(out, ensure_ascii=False, indent=1))
+            return out["rc"]
 
         if args.a2_evidence:
             ev = a2_evidence(args.repo_root)
