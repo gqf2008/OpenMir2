@@ -1151,8 +1151,13 @@ def selftest(args):
                  "backup": res_h["backup"], "backup_sha256": ""}
         ev_h2 = {"action": "prepended", "path": res_h["path"],
                  "backup": res_h["backup"], "backup_sha256": "", "before_sha256": ""}
+        # ③（卡 `openmir2-mirflow-backup-nonstr-sha-tooth`）：**非字符串真值** `123` ——
+        # 只有 `not isinstance(want, str)` 那一半能兜住；删掉它会误诊成「备份 sha 不匹配」。
+        ev_h3 = {"action": "prepended", "path": res_h["path"],
+                 "backup": res_h["backup"], "backup_sha256": 123}
         err_h1 = restore_mongen(dict(ev_h1))
         err_h2 = restore_mongen(dict(ev_h2))
+        err_h3 = restore_mongen(dict(ev_h3))
         ok_h = (err_h1 is not None and "判不了" in err_h1
                 and err_h2 is not None and "判不了" in err_h2
                 and "!= 期望" not in err_h2
@@ -1161,6 +1166,14 @@ def selftest(args):
         ok_all &= _chk(ok_h,
                        "P1 牙②h 空串 sha（只 backup_sha256 / 两键皆空）⇒ 「判不了」且目标不动、备份仍在",
                        (err_h1, err_h2))
+        # 牙②i（卡 `openmir2-mirflow-backup-nonstr-sha-tooth`）：第三格**单独成牙**，
+        # 变异（删 `not isinstance(want, str)` 半）只让它红、不连带 ②d/②e/②f/②g/②h。
+        ok_all &= _chk(err_h3 is not None and "判不了" in err_h3
+                       and "!= 期望" not in err_h3
+                       and _sha256_file(res_h["path"]) == before_h
+                       and os.path.exists(res_h["backup"]),
+                       "P1 牙②i 非字符串真值 backup_sha256=123 ⇒ 「判不了」且目标不动、备份仍在"
+                       "（删 isinstance 半 ⇒ 误诊成 sha 不匹配）", err_h3)
 
         # ---- P1 牙②d：`backup_sha256` 必须被**执行**——篡改备份内容 ⇒ restore 拒绝且目标不动
         tamper_env = _mk_env("EnvirTamper", "\n")
