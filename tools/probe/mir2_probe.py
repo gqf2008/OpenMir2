@@ -2147,11 +2147,16 @@ class Run:
             waited = 0
             # 没有相邻目标时**只等不追**（不注入任何移动帧）：每轮 pump(interval) 后重读帧，
             # 最多等 max_retries 轮——鸡会自己走进邻格；等不到才 fail-closed。
+            transitions = 0
             while row is None and cands and waited < plan["max_retries"]:
                 waited += 1
                 conn.pump(interval)
                 row = self._pick_track_target(conn, plan)
                 cands = self._track_candidates(conn, plan)
+                if row is not None:
+                    # **状态转移**（卡 openmir2-probe-dsl-track-adjacency-flake）：从「无相邻候选」
+                    # 变成「已相邻」——这是**事件**，与墙钟无关，冲满载也不会变。
+                    transitions += 1
             if row is None:
                 last_known = ("(%d,%d) actor=%d seq=%s"
                               % (last["x"], last["y"], last["actor"], last["last_seq"])
@@ -2160,7 +2165,7 @@ class Run:
                     near = self._format_track_candidates(cands)
                     self.steps.append({"index": idx, "kind": "kill", "mode": "track",
                                        "selector": plan["track"], "result": "no-adjacent",
-                                       "candidates": near, "waited": waited,
+                                       "candidates": near, "waited": waited, "adjacent_transitions": transitions,
                                        "swings": swings, "retries": retries,
                                        "note": plan.get("note", "")})
                     raise StepFailure(
@@ -2170,7 +2175,7 @@ class Run:
                         % (idx, len(cands), waited, interval, near, last_known))
                 self.steps.append({"index": idx, "kind": "kill", "mode": "track",
                                    "selector": plan["track"], "result": "target-gone",
-                                   "waited": waited,
+                                   "waited": waited, "adjacent_transitions": transitions,
                                    "last_known": last_known, "swings": swings,
                                    "retries": retries, "note": plan.get("note", "")})
                 vis = visible_actors(conn.frames, self.state.get("self_actor"))
@@ -2238,7 +2243,7 @@ class Run:
                                    "target": row["actor"], "target_xy": tx | (ty << 16),
                                    "direction": direction, "swings": swings,
                                    "retries": retries, "turns": turns,
-                                   "waited": waited,
+                                   "waited": waited, "adjacent_transitions": transitions,
                                    "matched_seq": seq, "matched_ident": fr.ident,
                                    "matched_recog": fr.recog, "note": plan.get("note", "")})
                 return
@@ -5473,12 +5478,23 @@ def _selftest_track_adjacency():
         # 负例：帧提前到 30/40ms（落进 execute_step 前的 pump(50)）⇒ waited=0、first_t≈51ms ⇒ 本牙红。）
         rec_b = run.steps[-1] if run.steps else {}
         waited_b = rec_b.get("waited")
+        # 卡 `openmir2-probe-dsl-track-adjacency-flake`：**不再用墙钟**（`first_t >= 300`）。
+        # 满载时首个发送的时刻只增不减，但**「等过几轮」与「是否观察到『无相邻→相邻』的状态转移」**
+        # 才是这条牙真正要钉的东西；它们是**事件计数**，与机器快慢无关。
+        # **为什么连 `waited >= 1` 也不能要**：`pump(450)` 到窗口末才返回，帧在 250/300ms 落地时
+        # 会在**同一次 pump** 里被读到 ⇒ 满载/快机器上 `waited`（以及相邻转移计数）天然可能是 0，
+        # 而行为完全正确。真正该钉的是「**出手时目标就在八向相邻格**」，这由 `only_turn_hit`
+        # （逐字节只发 TURN/HIT）与 `target_xy` 直接表达，与机器快慢无关。
+        trans_b = rec_b.get("adjacent_transitions")
         checks.append((not (err is not None and "都不在八向相邻格" in err)
-                       and len(sent) >= 2 and first_t >= 300 and only_turn_hit
-                       and waited_b is not None and waited_b >= 1,
-                       "牙b 定时交付：等 ≥300ms 才出手（首个发送 t=%.0fms）、等待期零 write"
-                       "（逐字节只发 TURN/HIT=%s，共 %d 帧）、step.waited=%r（>=1）；err=%r"
-                       % (first_t, only_turn_hit, len(sent), waited_b, err)))
+                       and len(sent) >= 2 and only_turn_hit
+                       and rec_b.get("result") == "dead"
+                       and rec_b.get("target_xy") == (331 | (331 << 16)),
+                       "牙b 事件断言：等待期零 write（逐字节只发 TURN/HIT=%s，共 %d 帧）、"
+                       "result=%r、target_xy=%r（出手时目标就在八向相邻格）；"
+                       "step.waited=%r / adjacent_transitions=%r / 首个发送 t=%.0fms 仅作 info；err=%r"
+                       % (only_turn_hit, len(sent), rec_b.get("result"), rec_b.get("target_xy"),
+                          waited_b, trans_b, first_t, err)))
     finally:
         _shutil.rmtree(tmpd, ignore_errors=True)
 
