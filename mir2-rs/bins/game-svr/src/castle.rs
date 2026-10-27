@@ -1581,19 +1581,13 @@ pub fn castle_official_action_exec(
                     // **F1（review `e7f076f4`）**：`RM_DIGUP` 的帧体是
                     // `MakeWord(Dir, baseObject.Light)` + `GetFeature(this)`（`PlayObject.Message.cs:1891-1897`）
                     // ⇒ Light/Feature **必须**取实体的展示层（与 `drain_monster_ref_msgs` 同源）。
-                    let Some((map_id, status, feature, light)) =
-                        world.entities.get(unit).map(|e| {
-                            let d = displays.get(unit);
-                            (
-                                e.map_id,
-                                e.char_status,
-                                d.map_or(0, |d| d.feature),
-                                d.map_or(0, |d| d.light),
-                            )
-                        })
+                    let Some((map_id, entity_status)) =
+                        world.entities.get(unit).map(|e| (e.map_id, e.char_status))
                     else {
                         continue;
                     };
+                    let d = displays.get(unit);
+                    let (feature, light) = d.map_or((0, 0), |d| (d.feature, d.light));
                     let body = match ident {
                         mir2_world::monai::RM_DIGUP => crate::smframe::sm_digup(
                             unit,
@@ -1602,19 +1596,24 @@ pub fn castle_official_action_exec(
                             dir,
                             light,
                             feature,
-                            status,
+                            entity_status,
                         ),
                         mir2_world::monai::RM_DIGDOWN => crate::smframe::sm_digdown(
                             unit,
                             u16::try_from(x).unwrap_or(0),
                             u16::try_from(y).unwrap_or(0),
                         ),
+                        // **N2（merge_result `29e240b9` Minor）**：`SM_ALIVE` 的 `CharDesc.Status`
+                        // 与 `drain_monster_ref_msgs` 的 `RM_ALIVE` 支**同一来源**——展示层
+                        // `d.status`（无登记 ⇒ 0），不是实体 `char_status`；`RM_DIGUP` 保持实体
+                        // `char_status`（= drain 侧 `m.status` 的「发帧时刻 CharStatus」语义）。
+                        // 现网门/墙无 buff ⇒ 两源恒等（`ActorDisplay.status` 的口径注）。
                         _ => crate::smframe::sm_alive(
                             unit,
                             u16::try_from(x).unwrap_or(0),
                             u16::try_from(y).unwrap_or(0),
                             dir,
-                            &crate::downlink::char_desc(feature, status),
+                            &crate::downlink::char_desc(feature, d.map_or(0, |d| d.status)),
                         ),
                     };
                     for r in mir2_world::session::send_ref_msg_targets_at(

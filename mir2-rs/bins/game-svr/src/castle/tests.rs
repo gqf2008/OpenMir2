@@ -1761,3 +1761,118 @@ fn castle_official_action_repair_wall_emits_wall_frames_after_60s() {
         "帧的 Recog 必须是**墙**的 ActorId（不是门 {door_actor}）"
     );
 }
+
+/// **N2（merge_result `29e240b9` Minor）**：emit 的 `SM_ALIVE`（墙修复的 `RefStatus` 帧）
+/// `CharDesc.Status` 与 `drain_monster_ref_msgs` 的 `RM_ALIVE` 支**同一来源**——展示层
+/// `d.status`（无登记 ⇒ 0），不是实体 `char_status`。两格，且故意让实体源非零（`0x1234`）
+/// 使两个源可分：
+/// ① 展示层登记 `status=0x77` ⇒ 帧尾 Status=`0x77`；
+/// ② 完全不登记展示层 ⇒ Status=`0`（不得回落实体 `char_status`）。
+///
+/// 牙：把 RM_ALIVE 支的 status 改回实体 `char_status` ⇒ 两格都 RED（N2 的钉）。
+#[test]
+fn castle_official_action_alive_status_uses_display_layer() {
+    // —— 格①：展示层登记了 status（与实体源可分）——
+    let (mut world, _door, a_id) = action_world();
+    let mut wall = mir2_world::Entity::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    wall.race = 111;
+    wall.char_status = 0x1234; // 实体源故意非零 ⇒ 改回实体源的变异必被识破
+    let wall_actor = world.add_entity(wall);
+    world.castles[0].left_wall = Some(mir2_world::castle::CastleUnit {
+        entity_id: Some(wall_actor),
+        x: 4,
+        y: 5,
+        hp: 5,
+        max_hp: 10,
+        struck_tick: 0,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    let mut displays = downlink::DisplayTable::new();
+    displays.set(
+        wall_actor,
+        downlink::ActorDisplay {
+            dir: 0,
+            light: 0,
+            feature: 0x55,
+            feature_ex: 0,
+            status: 0x77,
+            name_color: 255,
+            show_name: Vec::new(),
+        },
+    );
+    let out = super::castle_official_action_exec(
+        &mut world,
+        &displays,
+        0,
+        100_000,
+        "@repairwallnow1",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    let alive = out
+        .frames
+        .iter()
+        .find(|(r, b)| {
+            *r == a_id
+                && i32::from_le_bytes([b[0], b[1], b[2], b[3]]) == wall_actor
+                && u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_ALIVE
+        })
+        .map(|(_, b)| b.clone())
+        .expect("墙修复必须出 SM_ALIVE");
+    let tail = mir2_protocol::edcode::decode(&alive[12..]);
+    assert_eq!(
+        i32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]),
+        0x77,
+        "N2：SM_ALIVE 的 CharDesc.Status 取展示层 d.status（与 drain_monster_ref_msgs 同源）"
+    );
+    assert_eq!(
+        i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]),
+        0x55,
+        "Feature 仍取展示层（F1 口径不变）"
+    );
+
+    // —— 格②：展示层未登记 ⇒ Status=0（不得回落实体 char_status）——
+    let (mut world2, _door2, a_id2) = action_world();
+    let mut wall2 = mir2_world::Entity::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    wall2.race = 111;
+    wall2.char_status = 0x1234;
+    let wall_actor2 = world2.add_entity(wall2);
+    world2.castles[0].left_wall = Some(mir2_world::castle::CastleUnit {
+        entity_id: Some(wall_actor2),
+        x: 4,
+        y: 5,
+        hp: 5,
+        max_hp: 10,
+        struck_tick: 0,
+        ..mir2_world::castle::CastleUnit::default()
+    });
+    let out2 = super::castle_official_action_exec(
+        &mut world2,
+        &downlink::DisplayTable::new(),
+        0,
+        100_000,
+        "@repairwallnow1",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    let alive2 = out2
+        .frames
+        .iter()
+        .find(|(r, b)| {
+            *r == a_id2
+                && i32::from_le_bytes([b[0], b[1], b[2], b[3]]) == wall_actor2
+                && u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_ALIVE
+        })
+        .map(|(_, b)| b.clone())
+        .expect("无展示层登记也要出 SM_ALIVE");
+    let tail2 = mir2_protocol::edcode::decode(&alive2[12..]);
+    assert_eq!(
+        i32::from_le_bytes([tail2[4], tail2[5], tail2[6], tail2[7]]),
+        0,
+        "N2 退化格：展示层未登记 ⇒ Status=0，不得回落实体 char_status"
+    );
+}

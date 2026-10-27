@@ -28,6 +28,9 @@
   `SM_DIGUP`/`SM_DIGDOWN` 按 `SendRefMsg` 的 ±`SendRefMsgRange` 格扫出帧；**不回 `@main`**（F1：oracle 只调
   `MainDoorControl`，`@main` 由脚本 `goto` 产生，再回一页会重复）。
 - **repair**：`official_repair_door/wall(price, now_tick)` → 结果文案（成功/不需要 = 绿，资金不足 = 红）+ 事件帧；回 `@main`。
+- **N2 统一（merge_result `29e240b9` Minor，follow-up）**：emit 的 `SM_ALIVE` `CharDesc.Status`
+  与 `drain_monster_ref_msgs` 的 RM_ALIVE 支**同一来源**（展示层 `d.status`，无登记 ⇒ 0）；
+  `RM_DIGUP` 保持实体 `char_status`（= drain 侧 `m.status` 的发帧时刻语义）。现网门/墙无 buff ⇒ 两源恒等。
 - **hire**：`HireUnreachable` ⇒ `log=Some("N5")`，零帧零状态（照搬）。
 - 未命中标签 ⇒ `None`（oracle switch 无该分支）。
 - **N1 统一（reviewer-20）**：`handle_click_npc_cmd` 的 `Castle` 解析改为 **sticky 优先**——
@@ -42,11 +45,14 @@
 | `castle_official_action_repair_gold_and_messages` | 资金不足 ⇒ 红「城内资金不足!!!」且不扣款；钱够+满血 ⇒ 绿「城门不需要修理!!!」且不扣款 |
 | `castle_official_action_repair_wall_emits_wall_frames_after_60s`（返工新增） | 受损左墙（`(4,5)`，**与门是两个不同 actor**）+ `StruckTick=0` ⇒ `修理成功。` 绿、扣 `RepairWallPrice`、**帧的 Recog = 墙的 ActorId**（F2：只查主门会整帧丢失） |
 | `castle_official_action_hire_is_n5_noop` | `@hirearchernow1/12`、`@hireguardnow3` ⇒ 零帧/零提示/不回 @main/`log=N5`；`@main` ⇒ `None` |
+| `castle_official_action_alive_status_uses_display_layer`（N2 follow-up 新增） | emit 的 `SM_ALIVE`（墙修复帧）`CharDesc.Status` 取**展示层** `d.status`（与 `drain_monster_ref_msgs` 的 RM_ALIVE 支同源）；实体 `char_status` 故意给 `0x1234` 使两源可分 ⇒ 登记态读 `0x77`、未登记态读 `0` |
 
 **牙（各还原后 `castle.rs` sha256 与备份逐字节相同）**：
 ① `let close = matches!(..., CloseMainDoor)` 改成 `OpenMainDoor` ⇒ open/close 用例 RED；
 ② open/close 分支的 `say_main` 改回 `true` ⇒ open/close 用例 RED（F1 的钉）；
-③ `castle_unit_entity_at` 收回「只查 `main_door`」⇒ 墙修复用例 RED（F2 的钉）。
+③ `castle_unit_entity_at` 收回「只查 `main_door`」⇒ 墙修复用例 RED（F2 的钉）；
+④ emit 的 `light`/`feature` 改回硬编码 0 ⇒ open/close 用例 RED（返工 2 F1 的钉；reviewer 实测两颗各红一次）；
+⑤ RM_ALIVE 支的 status 改回实体 `char_status` ⇒ N2 用例两格都 RED（N2 的钉）。
 
 ## 4. 登记（未实现 / 不可达）
 
