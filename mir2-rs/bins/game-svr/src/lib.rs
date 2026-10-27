@@ -29655,6 +29655,349 @@ mod tests {
         );
     }
 
+    /// **A1（卡 `openmir2-castle-merchant-frame-order-tooth`，tier=L）**：**同一 tick** 里
+    /// 「商人 A 进入战中（false→true ⇒ `RM_DISAPPEAR`，入队优先级 125）」与「商人 B 退出战中
+    /// （true→false ⇒ `RM_HIT`，优先级 20）」并存时，同一近处观察者收到的帧序必须是
+    /// **`SM_HIT(14)` 先、`SM_DISAPPEAR(30)` 后**（`drain_run_downlinks_with_magic` 里
+    /// `drain_npc_merchant_hits` 在 `drain_merchant_disappears` 之前）。
+    ///
+    /// 断言顺序：**先数条数（恰 1+1）再比序**——缺一帧时序断言不得空过（A3 前半）。
+    ///
+    /// 牙（A2，红检实测）：只把 `drain_merchant_disappears(...)` 挪到
+    /// `drain_npc_merchant_hits(...)` 之前（不改任何逻辑）⇒ 条数仍 1+1、**序断言红**；
+    /// 还原即绿。禁止源码文本判据（本用例走生产排水函数全链路）。
+    #[test]
+    fn castle_merchant_frame_order_hit_before_disappear_same_tick() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(100, 100);
+        // 种子钉死：各次 `Run` 的 RNG 支（`Random(50)==0` ⇒ TURN/HIT 噪声）必须安静，
+        // 否则 1+1 条数断言失效——条数断言本身就是噪声探测器（红 = 种子漂移，不是实现坏）。
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        let mk_spawn = |name: &str, y: i32| MerchantSpawn {
+            name: name.to_string(),
+            x: 10,
+            y,
+            map_id: 0,
+            state: MerchantState::new(
+                name.to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                true, // `CastleMerchant`（`LocalDB.cs:461-464`）
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            // A 在 y=11、B 在 y=9 ⇒ 都在观察者 p(10,10) 的 ±`SendRefMsgRange` 内。
+            vec![mk_spawn("商人A", 11), mk_spawn("商人B", 9)],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 2);
+        assert!(failed.is_empty());
+        let ids = world.merchant_ids_sorted();
+        let (a_id, b_id) = (ids[0], ids[1]);
+        assert_ne!(a_id, b_id, "两个商人必须是两个实体");
+        assert!(world.set_merchant_castle_index(a_id, Some(0)));
+        assert!(world.set_merchant_castle_index(b_id, Some(0)));
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("up", "p", 1, 0, 901, p));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
+            let st = world
+                .entities
+                .get_mut(id)
+                .and_then(|e| e.merchant.as_mut())
+                .expect("商人状态在");
+            st.castle_under_war = war; // `Castle.UnderWar` 快照
+            st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
+        };
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut out: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                out.push((socket, body));
+            }
+            out
+        };
+        let idents = |frames: &[(i32, Vec<u8>)], ident: u16| -> Vec<Vec<u8>> {
+            frames
+                .iter()
+                .filter(|(_, b)| {
+                    mir2_protocol::frame::CommandMessage::from_bytes(b)
+                        .is_some_and(|c| c.ident == ident)
+                })
+                .map(|(_, b)| b.clone())
+                .collect()
+        };
+
+        // tick0：B 先**真实**进入战中（`fixed_hide_mode` 置位）——它的消失帧不入 record、
+        // 不排水；下一拍才有「B true→false」可转，且 boot 拍的 RNG 流位置就此钉死。
+        set_war(&mut world, b_id, true);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let boot = world.merchant_tick();
+        assert!(
+            boot.disappears.iter().any(|(id, _)| *id == b_id),
+            "boot 拍：B 进入战中（其消失帧本拍不排水）"
+        );
+        assert!(
+            !boot.disappears.iter().any(|(id, _)| *id == a_id),
+            "boot 拍：A 不转态"
+        );
+
+        // **同一拍**：A false→true（DISAPPEAR）＋ B true→false（HIT）。
+        set_war(&mut world, a_id, true);
+        set_war(&mut world, b_id, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let both = world.merchant_tick();
+        assert_eq!(both.hits, vec![b_id], "B 退出战中 ⇒ 恰一条 RM_HIT");
+        assert_eq!(both.disappears.len(), 1, "恰 A 一个商人进入战中");
+        assert_eq!(both.disappears[0].0, a_id, "消失对象 = A 的 ActorId");
+        let rec = mir2_world::TickRecord {
+            merchant_hits: both.hits.clone(),
+            merchant_disappears: both.disappears.clone(),
+            ..Default::default()
+        };
+        let _ = drain_run_downlinks(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            12,
+            0,
+            0,
+            false,
+        );
+        let frames = take(&mut rx0);
+        let to_p: Vec<(i32, Vec<u8>)> = frames.iter().filter(|(s, _)| *s == 901).cloned().collect();
+        // A1 第一半：**条数**（先于序断言；缺一帧 ⇒ 这里红，序断言不得空过）。
+        let hits = idents(&to_p, mir2_protocol::messages::SM_HIT);
+        let diss = idents(&to_p, mir2_protocol::messages::SM_DISAPPEAR);
+        assert_eq!(hits.len(), 1, "恰 1 条 SM_HIT(14)（B 退出战中）");
+        assert_eq!(diss.len(), 1, "恰 1 条 SM_DISAPPEAR(30)（A 进入战中）");
+        // A1 第二半：**序** —— `RM_HIT`(20) 先于 `RM_DISAPPEAR`(125)。
+        let pos_of = |ident: u16| -> usize {
+            to_p.iter()
+                .position(|(_, b)| {
+                    mir2_protocol::frame::CommandMessage::from_bytes(b)
+                        .is_some_and(|c| c.ident == ident)
+                })
+                .expect("帧在场（条数断言已过）")
+        };
+        let (hit_pos, dis_pos) = (
+            pos_of(mir2_protocol::messages::SM_HIT),
+            pos_of(mir2_protocol::messages::SM_DISAPPEAR),
+        );
+        assert!(
+            hit_pos < dis_pos,
+            "帧序必须 SM_HIT 先、SM_DISAPPEAR 后（优先级 20 < 125）；实际 hit@{hit_pos} dis@{dis_pos}"
+        );
+    }
+
+    /// **A3（同卡）**：退化三格**显式计数**，不得空过：
+    /// ① 只 A 转（record 只有 disappears）⇒ 1 DISAPPEAR / 0 HIT；
+    /// ② 只 B 转（record 只有 hits）⇒ 1 HIT / 0 DISAPPEAR；
+    /// ③ 双不转（record 空）⇒ 观察者 0 帧。
+    ///
+    /// 同一世界按相 ph 级推进（每拍只允许一个转态），RNG 噪声由条数断言探掉。
+    #[test]
+    fn castle_merchant_frame_order_degenerate_cells_count_explicit() {
+        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(100, 100);
+        world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        let mk_spawn = |name: &str, y: i32| MerchantSpawn {
+            name: name.to_string(),
+            x: 10,
+            y,
+            map_id: 0,
+            state: MerchantState::new(
+                name.to_string(),
+                "0".to_string(),
+                0,
+                16,
+                100,
+                true,
+                false,
+                0,
+                MerchantFlags::default(),
+                Vec::new(),
+                Vec::new(),
+                0,
+            ),
+        };
+        let mut displays = downlink::DisplayTable::new();
+        let (kept, failed, _book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            vec![mk_spawn("商人A", 11), mk_spawn("商人B", 9)],
+            Vec::new(),
+            &mut displays,
+        );
+        assert_eq!(kept, 2);
+        assert!(failed.is_empty());
+        let ids = world.merchant_ids_sorted();
+        let (a_id, b_id) = (ids[0], ids[1]);
+        assert!(world.set_merchant_castle_index(a_id, Some(0)));
+        assert!(world.set_merchant_castle_index(b_id, Some(0)));
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("up", "p", 1, 0, 901, p));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+
+        let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
+            let st = world
+                .entities
+                .get_mut(id)
+                .and_then(|e| e.merchant.as_mut())
+                .expect("商人状态在");
+            st.castle_under_war = war;
+            st.run_tick = -1000;
+        };
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut out: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                out.push((socket, body));
+            }
+            out
+        };
+        let idents = |frames: &[(i32, Vec<u8>)], ident: u16| -> Vec<Vec<u8>> {
+            frames
+                .iter()
+                .filter(|(_, b)| {
+                    mir2_protocol::frame::CommandMessage::from_bytes(b)
+                        .is_some_and(|c| c.ident == ident)
+                })
+                .map(|(_, b)| b.clone())
+                .collect()
+        };
+        let drain_tick = |world: &mut mir2_world::World,
+                          hits: Vec<i32>,
+                          disappears: Vec<(i32, Vec<i32>)>,
+                          sessions: &mut HashMap<String, SessionGround>,
+                          rx: &mut mpsc::UnboundedReceiver<SimToGate>,
+                          catalog: &dyn game_svr::ability::ItemCatalog|
+         -> Vec<(i32, Vec<u8>)> {
+            let rec = mir2_world::TickRecord {
+                merchant_hits: hits,
+                merchant_disappears: disappears,
+                ..Default::default()
+            };
+            let _ = drain_run_downlinks(
+                &rec, world, &displays, &online, sessions, &gates, catalog, 12, 0, 0, false,
+            );
+            let frames = take(rx);
+            frames.iter().filter(|(s, _)| *s == 901).cloned().collect()
+        };
+
+        // boot：B 真实进入战中（帧不排水）。
+        set_war(&mut world, b_id, true);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let boot = world.merchant_tick();
+        assert!(boot.disappears.iter().any(|(id, _)| *id == b_id));
+
+        // 格①：只 A 转 ⇒ 1 DISAPPEAR / 0 HIT。
+        set_war(&mut world, a_id, true);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let c1 = world.merchant_tick();
+        assert_eq!(c1.disappears.len(), 1, "格①：恰 A 转");
+        assert!(c1.hits.is_empty(), "格①：无 HIT（A 进战不发 RM_HIT）");
+        let to_p = drain_tick(
+            &mut world,
+            c1.hits.clone(),
+            c1.disappears.clone(),
+            &mut sessions,
+            &mut rx0,
+            &catalog,
+        );
+        assert_eq!(
+            idents(&to_p, mir2_protocol::messages::SM_DISAPPEAR).len(),
+            1,
+            "格①：1 DISAPPEAR"
+        );
+        assert_eq!(
+            idents(&to_p, mir2_protocol::messages::SM_HIT).len(),
+            0,
+            "格①：0 HIT"
+        );
+
+        // 格②：只 B 转 ⇒ 1 HIT / 0 DISAPPEAR。
+        set_war(&mut world, b_id, false);
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let c2 = world.merchant_tick();
+        assert_eq!(c2.hits, vec![b_id], "格②：恰 B 退战");
+        assert!(c2.disappears.is_empty(), "格②：无 DISAPPEAR");
+        let to_p = drain_tick(
+            &mut world,
+            c2.hits.clone(),
+            c2.disappears.clone(),
+            &mut sessions,
+            &mut rx0,
+            &catalog,
+        );
+        assert_eq!(
+            idents(&to_p, mir2_protocol::messages::SM_HIT).len(),
+            1,
+            "格②：1 HIT"
+        );
+        assert_eq!(
+            idents(&to_p, mir2_protocol::messages::SM_DISAPPEAR).len(),
+            0,
+            "格②：0 DISAPPEAR"
+        );
+
+        // 格③：双不转 ⇒ record 空 ⇒ 观察者 0 帧。
+        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        let c3 = world.merchant_tick();
+        assert!(
+            c3.hits.is_empty() && c3.disappears.is_empty(),
+            "格③：双稳态不得再转（hits={:?} disappears={:?}）",
+            c3.hits,
+            c3.disappears
+        );
+        let to_p = drain_tick(
+            &mut world,
+            c3.hits.clone(),
+            c3.disappears.clone(),
+            &mut sessions,
+            &mut rx0,
+            &catalog,
+        );
+        assert!(to_p.is_empty(), "格③：观察者 0 帧，实际 {to_p:?}");
+    }
+
     /// **判据（卡 `openmir2-castle-merchant-disappear-downlink`，tier=R）**：新通道与既有的
     /// AOI 消失支**不会**对同一对象各发一条。
     ///
