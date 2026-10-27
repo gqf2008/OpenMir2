@@ -986,6 +986,44 @@ def selftest(args):
         ok_all &= _chk(ok_eol, "P1 牙②b 换行跟随原文件（CRLF↔CRLF、LF↔LF，原文件字节留在尾部）",
                        (res_lf.get("eol"), res_crlf.get("eol")))
 
+        # ---- P1 牙②c（卡 `openmir2-mirflow-newline-backup-tooth`）：**无尾换行**的夹具。
+        #      前插后原文尾部字节必须保留**并补一个 nl**；且与 card_window 的布局机判交叉一致。
+        env_noeol = _mk_env("EnvirNoEOL", "")
+        noeol_path = os.path.join(env_noeol, "MonGen.txt")
+        with open(noeol_path, "rb") as fh:
+            orig_noeol = fh.read()
+        res_noeol = prepend_mongen(env_noeol, spec, dry_run=False)
+        with open(noeol_path, "rb") as fh:
+            raw_noeol = fh.read()
+        ok_tail = (orig_noeol and not orig_noeol.endswith(b"\n")
+                   and raw_noeol.endswith(orig_noeol + b"\n")
+                   and res_noeol.get("eol") == "LF")
+        # 交叉判：直接用 card_window 的 `_mongen_fixture_layout`（同口径的第二意见）。
+        import sys as _sys
+        _cw_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                               "conformance")
+        if _cw_dir not in _sys.path:
+            _sys.path.insert(0, _cw_dir)
+        import card_window as _cw
+        ok_layout, why_layout = _cw._mongen_fixture_layout(orig_noeol, raw_noeol,
+                                                           res_noeol["lines"])
+        ok_all &= _chk(ok_tail and ok_layout,
+                       "P1 牙②c 无尾换行：尾部字节保留 + 补 nl，且 card_window 布局机判一致",
+                       (ok_tail, why_layout))
+
+        # ---- P1 牙②d：`backup_sha256` 必须被**执行**——篡改备份内容 ⇒ restore 拒绝且目标不动
+        tamper_env = _mk_env("EnvirTamper", "\n")
+        res_t = prepend_mongen(tamper_env, spec, dry_run=False)
+        before_tamper = _sha256_file(res_t["path"])
+        with open(res_t["backup"], "ab") as fh:
+            fh.write(b"\n#tampered\n")
+        err_t = restore_mongen(res_t)
+        after_tamper = _sha256_file(res_t["path"])
+        ok_all &= _chk(err_t is not None and "备份" in err_t
+                       and after_tamper == before_tamper,
+                       "P1 牙②d 备份被篡改 ⇒ restore 拒绝（报错）且目标文件一个字节没动",
+                       (err_t, after_tamper == before_tamper))
+
         # ---- P4 牙⑦：两侧快照 ⇒ 金币差/同一 StdIndex/槽消失 三事实 pass
         def _mk_snap(dirp, gold, rows):
             os.makedirs(dirp, exist_ok=True)
@@ -1193,9 +1231,22 @@ def prepend_mongen(envir_root, specs, dry_run=True):
 
 
 def restore_mongen(res):
-    """按证据把 MonGen.txt 还原成写前字节，并核对 sha256。"""
+    """按证据把 MonGen.txt 还原成写前字节，并核对 sha256。
+
+    卡 `openmir2-mirflow-newline-backup-tooth`：还原**之前**先核备份本身的 sha256
+    （`backup_sha256`，缺省回落到 `before_sha256`）——备份被改动时**拒绝还原**并报错，
+    绝不把坏字节写回目标文件。
+    """
     if not res or res.get("action") != "prepended":
         return None
+    backup = res.get("backup")
+    if not backup or not os.path.isfile(backup):
+        return "备份缺失：%r（拒绝还原）" % (backup,)
+    want = res.get("backup_sha256") or res.get("before_sha256")
+    got_backup = _sha256_file(backup)
+    if got_backup != want:
+        return ("备份 sha256=%s != 期望 %s（备份已被改动，拒绝还原；目标文件未动）"
+                % (got_backup, want))
     with open(res["backup"], "rb") as fh:
         original = fh.read()
     with open(res["path"], "wb") as fh:
