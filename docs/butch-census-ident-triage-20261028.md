@@ -91,7 +91,7 @@ python -I -B E:/tmp/dev-2/build_butch_triage.py
 | 无名随机转身（body_len=11） | 12 | 0 |
 | 合计 | 40 | 28 |
 
-12 条无名 TURN 每条都紧随同 recog 的 41，命中既有
+12 条无名 TURN 每条之后都紧随一条同 recog 的 41，命中既有
 `rules.json.random_branch_pairs`；报告明确给出 `oracle_pairs=12 / rust_pairs=0 /
 shape_mismatch=false`。摘出后 28 条具名出现帧两侧都在，body SHA 也同为
 `d82d8b52…ad73`。
