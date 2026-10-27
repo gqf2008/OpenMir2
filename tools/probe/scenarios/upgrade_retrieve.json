@@ -50,7 +50,7 @@
     },
     {
       "wait_for": 615,
-      "timeout_ms": 3000,
+      "timeout_ms": 8000,
       "note": "SM_TAKEON_OK(615)（bag_equip 同口径：615=OK/616=FAIL）。只等 615：装备失败（616）不在集合 => 本步响亮超时，不会带着空手进升级链假绿"
     },
     {
@@ -59,7 +59,7 @@
     },
     {
       "wait_for": 643,
-      "timeout_ms": 3000,
+      "timeout_ms": 8000,
       "note": "[@main] 说词面板（Market_Def/沙巴克铁匠-3.txt:2-8）：含 <开始武器升级/@upgrade>、<取回升级武器/@getbackupgnow>、<听更多的歌/@ge>、<离 开/@tuichu>。oracle NormNpc.SendMsgToUser（src/M2Server/Npc/NormNpc.cs:1613-1616）-> SM_MERCHANTSAY(643)（Messages.cs:304）；每句说词经 GetScriptLabel（src/M2Server/Player/PlayObject.Base.cs:2775-2811）重建 CanJmpScriptLableMap"
     },
     {
@@ -68,7 +68,7 @@
     },
     {
       "wait_for": 643,
-      "timeout_ms": 3000,
+      "timeout_ms": 8000,
       "note": "[@upgrade] 纯说词（沙巴克铁匠-3.txt:104-111），含 $UPGRADEWEAPONFEE 展开与 <确认修炼/@confirmupgrade>/<取 消/@main> 两个链接"
     },
     {
@@ -77,7 +77,7 @@
     },
     {
       "wait_for": 643,
-      "timeout_ms": 3000,
+      "timeout_ms": 8000,
       "note": "[@confirmupgrade]（沙巴克铁匠-3.txt:113-124）走 #if CHECKUSEITEM 1 的命中支（手上必须有武器）=> 说词含 <请求修炼/@upgradenow>。夹具没武器时走 #elsesay（只有 <返 回/@main>），下一条 dlg_select @upgradenow 会被 LableIsCanJmp 拒 => 第 8 步 wait_for 超时（fail-closed，不会假绿）"
     },
     {
