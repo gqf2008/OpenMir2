@@ -81,7 +81,7 @@
 2. **战斗完全没发生（不是「有攻击但无目标」）**：`attack_1..3` 三次点击产生的 c2s 只有走/跑（`3011`×7 / `3013`×6），**没有任何 `3014 CM_HIT`**；`game-svr.out.log` 的 ident 分布同样无 3014。⇒ **既没验证「怪物被打、掉血、死亡、尸体、挖肉」，也没验证「攻击帧本身发得出」**。本项由 `openmir2-mirflow-combat-pickup-stages` 的帧解析器发现（该卡 `verify_chunks`/证据评估），原文本条与第 3 行已订正。
 3. **`chunks.ndjson` 的 `sha256` 字段全为空串**：原始 bin 在，但逐块内容指纹缺失 ⇒ 拿它做「字节未变」断言的人会假绿。
 4. **`mir2_probe` 与客户端连的是同一个角色 `aaa`**，两次会话共用存档 ⇒ 快照前后差异同时包含「探针的一次小移动」与「客户端走路」；本轮结论不依赖位置差值的具体大小，但**谁移动了哪一段无法从快照单独区分**（日志可区分）。
-5. 服务端 WRN 一条：L373 `消失帧：观察者 actor=290 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)`——**未定性**，待查是否与 C# 同形。
+5. 服务端 WRN 一条：L373 `消失帧：观察者 actor=290 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)`——**已定性（原「未定性」订正）**：该 observer 是**非玩家自扫怪**（`monster_self_scans`：Guard/ArcherGuard/SlaveMonster/下属），本来就不在 `OnlineRegistry`，属预期噪声，**不是**玩家观察者丢帧；当时世界里的玩家只有 `aaa`(6496)。旧 WRN 文案是对所有观察者统一打的，已由卡 `openmir2-aoi-disappear-observer-scope`（tier=R）改为按 `HideObserverKind` 分流：非玩家自扫怪与 `PlayCloneObject` 只计数（DBG 带 observer id），**真玩家**缺失才保留 WRN + `missing_online`。
 
 ## 5. 机器状态恢复（DoD）
 

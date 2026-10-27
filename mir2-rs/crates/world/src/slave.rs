@@ -2273,6 +2273,9 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     let mut e = Entity::new(0, CLONE_NAME.to_string(), x, y);
     e.id = clone_id;
     e.race = ACTOR_RACE_PLAY;
+    // **卡 `openmir2-aoi-disappear-observer-scope`（N1）**：显式标记 PlayCloneObject
+    // （race=PLAY、!ghost、无真实会话）——AOI 消失帧观察者分类据此与真玩家区分。
+    e.is_clone = true;
     e.map_id = map_id;
     // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`（克隆体走 PlayObject ctor）。
     e.verify_tick = world.clock_ms;

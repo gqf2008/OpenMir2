@@ -138,7 +138,7 @@ pub use special_monster::{
 pub use world::{
     AutoGetExpState, BaseObjectMoveOutcome, Command, DigOutEvent, EntitySnapshot,
     ExtraAbilEventKind, ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView,
-    HomeMoveTarget, LampDuraChange, PassThroughHit, PassThroughOutcome, RouteCheck, RunStateExpiry,
-    SpaceMoveCastOutcome, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent,
-    WeaponUpgradeOutcome, World, TICK_INTERVAL_MS,
+    HideObserverKind, HomeMoveTarget, LampDuraChange, PassThroughHit, PassThroughOutcome,
+    RouteCheck, RunStateExpiry, SpaceMoveCastOutcome, StepOutcome, TickRecord, UEnhancerOutcome,
+    WeaponUpgradeEvent, WeaponUpgradeOutcome, World, TICK_INTERVAL_MS,
 };
