@@ -38,6 +38,10 @@ import re
 import subprocess
 import sys
 
+# 卡 `openmir2-entry-shape-dedupe`：两态兼容只留一处（`tools/collab/entryrefs.py`）
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "collab"))
+from entryrefs import EntryRefError, entry_of  # noqa: E402
+
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 MANIFEST_REL = "tools/window/run3-scenarios.json"
 SCEN_DIR_REL = "tools/probe/scenarios"
@@ -278,9 +282,14 @@ def read_collab(repo):
         except Exception:
             continue
         # **接缝（review C1）**：collab blob 是**扁平**的（顶层 actor/body/id/kind/parent/…），
-        # 没有 `entry` 包层；只有 `walgit collab thread` 的**视图**才有。两种都认。
-        ent = doc.get("entry") or doc
-        tid = ent.get("id") or doc.get("id")
+        # 没有 `entry` 包层；只有 `walgit collab thread` 的**视图**才有。
+        # 两态兼容统一走 `tools/collab/entryrefs.entry_of`（卡 `openmir2-entry-shape-dedupe`）——
+        # 形状不对时它抛 `EntryRefError`，这里按「不是条目」跳过（与原实现一致）。
+        try:
+            ent = entry_of(doc)
+        except EntryRefError:
+            continue
+        tid = ent.get("id")
         if not tid:
             continue
         known.add(tid)
@@ -579,14 +588,19 @@ def selftest():
              {"version": 1, "kind": "issue", "id": "card-x", "actor": "p",
               "parent": "", "sig": "", "ts": 1,
               "body": {"acceptance": ["see tools/probe/scenarios/fromcard.json"]}})
+        # 形状③：thread 视图**包层**（`{"entry": …}`）也必须解出同一份 entry
+        _put("refs/collab/inbox/p/card-x-w1",
+             {"entry": {"version": 1, "kind": "status", "id": "card-x", "actor": "p",
+                        "parent": "", "sig": "", "ts": 2, "body": {"status": "in-progress"}},
+              "oid": "f" * 40, "principal": "p", "verified": True})
         got, known2, n2 = read_collab(tmp)
         kinds = {k for _t, k, _b in got}
         bodies = [b for _t, _k, b in got if b]
-        check("接缝：扁平 blob 解出 kind", kinds == {"merge_result", "issue"}, kinds)
-        check("接缝：扁平 blob 解出 body", all(b for b in bodies) and len(bodies) == 2, bodies)
+        check("接缝：扁平 blob 解出 kind", kinds == {"merge_result", "issue", "status"}, kinds)
+        check("接缝：扁平 blob 解出 body", all(b for b in bodies) and len(bodies) == 3, bodies)
         check("接缝：refs_from_cards 能取到名字",
               set(refs_from_cards(got)) == {"fromcard"}, refs_from_cards(got))
-        check("接缝：扫描条数 = 2", n2 == 2, n2)
+        check("接缝：扫描条数 = 3（含包层 blob）", n2 == 3, n2)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

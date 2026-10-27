@@ -43,7 +43,9 @@ def entry_of(item):
         inner = item.get("entry")
         if isinstance(inner, dict):
             return inner
-        if item.get("kind"):
+        # 扁平形态必须**同时**有 `id` 与 `kind`（卡 `openmir2-entry-shape-dedupe` A3③）：
+        # 只有 `kind` 的对象既不是条目本身、也不是包装，按形状不对报错。
+        if item.get("id") and item.get("kind"):
             return item
     raise EntryRefError("条目形状不对（既不是 {entry: ...} 包装，也不是 entry 本身）：%r"
                         % (str(item)[:120],))
@@ -122,6 +124,20 @@ def selftest():
 
     def wrap(entry):
         return {"entry": entry, "oid": "f" * 40, "principal": "p", "verified": True}
+
+    # ---- `entry_of` 的四种形状（卡 `openmir2-entry-shape-dedupe` A3）----
+    flat = {"id": "card-x", "kind": "issue", "body": {"a": 1}}
+    chk(entry_of(flat) is flat, "形状①：扁平 blob（顶层 id/kind）⇒ 原样返回")
+    chk(entry_of(wrap(flat)) is flat, "形状②：thread 视图 {entry: …} ⇒ 返回内层")
+    chk(entry_of({"id": "card-y", "kind": "status"}) is not None,
+        "形状③：无包层但带 id+kind ⇒ 解出同一份 entry")
+    for bad in (None, 42, "x", {}, {"id": "only-id"}, {"kind": "only-kind"}):
+        try:
+            entry_of(bad)
+        except EntryRefError:
+            continue
+        raise AssertionError("形状④：%r 必须报错，不许静默返回空 dict" % (bad,))
+    chk(True, "形状④：既无 entry 也无 id/kind ⇒ EntryRefError（无静默空 dict）")
 
     # 正例
     item = wrap({"kind": "patch", "refs": {"base": good, "head": other}})

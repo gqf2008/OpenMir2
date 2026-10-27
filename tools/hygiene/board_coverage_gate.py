@@ -49,6 +49,10 @@ import json
 import os
 import subprocess
 import sys
+
+# 卡 `openmir2-entry-shape-dedupe`：两态兼容只留一处（`tools/collab/entryrefs.py`）
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "collab"))
+from entryrefs import EntryRefError, entry_of  # noqa: E402
 import time
 
 RUN_TIMEOUT = 120.0
@@ -142,19 +146,16 @@ def batch_entries(repo, shas):
 
 
 def _entry_of(item):
-    """Entry dict from an inbox blob.
+    """Entry dict from an inbox blob —— **委托** `tools/collab/entryrefs.entry_of`。
 
-    Inbox blobs are the signed entry itself; `walgit collab thread` wraps them
-    as ``{"entry": ..., "oid": ..., "verified": ...}``.  Accept both shapes.
+    两态兼容（扁平 blob / `{"entry": …}` 包装）只允许有一份实现：
+    `scenario_manifest_gate` 曾各写一份，结果那边按嵌套读、真实树主判据从未运行（规则 33）。
+    形状不对时 `entry_of` 抛 `EntryRefError`，本门按「无 entry」处理（返回 None，保持原判定口径）。
     """
-    if not isinstance(item, dict):
+    try:
+        return entry_of(item)
+    except EntryRefError:
         return None
-    inner = item.get("entry")
-    if isinstance(inner, dict):
-        return inner
-    if item.get("id") and item.get("kind"):
-        return item
-    return None
 
 
 def newest_by_thread(entries):
@@ -297,6 +298,14 @@ def _selftest_exit_wiring():
 
 
 def selftest():
+
+    # 卡 `openmir2-entry-shape-dedupe` A3：`_entry_of` 的四种形状（**委托**后仍一致）
+    _flat = {"id": "card-z", "kind": "issue", "body": {}}
+    assert _entry_of(_flat) is _flat, "扁平 blob 必须解出自身"
+    assert _entry_of({"entry": _flat, "oid": "f" * 40}) is _flat, "包层必须解出内层"
+    assert _entry_of({"id": "card-w", "kind": "status"}) is not None, "id+kind 无包层也必须解出"
+    for _bad in (None, 42, {}, {"id": "only-id"}, {"kind": "only-kind"}):
+        assert _entry_of(_bad) is None, "形状④ 必须返回 None（不许静默空 dict）：%r" % (_bad,)
     """Synthetic fixtures only — no repo, ledger or board required."""
     def item(thread, kind, ts, actor="a"):
         return {"entry": {"id": thread, "kind": kind, "ts": ts, "actor": actor}}
