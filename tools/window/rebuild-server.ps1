@@ -36,9 +36,42 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# 全局兜底：任何未捕获的终止错误（含将来有人删掉某段 try/catch）都必须 rc=2 + `RED:`，
+# 不得让脚本以 0 退出却留下旧 stamp。
+trap {
+  Write-Host ("RED: 未捕获异常：" + $_.Exception.Message)
+  exit 2
+}
+
 function Fail([string]$msg) {
   Write-Host ("RED: " + $msg)
   exit 2
+}
+
+# SHA256 用 .NET 直接算，**不依赖 `Get-FileHash`**：
+#   * Windows PowerShell 5.1 在本机 PSModulePath 缺 `Microsoft.PowerShell.Utility` 时会报
+#     `Get-FileHash is not recognized`（2026-10-27 窗口重建现场：构建成功但 stamp 没写成）；
+#   * `[System.Security.Cryptography.SHA256]::Create()` + `[IO.File]::Open` 在 5.1 与 7 都可用。
+# 任何异常都向上抛，由调用点转成 `Fail`（fail-closed），不得吞掉后继续写 stamp。
+function Get-Sha256Hex([string]$path) {
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = $null
+  try {
+    $stream = [System.IO.File]::Open(
+      $path,
+      [System.IO.FileMode]::Open,
+      [System.IO.FileAccess]::Read,
+      [System.IO.FileShare]::Read
+    )
+    $bytes = $sha.ComputeHash($stream)
+  } finally {
+    if ($null -ne $stream) { $stream.Dispose() }
+    $sha.Dispose()
+  }
+  if ($null -eq $bytes -or $bytes.Length -ne 32) {
+    throw ("ComputeHash 返回 " + $(if ($null -eq $bytes) { 'null' } else { $bytes.Length.ToString() + ' 字节' }) + "（应为 32）")
+  }
+  return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
 }
 
 if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
@@ -95,8 +128,24 @@ if (-not (Test-Path -LiteralPath $Exe -PathType Leaf)) {
 }
 
 # ---- sha256 / stamp ------------------------------------------------------
-$Sha = (Get-FileHash -LiteralPath $Exe -Algorithm SHA256).Hash.ToLowerInvariant()
-$Size = (Get-Item -LiteralPath $Exe).Length
+# fail-closed：size / sha256 任一失败 ⇒ rc=2 + `RED:`，**不写 stamp**（旧 stamp 留着也只能被
+# rc=2 显式判红，绝不允许「哈希失败但 exit 0」这种失效模式复活）。
+try {
+  $Size = [long](Get-Item -LiteralPath $Exe -ErrorAction Stop).Length
+} catch {
+  Fail ("读二进制大小失败：" + $Exe + " :: " + $_.Exception.Message)
+}
+if ($Size -le 0) {
+  Fail ("二进制大小为 0（不可作为构建产物）：" + $Exe)
+}
+try {
+  $Sha = Get-Sha256Hex $Exe
+} catch {
+  Fail ("SHA256 计算失败：" + $Exe + " :: " + $_.Exception.Message)
+}
+if ($Sha -notmatch '^[0-9a-f]{64}$') {
+  Fail ("SHA256 不是 64 位小写 hex（实际='" + $Sha + "'）：" + $Exe)
+}
 $CargoVer = ''
 $RustcVer = ''
 try { $CargoVer = ((& cargo --version 2>$null) -join ' ') } catch {}
@@ -121,13 +170,27 @@ if ($Plan) {
     cargo        = $CargoVer
     rustc        = $RustcVer
   }
-  $json = ($doc | ConvertTo-Json -Depth 4)
-  $utf8 = New-Object System.Text.UTF8Encoding($false)
-  $dir = Split-Path -Parent $Stamp
-  if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
-    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+  # fail-closed 写 stamp：先写临时文件再替换，写后回读核对；任一步失败 ⇒ rc=2。
+  # 绝不 swallow 后 exit 0（2026-10-27 失效模式：stamp 留旧 head/sha 却被当成功）。
+  $tmp = $Stamp + '.tmp-' + $PID
+  try {
+    $json = ($doc | ConvertTo-Json -Depth 4)
+    if ([string]::IsNullOrWhiteSpace($json)) { throw 'ConvertTo-Json 产出空串' }
+    $utf8 = New-Object System.Text.UTF8Encoding($false)
+    $dir = Split-Path -Parent $Stamp
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+      New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    }
+    [System.IO.File]::WriteAllText($tmp, $json + "`n", $utf8)
+    Move-Item -LiteralPath $tmp -Destination $Stamp -Force
+    $check = [System.IO.File]::ReadAllText($Stamp, $utf8) | ConvertFrom-Json
+    if ([string]$check.head -ne $Head) { throw ("回读 head='{0}' 与 git HEAD='{1}' 不一致" -f $check.head, $Head) }
+    if ([string]$check.sha256 -ne $Sha) { throw ("回读 sha256='{0}' 与计算值不一致" -f $check.sha256) }
+    if ([long]$check.size -ne $Size) { throw ("回读 size='{0}' 与文件字节={1} 不一致" -f $check.size, $Size) }
+  } catch {
+    if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    Fail ("写 stamp 失败：" + $Stamp + " :: " + $_.Exception.Message)
   }
-  [System.IO.File]::WriteAllText($Stamp, $json + "`n", $utf8)
   Write-Host ("BUILD_STAMP " + $Stamp)
 }
 
