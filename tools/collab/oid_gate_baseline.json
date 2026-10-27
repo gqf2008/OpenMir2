@@ -23,6 +23,28 @@
    "added_by": "openmir2-tester-1",
    "entry_oid": "179e99da500bc36b2a6efc5e39c30382a869ae81",
    "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用旧坏 parent **不再**被豁免。"
+  },
+  {
+   "principal": "openmir2-coordinator",
+   "thread": "openmir2-oid-gate-baseline-audit",
+   "field": "parent",
+   "value": "57af0b9150adaf671e94e93553c8e13b",
+   "reason": "2026-10-27 Leader 误把 ref 后缀当 parent；只登记不回写（该 parent 对象不存在）。",
+   "added_at": "2026-10-27",
+   "added_by": "openmir2-coordinator",
+   "entry_oid": "a1cef765774ac140e29e4beb6b2e482e0bb314e0",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex）；豁免键含它 ⇒ 新卡复用旧坏 parent 不再被豁免。"
+  },
+  {
+   "principal": "openmir2-coordinator",
+   "thread": "openmir2-preflight-docs-timeout-false-positive",
+   "field": "parent",
+   "value": "4faf049a491e3f040a966c0466bd18d0",
+   "reason": "2026-10-27 Leader 误把 ref 后缀当 parent；只登记不回写（该 parent 对象不存在）。",
+   "added_at": "2026-10-27",
+   "added_by": "openmir2-coordinator",
+   "entry_oid": "cba883b4b2713bbca1351a5703f844b8753ab78d",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex）；豁免键含它 ⇒ 新卡复用旧坏 parent 不再被豁免。"
   }
  ]
 }
