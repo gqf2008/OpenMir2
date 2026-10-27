@@ -2967,8 +2967,10 @@ def _finish_evidence(run, args, scenario, params, error):
             c.close()
         except Exception as ex:  # noqa: BLE001
             print("mir2_probe: 连接关闭失败（证据已落盘）：%r" % (ex,), file=sys.stderr)
+    # 卡 openmir2-probe-frames-total-callsite：控制台与 run.json **同一口径**
+    # （都 = s2c + c2s 数据行，**不含 meta 账目行**）
     print("mir2_probe: exit=%d reason=%s frames=%d out=%s"
-          % (run.exit_code, run.exit_reason, run.recorder.seq, args.out))
+          % (run.exit_code, run.exit_reason, _frames_total(run.recorder), args.out))
     if error:
         print("  error: %s" % error, file=sys.stderr)
     return path
@@ -4070,6 +4072,60 @@ def _delayed_frames():
         (6930, SM_SYSMESSAGE, 0, 0, 0, encode_text("welcome")),
     ))
     return early, late
+
+
+def _selftest_frames_total_payload():
+    """卡 `openmir2-probe-frames-total-callsite`：**payload 级**牙。
+
+    `build_run_json(...)["frames_total"]` 必须等于 `_frames_total(recorder)`（s2c + c2s，不含 meta）；
+    **把调用点改回 `recorder.seq` ⇒ 本牙必红**。控制台的 `frames=` 与 run.json 同口径（也排除 meta）。
+    """
+    import shutil
+    import tempfile
+    import types as _types
+    from contextlib import redirect_stdout
+    import io as _io
+    tmp = tempfile.mkdtemp(prefix="mir2probe-framestotal-")
+    try:
+        rec = Recorder(os.path.join(tmp, "r"), now_ms())
+        conn = Conn("gamegate", rec)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock([build_s2c_frame(6930, SM_LOGON, 5, 9, 0, bytes(16))])
+        conn.pump(20)                      # 1 条 s2c
+        conn.send(CM_TURN, 1, 0, 0, 0, b"")  # 1 条 c2s
+        rec.close()                        # + 1 条 meta
+        assert rec.seq == 3, ("前置：行号应为 3（s2c+c2s+meta）", rec.seq)
+        assert _frames_total(rec) == 2, ("前置：数据行应为 2", _frames_total(rec))
+
+        run = _types.SimpleNamespace(
+            recorder=rec, start_wall="2026-10-27T00:00:00+08:00", t0_ms=now_ms(),
+            chain=None, dwell=None, steps=[], auto=None, unclassified=[],
+            exit_code=0, exit_reason="ok", conns=[])
+        args = _types.SimpleNamespace(out=os.path.join(tmp, "out"), _argv=["mir2_probe.py"])
+        payload = build_run_json(run, args, None, {}, None)
+        assert payload["frames_total"] == _frames_total(rec) == 2, (
+            "payload.frames_total 必须等于 _frames_total(recorder)，实得 %r" % (payload["frames_total"],))
+        assert payload["frames_total"] != rec.seq, "frames_total 不得等于 seq（seq 含 meta 行）"
+
+        # 控制台同口径：`_finish_evidence` 打印的 frames= 必须与 payload 一致。
+        # 注意用**另一个仍打开的** recorder（上面的 rec 已经 close 过；重复 close 会写失败并打 stderr，
+        # 那是另一颗牙管的场景，别在这里制造噪声）。
+        rec2 = Recorder(os.path.join(tmp, "r2"), now_ms())
+        conn2 = Conn("gamegate", rec2)
+        conn2.phase = "gamegate"
+        conn2.sock = _FakeSock([build_s2c_frame(6930, SM_LOGON, 5, 9, 0, bytes(16))])
+        conn2.pump(20)
+        conn2.send(CM_TURN, 1, 0, 0, 0, b"")
+        run2 = _types.SimpleNamespace(**dict(run.__dict__))
+        run2.recorder = rec2
+        buf = _io.StringIO()
+        with redirect_stdout(buf):
+            _finish_evidence(run2, args, None, {}, None)
+        printed = [l for l in buf.getvalue().splitlines() if "frames=" in l]
+        assert printed and ("frames=2 " in printed[0]), ("控制台 frames 口径必须与 run.json 一致", printed)
+        return "payload.frames_total == _frames_total == 2（seq=3）；控制台 frames=2 同口径"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def _selftest_c2s_close_hygiene():
@@ -6540,6 +6596,7 @@ def run_selftest():
     check("ack-predicate-wait", _selftest_ack_wait)
     check("c2s-capture", _selftest_c2s_capture)
     check("c2s-close-hygiene", _selftest_c2s_close_hygiene)
+    check("frames-total-payload", _selftest_frames_total_payload)
     if fails:
         print("mir2_probe selftest: FAIL")
         for f in fails:

@@ -359,6 +359,10 @@ restore / stack / probe / db / stop 子进程的环境。**真正必需的只有
 **不含** `c2s.ndjson` 里的 `direction="meta"` 账目行。base 曾用 `Recorder.seq`（行号）⇒ 报告比实际帧数多 1；
 c2s 采集默认开启，所以带 c2s 的一次运行 `frames_total` 会比纯 s2c 多出那些 c2s 行（这正是它的语义）。
 
+**控制台与 run.json 同口径**（卡 `openmir2-probe-frames-total-callsite`）：收尾打印的
+`mir2_probe: exit=… frames=N …` 里的 `N` 与 `run.json` 的 `frames_total` **是同一个数**（都排除 meta 行），
+不再用 `Recorder.seq`（行号）。
+
 ## 退出码
 
 * `0` 全绿；
