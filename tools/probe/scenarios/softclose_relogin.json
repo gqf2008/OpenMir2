@@ -51,9 +51,10 @@
     },
     {
       "relogin": {
-        "settle_ms": 1500
+        "settle_ms": 1500,
+        "assert_same_actor": false
       },
-      "note": "**段2（2026-10-27 改写）**：关掉当前 GameGate 连接 → settle 1500ms → 用**同一 account / 同一角色**重跑 login→selgate→gamegate 链。**判据语义改为「同账号、新对象」**（**N2 订正**）：`world.soft_close` 只置 ghost + `add_to_mapped=false`，**实体仍在**；真正的摘除发生在断线（`GateEvent::Closed`）或重进路径——本场景由 step5 断线 + 重连触发。因此 `assert_same_actor: true`（假设 id 复用）与实现不符，已删除。**注意这是概率事实、不是不变量**：C# `GetNextIdentity` 的随机池只排除**当前在用**的 id，**已释放的 id 可以复用**；Rust `alloc_id` 单调递增。碰撞概率极低（实测 `981561271 → 718963883`），但**不得**把「id 必不同 / 相同即判红」写成机器判据——消费方（`openmir2-softclose-cleanup-residue`）应把两次 ActorId 当**观测值**记录并对齐，**不假设**复用或必变。两段的 actor id / SM_LOGON 字段仍落进 `run.json` 的 `steps[]` 与 `chain.segments`。"
+      "note": "**段2（2026-10-27 改写；run4 复核后 assert_same_actor 显式 false）**：关掉当前 GameGate 连接 → settle 1500ms → 用**同一 account / 同一角色**重跑 login→selgate→gamegate 链。**判据语义 = 「同账号、新对象」**（**N2 订正**）：`world.soft_close` 只置 ghost + `add_to_mapped=false`，**实体仍在**；真正的摘除发生在断线（`GateEvent::Closed`）或重进路径——本场景由 step5 断线 + 重连触发。**必须显式写 `assert_same_actor: false`，删键不等于关断言**：探针缺键取缺省 `true`（`mir2_probe.py:1145`），其报错文案（同文件 `:2439`）也把同 ActorId 断言当前提断言、指明以显式 `false` 关闭——2026-10-27 一版误按「删键即关」交付，run4 复核证伪：缺键 ⇒ 断言照跑 ⇒ probe rc=1（`1144168594 → 794828501`），与 run3 显式 `true` 时（`981561271 → 718963883`）同形态；两对 id 均为 C#，出处 `E:/tmp/window/run3` 与 `run4` 的 `softclose_relogin/csharp/run.json` `steps[]` 里 `kind=relogin` 条目。**注意这是概率事实、不是不变量**：C# `GetNextIdentity` 的随机池只排除**当前在用**的 id，**已释放的 id 可以复用**；Rust `alloc_id` 单调递增。碰撞概率极低，但**不得**把「id 必不同 / 相同即判红」写成机器判据——消费方（`openmir2-softclose-cleanup-residue`）应把两段 ActorId 当**观测值**从 `run.json` 的 `steps[]` 与 `chain.segments` 取出对齐，**不假设**复用或必变。"
     },
     {
       "wait_for": {
