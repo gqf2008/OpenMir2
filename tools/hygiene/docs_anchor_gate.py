@@ -307,6 +307,10 @@ def item_spans(text):
         for op in opens:
             if depth > op[1]:
                 op[3] = True
+            elif op[2] == i and "{" in line and "}" in line:
+                # 单行内建体 `fn a() {}`：depth 从未超过起始深度，必须当场标 opened，
+                # 否则 span 会一直延伸到下一个 fn 的结尾（后续锚全部假 UNDECIDABLE）。
+                op[3] = True
         while opens and opens[-1][3] and opens[-1][1] >= depth:
             name, d0, start, _seen = opens.pop()
             spans.append((name, start, i))
@@ -609,6 +613,7 @@ def selftest():
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
+    ok.extend(_extra_teeth())
     fails = [(n, d) for n, good, d in ok if not good]
     for n, good, d in ok:
         print("%s %s%s" % ("PASS" if good else "FAIL", n, "" if good else "  %r" % (d,)))
@@ -633,6 +638,81 @@ def main(argv):
         reg = argv[argv.index("--registry") + 1]
     return run(reg, REPO, list_only="--list" in argv)
 
+
+def _extra_teeth():
+    """卡 `openmir2-doc-anchor-drift` 复审追加的牙（reviewer-20 `8241bcf6`）。"""
+    ok = []
+
+    def check(name, cond, detail=""):
+        ok.append((name, bool(cond), detail))
+
+    # ① 覆盖面：A 表（`| # | 路径 | 位置 |` ⇒ cells[3]）与 B 表（`| # | 位置 |` ⇒ cells[2]）
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="dag-hdr-")
+    try:
+        os.makedirs(os.path.join(tmp, "docs"))
+        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world", "src"))
+        with open(os.path.join(tmp, "mir2-rs/crates/world/src/w.rs"), "w", encoding="utf-8") as fh:
+            fh.write("fn alpha() {{}}{0}fn beta() {{ let _ = 1; }}{0}".format(chr(10)))
+        doc = chr(10).join([
+            "| # | 路径 | 位置 | 会话 ghost 时 | 依据 |",
+            "|---|---|---|---|---|",
+            "| A1 | `alpha` | `w.rs` `no_such_symbol_a` | x | y |",
+            "",
+            "| # | 位置 | 消费者 | ghost 时 | 依据 |",
+            "|---|---|---|---|---|",
+            "| B1 | `w.rs` `no_such_symbol_b` | x | y | z |",
+        ])
+        with open(os.path.join(tmp, "docs", "m.md"), "w", encoding="utf-8") as fh:
+            fh.write(doc)
+        reg = os.path.join(tmp, "reg.toml")
+        with open(reg, "w", encoding="utf-8") as fh:
+            fh.write('[[files]]{0}path = "docs/m.md"{0}why = "t"{0}'
+                     '[[base_dirs]]{0}dir = "mir2-rs/crates/world/src/"{0}'.format(chr(10)))
+        rc, out = _cap(run, reg, tmp)
+        check("覆盖面：A 表位置列（cells[3]）被扫到",
+              "no_such_symbol_a" in out and "ANCHOR_SYMBOL_MISSING" in out, out[-300:])
+        check("覆盖面：B 表位置列（cells[2]）被扫到", "no_such_symbol_b" in out, out[-300:])
+
+        # ② 单行内建体：`fn alpha() {}` 不得吞掉后面的 `fn beta`
+        with open(os.path.join(tmp, "docs", "m.md"), "w", encoding="utf-8") as fh:
+            fh.write(chr(10).join([
+                "| # | 位置 | 消费者 | ghost 时 | 依据 |",
+                "|---|---|---|---|---|",
+                "| B1 | `w.rs` `beta` | x | y | z |",
+            ]))
+        rc2, out2 = _cap(run, reg, tmp)
+        check("单行 fn `fn alpha() {{}}` 不吞掉后面的 `fn beta`",
+              rc2 == 0 and "RESULT: GREEN" in out2, out2[-300:])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    # ③ O1 兜底：无 `fn <sym>(` 声明、命中行落在两个嵌套 item ⇒ rc=2 且 detail 含「定位不到」
+    tmp2 = tempfile.mkdtemp(prefix="dag-o1-")
+    try:
+        os.makedirs(os.path.join(tmp2, "docs"))
+        os.makedirs(os.path.join(tmp2, "mir2-rs", "crates", "world", "src"))
+        with open(os.path.join(tmp2, "mir2-rs/crates/world/src/o.rs"), "w", encoding="utf-8") as fh:
+            fh.write("fn outer() {{{0}    fn inner() {{{0}        let x = placeholder_sym;{0}    }}{0}}}{0}"
+                     .format(chr(10)))
+        with open(os.path.join(tmp2, "docs", "m.md"), "w", encoding="utf-8") as fh:
+            fh.write(chr(10).join([
+                "| # | 位置 | 消费者 | ghost 时 | 依据 |",
+                "|---|---|---|---|---|",
+                "| B1 | `o.rs` `placeholder_sym` | x | y | z |",
+            ]))
+        reg2 = os.path.join(tmp2, "reg.toml")
+        with open(reg2, "w", encoding="utf-8") as fh:
+            fh.write('[[files]]{0}path = "docs/m.md"{0}why = "t"{0}'
+                     '[[base_dirs]]{0}dir = "mir2-rs/crates/world/src/"{0}'.format(chr(10)))
+        rc3, out3 = _cap(run, reg2, tmp2)
+        check("O1：无声明 + 命中行落在嵌套 item ⇒ rc=2 且 detail 含「定位不到」",
+              rc3 == 2 and "UNDECIDABLE" in out3 and "定位不到" in out3, out3[-300:])
+    finally:
+        shutil.rmtree(tmp2, ignore_errors=True)
+
+    return ok
 
 if __name__ == "__main__":
     sys.exit(main(sys.argv[1:]))
