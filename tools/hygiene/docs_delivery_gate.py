@@ -772,10 +772,25 @@ def _r1_accounting_ok(calls, seen, sites):
     return calls == 1 + len(sites) and sorted(seen) == sorted(sites)
 
 
-#: **R1i/R1k 必须经由 [`_r1_accounting_live`] 读取判定**（review 89ae2a18 C2）：
+#: **R1i/R1k 必须经由 [`_r1_accounting_guard`] 读取判定**（review 89ae2a18 C2）：
 #: 有人把两处改回内联判定时，本计数不动 ⇒ 末尾的 `_R1_LIVE_CALLS == 2` 必红。
 #: 这是「守卫要证明自己被调用」，而不是靠源码文本牙（后者可被换写法绕过）。
 _R1_LIVE_CALLS = 0
+
+
+def _r1_guard_verify(fn):
+    """R1 兜底的**可测包装**（review 349604e8 ①）：**任何异常都必须落判红**，绝不升 NEED/rc=2。
+
+    返回 `(ok, detail)`。`AssertionError` 与其它异常一律 `False`——把这里改成
+    `except Exception: return 2`（或让异常逃逸到 `selftest()` 顶层）会让 `元牙 R1-meta⑪` 变红。
+    """
+    try:
+        fn()
+        return True, ""
+    except AssertionError as e:
+        return False, "AssertionError: %s" % (e,)
+    except Exception as e:          # 宽兜底：同样判红（不静默、不升 NEED）
+        return False, "%s: %s" % (type(e).__name__, e)
 
 
 def _r1_accounting_guard(calls, seen, sites):
@@ -799,6 +814,7 @@ def selftest():
 
     牙 N2c 钉住这条：把 `_selftest_run` 换成「抛 GitUnavailable」⇒ 本函数必须返回 2。
     """
+    global _R1_LIVE_CALLS          # ⑨/⑩/⑪ 是「故意失败」的探测，前后保存/恢复，不计入接线证据
     global _ST_CALLS
     _ST_CALLS += 1
     try:
@@ -814,6 +830,7 @@ def selftest():
 
 
 def _selftest_run():
+    global _R1_LIVE_CALLS          # ⑨/⑩/⑪ 的探测前后保存/恢复，不计入接线证据
     fails = []
     checked = [0]
 
@@ -1150,13 +1167,11 @@ def _selftest_run():
         # **行为牙**（review e4d6546f C1 返工）：`_ST_CALLS` **永不重置**，四处有意递归
         # （n2c/n2d/c6b + 之后的 n2c2）各自先 `_st_exempt(<站点>)` 登记额度。R1i 在此刻核算
         # 「1（本层）+ 已消耗额度」——把整跑偷偷加回**窗口之前**也会让计数超出，不再被清零掩盖。
-        try:
-            _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN)
-            chk(True, "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数"
-                      "（多一次未登记的整跑 ⇒ 红；实际 calls=%r exempt=%r）"
-                      % (_ST_CALLS, list(_ST_EXEMPT_SEEN)))
-        except AssertionError as _e:
-            chk(False, "R1i（guard 抛错，rc=1 不是判不了）：%s" % (_e,))
+        _ok_i, _d_i = _r1_guard_verify(
+            lambda: _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN))
+        chk(_ok_i, "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数"
+                   "（多一次未登记的整跑 ⇒ 红；实际 calls=%r exempt=%r）%s"
+                   % (_ST_CALLS, list(_ST_EXEMPT_SEEN), "" if _ok_i else "；guard: " + _d_i))
 
         try:
             c4a = _require_branch(fx, env, "master") is True
@@ -1432,12 +1447,11 @@ def _selftest_run():
     # R1k（C1 返工的第二半）：豁免额度必须**恰好消耗一次且只消耗登记站点**，且全程调用数
     # == 1 + 额度数。同时钉住三种退化：多跑一次未登记 ⇒ 计数超；登记了却没发生（站点被删/
     # 挪/短路）⇒ 集合少一项；站点名对不上 ⇒ 集合不等。
-    try:
-        _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES)
-        chk(True, "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）"
-                  % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES)))
-    except AssertionError as _e:
-        chk(False, "R1k（guard 抛错，rc=1 不是判不了）：%s" % (_e,))
+    _ok_k, _d_k = _r1_guard_verify(
+        lambda: _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES))
+    chk(_ok_k, "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）%s"
+               % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES),
+                  "" if _ok_k else "；guard: " + _d_k))
 
     # 元牙（review 15d62f97 N2 / 89ae2a18 C1·N2）：全部直接喂 `_r1_accounting_ok` 的**合成参数**。
     # `_META` 是**唯一**登记处：末尾断言条数，删掉任一颗 ⇒ 条数不等 ⇒ 红（N2 计数元断言）。
@@ -1477,11 +1491,26 @@ def _selftest_run():
     for _cond, _msg in _META:
         chk(_cond, _msg)
 
-    # C2：R1i 与 R1k 必须**都**经由接缝（`_r1_accounting_live`）读取；把任一处改回内联判定
+    # C2：R1i 与 R1k 必须**都**经由接缝（`_r1_accounting_guard`）读取；把任一处改回内联判定
     # ⇒ 计数不动 ⇒ 本条红。这是「守卫证明自己被调用」的正向证据，不靠源码文本。
+    # 牙⑩⑪（review 349604e8 ①）：兜底包装必须「任何异常 ⇒ 判红」，不许升成 NEED/rc=2。
+    # 探测同样**不计入** `_R1_LIVE_CALLS`（前后保存/恢复）。
+    _live_before2 = _R1_LIVE_CALLS
+    _ok10, _ = _r1_guard_verify(lambda: _r1_accounting_guard(0, (), ()))
+    chk(_ok10 is False,
+        "元牙 R1-meta⑩ guard 抛 AssertionError ⇒ 包装返回 False（判红，不是判不了）")
+
+    def _boom():
+        raise ValueError("boom")
+
+    _ok11, _d11 = _r1_guard_verify(_boom)
+    chk(_ok11 is False,
+        "元牙 R1-meta⑪ **非 AssertionError 也必须判红**（把包装改成「宽 except ⇒ return 2」"
+        "会让本条红；实际 detail=%r）" % (_d11,))
+    _R1_LIVE_CALLS = _live_before2
+
     # 反向牙⑨（review 1260da60 要求）：guard **必须抛错**。若有人把它改成「返回 bool 不抛」，
     # 「丢弃返回值 + 内联 `<=`」这条退化路径就复活 ⇒ 本牙必须红。
-    global _R1_LIVE_CALLS          # ⑨ 是一次「故意失败」的探测，不得计入两处接线证据
     _live_before = _R1_LIVE_CALLS
     try:
         _r1_accounting_guard(0, (), ())
@@ -1493,7 +1522,7 @@ def _selftest_run():
                  "因为「丢弃返回值 + 内联 <=」会绕过它）")
 
     chk(_R1_LIVE_CALLS == 2,
-        "元牙 R1-meta⓪ R1i/R1k 均经由 `_r1_accounting_live`（计数须为 2，实际 %d；"
+        "元牙 R1-meta⓪ R1i/R1k 均经由 `_r1_accounting_guard`（计数须为 2，实际 %d；"
         "改回内联判定 ⇒ 本条红）" % _R1_LIVE_CALLS)
 
     if fails:
