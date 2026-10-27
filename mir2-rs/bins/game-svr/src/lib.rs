@@ -14594,6 +14594,31 @@ fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::Entity {
     e
 }
 
+/// 登录批 `new PlayObject()`（`WorldServer.cs:234`）5 抽里**存活到实体**的两个值
+/// （卡 `openmir2-player-ctor-rng-order`）。
+///
+/// 抽数本身由 [`mir2_world::World::fold_login_player_ctor_draws`] 在**落点改写之前**完成
+/// （位置契约见该函数）：`RunTick`/`SearchTime`/`AttackTick` 三抽的值被 `PlayObject`
+/// 派生 ctor 覆盖（`PlayObject.cs:898/900/918`），故不在此处落值；只有
+/// - `WalkTick = ctor_tick - Random(3000)`（`AnimalObject.cs:77`，派生 ctor 不覆盖；玩家路径
+///   无读点，按 oracle 记值，供将来走位门复用）与
+/// - `RandomNo = Random(999999)`（`PlayObject.cs:1047`；脚本 `<$RANDOMNO>`/`SETRANDOMNO`/
+///   `CHECKRANDOMNO` 的取值源，Rust 脚本层尚未接线）
+///
+/// 需要写入实体。
+fn new_player_entity_with_login_ctor(
+    chr_name: String,
+    x: i32,
+    y: i32,
+    ctor: &mir2_world::LoginPlayerCtorDraws,
+    ctor_tick: i64,
+) -> mir2_world::Entity {
+    let mut e = new_player_entity(chr_name, x, y);
+    e.ai.walk_tick = ctor.walk_tick(ctor_tick);
+    e.random_no = ctor.random_no;
+    e
+}
+
 /// `WorldServer.GetHumData` 的**记录 → `PlayObject` 标量装载**（登录实体构造点唯一入口）。
 ///
 /// - `Dir`：oracle 把 `CharacterData.Dir` 直接赋给 `PlayObject`（`WorldServer.cs:1113-1125`
@@ -23536,6 +23561,24 @@ fn sim_loop(
                                     let home_empty = full.as_ref().is_some_and(|r| {
                                         r.data.home_map.as_deref().unwrap_or("").is_empty()
                                     });
+                                    // **准入判据提前**（oracle `WorldServer.cs:503`）：`IsFull` /
+                                    // `ProcessHumansIsLogined` 的检查在 `ProcessHumansMakeNewHuman`
+                                    // (`:518`) **之前** ⇒ 重复登录**不构造 PlayObject、不抽数**。
+                                    let in_save = engine.in_save_rcd_list(&head.chr_name);
+                                    let in_world = matches!(
+                                        world.session(&head.chr_name).map(|s| s.stage),
+                                        Some(mir2_world::WorldStage::InWorld)
+                                    );
+                                    // **oracle `WorldServer.cs:234` 的 `new PlayObject()`（5 抽）**
+                                    // （卡 `openmir2-player-ctor-rng-order`）：位置必须早于
+                                    // ① HomeMap 出生点抽数（`:254-259`）②落点改写抽数
+                                    // （`:306-307`/`:339-340`/`:346-347`）③移位环（`:380-381`）。
+                                    // 只在非重复登录分支抽（重复支 oracle 不构造）。
+                                    let login_ctor = if in_save || in_world {
+                                        None
+                                    } else {
+                                        Some(world.fold_login_player_ctor_draws())
+                                    };
                                     let (enter_map_name, home_x, home_y, enter_x, enter_y) =
                                         if home_empty {
                                             // oracle `WorldServer.cs:254-259` 的**同序 3 抽**
@@ -23602,12 +23645,8 @@ fn sim_loop(
                                         // `!IsFull && !ProcessHumansIsLogined(chr)`）：
                                         // `ProcessHumansIsLogined`（`:200-217`）= `FrontEngine.InSaveRcdList(chr)`
                                         // **或** `PlayObjectList` 有同名。命中 ⇒ 关新（旧仍在世界时再踢旧）；
-                                        // 未命中 ⇒ 放行。夹具实测的两支（A 放行 / B 关新）就是它的竞态。
-                                        let in_save = engine.in_save_rcd_list(&head.chr_name);
-                                        let in_world = matches!(
-                                            world.session(&head.chr_name).map(|s| s.stage),
-                                            Some(mir2_world::WorldStage::InWorld)
-                                        );
+                                        // 未命中 ⇒ 放行。**判定已提前到 `new PlayObject()` 抽数之前**
+                                        // （oracle `:503` 在 `:518` 之前）⇒ 此处不再重算。
                                         if in_save || in_world {
                                             if in_save {
                                                 glog!(
@@ -23626,6 +23665,9 @@ fn sim_loop(
                                                 in_world,
                                             );
                                         } else {
+                                        let login_ctor = login_ctor.as_ref().expect(
+                                            "非重复登录：oracle new PlayObject() 的 5 抽必已发生",
+                                        );
                                         // oracle `WorldServer.cs:298-350`：进图/死亡落点改写（生产实现在
                                         // `rewrite_enter_position`；**Home 输入取角色记录**，不是 `[Setup]`）。
                                         // **位置**：`resolve_enter_map` 之后、地形移位环之前；抽数走
@@ -23719,10 +23761,12 @@ fn sim_loop(
                                         let (enter_x, enter_y) =
                                             (shift.x as i16, shift.y as i16);
                                         let _ = world.open_session(&head.chr_name);
-                                        let mut ent = new_player_entity(
+                                        let mut ent = new_player_entity_with_login_ctor(
                                             head.chr_name.clone(),
                                             i32::from(enter_x),
                                             i32::from(enter_y),
+                                            login_ctor,
+                                            login_ctor_tick,
                                         );
                                         // oracle `GetHumData` 的记录 → `PlayObject` 标量装载
                                         // （`Dir` 与 `WorldServer.cs:1159` 的 `AllowGroupReCall`）；
@@ -29885,6 +29929,73 @@ mod tests {
         assert_eq!(
             e.view_range, 12,
             "oracle PlayObject 构造器置 ViewRange=12（PlayObject.cs:904）"
+        );
+    }
+
+    /// **登录批 5 抽的存活值落到实体**（卡 `openmir2-player-ctor-rng-order` A1/A4）：
+    /// `WalkTick = ctor_tick - Random(3000)`（`AnimalObject.cs:77`；`PlayObject` 派生 ctor
+    /// **不覆盖**）与 `RandomNo = Random(999999)`（`PlayObject.cs:1047`）。
+    /// 抽数本身在落点改写之前完成（见 [`login_player_ctor_draws_wired_before_position_rewrite`]）。
+    #[test]
+    fn new_player_entity_applies_walk_tick_and_random_no() {
+        let mut w = mir2_world::World::with_maps(vec![(8, 8)]);
+        w.rng = mir2_shared::rng::RandomNumber::with_seed(4242);
+        let d = w.fold_login_player_ctor_draws();
+        let e = new_player_entity_with_login_ctor("p".to_string(), 10, 10, &d, 5_000);
+        assert_eq!(
+            e.ai.walk_tick,
+            5_000 - i64::from(d.walk_tick_delta),
+            "WalkTick = GetTickCount() - Random(3000)（AnimalObject.cs:77，存活）"
+        );
+        assert_eq!(
+            e.random_no, d.random_no,
+            "RandomNo = Random(999999)（PlayObject.cs:1047，存活）"
+        );
+    }
+
+    /// **接线点保鲜门**（卡 `openmir2-player-ctor-rng-order` A2/A4）：生产必须
+    /// ① 恰一处 `fold_login_player_ctor_draws(`；
+    /// ② 它早于 `rewrite_enter_position(` 与 `shift_enter_position(`（`WorldServer.cs:234` <
+    ///    `:306/:339/:346/:380`）；
+    /// ③ `new_player_entity` 体内**不得**出现抽数（构造点不在那里）。
+    ///
+    /// 红检（各自实测）：删掉生产调用行 ⇒ ① 红；把它挪到 `rewrite_enter_position` 之后 ⇒ ② 红；
+    /// 把抽数塞进 `new_player_entity` ⇒ ③ 红。
+    #[test]
+    fn login_player_ctor_draws_wired_before_position_rewrite() {
+        let raw = include_str!("lib.rs");
+        let src = crate::strip_rust_comments(raw);
+        // `concat!` 拆开字面量 ⇒ 本测试自身的源码文本不会命中锚串；带 `world.` 接收者
+        // ⇒ 只数**生产**调用（测试里的 `w.fold_login_player_ctor_draws()` 不计）。
+        let draw = concat!("world.fold_login_player_ctor_", "draws(");
+        assert_eq!(
+            src.matches(draw).count(),
+            1,
+            "生产（去注释后）必须恰一处登录 5 抽调用"
+        );
+        let draw_at = src.find(draw).expect("登录 5 抽调用");
+        // 用**调用点**锚，不用函数定义（`fn rewrite_enter_position(` 在文件前部）。
+        let rewrite_at = src
+            .find("let out = rewrite_enter_position(")
+            .expect("落点改写调用");
+        let shift_at = src
+            .find("let shift = mapwire::shift_enter_position(")
+            .expect("移位环调用");
+        assert!(
+            draw_at < rewrite_at && draw_at < shift_at,
+            "5 抽必须早于 rewrite_enter_position/shift_enter_position"
+        );
+        let fn_at = src
+            .find("fn new_player_entity(")
+            .expect("new_player_entity");
+        let fn_end = src[fn_at..]
+            .find("\n}\n")
+            .map(|i| fn_at + i)
+            .expect("new_player_entity 函数体结束");
+        let body = &src[fn_at..fn_end];
+        assert!(
+            !body.contains(draw) && !body.contains("random_below("),
+            "抽数不得放进 new_player_entity：{body}"
         );
     }
 
@@ -75932,6 +76043,32 @@ mod castle_insertion_tests {
             castle < merchant,
             "城堡块必须在 LoadMerchant 之前（oracle GameApp.cs:213 → :227）"
         );
+    }
+
+    /// **startup 批次不重复抽**（卡 `openmir2-player-ctor-rng-order` A4 负例 ③）：
+    /// 四个启动期 fold 调用点在剥注释后的**生产段**（`mod tests {` 之前）各**恰一处**。
+    /// 重复其一 ⇒ startup 桶翻倍 + 其后共享流整体错位（登录批的 5 抽会挪位）⇒ 本用例必红。
+    #[test]
+    fn startup_ctor_fold_calls_are_each_exactly_once() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+            .expect("读 lib.rs");
+        let code = strip_line_comments(&src);
+        let code = match code.find("mod tests {") {
+            Some(pos) => &code[..pos],
+            None => code.as_str(),
+        };
+        for needle in [
+            "world.fold_ctor_draws_game_app_ctor(",
+            "world.fold_ctor_draw_item_number_barrier_a(",
+            "world.fold_ctor_draws_load_map_info(",
+            "world.fold_ctor_draws_load_map_quest(",
+        ] {
+            assert_eq!(
+                code.matches(needle).count(),
+                1,
+                "startup fold 调用点必须恰一处（重复 = startup 桶翻倍）：{needle}"
+            );
+        }
     }
 }
 

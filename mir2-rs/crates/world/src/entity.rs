@@ -672,6 +672,14 @@ pub struct Entity {
     /// P27 的 1s 门基准。oracle 在对象构造时取钟；本骨架 `Entity::new` 拿不到宿主时钟
     /// ⇒ 缺省 0，生产路径由 `new_player_entity` 用 `now_ms()` 重盖（与 `VerifyTick` 同法）。
     pub exp_rate_tick: i64,
+    /// C# `PlayObject.RandomNo`（`PlayObject.cs:815`；ctor `:1047`
+    /// `RandomNo = Random(999999).ToString()`）——登录批 `new PlayObject()` 的**第 5 抽**。
+    ///
+    /// 消费面（oracle）：脚本变量 `<$RANDOMNO>`（`NormNpc.cs:439`）、`SETRANDOMNO`
+    /// （`ExecutionProcessingSys.cs:2112-2119`）、`CHECKRANDOMNO`（`ScriptEngine.cs:350-353`）。
+    /// 本仓脚本层尚未接线（`crates/script` 的 `CHECKRANDOMNO` 仍是 TODO）⇒ 字段先按 oracle
+    /// 落值，接线后可直接消费；oracle 存的是十进制字符串，本字段存数值（`to_string()` 同形）。
+    pub random_no: i32,
     /// C# `PlayObject.BoPowerItem`（`PlayObject.cs:223`）。
     pub bo_power_item: bool,
     /// C# `PlayObject.PowerItem`（`PlayObject.cs:199`）。
@@ -1120,6 +1128,8 @@ impl Entity {
             kill_mon_exp_rate: 100,
             kill_mon_exp_rate_time: 0,
             exp_rate_tick: 0,
+            // `PlayObject.cs:1047` 的 `RandomNo` 由登录构造点抽数后写入；`Entity::new` 缺省 0。
+            random_no: 0,
             bo_power_item: false,
             power_item: 0,
             // `PlayObject.cs:181/185/194/195`：ctor 缺省 `FireHitSkill/TwinHitSkill = false`、

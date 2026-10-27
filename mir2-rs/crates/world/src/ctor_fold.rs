@@ -118,6 +118,21 @@
 //! 抽数的符号化投影**（site = oracle 锚），供构造级用例把「次序」也钉死——真机流水的 site 列
 //! 两侧都区分不出这些同形构造点（oracle 侧同为 `BaseObject..ctor`/`AnimalObject..ctor`），
 //! 只有本账本的 site 列能咬住次序错位。
+//!
+//! ## 登录批（卡 `openmir2-player-ctor-rng-order`）
+//!
+//! 启动期之外，**登录玩家的 `new PlayObject()`（`WorldServer.cs:234`）也会无条件消耗全局
+//! RNG**——继承链 `PlayObject : CharacterObject : AnimalObject : BaseObject` 的 ctor 公共链
+//! 共 **5 抽**：`BaseObject.cs:439` `Random(1500)`、`:441` `Random(2000)`、
+//! `AnimalObject.cs:76-77` `Random(3000)` ×2、`PlayObject.cs:1047` `Random(999999)`（`RandomNo`）。
+//! 派生 ctor 覆盖 `RunTick`/`SearchTime`/`AttackTick`，但 **`WalkTick` 与 `RandomNo` 存活**。
+//!
+//! 登录批用 [`World::fold_login_player_ctor_draws`] 抽、[`CtorFoldLedger::batch`] =
+//! [`CtorDrawBatch::Login`] 与启动期账本显式分桶：前 4 抽复用同一抽数点
+//! [`BaseAnimalCtorDraws::draw`]（trace site 与启动期相同，**不能只靠 site 区分**），第 5 抽
+//! 单独追加。调用位置契约：**早于** `HomeMap` 出生点抽数（`WorldServer.cs:254-259`）与
+//! `rewrite_enter_position`/`shift_enter_position`（`:306/:339/:346/:380`），且只在非重复登录
+//! 分支（oracle `:503` 的 `ProcessHumansIsLogined` 门在 `ProcessHumansMakeNewHuman` 之前）。
 
 use crate::entity::{BaseAnimalCtorDraws, BASE_ANIMAL_CTOR_DRAW_MODS};
 use crate::World;
@@ -147,6 +162,20 @@ pub enum CtorFoldSite {
     /// SystemShare.RandomNumber.Random(10000)`（`AppService.cs:87` 的 `GameShare.LoadConfig()` 链）
     /// —— **恰 1 抽**，且抽数要 `+=` 到 `[Setup] ItemNumber` 上（不是 ctor 链的 4 抽、也不是丢弃）。
     BarrierAItemNumber,
+    /// **登录批第 1 抽**：`WorldServer.cs:234` `new PlayObject()` ⇒ `BaseObject.cs:439`
+    /// `RunTick = GetTickCount() + Random(1500)`（值随后被 `PlayObject.cs:898` 覆盖，仅占流位）。
+    PlayerBaseRunTick,
+    /// **登录批第 2 抽**：`BaseObject.cs:441` `SearchTime = Random(2000) + 2000`
+    /// （值随后被 `PlayObject.cs:900` 覆盖为 1000，仅占流位）。
+    PlayerBaseSearchTime,
+    /// **登录批第 3 抽**：`AnimalObject.cs:76` `AttackTick = GetTickCount() - Random(3000)`
+    /// （值随后被 `PlayObject.cs:918` 覆盖，仅占流位）。
+    PlayerAnimalAttackTick,
+    /// **登录批第 4 抽**：`AnimalObject.cs:77` `WalkTick = GetTickCount() - Random(3000)`
+    /// （**存活**：`PlayObject` ctor 不覆盖 `WalkTick`）。
+    PlayerAnimalWalkTick,
+    /// **登录批第 5 抽**：`PlayObject.cs:1047` `RandomNo = Random(999999).ToString()`（**存活**）。
+    PlayerRandomNo,
 }
 
 impl CtorFoldSite {
@@ -164,6 +193,21 @@ impl CtorFoldSite {
             CtorFoldSite::HiddenQFunction => "Merchant..ctor@LocalDB.cs:210",
             CtorFoldSite::HiddenRobotManage => "Merchant..ctor@LocalDB.cs:312",
             CtorFoldSite::BarrierAItemNumber => "ServerConf.LoadConfig@ServerConf.cs:114",
+            CtorFoldSite::PlayerBaseRunTick => {
+                "PlayObject..ctor@WorldServer.cs:234->BaseObject.cs:439"
+            }
+            CtorFoldSite::PlayerBaseSearchTime => {
+                "PlayObject..ctor@WorldServer.cs:234->BaseObject.cs:441"
+            }
+            CtorFoldSite::PlayerAnimalAttackTick => {
+                "PlayObject..ctor@WorldServer.cs:234->AnimalObject.cs:76"
+            }
+            CtorFoldSite::PlayerAnimalWalkTick => {
+                "PlayObject..ctor@WorldServer.cs:234->AnimalObject.cs:77"
+            }
+            CtorFoldSite::PlayerRandomNo => {
+                "PlayObject..ctor@WorldServer.cs:234->PlayObject.cs:1047"
+            }
         }
     }
 }
@@ -188,6 +232,43 @@ pub const CTOR_FOLD_BARRIER_A_DRAWS: usize = 1;
 /// `kind` 仍是 [`CTOR_FOLD_DRAW_KIND`]（`Next(max)`，与 `rng_trace` 同列）；与 ctor 公共链的
 /// `1500/2000/3000/3000` **不同表**。
 pub const CTOR_FOLD_BARRIER_A_MOD: i64 = 10_000;
+
+/// **登录批第 5 抽**的上界（oracle `PlayObject.cs:1047` `Random(999999)`，`RandomNo`）。
+///
+/// 前 4 抽复用 [`BASE_ANIMAL_CTOR_DRAW_MODS`]（`1500/2000/3000/3000`）；本常量只给第 5 抽。
+pub const PLAYER_CTOR_RANDOM_NO_MOD: i32 = 999_999;
+
+/// 登录批 `new PlayObject()`（`WorldServer.cs:234`）的 5 抽结果 + 账本。
+///
+/// 抽数次序 = oracle 继承链：`BaseObject`（`1500`、`2000`）+ `AnimalObject`
+/// （`3000`、`3000`）+ `PlayObject`（`999999`）。派生 ctor 覆盖
+/// `RunTick`/`SearchTime`/`AttackTick`，但 [`Self::walk_tick_delta`] 与
+/// [`Self::random_no`] **存活**（消费面见 [`crate::Entity::random_no`] 与
+/// `AnimalState::walk_tick`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LoginPlayerCtorDraws {
+    /// 第 1 抽 `Random(1500)`（`RunTick` 增量；被 `PlayObject.cs:898` 覆盖，仅占流位）。
+    pub run_tick_delta: i32,
+    /// 第 2 抽 `Random(2000) + 2000`（`SearchTime`；被 `PlayObject.cs:900` 覆盖为 1000）。
+    pub base_search_time: i32,
+    /// 第 3 抽 `Random(3000)`（`AttackTick` 增量；被 `PlayObject.cs:918` 覆盖）。
+    pub attack_tick_delta: i32,
+    /// 第 4 抽 `Random(3000)`（`WalkTick` 增量；**存活**）。
+    pub walk_tick_delta: i32,
+    /// 第 5 抽 `Random(999999)`（`RandomNo`；**存活**）。
+    pub random_no: i32,
+    /// 5 条符号化账本（`batch = Login`，site 与 oracle 逐抽对应）。
+    pub ledger: CtorFoldLedger,
+}
+
+impl LoginPlayerCtorDraws {
+    /// `WalkTick = ctor_tick - Random(3000)`（oracle `AnimalObject.cs:77`，`GetTickCount()` 取
+    /// 构造时刻；派生 `PlayObject` ctor 不覆盖 `WalkTick`）。
+    #[must_use]
+    pub fn walk_tick(&self, ctor_tick: i64) -> i64 {
+        ctor_tick - i64::from(self.walk_tick_delta)
+    }
+}
 
 /// **构造段 fold 计划**：按 oracle 次序排好的站点表，按三条屏障切成三段（见模块头）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -292,9 +373,23 @@ pub struct CtorFoldEntry {
     pub result: i64,
 }
 
+/// **抽数批次**：同一 oracle 构造链在启动期与登录期各出现一次。前 4 抽的 `rng_trace`
+/// site 相同（都在 [`BaseAnimalCtorDraws::draw`] 内）⇒ 账本必须显式分桶，
+/// **不能只按 site/流水文件行区分**（卡 `openmir2-player-ctor-rng-order` A3）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CtorDrawBatch {
+    /// 启动期 `ctor_fold`（段①/屏障 A/段②/段③）。
+    #[default]
+    Startup,
+    /// 登录期 `new PlayObject()`（`WorldServer.cs:234`，每次登录 5 抽）。
+    Login,
+}
+
 /// 构造段 fold 账本（按抽数次序）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct CtorFoldLedger {
+    /// 抽数批次（startup vs login）。[`Self::by_site`] 只对 startup 的 4 抽/站点账本成立。
+    pub batch: CtorDrawBatch,
     pub entries: Vec<CtorFoldEntry>,
 }
 
@@ -311,10 +406,16 @@ impl CtorFoldLedger {
 
     /// ctor 公共链账本逐站点折叠成 `(site, 该处 4 抽的原值)` 的视图（判据用例的期望表按此写）。
     ///
-    /// **只对 4 抽/站点的 ctor 链账本成立**：尾余数（屏障 A 的 1 条）被 `as_chunks` 丢掉 ⇒
-    /// 不要对 [`World::fold_ctor_draw_item_number_barrier_a`] 的返回值用它（直接读 `entries`）。
+    /// **只对 4 抽/站点的 startup ctor 链账本成立**：尾余数（屏障 A 的 1 条）被 `as_chunks`
+    /// 丢掉 ⇒ 不要对 [`World::fold_ctor_draw_item_number_barrier_a`] 的返回值用它（直接读
+    /// `entries`）；登录批是 **5 抽/次** 且 `batch = Login` ⇒ 也不得用它。
     #[must_use]
     pub fn by_site(&self) -> Vec<(CtorFoldSite, [i64; CTOR_FOLD_DRAWS_PER_SITE])> {
+        debug_assert_eq!(
+            self.batch,
+            CtorDrawBatch::Startup,
+            "by_site 只适用于 startup 的 4 抽/站点账本"
+        );
         self.entries
             .as_chunks::<CTOR_FOLD_DRAWS_PER_SITE>()
             .0
@@ -359,6 +460,7 @@ impl World {
     #[track_caller]
     pub fn fold_ctor_draw_item_number_barrier_a(&mut self, plan: &CtorFoldPlan) -> CtorFoldLedger {
         let mut ledger = CtorFoldLedger {
+            batch: CtorDrawBatch::Startup,
             entries: Vec::with_capacity(plan.barrier_a.len()),
         };
         for &site in &plan.barrier_a {
@@ -396,6 +498,7 @@ impl World {
     /// fold 本体：逐站点走**同一条** ctor 公共链（唯一抽数点 [`BaseAnimalCtorDraws::draw`]）。
     fn fold_sites(&mut self, sites: &[CtorFoldSite]) -> CtorFoldLedger {
         let mut ledger = CtorFoldLedger {
+            batch: CtorDrawBatch::Startup,
             entries: Vec::with_capacity(sites.len() * CTOR_FOLD_DRAWS_PER_SITE),
         };
         for &site in sites {
@@ -418,6 +521,72 @@ impl World {
             }
         }
         ledger
+    }
+
+    /// **登录批**：oracle `WorldServer.cs:234` `new PlayObject()` 的 **5 抽**（继承链顺序）。
+    ///
+    /// 次序 = ① `BaseObject.cs:439` `Random(1500)` → ② `:441` `Random(2000)` →
+    /// ③ `AnimalObject.cs:76` `Random(3000)` → ④ `:77` `Random(3000)` →
+    /// ⑤ `PlayObject.cs:1047` `Random(999999)`。
+    ///
+    /// 前 4 抽**复用同一抽数点** [`BaseAnimalCtorDraws::draw`]（一处定义，防「少抽 2 次」复发），
+    /// 第 5 抽单独追加；账本 `batch = Login`，与启动期显式分桶（前 4 抽的 `rng_trace` site 与
+    /// 启动期相同，**不能只靠 site 区分**）。
+    ///
+    /// 调用位置契约（宿主 `bins/game-svr/src/lib.rs`）：
+    /// - **只在非重复登录分支**（oracle `:503` 的 `ProcessHumansIsLogined` 门在
+    ///   `ProcessHumansMakeNewHuman` 之前 ⇒ 重复登录不构造、不抽）；
+    /// - **早于** `HomeMap` 出生点抽数（`:254-259`）与 `rewrite_enter_position`/
+    ///   `shift_enter_position`（`:306/:339/:346/:380`）；
+    /// - **不得**放进 `new_player_entity`（它是落图前的字段装配，晚于改写抽数）。
+    #[must_use]
+    pub fn fold_login_player_ctor_draws(&mut self) -> LoginPlayerCtorDraws {
+        let d = BaseAnimalCtorDraws::draw(&mut self.rng);
+        let random_no = self.rng.random_below(PLAYER_CTOR_RANDOM_NO_MOD);
+        let entries = vec![
+            CtorFoldEntry {
+                site: CtorFoldSite::PlayerBaseRunTick,
+                kind: CTOR_FOLD_DRAW_KIND,
+                arg: i64::from(BASE_ANIMAL_CTOR_DRAW_MODS[0]),
+                result: i64::from(d.run_tick_delta),
+            },
+            CtorFoldEntry {
+                site: CtorFoldSite::PlayerBaseSearchTime,
+                kind: CTOR_FOLD_DRAW_KIND,
+                arg: i64::from(BASE_ANIMAL_CTOR_DRAW_MODS[1]),
+                // 账本记 `Random(2000)` 的**原值**（不含 `+2000`），与启动期账本同列同值。
+                result: i64::from(d.base_search_time - BASE_ANIMAL_CTOR_DRAW_MODS[1]),
+            },
+            CtorFoldEntry {
+                site: CtorFoldSite::PlayerAnimalAttackTick,
+                kind: CTOR_FOLD_DRAW_KIND,
+                arg: i64::from(BASE_ANIMAL_CTOR_DRAW_MODS[2]),
+                result: i64::from(d.attack_tick_delta),
+            },
+            CtorFoldEntry {
+                site: CtorFoldSite::PlayerAnimalWalkTick,
+                kind: CTOR_FOLD_DRAW_KIND,
+                arg: i64::from(BASE_ANIMAL_CTOR_DRAW_MODS[3]),
+                result: i64::from(d.walk_tick_delta),
+            },
+            CtorFoldEntry {
+                site: CtorFoldSite::PlayerRandomNo,
+                kind: CTOR_FOLD_DRAW_KIND,
+                arg: i64::from(PLAYER_CTOR_RANDOM_NO_MOD),
+                result: i64::from(random_no),
+            },
+        ];
+        LoginPlayerCtorDraws {
+            run_tick_delta: d.run_tick_delta,
+            base_search_time: d.base_search_time,
+            attack_tick_delta: d.attack_tick_delta,
+            walk_tick_delta: d.walk_tick_delta,
+            random_no,
+            ledger: CtorFoldLedger {
+                batch: CtorDrawBatch::Login,
+                entries,
+            },
+        }
     }
 }
 
@@ -718,5 +887,104 @@ mod tests {
         p2.push_robot_objects(2);
         assert_eq!(p1.total_draws(), 4);
         assert_eq!(p2.total_draws(), 8, "行数 × 4，不是常量 4");
+    }
+
+    /// **登录批恰 5 抽、次序 = oracle 继承链**（卡 `openmir2-player-ctor-rng-order` A4）：
+    /// ① `BaseObject` `1500` → ② `2000` → ③ `AnimalObject` `3000` → ④ `3000` →
+    /// ⑤ `PlayObject` `999999`。缺任一抽/换序/错模数 ⇒ 本用例必红。
+    #[test]
+    fn login_player_ctor_draws_follow_oracle_order_and_count() {
+        let mut w = World::with_maps(vec![(8, 8)]);
+        w.rng = RandomNumber::with_seed(1234);
+        let d = w.fold_login_player_ctor_draws();
+
+        assert_eq!(d.ledger.batch, CtorDrawBatch::Login);
+        assert_eq!(d.ledger.len(), 5, "登录 PlayObject 构造恒 5 抽");
+        let sites: Vec<CtorFoldSite> = d.ledger.entries.iter().map(|e| e.site).collect();
+        assert_eq!(
+            sites,
+            vec![
+                CtorFoldSite::PlayerBaseRunTick,
+                CtorFoldSite::PlayerBaseSearchTime,
+                CtorFoldSite::PlayerAnimalAttackTick,
+                CtorFoldSite::PlayerAnimalWalkTick,
+                CtorFoldSite::PlayerRandomNo,
+            ],
+            "次序 = BaseObject(2) → AnimalObject(2) → PlayObject.RandomNo"
+        );
+        let args: Vec<i64> = d.ledger.entries.iter().map(|e| e.arg).collect();
+        assert_eq!(args, vec![1500, 2000, 3000, 3000, 999_999]);
+        assert!(
+            d.ledger
+                .entries
+                .iter()
+                .all(|e| e.kind == CTOR_FOLD_DRAW_KIND),
+            "kind 必须与 rng_trace 同列 `Next(max)`"
+        );
+
+        // 结果逐项 = 同种子参考流按同序 5 抽。
+        let mut refr = RandomNumber::with_seed(1234);
+        let rd = BaseAnimalCtorDraws::draw(&mut refr);
+        let expected = vec![
+            i64::from(rd.run_tick_delta),
+            i64::from(rd.base_search_time - BASE_ANIMAL_CTOR_DRAW_MODS[1]),
+            i64::from(rd.attack_tick_delta),
+            i64::from(rd.walk_tick_delta),
+            i64::from(refr.random_below(PLAYER_CTOR_RANDOM_NO_MOD)),
+        ];
+        let got: Vec<i64> = d.ledger.entries.iter().map(|e| e.result).collect();
+        assert_eq!(got, expected);
+        assert_eq!(i64::from(d.random_no), expected[4]);
+        // 流位恰好前移 5（第 6 个值两侧一致）。
+        assert_eq!(w.rng.random_below(1_000_000), refr.random_below(1_000_000));
+    }
+
+    /// **缺第 5 抽（`RandomNo`）⇒ 其后共享流错位**（A4 负例）。
+    #[test]
+    fn login_missing_fifth_draw_shifts_stream() {
+        let mut with5 = World::with_maps(vec![(8, 8)]);
+        with5.rng = RandomNumber::with_seed(77);
+        let _ = with5.fold_login_player_ctor_draws();
+        let after5 = with5.rng.random_below(1_000_000);
+
+        let mut only4 = World::with_maps(vec![(8, 8)]);
+        only4.rng = RandomNumber::with_seed(77);
+        let _ = BaseAnimalCtorDraws::draw(&mut only4.rng);
+        let after4 = only4.rng.random_below(1_000_000);
+        assert_ne!(after5, after4, "缺第 5 抽 ⇒ 其后所有抽数错位");
+    }
+
+    /// **startup / login 两批显式分桶、分别计数**（A3）：同一 `site` 文件行不能区分批次
+    /// （前 4 抽的 trace site 相同）⇒ 靠 `batch` 字段；两批在同一条 `world.rng` 上首尾相接。
+    #[test]
+    fn startup_and_login_batches_are_separate() {
+        let mut w = World::with_maps(vec![(8, 8)]);
+        w.rng = RandomNumber::with_seed(9);
+        let mut plan = CtorFoldPlan::new();
+        plan.push_robot_objects(1);
+        plan.push_orphan_merchants();
+        let startup = w.fold_ctor_draws_game_app_ctor(&plan);
+        assert_eq!(startup.batch, CtorDrawBatch::Startup);
+        assert_eq!(startup.len(), 16, "段① = 4 站点 × 4 抽 = 16 条");
+
+        let login1 = w.fold_login_player_ctor_draws();
+        let login2 = w.fold_login_player_ctor_draws();
+        assert_eq!(login1.ledger.batch, CtorDrawBatch::Login);
+        assert_eq!(login2.ledger.batch, CtorDrawBatch::Login);
+        assert_eq!(login1.ledger.len(), 5);
+        assert_eq!(login2.ledger.len(), 5);
+
+        // 同种子回放：`draw` 每次 = 1 站点（4 抽）⇒ 段① 4 次 draw，随后 login1/login2 各 4+1 抽。
+        let sites = plan.game_app_ctor.len();
+        assert_eq!(sites, 4);
+        let mut refr = RandomNumber::with_seed(9);
+        for _ in 0..sites {
+            let _ = BaseAnimalCtorDraws::draw(&mut refr);
+        }
+        let rd1 = BaseAnimalCtorDraws::draw(&mut refr);
+        assert_eq!(login1.run_tick_delta, rd1.run_tick_delta);
+        let _ = refr.random_below(PLAYER_CTOR_RANDOM_NO_MOD); // login1 第 5 抽
+        let rd2 = BaseAnimalCtorDraws::draw(&mut refr);
+        assert_eq!(login2.run_tick_delta, rd2.run_tick_delta);
     }
 }
