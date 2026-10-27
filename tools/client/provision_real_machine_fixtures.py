@@ -1023,7 +1023,11 @@ def selftest(args):
             tail_ok = (raw_before and not raw_before.endswith(b"\n")
                        and raw_after.endswith(raw_before + want_nl)
                        and res_c.get("eol") == want_eol
-                       and raw_after.count(b"\n") == raw_after.count(want_nl))
+                       # 复审 N1：按形态分叉——CRLF 源判「无混排」(`\n` 数 == `\r\n` 数)，
+                       # LF 源判「不出现 CRLF」（旧写法 `count(\n)==count(want_nl)` 在
+                       # `want_nl == b"\n"` 时是同义反复，永远为真）。
+                       and ((raw_after.count(b"\n") == raw_after.count(b"\r\n"))
+                            if want_nl == b"\r\n" else (b"\r\n" not in raw_after)))
             lay_ok, why = _cw._mongen_fixture_layout(raw_before, raw_after, res_c["lines"])
             ok_matrix = ok_matrix and tail_ok and lay_ok
             detail_matrix.append((tag, tail_ok, lay_ok, why))
@@ -1045,10 +1049,26 @@ def selftest(args):
             err_m = None
             raised_m = repr(ex)
         after_m = _sha256_file(res_m["path"])
+        # 复审 N2：守护是 `if not backup or not os.path.isfile(backup):`，上面只走
+        # `not os.path.isfile(...)` 那半；这里再构造 `backup: None` ⇒ 必须同样干净报错
+        # （删掉 `not backup or` 会掉进 `os.path.isfile(None)` 的 TypeError）。
+        synth = {"action": "prepended", "path": res_m["path"], "backup": None,
+                 "before_sha256": res_m["before_sha256"]}
+        try:
+            err_n = restore_mongen(synth)
+            raised_n = None
+        except Exception as ex:      # noqa: BLE001
+            err_n = None
+            raised_n = repr(ex)
+        after_n = _sha256_file(synth["path"])
         ok_all &= _chk(raised_m is None and err_m is not None and "备份缺失" in err_m
-                       and after_m == before_m,
-                       "P1 牙②e 备份缺失 ⇒ 返回「备份缺失」错误（不抛异常）且目标文件零字节变化",
-                       (raised_m, err_m, after_m == before_m))
+                       and after_m == before_m
+                       and raised_n is None and err_n is not None and "备份缺失" in err_n
+                       and after_n == before_m,
+                       "P1 牙②e 备份缺失（unlink / backup=None 两种入参）⇒ 返回「备份缺失」"
+                       "错误、不抛异常、目标文件零字节变化",
+                       (raised_m, err_m, after_m == before_m,
+                        raised_n, err_n, after_n == before_m))
 
         # ---- P1 牙②d：`backup_sha256` 必须被**执行**——篡改备份内容 ⇒ restore 拒绝且目标不动
         tamper_env = _mk_env("EnvirTamper", "\n")
