@@ -10,7 +10,7 @@
 
 | 项 | 现值 | 说明 |
 |---|---|---|
-| master | `d470d7bd1` | 本单的 base；分支 `card/window-run-sheet` 从此起 |
+| master | 写作时 `d470d7bd1` | 本单的 base；分支 `card/window-run-sheet` 从此起。**写作后 master 又前移了两笔 docs-only 合并（`793705800`：m3 对账 + smframe 订正），Rust 树未变**——窗口前仍必须以**开窗当时的 master** 重建并对齐 `binary_stamp`，不得把本行当永久现值 |
 | workspace 读数 | **142 suites / 3326 passed / 63 ignored**（今天的合并门，由 `openmir2-coordinator` 派工给出） | 本单**未重跑** cargo；窗口前必须在当前 master 上重建并重测，把新条目写进 `<git-common-dir>/tester/last-workspace-test.json` |
 | 证据文件里最新的历史条目 | `d315471a3`：141 suites / 3374 = 3311 passed + 63 ignored | **已过期**：其后 Rust 改动（player-ctor 7 + AOI 2 等）已超越该 tip。`d315471a3` 只能作为历史读数，**不得进判据、不得当现值** |
 | `binary_stamp` | `mir2-rs/target/release/mir2-server.build.json` **当前不存在**（本单实测 MISS） | 严格 head 相等：窗口前任何提交（含 docs-only）都会打漂并逼 rebuild |
