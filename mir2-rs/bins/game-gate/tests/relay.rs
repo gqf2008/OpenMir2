@@ -14,6 +14,8 @@
 //! 5. body < 16 字节（登录后）⇒ 网关关会话（"异常消息封包"）并补发 `GM_CLOSE`（`session_id=0, socket=handle`）；
 //! 6. 缺配置时进程**非零退出**（M1 验收④）。
 
+use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use mir2_protocol::frame::ServerMessage;
@@ -34,13 +36,64 @@ mod support;
 /// 到界即 kill 进程树并 reap（见 `support::output_bounded`），不会挂死门禁。
 const MISSING_CONFIG_BOUND: Duration = Duration::from_secs(10);
 
-/// 假 GameSvr：接受一条连接，把收到的每帧 `(header, body)` 收进 Vec 返回。
-async fn fake_game_svr() -> (u16, tokio::task::JoinHandle<Vec<(ServerMessage, Vec<u8>)>>) {
+/// 时间线毫秒时刻（`as_millis` 截断安全化：测试寿命远小于 i64 上界，越界取上界即可）。
+fn ms_since(t0: Instant) -> i64 {
+    i64::try_from(t0.elapsed().as_millis()).unwrap_or(i64::MAX)
+}
+
+/// 假 GameSvr 的**两侧时间线**（卡 openmir2-flaky-relay-gmclose-race 的 A1 埋点）：
+/// accept / 每帧 / EOF 相对 `t0` 的毫秒时刻（同进程同时钟，可与客户端侧时刻直接比）。
+/// 失败诊断（A2「超时打印两侧帧序」）从这里取数；`shutdown()` 会删临时目录，网关日志尾
+/// 必须在 kill 前用 `Gate::log_tail` 取出，否则「进程崩溃 ⇒ 客户端 EOF ⇒ got=[]」这类
+/// 假说没有物证可核。
+struct SrvWitness {
+    t0: Instant,
+    accept_ms: AtomicI64,
+    frames: StdMutex<Vec<(u16, i64)>>,
+    eof_ms: AtomicI64,
+}
+
+impl SrvWitness {
+    fn snapshot(&self) -> Vec<(u16, i64)> {
+        self.frames.lock().unwrap().clone()
+    }
+
+    /// 人类可读时间线（EOF 未发生记 -1）。
+    fn timeline(&self) -> String {
+        let frames = self
+            .snapshot()
+            .iter()
+            .map(|(i, t)| format!("{{ident={i}, t={t}ms}}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "srv: accept={}ms frames=[{}] eof={}ms",
+            self.accept_ms.load(Ordering::Relaxed),
+            frames,
+            self.eof_ms.load(Ordering::Relaxed)
+        )
+    }
+}
+
+/// 假 GameSvr（带时间线埋点）：接受一条连接，把收到的每帧 `(header, body)` 收进 Vec 返回。
+async fn fake_game_svr_witness() -> (
+    u16,
+    std::sync::Arc<SrvWitness>,
+    tokio::task::JoinHandle<Vec<(ServerMessage, Vec<u8>)>>,
+) {
     let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = l.local_addr().unwrap().port();
+    let w = std::sync::Arc::new(SrvWitness {
+        t0: Instant::now(),
+        accept_ms: AtomicI64::new(-1),
+        frames: StdMutex::new(Vec::new()),
+        eof_ms: AtomicI64::new(-1),
+    });
+    let w2 = std::sync::Arc::clone(&w);
     let h = tokio::spawn(async move {
         let mut got = Vec::new();
         let (mut sock, _) = l.accept().await.unwrap();
+        w2.accept_ms.store(ms_since(w2.t0), Ordering::Relaxed);
         loop {
             let mut head = [0u8; ServerMessage::SIZE];
             if sock.read_exact(&mut head).await.is_err() {
@@ -51,11 +104,48 @@ async fn fake_game_svr() -> (u16, tokio::task::JoinHandle<Vec<(ServerMessage, Ve
             if !body.is_empty() && sock.read_exact(&mut body).await.is_err() {
                 break;
             }
+            w2.frames.lock().unwrap().push((msg.ident, ms_since(w2.t0)));
             got.push((msg, body));
         }
+        w2.eof_ms.store(ms_since(w2.t0), Ordering::Relaxed);
         got
     });
+    (port, w, h)
+}
+
+/// 假 GameSvr：接受一条连接，把收到的每帧 `(header, body)` 收进 Vec 返回。
+async fn fake_game_svr() -> (u16, tokio::task::JoinHandle<Vec<(ServerMessage, Vec<u8>)>>) {
+    let (port, _w, h) = fake_game_svr_witness().await;
     (port, h)
+}
+
+/// 有界等待「`GM_CLOSE` 已到达假 GameSvr」（终止条件 = witness 帧记录这一**可观测事件**，
+/// 不是固定时长；卡 A2）。超时 ⇒ `Err(诊断串)`：点名缺席帧 + 已见帧序 + srv 时间线 ——
+/// 即「超时打印两侧帧序」；A3 的牙据此断言「按预期原因红」。
+async fn wait_uplink_close(w: &std::sync::Arc<SrvWitness>, bound: Duration) -> Result<i64, String> {
+    let deadline = Instant::now() + bound;
+    loop {
+        if let Some((_ident, at)) = w
+            .snapshot()
+            .into_iter()
+            .find(|(i, _)| *i == u16::from(grobal2::GM_CLOSE))
+        {
+            return Ok(at);
+        }
+        if Instant::now() >= deadline {
+            let seen = w
+                .snapshot()
+                .iter()
+                .map(|(i, _)| i.to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "GM_CLOSE 未在 {bound:?} 内到达假 GameSvr（超时）；已见帧序=[{seen}]；{}",
+                w.timeline()
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 }
 
 fn write_conf(dir: &std::path::Path, srv_port: u16, gate_port: u16) {
@@ -323,6 +413,22 @@ impl Gate {
 
     async fn connect(&self) -> TcpStream {
         connect_with_retry(self.port).await
+    }
+
+    /// kill 前留存网关 stdout/stderr 尾部（`shutdown` 会删临时目录；失败诊断必须在
+    /// 删除前把物证取出来，否则「网关进程崩溃 ⇒ 客户端 EOF ⇒ got=[]」这类假说无从核对）。
+    fn log_tail(&self, max_bytes: usize) -> String {
+        match std::fs::read_to_string(self.dir.join("gate.out.log")) {
+            Ok(s) => {
+                let l = s.len();
+                if l <= max_bytes {
+                    s
+                } else {
+                    s[l - max_bytes..].to_string()
+                }
+            }
+            Err(e) => format!("<gate.out.log 读取失败: {e}>"),
+        }
     }
 
     /// 收工：kill 子进程 + 清临时目录（失败路径也走这里）。
@@ -935,12 +1041,15 @@ async fn header_prefixed_login_is_kicked() {
     .to_vec();
     head.extend_from_slice(&frame);
 
-    let (srv_port, srv_task) = fake_game_svr().await;
+    let (srv_port, witness, srv_task) = fake_game_svr_witness().await;
     let gate_port = support::next_port();
     let gate = Gate::start("gg-hdr", srv_port, gate_port).await;
+    let t_start = ms_since(witness.t0);
     let mut client = gate.connect().await;
+    let t_connect = ms_since(witness.t0);
     client.write_all(&head).await.unwrap();
     client.flush().await.unwrap();
+    let t_write = ms_since(witness.t0);
 
     // 网关应主动断开（读到 EOF）
     let mut buf = [0u8; 1];
@@ -948,7 +1057,23 @@ async fn header_prefixed_login_is_kicked() {
         .await
         .expect("5s 内网关应剔除该连接")
         .expect("读应成功（EOF=0 也算）");
+    let t_eof = ms_since(witness.t0);
     assert_eq!(n, 0, "带 20B 头的登录帧必须被剔除（oracle 实测如此）");
+
+    // A2（卡 openmir2-flaky-relay-gmclose-race）：等「GM_CLOSE 已到达假 GameSvr」这一
+    // 可观测事件再收工——旧的「EOF 即 kill」会跟上行写任务的落盘竞速（2026-10-26 全量
+    // 偶发 got=[]，隔离 3/3 绿）。超时 ⇒ 打印两侧时间线 + 已见帧序 + 网关日志尾（kill
+    // 前取证），按预期原因红，不静默。同步离开路径（`send_internal_sync`）保证 EOF 前
+    // GM_CLOSE 已进内核，正常路径这里立即返回；回归到异步入队时这道等待就会红。
+    let gate_log = gate.log_tail(4096);
+    if let Err(diag) = wait_uplink_close(&witness, Duration::from_secs(5)).await {
+        panic!(
+            "剔除路径 5s 内未把 GM_CLOSE 送到假 GameSvr：{diag}
+             client: start={t_start}ms connect={t_connect}ms write={t_write}ms eof={t_eof}ms
+             gate 日志尾（kill 前）：
+{gate_log}"
+        );
+    }
     gate.shutdown().await;
     drop(client);
 
@@ -978,6 +1103,73 @@ async fn header_prefixed_login_is_kicked() {
     assert_eq!(close.session_index, 0, "GM_CLOSE 的 SessionIndex 必须是 0");
     assert_eq!(close.pack_length, 0, "GM_CLOSE 无 body ⇒ PackLength=0");
     assert!(close_body.is_empty(), "GM_CLOSE 不得带 body");
+}
+
+/// A3 的牙（卡 openmir2-flaky-relay-gmclose-race）：人为延迟 GM_CLOSE 的**写出**（测试
+/// env `MIR2_GATE_TEST_GM_CLOSE_DELAY_MS`，见 src `GM_CLOSE_DELAY_ENV`）⇒ 有界等待必须
+/// **按预期原因**超时红——诊断点名 GM_CLOSE 缺席并给出已见帧序——而不是静默变绿；随后
+/// 放宽等待必须等到 ⇒ 证明注入是「延迟」不是「丢帧」。等待放在客户端写完垃圾帧之后、
+/// 读 EOF 之前：同步离开路径下 EOF 恒晚于 GM_CLOSE 落盘，只有这段窗口能观察到「还没写」。
+/// 谁删掉注入或把有界等待改成固定 sleep，这条用例就红。
+#[tokio::test]
+async fn gm_close_write_delay_makes_bounded_wait_red() {
+    let (srv_port, witness, srv_task) = fake_game_svr_witness().await;
+    let gate_port = support::next_port();
+    let gate = Gate::start_with_env(
+        "gg-delay",
+        srv_port,
+        gate_port,
+        &[("MIR2_GATE_TEST_GM_CLOSE_DELAY_MS", "2000")],
+    )
+    .await;
+    let mut client = gate.connect().await;
+    client
+        .write_all(&login_frame(
+            "XXloadbot1\\lb1a\\1\\120020522\\1200205220\\AABB",
+        ))
+        .await
+        .unwrap();
+    client.flush().await.unwrap();
+
+    // GM_CLOSE 被延迟 2s ⇒ 500ms 有界等待必须超时，且诊断「按预期原因」：点名 GM_CLOSE
+    // 缺席 + 已见帧序恰为 [GM_OPEN]（延迟只注入在 GM_CLOSE 上）。
+    let diag = wait_uplink_close(&witness, Duration::from_millis(500))
+        .await
+        .expect_err("GM_CLOSE 写出被延迟 2s ⇒ 500ms 有界等待必须按预期原因超时红");
+    assert!(
+        diag.contains("GM_CLOSE") && diag.contains("超时"),
+        "诊断必须点名缺席帧与超时原因：{diag}"
+    );
+    let open_ident = u16::from(grobal2::GM_OPEN).to_string();
+    assert!(
+        diag.contains(&format!("[{open_ident}]")),
+        "延迟只注入 GM_CLOSE ⇒ 已见帧序必须恰为 [GM_OPEN]：{diag}"
+    );
+
+    // 网关仍应主动断开（读到 EOF；同步离开路径等写完延迟帧才放行 ⇒ EOF 在 ~2s 处）
+    let mut buf = [0u8; 1];
+    let n = tokio::time::timeout(Duration::from_secs(5), client.read(&mut buf))
+        .await
+        .expect("5s 内网关应剔除该连接")
+        .expect("读应成功（EOF=0 也算）");
+    assert_eq!(n, 0, "网关必须剔除（读到 EOF）");
+
+    // 延迟 ≠ 丢帧：放宽到 5s 内必须等到（此时 2s 延迟早已过去）。
+    wait_uplink_close(&witness, Duration::from_secs(5))
+        .await
+        .expect("放宽等待后 GM_CLOSE 必须到达（注入的是延迟不是丢失）");
+    gate.shutdown().await;
+    drop(client);
+    let got = tokio::time::timeout(Duration::from_secs(5), srv_task)
+        .await
+        .expect("假 GameSvr 未结束")
+        .unwrap();
+    let idents: Vec<u16> = got.iter().map(|(m, _)| m.ident).collect();
+    assert_eq!(
+        idents,
+        vec![u16::from(grobal2::GM_OPEN), u16::from(grobal2::GM_CLOSE)],
+        "延迟路径的最终帧序不变：GM_OPEN + GM_CLOSE，且不得出现 GM_DATA"
+    );
 }
 
 /// **判据（下行）**：网关 → 客户端的两种出帧形态必须等于 oracle 实测字节。

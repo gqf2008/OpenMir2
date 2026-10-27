@@ -83,6 +83,11 @@ const KEEPALIVE_ENV: &str = "MIR2_GAME_GATE_KEEPALIVE_MS";
 const MAINTENANCE_MS: i64 = 600_000;
 /// C# `GateShare.CheckServerTimeOutTime`（`GateShare.cs:22`）：网关↔GameSvr 3min 无响应判定。
 const CHECK_SERVER_TIMEOUT_MS: i64 = 3 * 60 * 1000;
+
+/// 测试注入（A3 牙专用，卡 openmir2-flaky-relay-gmclose-race）：设置后上行写任务在写出
+/// `GM_CLOSE` 前人为延迟 N 毫秒——用于证明用例的有界等待会「按预期原因」超时红并打印
+/// 帧序，而不是静默变绿。生产与其它测试不设 ⇒ `None` ⇒ 零行为变化。
+const GM_CLOSE_DELAY_ENV: &str = "MIR2_GATE_TEST_GM_CLOSE_DELAY_MS";
 /// 测试注入：3min 无响应阈值（生产不设该变量）。
 const CHECK_SERVER_TIMEOUT_ENV: &str = "MIR2_GAME_GATE_CHECK_SERVER_TIMEOUT_MS";
 /// C# `GateShare.SessionTimeOutTime`（`GateShare.cs:26`）：会话 15 天无上行即清理。
@@ -368,6 +373,8 @@ struct LinkCtx {
     period: Duration,
     /// `GateShare.CheckServerTimeOutTime`（生产 3min；测试注入）。
     timeout_ms: i64,
+    /// A3 牙注入：GM_CLOSE 写出前的人为延迟（`GM_CLOSE_DELAY_ENV`；生产恒 `None`）。
+    gm_close_delay_ms: Option<u64>,
 }
 
 /// `ClientThread.cs:158`：`游戏网关[{LocalEndPoint}] 游戏引擎[{EndPoint}]链接成功.`
@@ -534,6 +541,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .and_then(|v| v.parse::<u64>().ok())
         .filter(|&n| n > 0)
         .unwrap_or(SESSION_SWEEP_MS);
+    // A3 牙注入（见 `GM_CLOSE_DELAY_ENV`；不设 ⇒ None ⇒ 零行为变化）。
+    let gm_close_delay_ms = std::env::var(GM_CLOSE_DELAY_ENV)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok());
     if max_session != MAX_SESSION
         || keepalive_ms != KEEPALIVE_MS
         || check_server_timeout_ms != CHECK_SERVER_TIMEOUT_MS
@@ -591,6 +602,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
             srv_port: ep.srv_port,
             period: Duration::from_millis(keepalive_ms),
             timeout_ms: check_server_timeout_ms,
+            gm_close_delay_ms,
         };
         // `ClientThread.ClientSocketConnect`：GateReady/Connected/Runing + RestSessionArray + 日志。
         // 首连在绑定监听**之前**登记，避免 accept 抢在 GateReady 之前（M1④ 的启动门）。
@@ -1224,6 +1236,7 @@ async fn writer(
     generation: u64,
     mut close_rx: watch::Receiver<bool>,
     events: mpsc::UnboundedSender<LinkEvent>,
+    gm_close_delay_ms: Option<u64>,
 ) {
     loop {
         let out = tokio::select! {
@@ -1233,6 +1246,14 @@ async fn writer(
                 None => break,
             },
         };
+        // A3 牙注入：只延迟 `GM_CLOSE` 的写出（测试 env 恒 None ⇒ 不进这支）。
+        if let Some(ms) = gm_close_delay_ms {
+            if ServerMessage::from_bytes(&out.wire[..ServerMessage::SIZE]).map(|m| m.ident)
+                == Some(u16::from(grobal2::GM_CLOSE))
+            {
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+            }
+        }
         let written = wr.write_all(&out.wire).await.is_ok() && wr.flush().await.is_ok();
         // 同步发送方（离开路径的 `GM_CLOSE`）在等这个回执：只有确认写进 socket 才放它返回。
         if let Some(ack) = out.ack {
@@ -1296,6 +1317,7 @@ fn install_connection(
         generation,
         close_rx.clone(),
         events.clone(),
+        ctx.gm_close_delay_ms,
     ));
     tokio::spawn(reader(
         rd,
@@ -2132,6 +2154,7 @@ mod tests {
             srv_port: addr.port(),
             period: Duration::from_millis(10),
             timeout_ms: 60_000,
+            gm_close_delay_ms: None,
         };
         let (events, mut events_rx) = mpsc::unbounded_channel();
         let generation = down.next_generation();
