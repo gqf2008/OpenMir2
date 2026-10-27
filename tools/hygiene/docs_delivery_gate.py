@@ -744,6 +744,32 @@ def _st_exempt(site):
     _ST_EXEMPT_SEEN.append(site)
 
 
+#: **新增一条「合法的递归 selftest 牙」要改哪几处**（review 15d62f97 N1 的文档化，A3）：
+#:
+#:   1. `_ST_EXEMPT_SITES` 里加站点名（额度名单；**不加** ⇒ `_st_exempt` 直接抛、R1k 集合不等）；
+#:   2. 在**递归发生点**调 `_st_exempt("<site>")`（登记额度；只加名单不调 ⇒ seen 少一项 ⇒ R1k 红）；
+#:   3. 递归点若在 **R1i 之前**，无需额外改动（R1i 用 `_ST_EXEMPT_SEEN` 自比，恒等）；
+#:      在 **R1i 之后**（如 n2c2）也不需改动——R1k 用的是 `_ST_EXEMPT_SITES`；
+#:   4. **元牙不用改**：`元牙 R1-meta①–⑥` 直接喂 `_r1_accounting_ok` 的合成参数，与站点名单长度无关。
+#:
+#: 结论（用牙固定）：本模型**支持**合法的递归牙，但**必须**同时满足「登记名单 + 调用 `_st_exempt`」
+#: 两处；只做一处会分别落到 R1k 的两条断言上（集合不等 / 调用数超出），不会静默通过。
+
+
+def _r1_accounting_ok(calls, seen, sites):
+    """R1 重入记账的**单一接缝**（review 15d62f97 N2 的元牙落点）。
+
+    判据两条且都是**严格**形态：
+      * `calls == 1 + len(sites)` —— 必须**等于**（不是 `<=`）；
+      * `sorted(seen) == sorted(sites)` —— 已消耗站点与登记站点的**多重集相等**。
+
+    为什么必须是接缝：`==` 一旦被软化成 `<=`，「**登记了却没有那一次递归**」就不可观测
+    （`_ST_EXEMPT_SEEN` 在 `_st_exempt()` **登记时**就写入，登记 ≠ 消耗）⇒ 只有把判定收在
+    这一处、并让元牙直接喂合成参数，才能证明软化会红。
+    """
+    return calls == 1 + len(sites) and sorted(seen) == sorted(sites)
+
+
 def selftest():
     """自测入口：**环境建不了夹具 ⇒ rc=2（判不了）**，不是 rc=1（证伪）。
 
@@ -1100,7 +1126,7 @@ def _selftest_run():
         # **行为牙**（review e4d6546f C1 返工）：`_ST_CALLS` **永不重置**，四处有意递归
         # （n2c/n2d/c6b + 之后的 n2c2）各自先 `_st_exempt(<站点>)` 登记额度。R1i 在此刻核算
         # 「1（本层）+ 已消耗额度」——把整跑偷偷加回**窗口之前**也会让计数超出，不再被清零掩盖。
-        chk(_ST_CALLS == 1 + len(_ST_EXEMPT_SEEN),
+        chk(_r1_accounting_ok(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN),
             "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数（多一次未登记的整跑 ⇒ 红；"
             "实际 calls=%r exempt=%r）" % (_ST_CALLS, list(_ST_EXEMPT_SEEN)))
 
@@ -1378,10 +1404,27 @@ def _selftest_run():
     # R1k（C1 返工的第二半）：豁免额度必须**恰好消耗一次且只消耗登记站点**，且全程调用数
     # == 1 + 额度数。同时钉住三种退化：多跑一次未登记 ⇒ 计数超；登记了却没发生（站点被删/
     # 挪/短路）⇒ 集合少一项；站点名对不上 ⇒ 集合不等。
-    chk(sorted(_ST_EXEMPT_SEEN) == sorted(_ST_EXEMPT_SITES)
-        and _ST_CALLS == 1 + len(_ST_EXEMPT_SITES),
+    chk(_r1_accounting_ok(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES),
         "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）"
         % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES)))
+
+    # 元牙（review 15d62f97 N2）：把 `==` 软化成 `<=`、或把多重集比软化成「子集/只看已登记」
+    # ⇒ 本段必须红。三条都走**同一个接缝** `_r1_accounting_ok`，因此生产判定被改动会立刻命中。
+    chk(_r1_accounting_ok(1 + len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES, _ST_EXEMPT_SITES),
+        "元牙 R1-meta① 调用数 == 1 + 站点数且集合相等 ⇒ 绿")
+    chk(not _r1_accounting_ok(len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES, _ST_EXEMPT_SITES),
+        "元牙 R1-meta② **登记了却没有那一次递归**（calls 少 1）⇒ 红；"
+        "把接缝的 `==` 软化成 `<=` 会让本条变绿")
+    chk(not _r1_accounting_ok(1 + len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES[:-1], _ST_EXEMPT_SITES),
+        "元牙 R1-meta③ 登记了但没消耗（seen 少一项）⇒ 红；把多重集比软化会让本条变绿")
+    chk(not _r1_accounting_ok(1 + len(_ST_EXEMPT_SITES), _ST_EXEMPT_SITES + ("n2c",),
+                              _ST_EXEMPT_SITES),
+        "元牙 R1-meta④ 多消耗一个站点（seen 多一项）⇒ 红")
+    # A2 退化三态：确认「空集/清零」不会让接缝恒绿。
+    chk(len(_ST_EXEMPT_SITES) >= 1,
+        "元牙 R1-meta⑤ 登记站点集合**不得为空**（空集会让 R1k 恒绿、等于关掉重入记账）")
+    chk(not _r1_accounting_ok(0, (), ()),
+        "元牙 R1-meta⑥ 计数清零（calls=0 且无站点）⇒ 红（`1 + 0` 才是合法值）")
 
     if fails:
         print("docs_delivery_gate selftest: FAIL (%d/%d)" % (len(fails), checked[0]))
