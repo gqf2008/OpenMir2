@@ -50,6 +50,29 @@ SIDE_KEYS = ("pid_file", "require_pid_binaries")
 
 _TID = re.compile(r'"timeout_ms"\s*:')
 
+#: **步骤级 DSL** 里 `timeout_ms` 是合法的（`{"wait_for": {...}, "timeout_ms": 3000}`）。
+#: 只有 profile 顶层的旧键才该被拒——它会被静默忽略、probe 仍按 180s 被杀。
+STEP_CONTEXT_KEYS = ("wait_for", "wait_idents", "wait_frames", "dlg_select", "click_npc",
+                     "kill", "sleep", "repeat", "enter_map", "walk", "move")
+
+
+def _profile_timeout_lines(text):
+    """返回「像 **profile 旧键** 的 `"timeout_ms":`」所在行号；步骤级 DSL 的合法用法不算。
+
+    判据：**同一行或上一行**出现步骤键 ⇒ 视为步骤级（runbook 里的示例常写成一行的 JSON）；
+    否则视为 profile 旧键。这样 `runbook:1176` 的合法示例不再误红，而真正的 profile 旧键仍红。
+    """
+    out = []
+    lines = text.splitlines()
+    for i, line in enumerate(lines):
+        if not _TID.search(line):
+            continue
+        window = line + " " + (lines[i - 1] if i else "")
+        if any(k in window for k in STEP_CONTEXT_KEYS):
+            continue
+        out.append(i + 1)
+    return out
+
 
 def _rel(path):
     """相对仓库的展示路径；**跨盘**（仓库在 E:、TEMP 在 C:）时 relpath 会抛 ValueError
@@ -77,9 +100,11 @@ def check_docs(runbook=RUNBOOK, readme=SCEN_README):
     if "probe_timeout_ms" not in text:
         problems.append("%s 缺 `probe_timeout_ms`（profile 键被静默忽略的老写法？）"
                         % _rel(runbook))
-    if _TID.search(text):
-        problems.append("%s 里又出现 profile 的 `\"timeout_ms\"`（会被**静默忽略**，probe 仍按 180s 被杀）"
-                        % _rel(runbook))
+    bad_lines = _profile_timeout_lines(text)
+    if bad_lines:
+        problems.append("%s 第 %s 行里又出现 profile 的 `\"timeout_ms\"`"
+                        "（会被**静默忽略**，probe 仍按 180s 被杀）"
+                        % (_rel(runbook), ",".join(str(n) for n in bad_lines[:8])))
     with open(readme, encoding="utf-8") as fh:
         text = fh.read()
     if "probe_timeout_ms" not in text:
@@ -454,6 +479,29 @@ def selftest():
         chk(False, "①b 旧键 `\"timeout_ms\"` 必须红")
     except StepFail as ex:
         chk("timeout_ms" in str(ex), "①b 旧键 `\"timeout_ms\"` 必须红并点名（%s）" % str(ex)[:60])
+
+    # ①c/①d（卡 openmir2-preflight-docs-timeout-false-positive）：
+    #   步骤级 DSL 的 `"timeout_ms": 3000` **合法**（runbook:1176 就是这种）；profile 旧键仍必须红。
+    step_runbook = os.path.join(tmp, "runbook-step.md")
+    with open(step_runbook, "w", encoding="utf-8") as fh:
+        fh.write("probe 超时用 `probe_timeout_ms`" + chr(10))
+        fh.write('{"wait_for": {"frame_class": "server_ack_time", '
+                 '"body_text_contains": "+GD/"}, "timeout_ms": 3000}' + chr(10))
+    try:
+        check_docs(step_runbook, good_runbook)
+        chk(True, "①c 步骤级 `timeout_ms`（同行有 wait_for）⇒ 合法，不报错")
+    except StepFail as ex:
+        chk(False, "①c 步骤级 `timeout_ms` 被误红（%s）" % str(ex)[:80])
+    profile_old = os.path.join(tmp, "runbook-profile-old.md")
+    with open(profile_old, "w", encoding="utf-8") as fh:
+        fh.write("probe 超时用 `probe_timeout_ms`" + chr(10))
+        fh.write('{"login_gate": "127.0.0.1:7000", "timeout_ms": 720000}')
+    try:
+        check_docs(profile_old, good_runbook)
+        chk(False, "①d profile 旧键（片段里没有步骤键）必须红")
+    except StepFail as ex:
+        chk("timeout_ms" in str(ex) and "行" in str(ex),
+            "①d profile 旧键必须红并点名行号（%s）" % str(ex)[:80])
 
     # ② 二进制（桩 ps1）
 
