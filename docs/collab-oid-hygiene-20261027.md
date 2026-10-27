@@ -1,4 +1,4 @@
-# collab 条目里的 oid：读侧机判 + 写侧 fail-closed（2026-10-27）
+# collab 条目里的 oid：读侧报告工具 + 写侧 fail-closed（2026-10-27）
 
 卡：`openmir2-collab-oid-resolvability-gate`（tier=L）。
 
