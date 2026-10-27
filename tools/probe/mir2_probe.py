@@ -180,6 +180,7 @@ class Recorder:
         self.capture_c2s = bool(capture_c2s)
         self.c2s_skipped = 0
         self.c2s_written = 0
+        self.s2c_written = 0
         # **方案 (c)**（review C1）：c2s 单独写 `c2s.ndjson`，`frames.ndjson` 保持**纯 s2c**
         # ⇒ `compare_runs.load_stream` / `frame_drift_report` / `param_discovery` **零改动**。
         self.c2s_path = os.path.join(out_dir, "c2s.ndjson")
@@ -187,6 +188,7 @@ class Recorder:
 
     def write_frame(self, phase, conn_label, frame):
         self.seq += 1
+        self.s2c_written += 1
         row = {
             "seq": self.seq,
             "t_ms": now_ms() - self.t0_ms,
@@ -2945,8 +2947,43 @@ def do_finish(run, args, conn):
             pass
 
 
+def _finish_evidence(run, args, scenario, params, error):
+    """收尾顺序（卡 `openmir2-probe-close-evidence-teeth`）：**run.json 先落盘**，再关 recorder。
+
+    理由：`run.json` 才是主证据；`Recorder.close()` 写 meta 账目失败时**不得阻断证据**，
+    但也**不许静默**——一律回显到 stderr。连接关闭同理（失败只报告）。
+    """
+    payload = build_run_json(run, args, scenario, params, error)
+    os.makedirs(args.out, exist_ok=True)
+    path = os.path.join(args.out, "run.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=1)
+    try:
+        run.recorder.close()
+    except Exception as ex:  # noqa: BLE001
+        print("mir2_probe: 证据收尾失败（run.json 已落盘）：%r" % (ex,), file=sys.stderr)
+    for c in getattr(run, "conns", []):
+        try:
+            c.close()
+        except Exception as ex:  # noqa: BLE001
+            print("mir2_probe: 连接关闭失败（证据已落盘）：%r" % (ex,), file=sys.stderr)
+    print("mir2_probe: exit=%d reason=%s frames=%d out=%s"
+          % (run.exit_code, run.exit_reason, run.recorder.seq, args.out))
+    if error:
+        print("  error: %s" % error, file=sys.stderr)
+    return path
+
+
+def _frames_total(recorder):
+    """`frames_total` = **s2c + c2s 数据行**；**不含 `direction="meta"` 账目行**（review 86f7ef66 N1）。
+
+    base 曾用 `recorder.seq`（行号，含 1 条 meta）⇒ 报告比实际帧数多 1。
+    """
+    return getattr(recorder, "s2c_written", 0) + getattr(recorder, "c2s_written", 0)
+
+
 def build_run_json(run, args, scenario, params, error):
-    frames_total = run.recorder.seq
+    frames_total = _frames_total(run.recorder)
     by_conn = dict(run.recorder.counts)
     hist = dict(run.recorder.ident_hist)
     return {
@@ -3157,18 +3194,7 @@ def main(argv=None):
         error = "%s: %s" % (type(ex).__name__, ex)
         run.exit_code, run.exit_reason = 2, "internal"
     finally:
-        for c in run.conns:
-            c.close()
-        run.recorder.close()
-        payload = build_run_json(run, args, scenario, params, error)
-        os.makedirs(args.out, exist_ok=True)
-        path = os.path.join(args.out, "run.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=1)
-        print("mir2_probe: exit=%d reason=%s frames=%d out=%s"
-              % (run.exit_code, run.exit_reason, run.recorder.seq, args.out))
-        if error:
-            print("  error: %s" % error, file=sys.stderr)
+        _finish_evidence(run, args, scenario, params, error)
     return run.exit_code
 
 
@@ -4094,7 +4120,84 @@ def _selftest_c2s_close_hygiene():
             "close 必须重新抛出账目写入错误（不吞），实得 %r" % (raised,))
         assert rec2._fh.closed and rec2._c2s_fh.closed, "写入失败时句柄也必须关闭"
         assert "账目行写入失败" in buf2.getvalue(), "至少写 stderr：%r" % buf2.getvalue()
-        return "正常 close 零 stderr + 双句柄关；注入写失败 ⇒ 重新抛出 + 双句柄仍关 + stderr 点名"
+
+        # ①b `_BadCloser`（review info ①）：**finally 里关句柄失败**也必须报告——
+        #    把 `finally` 里那个 `except` 体退化成 `pass` ⇒ 本断言必红。
+        rec3 = Recorder(os.path.join(tmp, "badclose"), now_ms())
+        real3 = rec3._c2s_fh
+
+        class _BadCloser(object):
+            def write(self, data):
+                return real3.write(data)
+
+            def close(self):
+                raise OSError("injected: close failed")
+
+            @property
+            def closed(self):
+                return real3.closed
+
+        rec3._c2s_fh = _BadCloser()
+        buf3 = _io.StringIO()
+        raised3 = None
+        with redirect_stderr(buf3):
+            try:
+                rec3.close()
+            except Exception as ex:  # noqa: BLE001
+                raised3 = ex
+        assert isinstance(raised3, OSError) and "close failed" in str(raised3), (
+            "句柄关闭失败必须重新抛出（不吞），实得 %r" % (raised3,))
+        assert "关闭失败" in buf3.getvalue(), "句柄关闭失败必须写 stderr：%r" % buf3.getvalue()
+        assert rec3._fh.closed, "另一侧句柄仍必须关闭"
+
+        # ② 证据优先（review info ②）：`_finish_evidence` 必须先落 run.json，
+        #    recorder.close() 失败**不阻断证据**且**不静默**。
+        import types as _types
+        out_dir = os.path.join(tmp, "evidence")
+        # **真顺序牙**（review C1）：close 在**被调用那一刻**记录「run.json 是否已存在」。
+        # 把 close 块挪到 build 之前 ⇒ 该记录变 False ⇒ 牙红（不再依赖「抛异常」这种间接证据）。
+        _seen = {"evidence_at_close": None}
+
+        def _close_probe():
+            # **只记第一次调用**：若实现被改成「先 close 一次、之后又 close 一次」，
+            # 只记最后一次会让顺序牙假绿（review C1 就是这种情形）。
+            if _seen["evidence_at_close"] is None:
+                _seen["evidence_at_close"] = os.path.isfile(os.path.join(out_dir, "run.json"))
+            _seen["calls"] = _seen.get("calls", 0) + 1
+            raise OSError("injected: meta failed")
+
+        fake_run = _types.SimpleNamespace(
+            recorder=_types.SimpleNamespace(seq=0, close=_close_probe),
+            conns=[], exit_code=0, exit_reason="ok")
+        fake_args = _types.SimpleNamespace(out=out_dir)
+        _real_build = globals()["build_run_json"]
+        globals()["build_run_json"] = lambda *a, **k: {"ok": True, "marker": "evidence-first"}
+        buf4 = _io.StringIO()
+        try:
+            with redirect_stderr(buf4):
+                evidence_path = _finish_evidence(fake_run, fake_args, None, {}, None)
+        finally:
+            globals()["build_run_json"] = _real_build
+        assert os.path.isfile(evidence_path), "close 失败时 run.json 必须已经落盘（%r）" % evidence_path
+        assert _seen.get("calls", 0) >= 1, "close 必须被调用过"
+        assert _seen["evidence_at_close"] is True, (
+            "**顺序牙**：recorder.close() 被调用时 run.json 必须已存在（先 close 后落盘 ⇒ 这里为 False）")
+        assert "证据收尾失败" in buf4.getvalue(), "close 失败不得静默：%r" % buf4.getvalue()
+
+        # N1：`frames_total` = s2c + c2s 数据行，**不含 meta 账目行**
+        rec5 = Recorder(os.path.join(tmp, "counts"), now_ms())
+        conn5 = Conn("gamegate", rec5)
+        conn5.phase = "gamegate"
+        conn5.sock = _FakeSock([build_s2c_frame(6930, SM_LOGON, 5, 9, 0, bytes(16))])
+        conn5.pump(20)
+        conn5.send(CM_TURN, 1, 0, 0, 0, b"")
+        rec5.close()
+        total = _frames_total(rec5)
+        assert total == 2, ("frames_total 必须是 s2c+c2s 数据行", total, rec5.s2c_written, rec5.c2s_written)
+        assert rec5.seq == 3, ("seq 是**行号**（1 s2c + 1 c2s + 1 meta）", rec5.seq)
+        assert total != rec5.seq, "frames_total 与 seq 必须不同（meta 行不得计入）"
+        return ("正常 close 零 stderr + 双句柄关；写失败 ⇒ 重新抛出；关句柄失败 ⇒ 报告（_BadCloser）；"
+                "收尾失败 ⇒ run.json 已落盘且 stderr 点名")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

@@ -355,6 +355,10 @@ restore / stack / probe / db / stop 子进程的环境。**真正必需的只有
 十六进制与等待结果）、`auto`（自动握手）、
 `frames_total` / `frames_by_conn` / `ident_hist`、`unclassified`、`exit`。
 
+**`frames_total` 的口径**（卡 `openmir2-probe-close-evidence-teeth` N1）：= **s2c 数据行 + c2s 数据行**，
+**不含** `c2s.ndjson` 里的 `direction="meta"` 账目行。base 曾用 `Recorder.seq`（行号）⇒ 报告比实际帧数多 1；
+c2s 采集默认开启，所以带 c2s 的一次运行 `frames_total` 会比纯 s2c 多出那些 c2s 行（这正是它的语义）。
+
 ## 退出码
 
 * `0` 全绿；
