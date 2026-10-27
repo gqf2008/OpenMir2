@@ -52,11 +52,11 @@ remove_from_map(actor_id)  →  entities.remove(actor_id)  →  sess.actor_id = 
 
 | # | 路径 | 位置 | 会话 ghost 时 | 依据 |
 |---|---|---|---|---|
-| A1 | `drain_aoi_downlink`（AOI 出现帧下行） | `lib.rs:15064` | 🧱 跳过 | `:15073` `if sess.stage != WorldStage::InWorld { continue }`；**且**目标侧 `aoi.rs:228-232` 有 `!other.ghost` |
-| A2 | `drain_depart_downlink`（离世广播） | `lib.rs:14993` | 🧱 不在名单 | 事件来自 `world.drain_departs()`，只在**离开那一刻**产生 |
-| A3 | `drain_login_tail`（登录尾段排水） | `lib.rs:15575` | 🧱 无登录帧 | 只有 `login_pending` 有该会话时才有事做；ghost 不重登 |
-| A4 | `drain_close_health_residual`（ShowHp 到期扫描） | `lib.rs:17001-17013` | **⚠️ 需补过滤** | 它 `world.entities.iter().map(|e| e.id)` 取**全部**实体再逐个 `drain_close_health_for`；后者只判 `e.show_hp && now - e.show_hp_tick > interval`（`lib.rs:17649`），**没有 ghost/stage 门** ⇒ M-3 后「ghost 且 `show_hp=true`」会以它为 `Recog` 向 ±12 玩家出帧，而 oracle 的 ghost 对象 `Run` 不再跑（`PlayObject.Message.cs:360` 起的 `Run` 链路）⇒ 不该出 |
-| A5 | `drain_periodic_save`（周期存档） | `lib.rs:17224-17255` | **⚠️ 需补过滤（stage/ghost 门）** | 名单 = `sessions.keys()`（排序后逐个 `save_human_rcd`，`:17239-17240`），**没有 stage 门**。oracle 的**周期**存档**排除 ghost**：`WorldServer.cs:648` `if (!playObject.Ghost)` 是主干，`:698-702`（Run + 周期 `SaveHumanRcd`）在**主干内**；ghost 走 **`else`**（`:707-716`：`:709 PlayObjectList.Remove` + `Disappear()` + `:713 SaveHumanRcd` + `:714 CloseUser`）⇒ **ghost 的那次存档发生在「移除时」**（在本仓对应断线存档），**不是**周期存档。⇒ M-3 后 `drain_periodic_save` 必须按 `stage`/`ghost` 跳过；`save_human_rcd` 在 `actor_id=Some` 时读同一份实体这一点仍要复核（§5） |
+| A1 | `drain_aoi_downlink`（AOI 出现帧下行） | `lib.rs` `drain_aoi_downlink` | 🧱 跳过 | `:15073` `if sess.stage != WorldStage::InWorld { continue }`；**且**目标侧 `aoi.rs:228-232` 有 `!other.ghost` |
+| A2 | `drain_depart_downlink`（离世广播） | `lib.rs` `drain_depart_downlink` | 🧱 不在名单 | 事件来自 `world.drain_departs()`，只在**离开那一刻**产生 |
+| A3 | `drain_login_tail`（登录尾段排水） | `lib.rs` `drain_login_tail` | 🧱 无登录帧 | 只有 `login_pending` 有该会话时才有事做；ghost 不重登 |
+| A4 | `drain_close_health_residual`（ShowHp 到期扫描） | `lib.rs` `drain_close_health_residual` | **⚠️ 需补过滤** | 它 `world.entities.iter().map(|e| e.id)` 取**全部**实体再逐个 `drain_close_health_for`；后者只判 `e.show_hp && now - e.show_hp_tick > interval`（`lib.rs:17649`），**没有 ghost/stage 门** ⇒ M-3 后「ghost 且 `show_hp=true`」会以它为 `Recog` 向 ±12 玩家出帧，而 oracle 的 ghost 对象 `Run` 不再跑（`PlayObject.Message.cs:360` 起的 `Run` 链路）⇒ 不该出 |
+| A5 | `drain_periodic_save`（周期存档） | `lib.rs` `drain_periodic_save` | **⚠️ 需补过滤（stage/ghost 门）** | 名单 = `sessions.keys()`（排序后逐个 `save_human_rcd`，`:17239-17240`），**没有 stage 门**。oracle 的**周期**存档**排除 ghost**：`WorldServer.cs:648` `if (!playObject.Ghost)` 是主干，`:698-702`（Run + 周期 `SaveHumanRcd`）在**主干内**；ghost 走 **`else`**（`:707-716`：`:709 PlayObjectList.Remove` + `Disappear()` + `:713 SaveHumanRcd` + `:714 CloseUser`）⇒ **ghost 的那次存档发生在「移除时」**（在本仓对应断线存档），**不是**周期存档。⇒ M-3 后 `drain_periodic_save` 必须按 `stage`/`ghost` 跳过；`save_human_rcd` 在 `actor_id=Some` 时读同一份实体这一点仍要复核（§5） |
 | A6 | `GateEvent::Closed` 臂（断线/软关存档） | `lib.rs` 的 `GateEvent::Closed` 分支 | **母卡要修的点** | 它按「实体在世」取派生字段（`entity_derived_snapshot`），而今天 soft_close 已把实体摘掉 ⇒ 派生字段静默回落。M-3 让实体保留后这条自然正确；**M-2 应为「Closed 的存档字段与 disconnect 前一致」补一颗牙** |
 
 ## 3. B. 实体迭代（`entities.iter/ids/len/values`，生产 **25** 处 / 24 行；B20 一行两处）

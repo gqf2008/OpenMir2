@@ -70,6 +70,8 @@ REGISTRY = [
     ("board_coverage_gate", ["tools/hygiene/board_coverage_gate.py", "--selftest"], False),
     # 卡 `openmir2-scenario-manifest-gate`：卡面/文档引用的 probe 场景必须真的在 run3 清单里。
     ("scenario_manifest_gate", ["tools/hygiene/scenario_manifest_gate.py", "--selftest"], False),
+    # 卡 `openmir2-doc-anchor-drift`：判据文档（`[[files]]` 登记）里的行号/符号锚。
+    ("docs_anchor_gate", ["tools/hygiene/docs_anchor_gate.py", "--selftest"], False),
     ("t_reservation_gate", ["tools/whitelist/t_reservation_gate.py", "selftest"], False),
     ("next_t", ["tools/whitelist/next_t.py", "selftest"], False),
     # dbsnap 的自测会连**本机 MySQL** 读 13 张库表（mir2_account.* / mir2_db.*，mysql.exe 路径硬编码）
