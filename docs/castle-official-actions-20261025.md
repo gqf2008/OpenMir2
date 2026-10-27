@@ -52,7 +52,8 @@
 ② open/close 分支的 `say_main` 改回 `true` ⇒ open/close 用例 RED（F1 的钉）；
 ③ `castle_unit_entity_at` 收回「只查 `main_door`」⇒ 墙修复用例 RED（F2 的钉）；
 ④ emit 的 `light`/`feature` 改回硬编码 0 ⇒ open/close 用例 RED（返工 2 F1 的钉；reviewer 实测两颗各红一次）；
-⑤ RM_ALIVE 支的 status 改回实体 `char_status` ⇒ N2 用例两格都 RED（N2 的钉）。
+⑤ RM_ALIVE 支的 status 改回实体 `char_status` ⇒ N2 用例两格都 RED（N2 的钉）；
+⑥ emit 的 RM_DIGUP status 改读展示层 ⇒ info① 用例 RED（DIGUP 实体半边的对称钉；merge_result `e25f5ed8` 后续）。
 
 ## 4. 登记（未实现 / 不可达）
 
