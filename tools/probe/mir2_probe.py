@@ -4121,9 +4121,31 @@ def _selftest_frames_total_payload():
         buf = _io.StringIO()
         with redirect_stdout(buf):
             _finish_evidence(run2, args, None, {}, None)
-        printed = [l for l in buf.getvalue().splitlines() if "frames=" in l]
-        assert printed and ("frames=2 " in printed[0]), ("控制台 frames 口径必须与 run.json 一致", printed)
-        return "payload.frames_total == _frames_total == 2（seq=3）；控制台 frames=2 同口径"
+        def _console_frames_line(text):
+            """**行锚**取控制台那一行（卡 `openmir2-probe-console-line-parse`）。
+
+            原来用「第一条含 `frames=` 的行」，一旦输出前后混进别的带 `frames=` 的诊断行
+            （日志、告警、别的工具的行），牙就会去检查**错的那行**。锚必须是完整的行首前缀。
+            """
+            for line in text.splitlines():
+                if line.startswith("mir2_probe: exit="):
+                    return line
+            return None
+
+        target = _console_frames_line(buf.getvalue())
+        assert target is not None and ("frames=2 " in target), (
+            "控制台 frames 口径必须与 run.json 一致（行锚 = `mir2_probe: exit=`）", target)
+
+        # **反例牙**：在目标行前后插入别的含 `frames=` 的诊断行 ⇒ 仍必须命中锚定的那行。
+        noisy = ("warn: helper frames=99 (noise before)" + chr(10)
+                 + buf.getvalue()
+                 + "tail: other tool frames=0 (noise after)" + chr(10))
+        noisy_target = _console_frames_line(noisy)
+        assert noisy_target is not None and "frames=2 " in noisy_target, (
+            "插入噪声行后仍必须命中 `mir2_probe: exit=` 那一行（不许退化成『第一条含 frames=』）",
+            noisy_target)
+        return ("payload.frames_total == _frames_total == 2（seq=3）；控制台行锚 `mir2_probe: exit=` "
+                "在同口径检查下取到 frames=2，且前后插入噪声 frames=99/0 后仍命中目标行")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
