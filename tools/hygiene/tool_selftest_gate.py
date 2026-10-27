@@ -58,6 +58,9 @@ REGISTRY = [
     # 卡 openmir2-refs-head-guard（Lead 裁决「只加这一行」）：collab 条目 refs.head/base 的
     # fail-closed 取值 + 反模式 lint；不登记就是 UNCLASSIFIED rc=2（既有团队规矩：新工具必须进工具门）。
     ("entryrefs", ["tools/collab/entryrefs.py", "--selftest"], False),
+    # 卡 openmir2-signing-script-head-placeholder：collab patch 条目的 head/base 必须由本脚本
+    # rev-parse 实取（40 位小写 hex assert，非 hex 拒签）——2ddb6d94 的 refs.head 缺失事故源头。
+    ("sign_entry", ["tools/collab/sign_entry.py", "--selftest", "--repo", "."], False),
     # 规则 36：注册**真仓库 check**（`gate` = 自测 + 真仓库判据），不是只跑合成夹具。
     ("oid_gate", ["tools/collab/oid_gate.py", "gate",
                   "--baseline", "tools/collab/oid_gate_baseline.json"], False),
