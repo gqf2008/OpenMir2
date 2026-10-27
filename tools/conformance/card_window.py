@@ -3561,6 +3561,8 @@ def _parse_assets_row(out, n_decl):
 #   * 判据是**静默检测**：轮询目标行（`characters.LASTUPDATE` + 行数 +
 #     `characters_ablity.ModifyTime` 第二见证）指纹，连续两次
 #     采样相同且时间跨度 >= `quiet_ms` 才认为落定；**不用固定 sleep 充当证据**；
+#   * `require_changes=true` 时，未观测到变化的 quiet 不提前收口；持续采样到
+#     `window_ms`，延迟变化会重新起算 quiet。观满窗口仍零变化才记 no_change_observed；
 #   * 窗口 `window_ms`（默认 5000，上限 5000）内不落定 ⇒ **fail-closed**：该侧 rc=2 并记
 #     `save_unsettled`（点名前后的采样），绝不回退成「等够了就当成功」；
 #   * `--dry-run` 只打印计划、不连库。
@@ -3581,8 +3583,8 @@ def profile_save_settle(prof, side=None):
 
     `require_changes`（**默认 true**）：静默是**负向判据**——恒定指纹同样会被 `settle_decision`
     判成落定（`changes == 0` 也 settled，reviewer-21 实测）。所以默认要求**从 arm 点起至少
-    观测到 1 次变化**，否则该侧 DB 面不采信（rc=2 / `no_change_observed`）。
-    **静默 != 存档已触发。** 确实不写库的只读场景才可显式 `require_changes: false`，
+    观测到 1 次变化**，否则持续采样到 window 结束，该侧 DB 面不采信
+    （rc=2 / `no_change_observed`）。**静默 != 存档已触发。** 确实不写库的只读场景才可显式 `require_changes: false`，
     并在该线程 `comment` 里写明「本场景不产生状态变化」。
     """
     decl = prof.get("save_settle")
@@ -3636,8 +3638,8 @@ def summary_save_settle_decl(prof):
 def settle_decision(samples, quiet_ms):
     """静默检测：`samples` = [(t_ms, fingerprint)] 按时间升序。
 
-    返回 (settled, changes, elapsed_ms)。**落定 = 存在相邻两次采样指纹相同且时间跨度
-    >= quiet_ms**（即连续 quiet_ms 内没有任何变化）；固定 sleep 不参与判定。
+    返回 (settled, changes, elapsed_ms)。**落定 = 当前末尾连续段在 quiet_ms 内没有变化**；
+    新变化会撤销此前已达成的 quiet，固定 sleep 不参与判定。
     """
     if not samples:
         return False, 0, 0
@@ -3651,9 +3653,9 @@ def settle_decision(samples, quiet_ms):
     for i in range(1, len(samples)):
         if samples[i][1] != samples[i - 1][1]:
             run_start = samples[i][0]
+            settled = False
         elif (samples[i][0] - run_start) >= quiet_ms:
             settled = True
-            break
     return settled, changes, samples[-1][0] - samples[0][0]
 
 
@@ -3802,22 +3804,12 @@ def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
                 [(s["t_ms"], s["sha256_12"]) for s in res["samples"]], res["quiet_ms"])
             res["changes"] = changes
             elapsed = t - t_start
-            if settled:
-                res["settled"] = True
-                res["elapsed_ms"] = elapsed
+            res["settled"] = settled
+            res["elapsed_ms"] = elapsed
+            # quiet 只决定「观测到变化后何时收口」；require_changes=true 且尚未变化时
+            # 不能把静默当成失败提前返回，否则异步落库晚于 quiet 就永远观测不到。
+            if settled and (not res["require_changes"] or res["changes"] > 0):
                 res["action"] = "settled"
-                if res["require_changes"] and res["changes"] == 0:
-                    # **静默 != 存档已触发**：本轮应有状态变化却一次都没观测到 ⇒ 存档很可能
-                    # 还没到（或根本没触发）。落定只证明「此刻没人在写」，不能当证据用。
-                    res["action"] = "no_change_observed"
-                    res["error"] = ("save_unsettled: no_change_observed —— require_changes=true "
-                                    "但实际观测的 %dms 内没有任何变化（changes=0，采样 %d 次；"
-                                    "db=%s 行=%s；window 上限 %dms）—— 静默 != 存档已触发，"
-                                    "该侧 DB 面不采信"
-                                    % (elapsed, len(res["samples"]), db, chr_name,
-                                       res["window_ms"]))
-                    res["rc"] = 2
-                    return res
                 res["rc"] = 0
                 runner.log("[%s] 存档落定：db=%s 行=%s changes=%d elapsed=%dms samples=%d"
                            % (side, db, chr_name, changes, elapsed, len(res["samples"])))
@@ -3825,8 +3817,19 @@ def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
             if elapsed >= res["window_ms"]:
                 break
             _sleep(min(res["poll_ms"], max(0, res["window_ms"] - elapsed)))
-        res["action"] = "timeout"
         res["elapsed_ms"] = _now_ms() - t_start
+        if res["require_changes"] and res["changes"] == 0:
+            # 观满整个 window 仍无变化才是 no_change；此时静默仍不等于存档已触发。
+            res["action"] = "no_change_observed"
+            res["error"] = ("save_unsettled: no_change_observed —— require_changes=true "
+                            "但实际观测的 %dms 内没有任何变化（changes=0，采样 %d 次；"
+                            "db=%s 行=%s；window 上限 %dms）—— 静默 != 存档已触发，"
+                            "该侧 DB 面不采信"
+                            % (res["elapsed_ms"], len(res["samples"]), db, chr_name,
+                               res["window_ms"]))
+            res["rc"] = 2
+            return res
+        res["action"] = "timeout"
         res["error"] = ("save_unsettled: %dms 窗口内未观测到 %dms 静默（changes=%d，采样 %d 次；"
                         "db=%s 行=%s）—— 存档可能仍在途或未触发，拒绝把本次 DB 快照当证据"
                         % (res["window_ms"], res["quiet_ms"], res["changes"],
@@ -8909,6 +8912,8 @@ def _selftest_save_settle():
                 "SETTLE5 静默跨度不足（1000<1200）=> 未落定"))
     out.append((settle_decision(mk(["a", "a", "b", "b", "b", "b", "b"]), 800)[0] is True,
                 "SETTLE6 变化后静默 => settled（changes 计入）"))
+    out.append((settle_decision(mk(["a", "a", "a", "b"]), 400)[0] is False,
+                "SETTLE6b 新变化撤销此前 quiet：当前尾段尚未静默 => 不 settled"))
     out.append((settle_decision(mk(list("abcdefg")), 800)[0] is False,
                 "SETTLE7 持续变化 => 未落定"))
 
@@ -9007,11 +9012,20 @@ def _selftest_save_settle():
                 and "no_change_observed" in err5
                 and "静默 != 存档已触发" in err5
                 and ("实际观测的 %dms" % res5["elapsed_ms"]) in err5
-                and res5["elapsed_ms"] < 1200
+                and res5["elapsed_ms"] >= 1200
+                and len(res5["samples"]) >= 6
                 and "window 上限 1200ms" in err5,
-                "SETTLE15 牙8 require_changes 且零变化 => rc=2 no_change_observed"
-                "（且报错用实际 elapsed=%dms、不拿 window 上限冒充）"
-                % res5["elapsed_ms"]))
+                "SETTLE15 牙8 require_changes 且零变化 => 观满 window 后 rc=2 no_change_observed"
+                "（quiet 不提前截断；实际 elapsed=%dms）" % res5["elapsed_ms"]))
+    delayed_b = "B" + chr(10) + "46"
+    seq_delayed = iter([constant(None), constant(None), constant(None),
+                        delayed_b, delayed_b, delayed_b, delayed_b])
+    res_delayed = wait_save_settled(_R(), "csharp", prof, sc, ss, {},
+                                    sql_fn=lambda _s: next(seq_delayed), clock=make_clock())
+    out.append((res_delayed["rc"] == 0 and res_delayed["action"] == "settled"
+                and res_delayed["changes"] == 1 and len(res_delayed["samples"]) >= 5
+                and res_delayed["elapsed_ms"] > 400,
+                "SETTLE15d 延迟落库正对照：quiet 后才变化 => 继续采样并 rc=0 changes=1"))
     seq2 = iter(["A\n46", "B\n46", "B\n46", "B\n46", "B\n46"])
     res6 = wait_save_settled(_R(), "csharp", prof, sc, ss, {},
                              sql_fn=lambda _s: next(seq2), clock=make_clock())
