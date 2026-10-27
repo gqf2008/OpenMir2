@@ -1,0 +1,2833 @@
+{
+  "format": "butch-census-ident-triage-draft/1",
+  "card": "openmir2-butch-census-ident-triage",
+  "tier": "R",
+  "window_required": true,
+  "active": false,
+  "activation_blocker": "本文件是 triage 证据与判据草案，不是 compare_runs 可加载的 rules.json；未实现、未批准前没有任何 ignore/归一化效果。",
+  "evidence": {
+    "run4": {
+      "root": "E:\\tmp\\window\\run4\\butch_two_draws",
+      "frames_sha256": {
+        "csharp": "a2af6f81ba45836a58b1299c5aca1203e0662eb0b89266dd5c6f08a0b714c56a",
+        "rust": "f7b00213dc542da8f17859b38b2c48a9137f3713a9fe0fb643342cba98e8b8ea"
+      },
+      "report_sha256": "907ef8fb1985d08f68c4b7a72e99bbc2df3ffc1b9790110732f109d4f8418242",
+      "fixture_after_sha256": {
+        "csharp": "82f63f0aace7b1be4dbf4fa2854bce5040e32464124afd65cf98a59ede2331c5",
+        "rust": "82f63f0aace7b1be4dbf4fa2854bce5040e32464124afd65cf98a59ede2331c5"
+      }
+    },
+    "repeated_same_binary_control": {
+      "run3": {
+        "scenario_sha256": "23558a94d8955a31c6eede719900c52a6eed7796d5b0371dd977b52ac8f0c065",
+        "binary_sha256": {
+          "csharp": [
+            "ab6550080736e6610c86de226751c66a319e61e6be2176630a2374ea5819392f"
+          ],
+          "rust": [
+            "fca9e8cd6733a3ca2a5d6dcbc19a711a95e43723e889bfa38c2d0dce1c8cea31"
+          ]
+        },
+        "counts": {
+          "csharp": {
+            "10": 34,
+            "41": 36,
+            "11": 4,
+            "14": 0,
+            "656": 2,
+            "turn_body_len": {
+              "11": 7,
+              "19": 27
+            }
+          },
+          "rust": {
+            "10": 26,
+            "41": 28,
+            "11": 6,
+            "14": 0,
+            "656": 0,
+            "turn_body_len": {
+              "19": 26
+            }
+          }
+        }
+      },
+      "run4": {
+        "scenario_sha256": "23558a94d8955a31c6eede719900c52a6eed7796d5b0371dd977b52ac8f0c065",
+        "binary_sha256": {
+          "csharp": [
+            "ab6550080736e6610c86de226751c66a319e61e6be2176630a2374ea5819392f"
+          ],
+          "rust": [
+            "fca9e8cd6733a3ca2a5d6dcbc19a711a95e43723e889bfa38c2d0dce1c8cea31"
+          ]
+        },
+        "counts": {
+          "csharp": {
+            "10": 40,
+            "41": 42,
+            "11": 12,
+            "14": 1,
+            "656": 4,
+            "turn_body_len": {
+              "11": 12,
+              "19": 28
+            }
+          },
+          "rust": {
+            "10": 28,
+            "41": 30,
+            "11": 19,
+            "14": 4,
+            "656": 0,
+            "turn_body_len": {
+              "19": 28
+            }
+          }
+        }
+      }
+    }
+  },
+  "timeline": {
+    "10": {
+      "name": "SM_TURN",
+      "summary": {
+        "csharp": {
+          "count": 40,
+          "first": {
+            "seq": 27,
+            "t_ms": 2427
+          },
+          "last": {
+            "seq": 146,
+            "t_ms": 10146
+          },
+          "intervals_ms": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1173,
+            388,
+            2027,
+            0,
+            774,
+            299,
+            1351,
+            611,
+            488,
+            0,
+            608,
+            0
+          ],
+          "distinct_recog": 28,
+          "distribution": {
+            "param": {
+              "325": 2,
+              "326": 4,
+              "327": 2,
+              "328": 1,
+              "329": 3,
+              "330": 12,
+              "331": 5,
+              "332": 4,
+              "333": 3,
+              "334": 4
+            },
+            "tag": {
+              "327": 4,
+              "328": 2,
+              "329": 10,
+              "330": 8,
+              "331": 7,
+              "332": 6,
+              "333": 1,
+              "334": 1,
+              "335": 1
+            },
+            "series": {
+              "0": 4,
+              "1": 2,
+              "2": 5,
+              "3": 7,
+              "4": 7,
+              "5": 5,
+              "6": 7,
+              "7": 3
+            },
+            "body_len": {
+              "11": 12,
+              "19": 28
+            }
+          }
+        },
+        "rust": {
+          "count": 28,
+          "first": {
+            "seq": 30,
+            "t_ms": 1824
+          },
+          "last": {
+            "seq": 84,
+            "t_ms": 1825
+          },
+          "intervals_ms": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0
+          ],
+          "distinct_recog": 28,
+          "distribution": {
+            "param": {
+              "325": 2,
+              "326": 1,
+              "327": 3,
+              "328": 2,
+              "329": 4,
+              "330": 3,
+              "331": 5,
+              "332": 2,
+              "333": 2,
+              "334": 3,
+              "336": 1
+            },
+            "tag": {
+              "322": 1,
+              "324": 1,
+              "326": 1,
+              "327": 2,
+              "328": 1,
+              "329": 3,
+              "330": 6,
+              "331": 6,
+              "332": 4,
+              "333": 3
+            },
+            "series": {
+              "0": 2,
+              "1": 1,
+              "2": 2,
+              "3": 2,
+              "4": 3,
+              "5": 3,
+              "6": 6,
+              "7": 9
+            },
+            "body_len": {
+              "19": 28
+            }
+          }
+        }
+      },
+      "frames": {
+        "csharp": [
+          {
+            "seq": 27,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 131559959,
+            "param": 333,
+            "tag": 332,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 29,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1261425714,
+            "param": 332,
+            "tag": 328,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 31,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1385566385,
+            "param": 332,
+            "tag": 327,
+            "series": 1,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 33,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1764435985,
+            "param": 331,
+            "tag": 335,
+            "series": 4,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 35,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 730536282,
+            "param": 329,
+            "tag": 330,
+            "series": 0,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 37,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 696890076,
+            "param": 331,
+            "tag": 330,
+            "series": 4,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 39,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1647281687,
+            "param": 331,
+            "tag": 329,
+            "series": 5,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 41,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 415697375,
+            "param": 330,
+            "tag": 331,
+            "series": 5,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 43,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1554121447,
+            "param": 330,
+            "tag": 331,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 45,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1790038535,
+            "param": 330,
+            "tag": 331,
+            "series": 0,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 47,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 767349470,
+            "param": 330,
+            "tag": 330,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 49,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 108106209,
+            "param": 330,
+            "tag": 329,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 51,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 403912535,
+            "param": 329,
+            "tag": 331,
+            "series": 2,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 53,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1560908909,
+            "param": 330,
+            "tag": 327,
+            "series": 3,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 55,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1138940660,
+            "param": 330,
+            "tag": 328,
+            "series": 4,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 57,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1594168837,
+            "param": 330,
+            "tag": 329,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 59,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1808183258,
+            "param": 334,
+            "tag": 331,
+            "series": 2,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 61,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1406301903,
+            "param": 329,
+            "tag": 329,
+            "series": 0,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 63,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1352078385,
+            "param": 327,
+            "tag": 333,
+            "series": 5,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 65,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1746637502,
+            "param": 327,
+            "tag": 327,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 67,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 2011194138,
+            "param": 331,
+            "tag": 332,
+            "series": 3,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 69,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1588162198,
+            "param": 326,
+            "tag": 329,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 71,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1216191512,
+            "param": 326,
+            "tag": 327,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 73,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 720417635,
+            "param": 332,
+            "tag": 334,
+            "series": 5,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 75,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1891900359,
+            "param": 332,
+            "tag": 330,
+            "series": 0,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 77,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 122682504,
+            "param": 334,
+            "tag": 329,
+            "series": 3,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 79,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 637433679,
+            "param": 325,
+            "tag": 330,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 81,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1550231346,
+            "param": 326,
+            "tag": 332,
+            "series": 2,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 95,
+            "t_ms": 3600,
+            "phase": "gamegate",
+            "recog": 637433679,
+            "param": 325,
+            "tag": 330,
+            "series": 3,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 98,
+            "t_ms": 3988,
+            "phase": "gamegate",
+            "recog": 1594168837,
+            "param": 330,
+            "tag": 329,
+            "series": 2,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 107,
+            "t_ms": 6015,
+            "phase": "gamegate",
+            "recog": 131559959,
+            "param": 333,
+            "tag": 332,
+            "series": 3,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 109,
+            "t_ms": 6015,
+            "phase": "gamegate",
+            "recog": 122682504,
+            "param": 334,
+            "tag": 329,
+            "series": 1,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 112,
+            "t_ms": 6789,
+            "phase": "gamegate",
+            "recog": 415697375,
+            "param": 330,
+            "tag": 331,
+            "series": 2,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 115,
+            "t_ms": 7088,
+            "phase": "gamegate",
+            "recog": 403912535,
+            "param": 328,
+            "tag": 332,
+            "series": 4,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 124,
+            "t_ms": 8439,
+            "phase": "gamegate",
+            "recog": 131559959,
+            "param": 333,
+            "tag": 332,
+            "series": 4,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 128,
+            "t_ms": 9050,
+            "phase": "gamegate",
+            "recog": 767349470,
+            "param": 330,
+            "tag": 330,
+            "series": 3,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 133,
+            "t_ms": 9538,
+            "phase": "gamegate",
+            "recog": 122682504,
+            "param": 334,
+            "tag": 329,
+            "series": 5,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 135,
+            "t_ms": 9538,
+            "phase": "gamegate",
+            "recog": 1588162198,
+            "param": 326,
+            "tag": 329,
+            "series": 4,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 144,
+            "t_ms": 10146,
+            "phase": "gamegate",
+            "recog": 696890076,
+            "param": 331,
+            "tag": 330,
+            "series": 3,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 146,
+            "t_ms": 10146,
+            "phase": "gamegate",
+            "recog": 415697375,
+            "param": 330,
+            "tag": 331,
+            "series": 4,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          }
+        ],
+        "rust": [
+          {
+            "seq": 30,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 189,
+            "param": 333,
+            "tag": 322,
+            "series": 0,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 32,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 216,
+            "param": 332,
+            "tag": 333,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 34,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 215,
+            "param": 332,
+            "tag": 332,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 36,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 193,
+            "param": 334,
+            "tag": 326,
+            "series": 1,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 38,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 214,
+            "param": 331,
+            "tag": 331,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 40,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 213,
+            "param": 331,
+            "tag": 331,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 42,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 203,
+            "param": 331,
+            "tag": 330,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 44,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 186,
+            "param": 331,
+            "tag": 327,
+            "series": 4,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 46,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 212,
+            "param": 330,
+            "tag": 331,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 48,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 209,
+            "param": 330,
+            "tag": 331,
+            "series": 3,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 50,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 191,
+            "param": 330,
+            "tag": 330,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 52,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 205,
+            "param": 328,
+            "tag": 332,
+            "series": 5,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 54,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 199,
+            "param": 329,
+            "tag": 330,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 56,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 190,
+            "param": 329,
+            "tag": 324,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 58,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 188,
+            "param": 329,
+            "tag": 329,
+            "series": 0,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 60,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 210,
+            "param": 329,
+            "tag": 331,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 62,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 207,
+            "param": 328,
+            "tag": 330,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 64,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 208,
+            "param": 327,
+            "tag": 333,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 66,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 206,
+            "param": 327,
+            "tag": 329,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 68,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 202,
+            "param": 336,
+            "tag": 330,
+            "series": 2,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 70,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 197,
+            "param": 326,
+            "tag": 330,
+            "series": 4,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 72,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 185,
+            "param": 325,
+            "tag": 333,
+            "series": 5,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 74,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 211,
+            "param": 331,
+            "tag": 332,
+            "series": 6,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 76,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 194,
+            "param": 333,
+            "tag": 329,
+            "series": 3,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 78,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 195,
+            "param": 334,
+            "tag": 328,
+            "series": 2,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 80,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 201,
+            "param": 334,
+            "tag": 331,
+            "series": 5,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 82,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 198,
+            "param": 325,
+            "tag": 332,
+            "series": 7,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          },
+          {
+            "seq": 84,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 187,
+            "param": 327,
+            "tag": 327,
+            "series": 4,
+            "body_len": 19,
+            "body_sha256": "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73"
+          }
+        ]
+      }
+    },
+    "41": {
+      "name": "SM_FEATURECHANGED",
+      "summary": {
+        "csharp": {
+          "count": 42,
+          "first": {
+            "seq": 15,
+            "t_ms": 2419
+          },
+          "last": {
+            "seq": 148,
+            "t_ms": 10548
+          },
+          "intervals_ms": [
+            8,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1173,
+            388,
+            0,
+            2027,
+            0,
+            774,
+            299,
+            1351,
+            611,
+            488,
+            0,
+            608,
+            402
+          ],
+          "distinct_recog": 29,
+          "distribution": {
+            "param": {
+              "0": 1,
+              "11": 40,
+              "512": 1
+            },
+            "tag": {
+              "2": 2,
+              "160": 40
+            },
+            "series": {
+              "0": 42
+            },
+            "body_len": {
+              "0": 42
+            }
+          }
+        },
+        "rust": {
+          "count": 30,
+          "first": {
+            "seq": 15,
+            "t_ms": 822
+          },
+          "last": {
+            "seq": 99,
+            "t_ms": 2341
+          },
+          "intervals_ms": [
+            1002,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            0,
+            516
+          ],
+          "distinct_recog": 29,
+          "distribution": {
+            "param": {
+              "0": 1,
+              "11": 28,
+              "512": 1
+            },
+            "tag": {
+              "2": 2,
+              "160": 28
+            },
+            "series": {
+              "0": 30
+            },
+            "body_len": {
+              "0": 30
+            }
+          }
+        }
+      },
+      "frames": {
+        "csharp": [
+          {
+            "seq": 15,
+            "t_ms": 2419,
+            "phase": "gamegate",
+            "recog": 1505560413,
+            "param": 0,
+            "tag": 2,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 28,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 131559959,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 30,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1261425714,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 32,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1385566385,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 34,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1764435985,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 36,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 730536282,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 38,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 696890076,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 40,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1647281687,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 42,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 415697375,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 44,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1554121447,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 46,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1790038535,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 48,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 767349470,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 50,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 108106209,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 52,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 403912535,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 54,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1560908909,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 56,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1138940660,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 58,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1594168837,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 60,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1808183258,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 62,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1406301903,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 64,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1352078385,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 66,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1746637502,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 68,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 2011194138,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 70,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1588162198,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 72,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1216191512,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 74,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 720417635,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 76,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1891900359,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 78,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 122682504,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 80,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 637433679,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 82,
+            "t_ms": 2427,
+            "phase": "gamegate",
+            "recog": 1550231346,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 96,
+            "t_ms": 3600,
+            "phase": "gamegate",
+            "recog": 637433679,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 99,
+            "t_ms": 3988,
+            "phase": "gamegate",
+            "recog": 1594168837,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 103,
+            "t_ms": 3988,
+            "phase": "gamegate",
+            "recog": 1505560413,
+            "param": 512,
+            "tag": 2,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 108,
+            "t_ms": 6015,
+            "phase": "gamegate",
+            "recog": 131559959,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 110,
+            "t_ms": 6015,
+            "phase": "gamegate",
+            "recog": 122682504,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 113,
+            "t_ms": 6789,
+            "phase": "gamegate",
+            "recog": 415697375,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 116,
+            "t_ms": 7088,
+            "phase": "gamegate",
+            "recog": 403912535,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 125,
+            "t_ms": 8439,
+            "phase": "gamegate",
+            "recog": 131559959,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 129,
+            "t_ms": 9050,
+            "phase": "gamegate",
+            "recog": 767349470,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 134,
+            "t_ms": 9538,
+            "phase": "gamegate",
+            "recog": 122682504,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 136,
+            "t_ms": 9538,
+            "phase": "gamegate",
+            "recog": 1588162198,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 145,
+            "t_ms": 10146,
+            "phase": "gamegate",
+            "recog": 696890076,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 148,
+            "t_ms": 10548,
+            "phase": "gamegate",
+            "recog": 415697375,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "rust": [
+          {
+            "seq": 15,
+            "t_ms": 822,
+            "phase": "gamegate",
+            "recog": 605,
+            "param": 0,
+            "tag": 2,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 31,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 189,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 33,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 216,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 35,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 215,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 37,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 193,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 39,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 214,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 41,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 213,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 43,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 203,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 45,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 186,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 47,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 212,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 49,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 209,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 51,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 191,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 53,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 205,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 55,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 199,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 57,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 190,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 59,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 188,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 61,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 210,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 63,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 207,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 65,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 208,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 67,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 206,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 69,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 202,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 71,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 197,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 73,
+            "t_ms": 1824,
+            "phase": "gamegate",
+            "recog": 185,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 75,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 211,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 77,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 194,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 79,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 195,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 81,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 201,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 83,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 198,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 85,
+            "t_ms": 1825,
+            "phase": "gamegate",
+            "recog": 187,
+            "param": 11,
+            "tag": 160,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 99,
+            "t_ms": 2341,
+            "phase": "gamegate",
+            "recog": 605,
+            "param": 512,
+            "tag": 2,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      }
+    },
+    "11": {
+      "name": "SM_WALK",
+      "summary": {
+        "csharp": {
+          "count": 12,
+          "first": {
+            "seq": 92,
+            "t_ms": 2696
+          },
+          "last": {
+            "seq": 155,
+            "t_ms": 11643
+          },
+          "intervals_ms": [
+            295,
+            297,
+            2727,
+            2424,
+            312,
+            1100,
+            0,
+            697,
+            0,
+            814,
+            281
+          ],
+          "distinct_recog": 9,
+          "distribution": {
+            "param": {
+              "325": 1,
+              "326": 1,
+              "328": 2,
+              "329": 1,
+              "331": 3,
+              "332": 1,
+              "333": 2,
+              "334": 1
+            },
+            "tag": {
+              "325": 1,
+              "326": 1,
+              "328": 1,
+              "330": 1,
+              "331": 2,
+              "332": 2,
+              "333": 2,
+              "334": 1,
+              "335": 1
+            },
+            "series": {
+              "1": 3,
+              "2": 1,
+              "3": 1,
+              "4": 2,
+              "5": 4,
+              "6": 1
+            },
+            "body_len": {
+              "11": 12
+            }
+          }
+        },
+        "rust": {
+          "count": 19,
+          "first": {
+            "seq": 27,
+            "t_ms": 822
+          },
+          "last": {
+            "seq": 166,
+            "t_ms": 19961
+          },
+          "intervals_ms": [
+            0,
+            1201,
+            4009,
+            202,
+            2404,
+            1803,
+            200,
+            2405,
+            1204,
+            2005,
+            600,
+            602,
+            802,
+            0,
+            894,
+            107,
+            701,
+            0
+          ],
+          "distinct_recog": 14,
+          "distribution": {
+            "param": {
+              "323": 1,
+              "324": 2,
+              "325": 2,
+              "326": 2,
+              "327": 1,
+              "328": 1,
+              "329": 2,
+              "331": 2,
+              "332": 2,
+              "334": 1,
+              "337": 1,
+              "338": 1,
+              "339": 1
+            },
+            "tag": {
+              "322": 1,
+              "323": 1,
+              "327": 1,
+              "328": 1,
+              "330": 4,
+              "331": 6,
+              "332": 3,
+              "333": 2
+            },
+            "series": {
+              "1": 1,
+              "2": 4,
+              "3": 2,
+              "4": 1,
+              "5": 1,
+              "6": 2,
+              "7": 8
+            },
+            "body_len": {
+              "11": 19
+            }
+          }
+        }
+      },
+      "frames": {
+        "csharp": [
+          {
+            "seq": 92,
+            "t_ms": 2696,
+            "phase": "gamegate",
+            "recog": 108106209,
+            "param": 331,
+            "tag": 328,
+            "series": 1,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 93,
+            "t_ms": 2991,
+            "phase": "gamegate",
+            "recog": 403912535,
+            "param": 328,
+            "tag": 332,
+            "series": 5,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 94,
+            "t_ms": 3288,
+            "phase": "gamegate",
+            "recog": 1554121447,
+            "param": 329,
+            "tag": 331,
+            "series": 6,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 106,
+            "t_ms": 6015,
+            "phase": "gamegate",
+            "recog": 1352078385,
+            "param": 326,
+            "tag": 334,
+            "series": 5,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 126,
+            "t_ms": 8439,
+            "phase": "gamegate",
+            "recog": 1352078385,
+            "param": 325,
+            "tag": 335,
+            "series": 5,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 127,
+            "t_ms": 8751,
+            "phase": "gamegate",
+            "recog": 1385566385,
+            "param": 333,
+            "tag": 326,
+            "series": 1,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 140,
+            "t_ms": 9851,
+            "phase": "gamegate",
+            "recog": 2011194138,
+            "param": 332,
+            "tag": 333,
+            "series": 3,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 141,
+            "t_ms": 9851,
+            "phase": "gamegate",
+            "recog": 403912535,
+            "param": 328,
+            "tag": 333,
+            "series": 4,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 149,
+            "t_ms": 10548,
+            "phase": "gamegate",
+            "recog": 1866488471,
+            "param": 331,
+            "tag": 332,
+            "series": 4,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 150,
+            "t_ms": 10548,
+            "phase": "gamegate",
+            "recog": 122682504,
+            "param": 333,
+            "tag": 330,
+            "series": 5,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 154,
+            "t_ms": 11362,
+            "phase": "gamegate",
+            "recog": 415697375,
+            "param": 331,
+            "tag": 331,
+            "series": 2,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 155,
+            "t_ms": 11643,
+            "phase": "gamegate",
+            "recog": 1385566385,
+            "param": 334,
+            "tag": 325,
+            "series": 1,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          }
+        ],
+        "rust": [
+          {
+            "seq": 27,
+            "t_ms": 822,
+            "phase": "gamegate",
+            "recog": 185,
+            "param": 325,
+            "tag": 333,
+            "series": 5,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 28,
+            "t_ms": 822,
+            "phase": "gamegate",
+            "recog": 210,
+            "param": 329,
+            "tag": 331,
+            "series": 6,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 94,
+            "t_ms": 2023,
+            "phase": "gamegate",
+            "recog": 198,
+            "param": 324,
+            "tag": 331,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 108,
+            "t_ms": 6032,
+            "phase": "gamegate",
+            "recog": 190,
+            "param": 328,
+            "tag": 323,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 110,
+            "t_ms": 6234,
+            "phase": "gamegate",
+            "recog": 185,
+            "param": 324,
+            "tag": 332,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 118,
+            "t_ms": 8638,
+            "phase": "gamegate",
+            "recog": 206,
+            "param": 326,
+            "tag": 328,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 123,
+            "t_ms": 10441,
+            "phase": "gamegate",
+            "recog": 206,
+            "param": 325,
+            "tag": 327,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 126,
+            "t_ms": 10641,
+            "phase": "gamegate",
+            "recog": 197,
+            "param": 326,
+            "tag": 331,
+            "series": 4,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 133,
+            "t_ms": 13046,
+            "phase": "gamegate",
+            "recog": 194,
+            "param": 334,
+            "tag": 330,
+            "series": 3,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 139,
+            "t_ms": 14250,
+            "phase": "gamegate",
+            "recog": 196,
+            "param": 338,
+            "tag": 332,
+            "series": 2,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 145,
+            "t_ms": 16255,
+            "phase": "gamegate",
+            "recog": 190,
+            "param": 327,
+            "tag": 322,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 149,
+            "t_ms": 16855,
+            "phase": "gamegate",
+            "recog": 216,
+            "param": 331,
+            "tag": 333,
+            "series": 6,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 151,
+            "t_ms": 17457,
+            "phase": "gamegate",
+            "recog": 202,
+            "param": 337,
+            "tag": 330,
+            "series": 2,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 158,
+            "t_ms": 18259,
+            "phase": "gamegate",
+            "recog": 213,
+            "param": 332,
+            "tag": 330,
+            "series": 1,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 159,
+            "t_ms": 18259,
+            "phase": "gamegate",
+            "recog": 214,
+            "param": 332,
+            "tag": 331,
+            "series": 2,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 162,
+            "t_ms": 19153,
+            "phase": "gamegate",
+            "recog": 191,
+            "param": 331,
+            "tag": 331,
+            "series": 3,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 163,
+            "t_ms": 19260,
+            "phase": "gamegate",
+            "recog": 209,
+            "param": 329,
+            "tag": 330,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 165,
+            "t_ms": 19961,
+            "phase": "gamegate",
+            "recog": 185,
+            "param": 323,
+            "tag": 331,
+            "series": 7,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          },
+          {
+            "seq": 166,
+            "t_ms": 19961,
+            "phase": "gamegate",
+            "recog": 196,
+            "param": 339,
+            "tag": 332,
+            "series": 2,
+            "body_len": 11,
+            "body_sha256": "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e"
+          }
+        ]
+      }
+    },
+    "14": {
+      "name": "SM_HIT",
+      "summary": {
+        "csharp": {
+          "count": 1,
+          "first": {
+            "seq": 120,
+            "t_ms": 7697
+          },
+          "last": {
+            "seq": 120,
+            "t_ms": 7697
+          },
+          "intervals_ms": [],
+          "distinct_recog": 1,
+          "distribution": {
+            "param": {
+              "330": 1
+            },
+            "tag": {
+              "331": 1
+            },
+            "series": {
+              "0": 1
+            },
+            "body_len": {
+              "0": 1
+            }
+          }
+        },
+        "rust": {
+          "count": 4,
+          "first": {
+            "seq": 107,
+            "t_ms": 6032
+          },
+          "last": {
+            "seq": 148,
+            "t_ms": 16855
+          },
+          "intervals_ms": [
+            3607,
+            3607,
+            3609
+          ],
+          "distinct_recog": 1,
+          "distribution": {
+            "param": {
+              "329": 4
+            },
+            "tag": {
+              "330": 4
+            },
+            "series": {
+              "2": 4
+            },
+            "body_len": {
+              "0": 4
+            }
+          }
+        }
+      },
+      "frames": {
+        "csharp": [
+          {
+            "seq": 120,
+            "t_ms": 7697,
+            "phase": "gamegate",
+            "recog": 1790038535,
+            "param": 330,
+            "tag": 331,
+            "series": 0,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ],
+        "rust": [
+          {
+            "seq": 107,
+            "t_ms": 6032,
+            "phase": "gamegate",
+            "recog": 199,
+            "param": 329,
+            "tag": 330,
+            "series": 2,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 121,
+            "t_ms": 9639,
+            "phase": "gamegate",
+            "recog": 199,
+            "param": 329,
+            "tag": 330,
+            "series": 2,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 134,
+            "t_ms": 13246,
+            "phase": "gamegate",
+            "recog": 199,
+            "param": 329,
+            "tag": 330,
+            "series": 2,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "seq": 148,
+            "t_ms": 16855,
+            "phase": "gamegate",
+            "recog": 199,
+            "param": 329,
+            "tag": 330,
+            "series": 2,
+            "body_len": 0,
+            "body_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      }
+    }
+  },
+  "partitions": {
+    "named_turns": {
+      "csharp": {
+        "count": 28,
+        "body_sha256": {
+          "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73": 28
+        },
+        "outside_fixture_cells_329_to_331": 17,
+        "coordinate_bounds": {
+          "x": [
+            325,
+            334
+          ],
+          "y": [
+            327,
+            335
+          ]
+        }
+      },
+      "rust": {
+        "count": 28,
+        "body_sha256": {
+          "d82d8b522f53fe76c4ed853a967fcaa5bdc012dc6e65e71bef3948adb617ad73": 28
+        },
+        "outside_fixture_cells_329_to_331": 19,
+        "coordinate_bounds": {
+          "x": [
+            325,
+            336
+          ],
+          "y": [
+            322,
+            333
+          ]
+        }
+      }
+    },
+    "nameless_random_turns": {
+      "csharp": 12,
+      "rust": 0
+    },
+    "featurechanged": {
+      "monster_param11_tag160": {
+        "csharp": 40,
+        "rust": 28
+      },
+      "player_tag2": {
+        "csharp": 2,
+        "rust": 2
+      }
+    },
+    "walks": {
+      "csharp": {
+        "count": 12,
+        "body_sha256": {
+          "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e": 12
+        },
+        "recog_without_named_turn": [
+          1866488471
+        ]
+      },
+      "rust": {
+        "count": 19,
+        "body_sha256": {
+          "315462a487746ddb31a1e403c2ae61322a454431530d53fffba9d7b9be48365e": 19
+        },
+        "recog_without_named_turn": [
+          196
+        ]
+      }
+    }
+  },
+  "diagnostic_recompare": {
+    "baseline": {
+      "path": "E:\\tmp\\dev-2\\butch-run4-recompare.json",
+      "compare_rc": 2,
+      "verdict": "UNDECIDABLE",
+      "frames_compared": 28,
+      "diff_count": 90,
+      "diff_idents": {
+        "10": 28,
+        "41": 28,
+        "201": 1,
+        "654": 1,
+        "657": 2,
+        "42": 1,
+        "100": 1,
+        "11": 14,
+        "642": 2,
+        "656": 4,
+        "34": 1,
+        "44": 1,
+        "31": 1,
+        "32": 1,
+        "637": 1,
+        "None": 3
+      },
+      "sha256": "5fbc890b5e57a280228761256018d820847d8fa8b9ce15f1377b96d1de88af63"
+    },
+    "diagnostic_only_ignore_11": {
+      "path": "E:\\tmp\\dev-2\\butch-run4-recompare-no11.json",
+      "compare_rc": 2,
+      "verdict": "UNDECIDABLE",
+      "frames_compared": 35,
+      "diff_count": 71,
+      "diff_idents": {
+        "10": 28,
+        "41": 28,
+        "201": 1,
+        "656": 4,
+        "34": 1,
+        "44": 1,
+        "31": 3,
+        "32": 1,
+        "637": 1,
+        "None": 3
+      },
+      "sha256": "8b6be0fd283256f3911f4e8bee1063e528c66a57367319489ab64a43de524d70"
+    },
+    "diagnostic_only_ignore_11_201": {
+      "path": "E:\\tmp\\dev-2\\butch-run4-recompare-no11-no201.json",
+      "compare_rc": 2,
+      "verdict": "UNDECIDABLE",
+      "frames_compared": 91,
+      "diff_count": 55,
+      "diff_idents": {
+        "10": 41,
+        "656": 4,
+        "34": 1,
+        "44": 1,
+        "31": 3,
+        "32": 1,
+        "637": 1,
+        "None": 3
+      },
+      "sha256": "7c01c53456dfb7d1b63a8d14db5bb2e13b78a30745231310406b44078f5a9711"
+    },
+    "warning": "两个 --ignore-idents 运行只是定位对齐级联的负对照，不是交付判据，也不证明坐标/存在性等价。"
+  },
+  "emission_anchors": {
+    "10": {
+      "oracle": [
+        "src/M2Server/Player/PlayObject.cs:3240（AOI 具名出现）",
+        "src/M2Server/Player/PlayObject.Message.cs:1524-1560（RM_TURN 下行）"
+      ],
+      "rust": [
+        "mir2-rs/bins/game-svr/src/downlink.rs:336-348（具名出现对）",
+        "mir2-rs/bins/game-svr/src/downlink.rs:358-364（无名随机对）"
+      ]
+    },
+    "41": {
+      "oracle": [
+        "src/M2Server/Player/PlayObject.Message.cs:1552-1560"
+      ],
+      "rust": [
+        "mir2-rs/bins/game-svr/src/downlink.rs:336-364",
+        "mir2-rs/bins/game-svr/src/smframe.rs:144"
+      ]
+    },
+    "11": {
+      "oracle": [
+        "src/M2Server/Actor/AnimalObject.cs:425-441（Wondering 随机支）",
+        "src/M2Server/Player/PlayObject.Message.cs:1403-1410（RM_WALK 下行）"
+      ],
+      "rust": [
+        "mir2-rs/crates/world/src/monai.rs:232-245（Wondering）",
+        "mir2-rs/bins/game-svr/src/lib.rs:15443-15558（位置差还原及下行）",
+        "mir2-rs/bins/game-svr/src/downlink.rs:384-397（编码）"
+      ]
+    },
+    "14": {
+      "oracle": [
+        "src/M2Server/Actor/AnimalObject.cs:169-172（SendAttackMsg）",
+        "src/M2Server/Actor/BaseObject.Attack.cs:173-176",
+        "src/M2Server/Player/PlayObject.Message.cs:1433-1440"
+      ],
+      "rust": [
+        "mir2-rs/bins/game-svr/src/lib.rs:19966-19976（monai RM_HIT 下行）"
+      ]
+    },
+    "rng": {
+      "oracle": [
+        "src/OpenMir2/RandomNumber.cs:35（new Random() 墙钟播种）"
+      ],
+      "rust": [
+        "mir2-rs/crates/world/src/world.rs:1343-1344（with_seed(42)，独立进程流位不相同）"
+      ]
+    }
+  },
+  "triage": {
+    "10": "条数差 = 12/0 无名随机对；28/28 具名出现帧均在。201 相对位置造成对齐级联（201 修复 086889f54 不在 run4）。具名坐标已受登录前游走影响，未证明等价，保留 R；不整类 ignore。",
+    "41": "12 条差与 10 一一成对；28/28 怪物出现配套 + 2/2 玩家自身帧均在，无独立缺帧证据。跟随 10 的随机对规则，坐标/时序余项保留 R。",
+    "11": "两侧全部 body_sha256 相同；同二进制同场景重复运行计数变化，来源是 Wondering/追踪目标时的随机移动。当前规则只掩 series，条数/落点仍不可直接比；仅给形状草案，坐标与存在性保留 R。",
+    "14": "只引用 openmir2-ignore-rule-count-compare：PENDING、UNDECIDABLE；本卡不转正、不重判、不用 --ignore-idents 14 图绿。"
+  },
+  "draft_criteria": {
+    "random_turn_pairs": {
+      "reuse": "tools/conformance/rules.json.random_branch_pairs",
+      "required_residual_symmetric_difference": "摘出随机对后，10/41 未分类残差的两侧对称差必须为空；具名 10 与玩家 41 不得被摘。"
+    },
+    "random_walk_shape_only": {
+      "status": "DRAFT_NOT_ACTIVE",
+      "match": {
+        "ident": 11,
+        "phase": "gamegate",
+        "body_len": 11
+      },
+      "shape_fields": [
+        "body_sha256"
+      ],
+      "symmetric_difference": "(oracle_shapes - rust_shapes) ∪ (rust_shapes - oracle_shapes) 必须为空；两侧必须各自独立计算，不能只查 before 键仍在 after。",
+      "zero_or_empty_side": "UNDECIDABLE，不得空集 vacuous PASS。",
+      "unmatched_frames": "留在普通逐帧流；任何只出现一侧的未匹配残差都判 RED，不许按单侧计数放行。",
+      "not_judged_here": [
+        "条数",
+        "param/tag 落点",
+        "series/Dir",
+        "recog",
+        "t_ms"
+      ],
+      "still_required_for_activation": [
+        "run4 无 --rng-log；须补 RNG 流水/流位锚，或用静止怪对照场景把随机存在性与确定性移动分开。",
+        "生产链构造牙须同时覆盖 Wondering 的 WalkTo 分支与 drain_monster_walk_downlink；缺牙时不得放弃存在性判据。",
+        "recog 不能当锚：本轮两侧各有 1 个 WALK actor 没有具名 TURN；广播范围/AOI 边界未分开前不得按 recog 白名单吞帧。"
+      ],
+      "forbidden": [
+        "整类 ignore ident=11",
+        "把本草案当成坐标等价证明",
+        "把 zero-side 当 PASS"
+      ]
+    },
+    "named_initial_turns": {
+      "status": "KEEP_COMPARE_UNDECIDABLE_R",
+      "reason": "28/28 均在且 body_sha256 相同，但 17/28（C#）与 19/28（Rust）已离开 fixture 的 329..331 原始格；登录前游走使逐坐标对比需要 RNG/静止对照，不能豁免 param/tag。"
+    },
+    "ident_14": {
+      "status": "PENDING_EXTERNAL_CARD",
+      "owner_card": "openmir2-ignore-rule-count-compare"
+    }
+  },
+  "negative_controls_required": [
+    {
+      "case": "删除一侧一条已匹配随机 WALK",
+      "want": "只登记次数差；不得把它当形状差，但窗口等价判据仍需 RNG 证据"
+    },
+    {
+      "case": "改坏一侧 WALK body_sha256",
+      "want": "形状对称差非空 ⇒ RED"
+    },
+    {
+      "case": "一侧 WALK 为空、另一侧非空",
+      "want": "UNDECIDABLE，不得 PASS"
+    },
+    {
+      "case": "加入 body_len!=11 或非 gamegate 的 WALK",
+      "want": "不匹配草案，留普通流 ⇒ RED"
+    },
+    {
+      "case": "具名 TURN(body_len=19) 或玩家 FEATURECHANGED(tag=2)",
+      "want": "不得进入随机对/随机 WALK 提取器"
+    },
+    {
+      "case": "只有单侧有未匹配残差",
+      "want": "对称差非空 ⇒ RED；反向交换两侧结果相同"
+    }
+  ]
+}
