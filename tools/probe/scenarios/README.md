@@ -307,9 +307,22 @@ restore / stack / probe / db / stop 子进程的环境。**真正必需的只有
 
 ## 证据文件
 
-### `frames.ndjson`（一行一条 s2c 帧）
+### `frames.ndjson`（一行一条 **s2c** 帧；schema 不变）
 
-固定字段：`seq`、`t_ms`（相对本次运行起点）、`phase`（`login`/`selgate`/`gamegate`）、
+**卡 `openmir2-probe-c2s-capture`（2026-10-27）起，客户端→服务端的采集写到**另一个文件
+`c2s.ndjson`**；`frames.ndjson` 仍是**纯 s2c**、字段与旧产物**逐字节一致**，
+所以 `compare_runs.load_stream` / `frame_drift_report` / `param_discovery` **零改动**。
+
+### `c2s.ndjson`（一行一条 **c2s** 行或一条账目行）
+
+* `direction="c2s"`：客户端→服务端的**原始字节**——
+  `seq`、`t_ms`、`phase`、`conn`、`direction`、`ident`（能解析时）、`raw_len`、`raw_hex`、
+  `raw_sha256`、`frame_class="c2s"`。**`raw_hex` 是线上原样字节**，不是解码后的字段；
+* `direction="meta"`：采集账目行，**每次运行结束时都会写**——
+  `capture="on"|"off"`、`c2s_written`、`c2s_skipped`。**关采集不静默省略**：`capture="off"`
+  + `c2s_skipped=N` 让产物自己说明「采集被关了」。消费者应跳过 `meta` 行。
+
+`s2c` 固定字段：`seq`、`t_ms`（相对本次运行起点）、`phase`（`login`/`selgate`/`gamegate`）、
 `conn`、`ident`、`recog`、`param`、`tag`、`series`、`body_len`、`body_hex`、`body_sha256`。
 附加：`frame_class`、`tail`（`!` 或 `!$`）、`raw_len`、`body_text`（GBK 展示，仅供人看）。
 
