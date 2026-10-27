@@ -1,0 +1,14 @@
+{
+  "format": "mir2-proxy-port-profile/1",
+  "description": "mirflow 真机流程的 proxy 端口剖面（卡 `openmir2-mirflow-realmachine-flow-runnable` P2）。proxy **不得监听**默认端口段 5000–7200（那里是 oracle/rust 自己的 Gate/SelGate/DBSrv）；它只作为客户端连出去（upstream 可以落在默认段）。",
+  "proxy": {
+    "listen": 18600,
+    "upstream_host": "127.0.0.1",
+    "upstream_port": 7200
+  },
+  "client": {
+    "gate_port": 18600,
+    "login_port": 7000
+  },
+  "note": "用法：mir2_proxy.py --listen 127.0.0.1:18600 --upstream 127.0.0.1:7200 --out <ProxyDir>；客户端 Gate 指向 127.0.0.1:18600，SelGate/LoginGate 仍是 7000。四类动作的 `-ProxyDir` 仍指向该 `--out` 目录（fail-closed 不变）。"
+}
