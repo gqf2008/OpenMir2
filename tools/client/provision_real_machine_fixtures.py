@@ -1139,6 +1139,29 @@ def selftest(args):
                        "篡改备份 ⇒ 拒绝还原、目标不动并点名",
                        (ok_bo, err_bo, err_bo2))
 
+        # ---- P1 牙②h（卡 `openmir2-mirflow-backup-empty-sha-tooth`）：缺键守卫里
+        #      **空串那一半**（`or not want`）。两格：
+        #      ① `backup_sha256=""`、无 `before_sha256` ⇒ `want` 是 None，由 `not isinstance`
+        #         那一半兜住（卡面 A1 的字面形态）；
+        #      ② `backup_sha256=""` **且** `before_sha256=""` ⇒ `want` 是 `""`，**只有**
+        #         `or not want` 能兜住 —— 删掉那半会掉进「备份 sha256=… != 期望」的错误诊断。
+        res_h = _prep("EnvirEmptySha")
+        before_h = _sha256_file(res_h["path"])
+        ev_h1 = {"action": "prepended", "path": res_h["path"],
+                 "backup": res_h["backup"], "backup_sha256": ""}
+        ev_h2 = {"action": "prepended", "path": res_h["path"],
+                 "backup": res_h["backup"], "backup_sha256": "", "before_sha256": ""}
+        err_h1 = restore_mongen(dict(ev_h1))
+        err_h2 = restore_mongen(dict(ev_h2))
+        ok_h = (err_h1 is not None and "判不了" in err_h1
+                and err_h2 is not None and "判不了" in err_h2
+                and "!= 期望" not in err_h2
+                and _sha256_file(res_h["path"]) == before_h
+                and os.path.exists(res_h["backup"]))
+        ok_all &= _chk(ok_h,
+                       "P1 牙②h 空串 sha（只 backup_sha256 / 两键皆空）⇒ 「判不了」且目标不动、备份仍在",
+                       (err_h1, err_h2))
+
         # ---- P1 牙②d：`backup_sha256` 必须被**执行**——篡改备份内容 ⇒ restore 拒绝且目标不动
         tamper_env = _mk_env("EnvirTamper", "\n")
         res_t = prepend_mongen(tamper_env, spec, dry_run=False)
