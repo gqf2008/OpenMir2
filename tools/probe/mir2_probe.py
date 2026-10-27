@@ -180,6 +180,10 @@ class Recorder:
         self.capture_c2s = bool(capture_c2s)
         self.c2s_skipped = 0
         self.c2s_written = 0
+        # **方案 (c)**（review C1）：c2s 单独写 `c2s.ndjson`，`frames.ndjson` 保持**纯 s2c**
+        # ⇒ `compare_runs.load_stream` / `frame_drift_report` / `param_discovery` **零改动**。
+        self.c2s_path = os.path.join(out_dir, "c2s.ndjson")
+        self._c2s_fh = open(self.c2s_path, "w", encoding="utf-8", buffering=1)
 
     def write_frame(self, phase, conn_label, frame):
         self.seq += 1
@@ -231,18 +235,19 @@ class Recorder:
             "raw_sha256": sha256_hex(data),
             "frame_class": "c2s",
         }
-        self._fh.write(json.dumps(row, ensure_ascii=False) + "\n")
+        self._c2s_fh.write(json.dumps(row, ensure_ascii=False) + "\n")
         return row
 
     def close(self):
         # 关采集**不许静默省略**：留下一条可审计的账目行。
-        if not self.capture_c2s and self.c2s_skipped:
+        if True:   # meta **永远**写（关采集时尤其不能丢；开着也记条数便于审计）
             try:
                 self.seq += 1
-                self._fh.write(json.dumps({"seq": self.seq, "direction": "meta",
-                                           "capture": "off",
-                                           "c2s_skipped": self.c2s_skipped},
+                self._c2s_fh.write(json.dumps({"seq": self.seq, "direction": "meta",
+                                           "capture": "on" if self.capture_c2s else "off",
+                                           "c2s_written": self.c2s_written, "c2s_skipped": self.c2s_skipped},
                                           ensure_ascii=False) + "\n")
+                self._c2s_fh.close()
             except Exception:  # noqa: BLE001
                 pass
         try:
@@ -251,12 +256,8 @@ class Recorder:
             pass
 
 
-def load_frames(path):
-    """读 `frames.ndjson`：**旧产物（没有 `direction`）按 s2c 读**，meta 行保留但标记出来。
-
-    返回 `(rows, meta)`：`rows` 里每行都保证有 `direction`（缺省补 `"s2c"`）。
-    这是 s2c 消费者的兼容入口——`compare_runs.py` 等读旧目录时行为不变。
-    """
+def load_c2s(path):
+    """读 `c2s.ndjson`：返回 `(rows, meta)`。`frames.ndjson` 仍是**纯 s2c**（消费者零改动）。"""
     rows, meta = [], []
     with open(path, encoding="utf-8") as fh:
         for line in fh:
@@ -264,8 +265,7 @@ def load_frames(path):
             if not line:
                 continue
             row = json.loads(line)
-            row.setdefault("direction", "s2c")
-            if row["direction"] == "meta":
+            if row.get("direction") == "meta":
                 meta.append(row)
             else:
                 rows.append(row)
@@ -4034,60 +4034,58 @@ def _delayed_frames():
 
 
 def _selftest_c2s_capture():
-    """卡 `openmir2-probe-c2s-capture`：**双向**采集的牙（全部合成，不起栈、不占端口）。
+    """卡 `openmir2-probe-c2s-capture`（**方案 c**：c2s 单文件）的牙——全部合成，不起栈不占端口。
 
-    ① 合成 socket 双向已知帧：c2s 行的 `raw_hex` 必须与发出的字节**逐字节相等**、`direction="c2s"`；
-       s2c 行仍是旧 schema（无 direction 时按 s2c 读）。
-    ② **关采集不得静默省略**：`capture_c2s=False` 时不写 c2s 行，但 `close()` 必须留下
-       `direction="meta"`、`capture="off"`、`c2s_skipped=N` 的账目行。
-    ③ **旧产物读取兼容**：没有 `direction` 的旧 ndjson 经 `load_frames` 一律补 `"s2c"`。
+    ① 合成 socket 双向已知帧：c2s 行写进 `c2s.ndjson`，`raw_hex` 与发出的字节**逐字节相等**；
+       `frames.ndjson` **仍然纯 s2c**（1 条），消费者零改动。
+    ② **消费者等价**：带 c2s 的目录与关采集的目录，`compare_runs.load_stream` 读到的帧数**相同**。
+    ③ **关采集不得静默省略**：`c2s.ndjson` 仍写出 `direction="meta"` + `capture="off"` + `c2s_skipped=N`。
     """
     import shutil
     import tempfile
+    import importlib.util
     tmp = tempfile.mkdtemp(prefix="mir2probe-c2s-")
     try:
-        # ---- ① 双向 ----
-        rec = Recorder(os.path.join(tmp, "a"), now_ms())
         s2c_bytes = build_s2c_frame(6930, SM_LOGON, 5, 9, 0, bytes(16))
-        conn = Conn("gamegate", rec)
-        conn.phase = "gamegate"
-        conn.sock = _FakeSock([s2c_bytes])
-        conn.pump(20)
-        assert conn.frames, "前置：s2c 帧应被解析出来"
-        f1 = conn.send(CM_TURN, 7, 3, 0, 0, b"")
-        f2 = conn.send(CM_SOFTCLOSE, 0, 1, 0, 0, b"")
-        # 注意：`Conn.pump` 已经把收到的帧写进 recorder（经 `on_frame`/recorder 路径），
-        # 这里**不要**再手动 write_frame，否则 s2c 行会重复（本牙第一版就踩到）。
-        rec.close()
-        rows, meta = load_frames(rec.path)
-        c2s = [r for r in rows if r["direction"] == "c2s"]
-        s2c = [r for r in rows if r["direction"] == "s2c"]
-        assert meta == [], meta
-        assert len(c2s) == 2 and len(s2c) == 1, (len(c2s), len(s2c))
-        assert c2s[0]["raw_hex"] == f1.hex() and c2s[1]["raw_hex"] == f2.hex(), "c2s 原始字节必须逐字节相等"
-        assert c2s[0]["ident"] == 7 and c2s[1]["ident"] == 0, (c2s[0]["ident"], c2s[1]["ident"])
-        assert [r["seq"] for r in rows] == sorted(r["seq"] for r in rows), "seq 必须单调"
-        assert c2s[0]["raw_sha256"] == sha256_hex(f1), "raw_sha256 必须是原始字节的哈希"
 
-        # ---- ② 关采集不得静默省略 ----
-        rec2 = Recorder(os.path.join(tmp, "b"), now_ms(), capture_c2s=False)
-        conn2 = Conn("gamegate", rec2)
-        conn2.phase = "gamegate"
-        conn2.sock = _FakeSock([])
-        conn2.send(CM_TURN, 1, 0, 0, 0, b"")
-        conn2.send(CM_TURN, 2, 0, 0, 0, b"")
-        rec2.close()
-        rows2, meta2 = load_frames(rec2.path)
-        assert [r for r in rows2 if r["direction"] == "c2s"] == [], "关采集时不得写 c2s 行"
-        assert len(meta2) == 1 and meta2[0]["capture"] == "off" and meta2[0]["c2s_skipped"] == 2, meta2
+        def _mk(sub, capture):
+            rec = Recorder(os.path.join(tmp, sub), now_ms(), capture_c2s=capture)
+            conn = Conn("gamegate", rec)
+            conn.phase = "gamegate"
+            conn.sock = _FakeSock([s2c_bytes])
+            conn.pump(20)
+            f1 = conn.send(CM_TURN, 7, 3, 0, 0, b"")
+            f2 = conn.send(CM_SOFTCLOSE, 0, 1, 0, 0, b"")
+            rec.close()
+            return rec, f1, f2
 
-        # ---- ③ 旧产物兼容 ----
-        legacy = os.path.join(tmp, "legacy.ndjson")
-        with open(legacy, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps({"seq": 1, "ident": 654, "body_hex": ""}) + chr(10))
-        old_rows, old_meta = load_frames(legacy)
-        assert old_meta == [] and old_rows[0]["direction"] == "s2c", old_rows
-        return ("c2s 2 条逐字节相等 + s2c 1 条不变；关采集留 meta（skipped=2）；旧产物补 s2c")
+        # ① 双向字节
+        rec_on, f1, f2 = _mk("on", True)
+        with open(rec_on.path, encoding="utf-8") as fh:
+            s2c_rows = [json.loads(l) for l in fh if l.strip()]
+        assert len(s2c_rows) == 1 and "direction" not in s2c_rows[0], "frames.ndjson 必须仍是纯 s2c"
+        c2s_rows, c2s_meta = load_c2s(rec_on.c2s_path)
+        assert len(c2s_rows) == 2, c2s_rows
+        assert c2s_rows[0]["raw_hex"] == f1.hex() and c2s_rows[1]["raw_hex"] == f2.hex(), "c2s 原始字节必须逐字节相等"
+        assert c2s_rows[0]["direction"] == "c2s" and c2s_rows[0]["ident"] == 7, c2s_rows[0]
+        assert c2s_rows[0]["raw_sha256"] == sha256_hex(f1), c2s_rows[0]
+        assert len(c2s_meta) == 1 and c2s_meta[0]["capture"] == "on", c2s_meta
+
+        # ② 消费者等价：load_stream 帧数相同
+        rec_off, _g1, _g2 = _mk("off", False)
+        spec = importlib.util.spec_from_file_location(
+            "compare_runs_probe", os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "conformance", "compare_runs.py"))
+        cr = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(cr)
+        on_frames = cr.load_stream(os.path.dirname(rec_on.path), "on")
+        off_frames = cr.load_stream(os.path.dirname(rec_off.path), "off")
+        assert len(on_frames.frames) == len(off_frames.frames) == 1, (len(on_frames.frames), len(off_frames.frames))
+
+        # ③ 关采集留账目
+        off_rows, off_meta = load_c2s(rec_off.c2s_path)
+        assert off_rows == [], off_rows
+        assert len(off_meta) == 1 and off_meta[0]["capture"] == "off" and off_meta[0]["c2s_skipped"] == 2, off_meta
+        return "c2s 单文件 2 条逐字节相等；frames.ndjson 纯 s2c 且 load_stream 帧数不变；关采集留 meta(skipped=2)"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
@@ -6561,13 +6559,14 @@ def _selftest_conn_semantics():
         assert waited >= 30, waited
         run.recorder.close()
         rows = [json.loads(line) for line in open(run.recorder.path, encoding="utf-8")]
-        # 卡 openmir2-probe-c2s-capture：同一文件里现在**双向**都有行，靠 direction 区分；
-        # 旧的「4 条 s2c」语义不变（缺 direction 的旧产物按 s2c 读）。
-        s2c_rows = [r for r in rows if r.get("direction", "s2c") == "s2c"]
-        c2s_rows = [r for r in rows if r.get("direction") == "c2s"]
-        assert len(s2c_rows) == 4 and s2c_rows[0]["frame_class"] == "protocol"
+        # 卡 openmir2-probe-c2s-capture（方案 c）：`frames.ndjson` **仍然是纯 s2c**，
+        # 所以这里的「4 条」断言原样成立——c2s 在**另一个文件** `c2s.ndjson` 里。
+        assert len(rows) == 4 and rows[0]["frame_class"] == "protocol", len(rows)
+        assert all("direction" not in r for r in rows), "frames.ndjson 不得混入方向字段"
+        c2s_rows, c2s_meta = load_c2s(run.recorder.c2s_path)
         assert len(c2s_rows) >= 1 and all(r["raw_len"] > 0 for r in c2s_rows), c2s_rows
-        return "%d s2c + %d c2s frames, 2 auto replies" % (len(s2c_rows), len(c2s_rows))
+        assert len(c2s_meta) == 1 and c2s_meta[0]["capture"] == "on", c2s_meta
+        return "%d s2c frames（c2s 另存 %d 条），2 auto replies" % (len(rows), len(c2s_rows))
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
