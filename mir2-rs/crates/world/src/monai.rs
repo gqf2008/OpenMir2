@@ -5267,6 +5267,30 @@ pub fn monster_ai_tick(world: &mut World) {
         .map(|e| e.id)
         .collect();
     for id in ids {
+        // **不可见怪跳步门**（`WorldServer.MonGen.cs:294-296/314`）：
+        //
+        //   if (!monster.IsVisibleActive && (monster.ProcessRunCount < Config.ProcessMonsterInterval))
+        //       monster.ProcessRunCount++;
+        //   else { /* 守卫/下属 SearchViewRange */ monster.ProcessRunCount = 0; monster.Run(); }
+        //
+        // - 比较是**严格 `<`**（`:294` 原文）；`interval == 0` 没有特判——`0 < 0` 为假 ⇒ 直接走
+        //   else ⇒ 每次都 Run；负数同理。
+        // - `IsVisibleActive == true` ⇒ 首项为假 ⇒ 直接走 else（可见怪每个到点 pass 都 Run）。
+        // - 计数清零点：本支每次实际 Run 前（`:314`）；复活成功时（`:289`，见
+        //   [`crate::mongen::process_cert_lists`]）。
+        // - 本仓无逐 actor `RunTime` 门（既有建模差异，见 `mongen.rs::process_cert_lists` 文档）
+        //   ⇒ 每个世界 tick 就是 oracle 的一个「到点 pass」。
+        // - 位置：**整个实体 AI 体之前**（含死亡/类覆写支）——oracle 的 `monster.Run()` 本身就含
+        //   末尾 `base.Run()`，整段都受该门控。
+        let (visible_active, run_count) = match world.entities.get(id) {
+            Some(e) => (e.is_visible_active, world.process_run_count(id)),
+            None => continue,
+        };
+        if !visible_active && run_count < world.process_monster_interval {
+            world.set_process_run_count(id, run_count + 1);
+            continue;
+        }
+        world.set_process_run_count(id, 0);
         // `CanMove()`（`AnimalObject.cs:162-165`）对 `Death` 恒 false ⇒ `MonsterObject.Run`
         // 的 AI 体（Think/Walk/Attack）整段跳过，只剩 `base.Run()` 的死亡支与 VerifyTick 段。
         if world.entities.get(id).is_some_and(|e| e.death) {
@@ -8236,6 +8260,111 @@ mod tests {
         world.add_entity(e)
     }
 
+    /// 一次「到点 pass」的探针：先把 `SearchEnemyTick`/`TargetCret` 复位，再跑
+    /// [`monster_ai_tick`]，返回本 pass 是否真的进了 `monster_run`。
+    ///
+    /// race 81 在 `monster_run` 的索敌段（`ATMonster.Run`，`MonsterObject.cs` 前段）会把
+    /// `TargetCret` 认领到可见玩家；被 `ProcessMonsterInterval` 跳步门吃掉则保持 `None`
+    /// ⇒ 这是一个与门本身解耦的「Run 确实执行了」判据。
+    fn interval_pass(world: &mut World, mid: i32, pid: i32, now: i64) -> bool {
+        {
+            let e = world.entities.get_mut(mid).unwrap();
+            e.ai.search_enemy_tick = 0;
+            e.ai.target_creature = None;
+        }
+        world.clock_ms = now;
+        monster_ai_tick(world);
+        world.entities.get(mid).unwrap().ai.target_creature == Some(pid)
+    }
+
+    fn interval_world(interval: i32, visible_active: bool) -> (World, i32, i32) {
+        let mut world = World::new(60, 60);
+        let mid = race_monster(&mut world, 81, 10, 10);
+        let pid = player(&mut world, 12, 10);
+        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            target: pid,
+            flag: VisibleFlag::Show,
+        }];
+        world.entities.get_mut(mid).unwrap().is_visible_active = visible_active;
+        world.set_process_monster_interval(interval);
+        world.enable_monster_ai();
+        (world, mid, pid)
+    }
+
+    /// **A2①**：不可见怪 + `interval = 2` ⇒ 连续 3 个到点 pass **只跑 1 次** `monster_run`
+    /// （第 3 个 pass），计数轨迹 1 → 2 → 0。
+    ///
+    /// oracle：`WorldServer.MonGen.cs:294` 的**严格 `<`** + `:296` 递增
+    /// （`0<2`、`1<2` 只计数；`2<2` 假 ⇒ `:314` 清零 + `:315 Run()`）。
+    ///
+    /// 牙①：删掉 [`monster_ai_tick`] 的跳步门 ⇒ 三个 pass 全 true，本用例红。
+    /// 牙②：把比较从 `<` 改成 `<=` ⇒ 第 3 个 pass 仍在计数（到 3），本用例红。
+    #[test]
+    fn invisible_monster_runs_once_per_three_passes() {
+        let (mut world, mid, pid) = interval_world(2, false);
+        let count = |w: &World| w.process_run_count(mid);
+
+        assert!(!interval_pass(&mut world, mid, pid, 5_000), "pass1 不跑");
+        assert_eq!(count(&world), 1, "pass1 后 ProcessRunCount=1（`:296`）");
+        assert!(!interval_pass(&mut world, mid, pid, 5_000), "pass2 不跑");
+        assert_eq!(count(&world), 2, "pass2 后 ProcessRunCount=2");
+        assert!(interval_pass(&mut world, mid, pid, 5_000), "pass3 必须跑");
+        assert_eq!(count(&world), 0, "Run 前清零（`:314`）");
+    }
+
+    /// **A2②**：`interval = 0` ⇒ **每个**到点 pass 都跑（oracle 无特判：`0 < 0` 为假）。
+    ///
+    /// 牙：把跳步门写成 `run_count <= interval` ⇒ 本用例 pass1/2 被跳 ⇒ 红。
+    #[test]
+    fn zero_interval_runs_every_pass() {
+        let (mut world, mid, pid) = interval_world(0, false);
+        for pass in 0..3 {
+            assert!(
+                interval_pass(&mut world, mid, pid, 5_000),
+                "interval=0 ⇒ pass{pass} 必须跑（`0 < 0` 为假）"
+            );
+            assert_eq!(
+                world.process_run_count(mid),
+                0,
+                "每个 pass 都走 else 支 ⇒ 计数保持 0"
+            );
+        }
+    }
+
+    /// **A2③**：`IsVisibleActive = true` ⇒ 不受该门限制，每个到点 pass 都跑
+    /// （oracle `:294` 首项 `!IsVisibleActive` 为假 ⇒ 直接走 else）。
+    ///
+    /// 牙：把门写成只看 `ProcessRunCount < interval`（漏掉 `!IsVisibleActive`）⇒ 红。
+    #[test]
+    fn visible_monster_ignores_interval_gate() {
+        let (mut world, mid, pid) = interval_world(2, true);
+        for pass in 0..3 {
+            assert!(
+                interval_pass(&mut world, mid, pid, 5_000),
+                "可见怪 pass{pass} 必须跑"
+            );
+        }
+    }
+
+    /// **A3 第三颗牙的等价替身**：`interval = 2`、不可见怪跑 **6** 个 pass ⇒ 只有 pass3/pass6
+    /// 真正 `monster_run`。
+    ///
+    /// 牙：删掉 Run 前的 `ProcessRunCount = 0`（`:314`）⇒ pass3 后计数停在 2，pass4/5/6 全跑
+    /// ⇒ 本用例红（这正是「删计数清零」的第二道牙；oracle 没有 `interval = 0` 特判，
+    /// 原计划的第三颗牙无可删分支，见卡上 comment）。
+    #[test]
+    fn counter_resets_after_each_run_pass() {
+        let (mut world, mid, pid) = interval_world(2, false);
+        let got: Vec<bool> = (0..6)
+            .map(|_| interval_pass(&mut world, mid, pid, 5_000))
+            .collect();
+        assert_eq!(
+            got,
+            vec![false, false, true, false, false, true],
+            "6 pass 的 Run 轨迹必须是「每 3 个 pass 一次」"
+        );
+    }
+
     /// ①-A：`ATMonster.Run`（`ATMonster.cs:17`）的时钟门四态——race 81/83 的怪只在
     /// `(now-SearchEnemyTick)>8000 || ((now-SearchEnemyTick)>1000 && TargetCret==null)` 时索敌。
     /// 改坏必红：去掉 `search_target` 调用 ⇒ 段 3/4（应认领却空）断言红。
@@ -8558,6 +8687,8 @@ mod tests {
     #[test]
     fn guard_still_drains_struck_queue() {
         let mut world = World::new(30, 30);
+        // 本条测守卫的 `RM_STRUCK` 出队，不是跳步门 ⇒ interval=0 关掉门。
+        world.set_process_monster_interval(0);
         let gid = race_monster(&mut world, 11, 10, 10);
         let hitter = player(&mut world, 11, 10);
         world.entities.get_mut(gid).unwrap().ai.pending_struck = vec![crate::entity::StruckMsg {
@@ -10119,6 +10250,8 @@ mod tests {
         let (mut world, id) = setup(false, false);
         world.clock_ms = 20_000;
         world.enable_monster_ai();
+        // 本条测死怪分支仍驱动类 `Run`，不是跳步门 ⇒ interval=0 关掉门。
+        world.set_process_monster_interval(0);
         monster_ai_tick(&mut world);
         assert!(!world.entities.get(id).unwrap().death, "死怪分支驱动复生");
     }
@@ -12368,6 +12501,8 @@ mod tests {
     #[test]
     fn mb4_siege_branches_skip_base_run_in_tick_driver() {
         let mut world = World::new(32, 32);
+        // 本条测攻城两分支跳过 base.Run，不是跳步门 ⇒ interval=0 关掉门。
+        world.set_process_monster_interval(0);
         let id = mb4_cow(&mut world, 10, 10, 700, 700);
         assert!(world.enter_world(id), "牛魔王落图");
         mb4_block(&mut world, &[(9, 9), (10, 9), (11, 9), (9, 10), (9, 11)]);
@@ -13889,6 +14024,8 @@ mod tests {
     fn mb7_dead_elf_races_ghost_through_class_run_via_ai_tick() {
         for race in [113u8, 114u8] {
             let mut w = World::new(30, 30);
+            // 本条测死亡精灵的类 Run 变 Ghost，不是跳步门 ⇒ interval=0 关掉门。
+            w.set_process_monster_interval(0);
             w.clock_ms = 102_000;
             assert!(
                 w.make_ghost_time > 2_001,
@@ -15172,6 +15309,8 @@ mod mb89_tests {
     #[test]
     fn mb89_race215_think_dispatch_two_pass_matches_oracle() {
         let mut world = World::new(40, 40);
+        // 本条测两 Pass 的 Think 分派，不是跳步门 ⇒ interval=0 关掉门（oracle 合法配置）。
+        world.set_process_monster_interval(0);
         world.clock_ms = 10_000;
         let now = world.clock_ms;
         let m = spawn_monster(&mut world, 215, 10, 10, 1000);

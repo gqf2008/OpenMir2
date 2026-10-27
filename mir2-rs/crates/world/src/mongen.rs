@@ -1091,6 +1091,9 @@ pub fn process_cert_lists(
                     if due {
                         let (x, y, range) = (owner.x, owner.y, owner.range);
                         if let Some(outcome) = world.revive_monster(id, x, y, range, now) {
+                            // `WorldServer.MonGen.cs:289`：`ReAliveEx` 成功 ⇒ `ProcessRunCount = 0`
+                            // （下一 pass 不被 AI 跳步门吃掉）。
+                            world.set_process_run_count(id, 0);
                             record.revived.push(outcome);
                         }
                     }
@@ -1946,8 +1949,15 @@ mod tests {
         assert!(e.death && e.invisible, "未到点仍是尸体");
 
         // +1ms：复活。
+        // `ProcessRunCount` 先置非零 ⇒ 复活成功必须清零（`WorldServer.MonGen.cs:289`）。
+        world.set_process_run_count(id, 2);
         let rec = process_cert_lists(&mut state, &mut world, 61_001, 0, &config);
         assert_eq!(rec.revived.len(), 1, "到点必须真正复活");
+        assert_eq!(
+            world.process_run_count(id),
+            0,
+            "`ReAliveEx` 成功 ⇒ ProcessRunCount=0（`:289`）"
+        );
         let e = world.entities.get(id).unwrap();
         assert!(!e.death, "Death=false");
         assert!(!e.invisible, "Invisible=false");
