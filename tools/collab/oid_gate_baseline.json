@@ -56,6 +56,17 @@
    "added_by": "openmir2-coordinator",
    "entry_oid": "e367f5ed8e38d715a9ab4cf1007a09a2a7a03ee8",
    "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 parent 不再被豁免。"
+  },
+  {
+   "principal": "openmir2-coordinator",
+   "thread": "openmir2-window-batch-run-sheet",
+   "field": "body.oid",
+   "value": "ce8135f39351c33d54c4bd239031af7ed3a02db5",
+   "reason": "2026-10-27 merge_result 条目把 git log 短前缀 ce8135f39 手工补全成臆造 40-hex（真 oid=ce8135f39bed90cf4a7a418087ecfbb100a509d9，tester-1 实跑抓到）。同内容修正版已重签 b3ae35c3（corrects 指向本坏条，oid 取 rev-parse）；本豁免只覆盖这一条的 body.oid 候选，不构成字段级豁免。",
+   "added_at": "2026-10-27",
+   "added_by": "openmir2-coordinator",
+   "entry_oid": "ecb06fabe4a07f6e8c6e38f1468e431a8375201f",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 oid 不再被豁免。"
   }
  ]
 }
