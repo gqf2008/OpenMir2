@@ -35,7 +35,8 @@
   python -I -B tools/window/blocked_sources_check.py selftest
 
 selftest 汇总行三态：`GREEN:`（rc=0）/ `NEED:`（rc=2，判不了，规则 16）/ `RED:`（rc=1）；
-NEED 态**不得**以 `GREEN:` 开头（卡 openmir2-blocked-sources-n9-isolation N2）。
+NEED 态**不得**以 `GREEN:` 开头；进程 rc 由 fail/need **独立**计算（不取文案返回值）
+（卡 openmir2-blocked-sources-n9-isolation N2）。
 
 `--list-output` = 先 `bash tools/window/run_batch.sh --list > <file>` 再喂进来：额外要求
 **`--list` 标 YES 的场景集合 ==（run3 里）场景 JSON blocked 为真的集合**。
@@ -624,10 +625,12 @@ def check(run3_path, scenes_dir, list_output=None, tokens=None, repo=None,
 
 # ---------------------------------------------------------------- selftest
 def render_summary(ok, fail, need):
-    """selftest 汇总行三态 + rc（卡 openmir2-blocked-sources-n9-isolation N2）。
+    """selftest 汇总行三态文案（卡 openmir2-blocked-sources-n9-isolation N2）。
 
-    N2：NEED 分支 rc 仍是 2（判不了，规则 16），但**前缀不得再是 GREEN:**——否则人读成绿。
-    优先级：RED（fail>0）> NEED（need>0）> GREEN。返回 (prefix, body, rc)。
+    返回 (prefix, body, text_rc)。N2：NEED 分支 rc 仍是 2（判不了，规则 16），但
+    **前缀不得再是 GREEN:**——否则人读成绿。优先级：RED > NEED > GREEN。
+    **进程退出码不取这里的 text_rc**（见 `selftest_rc`）：否则「RED 分支 rc→0」的
+    变异会让牙红而进程 rc=0，被按 rc 判的门放过。
     """
     if fail:
         return 'RED:', '%d/%d' % (ok, ok + fail), 1
@@ -636,12 +639,27 @@ def render_summary(ok, fail, need):
     return 'GREEN:', '%d/%d' % (ok, ok + fail), 0
 
 
-def selftest():
+def selftest_rc(fail, need):
+    """进程退出码：**独立**于汇总文案（N2）。1（RED）> 2（NEED）> 0（GREEN）。
+
+    与 `render_summary` 的 text_rc 解耦：即使文案的 RED 分支被改成 rc0，只要 fail>0，
+    进程仍必须 rc=1——否则「牙红但进程绿」会被按 rc 判的门放过。
+    """
+    if fail:
+        return 1
+    if need:
+        return 2
+    return 0
+
+
+def selftest(child=False, n9_mode=''):
+    """`child=True` 只由本文件的自测子进程用（argv `--child`），用于抑制递归。
+
+    **不用环境变量做递归闸**（N1 返工）：env 泄漏（如 BLOCKED_SOURCES_SELFTEST_INNER=1）
+    不得让任何牙静默不跑；子进程身份只能来自显式 argv。
+    """
     ok = fail = 0
     need_n = [0]
-    # N2 三态牙用（只由本文件的自测子进程设置；正常调用不受影响）
-    n9_mode = os.environ.get('BLOCKED_SOURCES_SELFTEST_N9', '')
-    inner = os.environ.get('BLOCKED_SOURCES_SELFTEST_INNER') == '1'
 
     def chk(cond, name):
         nonlocal ok, fail
@@ -659,6 +677,9 @@ def selftest():
 
     tmp = tempfile.mkdtemp(prefix='blocked-sources-selftest.')
     try:
+        if n9_mode == 'red':
+            # N2 牙④ 的驱动器：故意让一颗牙失败以进入 RED 态（不影响 n9 夹具）。
+            chk(False, '驱动 RED 态（N2 牙④：只用于端到端 rc 断言）')
         scenes = os.path.join(tmp, 'scenarios')
         os.makedirs(scenes)
         run3 = os.path.join(tmp, 'run3.json')
@@ -911,14 +932,14 @@ def selftest():
         #
         # N1（卡 openmir2-blocked-sources-n9-isolation）：path 类证据的解析基准**跟随夹具根**
         # （`n9_repo = n9_root`），不得再传 REPO_ROOT——否则自测仍会读真仓库。把 `n9_repo`
-        # 改回 REPO_ROOT 时，下面的牙 P2（只在真仓库存在的 path）必须红。
+        # 改回 REPO_ROOT（或伪真仓库根）时，下面的牙 P2（只在对照根存在的 path）必须红。
         #
         # 中性态（`BLOCKED_SOURCES_SELFTEST_N9=skip`）：不构造夹具、不判 NEED，也不打印 NEED:。
         if n9_mode == 'skip':
             pass
         else:
             n9_root = os.path.join(tmp, 'n9')
-            n9_repo = n9_root      # ← path 证据解析基准（变异靶点：改回 REPO_ROOT ⇒ 牙P2 红）
+            n9_repo = n9_root      # ← path 证据解析基准（变异靶点：改回 REPO_ROOT/伪根 ⇒ 牙P2 红）
             n9_scenes = os.path.join(n9_root, 'scenarios')
             os.makedirs(os.path.join(n9_root, 'ev'), exist_ok=True)
             os.makedirs(n9_scenes, exist_ok=True)
@@ -930,10 +951,17 @@ def selftest():
             with open(os.path.join(n9_root, 'ev', 'fixture_only.md'), 'w',
                       encoding='utf-8') as fh:
                 fh.write('n9 fixture-only evidence\n')
-            # 牙P1b 用：与真仓库**同名**的文件（真仓库也有 AGENTS.md）⇒ 单看会假绿
+            # 牙P1b 用：与「伪真仓库根」**同名**的文件 ⇒ 单看会假绿
             with open(os.path.join(n9_root, 'AGENTS.md'), 'w',
                       encoding='utf-8') as fh:
                 fh.write('n9 AGENTS control\n')
+            # N3：伪真仓库根（封闭自测，不读真 REPO_ROOT）——P1b/P2 的对照基准
+            pseudo_repo_root = os.path.join(tmp, 'pseudo_repo')
+            os.makedirs(pseudo_repo_root, exist_ok=True)
+            for _anchor in ('AGENTS.md', 'README.md'):
+                with open(os.path.join(pseudo_repo_root, _anchor), 'w',
+                          encoding='utf-8') as fh:
+                    fh.write('pseudo repo anchor: %s\n' % _anchor)
             n9_struct = ['blk_struct_a', 'blk_struct_b']
             n9_orphan = ['blk_orphan']
             n9_free = 'free_ok'
@@ -1006,8 +1034,11 @@ def selftest():
                     % (probs9b,))
 
                 # ---- N1 成对牙：path 证据只能按夹具根解析，不得回退真仓库根 ----
-                def n9_path_probe(ev_value):
-                    """在 n9_root 下造一个单孤儿夹具（path 证据），返回 (problems, undecidable)。"""
+                def n9_path_probe(ev_value, repo=None):
+                    """在 n9_root 下造一个单孤儿夹具（path 证据），返回 (problems, undecidable)。
+
+                    `repo` 省略时用被测的 `n9_repo`；给值用于正控（伪真仓库根）。
+                    """
                     probe_root = os.path.join(n9_root, 'pathprobe')
                     pscenes = os.path.join(probe_root, 'scenarios')
                     os.makedirs(pscenes, exist_ok=True)
@@ -1028,7 +1059,8 @@ def selftest():
                                 {'kind': 'path', 'value': ev_value}]}}},
                             fh, ensure_ascii=False)
                     pr, pu, _pi = check(
-                        prun3, pscenes, None, n9_table, repo=n9_repo, ledger={},
+                        prun3, pscenes, None, n9_table,
+                        repo=n9_repo if repo is None else repo, ledger={},
                         commit_check=lambda s: True, landed_check=lambda s: False)
                     return pr, pu
 
@@ -1036,23 +1068,28 @@ def selftest():
                 pr1, pu1 = n9_path_probe('ev/fixture_only.md')
                 chk(pr1 == [] and pu1 == [],
                     '牙P1a（N1）：path 在夹具根内存在 ⇒ 绿（probs=%r，und=%r）' % (pr1, pu1))
-                # ① 对照：与真仓库**同名**、且在夹具根也放了一份 ⇒ 绿（这一支单独存在会假绿）
-                if not os.path.isfile(os.path.join(REPO_ROOT, 'AGENTS.md')):
-                    need('牙P1b 前置：真仓库根没有 AGENTS.md（同名锚失效）⇒ 判不了')
+                # ① 对照：与「伪真仓库根」**同名**、且夹具根也放了一份 ⇒ 绿（单独看会假绿）
+                if not os.path.isfile(os.path.join(pseudo_repo_root, 'AGENTS.md')):
+                    need('牙P1b 前置：伪真仓库根没有 AGENTS.md（同名锚失效）⇒ 判不了')
                 else:
                     pr1b, pu1b = n9_path_probe('AGENTS.md')
                     chk(pr1b == [] and pu1b == [],
                         '牙P1b（N1 对照）：同名文件在两处都存在 ⇒ 绿（单独看会假绿，故必须配 P2）'
                         '（probs=%r，und=%r）' % (pr1b, pu1b))
-                # ② 只在**真仓库**存在、夹具根没有的 path ⇒ 必须非绿（判不了）
-                if (not os.path.isfile(os.path.join(REPO_ROOT, 'README.md'))
+                # ② 只在**伪真仓库根**存在、夹具根没有的 path ⇒ 必须非绿（判不了）
+                if (not os.path.isfile(os.path.join(pseudo_repo_root, 'README.md'))
                         or os.path.exists(os.path.join(n9_root, 'README.md'))):
-                    need('牙P2 前置：真仓库锚 README.md 不存在或夹具根也有一份（不变式不成立）⇒ 判不了')
+                    need('牙P2 前置：伪真仓库根锚 README.md 不存在或夹具根也有一份（不变式不成立）⇒ 判不了')
                 else:
                     pr2, pu2 = n9_path_probe('README.md')
                     chk(pr2 == [] and any('path' in u and 'README.md' in u for u in pu2),
-                        '牙P2（N1）：只在真仓库存在的 path（README.md）⇒ 夹具根下判不了（不得假绿；'
-                        '把解析基准改回 REPO_ROOT 时本牙必红）（probs=%r，und=%r）' % (pr2, pu2))
+                        '牙P2（N1）：只在伪真仓库根存在的 path（README.md）⇒ 夹具根下判不了（不得假绿；'
+                        '把解析基准改回伪真仓库根时本牙必红）（probs=%r，und=%r）' % (pr2, pu2))
+                    # P2b 正控：同一证据换**伪真仓库根** ⇒ 绿（证明基准承重；封闭不读真 REPO_ROOT）
+                    pr2b, pu2b = n9_path_probe('README.md', repo=pseudo_repo_root)
+                    chk(pr2b == [] and pu2b == [],
+                        '牙P2b（N1 正控）：同一 path 在伪真仓库根下可解析 ⇒ 绿（基准承重）'
+                        '（probs=%r，und=%r）' % (pr2b, pu2b))
 
         # ---- 卡 openmir2-blocked-token-rot：反向校验牙（合成夹具，不碰真实仓库）----
         rot_root = os.path.join(tmp, 'rot')
@@ -1151,53 +1188,71 @@ def selftest():
             '牙rot-wire main() 真调用反向校验（打桩 check 后仍 rc=1 并点名表项腐烂）')
 
         # ---- N2（卡 openmir2-blocked-sources-n9-isolation）：汇总行三态（前缀 + rc）----
-        # 端到端跑本 selftest 的子进程：normal/break/skip 三态各一颗牙，同时断言 rc 与前缀。
-        # 子进程带 INNER=1，避免递归。中性态 = skip（跳过/未枚举）⇒ 不得打印 NEED:。
-        if not inner:
-            def _n9_child(mode):
-                env = dict(os.environ)
-                env['BLOCKED_SOURCES_SELFTEST_INNER'] = '1'
-                if mode:
-                    env['BLOCKED_SOURCES_SELFTEST_N9'] = mode
-                else:
-                    env.pop('BLOCKED_SOURCES_SELFTEST_N9', None)
-                pc = subprocess.run(
-                    [sys.executable, '-I', '-X', 'utf8', '-B', os.path.abspath(__file__),
-                     'selftest'],
-                    capture_output=True, text=True, encoding='utf-8', errors='replace',
-                    env=env, timeout=300)
-                cout = pc.stdout or ''
-                slines = [ln for ln in cout.splitlines()
-                          if 'blocked_sources_check selftest' in ln]
-                return pc.returncode, cout, (slines[-1] if slines else '')
+        # 端到端跑本 selftest 的子进程：normal/break/skip/RED 四态各一颗牙，同时断言 rc 与前缀。
+        # 子进程带 argv `--child`，避免递归；**不用 env 闸**（N1 返工：env 泄漏不得让牙静默不跑）。
+        # 中性态 = skip（跳过/未枚举）⇒ 不得打印 NEED:。
+        def _n9_child(mode):
+            env = dict(os.environ)
+            # 仍然塞老 env（现在**不被读取**），用于反证 env 泄漏不会少跑牙（牙N2-⑤）。
+            env['BLOCKED_SOURCES_SELFTEST_INNER'] = '1'
+            env['BLOCKED_SOURCES_SELFTEST_N9'] = mode if mode else ''
+            argv = [sys.executable, '-I', '-X', 'utf8', '-B', os.path.abspath(__file__),
+                    'selftest', '--child']
+            if mode:
+                argv += ['--n9-mode', mode]
+            pc = subprocess.run(argv, capture_output=True, text=True, encoding='utf-8',
+                                errors='replace', env=env, timeout=300)
+            cout = pc.stdout or ''
+            slines = [ln for ln in cout.splitlines()
+                      if 'blocked_sources_check selftest' in ln]
+            return pc.returncode, cout, (slines[-1] if slines else '')
 
+        def _has_need_line(text):
+            return any(ln.startswith('NEED:') for ln in text.splitlines())
+
+        if not child:
             rc_ok, out_ok, sum_ok = _n9_child('')
-            chk(rc_ok == 0 and sum_ok.startswith('GREEN:') and 'NEED:' not in out_ok,
+            chk(rc_ok == 0 and sum_ok.startswith('GREEN:') and not _has_need_line(out_ok),
                 '牙N2-①（不变式成立）：rc=0、无 NEED:、汇总 GREEN:（rc=%r，summary=%r）'
                 % (rc_ok, sum_ok))
             rc_need, out_need, sum_need = _n9_child('break')
-            chk(rc_need == 2 and sum_need.startswith('NEED:') and 'NEED:' in out_need,
+            chk(rc_need == 2 and sum_need.startswith('NEED:') and _has_need_line(out_need),
                 '牙N2-②（不变式不成立）：rc=2、汇总 NEED:（前缀改回 GREEN: 时本牙必红）'
                 '（rc=%r，summary=%r）' % (rc_need, sum_need))
             rc_skip, out_skip, sum_skip = _n9_child('skip')
-            chk(rc_skip == 0 and sum_skip.startswith('GREEN:') and 'NEED:' not in out_skip,
+            chk(rc_skip == 0 and sum_skip.startswith('GREEN:') and not _has_need_line(out_skip),
                 '牙N2-③（中性态：跳过/未枚举）：rc=0、不得打印 NEED:（中性态也打印 NEED: 时本牙必红）'
                 '（rc=%r，summary=%r）' % (rc_skip, sum_skip))
-            # 汇总行三支直调（RED 分支仍 RED；NEED 态不得以 GREEN: 开头）
-            for _label, _ok, _fail, _need, _want_pre, _want_rc, _want_need in (
-                    ('GREEN', 10, 0, 0, 'GREEN:', 0, False),
-                    ('NEED', 10, 0, 1, 'NEED:', 2, True),
-                    ('RED', 10, 1, 0, 'RED:', 1, False)):
-                _pre, _body, _rc = render_summary(_ok, _fail, _need)
-                chk(_pre == _want_pre and _rc == _want_rc
-                    and ('NEED:' in (_pre + _body)) == _want_need,
-                    '牙N2-sum-%s：render_summary 前缀/rc 一致（pre=%r，rc=%r）'
-                    % (_label, _pre, _rc))
+            rc_red, out_red, sum_red = _n9_child('red')
+            chk(rc_red == 1 and sum_red.startswith('RED:') and not _has_need_line(out_red),
+                '牙N2-④（RED 态）：rc=1、汇总 RED:（render_summary 的 RED 分支被改成 rc0 时，'
+                '进程仍必须由 fail 独立算出 rc=1）（rc=%r，summary=%r）' % (rc_red, sum_red))
+            # N1 返工：inner=1 的子进程必须仍跑满直调牙与计数下限，不得静默少跑。
+            _sum_pass = [ln for ln in out_ok.splitlines() if ln.startswith('PASS 牙N2-sum-')]
+            _m = re.search(r'(\d+)/(\d+)\s*$', sum_ok)
+            _child_total = int(_m.group(2)) if _m else -1
+            chk(len(_sum_pass) == 3 and _child_total >= 58,
+                '牙N2-⑤（inner 泄漏防护）：inner=1 时仍跑 3 颗直调牙且总数 >=58'
+                '（实跑 %d 颗、total=%d；把直调牙移回 if not inner/child 时本牙必红）'
+                % (len(_sum_pass), _child_total))
+
+        # 三态直调牙（**不在 child 条件内**：env/递归闸泄漏时也必须跑）
+        for _label, _ok, _fail, _need, _want_pre, _want_rc, _want_need in (
+                ('GREEN', 10, 0, 0, 'GREEN:', 0, False),
+                ('NEED', 10, 0, 1, 'NEED:', 2, True),
+                ('RED', 10, 1, 0, 'RED:', 1, False)):
+            _pre, _body, _rc = render_summary(_ok, _fail, _need)
+            chk(_pre == _want_pre and _rc == _want_rc
+                and ('NEED:' in (_pre + _body)) == _want_need
+                and selftest_rc(_fail, _need) == _want_rc,
+                '牙N2-sum-%s：render_summary 前缀/rc 与 selftest_rc 一致（pre=%r，rc=%r）'
+                % (_label, _pre, _rc))
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    _prefix, _body, _rc = render_summary(ok, fail, need_n[0])
+    _prefix, _body, _text_rc = render_summary(ok, fail, need_n[0])
+    _rc = selftest_rc(fail, need_n[0])   # N2：进程 rc 与文案解耦（不取 text_rc）
     print('%s blocked_sources_check selftest %s' % (_prefix, _body))
     return _rc
 
@@ -1209,9 +1264,11 @@ def main(argv=None):
     ap.add_argument('--run3', default=DEFAULT_RUN3)
     ap.add_argument('--scenarios-dir', default=DEFAULT_SCENES)
     ap.add_argument('--list-output', help='`run_batch.sh --list` 的输出文件（可选）')
+    ap.add_argument('--child', action='store_true', help=argparse.SUPPRESS)
+    ap.add_argument('--n9-mode', default='', help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
     if args.cmd == 'selftest':
-        return selftest()
+        return selftest(child=args.child, n9_mode=args.n9_mode)
     try:
         problems, undecidable, info = check(args.run3, args.scenarios_dir, args.list_output)
         # A1（卡 openmir2-blocked-token-rot）：表项反向校验——只在这里接（fixture 用的 check()
