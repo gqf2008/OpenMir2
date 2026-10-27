@@ -288,6 +288,17 @@ def load_c2s(path):
     return rows, meta
 
 
+def _sorted_protocol_idents(frames, recog_filter=None):
+    """诊断面列出已知协议 ident；控制帧的 ``None`` 不参与排序。
+
+    控制帧仍保留在 ``conn.frames`` / ``frames.ndjson``，也可由 ``frame_class`` 谓词
+    显式等待；这里只避免 ``seen_idents`` / dwell 摘要混合 ``None`` 与 int。
+    """
+    return sorted({fr.ident for _, fr in frames
+                   if fr.ident is not None
+                   and (recog_filter is None or recog_filter(fr))})
+
+
 class Conn:
     """一条客户端连接：发帧、增量收帧、记证据。"""
 
@@ -2609,13 +2620,12 @@ class Run:
             t_start = now_ms()
             recog_filter = self._recog_filter(plan, idx)
             ok = conn.wait_frames(plan["count"], plan["idents"], timeout, recog_filter)
-            seen = {fr.ident for _, fr in conn.frames
-                    if recog_filter is None or recog_filter(fr)}
+            seen = _sorted_protocol_idents(conn.frames, recog_filter)
             rec = {"index": idx, "kind": "wait_frames", "count": plan["count"],
                    "idents": plan["idents"], "timeout_ms": timeout,
                    "t_ms": t_start - self.t0_ms, "waited_ms": now_ms() - t_start,
                    "total_frames": len(conn.frames),
-                   "seen_idents": sorted(seen),
+                   "seen_idents": seen,
                    "matched": ok, "note": plan.get("note", "")}
             if recog_filter is not None:
                 rec["recog"] = plan.get("recog")
@@ -2632,8 +2642,7 @@ class Run:
             t_start = now_ms()
             recog_filter = self._recog_filter(plan, idx)
             missing, waited = conn.wait_idents(plan["idents"], timeout, recog_filter)
-            seen = sorted({fr.ident for _, fr in conn.frames
-                           if recog_filter is None or recog_filter(fr)})
+            seen = _sorted_protocol_idents(conn.frames, recog_filter)
             rec = {"index": idx, "kind": "wait_idents", "idents": plan["idents"],
                    "timeout_ms": timeout, "t_ms": t_start - self.t0_ms,
                    "waited_ms": waited, "seen_idents": seen,
@@ -2934,13 +2943,13 @@ def dwell_after_enter(conn, dwell_ms, legacy_pump_ms=0):
     """
     requested = max(0, int(dwell_ms or 0))
     legacy = 0 if requested > 0 else max(0, int(legacy_pump_ms or 0))
-    before = sorted({fr.ident for _, fr in conn.frames})
+    before = _sorted_protocol_idents(conn.frames)
     t_start = now_ms()
     if requested > 0:
         conn.pump(requested)
     elif legacy > 0:
         conn.pump(legacy)
-    after = sorted({fr.ident for _, fr in conn.frames})
+    after = _sorted_protocol_idents(conn.frames)
     return {
         "requested_ms": requested,
         "legacy_pump_ms": legacy,
@@ -6676,6 +6685,58 @@ def _selftest_ack_wait():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def _selftest_null_ident_steps():
+    """null-ident 控制帧不破坏步进诊断；目标协议帧缺席仍必须红。"""
+    import shutil
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="mir2probe-null-ident-")
+    run = None
+    durachange = 642  # SM_DURACHANGE
+    try:
+        args = argparse.Namespace(out=tmp, no_auto_handshake=True, timeout_ms=8000)
+        run = Run(args)
+        conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
+        conn.phase = "gamegate"
+        conn.sock = _FakeSock([b"#+GD/874754328!"])
+        conn.pump(20)
+        assert [fr.ident for _, fr in conn.frames] == [None], conn.frames
+        assert conn.frames[0][1].frame_class == "server_ack_time"
+
+        # run5 的原路径：wait_for(642) 已成功，随后的 wait_idents 诊断排序崩溃。
+        conn.sock.chunks.append(build_s2c_frame(3997, durachange, 1, 4000, 0, b""))
+        run.execute_step(conn, plan_step({"wait_for": durachange}, 0, {}))
+        assert [fr.ident for _, fr in conn.frames] == [None, durachange], conn.frames
+        assert run.steps[-1]["matched_ident"] == durachange, run.steps[-1]
+        run.execute_step(conn, plan_step({
+            "wait_idents": {"idents": [durachange], "timeout_ms": 10}}, 1, {}))
+        assert run.steps[-1]["matched"] and run.steps[-1]["missing_idents"] == [], run.steps[-1]
+        assert run.steps[-1]["seen_idents"] == [durachange], run.steps[-1]
+
+        # 同型排序点一并覆盖：wait_frames 与 dwell 的 before/after/new 诊断。
+        run.execute_step(conn, plan_step({
+            "wait_frames": {"count": 2, "idents": [durachange], "timeout_ms": 10}}, 2, {}))
+        assert run.steps[-1]["seen_idents"] == [durachange], run.steps[-1]
+        dwell = dwell_after_enter(conn, 0, 0)
+        assert dwell["idents_before"] == [durachange], dwell
+        assert dwell["idents_after"] == [durachange] and dwell["new_idents"] == [], dwell
+
+        # 负对照：控制帧仍在捕获/匹配流里，但绝不能代替缺席的目标 ident。
+        try:
+            run.execute_step(conn, plan_step({
+                "wait_for": SM_STRUCK, "timeout_ms": 5}, 3, {}))
+        except StepFailure as ex:
+            assert "timeout waiting" in str(ex), str(ex)
+        else:
+            raise AssertionError("null-ident control frame satisfied an absent target ident")
+        rows = [json.loads(line) for line in open(run.recorder.path, encoding="utf-8")]
+        assert rows[0]["ident"] is None and rows[0]["frame_class"] == "server_ack_time", rows[0]
+        return "wait_for/wait_idents/wait_frames/dwell green; absent target still red; capture unchanged"
+    finally:
+        if run is not None:
+            run.recorder.close()
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def run_selftest():
     fails = []
     checked = [0]
@@ -6719,6 +6780,7 @@ def run_selftest():
     check("wait-recog-filter", _selftest_wait_recog_filter)
     check("recog-self-after-relogin", _selftest_recog_self_after_relogin)
     check("ack-predicate-wait", _selftest_ack_wait)
+    check("null-ident-steps", _selftest_null_ident_steps)
     check("c2s-capture", _selftest_c2s_capture)
     check("c2s-close-hygiene", _selftest_c2s_close_hygiene)
     check("frames-total-payload", _selftest_frames_total_payload)
