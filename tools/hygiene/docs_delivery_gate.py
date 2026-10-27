@@ -751,6 +751,8 @@ def _st_exempt(site):
 #:   3. 递归点若在 **R1i 之前**，无需额外改动（R1i 用 `_ST_EXEMPT_SEEN` 自比，恒等）；
 #:      在 **R1i 之后**（如 n2c2）也不需改动——R1k 用的是 `_ST_EXEMPT_SITES`；
 #:   4. **元牙不用改**：`元牙 R1-meta⓪/①–⑧` 直接喂 `_r1_accounting_ok` 的合成参数，与站点名单长度无关。
+#:      **但新增「包装调用点」（新的 R1 判定点）必须同时改 `_R1_GUARD_REQUIRED_SITES`**——否则
+#:      `元牙 R1-meta⓪`（包装计数/站点名）会红；本卡范围内两处判定点固定为 `R1i` / `R1k`。
 #:
 #: **支持范围（按实测收窄，review 89ae2a18 N3）**：本模型**只支持「同一个 `_selftest_run` 内
 #: 经 `_st_exempt` 登记、且**内层在到达登记点之前就返回**」的递归牙**（即 n2c / n2d / c6b / n2c2 这一模式；n2c 本身就是「整跑但提前返回」）。**不支持**「递归整跑
@@ -772,10 +774,91 @@ def _r1_accounting_ok(calls, seen, sites):
     return calls == 1 + len(sites) and sorted(seen) == sorted(sites)
 
 
-#: **R1i/R1k 必须经由 [`_r1_accounting_live`] 读取判定**（review 89ae2a18 C2）：
-#: 有人把两处改回内联判定时，本计数不动 ⇒ 末尾的 `_R1_LIVE_CALLS == 2` 必红。
-#: 这是「守卫要证明自己被调用」，而不是靠源码文本牙（后者可被换写法绕过）。
+#: **R1i/R1k 必须经由 [`_r1_accounting_guard`] 读取判定**（review 89ae2a18 C2）：
+#: `_R1_LIVE_CALLS` 数的是 **guard 内部**的读取次数 ⇒ **它证明不了「调用点走的是包装」**
+#: （review a6b03f30 F1：把两处改回内联直调 guard，计数照样 +2，旧注释的断言是假的）。
+#: 「走包装」由包装自己的计数 `_R1_GUARD_V_CALLS` 与站点名 `_R1_GUARD_SITES` 证明，
+#: 判据收在 [`_r1_wiring_ok`]，元牙⑫ 提供两种退化的负例。
 _R1_LIVE_CALLS = 0
+
+#: 包装的**接线证据**（review a6b03f30 F1）：入口自增 + 站点名。
+#: ① 内联回退 ⇒ 包装计数 0；② 内联 + 在别处补两次包装「凑数」⇒ 次数凑回 2，但站点名对不上
+#: ⇒ 两种都被 `_r1_wiring_ok` 判红。只数次数会被 ② 绕过。
+_R1_GUARD_V_CALLS = 0
+_R1_GUARD_SITES = []
+_R1_GUARD_REQUIRED_SITES = ("R1i", "R1k")
+
+
+def _r1_wiring_ok(calls, sites):
+    """接线判据：包装被调用 **恰好 len(必需站点)** 次，且**站点名多重集相等**。"""
+    return (calls == len(_R1_GUARD_REQUIRED_SITES)
+            and sorted(sites) == sorted(_R1_GUARD_REQUIRED_SITES))
+
+
+def _r1_guard_shape_ok(res):
+    """包装返回值形态必须是 `(bool, str)`（review a6b03f30 F2）。
+
+    形态退化（`return None` / `pass` / 裸 int）原本会以 `TypeError: cannot unpack NoneType`
+    冒泡——rc=1 但没有命名 FAIL；本判据把它变成有名有姓的红。
+    """
+    return isinstance(res, tuple) and len(res) == 2 and isinstance(res[0], bool)
+
+
+#: 结算层记账（review 869b08bb）：R1 判定结果与**每个 chk 的结论**。
+#: 为什么需要：把调用点从 `chk(_ok_i, …)` 改成 `if not _ok_i: return 2` 时，红会降级成
+#: 「NEED、FAIL=0」；结算层在 `selftest()` 返回前再核一次，强制成**命名红 rc=1**。
+_R1_GUARD_RESULTS = []          # [(site, ok)]
+_SELFTEST_CHK = []              # [(cond, name)]
+
+
+def _r1_settle_rc(rc, results, records, base=0):
+    """R1 结算层：**判定失败必须落成命名 FAIL**，rc 不许被降级成 NEED / 静默绿。"""
+    unnamed = [site for site, ok in results[base:]
+               if not ok and not any((not cond) and (site in name) for cond, name in records)]
+    if unnamed:
+        return 1, ("R1 判定失败未落命名 FAIL：%s（调用点把红降级成 NEED/静默；"
+                   "本结算层强制 rc=1）" % "/".join(sorted(unnamed)))
+    if rc == 2 and any(not cond for cond, _n in records):
+        return 1, "有命名 FAIL 却返回 rc=2（NEED）—— 红不得升成判不了"
+    return rc, ""
+
+
+def _r1_guard_verify(fn):
+    """R1 兜底的**可测包装**（review 349604e8 ①）：**任何异常都必须落判红**，绝不升 NEED/rc=2。
+
+    返回 `(ok, detail)`。`AssertionError` 与其它异常一律 `False`——把这里改成
+    `except Exception: return 2`（或让异常逃逸到 `selftest()` 顶层）会让 `元牙 R1-meta⑪` 变红。
+    入口自增 `_R1_GUARD_V_CALLS`：这是「调用点确实走包装」的**正向证据**（a6b03f30 F1）。
+    """
+    global _R1_GUARD_V_CALLS
+    _R1_GUARD_V_CALLS += 1
+    try:
+        fn()
+        return True, ""
+    except AssertionError as e:
+        return False, "AssertionError: %s" % (e,)
+    except Exception as e:          # 宽兜底：同样判红（不静默、不升 NEED）
+        return False, "%s: %s" % (type(e).__name__, e)
+
+
+def _r1_guard_probe(fn):
+    """探测包装本身：**异常与非法返回值形态都收敛成命名 FAIL**（review a6b03f30 F2）。"""
+    try:
+        res = _r1_guard_verify(fn)
+    except Exception as e:
+        return False, "包装自身抛异常：%s: %s" % (type(e).__name__, e)
+    if not _r1_guard_shape_ok(res):
+        return False, "包装返回值形态非法：%r（应为 (bool, str)）" % (res,)
+    return res
+
+
+def _r1_guard_check(site, fn):
+    """生产判定点唯一入口：记站点名（接线证据）→ 调包装 → 记结论（供结算层核「失败有没有命名」）。"""
+    global _R1_GUARD_SITES
+    _R1_GUARD_SITES.append(site)
+    res = _r1_guard_probe(fn)
+    _R1_GUARD_RESULTS.append((site, bool(res[0])))
+    return res
 
 
 def _r1_accounting_guard(calls, seen, sites):
@@ -801,8 +884,10 @@ def selftest():
     """
     global _ST_CALLS
     _ST_CALLS += 1
+    _res_base = len(_R1_GUARD_RESULTS)
+    _chk_base = len(_SELFTEST_CHK)
     try:
-        return _selftest_run()
+        rc = _selftest_run()
     except GitUnavailable as ex:
         print("docs_delivery_gate selftest: 判不了（rc=2）—— 环境建不了 git 夹具：%s" % ex)
         return 2
@@ -811,14 +896,22 @@ def selftest():
         print("docs_delivery_gate selftest: 判不了（rc=2）—— 环境不能建临时夹具：%s: %s"
               % (ex.__class__.__name__, ex))
         return 2
+    # 结算层（review 869b08bb）：调用点若把 R1 失败改成 `return 2`/`return 0`，这里强制命名红。
+    _rc, _why = _r1_settle_rc(rc, _R1_GUARD_RESULTS, _SELFTEST_CHK[_chk_base:], base=_res_base)
+    if _rc != rc:
+        print("docs_delivery_gate selftest: FAIL (1/1)")
+        print("  - " + _why)
+    return _rc
 
 
 def _selftest_run():
+    global _R1_LIVE_CALLS, _R1_GUARD_V_CALLS, _R1_GUARD_SITES   # ⑨/⑩/⑪ 的探测前后保存/恢复，不计入接线证据
     fails = []
     checked = [0]
 
     def chk(cond, name):
         checked[0] += 1
+        _SELFTEST_CHK.append((bool(cond), name))
         if cond:
             print("PASS " + name)
         else:
@@ -1150,13 +1243,11 @@ def _selftest_run():
         # **行为牙**（review e4d6546f C1 返工）：`_ST_CALLS` **永不重置**，四处有意递归
         # （n2c/n2d/c6b + 之后的 n2c2）各自先 `_st_exempt(<站点>)` 登记额度。R1i 在此刻核算
         # 「1（本层）+ 已消耗额度」——把整跑偷偷加回**窗口之前**也会让计数超出，不再被清零掩盖。
-        try:
-            _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN)
-            chk(True, "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数"
-                      "（多一次未登记的整跑 ⇒ 红；实际 calls=%r exempt=%r）"
-                      % (_ST_CALLS, list(_ST_EXEMPT_SEEN)))
-        except AssertionError as _e:
-            chk(False, "R1i（guard 抛错，rc=1 不是判不了）：%s" % (_e,))
+        _ok_i, _d_i = _r1_guard_check(
+            "R1i", lambda: _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SEEN))
+        chk(_ok_i, "R1i 到此处为止 selftest 调用数 == 1 + 已登记豁免数"
+                   "（多一次未登记的整跑 ⇒ 红；实际 calls=%r exempt=%r）%s"
+                   % (_ST_CALLS, list(_ST_EXEMPT_SEEN), "" if _ok_i else "；guard: " + _d_i))
 
         try:
             c4a = _require_branch(fx, env, "master") is True
@@ -1432,12 +1523,11 @@ def _selftest_run():
     # R1k（C1 返工的第二半）：豁免额度必须**恰好消耗一次且只消耗登记站点**，且全程调用数
     # == 1 + 额度数。同时钉住三种退化：多跑一次未登记 ⇒ 计数超；登记了却没发生（站点被删/
     # 挪/短路）⇒ 集合少一项；站点名对不上 ⇒ 集合不等。
-    try:
-        _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES)
-        chk(True, "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）"
-                  % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES)))
-    except AssertionError as _e:
-        chk(False, "R1k（guard 抛错，rc=1 不是判不了）：%s" % (_e,))
+    _ok_k, _d_k = _r1_guard_check(
+        "R1k", lambda: _r1_accounting_guard(_ST_CALLS, _ST_EXEMPT_SEEN, _ST_EXEMPT_SITES))
+    chk(_ok_k, "R1k 豁免额度全消耗且只消耗登记站点（实际 calls=%r seen=%r 登记=%r）%s"
+               % (_ST_CALLS, sorted(_ST_EXEMPT_SEEN), sorted(_ST_EXEMPT_SITES),
+                  "" if _ok_k else "；guard: " + _d_k))
 
     # 元牙（review 15d62f97 N2 / 89ae2a18 C1·N2）：全部直接喂 `_r1_accounting_ok` 的**合成参数**。
     # `_META` 是**唯一**登记处：末尾断言条数，删掉任一颗 ⇒ 条数不等 ⇒ 红（N2 计数元断言）。
@@ -1477,11 +1567,30 @@ def _selftest_run():
     for _cond, _msg in _META:
         chk(_cond, _msg)
 
-    # C2：R1i 与 R1k 必须**都**经由接缝（`_r1_accounting_live`）读取；把任一处改回内联判定
+    # C2：R1i 与 R1k 必须**都**经由接缝（`_r1_accounting_guard`）读取；把任一处改回内联判定
     # ⇒ 计数不动 ⇒ 本条红。这是「守卫证明自己被调用」的正向证据，不靠源码文本。
+    # 牙⑩⑪（review 349604e8 ①）：兜底包装必须「任何异常 ⇒ 判红」，不许升成 NEED/rc=2。
+    # 探测同样**不计入** `_R1_LIVE_CALLS`（前后保存/恢复）。
+    _live_before2 = _R1_LIVE_CALLS
+    _v_before2 = _R1_GUARD_V_CALLS
+    _ok10, _d10 = _r1_guard_probe(lambda: _r1_accounting_guard(0, (), ()))
+    chk(_ok10 is False and _d10.startswith("AssertionError: R1 重入记账不成立"),
+        "元牙 R1-meta⑩ guard 抛 AssertionError ⇒ 包装返回 False，且 detail 是**具名的记账错误**"
+        "（判红，不是判不了；只判 `is False` 会被 `except AssertionError: return None` 这类"
+        "形态退化掩盖 ⇒ 这里钉的是诊断文本。实际 detail=%r）" % (_d10,))
+
+    def _boom():
+        raise ValueError("boom")
+
+    _ok11, _d11 = _r1_guard_probe(_boom)
+    chk(_ok11 is False and _d11 == "ValueError: boom",
+        "元牙 R1-meta⑪ **非 AssertionError 也必须判红**，且 detail 必须是**该异常本身**"
+        "（把包装改成「宽 except ⇒ return 2/None」会让本条红；实际 detail=%r）" % (_d11,))
+    _R1_LIVE_CALLS = _live_before2
+    _R1_GUARD_V_CALLS = _v_before2
+
     # 反向牙⑨（review 1260da60 要求）：guard **必须抛错**。若有人把它改成「返回 bool 不抛」，
     # 「丢弃返回值 + 内联 `<=`」这条退化路径就复活 ⇒ 本牙必须红。
-    global _R1_LIVE_CALLS          # ⑨ 是一次「故意失败」的探测，不得计入两处接线证据
     _live_before = _R1_LIVE_CALLS
     try:
         _r1_accounting_guard(0, (), ())
@@ -1492,9 +1601,76 @@ def _selftest_run():
     chk(_raised, "元牙 R1-meta⑨ guard 在不成立时必须**抛错**（改成返回 bool ⇒ 本条红，"
                  "因为「丢弃返回值 + 内联 <=」会绕过它）")
 
+    # 接线牙⑫（review a6b03f30 F1）：旧实现只有 `_R1_LIVE_CALLS == 2`，而**内联直调 guard
+    # 同样 +2** ⇒ 把 R1i/R1k 改回内联、甚至把包装调用搬到别处，selftest 仍 79/79 全绿。
+    # 现在判据是包装自己的计数 + 站点名（`_r1_wiring_ok`）；下面四颗负例固定它的两种退化，
+    # 以及 F2 的返回值形态判据。
+    _req = _R1_GUARD_REQUIRED_SITES
+    chk(_r1_wiring_ok(len(_req), list(_req)),
+        "元牙 R1-meta⑫ 正向对照：包装次数 == %d 且站点名相等 ⇒ 绿" % len(_req))
+    chk(not _r1_wiring_ok(0, []),
+        "元牙 R1-meta⑫a **内联回退**（包装 0 次、无站点；guard 计数照样 +2）⇒ 红")
+    chk(not _r1_wiring_ok(len(_req), []),
+        "元牙 R1-meta⑫b 内联两处 + 别处补两次包装「凑数」（次数 == 2、站点名空）⇒ 红")
+    chk(not _r1_wiring_ok(len(_req), list(_req) + ["elsewhere"]),
+        "元牙 R1-meta⑫c 包装被搬到别处（多一个未登记站点）⇒ 红")
+    chk(not _r1_guard_shape_ok(None) and not _r1_guard_shape_ok(2)
+        and not _r1_guard_shape_ok((True,)) and not _r1_guard_shape_ok((1, "")),
+        "元牙 R1-meta⑫d 形态判据：None / 裸 int / 短元组 / 非 bool 首项 ⇒ 都判非法"
+        "（F2：不许退化成 `TypeError: cannot unpack`）")
+    chk(_r1_guard_shape_ok((False, "x")),
+        "元牙 R1-meta⑫e 形态判据正向对照：(bool, str) ⇒ 合法")
+
+    # 结算层牙⑬（review 869b08bb）：把 R1i/R1k 的调用点改成 `if not ok: return 2` 并制造记账错
+    # ⇒ 旧行为 rc=2（NEED）、FAIL=0；本层必须把它变成**命名红 rc=1**。
+    _s_a, _w_a = _r1_settle_rc(2, [("R1i", False)], [])
+    chk(_s_a == 1 and "R1i" in _w_a,
+        "元牙 R1-meta⑬a 调用点把失败改成 `return 2`（NEED、FAIL=0）⇒ 结算层强制 rc=1 并点名 R1i"
+        "（实际 rc=%r detail=%r）" % (_s_a, _w_a))
+    _s_b, _w_b = _r1_settle_rc(0, [("R1k", False)], [])
+    chk(_s_b == 1 and "R1k" in _w_b,
+        "元牙 R1-meta⑬b 调用点把失败改成静默绿（`return 0`）⇒ 同样强制成一个命名红 rc=1"
+        "（实际 rc=%r detail=%r）" % (_s_b, _w_b))
+    _s_c, _w_c = _r1_settle_rc(2, [("R1i", False)], [(False, "R1i 到此处为止 selftest 调用数…")])
+    chk(_s_c == 1 and "rc=2" in _w_c,
+        "元牙 R1-meta⑬c 已落命名 FAIL 却返回 rc=2 ⇒ 也不许把红升成「判不了」"
+        "（实际 rc=%r detail=%r）" % (_s_c, _w_c))
+    _s_d, _w_d = _r1_settle_rc(0, [("R1i", True), ("R1k", True)], [(True, "R1i …")])
+    chk(_s_d == 0 and not _w_d,
+        "元牙 R1-meta⑬d 正向对照：全 True 且 rc=0 ⇒ 结算层不改写（实际 rc=%r）" % (_s_d,))
+
+    # 结算层**接线**牙⑭（review 869b08bb）：桩 `_selftest_run` 记一条**未命名**的 R1 失败后
+    # 返回 2（模拟「调用点改成 `if not ok: return 2`」）⇒ `selftest()` 必须 rc=1 且打印命名 FAIL。
+    # ⑬a–d 只测谓词本身；删掉 `selftest()` 里的 `_r1_settle_rc(...)` 接线（原样 `return rc`）
+    # ⇒ 只有本条会红。
+    _saved_run14 = globals()["_selftest_run"]
+    _res_before14 = len(_R1_GUARD_RESULTS)
+
+    def _silent_needy_run():
+        _R1_GUARD_RESULTS.append(("R1i", False))
+        return 2
+
+    globals()["_selftest_run"] = _silent_needy_run
+    try:
+        _buf14 = io.StringIO()
+        with contextlib.redirect_stdout(_buf14):
+            _rc14 = selftest()
+        _out14 = _buf14.getvalue()
+    finally:
+        globals()["_selftest_run"] = _saved_run14
+        del _R1_GUARD_RESULTS[_res_before14:]
+    chk(_rc14 == 1 and "  - R1 判定失败未落命名 FAIL：R1i" in _out14,
+        "元牙 R1-meta⑭ 结算层**接线**：桩返回 2 且记一条未命名 R1 失败 ⇒ selftest() 必须 rc=1 "
+        "并打印命名 FAIL（删掉 `_r1_settle_rc` 接线 ⇒ 本条红；实际 rc=%r 尾部=%r）"
+        % (_rc14, _out14[-160:]))
+
+    chk(_r1_wiring_ok(_R1_GUARD_V_CALLS, _R1_GUARD_SITES),
+        "元牙 R1-meta⓪ R1i/R1k 均经由包装 `_r1_guard_verify`（包装计数须为 %d、站点须为 %r；"
+        "实际 calls=%r sites=%r；改回内联或把包装搬到别处 ⇒ 本条红）"
+        % (len(_req), list(_req), _R1_GUARD_V_CALLS, list(_R1_GUARD_SITES)))
     chk(_R1_LIVE_CALLS == 2,
-        "元牙 R1-meta⓪ R1i/R1k 均经由 `_r1_accounting_live`（计数须为 2，实际 %d；"
-        "改回内联判定 ⇒ 本条红）" % _R1_LIVE_CALLS)
+        "元牙 R1-meta⓪b guard 读取次数 == 2（实际 %d；与 ⓪ 合起来才同时钉住「读了」与「经由包装读」）"
+        % _R1_LIVE_CALLS)
 
     if fails:
         print("docs_delivery_gate selftest: FAIL (%d/%d)" % (len(fails), checked[0]))
