@@ -265,8 +265,8 @@ drop	rust	bins/game-svr/src/ground\.rs:	bins/game-svr/src/ground.rs	P21 drop_ite
 # `GetBackupgWeapon`（`:592-759`）RNG 密集（耐久分支 + `Random(3)` + DC/MC/SC 三支）。
 # Rust 侧全部抽数落 `crates/world/src/merchant.rs`（上方 `merchant`/rust 行已按文件覆盖，
 # 不新增 rust 行）。这两行只为 C# 侧的新站点提供归类，避免 `--require-closed` 报 UNCLASSIFIED。
-merchant	csharp	Merchant\.UpgradeWapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:527	武器升级提交（零 RNG；入口行，占位归类）
-merchant	csharp	Merchant\.GetBackupgWeapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:592	武器升级取回：耐久分支 Random(Dura)/Random(Dura-18)、Random(3)、DC/MC/SC 三支 Random(Rate)[+Two/ThreePointRate]（:621/:637/:647/:677/:698/:719）
+merchant	csharp	Merchant\.UpgradeWapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:529	武器升级提交（零 RNG；入口行=方法声明行；**2026-10-27 订正**：原写 :527，实际 `UpgradeWapon` 声明在 `:529`（`:527` 是上一个方法的 `}`）⇒ 属陈旧快照漂移，非逻辑错误）
+merchant	csharp	Merchant\.GetBackupgWeapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:594	武器升级取回（**2026-10-27 订正**：原写 `:592`，那是本方法的 `/// </summary>` 行；声明在 `:594`） Random(Dura)/Random(Dura-18)、Random(3)、DC/MC/SC 三支 Random(Rate)[+Two/ThreePointRate]（:621/:637/:647/:677/:698/:719）
 
 # ---- 2026-10-20 追加（MB-5：毒 / 隐身 / 瞬移；卡 openmir2-mb5-monsters）-----------------
 # 五类全部是可覆写 Run 的专用怪，取数点全在 Run 体/其调用的 helper 内；Rust 站点文件级
