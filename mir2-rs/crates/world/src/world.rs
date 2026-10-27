@@ -194,6 +194,22 @@ fn hutil_round(v: f64) -> i32 {
     v.round() as i32
 }
 
+/// `TickRecord::hides` 观察者类别（**可观测性标注**；不参与帧集合/顺序）。
+///
+/// `hides` 的生产点 = [`World::tick_tail`] 的 AOI 自扫循环，观察者只有两类：
+/// - `Player`：`race == ACTOR_RACE_PLAY && !ghost` 且过 `SearchTime` 门的玩家；
+/// - `NonPlayer`：`!ghost && crate::monai::monster_self_scans(e)` 的自扫怪
+///   （Guard / ArcherGuard / SlaveMonster / 下属；`WorldServer.MonGen.cs:300-313`）。
+///
+/// 只有玩家会在 `OnlineRegistry` 里登记；非玩家自扫怪**不在** ⇒ 宿主对「无在线网关坐标」
+/// 的处理必须按类别分流：非玩家是预期噪声，玩家缺失才是真丢帧（卡
+/// `openmir2-aoi-disappear-observer-scope`，tier=R）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HideObserverKind {
+    Player,
+    NonPlayer,
+}
+
 /// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TickRecord {
@@ -339,6 +355,13 @@ pub struct TickRecord {
     /// 帧经**观察者自己**的消息队列发出 ⇒ 收件人 = 观察者，`Recog` = 离开者。
     /// 由 [`crate::aoi::search_view_range`] 的返回值填充；帧面由宿主（`bins/game-svr`）出。
     pub hides: Vec<(i32, i32)>,
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：本 tick `hides` 各事件的观察者
+    /// 类别，`(观察者 id, 离开者 id, 类别)`；按 `(observer, target)` 查（顺序非契约）。
+    ///
+    /// `hides` 本体语义/顺序不变，本字段只做**可观测分类**（玩家 / 非玩家自扫怪），供宿主
+    /// （`bins/game-svr::drain_aoi_disappear`）把「非玩家自扫怪不在 OnlineRegistry」从
+    /// 「玩家观察者缺失（真丢帧）」里分流出来。缺标注时宿主按 `Player` 处理（fail-safe loud）。
+    pub hide_observer_kinds: Vec<(i32, i32, HideObserverKind)>,
     /// **卡 `openmir2-map-event-frames`**：本 tick 各玩家观察者「离开事件视野」的
     /// `(观察者 id, 事件下标, nX, nY)`（保序 = 下标升序移除序）。
     ///
@@ -5060,6 +5083,7 @@ impl World {
             butches: Vec::new(),
             skeletons: Vec::new(),
             hides: Vec::new(),
+            hide_observer_kinds: Vec::new(),
             buff_status_changes: Vec::new(),
             buff_sysmsgs: Vec::new(),
             buff_recalcs: Vec::new(),
@@ -5432,14 +5456,19 @@ impl World {
                     //
                     // `aoi_order` 仍记录每个实体的处理顺序（它是槽位顺序诊断，不是「实际扫了
                     // 几次」的计数）；被节流跳过/不自扫的实体也入列，保持既有诊断契约不变。
-                    let scan = match self.entities.get(*id) {
-                        Some(e) if e.race == crate::entity::ACTOR_RACE_PLAY => {
-                            !e.ghost && self.clock_ms - e.ai.search_tick > e.ai.search_time
-                        }
-                        Some(e) if !e.ghost && crate::monai::monster_self_scans(e) => {
-                            self.clock_ms - e.ai.search_tick > e.ai.search_time
-                        }
-                        Some(_) => false,
+                    // 观察者类别与「是否自扫」同一个 `match` 判定：`race == PLAY` ⇒ 玩家；
+                    // `monster_self_scans` ⇒ 非玩家自扫怪。二者互斥（race 不可能同时是 PLAY 与
+                    // 11/112/254；`is_slave` 的怪 race 也不是 PLAY——下属的 race 沿用原怪）。
+                    let (scan, observer_kind) = match self.entities.get(*id) {
+                        Some(e) if e.race == crate::entity::ACTOR_RACE_PLAY => (
+                            !e.ghost && self.clock_ms - e.ai.search_tick > e.ai.search_time,
+                            HideObserverKind::Player,
+                        ),
+                        Some(e) if !e.ghost && crate::monai::monster_self_scans(e) => (
+                            self.clock_ms - e.ai.search_tick > e.ai.search_time,
+                            HideObserverKind::NonPlayer,
+                        ),
+                        Some(_) => (false, HideObserverKind::Player),
                         None => continue,
                     };
                     if !scan {
@@ -5456,6 +5485,12 @@ impl World {
                     for target in outcome.removed {
                         // 观察者 `*id` 收「`target` 离开视野」⇒ `SM_DISAPPEAR(target)`（保序）。
                         record.hides.push((*id, target));
+                        // **卡 `openmir2-aoi-disappear-observer-scope`**：同一事件旁挂观察者类别
+                        // （`hides` 本体不变）。宿主据此把非玩家自扫怪的「无在线网关坐标」与
+                        // 玩家缺失分流（前者预期噪声，后者真丢帧）。
+                        record
+                            .hide_observer_kinds
+                            .push((*id, target, observer_kind));
                     }
                     // 玩家扫描期间的 `RM_UPDATEVIEWRANGE` 投递（`PlayObject.cs:3136`）：
                     // 只有 oracle 有该 `Operate` 支的实体才入队（`MonsterObject`，排除
@@ -12004,6 +12039,114 @@ mod tests {
             u16::MAX,
             "ushort 回绕：(ushort)(0-1) = 65535（照抄 oracle 缺陷）"
         );
+    }
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：`TickRecord::hides` 的观察者
+    /// 分类标注——玩家观察者 ⇒ `Player`；自扫怪观察者（Guard/ArcherGuard/SlaveMonster/下属）⇒
+    /// `NonPlayer`。`hides` 本体（`(observer, target)` 内容与顺序）不变。
+    ///
+    /// 场景：玩家 `p` 与 Guard(11) 怪 `g` 同屏、共同看得见玩家 `t`；首轮扫描后把 `t` 摘出
+    /// 世界（格 + 实体）⇒ 下一轮两者的 AOI 都把 `t` 标 `Hidden` ⇒ `hides` 同时含 `(p, t)`
+    /// 与 `(g, t)`，类别分别为 `Player` / `NonPlayer`。
+    ///
+    /// 红检：删掉生产点的 `record.hide_observer_kinds.push(...)` ⇒ 末尾「每个 hides 事件都
+    /// 必须有标注」与两条 `kind_of` 断言必红；把两臂的类别互换 ⇒ `kind_of` 断言必红。
+    #[test]
+    fn hides_classify_player_and_self_scan_monster_observers() {
+        let mut w = World::new(64, 64);
+
+        w.open_session("p");
+        let p = w
+            .enter_map(
+                "p",
+                {
+                    let mut e = Entity::new(0, "p", 20, 20);
+                    e.view_range = 12;
+                    e.want_ref_msg = true;
+                    e
+                },
+                0,
+            )
+            .expect("p 进图");
+        // Guard(11) ∈ `monster_self_scans`：会主动 `SearchViewRange`。
+        let g = {
+            let mut e = Entity::new(9_001, "g", 20, 24);
+            e.race = 11;
+            e.view_range = 12;
+            e.ai.search_time = 1_000;
+            let id = w.entities.insert(e);
+            assert!(w.enter_world(id), "g 落图");
+            id
+        };
+        w.open_session("t");
+        let t = w
+            .enter_map("t", Entity::new(0, "t", 20, 22), 0)
+            .expect("t 进图");
+
+        // 首轮扫描（玩家/Guard 的 SearchTime=1000，200ms tick ⇒ 1200ms 命中）：两者都把
+        // `t` 收进视野，无消失事件。
+        let mut first_hides = Vec::new();
+        for _ in 0..6 {
+            first_hides.extend(w.tick().hides);
+        }
+        assert!(
+            first_hides.is_empty(),
+            "首轮只出现、不消失：{first_hides:?}"
+        );
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == t),
+            "前提：p 首轮看得见 t"
+        );
+        assert!(
+            w.entities
+                .get(g)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == t),
+            "前提：自扫怪 g 首轮看得见 t"
+        );
+
+        // `t` 走出 p/g 的视野（同图同步移动；实体仍在表里——`removed` 的守卫要求目标实体存在
+        // 且 `!FixedHideMode && !Ghost`）⇒ 下一轮 p/g 的扫描都把它标 `Hidden`。
+        assert!(w.try_step_now(t, 1, 0, 20), "t 应能向东走 20 格");
+
+        let mut hides = Vec::new();
+        let mut kinds = Vec::new();
+        for _ in 0..6 {
+            let rec = w.tick();
+            hides.extend(rec.hides);
+            kinds.extend(rec.hide_observer_kinds);
+        }
+        assert!(
+            hides.contains(&(p, t)),
+            "玩家观察者 p 的消失事件：{hides:?}"
+        );
+        assert!(
+            hides.contains(&(g, t)),
+            "自扫怪观察者 g 的消失事件：{hides:?}"
+        );
+        let kind_of = |observer: i32| {
+            kinds
+                .iter()
+                .find_map(|&(o, target, kind)| (o == observer && target == t).then_some(kind))
+        };
+        assert_eq!(kind_of(p), Some(HideObserverKind::Player));
+        assert_eq!(kind_of(g), Some(HideObserverKind::NonPlayer));
+        // 每个 `hides` 事件都必须有标注（漏标 ⇒ 宿主 fail-safe 按玩家处理，需在此先咬住）。
+        for (observer, target) in &hides {
+            assert!(
+                kinds
+                    .iter()
+                    .any(|&(o, t2, _)| o == *observer && t2 == *target),
+                "hides 事件 ({observer}, {target}) 缺观察者类别标注"
+            );
+        }
     }
 }
 

@@ -14960,19 +14960,70 @@ fn entity_in_cell_index(world: &mir2_world::World, e: &mir2_world::Entity) -> bo
 /// 升序 = `hides` 保序；出现帧序 = 追加序 = `drain_aoi_downlink` 遍历序）。⇒ **不是**顺序差异
 /// （原「整批前置 ⇒ 可能与 oracle 不同序」的登记**作废/订正**）。
 ///
-/// 去程守卫：观察者不在线（`online` 无登记）⇒ 跳过并记 WRN（不猜线）。离开者是否 `FixedHideMode`/
-/// `Ghost` 已在世界侧 `search_view_range` 过滤，此处不再查实体（实体可能已被移除）。
-fn drain_aoi_disappear(
+/// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· 观察者分类计数**。
+///
+/// `TickRecord::hides` 的观察者有两类（世界侧 [`mir2_world::HideObserverKind`] 标注）：
+/// - `Player`：`race == PLAY && !ghost` 的玩家 ⇒ 必须在 `OnlineRegistry` 里；
+/// - `NonPlayer`：`monster_self_scans` 的自扫怪（Guard/ArcherGuard/SlaveMonster/下属）
+///   ⇒ **本来就不在** `OnlineRegistry`，此前统一打 WRN 属**预期噪声**（真机 actor=290 已定性）。
+///
+/// 本结构只做**可观测性**，不改变发帧集合/顺序：
+/// - `player_observer`：本批 `Player` 观察者事件数；
+/// - `nonplayer_observer`：本批 `NonPlayer` 观察者事件数（不发帧、不查 online）；
+/// - `missing_online`：**玩家**观察者在 `online` 无登记 ⇒ 真丢帧风险（loud WRN + 计数）；
+/// - `emitted`：实际发出的 `SM_DISAPPEAR(30)` 条数（成功路由到网关）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct DisappearObserverCounts {
+    player_observer: usize,
+    nonplayer_observer: usize,
+    missing_online: usize,
+    emitted: usize,
+}
+
+/// 查 `(observer, target)` 的观察者类别。
+///
+/// **缺标注 ⇒ 按 `Player` 处理**（fail-safe loud）：漏标/旧构造不得把玩家缺失静音成
+/// 「非玩家预期噪声」。顺序不是契约，按二元组查而非下标对齐。
+fn hide_observer_kind(
+    rec: &mir2_world::TickRecord,
+    observer_id: i32,
+    target_id: i32,
+) -> mir2_world::HideObserverKind {
+    rec.hide_observer_kinds
+        .iter()
+        .find_map(|&(o, t, kind)| (o == observer_id && t == target_id).then_some(kind))
+        .unwrap_or(mir2_world::HideObserverKind::Player)
+}
+
+/// 去程守卫：观察者不在线（`online` 无登记）⇒ 跳过。**按类别分流**：
+/// - 非玩家自扫怪 ⇒ `DBG`（预期：它们不在 `OnlineRegistry`）；
+/// - 玩家 ⇒ `WRN` + `missing_online`（真丢帧风险，**不得**静默降级）。
+///
+/// 离开者是否 `FixedHideMode`/`Ghost` 已在世界侧 `search_view_range` 过滤，此处不再查实体
+/// （实体可能已被移除）。
+fn drain_aoi_disappear_with_counts(
     rec: &mir2_world::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-) -> usize {
+) -> (usize, DisappearObserverCounts) {
     let mut sent = 0usize;
+    let mut counts = DisappearObserverCounts::default();
     for (observer_id, target_id) in &rec.hides {
+        match hide_observer_kind(rec, *observer_id, *target_id) {
+            mir2_world::HideObserverKind::NonPlayer => {
+                // 自扫怪不在 OnlineRegistry 是**预期**：不发帧、不打 WRN、不查路由。
+                counts.nonplayer_observer += 1;
+                continue;
+            }
+            mir2_world::HideObserverKind::Player => {
+                counts.player_observer += 1;
+            }
+        }
         let Some(observer) = online.iter().find(|e| e.actor_id == *observer_id) else {
+            counts.missing_online += 1;
             glog!(
                 "WRN",
-                "消失帧：观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)"
+                "消失帧：玩家观察者 actor={observer_id} 无在线网关坐标 ⇒ 跳过 SM_DISAPPEAR(30)（missing_online；非「非玩家自扫怪」，是真丢帧风险）"
             );
             continue;
         };
@@ -14984,7 +15035,26 @@ fn drain_aoi_disappear(
             body: downlink::disappear_frame(*target_id),
         });
         sent += 1;
+        counts.emitted += 1;
     }
+    if counts.nonplayer_observer > 0 {
+        // 汇总一条 DBG（不逐条刷屏）；与上面玩家缺失的 WRN 文案**不同**，便于真机区分。
+        glog!(
+            "DBG",
+            "消失帧：{} 条非玩家自扫观察者事件（不在 OnlineRegistry 属预期）⇒ 未发 SM_DISAPPEAR(30)",
+            counts.nonplayer_observer
+        );
+    }
+    (sent, counts)
+}
+
+/// 生产入口：保持原签名/返回值（`usize` = 实发条数），内部分类型计数并分流日志。
+fn drain_aoi_disappear(
+    rec: &mir2_world::TickRecord,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) -> usize {
+    let (sent, _counts) = drain_aoi_disappear_with_counts(rec, online, gates);
     sent
 }
 
@@ -30510,6 +30580,181 @@ mod tests {
                 .all(|v| v.target != b),
             "Ghost 目标仍应从 VisibleActors 移除"
         );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // 卡 `openmir2-aoi-disappear-observer-scope`（tier=R）：hides 观察者分类 + 日志/计数分流。
+    // -----------------------------------------------------------------------------------
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：`drain_aoi_disappear` 必须按
+    /// `HideObserverKind` 分流——玩家发帧、非玩家自扫怪**只计数不发帧**、且不把非玩家算进
+    /// `missing_online`。
+    ///
+    /// **合成牙**：把非玩家 id 也放进 `online`（生产不可能；构造级只为让「误当玩家发帧」可观测）。
+    /// 红检：删掉 `hide_observer_kind` 分流（恒按玩家）⇒ 非玩家那条会走 online 分支并发帧
+    /// ⇒ `emitted==1`/`nonplayer_observer==1`/「902 无帧」三处断言必红。
+    #[test]
+    fn aoi_disappear_counts_split_player_and_nonplayer_observers() {
+        use mir2_protocol::frame::CommandMessage;
+        use mir2_world::HideObserverKind;
+        use std::collections::HashMap;
+
+        let player = 1_001;
+        let guard = 9_001;
+        let target = 2_002;
+
+        let rec = mir2_world::TickRecord {
+            hides: vec![(player, target), (guard, target)],
+            hide_observer_kinds: vec![
+                (player, target, HideObserverKind::Player),
+                (guard, target, HideObserverKind::NonPlayer),
+            ],
+            ..Default::default()
+        };
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("up", "p", 1, 0, 901, player));
+        // 合成：非玩家 id 也在 online（只为让「误当玩家」发得出帧）。
+        online_set(&mut online, entry("ug", "g", 2, 0, 902, guard));
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        assert_eq!(
+            counts,
+            DisappearObserverCounts {
+                player_observer: 1,
+                nonplayer_observer: 1,
+                missing_online: 0,
+                emitted: 1,
+            },
+            "分类计数（非玩家不查 online、不发帧）"
+        );
+        assert_eq!(sent, 1, "只发玩家观察者那 1 条");
+
+        let mut routed: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx0.try_recv() {
+            routed.push((socket, body));
+        }
+        assert_eq!(routed.len(), 1, "非玩家观察者不得发帧：{routed:?}");
+        assert_eq!(routed[0].0, 901, "帧只路由给玩家观察者 socket");
+        let cm = CommandMessage::from_bytes(&routed[0].1).expect("12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_DISAPPEAR);
+        assert_eq!(cm.recog, target);
+    }
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：**玩家**观察者缺失必须在
+    /// `missing_online` 里大声计数（真丢帧风险）；非玩家缺失是预期，**不得**混进该计数。
+    ///
+    /// 红检：把 `counts.missing_online += 1` 删掉 ⇒ 首断言必红；把非玩家也当玩家查 online
+    /// ⇒ 第二条的 `missing_online == 0` 必红。
+    #[test]
+    fn aoi_disappear_missing_player_online_is_counted_but_nonplayer_is_not() {
+        use mir2_world::HideObserverKind;
+        use std::collections::HashMap;
+
+        let player = 1_001;
+        let guard = 9_001;
+        let target = 2_002;
+
+        let online: OnlineRegistry = Vec::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // ① 玩家观察者不在 online ⇒ missing_online（loud）。
+        let rec = mir2_world::TickRecord {
+            hides: vec![(player, target)],
+            hide_observer_kinds: vec![(player, target, HideObserverKind::Player)],
+            ..Default::default()
+        };
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        assert_eq!(sent, 0, "玩家缺失不得发帧（不猜线）");
+        assert_eq!(counts.player_observer, 1);
+        assert_eq!(counts.missing_online, 1, "玩家缺失必须大声计数");
+        assert_eq!(counts.emitted, 0);
+        assert!(rx0.try_recv().is_err(), "玩家缺失不发帧");
+
+        // ② 非玩家自扫怪不在 online ⇒ 预期噪声，只计 nonplayer_observer。
+        let rec = mir2_world::TickRecord {
+            hides: vec![(guard, target)],
+            hide_observer_kinds: vec![(guard, target, HideObserverKind::NonPlayer)],
+            ..Default::default()
+        };
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        assert_eq!(sent, 0);
+        assert_eq!(counts.nonplayer_observer, 1);
+        assert_eq!(
+            counts.missing_online, 0,
+            "非玩家自扫怪不在 online 是预期，不得混进 missing_online"
+        );
+        assert!(rx0.try_recv().is_err(), "非玩家不发帧");
+    }
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· 不变量（构造级）**：
+    /// 在构造的「玩家 + 自扫怪」场景里，每个 drain 点的
+    /// `world.entities` 中 `race == PLAY && !ghost` 的实体都必须在 `online.actor_id` 集合内；
+    /// 且 `hides` 里 `Player` 类别的观察者也必须在 online。
+    ///
+    /// **边界（必须如实登记）**：这只是**构造级**不变量，不是对生产全部 `online_take`
+    /// （顶号踢旧 / 账号级顶号 / 人物关闭）与 gate 事件跨轮窗口的穷举证明。⇒ 卡保持
+    /// **R + `window_required`**；真机 290 观察者复跑前不得 `closed`；本用例的绿不得被当成
+    /// 「玩家 observer 永远在 online」的证明。
+    #[test]
+    fn live_players_are_in_online_at_aoi_drain_points_constructed_invariant() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.open_session("a");
+        let a = world
+            .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
+            .expect("a 进图");
+        world.open_session("b");
+        let b = world
+            .enter_map("b", new_player_entity("b".to_string(), 14, 10), 0)
+            .expect("b 进图");
+        // 自扫怪（Guard, race=11）——不在 online 是**预期**，用于覆盖混合场景。
+        let g = {
+            let mut e = mir2_world::Entity::new(9_001, "g", 12, 12);
+            e.race = 11;
+            e.view_range = 12;
+            e.ai.search_time = 1_000;
+            let id = world.entities.insert(e);
+            assert!(world.enter_world(id), "guard 落图");
+            id
+        };
+        assert!(g > 0);
+
+        let online: OnlineRegistry = vec![
+            entry("ua", "a", 1, 0, 901, a),
+            entry("ub", "b", 2, 0, 902, b),
+        ];
+
+        for tick in 0..12 {
+            let rec = world.tick();
+            for e in world.entities.iter() {
+                if e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost {
+                    assert!(
+                        online.iter().any(|o| o.actor_id == e.id),
+                        "tick {tick}: live player {} 不在 online.actor_id 集合内",
+                        e.id
+                    );
+                }
+            }
+            for (observer, target) in &rec.hides {
+                let kind = rec
+                    .hide_observer_kinds
+                    .iter()
+                    .find_map(|&(o, t, k)| (o == *observer && t == *target).then_some(k))
+                    // 缺标注 = 宿主 fail-safe 按玩家处理 ⇒ 这里同样按玩家核。
+                    .unwrap_or(mir2_world::HideObserverKind::Player);
+                if kind == mir2_world::HideObserverKind::Player {
+                    assert!(
+                        online.iter().any(|o| o.actor_id == *observer),
+                        "tick {tick}: Player 类 hides 观察者 {observer} 不在 online（真丢帧风险）"
+                    );
+                }
+            }
+        }
     }
 
     /// **orphan 编码器接线首批（验证者一号 must_fix#2）**：**单方向**离开用例——只有 `a` 观察 `b`
