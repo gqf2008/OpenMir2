@@ -1876,3 +1876,59 @@ fn castle_official_action_alive_status_uses_display_layer() {
         "N2 退化格：展示层未登记 ⇒ Status=0，不得回落实体 char_status"
     );
 }
+
+/// **info①（merge_result `e25f5ed8` 后续，卡 `openmir2-castle-official-actions`）**：
+/// `SM_DIGUP` 尾 `MessageBodyWL.Param2`（CharStatus）的**实体半边**对称牙——
+/// N2 已钉 `RM_ALIVE` 的 status 取**展示层**；本用例钉 `RM_DIGUP` 的 status 取
+/// **实体 `char_status`**（= drain 侧 `m.status` 的发帧时刻语义）：实体源故意给
+/// `0x99`、展示层 `status` 显式 0（两源可分）⇒ 尾 Param2 必须读 `0x99`。
+///
+/// 牙：把 emit 的 RM_DIGUP status 改回展示层 ⇒ 本用例 RED（Param2 变 0）。
+#[test]
+fn castle_official_action_digup_status_takes_entity_char_status() {
+    let (mut world, door, a_id) = action_world();
+    world.entities.get_mut(door).unwrap().char_status = 0x99;
+    let mut displays = downlink::DisplayTable::new();
+    displays.set(
+        door,
+        downlink::ActorDisplay {
+            dir: 0,
+            light: 3,
+            feature: 0x55,
+            feature_ex: 0,
+            status: 0, // 展示层故意 0 ≠ 实体 0x99 ⇒ 两源可分
+            name_color: 255,
+            show_name: Vec::new(),
+        },
+    );
+    let out = super::castle_official_action_exec(
+        &mut world,
+        &displays,
+        0,
+        0,
+        "@openmaindoor",
+        (2_000_000, 500_000),
+        (0xDB, 0xFF),
+        (0xFF, 0x38),
+    )
+    .expect("动作已识别");
+    let digup = out
+        .frames
+        .iter()
+        .find(|(r, b)| {
+            *r == a_id && u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_DIGUP
+        })
+        .map(|(_, b)| b.clone())
+        .expect("开门必须出 SM_DIGUP");
+    let tail = mir2_protocol::edcode::decode(&digup[12..]);
+    assert_eq!(
+        i32::from_le_bytes([tail[0], tail[1], tail[2], tail[3]]),
+        0x55,
+        "Param1 = GetFeature（展示层，F1 口径不变）"
+    );
+    assert_eq!(
+        i32::from_le_bytes([tail[4], tail[5], tail[6], tail[7]]),
+        0x99,
+        "info①：Param2 = CharStatus 必须取实体 char_status（展示层是 0）"
+    );
+}
