@@ -947,6 +947,45 @@ def selftest(args):
                        "P2 牙⑥ proxy 监听默认段 5000–7200 ⇒ fail（不放开 fail-closed）",
                        r_port["problems"])
 
+        # ---- P2 牙⑥b（复审 F1）：listen == upstream_port ⇒ fail（自环上游）。
+        #      删掉那条判定（改成 `if False:`）⇒ 只有本牙红。
+        bad_self = {"proxy": {"listen": 18600, "upstream_host": "127.0.0.1",
+                              "upstream_port": 18600},
+                    "client": {"gate_port": 18600}}
+        r_self = check_proxy_profile(bad_self)
+        ok_all &= _chk(r_self["verdict"] == "fail"
+                       and any("相同" in p for p in r_self["problems"]),
+                       "P2 牙⑥b listen == upstream_port ⇒ fail（自环上游）",
+                       r_self["problems"])
+
+        # ---- P1 牙②b（复审 F2）：换行**跟随原文件**——CRLF 源前插 CRLF、LF 源前插 LF，
+        #      且原文件字节原样留在尾部。固定 LF 的写法这条必红。
+        def _mk_env(tag, eol):
+            d = os.path.join(t2, tag)
+            os.makedirs(d)
+            with open(os.path.join(d, "MonGen.txt"), "wb") as fh:
+                fh.write(("3\t320\t328\t"
+                          "\u9e21").encode("gbk") + eol.encode())
+            with open(os.path.join(d, "MapInfo.txt"), "wb") as fh:
+                fh.write("[3 盟重省] FIGHT\n".encode("gbk"))
+            return d
+
+        env_lf = _mk_env("EnvirLF", "\n")
+        env_crlf = _mk_env("EnvirCRLF", "\r\n")
+        orig_crlf = open(os.path.join(env_crlf, "MonGen.txt"), "rb").read()
+        res_lf = prepend_mongen(env_lf, spec, dry_run=False)
+        res_crlf = prepend_mongen(env_crlf, spec, dry_run=False)
+        raw_lf = open(os.path.join(env_lf, "MonGen.txt"), "rb").read()
+        raw_crlf = open(os.path.join(env_crlf, "MonGen.txt"), "rb").read()
+        ok_eol = (res_lf.get("eol") == "LF" and b"\r\n" not in raw_lf
+                  and res_crlf.get("eol") == "CRLF"
+                  and raw_crlf.count(b"\n") == raw_crlf.count(b"\r\n")
+                  and raw_crlf.endswith(orig_crlf)
+                  and raw_lf.endswith(open(os.path.join(env_lf, "MonGen.txt"
+                                                        ".pre-fixture.bak"), "rb").read()))
+        ok_all &= _chk(ok_eol, "P1 牙②b 换行跟随原文件（CRLF↔CRLF、LF↔LF，原文件字节留在尾部）",
+                       (res_lf.get("eol"), res_crlf.get("eol")))
+
         # ---- P4 牙⑦：两侧快照 ⇒ 金币差/同一 StdIndex/槽消失 三事实 pass
         def _mk_snap(dirp, gold, rows):
             os.makedirs(dirp, exist_ok=True)
@@ -998,6 +1037,38 @@ def selftest(args):
                        and all(f["verdict"] == "undecidable" for f in ev3["facts"].values()),
                        "P4 牙⑨ 缺快照 ⇒ 三事实判不了（不给绿）",
                        ev3["verdict"] if ev3 else None)
+
+        # ---- P4 牙⑨b（复审 F3）：bagitem 快照缺 `StdIndex` 列 ⇒ 两条事实 undecidable
+        #      且点名缺列（旧实现抛 ValueError ⇒ 整档崩）。
+        bad_dir = os.path.join(t2, "bad_cols")
+        os.makedirs(bad_dir)
+        with open(os.path.join(bad_dir, "mir2_test_db.characters.tsv"), "w",
+                  encoding="utf-8", newline="\n") as fh:
+            fh.write("7\taaa\t4500\n")
+        with open(os.path.join(bad_dir, "mir2_test_db.characters_bagitem.tsv"), "w",
+                  encoding="utf-8", newline="\n") as fh:
+            fh.write("7\t41\t900002\n")
+        with open(os.path.join(bad_dir, "manifest.json"), "w", encoding="utf-8",
+                  newline="\n") as fh:
+            json.dump({"tool": "dbsnap", "tables": [
+                {"table": "mir2_test_db.characters", "rows": 1, "sha256": "aa",
+                 "file": "mir2_test_db.characters.tsv",
+                 "columns": ["Id", "ChrName", "Gold"]},
+                {"table": "mir2_test_db.characters_bagitem", "rows": 1, "sha256": "bb",
+                 "file": "mir2_test_db.characters_bagitem.tsv",
+                 "columns": ["PlayerId", "Position", "MakeIndex"]}]}, fh,
+                ensure_ascii=False)
+        try:
+            ev4 = db_evidence(cb, ca, rb, bad_dir, 7, expect_slot=40)
+        except Exception as ex:   # noqa: BLE001 — 缺列必须判 undecidable，不许崩
+            ev4 = None
+            ok_all &= _chk(False, "P4 牙⑨b 缺列不得抛异常", repr(ex))
+        if ev4 is not None:
+            ok_all &= _chk(ev4["facts"]["same_std_index"]["verdict"] == "undecidable"
+                           and "StdIndex" in ev4["facts"]["same_std_index"]["detail"]
+                           and ev4["rc"] == RC_UNDECIDABLE,
+                           "P4 牙⑨b bagitem 缺 StdIndex 列 ⇒ undecidable 且点名缺列",
+                           ev4["facts"]["same_std_index"])
 
         # ---- 漂移牙⑩：本文件的 MonGen 布局常量必须与 card_window 一致
         import re as _re
@@ -1103,12 +1174,18 @@ def prepend_mongen(envir_root, specs, dry_run=True):
         return res
     with open(mongen, "rb") as fh:
         original = fh.read()
+    # 复审 F2：换行**跟随原文件**（与 `card_window.py` 同口径：含 CRLF ⇒ 用 CRLF）。
+    # 固定 LF 会让 CRLF 部署件出现混排，也与 card_window 的布局机判不等价。
+    nl = b"\r\n" if b"\r\n" in original else b"\n"
+    body = original if (not original or original.endswith(b"\n")) else original + nl
+    block = b"".join(ln.encode("gbk") + nl for ln in lines)
     backup = mongen + ".pre-fixture.bak"
     with open(backup, "wb") as fh:
         fh.write(original)
-    payload = ("\n".join(lines) + "\n").encode("gbk")
     with open(mongen, "wb") as fh:
-        fh.write(payload + original)
+        fh.write(block + body)
+    res["eol"] = "CRLF" if nl == b"\r\n" else "LF"
+    res["backup_sha256"] = res["before_sha256"]
     res["backup"] = backup
     res["after_sha256"] = _sha256_file(mongen)
     res["action"] = "prepended"
@@ -1267,14 +1344,31 @@ def db_evidence(csharp_before, csharp_after, rust_before, rust_after,
     bt = "mir2_test_db.characters_bagitem"
 
     def slots(snap):
+        if bt not in snap["tables"]:
+            raise Prereq("快照里没有表 %s（判不了）" % bt)
         cols, rows = snap["tables"][bt]
+        for need in ("PlayerId", "Position", "StdIndex"):
+            if need not in cols:
+                raise Prereq("bagitem 快照缺列 %r（判不了）" % need)
         pid = cols.index("PlayerId")
         pos = cols.index("Position")
         std = cols.index("StdIndex")
         return {(r[pos], r[std]) for r in rows if r[pid] == str(player_id)}
 
-    gone = {"csharp": slots(snaps["csharp_before"]) - slots(snaps["csharp_after"]),
-            "rust": slots(snaps["rust_before"]) - slots(snaps["rust_after"])}
+    try:
+        gone = {"csharp": slots(snaps["csharp_before"]) - slots(snaps["csharp_after"]),
+                "rust": slots(snaps["rust_before"]) - slots(snaps["rust_after"])}
+    except Prereq as ex:
+        # 复审 F3：缺列/缺表是**判不了**（undecidable），不是崩；点名缺哪一列。
+        for f in ("same_std_index", "slot_disappeared"):
+            out["facts"][f] = {"verdict": "undecidable", "detail": str(ex)}
+        gone = None
+    if gone is None:
+        gold_fact = out["facts"].get("gold_delta") or {"verdict": "undecidable",
+                                                       "detail": "其它事实判不了"}
+        out["verdict"] = "fail" if gold_fact["verdict"] == "fail" else "undecidable"
+        out["rc"] = RC_MISMATCH if gold_fact["verdict"] == "fail" else RC_UNDECIDABLE
+        return out
     stds = {"csharp": sorted({s for _p, s in gone["csharp"] if s != "0"}),
             "rust": sorted({s for _p, s in gone["rust"] if s != "0"})}
     ok_std = bool(stds["csharp"]) and stds["csharp"] == stds["rust"]
