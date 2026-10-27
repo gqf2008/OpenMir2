@@ -722,11 +722,22 @@ def main(argv=None):
 # ---------------------------------------------------------------------------
 # 自测（每类 ≥2 个反例；删掉对应检查分支 ⇒ 这里的断言必红）
 # ---------------------------------------------------------------------------
+#: N1（卡 `openmir2-docs-hexref-integration-followup`）：`selftest()` 的**嵌套深度**与
+#: 窗口内最大值。R1i 用它把「禁止再整跑」变成**行为**判据——旧牙只查 `_DG_PROBE` 这个名字
+#: 在不在 `globals()` 里，换个新开关（实测 `_DG_PROBE2`）把整跑原样加回仍然全绿。
+_ST_DEPTH = 0
+_ST_MAX = 0
+
+
 def selftest():
     """自测入口：**环境建不了夹具 ⇒ rc=2（判不了）**，不是 rc=1（证伪）。
 
     牙 N2c 钉住这条：把 `_selftest_run` 换成「抛 GitUnavailable」⇒ 本函数必须返回 2。
     """
+    global _ST_DEPTH, _ST_MAX
+    _ST_DEPTH += 1
+    if _ST_DEPTH > _ST_MAX:
+        _ST_MAX = _ST_DEPTH
     try:
         return _selftest_run()
     except GitUnavailable as ex:
@@ -737,11 +748,15 @@ def selftest():
         print("docs_delivery_gate selftest: 判不了（rc=2）—— 环境不能建临时夹具：%s: %s"
               % (ex.__class__.__name__, ex))
         return 2
+    finally:
+        _ST_DEPTH -= 1
 
 
 def _selftest_run():
     fails = []
     checked = [0]
+    #: N1：R1 重入窗口标记（起点在 R1b 之前赋值；留 `None` 默认值让「标记被删」也判红）。
+    _R1_WIN = None
 
     def chk(cond, name):
         checked[0] += 1
@@ -1003,6 +1018,12 @@ def _selftest_run():
         #      并钉住「先判记录」：已观测到 3 条合法调用时，内层之后再中断也算绿。
         # 集成层（整跑一次 selftest，**分状态**）：
         #   内层没跑完（rc=2）且记录 <3 ⇒ NEED（判不了）；跑完却 <3 次记录 ⇒ 红。
+        # R1 重入窗口**起点**（N1）：从这里到 R1i 之间不得再整跑 selftest。
+        # 注意 R1a 的**物理位置**在夹具构建段（约 :809），它与 R1b–R1h 之间隔着 n2c/n2d/c6b
+        # 三颗**故意递归**调 `selftest()` 的牙（tester-1 实测嵌套计数 = 3）⇒ 窗口只能卡在
+        # R1b–R1i 这一段；把窗口拉到 R1a 会把那三颗牙误判成「重入」。
+        _R1_WIN = {"base": _ST_DEPTH}
+        globals()["_ST_MAX"] = _ST_DEPTH
         _SYNTH_C1 = "c1" + "0" * 38        # 40 位、含 a–f
         _SYNTH_SIDE = "5d" + "1" * 38      # 40 位、含 a–f
         _SYNTH_BLOB = "b10b" + "0" * 36    # 40 位、含 a–f
@@ -1057,9 +1078,15 @@ def _selftest_run():
         # 本牙钉住「没人把整跑加回来」：`selftest` 的**最大嵌套深度**必须恒为 1。
         # 钉住「集成层确实被删掉、没有换成另一种整跑」：R1 只剩确定性覆盖，
         # 且旧的探针重入开关 `_DG_PROBE` 必须**从模块命名空间里消失**（删干净，不留死代码）。
-        chk("_DG_PROBE" not in globals(),
-            "R1i 集成层已彻底移除：`_DG_PROBE` 不得再存在于模块命名空间（现为 %r）"
-            % (globals().get("_DG_PROBE"),))
+        # **行为牙**（不是名字检查）：窗口内只要发生过一次嵌套 `selftest()`，`_ST_MAX` 就会 >1。
+        # 三种退化都不许空过：窗口标记缺失（`_R1_WIN` 被删）⇒ 红；接缝被绕开（`selftest` 不再
+        # 被调用）⇒ `_ST_DEPTH` 为 0 ⇒ 红；窗口内确实没重入 ⇒ 三值都 == 1 ⇒ 绿。
+        _r1_win = _R1_WIN
+        chk(isinstance(_r1_win, dict) and _r1_win.get("base") == 1
+            and _ST_DEPTH == 1 and globals().get("_ST_MAX") == 1,
+            "R1i R1b–R1h 窗口内 selftest 不得被重入（基准/当前/窗口内最大嵌套深度都要 == 1；"
+            "实际 win=%r depth=%r max=%r）"
+            % (_r1_win, _ST_DEPTH, globals().get("_ST_MAX")))
 
         try:
             c4a = _require_branch(fx, env, "master") is True
