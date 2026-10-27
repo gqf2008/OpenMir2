@@ -86,6 +86,16 @@ BLOCKED_TOKENS = {
         'absent': ('未合',),
         'tokens': ('GuildOfficial', 'IMerchant', 'InvalidCastException'),
     },
+    # 2026-10-27（卡 `openmir2-window-run3-prereq-triage`，owner 裁决）：#12 `npc_script_chain` 与
+    # king_dialog / king_castle_war 同族——链的宿主是 `Npcs.txt:3` type=1 `GuildOfficial`，
+    # `ClientClickNpc` 的 `(IMerchant)actor` 硬转抛 `InvalidCastException` ⇒ 点击链恒 0 帧
+    # ⇒ 场景语义不成立（不是缺夹具，也不是坐标写错）。token 取「原因侧」三个词：换写法可以，
+    # 但清单行与场景 JSON 两侧都必须说清「是类型门 + 是抛异常」。
+    'npc_script_chain': {
+        'source': 'docs/window-run3-prereq-triage-20261027.md §n12',
+        'absent': ('未合',),
+        'tokens': ('GuildOfficial', 'IMerchant', 'InvalidCastException'),
+    },
 }
 
 

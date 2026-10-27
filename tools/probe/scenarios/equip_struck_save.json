@@ -1,8 +1,11 @@
 {
   "name": "equip_struck_save",
-  "description": "R7 装备耐久变化场景（openmir2-persist-useitems-wiring 的窗口前置）：placement 到**铁器店 map 0103 (19,19)**，目标是正上方格 (19,18) 的商店 NPC「卫家店」（MerChant.txt:26）——CM_TURN(3010) 定朝向 Up → sleep 400 → CM_HIT(3014) → 等 SM_DURACHANGE(642)（并覆盖 SM_UPDATEITEM(203)），硬门只认 642。选「攻击方武器扣耐久」：oracle 的 AttackSuccess（PlayObject.Attack.cs:215-229）只在 targetObject==null 时 early-return，有目标就**无条件**抽 Random(5)+2-WeaponStrong 并调 DoDamageWeapon，**命中/躲闪/伤害 0 都照扣**；而「受击方扣耐久」要先被打中（概率路径，combat_strike 的 BLOCKED 教训）。**为什么是 map 0103**：该图在 MonGen.txt 里**一行刷怪配置都没有**（部署件与两侧窗口 Envir 的 MonGen.txt 逐字节相同）⇒ 不存在任何刷怪箱，玩家视野内**确定零怪**；上一版选的 map 0 (288,610) 被 MonGen.txt:112/113/124/125 的 鹿/稻草人 Range=50 箱体覆盖（GenMonRate=10 ⇒ 每行 50 只），稻草人 Race=83 SlowAtMonster 会主动攻击 ⇒ 已废弃。目标选商店 NPC 还有两点好处：GetMovingObject 返回格内任何 ActorObject（Envirnoment.cs:1203-1239），且玩家侧 IsAttackTarget 对 NPC 返回 false（PlayObject.Attack.cs:627-753，默认 HAM_ALL 下只有 Race<NPC||Race>PeaceNpc 才可打）⇒ 目标不掉血、不还手、不产生 SM_STRUCK 噪声。注意：**Rust 已接这条磨损帧**（卡 openmir2-attack-weapon-wear-642 合入 master 8dcb8c8ca：AttackSuccess 有目标即 DoDamageWeapon → SM_DURACHANGE(642)，破零支 202 → 642(0) → 再一条 642(0)）；今日 card_window --dry-run rc=0。**真机窗口未跑（取证须真机）**；硬门 wait_idents [642] 不受破零双帧影响，但真机判定不要按「恰一条 642」写。逐条 file:line、零怪证明表、存档侧判据与登记见 docs/equip-struck-save-scenario-20261023.md。**武器夹具锚点（run-1 悬置的「缺同屏攻击者语境」已由「打身前商店 NPC」方案闭合，装备位数据可机判）**：gm01（PlayerId=1）两侧基线快照自带已装备武器——characters_item Position=1（ItemLocation.Weapon，src/OpenMir2/Enums/ItemLocation.cs:9）单行：StdIndex=223=裁决之杖（StdMode=6、模板 SOURCE=0 => SpecialPwr=0 => AddAbil.WeaponStrong=0，src/M2Server/Player/PlayObject.cs:4424-4426；MySqlDB.cs:36），Dura=22198/DuraMax=32000（>0 且远离破零，nWeaponDamage=Random(5)+2-0∈[2,6] 不会击穿）；两侧 characters_item_attr 零行 => Desc[7]=0（不覆写 SpecialPwr，GameItemSystem.cs:748-754）、Desc[10]=0（未升级 => 不走 CheckWeaponUpgrade 的 203/1102 支）。登记在案的残余：装备位（characters_item）没有场景声明通道（inventory 夹具只写 characters_bagitem），本场景依赖基线快照自带武器；若基线变更需另开装备位夹具卡。",
+  "description": "R7 装备耐久变化场景（openmir2-persist-useitems-wiring 的窗口前置）：placement 到**铁器店 map 0103 (19,19)**，目标是正上方格 (19,18) 的商店 NPC「卫家店」（MerChant.txt:26）——CM_TURN(3010) 定朝向 Up → sleep 400 → CM_HIT(3014) → 等 SM_DURACHANGE(642)（并覆盖 SM_UPDATEITEM(203)），硬门只认 642。选「攻击方武器扣耐久」：oracle 的 AttackSuccess（PlayObject.Attack.cs:215-229）只在 targetObject==null 时 early-return，有目标就**无条件**抽 Random(5)+2-WeaponStrong 并调 DoDamageWeapon，**命中/躲闪/伤害 0 都照扣**；而「受击方扣耐久」要先被打中（概率路径，combat_strike 的 BLOCKED 教训）。**为什么是 map 0103**：该图在 MonGen.txt 里**一行刷怪配置都没有**（部署件与两侧窗口 Envir 的 MonGen.txt 逐字节相同）⇒ 不存在任何刷怪箱，玩家视野内**确定零怪**；上一版选的 map 0 (288,610) 被 MonGen.txt:112/113/124/125 的 鹿/稻草人 Range=50 箱体覆盖（GenMonRate=10 ⇒ 每行 50 只），稻草人 Race=83 SlowAtMonster 会主动攻击 ⇒ 已废弃。目标选商店 NPC 还有两点好处：GetMovingObject 返回格内任何 ActorObject（Envirnoment.cs:1203-1239），且玩家侧 IsAttackTarget 对 NPC 返回 false（PlayObject.Attack.cs:627-753，默认 HAM_ALL 下只有 Race<NPC||Race>PeaceNpc 才可打）⇒ 目标不掉血、不还手、不产生 SM_STRUCK 噪声。注意：**Rust 已接这条磨损帧**（卡 openmir2-attack-weapon-wear-642 合入 master 8dcb8c8ca：AttackSuccess 有目标即 DoDamageWeapon → SM_DURACHANGE(642)，破零支 202 → 642(0) → 再一条 642(0)）；今日 card_window --dry-run rc=0。**真机窗口未跑（取证须真机）**；硬门 wait_idents [642] 不受破零双帧影响，但真机判定不要按「恰一条 642」写。逐条 file:line、零怪证明表、存档侧判据与登记见 docs/equip-struck-save-scenario-20261023.md。**武器夹具锚点（run-1 悬置的「缺同屏攻击者语境」已由「打身前商店 NPC」方案闭合，装备位数据可机判）**：gm01（PlayerId=1）两侧基线快照自带已装备武器——characters_item Position=1（ItemLocation.Weapon，src/OpenMir2/Enums/ItemLocation.cs:9）单行：StdIndex=223=裁决之杖（StdMode=6、模板 SOURCE=0 => SpecialPwr=0 => AddAbil.WeaponStrong=0，src/M2Server/Player/PlayObject.cs:4424-4426；MySqlDB.cs:36），Dura=22198/DuraMax=32000（>0 且远离破零，nWeaponDamage=Random(5)+2-0∈[2,6] 不会击穿）；两侧 characters_item_attr 零行 => Desc[7]=0（不覆写 SpecialPwr，GameItemSystem.cs:748-754）、Desc[10]=0（未升级 => 不走 CheckWeaponUpgrade 的 203/1102 支）。登记在案的残余：装备位（characters_item）没有场景声明通道（inventory 夹具只写 characters_bagitem），本场景依赖基线快照自带武器；若基线变更需另开装备位夹具卡。 **2026-10-27 补齐武器前置（卡 openmir2-window-run3-prereq-triage）**：本场景原先假定「基线角色自带已装备武器」（旧文档锚的是 gm01/PlayerId=1 的裁决之杖 StdIndex=223），但 run3 剖面的 `alt` 登录的是 winplay0（PlayerId=6228），其基线 `characters_item` 共 13 行（Position 0..12）**全部零值** ⇒ `UseItems[Weapon]` 为空 ⇒ `AttackSuccess` 的 `DoDamageWeapon` 支被跳过、642/203 永不出现（run3 首跑 `frames.ndjson` 在点击应答 643 之后一条 s2c 都没有，只有无关的 656；`save_settle` 因无耐久写入判 `no_change_observed`）。现改为**场景自描述**：顶层 `inventory` 声明木剑#5001@40，`steps[0..1]` 用 `CM_TAKEONITEM` 穿上武器并等 615，再走原来的「点 (19,18) 卫家店 → 转 Up → 挥击」链。诊断与证据见 `docs/window-run3-prereq-triage-20261027.md` §n13。",
   "params": {
-    "self_pos": 1245203
+    "self_pos": 1245203,
+    "make_index": 5001,
+    "takeon_where": 1,
+    "item_name": "木剑"
   },
   "placement": {
     "map": "0103",
@@ -11,6 +14,20 @@
     "note": "铁器店 map 0103（MapInfo.txt:293 `[0103 铁器店] FIGHT`，服务器号 0）；目标商店 NPC「卫家店」在 (19,18)（E:/MirServer/Mir200/Envir/MerChant.txt:26，GBK：`比奇城/卫家店 0103 19 18 卫家店 0 1 0`，脚本 Market_Def/比奇城/卫家店-0103.txt）。本格是它的正南邻格（Dir=Up 的前方格 = (x, y-1)，BaseObject.cs:977-990）。**零怪证明**：MonGen.txt 里 map 0103 零行（部署件与两侧窗口 Envir 逐字节相同，cmp 已验）⇒ 没有刷怪箱（刷怪位置 = X-Range+Random(2*Range+1)，WorldServer.MonGen.cs:825-826/849-850；每行实际只数 = Count/(GenMonRate/10)，GenMonRate 部署 = 10（Server.conf:780）⇒ = Count，WorldServer.MonGen.cs:232）；map 0103 也没有 loadgen 子文件、没有脚本 MONGEN/MONGENEX、MapQuest/MapEvent 无该图条目；MerChant/Npcs 里 map 0103 只有这一个 actor ⇒ 视野内确定零怪、零主动攻击。0103.map 该格 bk=0/fr=3722（fr 无 bit15）可走"
   },
   "steps": [
+    {
+      "send": {
+        "ident": 1003,
+        "recog": "make_index",
+        "param": "takeon_where",
+        "text_from": "item_name"
+      },
+      "note": "CM_TAKEONITEM(1003) 把夹具木剑穿到武器位：`recog`=make_index=5001、`param`=takeon_where=1（ItemLocation.Weapon，src/OpenMir2/Enums/ItemLocation.cs:9；StdMode 5 ⇒ Weapon 由 param_discovery 的逆表给出）、`body`=item_name 文本。**这是 642 的真实逻辑来源**：oracle `AttackSuccess`（src/M2Server/Player/PlayObject.Attack.cs:218-222）只有 `UseItems[Weapon] != null && Index > 0` 时才调 `DoDamageWeapon`（同文件 :1436-1440），而 run3 剖面登录的 winplay0（PlayerId=6228）基线 `characters_item` Position=1 全零 ⇒ 不穿武器时 642/203 永不可能出现（run3 首跑实测：CM_HIT 之后 3s 零 s2c 帧，见 docs/window-run3-prereq-triage-20261027.md §n13）。"
+    },
+    {
+      "wait_for": 615,
+      "timeout_ms": 3000,
+      "note": "SM_TAKEON_OK(615)（src/OpenMir2/Messages.cs:284）＝穿戴成功回执。等回执而不是 sleep：「还没穿上就挥击」会让 642 缺失变成时序假红。同型前置见 upgrade_retrieve 的 steps[0..1]。"
+    },
     {
       "click_npc": "pos:19,18",
       "note": "目标存在性前置（卡 openmir2-scenario-fixture-migration）：先确认 (19,18) 上有**固定 NPC 卫家店**（MerChant.txt:26）。`pos:` 命中前过静态对象门；目标格空 ⇒ fail-closed 并列出该格 ±3 邻近可见对象（便于直接改坐标）；**不静默跳过、不加大超时**。"
@@ -56,6 +73,18 @@
         "timeout_ms": 3000
       },
       "note": "成功硬门：642 必须真的到。没装备武器 ⇒ DoDamageWeapon early-return（PlayObject.Attack.cs:1438-1441）；身前格没目标 ⇒ AttackSuccess early-return（:217-220）；武器有效 SpecialPwr（AddAbil.WeaponStrong，PlayObject.cs:4424-4426）≠0 且 Random(5)+2 ≤ WeaponStrong ⇒ nWeaponDamage ≤0 被 :226 挡掉——三条都零 642 ⇒ 本步红（不会拿 203 蒙混过去）。破零支（Dura ≤ 2 才保证一击破零：nWeaponDamage 最小 2）会先来 202 再来 Recog=0 的 642，仍满足本步；帧先后由比较器判"
+    }
+  ],
+  "inventory": [
+    {
+      "index": 207,
+      "make_index": 5001,
+      "position": 40,
+      "std_mode": 5,
+      "ani_count": 1,
+      "dura": 4000,
+      "dura_max": 4000,
+      "note": "木剑（stditems#207：StdMode=5、Shape=1、DuraMax 4000）——steps[0] 的 CM_TAKEONITEM 把它穿到武器位，让 642 有真实逻辑来源。ani_count 必须等于 Shape=1（card_window.py 的模板校验），旧写法 ani_count=0 会 rc=2。槽 40 在基线里是空占位行（PlayerId=6228 Pos40 = Id409/全零），占用谓词只认 StdIndex/MakeIndex 非 0 的“真有物品”行（卡 openmir2-window-run3-prereq-triage）。"
     }
   ]
 }

@@ -2925,8 +2925,16 @@ def run_inventory(runner, side, prof, sc, items, env, timeout=120):
         positions = [it["position"] for it in items]
         # 声明槽位必须原本为空：DELETE+INSERT 会把该行其它列重置成默认值，工具不替操作者
         # 做「覆盖已有物品」这件事（review `c866f358` M-1）。
+        # 卡 `openmir2-window-run3-prereq-triage`（reviewer-21 `3dc30ae5` 返工，n17 真因）：
+        # **占用 = 这一格真有物品**，不是「有行」。存档约定是每槽一行、清空 = 把列置零
+        #（基线 `characters_bagitem` 对每个角色恒有 46 行 `Position 0..45`，全零占位），
+        # 只 `COUNT(*) WHERE Position IN` 会把**整包**判成已占用 ⇒ 46/46 基线上任何声明都
+        # fail-closed（run3 #17 实测：「声明槽位里已有 2 行（[40, 41]）」而两行都是空占位）。
+        # `MakeIndex` 是带服务器号的合成键（DBSvr 写入必非 0；空行恒 0），所以
+        # `StdIndex <> 0 OR MakeIndex <> 0` 与「这一格真有物品」等价。
         occ_sql = ("SELECT COUNT(*) FROM `%s`.`characters_bagitem`\n"
-                   " WHERE `PlayerId` = %d AND `Position` IN (%s);\n"
+                   " WHERE `PlayerId` = %d AND `Position` IN (%s)\n"
+                   "   AND (`StdIndex` <> 0 OR `MakeIndex` <> 0);\n"
                    % (db, player_id,
                       ", ".join(str(p) for p in positions)))
         occ = sql("inventory.occupancy", occ_sql)
@@ -7148,6 +7156,51 @@ def _selftest_inventory(tmp):
                 return 0, "%d\n" % self.rows_written, ""
             return 1, "", "unexpected tag %s" % tag
 
+    class _OccupancyRunner(_FakeRunner):
+        """按 SQL 的 WHERE 真算占用行数（其余 tag 全部走 `_FakeRunner`）。
+
+        `rows` = [(Position, StdIndex, MakeIndex)]。SQL 里带 `StdIndex/MakeIndex <> 0` 谓词时
+        只数非空行；**谓词一旦被删掉**（变异）就退化成「数所有行」= 修复前的 buggy 语义，
+        ① 立刻红 —— 这就是这两颗牙的咬合点。
+        """
+
+        def __init__(self, rows):
+            _FakeRunner.__init__(self)
+            self.rows = rows
+
+        def run(self, side, tag, argv, env=None, timeout=120, stdin_text=None,
+                capture=True):
+            if tag != "inventory.occupancy":
+                return _FakeRunner.run(self, side, tag, argv, env=env, timeout=timeout,
+                                       stdin_text=stdin_text, capture=capture)
+            text = stdin_text or ""
+            m = re.search(r"`Position` IN \(([^)]*)\)", text)
+            pos = {int(x) for x in m.group(1).split(",")} if m else set()
+            # **真的算 WHERE**：把 SQL 里最后一个 `AND (… )` 谓词抠出来，去掉反引号、
+            # `<>` 换成 `!=` 后求值。这样「整段谓词删掉」与「OR→AND」两种变异都会改变
+            # 结果——牙才咬得住 SQL 本身，而不是由假 runner 另写一套语义（那是装饰）。
+            i = text.rfind("AND (")
+            expr = None
+            if i != -1:
+                j = text.find(")", i)
+                if j != -1:
+                    expr = (text[i + 5:j].replace("`", "").replace("<>", "!=")
+                            .replace(" OR ", " or ").replace(" AND ", " and "))
+            n = 0
+            for (p, std, mk) in self.rows:
+                if p not in pos:
+                    continue
+                if expr is not None:
+                    try:
+                        keep = bool(eval(expr, {"__builtins__": {}},
+                                        {"StdIndex": std, "MakeIndex": mk}))
+                    except Exception:
+                        keep = False
+                    if not keep:
+                        continue
+                n += 1
+            return 0, "%d\n" % n, ""
+
     prof = {"char_name": "hero", "account": "ua",
             "sides": {"csharp": {"db": {"characters_db": "mir2_test_db"}}}}
     sc = prof["sides"]["csharp"]
@@ -7191,6 +7244,22 @@ def _selftest_inventory(tmp):
         short = run_inventory(_FakeRunner(rows_written=1), "csharp", prof, sc, two, {})
         out.append((short["rc"] == 2 and "写后行数" in (short["error"] or ""),
                     "⑮ 写后行数 < 声明件数 => rc=2（%r）" % (short["error"] or "")[:90]))
+        # ①②（reviewer-21 `3dc30ae5` 返工）：占用谓词必须是「有物品」而不是「有行」。
+        # 假 runner 按 SQL 的 WHERE 真算行数，所以把谓词删掉（变异）⇒ ① 会红。
+        empty_slot = run_inventory(_OccupancyRunner([(3, 0, 0)]), "csharp", prof, sc, one, {})
+        out.append((empty_slot["rc"] == 0,
+                    "⑲ 空占位行（StdIndex=0 且 MakeIndex=0）不算占用 => rc=0（%r）"
+                    % (empty_slot["error"] or "")[:80]))
+        real_slot = run_inventory(_OccupancyRunner([(3, 207, 5001)]), "csharp", prof, sc, one, {})
+        out.append((real_slot["rc"] == 2 and "已有" in (real_slot["error"] or ""),
+                    "⑳ 真有物品的行（StdIndex/MakeIndex 非 0）仍算占用 => rc=2（%r）"
+                    % (real_slot["error"] or "")[:80]))
+        # ⑴：谓词必须是 **OR**——老物品行可能 `StdIndex>0` 但 `MakeIndex=0`（历史行/未写合成键），
+        # 写成 AND 会把它当空槽（那就真的会覆盖已有物品）。
+        legacy_slot = run_inventory(_OccupancyRunner([(3, 207, 0)]), "csharp", prof, sc, one, {})
+        out.append((legacy_slot["rc"] == 2 and "已有" in (legacy_slot["error"] or ""),
+                    "㉑ 只有 StdIndex 非 0（老物品行）也算占用 => rc=2（%r）"
+                    % (legacy_slot["error"] or "")[:80]))
     finally:
         globals()["_check_db_pairing"] = orig_pair
         globals()["placement_envir_root"] = orig_root
