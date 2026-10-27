@@ -2945,6 +2945,33 @@ def do_finish(run, args, conn):
             pass
 
 
+def _finish_evidence(run, args, scenario, params, error):
+    """收尾顺序（卡 `openmir2-probe-close-evidence-teeth`）：**run.json 先落盘**，再关 recorder。
+
+    理由：`run.json` 才是主证据；`Recorder.close()` 写 meta 账目失败时**不得阻断证据**，
+    但也**不许静默**——一律回显到 stderr。连接关闭同理（失败只报告）。
+    """
+    payload = build_run_json(run, args, scenario, params, error)
+    os.makedirs(args.out, exist_ok=True)
+    path = os.path.join(args.out, "run.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(payload, fh, ensure_ascii=False, indent=1)
+    try:
+        run.recorder.close()
+    except Exception as ex:  # noqa: BLE001
+        print("mir2_probe: 证据收尾失败（run.json 已落盘）：%r" % (ex,), file=sys.stderr)
+    for c in getattr(run, "conns", []):
+        try:
+            c.close()
+        except Exception as ex:  # noqa: BLE001
+            print("mir2_probe: 连接关闭失败（证据已落盘）：%r" % (ex,), file=sys.stderr)
+    print("mir2_probe: exit=%d reason=%s frames=%d out=%s"
+          % (run.exit_code, run.exit_reason, run.recorder.seq, args.out))
+    if error:
+        print("  error: %s" % error, file=sys.stderr)
+    return path
+
+
 def build_run_json(run, args, scenario, params, error):
     frames_total = run.recorder.seq
     by_conn = dict(run.recorder.counts)
@@ -3157,18 +3184,7 @@ def main(argv=None):
         error = "%s: %s" % (type(ex).__name__, ex)
         run.exit_code, run.exit_reason = 2, "internal"
     finally:
-        for c in run.conns:
-            c.close()
-        run.recorder.close()
-        payload = build_run_json(run, args, scenario, params, error)
-        os.makedirs(args.out, exist_ok=True)
-        path = os.path.join(args.out, "run.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            json.dump(payload, fh, ensure_ascii=False, indent=1)
-        print("mir2_probe: exit=%d reason=%s frames=%d out=%s"
-              % (run.exit_code, run.exit_reason, run.recorder.seq, args.out))
-        if error:
-            print("  error: %s" % error, file=sys.stderr)
+        _finish_evidence(run, args, scenario, params, error)
     return run.exit_code
 
 
@@ -4094,7 +4110,56 @@ def _selftest_c2s_close_hygiene():
             "close 必须重新抛出账目写入错误（不吞），实得 %r" % (raised,))
         assert rec2._fh.closed and rec2._c2s_fh.closed, "写入失败时句柄也必须关闭"
         assert "账目行写入失败" in buf2.getvalue(), "至少写 stderr：%r" % buf2.getvalue()
-        return "正常 close 零 stderr + 双句柄关；注入写失败 ⇒ 重新抛出 + 双句柄仍关 + stderr 点名"
+
+        # ①b `_BadCloser`（review info ①）：**finally 里关句柄失败**也必须报告——
+        #    把 `finally` 里那个 `except` 体退化成 `pass` ⇒ 本断言必红。
+        rec3 = Recorder(os.path.join(tmp, "badclose"), now_ms())
+        real3 = rec3._c2s_fh
+
+        class _BadCloser(object):
+            def write(self, data):
+                return real3.write(data)
+
+            def close(self):
+                raise OSError("injected: close failed")
+
+            @property
+            def closed(self):
+                return real3.closed
+
+        rec3._c2s_fh = _BadCloser()
+        buf3 = _io.StringIO()
+        raised3 = None
+        with redirect_stderr(buf3):
+            try:
+                rec3.close()
+            except Exception as ex:  # noqa: BLE001
+                raised3 = ex
+        assert isinstance(raised3, OSError) and "close failed" in str(raised3), (
+            "句柄关闭失败必须重新抛出（不吞），实得 %r" % (raised3,))
+        assert "关闭失败" in buf3.getvalue(), "句柄关闭失败必须写 stderr：%r" % buf3.getvalue()
+        assert rec3._fh.closed, "另一侧句柄仍必须关闭"
+
+        # ② 证据优先（review info ②）：`_finish_evidence` 必须先落 run.json，
+        #    recorder.close() 失败**不阻断证据**且**不静默**。
+        import types as _types
+        out_dir = os.path.join(tmp, "evidence")
+        fake_run = _types.SimpleNamespace(
+            recorder=_types.SimpleNamespace(seq=0, close=lambda: (_ for _ in ()).throw(OSError("injected: meta failed"))),
+            conns=[], exit_code=0, exit_reason="ok")
+        fake_args = _types.SimpleNamespace(out=out_dir)
+        _real_build = globals()["build_run_json"]
+        globals()["build_run_json"] = lambda *a, **k: {"ok": True, "marker": "evidence-first"}
+        buf4 = _io.StringIO()
+        try:
+            with redirect_stderr(buf4):
+                evidence_path = _finish_evidence(fake_run, fake_args, None, {}, None)
+        finally:
+            globals()["build_run_json"] = _real_build
+        assert os.path.isfile(evidence_path), "close 失败时 run.json 必须已经落盘（%r）" % evidence_path
+        assert "证据收尾失败" in buf4.getvalue(), "close 失败不得静默：%r" % buf4.getvalue()
+        return ("正常 close 零 stderr + 双句柄关；写失败 ⇒ 重新抛出；关句柄失败 ⇒ 报告（_BadCloser）；"
+                "收尾失败 ⇒ run.json 已落盘且 stderr 点名")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
