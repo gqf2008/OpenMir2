@@ -1,0 +1,28 @@
+{
+ "format": "oid-gate-baseline/1",
+ "note": "历史坏条目的**逐条豁免清单**。只登记、不回写历史；豁免必须带具体 principal/thread/field/value/reason，**不许通配**、不许空值，更不许「忽略全部 parent」。新增条目要配理由与 added_at/added_by，让每次豁免都能被审计。 **豁免键 = (principal, thread, entry_oid, field, value)**：同 principal/字段/值但不同条目或不同线程 ⇒ 仍判红（reviewer-21 的复用攻击面）。",
+ "entries": [
+  {
+   "principal": "openmir2-dev-2",
+   "thread": "openmir2-scenario-manifest-gate",
+   "field": "parent",
+   "value": "4da5b01a6660b74a1a4cd25ede3dadb2a9b0e8d5",
+   "reason": "2026-10-27 oid_gate 首次真仓库扫描（最近 300 条）发现：该 parent 是 40 位臆造 oid，`git cat-file -t` 不存在。历史条目是签名事实，**只登记、不回写**；处置=豁免，新写入的坏 parent 仍然判红。",
+   "added_at": "2026-10-27",
+   "added_by": "openmir2-tester-1",
+   "entry_oid": "693aa1e55509953527decdb98c0b4f93aa480999",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用旧坏 parent **不再**被豁免。"
+  },
+  {
+   "principal": "openmir2-dev-2",
+   "thread": "openmir2-window-scenarios-for-new-rcards",
+   "field": "parent",
+   "value": "66fda9a70e5f0b3c1b8dbf2e2c8e0e2b8f0e1c2d",
+   "reason": "同上：2026-10-27 首跑发现的历史坏 parent（对象不存在）。**只登记、不回写**；豁免只覆盖这一条，不构成对 parent 字段的整体豁免。",
+   "added_at": "2026-10-27",
+   "added_by": "openmir2-tester-1",
+   "entry_oid": "179e99da500bc36b2a6efc5e39c30382a869ae81",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用旧坏 parent **不再**被豁免。"
+  }
+ ]
+}

@@ -58,7 +58,9 @@ REGISTRY = [
     # 卡 openmir2-refs-head-guard（Lead 裁决「只加这一行」）：collab 条目 refs.head/base 的
     # fail-closed 取值 + 反模式 lint；不登记就是 UNCLASSIFIED rc=2（既有团队规矩：新工具必须进工具门）。
     ("entryrefs", ["tools/collab/entryrefs.py", "--selftest"], False),
-    ("oid_gate", ["tools/collab/oid_gate.py", "--selftest"], False),
+    # 规则 36：注册**真仓库 check**（`gate` = 自测 + 真仓库判据），不是只跑合成夹具。
+    ("oid_gate", ["tools/collab/oid_gate.py", "gate",
+                  "--baseline", "tools/collab/oid_gate_baseline.json"], False),
     ("run_batch", ["tools/window/run_batch_selftest.py"], False),
     ("goal_gate", ["tools/goal/goal_gate.py", "selftest"], False),
     ("conflict_marker_gate", ["tools/hygiene/conflict_marker_gate.py", "--selftest"], False),

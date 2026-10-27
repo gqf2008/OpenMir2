@@ -56,19 +56,20 @@ tools/collab/sign_entry.sh --repo . --kind patch --id <thread> \
 
 ## 怎么保证团队都走这条路（可强制执行的部分）
 
-1. **读侧目前是「自测已登记 + 真仓库 check 未接入门」**（review C1，2026-10-27）：
-   `tool_selftest_gate` 的 REGISTRY 里跑的是 **`oid_gate --selftest`（合成夹具）**，不是真仓库的 `check`。
-   **所以「写坏的条目会让工具门红」在当前注册下不会发生**——工具存在、牙存在、注册存在，
-   但真正的判据没有被任何门调用。真仓库 `check` 现在是**报告模式**，要人工跑：
-   ```sh
-   python -I tools/collab/oid_gate.py check --limit 200
-   ```
-   首跑（最近 300 条）发现 **2 处历史 `parent` 指向不存在对象**（`openmir2-dev-2`，见上表下段），
-   按「只报不改」登记在案；**谁/何时/以什么 rc 处置**由后续卡 `openmir2-oid-gate-realcheck-baseline`
-   决定（要求 `--baseline <file>` 或 `--since` 只查新条目，**不许一刀切忽略全部 parent**、
-   也不许直接接进门——历史红若永久存在，门就没人看了）。
+1. **读侧已接入合并门（2026-10-27，`openmir2-oid-gate-realcheck-baseline`）**：
+   `tool_selftest_gate` 的 REGISTRY 那一条现在跑的是 **`oid_gate gate --baseline tools/collab/oid_gate_baseline.json`**，
+   即「合成夹具自测 **+ 真仓库判据**」一起跑——**不是只跑自测**（规则 36）。
+   * **谁**：`tool_selftest_gate`（合并门第 8 项，`goal_gate` 条件④）；`tester-1` 的集成循环每次 tick 也会复跑。
+   * **何时**：每次合并前 / 每次 tick；`--limit 200`（最近 200 条）为默认窗口，`--since <ts>` 可只查新条目
+     （给了 since 就**不按 `--limit` 截断**，扫描窗口缩小也抓得到新坏条目）。
+   * **以什么 rc**：新坏条目 ⇒ **rc=1**（点名 principal/线程/字段/值）；git 不可用 / baseline 缺失或为空 ⇒ **rc=2**；
+     baseline 豁免的那 2 条历史红 ⇒ **计入豁免并逐条打印，不算红**。
+   * **耗时**：本机 `gate` 一次约 **7.4s**（自测 0.3s + 真仓库约 7s；`--limit 200`）。别让它变成隐性瓶颈，
+     扩大窗口（`--limit` 加大）要先测耗时。
+   * **审计**：每次输出都带「扫描 N 条条目 / M 个 oid」+「豁免 k 处（逐条）」+「baseline 共 n 条（命中/未命中）」，
+     **扫到 0 条 ⇒ rc=2**（扫了 0 个不许算绿）。
 2. **写侧建议统一走 `sign_entry.sh`**：它把「拒绝短号」变成工具行为；手工 `walgit collab entry`
-   仍然可能写坏，此时**只有人工跑 `check` 才会点名**（这不是门，别当门用）。
+   仍然可能写坏，但**只要落在扫描窗口内，下一次 `gate` 就会红**（历史那 2 条由 baseline 逐条豁免，不算新红）。
 3. 新增任何接受 oid 的脚本：一律先调 `oid_gate.py verify` / `verify-entry` 再落库，
    不要自己写 `len(x) == 40` 之类的半套校验。
 
