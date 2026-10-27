@@ -2570,6 +2570,43 @@ INVENTORY_OPTIONAL_KEYS = ("std_mode", "ani_count", "dura", "dura_max", "note")
 INVENTORY_MAX_BAG = 46
 
 
+def _pick_occupancy_pred(text):
+    """从 `characters_bagitem` 的占用 SQL 里取出**占用谓词**的内容（不含外层括号）。
+
+    卡 `openmir2-cardwindow-occupancy-parser-safety`（reviewer-21 在 `0ef97e49` 的 N2）：
+    旧实现用裸 `text.rfind("AND (")`——**认的是「最后一组」而不是「占用那组」**。SQL 将来
+    多加一个 AND 组（例如 `AND (` + BT + 'Position' + BT + ' <> -1)`）就会静默改去求值新那组：
+    两颗占用牙仍然绿，却已不再钉占用规则。
+
+    规则：从右往左逐个 `AND (` 候选，**只认 body 里含 `StdIndex` 的那组**，并按括号配平截取
+    （谓词里再套一层括号也截得对）。一个都找不到 ⇒ 返回 None——调用方按「数所有行」退化成
+    修复前的语义，空占位行会被算成占用 ⇒ ⑲ 立刻红，**不静默**。
+    """
+    idx = len(text)
+    while True:
+        i = text.rfind("AND (", 0, idx)
+        if i < 0:
+            return None
+        start = text.find("(", i)
+        depth = 0
+        cand = None
+        for j in range(start, len(text)):
+            ch = text[j]
+            if ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0:
+                    cand = text[start + 1:j]
+                    break
+        # 守卫要**两个列名都在**：占用谓词是 `StdIndex … OR MakeIndex …`；
+        # 只认 `StdIndex` 的话，将来一个只提 `StdIndex` 的新组（如 `AND (`StdIndex` = 0)`）
+        # 会被当成占用谓词——那也是一种静默换目标。
+        if cand is not None and "StdIndex" in cand and "MakeIndex" in cand:
+            return cand
+        idx = i
+
+
 def _selftest_inventory_reachability(tmp):
     """卡 `openmir2-inventory-fixture-reachability`：让 inventory 夹具**真的可达**的三条断言。
 
@@ -7179,13 +7216,18 @@ def _selftest_inventory(tmp):
             # **真的算 WHERE**：把 SQL 里最后一个 `AND (… )` 谓词抠出来，去掉反引号、
             # `<>` 换成 `!=` 后求值。这样「整段谓词删掉」与「OR→AND」两种变异都会改变
             # 结果——牙才咬得住 SQL 本身，而不是由假 runner 另写一套语义（那是装饰）。
-            i = text.rfind("AND (")
+            # 卡 `openmir2-cardwindow-occupancy-parser-safety`：**不再裸 rfind**——按
+            # `StdIndex` 认组 + 括号配平（见 `_pick_occupancy_pred`）；找不到 ⇒ None ⇒
+            # 退化成「数所有行」⇒ ⑲ 立刻红，不静默。
+            cand = _pick_occupancy_pred(text)
             expr = None
-            if i != -1:
-                j = text.find(")", i)
-                if j != -1:
-                    expr = (text[i + 5:j].replace("`", "").replace("<>", "!=")
-                            .replace(" OR ", " or ").replace(" AND ", " and "))
+            if cand is not None:
+                # SQL 的 `=` 要译成 `==`：**不译的话 `eval` 会抛 SyntaxError、被下面
+                # 的 except 吞成 keep=False ⇒ 谓词恒假 ⇒ 空槽判定反过来把真物品当空槽**。
+                # 用字母数字边界避免把 `<=`/`>=`/`!=` 译坏。
+                expr = (cand.replace("`", "").replace("<>", "!=")
+                        .replace(" OR ", " or ").replace(" AND ", " and "))
+                expr = re.sub(r"(?<![<>=!])=(?!=)", "==", expr)
             n = 0
             for (p, std, mk) in self.rows:
                 if p not in pos:
@@ -7260,6 +7302,36 @@ def _selftest_inventory(tmp):
         out.append((legacy_slot["rc"] == 2 and "已有" in (legacy_slot["error"] or ""),
                     "㉑ 只有 StdIndex 非 0（老物品行）也算占用 => rc=2（%r）"
                     % (legacy_slot["error"] or "")[:80]))
+        # ㉒a/b（卡 `openmir2-cardwindow-occupancy-parser-safety` A2）：**多 AND 组**的合成 SQL。
+        # 旧实现的裸 `rfind("AND (")` 会取到**最后**那组（就不是占用谓词）。
+        base_sql = ("SELECT COUNT(*) FROM `db`.`characters_bagitem`\n"
+                    " WHERE `PlayerId` = 6228 AND `Position` IN (3)\n"
+                    "   AND (`StdIndex` <> 0 OR `MakeIndex` <> 0)")
+        # a：白盒——解析器直接告诉我们它选了哪组
+        multi_sql = base_sql + ("\n   AND (`Position` <> -1);\n")
+        picked = _pick_occupancy_pred(multi_sql)
+        out.append((picked is not None and "StdIndex" in picked and "MakeIndex" in picked
+                    and "Position" not in picked,
+                    "㉒a 多 AND 组时取的仍是占用谓词（不是最后一组）"))
+        # b：行为面——尾那组改成 `StdIndex = 0`：裸 rfind 会取它、把空占位行算成占用
+        trap_sql = base_sql + ("\n   AND (`StdIndex` = 0);\n")
+        probe = _OccupancyRunner([(3, 0, 0)])
+        rc_t, out_t, _ = probe.run("csharp", "inventory.occupancy", [], stdin_text=trap_sql)
+        out.append((out_t.strip() == "0",
+                    "㉒b 尾组是 `StdIndex = 0` 时仍不被当作谓词（空占位行不算占用）"))
+        # c：找不到占用谓词（被删）=> 返回 None（调用方退化成数所有行），不静默
+        out.append((_pick_occupancy_pred(base_sql.replace(
+                        "   AND (`StdIndex` <> 0 OR `MakeIndex` <> 0)", "")) is None,
+                    "㉒c 占用谓词被删 => 返回 None（上游退化成数所有行）"))
+        # ㉒d：谓词里的 `=` 必须该被译成 `==`——**不译就是 `eval` 抛
+        # SyntaxError 被 except 吞成 keep=False、谓词恒假**（空槽判定反过来把真物品当空槽）。
+        eq_sql = ("SELECT COUNT(*) FROM `db`.`characters_bagitem`" + chr(10) +
+                  " WHERE `PlayerId` = 6228 AND `Position` IN (3)" + chr(10) +
+                  "   AND (`StdIndex` = 0 OR `MakeIndex` = 0)")
+        probe_eq = _OccupancyRunner([(3, 0, 0)])
+        rc_e, out_e, _ = probe_eq.run("csharp", "inventory.occupancy", [], stdin_text=eq_sql)
+        out.append((out_e.strip() == "1",
+                    "㉒d 谓词用 `=` 也能求值（译成 ==）：StdIndex=0 的行被算为占用"))
     finally:
         globals()["_check_db_pairing"] = orig_pair
         globals()["placement_envir_root"] = orig_root
