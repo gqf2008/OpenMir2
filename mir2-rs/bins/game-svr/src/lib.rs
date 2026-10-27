@@ -22094,6 +22094,10 @@ fn sim_loop(
         enter_cfg.mon_gen.config.user_full,
         enter_cfg.mon_gen.config.zen_fast_step,
     );
+    // **卡 `openmir2-monster-interval-gate`**：`[Setup] ProcessMonsterInterval`
+    // （`ServerConf.cs:636`，构造缺省 `GameSvrConf.cs:1895` = 2）灌进世界——唯一消费点 =
+    // `monai::monster_ai_tick` 的不可见怪跳步门（`WorldServer.MonGen.cs:294`）。
+    world.set_process_monster_interval(enter_cfg.mon_gen.config.process_monster_interval);
     // **MB-3（R34）**：`Config.Zuma[4]`（`[Names] Zuma1..4`）——`ScultureKingMonster.CallSlave`
     // 的 `Random(4)` 怪名表。配置层读不到时保持 oracle 构造缺省（部署件同值）。
     if let Some(conf) = enter_cfg.game_conf.as_ref() {
@@ -65020,6 +65024,8 @@ SendRefMsgRange=15
 
         let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
         world.enable_monster_ai();
+        // 本条测产仔/帧队列是否无界增长，不是跳步门 ⇒ interval=0 关掉门（oracle 合法配置）。
+        world.set_process_monster_interval(0);
         let mut queen = Entity::new(0, "蜂后".to_string(), 10, 10);
         queen.race = 103;
         queen.hp = 100;
@@ -65206,6 +65212,8 @@ SendRefMsgRange=15
         use mir2_world::Entity;
         let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
         world.enable_monster_ai();
+        // 本条测怪攻击 ⇒ SM_HIT 的出帧路径，不是跳步门 ⇒ interval=0 关掉门。
+        world.set_process_monster_interval(0);
         world.enable_refmessage_delay();
         let mut m = Entity::new(0, "半兽人".to_string(), 10, 12);
         m.race = 60;

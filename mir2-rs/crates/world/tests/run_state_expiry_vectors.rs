@@ -60,6 +60,8 @@ fn holy_seize_expiry_strictly_after_interval() {
 #[test]
 fn holy_seize_expiry_runs_through_monster_ai_tick() {
     let mut w = World::new(32, 32);
+    // 本条测 `animal_run` 到期待清，不是跳步门 ⇒ interval=0 关掉门。
+    w.set_process_monster_interval(0);
     let id = monster(&mut w);
     {
         let e = w.entities.get_mut(id).unwrap();
@@ -84,6 +86,8 @@ fn holy_seize_expiry_runs_through_monster_ai_tick() {
 #[test]
 fn crazy_mode_expiry_strictly_after_interval() {
     let mut w = World::new(32, 32);
+    // 本条测 CrazyMode 到期待清，不是跳步门 ⇒ interval=0 关掉门。
+    w.set_process_monster_interval(0);
     let id = monster(&mut w);
     w.clock_ms = 1_000;
     open_crazy_mode(&mut w, id, 1); // interval = 1000ms
@@ -115,6 +119,8 @@ fn crazy_mode_expiry_strictly_after_interval() {
 fn crazy_mode_expiry_runs_on_non_movable_path() {
     // oracle：外层 `CanMove() && ...` 为假时仍落 `CheckRoyalty(); CrazyMode 到期; base.Run()`。
     let mut w = World::new(32, 32);
+    // 本条测「不可移动路径也要到期」，不是跳步门 ⇒ interval=0 关掉门。
+    w.set_process_monster_interval(0);
     let id = monster(&mut w);
     {
         let e = w.entities.get_mut(id).unwrap();

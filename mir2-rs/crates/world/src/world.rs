@@ -1027,6 +1027,22 @@ pub struct World {
     pub mon_gen_user_full: i32,
     /// `GetMonstersZenTime` 用的 `Config.ZenFastStep`（同 [`Self::mon_gen_user_full`]）。
     pub mon_gen_zen_fast_step: i32,
+    /// `Config.ProcessMonsterInterval`（`GameSvrConf.cs:1142`，构造缺省 `:1895` = 2；
+    /// `ServerConf.cs:636` 读 `[Setup] ProcessMonsterInterval`）。
+    ///
+    /// 唯一读点 = [`crate::monai::monster_ai_tick`] 的不可见怪跳步门
+    /// （`WorldServer.MonGen.cs:294`）：`!IsVisibleActive && ProcessRunCount < 该值` ⇒ 只计数、
+    /// 不跑 AI。缺省 2 = oracle 构造缺省；宿主用 [`World::set_process_monster_interval`] 灌部署值。
+    pub process_monster_interval: i32,
+    /// `AnimalObject.ProcessRunCount` 的**旁挂表**（键 = `ActorId`）。
+    ///
+    /// oracle 把该计数放在 `AnimalObject` 字段上（`src/M2Server/Actor/AnimalObject.cs:46`，
+    /// ctor `:85` 置 0）。本仓刻意**不加** `Entity` 字段：`Entity` 是 HIGH_CHURN 且参与存档/
+    /// 序列化/对拍，旁挂表能让既有 golden/存档逐字节不变（本表只按 id 查/写，从不遍历 ⇒
+    /// 选 `BTreeMap` 仅为消除哈希随机性；`EntityStore::alloc_id` 单调递增、不复用 id ⇒ 无键冲突）。
+    ///
+    /// 生命周期：`release_entity` 时删键；复活成功时清零（`WorldServer.MonGen.cs:289`）。
+    pub process_run_counts: std::collections::BTreeMap<i32, i32>,
     /// C# `Config.ClearDropOnFloorItemTime`
     pub clear_drop_on_floor_item_time: i64,
     /// 每张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：
@@ -1368,6 +1384,9 @@ impl World {
             make_ghost_time: 3 * 60 * 1000,
             mon_gen_user_full: 5000,
             mon_gen_zen_fast_step: 300,
+            // `GameSvrConf.cs:1895` 构造缺省；部署件由 `ServerConf.cs:636` 覆盖。
+            process_monster_interval: 2,
+            process_run_counts: std::collections::BTreeMap::new(),
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             map_exp_rate: vec![None; maps_len],
             spirit_mutiny_tick: 0,
@@ -1474,6 +1493,30 @@ impl World {
         self.make_ghost_time = make_ghost_time;
         self.mon_gen_user_full = mon_gen_user_full;
         self.mon_gen_zen_fast_step = mon_gen_zen_fast_step;
+    }
+
+    /// 灌入 `[Setup] ProcessMonsterInterval`（`ServerConf.cs:636`；构造缺省
+    /// `GameSvrConf.cs:1895` = 2）。
+    ///
+    /// 生产宿主在起世界时用 `MonGenConfig::process_monster_interval` 灌入；合成 golden/单测
+    /// 不调 ⇒ 保持 oracle 构造缺省（且 `ai_enabled=false` 时该值不被消费）。
+    pub fn set_process_monster_interval(&mut self, interval: i32) {
+        self.process_monster_interval = interval;
+    }
+
+    /// `AnimalObject.ProcessRunCount`（旁挂表，见 [`Self::process_run_counts`]）。
+    #[must_use]
+    pub fn process_run_count(&self, actor_id: i32) -> i32 {
+        self.process_run_counts.get(&actor_id).copied().unwrap_or(0)
+    }
+
+    /// 写 `ProcessRunCount`；`0` 等价于 oracle 的「置 0」（表项删除，避免空项堆积）。
+    pub fn set_process_run_count(&mut self, actor_id: i32, value: i32) {
+        if value == 0 {
+            self.process_run_counts.remove(&actor_id);
+        } else {
+            self.process_run_counts.insert(actor_id, value);
+        }
     }
 
     /// 灌入 `[Setup]` 的四个名字色（T-132；与 oracle `ServerConf.cs:509-512` 同源）。
@@ -6145,6 +6188,8 @@ impl World {
     /// Ghost 5 分钟门后释放实体（`WorldServer.MonGen.cs:320-333` 的 `CertList.RemoveAt`
     /// + 对象失引用）：摘格 + 从实体仓库移除。不消费随机数。
     pub fn release_entity(&mut self, actor_id: i32) -> bool {
+        // `ProcessRunCount` 旁挂项随实体一起清（id 单调不复用，删除只为控内存）。
+        self.process_run_counts.remove(&actor_id);
         self.disappear_a(actor_id);
         self.entities.remove(actor_id).is_some()
     }
@@ -8595,6 +8640,8 @@ mod tests {
         w.enable_monster_ai();
         let p = mview_player(&mut w, 11, 10, 12);
         let m = mview_monster(&mut w, 10, 10, 5, 1000);
+        // 本条测「消息段何时消费」，不是跳步门本身 ⇒ 用 interval=0 关掉门（oracle 合法配置）。
+        w.set_process_monster_interval(0);
 
         for _ in 0..6 {
             w.tick(); // 1200ms：玩家扫描末尾投递
@@ -8652,6 +8699,8 @@ mod tests {
         w.enable_monster_ai();
         let p = mview_player(&mut w, 11, 10, 12);
         let m = mview_monster(&mut w, 10, 10, 5, 2000);
+        // 本条测 `SearchTime` 节流，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
 
         for _ in 0..6 {
             w.tick(); // 1200ms 投递
@@ -8695,6 +8744,8 @@ mod tests {
         let p1 = mview_player(&mut w, 11, 10, 12);
         let p2 = mview_player(&mut w, 9, 10, 12);
         let m = mview_monster(&mut w, 10, 10, 5, 0);
+        // 本条测同 tick 双投递的窗口丢弃，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
 
         for _ in 0..6 {
             w.tick(); // 1200ms：p1、p2 按槽位序投递
@@ -8714,8 +8765,10 @@ mod tests {
     fn player_update_reaches_monster_at_exact_view_range_span() {
         let mut w = World::new(32, 32);
         w.enable_monster_ai();
+        // 本条测距离门边界，不是跳步门 ⇒ interval=0 关掉门。
         let p = mview_player(&mut w, 10, 10, 12);
         let m = mview_monster(&mut w, 17, 10, 5, 0); // dx = 7 == 12 - 5
+        w.set_process_monster_interval(0);
         for _ in 0..6 {
             w.tick();
         }
@@ -8781,6 +8834,8 @@ mod tests {
         let p = mview_player(&mut w, 11, 10, 12);
         let m = mview_monster(&mut w, 10, 10, 5, 0);
         w.entities.get_mut(m).unwrap().death = true;
+        // 本条测死亡/幽灵的消息段消费，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
         for _ in 0..6 {
             w.tick();
         }
@@ -11863,6 +11918,8 @@ mod tests {
             "`NormNpc()` ctor 置 SuperMan=true（`NormNpc.cs:41`）"
         );
         let id = w.add_entity(guard);
+        // 本条测 `BaseObject.Run:32-36` 的回满次序，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
         let rec = w.tick_head();
         assert!(
             rec.deaths.is_empty(),
@@ -12695,6 +12752,9 @@ mod castle_wire_tests {
             role,
         });
         w.enable_monster_ai();
+        // 本组用例只测 `Castle*Run` 段；`ProcessMonsterInterval` 跳步门是另一条轴，
+        // 用 oracle 合法的 `interval = 0`（每次到点都 Run）把它关掉。
+        w.set_process_monster_interval(0);
         (w, id)
     }
 
