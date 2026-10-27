@@ -589,3 +589,51 @@
 - 本报告文件：`mir2-rs/tests/parity/m3/audit-smframe-fields-20261018.md`（唯一新增文件）。
 - worktree：`/e/tmp/impl-frameaudit`（detached `03208e20e`），未 push。
 - 未启动任何服务/端口；未改共享主检出；本地 `cargo test` 只在 worktree 的 `target/` 下产生构建产物。
+
+---
+
+## 订正 2026-10-27（对账 master d470d7bd1）
+
+> 本节**只追加**，不改写上文 §3 表格与 §5 的历史结论（其中 G-13/G-14/G-15 的 `❌`/「无接线」按 2026-10-18 基线成立，现已由后续卡落地）。判定口径：
+> **已接线** = 有生产发射点，且给出「发出点 → 所在函数 → 该函数在生产 tick 上的调用点」完整链；
+> **未接线** = 编码器 + 构造用例已备，但无生产发射点（tests 内调用不算）。
+> 判级按 `AGENTS.md`；本节未改代码/测试。
+
+### 0. 范围
+
+- 条目 = G-13（23021/23023/8001/655）+ G-14（1102）+ G-15（1104/1101），共 **7 帧**。
+- 原始出处：§3.4 的 1102/1104/655/1101/8001 行、§3.3 的 23021/23023 行、§5 的 G-13/G-14/G-15 节。
+
+### 1. 逐帧三态与证据（A1 / A5）
+
+| 帧 | 原文结论 | 现判定 | 生产发射点（发出点 → 函数 → 生产调用点） | 证据命令 | 输出摘要 |
+|---|---|---|---|---|---|
+| 655 `SM_LAMPCHANGEDURA` | 无发射点（G-13） | **已接线** | `mir2-rs/bins/game-svr/src/lib.rs:17663` `smframe_ext::sm_lampchangedura(d.recog)` → `fn drain_weapon_durability`（定义 `:17653`）→ `sim_loop` 调用 `:25511`；世界侧生产者 `world.use_lamps()`（`:17662`，`World::use_lamps` 定义 `crates/world/src/world.rs:1778`） | `grep -rn "sm_lampchangedura" mir2-rs/bins --include=*.rs`；`grep -n "drain_weapon_durability" mir2-rs/bins/game-svr/src/lib.rs` | 3 条命中：`:17663`（生产）、`:77300`（单测）、`smframe_ext.rs:291`（定义）；`drain_weapon_durability` 有定义 `:17653` 与 sim_loop 调用 `:25511`，另有调用点牙 `:77213` |
+| 1102 `SM_BREAKWEAPON` | 无发射点（G-14） | **已接线** | `mir2-rs/bins/game-svr/src/lib.rs:17680` `smframe_ext::sm_breakweapon(ev.actor_id)` → `fn drain_weapon_durability`（`:17653`）→ `sim_loop` `:25511`；事件源 `rec.weapon_breaks`（`crates/world` 的 `check_weapon_upgrade_status` → `TickRecord::weapon_breaks`，见 `smframe_ext.rs:57`） | `grep -rn "sm_breakweapon" mir2-rs/bins --include=*.rs` | `:17680`（生产）、`:77360`（单测）、`smframe_ext.rs:101`（定义）；同一条 `drain_weapon_durability` 链 |
+| 1101 `SM_CLOSEHEALTH` | 无发射点（G-15） | **已接线** | `mir2-rs/bins/game-svr/src/lib.rs:17882` `smframe_ext::sm_closehealth(actor_id)` → `fn drain_close_health_for`（`:17847`）→ 玩家支 `drain_stamina`（定义 `:17000`）`:17167`；非会话实体支 `drain_close_health_residual`（`:17184`）`:17192` → 其父 `:17172`（两个入口都在生产 tick 内） | `grep -rn "sm_closehealth" mir2-rs/bins --include=*.rs`；`grep -n "drain_close_health_for\|drain_close_health_residual" mir2-rs/bins/game-svr/src/lib.rs` | 发出点 `:17882`；调用点 `:17167`、`:17192`（`:17172` 调 residual）；其余为单测 `:61221` 与定义 `smframe_ext.rs:192` |
+| 8001 `SM_PLAYDICE` | 无接线（G-13） | **已接线** | `mir2-rs/bins/game-svr/src/pickwire.rs:237` `smframe_ext::sm_playdice(...)` → `fn script_frame`（`:174`）→ `emit_script_frames_into`（`lib.rs:8263`）与 `emit_script_frames_raw`（`lib.rs:8814`）→ `emit_script_frames`（`lib.rs:8516`）→ 生产脚本排水 `lib.rs:8755`；上游动作 `ActionOfPlayDice`（`crates/script/src/engine/actions.rs:889`，`send_msg(RM_PLAYDICE, …)` 于 `:897`）已在 `IMPLEMENTED_EXECUTIONS`（`crates/script/src/engine/dispatch.rs:80`） | `grep -rn "sm_playdice" mir2-rs/bins --include=*.rs`；`grep -rn "ActionOfPlayDice" mir2-rs/crates/script/src --include=*.rs` | 发出点 `pickwire.rs:237`；`script_frame` 生产调用 `lib.rs:8263`、`lib.rs:8814`；动作实现与派发 `actions.rs:889/897`、`dispatch.rs:80`；端到端用例 `lib.rs:34275`（CM_CLICKNPC 脚本排水必须含 8001） |
+| 23021 `SM_QUERYYBSELL` | 无接线（G-13） | **未接线**（编码器 + 构造用例已备，无生产发射点） | 无 | `grep -rn "sm_queryybsell\|QUERYYB" mir2-rs/bins mir2-rs/crates --include=*.rs` | 仅 `smframe_ext.rs:475`（编码器）、`:785`（构造用例）、`crates/script/src/codes.rs:575`（枚举 `QUERYYBSELL`，**无 handler**）；宿主零帧由 T-203 用例钉住（`lib.rs:74192` 断言「门全开时宿主仍零 SM_QUERYYBSELL」） |
+| 23023 `SM_QUERYYBDEAL` | 无接线（G-13） | **未接线**（编码器 + 构造用例已备，无生产发射点） | 无 | 同上 | 仅 `smframe_ext.rs:454`（编码器）、`:780`（构造用例）、`crates/script/src/codes.rs:576`（枚举，无 handler）；`lib.rs:74198` 同形断言 |
+| 1104 `SM_CHANGEFACE` | 无发射点（G-15） | **未接线**（编码器 + 构造用例已备，无生产发射点） | 无 | `grep -rn "sm_changeface" mir2-rs/bins --include=*.rs` | 仅 `smframe_ext.rs:115`（编码器）、`:734`（构造用例）；无生产者；`smframe_ext.rs:58` 已登记 T-175「上游 `ElfWarrior` 分裂支未移植」 |
+
+> A3 备注：上表 4 条「已接线」均给出 `文件:行` + 函数名 + 生产调用点；3 条「未接线」均为「编码器 + 构造用例已备，无生产发射点」，不是「什么都没有」。
+
+### 2. oracle 侧依据（本轮 re-grep，不照抄旧行号）
+
+| 帧 | oracle 处理器（实测） | oracle 生产者（实测） |
+|---|---|---|
+| 655 | `src/M2Server/Player/PlayObject.Message.cs:1843` `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0,0,0)` | `PlayObject.Message.cs:2265/2274`（`UseLamp` 两处 `SendMsg(RM_LAMPCHANGEDURA, …)`） |
+| 1102 | `PlayObject.Message.cs:2016` `SendDefMessage(SM_BREAKWEAPON, ActorId, 0,0,0)` | `src/M2Server/Player/PlayObject.cs:4121` `SendRefMsg(RM_BREAKWEAPON,…)`（`CheckWeaponUpgradeStatus`，由 `CheckWeaponUpgrade` `:4110` ← `PlayObject.Attack.cs:31`） |
+| 1101 | `PlayObject.Message.cs:2013` `SendDefMessage(SM_CLOSEHEALTH, ActorId, 0,0,0)` | `src/M2Server/Actor/BaseObject.cs:933` `BreakOpenHealth()`，调用点 `BaseObject.Base.cs:221` |
+| 8001 | `PlayObject.Message.cs:2039` `MakeMessage(SM_PLAYDICE, ActorId, wParam, 0, 0)` | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:157` 注册 `ActionOfPlayDice`，实现 `:2030` |
+| 23021 | `PlayObject.Message.cs:2050`（recog/param/tag/series = n1..wParam） | `ExecutionProcessingSys.cs:2443` `playerActor.SendMsg(normNpc, RM_QUERYYBSELL, 0,0,0,0, sSendStr)` |
+| 23023 | `PlayObject.Message.cs:2054` | `ExecutionProcessingSys.cs:2550` 同形 |
+| 1104 | `PlayObject.Message.cs:2024`（头 + `Encode(CharDesc)`） | `src/M2Server/Monster/Monsters/ElfWarriorMonster.cs:149` `SendRefMsg(RM_CHANGEFACE, 0, ActorId, elfMon.ActorId, 0, "")` |
+
+### 3. 结论与排期影响
+
+1. **G-13 的 4 帧中 2 帧已闭合**：655（火把持久）与 8001（脚本 `@playdice`）已有生产发射点；23021/23023 仍无（上游 `QUERYYB*` 脚本动作未实现，且部署 `Envir` **0 处**使用 ⇒ 维持 T-203「不可达登记」，不是本轮可接线项）。
+2. **G-14 已闭合**：1102 由 `openmir2-weapon-durability-frames`（T-199）接线，链路 `check_weapon_upgrade_status → TickRecord::weapon_breaks → drain_weapon_durability`；伴随帧 `SM_UPDATEITEM(203)`/`RM_ABILITY`/`RM_SUBABILITY` 仍未接（T-79⑥/T-95①，不影响本帧判定）。
+3. **G-15 的 2 帧中 1 帧已闭合**：1101 由 `openmir2-sm-closehealth-wire`（2026-10-23）接线（玩家 + 怪物/NPC 双入口）；1104 仍无生产者（T-175：`ElfWarriorMonster` 的 `MakeClone` 分裂支未移植）。
+4. **对覆盖率/窗口排期的订正**：655/1102/1101/8001 不应再计入「未接线帧」；剩余未接线为 **23021/23023/1104**（3 帧），其中 23021/23023 已判不可达、1104 需先移植 ELF 分裂支。
+5. **后续卡建议**：1104 单独开卡（`write_set`：`crates/world/src/monai.rs`（`elf_warrior_run` 分裂支）、`bins/game-svr/src/lib.rs`（排水）；判据：固定时钟构造 ELF 分裂 ⇒ 观察者必收 `SM_CHANGEFACE(1104)`，删分支即红；tier=R——战斗/时序）。23021/23023 不派卡，维持 T-203 登记（部署 `Envir` 0 处使用；若内容侧出现 `QUERYYBSELL`/`QUERYYBDEAL` 脚本再开）。
