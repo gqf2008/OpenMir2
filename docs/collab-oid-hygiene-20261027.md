@@ -78,3 +78,33 @@ tools/collab/sign_entry.sh --repo . --kind patch --id <thread> \
 - `entryrefs.py`：**读**条目时该从哪个字段取（`entry.refs.head`，不是 `body.head`），fail-closed；
 - `oid_gate.py`：**写**进去的值是否真实存在（可解析）。
 两者互补，docstring 互相引用。
+
+## baseline 审计（`--audit-baseline`）
+
+```sh
+python -I -B tools/collab/oid_gate.py check --audit-baseline   # 默认读 tools/collab/oid_gate_baseline.json
+python -I -B tools/collab/oid_gate.py check --audit-baseline --baseline <path>
+```
+
+逐条核 baseline 的 `entry_oid`：`git cat-file -t` 必须是 **blob**，解析后
+`actor == principal`、`id == thread`、`field` 的值等于登记的 `value`。
+
+| rc | 含义 |
+|---|---|
+| 0 | 每条豁免都能核到对应 blob，且绑定一致 |
+| 1 | **不一致**（`entry_oid` 解析不到 / 不是 blob / principal / thread / field 值不符），逐条点名 |
+| 2 | **判不了**（baseline 缺失/读不了/为空、条目缺字段、blob 解析不了） |
+
+为什么要它：**手抄错 `entry_oid` 会让豁免静默失效**——豁免键含 `entry_oid`，抄错就等于没豁免，
+而普通扫描只会在「那条条目恰好在窗口内」时才暴露。audit 直接按 oid 取 blob，不依赖窗口。
+
+### 「未命中」不是失败，也不是「已核」
+
+普通扫描（不带 `--audit-baseline`）会打印 baseline 的命中情况。**未命中** = 该豁免对应的条目
+`ts` 已经滚出本次扫描窗口（`--since` / 最近 N 条），**这一次**没遇到它。含义只有三条：
+
+1. 它不是失败——不要因为未命中把门判红，也不要删豁免；
+2. 它也**不是**「已核」——未命中意味着这次没验过它，别写进证据说「已核对」；
+3. 要确认某条豁免仍然成立，跑 `--audit-baseline`（按 oid 直接核，与窗口无关）。
+
+窗口语义（`--since` 给了就不按 `--limit` 截断）不变。

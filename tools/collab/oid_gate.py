@@ -369,6 +369,178 @@ def verify_parent(repo, values, git_cmd=("git",)):
     return 0, "parent 全部可解析（%d 个）" % len(values)
 
 
+def _baseline_count(path):
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return len(data.get("entries") or [])
+    except Exception:
+        return 0
+
+def audit_baseline(repo, path, git_cmd=("git",)):
+    """逐条核 baseline 的 `entry_oid`（卡 `openmir2-oid-gate-baseline-audit` A1）。
+
+    每条必须：`git cat-file -t <entry_oid>` **是 blob**；解析后 `actor == principal`、
+    `id == thread`、`field` 的值等于登记的 `value`。
+
+    返回 `(rc, red, undec)`：
+      * `rc=0` 全部可核；`rc=1` 有**不一致**（逐条点名）；`rc=2` **判不了**
+        （文件缺失/读不了/条目缺字段/blob 解析不了）。
+    **手抄错 entry_oid 会让豁免静默失效**——本模式就是把那一点变成红。
+    """
+    if not path or not os.path.isfile(path):
+        return 2, [], ["baseline 文件缺失/未给：%s" % path]
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError) as ex:
+        return 2, [], ["baseline 读不了：%s" % ex]
+    entries = data.get("entries")
+    if not isinstance(entries, list) or not entries:
+        return 2, [], ["baseline 为空：没有任何可核对象（不等于通过）"]
+    red, undec, ok = [], [], 0
+    for i, e in enumerate(entries):
+        tag = "entries[%d]" % i
+        if not isinstance(e, dict):
+            undec.append("%s 不是对象（判不了）" % tag)
+            continue
+        # `value` 允许空串（条目字段本身为空）⇒ 只要求**键存在**；其余要求非空
+        missing = [k for k in ("principal", "thread", "entry_oid", "field", "value", "reason")
+                   if k not in e or (k != "value" and not e.get(k))]
+        if missing:
+            undec.append("%s 缺字段 %s（判不了）" % (tag, missing))
+            continue
+        oid = str(e["entry_oid"])
+        if not re.match(r"^[0-9a-f]{40}$", oid):
+            undec.append("%s entry_oid 不是 40 位 hex：%r（判不了）" % (tag, oid))
+            continue
+        p = _git(repo, ["cat-file", "-t", oid], git_cmd=git_cmd)
+        if p.returncode != 0:
+            red.append("%s entry_oid %s 解析不到（不是现有对象）" % (tag, oid))
+            continue
+        kind = (p.stdout or "").strip()
+        if kind != "blob":
+            red.append("%s entry_oid %s 是 %s，不是 blob" % (tag, oid, kind))
+            continue
+        q = _git(repo, ["cat-file", "-p", oid], git_cmd=git_cmd)
+        try:
+            raw = json.loads(q.stdout)
+        except ValueError as ex:
+            undec.append("%s blob 解析不了：%s" % (tag, ex))
+            continue
+        entry = raw.get("entry") if isinstance(raw, dict) and isinstance(raw.get("entry"), dict) else raw
+        if not isinstance(entry, dict):
+            undec.append("%s blob 不是条目对象（判不了）" % tag)
+            continue
+        problems = []
+        if entry.get("actor") != e["principal"]:
+            problems.append("principal 登记 %r ≠ 条目 actor %r" % (e["principal"], entry.get("actor")))
+        if entry.get("id") != e["thread"]:
+            problems.append("thread 登记 %r ≠ 条目 id %r" % (e["thread"], entry.get("id")))
+        want_field = e["field"]
+        want_value = str(e["value"]).strip().lower()
+        have = None
+        for name, val, _kind in oid_fields(entry):
+            if name == want_field:
+                have = str(val)
+                break
+        if have is None:
+            problems.append("条目里没有字段 %s" % want_field)
+        elif have.strip().lower() != want_value:
+            problems.append("字段 %s 登记 %r ≠ 条目 %r" % (want_field, e["value"], have))
+        if problems:
+            red.append("%s（entry_oid %s）：%s" % (tag, oid, "；".join(problems)))
+        else:
+            ok += 1
+    rc = 1 if red else (2 if undec else 0)
+    return rc, red, undec
+
+
+def _audit_teeth():
+    """baseline 审计的五态牙（卡 `openmir2-oid-gate-baseline-audit` A2）。临时仓库，不碰真仓库。"""
+    import shutil
+    import tempfile
+    ok = []
+
+    def chk(cond, name):
+        ok.append((name, bool(cond)))
+
+    tmp = tempfile.mkdtemp(prefix="oid-audit-")
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
+    try:
+        subprocess.run(["git", "init", "-q", tmp], check=True, env=env)
+        entry = {"version": 1, "kind": "status", "id": "card-a", "actor": "p",
+                 "parent": "", "sig": "", "ts": 0, "body": {"x": 1}}
+        blob = json.dumps(entry).encode()
+        h = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                           input=blob, capture_output=True, check=True, env=env).stdout.decode().strip()
+        good = {"principal": "p", "thread": "card-a", "entry_oid": h, "field": "parent",
+                "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "reason": "r"}
+
+        def run_with(entries):
+            path = os.path.join(tmp, "baseline.json")
+            with io.open(path, "w", encoding="utf-8", newline="") as fh:
+                fh.write(json.dumps({"format": "oid-gate-baseline/1", "entries": entries}))
+            return audit_baseline(tmp, path)
+
+        # ① 全 0 entry_oid ⇒ rc=1
+        zero = dict(good, entry_oid="0" * 40)
+        rc, red, undec = run_with([zero])
+        chk(rc == 1 and red, "牙①：全 0 entry_oid ⇒ rc=1")
+        # ② thread 改错 ⇒ rc=1
+        rc, red, undec = run_with([dict(good, thread="card-OTHER")])
+        chk(rc == 1 and any("thread" in r for r in red), "牙②：thread 改错 ⇒ rc=1")
+        # ③ value 改错 ⇒ rc=1
+        rc, red, undec = run_with([dict(good, value="cafebabecafebabecafebabecafebabecafebabe")])
+        chk(rc == 1 and any("字段" in r for r in red), "牙③：value 改错 ⇒ rc=1")
+        # ④ 完全正确 ⇒ rc=0（entry 的 parent 为空串，登记值也应为空串）
+        exact = dict(good, value="")
+        rc, red, undec = run_with([dict(exact, value="x")])
+        # parent 为空 ⇒ 与登记 "x" 不符 ⇒ rc=1；正确形态用空值登记：
+        ok_entry = dict(good, value="")
+        rc2, red2, undec2 = run_with([ok_entry])
+        chk(rc == 1, "牙④a：value 与条目不符（空 vs x）⇒ rc=1")
+        chk(rc2 == 0 and not red2 and not undec2, "牙④b：完全正确 ⇒ rc=0")
+        # N3：`field = refs.head` 也要能核（现有只覆盖 parent）
+        entry_r = {"version": 1, "kind": "patch", "id": "card-r", "actor": "p",
+                   "parent": "", "sig": "", "ts": 0,
+                   "refs": {"base": "0" * 0 + "a" * 40, "head": "b" * 40}, "body": {}}
+        h_r = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                             input=json.dumps(entry_r).encode(), capture_output=True,
+                             check=True, env=env).stdout.decode().strip()
+        rc_r, red_r, _ = run_with([{"principal": "p", "thread": "card-r", "entry_oid": h_r,
+                                    "field": "refs.head", "value": "b" * 40, "reason": "r"}])
+        chk(rc_r == 0 and not red_r, "牙⑥：field=refs.head 绑定一致 ⇒ rc=0")
+        rc_r2, red_r2, _ = run_with([{"principal": "p", "thread": "card-r", "entry_oid": h_r,
+                                      "field": "refs.head", "value": "c" * 40, "reason": "r"}])
+        chk(rc_r2 == 1 and red_r2, "牙⑥b：field=refs.head 值不符 ⇒ rc=1")
+
+        # C1：**不带 `--baseline`** 时，`check --audit-baseline` 的 rc 必须等于审计 rc
+        #（旧实现会把 bpath 丢掉 ⇒ 真仓库 check 按「已豁免 0」全红、覆盖审计返回码）
+        bad_entry = {"version": 1, "kind": "status", "id": "card-a", "actor": "p",
+                     "parent": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "sig": "", "ts": 99,
+                     "body": {}}
+        h_bad = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                               input=json.dumps(bad_entry).encode(), capture_output=True,
+                               check=True, env=env).stdout.decode().strip()
+        subprocess.run(["git", "-C", tmp, "update-ref", "refs/collab/inbox/p/card-a-1", h_bad],
+                       check=True, env=env)
+        os.makedirs(os.path.join(tmp, "tools", "collab"))
+        with io.open(os.path.join(tmp, "tools", "collab", "oid_gate_baseline.json"),
+                     "w", encoding="utf-8", newline="") as fh:
+            fh.write(json.dumps({"format": "oid-gate-baseline/1",
+                                 "entries": [dict(good, entry_oid=h_bad)]}))
+        rc_c1 = main(["check", "--audit-baseline", "--repo", tmp])
+        chk(rc_c1 == 0, "C1 牙：不带 --baseline 时 check --audit-baseline 仍 = 审计 rc（0）")
+
+        # ⑤ baseline 缺失 ⇒ rc=2
+        rc3, red3, undec3 = audit_baseline(tmp, os.path.join(tmp, "no-such.json"))
+        chk(rc3 == 2, "牙⑤：baseline 文件缺失 ⇒ rc=2")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return ok
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="collab 条目 oid 可解析性门（只读，只报不改）")
     ap.add_argument("cmd", nargs="?", choices=("check", "gate", "verify", "verify-entry"))
@@ -377,6 +549,9 @@ def main(argv=None):
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     ap.add_argument("--json")
     ap.add_argument("--baseline", help="逐条豁免清单（历史坏条目）；缺失/空 ⇒ rc=2")
+    ap.add_argument("--audit-baseline", action="store_true",
+                    help="逐条核 baseline 的 entry_oid：必须是 blob 且 principal/thread/field/value 绑定一致"
+                         "（0 全核过 / 1 不一致并点名 / 2 判不了）")
     ap.add_argument("--since", type=int, default=None, help="只查 ts >= N 的新条目（给了就**不按 --limit 截断**）")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args(argv)
@@ -391,6 +566,25 @@ def main(argv=None):
             for r in resolved:
                 print(r)
     elif args.cmd in ("check", "gate"):
+        if args.audit_baseline:
+            bpath = args.baseline or os.path.join(
+                repo, "tools", "collab", "oid_gate_baseline.json")
+            # **C1（reviewer-21 `5b2b7171`）**：审计通过后 main 会继续跑真仓库 check；
+            # 必须把 bpath 一起传下去，否则 args.baseline=None ⇒ 历史豁免按「已豁免 0」全红、
+            # 把 `--audit-baseline` 的返回码覆盖掉。
+            args.baseline = bpath
+            arc, red, undec = audit_baseline(repo, bpath)
+            for r in red:
+                print("AUDIT-RED   " + r)
+            for u in undec:
+                print("AUDIT-NEED  " + u)
+            if arc != 0:
+                print(("PASS " if arc == 0 else ("NEED " if arc == 2 else "FAIL "))
+                      + "baseline audit（%d 条不一致 / %d 条判不了）" % (len(red), len(undec)))
+                return arc
+            # N1：通过也必须说话（静默成功与「没跑」在日志里分不开）
+            print("AUDIT-OK %d 条（entry_oid 均为 blob，principal/thread/field/value 与条目一致）"
+                  % _baseline_count(bpath))
         if args.cmd == "gate":
             st = selfcheck()
             if st != 0:
@@ -546,6 +740,8 @@ def selfcheck():
         "A4：`--since 50` 过滤掉旧条目；**`--limit 1` 不会把它再截掉**（窗口缩小仍抓得到新坏条目）")
     _w_since2 = _window([_old, _new], 1, 200)
     chk(_w_since2 == [], "A4b：`--since` 之后没有条目 ⇒ 空（上层据此 rc=2，不许算绿）")
+    for _name, _good in _audit_teeth():
+        chk(_good, "audit " + _name)
 
     # 端到端牙（规则 36 的硬证据）：在**真 git 仓库**里写一条带坏 head 的 collab ref，
     # `real_check` 必须**读得到并判红**；再把那条逐条写进 baseline ⇒ 变绿且豁免可见。
