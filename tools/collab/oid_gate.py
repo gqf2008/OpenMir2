@@ -369,6 +369,14 @@ def verify_parent(repo, values, git_cmd=("git",)):
     return 0, "parent 全部可解析（%d 个）" % len(values)
 
 
+def _baseline_count(path):
+    try:
+        with io.open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return len(data.get("entries") or [])
+    except Exception:
+        return 0
+
 def audit_baseline(repo, path, git_cmd=("git",)):
     """逐条核 baseline 的 `entry_oid`（卡 `openmir2-oid-gate-baseline-audit` A1）。
 
@@ -494,6 +502,38 @@ def _audit_teeth():
         rc2, red2, undec2 = run_with([ok_entry])
         chk(rc == 1, "牙④a：value 与条目不符（空 vs x）⇒ rc=1")
         chk(rc2 == 0 and not red2 and not undec2, "牙④b：完全正确 ⇒ rc=0")
+        # N3：`field = refs.head` 也要能核（现有只覆盖 parent）
+        entry_r = {"version": 1, "kind": "patch", "id": "card-r", "actor": "p",
+                   "parent": "", "sig": "", "ts": 0,
+                   "refs": {"base": "0" * 0 + "a" * 40, "head": "b" * 40}, "body": {}}
+        h_r = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                             input=json.dumps(entry_r).encode(), capture_output=True,
+                             check=True, env=env).stdout.decode().strip()
+        rc_r, red_r, _ = run_with([{"principal": "p", "thread": "card-r", "entry_oid": h_r,
+                                    "field": "refs.head", "value": "b" * 40, "reason": "r"}])
+        chk(rc_r == 0 and not red_r, "牙⑥：field=refs.head 绑定一致 ⇒ rc=0")
+        rc_r2, red_r2, _ = run_with([{"principal": "p", "thread": "card-r", "entry_oid": h_r,
+                                      "field": "refs.head", "value": "c" * 40, "reason": "r"}])
+        chk(rc_r2 == 1 and red_r2, "牙⑥b：field=refs.head 值不符 ⇒ rc=1")
+
+        # C1：**不带 `--baseline`** 时，`check --audit-baseline` 的 rc 必须等于审计 rc
+        #（旧实现会把 bpath 丢掉 ⇒ 真仓库 check 按「已豁免 0」全红、覆盖审计返回码）
+        bad_entry = {"version": 1, "kind": "status", "id": "card-a", "actor": "p",
+                     "parent": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "sig": "", "ts": 99,
+                     "body": {}}
+        h_bad = subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                               input=json.dumps(bad_entry).encode(), capture_output=True,
+                               check=True, env=env).stdout.decode().strip()
+        subprocess.run(["git", "-C", tmp, "update-ref", "refs/collab/inbox/p/card-a-1", h_bad],
+                       check=True, env=env)
+        os.makedirs(os.path.join(tmp, "tools", "collab"))
+        with io.open(os.path.join(tmp, "tools", "collab", "oid_gate_baseline.json"),
+                     "w", encoding="utf-8", newline="") as fh:
+            fh.write(json.dumps({"format": "oid-gate-baseline/1",
+                                 "entries": [dict(good, entry_oid=h_bad)]}))
+        rc_c1 = main(["check", "--audit-baseline", "--repo", tmp])
+        chk(rc_c1 == 0, "C1 牙：不带 --baseline 时 check --audit-baseline 仍 = 审计 rc（0）")
+
         # ⑤ baseline 缺失 ⇒ rc=2
         rc3, red3, undec3 = audit_baseline(tmp, os.path.join(tmp, "no-such.json"))
         chk(rc3 == 2, "牙⑤：baseline 文件缺失 ⇒ rc=2")
@@ -529,6 +569,10 @@ def main(argv=None):
         if args.audit_baseline:
             bpath = args.baseline or os.path.join(
                 repo, "tools", "collab", "oid_gate_baseline.json")
+            # **C1（reviewer-21 `5b2b7171`）**：审计通过后 main 会继续跑真仓库 check；
+            # 必须把 bpath 一起传下去，否则 args.baseline=None ⇒ 历史豁免按「已豁免 0」全红、
+            # 把 `--audit-baseline` 的返回码覆盖掉。
+            args.baseline = bpath
             arc, red, undec = audit_baseline(repo, bpath)
             for r in red:
                 print("AUDIT-RED   " + r)
@@ -538,6 +582,9 @@ def main(argv=None):
                 print(("PASS " if arc == 0 else ("NEED " if arc == 2 else "FAIL "))
                       + "baseline audit（%d 条不一致 / %d 条判不了）" % (len(red), len(undec)))
                 return arc
+            # N1：通过也必须说话（静默成功与「没跑」在日志里分不开）
+            print("AUDIT-OK %d 条（entry_oid 均为 blob，principal/thread/field/value 与条目一致）"
+                  % _baseline_count(bpath))
         if args.cmd == "gate":
             st = selfcheck()
             if st != 0:

@@ -92,7 +92,7 @@ python -I -B tools/collab/oid_gate.py check --audit-baseline --baseline <path>
 | rc | 含义 |
 |---|---|
 | 0 | 每条豁免都能核到对应 blob，且绑定一致 |
-| 1 | **不一致**（oid 不是 blob / principal / thread / field 值不符），逐条点名 |
+| 1 | **不一致**（`entry_oid` 解析不到 / 不是 blob / principal / thread / field 值不符），逐条点名 |
 | 2 | **判不了**（baseline 缺失/读不了/为空、条目缺字段、blob 解析不了） |
 
 为什么要它：**手抄错 `entry_oid` 会让豁免静默失效**——豁免键含 `entry_oid`，抄错就等于没豁免，
