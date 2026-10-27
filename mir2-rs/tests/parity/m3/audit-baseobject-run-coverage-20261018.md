@@ -590,7 +590,7 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 | P12 | 部分 | 仍成立 | `off_line_flag`/`kick_off_line_tick` 只做会话↔实体镜像（`bins/game-svr/src/lib.rs:2595/7317/7335`），无 `> KickOffLineTick ⇒ BoSoftClose` 门 |
 | P13 | 部分 | 仍成立 | `crates/script/src/engine/mod.rs:612 set_delay_call` 是空默认实现；无到点回调驱动 |
 | P14 | 缺失 | 仍成立 | E13：`dec_pk_point` / `DecPkPoint` 0 命中 |
-| P15 | 部分 | 仍成立 | `crates/world/src/world.rs:1778 use_lamps` 有实现与单测（`:13201/13507`），但宿主无调用点（`grep -rn "use_lamps(" bins` → 0） |
+| P15 | 部分 | 已实现 | `bins/game-svr/src/lib.rs:17662 for d in world.use_lamps()`（在 `fn drain_weapon_durability`（`:17653`）内，sim_loop 调用 `:25511`）；灯耐久结算与 655 发射点 `:17663`；`UseLamp` 本体 `crates/world/src/world.rs:1778` |
 | P17 | 部分 | 仍成立 | `bins/game-svr/src/enter.rs:218-227` 明写 `CastleMgr.InCastleWarArea` 等分支改 `result` 但不触发，`PLAY_NAME_COLOR` 恒 255 |
 | P18 | 部分 | 仍成立 | E13：`LogonTimcCost` / `HalfPrice` / 夜间折扣 0 命中，无 1s 聚合门 |
 | P19 | 部分 | 仍成立 | 命令仍是 tick 边界排空的 FIFO（`bins/game-svr/src/inbound.rs`），无 200ms 预算/优先级队 |
@@ -628,7 +628,7 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 | MCS-7 | 判据 | 仍成立 | B10 玩家入口不存在（同 B10） |
 | MCS-8 | 判据 | 仍成立 | B03/D02 口径仍未裁定；须带时间戳真机 dump |
 | MCS-9 | 判据 | 仍成立 | E14：`100`/`RM_ABILITY` 仍未接线 |
-| MCS-10 | 判据 | 仍成立 | P14 缺；P15 无宿主调用点（同 P14/P15） |
+| MCS-10 | 判据 | 仍成立 | P14 缺；灯支 P15 已接线（`lib.rs:17662` 的 `world.use_lamps()` + 655 发射点 `:17663`），判据的灯半边可转绿 |
 | MCS-11 | 判据 | 仍成立 | P07 缺 |
 | MCS-12 | 判据 | 前提被证伪 | D08 已实现（`slave.rs:1741-1757`），改为回归门 |
 | MCS-13 | 判据 | 前提被证伪 | D03 已实现：玩家已有 `SearchTime` 门（`world.rs:5467-5486`） |
@@ -638,12 +638,12 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 
 ### 3. 三态统计与「仍成立」的开卡建议（A4）
 
-统计：**已实现 51 / 前提被证伪 11 / 仍成立 53**（合计 115；已实现含 B08，证伪含 4 个死类 R 行 R09/R27/R28/R32 与 7 条 MCS）。
+统计：**已实现 52 / 前提被证伪 11 / 仍成立 52**（合计 115；已实现含 B08 与 P15，证伪含 4 个死类 R 行 R09/R27/R28/R32 与 7 条 MCS）。
 
 仍成立项按写集归并为 4 张卡（不得只写「仍缺」）：
 
 1. **卡 A：玩家 `PlayObject.Run` 残段 PL-5**
-   - 覆盖：P05/P07/P08/P10/P11/P12/P13/P14/P18/P19/P23/P24/P28/P29/P30/P33/P34/P35/P38（P15 需先把 `world.use_lamps()` 接进宿主 tick）。
+   - 覆盖：P05/P07/P08/P10/P11/P12/P13/P14/P18/P19/P23/P24/P28/P29/P30/P33/P34/P35/P38（P15 已接线，移出本卡）。
    - `write_set`：`bins/game-svr/src/lib.rs`、`bins/game-svr/src/chat.rs`、`crates/script/src/engine/{mod.rs,actions.rs}`、`crates/world/src/world.rs`。
    - 判据：MCS-10（P14/P15）、MCS-11（P07）；其余各段写「固定时钟 + 构造级到点/不出帧」用例；tier=L（纯帧/状态），P14/P18 若改 RNG 则升 R。
 2. **卡 B：per-actor 节拍与可见性降频（D01/D02/D04/D05/M13）**
@@ -652,7 +652,7 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 3. **卡 C：怪物/守卫/AI 残项（R39/O02/O09/O10/O11/B01/B06/B10/B13/N01/N04/N05/N06）**
    - `write_set`：`crates/world/src/{monai.rs,world.rs,slave.rs,merchant.rs,npc.rs,combat.rs}`、`bins/game-svr/src/{inbound.rs,gmcmd.rs}`。
    - 判据：R39「SuperGuard 主动攻击 PvP 玩家」帧断言；O10「练功师统计破坏力回话」；O11「假人受击 PK 标记」；N01/N06 复用 MCS-15。tier=R（战斗数值/时序）与 L（帧面）分项标注。
-4. **卡 D：buff 帧面 `SM_SYSMESSAGE(100)` + `RM_ABILITY`（§4.4 / MCS-9）**
+4. **卡 D：buff 帧面 `SM_SYSMESSAGE(100)` + `RM_ABILITY`（§4.4 / MCS-9）**（板上已有卡 `openmir2-buff-ability-frame-wiring`，并入该卡，不新开）
    - `write_set`：`crates/world/src/buff.rs`、`bins/game-svr/src/lib.rs`（`drain_buff_downlink`）。
    - 判据：MCS-9（`state_tick=2` 两个 pass 后必出 `100` 与 `SM_ABILITY`，且 AC/MAC 到期回落）。tier=R（战斗数值）。
 
@@ -665,3 +665,5 @@ Rust 侧没有按 race 分派专用类的机制：`monster_ai_tick` 只把 `is_a
 | `VerifyMapTime` 未接 NPC/商人 | 缺失 | 已实现 | E8：`merchant.rs:1686`、`npc.rs:433`、`monai.rs:5004`、`world.rs:5406` |
 | `SM_PLAYDICE(8001)` 未映射 | 缺失 | 已实现 | E9：`bins/game-svr/src/pickwire.rs:232` |
 | 专用怪 `Run` 覆写「34 个未建模」（§2.4 引言） | 缺失 | 大部分已实现 | E1：`monster_class_run` 覆盖 29 个 race + 城堡 110/111 + BeeQueen/SpiderHouse + 20/112；残 R39 与 5 个死类 |
+
+> **本轮自我订正（同日复跑）**：P15 初判「仍成立·宿主无调用点」有误——早先 `grep … | head -5` 在 `crates/world/src/world.rs` 的 5 条测试命中后截断，漏掉了 `bins/game-svr/src/lib.rs:17662` 的生产调用。无截断复跑后改为**已实现**（见上表 P15 行）。同源教训已用于 `audit-uncovered-surfaces-20261019.md` 的 #10/#15。

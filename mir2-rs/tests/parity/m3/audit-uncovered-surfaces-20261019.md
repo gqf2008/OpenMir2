@@ -132,12 +132,12 @@ for t in account_friend tbl_conncheckuser tbl_connectlogs tbl_countlogs tbl_gmip
 | 7 | 攻城区语义（`InCastleWarArea`/落点改写/766 bit4/名字色） | 恒 false、不抽 `Random(9)` | 仍成立（部分已接） | 落点改写已接：`mir2_world::castle::relocate_on_enter`（`bins/game-svr/src/lib.rs:21500`）；但 `bins/game-svr/src/enter.rs:218-227` 明写 `PvpFlag/GetGuildRelation/Fight3Zone/InCastleWarArea` 分支不触发、`PLAY_NAME_COLOR=255`；`766` bit4 无生产置位 |
 | 8 | 城堡税/成员价 | `let _tax` 丢弃 | 已实现 | `bins/game-svr/src/shop.rs:41-44`（卡 `openmir2-castle-merchant-tax-wiring`）回 `MerchantTaxIntent`（`:1095`），宿主 `bins/game-svr/src/lib.rs:5932` 调 `apply_merchant_tax`；`crates/world/src/castle_tax.rs` 公式 |
 | 9 | 频道聊天 `!!`/`!~`/`!` | 喊话/组队/行会未接 | 已实现 | `bins/game-svr/src/chat.rs:251 parse_channel` / `:292 cry_targets` / `:334 shout_decision`；生产调用 `bins/game-svr/src/lib.rs:1612/1712/1748`（行会支 `:1667`） |
-| 10 | 武器升级 NPC（`@upgradenow`/`@getbackupgnow`） | 无状态、无标签处理器 | 仍成立 | 无 `@upgradenow` 处理器：`grep -rn "upgradenow" bins crates --include=*.rs` 仅测试名（`bins/game-svr/src/bag.rs:1632+`）；`UPgradeWeaponGetBackTime` 仅配置读取（`bins/game-svr/src/config.rs:261/1085`） |
+| 10 | 武器升级 NPC（`@upgradenow`/`@getbackupgnow`） | 无状态、无标签处理器 | 已实现 | 生产链：`bins/game-svr/src/lib.rs:6438 upgrade_request_for(label, &view)` → `:6536 upgrade_wapon_outcome(...)`；纯函数 `bins/game-svr/src/shop.rs:1605/1628`；状态机 `mir2_world::merchant`（`UpgradeWaponBegin/Outcome`）。`UPgradeWeaponGetBackTime` 读入 `bins/game-svr/src/config.rs:261/1085`（注：早先 grep 因 `head -6` 截断漏判，本轮已无截断复跑） |
 | 11 | GameGate 速度/间隔规则 | 只有 `ChatThrottle` | 已实现 | `bins/game-gate/src/config.rs:222/226` 读 `MoveInterval` 等；`bins/game-gate/src/rules.rs:256` 速度结构、`:455` 门判定 |
 | 12 | LoginGate/SelGate 60s 空闲超时两阶段 | 无定时器 | 已实现 | `bins/login-gate/src/idle_timeout.rs`（`IdleTimer`/`TimeoutAction`/`CHECK_INTERVAL_MS`）；接线 `bins/login-gate/src/lib.rs:19/29/165/206`；严格 `> timeout` 见 `:280` |
 | 13 | 网关 → LoginSrv/DBSrv 的 `Enter` 帧体形状 | 发 `peer` 原文 | 已实现 | LoginGate `"{ip}/{ip}"`：`bins/login-gate/src/lib.rs:271 login_gate_enter_body`（调用 `:312`）；SelGate `"%K{sid}/{ip}/{ip}$"`：`bins/sel-gate/src/lib.rs:166`；消费端 `%…$` 解析 `bins/db-srv/src/gbk.rs:316` |
 | 14 | `account_protection` 13 列字段级 | 只写 `UserName/Quiz2` | 已实现 | `crates/storage/src/account.rs:135`（13 列 INSERT）/`:140`（13 列 UPDATE）；往返用例 `bins/login-srv/src/login_server.rs:1541` |
-| 15 | 交易栏 `GetUpgradeStdItem` desc 差量 + 自定义名 | `trade.rs` 未建模 | 仍成立（部分已接） | `bins/game-svr/src/trade.rs:58/360/968/996/1024` 只用 `item_display_name`；`upgrade_std_item` 生产调用只在入包路径 `bins/game-svr/src/bag.rs:1038`，交易栏未接 `Desc[13]` 差量 |
+| 15 | 交易栏 `GetUpgradeStdItem` desc 差量 + 自定义名 | `trade.rs` 未建模 | 已实现 | 交易栏 ClientItem 走 `itemwire::encode_client_item`（`bins/game-svr/src/trade.rs:977/985/1000/1008/1022/1030`），该函数对每个 `ClientItem` 统一套 `bag::upgrade_std_item`（`bins/game-svr/src/itemwire.rs:33/89/99`）；自定义名 `bag.rs:564 item_display_name`（`desc[13]==1 ⇒ custom_item_name`） |
 | 16 | `OPENYBDEAL` + 登录 `GetSellOffGlod` | `IMPLEMENTED_EXECUTIONS` 不含 | 已实现 | `crates/script/src/engine/dispatch.rs:81` 已含 `ActionOfOpenSaleDeal`；实现 `crates/script/src/engine/actions.rs:905`；生产路径用例 `bins/game-svr/src/lib.rs:32442/32955` |
 | 17 | GM 命令面（`@LetGuild`/`@LetTrade` 等） | `@` 命令全 no-op | 仍成立 | `bins/game-svr/src/guild_cmd.rs:31` 明写 `allow_guild` 唯一生产写点 `@Letguild` 未接 ⇒ 恒 false；其余命令面未接 |
 | 18 | GameGate↔GameSvr 保活/断链重连 | 已修但 3min 分支需竞态 | 已实现 | `bins/game-gate/src/lib.rs:29-34`（B-5/B-4，2026-10-20：10s `GM_CHECKCLIENT`、3min 严格 `>`、15 天清扫、下行重连）；`CHECK_SERVER_TIMEOUT` 注入见 `:522-545` |
@@ -146,14 +146,14 @@ for t in account_friend tbl_conncheckuser tbl_connectlogs tbl_countlogs tbl_gmip
 
 ### 2. 三态统计与「仍成立」的开卡建议（A4）
 
-统计：**已实现 14 / 前提被证伪 1 / 仍成立 5**（合计 20）。
+统计：**已实现 16 / 前提被证伪 1 / 仍成立 3**（合计 20；本轮自我订正：#10 与 #15 早先因 grep 截断/只搜测试名而误判为「仍成立」，无截断复跑后均为已实现。与派工预期的 15/1/4 相差 1，差异项即 #15，证据见本表末列，请审查复核）。
 
-仍成立 5 条各成一卡（沿用原文牙名，写清写集）：
+> #10 归属：板上已有 `openmir2-weapon-upgrade-values` / `openmir2-merchant-script-load`，本轮确认其生产链已闭合 ⇒ 不新开卡、不改这两张卡。
 
-1. **#6 攻城 NPC 标签** — `write_set`：`bins/game-svr/src/npc.rs`、`bins/game-svr/src/castle.rs`；判据 `castle_official_label_vectors`（每标签断言 `CastleOfficialAction` 与金币/城墙 HP 差；N1 金库提取/上缴保持 no-op；`hirearchernowN` 不 panic）。tier=L。
-2. **#7 攻城区语义** — `write_set`：`bins/game-svr/src/enter.rs`、`bins/game-svr/src/lib.rs`、`crates/world/src/castle.rs`；判据 `castle_area_login_vectors`（固定种子，攻城区/皇宫各一例；须同时覆盖 `HomeX-4+Random(9)` 与无城主支 `HomeX-2+Random(5)` 的两次抽取顺序——见 D-3）。tier=R（RNG + 进图时序）。
-3. **#10 武器升级 NPC** — `write_set`：`bins/game-svr/src/merchant.rs`、`bins/game-svr/src/bag.rs`、`crates/script/src`（`@upgradenow`/`@getbackupgnow` 标签）；判据 `weapon_upgrade_vectors`（固定种子，断言升级后 DC/SC/MC/Dura 与 `GetBackTick`；取回时限前/后）。tier=R（RNG + 时序）。
-4. **#15 交易栏 desc 差量/自定义名** — `write_set`：`bins/game-svr/src/trade.rs`、`bins/game-svr/src/bag.rs`；判据 `deal_item_desc_vectors`（带升级属性物品的 `SM_ADDITEM/SM_DEALADDITEM` 的 `ClientItem` 逐字节）。tier=L（帧编码）。
-5. **#17 GM 命令面** — `write_set`：`bins/game-svr/src/gmcmd.rs`、`bins/game-svr/src/chat.rs`、`crates/world/src/party.rs`；判据 `gm_command_vectors`（`@LetGuild` 两次切换 `AllowGuild` 并断言提示帧；`@LetTrade` 后交易被拒）。tier=L。
+仍成立 3 条各成一卡（沿用原文牙名，写清写集）：
+
+1. **#6 攻城 NPC 标签** — `write_set`：`bins/game-svr/src/npc.rs`、`bins/game-svr/src/castle.rs`；判据 `castle_official_label_vectors`（每标签断言 `CastleOfficialAction` 与金币/城墙 HP 差；N1 金库提取/上缴保持 no-op；`hirearchernowN` 不 panic）。关联板上卡 `openmir2-castle-official-actions`（并入，不新开）。tier=L。
+2. **#7 攻城区语义** — `write_set`：`bins/game-svr/src/enter.rs`、`bins/game-svr/src/lib.rs`、`crates/world/src/castle.rs`；判据 `castle_area_login_vectors`（固定种子，攻城区/皇宫各一例；须同时覆盖 `HomeX-4+Random(9)` 与无城主支 `HomeX-2+Random(5)` 的两次抽取顺序——见 D-3）。关联板上卡 `openmir2-m3-castle-siege-state`（并入，不新开）。tier=R（RNG + 进图时序）。
+3. **#17 GM 命令面** — `write_set`：`bins/game-svr/src/gmcmd.rs`、`bins/game-svr/src/chat.rs`、`crates/world/src/party.rs`；判据 `gm_command_vectors`（`@LetGuild` 两次切换 `AllowGuild` 并断言提示帧；`@LetTrade` 后交易被拒）。tier=L。
 
 > #1/#2 的「已实现」含 D-4 提醒：既有 `M3⑧公会攻城现状盘点报告-20261013.md` 的登记项已在本轮落地，派新卡时请引用本表而不是旧登记。
