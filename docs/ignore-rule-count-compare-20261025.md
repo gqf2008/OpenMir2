@@ -34,7 +34,7 @@ reviewer-2 当年的保留条件是「**直到 fixedhide 卡落地 或 工具加
 - **判定（②，保护升级而不是取消）**：对**所有** `action=ignore` 规则（`pending` 或已批准）一视同仁——
   | 两侧计数 | 形态 | 判定 |
   |---|---|---|
-  | 相等 | 相等（含体哈希多重集） | **放行**：记 `ignored_ident_rules_counted`（「已计数、形态已比」），不再 UNDECIDABLE |
+  | 相等 | 相等（含体哈希多重集） | **放行**：记 `ignored_rule_census`，并在 `ignored_ident_rules_counted_all` 里出现（兼容字段 `ignored_ident_rules_counted` 只收 PENDING），不再 UNDECIDABLE |
   | 相等 | 不同 | **UNDECIDABLE**：`pending` → `pending_ignore_rule`，已批准 → `ignore_rule_mismatch`；detail 点明「形态不同」+ 两侧形态分布 |
   | 不同 | — | **UNDECIDABLE**：同上按 `pending` 分 kind；detail 点明 `oracle/rust/delta` |
   **转正不取消兜底**：批准只把 kind 从 `pending_ignore_rule` 换成 `ignore_rule_mismatch`，
