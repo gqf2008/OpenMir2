@@ -5,9 +5,12 @@
     "not_in_run3_reason": {
       "reason": "前置只剩 ②：无 UseItems（装备槽）夹具通道（card_window 的 fixtures 只有 inventory_replace/inventory_drop）；@Level0 自 4f06e85cc 起已实现（写实体 + pending_level_up，a5407e2be 并入 master），不再是前置。",
       "evidence": [
-        {"kind": "card", "value": "openmir2-gm-target-state-write"},
+        {"kind": "card", "value": "openmir2-real-machine-verification-master"},
         {"kind": "path", "value": "mir2-rs/bins/game-svr/src/gmcmd.rs"},
         {"kind": "path", "value": "tools/conformance/card_window.py"}
+      ],
+      "provenance": [
+        {"kind": "card", "value": "openmir2-gm-target-state-write", "status": "closed", "note": "历史出处；原卡已 closed，active blocker 转指 openmir2-real-machine-verification-master"}
       ]
     },
     "reason": "**前置只剩 ②**（`@Level0` 自 `4f06e85cc` 起已实现：写实体 + `pending_level_up`，`a5407e2be` 并入 master；旧文案「Rust no-op」已失效）：**无装备槽夹具通道**：`tools/conformance/card_window.py` 的 fixtures 只支持 `inventory_replace`/`inventory_drop`（背包槽），没有 `UseItems`（装备槽）种子通道；因此也无法绕过 GM、直接在登录时把「NeedLevel 不满足的装备」放到身上。",
