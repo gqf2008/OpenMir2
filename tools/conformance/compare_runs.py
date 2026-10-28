@@ -1571,20 +1571,24 @@ def parse_oracle_extra_shapes(rule):
         if isinstance(raw, dict):
             shape_raw, cap = raw.get("shape"), raw.get("max")
         else:
+            # R20-Y4：不设上界的 bare string 视为非法（fail-closed）——
+            # 「同形状额外帧必须有上界」是 X2 的结论，不能让新规则用旧写法绕过。
             shape_raw, cap = raw, None
         parts = [x.strip() for x in str(shape_raw).split(",")]
         if len(parts) != 3 or not all(p.lstrip("-").isdigit() for p in parts):
             invalid.append(str(raw))
             continue
-        if cap is not None:
-            try:
-                cap = int(cap)
-            except (TypeError, ValueError):
-                invalid.append(str(raw))
-                continue
-            if cap < 0:
-                invalid.append(str(raw))
-                continue
+        if cap is None:
+            invalid.append(str(raw))
+            continue
+        try:
+            cap = int(cap)
+        except (TypeError, ValueError):
+            invalid.append(str(raw))
+            continue
+        if cap < 0:
+            invalid.append(str(raw))
+            continue
         shapes[",".join(parts)] = cap
     return shapes, invalid
 
@@ -1596,7 +1600,14 @@ def oracle_extra_status(rule):
     owner/coordinator 裁决，卡面 issue 不等于规则表里的批准；未裁决时只登记候选，
     该 ignore 差异仍判 UNDECIDABLE。
     """
-    return str((rule or {}).get("oracle_extra_status", "PENDING")).strip().upper()
+    raw = str((rule or {}).get("oracle_extra_status", "PENDING")).strip().upper()
+    if raw != "APPROVED":
+        return raw or "PENDING"
+    # R20-Y1：只写 APPROVED 但没写裁决 oid ⇒ 视同 PENDING（fail-closed）。
+    # 否则一次「忘了补 decision」的编辑就能放行，并在记录里留下无 decision 的批准人。
+    if not str((rule or {}).get("oracle_extra_decision") or "").strip():
+        return "PENDING"
+    return "APPROVED"
 
 
 def oracle_extra_explainable(row, rule):
@@ -1646,7 +1657,7 @@ def oracle_extra_explainable(row, rule):
         if sha != EMPTY_BODY_SHA256:
             info["reason"] = "shape %s 的 body 非空（sha256=%s）⇒ 有载荷" % (shape, sha)
             return False, info
-        cap = shapes[shape]
+        cap = shapes.get(shape)
         if cap is not None and (on - rn) > cap:
             info["reason"] = ("shape %s 的 oracle 额外帧 %d 超过规则上界 max=%d"
                               % (shape, on - rn, cap))
@@ -2676,6 +2687,7 @@ def compare_main(args):
     # T-270 受控裁决的第二、三个条件要在库比完之后才有答案：先记下**帧面**是否有其它差异
     # （库差异后面会并进同一个 diffs 列表，不能混在一起判）。
     frame_diffs_before_db = bool(report["diffs"])
+    frame_diffs_count = len(report["diffs"])
 
     db_opts = dict(rules.db)
     if args.db_time_mode:
@@ -2737,7 +2749,7 @@ def compare_main(args):
             info = cand["info"]
             rule = rules.by_ident.get(info["ident"]) or {}
             status = oracle_extra_status(rule)
-            verified = {"frame_diffs": 0, "db_state": _db.get("state"),
+            verified = {"frame_diffs": frame_diffs_count, "db_state": _db.get("state"),
                         "db_diffs": len(_db.get("diffs") or []),
                         "db_undecidable": len(_db.get("undecidable") or [])}
             base_rec = {
@@ -2749,7 +2761,12 @@ def compare_main(args):
             }
             blockers = list(_blockers)
             if status != "APPROVED":
-                blockers.append("T-270 白名单为 %s（缺 owner/coordinator 裁决条目）" % status)
+                _raw_status = str(rule.get("oracle_extra_status", "PENDING")).strip().upper()
+                if _raw_status == "APPROVED":
+                    blockers.append("T-270 status=APPROVED 但缺 oracle_extra_decision "
+                                    "⇒ 视同 PENDING（R20-Y1）")
+                else:
+                    blockers.append("T-270 白名单为 %s（缺 owner/coordinator 裁决条目）" % status)
             if blockers:
                 cand["und"]["adjudication"] = "T-270"
                 cand["und"]["adjudication_blocked_by"] = "；".join(blockers)
@@ -2816,6 +2833,14 @@ def compare_main(args):
         # 附属证据 `pending_review_used`，**不能**替代主标志（否则一份 20 条 UNDECIDABLE
         # 的报告可能因为没碰到 10/50 而显示 false，误导读者）。
         report["rules"]["pending_review_used"] = used
+        # R20-Y3：本次真的出了 T-270 候选时，把 T-270 也算进「本次影响面」。
+        if (report["frames"].get("oracle_extra_candidates")
+                and any(str(x).startswith("T-270") for x in (report["rules"].get("pending_review") or []))
+                and not any(str(x).startswith("T-270")
+                            for x in report["rules"]["pending_review_used"])):
+            report["rules"]["pending_review_used"].append(
+                [x for x in report["rules"]["pending_review"]
+                 if str(x).startswith("T-270")][0])
 
     if report["undecidable"]:
         report["verdict"] = "UNDECIDABLE"

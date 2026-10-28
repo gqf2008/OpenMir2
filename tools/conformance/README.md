@@ -129,8 +129,10 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
    两侧库快照比过且无差异**、且 `oracle_extra_status == "APPROVED"` 时，才把该差异登记为
    `frames.oracle_extra_hits`（并进 `whitelisted`，`kind=oracle_extra_hit`）而不判 UNDECIDABLE；
    任一条不成立仍 `ignore_rule_mismatch`，写 `adjudication_blocked_by` 说明被哪条挡住，并把够格的差异
-   登记到 `frames.oracle_extra_candidates`。**未拿到 owner/coordinator 裁决（status 缺省=PENDING）时只登记候选、
-   不放行**，且报告 `rules.rules_pending_review=true`。详见 `docs/ident14-extra-hit-adjudication-20261029.md`。
+   登记到 `frames.oracle_extra_candidates`。**未拿到 owner/coordinator 裁决（status 缺省=PENDING，
+   或写了 APPROVED 却没写 `oracle_extra_decision`）时只登记候选、不放行**，且报告
+   `rules.rules_pending_review=true`；每个形状必须带 `max` 上界（bare string 视为规则非法）。
+   详见 `docs/ident14-extra-hit-adjudication-20261029.md`。
    两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
 2. `ident` 永远比较（即使其余字段被掩码）；错位即 `ident` 差异。
 3. 头部字段 `recog/param/tag/series` + 驱动器字段 `phase/seq/t_ms/conn`：
