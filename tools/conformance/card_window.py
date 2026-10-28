@@ -8914,6 +8914,8 @@ def _selftest_save_settle():
                 "SETTLE6 变化后静默 => settled（changes 计入）"))
     out.append((settle_decision(mk(["a", "a", "a", "b"]), 400)[0] is False,
                 "SETTLE6b 新变化撤销此前 quiet：当前尾段尚未静默 => 不 settled"))
+    out.append((settle_decision(mk(["a", "a", "a", "b", "b"]), 400)[0] is False,
+                "SETTLE6b-ii 新指纹尾段仅 200ms<quiet(400)：旧 quiet 不得带入新尾段"))
     out.append((settle_decision(mk(list("abcdefg")), 800)[0] is False,
                 "SETTLE7 持续变化 => 未落定"))
 
@@ -9004,8 +9006,8 @@ def _selftest_save_settle():
     ss = dict(settle, require_changes=True)
     res5 = wait_save_settled(_R(), "csharp", prof, sc, ss, {},
                              sql_fn=constant, clock=make_clock())
-    # 报错串必须用**实际 elapsed**（settle 时约 800ms），不能拿 window 上限 1200ms 冒充，
-    # 否则真机读到会以为「等满窗口才判无变化」。
+    # require_changes=true 且零变化时 quiet 不提前收口，必须观满 window；
+    # 报错串用**实际 elapsed**，不能用较小的 settle 时刻冒充本次零变化观测跨度。
     err5 = res5["error"] or ""
     out.append((res5["rc"] == 2 and res5["action"] == "no_change_observed"
                 and res5["settled"] is True and res5["changes"] == 0
@@ -9022,10 +9024,18 @@ def _selftest_save_settle():
                         delayed_b, delayed_b, delayed_b, delayed_b])
     res_delayed = wait_save_settled(_R(), "csharp", prof, sc, ss, {},
                                     sql_fn=lambda _s: next(seq_delayed), clock=make_clock())
+    delayed_samples = res_delayed["samples"]
+    delayed_change_times = [cur["t_ms"] for prev, cur in zip(delayed_samples, delayed_samples[1:])
+                            if cur["sha256_12"] != prev["sha256_12"]]
+    delayed_tail_quiet_ms = (delayed_samples[-1]["t_ms"] - delayed_change_times[-1]
+                             if delayed_samples and delayed_change_times else None)
     out.append((res_delayed["rc"] == 0 and res_delayed["action"] == "settled"
-                and res_delayed["changes"] == 1 and len(res_delayed["samples"]) >= 5
-                and res_delayed["elapsed_ms"] > 400,
-                "SETTLE15d 延迟落库正对照：quiet 后才变化 => 继续采样并 rc=0 changes=1"))
+                and res_delayed["changes"] == 1 and len(delayed_samples) >= 5
+                and res_delayed["elapsed_ms"] > 400
+                and delayed_tail_quiet_ms is not None
+                and delayed_tail_quiet_ms >= ss["quiet_ms"],
+                "SETTLE15d 延迟落库正对照：quiet 后才变化 => 继续采样并 rc=0 changes=1；"
+                "末样本-最后变化样本=%sms >= quiet" % delayed_tail_quiet_ms))
     seq2 = iter(["A\n46", "B\n46", "B\n46", "B\n46", "B\n46"])
     res6 = wait_save_settled(_R(), "csharp", prof, sc, ss, {},
                              sql_fn=lambda _s: next(seq2), clock=make_clock())
