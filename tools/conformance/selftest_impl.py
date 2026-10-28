@@ -1154,6 +1154,45 @@ class Selftest(object):
                    and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
                    (rc, (rep or {}).get("undecidable")))
 
+        # R20-F1：第二个形状 (327,327,6) 也要有牙——删条目 / 改宽 max 都必须红。
+        walk6 = self.frame(10, b"", **dict(heads_o, seq=821, param=327, tag=327, series=518))
+        hit6 = self.frame(14, b"", **dict(heads_o, seq=822, param=327, tag=327,
+                                          series=6, recog=66))
+        walk6r = self.frame(10, b"", **dict(heads_r, seq=823, param=327, tag=327, series=518))
+        od6 = self.write_run("t270-o-shape6", [walk6, hit6],
+                             db=_snap270("mir2_test_db_oracle"))
+        rd6 = self.write_run("t270-r-shape6", [walk6r],
+                             db=_snap270("mir2_test_db_rust"))
+        rc, rep = self.compare(od6, rd6)
+        _h6 = ((rep or {}).get("frames") or {}).get("oracle_extra_hits") or []
+        self.check("T-270 shape (327,327,6) 已裁决 fb0ea7a9 => rc 0 且 approved_by 该 oid",
+                   rc == 0 and bool(_h6)
+                   and str(_h6[0].get("approved_by") or "") ==
+                   "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41",
+                   (rc, _h6, (rep or {}).get("undecidable")))
+
+        _no6 = _rules270_variant(
+            "rules-270-no-shape6.json",
+            lambda r: r.__setitem__("oracle_extra_shapes", [
+                e for e in r["oracle_extra_shapes"] if e.get("shape") != "327,327,6"]))
+        rc, rep = self.compare(od6, rd6, ["--rules", _no6])
+        self.check("T-270 F1：删掉 (327,327,6) 条目 => rc 2（不放行）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # 同一形状（param/tag/series 相同）第 2 条 ⇒ 用来证明 max=1 的上界没有失效
+        # （series 不同就是另一个形状，测不到 max）。
+        hit6b = self.frame(14, b"", **dict(heads_o, seq=824, param=327, tag=327,
+                                           series=6, recog=67))
+        od6_two = self.write_run("t270-o-shape6-two", [walk6, hit6, hit6b],
+                                 db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od6_two, rd6)
+        self.check("T-270 F1：同形状 2 条 > max=1 => rc 2（上界不失效）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
         # 新增形状 (318,332,7)/(327,327,6) 的 owner 裁决（fb0ea7a9）：放行且 approved_by 该 oid。
         walk7 = self.frame(10, b"", **dict(heads_o, seq=818, param=318, tag=332, series=519))
         hit7 = self.frame(14, b"", **dict(heads_o, seq=819, param=318, tag=332,
@@ -1168,7 +1207,8 @@ class Selftest(object):
         _h7 = ((rep or {}).get("frames") or {}).get("oracle_extra_hits") or []
         self.check("T-270 shape (318,332,7) 已裁决 fb0ea7a9 => rc 0 且 approved_by 该 oid",
                    rc == 0 and bool(_h7)
-                   and "fb0ea7a9" in str(_h7[0].get("approved_by") or ""),
+                   and str(_h7[0].get("approved_by") or "") ==
+                   "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41",
                    (rc, _h7, (rep or {}).get("undecidable")))
 
         # F2：只声明 body_sha256、没有 body_hex 的帧也必须按「有载荷」拒（不能当空体）。
