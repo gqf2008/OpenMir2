@@ -78,6 +78,8 @@ use crate::world::World;
 pub const RM_TURN: u16 = 10001;
 /// `Messages.RM_HIT`（`src/OpenMir2/Messages.cs:554`）——`AnimalObject.Attack` 的攻击动作帧。
 pub const RM_HIT: u16 = 10004;
+/// `Messages.RM_CHANGENAMECOLOR` = 8090；world 不依赖 protocol crate，常量值对冻结表。
+pub const RM_CHANGENAMECOLOR: u16 = 8090;
 /// `Messages.RM_DIGUP`（`src/OpenMir2/Messages.cs:614`）——出土帧（`SM_DIGUP`）。
 pub const RM_DIGUP: u16 = 10200;
 /// `Messages.RM_SPELL`（`src/OpenMir2/Messages.cs:562` = 10008）——`FireballMonster.Run` 的
@@ -577,6 +579,9 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
             if let Some((dir, x, y)) = world.entities.get(actor_id).map(|e| (e.ai.dir, e.x, e.y)) {
                 send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
             }
+            // `MonsterObject.AttackTarget`：`Attack(...)` 之后无条件 `BreakHolySeizeMode()`
+            // ⇒ `RefNameColor()`。顺序保持在 RM_HIT 之后；不要求 HolySeize 原先为 true。
+            send_ref_msg(world, actor_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
         }
         true
     } else {
@@ -623,6 +628,8 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
     // 不加 `AttackTick`，只写 `Dir/N550/TargetX/Y`。
     if world.entities.get(victim_id).is_some_and(|e| e.race == 120) {
         soccer_ball_struck(world, victim_id, hiter_id);
+        // `Operate(RM_STRUCK)` 在覆写的 `Struck` 之后仍无条件 BreakHolySeizeMode。
+        send_ref_msg(world, victim_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
         return;
     }
     let now = world.clock_ms;
@@ -670,6 +677,9 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
     }
     // `GuardUnit.Struck`（`GuardUnit.cs:27-33`）：`Castle != null` ⇒ 置 `CrimeforCastle`。
     guard_unit_struck(world, victim_id, now);
+    // `AnimalObject.Operate(RM_STRUCK)`：`Struck` 后无条件 `BreakHolySeizeMode()`
+    // ⇒ `RefNameColor()`，不是只有 HolySeize=true 才发。
+    send_ref_msg(world, victim_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
 }
 
 /// `CreateMonster`（`WorldServer.MonGen.cs:507-728`）按 `monsters.Race` 选怪类；本函数给出
@@ -7862,6 +7872,48 @@ mod tests {
         );
     }
 
+    /// A1/A3：近战受击无条件产 656；收件人在发帧时刻按 ±12 快照，隐藏则抑制。
+    /// 删除 animal_struck 尾的 RM_CHANGENAMECOLOR 生产 => 首个事件断言必红。
+    #[test]
+    fn animal_struck_emits_name_color_without_holy_prerequisite() {
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        let hitter = player(&mut world, 11, 10);
+        let observer = player(&mut world, 10, 20); // Δ=10 ⇒ 界内
+        let outsider = player(&mut world, 23, 10); // Δ=13 ⇒ 界外
+        world.tick();
+        assert!(
+            !world.entities.get(mid).unwrap().ai.holy_seize,
+            "不得要求 HolySeize 前置"
+        );
+
+        animal_struck(&mut world, mid, hitter);
+        assert_eq!(world.pending_monster_ref_msgs.len(), 1);
+        let nc = &world.pending_monster_ref_msgs[0];
+        assert_eq!(nc.actor_id, mid);
+        assert_eq!(nc.ident, RM_CHANGENAMECOLOR);
+        assert_eq!(
+            (nc.w_param, nc.n_param1, nc.n_param2, nc.n_param3),
+            (0, 0, 0, 0)
+        );
+        assert!(!nc.self_only);
+        let mut got = nc.recipients.clone();
+        got.sort_unstable();
+        let mut want = vec![hitter, observer];
+        want.sort_unstable();
+        assert_eq!(got, want, "仅 ±12 内玩家；界外不得收 656");
+        assert!(!nc.recipients.contains(&outsider));
+
+        world.entities.get_mut(mid).unwrap().ob_mode = true;
+        animal_struck(&mut world, mid, hitter);
+        let hidden = &world.pending_monster_ref_msgs[1];
+        assert_eq!(hidden.ident, RM_CHANGENAMECOLOR);
+        assert!(
+            hidden.self_only && hidden.recipients.is_empty(),
+            "ObMode ⇒ 无观察者帧"
+        );
+    }
+
     /// W4-B：`TargetCret != null` 且**邻接** ⇒ `GetAttackDir` 真 ⇒ 短路**不抽** `Random(6)`。
     #[test]
     fn animal_struck_adjacent_target_takes_without_drawing() {
@@ -8073,7 +8125,7 @@ mod tests {
             "恰 1 条攻击结算（SM_STRUCK 数据源）"
         );
         let refs = &world.pending_monster_ref_msgs;
-        assert_eq!(refs.len(), 1, "一次攻击恰 1 条 RM_HIT");
+        assert_eq!(refs.len(), 2, "一次攻击依次产 RM_HIT + RM_CHANGENAMECOLOR");
         let r = &refs[0];
         assert_eq!(r.ident, RM_HIT, "ident = RM_HIT");
         assert_eq!(
@@ -8100,6 +8152,20 @@ mod tests {
         assert!(!r.recipients.contains(&mid), "自己不在收件人内");
         assert!(!r.recipients.contains(&other_mon), "怪物观察者不发 RM_HIT");
         assert!(!r.recipients.contains(&outsider), "Δ>12 不发");
+
+        // A2 出手臂：Attack 之后 BreakHolySeizeMode ⇒ 656；与受击臂测试分开。
+        let nc = &refs[1];
+        assert_eq!(nc.actor_id, mid);
+        assert_eq!(nc.ident, RM_CHANGENAMECOLOR);
+        assert_eq!(
+            (nc.w_param, nc.n_param1, nc.n_param2, nc.n_param3),
+            (0, 0, 0, 0)
+        );
+        assert_eq!(
+            nc.recipients, r.recipients,
+            "656 复用同一 SendRefMsg 收件人快照"
+        );
+        assert!(!nc.self_only);
     }
 
     /// **Lane 1**：`RM_HIT` 的发送门严格照 oracle——`Attack` 只在
@@ -8124,8 +8190,8 @@ mod tests {
         assert_eq!(world.pending_ai_attacks[0].2.damage, 0, "零伤害");
         assert_eq!(
             world.pending_monster_ref_msgs.len(),
-            1,
-            "零伤害/未命中仍发 RM_HIT（oracle 无条件）"
+            2,
+            "零伤害/未命中仍依次发 RM_HIT + 656（oracle 无条件）"
         );
 
         // B) 距离不足（非八邻格）⇒ 不进 `Attack` ⇒ 不发 RM_HIT。
@@ -8179,9 +8245,12 @@ mod tests {
         world.clock_ms = 2_200;
         assert!(attack_target(&mut world, mid));
         let refs = &world.pending_monster_ref_msgs;
-        assert_eq!(refs.len(), 1, "事件仍产生（SendRefMsg 语义）");
-        assert!(refs[0].self_only, "隐藏模式 ⇒ self_only");
-        assert!(refs[0].recipients.is_empty(), "self_only ⇒ 无收件人");
+        assert_eq!(refs.len(), 2, "RM_HIT + 656 事件仍产生（SendRefMsg 语义）");
+        assert!(refs.iter().all(|r| r.self_only), "隐藏模式 ⇒ self_only");
+        assert!(
+            refs.iter().all(|r| r.recipients.is_empty()),
+            "self_only ⇒ 无收件人"
+        );
     }
 
     /// **Lane 1 回归**：玩家攻击路径不受影响——`CM_HIT`/`Command::Attack` 的
@@ -8200,8 +8269,11 @@ mod tests {
         let rec = world.tick();
         assert_eq!(rec.attacks.len(), 1, "玩家攻击照常结算");
         assert!(
-            world.pending_monster_ref_msgs.is_empty(),
-            "玩家攻击不得产生怪物 RM_HIT 事件"
+            world
+                .pending_monster_ref_msgs
+                .iter()
+                .all(|m| m.ident != RM_HIT),
+            "玩家攻击不得产生怪物 RM_HIT 事件（受击后的 656 是另一独立事件）"
         );
         assert!(world.pending_ai_attacks.is_empty());
     }

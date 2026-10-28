@@ -19974,6 +19974,15 @@ fn drain_monster_ref_msgs(
                 m.dir,
                 &[],
             ),
+            // `RefNameColor` ⇒ `PlayObject.Message.cs:1677-1679`：接收者侧
+            // `GetChrColor(baseObject)`，普通怪取实体 NameColor（构造默认 255），无尾。
+            mir2_protocol::messages::RM_CHANGENAMECOLOR => {
+                let color = world
+                    .entities
+                    .get(m.actor_id)
+                    .map_or(0, |e| mir2_world::slave::get_chr_color(e, &[], 0));
+                smframe::sm_changenamecolor(m.actor_id, color)
+            }
             mir2_world::monai::RM_DIGUP => {
                 let (feature, light) = displays
                     .get(m.actor_id)
@@ -65784,9 +65793,18 @@ SendRefMsgRange=15
         world
             .pending_monster_ref_msgs
             .push(msg(mir2_world::monai::RM_10205, 11, 10, 1));
+        world.pending_monster_ref_msgs.push(msg(
+            mir2_protocol::messages::RM_CHANGENAMECOLOR,
+            0,
+            0,
+            0,
+        ));
         let mut hidden = msg(mir2_world::monai::RM_DIGUP, 10, 10, 0);
         hidden.self_only = true;
         world.pending_monster_ref_msgs.push(hidden);
+        let mut hidden_color = msg(mir2_protocol::messages::RM_CHANGENAMECOLOR, 0, 0, 0);
+        hidden_color.self_only = true;
+        world.pending_monster_ref_msgs.push(hidden_color);
 
         drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
         let mut bodies = Vec::new();
@@ -65796,7 +65814,7 @@ SendRefMsgRange=15
                 bodies.push(body);
             }
         }
-        assert_eq!(bodies.len(), 4, "self_only 不产帧");
+        assert_eq!(bodies.len(), 5, "self_only 不产帧（含 656 抑制负例）");
         assert_eq!(
             bodies[0],
             smframe::sm_digup(mid, 10, 10, 2, 0, 0x0033_4455, 0x2),
@@ -65808,6 +65826,7 @@ SendRefMsgRange=15
             smframe::sm_action_hit(mir2_protocol::messages::SM_HIT, mid, 10, 10, 2, &[])
         );
         assert_eq!(bodies[3], smframe_ext::sm_716(mid, 11, 10, 1));
+        assert_eq!(bodies[4], smframe::sm_changenamecolor(mid, 255));
         assert!(
             world.pending_monster_ref_msgs.is_empty(),
             "排空后队列必须为空（否则无界增长）"
@@ -65916,12 +65935,30 @@ SendRefMsgRange=15
             &online,
             &gates,
         );
-        let hits = take_frames(&mut rx0);
+        let frames = take_frames(&mut rx0);
+        let hits: Vec<_> = frames
+            .iter()
+            .filter(|(_, b)| u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_HIT)
+            .cloned()
+            .collect();
+        let colors: Vec<_> = frames
+            .iter()
+            .filter(|(_, b)| {
+                u16::from_le_bytes([b[4], b[5]]) == mir2_protocol::messages::SM_CHANGENAMECOLOR
+            })
+            .cloned()
+            .collect();
+        assert_eq!(frames.len(), 4, "RM_HIT + 656 各两条，不得混入其它帧");
         assert_eq!(
             hits.len(),
             2,
             "受击者 + 观察者各 1 条 SM_HIT；界外玩家 0 条"
         );
+        assert_eq!(colors.len(), 2, "同一出手臂另产两条 656");
+        for (socket, body) in &colors {
+            assert!(matches!(*socket, 5 | 6), "656 界外玩家不得收件");
+            assert_eq!(body, &smframe::sm_changenamecolor(mid, 255));
+        }
         let expect = smframe::sm_action_hit(
             mir2_protocol::messages::SM_HIT,
             mid,
