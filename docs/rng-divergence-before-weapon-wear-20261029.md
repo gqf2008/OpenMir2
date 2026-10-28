@@ -76,7 +76,9 @@ index 不是稳定契约。
 | B `GetAttackPower(10)` | 105032 / max10=8 | 66351 / max10=6 | Luck 门第二抽 |
 | C `AttackSuccess(max5)` | 105129 / max5=3 | 66352 / max5=4 | 武器磨损 `Random(5)` |
 
-- **调用次数与次序相同**：A→B→C，各一次；没有多插/漏抽。
+- **玩家独占 canonical 的调用次数与次序相同**：A→B→C，各一次；没有多插/漏抽
+  （`player_attack_counts` 两侧 A/B/C 各 1）。共享 canonical（`atk_power_base`/`hit_gate`/
+  `hit_struck_damage`）在 C# 里无法归属 actor，只在 `all_attack_counts` 作背景。
 - C# A/B/C 之间夹层共 **100 抽**（A→B 4 条 Wondering，B→C 96 条 Wondering）；
   Rust A/B/C **连续 0 夹层**（单线程）。
 - C# `RandomNumber.Random(int)` 直接调 `System.Random.Next`，没有加锁
@@ -98,25 +100,41 @@ index 不是稳定契约。
 - `player_ctor_draw`（C# 第5 / Rust 第53600）；
 - `attack_windows_total`：两侧各自唯一的 `atk_power_a` 起点数；缺失或 ≠1 即
   `UNDECIDABLE_ATTACK_WINDOW`，不静默取第一个窗口；
-- `attack_draw_counts`：全流每个攻击族 canonical 的抽数（run9 两侧 A/B/C 各恰 1）；
-- `attack_local`：**shape = A→首个 Success 之间全部攻击族 canonical 的有序序列（含重复）**、
-  `attack_counts`、`maxes`、`trailing_success_after_window`（首个 Success 之后同一次攻击的
-  Success 抽数，毒门/多抽 C 的判别面）与夹层站点计数；
+- `player_attack_counts`：全流**玩家独占** canonical（A/B/C）的抽数，与分类同口径；
+- `all_attack_counts`：全流**所有**攻击族 canonical 的抽数，作背景（含怪物攻击的
+  `atk_power_base`/`hit_gate`/`hit_struck_damage` 等），**不可跨侧直接比**；
+- `attack_local`：**shape = A→首个 Success 之间玩家独占 canonical 的有序序列（含重复）**、
+  `attack_counts`、`maxes`、`foreign_attack_draws_between_a_success` /
+  `foreign_attack_sites`（窗口内共享 canonical 的外来抽，只记录、不参与分类）、
+  `trailing_success_after_window`（首个 Success 之后、下一个 `atk_power_a` 之前的 Success
+  抽数，毒门/多抽 C 的判别面）、`trailing_foreign_attack_draws` 与夹层站点计数；
 - `classification`：`ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED` /
   `ATTACK_CALL_SHAPE_DIVERGENCE` / `ATTACK_CALL_ARG_DIVERGENCE` / `UNDECIDABLE_ATTACK_WINDOW`。
 
-> 2026-10-29 返工（reviewer-20 F1–F5）：旧实现先搜到一个 A、一个 B、一个 C 再拼固定三元组，
+> 2026-10-29 返工1（reviewer-20 F1–F5）：旧实现先搜到一个 A、一个 B、一个 C 再拼固定三元组，
 > 所以 `ATTACK_CALL_SHAPE_DIVERGENCE` 不可达——一侧多抽一次 B/C 仍报 EQUAL。现在 shape 是
 > 有序序列（含重复），多/少抽会直接改变 shape；首个 Success 之后的 Success 单列比较；
-> 起点数、全流攻击计数、SEED_PROBE 是否存在与 token 是否全等也都进入判据。
+> 起点数、攻击计数、SEED_PROBE 是否存在与 token 是否全等也都进入判据。
+>
+> 2026-10-29 返工2（reviewer-20 F1–F4）：shape 一度收进**全部**攻击族 canonical，导致 C# 怪物
+> 线程插一条 `atk_power_base`/`hit_gate` 就被当成本玩家攻击的 shape（合成
+> `[A, atk_power_base, B, C]` vs `[A,B,C]` 误报 DIVERGENCE）。账本没有线程/actor 列，
+> 共享 canonical **无法归属**，因此现在 shape 只取玩家独占的 A/B/C；外来攻击族抽单列
+> foreign、不改分类、不报 DIVERGENCE。`trailing` 扫描改为到「下一个 `atk_power_a`」为止，
+> 外来行不再截断扫描。计数按 `player_attack_counts` / `all_attack_counts` 拆开。
 
-`--check` 扩到 **22/22**。新增/改造的常驻牙（每条都做过“删掉即 FAIL”的变异复验）：
+`--check` 扩到 **27/27**。新增/改造的常驻牙（每条都做过“删掉即 FAIL”的变异复验）：
 
 | 牙 | 断言 |
 |---|---|
 | 缺 B（少抽） | `[A,C]` vs `[A,B,C]` ⇒ `ATTACK_CALL_SHAPE_DIVERGENCE` |
 | 多抽 B | `[A,B,B,C]` vs `[A,B,C]` ⇒ `ATTACK_CALL_SHAPE_DIVERGENCE`（旧实现报 EQUAL） |
 | 多抽 C | 首个 Success 之后仍有 Success ⇒ `trailing_success_after_window` 1 vs 0 ⇒ DIVERGENCE |
+| C# 外来 `atk_power_base` | 窗口内插入 ⇒ 仍 EQUAL，`foreign_attack_draws_between_a_success` C#=1/Rust=0 |
+| C# 外来 `hit_struck_damage` | 同上，`foreign_attack_sites={"hit_struck_damage":1}` |
+| 计数拆分 | `player_attack_counts` 不含 `atk_power_base`；`all_attack_counts` 才含 |
+| 取数上界不同 | shape 相同、B 的 max 10→9 ⇒ `ATTACK_CALL_ARG_DIVERGENCE` |
+| 外来行不截断 trailing | `[A,B,C, atk_power_base, C]` vs `[A,B,C]` ⇒ trailing C#=1 ⇒ DIVERGENCE |
 | 缺终点 | 只有 A/B ⇒ `UNDECIDABLE_ATTACK_WINDOW` 且 reason 点名 `attack_success` |
 | 起点不唯一 | 两个 A ⇒ UNDECIDABLE + `attack_windows_total={csharp:1,rust:2}` |
 | 两套 ctor 站点 | 合成件里 C#/Rust 构造抽各一行 ⇒ `player_ctor_draw.index` = 1 / 2 |
@@ -126,15 +144,20 @@ index 不是稳定契约。
 
 原 Dura/RNG 账本负例（无攻击、同值、run6 形态、快照不一致、重复 642、比较器非恒等、
 账本缺失/坏头、首差 index、夹层计数、SEED_PROBE 不同）全部保留。真实 run9 输出：
-`E:/tmp/dev-2/rngdiv-run9-analysis-v2.json`（`status=DIAGNOSED`，classification 同下，
-`attack_windows_total=1/1`，`attack_draw_counts` 两侧 `atk_power_a/b/attack_success` 各 1）。
+`E:/tmp/dev-2/rngdiv-run9-analysis-v3.json`（`status=DIAGNOSED`，classification 同下，
+`attack_windows_total=1/1`，`player_attack_counts` 两侧 A/B/C 各 1、窗口 foreign 0/0、
+trailing 0/0）。注意 run9 的 `all_attack_counts` 两侧差别很大（C# `atk_power_base:16`、
+`hit_gate:16`、`hit_struck_damage:18`；Rust 无前三者、`hit_struck_damage:206`），
+那是怪物/共享站点的背景，**不作为攻击路径判据**。
 
 ## A4：R 窗口收口
 
 未在本卡运行真机（本卡只读诊断），也没有修改实现。当前 master 的 n13 复跑应：
 
-1. 用 `--rng-log` 采集两侧账本，确认 `SEED_PROBE` 相同、攻击局部 shape 仍为
-   `[atk_power_a, atk_power_b, attack_success]`；
+1. 用 `--rng-log` 采集两侧账本，确认 `SEED_PROBE` 相同、`attack_windows_total` 两侧为 1、
+   玩家独占 shape 仍为 `[atk_power_a, atk_power_b, attack_success]`、`player_attack_counts`
+   A/B/C 各 1；窗口内若出现 `foreign_attack_draws_between_a_success > 0`（C# 怪物线程插入），
+   按 foreign 记录，不据此判 DIVERGENCE；
 2. 观察 C# 同一攻击内是否仍有 Wondering 夹层、Rust 是否为 0；必要时做两次同 seed C# 复跑，
    若 C# Dura 自身在 run-to-run 变化，则作为“共享 RNG 跨线程非契约”的直接证据；
 3. Dura 相等不是本实现可单方面保证的量；若仍差，须 owner/coordinator 给出“并发 RNG 交错
