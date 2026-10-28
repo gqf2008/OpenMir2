@@ -75,8 +75,10 @@ Rust：`mir2-rs/bins/game-svr/src/smframe.rs:262-345`；默认（env 未设）�
 新增 `card_window --selftest` 15e 永久断言：alt rust env 无 pin、stack 无 `-PinChecks`；
 `window-layout` env=`0` 且 `-PinChecks/-PinLog` 可观测；`window-testdb` 无 pin；
 把 alt 污染成含 pin、或删掉 `window-layout` env 的副本，都必须不满足。实测
-`card_window selftest 469/469 GREEN`。外部负例“给 alt 注入 pin”由 15e 与 preflight
-`pin_static` 双重点名。
+`card_window selftest 469/469 GREEN`。`preflight_private_stack --selftest` 同步扩到
+**54/54**：`pin_static` 现在同时校验 `window-layout` 的 env/`-PinChecks`/`-PinLog`，并保留
+“alt 不得含布局 env”的硬断言；roster 允许 `window-layout`。外部负例“给 alt 注入 pin”、
+“删 window-layout pin”都会命名红。
 
 未改生产默认，也未改 `rules.json`：53 仍按原规则 fail-closed 比较，本轮不新增掩码。
 
