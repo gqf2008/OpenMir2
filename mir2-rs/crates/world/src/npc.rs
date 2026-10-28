@@ -861,6 +861,7 @@ mod tests {
         player.race = crate::entity::ACTOR_RACE_PLAY;
         player.dc = 0x0A_14;
         let pid = world.add_entity(player);
+        assert!(world.enter_world(pid), "玩家必须落图，656 才有观察者");
         if let Some(n) = world.entities.get_mut(nid).and_then(|e| e.npc.as_mut()) {
             n.run_tick = 0;
         }
@@ -874,11 +875,24 @@ mod tests {
         );
         world.npc_tick();
         let refs = world.take_monster_ref_msgs();
-        assert!(
-            refs.iter()
-                .any(|m| m.ident == crate::monai::RM_CHANGENAMECOLOR && m.actor_id == nid),
-            "NormNpc base.Run 必须出队并产 656：{refs:?}"
+        let colors: Vec<_> = refs
+            .iter()
+            .filter(|m| m.ident == crate::monai::RM_CHANGENAMECOLOR)
+            .collect();
+        assert_eq!(colors.len(), 1, "恰一条 656：{refs:?}");
+        let color = colors[0];
+        assert_eq!(color.actor_id, nid);
+        assert_eq!(color.recipients, vec![pid], "观察者必须收到 656");
+        assert_eq!(
+            (
+                color.w_param,
+                color.n_param1,
+                color.n_param2,
+                color.n_param3
+            ),
+            (0, 0, 0, 0)
         );
+        assert!(!color.self_only);
         assert!(world
             .entities
             .get(nid)

@@ -3039,6 +3039,7 @@ mod tests {
         w.enable_merchant_tick();
         let mid = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
         let pid = w.add_entity(player_entity(0, "hero", 6, 5));
+        assert!(w.enter_world(pid), "玩家必须落图，656 才有观察者");
         {
             let st = w
                 .entities
@@ -3058,11 +3059,24 @@ mod tests {
         w.merchant_tick();
 
         let refs = w.take_monster_ref_msgs();
-        assert!(
-            refs.iter()
-                .any(|m| m.ident == crate::monai::RM_CHANGENAMECOLOR && m.actor_id == mid),
-            "Merchant base.Run 必须把 RM_STRUCK 出队并产 656：{refs:?}"
+        let colors: Vec<_> = refs
+            .iter()
+            .filter(|m| m.ident == crate::monai::RM_CHANGENAMECOLOR)
+            .collect();
+        assert_eq!(colors.len(), 1, "恰一条 656：{refs:?}");
+        let color = colors[0];
+        assert_eq!(color.actor_id, mid);
+        assert_eq!(color.recipients, vec![pid], "观察者必须收到 656");
+        assert_eq!(
+            (
+                color.w_param,
+                color.n_param1,
+                color.n_param2,
+                color.n_param3
+            ),
+            (0, 0, 0, 0)
         );
+        assert!(!color.self_only);
         assert!(
             w.entities.get(mid).unwrap().ai.pending_struck.is_empty(),
             "出队后队列必须清空"
