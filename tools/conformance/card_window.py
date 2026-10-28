@@ -3597,7 +3597,11 @@ def _parse_assets_row(out, n_decl):
 #   * `--dry-run` 只打印计划、不连库。
 #
 # 证据：`<side>/save_settle.json` = {side,db,enabled,window_ms,quiet_ms,poll_ms,
-# require_changes, samples:[{t_ms,sha256_12}], changes, settled, elapsed_ms, action, rc, error}。
+# require_changes, baseline:{sha256_12,witness,action}, baseline_changed,
+# samples:[{t_ms,sha256_12}], window_changes, changes, settled, elapsed_ms, action, rc, error}。
+# probe 前另有 `<side>/save_settle_baseline.json`：run10 证明 C# 可在 probe 退出前完成
+# 落库；只看 probe 之后的窗口会把「已变化且静默」误报 no_change。changes 计入
+# baseline_changed 的那一次，但 window_changes 单独保留窗口内变化数。
 SAVE_SETTLE_DEFAULTS = {"enabled": True, "window_ms": 5000, "quiet_ms": 800,
                         "poll_ms": 200, "require_changes": True}
 SAVE_SETTLE_KEYS = ("enabled", "window_ms", "quiet_ms", "poll_ms", "require_changes")
@@ -3752,11 +3756,63 @@ def _sql_identifiers(sql):
     return set(re.findall(r"`([^`]+)`", body))
 
 
+def save_settle_baseline(runner, side, prof, sc, env, sql_fn=None, timeout=120):
+    """probe **之前**读取目标行指纹，作为「本次运行前」基线。
+
+    卡 `openmir2-softclose-waitfor-ack` run10：C# 在 probe 结束前就完成落库，旧的
+    `wait_save_settled` 只从 probe 之后采样，永远看不到那次变化 ⇒ 误报 no_change。
+    本函数必须在 placement/inventory 夹具之后、起栈之前调用；失败即 rc=2（不拍库）。
+    """
+    res = {"side": side, "db": None, "chars": None, "fingerprint": None,
+           "sha256_12": None, "witness": None, "action": None, "rc": None,
+           "error": None}
+    chr_name = str(prof.get("char_name") or "")
+    try:
+        db = placement_characters_db(side, sc)
+        res["db"] = db
+        if not chr_name:
+            raise ConfigError("存档基线需要 profile 的 char_name")
+        if sql_fn is None:
+            client = placement_db_client(prof, side)
+            argv = _mysql_argv(client)
+
+            def sql_fn(text):
+                rc, out, err = runner.run(side, "save_settle_baseline", argv, env=env,
+                                          timeout=timeout, stdin_text=text, capture=True)
+                if rc != 0:
+                    raise ConfigError("save_settle_baseline 查询失败（mysql rc=%s）：%s"
+                                      % (rc, (err or out or "").strip()[:300]))
+                return out
+    except ConfigError as e:
+        res["error"] = "存档基线前置校验失败：%s" % e
+        res["rc"] = 2
+        return res
+    if getattr(runner, "dry_run", False):
+        res["action"] = "dry-run"
+        res["rc"] = 0
+        return res
+    try:
+        fp = sql_fn(_save_settle_sql(db, chr_name)).strip("\r\n")
+    except ConfigError as e:
+        res["error"] = "存档基线读取失败：%s" % e
+        res["rc"] = 2
+        return res
+    witness, werr = _save_settle_witness(fp)
+    res.update(fingerprint=fp,
+               sha256_12=hashlib.sha256(fp.encode("utf-8")).hexdigest()[:12],
+               witness=witness, action="baseline", rc=0)
+    if werr:
+        res["witness_error"] = werr
+    return res
+
+
 def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
-                      timeout=120, clock=None):
+                      timeout=120, clock=None, baseline=None):
     """probe 之后、dbsnap 之前的「存档落定」等待（卡 `openmir2-harness-save-time-symmetry`）。
 
     `sql_fn(sql_text) -> str` 可用测试夹具注入；生产路径走该侧 mysql 客户端。
+    `baseline` = [`save_settle_baseline`] 在 **probe 之前**读到的行指纹；首样本若与其不同，
+    `baseline_changed=true` 并计入 `changes`（run10 的落库在 probe 退出前已完成）。
     失败（DB 不可用 / 窗口内不落定）⇒ rc=2 + `save_unsettled`，调用方不得继续拍库。
     """
     import time as _time
@@ -3775,7 +3831,12 @@ def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
            # 将来新加的路径）若默认 False，就会把「静默是负向判据」这道门静默关掉
            # （reviewer-21 delta 实测：不带该键 + 恒定指纹 => rc=0 settled / changes=0）。
            "require_changes": bool(settle.get("require_changes", True)),
-           "samples": [], "changes": 0,
+           "samples": [], "changes": 0, "window_changes": 0,
+           "baseline": ({"sha256_12": baseline.get("sha256_12"),
+                         "witness": baseline.get("witness"),
+                         "action": baseline.get("action")}
+                        if baseline else None),
+           "baseline_changed": False,
            "witness_first": None, "witness_last": None,
            "settled": False, "elapsed_ms": 0, "action": None, "rc": None,
            "error": None}
@@ -3829,9 +3890,13 @@ def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
             if res.get("witness_first") is None:
                 res["witness_first"] = witness
             res["witness_last"] = witness
+            baseline_fp = (baseline or {}).get("fingerprint")
+            if baseline_fp is not None and len(res["samples"]) == 1:
+                res["baseline_changed"] = fp != baseline_fp
             settled, changes, _ = settle_decision(
                 [(s["t_ms"], s["sha256_12"]) for s in res["samples"]], res["quiet_ms"])
-            res["changes"] = changes
+            res["window_changes"] = changes
+            res["changes"] = changes + (1 if res["baseline_changed"] else 0)
             elapsed = t - t_start
             res["settled"] = settled
             res["elapsed_ms"] = elapsed
@@ -3851,8 +3916,9 @@ def wait_save_settled(runner, side, prof, sc, settle, env, sql_fn=None,
             # 观满整个 window 仍无变化才是 no_change；此时静默仍不等于存档已触发。
             res["action"] = "no_change_observed"
             res["error"] = ("save_unsettled: no_change_observed —— require_changes=true "
-                            "但实际观测的 %dms 内没有任何变化（changes=0，采样 %d 次；"
-                            "db=%s 行=%s；window 上限 %dms）—— 静默 != 存档已触发，"
+                            "但实际观测的 %dms 内没有任何变化（changes=0，"
+                            "baseline_changed=false，采样 %d 次；db=%s 行=%s；"
+                            "window 上限 %dms）—— 静默 != 存档已触发，"
                             "该侧 DB 面不采信"
                             % (res["elapsed_ms"], len(res["samples"]), db, chr_name,
                                res["window_ms"]))
@@ -5410,6 +5476,29 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
                             % (", ".join(parts), side))
             return res
 
+        # 2b) **存档基线（probe 之前）**：run10 证明 C# 会在 probe 返回前完成落库；
+        #     只在 probe 后采样的旧办法会把「已变化且静默」误判成 no_change。
+        #     位置必须在 placement/inventory 夹具之后、起栈之前。
+        try:
+            settle_cfg = profile_save_settle(prof, side)
+        except ConfigError as e:
+            res["error"] = "存档落定等待配置非法：%s" % e
+            return res
+        save_baseline = None
+        if settle_cfg.get("enabled"):
+            save_baseline = save_settle_baseline(runner, side, prof, sc, env)
+            res["save_settle_baseline"] = save_baseline
+            try:
+                write_json_file(os.path.join(side_dir, "save_settle_baseline.json"),
+                                save_baseline)
+            except OSError as e:
+                res["error"] = "写 save_settle_baseline.json 失败：%s" % e
+                return res
+            if save_baseline.get("rc") != 0:
+                res["error"] = (save_baseline.get("error")
+                                or "存档基线读取失败（不拍库）")
+                return res
+
         # 3) 起栈
         stack_argv = expand_argv(sc["stack"], ctx)
         stack_attempted = True
@@ -5510,12 +5599,8 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
         #     Rust 在 gate 事件里同步存档、C# 走异步 FrontEngine→DBSrv；拍库前必须两侧都
         #     到「可观测静默」，否则会把「一侧已落库、另一侧仍是基线」误读成行为差异。
         #     窗口内不落定 ⇒ fail-closed（rc=2 save_unsettled），**不拍库**。
-        try:
-            settle_cfg = profile_save_settle(prof, side)
-        except ConfigError as e:
-            res["error"] = "存档落定等待配置非法：%s" % e
-            return res
-        sres = wait_save_settled(runner, side, prof, sc, settle_cfg, env)
+        sres = wait_save_settled(runner, side, prof, sc, settle_cfg, env,
+                                 baseline=save_baseline)
         try:
             write_json_file(os.path.join(side_dir, "save_settle.json"), sres)
         except OSError as e:
@@ -9004,6 +9089,35 @@ def _selftest_save_settle():
     out.append(("wait_save_settled(" in src
                 and src.index("wait_save_settled(") < src.index("# 7) 抓库"),
                 "SETTLE12 接线：run_side 在「# 7) 抓库」之前调用 wait_save_settled"))
+    out.append(("save_settle_baseline(" in src
+                and src.index("save_settle_baseline(") < src.index("stack_argv = expand_argv")
+                and "baseline=save_baseline" in src,
+                "SETTLE12b 接线：基线在起栈前取、并传给 wait_save_settled"))
+
+    tab = chr(9)
+    old_fp = "2026-10-22 12:56:59" + tab + "1" + tab + "2026-10-22 12:56:59"
+    new_fp = "2026-10-29 01:50:54" + tab + "1" + tab + "2026-10-29 01:50:54"
+    baseline = save_settle_baseline(_R(), "csharp", prof, sc, {},
+                                    sql_fn=lambda _s: old_fp)
+    out.append((baseline["rc"] == 0 and baseline["action"] == "baseline"
+                and baseline["fingerprint"] == old_fp
+                and baseline["witness"] == old_fp.split(tab),
+                "SETTLE20 probe 前基线：读指纹/见证成功"))
+    res_base = wait_save_settled(_R(), "csharp", prof, sc, settle, {},
+                                 sql_fn=lambda _s: new_fp, baseline=baseline,
+                                 clock=make_clock())
+    out.append((res_base["rc"] == 0 and res_base["action"] == "settled"
+                and res_base["baseline_changed"] is True
+                and res_base["window_changes"] == 0 and res_base["changes"] == 1,
+                "SETTLE21 probe 前已落库、窗口内恒静 => rc=0（baseline_changed 计入一次变化）"))
+    res_base_same = wait_save_settled(_R(), "csharp", prof, sc, settle, {},
+                                      sql_fn=lambda _s: old_fp, baseline=baseline,
+                                      clock=make_clock())
+    out.append((res_base_same["rc"] == 2
+                and res_base_same["action"] == "no_change_observed"
+                and res_base_same["baseline_changed"] is False
+                and res_base_same["changes"] == 0,
+                "SETTLE21b 基线与窗口都无变化 => 仍 rc=2 no_change_observed"))
 
     # --- schema 牙（review `b48197f6` F1；两颗表都验）--------------------------
     cols = _schema_columns("characters")
@@ -9470,7 +9584,8 @@ def selftest():
         chk(s_disc["exit_code"] == 0 and s_disc["verdict"] == "PASS",
             "DISC-1 可推导场景 => rc=0/PASS（实际 %s/%s）"
             % (s_disc["exit_code"], s_disc["verdict"]))
-        disc_core = [x for x in disc_steps if x != "save_settle"]
+        disc_core = [x for x in disc_steps
+                     if x not in ("save_settle", "save_settle_baseline")]
         chk(disc_core == ["restore", "stack", "discover", "probe", "db", "stop"] * 2
             + ["compare"],
             "DISC-1 命令序列 discover 先于 probe（剔除 settle 轮询后实际 %s）" % disc_core)
@@ -9518,8 +9633,10 @@ def selftest():
         miss_steps = [c["step"] for c in s_miss["commands"]]
         chk(s_miss["exit_code"] == 2 and "make_index" in err_miss,
             "DISC-4 推导失败 => rc=2 且点名缺哪个变量（%r）" % err_miss)
-        chk(miss_steps == ["restore", "stack", "discover", "stop"],
-            "DISC-4 推导失败 => 不跑场景（不静默用空值，%s）" % miss_steps)
+        miss_core = [x for x in miss_steps
+                     if x not in ("save_settle", "save_settle_baseline")]
+        chk(miss_core == ["restore", "stack", "discover", "stop"],
+            "DISC-4 推导失败 => 不跑场景（不静默用空值，%s）" % miss_core)
         try:
             with open(os.path.join(out_miss, "csharp", "discovered.json"),
                       encoding="utf-8") as f:
