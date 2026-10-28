@@ -2703,13 +2703,21 @@ def compare_main(args):
             except ValueError:  # 已被别处移除 ⇒ 不重复登记
                 continue
             info = cand["info"]
+            # F2（reviewer-21）：reason 必须按**本次实际条件**生成，不能预先写死
+            # 「库快照比过且无差异」——那会在条件未验证时给出误导性说明。
             rec = {
                 "source": "frame", "kind": "oracle_extra_hit",
                 "ident": info["ident"], "card": "openmir2-ident14-extra-hit-adjudication",
                 "ref": "T-270", "oracle": info["oracle_total"],
                 "rust": info["rust_total"], "shapes": info["extra"],
-                "reason": ("oracle 侧多出的 SM_HIT(14)：形状在 T-270 白名单内、body 为空、"
-                           "帧面其它帧全等、两侧库快照比过且无差异 ⇒ 登记为受控非等价差异"),
+                "verified": {"frame_diffs": 0, "db_state": _db.get("state"),
+                             "db_diffs": len(_db.get("diffs") or []),
+                             "db_undecidable": len(_db.get("undecidable") or [])},
+                "reason": ("oracle 侧多出的 SM_HIT(14)：形状在 T-270 白名单内、body 为空；"
+                           "本次帧面除该 ignore 差异外 diffs=0，两侧库快照 state=%r、"
+                           "diffs=%d、undecidable=%d ⇒ 登记为受控非等价差异"
+                           % (_db.get("state"), len(_db.get("diffs") or []),
+                              len(_db.get("undecidable") or []))),
                 "tier": "R", "approved_by": "T-270（卡 openmir2-ident14-extra-hit-adjudication）",
             }
             report["whitelisted"].append(rec)

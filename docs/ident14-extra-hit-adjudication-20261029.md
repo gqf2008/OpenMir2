@@ -48,8 +48,10 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
 2. 两侧库快照都读到且比过（`state=compared`）；
 3. 库无 diffs；4. 库无 undecidable。
 
-放行时写 `frames.oracle_extra_hits[]`（ident / 每形状两侧计数 / 卡号 / T-270 / tier=R），
+放行时写 `frames.oracle_extra_hits[]`（ident / 每形状两侧计数 / 卡号 / T-270 / tier=R / `verified`），
 并进 `whitelisted`（`kind=oracle_extra_hit`）——**显式登记，不是静默掩码**。
+`reason` 与 `verified` 按**本次实际条件**生成（`db_state` / `db_diffs` / `db_undecidable` / `frame_diffs`），
+不预写「库比过且无差异」（reviewer-21 F2）。
 
 ## 4. 牙与变异（`compare_runs selftest`，离线合成输入）
 
@@ -61,6 +63,8 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
 | 形状不符 | 额外帧 param/tag=7,7 ⇒ **rc 2** |
 | body 非空 | 额外帧带 `b"x"` ⇒ **rc 2** |
 | Rust 多发 | 把同形帧放到 rust 侧 ⇒ **rc 2** |
+| 库未比（reviewer-21 F1） | 两侧都没有库快照（`state=absent_both`）⇒ **rc 2**，`blocked_by` 点明「库未比」；实测 head `55a38412` 上删掉 run12 两侧快照**不会**变 PASS（rc 2 / `absent_both` / 无 hits） |
+| 库判不了（reviewer-21 F1） | 库 `state=compared`、diffs=0 但库侧有 undecidable（run.json 缺 `--char-name`）⇒ **rc 2**，`blocked_by` 点明「判不了」 |
 
 变异（逐次恢复并核 sha256，无 MUTATION 残留；`compare_runs.py` 恢复后
 `5a5ac4d165eff1070ec61dc98b9ce105e118592ca21aabe8c4840ee948fad315`）：
@@ -72,6 +76,8 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
 | 删「rust 多发」检查 | Rust 多发牙红 |
 | 删「帧面其它差异」条件 | 伴随帧差牙红 |
 | 删「库有差异」条件 | 伴随库差牙红 |
+| 删「库未比」条件 | 库未比牙红（rc 0 / `absent_both` / 无 hits） |
+| 删「库判不了」条件 | 库判不了牙红 |
 
 五条变异各自只打红对应那颗牙（其余 383 条仍绿）。
 

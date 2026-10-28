@@ -892,6 +892,38 @@ class Selftest(object):
                    and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
                    (rc, und270f))
 
+        # reviewer-21 F1：放行闸的两条阻断（库未比 / 库有判不了）此前没有牙。
+        od270nd = self.write_run("t270-o-nodb", base270 + [hit270])
+        rd270nd = self.write_run("t270-r-nodb", base270)
+        rc, rep = self.compare(od270nd, rd270nd)
+        und270nd = (rep or {}).get("undecidable") or []
+        self.check("T-270：两侧都没有库快照 => rc 2 且 blocked_by 点明「库未比」",
+                   rc == 2
+                   and any(u.get("ident") == 14 and "库未比" in str(u.get("adjudication_blocked_by") or "")
+                           for u in und270nd)
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, ((rep or {}).get("db") or {}).get("state"), und270nd))
+
+        # 库 state=compared、diffs=0，但库侧有 undecidable（run.json 缺 --char-name ⇒ 时间见证定不到行）
+        od270nu = self.write_run("t270-o-dbund", base270 + [hit270], run_meta=False,
+                                 db=_snap270("mir2_test_db_oracle"))
+        rd270nu = self.write_run("t270-r-dbund", base270, run_meta=False,
+                                 db=_snap270("mir2_test_db_rust"))
+        for _d in (od270nu, rd270nu):
+            with open(os.path.join(_d, "run.json"), "w", encoding="utf-8", newline="\n") as _f:
+                json.dump({"argv": ["synth", "nochar"], "started_at": "2026-01-01T00:00:00",
+                           "ended_at": "2026-01-01T00:00:10", "steps": []}, _f)
+                _f.write("\n")
+        rc, rep = self.compare(od270nu, rd270nu)
+        und270nu = (rep or {}).get("undecidable") or []
+        self.check("T-270：库有 undecidable => rc 2 且不放行（blocked_by 点明「判不了」）",
+                   rc == 2
+                   and any(u.get("ident") == 14
+                           and "判不了" in str(u.get("adjudication_blocked_by") or "")
+                           for u in und270nu)
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, ((rep or {}).get("db") or {}).get("state"), und270nu))
+
     # ------------------------------------------------------------------
     # 批次 4（卡 openmir2-conformance-rules-recog-unmask）
     # 这 7 条 action=compare 但此前 head_mask/head_compare 都是 None，而 global
