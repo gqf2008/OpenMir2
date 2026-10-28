@@ -2576,9 +2576,9 @@ def _selftest_movable_201(mod):
     bag = client_item(1)
     bag_other = client_item(2)
 
-    def fr(idx, ident, body=b"", series=0):
+    def fr(idx, ident, body=b"", series=0, param=0):
         return {"index": idx, "line": idx + 1, "ident": ident, "body": body,
-                "body_sha256": None, "param": 0, "tag": 0, "series": series,
+                "body_sha256": None, "param": param, "tag": 0, "series": series,
                 "phase": "gamegate", "recog": 7, "seq": idx, "t_ms": idx,
                 "conn": 1, "raw": {}}
 
@@ -2592,11 +2592,15 @@ def _selftest_movable_201(mod):
         return mod.compare_streams(stream("oracle", ofl), stream("rust", rfl), rules)
 
     base_o = [bag_fr] + other
-    for pos in (0, 1, 2):
+    # 4 个插入位都必须是常驻断言，尤其 pos=len(other)（真正的末尾）；只测 0/1/2
+    # 会漏掉尾位回归（reviewer-21 N1）。
+    for pos in range(len(other) + 1):
         moved = other[:pos] + [bag_fr] + other[pos:]
         c = run(base_o, moved)
-        chk(c["diffs"] == [] and c["movable_frames"]["counts_equal"] is True,
-            "movable201 A1：仅移动 201 到第 %d 位 ⇒ diffs=[]" % pos,
+        chk(c["diffs"] == [] and c["movable_frames"]["counts_equal"] is True
+            and c["movable_frames"]["pairs_compared"] == 1,
+            "movable201 A1：仅移动 201 到插入位 %d/%d ⇒ diffs=[]、pairs=1"
+            % (pos, len(other)),
             (c["diffs"][:2], c["movable_frames"]))
 
     moved_non201 = [other[1], other[0], other[2], bag_fr]
@@ -2616,6 +2620,14 @@ def _selftest_movable_201(mod):
     c = run(base_o, [bad_bag] + other)
     chk(any(d.get("kind") == "bagitems_record" for d in c["diffs"]),
         "movable201 A2：改 201 未掩字节 ⇒ 判红（bagitems_record）", c["diffs"][:2])
+
+    # N2：body 完全相同、只改 201 的 param ⇒ 必须有 head 差异。删除
+    # `_compare_movable_subsequence` 的唯一 head_compare 行时本项必红。
+    bad_param = fr(40, 201, bag, 3, param=1)
+    c = run(base_o, [bad_param] + other)
+    chk(any(d.get("ident") == 201 and d.get("field") == "param"
+            and d.get("kind") == "head" for d in c["diffs"]),
+        "movable201 A2：仅 201 param 不同 ⇒ 判红（head/param）", c["diffs"][:2])
 
     bad_other = [fr(10, 51, b"z", 1), other[1], other[2]]
     c = run(base_o, [bag_fr] + bad_other)
