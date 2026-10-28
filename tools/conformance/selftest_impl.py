@@ -1039,6 +1039,44 @@ class Selftest(object):
         self.check("T-270 Y3：PENDING 且有候选 => pending_review_used 含 T-270",
                    any(str(x).startswith("T-270") for x in _used_y3), (rc, _used_y3))
 
+        # ---- 重开后的 Dir 族扩展（run24：49,49,1）----
+        # 新形状自带 decision="" ⇒ 视同 PENDING：只登记候选、不放行（不能白蹭规则级批准）。
+        hit270d1 = self.frame(14, b"", **dict(heads_o, seq=805, param=49, tag=49, series=1))
+        od270d1 = self.write_run("t270-o-dir1", base270 + [hit270d1],
+                                 db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270d1, rd270)
+        _fr_d1 = (rep or {}).get("frames") or {}
+        _und_d1 = (rep or {}).get("undecidable") or []
+        self.check("T-270 Dir=1（仓库规则 decision 为空）：只登记候选、仍 rc 2、blocked_by 点明形状裁决未落地",
+                   rc == 2
+                   and bool(_fr_d1.get("oracle_extra_candidates"))
+                   and not _fr_d1.get("oracle_extra_hits")
+                   and any(u.get("ident") == 14
+                           and "49,49,1" in str(u.get("adjudication_blocked_by") or "")
+                           for u in _und_d1),
+                   (rc, _fr_d1.get("oracle_extra_candidates"), _und_d1))
+
+        path270_d1ok = _rules270_variant(
+            "rules-270-dir1-approved.json",
+            lambda r: [e.__setitem__("decision", "7c9f9525c63402155d37b5c8e09d4ee8d4486683")
+                       for e in r["oracle_extra_shapes"] if e.get("shape") == "49,49,1"])
+        rc, rep = self.compare(od270d1, rd270, ["--rules", path270_d1ok])
+        _fr_d1ok = (rep or {}).get("frames") or {}
+        self.check("T-270 Dir=1（合成裁决）：形状+上界+零副作用 => rc 0 且显式登记",
+                   rc == 0 and bool(_fr_d1ok.get("oracle_extra_hits")),
+                   (rc, _fr_d1ok.get("oracle_extra_hits"), (rep or {}).get("undecidable")))
+
+        # reviewer-20 R20-W1：max 边界相等（delta==cap）必须放行；`>`→`>=` 的变异要红。
+        path270_cap1 = _rules270_variant(
+            "rules-270-cap1.json",
+            lambda r: [e.__setitem__("max", 1)
+                       for e in r["oracle_extra_shapes"] if e.get("shape") == "49,49,5"])
+        rc, rep = self.compare(od270, rd270, ["--rules", path270_cap1])
+        _fr_cap = (rep or {}).get("frames") or {}
+        self.check("T-270 max 边界：delta == cap（1==1）=> 放行（「不超过」含相等）",
+                   rc == 0 and bool(_fr_cap.get("oracle_extra_hits")),
+                   (rc, _fr_cap.get("oracle_extra_hits"), (rep or {}).get("undecidable")))
+
     # ------------------------------------------------------------------
     # 批次 4（卡 openmir2-conformance-rules-recog-unmask）
     # 这 7 条 action=compare 但此前 head_mask/head_compare 都是 None，而 global

@@ -1589,8 +1589,20 @@ def parse_oracle_extra_shapes(rule):
         if cap < 0:
             invalid.append(str(raw))
             continue
-        shapes[",".join(parts)] = cap
+        _dec = None
+        if isinstance(raw, dict) and "decision" in raw:
+            _dec = str(raw.get("decision") or "").strip()
+        shapes[",".join(parts)] = {"max": cap, "decision": _dec}
     return shapes, invalid
+
+
+def valid_decision_oid(value):
+    """裁决 oid 必须是 40 位 hex（可带 `decision=` 前缀）；否则视为无效（R20-Z1）。"""
+    dec = str(value or "").strip()
+    if not dec:
+        return False
+    oid = dec.split("decision=", 1)[-1] if "decision=" in dec else dec
+    return bool(re.fullmatch(r"[0-9a-fA-F]{40}", oid.strip()))
 
 
 def oracle_extra_status(rule):
@@ -1605,13 +1617,9 @@ def oracle_extra_status(rule):
         return raw or "PENDING"
     # R20-Y1：只写 APPROVED 但没写裁决 oid ⇒ 视同 PENDING（fail-closed）。
     # 否则一次「忘了补 decision」的编辑就能放行，并在记录里留下无 decision 的批准人。
-    dec = str((rule or {}).get("oracle_extra_decision") or "").strip()
-    if not dec:
-        return "PENDING"
     # R20-Z1：decision 必须是 40 位 hex 的 collab 条目 oid（可带 "decision=" 前缀）——
     # 任意串（typo / 旧卡名）不能当批准用。
-    _oid = dec.split("decision=", 1)[-1] if "decision=" in dec else dec
-    if not re.fullmatch(r"[0-9a-fA-F]{40}", _oid.strip()):
+    if not valid_decision_oid((rule or {}).get("oracle_extra_decision")):
         return "PENDING"
     return "APPROVED"
 
@@ -1663,13 +1671,24 @@ def oracle_extra_explainable(row, rule):
         if sha != EMPTY_BODY_SHA256:
             info["reason"] = "shape %s 的 body 非空（sha256=%s）⇒ 有载荷" % (shape, sha)
             return False, info
-        cap = shapes.get(shape)
+        _spec = shapes.get(shape) or {}
+        cap = _spec.get("max")
         if cap is not None and (on - rn) > cap:
             info["reason"] = ("shape %s 的 oracle 额外帧 %d 超过规则上界 max=%d"
                               % (shape, on - rn, cap))
             return False, info
+        # 逐形状裁决（卡 reopen）：条目自带 decision 时按它判（空/非法 ⇒ PENDING），
+        # 未写 decision 的形状继承规则级 decision。新形状必须显式给裁决，不能白蹭旧批准。
+        _shape_dec = _spec.get("decision")
+        if _shape_dec is None:
+            _shape_status = "INHERIT"
+        elif valid_decision_oid(_shape_dec):
+            _shape_status = "APPROVED"
+        else:
+            _shape_status = "PENDING"
         extra.append({"shape": shape, "body_sha256": sha,
-                      "oracle": on, "rust": rn, "delta": on - rn, "max": cap})
+                      "oracle": on, "rust": rn, "delta": on - rn, "max": cap,
+                      "decision": _shape_dec, "decision_status": _shape_status})
     if not extra:
         info["reason"] = "计数差为 0（不该走到这里）"
         return False, info
@@ -2766,6 +2785,11 @@ def compare_main(args):
                 "verified": verified,
             }
             blockers = list(_blockers)
+            _pending_shapes = [e["shape"] for e in (info.get("extra") or [])
+                               if e.get("decision_status") not in (None, "INHERIT", "APPROVED")]
+            if _pending_shapes and status == "APPROVED":
+                blockers.append("shape %s 的裁决未落地/非法（条目自带 decision 为空或不是 oid）"
+                                % "、".join(_pending_shapes))
             if status != "APPROVED":
                 _raw_status = str(rule.get("oracle_extra_status", "PENDING")).strip().upper()
                 if _raw_status == "APPROVED":
