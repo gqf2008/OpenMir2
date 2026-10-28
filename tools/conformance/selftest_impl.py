@@ -803,6 +803,175 @@ class Selftest(object):
         self.check("忽略牙：同一条 14 改回 compare => rc 1（多出的帧立刻暴露）",
                    rc == 1, (rc, (rep or {}).get("diffs")))
 
+        # ---- T-270 受控裁决（卡 openmir2-ident14-extra-hit-adjudication）----
+        # 仓库规则的 T-270 是 PENDING（reviewer-20 R20-X1）⇒ 只登记候选、不放行；
+        # 放行闸本身用合成的 APPROVED 副本测（机制牙）。两条路径都要有永久断言。
+        _dp270 = self.api.load_module("dbsnap_pair", self.api.DBSNAP_PAIR)
+        _cols270 = list(_dp270.TABLE_SPECS["mir2_db.characters_ablity"]["columns"])
+        _char_cols270 = list(_dp270.TABLE_SPECS["mir2_db.characters"]["columns"])
+
+        def _snap270(prefix, level=7, mt="2026-01-01 00:00:05"):
+            # 列集/角色行必须与登记表 **和 run.json 的 --char-name 一致**，否则时间见证
+            # 先判 db_time_witness_unscoped，测不到本卡的裁决。
+            row = ["0"] * len(_cols270)
+            row[_cols270.index("PlayerId")] = "1"
+            row[_cols270.index("Level")] = level
+            if "ModifyTime" in _cols270:
+                row[_cols270.index("ModifyTime")] = mt
+            char_row270 = ["0"] * len(_char_cols270)
+            char_row270[_char_cols270.index("Id")] = "1"
+            char_row270[_char_cols270.index("ChrName")] = "winplay0"
+            char_row270[_char_cols270.index("LASTUPDATE")] = mt
+            return {"format": "dbsnap-inline/1",
+                    "tables": [{"table": prefix + ".characters",
+                                "columns": _char_cols270, "rows": [char_row270]},
+                               {"table": prefix + ".characters_ablity",
+                                "columns": _cols270, "rows": [row]}]}
+
+        rules270 = json.loads(json.dumps(self.builtin_rules))
+        for _r270 in rules270["rules"]:
+            if _r270.get("ident") == 14:
+                _r270["oracle_extra_status"] = "APPROVED"
+                _r270["oracle_extra_decision"] = "selftest: T-270 synthetic approval"
+        path270 = self.rules_file("rules-270-approved.json", rules270)
+
+        base270 = [self.frame(41, bytes([1, 2]), **heads_o)]
+        hit270 = self.frame(14, b"", **dict(heads_o, seq=801, param=49, tag=49, series=5))
+        od270 = self.write_run("t270-o", base270 + [hit270],
+                               db=_snap270("mir2_test_db_oracle"))
+        rd270 = self.write_run("t270-r", base270, db=_snap270("mir2_test_db_rust"))
+
+        # ① 仓库规则（PENDING）：形状全对也不放行，只出候选。
+        rc, rep = self.compare(od270, rd270)
+        fr270p = (rep or {}).get("frames") or {}
+        cands270 = fr270p.get("oracle_extra_candidates") or []
+        self.check("T-270 PENDING（仓库规则）：形状全对也只登记候选、仍 rc 2（R20-X1）",
+                   rc == 2 and bool(cands270) and cands270[0].get("status") == "PENDING"
+                   and not fr270p.get("oracle_extra_hits")
+                   and any(u.get("ident") == 14
+                           and "PENDING" in str(u.get("adjudication_blocked_by") or "")
+                           for u in (rep or {}).get("undecidable", []))
+                   and ((rep or {}).get("rules") or {}).get("rules_pending_review") is True,
+                   (rc, cands270, (rep or {}).get("rules")))
+
+        # ② 合成 APPROVED：零副作用 + 白名单形状 ⇒ 放行并显式登记。
+        rc, rep = self.compare(od270, rd270, ["--rules", path270])
+        fr270 = (rep or {}).get("frames") or {}
+        hits270 = fr270.get("oracle_extra_hits") or []
+        self.check("T-270 APPROVED（合成）：白名单形状的空体 14、无其它帧差、库全等 => rc 0 且显式登记",
+                   rc == 0 and len(hits270) == 1 and hits270[0].get("ident") == 14
+                   and any(w.get("kind") == "oracle_extra_hit" and w.get("ref") == "T-270"
+                           for w in (rep or {}).get("whitelisted", [])),
+                   (rc, hits270, (rep or {}).get("undecidable")))
+
+        rd270db = self.write_run("t270-r-db", base270,
+                                 db=_snap270("mir2_test_db_rust", 8))
+        rc, rep = self.compare(od270, rd270db, ["--rules", path270])
+        und270 = (rep or {}).get("undecidable") or []
+        self.check("T-270：伴随库差 => 不放行（仍 UNDECIDABLE，blocked_by 点明库）",
+                   rc == 2
+                   and any(u.get("ident") == 14 and u.get("kind") == "ignore_rule_mismatch"
+                           and "库" in str(u.get("adjudication_blocked_by") or "")
+                           for u in und270)
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, und270))
+
+        hit270bad = self.frame(14, b"", **dict(heads_o, seq=802, param=7, tag=7, series=5))
+        od270s = self.write_run("t270-o-shape", base270 + [hit270bad],
+                                db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270s, rd270, ["--rules", path270])
+        self.check("T-270：形状不在白名单 => rc 2（不放行）",
+                   rc == 2 and any(u.get("ident") == 14 for u in (rep or {}).get("undecidable", []))
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        hit270body = self.frame(14, b"x", **dict(heads_o, seq=803, param=49, tag=49, series=5))
+        od270b = self.write_run("t270-o-body", base270 + [hit270body],
+                                db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270b, rd270, ["--rules", path270])
+        self.check("T-270：额外帧 body 非空 => rc 2（有载荷不放行）",
+                   rc == 2 and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        od270clean = self.write_run("t270-o-clean", base270,
+                                    db=_snap270("mir2_test_db_oracle"))
+        rd270x = self.write_run("t270-r-extra", base270 + [hit270],
+                                db=_snap270("mir2_test_db_rust"))
+        rc, rep = self.compare(od270clean, rd270x, ["--rules", path270])
+        self.check("T-270：Rust 侧多出同形帧 => rc 2（只放行 oracle 侧多出）",
+                   rc == 2 and any(u.get("ident") == 14 for u in (rep or {}).get("undecidable", []))
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        rd270f = self.write_run("t270-r-framediff",
+                                [self.frame(41, bytes([1, 3]), **heads_o)],
+                                db=_snap270("mir2_test_db_rust"))
+        rc, rep = self.compare(od270, rd270f, ["--rules", path270])
+        und270f = (rep or {}).get("undecidable") or []
+        self.check("T-270：伴随其它帧差 => 不放行（blocked_by 点明帧面）",
+                   rc == 2
+                   and any(u.get("ident") == 14 and "帧面" in str(u.get("adjudication_blocked_by") or "")
+                           for u in und270f)
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, und270f))
+
+        # reviewer-21 F1：放行闸的两条阻断（库未比 / 库有判不了）此前没有牙。
+        od270nd = self.write_run("t270-o-nodb", base270 + [hit270])
+        rd270nd = self.write_run("t270-r-nodb", base270)
+        rc, rep = self.compare(od270nd, rd270nd, ["--rules", path270])
+        und270nd = (rep or {}).get("undecidable") or []
+        self.check("T-270：两侧都没有库快照 => rc 2 且 blocked_by 点明「库未比」",
+                   rc == 2
+                   and any(u.get("ident") == 14 and "库未比" in str(u.get("adjudication_blocked_by") or "")
+                           for u in und270nd)
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, ((rep or {}).get("db") or {}).get("state"), und270nd))
+
+        # 库 state=compared、diffs=0，但库侧有 undecidable（run.json 缺 --char-name ⇒ 时间见证定不到行）
+        od270nu = self.write_run("t270-o-dbund", base270 + [hit270], run_meta=False,
+                                 db=_snap270("mir2_test_db_oracle"))
+        rd270nu = self.write_run("t270-r-dbund", base270, run_meta=False,
+                                 db=_snap270("mir2_test_db_rust"))
+        for _d270 in (od270nu, rd270nu):
+            with open(os.path.join(_d270, "run.json"), "w", encoding="utf-8", newline="\n") as _f270:
+                json.dump({"argv": ["synth", "nochar"], "started_at": "2026-01-01T00:00:00",
+                           "ended_at": "2026-01-01T00:00:10", "steps": []}, _f270)
+                _f270.write("\n")
+        rc, rep = self.compare(od270nu, rd270nu, ["--rules", path270])
+        und270nu = (rep or {}).get("undecidable") or []
+        self.check("T-270：库有 undecidable => rc 2 且不放行（blocked_by 点明「判不了」）",
+                   rc == 2
+                   and any(u.get("ident") == 14
+                           and "判不了" in str(u.get("adjudication_blocked_by") or "")
+                           for u in und270nu)
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, ((rep or {}).get("db") or {}).get("state"), und270nu))
+
+        # R20-X2：同形状额外帧超过规则 max（49,49,5 的 max=2）⇒ 不放行。
+        od270over = self.write_run(
+            "t270-o-over", base270 + [hit270, hit270, hit270],
+            db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270over, rd270, ["--rules", path270])
+        self.check("T-270：同形状 3 条超过 max=2 => rc 2（无界额外帧不放行，R20-X2）",
+                   rc == 2
+                   and any(u.get("ident") == 14 and "max" in str(u.get("adjudication_blocked_by") or "")
+                           for u in (rep or {}).get("undecidable", []))
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # R20-X3：形状键不含 recog（ActorId）。换 actor 同坐标/朝向/空体仍按同一规则判，
+        # 这里锁住「actor 不参与形状」这一登记口径（其余帧与库仍须全等）。
+        hit270actor = self.frame(14, b"", **dict(heads_o, seq=804, param=49, tag=49,
+                                                 series=5, recog=424242))
+        od270actor = self.write_run("t270-o-actor", base270 + [hit270actor],
+                                    db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270actor, rd270, ["--rules", path270])
+        self.check("T-270：recog 不计入形状（不同 actor 同坐标/朝向/空体 => 同判，R20-X3 登记口径）",
+                   rc == 0
+                   and bool(((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("frames", {}).get("oracle_extra_hits"),
+                    (rep or {}).get("undecidable")))
+
     # ------------------------------------------------------------------
     # 批次 4（卡 openmir2-conformance-rules-recog-unmask）
     # 这 7 条 action=compare 但此前 head_mask/head_compare 都是 None，而 global
