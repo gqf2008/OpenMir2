@@ -50,7 +50,10 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
   受击动画；ActorId 是会话内分配的，跨运行不稳定，硬绑只会制造假红。actor 差异本身没有服务端
   后果，而「其它帧全等 + 库全等」已经把可观测状态锁死。若将来要绑 actor，另加
   `oracle_extra_recogs` 白名单并由裁决条目说明（selftest 有 `recog 不计入形状` 的登记牙）。
-- `oracle_extra_status`：**只有显式 `APPROVED` 才放行**；缺省/未知值一律按 PENDING（fail-closed）。
+- `oracle_extra_status`：**只有显式 `APPROVED` 且带非空 `oracle_extra_decision` 才放行**；
+  缺省/未知值、以及「写了 APPROVED 但没写裁决 oid」一律按 PENDING（fail-closed，reviewer-20 R20-Y1，
+  selftest 有对应牙）。`oracle_extra_shapes` 的每个形状**必须带 `max`**，bare string 视为规则非法
+  （R20-Y4，同样有牙——否则新规则能用旧写法绕开上界）。
 
 ## 4. 判定流程（compare_runs.py）
 
@@ -95,6 +98,10 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | 库判不了（F1） | `state=compared`、diffs=0 但库侧有 undecidable ⇒ `rc 2`，`blocked_by` 点明「判不了」 |
 | 超上界（X2） | 同形状 3 条 > `max=2` ⇒ `rc 2`，`blocked_by` 点明 `max` |
 | actor 口径（X3） | 换 recog、同坐标/朝向/空体 ⇒ 同判（登记「actor 不参与形状」） |
+| APPROVED 缺 decision（Y1） | status=APPROVED 但删掉 `oracle_extra_decision` ⇒ 视同 PENDING、`rc 2`、`blocked_by` 点明缺 decision |
+| verified 实际条数（Y2） | 伴随帧差时候选的 `verified.frame_diffs` 必须是实际条数（≥1），不能写死 0 |
+| 影响面（Y3） | PENDING 且本次有候选 ⇒ `rules.pending_review_used` 含 T-270 |
+| bare shape（Y4） | 形状写成 bare string（无 `max`）⇒ 规则非法、不入候选、`rc 2` |
 
 变异（逐次恢复并核 sha256，无 MUTATION 残留；恢复后
 `compare_runs.py` sha256=`185e78aae0565e6655d0d021faad31f20d5147f79866497061f139d51931c40f`）：
@@ -110,14 +117,18 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | 删「库判不了」条件 | 库判不了牙红 |
 | 删 `max` 上界检查 | 超上界牙红（rc 由 2 变 0） |
 | `oracle_extra_status` 恒返回 APPROVED | PENDING 牙红 |
+| 删「APPROVED 必须有 decision」 | Y1 牙红（rc 由 2 变 0） |
+| `verified.frame_diffs` 写死 0 | Y2 牙红 |
+| 不把 T-270 计入 `pending_review_used` | Y3 牙红 |
+| 允许 bare shape 无 max | Y4 牙红（rc 由 2 变 0、候选出现） |
 
 每次变异只打红对应那颗牙（其余仍绿）。
 
-**F1 的复现尝试**：reviewer-21 报「删掉 run12 两侧 db 快照后从 UNDECIDABLE 变 PASS」。在本 head 上
-实测**不成立**：删 `db_snapshot.json` + `db/` ⇒ `rc 2 / state=absent_both / blocked_by「库未比
-（state='absent_both'）」/ 无 hits`；只删一侧 ⇒ `one_sided` 同样 `rc 2`；去掉 run.json 的
-`--char-name`（库 undecidable 非空）⇒ `rc 2 / blocked_by「库有 N 条判不了」`。三例都不产生 PASS。
-若仍能复现，需给出命令与产物路径（可能是 `--rules` 覆盖或 `--db-*` 指向别处）。
+**F1 的两半（reviewer-21 原意）**：① 不删条件时，删 `db_snapshot.json` + `db/` ⇒
+`rc 2 / state=absent_both / blocked_by「库未比」/ 无 hits`；只删一侧 ⇒ `one_sided` 同样 `rc 2`；
+去掉 run.json 的 `--char-name` ⇒ `rc 2 /「库有 N 条判不了」`。② **短路 state/undecidable 检查（变异）后**，
+无库快照的 run12 会变 PASS —— 这正是 F1 说的「缺牙」；本 head 已补两颗牙，删条件即**命名红**
+（变异 M6/M7）。两句同时成立；此前版本只写了前半，读起来像在否认 F1，已按此更正。
 
 ## 6. 离线重算（A4 的离线部分）
 

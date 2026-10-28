@@ -972,6 +972,51 @@ class Selftest(object):
                    (rc, (rep or {}).get("frames", {}).get("oracle_extra_hits"),
                     (rep or {}).get("undecidable")))
 
+        # ---- R20-Y1..Y4 返工牙 ----
+        def _rules270_variant(name, mutate):
+            _d = json.loads(json.dumps(rules270))
+            for _r in _d["rules"]:
+                if _r.get("ident") == 14:
+                    mutate(_r)
+            return self.rules_file(name, _d)
+
+        # Y1：status=APPROVED 但缺 oracle_extra_decision ⇒ 视同 PENDING、不放行。
+        path270_nodec = _rules270_variant(
+            "rules-270-approved-nodec.json", lambda r: r.pop("oracle_extra_decision", None))
+        rc, rep = self.compare(od270, rd270, ["--rules", path270_nodec])
+        _und_y1 = (rep or {}).get("undecidable") or []
+        self.check("T-270 Y1：status=APPROVED 但缺 decision => 视同 PENDING、仍 rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits"))
+                   and any(u.get("ident") == 14
+                           and "oracle_extra_decision" in str(u.get("adjudication_blocked_by") or "")
+                           for u in _und_y1),
+                   (rc, _und_y1))
+
+        # Y4：bare string 形状（没有 max）⇒ 规则非法、不入候选、不放行。
+        path270_bare = _rules270_variant(
+            "rules-270-bare.json", lambda r: r.__setitem__("oracle_extra_shapes", ["49,49,5"]))
+        rc, rep = self.compare(od270, rd270, ["--rules", path270_bare])
+        _fr_y4 = (rep or {}).get("frames") or {}
+        self.check("T-270 Y4：bare shape 缺 max => 规则非法、不入候选、仍 rc 2",
+                   rc == 2 and not (_fr_y4.get("oracle_extra_candidates")
+                                    or _fr_y4.get("oracle_extra_hits")),
+                   (rc, _fr_y4.get("oracle_extra_candidates"), _fr_y4.get("oracle_extra_hits")))
+
+        # Y3：PENDING 且本次有候选 ⇒ pending_review_used 里要出现 T-270（影响面不漏报）。
+        rc, rep = self.compare(od270, rd270)
+        _used_y3 = ((rep or {}).get("rules") or {}).get("pending_review_used") or []
+        self.check("T-270 Y3：PENDING 且有候选 => pending_review_used 含 T-270",
+                   any(str(x).startswith("T-270") for x in _used_y3), (rc, _used_y3))
+
+        # Y2：伴随帧差时，候选记录的 verified.frame_diffs 必须是实际条数（不能写死 0）。
+        rc, rep = self.compare(od270, rd270f, ["--rules", path270])
+        _cands_y2 = ((rep or {}).get("frames") or {}).get("oracle_extra_candidates") or []
+        self.check("T-270 Y2：伴随帧差 => candidate.verified.frame_diffs 为实际条数（>=1）",
+                   bool(_cands_y2)
+                   and int((_cands_y2[0].get("verified") or {}).get("frame_diffs", 0)) >= 1,
+                   (rc, _cands_y2[0].get("verified") if _cands_y2 else None))
+
     # ------------------------------------------------------------------
     # 批次 4（卡 openmir2-conformance-rules-recog-unmask）
     # 这 7 条 action=compare 但此前 head_mask/head_compare 都是 None，而 global
