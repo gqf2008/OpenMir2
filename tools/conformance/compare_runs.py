@@ -1605,6 +1605,24 @@ def valid_decision_oid(value):
     return bool(re.fullmatch(r"[0-9a-fA-F]{40}", oid.strip()))
 
 
+def _extra_approved_by(rule, info):
+    """放行记录的批准人：形状自带裁决的用它自己的 oid，继承的用规则级 oid（去重、保序）。"""
+    out = []
+    if any(e.get("decision_status") in (None, "INHERIT") for e in (info.get("extra") or [])):
+        dec = str((rule or {}).get("oracle_extra_decision") or "").strip()
+        if dec:
+            out.append(dec)
+    for e in (info.get("extra") or []):
+        if e.get("decision_status") == "APPROVED" and e.get("decision"):
+            out.append(str(e["decision"]).strip())
+    seen, uniq = set(), []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return ", ".join(uniq) or "T-270（卡 openmir2-ident14-extra-hit-adjudication）"
+
+
 def oracle_extra_status(rule):
     """`oracle_extra_status`：只有显式 `APPROVED` 才允许放行。
 
@@ -2823,8 +2841,7 @@ def compare_main(args):
                                % (_db.get("state"), len(_db.get("diffs") or []),
                                   len(_db.get("undecidable") or []))),
                        tier="R",
-                       approved_by=str(rule.get("oracle_extra_decision")
-                                       or "T-270（卡 openmir2-ident14-extra-hit-adjudication）"))
+                       approved_by=_extra_approved_by(rule, info))
             report["whitelisted"].append(rec)
             report["frames"]["oracle_extra_hits"].append(rec)
 
