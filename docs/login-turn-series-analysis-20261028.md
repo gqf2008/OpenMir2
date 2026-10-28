@@ -46,13 +46,15 @@
 | `SM_STARTPLAY(525)` | 389ms | 378ms | 11ms |
 | `SM_SENDNOTICE(658)` | 2128ms | 734ms | 1394ms |
 | 首条 `SM_TURN(10)` | 3024ms | 1735ms | 1289ms |
-| 658 → 首扫/出现帧 | 896ms | 1001ms | 105ms |
+| 658 → 首个出现帧 `51` | 896ms | 0ms | 896ms |
+| 658 → 首条 `SM_TURN(10)` | 896ms | 1001ms | 105ms |
 | 525 → 658 | 1739ms | 356ms | 1383ms |
 
-- 绝对 1394ms 差**全部发生在 658 之前**（前四帧只差 11ms），不能归给 `SM_TURN` 或 41 的出队。
+- 绝对 1394ms 差**全部发生在 658 之前**（前四帧逐对差 = 1/-3/11/11ms，最大 11ms），不能归给 `SM_TURN` 或 41 的出队。
+- **658 之后不能再说“两侧只差 105ms”**：首个出现帧 `51` 是 C# `2128→3024`（+896ms）、Rust `734→734`（+0ms），观测差 896ms。C# 的 896ms 延迟可能来自 `RunNotice → CM_LOGINNOTICEOK → UserLogon` 等待、TCP/探针批处理或真实服务端时点差；现有帧时间戳只有接收时刻，无法区分，必须留 A4 用服务端 tick/发送侧证据判定。
 - C# `t=3024` 的登录尾帧与出现帧同批到达；帧时间戳是探针**接收时间**，不是 `SendSocket` 时刻，不能据此反推服务端 tick。
 - oracle `PlayObject` ctor 覆盖为 `RunTick=GetTickCount()/RunTime=250/SearchTime=1000`（`src/M2Server/Player/PlayObject.cs:898-901`），首扫门在 `WorldServer.cs:663-667`；Rust 首扫基准是 `PLAYER_SEARCH_TIME=1000`（`mir2-rs/crates/world/src/entity.rs:18`），并有 `first_scan_base_is_playobject_ctor_not_map_entry` / `login_search_base_is_captured_at_playobject_ctor` 钉住。
-- 因而只能在**同一观测窗**内比较相对关系；“C# 更晚绝对时点 = 协议时序差”不成立。真正的服务端发送时刻差需要服务端 tick 日志，现有产物没有，`window_required` 保持。
+- 因而只能在**同一观测窗**内比较相对关系；“C# 更晚绝对时点 = 协议时序差”不成立。尤其首个出现帧的 896ms 观测延迟既不能证明真差，也不能证明只是批处理；需要服务端 tick 日志与 A4 同窗重拍，`window_required` 保持。
 
 ## 5. 处置建议
 
