@@ -51,11 +51,11 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
 
 **Dir 族与逐形状裁决**：`(49,49)` 下已观测到 Dir=5（run21，2 条）与 Dir=1（run24，1 条），
 两者都零副作用但**分开登记**——每个 Dir 一个 `max`，且条目可自带 `decision`：
-写了 `decision` 就按它判（必须 40-hex oid），没写则继承规则级 approval。
+**键缺失、空串或非 40-hex 一律按 PENDING**——没有「继承规则级 approval」这条路。
 **每个形状必须自带 `decision`**（reviewer-21 F1）：键**缺失**与空串/非法 oid 一视同仁按 PENDING，
 **不允许继承规则级批准**——否则删掉一个 `decision` 键就能让新形状蹭旧批准。`49,49,1` 已由 owner 单独裁决
 （comment `f0b5734e0d67718618473bc2fb54e8d6f8ea58dd`，APPROVED，仅该形状、仅 oracle 侧），
-放行记录的 `approved_by` 会写**该形状自己的 oid**（继承的写规则级 oid，混合时并列）。
+放行记录的 `approved_by` 只写**各形状自己的裁决 oid**（多形状时并列去重）。
 
 - `shape` = `param,tag,series`（坐标 + 朝向）；`max` = 该形状允许的 oracle 额外帧**上界**
   （reviewer-20 R20-X2：同形状不能无界放行；上限取 A1 证据里实际出现过的条数）。
