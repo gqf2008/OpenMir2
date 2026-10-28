@@ -19900,6 +19900,27 @@ fn drain_special_ref_msgs(
 /// `#[allow(clippy::let_and_return)]`：`RM_DIGUP` 支必须把 `sm_digup(…)` 的返回值绑到
 /// `let` 再作为块尾返回——对账门 `recon_gates.py` 的 `_call_value_dropped` 会把「调用点
 /// 即裸块尾且签名行以 `(` 收尾」误判为 `value_dropped`（`SM_DIGUP` 会从 implemented 降级）。
+/// **卡 `openmir2-656-642-frame-order`（tier=R）**：同拍攻击帧序。
+///
+/// oracle：玩家 `AttackSuccess` 的 `DoDamageWeapon` 先发 `SM_DURACHANGE(642)` 给攻击者；
+/// 目标的 `RM_STRUCK` 在目标自己的 `Run` 中才经 `BreakHolySeizeMode → RefNameColor` 发 656。
+/// 本宿主把 642 交给 [`drain_attack_weapon_wear`]，656 在 [`drain_monster_ref_msgs`]；
+/// 两种帧共用同一 gate channel ⇒ 必须按此函数顺序调用，否则线上反序。
+#[allow(clippy::too_many_arguments)]
+fn drain_attack_wear_then_monster_refs(
+    rec: &mir2_world::TickRecord,
+    world: &mut mir2_world::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    catalog: &game_svr::ability::StdItemCatalog,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
+) -> usize {
+    let sent = drain_attack_weapon_wear(rec, online, gates, catalog);
+    drain_monster_ref_msgs(world, displays, online, gates, pet_cfg);
+    sent
+}
+
 #[allow(clippy::let_and_return)]
 fn drain_monster_ref_msgs(
     world: &mut mir2_world::World,
@@ -21255,6 +21276,8 @@ fn tick_world_with_specials(
     let mut rec = tick_world_head_with_specials(
         world, host, table, registry, displays, online, gates, pet_cfg,
     );
+    // 测试 helper 没有 TickRecord 的武器事件消费，仍需排怪物 ref，保持既有测试语义。
+    drain_monster_ref_msgs(world, displays, online, gates, pet_cfg);
     world.tick_tail(&mut rec);
     rec
 }
@@ -21367,8 +21390,10 @@ fn tick_world_head_with_specials(
         let _ = world.flush_sculture_spawns(&mut spawner);
     }
     drain_special_ref_msgs(world, online, gates);
-    // **MB-1**：怪物 `Run` 覆写的出帧（`SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`）。
-    drain_monster_ref_msgs(world, displays, online, gates, pet_cfg);
+    // 怪物 `Ref*` 帧（含 RM_CHANGENAMECOLOR）由宿主在「攻击武器磨损之后」统一排水，
+    // 见 [`drain_attack_wear_then_monster_refs`]；此处保留 `displays`/`pet_cfg` 形参
+    // 以维持测试 helper 的同一签名。
+    let _ = (displays, pet_cfg);
     rec
 }
 
@@ -25432,6 +25457,16 @@ fn sim_loop(
             &gates,
             &enter_cfg.pet_cfg,
         );
+        // 同拍帧序：642（攻击者武器磨损）先于怪物 ref 656（目标 BreakHolySeizeMode）。
+        let _attack_weapon_wear = drain_attack_wear_then_monster_refs(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &enter_cfg.catalog,
+            &enter_cfg.pet_cfg,
+        );
         // oracle `PlayObject.Message.cs:262-266`：3s `CheckDupObjTick` 支里的 `GetStartPoint()`。
         apply_get_start_point_after_tick(
             &world,
@@ -25606,8 +25641,6 @@ fn sim_loop(
         // **卡 `openmir2-attack-weapon-wear-642`**：本 tick `AttackSuccess` 的武器磨损下行
         // （202 直发 + 642 入队，只投攻击者自己）。与武器耐久族相邻：同属「武器状态」帧，
         // oracle 都在攻击/Run 段内即时或入队发出。
-        let _attack_weapon_wear =
-            drain_attack_weapon_wear(&rec, &online, &gates, &enter_cfg.catalog);
         let _weapon_durability = drain_weapon_durability(&rec, &mut world, &online, &gates);
         drain_pk_flag_downlink(&mut world, &online, &gates);
         // **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()`→`DelMember`）帧——在本 tick 的
@@ -78761,16 +78794,14 @@ mod attack_weapon_wear_tests {
         );
     }
 
-    /// **接线牙**：`sim_loop` 里必须恰有一条 `drain_attack_weapon_wear` 生产调用，且位于
-    /// `drain_weapon_durability` 之前（同属武器状态帧族）。
+    /// **接线牙**：`sim_loop` 里必须恰有一条 `drain_attack_wear_then_monster_refs`
+    /// 生产调用，且位于 `drain_weapon_durability` 之前。该 helper 自身保证 642 先于 656。
     ///
     /// 红检（实测）：把该调用行注释掉 ⇒ 本用例必红（0 命中）。
     #[test]
-    fn drain_attack_weapon_wear_call_is_wired_in_sim_loop() {
+    fn drain_attack_wear_then_monster_refs_is_wired_in_sim_loop() {
         let src = include_str!("lib.rs");
         let lines: Vec<&str> = src.lines().collect();
-        // 只在 `fn sim_loop(` 到它内部第一条 `drain_weapon_durability` 之间找——本卡用例里也有
-        // 直接调用 `drain_attack_weapon_wear`，不能算生产调用行。
         let sim_start = lines
             .iter()
             .position(|l| l.starts_with("fn sim_loop("))
@@ -78789,14 +78820,83 @@ mod attack_weapon_wear_tests {
             .enumerate()
             .filter(|(i, l)| {
                 (sim_start..lamp).contains(i)
-                    && l.trim().starts_with("drain_attack_weapon_wear(&rec")
+                    && l.trim() == "let _attack_weapon_wear = drain_attack_wear_then_monster_refs("
             })
             .map(|(i, _)| i)
             .collect();
         assert_eq!(
             hits.len(),
             1,
-            "`sim_loop` 内（`drain_weapon_durability` 之前）必须恰一条生产调用行（0 = 被删/被注释/改坏；>1 = 重复）；命中 {hits:?}"
+            "`sim_loop` 内（`drain_weapon_durability` 之前）必须恰一条生产 helper 调用；命中 {hits:?}"
+        );
+    }
+
+    /// **同拍帧序牙**：一次攻击同时产 642 与 656 时，gate channel 必须先 642 后 656。
+    /// 红检：交换 helper 内两条 drain 调用 ⇒ 本用例红。
+    #[test]
+    fn attack_weapon_642_precedes_monster_ref_656() {
+        let mut world = mir2_world::World::new(64, 64);
+        world.clock_ms = 100_000;
+        world.open_session("p");
+        let p = world
+            .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
+            .expect("玩家 p 进图");
+        let mut foe = mir2_world::Entity::new(0, "foe", 10, 11);
+        foe.race = 80;
+        foe.hp = 1000;
+        foe.max_hp = 1000;
+        let foe = world.add_entity(foe);
+        world.entities.get_mut(p).unwrap().use_items[1] = weapon_slot(5000, 9000);
+        world.attack_cmd(p, foe);
+        let rec = world.tick();
+        assert_eq!(rec.weapon_wears.len(), 1, "攻击产生 642 事件");
+
+        world
+            .pending_monster_ref_msgs
+            .push(mir2_world::MonsterRefMsg {
+                actor_id: p,
+                ident: mir2_protocol::messages::RM_CHANGENAMECOLOR,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                target_x: 0,
+                target_y: 0,
+                dir: 0,
+                x: 10,
+                y: 10,
+                map_id: 0,
+                status: 0,
+                self_only: false,
+                recipients: vec![p],
+            });
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, online_entry("p", 901, p));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let gates = gates_with(tx);
+        let displays = downlink::DisplayTable::new();
+        let catalog = catalog_with_weapon(10);
+        let _ = drain_attack_wear_then_monster_refs(
+            &rec,
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &catalog,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
+        let idents: Vec<u16> = take(&mut rx)
+            .iter()
+            .map(|(_, body)| cm(body).ident)
+            .collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_DURACHANGE,
+                mir2_protocol::messages::SM_CHANGENAMECOLOR
+            ],
+            "同拍必须先 642 后 656"
         );
     }
 
