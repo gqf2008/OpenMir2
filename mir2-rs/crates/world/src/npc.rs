@@ -376,6 +376,10 @@ impl World {
                     if r.hit {
                         out.hits.push(id);
                     }
+                    // `NormNpc.Run` 尾 `base.Run()`（`NormNpc.cs:1604-1611`）：
+                    // `AnimalObject.Run` → `BaseObject.Run`，必须消费 RM_STRUCK。
+                    crate::monai::animal_run(self, id);
+                    crate::monai::base_object_run_monster(self, id);
                 }
             } else if (now - ghost_tick) > NPC_GHOST_EXPIRE_MS {
                 // oracle `QuestNpcList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
