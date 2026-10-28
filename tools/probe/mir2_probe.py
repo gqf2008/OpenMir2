@@ -6698,15 +6698,13 @@ def _selftest_null_ident_steps():
         conn = Conn("gamegate", run.recorder, on_frame=run.on_frame)
         conn.phase = "gamegate"
         conn.sock = _FakeSock([b"#+GD/874754328!"])
-        conn.pump(20)
-        assert [fr.ident for _, fr in conn.frames] == [None], conn.frames
-        assert conn.frames[0][1].frame_class == "server_ack_time"
 
-        # run5 的原路径：wait_for(642) 已成功，随后的 wait_idents 诊断排序崩溃。
+        # 正例：null 与目标 642 都在 wait_for 的等待窗口内新到；null 不得成为通配匹配。
         conn.sock.chunks.append(build_s2c_frame(3997, durachange, 1, 4000, 0, b""))
         run.execute_step(conn, plan_step({"wait_for": durachange}, 0, {}))
         assert [fr.ident for _, fr in conn.frames] == [None, durachange], conn.frames
-        assert run.steps[-1]["matched_ident"] == durachange, run.steps[-1]
+        assert conn.frames[0][1].frame_class == "server_ack_time"
+        positive_matched_ident = run.steps[-1]["matched_ident"]
         run.execute_step(conn, plan_step({
             "wait_idents": {"idents": [durachange], "timeout_ms": 10}}, 1, {}))
         assert run.steps[-1]["matched"] and run.steps[-1]["missing_idents"] == [], run.steps[-1]
@@ -6720,17 +6718,25 @@ def _selftest_null_ident_steps():
         assert dwell["idents_before"] == [durachange], dwell
         assert dwell["idents_after"] == [durachange] and dwell["new_idents"] == [], dwell
 
-        # 负对照：控制帧仍在捕获/匹配流里，但绝不能代替缺席的目标 ident。
+        # 负例：等待开始后才注入新 null；SM_STRUCK 真缺席时仍必须 timeout。
+        negative_after = conn.recorder.seq
+        negative_timeout = False
+        conn.sock.chunks.append(b"#+GD/874755156!")
         try:
             run.execute_step(conn, plan_step({
                 "wait_for": SM_STRUCK, "timeout_ms": 5}, 3, {}))
         except StepFailure as ex:
-            assert "timeout waiting" in str(ex), str(ex)
-        else:
-            raise AssertionError("null-ident control frame satisfied an absent target ident")
+            negative_timeout = "timeout waiting" in str(ex)
+        assert any(seq > negative_after and fr.ident is None for seq, fr in conn.frames), (
+            "负例必须在等待窗口内实际收到新 null，而不是用步前帧凑数")
+        assert not any(fr.ident == SM_STRUCK for _, fr in conn.frames), conn.frames
+        # 放在两臂都执行后统一断言：null-wildcard 变异时，输出同时暴露正/负两臂都错。
+        assert positive_matched_ident == durachange and negative_timeout, (
+            "null-wildcard 牙：正例 matched_ident=%r（应为 %d），负例 timeout=%r（应为 True）"
+            % (positive_matched_ident, durachange, negative_timeout))
         rows = [json.loads(line) for line in open(run.recorder.path, encoding="utf-8")]
         assert rows[0]["ident"] is None and rows[0]["frame_class"] == "server_ack_time", rows[0]
-        return "wait_for/wait_idents/wait_frames/dwell green; absent target still red; capture unchanged"
+        return "in-window null positive/negative + wildcard tooth; diagnostics and capture unchanged"
     finally:
         if run is not None:
             run.recorder.close()
