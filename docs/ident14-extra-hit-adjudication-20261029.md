@@ -7,10 +7,11 @@
 - 关系卡：`openmir2-ignore-rule-count-compare`（counts+shape 门槛）、
   `openmir2-real-machine-verification-master`（真机窗口项）
 
-> **当前状态：PENDING（reviewer-20 R20-X1）。** 白名单本身还没有 owner/coordinator 裁决条目，
-> 所以**只登记候选**（`frames.oracle_extra_candidates`），该 ignore 差异**仍判 UNDECIDABLE**，
-> `rules_pending_review` 为 true。拿到裁决后把 `oracle_extra_status` 改成 `APPROVED`、把裁决 oid
-> 写进 `oracle_extra_decision`，才会走放行分支（放行闸的机制牙用合成 APPROVED 规则测）。
+> **当前状态：APPROVED。** owner/coordinator 裁决条目 `7c9f9525c63402155d37b5c8e09d4ee8d4486683`
+> （openmir2-coordinator，卡 `openmir2-ident14-extra-hit-adjudication`）已签，规则里
+> `oracle_extra_status="APPROVED"` + `oracle_extra_decision="7c9f9525…"`，放行分支生效；
+> 缺 decision 或状态非 APPROVED 时仍按 PENDING 处理（只登记 `frames.oracle_extra_candidates`、
+> 保持 UNDECIDABLE、`rules_pending_review=true`）。
 
 ## 1. 结论（先给判据）
 
@@ -39,7 +40,8 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
 ## 3. 规则字段（rules.json，ident 14）
 
 ```json
-"oracle_extra_status": "PENDING",
+"oracle_extra_status": "APPROVED",
+"oracle_extra_decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683",
 "oracle_extra_shapes": [{"shape": "318,336,4", "max": 1},
                         {"shape": "49,49,5", "max": 2}]
 ```
@@ -50,7 +52,7 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
   受击动画；ActorId 是会话内分配的，跨运行不稳定，硬绑只会制造假红。actor 差异本身没有服务端
   后果，而「其它帧全等 + 库全等」已经把可观测状态锁死。若将来要绑 actor，另加
   `oracle_extra_recogs` 白名单并由裁决条目说明（selftest 有 `recog 不计入形状` 的登记牙）。
-- `oracle_extra_status`：**只有显式 `APPROVED` 且带非空 `oracle_extra_decision` 才放行**；
+- `oracle_extra_status` / `oracle_extra_decision`：**只有显式 `APPROVED` 且带非空裁决 oid 才放行**；
   缺省/未知值、以及「写了 APPROVED 但没写裁决 oid」一律按 PENDING（fail-closed，reviewer-20 R20-Y1，
   selftest 有对应牙）。`oracle_extra_shapes` 的每个形状**必须带 `max`**，bare string 视为规则非法
   （R20-Y4，同样有牙——否则新规则能用旧写法绕开上界）。
@@ -102,6 +104,9 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | verified 实际条数（Y2） | 伴随帧差时候选的 `verified.frame_diffs` 必须是实际条数（≥1），不能写死 0 |
 | 影响面（Y3） | PENDING 且本次有候选 ⇒ `rules.pending_review_used` 含 T-270 |
 | bare shape（Y4） | 形状写成 bare string（无 `max`）⇒ 规则非法、不入候选、`rc 2` |
+| verified.db_*（正向） | 放行记录 `verified` 带实际 `db_state=compared` / `db_diffs=0` / `db_undecidable=0` / `frame_diffs=0` |
+| verified.db_diffs（库差） | 伴随库差时候选 `verified.db_diffs >= 1`（不能写死 0） |
+| verified.db_undecidable（库判不了） | 库判不了时候选 `verified.db_undecidable >= 1` |
 
 变异（逐次恢复并核 sha256，无 MUTATION 残留；恢复后
 `compare_runs.py` sha256=`185e78aae0565e6655d0d021faad31f20d5147f79866497061f139d51931c40f`）：
@@ -121,6 +126,8 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | `verified.frame_diffs` 写死 0 | Y2 牙红 |
 | 不把 T-270 计入 `pending_review_used` | Y3 牙红 |
 | 允许 bare shape 无 max | Y4 牙红（rc 由 2 变 0、候选出现） |
+| `verified.db_diffs` 写死 0 | 库差 verified 牙红 |
+| `verified.db_undecidable` 写死 0 | 库判不了 verified 牙红 |
 
 每次变异只打红对应那颗牙（其余仍绿）。
 
@@ -138,12 +145,13 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | 运行 | 判定 | 说明 |
 |---|---|---|
 | run5 softclose_relogin | **UNDECIDABLE**（rc 2） | 额外帧形状 `318,332,7` 不在白名单 ⇒ 保持原判 |
-| run12 softclose_relogin | **UNDECIDABLE**（rc 2） | 形状/上界都符合，但 T-270 为 PENDING ⇒ **只登记候选**（`oracle_extra_candidates` 1 条） |
+| run12 softclose_relogin | **PASS**（rc 0） | `oracle_extra_hits` 1 条，`approved_by=7c9f9525…`，`verified={compared,0,0,0}` |
 | run16 login_only | PASS | 无 14 帧 |
 | run17 move_walk | PASS | 无 14 帧 |
-| run21 gamepoint_exchange | **UNDECIDABLE**（rc 2） | 同上，候选 1 条（含 2 帧） |
+| run21 gamepoint_exchange | **PASS**（rc 0） | `oracle_extra_hits` 1 条（含 2 帧），`approved_by=7c9f9525…` |
 
-⇒ PENDING 期间**没有任何一次窗口产物被洗成 PASS**；裁决条目落地后才有放行路径。
+⇒ 裁决条目（`7c9f9525…`）落地后，只有**A1 证据覆盖的两个形状**放行；run5 等未登记形状仍 UNDECIDABLE，
+仓库里其它窗口运行（run3/run4/run5-upgrade）同样不放行。
 
 仓库里其它窗口运行（run3 castle/dice/move_walk、run4 butch、run5 upgrade_retrieve 等）的 14 形状
 都**不在**白名单，仍按 `ignore_rule_mismatch` 判 `UNDECIDABLE`——本裁决不是「整类 14 放行」。
@@ -154,8 +162,8 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
   同场景多跑出第 3 条，都需要按同样证据逐个登记（不会自动放行）。
 - **只证明「这几条额外帧零副作用」**：不能推出「所有 C# 额外 14 都零副作用」。确定性支（城堡商人
   `FixedHideMode` 解除补发，`Merchant.cs:152-157`）与攻击命中仍走原路径，没有被本裁决覆盖。
-- **裁决条目未落地（R20-X1）**：需要 owner/coordinator 在规则表层面给出 `oracle_extra_decision`
-  与 `APPROVED`；在此之前 T-270 只是候选登记，`rules_pending_review` 保持 true。
+- **裁决条目已落地**：`7c9f9525…`（APPROVED，scope=两形状 max1/max2、oracle 侧、零副作用）。
+  新增形状仍需新的证据与裁决；`oracle_extra_status` 改回 PENDING（或 decision 清空）即退回候选模式。
 - **真机复跑未做（A4 的窗口部分）**：窗口受 Leader 排期，本卡不自行起栈；待窗口内在当前 master
   复跑至少一条场景并把证据入卡。
 - 父卡的真机项（ident14「不该出现的一侧不发」）仍在 `openmir2-real-machine-verification-master`
