@@ -764,6 +764,11 @@ impl World {
                     if r.space_moved {
                         out.space_moves.push(id);
                     }
+                    // `Merchant.Run` 尾 `base.Run()`（`Merchant.cs:170`）：`AnimalObject.Run`
+                    // 的 HolySeize 到期段 → `BaseObject.Run` 的 RM_STRUCK 出队/恢复段。
+                    // 漏掉它 ⇒ 玩家打商店 NPC 后 `pending_struck` 永不出队，656 也不产生。
+                    crate::monai::animal_run(self, id);
+                    crate::monai::base_object_run_monster(self, id);
                 }
             } else if (now - ghost_tick) > MERCHANT_GHOST_EXPIRE_MS {
                 // oracle `MerchantList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
@@ -3022,6 +3027,61 @@ mod tests {
             w.take_refmessage_frames().is_empty(),
             "对商人攻击不得产生受击帧"
         );
+    }
+
+    /// 玩家打商店 NPC：`_Attack` 的 `Race > Play ⇒ SendMsg(RM_STRUCK)` 入队，
+    /// `Merchant.Run` 尾的 `base.Run()` 必须出队并走 `BreakHolySeizeMode → 656`。
+    /// 红检：删 `merchant_tick` 里的 `base_object_run_monster` ⇒ 本用例红。
+    #[test]
+    fn player_attack_merchant_produces_name_color_through_base_run() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 1_000;
+        w.enable_merchant_tick();
+        let mid = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
+        let pid = w.add_entity(player_entity(0, "hero", 6, 5));
+        assert!(w.enter_world(pid), "玩家必须落图，656 才有观察者");
+        {
+            let st = w
+                .entities
+                .get_mut(mid)
+                .and_then(|e| e.merchant.as_mut())
+                .expect("商人状态");
+            st.run_tick = 0;
+        }
+
+        let outcome = w.attack_once(pid, mid).expect("攻击应结算");
+        assert_eq!(outcome.damage, 0, "NPC 不可被伤害");
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.pending_struck.len(),
+            1,
+            "race>Play ⇒ RM_STRUCK 入队"
+        );
+        w.merchant_tick();
+
+        let refs = w.take_monster_ref_msgs();
+        let colors: Vec<_> = refs
+            .iter()
+            .filter(|m| m.ident == crate::monai::RM_CHANGENAMECOLOR)
+            .collect();
+        assert_eq!(colors.len(), 1, "恰一条 656：{refs:?}");
+        let color = colors[0];
+        assert_eq!(color.actor_id, mid);
+        assert_eq!(color.recipients, vec![pid], "观察者必须收到 656");
+        assert_eq!(
+            (
+                color.w_param,
+                color.n_param1,
+                color.n_param2,
+                color.n_param3
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(!color.self_only);
+        assert!(
+            w.entities.get(mid).unwrap().ai.pending_struck.is_empty(),
+            "出队后队列必须清空"
+        );
+        assert!(!w.entities.get(mid).unwrap().ai.holy_seize);
     }
 
     /// 判据 2（回归）：race 50 的目标**仍可被玩家攻击**，伤害与受击帧路径不变。

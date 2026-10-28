@@ -376,6 +376,10 @@ impl World {
                     if r.hit {
                         out.hits.push(id);
                     }
+                    // `NormNpc.Run` 尾 `base.Run()`（`NormNpc.cs:1604-1611`）：
+                    // `AnimalObject.Run` → `BaseObject.Run`，必须消费 RM_STRUCK。
+                    crate::monai::animal_run(self, id);
+                    crate::monai::base_object_run_monster(self, id);
                 }
             } else if (now - ghost_tick) > NPC_GHOST_EXPIRE_MS {
                 // oracle `QuestNpcList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
@@ -839,6 +843,64 @@ mod tests {
         set_rt(&mut world, 0);
         world.clock_ms = 10_200;
         assert_eq!(world.npc_tick().ran, vec![a], "恰 200ms ⇒ 放开");
+    }
+
+    /// 玩家打固定 NPC：`_Attack` 对 Race>Play 目标入队 RM_STRUCK，`NormNpc.Run` 尾的
+    /// `base.Run()` 必须出队并走 `BreakHolySeizeMode → 656`。
+    /// 红检：删 `npc_tick` 的 `base_object_run_monster` ⇒ 本用例红。
+    #[test]
+    fn player_attack_npc_produces_name_color_through_base_run() {
+        let mut world = World::with_maps(vec![(20, 20)]);
+        world.rng = RandomNumber::with_seed(11);
+        world.clock_ms = 10_000;
+        world.enable_npc_tick();
+        let nid = world
+            .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 3, 3))
+            .expect("挂图成功");
+        let mut player = Entity::new(0, "hero", 4, 3);
+        player.race = crate::entity::ACTOR_RACE_PLAY;
+        player.dc = 0x0A_14;
+        let pid = world.add_entity(player);
+        assert!(world.enter_world(pid), "玩家必须落图，656 才有观察者");
+        if let Some(n) = world.entities.get_mut(nid).and_then(|e| e.npc.as_mut()) {
+            n.run_tick = 0;
+        }
+
+        let outcome = world.attack_once(pid, nid).expect("攻击应结算");
+        assert_eq!(outcome.damage, 0, "NPC 不可被伤害");
+        assert_eq!(
+            world.entities.get(nid).unwrap().ai.pending_struck.len(),
+            1,
+            "race>Play ⇒ RM_STRUCK 入队"
+        );
+        world.npc_tick();
+        let refs = world.take_monster_ref_msgs();
+        let colors: Vec<_> = refs
+            .iter()
+            .filter(|m| m.ident == crate::monai::RM_CHANGENAMECOLOR)
+            .collect();
+        assert_eq!(colors.len(), 1, "恰一条 656：{refs:?}");
+        let color = colors[0];
+        assert_eq!(color.actor_id, nid);
+        assert_eq!(color.recipients, vec![pid], "观察者必须收到 656");
+        assert_eq!(
+            (
+                color.w_param,
+                color.n_param1,
+                color.n_param2,
+                color.n_param3
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(!color.self_only);
+        assert!(world
+            .entities
+            .get(nid)
+            .unwrap()
+            .ai
+            .pending_struck
+            .is_empty());
+        assert!(!world.entities.get(nid).unwrap().ai.holy_seize);
     }
 
     /// **驱动开关牙（改坏必红）**：`World::tick` 在 `npc_enabled=false`（缺省）时**不**驱动
