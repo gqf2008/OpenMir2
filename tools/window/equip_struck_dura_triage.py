@@ -9,12 +9,17 @@
 比较器非恒等；RNG 账本存在/缺失/坏头三臂），真实状态只从 tempdir 读，不写仓库。
 """
 import argparse
+import collections
 import csv
 import hashlib
+import importlib.util
 import json
 import sys
 import tempfile
 from pathlib import Path
+
+RNG_DIFF_PATH = (Path(__file__).resolve().parents[2]
+                 / "mir2-rs/tests/parity/m3/rng-trace-probe/rng_ledger_diff.py")
 
 CM_HIT = 3014
 SM_DURACHANGE = 642
@@ -88,6 +93,110 @@ def pair_rng_log_status(statuses):
         "rng_log_any_file": any(status["exists"] for status in statuses),
         "rng_log_invalid_sides": [status["path"] for status in statuses
                                   if status["exists"] and not status["valid"]],
+    }
+
+
+def _load_rngdiff():
+    spec = importlib.util.spec_from_file_location("rng_ledger_diff", RNG_DIFF_PATH)
+    if spec is None or spec.loader is None:
+        raise InputError("无法加载 %s" % RNG_DIFF_PATH)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _seed_probe(path):
+    for line in Path(path).read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith("SEED_PROBE"):
+            return line[len("SEED_PROBE"):].strip()
+    return None
+
+
+def analyze_rng_streams(csharp_path, rust_path):
+    """对 run9 两侧 rng-stream 做站点/攻击局部结构对照。
+
+    不是拿全局 draw index 当同一契约：C# 的共享 `Random` 会被怪物线程并发调用，
+    日志里同一攻击的 A/B/C 三抽可能夹着别的站点；Rust 单线程则连续。这里分别报告
+    全局首差与「攻击局部三抽形状/值」，并把跨线程夹层显式量化。
+    """
+    try:
+        rd = _load_rngdiff()
+        a = rd.parse_trace(str(csharp_path))
+        b = rd.parse_trace(str(rust_path))
+    except (OSError, ValueError, AttributeError) as exc:
+        return {"status": "UNDECIDABLE", "reason": "RNG 账本解析失败：%s" % exc}
+    if not a or not b:
+        return {"status": "UNDECIDABLE", "reason": "RNG 账本为空"}
+
+    def key(row):
+        return (row[1], row[2], row[3])
+
+    first = None
+    for i in range(min(len(a), len(b))):
+        if key(a[i]) != key(b[i]):
+            first = {
+                "index": i + 1,
+                "csharp": {"site": a[i][4], "max": a[i][2], "result": a[i][3],
+                           "canonical": rd.canonical(a[i][4])},
+                "rust": {"site": b[i][4], "max": b[i][2], "result": b[i][3],
+                         "canonical": rd.canonical(b[i][4])},
+            }
+            break
+
+    def attack_window(rows):
+        ia = next((i for i, row in enumerate(rows)
+                   if rd.canonical(row[4]) == "atk_power_a"), None)
+        if ia is None:
+            return None
+        ib = next((i for i in range(ia + 1, len(rows))
+                   if rd.canonical(rows[i][4]) == "atk_power_b"), None)
+        if ib is None:
+            return None
+        ic = next((i for i in range(ib + 1, len(rows))
+                   if rd.canonical(rows[i][4]) == "attack_success"), None)
+        if ic is None:
+            return None
+        middle = rows[ia + 1:ic]
+        interleaved = collections.Counter(
+            rd.canonical(row[4]) for j, row in enumerate(middle)
+            if rd.canonical(row[4]) not in ("atk_power_b", "attack_success"))
+        return {
+            "shape": [rd.canonical(rows[i][4]) for i in (ia, ib, ic)],
+            "values": [{"max": rows[i][2], "result": rows[i][3],
+                        "seq": rows[i][0], "site": rows[i][4]}
+                       for i in (ia, ib, ic)],
+            "interleaved_between_a_success": sum(interleaved.values()),
+            "interleaved_sites": dict(sorted(interleaved.items())),
+        }
+
+    ca, rb = attack_window(a), attack_window(b)
+
+    def player_ctor(rows):
+        for i, row in enumerate(rows):
+            site = row[4].replace("\\", "/")
+            if ("PlayObject..ctor@PlayObject.cs" in site
+                    or "ctor_fold.rs:545" in site):
+                return {"index": i + 1, "seq": row[0], "max": row[2],
+                        "result": row[3], "site": row[4]}
+        return None
+
+    if ca is None or rb is None:
+        classification = "UNDECIDABLE_ATTACK_WINDOW"
+    elif ca["shape"] == rb["shape"]:
+        classification = "ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED"
+    else:
+        classification = "ATTACK_CALL_SHAPE_DIVERGENCE"
+    return {
+        "status": "DIAGNOSED" if classification != "UNDECIDABLE_ATTACK_WINDOW"
+                  else "UNDECIDABLE",
+        "seed_probe_equal": _seed_probe(csharp_path) == _seed_probe(rust_path),
+        "draws": {"csharp": len(a), "rust": len(b)},
+        "first_value_divergence": first,
+        "player_ctor_draw": {"csharp": player_ctor(a), "rust": player_ctor(b)},
+        "attack_local": {"csharp": ca, "rust": rb},
+        "classification": classification,
+        "boundary": "全局 draw 序列含 C# 多线程共享 Random 的交错；首差与末值差不能直接归为"
+                    "攻击实现缺/多抽。攻击局部 A→B→Success 形状相等只证调用结构，不等证 Dura 数值。",
     }
 
 
@@ -212,6 +321,15 @@ def analyze(root):
         "boundary": "rng_log_present 只认 <side>/rng-stream.tsv 通过头/列/site 校验；"
                     "单次 Random(5) 形态候选不等于已有 RNG 流水证明，无有效流水时最终 R 结论保持未决。",
     }
+    rng_paths = {side: root / side / "rng-stream.tsv" for side in ("csharp", "rust")}
+    if all(result["sides"][side]["rng_log"]["valid"] for side in ("csharp", "rust")):
+        result["rng_alignment"] = analyze_rng_streams(
+            rng_paths["csharp"], rng_paths["rust"])
+    else:
+        result["rng_alignment"] = {
+            "status": "UNDECIDABLE",
+            "reason": "两侧没有通过头/列/site 校验的 rng-stream.tsv",
+        }
     return result
 
 
@@ -278,7 +396,49 @@ def check():
                 and pair_rng_log_status([bad])["rng_log_present"] is False,
                 "变异牙③：坏头文件存在但不得当流水证据")
 
-    expected_checks = 9
+        def rng_file(name, rows, seed="1 2 3"):
+            p = Path(tmp) / name
+            body = "1\tINJECT_OK\t42\t0\nSEED_PROBE %s\n" % seed
+            body += "".join("%d\tNext(max)\t%s\t%s\t%s\n" % row for row in rows)
+            p.write_text(body, encoding="utf-8")
+            return p
+
+        ca = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
+        cb = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934"
+        cc = "M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223"
+        w = "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427"
+        ra = r"crates\world\src\combat.rs:109"
+        rb_ = r"crates\world\src\combat.rs:111"
+        rc = r"crates\world\src\combat.rs:1152"
+        csharp = rng_file("csharp.tsv", [
+            (1, 5, 3, ca), (2, 20, 7, w), (3, 20, 1, w),
+            (4, 10, 8, cb), (5, 20, 2, w), (6, 5, 3, cc)])
+        rust = rng_file("rust.tsv", [
+            (1, 5, 3, ra), (2, 10, 8, rb_), (3, 5, 4, rc)])
+        align = analyze_rng_streams(csharp, rust)
+        require(align["seed_probe_equal"]
+                and align["classification"] == "ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED"
+                and align["attack_local"]["csharp"]["interleaved_between_a_success"] == 3
+                and align["attack_local"]["rust"]["interleaved_between_a_success"] == 0,
+                "RNG 诊断：攻击局部 A→B→Success 形状相等，C# 夹层抽数被量化")
+
+        require(align["first_value_divergence"] is not None
+                and align["first_value_divergence"]["index"] == 2,
+                "RNG 诊断：报出首个值分歧（示例 index=2）")
+
+        missing_b = rng_file("missing-b.tsv", [
+            (1, 5, 3, ca), (2, 5, 4, rc)])
+        align_bad = analyze_rng_streams(csharp, missing_b)
+        require(align_bad["status"] == "UNDECIDABLE"
+                and align_bad["classification"] == "UNDECIDABLE_ATTACK_WINDOW",
+                "RNG 诊断牙：缺 atk_power_b ⇒ 攻击窗口判不了（不误报形状相等）")
+
+        diff_seed = rng_file("diff-seed.tsv", [
+            (1, 5, 3, ra), (2, 10, 8, rb_), (3, 5, 4, rc)], seed="9 9 9")
+        require(analyze_rng_streams(csharp, diff_seed)["seed_probe_equal"] is False,
+                "RNG 诊断：SEED_PROBE 不同 ⇒ 显式 false")
+
+    expected_checks = 13
     passed = sum(condition for condition, _name in cases)
     print("CHECK %d/%d" % (passed, len(cases)))
     return 0 if (passed == len(cases) == expected_checks and cases) else 1
