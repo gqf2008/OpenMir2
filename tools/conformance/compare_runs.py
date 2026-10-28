@@ -2579,6 +2579,103 @@ def _selftest_ident_653_head_compare(mod):
     return checks
 
 
+def _selftest_ident_656_compare(mod):
+    """ident 656 严格 compare 的常驻牙（卡 openmir2-rules-ident-656-compare）。"""
+    checks = []
+
+    def chk(name, cond, detail=""):
+        checks.append((name, bool(cond), detail))
+
+    def fr(idx, ident, param=0, tag=0, series=0, body=b"", recog=7):
+        return {"index": idx, "line": idx + 1, "ident": ident, "body": body,
+                "body_sha256": None, "param": param, "tag": tag, "series": series,
+                "phase": "gamegate", "recog": recog, "seq": idx, "t_ms": idx,
+                "conn": 1, "raw": {}}
+
+    def stream(label, frames):
+        return mod.Stream(label, "/dev/null", "/dev/null", frames, [])
+
+    def run(ofl, rfl, ruleset):
+        return mod.compare_streams(stream("oracle", ofl), stream("rust", rfl), ruleset)
+
+    def has(c, field):
+        return any(d.get("ident") == 656 and d.get("field") == field for d in c["diffs"])
+
+    rules = mod.load_rules(mod.DEFAULT_RULES)
+    rule = rules.by_ident.get(656) or {}
+    chk("ident656 前提：规则为 compare 且无 head_mask/head_compare",
+        rule.get("action") == "compare" and not rule.get("head_mask")
+        and not rule.get("head_compare"), rule)
+
+    base = [fr(0, 656, param=255, tag=0, series=0, body=b"", recog=7)]
+    same = [fr(0, 656, param=255, tag=0, series=0, body=b"", recog=9)]
+    c = run(base, same, rules)
+    chk("ident656 A1：字段相同仅 recog 不同 ⇒ 绿且 recog 显式 masked",
+        c["diffs"] == [] and not c["unclassified"]
+        and any(w.get("ident") == 656 and w.get("field") == "recog"
+                and w.get("kind") == "masked_head" for w in c["whitelisted"]),
+        (c["diffs"], c["whitelisted"][:2], c["unclassified"]))
+
+    cases = [
+        ("param", [fr(0, 656, param=254, tag=0, series=0, body=b"")]),
+        ("tag", [fr(0, 656, param=255, tag=1, series=0, body=b"")]),
+        ("series", [fr(0, 656, param=255, tag=0, series=1, body=b"")]),
+        ("body_len", [fr(0, 656, param=255, tag=0, series=0, body=bytes([0]))]),
+    ]
+    for field, rust in cases:
+        c = run(base, rust, rules)
+        chk("ident656 A2：%s 不同 ⇒ 判红" % field, has(c, field), c["diffs"][:2])
+    c = run([fr(0, 656, param=255, tag=0, series=0, body=bytes([0]))],
+            [fr(0, 656, param=255, tag=0, series=0, body=bytes([1]))], rules)
+    chk("ident656 A2：body 不同 ⇒ 判红", has(c, "body"), c["diffs"][:2])
+
+    c = run(base, base + [fr(1, 656, param=255)], rules)
+    chk("ident656 A2：Rust 多一条 656 ⇒ 判红（计数严格）",
+        bool(c["diffs"]), c["diffs"][:2])
+    c = run(base + [fr(1, 656, param=255)], base, rules)
+    chk("ident656 A2：Rust 少一条 656 ⇒ 判红（计数严格）",
+        bool(c["diffs"]), c["diffs"][:2])
+
+    sha_before = mod.sha256_file(mod.DEFAULT_RULES)
+    raw = mod.read_json(mod.DEFAULT_RULES, "规则表")
+    no_rule = json.loads(json.dumps(raw))
+    no_rule["rules"] = [r for r in no_rule.get("rules") or [] if r.get("ident") != 656]
+    mut_no_rule = mod.RuleSet(no_rule, "<selftest:656 删规则>", "")
+    c = run(base, same, mut_no_rule)
+    chk("ident656 A4 变异：删规则 ⇒ 656 UNCLASSIFIED（A1 必红）",
+        656 in c["unclassified"], c["unclassified"])
+
+    masked_param = json.loads(json.dumps(raw))
+    for r in masked_param.get("rules") or []:
+        if r.get("ident") == 656:
+            r["head_mask"] = ["param"]
+    mut_mask = mod.RuleSet(masked_param, "<selftest:656 掩 param>", "")
+    c = run(base, [fr(0, 656, param=254, tag=0, series=0, body=b"")], mut_mask)
+    chk("ident656 A4 变异：放宽 param（head_mask）⇒ param 负例被吞（A2 必红）",
+        not has(c, "param"), c["diffs"][:2])
+
+    chk("ident656 变异只在内存副本：仓内 rules.json sha256 前后相同",
+        mod.sha256_file(mod.DEFAULT_RULES) == sha_before)
+    return checks
+
+
+#: ident656 常驻牙的冻结名字清单；与 653 的清单一起做集合相等元断言。
+_IDENT656_TEETH_NAMES = (
+    "ident656 前提：规则为 compare 且无 head_mask/head_compare",
+    "ident656 A1：字段相同仅 recog 不同 ⇒ 绿且 recog 显式 masked",
+    "ident656 A2：param 不同 ⇒ 判红",
+    "ident656 A2：tag 不同 ⇒ 判红",
+    "ident656 A2：series 不同 ⇒ 判红",
+    "ident656 A2：body_len 不同 ⇒ 判红",
+    "ident656 A2：body 不同 ⇒ 判红",
+    "ident656 A2：Rust 多一条 656 ⇒ 判红（计数严格）",
+    "ident656 A2：Rust 少一条 656 ⇒ 判红（计数严格）",
+    "ident656 A4 变异：删规则 ⇒ 656 UNCLASSIFIED（A1 必红）",
+    "ident656 A4 变异：放宽 param（head_mask）⇒ param 负例被吞（A2 必红）",
+    "ident656 变异只在内存副本：仓内 rules.json sha256 前后相同",
+)
+
+
 #: ident653 常驻牙的**冻结名字清单**（卡 openmir2-selftest-teeth-meta-assert）。
 #:
 #: 这 8 条牙此前靠 `st.finish = finish_with_ident653_teeth` 这种 monkey-patch 注入：把那一行
@@ -2619,11 +2716,11 @@ def _new_selftest_with_teeth(mod, me, here, teeth):
                 self.check(name, cond, detail)
             # 元断言（此刻 passed/failed 里应当只有这 8 条）：名字集合必须与冻结清单**完全相等**，
             # 缺谁/多谁都逐条点名。既有 343 条断言一条不改，本条与 8 条牙直接进 GREEN 的分子/分母。
-            expected = set(_IDENT653_TEETH_NAMES)
+            expected = set(_IDENT653_TEETH_NAMES) | set(_IDENT656_TEETH_NAMES)
             checked = set(self.passed) | {name for name, _detail in self.failed}
             missing = sorted(expected - checked)
             unexpected = sorted(checked - expected)
-            self.check("ident653 元断言：8 条常驻牙全部出现在 PASS/FAIL 名单（缺一即红并点名）",
+            self.check("ident653/656 元断言：常驻牙全部出现在 PASS/FAIL 名单（缺一即红并点名）",
                        not missing and not unexpected,
                        {"missing": missing, "unexpected": unexpected})
 
@@ -2643,6 +2740,11 @@ def cmd_selftest():
         mod.traceback.print_exc()
         teeth = [("ident653: 常驻牙自身崩溃（INCOMPLETE）", False, "exception")]
     try:
+        teeth = teeth + _selftest_ident_656_compare(me)
+    except Exception:  # noqa: BLE001
+        mod.traceback.print_exc()
+        teeth = teeth + [("ident656: 常驻牙自身崩溃（INCOMPLETE）", False, "exception")]
+    try:
         # teeth 是**必填构造参数**；少传（或退回 mod.Selftest(me, here) 的旧写法）走下面的
         # 构造异常/元断言分支判 RED，而不是让 8 条牙静默消失。
         st = _new_selftest_with_teeth(mod, me, here, teeth)
@@ -2653,7 +2755,7 @@ def cmd_selftest():
     # 元断言（跑测试前，**无条件执行**）：Selftest 实例必须真的收到全部 8 条牙。若有人把接线退回
     # `mod.Selftest(me, here)`，这里逐条点名缺了谁——而不是照旧报 GREEN 343/343。
     registered = set(getattr(st, "teeth_names", ()) or ())
-    missing = sorted(set(_IDENT653_TEETH_NAMES) - registered)
+    missing = sorted((set(_IDENT653_TEETH_NAMES) | set(_IDENT656_TEETH_NAMES)) - registered)
     if missing:
         print("RED: compare_runs selftest 元断言：ident653 常驻牙未接入 Selftest（接缝断了），"
               "missing=%r" % (missing,))
