@@ -52,6 +52,10 @@ REGISTRY = [
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
     ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),
     ("butch_ledger", ["tools/window/butch_ledger.py", "--selftest"], False),
+    # 卡 openmir2-equip-struck-dura-db-triage（reviewer-20 F1）：run6 武器磨损/落库只读
+    # 重建；`--check` 含输入/快照/事件数/RNG 账本负对照。显式登记，避免「入仓未入账」。
+    ("equip_struck_dura_triage",
+     ["tools/window/equip_struck_dura_triage.py", "--check"], False),
     ("rc_attribution", ["tools/window/rc_attribution.py", "--selftest"], False),
     ("window_criteria_lint", ["tools/goal/window_criteria_lint.py", "--selftest"], False),
     ("blocked_sources_check", ["tools/window/blocked_sources_check.py", "selftest"], False),
