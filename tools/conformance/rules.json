@@ -289,7 +289,7 @@
       "action": "compare",
       "tier": "L",
       "reason": "SM_CHANGENAMECOLOR 是真实协议帧（src/OpenMir2/Messages.cs:318）。下行点 src/M2Server/Player/PlayObject.Message.cs:1677-1679：`SendDefMessage(SM_CHANGENAMECOLOR, processMsg.ActorId, GetChrColor(baseObject), 0, 0)` ⇒ recog=名色变化的 ActorId（会话作用域，按全局 recog 掩码，不算命中）、param=GetChrColor（普通怪/玩家默认 255，宝宝按 SlaveColor、NPC 按 NpcNameColor）、tag/series=0、body 为空。近战受击/出手经 BreakHolySeizeMode→RefNameColor 产生，可能每击一条；**计数严格相等**，param/tag/series/body 全部逐字节比较，不做 head_mask、不做 ignore，也不把它当控制帧。T-184 只涉及 SM_BAGITEMS(201) 的相对位置，不改变本条的全序/计数判据。",
-      "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-1)"
+      "approved_by": "openmir2-coordinator (approve reviewer-21 3d9e9a50, 2026-10-28; draft: openmir2-dev-1)"
     },
     {
       "ident": 11,
