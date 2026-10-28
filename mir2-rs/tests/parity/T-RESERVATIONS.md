@@ -304,3 +304,4 @@
 | T-267 | openmir2-sendmsg-login-qmanage-cases | 2026-10-23T19:27:46Z | 在用 |
 | T-268 | openmir2-gm-target-state-write | 2026-10-25T06:56:17Z | 在用 |
 | T-269 | openmir2-dura-nondeterminism-adjudication | 2026-10-28T19:34:24Z | 在用 |
+| T-270 | openmir2-ident14-extra-hit-adjudication | 2026-10-28T20:49:59Z | 在用 |
