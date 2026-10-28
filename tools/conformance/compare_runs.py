@@ -1553,18 +1553,20 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     o_kept, o_ign, o_ign_cli = split("oracle", o_stream.frames)
     r_kept, r_ign, r_ign_cli = split("rust", r_stream.frames)
 
+    # T-184：201 的位置不作全序对齐键。必须**先于随机对提取**摘出：若 201 落在
+    # 无名 TURN(10)+FEATURECHANGED(41) 之间，晚摘会把随机对拆散，误报 block_align/次数差
+    # （reviewer-20 F1）。摘出后其它帧仍按原全序；201 子序列稍后单独逐帧比。
+    o_movable, o_kept = _split_movable_frames(o_kept)
+    r_movable, r_kept = _split_movable_frames(r_kept)
+
     # 随机分支成对帧（卡 openmir2-rules-random-idle-frames）：先按形状摘出再对齐；
-    # 次数差不算差异，形状差算差异。kept_frames 用**摘对之前**的长度（空运行判据不变）。
-    o_kept_n, r_kept_n = len(o_kept), len(r_kept)
+    # 次数差不算差异，形状差算差异。kept_frames 用**摘对/摘201之前**的长度（空运行判据不变）。
+    o_kept_n, r_kept_n = len(o_kept) + len(o_movable), len(r_kept) + len(r_movable)
     rp_rule = rules.random_branch_pairs
     o_pairs, o_kept = extract_random_pairs(o_kept, rp_rule)
     r_pairs, r_kept = extract_random_pairs(r_kept, rp_rule)
     random_pairs_summary = (compare_random_pairs(o_pairs, r_pairs, rp_rule, diffs, whitelisted)
                             if rp_rule else None)
-
-    # T-184：201 的位置不作全序对齐键；先摘成有序子序列，其它帧仍按原全序比较。
-    o_movable, o_kept = _split_movable_frames(o_kept)
-    r_movable, r_kept = _split_movable_frames(r_kept)
 
     # multiset_by_tick 需要 t_ms 标注 tick 窗口：**任一侧任一帧**缺 t_ms 都判不了。
     # 必须预扫整条流，不能在块首判——缺的是运行中的后续帧时会被漏判，进而误报
@@ -2603,6 +2605,17 @@ def _selftest_movable_201(mod):
             % (pos, len(other)),
             (c["diffs"][:2], c["movable_frames"]))
 
+    # F1：201 插进无名 TURN(10)+FEATURECHANGED(41) 随机对内部也必须仍无 diff；
+    # 201 摘取若晚于 extract_random_pairs，本项会拆散随机对并误报 block_align/次数差。
+    turn = fr(50, 10, body=bytes(range(11)), series=0x0203)
+    feature = fr(51, 41, body=b"", series=0)
+    c = run([turn, feature, bag_fr], [turn, bag_fr, feature])
+    rp = c["random_branch_pairs"] or {}
+    chk(c["diffs"] == [] and rp.get("oracle_pairs") == 1 and rp.get("rust_pairs") == 1
+        and rp.get("counts_equal") is True and c["movable_frames"]["pairs_compared"] == 1,
+        "movable201 A1：201 位于 10/41 随机对内部 ⇒ 不拆对、diffs=[]",
+        (c["diffs"][:2], rp, c["movable_frames"]))
+
     moved_non201 = [other[1], other[0], other[2], bag_fr]
     c = run(base_o, moved_non201)
     chk(c["diffs"] != [], "movable201 A2：移动非 201 ident ⇒ 判红",
@@ -2833,7 +2846,14 @@ def cmd_selftest():
         mod.traceback.print_exc()
         print("RED: compare_runs selftest 未跑完（INCOMPLETE）")
         return 2
-    return rc or extra_rc
+    if extra_rc:
+        # 辅助牙不在这条 harness 的 352 分母里；必须在它打印 GREEN 后再给总态，
+        # 否则日志末行会误导为全绿（reviewer-20 N1）。
+        print("RED: compare_runs auxiliary teeth FAILED（random_pairs / movable201；见上方 FAIL 行）")
+        return rc or extra_rc
+    if rc == 0:
+        print("AUX_TEETH GREEN: random_pairs + movable201（计数见各自 *_SELFTEST 行）")
+    return rc
 
 
 def main(argv=None):
