@@ -10229,7 +10229,7 @@ def selftest():
                       and ("%s=0" % PIN_LAYOUT_KEY)
                       in (wmi_pin_checks(dbp["sides"]["rust"].get("stack")) or []))
             no_pin = copy.deepcopy(alt)
-            no_pin["sides"]["rust"]["env"].pop(PIN_LAYOUT_KEY, None)
+            (no_pin["sides"]["rust"].get("env") or {}).pop(PIN_LAYOUT_KEY, None)
             no_pin_ok = ((no_pin["sides"]["rust"].get("env") or {}).get(PIN_LAYOUT_KEY) == "0")
             alt_err = ""
         except ConfigError as exc:
