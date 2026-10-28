@@ -354,8 +354,8 @@ def _pin_log(stack):
     return argv[i + 1] if i + 1 < len(argv) else None
 
 
-def check_pin_static(alt, wm, pin_log):
-    """`alt`/`window-magic` 的 pin 口径（参数可注入，`--selftest` 用）。"""
+def check_pin_static(alt, wm, pin_log, layout=None):
+    """`alt`/`window-magic`/`window-layout` 的 pin 口径（参数可注入，`--selftest` 用）。"""
     problems = []
     rs = (wm.get("sides") or {}).get("rust") or {}
     cs = (wm.get("sides") or {}).get("csharp") or {}
@@ -385,11 +385,29 @@ def check_pin_static(alt, wm, pin_log):
     if PIN_KEY in alt_rs_env:
         problems.append("alt.rust.env 不该有 %s（alt 是窗口基线 profile，不能被窗口 pin 污染）"
                         % PIN_KEY)
+    if layout is not None:
+        lrs = (layout.get("sides") or {}).get("rust") or {}
+        lenv = lrs.get("env") or {}
+        if lenv.get(PIN_KEY) != PIN_VALUE:
+            problems.append("window-layout.rust.env[%s]=%r（应为 %r，53 对拍专用）"
+                            % (PIN_KEY, lenv.get(PIN_KEY), PIN_VALUE))
+        lchecks = _pin_checks(lrs.get("stack"))
+        if lchecks is None:
+            problems.append("window-layout.rust.stack 不是 WMI 包装（pin 无法自证）")
+        elif ("%s=%s" % (PIN_KEY, PIN_VALUE)) not in lchecks:
+            problems.append("window-layout.rust.stack 未接 -PinChecks %s=%s（实际 %r）"
+                            % (PIN_KEY, PIN_VALUE, lchecks))
+        llog = _pin_log(lrs.get("stack"))
+        if not llog:
+            problems.append("window-layout.rust.stack 缺 -PinLog")
+        elif norm_path(llog) != norm_path(pin_log):
+            problems.append("window-layout -PinLog=%r，与 RUST_STACK_PIN_LOG=%r 不一致"
+                            % (llog, pin_log))
     if problems:
         return FAIL, "；".join(problems), \
-            "回退 card_window.py 的 window-magic 派生（_derived_magic_profile）"
-    return OK, "window-magic: rust env %s=%s + -PinChecks/-PinLog 已接线；alt 未污染" \
-        % (PIN_KEY, PIN_VALUE), None
+            "回退 card_window.py 的 window-magic/window-layout 派生（alt 保持干净）"
+    return OK, ("window-magic + window-layout: rust env %s=%s + -PinChecks/-PinLog 已接线；"
+                "alt 未污染" % (PIN_KEY, PIN_VALUE)), None
 
 
 def check_pin_smoke(pin_log, wrapper=WMI_WRAPPER, runner=None):
@@ -505,8 +523,8 @@ def check_roster(repo=None, manifest=None):
     for s in scen:
         names.append(s.get("name"))
         numbers.append(s.get("n"))
-        if s.get("profile") not in ("alt", "window-magic"):
-            problems.append("%s profile=%r（只允许 alt / window-magic）"
+        if s.get("profile") not in ("alt", "window-magic", "window-layout"):
+            problems.append("%s profile=%r（只允许 alt / window-magic / window-layout）"
                             % (s.get("name"), s.get("profile")))
         p = os.path.join(repo, "tools", "probe", "scenarios", "%s.json" % s.get("name"))
         if not os.path.isfile(p):
@@ -857,12 +875,13 @@ def run_all(root=DEFAULT_PRIVATE_ROOT, start_rust=DEFAULT_START_RUST, repo=REPO,
         cw = _load_card_window()
         alt = cw.load_profile("alt")
         wm = cw.load_profile("window-magic")
+        layout = cw.load_profile("window-layout")
         pin_log = cw.RUST_STACK_PIN_LOG
     except Exception as ex:  # ConfigError / import 失败都按 FAIL
         rep.add("pin_static", FAIL, "加载内置 profile 失败：%s" % ex,
-                "修 card_window.py 的 window-magic 派生")
+                "修 card_window.py 的 window-magic/window-layout 派生")
     else:
-        status, detail, fix = check_pin_static(alt, wm, pin_log)
+        status, detail, fix = check_pin_static(alt, wm, pin_log, layout)
         rep.add("pin_static", status, detail, fix)
 
     if skip_pin_smoke:
@@ -1062,6 +1081,17 @@ def selftest():
         wm_bad2["sides"]["rust"]["env"] = {}
         chk(check_pin_static(alt, wm_bad2, "E:/log/game-svr.out.log")[0] == FAIL,
             "牙: 缺 MIR2_CLIENT_ABILITY_LAYOUT=0 => FAIL")
+        layout = {"sides": {"rust": json.loads(json.dumps(rs))}}
+        chk(check_pin_static(alt, wm, "E:/log/game-svr.out.log", layout)[0] == OK,
+            "pin: window-layout 独立 pin 接线 => OK")
+        layout_bad = {"sides": {"rust": json.loads(json.dumps(rs))}}
+        layout_bad["sides"]["rust"]["env"] = {}
+        chk(check_pin_static(alt, wm, "E:/log/game-svr.out.log", layout_bad)[0] == FAIL,
+            "牙: window-layout 缺 MIR2_CLIENT_ABILITY_LAYOUT=0 => FAIL")
+        alt_bad = json.loads(json.dumps(alt))
+        alt_bad["sides"]["rust"]["env"] = {PIN_KEY: "0"}
+        chk(check_pin_static(alt_bad, wm, "E:/log/game-svr.out.log", layout)[0] == FAIL,
+            "牙: alt 被布局 pin 污染 => FAIL（run8 preflight 回归）")
 
         # roster：条数按清单实况（不硬编码）；已封存 pickup_item 不得入列；n 必须 1..N 连续。
         # 牙必须钉在**正确语义**上（断号/重复/pickup），不能靠「多一条就红」——那是 count==17 的旧语义。
