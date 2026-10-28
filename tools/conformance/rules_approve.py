@@ -5,8 +5,10 @@
 卡：`openmir2-rules-pending-adjudication`（tier L；改判据 = 改验收口径，必须独立复审）。
 
 裁定（2026-10-25，Leader/coordinator）：
-  * **转正 50 条**：`global` 4 + `rules` 里除 ident 10/14/50 的 45 条 + `db` 1；
-  * **保留 PENDING 3 条**：`rules` 的 ident `10` / `14` / `50`（理由见卡面 decision）。
+  * **转正 50 条**：`global` 4 + `rules` 里除 ident 10/50 的 45 条 + `db` 1；
+  * **保留 PENDING 2 条**：`rules` 的 ident `10` / `50`（理由见卡面 decision）；
+  * **2026-10-29 追加**：ident `14` 经 owner/coordinator 裁决转正（新 decision oid），
+    保留 counts+shape 全等才剔除的判据（见 compare_runs 的 ignore_rule_mismatch）。
 
 本工具**只改 approved_by**：`action`/`head_mask`/`mask_fields`/`tier`/`reason` 一个字都不动
 （要改判据内容另开卡走评审）。
@@ -30,10 +32,14 @@ DEFAULT_RULES = os.path.join(HERE, "rules.json")
 #: 本卡 issue oid（`walgit collab` 的 issue entry oid；裁定记录在卡线程里）。
 DECISION_OID = "062972b6581e9fe4fd15370bdbbb4f8a4e3758ce"
 #: 保留 PENDING 的 `rules` ident（int）。
-KEEP_PENDING_IDENTS = frozenset({10, 14, 50})
+KEEP_PENDING_IDENTS = frozenset({10, 50})
 #: 翻正后的 approved_by 模板：保留原草稿人，格式与卡面一致。
 APPROVED_TMPL = ("openmir2-orchestrator (coordinator review 2026-10-25, "
                  "decision=%s; draft: %%s)" % DECISION_OID)
+#: 2026-10-29 的 ident14 追加裁决（只用于 ident 14）。
+DECISION_OID_14 = "81f45a499d7a25227f93bc1e933cc6f086b3b669"
+APPROVED_TMPL_14 = ("openmir2-orchestrator (coordinator review 2026-10-29, "
+                    "decision=%s; draft: %%s)" % DECISION_OID_14)
 #: `reason` 最短长度（卡面硬要求）。
 MIN_REASON_LEN = 20
 
@@ -54,13 +60,14 @@ def _draft_of(value):
 
 
 def approved_ok(value):
-    """approved_by 是否已是本裁定的正式批准格式（含 coordinator 标记 + 草稿人）。"""
+    """approved_by 是否已是正式批准格式（2026-10-25 全量裁定或 2026-10-29 ident14 追加）。"""
     s = str(value or "")
-    return (not _is_pending(s)
-            and "coordinator review 2026-10-25" in s
-            and ("decision=%s" % DECISION_OID) in s
-            and "draft:" in s
-            and bool(_draft_of(s)))
+    if _is_pending(s) or not s or "draft:" not in s or not _draft_of(s):
+        return False
+    return ((("coordinator review 2026-10-25" in s)
+             and (("decision=%s" % DECISION_OID) in s))
+            or (("coordinator review 2026-10-29" in s)
+                and (("decision=%s" % DECISION_OID_14) in s)))
 
 
 def _validate_entry(entry, where, keep_pending):
@@ -131,7 +138,8 @@ def apply_rules(rules):
     for ns, idx, entry in to_flip:
         order = list(entry.keys())
         draft = _draft_of(entry.get("approved_by"))
-        entry["approved_by"] = APPROVED_TMPL % draft
+        entry["approved_by"] = ((APPROVED_TMPL_14 if entry.get("ident") == 14
+                                 else APPROVED_TMPL) % draft)
         # 键序保持（approved_by 已存在，赋值不改变位置）
         assert list(entry.keys()) == order
     return new, rows
@@ -182,8 +190,8 @@ def selftest():
         checks.append((cond, msg))
 
     ok, rows, to_flip = check_rules(base)
-    chk(ok and len(to_flip) == 3,
-        "合法输入：global/rules(11)/db 待翻正，10/14 保留（rows=%d）" % len(rows))
+    chk(ok and len(to_flip) == 4,
+        "合法输入：global/rules(11/14)/db 待翻正，10 保留（rows=%d）" % len(rows))
     new, _ = apply_rules(base)
     chk(new["global"][0]["approved_by"].endswith("draft: worker-1)")
         and "coordinator review 2026-10-25" in new["global"][0]["approved_by"]
@@ -191,8 +199,9 @@ def selftest():
         "翻正格式：coordinator review + decision oid + 原草稿人")
     chk(new["rules"][0]["approved_by"] != new["rules"][1]["approved_by"]
         and new["rules"][1]["approved_by"].startswith("PENDING")
-        and new["rules"][2]["approved_by"].startswith("PENDING"),
-        "ident 10/14 保持 PENDING；其它翻正")
+        and "coordinator review 2026-10-29" in new["rules"][2]["approved_by"]
+        and ("decision=%s" % DECISION_OID_14) in new["rules"][2]["approved_by"],
+        "ident 10 保持 PENDING；14 按 2026-10-29 裁决翻正；其它翻正")
     ok2, rows2, to_flip2 = check_rules(new)
     chk(ok2 and not to_flip2, "幂等：翻正后再 check 无需再改")
     chk(list(new["rules"][0].keys()) == list(base["rules"][0].keys()),
