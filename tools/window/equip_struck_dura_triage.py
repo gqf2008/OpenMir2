@@ -29,14 +29,18 @@ WEAPON_SLOT = 1
 WEAR_MIN = 2
 WEAR_MAX = 6  # Random(5)+2，WeaponStrong=0
 
-# 攻击局部窗口的站点 vocabulary（与 rng_ledger_diff.CANON_RULES 的 attack 族一致）。
-# 窗口 shape 取「A→首个 attack_success 之间**全部** attack 族 canonical 的有序序列（含重复）」，
-# 这样一侧多抽/少抽一次 B/C 会直接改变 shape，而不是被固定三元组吞掉。
+# 攻击族站点 vocabulary（与 rng_ledger_diff.CANON_RULES 的 attack 族一致）。
 ATTACK_WINDOW_CANON = (
     "atk_power_a", "atk_power_b", "atk_power_base", "hit_gate", "attack_success",
     "hit_struck_damage", "hit_struck_damage2", "struck_durability",
     "struck_durability_slot", "attack_skill_point_count",
 )
+# **玩家攻击独占**的 canonical：C# 只由 PlayObject 的
+# GetAttackPower(:2929/:2934) / AttackSuccess 产生，Rust 对应 combat.rs:109/111 + 1150/1258。
+# 其余攻击族 canonical（atk_power_base/hit_gate/hit_struck_damage…）在 C# 全局流里
+# **无法归属 actor**（账本没有线程/actor 列，怪物线程随时会插一条），因此只作为 foreign
+# 计数，不进入 shape、不参与等价判定。shape 只取玩家独占 canonical 的有序序列（含重复）。
+PLAYER_ATTACK_CANON = ("atk_power_a", "atk_power_b", "attack_success")
 # 玩家构造抽的站点识别（C# PlayObject..ctor / Rust ctor_fold 折叠点）。抽成常量便于自测钉住。
 PLAYER_CTOR_SITES = ("PlayObject..ctor@PlayObject.cs", "ctor_fold.rs:545")
 
@@ -169,17 +173,21 @@ def analyze_rng_streams(csharp_path, rust_path):
             break
 
     def attack_draw_counts(rows):
+        """全流攻击族计数，拆成玩家独占（可与对侧比）与 all（背景，不可跨侧比）。"""
         counts = collections.Counter(
             rd.canonical(row[4]) for row in rows
             if rd.canonical(row[4]) in ATTACK_WINDOW_CANON)
-        return dict(sorted(counts.items()))
+        player = {name: counts[name] for name in PLAYER_ATTACK_CANON if name in counts}
+        return dict(sorted(player.items())), dict(sorted(counts.items()))
 
     def attack_window(rows):
         """窗口 = 唯一的 `atk_power_a` → 其后的首个 `attack_success`（含两端）。
 
-        shape 不是「搜到 A/B/C 再拼固定三元组」，而是窗口内**全部** attack 族 canonical 的
-        有序序列（含重复）；重复/缺失的 B、C 会改变 shape ⇒ 可判多抽/少抽。起点不唯一
-        （一次跑里多次玩家攻击）或没有终点时返回 None，交上层判 UNDECIDABLE，不静默取第一个。
+        shape 只取**玩家独占** canonical（A/B/C）的有序序列（含重复）：这些站点只由
+        PlayObject 的取数产生，可归属到玩家攻击；重复/缺失会改变 shape ⇒ 可判多抽/少抽。
+        `hit_gate`/`atk_power_base`/`hit_struck_damage` 等共享 canonical 在 C# 全局流里
+        无法归属 actor（怪物线程会插入），只作 foreign 计数，**不进入 shape、不改变分类**。
+        起点不唯一（一次跑里多次玩家攻击）或没有终点时返回 None，交上层判 UNDECIDABLE。
         """
         starts = [i for i, row in enumerate(rows)
                   if rd.canonical(row[4]) == "atk_power_a"]
@@ -193,17 +201,23 @@ def analyze_rng_streams(csharp_path, rust_path):
         if ic is None:
             return None, len(starts), "atk_power_a 之后没有 attack_success，窗口无法定界"
         window = rows[ia:ic + 1]
-        attack_rows = [row for row in window
-                       if rd.canonical(row[4]) in ATTACK_WINDOW_CANON]
-        shape = [rd.canonical(row[4]) for row in attack_rows]
+        player_rows = [row for row in window
+                       if rd.canonical(row[4]) in PLAYER_ATTACK_CANON]
+        foreign_rows = [row for row in window
+                        if rd.canonical(row[4]) in ATTACK_WINDOW_CANON
+                        and rd.canonical(row[4]) not in PLAYER_ATTACK_CANON]
+        shape = [rd.canonical(row[4]) for row in player_rows]
         # 首个 Success 之后再出现的 Success 属于同一次攻击的毒门取数（C# :221/:225、
-        # Rust 1150/1258 同 canonical）或多抽；扫描到下一个非 Success 的攻击族抽为止
-        # （那已是下一次攻击的开始），不把后续攻击算进本窗口。两侧该计数不等 ⇒ 多/少抽 C。
-        stop = next((i for i in range(ic + 1, len(rows))
-                     if rd.canonical(rows[i][4]) in ATTACK_WINDOW_CANON
-                     and rd.canonical(rows[i][4]) != "attack_success"), len(rows))
-        trailing = [row for row in rows[ic + 1:stop]
+        # Rust 1150/1258 同 canonical）或多抽。扫描到**下一个 atk_power_a**（下一次玩家攻击
+        # 的起点）为止：外来的 atk_power_base/hit_gate 等行不得截断扫描，否则会把多抽 C 漏掉。
+        next_a = next((i for i in range(ic + 1, len(rows))
+                       if rd.canonical(rows[i][4]) == "atk_power_a"), len(rows))
+        trailing = [row for row in rows[ic + 1:next_a]
                     if rd.canonical(row[4]) == "attack_success"]
+        trailing_foreign = collections.Counter(
+            rd.canonical(row[4]) for row in rows[ic + 1:next_a]
+            if rd.canonical(row[4]) in ATTACK_WINDOW_CANON
+            and rd.canonical(row[4]) not in PLAYER_ATTACK_CANON)
         middle = rows[ia + 1:ic]
         interleaved = collections.Counter(
             rd.canonical(row[4]) for row in middle
@@ -211,12 +225,17 @@ def analyze_rng_streams(csharp_path, rust_path):
         return {
             "shape": shape,
             "attack_counts": dict(sorted(collections.Counter(shape).items())),
-            "maxes": [row[2] for row in attack_rows],
+            "maxes": [row[2] for row in player_rows],
             "window_draws": [ia + 1, ic + 1],
             "values": [{"max": row[2], "result": row[3], "seq": row[0], "site": row[4]}
-                       for row in attack_rows],
+                       for row in player_rows],
+            "foreign_attack_draws_between_a_success": len(foreign_rows),
+            "foreign_attack_sites": dict(sorted(collections.Counter(
+                rd.canonical(row[4]) for row in foreign_rows).items())),
             "trailing_success_after_window": len(trailing),
             "trailing_success_seqs": [row[0] for row in trailing],
+            "trailing_foreign_attack_draws": sum(trailing_foreign.values()),
+            "trailing_foreign_sites": dict(sorted(trailing_foreign.items())),
             "interleaved_between_a_success": sum(interleaved.values()),
             "interleaved_sites": dict(sorted(interleaved.items())),
         }, len(starts), None
@@ -239,17 +258,19 @@ def analyze_rng_streams(csharp_path, rust_path):
             "rust: " + rb_reason if rb_reason else "") if part)
     elif ca["shape"] != rb["shape"]:
         classification = "ATTACK_CALL_SHAPE_DIVERGENCE"
-        reason = "攻击族有序序列（含重复）不同 ⇒ 存在多抽/少抽或次序差"
+        reason = "玩家攻击族有序序列（A/B/C，含重复）不同 ⇒ 存在多抽/少抽或次序差"
     elif ca["trailing_success_after_window"] != rb["trailing_success_after_window"]:
         classification = "ATTACK_CALL_SHAPE_DIVERGENCE"
         reason = "首个 Success 之后的 Success 抽数不同（毒门/多抽 C）"
     elif ca["maxes"] != rb["maxes"]:
         classification = "ATTACK_CALL_ARG_DIVERGENCE"
-        reason = "攻击族调用序列相同但取数上界不同（参数面差，不是多/少抽）"
+        reason = "玩家攻击族调用序列相同但取数上界不同（参数面差，不是多/少抽）"
     else:
         classification = "ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED"
     csharp_probe = _seed_probe(csharp_path)
     rust_probe = _seed_probe(rust_path)
+    csharp_player_counts, csharp_all_counts = attack_draw_counts(a)
+    rust_player_counts, rust_all_counts = attack_draw_counts(b)
     result = {
         "status": "UNDECIDABLE" if classification == "UNDECIDABLE_ATTACK_WINDOW" else "DIAGNOSED",
         "seed_probe": {"csharp": csharp_probe, "rust": rust_probe},
@@ -259,14 +280,18 @@ def analyze_rng_streams(csharp_path, rust_path):
         "first_value_divergence": first,
         "player_ctor_draw": {"csharp": player_ctor(a), "rust": player_ctor(b)},
         "attack_windows_total": {"csharp": ca_total, "rust": rb_total},
-        "attack_draw_counts": {"csharp": attack_draw_counts(a),
-                               "rust": attack_draw_counts(b)},
+        # player_attack_counts 与分类同口径（A/B/C，仅玩家独占）；all_attack_counts 是背景，
+        # 含怪物线程/怪物攻击的共享 canonical，**不可跨侧直接比**。
+        "player_attack_counts": {"csharp": csharp_player_counts,
+                                 "rust": rust_player_counts},
+        "all_attack_counts": {"csharp": csharp_all_counts, "rust": rust_all_counts},
         "attack_local": {"csharp": ca, "rust": rb},
         "classification": classification,
         "boundary": "全局 draw 序列含 C# 多线程共享 Random 的交错；首差与末值/夹层差不能直接归为"
-                    "攻击实现缺/多抽。shape 是 A→首个 Success 之间全部 attack 族 canonical 的"
-                    "有序序列（含重复），多/少抽会直接触发 ATTACK_CALL_SHAPE_DIVERGENCE；"
-                    "shape 相等仍不等于 Dura 数值相等（流位置/交错仍是 R 级未决项）。",
+                    "攻击实现缺/多抽。shape 只取玩家独占 canonical（A/B/C）的有序序列（含重复）；"
+                    "共享 canonical（atk_power_base/hit_gate/hit_struck_damage…）在 C# 全局流里"
+                    "无法归属 actor，只计入 foreign，不参与分类。shape 相等仍不等于 Dura 数值相等"
+                    "（流位置/交错仍是 R 级未决项）。",
     }
     if reason:
         result["reason"] = reason
@@ -483,6 +508,8 @@ def check():
         ra = r"crates\world\src\combat.rs:109"
         rb_ = r"crates\world\src\combat.rs:111"
         rc = r"crates\world\src\combat.rs:1152"
+        base = "M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892"
+        hsd = "M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792"
         csharp = rng_file("csharp.tsv", [
             (1, 5, 3, ca), (2, 20, 7, w), (3, 20, 1, w),
             (4, 10, 8, cb), (5, 20, 2, w), (6, 5, 3, cc)])
@@ -499,9 +526,11 @@ def check():
                 == ["atk_power_a", "atk_power_b", "attack_success"]
                 and side_case(align, "csharp").get("interleaved_between_a_success") == 3
                 and side_case(align, "rust").get("interleaved_between_a_success") == 0
-                and ((align.get("attack_draw_counts") or {}).get("csharp") or {})
-                .get("atk_power_a") == 1,
-                "RNG 诊断：攻击局部 shape 相等，C# 夹层抽数被量化、攻击计数可读")
+                and ((align.get("player_attack_counts") or {}).get("csharp") or {})
+                .get("atk_power_a") == 1
+                and ((align.get("all_attack_counts") or {}).get("csharp") or {})
+                .get("atk_power_b") == 1,
+                "RNG 诊断：玩家攻击 shape 相等，C# 夹层抽数被量化、玩家/全流计数分离")
 
         require(align["first_value_divergence"] is not None
                 and align["first_value_divergence"]["index"] == 2,
@@ -530,6 +559,52 @@ def check():
                 and side_case(align_extra_c, "rust").get("trailing_success_after_window") == 1
                 and side_case(align_extra_c, "csharp").get("trailing_success_after_window") == 0,
                 "RNG 诊断牙③：一侧多抽一次 C ⇒ DIVERGENCE（首个 Success 之后仍有 Success）")
+
+        foreign_csharp = rng_file("foreign-c.tsv", [
+            (1, 5, 3, ca), (2, 20, 7, base), (3, 10, 8, cb), (4, 5, 3, cc)])
+        align_foreign = analyze_rng_streams(foreign_csharp, rust)
+        require(align_foreign["classification"]
+                == "ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED"
+                and side_case(align_foreign, "csharp").get("shape")
+                == ["atk_power_a", "atk_power_b", "attack_success"]
+                and side_case(align_foreign, "csharp")
+                .get("foreign_attack_draws_between_a_success") == 1
+                and side_case(align_foreign, "rust")
+                .get("foreign_attack_draws_between_a_success") == 0,
+                "RNG 诊断牙⑨：C# 怪物线程插 atk_power_base ⇒ 只记 foreign，不得误报 DIVERGENCE")
+
+        foreign_hsd = rng_file("foreign-hsd.tsv", [
+            (1, 5, 3, ca), (2, 20, 7, hsd), (3, 10, 8, cb), (4, 5, 3, cc)])
+        align_hsd = analyze_rng_streams(foreign_hsd, rust)
+        require(align_hsd["classification"]
+                == "ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED"
+                and side_case(align_hsd, "csharp")
+                .get("foreign_attack_sites") == {"hit_struck_damage": 1},
+                "RNG 诊断牙⑩：C# 窗口内 hit_struck_damage 同样只记 foreign（共享 canonical 不归属）")
+
+        require(((align_foreign.get("player_attack_counts") or {}).get("csharp") or {})
+                == {"atk_power_a": 1, "atk_power_b": 1, "attack_success": 1}
+                and ((align_foreign.get("all_attack_counts") or {}).get("csharp") or {})
+                .get("atk_power_base") == 1,
+                "RNG 诊断牙⑪：player_attack_counts 不含怪物行，all_attack_counts 才含")
+
+        arg_rust = rng_file("arg-r.tsv", [
+            (1, 5, 3, ra), (2, 9, 8, rb_), (3, 5, 4, rc)])
+        align_arg = analyze_rng_streams(csharp, arg_rust)
+        require(align_arg["classification"] == "ATTACK_CALL_ARG_DIVERGENCE"
+                and "上界" in align_arg.get("reason", ""),
+                "RNG 诊断牙⑫：shape 相同但取数上界不同 ⇒ ATTACK_CALL_ARG_DIVERGENCE")
+
+        trailing_foreign = rng_file("trailing-foreign.tsv", [
+            (1, 5, 3, ca), (2, 10, 8, cb), (3, 5, 3, cc),
+            (4, 20, 7, base), (5, 5, 1, cc)])
+        align_trailing = analyze_rng_streams(trailing_foreign, rust)
+        require(align_trailing["classification"] == "ATTACK_CALL_SHAPE_DIVERGENCE"
+                and side_case(align_trailing, "csharp")
+                .get("trailing_success_after_window") == 1
+                and side_case(align_trailing, "csharp")
+                .get("trailing_foreign_attack_draws") == 1,
+                "RNG 诊断牙⑬：外来行不得截断 trailing（否则多抽 C 漏报）")
 
         no_success = rng_file("no-success.tsv", [
             (1, 5, 3, ra), (2, 10, 8, rb_)])
@@ -632,7 +707,7 @@ def check():
                 and "rng-stream" in bad_rng.get("reason", ""),
                 "analyze() 接线牙：一侧坏头 ⇒ rng_alignment=UNDECIDABLE 且带 reason")
 
-    expected_checks = 22
+    expected_checks = 27
     passed = sum(condition for condition, _name in cases)
     print("CHECK %d/%d" % (passed, len(cases)))
     return 0 if (passed == len(cases) == expected_checks and cases) else 1
