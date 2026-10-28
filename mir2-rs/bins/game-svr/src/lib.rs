@@ -19906,6 +19906,7 @@ fn drain_monster_ref_msgs(
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
 ) {
     for m in world.take_monster_ref_msgs() {
         if m.self_only {
@@ -19977,10 +19978,18 @@ fn drain_monster_ref_msgs(
             // `RefNameColor` ⇒ `PlayObject.Message.cs:1677-1679`：接收者侧
             // `GetChrColor(baseObject)`，普通怪取实体 NameColor（构造默认 255），无尾。
             mir2_protocol::messages::RM_CHANGENAMECOLOR => {
-                let color = world
-                    .entities
-                    .get(m.actor_id)
-                    .map_or(0, |e| mir2_world::slave::get_chr_color(e, &[], 0));
+                let Some(e) = world.entities.get(m.actor_id) else {
+                    continue;
+                };
+                // 近战两条生产臂只从 `MonsterObject` 到达；NPC 支不可达。仍传 oracle
+                // ctor 缺省 255（`GameSvrConf.cs:1923`）而非任意 0；未来若接入 NPC
+                // 命中路径，必须改为读取 `NpcNameColor` 配置。
+                const NPC_NAME_COLOR_ORACLE_DEFAULT: u8 = 255;
+                let color = mir2_world::slave::get_chr_color(
+                    e,
+                    &pet_cfg.slave_color,
+                    NPC_NAME_COLOR_ORACLE_DEFAULT,
+                );
                 smframe::sm_changenamecolor(m.actor_id, color)
             }
             mir2_world::monai::RM_DIGUP => {
@@ -21240,9 +21249,11 @@ fn tick_world_with_specials(
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
 ) -> mir2_world::TickRecord {
-    let mut rec =
-        tick_world_head_with_specials(world, host, table, registry, displays, online, gates);
+    let mut rec = tick_world_head_with_specials(
+        world, host, table, registry, displays, online, gates, pet_cfg,
+    );
     world.tick_tail(&mut rec);
     rec
 }
@@ -21336,6 +21347,7 @@ fn tick_world_head_with_specials(
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
 ) -> mir2_world::TickRecord {
     let rec = world.tick_head();
     // oracle `Operate(RM_ZEN_BEE)` 的 `RegenMonsterByName`：与本 tick 其它怪物/商人取数
@@ -21354,7 +21366,7 @@ fn tick_world_head_with_specials(
     }
     drain_special_ref_msgs(world, online, gates);
     // **MB-1**：怪物 `Run` 覆写的出帧（`SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`）。
-    drain_monster_ref_msgs(world, displays, online, gates);
+    drain_monster_ref_msgs(world, displays, online, gates, pet_cfg);
     rec
 }
 
@@ -25416,6 +25428,7 @@ fn sim_loop(
             &mut displays,
             &online,
             &gates,
+            &enter_cfg.pet_cfg,
         );
         // oracle `PlayObject.Message.cs:262-266`：3s `CheckDupObjTick` 支里的 `GetStartPoint()`。
         apply_get_start_point_after_tick(
@@ -65695,6 +65708,7 @@ SendRefMsgRange=15
                 &mut displays,
                 &online,
                 &gates,
+                &mir2_data::pet_slave::PetSlaveConfig::default(),
             );
             assert!(
                 world.pending_special_ref_msgs.is_empty(),
@@ -65744,6 +65758,11 @@ SendRefMsgRange=15
         let mut m = Entity::new(0, "石像".to_string(), 10, 10);
         m.race = 101;
         let mid = world.add_entity(m);
+        let mut slave = Entity::new(0, "宝宝".to_string(), 10, 11);
+        slave.race = 101;
+        slave.master = Some(pid);
+        slave.slave_exp_level = 2;
+        let sid = world.add_entity(slave);
         world.tick(); // Enter 落格
 
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -65799,6 +65818,25 @@ SendRefMsgRange=15
             0,
             0,
         ));
+        world
+            .pending_monster_ref_msgs
+            .push(mir2_world::MonsterRefMsg {
+                actor_id: sid,
+                ident: mir2_protocol::messages::RM_CHANGENAMECOLOR,
+                w_param: 0,
+                n_param1: 0,
+                n_param2: 0,
+                n_param3: 0,
+                target_x: 0,
+                target_y: 0,
+                dir: 0,
+                x: 10,
+                y: 11,
+                map_id: 0,
+                status: 0,
+                self_only: false,
+                recipients: vec![pid],
+            });
         let mut hidden = msg(mir2_world::monai::RM_DIGUP, 10, 10, 0);
         hidden.self_only = true;
         world.pending_monster_ref_msgs.push(hidden);
@@ -65806,7 +65844,9 @@ SendRefMsgRange=15
         hidden_color.self_only = true;
         world.pending_monster_ref_msgs.push(hidden_color);
 
-        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        let mut pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        pet_cfg.slave_color[2] = 0x93;
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
         let mut bodies = Vec::new();
         while let Ok(ev) = rx0.try_recv() {
             if let SimToGate::SendFrame { body, socket } = ev {
@@ -65814,7 +65854,7 @@ SendRefMsgRange=15
                 bodies.push(body);
             }
         }
-        assert_eq!(bodies.len(), 5, "self_only 不产帧（含 656 抑制负例）");
+        assert_eq!(bodies.len(), 6, "普通怪与宝宝各一条 656；self_only 不产帧");
         assert_eq!(
             bodies[0],
             smframe::sm_digup(mid, 10, 10, 2, 0, 0x0033_4455, 0x2),
@@ -65827,6 +65867,11 @@ SendRefMsgRange=15
         );
         assert_eq!(bodies[3], smframe_ext::sm_716(mid, 11, 10, 1));
         assert_eq!(bodies[4], smframe::sm_changenamecolor(mid, 255));
+        assert_eq!(
+            bodies[5],
+            smframe::sm_changenamecolor(sid, 0x93),
+            "宝宝颜色必须取配置 SlaveColor[SlaveExpLevel]，不得回落 NameColor"
+        );
         assert!(
             world.pending_monster_ref_msgs.is_empty(),
             "排空后队列必须为空（否则无界增长）"
@@ -65934,6 +65979,7 @@ SendRefMsgRange=15
             &mut displays,
             &online,
             &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
         );
         let frames = take_frames(&mut rx0);
         let hits: Vec<_> = frames
@@ -66004,6 +66050,7 @@ SendRefMsgRange=15
             &mut displays,
             &online,
             &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
         );
         let tick2_frames = take_frames(&mut rx0);
         assert!(
@@ -66123,7 +66170,13 @@ SendRefMsgRange=15
             10,
         ));
 
-        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        drain_monster_ref_msgs(
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
         let mut bodies = Vec::new();
         while let Ok(ev) = rx0.try_recv() {
             if let SimToGate::SendFrame { body, socket } = ev {
@@ -66255,7 +66308,13 @@ SendRefMsgRange=15
             },
         ];
         let displays = downlink::DisplayTable::new();
-        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        drain_monster_ref_msgs(
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
 
         let mut by_socket: HashMap<i32, Vec<Vec<u8>>> = HashMap::new();
         while let Ok(ev) = rx0.try_recv() {
@@ -66451,7 +66510,13 @@ SendRefMsgRange=15
             },
         ];
         let displays = downlink::DisplayTable::new();
-        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        drain_monster_ref_msgs(
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
         let mut socks = Vec::new();
         let want = smframe::sm_spacemove_hide(mir2_protocol::messages::SM_SPACEMOVE_HIDE, mid);
         while let Ok(ev) = rx0.try_recv() {
@@ -66560,7 +66625,13 @@ SendRefMsgRange=15
             },
         ];
         let displays = downlink::DisplayTable::new();
-        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        drain_monster_ref_msgs(
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
         let mut by_socket: HashMap<i32, Vec<u8>> = HashMap::new();
         while let Ok(ev) = rx0.try_recv() {
             if let SimToGate::SendFrame { body, socket } = ev {
@@ -66657,7 +66728,13 @@ SendRefMsgRange=15
                 // 发帧时刻（尚未隐藏）快照到玩家。
                 recipients: vec![pid],
             });
-        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        drain_monster_ref_msgs(
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
         let mut frames = 0;
         while let Ok(ev) = rx0.try_recv() {
             if let SimToGate::SendFrame { body, socket } = ev {
@@ -77769,7 +77846,13 @@ mod castle_frame_tests {
             socket: 5,
             actor_id: pid,
         }];
-        drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+        drain_monster_ref_msgs(
+            &mut world,
+            &displays,
+            &online,
+            &gates,
+            &mir2_data::pet_slave::PetSlaveConfig::default(),
+        );
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {

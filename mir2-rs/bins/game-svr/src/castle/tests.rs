@@ -1107,7 +1107,13 @@ fn t127_door_close_structure_event_drains_to_sm_digdown() {
     gates.insert(0, tx0);
     let online: crate::OnlineRegistry = vec![online_entry("甲", 5, a_id)];
     let displays = downlink::DisplayTable::new();
-    crate::drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+    crate::drain_monster_ref_msgs(
+        &mut world,
+        &displays,
+        &online,
+        &gates,
+        &mir2_data::pet_slave::PetSlaveConfig::default(),
+    );
 
     let frames = drain_frames(&mut rx0);
     assert_eq!(frames.len(), 1, "SM_DIGDOWN 单帧");
@@ -1222,7 +1228,13 @@ fn t127_cross_source_frames_follow_priority_order() {
         0,
         &mir2_world::castle::StructureEvent::RefDigDown { dir: 0, x: 5, y: 5 }
     ));
-    crate::drain_monster_ref_msgs(&mut world, &displays, &online, &gates);
+    crate::drain_monster_ref_msgs(
+        &mut world,
+        &displays,
+        &online,
+        &gates,
+        &mir2_data::pet_slave::PetSlaveConfig::default(),
+    );
     // 相位③（252）：`SendBroadCastMsgExt`。
     let n3 = super::fan_out_sysmessage_to_all(
         &online,
