@@ -1606,12 +1606,8 @@ def valid_decision_oid(value):
 
 
 def _extra_approved_by(rule, info):
-    """放行记录的批准人：形状自带裁决的用它自己的 oid，继承的用规则级 oid（去重、保序）。"""
+    """放行记录的批准人：**只列形状自己的裁决 oid**（F1 后不再有「继承」）。"""
     out = []
-    if any(e.get("decision_status") in (None, "INHERIT") for e in (info.get("extra") or [])):
-        dec = str((rule or {}).get("oracle_extra_decision") or "").strip()
-        if dec:
-            out.append(dec)
     for e in (info.get("extra") or []):
         if e.get("decision_status") == "APPROVED" and e.get("decision"):
             out.append(str(e["decision"]).strip())
@@ -1697,13 +1693,10 @@ def oracle_extra_explainable(row, rule):
             return False, info
         # 逐形状裁决（卡 reopen）：条目自带 decision 时按它判（空/非法 ⇒ PENDING），
         # 未写 decision 的形状继承规则级 decision。新形状必须显式给裁决，不能白蹭旧批准。
+        # F1（reviewer-21 1ab17d61）：**每个形状都必须自带 decision 键**。
+        # 键缺失不再 INHERIT 规则级批准——否则「删掉 decision 键」就能让新形状蹭旧批准。
         _shape_dec = _spec.get("decision")
-        if _shape_dec is None:
-            _shape_status = "INHERIT"
-        elif valid_decision_oid(_shape_dec):
-            _shape_status = "APPROVED"
-        else:
-            _shape_status = "PENDING"
+        _shape_status = "APPROVED" if valid_decision_oid(_shape_dec) else "PENDING"
         extra.append({"shape": shape, "body_sha256": sha,
                       "oracle": on, "rust": rn, "delta": on - rn, "max": cap,
                       "decision": _shape_dec, "decision_status": _shape_status})
@@ -2804,9 +2797,9 @@ def compare_main(args):
             }
             blockers = list(_blockers)
             _pending_shapes = [e["shape"] for e in (info.get("extra") or [])
-                               if e.get("decision_status") not in (None, "INHERIT", "APPROVED")]
-            if _pending_shapes and status == "APPROVED":
-                blockers.append("shape %s 的裁决未落地/非法（条目自带 decision 为空或不是 oid）"
+                               if e.get("decision_status") != "APPROVED"]
+            if _pending_shapes:
+                blockers.append("shape %s 的裁决未落地/非法（decision 缺失、为空或不是 oid）"
                                 % "、".join(_pending_shapes))
             if status != "APPROVED":
                 _raw_status = str(rule.get("oracle_extra_status", "PENDING")).strip().upper()
@@ -2823,8 +2816,9 @@ def compare_main(args):
             if blockers:
                 cand["und"]["adjudication"] = "T-270"
                 cand["und"]["adjudication_blocked_by"] = "；".join(blockers)
+                _cand_status = "PENDING" if (status != "APPROVED" or _pending_shapes) else status
                 report["frames"]["oracle_extra_candidates"].append(dict(
-                    base_rec, status=status, blockers=blockers,
+                    base_rec, status=_cand_status, blockers=blockers,
                     reason=("oracle 侧多出的 SM_HIT(14)：形状符合候选条件，但 %s "
                             "⇒ 只登记候选、仍判 UNDECIDABLE（reviewer-20 R20-X1："
                             "白名单未获裁决前不放行）" % "；".join(blockers))))
@@ -2846,9 +2840,16 @@ def compare_main(args):
             report["frames"]["oracle_extra_hits"].append(rec)
 
     # T-270 白名单未获裁决 ⇒ 报告层面必须显示「还有未审过的判据」（reviewer-20 R20-X1）。
+    def _shape_pending(rule):
+        for e in ((rule or {}).get("oracle_extra_shapes") or []):
+            if not isinstance(e, dict) or not valid_decision_oid(e.get("decision")):
+                return True
+        return False
+
     _pending_extra = sorted(
         i for i, r in rules.by_ident.items()
-        if (r or {}).get("oracle_extra_shapes") and oracle_extra_status(r) != "APPROVED")
+        if (r or {}).get("oracle_extra_shapes")
+        and (oracle_extra_status(r) != "APPROVED" or _shape_pending(r)))
     if _pending_extra:
         report["rules"]["rules_pending_review"] = True
         _pending_list = report["rules"].setdefault("pending_review", [])

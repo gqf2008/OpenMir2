@@ -1052,6 +1052,20 @@ class Selftest(object):
                    and "f0b5734e" in str(_hits_d1[0].get("approved_by") or ""),
                    (rc, _hits_d1, (rep or {}).get("undecidable")))
 
+        # F1（reviewer-21 1ab17d61）：**删掉 decision 键**同样必须是 PENDING，
+        # 不能靠「键缺失 ⇒ 继承规则级批准」让新形状蹭旧批准。
+        path270_delnodec = _rules270_variant(
+            "rules-270-deldir5dec.json",
+            lambda r: [e.pop("decision", None) for e in r["oracle_extra_shapes"]
+                       if e.get("shape") == "49,49,5"])
+        rc, rep = self.compare(od270, rd270, ["--rules", path270_delnodec])
+        _fr_del = (rep or {}).get("frames") or {}
+        _cand_del = _fr_del.get("oracle_extra_candidates") or []
+        self.check("T-270 F1：删掉形状的 decision 键 => 视同 PENDING、只登记候选、仍 rc 2",
+                   rc == 2 and bool(_cand_del) and not _fr_del.get("oracle_extra_hits")
+                   and _cand_del[0].get("status") == "PENDING",
+                   (rc, _cand_del, (rep or {}).get("undecidable")))
+
         # ② 清空该形状的 decision ⇒ 视同 PENDING：只登记候选、不放行（不能白蹭规则级批准）。
         path270_d1pend = _rules270_variant(
             "rules-270-dir1-pending.json",
@@ -1060,14 +1074,21 @@ class Selftest(object):
         rc, rep = self.compare(od270d1, rd270, ["--rules", path270_d1pend])
         _fr_d1p = (rep or {}).get("frames") or {}
         _und_d1 = (rep or {}).get("undecidable") or []
+        _cand_d1p = _fr_d1p.get("oracle_extra_candidates") or []
+        _used_d1p = ((rep or {}).get("rules") or {}).get("pending_review_used") or []
         self.check("T-270 Dir=1（decision 清空）：只登记候选、仍 rc 2、blocked_by 点明形状裁决未落地",
                    rc == 2
-                   and bool(_fr_d1p.get("oracle_extra_candidates"))
+                   and bool(_cand_d1p)
                    and not _fr_d1p.get("oracle_extra_hits")
                    and any(u.get("ident") == 14
                            and "49,49,1" in str(u.get("adjudication_blocked_by") or "")
                            for u in _und_d1),
-                   (rc, _fr_d1p.get("oracle_extra_candidates"), _und_d1))
+                   (rc, _cand_d1p, _und_d1))
+        # R20-DIR2：候选 status 必须与形状裁决一致，且形状级 PENDING 要进「本次影响面」。
+        self.check("T-270 DIR2：形状 decision 清空时 candidate.status=PENDING 且 pending_review_used 含 T-270",
+                   bool(_cand_d1p) and _cand_d1p[0].get("status") == "PENDING"
+                   and any(str(x).startswith("T-270") for x in _used_d1p),
+                   (_cand_d1p[0].get("status") if _cand_d1p else None, _used_d1p))
 
         # reviewer-20 R20-W1：max 边界相等（delta==cap）必须放行；`>`→`>=` 的变异要红。
         path270_cap1 = _rules270_variant(
