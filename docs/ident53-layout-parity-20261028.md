@@ -24,7 +24,7 @@ n17 验 53 body；R 卡不因离线修复 closed。
   —— **没有** `-PinChecks` / `-PinLog`。
 - 同批 `card-window.log:722-726` 的包装自证是
   `env forwarding: 116 vars (MIR2_*: ; ...)`：所有 `MIR2_*` 均为空，未转发布局 pin。
-- 以 run5 的 `git_head=df6e404c2` 回看该版 `card_window.py:461-523`，内置 `alt` 的
+- 以 run5 的 `git_head=9fdaddac9` 回看该版 `card_window.py:461-523`，内置 `alt` 的
   `sides.rust.env` 为 `None`，stack 也是不带 pin 参数的 `wmi_stack_argv(...)`。
   ⇒ **profile 漏 env**，不是宿主没转发已存在的 pin。
 
@@ -36,7 +36,7 @@ n17 验 53 body；R 卡不因离线修复 closed。
 冻结客户端（只读）：
 
 - `E:/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas:39`：`HIGHHP = True`；
-- `.../Source/MirClient/ClMain.pas:10220-1032`：`SM_HEALTHSPELLCHANGED` 在 `HIGHHP` 下
+- `.../Source/MirClient/ClMain.pas:10220-10232`：`SM_HEALTHSPELLCHANGED` 在 `HIGHHP` 下
   `DecodeBuffer(body, @desc, SizeOf(TCharDesc))`，再取
   `HP=desc.Feature / MP=desc.Status / MaxHP=desc.StatusEx`；
 - `.../Source/Common/Grobal2.pas:3515-3519`：`TCharDesc` 是三个 `Integer`，合计 12B，
