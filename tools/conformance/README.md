@@ -123,11 +123,14 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
    保护没有取消，只是升级成可比判据（卡 `openmir2-ignore-rule-count-compare`）。
    `frames.ignored_ident_rules_counted` / `_mismatch` 是**兼容字段（只含 PENDING 规则）**，
    判「有没有 ignore 差异」请读 `_counted_all` / `_mismatch_all`（含已批准规则）。`frames.ignored_counts` 两侧都补 0（单侧命中也能直读）。
-   **受控放行（T-270）**：规则可在 ignore 条目上声明 `oracle_extra_shapes`（`"param,tag,series"` 列表）。
-   仅当额外帧**全在 oracle 侧**、形状在白名单内、body 为空，且**帧面其它差异为 0、两侧库快照比过且无差异**
-   四条同时成立时，才把该差异登记为 `frames.oracle_extra_hits`（并进 `whitelisted`，`kind=oracle_extra_hit`）
-   而不判 UNDECIDABLE；任一条不成立仍 `ignore_rule_mismatch`，并写 `adjudication_blocked_by` 说明被哪条挡住。
-   详见 `docs/ident14-extra-hit-adjudication-20261029.md`。
+   **受控放行（T-270）**：规则可在 ignore 条目上声明 `oracle_extra_shapes`
+   （`[{"shape":"param,tag,series","max":N}]`）与 `oracle_extra_status`。
+   仅当额外帧**全在 oracle 侧**、形状在白名单内且**不超过该形状 `max`**、body 为空、**帧面其它差异为 0、
+   两侧库快照比过且无差异**、且 `oracle_extra_status == "APPROVED"` 时，才把该差异登记为
+   `frames.oracle_extra_hits`（并进 `whitelisted`，`kind=oracle_extra_hit`）而不判 UNDECIDABLE；
+   任一条不成立仍 `ignore_rule_mismatch`，写 `adjudication_blocked_by` 说明被哪条挡住，并把够格的差异
+   登记到 `frames.oracle_extra_candidates`。**未拿到 owner/coordinator 裁决（status 缺省=PENDING）时只登记候选、
+   不放行**，且报告 `rules.rules_pending_review=true`。详见 `docs/ident14-extra-hit-adjudication-20261029.md`。
    两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
 2. `ident` 永远比较（即使其余字段被掩码）；错位即 `ident` 差异。
 3. 头部字段 `recog/param/tag/series` + 驱动器字段 `phase/seq/t_ms/conn`：

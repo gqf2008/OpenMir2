@@ -1560,15 +1560,43 @@ EMPTY_BODY_SHA256 = (
 
 
 def parse_oracle_extra_shapes(rule):
-    """解析 `oracle_extra_shapes`（"param,tag,series" 列表）⇒ (set, invalid_list)。"""
-    shapes, invalid = set(), []
+    """解析 `oracle_extra_shapes` ⇒ ({shape: max}, invalid_list)。
+
+    条目两种写法：`"param,tag,series"`（不设上界）或 `{"shape": "...", "max": N}`。
+    reviewer-20 R20-X2：同形状的额外帧不能无界放行，规则必须能写上限；`max` 缺省 = 不设界，
+    但仓库规则表里应为每个形状写明上限（证据里出现过几条就写几条）。
+    """
+    shapes, invalid = {}, []
     for raw in ((rule or {}).get("oracle_extra_shapes") or []):
-        parts = [x.strip() for x in str(raw).split(",")]
+        if isinstance(raw, dict):
+            shape_raw, cap = raw.get("shape"), raw.get("max")
+        else:
+            shape_raw, cap = raw, None
+        parts = [x.strip() for x in str(shape_raw).split(",")]
         if len(parts) != 3 or not all(p.lstrip("-").isdigit() for p in parts):
             invalid.append(str(raw))
-        else:
-            shapes.add(",".join(parts))
+            continue
+        if cap is not None:
+            try:
+                cap = int(cap)
+            except (TypeError, ValueError):
+                invalid.append(str(raw))
+                continue
+            if cap < 0:
+                invalid.append(str(raw))
+                continue
+        shapes[",".join(parts)] = cap
     return shapes, invalid
+
+
+def oracle_extra_status(rule):
+    """`oracle_extra_status`：只有显式 `APPROVED` 才允许放行。
+
+    缺省 / 未知值一律按 PENDING（fail-closed）：reviewer-20 R20-X1 —— 白名单本身也要有
+    owner/coordinator 裁决，卡面 issue 不等于规则表里的批准；未裁决时只登记候选，
+    该 ignore 差异仍判 UNDECIDABLE。
+    """
+    return str((rule or {}).get("oracle_extra_status", "PENDING")).strip().upper()
 
 
 def oracle_extra_explainable(row, rule):
@@ -1618,8 +1646,13 @@ def oracle_extra_explainable(row, rule):
         if sha != EMPTY_BODY_SHA256:
             info["reason"] = "shape %s 的 body 非空（sha256=%s）⇒ 有载荷" % (shape, sha)
             return False, info
+        cap = shapes[shape]
+        if cap is not None and (on - rn) > cap:
+            info["reason"] = ("shape %s 的 oracle 额外帧 %d 超过规则上界 max=%d"
+                              % (shape, on - rn, cap))
+            return False, info
         extra.append({"shape": shape, "body_sha256": sha,
-                      "oracle": on, "rust": rn, "delta": on - rn})
+                      "oracle": on, "rust": rn, "delta": on - rn, "max": cap})
     if not extra:
         info["reason"] = "计数差为 0（不该走到这里）"
         return False, info
@@ -2629,10 +2662,16 @@ def compare_main(args):
                           "相同" if row["shape_equal"] else "不同"))}
         undecidable.append(_und)
         # 受控裁决候选（T-270）：形状对得上只是**必要条件**，放行与否留给库比完之后再定。
-        _ok_extra, _extra_info = oracle_extra_explainable(
-            row, rules.by_ident.get(row["ident"]))
+        _rule_extra = rules.by_ident.get(row["ident"]) or {}
+        _ok_extra, _extra_info = oracle_extra_explainable(row, _rule_extra)
         if _ok_extra:
             pending_oracle_extra.append({"und": _und, "info": _extra_info})
+        elif _rule_extra.get("oracle_extra_shapes"):
+            # 规则登记了 T-270 白名单但本条不满足候选条件（形状/body/max/Rust 多发）⇒
+            # 在报告里写清「为什么没进候选」，别让读者自己去猜。
+            _und["adjudication"] = "T-270"
+            _und["adjudication_blocked_by"] = (
+                _extra_info.get("reason") or "不满足 T-270 候选条件")
 
     # T-270 受控裁决的第二、三个条件要在库比完之后才有答案：先记下**帧面**是否有其它差异
     # （库差异后面会并进同一个 diffs 列表，不能混在一起判）。
@@ -2682,6 +2721,7 @@ def compare_main(args):
     #   ③ 库无 diffs；④ 库无 undecidable。
     # 放行是**逐形状 + 空体**的（见 oracle_extra_explainable），不是整类 ignore。
     report["frames"]["oracle_extra_hits"] = []
+    report["frames"]["oracle_extra_candidates"] = []
     if pending_oracle_extra:
         _db = report.get("db") or {}
         _blockers = []
@@ -2694,34 +2734,59 @@ def compare_main(args):
         if (_db.get("undecidable") or []):
             _blockers.append("库有 %d 条判不了" % len(_db.get("undecidable") or []))
         for cand in pending_oracle_extra:
-            if _blockers:
+            info = cand["info"]
+            rule = rules.by_ident.get(info["ident"]) or {}
+            status = oracle_extra_status(rule)
+            verified = {"frame_diffs": 0, "db_state": _db.get("state"),
+                        "db_diffs": len(_db.get("diffs") or []),
+                        "db_undecidable": len(_db.get("undecidable") or [])}
+            base_rec = {
+                "source": "frame", "kind": "oracle_extra_hit",
+                "ident": info["ident"], "card": "openmir2-ident14-extra-hit-adjudication",
+                "ref": "T-270", "oracle": info["oracle_total"],
+                "rust": info["rust_total"], "shapes": info["extra"],
+                "verified": verified,
+            }
+            blockers = list(_blockers)
+            if status != "APPROVED":
+                blockers.append("T-270 白名单为 %s（缺 owner/coordinator 裁决条目）" % status)
+            if blockers:
                 cand["und"]["adjudication"] = "T-270"
-                cand["und"]["adjudication_blocked_by"] = "；".join(_blockers)
+                cand["und"]["adjudication_blocked_by"] = "；".join(blockers)
+                report["frames"]["oracle_extra_candidates"].append(dict(
+                    base_rec, status=status, blockers=blockers,
+                    reason=("oracle 侧多出的 SM_HIT(14)：形状符合候选条件，但 %s "
+                            "⇒ 只登记候选、仍判 UNDECIDABLE（reviewer-20 R20-X1："
+                            "白名单未获裁决前不放行）" % "；".join(blockers))))
                 continue
             try:
                 report["undecidable"].remove(cand["und"])
             except ValueError:  # 已被别处移除 ⇒ 不重复登记
                 continue
-            info = cand["info"]
-            # F2（reviewer-21）：reason 必须按**本次实际条件**生成，不能预先写死
-            # 「库快照比过且无差异」——那会在条件未验证时给出误导性说明。
-            rec = {
-                "source": "frame", "kind": "oracle_extra_hit",
-                "ident": info["ident"], "card": "openmir2-ident14-extra-hit-adjudication",
-                "ref": "T-270", "oracle": info["oracle_total"],
-                "rust": info["rust_total"], "shapes": info["extra"],
-                "verified": {"frame_diffs": 0, "db_state": _db.get("state"),
-                             "db_diffs": len(_db.get("diffs") or []),
-                             "db_undecidable": len(_db.get("undecidable") or [])},
-                "reason": ("oracle 侧多出的 SM_HIT(14)：形状在 T-270 白名单内、body 为空；"
-                           "本次帧面除该 ignore 差异外 diffs=0，两侧库快照 state=%r、"
-                           "diffs=%d、undecidable=%d ⇒ 登记为受控非等价差异"
-                           % (_db.get("state"), len(_db.get("diffs") or []),
-                              len(_db.get("undecidable") or []))),
-                "tier": "R", "approved_by": "T-270（卡 openmir2-ident14-extra-hit-adjudication）",
-            }
+            # reason/verified 按**本次实际条件**生成（reviewer-21 F2）。
+            rec = dict(base_rec, status=status,
+                       reason=("oracle 侧多出的 SM_HIT(14)：形状在白名单内（含 max 上界）、body 为空；"
+                               "本次帧面除该 ignore 差异外 diffs=0，两侧库快照 state=%r、diffs=%d、"
+                               "undecidable=%d，且 T-270 已获裁决 ⇒ 登记为受控非等价差异"
+                               % (_db.get("state"), len(_db.get("diffs") or []),
+                                  len(_db.get("undecidable") or []))),
+                       tier="R",
+                       approved_by=str(rule.get("oracle_extra_decision")
+                                       or "T-270（卡 openmir2-ident14-extra-hit-adjudication）"))
             report["whitelisted"].append(rec)
             report["frames"]["oracle_extra_hits"].append(rec)
+
+    # T-270 白名单未获裁决 ⇒ 报告层面必须显示「还有未审过的判据」（reviewer-20 R20-X1）。
+    _pending_extra = sorted(
+        i for i, r in rules.by_ident.items()
+        if (r or {}).get("oracle_extra_shapes") and oracle_extra_status(r) != "APPROVED")
+    if _pending_extra:
+        report["rules"]["rules_pending_review"] = True
+        _pending_list = report["rules"].setdefault("pending_review", [])
+        for i in _pending_extra:
+            tag = "T-270: rules[ident=%d].oracle_extra_shapes" % i
+            if tag not in _pending_list:
+                _pending_list.append(tag)
 
     # 卡 `openmir2-rules-pending-adjudication` ④（Leader 裁定 2026-10-25）：
     #   * `rules_pending_review` = **保守主标志**：规则文件里只要还有任何 PENDING
