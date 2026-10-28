@@ -125,6 +125,10 @@ ACTIONS = ("compare", "mask_fields", "mask_body_ranges", "ignore", "ability_layo
 BAG_RECORD_LEN = 124
 BAG_RECORD_FIELDS = {"MakeIndex": (100, 104)}
 BAG_DEFAULT_MASKS = ("MakeIndex",)
+#: T-184：SM_BAGITEMS(201) 相对登录/出现帧的位置不是 oracle 契约（`SendSocket` 直连，
+#: 落点取决入站命令被处理/脚本执行的那一刻）。本比较器只对这一 ident 忽略“相对其它帧的位置”，
+#: 仍按原相对序逐帧比较计数/head/body；其它 ident 一律保持全序，绝不降级成 set/multiset。
+MOVABLE_FRAME_IDENT = 201
 TIERS = ("R", "L")
 
 # ---------------------------------------------------------------------------
@@ -1280,6 +1284,18 @@ def compare_bodies(fr_o, fr_r, rule, diffs, whitelisted, undecidable, masked_ran
                       "detail": "body 逐字节不同（首处 offset=%d）" % off})
 
 
+def _split_movable_frames(frames, ident=MOVABLE_FRAME_IDENT):
+    """摘出 `ident` 的有序子序列，返回 `(movable, rest)`。
+
+    只改变它相对**其它帧**的位置：子序列自身仍保持原次序，`rest` 也保持原全序。
+    调用方必须随后对 movable 做逐帧 head/body + 条数硬比较，不能只摘不比。
+    """
+    movable, rest = [], []
+    for fr in frames:
+        (movable if fr.get("ident") == ident else rest).append(fr)
+    return movable, rest
+
+
 def _build_blocks(frames, rules):
     """把一侧（已按 ignore 规则剔除后的）帧流切成对齐块。
 
@@ -1437,6 +1453,31 @@ def _compare_multiset_block(ob, rb, head_compare, diffs, whitelisted, undecidabl
     return matched
 
 
+def _compare_movable_subsequence(o_frames, r_frames, rules, head_compare, compare_bodies,
+                                 diffs, whitelisted, undecidable, masked_ranges_note):
+    """逐对比较可移动 201 子序列：条数硬比、按原相对序比 head/body。
+
+    不禁用任何 payload 判据，也不对 201 做排序/多重集；允许的只有“相对其它帧的位置”。
+    """
+    ident = MOVABLE_FRAME_IDENT
+    compared = 0
+    if len(o_frames) != len(r_frames):
+        probe = (o_frames[len(r_frames)] if len(o_frames) > len(r_frames)
+                 else r_frames[len(o_frames)])
+        diffs.append({
+            "source": "frame", "frame_index": probe["index"], "ident": ident,
+            "field": "count", "kind": "movable_count",
+            "oracle": len(o_frames), "rust": len(r_frames),
+            "detail": "可移动帧 %d 条数不同（位置可移动不等于计数可移动）" % ident,
+        })
+    for of, rf in zip(o_frames, r_frames):
+        head_compare(of, rf)
+        compare_bodies(of, rf, rules.by_ident.get(ident),
+                       diffs, whitelisted, undecidable, masked_ranges_note)
+        compared += 1
+    return compared
+
+
 def ignore_rule_census(counts, shapes, rules):
     """`ignore` 规则的**每侧计数 + 形态**普查（卡 openmir2-ignore-rule-count-compare）。
 
@@ -1520,6 +1561,10 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     r_pairs, r_kept = extract_random_pairs(r_kept, rp_rule)
     random_pairs_summary = (compare_random_pairs(o_pairs, r_pairs, rp_rule, diffs, whitelisted)
                             if rp_rule else None)
+
+    # T-184：201 的位置不作全序对齐键；先摘成有序子序列，其它帧仍按原全序比较。
+    o_movable, o_kept = _split_movable_frames(o_kept)
+    r_movable, r_kept = _split_movable_frames(r_kept)
 
     # multiset_by_tick 需要 t_ms 标注 tick 窗口：**任一侧任一帧**缺 t_ms 都判不了。
     # 必须预扫整条流，不能在块首判——缺的是运行中的后续帧时会被漏判，进而误报
@@ -1636,6 +1681,20 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
                                 "尾部多出的 ident：%s%s"
                                 % ([fr["ident"] for fr in tail[:10]], extra)})
 
+    # 被摘出的 201 仍必须逐帧/逐条通过全部 payload 判据；只放宽它相对其它帧的位置。
+    movable_compared = _compare_movable_subsequence(
+        o_movable, r_movable, rules, head_compare, compare_bodies,
+        diffs, whitelisted, undecidable, masked_ranges_note)
+    compared_frames += movable_compared
+    movable_summary = {
+        "ident": MOVABLE_FRAME_IDENT,
+        "oracle": len(o_movable),
+        "rust": len(r_movable),
+        "counts_equal": len(o_movable) == len(r_movable),
+        "pairs_compared": movable_compared,
+        "reason": "T-184：201 相对其它帧的位置非契约；计数/head/body 与 201 间相对序仍严格比较",
+    }
+
     # F3（reviewer-20）：单侧命中时另一侧也必须**有键**（补 0），
     # 否则读 `ignored_counts["rust"]["658"]` 会 KeyError。census 里两侧计数也一并对齐。
     for _ident in sorted(set(ignore_counts["oracle"]) | set(ignore_counts["rust"])):
@@ -1671,6 +1730,7 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
             if row["pending"] and not (row["counts_equal"] and row["shape_equal"])),
         "kept_frames": {"oracle": o_kept_n, "rust": r_kept_n},
         "random_branch_pairs": random_pairs_summary,
+        "movable_frames": movable_summary,
         "present_idents": present,
         "unclassified": unclassified,
         "compared_frames": compared_frames,
@@ -2089,6 +2149,7 @@ def compare_main(args):
     report["masked_ranges"] = cmp["masked_ranges"]
     report["masked_order"] = cmp["masked_order"]
     report["random_branch_pairs"] = cmp["random_branch_pairs"]
+    report["movable_frames"] = cmp["movable_frames"]
     undecidable.extend(cmp["undecidable"])
     for p in o_stream.problems + r_stream.problems:
         undecidable.append({"source": "input", **p})
@@ -2237,6 +2298,11 @@ def human_summary(report):
                          "这对帧是否存在由构造级用例 "
                          "npc_random_idle_frames_through_production_drain_run 负责）"
                          % rp["oracle_pairs"])
+    mf = report.get("movable_frames")
+    if mf:
+        lines.append("movable_frames(ident=%d): oracle=%d rust=%d counts_equal=%s pairs=%d"
+                     % (mf["ident"], mf["oracle"], mf["rust"], mf["counts_equal"],
+                        mf["pairs_compared"]))
     fr = report.get("frames") or {}
     if fr:
         lines.append("frames: oracle=%d rust=%d compared=%d"
@@ -2477,6 +2543,95 @@ def _selftest_random_pairs(mod):
     return 0 if fail_n == 0 else 1
 
 
+def _selftest_movable_201(mod):
+    """T-184 的 201 可移动对齐常驻牙（卡 openmir2-compare-201-movable-frame）。
+
+    A1：只移动 201 到前/中/后三位置 ⇒ diffs=[]；
+    A2：移动非 201、增/删 201、改 201 未掩字节、改其它 ident payload、交换两条 201
+        的相互次序 ⇒ 各自判红；不允许把全序降成集合。
+    """
+    pass_n = fail_n = 0
+
+    def chk(cond, name, detail=""):
+        nonlocal pass_n, fail_n
+        if cond:
+            pass_n += 1
+            print("PASS %s" % name)
+        else:
+            fail_n += 1
+            print("FAIL %s %s" % (name, detail))
+
+    codec = mod.load_module("mir2frame", mod.MIR2FRAME)
+    rules = mod.load_rules(mod.DEFAULT_RULES)
+
+    def client_item(marker=0, make_index=1000):
+        raw = bytearray(mod.BAG_RECORD_LEN)
+        raw[0] = 1
+        raw[1] = marker
+        raw[100:104] = int(make_index).to_bytes(4, "little")
+        raw[104:106] = (4000).to_bytes(2, "little")
+        raw[106:108] = (4000).to_bytes(2, "little")
+        return codec.encode_bytes(bytes(raw)) + b"/"
+
+    bag = client_item(1)
+    bag_other = client_item(2)
+
+    def fr(idx, ident, body=b"", series=0):
+        return {"index": idx, "line": idx + 1, "ident": ident, "body": body,
+                "body_sha256": None, "param": 0, "tag": 0, "series": series,
+                "phase": "gamegate", "recog": 7, "seq": idx, "t_ms": idx,
+                "conn": 1, "raw": {}}
+
+    other = [fr(10, 51, b"a", 1), fr(20, 658, b"b", 2), fr(30, 657, b"c", 3)]
+    bag_fr = fr(40, 201, bag, 3)
+
+    def stream(label, frames):
+        return mod.Stream(label, "/dev/null", "/dev/null", frames, [])
+
+    def run(ofl, rfl):
+        return mod.compare_streams(stream("oracle", ofl), stream("rust", rfl), rules)
+
+    base_o = [bag_fr] + other
+    for pos in (0, 1, 2):
+        moved = other[:pos] + [bag_fr] + other[pos:]
+        c = run(base_o, moved)
+        chk(c["diffs"] == [] and c["movable_frames"]["counts_equal"] is True,
+            "movable201 A1：仅移动 201 到第 %d 位 ⇒ diffs=[]" % pos,
+            (c["diffs"][:2], c["movable_frames"]))
+
+    moved_non201 = [other[1], other[0], other[2], bag_fr]
+    c = run(base_o, moved_non201)
+    chk(c["diffs"] != [], "movable201 A2：移动非 201 ident ⇒ 判红",
+        c["diffs"][:2])
+
+    c = run(base_o, [bag_fr, fr(41, 201, bag_other, 4)] + other)
+    chk(any(d.get("kind") == "movable_count" for d in c["diffs"]),
+        "movable201 A2：增加一条 201 ⇒ 判红（movable_count）", c["diffs"][:2])
+
+    c = run(base_o, other)
+    chk(any(d.get("kind") == "movable_count" for d in c["diffs"]),
+        "movable201 A2：删除 201 ⇒ 判红（movable_count）", c["diffs"][:2])
+
+    bad_bag = fr(40, 201, client_item(9), 3)
+    c = run(base_o, [bad_bag] + other)
+    chk(any(d.get("kind") == "bagitems_record" for d in c["diffs"]),
+        "movable201 A2：改 201 未掩字节 ⇒ 判红（bagitems_record）", c["diffs"][:2])
+
+    bad_other = [fr(10, 51, b"z", 1), other[1], other[2]]
+    c = run(base_o, [bag_fr] + bad_other)
+    chk(any(d.get("ident") == 51 and d.get("field") == "body" for d in c["diffs"]),
+        "movable201 A2：改其它 ident payload ⇒ 判红", c["diffs"][:2])
+
+    bag2 = fr(41, 201, bag_other, 4)
+    c = run([bag_fr, bag2] + other, [bag2, bag_fr] + other)
+    chk(any(d.get("kind") == "bagitems_record" for d in c["diffs"]),
+        "movable201 A2：交换两条 201 的相互次序 ⇒ 判红（只放宽相对其它帧的位置）",
+        c["diffs"][:2])
+
+    print("MOVABLE201_SELFTEST_PASS=%d FAIL=%d" % (pass_n, fail_n))
+    return 0 if fail_n == 0 else 1
+
+
 def _selftest_ident_653_head_compare(mod):
     """SM_GOLDCHANGED(653) 的 `head_compare:["recog"]` 常驻牙（卡 openmir2-rules-653-resident-tooth）。
 
@@ -2634,6 +2789,7 @@ def cmd_selftest():
     here = os.path.dirname(os.path.abspath(__file__))
     me = sys.modules[__name__]
     extra_rc = _selftest_random_pairs(me)
+    extra_rc |= _selftest_movable_201(me)
     mod = load_module("conformance_selftest_impl",
                       os.path.join(here, "selftest_impl.py"))
     # 653 常驻牙汇入 harness 的计数：既有 343 条一条不改，新增条目直接进 GREEN 的分子/分母。
