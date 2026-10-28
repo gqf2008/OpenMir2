@@ -669,7 +669,7 @@
           "run13：C# 4000→3998（642 recog=3998，末次 Random(5)=0，磨损 2）；Rust 4000→3994（Random(5)=4，磨损 6）"
         ],
         "tier": "R",
-        "approved_by": "PENDING owner/coordinator review（卡 openmir2-dura-nondeterminism-adjudication；run9/run13 证据见 cs_evidence）"
+        "approved_by": "openmir2-coordinator（2026-10-29 owner 裁决：T-269 受控非契约；approve reviewer-21 5bf08563；证据 run9/run13 cs_evidence）"
       }
     ]
   }
