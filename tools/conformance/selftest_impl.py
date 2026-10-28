@@ -1154,6 +1154,23 @@ class Selftest(object):
                    and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
                    (rc, (rep or {}).get("undecidable")))
 
+        # 新增形状 (318,332,7)/(327,327,6) 的 owner 裁决（fb0ea7a9）：放行且 approved_by 该 oid。
+        walk7 = self.frame(10, b"", **dict(heads_o, seq=818, param=318, tag=332, series=519))
+        hit7 = self.frame(14, b"", **dict(heads_o, seq=819, param=318, tag=332,
+                                          series=7, recog=88))
+        od7 = self.write_run("t270-o-shape7", [walk7, hit7],
+                             db=_snap270("mir2_test_db_oracle"))
+        rd7 = self.write_run("t270-r-shape7",
+                             [self.frame(10, b"", **dict(heads_r, seq=820, param=318,
+                                                         tag=332, series=519))],
+                             db=_snap270("mir2_test_db_rust"))
+        rc, rep = self.compare(od7, rd7)
+        _h7 = ((rep or {}).get("frames") or {}).get("oracle_extra_hits") or []
+        self.check("T-270 shape (318,332,7) 已裁决 fb0ea7a9 => rc 0 且 approved_by 该 oid",
+                   rc == 0 and bool(_h7)
+                   and "fb0ea7a9" in str(_h7[0].get("approved_by") or ""),
+                   (rc, _h7, (rep or {}).get("undecidable")))
+
         # F2：只声明 body_sha256、没有 body_hex 的帧也必须按「有载荷」拒（不能当空体）。
         hit_sha_only = dict(hit270p)
         hit_sha_only.pop("body_hex", None)
