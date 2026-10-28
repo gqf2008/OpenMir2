@@ -639,6 +639,38 @@
           ]
         }
       }
-    }
+    },
+    "adjudications": [
+      {
+        "id": "T-269",
+        "table": "mir2_db.characters_item",
+        "column": "Dura",
+        "row_match": {
+          "Position": "1"
+        },
+        "witness": {
+          "frame_ident": 642,
+          "frame_param": "1",
+          "frame_count": 1,
+          "rng_canonical": "attack_success",
+          "rng_count": 1,
+          "wear_offset": 2,
+          "wear_range": [
+            2,
+            6
+          ],
+          "require_db_equals_frame_recog": true,
+          "require_duramax_minus_recog_equals_wear": true
+        },
+        "card": "openmir2-dura-nondeterminism-adjudication",
+        "reason": "受控非契约（不是整列掩码）：Oracle `nWeaponDamage = (ushort)(Random(5) + 2 - WeaponStrong)`（src/M2Server/Player/PlayObject.Attack.cs:225）的末次 Random(5) 来自**共享全局 RNG**（src/OpenMir2/RandomNumber.cs:83-100 无锁），而 C# 怪物 AI 由多个后台线程驱动（src/GameSrv/Word/WorldServer.MonGen.cs:145-160）⇒ 同 seed、同二进制、同场景的两次 C# 运行会抽到不同的末次值（run9 Random(5)=3 ⇒ 4000→3995；run13 Random(5)=0 ⇒ 4000→3998），Rust 单线程两次均 Random(5)=4 ⇒ 3994。放行条件（本工具逐次实证）：本侧 DB Dura == 本侧唯一一条 642 的 recog、本侧末次 attack_success 抽值推出的磨损量 ∈ [2,6]、且 DuraMax−recog == Random(5)+2。任一不成立 ⇒ 保留差异；缺 rng 流水/无 642/行定位不到 ⇒ UNDECIDABLE。Dura 之外的行与列仍逐字节比。",
+        "cs_evidence": [
+          "run9：C# 4000→3995（642 recog=3995，末次 Random(5)=3，磨损 5）；Rust 4000→3994（Random(5)=4，磨损 6）",
+          "run13：C# 4000→3998（642 recog=3998，末次 Random(5)=0，磨损 2）；Rust 4000→3994（Random(5)=4，磨损 6）"
+        ],
+        "tier": "R",
+        "approved_by": "PENDING owner/coordinator review（卡 openmir2-dura-nondeterminism-adjudication；run9/run13 证据见 cs_evidence）"
+      }
+    ]
   }
 }

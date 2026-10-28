@@ -163,6 +163,16 @@ DEFAULT_RULES = os.path.join(HERE, "rules.json")
 LOGIN_COMPARE = os.path.join(REPO_ROOT, "tools", "loginfixture", "capture_login_compare.py")
 MIR2FRAME = os.path.join(REPO_ROOT, "tools", "probe", "mir2frame.py")
 DBSNAP_PAIR = os.path.join(REPO_ROOT, "tools", "db-parity", "dbsnap_pair.py")
+# 站点 canonical 表只认一份（`rng_ledger_diff.CANON_RULES`）；库裁决要读
+# `<side>/rng-stream.tsv` 的末次 Random(5)，不在这里抄第二份站点表。
+RNG_LEDGER_DIFF = os.path.join(REPO_ROOT, "mir2-rs", "tests", "parity", "m3",
+                               "rng-trace-probe", "rng_ledger_diff.py")
+# `db.adjudications[].witness` 的允许键（未知键加载期拒，防止声明了没实现的判据）。
+ADJ_WITNESS_KEYS = frozenset({
+    "frame_ident", "frame_param", "frame_count", "rng_canonical", "rng_count",
+    "wear_offset", "wear_range", "require_db_equals_frame_recog",
+    "require_duramax_minus_recog_equals_wear",
+})
 
 # dbsnap_pair 的差异记录里，哪些 kind 属于「结构/输入问题（无法判定）」而不是「两侧取值不同」。
 DB_UNDECIDABLE_KINDS = frozenset({
@@ -528,8 +538,75 @@ class RuleSet(object):
             raise InputError("db 给了 tier 就必须给 reason")
         if str(db.get("approved_by", "")).upper().startswith("PENDING"):
             self.pending_review.append("db")
+        out["adjudications"] = self._parse_db_adjudications(db)
         out["meta"] = {k: db[k] for k in ("reason", "tier", "approved_by") if k in db}
         self.db = out
+
+    def _parse_db_adjudications(self, db):
+        """受控非确定性裁决（卡 `openmir2-dura-nondeterminism-adjudication`）。
+
+        每条只对**单列 + 指定行**生效，且必须带「本侧证据」见证：只有本侧 DB 值等于本侧最后
+        一条 642 的 recog、且本侧末次 Random(5) 推出的磨损量落在 oracle 值域（并与
+        DuraMax−recog 一致）时，该单元格差异才转成 whitelisted；见证矛盾 ⇒ 保留差异（红），
+        证据缺失（无 642 / 无 rng 流水 / 定位不到行）⇒ UNDECIDABLE。**不许整列掩、不许
+        `ignore_columns`。**
+        """
+        adjs = db.get("adjudications", [])
+        if not isinstance(adjs, list):
+            raise InputError("db.adjudications 必须是数组")
+        out = []
+        seen = set()
+        for i, decl in enumerate(adjs):
+            where = "db.adjudications[%d]" % i
+            if not isinstance(decl, dict):
+                raise InputError("%s 必须是对象" % where)
+            for key in ("id", "table", "column", "card", "reason", "tier", "approved_by"):
+                if not isinstance(decl.get(key), str) or not decl[key].strip():
+                    raise InputError("%s 必须写 %s" % (where, key))
+            if decl["id"] in seen:
+                raise InputError("%s 的 id %r 重复" % (where, decl["id"]))
+            seen.add(decl["id"])
+            if decl["tier"] not in TIERS:
+                raise InputError("%s.tier 必须是 R/L" % where)
+            row_match = decl.get("row_match")
+            if not isinstance(row_match, dict) or not row_match:
+                raise InputError("%s 必须写非空 row_match（行级作用域，禁整列掩）" % where)
+            witness = decl.get("witness")
+            if not isinstance(witness, dict) or not witness:
+                raise InputError("%s 必须写 witness（本侧证据）" % where)
+            bad = sorted(set(witness) - ADJ_WITNESS_KEYS)
+            if bad:
+                raise InputError("%s.witness 有未知键 %s（允许 %s）"
+                                 % (where, bad, sorted(ADJ_WITNESS_KEYS)))
+            if not is_int(witness.get("frame_ident")):
+                raise InputError("%s.witness.frame_ident 必须是整数 ident" % where)
+            if "frame_count" in witness and not is_int(witness["frame_count"]):
+                raise InputError("%s.witness.frame_count 必须是整数" % where)
+            if "rng_count" in witness and not is_int(witness["rng_count"]):
+                raise InputError("%s.witness.rng_count 必须是整数" % where)
+            if "wear_offset" in witness and not is_int(witness["wear_offset"]):
+                raise InputError("%s.witness.wear_offset 必须是整数" % where)
+            rng = witness.get("wear_range")
+            if (not isinstance(rng, list) or len(rng) != 2
+                    or not all(is_int(v) for v in rng) or rng[0] > rng[1]):
+                raise InputError("%s.witness.wear_range 必须是 [lo,hi] 两个整数且 lo<=hi" % where)
+            for key in ("require_db_equals_frame_recog",
+                        "require_duramax_minus_recog_equals_wear"):
+                if key in witness and not isinstance(witness[key], bool):
+                    raise InputError("%s.witness.%s 必须是布尔" % (where, key))
+            cs = decl.get("cs_evidence")
+            if cs is not None and (not isinstance(cs, list) or not cs
+                                   or not all(isinstance(x, str) and x.strip() for x in cs)):
+                raise InputError("%s.cs_evidence 必须是非空字符串数组" % where)
+            if str(decl["approved_by"]).upper().startswith("PENDING"):
+                self.pending_review.append(where)
+            out.append({"id": decl["id"].strip(), "table": decl["table"].strip(),
+                        "column": decl["column"].strip(), "row_match": dict(row_match),
+                        "witness": dict(witness), "card": decl["card"].strip(),
+                        "reason": decl["reason"].strip(), "tier": decl["tier"],
+                        "approved_by": decl["approved_by"].strip(),
+                        "cs_evidence": list(cs or [])})
+        return out
 
     # -- 查询 --
     def mask_for(self, ident):
@@ -1934,6 +2011,251 @@ def _side_char_name(o_dir, r_dir):
     return out
 
 
+# ---------------------------------------------------------------------------
+# 库裁决：受控非确定性白名单（db.adjudications）
+# ---------------------------------------------------------------------------
+def _manifest_table_rows(snap_dir, table, canon):
+    """读 prepare_snapshot 产物里某张表 → (columns, rows)；缺表/坏 manifest/读失败 ⇒ None。
+
+    真实快照的表名带各自的库前缀（`mir2_test_db.*` / `mir2_db.*`），必须与 dbsnap_pair
+    同口径用 `canonical_table_name` 归一后再找，否则「找不到表」会把裁决判成 UNDECIDABLE。
+    """
+    path = os.path.join(snap_dir, "manifest.json")
+    try:
+        manifest = read_json(path, "dbsnap manifest")
+    except (InputError, Undecidable):
+        return None
+    entry = next((t for t in manifest.get("tables") or []
+                  if isinstance(t, dict) and canon(t.get("table")) == table), None)
+    if entry is None:
+        return None
+    cols = [c if isinstance(c, str) else (c or {}).get("name")
+            for c in (entry.get("columns") or [])]
+    fpath = entry.get("file")
+    if not isinstance(fpath, str) or not fpath:
+        return None
+    fpath = fpath if os.path.isabs(fpath) else os.path.join(snap_dir, fpath)
+    rows = []
+    try:
+        with open(fpath, "r", encoding="utf-8", newline="") as f:
+            for line in f:
+                line = line.rstrip("\r\n")
+                if line:
+                    rows.append(line.split("\t"))
+    except OSError:
+        return None
+    return cols, rows
+
+
+def _side_frames(dirpath):
+    out = []
+    try:
+        with open(os.path.join(dirpath, "frames.ndjson"), "r",
+                  encoding="utf-8", errors="replace") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    out.append(json.loads(line))
+                except ValueError:
+                    continue
+    except OSError:
+        return None
+    return out
+
+
+def _side_rng_draws(dirpath):
+    """读 `<dir>/rng-stream.tsv` → [(canonical, max, result)]；缺文件/解析失败 ⇒ None。"""
+    path = os.path.join(dirpath, "rng-stream.tsv")
+    if not os.path.exists(path):
+        return None
+    try:
+        mod = load_module("rng_ledger_diff", RNG_LEDGER_DIFF)
+        rows = mod.parse_trace(path)
+    except (InputError, Undecidable, OSError, ValueError, ImportError, AttributeError):
+        return None
+    return [(mod.canonical(r[4]), r[2], r[3]) for r in rows]
+
+
+def _row_matches(cols, row, match):
+    idx = {c: i for i, c in enumerate(cols)}
+    for col, want in match.items():
+        if col not in idx:
+            return False
+        got = row[idx[col]] if idx[col] < len(row) else None
+        if str(got) != str(want):
+            return False
+    return True
+
+
+def _pk_values(cols, row, pk_cols):
+    idx = {c: i for i, c in enumerate(cols)}
+    return [row[idx[c]] if idx[c] < len(row) else "" for c in pk_cols]
+
+
+def _adjudication_side_witness(side_dir, decl, label):
+    """计算单侧见证：642 帧 + 末次 Random(5) + 磨损量。返回 (witness, problems, missing)。
+
+    `problems` = 见证矛盾（保留差异，红）；`missing` = 证据缺失（UNDECIDABLE）。
+    """
+    witness = decl["witness"]
+    problems = []
+    missing = []
+    frames = _side_frames(side_dir)
+    if frames is None:
+        missing.append("%s: 读不到 frames.ndjson" % label)
+        return None, problems, missing
+    ident = int(witness["frame_ident"])
+    sel = [fr for fr in frames if fr.get("ident") == ident]
+    want = int(witness.get("frame_count", 1))
+    if len(sel) != want:
+        problems.append("%s: ident=%d 帧数 %d != %d（无法绑定到唯一一次攻击）"
+                        % (label, ident, len(sel), want))
+        return None, problems, missing
+    fr = sel[0]
+    if "frame_param" in witness and str(fr.get("param")) != str(witness["frame_param"]):
+        problems.append("%s: ident=%d param=%r 不是登记槽位 %r"
+                        % (label, ident, fr.get("param"), witness["frame_param"]))
+    try:
+        recog = int(fr.get("recog"))
+        duramax = int(fr.get("tag"))
+    except (TypeError, ValueError):
+        problems.append("%s: ident=%d recog/tag 不是整数" % (label, ident))
+        return None, problems, missing
+    rng = _side_rng_draws(side_dir)
+    if rng is None:
+        missing.append("%s: 缺可解析的 rng-stream.tsv（无法证明末次 Random(5)）" % label)
+        return {"recog": recog, "duramax": duramax}, problems, missing
+    canon = witness.get("rng_canonical", "attack_success")
+    succ = [row for row in rng if row[0] == canon]
+    want = int(witness.get("rng_count", 1))
+    if len(succ) != want:
+        problems.append("%s: %s 抽数 %d != %d" % (label, canon, len(succ), want))
+        return {"recog": recog, "duramax": duramax}, problems, missing
+    try:
+        random5 = int(succ[-1][2])
+    except (TypeError, ValueError):
+        problems.append("%s: %s 抽数值不可解析" % (label, canon))
+        return {"recog": recog, "duramax": duramax}, problems, missing
+    wear = random5 + int(witness.get("wear_offset", 2))
+    lo, hi = witness["wear_range"]
+    if not (lo <= wear <= hi):
+        problems.append("%s: Random(5)=%d ⇒ 磨损 %d 不在 oracle 值域 [%d,%d]"
+                        % (label, random5, wear, lo, hi))
+    if witness.get("require_duramax_minus_recog_equals_wear", True):
+        if duramax - recog != wear:
+            problems.append("%s: DuraMax(%d) - recog(%d) = %d != Random(5)+%d = %d"
+                            % (label, duramax, recog, duramax - recog,
+                               int(witness.get("wear_offset", 2)), wear))
+    return {"recog": recog, "duramax": duramax, "random5": random5, "wear": wear}, problems, missing
+
+
+def apply_db_adjudications(records, decls, o_snap, r_snap, o_dir, r_dir, table_specs, canon):
+    """对 `value` 差异套用 `db.adjudications`，返回 (applied, violations, undecidable, drop)。
+
+    * 只在 (table, column) 与**主键行**都命中时生效（`row_match` 行级作用域）；
+    * 见证矛盾 ⇒ violation（差异保留，报告红）；
+    * 证据缺失（无 642 / 无 rng 流水 / 行定位不到）⇒ undecidable（rc 2），绝不放行；
+    * `applied` 是本工具并入 `whitelisted` 的显式裁决记录（带卡号/原因/两次 C# 证据）。
+    """
+    applied, violations, undecidable = [], [], []
+    drop = set()
+    if not decls:
+        return applied, violations, undecidable, drop
+    for decl in decls:
+        table, column = decl["table"], decl["column"]
+        targets = [i for i, rec in enumerate(records)
+                   if rec.get("kind") == "value" and rec.get("table") == table
+                   and rec.get("column") == column]
+        if not targets:
+            continue
+        pk_cols = ((table_specs or {}).get(table) or {}).get("pk") or []
+        o_tab = _manifest_table_rows(o_snap, table, canon)
+        r_tab = _manifest_table_rows(r_snap, table, canon)
+        if o_tab is None or r_tab is None:
+            undecidable.append({
+                "source": "db", "kind": "db_adjudication_undecidable",
+                "adjudication": decl["id"], "table": table, "column": column,
+                "detail": "快照里找不到表 %s（无法定位见证行）" % table})
+            continue
+        o_cols, o_rows = o_tab
+        r_cols, r_rows = r_tab
+        if not pk_cols:
+            undecidable.append({
+                "source": "db", "kind": "db_adjudication_undecidable",
+                "adjudication": decl["id"], "table": table, "column": column,
+                "detail": "表 %s 未登记主键，无法确认差异行就是见证行" % table})
+            continue
+        for i in targets:
+            rec = records[i]
+            key = rec.get("key")
+            if not isinstance(key, list):
+                continue  # multiset 记录没有行键 ⇒ 不适用（保持红）
+            # 行级作用域：按主键取到**这条差异行**，并要求它在两侧都满足 `row_match`
+            # （例如 Position=1 的武器槽）。别的武器槽也在表里（每人一行）⇒ 不能用
+            # 「row_match 全局只命中 1 行」当判据；真正的绑定是下面的「DB 值 == 本侧 642」。
+            row_o = next((row for row in o_rows
+                          if _pk_values(o_cols, row, pk_cols) == key), None)
+            row_r = next((row for row in r_rows
+                          if _pk_values(r_cols, row, pk_cols) == key), None)
+            if row_o is None or row_r is None:
+                undecidable.append({
+                    "source": "db", "kind": "db_adjudication_undecidable",
+                    "adjudication": decl["id"], "table": table, "column": column,
+                    "key": key, "detail": "快照里定位不到差异行（oracle=%s / rust=%s）"
+                                              % (row_o is not None, row_r is not None)})
+                continue
+            if (not _row_matches(o_cols, row_o, decl["row_match"])
+                    or not _row_matches(r_cols, row_r, decl["row_match"])):
+                continue  # 差异行不是登记的行（如非武器槽）⇒ 保持红
+            w_o, p_o, m_o = _adjudication_side_witness(o_dir, decl, "oracle")
+            w_r, p_r, m_r = _adjudication_side_witness(r_dir, decl, "rust")
+            if m_o or m_r:
+                undecidable.append({
+                    "source": "db", "kind": "db_adjudication_undecidable",
+                    "adjudication": decl["id"], "table": table, "column": column,
+                    "key": key, "detail": "；".join(m_o + m_r)})
+                continue
+            problems = list(p_o) + list(p_r)
+            if w_o is None or w_r is None:
+                # 帧数/取值问题已进 problems；见证不可用时不得再拿它做 DB 等值判定。
+                if not problems:
+                    problems.append("见证不可用（未给出原因）")
+            elif decl["witness"].get("require_db_equals_frame_recog", True):
+                for side, side_key, w in (("oracle", "a", w_o), ("rust", "b", w_r)):
+                    try:
+                        db_val = int(str(rec.get(side_key)).strip())
+                    except (TypeError, ValueError):
+                        problems.append("%s: DB %s 值 %r 不是整数"
+                                        % (side, column, rec.get(side_key)))
+                        continue
+                    if db_val != w["recog"]:
+                        problems.append("%s: DB %s=%d != 本侧 642 recog=%d"
+                                        % (side, column, db_val, w["recog"]))
+            if problems:
+                violations.append({
+                    "table": table, "column": column, "kind": "adjudication_violation",
+                    "adjudication": decl["id"], "key": key,
+                    "detail": "；".join(problems)})
+                continue
+            drop.add(i)
+            applied.append({
+                "source": "db", "table": table, "field": column,
+                "kind": "db_adjudicated_nondeterminism",
+                "adjudication": decl["id"], "card": decl["card"],
+                "reason": decl["reason"], "cs_evidence": decl["cs_evidence"],
+                "tier": decl["tier"], "approved_by": decl["approved_by"], "key": key,
+                "oracle": {"db": rec.get("a"), "frame_recog": w_o["recog"],
+                           "duramax": w_o["duramax"], "random5": w_o["random5"],
+                           "wear": w_o["wear"]},
+                "rust": {"db": rec.get("b"), "frame_recog": w_r["recog"],
+                         "duramax": w_r["duramax"], "random5": w_r["random5"],
+                         "wear": w_r["wear"]},
+            })
+    return applied, violations, undecidable, drop
+
+
 def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
     o_path = overrides.get("oracle") or find_snapshot(o_dir)
     r_path = overrides.get("rust") or find_snapshot(r_dir)
@@ -1982,8 +2304,18 @@ def compare_db(o_dir, r_dir, db_opts, tmp_root, overrides, require_db=False):
         return info, info["undecidable"]
     info["state"] = "compared"
     info["summary"] = summary
+    # 库裁决（db.adjudications）：受控非确定性白名单。只对**已登记行**的 Dura 单元格
+    # 生效；见证矛盾保留差异（红），证据缺失判 UNDECIDABLE。
+    applied, adj_violations, adj_und, drop = apply_db_adjudications(
+        records, db_opts.get("adjudications") or [], o_snap, r_snap, o_dir, r_dir,
+        getattr(mod, "TABLE_SPECS", {}),
+        getattr(mod, "canonical_table_name", lambda name: name))
+    if drop:
+        records = [rec for i, rec in enumerate(records) if i not in drop]
+    records.extend(adj_violations)
     info["records"] = records
-    und = []
+    info["adjudications"] = applied
+    und = list(adj_und)
     for rec in records:
         if rec.get("kind") == "masked_column_applied":
             # 掩码必须**显式**出现在报告的 whitelisted 里（卡 openmir2-db-makeindex-mask ①）。
@@ -2247,6 +2579,10 @@ def compare_main(args):
                 "occupied_a": m.get("occupied_a"), "occupied_b": m.get("occupied_b"),
                 "applies_to": m.get("applies_to"),
                 "skipped": m.get("skipped") or [], "tier": "L", "approved_by": m["ref"]})
+        # 受控非确定性裁决（卡 openmir2-dura-nondeterminism-adjudication）：每条都带
+        # 卡号/原因/两次 C# 证据与两侧见证值 —— 不是静默掩码。
+        for a in (db_info.get("adjudications") or []):
+            report["whitelisted"].append(a)
     except (InputError, Undecidable) as e:
         report["db"] = {"state": "error", "detail": str(e), "diffs": [], "undecidable": []}
         report["undecidable"].append({"source": "db", "kind": "db_input_error",

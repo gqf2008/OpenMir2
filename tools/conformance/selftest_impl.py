@@ -105,7 +105,7 @@ class Selftest(object):
         os.makedirs(path, exist_ok=True)
         return path
 
-    def write_run(self, name, frames, run_meta=True, db=None, raw_lines=None):
+    def write_run(self, name, frames, run_meta=True, db=None, raw_lines=None, rng=None):
         d = self.tmpdir(name)
         fpath = os.path.join(d, "frames.ndjson")
         with open(fpath, "w", encoding="utf-8", newline="\n") as f:
@@ -115,6 +115,13 @@ class Selftest(object):
             else:
                 for fr in frames:
                     f.write(json.dumps(fr, ensure_ascii=True, sort_keys=True) + "\n")
+        if rng is not None:
+            # `card_window --rng-log` 的真实产物形态：INJECT_OK 头 + SEED_PROBE + 逐抽行
+            # （seq/kind/max/result/site）。库裁决的见证只从这里取末次 Random(5)。
+            with open(os.path.join(d, "rng-stream.tsv"), "w", encoding="utf-8", newline="\n") as f:
+                f.write("1\tINJECT_OK\t42\t0\nSEED_PROBE 1 2 3\n")
+                for row in rng:
+                    f.write("%d\tNext(max)\t%s\t%s\t%s\n" % row)
         if run_meta:
             with open(os.path.join(d, "run.json"), "w", encoding="utf-8", newline="\n") as f:
                 json.dump({"argv": ["synth", name, "--char-name", "winplay0"],
@@ -237,6 +244,7 @@ class Selftest(object):
         self.t_control_frames()
         self.t_dropitem_ack()
         self.t_db()
+        self.t_dura_adjudication()
         return self.finish()
 
     def t_baseline(self, o, r):
@@ -2906,6 +2914,139 @@ class Selftest(object):
         self.check("牙MI-12 applies_to 非法值（\"pipeline\"，且 require 不含 changes_on_mutation）⇒ rc 2",
                    rc_bs == 2, (rc_bs, (rep_bs or {}).get("undecidable")))
 
+
+    # ------------------------------------------------------------------
+    # 库裁决（卡 openmir2-dura-nondeterminism-adjudication，T-269）
+    # ------------------------------------------------------------------
+    DURA_SITE = "M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223"
+
+    def _dura_frames(self, recog, extra=0, param=1, tag=4000):
+        return [self.frame(642, phase="run", seq=i + 1, conn="c", t_ms=i + 1,
+                           recog=recog, param=param, tag=tag, series=0)
+                for i in range(1 + extra)]
+
+    def _dura_rng(self, values):
+        return [(i, 5, v, self.DURA_SITE) for i, v in enumerate(values)]
+
+    def _dura_db(self, dura, other=100, duramax=4000, weapon_duramax=None):
+        return {"format": "dbsnap-inline/1", "tables": [{
+            "table": "mir2_db.characters_item",
+            "columns": ["Id", "PlayerId", "Position", "MakeIndex", "StdIndex", "Dura", "DuraMax"],
+            "rows": [[106, 1001, 1, 5001, 207, dura,
+                      duramax if weapon_duramax is None else weapon_duramax],
+                     [107, 1001, 2, 5002, 207, other, 100]]}]}
+
+    def _dura_pair(self, tag, csh, rst):
+        od = self.write_run("t-adj-%s-o" % tag, csh["frames"],
+                            db=csh["db"], rng=csh.get("rng"))
+        rd = self.write_run("t-adj-%s-r" % tag, rst["frames"],
+                            db=rst["db"], rng=rst.get("rng"))
+        return od, rd
+
+    def t_dura_adjudication(self):
+        def side(recog, db_dura, random5, extra=0, other=100,
+                 weapon_duramax=None, rng=True):
+            return {"frames": self._dura_frames(recog, extra=extra),
+                    "db": self._dura_db(db_dura, other=other, weapon_duramax=weapon_duramax),
+                    "rng": self._dura_rng([random5]) if rng else None}
+
+        # ① 正例：两侧 DB == 本侧 642、末次 Random(5) 推出磨损 ∈ [2,6] ⇒ 只把该单元格
+        #    转成 whitelisted；db.diffs 为空、帧面仍全等。
+        od, rd = self._dura_pair("ok", side(3995, 3995, 3), side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd)
+        wa = [w for w in ((rep or {}).get("whitelisted") or [])
+              if w.get("kind") == "db_adjudicated_nondeterminism"]
+        self.check("Dura 裁决①：见证成立 ⇒ rc 0 且登记 db_adjudicated_nondeterminism",
+                   rc == 0 and len(wa) == 1
+                   and wa[0].get("adjudication") == "T-269"
+                   and wa[0].get("card") == "openmir2-dura-nondeterminism-adjudication"
+                   and wa[0].get("oracle", {}).get("db") == "3995"
+                   and wa[0].get("oracle", {}).get("random5") == 3
+                   and wa[0].get("rust", {}).get("db") == "3994"
+                   and wa[0].get("rust", {}).get("wear") == 6,
+                   (rc, wa or (rep or {}).get("diffs")))
+        self.check("Dura 裁决①：whitelisted 带两次 C# 证据且 db.diffs 为空",
+                   bool(wa) and len(wa[0].get("cs_evidence") or []) == 2
+                   and not ((rep or {}).get("db") or {}).get("diffs"),
+                   (wa and wa[0].get("cs_evidence"), (rep or {}).get("db")))
+
+        # ② DB != 本侧 642 ⇒ 保留差异（红）+ adjudication_violation。
+        od, rd = self._dura_pair("db", side(3995, 3996, 3), side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd)
+        kinds = [d.get("kind") for d in ((rep or {}).get("db") or {}).get("diffs") or []]
+        self.check("Dura 裁决牙②：DB Dura != 本侧 642 recog ⇒ rc 1 且记 adjudication_violation",
+                   rc == 1 and "adjudication_violation" in kinds
+                   and not [w for w in ((rep or {}).get("whitelisted") or [])
+                            if w.get("kind") == "db_adjudicated_nondeterminism"],
+                   (rc, kinds))
+
+        # ③ 642 条数 != 1 ⇒ 红（无法绑定到唯一一次攻击）。
+        od, rd = self._dura_pair("two", side(3995, 3995, 3, extra=1), side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd)
+        kinds = [d.get("kind") for d in ((rep or {}).get("db") or {}).get("diffs") or []]
+        self.check("Dura 裁决牙③：642 条数 != 1 ⇒ rc 1（不放行）",
+                   rc == 1 and "adjudication_violation" in kinds, (rc, kinds))
+
+        # ④ 末次 Random(5) 推出磨损越界 ⇒ 红。
+        od, rd = self._dura_pair("range", side(3989, 3989, 9), side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd)
+        kinds = [d.get("kind") for d in ((rep or {}).get("db") or {}).get("diffs") or []]
+        self.check("Dura 裁决牙④：Random(5)=9 ⇒ 磨损 11 越界 ⇒ rc 1",
+                   rc == 1 and "adjudication_violation" in kinds, (rc, kinds))
+
+        # ⑤ DuraMax - recog != Random(5)+2 ⇒ 红（公式面矛盾）。
+        od, rd = self._dura_pair("formula", side(3990, 3990, 3), side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd)
+        kinds = [d.get("kind") for d in ((rep or {}).get("db") or {}).get("diffs") or []]
+        self.check("Dura 裁决牙⑤：DuraMax-recog != Random(5)+2 ⇒ rc 1",
+                   rc == 1 and "adjudication_violation" in kinds, (rc, kinds))
+
+        # ⑥ 行级作用域：非武器槽（Position=2）的行即使数值与见证完全相同也不许被裁决
+        #    （否则「只放行登记行」退化成「整列放行」）。
+        od, rd = self._dura_pair("otherrow", side(3995, 3995, 3, other=3995),
+                                 side(3994, 3994, 4, other=3994))
+        rc, rep = self.compare(od, rd)
+        rows = [((d.get("record") or {}).get("key"), (d.get("record") or {}).get("column"))
+                for d in ((rep or {}).get("db") or {}).get("diffs") or []]
+        self.check("Dura 裁决牙⑥：非武器槽行的 Dura 差异仍比（rc 1，key=107）",
+                   rc == 1 and (["107"], "Dura") in rows, (rc, rows))
+
+        # ⑦ 见证列之外的列不同（DuraMax）⇒ 红（不因同表有裁决就整体放行）。
+        od, rd = self._dura_pair("duramax", side(3995, 3995, 3, weapon_duramax=3999),
+                                 side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd)
+        cols = [(d.get("record") or {}).get("column")
+                for d in ((rep or {}).get("db") or {}).get("diffs") or []]
+        self.check("Dura 裁决牙⑦：DuraMax 不同 ⇒ rc 1",
+                   rc == 1 and "DuraMax" in cols, (rc, cols))
+
+        # ⑧ 缺 rng 流水 ⇒ UNDECIDABLE（不得放行）。
+        od, rd = self._dura_pair("norg", side(3995, 3995, 3, rng=False),
+                                 side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd)
+        und = [u.get("kind") for u in (rep or {}).get("undecidable") or []]
+        self.check("Dura 裁决牙⑧：缺 rng-stream.tsv ⇒ rc 2 + db_adjudication_undecidable",
+                   rc == 2 and "db_adjudication_undecidable" in und, (rc, und))
+
+        # ⑨ 删掉规则（adjudications=[]）⇒ 原始差异保留（红）——这是「删判据即变红」的负对照。
+        rules_none = json.loads(json.dumps(self.builtin_rules))
+        rules_none["db"]["adjudications"] = []
+        p_none = self.rules_file("dura-no-adj.json", rules_none)
+        od, rd = self._dura_pair("noadj", side(3995, 3995, 3), side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd, ["--rules", p_none])
+        self.check("Dura 裁决牙⑨：删掉 db.adjudications ⇒ 原有 Dura 差异照旧 rc 1",
+                   rc == 1 and not [w for w in ((rep or {}).get("whitelisted") or [])
+                                    if w.get("kind") == "db_adjudicated_nondeterminism"],
+                   (rc, (rep or {}).get("db", {}).get("diffs")))
+
+        # ⑩ 规则校验：witness 未知键 ⇒ 加载期拒（rc 2），不许声明没实现的判据。
+        rules_bad = json.loads(json.dumps(self.builtin_rules))
+        rules_bad["db"]["adjudications"][0]["witness"]["unsupported_check"] = True
+        p_bad = self.rules_file("dura-badwitness.json", rules_bad)
+        od, rd = self._dura_pair("badw", side(3995, 3995, 3), side(3994, 3994, 4))
+        rc, rep = self.compare(od, rd, ["--rules", p_bad])
+        self.check("Dura 裁决牙⑩：witness 未知键 ⇒ rc 2（加载期拒）",
+                   rc == 2, (rc, (rep or {}).get("undecidable")))
 
     def finish(self):
         total = len(self.passed) + len(self.failed)
