@@ -134,7 +134,8 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
    `rules.rules_pending_review=true`；每个形状必须带 `max` 上界（bare string 视为规则非法）。
    报告里的 `verified{frame_diffs,db_state,db_diffs,db_undecidable}` 是**本次实际值**，
    放行与候选记录都会带上（便于复核「为什么放行 / 被什么挡住」）。
-   详见 `docs/ident14-extra-hit-adjudication-20261029.md`。
+   每个形状条目**必须自带 `decision`**（40-hex 裁决 oid）；键缺失、空串或非法 oid 一律 PENDING，
+   不允许继承规则级批准（reviewer-21 F1）。详见 `docs/ident14-extra-hit-adjudication-20261029.md`。
    两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
 2. `ident` 永远比较（即使其余字段被掩码）；错位即 `ident` 差异。
 3. 头部字段 `recog/param/tag/series` + 驱动器字段 `phase/seq/t_ms/conn`：

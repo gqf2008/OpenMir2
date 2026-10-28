@@ -1039,6 +1039,68 @@ class Selftest(object):
         self.check("T-270 Y3：PENDING 且有候选 => pending_review_used 含 T-270",
                    any(str(x).startswith("T-270") for x in _used_y3), (rc, _used_y3))
 
+        # ---- 重开后的 Dir 族扩展（run24：49,49,1）----
+        hit270d1 = self.frame(14, b"", **dict(heads_o, seq=805, param=49, tag=49, series=1))
+        od270d1 = self.write_run("t270-o-dir1", base270 + [hit270d1],
+                                 db=_snap270("mir2_test_db_oracle"))
+        # ① 仓库规则：Dir=1 已有独立 owner 裁决（f0b5734e…）⇒ 放行。
+        rc, rep = self.compare(od270d1, rd270)
+        _fr_d1 = (rep or {}).get("frames") or {}
+        _hits_d1 = _fr_d1.get("oracle_extra_hits") or []
+        self.check("T-270 Dir=1（仓库规则带独立裁决 f0b5734e）：形状+上界+零副作用 => rc 0 且 approved_by 该 oid",
+                   rc == 0 and bool(_hits_d1)
+                   and "f0b5734e" in str(_hits_d1[0].get("approved_by") or ""),
+                   (rc, _hits_d1, (rep or {}).get("undecidable")))
+
+        # F1（reviewer-21 1ab17d61）：**删掉 decision 键**同样必须是 PENDING，
+        # 不能靠「键缺失 ⇒ 继承规则级批准」让新形状蹭旧批准。
+        path270_delnodec = _rules270_variant(
+            "rules-270-deldir5dec.json",
+            lambda r: [e.pop("decision", None) for e in r["oracle_extra_shapes"]
+                       if e.get("shape") == "49,49,5"])
+        rc, rep = self.compare(od270, rd270, ["--rules", path270_delnodec])
+        _fr_del = (rep or {}).get("frames") or {}
+        _cand_del = _fr_del.get("oracle_extra_candidates") or []
+        self.check("T-270 F1：删掉形状的 decision 键 => 视同 PENDING、只登记候选、仍 rc 2",
+                   rc == 2 and bool(_cand_del) and not _fr_del.get("oracle_extra_hits")
+                   and _cand_del[0].get("status") == "PENDING",
+                   (rc, _cand_del, (rep or {}).get("undecidable")))
+
+        # ② 清空该形状的 decision ⇒ 视同 PENDING：只登记候选、不放行（不能白蹭规则级批准）。
+        path270_d1pend = _rules270_variant(
+            "rules-270-dir1-pending.json",
+            lambda r: [e.__setitem__("decision", "")
+                       for e in r["oracle_extra_shapes"] if e.get("shape") == "49,49,1"])
+        rc, rep = self.compare(od270d1, rd270, ["--rules", path270_d1pend])
+        _fr_d1p = (rep or {}).get("frames") or {}
+        _und_d1 = (rep or {}).get("undecidable") or []
+        _cand_d1p = _fr_d1p.get("oracle_extra_candidates") or []
+        _used_d1p = ((rep or {}).get("rules") or {}).get("pending_review_used") or []
+        self.check("T-270 Dir=1（decision 清空）：只登记候选、仍 rc 2、blocked_by 点明形状裁决未落地",
+                   rc == 2
+                   and bool(_cand_d1p)
+                   and not _fr_d1p.get("oracle_extra_hits")
+                   and any(u.get("ident") == 14
+                           and "49,49,1" in str(u.get("adjudication_blocked_by") or "")
+                           for u in _und_d1),
+                   (rc, _cand_d1p, _und_d1))
+        # R20-DIR2：候选 status 必须与形状裁决一致，且形状级 PENDING 要进「本次影响面」。
+        self.check("T-270 DIR2：形状 decision 清空时 candidate.status=PENDING 且 pending_review_used 含 T-270",
+                   bool(_cand_d1p) and _cand_d1p[0].get("status") == "PENDING"
+                   and any(str(x).startswith("T-270") for x in _used_d1p),
+                   (_cand_d1p[0].get("status") if _cand_d1p else None, _used_d1p))
+
+        # reviewer-20 R20-W1：max 边界相等（delta==cap）必须放行；`>`→`>=` 的变异要红。
+        path270_cap1 = _rules270_variant(
+            "rules-270-cap1.json",
+            lambda r: [e.__setitem__("max", 1)
+                       for e in r["oracle_extra_shapes"] if e.get("shape") == "49,49,5"])
+        rc, rep = self.compare(od270, rd270, ["--rules", path270_cap1])
+        _fr_cap = (rep or {}).get("frames") or {}
+        self.check("T-270 max 边界：delta == cap（1==1）=> 放行（「不超过」含相等）",
+                   rc == 0 and bool(_fr_cap.get("oracle_extra_hits")),
+                   (rc, _fr_cap.get("oracle_extra_hits"), (rep or {}).get("undecidable")))
+
     # ------------------------------------------------------------------
     # 批次 4（卡 openmir2-conformance-rules-recog-unmask）
     # 这 7 条 action=compare 但此前 head_mask/head_compare 都是 None，而 global
