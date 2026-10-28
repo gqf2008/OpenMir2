@@ -1683,11 +1683,11 @@ def oracle_extra_policy_check(row, rule, cmp):
     extra = []
     for fr in o_frames:
         recog = fr.get("recog")
-        if fr.get("body"):
-            info["reason"] = "recog=%s 的额外帧带 body ⇒ 有载荷" % (recog,)
-            return False, info
-        if not isinstance(series := fr.get("series"), int) or (series & 0x7) not in range(8):
-            info["reason"] = "recog=%s 的 series=%r 低 3 位不是合法 Dir" % (recog, series)
+        # F2：空体要同时看 body 与 body_sha256——load_stream 允许「只声明 sha、没有 body_hex」
+        # 的帧（body=None），只看 body 会把带载荷的帧当空体放行。
+        if fr.get("body") or fr.get("body_sha256") not in (None, EMPTY_BODY_SHA256):
+            info["reason"] = "recog=%s 的额外帧带 body（body_sha256=%r）⇒ 有载荷" % (
+                recog, fr.get("body_sha256"))
             return False, info
         if (recog, fr.get("param"), fr.get("tag")) not in walks:
             info["reason"] = ("recog=%s 在本侧 ident10 里找不到坐标 (%r,%r) 的走位帧"
@@ -1699,7 +1699,7 @@ def oracle_extra_policy_check(row, rule, cmp):
                               % (recog, seen[recog], max_per_actor))
             return False, info
         extra.append({"recog": recog, "param": fr.get("param"), "tag": fr.get("tag"),
-                      "series": series, "delta": 1})
+                      "series": fr.get("series"), "delta": 1})
     info["extra"] = extra
     info["oracle_total"] = row.get("oracle")
     info["rust_total"] = row.get("rust")
@@ -2915,12 +2915,20 @@ def compare_main(args):
             except ValueError:  # 已被别处移除 ⇒ 不重复登记
                 continue
             # reason/verified 按**本次实际条件**生成（reviewer-21 F2）。
-            rec = dict(base_rec, status=status,
-                       reason=("oracle 侧多出的 SM_HIT(14)：形状在白名单内（含 max 上界）、body 为空；"
-                               "本次帧面除该 ignore 差异外 diffs=0，两侧库快照 state=%r、diffs=%d、"
-                               "undecidable=%d，且 T-270 已获裁决 ⇒ 登记为受控非等价差异"
-                               % (_db.get("state"), len(_db.get("diffs") or []),
-                                  len(_db.get("undecidable") or []))),
+            if info.get("mode") == "policy":
+                _reason = ("oracle 侧多出的 SM_HIT(14)：policy=per_actor_once"
+                           "（每 recog ≤%d、recog 在本侧 ident10 有同坐标走位帧、body 空）；"
+                           "本次帧面除该 ignore 差异外 diffs=0，两侧库快照 state=%r、diffs=%d、"
+                           "undecidable=%d，且已获裁决 ⇒ 登记为受控非等价差异"
+                           % (info.get("max_per_actor"), _db.get("state"),
+                              len(_db.get("diffs") or []), len(_db.get("undecidable") or [])))
+            else:
+                _reason = ("oracle 侧多出的 SM_HIT(14)：形状在白名单内（含 max 上界）、body 为空；"
+                           "本次帧面除该 ignore 差异外 diffs=0，两侧库快照 state=%r、diffs=%d、"
+                           "undecidable=%d，且 T-270 已获裁决 ⇒ 登记为受控非等价差异"
+                           % (_db.get("state"), len(_db.get("diffs") or []),
+                              len(_db.get("undecidable") or [])))
+            rec = dict(base_rec, status=status, reason=_reason,
                        tier="R",
                        approved_by=_extra_approved_by(rule, info))
             report["whitelisted"].append(rec)

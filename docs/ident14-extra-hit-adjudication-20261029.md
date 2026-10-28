@@ -52,6 +52,10 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
 **Dir 族与逐形状裁决**：`(49,49)` 下已观测到 Dir=5（run21，2 条）与 Dir=1（run24，1 条），
 两者都零副作用但**分开登记**——每个 Dir 一个 `max`，且条目可自带 `decision`：
 **键缺失、空串或非 40-hex 一律按 PENDING**——没有「继承规则级 approval」这条路。
+run27 实测的两个新形状 `318,332,7`（recog=1406845931）与 `327,327,6`（recog=190181583）
+已按候选登记（`max=1`、`decision=""`）：run27 本身另有 10 条帧差 ⇒ 仍 UNDECIDABLE；
+且 `318,332,7` 与 run5 的额外帧**同形**（run5：recog=371349499，其余帧 0 差、库零差）——
+**裁决该形状会同时让 run5 转 PASS**，需 owner 一并确认覆盖范围。
 **每个形状必须自带 `decision`**（reviewer-21 F1）：键**缺失**与空串/非法 oid 一视同仁按 PENDING，
 **不允许继承规则级批准**——否则删掉一个 `decision` 键就能让新形状蹭旧批准。`49,49,1` 已由 owner 单独裁决
 （comment `f0b5734e0d67718618473bc2fb54e8d6f8ea58dd`，APPROVED，仅该形状、仅 oracle 侧），
@@ -197,10 +201,11 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 - 父卡的真机项（ident14「不该出现的一侧不发」）仍在 `openmir2-real-machine-verification-master`
   （`fdc4bbb27`）。
 
-## 8. 有界动态规则提案：`oracle_extra_policy="per_actor_once"`（未启用，待裁决）
+## 8. 有界动态规则：`oracle_extra_policy="per_actor_once"`（**owner 已拒绝，不启用**）
 
 run27 再次证明「枚举精确形状」不可扩展（本次额外形状 `318,332,7`、`327,327,6` 都不在白名单）。
-本节是实现好的**替代机制 + 构造牙 + 离线重算**，**规则表里尚未声明 policy**（等 owner 新裁决）。
+本节记录尝试过又**被拒绝**的替代方案，留作证据：它放行面过宽，仓库规则**不会**声明 policy。
+（run27 的精确形状改为按 §3 的候选模型逐个登记。）
 
 ### 8.1 判据（全部满足才成为候选）
 
@@ -211,7 +216,7 @@ run27 再次证明「枚举精确形状」不可扩展（本次额外形状 `318
 4. 每个 `recog` 的额外帧数 ≤ `oracle_extra_policy_max_per_actor`（缺省 1，必须整数 ≥1，
    规则必须显式写；**run21 的真实形态是同一 recog 2 条 ⇒ 证据要求上界 2**）；
 5. 该 `recog` 在本侧 ident10 里**存在一条 param/tag 完全相同的走位帧**（坐标自洽）；
-6. `series` 低 3 位落在 0..7（合法 Dir；高位旗标不参与判定）。
+（原第 6 条「series 低 3 位是合法 Dir」恒真、不构成判据，已删除——reviewer-21 F3。）
 
 放行仍要叠加原有三闸：帧面其它差异为 0、两侧库快照 `state=compared` 且无 diffs、
 库无 undecidable。放行记录 `approved_by` 写 policy 的裁决 oid，并登记
@@ -232,7 +237,16 @@ run27 再次证明「枚举精确形状」不可扩展（本次额外形状 `318
 变异（逐次恢复并核 sha256）：删每 actor 上界 / 删 ident10 坐标校验 / 删 body 检查 /
 删 rust 侧检查 ⇒ 各自只打红对应那颗牙。
 
-### 8.3 离线重算（合成 policy 规则，`max_per_actor=2` + 已裁决）
+### 8.3 为什么被拒绝：run5 也会被放行（F1）
+
+run5/softclose_relogin 的额外 14 是 `(recog=371349499, 318,332, Dir=7)`，body 空，
+同侧 ident10 恰有 `(371349499, 318,332)` 的走位帧，且该运行帧面 diffs=0、库 compared 零差。
+⇒ 在 `max_per_actor=2` + 已裁决的合成规则下，run5 **PASS / hits 1**
+（`E:/tmp/dev1-ident14/t270/pol2-run5.json`）。也就是说 policy 的放行面不是「已裁决的三个形状」，
+而是「任何 actor 坐标自洽的空体 oracle 独有 14（≤上界）」，`318,332,7` 并不在
+`7c9f9525` / `f0b5734e` 的 scope 里。owner 据此拒绝启用 policy。
+
+### 8.4 离线重算（合成 policy 规则，`max_per_actor=2` + 已裁决）
 
 | 运行 | 判定 | 说明 |
 |---|---|---|
@@ -241,8 +255,8 @@ run27 再次证明「枚举精确形状」不可扩展（本次额外形状 `318
 | run23 gamepoint | PASS | 无 14 |
 | run24 gamepoint | PASS | 49,49,1 对得上 ident10 |
 | run27 softclose | **UNDECIDABLE** | 额外 14 符合动态规则，但**帧面另有 10 条 diffs** ⇒ 被「帧面其它差异为 0」挡下（证明动态规则不会掩掉真差异） |
-| run5 softclose | UNDECIDABLE | 额外 14 的 recog 在本侧 ident10 无对应坐标 |
+| run5 softclose | **PASS（hits 1）** | 见 §8.3——这正是 policy 被拒的原因（上一版这里写「无对应坐标」，是错的） |
 
-**未启用**：仓库 `rules.json` 目前只有 `oracle_extra_shapes`，没有 `oracle_extra_policy`；
-owner 给出 `oracle_extra_policy_decision` 后，把 policy 三字段写进规则即切到动态规则
-（同时可移除/保留形状白名单，二者只走 policy 分支）。
+**不启用**：仓库 `rules.json` 只有 `oracle_extra_shapes`，**不会**写 `oracle_extra_policy`。
+代码保留该分支只用于回归与文档证据；F2（空体必须同时看 `body_sha256`）与 F4（policy 分支
+单独生成 reason）已修。

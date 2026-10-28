@@ -1154,6 +1154,19 @@ class Selftest(object):
                    and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
                    (rc, (rep or {}).get("undecidable")))
 
+        # F2：只声明 body_sha256、没有 body_hex 的帧也必须按「有载荷」拒（不能当空体）。
+        hit_sha_only = dict(hit270p)
+        hit_sha_only.pop("body_hex", None)
+        hit_sha_only.pop("body_len", None)
+        hit_sha_only["body_sha256"] = "ab" * 32
+        od270p_sha = self.write_run("t270-pol-o-sha", [walk270, hit_sha_only],
+                                    db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270p_sha, rd270p, ["--rules", _pol_ok])
+        self.check("T-270 policy F2：只声明 body_sha256（无 body_hex）=> rc 2（不算空体）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
         # Rust 侧也有 14（形状不同 ⇒ census 仍不等）⇒ 不受理；这条专测「rust 帧存在」这一支。
         hit270p_rx = self.frame(14, b"", **dict(heads_r, seq=816, param=49, tag=49,
                                                 series=2, recog=99))
