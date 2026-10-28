@@ -1607,6 +1607,8 @@ def valid_decision_oid(value):
 
 def _extra_approved_by(rule, info):
     """放行记录的批准人：**只列形状自己的裁决 oid**（F1 后不再有「继承」）。"""
+    if info.get("mode") == "policy":
+        return str(info.get("decision") or "").strip() or "T-270（卡 openmir2-ident14-extra-hit-adjudication）"
     out = []
     for e in (info.get("extra") or []):
         if e.get("decision_status") == "APPROVED" and e.get("decision"):
@@ -1636,6 +1638,72 @@ def oracle_extra_status(rule):
     if not valid_decision_oid((rule or {}).get("oracle_extra_decision")):
         return "PENDING"
     return "APPROVED"
+
+
+def oracle_extra_policy_check(row, rule, cmp):
+    """有界动态规则 `oracle_extra_policy="per_actor_once"` 的判定（卡重开：run27）。
+
+    比「枚举精确形状」可扩展，但仍然有界——每个 actor(recog) 至多 1 条，且必须能对上
+    本侧 ident10 的坐标。返回 (ok, info)；ok 只表示「符合候选条件」，放行与否仍要过
+    库/帧面闸与裁决（`oracle_extra_policy_decision`）。
+
+    条件（缺一即 False）：
+      1. oracle 侧该 ident 的额外帧 body 全空；
+      2. 每个 recog 至多 1 条；
+      3. 该 recog 在本侧 ident10 里有一条 param/tag 完全相同的走位帧（坐标自洽）；
+      4. series 的低 3 位落在 0..7（合法 Dir；高位旗标不参与判定）；
+      5. rust 侧该 ident 没有任何帧（Rust 多发不受理）。
+    """
+    info = {"ident": row.get("ident"), "mode": "policy", "policy": "per_actor_once"}
+    try:
+        max_per_actor = int((rule or {}).get("oracle_extra_policy_max_per_actor", 1))
+    except (TypeError, ValueError):
+        info["reason"] = "oracle_extra_policy_max_per_actor 不是整数 ⇒ 规则非法"
+        return False, info
+    if max_per_actor < 1:
+        info["reason"] = "oracle_extra_policy_max_per_actor 必须 >= 1"
+        return False, info
+    info["max_per_actor"] = max_per_actor
+    dec = (rule or {}).get("oracle_extra_policy_decision")
+    info["decision"] = dec
+    info["decision_status"] = "APPROVED" if valid_decision_oid(dec) else "PENDING"
+    o_frames = [f for f in (cmp.get("ignore_frames") or {}).get("oracle", [])
+                if f.get("ident") == row.get("ident")]
+    r_frames = [f for f in (cmp.get("ignore_frames") or {}).get("rust", [])
+                if f.get("ident") == row.get("ident")]
+    if r_frames:
+        info["reason"] = "rust 侧也有 %d 条同 ident 帧 ⇒ 不是 oracle 独有" % len(r_frames)
+        return False, info
+    if not o_frames:
+        info["reason"] = "oracle 侧没有该 ident 的被剔帧（不该走到这里）"
+        return False, info
+    walks = {(w[0], w[1], w[2]) for w in
+             (cmp.get("walk_frames") or {}).get("oracle", [])}
+    seen = {}
+    extra = []
+    for fr in o_frames:
+        recog = fr.get("recog")
+        if fr.get("body"):
+            info["reason"] = "recog=%s 的额外帧带 body ⇒ 有载荷" % (recog,)
+            return False, info
+        if not isinstance(series := fr.get("series"), int) or (series & 0x7) not in range(8):
+            info["reason"] = "recog=%s 的 series=%r 低 3 位不是合法 Dir" % (recog, series)
+            return False, info
+        if (recog, fr.get("param"), fr.get("tag")) not in walks:
+            info["reason"] = ("recog=%s 在本侧 ident10 里找不到坐标 (%r,%r) 的走位帧"
+                              % (recog, fr.get("param"), fr.get("tag")))
+            return False, info
+        seen[recog] = seen.get(recog, 0) + 1
+        if seen[recog] > max_per_actor:
+            info["reason"] = ("recog=%s 的额外帧 %d 条，超过每个 actor 的上界 %d"
+                              % (recog, seen[recog], max_per_actor))
+            return False, info
+        extra.append({"recog": recog, "param": fr.get("param"), "tag": fr.get("tag"),
+                      "series": series, "delta": 1})
+    info["extra"] = extra
+    info["oracle_total"] = row.get("oracle")
+    info["rust_total"] = row.get("rust")
+    return True, info
 
 
 def oracle_extra_explainable(row, rule):
@@ -1761,6 +1829,8 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
     # 计数是硬判据；形态是加强项（见 IGNORE_SHAPE_FIELDS 为什么不含 recog）。
     ignore_counts = {"oracle": {}, "rust": {}}
     ignore_shapes = {"oracle": {}, "rust": {}}
+    # 有界动态规则（T-270 per_actor_once）要看**逐帧 recog/坐标/body**，不能只看形状多重集。
+    ignore_frames = {"oracle": [], "rust": []}
 
     def split(side, frames):
         kept, ignored, ignored_cli = [], [], []
@@ -1776,6 +1846,7 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
                 shape = _ignore_shape_key(fr)
                 bucket = ignore_shapes[side].setdefault(ident, {})
                 bucket[shape] = bucket.get(shape, 0) + 1
+                ignore_frames[side].append(fr)
                 if str(rule.get("approved_by", "")).upper().startswith("PENDING"):
                     pending_ignore.add(ident)
                 continue
@@ -1954,6 +2025,12 @@ def compare_streams(o_stream, r_stream, rules, cli_ignore_idents=frozenset()):
         "ignored_cli": ignored_cli,
         "ignored_counts": ignore_counts,
         "ignored_shapes": ignore_shapes,
+        "ignore_frames": ignore_frames,
+        "walk_frames": {
+            side: [[f.get("recog"), f.get("param"), f.get("tag")]
+                   for f in (o_stream.frames if side == "oracle" else r_stream.frames)
+                   if f.get("ident") == 10]
+            for side in ("oracle", "rust")},
         "ignored_rule_census": census,
         "pending_ignore_hits": sorted(pending_ignore),
         "pending_ignore_counted": sorted(
@@ -2710,7 +2787,10 @@ def compare_main(args):
         undecidable.append(_und)
         # 受控裁决候选（T-270）：形状对得上只是**必要条件**，放行与否留给库比完之后再定。
         _rule_extra = rules.by_ident.get(row["ident"]) or {}
-        _ok_extra, _extra_info = oracle_extra_explainable(row, _rule_extra)
+        if str(_rule_extra.get("oracle_extra_policy") or "").strip():
+            _ok_extra, _extra_info = oracle_extra_policy_check(row, _rule_extra, cmp)
+        else:
+            _ok_extra, _extra_info = oracle_extra_explainable(row, _rule_extra)
         if _ok_extra:
             pending_oracle_extra.append({"und": _und, "info": _extra_info})
         elif _rule_extra.get("oracle_extra_shapes"):
@@ -2796,11 +2876,15 @@ def compare_main(args):
                 "verified": verified,
             }
             blockers = list(_blockers)
-            _pending_shapes = [e["shape"] for e in (info.get("extra") or [])
-                               if e.get("decision_status") != "APPROVED"]
+            _pending_shapes = [e.get("shape") for e in (info.get("extra") or [])
+                               if info.get("mode") != "policy"
+                               and e.get("decision_status") != "APPROVED"]
             if _pending_shapes:
                 blockers.append("shape %s 的裁决未落地/非法（decision 缺失、为空或不是 oid）"
                                 % "、".join(_pending_shapes))
+            if info.get("mode") == "policy" and info.get("decision_status") != "APPROVED":
+                blockers.append("oracle_extra_policy=per_actor_once 的裁决未落地/非法"
+                                "（oracle_extra_policy_decision 缺失、为空或不是 oid）")
             if status != "APPROVED":
                 _raw_status = str(rule.get("oracle_extra_status", "PENDING")).strip().upper()
                 if _raw_status == "APPROVED":
@@ -2816,7 +2900,10 @@ def compare_main(args):
             if blockers:
                 cand["und"]["adjudication"] = "T-270"
                 cand["und"]["adjudication_blocked_by"] = "；".join(blockers)
-                _cand_status = "PENDING" if (status != "APPROVED" or _pending_shapes) else status
+                _cand_status = "PENDING" if (
+                    status != "APPROVED" or _pending_shapes
+                    or (info.get("mode") == "policy"
+                        and info.get("decision_status") != "APPROVED")) else status
                 report["frames"]["oracle_extra_candidates"].append(dict(
                     base_rec, status=_cand_status, blockers=blockers,
                     reason=("oracle 侧多出的 SM_HIT(14)：形状符合候选条件，但 %s "
@@ -2841,6 +2928,8 @@ def compare_main(args):
 
     # T-270 白名单未获裁决 ⇒ 报告层面必须显示「还有未审过的判据」（reviewer-20 R20-X1）。
     def _shape_pending(rule):
+        if str((rule or {}).get("oracle_extra_policy") or "").strip():
+            return not valid_decision_oid((rule or {}).get("oracle_extra_policy_decision"))
         for e in ((rule or {}).get("oracle_extra_shapes") or []):
             if not isinstance(e, dict) or not valid_decision_oid(e.get("decision")):
                 return True

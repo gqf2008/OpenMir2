@@ -1066,6 +1066,123 @@ class Selftest(object):
                    and _cand_del[0].get("status") == "PENDING",
                    (rc, _cand_del, (rep or {}).get("undecidable")))
 
+        # ---- 有界动态规则 oracle_extra_policy=per_actor_once（run27 提案的构造牙）----
+        # 用合成规则副本测（仓库规则暂时不声明 policy，等 owner 裁决）。
+        _pol_ok = _rules270_variant(
+            "rules-270-policy.json",
+            lambda r: (r.__setitem__("oracle_extra_policy", "per_actor_once"),
+                       r.__setitem__("oracle_extra_policy_decision",
+                                     "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd")))
+        _pol_pend = _rules270_variant(
+            "rules-270-policy-pending.json",
+            lambda r: (r.__setitem__("oracle_extra_policy", "per_actor_once"),
+                       r.__setitem__("oracle_extra_policy_decision", "")))
+
+        # 走位帧：ident10 (49,49)。额外 14 的 recog 与坐标必须对得上它。
+        walk270 = self.frame(10, b"", **dict(heads_o, seq=810, param=49, tag=49, series=513))
+        hit270p = self.frame(14, b"", **dict(heads_o, seq=811, param=49, tag=49,
+                                             series=7, recog=77))
+        walk270r = self.frame(10, b"", **dict(heads_r, seq=812, param=49, tag=49, series=519))
+        od270p = self.write_run("t270-pol-o", [walk270, hit270p],
+                                db=_snap270("mir2_test_db_oracle"))
+        rd270p = self.write_run("t270-pol-r", [walk270r],
+                                db=_snap270("mir2_test_db_rust"))
+        rc, rep = self.compare(od270p, rd270p, ["--rules", _pol_ok])
+        _fr_pol = (rep or {}).get("frames") or {}
+        self.check("T-270 policy：recog 对上本侧 ident10 坐标、body 空、每 actor 1 条 => rc 0 且登记",
+                   rc == 0 and bool(_fr_pol.get("oracle_extra_hits")),
+                   (rc, _fr_pol.get("oracle_extra_hits"), (rep or {}).get("undecidable")))
+
+        rc, rep = self.compare(od270p, rd270p, ["--rules", _pol_pend])
+        _cand_pol = (((rep or {}).get("frames") or {}).get("oracle_extra_candidates") or [])
+        self.check("T-270 policy：decision 为空 => 只登记候选、仍 rc 2",
+                   rc == 2 and bool(_cand_pol) and _cand_pol[0].get("status") == "PENDING",
+                   (rc, _cand_pol))
+
+        # 坐标对不上本侧 ident10 ⇒ 不放行
+        hit270p_bad = self.frame(14, b"", **dict(heads_o, seq=813, param=99, tag=99,
+                                                 series=3, recog=77))
+        od270p_bad = self.write_run("t270-pol-o-bad", [walk270, hit270p_bad],
+                                    db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270p_bad, rd270p, ["--rules", _pol_ok])
+        self.check("T-270 policy：坐标对不上 ident10 => rc 2（不放行）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # 同 actor 两条 ⇒ 超默认每 actor 1 条（run21 需要 2 ⇒ 规则可把上界写成 2）
+        hit270p2 = self.frame(14, b"", **dict(heads_o, seq=814, param=49, tag=49,
+                                              series=4, recog=77))
+        od270p_two = self.write_run("t270-pol-o-two", [walk270, hit270p, hit270p2],
+                                    db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270p_two, rd270p, ["--rules", _pol_ok])
+        self.check("T-270 policy：同 actor 2 条 > 默认上界 1 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # 上界可配：max_per_actor=2 时同 actor 两条放行（run21 的真实形态），3 条仍红。
+        _pol_ok2 = _rules270_variant(
+            "rules-270-policy-max2.json",
+            lambda r: (r.__setitem__("oracle_extra_policy", "per_actor_once"),
+                       r.__setitem__("oracle_extra_policy_max_per_actor", 2),
+                       r.__setitem__("oracle_extra_policy_decision",
+                                     "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd")))
+        rc, rep = self.compare(od270p_two, rd270p, ["--rules", _pol_ok2])
+        self.check("T-270 policy：同 actor 2 条 == 上界 2 => rc 0（上界可配，run21 形态）",
+                   rc == 0
+                   and bool(((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, ((rep or {}).get("frames") or {}).get("oracle_extra_hits")))
+        hit270p3 = self.frame(14, b"", **dict(heads_o, seq=817, param=49, tag=49,
+                                              series=6, recog=77))
+        od270p_three = self.write_run("t270-pol-o-three", [walk270, hit270p, hit270p2, hit270p3],
+                                      db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270p_three, rd270p, ["--rules", _pol_ok2])
+        self.check("T-270 policy：同 actor 3 条 > 上界 2 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # body 非空 ⇒ 不放行
+        hit270p_body = self.frame(14, b"x", **dict(heads_o, seq=815, param=49, tag=49,
+                                                   series=3, recog=77))
+        od270p_body = self.write_run("t270-pol-o-body", [walk270, hit270p_body],
+                                     db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270p_body, rd270p, ["--rules", _pol_ok])
+        self.check("T-270 policy：额外帧 body 非空 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # Rust 侧也有 14（形状不同 ⇒ census 仍不等）⇒ 不受理；这条专测「rust 帧存在」这一支。
+        hit270p_rx = self.frame(14, b"", **dict(heads_r, seq=816, param=49, tag=49,
+                                                series=2, recog=99))
+        rd270p_extra = self.write_run("t270-pol-r-extra", [walk270r, hit270p_rx],
+                                      db=_snap270("mir2_test_db_rust"))
+        rc, rep = self.compare(od270p, rd270p_extra, ["--rules", _pol_ok])
+        self.check("T-270 policy：Rust 侧也有 14 帧 => rc 2（Rust 多发不受理）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # Rust 侧多出一条而 oracle 没有 ⇒ 也要红（另一支：oracle 无被剔帧）。
+        od270p_only_walk = self.write_run("t270-pol-o-walk", [walk270],
+                                          db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od270p_only_walk, rd270p_extra, ["--rules", _pol_ok])
+        self.check("T-270 policy：oracle 无额外帧而 Rust 有 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # 库差 ⇒ 不放行
+        rd270p_db = self.write_run("t270-pol-r-db", [walk270r],
+                                   db=_snap270("mir2_test_db_rust", 8))
+        rc, rep = self.compare(od270p, rd270p_db, ["--rules", _pol_ok])
+        self.check("T-270 policy：伴随库差 => rc 2（不放行）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
         # ② 清空该形状的 decision ⇒ 视同 PENDING：只登记候选、不放行（不能白蹭规则级批准）。
         path270_d1pend = _rules270_variant(
             "rules-270-dir1-pending.json",

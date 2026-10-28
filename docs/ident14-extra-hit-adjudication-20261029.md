@@ -196,3 +196,53 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
   复跑至少一条场景并把证据入卡。
 - 父卡的真机项（ident14「不该出现的一侧不发」）仍在 `openmir2-real-machine-verification-master`
   （`fdc4bbb27`）。
+
+## 8. 有界动态规则提案：`oracle_extra_policy="per_actor_once"`（未启用，待裁决）
+
+run27 再次证明「枚举精确形状」不可扩展（本次额外形状 `318,332,7`、`327,327,6` 都不在白名单）。
+本节是实现好的**替代机制 + 构造牙 + 离线重算**，**规则表里尚未声明 policy**（等 owner 新裁决）。
+
+### 8.1 判据（全部满足才成为候选）
+
+1. 规则声明 `oracle_extra_policy="per_actor_once"`，且 `oracle_extra_policy_decision`
+   是合法 40-hex oid（否则 PENDING，只登记候选）；
+2. 额外 `SM_HIT` 全在 **oracle 侧**，且 rust 侧该 ident **没有任何帧**（Rust 多发不受理）；
+3. 每条额外帧 **body 为空**；
+4. 每个 `recog` 的额外帧数 ≤ `oracle_extra_policy_max_per_actor`（缺省 1，必须整数 ≥1，
+   规则必须显式写；**run21 的真实形态是同一 recog 2 条 ⇒ 证据要求上界 2**）；
+5. 该 `recog` 在本侧 ident10 里**存在一条 param/tag 完全相同的走位帧**（坐标自洽）；
+6. `series` 低 3 位落在 0..7（合法 Dir；高位旗标不参与判定）。
+
+放行仍要叠加原有三闸：帧面其它差异为 0、两侧库快照 `state=compared` 且无 diffs、
+库无 undecidable。放行记录 `approved_by` 写 policy 的裁决 oid，并登记
+`frames.oracle_extra_hits`（含每 recog 计数与 `max_per_actor`）。
+
+### 8.2 牙（`compare_runs selftest`，用合成规则副本测，仓库规则不声明 policy）
+
+| 牙 | 断言 |
+|---|---|
+| 正向 | recog 对上本侧 ident10 坐标、body 空、每 actor ≤ 上界 ⇒ `rc 0` 且登记 |
+| PENDING | `oracle_extra_policy_decision=""` ⇒ 只登记候选、`rc 2` |
+| 坐标不符 | 额外帧坐标对不上 ident10 ⇒ `rc 2` |
+| 超上界 | 同 actor 2 条 > 默认上界 1 ⇒ `rc 2`；上界写 2 时 2 条放行、3 条红（上界可配） |
+| body 非空 | ⇒ `rc 2` |
+| Rust 也有 14 | ⇒ `rc 2`（oracle 无对应帧的形态同样红） |
+| 伴随库差 | ⇒ `rc 2` |
+
+变异（逐次恢复并核 sha256）：删每 actor 上界 / 删 ident10 坐标校验 / 删 body 检查 /
+删 rust 侧检查 ⇒ 各自只打红对应那颗牙。
+
+### 8.3 离线重算（合成 policy 规则，`max_per_actor=2` + 已裁决）
+
+| 运行 | 判定 | 说明 |
+|---|---|---|
+| run12 softclose | PASS | `oracle_extra_hits` 1 条（318,336,4 对得上 ident10） |
+| run21 gamepoint | PASS | 同 recog 2 条 ≤ 上界 2 |
+| run23 gamepoint | PASS | 无 14 |
+| run24 gamepoint | PASS | 49,49,1 对得上 ident10 |
+| run27 softclose | **UNDECIDABLE** | 额外 14 符合动态规则，但**帧面另有 10 条 diffs** ⇒ 被「帧面其它差异为 0」挡下（证明动态规则不会掩掉真差异） |
+| run5 softclose | UNDECIDABLE | 额外 14 的 recog 在本侧 ident10 无对应坐标 |
+
+**未启用**：仓库 `rules.json` 目前只有 `oracle_extra_shapes`，没有 `oracle_extra_policy`；
+owner 给出 `oracle_extra_policy_decision` 后，把 policy 三字段写进规则即切到动态规则
+（同时可移除/保留形状白名单，二者只走 policy 分支）。
