@@ -7976,6 +7976,46 @@ mod tests {
         }
     }
 
+    /// **卡 `openmir2-656-sculture-order-tooth`**：race 102 ScultureKing 到点近战的
+    /// `pending_monster_ref_msgs` 必须**精确**是 `RM_HIT → RM_CHANGENAMECOLOR`。
+    /// 不能像 `king_melee_due_*` 那样只查 `.any(656)`：把
+    /// `sculture_king_attack_target` 的 break helper 挪到 `sculture_king_attack` 之前一格，
+    /// 只查存在性时 726 条测试仍会全绿（reviewer-20 e083edb4）。
+    ///
+    /// race 92 CowKing 的同序判据由既有
+    /// `mb4_attack_uses_abs_dc_spread_and_half_physical_half_magic` 的
+    /// `refs[0]=RM_HIT / refs[1]=RM_CHANGENAMECOLOR` 精确断言覆盖。
+    #[test]
+    fn sculture_king_melee_sequence_is_hit_then_name_color() {
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        {
+            let m = world.entities.get_mut(mid).unwrap();
+            m.race = 102;
+            m.dc = 10 | (10 << 8);
+            m.level = 1;
+            m.ai.attack_tick = 0;
+            m.ai.next_hit_time = 2_000;
+        }
+        let pid = player(&mut world, 11, 10);
+        world.tick();
+        set_target_creature(&mut world, mid, pid);
+        world.clock_ms = 2_200;
+        assert!(monster_attack_target(&mut world, mid), "race 102 邻接到点");
+
+        let sequence: Vec<(u16, i32)> = world
+            .pending_monster_ref_msgs
+            .iter()
+            .map(|m| (m.ident, m.actor_id))
+            .collect();
+        assert_eq!(
+            sequence,
+            vec![(RM_HIT, mid), (RM_CHANGENAMECOLOR, mid)],
+            "ScultureKing 必须恰好 RM_HIT 后同拍 RM_CHANGENAMECOLOR；\
+             helper 挪到 Attack 前 ⇒ 本断言红"
+        );
+    }
+
     /// W4-B：`TargetCret != null` 且**邻接** ⇒ `GetAttackDir` 真 ⇒ 短路**不抽** `Random(6)`。
     #[test]
     fn animal_struck_adjacent_target_takes_without_drawing() {
