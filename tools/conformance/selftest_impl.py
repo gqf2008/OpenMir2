@@ -352,19 +352,35 @@ class Selftest(object):
     # -- 首次双栈对拍暴露的 8 条规则缺口（100/520/525/529/530/654/657 + 52 线缆布局对）--
     # 530 = SM_SELECTSERVER_OK：body 末段是 LoginSrv 进程内 SessionID（跨进程必然不同）
     # ⇒ action=mask_body_ranges（只掩偏移 16..end，ip/端口仍逐字节比）；其余 6 条 compare。
-    @staticmethod
-    def _approved_ok(meta):
+    _RULES_APPROVE = None
+
+    @classmethod
+    def _rules_approve_module(cls):
+        """按文件路径加载同目录的 rules_approve.py（compare_runs 用 load_module 加载本文件，
+        sys.path 里没有 tools/conformance，不能用普通 import）。"""
+        if cls._RULES_APPROVE is not None:
+            return cls._RULES_APPROVE
+        import importlib.util
+        import os
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rules_approve.py")
+        spec = importlib.util.spec_from_file_location("conformance_rules_approve", path)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        cls._RULES_APPROVE = mod
+        return mod
+
+    @classmethod
+    def _approved_ok(cls, meta):
         """approved_by 是否为本裁定的正式批准（卡 openmir2-rules-pending-adjudication）。
 
-        断言必须同时看到：① 不是 PENDING；② coordinator 复核标记（日期）；
-        ③ 裁定 decision oid；④ 保留原草稿人（draft: ...）。缺一条即视为未批准。
+        谓词**只有一份**：委托 rules_approve.approved_ok(approved_by, ident)。它按 ident
+        绑定决策模板（14 → 2026-10-29，其余 → 2026-10-25），要求 coordinator 复核标记 +
+        decision oid + 原草稿人，缺一条即未批准（reviewer-21 N4：此前这里是第二份硬编码谓词，
+        rules_approve 的绑定改了它不会跟）。
         """
-        ab = str((meta or {}).get("approved_by") or "")
-        return (ab.strip().upper().startswith("PENDING") is False
-                and "coordinator review 2026-10-25" in ab
-                and "decision=062972b6581e9fe4fd15370bdbbb4f8a4e3758ce" in ab
-                and "draft:" in ab
-                and ab.split("draft:", 1)[1].strip(" )").strip() != "")
+        meta = meta or {}
+        return cls._rules_approve_module().approved_ok(
+            meta.get("approved_by"), meta.get("ident"))
 
     NEW_IDENTS = ((100, "multiset_by_tick"), (520, "compare"), (525, "compare"),
                   (529, "compare"), (530, "mask_body_ranges"), (654, "compare"),
@@ -757,6 +773,13 @@ class Selftest(object):
                    and frames.get("ignored", {}).get("oracle", {}).get("idents") == [14]
                    and frames.get("ignored", {}).get("rust", {}).get("idents") == [14],
                    (rc, frames, (rep or {}).get("undecidable")))
+        # reviewer-21 N1：放行分支同样要有永久断言——已批准规则同形放行时必须出现在
+        # `_counted_all` 里；pending-only 兼容字段保持空（否则再退化成 pending-only 不会被发现）。
+        self.check("ident14 同形放行 => counted_all 含 14、pending-only 兼容字段为空（N1）",
+                   frames.get("ignored_ident_rules_counted_all") == [14]
+                   and frames.get("ignored_ident_rules_counted") == [],
+                   (rc, frames.get("ignored_ident_rules_counted_all"),
+                    frames.get("ignored_ident_rules_counted")))
 
         f14_shape = self.frame(14, b"The merchant is hit",
                                **dict(heads_o, seq=704, param=9))

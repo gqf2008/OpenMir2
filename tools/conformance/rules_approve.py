@@ -134,6 +134,33 @@ def check_rules(rules):
     return ok, rows, to_flip
 
 
+STALE_IGNORE_REASON_PHRASES = (
+    "PENDING 状态下的 UNDECIDABLE 兜底",
+    "本规则会把它一并剔掉",
+    "不由本规则比较",
+)
+
+
+def check_ignore_reasons(rules):
+    """所有 action=ignore 条目的 reason 不得再写转正前的旧语义。
+
+    判定路径已改成「所有 ignore 都要每侧计数 + 形态多重集全等才剔除」，rules.json 的
+    reason 是规则表的权威描述；留着旧句会把读者带回「已批准可任意剔帧 / 一侧多一条会被
+    静默剔掉」的结论（reviewer-20 R20-C1）。返回 (ok, rows)，rows 每项 {ident, hits}。
+    """
+    rows = []
+    ok = True
+    for entry in rules.get("rules") or []:
+        if not isinstance(entry, dict) or entry.get("action") != "ignore":
+            continue
+        reason = str(entry.get("reason") or "")
+        hits = [p for p in STALE_IGNORE_REASON_PHRASES if p in reason]
+        rows.append({"ident": entry.get("ident"), "hits": hits})
+        if hits:
+            ok = False
+    return ok, rows
+
+
 def apply_rules(rules):
     """在 deepcopy 上翻正；校验不过 => 抛 ValueError（一个字节都不写）。"""
     new = copy.deepcopy(rules)
@@ -259,6 +286,20 @@ def selftest():
     chk(not ok10 and any("既不是 PENDING" in r["message"] for r in rows10),
         "ident14 用 10-25 模板 => 拒")
 
+    # A2（本卡）：ignore reason 的旧语义检查——合成输入，不读真实仓库。
+    good_reason = copy.deepcopy(new)
+    good_reason["rules"][2]["reason"] = (
+        "ignore 前按每侧计数 + 形态多重集比；不等即整轮 UNDECIDABLE（ignore_rule_mismatch）。"
+        + "g" * 20)
+    okr, rowsr = check_ignore_reasons(good_reason)
+    chk(okr and bool(rowsr) and rowsr[0]["ident"] == 14 and rowsr[0]["hits"] == [],
+        "ignore reason 写新语义 => 通过（rows=%d）" % len(rowsr))
+    bad_reason = copy.deepcopy(good_reason)
+    bad_reason["rules"][2]["reason"] += "；PENDING 状态下的 UNDECIDABLE 兜底"
+    okb, rowsb = check_ignore_reasons(bad_reason)
+    chk(not okb and any(r["ident"] == 14 and r["hits"] for r in rowsb),
+        "ignore reason 残留旧语义 => 拒")
+
     # 非 PENDING 且非本格式 => 拒（不许静默覆盖别人的批准）
     foreign = copy.deepcopy(base)
     foreign["rules"][0]["approved_by"] = "someone else approved"
@@ -280,11 +321,21 @@ def main(argv=None):
     ap.add_argument("--check", action="store_true")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--selftest", action="store_true")
+    ap.add_argument("--check-ignore-reasons", action="store_true",
+                    help="只查 action=ignore 条目的 reason 是否仍写转正前旧语义")
     args = ap.parse_args(argv)
     if args.selftest:
         return selftest()
+    if args.check_ignore_reasons:
+        ok_r, rows_r = check_ignore_reasons(_load(args.rules))
+        for r in rows_r:
+            print("%-8s ident=%s hits=%s"
+                  % ("ok" if not r["hits"] else "STALE", r["ident"], r["hits"]))
+        print("IGNORE_REASON_SUMMARY ok=%s stale=%d checked=%d"
+              % (ok_r, sum(1 for r in rows_r if r["hits"]), len(rows_r)))
+        return 0 if ok_r else 2
     if not (args.check or args.apply):
-        ap.error("需要 --check / --apply / --selftest 之一")
+        ap.error("需要 --check / --apply / --check-ignore-reasons / --selftest 之一")
     rules = _load(args.rules)
     ok, rows, to_flip = check_rules(rules)
     _report(rows)
