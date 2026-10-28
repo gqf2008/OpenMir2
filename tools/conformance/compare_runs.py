@@ -1487,9 +1487,10 @@ def ignore_rule_census(counts, shapes, rules):
     （任一侧 hit > 0）；每条给两侧计数、差值、计数是否相等、形态是否相等，
     以及规则自身的 `pending`（`approved_by` 以 PENDING 开头）。
 
-    判定语义（main 里用）：PENDING 规则只有在「计数相等 **且** 形态相等」时才不再
-    整轮 UNDECIDABLE（记为「已计数、形态已比」）；否则仍点名差额（fail-closed）。
-    非 PENDING 的 ignore 规则只做留痕，不影响判定。
+    判定语义（main 里用）：**所有** `action=ignore`（PENDING 或已批准）都只有在
+    「计数相等 **且** 形态相等」时才不再整轮 UNDECIDABLE（记为「已计数、形态已比」）；
+    否则仍点名差额（fail-closed），PENDING → `pending_ignore_rule`、已批准 →
+    `ignore_rule_mismatch`。转正只换 kind，不取消兜底（reviewer-20 R20-N3）。
     """
     rows = []
     for ident in sorted(set(counts["oracle"]) | set(counts["rust"])):
@@ -2129,8 +2130,18 @@ def compare_main(args):
         "ignored_counts": {side: {str(i): n for i, n in sorted(v.items())}
                            for side, v in cmp["ignored_counts"].items()},
         "ignored_rule_census": cmp["ignored_rule_census"],
+        # 兼容字段：**只看 PENDING 规则**（卡 openmir2-ignore-rule-count-compare 首版口径）。
+        # 已批准规则放行/被剔不在这里 ⇒ 读这两字段判「有没有 ignore 差异」会漏
+        # （reviewer-20 R20-N2：ident14 转正后 run5 的 1/0 只在 undecidable 里）。
+        # 新消费者请用下面两个 `_all` 字段。
         "ignored_ident_rules_counted": cmp["pending_ignore_counted"],
         "ignored_ident_rules_mismatch": cmp["pending_ignore_mismatch"],
+        "ignored_ident_rules_counted_all": sorted(
+            row["ident"] for row in cmp["ignored_rule_census"]
+            if row["counts_equal"] and row["shape_equal"]),
+        "ignored_ident_rules_mismatch_all": sorted(
+            row["ident"] for row in cmp["ignored_rule_census"]
+            if not (row["counts_equal"] and row["shape_equal"])),
     }
     report["coverage"] = {
         "present_idents": cmp["present_idents"],

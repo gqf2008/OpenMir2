@@ -120,7 +120,9 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
    + `body_sha256` 的多重集）相等 ⇒ 记「已计数、形态已比」放行（`frames.ignored_rule_census` /
    `ignored_ident_rules_counted`）；计数或形态对不上 ⇒ **UNDECIDABLE**（`pending` →
    `pending_ignore_rule`，已批准 → `ignore_rule_mismatch`），点名 `oracle/rust/delta`——
-   保护没有取消，只是升级成可比判据（卡 `openmir2-ignore-rule-count-compare`）。`frames.ignored_counts` 两侧都补 0（单侧命中也能直读）。
+   保护没有取消，只是升级成可比判据（卡 `openmir2-ignore-rule-count-compare`）。
+   `frames.ignored_ident_rules_counted` / `_mismatch` 是**兼容字段（只含 PENDING 规则）**，
+   判「有没有 ignore 差异」请读 `_counted_all` / `_mismatch_all`（含已批准规则）。`frames.ignored_counts` 两侧都补 0（单侧命中也能直读）。
    两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
 2. `ident` 永远比较（即使其余字段被掩码）；错位即 `ident` 差异。
 3. 头部字段 `recog/param/tag/series` + 驱动器字段 `phase/seq/t_ms/conn`：

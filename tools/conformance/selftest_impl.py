@@ -723,11 +723,19 @@ class Selftest(object):
         od = self.write_run("t22-ign-o", body_o)
         rd = self.write_run("t22-ign-r", body_r)
         rc, rep = self.compare(od, rd)
+        _f14 = (rep or {}).get("frames") or {}
         self.check("ident14 已批准但计数不等 => rc 2（ignore_rule_mismatch，不洗绿）",
                    rc == 2 and any(u.get("kind") == "ignore_rule_mismatch"
                                    and u.get("ident") == 14
                                    for u in (rep or {}).get("undecidable", [])),
                    (rc, (rep or {}).get("undecidable")))
+        # R20-N2：已批准规则的差异必须进 `_all` 字段；pending-only 兼容字段保持空
+        # （否则直接读 `ignored_ident_rules_mismatch` 的消费者会以为没有差异）。
+        self.check("ident14 已批准不等 => mismatch 进 _all、不进 pending-only 兼容字段",
+                   _f14.get("ignored_ident_rules_mismatch_all") == [14]
+                   and _f14.get("ignored_ident_rules_mismatch") == [],
+                   (rc, _f14.get("ignored_ident_rules_mismatch_all"),
+                    _f14.get("ignored_ident_rules_mismatch")))
 
         f14_same = self.frame(14, b"The merchant is hit", **dict(heads_o, seq=703))
         rd_same = self.write_run("t22-ign-r-same", [f41, f14_same])
