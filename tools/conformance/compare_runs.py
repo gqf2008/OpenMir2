@@ -17,13 +17,13 @@
 1) 帧对齐：**按序**对齐（不是按 seq 找键）。默认**没有** ignore 规则：10=SM_TURN、
    41=SM_FEATURECHANGED 是真实协议帧（downlink 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」，
    有逐字节黄金断言），必须比。确需剔除只能用显式 `--ignore-idents`；规则表里的
-   `action=ignore` 若 `approved_by` 仍是 PENDING，则按**每侧每规则计数 + 形态**判：
-   两侧计数相等**且**形态（param/tag/series + body_sha256 的多重集；recog 是 ActorId
-   性质，不参与）相等 ⇒ 记为
-   「已计数、形态已比」放行（report `frames.ignored_rule_census` /
-   `ignored_ident_rules_counted`）；计数或形态对不上 ⇒ 仍 UNDECIDABLE
-   （`pending_ignore_rule`，点名 oracle/rust/delta）——**保护没有取消，只是升级成可比判据**
-   （卡 openmir2-ignore-rule-count-compare）。被剔除的消息号在两侧先各自剔除再逐位对齐。
+   `action=ignore`（PENDING 或已批准）一律按**每侧每规则计数 + 形态**判：两侧计数相等
+   **且**形态（param/tag/series + body_sha256 的多重集；recog 是 ActorId 性质，不参与）
+   相等才允许剔除（report `frames.ignored_rule_census`）；计数或形态对不上 ⇒ 仍
+   UNDECIDABLE（PENDING 记 `pending_ignore_rule`、已批准记 `ignore_rule_mismatch`，
+   点名 oracle/rust/delta）——**保护没有取消，只是升级成可比判据**
+   （卡 openmir2-ignore-rule-count-compare；2026-10-29 ident14 转正后仍适用）。
+   被剔除的消息号在两侧先各自剔除再逐位对齐。
    `ident` 永远参与比较（即使该帧其余字段被掩码）。
    例外（输入层，非 ignore 规则）：`ident` 为空（null/缺键）的**控制帧**（如 GameGate
    `+GD/<rtime>` 时间应答，frame_class=server_ack_time）在 load_stream 剔除并逐帧留痕
@@ -1487,9 +1487,10 @@ def ignore_rule_census(counts, shapes, rules):
     （任一侧 hit > 0）；每条给两侧计数、差值、计数是否相等、形态是否相等，
     以及规则自身的 `pending`（`approved_by` 以 PENDING 开头）。
 
-    判定语义（main 里用）：PENDING 规则只有在「计数相等 **且** 形态相等」时才不再
-    整轮 UNDECIDABLE（记为「已计数、形态已比」）；否则仍点名差额（fail-closed）。
-    非 PENDING 的 ignore 规则只做留痕，不影响判定。
+    判定语义（main 里用）：**所有** `action=ignore`（PENDING 或已批准）都只有在
+    「计数相等 **且** 形态相等」时才不再整轮 UNDECIDABLE（记为「已计数、形态已比」）；
+    否则仍点名差额（fail-closed），PENDING → `pending_ignore_rule`、已批准 →
+    `ignore_rule_mismatch`。转正只换 kind，不取消兜底（reviewer-20 R20-N3）。
     """
     rows = []
     for ident in sorted(set(counts["oracle"]) | set(counts["rust"])):
@@ -2129,8 +2130,18 @@ def compare_main(args):
         "ignored_counts": {side: {str(i): n for i, n in sorted(v.items())}
                            for side, v in cmp["ignored_counts"].items()},
         "ignored_rule_census": cmp["ignored_rule_census"],
+        # 兼容字段：**只看 PENDING 规则**（卡 openmir2-ignore-rule-count-compare 首版口径）。
+        # 已批准规则放行/被剔不在这里 ⇒ 读这两字段判「有没有 ignore 差异」会漏
+        # （reviewer-20 R20-N2：ident14 转正后 run5 的 1/0 只在 undecidable 里）。
+        # 新消费者请用下面两个 `_all` 字段。
         "ignored_ident_rules_counted": cmp["pending_ignore_counted"],
         "ignored_ident_rules_mismatch": cmp["pending_ignore_mismatch"],
+        "ignored_ident_rules_counted_all": sorted(
+            row["ident"] for row in cmp["ignored_rule_census"]
+            if row["counts_equal"] and row["shape_equal"]),
+        "ignored_ident_rules_mismatch_all": sorted(
+            row["ident"] for row in cmp["ignored_rule_census"]
+            if not (row["counts_equal"] and row["shape_equal"])),
     }
     report["coverage"] = {
         "present_idents": cmp["present_idents"],
@@ -2191,19 +2202,22 @@ def compare_main(args):
     # 而是升级判据 —— 只有「两侧计数相等 **且** 形态相等」才算「已计数、形态已比」放行；
     # 计数或形态对不上仍整轮 UNDECIDABLE，并点名差多少（fail-closed）。
     for row in cmp["ignored_rule_census"]:
-        if not row["pending"]:
-            continue
         if row["counts_equal"] and row["shape_equal"]:
             continue
+        # 2026-10-29 裁决 a：ident14 已转正，但「可忽略」仍以计数与形态全等为前提。
+        # 已批准 ignore 的 mismatch 不再静默进 census，而是同样判 UNDECIDABLE。
+        kind = "pending_ignore_rule" if row["pending"] else "ignore_rule_mismatch"
+        prefix = ("approved_by 仍为 PENDING，且本次剔除" if row["pending"]
+                  else "规则已批准，但本次剔除")
         undecidable.append({
-            "source": "coverage", "kind": "pending_ignore_rule", "ident": row["ident"],
+            "source": "coverage", "kind": kind, "ident": row["ident"],
             "oracle": row["oracle"], "rust": row["rust"], "delta": row["delta"],
             "counts_equal": row["counts_equal"], "shape_equal": row["shape_equal"],
             "shape_fields": row["shape_fields"], "shapes": row["shapes"],
-            "detail": ("ident %d 的 ignore 规则 approved_by 仍为 PENDING，且本次剔除"
-                       "两侧对不上：oracle=%d / rust=%d（差 %+d），形态（%s）%s ⇒ 判不了"
-                       "（先复核该规则，或用显式 --ignore-idents 承担剔除）"
-                       % (row["ident"], row["oracle"], row["rust"], row["delta"],
+            "detail": ("ident %d 的 ignore %s两侧对不上：oracle=%d / rust=%d（差 %+d），"
+                       "形态（%s）%s ⇒ 判不了（计数与形态全等才允许剔除；"
+                       "或用显式 --ignore-idents 承担剔除）"
+                       % (row["ident"], prefix, row["oracle"], row["rust"], row["delta"],
                           "/".join(row["shape_fields"]),
                           "相同" if row["shape_equal"] else "不同"))})
 
@@ -2242,7 +2256,7 @@ def compare_main(args):
 
     # 卡 `openmir2-rules-pending-adjudication` ④（Leader 裁定 2026-10-25）：
     #   * `rules_pending_review` = **保守主标志**：规则文件里只要还有任何 PENDING
-    #     （global/rules/db 任一，含本卡保留的 ident 10/14/50）就是 true。读者据此判断
+    #     （global/rules/db 任一，含现行保留的 ident 10/50（14 已转正））就是 true。读者据此判断
     #     「这份报告的判据是否已全部审过」；宁可恒真，也不让读者误以为全审过。
     #   * `pending_review_used` = 附属证据：本次**实际涉及**的 PENDING 项
     #     （global 恒计入；db 仅在本次比了库时计入；ident 规则与两侧出现过的 ident 求交集）。
@@ -2266,7 +2280,7 @@ def compare_main(args):
         # **保守主标志**（Leader 裁定 2026-10-25）：只要规则文件里还有 PENDING，就是
         # true——读者据此判断「这份报告的判据是否全部审过」。按需的「本次影响面」降级为
         # 附属证据 `pending_review_used`，**不能**替代主标志（否则一份 20 条 UNDECIDABLE
-        # 的报告可能因为没碰到 10/14/50 而显示 false，误导读者）。
+        # 的报告可能因为没碰到 10/50 而显示 false，误导读者）。
         report["rules"]["pending_review_used"] = used
 
     if report["undecidable"]:

@@ -31,13 +31,20 @@ reviewer-2 当年的保留条件是「**直到 fixedhide 卡落地 或 工具加
   （`src/M2Server/Player/PlayObject.Message.cs:1436`
   `MakeMessage(SM_HIT, processMsg.ActorId, nParam1, nParam2, wParam)`），两侧 ActorId 分配互不相关，
   比 recog 只会制造假红。残余风险见 §4。
-- **判定（②，保护升级而不是取消）**：只对 `pending` 规则说话——
+- **判定（②，保护升级而不是取消）**：对**所有** `action=ignore` 规则（`pending` 或已批准）一视同仁——
   | 两侧计数 | 形态 | 判定 |
   |---|---|---|
   | 相等 | 相等（含体哈希多重集） | **放行**：记 `ignored_ident_rules_counted`（「已计数、形态已比」），不再 UNDECIDABLE |
-  | 相等 | 不同 | `UNDECIDABLE(pending_ignore_rule)`，detail 点明「形态不同」+ 两侧形态分布 |
-  | 不同 | — | `UNDECIDABLE(pending_ignore_rule)`，detail 点明 `oracle/rust/delta` |
-  非 PENDING 的 ignore 规则只留痕、不参与判定（其合法性由规则表自身的 `approved_by` 负责）。
+  | 相等 | 不同 | **UNDECIDABLE**：`pending` → `pending_ignore_rule`，已批准 → `ignore_rule_mismatch`；detail 点明「形态不同」+ 两侧形态分布 |
+  | 不同 | — | **UNDECIDABLE**：同上按 `pending` 分 kind；detail 点明 `oracle/rust/delta` |
+  **转正不取消兜底**：批准只把 kind 从 `pending_ignore_rule` 换成 `ignore_rule_mismatch`，
+  计数或形态对不上**仍是整轮 UNDECIDABLE**。旧文本「非 PENDING 只留痕、不参与判定」是转正前语义，
+  已作废（reviewer-21 F1；ident 14 于 2026-10-29 转正后这条空洞会被直接利用）。
+- **报告字段的兼容分界（reviewer-20 R20-N2）**：`frames.ignored_ident_rules_counted` /
+  `frames.ignored_ident_rules_mismatch` 是首版口径的**兼容字段，只含 `pending=true` 规则**；
+  已批准规则（如 ident 14）的不等只出现在 `undecidable[]`（`kind=ignore_rule_mismatch`）里，
+  直接读兼容字段会漏。判定请用 `frames.ignored_ident_rules_counted_all` /
+  `frames.ignored_ident_rules_mismatch_all`（**所有** ignore 规则，含已批准）。
 - **补 0 侧（reviewer-20 F3）**：`ignored_counts` 对任一侧命中过的 ident **两侧都建键**（没命中补 0），
   直接读 `ignored_counts["rust"]["658"]` 不会 KeyError；census 里 `oracle/rust` 也一并对齐。
 - **不放宽现有边界**：CLI `--ignore-idents` 仍然独立（不计入规则计数），

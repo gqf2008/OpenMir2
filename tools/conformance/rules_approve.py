@@ -5,8 +5,10 @@
 卡：`openmir2-rules-pending-adjudication`（tier L；改判据 = 改验收口径，必须独立复审）。
 
 裁定（2026-10-25，Leader/coordinator）：
-  * **转正 50 条**：`global` 4 + `rules` 里除 ident 10/14/50 的 45 条 + `db` 1；
-  * **保留 PENDING 3 条**：`rules` 的 ident `10` / `14` / `50`（理由见卡面 decision）。
+  * **转正 50 条**：`global` 4 + `rules` 里除 ident 10/50 的 45 条 + `db` 1；
+  * **保留 PENDING 2 条**：`rules` 的 ident `10` / `50`（理由见卡面 decision）；
+  * **2026-10-29 追加**：ident `14` 经 owner/coordinator 裁决转正（新 decision oid），
+    保留 counts+shape 全等才剔除的判据（见 compare_runs 的 ignore_rule_mismatch）。
 
 本工具**只改 approved_by**：`action`/`head_mask`/`mask_fields`/`tier`/`reason` 一个字都不动
 （要改判据内容另开卡走评审）。
@@ -30,10 +32,14 @@ DEFAULT_RULES = os.path.join(HERE, "rules.json")
 #: 本卡 issue oid（`walgit collab` 的 issue entry oid；裁定记录在卡线程里）。
 DECISION_OID = "062972b6581e9fe4fd15370bdbbb4f8a4e3758ce"
 #: 保留 PENDING 的 `rules` ident（int）。
-KEEP_PENDING_IDENTS = frozenset({10, 14, 50})
+KEEP_PENDING_IDENTS = frozenset({10, 50})
 #: 翻正后的 approved_by 模板：保留原草稿人，格式与卡面一致。
 APPROVED_TMPL = ("openmir2-orchestrator (coordinator review 2026-10-25, "
                  "decision=%s; draft: %%s)" % DECISION_OID)
+#: 2026-10-29 的 ident14 追加裁决（只用于 ident 14）。
+DECISION_OID_14 = "81f45a499d7a25227f93bc1e933cc6f086b3b669"
+APPROVED_TMPL_14 = ("openmir2-orchestrator (coordinator review 2026-10-29, "
+                    "decision=%s; draft: %%s)" % DECISION_OID_14)
 #: `reason` 最短长度（卡面硬要求）。
 MIN_REASON_LEN = 20
 
@@ -53,17 +59,23 @@ def _draft_of(value):
     return tail
 
 
-def approved_ok(value):
-    """approved_by 是否已是本裁定的正式批准格式（含 coordinator 标记 + 草稿人）。"""
+def approved_ok(value, ident=None):
+    """approved_by 是否是该 ident 的正式批准格式（按 ident 绑定决策模板）。
+
+    ident 14 只接受 2026-10-29 追加裁决；其它条目只接受 2026-10-25 全量裁定。
+    不按 ident 共用两套模板会把批准谓词放宽成可借用的软化通道。
+    """
     s = str(value or "")
-    return (not _is_pending(s)
-            and "coordinator review 2026-10-25" in s
-            and ("decision=%s" % DECISION_OID) in s
-            and "draft:" in s
-            and bool(_draft_of(s)))
+    if _is_pending(s) or not s or "draft:" not in s or not _draft_of(s):
+        return False
+    old_ok = (("coordinator review 2026-10-25" in s)
+              and (("decision=%s" % DECISION_OID) in s))
+    new_ok = (("coordinator review 2026-10-29" in s)
+              and (("decision=%s" % DECISION_OID_14) in s))
+    return new_ok if ident == 14 else old_ok
 
 
-def _validate_entry(entry, where, keep_pending):
+def _validate_entry(entry, where, keep_pending, ident=None):
     """返回 (ok, action, message)。action ∈ {flip, ok, keep, error}。"""
     if not isinstance(entry, dict):
         return False, "error", "%s: 条目必须是对象" % where
@@ -84,7 +96,7 @@ def _validate_entry(entry, where, keep_pending):
         return False, "error", ("%s: reason 非空且长度须 >= %d 字符（实际 %r）"
                                 % (where, MIN_REASON_LEN,
                                    len(reason.strip()) if isinstance(reason, str) else reason))
-    if approved_ok(ab):
+    if approved_ok(ab, ident):
         return True, "ok", "%s: 已是正式批准（草稿人 %r）" % (where, _draft_of(ab))
     if not _is_pending(ab):
         return False, "error", ("%s: approved_by 既不是 PENDING 也不是本裁定格式（%r）"
@@ -113,7 +125,7 @@ def check_rules(rules):
     ok = True
     for ns, ident, idx, entry, keep in iter_entries(rules):
         where = "%s[%s]" % (ns, ident if ident is not None else idx)
-        good, action, msg = _validate_entry(entry, where, keep)
+        good, action, msg = _validate_entry(entry, where, keep, ident)
         rows.append({"where": where, "action": action, "message": msg})
         if not good:
             ok = False
@@ -131,7 +143,8 @@ def apply_rules(rules):
     for ns, idx, entry in to_flip:
         order = list(entry.keys())
         draft = _draft_of(entry.get("approved_by"))
-        entry["approved_by"] = APPROVED_TMPL % draft
+        entry["approved_by"] = ((APPROVED_TMPL_14 if entry.get("ident") == 14
+                                 else APPROVED_TMPL) % draft)
         # 键序保持（approved_by 已存在，赋值不改变位置）
         assert list(entry.keys()) == order
     return new, rows
@@ -182,8 +195,8 @@ def selftest():
         checks.append((cond, msg))
 
     ok, rows, to_flip = check_rules(base)
-    chk(ok and len(to_flip) == 3,
-        "合法输入：global/rules(11)/db 待翻正，10/14 保留（rows=%d）" % len(rows))
+    chk(ok and len(to_flip) == 4,
+        "合法输入：global/rules(11/14)/db 待翻正，10 保留（rows=%d）" % len(rows))
     new, _ = apply_rules(base)
     chk(new["global"][0]["approved_by"].endswith("draft: worker-1)")
         and "coordinator review 2026-10-25" in new["global"][0]["approved_by"]
@@ -191,8 +204,9 @@ def selftest():
         "翻正格式：coordinator review + decision oid + 原草稿人")
     chk(new["rules"][0]["approved_by"] != new["rules"][1]["approved_by"]
         and new["rules"][1]["approved_by"].startswith("PENDING")
-        and new["rules"][2]["approved_by"].startswith("PENDING"),
-        "ident 10/14 保持 PENDING；其它翻正")
+        and "coordinator review 2026-10-29" in new["rules"][2]["approved_by"]
+        and ("decision=%s" % DECISION_OID_14) in new["rules"][2]["approved_by"],
+        "ident 10 保持 PENDING；14 按 2026-10-29 裁决翻正；其它翻正")
     ok2, rows2, to_flip2 = check_rules(new)
     chk(ok2 and not to_flip2, "幂等：翻正后再 check 无需再改")
     chk(list(new["rules"][0].keys()) == list(base["rules"][0].keys()),
@@ -224,6 +238,26 @@ def selftest():
     ok7, rows7, _ = check_rules(wrong_keep)
     chk(not ok7 and any("保留 PENDING" in r["message"] for r in rows7),
         "保留项被翻正 => 拒")
+
+    # F3 正向牙：按 ident 绑定的正确模板必须判 ok（ident14 → 10-29、非 14 → 10-25）。
+    ok_p, rows_p, _ = check_rules(new)
+    by_where = {r["where"]: r["action"] for r in rows_p}
+    chk(ok_p and by_where.get("rules[14]") == "ok" and by_where.get("rules[11]") == "ok",
+        "按 ident 绑定的正确模板（14→10-29、非 14→10-25）=> ok")
+
+    # F3 反向牙 a：2026-10-29 的模板只能用于 ident14，贴到其它 ident => 拒。
+    wrong_14 = copy.deepcopy(new)
+    wrong_14["rules"][0]["approved_by"] = APPROVED_TMPL_14 % "worker-2"
+    ok9, rows9, _ = check_rules(wrong_14)
+    chk(not ok9 and any("既不是 PENDING" in r["message"] for r in rows9),
+        "ident14 的 10-29 模板贴到非 14 条目 => 拒")
+
+    # F3 反向牙 b：ident14 用 2026-10-25 模板（= 其它条目的模板）=> 拒。
+    wrong_14_old = copy.deepcopy(new)
+    wrong_14_old["rules"][2]["approved_by"] = APPROVED_TMPL % "worker-4"
+    ok10, rows10, _ = check_rules(wrong_14_old)
+    chk(not ok10 and any("既不是 PENDING" in r["message"] for r in rows10),
+        "ident14 用 10-25 模板 => 拒")
 
     # 非 PENDING 且非本格式 => 拒（不许静默覆盖别人的批准）
     foreign = copy.deepcopy(base)

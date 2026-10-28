@@ -377,8 +377,8 @@ class Selftest(object):
                            for k in ("reason", "tier", "approved_by"))
                        and self._approved_ok(meta),
                        {k: meta.get(k) for k in ("tier", "approved_by")})
-        # 裁定「保留 PENDING」的三条（10/14/50）：必须仍是 PENDING，且 reason 写明原因。
-        for ident in (10, 14, 50):
+        # 仍保留 PENDING 的两条（10/50）；14 已于 2026-10-29 追加转正。
+        for ident in (10, 50):
             r = rs.by_ident.get(ident) or {}
             ab = str(r.get("approved_by") or "")
             reason = str(r.get("reason") or "")
@@ -386,6 +386,15 @@ class Selftest(object):
                        ab.strip().upper().startswith("PENDING")
                        and len(reason.strip()) >= 20,
                        {"approved_by": ab[:40], "reason_len": len(reason)})
+        r14 = rs.by_ident.get(14) or {}
+        ab14 = str(r14.get("approved_by") or "")
+        self.check("ident=14 按 2026-10-29 裁决转正（新 decision + 草稿人；不是 PENDING）",
+                   r14.get("action") == "ignore"
+                   and not ab14.strip().upper().startswith("PENDING")
+                   and "coordinator review 2026-10-29" in ab14
+                   and "decision=81f45a499d7a25227f93bc1e933cc6f086b3b669" in ab14
+                   and "draft: openmir2-worker-4" in ab14,
+                   ab14)
 
         self.check("520 的 recog 从全局掩码取回比较（=nChrCount，协议内容）",
                    rs.by_ident[520].get("head_compare") == ["recog"],
@@ -706,31 +715,51 @@ class Selftest(object):
                                    for u in (rep or {}).get("undecidable", [])),
                    (rc, (rep or {}).get("undecidable")))
 
-        # 4) 反向牙：把 ignore 的 ident 14 改回 compare ⇒ 同一对产物必须由 0 变 1
-        #    （证明 ignore 是真在剔帧，不是「反正没差异」；也证明规则表是判定的载荷）
-        f41 = self.frame(41, b"\x01\x02", **heads_o)
+        # 4) ident14 已转正（2026-10-29）：只有 counts+shape 全等才可剔除。
+        f41 = self.frame(41, bytes([1, 2]), **heads_o)
         f14 = self.frame(14, b"The merchant is hit", **dict(heads_o, seq=702))
         body_o = [f41, f14]
         body_r = [f41]
         od = self.write_run("t22-ign-o", body_o)
         rd = self.write_run("t22-ign-r", body_r)
-        # 内置 14 的 approved_by 是 PENDING ⇒ 真剔帧时按既有口径判 UNDECIDABLE（不是放行）。
-        # 牙要证明的是「ignore 与 compare 的判定差」，所以用**已批准**的副本消除 PENDING 兜底。
-        rules1 = json.loads(json.dumps(self.builtin_rules))
-        for rule in rules1["rules"]:
-            if rule.get("ident") == 14:
-                rule["approved_by"] = "selftest: approved (non-pending)"
-        path1 = self.rules_file("rules-14-ignore.json", rules1)
         rc, rep = self.compare(od, rd)
-        self.check("忽略牙：内置 14 是 PENDING ignore ⇒ 真剔帧时 rc 2（pending_ignore_rule 兜底）",
-                   rc == 2 and any(u.get("kind") == "pending_ignore_rule"
+        _f14 = (rep or {}).get("frames") or {}
+        self.check("ident14 已批准但计数不等 => rc 2（ignore_rule_mismatch，不洗绿）",
+                   rc == 2 and any(u.get("kind") == "ignore_rule_mismatch"
+                                   and u.get("ident") == 14
                                    for u in (rep or {}).get("undecidable", [])),
                    (rc, (rep or {}).get("undecidable")))
-        rc, rep = self.compare(od, rd, ["--rules", path1])
-        self.check("忽略牙：已批准 ignore 下多出的 ident=14 => rc 0 且 ignored 记 1 条",
-                   rc == 0 and ((rep or {}).get("frames", {}).get("ignored", {})
-                                .get("oracle", {}).get("idents") == [14]),
-                   (rc, (rep or {}).get("frames"), (rep or {}).get("diffs")))
+        # R20-N2：已批准规则的差异必须进 `_all` 字段；pending-only 兼容字段保持空
+        # （否则直接读 `ignored_ident_rules_mismatch` 的消费者会以为没有差异）。
+        self.check("ident14 已批准不等 => mismatch 进 _all、不进 pending-only 兼容字段",
+                   _f14.get("ignored_ident_rules_mismatch_all") == [14]
+                   and _f14.get("ignored_ident_rules_mismatch") == [],
+                   (rc, _f14.get("ignored_ident_rules_mismatch_all"),
+                    _f14.get("ignored_ident_rules_mismatch")))
+
+        f14_same = self.frame(14, b"The merchant is hit", **dict(heads_o, seq=703))
+        rd_same = self.write_run("t22-ign-r-same", [f41, f14_same])
+        rc, rep = self.compare(od, rd_same)
+        frames = (rep or {}).get("frames") or {}
+        census = [x for x in (frames.get("ignored_rule_census") or [])
+                  if x.get("ident") == 14]
+        self.check("ident14 两侧各 1 帧且形态相同 => rc 0（仅此情形允许剔除）",
+                   rc == 0 and bool(census) and census[0]["counts_equal"]
+                   and census[0]["shape_equal"]
+                   and frames.get("ignored", {}).get("oracle", {}).get("idents") == [14]
+                   and frames.get("ignored", {}).get("rust", {}).get("idents") == [14],
+                   (rc, frames, (rep or {}).get("undecidable")))
+
+        f14_shape = self.frame(14, b"The merchant is hit",
+                               **dict(heads_o, seq=704, param=9))
+        rd_shape = self.write_run("t22-ign-r-shape", [f41, f14_shape])
+        rc, rep = self.compare(od, rd_shape)
+        mism = [u for u in (rep or {}).get("undecidable", [])
+                if u.get("kind") == "ignore_rule_mismatch" and u.get("ident") == 14]
+        self.check("ident14 计数相等但形态不同 => rc 2（shape_equal=false，不洗绿）",
+                   rc == 2 and bool(mism) and mism[0].get("counts_equal") is True
+                   and mism[0].get("shape_equal") is False,
+                   (rc, mism))
         rules2 = json.loads(json.dumps(self.builtin_rules))
         for rule in rules2["rules"]:
             if rule.get("ident") == 14:
@@ -877,11 +906,11 @@ class Selftest(object):
         """卡 `openmir2-rules-pending-adjudication` ④（Leader 裁定 2026-10-25）：
 
         `rules_pending_review` 是**保守主标志**——规则文件里只要还有任何 PENDING
-        （含本卡保留的 10/14/50）就是 True。**为什么必须保守**：读者用这个标志判断
+        （含现行保留的 10/50）就是 True。**为什么必须保守**：读者用这个标志判断
         「这份报告的判据是否全部审过」；若改成「本次涉及才 True」，一份藏着未审规则的
         报告会显示 False，正是要堵的假绿。本次影响面单列在 `pending_review_used`。
 
-        * 只用已批准规则（520）⇒ 主标志 **True**（文件里仍有 10/14/50）+ `pending_review_used` 为空；
+        * 只用已批准规则（520）⇒ 主标志 **True**（文件里仍有 10/50）+ `pending_review_used` 为空；
         * 出现保留 PENDING 的 ident（10）⇒ 主标志 True + `pending_review_used` 命中该条；
         * `pending_review`（全量清单）仍保留三条，供审计。
         """
@@ -897,7 +926,7 @@ class Selftest(object):
         rd = self.write_run("t-pr-scope-r", [mk("r", 520, b"1/2")])
         rc, rep = self.compare(od, rd)
         rs = (rep or {}).get("rules") or {}
-        # Leader 裁定：主标志是**保守闸门**——文件里还有 10/14/50 PENDING ⇒ 恒 true；
+        # Leader 裁定：主标志是**保守闸门**——文件里还有 10/50 PENDING ⇒ 恒 true；
         # 「本次影响面」降到 pending_review_used（520 不涉及任何 PENDING => 空）。
         self.check("只碰已批准规则（520）=> rules_pending_review 仍为 True（保守闸门）"
                    "且 pending_review_used 为空",
@@ -907,9 +936,9 @@ class Selftest(object):
         # 卡 openmir2-rules-ident-gaps：这是**账本**（当前有哪些 ident 是 PENDING），不是不变式。
         # 新增 draft 规则必须同步这张表；断言仍是**完全相等**（fail-closed）——不许改成子集包含，
         # 否则账本会空转、新 draft 再也不逼人更新。账本更新 ≠ 批准（rules_pending_review 仍为真）。
-        self.check("PENDING ledger: 当前 PENDING 的 ident = {10,14,32,34,44,50,637,653}"
+        self.check("PENDING ledger: 当前 PENDING 的 ident = {10,32,34,44,50,637,653}"
                    "（新增 draft 规则必须同步此表；账本更新 ≠ 批准）",
-                   {10, 14, 32, 34, 44, 50, 637, 653} == {int(x.split("ident=[")[1].rstrip("]"))
+                   {10, 32, 34, 44, 50, 637, 653} == {int(x.split("ident=[")[1].rstrip("]"))
                                                      for x in (rs.get("pending_review") or [])
                                                      if "ident=[" in x},
                    rs.get("pending_review"))
@@ -1071,13 +1100,15 @@ class Selftest(object):
                             [self._struck31("r", 863, tag=41), tail41("r", 865)])
         rc, rep = self.compare(od, rd, ["--rules", path_ign])
         ign_report = ((rep or {}).get("frames") or {}).get("ignored") or {}
-        self.check("牙②：31 放宽成整帧 ignore => 用例②(tag) 被吞成 rc 0（两侧各剔 1 帧）",
-                   rc == 0
+        mism31 = [u for u in (rep or {}).get("undecidable", [])
+                  if u.get("kind") == "ignore_rule_mismatch" and u.get("ident") == 31]
+        self.check("牙②：31 放宽成整帧 ignore 但形态不同 => rc 2 ignore_rule_mismatch（不吞差异）",
+                   rc == 2
                    and (ign_report.get("oracle") or {}).get("count") == 1
                    and (ign_report.get("rust") or {}).get("count") == 1
+                   and bool(mism31) and mism31[0].get("shape_equal") is False
                    and not any(d.get("ident") == 31 for d in (rep or {}).get("diffs", [])),
-                   (rc, ign_report, (rep or {}).get("diffs"),
-                    (rep or {}).get("undecidable")))
+                   (rc, ign_report, (rep or {}).get("diffs"), mism31))
 
         # 牙③（review I-1 的正向牙）：把 recog 重新加回 head_compare ⇒ 同一对「仅 recog 不同」的帧
         # 由 rc 0（真规则：掩码生效）变 rc 1 field=recog。真规则下 tag/series/body 未掩区仍 rc 1
@@ -1266,8 +1297,11 @@ class Selftest(object):
                                              self.frame(642, b"", **dict(h642, seq=841, conn="r",
                                                                          param=9))])
         rc, rep = self.compare(od, rd, ["--rules", wide_path])
-        self.check("牙②：642 放宽成整帧 ignore => 槽位(param) 差异被吞 => rc 0（真规则 rc 1）",
-                   rc == 0, (rc, (rep or {}).get("diffs")))
+        mism642 = [u for u in (rep or {}).get("undecidable", [])
+                   if u.get("kind") == "ignore_rule_mismatch" and u.get("ident") == 642]
+        self.check("牙②：642 放宽成整帧 ignore 但形态不同 => rc 2 ignore_rule_mismatch（不吞差异）",
+                   rc == 2 and bool(mism642) and mism642[0].get("shape_equal") is False,
+                   (rc, (rep or {}).get("diffs"), mism642))
         rec_a = self._client_item(make_index=1000)
         rec_name = self._client_item(name=b"\xcd\xc0\xc1\xfb", make_index=1000)
         h203 = dict(phase="bag", seq=850, t_ms=1, conn="o",
@@ -1278,8 +1312,11 @@ class Selftest(object):
                                              self.frame(203, self.lc.encode(rec_name),
                                                         **dict(h203, seq=851, conn="r"))])
         rc, rep = self.compare(od, rd, ["--rules", wide_path])
-        self.check("牙②：203 放宽成整帧 ignore => Name 差异被吞 => rc 0（真规则 rc 1）",
-                   rc == 0, (rc, (rep or {}).get("diffs")))
+        mism203 = [u for u in (rep or {}).get("undecidable", [])
+                   if u.get("kind") == "ignore_rule_mismatch" and u.get("ident") == 203]
+        self.check("牙②：203 放宽成整帧 ignore 但形态不同 => rc 2 ignore_rule_mismatch（不吞差异）",
+                   rc == 2 and bool(mism203) and mism203[0].get("shape_equal") is False,
+                   (rc, (rep or {}).get("diffs"), mism203))
 
     def t_ability_wire(self, o, r):
         """首次真机对拍实测的 52 线缆长度对 (54, 78)：EDCode 归一后按 40/58 语义比。"""

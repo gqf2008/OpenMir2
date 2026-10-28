@@ -20,12 +20,46 @@
 
 **残余风险（reviewer-21 N1）**：形态比较是**顺序无关的多重集** ⇒ 剔帧的相对顺序差异不会触发 UNDECIDABLE，只能靠 census 观察。
 
+## 6c. 追加裁定：ident 14 **批准转正**（2026-10-29）
+
+**裁决**：owner/coordinator 选 **a) 批准转正**。decision=`81f45a499d7a25227f93bc1e933cc6f086b3b669`
+（该 oid 是 coordinator 在本卡线程签的 `status: in-progress` 条目——collab 条目 oid 是 blob，
+不是 commit；裁决原文在该条目的 `work` 字段里，不在 commit message 里，复核时按
+`walgit collab thread openmir2-ignore-rule-count-compare` 读）。
+
+**依据**：计数/形态机制已落地；run3 `dice_chain_auto`/`move_walk`、run5 `softclose_relogin`、run12
+仍以 ident-14 同形 `1/0` 被 census 显式暴露。该差异可审计，不再需要 PENDING 的整轮兜底来暴露。
+
+**转正后的严格边界**（`compare_runs.py` 的 CH-2）：
+
+| 14 两侧 | 判定 |
+|---|---|
+| counts 相等 **且** shape 相等（param/tag/series/body_sha256 多重集） | 允许剔除，rc 0，census 留痕 |
+| counts 不等 | **仍 UNDECIDABLE**，kind=`ignore_rule_mismatch`，点名 oracle/rust/delta |
+| counts 相等但 shape 不等 | **仍 UNDECIDABLE**，kind=`ignore_rule_mismatch`，`shape_equal=false` |
+
+⇒ 转正**不是**取消兜底，也不是「14 一律绿」；只有可证明同量同形时才剔除。不得用
+`require_changes=false`、固定条数或整类 ignore 洗绿。
+
+**残余风险**：形态比较是顺序无关多重集；剔帧的相对顺序差只在 census 可见。原 PENDING 解除条件中
+「R 级窗口证明不该出现的一侧不发」仍未取得，留 `openmir2-real-machine-verification-master`。
+
+**三颗证明**（计数/形态是两个独立失效模式，各要一颗牙；第三颗是正向放行）：
+
+1. **同形可忽略**：`selftest_impl.py` 的 `ident14 两侧各 1 帧且形态相同 => rc 0`；两侧各 1 条同形
+   14 被 census 记为 `counts_equal=true / shape_equal=true`，且 `ignored` 两侧均记录 1 条。
+2. **counts 不等仍 UNDECIDABLE**：同套件“一侧多 1 帧”一例要求 `rc=2 / kind=ignore_rule_mismatch`。
+   run5 `softclose_relogin` 离线重算同样得到 `verdict=UNDECIDABLE`、
+   `ignored_counts={oracle:{14:1},rust:{14:0}}`、`census14.counts_equal=false`，没有被转正洗成 PASS。
+3. **counts 相等但 shape 不等仍 UNDECIDABLE**：同套件“counts 相等但 param 不同”一例要求
+   `rc=2 / kind=ignore_rule_mismatch / shape_equal=false`——单独锁住「只比总数、不比形态」的退化。
+
 ## 1. 裁定
 
 | 组 | 条数 | 裁定 |
 |---|---:|---|
 | `global` 掩码 | 4 | 全部转正 |
-| `rules` 数组 | 48 | 转正 45；**保留 PENDING 3**（ident 10/14/50） |
+| `rules` 数组 | 48 | 转正 45；**当时保留 PENDING 3**（ident 10/14/50；14 已于 2026-10-29 转正，见 §6c；现行保留 2） |
 | `db` | 1 | 转正 |
 
 翻正后的 `approved_by` 格式（保留原草稿人）：
@@ -44,7 +78,7 @@ openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4f
 | global:seq | mask_fields | L | openmir2-worker-4 | ✅ 转正 | 驱动器本地序号（每侧自增），不是服务端协议字段；帧对齐按文件顺序，seq 不参与判定 |
 | ident=10 | compare | R | openmir2-worker-4 | ⏸ 保留 PENDING | SM_TURN 是真实协议帧（Messages.cs:161），body/param/tag 仍逐字节比；掩的是 **整个 series word = MakeWord(Dir, Light)**（低字节 Dir、高字节… |
 | ident=41 | compare | L | openmir2-worker-4 | ✅ 转正 | 41=SM_FEATURECHANGED 是真实协议帧（Messages.cs:202；downlink.rs 明确「SM_TURN+SM_FEATURECHANGED 一组两帧」且有逐字节黄金断言），默认必须逐字节比较… |
-| ident=14 | ignore | R | openmir2-worker-4 | ⏸ 保留 PENDING | SM_HIT：固定 NPC / 商人的受击帧。**两个发点，性质不同**：① 随机支——`GuildOfficial.Run` 的 `Random(30)==0`（src/GameSrv/Npc/GuildOfficia… |
+| ident=14 | ignore | R | openmir2-worker-4 | ✅ 转正（2026-10-29 追加，见 §6c） | SM_HIT：固定 NPC / 商人的受击帧。**两个发点，性质不同**：① 随机支——`GuildOfficial.Run` 的 `Random(30)==0`（src/GameSrv/Npc/GuildOfficia… |
 | ident=31 | mask_body_ranges | L | openmir2-worker-68; rework after review 926d1b67 | ✅ 转正 | SM_STRUCK(31) 是真实协议帧（src/OpenMir2/Messages.cs:197）。下行点 src/M2Server/Player/PlayObject.Message.cs:1601（本卡已复核）：`… |
 | ident=46 | mask_fields | L | openmir2-worker-4 | ✅ 转正 | SM_DAYCHANGING 的 param=Bright、tag=DayBright()，由游戏内小时/光照决定（C# PlayObject.Message.cs RM_DAYCHANGING）；两次运行启动时刻不同 … |
 | ident=50 | mask_fields | L | openmir2-worker-4 | ⏸ 保留 PENDING | SM_LOGON 的 series=MakeWord(Dir, Light)，Light 是游戏内光照（墙钟相关，C# PlayObject.cs:1131）；body 与 param/tag 仍比 |
@@ -98,17 +132,17 @@ openmir2-orchestrator (coordinator review 2026-10-25, decision=062972b6581e9fe4f
 
 | 字段 | 口径 | 用途 |
 |---|---|---|
-| `rules_pending_review` | **保守主标志**：规则文件里只要还有**任何** PENDING（global/rules/db 任一，含本卡保留的 10/14/50）就是 `true` | 读者判断「这份报告的判据是否**全部**审过」。宁可恒真，也不让「没碰到 pending ident」的报告被误读成全审过 |
+| `rules_pending_review` | **保守主标志**：规则文件里只要还有**任何** PENDING（global/rules/db 任一，含现行保留的 10/50；14 于 2026-10-29 转正）就是 `true` | 读者判断「这份报告的判据是否**全部**审过」。宁可恒真，也不让「没碰到 pending ident」的报告被误读成全审过 |
 | `pending_review_used` | **本次影响面**：global 恒计入；db 仅在本次比了库时计入；ident 规则与两侧出现过的 ident 求交集 | 判读「这条证据实际受哪几条 PENDING 影响」；**不是**信任闸门 |
 | `pending_review` | 全量 PENDING 清单（审计用，含条目定位） | 复核/审计 |
 
-⇒ 在 10/14/50 全部转正之前，`rules_pending_review` 会**恒为 true**——这是刻意的保守语义。
+⇒ 在 10/50 全部转正之前，`rules_pending_review` 会**恒为 true**——这是刻意的保守语义。
 
 ## 3. 保留 PENDING 的三条与解封条件
 
 | ident | 为什么保留 | 解封条件 |
 |---|---|---|
-| 14（ignore） | reviewer-2 在 `46e479fc`/`2f4b311f` 明写须等 `openmir2-castle-merchant-fixedhide-hit` 的 R 级窗口⑧；代码虽已合 `0119e47b9`，窗口未跑 | **2026-10-25 裁定：暂不转正（见 §6b）**——工具侧「计数/形态比较」已落地（`e335578bc`，reviewer-2 保留条件的后半句已满足），但转正会**取消**「形态不等 ⇒ 整轮 UNDECIDABLE」的兜底，反而更松 |
+| 14（ignore） | **已于 2026-10-29 转正（§6c）**；counts 或 shape 不等仍 UNDECIDABLE（`ignore_rule_mismatch`），PENDING 兜底未取消 | 已裁决；窗口残余风险转 verification-master |
 | 10（compare + head_mask:[series]） | 掩掉整个 `MakeWord(Dir,Light)`，连 Dir 一起丢 ⇒ 原地转身缺帧级判据 | 工具支持「只掩 Light 半字节」后重评 |
 | 50（mask_fields:[series]） | reason 只论证 Light 是墙钟、没论证 Dir | 同上 |
 

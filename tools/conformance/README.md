@@ -115,12 +115,14 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 1. **对齐按文件顺序**，不按 `seq` 建键。默认**没有** ignore 规则：`action=ignore` 只能来自
    规则表或显式 `--ignore-idents`，被剔除的消息号在两侧**先各自剔除**，剩余序列逐位对齐。
    10=`SM_TURN` / 41=`SM_FEATURECHANGED` 是真实协议帧（`Messages.cs:161/202`，downlink 有逐字节
-   黄金断言），默认 `compare` 逐字节比。规则表里 `approved_by` 仍是 `PENDING` 的 `ignore`，
-   按**每侧每规则计数 + 形态**判：两侧计数相等且形态（`param/tag/series` + `body_sha256`
-   的多重集）相等 ⇒ 记「已计数、形态已比」放行（`frames.ignored_rule_census` /
-   `ignored_ident_rules_counted`）；计数或形态对不上 ⇒ `UNDECIDABLE(pending_ignore_rule)`，
-   点名 `oracle/rust/delta`——保护没有取消，只是升级成可比判据（卡
-   `openmir2-ignore-rule-count-compare`）。`frames.ignored_counts` 两侧都补 0（单侧命中也能直读）。
+   黄金断言），默认 `compare` 逐字节比。规则表里**所有** `action=ignore`（`approved_by` 仍
+   `PENDING` 或已批准）一律按**每侧每规则计数 + 形态**判：两侧计数相等且形态（`param/tag/series`
+   + `body_sha256` 的多重集）相等 ⇒ 记「已计数、形态已比」放行（`frames.ignored_rule_census` /
+   `ignored_ident_rules_counted`）；计数或形态对不上 ⇒ **UNDECIDABLE**（`pending` →
+   `pending_ignore_rule`，已批准 → `ignore_rule_mismatch`），点名 `oracle/rust/delta`——
+   保护没有取消，只是升级成可比判据（卡 `openmir2-ignore-rule-count-compare`）。
+   `frames.ignored_ident_rules_counted` / `_mismatch` 是**兼容字段（只含 PENDING 规则）**，
+   判「有没有 ignore 差异」请读 `_counted_all` / `_mismatch_all`（含已批准规则）。`frames.ignored_counts` 两侧都补 0（单侧命中也能直读）。
    两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
 2. `ident` 永远比较（即使其余字段被掩码）；错位即 `ident` 差异。
 3. 头部字段 `recog/param/tag/series` + 驱动器字段 `phase/seq/t_ms/conn`：
@@ -144,7 +146,7 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
 | `mask_fields` | `fields` 里的头部字段不比（如 46 的 param/tag = 墙钟小时位）；body 仍逐字节比 |
 | `mask_body_ranges` | body 的 `[start,end)` 区间（`end:null` = 到末尾）不比；长度必须相等，否则 body_len 差异。区间内若确有不同，仍登记 `mask_body_ranges` |
 | `multiset_by_tick` | **同 ident 连续段**（被别的 ident 隔开不合并）内的帧按 `(param,tag,series,body_hex,phase)` 多重集比（排序后逐项）。顺序不同但集合相同 ⇒ rc 0 并登记 `masked_order`；集合不同 ⇒ rc 1 并给出缺失/多余的具体帧。`tick_tolerance_ms` 只用于标注 tick 窗口（`tick_split`），`t_ms` 不作判定边界；任一帧缺 `t_ms` ⇒ rc 2。**只允许用于无因果序的帧**（当前仅 ident 100） |
-| `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；PENDING 复核的 ignore 只在「两侧计数相等且形态（`param/tag/series`+`body_sha256` 多重集）相等」时放行（记 `ignored_ident_rules_counted`），否则 UNDECIDABLE 并点名差额 |
+| `ignore` | 该消息号在两侧对齐前剔除；`ident` 也因此不比。默认规则表**没有** ignore；**所有** ignore（PENDING 或已批准）只在「两侧计数相等且形态（`param/tag/series`+`body_sha256` 多重集）相等」时放行（记 `ignored_ident_rules_counted`），否则 UNDECIDABLE（PENDING → `pending_ignore_rule`，已批准 → `ignore_rule_mismatch`）并点名差额 |
 | `ability_layout` | 52 SM_ABILITY：`{40,58}` 明文布局对按 18 个语义字段逐项比（布局表从 `tools/loginfixture/capture_login_compare.py` 导入，**不抄第二份**）；线缆字节先按 `54→40 / 78→58` 归一（EDCode，见下）；同长度同布局退回逐字节（归一过的在明文空间比）；未登记长度对 ⇒ UNDECIDABLE |
 | `bagitems_records` | 200 `SM_ADDITEM` / 201 `SM_BAGITEMS`：包体按 **124B `ClientItem` 记录**（`'/'` 分隔）逐条比；`record_mask` 登记过的字段（默认 `["MakeIndex"]`，偏移 100..104）允许不同并**显式登记** `bagitems_masked_field`，其余每个字节都必须相同（`bagitems_record` 报 slot+offset）。条数不同 ⇒ `bagitems_count`；**记录解不开 / 不是 124B ⇒ UNDECIDABLE**（`bagitems_decode`，绝不按通过处理）。依据：`ClientItem.WritePacket`（`src/OpenMir2/Packets/ClientPackets/ClientItem.cs`）+ `M2Share.GetItemNumber()` = 计数器 + `GetTickCount()`（`M2Share.cs:547-555`）⇒ MakeIndex 跨进程不可复现 |
 
