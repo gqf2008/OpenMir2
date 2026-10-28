@@ -6,13 +6,14 @@
     --root E:/tmp/window/run6/equip_struck_save --json E:/tmp/dev-2/dura-run6-analysis.json
 
 --check 跑合成正负例与变异牙（无攻击、同值、run6 形态、快照不一致、重复 642、
-比较器非恒等），不读真实仓库状态，也不写任何文件。
+比较器非恒等；RNG 账本存在/缺失/坏头三臂），真实状态只从 tempdir 读，不写仓库。
 """
 import argparse
 import csv
 import hashlib
 import json
 import sys
+import tempfile
 from pathlib import Path
 
 CM_HIT = 3014
@@ -42,6 +43,52 @@ def sha256(path):
 def public_frame(frame):
     return {key: frame.get(key) for key in
             ("seq", "t_ms", "phase", "ident", "recog", "param", "tag", "series", "body_len")}
+
+
+def rng_ledger_status(path):
+    """按 card_window --rng-log 的真实产物判定账本是否可用。
+
+    固定路径是 `<out>/<side>/rng-stream.tsv`；probe 的 run.json argv 不含 `--rng-log`。
+    格式与 `card_window.check_rng_ledger` 同：头四行内有 `INJECT_OK` 与 `SEED_PROBE`，
+    其后每行 `seq\tkind\tmax/arg\tresult\tsite` 至少 5 列且 site 非空。
+    """
+    path = Path(path)
+    if not path.is_file():
+        return {"path": str(path), "exists": False, "valid": False,
+                "detail": "RNG 账本不存在"}
+    try:
+        lines = [line.rstrip("\r\n") for line in path.read_text(
+            encoding="utf-8", errors="replace").splitlines() if line.strip()]
+    except OSError as exc:
+        return {"path": str(path), "exists": True, "valid": False,
+                "detail": "RNG 账本读失败：%s" % exc}
+    if len(lines) < 2:
+        return {"path": str(path), "exists": True, "valid": False,
+                "detail": "RNG 账本为空/不足两行"}
+    head = "\n".join(lines[:4])
+    if "INJECT_OK" not in head or "SEED_PROBE" not in head:
+        return {"path": str(path), "exists": True, "valid": False,
+                "detail": "RNG 账本缺 INJECT_OK/SEED_PROBE 自证头"}
+    for number, line in enumerate(lines[2:], start=3):
+        columns = line.split("\t")
+        if len(columns) < 5:
+            return {"path": str(path), "exists": True, "valid": False,
+                    "detail": "RNG 账本第 %d 行列数 %d < 5" % (number, len(columns))}
+        if not columns[4].strip():
+            return {"path": str(path), "exists": True, "valid": False,
+                    "detail": "RNG 账本第 %d 行 site 为空" % number}
+    return {"path": str(path), "exists": True, "valid": True,
+            "detail": "%d 行，头/列/site 均通过" % len(lines)}
+
+
+def pair_rng_log_status(statuses):
+    """`rng_log_present` 只认至少一侧**可用**的账本；坏文件单独登记，不得算作证据。"""
+    return {
+        "rng_log_present": any(status["valid"] for status in statuses),
+        "rng_log_any_file": any(status["exists"] for status in statuses),
+        "rng_log_invalid_sides": [status["path"] for status in statuses
+                                  if status["exists"] and not status["valid"]],
+    }
 
 
 def evaluate(initial_dura, hit_count, dura_values, final_dura):
@@ -124,7 +171,7 @@ def analyze(root):
                              int(row["Dura"]))
         settle = read_json(side_dir / "save_settle.json")
         run = read_json(side_dir / "run.json")
-        argv = run.get("argv") or []
+        rng_log = rng_ledger_status(side_dir / "rng-stream.tsv")
         result["sides"][side] = {
             "fixture": {
                 "player_id": fixture["player_id"], "make_index": make_index,
@@ -147,7 +194,7 @@ def analyze(root):
                 "last_witness": settle.get("witness_last"),
             },
             "run_wall": {"start": run.get("start_wall"), "end": run.get("end_wall")},
-            "rng_log_requested": "--rng-log" in argv,
+            "rng_log": rng_log,
             "frames_sha256": sha256(side_dir / "frames.ndjson"),
             "c2s_sha256": sha256(side_dir / "c2s.ndjson"),
         }
@@ -160,9 +207,10 @@ def analyze(root):
         "final_db_equals_last_642_both": all(
             result["sides"][side]["evaluation"]["snapshot_consistent"]
             for side in ("csharp", "rust")),
-        "rng_log_present": any(result["sides"][side]["rng_log_requested"]
-                               for side in ("csharp", "rust")),
-        "boundary": "单次 Random(5) 形态候选不等于已有 RNG 流水证明；无流水时最终 R 结论保持未决。",
+        **pair_rng_log_status([result["sides"][side]["rng_log"]
+                               for side in ("csharp", "rust")]),
+        "boundary": "rng_log_present 只认 <side>/rng-stream.tsv 通过头/列/site 校验；"
+                    "单次 Random(5) 形态候选不等于已有 RNG 流水证明，无有效流水时最终 R 结论保持未决。",
     }
     return result
 
@@ -207,9 +255,33 @@ def check():
 
     require(classify_pair(same_c, same_r) != classify_pair(run6_c, run6_r),
             "负对照：构造应报差输入，比较器不恒等")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        missing = rng_ledger_status(Path(tmp) / "missing.tsv")
+        require(not missing["exists"] and not missing["valid"]
+                and pair_rng_log_status([missing])["rng_log_present"] is False,
+                "RNG 账本无文件 ⇒ present=false")
+
+        valid_path = Path(tmp) / "rng-stream.tsv"
+        valid_path.write_text("INJECT_OK\nSEED_PROBE\n0\tNext\t5\t4\tcombat.rs:1151\n",
+                              encoding="utf-8")
+        valid = rng_ledger_status(valid_path)
+        require(valid["exists"] and valid["valid"]
+                and pair_rng_log_status([valid])["rng_log_present"] is True,
+                "RNG 账本存在+头/列/site 合格 ⇒ present=true")
+
+        bad_path = Path(tmp) / "bad.tsv"
+        bad_path.write_text("NO_HEADER\nSEED_PROBE\n0\tNext\t5\t4\tcombat.rs:1151\n",
+                            encoding="utf-8")
+        bad = rng_ledger_status(bad_path)
+        require(bad["exists"] and not bad["valid"]
+                and pair_rng_log_status([bad])["rng_log_present"] is False,
+                "变异牙③：坏头文件存在但不得当流水证据")
+
+    expected_checks = 9
     passed = sum(condition for condition, _name in cases)
     print("CHECK %d/%d" % (passed, len(cases)))
-    return 0 if passed == len(cases) and cases else 1
+    return 0 if (passed == len(cases) == expected_checks and cases) else 1
 
 
 def main():

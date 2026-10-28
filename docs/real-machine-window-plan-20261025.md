@@ -8,11 +8,11 @@
 
 ## 0. 开窗前必须全绿的条目
 
-> **认树锚（开窗当天照抄）**：下文第 1 行与「开窗当天用它认树」里的工具门数字（**58 项 / 清点 63 = 58 + 5 + 0**）是**故意保留的实数值**——它们用于确认「开的就是预期那棵树」。**加/删工具时必须同步更新**（同时更新 `--inventory` 清点差），不要改成「详见实跑」而失去认树能力。
+> **认树锚（开窗当天照抄）**：下文第 1 行与「开窗当天用它认树」里的工具门数字（**59 项 / 清点 64 = 59 + 5 + 0**）是**故意保留的实数值**——它们用于确认「开的就是预期那棵树」。**加/删工具时必须同步更新**（同时更新 `--inventory` 清点差），不要改成「详见实跑」而失去认树能力。
 
 | # | 项 | 判据 | 现状 |
 |---:|---|---|---|
-| 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **58 项全绿**；`--inventory` rc=0 | **已绿**（历史：`8b7c9c281` 当时 47/47；`26ba230ea` 起 48 项；2026-10-27 起 **53 项**（含 entryrefs）（含 C7 的 `mir_flow.selftest.ps1` 与 run_batch 的 `run_batch_selftest.py`），`--inventory` **60=55+5+0**。原始记录：`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
+| 1 | 工具门 | `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **59 项全绿**；`--inventory` rc=0 | **已绿**（历史：`8b7c9c281` 当时 47/47；`26ba230ea` 起 48 项；2026-10-27 起 **53 项**（含 entryrefs）（含 C7 的 `mir_flow.selftest.ps1` 与 run_batch 的 `run_batch_selftest.py`），`--inventory` **60=55+5+0**。原始记录：`--inventory` rc=0 清点 52=47+5+0；并用「假未分类工具在场 ⇒ `--selftest` 仍 18/18 绿、`--inventory` rc=2 点名、删掉后 rc=0」独立复验） |
 | 2 | 判定三档 | `mir_flow` 的 `missing_prereq / spawn_failed / out_of_range` 可机判区分 | **已绿**（`e7fb3e78d`：三档 kind/rc=6/7/8，`selftest 148/148`；用法错 rc=2 与判据彻底分家） |
 | 3 | 夹具 | `provision_...py --gate ...`（逐阶段求值，见下） | **已实测**：动作分布在**两张图**上 ⇒ 需两次 `--apply`，详见本节下的「夹具实测」 |
 | 4 | 机器空闲 | `E:/MirServer/port-status.ps1` 十端口在监听（基线态）；**3306 UP**（pid 现查，**不要写死**） | 当前满足。**注**：`mysqld` pid 会变（2026-10-26 实测由 2580 → 3308，22:04:18 起重启过）⇒ **pid 变化说明 MySQL 重启过，之前取的 DB 基线可能失效，需重取**；判据只看「3306 UP + 能连」，不看 pid |
@@ -56,7 +56,7 @@ SabukW 部署件 9260B→实测 9290B，会变，别写死）见 runbook **§0.9
 
 **开窗当天用它认树**（数字对不上就说明不在预期 master 上）：
 - `python -I -B tools/goal/goal_gate.py selftest` ⇒ **85 条断言 85 通过**（`cb947d123` 实测；来历：`80a820762` 加 4 条 → 79→83；whitelist 卡（`6f282de2e`）加 1 条 → 84；`goal-gate-wiring-teeth`（`cb947d123`）加 1 条 → 85）
-- `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **58 项全绿**；`--inventory` ⇒ 清点 **63 = 58 + 5 + 0**（2026-10-28 起，含 sign_entry；2026-10-27 起曾为 57/62，含 C7 / run_batch / entryrefs / rng_consumer_groups；此前 56/61、52/57、51/56、50/55、48/53、47/52）
+- `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **59 项全绿**；`--inventory` ⇒ 清点 **64 = 59 + 5 + 0**（2026-10-28 起，含 sign_entry 与 equip_struck_dura_triage；2026-10-27 起曾为 57/62，含 C7 / run_batch / entryrefs / rng_consumer_groups；此前 56/61、52/57、51/56、50/55、48/53、47/52）
 - `goal_gate --full` 产物里条件④ 应显示「**门禁 8 项**」（第 8 项 = 工具自测门，约 +120s）
 - `cargo test --workspace` ⇒ 三元组以测试车道证据条目为准：截至本行改写时最新条目 `f60dc2959`（`<git-common-dir>/tester/last-workspace-test.json`，2026-10-28 实测 `--no-fail-fast`）= **142 suites，running 3401 = passed 3338 + ignored 63**。滚动口径（卡 `openmir2-windowplan-docs61-qualifier`）：本行**不引用任何固定提交集合**；过期条件机械可判——证据条目键 != 当前 master tip 且其后存在 Rust 面提交 ⇒ 限定语过期，tester 重测登记新条目并刷新本行指针；机判对账走同一证据文件，证据缺失/该 tip 无条目 ⇒ 判不了 rc=2
 

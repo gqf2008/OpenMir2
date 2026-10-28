@@ -15,12 +15,14 @@ frames / c2s / fixture / save_settle / DB TSV，不改生产实现、冻结场�
 - 本轮没有确认 Rust 实现回归，不开实现修复卡；也不新增 `ignore_columns`。
 
 可复现分析器：`tools/window/equip_struck_dura_triage.py`。真实输出：
-`E:/tmp/dev-2/dura-run6-analysis.json`；合成负对照：`E:/tmp/dev-2/dura-check.txt`。
+`E:/tmp/dev-2/dura-run6-analysis-fixed.json`；合成负对照：`E:/tmp/dev-2/dura-check.txt`。
+分析器已登记 `tool_selftest_gate`（`--check` 入口），工具门因此为 **59/59**、清点
+**64 = 59 + 5 + 0**。
 
 ```sh
 python -I -B tools/window/equip_struck_dura_triage.py \
   --root E:/tmp/window/run6/equip_struck_save \
-  --json E:/tmp/dev-2/dura-run6-analysis.json
+  --json E:/tmp/dev-2/dura-run6-analysis-fixed.json
 python -I -B tools/window/equip_struck_dura_triage.py --check
 ```
 
@@ -75,7 +77,9 @@ Rust 对应：
 逐行对照没有发现抽数上界、加 2、调用次数或写回路径差。实际 3/6 又都在一次
 `Random(5)+2` 的 `[2,6]` 值域内，并分别精确等于两侧 642 与 DB 的磨损量。
 
-**限制**：run.json 的两侧 argv 均无 `--rng-log`，run6 目录也没有 RNG 流水文件。故本卡把
+**限制**：run6 的 `csharp/`、`rust/` 下都没有真实账本 `<side>/rng-stream.tsv`。分析器按该
+固定文件路径判定，并校验头四行含 `INJECT_OK`/`SEED_PROBE`、数据行至少 5 列且 site 非空；
+它**不读 probe argv**（`--rng-log` 是 card_window 的参数，probe argv 从来不会有它）。故本卡把
 分类记为 `SINGLE_RANDOM5_FLOW_DIFFERENCE_CANDIDATE`，不冒充已有逐站点/逐序流水证明。
 C# 的随机源是墙钟播种 `src/OpenMir2/RandomNumber.cs:35`，Rust 是独立进程固定种子流；
 两边本就不要求同一次运行抽到相同裸值。最终 R 收口要补实际流水或等价流位锚。
@@ -103,14 +107,21 @@ DB 不一致、磨损超出 `[2,6]`、或源码存在第二次 `Random(5)`/额�
 
 ## 3. A3：负对照与分析器牙
 
-`python -I -B tools/window/equip_struck_dura_triage.py --check` 实测 **6/6 PASS**：
+`python -I -B tools/window/equip_struck_dura_triage.py --check` 实测 **9/9 PASS**：
 
 1. 无成功攻击、无 642：两侧 `Dura=4000` 不变，分类 `NO_ATTACK_NO_CHANGE`；
 2. 两侧同为 4000→3997：`SAME_SINGLE_WEAR`，不得伪报随机差；
 3. run6 形态：3997/3994 唯一推出裸 `Random(5)=1/4`；
 4. **变异牙①**：最后 642=3994 而 DB=4000 ⇒ `snapshot_consistent=false`，不得判 RNG；
 5. **变异牙②**：一次攻击却两条 642 ⇒ `event_count_consistent=false`，不得编单次 RNG 解释；
-6. 负对照：同值输入与应报差输入得到不同分类，证明比较器不恒等。
+6. 负对照：同值输入与应报差输入得到不同分类，证明比较器不恒等；
+7. RNG 账本无文件 ⇒ `rng_log_present=false`；
+8. tempdir 内合法 `rng-stream.tsv`（`INJECT_OK`/`SEED_PROBE` + 5 列 site）⇒ true；
+9. **变异牙③**：文件存在但缺自证头 ⇒ false，不能把坏文件当流水证据。
+
+`expected_checks=9` 是硬断言：删掉任一条用例会变成 `8/9`，不会在 8/8 下静默空过。
+分析器已登记进 `tool_selftest_gate`；`--only equip_struck_dura_triage` 可单跑，完整门
+**59/59**、`--inventory` **64 = 59 + 5 + 0**。把 `--check` 改坏时工具门会真实报红。
 
 分析器对真实 run6 输出 `final_db_equals_last_642_both=true`、
 `rng_log_present=false`、`wear_difference_csharp_minus_rust=-3`。空事件不会被当成一次 RNG；
