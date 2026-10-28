@@ -469,7 +469,10 @@ BUILTIN_PROFILES = {
                         "（WMI Win32_Process.Create 派生，断开 stdout 管道继承的死锁）并兜底"
                         "「全就绪端口（含网关）监听 + 暖 45s」；ready_ports 去掉网关端口 "
                         "17200/17600（wait_ready 的探针会占住 GameGate user 会话槽，"
-                        "596ms 后真实连接被丢 no SM_LOGON）。"),
+                        "596ms 后真实连接被丢 no SM_LOGON）。"
+                        " | D-9 对拍布局（卡 openmir2-ident53-layout-parity）：rust env "
+                        "MIR2_CLIENT_ABILITY_LAYOUT=0 + stack -PinChecks 自证；冻结客户端 "
+                        "HIGHHP=True 要 16B 尾，oracle 无尾，跨侧对拍必须显式取 oracle 布局。"),
         "login_gate": "127.0.0.1:17000",
         "account": "winplay0",
         "server_name": "热血传奇",
@@ -503,8 +506,10 @@ BUILTIN_PROFILES = {
             },
             "rust": {
                 "label": "Rust",
-                "stack": wmi_stack_argv("E:/tmp/conformance/start-rust.ps1",
-                                        (15000, 17000, 17100, 17600)),
+                "stack": with_wmi_pin_checks(
+                    wmi_stack_argv("E:/tmp/conformance/start-rust.ps1",
+                                   (15000, 17000, 17100, 17600)),
+                    ["%s=0" % PIN_LAYOUT_KEY], RUST_STACK_PIN_LOG),
                 "stop": POWERSHELL + ["-File", "E:/tmp/conformance/stop-rust.ps1"],
                 "restore": [GIT_BASH or "bash",
                             "E:/tmp/conformance/restore-baseline-r.sh"],
@@ -512,6 +517,10 @@ BUILTIN_PROFILES = {
                 # 网关 17600 同上：不进 ready_ports，由 stack 包装兜底。
                 "ready_ports": [15000, 17000, 17100],
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
+                # D-9：跨侧逐字节对拍取 oracle 的 header-only 53；生产默认仍为冻结客户端
+                # 16B 布局（不改 src）。只有 rust 消费此 env；stack 的 -PinChecks/-PinLog
+                # 让 pin 丢失 fail-closed（run5 的 53 body 0/16 即该缺口）。
+                "env": {PIN_LAYOUT_KEY: "0"},
                 "binaries": [RUST_SERVER_BIN],
                 "require_pid_binaries": True,
                 # 部署把 pid 写到 wrapper 的 `-LogDir`（`start-rust.ps1` 里写死
@@ -586,8 +595,8 @@ def _derived_magic_profile(base, name, description):
     ``MIR2_CLIENT_ABILITY_LAYOUT=0`` 走 ``sides.rust.env`` 通道（README「spell_cast 必须 pin D-9」；
     C# 是 oracle 不消费该 env，卡 `openmir2-window-wmi-env-forwarding` 起不再两侧都设），
     并给 rust 侧 WMI stack 接线 -PinChecks（pin 自证，见 with_wmi_pin_checks）。
-    **不改 `alt` 默认值**：alt 是 18 个场景的既有基线，动它会让所有场景的输入一起变；
-    新前置只能以**新 profile** 的形式存在。
+    **alt 现已自带 D-9 pin**（卡 openmir2-ident53-layout-parity）；本构造器仍保留幂等写法，
+    便于从无 pin 的派生基线复用。它仍不改变 alt 的 magic 输入，新增夹具只留在本 profile。
     """
     prof = copy.deepcopy(base)
     prof["name"] = name
@@ -10202,6 +10211,32 @@ def selftest():
             wm_ok, wm_err = False, str(exc)
         chk(wm_ok, "15d) 内置 window-magic：两侧 magic 段(magic_id=1) + rust 侧 pin=0 + "
             "stack 接线 -PinChecks/-PinLog %s" % wm_err)
+
+        # 15e) 卡 openmir2-ident53-layout-parity：alt 必须自带 D-9 pin 且可观测。
+        #      run5 的 alt 无 env/无 -PinChecks，53 走了 16B 客户端尾，与 oracle 0B 假红。
+        try:
+            alt = load_profile("alt")
+            alt_rs = alt["sides"]["rust"]
+            alt_env = (alt_rs.get("env") or {}).get(PIN_LAYOUT_KEY)
+            alt_cs_env = (alt["sides"]["csharp"].get("env") or {}).get(PIN_LAYOUT_KEY)
+            alt_wired = wmi_pin_checks(alt_rs.get("stack"))
+            alt_ok = (alt_env == "0" and alt_cs_env is None
+                      and alt_wired is not None
+                      and ("%s=0" % PIN_LAYOUT_KEY) in alt_wired
+                      and any("-PinLog" == str(x) for x in alt_rs["stack"]))
+            dbp = load_profile("window-testdb")
+            dbp_ok = ((dbp["sides"]["rust"].get("env") or {}).get(PIN_LAYOUT_KEY) == "0"
+                      and ("%s=0" % PIN_LAYOUT_KEY)
+                      in (wmi_pin_checks(dbp["sides"]["rust"].get("stack")) or []))
+            no_pin = copy.deepcopy(alt)
+            no_pin["sides"]["rust"]["env"].pop(PIN_LAYOUT_KEY, None)
+            no_pin_ok = ((no_pin["sides"]["rust"].get("env") or {}).get(PIN_LAYOUT_KEY) == "0")
+            alt_err = ""
+        except ConfigError as exc:
+            alt_ok, dbp_ok, no_pin_ok, alt_err = False, False, True, str(exc)
+        chk(alt_ok and dbp_ok and not no_pin_ok,
+            "15e) alt 的 rust env pin=0 + -PinChecks/-PinLog 可观测；window-testdb 继承；"
+            "去掉 env 的副本不满足 %s" % alt_err)
 
         # 16) I-4：真跑缺 --out => rc=2，且不往 cwd 写任何证据
         old_cwd = os.getcwd()
