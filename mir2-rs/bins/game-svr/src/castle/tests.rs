@@ -548,9 +548,11 @@ fn castle_production_call_order_is_wired() {
     let tick = main_rs
         .find("mir2_world::castle::castle_war_tick(")
         .expect("每 tick 城堡检查必须存在");
-    let tick_head = main_rs
-        .find("let mut rec = tick_world_head_with_specials(")
-        .expect("world tick 必须存在");
+    let sim_loop = main_rs.find("fn sim_loop(").expect("sim_loop 必须存在");
+    let tick_head = sim_loop
+        + main_rs[sim_loop..]
+            .find("let mut rec = tick_world_head_with_specials(")
+            .expect("sim_loop 内 world tick 必须存在");
     assert!(tick < tick_head, "每 tick 城堡检查在 world tick 之前");
 
     let apply = main_rs

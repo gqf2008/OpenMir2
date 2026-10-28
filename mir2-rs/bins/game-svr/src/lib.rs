@@ -21241,6 +21241,7 @@ fn drain_player_revival_with_magic(
 /// 宿主（`sim_loop`）与回归用例走**同一个**函数 ⇒ 删任一条排水都会让「队列有界 /
 /// 产仔」用例变红。
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 fn tick_world_with_specials(
     world: &mut mir2_world::World,
     host: Option<&mut game_svr::mongen::MonGenHost>,
@@ -21339,6 +21340,7 @@ fn apply_start_point_for_fired_players(
 /// `sim_loop` 在这之后驱动 P21/P32（玩家 `Run` 的宿主段），再调 `World::tick_tail`——
 /// 与 oracle「`PlayObject.Run` 的 P21→…→P32 → `base.Run()` 的 Die/VerifyMapTime」同序。
 /// 单测/回归仍走组合版 `tick_world_with_specials`（宿主段为空，行为与 A1 前一致）。
+#[allow(clippy::too_many_arguments)]
 fn tick_world_head_with_specials(
     world: &mut mir2_world::World,
     host: Option<&mut game_svr::mongen::MonGenHost>,
@@ -66274,8 +66276,12 @@ SendRefMsgRange=15
             .collect();
         assert_eq!(
             idents,
-            vec![mir2_world::monai::RM_SPELL, mir2_world::monai::RM_MAGICFIRE],
-            "world 侧先 RM_SPELL 后 RM_MAGICFIRE"
+            vec![
+                mir2_world::monai::RM_SPELL,
+                mir2_world::monai::RM_MAGICFIRE,
+                mir2_protocol::messages::RM_CHANGENAMECOLOR,
+            ],
+            "world 侧先施法两帧，再有目标时的 Break 656"
         );
 
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
@@ -66331,11 +66337,12 @@ SendRefMsgRange=15
         );
         let want_spell = smframe::sm_spell(mid, 12, 10, 48, 48);
         let want_fire = smframe::sm_magicfire(mid, 12, 10, 2, 48, tid);
+        let want_color = smframe::sm_changenamecolor(mid, 255);
         for socket in [5, 6] {
             assert_eq!(
                 by_socket[&socket],
-                vec![want_spell.clone(), want_fire.clone()],
-                "socket {socket}：SM_SPELL → SM_MAGICFIRE 逐字节"
+                vec![want_spell.clone(), want_fire.clone(), want_color.clone()],
+                "socket {socket}：SM_SPELL → SM_MAGICFIRE → Break 656 逐字节"
             );
         }
         // 逐字段钉 oracle（不依赖 `smframe` 自证）：`SM_SPELL` 头 + ASCII 尾。

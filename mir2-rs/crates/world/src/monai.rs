@@ -551,7 +551,6 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
             if let Some(e) = world.entities.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
-                e.ai.holy_seize = false;
             }
             turn_to(world, actor_id, bt_dir);
             // oracle `AnimalObject.Attack`：`GetBaseAttackPoewr()`（怪物 = `AttackPowerMode::Base`）
@@ -580,8 +579,8 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
                 send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
             }
             // `MonsterObject.AttackTarget`：`Attack(...)` 之后无条件 `BreakHolySeizeMode()`
-            // ⇒ `RefNameColor()`。顺序保持在 RM_HIT 之后；不要求 HolySeize 原先为 true。
-            send_ref_msg(world, actor_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
+            // ⇒ 清 HolySeize + `RefNameColor()`；顺序保持在 RM_HIT 之后。
+            break_holy_seize_mode(world, actor_id);
         }
         true
     } else {
@@ -629,7 +628,7 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
     if world.entities.get(victim_id).is_some_and(|e| e.race == 120) {
         soccer_ball_struck(world, victim_id, hiter_id);
         // `Operate(RM_STRUCK)` 在覆写的 `Struck` 之后仍无条件 BreakHolySeizeMode。
-        send_ref_msg(world, victim_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
+        break_holy_seize_mode(world, victim_id);
         return;
     }
     let now = world.clock_ms;
@@ -678,8 +677,8 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
     // `GuardUnit.Struck`（`GuardUnit.cs:27-33`）：`Castle != null` ⇒ 置 `CrimeforCastle`。
     guard_unit_struck(world, victim_id, now);
     // `AnimalObject.Operate(RM_STRUCK)`：`Struck` 后无条件 `BreakHolySeizeMode()`
-    // ⇒ `RefNameColor()`，不是只有 HolySeize=true 才发。
-    send_ref_msg(world, victim_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
+    // ⇒ 清 HolySeize + `RefNameColor()`，不是只有 HolySeize=true 才发。
+    break_holy_seize_mode(world, victim_id);
 }
 
 /// `CreateMonster`（`WorldServer.MonGen.cs:507-728`）按 `monsters.Race` 选怪类；本函数给出
@@ -2086,10 +2085,10 @@ fn sculture_king_attack_target(world: &mut World, actor_id: i32) -> bool {
             if let Some(e) = world.entities.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
-                e.ai.holy_seize = false;
             }
             turn_to(world, actor_id, bt_dir);
             sculture_king_attack(world, actor_id, target_id);
+            break_holy_seize_mode(world, actor_id);
         }
         true
     } else {
@@ -4244,12 +4243,15 @@ pub fn break_crazy_mode(world: &mut World, actor_id: i32) {
     }
 }
 
-/// `AnimalObject.BreakHolySeizeMode()`（`AnimalObject.cs:330-334`）：置 `HolySeize = false`
-/// （`RefNameColor` 帧面不在 world 层；与既有 `attack_target`/`tame_adopt` 的写法同口径）。
+/// `AnimalObject.BreakHolySeizeMode()`（`AnimalObject.cs:330-334`）：无条件
+/// `HolySeize = false; RefNameColor();`。状态与帧事件必须同位产生，否则受击/出手后
+/// 怪仍保持冻结，或命中 HolySeize 的怪不发 656。所有既有调用点共用本 helper。
 pub fn break_holy_seize_mode(world: &mut World, actor_id: i32) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
-        e.ai.holy_seize = false;
-    }
+    let Some(e) = world.entities.get_mut(actor_id) else {
+        return;
+    };
+    e.ai.holy_seize = false;
+    send_ref_msg(world, actor_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
 }
 
 /// `MonsterObject.Run` 尾的 `CrazyMode` 到期段（`MonsterObject.cs:353-356`）。
@@ -4521,10 +4523,10 @@ fn cow_king_attack_target(world: &mut World, actor_id: i32) -> bool {
             if let Some(e) = world.entities.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
-                e.ai.holy_seize = false;
             }
             turn_to(world, actor_id, bt_dir);
             cow_king_attack(world, actor_id, target_id);
+            break_holy_seize_mode(world, actor_id);
         }
         true
     } else {
@@ -7887,7 +7889,12 @@ mod tests {
             "不得要求 HolySeize 前置"
         );
 
+        world.entities.get_mut(mid).unwrap().ai.holy_seize = true;
         animal_struck(&mut world, mid, hitter);
+        assert!(
+            !world.entities.get(mid).unwrap().ai.holy_seize,
+            "受击后必须 BreakHolySeizeMode 清状态"
+        );
         assert_eq!(world.pending_monster_ref_msgs.len(), 1);
         let nc = &world.pending_monster_ref_msgs[0];
         assert_eq!(nc.actor_id, mid);
@@ -7912,6 +7919,61 @@ mod tests {
             hidden.self_only && hidden.recipients.is_empty(),
             "ObMode ⇒ 无观察者帧"
         );
+    }
+
+    /// T2：SoccerBall 覆写了 Struck，但 `Operate(RM_STRUCK)` 仍在之后无条件
+    /// `BreakHolySeizeMode` —— 早退臂也必须清 HolySeize 并产 656。
+    #[test]
+    fn soccer_struck_clears_holy_seize_and_emits_name_color() {
+        let mut world = World::new(40, 40);
+        let sid = monster(&mut world, 10, 10);
+        world.entities.get_mut(sid).unwrap().race = 120;
+        let hitter = player(&mut world, 11, 10);
+        world.tick();
+        world.entities.get_mut(sid).unwrap().ai.holy_seize = true;
+        animal_struck(&mut world, sid, hitter);
+        assert!(!world.entities.get(sid).unwrap().ai.holy_seize);
+        assert_eq!(world.pending_monster_ref_msgs.len(), 1);
+        assert_eq!(world.pending_monster_ref_msgs[0].ident, RM_CHANGENAMECOLOR);
+        assert_eq!(world.pending_monster_ref_msgs[0].actor_id, sid);
+    }
+
+    /// T1：race 92/102/134 只覆写 Attack、继承 MonsterObject.AttackTarget；到点支在
+    /// 专用 Attack 之后同样 BreakHolySeizeMode ⇒ 清状态并发 656。
+    #[test]
+    fn king_melee_due_clears_holy_seize_and_emits_name_color() {
+        for race in [92u8, 102, 134] {
+            let mut world = World::new(40, 40);
+            let mid = monster(&mut world, 10, 10);
+            {
+                let m = world.entities.get_mut(mid).unwrap();
+                m.race = race;
+                m.dc = 10 | (10 << 8);
+                m.level = 1;
+                m.ai.attack_tick = 0;
+                m.ai.next_hit_time = 2_000;
+                m.ai.holy_seize = true;
+            }
+            let pid = player(&mut world, 11, 10);
+            world.tick();
+            set_target_creature(&mut world, mid, pid);
+            world.clock_ms = 2_200;
+            assert!(
+                monster_attack_target(&mut world, mid),
+                "race {race} 邻接到点"
+            );
+            assert!(
+                !world.entities.get(mid).unwrap().ai.holy_seize,
+                "race {race} 出手后必须清 HolySeize"
+            );
+            assert!(
+                world
+                    .pending_monster_ref_msgs
+                    .iter()
+                    .any(|m| m.ident == RM_CHANGENAMECOLOR && m.actor_id == mid),
+                "race {race} 出手后必须产 656"
+            );
+        }
     }
 
     /// W4-B：`TargetCret != null` 且**邻接** ⇒ `GetAttackDir` 真 ⇒ 短路**不抽** `Random(6)`。
@@ -11450,8 +11512,14 @@ mod tests {
             "BreakHolySeize"
         );
         let refs = world.pending_monster_ref_msgs.clone();
-        assert_eq!(refs.len(), 1, "仅 RM_HIT（SpitAttack 不发逐目标帧）");
+        assert_eq!(
+            refs.len(),
+            2,
+            "RM_HIT + BreakHolySeize 656（SpitAttack 不发逐目标帧）"
+        );
         assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[1].ident, RM_CHANGENAMECOLOR);
+        assert_eq!(refs[1].actor_id, m);
         assert_eq!(refs[0].w_param, i32::from(DIR_UP));
         let msg = world.self_delay_msgs.peek(p).expect("300ms 延时");
         assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
@@ -11516,8 +11584,10 @@ mod tests {
         assert_eq!(world.entities.get(p).unwrap().green_poisoning_point, 1);
         assert!(!world.entities.get(m).unwrap().ai.holy_seize);
         let refs = world.pending_monster_ref_msgs.clone();
-        assert_eq!(refs.len(), 1);
+        assert_eq!(refs.len(), 2, "专用 Attack 后 RM_HIT + BreakHolySeize 656");
         assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[1].ident, RM_CHANGENAMECOLOR);
+        assert_eq!(refs[1].actor_id, m);
         assert_eq!(refs[0].w_param, i32::from(DIR_UP));
         let msg = world.self_delay_msgs.peek(p).expect("300ms");
         assert_eq!(msg.ident, crate::slave::RM_REFMESSAGE);
@@ -11666,8 +11736,10 @@ mod tests {
         assert_eq!(world.pending_ai_attacks[0].2.struck_power, (5 + d0) as u16);
         assert!(!world.entities.get(m).unwrap().ai.holy_seize);
         let refs = world.pending_monster_ref_msgs.clone();
-        assert_eq!(refs.len(), 1);
+        assert_eq!(refs.len(), 2, "专用 Attack 后 RM_HIT + BreakHolySeize 656");
         assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[1].ident, RM_CHANGENAMECOLOR);
+        assert_eq!(refs[1].actor_id, m);
         assert_eq!(refs[0].w_param, i32::from(DIR_RIGHT));
         let msg = world.self_delay_msgs.peek(p).expect("300ms");
         assert_eq!(msg.w_param, 5 + d0);
@@ -11697,7 +11769,16 @@ mod tests {
         let mut expect = before.clone();
         let _ = expect.random_below(1);
         assert_stream_eq(&mut world, &mut expect, "nPower<=0");
-        assert!(world.pending_monster_ref_msgs.is_empty());
+        let idents: Vec<u16> = world
+            .pending_monster_ref_msgs
+            .iter()
+            .map(|m| m.ident)
+            .collect();
+        assert_eq!(
+            idents,
+            vec![RM_CHANGENAMECOLOR],
+            "无攻击帧，但 Break 仍发 656"
+        );
         assert!(world.pending_ai_attacks.is_empty());
         assert_eq!(world.entities.get(p).unwrap().hp, 500);
         assert!(
@@ -11815,8 +11896,10 @@ mod tests {
         assert!(elf_warrior_attack_target(&mut world, m));
         assert_stream_eq(&mut world, &mut expect, "ElfWarrior 强化形态");
         let refs = world.pending_monster_ref_msgs.clone();
-        assert_eq!(refs.len(), 1);
+        assert_eq!(refs.len(), 2, "专用 Attack 后 RM_HIT + BreakHolySeize 656");
         assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[1].ident, RM_CHANGENAMECOLOR);
+        assert_eq!(refs[1].actor_id, m);
         assert_eq!(refs[0].w_param, i32::from(DIR_RIGHT));
         assert_eq!(world.pending_ai_attacks.len(), 1);
         assert_eq!(
@@ -11906,8 +11989,10 @@ mod tests {
         assert_stream_eq(&mut world, &mut expect, "ElfWarrior 非强化形态");
 
         let refs = world.pending_monster_ref_msgs.clone();
-        assert_eq!(refs.len(), 1);
+        assert_eq!(refs.len(), 2, "专用 Attack 后 RM_HIT + BreakHolySeize 656");
         assert_eq!(refs[0].ident, RM_HIT);
+        assert_eq!(refs[1].ident, RM_CHANGENAMECOLOR);
+        assert_eq!(refs[1].actor_id, m);
         assert_eq!(refs[0].w_param, i32::from(DIR_RIGHT));
         assert_eq!(world.pending_ai_attacks.len(), 1, "SpitSpider 魔法结算");
         assert_eq!(
@@ -12562,10 +12647,12 @@ mod tests {
         assert_eq!(msg.n_param3, id, "ActorId");
         assert_eq!(msg.deliver_at_ms, 100_200, "200ms 延迟");
         let refs = world.pending_monster_ref_msgs.clone();
-        assert_eq!(refs.len(), 1, "HitMagAttackTarget 尾帧一条 RM_HIT");
+        assert_eq!(refs.len(), 2, "HitMagAttackTarget 尾 RM_HIT + Break 656");
         assert_eq!(refs[0].ident, RM_HIT);
         assert_eq!(refs[0].actor_id, id);
         assert_eq!((refs[0].x, refs[0].y), (10, 10));
+        assert_eq!(refs[1].ident, RM_CHANGENAMECOLOR);
+        assert_eq!(refs[1].actor_id, id);
     }
 
     /// 判据③c：Siege 两支在 oracle 里 `return` ⇒ **跳过 `base.Run()`**
@@ -15223,7 +15310,11 @@ mod mb89_tests {
             .iter()
             .map(|f| f.ident)
             .collect();
-        assert_eq!(idents, vec![RM_SPELL, RM_MAGICFIRE], "帧顺序");
+        assert_eq!(
+            idents,
+            vec![RM_SPELL, RM_MAGICFIRE, RM_CHANGENAMECOLOR],
+            "帧顺序：施法两帧后 Break 656"
+        );
         let sp = &s.world.pending_monster_ref_msgs[0];
         assert_eq!(
             (sp.w_param, sp.n_param1, sp.n_param2, sp.n_param3),
@@ -15284,7 +15375,12 @@ mod mb89_tests {
             &before,
             "目标在底边 ⇒ MagCanHitTarget 为假 ⇒ 零抽数",
         );
-        assert!(world.pending_monster_ref_msgs.is_empty());
+        let idents: Vec<u16> = world
+            .pending_monster_ref_msgs
+            .iter()
+            .map(|m| m.ident)
+            .collect();
+        assert_eq!(idents, vec![RM_CHANGENAMECOLOR], "有目标 ⇒ Break 仍发 656");
     }
 
     /// R19-A7：距离门读的是 **`TargetX/TargetY` 字段**，不是 `TargetCret.CurrX/CurrY`。
