@@ -239,12 +239,25 @@ def selftest():
     chk(not ok7 and any("保留 PENDING" in r["message"] for r in rows7),
         "保留项被翻正 => 拒")
 
-    # F3：2026-10-29 的模板只能用于 ident14，贴到其它 ident => 拒。
+    # F3 正向牙：按 ident 绑定的正确模板必须判 ok（ident14 → 10-29、非 14 → 10-25）。
+    ok_p, rows_p, _ = check_rules(new)
+    by_where = {r["where"]: r["action"] for r in rows_p}
+    chk(ok_p and by_where.get("rules[14]") == "ok" and by_where.get("rules[11]") == "ok",
+        "按 ident 绑定的正确模板（14→10-29、非 14→10-25）=> ok")
+
+    # F3 反向牙 a：2026-10-29 的模板只能用于 ident14，贴到其它 ident => 拒。
     wrong_14 = copy.deepcopy(new)
     wrong_14["rules"][0]["approved_by"] = APPROVED_TMPL_14 % "worker-2"
     ok9, rows9, _ = check_rules(wrong_14)
     chk(not ok9 and any("既不是 PENDING" in r["message"] for r in rows9),
         "ident14 的 10-29 模板贴到非 14 条目 => 拒")
+
+    # F3 反向牙 b：ident14 用 2026-10-25 模板（= 其它条目的模板）=> 拒。
+    wrong_14_old = copy.deepcopy(new)
+    wrong_14_old["rules"][2]["approved_by"] = APPROVED_TMPL % "worker-4"
+    ok10, rows10, _ = check_rules(wrong_14_old)
+    chk(not ok10 and any("既不是 PENDING" in r["message"] for r in rows10),
+        "ident14 用 10-25 模板 => 拒")
 
     # 非 PENDING 且非本格式 => 拒（不许静默覆盖别人的批准）
     foreign = copy.deepcopy(base)
