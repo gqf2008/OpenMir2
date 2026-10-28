@@ -53,8 +53,8 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
   后果，而「其它帧全等 + 库全等」已经把可观测状态锁死。若将来要绑 actor，另加
   `oracle_extra_recogs` 白名单并由裁决条目说明（selftest 有 `recog 不计入形状` 的登记牙）。
 - `oracle_extra_status` / `oracle_extra_decision`：**只有显式 `APPROVED` 且带非空裁决 oid 才放行**；
-  缺省/未知值、以及「写了 APPROVED 但没写裁决 oid」一律按 PENDING（fail-closed，reviewer-20 R20-Y1，
-  selftest 有对应牙）。`oracle_extra_shapes` 的每个形状**必须带 `max`**，bare string 视为规则非法
+  缺省/未知值、以及「写了 APPROVED 但没写裁决 oid / oid 不是 40-hex」一律按 PENDING
+  （fail-closed，reviewer-20 R20-Y1/R20-Z1，selftest 各有牙）。`oracle_extra_shapes` 的每个形状**必须带 `max`**，bare string 视为规则非法
   （R20-Y4，同样有牙——否则新规则能用旧写法绕开上界）。
 
 ## 4. 判定流程（compare_runs.py）
@@ -107,6 +107,7 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | verified.db_*（正向） | 放行记录 `verified` 带实际 `db_state=compared` / `db_diffs=0` / `db_undecidable=0` / `frame_diffs=0` |
 | verified.db_diffs（库差） | 伴随库差时候选 `verified.db_diffs >= 1`（不能写死 0） |
 | verified.db_undecidable（库判不了） | 库判不了时候选 `verified.db_undecidable >= 1` |
+| decision 非 oid（Z1） | `oracle_extra_decision="not-an-oid"` ⇒ 视同 PENDING、`rc 2`、`blocked_by` 点明「不是合法 oid」 |
 
 变异（逐次恢复并核 sha256，无 MUTATION 残留；恢复后
 `compare_runs.py` sha256=`185e78aae0565e6655d0d021faad31f20d5147f79866497061f139d51931c40f`）：
@@ -128,6 +129,7 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | 允许 bare shape 无 max | Y4 牙红（rc 由 2 变 0、候选出现） |
 | `verified.db_diffs` 写死 0 | 库差 verified 牙红 |
 | `verified.db_undecidable` 写死 0 | 库判不了 verified 牙红 |
+| 删 decision 的 40-hex 校验 | Z1 牙红（rc 由 2 变 0） |
 
 每次变异只打红对应那颗牙（其余仍绿）。
 

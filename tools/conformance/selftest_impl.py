@@ -1010,6 +1010,19 @@ class Selftest(object):
                            for u in _und_y1),
                    (rc, _und_y1))
 
+        # Z1：decision 必须是 40-hex oid；任意串（typo / 旧卡名）不放行。
+        path270_baddec = _rules270_variant(
+            "rules-270-baddec.json", lambda r: r.__setitem__("oracle_extra_decision", "not-an-oid"))
+        rc, rep = self.compare(od270, rd270, ["--rules", path270_baddec])
+        _und_z1 = (rep or {}).get("undecidable") or []
+        self.check("T-270 Z1：decision 不是 40-hex oid => 视同 PENDING、仍 rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits"))
+                   and any(u.get("ident") == 14
+                           and "不是合法 oid" in str(u.get("adjudication_blocked_by") or "")
+                           for u in _und_z1),
+                   (rc, _und_z1))
+
         # Y4：bare string 形状（没有 max）⇒ 规则非法、不入候选、不放行。
         path270_bare = _rules270_variant(
             "rules-270-bare.json", lambda r: r.__setitem__("oracle_extra_shapes", ["49,49,5"]))

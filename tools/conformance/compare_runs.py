@@ -1605,7 +1605,13 @@ def oracle_extra_status(rule):
         return raw or "PENDING"
     # R20-Y1：只写 APPROVED 但没写裁决 oid ⇒ 视同 PENDING（fail-closed）。
     # 否则一次「忘了补 decision」的编辑就能放行，并在记录里留下无 decision 的批准人。
-    if not str((rule or {}).get("oracle_extra_decision") or "").strip():
+    dec = str((rule or {}).get("oracle_extra_decision") or "").strip()
+    if not dec:
+        return "PENDING"
+    # R20-Z1：decision 必须是 40 位 hex 的 collab 条目 oid（可带 "decision=" 前缀）——
+    # 任意串（typo / 旧卡名）不能当批准用。
+    _oid = dec.split("decision=", 1)[-1] if "decision=" in dec else dec
+    if not re.fullmatch(r"[0-9a-fA-F]{40}", _oid.strip()):
         return "PENDING"
     return "APPROVED"
 
@@ -2763,8 +2769,13 @@ def compare_main(args):
             if status != "APPROVED":
                 _raw_status = str(rule.get("oracle_extra_status", "PENDING")).strip().upper()
                 if _raw_status == "APPROVED":
-                    blockers.append("T-270 status=APPROVED 但缺 oracle_extra_decision "
-                                    "⇒ 视同 PENDING（R20-Y1）")
+                    _dec = str(rule.get("oracle_extra_decision") or "").strip()
+                    if not _dec:
+                        blockers.append("T-270 status=APPROVED 但缺 oracle_extra_decision "
+                                        "⇒ 视同 PENDING（R20-Y1）")
+                    else:
+                        blockers.append("T-270 status=APPROVED 但 oracle_extra_decision "
+                                        "不是合法 oid（%r）⇒ 视同 PENDING（R20-Z1）" % _dec)
                 else:
                     blockers.append("T-270 白名单为 %s（缺 owner/coordinator 裁决条目）" % status)
             if blockers:
