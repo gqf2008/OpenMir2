@@ -7938,6 +7938,69 @@ mod tests {
         assert_eq!(world.pending_monster_ref_msgs[0].actor_id, sid);
     }
 
+    /// **卡 `openmir2-656-animal-run-tooth`**（reviewer-20 N3）：`MonsterObject.Run` 末尾的
+    /// `base.Run()` = `AnimalObject.Run`（`AnimalObject.cs:142-149`）的 **HolySeize 到期半句**
+    /// 必须清状态并发 656（`BreakHolySeizeMode`，`AnimalObject.cs:330-334`）。
+    ///
+    /// 驱动方式是真实 AI 入口 [`monster_ai_tick`]（race 80 走 `monster_run` → `animal_run`
+    /// → `base_object_run_monster` 通用支），不是直接调 helper。`is_visible_active=true`
+    /// 绕开 `ProcessMonsterInterval` 跳步门；到期比较是**严格 `>`**（等于不清）。
+    ///
+    /// 牙：删掉通用支里的 `animal_run(world, id);` ⇒ 到期不清、无 656 ⇒ 本用例红；
+    /// 把比较改成 `>=` ⇒ 第一个 pass（差等于 interval）就清 ⇒ 本用例红。
+    #[test]
+    fn animal_run_holy_seize_expiry_clears_and_emits_name_color() {
+        let mut world = World::new(40, 40);
+        let mid = monster(&mut world, 10, 10);
+        {
+            let m = world.entities.get_mut(mid).unwrap();
+            m.is_visible_active = true;
+            m.ai.holy_seize = true;
+            m.ai.holy_seize_tick = 1_000;
+            m.ai.holy_seize_interval = 50;
+        }
+
+        // 差 == interval（严格 > 不成立）⇒ 不得清、不得产 656。
+        world.clock_ms = 1_050;
+        monster_ai_tick(&mut world);
+        assert!(
+            world.entities.get(mid).unwrap().ai.holy_seize,
+            "now - tick == interval 时不得清除（oracle 严格 >）"
+        );
+        assert!(
+            !world
+                .pending_monster_ref_msgs
+                .iter()
+                .any(|m| m.ident == RM_CHANGENAMECOLOR && m.actor_id == mid),
+            "未到期不得产 656"
+        );
+
+        // 差 == interval + 1 ⇒ 到期：清 HolySeize 且恰产一条 656。
+        world.clock_ms = 1_051;
+        monster_ai_tick(&mut world);
+        assert!(
+            !world.entities.get(mid).unwrap().ai.holy_seize,
+            "animal_run 到期必须清 HolySeize"
+        );
+        let frames: Vec<_> = world
+            .pending_monster_ref_msgs
+            .iter()
+            .filter(|m| m.ident == RM_CHANGENAMECOLOR && m.actor_id == mid)
+            .collect();
+        assert_eq!(frames.len(), 1, "到期必须恰产一条 656");
+        assert_eq!(
+            (
+                frames[0].w_param,
+                frames[0].n_param1,
+                frames[0].n_param2,
+                frames[0].n_param3
+            ),
+            (0, 0, 0, 0),
+            "656 参数按 BreakHolySeizeMode 恒 0"
+        );
+        assert!(!frames[0].self_only, "普通怪非 ObMode ⇒ 656 不是 self_only");
+    }
+
     /// T1：race 92/102/134 只覆写 Attack、继承 MonsterObject.AttackTarget；到点支在
     /// 专用 Attack 之后同样 BreakHolySeizeMode ⇒ 清状态并发 656。
     #[test]
