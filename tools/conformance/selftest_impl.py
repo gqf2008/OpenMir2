@@ -907,9 +907,9 @@ class Selftest(object):
         # 卡 openmir2-rules-ident-gaps：这是**账本**（当前有哪些 ident 是 PENDING），不是不变式。
         # 新增 draft 规则必须同步这张表；断言仍是**完全相等**（fail-closed）——不许改成子集包含，
         # 否则账本会空转、新 draft 再也不逼人更新。账本更新 ≠ 批准（rules_pending_review 仍为真）。
-        self.check("PENDING ledger: 当前 PENDING 的 ident = {10,14,32,34,44,50,637,653}"
+        self.check("PENDING ledger: 当前 PENDING 的 ident = {10,14,32,34,44,50,637,653,656}"
                    "（新增 draft 规则必须同步此表；账本更新 ≠ 批准）",
-                   {10, 14, 32, 34, 44, 50, 637, 653} == {int(x.split("ident=[")[1].rstrip("]"))
+                   {10, 14, 32, 34, 44, 50, 637, 653, 656} == {int(x.split("ident=[")[1].rstrip("]"))
                                                      for x in (rs.get("pending_review") or [])
                                                      if "ident=[" in x},
                    rs.get("pending_review"))
