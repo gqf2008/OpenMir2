@@ -4,6 +4,8 @@
 > **本单不构成任何 R 卡的「已验」**：所有 R 卡在真机批次跑完、按各自验收判据判定并回填签名证据前，保持 `in-progress`（AGENTS.md「判据分级」）。
 > 写集：本文件。未改 `tools/window/**`、未改生产代码、未改任何卡状态、未起栈、未占端口、未跑 cargo。
 
+> **滚动现值（run6，2026-10-28 08:40–08:43）**：最近窗口 head=`df6e404c2de573c256d2b6e510e0bbc2b4e6f4f4`，Rust binary sha256=`e112ba2e2800ebc43279f8af4c61b18aee809f3bbdae6e0bc872a0e5552cfa1a`，单场景 `equip_struck_save` 结果见 `docs/window-run6-20261028.md`（UNDECIDABLE，不是 PASS）。本文 §0.1 的 `d470d7bd1` / 142 suites 等是首版历史读数，**不得当现值**。过期条件：production Rust 提交、rebuild 后 `binary_stamp` 或 head 变化、Envir/场景/rules 变更、再次开窗——任一发生时先重取现值并覆盖本段；run6 的单场景结果不得外推到本单其它组。
+
 ## 0. 使用前提（开窗当天先读）
 
 ### 0.1 现值与「旧读数不得当现值」
