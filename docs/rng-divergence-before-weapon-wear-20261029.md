@@ -93,16 +93,41 @@ index 不是稳定契约。
 `tools/window/equip_struck_dura_triage.py` 已扩展（仍走既有注册项）：
 `--root <run> --json ...` 的 `rng_alignment` 现在输出：
 
-- `seed_probe_equal`；
+- `seed_probe` / `seed_probe_equal`（两侧 probe 行都必须存在、非空且 token 全等才为 true）；
 - `first_value_divergence`（含两侧 site/max/result）；
 - `player_ctor_draw`（C# 第5 / Rust 第53600）；
-- 攻击局部 A→B→Success 的 shape、值、夹层站点计数；
-- `classification = ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED`。
+- `attack_windows_total`：两侧各自唯一的 `atk_power_a` 起点数；缺失或 ≠1 即
+  `UNDECIDABLE_ATTACK_WINDOW`，不静默取第一个窗口；
+- `attack_draw_counts`：全流每个攻击族 canonical 的抽数（run9 两侧 A/B/C 各恰 1）；
+- `attack_local`：**shape = A→首个 Success 之间全部攻击族 canonical 的有序序列（含重复）**、
+  `attack_counts`、`maxes`、`trailing_success_after_window`（首个 Success 之后同一次攻击的
+  Success 抽数，毒门/多抽 C 的判别面）与夹层站点计数；
+- `classification`：`ATTACK_LOCAL_SHAPE_EQUAL_GLOBAL_STREAM_INTERLEAVED` /
+  `ATTACK_CALL_SHAPE_DIVERGENCE` / `ATTACK_CALL_ARG_DIVERGENCE` / `UNDECIDABLE_ATTACK_WINDOW`。
 
-`--check` 扩到 **13/13**：合成两侧同形不同夹层 ⇒ shape equal；缺 `atk_power_b` ⇒
-`UNDECIDABLE_ATTACK_WINDOW`（不误报）；SEED_PROBE 不同 ⇒ 显式 false。原 Dura/RNG 账本
-负例保留。真实 run9 输出：
-`E:/tmp/dev-2/rngdiv-run9-analysis-fixed.json`。
+> 2026-10-29 返工（reviewer-20 F1–F5）：旧实现先搜到一个 A、一个 B、一个 C 再拼固定三元组，
+> 所以 `ATTACK_CALL_SHAPE_DIVERGENCE` 不可达——一侧多抽一次 B/C 仍报 EQUAL。现在 shape 是
+> 有序序列（含重复），多/少抽会直接改变 shape；首个 Success 之后的 Success 单列比较；
+> 起点数、全流攻击计数、SEED_PROBE 是否存在与 token 是否全等也都进入判据。
+
+`--check` 扩到 **22/22**。新增/改造的常驻牙（每条都做过“删掉即 FAIL”的变异复验）：
+
+| 牙 | 断言 |
+|---|---|
+| 缺 B（少抽） | `[A,C]` vs `[A,B,C]` ⇒ `ATTACK_CALL_SHAPE_DIVERGENCE` |
+| 多抽 B | `[A,B,B,C]` vs `[A,B,C]` ⇒ `ATTACK_CALL_SHAPE_DIVERGENCE`（旧实现报 EQUAL） |
+| 多抽 C | 首个 Success 之后仍有 Success ⇒ `trailing_success_after_window` 1 vs 0 ⇒ DIVERGENCE |
+| 缺终点 | 只有 A/B ⇒ `UNDECIDABLE_ATTACK_WINDOW` 且 reason 点名 `attack_success` |
+| 起点不唯一 | 两个 A ⇒ UNDECIDABLE + `attack_windows_total={csharp:1,rust:2}` |
+| 两套 ctor 站点 | 合成件里 C#/Rust 构造抽各一行 ⇒ `player_ctor_draw.index` = 1 / 2 |
+| 无 probe 行 | 两侧都缺 ⇒ `seed_probe_equal=false`（`None==None` 不得为真） |
+| 只有字样 | 头行只是出现 `SEED_PROBE` 字样、无以它开头的行 ⇒ 账本不合格 |
+| analyze 接线 | 合成 root 两侧合法账本 ⇒ `rng_alignment` 真挂上；一侧坏头 ⇒ UNDECIDABLE 带 reason |
+
+原 Dura/RNG 账本负例（无攻击、同值、run6 形态、快照不一致、重复 642、比较器非恒等、
+账本缺失/坏头、首差 index、夹层计数、SEED_PROBE 不同）全部保留。真实 run9 输出：
+`E:/tmp/dev-2/rngdiv-run9-analysis-v2.json`（`status=DIAGNOSED`，classification 同下，
+`attack_windows_total=1/1`，`attack_draw_counts` 两侧 `atk_power_a/b/attack_success` 各 1）。
 
 ## A4：R 窗口收口
 
