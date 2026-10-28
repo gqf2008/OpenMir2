@@ -59,18 +59,23 @@ def _draft_of(value):
     return tail
 
 
-def approved_ok(value):
-    """approved_by 是否已是正式批准格式（2026-10-25 全量裁定或 2026-10-29 ident14 追加）。"""
+def approved_ok(value, ident=None):
+    """approved_by 是否是该 ident 的正式批准格式（按 ident 绑定决策模板）。
+
+    ident 14 只接受 2026-10-29 追加裁决；其它条目只接受 2026-10-25 全量裁定。
+    不按 ident 共用两套模板会把批准谓词放宽成可借用的软化通道。
+    """
     s = str(value or "")
     if _is_pending(s) or not s or "draft:" not in s or not _draft_of(s):
         return False
-    return ((("coordinator review 2026-10-25" in s)
-             and (("decision=%s" % DECISION_OID) in s))
-            or (("coordinator review 2026-10-29" in s)
-                and (("decision=%s" % DECISION_OID_14) in s)))
+    old_ok = (("coordinator review 2026-10-25" in s)
+              and (("decision=%s" % DECISION_OID) in s))
+    new_ok = (("coordinator review 2026-10-29" in s)
+              and (("decision=%s" % DECISION_OID_14) in s))
+    return new_ok if ident == 14 else old_ok
 
 
-def _validate_entry(entry, where, keep_pending):
+def _validate_entry(entry, where, keep_pending, ident=None):
     """返回 (ok, action, message)。action ∈ {flip, ok, keep, error}。"""
     if not isinstance(entry, dict):
         return False, "error", "%s: 条目必须是对象" % where
@@ -91,7 +96,7 @@ def _validate_entry(entry, where, keep_pending):
         return False, "error", ("%s: reason 非空且长度须 >= %d 字符（实际 %r）"
                                 % (where, MIN_REASON_LEN,
                                    len(reason.strip()) if isinstance(reason, str) else reason))
-    if approved_ok(ab):
+    if approved_ok(ab, ident):
         return True, "ok", "%s: 已是正式批准（草稿人 %r）" % (where, _draft_of(ab))
     if not _is_pending(ab):
         return False, "error", ("%s: approved_by 既不是 PENDING 也不是本裁定格式（%r）"
@@ -120,7 +125,7 @@ def check_rules(rules):
     ok = True
     for ns, ident, idx, entry, keep in iter_entries(rules):
         where = "%s[%s]" % (ns, ident if ident is not None else idx)
-        good, action, msg = _validate_entry(entry, where, keep)
+        good, action, msg = _validate_entry(entry, where, keep, ident)
         rows.append({"where": where, "action": action, "message": msg})
         if not good:
             ok = False
@@ -233,6 +238,13 @@ def selftest():
     ok7, rows7, _ = check_rules(wrong_keep)
     chk(not ok7 and any("保留 PENDING" in r["message"] for r in rows7),
         "保留项被翻正 => 拒")
+
+    # F3：2026-10-29 的模板只能用于 ident14，贴到其它 ident => 拒。
+    wrong_14 = copy.deepcopy(new)
+    wrong_14["rules"][0]["approved_by"] = APPROVED_TMPL_14 % "worker-2"
+    ok9, rows9, _ = check_rules(wrong_14)
+    chk(not ok9 and any("既不是 PENDING" in r["message"] for r in rows9),
+        "ident14 的 10-29 模板贴到非 14 条目 => 拒")
 
     # 非 PENDING 且非本格式 => 拒（不许静默覆盖别人的批准）
     foreign = copy.deepcopy(base)

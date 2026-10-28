@@ -22,7 +22,10 @@
 
 ## 6c. 追加裁定：ident 14 **批准转正**（2026-10-29）
 
-**裁决**：owner/coordinator 选 **a) 批准转正**。decision=`81f45a499d7a25227f93bc1e933cc6f086b3b669`。
+**裁决**：owner/coordinator 选 **a) 批准转正**。decision=`81f45a499d7a25227f93bc1e933cc6f086b3b669`
+（该 oid 是 coordinator 在本卡线程签的 `status: in-progress` 条目——collab 条目 oid 是 blob，
+不是 commit；裁决原文在该条目的 `work` 字段里，不在 commit message 里，复核时按
+`walgit collab thread openmir2-ignore-rule-count-compare` 读）。
 
 **依据**：计数/形态机制已落地；run3 `dice_chain_auto`/`move_walk`、run5 `softclose_relogin`、run12
 仍以 ident-14 同形 `1/0` 被 census 显式暴露。该差异可审计，不再需要 PENDING 的整轮兜底来暴露。
@@ -41,14 +44,15 @@
 **残余风险**：形态比较是顺序无关多重集；剔帧的相对顺序差只在 census 可见。原 PENDING 解除条件中
 「R 级窗口证明不该出现的一侧不发」仍未取得，留 `openmir2-real-machine-verification-master`。
 
-**两颗证明**：
+**三颗证明**（计数/形态是两个独立失效模式，各要一颗牙；第三颗是正向放行）：
 
 1. **同形可忽略**：`selftest_impl.py` 的 `ident14 两侧各 1 帧且形态相同 => rc 0`；两侧各 1 条同形
    14 被 census 记为 `counts_equal=true / shape_equal=true`，且 `ignored` 两侧均记录 1 条。
-2. **count/shape 不等仍 UNDECIDABLE**：同套件另有“一侧多 1 帧”与“counts 相等但 param 不同”
-   两例，均要求 `rc=2 / kind=ignore_rule_mismatch`。run5 `softclose_relogin` 离线重算同样得到
-   `verdict=UNDECIDABLE`、`ignored_counts={oracle:{14:1},rust:{14:0}}`、`census14.counts_equal=false`，
-   没有被转正洗成 PASS。
+2. **counts 不等仍 UNDECIDABLE**：同套件“一侧多 1 帧”一例要求 `rc=2 / kind=ignore_rule_mismatch`。
+   run5 `softclose_relogin` 离线重算同样得到 `verdict=UNDECIDABLE`、
+   `ignored_counts={oracle:{14:1},rust:{14:0}}`、`census14.counts_equal=false`，没有被转正洗成 PASS。
+3. **counts 相等但 shape 不等仍 UNDECIDABLE**：同套件“counts 相等但 param 不同”一例要求
+   `rc=2 / kind=ignore_rule_mismatch / shape_equal=false`——单独锁住「只比总数、不比形态」的退化。
 
 ## 1. 裁定
 

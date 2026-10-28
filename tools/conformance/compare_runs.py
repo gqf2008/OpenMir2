@@ -2196,7 +2196,7 @@ def compare_main(args):
         # 2026-10-29 裁决 a：ident14 已转正，但「可忽略」仍以计数与形态全等为前提。
         # 已批准 ignore 的 mismatch 不再静默进 census，而是同样判 UNDECIDABLE。
         kind = "pending_ignore_rule" if row["pending"] else "ignore_rule_mismatch"
-        prefix = ("approved_by 仍为 PENDING" if row["pending"]
+        prefix = ("approved_by 仍为 PENDING，且本次剔除" if row["pending"]
                   else "规则已批准，但本次剔除")
         undecidable.append({
             "source": "coverage", "kind": kind, "ident": row["ident"],
