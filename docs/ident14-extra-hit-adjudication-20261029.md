@@ -46,16 +46,22 @@ C# 侧多出的 `SM_HIT(14)` 在**逐帧验证为零可观测副作用**后，�
 "oracle_extra_decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683",
 "oracle_extra_shapes": [{"shape": "318,336,4", "max": 1, "decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683"},
                         {"shape": "49,49,5", "max": 2, "decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683"},
-                        {"shape": "49,49,1", "max": 1, "decision": "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd"}]
+                        {"shape": "49,49,1", "max": 1, "decision": "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd"},
+                        {"shape": "318,332,7", "max": 1, "decision": "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41"},
+                        {"shape": "327,327,6", "max": 1, "decision": "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41"}]
 ```
 
 **Dir 族与逐形状裁决**：`(49,49)` 下已观测到 Dir=5（run21，2 条）与 Dir=1（run24，1 条），
 两者都零副作用但**分开登记**——每个 Dir 一个 `max`，且条目可自带 `decision`：
-写了 `decision` 就按它判（必须 40-hex oid），没写则继承规则级 approval。
+**键缺失、空串或非 40-hex 一律按 PENDING**——没有「继承规则级 approval」这条路。
+run27 实测的两个新形状 `318,332,7`（recog=1406845931）与 `327,327,6`（recog=190181583）
+已获 owner 裁决 `fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41`（scope 明确**覆盖 run5 同形帧**）。
+run5 的额外 14（recog=371349499, 318,332, Dir=7）与前者同形 ⇒ 裁决后 run5 转 **PASS**；
+run27 因**另有 10 条帧差**仍 UNDECIDABLE（形状裁决不越过「帧面其它差异为 0」这条闸）。
 **每个形状必须自带 `decision`**（reviewer-21 F1）：键**缺失**与空串/非法 oid 一视同仁按 PENDING，
 **不允许继承规则级批准**——否则删掉一个 `decision` 键就能让新形状蹭旧批准。`49,49,1` 已由 owner 单独裁决
 （comment `f0b5734e0d67718618473bc2fb54e8d6f8ea58dd`，APPROVED，仅该形状、仅 oracle 侧），
-放行记录的 `approved_by` 会写**该形状自己的 oid**（继承的写规则级 oid，混合时并列）。
+放行记录的 `approved_by` 只写**各形状自己的裁决 oid**（多形状时并列去重）。
 
 - `shape` = `param,tag,series`（坐标 + 朝向）；`max` = 该形状允许的 oracle 额外帧**上界**
   （reviewer-20 R20-X2：同形状不能无界放行；上限取 A1 证据里实际出现过的条数）。
@@ -165,7 +171,7 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 
 | 运行 | 判定 | 说明 |
 |---|---|---|
-| run5 softclose_relogin | **UNDECIDABLE**（rc 2） | 额外帧形状 `318,332,7` 不在白名单 ⇒ 保持原判 |
+| run5 softclose_relogin | **PASS**（rc 0） | `318,332,7` 经 `fb0ea7a9…` 裁决 ⇒ `oracle_extra_hits` 1 条 |
 | run12 softclose_relogin | **PASS**（rc 0） | `oracle_extra_hits` 1 条，`approved_by=7c9f9525…`，`verified={compared,0,0,0}` |
 | run16 login_only | PASS | 无 14 帧 |
 | run17 move_walk | PASS | 无 14 帧 |
@@ -173,7 +179,7 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
 | run23 gamepoint_exchange | PASS | 无 14 帧（未触发白名单） |
 | run24 gamepoint_exchange | **PASS**（rc 0） | Dir=1 形状经 `f0b5734e…` 裁决 ⇒ `oracle_extra_hits` 1 条，`approved_by` 为该 oid |
 
-⇒ 裁决条目（`7c9f9525…`）落地后，只有**A1 证据覆盖的两个形状**放行；run5 等未登记形状仍 UNDECIDABLE，
+⇒ 裁决条目（`7c9f9525…` / `f0b5734e…` / `fb0ea7a9…`）落地后，只有**证据覆盖的五个形状**放行；未登记形状仍 UNDECIDABLE，
 仓库里其它窗口运行（run3/run4/run5-upgrade）同样不放行。
 
 仓库里其它窗口运行（run3 castle/dice/move_walk、run4 butch、run5 upgrade_retrieve 等）的 14 形状
@@ -185,6 +191,8 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
   同场景多跑出第 3 条，都需要按同样证据逐个登记（不会自动放行）。
 - **只证明「这几条额外帧零副作用」**：不能推出「所有 C# 额外 14 都零副作用」。确定性支（城堡商人
   `FixedHideMode` 解除补发，`Merchant.cs:152-157`）与攻击命中仍走原路径，没有被本裁决覆盖。
+- **run27 形状已裁决**：`fb0ea7a95…`（318,332,7 / 327,327,6，max=1，覆盖 run5 同形帧）；
+  run27 的 10 条帧差仍需单独处理，不在本裁决范围内。
 - **Dir=1 已裁决**：`f0b5734e…`（APPROVED，scope=(49,49,1) max=1、仅 oracle 侧）。新 Dir 仍需按
   同样证据 + 单独裁决登记，未裁决的 Dir 只登记候选。
 - **裁决 oid 未与本工具交叉核对（R20-DIR3）**：规则级与逐形状 `decision` 都只校验「40-hex 的
@@ -196,3 +204,63 @@ PENDING 期间报告 `rules.rules_pending_review=true`，`rules.pending_review` 
   复跑至少一条场景并把证据入卡。
 - 父卡的真机项（ident14「不该出现的一侧不发」）仍在 `openmir2-real-machine-verification-master`
   （`fdc4bbb27`）。
+
+## 8. 有界动态规则：`oracle_extra_policy="per_actor_once"`（**owner 已拒绝，不启用**）
+
+run27 再次证明「枚举精确形状」不可扩展（本次额外形状 `318,332,7`、`327,327,6` 都不在白名单）。
+本节记录尝试过又**被拒绝**的替代方案，留作证据：它放行面过宽，仓库规则**不会**声明 policy。
+（run27 的精确形状改为按 §3 的候选模型逐个登记。）
+
+### 8.1 判据（全部满足才成为候选）
+
+1. 规则声明 `oracle_extra_policy="per_actor_once"`，且 `oracle_extra_policy_decision`
+   是合法 40-hex oid（否则 PENDING，只登记候选）；
+2. 额外 `SM_HIT` 全在 **oracle 侧**，且 rust 侧该 ident **没有任何帧**（Rust 多发不受理）；
+3. 每条额外帧 **body 为空**；
+4. 每个 `recog` 的额外帧数 ≤ `oracle_extra_policy_max_per_actor`（缺省 1，必须整数 ≥1，
+   规则必须显式写；**run21 的真实形态是同一 recog 2 条 ⇒ 证据要求上界 2**）；
+5. 该 `recog` 在本侧 ident10 里**存在一条 param/tag 完全相同的走位帧**（坐标自洽）；
+（原第 6 条「series 低 3 位是合法 Dir」恒真、不构成判据，已删除——reviewer-21 F3。）
+
+放行仍要叠加原有三闸：帧面其它差异为 0、两侧库快照 `state=compared` 且无 diffs、
+库无 undecidable。放行记录 `approved_by` 写 policy 的裁决 oid，并登记
+`frames.oracle_extra_hits`（含每 recog 计数与 `max_per_actor`）。
+
+### 8.2 牙（`compare_runs selftest`，用合成规则副本测，仓库规则不声明 policy）
+
+| 牙 | 断言 |
+|---|---|
+| 正向 | recog 对上本侧 ident10 坐标、body 空、每 actor ≤ 上界 ⇒ `rc 0` 且登记 |
+| PENDING | `oracle_extra_policy_decision=""` ⇒ 只登记候选、`rc 2` |
+| 坐标不符 | 额外帧坐标对不上 ident10 ⇒ `rc 2` |
+| 超上界 | 同 actor 2 条 > 默认上界 1 ⇒ `rc 2`；上界写 2 时 2 条放行、3 条红（上界可配） |
+| body 非空 | ⇒ `rc 2` |
+| Rust 也有 14 | ⇒ `rc 2`（oracle 无对应帧的形态同样红） |
+| 伴随库差 | ⇒ `rc 2` |
+
+变异（逐次恢复并核 sha256）：删每 actor 上界 / 删 ident10 坐标校验 / 删 body 检查 /
+删 rust 侧检查 ⇒ 各自只打红对应那颗牙。
+
+### 8.3 为什么被拒绝：run5 也会被放行（F1）
+
+run5/softclose_relogin 的额外 14 是 `(recog=371349499, 318,332, Dir=7)`，body 空，
+同侧 ident10 恰有 `(371349499, 318,332)` 的走位帧，且该运行帧面 diffs=0、库 compared 零差。
+⇒ 在 `max_per_actor=2` + 已裁决的合成规则下，run5 **PASS / hits 1**
+（`E:/tmp/dev1-ident14/t270/pol2-run5.json`）。也就是说 policy 的放行面不是「已裁决的三个形状」，
+而是「任何 actor 坐标自洽的空体 oracle 独有 14（≤上界）」，`318,332,7` 并不在
+`7c9f9525` / `f0b5734e` 的 scope 里。owner 据此拒绝启用 policy。
+
+### 8.4 离线重算（合成 policy 规则，`max_per_actor=2` + 已裁决）
+
+| 运行 | 判定 | 说明 |
+|---|---|---|
+| run12 softclose | PASS | `oracle_extra_hits` 1 条（318,336,4 对得上 ident10） |
+| run21 gamepoint | PASS | 同 recog 2 条 ≤ 上界 2 |
+| run23 gamepoint | PASS | 无 14 |
+| run24 gamepoint | PASS | 49,49,1 对得上 ident10 |
+| run27 softclose | **UNDECIDABLE** | 两个形状均已裁决，但**帧面另有 10 条 diffs** ⇒ 被「帧面其它差异为 0」挡下（形状裁决不掩帧差） |
+| run5 softclose | **PASS（hits 1）** | 见 §8.3——这正是 policy 被拒的原因（上一版这里写「无对应坐标」，是错的） |
+
+**不启用**：仓库 `rules.json` 只有 `oracle_extra_shapes`，**不会**写 `oracle_extra_policy`。
+代码保留该分支只用于回归与文档证据；F2（空体必须同时看 `body_sha256`）与 F4（policy 分支
+单独生成 reason）已修。
