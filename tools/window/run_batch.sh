@@ -356,7 +356,7 @@ run_preflight() {
         log "PREFLIGHT FAIL private rc=$rc（见 $dir/preflight-private.log）"
         return 2
     fi
-    for prof in alt window-magic; do
+    for prof in alt window-magic window-layout; do
         log "== preflight public --profile $prof --with-dry-run"
         "$PY" -I -B "$PREFLIGHT_PUBLIC" --profile "$prof" --with-dry-run \
             >"$dir/preflight-$prof.log" 2>&1
@@ -367,7 +367,7 @@ run_preflight() {
             return 2
         fi
     done
-    log "PREFLIGHT PASS（private + alt + window-magic）"
+    log "PREFLIGHT PASS（private + alt + window-magic + window-layout）"
     return 0
 }
 
