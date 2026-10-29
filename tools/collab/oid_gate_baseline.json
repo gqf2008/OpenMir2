@@ -67,6 +67,28 @@
    "added_by": "openmir2-coordinator",
    "entry_oid": "ecb06fabe4a07f6e8c6e38f1468e431a8375201f",
    "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 oid 不再被豁免。"
+  },
+  {
+   "principal": "openmir2-reviewer-20",
+   "thread": "openmir2-rust-extra-ident14-hit",
+   "field": "body.head",
+   "value": "e8de0c9336f7b4f0a3b0c1e9c6f1a1e3a1f1a1a1",
+   "reason": "reviewer-20 2026-10-29 手写 head/parent 失误，已用 comment aa6abcff 更正并向 coordinator 重签 clean review；历史条目只登记不回写。",
+   "added_at": "2026-10-29",
+   "added_by": "openmir2-dev-1",
+   "entry_oid": "6ab59a015b47ec165a61460aa5ec760c5dad7955",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 value 不再被豁免。"
+  },
+  {
+   "principal": "openmir2-reviewer-20",
+   "thread": "openmir2-rust-extra-ident14-hit",
+   "field": "parent",
+   "value": "daa55792ad0a3e7f1c8f4a9a0e5b2b1c6f4f0e2a",
+   "reason": "reviewer-20 2026-10-29 手写 head/parent 失误，已用 comment aa6abcff 更正并向 coordinator 重签 clean review；历史条目只登记不回写。",
+   "added_at": "2026-10-29",
+   "added_by": "openmir2-dev-1",
+   "entry_oid": "6ab59a015b47ec165a61460aa5ec760c5dad7955",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 parent 不再被豁免。"
   }
  ]
 }
