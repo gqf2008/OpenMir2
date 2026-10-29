@@ -89,6 +89,17 @@
    "added_by": "openmir2-dev-1",
    "entry_oid": "6ab59a015b47ec165a61460aa5ec760c5dad7955",
    "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 parent 不再被豁免。"
+  },
+  {
+   "principal": "openmir2-reviewer-21",
+   "thread": "openmir2-rm-self-guard-all-idents",
+   "field": "body.base",
+   "value": "8bca7de1c0da17a04857048469141297c6a60763",
+   "reason": "reviewer-21 2026-10-29 手写 base 尾段失误（真实 master=8bca7de1c16c50858…，head=82c976f8… 已核、approve 结论有效）；历史条目只登记不回写。",
+   "added_at": "2026-10-29",
+   "added_by": "openmir2-dev-1",
+   "entry_oid": "fa6d3e298c7e99badaa676ce3182a25ab8478c7e",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 base 不再被豁免。"
   }
  ]
 }
