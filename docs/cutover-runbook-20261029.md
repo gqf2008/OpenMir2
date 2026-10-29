@@ -17,8 +17,8 @@
   2. **客户端（Delphi mirbeta）一行不改**；对外地址/端口/服务器名（`热血传奇`）不变。
   3. **不手改任何 Envir / Castle 内容**；`E:/MirServer/M2GameSvr/Castle/List.txt`（内容 `0,1`，
      sha256 `9b38d284…`）及其余数据文件保持字节原样（比对看内容不比 mtime，原因见下文 §3.S8）。
-  4. 不改配置文件：六角色 conf 两栈共用（见 §2/§3.S6），切换只换进程，不改文件；唯一例外是
-     §2.G0 阻塞项的 owner 裁决处置（那是**开窗前**的部署准备，不是窗口动作）。
+  4. 不改配置文件：六角色 conf 两栈共用（见 §2/§3.S6），切换只换进程，不改文件。（§2.G0
+     曾预置的例外路径——预置生产版 conf——owner 已选选项 A 未触发，存档备查。）
   5. 窗口内不跑 `cargo`（构建会干扰在跑栈；二进制必须**窗口前**备好并核验，见 §2.G1）。
 - 涉及脚本与工具（本文引用的全部为仓内已验证入口）：
   `tools/m2-acceptance/start_mir2_server.ps1`、`tools/m2-acceptance/stop_mir2_server.ps1`、
@@ -43,23 +43,29 @@
 
 ## 2. 前置清单（G0–G6；执行窗口前逐项勾掉，缺一不开窗）
 
-### G0 阻塞项：生产根六角色 conf 与启动脚本映射漂移（裁决前**切换不可执行**）
+### G0 阻塞项：生产根六角色 conf 与启动脚本映射漂移（**已解除** 2026-10-29，选项 A 合并 `285a3540`）
+
+> **已解除（2026-10-29：`start_mir2_server.ps1` conf 解析改候选列表，merge `285a3540`
+> （approve reviewer-22 `99b0fe9f`），生产/测试布局均解析；ambiguous WARN 为根漂移信号）**。
+> 解除判据（G1② 的 WhatIf 打出三行 `SERVER_EXE*` 且无「RED: 缺配置」）已由合并态满足：
+> 生产根解析 `DBServer\dbsvr.conf` + `LoginSrv\config.conf`，测试根（rust-root）解析
+> `DBSrv\dbsvr.conf` + `LoginSrv\logsrv.conf`（login-srv 测试值优先，防生产族值翻转；
+> 多候选并存打 WARN，见合并卡 `openmir2-g0-conf-map-option-a`）。以下为处置存档。
 
 - **实况**（2026-10-29 预检实证，本线程预检 comment `fec9c461`；reviewer-23 R23C-F1 同判）：
   `start_mir2_server.ps1` 的角色→conf 映射是固定的 `DBSrv\dbsvr.conf`、`LoginSrv\logsrv.conf`，
   而 `E:/MirServer` 实际布局是 **`DBServer\dbsvr.conf`**（无 `DBSrv` 目录）与
   **`LoginSrv\config.conf`**（无 `logsrv.conf`）；另四角色 conf
   （`M2GameSvr\Server.conf`、`LoginGate\config.conf`、`SelGate\config.conf`、`RunGate\config.conf`）都在。
-  脚本对六份 conf 的存在性检查先于一切输出且缺一 exit 2 ⇒ `-Root E:/MirServer` 下
-  **G1② 与 §3.S4 现在必 RED**（`RED: 缺配置 db-srv/login-srv`），`SERVER_EXE_SHA256` 行不可达。
-- **处置（owner 裁决，二选一；裁决并落地前 G1②/§3.S4/§3.S6 不得执行）**：
-  1. **对齐脚本**：另开卡把 `start_mir2_server.ps1` 固定表改成生产实况路径
-     （`DBServer\dbsvr.conf`、`LoginSrv\config.conf`）——不新增部署文件；
-  2. **补齐部署根**：在 `E:/MirServer` 预置 `DBSrv\dbsvr.conf`、`LoginSrv\logsrv.conf` 两份生产版
-     conf（端口 6000/5100/5700、5500/5600；ConnctionString 指生产库）——这会在生产根**新增
-     配置文件**，触碰红线 §0.4 的边界，**必须 owner 认可后才可做**（且属开窗前的部署准备，
-     不是窗口动作）。
-- 解除判据：`G1②` 的 WhatIf 能打出三行 `SERVER_EXE*` 且无「RED: 缺配置」。
+  脚本对六份 conf 的存在性检查先于一切输出且缺一 exit 2 ⇒ 当日 `-Root E:/MirServer` 下
+  **G1② 与 §3.S4 必 RED**（`RED: 缺配置 db-srv/login-srv`），`SERVER_EXE_SHA256` 行不可达。
+- **处置（2026-10-29 owner 选定**选项 A**，即上段合并；选项 B 存档备查）**：
+  1. **对齐脚本（已采用）**：`start_mir2_server.ps1` conf 解析改候选列表
+     （生产实况路径在前、旧/测试布局兜底；login-srv 以测试系名 `logsrv.conf` 优先防生产族值
+     翻转，多候选并存打 ambiguous WARN）——不新增部署文件；
+  2. **补齐部署根（未采用，存档）**：在 `E:/MirServer` 预置 `DBSrv\dbsvr.conf`、
+     `LoginSrv\logsrv.conf` 两份生产版 conf（端口 6000/5100/5700、5500/5600；ConnctionString
+     指生产库）——会在生产根**新增配置文件**，触碰红线 §0.4 的边界。
 
 ### G1 交付二进制核验（**以 build stamp 的 head+sha256 为准**）
 
@@ -76,7 +82,7 @@
   | stamp.built_at | （待填） | `2026-10-29T12:41:49+08` |
 
   三道核验（在**将要起栈的那棵树**里跑；exe 解析只认脚本的 `$PSScriptRoot`；
-  **本步依赖 G0 阻塞项解除**）：
+  G0 已解除——2026-10-29 选项 A 合并 `285a3540`，conf 候选解析生产/测试布局均可用）：
 
 ```sh
 # ① 裸 sha（Git Bash）
@@ -233,7 +239,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 - 角色与端口（脚本内固定表，与现网一致）：db-srv 6000/5100/5700 → login-srv 5500/5600 →
   game-svr 5000 → login-gate 7000 → sel-gate 7100 → game-gate 7200/7201/7202；
   启动顺序如上，任一角色未就绪 ⇒ 脚本自动**反向回滚已起角色**并 RED（fail-closed，不静默）。
-  **本步依赖 §2.G0 阻塞项解除**（conf 映射对齐/补齐，并已由 G1② 的 WhatIf 无「RED: 缺配置」验证）。
+  **G0 已解除（2026-10-29，选项 A 合并 `285a3540`）**：conf 映射已按生产/测试双布局候选解析；
+  起栈前仍以 G1② 的 WhatIf 无「RED: 缺配置」为验证点。
 - conf 全部沿用 `-Root` 下现网文件（两栈共用，见 §3.S6 核对点）；库名由各 conf 的
   ConnctionString 决定，本脚本不改写任何配置。注意两个面：game-svr 走 Server.conf 的
   **mir2_data**，db-srv 走 dbsvr.conf 的 **mir2_db**（见 §3.S6 表）。
@@ -260,8 +267,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1
 | `E:/MirServer/LoginSrv/AddrTable.txt` | 服务器名 `热血传奇` + `…:7100` | 客户端选服路由；切栈不改，改了等于把玩家指去别处 |
 | `E:/MirServer/RunGate/config.conf` | 7200/7201/7202 | game-gate 对客户端端口 |
 | `E:/MirServer/M2GameSvr/Server.conf` | 端口 5000；`CastleDir=Castle`、`CastleFile=Castle/List.txt`；ConnctionString → **mir2_data**（GameSvr 直连存档面；与 dbsvr.conf 的 mir2_db 是两个面，库名核对以实文件为准——**勿把文件「改对」成 mir2_db**，见 §5 风险 7） | game-svr 主配置（C# 消费点 `src/GameSrv/DB/MySqlDB.cs`：`new MySqlConnection(Config.ConnctionString)`）；Castle 路径决定 §S8 的 600s 重写落点 |
-| `E:/MirServer/DBServer/dbsvr.conf`（注意目录名是 **DBServer**；启动脚本映射期望 `DBSrv\dbsvr.conf`——差异即 §2.G0 阻塞项） | 6000/5100/5700；ConnctionString → **mir2_db** | Rust db-srv 的 6000 取档/存档面 + 5100 选角面；分片族 `mir2_dbsrv6k_mkt_*` 由该面按需落库 |
-| `E:/MirServer/LoginSrv/config.conf`（脚本映射期望 `LoginSrv\logsrv.conf`——差异归 §2.G0） | 5500/5600 | login-srv 选服/账号面配置 |
+| `E:/MirServer/DBServer/dbsvr.conf`（目录名是 **DBServer**；启动脚本现按候选列表解析 `DBServer\dbsvr.conf`/`DBSrv\dbsvr.conf`，G0 已解除，merge `285a3540`） | 6000/5100/5700；ConnctionString → **mir2_db** | Rust db-srv 的 6000 取档/存档面 + 5100 选角面；分片族 `mir2_dbsrv6k_mkt_*` 由该面按需落库 |
+| `E:/MirServer/LoginSrv/config.conf`（候选解析含 `LoginSrv\logsrv.conf`/`LoginSrv\config.conf`；生产根无 logsrv.conf ⇒ 解析到本文件，G0 已解除，merge `285a3540`） | 5500/5600 | login-srv 选服/账号面配置 |
 
 ### S7 冒烟（probe 单跑；离线判读，不连对拍库）
 
