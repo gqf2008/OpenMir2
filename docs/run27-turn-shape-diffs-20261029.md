@@ -36,22 +36,24 @@ Rust frames `1cd059ef…`）。
 | — | 10 | `random_pair_shape` rust `(327,327,light2,gamegate)` | Rust 的无名 idle TURN 落点/phase |
 
 **T-270 无关（独立重算）**：把仓规则里的 ident14 白名单清空后重算。**权威口径 = 源文件 sha +
-下面的生成命令**；副本 sha 只在**按本命令（LF + 尾换行）**生成时成立：
+下面的生成命令 + 重跑实取 sha**。
 
-- 源：`tools/conformance/rules.json` @ `4d1197edd`，sha256 `c08bf8111ce9c0658865133eb343464d2b4d3c232c651ede7d8f20a3cb32ec74`；
-- 按下方命令生成的结果 sha256 **`e5d6f7b3c6596518e07623d0b262dd6ef1d92324fbc7244bef3b2006a5c2f910`**
-  （75963 B、LF、尾换行）；
-- 等价形式：用 `json.dump(..., indent=2, sort_keys=True)` 直接写**文本模式**文件（无 `newline="
-"`、
-  无尾换行）在 Windows 上会得到 CRLF 版本 `ab7563c9c4739b6aa06955e656fe8017e4683972c6a72f325d5543a577e03393`
-  （76645 B、683 个 CRLF）——两份**逐规则 JSON 完全相等**，重算都得同一组 10 条差异
-  （report `c1ed6c46…` / `3459d9bc…`，ten-tuple 逐条相同）。本卡提交时 `E:/tmp` 里就是后者；
-  它不是「被谁重写」，而是同一个脚本换了换行约定（reviewer-20 R9-F1 已用字节级复现。
-  **重跑时按本节命令生成、以实取 sha 为准**。
+- 源：`tools/conformance/rules.json` @ `141d1e77f`（已 merge master），sha256
+  `f75ca3f65f60c730ca7bf9daf7577c828c77273db29800980982f2c494d46c91`；
+- **Windows 文本模式**（`json.dump` 直接写文本文件：CRLF、无尾换行）⇒
+  `ab7563c9c4739b6aa06955e656fe8017e4683972c6a72f325d5543a577e03393`（76645 B、683 个 CRLF）
+  ——reviewer-20 复核时 `E:/tmp` 里的形态；
+- **规范内容哈希**（LF + 尾换行，见下方第二段命令）⇒
+  `e5d6f7b3c6596518e07623d0b262dd6ef1d92324fbc7244bef3b2006a5c2f910`（75963 B、0 CRLF）
+  ——本卡当前磁盘副本的形态；
+- 两种形态**逐规则 JSON 完全相等**，重算都得同一组 10 条差异（ten-tuple 逐条相同）。
+  记录 sha 只作锚，**重跑按本节命令生成、以实取 sha 为准**。
 - 语义说明：命令除清空 `oracle_extra_shapes`/`oracle_extra_status` 外，还 **pop 了
   `oracle_extra_evidence`/`oracle_extra_note`** 两个登记元数据字段——不影响比较结果，但会改变 sha。
+- 合并 master（`141d1e77f`）只改到 rules.json 的 ident14 登记元数据/decision：清空副本的字节与
+  sha **不变**；仓规则侧 report sha 变成 `0eee58ce…`（运行标识），**ten-tuple 仍是同一组 10 条**。
 
-生成方式（与上表 sha 一一对应）：
+生成方式（Windows 文本模式 → `ab7563c9…`）：
 
 ```python
 import json
@@ -62,31 +64,36 @@ for rule in r["rules"]:
         rule["oracle_extra_status"] = "PENDING"
         rule.pop("oracle_extra_evidence", None)   # 登记元数据；不影响比较，但改变 sha
         rule.pop("oracle_extra_note", None)
+with open("E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json", "w", encoding="utf-8") as f:
+    json.dump(r, f, ensure_ascii=False, indent=2, sort_keys=True)   # 无尾换行；Windows 默认 CRLF
+```
+
+规范形式（LF + 尾换行 → `e5d6f7b3…`）：把上面最后两行换成
+
+```python
 with open("E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json", "w",
-          encoding="utf-8", newline="
-") as f:
-    f.write(json.dumps(r, ensure_ascii=False, indent=2, sort_keys=True) + "
-")
+          encoding="utf-8", newline="\n") as f:
+    f.write(json.dumps(r, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
 ```
 
 重跑命令与结果：
 
 ```sh
-# 仓规则
+# 仓规则（master 141d1e77f 上）
 python -I -B tools/conformance/compare_runs.py \
   --oracle E:/tmp/window/run27/softclose_relogin/csharp \
   --rust   E:/tmp/window/run27/softclose_relogin/rust \
-  --out E:/tmp/dev-2/run27-repo-rules.json
+  --out E:/tmp/dev-2/run27-repo-rules-merged.json
 # T-270 白名单清空副本
 python -I -B tools/conformance/compare_runs.py \
   --oracle E:/tmp/window/run27/softclose_relogin/csharp \
   --rust   E:/tmp/window/run27/softclose_relogin/rust \
   --rules  E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json \
-  --out    E:/tmp/dev-2/run27-nowhitelist-own.json
+  --out    E:/tmp/dev-2/run27-nowhitelist-merged.json
 ```
 
 两次都是 `UNDECIDABLE / rc=2`、**10 条差异**，`kind/ident/frame_index/field/oracle/rust` 十元组逐条相同
-（report sha256 `d51e2e2f…` vs `c1ed6c46…`）。⇒ 清空白名单不会消除这组差异。
+（report sha256 `0eee58ce…` vs `c1ed6c46…`，只作运行标识）。⇒ 清空白名单不会消除这组差异。
 
 > `report.json` 的 sha 依赖 report 内的 `inputs`/`options`/路径，**跨环境/跨目录不可复现**，
 > 只作「本次运行标识」；稳定判据是 diff 的 **ten-tuple**（reviewer-20 R9-N2）。
