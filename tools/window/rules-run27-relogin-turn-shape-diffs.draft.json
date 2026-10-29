@@ -50,10 +50,16 @@
       "nowhitelist_rules": "E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json",
       "diff_set_identical": true,
       "diff_set": "kind/ident/frame_index/field/oracle/rust 十元组逐条相同（见 diff_table）",
-      "nowhitelist_rules_sha256": "e5d6f7b3c6596518e07623d0b262dd6ef1d92324fbc7244bef3b2006a5c2f910",
-      "nowhitelist_report_sha256_own": "c1ed6c46dea8e4da7483a2f42eb86c410a536aab37592f32f391db5fa87e83df",
       "generation": "python -I - <<'PY'\nimport json\nr = json.load(open('tools/conformance/rules.json', encoding='utf-8'))\nfor rule in r['rules']:\n    if rule.get('ident') == 14:\n        rule['oracle_extra_shapes'] = []\n        rule['oracle_extra_status'] = 'PENDING'\n        rule.pop('oracle_extra_evidence', None)\n        rule.pop('oracle_extra_note', None)\njson.dump(r, open('E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)\nPY",
-      "reviewer_temp_copy_note": "reviewer-21 的临时副本 E:/tmp/window/reviewer-21-review/rules-270-nowhitelist.json 只作对照；本卡证据已改为自建副本（同一做法：仅 ident14 oracle_extra_shapes=[]、status=PENDING）。"
+      "reviewer_temp_copy_note": "reviewer-21 的临时副本 E:/tmp/window/reviewer-21-review/rules-270-nowhitelist.json 只作对照；本卡证据已改为自建副本（同一做法：仅 ident14 oracle_extra_shapes=[]、status=PENDING）。",
+      "authority": "权威口径 = 源 rules.json 的 sha + 生成命令；E:/tmp 下副本可变，重跑时以实际 sha 为准。",
+      "source_rules": "tools/conformance/rules.json @ 4d1197edd",
+      "source_rules_sha256": "c08bf8111ce9c0658865133eb343464d2b4d3c232c651ede7d8f20a3cb32ec74",
+      "deterministic_sha256": "e5d6f7b3c6596518e07623d0b262dd6ef1d92324fbc7244bef3b2006a5c2f910",
+      "on_disk_sha256_20261029_0818": "ab7563c9c4739b6aa06955e656fe8017e4683972c6a72f325d5543a577e03393",
+      "on_disk_note": "该 /tmp 副本在提交后被另一车道以不同 JSON 格式重写（缩进/键序不同，逐规则 JSON 相等）；两种副本重算都得到同一组 10 条差异。",
+      "report_sha256_deterministic_copy": "c1ed6c46dea8e4da7483a2f42eb86c410a536aab37592f32f391db5fa87e83df",
+      "report_sha256_ondisk_copy": "3459d9bc84b4f19f88d3c55fe550c36d211695ee269113c447700110734c4e1c"
     },
     "cross_run_login_order": {
       "run3": {

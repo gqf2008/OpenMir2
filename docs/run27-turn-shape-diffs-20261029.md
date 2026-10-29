@@ -35,9 +35,19 @@ Rust frames `1cd059ef…`）。
 | — | 10 | `random_pair_shape` oracle `(318,332,light2,gamegate2)` | C# 的无名 idle TURN 落点/phase |
 | — | 10 | `random_pair_shape` rust `(327,327,light2,gamegate)` | Rust 的无名 idle TURN 落点/phase |
 
-**T-270 无关（独立重算）**：自建 `E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json`
-（sha256 `e5d6f7b3…`；只把 ident14 的 `oracle_extra_shapes=[]`、`oracle_extra_status=PENDING`，
-其余同仓规则），生成方式：
+**T-270 无关（独立重算）**：把仓规则里的 ident14 白名单清空（只改
+`oracle_extra_shapes=[]`、`oracle_extra_status=PENDING`，其余逐字段不动）后重算。**权威口径 =
+源文件 sha + 下面的生成命令**（`E:/tmp` 下的副本是可变的，重跑时以实际 sha 为准）：
+
+- 源：`tools/conformance/rules.json` @ `4d1197edd`，sha256 `c08bf8111ce9c0658865133eb343464d2b4d3c232c651ede7d8f20a3cb32ec74`；
+- 按下方命令**确定性生成**的结果 sha256 `e5d6f7b3c6596518e07623d0b262dd6ef1d92324fbc7244bef3b2006a5c2f910`
+  （本卡提交时的记录值）；
+- `E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json` 在 2026-10-29 08:18 被另一车道以
+  不同 JSON 格式重写过，当前 sha256 是 `ab7563c9c4739b6aa06955e656fe8017e4683972c6a72f325d5543a577e03393`；
+  它与确定性生成版**逐规则 JSON 相等**（仅缩进/键序不同），两种副本重算得到**同一组 10 条差异**
+  （report `c1ed6c46…` vs `3459d9bc…`）。⇒ 记录 sha 只作锚，**重跑时以实际文件 sha 为准**。
+
+生成方式：
 
 ```python
 import json
