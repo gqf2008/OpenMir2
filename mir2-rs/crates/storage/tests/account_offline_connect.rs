@@ -69,3 +69,33 @@ async fn init_or_empty_loads_accounts_with_assembled_options() {
     );
     assert!(store.count() > 0, "账号缓存必须非空");
 }
+
+/// MUT-C（卡 `openmir2-login-srv-dsn-source`，第四次重切决定性实验 C）：**陈旧 config
+/// 口令陷阱钉死**——组装选项带 `pwd=123456`（config.conf 陈旧值）⇒ 本机 mysqld 必须
+/// 1045 拒绝（`using password: YES`）。该测试红 = 有人把陈旧口令又当有效凭据用了。
+#[tokio::test]
+async fn assembled_options_with_stale_config_password_denied() {
+    if !mysql_3306_listening() {
+        eprintln!("skip: 本机 3306 无监听（离线环境）");
+        return;
+    }
+    let opts = MySqlConnectOptions::new()
+        .host("127.0.0.1")
+        .port(3306)
+        .username("root")
+        .password("123456") // config.conf 陈旧口令（决定性实验 C：-p123456 ⇒ 1045 YES）
+        .database("mir2_account");
+    let pool = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect_lazy_with(opts);
+    let err = sqlx::query("SELECT Id, Account FROM account LIMIT 1")
+        .fetch_one(&pool)
+        .await
+        .expect_err("陈旧口令必须被拒（1045）");
+    let text = err.to_string();
+    assert!(
+        text.contains("1045") || text.contains("Access denied"),
+        "必须是 1045/Access denied 签名，实得：{text}"
+    );
+}

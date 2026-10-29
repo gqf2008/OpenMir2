@@ -106,20 +106,20 @@ async fn timer_loop(share: std::sync::Arc<state::Share>) {
     }
 }
 
-/// A2（卡 `openmir2-login-srv-dsn-source`，重切第三层修订）：账号库 DSN 的**权威源**。
+/// A2（卡 `openmir2-login-srv-dsn-source`，重切第三层修订 + 第四次重切决定性实验）：
+/// 账号库 DSN = **dbsvr.conf 全套凭据**、仅覆写 `database` → 账号库。
 ///
-/// `config.conf` 的 `[DataBase] ConnctionString` 在生产指向不可达的旧库机
-/// （10.10.0.199:3306 实测超时）；同部署根的 `dbsvr.conf` 是**权威本机库端点**
-/// （server=127.0.0.1，db-srv 同源）。规则：
-/// - host/port 取 dbsvr.conf 的 `ConnctionString`（权威端点）；
-/// - **user/password 沿用 config.conf**（root/空口令＝生产 MySQL 实证可用；
-///   dbsvr.conf 存储的口令对本机 root 已失效——重切窗 1045 `Access denied for
-///   user 'root'@'localhost' (using password: YES)` 实证，与 GateAddr/DSN 同为
-///   陈旧配置）；
-/// - `database` 固定账号库 `mir2_account`（account 表仅在 mir2_account——
-///   information_schema 与 winplay0 实证，mir2_db 无此表）。
+/// 决定性实验（2026-10-29，本机 mysqld 127.0.0.1:3306）：
+/// - A：`mysql -u root`（无口令）TCP ⇒ **成功**（dbsvr.conf pwd=〔空〕同判）；
+/// - C：`mysql -u root -p123456` ⇒ **1045 Access denied (using password: YES)**
+///   —— config.conf 的 `pwd=123456` 是陈旧值，「凭据沿用 config.conf」会把错口令
+///   带进运行时（v2 的缺陷）。
 ///
-/// dbsvr.conf 缺失/不可解析 ⇒ 回退 config.conf 原值（连接失败走 fail-soft，不退）。
+/// `config.conf` 的 `[DataBase] ConnctionString` 整条为陈旧配置（host 指向不可达的
+/// 10.10.0.199、pwd=123456 陈旧），**不参与**账号库连接；`database` 固定账号库
+/// `mir2_account`（account 表仅在 mir2_account——information_schema 与 winplay0
+/// 实证，mir2_db 无此表）。dbsvr.conf 缺失/不可解析 ⇒ 回退 config.conf 原值
+/// （连接失败走 fail-soft，不退）。
 fn authoritative_account_dsn(conf_path: &std::path::Path, own: LegacyDsn) -> LegacyDsn {
     let Some(root) = conf_path.parent().and_then(|p| p.parent()) else {
         return own;
@@ -151,11 +151,12 @@ fn authoritative_account_dsn(conf_path: &std::path::Path, own: LegacyDsn) -> Leg
     // 重切第三层修订：凭据沿用 config.conf（root/空口令＝生产 MySQL 实证可用）；
     // dbsvr.conf 存储的口令对本机 root 已失效（重切窗 1045 实证）。
     // database 固定账号库 mir2_account（account 表仅在 mir2_account 实证）。
+    // dbsvr.conf 全套凭据（root/空口令＝实验 A 实证）+ 仅覆写账号库名。
     LegacyDsn {
         host: dbsvr_dsn.host,
         port: dbsvr_dsn.port,
-        user: own.user,
-        password: own.password,
+        user: dbsvr_dsn.user,
+        password: dbsvr_dsn.password,
         database: "mir2_account".into(),
     }
 }
