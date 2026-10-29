@@ -105,9 +105,13 @@ async fn conn_task(server: Arc<Server>, db: Arc<Db>, sock: TcpStream, peer: Stri
         .map_or(peer.as_str(), |(h, _)| h)
         .to_string();
     if !server.share.check_server_ip(&ip) {
-        log::warn(&format!("非法服务器连接: {ip}"));
-        log::info(&format!("服务器连接: {ip}"));
-        return Ok(());
+        // 卡 `openmir2-selgate-dbsrv-handshake`（A2）：与 5100 面（server.rs `gate_conn`）
+        // 同族同修——生效白名单随运行目录而异（oracle 实际放行 127.0.0.1，证据见 server.rs
+        // 同位注释），白名单不命中仅记日志、**不断链**（6000 面 = GameSvr 取档/存档链，
+        // 秒断会让 game-srv 也进重连循环）。login-srv 同族先例 5a41e5f8d。
+        log::warn(&format!(
+            "非法服务器连接: {ip}（不在 AddrTable 白名单；按 oracle 接受，不断链）"
+        ));
     }
     log::info(&format!("服务器连接: {ip}"));
     let (mut rd, mut wr) = sock.into_split();
