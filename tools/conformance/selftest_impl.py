@@ -1025,14 +1025,18 @@ class Selftest(object):
                    and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
                    (rc, (rep or {}).get("undecidable")))
 
-        hit327dir = self.frame(14, b"", **dict(heads_o, seq=809, param=327, tag=327, series=4))
-        od327d = self.write_run("t270-o-327-dir", base270 + [hit327dir],
-                                db=_snap270("mir2_test_db_oracle"))
-        rc, rep = self.compare(od327d, rd270)
-        self.check("T-270 shape(327,327,3) 负例：同坐标不同 Dir(series=4) 未登记 => rc 2",
-                   rc == 2
-                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
-                   (rc, (rep or {}).get("undecidable")))
+        # 卡 openmir2-t270-shape-327-327-4 转正 (327,327,4) 后，原「series=4 未登记」负例
+        # 前提失效 ⇒ 旧牙挪到仍**未**登记的 Dir 族（0/1/2/5/7），逐个仍 rc 2（A3；语义变更挪旧牙）。
+        for _u270d in (0, 1, 2, 5, 7):
+            _hit327u = self.frame(14, b"", **dict(heads_o, seq=809, param=327, tag=327,
+                                                  series=_u270d))
+            _od327u = self.write_run("t270-o-327-dir%d" % _u270d, base270 + [_hit327u],
+                                     db=_snap270("mir2_test_db_oracle"))
+            rc, rep = self.compare(_od327u, rd270)
+            self.check("T-270 shape(327,327,*) 负例：同坐标未批 Dir(series=%d) 未登记 => rc 2" % _u270d,
+                       rc == 2
+                       and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                       (rc, (rep or {}).get("undecidable")))
 
         rules_327_max0 = _rules270_variant(
             "rules-270-327-max0.json",
@@ -1050,6 +1054,64 @@ class Selftest(object):
                        if e.get("shape") == "327,327,3"])
         rc, rep = self.compare(od327, rd270, ["--rules", rules_327_nodec])
         self.check("T-270 shape(327,327,3) 负例：缺 decision => rc 2（PENDING 牙）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # 卡 openmir2-t270-shape-327-327-4：run49 命中的第 7 个 Dir 变体
+        # (327,327,4) max=1（decision 811aff9f…，由脚本从卡线程回读写入 rules.json）。
+        hit327d4 = self.frame(14, b"", **dict(heads_o, seq=810, param=327, tag=327, series=4))
+        od327d4 = self.write_run("t270-o-327-d4", base270 + [hit327d4],
+                                 db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od327d4, rd270)
+        _hits327d4 = (((rep or {}).get("frames") or {}).get("oracle_extra_hits") or [])
+        self.check("T-270 shape(327,327,4)：精确登记后 rc 0 且 oracle_extra_hits=1（approved_by=811aff9f…）",
+                   rc == 0 and len(_hits327d4) == 1
+                   and "811aff9f" in str(_hits327d4[0].get("approved_by") or ""),
+                   (rc, _hits327d4, (rep or {}).get("undecidable")))
+
+        od327d4x2 = self.write_run("t270-o-327-d4-2", base270 + [hit327d4, hit327d4],
+                                   db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od327d4x2, rd270)
+        self.check("T-270 shape(327,327,4) 负例：同形状 2 条 > max=1 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        hit327d4body = self.frame(14, b"x", **dict(heads_o, seq=811, param=327, tag=327, series=4))
+        od327d4b = self.write_run("t270-o-327-d4-body", base270 + [hit327d4body],
+                                  db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od327d4b, rd270)
+        self.check("T-270 shape(327,327,4) 负例：body 非空 => rc 2（有载荷不放行）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        # A1：decision 缺失/空串/非 hex 三种形态都按 PENDING（fail-closed），逐个仍 rc 2。
+        def _d4dec270(_v):
+            def _m(r):
+                for e in r["oracle_extra_shapes"]:
+                    if e.get("shape") == "327,327,4":
+                        if _v is None:
+                            e.pop("decision", None)
+                        else:
+                            e["decision"] = _v
+            return _m
+        for _dv270, _dw270 in ((None, "缺失"), ("", "空串"), ("zzz-not-hex", "非 hex")):
+            _rules_d4dec = _rules270_variant(
+                "rules-270-327-d4-dec-%s.json" % _dw270, _d4dec270(_dv270))
+            rc, rep = self.compare(od327d4, rd270, ["--rules", _rules_d4dec])
+            self.check("T-270 shape(327,327,4) 负例：decision %s => rc 2（A1 PENDING 牙）" % _dw270,
+                       rc == 2
+                       and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                       (rc, (rep or {}).get("undecidable")))
+
+        rules_327d4_max0 = _rules270_variant(
+            "rules-270-327-d4-max0.json",
+            lambda r: [e.__setitem__("max", 0) for e in r["oracle_extra_shapes"]
+                       if e.get("shape") == "327,327,4"])
+        rc, rep = self.compare(od327d4, rd270, ["--rules", rules_327d4_max0])
+        self.check("T-270 shape(327,327,4) 负例：规则副本 max=0 => rc 2",
                    rc == 2
                    and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
                    (rc, (rep or {}).get("undecidable")))
