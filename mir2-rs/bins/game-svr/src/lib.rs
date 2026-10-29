@@ -20127,8 +20127,9 @@ fn drain_monster_ref_msgs(
         // 收件人用**发帧时刻**的快照（`MonsterRefMsg::recipients`），不在此刻重算：
         // oracle `SendRefMsg` 在调用时就已投递；`StickMonster.ComeDown` 先发 `RM_DIGDOWN`
         // 再置 `FixedHideMode=true` ⇒ 排水时按 `hear_targets_at` 重算会因 sender 已隐藏而丢帧（复验 MB-1 F1）。
-        // `RM_HIT` 的**自身守卫**：oracle `PlayObject.Message.cs:1436`
-        // `if (processMsg.ActorId != ActorId)` —— 攻击者自己不收自己的受击帧。
+        // `RM_HIT` 的**自身守卫**：oracle `PlayObject.Message.cs:1434`
+        // `if (processMsg.ActorId != ActorId)` —— 攻击者自己不收自己的受击帧
+        // （:1436 是 `MakeMessage`，不是守卫）。
         // 收件人快照按 oracle 格扫**包含 sender 自己**（见 `NO_SENDER_EXCLUSION`），
         // 因此必须在这里按接收者 id 去掉「自己发给自己」的那一份
         // （卡 `openmir2-rust-extra-ident14-hit`：run32 玩家攻击后收到自己的 14）。
@@ -65924,7 +65925,8 @@ SendRefMsgRange=15
 
     /// 卡 `openmir2-rust-extra-ident14-hit`（run32）：`RM_HIT` 的**自身守卫**。
     ///
-    /// oracle `PlayObject.Message.cs:1433-1440`：`if (processMsg.ActorId != ActorId)` ⇒
+    /// oracle `PlayObject.Message.cs:1433-1439`（守卫在 **:1434**
+    /// `if (processMsg.ActorId != ActorId)`；`:1436` 是 `MakeMessage`）⇒
     /// 攻击者自己**不收**自己的受击帧；而 `SendRefMsg` 的格扫**包含 sender 自己**
     /// （`NO_SENDER_EXCLUSION`）⇒ 下行必须按接收者 id 去掉这一份。
     ///
@@ -66001,6 +66003,49 @@ SendRefMsgRange=15
             }
         }
         assert_eq!(n_monster, 1, "怪物发的 SM_HIT 必须照常投递");
+
+        // ③ 多收件人：recipients=[自己, 另一玩家] ⇒ 自己 0 帧、另一玩家 1 帧（防误杀）。
+        let mut p2 = Entity::new(0, "P2".to_string(), 12, 10);
+        p2.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid2 = world.add_entity(p2);
+        world.tick();
+        let online2: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "P".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: pid,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "P2".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: pid2,
+            },
+        ];
+        world
+            .pending_monster_ref_msgs
+            .push(hit(pid, vec![pid, pid2]));
+        drain_monster_ref_msgs(&mut world, &displays, &online2, &gates, &pet_cfg);
+        let mut to_self = 0usize;
+        let mut to_other = 0usize;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, socket } = ev {
+                if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_HIT {
+                    match socket {
+                        5 => to_self += 1,
+                        6 => to_other += 1,
+                        _ => panic!("意外 socket {socket}"),
+                    }
+                }
+            }
+        }
+        assert_eq!(to_self, 0, "多收件人时攻击者自己仍不收自己的 SM_HIT");
+        assert_eq!(to_other, 1, "多收件人时另一玩家必须照常收到 1 条");
     }
 
     /// **Lane 1（`openmir2-monster-attack-smhit`）**：怪普攻在**生产 tick 路径**上出
