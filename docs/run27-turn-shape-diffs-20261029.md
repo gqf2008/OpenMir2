@@ -11,11 +11,12 @@
 | # | 类别 | 依据 |
 |---|---|---|
 | 8 条（param/tag/body_len 在 frame 21/25，41.tag 在 frame 22/26） | `ORACLE_LOGIN_BURST_ORDER_NONDETERMINISM` | 两侧登录段 8 条具名 TURN 的 `(x,y,body_len,body_sha256,light)` 多重集**逐项相同**，只是**登录段顺序**不同；同一 C# 二进制 + 同 scenario + 同 Rust 二进制的 run15 同场景 **PASS** |
-| 2 条（`random_pair_shape` 两向各一） | `RNG_STREAM_POSITION` | 两侧无名 11B idle TURN 落在不同对象/时机（C# `(318,336,dir4)/(318,332,dir5)`@gamegate2；Rust `(327,327,dir1)/(318,336,dir7)`@gamegate），且 `phase` 是驱动标签（规则自身 F4 已知代价） |
+| 2 条（`random_pair_shape` 两向各一） | `RNG_CHOOSES_ACTOR`（不同 actor 被抽中，归属不可比） | 两侧无名 11B idle TURN 落在**不同 actor**：C# `recog 9915350/(318,336)`、`recog 1406845931/(318,332)`；Rust `recog 12/(327,327)`、`recog 117/(318,336)` ⇒ 现有「两侧都有对就比 (param,tag,light,phase)」在语义上无法对齐；**去掉 phase 也消不掉**（见 A2-2 / F1） |
 
-**判据建议**：本卡不落 compare_runs 规则（`tools/window/...draft.json` 里 `active=false`），只给两条草案
-P1（登录出现段按多重集）/ P2（随机成对帧形状合同去掉 `phase`），均带负例；**未 ignore ident10/41**，
-未改场景等待、未放宽 `body_len`。是否激活由 owner/coordinator 裁决 + A4 真机复跑决定。
+**判据建议**：本卡不落 compare_runs 规则（`tools/window/...draft.json` 里 `active=false`），只保留一条草案
+**P1（登录出现段按多重集）**，带可执行负例；**P2（去掉 phase）已按 reviewer-21 aafbf8a8 F1 + owner 裁决撤回**——
+它消不掉那两条 `random_pair_shape`。**未 ignore ident10/41**，未改场景等待、未放宽 `body_len`。
+是否激活由 owner/coordinator 裁决 + A4 真机复跑决定。
 
 > 卡面写「7 条 ident10 + 3 条 ident41」，实测是 **8 条 ident10 + 2 条 ident41**（见 `diff_table`）；
 > 分类结论不受影响。
@@ -34,19 +35,41 @@ Rust frames `1cd059ef…`）。
 | — | 10 | `random_pair_shape` oracle `(318,332,light2,gamegate2)` | C# 的无名 idle TURN 落点/phase |
 | — | 10 | `random_pair_shape` rust `(327,327,light2,gamegate)` | Rust 的无名 idle TURN 落点/phase |
 
-**T-270 无关（独立重算）**：用 `rules-270-nowhitelist.json`（仅把 ident14 的
-`oracle_extra_shapes=[]`、`oracle_extra_status=PENDING`，其余逐字节同仓规则）重跑：
+**T-270 无关（独立重算）**：自建 `E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json`
+（sha256 `e5d6f7b3…`；只把 ident14 的 `oracle_extra_shapes=[]`、`oracle_extra_status=PENDING`，
+其余同仓规则），生成方式：
+
+```python
+import json
+r = json.load(open("tools/conformance/rules.json", encoding="utf-8"))
+for rule in r["rules"]:
+    if rule.get("ident") == 14:
+        rule["oracle_extra_shapes"] = []
+        rule["oracle_extra_status"] = "PENDING"
+        rule.pop("oracle_extra_evidence", None)
+        rule.pop("oracle_extra_note", None)
+json.dump(r, open("E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json", "w",
+                  encoding="utf-8"), ensure_ascii=False, indent=2, sort_keys=True)
+```
+
+重跑命令与结果：
 
 ```sh
+# 仓规则
 python -I -B tools/conformance/compare_runs.py \
   --oracle E:/tmp/window/run27/softclose_relogin/csharp \
   --rust   E:/tmp/window/run27/softclose_relogin/rust \
-  [--rules E:/tmp/window/reviewer-21-review/rules-270-nowhitelist.json] \
-  --out E:/tmp/dev-2/run27-{repo-rules,nowhitelist}.json
+  --out E:/tmp/dev-2/run27-repo-rules.json
+# T-270 白名单清空副本
+python -I -B tools/conformance/compare_runs.py \
+  --oracle E:/tmp/window/run27/softclose_relogin/csharp \
+  --rust   E:/tmp/window/run27/softclose_relogin/rust \
+  --rules  E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json \
+  --out    E:/tmp/dev-2/run27-nowhitelist-own.json
 ```
 
 两次都是 `UNDECIDABLE / rc=2`、**10 条差异**，`kind/ident/frame_index/field/oracle/rust` 十元组逐条相同
-（report sha256 `d51e2e2f…` vs `b85ede53…`）。⇒ 清空白名单不会消除这组差异。
+（report sha256 `d51e2e2f…` vs `c1ed6c46…`）。⇒ 清空白名单不会消除这组差异。
 
 ## A2：两类归属的证据
 
@@ -97,11 +120,13 @@ run-to-run 非确定性，不是 Rust 偏差。
 | C# | (318,336) dir4 light2 @ `gamegate2` | (318,332) dir5 light2 @ `gamegate2` |
 | Rust | (327,327) dir1 light2 @ `gamegate` | (318,336) dir7 light2 @ `gamegate` |
 
-- 对数相同（各 2 对）、`light` 相同（2），但落点（谁被抽中）与时机（登录前/重登录后）不同
-  ⇒ 共享全局 RNG 的交错（C# 无锁 `Random` + 多线程 `ProcessMonsters`，见 T-266 证据）在
-  `Merchant.Run` 的 `Random(50)`/`RandomByte(8)` 上的流位差。
-- 形状合同把 **`phase`**（驱动侧连接/阶段标签 `gamegate`/`gamegate2`）也算进去 ⇒ 同一个
-  RNG 流位差会额外报成「形状合同被破坏」。规则 reason 自己已登记这类假红（F4 已知代价）。
+- 对数相同（各 2 对）、`light` 相同（2），但**被抽中的 actor 不同**（`recog` 与坐标都不同）⇒
+  共享全局 RNG 的交错（C# 无锁 `Random` + 多线程 `ProcessMonsters`，见 T-266 证据）在
+  `Merchant.Run` 的 `Random(50)`/`RandomByte(8)` 上选了不同的 NPC/时机。
+- **P2 撤回（reviewer-21 aafbf8a8 F1）**：把 `phase`（驱动侧连接/阶段标签 `gamegate`/`gamegate2`）
+  从形状里去掉**消不掉这两条**——去 phase 后仍得 C# 形状集 `{(318,336,2),(318,332,2)}` vs
+  Rust `{(327,327,2),(318,336,2)}`。phase 只是加剧差异，不是根因；`classification.pair_shape`
+  因此改为 **`RNG_CHOOSES_ACTOR`（不同 actor 抽中的 idle turn，归属不可比）**，两条保持 `UNDECIDABLE`。
 - 另：具名 TURN 的 `series`（Dir）两侧也全部不同（C# 1/7/7/6…，Rust 4/1/1/4…），但这是
   ident10 的**既有**整字掩码（`head_mask:["series"]`，oracle 墙钟随机不可复现），不是本卡新增豁免。
 
@@ -113,11 +138,70 @@ run-to-run 非确定性，不是 Rust 偏差。
 - **P1（登录出现段按多重集）**：同一 phase 内连续成对的具名 TURN(+41) 段，当且仅当**对数相等**且
   `(param,tag,light,body_sha256)` 多重集**完全相同**时按多重集比较；负例：段内任一
   param/tag/light/body 不同、对数不同、跨 phase 合并 ⇒ 仍红；段外帧（含 11B idle turn）不受影响。
-- **P2（`random_branch_pairs` 形状去掉 `phase`）**：`param/tag/light` 仍逐项比；负例：
-  任一不同 ⇒ 仍红；一侧有对另一侧无对 ⇒ 维持既有「只登记次数」语义。
+- **P2 已撤回**（reviewer-21 aafbf8a8 F1 + owner 裁决）：它消不掉两条 `random_pair_shape`；
+  草案里移入 `withdrawn_criteria`，并把理由与「若将来要归一只能走 recog 交集才比形状、需 owner R 裁决」
+  的替代方案写明。
 
-两条都不是 ignore：10/41 帧仍在流里，只是把**已证明非契约的维度**（登录段顺序 / 随机帧的驱动阶段标签）
-从判据里拿掉，且以「多重集/其余字段全等」为前提。
+两条性质都不是 ignore：10/41 帧仍在流里，P1 只是把**已证明非契约的维度**（登录段顺序）从判据里拿掉，
+且以「多重集/其余字段全等」为前提。
+
+### P1 的可执行负例（本卡内可复跑）
+
+草案 `draft_criteria[0].selftest_cases` 里有 6 条合成用例；下面这段**读草案并断言**，可直接复跑：
+
+```python
+import json
+d = json.load(open("tools/window/rules-run27-relogin-turn-shape-diffs.draft.json", encoding="utf-8"))
+p1 = next(c for c in d["draft_criteria"] if c["id"].startswith("P1"))
+
+
+def key(p):
+    return (p["x"], p["y"], p["light"], p["body_sha256"])
+
+
+def runs(seq):
+    out = []
+    for p in seq:
+        if out and out[-1][0] == p["phase"]:
+            out[-1][1].append(key(p))
+        else:
+            out.append((p["phase"], [key(p)]))
+    return [(ph, tuple(sorted(v))) for ph, v in out]
+
+
+def p1_equal(oracle, rust, *, always_equal=False):
+    return True if always_equal else runs(oracle) == runs(rust)
+
+
+ok = True
+for case in p1["selftest_cases"]:
+    got = p1_equal(case["oracle"], case["rust"])
+    hit = got == case["expect_equal"]
+    ok = ok and hit
+    print(("PASS" if hit else "FAIL"), case["name"], "->", got)
+
+negatives = [c for c in p1["selftest_cases"] if not c["expect_equal"]]
+mutant_broken = [c["name"] for c in negatives
+                 if p1_equal(c["oracle"], c["rust"], always_equal=True) != c["expect_equal"]]
+print("mutation(always-equal) breaks %d/%d negative cases" % (len(mutant_broken), len(negatives)))
+print("CHECK", "GREEN" if ok and len(mutant_broken) == len(negatives) and negatives else "RED")
+```
+
+实测输出（2026-10-29，本 worktree）：
+
+```text
+PASS 正例：多重集相同、登录段顺序不同 => 等价 -> True
+PASS 负例：某对的 body_sha256 不同 => 不等价 -> False
+PASS 负例：某对的 light 不同 => 不等价 -> False
+PASS 负例：对数不同（oracle 4 vs rust 3）=> 不等价 -> False
+PASS 负例：跨 phase 不得合并（oracle g1,g1,g2,g2 vs rust 全 g1）=> 不等价 -> False
+PASS 段外非成对帧不参与 P1（同一 pairs、额外 context 帧 => 仍等价） -> True
+mutation(always-equal) breaks 4/4 negative cases
+CHECK GREEN
+```
+
+> 这组牙目前挂在**文档内可复跑片段**上（本卡写集＝`tools/window/rules*` + 本文档）；要进 CI 需另开卡
+> 新增 `--check` 工具并在 `tools/hygiene/tool_selftest_gate.py` 登记、同步两处认树数字（会扩写集）。
 
 ## A4：真机窗口（未跑，本卡不 green）
 
@@ -125,11 +209,15 @@ run-to-run 非确定性，不是 Rust 偏差。
    `A,B,C,D` / `A,D,C,B` 间跳变；若稳定为同一顺序，P1 需重新评估。
 2. 同两次运行核对无名 idle TURN 的 `Random(50)`/`RandomByte(8)` 抽取对象与时机，确认是 RNG 流位差
    而非 Rust 多抽/少抽。
-3. owner/coordinator 对 P1/P2 的 R 级裁决；未裁决前 10 条差异保持 `UNDECIDABLE`，不得用 ignore 洗绿。
+3. owner/coordinator 对 P1 的 R 级裁决，以及对「随机 idle turn 的 actor 归属是否可比」的 R 级裁决
+   （后者决定两条 `random_pair_shape` 是否永远保持 `UNDECIDABLE`）；未裁决前 10 条差异保持
+   `UNDECIDABLE`，不得用 ignore 洗绿。
 
 ## 残留物
 
-- 证据（保留）：`E:/tmp/dev-2/run27-repo-rules.json`、`E:/tmp/dev-2/run27-nowhitelist.json`；
-  输入 `E:/tmp/window/run27/softclose_relogin/`、对照 `E:/tmp/window/run15/softclose_relogin/`、
-  `E:/tmp/window/reviewer-21-review/rules-270-nowhitelist.json`。
+- 证据（保留）：`E:/tmp/dev-2/run27-repo-rules.json`、`E:/tmp/dev-2/run27-nowhitelist-own.json`、
+  `E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json`（自建；生成命令见 A1）；
+  输入 `E:/tmp/window/run27/softclose_relogin/`、对照 `E:/tmp/window/run15/softclose_relogin/`。
+  reviewer-21 的临时副本 `E:/tmp/window/reviewer-21-review/rules-270-nowhitelist.json` 只作交叉对照
+  （跨 lane 路径不稳定，已不作为本卡证据根）。
 - 过程产物（可删）：`E:/tmp/dev-2/make-run27-draft.py`、`E:/tmp/dev-2/run27.txt`。

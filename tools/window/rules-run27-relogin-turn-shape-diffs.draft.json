@@ -47,9 +47,13 @@
       "why": "A1：清空 T-270 白名单后同一组 10 条差异仍在 => 与 T-270 无关",
       "repo_rules_report_sha256": "d51e2e2f3e7807eff90ae6785134f4a5893140b50128bf8c61ed3056d20e3f14",
       "nowhitelist_report_sha256": "b85ede53d7789b7ea61f11526c7c04c78bef71bd781c50cdc2903caa9ce27eeb",
-      "nowhitelist_rules": "E:/tmp/window/reviewer-21-review/rules-270-nowhitelist.json（仅 ident14 oracle_extra_shapes=[] / status=PENDING，其余逐字节同仓规则）",
+      "nowhitelist_rules": "E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json",
       "diff_set_identical": true,
-      "diff_set": "kind/ident/frame_index/field/oracle/rust 十元组逐条相同（见 diff_table）"
+      "diff_set": "kind/ident/frame_index/field/oracle/rust 十元组逐条相同（见 diff_table）",
+      "nowhitelist_rules_sha256": "e5d6f7b3c6596518e07623d0b262dd6ef1d92324fbc7244bef3b2006a5c2f910",
+      "nowhitelist_report_sha256_own": "c1ed6c46dea8e4da7483a2f42eb86c410a536aab37592f32f391db5fa87e83df",
+      "generation": "python -I - <<'PY'\nimport json\nr = json.load(open('tools/conformance/rules.json', encoding='utf-8'))\nfor rule in r['rules']:\n    if rule.get('ident') == 14:\n        rule['oracle_extra_shapes'] = []\n        rule['oracle_extra_status'] = 'PENDING'\n        rule.pop('oracle_extra_evidence', None)\n        rule.pop('oracle_extra_note', None)\njson.dump(r, open('E:/tmp/dev-2/run27-t270-whitelist-cleared.rules.json', 'w', encoding='utf-8'), ensure_ascii=False, indent=2, sort_keys=True)\nPY",
+      "reviewer_temp_copy_note": "reviewer-21 的临时副本 E:/tmp/window/reviewer-21-review/rules-270-nowhitelist.json 只作对照；本卡证据已改为自建副本（同一做法：仅 ident14 oracle_extra_shapes=[]、status=PENDING）。"
     },
     "cross_run_login_order": {
       "run3": {
@@ -487,7 +491,9 @@
     }
   ],
   "classification": {
-    "pair_shape": "RNG_STREAM_POSITION",
+    "pair_shape": "RNG_CHOOSES_ACTOR",
+    "pair_shape_why": "两条 random_pair_shape 来自**不同 actor 被抽中**的随机 idle turn：C# 无名 11B TURN 在 recog 9915350/(318,336) 与 recog 1406845931/(318,332)；Rust 在 recog 12/(327,327) 与 recog 117/(318,336)。坐标/recog 都不同 ⇒ 现有 random_branch_pairs 的「两侧都有对就比 (param,tag,light,phase)」在语义上无法对齐；把 phase 从形状里去掉**也消不掉**这两条（reviewer-21 aafbf8a8 F1）。⇒ 本卡不引入放宽判据，这两条保持 UNDECIDABLE，留待 owner 对「随机 idle turn 的 actor 归属是否可比」做 R 级裁决。",
+    "phase_note": "phase（gamegate/gamegate2）确实不同，但它只是**加剧**了形状互异，不是根因；不作为判据改动理由。",
     "alignment": "ORACLE_LOGIN_BURST_ORDER_NONDETERMINISM",
     "real_regression": false,
     "real_regression_why": "无内容差：两侧登录段 8 条具名 TURN 的 (x,y,body_len,body_sha256,light) 多重集逐项相同；重登录段两侧顺序与内容完全一致；同一 C#+Rust 二进制的 run15 同场景 PASS。唯一内容级差异是 series(Dir) —— 已是 ident10 既有掩码（oracle 墙钟/随机不可复现）。"
@@ -504,23 +510,411 @@
         "跨 phase 的段不得合并"
       ],
       "rationale": "run15 与 run27 同 C# 二进制/同场景，登录段顺序分别为 A,D,C,B 与 A,B,C,D => oracle 自身顺序非契约；但内容多重集必须相等才放行，防止把真差异（缺帧/换体）洗绿。",
-      "activation": "需 owner/coordinator 裁决 + 真机复跑（A4）"
-    },
-    {
-      "id": "P2-random-pair-phase-not-a-contract",
-      "applies_to": "random_branch_pairs.shape_fields",
-      "rule": "把 phase 从随机成对帧的形状合同里移除（param/tag/light 仍比）；phase 仅作上下文记录。",
-      "negative_cases": [
-        "param/tag/light 任一不同 => 仍红",
-        "一侧有对另一侧无对 => 仍按既有规则只登记次数"
+      "activation": "需 owner/coordinator 裁决 + 真机复跑（A4）",
+      "selftest_cases": [
+        {
+          "name": "正例：多重集相同、登录段顺序不同 => 等价",
+          "oracle": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            }
+          ],
+          "rust": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            }
+          ],
+          "expect_equal": true
+        },
+        {
+          "name": "负例：某对的 body_sha256 不同 => 不等价",
+          "oracle": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            }
+          ],
+          "rust": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "00000000",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            }
+          ],
+          "expect_equal": false
+        },
+        {
+          "name": "负例：某对的 light 不同 => 不等价",
+          "oracle": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            }
+          ],
+          "rust": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 3,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            }
+          ],
+          "expect_equal": false
+        },
+        {
+          "name": "负例：对数不同（oracle 4 vs rust 3）=> 不等价",
+          "oracle": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            }
+          ],
+          "rust": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            }
+          ],
+          "expect_equal": false
+        },
+        {
+          "name": "负例：跨 phase 不得合并（oracle g1,g1,g2,g2 vs rust 全 g1）=> 不等价",
+          "oracle": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g2"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g2"
+            }
+          ],
+          "rust": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            }
+          ],
+          "expect_equal": false
+        },
+        {
+          "name": "段外非成对帧不参与 P1（同一 pairs、额外 context 帧 => 仍等价）",
+          "oracle": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            }
+          ],
+          "rust": [
+            {
+              "x": 318,
+              "y": 336,
+              "light": 2,
+              "body_sha256": "eb5b755b",
+              "phase": "g1"
+            },
+            {
+              "x": 332,
+              "y": 317,
+              "light": 2,
+              "body_sha256": "d7fbde6e",
+              "phase": "g1"
+            },
+            {
+              "x": 318,
+              "y": 332,
+              "light": 2,
+              "body_sha256": "18514f46",
+              "phase": "g1"
+            },
+            {
+              "x": 327,
+              "y": 327,
+              "light": 2,
+              "body_sha256": "fcadedc7",
+              "phase": "g1"
+            }
+          ],
+          "context_oracle": [],
+          "context_rust": [
+            {
+              "ident": 654,
+              "param": 0
+            }
+          ],
+          "expect_equal": true
+        }
       ],
-      "rationale": "phase 是驱动侧连接/阶段标签（gamegate/gamegate2），随机 idle turn 落在登录前还是重登录后由 oracle 的随机流决定；把它当形状字段会把「抽数时机差」误报成「形状合同破坏」（本 run 的两条 random_pair_shape 即此）。",
-      "activation": "需 owner/coordinator 裁决（改 rules.json 属判据变更）"
+      "selftest_runner_note": "本卡的负例牙以 docs/run27-turn-shape-diffs-20261029.md §A3 的可复跑片段执行（读本文件的自测用例并断言）；正式进 CI 需另开卡新增 --check 工具并在 tools/hygiene/tool_selftest_gate.py 登记 + 同步两处认树数字，超出本卡写集。"
     }
   ],
   "window_items": [
     "当前 master 真机复跑 run27 场景两次（同二进制、带 --rng-log）：确认 C# 登录段顺序是否仍在 A,B,C,D / A,D,C,B 间跳变；若稳定在一种顺序，则 P1 需重新评估。",
     "同两次运行核对无名 idle turn 的落点/时机（Random(50)/RandomByte(8) 抽取对象），确认属 RNG 流位差而非 Rust 多抽/少抽。",
     "owner/coordinator 对 P1/P2 的 R 级裁决；未裁决前 10 条差异保持 UNDECIDABLE，不得用 ignore 洗绿。"
-  ]
+  ],
+  "withdrawn_criteria": [
+    {
+      "id": "P2-random-pair-phase-not-a-contract",
+      "withdrawn_at": "rework-1（reviewer-21 aafbf8a8 F1 + owner 裁决）",
+      "withdrawn_reason": "去掉 phase 后 C# 形状集 {(318,336,2),(318,332,2)} vs Rust {(327,327,2),(318,336,2)} 仍得 only_o={(318,332,2)}、only_r={(327,327,2)} ⇒ 两条 random_pair_shape 原样保留；P2 不解决它声称要解决的问题，故撤回。",
+      "alternative_needs_owner": "若将来要把这类差异归一，只能走「两侧 pairs 的 recog 集合有交集时才比 (param,tag,light)，否则只登记次数」——它放宽现有「两侧都有对就比形状」的口径，需 owner 的 R 级裁决与可执行负例（recog 相同但坐标/body 不同仍红），不在本卡实现。"
+    }
+  ],
+  "notes": {
+    "N1": "差异拆分 8 条 ident10 + 2 条 ident41（卡面 7+3 已更正；reviewer-21 复核一致）。",
+    "N2": "P1 的负例已列为 selftest_cases 并由文档内片段可复跑；正式实现卡里需再补删条件变异。"
+  }
 }
