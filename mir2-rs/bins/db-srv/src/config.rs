@@ -90,6 +90,13 @@ pub struct DbConfig {
 /// 单元测试用的最小配置（会话链只需要 `ids_addr`/`ids_port`/`server_name`）。
 #[cfg(test)]
 pub(crate) fn for_test(ids_addr: String, ids_port: u16) -> DbConfig {
+    for_test_with_conn(ids_addr, ids_port, b"")
+}
+
+/// [`for_test`] 的连接串变体（卡 `openmir2-selgate-dbsrv-query-chain`：查号链牙要连
+/// 本机 `mir2_test_db`，其余键与 [`for_test`] 相同）。
+#[cfg(test)]
+pub(crate) fn for_test_with_conn(ids_addr: String, ids_port: u16, conn: &[u8]) -> DbConfig {
     DbConfig {
         server_name: RawStr(b"LegendOfMir2".to_vec()),
         show_debug: false,
@@ -106,7 +113,7 @@ pub(crate) fn for_test(ids_addr: String, ids_port: u16) -> DbConfig {
         ids_addr,
         ids_port,
         storeage: RawStr(b"MySQL".to_vec()),
-        conn_string: RawStr(Vec::new()),
+        conn_string: RawStr(conn.to_vec()),
     }
 }
 
