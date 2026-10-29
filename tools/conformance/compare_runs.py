@@ -2787,8 +2787,14 @@ def compare_main(args):
         undecidable.append(_und)
         # 受控裁决候选（T-270）：形状对得上只是**必要条件**，放行与否留给库比完之后再定。
         _rule_extra = rules.by_ident.get(row["ident"]) or {}
-        if str(_rule_extra.get("oracle_extra_policy") or "").strip():
-            _ok_extra, _extra_info = oracle_extra_policy_check(row, _rule_extra, cmp)
+        _policy = str(_rule_extra.get("oracle_extra_policy") or "").strip()
+        if _policy:
+            if _policy != "per_actor_once":
+                _ok_extra, _extra_info = False, {
+                    "ident": row["ident"], "mode": "policy",
+                    "reason": "未知的 oracle_extra_policy=%r（只支持 per_actor_once）" % _policy}
+            else:
+                _ok_extra, _extra_info = oracle_extra_policy_check(row, _rule_extra, cmp)
         else:
             _ok_extra, _extra_info = oracle_extra_explainable(row, _rule_extra)
         if _ok_extra:
@@ -2907,8 +2913,7 @@ def compare_main(args):
                 report["frames"]["oracle_extra_candidates"].append(dict(
                     base_rec, status=_cand_status, blockers=blockers,
                     reason=("oracle 侧多出的 SM_HIT(14)：形状符合候选条件，但 %s "
-                            "⇒ 只登记候选、仍判 UNDECIDABLE（reviewer-20 R20-X1："
-                            "白名单未获裁决前不放行）" % "；".join(blockers))))
+                            "⇒ 只登记候选、仍判 UNDECIDABLE" % "；".join(blockers))))
                 continue
             try:
                 report["undecidable"].remove(cand["und"])
@@ -2945,13 +2950,16 @@ def compare_main(args):
 
     _pending_extra = sorted(
         i for i, r in rules.by_ident.items()
-        if (r or {}).get("oracle_extra_shapes")
+        if ((r or {}).get("oracle_extra_shapes") or (r or {}).get("oracle_extra_policy"))
         and (oracle_extra_status(r) != "APPROVED" or _shape_pending(r)))
     if _pending_extra:
         report["rules"]["rules_pending_review"] = True
         _pending_list = report["rules"].setdefault("pending_review", [])
         for i in _pending_extra:
-            tag = "T-270: rules[ident=%d].oracle_extra_shapes" % i
+            _r = rules.by_ident.get(i) or {}
+            # policy-only 规则要用自己的字段名，别都写成 oracle_extra_shapes（R20-F5）。
+            _field = "oracle_extra_shapes" if _r.get("oracle_extra_shapes") else "oracle_extra_policy"
+            tag = "T-270: rules[ident=%d].%s" % (i, _field)
             if tag not in _pending_list:
                 _pending_list.append(tag)
 
