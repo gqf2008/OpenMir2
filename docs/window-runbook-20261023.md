@@ -452,6 +452,20 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 3. 重启 MySQL，`logs/MySQL.err.log` **不得**出现 `Starting crash recovery`；
 4. 正常关闭再启动同样**不得**出现；对照组（错误做法）是 `Stop-Process -Force`，它会出现该行。
 
+## 0.14 参考栈 vs 私有栈口径（2026-10-29；卡 `openmir2-exec-sheet-doc-sweep2`）
+
+> 来源：reviewer-21 环境观测 + Leader 对 `card_window` DB 拒绝策略的核实；与 exec sheet ①-1 的
+> profile 端口口径配套（exec sheet 评论 50033096211f / 46210975578e）。
+
+1. **两栈 DB 隔离 ⇒ 参考栈不需要为开发/测试下线**：`E:/MirServer` 参考栈跑**生产库**；
+   conformance 私有栈 C# 用 `mir2_test_db`、Rust 用 `mir2_test_db_r`，`card_window` 默认
+   **拒绝生产库**（`mir2_db` 等，`tools/conformance/card_window.py:49-52`）。「5000–7200 全 DOWN」
+   是**真机窗口**口径；开发/测试期按 exec sheet ①-1 的 **profile 端口（15xxx/17xxx）口径**即可
+   （生产栈 5000–7200 在听不影响开窗，`check_ports_free` 只看传入的 profile 端口）。
+2. **私有栈同一时刻只允许一套在跑**：同库并发会互相污染 DB 后态；这也是 port 互斥规则的另一半理由。
+3. **拿窗口证据时**，确保没有第二套 conformance 栈同库并发。
+4. mysqld（3306）是两栈**共用**的唯一实例 ⇒ 「停参考栈」**绝不能停 mysqld**（§0.13 的优雅关闭口径不变）。
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。
