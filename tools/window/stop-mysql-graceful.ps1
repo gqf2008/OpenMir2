@@ -11,6 +11,10 @@
   本脚本只做一件事：**把 mysqld 优雅关掉**（`mysqladmin shutdown`），并**等它真的退出**。
   它**绝不**调用 `Stop-Process`；超时也只是报错（rc=3）并给出人工处置建议。
 
+  等待退出是**计数式**（卡 `openmir2-stop-mysql-graceful-b1-flake`）：预算 `-TimeoutSec` 秒
+  按 200ms 轮询间隔折算成**轮询次数上限**，循环由计数器驱动，不拿墙钟做断言；
+  每次轮询的观测（pid_alive / port_open）逐条记录，终态行带 `poll=<k>/<上限>` 与最后观测。
+
   幂等：没在跑 ⇒ `MYSQL_STOP already_stopped`，rc=0。
 
   密码：**只从环境变量取**（默认变量名 `MYSQL_ROOT_PASSWORD`，可用 `-PasswordEnv` 改），
@@ -27,7 +31,7 @@
   包一层（cmd 透传 ERRORLEVEL），**并且**让包装器把 mysqladmin 的 `$LASTEXITCODE` 写进
   `<OutFile>.rc`、父进程**读那个文件**——两条通道都拿到才算数，`ExitCode` 只作第三兜底。
 
-  退出码：0=已停/优雅停止成功；2=用法错；3=超时（进程仍在，未强杀）；4=mysqladmin 失败。
+  退出码：0=已停/优雅停止成功；2=用法错；3=轮询预算耗尽（进程仍在，未强杀）；4=mysqladmin 失败。
 
 .PARAMETER DryRun
   只打印将执行的命令（不含密码）与当前判定，不做任何动作。
@@ -37,7 +41,7 @@
   跑一个临时的 `mysqladmin.cmd`（`exit /b 0|1`）——这是 B1 的牙。
 
 .PARAMETER Selftest
-  离线自测：假进程表 + **真实进程路径**（临时 `mysqladmin.cmd`）共 15 条。
+  离线自测：假进程表 + **真实进程路径**（临时 `mysqladmin.cmd`）共 22 条。
 
 .EXAMPLE
   $env:MYSQL_ROOT_PASSWORD = '…'      # 若 root 有口令
@@ -176,17 +180,28 @@ function Invoke-Stop {
   }
   $rc = Invoke-MysqladminShutdown $MysqlHome $DbHost $Port $User $PasswordEnv $OutFile
   if ($rc -ne 0) { return $rc }
-  Write-Stop 'graceful_sent' ("mysqladmin shutdown 已发出；等待退出（≤" + $TimeoutSec + "s）")
-  $deadline = (Get-Date).AddSeconds($TimeoutSec)
-  while ((Get-Date) -lt $deadline) {
-    if (-not (Test-AnyPidAlive $pids) -and -not (Test-PortOpen $Port)) {
-      Write-Stop 'stopped' ("已优雅退出（pid " + ($pids -join ',') + "；端口 " + $Port + " 已释放）")
+  # 计数式等待（卡 `openmir2-stop-mysql-graceful-b1-flake`）：不拿墙钟做上界断言——
+  # 预算 `TimeoutSec` 秒按 200ms 轮询间隔折算成**轮询次数上限**，循环由计数器驱动；
+  # 每次轮询的观测（pid_alive / port_open）逐条记进 `$pollLog`，终态行带 `poll=<k>/<上限>`
+  # 与最后一条观测。判据只剩「最终必须退出」（计数器内发生）与「预算耗尽 ⇒ TIMEOUT rc=3」。
+  $pollIntervalMs = 200
+  $maxPolls = [Math]::Max(1, [int][Math]::Ceiling($TimeoutSec * 1000.0 / $pollIntervalMs))
+  $pollLog = @()
+  Write-Stop 'graceful_sent' ("mysqladmin shutdown 已发出；等待退出（计数式：间隔 " + $pollIntervalMs +
+                              "ms，预算 " + $TimeoutSec + "s ⇒ ≤" + $maxPolls + " 次轮询）")
+  for ($poll = 1; $poll -le $maxPolls; $poll++) {
+    $pidAlive = Test-AnyPidAlive $pids
+    $portOpen = Test-PortOpen $Port
+    $pollLog += ('#' + $poll + ':pid_alive=' + $pidAlive + ',port_open=' + $portOpen)
+    if (-not $pidAlive -and -not $portOpen) {
+      Write-Stop 'stopped' ("已优雅退出（poll=" + $poll + "/" + $maxPolls + "; pid " + ($pids -join ',') +
+                            " 不再存在，端口 " + $Port + " 已释放；最后观测 " + $pollLog[-1] + "）")
       return 0
     }
-    Start-Sleep -Milliseconds 200
+    if ($poll -lt $maxPolls) { Start-Sleep -Milliseconds $pollIntervalMs }
   }
-  Write-Stop 'TIMEOUT' ("≤" + $TimeoutSec + "s 内未退出（pid 仍活：" + ($pids -join ',') +
-                        "）；**未强杀**。请查 logs/MySQL.err.log，由人决定下一步")
+  Write-Stop 'TIMEOUT' ("轮询预算耗尽（poll=" + $maxPolls + "/" + $maxPolls + "；pid 仍活：" + ($pids -join ',') +
+                        "；最后观测 " + $pollLog[-1] + "）；**未强杀**。请查 logs/MySQL.err.log，由人决定下一步")
   return 3
 }
 
@@ -244,7 +259,11 @@ function Invoke-Selftest {
     New-Item -ItemType Directory -Force -Path $realBin | Out-Null
     $fakeAdmin = Join-Path $realBin 'mysqladmin.cmd'
     [IO.File]::WriteAllText($fakeAdmin, "@echo off`r`nexit /b 0`r`n", (New-Object Text.UTF8Encoding($false)))
-    $out = Run-Script @{ ProcessIds = { @(4242) }; PortOpen = { param($p) $false } } 5 '' $realHome $fakeAdmin
+    # PidAlive 一并注入（卡 `openmir2-stop-mysql-graceful-b1-flake`）：pid 4242 是虚构的，
+    # 旧版留真打 `Get-Process -Id 4242`——本机恰好有同号 PID 时等待循环空转满预算后 TIMEOUT 判红
+    # （2026-10-29 三次观测 2 红 1 绿）。B1 要测的是 mysqladmin 真实路径，不是真进程表。
+    $out = Run-Script @{ ProcessIds = { @(4242) }; PortOpen = { param($p) $false }
+                         PidAlive = { param($ids) $false } } 5 '' $realHome $fakeAdmin
     Chk ($LASTEXITCODE -eq 0 -and ($out -match 'MYSQL_STOP stopped')) 'B1 真实路径: mysqladmin.cmd exit 0 => rc=0 且 stopped' ("rc=" + $LASTEXITCODE + " out=" + $out)
     [IO.File]::WriteAllText($fakeAdmin, "@echo off`r`nexit /b 1`r`n", (New-Object Text.UTF8Encoding($false)))
     $out = Run-Script @{ ProcessIds = { @(4244) }; PortOpen = { param($p) $false } } 3 '' $realHome $fakeAdmin
@@ -267,6 +286,26 @@ function Invoke-Selftest {
     Chk (-not ($codeOnly -match 'Stop-Process')) '实现体不调用 Stop-Process（不强杀；注释里提到不算）'
     Chk (-not ($codeOnly -match '\[string\]\$Password\b')) '没有 -Password 参数（只走环境变量）'
     Chk (($codeOnly -notmatch 'Stop-Process') -and ([regex]::Replace($src, '(?s)<#.*?#>', '') -match 'Stop-Process')) 'F2: 注释（含行尾）里出现 Stop-Process 不误红（原文命中、剥后不命中）'
+
+    # ⑦ 计数式等待牙（卡 `openmir2-stop-mysql-graceful-b1-flake`）：等待由**轮询计数器**驱动，
+    #    不再引用墙钟上界。正向：第 3 次轮询翻转 ⇒ `poll=3/<预算>`；预算耗尽 ⇒ TIMEOUT 且
+    #    `poll=<预算>/<预算>`、每次观测都有记录。反向牙（A2）：把计数器→观测的接线改坏
+    #    （见变异记录）时这两条必红。
+    $script:t3 = 0
+    $out = Run-Script @{ ProcessIds = { @(4247) }; PortOpen = { param($p) $false }
+                         PidAlive = { param($ids) $script:t3++; return ($script:t3 -le 2) }
+                         Launch = { param($a, $b, $c) 0 } } 1
+    Chk ($out -match 'MYSQL_STOP stopped') 'B1 计数: 第 3 次轮询翻转 => stopped' $out
+    Chk ($out -match 'poll=3/5') 'B1 计数: stopped 记录实际翻转轮次 poll=3/5（计数器接线）' $out
+    Chk ($LASTEXITCODE -eq 0) 'B1 计数: 第 3 次轮询翻转 => rc=0' ("rc=" + $LASTEXITCODE)
+
+    $out = Run-Script @{ ProcessIds = { @(4248) }; PortOpen = { param($p) $true }
+                         PidAlive = { param($ids) $true }
+                         Launch = { param($a, $b, $c) 0 } } 1
+    Chk ($out -match 'MYSQL_STOP TIMEOUT') 'B1 计数: 预算耗尽 => TIMEOUT' $out
+    Chk ($out -match 'poll=5/5') 'B1 计数: TIMEOUT 恰在预算上限 poll=5/5' $out
+    Chk ($LASTEXITCODE -eq 3) 'B1 计数: 预算耗尽 => rc=3' ("rc=" + $LASTEXITCODE)
+    Chk ($out -match 'pid_alive=True,port_open=True') 'B1 计数: 每次观测有记录（最后观测进终态行）' $out
   } finally {
     Remove-Item -LiteralPath $script:tmpHome -Recurse -Force -ErrorAction SilentlyContinue
   }
