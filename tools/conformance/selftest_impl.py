@@ -1078,6 +1078,30 @@ class Selftest(object):
             lambda r: (r.__setitem__("oracle_extra_policy", "per_actor_once"),
                        r.__setitem__("oracle_extra_policy_decision", "")))
 
+        # R20-F5a：未知 policy 值必须 fail-closed（不能被当成 per_actor_once）。
+        _pol_bogus = _rules270_variant(
+            "rules-270-policy-bogus.json",
+            lambda r: (r.__setitem__("oracle_extra_policy", "bogus_policy"),
+                       r.__setitem__("oracle_extra_policy_decision",
+                                     "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd")))
+        _bogus_rule = json.loads(json.dumps(self.builtin_rules))
+        for _r in _bogus_rule["rules"]:
+            if _r.get("ident") == 14:
+                _r["oracle_extra_policy"] = "bogus_policy"
+                _r["oracle_extra_policy_decision"] = "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd"
+                _r.pop("oracle_extra_shapes", None)
+        _path_bogus = self.rules_file("rules-270-policy-bogus.json", _bogus_rule)
+
+        # R20-F5b：policy-only 规则（没有 oracle_extra_shapes）也要进 pending_review，
+        # 且标签用 oracle_extra_policy 字段名。
+        _pol_only = json.loads(json.dumps(self.builtin_rules))
+        for _r in _pol_only["rules"]:
+            if _r.get("ident") == 14:
+                _r["oracle_extra_policy"] = "per_actor_once"
+                _r["oracle_extra_policy_decision"] = ""
+                _r.pop("oracle_extra_shapes", None)
+        _path_pol_only = self.rules_file("rules-270-policy-only.json", _pol_only)
+
         # 走位帧：ident10 (49,49)。额外 14 的 recog 与坐标必须对得上它。
         walk270 = self.frame(10, b"", **dict(heads_o, seq=810, param=49, tag=49, series=513))
         hit270p = self.frame(14, b"", **dict(heads_o, seq=811, param=49, tag=49,
@@ -1092,6 +1116,20 @@ class Selftest(object):
         self.check("T-270 policy：recog 对上本侧 ident10 坐标、body 空、每 actor 1 条 => rc 0 且登记",
                    rc == 0 and bool(_fr_pol.get("oracle_extra_hits")),
                    (rc, _fr_pol.get("oracle_extra_hits"), (rep or {}).get("undecidable")))
+
+        rc, rep = self.compare(od270p, rd270p, ["--rules", _path_bogus])
+        _fr_bogus = (rep or {}).get("frames") or {}
+        self.check("T-270 F5a：未知 oracle_extra_policy 值 => rc 2、不放行",
+                   rc == 2 and not _fr_bogus.get("oracle_extra_hits"),
+                   (rc, (rep or {}).get("undecidable")))
+
+        rc, rep = self.compare(od270p, rd270p, ["--rules", _path_pol_only])
+        _tags = ((rep or {}).get("rules") or {}).get("pending_review") or []
+        _used = ((rep or {}).get("rules") or {}).get("pending_review_used") or []
+        self.check("T-270 F5b：policy-only 规则进 pending_review 且标签用 oracle_extra_policy",
+                   any("oracle_extra_policy" in str(t) for t in _tags)
+                   and any("oracle_extra_policy" in str(t) for t in _used),
+                   (rc, _tags, _used))
 
         rc, rep = self.compare(od270p, rd270p, ["--rules", _pol_pend])
         _cand_pol = (((rep or {}).get("frames") or {}).get("oracle_extra_candidates") or [])

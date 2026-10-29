@@ -2956,7 +2956,10 @@ def compare_main(args):
         report["rules"]["rules_pending_review"] = True
         _pending_list = report["rules"].setdefault("pending_review", [])
         for i in _pending_extra:
-            tag = "T-270: rules[ident=%d].oracle_extra_shapes" % i
+            _r = rules.by_ident.get(i) or {}
+            # policy-only 规则要用自己的字段名，别都写成 oracle_extra_shapes（R20-F5）。
+            _field = "oracle_extra_shapes" if _r.get("oracle_extra_shapes") else "oracle_extra_policy"
+            tag = "T-270: rules[ident=%d].%s" % (i, _field)
             if tag not in _pending_list:
                 _pending_list.append(tag)
 
