@@ -14,9 +14,12 @@
       4 login-gate  5 sel-gate    6 game-gate
   停止顺序 = 上面的严格反向（game-gate -> sel-gate -> login-gate -> game-svr -> login-srv -> db-srv）。
 
-  配置文件（相对 `-Root`，与 start_rust_stack.ps1 的六角色口径一致）：
-      db-srv     <Root>\DBSrv\dbsvr.conf
-      login-srv  <Root>\LoginSrv\logsrv.conf
+  配置文件（相对 `-Root`；每角色按候选顺序取**第一份存在**的 conf——生产实况布局
+  `DBServer\dbsvr.conf` / `LoginSrv\config.conf` 优先，兼容旧/测试布局
+  `DBSrv\dbsvr.conf` / `LoginSrv\logsrv.conf`（卡 openmir2-g0-conf-map-option-a）；
+  全部候选都缺失才 RED，点名全部候选路径）：
+      db-srv     <Root>\DBServer\dbsvr.conf   （或 <Root>\DBSrv\dbsvr.conf）
+      login-srv  <Root>\LoginSrv\config.conf  （或 <Root>\LoginSrv\logsrv.conf）
       game-svr   <Root>\M2GameSvr\Server.conf
       login-gate <Root>\LoginGate\config.conf
       sel-gate   <Root>\SelGate\config.conf
@@ -85,13 +88,16 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # 六个角色的固定表：启动顺序 = 数组顺序；stop_order 越大越先停（停止脚本按降序）。
+# conf 候选（卡 openmir2-g0-conf-map-option-a）：生产实况布局在前、旧/测试布局（含
+# E:/tmp/conformance/rust-root 与 alt_port_profile.py 产出的部署目录）在后；
+# 解析时取第一份存在的候选，全部缺失才 RED。
 $RoleTable = @(
-  [pscustomobject]@{ role = 'db-srv';     conf = 'DBSrv\dbsvr.conf';      ports = @(6000, 5100, 5700); stop_order = 1 }
-  [pscustomobject]@{ role = 'login-srv';  conf = 'LoginSrv\logsrv.conf';  ports = @(5500, 5600);       stop_order = 2 }
-  [pscustomobject]@{ role = 'game-svr';   conf = 'M2GameSvr\Server.conf'; ports = @(5000);             stop_order = 3 }
-  [pscustomobject]@{ role = 'login-gate'; conf = 'LoginGate\config.conf'; ports = @(7000);             stop_order = 4 }
-  [pscustomobject]@{ role = 'sel-gate';   conf = 'SelGate\config.conf';   ports = @(7100);             stop_order = 5 }
-  [pscustomobject]@{ role = 'game-gate';  conf = 'RunGate\config.conf';   ports = @(7200, 7201, 7202); stop_order = 6 }
+  [pscustomobject]@{ role = 'db-srv';     confCandidates = @('DBServer\dbsvr.conf', 'DBSrv\dbsvr.conf');      conf = ''; ports = @(6000, 5100, 5700); stop_order = 1 }
+  [pscustomobject]@{ role = 'login-srv';  confCandidates = @('LoginSrv\config.conf', 'LoginSrv\logsrv.conf'); conf = ''; ports = @(5500, 5600);       stop_order = 2 }
+  [pscustomobject]@{ role = 'game-svr';   confCandidates = @('M2GameSvr\Server.conf');  conf = ''; ports = @(5000);             stop_order = 3 }
+  [pscustomobject]@{ role = 'login-gate'; confCandidates = @('LoginGate\config.conf');  conf = ''; ports = @(7000);             stop_order = 4 }
+  [pscustomobject]@{ role = 'sel-gate';   confCandidates = @('SelGate\config.conf');    conf = ''; ports = @(7100);             stop_order = 5 }
+  [pscustomobject]@{ role = 'game-gate';  confCandidates = @('RunGate\config.conf');    conf = ''; ports = @(7200, 7201, 7202); stop_order = 6 }
 )
 
 # ---- 端口剖面：-PortsProfile（alt_port_profile.json 的 ports_by_role）/ -Ports 覆盖。----
@@ -343,16 +349,24 @@ if ($plan.Count -eq 0) {
 }
 
 # ---- 配置存在性（WhatIf 与实跑同一判据；缺一即退出 2）。----
+# 每角色按 confCandidates 顺序解析：第一份存在的候选生效（生产实况布局优先，
+# 旧/测试布局兜底）；全部缺失才 RED 并点名全部候选（卡 openmir2-g0-conf-map-option-a）。
 $missing = @()
 foreach ($p in $plan) {
-  $confPath = Join-Path $Root $p.conf
-  if (-not (Test-Path -LiteralPath $confPath -PathType Leaf)) {
-    $missing += ("{0} -> {1}" -f $p.role, $confPath)
+  $resolved = $null
+  foreach ($cand in $p.confCandidates) {
+    $confPath = Join-Path $Root $cand
+    if (Test-Path -LiteralPath $confPath -PathType Leaf) { $resolved = $cand; break }
+  }
+  if ($null -eq $resolved) {
+    $missing += ("{0} -> {1}" -f $p.role, (($p.confCandidates | ForEach-Object { Join-Path $Root $_ }) -join ' OR '))
+  } else {
+    $p.conf = $resolved
   }
 }
 if ($missing.Count -gt 0) {
   Write-Output ('RED: 缺配置：' + ($missing -join '; '))
-  Write-Output ('RED: -Root={0}；本工具要求六角色配置按固定映射存在（见 -WhatIf 用法）' -f $Root)
+  Write-Output ('RED: -Root={0}；本工具要求六角色配置按候选映射存在（见 -WhatIf 用法）' -f $Root)
   exit 2
 }
 
