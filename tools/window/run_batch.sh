@@ -684,22 +684,48 @@ fi
 
 run_castle_compare
 
-# ---- 跑后对称性复核（卡 openmir2-postrun-symmetry-drift）----
+# ---- 跑后对称性复核（卡 openmir2-postrun-symmetry-drift；profile 去重：openmir2-postrun-drift-followups）----
 # C# 运行期会按内存重写 Castle/List.txt 与 SabukW ⇒ 跑后漂移是预期行为，只标注（不改本轮 rc）。
+# 清单支持逐行 profile（run3 现为 alt / window-layout / window-magic 混合）⇒ 写死 load_profile("alt")
+# 会漏掉非 alt 行的跑后漂移。改为按**本批选中行**实际出现的 profile 去重后逐个复核（每个 profile
+# 用自己的 envir_root；blocked 行没跑，不进复核面）。选中行在 ⑦ 之后必非空 ⇒ 去重结果为空是 bug，
+# fail-closed 直接 die，不静默跳过。
 log "== 跑后对称性复核（预期可能漂移；下一轮前须还原/对齐）"
-CARD_WINDOW="$CARD_WINDOW" "$PY" -I -B - <<'PY' | while IFS= read -r ln; do log "$ln"; done
+_postrun_us=$'\x1f'
+_postrun_profiles=""
+declare -A _postrun_prof_seen=()
+for _prow in "${selected[@]}"; do
+    IFS=$_postrun_us read -r _pn _pname _pprof _pextra _pblocked _preason <<<"$_prow"
+    [ -n "$_pprof" ] || continue
+    [ -n "${_postrun_prof_seen[$_pprof]:-}" ] && continue
+    _postrun_prof_seen[$_pprof]=1
+    _postrun_profiles="${_postrun_profiles:+${_postrun_profiles}${_postrun_us}}$_pprof"
+done
+unset _postrun_prof_seen _prow _pn _pname _pprof _pextra _pblocked _preason
+[ -n "$_postrun_profiles" ] || die "跑后复核：选中行里没有任何 profile（不应发生：清单校验/选中非空应已拦截）"
+log "跑后对称性 profile（按选中行去重）：$(echo "$_postrun_profiles" | tr '\037' ' ')"
+CARD_WINDOW="$CARD_WINDOW" POSTRUN_PROFILES="$_postrun_profiles" "$PY" -I -B - <<'PY' | while IFS= read -r ln; do log "$ln"; done
 import importlib.util, os
 path = os.environ["CARD_WINDOW"]
 spec = importlib.util.spec_from_file_location("_postrun_cw", path)
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
-prof = mod.load_profile("alt")
-drift = mod.postrun_symmetry(prof)
-if not drift:
-    print("跑后对称性：OK")
-else:
-    files = ",".join((d.get("file") or "?") for d in drift[:8])
-    print("跑后对称性：DRIFT(%d) %s" % (len(drift), files))
+profiles = [p for p in os.environ.get("POSTRUN_PROFILES", "").split("\x1f") if p]
+if not profiles:
+    raise SystemExit("run_batch: POSTRUN_PROFILES 为空（bash 侧应已 die，不应到这里）")
+for pname in profiles:
+    # 单个 profile 坏（名字打错/JSON 读不了）只显式标注，不许崩掉整段——否则排在后面的
+    # profile 连同被静默丢掉（本段只标注、不改 rc，ERROR 行交给值守按 §0.10 处理）。
+    try:
+        drift = mod.postrun_symmetry(mod.load_profile(pname))
+    except Exception as ex:  # noqa: BLE001
+        print("跑后对称性[%s]：ERROR %s: %s" % (pname, type(ex).__name__, ex))
+        continue
+    if not drift:
+        print("跑后对称性[%s]：OK" % (pname,))
+    else:
+        files = ",".join((d.get("file") or "?") for d in drift[:8])
+        print("跑后对称性[%s]：DRIFT(%d) %s" % (pname, len(drift), files))
 PY
 
 if [ "$bad" -ne 0 ]; then
