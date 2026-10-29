@@ -130,6 +130,187 @@ async fn session_face_accepts_loopback_despite_whitelist_miss() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+// ==== 登录回帧三牙（卡 `openmir2-login-srv-reply-chain` A2）====
+// 需要本机 MySQL（127.0.0.1:3306，root/空口令）与 mir2_test_account 库；不可用 ⇒ 打印跳过
+// （真机 529 链路由 A3 窗口覆盖）。临时账号（account+account_protection 两行）用后即删。
+
+const TOOTH_MYSQL: &str = "D:/mysql/mariadb-10.11.19-winx64/bin/mysql.exe";
+
+fn tooth_mysql_exec(sql: &str) {
+    let out = std::process::Command::new(TOOTH_MYSQL)
+        .args(["-h", "127.0.0.1", "-P", "3306", "-u", "root", "-e", sql])
+        .output()
+        .expect("mysql.exe 执行失败");
+    assert!(
+        out.status.success(),
+        "SQL 失败: {sql} => {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+fn tooth_mysql_available() -> bool {
+    std::process::Command::new(TOOTH_MYSQL)
+        .args([
+            "-h",
+            "127.0.0.1",
+            "-P",
+            "3306",
+            "-u",
+            "root",
+            "-e",
+            "SELECT 1",
+        ])
+        .output()
+        .is_ok_and(|o| o.status.success())
+}
+
+/// 起 login-srv（DSN ⇒ mir2_test_account）并走一次完整 TCP 登录：
+/// 连 5500 → Enter(会话"1") → Data(CM_IDPASSWORD) ⇒ 返回首条 Data 回帧的 (ident, recog)。
+async fn login_reply(account: &str, password: &str) -> (u16, i32) {
+    use mir2_protocol::frame::ServerDataPacket;
+    use mir2_protocol::internal::{ServerDataMessage, ServerDataType};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let dir = lab_dir("replychain");
+    let gate_port = support::next_port();
+    let srv_port = support::next_port();
+    let conf = write_lab(
+        &dir,
+        gate_port,
+        srv_port,
+        "server=127.0.0.1;uid=root;database=mir2_test_account;",
+    );
+    let log = dir.join("login-srv.out.log");
+    let out_f = std::fs::File::create(&log).unwrap();
+    let err_f = out_f.try_clone().unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    cmd.arg(&conf)
+        .stdout(out_f)
+        .stderr(err_f)
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().expect("启动子进程失败");
+    support::gate_ready(&log, gate_port, std::time::Duration::from_secs(15)).await;
+    support::gate_ready(&log, srv_port, std::time::Duration::from_secs(15)).await;
+
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", gate_port))
+        .await
+        .expect("连 5500 必须成功");
+    // Enter：注册用户会话 socket_id="1"（体 = {ip}/{ip}，C# ReceiveOpenUser 同形）
+    let enter = ServerDataMessage {
+        kind: ServerDataType::Enter,
+        socket_id: "1".into(),
+        data_len: 0,
+        data: b"127.0.0.1/127.0.0.1".to_vec(),
+    };
+    c.write_all(&enter.to_wire()).await.unwrap();
+    // Data：CM_IDPASSWORD(2001)。客户端帧头块 = **16 字符**（DefBlockSize，TCmdPack 时代
+    // 遗留：12B CommandMessage + 4B 填充）——错位会让 login_id 解成乱码（本牙调试实测）。
+    // 头块 = 12B CommandMessage ⇒ encode 后恰 16 字符（DefBlockSize）；不垫字节。
+    let head_block = mir2_protocol::frame::CommandMessage::make(
+        i32::from(mir2_protocol::messages::CM_IDPASSWORD),
+        0,
+        0,
+        0,
+        0,
+    )
+    .to_bytes();
+    let mut frame = vec![b'#', b'1'];
+    frame.extend_from_slice(&mir2_protocol::edcode::encode(&head_block));
+    frame.extend_from_slice(&mir2_protocol::edcode::encode(
+        format!("{account}/{password}").as_bytes(),
+    ));
+    frame.push(b'!');
+    let data_msg = ServerDataMessage {
+        kind: ServerDataType::Data,
+        socket_id: "1".into(),
+        data_len: 0,
+        data: frame,
+    };
+    c.write_all(&data_msg.to_wire()).await.unwrap();
+
+    // 读回帧（跳过 KeepAlive 等非 Data 帧），解出客户端帧的 ident/recog
+    loop {
+        let mut head = [0u8; ServerDataPacket::SIZE];
+        c.read_exact(&mut head).await.expect("网关回帧头");
+        let pkt = ServerDataPacket::from_bytes(&head).expect("回包头非法");
+        let mut body = vec![0u8; usize::from(pkt.packet_len)];
+        c.read_exact(&mut body).await.expect("网关回帧体");
+        let msg = ServerDataMessage::from_bytes(&body).expect("回帧体非法");
+        if msg.kind != ServerDataType::Data {
+            continue;
+        }
+        let bang = msg.data.iter().position(|&b| b == b'!').expect("回帧无 !");
+        let inner = &msg.data[1..bang]; // 去掉 '#'
+        let decoded = mir2_protocol::edcode::decode(inner);
+        let cmd =
+            mir2_protocol::frame::CommandMessage::from_bytes(&decoded).expect("回帧头解码失败");
+        child.kill().await.ok();
+        return (cmd.ident, cmd.recog);
+    }
+}
+
+fn tooth_cleanup(account: &str) {
+    tooth_mysql_exec(&format!(
+        "DELETE FROM mir2_test_account.account_protection WHERE AccountId=(SELECT Id FROM mir2_test_account.account WHERE Account='{account}'); DELETE FROM mir2_test_account.account WHERE Account='{account}';"
+    ));
+}
+
+/// 合法账号 + 正确密码 ⇒ **529**（SM_PASSOK_SELECTSERVER，recog=0）。
+#[tokio::test]
+#[ignore = "需要本机 MySQL 与空闲机器（并行负载下子进程装载会超时）；显式 --ignored --test-threads=1 运行"]
+async fn reply_chain_ok_password_replies_529() {
+    if !tooth_mysql_available() {
+        eprintln!("skip: 本机 MySQL 不可用（真机 529 由 A3 窗口覆盖）");
+        return;
+    }
+    tooth_cleanup("tooth_529");
+    tooth_mysql_exec(
+        "INSERT INTO mir2_test_account.account (Account,PassWord,PassFailCount,PassFailTime,Seconds,LastLoginTime,PayMode,State) VALUES ('tooth_529','toothpw',0,0,0,0,0,0);",
+    );
+    tooth_mysql_exec(
+        "INSERT INTO mir2_test_account.account_protection (AccountId,UserName,Birthday,Quiz2) SELECT Id,'TU','1990-01-01','TQ' FROM mir2_test_account.account WHERE Account='tooth_529';",
+    );
+    let (ident, recog) = login_reply("tooth_529", "toothpw").await;
+    tooth_cleanup("tooth_529");
+    assert_eq!(ident, 529, "正确密码必须回 529");
+    assert_eq!(recog, 0, "529 的 recog 必须=0");
+}
+
+/// 合法账号 + **错密码** ⇒ 503（SM_PASSWD_FAIL），recog=-1（nCode=-1）。
+#[tokio::test]
+#[ignore = "需要本机 MySQL 与空闲机器（并行负载下子进程装载会超时）；显式 --ignored --test-threads=1 运行"]
+async fn reply_chain_wrong_password_replies_503_minus1() {
+    if !tooth_mysql_available() {
+        eprintln!("skip: 本机 MySQL 不可用");
+        return;
+    }
+    tooth_cleanup("tooth_wrong");
+    tooth_mysql_exec(
+        "INSERT INTO mir2_test_account.account (Account,PassWord,PassFailCount,PassFailTime,Seconds,LastLoginTime,PayMode,State) VALUES ('tooth_wrong','toothpw',0,0,0,0,0,0);",
+    );
+    tooth_mysql_exec(
+        "INSERT INTO mir2_test_account.account_protection (AccountId,UserName,Birthday,Quiz2) SELECT Id,'TU','1990-01-01','TQ' FROM mir2_test_account.account WHERE Account='tooth_wrong';",
+    );
+    let (ident, recog) = login_reply("tooth_wrong", "wrongpw").await;
+    tooth_cleanup("tooth_wrong");
+    assert_eq!(ident, 503, "错密码必须回 503");
+    assert_eq!(recog, -1, "错密码的 nCode 必须=-1");
+}
+
+/// 未知账号 ⇒ 503（SM_PASSWD_FAIL），recog=0（nCode=0，「账号不存在」分支；
+/// oracle：AccountStorage 空表/未命中同为该分支）。
+#[tokio::test]
+#[ignore = "需要本机 MySQL 与空闲机器（并行负载下子进程装载会超时）；显式 --ignored --test-threads=1 运行"]
+async fn reply_chain_unknown_account_replies_503_zero() {
+    if !tooth_mysql_available() {
+        eprintln!("skip: 本机 MySQL 不可用");
+        return;
+    }
+    let (ident, recog) = login_reply("no_such_acct_xyz", "whatever").await;
+    assert_eq!(ident, 503, "未知账号必须回 503");
+    assert_eq!(recog, 0, "未知账号的 nCode 必须=0");
+}
+
 /// GB2312 编码（测试侧只需 ASCII + “热血传奇”）：与生产同一 `.NET cp936` 入口，
 /// 避免夹具与线上编码口径分叉。
 fn gbk(s: &str) -> Vec<u8> {

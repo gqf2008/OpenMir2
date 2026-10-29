@@ -210,17 +210,19 @@ impl AccountStore {
     /// 池用 `connect_lazy`：创建不触库，之后每条查询按需建连（对齐 C# 每操作 `Open()`+catch）。
     /// 返回 `(store, init_err)`：`init_err` = 启动首试失败的详情（调用方按 C# 文本记日志）。
     pub async fn init_or_empty(dsn: &LegacyDsn) -> (Self, Option<StorageError>) {
+        // 空 password ⇒ **不设** password（对齐 mysql.exe 无 -p 的行为：发送空串密码
+        // 与不发送在 MariaDB root@localhost 上结果不同——前者 1045、后者成功）。
+        let mut opts = sqlx::mysql::MySqlConnectOptions::new()
+            .host(&dsn.host)
+            .port(dsn.port)
+            .username(&dsn.user);
+        if !dsn.password.is_empty() {
+            opts = opts.password(&dsn.password);
+        }
         let pool = MySqlPoolOptions::new()
             .max_connections(8)
             .acquire_timeout(std::time::Duration::from_secs(3))
-            .connect_lazy_with(
-                sqlx::mysql::MySqlConnectOptions::new()
-                    .host(&dsn.host)
-                    .port(dsn.port)
-                    .username(&dsn.user)
-                    .password(&dsn.password)
-                    .database(&dsn.database),
-            );
+            .connect_lazy_with(opts.database(&dsn.database));
         let mut store = Self {
             pool,
             map: HashMap::new(),

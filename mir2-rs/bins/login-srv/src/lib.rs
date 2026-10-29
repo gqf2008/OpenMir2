@@ -106,14 +106,20 @@ async fn timer_loop(share: std::sync::Arc<state::Share>) {
     }
 }
 
-/// A2（卡 `openmir2-login-srv-dsn-source`）：账号库 DSN 的**权威源**。
+/// A2（卡 `openmir2-login-srv-dsn-source`，重切第三层修订）：账号库 DSN 的**权威源**。
 ///
-/// `config.conf` 的 `[DataBase] ConnctionString` 在生产是失效值（10.10.0.199/Mir2 旧库机），
-/// 而同部署根的 `dbsvr.conf` 是权威本机库面（db-srv 用它连接成功）。规则：host/port/user/
-/// password 取 dbsvr.conf 的 `ConnctionString`；`database` 固定账号库 `mir2_account`
-/// （C# `Config.cs:58` 缺省 DSN 同款；生产账号表仅在 mir2_account——information_schema
-/// 与 winplay0 实证，mir2_db 无 account 表）。dbsvr.conf 缺失/不可解析 ⇒ 回退 config.conf
-/// 原值（连接失败走 fail-soft，不退）。
+/// `config.conf` 的 `[DataBase] ConnctionString` 在生产指向不可达的旧库机
+/// （10.10.0.199:3306 实测超时）；同部署根的 `dbsvr.conf` 是**权威本机库端点**
+/// （server=127.0.0.1，db-srv 同源）。规则：
+/// - host/port 取 dbsvr.conf 的 `ConnctionString`（权威端点）；
+/// - **user/password 沿用 config.conf**（root/空口令＝生产 MySQL 实证可用；
+///   dbsvr.conf 存储的口令对本机 root 已失效——重切窗 1045 `Access denied for
+///   user 'root'@'localhost' (using password: YES)` 实证，与 GateAddr/DSN 同为
+///   陈旧配置）；
+/// - `database` 固定账号库 `mir2_account`（account 表仅在 mir2_account——
+///   information_schema 与 winplay0 实证，mir2_db 无此表）。
+///
+/// dbsvr.conf 缺失/不可解析 ⇒ 回退 config.conf 原值（连接失败走 fail-soft，不退）。
 fn authoritative_account_dsn(conf_path: &std::path::Path, own: LegacyDsn) -> LegacyDsn {
     let Some(root) = conf_path.parent().and_then(|p| p.parent()) else {
         return own;
@@ -139,11 +145,19 @@ fn authoritative_account_dsn(conf_path: &std::path::Path, own: LegacyDsn) -> Leg
     else {
         return own;
     };
-    let Ok(mut authoritative) = LegacyDsn::parse(conn) else {
+    let Ok(dbsvr_dsn) = LegacyDsn::parse(conn) else {
         return own;
     };
-    authoritative.database = "mir2_account".into();
-    authoritative
+    // 重切第三层修订：凭据沿用 config.conf（root/空口令＝生产 MySQL 实证可用）；
+    // dbsvr.conf 存储的口令对本机 root 已失效（重切窗 1045 实证）。
+    // database 固定账号库 mir2_account（account 表仅在 mir2_account 实证）。
+    LegacyDsn {
+        host: dbsvr_dsn.host,
+        port: dbsvr_dsn.port,
+        user: own.user,
+        password: own.password,
+        database: "mir2_account".into(),
+    }
 }
 
 async fn run_inner(args: &[String]) -> Result<()> {
