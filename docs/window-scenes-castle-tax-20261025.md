@@ -143,7 +143,7 @@
      `0\r\n1\r\n`，**不是服务端写的**。
      **归因：原因未定位**。两条假设已排除：
      - `SaveTick` **不控制写盘**——`UserCastle.IncRateGold` 只更新内存 tick
-       （`src/GameSrv/CastleManager/UserCastle.cs:796-805`），不是落盘门；
+       （`src/M2Server/Castle/UserCastle.cs:798-805`；旧稿误写 `src/GameSrv/CastleManager/`，reviewer-20 F1 订正），不是落盘门；
      - 600s 门不是拦路者——`ConsoleShowUserCountTime` 已覆盖为 5000ms，且
        `SystemProcessor.ExecuteInternal` **每 tick 都调 `ShowOnline()`**
        （`ShowOnlineTick` 在 Startup 置初值）⇒ 8s 窗口足够触发一次 `CastleMgr.Save()`。
@@ -183,7 +183,7 @@
    **map 3 铁匠**的独立场景（单场景一个 placement ⇒ 另开卡）；另有上条「税入账原因未定位」。
 2. **买武器腿**：解析 `SM_SENDDETAILGOODSLIST(652)` 的 ClientItem buffer（EDCode）取 `MakeIndex`，喂给第 19 步
    （需改 `tools/probe/mir2_probe.py`，本卡写集外）。
-3. **Castle 夹具对齐**：两侧 `Castle/List.txt` 同值（建议都 `0`），`Castle/0/SabukW.txt` 初值同源（现已是）。
+3. **Castle 夹具对齐**：两侧**含影子** `Castle/List.txt` 同值 **`0,1`**（与 runbook §0.9/§0.10 一致；W-TAX-2 需 ≥2 城；reviewer-20 F2 订正，旧稿「建议都 0」作废），`Castle/0/SabukW.txt` 初值同源（现已是）。
 4. **W-TAX-4**：真实时点（10 分钟门）+ 存档门（600000ms）；「同 tick 逐位」等 ⑧-1 的 C# 时钟注入。
 
 ## 7. run3 注册（只追加两行）

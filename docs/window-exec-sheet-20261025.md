@@ -11,16 +11,23 @@
 
 | # | 检查 | 命令 / 判据 | 不合格怎么办 |
 |---:|---|---|---|
-| 1 | 端口 | `powershell -File E:/MirServer/port-status.ps1` ⇒ **5000–7200 全 DOWN**、**mysqld 3306 UP** | 占用 ⇒ 定位后清进程；**不要跑 `start-all.ps1`**（窗口栈由 `run_batch`/`card_window` 自己起；`check_ports_free` 占用即 rc=2）。源：`delivery-acceptance-runbook` §3 B1 |
+| 1 | 端口（**profile 口径**） | `powershell -File E:/MirServer/port-status.ps1` + preflight 的 `check_ports_free` ⇒ **profile 端口（15xxx/17xxx）全空**、**mysqld 3306 UP**。生产栈 5000–7200 **可以继续在听**——`card_window.py:789 check_ports_free(ports)` 只检查传入的 profile 端口（15xxx/17xxx），netstat 表以外一概不看（B1 同口径；实测 2026-10-25 生产栈与私栈同跑，butch 全轮不受影响） | 生产栈去留**显式二选一**：**默认不停**（零风险；且 `gate_shadow_proxy --gate sel` 模板依赖生产 SelGate 7100 在听）。要停（让出 CPU 头寸/降负载）⇒ 先记录重启步骤、确认该命令**不碰 mysqld**，并在收窗时复核十端口恢复（mysqld 不算）。**永不跑 `start-all.ps1 -Stop`**（会连 mysqld 一起停）。源：`delivery-acceptance-runbook` §3 B1 + 本卡评论 2662cb1f（①-1 与服务端口径冲突的订正） |
 | 2 | 私栈前置 | `python -I -B tools/window/preflight_private_stack.py`（10 步，含 `castle_list_symmetry` / `envir_shadow_symmetry`，见该脚本 `--help`） | 按脚本输出修；`-CheckPinsOnly` 可只核钉住项 |
 | 2b | 城表对齐 | preflight 的 `castle_list_symmetry` 必须 OK（两侧含 `M2GameSvr-hook` 影子内容/sha256 一致） | 不一致 ⇒ 按 `window-runbook` §0.9 用 `Copy-Item` 对齐（W-TAX-2 需两城 `0,1`），**不碰 `E:/MirServer`**；否则城堡税/多城项必假红 |
 | 2c | 影子=基线 | preflight 的 `envir_shadow_symmetry` 必须 OK（`csharp-root/M2GameSvr/Envir` vs `M2GameSvr-hook/Envir` vs `rust-root` 逐文件 sha256；实测 642 文件 0 差异） | 不一致 ⇒ 用基线 Envir 覆盖影子（或删影子 `GameSvr.exe` 让部署重建）；否则 `--rng-log` 窗口会用被改过的 oracle 脚本（内容冻结风险） |
 | 2d | 写后复核（G-2） | 夹具应用后/收工后**重跑 preflight**（或比对基线/影子 sha）；preflight 是**写前**检查，绿 ≠ 运行期一致（runbook §0.9） | 任一 Envir/影子 sha 变化 ⇒ 先还原再到 2c；`--rng-log` 下夹具必须同时写基线+影子（G-1） |
-| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 26（blocked 5 ⇒ 入批 21）`**（**以开窗当天实况为准**；blocked 数随卡收口会变，2026-10-27 由 2 升到 5：`king_dialog` / `king_castle_war` / `npc_script_chain`(#12) 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10；#12 的裁决与证据见 `docs/window-run3-prereq-triage-20261027.md` §n12）），#10/#11/#22/#24 标 `YES` | 场景数不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ **先看是不是又有卡封存/解封**（清单行的 `blocked` 字段），并在开工记录里写明是哪两条、为什么——**不许**为了让数字对上而解封一个「oracle 恒 0 帧」的场景 |
+| 3 | 场景清单（**以 `--list` 实况为准**） | `bash tools/window/run_batch.sh --list` ⇒ **`场景数 26（blocked 5 ⇒ 入批 21）`**（**以开窗当天实况为准**；取数 commit `8bca7de1c`，2026-10-29；blocked 数随卡收口会变，2026-10-27 由 2 升到 5：`king_dialog` / `king_castle_war` / `npc_script_chain`(#12) 封存（oracle 点 `Envir/Npcs.txt` type=1 的 `GuildOfficial` 恒 0 帧，`docs/window-runbook-20261023.md` §10；#12 的裁决与证据见 `docs/window-run3-prereq-triage-20261027.md` §n12）），#10/#11/#22/#24 标 `YES` | 场景数不符 ⇒ 停（`run3-scenarios.json` 被改了）；blocked 计数不符 ⇒ **先看是不是又有卡封存/解封**（清单行的 `blocked` 字段），并在开工记录里写明是哪两条、为什么——**不许**为了让数字对上而解封一个「oracle 恒 0 帧」的场景 |
 | 4 | 门禁基线 | `python -I -B tools/goal/goal_gate.py --skip-tests --json`（全量版需低负载时段） | 红 ⇒ 先修再开窗（`window-runbook` §6） |
 
 > blocked 语义（已实测）：**blocked 场景只在 `--list` 标注、不进批次**；普通批次自动跳过并打印 `blocked B ⇒ 入批 N−B`；
 > 只有 `--only <该场景>` 点名才 rc=2（**预期**）。源：`tools/window/run_batch.sh:107-108 / :223-225`。
+
+> **栈口径（参考栈 vs 私有栈，别混）**（源：本卡评论 50033096211f / 46210975578e）：
+> ① `E:/MirServer` 参考栈跑**生产库**；conformance 私有栈 C# 用 `mir2_test_db`、Rust 用 `mir2_test_db_r`，
+> 且 `card_window` 默认**拒绝生产库**（`card_window.py:49-52`）⇒ 两栈 **DB 层隔离**，开发/测试期的受控重跑
+> **不需要 reference stack 下线**（「5000–7200 全 DOWN」是真机窗口口径，开发/测试按 ①-1 的 profile 口径）。
+> ② **私有栈同一时刻只允许一套在跑**（同库并发会互相污染 DB 后态；这也是 port 互斥规则的另一半理由）。
+> ③ 拿窗口证据时，确保没有第二套 conformance 栈同库并发。
 
 ## ② 分轮次执行表（场景 → 卡片 W 项 → 期望证据 → 失败先看什么）
 
@@ -28,11 +35,11 @@
 |---|---|---|---|---|
 | W1 | #1–#17（`login_only` … `upgrade_retrieve`） | 台账 #2 `W-LF-1`（部分：既有角色进图腿）、#3 的相邻腿；其余为通用冒烟 | `card_window.py` 每轮 out 目录的 `frames.ndjson` + DB 九表快照 + `compare_runs.py` 输出 | `run_batch` 的 rc 双列（outer/compare）；探针日志 `probe.log` |
 | W2 | #18 `gamepoint_exchange` | 台账 #3 **W-PD-1**（GAMEPOINT 落库 + `SM_GAMEGOLDNAME(5008)`） | 5008 的 `Param/Tag` 逐字节 + `characters.GamePoint` 前后值（9→0）+ 643 帧序 | 先看是否命中 `CHECKGAMEPOINT > 8`（`:522`）门；`SoftVersionDateEx == 0` 会导致根本不发 5008（`PlayObject.Base.cs:930-933`） |
-| W3 | #19 `clearmapmon_q001` | 台账 #4 **W-CM-2**；W-CM-1 **只覆盖「MONGENEX 刷怪/同名多只/玩家切图」**——**清场与宠物/召唤物仅构造级，无真机证据**（引台账第 4 行） | **活性检查**：末步 `wait_idents [10]`（累计、**无 seq 下界**）只证「连接内曾出现 `SM_TURN`」，**不区分来源/时点，≠「那 2 只 `骷髅精灵5` 进图」**。数量/位置交给证据层：`SM_TURN` 帧的 `recog`(actor id)/`param`+`tag`(x,y) + 两侧 `frames.ndjson` 逐帧对拍 + 实体/AOI 差集；**不期望 `SM_DISAPPEAR(30)`**（Q001 无 MonGen 行，清的是空图） | **第 4 步 `wait_for 643` 超时**（第 3 步 `dlg_select @rw01` 的 1011 被 CanJmp 拒）⇒ 多半是前置**蛇毒×1 未预置**（`老人-1.txt` `[@main]` 的 `checkitem 蛇毒` 支才给 `@rw01` 链接 :20）；若已预置仍超时，再查 `[@rw01]` 页的 `@rw02` 链接(:35) 与被清怪是否在场 |
+| W3 | #19 `clearmapmon_q001` | 台账 #4 **W-CM-2**；W-CM-1 **只覆盖「MONGENEX 刷怪/同名多只/玩家切图」**——**清场与宠物/召唤物仅构造级，无真机证据**（引台账第 4 行） | **活性检查**：**第 7 步** `wait_idents [10]`（q001 共 8 步，**末步是 `sleep 500`**；累计、**无 seq 下界**）只证「连接内曾出现 `SM_TURN`」，**不区分来源/时点，≠「那 2 只 `骷髅精灵5` 进图」**。数量/位置交给证据层：`SM_TURN` 帧的 `recog`(actor id)/`param`+`tag`(x,y) + 两侧 `frames.ndjson` 逐帧对拍 + 实体/AOI 差集；**不期望 `SM_DISAPPEAR(30)`**（Q001 无 MonGen 行，清的是空图） | **第 4 步 `wait_for 643` 超时**（第 3 步 `dlg_select @rw01` 的 1011 被 CanJmp 拒）⇒ 多半是前置**蛇毒×1 未预置**（`老人-1.txt` `[@main]` 的 `checkitem 蛇毒` 支才给 `@rw01` 链接 :20）；若已预置仍超时，再查 `[@rw01]` 页的 `@rw02` 链接(:35) 与被清怪是否在场 |
 | W3 | #20 `dropgold_zero_draw` | 台账 #6 **W-DG-1** | `SM_GOLDCHANGED(653)` 恰一条 + `Recog` 同源 + **金币净差 0** + 地面无金币 + RNG 流位不前进 | 653 缺 ⇒ 没进 `ClientDropGold` 或命中前置门（SafeZone / `nGold < CanDropGold`，只发 `RM_MENU_OK`）；**金币差写成 100 是错的**（BUG-REPLICA 2：`DropGoldDown` 恒失败回滚） |
 | W3 | #22 `castle_merchant_tax`（**blocked**） | 台账 #1 **W-TAX-2/3** | 见 ③：本轮不可跑（需配置覆盖通道 + 第二 placement + 600s 落盘） | — |
-| W3 | #23 `castle_merchant_tax_potion` | 台账 #1 **W-TAX-1（买腿）** | 步序：`0153` → 643 → `@buy` → 645 → `CM_USERBUYITEM(1014, 金创药(小量))` → `wait_idents[650,200]` → `sleep 620000`；**期望买价 88、当场 `650.recog` = Gold 9912**、620s 后 `SabukW` 的 `TotalGold`/`TodayIncome` **各 +4** | 650 缺 ⇒ 买卖前置（金币/负重/门槛）不满足；620s 后文件未 +4 ⇒ `SaveTick` 10min 门或税目的地不对（先看台账 #1 的 W-TAX-2 前置） |
-| —（不入批） | #21 `butch_two_draws` | 台账 #6 **W-DG-2** | 见 ③：本轮不可跑 | — |
+| W3 | #23 `castle_merchant_tax_potion` | 台账 #1 **W-TAX-1（买腿）** | 步序：`0153` → 643 → `@buy` → 645 → `CM_USERBUYITEM(1014, 金创药(小量))` → `wait_idents[650,200]` → `sleep 620000`（**手动单跑要带 `--timeout-ms 700000`**，与场景 JSON 一致）；**期望买价 88、当场 `650.recog` = Gold 9912**、620s 后 `SabukW` 的 `TotalGold`/`TodayIncome` **各 +4** | 650 缺 ⇒ 买卖前置（金币/负重/门槛）不满足；620s 后文件未 +4 ⇒ `SaveTick` 10min 门或税目的地不对（先看台账 #1 的 W-TAX-2 前置） |
+| W3 | #21 `butch_two_draws`（**已解封、进批**） | 台账 #6 **W-DG-2** | **kill 步已合（`2c271ddb9`），只差实测**：复跑只需窗口 + `--rng-log`；判据工具 `tools/window/butch_ledger.py`（14 颗牙）。注意帧面对比仍 UNDECIDABLE（`32/34/44/637/656` 未登记 + `ident 14` PENDING），那是规则表覆盖面问题，需另卡（详见 ③） | — |
 | W4 | #25 `softclose_save` | `openmir2-makeghost-lifecycle` **M-3 A1 / M-2 A5**（移除时存档落库） | 两侧 `characters` 行的 `CX/CY` = 走位后的 **(321,328)**（不是基线 320,328）+ `save_settle.json` 两侧 `settled=true` + `db/manifest.json` 两侧齐全 | 行值仍是 320,328 ⇒ 软关存档没发/写的是基线；`save_settle` rc=2 ⇒ 窗口内未落定（**不是**通过）；`require_changes` 无变化 ⇒ 本场景没产生状态变化（不该发生，查 walk 是否成功） |
 | W4 | #26 `softclose_relogin` | `openmir2-makeghost-lifecycle` **M-3 A6（单客户端腿）** + `openmir2-softclose-cleanup-residue` A1 | 两段 `SM_FEATURECHANGED(41)` 各一条且 `recog_is=self`；`relogin.assert_same_actor` 在 run 内断言两段 ActorId 相同；`chain.segments` 两段齐全 | `assert_same_actor` 失败 ⇒ 判据前提不成立（白跑）；段2 等不到 41 ⇒ 重连没进世界 |
 
