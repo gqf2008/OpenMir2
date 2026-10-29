@@ -10,7 +10,8 @@
 //! → `连接SQL服务器成功...` → `账号数据读取成功...[N]` → `服务已启动成功...`。
 //!
 //! **失败要响（M1④）**：缺配置键、缺 AddrTable/UserLimit、绑不上端口、连不上 MySQL
-//! 一律打印明确错误并以非零码退出（连不上库的偏离已登记 A-6）。
+//! 一律打印明确错误并以非零码退出（缺配置/缺伴随文件/端口非法）；SQL 连接失败按
+//! oracle fail-soft 语义只记日志继续跑（卡 `openmir2-login-srv-dsn-source`，A-6 偏离撤销）。
 
 // 文档与日志逐字引用 C# 标识符/文件名，不加反引号改造。
 #![allow(clippy::doc_markdown)]
@@ -105,6 +106,46 @@ async fn timer_loop(share: std::sync::Arc<state::Share>) {
     }
 }
 
+/// A2（卡 `openmir2-login-srv-dsn-source`）：账号库 DSN 的**权威源**。
+///
+/// `config.conf` 的 `[DataBase] ConnctionString` 在生产是失效值（10.10.0.199/Mir2 旧库机），
+/// 而同部署根的 `dbsvr.conf` 是权威本机库面（db-srv 用它连接成功）。规则：host/port/user/
+/// password 取 dbsvr.conf 的 `ConnctionString`；`database` 固定账号库 `mir2_account`
+/// （C# `Config.cs:58` 缺省 DSN 同款；生产账号表仅在 mir2_account——information_schema
+/// 与 winplay0 实证，mir2_db 无 account 表）。dbsvr.conf 缺失/不可解析 ⇒ 回退 config.conf
+/// 原值（连接失败走 fail-soft，不退）。
+fn authoritative_account_dsn(conf_path: &std::path::Path, own: LegacyDsn) -> LegacyDsn {
+    let Some(root) = conf_path.parent().and_then(|p| p.parent()) else {
+        return own;
+    };
+    let dbsvr_path = ["/DBServer/dbsvr.conf", "/DBSrv/dbsvr.conf"]
+        .iter()
+        .map(|rel| root.join(rel.trim_start_matches('/')))
+        .find(|p| p.is_file());
+    let Some(dbsvr_path) = dbsvr_path else {
+        return own;
+    };
+    let text = std::fs::read_to_string(&dbsvr_path).unwrap_or_default();
+    let Some(conn) = text
+        .lines()
+        .find(|l| {
+            l.trim_start()
+                .to_ascii_lowercase()
+                .starts_with("connctionstring")
+        })
+        .and_then(|l| l.split_once('='))
+        .map(|(_, v)| v.trim())
+        .filter(|v| !v.is_empty())
+    else {
+        return own;
+    };
+    let Ok(mut authoritative) = LegacyDsn::parse(conn) else {
+        return own;
+    };
+    authoritative.database = "mir2_account".into();
+    authoritative
+}
+
 async fn run_inner(args: &[String]) -> Result<()> {
     let conf = args
         .first()
@@ -144,13 +185,26 @@ async fn run_inner(args: &[String]) -> Result<()> {
         ),
     );
     log_line("INF", "正在连接SQL服务器...");
-    let dsn = LegacyDsn::parse(&cfg.conn_string)
+    let own_dsn = LegacyDsn::parse(&cfg.conn_string)
         .with_context(|| "[错误] SQL 连接失败!请检查SQL设置...（连接串缺键）".to_string())?;
-    let store = AccountStore::connect(&dsn)
-        .await
-        .context("[错误] SQL 连接失败!请检查SQL设置...（M1④/A-6：连不上库必须报错退出）")?;
-    log_line("INF", "连接SQL服务器成功...");
-    log_line("INF", &format!("账号数据读取成功...[{}]", store.count()));
+    // A2（卡 `openmir2-login-srv-dsn-source`）：DSN 权威源 = dbsvr.conf（host/port/凭据）
+    // + 账号库 mir2_account；连接失败按 oracle fail-soft 只记日志继续（A-6 偏离撤销）。
+    let dsn = authoritative_account_dsn(&conf, own_dsn);
+    log_line(
+        "INF",
+        &format!(
+            "账号库连接参数（权威源）：server={}:{} database={}",
+            dsn.host, dsn.port, dsn.database
+        ),
+    );
+    let (store, init_err) = AccountStore::init_or_empty(&dsn).await;
+    if let Some(e) = &init_err {
+        log_line("ERR", "[错误] SQL 连接失败!请检查SQL设置...");
+        log_line("ERR", &format!("{e:#}"));
+    } else {
+        log_line("INF", "连接SQL服务器成功...");
+        log_line("INF", &format!("账号数据读取成功...[{}]", store.count()));
+    }
     log_line("INF", "服务已启动成功...");
     log_line("INF", "欢迎使用翎风系列游戏软件...");
     log_line("INF", "网站:http://www.gameofmir.com");
