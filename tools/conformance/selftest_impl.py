@@ -1119,8 +1119,11 @@ class Selftest(object):
 
         rc, rep = self.compare(od270p, rd270p, ["--rules", _path_bogus])
         _fr_bogus = (rep or {}).get("frames") or {}
-        self.check("T-270 F5a：未知 oracle_extra_policy 值 => rc 2、不放行",
-                   rc == 2 and not _fr_bogus.get("oracle_extra_hits"),
+        self.check("T-270 F5a：未知 oracle_extra_policy 值 => rc 2、不放行，且红行有归因",
+                   rc == 2 and not _fr_bogus.get("oracle_extra_hits")
+                   and any(u.get("ident") == 14
+                           and "未知的 oracle_extra_policy" in str(u.get("adjudication_blocked_by") or "")
+                           for u in (rep or {}).get("undecidable", [])),
                    (rc, (rep or {}).get("undecidable")))
 
         rc, rep = self.compare(od270p, rd270p, ["--rules", _path_pol_only])
