@@ -224,7 +224,8 @@ def _resolve(repo, oid, want_commit, git_cmd):
 def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None):
     """四态判定。返回 (rc, detail, stats)。"""
     stats = {"entries": len(entries), "oids": 0, "ok": 0, "short": 0,
-             "non_commit": 0, "bad": 0, "empty": 0, "exempted": 0, "ellipsis": 0}
+             "non_commit": 0, "bad": 0, "empty": 0, "exempted": 0, "ellipsis": 0,
+             "explanatory": 0}
     bad, short_hits, skipped, exempt = [], [], [], []
     baseline = set(baseline or [])
     used_baseline = set()
@@ -265,6 +266,8 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None
                 if not matches:
                     skipped.append("%s 不含 oid（自由文本：%r）" % (field, text[:40]))
                     continue
+                _declared_seen = False
+                _pure_oid = bool(re.fullmatch(r"[0-9a-fA-F]{7,40}", text.strip()))
                 for _m in matches:
                     cand = _m.group(0)
                     # 卡 `openmir2-oid-gate-ellipsis-abbrev`：**紧跟省略号**的 hex 片段是
@@ -277,6 +280,17 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None
                         skipped.append("%s=%s（紧跟省略号 ⇒ 展示缩写，跳过）"
                                        % (field, cand))
                         continue
+                    # 卡 `openmir2-oid-baseline-audit-free-text` 的续修：**body.head / body.base
+                    # 的自由文本**只把**第一个**（非省略号）候选当 oid 声明去解析；
+                    # 其后候选是说明性片段（如 `binary sha e49a8ede`）⇒ 跳过计 info。
+                    # 纯 oid 值、refs.*、parent 的严格性不变。
+                    if (field in ("body.head", "body.base") and not _pure_oid
+                            and _declared_seen):
+                        stats["explanatory"] += 1
+                        skipped.append("%s=%s（首个候选之后的说明性片段，跳过）"
+                                       % (field, cand))
+                        continue
+                    _declared_seen = True
                     stats["oids"] += 1
                     if kind == "entry":
                         # parent 指的是**条目本身**——它是 git **blob** 对象（thread 视图里的 oid 就是
@@ -302,10 +316,11 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None
     if not entries:
         return 2, "扫描到 0 条条目 ⇒ 判不了（扫了 0 个不许算绿）", stats
     detail = ("扫描 %d 条条目 / %d 个 oid：可解析 %d（其中短 oid %d）、非 commit 跳过 %d、"
-              "空值 %d、解析不到 %d（其中已豁免 %d）、省略号缩写跳过 %d"
+              "空值 %d、解析不到 %d（其中已豁免 %d）、省略号缩写跳过 %d、"
+              "说明性片段跳过 %d"
               % (stats["entries"], stats["oids"], stats["ok"], stats["short"],
                  stats["non_commit"], stats["empty"], stats["bad"],
-                 len(exempt), stats["ellipsis"]))
+                 len(exempt), stats["ellipsis"], stats["explanatory"]))
     stats["exempted"] = len(exempt)
     stats["baseline_total"] = len(baseline)
     stats["baseline_unused"] = len(baseline - used_baseline)
@@ -845,6 +860,24 @@ def selfcheck():
     chk(rc_eo2 == 1 and st_eo2.get("ellipsis") == 1,
         "A3⑤ 反向：第一处不带省略号、第二处带 ⇒ 第一处仍红（rc=%d，ellipsis=%d）"
         % (rc_eo2, st_eo2.get("ellipsis", -1)))
+
+    # ---- body.head/base 自由文本：只把**第一个**候选当 oid 声明（卡续修）----
+    # ① `95b2e9e（binary sha e49a8ede）`：首个候选是真实短 oid ⇒ 绿，说明性片段跳过 1。
+    _first_ok = ("dev", "th-fr1", "5" * 40,
+                 mk({}, {"head": "%s（binary sha e49a8ede）" % real[:7]}))
+    rc_f1, d_f1, st_f1 = check_entries([_first_ok], tmp)
+    chk(rc_f1 == 0 and st_f1.get("explanatory") == 1,
+        "续修① 自由文本首个候选是好短 oid、其后是 binary sha ⇒ rc=0 且说明性片段跳过 1"
+        "（rc=%d，explanatory=%d）" % (rc_f1, st_f1.get("explanatory", -1)))
+    # ② 首个候选是坏 40 位 ⇒ 仍红（说明性片段规则不得掩盖声明本身）。
+    _first_bad = ("dev", "th-fr2", "6" * 40,
+                  mk({}, {"head": "master deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}))
+    rc_f2, d_f2, _ = check_entries([_first_bad], tmp)
+    chk(rc_f2 == 1, "续修② 首个候选是坏 40 位 ⇒ 仍红（rc=%d）" % rc_f2)
+    # ③ 纯 oid 的 body.head 坏 ⇒ 仍红（不适用说明性片段规则）。
+    _pure_bad = ("dev", "th-fr3", "7" * 40, mk({}, {"head": "0" * 40}))
+    rc_f3, d_f3, _ = check_entries([_pure_bad], tmp)
+    chk(rc_f3 == 1, "续修③ 纯 oid 的 body.head 坏 ⇒ 仍红（rc=%d）" % rc_f3)
 
     # A3③：refs.head 空值仍红（空不等于短）。
     _empty_refs = ("dev", "th-ell4", "2" * 40, mk({"head": ""}, {}))
