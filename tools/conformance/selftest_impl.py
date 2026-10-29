@@ -996,6 +996,64 @@ class Selftest(object):
                    (rc, (rep or {}).get("frames", {}).get("oracle_extra_hits"),
                     (rep or {}).get("undecidable")))
 
+        # 卡 openmir2-t270-shape-327-327-3：run35 命中的第 6 个 Dir 变体
+        # (327,327,3) max=1（decision 449cd0c9…，由脚本从卡线程回读写入 rules.json）。
+        hit327 = self.frame(14, b"", **dict(heads_o, seq=807, param=327, tag=327, series=3))
+        od327 = self.write_run("t270-o-327", base270 + [hit327],
+                               db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od327, rd270)
+        _hits327 = (((rep or {}).get("frames") or {}).get("oracle_extra_hits") or [])
+        self.check("T-270 shape(327,327,3)：精确登记后 rc 0 且 oracle_extra_hits=1（approved_by=449cd0c9…）",
+                   rc == 0 and len(_hits327) == 1
+                   and "449cd0c9" in str(_hits327[0].get("approved_by") or ""),
+                   (rc, _hits327, (rep or {}).get("undecidable")))
+
+        od327x2 = self.write_run("t270-o-327-2", base270 + [hit327, hit327],
+                                 db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od327x2, rd270)
+        self.check("T-270 shape(327,327,3) 负例：同形状 2 条 > max=1 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        hit327body = self.frame(14, b"x", **dict(heads_o, seq=808, param=327, tag=327, series=3))
+        od327b = self.write_run("t270-o-327-body", base270 + [hit327body],
+                                db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od327b, rd270)
+        self.check("T-270 shape(327,327,3) 负例：body 非空 => rc 2（有载荷不放行）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        hit327dir = self.frame(14, b"", **dict(heads_o, seq=809, param=327, tag=327, series=4))
+        od327d = self.write_run("t270-o-327-dir", base270 + [hit327dir],
+                                db=_snap270("mir2_test_db_oracle"))
+        rc, rep = self.compare(od327d, rd270)
+        self.check("T-270 shape(327,327,3) 负例：同坐标不同 Dir(series=4) 未登记 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        rules_327_max0 = _rules270_variant(
+            "rules-270-327-max0.json",
+            lambda r: [e.__setitem__("max", 0) for e in r["oracle_extra_shapes"]
+                       if e.get("shape") == "327,327,3"])
+        rc, rep = self.compare(od327, rd270, ["--rules", rules_327_max0])
+        self.check("T-270 shape(327,327,3) 负例：规则副本 max=0 => rc 2",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
+        rules_327_nodec = _rules270_variant(
+            "rules-270-327-nodec.json",
+            lambda r: [e.pop("decision", None) for e in r["oracle_extra_shapes"]
+                       if e.get("shape") == "327,327,3"])
+        rc, rep = self.compare(od327, rd270, ["--rules", rules_327_nodec])
+        self.check("T-270 shape(327,327,3) 负例：缺 decision => rc 2（PENDING 牙）",
+                   rc == 2
+                   and not (((rep or {}).get("frames") or {}).get("oracle_extra_hits")),
+                   (rc, (rep or {}).get("undecidable")))
+
         # ---- R20-Y1/Y3/Y4 返工牙（PENDING 语义用临时副本测）----
         # Y1：status=APPROVED 但缺 oracle_extra_decision ⇒ 视同 PENDING、不放行。
         path270_nodec = _rules270_variant(
