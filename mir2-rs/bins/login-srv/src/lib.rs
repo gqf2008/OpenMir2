@@ -63,13 +63,20 @@ fn print_banner() {
     );
 }
 
-/// 监听地址：C# 默认 `"*"`（`IPAddress.Parse("*")` 会抛）；这里按 C#「监听 Any」的意图取 0.0.0.0。
-fn bind_addr(addr: &str) -> String {
-    if addr.trim().is_empty() || addr == "*" {
-        "0.0.0.0".to_string()
-    } else {
-        addr.to_string()
-    }
+/// 监听/广播分离（卡 `openmir2-login-srv-bind-addr`）：本服务的**监听**一律绑
+/// `0.0.0.0`（对齐 C# LoginSrv `IPAddress.Any`——同 conf 字面地址 C# 照常监听；
+/// 切流 S4 实测字面绑 10.10.0.102 ⇒ os error 10049 起不来）。conf 的
+/// `GateAddr`/`ServerAddr` 只作日志/广播数据，不参与绑定，下发字段值不变。
+fn listen_ip() -> &'static str {
+    "0.0.0.0"
+}
+
+/// 起 5500/5600 两个监听（`AppService.StartAsync`：login.StartServer → masSoc.StartServer）。
+async fn bind_listeners(cfg: &config::Config) -> std::io::Result<(TcpListener, TcpListener)> {
+    Ok((
+        TcpListener::bind((listen_ip(), cfg.gate_port)).await?,
+        TcpListener::bind((listen_ip(), cfg.server_port)).await?,
+    ))
 }
 
 /// `TimedService.ExecuteAsync`（10ms 轮询 + 20s/10s 两个节拍）。
@@ -110,31 +117,24 @@ async fn run_inner(args: &[String]) -> Result<()> {
         ),
     );
     // C# `AppService.StartAsync` 的顺序：login.StartServer(5500) → masSoc.StartServer(5600)
-    // → accountStorage.Initialization(SQL)
-    let gate_listener = TcpListener::bind((bind_addr(&cfg.gate_addr), cfg.gate_port))
-        .await
-        .with_context(|| {
-            format!(
-                "绑定账号登陆服务 {}:{} 失败（端口被占？M1④：失败必须明确报错退出）",
-                cfg.gate_addr, cfg.gate_port
-            )
-        })?;
-    log_line(
-        "INF",
-        &format!("账号登陆服务[{}:{}]已启动.", cfg.gate_addr, cfg.gate_port),
-    );
-    let session_listener = TcpListener::bind((bind_addr(&cfg.server_addr), cfg.server_port))
-        .await
-        .with_context(|| {
-            format!(
-                "绑定账号数据服务 {}:{} 失败（端口被占？M1④）",
-                cfg.server_addr, cfg.server_port
-            )
-        })?;
+    // → accountStorage.Initialization(SQL)。监听恒 0.0.0.0；GateAddr/ServerAddr 仅广播。
+    let (gate_listener, session_listener) = bind_listeners(&cfg).await.with_context(|| {
+        format!(
+            "绑定账号服务 0.0.0.0:{}/0.0.0.0:{} 失败（端口被占？M1④：失败必须明确报错退出）；conf 广播地址 GateAddr={}/ServerAddr={} 仅下发，不参与绑定",
+            cfg.gate_port, cfg.server_port, cfg.gate_addr, cfg.server_addr
+        )
+    })?;
     log_line(
         "INF",
         &format!(
-            "账号数据服务[{}:{}]已启动.",
+            "账号登陆服务[GateAddr={}（仅广播）; 监听 0.0.0.0:{}]已启动.",
+            cfg.gate_addr, cfg.gate_port
+        ),
+    );
+    log_line(
+        "INF",
+        &format!(
+            "账号数据服务[ServerAddr={}（仅广播）; 监听 0.0.0.0:{}]已启动.",
             cfg.server_addr, cfg.server_port
         ),
     );

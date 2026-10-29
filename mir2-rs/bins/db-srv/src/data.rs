@@ -58,18 +58,29 @@ pub(crate) enum ConnAction {
     Close,
 }
 
+/// 绑定 6000 数据面监听（卡 `openmir2-login-srv-bind-addr` A2 审计）：**按 conf
+/// `[Setup] ServerAddr` 字面绑定**——与 C# DBSvr 同语义（生产实况：conf
+/// ServerAddr=127.0.0.1 ⇒ 监听 127.0.0.1:6000；LoginSrv 的字面绑定缺陷不适用：
+/// 本角色 conf 可绑定，且 C# 同样字面绑定）。conf 含不可本机绑定地址 ⇒ bind
+/// 报错 fail-loud（M1④）。A2 牙钉住本 parity。注：5100 面（GateAddr/GatePort）
+/// 当前只解析未起监听（S4b 未完片），起监听时须同样字面绑定。
+async fn bind_data_listener(advertised_addr: &str, port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind((advertised_addr, port)).await
+}
+
 /// 起 6000 监听并服务（`DataService.Initialize` + `Start`）。
 ///
 /// # Errors
 /// 绑定失败（端口被占/地址非法）时返回错误（M1④：启动失败要明确报错并给退出码）。
 pub async fn run(server: Arc<Server>, db: Arc<Db>) -> Result<()> {
-    let addr = (server.cfg.server_addr.as_str(), server.cfg.server_port);
-    let listener = TcpListener::bind(addr).await.with_context(|| {
-        format!(
-            "绑定 {}:{} 失败（端口被占？M1④）",
-            server.cfg.server_addr, server.cfg.server_port
-        )
-    })?;
+    let listener = bind_data_listener(&server.cfg.server_addr, server.cfg.server_port)
+        .await
+        .with_context(|| {
+            format!(
+                "绑定 {}:{} 失败（端口被占？M1④）",
+                server.cfg.server_addr, server.cfg.server_port
+            )
+        })?;
     log::info(&format!(
         "玩家数据存储服务[{}:{}]已启动.等待链接...",
         server.cfg.server_addr, server.cfg.server_port
@@ -1109,5 +1120,25 @@ mod db_fault_tests {
             "item 表不受 storage 失败影响"
         );
         ts::drop_db(&dsn).await;
+    }
+}
+
+#[cfg(test)]
+mod bind_addr_teeth {
+    use super::*;
+
+    /// A2（卡 `openmir2-login-srv-bind-addr`）：parity 钉死牙——6000 数据面监听**跟随
+    /// conf `ServerAddr` 字面绑定**（与 C# DBSvr 同语义；生产实况 conf=127.0.0.1 ⇒
+    /// 监听 127.0.0.1:6000）。防误改 0.0.0.0 或改绑他址。
+    #[tokio::test]
+    async fn a2_bind_follows_conf_addr_csharp_parity() {
+        let l = bind_data_listener("127.0.0.1", 0)
+            .await
+            .expect("bind 必须成功");
+        assert_eq!(
+            l.local_addr().unwrap().ip().to_string(),
+            "127.0.0.1",
+            "6000 数据面监听必须按 conf ServerAddr 字面绑定（C# parity）"
+        );
     }
 }

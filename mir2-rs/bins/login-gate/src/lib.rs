@@ -99,6 +99,14 @@ enum Admission {
     Slot(usize),
 }
 
+/// 绑定对外监听（卡 `openmir2-login-srv-bind-addr` A2 审计）：**按 conf `GateAddr0` 字面
+/// 绑定**——与 C# LoginGate 同语义（生产实况：conf GateAddr0=127.0.0.1 ⇒ 监听
+/// 127.0.0.1:7000；LoginGate 无广播下发字段）。conf 含不可本机绑定地址 ⇒ bind 报错
+/// fail-loud（M1④），与 C# 字面绑定同判。A2 牙钉住本 parity，防将来误改 0.0.0.0 造成偏离。
+async fn bind_gate_listener(cfg: &config::GateConfig) -> std::io::Result<TcpListener> {
+    TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port)).await
+}
+
 #[allow(clippy::too_many_lines)] // 启动顺序照 `AppService.Start`：先连下游、再监听，错误分支都是 fail-loud
 async fn run_inner(args: &[String]) -> Result<()> {
     // 配置路径：可选 argv[1] 覆盖（默认取可执行文件同目录，与 C# BaseDirectory 一致）
@@ -146,14 +154,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
         Arc::clone(&slots),
     ));
 
-    let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
-        .await
-        .with_context(|| {
-            format!(
-                "绑定 {}:{} 失败（端口被占？）",
-                cfg.gate_addr, cfg.gate_port
-            )
-        })?;
+    let listener = bind_gate_listener(&cfg).await.with_context(|| {
+        format!(
+            "绑定 {}:{} 失败（端口被占？）",
+            cfg.gate_addr, cfg.gate_port
+        )
+    })?;
     glog!(
         "INF",
         "登录网关[{}:{}]已启动...",
@@ -826,5 +832,33 @@ mod tests {
             "下游断开必须清全部槽（若只清一个 ⇒ 本用例红）"
         );
         assert!(!table.is_full());
+    }
+}
+
+#[cfg(test)]
+mod bind_addr_teeth {
+    use super::*;
+
+    /// A2（卡 `openmir2-login-srv-bind-addr`）：parity 钉死牙——监听**跟随 conf
+    /// `GateAddr0` 字面绑定**（与 C# LoginGate 同语义；生产实况 conf=127.0.0.1 ⇒
+    /// 监听 127.0.0.1:7000）。本牙防两向偏离：误改 0.0.0.0（暴露 loopback-only 服务）
+    /// 或改绑其它地址都会红。login-srv 的字面绑定缺陷（S4 10049）不适用于本角色：
+    /// 生产 conf 是 127.0.0.1（可绑定），且 C# 同样字面绑定。
+    #[tokio::test]
+    async fn a2_bind_follows_conf_addr_csharp_parity() {
+        let cfg = config::GateConfig {
+            srv_addr: "127.0.0.1".into(),
+            srv_port: 1,
+            gate_addr: "127.0.0.1".into(),
+            gate_port: 0,
+            client_timeout_ms: 60_000,
+        };
+        let l = bind_gate_listener(&cfg).await.expect("bind 必须成功");
+        let ip = l.local_addr().unwrap().ip();
+        assert_eq!(
+            ip.to_string(),
+            cfg.gate_addr,
+            "监听必须按 conf GateAddr0 字面绑定（C# parity）"
+        );
     }
 }

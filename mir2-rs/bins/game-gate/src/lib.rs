@@ -504,6 +504,14 @@ impl Drop for SlotGuard {
     }
 }
 
+/// 绑定一个端点的对外监听（卡 `openmir2-login-srv-bind-addr` A2 审计）：**按 conf
+/// `GateAddressN` 字面绑定**（缺省回退链终点即 `0.0.0.0`）——与 C# GameGate 同语义
+/// （生产实况：conf GateAddress1=127.0.0.1 ⇒ 监听 127.0.0.1:7200）。conf 含不可本机
+/// 绑定地址 ⇒ bind 报错 fail-loud（M1④），与 C# 字面绑定同判。A2 牙钉住本 parity。
+async fn bind_endpoint_listener(ep: &config::Endpoint) -> std::io::Result<TcpListener> {
+    TcpListener::bind((ep.gate_addr.as_str(), ep.gate_port)).await
+}
+
 #[allow(clippy::too_many_lines)] // 端点循环：连接/状态/槽表/两个任务；拆函数只会多传一坨 Arc
 async fn run_inner(args: &[String]) -> Result<()> {
     let conf = args
@@ -626,11 +634,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
             Ok::<(), anyhow::Error>(())
         }));
 
-        let listener = TcpListener::bind((ep.gate_addr.as_str(), ep.gate_port))
-            .await
-            .with_context(|| {
-                format!("绑定 {}:{} 失败（端口被占？）", ep.gate_addr, ep.gate_port)
-            })?;
+        let listener = bind_endpoint_listener(&ep).await.with_context(|| {
+            format!("绑定 {}:{} 失败（端口被占？）", ep.gate_addr, ep.gate_port)
+        })?;
         glog!(
             "INF",
             "游戏网关[{}:{}]已启动...",
@@ -2245,6 +2251,30 @@ mod tests {
                 Some(u16::try_from(MAX_SESSION - 1).unwrap())
             ),
             "第 10001 个连接返回最后一个槽（9999）的 handle，不 panic"
+        );
+    }
+}
+
+#[cfg(test)]
+mod bind_addr_teeth {
+    use super::*;
+
+    /// A2（卡 `openmir2-login-srv-bind-addr`）：parity 钉死牙——端点监听**跟随 conf
+    /// `GateAddressN` 字面绑定**（与 C# GameGate 同语义；生产实况 conf=127.0.0.1 ⇒
+    /// 监听 127.0.0.1:7200）。防误改 0.0.0.0（暴露 loopback-only 服务）或改绑他址。
+    #[tokio::test]
+    async fn a2_bind_follows_conf_addr_csharp_parity() {
+        let ep = config::Endpoint {
+            srv_addr: "127.0.0.1".into(),
+            srv_port: 1,
+            gate_addr: "127.0.0.1".into(),
+            gate_port: 0,
+        };
+        let l = bind_endpoint_listener(&ep).await.expect("bind 必须成功");
+        assert_eq!(
+            l.local_addr().unwrap().ip().to_string(),
+            ep.gate_addr,
+            "端点监听必须按 conf GateAddress 字面绑定（C# parity）"
         );
     }
 }
