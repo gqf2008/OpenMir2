@@ -323,7 +323,7 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
   List.txt 不一致仍 FAIL）：SabukW 差异记 WARN 并点名文件，三侧 sha 写进基线；夹具整体缺失才 FAIL。
 ---
 
-## 0.10 跑后对称性：C# 运行期会重写 Castle 文件（2026-10-25；卡 `openmir2-postrun-symmetry-drift`）
+## 0.10 跑后对称性：C# 运行期会重写 Castle 文件（2026-10-25；卡 `openmir2-postrun-symmetry-drift`；还原方向订正 2026-10-29，卡 `openmir2-postrun-drift-followups`）
 
 - **事实**：C# 的 `CastleMgr.Save()`/`SaveCastleList()` 会按**内存状态**重写
   `Castle/List.txt` 与 `Castle/<n>/SabukW.txt`（与 600s 存档门同一机制）⇒ **跑后漂移是预期行为**，
@@ -331,20 +331,44 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
   （mtime=运行时刻）。
 - **自动复核**：`card_window.py` 在 verdict 定稿后、写产物前做一次跑后对称性复核，结果写
   `card-window.json` 的 **`post_run_symmetry_drift`**（无漂移为 `[]`；有则列 `{file, sha256:{侧:sha}}`）。
-  **只标注、不改本轮 parity 结论**。`run_batch.sh` 批次末尾打印一行
-  **`跑后对称性：OK`** 或 **`跑后对称性：DRIFT(n) <文件…>`**。另见 §0.9b：`run_batch.sh` 现在起栈前落 `castle-before.txt`、跑后落 `castle-after.txt`，并把差异按「本轮造成 / 开窗前已存在」**两档**归因（`CASTLE_DRIFT`）。
-- **下一轮前必须还原/对齐**（不碰 `E:/MirServer`，只动私有根）：
-  ```powershell
-  # 以基线为准，把影子与 rust 的 Castle 目录对齐（示例：两城 0,1）
-  Copy-Item -Force E:/tmp/conformance/csharp-root/M2GameSvr/Castle/List.txt `
-    E:/tmp/conformance/csharp-root/M2GameSvr-hook/Castle/List.txt
-  Copy-Item -Force E:/tmp/conformance/csharp-root/M2GameSvr/Castle/List.txt `
+  **只标注、不改本轮 parity 结论**。`run_batch.sh` 批次末尾**按本批选中行实际出现的 profile 去重后
+  逐个打印**（2026-10-29 订正，卡 `openmir2-postrun-drift-followups`；此前写死 `alt`，清单混
+  profile 时漏非 alt 行——run3 现为 alt / window-layout / window-magic 混合）：
+  **`跑后对称性 profile（按选中行去重）：<profile…>`**，随后每个 profile 一行
+  **`跑后对称性[<profile>]：OK`** / **`跑后对称性[<profile>]：DRIFT(n) <文件…>`**
+  （profile 本身解析不了时为 **`跑后对称性[<profile>]：ERROR …`**，只标注、不影响其余 profile 与本轮 rc）。
+  另见 §0.9b：`run_batch.sh` 现在起栈前落 `castle-before.txt`、跑后落 `castle-after.txt`，并把差异按「本轮造成 / 开窗前已存在」**两档**归因（`CASTLE_DRIFT`）。
+- **下一轮前必须还原/对齐**（不碰 `E:/MirServer`，只动私有根；**2026-10-29 订正：锚冻结件，
+  不再以任一私有根为基准**，卡 `openmir2-postrun-drift-followups`）。
+  为什么方向要改：`--rng-log` 的轮次 GameSvr 从影子 `M2GameSvr-hook/` 跑，漂移落在影子上；
+  但**不带 `--rng-log` 的轮次 GameSvr 直接从基线根 `csharp-root/M2GameSvr/` 跑 ⇒ 漂移就发生在
+  「基线」自己身上**——旧写法（从基线根 `cp` 给影子与 rust，已废弃）会把漂移**传播**出去
+  （三份一起坏）。私有根谁真谁假，只能跟冻结件比：
+  ```sh
+  # 第 1 步（只读）：冻结件 vs 三私有根的 sha——先看清漂移落在哪几份；四行同值 ⇒ 无需对齐
+  sha256sum E:/MirServer/M2GameSvr/Castle/List.txt \
+    E:/tmp/conformance/csharp-root/M2GameSvr/Castle/List.txt \
+    E:/tmp/conformance/csharp-root/M2GameSvr-hook/Castle/List.txt \
     E:/tmp/conformance/rust-root/M2GameSvr/Castle/List.txt
-  # 再跑 preflight：castle_list_symmetry / envir_shadow_symmetry 必须 OK
+  ```
+  ```powershell
+  # 第 2 步：以冻结件为准对齐三私有根（复制方向永远是 冻结件 → 私有根；绝不反向写 E:/MirServer）
+  foreach ($d in @("E:/tmp/conformance/csharp-root/M2GameSvr",
+                   "E:/tmp/conformance/csharp-root/M2GameSvr-hook",
+                   "E:/tmp/conformance/rust-root/M2GameSvr")) {
+    Copy-Item -Force E:/MirServer/M2GameSvr/Castle/List.txt "$d/Castle/List.txt"
+  }
+  # 第 3 步：重跑 preflight：castle_list_symmetry / envir_shadow_symmetry 必须 OK
   python -I -B tools/window/preflight_private_stack.py
   ```
+  冻结件参考值：`0,1` 两城（6B，sha `9b38d284…`，见 §0.6——内容恒定、mtime 每 600s 跳，
+  **比对内容不比 mtime**；`E:/MirServer` 参考栈在跑时也被同一 600s 门重写，但重写自同一内存状态
+  ⇒ sha 口径不受在跑/停栈影响）。
   若 `SabukW` 的 `TotalGold/TodayIncome` 也被上一轮写脏，按 `window-fixture-config-castle`
   的 `castle_files` 夹具把两侧初始值显式声明（`TotalGold=0`、`TodayIncome=0`）。
+  **`SabukW`/`Envir` 同理锚冻结件**：还原/对齐一律以 `E:/MirServer` 部署件为源——即 §0.9b
+  开窗第 0 步「复制部署件当时的值 + 落 `castle-before` 基线」的口径，不从任一私有根互抄
+  （`Castle/Castle/SabukW.txt` 三侧本就互不相同，以 §0.9b 的部署件复制为准）。
 
 ---
 
