@@ -60,6 +60,76 @@ fn write_lab(dir: &Path, gate_port: u16, srv_port: u16, dsn: &str) -> PathBuf {
     conf_path
 }
 
+/// A2（卡 `openmir2-login-srv-illegal-addr-filter`）：**127.0.0.1 连入 5600 不得被
+/// 一票否决**。oracle：C# 生产白名单（ServerAddr.txt=4 旧网段 IP）不含 127.0.0.1，
+/// 运行二进制仍接受（LoginSrv.out.log 18:13:32.179 `[DBG] 127.0.0.1:64174链接成功`，
+/// 三次 login_only 全链 completed）⇒ 白名单不命中仅记日志、不断链。夹具刻意写生产同款
+/// 白名单（无 127.0.0.1）以复现否决触发条件。
+///
+/// 反向牙（A2 变异）：恢复 `drop(sock); continue;` 一票否决 ⇒ 连接被立即关闭 ⇒ 本牙红。
+#[tokio::test]
+async fn session_face_accepts_loopback_despite_whitelist_miss() {
+    let dir = lab_dir("noaddrfilter");
+    let gate_port = support::next_port();
+    let srv_port = support::next_port();
+    let conf = write_lab(
+        &dir,
+        gate_port,
+        srv_port,
+        "server=127.0.0.1;port=3399;uid=root;pwd=;database=mir2_account;",
+    );
+    // 覆写为**生产同款**白名单（无 127.0.0.1）：正是它让旧实现否决 db-srv 的链入。
+    std::fs::write(
+        dir.join("ServerAddr.txt"),
+        "10.10.0.163
+10.10.0.102
+",
+    )
+    .unwrap();
+    let log = dir.join("login-srv.out.log");
+    let out_f = std::fs::File::create(&log).unwrap();
+    let err_f = out_f.try_clone().unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    cmd.arg(&conf)
+        .stdout(out_f)
+        .stderr(err_f)
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().expect("启动子进程失败");
+    // 5600 面就绪（DSN 失效走 fail-soft，不影响监听）
+    support::gate_ready(&log, srv_port, std::time::Duration::from_secs(15)).await;
+    // 127.0.0.1 连入（db-srv IDS 链路同型）
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", srv_port))
+        .await
+        .expect("127.0.0.1 连入 5600 必须被接受");
+    // 白名单外 ⇒ 旧实现记 WRN（oracle 同款日志仍保留）
+    let text = support::wait_log_contains(
+        &log,
+        "非法地址连接:127.0.0.1",
+        std::time::Duration::from_secs(5),
+    )
+    .await;
+    assert!(
+        text.contains("非法地址连接:127.0.0.1"),
+        "白名单外连入必须仍记日志（oracle 保留 Warn），实得：{text}"
+    );
+    // 核心断言：**不断链**。读 socket：对端关闭 ⇒ Ok(0)（旧实现必如此 ⇒ 红）；
+    // 未关闭 ⇒ 读挂起 ⇒ 超时路径 ⇒ ok。
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let mut probe_buf = [0u8; 1];
+    let closed = tokio::time::timeout(
+        std::time::Duration::from_millis(400),
+        c.read(&mut probe_buf),
+    )
+    .await
+    .is_ok_and(|r| matches!(r, Ok(0) | Err(_)));
+    assert!(
+        !closed,
+        "127.0.0.1 连入 5600 不得被一票否决关闭（oracle 接受语义）"
+    );
+    child.kill().await.ok();
+    std::fs::remove_dir_all(&dir).ok();
+}
+
 /// GB2312 编码（测试侧只需 ASCII + “热血传奇”）：与生产同一 `.NET cp936` 入口，
 /// 避免夹具与线上编码口径分叉。
 fn gbk(s: &str) -> Vec<u8> {
