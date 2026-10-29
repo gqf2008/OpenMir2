@@ -203,6 +203,34 @@ impl AccountStore {
         Ok(store)
     }
 
+    /// 对应 C# `Initialization` 的 **oracle fail-soft 语义**（卡 `openmir2-login-srv-dsn-source`
+    /// A1：C# 连接/载入失败只记日志继续跑；账号缓存空 ⇒ `Index` 恒 -1、登录走「账号不存在」
+    /// 分支，进程常驻。旧 M1④/A-6「必须报错退出」为登记过的授权偏离，本卡按 oracle 撤销）。
+    ///
+    /// 池用 `connect_lazy`：创建不触库，之后每条查询按需建连（对齐 C# 每操作 `Open()`+catch）。
+    /// 返回 `(store, init_err)`：`init_err` = 启动首试失败的详情（调用方按 C# 文本记日志）。
+    pub async fn init_or_empty(dsn: &LegacyDsn) -> (Self, Option<StorageError>) {
+        let pool = MySqlPoolOptions::new()
+            .max_connections(8)
+            .acquire_timeout(std::time::Duration::from_secs(3))
+            .connect_lazy_with(
+                sqlx::mysql::MySqlConnectOptions::new()
+                    .host(&dsn.host)
+                    .port(dsn.port)
+                    .username(&dsn.user)
+                    .password(&dsn.password)
+                    .database(&dsn.database),
+            );
+        let mut store = Self {
+            pool,
+            map: HashMap::new(),
+        };
+        match store.load_quick_list().await {
+            Ok(_) => (store, None),
+            Err(e) => (store, Some(e)),
+        }
+    }
+
     /// `LoadQuickList`：`SELECT Id,Account,State FROM account order by Id Desc`。
     ///
     /// # Errors

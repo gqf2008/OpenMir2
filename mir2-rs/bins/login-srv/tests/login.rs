@@ -30,9 +30,6 @@ const QUICK_EXIT_BOUND: Duration = Duration::from_secs(10);
 /// 「连不上 MySQL」子进程的退出上界。依据：本机实测 **30.10s** ——
 /// `login-srv` 对必不通的 DSN（`127.0.0.1:3399`）先耗尽 MySQL 连接超时才打印「SQL 连接失败」并退出
 /// （本机基线 `login.rs` target 4 条用例合计 **30.22s**，该条占绝大部分）；取 **90s** = 3× 实测，
-/// 只为兜住「连接器卡死」，不改变正常路径的耗时。
-const MYSQL_EXIT_BOUND: Duration = Duration::from_secs(90);
-
 /// C# 金标准（`oracle_capture.py` 产出）。
 const ORACLE: &str = include_str!("../../../tests/parity/loginsrv/oracle-bytes.json");
 
@@ -349,31 +346,49 @@ async fn missing_config_exits_nonzero() {
     std::fs::remove_dir_all(&dir2).ok();
 }
 
-/// 连不上 MySQL ⇒ 非零退出并明确报错（M1④ / A-6）。
+/// 连不上 MySQL ⇒ **fail-soft 常驻**（卡 `openmir2-login-srv-dsn-source`）：
+/// 两监听照常就绪、日志含「SQL 连接失败」、进程**不退出**（oracle `Initialization`
+/// catch-and-continue；旧 M1④/A-6「必须报错退出」的授权偏离已按 oracle 撤销，
+/// 本牙即新语义的反向钉：谁把「退出」改回来谁红）。
 #[tokio::test]
-async fn mysql_unreachable_exits_nonzero() {
+async fn mysql_unreachable_fail_soft_and_stays_up() {
     let dir = lab_dir("nodbmysql");
+    let gate_port = support::next_port();
+    let srv_port = support::next_port();
     // 配置齐全，但 DSN 指向一个必不通的端口
     let conf = write_lab(
         &dir,
-        support::next_port(),
-        support::next_port(),
+        gate_port,
+        srv_port,
         "server=127.0.0.1;port=3399;uid=root;pwd=;database=mir2_account;",
     );
+    let log = dir.join("login-srv.out.log");
+    let out_f = std::fs::File::create(&log).unwrap();
+    let err_f = out_f.try_clone().unwrap();
     let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
-    cmd.arg(&conf);
-    let out = support::output_bounded(
-        &mut cmd,
-        "login-srv 连不上 MySQL 非零退出",
-        MYSQL_EXIT_BOUND,
-    )
-    .await;
-    assert!(!out.status.success(), "连不上 MySQL 必须非零退出（M1④）");
+    cmd.arg(&conf)
+        .stdout(out_f)
+        .stderr(err_f)
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().expect("启动子进程失败");
+    // 两监听就绪（bind 与 SQL 连接无关）
+    support::gate_ready(&log, gate_port, std::time::Duration::from_secs(15)).await;
+    support::gate_ready(&log, srv_port, std::time::Duration::from_secs(15)).await;
+    // SQL 失败日志（C# Initialization 的 catch 文本同款）
     let text =
-        String::from_utf8_lossy(&out.stdout).to_string() + &String::from_utf8_lossy(&out.stderr);
+        support::wait_log_contains(&log, "SQL 连接失败", std::time::Duration::from_secs(10)).await;
     assert!(
         text.contains("SQL 连接失败"),
-        "错误应指明 SQL 连接失败，实得：{text}"
+        "必须记录 SQL 连接失败（oracle catch 文本），实得：{text}"
     );
+    // fail-soft 核心断言：进程仍常驻，不得退出
+    tokio::time::sleep(std::time::Duration::from_millis(800)).await;
+    assert!(
+        matches!(child.try_wait(), Ok(None)),
+        "DSN 失效 ⇒ 服务必须常驻（oracle fail-soft），不得退出；子进程日志：
+{}",
+        std::fs::read_to_string(&log).unwrap_or_default()
+    );
+    child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }
