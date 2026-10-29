@@ -144,7 +144,7 @@ B = sorted((c for c in pool if c not in A), key=lambda c: (h[c], c))[:10]
 
 ## 6. 发现
 
-**F1（桶语义与卡面不一致）**：卡面说「`window_required` 约 122 张」，实际快照是 **121 张分类桶**；更关键的是桶 ≠「`window_required=true` 全集」：131 条 wr=true 中 4 张已 closed、4 张 not_in_board、2 张被改判。桶内还混入 **5 张未合并卡**（`openmir2-gm-batch-5-guild-castle`、`openmir2-script-envir-root-host`、`openmir2-script-sendmsg-host`、`openmir2-script-user-account`、`openmir2-window-gate-two-runs`），但 `r_category` 把 `window_required` 排在 `merged` 之前、`classify_r_evidence` 直接 `PASS`，所以它们**因「有登记」而非「有真机证据」被计为已登记**。本次 30 张按规则抽样全部落在已合并的 116 张里，未覆盖这 5 张（已知盲区；补充阅读显示 `script-sendmsg-host` 的 W-1/W-2/W-3 已把命令指到 `docs/sendmsg-host-20261023.md §6`，按 §3 初判偏①，但未计入 30 张分布）。
+**F1（桶语义与卡面不一致）**：卡面说「`window_required` 约 122 张」，实际快照是 **121 张分类桶**；更关键的是桶 ≠「`window_required=true` 全集」：131 条 wr=true 中 4 张已 closed、4 张 not_in_board、2 张被改判。桶内还混入 **当时仍挂在 `window_required` 桶里的 5 张卡**（`openmir2-script-envir-root-host`、`openmir2-script-sendmsg-host`、`openmir2-script-user-account`、`openmir2-window-gate-two-runs`，以及 `openmir2-gm-batch-5-guild-castle`——该卡**已收口（2026-10-29）**：A 片合 `2810298e9`、B 片由 `openmir2-gm-batch-5b-cross-server` blocked-by G11、C 片已登记不实现），但 `r_category` 把 `window_required` 排在 `merged` 之前、`classify_r_evidence` 直接 `PASS`，所以它们**因「有登记」而非「有真机证据」被计为已登记**。本次 30 张按规则抽样全部落在已合并的 116 张里，未覆盖这 5 张（已知盲区；补充阅读显示 `script-sendmsg-host` 的 W-1/W-2/W-3 已把命令指到 `docs/sendmsg-host-20261023.md §6`，按 §3 初判偏①，但未计入 30 张分布）。
 
 **F2（`last_status_ts` 不表示欠窗口时长）**：92/121 的时间戳来自 2026-10-23 08 时的「R 级记账补登」批量 status；A 组「最旧 20 张」只跨 29 分钟。拿它的排序当「窗口欠账优先级」会得出错误结论。
 
