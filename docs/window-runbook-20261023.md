@@ -490,6 +490,38 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 3. **拿窗口证据时**，确保没有第二套 conformance 栈同库并发。
 4. mysqld（3306）是两栈**共用**的唯一实例 ⇒ 「停参考栈」**绝不能停 mysqld**（§0.13 的优雅关闭口径不变）。
 
+## 0.15 停栈与存档：保证链、为什么不优雅停、覆盖不到的情形（2026-10-29；卡 `openmir2-harness-stop-and-evidence`）
+
+**存档唯一保证链**：场景收尾的 `save_settle` 等到 DB **真的出现声明过的变化**才 PASS；
+`require_changes`（默认 **true**，不许改 false）在「没等到变化」时把该场景判红。
+⇒ 证据里的 DB 后态由「settle 等到的写入」保证；停栈（无论强杀还是 CTRL_C）**都不提供**存档保证。
+
+**为什么不做 C# 优雅停（①(b)，三轮真机实验后裁定）**：
+oracle 有 `AppService.OnShutdown()` → `SavePlayer()`（`src/GameSrv/AppService.cs:206/210`，
+只存**在线**玩家），但它的触发条件是**进程真实退出**（如 DBSrv 死亡连坐导致 GameSrv 自杀，
+`GameSrv.out.log` 的退出横幅即此路径，`Online Players[0]` 时 `SavePlayer` 为 no-op）。
+而 harness 能发的 **CTRL_C**（`stop-csharp-graceful.ps1`：`FreeConsole → AttachConsole(<pid>) →
+SetConsoleCtrlHandler(NULL,true) → GenerateConsoleCtrlEvent(0,0)`）只走到
+`Program.cs:16` 的 `cts.Cancel()`（停网关），**不会**进入 `StoppingAsync → OnShutdown`：
+
+- **v3 实测（2026-10-29，Debug 日志已开）**：玩家 winplay0 在线、探针连着时发 CTRL_C ⇒
+  游戏照常运行（+4s 仍有 `[DBG] 执行任务Id:4成功`）、**无** `Application is stopping`、
+  **无**「保存玩家数据」行、进程 30s 不退、DB **零写入**（`E:/tmp/dev-2/saveproof3/`）。
+- v1/v2 的「CTRL_C 后 LASTUPDATE 前进」全部是**探针自身落库**（softclose/断开存档）与
+  CTRL_C 的时序耦合，被 reviewer-23（R23-F1）正确否决：竞争写者无法唯一归因。
+
+⇒ **结论**：给 C# 栈发 CTRL_C 换不来 `SavePlayer`；要做真正的优雅存档必须改 C# 源
+（把 `OnShutdown` 挂到 `cts.Cancel` 路径）——那是 src 卡，不在 harness 范围。
+停栈维持 `start-csharp.ps1 -Stop` / `Stop-Process`（`stop-csharp-graceful.ps1` 保留为
+「网关排水式」可选项，但它**不是**存档手段）。
+
+**覆盖不到的情形（settle+require_changes 也救不了，必须人工核）**：
+1. 场景**没声明**的 DB 变化（如 600s `SaveTick` 自动落盘、`Castle/List.txt` 600s 重写）；
+2. DBSrv/MySQL 自身故障或强杀窗口（`stop-mysql-graceful.ps1` 的崩溃史见该文件头）；
+3. 探针中途断线导致后半步骤没跑（rc 会红，但「哪些表没写」要对照场景声明逐表看）。
+
+**红线（重复）**：不许把 `require_changes` 默认改 false；不许用固定 sleep 冒充「存档已发生」。
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。
