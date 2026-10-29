@@ -134,9 +134,10 @@ CONFORMANCE_PASSWORD=... bash tools/conformance/run_dual.sh   --scenario tools/p
    `rules.rules_pending_review=true`；每个形状必须带 `max` 上界（bare string 视为规则非法）。
    报告里的 `verified{frame_diffs,db_state,db_diffs,db_undecidable}` 是**本次实际值**，
    放行与候选记录都会带上（便于复核「为什么放行 / 被什么挡住」）。
-   另有**有界动态规则** `oracle_extra_policy="per_actor_once"`（未启用，提案见 docs §8）：
-   oracle 独有 + body 空 + 每 recog 不超过 `oracle_extra_policy_max_per_actor` + 该 recog 在本侧
-   ident10 有相同坐标的走位帧 + series 低 3 位是合法 Dir；仍需帧面/库三闸。
+   代码里还保留一条**已被 owner 拒绝、不会启用**的动态分支 `oracle_extra_policy="per_actor_once"`
+   （只用于回归与证据，见 docs §8）：oracle 独有 + body 空（含 `body_sha256` 校验）+
+   每 recog 不超过 `oracle_extra_policy_max_per_actor` + 该 recog 在本侧 ident10 有相同坐标的走位帧；
+   仍需帧面/库三闸。规则表**不写**该字段。
    每个形状条目**必须自带 `decision`**（40-hex 裁决 oid）；键缺失、空串或非法 oid 一律 PENDING，
    不允许继承规则级批准（reviewer-21 F1）。详见 `docs/ident14-extra-hit-adjudication-20261029.md`。
    两侧剔除后可比较帧数都是 0 ⇒ `UNDECIDABLE(empty_run)`，只有 `--allow-empty` 放行。
