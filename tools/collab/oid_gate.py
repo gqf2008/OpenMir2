@@ -461,8 +461,24 @@ def audit_baseline(repo, path, git_cmd=("git",)):
                 break
         if have is None:
             problems.append("条目里没有字段 %s" % want_field)
-        elif have.strip().lower() != want_value:
-            problems.append("字段 %s 登记 %r ≠ 条目 %r" % (want_field, e["value"], have))
+        else:
+            raw = have.strip()
+            raw_l = raw.lower()
+            # 卡 `openmir2-oid-baseline-audit-free-text`：**纯 oid 字段**（整段就是 7–40 位 hex）
+            # 仍要求逐字相等；**自由文本字段**（如 parent 写成「refs/… 0080494a… 7668c284…」）
+            # 按**候选 oid 出现**匹配 —— 与 check 同口径（`[0-9a-f]{7,40}` 抠候选），
+            # 否则「登记值 == 整段原文」对自由文本永远不可能满足（entries[4] 的历史红）。
+            if raw == "" and want_value == "":
+                pass  # 空字段对空登记值：一致（load_baseline 允许 value 为空串）
+            elif re.fullmatch(r"[0-9a-fA-F]{7,40}", raw):
+                if raw_l != want_value:
+                    problems.append("字段 %s 是纯 oid，登记 %r ≠ 条目 %r"
+                                    % (want_field, e["value"], have))
+            else:
+                cands = [c.lower() for c in re.findall(r"[0-9a-fA-F]{7,40}", raw)]
+                if want_value not in cands:
+                    problems.append("字段 %s 的自由文本里没有候选 %r（候选=%r）"
+                                    % (want_field, e["value"], cands))
         if problems:
             red.append("%s（entry_oid %s）：%s" % (tag, oid, "；".join(problems)))
         else:
@@ -517,6 +533,37 @@ def _audit_teeth():
         rc2, red2, undec2 = run_with([ok_entry])
         chk(rc == 1, "牙④a：value 与条目不符（空 vs x）⇒ rc=1")
         chk(rc2 == 0 and not red2 and not undec2, "牙④b：完全正确 ⇒ rc=0")
+
+        # ---- 自由文本字段按**候选 oid 出现**匹配（卡 openmir2-oid-baseline-audit-free-text）----
+        def _blob_for(ent):
+            b = json.dumps(ent).encode()
+            return subprocess.run(["git", "-C", tmp, "hash-object", "-w", "--stdin"],
+                                  input=b, capture_output=True, check=True,
+                                  env=env).stdout.decode().strip()
+
+        # ⑤ entries[4] 的历史形态：parent 是自由文本，登记值是其中一个 32-hex 候选 ⇒ rc=0
+        free_entry = dict(entry, parent="refs/collab/inbox/p/0080494a37c0a623179b3334910864f1 "
+                                        "7668c284e611c7c307150dc6c9e08e1ac0e41642")
+        free_ok = {"principal": "p", "thread": "card-a", "entry_oid": _blob_for(free_entry),
+                   "field": "parent", "value": "0080494a37c0a623179b3334910864f1", "reason": "r"}
+        rc5, red5, _ = run_with([free_ok])
+        chk(rc5 == 0 and not red5,
+            "牙⑤ 自由文本字段：登记值是文本里的候选 ⇒ rc=0（整段相等的老口径不可能满足）")
+        # ⑥ 登记一个文本里不存在的候选 ⇒ 仍红（放宽不得外溢）
+        rc6, red6, _ = run_with([dict(free_ok, value="cafebabecafebabecafebabecafebabecafebabe")])
+        chk(rc6 == 1 and red6, "牙⑥ 自由文本里的**错误**候选 ⇒ 仍红")
+        # ⑦ 纯 oid 字段仍逐字相等：父字段是 40-hex 时，登记它的前缀（也是候选）依然红
+        pure_entry = dict(entry, parent="deadbeefdeadbeefdeadbeefdeadbeefdeadbeef")
+        pure_ok = {"principal": "p", "thread": "card-a", "entry_oid": _blob_for(pure_entry),
+                   "field": "parent", "value": "deadbeef", "reason": "r"}
+        rc7, red7, _ = run_with([pure_ok])
+        chk(rc7 == 1 and red7, "牙⑦ 纯 oid 字段：前缀候选不算相等 ⇒ 仍红")
+        # ⑧ 条目里根本没有该字段 ⇒ 仍红（放宽不得变成「任意字段候选即可」）
+        no_field = {"principal": "p", "thread": "card-a", "entry_oid": h,
+                    "field": "body.oid", "value": "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+                    "reason": "r"}
+        rc8, red8, _ = run_with([no_field])
+        chk(rc8 == 1 and red8, "牙⑧ 条目里没有登记字段 ⇒ 仍红")
         # N3：`field = refs.head` 也要能核（现有只覆盖 parent）
         entry_r = {"version": 1, "kind": "patch", "id": "card-r", "actor": "p",
                    "parent": "", "sig": "", "ts": 0,
