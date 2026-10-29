@@ -383,6 +383,14 @@ fn spawn_shutdown_pipe_listener(
 ) {
 }
 
+/// 绑定对网关的监听（卡 `openmir2-login-srv-bind-addr` A2 审计）：**按 conf
+/// `[Server] GateAddr` 字面绑定**——与 C# M2Server 同语义（生产实况：conf
+/// GateAddr=127.0.0.1 ⇒ 监听 127.0.0.1:5000）。conf 含不可本机绑定地址 ⇒ bind
+/// 报错 fail-loud（M1④），与 C# 字面绑定同判。A2 牙钉住本 parity。
+async fn bind_gate_listener(advertised_addr: &str, gate_port: u16) -> std::io::Result<TcpListener> {
+    TcpListener::bind((advertised_addr, gate_port)).await
+}
+
 async fn run_inner(args: &[String]) -> Result<()> {
     let conf = args
         .first()
@@ -1306,7 +1314,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
         });
     }
 
-    let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
+    let listener = bind_gate_listener(&cfg.gate_addr, cfg.gate_port)
         .await
         .with_context(|| {
             format!(
@@ -79518,4 +79526,24 @@ mod attack_weapon_wear_tests {
     }
 
     // ---- CLEARMAPMON + MONGENEX 同一条动作序队列（卡 `openmir2-clearmapmon-impl`） ------
+}
+
+#[cfg(test)]
+mod bind_addr_teeth {
+    use super::*;
+
+    /// A2（卡 `openmir2-login-srv-bind-addr`）：parity 钉死牙——对网关监听**跟随 conf
+    /// `GateAddr` 字面绑定**（与 C# M2Server 同语义；生产实况 conf=127.0.0.1 ⇒
+    /// 监听 127.0.0.1:5000）。防误改 0.0.0.0 或改绑他址。
+    #[tokio::test]
+    async fn a2_bind_follows_conf_addr_csharp_parity() {
+        let l = bind_gate_listener("127.0.0.1", 0)
+            .await
+            .expect("bind 必须成功");
+        assert_eq!(
+            l.local_addr().unwrap().ip().to_string(),
+            "127.0.0.1",
+            "对网关监听必须按 conf GateAddr 字面绑定（C# parity）"
+        );
+    }
 }

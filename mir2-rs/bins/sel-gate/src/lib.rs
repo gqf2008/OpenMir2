@@ -82,6 +82,14 @@ struct GateShared {
     slots: Arc<std::sync::Mutex<SlotTable>>,
 }
 
+/// 绑定对外监听（卡 `openmir2-login-srv-bind-addr` A2 审计）：`GateAddr0` 可选、缺省
+/// `0.0.0.0`（与 C# SelGate `IPAddress.Any` 同语义），给了就**按字面绑定**——生产实况
+/// conf 无 GateAddr0 ⇒ 监听 0.0.0.0:7100，与 C# 完全一致。conf 含不可本机绑定地址 ⇒
+/// bind 报错 fail-loud（M1④）。A2 牙钉住「缺省 Any + 给了跟 conf」两支。
+async fn bind_gate_listener(cfg: &config::GateConfig) -> std::io::Result<TcpListener> {
+    TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port)).await
+}
+
 async fn run_inner(args: &[String]) -> Result<()> {
     // 配置路径：可选 argv[1] 覆盖（默认取可执行文件同目录，与 C# BaseDirectory 一致）
     let conf = args
@@ -108,14 +116,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
 
     // oracle `AppService.Start()` 先起监听（`_serverService.Start()`）再连下游
     // （`_clientManager.Start()`）；DBSrv 不在**不退出**，由 10s 重连循环负责。
-    let listener = TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port))
-        .await
-        .with_context(|| {
-            format!(
-                "绑定 {}:{} 失败（端口被占？）",
-                cfg.gate_addr, cfg.gate_port
-            )
-        })?;
+    let listener = bind_gate_listener(&cfg).await.with_context(|| {
+        format!(
+            "绑定 {}:{} 失败（端口被占？）",
+            cfg.gate_addr, cfg.gate_port
+        )
+    })?;
     tokio::spawn(downstream::run(downstream.clone()));
     glog!(
         "INF",
@@ -509,5 +515,44 @@ mod tests {
         let body = sel_gate_enter_body("7", "10.1.2.3");
         assert_eq!(body.len(), 22);
         assert_eq!(i16::try_from(body.len()).unwrap(), 22);
+    }
+}
+
+#[cfg(test)]
+mod bind_addr_teeth {
+    use super::*;
+
+    /// A2（卡 `openmir2-login-srv-bind-addr`）：parity 钉死牙——`GateAddr0` 缺省/给出
+    /// 两支都要跟 conf 走（C# SelGate `IPAddress.Any` + 生产实况无该键 ⇒ 0.0.0.0:7100）。
+    #[tokio::test]
+    async fn a2_bind_follows_conf_addr_csharp_parity() {
+        // 支①：缺省（config.rs 归一为 "0.0.0.0"）⇒ 监听 0.0.0.0。
+        let cfg = config::GateConfig {
+            srv_addr: "127.0.0.1".into(),
+            srv_port: 1,
+            gate_addr: "0.0.0.0".into(),
+            gate_port: 0,
+            client_timeout_ms: 60_000,
+        };
+        let l = bind_gate_listener(&cfg).await.expect("bind 必须成功");
+        assert!(
+            l.local_addr().unwrap().ip().is_unspecified(),
+            "缺省 GateAddr0 ⇒ 监听必须 0.0.0.0"
+        );
+
+        // 支②：conf 显式 127.0.0.1 ⇒ 按字面绑 127.0.0.1（C# 字面绑定同语义）。
+        let cfg = config::GateConfig {
+            srv_addr: "127.0.0.1".into(),
+            srv_port: 1,
+            gate_addr: "127.0.0.1".into(),
+            gate_port: 0,
+            client_timeout_ms: 60_000,
+        };
+        let l = bind_gate_listener(&cfg).await.expect("bind 必须成功");
+        assert_eq!(
+            l.local_addr().unwrap().ip().to_string(),
+            "127.0.0.1",
+            "显式 GateAddr0 ⇒ 按字面绑定（C# parity）"
+        );
     }
 }

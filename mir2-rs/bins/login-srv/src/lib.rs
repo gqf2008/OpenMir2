@@ -63,13 +63,25 @@ fn print_banner() {
     );
 }
 
-/// 监听地址：C# 默认 `"*"`（`IPAddress.Parse("*")` 会抛）；这里按 C#「监听 Any」的意图取 0.0.0.0。
-fn bind_addr(addr: &str) -> String {
-    if addr.trim().is_empty() || addr == "*" {
-        "0.0.0.0".to_string()
-    } else {
-        addr.to_string()
-    }
+/// 监听/广播分离（卡 `openmir2-login-srv-bind-addr`，reviewer-22 R①）：LoginSrv 的
+/// 两个监听**不读 conf 地址字段**——生产可观测 oracle（同 conf `GateAddr=ServerAddr=
+/// 10.10.0.102`，C# 照常监听）：5500 面 = `0.0.0.0`（Any）、5600 面 = `127.0.0.1`
+/// （loopback，不把账号会话面暴露到网段；`ServerAddr.txt` whitelist 仍按对端 IP 生效）。
+/// conf 的 `GateAddr`/`ServerAddr`/`MonAddr`/`RunAddr` 只作日志/广播数据，值不变。
+fn listen_gate_ip() -> &'static str {
+    "0.0.0.0"
+}
+
+fn listen_session_ip() -> &'static str {
+    "127.0.0.1"
+}
+
+/// 起 5500/5600 两个监听（`AppService.StartAsync`：login.StartServer → masSoc.StartServer）。
+async fn bind_listeners(cfg: &config::Config) -> std::io::Result<(TcpListener, TcpListener)> {
+    Ok((
+        TcpListener::bind((listen_gate_ip(), cfg.gate_port)).await?,
+        TcpListener::bind((listen_session_ip(), cfg.server_port)).await?,
+    ))
 }
 
 /// `TimedService.ExecuteAsync`（10ms 轮询 + 20s/10s 两个节拍）。
@@ -110,31 +122,24 @@ async fn run_inner(args: &[String]) -> Result<()> {
         ),
     );
     // C# `AppService.StartAsync` 的顺序：login.StartServer(5500) → masSoc.StartServer(5600)
-    // → accountStorage.Initialization(SQL)
-    let gate_listener = TcpListener::bind((bind_addr(&cfg.gate_addr), cfg.gate_port))
-        .await
-        .with_context(|| {
-            format!(
-                "绑定账号登陆服务 {}:{} 失败（端口被占？M1④：失败必须明确报错退出）",
-                cfg.gate_addr, cfg.gate_port
-            )
-        })?;
-    log_line(
-        "INF",
-        &format!("账号登陆服务[{}:{}]已启动.", cfg.gate_addr, cfg.gate_port),
-    );
-    let session_listener = TcpListener::bind((bind_addr(&cfg.server_addr), cfg.server_port))
-        .await
-        .with_context(|| {
-            format!(
-                "绑定账号数据服务 {}:{} 失败（端口被占？M1④）",
-                cfg.server_addr, cfg.server_port
-            )
-        })?;
+    // → accountStorage.Initialization(SQL)。监听恒 0.0.0.0；GateAddr/ServerAddr 仅广播。
+    let (gate_listener, session_listener) = bind_listeners(&cfg).await.with_context(|| {
+        format!(
+            "绑定账号服务 0.0.0.0:{}/127.0.0.1:{} 失败（端口被占？M1④：失败必须明确报错退出）；conf 广播地址 GateAddr={}/ServerAddr={} 仅下发，不参与绑定",
+            cfg.gate_port, cfg.server_port, cfg.gate_addr, cfg.server_addr
+        )
+    })?;
     log_line(
         "INF",
         &format!(
-            "账号数据服务[{}:{}]已启动.",
+            "账号登陆服务[GateAddr={}（仅广播）; 监听 0.0.0.0:{}]已启动.",
+            cfg.gate_addr, cfg.gate_port
+        ),
+    );
+    log_line(
+        "INF",
+        &format!(
+            "账号数据服务[ServerAddr={}（仅广播）; 监听 127.0.0.1:{}]已启动.",
             cfg.server_addr, cfg.server_port
         ),
     );
@@ -210,4 +215,42 @@ pub fn run_with_args(args: &[String]) -> i32 {
     let _ = std::io::stdout().flush();
     let _ = std::io::stderr().flush();
     code
+}
+
+#[cfg(test)]
+mod bind_addr_teeth {
+    use super::*;
+
+    /// A1/A3（卡 `openmir2-login-srv-bind-addr`，reviewer-22 R②）：conf
+    /// `GateAddr=ServerAddr=10.10.0.102`（切流 S4 RED：字面绑定 os error 10049）时——
+    /// 5500 面监听必须起在 `0.0.0.0`（oracle Any）、5600 面监听必须落在 `127.0.0.1`
+    /// （oracle 生产实况 loopback）；conf 地址字段只进日志/下发，值不变。
+    ///
+    /// 反向牙（A2/A3 变异）：把 `bind_listeners` 改回按 conf 字面绑定
+    /// （`cfg.gate_addr`/`cfg.server_addr`）⇒ 本机（无 10.10.0.102）bind 直接
+    /// `Err(10049)` ⇒ expect 红；有该地址的机器上 local_addr 断言红。两条路都咬得住。
+    #[test]
+    fn a1_listen_binds_oracle_addrs_even_when_conf_addr_unbindable() {
+        let cfg = config::Config {
+            gate_addr: "10.10.0.102".into(),
+            server_addr: "10.10.0.102".into(),
+            gate_port: 0,
+            server_port: 0,
+            ..Default::default()
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let (g, s) = rt
+            .block_on(bind_listeners(&cfg))
+            .expect("conf 含不可绑地址时监听仍必须成功（监听/广播分离）");
+        assert!(
+            g.local_addr().unwrap().ip().is_unspecified(),
+            "5500 面监听必须落在 0.0.0.0（oracle Any），实测 {:?}",
+            g.local_addr()
+        );
+        assert_eq!(
+            s.local_addr().unwrap().ip().to_string(),
+            "127.0.0.1",
+            "5600 面监听必须落在 127.0.0.1（oracle 生产实况 loopback）"
+        );
+    }
 }
