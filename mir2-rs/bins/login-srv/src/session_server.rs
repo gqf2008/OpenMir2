@@ -48,12 +48,18 @@ pub async fn run_session_listener(share: Arc<Share>, listener: TcpListener) -> R
     loop {
         let (sock, peer) = listener.accept().await?;
         sock.set_nodelay(true).ok();
+        // 卡 `openmir2-login-srv-illegal-addr-filter`（A1/A2）：参考树 SessionServer.cs:63-89
+        // 是「白名单一票否决 + Close」，但运行二进制的**可观测行为**与之不符——同 conf
+        // （白名单 = ServerAddr.txt 4 旧网段 IP，无 127.0.0.1）下 C# 生产**接受** 127.0.0.1
+        // 服务链入（LoginSrv.out.log 18:13:32.179 `[DBG] 127.0.0.1:64174链接成功`＝boAllowed
+        // 分支，且三次 login_only 全链 completed）。以可观测 oracle 为准：白名单不命中仅记
+        // 日志，**不断链**（服务注册链路 db-srv⇄login-srv 必经此面）。
         let ip = peer.ip().to_string();
-        // C# `Connecting`：不在 `ServerAddr` 白名单内 ⇒ 打日志并立即关闭
         if !share.cfg.server_addrs.iter().any(|a| a == &ip) {
-            log_line("WRN", &format!("非法地址连接:{ip}"));
-            drop(sock);
-            continue;
+            log_line(
+                "WRN",
+                &format!("非法地址连接:{ip}（不在 ServerAddr 白名单；按 oracle 接受，不断链）"),
+            );
         }
         let socket_id = format!("srv-{seq}");
         seq += 1;
