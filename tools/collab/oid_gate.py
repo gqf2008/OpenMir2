@@ -224,7 +224,7 @@ def _resolve(repo, oid, want_commit, git_cmd):
 def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None):
     """四态判定。返回 (rc, detail, stats)。"""
     stats = {"entries": len(entries), "oids": 0, "ok": 0, "short": 0,
-             "non_commit": 0, "bad": 0, "empty": 0, "exempted": 0}
+             "non_commit": 0, "bad": 0, "empty": 0, "exempted": 0, "ellipsis": 0}
     bad, short_hits, skipped, exempt = [], [], [], []
     baseline = set(baseline or [])
     used_baseline = set()
@@ -263,6 +263,16 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None
                     skipped.append("%s 不含 oid（自由文本：%r）" % (field, text[:40]))
                     continue
                 for cand in cands:
+                    # 卡 `openmir2-oid-gate-ellipsis-abbrev`：**紧跟省略号**的 hex 片段是
+                    # 展示缩写（如 `binary sha 31c0dec8…`），不是 oid 声明 ⇒ 跳过计 info。
+                    # 只放宽 `body.*` 自由文本；`refs.*` 的严格性不变（A3）。
+                    _tail = text[text.find(cand) + len(cand):][:3]
+                    if (field.startswith("body.")
+                            and (_tail.startswith("…") or _tail.startswith("..."))):
+                        stats["ellipsis"] += 1
+                        skipped.append("%s=%s（紧跟省略号 ⇒ 展示缩写，跳过）"
+                                       % (field, cand))
+                        continue
                     stats["oids"] += 1
                     if kind == "entry":
                         # parent 指的是**条目本身**——它是 git **blob** 对象（thread 视图里的 oid 就是
@@ -288,10 +298,10 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None
     if not entries:
         return 2, "扫描到 0 条条目 ⇒ 判不了（扫了 0 个不许算绿）", stats
     detail = ("扫描 %d 条条目 / %d 个 oid：可解析 %d（其中短 oid %d）、非 commit 跳过 %d、"
-              "空值 %d、解析不到 %d（其中已豁免 %d）"
+              "空值 %d、解析不到 %d（其中已豁免 %d）、省略号缩写跳过 %d"
               % (stats["entries"], stats["oids"], stats["ok"], stats["short"],
                  stats["non_commit"], stats["empty"], stats["bad"],
-                 len(exempt)))
+                 len(exempt), stats["ellipsis"]))
     stats["exempted"] = len(exempt)
     stats["baseline_total"] = len(baseline)
     stats["baseline_unused"] = len(baseline - used_baseline)
@@ -750,6 +760,29 @@ def selfcheck():
     rc_e3, _d3, st_e3 = check_entries([_bad_entry], tmp, baseline=bl)
     chk(rc_e3 == 0 and st_e3.get("exempted") == 1,
         "牙③ 对照：键完全相同 ⇒ 豁免仍生效（rc=%d）" % rc_e3)
+
+    # ---- 省略号缩写（卡 openmir2-oid-gate-ellipsis-abbrev）----
+    # A1/A2：自由文本里「hex 紧跟 …/...」是展示缩写，跳过计 info、不判红。
+    _ell = ("dev", "th-ell", "e" * 40,
+            mk({}, {"head": "%s（重建 stamp=head，binary sha 31c0dec8…）" % real}))
+    rc_ell, d_ell, st_ell = check_entries([_ell], tmp)
+    chk(rc_ell == 0 and st_ell.get("ellipsis") == 1 and "省略号缩写跳过 1" in d_ell,
+        "A2 自由文本里紧跟 … 的缩写 ⇒ 跳过计 info、不判红（rc=%d，%r）"
+        % (rc_ell, d_ell[:110]))
+    # A3①：没有省略号的坏 40 位仍红。
+    _ell_plain = ("dev", "th-ell2", "f" * 40,
+                  mk({}, {"head": "见 deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"}))
+    rc_ep, d_ep, _ = check_entries([_ell_plain], tmp)
+    chk(rc_ep == 1 and "deadbeefdeadbeef" in d_ep,
+        "A3① 无省略号的 40 位坏 oid ⇒ 仍红并点名（rc=%d）" % rc_ep)
+    # A3②：refs.head 的严格性不放宽（即使带省略号也红）。
+    _ell_refs = ("dev", "th-ell3", "1" * 40, mk({"head": "deadbeef…"}, {}))
+    rc_er, d_er, _ = check_entries([_ell_refs], tmp)
+    chk(rc_er == 1, "A3② refs.head 带省略号也不豁免（refs 严格性不变；rc=%d）" % rc_er)
+    # A3③：refs.head 空值仍红（空不等于短）。
+    _empty_refs = ("dev", "th-ell4", "2" * 40, mk({"head": ""}, {}))
+    rc_ef, _, _ = check_entries([_empty_refs], tmp)
+    chk(rc_ef == 1, "A3③ refs.head 空值 ⇒ 仍红（rc=%d）" % rc_ef)
 
     # ---- since（A4）：过滤新条目，且**不给 limit 悄悄截断** ----
     _old = ("dev", "th-old", "c" * 40, dict(mk({"head": missing}, {}), ts=10))
