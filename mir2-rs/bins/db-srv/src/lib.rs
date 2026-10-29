@@ -35,6 +35,8 @@ mod loginsrv;
 mod market;
 mod marketdata;
 mod playdata;
+#[cfg(test)]
+mod query_chain_tests;
 mod route;
 mod server;
 #[cfg(test)]

@@ -19,6 +19,8 @@
 
 mod config;
 mod downstream;
+#[cfg(test)]
+mod forward_tests;
 mod gbk;
 mod idle_timeout;
 mod slots;
@@ -90,7 +92,7 @@ async fn bind_gate_listener(cfg: &config::GateConfig) -> std::io::Result<TcpList
     TcpListener::bind((cfg.gate_addr.as_str(), cfg.gate_port)).await
 }
 
-async fn run_inner(args: &[String]) -> Result<()> {
+pub(crate) async fn run_inner(args: &[String]) -> Result<()> {
     // 配置路径：可选 argv[1] 覆盖（默认取可执行文件同目录，与 C# BaseDirectory 一致）
     let conf = args
         .first()
