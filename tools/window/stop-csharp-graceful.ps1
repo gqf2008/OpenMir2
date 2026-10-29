@@ -1,10 +1,12 @@
 # stop-csharp-graceful.ps1 — 给 C# 私有栈的 GameSvr 发 **CTRL_C**（优雅停），等它自己退出。
 #
-# 卡 openmir2-harness-stop-and-evidence ①(a)。原理（oracle 既有行为，不改 C#）：
-#   `src/GameSrv/Program.cs:16` 注册 `Console.CancelKeyPress` ⇒ `cts.Cancel()` ⇒
-#   `AppServer.StoppingAsync` → `OnShutdown()`（AppService.cs:206）→ **`SavePlayer()`**（:210，
-#   把**在线**玩家逐个 `SaveHumanRcd`）→ 网关停 → 进程自然退出。
-#   `Stop-Process -Force` 会跳过这一切 ⇒ ①(a) 的判据是「停栈后 DB 出现该次存档写入」。
+# 卡 openmir2-harness-stop-and-evidence ①(b)。原理与**实测边界**（v3，2026-10-29）：
+#   `src/GameSrv/Program.cs:16` 注册 `Console.CancelKeyPress` ⇒ 仅 `cts.Cancel()`
+#   （停网关），**不会**走 `AppService.StoppingAsync → OnShutdown → SavePlayer`
+#   （AppService.cs:206/210）。实测：CTRL_C 后游戏照常运行（4s 后仍有 DBG 任务行）、
+#   无「Application is stopping」/「保存玩家数据」日志行、进程 30s 不退、DB 零写入。
+#   ⇒ 本工具只做「网关排水式停 GameSvr」，**不提供存档保证**；存档唯一保证 =
+#   场景 settle + `require_changes`（runbook §0.15）。进程不退时按 STILL_ALIVE 处置。
 #
 # 发送方式（Windows 只能对**自己附着**的控制台发 CTRL_C）：经典三步
 #   FreeConsole → AttachConsole(<GameSvr pid>) → SetConsoleCtrlHandler(NULL,$true)
@@ -17,8 +19,10 @@
 #       -PidFile <start-csharp 的 pid json> [-Name GameSvr] [-TimeoutSec 60]
 #   powershell ... -GamePid <pid>                       # 直接给 pid
 #
-# 退出码：0 = GRACEFUL_EXIT（进程已退出）；3 = STILL_ALIVE（超时未退，此时才允许人工
-#         `Stop-Process -Force`，并必须在证据里登记「未走优雅停」）；2 = 参数/缺件错误。
+# 退出码：0 = GRACEFUL_EXIT（进程已退出）；3 = STILL_ALIVE（CTRL_C 已送达但超时未退——
+#         关服倒计时/网关排水比存档慢，属预期；此时才允许人工 `Stop-Process -Force`，并必须
+#         在证据里登记「未走优雅退出」）；4 = ATTACH_FAILED（CTRL_C **没送达**——目标没有
+#         控制台/已退出；此时**不得**轮询存档，直接走人工处置）；2 = 参数/缺件错误。
 param(
   [int]$GamePid = 0,
   [string]$PidFile = '',
@@ -70,8 +74,8 @@ public static class CtrlCSender2 {
 [void][CtrlCSender2]::FreeConsole()
 $attached = [CtrlCSender2]::AttachConsole([uint32]$GamePid)
 if (-not $attached) {
-  Write-Output ("ATTACH_FAILED pid={0} err={1}（目标可能没有控制台/已退出）" -f $GamePid, [Runtime.InteropServices.Marshal]::GetLastWin32Error())
-  exit 3
+  Write-Output ("ATTACH_FAILED pid={0} err={1}（CTRL_C 没送达：目标没有控制台/已退出；不得轮询存档）" -f $GamePid, [Runtime.InteropServices.Marshal]::GetLastWin32Error())
+  exit 4
 }
 [void][CtrlCSender2]::GenerateConsoleCtrlEvent(0, 0)   # CTRL_C_EVENT
 [void][CtrlCSender2]::FreeConsole()
