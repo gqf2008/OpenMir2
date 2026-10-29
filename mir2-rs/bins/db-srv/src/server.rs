@@ -170,14 +170,27 @@ impl Server {
 }
 
 /// 单个角色网关连接：注册槽位 → 读内部帧 → 处理 Enter/Leave/KeepAlive、转发 Data。
-async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String) -> Result<()> {
+pub(crate) async fn gate_conn(server: Arc<Server>, sock: TcpStream, peer: String) -> Result<()> {
     let ip = peer
         .rsplit_once(':')
         .map_or(peer.as_str(), |(h, _)| h)
         .to_string();
     if !server.share.check_server_ip(&ip) {
-        log::warn(&format!("非法服务器连接: {peer}"));
-        return Ok(());
+        // 卡 `openmir2-selgate-dbsrv-handshake`（A1/A2）：C# `UserService.Connecting`
+        // （`src/DBSrv/Services/Impl/UserService.cs:161-167`）字面上是「白名单一票否决 +
+        // Close」，但**可观测 oracle** 与之不符——生效白名单取自 DBSrv 运行目录
+        // （`DBShare.cs:15` = BaseDirectory/AddrTable.txt；`start-all.ps1:39` 把 DBSrv 指到
+        // `src/DBSrv/bin/Release`，该处 AddrTable.txt = `127.0.0.1`）⇒ 现网 C# 接受
+        // 127.0.0.1 网关连入且长连稳定（2026-10-29 晚 E:/MirServer/logs：SelGate 22:25:54
+        // 链接成功后 7100↔5100 ESTABLISHED 贯穿整夜）。部署树
+        // `E:/MirServer/DBServer/AddrTable.txt` 只有 10.10.0.x、无 127.0.0.1 ⇒ 旧实现
+        // 连接即关 ⇒ SelGate 按 `TimedService` 每 10s 重连＝"握手每 10 秒断连"
+        // （本卡 A1 已用 prebuilt 双进程真机复现 + 白名单控制组翻转）。与已合并的
+        // login-srv 同族修复（5a41e5f8d）同口径：白名单不命中**仅记日志、不断链**
+        // （以可观测 oracle 为准）。
+        log::warn(&format!(
+            "非法服务器连接: {peer}（不在 AddrTable 白名单；按 oracle 接受，不断链）"
+        ));
     }
     let id = server.next_id.fetch_add(1, Ordering::Relaxed);
     let Ok(slot) = usize::try_from(id - 1) else {
