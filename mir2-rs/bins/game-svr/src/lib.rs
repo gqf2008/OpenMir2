@@ -20127,7 +20127,16 @@ fn drain_monster_ref_msgs(
         // 收件人用**发帧时刻**的快照（`MonsterRefMsg::recipients`），不在此刻重算：
         // oracle `SendRefMsg` 在调用时就已投递；`StickMonster.ComeDown` 先发 `RM_DIGDOWN`
         // 再置 `FixedHideMode=true` ⇒ 排水时按 `hear_targets_at` 重算会因 sender 已隐藏而丢帧（复验 MB-1 F1）。
+        // `RM_HIT` 的**自身守卫**：oracle `PlayObject.Message.cs:1436`
+        // `if (processMsg.ActorId != ActorId)` —— 攻击者自己不收自己的受击帧。
+        // 收件人快照按 oracle 格扫**包含 sender 自己**（见 `NO_SENDER_EXCLUSION`），
+        // 因此必须在这里按接收者 id 去掉「自己发给自己」的那一份
+        // （卡 `openmir2-rust-extra-ident14-hit`：run32 玩家攻击后收到自己的 14）。
+        let drop_self = m.ident == mir2_world::monai::RM_HIT;
         for target_id in &m.recipients {
+            if drop_self && *target_id == m.actor_id {
+                continue;
+            }
             let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
                 continue;
             };
@@ -65911,6 +65920,87 @@ SendRefMsgRange=15
             world.pending_monster_ref_msgs.is_empty(),
             "排空后队列必须为空（否则无界增长）"
         );
+    }
+
+    /// 卡 `openmir2-rust-extra-ident14-hit`（run32）：`RM_HIT` 的**自身守卫**。
+    ///
+    /// oracle `PlayObject.Message.cs:1433-1440`：`if (processMsg.ActorId != ActorId)` ⇒
+    /// 攻击者自己**不收**自己的受击帧；而 `SendRefMsg` 的格扫**包含 sender 自己**
+    /// （`NO_SENDER_EXCLUSION`）⇒ 下行必须按接收者 id 去掉这一份。
+    ///
+    /// 牙：删掉 `drop_self` 守卫 ⇒ ① 的帧数由 0 变 1。
+    #[test]
+    fn rust_extra_ident14_self_hit_dropped() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut m = Entity::new(0, "石像".to_string(), 10, 10);
+        m.race = 101;
+        let mid = world.add_entity(m);
+        world.tick();
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "P".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        let displays = downlink::DisplayTable::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+
+        let hit = |actor_id: i32, recipients: Vec<i32>| mir2_world::MonsterRefMsg {
+            actor_id,
+            ident: mir2_world::monai::RM_HIT,
+            w_param: 0,
+            n_param1: 0,
+            n_param2: 0,
+            n_param3: 0,
+            target_x: 0,
+            target_y: 0,
+            dir: 5,
+            x: 19,
+            y: 18,
+            map_id: 0,
+            status: 0,
+            self_only: false,
+            recipients,
+        };
+
+        // ① 玩家自己发的 RM_HIT（recipients 含自己）⇒ 不得下发。
+        world.pending_monster_ref_msgs.push(hit(pid, vec![pid]));
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+        let mut n_self = 0usize;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_HIT {
+                    n_self += 1;
+                }
+            }
+        }
+        assert_eq!(
+            n_self, 0,
+            "攻击者自己不收自己的 SM_HIT（oracle `processMsg.ActorId != ActorId`）"
+        );
+
+        // ② 怪物发的 RM_HIT ⇒ 玩家照常收到（守卫只针对 sender 本人）。
+        world.pending_monster_ref_msgs.push(hit(mid, vec![pid]));
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+        let mut n_monster = 0usize;
+        while let Ok(ev) = rx0.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_HIT {
+                    n_monster += 1;
+                }
+            }
+        }
+        assert_eq!(n_monster, 1, "怪物发的 SM_HIT 必须照常投递");
     }
 
     /// **Lane 1（`openmir2-monster-attack-smhit`）**：怪普攻在**生产 tick 路径**上出
