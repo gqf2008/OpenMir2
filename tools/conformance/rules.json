@@ -44,7 +44,12 @@
     "feature_ident": 41,
     "turn_body_len": 11,
     "feature_body_len": 0,
-    "shape_fields": ["param", "tag", "light", "phase"],
+    "shape_fields": [
+      "param",
+      "tag",
+      "light",
+      "phase"
+    ],
     "reason": "随机分支产生的「无名 SM_TURN(10) + 紧随同 recog 的 SM_FEATURECHANGED(41)」成对帧（卡 openmir2-rules-random-idle-frames）。生产点：固定 NPC/商人的 `Random(50)==0 => TurnTo(RandomByte(8))`（src/GameSrv/Npc/Merchant.cs:132-141、src/GameSrv/Npc/GuildOfficial.cs:39-53）与机器人走路卡住分支 `Random(2)=>TurnTo else WalkTo`（src/Modules/RobotSystem/Services/RobotPlayer.Base.cs:982/:997）——**是随机分支，不是「纯 idle 动画」**。收件人侧 RM_TURN 支无条件补发 41（PlayObject.Message.cs:1524-1560）：TURN 无名尾（尾=Encode(8B CharDesc)，body_len=11；带名尾的登录期出现帧 body_len>11，**不在本规则内**）、41 Recog=actor 且无尾。**存在性与次数不可比**：oracle 随机源是墙钟播种的 new Random()（src/OpenMir2/RandomNumber.cs:35），rust 是 with_seed(42)（mir2-rs/crates/world/src/world.rs:1301）⇒ 同一 oracle 二进制、同一场景多轮实测这对帧 0/1/2 次（run2 dice_chain_auto 2 vs 0、move_walk 1 vs 2 vs 1 vs 0）。**可比的是形状**：按多重集比 (param, tag, Light, phase)；**一侧一对都没有时不比形状**（没有合同可比，只登记次数）。Light = series 高字节（固定 NPC/NormNpc ctor Light=2，见 npc_random_idle_frames_through_production_drain_run）；**Dir = series 低字节 = RandomByte(8) 的结果，不比**。**这对帧是否存在不由对拍判**：它由构造级用例 `npc_random_idle_frames_through_production_drain_run`（`mir2-rs/bins/game-svr/src/lib.rs:28317`）钉住——对拍只管**形状**，存在性归构造级用例（Rust 永远发不出这对帧时，单看对拍不会红；报告里 `oracle_pairs>=3 且 rust_pairs==0` 会在人读摘要里打一行 WARNING，但不改 verdict）。**shape_fields 里的 `phase` 是驱动侧连接标签**（login/gamegate/selgate），不是协议字段：标签改名会假红（F4，已知代价）。**不许用「ident 10 整类 ignore」图省事**：ident 10 有确定性实例（登录期带名尾 4 对），整类掩掉会把真差异一起掩了；也不许整类 ignore 41。",
     "tier": "L",
     "approved_by": "PENDING owner/coordinator review (draft: openmir2-dev-2)"
@@ -73,11 +78,38 @@
       "reason": "SM_HIT：固定 NPC / 商人的受击帧。**两个发点，性质不同**：① 随机支——`GuildOfficial.Run` 的 `Random(30)==0`（src/GameSrv/Npc/GuildOfficial.cs:47 → :49）、`Merchant.Run` 的第二个 `Random(50)==0`（Merchant.cs:138 → :140），oracle 随机源是墙钟播种的 `new Random()`（src/OpenMir2/RandomNumber.cs:35）⇒ **跨进程不可复现**；② **确定性支**——城堡商人 `FixedHideMode` 解除时补发一条（Merchant.cs:152-157，`SendRefMsg(RM_HIT,…)` 在 :156），这一条**不由本规则覆盖、也未被任何帧级判据覆盖**（reviewer-2 F2），须由「城堡商人在战中/战后切换」的场景或构造级用例单独判（已开卡追踪）。\n\n**2026-10-29 转正（owner/coordinator decision=81f45a49）**：保留计数+形态双等门槛；两侧 counts 与 shape 全等才允许剔除，任一不等仍判 UNDECIDABLE（`ignore_rule_mismatch`），不得洗绿。原 PENDING 解除条件中“R 级窗口证明不该出现的一侧不发”仍未取得，作为残余风险登记在 verification-master。**本规则的边界**：`ignore` 在按序对齐前整帧剔除，但剔除前 `ignore_rule_census` 会按**每侧计数 + 形态多重集**（`param/tag/series` + `body_sha256`）比较两侧被剔的帧，只有全等才允许剔除；**Recog（ActorId，跨进程无关）与收件人集合不比**，它们只由单元用例钉死（downlink::hit_frame 黄金用例 npc_hit_frame_is_sm_hit_with_dir_series_and_no_tail + T-154 F1 的 npc_hit_frames_only_for_world_branch_and_never_to_npc）；若 Rust 从确定性路径多发了 14：一侧多一条 ⇒ 两侧计数不等 ⇒ 整轮 UNDECIDABLE（`ignore_rule_mismatch`），**不会被静默剔掉**；只有 counts 与 shape 全等时才允许剔除（残余风险因此只剩「同量同形但语义错」这一类，由上面的构造级覆盖盯）。原始现象：2026-10-23 双栈窗口里 Rust（seed=42）在登录后 0.8s 发了一条 recog=被观察商人、Series=Dir 的 14，oracle 同场景 0 条（两侧 rest 帧逐字节相同）。**历史 PENDING 解除条件（已被 2026-10-29 裁决取代）**：当前证据只到「**跨轮不可复现**」——同一 oracle 二进制（sha256=ab655008…）+ 同一 `scenario_sha256` 下 castle 14=29 vs 27、dice_chain 0/1/0、move_walk 0/0/1/0 ⇒ 解除理由只能写「不可逐帧对齐」，**绝不能**写成「已比对一致」。要真正解除，必须先有 R 级窗口证据（证明「不该出现的一侧不发」）或把它换成形状级规则。**整帧 ignore 的已知代价**：`RM_HIT` 还有三类**未登记**来源——动物攻击（AnimalObject.cs:171/382）、怪物特殊攻击（11 个 Monsters 文件 + SuperGuard:33）、**玩家攻击**（PlayObject.Attack.cs:45/56/67/82/86）；butch 那 2 条正是**鸡在啄玩家**（recog=199、同坐标 329,330）⇒ 整帧 ignore 会把战斗命中一起吞掉。**因此本卡不从 ignore 改成掩码**（没有 R 证据）。**长期因为本规则判 UNDECIDABLE 的场景**（两侧 14 计数不齐时）：npc_click、merchant_dialog、butch_two_draws、castle_merchant_tax_potion。另：ident 10 与 50 也仍是 PENDING ⇒ 靠它们通过的场景并不是「已批准规则下的绿」，判读时要一起写。**不许为了让场景变绿给 14 加掩码。**\n\n**受控裁决（T-270，卡 openmir2-ident14-extra-hit-adjudication）**：oracle 侧多出的 SM_HIT(14) 若全部落在 `oracle_extra_shapes` 白名单内、body 为空、帧面其它帧全等、两侧库快照比过且无差异，则登记为 `frames.oracle_extra_hits`（whitelisted）而不是判 UNDECIDABLE；Rust 多出、形状不符、body 非空、伴随帧差或库差一律保持 UNDECIDABLE。本条只覆盖登记过的形状，不改变「整类 ignore」的门槛。\n\n**状态 APPROVED（owner 裁决 `7c9f9525c63402155d37b5c8e09d4ee8d4486683`，openmir2-coordinator，2026-10-29）**：只放行 `oracle_extra_shapes` 里登记的两个形状（各带 max），且必须同时满足帧面无其它差异、库 state=compared 且无 diffs/undecidable；`oracle_extra_status=APPROVED` 但 `oracle_extra_decision` 为空时仍按 PENDING 处理（fail-closed）。",
       "tier": "R",
       "approved_by": "openmir2-orchestrator (coordinator review 2026-10-29, decision=81f45a499d7a25227f93bc1e933cc6f086b3b669; draft: openmir2-worker-4)",
-      "oracle_extra_shapes": [{"shape": "318,336,4", "max": 1, "decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683"},
-                             {"shape": "49,49,5", "max": 2, "decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683"},
-                             {"shape": "49,49,1", "max": 1, "decision": "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd"},
-                             {"shape": "318,332,7", "max": 1, "decision": "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41"},
-                             {"shape": "327,327,6", "max": 1, "decision": "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41"}],
+      "oracle_extra_shapes": [
+        {
+          "shape": "318,336,4",
+          "max": 1,
+          "decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683"
+        },
+        {
+          "shape": "49,49,5",
+          "max": 2,
+          "decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683"
+        },
+        {
+          "shape": "49,49,1",
+          "max": 1,
+          "decision": "f0b5734e0d67718618473bc2fb54e8d6f8ea58dd"
+        },
+        {
+          "shape": "318,332,7",
+          "max": 1,
+          "decision": "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41"
+        },
+        {
+          "shape": "327,327,6",
+          "max": 1,
+          "decision": "fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41"
+        },
+        {
+          "shape": "327,327,3",
+          "max": 1,
+          "decision": "449cd0c9d6c4f10445c62890e6f3f7c90873522b"
+        }
+      ],
       "oracle_extra_status": "APPROVED",
       "oracle_extra_decision": "7c9f9525c63402155d37b5c8e09d4ee8d4486683",
       "oracle_extra_evidence": "run27/softclose_relogin：oracle 2 条 14——(recog=1406845931, 318,332, Dir=7) 与 (recog=190181583, 327,327, Dir=6)，body 全空；两者在本侧 ident10 都有同坐标走位帧；但该次运行**另有 10 条帧差** ⇒ 即使形状裁决落地也仍 UNDECIDABLE。**注意**：318,332,7 与 run5/softclose_relogin 的额外帧**同形**（run5 是 recog=371349499、其余帧 diffs=0、库 compared 零差）⇒ 一旦裁决该形状，run5 也会转 PASS（需 owner 一并确认覆盖范围）；两个形状已由 owner 裁决（comment `fb0ea7a95aee64d4a9a21df6983d0a79b5b94f41`，APPROVED，**覆盖 run5 的同形帧**）。run24/gamepoint_exchange：oracle 1 条 14(49,49,1)（recog=511670749，本侧 ident10 位置帧正是 (49,49)；其余帧逐字节相同、库 state=compared 且零差异）⇒ 零可观测副作用，owner 已对该 Dir 单独裁决（comment `f0b5734e0d67718618473bc2fb54e8d6f8ea58dd`，APPROVED，仅该形状仅 oracle 侧）；run23 无 14 ⇒ PASS。run12/softclose_relogin：oracle 1 条 14(318,336,4)（recog=60597838，流末帧）；run21/gamepoint_exchange：oracle 2 条 14(49,49,5)（recog=29729721）。两侧该 actor 的位置帧（ident 10）分别就是 (318,336)/(49,49)，body 均为空（sha256=e3b0c442…），帧面其它帧逐字节相同、库快照比过且零差异 ⇒ 零可观测副作用（T-270）",
