@@ -2799,9 +2799,11 @@ def compare_main(args):
             _ok_extra, _extra_info = oracle_extra_explainable(row, _rule_extra)
         if _ok_extra:
             pending_oracle_extra.append({"und": _und, "info": _extra_info})
-        elif _rule_extra.get("oracle_extra_shapes"):
-            # 规则登记了 T-270 白名单但本条不满足候选条件（形状/body/max/Rust 多发）⇒
-            # 在报告里写清「为什么没进候选」，别让读者自己去猜。
+        elif (_rule_extra.get("oracle_extra_shapes")
+              or _rule_extra.get("oracle_extra_policy")):
+            # 规则登记了 T-270 白名单/policy 但本条不满足候选条件（形状/body/max/policy 值/
+            # Rust 多发）⇒ 在报告里写清「为什么没进候选」。policy-only 规则也要能归因
+            # （reviewer-21 R21-N1：非法 policy 值在 shapes 为空时此前是无归因的红行）。
             _und["adjudication"] = "T-270"
             _und["adjudication_blocked_by"] = (
                 _extra_info.get("reason") or "不满足 T-270 候选条件")
