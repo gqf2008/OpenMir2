@@ -237,17 +237,24 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 - **检查（fail-closed）**：`tools/window/preflight_private_stack.py` 新增
   `castle_list_symmetry` 步——比对两侧（含影子）内容与 sha256，不一致打印两侧 bytes/sha256
   并 rc=2；只读，不改文件。
-- **对齐办法**（私有栈夹具，**不碰 `E:/MirServer`**）：
+- **对齐办法**（私有栈夹具；**只读引用部署件、只写私有根**——与 §0.9b/§0.10 同一锚定口径）：
   ```powershell
-  # W-TAX-2 需两城：以 rust-root 的 0,1 为基准
-  Copy-Item -Force E:/tmp/conformance/rust-root/M2GameSvr/Castle/List.txt `
-    E:/tmp/conformance/csharp-root/M2GameSvr/Castle/List.txt
-  if (Test-Path E:/tmp/conformance/csharp-root/M2GameSvr-hook/Castle/List.txt) {
-    Copy-Item -Force E:/tmp/conformance/rust-root/M2GameSvr/Castle/List.txt `
-      E:/tmp/conformance/csharp-root/M2GameSvr-hook/Castle/List.txt
+  # W-TAX-2 需两城：锚部署件当时的值（0,1），对齐三私有根（2026-10-29 订正，见下）
+  foreach ($d in @("E:/tmp/conformance/csharp-root/M2GameSvr",
+                   "E:/tmp/conformance/csharp-root/M2GameSvr-hook",
+                   "E:/tmp/conformance/rust-root/M2GameSvr")) {
+    if (Test-Path "$d/Castle/List.txt") {
+      Copy-Item -Force E:/MirServer/M2GameSvr/Castle/List.txt "$d/Castle/List.txt"
+    }
   }
   ```
-  最小场景可反向对齐到 `0`（1 城），但 W-TAX-2 与多城项需 `0,1`；对齐后重跑 preflight，
+  **订正（2026-10-29，卡 `openmir2-runbook-09-legacy-baseline-wording`，reviewer-22
+  observation）**：旧写法（rust-root → 另两根互抄、把某个私有根当基准）已废弃——
+  私有根互为基准会让任何一个根的漂移成为「真值」；改为与 §0.9b 开窗第 0 步同口径：
+  **以部署件 `E:/MirServer/M2GameSvr/Castle/List.txt` 当时的值（`0,1`）为源，复制方向恒为
+  部署件 → 私有根**（跑后还原方向同此，见 §0.10 的 2026-10-29 订正）。
+  最小场景确需 `0`（1 城）时，三侧一致地写 `0` 并在窗口日志登记为夹具决策（对称性判据
+  仍要求三侧一致）；W-TAX-2 与多城项需 `0,1`，以部署件为源即得。对齐后重跑 preflight，
   `castle_list_symmetry` 必须 OK。**订正（2026-10-26，卡 `openmir2-castle-symmetry-baseline`）**：`Castle/<n>/SabukW.txt`（每城一份）确实同源，但部署件与私有栈里**还有** `Castle/Castle/SabukW.txt`（实测三侧 `98d9b630…`(10400B) / `18ee5e6a…`(11090B) / `93b6af8b…`(10971B)，部署件 `cec68c8c…`(9290B)，**互不相同**）⇒ 由 §0.9b 的开窗第 0 步统一复制部署件值并落跑前基线。
 - **影响面**：W-TAX-1..4（尤其 W-TAX-2）、T-127 W-T127-4（多城广播次序）、任何按城表遍历的
   城堡工作项。窗口执行单（exec sheet）前置表已同步该步。
