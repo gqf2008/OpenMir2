@@ -258,15 +258,19 @@ def check_entries(entries, repo, git_cmd=("git",), entry_ids=None, baseline=None
                               "空值：%s / %s / %s / 条目 %s ⇒ 空不等于短，判红"
                               % (principal, thread, field, str(eoid)[:9]))
                     continue
-                cands = oid_re.findall(text)
-                if not cands:
+                # 用 `finditer` 的 **span** 取当前候选的尾部：同一 hex 片段在文本里出现多次时，
+                # `text.find(cand)` 永远命中第一处 ⇒ 位置判断错位（① 第二个该跳过却红；
+                # ② 第二个该判红却被跳过）。
+                matches = list(oid_re.finditer(text))
+                if not matches:
                     skipped.append("%s 不含 oid（自由文本：%r）" % (field, text[:40]))
                     continue
-                for cand in cands:
+                for _m in matches:
+                    cand = _m.group(0)
                     # 卡 `openmir2-oid-gate-ellipsis-abbrev`：**紧跟省略号**的 hex 片段是
                     # 展示缩写（如 `binary sha 31c0dec8…`），不是 oid 声明 ⇒ 跳过计 info。
                     # 只放宽 `body.*` 自由文本；`refs.*` 的严格性不变（A3）。
-                    _tail = text[text.find(cand) + len(cand):][:3]
+                    _tail = text[_m.end():_m.end() + 3]
                     if (field.startswith("body.")
                             and (_tail.startswith("…") or _tail.startswith("..."))):
                         stats["ellipsis"] += 1
@@ -779,6 +783,22 @@ def selfcheck():
     _ell_refs = ("dev", "th-ell3", "1" * 40, mk({"head": "deadbeef…"}, {}))
     rc_er, d_er, _ = check_entries([_ell_refs], tmp)
     chk(rc_er == 1, "A3② refs.head 带省略号也不豁免（refs 严格性不变；rc=%d）" % rc_er)
+    # A3④（reviewer 指出的位置错位）：同一片段出现多次时，必须按**当前候选的位置**判尾部。
+    # 第一处带省略号、第二处不带 ⇒ 第二处仍红。
+    _ell_order = ("dev", "th-ell5", "3" * 40,
+                  mk({}, {"head": "31c0dec8… 31c0dec8"}))
+    rc_eo, d_eo, st_eo = check_entries([_ell_order], tmp)
+    chk(rc_eo == 1 and st_eo.get("ellipsis") == 1,
+        "A3④ 同一文本：第一处带省略号、第二处不带 ⇒ 第二处仍红（rc=%d，ellipsis=%d）"
+        % (rc_eo, st_eo.get("ellipsis", -1)))
+    # 反向：第一处不带、第二处带省略号 ⇒ 第一处仍红（放宽不得外溢到前面的候选）。
+    _ell_order2 = ("dev", "th-ell6", "4" * 40,
+                   mk({}, {"head": "31c0dec8 31c0dec8…"}))
+    rc_eo2, d_eo2, st_eo2 = check_entries([_ell_order2], tmp)
+    chk(rc_eo2 == 1 and st_eo2.get("ellipsis") == 1,
+        "A3⑤ 反向：第一处不带省略号、第二处带 ⇒ 第一处仍红（rc=%d，ellipsis=%d）"
+        % (rc_eo2, st_eo2.get("ellipsis", -1)))
+
     # A3③：refs.head 空值仍红（空不等于短）。
     _empty_refs = ("dev", "th-ell4", "2" * 40, mk({"head": ""}, {}))
     rc_ef, _, _ = check_entries([_empty_refs], tmp)
