@@ -14,9 +14,13 @@
       4 login-gate  5 sel-gate    6 game-gate
   停止顺序 = 上面的严格反向（game-gate -> sel-gate -> login-gate -> game-svr -> login-srv -> db-srv）。
 
-  配置文件（相对 `-Root`，与 start_rust_stack.ps1 的六角色口径一致）：
-      db-srv     <Root>\DBSrv\dbsvr.conf
-      login-srv  <Root>\LoginSrv\logsrv.conf
+  配置文件（相对 `-Root`；每角色按候选顺序取**第一份存在**的 conf。候选序按本脚本服务的
+  默认根优先——本脚本是 Rust mir2-server 启动器，现役窗口测试链（card_window →
+  start-rust.ps1）默认 `-Root rust-root`，故 login-srv 以 rust/测试系名 `logsrv.conf` 优先
+  （卡 openmir2-g0-conf-map-option-a 返工，R22-C-F1）；`E:/MirServer` 生产根无 `logsrv.conf`
+  ⇒ 生产解析（`LoginSrv\config.conf`）不变。多候选并存时打 WARN「ambiguous root」：
+      db-srv     <Root>\DBServer\dbsvr.conf   （或 <Root>\DBSrv\dbsvr.conf）
+      login-srv  <Root>\LoginSrv\logsrv.conf  （或 <Root>\LoginSrv\config.conf）
       game-svr   <Root>\M2GameSvr\Server.conf
       login-gate <Root>\LoginGate\config.conf
       sel-gate   <Root>\SelGate\config.conf
@@ -85,13 +89,18 @@ param(
 $ErrorActionPreference = 'Stop'
 
 # 六个角色的固定表：启动顺序 = 数组顺序；stop_order 越大越先停（停止脚本按降序）。
+# conf 候选（卡 openmir2-g0-conf-map-option-a）：login-srv 以 rust/测试系名 logsrv.conf 优先
+# （本脚本是 Rust 启动器，现役测试链默认根 rust-root 两候选并存——生产族 config.conf 在后，
+# 否则测试窗口 login-srv 解析到生产族值、撞 C# LoginSrv 端口并连生产库，R22-C-F1 Critical）；
+# db-srv 维持生产实况在前（rust-root 无 DBServer、E:/MirServer 无 DBSrv，今日无混存根）。
+# 多候选并存 ⇒ WARN「ambiguous root」（解析仍取第一份，告警让漂移可见）。
 $RoleTable = @(
-  [pscustomobject]@{ role = 'db-srv';     conf = 'DBSrv\dbsvr.conf';      ports = @(6000, 5100, 5700); stop_order = 1 }
-  [pscustomobject]@{ role = 'login-srv';  conf = 'LoginSrv\logsrv.conf';  ports = @(5500, 5600);       stop_order = 2 }
-  [pscustomobject]@{ role = 'game-svr';   conf = 'M2GameSvr\Server.conf'; ports = @(5000);             stop_order = 3 }
-  [pscustomobject]@{ role = 'login-gate'; conf = 'LoginGate\config.conf'; ports = @(7000);             stop_order = 4 }
-  [pscustomobject]@{ role = 'sel-gate';   conf = 'SelGate\config.conf';   ports = @(7100);             stop_order = 5 }
-  [pscustomobject]@{ role = 'game-gate';  conf = 'RunGate\config.conf';   ports = @(7200, 7201, 7202); stop_order = 6 }
+  [pscustomobject]@{ role = 'db-srv';     confCandidates = @('DBServer\dbsvr.conf', 'DBSrv\dbsvr.conf');      conf = ''; ports = @(6000, 5100, 5700); stop_order = 1 }
+  [pscustomobject]@{ role = 'login-srv';  confCandidates = @('LoginSrv\logsrv.conf', 'LoginSrv\config.conf'); conf = ''; ports = @(5500, 5600);       stop_order = 2 }
+  [pscustomobject]@{ role = 'game-svr';   confCandidates = @('M2GameSvr\Server.conf');  conf = ''; ports = @(5000);             stop_order = 3 }
+  [pscustomobject]@{ role = 'login-gate'; confCandidates = @('LoginGate\config.conf');  conf = ''; ports = @(7000);             stop_order = 4 }
+  [pscustomobject]@{ role = 'sel-gate';   confCandidates = @('SelGate\config.conf');    conf = ''; ports = @(7100);             stop_order = 5 }
+  [pscustomobject]@{ role = 'game-gate';  confCandidates = @('RunGate\config.conf');    conf = ''; ports = @(7200, 7201, 7202); stop_order = 6 }
 )
 
 # ---- 端口剖面：-PortsProfile（alt_port_profile.json 的 ports_by_role）/ -Ports 覆盖。----
@@ -343,16 +352,34 @@ if ($plan.Count -eq 0) {
 }
 
 # ---- 配置存在性（WhatIf 与实跑同一判据；缺一即退出 2）。----
+# 每角色按 confCandidates 顺序解析：第一份存在的候选生效；多候选并存 ⇒ WARN
+# 「ambiguous root」（解析仍取第一份，告警让根漂移可见）；全部缺失才 RED 并点名全部
+# 候选（卡 openmir2-g0-conf-map-option-a）。
 $missing = @()
+$ambiguous = @()
 foreach ($p in $plan) {
-  $confPath = Join-Path $Root $p.conf
-  if (-not (Test-Path -LiteralPath $confPath -PathType Leaf)) {
-    $missing += ("{0} -> {1}" -f $p.role, $confPath)
+  $resolved = $null
+  $resolvedOthers = @()
+  foreach ($cand in $p.confCandidates) {
+    $confPath = Join-Path $Root $cand
+    if (Test-Path -LiteralPath $confPath -PathType Leaf) {
+      if ($null -eq $resolved) { $resolved = $cand }
+      else { $resolvedOthers += $cand }
+    }
+  }
+  if ($null -eq $resolved) {
+    $missing += ("{0} -> {1}" -f $p.role, (($p.confCandidates | ForEach-Object { Join-Path $Root $_ }) -join ' OR '))
+  } else {
+    $p.conf = $resolved
+    if ($resolvedOthers.Count -gt 0) {
+      $ambiguous += ("{0} -> 取 {1}（还有 {2}）" -f $p.role, $resolved, ($resolvedOthers -join ', '))
+    }
   }
 }
+foreach ($a in $ambiguous) { Write-Output ("WARN: ambiguous root: " + $a) }
 if ($missing.Count -gt 0) {
   Write-Output ('RED: 缺配置：' + ($missing -join '; '))
-  Write-Output ('RED: -Root={0}；本工具要求六角色配置按固定映射存在（见 -WhatIf 用法）' -f $Root)
+  Write-Output ('RED: -Root={0}；本工具要求六角色配置按候选映射存在（见 -WhatIf 用法）' -f $Root)
   exit 2
 }
 
