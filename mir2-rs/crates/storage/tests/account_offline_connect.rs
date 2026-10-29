@@ -99,3 +99,55 @@ async fn assembled_options_with_stale_config_password_denied() {
         "必须是 1045/Access denied 签名，实得：{text}"
     );
 }
+
+/// Index 探针：插入临时行 ⇒ `init_or_empty` ⇒ `index` 必须命中（Map 键/大小写/装载时序）。
+#[tokio::test]
+async fn index_finds_inserted_row() {
+    if !mysql_3306_listening() {
+        eprintln!("skip: 本机 3306 无监听（离线环境）");
+        return;
+    }
+    let cleanup = sqlx::mysql::MySqlPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(5))
+        .connect_lazy_with(
+            MySqlConnectOptions::new()
+                .host("127.0.0.1")
+                .port(3306)
+                .username("root")
+                .database("mir2_test_account"),
+        );
+    sqlx::query("DELETE FROM account_protection WHERE AccountId IN (SELECT Id FROM account WHERE Account='tooth_idx')")
+        .execute(&cleanup)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM account WHERE Account='tooth_idx'")
+        .execute(&cleanup)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO account (Account,PassWord,PassFailCount,PassFailTime,Seconds,LastLoginTime,PayMode,State) VALUES ('tooth_idx','idxpw',0,0,0,0,0,0)")
+        .execute(&cleanup)
+        .await
+        .unwrap();
+
+    let dsn =
+        mir2_storage::LegacyDsn::parse("server=127.0.0.1;uid=root;database=mir2_test_account;")
+            .expect("DSN 解析");
+    let (store, init_err) = mir2_storage::AccountStore::init_or_empty(&dsn).await;
+    assert!(init_err.is_none(), "装载必须成功：{init_err:?}");
+    let hit = store.index("tooth_idx");
+    assert!(
+        hit.is_some(),
+        "index 必须命中临时行（map_len={}）",
+        store.count()
+    );
+    assert!(hit.unwrap() > 0);
+    sqlx::query("DELETE FROM account_protection WHERE AccountId IN (SELECT Id FROM account WHERE Account='tooth_idx')")
+        .execute(&cleanup)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM account WHERE Account='tooth_idx'")
+        .execute(&cleanup)
+        .await
+        .unwrap();
+}

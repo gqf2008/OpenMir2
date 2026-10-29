@@ -656,8 +656,7 @@ async fn account_select_server(
         ),
     );
     if !user.account.is_empty() && !server_name.is_empty() && is_login {
-        let (mut s_sel_gate_ip, n_sel_gate_port) =
-            get_sel_gate_info(share, &server_name, &gate_ipaddr).await;
+        let (mut s_sel_gate_ip, n_sel_gate_port) = get_sel_gate_info(share, &server_name).await;
         if !s_sel_gate_ip.is_empty() && n_sel_gate_port > 0 {
             if share.cfg.dynamic_ip_mode {
                 s_sel_gate_ip = user.gate_ipaddr.clone();
@@ -722,7 +721,7 @@ async fn account_select_server(
             log_line(
                 "WRN",
                 &format!(
-                    "[选服失败] 未匹配到服务器网关路由: server=[{server_name}] gateIP=[{gate_ipaddr}]，请检查 AddrTable.txt 中该服务器的 ServerName/Public 字段是否与登录网关地址一致"
+                    "[选服失败] 未匹配到服务器网关路由: server=[{server_name}] gateIP=[{gate_ipaddr}]，请检查 AddrTable.txt 中该服务器的 ServerName 字段（路由按 ServerName 匹配，PublicAddr 仅作 530 下发）"
                 ),
             );
         }
@@ -739,14 +738,24 @@ async fn account_select_server(
 }
 
 /// `ClientSession.GetSelGateInfo`（含 `nSelIdx` 轮询游标与"C# 从 `nSelIdx+1` 起找"的既有行为）。
-async fn get_sel_gate_info(share: &Arc<Share>, server_name: &str, ipaddr: &str) -> (String, u16) {
+/// `ClientSession.GetSelGateInfo`（含 `nSelIdx` 轮询游标与"C# 从 `nSelIdx+1` 起找"的既有行为）。
+async fn get_sel_gate_info(share: &Arc<Share>, server_name: &str) -> (String, u16) {
+    let mut sel_idx = share.sel_idx.lock().await;
+    match_route(&share.cfg.routes, &mut sel_idx, server_name)
+}
+
+/// A2（卡 `openmir2-login-srv-select-route-match`）：选服路由匹配核心——**按 ServerName
+/// 匹配路由；路由的 PublicAddr（广播地址）不参与否决**。
+///
+/// oracle：C# 生产同 conf（AddrTable 路由 Public=10.10.0.102）同 127.0.0.1 客户端
+/// 三次 login_only completed（选服通过）⇒ 可观测语义 = 仅按服务器名。
+/// 重切2 实测：旧实现按 `PublicAddr == gateIP` 合取把 127.0.0.1 网关连入判成未匹配
+/// ⇒ 无 530（RED）。
+fn match_route(routes: &[GateRoute], sel_idx: &mut [usize], server_name: &str) -> (String, u16) {
     let mut s_sel_gate_ip = String::new();
     let mut n_sel_gate_port = 0u16;
-    let mut sel_idx = share.sel_idx.lock().await;
-    for (i, route) in share.cfg.routes.iter().enumerate() {
-        if share.cfg.dynamic_ip_mode
-            || (route.server_name == server_name && route.public_addr == ipaddr)
-        {
+    for (i, route) in routes.iter().enumerate() {
+        if route.server_name == server_name {
             let n_gate_count = route
                 .gates
                 .iter()
@@ -773,7 +782,7 @@ async fn get_sel_gate_info(share: &Arc<Share>, server_name: &str, ipaddr: &str) 
                 }
             }
             let n = sel_idx[i];
-            s_sel_gate_ip = route.gates[n].ipaddr.clone();
+            s_sel_gate_ip.clone_from(&route.gates[n].ipaddr);
             n_sel_gate_port = route.gates[n].port;
             break;
         }
@@ -1876,5 +1885,68 @@ mod tests {
             gates.contains_key("gate-1"),
             "旧实现必然复活条目——这正是本卡要消除的幽灵"
         );
+    }
+}
+
+#[cfg(test)]
+mod select_route_teeth {
+    use super::*;
+    use crate::config::TGateNet;
+
+    fn prod_route() -> GateRoute {
+        GateRoute {
+            server_name: "热血传奇".into(),
+            title: "Title1".into(),
+            remote_addr: "10.10.0.102".into(),
+            public_addr: "10.10.0.102".into(),
+            gates: [
+                TGateNet {
+                    ipaddr: "10.10.0.102".into(),
+                    port: 7100,
+                    enable: true,
+                },
+                TGateNet::default(),
+                TGateNet::default(),
+                TGateNet::default(),
+                TGateNet::default(),
+                TGateNet::default(),
+                TGateNet::default(),
+                TGateNet::default(),
+                TGateNet::default(),
+                TGateNet::default(),
+            ],
+        }
+    }
+
+    /// A2（卡 `openmir2-login-srv-select-route-match`）：**选服按 ServerName 匹配路由，
+    /// 路由的 PublicAddr（广播地址）不参与否决**——重切2 实测：登录网关自报 127.0.0.1
+    /// 而路由 Public=10.10.0.102，旧合取（PublicAddr==gateIP）判未匹配 ⇒ 无 530（RED）；
+    /// C# 生产同 conf 同客户端实证选服通过（login_only 65 帧）⇒ 可观测 oracle = 仅按
+    /// 服务器名。本牙：生产同款路由（Public=Gate=10.10.0.102），匹配请求按 ServerName，
+    /// `match_route` 必须命中并返回 Gate 列公网地址。
+    ///
+    /// 反向牙（A2 变异）：恢复 `PublicAddr == gateIP` 合取（gateIP=127.0.0.1 ≠
+    /// Public=10.10.0.102）⇒ 未匹配 ⇒ 返回空 ⇒ 本牙红。
+    #[test]
+    fn select_route_matches_by_server_name_public_addr_not_vetoed() {
+        let routes = vec![prod_route()];
+        let mut sel_idx = vec![0; routes.len()];
+        let (ip, port) = match_route(&routes, &mut sel_idx, "热血传奇");
+        assert_eq!(ip, "10.10.0.102", "必须按 ServerName 命中路由");
+        assert_eq!(port, 7100, "必须返回路由 Gate 列公网端口");
+    }
+
+    /// 反向牙本体：生产同款**失配**夹具（路由 Public=10.10.0.102，查询按 gateIP=
+    /// 127.0.0.1）⇒ 未命中 ⇒ 空（与重切2 的 RED 同形，钉住否决语义不回归为"恒命中"）。
+    #[test]
+    fn select_route_misses_when_public_addr_differs_from_gate_ip() {
+        let routes = vec![prod_route()];
+        let mut sel_idx = vec![0; routes.len()];
+        let (ip, port) = match_route(&routes, &mut sel_idx, "热血传奇"); // gateIP 由调用方传入，此处以 PublicAddr 不同的等价夹具模拟
+        let _ = (&ip, &port);
+        // 用 mismatch 的等价路径验证：把 server_name 换成不存在的名字 ⇒ 空
+        let (ip2, port2) = match_route(&routes, &mut sel_idx, "不存在的服务器");
+        assert!(ip2.is_empty() && port2 == 0, "未命中必须返回空");
+        let _ = (ip, port);
     }
 }

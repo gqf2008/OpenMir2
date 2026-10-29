@@ -643,3 +643,184 @@ async fn mysql_unreachable_fail_soft_and_stays_up() {
     child.kill().await.ok();
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// ==== 选服路由匹配牙（卡 `openmir2-login-srv-select-route-match` A2）====
+// 需要本机 MySQL（127.0.0.1:3306，root/空口令）与 mir2_test_account；不可用 ⇒ 跳过。
+
+/// A2：**任意客户端 IP 选服 ⇒ 530 且下发地址 = AddrTable 路由公网值**。
+/// 夹具 = 生产同款失配：AddrTable 路由 Public/Gate = `10.10.0.102:7100`，而连入方
+/// （登录网关/客户端）= 127.0.0.1 —— 旧实现按 `PublicAddr == gateIP` 合取一票否决
+/// ⇒ 无 530（重切2 RED 根因）；修复后按 ServerName 匹配 ⇒ 530 且下发
+/// `10.10.0.102/7100/<sid>`（不得改成 127.0.0.1——客户端要在真机可达面连 SelGate）。
+///
+/// 反向牙（A2 变异）：恢复 `PublicAddr == gateIP` 合取 ⇒ 无 530 ⇒ 本牙红。
+#[tokio::test]
+#[ignore = "需要本机 MySQL 与空闲机器（并行负载下登录回帧会超时）；显式 --ignored --test-threads=1 运行"]
+#[allow(clippy::too_many_lines)] // 生产同款失配夹具 + 登录 529 + 选服 530 两阶段同用例
+async fn select_server_matches_by_name_regardless_of_client_ip() {
+    use mir2_protocol::frame::ServerDataPacket;
+    use mir2_protocol::internal::{ServerDataMessage, ServerDataType};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    if !tooth_mysql_available() {
+        eprintln!("skip: 本机 MySQL 不可用");
+        return;
+    }
+    let dir = lab_dir("selpatch");
+    let gate_port = support::next_port();
+    let srv_port = support::next_port();
+    let conf = write_lab(
+        &dir,
+        gate_port,
+        srv_port,
+        "server=127.0.0.1;uid=root;database=mir2_test_account;",
+    );
+    // 生产同款失配：路由 Public/Gate = 10.10.0.102:7100（≠ 127.0.0.1 连入方）
+    std::fs::write(
+        dir.join("AddrTable.txt"),
+        gbk("热血传奇 Title1 10.10.0.102 10.10.0.102 10.10.0.102:7100\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("ServerAddr.txt"), "10.10.0.163\n10.10.0.102\n").unwrap();
+    tooth_cleanup("tooth_sel"); // 防御：前次失败运行可能残留
+    tooth_mysql_exec(
+        "INSERT INTO mir2_test_account.account (Account,PassWord,PassFailCount,PassFailTime,Seconds,LastLoginTime,PayMode,State) VALUES ('tooth_sel','toothpw',0,0,0,0,0,0);",
+    );
+    tooth_mysql_exec(
+        "INSERT INTO mir2_test_account.account_protection (AccountId,UserName,Birthday,Quiz2) SELECT Id,'TU','1990-01-01','TQ' FROM mir2_test_account.account WHERE Account='tooth_sel';",
+    );
+    let log = dir.join("login-srv.out.log");
+    let out_f = std::fs::File::create(&log).unwrap();
+    let err_f = out_f.try_clone().unwrap();
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    cmd.arg(&conf)
+        .stdout(out_f)
+        .stderr(err_f)
+        .kill_on_drop(true);
+    let mut child = cmd.spawn().expect("启动子进程失败");
+    support::gate_ready(&log, gate_port, std::time::Duration::from_secs(15)).await;
+    support::gate_ready(&log, srv_port, std::time::Duration::from_secs(15)).await;
+
+    let mut c = tokio::net::TcpStream::connect(("127.0.0.1", gate_port))
+        .await
+        .expect("连 5500 必须成功");
+
+    // ① 登录：Enter + CM_IDPASSWORD ⇒ 等 529（SM_PASSOK_SELECTSERVER）
+    let enter = ServerDataMessage {
+        kind: ServerDataType::Enter,
+        socket_id: "1".into(),
+        data_len: 0,
+        data: b"127.0.0.1/127.0.0.1".to_vec(),
+    };
+    c.write_all(&enter.to_wire()).await.unwrap();
+    let login_client_frame = vec_as_frame(
+        mir2_protocol::messages::CM_IDPASSWORD,
+        0,
+        b"tooth_sel/toothpw",
+    );
+    let login_msg = ServerDataMessage {
+        kind: ServerDataType::Data,
+        socket_id: "1".into(),
+        data_len: 0,
+        data: login_client_frame,
+    };
+    c.write_all(&login_msg.to_wire()).await.unwrap();
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut saw_529 = false;
+    let mut head = [0u8; ServerDataPacket::SIZE];
+    while tokio::time::Instant::now() < deadline {
+        let read = tokio::time::timeout(std::time::Duration::from_secs(3), c.read(&mut head)).await;
+        let Ok(Ok(_)) = read else {
+            break; // 对端关闭/读错误
+        };
+        let pkt = ServerDataPacket::from_bytes(&head).expect("回包头非法");
+        let mut body = vec![0u8; usize::from(pkt.packet_len)];
+        c.read_exact(&mut body).await.expect("回帧体");
+        let Ok(msg) = ServerDataMessage::from_bytes(&body) else {
+            continue;
+        };
+        if msg.kind != ServerDataType::Data {
+            continue;
+        }
+        let Some(bang) = msg.data.iter().position(|&b| b == b'!') else {
+            continue;
+        };
+        let inner = &msg.data[1..bang]; // 去 '#'（回帧无字面量 '1'，只跳一次）
+        let decoded = mir2_protocol::edcode::decode(inner);
+        let Some(cmd) = mir2_protocol::frame::CommandMessage::from_bytes(&decoded) else {
+            continue;
+        };
+        if cmd.ident == 529 {
+            saw_529 = true;
+            break;
+        }
+    }
+    assert!(saw_529, "登录必须先成功（529 前置）");
+
+    // ② 选服：CM_SELECTSERVER(104)，体 = GB2312 服务器名（C# 同形）
+    let select_frame = vec_as_frame(
+        mir2_protocol::messages::CM_SELECTSERVER,
+        0,
+        &gbk("热血传奇"),
+    );
+    c.write_all(&select_frame).await.unwrap();
+
+    // ③ 读回帧直到 530（SM_SELECTSERVER_OK）或 503（失败分支）
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut select_reply: Option<(u16, i32, String)> = None;
+    while tokio::time::Instant::now() < deadline {
+        let read = tokio::time::timeout(std::time::Duration::from_secs(3), c.read(&mut head)).await;
+        let Ok(Ok(_)) = read else {
+            break; // 对端关闭/读错误
+        };
+        let pkt = ServerDataPacket::from_bytes(&head).expect("回包头非法");
+        let mut body = vec![0u8; usize::from(pkt.packet_len)];
+        c.read_exact(&mut body).await.expect("回帧体");
+        let Ok(msg) = ServerDataMessage::from_bytes(&body) else {
+            continue;
+        };
+        if msg.kind != ServerDataType::Data {
+            continue;
+        }
+        let Some(bang) = msg.data.iter().position(|&b| b == b'!') else {
+            continue;
+        };
+        let inner = &msg.data[1..bang]; // 去 '#'
+        let decoded = mir2_protocol::edcode::decode(inner);
+        let Some(cmd) = mir2_protocol::frame::CommandMessage::from_bytes(&decoded) else {
+            continue;
+        };
+        if cmd.ident == 530 || cmd.ident == 503 {
+            // 体 = 明文 GB2312 字节（头 12B CommandMessage 之后）
+            let plain_body = String::from_utf8_lossy(&decoded[12..]).to_string();
+            select_reply = Some((cmd.ident, cmd.recog, plain_body));
+            break;
+        }
+    }
+    let Some((ident, recog, body_text)) = select_reply else {
+        child.kill().await.ok();
+        panic!("选服必须回 530（路由公网值下发）；生产同款失配夹具下旧实现无 530 ⇒ 本牙红");
+    };
+    tooth_cleanup("tooth_sel");
+    child.kill().await.ok();
+    assert_eq!(ident, 530, "选服成功必须回 530");
+    assert!(
+        body_text.starts_with("10.10.0.102/7100/"),
+        "530 下发必须是 AddrTable 路由公网值 10.10.0.102:7100 面，实得：{body_text}"
+    );
+    assert_eq!(recog, 0, "530 recog 必须=0（非点卡路径）");
+}
+
+/// 用 (ident, recog, body) 构造网关链路客户端帧：`#1<enc(头12B)>[<enc(体)>]!`。
+fn vec_as_frame(ident: u16, recog: i32, body: &[u8]) -> Vec<u8> {
+    let mut out = vec![b'#', b'1'];
+    out.extend_from_slice(&mir2_protocol::edcode::encode(
+        &mir2_protocol::frame::CommandMessage::make(i32::from(ident), recog, 0, 0, 0).to_bytes(),
+    ));
+    if !body.is_empty() {
+        out.extend_from_slice(&mir2_protocol::edcode::encode(body));
+    }
+    out.push(b'!');
+    out
+}
