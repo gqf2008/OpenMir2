@@ -66048,6 +66048,250 @@ SendRefMsgRange=15
         assert_eq!(to_other, 1, "多收件人时另一玩家必须照常收到 1 条");
     }
 
+    // ---- `openmir2-rm-self-guard-all-idents` A2：路径级牙（docs/rm-self-guard-audit-20261029.md §3）----
+
+    /// A2 ①：`WALK/RUN/HORSERUN/TURN` 族出帧走 [`broadcast_ref_msg`]（`include_self=false`）：
+    /// 发起者自己 **0 帧**、附近另一玩家 **1 帧**（oracle `PlayObject.Message.cs:1404/1414/1424/1528`
+    /// 的 `ActorId != ActorId` 守卫）。
+    ///
+    /// 牙：把调用点改成 [`broadcast_ref_msg_with_self`]（或 `include_self=true`）
+    /// ⇒ 自己的帧数由 0 变 1，本测试红。
+    #[test]
+    fn rm_path_teeth_broadcast_walk_turn_excludes_self() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut q = Entity::new(0, "Q".to_string(), 12, 10);
+        q.race = mir2_world::ACTOR_RACE_PLAY;
+        let qid = world.add_entity(q);
+        world.tick();
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "P".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: pid,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "Q".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: qid,
+            },
+        ];
+        broadcast_ref_msg(&world, &online, &gates, pid, &[vec![7u8; 12]]);
+        let mut to_self = 0usize;
+        let mut to_other = 0usize;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, .. } = ev {
+                match socket {
+                    5 => to_self += 1,
+                    6 => to_other += 1,
+                    _ => panic!("意外 socket {socket}"),
+                }
+            }
+        }
+        assert_eq!(
+            to_self, 0,
+            "WALK/RUN/TURN 族的发起者自己不得收到（oracle 有 ActorId != ActorId 守卫）"
+        );
+        assert_eq!(to_other, 1, "附近另一玩家必须照常收到 1 条");
+    }
+
+    /// A2 ②：`PUSH/RUSH/RUSHKUNG` 的复合条件**恒真** ⇒ 发起者自己也收：
+    /// [`broadcast_ref_msg_with_self`]（`include_self=true`）：自己 **1 帧**、另一玩家 **1 帧**
+    /// （oracle `PlayObject.Message.cs:1528` 的
+    /// `ActorId != ActorId || wIdent == RM_PUSH/RUSH/RUSHKUNG`）。
+    ///
+    /// 牙：改成 [`broadcast_ref_msg`]（排除自己）⇒ 自己的帧数由 1 变 0，本测试红。
+    #[test]
+    fn rm_path_teeth_broadcast_push_rush_includes_self() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut q = Entity::new(0, "Q".to_string(), 12, 10);
+        q.race = mir2_world::ACTOR_RACE_PLAY;
+        let qid = world.add_entity(q);
+        world.tick();
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "P".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 5,
+                actor_id: pid,
+            },
+            OnlineEntry {
+                account: "b".to_string(),
+                chr_name: "Q".to_string(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 6,
+                actor_id: qid,
+            },
+        ];
+        broadcast_ref_msg_with_self(&world, &online, &gates, pid, &[vec![9u8; 12]]);
+        let mut to_self = 0usize;
+        let mut to_other = 0usize;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, .. } = ev {
+                match socket {
+                    5 => to_self += 1,
+                    6 => to_other += 1,
+                    _ => panic!("意外 socket {socket}"),
+                }
+            }
+        }
+        assert_eq!(
+            to_self, 1,
+            "PUSH/RUSH/RUSHKUNG 的复合条件恒真：发起者自己也收（oracle）"
+        );
+        assert_eq!(to_other, 1, "附近另一玩家必须照常收到 1 条");
+    }
+
+    /// A2 ③（`RM_SPELL` 反例）：唯一 producer 是 `FireballMonster`（sender 怪物、不在 online）
+    /// ⇒ drain 后**没有自帧**、玩家照常收 1 条。若将来加玩家 sender，必须先给 `RM_SPELL` 加与
+    /// `RM_HIT` 同款的 `recipient == actor_id` 守卫（A1 对照表「不适用」的前提）。
+    #[test]
+    fn rm_path_teeth_drain_spell_monster_sender_no_self() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        let mut m = Entity::new(0, "火球怪".to_string(), 20, 20);
+        m.race = 101;
+        let mid = world.add_entity(m);
+        world.tick();
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "P".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        let displays = downlink::DisplayTable::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+
+        world
+            .pending_monster_ref_msgs
+            .push(mir2_world::MonsterRefMsg {
+                actor_id: mid,
+                ident: mir2_world::monai::RM_SPELL,
+                w_param: 48,
+                n_param1: 20,
+                n_param2: 20,
+                n_param3: 0,
+                target_x: 0,
+                target_y: 0,
+                dir: 0,
+                x: 20,
+                y: 20,
+                map_id: 0,
+                status: 0,
+                self_only: false,
+                recipients: vec![pid],
+            });
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+        let mut n = 0usize;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_SPELL {
+                    n += 1;
+                }
+            }
+        }
+        assert_eq!(n, 1, "怪物 sender 的 RM_SPELL：玩家收 1 条 SM_SPELL");
+        assert!(
+            !online.iter().any(|e| e.actor_id == mid),
+            "sender 怪物不在 online ⇒ 不可能自帧"
+        );
+    }
+
+    /// A2 ④（`RM_MAGICFIRE` 负例）：C# `PlayObject.Message.cs:1788-1793` **无**
+    /// `ActorId != ActorId` 守卫 ⇒ drain 也**不过滤**自己：玩家 sender + recipients=[自己]
+    /// ⇒ 自己收 **1 帧**（oracle 含自己）。
+    ///
+    /// 牙：若有人「顺手」给 `RM_MAGICFIRE` 加自身过滤 ⇒ 本测试红。
+    #[test]
+    fn rm_path_teeth_drain_magicfire_player_sender_not_filtered() {
+        use mir2_world::Entity;
+        let mut world = mir2_world::World::new(64, 64);
+        let mut p = Entity::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let pid = world.add_entity(p);
+        world.tick();
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".to_string(),
+            chr_name: "P".to_string(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 5,
+            actor_id: pid,
+        }];
+        let displays = downlink::DisplayTable::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+
+        world
+            .pending_monster_ref_msgs
+            .push(mir2_world::MonsterRefMsg {
+                actor_id: pid,
+                ident: mir2_world::monai::RM_MAGICFIRE,
+                w_param: 0,
+                n_param1: 0x0002_0030,
+                n_param2: 48,
+                n_param3: 0,
+                target_x: 0,
+                target_y: 0,
+                dir: 0,
+                x: 10,
+                y: 10,
+                map_id: 0,
+                status: 0,
+                self_only: false,
+                recipients: vec![pid],
+            });
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+        let mut n = 0usize;
+        while let Ok(ev) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = ev {
+                if u16::from_le_bytes([body[4], body[5]]) == mir2_protocol::messages::SM_MAGICFIRE {
+                    n += 1;
+                }
+            }
+        }
+        assert_eq!(
+            n, 1,
+            "RM_MAGICFIRE 无自身守卫（oracle 含自己）：发起者自己必须照常收到"
+        );
+    }
+
     /// **Lane 1（`openmir2-monster-attack-smhit`）**：怪普攻在**生产 tick 路径**上出
     /// `SM_HIT(14)`，并与同击的 `SM_STRUCK(31)` 保持 oracle 时序——`RM_HIT` 即时
     /// （`SendAttackMsg`），`RM_STRUCK` 走 `SendStruckDelayMsg(RM_REFMESSAGE, …, 200ms)`

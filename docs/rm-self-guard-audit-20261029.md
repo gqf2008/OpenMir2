@@ -53,6 +53,14 @@
 
 ## 3. 后续（本卡 A2/A4/A5；依赖已随 `e8de0c93`/`95b2e9e` 合入，窗口结束后执行）
 
+**A2 已交（本提交，`mir2-rs/bins/game-svr/src/lib.rs` 测试）**：
+`rm_path_teeth_broadcast_walk_turn_excludes_self`（① WALK/RUN/HORSERUN/TURN 自己 0 / 他人 1）、
+`rm_path_teeth_broadcast_push_rush_includes_self`（② PUSH/RUSH/RUSHKUNG 自己 1 / 他人 1）、
+`rm_path_teeth_drain_spell_monster_sender_no_self`（③ RM_SPELL 怪物 sender 无自帧）、
+`rm_path_teeth_drain_magicfire_player_sender_not_filtered`（④ RM_MAGICFIRE 玩家 sender 不过滤）。
+另有既有牙：RM_HIT 自身守卫 + 多收件人（`e8de0c93`）与 NOWDEATH 含自己（既有用例）；`RM_MOVEFAIL`
+编码器未接（`movewire` 模块头登记），无从过滤。
+
 - A2 牙（路径级，不重复写 14 卡已有牙）：
   1. 宿主动作帧/移动帧：sender 自己 0 帧、附近他人 1 帧（`WALK`/`RUN`/`HORSERUN`/`TURN`）；
   2. `PUSH/RUSH/RUSHKUNG`：sender 自己 1 帧（C# 恒真）；
