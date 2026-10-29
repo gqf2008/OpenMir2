@@ -23,6 +23,7 @@
 #   bash tools/window/run_batch.sh --no-preflight     # 跳过前置自检（只在调试时用）
 #   bash tools/window/run_batch.sh --skip-pin-smoke   # pin 链只做静态核对（证据里登记未冒烟）
 #   bash tools/window/run_batch.sh --rng-log          # 每侧落 RNG 流水并校验（缺账本/无 site ⇒ 该场景 rc=2）
+#   bash tools/window/run_batch.sh --tier R           # R 级窗口：build stamp 缺失 ⇒ rc=2（binary_identity=missing；L 级仅标记）
 #   bash tools/window/run_batch.sh --run-dir E:/tmp/window/run3 --timeout-sec 2700
 #
 # 退出码：0 = 所有选中场景都产出了 PASS/FAIL（有结论）；2 = 缺参/前置失败/出现
@@ -54,6 +55,7 @@ DRY_RUN=0
 FORCE=0
 SKIP_PIN_SMOKE=0
 RNG_LOG=0
+TIER=${WINDOW_TIER:-L}
 ONLY=""
 FROM=""
 
@@ -82,6 +84,7 @@ while [ $# -gt 0 ]; do
         --no-preflight)   DO_PREFLIGHT=0; shift ;;
         --skip-pin-smoke) SKIP_PIN_SMOKE=1; shift ;;
         --rng-log)        RNG_LOG=1; shift ;;
+        --tier)           [ $# -ge 2 ] || die "--tier 缺值"; case "$2" in R|L) TIER=$2 ;; *) die "--tier 只接受 R/L（实际 $2）" ;; esac; shift 2 ;;
         --python)         [ $# -ge 2 ] || die "--python 缺值"; PY=$2; shift 2 ;;
         *)                die "未知参数 $1" ;;
     esac
@@ -379,6 +382,34 @@ else
     log "WARNING: --no-preflight ⇒ 跳过全部前置自检（证据里必须登记）"
 fi
 
+# ---- ②b 二进制身份 → <run_dir>/build.json（卡 openmir2-harness-stop-and-evidence）----
+# 证据目录**自包含**：拿到目录就能核「这批是哪份二进制跑出来的」（head/sha256/dirty/构建时间）。
+#   * stamp 存在 ⇒ 原样拷贝为 build.json，`binary_identity=ok`；
+#   * stamp 缺失 ⇒ 写 `{"binary_identity":"missing"}`；**--tier R ⇒ rc=2**（R 级窗口证据缺身份
+#     ⇒ UNDECIDABLE，报告点名，不许 PASS）；--tier L（默认）⇒ 仅标记、不阻断（Leader 规格补丁评论 4fd7ac7d）。
+# WINDOW_BUILD_STAMP 可覆盖 stamp 路径（run_batch_selftest 用临时文件，不碰真实 target/）。
+BUILD_STAMP=${WINDOW_BUILD_STAMP:-$STAMP}
+IDENT_DIR=$LOG_DIR   # 真跑时 LOG_DIR==RUN_DIR；dry-run 落 dry-run 目录
+mkdir -p "$IDENT_DIR" || die "建不了身份目录：$IDENT_DIR"
+if [ -f "$BUILD_STAMP" ]; then
+    cp "$BUILD_STAMP" "$IDENT_DIR/build.json" || die "写不了 $IDENT_DIR/build.json"
+    BINARY_IDENTITY=ok
+    export RUN_BATCH_BINARY_IDENTITY=ok
+    log "BINARY_IDENTITY ok（$BUILD_STAMP → $IDENT_DIR/build.json）"
+else
+    BINARY_IDENTITY=missing
+    printf '{
+  "binary_identity": "missing"
+}
+' > "$IDENT_DIR/build.json"
+    export RUN_BATCH_BINARY_IDENTITY=missing
+    log "BINARY_IDENTITY missing（stamp 不存在：$BUILD_STAMP）"
+    if [ "$TIER" = "R" ]; then
+        die "R 级窗口证据缺二进制身份：binary_identity=missing（stamp=$BUILD_STAMP 不存在）⇒ UNDECIDABLE，不许 PASS（Leader 规格补丁评论 4fd7ac7d）"
+    fi
+    log "WARNING: tier=L ⇒ 仅标记 binary_identity=missing，不阻断"
+fi
+
 # ---- ③ 续跑判据 ----
 is_complete() {
     "$PY" -I -B - "$1" "$HEAD" <<'PY'
@@ -640,6 +671,7 @@ if os.path.isfile(cand):
 
 doc = {
     "format": "window-batch-summary/1",
+    "binary_identity": os.environ.get("RUN_BATCH_BINARY_IDENTITY", "ok"),
     "card": card,
     "run_dir": run_dir,
     "repo": os.getcwd(),

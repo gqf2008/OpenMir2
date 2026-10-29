@@ -466,6 +466,32 @@ python -I -B tools/conformance/compare_runs.py selftest      # 期望 GREEN: com
 3. **拿窗口证据时**，确保没有第二套 conformance 栈同库并发。
 4. mysqld（3306）是两栈**共用**的唯一实例 ⇒ 「停参考栈」**绝不能停 mysqld**（§0.13 的优雅关闭口径不变）。
 
+## 0.15 停栈与存档：保证链、优雅停、覆盖不到的情形（2026-10-29；卡 `openmir2-harness-stop-and-evidence`）
+
+**当前保证链（不是优雅停）**：场景收尾的 `save_settle` 等到 DB **真的出现声明过的变化**才 PASS；
+`require_changes`（默认 **true**，不许改 false）在「没等到变化」时把该场景判红。
+⇒ 证据里的 DB 后态由「settle 等到的写入」保证；`Stop-Process -Force` 强杀 C# 栈
+**跳过** oracle 的 `AppService.SavePlayer()`（`src/GameSrv/AppService.cs:133-147`，只存**在线**玩家）。
+
+**优雅停（①(a)，已实现并真机证明）**：`tools/window/stop-csharp-graceful.ps1` 给 GameSvr 发
+**CTRL_C**（`FreeConsole → AttachConsole(<pid>) → SetConsoleCtrlHandler(NULL,true) →
+GenerateConsoleCtrlEvent(0,0)`；`$PID` 是 PowerShell 只读变量，参数名用 `-GamePid`）。
+oracle 既有链路：`Program.cs:16`（`Console.CancelKeyPress` ⇒ `cts.Cancel()`）→
+`AppService.cs:206 OnShutdown()` → **`SavePlayer()`**（:210）。
+**真机抽样证据（2026-10-29，私有栈，玩家 winplay0 在线且探针仍连着）**：CTRL_C 发出后
+**7 秒内** `mir2_test_db.characters.LASTUPDATE` 从 `12:06:20` 前进到 `12:07:18` ⇒
+「停栈后 DB 出现存档写入」成立，`SavePlayer` 确实执行。过程产物：
+`E:/tmp/dev-2/saveproof/`（poll.log / graceful.log / probe.log）。
+
+**优雅停覆盖不到的情形（必须知道）**：
+1. 玩家**不在线**时停栈：`SavePlayer` 有 `PlayObjectCount > 0` 门 ⇒ 什么都不存；
+   此时 DB 后态只有 settle/`require_changes` 一条保证链。
+2. 进程**退出**要等关服倒计时/网关排水（实测 45s 仍在 `STILL_ALIVE`，属预期——
+   倒计时广播 + 网关排水比存档慢）。**harness 流程**：CTRL_C → 轮询 DB LASTUPDATE
+   前进（= 存档证明，≈7s）→ `start-csharp.ps1 -Stop` 强收残余进程（存档已落，强收不回滚）。
+3. DBSrv/MySQL 自身故障 ⇒ 什么保证都没有（与 graceful 无关）。
+4. **不许**把 `require_changes` 默认改 false、**不许**用固定 sleep 冒充「存档已发生」。
+
 ## 1. 开跑前必做（缺一不可）
 
 1. **重建 Rust 栈并记录 sha256**。

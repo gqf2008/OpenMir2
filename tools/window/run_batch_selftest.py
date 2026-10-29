@@ -16,6 +16,10 @@
   T3 **带**密码的 `--dry-run` ⇒ rc=0 且 **无** WRN 标记串（防 WRN 恒亮——恒亮的告警等于没有告警）。
   T4 `--list` + 无密码 ⇒ rc=0（该门本就在 `--list` 的 `exit 0` 之后；这条是回归保护，
      防止有人把门整体搬到 `--list` 前面）。
+  T5 `--tier R` + stamp 存在 ⇒ rc=0 且 `<run-dir>-dry-run/build.json` 落盘（head/sha256）；
+  T6 `--tier R` + stamp 缺失 ⇒ rc=2 且点名 `binary_identity=missing`（R 级证据缺身份不许 PASS）；
+  T7 `--tier L`（默认）+ stamp 缺失 ⇒ rc=0 仅标记；T8 L 级 + stamp 存在 ⇒ build.json=stamp 拷贝。
+  （卡 `openmir2-harness-stop-and-evidence`；stamp 路径用 `WINDOW_BUILD_STAMP` 覆盖，不碰真实 target/。）
 
 红检（变异见卡 `openmir2-runbatch-dryrun-password` 的 patch body）：
   M1 删掉 `DRY_RUN` 分支（= 退回修复前）⇒ T1 红；M2 真跑分支也放行 ⇒ T2 红；
@@ -24,6 +28,7 @@
 退出码：0 全绿；1 有红；**2 = 判不了**（本机探测不到 Git bash ⇒ 裸 `bash` 会命中 WSL stub）。
 """
 
+import json
 import os
 import shutil
 import subprocess
@@ -194,6 +199,71 @@ def main():
         rc, out, err = run_batch(["--list"], with_password=False)
         check("T4 --list 无密码 ⇒ rc=0", rc == 0, "rc=%r stderr=%s" % (rc, err[-300:]))
         check("T4 --list 无密码 ⇒ 有清单行", "场景数" in out, out[-300:])
+
+        # ---- T5–T8：二进制身份 build.json（卡 openmir2-harness-stop-and-evidence）----
+        # WINDOW_BUILD_STAMP 覆盖 stamp 路径（临时文件，不碰真实 target/）；
+        # --dry-run 下 build.json 落 `<run-dir>-dry-run/build.json`（与真跑的 <run_dir>/ 同名同义）。
+        stamp_ok = os.path.join(tmp, "ok.build.json")
+        with open(stamp_ok, "w", encoding="utf-8", newline="\n") as fh:
+            fh.write(json.dumps({"head": "a" * 40, "sha256": "b" * 64,
+                                 "dirty": "", "built_at": "2026-10-29T00:00:00"}))
+        stamp_missing = os.path.join(tmp, "missing.build.json")
+
+        # T5：R 级 + stamp 存在 ⇒ rc=0 且 build.json 落盘（内容=stamp）。
+        rd5 = os.path.join(tmp, "t5")
+        os.environ["WINDOW_BUILD_STAMP"] = stamp_ok
+        try:
+            rc, out, err = run_batch(["--dry-run", "--no-preflight", "--tier", "R",
+                                      "--run-dir", rd5], with_password=False)
+            build5 = os.path.join(rd5 + "-dry-run", "build.json")
+            ok5 = rc == 0 and os.path.isfile(build5)
+            content5 = open(build5, encoding="utf-8").read() if os.path.isfile(build5) else ""
+            check("T5 R 级 stamp 存在 ⇒ rc=0 且 <dry-run>/build.json 落盘（含 head/sha256）",
+                  ok5 and '"head"' in content5 and '"sha256"' in content5,
+                  "rc=%r build5=%s" % (rc, content5[:200]))
+        finally:
+            os.environ.pop("WINDOW_BUILD_STAMP", None)
+
+        # T6：R 级 + stamp 缺失 ⇒ rc=2 且点名 binary_identity=missing（不许 PASS）。
+        rd6 = os.path.join(tmp, "t6")
+        os.environ["WINDOW_BUILD_STAMP"] = stamp_missing
+        try:
+            rc, out, err = run_batch(["--dry-run", "--no-preflight", "--tier", "R",
+                                      "--run-dir", rd6], with_password=False)
+            check("T6 R 级 stamp 缺失 ⇒ rc=2 且点名 binary_identity=missing（die 走 stderr）",
+                  rc == 2 and "binary_identity=missing" in (out + err),
+                  "rc=%r out=%s err=%s" % (rc, out[-300:], err[-300:]))
+        finally:
+            os.environ.pop("WINDOW_BUILD_STAMP", None)
+
+        # T7：L 级（默认）+ stamp 缺失 ⇒ rc=0（仅标记、不阻断）且 build.json 写的是 missing。
+        rd7 = os.path.join(tmp, "t7")
+        os.environ["WINDOW_BUILD_STAMP"] = stamp_missing
+        try:
+            rc, out, err = run_batch(["--dry-run", "--no-preflight",
+                                      "--run-dir", rd7], with_password=False)
+            build7 = os.path.join(rd7 + "-dry-run", "build.json")
+            content7 = open(build7, encoding="utf-8").read() if os.path.isfile(build7) else ""
+            check("T7 L 级 stamp 缺失 ⇒ rc=0（仅标记）且 stdout 点名 binary_identity=missing",
+                  rc == 0 and "binary_identity=missing" in out, "rc=%r out=%s" % (rc, out[-400:]))
+            check("T7 L 级 stamp 缺失 ⇒ build.json 写 binary_identity=missing",
+                  '"binary_identity": "missing"' in content7, content7[:200])
+        finally:
+            os.environ.pop("WINDOW_BUILD_STAMP", None)
+
+        # T8：L 级 + stamp 存在 ⇒ rc=0 且 build.json 就是 stamp 原文拷贝。
+        rd8 = os.path.join(tmp, "t8")
+        os.environ["WINDOW_BUILD_STAMP"] = stamp_ok
+        try:
+            rc, out, err = run_batch(["--dry-run", "--no-preflight",
+                                      "--run-dir", rd8], with_password=False)
+            build8 = os.path.join(rd8 + "-dry-run", "build.json")
+            same = (open(build8, "rb").read() == open(stamp_ok, "rb").read()
+                    if os.path.isfile(build8) else False)
+            check("T8 L 级 stamp 存在 ⇒ rc=0 且 build.json=stamp 原样拷贝", rc == 0 and same,
+                  "rc=%r" % (rc,))
+        finally:
+            os.environ.pop("WINDOW_BUILD_STAMP", None)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
