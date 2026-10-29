@@ -17,7 +17,8 @@
   2. **客户端（Delphi mirbeta）一行不改**；对外地址/端口/服务器名（`热血传奇`）不变。
   3. **不手改任何 Envir / Castle 内容**；`E:/MirServer/M2GameSvr/Castle/List.txt`（内容 `0,1`，
      sha256 `9b38d284…`）及其余数据文件保持字节原样（比对看内容不比 mtime，原因见下文 §3.S8）。
-  4. 不改配置文件：六角色 conf 两栈共用（见 §2），切换只换进程，不改文件。
+  4. 不改配置文件：六角色 conf 两栈共用（见 §2/§3.S6），切换只换进程，不改文件；唯一例外是
+     §2.G0 阻塞项的 owner 裁决处置（那是**开窗前**的部署准备，不是窗口动作）。
   5. 窗口内不跑 `cargo`（构建会干扰在跑栈；二进制必须**窗口前**备好并核验，见 §2.G1）。
 - 涉及脚本与工具（本文引用的全部为仓内已验证入口）：
   `tools/m2-acceptance/start_mir2_server.ps1`、`tools/m2-acceptance/stop_mir2_server.ps1`、
@@ -42,10 +43,40 @@
 
 ## 2. 前置清单（G0–G6；执行窗口前逐项勾掉，缺一不开窗）
 
-### G1 交付二进制核验（sha256 + stamp）
+### G0 阻塞项：生产根六角色 conf 与启动脚本映射漂移（裁决前**切换不可执行**）
 
-卡面给定交付二进制 sha256：`e49a8ede7f2510d08acb334577ee2782c672c30a3b1c5734e2682ed25c4ecd71`。
-三道核验（在**将要起栈的那棵树**里跑；exe 解析只认脚本的 `$PSScriptRoot`）：
+- **实况**（2026-10-29 预检实证，本线程预检 comment `fec9c461`；reviewer-23 R23C-F1 同判）：
+  `start_mir2_server.ps1` 的角色→conf 映射是固定的 `DBSrv\dbsvr.conf`、`LoginSrv\logsrv.conf`，
+  而 `E:/MirServer` 实际布局是 **`DBServer\dbsvr.conf`**（无 `DBSrv` 目录）与
+  **`LoginSrv\config.conf`**（无 `logsrv.conf`）；另四角色 conf
+  （`M2GameSvr\Server.conf`、`LoginGate\config.conf`、`SelGate\config.conf`、`RunGate\config.conf`）都在。
+  脚本对六份 conf 的存在性检查先于一切输出且缺一 exit 2 ⇒ `-Root E:/MirServer` 下
+  **G1② 与 §3.S4 现在必 RED**（`RED: 缺配置 db-srv/login-srv`），`SERVER_EXE_SHA256` 行不可达。
+- **处置（owner 裁决，二选一；裁决并落地前 G1②/§3.S4/§3.S6 不得执行）**：
+  1. **对齐脚本**：另开卡把 `start_mir2_server.ps1` 固定表改成生产实况路径
+     （`DBServer\dbsvr.conf`、`LoginSrv\config.conf`）——不新增部署文件；
+  2. **补齐部署根**：在 `E:/MirServer` 预置 `DBSrv\dbsvr.conf`、`LoginSrv\logsrv.conf` 两份生产版
+     conf（端口 6000/5100/5700、5500/5600；ConnctionString 指生产库）——这会在生产根**新增
+     配置文件**，触碰红线 §0.4 的边界，**必须 owner 认可后才可做**（且属开窗前的部署准备，
+     不是窗口动作）。
+- 解除判据：`G1②` 的 WhatIf 能打出三行 `SERVER_EXE*` 且无「RED: 缺配置」。
+
+### G1 交付二进制核验（**以 build stamp 的 head+sha256 为准**）
+
+- **口径（2026-10-29 返工订正）**：交付物不锚固定 sha 常数——master 每并一卡，target 重建后
+  sha 即变（预检实证：卡面旧值 `e49a8ede…` 与当时实物 `4bd4e776…`（head=910a7d6c3）已不符，
+  master 其后又前进）。判据：**开窗前重建 release，把当次 stamp 的 `head`+`sha256` 抄进下表；
+  窗口内三道核验全等于表值**；`stamp.head` 必须 = owner 指定的切换基线提交（delivery tag
+  口径），`dirty` 必须为空。
+
+  | 字段 | 窗口前填写 | 预检时点观测（**已作废**，仅示例） |
+  |---|---|---|
+  | stamp.head | （待填） | `910a7d6c3` |
+  | stamp.sha256 | （待填） | `4bd4e7762eea…cfe4` |
+  | stamp.built_at | （待填） | `2026-10-29T12:41:49+08` |
+
+  三道核验（在**将要起栈的那棵树**里跑；exe 解析只认脚本的 `$PSScriptRoot`；
+  **本步依赖 G0 阻塞项解除**）：
 
 ```sh
 # ① 裸 sha（Git Bash）
@@ -56,17 +87,15 @@ sha256sum mir2-rs/target/release/mir2-server.exe
 # ② WhatIf 三行 + 强制 Release（缺 release 二进制时 RED，不会静默退到 debug）
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
   -Root E:\MirServer -WhatIf -RequireRelease
-# 期望：SERVER_EXE_SHA256 = e49a8ede…（与卡面值全等）；SERVER_EXE_BUILD = Release
+# 期望：SERVER_EXE_SHA256 = 上表 sha256；SERVER_EXE_BUILD = Release；无「RED: 缺配置」
 ```
 
 ```sh
-# ③ build stamp 交叉（rebuild-server.ps1 / cargo build 产出的自述 stamp）
-python -I -c "import json;d=json.load(open('mir2-rs/target/release/mir2-server.build.json'));print(d.get('sha256'),d.get('git_head'),d.get('build'))"
-# 期望：sha256 与 ①/② 全等；git_head = owner 指定的交付提交（delivery-20261029 口径）
+# ③ build stamp 交叉（rebuild-server.ps1 / cargo build 产出的自述 stamp；键名 head/built_at/rustc）
+python -I -c "import json;d=json.load(open('mir2-rs/target/release/mir2-server.build.json'));print(d.get('head'),d.get('sha256'),d.get('built_at'),d.get('rustc'))"
+# 期望：head = 上表 head；sha256 与 ①/② 全等；dirty 为空
 ```
 
-- 若现场重构建而非用现成二进制：重构建后 sha256 **必须仍等于卡面值**（同 tag 同构可复现）；
-  不相等即停，找 owner 对齐后再开窗。
 - stamp 缺失时以 ①+② 为准（两者一致即可放行），并在窗口日志登记「stamp 缺、以 sha 双源核验」。
 
 ### G2 数据库备份命令（本清单只做**预演**；正式全量备份在 §3.S3 停机后执行）
@@ -204,8 +233,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mi
 - 角色与端口（脚本内固定表，与现网一致）：db-srv 6000/5100/5700 → login-srv 5500/5600 →
   game-svr 5000 → login-gate 7000 → sel-gate 7100 → game-gate 7200/7201/7202；
   启动顺序如上，任一角色未就绪 ⇒ 脚本自动**反向回滚已起角色**并 RED（fail-closed，不静默）。
+  **本步依赖 §2.G0 阻塞项解除**（conf 映射对齐/补齐，并已由 G1② 的 WhatIf 无「RED: 缺配置」验证）。
 - conf 全部沿用 `-Root` 下现网文件（两栈共用，见 §3.S6 核对点）；库名由各 conf 的
-  ConnctionString 决定，本脚本不改写任何配置。
+  ConnctionString 决定，本脚本不改写任何配置。注意两个面：game-svr 走 Server.conf 的
+  **mir2_data**，db-srv 走 dbsvr.conf 的 **mir2_db**（见 §3.S6 表）。
 - `-Seed 42`：显式记档便于事后对账（脚本缺省也是 42）。说明：C# 生产此前未注入种子（每次随机），
   Rust 固定种子意味着**重启后随机序列从头复放**——这不是对拍语义（生产单栈），但要在窗口日志里
   知情登记；owner 若要求与 C# 行为一致（每次随机），改传 `-Seed` 一个当场随机值。
@@ -228,8 +259,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1
 | `E:/MirServer/SelGate/config.conf` | `ServerPort0=5100`、`GatePort0=7100` | SelGate 上游指 DBSrv 5100 面、自身服务 7100；Rust sel-gate 读同一文件 |
 | `E:/MirServer/LoginSrv/AddrTable.txt` | 服务器名 `热血传奇` + `…:7100` | 客户端选服路由；切栈不改，改了等于把玩家指去别处 |
 | `E:/MirServer/RunGate/config.conf` | 7200/7201/7202 | game-gate 对客户端端口 |
-| `E:/MirServer/M2GameSvr/Server.conf` | 端口 5000；`CastleDir=Castle`、`CastleFile=Castle/List.txt`；ConnctionString → mir2_db | game-svr 主配置；Castle 路径决定 §S8 的 600s 重写落点 |
-| `E:/MirServer/DBSrv/dbsvr.conf` | 6000/5100/5700；ConnctionString → mir2_db / 分片族 | Rust db-srv 的 6000 取档/存档面 + 5100 选角面都从这里读 |
+| `E:/MirServer/M2GameSvr/Server.conf` | 端口 5000；`CastleDir=Castle`、`CastleFile=Castle/List.txt`；ConnctionString → **mir2_data**（GameSvr 直连存档面；与 dbsvr.conf 的 mir2_db 是两个面，库名核对以实文件为准——**勿把文件「改对」成 mir2_db**，见 §5 风险 7） | game-svr 主配置（C# 消费点 `src/GameSrv/DB/MySqlDB.cs`：`new MySqlConnection(Config.ConnctionString)`）；Castle 路径决定 §S8 的 600s 重写落点 |
+| `E:/MirServer/DBServer/dbsvr.conf`（注意目录名是 **DBServer**；启动脚本映射期望 `DBSrv\dbsvr.conf`——差异即 §2.G0 阻塞项） | 6000/5100/5700；ConnctionString → **mir2_db** | Rust db-srv 的 6000 取档/存档面 + 5100 选角面；分片族 `mir2_dbsrv6k_mkt_*` 由该面按需落库 |
+| `E:/MirServer/LoginSrv/config.conf`（脚本映射期望 `LoginSrv\logsrv.conf`——差异归 §2.G0） | 5500/5600 | login-srv 选服/账号面配置 |
 
 ### S7 冒烟（probe 单跑；离线判读，不连对拍库）
 
@@ -272,8 +304,11 @@ python -I -B $P/mir2_probe.py --login-gate 127.0.0.1:7000 \
   # 出现存档族之外的表 ⇒ 停下归因，必要时走 §4。
   ```
 
-- 日志巡检：`E:\MirServer\logs\mir2-server\<role>.err.log` 无持续刷屏异常；game-svr 日志里
-  seed 注入行（`RUST_SEED_INJECTED=42`）与 `SEED_PROBE` 出现且一致。
+- 日志巡检：`E:\MirServer\logs\mir2-server\<role>.err.log` 无持续刷屏异常；game-svr 日志里的
+  RNG 同种子注入自证行按源码 glog 原样串找（`mir2-rs/bins/game-svr/src/lib.rs`：
+  `RNG 同种子注入：seed=42 参照序列=SEED_PROBE …`，-Seed 42 时）；
+  **别找 `RUST_SEED_INJECTED=`**——那是 m3 测试预检脚本（tests/parity/m3）的 token，
+  生产日志里不存在，照它找会假 RED 误触发「RED 即停」。
 - 真实客户端（owner 或值班）手工登录一次，确认选服/选角/进图/回城四步体感正常。
 
 ---
@@ -373,6 +408,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:/MirServer/port-status.ps1
    真机回归——本手册的冒烟覆盖登录/走路/商人对话，其余玩法靠 S8 观察段兜底。
 6. **Castle 600s 重写**切换后由 Rust 接管：内容应保持 `0,1`；若 sha 变化（城数增减）＝异常，
    立即归因（它影响税/多城广播等玩法面）。
+7. **照旧表「改对」conf = 生产事故**：两个存档面是**有意**分开的——game-svr（Server.conf）连
+   `mir2_data`，db-srv（DBServer/dbsvr.conf）连 `mir2_db`。S6 是只读核对表；任何与表不符处
+   停下找 owner，不许改文件来「消 RED」（reviewer-23 R23C-F2 的原话场景）。
 
 ---
 
