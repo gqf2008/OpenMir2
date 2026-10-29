@@ -213,8 +213,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
     );
     let (store, init_err) = AccountStore::init_or_empty(&dsn).await;
     if let Some(e) = &init_err {
-        log_line("ERR", "[错误] SQL 连接失败!请检查SQL设置...");
-        log_line("ERR", &format!("{e:#}"));
+        // 卡续作 ①：oracle 同款文本 + 底层 cause **同一条日志**（sqlx/DB 层文本随
+        // StorageError::Backend 的消息一起输出，不吞任何一层）。
+        log_line(
+            "ERR",
+            &format!("[错误] SQL 连接失败!请检查SQL设置...：{e:#}"),
+        );
     } else {
         log_line("INF", "连接SQL服务器成功...");
         log_line("INF", &format!("账号数据读取成功...[{}]", store.count()));
