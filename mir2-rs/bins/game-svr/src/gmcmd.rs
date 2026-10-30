@@ -72,6 +72,7 @@
 //! [`GmWorld`] 的 `maps`/`world` 只读视图（宿主已有能力，不另造）。
 
 use chrono::Local;
+use mir2_script::engine::quest_state::{QuestBitmap, QUEST_ARRAY_LEN};
 
 /// oracle `CommandHelp.GameCommandPermissionTooLow`（`CommandHelp.cs`）。
 pub const PERMISSION_TOO_LOW: &str = "权限不够!!!";
@@ -846,6 +847,15 @@ pub enum Imp {
     /// `ClearHumanPasswordCommand`（现网 `@清除仓库密码`）：空名/`?` ⇒ 两条红；离线**静默**；
     /// 在线 ⇒ 清目标 `IsPasswordLocked/IsUnLockStoragePwd/StoragePwd` + 双绿字。
     ClearHumanPassword,
+
+    // ---- 族 F · 脚本标志（3，卡 `openmir2-gm-family-f-script-flags`，tier=R）----
+    /// `SetFlagCommand`（现网 `@setflag`）：写**调用者** `QuestFlag` 位（不是目标）+
+    /// 对目标回绿字 `{调用者}: [n] = ON/OFF`；目标离线/实参不足 ⇒ NRE/越界被吞 ⇒ 零帧。
+    SetFlag,
+    /// `SetOpenCommand`（现网 `@setopen`）：同 `SetFlag`，写 `QuestUnitOpen`。
+    SetOpen,
+    /// `SetUnitCommand`（现网 `@setunit`）：同 `SetFlag`，写 `QuestUnit`。
+    SetUnit,
     Unimplemented,
 }
 
@@ -874,6 +884,63 @@ pub enum GmColor {
 pub struct GmMsg {
     pub color: GmColor,
     pub text: String,
+}
+
+/// 会话任务态三组位图（`PlayObject.QuestFlag/QuestUnit/QuestUnitOpen`，各 `byte[128]`）的
+/// **只读快照**（族 F，卡 `openmir2-gm-family-f-script-flags`）。
+///
+/// oracle 里这三组数组是 `PlayObject` 的同生命周期字段（`PlayObject.cs:865-867/1038-1040`），
+/// 脚本与 GM 命令读写同一份；本仓的运行时真身是宿主的 `saves.record.data.quest_*`
+/// （内存里的 `CharacterData`；oracle **不落库**，见 `bins/db-srv/tests/quest_no_persist.rs`）
+/// ⇒ 命令派发前由宿主克隆成这份快照注入 [`GmWorld`]（`None` = 未注入，按新角色全零语义读）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GmQuestFlags {
+    /// `PlayObject.QuestFlag`（`@setflag` 的写组；`@showflag` 的读组）。
+    pub flag: QuestBitmap,
+    /// `PlayObject.QuestUnit`（`@setunit` 的写组）。
+    pub unit: QuestBitmap,
+    /// `PlayObject.QuestUnitOpen`（`@setopen` 的写组）。
+    pub unit_open: QuestBitmap,
+}
+
+impl GmQuestFlags {
+    /// 从会话记录三列（`Option<Vec<u8>>`，`PlayerDataInfo.cs:101-103`）原位载入；缺列或
+    /// 短于 128 字节按全零补齐（oracle `new byte[128]`）。
+    #[must_use]
+    pub fn from_record(flag: Option<&[u8]>, unit: Option<&[u8]>, unit_open: Option<&[u8]>) -> Self {
+        fn bm(v: Option<&[u8]>) -> QuestBitmap {
+            let mut arr = [0u8; QUEST_ARRAY_LEN];
+            if let Some(v) = v {
+                let n = v.len().min(arr.len());
+                arr[..n].copy_from_slice(&v[..n]);
+            }
+            QuestBitmap::from_bytes(arr)
+        }
+        Self {
+            flag: bm(flag),
+            unit: bm(unit),
+            unit_open: bm(unit_open),
+        }
+    }
+}
+
+/// 一条待落地的**会话任务位写**（族 F）。
+///
+/// oracle 的三条命令把位阵写在**调用者** `PlayerActor` 上（卡面 forbidden 禁修的怪癖），
+/// 而绿字回执发给 **targetObject**——命令体纯（只有 `&mut GmSession`/`&GmWorld`）⇒ 这里装
+/// 「写后整组位阵」+「目标回执」，宿主在同一事件内落到 `saves.record.data.quest_*`
+/// 并发 `SM_SYSMESSAGE(100)` 给目标。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmQuestWrite {
+    /// 写后的 `QuestFlag` 整组（`SetFlag`）；`None` = 本条命令没写这一组。
+    pub flag: Option<QuestBitmap>,
+    /// 写后的 `QuestUnit` 整组（`SetUnit`）。
+    pub unit: Option<QuestBitmap>,
+    /// 写后的 `QuestUnitOpen` 整组（`SetOpen`）。
+    pub unit_open: Option<QuestBitmap>,
+    /// `(目标规范名, 回执)`：oracle `targetObject.SysMsg(PlayerActor.ChrName + ": [n] = ON/OFF",
+    /// Green, Hint)`（回执收件人是**目标**，不是调用者）。
+    pub target_msg: Option<(String, GmMsg)>,
 }
 
 /// GM 命令对**权威 `Entity`** 的一次写入（卡 `openmir2-gm-admin-mode-entity-seam`）。
@@ -1111,6 +1178,11 @@ pub struct GmSession {
     /// `@删除技能`（目标名, 技能名；`All` 删除全部）——MagicList 在 `saves`（宿主收口：
     /// 212 发给目标 + 双方绿字 + Recalc；All 支不发帧不发字）。
     pub pending_del_skill: Option<(String, String)>,
+
+    // ---- 族 F · 脚本标志（3 条；写的是**调用者**，回执发给目标——oracle 怪癖）----
+    /// `@setflag`/`@setopen`/`@setunit` 的待落地会话任务位写（宿主同一事件内落到
+    /// `saves.record.data.quest_*` 并把绿字发给目标；见 [`GmQuestWrite`]）。
+    pub pending_quest: Option<GmQuestWrite>,
 }
 
 impl Default for GmSession {
@@ -1165,6 +1237,7 @@ impl Default for GmSession {
             pending_clear_copy: None,
             pending_clear_password: None,
             pending_del_skill: None,
+            pending_quest: None,
         }
     }
 }
@@ -1548,6 +1621,10 @@ pub struct GmWorld<'a> {
     pub mission: Option<&'a std::cell::RefCell<GmMissionState>>,
     /// **族 X2**：`SystemShare.SpiritMutinyTick`（`@祈祷生效`/`@停止叛变` 写，ms）。
     pub spirit_mutiny_tick: Option<&'a std::cell::Cell<i64>>,
+    /// **族 F**：会话任务态三组位图的只读快照（角色名 → [`GmQuestFlags`]）。`None` = 未注入
+    /// （脚本桥/测试）⇒ 按「新角色全零位阵」语义读。`@setflag` 用它取**调用者**当前位阵算
+    /// 写后读回，`@showflag` 用它读**目标**真位阵（此前是恒零接缝）。
+    pub quests: Option<&'a std::collections::HashMap<String, GmQuestFlags>>,
     /// `SystemShare.FilterWord`（**全局可变位**，`SystemShare.cs:157` 声明、部署启动
     /// `GameApp.cs:70` 置 true；`@DisableFilter` 翻转）的宿主侧共享单元。
     ///
@@ -1571,6 +1648,7 @@ impl<'a> GmWorld<'a> {
             pose_target: None,
             mission: None,
             spirit_mutiny_tick: None,
+            quests: None,
             filter_word: None,
         }
     }
@@ -1627,6 +1705,16 @@ impl<'a> GmWorld<'a> {
         self
     }
 
+    /// 注入会话任务态快照（族 F：`@setflag`/`@setopen`/`@setunit`/`@showflag` 的读源）。
+    #[must_use]
+    pub fn with_quests(
+        mut self,
+        quests: &'a std::collections::HashMap<String, GmQuestFlags>,
+    ) -> Self {
+        self.quests = Some(quests);
+        self
+    }
+
     /// `WorldEngine.GetPlayObject`（`WorldServer.cs:937-954`）：`PlayObjectList` 顺序扫，
     /// `ChrName` **OrdinalIgnoreCase** 命中首个、且 `!Ghost`。本仓实体表含怪物 ⇒ 加 `Race == Play` 门。
     fn play_by_name(&self, name: &str) -> Option<&'a mir2_world::Entity> {
@@ -1638,6 +1726,18 @@ impl<'a> GmWorld<'a> {
 
     fn entity(&self, id: i32) -> Option<&'a mir2_world::Entity> {
         self.world?.entities.get(id)
+    }
+
+    /// 按 `ChrName` 取会话任务态快照（`OrdinalIgnoreCase`，同 `GetPlayObject`）；未注入/未命中
+    /// ⇒ `None`（调用方按新角色全零位阵处理）。
+    fn quest_of(&self, name: &str) -> Option<&'a GmQuestFlags> {
+        let q = self.quests?;
+        if let Some(v) = q.get(name) {
+            return Some(v);
+        }
+        q.iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v)
     }
 
     /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
@@ -2053,12 +2153,14 @@ fn map_monster_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
 }
 
 /// 目标 `GetQuestFalgStatus(nFlag)`（`PlayObject.cs:3966-3989`：`nFlag-1` → 位
-/// `128 >> (n-1)%8` 于字节 `(n-1)/8`）的**读源接缝**。宿主未建模 `QuestFlag` 位阵
-/// （族 F 的 setflag/setopen/setunit 尚未落地、无任何写点）⇒ 恒零值模型：任何目标/任何
-/// 位号读 0（= 新角色位阵全零语义）。族 F 落地时把本函数换成真位阵读，`showflag` 的
-/// ON 支随之可达——命令体结构已按 oracle 写全，不随接缝改动。
-fn target_quest_flag_status(_target: &mir2_world::Entity, _n_flag: i32) -> i32 {
-    0
+/// `128 >> (n-1)%8` 于字节 `(n-1)/8`）。
+///
+/// 读源 = [`GmWorld::quests`] 里该目标的三组位图快照（宿主派发前从会话记录
+/// `saves.record.data.quest_flag` 克隆）。快照未注入（脚本桥/测试）⇒ 0（= 新角色全零位阵）。
+fn target_quest_flag_status(world: &GmWorld<'_>, target: &mir2_world::Entity, n_flag: i32) -> i32 {
+    world
+        .quest_of(&target.name)
+        .map_or(0, |q| q.flag.get(n_flag))
 }
 
 /// `HumanCountCommand.Execute`（`HumanCountCommand.cs:13-33`，现网 `@HumanCountwa`）。
@@ -2292,8 +2394,8 @@ fn show_flag(parameters: &str, world: &GmWorld<'_>) -> GmResult {
         return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[s_human.to_string()]));
     };
     let n_flag = str_to_int(s_flag, 0);
-    // 读源接缝：宿主位阵恒零值模型 ⇒ 恒走 OFF 支（ON 支结构保留，见 seam 文档）。
-    let status = target_quest_flag_status(target, n_flag);
+    // 族 F 起读源是真位阵快照（此前是恒零接缝）；未注入时仍按全零模型走 OFF 支。
+    let status = target_quest_flag_status(world, target, n_flag);
     if status == 1 {
         green(dotnet_format(
             Q_FLAG_ON_FMT,
@@ -2305,6 +2407,103 @@ fn show_flag(parameters: &str, world: &GmWorld<'_>) -> GmResult {
             &[target.name.clone(), n_flag.to_string()],
         ))
     }
+}
+
+/// 族 F 三条命令写哪一组位阵（oracle 是同一段代码复制的三遍）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GmQuestKind {
+    /// `SetFlagCommand` → `PlayObject.QuestFlag`（`PlayObject.cs:3990`）。
+    Flag,
+    /// `SetOpenCommand` → `PlayObject.QuestUnitOpen`（`:4037`）。
+    UnitOpen,
+    /// `SetUnitCommand` → `PlayObject.QuestUnit`（`:4084`）。
+    Unit,
+}
+
+/// `SetFlagCommand` / `SetOpenCommand` / `SetUnitCommand`
+/// （`src/Modules/GameCommand/Commands/SetPassWordCommand.cs:212-311`）。
+///
+/// 三条 oracle 是同一段代码复制的三遍，只有位阵不同：`SetFlag→QuestFlag`、
+/// `SetOpen→QuestUnitOpen`、`SetUnit→QuestUnit`。
+///
+/// **怪癖照抄（卡面 forbidden 禁修）**：
+/// 1. 写的是**调用者** `PlayerActor.SetQuest*Status`，**不是** `targetObject`；
+/// 2. `targetObject == null`（离线性 / 空名）⇒ 进 else 支对 null 调 `SysMsg` ⇒ NRE 被
+///    `PlayObject.Chat.cs:402` 的 catch 吞 ⇒ **零帧零写**（源文本那句帮助本身不可达）；
+/// 3. 实参 < 3 ⇒ `@params[1]`/`@params[2]` 越界，同样被吞 ⇒ 零帧（且发生在写之前）；
+/// 4. 绿字按**写后读回**（`GetQuest*Status(nFlag) == 1`）定 ON/OFF，并发往 **targetObject**。
+///
+/// `nFlag` 语义（`PlayObject.cs:3966-4102`）：`nFlag-1` 后 `flag < 0` 或字节越界 ⇒ set no-op、
+/// get 返回 0 ⇒ 回执恒 `OFF`；`nValue != 0` 即 ON（回执不显示数值）。
+fn set_quest_bits(
+    parameters: &str,
+    world: &GmWorld<'_>,
+    sess: &mut GmSession,
+    kind: GmQuestKind,
+) -> GmResult {
+    // C# `String.Split(' ')` 至少 1 段（空串 ⇒ [""]）⇒ oracle `Length <= 0` 支不可达；
+    // 空名/未知名都走 `GetPlayObject == null` 的 NRE 支（零帧且**不写**）。
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let Some(target) = world.play_by_name(name) else {
+        return no_frames(
+            "setflag/setopen/setunit：targetObject == null ⇒ 对 null 调 SysMsg 抛 NRE，被 catch 吞 ⇒ 零帧（源文本帮助不可达）",
+        );
+    };
+    let (Some(&s_flag), Some(&s_value)) = (params.get(1), params.get(2)) else {
+        return no_frames(
+            "setflag/setopen/setunit：@params[1]/@params[2] 越界 ⇒ IndexOutOfRangeException 被 catch 吞 ⇒ 零帧",
+        );
+    };
+    let n_flag = str_to_int(s_flag, 0);
+    let n_value = str_to_int(s_value, 0);
+    // 脚本 `GMEXECUTE` 桥不持会话任务态快照（`GmWorld.quests == None`）⇒ 无法在调用者
+    // **真实**位阵上做 oracle 的「写后读回」读改写；退化形态 = 零帧 + log_note，不伪造整组
+    // 零基准写（否则下一次 CM_SAY 会用它整组覆盖调用者已有位阵）。部署脚本无这三条命令的
+    // 可达调用（`coverage/gm_registry.json` 三条均 unreachable）。
+    if world.quests.is_none() {
+        return no_frames(
+            "setflag/setopen/setunit：GmWorld 未注入会话任务态快照（脚本 GMEXECUTE 桥）⇒ 退化零帧",
+        );
+    }
+    // 调用者当前位阵（oracle 命令对象 = 说话者自己的 PlayObject；调用者不在记录表 ⇒ 全零）。
+    let mut bits = world.quest_of(world.speaker).cloned().unwrap_or_default();
+    let status = match kind {
+        GmQuestKind::Flag => {
+            bits.flag.set(n_flag, n_value);
+            bits.flag.get(n_flag)
+        }
+        GmQuestKind::UnitOpen => {
+            bits.unit_open.set(n_flag, n_value);
+            bits.unit_open.get(n_flag)
+        }
+        GmQuestKind::Unit => {
+            bits.unit.set(n_flag, n_value);
+            bits.unit.get(n_flag)
+        }
+    };
+    // `PlayerActor.ChrName + ": [" + nFlag + "] = ON/OFF"`（`int` 的 decimal 拼接）。
+    let verdict = if status == 1 { "ON" } else { "OFF" };
+    let text = format!("{}: [{}] = {}", world.speaker, n_flag, verdict);
+    let mut write = GmQuestWrite {
+        flag: None,
+        unit: None,
+        unit_open: None,
+        target_msg: Some((
+            target.name.clone(),
+            GmMsg {
+                color: GmColor::Green,
+                text,
+            },
+        )),
+    };
+    match kind {
+        GmQuestKind::Flag => write.flag = Some(bits.flag),
+        GmQuestKind::UnitOpen => write.unit_open = Some(bits.unit_open),
+        GmQuestKind::Unit => write.unit = Some(bits.unit),
+    }
+    sess.pending_quest = Some(write);
+    GmResult::empty()
 }
 
 /// `HumanLocalCommand.Execute`（`HumanLocalCommand.cs:14-36`，现网 `@IP`）：
@@ -4032,6 +4231,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_clear_copy = None;
     sess.pending_clear_password = None;
     sess.pending_del_skill = None;
+    sess.pending_quest = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -4259,6 +4459,11 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::DelSkillCmd => del_skill(parameters, world, sess),
         Imp::ClearCopyItem => clear_copy_item(parameters, world, sess),
         Imp::ClearHumanPassword => clear_human_password(parameters, world, sess),
+
+        // ---- 族 F · 脚本标志（3）----
+        Imp::SetFlag => set_quest_bits(parameters, world, sess, GmQuestKind::Flag),
+        Imp::SetOpen => set_quest_bits(parameters, world, sess, GmQuestKind::UnitOpen),
+        Imp::SetUnit => set_quest_bits(parameters, world, sess, GmQuestKind::Unit),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -5015,7 +5220,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "setflag",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SetFlag,
     },
     CommandDef {
         name: "SetMapMode",
@@ -5027,13 +5232,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "setopen",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SetOpen,
     },
     CommandDef {
         name: "setunit",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SetUnit,
     },
     CommandDef {
         // oracle 活名 = `ShowDenyChrNameLogon`（`ShowDenyCharNameLogonCommand.cs:7` 的命令名，
@@ -6576,6 +6781,7 @@ mod tests {
             pose_target: None,
             mission: None,
             spirit_mutiny_tick: None,
+            quests: None,
             filter_word: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
@@ -6884,8 +7090,8 @@ mod tests {
     /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）与
     /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）与
     /// 族 X2 批 A（卡 `openmir2-gm-family-x2-target-control` 的 12 条目标控制/杂项）与
-    /// 批 B（同卡重 R 6 条）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 27），且命令名 → 实现标签固定。
+    /// 批 B（同卡重 R 6 条）与族 F（卡 `openmir2-gm-family-f-script-flags` 的 3 条脚本标志）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 24），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -6893,16 +7099,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            158,
-            "158 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）"
+            161,
+            "161 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）+ 族 F（脚本标志 3）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            27,
-            "185 - 158"
+            24,
+            "185 - 161"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -10898,5 +11104,253 @@ mod tests {
             assert!(r.frames.is_empty(), "{name}");
             assert_eq!(sess, GmSession::default(), "{name} 零状态变化");
         }
+    }
+
+    // ==================== 族 F · 脚本标志（3，卡 `openmir2-gm-family-f-script-flags`，tier=R）====================
+
+    use mir2_script::engine::quest_state::QuestBitmap;
+
+    fn f_bit(flag: i32, on: bool) -> QuestBitmap {
+        let mut b = QuestBitmap::new();
+        b.set(flag, i32::from(on));
+        b
+    }
+
+    /// 世界：`gm`（调用者）+ `bob`（目标），均 `Race = Play`（`GetPlayObject` 的命中面）。
+    fn f_world_entities() -> mir2_world::World {
+        let mut w = mir2_world::World::new(20, 20);
+        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        gm.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(gm);
+        let mut bob = mir2_world::Entity::new(0, "bob", 6, 6);
+        bob.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(bob);
+        w
+    }
+
+    /// 会话任务态快照：调用者的三组位由参数给定；目标 `bob` 刻意用**不同**的位
+    /// （flag 2 / unit 3 / unit_open 4）——用于咬「写的是调用者不是目标」的怪癖。
+    fn f_snapshot(
+        gm_flag: QuestBitmap,
+        gm_unit: QuestBitmap,
+        gm_unit_open: QuestBitmap,
+    ) -> std::collections::HashMap<String, GmQuestFlags> {
+        let mut m = std::collections::HashMap::new();
+        m.insert(
+            "gm".to_string(),
+            GmQuestFlags {
+                flag: gm_flag,
+                unit: gm_unit,
+                unit_open: gm_unit_open,
+            },
+        );
+        m.insert(
+            "bob".to_string(),
+            GmQuestFlags {
+                flag: f_bit(2, true),
+                unit: f_bit(3, true),
+                unit_open: f_bit(4, true),
+            },
+        );
+        m
+    }
+
+    fn f_exec(
+        sess: &mut GmSession,
+        world: &mir2_world::World,
+        guilds: &mir2_world::GuildManager,
+        quests: &std::collections::HashMap<String, GmQuestFlags>,
+        line: &str,
+    ) -> GmResult {
+        let view = GmWorld::new(guilds)
+            .with_world(world)
+            .with_speaker("gm")
+            .with_quests(quests);
+        execute(sess, &GmConfig::default(), &view, line)
+    }
+
+    /// 表项：`setflag/setopen/setunit` 已接线、perm 10、`Execute` 形参 2。
+    #[test]
+    fn f_family_table_entries_are_wired() {
+        for (name, imp) in [
+            ("setflag", Imp::SetFlag),
+            ("setopen", Imp::SetOpen),
+            ("setunit", Imp::SetUnit),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, 2, "{name} 的 Execute 形参个数");
+        }
+    }
+
+    /// **A1（怪癖）**：`@setflag` 写的是**调用者** `gm` 的 `QuestFlag`，不是目标 `bob`；
+    /// 绿字按写后读回判 ON/OFF，且**发给目标**（调用者零帧）。
+    ///
+    /// 变异红：把 `world.quest_of(world.speaker)` 改成 `quest_of(target.name)`（写目标）⇒
+    /// 结果位阵带 bob 的位 2 且丢调用者的位 1。
+    #[test]
+    fn f_setflag_writes_caller_not_target() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = f_world_entities();
+        // 调用者既有位：flag 1 = ON；目标 bob 的位 2 = ON（见 `f_snapshot`）。
+        let quests = f_snapshot(f_bit(1, true), QuestBitmap::new(), QuestBitmap::new());
+        let mut sess = gm_session();
+        let r = f_exec(&mut sess, &world, &guilds, &quests, "@setflag bob 5 1");
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "回执发给目标 ⇒ 调用者零帧"
+        );
+        let w = sess.pending_quest.clone().expect("命中必须装 pending");
+        let f = w.flag.expect("SetFlag 写 QuestFlag");
+        assert_eq!(f.get(5), 1, "写后的位 5");
+        assert_eq!(
+            f.get(1),
+            1,
+            "调用者既有位 1 必须保留（基准是**调用者**位阵）"
+        );
+        assert_eq!(f.get(2), 0, "目标 bob 的位 2 不得混入 ⇒ 写错目标必红");
+        assert!(
+            w.unit.is_none() && w.unit_open.is_none(),
+            "SetFlag 只写一组"
+        );
+        let (target, msg) = w.target_msg.expect("回执目标");
+        assert_eq!(target, "bob");
+        assert_eq!(msg.color, GmColor::Green);
+        assert_eq!(msg.text, "gm: [5] = ON", "`{{ChrName}}: [n] = ON` 逐字节");
+        // value = 0 ⇒ 清位 ⇒ OFF；调用者位 1 仍在。
+        let r = f_exec(&mut sess, &world, &guilds, &quests, "@setflag bob 5 0");
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        let w = sess.pending_quest.clone().expect("第二次命中");
+        let f = w.flag.unwrap();
+        assert_eq!(f.get(5), 0);
+        assert_eq!(f.get(1), 1);
+        assert_eq!(w.target_msg.unwrap().1.text, "gm: [5] = OFF");
+    }
+
+    /// **A2**：目标离线 / 空名 / 实参不足 ⇒ oracle 对 null 调 `SysMsg` 抛 NRE（或 `@params`
+    /// 越界），被 `PlayObject.Chat.cs:402` 的 catch 吞 ⇒ **零帧零写**（帮助文本本身不可达）。
+    ///
+    /// 变异红：把 `sess.pending_quest` 的装填移到 target 判空之前 ⇒ 本用例红。
+    #[test]
+    fn f_offline_or_short_args_zero_frames_no_write() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = f_world_entities();
+        let quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
+        let mut sess = gm_session();
+        for line in [
+            "@setflag nobody 5 1", // 离线（GetPlayObject == null ⇒ else 支 NRE）
+            "@setflag",            // 空名 ⇒ 同上
+            "@setflag bob",        // 目标在线但 @params[1] 越界
+            "@setflag bob 5",      // @params[2] 越界
+        ] {
+            let r = f_exec(&mut sess, &world, &guilds, &quests, line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 必须零帧");
+            assert!(sess.pending_quest.is_none(), "{line} 不得留下写入");
+            assert!(r.log_note.is_some(), "{line} 必须登记被吞的异常路径");
+        }
+        // 多余段落不影响（oracle 只看前三段）。
+        let _r = f_exec(&mut sess, &world, &guilds, &quests, "@setflag bob 5 1 9");
+        assert_eq!(sess.pending_quest.clone().unwrap().flag.unwrap().get(5), 1);
+        // 退化形态：脚本 GMEXECUTE 桥未注入任务态快照（`quests == None`）⇒ 零帧 + note，
+        // 不伪造整组零基准写（否则下一次 CM_SAY 会覆盖调用者已有位阵）。
+        let bare = GmWorld::new(&guilds).with_world(&world).with_speaker("gm");
+        let r = execute(&mut sess, &GmConfig::default(), &bare, "@setflag bob 5 1");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "退化形态零帧");
+        assert!(sess.pending_quest.is_none(), "退化形态不得装写");
+        assert!(r.log_note.expect("必须登记").contains("未注入"));
+    }
+
+    /// **A3**：`@setopen` / `@setunit` 与 `@setflag` 同构，只换位阵组（`QuestUnitOpen` /
+    /// `QuestUnit`），其余组保持 `None`，回执文本同形。
+    ///
+    /// 变异红：交换 `UnitOpen`/`Unit` 两支 ⇒ 本用例红。
+    #[test]
+    fn f_setopen_and_setunit_are_isomorphic() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = f_world_entities();
+        let quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
+        let mut sess = gm_session();
+        // setopen → QuestUnitOpen（调用者该组全零；目标 bob 的 unit_open 位 4 = ON 不得混入）。
+        let r = f_exec(&mut sess, &world, &guilds, &quests, "@setopen bob 5 1");
+        assert!(r.msgs.is_empty());
+        let w = sess.pending_quest.clone().expect("setopen 命中");
+        assert!(
+            w.flag.is_none() && w.unit.is_none(),
+            "setopen 只写 unit_open"
+        );
+        let uo = w.unit_open.expect("QuestUnitOpen");
+        assert_eq!(uo.get(5), 1);
+        assert_eq!(uo.get(4), 0, "目标 bob 的 unit_open 位 4 不得混入");
+        assert_eq!(w.target_msg.unwrap().1.text, "gm: [5] = ON");
+        // setunit → QuestUnit。
+        let r = f_exec(&mut sess, &world, &guilds, &quests, "@setunit bob 5 1");
+        assert!(r.msgs.is_empty());
+        let w = sess.pending_quest.clone().expect("setunit 命中");
+        assert!(
+            w.flag.is_none() && w.unit_open.is_none(),
+            "setunit 只写 unit"
+        );
+        let u = w.unit.expect("QuestUnit");
+        assert_eq!(u.get(5), 1);
+        assert_eq!(u.get(3), 0, "目标 bob 的 unit 位 3 不得混入");
+        assert_eq!(w.target_msg.unwrap().1.text, "gm: [5] = ON");
+    }
+
+    /// **A4（写后读回）**：ON/OFF 由**写后位值**决定——`nValue != 0` 即 ON（不回显数值）；
+    /// flag 0/负数/越界（`nFlag-1 < 0` 或字节下标越界）⇒ set no-op、读回 0 ⇒ **OFF**；
+    /// `StrToInt` 归一（`"05"` ⇒ `[5]`）。
+    ///
+    /// 变异红：用 `n_value != 0` 直接当判据（跳过读回）⇒ 越界 flag 支会印 ON，本用例红。
+    #[test]
+    fn f_readback_decides_on_off_after_write() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = f_world_entities();
+        let quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
+        let mut sess = gm_session();
+        for (flag, value, want) in [
+            ("5", "3", "gm: [5] = ON"), // 非 0 即 ON（不显示 3）
+            ("5", "0", "gm: [5] = OFF"),
+            ("0", "1", "gm: [0] = OFF"), // nFlag-1 = -1 ⇒ set no-op ⇒ get 0
+            ("-3", "1", "gm: [-3] = OFF"), // 同上
+            ("1025", "1", "gm: [1025] = OFF"), // 字节下标 128 越界 ⇒ no-op
+            ("1024", "1", "gm: [1024] = ON"), // 最后一字节最低位：合法
+            ("05", "1", "gm: [5] = ON"), // StrToInt 归一
+        ] {
+            let line = format!("@setflag bob {flag} {value}");
+            let r = f_exec(&mut sess, &world, &guilds, &quests, &line);
+            assert!(r.msgs.is_empty(), "{line}");
+            let w = sess.pending_quest.clone().expect("命中");
+            assert_eq!(w.target_msg.unwrap().1.text, want, "{line}");
+        }
+    }
+
+    /// `@showflag` 的读源换成**真位阵**（族 F 落地后不再恒 OFF）：目标位 7 = ON、位 8 = OFF；
+    /// 快照未注入（脚本桥/旧接缝形态）⇒ 仍按全零读 OFF。
+    ///
+    /// 变异红：`target_quest_flag_status` 改回恒 0 ⇒ ON 支断言红。
+    #[test]
+    fn f_showflag_reads_real_target_bitmap() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = f_world_entities();
+        // 只关心 bob 的 flag 组；bob 位 7 = ON。
+        let mut quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
+        quests.insert(
+            "bob".to_string(),
+            GmQuestFlags {
+                flag: f_bit(7, true),
+                unit: QuestBitmap::new(),
+                unit_open: QuestBitmap::new(),
+            },
+        );
+        let mut sess = gm_session();
+        let r = f_exec(&mut sess, &world, &guilds, &quests, "@showflag bob 7");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "bob: [7] = ON")]);
+        let r = f_exec(&mut sess, &world, &guilds, &quests, "@showflag bob 8");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "bob: [8] = OFF")]);
+        // 退化形态：未注入任务态快照 ⇒ 全零模型（旧接缝的语义保留）。
+        let bare = GmWorld::new(&guilds).with_world(&world).with_speaker("gm");
+        let r = execute(&mut sess, &GmConfig::default(), &bare, "@showflag bob 7");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "bob: [7] = OFF")]);
     }
 }

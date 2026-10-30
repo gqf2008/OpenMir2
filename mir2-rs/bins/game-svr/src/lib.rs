@@ -1526,9 +1526,30 @@ type GmSysMsgs = Vec<(u8, u8, String)>;
 /// 已编码的 GM 直发帧（`SendDefMessage` 面，如 `@AttackMode` 的 `SM_ATTACKMODE(213)`）。
 type GmDirectFrames = Vec<Vec<u8>>;
 
+/// `CM_SAY` 的生产入口（不带会话任务态快照的旧签名；仅测试/不关心任务位面的调用方用）。
+///
+/// 正式路径一律走 [`handle_say_with_saves`]——族 F 的 `@setflag/@showflag` 需要
+/// `saves.record.data.quest_*` 作为读源。
+#[cfg(test)]
 fn handle_say(
     host: &ChatHost<'_>,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    socket: i32,
+    tail: Option<&str>,
+) -> (GmSysMsgs, GmDirectFrames) {
+    let saves = std::collections::HashMap::new();
+    handle_say_with_saves(host, sessions, &saves, chr_name, socket, tail)
+}
+
+/// `CM_SAY` 的生产入口（含会话任务态读源）。
+fn handle_say_with_saves(
+    host: &ChatHost<'_>,
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    // **族 F**（卡 `openmir2-gm-family-f-script-flags`）：会话任务态运行时真身在
+    // `saves.record.data.quest_*`（oracle 的 `PlayObject.QuestFlag/QuestUnit/QuestUnitOpen`
+    // 不落库，只存在于内存 `CharacterData`）⇒ GM 派发前从这里克隆只读快照注入 [`gmcmd::GmWorld`]。
+    saves: &std::collections::HashMap<String, SavedHuman>,
     chr_name: &str,
     socket: i32,
     tail: Option<&str>,
@@ -1565,7 +1586,7 @@ fn handle_say(
     // `@` 命令（oracle `PlayObject.Chat.cs:363-400`）：命中即整条 `CM_SAY` 结束，**不**回落喊话；
     // 未命中 ⇒ `CommandSystem.Execute` 先发一条 `未知命令: …`，回落再补一条（见 [`gmcmd`]）。
     if line.starts_with('@') {
-        return handle_gm_command(host, sessions, speaker, line);
+        return handle_gm_command(host, sessions, saves, speaker, line);
     }
     if !chat::is_plain_say(line) {
         // 非 `@` 的非普通说话（当前只有首字符 `/`/`!` 两支之外的空白/异常行）：照旧丢弃并记日志。
@@ -1815,6 +1836,7 @@ fn send_self_sysmsg(host: &ChatHost<'_>, speaker: &OnlineEntry, msg: &str) {
 fn handle_gm_command(
     host: &ChatHost<'_>,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
+    saves: &std::collections::HashMap<String, SavedHuman>,
     speaker: &OnlineEntry,
     line: &str,
 ) -> (GmSysMsgs, GmDirectFrames) {
@@ -1832,6 +1854,21 @@ fn handle_gm_command(
     let pose_target: Option<String> = pose_create(host.world, host.displays, speaker.actor_id)
         .and_then(|id| host.world.entities.get(id))
         .map(|e| e.name.clone());
+    // **族 F**：会话任务态只读快照（`saves.record` 三列；oracle 的会话内 `CharacterData`）。
+    // `@setflag` 用它算「写后读回」，`@showflag` 用它读目标真位阵（此前是恒零接缝）。
+    let quests: std::collections::HashMap<String, gmcmd::GmQuestFlags> = saves
+        .iter()
+        .map(|(name, saved)| {
+            (
+                name.clone(),
+                gmcmd::GmQuestFlags::from_record(
+                    saved.record.data.quest_flag.as_deref(),
+                    saved.record.data.quest_unit.as_deref(),
+                    saved.record.data.quest_unit_open.as_deref(),
+                ),
+            )
+        })
+        .collect();
     let world_view = gmcmd::GmWorld {
         guilds: host.guilds,
         maps: host.registry,
@@ -1843,6 +1880,7 @@ fn handle_gm_command(
         filter_word: Some(host.filter_word),
         mission: Some(host.mission),
         spirit_mutiny_tick: Some(host.spirit_mutiny_tick),
+        quests: Some(&quests),
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -7812,6 +7850,10 @@ impl ScriptGmEnv<'_> {
                 filter_word: None,
                 mission: None,
                 spirit_mutiny_tick: None,
+                // 族 F：脚本桥不持会话任务态快照（`saves` 不在 `ScriptGmEnv` 里）⇒
+                // `@setflag/@setopen/@setunit` 经 `GMEXECUTE` 走 `log_note` 退化形态；
+                // 部署脚本无这三条命令的可达调用（`coverage/gm_registry.json`）。
+                quests: None,
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -19220,6 +19262,8 @@ fn apply_pending_gm_target_ops(
     let clear_copy = sg.gm.pending_clear_copy.clone();
     let clear_pwd = sg.gm.pending_clear_password.clone();
     let del_skill = sg.gm.pending_del_skill.clone();
+    // **族 F**：`@setflag/@setopen/@setunit` 的会话任务位写（写的是**调用者**，回执给目标）。
+    let quest = sg.gm.pending_quest.clone();
 
     let find_id = |world: &mir2_world::World, name: &str| -> Option<i32> {
         world
@@ -19589,6 +19633,47 @@ fn apply_pending_gm_target_ops(
         }
     }
 
+    // ⑦ 会话任务位写（族 F，卡 `openmir2-gm-family-f-script-flags`）
+    //
+    // oracle：`PlayerActor.SetQuest*Status(nFlag, nValue)` 写的是**调用者自己**的
+    // `PlayObject.Quest*`（怪癖，卡面 forbidden 禁修），随后 `targetObject.SysMsg(...)` 把
+    // 写后读回结果作为绿字发给**目标**。本仓命令体纯 ⇒ 位阵整组 + 目标回执由 pending 带回，
+    // 这里在同一事件内落到调用者的会话记录 `saves.record.data.quest_*`（运行时真身；
+    // oracle **不落库**，见 `bins/db-srv/tests/quest_no_persist.rs`）并给目标发
+    // `SM_SYSMESSAGE(100)`。
+    if let Some(w) = quest {
+        if let Some(saved) = saves.get_mut(chr_name) {
+            if let Some(b) = &w.flag {
+                saved.record.data.quest_flag = Some(b.as_bytes().to_vec());
+            }
+            if let Some(b) = &w.unit {
+                saved.record.data.quest_unit = Some(b.as_bytes().to_vec());
+            }
+            if let Some(b) = &w.unit_open {
+                saved.record.data.quest_unit_open = Some(b.as_bytes().to_vec());
+            }
+        } else {
+            // 生产路径不会命中（进世界即建 saves）；退化形态必须留痕，不静默吞写。
+            glog!(
+                "WRN",
+                "GM 任务位写：ChrName={chr_name} 无 saves 记录 ⇒ 写入丢弃"
+            );
+        }
+        if let Some((target, msg)) = &w.target_msg {
+            if let Some(e) = online
+                .iter()
+                .find(|e| e.chr_name.eq_ignore_ascii_case(target))
+            {
+                let (f, b) = match msg.color {
+                    gmcmd::GmColor::Red => (colors.red_f, colors.red_b),
+                    gmcmd::GmColor::Green => (colors.green_f, colors.green_b),
+                    gmcmd::GmColor::Blue => (colors.blue_f, colors.blue_b),
+                };
+                send_gm_sysmsg(gates, e, f, b, &msg.text);
+            }
+        }
+    }
+
     // 一次性标记：全部取走（含目标不在的情形，防陈旧）。
     if let Some(sg) = sessions.get_mut(chr_name) {
         sg.gm.pending_gm_die = None;
@@ -19597,6 +19682,7 @@ fn apply_pending_gm_target_ops(
         sg.gm.pending_clear_copy = None;
         sg.gm.pending_clear_password = None;
         sg.gm.pending_del_skill = None;
+        sg.gm.pending_quest = None;
     }
 }
 
@@ -23411,9 +23497,10 @@ fn sim_loop(
                         // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
                         // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
                         // `MsgQueue` 命令后才排水 ⇒ 203 必须先于 100（复审 important-2）。
-                        let (gm_deferred, gm_frames) = handle_say(
+                        let (gm_deferred, gm_frames) = handle_say_with_saves(
                             &host,
                             &mut ground_sessions,
+                            &saves,
                             &chr_name,
                             socket,
                             tail.as_deref(),
@@ -25326,6 +25413,11 @@ fn sim_loop(
                                                                 spirit_mutiny_tick: Some(
                                                                     &gm_spirit_mutiny_tick,
                                                                 ),
+                                                                // 族 F：`@Login` 时任务位阵
+                                                                // 恒为新角色全零（oracle 不落库）；
+                                                                // 脚本 `GMEXECUTE` 的写不落地
+                                                                // （部署无这些命令的可达调用）。
+                                                                quests: None,
                                                             };
                                                             if let Some(sg) = ground_sessions
                                                                 .get_mut(&head.chr_name)
@@ -40626,6 +40718,10 @@ break
         need_exps: Vec<i32>,
         /// **族 X2**：展示表（`@vv杀死` 面对面支 pose 解析用；测试默认空）。
         displays: downlink::DisplayTable,
+        /// **族 F**：会话任务态运行时真身（`saves.record.data.quest_*`，oracle 不落库的
+        /// 内存 `CharacterData`）。`handle_say` 派发前据此建只读快照，命令后由
+        /// `apply_pending_gm_target_ops` 把调用者的写落回这里。
+        saves: std::collections::HashMap<String, SavedHuman>,
     }
 
     impl GmRig {
@@ -40641,6 +40737,17 @@ break
             online_set(&mut online, entry("a", "aaa", 1, 0, 901, actor));
             let mut sessions = std::collections::HashMap::new();
             sessions.insert("aaa".to_string(), test_session_ground(actor));
+            let mut saves: std::collections::HashMap<String, SavedHuman> =
+                std::collections::HashMap::new();
+            saves.insert(
+                "aaa".to_string(),
+                SavedHuman {
+                    account: "a".into(),
+                    record: record::PlayerRecord::default(),
+                    enter_map: "0".into(),
+                    derived: None,
+                },
+            );
             Self {
                 gates,
                 rx,
@@ -40653,6 +40760,7 @@ break
                 // 这里给 256 项常量表 ⇒ `level=255` 时取 `need_exps[255]`（不触发越界支）。
                 need_exps: vec![10i32; 256],
                 displays: downlink::DisplayTable::new(),
+                saves,
             }
         }
 
@@ -40683,8 +40791,14 @@ break
             };
             let ctx = TestChatCtx::new();
             let host = ctx.host(&self.online, &self.world, &self.gates, &colors);
-            let (deferred, gm_frames) =
-                handle_say(&host, &mut self.sessions, "aaa", 901, Some(line));
+            let (deferred, gm_frames) = handle_say_with_saves(
+                &host,
+                &mut self.sessions,
+                &self.saves,
+                "aaa",
+                901,
+                Some(line),
+            );
             // 与生产 `sim_loop` 的 `CM_SAY` 支同一步：命令体装填的权威写在**同一事件内**
             // 落到 `Entity`（卡 `openmir2-gm-admin-mode-entity-seam`）。
             apply_pending_gm_entity(&mut self.sessions, "aaa", &mut self.world);
@@ -40739,8 +40853,6 @@ break
             // displays 空 ⇒ pose 恒 None——面对面支与删技能的线上承载在 lib 层专用用例覆盖）。
             let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
                 std::collections::HashMap::new();
-            let mut saves: std::collections::HashMap<String, SavedHuman> =
-                std::collections::HashMap::new();
             let empty_magic_table = magics::MagicTable::default();
             let gm_magic_cfg = MagicCfg {
                 table: &empty_magic_table,
@@ -40750,7 +40862,7 @@ break
             apply_pending_gm_target_ops(
                 &mut self.sessions,
                 &mut pwd_sessions,
-                &mut saves,
+                &mut self.saves,
                 &mut self.world,
                 &self.catalog,
                 gm_magic_cfg,
@@ -42774,6 +42886,175 @@ break
             rig.world.entities.get(rig.actor).unwrap().admin_mode,
             "Ghost 说话者（oracle 命令对象仍写同一字段）也必须落到权威 Entity"
         );
+    }
+
+    /// **族 F 宿主落地牙**（卡 `openmir2-gm-family-f-script-flags`）：
+    /// `@setflag victim 5 1` 经**生产入口** `handle_say_with_saves` ⇒ 命令体装 `pending_quest`
+    /// ⇒ `apply_pending_gm_target_ops` 在同一事件内：
+    /// ① 把**调用者**（hero）的 `QuestFlag` 整组落到 `saves.record.data.quest_flag`（oracle 的
+    ///    会话内 `CharacterData`，**不落库**）；目标 `victim` 的记录**不得被写**（怪癖）；
+    /// ② 绿字回执 `hero: [5] = ON` 作为 `SM_SYSMESSAGE(100)` 投**目标** socket（`Recog` = 目标
+    ///    ActorId），调用者不收帧；
+    /// ③ 随后 `@showflag hero 5` 从同一份 `saves` 快照读到真位 ⇒ ON（族 F 前是恒 OFF 接缝）。
+    ///
+    /// 变异红：apply 段写错目标 / 不落 `saves` / 把回执发给调用者 / `showflag` 改回恒 0 ⇒ 红。
+    #[test]
+    fn gm_family_f_quest_flags_land_on_caller_and_reply_to_target() {
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 219,
+            green_b: 255,
+            blue_f: 251,
+            blue_b: 252,
+        };
+        let mut world = mir2_world::World::new(32, 32);
+        let mut hero = mir2_world::Entity::new(0, "hero", 10, 10);
+        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let hero_id = world.add_entity(hero);
+        let mut victim = mir2_world::Entity::new(0, "victim", 11, 11);
+        victim.race = mir2_world::ACTOR_RACE_PLAY;
+        let victim_id = world.add_entity(victim);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
+        online_set(&mut online, entry("v", "victim", 2, 0, 902, victim_id));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut sessions: std::collections::HashMap<String, SessionGround> =
+            std::collections::HashMap::new();
+        let mut hero_sg = test_session_ground(hero_id);
+        hero_sg.gm.permission = 10; // perm 10 门（现网 Permission 恒 0，用例显式抬）
+        sessions.insert("hero".to_string(), hero_sg);
+        sessions.insert("victim".to_string(), test_session_ground(victim_id));
+        let mut saves: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        for (name, account) in [("hero", "h"), ("victim", "v")] {
+            saves.insert(
+                name.to_string(),
+                SavedHuman {
+                    account: account.to_string(),
+                    record: record::PlayerRecord::default(),
+                    enter_map: "0".to_string(),
+                    derived: None,
+                },
+            );
+        }
+        let ctx = TestChatCtx::new();
+
+        // ① 命令体：调用者零帧（回执装 pending）。
+        let (deferred, direct) = {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say_with_saves(
+                &host,
+                &mut sessions,
+                &saves,
+                "hero",
+                901,
+                Some("@setflag victim 5 1"),
+            )
+        };
+        assert!(
+            deferred.is_empty() && direct.is_empty(),
+            "回执发目标 ⇒ 调用者零帧"
+        );
+
+        // ② 同一事件内的宿主收口（与 sim_loop 的 CM_SAY 支同步）。
+        let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+            std::collections::HashMap::new();
+        let empty_magic_table = magics::MagicTable::default();
+        let magic_cfg = MagicCfg {
+            table: &empty_magic_table,
+            fire_ball_skill: "火球术",
+            heal_skill: "治愈术",
+        };
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &game_svr::ability::StdItemCatalog::new(),
+            magic_cfg,
+            &downlink::DisplayTable::new(),
+            &online,
+            &gates,
+            &colors,
+            chat::send_ref_msg_range(),
+            "hero",
+        );
+        assert!(
+            sessions["hero"].gm.pending_quest.is_none(),
+            "标记一次性：落地即清"
+        );
+        // 写的是调用者：hero 的 QuestFlag 位 5 = ON。
+        let hero_flag = saves["hero"]
+            .record
+            .data
+            .quest_flag
+            .as_ref()
+            .expect("写后必须建 128B 位阵");
+        assert_eq!(hero_flag.len(), 128, "oracle `new byte[128]`");
+        let mut arr = [0u8; 128];
+        arr.copy_from_slice(hero_flag);
+        let flags = mir2_script::engine::quest_state::QuestBitmap::from_bytes(arr);
+        assert_eq!(flags.get(5), 1, "调用者 hero 的 QuestFlag 位 5 = ON");
+        // 目标记录不得被写（怪癖：写调用者，不是 targetObject）。
+        assert!(
+            saves["victim"].record.data.quest_flag.is_none(),
+            "目标 victim 的记录不得被写（写错目标 ⇒ 红）"
+        );
+
+        // ③ 目标 socket 恰收一条 SM_SYSMESSAGE：Recog=目标 ActorId、正文逐字节。
+        let mut got: Vec<(i32, Vec<u8>)> = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                SimToGate::SendFrame { socket, body } => got.push((socket, body)),
+                other => panic!("GM 任务位写不应产生非帧消息: {other:?}"),
+            }
+        }
+        assert_eq!(got.len(), 1, "恰一条目标回执；实得 {}", got.len());
+        let (socket, body) = &got[0];
+        assert_eq!(*socket, 902, "回执投**目标** socket（不是调用者 901）");
+        assert_eq!(
+            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+            victim_id,
+            "Recog = 目标 ActorId"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            "Ident = SM_SYSMESSAGE(100)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[6], body[7]]),
+            0xFFDB,
+            "Green = MakeWord(219,255)"
+        );
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&body[12..])),
+            "hero: [5] = ON"
+        );
+
+        // ④ `@showflag` 现在读到真位（宿主的快照来自同一份 saves）。
+        let (show, _direct) = {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            handle_say_with_saves(
+                &host,
+                &mut sessions,
+                &saves,
+                "hero",
+                901,
+                Some("@showflag hero 5"),
+            )
+        };
+        assert_eq!(show.len(), 1, "showflag 一条绿字");
+        assert_eq!(show[0].2, "hero: [5] = ON");
+        assert_eq!(show[0].0, 219, "Green F");
+        assert_eq!(show[0].1, 255, "Green B");
     }
 
     /// `@时间`（`DataCommand`）：`SysMsg(当前日期时间: yyyy-MM-dd HH:mm:ss, Blue, Hint)`
