@@ -1,5 +1,8 @@
 # GM 命令 `Imp::Unimplemented` 74 条对 oracle 钉性盘点（2026-10-30）
 
+> **计数订正**：同日族 P（密码锁门 7）与族 T（会话开关/骑马 7）已落地，现存
+> `Imp::Unimplemented` = **60**——见 §7；§1–§6 保留盘点时点值。
+
 - 卡：`openmir2-gm-unimpl-inventory`（tier=L，worker=openmir2-dev-3，分支 `card/gm-unimpl-inventory-dev3`，基线 `walgit/master` `26f88f483`）。
 - 写集：仅本文档。不改 `mir2-rs/**`、不实现任何命令、不动 `Command.conf`。
 - oracle = C# 参照实现 `src/Modules/GameCommand/Commands/`（185 个命令类）；rust = `mir2-rs/bins/game-svr/src/gmcmd.rs` 的 `COMMANDS` 常量表（185 行）。
@@ -160,7 +163,20 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
 
 ## 6. 统计
 
-- 解析：`CommandDef` 表项 186；`Imp::Unimplemented` **74**（名字互异）。
+- 解析：`CommandDef` 表项 186；`Imp::Unimplemented` **74**（名字互异；**盘点时点值**，落地进度见 §7）。
 - 处置：**真缺口 65**（P7 + Q10 + T7 + F3 + M6 + C5 + W4 + X1 5 + X2 18）；**已对齐 9**；**垃圾命令 0**。
 - tier 提案分布：L 族 4 个（P/Q/T/X1，共 29 条）；R 族 5 个（F/M/C/W/X2，共 36 条）。
 - 证伪记录：卡面「垃圾命令 9 条」假设不成立——9 条混淆名全部映射到真实 oracle 类（§3），其中 6 条归密码锁门族、2 条师徒/配偶查询、1 条造物。
+
+## 7. 计数订正（2026-10-30 落地进度）
+
+本文 §1–§6 是**盘点时点**（基线 `26f88f483`）的快照，数字不随落地改写；本节记落地后的现存计数。
+
+- **族 P 7 条已落地**：卡 `openmir2-gm-family-p-passwordlock`（worker-85，commit `6791fe991`，
+  merge `e16572145`）——`Imp::PasswordLockGate`，部署 `PasswordLockSystem=0` 恒红字 + 零副作用牙。
+- **族 T 7 条已落地**：卡 `openmir2-gm-family-t-toggle-horse`（worker-85，本卡）——四条 toggle
+  绿字往返 + `OffHorse`/`OnHorse` 的 `FeatureChanged` 外观帧（`SM_FEATURECHANGED(41)` 宿主落地）+
+  `DisableFilter` 全局 `FilterWord` 翻转（`Cell` 全局单元注入）。
+- **现存 `Imp::Unimplemented` = 74 − 14 = 60**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
+  thirty_command_bodies` 的 125 已接 / 60 未接断言；改坏任一计数 ⇒ 该测试红）。
+- 剩余缺口族：Q10 / F3 / M6 / C5 / W4 / X1 5 / X2 18（§4.3 分族索引不变）。

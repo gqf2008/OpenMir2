@@ -148,6 +148,37 @@ pub const ENABLE_MASTER_RECALL: &str = "允许师徒传送!!!";
 /// `CommandHelp.DisableMasterRecall`。
 pub const DISABLE_MASTER_RECALL: &str = "禁止师徒传送!!!";
 
+// ===== 族 T · 会话开关/骑马（卡 `openmir2-gm-family-t-toggle-horse`，tier=L）的 SysMsg 正文 =====
+//
+// 文本取 `CommandHelp.cs:114-121` 与两个命令体的**内联字面量**（DisableFilterCommand.cs:15/19、
+// TakeOnHorseCommand.cs:15），逐字节照抄——注意两组 Ban 族的常量名与语义是**反的**：
+// `if (BanShout) SysMsg(EnableShoutMsg)` ⇒ `BanShout=true`（拒聊位开）显示的却是「允许群聊」，
+// oracle 就这么写，1:1 照抄、不「修」。
+/// `CommandHelp.EnableDealMsg`（`CommandHelp.cs:116`；`AllowDeal=true` 时发）。
+pub const ENABLE_DEAL_MSG: &str = "[允许交易]";
+/// `CommandHelp.DisableDealMsg`（`CommandHelp.cs:117`；`AllowDeal=false` 时发）。
+pub const DISABLE_DEAL_MSG: &str = "[禁止交易]";
+/// `CommandHelp.EnableShoutMsg`（`CommandHelp.cs:114`；`BanShout=true` 时发——常量名与状态语义相反，照抄）。
+pub const ENABLE_SHOUT_MSG: &str = "[允许群聊]";
+/// `CommandHelp.DisableShoutMsg`（`CommandHelp.cs:115`；`BanShout=false` 时发）。
+pub const DISABLE_SHOUT_MSG: &str = "[禁止群聊]";
+/// `CommandHelp.EnableGuildChat`（`CommandHelp.cs:118`；`BanGuildChat=true` 时发——同上相反，照抄）。
+pub const ENABLE_GUILD_CHAT: &str = "[允许行会聊天]";
+/// `CommandHelp.DisableGuildChat`（`CommandHelp.cs:119`；`BanGuildChat=false` 时发）。
+pub const DISABLE_GUILD_CHAT: &str = "[禁止行会聊天]";
+/// `CommandHelp.EnableJoinGuild`（`CommandHelp.cs:120`；`AllowGuild=true` 时发）。
+pub const ENABLE_JOIN_GUILD: &str = "[允许加入行会]";
+/// `CommandHelp.DisableJoinGuild`（`CommandHelp.cs:121`；`AllowGuild=false` 时发）。
+pub const DISABLE_JOIN_GUILD: &str = "[禁止加入行会]";
+/// `DisableFilterCommand.cs:15` 内联字面量（`SystemShare.FilterWord` 翻为 true 时发）。
+pub const DISABLE_FILTER_ENABLED: &str = "已启用文字过滤。";
+/// `DisableFilterCommand.cs:19` 内联字面量（翻为 false 时发）。部署启动 `GameApp.cs:70` 置 true
+/// ⇒ 现网第一条回「已禁止文字过滤。」。
+pub const DISABLE_FILTER_DISABLED: &str = "已禁止文字过滤。";
+/// `TakeOnHorseCommand.cs:15` 内联字面量（`HorseType == 0` 的红字）。oracle `HorseType`
+/// 全仓**无赋值点**（`feature.rs` 模块文档 §4 实证）⇒ 现网恒 0 ⇒ 本红字是**唯一可达支**。
+pub const ON_HORSE_NEED_TAG: &str = "骑马必须先戴上马牌!!!";
+
 // ===== 批次 4（数值/角色族，设计件 §4.3 第 72–115 行，44 条）的 CommandHelp 常量 =====
 //
 // 口径同上：`命令格式: @{现网名} {Help}`（`CommandAttribute.cs:53`）；`Help` 为空时**末尾空格保留**
@@ -527,6 +558,30 @@ pub enum Imp {
     /// 部署 `PasswordLockSystem=0` ⇒ 命令体第一句恒回红字 `NoPasswordLockSystemMsg`，
     /// 零状态、零额外帧；启用分支（RM_PASSWORD 状态机）现网不可达 ⇒ `log_note` 登记。
     PasswordLockGate,
+
+    // ---- 族 T · 会话开关/骑马（7，卡 `openmir2-gm-family-t-toggle-horse`，tier=L）----
+    /// `LetTradeCommand`（现网 `@交易`）：翻转 `AllowDeal`（ctor true，`PlayObject.cs:1008`），
+    /// 绿字 `[允许交易]`/`[禁止交易]` 二选一。
+    LetTrade,
+    /// `LetGuildCommand`（现网 `@加入门派`）：翻转 `AllowGuild`（ctor false，`PlayObject.cs:903`），
+    /// 绿字 `[允许加入行会]`/`[禁止加入行会]`。
+    LetGuild,
+    /// `LetShoutCommand`（现网 `@拒绝组队聊天`）：翻转 `BanShout`（ctor true，`PlayObject.cs:1006`），
+    /// 绿字 `[允许群聊]`/`[禁止群聊]`（常量名与状态语义相反，照抄）。
+    LetShout,
+    /// `BanGuildChatCommand`（现网 `@禁止行会信息`）：翻转 `BanGuildChat`（ctor true，
+    /// `PlayObject.cs:1007`），绿字 `[允许行会聊天]`/`[禁止行会聊天]`（同上相反，照抄）。
+    BanGuildChat,
+    /// `TakeOffHorseCommand`（现网 `@OffHorse`）：未骑马静默零帧；骑马 ⇒ `OnHorse=false` +
+    /// `FeatureChanged()` 外观帧（`pending_feature_changed`，宿主广播 `SM_FEATURECHANGED(41)`）。
+    TakeOffHorse,
+    /// `TakeOnHorseCommand`（现网 `@OnHorse`）：已骑马静默；`HorseType=0`（现网恒值，无赋值点）
+    /// ⇒ 红字「骑马必须先戴上马牌!!!」；上马 ⇒ `OnHorse=true` + 外观帧 + `@OnHorse` NPC 脚本
+    /// 跳线（宿主接缝，只登记不实现脚本面）。
+    TakeOnHorse,
+    /// `DisableFilterCommand`（现网 `@DisableFilter`）：翻转**全局** `SystemShare.FilterWord`
+    /// （部署启动 true，`GameApp.cs:70`）+ 绿字「已启用文字过滤。」/「已禁止文字过滤。」。
+    DisableFilter,
     Unimplemented,
 }
 
@@ -736,6 +791,27 @@ pub struct GmSession {
     /// `SendMsg(RM_LEVELUP)`（泵发 `SM_LEVELUP`/`SM_ABILITY`/`SM_SUBABILITY` 三条直连帧）。
     /// 本仓命令体纯 ⇒ 宿主在同一事件内按本标记落地。
     pub pending_level_up: Option<u8>,
+
+    // ---- 族 T · 会话开关/骑马（`PlayObject` 同生命周期字段；ctor 缺省见 `Default`）----
+    /// `PlayObject.AllowDeal`（ctor true，`PlayObject.cs:1008`；`@交易` 翻转）。
+    pub allow_deal: bool,
+    /// `PlayObject.AllowGuild`（ctor false，`PlayObject.cs:903`；`@加入门派` 翻转）。
+    pub allow_guild: bool,
+    /// `PlayObject.BanShout`（ctor true，`PlayObject.cs:1006`；`@拒绝组队聊天` 翻转）。
+    pub ban_shout: bool,
+    /// `PlayObject.BanGuildChat`（ctor true，`PlayObject.cs:1007`；`@禁止行会信息` 翻转）。
+    pub ban_guild_chat: bool,
+    /// `PlayObject.OnHorse`（ctor false，`PlayObject.cs:988`；`@OnHorse`/`@OffHorse` 翻转）。
+    pub on_horse: bool,
+    /// `PlayObject.HorseType`（`CharacterObject.cs:52`；oracle **全仓无赋值点** ⇒ 恒 0 ⇒
+    /// `@OnHorse` 的红字「骑马必须先戴上马牌!!!」是唯一可达支；测试可构造非 0 进上马支）。
+    pub horse_type: u8,
+    /// **待落地的 `FeatureChanged()` 外观帧**（oracle `BaseObject.cs:1509-1512`：
+    /// `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), …)` ⇒ 视距广播
+    /// `SM_FEATURECHANGED(41)`）。`@OnHorse`/`@OffHorse` 翻转 `on_horse` 后置位；宿主在
+    /// 同一事件内按「翻转后的会话态」现算 feature/feature_ex 并走
+    /// [`crate::downlink`] 的视距广播（与换装路径同一收口，见 lib.rs `apply_pending_gm_feature_changed`）。
+    pub pending_feature_changed: bool,
 }
 
 impl Default for GmSession {
@@ -773,6 +849,13 @@ impl Default for GmSession {
             pending_use_item: None,
             pending_clear_bag: None,
             pending_level_up: None,
+            allow_deal: true,
+            allow_guild: false,
+            ban_shout: true,
+            ban_guild_chat: true,
+            on_horse: false,
+            horse_type: 0,
+            pending_feature_changed: false,
         }
     }
 }
@@ -1105,6 +1188,13 @@ pub struct GmWorld<'a> {
     pub speaker_id: i32,
     /// `HUtil32.GetTickCount()` 的等价物（ms；冷却门的 `now`）。
     pub now_ms: i64,
+    /// `SystemShare.FilterWord`（**全局可变位**，`SystemShare.cs:157` 声明、部署启动
+    /// `GameApp.cs:70` 置 true；`@DisableFilter` 翻转）的宿主侧共享单元。
+    ///
+    /// oracle 是进程级单例（不是 `PlayObject` 字段）⇒ 用 `Cell` 内可变共享引用承载，
+    /// 跨会话/跨事件同一份；`None` = 构造处未注入（测试/`ScriptGmEnv::bridge` 的脚本
+    /// GMEXECUTE 路径）⇒ 命令体走 `log_note` 登记零帧（不静默伪造翻转）。
+    pub filter_word: Option<&'a std::cell::Cell<bool>>,
 }
 
 impl<'a> GmWorld<'a> {
@@ -1118,6 +1208,7 @@ impl<'a> GmWorld<'a> {
             speaker: "",
             speaker_id: 0,
             now_ms: 0,
+            filter_word: None,
         }
     }
 
@@ -1142,6 +1233,13 @@ impl<'a> GmWorld<'a> {
     #[must_use]
     pub fn with_now(mut self, now_ms: i64) -> Self {
         self.now_ms = now_ms;
+        self
+    }
+
+    /// 注入宿主的 `SystemShare.FilterWord` 全局单元（`@DisableFilter` 用）。
+    #[must_use]
+    pub fn with_filter_word(mut self, filter_word: &'a std::cell::Cell<bool>) -> Self {
+        self.filter_word = Some(filter_word);
         self
     }
 
@@ -1347,6 +1445,118 @@ fn password_lock_gate(parameters: &str, cfg: &GmConfig) -> GmResult {
     no_frames(
         "密码锁启用分支未实现：PasswordLockSystem=true 时 oracle 走 RM_PASSWORD 设/改/解密状态机与 IsPasswordLocked/IsCanGetBackItem 写面（SetPassWordCommand.cs / PasswordLockCommand.cs）；部署 Server.conf:382 PasswordLockSystem=0 ⇒ 现网不可达（卡 openmir2-gm-family-p-passwordlock forbidden）",
     )
+}
+
+// ---------------------------- 族 T · 会话开关/骑马（7，卡 `openmir2-gm-family-t-toggle-horse`）----------------------------
+//
+// oracle：四条 toggle（LetTrade/LetGuild/LetShout/BanGuildChat，体形全同：翻转布尔 +
+// `if (X) SysMsg(EnableXxxMsg, Green) else SysMsg(DisableXxxMsg, Green)`）+ 两条骑马
+// （TakeOffHorse/TakeOnHorse）+ `DisableFilterCommand`（全局 `SystemShare.FilterWord`）。
+// 7 条全是 `Execute(IPlayerActor)` **单参**（`GameCommand.Handle` case 1：不拆参数串）；
+// 生效名/权限三层链：`Command.conf [Command]`（LetShout=拒绝组队聊天 / LetTrade=交易 /
+// LetGuild=加入门派 / BanGuildChat=禁止行会信息 / TakeOnHorse=OnHorse / TakeOffHorse=OffHorse /
+// DisableFilter 不改名），perm 全 10（`GameCommands.cs:366-368/370/399-400/460` 构造缺省；
+// `[Permission]` 段只有 DisableFilter=10，与其缺省相同）。
+//
+// **常量名与状态语义相反**（oracle 原样）：`if (BanShout) → EnableShoutMsg`、
+// `if (BanGuildChat) → EnableGuildChat` —— 「拒聊位开」显示「允许群聊」。1:1 照抄不修。
+//
+// 消费点（`PlayObject.Operate` 交易门/加会门等）语义本卡**不改**（卡面 forbidden）：
+// 命令体只翻转会话镜像 + 回执。
+
+/// `LetTradeCommand.Execute`（`LetTradeCommand.cs:10-22`，现网 `@交易`）。
+fn let_trade(sess: &mut GmSession) -> GmResult {
+    sess.allow_deal = !sess.allow_deal;
+    green(if sess.allow_deal {
+        ENABLE_DEAL_MSG
+    } else {
+        DISABLE_DEAL_MSG
+    })
+}
+
+/// `LetGuildCommand.Execute`（`LetGuildCommand.cs:10-23`，现网 `@加入门派`）。
+fn let_guild(sess: &mut GmSession) -> GmResult {
+    sess.allow_guild = !sess.allow_guild;
+    green(if sess.allow_guild {
+        ENABLE_JOIN_GUILD
+    } else {
+        DISABLE_JOIN_GUILD
+    })
+}
+
+/// `LetShoutCommand.Execute`（`LetShoutCommand.cs:10-22`，现网 `@拒绝组队聊天`）。
+fn let_shout(sess: &mut GmSession) -> GmResult {
+    sess.ban_shout = !sess.ban_shout;
+    green(if sess.ban_shout {
+        ENABLE_SHOUT_MSG
+    } else {
+        DISABLE_SHOUT_MSG
+    })
+}
+
+/// `BanGuildChatCommand.Execute`（`BanGuildChatCommand.cs:10-22`，现网 `@禁止行会信息`）。
+fn ban_guild_chat(sess: &mut GmSession) -> GmResult {
+    sess.ban_guild_chat = !sess.ban_guild_chat;
+    green(if sess.ban_guild_chat {
+        ENABLE_GUILD_CHAT
+    } else {
+        DISABLE_GUILD_CHAT
+    })
+}
+
+/// `TakeOffHorseCommand.Execute`（`TakeOffHorseCommand.cs:10-19`，现网 `@OffHorse`）：
+/// `if (!OnHorse) return;`（静默零帧）⇒ `OnHorse = false; FeatureChanged();`。
+/// `FeatureChanged()`（`BaseObject.cs:1509-1512`）= `SendRefMsg(RM_FEATURECHANGED,
+/// GetFeatureEx(), GetFeatureToLong(), …)` ⇒ 视距广播 `SM_FEATURECHANGED(41)`；本仓命令体纯
+/// ⇒ 翻转镜像后置 [`GmSession::pending_feature_changed`]，宿主同一事件内广播。
+fn take_off_horse(sess: &mut GmSession) -> GmResult {
+    if !sess.on_horse {
+        return GmResult::empty();
+    }
+    sess.on_horse = false;
+    sess.pending_feature_changed = true;
+    GmResult::empty()
+}
+
+/// `TakeOnHorseCommand.Execute`（`TakeOnHorseCommand.cs:12-28`，现网 `@OnHorse`）：
+/// `if (OnHorse) return;`（已骑马静默）⇒ `HorseType == 0` 红字（现网唯一可达支：
+/// oracle `HorseType` 全仓无赋值点，见 `feature.rs` §4）⇒ 上马支 `OnHorse = true;
+/// FeatureChanged(); if (OnHorse) SystemShare.FunctionNPC.GotoLable(PlayerActor, "@OnHorse", false)`。
+/// 跳线是**宿主接缝**（部署 `FunctionNPC` 在场 ⇒ oracle 无 NRE；脚本面归脚本卡，本卡 forbidden
+/// 只登记）。
+fn take_on_horse(sess: &mut GmSession) -> GmResult {
+    if sess.on_horse {
+        return GmResult::empty();
+    }
+    if sess.horse_type == 0 {
+        return red(ON_HORSE_NEED_TAG);
+    }
+    sess.on_horse = true;
+    sess.pending_feature_changed = true;
+    no_frames(
+        "TakeOnHorse：FeatureChanged 外观帧已置 pending（宿主同一事件内广播 SM_FEATURECHANGED）；随后 FunctionNPC.GotoLable(PlayerActor,\"@OnHorse\",false) 脚本跳线未实现（卡 openmir2-gm-family-t-toggle-horse forbidden：脚本面归脚本卡；部署 FunctionNPC 在场 ⇒ oracle 该调用无 NRE）",
+    )
+}
+
+/// `DisableFilterCommand.Execute`（`DisableFilterCommand.cs:12-22`，现网 `@DisableFilter`）：
+/// `SystemShare.FilterWord = !SystemShare.FilterWord`——**全局位**（进程单例，跨会话同一份），
+/// 不是 `PlayObject` 字段。部署启动 true（`GameApp.cs:70`）⇒ 现网第一条回「已禁止文字过滤。」。
+/// 全局单元由宿主注入（[`GmWorld::filter_word`]）；未注入 ⇒ 登记零帧（不伪造翻转）。
+fn disable_filter(world: &GmWorld<'_>) -> GmResult {
+    match world.filter_word {
+        Some(cell) => {
+            let v = !cell.get();
+            cell.set(v);
+            green(if v {
+                DISABLE_FILTER_ENABLED
+            } else {
+                DISABLE_FILTER_DISABLED
+            })
+        }
+        None => no_frames(
+            "DisableFilter：SystemShare.FilterWord 全局位未注入（构造处未接全局单元）⇒ 零帧登记（不伪造翻转）",
+        ),
+    }
 }
 
 // ---------------------------- 宿主未接 / oracle 注释的登记文案 ----------------------------
@@ -2469,6 +2679,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_kick = None;
     sess.pending_use_item = None;
     sess.pending_clear_bag = None;
+    sess.pending_feature_changed = false;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -2646,6 +2857,15 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         }
         // ---- 族 P · 密码锁门（7，卡 `openmir2-gm-family-p-passwordlock`）----
         Imp::PasswordLockGate => password_lock_gate(parameters, cfg),
+
+        // ---- 族 T · 会话开关/骑马（7，卡 `openmir2-gm-family-t-toggle-horse`）----
+        Imp::LetTrade => let_trade(sess),
+        Imp::LetGuild => let_guild(sess),
+        Imp::LetShout => let_shout(sess),
+        Imp::BanGuildChat => ban_guild_chat(sess),
+        Imp::TakeOffHorse => take_off_horse(sess),
+        Imp::TakeOnHorse => take_on_horse(sess),
+        Imp::DisableFilter => disable_filter(world),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -3029,7 +3249,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "DisableFilter",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::DisableFilter,
     },
     CommandDef {
         name: "dsfsdt546",
@@ -3267,13 +3487,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "OffHorse",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::TakeOffHorse,
     },
     CommandDef {
         name: "OnHorse",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::TakeOnHorse,
     },
     CommandDef {
         name: "PasswordLock",
@@ -3571,7 +3791,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "交易",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::LetTrade,
     },
     CommandDef {
         name: "传送",
@@ -3643,7 +3863,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "加入门派",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::LetGuild,
     },
     CommandDef {
         name: "加钱",
@@ -3721,7 +3941,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "拒绝组队聊天",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::LetShout,
     },
     CommandDef {
         name: "探测",
@@ -3829,7 +4049,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "禁止行会信息",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::BanGuildChat,
     },
     CommandDef {
         name: "禁言",
@@ -4902,6 +5122,7 @@ mod tests {
             speaker: "boss",
             speaker_id: 7,
             now_ms: 0,
+            filter_word: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
         let mut sess = GmSession {
@@ -5203,9 +5424,10 @@ mod tests {
     /// 卡 `openmir2-gm-impl-startquest` 的 `StartQuest`、卡 `openmir2-gm-impl-kick` 的 `VV踢人`、
     /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`、
     /// 卡 `openmir2-gm-impl-clearbag` 的 `ClearBagItem`）
-    /// 以及批次 5A（卡 `openmir2-gm-batch-5a-guild-impl` 的 6 条行会族）
-    /// 与族 P（卡 `openmir2-gm-family-p-passwordlock` 的 7 条密码锁门）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 67），且命令名 → 实现标签固定。
+    /// 以及批次 5A（卡 `openmir2-gm-batch-5a-guild-impl` 的 6 条行会族）、
+    /// 族 P（卡 `openmir2-gm-family-p-passwordlock` 的 7 条密码锁门）与
+    /// 族 T（卡 `openmir2-gm-family-t-toggle-horse` 的 7 条会话开关/骑马）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 60），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -5213,16 +5435,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            118,
-            "118 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）"
+            125,
+            "125 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            67,
-            "185 - 118"
+            60,
+            "185 - 125"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -7710,6 +7932,263 @@ mod tests {
                 GmSession::default(),
                 "{name} 被权限门挡下后零状态变化"
             );
+        }
+    }
+
+    // ---------------------------- 族 T · 会话开关/骑马（7，卡 `openmir2-gm-family-t-toggle-horse`）----------------------------
+
+    /// 族 T 的 7 条现网名全部在 `COMMANDS` 表且 **imp = 族 T 对应变体**、**perm 10**、
+    /// **params 1**（oracle `Execute(IPlayerActor)` 单参 ⇒ `GameCommand.Handle` case 1；
+    /// perm = `GameCommands.cs:366-368/370/399-400/460` 构造缺省，`[Permission]` 段只有
+    /// `DisableFilter=10` 与缺省同值）。牙：任一条回退 `Unimplemented` / 改名 / 改权限 ⇒ 红。
+    #[test]
+    fn t_family_table_entries_are_wired() {
+        for (name, imp) in [
+            ("交易", Imp::LetTrade),
+            ("加入门派", Imp::LetGuild),
+            ("拒绝组队聊天", Imp::LetShout),
+            ("禁止行会信息", Imp::BanGuildChat),
+            ("OffHorse", Imp::TakeOffHorse),
+            ("OnHorse", Imp::TakeOnHorse),
+            ("DisableFilter", Imp::DisableFilter),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, 1, "{name} 的 Execute 形参个数（单参 case 1）");
+        }
+        // 出厂英文名不注册（`CommandMaps` 键 = 配置覆盖后的现网名；`DisableFilter` 不改名）。
+        for factory in [
+            "LetTrade",
+            "LetGuild",
+            "LetShout",
+            "BanGuildChat",
+            "TakeOnHorse",
+            "TakeOffHorse",
+        ] {
+            assert!(
+                find(factory).is_none(),
+                "{factory} 出厂名不该命中（conf 覆盖后只认现网名）"
+            );
+        }
+    }
+
+    /// **A1（卡 `openmir2-gm-family-t-toggle-horse`）**：四条 toggle 从 ctor 缺省出发翻两次
+    /// **回到初值**，绿字逐字节（`CommandHelp.cs:114-121`）：
+    /// `@交易` [禁止交易]→[允许交易]（ctor AllowDeal=true）；`@加入门派` [允许加入行会]→
+    /// [禁止加入行会]（ctor false）；`@拒绝组队聊天` [禁止群聊]→[允许群聊]（ctor BanShout=true，
+    /// **常量名与状态语义相反**照抄）；`@禁止行会信息` [禁止行会聊天]→[允许行会聊天]（ctor true）。
+    /// 命中即零帧、无 note。变异红：删翻转 / 绿字二选一条件写反 ⇒ 序列断言红。
+    #[test]
+    fn t_family_toggles_round_trip_with_byte_exact_texts() {
+        // (命令, 字段 getter, 第一翻预期, 第二翻预期)
+        for (name, get, first, second) in [
+            (
+                "@交易",
+                (|s: &GmSession| s.allow_deal) as fn(&GmSession) -> bool,
+                DISABLE_DEAL_MSG,
+                ENABLE_DEAL_MSG,
+            ),
+            (
+                "@加入门派",
+                (|s: &GmSession| s.allow_guild) as fn(&GmSession) -> bool,
+                ENABLE_JOIN_GUILD,
+                DISABLE_JOIN_GUILD,
+            ),
+            (
+                "@拒绝组队聊天",
+                (|s: &GmSession| s.ban_shout) as fn(&GmSession) -> bool,
+                DISABLE_SHOUT_MSG,
+                ENABLE_SHOUT_MSG,
+            ),
+            (
+                "@禁止行会信息",
+                (|s: &GmSession| s.ban_guild_chat) as fn(&GmSession) -> bool,
+                DISABLE_GUILD_CHAT,
+                ENABLE_GUILD_CHAT,
+            ),
+        ] {
+            // 单会话连敲两次（oracle `PlayObject` 同生命周期字段；`run_gm` 每次新建会话 ⇒ 用 `exec`）。
+            let mut sess = GmSession {
+                permission: 10,
+                ..GmSession::default()
+            };
+            let initial = get(&sess);
+            let r1 = exec(&mut sess, &GmConfig::default(), name);
+            assert!(r1.found && r1.parsed, "{name} 必须命中命令体");
+            assert_eq!(texts(&r1), vec![(GmColor::Green, first)], "{name} 第一翻");
+            assert!(r1.frames.is_empty() && r1.log_note.is_none(), "{name}");
+            assert_eq!(get(&sess), !initial, "{name} 第一翻应翻转");
+            let r2 = exec(&mut sess, &GmConfig::default(), name);
+            assert_eq!(texts(&r2), vec![(GmColor::Green, second)], "{name} 第二翻");
+            // A1：两次翻回初值。
+            assert_eq!(get(&sess), initial, "{name} 翻两次应回初值");
+            assert!(r2.frames.is_empty() && r2.log_note.is_none(), "{name}");
+        }
+    }
+
+    /// 带参不影响 toggle（`Execute(IPlayerActor)` 单参 ⇒ `GameCommand.Handle` case 1 根本
+    /// 不拆参数串）：`@交易 任意参数` 与 `@交易` 同答、同状态面。
+    #[test]
+    fn t_family_toggles_ignore_parameters() {
+        for line in ["@交易 abc", "@交易 ", "@加入门派 x y"] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.parsed, "{line}");
+            assert_eq!(r.msgs.len(), 1, "{line} 恰一条绿字");
+            assert_eq!(r.msgs[0].color, GmColor::Green, "{line}");
+        }
+    }
+
+    /// **A2（卡 `openmir2-gm-family-t-toggle-horse`）**：`@OffHorse`——未骑马（ctor）
+    /// **静默零帧**、会话零变化（`TakeOffHorseCommand.cs:12-14` 的 `if (!OnHorse) return;`）；
+    /// 构造骑马态 ⇒ `OnHorse=false` + **外观帧标记**（`pending_feature_changed`，宿主广播
+    /// `SM_FEATURECHANGED(41)`）+ 零 SysMsg（oracle 下马支没有文本）；再敲一次回静默。
+    /// 变异红：丢 `pending_feature_changed` 置位 ⇒ 本用例红。
+    #[test]
+    fn t_family_off_horse_silent_when_unmounted_and_frames_when_mounted() {
+        // 未骑马（ctor）：静默零帧零副作用。
+        let (r, sess) = run_gm("@OffHorse");
+        assert!(r.found && r.parsed);
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "未骑马应静默");
+        assert!(r.log_note.is_none());
+        assert_eq!(
+            sess,
+            GmSession {
+                permission: 10,
+                ..GmSession::default()
+            },
+            "未骑马零状态变化"
+        );
+        // 骑马态：翻转 + 外观帧标记。
+        let mut sess = GmSession {
+            permission: 10,
+            on_horse: true,
+            ..GmSession::default()
+        };
+        let r = exec(&mut sess, &GmConfig::default(), "@OffHorse");
+        assert!(r.msgs.is_empty(), "下马支 oracle 无文本");
+        assert!(!sess.on_horse, "OnHorse 应翻为 false");
+        assert!(
+            sess.pending_feature_changed,
+            "FeatureChanged 外观帧必须登记 pending（缺失 ⇒ 宿主不广播 41）"
+        );
+        assert!(r.found && r.parsed);
+        // 已下马：再敲回静默、无重复标记。
+        let r = exec(&mut sess, &GmConfig::default(), "@OffHorse");
+        assert!(r.msgs.is_empty());
+        assert!(!sess.pending_feature_changed, "第二次已静默，不重置标记");
+    }
+
+    /// **A2**：`@OnHorse` 三支——① 已骑马（构造）静默零帧；② `HorseType=0`（现网恒值，
+    /// oracle 全仓无赋值点）红字「骑马必须先戴上马牌!!!」逐字节；③ 构造 `HorseType≠0`
+    /// 上马：`OnHorse=true` + 外观帧标记 + `@OnHorse` 脚本跳线以 `log_note` 登记接缝
+    /// （卡面 forbidden：脚本面归脚本卡）。变异红：丢 pending 置位 / 删红字门 ⇒ 本用例红。
+    #[test]
+    fn t_family_on_horse_three_branches() {
+        // ① 已骑马：静默（`if (OnHorse) return;`）。
+        let mut sess = GmSession {
+            permission: 10,
+            on_horse: true,
+            ..GmSession::default()
+        };
+        let r = exec(&mut sess, &GmConfig::default(), "@OnHorse");
+        assert!(r.msgs.is_empty() && r.log_note.is_none(), "已骑马应静默");
+        assert!(!sess.pending_feature_changed, "已骑马不登记帧");
+        // ② HorseType=0（ctor）：红字唯一可达支。
+        let (r, sess) = run_gm("@OnHorse");
+        assert_eq!(texts(&r), vec![(GmColor::Red, ON_HORSE_NEED_TAG)]);
+        assert!(
+            !sess.on_horse && !sess.pending_feature_changed,
+            "红字支零副作用"
+        );
+        // ③ 上马支（构造 HorseType≠0；现网不可达，支结构 1:1）。
+        let mut sess = GmSession {
+            permission: 10,
+            horse_type: 5,
+            ..GmSession::default()
+        };
+        let r = exec(&mut sess, &GmConfig::default(), "@OnHorse");
+        assert!(r.msgs.is_empty(), "上马支 oracle 无 SysMsg");
+        assert!(sess.on_horse, "应翻为 true");
+        assert!(sess.pending_feature_changed, "外观帧必须登记 pending");
+        let note = r.log_note.expect("上马支必须登记 @OnHorse 跳线接缝");
+        assert!(
+            note.contains("@OnHorse") && note.contains("GotoLable"),
+            "{note}"
+        );
+        // 上马后再敲：已骑马静默、无重复标记。
+        let r = exec(&mut sess, &GmConfig::default(), "@OnHorse");
+        assert!(r.msgs.is_empty() && r.log_note.is_none());
+        assert!(!sess.pending_feature_changed, "第二次已静默");
+    }
+
+    /// **A3（卡 `openmir2-gm-family-t-toggle-horse`）**：`DisableFilter` 翻的是**全局位**
+    /// （`SystemShare.FilterWord`，进程单例）——注入共享 `Cell`：跨**两个会话**同一份
+    /// （部署启动 true ⇒ 第一条回「已禁止文字过滤。」）；翻两次回初值；未注入（退化形态）
+    /// ⇒ `log_note` 登记零帧、Cell 不可达。变异红：删全局翻转（只回文本不写位）⇒ 本用例红。
+    #[test]
+    fn t_family_disable_filter_flips_shared_global_bit() {
+        let filter_word = std::cell::Cell::new(true); // 部署启动值（GameApp.cs:70）
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld::new(&guilds).with_filter_word(&filter_word);
+        let mut sess_a = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        // 会话 A 第一敲：全局 true→false ⇒ 「已禁止文字过滤。」。
+        let r = execute(&mut sess_a, &GmConfig::default(), &world, "@DisableFilter");
+        assert_eq!(texts(&r), vec![(GmColor::Green, DISABLE_FILTER_DISABLED)]);
+        assert!(!filter_word.get(), "全局位应翻为 false");
+        // **跨会话同一份**：会话 B 看到的是 A 翻过的全局（oracle SystemShare 单例语义）。
+        let mut sess_b = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let r = execute(&mut sess_b, &GmConfig::default(), &world, "@DisableFilter");
+        assert_eq!(texts(&r), vec![(GmColor::Green, DISABLE_FILTER_ENABLED)]);
+        assert!(filter_word.get(), "第二敲应翻回 true");
+        // A1 口径：翻两次回初值；会话态零变化（命令不写任何 PlayObject 字段）。
+        assert_eq!(sess_a, sess_b, "命令体不写会话状态");
+        assert_eq!(
+            sess_a,
+            GmSession {
+                permission: 10,
+                ..GmSession::default()
+            }
+        );
+        // 退化形态：未注入全局单元（如脚本 GMEXECUTE 桥）⇒ 登记零帧，不伪造翻转。
+        let bare = GmWorld::new(&guilds);
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let r = execute(&mut sess, &GmConfig::default(), &bare, "@DisableFilter");
+        assert!(r.msgs.is_empty(), "未注入 ⇒ 零帧登记");
+        let note = r.log_note.expect("未注入必须登记，不许静默");
+        assert!(note.contains("FilterWord"), "{note}");
+    }
+
+    /// 族 T 权限门（`GameCommand.cs:37-40`）：`Permission < 10` ⇒ 恰一条红字 `权限不够!!!`，
+    /// 会话零变化——7 条全 perm 10。
+    #[test]
+    fn t_family_permission_gate_blocks_body() {
+        for name in [
+            "交易",
+            "加入门派",
+            "拒绝组队聊天",
+            "禁止行会信息",
+            "OffHorse",
+            "OnHorse",
+            "DisableFilter",
+        ] {
+            let (r, sess) = run(&format!("@{name}"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, PERMISSION_TOO_LOW)],
+                "{name}"
+            );
+            assert!(r.frames.is_empty(), "{name}");
+            assert_eq!(sess, GmSession::default(), "{name} 零状态变化");
         }
     }
 }

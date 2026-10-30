@@ -1492,6 +1492,10 @@ struct ChatHost<'a> {
     colors: &'a MsgColors,
     /// `@` 命令体要读的配置（`SystemShare.Config` 半边；部署 `PasswordLockHumanLogin=0`）。
     gm_cfg: gmcmd::GmConfig,
+    /// **`SystemShare.FilterWord` 全局位**（部署启动 true，`GameApp.cs:70`）的宿主单元；
+    /// 经 `GmWorld.filter_word` 注入 `@DisableFilter` 命令体（卡
+    /// `openmir2-gm-family-t-toggle-horse`）。进程级单例 ⇒ 由 `sim_loop` 持有。
+    filter_word: &'a std::cell::Cell<bool>,
     /// `[Setup] CanShoutMsgLevel`。
     can_shout_level: i32,
     /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
@@ -1821,6 +1825,7 @@ fn handle_gm_command(
         speaker: &speaker.chr_name,
         speaker_id: speaker.actor_id,
         now_ms: host.world.clock_ms,
+        filter_word: Some(host.filter_word),
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -2090,6 +2095,60 @@ fn apply_pending_level_up(
         let client_layout = game_svr::smframe::client_layout_enabled();
         send_levelup_frames(sg, entry, gates, client_layout);
     }
+    true
+}
+
+/// **族 T（卡 `openmir2-gm-family-t-toggle-horse`）**：把 `@OnHorse`/`@OffHorse` 的
+/// `FeatureChanged()` 外观帧（[`gmcmd::GmSession::pending_feature_changed`]）落地——
+/// 视距广播 `SM_FEATURECHANGED(41)`（`BaseObject.cs:1509-1512`：
+/// `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), 0, 0, "")`，含自己）。
+///
+/// 载荷现算：`GetFeatureToLong()`（= `PlayObject.GetFeature(null)`，`PlayObject.cs:3393`）
+/// **不含骑马位** ⇒ 翻转前后同值，按当前装备集现算（[`game_svr::ability::equipped_feature`]，
+/// 与换装重算同一取值口径）；`GetFeatureEx()`（`CharacterObject.cs:146-149`）=
+/// `MakeWord(OnHorse?HorseType:0, DressEffType)`，按**翻转后**的会话态现算；
+/// `DressEffType` oracle 全仓无赋值点 ⇒ 0（与换装路径同口径，见 [`broadcast_feature_changed`] 调用点）。
+///
+/// 标记一次性：先取走再广播。返回是否真落了帧（诊断用）。
+#[allow(clippy::too_many_arguments)]
+fn apply_pending_gm_feature_changed(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    ref_msg_range: i32,
+) -> bool {
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        return false;
+    };
+    if !sg.gm.pending_feature_changed {
+        return false;
+    }
+    sg.gm.pending_feature_changed = false;
+    let use_inst: Vec<Option<game_svr::ability::ItemInstance>> = sg
+        .use_items
+        .iter()
+        .map(|c| {
+            c.as_ref().map(|it| game_svr::ability::ItemInstance {
+                index: it.index,
+                dura: it.dura,
+            })
+        })
+        .collect();
+    let feature =
+        game_svr::ability::equipped_feature(catalog, &use_inst, sg.equip.gender, sg.equip.hair);
+    let feature_ex = game_svr::feature::feature_ex(sg.gm.on_horse, sg.gm.horse_type, 0);
+    broadcast_feature_changed(
+        world,
+        online,
+        gates,
+        sg.actor_id,
+        feature,
+        feature_ex,
+        ref_msg_range,
+    );
     true
 }
 
@@ -7730,6 +7789,9 @@ impl ScriptGmEnv<'_> {
                 speaker: chr_name,
                 speaker_id: actor_id,
                 now_ms: world.clock_ms,
+                // 脚本 GMEXECUTE 桥不持全局单元 ⇒ `@DisableFilter` 走 `log_note` 登记零帧
+                // （命令体退化形态有答案；脚本面本卡 forbidden）。
+                filter_word: None,
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -22750,6 +22812,11 @@ fn sim_loop(
     };
     let mut sell_off_sessions: std::collections::HashMap<String, game_svr::selloff::SellOffState> =
         std::collections::HashMap::new();
+    // **`SystemShare.FilterWord` 全局位**（`SystemShare.cs:157` 声明、部署启动 `GameApp.cs:70`
+    // 置 true；`@DisableFilter` 翻转）：进程级单例 ⇒ 进程生命周期一份 `Cell`，经
+    // `ChatHost.filter_word` → `GmWorld.filter_word` 注入命令体（卡
+    // `openmir2-gm-family-t-toggle-horse`；跨会话同一份）。
+    let gm_filter_word = std::cell::Cell::new(true);
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
     let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
@@ -22869,6 +22936,7 @@ fn sim_loop(
                             },
                             can_shout_level: enter_cfg.can_shout_msg_level,
                             registry: registry.as_ref(),
+                            filter_word: &gm_filter_word,
                         };
                         // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
                         // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
@@ -22940,6 +23008,18 @@ fn sim_loop(
                                 }
                             }
                         }
+                        // **族 T（卡 `openmir2-gm-family-t-toggle-horse`）**：`@OnHorse`/
+                        // `@OffHorse` 的 `FeatureChanged()` 视距广播 `SM_FEATURECHANGED(41)`
+                        // 在同一事件内落地（oracle `SendRefMsg` 立即 ⇒ 先于延后的 SysMsg）。
+                        apply_pending_gm_feature_changed(
+                            &mut ground_sessions,
+                            &chr_name,
+                            &enter_cfg.catalog,
+                            &world,
+                            &online,
+                            &gates,
+                            enter_cfg.shop.send_ref_msg_range,
+                        );
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
                         // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
                         if !gm_deferred.is_empty() || !gm_frames.is_empty() {
@@ -24722,6 +24802,9 @@ fn sim_loop(
                                                                 speaker: &head.chr_name,
                                                                 speaker_id: id,
                                                                 now_ms: world.clock_ms,
+                                                                // 与 CM_SAY 支同一份全局单元
+                                                                // （`SystemShare.FilterWord` 进程单例）。
+                                                                filter_word: Some(&gm_filter_word),
                                                             };
                                                             if let Some(sg) = ground_sessions
                                                                 .get_mut(&head.chr_name)
@@ -39944,6 +40027,8 @@ break
         party_cfg: mir2_world::PartyConfig,
         strings: crate::strings::StringConf,
         can_shout_level: i32,
+        /// `SystemShare.FilterWord` 全局位（部署启动 true；`@DisableFilter` 翻转）。
+        filter_word: std::cell::Cell<bool>,
     }
 
     impl TestChatCtx {
@@ -39959,6 +40044,7 @@ break
                 party_cfg: mir2_world::PartyConfig::default(),
                 strings: crate::strings::StringConf::defaults(),
                 can_shout_level: 0,
+                filter_word: std::cell::Cell::new(true),
             }
         }
 
@@ -39981,6 +40067,7 @@ break
                 gm_cfg: gmcmd::GmConfig::default(),
                 can_shout_level: self.can_shout_level,
                 registry: None,
+                filter_word: &self.filter_word,
             }
         }
     }
@@ -40081,6 +40168,17 @@ break
                     let _ = tx.send(SimToGate::SendFrame { socket: 901, body });
                 }
             }
+            // 与生产 `sim_loop` 的 `CM_SAY` 支同一步（卡 `openmir2-gm-family-t-toggle-horse`）：
+            // `@OnHorse`/`@OffHorse` 的 `FeatureChanged()` 视距广播 `SM_FEATURECHANGED(41)`。
+            apply_pending_gm_feature_changed(
+                &mut self.sessions,
+                "aaa",
+                &self.catalog,
+                &self.world,
+                &self.online,
+                &self.gates,
+                chat::send_ref_msg_range(),
+            );
             if !deferred.is_empty() || !gm_frames.is_empty() {
                 let speaker = self
                     .online
@@ -40128,6 +40226,89 @@ break
         let param = u16::from_le_bytes([body[6], body[7]]);
         let text = gbk_decode(&mir2_protocol::edcode::decode(&body[12..]));
         (param, text)
+    }
+
+    /// **族 T（卡 `openmir2-gm-family-t-toggle-horse`）宿主落地牙**：`@OnHorse`/`@OffHorse`
+    /// 的 `FeatureChanged()` 经生产入口（`handle_say` ⇒ [`apply_pending_gm_feature_changed`]
+    /// ⇒ 视距广播）出**线上帧** `SM_FEATURECHANGED(41)`：`Recog`=说话者、
+    /// `Param=LoWord(feature)`、`Tag=HiWord(feature)`、`Series=GetFeatureEx()`
+    /// （按**翻转后**的 `on_horse/horse_type` 现算；`DressEffType` oracle 无赋值点 ⇒ 0）。
+    /// 变异红：删 CM_SAY 支 / `GmRig::say` 的 `apply_pending_gm_feature_changed` 调用，
+    /// 或命令体丢 `pending_feature_changed` 置位 ⇒ 本用例红。
+    #[test]
+    fn gm_horse_toggle_broadcasts_sm_featurechanged_with_flipped_feature_ex() {
+        let mut rig = GmRig::new();
+        {
+            let sg = rig.sessions.get_mut("aaa").expect("GmRig 恒有 aaa");
+            sg.equip.gender = 1;
+            sg.equip.hair = 2;
+            sg.gm.horse_type = 5; // 上马支构造非 0（现网 HorseType 无赋值点恒 0 ⇒ 生产不可达）
+        }
+        // ① 上马支：恰一条 41，feature_ex = MakeWord(5, 0) = 5（翻转后）。
+        let bodies = rig.say_gm("@OnHorse");
+        assert_eq!(bodies.len(), 1, "上马支恰发一条帧（夹具单在线者）");
+        let b = &bodies[0];
+        assert_eq!(
+            u16::from_le_bytes([b[4], b[5]]),
+            mir2_protocol::messages::SM_FEATURECHANGED,
+            "Ident = SM_FEATURECHANGED(41)"
+        );
+        assert_eq!(
+            i32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            rig.actor,
+            "Recog = 说话者 ActorId"
+        );
+        let feature = game_svr::feature::human_feature(None, None, 1, 2);
+        assert_eq!(
+            u16::from_le_bytes([b[6], b[7]]),
+            game_svr::feature::lo_word(feature),
+            "Param = LoWord(GetFeatureToLong)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([b[8], b[9]]),
+            game_svr::feature::hi_word(feature),
+            "Tag = HiWord(GetFeatureToLong)"
+        );
+        assert_eq!(
+            u16::from_le_bytes([b[10], b[11]]),
+            5,
+            "Series = GetFeatureEx = MakeWord(HorseType=5, 0)（翻转后现算）"
+        );
+        assert!(rig.sessions["aaa"].gm.on_horse, "会话态已翻转");
+        assert!(
+            !rig.sessions["aaa"].gm.pending_feature_changed,
+            "标记一次性：落地即清"
+        );
+        // ② 下马：series 回 0（feature 不含骑马位 ⇒ Param/Tag 不变）。
+        let bodies = rig.say_gm("@OffHorse");
+        assert_eq!(bodies.len(), 1);
+        let b = &bodies[0];
+        assert_eq!(
+            u16::from_le_bytes([b[4], b[5]]),
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+        assert_eq!(
+            u16::from_le_bytes([b[10], b[11]]),
+            0,
+            "下马后 GetFeatureEx=0"
+        );
+        assert!(!rig.sessions["aaa"].gm.on_horse);
+        // ③ 未骑马再敲：静默零帧（`if (!OnHorse) return;`）。
+        let bodies = rig.say_gm("@OffHorse");
+        assert!(bodies.is_empty(), "未骑马静默");
+        // ④ HorseType=0（部署恒值）：`@OnHorse` 红字、零 41。
+        {
+            let sg = rig.sessions.get_mut("aaa").expect("aaa");
+            sg.gm.permission = 10;
+            sg.gm.horse_type = 0;
+        }
+        let bodies = rig.say_gm("@OnHorse");
+        assert_eq!(bodies.len(), 1, "只有红字 SysMsg");
+        assert_eq!(
+            u16::from_le_bytes([bodies[0][4], bodies[0][5]]),
+            mir2_protocol::messages::SM_SYSMESSAGE,
+            "红字支零外观帧"
+        );
     }
 
     /// 卡 `openmir2-gm-target-state-write`：`@Level0` 逐行（`ChangeLevelCommand.cs:21-24`）。
