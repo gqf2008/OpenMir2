@@ -212,9 +212,22 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   正在遍历的同一张表）、非自目标快照等价、越界异常停止，两路零 SysMsg）/
   清除仓库密码（空名/? 两条红/离线精确静默/在线清三字段+双绿字；规范名键）。
   宿主收口 `apply_pending_gm_target_ops`（pending_* 同事件落地）。
-- **现存 `Imp::Unimplemented` = 74 − 47 = 27**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
-  thirty_command_bodies` 的 158 已接 / 27 未接断言；改坏任一计数 ⇒ 该测试红）。
-- 剩余缺口族：F3 / M6 / C5 / W4（§4.3 分族索引不变；X2 全 18 条已结）。
+- **族 F 3 条已落地**：卡 `openmir2-gm-family-f-script-flags`（worker-85，tier=R）——
+  `setflag`/`setopen`/`setunit` 写**调用者**的 `QuestFlag`/`QuestUnitOpen`/`QuestUnit`
+  位阵（怪癖照抄：`PlayerActor.SetQuest*Status`，**不是** targetObject）+ 对**目标**回绿字
+  `{ChrName}: [n] = ON/OFF`（按**写后读回**判定）；target 离线/空名/实参 <3 ⇒ null 调
+  `SysMsg` 的 NRE / 下标越界被 `PlayObject.Chat.cs` 外层 catch 吞 ⇒ 零帧零写。运行时真身 =
+  `saves.record.data.quest_*`（oracle 会话内 `CharacterData`，**不落库**，db-srv 门
+  `quest_no_persist` 已固化）⇒ 无 DB 列/不新增存储列、未动 `crates/world`；宿主
+  `apply_pending_gm_target_ops` 同一事件内把调用者位阵整组落回会话记录，并把
+  `SM_SYSMESSAGE(100)`（Green，Recog=目标 ActorId）投**目标** socket。`showflag` 的
+  `target_quest_flag_status` 由恒零接缝换成真位阵读 ⇒ **ON 支可达**（Q 条目的接缝说明
+  到此被取代）。脚本桥 `GmWorld.quests=None` ⇒ 退化零帧 + `log_note`（部署脚本三条均
+  unreachable）。牙：A1 写调用者/目标位不混入 + A2 离线/缺参零帧零写 + A3 open/unit 同构 +
+  A4 写后读回 + 宿主级 saves 只落调用者且目标 socket 恰一条 100；变异 6 发全红。
+- **现存 `Imp::Unimplemented` = 74 − 50 = 24**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
+  thirty_command_bodies` 的 161 已接 / 24 未接断言；改坏任一计数 ⇒ 该测试红）。
+- 剩余缺口族：M6 / C5 / W4（§4.3 分族索引不变；X2 全 18 条、F 全 3 条已结）。
 
 ## 8. SystemShare null 字段扫盲（卡 `openmir2-gm-systemshare-null-sweep`，tier=R）
 
