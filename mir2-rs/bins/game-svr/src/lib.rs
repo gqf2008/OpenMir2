@@ -1108,6 +1108,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     show_rank_level_name,
                     server_index: cfg.server_index,
                     lock_human_login: cfg.lock_human_login,
+                    spirit_mutiny_time: cfg.spirit_mutiny_time,
                     guild_castle_cfg,
                     catalog: item_catalog,
                     world_item_catalog: item_table,
@@ -1496,6 +1497,10 @@ struct ChatHost<'a> {
     /// 经 `GmWorld.filter_word` 注入 `@DisableFilter` 命令体（卡
     /// `openmir2-gm-family-t-toggle-horse`）。进程级单例 ⇒ 由 `sim_loop` 持有。
     filter_word: &'a std::cell::Cell<bool>,
+    /// **族 X2**：全局任务目标四元（`@Mission` 写）与 `SpiritMutinyTick`（`@祈祷生效`/
+    /// `@停止叛变` 写）——进程级单例 ⇒ 由 `sim_loop` 持有。
+    mission: &'a std::cell::RefCell<gmcmd::GmMissionState>,
+    spirit_mutiny_tick: &'a std::cell::Cell<i64>,
     /// `[Setup] CanShoutMsgLevel`。
     can_shout_level: i32,
     /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
@@ -1826,6 +1831,8 @@ fn handle_gm_command(
         speaker_id: speaker.actor_id,
         now_ms: host.world.clock_ms,
         filter_word: Some(host.filter_word),
+        mission: Some(host.mission),
+        spirit_mutiny_tick: Some(host.spirit_mutiny_tick),
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -7792,6 +7799,8 @@ impl ScriptGmEnv<'_> {
                 // 脚本 GMEXECUTE 桥不持全局单元 ⇒ `@DisableFilter` 走 `log_note` 登记零帧
                 // （命令体退化形态有答案；脚本面本卡 forbidden）。
                 filter_word: None,
+                mission: None,
+                spirit_mutiny_tick: None,
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -19467,6 +19476,8 @@ struct EnterConfig {
     /// `[Setup] PasswordLockHumanLogin`（`Config.LockHumanLogin`，`ServerConf.cs:574`；
     /// `GameSvrConf.cs:1493` 缺省 false、部署 = 0）：`@LockLogin` 的第一道门。
     lock_human_login: bool,
+    /// `[Setup] SpiritMutinyTime`（部署 600000；`@祈祷生效` 的缺省持续时长，review M3）。
+    spirit_mutiny_time: i32,
     /// **G2**：同一份 `Server.conf` 的行会/城堡配置（`mir2_data::guild_castle::GuildCastleConfig::load`）。
     ///
     /// G2 只用其中的行会键映射成 `mir2_world::GuildConfig`（简报 §8）；G3 直接复用它建 `GuildStore`
@@ -19671,6 +19682,7 @@ impl EnterConfig {
             show_rank_level_name: false,
             server_index: 0,
             lock_human_login: false,
+            spirit_mutiny_time: 600_000,
             guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig::default(),
             guild_store: None,
             guild_sections: mir2_data::guild::GuildFileSections::oracle_defaults(),
@@ -22817,6 +22829,11 @@ fn sim_loop(
     // `ChatHost.filter_word` → `GmWorld.filter_word` 注入命令体（卡
     // `openmir2-gm-family-t-toggle-horse`；跨会话同一份）。
     let gm_filter_word = std::cell::Cell::new(true);
+    // **族 X2**：`SystemShare.BoMission/MissionMap/MissionX/MissionY`（@Mission 写）与
+    // `SystemShare.SpiritMutinyTick`（@祈祷生效/@停止叛变 写）——进程级单例，同 filter_word
+    // 经 ChatHost → GmWorld 注入（消费点 MobPlace 族/宝宝叛变逻辑落地时读同一份）。
+    let gm_mission = std::cell::RefCell::new(gmcmd::GmMissionState::default());
+    let gm_spirit_mutiny_tick = std::cell::Cell::new(0i64);
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
     let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
@@ -22932,11 +22949,14 @@ fn sim_loop(
                             colors: &colors,
                             gm_cfg: gmcmd::GmConfig {
                                 lock_human_login: enter_cfg.lock_human_login,
+                                spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                                 ..gmcmd::GmConfig::default()
                             },
                             can_shout_level: enter_cfg.can_shout_msg_level,
                             registry: registry.as_ref(),
                             filter_word: &gm_filter_word,
+                            mission: &gm_mission,
+                            spirit_mutiny_tick: &gm_spirit_mutiny_tick,
                         };
                         // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
                         // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
@@ -23020,6 +23040,32 @@ fn sim_loop(
                             &gates,
                             enter_cfg.shop.send_ref_msg_range,
                         );
+                        // **族 X2（卡 `openmir2-gm-family-x2-target-control`，review F3）**：
+                        // `@Reconnection` 的 `RM_RECONNECTION` 落帧支（`PlayObject.Message.cs:
+                        // 1988-1991`：**先 `BoReconnection = true` 再** `SM_RECONNECT`）走既有
+                        // `ReconnectPending` → `drain_reconnects` **唯一排水点**（T-202）——不新增
+                        // 第二条直发路径：命令体只装 `pending_reconnect`，这里推入队列，循环尾
+                        // drain 置位并发帧（与 oracle 同序）。
+                        // **M2**：仅 @ 命令后排水——非 @ 聊天不得把脚本桥留下的陈旧 pending 顺带
+                        // 发出（脚本桥不排水 ⇒ 陈旧值在下一条 @ 命令 execute() 入口被清空）。
+                        if tail
+                            .as_deref()
+                            .is_some_and(|t| t.trim_start().starts_with('@'))
+                        {
+                            if let Some(addr) = ground_sessions
+                                .get_mut(&chr_name)
+                                .and_then(|sg| sg.gm.pending_reconnect.take())
+                            {
+                                if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+                                    reconnect_pending.push(ReconnectPending {
+                                        gate_idx: e.gate_idx,
+                                        socket: e.socket,
+                                        chr_name: e.chr_name.clone(),
+                                        msg: addr.into_bytes(),
+                                    });
+                                }
+                            }
+                        }
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
                         // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
                         if !gm_deferred.is_empty() || !gm_frames.is_empty() {
@@ -23159,6 +23205,7 @@ fn sim_loop(
                         // `GMEXECUTE` 跳线视图（与 `@Login`/商人/组队同源）。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -23205,6 +23252,7 @@ fn sim_loop(
                         // `&mut guilds`（`GuildDisconnect`），与 GM 跳线要借的 `&guilds` 冲突。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -23293,6 +23341,7 @@ fn sim_loop(
                         // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图的配置半边（与 `@Login` 同源）。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let mut fixed_script = FixedNpcScriptCtx {
@@ -23373,6 +23422,7 @@ fn sim_loop(
                         // oracle `PlayObject.Message.cs:888-942` + `:972-974`。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -23482,6 +23532,7 @@ fn sim_loop(
                         //（与 `@Login`/商人路同源）。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -24805,6 +24856,10 @@ fn sim_loop(
                                                                 // 与 CM_SAY 支同一份全局单元
                                                                 // （`SystemShare.FilterWord` 进程单例）。
                                                                 filter_word: Some(&gm_filter_word),
+                                                                mission: Some(&gm_mission),
+                                                                spirit_mutiny_tick: Some(
+                                                                    &gm_spirit_mutiny_tick,
+                                                                ),
                                                             };
                                                             if let Some(sg) = ground_sessions
                                                                 .get_mut(&head.chr_name)
@@ -40034,6 +40089,9 @@ break
         can_shout_level: i32,
         /// `SystemShare.FilterWord` 全局位（部署启动 true；`@DisableFilter` 翻转）。
         filter_word: std::cell::Cell<bool>,
+        /// **族 X2**：全局任务目标四元与 `SpiritMutinyTick`（@Mission/@祈祷生效/@停止叛变）。
+        mission: std::cell::RefCell<gmcmd::GmMissionState>,
+        spirit_mutiny_tick: std::cell::Cell<i64>,
     }
 
     impl TestChatCtx {
@@ -40050,6 +40108,8 @@ break
                 strings: crate::strings::StringConf::defaults(),
                 can_shout_level: 0,
                 filter_word: std::cell::Cell::new(true),
+                mission: std::cell::RefCell::new(gmcmd::GmMissionState::default()),
+                spirit_mutiny_tick: std::cell::Cell::new(0),
             }
         }
 
@@ -40073,6 +40133,8 @@ break
                 can_shout_level: self.can_shout_level,
                 registry: None,
                 filter_word: &self.filter_word,
+                mission: &self.mission,
+                spirit_mutiny_tick: &self.spirit_mutiny_tick,
             }
         }
     }
@@ -40184,6 +40246,22 @@ break
                 &self.gates,
                 chat::send_ref_msg_range(),
             );
+            // 族 X2（review F3）：@Reconnection 与 sim_loop 同一步——推入 ReconnectPending
+            // ⇒ 唯一排水点 drain_reconnects（先置 BoReconnection=true 再发 SM_RECONNECT）。
+            let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
+            if let Some(addr) = self
+                .sessions
+                .get_mut("aaa")
+                .and_then(|sg| sg.gm.pending_reconnect.take())
+            {
+                reconnect_pending.push(ReconnectPending {
+                    gate_idx: 0,
+                    socket: 901,
+                    chr_name: "aaa".to_string(),
+                    msg: addr.into_bytes(),
+                });
+            }
+            drain_reconnects(&mut reconnect_pending, &mut self.sessions, &self.gates);
             if !deferred.is_empty() || !gm_frames.is_empty() {
                 let speaker = self
                     .online
@@ -40231,6 +40309,41 @@ break
         let param = u16::from_le_bytes([body[6], body[7]]);
         let text = gbk_decode(&mir2_protocol::edcode::decode(&body[12..]));
         (param, text)
+    }
+
+    /// **族 X2（卡 `openmir2-gm-family-x2-target-control`）宿主线上牙**：`@Reconnection`
+    /// 的 `RM_RECONNECTION` ⇒ 唯一落帧支 `PlayObject.Message.cs:1988-1991` `SM_RECONNECT`
+    /// （载荷 `"{ip}/{port}"`）。经 GmRig 生产入口断言恰一帧 + ident + 载荷逐字节 + 一次性。
+    /// 变异红：删 CM_SAY 支 / `GmRig::say` 的 pending_reconnect 排水 ⇒ 本用例红。
+    #[test]
+    fn gm_reconnection_emits_sm_reconnect_through_handle_say() {
+        use mir2_protocol::frame::CommandMessage;
+        let mut rig = GmRig::new();
+        let bodies = rig.say_gm("@Reconnection 10.0.0.8 7100");
+        assert_eq!(bodies.len(), 1, "恰一条 SM_RECONNECT；实得 {bodies:?}");
+        let cm = CommandMessage::from_bytes(&bodies[0]).expect("≥12B");
+        assert_eq!(cm.ident, mir2_protocol::messages::SM_RECONNECT);
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&bodies[0][12..])),
+            "10.0.0.8/7100"
+        );
+        assert!(
+            rig.sessions["aaa"].gm.pending_reconnect.is_none(),
+            "标记一次性：落地即清"
+        );
+        // F3（review）：drain_reconnects 先置 BoReconnection=true 再发帧（oracle
+        // PlayObject.Message.cs:1989-1990 同序）——该会话之后断线的 guild 退出/注销门与 oracle 一致。
+        assert!(
+            rig.sessions["aaa"].bo_reconnection,
+            "SM_RECONNECT 必置 BoReconnection=true（先置后发）"
+        );
+        // 缺参 ⇒ 红帮助、零帧；`?` ⇒ 蓝字说明。
+        let bodies = rig.say_gm("@Reconnection");
+        assert_eq!(bodies.len(), 1);
+        assert_eq!(
+            u16::from_le_bytes([bodies[0][4], bodies[0][5]]),
+            mir2_protocol::messages::SM_SYSMESSAGE
+        );
     }
 
     /// **族 T（卡 `openmir2-gm-family-t-toggle-horse`）宿主落地牙**：`@OnHorse`/`@OffHorse`

@@ -238,6 +238,50 @@ pub const X1_VIEW_WHISPER_STOP_FMT: &str = "已停止侦听{0}的私聊信息...
 /// `CommandHelp.GameCommandViewWhisperMsg2`（`CommandHelp.cs:93`；toggle 开 Msg2）。
 pub const X1_VIEW_WHISPER_START_FMT: &str = "正在侦听{0}的私聊信息...";
 
+// ===== 族 X2 · 目标控制/杂项（卡 `openmir2-gm-family-x2-target-control`，tier=R）批 A 文本 =====
+/// `CommandHelp.GameCommandDelNpcMsg`（`CommandHelp.cs:61`）：DelNpc 恒红（删除循环全注释）。
+pub const DEL_NPC_MSG: &str = "命令使用方法不正确，必须与NPC面对面，才能使用此命令!!!";
+/// `ClearMissionCommand.cs:28` 的 `?` 蓝字。
+pub const CLEAR_MISSION_HELP_BLUE: &str = "此命令用于清除人物的任务标志。";
+/// `ClearMissionCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `清除任务`）。
+pub const CLEAR_MISSION_HELP: &str = "命令格式: @清除任务 人物名称";
+/// `ClearMapMonsterCommand` 的 `Command.CommandHelp`（Help=`地图号(* 为所有) 怪物名称(* 为所有) 掉物品(0,1)`）。
+pub const CLEAR_MAP_MONSTER_HELP: &str =
+    "命令格式: @清除怪物 地图号(* 为所有) 怪物名称(* 为所有) 掉物品(0,1)";
+/// `ClearMapMonsterCommand.cs:74` 的恒红（杀怪循环全注释 ⇒ `envir` 恒 null）。
+pub const CLEAR_MAP_MONSTER_NO_MAP: &str = "输入的地图不存在!!!";
+/// `MissionCommand` 的 `Command.CommandHelp`（Help=` X Y` 带前导空格 ⇒ 双空格）。
+pub const MISSION_HELP: &str = "命令格式: @Mission  X Y";
+/// `SearchHumanCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `探测`）。
+pub const SEARCH_HUMAN_HELP: &str = "命令格式: @探测 人物名称";
+/// `SearchHumanCommand` 在线蓝字定位模板（`:34-38`；末坐标 **y 用调用者 CurrY** 是 oracle 怪癖）。
+pub const SEARCH_HUMAN_LOCATE_FMT: &str = "{0} 现在位于 {1}({2}) {3}:{4}";
+/// `SearchHumanCommand.cs:44` 离线红字。
+pub const SEARCH_HUMAN_OFFLINE_FMT: &str = "{0} 现在不在线，或位于其它服务器上!!!";
+/// `SearchHumanCommand.cs:48` 节流红字模板（`{0}` = 剩余秒数，已减 10）。
+pub const SEARCH_HUMAN_THROTTLE_FMT: &str = "{0} 秒之后才可以再使用此功能!!!";
+/// `SearchHumanCommand.cs:52` 门红字（ProbeNecklace 装备派生未建模 ⇒ 仅 perm<6 可达，外门 10 ⇒ 死支照抄）。
+pub const SEARCH_HUMAN_FORBIDDEN: &str = "您现在还无法使用此功能!!!";
+/// `ReconnectionCommand.cs:25` 的 `?` 蓝字。
+pub const RECONNECTION_HELP_BLUE: &str = "此命令用于改变客户端连接网关的IP及端口。";
+/// `ReconnectionCommand` 的 `Command.CommandHelp`（Help=` IP地址 端口` 带前导空格 ⇒ 双空格）。
+pub const RECONNECTION_HELP: &str = "命令格式: @Reconnection  IP地址 端口";
+// MessageSettings 师徒/配偶 13 段（MessageSettings.cs:165-171/182-188，逐字节）
+pub const MSG_NOT_MARRIED: &str = "你都没结婚查什么？";
+pub const MSG_WIFE_NOT_ONLINE: &str = "你的老婆还没有上线!!!";
+pub const MSG_HUSBAND_NOT_ONLINE: &str = "你的老公还没有上线!!!";
+pub const MSG_WIFE_NOW_LOCATE: &str = "你的老婆现在位于:";
+pub const MSG_HUSBAND_SEARCH_LOCATE: &str = "你的老公正在找你，他现在位于:";
+pub const MSG_HUSBAND_NOW_LOCATE: &str = "你的老公现在位于:";
+pub const MSG_WIFE_SEARCH_LOCATE: &str = "你的老婆正在找你，他现在位于:";
+pub const MSG_NOT_MASTER: &str = "你都没师徒关系查什么？";
+pub const MSG_MASTER_NOT_ONLINE: &str = "你的师父还没有上线!!!";
+pub const MSG_MASTERLIST_NOT_ONLINE: &str = "你的徒弟还没有上线!!!";
+pub const MSG_MASTER_NOW_LOCATE: &str = "你的师父现在位于:";
+pub const MSG_MASTERLIST_SEARCH_LOCATE: &str = "你的徒弟正在找你，他现在位于:";
+pub const MSG_MASTERLIST_NOW_LOCATE: &str = "你的徒弟现在位于:";
+pub const MSG_MASTER_SEARCH_LOCATE: &str = "你的师父正在找你，他现在位于:";
+
 // ===== 批次 4（数值/角色族，设计件 §4.3 第 72–115 行，44 条）的 CommandHelp 常量 =====
 //
 // 口径同上：`命令格式: @{现网名} {Help}`（`CommandAttribute.cs:53`）；`Help` 为空时**末尾空格保留**
@@ -710,6 +754,46 @@ pub enum Imp {
     /// ⇒ `WhisperHuman = null` ⇒ GM 再 toggle 出 Msg2；rust `listening_to` 持名不变 ⇒ 出
     /// Msg1（GM-only、零玩法影响）。
     ViewWhisper,
+
+    // ---- 族 X2 · 目标控制/杂项（18，卡 `openmir2-gm-family-x2-target-control`，tier=R）----
+    // 批 A（12）：L 子项 6 恒字面 + 轻 R 子项 6（探测/师徒/配偶/Reconnection/两个 GotoLable 接缝）。
+    /// `DelNpcCommand`（现网 `@DelNpc`）：删除循环**整段注释** ⇒ 恒红
+    /// `命令使用方法不正确，必须与NPC面对面，才能使用此命令!!!`（无论面前有没有 NPC）。
+    DelNpc,
+    /// `ClearMissionCommand`（现网 `@清除任务`）：空名红帮助 / `?` 蓝字说明 / 离线红
+    /// `{名}不在线，或在其它服务器上!!` / 在线绿 `{名}的任务标志已经全部清零。`（清零代码
+    /// **根本不存在**——非注释，是没写 ⇒ 只回执；卡面 forbidden 不补）。
+    ClearMission,
+    /// `ClearMapMonsterCommand`（现网 `@清除怪物`）：缺参红帮助；杀怪循环**整段注释**
+    /// ⇒ `envir` 恒 null ⇒ 恒红 `输入的地图不存在!!!`。
+    ClearMapMonster,
+    /// `MissionCommand`（现网 `@Mission`）：写全局 `BoMission/MissionMap/MissionX/MissionY`
+    /// + 绿字 `怪物集中目标已设定为: {图}({X}:{Y})`；缺参红帮助。
+    MissionCmd,
+    /// `SpirtStartCommand`（现网 `@祈祷生效`）：`SpiritMutinyTick = now + (n>0 ? n*1000 :
+    /// Config.SpiritMutinyTime)` + 绿字持续秒数。
+    SpirtStart,
+    /// `SpirtStopCommand`（现网 `@停止叛变`）：`SpiritMutinyTick = 0` + 绿字「祈祷叛变已停止。」。
+    SpirtStop,
+    /// `SearchHumanCommand`（现网 `@探测`）：`ProbeNecklace || Permission>=6` 门（外门 10 ⇒
+    /// 恒过）+ 10s `ProbeTick` 节流（perm>=3 免——perm 10 ⇒ 免）+ 在线蓝字定位
+    /// （**尾坐标 y 用调用者 CurrY** 怪癖）/ 离线红 / 节流红。
+    SearchHuman,
+    /// `SearchMasterCommand`（现网 `@fdht7ed`）：未拜师红 / 为师生 `MasterList` 空红
+    /// （本仓师徒在线表恒空 T-168）/ 为徒 `MasterHuman` 未建模（T-167）⇒ 红「师父还没有上线!!!」。
+    SearchMaster,
+    /// `SearchDearCommand`（现网 `@sdasdert`）：未结婚红 / 配偶离线按性别红 / 在线按性别
+    /// 双绿字（说话者侧建模；对方两条经 log_note 接缝登记）。
+    SearchDear,
+    /// `ReconnectionCommand`（现网 `@Reconnection`）：内层 `Permission<10` 死支照抄；`?` 蓝字；
+    /// 缺参红帮助；足参装 `pending_reconnect`（宿主同事件内经 `sm_reconnect` 出 `SM_RECONNECT`）。
+    Reconnection,
+    /// `MemberFunctionExCommand`（现网 `@MemberFuncEx`）：`FunctionNPC.GotoLable(@Member)`
+    /// 宿主接缝（函数式脚本面归脚本卡）⇒ log_note 零帧。
+    MemberFuncEx,
+    /// `MemberFunctionCommand`（现网 `@是我`）：`ScriptGotoCount=0` + `ManageNPC.GotoLable(@Member)`
+    /// 宿主接缝 ⇒ log_note 零帧。
+    MemberFunction,
     Unimplemented,
 }
 
@@ -944,8 +1028,22 @@ pub struct GmSession {
     /// （谁在监听我；`ViewWhisperCommand.cs:33-39`）。本仓写面消费点（私聊回声路由）未接
     /// ⇒ 该位唯一可观测面 = 本命令的 toggle 回执，故以**说话者侧** `listening_to` 承载
     /// （`Some(目标名)` = 正在监听该目标）：单命令驱动流下与 oracle 逐支等价；
-    /// 多听者覆盖差异（oracle 目标仅一个监听位）登记于 [`Imp::ViewWhisper`] 文档。
+    /// 多听者覆盖差异（oracle 目标仅一个监听位）与**目标重登**差异（oracle 重登 = 新
+    /// `PlayObject` ⇒ `WhisperHuman = null` ⇒ 再 toggle 出 Msg2；rust 持名 ⇒ 出 Msg1）
+    /// 均登记于 [`Imp::ViewWhisper`] 文档（review F3）。
     pub listening_to: Option<String>,
+
+    // ---- 族 X2 · 目标控制/杂项（`PlayObject` 同生命周期字段；ctor 缺省见 `Default`）----
+    /// `PlayObject.ProbeTick`（`@探测` 的 10 s 节流基准，ms；ctor 零值 = 从未使用哨兵）。
+    pub probe_tick: i64,
+    /// `PlayObject.MasterName`（`@fdht7ed` 的「已拜师」门；`WorldServer` 从角色记录装载）。
+    /// **装载面未接**（登录分支不读师徒记录）⇒ 现网恒空 ⇒ 恒红「你都没师徒关系查什么？」
+    /// （T-167 同源登记；构造级测试可置非空核后续支）。
+    pub master_name: String,
+    /// **待落地的 `RM_RECONNECTION`**（`@Reconnection`：`SendMsg(RM_RECONNECTION, …,
+    /// ip/port)` ⇒ 落帧支 `PlayObject.Message.cs:1988-1991` `SM_RECONNECT`）。
+    /// 本仓命令体纯 ⇒ 装地址串，宿主同一事件内经既有 `smframe_ext::sm_reconnect` 发给说话者。
+    pub pending_reconnect: Option<String>,
 }
 
 impl Default for GmSession {
@@ -991,6 +1089,9 @@ impl Default for GmSession {
             horse_type: 0,
             pending_feature_changed: false,
             listening_to: None,
+            probe_tick: 0,
+            master_name: String::new(),
+            pending_reconnect: None,
         }
     }
 }
@@ -1092,6 +1193,10 @@ pub struct GmConfig {
     pub win_lottery_level5: i32,
     /// 见 [`Self::win_lottery_level1`]。
     pub win_lottery_level6: i32,
+    /// `Config.SpiritMutinyTime`（`ServerConf.cs` 读 `[Setup] SpiritMutinyTime`；ctor
+    /// `GameSvrConf.cs:1738` = 30*60*1000、部署 `Server.conf:747` = 600000）：
+    /// `@祈祷生效` 缺省持续时长（ms）。`@停止叛变` 不读它。
+    pub spirit_mutiny_time: i32,
     /// `SystemShare.ServerIndex`（`SystemShare.cs:45` 缺省 0）。全仓**无写点**
     /// （只有 `AppService.cs:211` 读）⇒ 部署恒 0 = 主服 ⇒ `ReloadGuild`/`ReloadGuildAll` 永远走成功支。
     pub server_index: u8,
@@ -1131,6 +1236,7 @@ impl Default for GmConfig {
             win_lottery_level4: 0,
             win_lottery_level5: 0,
             win_lottery_level6: 0,
+            spirit_mutiny_time: 600000,
             server_index: 0,
             manage_npc_present: true,
             function_npc_present: true,
@@ -1325,6 +1431,17 @@ fn str_to_int(s: &str, def: i32) -> i32 {
     s.trim().parse::<i32>().unwrap_or(def)
 }
 
+/// oracle `SystemShare` 的**全局任务目标四元**（`@Mission` 写的 `BoMission/MissionMap/
+/// MissionX/MissionY`，`MissionCommand.cs:29-32`）。宿主侧进程单例，经
+/// [`GmWorld::mission`] 注入；消费点（`MobPlace` 族）落地时读同一份。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GmMissionState {
+    pub bo_mission: bool,
+    pub mission_map: String,
+    pub mission_x: i16,
+    pub mission_y: i16,
+}
+
 /// 命令体要读的世界侧只读状态（oracle `SystemShare` 的等价物）。
 ///
 /// 批次 2/3 只用 `guilds`；批次 3（传送/召唤）再加三项**只读视图**（宿主已有能力，不另造）：
@@ -1350,6 +1467,11 @@ pub struct GmWorld<'a> {
     pub speaker_id: i32,
     /// `HUtil32.GetTickCount()` 的等价物（ms；冷却门的 `now`）。
     pub now_ms: i64,
+    /// **族 X2**：`SystemShare.BoMission/MissionMap/MissionX/MissionY` 四元（`@Mission` 写）；
+    /// `None` = 未注入（脚本桥）⇒ 命令体登记零帧不伪造写。
+    pub mission: Option<&'a std::cell::RefCell<GmMissionState>>,
+    /// **族 X2**：`SystemShare.SpiritMutinyTick`（`@祈祷生效`/`@停止叛变` 写，ms）。
+    pub spirit_mutiny_tick: Option<&'a std::cell::Cell<i64>>,
     /// `SystemShare.FilterWord`（**全局可变位**，`SystemShare.cs:157` 声明、部署启动
     /// `GameApp.cs:70` 置 true；`@DisableFilter` 翻转）的宿主侧共享单元。
     ///
@@ -1370,6 +1492,8 @@ impl<'a> GmWorld<'a> {
             speaker: "",
             speaker_id: 0,
             now_ms: 0,
+            mission: None,
+            spirit_mutiny_tick: None,
             filter_word: None,
         }
     }
@@ -1395,6 +1519,20 @@ impl<'a> GmWorld<'a> {
     #[must_use]
     pub fn with_now(mut self, now_ms: i64) -> Self {
         self.now_ms = now_ms;
+        self
+    }
+
+    /// 注入宿主的全局任务目标四元（`@Mission` 用）。
+    #[must_use]
+    pub fn with_mission(mut self, mission: &'a std::cell::RefCell<GmMissionState>) -> Self {
+        self.mission = Some(mission);
+        self
+    }
+
+    /// 注入宿主的 `SystemShare.SpiritMutinyTick`（`@祈祷生效`/`@停止叛变` 用）。
+    #[must_use]
+    pub fn with_spirit_mutiny_tick(mut self, tick: &'a std::cell::Cell<i64>) -> Self {
+        self.spirit_mutiny_tick = Some(tick);
         self
     }
 
@@ -1437,6 +1575,15 @@ impl<'a> GmWorld<'a> {
 
     fn map_name(&self, map_id: usize) -> Option<&'a str> {
         self.maps?.name_of(map_id)
+    }
+
+    /// 仅 `MapDesc`（oracle 师徒/配偶定位行 `ChrName + " " + MapDesc + "(" + X + ":" + Y + ")"`
+    /// 只用 `MapDesc`——review F1；`MapDesc(MapName)` 组合只属 `@探测`，那里内联拼，不共享）。
+    fn map_desc(&self, map_id: usize) -> String {
+        let Some(maps) = self.maps else {
+            return String::new();
+        };
+        maps.map_desc_of(map_id).unwrap_or_default().to_string()
     }
 
     fn flag_of(&self, map_id: usize) -> Option<&'a mir2_envir::MapInfoFlag> {
@@ -2242,6 +2389,260 @@ fn view_whisper(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> 
         ))
     }
 }
+
+// ---------------------------- 族 X2 · 目标控制/杂项（18，卡 `openmir2-gm-family-x2-target-control`）批 A ----------------------------
+//
+// 批 A = L 子项 6 恒字面（DelNpc/清除任务/清除怪物/Mission/祈祷生效/停止叛变）+ 轻 R 子项 6
+// （探测/fdht7ed 师徒/sdasdert 配偶/Reconnection/MemberFuncEx/是我）。批 B（重 R 子项 6：
+// vv杀死/复活/VV给予权限/删除技能/ClearCopyItem/清除仓库密码的真副作用写面）另行交付。
+// 全部 perm 10（`[Permission]` 与构造缺省一致）；oracle 文件按卡面清单逐行核。
+
+/// `DelNpcCommand.Execute`（`DelNpcCommand.cs:11-44`，现网 `@DelNpc`）：`GetPoseCreate()` 之后
+/// 两条删除循环（MerchantList/QuestNpcList）**整段注释** ⇒ 无论面对面有没有 NPC 都落到末尾
+/// 恒红 `GameCommandDelNpcMsg`（卡面 forbidden：不补真删除）。
+fn del_npc(_world: &GmWorld<'_>) -> GmResult {
+    red(DEL_NPC_MSG)
+}
+
+/// `ClearMissionCommand.Execute`（`ClearMissionCommand.cs:14-40`，现网 `@清除任务`）。
+fn clear_mission(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let name = split_params(parameters).first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(CLEAR_MISSION_HELP);
+    }
+    if name.starts_with('?') {
+        return blue(CLEAR_MISSION_HELP_BLUE);
+    }
+    if world.play_by_name(name).is_none() {
+        return red(format!("{name}不在线，或在其它服务器上!!"));
+    }
+    // `:40`：清零代码**根本不存在**（不是注释，是没写）⇒ 只回执（卡面 forbidden 不补）。
+    green(format!("{name}的任务标志已经全部清零。"))
+}
+
+/// `ClearMapMonsterCommand.Execute`（`ClearMapMonsterCommand.cs:14-82`，现网 `@清除怪物`）。
+fn clear_map_monster(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let s_map = params.first().copied().unwrap_or("");
+    let s_mon = params.get(1).copied().unwrap_or("");
+    let s_items = params.get(2).copied().unwrap_or("");
+    if s_map.is_empty() || s_mon.is_empty() || s_items.is_empty() {
+        return red(CLEAR_MAP_MONSTER_HELP);
+    }
+    // 杀怪循环（:30-72）整段注释 ⇒ `envir` 恒 null ⇒ 恒红「输入的地图不存在!!!」；
+    // 「已清除怪物数: 0」在其后不可达。
+    red(CLEAR_MAP_MONSTER_NO_MAP)
+}
+
+/// `MissionCommand.Execute`（`MissionCommand.cs:14-35`，现网 `@Mission`）。
+fn mission_cmd(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let s_x = params.first().copied().unwrap_or("");
+    let s_y = params.get(1).copied().unwrap_or("");
+    if s_x.is_empty() || s_y.is_empty() {
+        return red(MISSION_HELP);
+    }
+    let n_x = str_to_int16(s_x, 0);
+    let n_y = str_to_int16(s_y, 0);
+    let Some((map_id, _, _)) = world.self_pos() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    let map_name = world.map_name(map_id).unwrap_or_default().to_string();
+    match world.mission {
+        Some(m) => {
+            let mut st = m.borrow_mut();
+            st.bo_mission = true;
+            st.mission_map = map_name.clone();
+            st.mission_x = n_x;
+            st.mission_y = n_y;
+        }
+        None => return no_frames(NOTE_X2_GLOBAL_NOT_INJECTED),
+    }
+    green(format!("怪物集中目标已设定为: {map_name}({n_x}:{n_y})"))
+}
+
+/// `SpirtStartCommand.Execute`（`SpirtStartCommand.cs:12-30`，现网 `@祈祷生效`）。
+fn spirt_start(parameters: &str, world: &GmWorld<'_>, cfg: &GmConfig) -> GmResult {
+    let s = split_params(parameters).first().copied().unwrap_or("");
+    let n_time = str_to_int(s, -1);
+    let dw_time = if n_time > 0 {
+        n_time * 1000
+    } else {
+        cfg.spirit_mutiny_time
+    };
+    let Some(cell) = world.spirit_mutiny_tick else {
+        return no_frames(NOTE_X2_GLOBAL_NOT_INJECTED);
+    };
+    cell.set(world.now_ms + i64::from(dw_time));
+    green(format!("祈祷叛变已开始。持续时长 {} 秒。", dw_time / 1000))
+}
+
+/// `SpirtStopCommand.Execute`（`SpirtStopCommand.cs:10-16`，现网 `@停止叛变`）。
+fn spirt_stop(world: &GmWorld<'_>) -> GmResult {
+    let Some(cell) = world.spirit_mutiny_tick else {
+        return no_frames(NOTE_X2_GLOBAL_NOT_INJECTED);
+    };
+    cell.set(0);
+    green("祈祷叛变已停止。")
+}
+
+/// `SearchHumanCommand.Execute`（`SearchHumanCommand.cs:13-58`，现网 `@探测`）。
+///
+/// 门 `ProbeNecklace || Permission >= 6`（项链装备派生未建模 ⇒ 恒 false；外门 10 ⇒ perm 恒 ≥6
+/// ⇒ 恒过，`您现在还无法使用此功能!!!` 为死支照抄）；节流 `now - ProbeTick > 10000 ||
+/// Permission >= 3`（perm 10 ⇒ 恒免）；在线蓝字定位**尾坐标 y 用调用者 CurrY**（oracle 怪癖，
+/// 卡面 A3 照抄）；离线红。
+fn search_human(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let name = split_params(parameters).first().copied().unwrap_or("");
+    let probe_necklace = false; // `PlayObject.ProbeNecklace` 装备派生未建模（T-169 同源）
+    if !(probe_necklace || sess.permission >= 6) {
+        return red(SEARCH_HUMAN_FORBIDDEN);
+    }
+    if name.is_empty() {
+        return red(SEARCH_HUMAN_HELP);
+    }
+    if world.now_ms - sess.probe_tick > 10_000 || sess.permission >= 3 {
+        sess.probe_tick = world.now_ms;
+        let Some(target) = world.play_by_name(name) else {
+            return red(dotnet_format(SEARCH_HUMAN_OFFLINE_FMT, &[name.to_string()]));
+        };
+        let Some(reg) = world.maps else {
+            return no_frames(NOTE_NO_MAP_REGISTRY);
+        };
+        let desc = reg
+            .map_desc_of(target.map_id)
+            .unwrap_or_default()
+            .to_string();
+        let map = reg.name_of(target.map_id).unwrap_or_default().to_string();
+        // 怪癖：尾坐标的 y 是**调用者** CurrY（`SearchHumanCommand.cs:37`），不是目标的。
+        let Some((_, _, caller_y)) = world.self_pos() else {
+            return no_frames(NOTE_NO_WORLD);
+        };
+        blue(dotnet_format(
+            SEARCH_HUMAN_LOCATE_FMT,
+            &[
+                name.to_string(),
+                desc,
+                map,
+                target.x.to_string(),
+                caller_y.to_string(),
+            ],
+        ))
+    } else {
+        // M1：C# `(GetTickCount() - ProbeTick) / 1000 - 10`——普通整数除（向零截断）+ 减 10，
+        // 余量 <10 s 时给负秒；不用 div_euclid/saturating_sub（负值语义不同）。当前支对
+        // perm≥10 不可达（外门 + `|| perm>=3`），但语义要与 C# 等价（review M1）。
+        red(dotnet_format(
+            SEARCH_HUMAN_THROTTLE_FMT,
+            &[((world.now_ms - sess.probe_tick) / 1000 - 10).to_string()],
+        ))
+    }
+}
+
+/// `SearchMasterCommand.Execute`（`SearchMasterCommand.cs:12-52`，现网 `@fdht7ed`）。
+fn search_master(sess: &GmSession, world: &GmWorld<'_>) -> GmResult {
+    if sess.master_name.is_empty() {
+        return red(MSG_NOT_MASTER);
+    }
+    if sess.is_master {
+        if sess.master_list.is_empty() {
+            return red(MSG_MASTERLIST_NOT_ONLINE);
+        }
+        // 为师生：逐在线徒弟 → 说话者绿字两行 + 给对方两条（宿主接缝 log_note）。
+        let mut r = GmResult::one(GmColor::Green, MSG_MASTERLIST_NOW_LOCATE.to_string());
+        for apprentice in &sess.master_list {
+            if let Some(t) = world.play_by_name(apprentice) {
+                r.msgs.push(GmMsg {
+                    color: GmColor::Green,
+                    text: format!("{} {}({}:{})", t.name, world.map_desc(t.map_id), t.x, t.y),
+                });
+            }
+        }
+        r.log_note = Some(NOTE_X2_TARGET_MSG_SEAM);
+        r
+    } else {
+        // `PlayerActor.MasterHuman` 未建模（T-167 同源）⇒ 红「你的师父还没有上线!!!」。
+        red(MSG_MASTER_NOT_ONLINE)
+    }
+}
+
+/// `SearchDearCommand.Execute`（`SearchDearCommand.cs:14-55`，现网 `@sdasdert`）。
+fn search_dear(sess: &GmSession, world: &GmWorld<'_>) -> GmResult {
+    if sess.dear_name.is_empty() {
+        return red(MSG_NOT_MARRIED);
+    }
+    let dear = world
+        .self_entity()
+        .and_then(|e| e.dear_human)
+        .and_then(|id| world.entity(id));
+    let Some(dear) = dear else {
+        return red(if sess.gender == 0 {
+            MSG_WIFE_NOT_ONLINE
+        } else {
+            MSG_HUSBAND_NOT_ONLINE
+        });
+    };
+    // 说话者侧两条（性别分支；`YourWifeSearchLocateMsg` 的「他」照抄 oracle 原字）。
+    // **F2**：gender!=0 支的首行是 **Red**（`SearchDearCommand.cs:49`；gender=0 的妻头是 Green :36）。
+    let mut r = if sess.gender == 0 {
+        GmResult::one(GmColor::Green, MSG_WIFE_NOW_LOCATE.to_string())
+    } else {
+        GmResult::one(GmColor::Red, MSG_HUSBAND_NOW_LOCATE.to_string())
+    };
+    r.msgs.push(GmMsg {
+        color: GmColor::Green,
+        text: format!(
+            "{} {}({}:{})",
+            dear.name,
+            world.map_desc(dear.map_id),
+            dear.x,
+            dear.y
+        ),
+    });
+    // 对方两条（「正在找你」+ 说话者位置）是发给**对方**的（宿主接缝 log_note 登记）。
+    r.log_note = Some(NOTE_X2_TARGET_MSG_SEAM);
+    r
+}
+
+/// `ReconnectionCommand.Execute`（`ReconnectionCommand.cs:14-41`，现网 `@Reconnection`）。
+fn reconnection(parameters: &str, sess: &mut GmSession) -> GmResult {
+    let params = split_params(parameters);
+    let s_ip = params.first().copied().unwrap_or("");
+    let s_port = params.get(1).copied().unwrap_or("");
+    if sess.permission < 10 {
+        return GmResult::empty(); // 内层死支（外门已 10）
+    }
+    if !s_ip.is_empty() && s_ip.starts_with('?') {
+        return blue(RECONNECTION_HELP_BLUE);
+    }
+    if s_ip.is_empty() || s_port.is_empty() {
+        return red(RECONNECTION_HELP);
+    }
+    sess.pending_reconnect = Some(format!("{s_ip}/{s_port}"));
+    GmResult::empty()
+}
+
+/// `MemberFunctionExCommand.Execute`（`MemberFunctionExCommand.cs:10-18`，现网 `@MemberFuncEx`）。
+fn member_func_ex() -> GmResult {
+    no_frames(
+        "MemberFuncEx：FunctionNPC.GotoLable(PlayerActor,\"@Member\",false) 宿主接缝未实现（函数式脚本面归脚本卡）",
+    )
+}
+
+/// `MemberFunctionCommand.Execute`（`MemberFunctionCommand.cs:9-17`，现网 `@是我`）。
+fn member_function() -> GmResult {
+    no_frames(
+        "是我(MemberFunction)：ScriptGotoCount=0 + ManageNPC.GotoLable(\"@Member\") 宿主接缝未实现（脚本面归脚本卡）",
+    )
+}
+
+/// 敌方两条消息（「正在找你」+ 说话者位置）发给**对方玩家**——本仓 `GmResult` 只有说话者
+/// 通道 ⇒ 宿主接缝登记（与 `dear_recall` 的 T-166..T-171 同口径）。
+const NOTE_X2_TARGET_MSG_SEAM: &str =
+    "X2：给对方玩家的两条定位绿字经宿主接缝未接（GmResult 仅说话者通道；T-167/T-168 同源）";
+/// X2 全局状态（Mission 四元 / SpiritMutinyTick）未注入（脚本桥）⇒ 登记零帧不伪造写。
+const NOTE_X2_GLOBAL_NOT_INJECTED: &str =
+    "X2：全局状态（SystemShare.BoMission/MissionX/Y 或 SpiritMutinyTick）未注入（脚本桥构造）⇒ 零帧不伪造写";
 
 // ---------------------------- 宿主未接 / oracle 注释的登记文案 ----------------------------
 const NOTE_EVENT_MGR: &str =
@@ -3398,6 +3799,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_use_item = None;
     sess.pending_clear_bag = None;
     sess.pending_feature_changed = false;
+    sess.pending_reconnect = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -3603,6 +4005,20 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::EnableSendMsg => enable_send_msg(parameters),
         Imp::ShutupList => shutup_list(world),
         Imp::ViewWhisper => view_whisper(parameters, world, sess),
+
+        // ---- 族 X2 · 目标控制/杂项（批 A 12，卡 `openmir2-gm-family-x2-target-control`）----
+        Imp::DelNpc => del_npc(world),
+        Imp::ClearMission => clear_mission(parameters, world),
+        Imp::ClearMapMonster => clear_map_monster(parameters),
+        Imp::MissionCmd => mission_cmd(parameters, world),
+        Imp::SpirtStart => spirt_start(parameters, world, cfg),
+        Imp::SpirtStop => spirt_stop(world),
+        Imp::SearchHuman => search_human(parameters, world, sess),
+        Imp::SearchMaster => search_master(sess, world),
+        Imp::SearchDear => search_dear(sess, world),
+        Imp::Reconnection => reconnection(parameters, sess),
+        Imp::MemberFuncEx => member_func_ex(),
+        Imp::MemberFunction => member_function(),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -3965,7 +4381,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "DelNpc",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelNpc,
     },
     CommandDef {
         name: "DenyChrNameLogon",
@@ -4025,7 +4441,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "fdht7ed",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::SearchMaster,
     },
     CommandDef {
         name: "ff",
@@ -4179,13 +4595,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "MemberFuncEx",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::MemberFuncEx,
     },
     CommandDef {
         name: "Mission",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MissionCmd,
     },
     CommandDef {
         name: "MobCountwa",
@@ -4257,7 +4673,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Reconnection",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::Reconnection,
     },
     CommandDef {
         name: "RefineWeaponwa",
@@ -4347,7 +4763,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "sdasdert",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::SearchDear,
     },
     CommandDef {
         name: "ServerInfo",
@@ -4555,7 +4971,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "停止叛变",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::SpirtStop,
     },
     CommandDef {
         name: "允许天地合一",
@@ -4687,7 +5103,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "探测",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SearchHuman,
     },
     CommandDef {
         name: "改变发型",
@@ -4717,7 +5133,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "是我",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::MemberFunction,
     },
     CommandDef {
         name: "查看PK",
@@ -4771,19 +5187,19 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "清除任务",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ClearMission,
     },
     CommandDef {
         name: "清除怪物",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ClearMapMonster,
     },
     CommandDef {
         name: "祈祷生效",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SpirtStart,
     },
     CommandDef {
         name: "禁止行会信息",
@@ -5917,6 +6333,8 @@ mod tests {
             speaker: "boss",
             speaker_id: 7,
             now_ms: 0,
+            mission: None,
+            spirit_mutiny_tick: None,
             filter_word: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
@@ -6223,8 +6641,9 @@ mod tests {
     /// 族 P（卡 `openmir2-gm-family-p-passwordlock` 的 7 条密码锁门）、
     /// 族 T（卡 `openmir2-gm-family-t-toggle-horse` 的 7 条会话开关/骑马）与
     /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）与
-    /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 45），且命令名 → 实现标签固定。
+    /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）与
+    /// 族 X2 批 A（卡 `openmir2-gm-family-x2-target-control` 的 12 条目标控制/杂项）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 33），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -6232,16 +6651,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            140,
-            "140 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）"
+            152,
+            "152 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            45,
-            "185 - 140"
+            33,
+            "185 - 152"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -9736,6 +10155,303 @@ mod tests {
                 ..GmSession::default()
             }
         );
+    }
+
+    // ---------------------------- 族 X2 · 目标控制/杂项（批 A 12，卡 `openmir2-gm-family-x2-target-control`）----------------------------
+
+    /// 批 A 12 条全部接线：现网名/impl/perm 10/params。
+    #[test]
+    fn x2a_family_table_entries_are_wired() {
+        for (name, imp, params) in [
+            ("DelNpc", Imp::DelNpc, 1),
+            ("清除任务", Imp::ClearMission, 2),
+            ("清除怪物", Imp::ClearMapMonster, 2),
+            ("Mission", Imp::MissionCmd, 2),
+            ("祈祷生效", Imp::SpirtStart, 2),
+            ("停止叛变", Imp::SpirtStop, 1),
+            ("探测", Imp::SearchHuman, 2),
+            ("fdht7ed", Imp::SearchMaster, 1),
+            ("sdasdert", Imp::SearchDear, 1),
+            ("Reconnection", Imp::Reconnection, 2),
+            ("MemberFuncEx", Imp::MemberFuncEx, 1),
+            ("是我", Imp::MemberFunction, 1),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, params, "{name} 的 Execute 形参个数");
+        }
+    }
+
+    /// 批 A 权限门（12 条全 perm 10）。
+    #[test]
+    fn x2a_family_permission_gate_blocks_body() {
+        for name in [
+            "DelNpc",
+            "清除任务",
+            "清除怪物",
+            "Mission",
+            "祈祷生效",
+            "停止叛变",
+            "探测",
+            "fdht7ed",
+            "sdasdert",
+            "Reconnection",
+            "MemberFuncEx",
+            "是我",
+        ] {
+            let (r, sess) = run(&format!("@{name}"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, PERMISSION_TOO_LOW)],
+                "{name}"
+            );
+            assert!(r.frames.is_empty(), "{name}");
+            assert_eq!(sess, GmSession::default(), "{name} 零状态变化");
+        }
+    }
+
+    /// **L 子项 6 恒字面**：DelNpc 恒红（循环注释）/ 清除任务四支（含清零代码不存在只回执）/
+    /// 清除怪物恒红（杀怪循环注释 ⇒ envir null）/ Mission 写全局四元 + 绿字 /
+    /// 祈祷生效 tick 写三形态 / 停止叛变 tick=0。
+    /// 变异红：M-X2a（DelNpc 文本）/M-X2b（清除怪物补数）/M-X2c（Mission 不写状态）/
+    /// M-X2f（祈祷生效忽略参数）/M-X2g（停止叛变不清零）。
+    #[test]
+    fn x2a_l_subitems_texts_and_globals() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // DelNpc：恒红（有无世界都同答）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &GmWorld::new(&guilds), "@DelNpc")),
+            vec![(GmColor::Red, DEL_NPC_MSG)]
+        );
+        let view = q_view(&fx, &w, &guilds);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@DelNpc")),
+            vec![(GmColor::Red, DEL_NPC_MSG)]
+        );
+        // 清除任务四支。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@清除任务")),
+            vec![(GmColor::Red, CLEAR_MISSION_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@清除任务 ?")),
+            vec![(GmColor::Blue, CLEAR_MISSION_HELP_BLUE)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@清除任务 nowhere")),
+            vec![(GmColor::Red, "nowhere不在线，或在其它服务器上!!")]
+        );
+        // 在线 ⇒ 只回执绿字（清零代码根本不存在，卡面 forbidden 不补）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@清除任务 bob")),
+            vec![(GmColor::Green, "bob的任务标志已经全部清零。")]
+        );
+        // 清除怪物：缺参帮助 / 足参恒红（kill loop 注释 ⇒ envir null）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@清除怪物")),
+            vec![(GmColor::Red, CLEAR_MAP_MONSTER_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@清除怪物 map * 0")),
+            vec![(GmColor::Red, CLEAR_MAP_MONSTER_NO_MAP)]
+        );
+        // Mission：缺参帮助；足参写全局四元 + 绿字（图名取说话者当前图）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@Mission")),
+            vec![(GmColor::Red, MISSION_HELP)]
+        );
+        let mission = std::cell::RefCell::new(GmMissionState::default());
+        let tick = std::cell::Cell::new(0i64);
+        let v2 = q_view(&fx, &w, &guilds)
+            .with_mission(&mission)
+            .with_spirit_mutiny_tick(&tick)
+            .with_now(50_000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &v2, "@Mission 10 20")),
+            vec![(GmColor::Green, "怪物集中目标已设定为: map(10:20)")]
+        );
+        assert_eq!(
+            *mission.borrow(),
+            GmMissionState {
+                bo_mission: true,
+                mission_map: "map".to_string(),
+                mission_x: 10,
+                mission_y: 20
+            }
+        );
+        // 祈祷生效：缺参 ⇒ 部署 SpiritMutinyTime=600000 ⇒ 600 秒；参数 5 ⇒ 5000ms；
+        // -1（非正）⇒ 缺省；tick = now + dwTime。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &v2, "@祈祷生效")),
+            vec![(GmColor::Green, "祈祷叛变已开始。持续时长 600 秒。")]
+        );
+        assert_eq!(tick.get(), 50_000 + 600_000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &v2, "@祈祷生效 5")),
+            vec![(GmColor::Green, "祈祷叛变已开始。持续时长 5 秒。")]
+        );
+        assert_eq!(tick.get(), 50_000 + 5_000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &v2, "@祈祷生效 -1")),
+            vec![(GmColor::Green, "祈祷叛变已开始。持续时长 600 秒。")]
+        );
+        // 停止叛变：tick=0 + 绿字。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &v2, "@停止叛变")),
+            vec![(GmColor::Green, "祈祷叛变已停止。")]
+        );
+        assert_eq!(tick.get(), 0);
+        // 全局未注入（裸 world）⇒ 登记零帧不伪造写。
+        let r = execute(&mut sess, &cfg, &GmWorld::new(&guilds), "@停止叛变");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+    }
+
+    /// **探测怪癖**（A3）：在线蓝字定位**尾坐标 y 用调用者 CurrY**（目标 bob 在 (6,6)、
+    /// 调用者 gm 在 (5,5) ⇒ `6:5`）；离线红三叹号；空名帮助；ProbeTick 刷新；perm 10 免节流。
+    /// 变异红：M-X2d（y 改用目标 CurrY）⇒ 本用例红。
+    #[test]
+    fn x2a_search_human_quirk() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = q_view(&fx, &w, &guilds).with_now(50_000);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@探测")),
+            vec![(GmColor::Red, SEARCH_HUMAN_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@探测 nowhere")),
+            vec![(GmColor::Red, "nowhere 现在不在线，或位于其它服务器上!!!")]
+        );
+        // 怪癖：bob 的 x=6 用目标值，y 用**调用者** 5（不是目标的 6）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@探测 bob")),
+            vec![(GmColor::Blue, "bob 现在位于 测试地图(map) 6:5")]
+        );
+        assert_eq!(sess.probe_tick, 50_000, "ProbeTick 刷新");
+        // perm 10 ≥ 3 ⇒ 10s 节流免 ⇒ 立即再查仍回蓝字。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@探测 bob")),
+            vec![(GmColor::Blue, "bob 现在位于 测试地图(map) 6:5")]
+        );
+    }
+
+    /// **师徒/配偶定位**（A1/A3）：未拜师红 / 为师生 MasterList 空红 / 有在线徒弟 ⇒
+    /// 说话者绿头+行+对方接缝 note；为徒 MasterHuman 未建模 ⇒ 师父未上线红；
+    /// 配偶未结婚红 / 离线按性别红 / 在线按性别双绿字（含「他」怪癖字）+ 对方接缝 note。
+    #[test]
+    fn x2a_master_dear_searches() {
+        let (fx, mut w, gm_id, bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = q_view(&fx, &w, &guilds);
+        // fdht7ed：未拜师 ⇒ 红。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@fdht7ed")),
+            vec![(GmColor::Red, MSG_NOT_MASTER)]
+        );
+        // 为师生 + MasterList 空 ⇒ 红。
+        sess.master_name = "师父名".to_string();
+        sess.is_master = true;
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@fdht7ed")),
+            vec![(GmColor::Red, MSG_MASTERLIST_NOT_ONLINE)]
+        );
+        // 为师生 + 在线徒弟 ⇒ 绿头 + 每行 + 对方三条（「正在找你」+ 位置）接缝 note。
+        sess.master_list = vec!["bob".to_string()];
+        let r = execute(&mut sess, &cfg, &view, "@fdht7ed");
+        assert_eq!(r.msgs.len(), 2, "{:?}", texts(&r));
+        assert_eq!(r.msgs[0].color, GmColor::Green);
+        assert_eq!(r.msgs[0].text, MSG_MASTERLIST_NOW_LOCATE);
+        // F1（review）：行只拼 MapDesc（不是 MapDesc(MapName)）⇒ "bob 测试地图(6:6)"。
+        assert_eq!(r.msgs[1].text, "bob 测试地图(6:6)");
+        assert!(r.log_note.expect("对方消息接缝").contains("接缝"));
+        // 为徒（is_master=false）+ MasterHuman 未建模 ⇒ 红「你的师父还没有上线!!!」。
+        sess.is_master = false;
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@fdht7ed")),
+            vec![(GmColor::Red, MSG_MASTER_NOT_ONLINE)]
+        );
+        // sdasdert：未结婚 ⇒ 红。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@sdasdert")),
+            vec![(GmColor::Red, MSG_NOT_MARRIED)]
+        );
+        // 已结婚 + 配偶离线 ⇒ 按性别红。
+        sess.dear_name = "bob".to_string();
+        sess.gender = 0;
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@sdasdert")),
+            vec![(GmColor::Red, MSG_WIFE_NOT_ONLINE)]
+        );
+        sess.gender = 1;
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@sdasdert")),
+            vec![(GmColor::Red, MSG_HUSBAND_NOT_ONLINE)]
+        );
+        // 在线配偶（entity.dear_human 链）⇒ 双绿字/红头（性别分支）+ 对方接缝 note。
+        w.entities.get_mut(gm_id).unwrap().dear_human = Some(bob_id);
+        let view = q_view(&fx, &w, &guilds);
+        let r = execute(&mut sess, &cfg, &view, "@sdasdert");
+        assert_eq!(
+            r.msgs[0].text, MSG_HUSBAND_NOW_LOCATE,
+            "gender=1 ⇒ 老公文案"
+        );
+        // F2（review）：gender!=0 支的首行是 **Red**（SearchDearCommand.cs:49）。
+        assert_eq!(r.msgs[0].color, GmColor::Red, "gender=1 夫头必红");
+        assert_eq!(r.msgs[1].color, GmColor::Green, "定位行绿");
+        // F1：行只拼 MapDesc（无 "(map)"）。
+        assert_eq!(r.msgs[1].text, "bob 测试地图(6:6)");
+        assert!(r.log_note.is_some());
+        sess.gender = 0;
+        let r = execute(&mut sess, &cfg, &view, "@sdasdert");
+        assert_eq!(r.msgs[0].text, MSG_WIFE_NOW_LOCATE);
+        assert_eq!(r.msgs[0].color, GmColor::Green, "gender=0 妻头必绿");
+        assert_eq!(r.msgs[1].text, "bob 测试地图(6:6)");
+        // 「他」怪癖字逐字节（YourWifeSearchLocateMsg 用「他」不是「她」）。
+        assert_eq!(MSG_WIFE_SEARCH_LOCATE, "你的老婆正在找你，他现在位于:");
+    }
+
+    /// **Reconnection + 两个 GotoLable 接缝**：`?` 蓝字 / 缺参红帮助 / 足参零帧+装 pending；
+    /// 宿主线上一帧 `SM_RECONNECT`（GmRig 生产入口，载荷 "{ip}/{port}"）；MemberFuncEx/是我
+    /// 零帧 + 接缝 note。
+    #[test]
+    fn x2a_reconnection_and_gotolable_seams() {
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let bare = GmWorld::new(&guilds);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &bare, "@Reconnection ?")),
+            vec![(GmColor::Blue, RECONNECTION_HELP_BLUE)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &bare, "@Reconnection")),
+            vec![(GmColor::Red, RECONNECTION_HELP)]
+        );
+        let r = execute(&mut sess, &cfg, &bare, "@Reconnection 1.2.3.4 7200");
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "RM 泵 ⇒ 命令体零帧"
+        );
+        assert_eq!(sess.pending_reconnect.as_deref(), Some("1.2.3.4/7200"));
+        // 两个 GotoLable 接缝：零帧 + note。
+        for line in ["@MemberFuncEx", "@是我"] {
+            let r = execute(&mut sess, &cfg, &bare, line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line}");
+            assert!(
+                r.log_note.expect("{line} 必须登记").contains("GotoLable"),
+                "{line}"
+            );
+        }
+        // 宿主线上帧（GmRig 生产入口）在 lib.rs tests 的
+        // `gm_reconnection_emits_sm_reconnect_through_handle_say` 覆盖。
     }
 
     /// 族 X1 权限门（5 条全 perm 10）：`Permission < 10` ⇒ 恰一条红字 `权限不够!!!`。
