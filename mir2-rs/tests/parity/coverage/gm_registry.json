@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "95554b968b251db4c17ed281f137b69e893025d75e988490b872741deb1652bd"
+   "sha256": "66579bc94281704d9f63dd73d0b9ae1c74377cd111dcd8116ff330cbd7710fd8"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -2576,69 +2576,6 @@
    "field_line": 48
   },
   {
-   "cmd": "允许天地合一",
-   "cmd_name": "允许天地合一",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/AllowGroupReCallCommand.cs:9",
-   "perm_min": 10,
-   "perm_source": "GameCommands.cs 构造默认",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "AllowGroupReCallCommand",
-   "attr_name": "AllowGroupReCall",
-   "handler_exec_line": 13,
-   "name_source": "conf[Command].AllowGroupCall",
-   "register_command": true,
-   "perm_attr": 0,
-   "field": "AllowGroupCall",
-   "field_line": 130
-  },
-  {
-   "cmd": "创建行会",
-   "cmd_name": "创建行会",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/AddGuildCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].AddGuild",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "AddGuildCommand",
-   "attr_name": "AddGuild",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].AddGuild",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "AddGuild",
-   "field_line": 300
-  },
-  {
-   "cmd": "删除行会",
-   "cmd_name": "删除行会",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/DelGuildCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].DelGuild",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "DelGuildCommand",
-   "attr_name": "DelGuild",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].DelGuild",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "DelGuild",
-   "field_line": 302
-  },
-  {
    "cmd": "查看周围",
    "cmd_name": "查看周围",
    "child_card": null,
@@ -2658,43 +2595,22 @@
    "perm_attr": 10,
    "field": "MobLevel",
    "field_line": 156
-  },
-  {
-   "cmd": "退出门派",
-   "cmd_name": "退出门派",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/EndGuildCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "GameCommands.cs 构造默认",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "EndGuildCommand",
-   "attr_name": "EndGuild",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].EndGuild",
-   "register_command": true,
-   "perm_attr": 0,
-   "field": "EndGuild",
-   "field_line": 70
   }
  ],
  "summary": {
-  "total": 13,
+  "total": 9,
   "by_verdict": {
-   "unreachable": 13
+   "unreachable": 9
   },
   "reachable": 0,
   "script_reachable": 0,
-  "unreachable": 13,
+  "unreachable": 9,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 172,
-   "Unimplemented": 13
+   "Implemented": 176,
+   "Unimplemented": 9
   },
   "third_state": 21,
   "third_state_imps": [
@@ -2720,7 +2636,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 151,
+  "complete_implemented": 155,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,

@@ -1874,6 +1874,11 @@ fn handle_gm_command(
     // **族 M**：`@怪` 的 `GetFrontPosition` 入参 = `PlayerActor.Dir`（玩家权威 Dir 在展示表，
     // `actor_dir` 优先实体 `ai.dir`、回落到展示表——与 `pose_create` 同口径）。
     let speaker_dir = actor_dir(host.world, host.displays, speaker.actor_id);
+    // **族 W**：`@退出门派` 的门读 `PlayObject.MyGuild/GuildRankNo`（会话缓存真身）。
+    let caller_guild = gmcmd::GmGuildState {
+        guild_name: sg.guild.guild_name.clone(),
+        rank_no: sg.guild.rank_no,
+    };
     let world_view = gmcmd::GmWorld {
         guilds: host.guilds,
         maps: host.registry,
@@ -1887,6 +1892,7 @@ fn handle_gm_command(
         spirit_mutiny_tick: Some(host.spirit_mutiny_tick),
         quests: Some(&quests),
         speaker_dir,
+        caller_guild: Some(&caller_guild),
         // 生产 `CM_SAY` 路径：宿主在**同一事件内**由 `apply_pending_gm_m_commands` 落地
         // 刷怪/造物（含 RNG）；`m_host` 只是「命令体可以装 pending」的接线标记。
         m_host: true,
@@ -7867,6 +7873,7 @@ impl ScriptGmEnv<'_> {
                 // 6 条走退化零帧（部署脚本无其可达调用）。
                 speaker_dir: 0,
                 m_host: false,
+                caller_guild: None,
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -9548,6 +9555,9 @@ struct EntityDerived {
     y: i32,
     dir: u8,
     attack_mode: u8,
+    /// `PlayObject.AllowGroupReCall`（`AllowGroupReCallCommand.cs:14` 的唯一生产写点；
+    /// 登录从记录装入、存档写回 `characters.AllowGroupReCall`——族 W 的 R 级落库面）。
+    allow_group_re_call: bool,
     /// ⚠ **可能是全零**（该路径的实体块从未同步装备）⇒ 消费端**必须先过
     /// [`use_items_loaded`]** 再采用，禁止直接写库——否则会把会话里已装备的物品写成
     /// `Index=0/Dura=0`（G-06 物资丢失形态）。接缝无条件拷 `e.use_items`，本不变量不在接缝里。
@@ -9563,6 +9573,7 @@ fn entity_derived_snapshot(e: &mir2_world::Entity) -> EntityDerived {
         y: e.y,
         dir: e.dir(),
         attack_mode: e.attack_mode,
+        allow_group_re_call: e.allow_group_re_call,
         use_items: e.use_items,
     }
 }
@@ -9996,6 +10007,10 @@ fn build_save_record(
         // 实体是权威（登录装入 + `@AttackMode` 写穿）⇒ 记录随会话实时值落库，
         // 否则 `@AttackMode` 只在本会话生效、登出即丢（review `2c5cb955` m-1）。
         rec.data.attatck_mode = d.attack_mode;
+        // `@允许天地合一` 的同源写回：oracle `PlayObject.AllowGroupReCall` 随
+        // `characters.AllowGroupReCall` 落库（`PlayerRecordData.allow_group_re_call`，
+        // 列已存在；族 W 的 R 级字段 diff 面）。
+        rec.data.allow_group_re_call = d.allow_group_re_call;
     } else if world.session(chr_name).is_some() {
         // 第三档：会话在、实体无、快照无 ⇒ 只能回落载入记录（必须留 WRN 痕迹）。
         warn_save_fallback(chr_name);
@@ -20330,6 +20345,187 @@ fn apply_pending_gm_castle_commands(
     }
 }
 
+/// 族 W（行会）的宿主落地段（卡 `openmir2-gm-family-w-guild`，tier=R）。
+///
+/// - `@创建行会`：`GuildMgr.AddGuild`（`GuildManager.cs:19-32`：CheckGuildName + FindGuild 去重）
+///   成功 ⇒ `GuildInfo` ctor 的 `GuildConf` 建 `<名>.ini` 副作用（`GuildConf.cs:7-14`）+
+///   `SaveGuildList` + SS_205（planes 跨服，单服登记）+ 绿字；`AddGuild` false ⇒ **静默**。
+/// - `@删除行会`：`DelGuild`（`GuildManager.cs:34-55`，OrdinalIgnoreCase；`RankList.Count>1` 拒删）
+///   成功 ⇒ `BackupGuildFile`（空体，`save_record`）+ RemoveAt + `SaveGuildList` + SS_206；
+///   失败 ⇒ 红「没找到X这个行会!!!」。
+/// - `@退出门派`：`MyGuild.DelMember`（`GuildInfo.cs:653-678`，成功 `UpdateGuildFile` ⇒ 当场落盘）
+///   ⇒ SS_207 + `MyGuild=null`（会话清三字段）+ `RefRankInfo(0,"")`(750,61) +
+///   `RefShowName()`(42,165) + 绿字(100,252)；`del_member` false ⇒ 静默（oracle `&&` 短路）。
+#[allow(clippy::too_many_arguments)]
+fn apply_pending_gm_guild_commands(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    world: &mir2_world::World,
+    guilds: &mut mir2_world::GuildManager,
+    guild_cfg: &mir2_world::GuildConfig,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    guild_sections: &mir2_data::guild::GuildFileSections,
+    server_index: i32,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    colors: &MsgColors,
+    now_tick: i32,
+    ref_range: i32,
+) {
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        return;
+    };
+    let add = sg.gm.pending_add_guild.take();
+    let del = sg.gm.pending_del_guild.take();
+    let end = sg.gm.pending_end_guild.take();
+    if add.is_none() && del.is_none() && end.is_none() {
+        return;
+    }
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name).cloned() else {
+        glog!("WRN", "W 族落地：ChrName={chr_name} 不在在线表 ⇒ 丢弃");
+        return;
+    };
+
+    // ---- ① @创建行会 ----
+    if let Some(req) = add {
+        if guilds.add_guild(&req.guild_name, &req.chief, guild_cfg) {
+            // `GuildInfo` ctor：`new GuildConf(sName, <GuildDir>/<sName>.ini)` ⇒ 文件不存在
+            // 时 `WriteString("Guild","GuildName",…)` 建文件（`GuildConf.cs:7-14` 副作用照搬）。
+            if let Some(store) = guild_store {
+                if let Err(e) = store.load_guild_conf(&req.guild_name) {
+                    glog!("ERR", "行会 .ini 建文件失败：{e}");
+                }
+            }
+            // `SetGuildInfo` → `SaveGuildInfoFile()`（`GuildInfo.cs:463-483`）：与 sibling
+            // 建会路径（`guild_official.rs:657-688`）同法。新建名无 `<名>.txt` 时
+            // `FileMode.Open` 抛错被 catch 记「保存行会信息失败!!!」⇒ 本宿同样记日志、不阻断
+            // （部署 GuildBase 只有 GuildList.txt ⇒ 正常建会会走这条失败日志，两栈一致）。
+            if let Some(g) = guilds.find_guild(&req.guild_name) {
+                if let Err(e) =
+                    guild_runtime::save_one(guild_store, guild_sections, g, now_tick, server_index)
+                {
+                    glog!("ERR", "保存行会信息失败!!! {e}");
+                }
+            }
+            // `SaveGuildList()`（`GuildManager.cs:124-143`；非 0 区 no-op 在 store 层判）。
+            if let Err(e) = guild_runtime::save_list(guild_store, &guilds.names(), server_index) {
+                glog!("ERR", "行会信息保存失败!!! {e}");
+            }
+            // `SendServerGroupMsg(SS_205, ServerIndex, sGuildName + '/' + sGuildChief)`：
+            // planes 跨服通道，客户端不可见 ⇒ 单服只记日志（G5 口径）。
+            glog!(
+                "INF",
+                "SS_205（单服无接收端）: {}/{}",
+                req.guild_name,
+                req.chief
+            );
+            send_gm_sysmsg(
+                gates,
+                &entry,
+                colors.green_f,
+                colors.green_b,
+                &format!("行会名称: {} 掌门人: {}", req.guild_name, req.chief),
+            );
+        }
+        // `AddGuild` false（名字非法/重名）⇒ `boAddState` 保持 false，无 else ⇒ 静默。
+    }
+
+    // ---- ② @删除行会 ----
+    if let Some(req) = del {
+        match guilds.del_guild(&req.guild_name) {
+            Some(record) => {
+                // `BackupGuildFile()`（`GuildInfo.cs` 四段清空）⇒ 落盘空体；再 SaveGuildList。
+                if let Err(e) = guild_runtime::save_record(
+                    guild_store,
+                    guild_sections,
+                    &record,
+                    now_tick,
+                    server_index,
+                ) {
+                    glog!("ERR", "保存行会信息失败!!! {e}");
+                }
+                if let Err(e) = guild_runtime::save_list(guild_store, &guilds.names(), server_index)
+                {
+                    glog!("ERR", "行会信息保存失败!!! {e}");
+                }
+                glog!("INF", "SS_206（单服无接收端）: {}", req.guild_name);
+            }
+            // 未找到 / `RankList.Count > 1` 拒删（oracle `break`）⇒ 同一红字。
+            None => send_gm_sysmsg(
+                gates,
+                &entry,
+                colors.red_f,
+                colors.red_b,
+                &format!("没找到{}这个行会!!!", req.guild_name),
+            ),
+        }
+    }
+
+    // ---- ③ @退出门派 ----
+    if let Some(req) = end {
+        let removed = guilds
+            .find_guild_mut(&req.guild_name)
+            .is_some_and(|g| g.del_member(chr_name, now_tick));
+        if removed {
+            // `DelMember` 末尾 `UpdateGuildFile()` ⇒ 当场落盘（`guild_cmd` 1039 同法）。
+            if let Some(g) = guilds.find_guild(&req.guild_name) {
+                if let Err(e) =
+                    guild_runtime::save_one(guild_store, guild_sections, g, now_tick, server_index)
+                {
+                    glog!("ERR", "保存行会信息失败!!! {e}");
+                }
+            }
+            glog!("INF", "SS_207（单服无接收端）: {}", req.guild_name);
+            // `PlayerActor.MyGuild = null`（会话缓存三字段清空）。
+            if let Some(sg) = sessions.get_mut(chr_name) {
+                sg.guild.guild_name = None;
+                sg.guild.rank_no = 0;
+                sg.guild.rank_name.clear();
+            }
+            // 排队帧优先级：`RefRankInfo(0,"")`=RM_CHANGEGUILDNAME(61) → `RefShowName`
+            // =RM_USERNAME(165) → `SysMsg`=RM_SYSMESSAGE(252)。750 无尾（纯头）。
+            if let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "GM 退出门派 750")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: entry.socket,
+                    body: guild_frames::sm_guild_changename_750(None, ""),
+                });
+            }
+            if let Some(display) = displays.get(entry.actor_id) {
+                let body =
+                    smframe::sm_username(entry.actor_id, display.name_color, &display.show_name);
+                for recipient in chat::hear_targets(world, entry.actor_id, ref_range) {
+                    let Some(t) = online.iter().find(|e| e.actor_id == recipient) else {
+                        continue;
+                    };
+                    if let Some(tx) = route_to_gate(gates, t.gate_idx, t.socket, "GM 退出门派 42")
+                    {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket: t.socket,
+                            body: body.clone(),
+                        });
+                    }
+                }
+            } else {
+                glog!(
+                    "WRN",
+                    "GM 退出门派：ActorId={} 无展示表条目 ⇒ 42 不产帧（登记）",
+                    entry.actor_id
+                );
+            }
+            send_gm_sysmsg(
+                gates,
+                &entry,
+                colors.green_f,
+                colors.green_b,
+                gmcmd::END_GUILD_OK,
+            );
+        }
+        // `DelMember` false ⇒ oracle `&&` 短路，无 else ⇒ 静默。
+    }
+}
+
 /// `TRouteInfo`（`src/OpenMir2/Data/TRouteInfo.cs:3-16`）：`!servertable.txt` 的一行。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteInfo {
@@ -23015,6 +23211,7 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
             d.sex,
             d.is_master,
             d.allow_guild_re_call,
+            d.allow_group_re_call,
             d.group_rcall_time,
             // `AttatckMode`（`WorldServer.cs:1148`）
             // 与 `ReLevel`（`:1133`）同由 `GetHumData` 装入。
@@ -24311,6 +24508,24 @@ fn sim_loop(
                                 &online,
                                 &gates,
                                 &mut pending_gm_castle_broadcasts,
+                            );
+                            // **族 W**：行会 4 条的宿主落地（GuildMgr 写 + 行会文件/列表落盘 +
+                            // SS_205/206/207 单服登记 + 750/42/100 帧序）。
+                            apply_pending_gm_guild_commands(
+                                &mut ground_sessions,
+                                &chr_name,
+                                &world,
+                                &mut guilds,
+                                &guild_cfg,
+                                guild_store.as_ref(),
+                                &enter_cfg.guild_sections,
+                                i32::from(enter_cfg.server_index),
+                                &displays,
+                                &online,
+                                &gates,
+                                &colors,
+                                world.clock_ms as i32,
+                                enter_cfg.shop.send_ref_msg_range,
                             );
                         }
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
@@ -26119,6 +26334,7 @@ fn sim_loop(
                                                                 // 落地通道（同桥口径）。
                                                                 speaker_dir: 0,
                                                                 m_host: false,
+                                                                caller_guild: None,
                                                             };
                                                             if let Some(sg) = ground_sessions
                                                                 .get_mut(&head.chr_name)
@@ -44865,6 +45081,403 @@ break
         assert_eq!(count("dead"), 5, "Death=true ⇒ 不清（!Death 门）");
         assert_eq!(count("ghost"), 5, "Ghost=true ⇒ 不清（!Ghost 门）");
         assert!(broadcasts.is_empty(), "StartContest 无广播队");
+    }
+
+    // ==================== 族 W · 行会宿主（卡 `openmir2-gm-family-w-guild`，tier=R）====================
+
+    /// 进世界夹具：`name` 角色 Race=Play，落在 map 0 的 (11,22)（`RefShowName` 需要实体落格）。
+    fn w_session_world(name: &str) -> (mir2_world::World, i32) {
+        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        world.open_session(name);
+        let mut e = mir2_world::Entity::new(0, name.to_string(), 11, 22);
+        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let actor = world.enter_map(name, e, 0).expect("进世界");
+        world.tick();
+        (world, actor)
+    }
+
+    fn w_colors() -> MsgColors {
+        MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 219,
+            green_b: 255,
+            blue_f: 251,
+            blue_b: 252,
+        }
+    }
+
+    fn w_collect(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                SimToGate::SendFrame { body, .. } => out.push(body),
+                other => panic!("族 W 不应产生非帧消息: {other:?}"),
+            }
+        }
+        out
+    }
+
+    /// **A4（R 级核心）**：`@允许天地合一` 翻转后，权威 `Entity.allow_group_re_call` 被写穿，
+    /// 且 `build_save_record` 把它写进 `characters.AllowGroupReCall`（`PlayerRecordData`
+    /// 的既存列，不改 schema）——完整「toggle → 实体 → 记录」链；再翻一次回 false。
+    /// 变异红：删 `EntityDerived` 采集或 `build_save_record` 写回 ⇒ 落库断言红。
+    #[test]
+    fn w_allow_group_recall_persists_to_record() {
+        let guilds = mir2_world::GuildManager::new();
+        let (mut world, actor) = w_session_world("hero");
+        let mut sessions = std::collections::HashMap::new();
+        let mut sg = test_session_ground(actor);
+        sg.gm.permission = 10; // GM 权限门（现网 Permission 恒 0，用例显式抬）
+        sessions.insert("hero".to_string(), sg);
+        let saved = SavedHuman {
+            account: "h".into(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".into(),
+            derived: None,
+        };
+        // 第一次：false → true。
+        {
+            let view = gmcmd::GmWorld::new(&guilds)
+                .with_world(&world)
+                .with_speaker("hero");
+            let sess = &mut sessions.get_mut("hero").unwrap().gm;
+            let r = gmcmd::execute(sess, &gmcmd::GmConfig::default(), &view, "@允许天地合一");
+            assert_eq!(r.msgs[0].text, gmcmd::ALLOW_GROUP_ON);
+            assert!(
+                sess.allow_group_re_call,
+                "翻的是 AllowGroupReCall（review I1）"
+            );
+            assert!(
+                !sess.allow_guild_re_call,
+                "不得碰 @sadasd 的 AllowGuildReCall"
+            );
+        }
+        apply_pending_gm_entity(&mut sessions, "hero", &mut world);
+        assert!(
+            world.entities.get(actor).unwrap().allow_group_re_call,
+            "权威 Entity 必须写穿"
+        );
+        // 离世快照同源：`EntityDerived` 必须采集本字段（soft-close 后实体摘除时用）。
+        let derived = entity_derived_snapshot(world.entities.get(actor).expect("实体在场"));
+        assert!(
+            derived.allow_group_re_call,
+            "EntityDerived 必须采集 allow_group_re_call"
+        );
+        let rec = build_save_record(&saved, "hero", &world, &sessions["hero"], None);
+        assert!(
+            rec.data.allow_group_re_call,
+            "characters.AllowGroupReCall 必须随存档写 true"
+        );
+        // 第二次：true → false。
+        {
+            let view = gmcmd::GmWorld::new(&guilds)
+                .with_world(&world)
+                .with_speaker("hero");
+            let sess = &mut sessions.get_mut("hero").unwrap().gm;
+            let r = gmcmd::execute(sess, &gmcmd::GmConfig::default(), &view, "@允许天地合一");
+            assert_eq!(r.msgs[0].text, gmcmd::ALLOW_GROUP_OFF);
+            assert!(!sess.allow_guild_re_call);
+        }
+        apply_pending_gm_entity(&mut sessions, "hero", &mut world);
+        let rec = build_save_record(&saved, "hero", &world, &sessions["hero"], None);
+        assert!(!rec.data.allow_group_re_call, "再翻一次 ⇒ 落库字段回 false");
+    }
+
+    /// **A3 宿主**：`@退出门派` 成功 ⇒ DelMember + SS_207 登记 + 会话清 `MyGuild` +
+    /// 750(61) → 42(165) → 100(252) 帧序 + 绿字「你已经退出行会。」。
+    /// 变异红：删 DelMember / 把 750 放广播后 / 不清会话 ⇒ 本用例红。
+    #[test]
+    fn w_end_guild_host_frames_and_side_effects() {
+        let mut guilds = mir2_world::GuildManager::new();
+        let cfg = mir2_world::GuildConfig::default();
+        assert!(guilds.add_guild("测试会", "boss", &cfg));
+        guilds
+            .find_guild_mut("测试会")
+            .unwrap()
+            .add_member("hero", &cfg, 0);
+        let (world, actor) = w_session_world("hero");
+        let mut sessions = std::collections::HashMap::new();
+        let mut sg = test_session_ground(actor);
+        sg.guild.guild_name = Some("测试会".into());
+        sg.guild.rank_no = 2;
+        sessions.insert("hero".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            actor,
+            downlink::ActorDisplay::new(0, 0, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        sessions.get_mut("hero").unwrap().gm.pending_end_guild = Some(gmcmd::GmEndGuildRequest {
+            guild_name: "测试会".into(),
+        });
+        apply_pending_gm_guild_commands(
+            &mut sessions,
+            "hero",
+            &world,
+            &mut guilds,
+            &cfg,
+            None,
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            0,
+            &displays,
+            &online,
+            &gates,
+            &w_colors(),
+            world.clock_ms as i32,
+            12,
+        );
+        let frames = w_collect(&mut rx);
+        let idents: Vec<u16> = frames
+            .iter()
+            .map(|b| u16::from_le_bytes([b[4], b[5]]))
+            .collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_CHANGEGUILDNAME,
+                mir2_protocol::messages::SM_USERNAME,
+                mir2_protocol::messages::SM_SYSMESSAGE
+            ],
+            "帧序必须是 750 → 42 → 100"
+        );
+        assert_eq!(frames[0].len(), 12, "RefRankInfo(0,\"\") ⇒ 纯头 750");
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&frames[2][12..])),
+            gmcmd::END_GUILD_OK
+        );
+        assert!(
+            !guilds.find_guild("测试会").unwrap().is_member("hero"),
+            "DelMember 必须移除成员"
+        );
+        assert!(
+            sessions["hero"].guild.guild_name.is_none() && sessions["hero"].guild.rank_no == 0,
+            "MyGuild=null ⇒ 会话清空"
+        );
+    }
+
+    /// 宿主 `@创建行会`（生产入口 `handle_say` → apply）：首次成功 ⇒ 管理器加会 + 绿字
+    /// 「行会名称: 测试会 掌门人: chief」；重复（掌门已入会 ⇒ MemberOfGuild 门）⇒ 命令体静默、
+    /// 零帧。变异红：删 MemberOfGuild 门 ⇒ 第二次仍加会失败但有回执差异；删 apply 落点 ⇒ 首次红。
+    #[test]
+    fn w_add_guild_end_to_end_and_member_gate() {
+        let mut ctx = TestChatCtx::new();
+        let mut world = mir2_world::World::new(32, 32);
+        let mut hero = mir2_world::Entity::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let hero_id = world.add_entity(hero);
+        let mut chief = mir2_world::Entity::new(0, "chief".to_string(), 6, 6);
+        chief.race = mir2_world::ACTOR_RACE_PLAY;
+        world.add_entity(chief);
+        let mut sessions = std::collections::HashMap::new();
+        let mut sg = test_session_ground(hero_id);
+        sg.gm.permission = 10; // GM 权限门
+        sessions.insert("hero".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let displays = downlink::DisplayTable::new();
+        let colors = w_colors();
+        let saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
+        let cfg = mir2_world::GuildConfig::default();
+        let apply = |sessions: &mut std::collections::HashMap<String, SessionGround>,
+                     guilds: &mut mir2_world::GuildManager| {
+            apply_pending_gm_guild_commands(
+                sessions,
+                "hero",
+                &world,
+                guilds,
+                &cfg,
+                None,
+                &mir2_data::guild::GuildFileSections::oracle_defaults(),
+                0,
+                &displays,
+                &online,
+                &gates,
+                &colors,
+                world.clock_ms as i32,
+                12,
+            );
+        };
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            let (deferred, direct) = handle_say_with_saves(
+                &host,
+                &mut sessions,
+                &saves,
+                "hero",
+                901,
+                Some("@创建行会 测试会 chief"),
+            );
+            assert!(deferred.is_empty() && direct.is_empty(), "命令体零帧");
+        }
+        apply(&mut sessions, &mut ctx.guilds);
+        assert!(ctx.guilds.find_guild("测试会").is_some());
+        let frames = w_collect(&mut rx);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&frames[0][12..])),
+            "行会名称: 测试会 掌门人: chief"
+        );
+        // 第二次：掌门已在会中 ⇒ `MemberOfGuild != null` ⇒ 命令体静默（pending 不装）。
+        {
+            let host = ctx.host(&online, &world, &gates, &colors);
+            let _ = handle_say_with_saves(
+                &host,
+                &mut sessions,
+                &saves,
+                "hero",
+                901,
+                Some("@创建行会 测试会2 chief"),
+            );
+        }
+        apply(&mut sessions, &mut ctx.guilds);
+        assert!(
+            ctx.guilds.find_guild("测试会2").is_none(),
+            "MemberOfGuild 门"
+        );
+        assert!(w_collect(&mut rx).is_empty(), "静默零帧");
+    }
+
+    /// **m1（review）**：`@创建行会` 宿主必须像 sibling 路径（`guild_official.rs:657-688`）
+    /// 一样在 `load_guild_conf` 后尝试 `SaveGuildInfoFile`（`save_one`）再 `SaveGuildList`。
+    /// 用真实 `GuildStore` + **已存在**的 `<名>.txt` 验证写入发生（oracle `FileMode.Open`
+    /// 只在文件已存在时写；缺文件走失败日志）。变异红：删 `save_one` 块 ⇒ 文件保持旧体。
+    #[test]
+    fn w_add_guild_host_attempts_save_guild_file() {
+        let base = std::env::temp_dir().join(format!(
+            "gs-w-guild-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let guild_file = base.join("GuildList.txt");
+        std::fs::write(
+            &guild_file,
+            "旧会
+",
+        )
+        .unwrap();
+        let txt = base.join("测试会.txt");
+        std::fs::write(&txt, "old-body").unwrap();
+        let store = mir2_data::guild::GuildStore::new(&base, &guild_file);
+        let cfg = mir2_world::GuildConfig::default();
+        let mut guilds = mir2_world::GuildManager::new();
+        let (world, actor) = w_session_world("hero");
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(actor));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
+        let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let displays = downlink::DisplayTable::new();
+        sessions.get_mut("hero").unwrap().gm.pending_add_guild = Some(gmcmd::GmAddGuildRequest {
+            guild_name: "测试会".into(),
+            chief: "hero".into(),
+        });
+        apply_pending_gm_guild_commands(
+            &mut sessions,
+            "hero",
+            &world,
+            &mut guilds,
+            &cfg,
+            Some(&store),
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            0,
+            &displays,
+            &online,
+            &gates,
+            &w_colors(),
+            world.clock_ms as i32,
+            12,
+        );
+        assert!(guilds.find_guild("测试会").is_some());
+        let body = std::fs::read(&txt).unwrap();
+        assert_ne!(
+            body,
+            b"old-body".to_vec(),
+            "已存在的 <名>.txt 必须被 save_one 写入新会体（sibling 口径）"
+        );
+        assert!(base.join("测试会.ini").exists(), "GuildConf ctor 建 .ini");
+        let list = std::fs::read(&guild_file).unwrap();
+        let name = gbk_encode("测试会");
+        assert!(
+            list.windows(name.len()).any(|w| w == name.as_slice()),
+            "SaveGuildList 写名单（GBK）"
+        );
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    /// 宿主 `@删除行会`：成功（单 rank）⇒ 管理器移除、零客户端帧（SS_206 仅登记）；
+    /// `RankList.Count>1` 拒删 ⇒ 红「没找到X这个行会!!!」。
+    /// 变异红：删 `del_guild` 落点 / 把拒删也报成功 ⇒ 本用例红。
+    #[test]
+    fn w_del_guild_host_success_and_refusal() {
+        let cfg = mir2_world::GuildConfig::default();
+        let mut guilds = mir2_world::GuildManager::new();
+        assert!(guilds.add_guild("可删会", "boss", &cfg));
+        assert!(guilds.add_guild("多人会", "boss2", &cfg));
+        guilds
+            .find_guild_mut("多人会")
+            .unwrap()
+            .add_member("bob", &cfg, 0);
+        let (world, actor) = w_session_world("hero");
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(actor));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let displays = downlink::DisplayTable::new();
+        let colors = w_colors();
+        let mut apply = |guilds: &mut mir2_world::GuildManager, name: &str| {
+            sessions.get_mut("hero").unwrap().gm.pending_del_guild =
+                Some(gmcmd::GmDelGuildRequest {
+                    guild_name: name.to_string(),
+                });
+            apply_pending_gm_guild_commands(
+                &mut sessions,
+                "hero",
+                &world,
+                guilds,
+                &cfg,
+                None,
+                &mir2_data::guild::GuildFileSections::oracle_defaults(),
+                0,
+                &displays,
+                &online,
+                &gates,
+                &colors,
+                world.clock_ms as i32,
+                12,
+            );
+        };
+        apply(&mut guilds, "可删会");
+        assert!(guilds.find_guild("可删会").is_none(), "单 rank 可删");
+        assert!(w_collect(&mut rx).is_empty(), "SS_206 单服无客户端帧");
+        apply(&mut guilds, "多人会");
+        assert!(guilds.find_guild("多人会").is_some(), "多 rank 拒删");
+        let frames = w_collect(&mut rx);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&frames[0][12..])),
+            "没找到多人会这个行会!!!"
+        );
     }
 
     /// `@时间`（`DataCommand`）：`SysMsg(当前日期时间: yyyy-MM-dd HH:mm:ss, Blue, Hint)`
