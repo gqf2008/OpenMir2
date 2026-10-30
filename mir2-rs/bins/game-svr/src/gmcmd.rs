@@ -1321,8 +1321,13 @@ pub struct GmSession {
     // ---- 批次 3 · 传送/召唤族（`PlayObject` 同生命周期字段；ctor 缺省见 `Default`）----
     /// `PlayObject.CanDearRecall`（`@dfsgf567` 翻转）。
     pub can_dear_recall: bool,
-    /// `PlayObject.AllowGuildReCall`（`@sadasd` 翻转；记录 `characters.AllowGuildReCall` 登录写入）。
+    /// `PlayObject.AllowGuildReCall`（`AllowGuildRecallCommand.cs:15` 的 `@sadasd` 翻转；
+    /// 记录 `characters.AllowGuildReCall` 登录写入）。
     pub allow_guild_re_call: bool,
+    /// `PlayObject.AllowGroupReCall`（`AllowGroupReCallCommand.cs:15` 的 `@允许天地合一` 翻转；
+    /// `WorldServer.cs:1159` 从 `humData.AllowGroupReCall` 装入）。**与
+    /// [`Self::allow_guild_re_call`] 是两个独立 bool**（oracle 原样；review I1 前误合并）。
+    pub allow_group_re_call: bool,
     /// `PlayObject.CanMasterRecall`（`@fdgh56j` 翻转）。
     pub can_master_recall: bool,
     /// `PlayObject.RecallSuite`（`PlayObject.cs:510`；唯一写点 `:2530`，`@天地合一` 的门之一）。
@@ -1492,6 +1497,7 @@ impl Default for GmSession {
             test_speed_mode: false,
             can_dear_recall: false,
             allow_guild_re_call: false,
+            allow_group_re_call: false,
             can_master_recall: false,
             recall_suite: false,
             is_master: false,
@@ -1559,11 +1565,13 @@ impl GmSession {
     /// `record::CharacterData.attatck_mode`/`.re_level`，不装载会让 `@AttackMode` 的
     /// 连加序列整体偏移、`@转生` 印出的发起者 `ReLevel` 为 0。
     #[must_use]
+    #[allow(clippy::too_many_arguments)] // 8 个 `GetHumData` 同源字段（新增 AllowGroupReCall 后超阈值）
     pub fn from_character(
         dear_name: &str,
         gender: u8,
         is_master: bool,
         allow_guild_re_call: bool,
+        allow_group_re_call: bool,
         group_rcall_time: i16,
         attack_mode: u8,
         re_level: u8,
@@ -1573,6 +1581,7 @@ impl GmSession {
             gender,
             is_master,
             allow_guild_re_call,
+            allow_group_re_call,
             group_rcall_time,
             attack_mode,
             re_level,
@@ -3463,8 +3472,11 @@ fn end_guild(world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
 /// 新值经 `pending_entity` 在同一事件内落到权威 `Entity.allow_group_re_call`，并由存档
 /// `EntityDerived` 写 `characters.AllowGroupReCall`（R 级落库面）。
 fn allow_group_recall(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
-    sess.allow_guild_re_call = !sess.allow_guild_re_call;
-    let new_value = sess.allow_guild_re_call;
+    // **review I1**：oracle 的 `AllowGroupReCall` 与 `@sadasd` 的 `AllowGuildReCall` 是两个
+    // 独立 `PlayObject` 字段（`AllowGroupReCallCommand.cs:15` vs `AllowGuildRecallCommand.cs:15`）
+    // ⇒ 只翻本字段；首翻的当前值来自 `characters.AllowGroupReCall`（登录 `from_character`）。
+    sess.allow_group_re_call = !sess.allow_group_re_call;
+    let new_value = sess.allow_group_re_call;
     let state = sess.entity_write(world);
     sess.stash(state, |st| {
         st.allow_group_re_call = Some(new_value);
@@ -9435,7 +9447,7 @@ mod tests {
     /// I-4：登录装载 `AttatckMode`（`WorldServer.cs:1148`）与 `ReLevel`（`:1133`）。
     #[test]
     fn gm_session_carries_attack_mode_and_re_level() {
-        let mut sess = GmSession::from_character("", 0, false, false, 0, 3, 7);
+        let mut sess = GmSession::from_character("", 0, false, false, false, 0, 3, 7);
         assert_eq!(sess.attack_mode, 3);
         assert_eq!(sess.re_level, 7);
         sess.permission = 10;
@@ -13391,10 +13403,18 @@ mod tests {
         let world = w_world();
         let view = w_view(&guilds, &world, None);
         let mut sess = gm_session();
-        assert!(!sess.allow_guild_re_call, "ctor false");
+        assert!(
+            !sess.allow_group_re_call,
+            "ctor false（AllowGroupReCall 独立字段）"
+        );
+        assert!(!sess.allow_guild_re_call, "@sadasd 字段不受影响");
         let r = execute(&mut sess, &GmConfig::default(), &view, "@允许天地合一");
         assert_eq!(texts(&r), vec![(GmColor::Green, ALLOW_GROUP_ON)]);
-        assert!(sess.allow_guild_re_call);
+        assert!(sess.allow_group_re_call, "翻的是 AllowGroupReCall");
+        assert!(
+            !sess.allow_guild_re_call,
+            "不得碰 AllowGuildReCall（review I1）"
+        );
         let ent = sess.pending_entity.expect("必须落 Entity 差量");
         assert_eq!(ent.allow_group_re_call, Some(true));
         let gm_id = world
@@ -13407,6 +13427,7 @@ mod tests {
         // 再翻一次 ⇒ OFF。
         let r = execute(&mut sess, &GmConfig::default(), &view, "@允许天地合一");
         assert_eq!(texts(&r), vec![(GmColor::Green, ALLOW_GROUP_OFF)]);
+        assert!(!sess.allow_group_re_call);
         assert!(!sess.allow_guild_re_call);
         assert_eq!(
             sess.pending_entity.expect("第二次差量").allow_group_re_call,
@@ -13420,5 +13441,58 @@ mod tests {
             "@允许天地合一 ignored",
         );
         assert_eq!(texts(&r), vec![(GmColor::Green, ALLOW_GROUP_ON)]);
+    }
+
+    /// **review I1 序列牙**：`@sadasd`（`AllowGuildReCall`）与 `@允许天地合一`
+    /// （`AllowGroupReCall`）是两个独立 oracle 字段，互不翻转；首翻当前值来自
+    /// `characters.AllowGroupReCall` 列（`from_character` 的第 5 个 bool），不是
+    /// `AllowGuildReCall`。变异红：把 `allow_group_recall` 改回翻
+    /// `sess.allow_guild_re_call` ⇒ 本用例红（探针原缺陷：先 @sadasd 再 toggle 得 OFF）。
+    #[test]
+    fn w_allow_group_recall_independent_of_sadasd() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = w_world();
+        let view = w_view(&guilds, &world, None);
+        let mut sess = gm_session();
+        // 先 @sadasd（翻 AllowGuildReCall）⇒ 再 @允许天地合一 必须是**首翻 ON**。
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@sadasd");
+        assert_eq!(texts(&r), vec![(GmColor::Green, ENABLE_GUILD_RECALL)]);
+        assert!(sess.allow_guild_re_call);
+        assert!(!sess.allow_group_re_call);
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@允许天地合一");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Green, ALLOW_GROUP_ON)],
+            "独立字段首翻必须 ON（旧缺陷：复用 allow_guild_re_call ⇒ OFF）"
+        );
+        assert!(sess.allow_group_re_call);
+        assert!(sess.allow_guild_re_call, "@sadasd 状态不被本命令改动");
+        assert_eq!(
+            sess.pending_entity
+                .expect("Entity 差量")
+                .allow_group_re_call,
+            Some(true)
+        );
+        // 再 @sadasd（翻回 false）——@允许天地合一 状态保持 true。
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@sadasd");
+        assert_eq!(texts(&r), vec![(GmColor::Green, DISABLE_GUILD_RECALL)]);
+        assert!(!sess.allow_guild_re_call);
+        assert!(sess.allow_group_re_call, "两字段互不干扰");
+        // 再 toggle ⇒ OFF。
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@允许天地合一");
+        assert_eq!(texts(&r), vec![(GmColor::Green, ALLOW_GROUP_OFF)]);
+        assert!(!sess.allow_group_re_call);
+        // 首翻当前值取自 AllowGroupReCall 列：from_character 置 true、AllowGuildReCall=false
+        // ⇒ 第一次 @允许天地合一 应为 OFF。
+        let mut seeded = GmSession::from_character("", 0, false, false, true, 0, 3, 7);
+        seeded.permission = 10;
+        let r = execute(&mut seeded, &GmConfig::default(), &view, "@允许天地合一");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Green, ALLOW_GROUP_OFF)],
+            "首翻读 AllowGroupReCall 列（true）⇒ OFF"
+        );
+        assert!(!seeded.allow_group_re_call);
+        assert!(!seeded.allow_guild_re_call);
     }
 }

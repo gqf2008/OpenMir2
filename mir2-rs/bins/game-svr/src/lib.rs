@@ -20397,6 +20397,17 @@ fn apply_pending_gm_guild_commands(
                     glog!("ERR", "行会 .ini 建文件失败：{e}");
                 }
             }
+            // `SetGuildInfo` → `SaveGuildInfoFile()`（`GuildInfo.cs:463-483`）：与 sibling
+            // 建会路径（`guild_official.rs:657-688`）同法。新建名无 `<名>.txt` 时
+            // `FileMode.Open` 抛错被 catch 记「保存行会信息失败!!!」⇒ 本宿同样记日志、不阻断
+            // （部署 GuildBase 只有 GuildList.txt ⇒ 正常建会会走这条失败日志，两栈一致）。
+            if let Some(g) = guilds.find_guild(&req.guild_name) {
+                if let Err(e) =
+                    guild_runtime::save_one(guild_store, guild_sections, g, now_tick, server_index)
+                {
+                    glog!("ERR", "保存行会信息失败!!! {e}");
+                }
+            }
             // `SaveGuildList()`（`GuildManager.cs:124-143`；非 0 区 no-op 在 store 层判）。
             if let Err(e) = guild_runtime::save_list(guild_store, &guilds.names(), server_index) {
                 glog!("ERR", "行会信息保存失败!!! {e}");
@@ -23200,6 +23211,7 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
             d.sex,
             d.is_master,
             d.allow_guild_re_call,
+            d.allow_group_re_call,
             d.group_rcall_time,
             // `AttatckMode`（`WorldServer.cs:1148`）
             // 与 `ReLevel`（`:1133`）同由 `GetHumData` 装入。
@@ -45136,7 +45148,14 @@ break
             let sess = &mut sessions.get_mut("hero").unwrap().gm;
             let r = gmcmd::execute(sess, &gmcmd::GmConfig::default(), &view, "@允许天地合一");
             assert_eq!(r.msgs[0].text, gmcmd::ALLOW_GROUP_ON);
-            assert!(sess.allow_guild_re_call);
+            assert!(
+                sess.allow_group_re_call,
+                "翻的是 AllowGroupReCall（review I1）"
+            );
+            assert!(
+                !sess.allow_guild_re_call,
+                "不得碰 @sadasd 的 AllowGuildReCall"
+            );
         }
         apply_pending_gm_entity(&mut sessions, "hero", &mut world);
         assert!(
@@ -45328,6 +45347,79 @@ break
             "MemberOfGuild 门"
         );
         assert!(w_collect(&mut rx).is_empty(), "静默零帧");
+    }
+
+    /// **m1（review）**：`@创建行会` 宿主必须像 sibling 路径（`guild_official.rs:657-688`）
+    /// 一样在 `load_guild_conf` 后尝试 `SaveGuildInfoFile`（`save_one`）再 `SaveGuildList`。
+    /// 用真实 `GuildStore` + **已存在**的 `<名>.txt` 验证写入发生（oracle `FileMode.Open`
+    /// 只在文件已存在时写；缺文件走失败日志）。变异红：删 `save_one` 块 ⇒ 文件保持旧体。
+    #[test]
+    fn w_add_guild_host_attempts_save_guild_file() {
+        let base = std::env::temp_dir().join(format!(
+            "gs-w-guild-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+        let guild_file = base.join("GuildList.txt");
+        std::fs::write(
+            &guild_file,
+            "旧会
+",
+        )
+        .unwrap();
+        let txt = base.join("测试会.txt");
+        std::fs::write(&txt, "old-body").unwrap();
+        let store = mir2_data::guild::GuildStore::new(&base, &guild_file);
+        let cfg = mir2_world::GuildConfig::default();
+        let mut guilds = mir2_world::GuildManager::new();
+        let (world, actor) = w_session_world("hero");
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(actor));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
+        let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let displays = downlink::DisplayTable::new();
+        sessions.get_mut("hero").unwrap().gm.pending_add_guild = Some(gmcmd::GmAddGuildRequest {
+            guild_name: "测试会".into(),
+            chief: "hero".into(),
+        });
+        apply_pending_gm_guild_commands(
+            &mut sessions,
+            "hero",
+            &world,
+            &mut guilds,
+            &cfg,
+            Some(&store),
+            &mir2_data::guild::GuildFileSections::oracle_defaults(),
+            0,
+            &displays,
+            &online,
+            &gates,
+            &w_colors(),
+            world.clock_ms as i32,
+            12,
+        );
+        assert!(guilds.find_guild("测试会").is_some());
+        let body = std::fs::read(&txt).unwrap();
+        assert_ne!(
+            body,
+            b"old-body".to_vec(),
+            "已存在的 <名>.txt 必须被 save_one 写入新会体（sibling 口径）"
+        );
+        assert!(base.join("测试会.ini").exists(), "GuildConf ctor 建 .ini");
+        let list = std::fs::read(&guild_file).unwrap();
+        let name = gbk_encode("测试会");
+        assert!(
+            list.windows(name.len()).any(|w| w == name.as_slice()),
+            "SaveGuildList 写名单（GBK）"
+        );
+        std::fs::remove_dir_all(&base).ok();
     }
 
     /// 宿主 `@删除行会`：成功（单 rank）⇒ 管理器移除、零客户端帧（SS_206 仅登记）；

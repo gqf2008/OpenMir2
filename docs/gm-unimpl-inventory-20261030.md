@@ -269,17 +269,24 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   之后由 `fan_out_sysmessage_to_all` 扇出。变异 5 发全红（帧序/停战/钳 0/或语义/范围门）。
 - **族 W 4 条已落地**：卡 `openmir2-gm-family-w-guild`（worker-85，tier=R）——
   创建行会（`ServerIndex!=0` 红死分支 / 空名红 / 掌门离线红 / `MemberOfGuild!=null` ⇒ **静默** /
-  成功 `AddGuild` + `GuildConf` 建 `.ini` + `SaveGuildList` + SS_205 登记 + 绿字
+  成功 `AddGuild` + `GuildConf` 建 `.ini` + `SaveGuildInfoFile`（`save_one`；缺 `<名>.txt`
+  时记「保存行会信息失败!!!」日志、不阻断，sibling `guild_official` 同法）+ `SaveGuildList`
+  + SS_205 登记 + 绿字
   「行会名称: X 掌门人: Y」；掌门身上的行会刷新段 oracle 整段注释 ⇒ 不补）/删除行会
   （`ServerIndex!=0` 红 / 空名红 / `DelGuild` 成功 ⇒ `BackupGuildFile` 空体 + RemoveAt +
   `SaveGuildList` + SS_206；失败含 `RankList.Count>1` 拒删 ⇒ 红「没找到X这个行会!!!」）/
   退出门派（无行会红 / 掌门 `GuildRankNo<=1` 拒退红 / 成员 `DelMember` 成功 ⇒ SS_207 +
   清 `MyGuild` + `RefRankInfo(0,"")`(750,61) → `RefShowName`(42,165) → 绿字(100,252)；
   `IsMember==false` ⇒ `&&` 短路静默）/允许天地合一（toggle 双绿字 `[允许天地合一]`/
-  `[禁止天地合一]` + **`Entity.allow_group_re_call` 写穿并由 `EntityDerived` 存档写
-  `characters.AllowGroupReCall`**——R 级字段 diff 面，列已存在、不改 schema）。
+  `[禁止天地合一]`；翻的是**独立** `PlayObject.AllowGroupReCall`——与 `@sadasd` 的
+  `AllowGuildReCall` 是两个字段（review I1），首翻当前值取 `characters.AllowGroupReCall`
+  （登录 `from_character`）——并写 `Entity.allow_group_re_call`（`@天地合一` 成员门）+
+  `EntityDerived` 在**会话内存 record** 往返；oracle 的 `characters.AllowGroupReCall` 列在
+  SQL 层绑 `hd.AllowGroup` 且不随本命令变化（Rust db-srv 照抄 bug-for-bug）⇒ **DB 列不变属
+  oracle 原样**，不以列 diff 为锚（T-272 登记，含 `build_save_record` 未回写 live
+  `AllowGroup` 的既有偏差））。
   宿主 `apply_pending_gm_guild_commands`（GuildMgr 写 + 行会文件/列表落盘 + SS 单服登记 +
-  750→42→100 帧序）。变异 9 发全红。
+  750→42→100 帧序）。变异 12 发全红。
 - **现存 `Imp::Unimplemented` = 74 − 65 = 9**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
   thirty_command_bodies` 的 176 已接 / 9 未接断言；改坏任一计数 ⇒ 该测试红）。
 - 剩余缺口族：无（§4.3 分族索引不变；X2 18 / F 3 / M 6 / C 5 / W 4 全结；余 9 条为结构不可达/垃圾命令，见 §4.2）。
