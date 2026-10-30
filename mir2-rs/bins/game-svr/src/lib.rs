@@ -45599,6 +45599,122 @@ SendRefMsgRange=15
         );
     }
 
+    /// **卡 `openmir2-querybagitems-81-throttle`（tier=R）牙**：30s 限频臂本身
+    /// （`PlayObject.Message.cs:785` `(GetTickCount()-QueryBagItemsTick) > 30*1000`）。
+    /// 上面的 [`query_bagitems_replies_sm_bagitems_with_items`] 只钉「首查回 201 / 空包不发」，
+    /// 这里钉「窗口内/精确边界不回、窗口外回且回后刷新基准」（`Message.cs:787`）。
+    /// 变异红（重放记录见卡 comment）：
+    /// ① 删 [`handle_query_bag_cmd`] 限频守卫（`lib.rs:4413-4421`）⇒ 窗口内/边界臂红；
+    /// ② `lib.rs:4414` `<=` 改 `<` ⇒ 精确边界臂红；
+    /// ③ 删 `lib.rs:4422` 回帧后刷新 ⇒ 刷新断言 + 末臂红（窗口外二查仍过）。
+    #[test]
+    fn query_bagitems_throttle_30s() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+
+        let catalog = newbie_catalog();
+        let names = newbie_names();
+        let mut list = Vec::new();
+        let mut n = names.item_number;
+        add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
+
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 40_000;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(7);
+        sg.state.item_list = list;
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        // ① 窗口内二查（tick=now）⇒ 不回 201（oracle else 臂 `SysMsg`，文案未建模）。
+        sessions.get_mut("hero").unwrap().query_bag_items_tick = Some(world.clock_ms);
+        handle_query_bag_cmd(
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "30s 窗口内二查不得回 SM_BAGITEMS"
+        );
+
+        // ② 精确边界 now-t=30_000 ⇒ 仍被抑制（oracle `> 30*1000` 不成立）。
+        sessions.get_mut("hero").unwrap().query_bag_items_tick = Some(world.clock_ms - 30_000);
+        handle_query_bag_cmd(
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "now-t=30_000 边界不得回 SM_BAGITEMS"
+        );
+
+        // ③ 窗口外 now-t=30_001 ⇒ 回 201，且回后刷新限频基准（`Message.cs:787`）。
+        sessions.get_mut("hero").unwrap().query_bag_items_tick = Some(world.clock_ms - 30_001);
+        handle_query_bag_cmd(
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+        );
+        let SimToGate::SendFrame { body, .. } = rx0.try_recv().expect("窗口外必须回 SM_BAGITEMS")
+        else {
+            panic!("应为 SendFrame")
+        };
+        assert_eq!(
+            CommandMessage::from_bytes(&body).expect("至少 12B").ident,
+            mir2_protocol::messages::SM_BAGITEMS,
+            "ident=201"
+        );
+        assert_eq!(
+            sessions.get_mut("hero").unwrap().query_bag_items_tick,
+            Some(world.clock_ms),
+            "回帧后限频基准必须刷新"
+        );
+
+        // ④ 刷新后再查（Δt=1s）⇒ 仍被抑制（证明 ③ 的刷新真生效）。
+        world.clock_ms += 1_000;
+        handle_query_bag_cmd(
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &world,
+        );
+        assert!(
+            matches!(rx0.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "回帧刷新基准后 1s 内再查不得回 SM_BAGITEMS"
+        );
+    }
+
     // ── 卡 `openmir2-bagitems-201-ordering`（tier=R）：201 与登录尾段的相对序 ──────────────
     //
     // **锚点分段结论**（`E:/tmp/window-20261026/run2/bag_equip`、`.../eat_item` 两侧
