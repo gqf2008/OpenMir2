@@ -89,6 +89,10 @@ pub struct GateConfig {
     /// `[Setup] TryDealTime`（oracle `GameSvrConf.cs:1515` 缺省 `3000`）——
     /// `CM_DEALTRY` 的「稍后再试」时间门（`PlayObject.Operate.cs:922`）。
     pub try_deal_time: i32,
+    /// `[Setup] SpiritMutinyTime`（oracle `ServerConf.cs:516` `ReadWriteInteger`；ctor
+    /// `GameSvrConf.cs:1738` 缺省 `1800000` ms，**部署 `Server.conf:747` = 600000**）——
+    /// `@祈祷生效` 的缺省持续时长（卡 `openmir2-gm-family-x2-target-control` review M3 改读配置）。
+    pub spirit_mutiny_time: i32,
     /// `[Setup] DealOKTime`（oracle `GameSvrConf.cs:1516` 缺省 `1000`）——
     /// `CM_DEALEND` 的时间门（`PlayObject.Operate.cs:1092`）。
     pub deal_ok_time: i32,
@@ -425,6 +429,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut green_msg_b_color: Option<u8> = None;
     let mut disable_in_safe_zone_fire_cross: Option<bool> = None;
     let mut try_deal_time: Option<i32> = None;
+    let mut spirit_mutiny_time: Option<i32> = None;
     let mut deal_ok_time: Option<i32> = None;
     let mut can_not_get_back_deal: Option<bool> = None;
     let mut disable_deal: Option<bool> = None;
@@ -750,6 +755,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     try_deal_time = Some(
                         v.parse()
                             .with_context(|| format!("TryDealTime 不是合法整数：{v:?}"))?,
+                    );
+                }
+                // `ServerConf.cs:516`：`ReadWriteInteger("Setup", "SpiritMutinyTime", …)`。
+                "SPIRITMUTINYTIME" => {
+                    spirit_mutiny_time = Some(
+                        v.parse()
+                            .with_context(|| format!("SpiritMutinyTime 不是合法整数：{v:?}"))?,
                     );
                 }
                 "DEALOKTIME" => {
@@ -1204,6 +1216,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         war_guild_name_color: war_guild_name_color.unwrap_or(0x45),
         in_free_pk_area_name_color: in_free_pk_area_name_color.unwrap_or(0xDD),
         try_deal_time: try_deal_time.unwrap_or(3_000),
+        // ctor 缺省 1800000（GameSvrConf.cs:1738）；部署 Server.conf:747=600000 由解析覆盖。
+        spirit_mutiny_time: spirit_mutiny_time.unwrap_or(1_800_000),
         deal_ok_time: deal_ok_time.unwrap_or(1_000),
         can_not_get_back_deal: can_not_get_back_deal.unwrap_or(true),
         disable_deal: disable_deal.unwrap_or(false),
@@ -1912,6 +1926,47 @@ GuildMsgBColor=11
     }
 
     /// `[Share] NoticeDir` 照 oracle 的键读（`ServerConf.cs:77`），值要 trim。
+    /// **X2 review M3**：`[Setup] SpiritMutinyTime` 从 Server.conf 装载（部署 600000）；
+    /// 缺键 ⇒ ctor 缺省 1800000（`GameSvrConf.cs:1738`）。
+    #[test]
+    fn parses_spirit_mutiny_time() {
+        let dir = std::env::temp_dir().join(format!("gs-spirit-cfg-{}", std::process::id()));
+        let p = write(
+            &dir,
+            "[Server]
+GateAddr=127.0.0.1
+GatePort=5000
+CheckBlock=1
+WorldMaps=10x10
+             IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+             [Setup]
+SpiritMutinyTime=600000
+",
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.spirit_mutiny_time, 600_000, "部署值");
+        // 缺键 ⇒ ctor 缺省 1800000。
+        let p2 = write(
+            &dir.join("no-key"),
+            "[Server]
+GateAddr=127.0.0.1
+GatePort=5000
+CheckBlock=1
+WorldMaps=10x10
+             IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+",
+        );
+        let c2 = load(&p2).unwrap();
+        assert_eq!(c2.spirit_mutiny_time, 1_800_000, "缺键 ⇒ ctor 缺省");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn parses_share_notice_dir() {
         let dir = std::env::temp_dir().join(format!("gs-notice-cfg-{}", std::process::id()));

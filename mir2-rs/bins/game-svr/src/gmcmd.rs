@@ -1577,16 +1577,13 @@ impl<'a> GmWorld<'a> {
         self.maps?.name_of(map_id)
     }
 
-    /// `MapDesc(MapName)` 组合串（oracle `MapDesc + '(' + MapName + ')'`；师徒/配偶定位用）。
-    fn map_desc_name(&self, map_id: usize) -> String {
+    /// 仅 `MapDesc`（oracle 师徒/配偶定位行 `ChrName + " " + MapDesc + "(" + X + ":" + Y + ")"`
+    /// 只用 `MapDesc`——review F1；`MapDesc(MapName)` 组合只属 `@探测`，那里内联拼，不共享）。
+    fn map_desc(&self, map_id: usize) -> String {
         let Some(maps) = self.maps else {
             return String::new();
         };
-        format!(
-            "{}({})",
-            maps.map_desc_of(map_id).unwrap_or_default(),
-            maps.name_of(map_id).unwrap_or_default()
-        )
+        maps.map_desc_of(map_id).unwrap_or_default().to_string()
     }
 
     fn flag_of(&self, map_id: usize) -> Option<&'a mir2_envir::MapInfoFlag> {
@@ -2532,12 +2529,12 @@ fn search_human(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> 
             ],
         ))
     } else {
+        // M1：C# `(GetTickCount() - ProbeTick) / 1000 - 10`——普通整数除（向零截断）+ 减 10，
+        // 余量 <10 s 时给负秒；不用 div_euclid/saturating_sub（负值语义不同）。当前支对
+        // perm≥10 不可达（外门 + `|| perm>=3`），但语义要与 C# 等价（review M1）。
         red(dotnet_format(
             SEARCH_HUMAN_THROTTLE_FMT,
-            &[(world.now_ms - sess.probe_tick)
-                .div_euclid(1000)
-                .saturating_sub(10)
-                .to_string()],
+            &[((world.now_ms - sess.probe_tick) / 1000 - 10).to_string()],
         ))
     }
 }
@@ -2557,13 +2554,7 @@ fn search_master(sess: &GmSession, world: &GmWorld<'_>) -> GmResult {
             if let Some(t) = world.play_by_name(apprentice) {
                 r.msgs.push(GmMsg {
                     color: GmColor::Green,
-                    text: format!(
-                        "{} {}({}:{})",
-                        t.name,
-                        world.map_desc_name(t.map_id),
-                        t.x,
-                        t.y
-                    ),
+                    text: format!("{} {}({}:{})", t.name, world.map_desc(t.map_id), t.x, t.y),
                 });
             }
         }
@@ -2592,21 +2583,18 @@ fn search_dear(sess: &GmSession, world: &GmWorld<'_>) -> GmResult {
         });
     };
     // 说话者侧两条（性别分支；`YourWifeSearchLocateMsg` 的「他」照抄 oracle 原字）。
-    let mut r = GmResult::one(
-        GmColor::Green,
-        if sess.gender == 0 {
-            MSG_WIFE_NOW_LOCATE
-        } else {
-            MSG_HUSBAND_NOW_LOCATE
-        }
-        .to_string(),
-    );
+    // **F2**：gender!=0 支的首行是 **Red**（`SearchDearCommand.cs:49`；gender=0 的妻头是 Green :36）。
+    let mut r = if sess.gender == 0 {
+        GmResult::one(GmColor::Green, MSG_WIFE_NOW_LOCATE.to_string())
+    } else {
+        GmResult::one(GmColor::Red, MSG_HUSBAND_NOW_LOCATE.to_string())
+    };
     r.msgs.push(GmMsg {
         color: GmColor::Green,
         text: format!(
             "{} {}({}:{})",
             dear.name,
-            world.map_desc_name(dear.map_id),
+            world.map_desc(dear.map_id),
             dear.x,
             dear.y
         ),
@@ -10381,7 +10369,8 @@ mod tests {
         assert_eq!(r.msgs.len(), 2, "{:?}", texts(&r));
         assert_eq!(r.msgs[0].color, GmColor::Green);
         assert_eq!(r.msgs[0].text, MSG_MASTERLIST_NOW_LOCATE);
-        assert_eq!(r.msgs[1].text, "bob 测试地图(map)(6:6)");
+        // F1（review）：行只拼 MapDesc（不是 MapDesc(MapName)）⇒ "bob 测试地图(6:6)"。
+        assert_eq!(r.msgs[1].text, "bob 测试地图(6:6)");
         assert!(r.log_note.expect("对方消息接缝").contains("接缝"));
         // 为徒（is_master=false）+ MasterHuman 未建模 ⇒ 红「你的师父还没有上线!!!」。
         sess.is_master = false;
@@ -10406,7 +10395,7 @@ mod tests {
             texts(&execute(&mut sess, &cfg, &view, "@sdasdert")),
             vec![(GmColor::Red, MSG_HUSBAND_NOT_ONLINE)]
         );
-        // 在线配偶（entity.dear_human 链）⇒ 双绿字（性别分支）+ 对方接缝 note。
+        // 在线配偶（entity.dear_human 链）⇒ 双绿字/红头（性别分支）+ 对方接缝 note。
         w.entities.get_mut(gm_id).unwrap().dear_human = Some(bob_id);
         let view = q_view(&fx, &w, &guilds);
         let r = execute(&mut sess, &cfg, &view, "@sdasdert");
@@ -10414,11 +10403,17 @@ mod tests {
             r.msgs[0].text, MSG_HUSBAND_NOW_LOCATE,
             "gender=1 ⇒ 老公文案"
         );
-        assert_eq!(r.msgs[1].text, "bob 测试地图(map)(6:6)");
+        // F2（review）：gender!=0 支的首行是 **Red**（SearchDearCommand.cs:49）。
+        assert_eq!(r.msgs[0].color, GmColor::Red, "gender=1 夫头必红");
+        assert_eq!(r.msgs[1].color, GmColor::Green, "定位行绿");
+        // F1：行只拼 MapDesc（无 "(map)"）。
+        assert_eq!(r.msgs[1].text, "bob 测试地图(6:6)");
         assert!(r.log_note.is_some());
         sess.gender = 0;
         let r = execute(&mut sess, &cfg, &view, "@sdasdert");
         assert_eq!(r.msgs[0].text, MSG_WIFE_NOW_LOCATE);
+        assert_eq!(r.msgs[0].color, GmColor::Green, "gender=0 妻头必绿");
+        assert_eq!(r.msgs[1].text, "bob 测试地图(6:6)");
         // 「他」怪癖字逐字节（YourWifeSearchLocateMsg 用「他」不是「她」）。
         assert_eq!(MSG_WIFE_SEARCH_LOCATE, "你的老婆正在找你，他现在位于:");
     }

@@ -1108,6 +1108,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     show_rank_level_name,
                     server_index: cfg.server_index,
                     lock_human_login: cfg.lock_human_login,
+                    spirit_mutiny_time: cfg.spirit_mutiny_time,
                     guild_castle_cfg,
                     catalog: item_catalog,
                     world_item_catalog: item_table,
@@ -19475,6 +19476,8 @@ struct EnterConfig {
     /// `[Setup] PasswordLockHumanLogin`（`Config.LockHumanLogin`，`ServerConf.cs:574`；
     /// `GameSvrConf.cs:1493` 缺省 false、部署 = 0）：`@LockLogin` 的第一道门。
     lock_human_login: bool,
+    /// `[Setup] SpiritMutinyTime`（部署 600000；`@祈祷生效` 的缺省持续时长，review M3）。
+    spirit_mutiny_time: i32,
     /// **G2**：同一份 `Server.conf` 的行会/城堡配置（`mir2_data::guild_castle::GuildCastleConfig::load`）。
     ///
     /// G2 只用其中的行会键映射成 `mir2_world::GuildConfig`（简报 §8）；G3 直接复用它建 `GuildStore`
@@ -19679,6 +19682,7 @@ impl EnterConfig {
             show_rank_level_name: false,
             server_index: 0,
             lock_human_login: false,
+            spirit_mutiny_time: 600_000,
             guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig::default(),
             guild_store: None,
             guild_sections: mir2_data::guild::GuildFileSections::oracle_defaults(),
@@ -22945,6 +22949,7 @@ fn sim_loop(
                             colors: &colors,
                             gm_cfg: gmcmd::GmConfig {
                                 lock_human_login: enter_cfg.lock_human_login,
+                                spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                                 ..gmcmd::GmConfig::default()
                             },
                             can_shout_level: enter_cfg.can_shout_msg_level,
@@ -23035,24 +23040,28 @@ fn sim_loop(
                             &gates,
                             enter_cfg.shop.send_ref_msg_range,
                         );
-                        // **族 X2（卡 `openmir2-gm-family-x2-target-control`）**：`@Reconnection`
-                        // 的 `RM_RECONNECTION` ⇒ 唯一落帧支 `PlayObject.Message.cs:1988-1991`
-                        // `SM_RECONNECT`（载荷 `"{ip}/{port}"`）。命令体只装 `pending_reconnect`，
-                        // 宿主同一事件内经既有 `smframe_ext::sm_reconnect` 发回说话者。
-                        if let Some(addr) = ground_sessions
-                            .get_mut(&chr_name)
-                            .and_then(|sg| sg.gm.pending_reconnect.take())
+                        // **族 X2（卡 `openmir2-gm-family-x2-target-control`，review F3）**：
+                        // `@Reconnection` 的 `RM_RECONNECTION` 落帧支（`PlayObject.Message.cs:
+                        // 1988-1991`：**先 `BoReconnection = true` 再** `SM_RECONNECT`）走既有
+                        // `ReconnectPending` → `drain_reconnects` **唯一排水点**（T-202）——不新增
+                        // 第二条直发路径：命令体只装 `pending_reconnect`，这里推入队列，循环尾
+                        // drain 置位并发帧（与 oracle 同序）。
+                        // **M2**：仅 @ 命令后排水——非 @ 聊天不得把脚本桥留下的陈旧 pending 顺带
+                        // 发出（脚本桥不排水 ⇒ 陈旧值在下一条 @ 命令 execute() 入口被清空）。
+                        if tail
+                            .as_deref()
+                            .is_some_and(|t| t.trim_start().starts_with('@'))
                         {
-                            if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
-                                if let Some(tx) = route_to_gate(
-                                    &gates,
-                                    e.gate_idx,
-                                    e.socket,
-                                    "GM Reconnection SM_RECONNECT",
-                                ) {
-                                    let _ = tx.send(SimToGate::SendFrame {
+                            if let Some(addr) = ground_sessions
+                                .get_mut(&chr_name)
+                                .and_then(|sg| sg.gm.pending_reconnect.take())
+                            {
+                                if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+                                    reconnect_pending.push(ReconnectPending {
+                                        gate_idx: e.gate_idx,
                                         socket: e.socket,
-                                        body: game_svr::smframe_ext::sm_reconnect(addr.as_bytes()),
+                                        chr_name: e.chr_name.clone(),
+                                        msg: addr.into_bytes(),
                                     });
                                 }
                             }
@@ -23196,6 +23205,7 @@ fn sim_loop(
                         // `GMEXECUTE` 跳线视图（与 `@Login`/商人/组队同源）。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -23242,6 +23252,7 @@ fn sim_loop(
                         // `&mut guilds`（`GuildDisconnect`），与 GM 跳线要借的 `&guilds` 冲突。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -23330,6 +23341,7 @@ fn sim_loop(
                         // **卡 `openmir2-gm-script-exec-seams`**：GM 跳线视图的配置半边（与 `@Login` 同源）。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let mut fixed_script = FixedNpcScriptCtx {
@@ -23410,6 +23422,7 @@ fn sim_loop(
                         // oracle `PlayObject.Message.cs:888-942` + `:972-974`。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -23519,6 +23532,7 @@ fn sim_loop(
                         //（与 `@Login`/商人路同源）。
                         let gm_cfg = gmcmd::GmConfig {
                             lock_human_login: enter_cfg.lock_human_login,
+                            spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
                             ..gmcmd::GmConfig::default()
                         };
                         let script_gm = ScriptGmEnv {
@@ -40232,19 +40246,22 @@ break
                 &self.gates,
                 chat::send_ref_msg_range(),
             );
-            // 族 X2：@Reconnection 的 SM_RECONNECT（与 sim_loop CM_SAY 支同一步）。
+            // 族 X2（review F3）：@Reconnection 与 sim_loop 同一步——推入 ReconnectPending
+            // ⇒ 唯一排水点 drain_reconnects（先置 BoReconnection=true 再发 SM_RECONNECT）。
+            let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
             if let Some(addr) = self
                 .sessions
                 .get_mut("aaa")
                 .and_then(|sg| sg.gm.pending_reconnect.take())
             {
-                if let Some(tx) = self.gates.get(&0) {
-                    let _ = tx.send(SimToGate::SendFrame {
-                        socket: 901,
-                        body: game_svr::smframe_ext::sm_reconnect(addr.as_bytes()),
-                    });
-                }
+                reconnect_pending.push(ReconnectPending {
+                    gate_idx: 0,
+                    socket: 901,
+                    chr_name: "aaa".to_string(),
+                    msg: addr.into_bytes(),
+                });
             }
+            drain_reconnects(&mut reconnect_pending, &mut self.sessions, &self.gates);
             if !deferred.is_empty() || !gm_frames.is_empty() {
                 let speaker = self
                     .online
@@ -40313,6 +40330,12 @@ break
         assert!(
             rig.sessions["aaa"].gm.pending_reconnect.is_none(),
             "标记一次性：落地即清"
+        );
+        // F3（review）：drain_reconnects 先置 BoReconnection=true 再发帧（oracle
+        // PlayObject.Message.cs:1989-1990 同序）——该会话之后断线的 guild 退出/注销门与 oracle 一致。
+        assert!(
+            rig.sessions["aaa"].bo_reconnection,
+            "SM_RECONNECT 必置 BoReconnection=true（先置后发）"
         );
         // 缺参 ⇒ 红帮助、零帧；`?` ⇒ 蓝字说明。
         let bodies = rig.say_gm("@Reconnection");
