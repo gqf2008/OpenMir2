@@ -53,6 +53,19 @@
 //! 另 reviewer-5 的 **O-1**：`ScriptLable` 与 `@s_repair` 的比较是 `string.Compare(..., OrdinalIgnoreCase)`，
 //! 本模块用 [`eq_label`]（ASCII 大小写不敏感）同口径。
 
+//! # 买流程实例层真机定性（卡 `openmir2-gm-buy-stock-instances`，2026-10-30，分支 c）
+//!
+//! MirClientZig 真机（卫家店-0103，`shop-20261030-215402-895`）：645 名单 7 项、652 明细
+//! **有**实例字节（`param=10`），买却回 `651 recog=1`——客户端出站 1014 `param/tag=0`
+//! （MakeIndex=0）。定性 = **oracle 同语义，Rust 不改行为**：武器门 `MakeIndex == nInt`
+//! （`Merchant.cs:1249`）照抄；根因是 ClientItem 布局**读偏移**错位——服务器族（C#
+//! `ClientItem.cs:25-88` WritePacket，`ItemNameLen=14` ⇒ 124B、MakeIndex@100；本仓
+//! `itemwire::encode_client_item` 测试钉死同布局）vs 冻结客户端 `Grobal2.pas:1981-2010`
+//! `TClientStdItem`（`string[20]` ⇒ 116B，`ClMain.pas:13614` 整块 cast 读 @116 = 服务端
+//! 108..122 全零 Desc 区）⇒ 客户端 Stock=0。同一份 652 字节发给 C# 参照栈结果相同。
+//! 登记路由（whitelist 行 / MirClientZig 证据）走卡线程；构造级双向牙
+//! `buy_weapon_gates_on_instance_make_index_and_real_one_succeeds`（变异红）。
+
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
 use mir2_formula::shop::{self, ItemPrice, PriceTables, ShopConfig, StdItemSource};
@@ -2297,6 +2310,95 @@ mod tests {
             "背包未被改动"
         );
         assert_eq!(full.gold, 10_000, "金币未扣");
+    }
+
+    /// 卡 `openmir2-gm-buy-stock-instances`（定性 = 分支 c：oracle 同语义 + 登记）：
+    /// **武器类（`StdMode > 4` 且非 42/31）买入必须过实例 `MakeIndex` 门**
+    /// （`Merchant.cs:1249`：`StdMode <= 4 || 42 || 31 || userItem.MakeIndex == nInt`）。
+    ///
+    /// 真机实锤（MirClientZig `shop-20261030-215402-895`）：卫家店-0103 木剑组**有**实例
+    /// （645 名单 7 项、652 明细 `param=10` 且带实例字节），买却回 `651 recog=1`——客户端出站
+    /// 1014 `param=0/tag=0`（MakeIndex=0）。根因是 ClientItem 布局**读偏移**错位：服务器族
+    /// （C# `ClientItem.cs:25-88` WritePacket，`ItemNameLen=14` ⇒ 124B、MakeIndex@100；本仓
+    /// `itemwire::encode_client_item` 有测试同步钉死）与冻结客户端 `Grobal2.pas:1981-2010`
+    /// `TClientStdItem`（`string[20]` ⇒ 116B，`ClMain.pas:13614` 整块 cast 读 @116）——客户端
+    /// 落在服务端 108..122 的全零 Desc 区 ⇒ Stock=0。同一份 652 字节发给 C# 参照栈同样如此
+    /// ⇒ **不是 Rust 装载/查询缺陷**（补货实例生成有世界侧牙
+    /// `merchant_refill_creates_goods_items_from_script_entries`；652 实例字节有
+    /// `detail_goods_list_encodes_last_ten_items_and_page_offset` 的 `@100` 断言）。
+    ///
+    /// 牙（双向，变异红）：
+    /// - 删 `|| candidate.make_index == n_int`（`:1249` 的门）⇒ 负例（n_int=0）变成买成功
+    ///   ⇒ `assert!(!r0.ok)` 红；
+    /// - 成功支改发 name-only 载荷（实例字节置零）⇒ 200 尾 `@100..108` 断言红。
+    #[test]
+    fn buy_weapon_gates_on_instance_make_index_and_real_one_succeeds() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let m = merchant(mflags(true, false));
+        // 卫家店-0103 `[goods] 木剑 10 10` 的补货产物形态（`make_merchant_item_by_name`：
+        // `MakeIndex` 计数器从 1 起、`Dura = DuraMax = 模板 20`）。
+        let mut goods = vec![vec![MerchantItem {
+            make_index: 1,
+            index: 2, // 木剑（catalog(): StdMode=5、price=30、dura_max=20）
+            dura: 20,
+            dura_max: 20,
+            desc: [0; 14],
+        }]];
+        let mut state = GroundState {
+            item_list: Vec::new(),
+            gold: 10_000,
+            wabil: ability(0, 100),
+        };
+        // 负例：MakeIndex=0（真机客户端实发形态）⇒ 名字命中但不取件 ⇒ n1C 保持 1
+        // ⇒ `651 recog=1`（真机观测值），不发 200/650，库存与金币不动。
+        let r0 = buy_item(&m, &mut state, &mut goods, "木剑", 0, &c);
+        assert!(!r0.ok, "MakeIndex 门：n_int=0 不得买成功");
+        assert_eq!(r0.frames.len(), 1, "只有 fail 帧");
+        assert_eq!(
+            r0.frames[0].ident,
+            mir2_protocol::messages::SM_BUYITEM_FAIL,
+            "651"
+        );
+        assert_eq!(r0.frames[0].recog, 1, "真机观测的 n1C=1（不是 2/3）");
+        assert_eq!(goods.len(), 1, "库存实例未动");
+        assert_eq!(goods[0][0].make_index, 1);
+        assert_eq!(state.gold, 10_000, "金币未扣");
+        assert!(state.item_list.is_empty(), "背包未入");
+
+        // 正例：n_int = 652 明细字节 `@100..104` 里的真 MakeIndex ⇒ 成功，且 200 尾
+        // **带实例字节**（不是 name-only）。
+        let r1 = buy_item(&m, &mut state, &mut goods, "木剑", 1, &c);
+        assert!(r1.ok);
+        let idents: Vec<u16> = r1.frames.iter().map(|f| f.ident).collect();
+        assert_eq!(
+            idents,
+            vec![
+                mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
+                mir2_protocol::messages::SM_BUYITEM_SUCCESS,
+            ],
+            "帧序：SM_ADDITEM（直连）→ 622(131) → 650(149)"
+        );
+        let add = &r1.frames[0];
+        assert!(add.tail_encoded, "ClientItem 尾已编码");
+        let ci = mir2_protocol::edcode::decode(&add.tail);
+        assert_eq!(ci.len(), 124, "ClientItem 定长 124B");
+        assert_eq!(ci[0], 4, "GBK 木剑 = 4 字节（Name 长度字节）");
+        assert_eq!(&ci[1..5], downlink::gbk("木剑").as_slice(), "名字字节");
+        assert_eq!(
+            &ci[100..104],
+            &1i32.to_le_bytes(),
+            "MakeIndex@100 = 库存实例的 1（服务器族布局 = C# oracle；客户端 @116 读零是布局错位）"
+        );
+        assert_eq!(&ci[104..106], &20u16.to_le_bytes(), "Dura@104 = 20");
+        assert_eq!(&ci[106..108], &20u16.to_le_bytes(), "DuraMax@106 = 20");
+        assert_eq!(state.item_list.len(), 1, "实例入包");
+        assert_eq!(
+            state.item_list[0].make_index, 1,
+            "实例原样入包（make_index 随件走）"
+        );
+        assert!(goods.is_empty(), "售罄 ⇒ 空组移除");
     }
 
     /// 卡 `openmir2-merchant-price-list-and-weight-frame` C 阶段：宿主 `MerchantView.item_price_list`
