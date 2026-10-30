@@ -19453,6 +19453,9 @@ fn apply_pending_gm_target_ops(
                 .iter()
                 .find(|e| e.chr_name.eq_ignore_ascii_case(&canon))
                 .cloned();
+            // F1-R3：绿字只是入 MsgQueue（oracle :64/:65），线上排在审计直发帧之后
+            // ⇒ 先收集，审计帧发完再发（同 sim_loop「直发帧先、SysMsg 后」口径）。
+            let mut pending_greens: Vec<(String, String)> = Vec::new();
             if let Some(saved) = saves.get_mut(&canon) {
                 let list = magic_list_mut(saved);
                 if is_all {
@@ -19491,29 +19494,24 @@ fn apply_pending_gm_target_ops(
                                 }
                             }
                             list.remove(idx);
-                            // 目标绿 + 调用者绿（`DelSkillCommand.cs:52-53`）。
+                            // 目标绿 + 调用者绿（`DelSkillCommand.cs:52-53`）——收集，
+                            // 待审计直发帧之后再发（F1-R3 帧序）。
                             if let Some(target) = &target_entry {
-                                send_gm_sysmsg(
-                                    gates,
-                                    target,
-                                    colors.green_f,
-                                    colors.green_b,
-                                    &format!("技能{skill}已删除。"),
-                                );
+                                pending_greens.push((
+                                    target.chr_name.clone(),
+                                    format!("技能{skill}已删除。"),
+                                ));
                             }
-                            if let Some(caller) = online
+                            if online
                                 .iter()
-                                .find(|e| e.chr_name.eq_ignore_ascii_case(chr_name))
+                                .any(|e| e.chr_name.eq_ignore_ascii_case(chr_name))
                             {
                                 // F4-R1：调用者绿字用**命令原始参数**（`DelSkillCommand.cs:65`
                                 // 的 sHumanName），不是规范名——`@删除技能 VICTIM …` 原样回显。
-                                send_gm_sysmsg(
-                                    gates,
-                                    caller,
-                                    colors.green_f,
-                                    colors.green_b,
-                                    &format!("{name}的技能{skill}已删除。"),
-                                );
+                                pending_greens.push((
+                                    chr_name.to_string(),
+                                    format!("{name}的技能{skill}已删除。"),
+                                ));
                             }
                             break;
                         }
@@ -19522,9 +19520,16 @@ fn apply_pending_gm_target_ops(
                 }
             }
             // 末尾 RecalcAbilitys（恒调用，oracle `:71`；F4-R2：魔法审计接真——
-            // 按 FlameRing/RecoveryRing 调 Add/DelItemSkill，210/212 帧投目标）。
-            let flame_ring_in = find_id(world, &name)
-                .and_then(|tid| world.entities.get(tid))
+            // 按 FlameRing/RecoveryRing 调 Add/DelItemSkill，210/212 帧经 SendSocket **立即**）。
+            // F2-R3：输入与其它 9 处重算点对齐——extra_abil 取目标实体活跃值（AttPowerUp 等
+            // 加成不被抹），flame_ring_in 取实体粘滞位；重算后 apply_ability_to_entity +
+            // `e.flame_ring |= effect.flame_ring` / `e.revival |= effect.revival` 落账。
+            let tid = find_id(world, &name);
+            let extra_abil = tid
+                .and_then(|t| world.entities.get(t))
+                .map(|e| e.extra_abil);
+            let flame_ring_in = tid
+                .and_then(|t| world.entities.get(t))
                 .is_some_and(|e| e.flame_ring);
             let effect = {
                 let magic = saves.get_mut(&canon).map(|saved| MagicRecalc {
@@ -19533,23 +19538,52 @@ fn apply_pending_gm_target_ops(
                     flame_ring_in,
                 });
                 match (sessions.get_mut(&canon), magic) {
-                    (Some(tsg), Some(magic)) => {
-                        Some(recalc_session_ability(tsg, catalog, None, Some(magic)))
-                    }
-                    (Some(tsg), None) => Some(recalc_session_ability(tsg, catalog, None, None)),
+                    (Some(tsg), Some(magic)) => Some(recalc_session_ability(
+                        tsg,
+                        catalog,
+                        extra_abil.as_ref(),
+                        Some(magic),
+                    )),
+                    (Some(tsg), None) => Some(recalc_session_ability(
+                        tsg,
+                        catalog,
+                        extra_abil.as_ref(),
+                        None,
+                    )),
                     _ => None,
                 }
             };
-            if let (Some(effect), Some(target)) = (effect, &target_entry) {
-                for ev in &effect.magic_events {
-                    if let Some(tx) =
-                        route_to_gate(gates, target.gate_idx, target.socket, "GM 删技能审计帧")
-                    {
-                        let _ = tx.send(SimToGate::SendFrame {
-                            socket: target.socket,
-                            body: game_svr::smframe::magic_event_frame(ev),
-                        });
+            if let Some(effect) = &effect {
+                if let (Some(tid), Some(tsg)) = (tid, sessions.get(&canon)) {
+                    if let Some(e) = world.entities.get_mut(tid) {
+                        apply_ability_to_entity(e, &tsg.state.wabil, &tsg.sub, tsg.hit_speed);
+                        if effect.revival {
+                            e.revival = true;
+                        }
+                        e.flame_ring |= effect.flame_ring;
                     }
+                }
+                // 审计直发帧（SendSocket 立即）：目标 socket。
+                if let Some(target) = &target_entry {
+                    for ev in &effect.magic_events {
+                        if let Some(tx) =
+                            route_to_gate(gates, target.gate_idx, target.socket, "GM 删技能审计帧")
+                        {
+                            let _ = tx.send(SimToGate::SendFrame {
+                                socket: target.socket,
+                                body: game_svr::smframe::magic_event_frame(ev),
+                            });
+                        }
+                    }
+                }
+            }
+            // F1-R3：两条绿字最后发（oracle MsgQueue 排水晚于当前 GM 槽的 RecalcAbilitys）。
+            for (green_to, text) in pending_greens {
+                if let Some(e) = online
+                    .iter()
+                    .find(|e| e.chr_name.eq_ignore_ascii_case(&green_to))
+                {
+                    send_gm_sysmsg(gates, e, colors.green_f, colors.green_b, &text);
                 }
             }
         }
@@ -41060,10 +41094,15 @@ break
         );
     }
 
-    /// **F4 牙（review b6a3962b）**：`@删除技能` 宿主真实实现——MagicList 在 `saves`
-    /// （`SavedHuman.record.data.magic`）：按名命中 ⇒ `SM_DELMAGIC(212)` 投**目标** +
-    /// 目标绿「技能X已删除。」+ 调用者绿「Y的技能X已删除。」+ 目标列表移除 + Recalc；
-    /// `All` ⇒ 清空且**不发帧不发字**。变异红：删 212 / 删双绿 / All 支发字。
+    /// **F4 牙（review b6a3962b / d7a57cd0 F3-R3 / 27f360af F1-R3）**：`@删除技能` 宿主真实
+    /// 实现——MagicList 在 `saves`；按名（**Desc** 语义，夹具 desc≠magic_name）命中 ⇒
+    /// `SM_DELMAGIC(212)` 投**目标 socket=902** + 审计 `RecalcAbilitys` 的 210/212（**同为
+    /// 目标 socket、SendSocket 立即**）+ 目标绿/调用者绿（**队尾**，排审计帧之后）+ 列表移除；
+    /// `All` ⇒ 清空且不发帧不发字。逐 socket 帧序断言（212(命令) → 212(审计) → 100(绿字)），
+    /// 审计帧各恰一条。
+    /// 变异红：M-T1 绿字回 canon / M-T2 自写收件人（ghost 收 ALIVE）/ M-T3 recalc 传 None /
+    /// M-T4 pose 注入恒 None / M-T5 SM_ABILITY 回发调用者 / M-T6 审计帧投 901 /
+    /// M-T7 查找键 desc→magic_name / M-T8 绿字先于审计帧。
     #[test]
     fn gm_del_skill_host_apply_emits_212_and_greens() {
         use std::collections::HashMap;
@@ -41080,10 +41119,10 @@ break
         };
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut hero_sg = test_session_ground(hero_id);
-        hero_sg.gm.pending_del_skill = Some(("victim".into(), "火球术".into()));
+        hero_sg.gm.pending_del_skill = Some(("victim".into(), "烈火球".into())); // Desc
         sessions.insert("hero".into(), hero_sg);
         let mut victim_sg = test_session_ground(victim_id);
-        victim_sg.equip.job = 2; // TAOIST：审计保治愈术（F4-R2 主案例确定性）
+        victim_sg.equip.job = 2; // TAOIST：审计保治愈术（主案例确定性）
         sessions.insert("victim".into(), victim_sg);
         let mut saves: HashMap<String, SavedHuman> = HashMap::new();
         saves.insert(
@@ -41096,21 +41135,25 @@ break
             },
         );
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
-        let mut magic_table = magics::MagicTable::new(vec![
+        // F2-R3 牙敏感点：目标带生效中的 ExtraAbil[0]（AttPowerUp DC 高字节 +3）——
+        // 重算必须传 `Some(&e.extra_abil)`，否则 GM 删技能把加成抹掉（wabil.dc 丢失 0x0300）。
+        world.entities.get_mut(victim_id).unwrap().extra_abil[0] = 3;
+        // F3-R3：**desc ≠ magic_name**——命令按 Desc 匹配（oracle :60），审计按 MagicName 查找
+        // （`magicaudit::delete_name_skill` 用 magic_name）。把命令查找改成 magic_name ⇒ 本用例红。
+        let magic_table = magics::MagicTable::new(vec![
             mir2_data::MagicInfo {
                 magic_id: 1,
                 magic_name: "火球术".into(),
-                desc: "火球术".into(),
+                desc: "烈火球".into(),
                 ..Default::default()
             },
             mir2_data::MagicInfo {
                 magic_id: 2,
                 magic_name: "治愈术".into(),
-                desc: "治愈术".into(),
+                desc: "回春术".into(),
                 ..Default::default()
             },
         ]);
-        let _ = &mut magic_table;
         let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let mut online: OnlineRegistry = Vec::new();
         online_set(
@@ -41152,6 +41195,25 @@ break
         };
         let displays = downlink::DisplayTable::new();
         let catalog = game_svr::ability::StdItemCatalog::new();
+        let collect =
+            |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16, i32, String)> {
+                std::iter::from_fn(|| rx.try_recv().ok())
+                    .filter_map(|m| match m {
+                        SimToGate::SendFrame { socket, body } => Some((
+                            socket,
+                            u16::from_le_bytes([body[4], body[5]]),
+                            i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                            if body.len() > 12 {
+                                gbk_decode(&mir2_protocol::edcode::decode(&body[12..]))
+                            } else {
+                                String::new()
+                            },
+                        )),
+                        _ => None,
+                    })
+                    .collect()
+            };
+        // ---- 主案例：job=TAOIST，按 Desc("烈火球") 删 mag1 ----
         apply_pending_gm_target_ops(
             &mut sessions,
             &mut pwd_sessions,
@@ -41170,45 +41232,54 @@ break
             12,
             "hero",
         );
-        // 列表移除命中项（火球术 mag_idx=1），治愈术保留。
         let list = saves["victim"].record.data.magic.as_ref().unwrap();
-        assert_eq!(list.len(), 1, "只删命中项");
+        assert_eq!(list.len(), 1, "只删命中项（按 Desc）");
         assert_eq!(list[0].as_ref().unwrap().mag_idx, 2);
-        // 帧：212 投目标 902（Recog=MagIdx=1）+ 目标绿 902 + 调用者绿 901。
-        let frames: Vec<(i32, Vec<u8>)> = std::iter::from_fn(|| rx0.try_recv().ok())
-            .filter_map(|m| match m {
-                SimToGate::SendFrame { socket, body } => Some((socket, body)),
-                _ => None,
-            })
-            .collect();
-        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
-        let del: Vec<&(i32, Vec<u8>)> = frames
+        // F2-R3：ExtraAbil[0]=3 ⇒ 重算后 wabil.dc 高字节在基础值(0x01)上 +3 = 0x0400；
+        // 若传 None（mutant）⇒ 只剩基础 0x0100。
+        assert_eq!(
+            sessions["victim"].state.wabil.dc, 0x0400,
+            "extra_abil 必须传入重算（None ⇒ 加成被抹 ⇒ 0x0100）"
+        );
+        assert!(
+            !world.entities.get(victim_id).unwrap().flame_ring,
+            "无 Sticky FlameRing（flame_ring_in=false 路径）"
+        );
+        let frames = collect(&mut rx0);
+        // 902 帧序：212(命令删除) → 100(目标绿)；审计在本例无事件（火球已删/治愈 job 门）。
+        let s902: Vec<u16> = frames
             .iter()
-            .filter(|(_, b)| ident(b) == mir2_protocol::messages::SM_DELMAGIC)
+            .filter(|(s, ..)| *s == 902)
+            .map(|(_, id, ..)| *id)
+            .collect();
+        assert_eq!(
+            s902,
+            vec![
+                mir2_protocol::messages::SM_DELMAGIC,
+                mir2_protocol::messages::SM_SYSMESSAGE
+            ],
+            "目标 socket 序 212→100；实得 {frames:?}"
+        );
+        let del: Vec<&(i32, u16, i32, String)> = frames
+            .iter()
+            .filter(|(_, id, ..)| *id == mir2_protocol::messages::SM_DELMAGIC)
             .collect();
         assert_eq!(del.len(), 1, "恰一条 SM_DELMAGIC；实得 {frames:?}");
         assert_eq!(del[0].0, 902, "212 投目标");
-        assert_eq!(
-            i32::from_le_bytes([del[0].1[0], del[0].1[1], del[0].1[2], del[0].1[3]]),
-            1,
-            "212 Recog = MagIdx"
-        );
-        let sys: Vec<(i32, String)> = frames
-            .iter()
-            .filter(|(_, b)| ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
-            .map(|(s, b)| (*s, gbk_decode(&mir2_protocol::edcode::decode(&b[12..]))))
-            .collect();
+        assert_eq!(del[0].2, 1, "212 Recog = MagIdx");
         assert!(
-            sys.iter()
-                .any(|(s, t)| *s == 902 && t == "技能火球术已删除。"),
-            "目标绿字；实得 {sys:?}"
+            frames.iter().any(|(s, id, .., t)| *s == 902
+                && *id == mir2_protocol::messages::SM_SYSMESSAGE
+                && t == "技能烈火球已删除。"),
+            "目标绿字；实得 {frames:?}"
         );
         assert!(
-            sys.iter()
-                .any(|(s, t)| *s == 901 && t == "victim的技能火球术已删除。"),
-            "调用者绿字；实得 {sys:?}"
+            frames.iter().any(|(s, id, .., t)| *s == 901
+                && *id == mir2_protocol::messages::SM_SYSMESSAGE
+                && t == "victim的技能烈火球已删除。"),
+            "调用者绿字；实得 {frames:?}"
         );
-        // All 支：清空且不发帧不发字。
+        // ---- All 支：清空且不发帧不发字 ----
         while rx0.try_recv().is_ok() {}
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
         sessions.get_mut("hero").unwrap().gm.pending_del_skill =
@@ -41245,13 +41316,12 @@ break
             rx0.try_recv().is_err(),
             "All 支不发帧不发字（oracle :49-52）"
         );
-        // F4-R2：RecalcAbilitys 尾段魔法审计接真——目标 job=0（战士）+ 持书本授予的
-        // 火球术，删另一个技能后审计删火球并出 212（与 oracle `:2764-2779` 同序）。
-        while rx0.try_recv().is_ok() {}
+        // ---- 审计案例：job=WARRIOR，按 Desc("回春术") 删 mag2；审计按 MagicName("火球术")
+        //      删 mag1 并出第二条 212 —— 目标 socket 序 212(2) → 212(1) → 100 ----
         magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
         sessions.get_mut("victim").unwrap().equip.job = 0;
         sessions.get_mut("hero").unwrap().gm.pending_del_skill =
-            Some(("victim".into(), "治愈术".into()));
+            Some(("victim".into(), "回春术".into()));
         apply_pending_gm_target_ops(
             &mut sessions,
             &mut pwd_sessions,
@@ -41270,24 +41340,30 @@ break
             12,
             "hero",
         );
-        let audit_frames: Vec<(i32, u16, i32)> = std::iter::from_fn(|| rx0.try_recv().ok())
-            .filter_map(|m| match m {
-                SimToGate::SendFrame { socket, body } => Some((
-                    socket,
-                    u16::from_le_bytes([body[4], body[5]]),
-                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
-                )),
-                _ => None,
-            })
-            .collect();
-        let dels: Vec<i32> = audit_frames
+        let frames = collect(&mut rx0);
+        let s902: Vec<u16> = frames
             .iter()
-            .filter(|(_, id, _)| *id == mir2_protocol::messages::SM_DELMAGIC)
-            .map(|(_, _, idx)| *idx)
+            .filter(|(s, ..)| *s == 902)
+            .map(|(_, id, ..)| *id)
             .collect();
-        assert!(
-            dels.contains(&2) && dels.contains(&1),
-            "命令删除(2)+审计删除(1)各一条 212；实得 {audit_frames:?}"
+        assert_eq!(
+            s902,
+            vec![
+                mir2_protocol::messages::SM_DELMAGIC,
+                mir2_protocol::messages::SM_DELMAGIC,
+                mir2_protocol::messages::SM_SYSMESSAGE
+            ],
+            "帧序：212(命令) → 212(审计) → 100(目标绿，队尾)；实得 {frames:?}"
+        );
+        let dels: Vec<(i32, i32)> = frames
+            .iter()
+            .filter(|(_, id, ..)| *id == mir2_protocol::messages::SM_DELMAGIC)
+            .map(|(s, _, recog, _)| (*s, *recog))
+            .collect();
+        assert_eq!(
+            dels,
+            vec![(902, 2), (902, 1)],
+            "命令删除(2)+审计删除(1)各恰一条且都投目标 902；实得 {frames:?}"
         );
         assert!(
             saves["victim"]
@@ -41300,12 +41376,11 @@ break
                 .all(|m| m.is_none() || m.as_ref().unwrap().mag_idx != 1),
             "审计已删火球术"
         );
-        // F4-R1：调用者绿字回显**原始参数拼写**（大写 VICTIM ≠ 实体名 victim）。
-        while rx0.try_recv().is_ok() {}
+        // ---- F4-R1：调用者绿字回显**原始参数拼写**（大写 VICTIM ≠ 实体名 victim）----
         magic_list_mut(saves.get_mut("victim").unwrap()).push(mag(1));
         sessions.get_mut("victim").unwrap().equip.job = 2;
         sessions.get_mut("hero").unwrap().gm.pending_del_skill =
-            Some(("VICTIM".into(), "火球术".into()));
+            Some(("VICTIM".into(), "烈火球".into()));
         apply_pending_gm_target_ops(
             &mut sessions,
             &mut pwd_sessions,
@@ -41324,24 +41399,12 @@ break
             12,
             "hero",
         );
-        let sys2: Vec<(i32, String)> = std::iter::from_fn(|| rx0.try_recv().ok())
-            .filter_map(|m| match m {
-                SimToGate::SendFrame { socket, body }
-                    if u16::from_le_bytes([body[4], body[5]])
-                        == mir2_protocol::messages::SM_SYSMESSAGE =>
-                {
-                    Some((
-                        socket,
-                        gbk_decode(&mir2_protocol::edcode::decode(&body[12..])),
-                    ))
-                }
-                _ => None,
-            })
-            .collect();
+        let frames = collect(&mut rx0);
         assert!(
-            sys2.iter()
-                .any(|(s, t)| *s == 901 && t == "VICTIM的技能火球术已删除。"),
-            "F4-R1：调用者绿字用原始参数拼写；实得 {sys2:?}"
+            frames.iter().any(|(s, id, .., t)| *s == 901
+                && *id == mir2_protocol::messages::SM_SYSMESSAGE
+                && t == "VICTIM的技能烈火球已删除。"),
+            "F4-R1：调用者绿字用原始参数拼写；实得 {frames:?}"
         );
     }
 
