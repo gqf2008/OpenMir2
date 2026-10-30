@@ -2022,6 +2022,10 @@ impl<'a> GmWorld<'a> {
 
     /// `CastleMgr.Find(name)`（`CastleManager.cs:21-31`）：`sName` **OrdinalIgnoreCase**
     /// 首个命中；`None` = `Find` 返回 null / 世界未注入。
+    ///
+    /// **T-173 口径**：`eq_ignore_ascii_case` 只折叠 ASCII，.NET `OrdinalIgnoreCase` 是 Unicode
+    /// 简单大小写折叠（`Ä`/`ä` 等在 .NET 相等、本仓不等）。冻结内容里城堡名为中文/ASCII ⇒
+    /// 现网无可观测差异；本条按 `whitelist.md` T-173 的域限定口径登记，勿当作逐字节等价。
     fn castle_index(&self, name: &str) -> Option<usize> {
         self.world?
             .castles

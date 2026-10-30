@@ -257,6 +257,8 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   翻转；开战支 `ShowOverMsg=false`/`WarDate`/`StartCastleWarTick`/`StartWallconquestWar`
   （RefShowName）/SS_212/**全服广播**/SS_204/`MainDoorControl(true)`；帧序按 oracle MsgQueue
   优先级：`SM_USERNAME(42,165)` → 门 `SM_DIGDOWN(21,217)` → `SM_SYSMESSAGE(100,252)`；
+  门 `door_close()` 的 12 条 `SetMapXyFlag(1)` 按 Run 支口径**当场落到该城地图**
+  （review I1：只入 `queue_structure_ref_msg` 会丢门格掩码，主门仍可走且不自愈）；
   `SS_212/204` 是 planes 跨服通道，单服只记日志（T-127）；再发一次 = 停战 + 结束广播）/
   StartContest（`Fight3Zone` 门红；红「开始行会争霸赛。」+ 范围 1000（**闭区间**）内
   `!Death && !Ghost` 玩家在 `!ObMode || !AdminMode`（**或**语义）时 `FightZoneDieCount=0` +

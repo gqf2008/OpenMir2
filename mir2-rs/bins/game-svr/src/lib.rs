@@ -20230,14 +20230,34 @@ fn apply_pending_gm_castle_commands(
             }
             // `SendServerGroupMsg(SS_212, ServerIndex, "")`：跨服 planes（单服登记）。
             glog!("INF", "SS_212（单服无接收端）");
-            // 相位②（216/217）：`MainDoorControl(true)` ⇒ Structure ⇒ tick head 排水。
+            // 相位②（216/217）：`MainDoorControl(true)` ⇒ Structure。
+            // **review I1**：`SetMapXyFlag` 必须按 Run 支口径**先落地图**（oracle
+            // `CastleDoor.Close()` 当场 `Envir.SetMapXyFlag(1)`，`CastleDoor.cs:60-76`）；
+            // `queue_structure_ref_msg` 对 SetMapXyFlag 直接 `return false`（castle.rs:1314）
+            // ⇒ 只喂它会丢 12 条门格掩码（主门仍可走且不自愈）。其余 `Ref*` 才入队由 tick head
+            // 出 216/217。
             let door_events = world.castles[idx].main_door_control(true);
+            let castle_map_id = world.castles[idx].castle_map_id;
             for ev in &door_events {
                 if let mir2_world::castle::CastleEvent::Structure(structure) = ev {
-                    let _ = game_svr::castle::queue_structure_ref_msg(world, idx, structure);
+                    if let mir2_world::castle::StructureEvent::SetMapXyFlag { x, y, walk } =
+                        structure
+                    {
+                        if let Some(id) = castle_map_id.filter(|id| *id < world.maps.len()) {
+                            if let Some(grid) = world.maps.get_mut(id) {
+                                grid.set_map_xy_flag(i32::from(*x), i32::from(*y), *walk);
+                            }
+                        }
+                    } else {
+                        let _ = game_svr::castle::queue_structure_ref_msg(world, idx, structure);
+                    }
                 }
             }
             // 相位③（252）：`SendBroadCastMsg(s20, MsgType.System)` ⇒ tick head 之后扇出。
+            // **o1 登记**：oracle `SendBroadCastMsg`（`WorldServer.cs:1738-1765`）在
+            // `ShowPreFixMsg=true` 时拼 `SysMsgPreFix`；本仓复用 `SendBroadCastMsgExt` 口径
+            // （`fan_out_sysmessage_to_all` 不拼前缀）——冻结部署 `Server.conf` 的
+            // `ShowPreFixMsg=0` ⇒ 当前逐字节相同（与 T-224 同口径；若配置改 1 需另接线）。
             let text = format!("[{} 攻城战已经开始]", world.castles[idx].name);
             glog!("INF", "SS_204（单服无接收端）: {text}");
             pending_broadcasts.push(text);
@@ -44598,6 +44618,19 @@ break
             &gates,
             &mut broadcasts,
         );
+        // **review I1 牙**：`MainDoorControl(true)` 的 `door_close()` 返回 12 条
+        // `SetMapXyFlag(1)`（`door_map_xy_flag_ops(1)` 把九格置 walk=false）——宿主必须按
+        // Run 支口径**当场落该城地图**（oracle `CastleDoor.Close()` 的 `Envir.SetMapXyFlag(1)`），
+        // 否则主门格仍可走且不会自愈。变异红：只喂 `queue_structure_ref_msg`（SetMapXyFlag 被其
+        // `return false` 丢弃）⇒ 下面两条断言失败。
+        assert!(
+            !world.maps[0].cell_valid(7, 7),
+            "主门格 (7,7) 必须被 SetMapXyFlag(1) 置 LowWall（不可走）"
+        );
+        assert!(
+            !world.maps[0].cell_valid(5, 7),
+            "门左格 (5,7)（dx=-2）必须被掩码置不可走"
+        );
         let phase1 = c_drain(&mut rx);
         assert_eq!(phase1.len(), 1, "皇宫 100 格内 hero 收 RefShowName");
         assert_eq!(c_ident(&phase1[0]), mir2_protocol::messages::SM_USERNAME);
@@ -44759,6 +44792,13 @@ break
         let carol = mk("carol", 0, 7, 7, false, true); // 或语义 ⇒ 清
         let dave = mk("dave", 1, 5, 5, false, false); // 异图 ⇒ 不清
         let erin = mk("erin", 0, 1006, 5, false, false); // 距离 1001 >1000 ⇒ 不清
+        let frank = mk("frank", 0, 1005, 5, false, false); // 距离恰好 1000（闭区间）⇒ 清
+        let dead = mk("dead", 0, 6, 5, false, false);
+        let ghost = mk("ghost", 0, 6, 5, false, false);
+        // oracle `GetMapRageHuman` 的 `!Death && !Ghost`（WorldServer.cs:1705-1707）：
+        // 死亡/幽灵玩家即使距离/ObMode 满足也不得被清。
+        world.entities.get_mut(dead).unwrap().death = true;
+        world.entities.get_mut(ghost).unwrap().ghost = true;
         let mut sessions = std::collections::HashMap::new();
         let mut online: OnlineRegistry = Vec::new();
         let mut saves: std::collections::HashMap<String, SavedHuman> =
@@ -44769,6 +44809,9 @@ break
             ("carol", carol),
             ("dave", dave),
             ("erin", erin),
+            ("frank", frank),
+            ("dead", dead),
+            ("ghost", ghost),
         ]
         .into_iter()
         .enumerate()
@@ -44817,7 +44860,10 @@ break
         assert_eq!(count("bob"), 5, "ObMode&&AdminMode 皆真 ⇒ 不清（或语义）");
         assert_eq!(count("carol"), 0, "!admin ⇒ 清（或语义）");
         assert_eq!(count("dave"), 5, "异图 ⇒ 不清");
-        assert_eq!(count("erin"), 5, "距离 >1000 ⇒ 不清");
+        assert_eq!(count("erin"), 5, "距离 1001 >1000 ⇒ 不清");
+        assert_eq!(count("frank"), 0, "距离恰好 1000 ⇒ 清（闭区间 `<=`）");
+        assert_eq!(count("dead"), 5, "Death=true ⇒ 不清（!Death 门）");
+        assert_eq!(count("ghost"), 5, "Ghost=true ⇒ 不清（!Ghost 门）");
         assert!(broadcasts.is_empty(), "StartContest 无广播队");
     }
 
