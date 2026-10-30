@@ -1501,6 +1501,9 @@ struct ChatHost<'a> {
     /// `@停止叛变` 写）——进程级单例 ⇒ 由 `sim_loop` 持有。
     mission: &'a std::cell::RefCell<gmcmd::GmMissionState>,
     spirit_mutiny_tick: &'a std::cell::Cell<i64>,
+    /// **族 X2**（review F3）：展示表——`@vv杀死` 无参支解析 `GetPoseCreate` 用
+    /// （`pose_create(world, displays, speaker)`）。
+    displays: &'a downlink::DisplayTable,
     /// `[Setup] CanShoutMsgLevel`。
     can_shout_level: i32,
     /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
@@ -1823,6 +1826,12 @@ fn handle_gm_command(
         );
         return (Vec::new(), Vec::new());
     };
+    // **族 X2（review F3）**：`@vv杀死` 无参支的 `GetPoseCreate()` —— 宿主用既有
+    // `pose_create(world, displays, speaker)` 解析前方格首个 !Ghost && !Death 对象，
+    // 把名字注入 `GmWorld.pose_target`（命令体用它决定 Die 还是红字）。
+    let pose_target: Option<String> = pose_create(host.world, host.displays, speaker.actor_id)
+        .and_then(|id| host.world.entities.get(id))
+        .map(|e| e.name.clone());
     let world_view = gmcmd::GmWorld {
         guilds: host.guilds,
         maps: host.registry,
@@ -1830,6 +1839,7 @@ fn handle_gm_command(
         speaker: &speaker.chr_name,
         speaker_id: speaker.actor_id,
         now_ms: host.world.clock_ms,
+        pose_target: pose_target.as_deref(),
         filter_word: Some(host.filter_word),
         mission: Some(host.mission),
         spirit_mutiny_tick: Some(host.spirit_mutiny_tick),
@@ -7798,6 +7808,7 @@ impl ScriptGmEnv<'_> {
                 now_ms: world.clock_ms,
                 // 脚本 GMEXECUTE 桥不持全局单元 ⇒ `@DisableFilter` 走 `log_note` 登记零帧
                 // （命令体退化形态有答案；脚本面本卡 forbidden）。
+                pose_target: None,
                 filter_word: None,
                 mission: None,
                 spirit_mutiny_tick: None,
@@ -19162,23 +19173,38 @@ fn gm_drain_gate(line: Option<&str>) -> bool {
 /// 命令体只装 `pending_*`（纯函数），本函数在**同一事件内**落地：
 ///
 /// - `@vv杀死` ⇒ `World::kill(target_id)`（`Command::Kill` ⇒ 既有 Die 死亡结算；卡面
-///   「不动杀底层语义」；命令入队后下一 tick 结算——oracle `Die()` 同拍，帧面两路都零帧）；
-/// - `@复活` ⇒ `Death=false` + `HP=MaxHP`（oracle `BaseObject.Base.cs:354-358` + `:40-41`）
-///   后接 `RM_ABILITY` 落帧：oracle `mIPlayerActor.SendMsg(PlayerActor, RM_ABILITY, …)`
-///   即用**目标会话**数据向**调用者**单投 `SM_ABILITY(52)`（`smframe::sm_ability`）；
-/// - `@VV给予权限` ⇒ 目标会话 `GmSession.permission = (byte)p`（运行时 Permission 唯一写点）；
-/// - `@ClearCopyItem` ⇒ 背包/仓库按（物品名 + MakeIndex）从后向前去重，**内层删除误写调用者
-///   列表**（oracle 怪癖照抄）：调用者列表越界 ⇒ 异常路径（停止，后续步骤不执行；两路都零帧）；
-/// - `@清除仓库密码` ⇒ 目标 `pwd_sessions.state` 三字段清零（IsPasswordLocked/
-///   IsUnLockStoragePwd/StoragePwd）。
+///   「不动杀底层语义」；Die 的 `RM_DEATH`⇒`SM_DEATH` 由死亡结算广播——**命令体零帧**，
+///   入队后下一 tick 结算 = 与 oracle 同拍差一拍，review M3 归窗口项）；
+/// - `@复活`（review F1/F2）：`Death=false`、**`death_settled=false`**（死亡结算一次性闩锁，
+///   不清则二次死亡永不结算）、`HP=MaxHP`，同步会话 `wabil.hp/max_hp`（帧载荷），
+///   向**被复活者本人** socket 投 `SM_ABILITY(52)`（oracle `mIPlayerActor.SendMsg(PlayerActor,
+///   RM_ABILITY)` 由被复活者自己的 MsgQueue 落帧，`PlayObject.Message.cs:1732-1734`），
+///   并按 AOI 广播 `SM_ALIVE(27)`（oracle `ReAlive()` 的 `SendRefMsg(RM_ALIVE)`，
+///   `BaseObject.Base.cs:357`）；
+/// - `@VV给予权限` ⇒ 目标会话 `GmSession.permission = (byte)p`；
+/// - `@ClearCopyItem`（review M1）：**调用者==目标时按活表迭代**（oracle 内层删除正在被
+///   遍历的同一张表，后续元素移位）；非自目标按快照等价；越界 = oracle 异常 ⇒ 停止；
+/// - `@清除仓库密码` ⇒ 目标 `pwd_sessions.state` 三字段清零；
+/// - `@删除技能`（review F4）：MagicList 在 `saves`（`SavedHuman.record.data.magic`）——
+///   倒序遍历；`All` 删除全部（无帧无字）；否则 `magic_table.get(mag_idx).desc` 与技能名
+///   `OrdinalIgnoreCase` 命中 ⇒ `SM_DELMAGIC(212)` 投**目标** + RemoveAt + 目标绿
+///   「技能X已删除。」+ 调用者绿「Y的技能X已删除。」+ break；末尾 `RecalcAbilitys`
+///   （`recalc_session_ability`）。
+/// - **review M2**：会话/pwd/saves 键一律用**解析出的规范名**（`world` 实体名，源自
+///   `GetPlayObject` 的 OrdinalIgnoreCase 命中），不用命令原始拼写。
 #[allow(clippy::too_many_arguments)]
 fn apply_pending_gm_target_ops(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
     world: &mut mir2_world::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
+    magic_table: &magics::MagicTable,
+    displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    colors: &MsgColors,
+    send_ref_range: i32,
     chr_name: &str,
 ) {
     let Some(sg) = sessions.get(chr_name) else {
@@ -19189,6 +19215,7 @@ fn apply_pending_gm_target_ops(
     let set_perm = sg.gm.pending_set_permission.clone();
     let clear_copy = sg.gm.pending_clear_copy.clone();
     let clear_pwd = sg.gm.pending_clear_password.clone();
+    let del_skill = sg.gm.pending_del_skill.clone();
 
     let find_id = |world: &mir2_world::World, name: &str| -> Option<i32> {
         world
@@ -19201,6 +19228,10 @@ fn apply_pending_gm_target_ops(
             })
             .map(|e| e.id)
     };
+    // review M2：规范名（world 实体名 = GetPlayObject 的 OrdinalIgnoreCase 命中结果）。
+    let canonical = |world: &mir2_world::World, name: &str| -> Option<String> {
+        find_id(world, name).and_then(|id| world.entities.get(id).map(|e| e.name.clone()))
+    };
 
     // ① vv杀死
     if let Some(name) = die {
@@ -19208,101 +19239,288 @@ fn apply_pending_gm_target_ops(
             world.kill(id);
         }
     }
-    // ② 复活
+    // ② 复活（F1 收件人=被复活者本人；F2 death_settled/wabil/RM_ALIVE）
     if let Some(name) = revive {
         if let Some(id) = find_id(world, &name) {
-            if let Some(e) = world.entities.get_mut(id) {
+            let dir = actor_dir(world, displays, id);
+            let (px, py, hp, max_hp) = {
+                let Some(e) = world.entities.get_mut(id) else {
+                    return;
+                };
+                e.death_settled = false;
                 e.death = false;
                 e.hp = e.max_hp;
-            }
-            // RM_ABILITY 落帧：oracle 目标把（自己的）ABILITY 发给调用者。
-            if let (Some(tsg), Some(caller)) = (
-                sessions.get(&name),
-                online.iter().find(|e| e.chr_name == chr_name),
-            ) {
-                let body = game_svr::smframe::sm_ability(
-                    tsg.state.gold,
-                    tsg.equip.job,
-                    tsg.game_gold,
-                    &ability_tail(&tsg.state.wabil, game_svr::smframe::client_layout_enabled()),
-                );
-                if let Some(tx) =
-                    route_to_gate(gates, caller.gate_idx, caller.socket, "GM 复活 SM_ABILITY")
-                {
-                    let _ = tx.send(SimToGate::SendFrame {
-                        socket: caller.socket,
-                        body,
-                    });
-                }
-            }
-        }
-    }
-    // ③ VV给予权限
-    if let Some((name, perm)) = set_perm {
-        if let Some(tsg) = sessions.get_mut(&name) {
-            tsg.gm.permission = perm;
-        }
-    }
-    // ④ ClearCopyItem（误删调用者列表怪癖照抄）
-    if let Some(name) = clear_copy {
-        let snapshot = sessions.get(&name).map(|t| {
-            (
-                t.state
-                    .item_list
-                    .iter()
-                    .map(|it| (it.index, it.make_index))
-                    .collect::<Vec<_>>(),
-                t.storage
-                    .items
-                    .iter()
-                    .map(|it| (it.index, it.make_index))
-                    .collect::<Vec<_>>(),
-            )
-        });
-        if let Some((items, storage)) = snapshot {
-            let name_of = |idx: u16| catalog.get(idx).map(|t| t.name.clone()).unwrap_or_default();
-            let Some(caller) = sessions.get_mut(chr_name) else {
-                return;
+                (e.x, e.y, e.hp, e.max_hp)
             };
-            let mut aborted = false;
-            'bag: for i in (0..items.len()).rev() {
-                let s14 = name_of(items[i].0);
-                for j in (0..i).rev() {
-                    if name_of(items[j].0) == s14 && items[i].1 == items[j].1 {
-                        // 怪癖：删除**调用者**背包下标 j；越界 = oracle IndexOutOfRange（被顶层吞）。
-                        if j >= caller.state.item_list.len() {
-                            aborted = true;
-                            break 'bag;
-                        }
-                        caller.state.item_list.remove(j);
-                        break;
+            if let Some(canon) = canonical(world, &name) {
+                // 帧载荷先用会话 wabil 同步 HP（F2b：ability_tail 编码含 hp）。
+                let mut ability_body: Option<Vec<u8>> = None;
+                if let Some(tsg) = sessions.get_mut(&canon) {
+                    tsg.state.wabil.hp = hp;
+                    tsg.state.wabil.max_hp = max_hp;
+                    ability_body = Some(game_svr::smframe::sm_ability(
+                        tsg.state.gold,
+                        tsg.equip.job,
+                        tsg.game_gold,
+                        &ability_tail(&tsg.state.wabil, game_svr::smframe::client_layout_enabled()),
+                    ));
+                }
+                // F1：SM_ABILITY 投**被复活者自己**的 socket（oracle 收件人自投）。
+                if let (Some(body), Some(target)) = (
+                    ability_body,
+                    online
+                        .iter()
+                        .find(|e| e.chr_name.eq_ignore_ascii_case(&canon)),
+                ) {
+                    if let Some(tx) =
+                        route_to_gate(gates, target.gate_idx, target.socket, "GM 复活 SM_ABILITY")
+                    {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket: target.socket,
+                            body,
+                        });
+                    }
+                }
+                // F2c：RM_ALIVE 视距广播（观察者 + 自己）——oracle ReAlive() 的 SendRefMsg。
+                let (feature, status) = displays.get(id).map_or((0, 0), |d| (d.feature, d.status));
+                let alive = game_svr::smframe::sm_alive(
+                    id,
+                    wire_coord(px),
+                    wire_coord(py),
+                    dir,
+                    &downlink::char_desc(feature, status),
+                );
+                for e in online {
+                    let Some(t) = world.entities.get(e.actor_id) else {
+                        continue;
+                    };
+                    if t.map_id != world.entities.get(id).map(|x| x.map_id).unwrap_or(0)
+                        || (t.x - px).abs() > send_ref_range
+                        || (t.y - py).abs() > send_ref_range
+                    {
+                        continue;
+                    }
+                    if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "GM 复活 SM_ALIVE")
+                    {
+                        let _ = tx.send(SimToGate::SendFrame {
+                            socket: e.socket,
+                            body: alive.clone(),
+                        });
                     }
                 }
             }
-            if !aborted {
-                'storage: for i in (0..storage.len()).rev() {
-                    let s14 = name_of(storage[i].0);
-                    for j in (0..i).rev() {
-                        if name_of(storage[j].0) == s14 && storage[i].1 == storage[j].1 {
-                            if j >= caller.storage.items.len() {
-                                aborted = true;
-                                break 'storage;
-                            }
-                            caller.storage.items.remove(j);
+        }
+    }
+    // ③ VV给予权限（M2：规范名键）
+    if let Some((name, perm)) = set_perm {
+        if let Some(canon) = canonical(world, &name) {
+            if let Some(tsg) = sessions.get_mut(&canon) {
+                tsg.gm.permission = perm;
+            }
+        }
+    }
+    // ④ ClearCopyItem（M1 自目标活表 / M2 规范名）
+    if let Some(name) = clear_copy {
+        if let Some(canon) = canonical(world, &name) {
+            let name_of = |idx: u16| catalog.get(idx).map(|t| t.name.clone()).unwrap_or_default();
+            if canon.eq_ignore_ascii_case(chr_name) {
+                // 自目标：oracle 正在改动被遍历的同一张表（活表语义，含越界异常停止）。
+                if let Some(caller) = sessions.get_mut(chr_name) {
+                    let mut i = caller.state.item_list.len() as isize - 1;
+                    'live_bag: while i >= 0 {
+                        if caller.state.item_list.is_empty() {
                             break;
                         }
+                        let idx = i as usize;
+                        if idx >= caller.state.item_list.len() {
+                            break; // oracle 越界 ⇒ 异常被吞 ⇒ 停止
+                        }
+                        let s14 = name_of(caller.state.item_list[idx].index);
+                        let mk = caller.state.item_list[idx].make_index;
+                        let mut j = i - 1;
+                        while j >= 0 {
+                            let ju = j as usize;
+                            if ju >= caller.state.item_list.len() {
+                                break 'live_bag;
+                            }
+                            if name_of(caller.state.item_list[ju].index) == s14
+                                && caller.state.item_list[ju].make_index == mk
+                            {
+                                caller.state.item_list.remove(ju);
+                                break;
+                            }
+                            j -= 1;
+                        }
+                        i -= 1;
+                    }
+                    let mut i = caller.storage.items.len() as isize - 1;
+                    while i >= 0 {
+                        if caller.storage.items.is_empty() {
+                            break;
+                        }
+                        let idx = i as usize;
+                        if idx >= caller.storage.items.len() {
+                            break;
+                        }
+                        let s14 = name_of(caller.storage.items[idx].index);
+                        let mk = caller.storage.items[idx].make_index;
+                        let mut j = i - 1;
+                        while j >= 0 {
+                            let ju = j as usize;
+                            if ju >= caller.storage.items.len() {
+                                break;
+                            }
+                            if name_of(caller.storage.items[ju].index) == s14
+                                && caller.storage.items[ju].make_index == mk
+                            {
+                                caller.storage.items.remove(ju);
+                                break;
+                            }
+                            j -= 1;
+                        }
+                        i -= 1;
+                    }
+                }
+            } else {
+                let snapshot = sessions.get(&canon).map(|t| {
+                    (
+                        t.state
+                            .item_list
+                            .iter()
+                            .map(|it| (it.index, it.make_index))
+                            .collect::<Vec<_>>(),
+                        t.storage
+                            .items
+                            .iter()
+                            .map(|it| (it.index, it.make_index))
+                            .collect::<Vec<_>>(),
+                    )
+                });
+                if let Some((items, storage)) = snapshot {
+                    let Some(caller) = sessions.get_mut(chr_name) else {
+                        return;
+                    };
+                    let mut aborted = false;
+                    'bag: for i in (0..items.len()).rev() {
+                        let s14 = name_of(items[i].0);
+                        for j in (0..i).rev() {
+                            if name_of(items[j].0) == s14 && items[i].1 == items[j].1 {
+                                if j >= caller.state.item_list.len() {
+                                    aborted = true;
+                                    break 'bag;
+                                }
+                                caller.state.item_list.remove(j);
+                                break;
+                            }
+                        }
+                    }
+                    if !aborted {
+                        'storage: for i in (0..storage.len()).rev() {
+                            let s14 = name_of(storage[i].0);
+                            for j in (0..i).rev() {
+                                if name_of(storage[j].0) == s14 && storage[i].1 == storage[j].1 {
+                                    if j >= caller.storage.items.len() {
+                                        aborted = true;
+                                        break 'storage;
+                                    }
+                                    caller.storage.items.remove(j);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let _ = aborted;
+                }
+            }
+        }
+    }
+    // ⑤ 清除仓库密码（M2：规范名键）
+    if let Some(name) = clear_pwd {
+        if let Some(canon) = canonical(world, &name) {
+            if let Some(p) = pwd_sessions.get_mut(&canon) {
+                p.state.is_password_locked = false;
+                p.state.is_un_lock_storage_pwd = false;
+                p.state.storage_pwd.clear();
+            }
+        }
+    }
+    // ⑥ 删除技能（F4：saves 里的 MagicList + 212 + 双方绿字 + Recalc）
+    if let Some((name, skill)) = del_skill {
+        if let Some(canon) = canonical(world, &name) {
+            let is_all = skill.eq_ignore_ascii_case("All");
+            let target_entry = online
+                .iter()
+                .find(|e| e.chr_name.eq_ignore_ascii_case(&canon))
+                .cloned();
+            if let Some(saved) = saves.get_mut(&canon) {
+                let list = magic_list_mut(saved);
+                if is_all {
+                    // All：全部 RemoveAt——**不发帧不发字**（oracle `:49-52`）。
+                    list.clear();
+                } else {
+                    let mut i = list.len() as isize - 1;
+                    while i >= 0 {
+                        let idx = i as usize;
+                        if idx >= list.len() {
+                            break;
+                        }
+                        let Some(Some(m)) = list.get(idx) else {
+                            i -= 1;
+                            continue;
+                        };
+                        let desc = magic_table
+                            .get(m.mag_idx)
+                            .map(|t| t.desc.clone())
+                            .unwrap_or_default();
+                        if desc.eq_ignore_ascii_case(&skill) {
+                            let mag_idx = m.mag_idx;
+                            // SendDelMagic(212) 投**目标** socket。
+                            if let Some(target) = &target_entry {
+                                if let Some(tx) = route_to_gate(
+                                    gates,
+                                    target.gate_idx,
+                                    target.socket,
+                                    "GM 删除技能 SM_DELMAGIC",
+                                ) {
+                                    let _ = tx.send(SimToGate::SendFrame {
+                                        socket: target.socket,
+                                        body: game_svr::smframe::sm_delmagic(mag_idx),
+                                    });
+                                }
+                            }
+                            list.remove(idx);
+                            // 目标绿 + 调用者绿（`DelSkillCommand.cs:52-53`）。
+                            if let Some(target) = &target_entry {
+                                send_gm_sysmsg(
+                                    gates,
+                                    target,
+                                    colors.green_f,
+                                    colors.green_b,
+                                    &format!("技能{skill}已删除。"),
+                                );
+                            }
+                            if let Some(caller) = online
+                                .iter()
+                                .find(|e| e.chr_name.eq_ignore_ascii_case(chr_name))
+                            {
+                                send_gm_sysmsg(
+                                    gates,
+                                    caller,
+                                    colors.green_f,
+                                    colors.green_b,
+                                    &format!("{canon}的技能{skill}已删除。"),
+                                );
+                            }
+                            break;
+                        }
+                        i -= 1;
                     }
                 }
             }
-            let _ = aborted;
-        }
-    }
-    // ⑤ 清除仓库密码
-    if let Some(name) = clear_pwd {
-        if let Some(p) = pwd_sessions.get_mut(&name) {
-            p.state.is_password_locked = false;
-            p.state.is_un_lock_storage_pwd = false;
-            p.state.storage_pwd.clear();
+            // 末尾 RecalcAbilitys（恒调用，oracle `:71`）。
+            if let Some(tsg) = sessions.get_mut(&canon) {
+                recalc_session_ability(tsg, catalog, None, None);
+            }
         }
     }
 
@@ -19313,6 +19531,7 @@ fn apply_pending_gm_target_ops(
         sg.gm.pending_set_permission = None;
         sg.gm.pending_clear_copy = None;
         sg.gm.pending_clear_password = None;
+        sg.gm.pending_del_skill = None;
     }
 }
 
@@ -23122,6 +23341,7 @@ fn sim_loop(
                             filter_word: &gm_filter_word,
                             mission: &gm_mission,
                             spirit_mutiny_tick: &gm_spirit_mutiny_tick,
+                            displays: &displays,
                         };
                         // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
                         // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
@@ -23233,10 +23453,15 @@ fn sim_loop(
                         apply_pending_gm_target_ops(
                             &mut ground_sessions,
                             &mut pwd_sessions,
+                            &mut saves,
                             &mut world,
                             &enter_cfg.catalog,
+                            &enter_cfg.magic_table,
+                            &displays,
                             &online,
                             &gates,
+                            &colors,
+                            enter_cfg.shop.send_ref_msg_range,
                             &chr_name,
                         );
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
@@ -25030,6 +25255,7 @@ fn sim_loop(
                                                                 now_ms: world.clock_ms,
                                                                 // 与 CM_SAY 支同一份全局单元
                                                                 // （`SystemShare.FilterWord` 进程单例）。
+                                                                pose_target: None,
                                                                 filter_word: Some(&gm_filter_word),
                                                                 mission: Some(&gm_mission),
                                                                 spirit_mutiny_tick: Some(
@@ -40267,6 +40493,8 @@ break
         /// **族 X2**：全局任务目标四元与 `SpiritMutinyTick`（@Mission/@祈祷生效/@停止叛变）。
         mission: std::cell::RefCell<gmcmd::GmMissionState>,
         spirit_mutiny_tick: std::cell::Cell<i64>,
+        /// **族 X2**：展示表（`@vv杀死` 面对面支的 pose 解析）。
+        displays: downlink::DisplayTable,
     }
 
     impl TestChatCtx {
@@ -40285,6 +40513,7 @@ break
                 filter_word: std::cell::Cell::new(true),
                 mission: std::cell::RefCell::new(gmcmd::GmMissionState::default()),
                 spirit_mutiny_tick: std::cell::Cell::new(0),
+                displays: downlink::DisplayTable::new(),
             }
         }
 
@@ -40310,6 +40539,7 @@ break
                 filter_word: &self.filter_word,
                 mission: &self.mission,
                 spirit_mutiny_tick: &self.spirit_mutiny_tick,
+                displays: &self.displays,
             }
         }
     }
@@ -40329,6 +40559,8 @@ break
         catalog: game_svr::ability::StdItemCatalog,
         /// `@Level0` 的 `MaxExp = GetLevelExp(level)` 数据源（`Exps.conf`；这里用常量表）。
         need_exps: Vec<i32>,
+        /// **族 X2**：展示表（`@vv杀死` 面对面支 pose 解析用；测试默认空）。
+        displays: downlink::DisplayTable,
     }
 
     impl GmRig {
@@ -40355,6 +40587,7 @@ break
                 // `GetLevelExp` 的索引上界是 255（`Grobal2.MaxLevel = byte.MaxValue`），
                 // 这里给 256 项常量表 ⇒ `level=255` 时取 `need_exps[255]`（不触发越界支）。
                 need_exps: vec![10i32; 256],
+                displays: downlink::DisplayTable::new(),
             }
         }
 
@@ -40437,16 +40670,25 @@ break
                 });
             }
             drain_reconnects(&mut reconnect_pending, &mut self.sessions, &self.gates);
-            // 族 X2 批 B：目标侧副作用收口（与 sim_loop CM_SAY 支同一步；pwd 态用空表）。
+            // 族 X2 批 B：目标侧副作用收口（与 sim_loop CM_SAY 支同一步；pwd/saves/魔表用空表，
+            // displays 空 ⇒ pose 恒 None——面对面支与删技能的线上承载在 lib 层专用用例覆盖）。
             let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
                 std::collections::HashMap::new();
+            let mut saves: std::collections::HashMap<String, SavedHuman> =
+                std::collections::HashMap::new();
+            let empty_magic_table = magics::MagicTable::default();
             apply_pending_gm_target_ops(
                 &mut self.sessions,
                 &mut pwd_sessions,
+                &mut saves,
                 &mut self.world,
                 &self.catalog,
+                &empty_magic_table,
+                &self.displays,
                 &self.online,
                 &self.gates,
+                &colors,
+                chat::send_ref_msg_range(),
                 "aaa",
             );
             if !deferred.is_empty() || !gm_frames.is_empty() {
@@ -40552,6 +40794,7 @@ break
         let hero_id = world.add_entity(Entity::new(0, "hero", 10, 10));
         let mut victim_e = Entity::new(0, "victim", 11, 11);
         victim_e.death = true;
+        victim_e.death_settled = true; // 已结算过的尸体：复活必须清闩锁（F2 牙敏感点）
         victim_e.hp = 1;
         victim_e.max_hp = 100;
         let victim_id = world.add_entity(victim_e);
@@ -40616,39 +40859,90 @@ break
                 actor_id: hero_id,
             },
         );
+        // F1：被复活者本人在线（有自己的 socket）——SM_ABILITY 收件人 = 被复活者。
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "v".into(),
+                chr_name: "victim".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: victim_id,
+            },
+        );
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let empty_magic = magics::MagicTable::default();
+        let displays = downlink::DisplayTable::new();
         apply_pending_gm_target_ops(
             &mut sessions,
             &mut pwd_sessions,
+            &mut saves,
             &mut world,
             &catalog,
+            &empty_magic,
+            &displays,
             &online,
             &gates,
+            &colors,
+            12,
             "hero",
         );
-        // ① 复活：death=false + HP=MaxHP + 恰一条 SM_ABILITY(52) 给调用者。
+        // ① 复活：death=false + death_settled 清零 + HP=MaxHP + wabil 同步（F2）。
         {
             let e = world.entities.get(victim_id).unwrap();
             assert!(!e.death, "ReAlive ⇒ death=false");
+            assert!(
+                !e.death_settled,
+                "F2：death_settled 必须清零（否则复活即免死）"
+            );
             assert_eq!(e.hp, 100, "HP=MaxHP");
         }
-        let frames: Vec<Vec<u8>> = std::iter::from_fn(|| rx0.try_recv().ok())
+        assert_eq!(sessions["victim"].state.wabil.hp, 100, "wabil.hp 同步");
+        assert_eq!(
+            sessions["victim"].state.wabil.max_hp, 100,
+            "wabil.max_hp 同步"
+        );
+        // F1：SM_ABILITY(52) 投**被复活者本人**（socket 902），不是调用者 901；
+        // F2c：SM_ALIVE(27) 视距广播（观察者 901 + 自己 902）。
+        let frames: Vec<(i32, u16)> = std::iter::from_fn(|| rx0.try_recv().ok())
             .filter_map(|m| match m {
-                SimToGate::SendFrame { body, .. } => Some(body),
+                SimToGate::SendFrame { socket, body } => {
+                    Some((socket, u16::from_le_bytes([body[4], body[5]])))
+                }
                 _ => None,
             })
             .collect();
-        assert_eq!(
-            frames.len(),
-            1,
-            "复活恰一条 SM_ABILITY；实得 {}",
-            frames.len()
+        assert!(
+            frames.contains(&(902, mir2_protocol::messages::SM_ABILITY)),
+            "SM_ABILITY 必须投被复活者 902；实得 {frames:?}"
         );
-        assert_eq!(
-            u16::from_le_bytes([frames[0][4], frames[0][5]]),
-            mir2_protocol::messages::SM_ABILITY
+        assert!(
+            !frames.contains(&(901, mir2_protocol::messages::SM_ABILITY)),
+            "调用者 901 不得收到 SM_ABILITY（F1 纠错向）"
+        );
+        assert!(
+            frames.contains(&(901, mir2_protocol::messages::SM_ALIVE)),
+            "SM_ALIVE 广播到观察者 901；实得 {frames:?}"
+        );
+        assert!(
+            frames.contains(&(902, mir2_protocol::messages::SM_ALIVE)),
+            "SM_ALIVE 广播含自己 902"
         );
         // ② VV给予权限：目标会话运行时 permission 写。
         assert_eq!(sessions["victim"].gm.permission, 7);
@@ -40675,16 +40969,22 @@ break
                 && gm.pending_set_permission.is_none()
                 && gm.pending_clear_copy.is_none()
                 && gm.pending_clear_password.is_none()
+                && gm.pending_del_skill.is_none()
         );
         // ⑥ vv杀死：单独一例（World::kill 入队 ⇒ tick 后 death）。
         sessions.get_mut("hero").unwrap().gm.pending_gm_die = Some("victim".into());
         apply_pending_gm_target_ops(
             &mut sessions,
             &mut pwd_sessions,
+            &mut saves,
             &mut world,
             &catalog,
+            &empty_magic,
+            &displays,
             &online,
             &gates,
+            &colors,
+            12,
             "hero",
         );
         while rx0.try_recv().is_ok() {}
@@ -40694,6 +40994,334 @@ break
         assert!(
             world.entities.get(victim_id).unwrap().death,
             "World::kill ⇒ tick 后死亡结算"
+        );
+    }
+
+    /// **F4 牙（review b6a3962b）**：`@删除技能` 宿主真实实现——MagicList 在 `saves`
+    /// （`SavedHuman.record.data.magic`）：按名命中 ⇒ `SM_DELMAGIC(212)` 投**目标** +
+    /// 目标绿「技能X已删除。」+ 调用者绿「Y的技能X已删除。」+ 目标列表移除 + Recalc；
+    /// `All` ⇒ 清空且**不发帧不发字**。变异红：删 212 / 删双绿 / All 支发字。
+    #[test]
+    fn gm_del_skill_host_apply_emits_212_and_greens() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        let mag = |mag_idx: u16| {
+            Some(record::MagicRcd {
+                mag_idx,
+                level: 1,
+                magic_key: 0,
+                tran_point: 0,
+            })
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut hero_sg = test_session_ground(hero_id);
+        hero_sg.gm.pending_del_skill = Some(("victim".into(), "火球术".into()));
+        sessions.insert("hero".into(), hero_sg);
+        sessions.insert("victim".into(), test_session_ground(victim_id));
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "victim".into(),
+            SavedHuman {
+                account: "v".into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
+        let mut magic_table = magics::MagicTable::new(vec![
+            mir2_data::MagicInfo {
+                magic_id: 1,
+                magic_name: "火球术".into(),
+                desc: "火球术".into(),
+                ..Default::default()
+            },
+            mir2_data::MagicInfo {
+                magic_id: 2,
+                magic_name: "治愈术".into(),
+                desc: "治愈术".into(),
+                ..Default::default()
+            },
+        ]);
+        let _ = &mut magic_table;
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero_id,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "v".into(),
+                chr_name: "victim".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: victim_id,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let displays = downlink::DisplayTable::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            &magic_table,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        // 列表移除命中项（火球术 mag_idx=1），治愈术保留。
+        let list = saves["victim"].record.data.magic.as_ref().unwrap();
+        assert_eq!(list.len(), 1, "只删命中项");
+        assert_eq!(list[0].as_ref().unwrap().mag_idx, 2);
+        // 帧：212 投目标 902（Recog=MagIdx=1）+ 目标绿 902 + 调用者绿 901。
+        let frames: Vec<(i32, Vec<u8>)> = std::iter::from_fn(|| rx0.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { socket, body } => Some((socket, body)),
+                _ => None,
+            })
+            .collect();
+        let ident = |b: &Vec<u8>| u16::from_le_bytes([b[4], b[5]]);
+        let del: Vec<&(i32, Vec<u8>)> = frames
+            .iter()
+            .filter(|(_, b)| ident(b) == mir2_protocol::messages::SM_DELMAGIC)
+            .collect();
+        assert_eq!(del.len(), 1, "恰一条 SM_DELMAGIC；实得 {frames:?}");
+        assert_eq!(del[0].0, 902, "212 投目标");
+        assert_eq!(
+            i32::from_le_bytes([del[0].1[0], del[0].1[1], del[0].1[2], del[0].1[3]]),
+            1,
+            "212 Recog = MagIdx"
+        );
+        let sys: Vec<(i32, String)> = frames
+            .iter()
+            .filter(|(_, b)| ident(b) == mir2_protocol::messages::SM_SYSMESSAGE)
+            .map(|(s, b)| (*s, gbk_decode(&mir2_protocol::edcode::decode(&b[12..]))))
+            .collect();
+        assert!(
+            sys.iter()
+                .any(|(s, t)| *s == 902 && t == "技能火球术已删除。"),
+            "目标绿字；实得 {sys:?}"
+        );
+        assert!(
+            sys.iter()
+                .any(|(s, t)| *s == 901 && t == "victim的技能火球术已删除。"),
+            "调用者绿字；实得 {sys:?}"
+        );
+        // All 支：清空且不发帧不发字。
+        while rx0.try_recv().is_ok() {}
+        magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(1), mag(2)]);
+        sessions.get_mut("hero").unwrap().gm.pending_del_skill =
+            Some(("victim".into(), "All".into()));
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            &magic_table,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        assert!(
+            saves["victim"]
+                .record
+                .data
+                .magic
+                .as_ref()
+                .unwrap()
+                .is_empty(),
+            "All ⇒ 全部删除"
+        );
+        assert!(
+            rx0.try_recv().is_err(),
+            "All 支不发帧不发字（oracle :49-52）"
+        );
+    }
+
+    /// **M1 牙（review b6a3962b）**：`@ClearCopyItem` 调用者==目标时按**活表**迭代——
+    /// oracle 内层删除正在遍历的同一张表（后续 i 读到移位后的元素）。
+    /// 夹具 `[A1(m1), A2(m2), A3(m1)]`：活表结果 `[A2, A3]`（2 件）；快照实现会给 `[A3]`（1 件）。
+    #[test]
+    fn gm_clear_copy_self_target_uses_live_table() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            10,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            11,
+            mir2_data::StdItem {
+                name: "铁剑".into(),
+                ..Default::default()
+            },
+        );
+        let item = |make_index: i32, index: u16| game_svr::bag::BagItem {
+            make_index,
+            index,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut hero_sg = test_session_ground(hero_id);
+        // 区分活表 vs 快照的夹具（5 件同名木剑）：活表结果 makes=[1,2]；快照会给 [2,2]。
+        hero_sg.state.item_list = vec![
+            item(1, 10),
+            item(2, 10),
+            item(2, 10),
+            item(1, 10),
+            item(2, 10),
+        ];
+        hero_sg.gm.pending_clear_copy = Some("hero".into());
+        sessions.insert("hero".into(), hero_sg);
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero_id,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let displays = downlink::DisplayTable::new();
+        let magic_table = magics::MagicTable::default();
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            &magic_table,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        let list = &sessions["hero"].state.item_list;
+        assert_eq!(list.len(), 2, "活表结果 2 件");
+        let makes: Vec<i32> = list.iter().map(|it| it.make_index).collect();
+        assert_eq!(
+            makes,
+            vec![1, 2],
+            "活表语义（oracle 外层次次读移位后的元素）；快照实现会给 [2, 2]"
+        );
+    }
+
+    /// **M2 牙（review b6a3962b）**：目标会话/pwd 查找用 GetPlayObject 的 OrdinalIgnoreCase
+    /// 命中结果（规范名），不用命令原始拼写——`@VV给予权限 VICTIM 7`（实体名 victim）仍写会话。
+    #[test]
+    fn gm_target_ops_use_canonical_lowercase_name() {
+        use std::collections::HashMap;
+        let mut world = mir2_world::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut hero_sg = test_session_ground(hero_id);
+        hero_sg.gm.pending_set_permission = Some(("VICTIM".into(), 7)); // 大写输入
+        sessions.insert("hero".into(), hero_sg);
+        sessions.insert("victim".into(), test_session_ground(victim_id));
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let online: OnlineRegistry = Vec::new();
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let displays = downlink::DisplayTable::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let magic_table = magics::MagicTable::default();
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            &magic_table,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        assert_eq!(
+            sessions["victim"].gm.permission, 7,
+            "M2：按规范名写目标会话（大写输入也命中）"
         );
     }
 

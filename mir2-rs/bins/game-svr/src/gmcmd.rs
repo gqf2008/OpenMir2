@@ -1108,6 +1108,9 @@ pub struct GmSession {
     pub pending_clear_copy: Option<String>,
     /// `@清除仓库密码` 目标名（宿主清目标 `pwd_sessions` 的 three fields）。
     pub pending_clear_password: Option<String>,
+    /// `@删除技能`（目标名, 技能名；`All` 删除全部）——MagicList 在 `saves`（宿主收口：
+    /// 212 发给目标 + 双方绿字 + Recalc；All 支不发帧不发字）。
+    pub pending_del_skill: Option<(String, String)>,
 }
 
 impl Default for GmSession {
@@ -1161,6 +1164,7 @@ impl Default for GmSession {
             pending_set_permission: None,
             pending_clear_copy: None,
             pending_clear_password: None,
+            pending_del_skill: None,
         }
     }
 }
@@ -1536,6 +1540,9 @@ pub struct GmWorld<'a> {
     pub speaker_id: i32,
     /// `HUtil32.GetTickCount()` 的等价物（ms；冷却门的 `now`）。
     pub now_ms: i64,
+    /// **族 X2**（review F3）：`PlayerActor.GetPoseCreate()` 的前方格目标名（宿主用
+    /// `pose_create` 解析后注入；`None` = 面前无人/未接线）。`@vv杀死` 无参支用。
+    pub pose_target: Option<&'a str>,
     /// **族 X2**：`SystemShare.BoMission/MissionMap/MissionX/MissionY` 四元（`@Mission` 写）；
     /// `None` = 未注入（脚本桥）⇒ 命令体登记零帧不伪造写。
     pub mission: Option<&'a std::cell::RefCell<GmMissionState>>,
@@ -1561,10 +1568,18 @@ impl<'a> GmWorld<'a> {
             speaker: "",
             speaker_id: 0,
             now_ms: 0,
+            pose_target: None,
             mission: None,
             spirit_mutiny_tick: None,
             filter_word: None,
         }
+    }
+
+    /// 注入面前格目标名（`@vv杀死` 无参支）。
+    #[must_use]
+    pub fn with_pose_target(mut self, pose: &'a str) -> Self {
+        self.pose_target = Some(pose);
+        self
     }
 
     #[must_use]
@@ -2719,10 +2734,13 @@ const NOTE_X2_GLOBAL_NOT_INJECTED: &str =
 // 既有范式（同 pending_kick/pending_clear_bag）；Die/ReAlive 底层语义复用 `World::kill` /
 // entity 字段，卡面 forbidden「不动杀/复活底层语义」。
 
-/// `KillCommand.Execute`（`KillCommand.cs:12-35`，现网 `@vv杀死`）。
+/// `KillCommand.Execute`（`KillCommand.cs:12-40`，现网 `@vv杀死`）。
 ///
-/// 带名 ⇒ 离线红；无参 ⇒ 面对面支（`GetPoseCreate` 宿主未接 ⇒ 恒红面对面失败信息，登记）；
-/// 命中 ⇒ `target.Die()`——**零帧**（宿主 `World::kill` 走既有死亡结算）。
+/// 带名 ⇒ 离线红；无参 ⇒ `GetPoseCreate()`（宿主 `pose_create` 解析后经
+/// [`GmWorld::pose_target`] 注入）：null ⇒ 红「必须与角色面对面站好!!!」；非 null ⇒ Die()。
+/// 命中 ⇒ `target.Die()`：**命令体零帧**（Die 的观察者帧 `RM_DEATH`⇒`SM_DEATH` 由死亡结算
+/// 广播，review M3；本仓 `World::kill` 入队、下一 tick 结算——与 oracle 同拍差一拍，
+/// 帧/时序归窗口项）。
 fn kill_cmd(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
     let name = split_params(parameters).first().copied().unwrap_or("");
     if !name.is_empty() {
@@ -2732,10 +2750,14 @@ fn kill_cmd(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmRe
         sess.pending_gm_die = Some(name.to_string());
         GmResult::empty()
     } else {
-        // `PlayerActor.GetPoseCreate()` 宿主未接（面向格对象查询无只读视图）⇒ 恒走失败支。
-        no_frames(
-            "vv杀死：无参面对面支需 GetPoseCreate（宿主未接）⇒ 恒红「必须与角色面对面站好!!!」；面对面成功支登记",
-        )
+        // 无参 ⇒ 面对面支（review F3：pose 由宿主 pose_create 解析注入）。
+        match world.pose_target {
+            Some(pose) => {
+                sess.pending_gm_die = Some(pose.to_string());
+                GmResult::empty()
+            }
+            None => red(KILL_FACE_FAIL),
+        }
     }
 }
 
@@ -2783,11 +2805,12 @@ fn set_permission(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -
     )
 }
 
-/// `DelSkillCommand.Execute`（`DelSkillCommand.cs:14-63`，现网 `@删除技能`）。
+/// `DelSkillCommand.Execute`（`DelSkillCommand.cs:14-71`，现网 `@删除技能`）。
 ///
-/// 魔法列表宿主未接（T-189 同源）⇒ 在线命中支无可匹配列表：按 oracle 空列表行为 = 循环不
-/// 进 / 无匹配 ⇒ 无文本、无 SendDelMagic，仅末尾 `RecalcAbilitys()`（宿主重算接缝登记）⇒ 零帧。
-fn del_skill(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+/// 空参红帮助 / 离线红；在线 ⇒ 装 `pending_del_skill`（MagicList 在宿主 `saves`，
+/// review F4：212 发给目标 + 双方绿字 + Recalc，`All` 支删全部不发帧不发字——
+/// 全部在本函数同事件内由宿主收口，命令体零帧零文本）。
+fn del_skill(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
     let params = split_params(parameters);
     let name = params.first().copied().unwrap_or("");
     let skill = params.get(1).copied().unwrap_or("");
@@ -2797,9 +2820,8 @@ fn del_skill(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     if world.play_by_name(name).is_none() {
         return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[name.to_string()]));
     }
-    no_frames(
-        "删除技能：MagicList 宿主未接（T-189 同源）⇒ 空列表无匹配 ⇒ 无 SendDelMagic/无文本；末尾 RecalcAbilitys 重算接缝登记",
-    )
+    sess.pending_del_skill = Some((name.to_string(), skill.to_string()));
+    GmResult::empty()
 }
 
 /// `ClearCopyItemCommand.Execute`（`ClearCopyItemCommand.cs:14-68`，现网 `@ClearCopyItem`）。
@@ -4009,6 +4031,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_set_permission = None;
     sess.pending_clear_copy = None;
     sess.pending_clear_password = None;
+    sess.pending_del_skill = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -4233,7 +4256,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::KillCmd => kill_cmd(parameters, world, sess),
         Imp::ReAlive => realive(parameters, world, sess),
         Imp::SetPermission => set_permission(parameters, world, sess),
-        Imp::DelSkillCmd => del_skill(parameters, world),
+        Imp::DelSkillCmd => del_skill(parameters, world, sess),
         Imp::ClearCopyItem => clear_copy_item(parameters, world, sess),
         Imp::ClearHumanPassword => clear_human_password(parameters, world, sess),
         Imp::Unimplemented => GmResult {
@@ -6550,6 +6573,7 @@ mod tests {
             speaker: "boss",
             speaker_id: 7,
             now_ms: 0,
+            pose_target: None,
             mission: None,
             spirit_mutiny_tick: None,
             filter_word: None,
@@ -10379,6 +10403,28 @@ mod tests {
 
     // ---------------------------- 族 X2 · 批 B（重 R 6 条）----------------------------
 
+    /// **F3 牙（review b6a3962b）**：`@vv杀死` 无参支——`pose_target` 注入 ⇒ Die（零帧 +
+    /// pending_gm_die）；无注入 ⇒ 红「必须与角色面对面站好!!!」。
+    #[test]
+    fn x2b_kill_face_target_branch() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = q_view(&fx, &w, &guilds).with_pose_target("bob");
+        let r = execute(&mut sess, &cfg, &view, "@vv杀死");
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "面前有人 ⇒ Die 零帧"
+        );
+        assert_eq!(sess.pending_gm_die.as_deref(), Some("bob"));
+        let bare = q_view(&fx, &w, &guilds);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &bare, "@vv杀死")),
+            vec![(GmColor::Red, KILL_FACE_FAIL)]
+        );
+    }
+
     /// 批 B 6 条全部接线：现网名/impl/perm 10/params。
     #[test]
     fn x2b_family_table_entries_are_wired() {
@@ -10435,8 +10481,11 @@ mod tests {
             texts(&execute(&mut sess, &cfg, &view, "@vv杀死 nowhere")),
             vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
         );
-        let r = execute(&mut sess, &cfg, &view, "@vv杀死");
-        assert!(r.msgs.is_empty() && r.log_note.expect("面对面接缝").contains("面对面"));
+        // 无参 + 面前无人（q_view 无 pose_target）⇒ 红「必须与角色面对面站好!!!」。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@vv杀死")),
+            vec![(GmColor::Red, KILL_FACE_FAIL)]
+        );
         let r = execute(&mut sess, &cfg, &view, "@vv杀死 bob");
         assert!(r.msgs.is_empty() && r.frames.is_empty(), "Die 零帧");
         assert_eq!(sess.pending_gm_die.as_deref(), Some("bob"));
@@ -10494,8 +10543,14 @@ mod tests {
             vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
         );
         let r = execute(&mut sess, &cfg, &view, "@删除技能 bob 火球术");
-        assert!(r.msgs.is_empty() && r.frames.is_empty());
-        assert!(r.log_note.expect("MagicList 登记").contains("MagicList"));
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "宿主收口 ⇒ 命令体零帧"
+        );
+        assert_eq!(
+            sess.pending_del_skill,
+            Some(("bob".to_string(), "火球术".to_string()))
+        );
         // ClearCopyItem：空名帮助 / 离线红 / 在线零帧 + pending。
         assert_eq!(
             texts(&execute(&mut sess, &cfg, &view, "@ClearCopyItem")),
