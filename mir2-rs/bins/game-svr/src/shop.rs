@@ -16,8 +16,11 @@
 //! 含 `BUG-REPLICA`）；本模块只做状态迁移 + 帧面 + 分支（**不**重写公式）。
 //!
 //! # 第②片（本片）
-//! - `CM_USERGETDETAILITEM(1015)`（`Merchant.ClientGetDetailGoodsList`，`Merchant.cs:1304`）+ `SM_SENDDETAILGOODSLIST(652)`
-//!   ⇒ [`detail_goods_list`]（尾 = `EncodeString(每件 EncodeBuffer(ClientItem) + '/')`，与 `msg.Ident` 的 RM→SM 双重编码口径）。
+//! - `CM_USERGETDETAILITEM(1015)`（`Merchant.ClientGetDetailGoodsList`，`Merchant.cs:1311`；部署 commit
+//!   `1f5132b2c` 处为 `:1304`）+ `SM_SENDDETAILGOODSLIST(652)` ⇒ [`detail_goods_list`]
+//!   （尾 = `EncodeString(每件 EncodeBuffer(ClientItem) + '/')`：**内层每件一次 `EncodeBuffer`、外层整串一次
+//!   `EncodeString`**，两层各一次——A1 逐层钉定见下文「652 编码层」节；冻结客户端按同口径**两遍**解，
+//!   **不得改成单层**）。
 //! - `CM_USERSTORAGEITEM(1031)` / `CM_USERTAKEBACKSTORAGEITEM(1032)`（`PlayObject.Operate.cs:1607-1713`）
 //!   ⇒ [`storage_item`] / [`take_back_storage_item`]；`@storage`/`@getback` 面板 ⇒ [`back_item_list`] 的
 //!   `SM_SENDUSERSTORAGEITEM(700)` / `SM_SAVEITEMLIST(704)` 分页（每页 50，`PlayObject.Base.cs:1590`）。
@@ -65,6 +68,53 @@
 //! 108..122 全零 Desc 区）⇒ 客户端 Stock=0。同一份 652 字节发给 C# 参照栈结果相同。
 //! 登记路由（whitelist 行 / MirClientZig 证据）走卡线程；构造级双向牙
 //! `buy_weapon_gates_on_instance_make_index_and_real_one_succeeds`（变异红）。
+//!
+//! # 652 编码层 A1 钉定（卡 `openmir2-gm-detail-652-single-layer`，2026-10-30）
+//!
+//! MirClientZig 字节表（`shop-20261029-164314-146` / `shop-20261030-225923-562`，`edcode.zig` 可复算）
+//! 报「新栈 652 双层编码 ⇒ 忠实客户端单层解析解不出实例 ⇒ 买 param=0 ⇒ 651」，据此判
+//! 「oracle 真机 = 单层，Rust 应改单层」。**A1 对 oracle 发送链逐层钉定的结论相反**：oracle 线上
+//! 652 尾就是**双层**，Rust 现状与 oracle **逐字节同构** ⇒ 不翻转（翻转 = 对冻结 oracle 制造线缆差异，
+//! 且冻结客户端本身按两遍解，见下）。
+//!
+//! oracle 发送链（部署二进制 `E:\MirServer\M2GameSvr\GameSrv.exe`，`ProductVersion=1.0.0+1f5132b2c…`，
+//! 2026-10-22 构建自本仓 commit `1f5132b2c`；该 commit 之后 `Merchant.cs` 只改过 `RefillGoods` 节拍，
+//! 本链未动——复核：`git diff 1f5132b2c HEAD -- src/GameSrv/Npc/Merchant.cs src/M2Server/Player/`）：
+//!
+//! 1. `ClientUserBuyItem`（`PlayObject.Operate.cs:210-211`）：`CM_USERGETDETAILITEM` → `ClientGetDetailGoodsList`；
+//! 2. **内层**：`Merchant.cs:1339` `sSendMsg += EDCode.EncodeBuffer(clientItem) + "/"`（逐件一次）；
+//! 3. `Merchant.cs:1349` `SendMsg(RM_SENDDETAILGOODSLIST, 0, ActorId, nItemCount, nInt, sSendMsg)`；
+//! 4. 队列原样：`BaseObject.Message.cs:82-94` `Buff = sMsg` → `:344-351` `msg.Msg = sendMessage.Buff`（**无编码**）；
+//! 5. 泵分支：`PlayObject.Message.cs:1830-1831` `SendDefMessage(SM_SENDDETAILGOODSLIST, …, processMsg.Msg)`；
+//! 6. **外层**：`PlayObject.Socket.cs:27-42` 的 `SendDefMessage(…, string sMsg)` → `SendSocket(ClientMsg, EDCode.EncodeString(sMsg))`；
+//! 7. `PlayObject.Socket.cs:101-129`：编码后串按 GBK 取字节、原样拼进帧体尾。
+//!
+//! ⇒ **oracle 线上尾 = GBK(EncodeString(EncodeBuffer(item1)+"/"+…+EncodeBuffer(itemN)+"/")) = 双层。**
+//! Rust 的 [`detail_goods_list`] 内层 `edcode::encode(encode_client_item(…))` + `frame(…)` 的
+//! `tail_encoded=false` 由宿主 `lib.rs::shop_frame_body` 施加 `edcode::encode` = **同两层**。
+//!
+//! 冻结客户端**也是两遍**（`E:/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas:13594-13639`）：
+//! `:13606` `bodystr := DecodeString(bodystr)`（撤外层）→ `:13611` `GetValidStr3(…, ['/'])` 切件 →
+//! `:13615` `DecodeBuffer(data, @pc^, SizeOf(TClientItem))`（撤内层）。⇒ 双层线缆正是客户端期望的形态。
+//!
+//! 卡片引作「oracle 真机=单层」的两条证据都不判别层数：① 「旧栈药品 StdMode≤4 短路成功」——买入门是
+//! `Merchant.cs:1249` `StdMode <= 4 || 42 || 31 || userItem.MakeIndex == nInt`，StdMode≤4 根本不看客户端
+//! 的 `nInt`；② 「旧栈/新栈 645 同构」——645 的尾是**纯文本** `名/sub/价/存/`（`Merchant.cs:987`）再走同一个
+//! `SendDefMessage` ⇒ 线上单层且两侧同构，只证明外层 `EncodeString` 两侧一致，不涉及 652 的内层。
+//!
+//! 651/param=0 的真因（与上张卡分支 c 一致，**不是**编码层）：服务器族 `ClientItem` 是 **124B**
+//! （`ItemNameLen=14` ⇒ `MakeIndex@100`、`Desc@108..121`；本仓 `itemwire::encode_client_item` 同布局），
+//! 而冻结客户端 `TClientStdItem` 是 `string[ItemNameLen]`、`Grobal2.pas:112` **`ItemNameLen = 20`** ⇒
+//! 结构 116B；`TClientItem`（`Grobal2.pas:3507`）总长同为 124B 但 **`MakeIndex@116`** ⇒ 客户端解出的 124B
+//! 按自家结构读，`MakeIndex` 落在服务器 `Desc` 全零区 ⇒ 0 ⇒ `CM_USERBUYITEM` `param=0` ⇒ 武器
+//! `MakeIndex == nInt` 门不过 ⇒ 651。同一份 652 字节发给 C# 参照栈结果相同 ⇒ **该现象在 oracle 侧同样发生**，
+//! Rust 保持逐字节等价即正确。（要「让冻结客户端买得动」须偏离 oracle 线缆布局，属 D 类裁决，另卡另裁；
+//! 本卡 forbidden 已明确不动 `itemwire` 的 124B 布局。）
+//!
+//! A3 牙：`detail_goods_list_652_wire_is_double_edcode_and_two_pass_recovers_instance`——从**真发射面**
+//! `crate::shop_frame_body` 取线上尾：撤外层一遍 == `frame.tail`；按 '/' 段撤内层一遍 == 124B 且
+//! `MakeIndex@100 == 55432`（非零）；两个单层方向（去内层 / 去外层）任一 ⇒ 红。**卡片原拟的
+//! 「单层一遍后 @100 可读」在本口径下不可满足**——它要求的正是被证否的线缆形态。
 
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
@@ -781,9 +831,12 @@ pub fn del_items_frame(deleted: &[(String, i32)]) -> ShopFrame {
 /// 收包侧 `CM_USERGETDETAILITEM` 与 `CM_USERBUYITEM` 共用 `ClientUserBuyItem`（`Operate.cs:192-213`）
 /// ⇒ 同一套 `IsBuy && 同图 && |dx|,|dy| <= 15` 门（由调用方判）；`n_int` = 收包 `Param`（菜单顶行）。
 ///
-/// 帧尾口径：`sSendMsg` = 每件 `EDCode.EncodeBuffer(clientItem) + '/'`，再经 RM→SM 的 `SendDefMessage`
-/// 施加 `EDCode.EncodeString`（`PlayObject.Message.cs:1830-1831` + `PlayObject.Socket.cs:26-43`）
-/// ⇒ 本帧 `tail_encoded = false`（原文 = 已编码件的 ASCII 拼接，`edcode::encode` 无损往返）。
+/// 帧尾口径（A1 钉定见模块头「652 编码层」节）：`sSendMsg` = 每件 `EDCode.EncodeBuffer(clientItem) + '/'`
+/// （`Merchant.cs:1339`，**内层**），经 RM 队列原样（`BaseObject.Message.cs:92/351`）到
+/// `PlayObject.Message.cs:1830-1831`，再由 `SendDefMessage` 施加 `EDCode.EncodeString`
+/// （`PlayObject.Socket.cs:36`，**外层**）⇒ 线上尾**双层**，本帧 `tail_encoded = false`
+/// （原文 = 已编码件的 ASCII 拼接，`edcode::encode` 无损往返）。冻结客户端 `ClMain.pas:13606/13615`
+/// 先撤外层、再逐件撤内层 ⇒ **不得改成单层**（见模块头）。
 #[must_use]
 pub fn detail_goods_list(
     m: &MerchantView,
@@ -2620,6 +2673,62 @@ mod tests {
         // 模板名不符（ordinal 区分大小写）⇒ 不发件（header-only）。
         let f3 = detail_goods_list(&m, &mut goods, "金创药", 0, &c);
         assert_eq!((f3.param, f3.tail.len()), (0, 0));
+    }
+
+    /// 卡 `openmir2-gm-detail-652-single-layer` A3（构造级）：从**真发射面** `crate::shop_frame_body`
+    /// （与宿主 `emit_shop_frames` 同一函数）取 652 线上尾，钉死「双层 EDCode + 客户端两遍解」：
+    /// 撤外层一遍 == `frame.tail`；按 '/' 切件、逐件撤内层一遍 == 124B ClientItem 且 `MakeIndex@100 == 55432`
+    /// （MirClientZig 字节表实证值）。oracle 链与冻结客户端口径见模块头「652 编码层」节。
+    ///
+    /// 牙（两个单层方向，任一必红）：
+    /// - 去掉**内层** `EncodeBuffer`（尾变裸 124B + '/'）⇒ 按 '/' 段的第二遍解不出 124B ⇒ `len == 124` 红；
+    /// - 去掉**外层** `EncodeString`（改 `tail_encoded=true` 或 emit 不编码）⇒ `decode(wire) != tail` 红。
+    ///
+    /// 反证：**单遍** `decode(wire)` 拿到的仍是带 '/' 的编码段串（≠ 124B 实例）⇒「单层口径」必出坏帧。
+    #[test]
+    fn detail_goods_list_652_wire_is_double_edcode_and_two_pass_recovers_instance() {
+        let cat = catalog();
+        let c = ctx(&cat);
+        let m = merchant(mflags(true, false));
+        // 卫家店-0103 木剑组（StdMode=5 ⇒ 武器门），MakeIndex = 55432（字节表 @100 实证）。
+        let mut goods = vec![vec![MerchantItem {
+            make_index: 55_432,
+            index: 2,
+            dura: 20,
+            dura_max: 20,
+            desc: [0; 14],
+        }]];
+        let f = detail_goods_list(&m, &mut goods, "木剑", 0, &c);
+        assert_eq!(f.ident, mir2_protocol::messages::SM_SENDDETAILGOODSLIST);
+        assert_eq!((f.recog, f.param, f.tag), (4_242, 1, 0));
+        assert!(!f.tail_encoded, "尾仍需 SendDefMessage 的外层 EncodeString");
+        // 线上体（12B 头 + 尾）走宿主真实发射口径。
+        let body = crate::shop_frame_body(&f);
+        let wire_tail = &body[12..];
+        // 第一遍（撤外层 EncodeString）恰好回到 `frame.tail`。
+        let pass1 = mir2_protocol::edcode::decode(wire_tail);
+        assert_eq!(pass1, f.tail, "外层恰好一遍 EncodeString（SendDefMessage）");
+        assert_ne!(
+            pass1.len(),
+            124,
+            "单遍拿到的是编码段串（{}B），不是 124B 实例",
+            pass1.len()
+        );
+        assert!(
+            pass1.contains(&b'/'),
+            "单遍结果仍带 '/' ⇒ 需再切再解才出实例"
+        );
+        // 第二遍（按 '/' 切件、逐件撤内层 EncodeBuffer）= 124B ClientItem。
+        let segs: Vec<&[u8]> = pass1.split(|b| *b == b'/').collect();
+        assert_eq!(segs.len(), 2, "1 件 + 尾部空段");
+        assert!(!segs[0].is_empty());
+        let item = mir2_protocol::edcode::decode(segs[0]);
+        assert_eq!(item.len(), 124, "C# ClientItem 定长 124B（itemwire 布局）");
+        assert_eq!(
+            u32::from_le_bytes([item[100], item[101], item[102], item[103]]),
+            55_432,
+            "MakeIndex@100 可读且非零"
+        );
     }
 
     /// `SendSaveItemList`（`PlayObject.Base.cs:1590`）：每页 50、`Tag=p`、`Series=page-1`；
