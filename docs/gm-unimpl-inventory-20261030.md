@@ -245,9 +245,31 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   标记登记，牙用 `rng_trace` 按 `file:line` 断言**次数与参数**（GiveMine 恰 1 抽 arg=18；
   Make 每件 1 抽 arg=100）。变异 8 发全红（钳位/颜色钳/抽数参数/删抽数/删 MakeIndex 重取/
   负重门/MobPlace 绿字/SlaveExpLevel 写）。
-- **现存 `Imp::Unimplemented` = 74 − 56 = 18**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
-  thirty_command_bodies` 的 167 已接 / 18 未接断言；改坏任一计数 ⇒ 该测试红）。
-- 剩余缺口族：C5 / W4（§4.3 分族索引不变；X2 全 18 条、F 全 3 条、M 全 6 条已结）。
+- **族 C 5 条已落地**：卡 `openmir2-gm-family-c-castle`（worker-85，tier=R）——
+  ContestPoint（空名/`?` ⇒ 两条红；行会不存在 ⇒ 绿；存在 ⇒ **静默**，得分 SysMsg 注释）/
+  SabukWallGold（**无参 ⇒ 零帧**：`CastleManager.GetCastleGoldInfo` 的 `List.Add` 整段注释 ⇒
+  list 恒空；`?`/非法运算符/金币越界 ⇒ 红；`char ctr = sCtr[1]` ⇒ 第二参 <2 个 UTF-16 码元
+  **越界零帧**；`=` 设值 / `-` **恒减 1**（忽略 nGold）/ `+` 加值 + `TotalGold<0` 钳 0）/
+  沙城（第三参 `bool.Parse` 非法 ⇒ Zero帧，先于空名检查；空名 ⇒ 红 Help；城堡/行会不存在 ⇒ 红；
+  两者都在 ⇒ `castle.GetCastle(guild)` 静态类型 `IUserCastle` 只声明 `GetCastle(IGuild)`，而
+  `UserCastle.GetCastle(IGuild)` 是 `throw new NotImplementedException()`（`UserCastle.cs:644-647`）
+  ⇒ **零帧、无状态改**，归属改写/SS_211/绿字不可达）/开始攻城（空名/城堡不存在红；`UnderWar`
+  翻转；开战支 `ShowOverMsg=false`/`WarDate`/`StartCastleWarTick`/`StartWallconquestWar`
+  （RefShowName）/SS_212/**全服广播**/SS_204/`MainDoorControl(true)`；帧序按 oracle MsgQueue
+  优先级：`SM_USERNAME(42,165)` → 门 `SM_DIGDOWN(21,217)` → `SM_SYSMESSAGE(100,252)`；
+  门 `door_close()` 的 12 条 `SetMapXyFlag(1)` 按 Run 支口径**当场落到该城地图**
+  （review I1：只入 `queue_structure_ref_msg` 会丢门格掩码，主门仍可走且不自愈）；
+  `SS_212/204` 是 planes 跨服通道，单服只记日志（T-127）；再发一次 = 停战 + 结束广播）/
+  StartContest（`Fight3Zone` 门红；红「开始行会争霸赛。」+ 范围 1000（**闭区间**）内
+  `!Death && !Ghost` 玩家在 `!ObMode || !AdminMode`（**或**语义）时 `FightZoneDieCount=0` +
+  绿「行会争霸赛已经开始。」；随后 `CryCry` 的 `playObject.SendMsg(null, RM_CRY, …)` 对 null
+  `ActorId` 解引用抛 NRE ⇒ 命令中止、**零 cry 帧**（有匹配玩家时第二次 CryCry 不可达；无匹配时
+  两次均零帧））。宿主 `apply_pending_gm_castle_commands`：广播正文压入
+  `pending_gm_castle_broadcasts`，并入 `castle_broadcast_texts` 在 tick head（门帧 216/217）
+  之后由 `fan_out_sysmessage_to_all` 扇出。变异 5 发全红（帧序/停战/钳 0/或语义/范围门）。
+- **现存 `Imp::Unimplemented` = 74 − 61 = 13**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
+  thirty_command_bodies` 的 172 已接 / 13 未接断言；改坏任一计数 ⇒ 该测试红）。
+- 剩余缺口族：W4（§4.3 分族索引不变；X2 全 18 条、F 全 3 条、M 全 6 条、C 全 5 条已结）。
 
 ## 8. SystemShare null 字段扫盲（卡 `openmir2-gm-systemshare-null-sweep`，tier=R）
 

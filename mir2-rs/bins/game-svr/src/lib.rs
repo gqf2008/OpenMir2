@@ -20132,6 +20132,204 @@ fn apply_pending_gm_m_commands(
     }
 }
 
+/// 族 C（城堡/赛事）的宿主落地段（卡 `openmir2-gm-family-c-castle`，tier=R）。
+///
+/// - `@SabukWallGold`：`castle.TotalGold` 的 `=`/`-`/`+` + `<0` 钳 0（`-=1` 照抄忽略 nGold）。
+/// - `@开始攻城`：翻转后的开战支按 oracle `MsgQueue` 优先级分三相：
+///   ① `StartWallconquestWar` 的 `RefShowName`（`RM_USERNAME`=165）**立即**发；
+///   ② `MainDoorControl(true)` 的 `Structure` 入 `pending_monster_ref_msgs`，由 tick head 的
+///   [`drain_monster_ref_msgs`] 出 216/217；
+///   ③ `SendBroadCastMsg` 正文压入 `pending_broadcasts`，由 tick head **之后**的
+///   `fan_out_sysmessage_to_all`(252) 扇出（见 sim_loop 的 `castle_broadcast_texts` 合并点）。
+///   `SendServerGroupMsg(SS_212/SS_204)` 单服无 planes 对端 ⇒ 只记日志（G5 口径）。
+///   停战支 = `StopWallconquestWar`（结束广播 + SS_204）。
+/// - `@StartContest`：范围 1000 内 `!Death && !Ghost` 玩家在 `!ObMode || !AdminMode`（**或**语义）
+///   时把 `saves.record.data.fight_zone_die_count` 清 0；`CryCry` 的 `SendMsg(null,…)` NRE
+///   ⇒ 零 cry 帧（命令体已登记结论）。
+#[allow(clippy::too_many_arguments)]
+fn apply_pending_gm_castle_commands(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    pending_broadcasts: &mut Vec<String>,
+) {
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        return;
+    };
+    let war = sg.gm.pending_castle_war.take();
+    let sbk = sg.gm.pending_sbk_gold.take();
+    let contest = sg.gm.pending_start_contest.take();
+    if war.is_none() && sbk.is_none() && contest.is_none() {
+        return;
+    }
+
+    // ---- ① @SabukWallGold：TotalGold 写 + 钳 0 ----
+    if let Some(req) = sbk {
+        if let Some(c) = world.castles.get_mut(req.castle_index) {
+            match req.op {
+                '=' => c.total_gold = req.gold,
+                // oracle `case '-': castle.TotalGold -= 1;`（**忽略 nGold**，照抄）。
+                '-' => c.total_gold = c.total_gold.wrapping_sub(1),
+                '+' => c.total_gold = c.total_gold.wrapping_add(req.gold),
+                _ => {}
+            }
+            if c.total_gold < 0 {
+                c.total_gold = 0;
+            }
+        }
+    }
+
+    // ---- ② @开始攻城 ----
+    if let Some(req) = war {
+        let idx = req.castle_index;
+        if idx >= world.castles.len() {
+            return;
+        }
+        if req.start {
+            let local = chrono::Local::now();
+            let date = mir2_world::castle::CastleDate::new(
+                chrono::Datelike::year(&local),
+                chrono::Datelike::month(&local),
+                chrono::Datelike::day(&local),
+            );
+            let wall_clock = local.format("%Y-%m-%d %H:%M:%S").to_string();
+            let now = world.clock_ms;
+            {
+                let c = &mut world.castles[idx];
+                c.under_war = true;
+                c.show_over_msg = false;
+                c.war_date = Some(date);
+                c.war_date_text = Some(wall_clock);
+                c.start_castle_war_tick = now;
+            }
+            // 相位①（165）：`StartWallconquestWar()` 的 `GetMapRageHuman(PalaceEnvir, HomeX,
+            // HomeY, 100)` + 逐个 `RefShowName()`（含目标自己，逐观察者算色）。
+            let show_events = world.castles[idx].start_wallconquest_war();
+            for ev in show_events {
+                if let mir2_world::castle::CastleEvent::RefreshShowName { x, y, range } = ev {
+                    let palace_map_id = world.castles.get(idx).and_then(|c| c.palace_map_id);
+                    let _ = game_svr::castle::refresh_show_name_in_area(
+                        online,
+                        world,
+                        displays,
+                        gates,
+                        sessions,
+                        castle_war_states,
+                        palace_map_id,
+                        x,
+                        y,
+                        range,
+                        chat::send_ref_msg_range(),
+                    );
+                }
+            }
+            // `SendServerGroupMsg(SS_212, ServerIndex, "")`：跨服 planes（单服登记）。
+            glog!("INF", "SS_212（单服无接收端）");
+            // 相位②（216/217）：`MainDoorControl(true)` ⇒ Structure。
+            // **review I1**：`SetMapXyFlag` 必须按 Run 支口径**先落地图**（oracle
+            // `CastleDoor.Close()` 当场 `Envir.SetMapXyFlag(1)`，`CastleDoor.cs:60-76`）；
+            // `queue_structure_ref_msg` 对 SetMapXyFlag 直接 `return false`（castle.rs:1314）
+            // ⇒ 只喂它会丢 12 条门格掩码（主门仍可走且不自愈）。其余 `Ref*` 才入队由 tick head
+            // 出 216/217。
+            let door_events = world.castles[idx].main_door_control(true);
+            let castle_map_id = world.castles[idx].castle_map_id;
+            for ev in &door_events {
+                if let mir2_world::castle::CastleEvent::Structure(structure) = ev {
+                    if let mir2_world::castle::StructureEvent::SetMapXyFlag { x, y, walk } =
+                        structure
+                    {
+                        if let Some(id) = castle_map_id.filter(|id| *id < world.maps.len()) {
+                            if let Some(grid) = world.maps.get_mut(id) {
+                                grid.set_map_xy_flag(i32::from(*x), i32::from(*y), *walk);
+                            }
+                        }
+                    } else {
+                        let _ = game_svr::castle::queue_structure_ref_msg(world, idx, structure);
+                    }
+                }
+            }
+            // 相位③（252）：`SendBroadCastMsg(s20, MsgType.System)` ⇒ tick head 之后扇出。
+            // **o1 登记**：oracle `SendBroadCastMsg`（`WorldServer.cs:1738-1765`）在
+            // `ShowPreFixMsg=true` 时拼 `SysMsgPreFix`；本仓复用 `SendBroadCastMsgExt` 口径
+            // （`fan_out_sysmessage_to_all` 不拼前缀）——冻结部署 `Server.conf` 的
+            // `ShowPreFixMsg=0` ⇒ 当前逐字节相同（与 T-224 同口径；若配置改 1 需另接线）。
+            let text = format!("[{} 攻城战已经开始]", world.castles[idx].name);
+            glog!("INF", "SS_204（单服无接收端）: {text}");
+            pending_broadcasts.push(text);
+        } else {
+            // `StopWallconquestWar()`：UnderWar=false + 清 AttackGuildList + `[{名} 攻城战已经结束]`
+            // 广播 + SS_204（`ListC` 恒空 ⇒ ChangePkStatus/MapRandomMove 不可达，照抄）。
+            let events = world.castles[idx].stop_wallconquest_war();
+            for ev in events {
+                match ev {
+                    mir2_world::castle::CastleEvent::Broadcast(msg) => {
+                        glog!("INF", "SS_204（单服无接收端）: {msg}");
+                        pending_broadcasts.push(msg);
+                    }
+                    mir2_world::castle::CastleEvent::ServerGroupMsg { code, text } => {
+                        glog!("INF", "SS_{code}（单服无接收端）: {text}");
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // ---- ③ @StartContest：范围 1000 的 FightZoneDieCount=0 ----
+    if let Some(req) = contest {
+        for e in online {
+            let Some(ent) = world.entities.get(e.actor_id) else {
+                continue;
+            };
+            // `GetMapRageHuman`：`!Death && !Ghost && Envir == envir && |dx|<=nRage && |dy|<=nRage`
+            // （**闭区间** `<=`）。
+            if ent.death
+                || ent.ghost
+                || ent.map_id != req.map_id
+                || (ent.x - req.x).abs() > 1000
+                || (ent.y - req.y).abs() > 1000
+            {
+                continue;
+            }
+            // `if (!mIPlayerActor.ObMode || !mIPlayerActor.AdminMode)`（**或**，照抄）⇒
+            // `FightZoneDieCount = 0`。记录是运行时真身（`saves.record.data`）。
+            if !ent.ob_mode || !ent.admin_mode {
+                if let Some(saved) = saves.get_mut(&e.chr_name) {
+                    saved.record.data.fight_zone_die_count = 0;
+                }
+            }
+        }
+        // `CryCry` 零帧结论已由命令体登记；这里只记中止原因（不影响帧面）。
+        let has_cry_recipient = online.iter().any(|e| {
+            let Some(ent) = world.entities.get(e.actor_id) else {
+                return false;
+            };
+            // `CryCry` 的收件人门：`!Ghost && Envir==pMap && BanShout && |dx|<nWide`（**严格 `<`**）。
+            !ent.ghost
+                && ent.map_id == req.map_id
+                && (ent.x - req.x).abs() < 1000
+                && (ent.y - req.y).abs() < 1000
+                && sessions.get(&e.chr_name).is_some_and(|sg| sg.gm.ban_shout)
+        });
+        if has_cry_recipient {
+            glog!(
+                "DBG",
+                "StartContest：CryCry SendMsg(null,…) NRE ⇒ 0 帧（第一次即中止，第二次 CryCry 不可达）"
+            );
+        } else {
+            glog!(
+                "DBG",
+                "StartContest：无 CryCry 匹配收件人 ⇒ 两次 CryCry 均 0 帧"
+            );
+        }
+    }
+}
+
 /// `TRouteInfo`（`src/OpenMir2/Data/TRouteInfo.cs:3-16`）：`!servertable.txt` 的一行。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteInfo {
@@ -23014,6 +23212,11 @@ fn sim_loop(
     // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
     let mut castle_war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
         std::collections::HashMap::new();
+    // **族 C（卡 `openmir2-gm-family-c-castle`）**：`@开始攻城` 的 `SendBroadCastMsg` 正文
+    // （`RM_SYSMESSAGE` 优先级 252）必须在 tick head 把门/墙 216/217 排完之后才扇出
+    // （oracle 每个 `PlayObject` 的 MsgQueue 按优先级升序）⇒ 先压这里，稍后并入
+    // `castle_broadcast_texts`（见同一个变量的消费点）。
+    let mut pending_gm_castle_broadcasts: Vec<String> = Vec::new();
     // **P3 收尾残余**：`MagTurnUndeadLevel` + `PKFlagTime`（`Server.conf [Setup]`）。
     world.set_mag_turn_undead_level(enter_cfg.mag_turn_undead_level);
     world.set_pk_flag_config(
@@ -24095,6 +24298,19 @@ fn sim_loop(
                                 enter_cfg.make_random_add_value,
                                 &mut item_number,
                                 &mut item_number_ex,
+                            );
+                            // **族 C**：城堡/赛事落地（TotalGold 写 / UnderWar 翻转 + 三相帧序 /
+                            // StartContest 的 DieCount 清零）。广播正文压队，tick head 之后扇出。
+                            apply_pending_gm_castle_commands(
+                                &mut ground_sessions,
+                                &chr_name,
+                                &mut world,
+                                &mut displays,
+                                &mut saves,
+                                &castle_war_states,
+                                &online,
+                                &gates,
+                                &mut pending_gm_castle_broadcasts,
                             );
                         }
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
@@ -26412,7 +26628,10 @@ fn sim_loop(
         // `pending_monster_ref_msgs` 排水；③ `Broadcast`(252) 在 tick head **之后**扇出。
         // （oracle 每个 `PlayObject` 只有一条 `MsgQueue`，其 Drain 在处理该玩家的 Run 里，
         // 本宿主用这三个相位复刻同一优先级序。）
-        let mut castle_broadcast_texts: Vec<String> = Vec::new();
+        // **族 C**：先放入本 tick 事件阶段积累的 GM 城堡广播（入队序在城堡 `Run` 之前，
+        // 同优先级 252 的 4 叉堆序按此顺序），再并入本轮的 `CastleEvent::Broadcast`。
+        let mut castle_broadcast_texts: Vec<String> =
+            std::mem::take(&mut pending_gm_castle_broadcasts);
         if castle_due.run {
             let local = chrono::Local::now();
             let now = mir2_world::castle::CastleNow::new(
@@ -26521,7 +26740,7 @@ fn sim_loop(
             }
             // **相位③（252）**：`SendBroadCastMsgExt`（`WorldServer.cs:1726-1737`）的正文交给
             // tick head 之后再扇出（见 `castle_broadcast_texts` 的消费点）。
-            castle_broadcast_texts = broadcasts;
+            castle_broadcast_texts.extend(broadcasts);
         }
         // **orphan 接线第二批**：掉线/小退/顶号的**离世广播**（oracle `BaseObject.DisappearA`
         // `BaseObject.cs:1519-1524` ⇒ `SendRefMsg(RM_DISAPPEAR)`，由 `MakeGhost` 调用）。
@@ -44293,6 +44512,359 @@ break
         assert_eq!(frames.len(), 2, "两只怪 ⇒ 两条 656");
         let after = rig.entity_ids();
         assert_eq!(after.iter().filter(|id| !before.contains(id)).count(), 2);
+    }
+
+    // ==================== 族 C · 城堡/赛事宿主（卡 `openmir2-gm-family-c-castle`，tier=R）====================
+
+    fn c_castle_unit(entity_id: i32, x: i16, y: i16) -> mir2_world::castle::CastleUnit {
+        mir2_world::castle::CastleUnit {
+            entity_id: Some(entity_id),
+            ghost: false,
+            death: false,
+            stone_mode: false,
+            opened: true,
+            hold_place: false,
+            set_map_flaged: false,
+            hp: 100,
+            max_hp: 100,
+            dir: 0,
+            x,
+            y,
+            struck_tick: 0,
+            health_tick: 0,
+            death_tick: 0,
+        }
+    }
+
+    fn c_drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            match msg {
+                SimToGate::SendFrame { body, .. } => out.push(body),
+                other => panic!("族 C 不应产生非帧消息: {other:?}"),
+            }
+        }
+        out
+    }
+
+    fn c_ident(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    /// **帧序核心（A4）**：`@开始攻城` 开战支按 oracle `MsgQueue` 优先级三相上线：
+    /// `RefShowName`(RM_USERNAME=165 ⇒ SM_USERNAME 42) → 门 `RM_DIGDOWN`(217 ⇒ SM_DIGDOWN 21)
+    /// → `SendBroadCastMsg`(252 ⇒ SM_SYSMESSAGE 100)。同时断言 Castle 字段翻转与广播正文。
+    ///
+    /// 变异红：把广播改成 tick head 之前直扇（顺序 42→100→21）或删门 `MainDoorControl`
+    /// （42→100）⇒ 本用例红。
+    #[test]
+    fn gm_c_forced_war_frames_in_priority_order() {
+        let mut world = mir2_world::World::new(32, 32);
+        world.clock_ms = 1_000;
+        let mut hero = mir2_world::Entity::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let hero_id = world.add_entity(hero);
+        // 门帧收件人走 `send_ref_msg_targets_at` 的**地图格**扫描 ⇒ 玩家必须落格。
+        assert!(world.enter_world(hero_id), "hero 落格");
+        let mut door = mir2_world::Entity::new(0, "城门".to_string(), 7, 7);
+        door.race = 112;
+        let door_id = world.add_entity(door);
+        let mut castle = c_castle_unit(door_id, 7, 7);
+        let mut c = mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        c.palace_map_id = Some(0);
+        c.castle_map_id = Some(0);
+        c.home_x = 5;
+        c.home_y = 5;
+        castle.opened = true;
+        c.main_door = Some(castle);
+        world.castles.push(c);
+
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(hero_id));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut saves: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        saves.insert(
+            "hero".to_string(),
+            SavedHuman {
+                account: "h".into(),
+                record: record::PlayerRecord::default(),
+                enter_map: "map".into(),
+                derived: None,
+            },
+        );
+        let war_states = std::collections::HashMap::new();
+        let mut displays = downlink::DisplayTable::new();
+        let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
+        let mut broadcasts: Vec<String> = Vec::new();
+        sessions.get_mut("hero").unwrap().gm.pending_castle_war = Some(gmcmd::GmCastleWarRequest {
+            castle_index: 0,
+            start: true,
+        });
+
+        // 相位①：RefShowName 立即发（优先级 165）。
+        apply_pending_gm_castle_commands(
+            &mut sessions,
+            "hero",
+            &mut world,
+            &mut displays,
+            &mut saves,
+            &war_states,
+            &online,
+            &gates,
+            &mut broadcasts,
+        );
+        // **review I1 牙**：`MainDoorControl(true)` 的 `door_close()` 返回 12 条
+        // `SetMapXyFlag(1)`（`door_map_xy_flag_ops(1)` 把九格置 walk=false）——宿主必须按
+        // Run 支口径**当场落该城地图**（oracle `CastleDoor.Close()` 的 `Envir.SetMapXyFlag(1)`），
+        // 否则主门格仍可走且不会自愈。变异红：只喂 `queue_structure_ref_msg`（SetMapXyFlag 被其
+        // `return false` 丢弃）⇒ 下面两条断言失败。
+        assert!(
+            !world.maps[0].cell_valid(7, 7),
+            "主门格 (7,7) 必须被 SetMapXyFlag(1) 置 LowWall（不可走）"
+        );
+        assert!(
+            !world.maps[0].cell_valid(5, 7),
+            "门左格 (5,7)（dx=-2）必须被掩码置不可走"
+        );
+        let phase1 = c_drain(&mut rx);
+        assert_eq!(phase1.len(), 1, "皇宫 100 格内 hero 收 RefShowName");
+        assert_eq!(c_ident(&phase1[0]), mir2_protocol::messages::SM_USERNAME);
+
+        // 相位②：tick head 排门/墙 216/217（`MainDoorControl(true)` 的 RM_DIGDOWN）。
+        drain_monster_ref_msgs(&mut world, &displays, &online, &gates, &pet_cfg);
+        let phase2 = c_drain(&mut rx);
+        assert_eq!(phase2.len(), 1, "主门关闭 ⇒ 一条 SM_DIGDOWN");
+        assert_eq!(c_ident(&phase2[0]), mir2_protocol::messages::SM_DIGDOWN);
+
+        // 相位③：tick head 之后扇出广播（252）。
+        assert_eq!(broadcasts, vec!["[沙巴克 攻城战已经开始]".to_string()]);
+        let sent = game_svr::castle::fan_out_sysmessage_to_all(
+            &online,
+            &world,
+            &gates,
+            &broadcasts,
+            255,
+            56,
+        );
+        assert_eq!(sent, 1);
+        let phase3 = c_drain(&mut rx);
+        assert_eq!(phase3.len(), 1);
+        assert_eq!(c_ident(&phase3[0]), mir2_protocol::messages::SM_SYSMESSAGE);
+
+        // Castle 字段翻转。
+        let c = &world.castles[0];
+        assert!(c.under_war, "UnderWar 翻为 true");
+        assert!(!c.show_over_msg, "ShowOverMsg=false");
+        assert!(c.war_date.is_some(), "WarDate 写入");
+        assert!(c.war_date_text.is_some(), "WarDate 墙钟串写入");
+        assert_eq!(c.start_castle_war_tick, 1_000, "StartCastleWarTick=now");
+    }
+
+    /// `@开始攻城` 再发一次 = 停战：`UnderWar=false` + `[{名} 攻城战已经结束]` 广播（252），
+    /// 无 RefShowName / 门帧。变异红：把停战也走开战支 ⇒ 本用例红。
+    #[test]
+    fn gm_c_forced_war_stop_broadcasts_end() {
+        let mut world = mir2_world::World::new(32, 32);
+        let mut c = mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        c.under_war = true;
+        world.castles.push(c);
+        let mut hero = mir2_world::Entity::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let hero_id = world.add_entity(hero);
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(hero_id));
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0, tx);
+        let mut saves: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        let war_states = std::collections::HashMap::new();
+        let mut displays = downlink::DisplayTable::new();
+        let mut broadcasts: Vec<String> = Vec::new();
+        sessions.get_mut("hero").unwrap().gm.pending_castle_war = Some(gmcmd::GmCastleWarRequest {
+            castle_index: 0,
+            start: false,
+        });
+        apply_pending_gm_castle_commands(
+            &mut sessions,
+            "hero",
+            &mut world,
+            &mut displays,
+            &mut saves,
+            &war_states,
+            &online,
+            &gates,
+            &mut broadcasts,
+        );
+        assert!(c_drain(&mut rx).is_empty(), "停战支命令阶段零帧");
+        assert!(!world.castles[0].under_war);
+        assert_eq!(broadcasts, vec!["[沙巴克 攻城战已经结束]".to_string()]);
+        let _ = game_svr::castle::fan_out_sysmessage_to_all(
+            &online,
+            &world,
+            &gates,
+            &broadcasts,
+            255,
+            56,
+        );
+        let frames = c_drain(&mut rx);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(c_ident(&frames[0]), mir2_protocol::messages::SM_SYSMESSAGE);
+    }
+
+    /// `@SabukWallGold` 宿主：`=` 设值 / `-` **恒减 1**（忽略 nGold）/ `+` 加值 / `<0` 钳 0。
+    /// 变异红：删钳 0 / 把 `-` 写成 `-= nGold` ⇒ 本用例红。
+    #[test]
+    fn gm_c_sabuk_wall_gold_ops_and_clamp() {
+        let mut world = mir2_world::World::new(32, 32);
+        world.castles.push(mir2_world::UserCastle::new(
+            "沙巴克",
+            mir2_world::CastleSiegeConfig::default(),
+        ));
+        let mut hero = mir2_world::Entity::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let hero_id = world.add_entity(hero);
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(hero_id));
+        let online: OnlineRegistry = Vec::new();
+        let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        let mut saves: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        let war_states = std::collections::HashMap::new();
+        let mut displays = downlink::DisplayTable::new();
+        let mut broadcasts: Vec<String> = Vec::new();
+        // `world` 作为**参数**传入（不被闭包捕获），便于两次调用之间读 `world.castles`。
+        let mut apply = |world: &mut mir2_world::World, op: char, gold: i32| {
+            sessions.get_mut("hero").unwrap().gm.pending_sbk_gold = Some(gmcmd::GmSbkGoldRequest {
+                castle_index: 0,
+                op,
+                gold,
+            });
+            apply_pending_gm_castle_commands(
+                &mut sessions,
+                "hero",
+                world,
+                &mut displays,
+                &mut saves,
+                &war_states,
+                &online,
+                &gates,
+                &mut broadcasts,
+            );
+        };
+        apply(&mut world, '=', 500);
+        assert_eq!(world.castles[0].total_gold, 500);
+        // `-` 恒减 1（nGold=999 被忽略）。
+        apply(&mut world, '-', 999);
+        assert_eq!(world.castles[0].total_gold, 499, "`-` 恒减 1");
+        apply(&mut world, '+', 7);
+        assert_eq!(world.castles[0].total_gold, 506);
+        // 从 0 减 1 ⇒ -1 ⇒ 钳 0。
+        apply(&mut world, '=', 0);
+        apply(&mut world, '-', 0);
+        assert_eq!(world.castles[0].total_gold, 0, "TotalGold<0 ⇒ 钳 0");
+    }
+
+    /// `@StartContest` 宿主：范围 1000（闭区间）内 `!Death && !Ghost` 玩家在
+    /// `!ObMode || !AdminMode`（**或**）时 `FightZoneDieCount=0`；零帧。
+    /// 变异红：把 `||` 改成 `&&`（bob 被误清）/ 去掉范围门（dave 被清）⇒ 本用例红。
+    #[test]
+    fn gm_c_start_contest_resets_die_count_in_range() {
+        let mut world = mir2_world::World::with_maps(vec![(32, 32), (32, 32)]);
+        let mut mk = |name: &str, map_id: usize, x: i32, y: i32, ob: bool, admin: bool| {
+            let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.map_id = map_id;
+            e.ob_mode = ob;
+            e.admin_mode = admin;
+            world.add_entity(e)
+        };
+        let hero = mk("hero", 0, 5, 5, false, false);
+        let bob = mk("bob", 0, 6, 6, true, true); // 两者皆真 ⇒ !ob||!admin = false ⇒ 不清
+        let carol = mk("carol", 0, 7, 7, false, true); // 或语义 ⇒ 清
+        let dave = mk("dave", 1, 5, 5, false, false); // 异图 ⇒ 不清
+        let erin = mk("erin", 0, 1006, 5, false, false); // 距离 1001 >1000 ⇒ 不清
+        let frank = mk("frank", 0, 1005, 5, false, false); // 距离恰好 1000（闭区间）⇒ 清
+        let dead = mk("dead", 0, 6, 5, false, false);
+        let ghost = mk("ghost", 0, 6, 5, false, false);
+        // oracle `GetMapRageHuman` 的 `!Death && !Ghost`（WorldServer.cs:1705-1707）：
+        // 死亡/幽灵玩家即使距离/ObMode 满足也不得被清。
+        world.entities.get_mut(dead).unwrap().death = true;
+        world.entities.get_mut(ghost).unwrap().ghost = true;
+        let mut sessions = std::collections::HashMap::new();
+        let mut online: OnlineRegistry = Vec::new();
+        let mut saves: std::collections::HashMap<String, SavedHuman> =
+            std::collections::HashMap::new();
+        for (i, (name, actor)) in [
+            ("hero", hero),
+            ("bob", bob),
+            ("carol", carol),
+            ("dave", dave),
+            ("erin", erin),
+            ("frank", frank),
+            ("dead", dead),
+            ("ghost", ghost),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            sessions.insert(name.to_string(), test_session_ground(actor));
+            online_set(
+                &mut online,
+                entry(name, name, i as i32 + 1, 0, 901 + i as i32, actor),
+            );
+            let mut rec = record::PlayerRecord::default();
+            rec.data.fight_zone_die_count = 5;
+            saves.insert(
+                name.to_string(),
+                SavedHuman {
+                    account: name.into(),
+                    record: rec,
+                    enter_map: "map".into(),
+                    derived: None,
+                },
+            );
+        }
+        let gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
+            std::collections::HashMap::new();
+        let war_states = std::collections::HashMap::new();
+        let mut displays = downlink::DisplayTable::new();
+        let mut broadcasts: Vec<String> = Vec::new();
+        sessions.get_mut("hero").unwrap().gm.pending_start_contest =
+            Some(gmcmd::GmStartContestRequest {
+                map_id: 0,
+                x: 5,
+                y: 5,
+            });
+        apply_pending_gm_castle_commands(
+            &mut sessions,
+            "hero",
+            &mut world,
+            &mut displays,
+            &mut saves,
+            &war_states,
+            &online,
+            &gates,
+            &mut broadcasts,
+        );
+        let count = |name: &str| saves[name].record.data.fight_zone_die_count;
+        assert_eq!(count("hero"), 0, "同图近距 + !ob ⇒ 清 0");
+        assert_eq!(count("bob"), 5, "ObMode&&AdminMode 皆真 ⇒ 不清（或语义）");
+        assert_eq!(count("carol"), 0, "!admin ⇒ 清（或语义）");
+        assert_eq!(count("dave"), 5, "异图 ⇒ 不清");
+        assert_eq!(count("erin"), 5, "距离 1001 >1000 ⇒ 不清");
+        assert_eq!(count("frank"), 0, "距离恰好 1000 ⇒ 清（闭区间 `<=`）");
+        assert_eq!(count("dead"), 5, "Death=true ⇒ 不清（!Death 门）");
+        assert_eq!(count("ghost"), 5, "Ghost=true ⇒ 不清（!Ghost 门）");
+        assert!(broadcasts.is_empty(), "StartContest 无广播队");
     }
 
     /// `@时间`（`DataCommand`）：`SysMsg(当前日期时间: yyyy-MM-dd HH:mm:ss, Blue, Hint)`

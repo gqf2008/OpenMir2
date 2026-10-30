@@ -247,6 +247,53 @@ pub const MAKE_NAME_NOT_FOUND_FMT: &str = "{0} 物品名称不正确!!!";
 /// M 族有副作用命令的退化形态：宿主未注入刷怪/造物通道（脚本 `GMEXECUTE` 桥）。
 pub const NOTE_M_HOST: &str =
     "M 族：宿主未注入刷怪/造物落地通道（脚本 GMEXECUTE 桥/退化形态）⇒ 零帧";
+
+// ===== 族 C · 城堡/赛事（卡 `openmir2-gm-family-c-castle`）=====
+/// `ContestPointCommand.cs:20` 第一条红字（帮助块首行）。
+pub const CONTEST_POINT_MSG: &str = "查看行会战的得分数。";
+/// `ContestPointCommand` 的 `Command.CommandHelp`（`Help = "行会名称"`），现网名 `ContestPoint`。
+pub const CONTEST_POINT_HELP: &str = "命令格式: @ContestPoint 行会名称";
+/// `ContestPointCommand.cs:31`：行会不存在绿字（`行会: {0} 不存在!!!`）。
+pub const CONTEST_POINT_NOT_FOUND_FMT: &str = "行会: {0} 不存在!!!";
+/// `ShowSbkGoldCommand.cs:38`：`GameCommandParamUnKnow` + `GameCommandSbkGoldHelpMsg`
+/// （现网名 `SabukWallGold`）。
+pub const SBK_GOLD_HELP: &str =
+    "命令格式: @SabukWallGold 城堡名称 控制符(=、-、+) 金币数(1-100000000)";
+/// `ShowSbkGoldCommand.cs:28`：`GameCommandParamUnKnow` + **空** Help ⇒ 尾随一个空格。
+pub const SBK_GOLD_HELP_EMPTY: &str = "命令格式: @SabukWallGold ";
+/// `CommandHelp.GameCommandSbkGoldCastleNotFoundMsg`（`CommandHelp.cs:47`）。
+pub const CASTLE_NOT_FOUND_FMT: &str = "城堡{0}未找到!!!";
+/// `ChangeSabukLordCommand` 的 `Command.CommandHelp`（`Help = "城堡名称 行会名称"`），现网名 `沙城`。
+pub const CHANGE_LORD_HELP: &str = "命令格式: @沙城 城堡名称 行会名称";
+/// `ChangeSabukLordCommand.cs:42`：`"行会 " + sGuildName + "还没建立!!!"`。
+pub const CHANGE_LORD_GUILD_MISSING_FMT: &str = "行会 {0}还没建立!!!";
+/// `ForcedWallconquestWarCommand` 的 `Command.CommandHelp`（`Help = "城堡名称"`），现网名 `开始攻城`。
+pub const FORCED_WAR_HELP: &str = "命令格式: @开始攻城 城堡名称";
+/// `StartContestCommand.cs:20`：`Fight3Zone` 门红字。
+pub const START_CONTEST_NOT_HERE: &str = "此命令不能在当前地图中使用!!!";
+/// `StartContestCommand.cs:24` 第一条红字。
+pub const START_CONTEST_START: &str = "开始行会争霸赛。";
+/// `StartContestCommand.cs:52` 第二条绿字。
+pub const START_CONTEST_STARTED: &str = "行会争霸赛已经开始。";
+/// `ForcedWallconquestWarCommand.cs:33` 的全服广播正文（`[城堡 攻城战已经开始]`）。
+pub const START_WAR_MSG_FMT: &str = "[{0} 攻城战已经开始]";
+/// `ShowSbkGoldCommand.cs:20-24`：`GetCastleGoldInfo` 的 `List.Add` **整段注释** ⇒ list 恒空
+/// ⇒ 无参支零帧（源码文本「列全部城堡金库」真机不可达）。
+pub const NOTE_SBK_GOLD_NO_ARG: &str =
+    "SabukWallGold 无参：CastleManager.GetCastleGoldInfo 的 List.Add 被注释 ⇒ list 恒空 ⇒ 零帧";
+/// `ChangeSabukLordCommand.cs:35` 的 `castle.GetCastle(guild)`：`castle` 静态类型 `IUserCastle`，
+/// 接口只声明 `GetCastle(IGuild)`（`IUserCastle.cs:130`），而 `UserCastle.GetCastle(IGuild)`
+/// 是 `throw new NotImplementedException()`（`UserCastle.cs:644-647`）⇒ 外层 catch 吞 ⇒
+/// 零帧且**无状态改**；其后的 SS_211/绿字不可达。
+pub const NOTE_GET_CASTLE_NOT_IMPL: &str =
+    "沙城：UserCastle.GetCastle(IGuild) 抛 NotImplementedException（UserCastle.cs:644-647）⇒ 零帧、无状态改；SS_211/绿字不可达";
+/// `ChangeSabukLordCommand.cs:22` 的 `bool.Parse(@params[2])` 失败（FormatException）被 catch 吞。
+pub const NOTE_BOOL_PARSE: &str =
+    "沙城：bool.Parse(第三参) 失败 ⇒ FormatException 被 catch 吞 ⇒ 零帧（先于空名/城堡/行会检查）";
+/// `StartContestCommand.cs:54-66` 的 `CryCry`：`playObject.SendMsg(null, RM_CRY, …)` 里
+/// `ActorId = baseObject.ActorId` 对 null 解引用 ⇒ NRE 被 catch 吞 ⇒ 两次 CryCry 都不产帧。
+pub const NOTE_START_CONTEST_CRY: &str =
+    "StartContest：CryCry 的 SendMsg(null,…) 抛 NRE ⇒ 0 cry 帧（有匹配玩家时第一次即中止；无匹配时两次均零帧）";
 /// `CommandHelp.GameCommandLotteryTicketMsg`（`CommandHelp.cs:65`；**尾随一个空格**）。
 pub const LOTTERY_MSG_FMT: &str =
     "已中彩票数:{0} 未中彩票数:{1} 一等奖:{2} 二等奖:{3} 三等奖:{4} 四等奖:{5} 五等奖:{6} 六等奖:{7} ";
@@ -909,6 +956,27 @@ pub enum Imp {
     /// `MakeItemCommond`（现网 `@s`）：权限 10 下走造物循环——满包停、名字未命中红、高价物门、
     /// `Random(MakeRandomAddValue)`（**每件一次**）、`GetItemNumberEx` 重取 MakeIndex、`SendAddItem`。
     MakeItem,
+
+    // ---- 族 C · 城堡/赛事（5，卡 `openmir2-gm-family-c-castle`，tier=R）----
+    /// `ContestPointCommand`（现网 `@ContestPoint`）：空名/`?` ⇒ 两条红；行会不存在 ⇒ 绿
+    /// `行会: X 不存在!!!`；存在 ⇒ **静默**（得分 SysMsg 整段注释）。
+    ContestPoint,
+    /// `ShowSbkGoldCommand`（现网 `@SabukWallGold`）：无参 ⇒ **零帧**（`GetCastleGoldInfo` 的
+    /// `List.Add` 整段注释）；`?`/非法 ⇒ 红；第二参 `sCtr[1]` 越界 ⇒ 零帧；
+    /// `=` 设值 / `-` 恒减 1 / `+` 加值 + `TotalGold<0` 钳 0。
+    SbkGold,
+    /// `ChangeSabukLordCommand`（现网 `@沙城`）：第三参 `bool.Parse` 非法 ⇒ 零帧；
+    /// 城堡/行会不存在 ⇒ 红；两者都在 ⇒ `GetCastle(IGuild)` 是
+    /// `throw new NotImplementedException()`（`UserCastle.cs:644-647`）⇒ **零帧无状态改**。
+    ChangeLord,
+    /// `ForcedWallconquestWarCommand`（现网 `@开始攻城`）：翻转 `UnderWar`；开战 ⇒
+    /// `StartWallconquestWar`（RefShowName 165）+ SS_212 登记 + 全服广播（252）+
+    /// `MainDoorControl(true)`（门帧 216/217，按优先级排在广播前）；再发 = 停战
+    /// （`StopWallconquestWar` 的广播）。
+    ForcedWallWar,
+    /// `StartContestCommand`（现网 `@StartContest`）：`Fight3Zone` 门红；红/绿两条 SysMsg +
+    /// 范围内玩家 `FightZoneDieCount=0`；`CryCry` 的 `SendMsg(null,...)` 抛 NRE ⇒ **零 cry 帧**。
+    StartContestCmd,
     Unimplemented,
 }
 
@@ -1046,6 +1114,32 @@ pub struct GmGiveMineRequest {
     pub count: i32,
     /// `nDura` 原值（`<=0` ⇒ 宿主抽 `Random(18)+3`）。
     pub dura: i32,
+}
+
+/// 城堡/赛事族（C）的待落地请求。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmCastleWarRequest {
+    /// `CastleMgr.Find(name)` 命中的下标（`world.castles` 序）。
+    pub castle_index: usize,
+    /// 翻转后的 `UnderWar`：`true` = 开战（`StartWallconquestWar` 支），`false` = 停战。
+    pub start: bool,
+}
+
+/// `@SabukWallGold` 对 `castle.TotalGold` 的写（宿主落地）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmSbkGoldRequest {
+    pub castle_index: usize,
+    /// `sCtr[1]` 的合法值：`=` / `-` / `+`。
+    pub op: char,
+    pub gold: i32,
+}
+
+/// `@StartContest` 的范围（`GetMapRageHuman(Envir, X, Y, 1000)`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmStartContestRequest {
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
 }
 
 /// GM 命令对**权威 `Entity`** 的一次写入（卡 `openmir2-gm-admin-mode-entity-seam`）。
@@ -1296,6 +1390,14 @@ pub struct GmSession {
     pub pending_make: Option<GmMakeRequest>,
     /// `@GiveMine` 的待落地矿石请求（宿主 RNG `Random(18)+3` + 负重/StdMode/Dura 门）。
     pub pending_give_mine: Option<GmGiveMineRequest>,
+
+    // ---- 族 C · 城堡/赛事（5 条）----
+    /// `@开始攻城`：`CastleMgr.Find` 命中的下标 + 翻转后的开/停战。
+    pub pending_castle_war: Option<GmCastleWarRequest>,
+    /// `@SabukWallGold`：`TotalGold` 写（四运算符 + 钳 0 由宿主落地）。
+    pub pending_sbk_gold: Option<GmSbkGoldRequest>,
+    /// `@StartContest`：范围 1000 内玩家的 `FightZoneDieCount=0`（宿主写 `saves`）。
+    pub pending_start_contest: Option<GmStartContestRequest>,
 }
 
 impl Default for GmSession {
@@ -1354,6 +1456,9 @@ impl Default for GmSession {
             pending_spawn: None,
             pending_make: None,
             pending_give_mine: None,
+            pending_castle_war: None,
+            pending_sbk_gold: None,
+            pending_start_contest: None,
         }
     }
 }
@@ -1913,6 +2018,30 @@ impl<'a> GmWorld<'a> {
     /// `PlayerActor.InSafeZone()`（`BaseObject.cs:1777`）的宿主折叠值（`Entity::in_safe_zone`）。
     fn self_in_safe_zone(&self) -> Option<bool> {
         Some(self.self_entity()?.in_safe_zone)
+    }
+
+    /// `CastleMgr.Find(name)`（`CastleManager.cs:21-31`）：`sName` **OrdinalIgnoreCase**
+    /// 首个命中；`None` = `Find` 返回 null / 世界未注入。
+    ///
+    /// **T-173 口径**：`eq_ignore_ascii_case` 只折叠 ASCII，.NET `OrdinalIgnoreCase` 是 Unicode
+    /// 简单大小写折叠（`Ä`/`ä` 等在 .NET 相等、本仓不等）。冻结内容里城堡名为中文/ASCII ⇒
+    /// 现网无可观测差异；本条按 `whitelist.md` T-173 的域限定口径登记，勿当作逐字节等价。
+    fn castle_index(&self, name: &str) -> Option<usize> {
+        self.world?
+            .castles
+            .iter()
+            .position(|c| c.name.eq_ignore_ascii_case(name))
+    }
+
+    /// `GuildMgr.FindGuild(name)`（`GuildManager.cs:63-72`）：**大小写敏感** `==`
+    /// （与 `CastleMgr.Find` 的 OrdinalIgnoreCase 不同，照抄）。
+    fn guild_exists(&self, name: &str) -> bool {
+        self.guilds.find_guild(name).is_some()
+    }
+
+    /// `PlayerActor.Envir.Flag.Fight3Zone`；地图/实体缺失 ⇒ `None`。
+    fn self_in_fight3_zone(&self) -> Option<bool> {
+        self.self_flag().map(|f| f.fight3_zone)
     }
 
     /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
@@ -2943,6 +3072,200 @@ fn make_item(
         permission: sess.permission,
     });
     GmResult::empty()
+}
+
+/// `ContestPointCommand.Execute`（`ContestPointCommand.cs:14-35`，现网 `@ContestPoint`）。
+///
+/// 空名/`?` ⇒ 两条红（说明 + Help）；行会不存在 ⇒ 绿 `行会: X 不存在!!!`；
+/// 存在 ⇒ **静默**（得分 SysMsg 整段注释）。
+fn contest_point(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let name = split_params(parameters).first().copied().unwrap_or("");
+    if name.is_empty() || name.starts_with('?') {
+        return GmResult {
+            found: true,
+            parsed: true,
+            msgs: vec![
+                GmMsg {
+                    color: GmColor::Red,
+                    text: CONTEST_POINT_MSG.to_string(),
+                },
+                GmMsg {
+                    color: GmColor::Red,
+                    text: CONTEST_POINT_HELP.to_string(),
+                },
+            ],
+            frames: Vec::new(),
+            log_note: None,
+        };
+    }
+    if world.guild_exists(name) {
+        // `PlayerActor.SysMsg($"{sGuildName} 的得分为: …")` 整段注释 ⇒ 静默。
+        GmResult::empty()
+    } else {
+        green(dotnet_format(
+            CONTEST_POINT_NOT_FOUND_FMT,
+            &[name.to_string()],
+        ))
+    }
+}
+
+/// `ShowSbkGoldCommand.Execute`（`ShowSbkGoldCommand.cs:14-65`，现网 `@SabukWallGold`）。
+///
+/// 支序（照抄）：`?` ⇒ 红（空 Help，尾随空格）；无城堡名 ⇒ **零帧**（`GetCastleGoldInfo`
+/// 的 `List.Add` 整段注释）；`CastleMgr.Find` 失败 ⇒ 红；`char ctr = sCtr[1]` 越界
+/// （第二参 < 2 UTF-16 码元，含缺参/单字符）⇒ **零帧**；非法控制符/`nGold` 越界 ⇒ 红；
+/// `=` 设值 / `-` **恒减 1** / `+` 加值；随后 `TotalGold<0 ⇒ 0`（宿主落地）。
+fn sbk_gold(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let params = split_params(parameters);
+    let s_castle = params.first().copied().unwrap_or("");
+    let s_ctr = params.get(1).copied().unwrap_or("");
+    let s_gold = params.get(2).copied().unwrap_or("");
+    if !s_castle.is_empty() && s_castle.starts_with('?') {
+        return red(SBK_GOLD_HELP_EMPTY.to_string());
+    }
+    if s_castle.is_empty() {
+        return no_frames(NOTE_SBK_GOLD_NO_ARG);
+    }
+    let Some(castle_index) = world.castle_index(s_castle) else {
+        return red(dotnet_format(CASTLE_NOT_FOUND_FMT, &[s_castle.to_string()]));
+    };
+    // `char ctr = sCtr[1]`（UTF-16 码元下标）：长度 < 2 ⇒ IndexOutOfRangeException 被吞。
+    let Some(ctr) = s_ctr.encode_utf16().nth(1) else {
+        return no_frames(
+            "SabukWallGold：char ctr = sCtr[1] 越界（第二参 <2 码元/缺参）⇒ IndexOutOfRangeException 被吞 ⇒ 零帧",
+        );
+    };
+    let n_gold = str_to_int(s_gold, -1);
+    let op = match ctr {
+        0x3D => '=',
+        0x2D => '-',
+        0x2B => '+',
+        _ => return red(SBK_GOLD_HELP.to_string()),
+    };
+    if !(0..=100_000_000).contains(&n_gold) {
+        return red(SBK_GOLD_HELP.to_string());
+    }
+    sess.pending_sbk_gold = Some(GmSbkGoldRequest {
+        castle_index,
+        op,
+        gold: n_gold,
+    });
+    GmResult::empty()
+}
+
+/// `ChangeSabukLordCommand.Execute`（`ChangeSabukLordCommand.cs:14-46`，现网 `@沙城`）。
+///
+/// 第三参**存在**时先 `bool.Parse`（非法 ⇒ FormatException 被吞 ⇒ 零帧，先于空名检查）；
+/// 空名 ⇒ 红 Help；城堡不存在 ⇒ 红；行会不存在 ⇒ 红 `行会 X还没建立!!!`；
+/// 两者都在 ⇒ `castle.GetCastle(guild)`——`castle` 静态类型 `IUserCastle` 只声明
+/// `GetCastle(IGuild)`，其实现是 `throw new NotImplementedException()`
+/// （`UserCastle.cs:644-647`）⇒ **零帧、无状态改**，绿字/SS_211 不可达。
+fn change_sabuk_lord(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let s_castle = params.first().copied().unwrap_or("");
+    let s_guild = params.get(1).copied().unwrap_or("");
+    // `bool boFlag = @params.Length > 2 && bool.Parse(@params[2]);`（先 Parse，后空名检查）。
+    let _bo_flag = if params.len() > 2 {
+        match parse_dotnet_bool(params[2]) {
+            Some(v) => v,
+            None => return no_frames(NOTE_BOOL_PARSE),
+        }
+    } else {
+        false
+    };
+    if s_castle.is_empty() || s_guild.is_empty() {
+        return red(CHANGE_LORD_HELP.to_string());
+    }
+    if world.castle_index(s_castle).is_none() {
+        return red(dotnet_format(CASTLE_NOT_FOUND_FMT, &[s_castle.to_string()]));
+    }
+    if !world.guild_exists(s_guild) {
+        return red(dotnet_format(
+            CHANGE_LORD_GUILD_MISSING_FMT,
+            &[s_guild.to_string()],
+        ));
+    }
+    // 两门都过 ⇒ `GetCastle(IGuild)` 抛 NotImplementedException；`GetCastle(GuildInfo)` 的
+    // 归属改写/广播（SS_204/绿字）不可达。`boFlag` 下的 SS_211 同样不可达。
+    no_frames(NOTE_GET_CASTLE_NOT_IMPL)
+}
+
+/// `ForcedWallconquestWarCommand.Execute`（`ForcedWallconquestWarCommand.cs:14-56`，
+/// 现网 `@开始攻城`）。
+///
+/// 空名 ⇒ 红 Help；城堡不存在 ⇒ 红；存在 ⇒ `UnderWar = !UnderWar`。开战支（宿主落地）：
+/// `ShowOverMsg=false`、`WarDate=now`、`StartCastleWarTick=now`、`StartWallconquestWar`
+/// （RefShowName 165）、SS_212 登记、全服广播（252）、SS_204 登记、`MainDoorControl(true)`
+/// （门/墙 216/217）。停战支 ⇒ `StopWallconquestWar`（广播结束讯）。
+fn forced_wallconquest_war(
+    parameters: &str,
+    world: &GmWorld<'_>,
+    sess: &mut GmSession,
+) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let s_castle = split_params(parameters).first().copied().unwrap_or("");
+    if s_castle.is_empty() {
+        return red(FORCED_WAR_HELP.to_string());
+    }
+    let Some(castle_index) = world.castle_index(s_castle) else {
+        return red(dotnet_format(CASTLE_NOT_FOUND_FMT, &[s_castle.to_string()]));
+    };
+    let Some(w) = world.world else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    let start = !w.castles[castle_index].under_war;
+    sess.pending_castle_war = Some(GmCastleWarRequest {
+        castle_index,
+        start,
+    });
+    GmResult::empty()
+}
+
+/// `StartContestCommand.Execute`（`StartContestCommand.cs:16-67`，现网 `@StartContest`）。
+///
+/// 命令无 `@params`（`Execute(IPlayerActor)`）。`Fight3Zone` 门红；否则红「开始行会争霸赛。」
+/// → 范围内 1000 格玩家（`!Death && !Ghost`）在 `!ObMode || !AdminMode`（**或**语义照抄）时
+/// `FightZoneDieCount=0`（宿主写 `saves`）→ 绿「行会争霸赛已经开始。」→ `CryCry` 的
+/// `SendMsg(null,…)` 抛 NRE ⇒ 命令中止（**零 cry 帧**；两条 SysMsg 已入队照常投递）。
+fn start_contest(world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let Some(fight3_zone) = world.self_in_fight3_zone() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    if !fight3_zone {
+        return red(START_CONTEST_NOT_HERE.to_string());
+    }
+    let Some((map_id, x, y)) = world.self_pos() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    sess.pending_start_contest = Some(GmStartContestRequest { map_id, x, y });
+    let mut r = red(START_CONTEST_START.to_string());
+    r.msgs.push(GmMsg {
+        color: GmColor::Green,
+        text: START_CONTEST_STARTED.to_string(),
+    });
+    // `CryCry` 的 NRE 判定需要在线表/BanShout（宿主）；命令体只登记「0 cry 帧」的结论。
+    r.log_note = Some(NOTE_START_CONTEST_CRY);
+    r
+}
+
+/// `bool.Parse`（.NET）：只认 `True`/`False`（**忽略大小写** + 前后空白）；其余失败。
+fn parse_dotnet_bool(s: &str) -> Option<bool> {
+    let t = s.trim();
+    if t.eq_ignore_ascii_case("true") {
+        Some(true)
+    } else if t.eq_ignore_ascii_case("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// `HumanLocalCommand.Execute`（`HumanLocalCommand.cs:14-36`，现网 `@IP`）：
@@ -4674,6 +4997,9 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_spawn = None;
     sess.pending_make = None;
     sess.pending_give_mine = None;
+    sess.pending_castle_war = None;
+    sess.pending_sbk_gold = None;
+    sess.pending_start_contest = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -4914,6 +5240,13 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::MobSpawn => mob_spawn(parameters, world, sess),
         Imp::GiveMine => give_mine(parameters, world, sess),
         Imp::MakeItem => make_item(parameters, world, sess, cfg),
+
+        // ---- 族 C · 城堡/赛事（5）----
+        Imp::ContestPoint => contest_point(parameters, world),
+        Imp::SbkGold => sbk_gold(parameters, world, sess),
+        Imp::ChangeLord => change_sabuk_lord(parameters, world),
+        Imp::ForcedWallWar => forced_wallconquest_war(parameters, world, sess),
+        Imp::StartContestCmd => start_contest(world, sess),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -5252,7 +5585,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ContestPoint",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ContestPoint,
     },
     CommandDef {
         name: "DelBonusPoint",
@@ -5637,7 +5970,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "SabukWallGold",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SbkGold,
     },
     CommandDef {
         name: "sadasd",
@@ -5752,7 +6085,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "StartContest",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::StartContestCmd,
     },
     CommandDef {
         name: "SuperTingwa",
@@ -5974,7 +6307,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "开始攻城",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ForcedWallWar,
     },
     CommandDef {
         name: "怪",
@@ -6064,7 +6397,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "沙城",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ChangeLord,
     },
     CommandDef {
         name: "清理垃圾",
@@ -7548,9 +7881,10 @@ mod tests {
     /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）与
     /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）与
     /// 族 X2 批 A（卡 `openmir2-gm-family-x2-target-control` 的 12 条目标控制/杂项）与
-    /// 批 B（同卡重 R 6 条）、族 F（卡 `openmir2-gm-family-f-script-flags` 的 3 条脚本标志）与
-    /// 族 M（卡 `openmir2-gm-family-m-spawn-make` 的 6 条刷怪/造物）的命令体接上
-    /// （`Unimplemented` 从 180 降到 18），且命令名 → 实现标签固定。
+    /// 批 B（同卡重 R 6 条）、族 F（卡 `openmir2-gm-family-f-script-flags` 的 3 条脚本标志）、
+    /// 族 M（卡 `openmir2-gm-family-m-spawn-make` 的 6 条刷怪/造物）与族 C
+    /// （卡 `openmir2-gm-family-c-castle` 的 5 条城堡/赛事）的命令体接上
+    /// （`Unimplemented` 从 180 降到 13），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -7558,16 +7892,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            167,
-            "167 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）+ 族 F（脚本标志 3）+ 族 M（刷怪/造物 6）"
+            172,
+            "172 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）+ 族 F（脚本标志 3）+ 族 M（刷怪/造物 6）+ 族 C（城堡/赛事 5）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            18,
-            "185 - 167"
+            13,
+            "185 - 172"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -12264,5 +12598,337 @@ mod tests {
                 "{line} 不得装 pending"
             );
         }
+    }
+
+    // ==================== 族 C · 城堡/赛事（5，卡 `openmir2-gm-family-c-castle`，tier=R）====================
+
+    /// 世界：`gm`（Race=Play，5,5，map 0 上）。城堡/地图由各用例添加。
+    fn c_world() -> mir2_world::World {
+        let mut w = mir2_world::World::new(20, 20);
+        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        gm.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(gm);
+        w
+    }
+
+    fn c_castle(name: &str) -> mir2_world::UserCastle {
+        mir2_world::UserCastle::new(name, mir2_world::CastleSiegeConfig::default())
+    }
+
+    fn c_view<'a>(
+        guilds: &'a mir2_world::GuildManager,
+        world: &'a mir2_world::World,
+        fx: &'a MapFixture,
+    ) -> GmWorld<'a> {
+        GmWorld::new(guilds)
+            .with_maps(&fx.registry)
+            .with_world(world)
+            .with_speaker("gm")
+            .with_m_host()
+    }
+
+    /// 表项：5 条接线、perm 10；StartContest 的 `Execute` 是单形参（params=1），其余 2。
+    #[test]
+    fn c_family_table_entries_are_wired() {
+        for (name, imp, params) in [
+            ("ContestPoint", Imp::ContestPoint, 2),
+            ("SabukWallGold", Imp::SbkGold, 2),
+            ("沙城", Imp::ChangeLord, 2),
+            ("开始攻城", Imp::ForcedWallWar, 2),
+            ("StartContest", Imp::StartContestCmd, 1),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, params, "{name} 的 Execute 形参个数");
+        }
+    }
+
+    /// `@ContestPoint` 三支：空名/`?` ⇒ 两条红（说明 + Help）；不存在 ⇒ 绿
+    /// `行会: X 不存在!!!`；存在 ⇒ **静默**（得分 SysMsg 注释）。
+    #[test]
+    fn c_contest_point_three_branches() {
+        let mut guilds = mir2_world::GuildManager::new();
+        assert!(guilds.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let world = c_world();
+        let fx = map_fixture(mir2_envir::MapInfoFlag::default());
+        let view = c_view(&guilds, &world, &fx);
+        let mut sess = gm_session();
+        for line in ["@ContestPoint", "@ContestPoint ?x"] {
+            assert_eq!(
+                texts(&execute(&mut sess, &GmConfig::default(), &view, line)),
+                vec![
+                    (GmColor::Red, CONTEST_POINT_MSG),
+                    (GmColor::Red, CONTEST_POINT_HELP)
+                ],
+                "{line}"
+            );
+        }
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@ContestPoint 无此会"
+            )),
+            vec![(GmColor::Green, "行会: 无此会 不存在!!!")]
+        );
+        let r = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view,
+            "@ContestPoint 测试会",
+        );
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "存在的行会 ⇒ 静默"
+        );
+    }
+
+    /// `@SabukWallGold`：无参 **零帧**（`GetCastleGoldInfo` 的 Add 被注释）；
+    /// `?` ⇒ 红（空 Help 尾随空格）；城堡不存在 ⇒ 红；第二参 `sCtr[1]` 越界 ⇒ 零帧；
+    /// 非法运算符/金币 ⇒ 红；合法 ⇒ 装 `('='|'-'|'+', nGold)`。
+    #[test]
+    fn c_sabuk_wall_gold_quirks() {
+        let guilds = mir2_world::GuildManager::new();
+        let mut world = c_world();
+        world.castles.push(c_castle("沙巴克"));
+        let fx = map_fixture(mir2_envir::MapInfoFlag::default());
+        let view = c_view(&guilds, &world, &fx);
+        let mut sess = gm_session();
+        // 无参 ⇒ 零帧 + note。
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@SabukWallGold");
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(r.log_note.expect("无参登记").contains("GetCastleGoldInfo"));
+        // `?` ⇒ 红（空 Help ⇒ 尾随空格）。
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@SabukWallGold ?"
+            )),
+            vec![(GmColor::Red, SBK_GOLD_HELP_EMPTY)]
+        );
+        // 城堡不存在。
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@SabukWallGold 无此城 x= 1"
+            )),
+            vec![(GmColor::Red, "城堡无此城未找到!!!")]
+        );
+        // 第二参 <2 码元（含缺参/单字符）⇒ `sCtr[1]` 越界零帧。
+        for line in ["@SabukWallGold 沙巴克", "@SabukWallGold 沙巴克 = 100"] {
+            let r = execute(&mut sess, &GmConfig::default(), &view, line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 零帧");
+            assert!(r.log_note.expect("越界登记").contains("sCtr[1]"));
+            assert!(sess.pending_sbk_gold.is_none());
+        }
+        // 非法运算符 / 金币范围 ⇒ 红。
+        for line in [
+            "@SabukWallGold 沙巴克 xy 100",
+            "@SabukWallGold 沙巴克 x= abc",
+            "@SabukWallGold 沙巴克 x= -1",
+            "@SabukWallGold 沙巴克 x= 100000001",
+        ] {
+            assert_eq!(
+                texts(&execute(&mut sess, &GmConfig::default(), &view, line)),
+                vec![(GmColor::Red, SBK_GOLD_HELP)],
+                "{line}"
+            );
+        }
+        // 合法三运算符（第二参取 `sCtr[1]`，首字符任意）。
+        for (line, op, gold) in [
+            ("@SabukWallGold 沙巴克 x= 500", '=', 500),
+            ("@SabukWallGold 沙巴克 x- 7", '-', 7),
+            ("@SabukWallGold 沙巴克 x+ 100000000", '+', 100_000_000),
+            ("@SabukWallGold 沙巴克 =+ 9", '+', 9),
+        ] {
+            let _ = execute(&mut sess, &GmConfig::default(), &view, line);
+            assert_eq!(
+                sess.pending_sbk_gold,
+                Some(GmSbkGoldRequest {
+                    castle_index: 0,
+                    op,
+                    gold,
+                }),
+                "{line}"
+            );
+        }
+    }
+
+    /// `@沙城`：第三参 `bool.Parse` 非法 ⇒ **零帧**（先于空名/城堡/行会检查）；
+    /// 空名 ⇒ 红 Help；城堡/行会不存在 ⇒ 红；两者都在 ⇒ **零帧无状态改**
+    /// （`UserCastle.GetCastle(IGuild)` 抛 NotImplementedException）。
+    #[test]
+    fn c_change_sabuk_lord_not_impl() {
+        let mut guilds = mir2_world::GuildManager::new();
+        assert!(guilds.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let mut world = c_world();
+        world.castles.push(c_castle("沙巴克"));
+        let fx = map_fixture(mir2_envir::MapInfoFlag::default());
+        let view = c_view(&guilds, &world, &fx);
+        let mut sess = gm_session();
+        // bool.Parse 非法（含 "1"/"0"/"yes"）⇒ 零帧（即使行会不存在）。
+        for third in ["xyz", "1", "0", "yes"] {
+            let line = format!("@沙城 无此城 无此会 {third}");
+            let r = execute(&mut sess, &GmConfig::default(), &view, &line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 零帧");
+            assert!(r.log_note.expect("bool.Parse 登记").contains("bool.Parse"));
+        }
+        // 缺第三参 ⇒ 不 Parse；空名 ⇒ 红 Help。
+        assert_eq!(
+            texts(&execute(&mut sess, &GmConfig::default(), &view, "@沙城")),
+            vec![(GmColor::Red, CHANGE_LORD_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@沙城 沙巴克"
+            )),
+            vec![(GmColor::Red, CHANGE_LORD_HELP)]
+        );
+        // 城堡不存在 / 行会不存在 ⇒ 红。
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@沙城 无此城 测试会"
+            )),
+            vec![(GmColor::Red, "城堡无此城未找到!!!")]
+        );
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@沙城 沙巴克 无此会"
+            )),
+            vec![(GmColor::Red, "行会 无此会还没建立!!!")]
+        );
+        // 两者都在 ⇒ GetCastle(IGuild) NotImpl ⇒ 零帧 + note；合法 bool 三形态都仍零帧。
+        for third in [None, Some("True"), Some("false")] {
+            let line = match third {
+                Some(v) => format!("@沙城 沙巴克 测试会 {v}"),
+                None => "@沙城 沙巴克 测试会".to_string(),
+            };
+            let r = execute(&mut sess, &GmConfig::default(), &view, &line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 零帧");
+            let note = r.log_note.expect("NotImpl 登记");
+            assert!(note.contains("NotImplemented"), "{line}: {note}");
+        }
+    }
+
+    /// `@开始攻城`：空名红 / 城堡不存在红；存在 ⇒ 装「翻转后的 UnderWar」请求。
+    #[test]
+    fn c_forced_wallconquest_war_stages_toggle() {
+        let guilds = mir2_world::GuildManager::new();
+        let mut world = c_world();
+        let mut castle = c_castle("沙巴克");
+        castle.under_war = false;
+        world.castles.push(castle);
+        let fx = map_fixture(mir2_envir::MapInfoFlag::default());
+        let view = c_view(&guilds, &world, &fx);
+        let mut sess = gm_session();
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@开始攻城"
+            )),
+            vec![(GmColor::Red, FORCED_WAR_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@开始攻城 无此城"
+            )),
+            vec![(GmColor::Red, "城堡无此城未找到!!!")]
+        );
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@开始攻城 沙巴克");
+        assert_eq!(
+            sess.pending_castle_war,
+            Some(GmCastleWarRequest {
+                castle_index: 0,
+                start: true,
+            })
+        );
+        // UnderWar=true ⇒ 再发 = 停战。
+        world.castles[0].under_war = true;
+        let view2 = c_view(&guilds, &world, &fx);
+        let _ = execute(&mut sess, &GmConfig::default(), &view2, "@开始攻城 沙巴克");
+        assert_eq!(
+            sess.pending_castle_war,
+            Some(GmCastleWarRequest {
+                castle_index: 0,
+                start: false,
+            })
+        );
+    }
+
+    /// `@StartContest`：`Fight3Zone` 门红；通过 ⇒ 红「开始行会争霸赛。」+ 绿「行会争霸赛已经开始。」
+    /// + 装范围请求 + CryCry 零帧 note；`@params` 被忽略（`Execute(IPlayerActor)`）。
+    #[test]
+    fn c_start_contest_gate_and_messages() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = c_world();
+        let fx_off = map_fixture(mir2_envir::MapInfoFlag::default());
+        let view_off = c_view(&guilds, &world, &fx_off);
+        let mut sess = gm_session();
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view_off,
+                "@StartContest"
+            )),
+            vec![(GmColor::Red, START_CONTEST_NOT_HERE)]
+        );
+        assert!(sess.pending_start_contest.is_none());
+        let fx_on = map_fixture(mir2_envir::MapInfoFlag {
+            fight3_zone: true,
+            ..mir2_envir::MapInfoFlag::default()
+        });
+        let view_on = c_view(&guilds, &world, &fx_on);
+        let r = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view_on,
+            "@StartContest ignored",
+        );
+        assert_eq!(
+            texts(&r),
+            vec![
+                (GmColor::Red, START_CONTEST_START),
+                (GmColor::Green, START_CONTEST_STARTED)
+            ]
+        );
+        assert!(r.log_note.expect("CryCry 登记").contains("NRE"));
+        assert_eq!(
+            sess.pending_start_contest,
+            Some(GmStartContestRequest {
+                map_id: 0,
+                x: 5,
+                y: 5,
+            })
+        );
+        // 退化形态（脚本桥无通道）⇒ 零帧 + note。
+        let bare = GmWorld::new(&guilds)
+            .with_maps(&fx_on.registry)
+            .with_world(&world)
+            .with_speaker("gm");
+        let r = execute(&mut sess, &GmConfig::default(), &bare, "@StartContest");
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(r.log_note.expect("退化登记").contains("M 族"));
+        assert!(sess.pending_start_contest.is_none());
     }
 }

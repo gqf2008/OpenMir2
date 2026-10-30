@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "11e85c3ab8d0aeaf0b5d27841a4206880aec6fcf2979b590490d2ebb6f9b461c"
+   "sha256": "95554b968b251db4c17ed281f137b69e893025d75e988490b872741deb1652bd"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -2429,27 +2429,6 @@
    "field_line": null
   },
   {
-   "cmd": "ContestPoint",
-   "cmd_name": "ContestPoint",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ContestPointCommand.cs:10",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].ContestPoint",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "ContestPointCommand",
-   "attr_name": "ContestPoint",
-   "handler_exec_line": 14,
-   "name_source": "conf[Command].ContestPoint",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ContestPoint",
-   "field_line": 238
-  },
-  {
    "cmd": "EndContest",
    "cmd_name": "EndContest",
    "child_card": null,
@@ -2469,27 +2448,6 @@
    "perm_attr": 10,
    "field": "EndContest",
    "field_line": 242
-  },
-  {
-   "cmd": "SabukWallGold",
-   "cmd_name": "SabukWallGold",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ShowSbkGoldCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].SabukWallGold",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "ShowSbkGoldCommand",
-   "attr_name": "ShowSbkGold",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].SabukWallGold",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "SabukWallGold",
-   "field_line": 94
   },
   {
    "cmd": "ServerInfo",
@@ -2574,27 +2532,6 @@
    "perm_attr": 10,
    "field": "ShowUnit",
    "field_line": 86
-  },
-  {
-   "cmd": "StartContest",
-   "cmd_name": "StartContest",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/StartContestCommand.cs:12",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].StartContest",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "StartContestCommand",
-   "attr_name": "StartContest",
-   "handler_exec_line": 16,
-   "name_source": "conf[Command].StartContest",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "StartContest",
-   "field_line": 240
   },
   {
    "cmd": "Total",
@@ -2702,27 +2639,6 @@
    "field_line": 302
   },
   {
-   "cmd": "开始攻城",
-   "cmd_name": "开始攻城",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ForcedWallconquestWarCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].ForcedWallConQuestWar",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "ForcedWallconquestWarCommand",
-   "attr_name": "ForcedWallconquestWar",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].ForcedWallConQuestWar",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ForcedWallConQuestWar",
-   "field_line": 306
-  },
-  {
    "cmd": "查看周围",
    "cmd_name": "查看周围",
    "child_card": null,
@@ -2742,27 +2658,6 @@
    "perm_attr": 10,
    "field": "MobLevel",
    "field_line": 156
-  },
-  {
-   "cmd": "沙城",
-   "cmd_name": "沙城",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ChangeSabukLordCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].ChangeSabukLord",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "ChangeSabukLordCommand",
-   "attr_name": "ChangeSabukLord",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].ChangeSabukLord",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "ChangeSabukLord",
-   "field_line": 304
   },
   {
    "cmd": "退出门派",
@@ -2787,19 +2682,19 @@
   }
  ],
  "summary": {
-  "total": 18,
+  "total": 13,
   "by_verdict": {
-   "unreachable": 18
+   "unreachable": 13
   },
   "reachable": 0,
   "script_reachable": 0,
-  "unreachable": 18,
+  "unreachable": 13,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 167,
-   "Unimplemented": 18
+   "Implemented": 172,
+   "Unimplemented": 13
   },
   "third_state": 21,
   "third_state_imps": [
@@ -2825,7 +2720,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 146,
+  "complete_implemented": 151,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
