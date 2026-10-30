@@ -282,6 +282,36 @@ pub const MSG_MASTERLIST_SEARCH_LOCATE: &str = "你的徒弟正在找你，他�
 pub const MSG_MASTERLIST_NOW_LOCATE: &str = "你的徒弟现在位于:";
 pub const MSG_MASTER_SEARCH_LOCATE: &str = "你的师父正在找你，他现在位于:";
 
+// ===== 族 X2 · 批 B（重 R 6 条）文本 =====
+/// `KillCommand.cs:29` 面对面失败红字（无参且面前无人）。
+pub const KILL_FACE_FAIL: &str = "命令使用方法不正确，必须与角色面对面站好!!!";
+/// `ReAliveCommand` 的 `Command.CommandHelp`（Help=`GameCommandPrvMsgHelpMsg`=「人物名称」）。
+pub const RE_ALIVE_HELP: &str = "命令格式: @复活 人物名称";
+/// `CommandHelp.GameCommandReAliveMsg`（`CommandHelp.cs:95`；**ASCII 句点**）。
+pub const RE_ALIVE_MSG1_FMT: &str = "{0} 已获重生.";
+/// `ReAliveCommand.cs:43` 内联（**全角句号**——与上一条同语义不同标点，oracle 怪癖照抄）。
+pub const RE_ALIVE_MSG2_FMT: &str = "{0} 已获重生。";
+/// `SetPermissionCommand` 的 `Command.CommandHelp`（Help=`人物名称 权限等级(0 - 10)`）。
+pub const SET_PERMISSION_HELP: &str = "命令格式: @VV给予权限 人物名称 权限等级(0 - 10)";
+/// `SetPermissionCommand.cs:40` 回执（**Red**）。
+pub const SET_PERMISSION_REPLY_FMT: &str = "{0} 当前权限为: {1}";
+/// `DelSkillCommand` 的 `Command.CommandHelp`（Help=`人物名称 技能名称`）。
+pub const DEL_SKILL_HELP: &str = "命令格式: @删除技能 人物名称 技能名称";
+/// `DelSkillCommand.cs:52` 目标绿字。
+pub const DEL_SKILL_TARGET_FMT: &str = "技能{0}已删除。";
+/// `DelSkillCommand.cs:53` 调用者绿字。
+pub const DEL_SKILL_CALLER_FMT: &str = "{0}的技能{1}已删除。";
+/// `ClearCopyItemCommand` 的 `Command.CommandHelp`（Help=`人物名称`）。
+pub const CLEAR_COPY_ITEM_HELP: &str = "命令格式: @ClearCopyItem 人物名称";
+/// `ClearHumanPasswordCommand.cs:21` 第一条红字（标题）。
+pub const CLEAR_PASSWORD_TITLE: &str = "清除玩家的仓库密码!!!";
+/// `ClearHumanPasswordCommand` 的 `Command.CommandHelp`（Help=`人物名称`）。
+pub const CLEAR_PASSWORD_HELP: &str = "命令格式: @清除仓库密码 人物名称";
+/// `ClearHumanPasswordCommand.cs:32` 目标绿字。
+pub const CLEAR_PASSWORD_TARGET: &str = "你的保护密码已被清除!!!";
+/// `ClearHumanPasswordCommand.cs:33` 调用者绿字。
+pub const CLEAR_PASSWORD_CALLER_FMT: &str = "{0}的保护密码已被清除!!!";
+
 // ===== 批次 4（数值/角色族，设计件 §4.3 第 72–115 行，44 条）的 CommandHelp 常量 =====
 //
 // 口径同上：`命令格式: @{现网名} {Help}`（`CommandAttribute.cs:53`）；`Help` 为空时**末尾空格保留**
@@ -794,6 +824,28 @@ pub enum Imp {
     /// `MemberFunctionCommand`（现网 `@是我`）：`ScriptGotoCount=0` + `ManageNPC.GotoLable(@Member)`
     /// 宿主接缝 ⇒ log_note 零帧。
     MemberFunction,
+
+    // ---- 族 X2 · 批 B（重 R 6 条：真副作用写面）----
+    /// `KillCommand`（现网 `@vv杀死`）：带名离线红 / 无面对面红；命中 ⇒ target.Die()
+    /// （宿主 `World::kill` ⇒ 既有死亡结算，零帧）。
+    KillCmd,
+    /// `ReAliveCommand`（现网 `@复活`）：空名红帮助 / 离线红 / 命中 ⇒ ReAlive（death=false），
+    /// 随后 HP=MaxHP、RM_ABILITY 落帧（宿主用目标会话数据出 SM_ABILITY 给调用者）、**双绿字**
+    /// （第一条 ASCII 句点、第二条全角句号——oracle 怪癖）。
+    ReAlive,
+    /// `SetPermissionCommand`（现网 `@VV给予权限`）：校验 0..=10 + 在线 ⇒ 写目标运行时
+    /// `Permission`（宿主目标会话）+ Red 回执。
+    SetPermission,
+    /// `DelSkillCommand`（现网 `@删除技能`）：空参红帮助 / 离线红 / 命中 ⇒ SendDelMagic +
+    /// 双方绿字 + RecalcAbilitys；`All` 支删全部**不发帧不发字**；魔法列表宿主未接（T-189 同源）。
+    DelSkillCmd,
+    /// `ClearCopyItemCommand`（现网 `@ClearCopyItem`）：空名红帮助 / 离线红；命中 ⇒ 背包/仓库
+    /// 按（物品名+MakeIndex）去重，**内层删除误写 `PlayerActor.ItemList`（调用者）**——卡面
+    /// forbidden 照抄；成功与越界异常两路都**零 SysMsg**。
+    ClearCopyItem,
+    /// `ClearHumanPasswordCommand`（现网 `@清除仓库密码`）：空名/`?` ⇒ 两条红；离线**静默**；
+    /// 在线 ⇒ 清目标 `IsPasswordLocked/IsUnLockStoragePwd/StoragePwd` + 双绿字。
+    ClearHumanPassword,
     Unimplemented,
 }
 
@@ -1044,6 +1096,21 @@ pub struct GmSession {
     /// ip/port)` ⇒ 落帧支 `PlayObject.Message.cs:1988-1991` `SM_RECONNECT`）。
     /// 本仓命令体纯 ⇒ 装地址串，宿主同一事件内经既有 `smframe_ext::sm_reconnect` 发给说话者。
     pub pending_reconnect: Option<String>,
+
+    // ---- 族 X2 批 B（重 R 6 条）的目标侧待落地写（宿主同一事件内收口）----
+    /// `@vv杀死` 目标名（宿主调 `World::kill` ⇒ 既有 Die 结算，卡面「不动杀底层语义」）。
+    pub pending_gm_die: Option<String>,
+    /// `@复活` 目标名（宿主置 death=false + HP=MaxHP + 向调用者发 RM_ABILITY 落帧）。
+    pub pending_gm_revive: Option<String>,
+    /// `@VV给予权限`（目标名, 新权限 0..=10；宿主写目标会话 `GmSession.permission`）。
+    pub pending_set_permission: Option<(String, u8)>,
+    /// `@ClearCopyItem` 目标名（宿主按怪癖执行去重：内层误删**调用者**列表元素）。
+    pub pending_clear_copy: Option<String>,
+    /// `@清除仓库密码` 目标名（宿主清目标 `pwd_sessions` 的 three fields）。
+    pub pending_clear_password: Option<String>,
+    /// `@删除技能`（目标名, 技能名；`All` 删除全部）——MagicList 在 `saves`（宿主收口：
+    /// 212 发给目标 + 双方绿字 + Recalc；All 支不发帧不发字）。
+    pub pending_del_skill: Option<(String, String)>,
 }
 
 impl Default for GmSession {
@@ -1092,6 +1159,12 @@ impl Default for GmSession {
             probe_tick: 0,
             master_name: String::new(),
             pending_reconnect: None,
+            pending_gm_die: None,
+            pending_gm_revive: None,
+            pending_set_permission: None,
+            pending_clear_copy: None,
+            pending_clear_password: None,
+            pending_del_skill: None,
         }
     }
 }
@@ -1467,6 +1540,9 @@ pub struct GmWorld<'a> {
     pub speaker_id: i32,
     /// `HUtil32.GetTickCount()` 的等价物（ms；冷却门的 `now`）。
     pub now_ms: i64,
+    /// **族 X2**（review F3）：`PlayerActor.GetPoseCreate()` 的前方格目标名（宿主用
+    /// `pose_create` 解析后注入；`None` = 面前无人/未接线）。`@vv杀死` 无参支用。
+    pub pose_target: Option<&'a str>,
     /// **族 X2**：`SystemShare.BoMission/MissionMap/MissionX/MissionY` 四元（`@Mission` 写）；
     /// `None` = 未注入（脚本桥）⇒ 命令体登记零帧不伪造写。
     pub mission: Option<&'a std::cell::RefCell<GmMissionState>>,
@@ -1492,10 +1568,18 @@ impl<'a> GmWorld<'a> {
             speaker: "",
             speaker_id: 0,
             now_ms: 0,
+            pose_target: None,
             mission: None,
             spirit_mutiny_tick: None,
             filter_word: None,
         }
+    }
+
+    /// 注入面前格目标名（`@vv杀死` 无参支）。
+    #[must_use]
+    pub fn with_pose_target(mut self, pose: &'a str) -> Self {
+        self.pose_target = Some(pose);
+        self
     }
 
     #[must_use]
@@ -2643,6 +2727,148 @@ const NOTE_X2_TARGET_MSG_SEAM: &str =
 /// X2 全局状态（Mission 四元 / SpiritMutinyTick）未注入（脚本桥）⇒ 登记零帧不伪造写。
 const NOTE_X2_GLOBAL_NOT_INJECTED: &str =
     "X2：全局状态（SystemShare.BoMission/MissionX/Y 或 SpiritMutinyTick）未注入（脚本桥构造）⇒ 零帧不伪造写";
+
+// ---------------------------- 族 X2 · 批 B（重 R 6 条：真副作用写面）----------------------------
+//
+// Kill/ReAlive/SetPermission/ClearCopyItem/清除仓库密码 走「命令体纯 + pending_* 宿主收口」
+// 既有范式（同 pending_kick/pending_clear_bag）；Die/ReAlive 底层语义复用 `World::kill` /
+// entity 字段，卡面 forbidden「不动杀/复活底层语义」。
+
+/// `KillCommand.Execute`（`KillCommand.cs:12-40`，现网 `@vv杀死`）。
+///
+/// 带名 ⇒ 离线红；无参 ⇒ `GetPoseCreate()`（宿主 `pose_create` 解析后经
+/// [`GmWorld::pose_target`] 注入）：null ⇒ 红「必须与角色面对面站好!!!」；非 null ⇒ Die()。
+/// 命中 ⇒ `target.Die()`：**命令体零帧**（Die 的观察者帧 `RM_DEATH`⇒`SM_DEATH` 由死亡结算
+/// 广播，review M3；本仓 `World::kill` 入队、下一 tick 结算——与 oracle 同拍差一拍，
+/// 帧/时序归窗口项）。
+fn kill_cmd(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let name = split_params(parameters).first().copied().unwrap_or("");
+    if !name.is_empty() {
+        if world.play_by_name(name).is_none() {
+            return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[name.to_string()]));
+        }
+        sess.pending_gm_die = Some(name.to_string());
+        GmResult::empty()
+    } else {
+        // 无参 ⇒ 面对面支（review F3：pose 由宿主 pose_create 解析注入）。
+        match world.pose_target {
+            Some(pose) => {
+                sess.pending_gm_die = Some(pose.to_string());
+                GmResult::empty()
+            }
+            None => red(KILL_FACE_FAIL),
+        }
+    }
+}
+
+/// `ReAliveCommand.Execute`（`ReAliveCommand.cs:14-45`，现网 `@复活`）。
+///
+/// 空名红帮助；离线红；命中 ⇒ ReAlive（death=false）+ HP=MaxHP + RM_ABILITY（宿主用目标
+/// 会话数据向调用者出 SM_ABILITY）+ 双绿字（第一条 ASCII 句点 / 第二条全角句号）。
+fn realive(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let name = split_params(parameters).first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(RE_ALIVE_HELP);
+    }
+    if world.play_by_name(name).is_none() {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[name.to_string()]));
+    }
+    sess.pending_gm_revive = Some(name.to_string());
+    let mut r = green(dotnet_format(RE_ALIVE_MSG1_FMT, &[name.to_string()]));
+    r.msgs.push(GmMsg {
+        color: GmColor::Green,
+        text: dotnet_format(RE_ALIVE_MSG2_FMT, &[name.to_string()]),
+    });
+    r
+}
+
+/// `SetPermissionCommand.Execute`（`SetPermissionCommand.cs:14-41`，现网 `@VV给予权限`）。
+fn set_permission(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let s_perm = params.get(1).copied().unwrap_or("");
+    let n_permission = str_to_int(s_perm, 0);
+    if name.is_empty() || !(0..=10).contains(&n_permission) {
+        return red(SET_PERMISSION_HELP);
+    }
+    if world.play_by_name(name).is_none() {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[name.to_string()]));
+    }
+    // `Config.ShowMakeItemMsg` 日志支（`SetPermissionCommand.cs:36-39`）宿主未接 ⇒ 登记。
+    sess.pending_set_permission = Some((name.to_string(), n_permission as u8));
+    noted(
+        red(dotnet_format(
+            SET_PERMISSION_REPLY_FMT,
+            &[name.to_string(), n_permission.to_string()],
+        )),
+        "VV给予权限：Config.ShowMakeItemMsg 日志支宿主未接（oracle 仅 LogService.Warn，无帧面差异）",
+    )
+}
+
+/// `DelSkillCommand.Execute`（`DelSkillCommand.cs:14-71`，现网 `@删除技能`）。
+///
+/// 空参红帮助 / 离线红；在线 ⇒ 装 `pending_del_skill`（MagicList 在宿主 `saves`，
+/// review F4：212 发给目标 + 双方绿字 + Recalc，`All` 支删全部不发帧不发字——
+/// 全部在本函数同事件内由宿主收口，命令体零帧零文本）。
+fn del_skill(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let params = split_params(parameters);
+    let name = params.first().copied().unwrap_or("");
+    let skill = params.get(1).copied().unwrap_or("");
+    if name.is_empty() || skill.is_empty() {
+        return red(DEL_SKILL_HELP);
+    }
+    if world.play_by_name(name).is_none() {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[name.to_string()]));
+    }
+    sess.pending_del_skill = Some((name.to_string(), skill.to_string()));
+    GmResult::empty()
+}
+
+/// `ClearCopyItemCommand.Execute`（`ClearCopyItemCommand.cs:14-68`，现网 `@ClearCopyItem`）。
+///
+/// 空名红帮助 / 离线红；命中 ⇒ 背包与仓库按（物品名 + MakeIndex）从后向前去重——
+/// **内层删除写的是 `PlayerActor.ItemList`/`PlayerActor.StorageItemList`（调用者）**，
+/// 卡面 forbidden 照抄该误删怪癖。成功与内层越界异常两条路都**零 SysMsg**（异常被顶层 catch 吞）。
+fn clear_copy_item(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let name = split_params(parameters).first().copied().unwrap_or("");
+    if name.is_empty() {
+        return red(CLEAR_COPY_ITEM_HELP);
+    }
+    if world.play_by_name(name).is_none() {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[name.to_string()]));
+    }
+    sess.pending_clear_copy = Some(name.to_string());
+    noted(
+        GmResult::empty(),
+        "ClearCopyItem：去重已装 pending（宿主按 oracle 误删调用者列表怪癖执行；成功/越界两路均零 SysMsg）",
+    )
+}
+
+/// `ClearHumanPasswordCommand.Execute`（`ClearHumanPasswordCommand.cs:14-35`，现网 `@清除仓库密码`）。
+///
+/// 空名/`?` ⇒ **两条红**（标题 + 帮助）；离线 ⇒ **静默 return**（零帧零 note，oracle 无文本）；
+/// 在线 ⇒ 清目标三字段（宿主 `pwd_sessions`）+ 目标绿 + 调用者绿。
+fn clear_human_password(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let name = split_params(parameters).first().copied().unwrap_or("");
+    if name.is_empty() || name.starts_with('?') {
+        let mut r = red(CLEAR_PASSWORD_TITLE);
+        r.msgs.push(GmMsg {
+            color: GmColor::Red,
+            text: CLEAR_PASSWORD_HELP.to_string(),
+        });
+        return r;
+    }
+    if world.play_by_name(name).is_none() {
+        return GmResult::empty(); // oracle 离线支无任何文本/帧
+    }
+    sess.pending_clear_password = Some(name.to_string());
+    let mut r = green(CLEAR_PASSWORD_TARGET);
+    r.msgs.push(GmMsg {
+        color: GmColor::Green,
+        text: dotnet_format(CLEAR_PASSWORD_CALLER_FMT, &[name.to_string()]),
+    });
+    r
+}
 
 // ---------------------------- 宿主未接 / oracle 注释的登记文案 ----------------------------
 const NOTE_EVENT_MGR: &str =
@@ -3800,6 +4026,12 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_clear_bag = None;
     sess.pending_feature_changed = false;
     sess.pending_reconnect = None;
+    sess.pending_gm_die = None;
+    sess.pending_gm_revive = None;
+    sess.pending_set_permission = None;
+    sess.pending_clear_copy = None;
+    sess.pending_clear_password = None;
+    sess.pending_del_skill = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -4019,6 +4251,14 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::Reconnection => reconnection(parameters, sess),
         Imp::MemberFuncEx => member_func_ex(),
         Imp::MemberFunction => member_function(),
+
+        // ---- 族 X2 · 批 B（重 R 6 条）----
+        Imp::KillCmd => kill_cmd(parameters, world, sess),
+        Imp::ReAlive => realive(parameters, world, sess),
+        Imp::SetPermission => set_permission(parameters, world, sess),
+        Imp::DelSkillCmd => del_skill(parameters, world, sess),
+        Imp::ClearCopyItem => clear_copy_item(parameters, world, sess),
+        Imp::ClearHumanPassword => clear_human_password(parameters, world, sess),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -4345,7 +4585,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ClearCopyItem",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ClearCopyItem,
     },
     CommandDef {
         name: "ClearItemMap",
@@ -4917,13 +5157,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "vv杀死",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::KillCmd,
     },
     CommandDef {
         name: "VV给予权限",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::SetPermission,
     },
     CommandDef {
         name: "VV调整元宝",
@@ -5001,7 +5241,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "删除技能",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelSkillCmd,
     },
     CommandDef {
         name: "删除物品",
@@ -5055,7 +5295,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "复活",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ReAlive,
     },
     CommandDef {
         name: "天地合一",
@@ -5181,7 +5421,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "清除仓库密码",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ClearHumanPassword,
     },
     CommandDef {
         name: "清除任务",
@@ -6333,6 +6573,7 @@ mod tests {
             speaker: "boss",
             speaker_id: 7,
             now_ms: 0,
+            pose_target: None,
             mission: None,
             spirit_mutiny_tick: None,
             filter_word: None,
@@ -6642,8 +6883,9 @@ mod tests {
     /// 族 T（卡 `openmir2-gm-family-t-toggle-horse` 的 7 条会话开关/骑马）与
     /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）与
     /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）与
-    /// 族 X2 批 A（卡 `openmir2-gm-family-x2-target-control` 的 12 条目标控制/杂项）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 33），且命令名 → 实现标签固定。
+    /// 族 X2 批 A（卡 `openmir2-gm-family-x2-target-control` 的 12 条目标控制/杂项）与
+    /// 批 B（同卡重 R 6 条）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 27），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -6651,16 +6893,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            152,
-            "152 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）"
+            158,
+            "158 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            33,
-            "185 - 152"
+            27,
+            "185 - 158"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -10158,6 +10400,195 @@ mod tests {
     }
 
     // ---------------------------- 族 X2 · 目标控制/杂项（批 A 12，卡 `openmir2-gm-family-x2-target-control`）----------------------------
+
+    // ---------------------------- 族 X2 · 批 B（重 R 6 条）----------------------------
+
+    /// **F3 牙（review b6a3962b）**：`@vv杀死` 无参支——`pose_target` 注入 ⇒ Die（零帧 +
+    /// pending_gm_die）；无注入 ⇒ 红「必须与角色面对面站好!!!」。
+    #[test]
+    fn x2b_kill_face_target_branch() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = q_view(&fx, &w, &guilds).with_pose_target("bob");
+        let r = execute(&mut sess, &cfg, &view, "@vv杀死");
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "面前有人 ⇒ Die 零帧"
+        );
+        assert_eq!(sess.pending_gm_die.as_deref(), Some("bob"));
+        let bare = q_view(&fx, &w, &guilds);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &bare, "@vv杀死")),
+            vec![(GmColor::Red, KILL_FACE_FAIL)]
+        );
+    }
+
+    /// 批 B 6 条全部接线：现网名/impl/perm 10/params。
+    #[test]
+    fn x2b_family_table_entries_are_wired() {
+        for (name, imp, params) in [
+            ("vv杀死", Imp::KillCmd, 2),
+            ("复活", Imp::ReAlive, 2),
+            ("VV给予权限", Imp::SetPermission, 2),
+            ("删除技能", Imp::DelSkillCmd, 2),
+            ("ClearCopyItem", Imp::ClearCopyItem, 2),
+            ("清除仓库密码", Imp::ClearHumanPassword, 2),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, params, "{name} 的 Execute 形参个数");
+        }
+    }
+
+    /// 批 B 权限门（6 条全 perm 10）。
+    #[test]
+    fn x2b_family_permission_gate_blocks_body() {
+        for name in [
+            "vv杀死",
+            "复活",
+            "VV给予权限",
+            "删除技能",
+            "ClearCopyItem",
+            "清除仓库密码",
+        ] {
+            let (r, sess) = run(&format!("@{name}"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, PERMISSION_TOO_LOW)],
+                "{name}"
+            );
+            assert!(r.frames.is_empty(), "{name}");
+            assert_eq!(sess, GmSession::default(), "{name} 零状态变化");
+        }
+    }
+
+    /// **批 B 命令层**：六条的可达支文本/零帧 + pending 标记（真副作用由 lib.rs 宿主牙覆盖）。
+    /// 怪癖：复活双绿字第一条 **ASCII 句点** / 第二条**全角句号**；清除仓库密码空名两条红、
+    /// 离线**精确静默**（零帧零 note）。
+    #[test]
+    fn x2b_target_control_texts_and_pending() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let view = q_view(&fx, &w, &guilds);
+        // vv杀死：离线红 / 无参面对面失败（宿主 GetPoseCreate 未接 ⇒ 恒失败支 + note）/
+        // 在线 ⇒ 零帧 + pending_gm_die。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@vv杀死 nowhere")),
+            vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
+        );
+        // 无参 + 面前无人（q_view 无 pose_target）⇒ 红「必须与角色面对面站好!!!」。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@vv杀死")),
+            vec![(GmColor::Red, KILL_FACE_FAIL)]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@vv杀死 bob");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "Die 零帧");
+        assert_eq!(sess.pending_gm_die.as_deref(), Some("bob"));
+        // 复活：空参帮助 / 离线红 / 在线双绿字（ASCII 句点 + 全角句号怪癖）+ pending。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@复活")),
+            vec![(GmColor::Red, RE_ALIVE_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@复活 nowhere")),
+            vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@复活 bob")),
+            vec![
+                (GmColor::Green, "bob 已获重生."),
+                (GmColor::Green, "bob 已获重生。")
+            ]
+        );
+        assert_eq!(sess.pending_gm_revive.as_deref(), Some("bob"));
+        // VV给予权限：越界/空名帮助 / 离线红 / 在线 Red 回执 + pending + ShowMakeItemMsg note。
+        for line in ["@VV给予权限", "@VV给予权限 bob 11", "@VV给予权限 bob -1"] {
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, line)),
+                vec![(GmColor::Red, SET_PERMISSION_HELP)],
+                "{line}"
+            );
+        }
+        // 非数字 ⇒ `StrToInt(sPermission, 0)` = 0（在 0..=10 内）⇒ 走回执支而非帮助。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@VV给予权限 bob x")),
+            vec![(GmColor::Red, "bob 当前权限为: 0")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@VV给予权限 nowhere 5")),
+            vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@VV给予权限 bob 5");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "bob 当前权限为: 5")]);
+        assert_eq!(sess.pending_set_permission, Some(("bob".to_string(), 5)));
+        assert!(r
+            .log_note
+            .expect("ShowMakeItemMsg 登记")
+            .contains("ShowMakeItemMsg"));
+        // 删除技能：空参帮助 / 离线红 / 在线零帧 + note（MagicList T-189 同源）。
+        for line in ["@删除技能", "@删除技能 bob"] {
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, line)),
+                vec![(GmColor::Red, DEL_SKILL_HELP)],
+                "{line}"
+            );
+        }
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@删除技能 nowhere x")),
+            vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@删除技能 bob 火球术");
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "宿主收口 ⇒ 命令体零帧"
+        );
+        assert_eq!(
+            sess.pending_del_skill,
+            Some(("bob".to_string(), "火球术".to_string()))
+        );
+        // ClearCopyItem：空名帮助 / 离线红 / 在线零帧 + pending。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ClearCopyItem")),
+            vec![(GmColor::Red, CLEAR_COPY_ITEM_HELP)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ClearCopyItem nowhere")),
+            vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@ClearCopyItem bob");
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "成功/异常两路都零帧"
+        );
+        assert_eq!(sess.pending_clear_copy.as_deref(), Some("bob"));
+        // 清除仓库密码：空名/? ⇒ 两条红；离线 ⇒ 精确静默（零帧零 note）；在线 ⇒ 双绿字 + pending。
+        for line in ["@清除仓库密码", "@清除仓库密码 ?"] {
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, line)),
+                vec![
+                    (GmColor::Red, CLEAR_PASSWORD_TITLE),
+                    (GmColor::Red, CLEAR_PASSWORD_HELP)
+                ],
+                "{line}"
+            );
+        }
+        let r = execute(&mut sess, &cfg, &view, "@清除仓库密码 nowhere");
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(r.log_note.is_none(), "oracle 离线支完全静默（无任何登记）");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@清除仓库密码 bob")),
+            vec![
+                (GmColor::Green, "你的保护密码已被清除!!!"),
+                (GmColor::Green, "bob的保护密码已被清除!!!")
+            ]
+        );
+        assert_eq!(sess.pending_clear_password.as_deref(), Some("bob"));
+    }
 
     /// 批 A 12 条全部接线：现网名/impl/perm 10/params。
     #[test]
