@@ -2263,6 +2263,12 @@ const NOTE_ROBOT_MANAGE: &str =
 // ---- 传送/召唤族的宿主未接与 oracle 越界登记（whitelist.md T-166..T-171）----
 const NOTE_INDEX_OUT_OF_RANGE: &str =
     "oracle 下标越界（`sHumanName[1]`/`@params[0..6]`）被 PlayObject.Chat.cs 的 catch 吞掉 ⇒ 零帧";
+/// **扫盲卡 `openmir2-gm-systemshare-null-sweep`**（X1 F1 同镜头系统化推广）：`SystemShare`
+/// 声明即 null 的集合字段（穷举见卡上清单：DisableSendMsgList:103 / DenySayMsgList:64 /
+/// ItemBind*/Deny*List 等共 29 个 NULL-FOREVER）⇒ 命令体触表即 NRE、被
+/// `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ 零帧。已修复：批次 5 `@禁言`（X1 后扫盲第一例）。
+const NOTE_SYSTEMSHARE_NULL_TABLE: &str =
+    "oracle SystemShare 集合字段声明即 null 全仓零赋值 ⇒ 命令体触表即 NRE、被 PlayObject.Chat.cs:402 顶层 catch 吞 ⇒ 零帧（扫盲卡 openmir2-gm-systemshare-null-sweep；源文本分支真机不可达）";
 const NOTE_NO_WORLD: &str =
     "GmWorld 未注入在线实体表/世界（S1 占位世界）⇒ 无法判定目标在线、坐标或地图 Flag";
 
@@ -2332,15 +2338,20 @@ const NOTE_SIGN_MAP_MOVE: &str = "SignMapMove: oracle 命令体整段注释 ⇒ 
 // `LoadDenyIPAddrList` 的读入体），所以启动后三表恒空、`boDelete` 恒 false。本仓不建这三张表
 // （宿主未接，`whitelist.md` T-162），文本按 oracle 原文发。
 
-/// `DelDenyAccountLogonCommand`（现网 `@-jid`）。
+/// `DelDenyAccountLogonCommand.Execute`（`DelDenyAccountLogonCommand.cs:12-27`，现网 `@-jid`）。
+///
+/// 空名红帮助可达（:18-20 不触表）；非空 `:26` for-init 读 null 表即 NRE ⇒ 零帧
+/// （源文本绿「{名} 没有被禁止登录。」真机不可达）。
 fn del_deny_account(parameters: &str) -> GmResult {
     let params: Vec<&str> = parameters.split(' ').collect();
     let account = params.first().copied().unwrap_or("");
     if account.is_empty() {
         return GmResult::one(GmColor::Red, DEL_DENY_ACCOUNT_HELP.to_string());
     }
-    // for 循环体（含命中提示 `已从禁止登录帐号列表中删除。`）整段被注释 ⇒ boDelete 恒 false。
-    GmResult::one(GmColor::Green, format!("{account}没有被禁止登录。"))
+    // oracle 真机零帧（扫盲卡 openmir2-gm-systemshare-null-sweep）：:26 for-init 读
+    // SystemShare.DenyAccountList（SystemShare.cs:143 声明即 null 全仓零赋值）即 NRE ⇒
+    // 被 PlayObject.Chat.cs:402 顶层 catch 吞 ⇒ :46 绿字真机不可达（循环体本就全注释）。
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 /// `DelDenyChrNameLogonCommand`（现网 `@DelDenyChrNameLogon`）。
@@ -2350,7 +2361,9 @@ fn del_deny_chr_name(parameters: &str) -> GmResult {
     if chr_name.is_empty() {
         return GmResult::one(GmColor::Red, DEL_DENY_CHRNAME_HELP.to_string());
     }
-    GmResult::one(GmColor::Green, format!("{chr_name}没有被禁止登录。"))
+    // oracle 真机零帧：:26 for-init 读 SystemShare.DenyChrNameList（SystemShare.cs:139
+    // 声明即 null 全仓零赋值）即 NRE ⇒ 绿字真机不可达（循环体本就全注释）。
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 /// `DelDenyIPaddrLogonCommand`（现网 `@-jip`）：倒序循环体同样被注释 ⇒ 恒 false。
@@ -2360,7 +2373,9 @@ fn del_deny_ip(parameters: &str) -> GmResult {
     if ip.is_empty() {
         return GmResult::one(GmColor::Red, DEL_DENY_IP_HELP.to_string());
     }
-    GmResult::one(GmColor::Green, format!("{ip}没有被禁止登录。"))
+    // oracle 真机零帧：:26 for-init 读 SystemShare.DenyIPAddrList（SystemShare.cs:135
+    // 声明即 null 全仓零赋值）即 NRE ⇒ 绿字真机不可达。
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 /// `DenyAccountLogonCommand`（现网 `@+jid`）：`sFixDeny[0] == '1'` 走「永久」支。
@@ -2435,18 +2450,24 @@ fn show_deny_account(sess: &GmSession) -> GmResult {
     if sess.permission < 6 {
         return GmResult::empty();
     }
-    GmResult::one(GmColor::Green, "禁止登录帐号列表为空。".to_string())
+    // oracle 真机零帧：:15 读 SystemShare.DenyAccountList（SystemShare.cs:143 声明即 null
+    // 全仓零赋值）即 NRE ⇒ 绿字真机不可达（循环体本就全注释；perm<6 静默门为 oracle 原样）。
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 /// `ShowDenyChrNameLogonCommand`（现网 `@ShowDenyChrNameLogon`）：无权限二次校验，表空即提示。
 fn show_deny_chr_name() -> GmResult {
-    GmResult::one(GmColor::Green, "禁止登录角色列表为空。".to_string())
+    // oracle 真机零帧：:15 直接读 SystemShare.DenyChrNameList（SystemShare.cs:139 声明即
+    // null 全仓零赋值）即 NRE ⇒ 绿字真机不可达（无 perm<6 内门，体首即触表）。
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 /// `ShowDenyIPaddrLogonCommand`（现网 `@+-jip`）：表空提示**沿用角色文案**
 /// （`禁止登录角色列表为空。`），是 oracle 的复制粘贴怪癖，照抄。
 fn show_deny_ip() -> GmResult {
-    GmResult::one(GmColor::Green, "禁止登录角色列表为空。".to_string())
+    // oracle 真机零帧：:16 读 SystemShare.DenyIPAddrList（SystemShare.cs:135 声明即 null
+    // 全仓零赋值）即 NRE ⇒ 绿字真机不可达（表空提示沿用角色文案的复制粘贴怪癖随之不可达）。
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 // ---------------------------- 重载/管理族（设计件 §4.4 第 4 族）----------------------------
@@ -3594,11 +3615,10 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
 ///   catch 吞掉 ⇒ **零帧**；
 /// - `:29` `dwTime = (uint)HUtil32.StrToInt(sTime, 5)`（`int.TryParse` 失败取 5；负值按
 ///   `unchecked` 回转成 uint，例如 `-1` ⇒ `4294967295`）；
-/// - `:30-55` `EnterCriticalSection/LeaveCriticalSection(DenySayMsgList)` 之间的
-///   **整段 `ContainsKey`/`Add`/`GetIndex` 逻辑（`:33-50`）被注释** ⇒ 不改任何状态、
-///   不加任何禁言名单、不落库；
-/// - `:56` 唯一实际副作用：`SysMsg("{0} 已被禁言{1}分钟", Red, Hint)`——**发给调用者**
-///   （`PlayerActor`），不是目标玩家。
+/// - `:30` `EnterCriticalSection(SystemShare.DenySayMsgList)` 对 **null 表**（`SystemShare.cs:64`
+///   声明即 null 全仓零赋值，扫盲卡实证）即 NRE ⇒ 被 `PlayObject.Chat.cs:402` 顶层 catch 吞
+///   ⇒ **零帧**——`:56` 的红字 SysMsg（`GameCommandShutupHumanMsg`，发给调用者）真机不可达；
+///   `:33-50` 的名单写段本就整段注释。本仓按真机行为落地：校验过 ⇒ 零帧 + `log_note`。
 fn shutup(parameters: &str) -> GmResult {
     let params = split_params(parameters);
     let human = params.first().copied().unwrap_or("");
@@ -3613,9 +3633,13 @@ fn shutup(parameters: &str) -> GmResult {
         Some(true) => return red(SHUTUP_HELP),
         Some(false) => {}
     }
-    // `(uint)HUtil32.StrToInt(sTime, 5)`：int → uint 的 unchecked 回转用 `as`。
-    let dw_time = str_to_int(time, 5) as u32;
-    red(format!("{human} 已被禁言{dw_time}分钟"))
+    // `(uint)HUtil32.StrToInt(sTime, 5)`：int → uint 的 unchecked 回转用 `as`（:29）。
+    let _dw_time = str_to_int(time, 5) as u32;
+    // oracle 真机零帧（reviewer-21 X1 审查同镜头盲区，扫盲卡 openmir2-gm-systemshare-null-sweep）：
+    // :30 `EnterCriticalSection(SystemShare.DenySayMsgList)` 对 null 表即 NRE ⇒
+    // 被 PlayObject.Chat.cs:402 顶层 catch 吞 ⇒ :56 的红字 SysMsg 真机不可达
+    // （DenySayMsgList=SystemShare.cs:64 声明即 null 全仓零赋值；:33-50 名单写段亦全注释）。
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 /// `ShowEffectCommand.Execute`（`src/Modules/GameCommand/Commands/ShowEffectCommand.cs:12-71`，
@@ -6237,7 +6261,10 @@ mod tests {
 
         let (r, _) = run_gm("@ShowDenyChrNameLogon");
         assert!(r.found);
-        assert_eq!(texts(&r), vec![(GmColor::Green, "禁止登录角色列表为空。")]);
+        // 真机零帧（扫盲卡）：Count 读 SystemShare.DenyChrNameList（声明即 null）⇒ NRE ⇒
+        // 绿字不可达；note 登记（无 perm<6 内门，体首即触表）。
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(r.log_note.expect("必须登记").contains("声明即 null"));
 
         let (r, _) = run_gm("@ShowDenyCharNameLogon");
         assert!(!r.found);
@@ -6248,17 +6275,18 @@ mod tests {
         );
     }
 
-    /// 封禁名单 9 条的文本（含「表恒空」与复制粘贴怪癖）。
+    /// 封禁名单族 9 条：可达支文本逐字节 + 触表六命令零帧（扫盲卡
+    /// `openmir2-gm-systemshare-null-sweep`，review F1 同款运行层真相——Del 三条的 for-init
+    /// 与 Show 三条的 Count 读 SystemShare.Deny*List 声明即 null（SystemShare.cs:135/:139/:143）
+    /// ⇒ NRE 被 Chat.cs:402 顶层 catch 吞 ⇒ 零帧；+jid 三条只调 Save 方法（全注释体）⇒
+    /// 绿字可达不变；`+jip` 4 参 `@params[3]` 越界零帧不变，见下一条用例）。
     #[test]
     fn deny_family_texts_match_oracle() {
         use GmColor::*;
         let cases: &[(&str, GmColor, &str)] = &[
             ("@-jid", Red, DEL_DENY_ACCOUNT_HELP),
-            ("@-jid acct", Green, "acct没有被禁止登录。"),
             ("@DelDenyChrNameLogon", Red, DEL_DENY_CHRNAME_HELP),
-            ("@DelDenyChrNameLogon 张三", Green, "张三没有被禁止登录。"),
             ("@-jip", Red, DEL_DENY_IP_HELP),
-            ("@-jip 1.2.3.4", Green, "1.2.3.4没有被禁止登录。"),
             ("@+jid", Red, DENY_ACCOUNT_HELP),
             ("@+jid acct 1", Green, "acct已加入禁止登录帐号列表"),
             ("@+jid acct 0", Green, "acct已加入临时禁止登录帐号列表"),
@@ -6279,15 +6307,32 @@ mod tests {
                 Green,
                 "1.2.3.4已加入临时禁止登录IP列表",
             ),
-            // Show 族：三表恒空；`ShowDenyIPaddr` 的表空提示沿用角色文案。
-            ("@+-jid", Green, "禁止登录帐号列表为空。"),
-            ("@ShowDenyChrNameLogon", Green, "禁止登录角色列表为空。"),
-            ("@+-jip", Green, "禁止登录角色列表为空。"),
         ];
         for (line, color, text) in cases {
             let (r, _) = run_gm(line);
             assert_eq!(texts(&r), vec![(*color, *text)], "{line}");
             assert!(r.found && r.parsed, "{line}");
+        }
+        // 触表六命令：真机 NRE ⇒ 零帧 + log_note（SYSTEMSHARE_NULL_TABLE）。
+        for line in [
+            "@-jid acct",
+            "@DelDenyChrNameLogon 张三",
+            "@-jip 1.2.3.4",
+            "@+-jid",
+            "@ShowDenyChrNameLogon",
+            "@+-jip",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(r.found && r.parsed, "{line} 命中命令体");
+            assert!(
+                r.msgs.is_empty() && r.frames.is_empty(),
+                "{line} 触表应零帧"
+            );
+            let note = r.log_note.expect("{line} 必须登记 NRE 零帧");
+            assert!(
+                note.contains("声明即 null") && note.contains("零帧"),
+                "{note}"
+            );
         }
     }
 
@@ -7433,35 +7478,28 @@ mod tests {
         );
     }
 
-    /// ① 正常触发：**恰好一条** Red SysMsg，文本逐字节（UTF-8 断言 + 线上 GBK 字节断言）。
-    ///
-    /// oracle `ShutupCommand.cs:56`：`SysMsg(string.Format(GameCommandShutupHumanMsg,
-    /// sHumanName, dwTime), MsgColor.Red, MsgType.Hint)`；`:33-50` 的 `DenySayMsgList`
-    /// 写入整段被注释 ⇒ 没有任何其它副作用。
+    /// ① 正常触发：**零帧**（扫盲卡 `openmir2-gm-systemshare-null-sweep`，X1 F1 同款
+    /// 运行层真相）。oracle 源文本 `ShutupCommand.cs:56` 有红字 SysMsg
+    /// （`GameCommandShutupHumanMsg`），但 `:30` `EnterCriticalSection(SystemShare.DenySayMsgList)`
+    /// 对 **null 表**（`SystemShare.cs:64` 声明即 null 全仓零赋值）即 NRE ⇒ 被
+    /// `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ `:56` 真机不可达 ⇒ 任何合法参数都零帧、
+    /// 零副作用。牙：把 `:30` 的 NRE 触点改成不触表（即删 Enter）⇒ 本用例仍绿——
+    /// 变异是改回发红字（源文本建模）⇒ 本用例红。
     #[test]
-    fn shutup_sends_exactly_one_red_sysmsg_bytes() {
+    fn shutup_enters_null_table_and_stays_zero_frames() {
         let (r, _) = run_gm("@禁言 zhangsan 30");
         assert!(r.found && r.parsed, "命中命令体，不走未知命令回落");
-        assert_eq!(r.msgs.len(), 1, "恰好一条 SysMsg（不能多帧）");
-        assert_eq!(r.msgs[0].color, GmColor::Red);
-        assert_eq!(r.msgs[0].text, "zhangsan 已被禁言30分钟");
-        assert!(r.frames.is_empty(), "本命令只发 SysMsg，无其它帧");
-        assert!(r.log_note.is_none(), "正常支没有吞异常/未接项");
-        // 线上编码（`gbk_encode`）后的字节：ASCII 段 + GBK 双字节字符。
-        assert_eq!(
-            crate::downlink::gbk(&r.msgs[0].text),
-            vec![
-                0x7a, 0x68, 0x61, 0x6e, 0x67, 0x73, 0x61, 0x6e, // "zhangsan"
-                0x20, // ' '
-                0xd2, 0xd1, // 已
-                0xb1, 0xbb, // 被
-                0xbd, 0xfb, // 禁
-                0xd1, 0xd4, // 言
-                0x33, 0x30, // "30"
-                0xb7, 0xd6, // 分
-                0xd6, 0xd3, // 钟
-            ]
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "真机零帧");
+        let note = r.log_note.expect("零帧必须登记 NRE 触点");
+        assert!(
+            note.contains("声明即 null") && note.contains("零帧"),
+            "{note}"
         );
+        // 合法参数三形态同答（校验支在 Enter 之前 ⇒ 帮助文本不受影响，见 ② 用例）。
+        for line in ["@禁言 bob 1", "@禁言 玩家 99999"] {
+            let (r2, _) = run_gm(line);
+            assert!(r2.msgs.is_empty() && r2.frames.is_empty(), "{line} 应零帧");
+        }
     }
 
     /// ② 参数校验与越界怪癖（`ShutupCommand.cs:21-29`）。
@@ -7498,21 +7536,17 @@ mod tests {
             texts(&run_gm("@禁言 x").0),
             vec![(GmColor::Red, SHUTUP_HELP)]
         );
-        // 时间不可解析 ⇒ `StrToInt` 缺省 5。
-        assert_eq!(
-            texts(&run_gm("@禁言 zhangsan abc").0),
-            vec![(GmColor::Red, "zhangsan 已被禁言5分钟")]
-        );
-        // 负值经 `(uint)` unchecked 回转（-1 ⇒ 4294967295），再按 uint 十进制格式化。
-        assert_eq!(
-            texts(&run_gm("@禁言 zhangsan -1").0),
-            vec![(GmColor::Red, "zhangsan 已被禁言4294967295分钟")]
-        );
-        // 多余的参数被忽略（只看 `@params[0]`/`[1]`）。
-        assert_eq!(
-            texts(&run_gm("@禁言 zhangsan 30 extra").0),
-            vec![(GmColor::Red, "zhangsan 已被禁言30分钟")]
-        );
+        // 时间不可解析 / 负值回转 / 多余参数——全部在 `:30` Enter(null) NRE 之后 ⇒ 真机零帧
+        // （源文本的红字回执真机不可达；`StrToInt` 缺省 5 与 uint 回转逻辑随之不可达）。
+        for line in [
+            "@禁言 zhangsan abc",
+            "@禁言 zhangsan -1",
+            "@禁言 zhangsan 30 extra",
+        ] {
+            let (r, _) = run_gm(line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 应零帧");
+            assert!(r.log_note.is_some(), "{line} 必须登记 NRE 触点");
+        }
     }
 
     /// ③ 权限门不过：命令体**零贡献**，只有 `CommandSystem.Execute` 的通用 `权限不够!!!`。
@@ -7540,8 +7574,9 @@ mod tests {
     /// 尾部三个空参 ⇒ 三个尾随空格），再把 `Permission` 临时置 10 执行、随后还原。
     ///
     /// 本用例走**宿主跳线**（`npc::NpcPlayer` 覆写的 `set_permission`/`process_user_line_msg`，
-    /// 卡 `openmir2-gm-script-host-seam`）：不抬权 ⇒ 权限门；抬权 ⇒ 恰好一条回执（逐字节 +
-    /// Red/Hint 色词）；执行后 `Permission` 还原。`@Login` 经真脚本引擎的端到端用例在
+    /// 卡 `openmir2-gm-script-host-seam`）：不抬权 ⇒ 权限门；抬权 ⇒ **零帧**（扫盲卡：
+    /// `@禁言` 触 null 表 NRE ⇒ 被顶层 catch 吞 ⇒ 红字回执真机不可达；notes 有登记）；
+    /// 执行后 `Permission` 还原。`@Login` 经真脚本引擎的端到端用例在
     /// `npc.rs` 的 `gmexecute_*` 组（含 `finally` 还原与目标解析）。
     #[test]
     fn shutup_script_gmexecute_path_through_npc_player_seam() {
@@ -7571,16 +7606,17 @@ mod tests {
             player.set_permission(10);
             player.process_user_line_msg(&s_data);
             player.set_permission(0);
-            assert_eq!(player.frames.len(), 1, "恰好一条 SysMsg");
-            assert_eq!(
-                player.frames[0].msg.as_deref(),
-                Some("新人 已被禁言10000分钟"),
-                "脚本里写的时长是 10000（分钟），原样进文本"
+            assert!(
+                player.frames.is_empty(),
+                "脚本路同样零帧：命令体 :30 Enter(null) NRE ⇒ 被顶层 catch 吞 ⇒ 红字回执真机不可达"
             );
-            assert_eq!(
-                (player.frames[0].n_param1, player.frames[0].n_param2),
-                (0xFF, 0x38),
-                "Red/Hint 的部署色词（`RedMsgFColor/RedMsgBColor`）"
+            assert!(
+                player
+                    .gm_notes
+                    .iter()
+                    .any(|n| n.contains("声明即 null") && n.contains("零帧")),
+                "脚本路零帧必须登记：{:?}",
+                player.gm_notes
             );
             assert!(player.gm_direct_frames.is_empty(), "`@禁言` 无直发帧");
         }

@@ -4541,64 +4541,74 @@ Other
         (frames, sess.permission, notes, direct)
     }
 
-    /// ① 抬权后命令真执行（载体 = 已实现的 `@禁言`）：**恰好一条** SysMsg，正文逐字节。
-    ///
-    /// oracle 链：`ExecutionProcessingSys.cs:4938-4947`（抬权 + `ProcessUserLineMsg` + finally）
-    /// ⇒ `PlayObject.Chat.cs:368` ⇒ `CommandSystem.Execute` ⇒ 权限门 ⇒ `ShutupCommand.Execute:56`。
+    /// ① 抬权后命令真执行（载体 = 已实现的 `@禁言`）：**零帧**（扫盲卡
+    /// `openmir2-gm-systemshare-null-sweep`，X1 F1 同款运行层真相——`ShutupCommand.cs:30`
+    /// `EnterCriticalSection(SystemShare.DenySayMsgList)` 对 null 表即 NRE ⇒ 被
+    /// `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ `:56` 红字真机不可达）。
     /// 牙 #1：删掉 `actions.rs` 的 `set_permission(10)` ⇒ 本用例变 `权限不够!!!` 必红。
     #[test]
     fn gmexecute_seam_shutup_self_emits_exactly_one_sysmsg() {
         // `sParam2 = Self`（OrdinalIgnoreCase）⇒ 角色名「新人」，与部署 `@Login` 的调用同形。
         let (frames, permission, notes, direct) =
             run_login_gm("新人", 0, gmexec_action("禁言", "self", "10000"));
-        assert_eq!(
-            sys_frames(&frames),
-            vec![("新人 已被禁言10000分钟", 0xFF, 0x38)],
-            "恰好一条 Red/Hint SysMsg，正文逐字节（含脚本里写的 10000 分钟）"
+        assert!(
+            frames.is_empty(),
+            "真机零帧：命令体 :30 触 null 表即 NRE，红字回执不可达"
         );
-        assert!(notes.is_empty(), "正常路径不得有登记：{notes:?}");
+        assert!(
+            notes
+                .iter()
+                .any(|n| n.contains("声明即 null") && n.contains("零帧")),
+            "零帧必须登记 NRE 触点：{notes:?}"
+        );
         assert!(direct.is_empty(), "`@禁言` 无 `SendDefMessage` 直发帧");
         assert_eq!(permission, 0, "抬权必须还回进入前的值");
     }
 
-    /// ⑤ 目标解析：`self`（→ 角色名）与显式名字两条路。
+    /// ⑤ 目标解析：`self`（→ 角色名）与显式名字两条路（真机均零帧，见
+    /// `gmexecute_seam_shutup_self_emits_exactly_one_sysmsg`；这里钉「两条路都命中命令体」）。
     #[test]
     fn gmexecute_seam_target_resolution_self_and_explicit_name() {
         // `self`：`sParam2` 按 `OrdinalIgnoreCase` 折成 `ChrName`。
-        let (via_self, ..) = run_login_gm("新人", 0, gmexec_action("禁言", "Self", "30"));
-        assert_eq!(
-            sys_frames(&via_self),
-            vec![("新人 已被禁言30分钟", 0xFF, 0x38)]
-        );
-        // 显式名字：原样进命令行（`@禁言 张三 30`），不回填角色名。
-        let (via_name, ..) = run_login_gm("新人", 0, gmexec_action("禁言", "张三", "30"));
-        assert_eq!(
-            sys_frames(&via_name),
-            vec![("张三 已被禁言30分钟", 0xFF, 0x38)]
-        );
+        let (via_self, _, notes_self, _) =
+            run_login_gm("新人", 0, gmexec_action("禁言", "Self", "30"));
+        assert!(via_self.is_empty(), "真机零帧");
+        assert!(notes_self
+            .iter()
+            .any(|n| n.contains("声明即 null") && n.contains("零帧")));
+        // 显式名字：原样进命令行（`@禁言 张三 30`），不回填角色名；同样零帧。
+        let (via_name, _, notes_name, _) =
+            run_login_gm("新人", 0, gmexec_action("禁言", "张三", "30"));
+        assert!(via_name.is_empty(), "显式名同样零帧");
+        assert!(notes_name
+            .iter()
+            .any(|n| n.contains("声明即 null") && n.contains("零帧")));
     }
 
-    /// ② `finally` 还原：进入前的值 **7** ⇒ 执行后仍是 7（不是 0）。
+    /// ② `finally` 还原：进入前的值 **7** ⇒ 执行后仍是 7（不是 0）。帧面为零帧
+    /// （`@禁言` 真机零帧，见 `gmexecute_seam_shutup_self_emits_exactly_one_sysmsg`）。
     ///
     /// oracle `:4938` 是 `byte btOldPermission = playerActor.Permission`——还原的是**进入前的值**。
     #[test]
     fn gmexecute_seam_restores_entering_permission_seven() {
-        let (frames, permission, ..) = run_login_gm("新人", 7, gmexec_action("禁言", "self", "5"));
-        assert_eq!(
-            sys_frames(&frames),
-            vec![("新人 已被禁言5分钟", 0xFF, 0x38)]
-        );
+        let (frames, permission, notes, _) =
+            run_login_gm("新人", 7, gmexec_action("禁言", "self", "5"));
+        assert!(frames.is_empty(), "真机零帧");
+        assert!(notes
+            .iter()
+            .any(|n| n.contains("声明即 null") && n.contains("零帧")));
         assert_eq!(permission, 7, "还原到进入前的 7，不是常量 0");
     }
 
-    /// ② 第二个进入值 **10** ⇒ 执行后仍是 10（幂等：抬权不把 10 变成别的）。
+    /// ② 第二个进入值 **10** ⇒ 执行后仍是 10（幂等：抬权不把 10 变成别的）。帧面为零帧。
     #[test]
     fn gmexecute_seam_restores_entering_permission_ten() {
-        let (frames, permission, ..) = run_login_gm("新人", 10, gmexec_action("禁言", "self", "5"));
-        assert_eq!(
-            sys_frames(&frames),
-            vec![("新人 已被禁言5分钟", 0xFF, 0x38)]
-        );
+        let (frames, permission, notes, _) =
+            run_login_gm("新人", 10, gmexec_action("禁言", "self", "5"));
+        assert!(frames.is_empty(), "真机零帧");
+        assert!(notes
+            .iter()
+            .any(|n| n.contains("声明即 null") && n.contains("零帧")));
         assert_eq!(permission, 10);
     }
 
@@ -4684,7 +4694,8 @@ Other
     ///
     /// 这是窗口判据的代码侧镜像：客户端 `@` 走 `handle_say` → `gmcmd::execute`，
     /// 权限取 `sg.gm.permission`；GMEXECUTE 的抬权写的是同一个字段 ⇒ 若还原失败，
-    /// 下面这条直呼会真的执行并回「已被禁言」文本（而不是 `权限不够!!!`）。
+    /// 下面这条直呼会真的执行并回命令体文本（`@禁言` 真机零帧，见扫盲卡
+    /// `openmir2-gm-systemshare-null-sweep`；而不是 `权限不够!!!`）。
     #[test]
     fn gmexecute_seam_does_not_leak_permission_to_client_commands() {
         let host = host_with(vec![def_with_actions(
@@ -4707,10 +4718,16 @@ Other
                 pwd_busy: false,
             });
             let _ = host.run_login(&mut player).expect("QManage 必须可解析");
-            assert_eq!(
-                sys_frames(&player.frames).len(),
-                1,
-                "脚本路径确实执行了一条"
+            // 脚本路径真机零帧（`@禁言` 触 null 表 NRE，见扫盲卡）——但命令**确实命中**
+            // （notes 有登记），非权限门挡下。
+            assert!(player.frames.is_empty(), "真机零帧");
+            assert!(
+                player
+                    .gm_notes
+                    .iter()
+                    .any(|n| n.contains("声明即 null") && n.contains("零帧")),
+                "脚本路径确实执行了命令体：{:?}",
+                player.gm_notes
             );
         }
         assert_eq!(sess.permission, 0, "脚本路径结束后会话权限已还原");
@@ -4718,7 +4735,6 @@ Other
         let direct = gmcmd::execute(&mut sess, &cfg, &world, "@禁言 新人 30");
         assert_eq!(direct.msgs.len(), 1);
         assert_eq!(direct.msgs[0].text, "权限不够!!!");
-        assert!(direct.msgs.iter().all(|m| !m.text.contains("已被禁言")));
         assert_eq!(sess.permission, 0);
     }
 

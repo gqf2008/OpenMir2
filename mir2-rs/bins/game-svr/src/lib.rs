@@ -33652,9 +33652,13 @@ mod tests {
     /// （`PlayObject.Base.cs:2824-2828`，命中即清 `string.Empty` ⇒ 一次性）。
     ///
     /// **卡 `openmir2-gm-script-exec-seams`（商家路）**：`CM_MERCHANTDLGSELECT` 送进
-    /// `run_merchant_goto` 的脚本里写 `GMEXECUTE 禁言 self 10000`，必须与 `@Login`（T-210）
-    /// 同口径产出**恰好一条** `SM_SYSMESSAGE(100)`（`@禁言` 的 oracle 文案逐字节），
+    /// `run_merchant_goto` 的脚本里写 `GMEXECUTE f`，必须与 `@Login`（T-210）
+    /// 同口径产出**恰好一条** `SM_SYSMESSAGE(100)`（`@f` 缺参红帮助逐字节），
     /// 且抬权（`Permission 3 → 10`）在脚本结束后还原成进入前的 3。
+    ///
+    /// 载体选择（扫盲卡 `openmir2-gm-systemshare-null-sweep`）：原载体 `禁言` 真机零帧
+    /// （`ShutupCommand.cs:30` 触 null 表 NRE ⇒ 红字回执不可达），故换 `@f`——
+    /// 单条确定性红字、零副作用，`GMEXECUTE` 跳线属性不变。
     ///
     /// 牙：删 `run_merchant_goto` 的装桥块 ⇒ 本用例红（0 条 SysMsg：`process_user_line_msg`
     /// 回到 `ScriptPlayer` 缺省 no-op）；删块尾 `sg.gm = s` 的放回 ⇒ 会话 GM 态变默认值、
@@ -33664,7 +33668,7 @@ mod tests {
         let mut rig = T142Rig::new(vec![t142_record(
             "@main",
             "",
-            vec![gmexec_act("禁言", "self", "10000")],
+            vec![gmexec_act("f", "", "")],
         )]);
         rig.sessions.get_mut("hero").unwrap().gm.permission = 3;
         let guilds = mir2_world::GuildManager::new();
@@ -33689,7 +33693,7 @@ mod tests {
             idents(&frames)
         );
         let text = gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..]));
-        assert_eq!(text, "hero 已被禁言10000分钟", "`@禁言` 的 SysMsg 逐字节");
+        assert_eq!(text, "命令格式: @f 地图号", "`@f` 的 SysMsg 逐字节");
         assert_eq!(
             rig.sessions["hero"].gm.permission, 3,
             "抬权必须还回进入前的值（3），且会话 GM 态已原样放回"
@@ -33711,7 +33715,8 @@ mod tests {
     }
 
     /// 同卡的**点击路**：`CM_CLICKNPC(@main)`（`PlayObject.Base.cs:676` → `GotoLable("@main")`）
-    /// 与对话框是同一个 [`run_merchant_goto`] ⇒ 装桥后脚本 `GMEXECUTE` 必须同样出帧。
+    /// 与对话框是同一个 [`run_merchant_goto`] ⇒ 装桥后脚本 `GMEXECUTE` 必须同样出帧
+    /// （载体 `@f`，理由见上一用例——原载体 `禁言` 真机零帧）。
     ///
     /// 牙：把 `handle_click_npc_cmd` 里 `run_merchant_goto(...)` 的 `gm` 实参换回 `None` ⇒ 红。
     #[test]
@@ -33719,7 +33724,7 @@ mod tests {
         let mut rig = T142Rig::new(vec![t142_record(
             "@main",
             "",
-            vec![gmexec_act("禁言", "self", "30")],
+            vec![gmexec_act("f", "", "")],
         )]);
         let guilds = mir2_world::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
@@ -33744,7 +33749,7 @@ mod tests {
         );
         assert_eq!(
             gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..])),
-            "hero 已被禁言30分钟"
+            "命令格式: @f 地图号"
         );
     }
 
@@ -41527,21 +41532,22 @@ break
         }
     }
 
-    /// 封禁名单族 9 条（权限 10）：文本逐字节 + `@params[3]` 越界零帧。
+    /// 封禁名单族 9 条（权限 10）：可达支文本逐字节 + 触表支零帧（扫盲卡
+    /// `openmir2-gm-systemshare-null-sweep`，review F1 同款运行层真相——Del/Show 六命令的
+    /// 循环/Count 读 SystemShare.Deny*List 声明即 null（SystemShare.cs:135/:139/:143）⇒
+    /// NRE 被 Chat.cs:402 顶层 catch 吞 ⇒ 零帧；+jid 三条只调 Save 方法（全注释体）⇒
+    /// 绿字可达不变；4 参 `@params[3]` 越界零帧不变）。
     #[test]
     fn gm_batch2_deny_family_through_handle_say() {
         let mut rig = GmRig::new();
         let cases: &[(&str, u16, &str)] = &[
             ("@-jid", 0x38FF, "命令格式: @-jid 登录帐号"),
-            ("@-jid acct", 0xFFDB, "acct没有被禁止登录。"),
             (
                 "@DelDenyChrNameLogon",
                 0x38FF,
                 "命令格式: @DelDenyChrNameLogon 人物名称",
             ),
-            ("@DelDenyChrNameLogon 张三", 0xFFDB, "张三没有被禁止登录。"),
             ("@-jip", 0x38FF, "命令格式: @-jip IP地址"),
-            ("@-jip 1.2.3.4", 0xFFDB, "1.2.3.4没有被禁止登录。"),
             ("@+jid", 0x38FF, "命令格式: @+jid 登录帐号 是否永久封(0,1)"),
             ("@+jid acct 1", 0xFFDB, "acct已加入禁止登录帐号列表"),
             ("@+jid acct 0", 0xFFDB, "acct已加入临时禁止登录帐号列表"),
@@ -41555,9 +41561,6 @@ break
             ("@+jip 1.2.3.4", 0xFFDB, "1.2.3.4已加入临时禁止登录IP列表"),
             // 4 参才轮到 `@params[3]`。
             ("@+jip 1.2.3.4 a b 1", 0xFFDB, "1.2.3.4已加入禁止登录IP列表"),
-            ("@+-jid", 0xFFDB, "禁止登录帐号列表为空。"),
-            ("@ShowDenyChrNameLogon", 0xFFDB, "禁止登录角色列表为空。"),
-            ("@+-jip", 0xFFDB, "禁止登录角色列表为空。"),
         ];
         for (line, param, text) in cases {
             let frames = rig.say_gm(line);
@@ -41566,10 +41569,29 @@ break
             assert_eq!(got_param, *param, "{line}");
             assert_eq!(&got_text, text, "{line}");
         }
+        // 触表六命令：真机 NRE ⇒ 零帧 + log_note（SYSTEMSHARE_NULL_TABLE）。
+        for line in [
+            "@-jid acct",
+            "@DelDenyChrNameLogon 张三",
+            "@-jip 1.2.3.4",
+            "@+-jid",
+            "@ShowDenyChrNameLogon",
+            "@+-jip",
+        ] {
+            let frames = rig.say_gm(line);
+            assert!(frames.is_empty(), "{line} 应零帧");
+        }
         // 2/3 参 ⇒ `@params[3]` 越界（catch 吞）⇒ 零帧。
         for line in ["@+jip 1.2.3.4 a", "@+jip 1.2.3.4 a b"] {
             assert!(rig.say_gm(line).is_empty(), "{line} 应零帧");
         }
+        assert!(rig
+            .sessions
+            .get("aaa")
+            .expect("rig 恒有 aaa")
+            .gm
+            .pending_clear_bag
+            .is_none());
     }
 
     /// 重载/管理族 14 条（权限 10）：文本逐字节 + 零帧项。
@@ -43152,7 +43174,7 @@ SendRefMsgRange=15
                     record_list: vec![t142_record(
                         "@StdModeFunc15",
                         "",
-                        vec![gmexec_act("禁言", "self", "45")],
+                        vec![gmexec_act("f", "", "")],
                     )],
                     quest_count: 0,
                 }],
@@ -43256,7 +43278,7 @@ SendRefMsgRange=15
         );
         assert_eq!(
             gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..])),
-            "hero 已被禁言45分钟"
+            "命令格式: @f 地图号"
         );
         assert!(
             idents.contains(&mir2_protocol::messages::SM_EAT_OK),
@@ -72508,10 +72530,11 @@ mod tests {",
         }
     }
 
-    /// **卡 `openmir2-gm-script-exec-seams`（固定 NPC 路；部署证据「改属性」）**：
+    /// **卡 `openmir2-gm-script-exec-seams`（固定 NPC 路）**：
     /// `GuildOfficial.UserSelect`（部署件 `Envir/Npc_def/比奇国王-0122.txt` 走的同一条
-    /// `Npc_def` 漏斗）里写 `GMEXECUTE 禁言 self 20` 必须出帧——此前这一路 `NpcPlayer` 无桥，
+    /// `Npc_def` 漏斗）里写 `GMEXECUTE f` 必须出帧——此前这一路 `NpcPlayer` 无桥，
     /// `ProcessUserLineMsg` 是 `ScriptPlayer` 缺省 no-op ⇒ 零帧。
+    /// 载体 `@f`（原部署证据 `禁言` 真机零帧，扫盲卡 `openmir2-gm-systemshare-null-sweep`）。
     ///
     /// 牙：把 `FixedNpcScriptCtx::goto_label` 的 `ScriptGmParts::with` 换成 `None` ⇒ 本用例红。
     #[test]
@@ -72521,7 +72544,7 @@ mod tests {",
         f.inject_npc_def_script(
             "[@main]
 #ACT
-GMEXECUTE 禁言 self 20
+GMEXECUTE f
 ",
         );
         let cfg = gmcmd::GmConfig::default();
@@ -72551,7 +72574,7 @@ GMEXECUTE 禁言 self 20
         );
         assert_eq!(
             gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..])),
-            "hero 已被禁言20分钟"
+            "命令格式: @f 地图号"
         );
     }
 
@@ -72692,8 +72715,9 @@ GMEXECUTE 禁言 self 20
     }
 
     /// **卡 `openmir2-gm-script-exec-seams`（组队路）**：`run_party_goto_label` 跑的 QFunction
-    /// 脚本里写 `GMEXECUTE 禁言 self 60` 必须出帧（oracle `FunctionNPC.GotoLable`），且会话 GM 态
+    /// 脚本里写 `GMEXECUTE f` 必须出帧（oracle `FunctionNPC.GotoLable`），且会话 GM 态
     /// （`Permission 5`）在脚本结束后**原样放回**（移出/放回等价于同一个 `PlayObject`）。
+    /// 载体 `@f`（原 `禁言` 真机零帧，扫盲卡 `openmir2-gm-systemshare-null-sweep`）。
     ///
     /// 牙：删 `run_party_goto_label` 的装桥块 ⇒ 0 条 SysMsg；删块尾 `sg.gm = s` 的放回 ⇒
     /// 会话 GM 态变默认值、Permission 5 丢（断言红）。
@@ -72715,7 +72739,7 @@ GMEXECUTE 禁言 self 20
                     record_list: vec![t142_record(
                         "@GroupCreate",
                         "",
-                        vec![gmexec_act("禁言", "self", "60")],
+                        vec![gmexec_act("f", "", "")],
                     )],
                     quest_count: 0,
                 }],
@@ -72794,7 +72818,7 @@ GMEXECUTE 禁言 self 20
         );
         assert_eq!(
             gbk_decode(&mir2_protocol::edcode::decode(&sys[0][12..])),
-            "Hero 已被禁言60分钟"
+            "命令格式: @f 地图号"
         );
         assert_eq!(
             ground_sessions["Hero"].gm.permission, 5,
