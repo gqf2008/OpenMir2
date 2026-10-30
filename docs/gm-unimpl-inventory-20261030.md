@@ -198,10 +198,16 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   **调用者 CurrY** 怪癖/离线红；fdht7ed 师徒（MasterList 在线徒弟互发，对方消息接缝登记）/
   sdasdert 配偶（性别分支含「他」字怪癖）；Reconnection：RM_RECONNECTION ⇒ 宿主
   `sm_reconnect` 出 SM_RECONNECT 线上帧；MemberFuncEx/是我 GotoLable 接缝 log_note）。
-  **批 B 待续**：重 R 子项 6（vv杀死/复活/VV给予权限/删除技能/ClearCopyItem/清除仓库密码）。
-- **现存 `Imp::Unimplemented` = 74 − 41 = 33**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
-  thirty_command_bodies` 的 152 已接 / 33 未接断言；改坏任一计数 ⇒ 该测试红）。
-- 剩余缺口族：F3 / M6 / C5 / W4 / X2 批 B 6（§4.3 分族索引不变）。
+- **族 X2 批 B 6 条已落地**（同卡，重 R 真副作用写面）：vv杀死（带名离线红/无参面对面失败，
+  命中 `World::kill` 复用既有 Die 结算，零帧）/复活（death=false+HP=MaxHP+RM_ABILITY 落帧
+  SM_ABILITY 给调用者+双绿字 ASCII 句点 vs 全角句号怪癖）/VV给予权限（校验 0..=10+写目标
+  会话运行时 Permission+Red 回执）/删除技能（空参红帮助/离线红；MagicList 宿主未接 T-189
+  ⇒ 空列表零帧+Recalc 接缝登记）/ClearCopyItem（去重**内层误删调用者背包/仓库**怪癖照抄+
+  越界异常停止，两路零 SysMsg）/清除仓库密码（空名/? 两条红/离线精确静默/在线清三字段+
+  双绿字）。宿主收口 `apply_pending_gm_target_ops`（pending_* 同事件落地）。
+- **现存 `Imp::Unimplemented` = 74 − 47 = 27**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
+  thirty_command_bodies` 的 158 已接 / 27 未接断言；改坏任一计数 ⇒ 该测试红）。
+- 剩余缺口族：F3 / M6 / C5 / W4（§4.3 分族索引不变；X2 全 18 条已结）。
 
 ## 8. SystemShare null 字段扫盲（卡 `openmir2-gm-systemshare-null-sweep`，tier=R）
 

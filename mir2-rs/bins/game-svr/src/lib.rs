@@ -19151,6 +19151,171 @@ fn process_switch_data(
 // 设计文档 §4.2.2「不得塞进 ECS：连接/会话/认证/限流」冲突 ⇒ 采用与
 // `soft_close_pending`（软关链，同一条登录/断线面）**同构**的宿主排水队列。
 
+/// `@` 命令后的 GM `pending_reconnect` 排水门（review R1）：**严格** `line.starts_with('@')`
+/// ——与 `handle_say` 的 `@` 判别同一口径（oracle `PlayObject.Chat.cs:363` 对原始行判
+/// `StartsWith("@")`；**不做 trim_start**，前导空格的「 @…」是普通聊天，不得顺带排出陈旧帧）。
+fn gm_drain_gate(line: Option<&str>) -> bool {
+    line.is_some_and(|t| t.starts_with('@'))
+}
+
+/// **族 X2 批 B（重 R 6 条）的目标侧副作用收口**（卡 `openmir2-gm-family-x2-target-control`）：
+/// 命令体只装 `pending_*`（纯函数），本函数在**同一事件内**落地：
+///
+/// - `@vv杀死` ⇒ `World::kill(target_id)`（`Command::Kill` ⇒ 既有 Die 死亡结算；卡面
+///   「不动杀底层语义」；命令入队后下一 tick 结算——oracle `Die()` 同拍，帧面两路都零帧）；
+/// - `@复活` ⇒ `Death=false` + `HP=MaxHP`（oracle `BaseObject.Base.cs:354-358` + `:40-41`）
+///   后接 `RM_ABILITY` 落帧：oracle `mIPlayerActor.SendMsg(PlayerActor, RM_ABILITY, …)`
+///   即用**目标会话**数据向**调用者**单投 `SM_ABILITY(52)`（`smframe::sm_ability`）；
+/// - `@VV给予权限` ⇒ 目标会话 `GmSession.permission = (byte)p`（运行时 Permission 唯一写点）；
+/// - `@ClearCopyItem` ⇒ 背包/仓库按（物品名 + MakeIndex）从后向前去重，**内层删除误写调用者
+///   列表**（oracle 怪癖照抄）：调用者列表越界 ⇒ 异常路径（停止，后续步骤不执行；两路都零帧）；
+/// - `@清除仓库密码` ⇒ 目标 `pwd_sessions.state` 三字段清零（IsPasswordLocked/
+///   IsUnLockStoragePwd/StoragePwd）。
+#[allow(clippy::too_many_arguments)]
+fn apply_pending_gm_target_ops(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    world: &mut mir2_world::World,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    chr_name: &str,
+) {
+    let Some(sg) = sessions.get(chr_name) else {
+        return;
+    };
+    let die = sg.gm.pending_gm_die.clone();
+    let revive = sg.gm.pending_gm_revive.clone();
+    let set_perm = sg.gm.pending_set_permission.clone();
+    let clear_copy = sg.gm.pending_clear_copy.clone();
+    let clear_pwd = sg.gm.pending_clear_password.clone();
+
+    let find_id = |world: &mir2_world::World, name: &str| -> Option<i32> {
+        world
+            .entities
+            .iter()
+            .find(|e| {
+                e.race == mir2_world::ACTOR_RACE_PLAY
+                    && !e.ghost
+                    && e.name.eq_ignore_ascii_case(name)
+            })
+            .map(|e| e.id)
+    };
+
+    // ① vv杀死
+    if let Some(name) = die {
+        if let Some(id) = find_id(world, &name) {
+            world.kill(id);
+        }
+    }
+    // ② 复活
+    if let Some(name) = revive {
+        if let Some(id) = find_id(world, &name) {
+            if let Some(e) = world.entities.get_mut(id) {
+                e.death = false;
+                e.hp = e.max_hp;
+            }
+            // RM_ABILITY 落帧：oracle 目标把（自己的）ABILITY 发给调用者。
+            if let (Some(tsg), Some(caller)) = (
+                sessions.get(&name),
+                online.iter().find(|e| e.chr_name == chr_name),
+            ) {
+                let body = game_svr::smframe::sm_ability(
+                    tsg.state.gold,
+                    tsg.equip.job,
+                    tsg.game_gold,
+                    &ability_tail(&tsg.state.wabil, game_svr::smframe::client_layout_enabled()),
+                );
+                if let Some(tx) =
+                    route_to_gate(gates, caller.gate_idx, caller.socket, "GM 复活 SM_ABILITY")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: caller.socket,
+                        body,
+                    });
+                }
+            }
+        }
+    }
+    // ③ VV给予权限
+    if let Some((name, perm)) = set_perm {
+        if let Some(tsg) = sessions.get_mut(&name) {
+            tsg.gm.permission = perm;
+        }
+    }
+    // ④ ClearCopyItem（误删调用者列表怪癖照抄）
+    if let Some(name) = clear_copy {
+        let snapshot = sessions.get(&name).map(|t| {
+            (
+                t.state
+                    .item_list
+                    .iter()
+                    .map(|it| (it.index, it.make_index))
+                    .collect::<Vec<_>>(),
+                t.storage
+                    .items
+                    .iter()
+                    .map(|it| (it.index, it.make_index))
+                    .collect::<Vec<_>>(),
+            )
+        });
+        if let Some((items, storage)) = snapshot {
+            let name_of = |idx: u16| catalog.get(idx).map(|t| t.name.clone()).unwrap_or_default();
+            let Some(caller) = sessions.get_mut(chr_name) else {
+                return;
+            };
+            let mut aborted = false;
+            'bag: for i in (0..items.len()).rev() {
+                let s14 = name_of(items[i].0);
+                for j in (0..i).rev() {
+                    if name_of(items[j].0) == s14 && items[i].1 == items[j].1 {
+                        // 怪癖：删除**调用者**背包下标 j；越界 = oracle IndexOutOfRange（被顶层吞）。
+                        if j >= caller.state.item_list.len() {
+                            aborted = true;
+                            break 'bag;
+                        }
+                        caller.state.item_list.remove(j);
+                        break;
+                    }
+                }
+            }
+            if !aborted {
+                'storage: for i in (0..storage.len()).rev() {
+                    let s14 = name_of(storage[i].0);
+                    for j in (0..i).rev() {
+                        if name_of(storage[j].0) == s14 && storage[i].1 == storage[j].1 {
+                            if j >= caller.storage.items.len() {
+                                aborted = true;
+                                break 'storage;
+                            }
+                            caller.storage.items.remove(j);
+                            break;
+                        }
+                    }
+                }
+            }
+            let _ = aborted;
+        }
+    }
+    // ⑤ 清除仓库密码
+    if let Some(name) = clear_pwd {
+        if let Some(p) = pwd_sessions.get_mut(&name) {
+            p.state.is_password_locked = false;
+            p.state.is_un_lock_storage_pwd = false;
+            p.state.storage_pwd.clear();
+        }
+    }
+
+    // 一次性标记：全部取走（含目标不在的情形，防陈旧）。
+    if let Some(sg) = sessions.get_mut(chr_name) {
+        sg.gm.pending_gm_die = None;
+        sg.gm.pending_gm_revive = None;
+        sg.gm.pending_set_permission = None;
+        sg.gm.pending_clear_copy = None;
+        sg.gm.pending_clear_password = None;
+    }
+}
+
 /// `TRouteInfo`（`src/OpenMir2/Data/TRouteInfo.cs:3-16`）：`!servertable.txt` 的一行。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteInfo {
@@ -23048,10 +23213,7 @@ fn sim_loop(
                         // drain 置位并发帧（与 oracle 同序）。
                         // **M2**：仅 @ 命令后排水——非 @ 聊天不得把脚本桥留下的陈旧 pending 顺带
                         // 发出（脚本桥不排水 ⇒ 陈旧值在下一条 @ 命令 execute() 入口被清空）。
-                        if tail
-                            .as_deref()
-                            .is_some_and(|t| t.trim_start().starts_with('@'))
-                        {
+                        if gm_drain_gate(tail.as_deref()) {
                             if let Some(addr) = ground_sessions
                                 .get_mut(&chr_name)
                                 .and_then(|sg| sg.gm.pending_reconnect.take())
@@ -23066,6 +23228,17 @@ fn sim_loop(
                                 }
                             }
                         }
+                        // **族 X2 批 B**：目标侧副作用收口（vv杀死/复活/VV给予权限/
+                        // ClearCopyItem/清除仓库密码），命令体纯 + pending_* 同事件落地。
+                        apply_pending_gm_target_ops(
+                            &mut ground_sessions,
+                            &mut pwd_sessions,
+                            &mut world,
+                            &enter_cfg.catalog,
+                            &online,
+                            &gates,
+                            &chr_name,
+                        );
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
                         // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
                         if !gm_deferred.is_empty() || !gm_frames.is_empty() {
@@ -24844,6 +25017,8 @@ fn sim_loop(
                                                             let gm_cfg = gmcmd::GmConfig {
                                                                 lock_human_login: enter_cfg
                                                                     .lock_human_login,
+                                                                spirit_mutiny_time: enter_cfg
+                                                                    .spirit_mutiny_time,
                                                                 ..gmcmd::GmConfig::default()
                                                             };
                                                             let gm_world = gmcmd::GmWorld {
@@ -40262,6 +40437,18 @@ break
                 });
             }
             drain_reconnects(&mut reconnect_pending, &mut self.sessions, &self.gates);
+            // 族 X2 批 B：目标侧副作用收口（与 sim_loop CM_SAY 支同一步；pwd 态用空表）。
+            let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
+                std::collections::HashMap::new();
+            apply_pending_gm_target_ops(
+                &mut self.sessions,
+                &mut pwd_sessions,
+                &mut self.world,
+                &self.catalog,
+                &self.online,
+                &self.gates,
+                "aaa",
+            );
             if !deferred.is_empty() || !gm_frames.is_empty() {
                 let speaker = self
                     .online
@@ -40309,6 +40496,205 @@ break
         let param = u16::from_le_bytes([body[6], body[7]]);
         let text = gbk_decode(&mir2_protocol::edcode::decode(&body[12..]));
         (param, text)
+    }
+
+    /// **R1 牙**：排水门严格 `starts_with('@')`（与 handle_say 同口径）——前导空格的
+    /// 「 @…」是普通聊天，不得排水；非 @ 与 None 同样不放行。
+    /// 变异红：改 `trim_start().starts_with('@')` ⇒ 本用例红。
+    #[test]
+    fn gm_drain_gate_is_strict_at_prefix() {
+        assert!(gm_drain_gate(Some("@Reconnection 1.2.3.4 7200")));
+        assert!(
+            !gm_drain_gate(Some(" @Reconnection 1.2.3.4 7200")),
+            "前导空格 ⇒ 普通聊天"
+        );
+        assert!(!gm_drain_gate(Some("hello")));
+        assert!(!gm_drain_gate(None));
+    }
+
+    /// **R3 牙（F3 bo 置位顺序）**：`drain_reconnects` 必须**先置 `BoReconnection=true` 再
+    /// 尝试发帧**（oracle `PlayObject.Message.cs:1989-1990` 同序）——用「会话在、gates 空
+    /// （路由必败）」构造：bo 仍为 true 证明置位先于/独立于发送。
+    /// 变异红：把 `sg.bo_reconnection = true;` 挪到 `route_to_gate` 失败 `continue` 之后
+    /// （或删掉）⇒ 本用例红。
+    #[test]
+    fn drain_reconnects_sets_bo_before_send() {
+        use std::collections::HashMap;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(7);
+        sg.bo_reconnection = false;
+        sessions.insert("hero".into(), sg);
+        let empty_gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        let mut pending = vec![ReconnectPending {
+            gate_idx: 0,
+            socket: 901,
+            chr_name: "hero".to_string(),
+            msg: b"1.2.3.4/7200".to_vec(),
+        }];
+        drain_reconnects(&mut pending, &mut sessions, &empty_gates);
+        assert!(
+            sessions["hero"].bo_reconnection,
+            "BoReconnection 必须置位（先置后发；路由失败也不回滚）"
+        );
+        assert!(pending.is_empty(), "队列取尽");
+    }
+
+    /// **族 X2 批 B 宿主落地牙**：`apply_pending_gm_target_ops` 五条副作用——
+    /// 复活（death=false + HP=MaxHP + SM_ABILITY(52) 投给调用者）/ VV给予权限（目标会话
+    /// permission 写）/ 清除仓库密码（pwd 三字段清）/ ClearCopyItem（**误删调用者背包**
+    /// 怪癖照抄 + 目标列表不动 + 越界异常停止）/ vv杀死（World::kill 入队 ⇒ tick 后 death）。
+    /// 变异红：M-B1..M-B5（每条副作用删/改向）⇒ 对应用例红。
+    #[test]
+    fn gm_target_ops_apply_state_and_quirk() {
+        use mir2_world::{Entity, World};
+        use std::collections::HashMap;
+        let mut world = World::new(32, 32);
+        let hero_id = world.add_entity(Entity::new(0, "hero", 10, 10));
+        let mut victim_e = Entity::new(0, "victim", 11, 11);
+        victim_e.death = true;
+        victim_e.hp = 1;
+        victim_e.max_hp = 100;
+        let victim_id = world.add_entity(victim_e);
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            10,
+            mir2_data::StdItem {
+                name: "木剑".into(),
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            11,
+            mir2_data::StdItem {
+                name: "铁剑".into(),
+                ..Default::default()
+            },
+        );
+        let item = |make_index: i32, index: u16| game_svr::bag::BagItem {
+            make_index,
+            index,
+            dura: 0,
+            dura_max: 0,
+            desc: [0; 14],
+        };
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut hero_sg = test_session_ground(hero_id);
+        hero_sg.state.item_list = vec![item(100, 10), item(101, 11)];
+        hero_sg.storage.items = vec![item(200, 11)];
+        hero_sg.gm.pending_gm_revive = Some("victim".into());
+        hero_sg.gm.pending_set_permission = Some(("victim".into(), 7));
+        hero_sg.gm.pending_clear_password = Some("victim".into());
+        hero_sg.gm.pending_clear_copy = Some("victim".into());
+        sessions.insert("hero".into(), hero_sg);
+        let mut victim_sg = test_session_ground(victim_id);
+        // 目标背包两把同名同 MakeIndex 的剑 ⇒ 一次命中；目标仓库同样。
+        victim_sg.state.item_list = vec![item(500, 10), item(500, 10)];
+        victim_sg.storage.items = vec![item(600, 11), item(600, 11)];
+        sessions.insert("victim".into(), victim_sg);
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        pwd_sessions.insert(
+            "victim".into(),
+            game_svr::inbound::PwdSession {
+                state: game_svr::inbound::StoragePwdState {
+                    storage_pwd: "abcd".into(),
+                    is_password_locked: true,
+                    is_un_lock_storage_pwd: true,
+                    ..Default::default()
+                },
+                locks: game_svr::inbound::ActionLocks::default(),
+            },
+        );
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero_id,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut world,
+            &catalog,
+            &online,
+            &gates,
+            "hero",
+        );
+        // ① 复活：death=false + HP=MaxHP + 恰一条 SM_ABILITY(52) 给调用者。
+        {
+            let e = world.entities.get(victim_id).unwrap();
+            assert!(!e.death, "ReAlive ⇒ death=false");
+            assert_eq!(e.hp, 100, "HP=MaxHP");
+        }
+        let frames: Vec<Vec<u8>> = std::iter::from_fn(|| rx0.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { body, .. } => Some(body),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            frames.len(),
+            1,
+            "复活恰一条 SM_ABILITY；实得 {}",
+            frames.len()
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_ABILITY
+        );
+        // ② VV给予权限：目标会话运行时 permission 写。
+        assert_eq!(sessions["victim"].gm.permission, 7);
+        // ③ 清除仓库密码：三字段清零。
+        {
+            let p = &pwd_sessions["victim"].state;
+            assert!(!p.is_password_locked && !p.is_un_lock_storage_pwd && p.storage_pwd.is_empty());
+        }
+        // ④ ClearCopyItem 怪癖：删**调用者**背包[0] 与仓库[0]；目标两列表不变。
+        assert_eq!(
+            sessions["hero"].state.item_list.len(),
+            1,
+            "调用者背包被误删"
+        );
+        assert_eq!(sessions["hero"].state.item_list[0].make_index, 101);
+        assert_eq!(sessions["hero"].storage.items.len(), 0, "调用者仓库被误删");
+        assert_eq!(sessions["victim"].state.item_list.len(), 2, "目标背包不动");
+        assert_eq!(sessions["victim"].storage.items.len(), 2, "目标仓库不动");
+        // ⑤ pending 全清（一次性）。
+        let gm = &sessions["hero"].gm;
+        assert!(
+            gm.pending_gm_die.is_none()
+                && gm.pending_gm_revive.is_none()
+                && gm.pending_set_permission.is_none()
+                && gm.pending_clear_copy.is_none()
+                && gm.pending_clear_password.is_none()
+        );
+        // ⑥ vv杀死：单独一例（World::kill 入队 ⇒ tick 后 death）。
+        sessions.get_mut("hero").unwrap().gm.pending_gm_die = Some("victim".into());
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut world,
+            &catalog,
+            &online,
+            &gates,
+            "hero",
+        );
+        while rx0.try_recv().is_ok() {}
+        for _ in 0..3 {
+            world.tick();
+        }
+        assert!(
+            world.entities.get(victim_id).unwrap().death,
+            "World::kill ⇒ tick 后死亡结算"
+        );
     }
 
     /// **族 X2（卡 `openmir2-gm-family-x2-target-control`）宿主线上牙**：`@Reconnection`
