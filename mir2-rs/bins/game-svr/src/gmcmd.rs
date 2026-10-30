@@ -294,6 +294,33 @@ pub const NOTE_BOOL_PARSE: &str =
 /// `ActorId = baseObject.ActorId` 对 null 解引用 ⇒ NRE 被 catch 吞 ⇒ 两次 CryCry 都不产帧。
 pub const NOTE_START_CONTEST_CRY: &str =
     "StartContest：CryCry 的 SendMsg(null,…) 抛 NRE ⇒ 0 cry 帧（有匹配玩家时第一次即中止；无匹配时两次均零帧）";
+
+// ===== 族 W · 行会（卡 `openmir2-gm-family-w-guild`）=====
+/// `AddGuildCommand.cs:22`：`ServerIndex != 0` 红字（部署 `ServerIndex=0` ⇒ 死分支）。
+pub const ADD_GUILD_NOT_MAIN: &str = "这个命令只能使用在主服务器上";
+/// `AddGuildCommand` 的 `Command.CommandHelp`（`Help = "行会名称 掌门人名称"`），现网名 `创建行会`。
+pub const ADD_GUILD_HELP: &str = "命令格式: @创建行会 行会名称 掌门人名称";
+/// `AddGuildCommand.cs:39`：`"行会名称: " + sGuildName + " 掌门人: " + sGuildChief`。
+pub const ADD_GUILD_OK_FMT: &str = "行会名称: {0} 掌门人: {1}";
+/// `DelGuildCommand.cs:22`：`ServerIndex != 0` 红字（部署 `ServerIndex=0` ⇒ 死分支）。
+pub const DEL_GUILD_NOT_MAIN: &str = "只能在主服务器上才可以使用此命令删除行会!!!";
+/// `DelGuildCommand` 的 `Command.CommandHelp`（`Help = "行会名称"`），现网名 `删除行会`。
+pub const DEL_GUILD_HELP: &str = "命令格式: @删除行会 行会名称";
+/// `DelGuildCommand.cs:35`：`"没找到" + sGuildName + "这个行会!!!"`。
+pub const DEL_GUILD_NOT_FOUND_FMT: &str = "没找到{0}这个行会!!!";
+/// `EndGuildCommand.cs:27`：无行会红字。
+pub const END_GUILD_NO_GUILD: &str = "你都没加入行会!!!";
+/// `EndGuildCommand.cs:22`：掌门（`GuildRankNo <= 1`）拒退红字。
+pub const END_GUILD_CHIEF_REFUSE: &str = "行会掌门人不能这样退出行会!!!";
+/// `EndGuildCommand.cs:18`：成员退会成功绿字。
+pub const END_GUILD_OK: &str = "你已经退出行会。";
+/// `CommandHelp.EnableGroupRecall`。
+pub const ALLOW_GROUP_ON: &str = "[允许天地合一]";
+/// `CommandHelp.DisableGroupRecall`。
+pub const ALLOW_GROUP_OFF: &str = "[禁止天地合一]";
+/// `@退出门派` 的退化形态：未注入说话者 `MyGuild` 快照（脚本桥/测试未接）。
+pub const NOTE_NO_CALLER_GUILD: &str =
+    "W 族：未注入说话者 MyGuild/GuildRankNo 快照（脚本桥/退化）⇒ 零帧";
 /// `CommandHelp.GameCommandLotteryTicketMsg`（`CommandHelp.cs:65`；**尾随一个空格**）。
 pub const LOTTERY_MSG_FMT: &str =
     "已中彩票数:{0} 未中彩票数:{1} 一等奖:{2} 二等奖:{3} 三等奖:{4} 四等奖:{5} 五等奖:{6} 六等奖:{7} ";
@@ -977,6 +1004,21 @@ pub enum Imp {
     /// `StartContestCommand`（现网 `@StartContest`）：`Fight3Zone` 门红；红/绿两条 SysMsg +
     /// 范围内玩家 `FightZoneDieCount=0`；`CryCry` 的 `SendMsg(null,...)` 抛 NRE ⇒ **零 cry 帧**。
     StartContestCmd,
+
+    // ---- 族 W · 行会（4，卡 `openmir2-gm-family-w-guild`，tier=R）----
+    /// `AddGuildCommand`（现网 `@创建行会`）：`ServerIndex!=0` 红（死分支）；空名红；
+    /// 掌门离线红；掌门已有所属 ⇒ **静默**（`MemberOfGuild` 门）；成功 ⇒ AddGuild + SS_205
+    /// + 绿字「行会名称: X 掌门人: Y」。
+    AddGuildCmd,
+    /// `DelGuildCommand`（现网 `@删除行会`）：`ServerIndex!=0` 红；空名红；成功 ⇒ SS_206；
+    /// 失败（未找到/rank>1 拒删）⇒ 红「没找到X这个行会!!!」。
+    DelGuildCmd,
+    /// `EndGuildCommand`（现网 `@退出门派`）：无行会红 / 掌门（RankNo<=1）拒 / 成员 ⇒
+    /// DelMember + SS_207 + 清标记 + `RefRankInfo(0,"")`(750) + `RefShowName`(42) + 绿字。
+    EndGuildCmd,
+    /// `AllowGroupReCallCommand`（现网 `@允许天地合一`）：toggle `AllowGroupReCall` + 双绿字；
+    /// 字段随存档写 `characters.AllowGroupReCall`。
+    AllowGroupRecall,
     Unimplemented,
 }
 
@@ -1142,6 +1184,30 @@ pub struct GmStartContestRequest {
     pub y: i32,
 }
 
+/// 行会族（W）的待落地请求。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmAddGuildRequest {
+    pub guild_name: String,
+    pub chief: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmDelGuildRequest {
+    pub guild_name: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmEndGuildRequest {
+    pub guild_name: String,
+}
+
+/// `PlayerActor.MyGuild?.GuildName` + `GuildRankNo` 的只读快照（`@退出门派` 的门）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GmGuildState {
+    pub guild_name: Option<String>,
+    pub rank_no: i16,
+}
+
 /// GM 命令对**权威 `Entity`** 的一次写入（卡 `openmir2-gm-admin-mode-entity-seam`）。
 ///
 /// oracle 的这些开关与 `PlayObject` 是**同一份字段**（`BaseObject.cs:145/157/263/267`、
@@ -1186,6 +1252,10 @@ pub struct GmEntityState {
     /// `(byte)HUtil32._MIN(MessageSettings.MAXUPLEVEL(255), nLevel)`，**unchecked 强转**）。
     /// 卡 `openmir2-gm-target-state-write`。
     pub level: Option<u8>,
+    /// `@允许天地合一` 写回 `PlayObject.AllowGroupReCall`（`AllowGroupReCallCommand.cs:14`）。
+    /// **R 级落库面**：`EntityDerived` 采集本字段，存档写 `characters.AllowGroupReCall`
+    /// （`PlayerRecordData.allow_group_re_call`，列已存在、不改 schema）。
+    pub allow_group_re_call: Option<bool>,
 }
 
 impl GmEntityState {
@@ -1215,6 +1285,9 @@ impl GmEntityState {
         }
         if let Some(v) = self.level {
             e.level = v;
+        }
+        if let Some(v) = self.allow_group_re_call {
+            e.allow_group_re_call = v;
         }
     }
 }
@@ -1398,6 +1471,14 @@ pub struct GmSession {
     pub pending_sbk_gold: Option<GmSbkGoldRequest>,
     /// `@StartContest`：范围 1000 内玩家的 `FightZoneDieCount=0`（宿主写 `saves`）。
     pub pending_start_contest: Option<GmStartContestRequest>,
+
+    // ---- 族 W · 行会（4 条）----
+    /// `@创建行会`：`GuildMgr.AddGuild` + SS_205 + 绿字（宿主落地）。
+    pub pending_add_guild: Option<GmAddGuildRequest>,
+    /// `@删除行会`：`GuildMgr.DelGuild`（成功 SS_206 / 失败红字，宿主落地）。
+    pub pending_del_guild: Option<GmDelGuildRequest>,
+    /// `@退出门派`：`MyGuild.DelMember` + SS_207 + 750/42/100（宿主落地）。
+    pub pending_end_guild: Option<GmEndGuildRequest>,
 }
 
 impl Default for GmSession {
@@ -1459,6 +1540,9 @@ impl Default for GmSession {
             pending_castle_war: None,
             pending_sbk_gold: None,
             pending_start_contest: None,
+            pending_add_guild: None,
+            pending_del_guild: None,
+            pending_end_guild: None,
         }
     }
 }
@@ -1856,6 +1940,9 @@ pub struct GmWorld<'a> {
     /// 展示表（`DisplayTable`）⇒ 由 `lib.rs` 的 `handle_gm_command` 用
     /// `actor_dir(world, displays, actor)` 解析后注入；`0` = 未注入（测试/退化）。
     pub speaker_dir: u8,
+    /// **族 W**：说话者的 `MyGuild`/`GuildRankNo` 快照（`@退出门派` 的门；由宿主从会话
+    /// `GuildSession` 注入）。`None` = 未注入（脚本桥/测试）⇒ 命令体登记零帧。
+    pub caller_guild: Option<&'a GmGuildState>,
     /// **族 M**：宿主持有刷怪/造物落地通道（`MonGenHost` + `MonsterTable` + 物品目录 + `world.rng`）。
     /// `false` = 脚本 `GMEXECUTE` 桥/测试未注入 ⇒ 有副作用的 M 命令走 `log_note` 退化零帧
     /// （不伪造 pending；部署脚本无这 6 条的不可达调用）。
@@ -1886,6 +1973,7 @@ impl<'a> GmWorld<'a> {
             quests: None,
             speaker_dir: 0,
             m_host: false,
+            caller_guild: None,
             filter_word: None,
         }
     }
@@ -1963,6 +2051,13 @@ impl<'a> GmWorld<'a> {
     #[must_use]
     pub fn with_m_host(mut self) -> Self {
         self.m_host = true;
+        self
+    }
+
+    /// 注入说话者的 `MyGuild`/`GuildRankNo` 快照（族 W：`@退出门派`）。
+    #[must_use]
+    pub fn with_caller_guild(mut self, guild: &'a GmGuildState) -> Self {
+        self.caller_guild = Some(guild);
         self
     }
 
@@ -3266,6 +3361,120 @@ fn parse_dotnet_bool(s: &str) -> Option<bool> {
     } else {
         None
     }
+}
+
+/// `AddGuildCommand.Execute`（`AddGuildCommand.cs:14-50`，现网 `@创建行会`）。
+///
+/// 支序照抄：`ServerIndex != 0` ⇒ 红（部署 0 ⇒ 死分支）；空名 ⇒ 红 Help；掌门离线 ⇒
+/// `NowNotOnLineOrOnOtherServer` 红；`MemberOfGuild(掌门) != null` ⇒ **静默**（`if` 无 else）；
+/// `AddGuild` 成功 ⇒ SS_205 + 绿字「行会名称: X 掌门人: Y」（失败静默——`boAddState` 后无 else）。
+/// 掌门身上的行会刷新段在 oracle **整段注释**（卡面 forbidden 不补）。
+fn add_guild(
+    parameters: &str,
+    world: &GmWorld<'_>,
+    sess: &mut GmSession,
+    cfg: &GmConfig,
+) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let params = split_params(parameters);
+    let guild_name = params.first().copied().unwrap_or("");
+    let chief = params.get(1).copied().unwrap_or("");
+    if cfg.server_index != 0 {
+        return red(ADD_GUILD_NOT_MAIN.to_string());
+    }
+    if guild_name.is_empty() || chief.is_empty() {
+        return red(ADD_GUILD_HELP.to_string());
+    }
+    if world.play_by_name(chief).is_none() {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[chief.to_string()]));
+    }
+    // `SystemShare.GuildMgr.MemberOfGuild(sGuildChief) == null` 才尝试添加；非 null ⇒ 静默。
+    if world.guilds.member_of_guild(chief).is_some() {
+        return GmResult::empty();
+    }
+    sess.pending_add_guild = Some(GmAddGuildRequest {
+        guild_name: guild_name.to_string(),
+        chief: chief.to_string(),
+    });
+    GmResult::empty()
+}
+
+/// `DelGuildCommand.Execute`（`DelGuildCommand.cs:14-43`，现网 `@删除行会`）。
+///
+/// `ServerIndex != 0` ⇒ 红（部署 0 ⇒ 死分支）；空名 ⇒ 红 Help；`DelGuild` 成功 ⇒ SS_206
+/// （无客户端帧）；失败（未找到 / `RankList.Count > 1` 拒删）⇒ 红「没找到X这个行会!!!」。
+fn del_guild(
+    parameters: &str,
+    world: &GmWorld<'_>,
+    sess: &mut GmSession,
+    cfg: &GmConfig,
+) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let guild_name = split_params(parameters).first().copied().unwrap_or("");
+    if cfg.server_index != 0 {
+        return red(DEL_GUILD_NOT_MAIN.to_string());
+    }
+    if guild_name.is_empty() {
+        return red(DEL_GUILD_HELP.to_string());
+    }
+    sess.pending_del_guild = Some(GmDelGuildRequest {
+        guild_name: guild_name.to_string(),
+    });
+    GmResult::empty()
+}
+
+/// `EndGuildCommand.Execute`（`EndGuildCommand.cs:14-31`，现网 `@退出门派`）。
+///
+/// 无行会 ⇒ 红；`GuildRankNo <= 1`（掌门）⇒ 红拒退；成员 ⇒
+/// `MyGuild.IsMember(ChrName) && MyGuild.DelMember(ChrName)` 成功才
+/// SS_207 + 清 `MyGuild` + `RefRankInfo(0,"")`(750) + `RefShowName()`(42) + 绿字；
+/// `IsMember == false`（或 DelMember false）⇒ `&&` 短路 **静默**（无 else）。
+fn end_guild(world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let Some(caller) = world.caller_guild else {
+        return no_frames(NOTE_NO_CALLER_GUILD);
+    };
+    let Some(guild_name) = caller.guild_name.clone() else {
+        return red(END_GUILD_NO_GUILD.to_string());
+    };
+    if caller.rank_no <= 1 {
+        return red(END_GUILD_CHIEF_REFUSE.to_string());
+    }
+    let is_member = world
+        .guilds
+        .find_guild(&guild_name)
+        .is_some_and(|g| g.is_member(world.speaker));
+    if !is_member {
+        return GmResult::empty();
+    }
+    sess.pending_end_guild = Some(GmEndGuildRequest { guild_name });
+    GmResult::empty()
+}
+
+/// `AllowGroupReCallCommand.Execute`（`AllowGroupReCallCommand.cs:12-22`，现网 `@允许天地合一`）。
+///
+/// 翻转 `PlayObject.AllowGroupReCall` + 双绿字（`[允许天地合一]`/`[禁止天地合一]`）；
+/// 新值经 `pending_entity` 在同一事件内落到权威 `Entity.allow_group_re_call`，并由存档
+/// `EntityDerived` 写 `characters.AllowGroupReCall`（R 级落库面）。
+fn allow_group_recall(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
+    sess.allow_guild_re_call = !sess.allow_guild_re_call;
+    let new_value = sess.allow_guild_re_call;
+    let state = sess.entity_write(world);
+    sess.stash(state, |st| {
+        st.allow_group_re_call = Some(new_value);
+    });
+    let text = if new_value {
+        ALLOW_GROUP_ON
+    } else {
+        ALLOW_GROUP_OFF
+    };
+    green(text.to_string())
 }
 
 /// `HumanLocalCommand.Execute`（`HumanLocalCommand.cs:14-36`，现网 `@IP`）：
@@ -5000,6 +5209,9 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_castle_war = None;
     sess.pending_sbk_gold = None;
     sess.pending_start_contest = None;
+    sess.pending_add_guild = None;
+    sess.pending_del_guild = None;
+    sess.pending_end_guild = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -5247,6 +5459,12 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::ChangeLord => change_sabuk_lord(parameters, world),
         Imp::ForcedWallWar => forced_wallconquest_war(parameters, world, sess),
         Imp::StartContestCmd => start_contest(world, sess),
+
+        // ---- 族 W · 行会（4）----
+        Imp::AddGuildCmd => add_guild(parameters, world, sess, cfg),
+        Imp::DelGuildCmd => del_guild(parameters, world, sess, cfg),
+        Imp::EndGuildCmd => end_guild(world, sess),
+        Imp::AllowGroupRecall => allow_group_recall(sess, world),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -6211,7 +6429,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "允许天地合一",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::AllowGroupRecall,
     },
     CommandDef {
         name: "允许联盟",
@@ -6229,7 +6447,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "创建行会",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::AddGuildCmd,
     },
     CommandDef {
         name: "删除技能",
@@ -6247,7 +6465,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "删除行会",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DelGuildCmd,
     },
     CommandDef {
         name: "加入门派",
@@ -6493,7 +6711,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "退出门派",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::EndGuildCmd,
     },
     CommandDef {
         name: "重读GM",
@@ -7573,6 +7791,7 @@ mod tests {
             quests: None,
             speaker_dir: 0,
             m_host: false,
+            caller_guild: None,
             filter_word: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
@@ -7882,9 +8101,10 @@ mod tests {
     /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）与
     /// 族 X2 批 A（卡 `openmir2-gm-family-x2-target-control` 的 12 条目标控制/杂项）与
     /// 批 B（同卡重 R 6 条）、族 F（卡 `openmir2-gm-family-f-script-flags` 的 3 条脚本标志）、
-    /// 族 M（卡 `openmir2-gm-family-m-spawn-make` 的 6 条刷怪/造物）与族 C
-    /// （卡 `openmir2-gm-family-c-castle` 的 5 条城堡/赛事）的命令体接上
-    /// （`Unimplemented` 从 180 降到 13），且命令名 → 实现标签固定。
+    /// 族 M（卡 `openmir2-gm-family-m-spawn-make` 的 6 条刷怪/造物）、族 C
+    /// （卡 `openmir2-gm-family-c-castle` 的 5 条城堡/赛事）与族 W
+    /// （卡 `openmir2-gm-family-w-guild` 的 4 条行会）的命令体接上
+    /// （`Unimplemented` 从 180 降到 9），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -7892,16 +8112,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            172,
-            "172 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）+ 族 F（脚本标志 3）+ 族 M（刷怪/造物 6）+ 族 C（城堡/赛事 5）"
+            176,
+            "176 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）+ 族 F（脚本标志 3）+ 族 M（刷怪/造物 6）+ 族 C（城堡/赛事 5）+ 族 W（行会 4）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            13,
-            "185 - 172"
+            9,
+            "185 - 176"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -12930,5 +13150,275 @@ mod tests {
         assert!(r.msgs.is_empty() && r.frames.is_empty());
         assert!(r.log_note.expect("退化登记").contains("M 族"));
         assert!(sess.pending_start_contest.is_none());
+    }
+
+    // ==================== 族 W · 行会（4，卡 `openmir2-gm-family-w-guild`，tier=R）====================
+
+    /// 世界：`gm`（调用者，Race=Play）+ `chief`（Race=Play）。
+    fn w_world() -> mir2_world::World {
+        let mut w = mir2_world::World::new(20, 20);
+        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        gm.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(gm);
+        let mut chief = mir2_world::Entity::new(0, "chief", 6, 6);
+        chief.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(chief);
+        w
+    }
+
+    fn w_view<'a>(
+        guilds: &'a mir2_world::GuildManager,
+        world: &'a mir2_world::World,
+        caller_guild: Option<&'a GmGuildState>,
+    ) -> GmWorld<'a> {
+        let view = GmWorld::new(guilds)
+            .with_world(world)
+            .with_speaker("gm")
+            .with_m_host();
+        match caller_guild {
+            Some(c) => view.with_caller_guild(c),
+            None => view,
+        }
+    }
+
+    /// 表项：4 条接线、perm 10；`退出门派`/`允许天地合一` 的 Execute 单形参（params=1）。
+    #[test]
+    fn w_family_table_entries_are_wired() {
+        for (name, imp, params) in [
+            ("创建行会", Imp::AddGuildCmd, 2),
+            ("删除行会", Imp::DelGuildCmd, 2),
+            ("退出门派", Imp::EndGuildCmd, 1),
+            ("允许天地合一", Imp::AllowGroupRecall, 1),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, params, "{name} 的 Execute 形参个数");
+        }
+    }
+
+    /// `@创建行会`：`ServerIndex!=0` 红（死分支）/ 空名红 Help / 掌门离线红 /
+    /// 掌门已有所属 ⇒ **静默**（`MemberOfGuild` 门）/ 成功 ⇒ 装 AddGuild 请求。
+    #[test]
+    fn w_add_guild_gates_and_member_of_guild() {
+        let mut guilds = mir2_world::GuildManager::new();
+        assert!(guilds.add_guild("现有会", "chief", &mir2_world::GuildConfig::default()));
+        let world = w_world();
+        let view = w_view(&guilds, &world, None);
+        let mut sess = gm_session();
+        // ServerIndex != 0 ⇒ 红（部署 0 ⇒ 死分支）。
+        let cfg_main = GmConfig {
+            server_index: 1,
+            ..GmConfig::default()
+        };
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &cfg_main,
+                &view,
+                "@创建行会 新会 chief"
+            )),
+            vec![(GmColor::Red, ADD_GUILD_NOT_MAIN)]
+        );
+        // 空名 ⇒ 红 Help。
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@创建行会"
+            )),
+            vec![(GmColor::Red, ADD_GUILD_HELP)]
+        );
+        // 掌门离线 ⇒ 红。
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@创建行会 新会 nobody"
+            )),
+            vec![(GmColor::Red, "nobody 现在不在线，或在其它服务器上!!!")]
+        );
+        // 掌门已有所属 ⇒ 静默（`if (MemberOfGuild == null)` 无 else）。
+        let r = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view,
+            "@创建行会 新会 chief",
+        );
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(sess.pending_add_guild.is_none());
+        // 未入会 + 在线 ⇒ 装请求。
+        let free = mir2_world::GuildManager::new();
+        let view_free = w_view(&free, &world, None);
+        let _ = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view_free,
+            "@创建行会 新会 chief",
+        );
+        assert_eq!(
+            sess.pending_add_guild,
+            Some(GmAddGuildRequest {
+                guild_name: "新会".into(),
+                chief: "chief".into(),
+            })
+        );
+        // 退化形态（脚本桥无通道）⇒ 零帧 + note。
+        let bare = GmWorld::new(&free).with_world(&world).with_speaker("gm");
+        let r = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &bare,
+            "@创建行会 新会 chief",
+        );
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(r.log_note.expect("退化登记").contains("M 族"));
+        assert!(sess.pending_add_guild.is_none());
+    }
+
+    /// `@删除行会`：`ServerIndex!=0` 红 / 空名红 Help / 足参装 DelGuild 请求。
+    #[test]
+    fn w_del_guild_gates_and_stage() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = w_world();
+        let view = w_view(&guilds, &world, None);
+        let mut sess = gm_session();
+        let cfg_main = GmConfig {
+            server_index: 1,
+            ..GmConfig::default()
+        };
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg_main, &view, "@删除行会 测试会")),
+            vec![(GmColor::Red, DEL_GUILD_NOT_MAIN)]
+        );
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@删除行会"
+            )),
+            vec![(GmColor::Red, DEL_GUILD_HELP)]
+        );
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@删除行会 测试会");
+        assert_eq!(
+            sess.pending_del_guild,
+            Some(GmDelGuildRequest {
+                guild_name: "测试会".into(),
+            })
+        );
+    }
+
+    /// `@退出门派` 三支：无行会红 / 掌门拒红 / 成员成功装请求；`IsMember==false` ⇒ 静默。
+    #[test]
+    fn w_end_guild_three_branches() {
+        let mut guilds = mir2_world::GuildManager::new();
+        assert!(guilds.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        guilds.find_guild_mut("测试会").unwrap().add_member(
+            "gm",
+            &mir2_world::GuildConfig::default(),
+            0,
+        );
+        let world = w_world();
+        let mut sess = gm_session();
+        // 未注入 MyGuild 快照 ⇒ 零帧 + note。
+        let none = w_view(&guilds, &world, None);
+        let r = execute(&mut sess, &GmConfig::default(), &none, "@退出门派");
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(r.log_note.expect("未注入登记").contains("MyGuild"));
+        // 无行会。
+        let no_guild = GmGuildState::default();
+        let v_no = w_view(&guilds, &world, Some(&no_guild));
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &v_no,
+                "@退出门派"
+            )),
+            vec![(GmColor::Red, END_GUILD_NO_GUILD)]
+        );
+        // 掌门（RankNo<=1）拒退。
+        let chief = GmGuildState {
+            guild_name: Some("测试会".into()),
+            rank_no: 1,
+        };
+        let v_chief = w_view(&guilds, &world, Some(&chief));
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &v_chief,
+                "@退出门派"
+            )),
+            vec![(GmColor::Red, END_GUILD_CHIEF_REFUSE)]
+        );
+        // rank>1 但不在成员表 ⇒ `&&` 短路静默。
+        let ghost_member = GmGuildState {
+            guild_name: Some("测试会".into()),
+            rank_no: 2,
+        };
+        // 先把 gm 从成员表删掉，模拟不一致 ⇒ `IsMember == false` ⇒ `&&` 短路静默。
+        guilds.find_guild_mut("测试会").unwrap().del_member("gm", 0);
+        {
+            let v_ghost = w_view(&guilds, &world, Some(&ghost_member));
+            let r = execute(&mut sess, &GmConfig::default(), &v_ghost, "@退出门派");
+            assert!(r.msgs.is_empty() && r.frames.is_empty());
+            assert!(sess.pending_end_guild.is_none());
+        }
+        // 恢复成员 ⇒ 装请求。
+        guilds.find_guild_mut("测试会").unwrap().add_member(
+            "gm",
+            &mir2_world::GuildConfig::default(),
+            0,
+        );
+        let v_again = w_view(&guilds, &world, Some(&ghost_member));
+        let _ = execute(&mut sess, &GmConfig::default(), &v_again, "@退出门派");
+        assert_eq!(
+            sess.pending_end_guild,
+            Some(GmEndGuildRequest {
+                guild_name: "测试会".into(),
+            })
+        );
+    }
+
+    /// `@允许天地合一`：toggle 双绿字 + `pending_entity.allow_group_re_call`（落库真源）。
+    #[test]
+    fn w_allow_group_recall_toggle_and_entity_write() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = w_world();
+        let view = w_view(&guilds, &world, None);
+        let mut sess = gm_session();
+        assert!(!sess.allow_guild_re_call, "ctor false");
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@允许天地合一");
+        assert_eq!(texts(&r), vec![(GmColor::Green, ALLOW_GROUP_ON)]);
+        assert!(sess.allow_guild_re_call);
+        let ent = sess.pending_entity.expect("必须落 Entity 差量");
+        assert_eq!(ent.allow_group_re_call, Some(true));
+        let gm_id = world
+            .entities
+            .iter()
+            .find(|e| e.name == "gm")
+            .expect("gm 在场")
+            .id;
+        assert_eq!(ent.actor_id, gm_id, "调用者实体 id");
+        // 再翻一次 ⇒ OFF。
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@允许天地合一");
+        assert_eq!(texts(&r), vec![(GmColor::Green, ALLOW_GROUP_OFF)]);
+        assert!(!sess.allow_guild_re_call);
+        assert_eq!(
+            sess.pending_entity.expect("第二次差量").allow_group_re_call,
+            Some(false)
+        );
+        // `@params` 被忽略（Execute(IPlayerActor)）。
+        let r = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view,
+            "@允许天地合一 ignored",
+        );
+        assert_eq!(texts(&r), vec![(GmColor::Green, ALLOW_GROUP_ON)]);
     }
 }
