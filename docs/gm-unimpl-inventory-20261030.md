@@ -228,7 +228,9 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
 - **族 M 6 条已落地**：卡 `openmir2-gm-family-m-spawn-make`（worker-85，tier=R）——
   MobNpc（缺参/`?` ⇒ 红帮助；足参**静默**——建 NPC 体整段注释）/MobPlace（Mission 未设或图
   不存在 ⇒ **两条红**；已设 ⇒ `_MIN(500,n)` 只 `RegenMonsterByName` + 带 Mission 三元的绿字；
-  `Mission/MissionX/MissionY` 三元宿主 `Entity` **未建模**（无消费者）⇒ 只刷怪、标记登记）/
+  `Mission/MissionX/MissionY` 三元宿主 `Entity` **未建模**（无字段；oracle 有消费者：
+  `MonsterObject` 无目标时回集中点、`SuperGuard` 忽略 Mission 目标 ⇒ 真实 AI 缺口，
+  但 `@MobPlace` 生产不可达）⇒ 只刷怪，偏离登记白名单 **T-271**）/
   ReCallMobEx（守卫 `Length>0` 怪癖：实参 <4 越界零帧；足参 ⇒ 刷一只 + `Master=调用者` +
   `SlaveExpLevel=1` + `NameColor` 钳 [0,255] + `RecalcAbilitys` + `RefNameColor(656)` +
   `SlaveList.Add`，**不置 IsSlave/不补 HP**）/怪（`(byte)_MIN(64,n)` + `nLevel=(byte)` 后

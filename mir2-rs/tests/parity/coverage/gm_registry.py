@@ -1342,13 +1342,27 @@ def cmd_selftest(args):
 
     def t_j():
         doc = copy.deepcopy(base)
-        # 样本随实现推进而换：`fdgfdg56`/`StorageLock` 已实现后改取 `s`/`Make`
-        # （conf[Command].Make=s ⇒ 字段 Make 的最终名是值 `s`，键 `Make` 不是命令名）。
-        row = next(r for r in doc["commands"] if r["field"] == "Make")
-        assert row["cmd"] == "s" and row["cmd_name"] == "s", \
-            "conf 键 Make ⇒ 字段 Make 的最终名应为值 `s`：%r" % row["cmd_name"]
-        row["cmd_name"] = "Make"  # v1 的错误口径：把 conf 键当 CmdName
-        gate_red(doc, "s.cmd_name:", "J conf 键当 CmdName", needle2="Make")
+        # 样本随实现推进而轮换：`fdgfdg56`/`StorageLock`、`s`/`Make` 均已实现后，取**任一**
+        # 仍不可达的 conf 改名行（`field` 是 conf 键、`cmd_name` 是值）。全部改名行都实现后
+        # 直接核推导表 `Make ⇒ s`（与 t_m 的退化路径同法），不静默放行。
+        row = next((r for r in doc["commands"]
+                    if r.get("field")
+                    and str(r.get("name_source", "")).startswith("conf[Command]")
+                    and r.get("cmd_name") != r.get("field")), None)
+        if row is None:
+            maps, _custom, _w = resolve_command_maps(
+                parse_gamecommands(), parse_gamecmdconf(),
+                parse_conf(args.conf)[0], parse_command_classes())
+            assert maps["Make"]["cmd_name"] == "s",                 "conf[Command].Make ⇒ 最终名应为 `s`：%r" % maps["Make"]["cmd_name"]
+            skips.append("J")
+            print("  [skip] J conf 键当 CmdName ⇒ gate 红"
+                  "（当前无未实现的 conf 改名行；已直接核推导表 Make⇒s）")
+            return
+        assert row["cmd"] == row["cmd_name"] and row["cmd_name"] != row["field"],             "conf 改名行口径异常：cmd=%r cmd_name=%r field=%r" % (
+                row["cmd"], row["cmd_name"], row["field"])
+        row["cmd_name"] = row["field"]  # v1 的错误口径：把 conf 键当 CmdName
+        gate_red(doc, "%s.cmd_name:" % row["cmd"], "J conf 键当 CmdName",
+                 needle2=row["field"])
 
     def t_k():
         doc = copy.deepcopy(base)

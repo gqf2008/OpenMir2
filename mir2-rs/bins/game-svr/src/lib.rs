@@ -19757,35 +19757,23 @@ fn gm_regen_monster(
 
 /// `@怪` 的 `monster.SlaveExpLevel = nLevel; RecalcAbilitys();`（`MobCommand.cs:48-54`）。
 ///
-/// `Master == null` ⇒ `ApplySlaveLevelAbilitys` 的 `Master != null` 支不命中；新生成怪的
-/// `WAbil == Abil`（惰性快照）⇒ 基础重算恒等。只有三族派生召唤物的覆写改速度
-/// （`WhiteSkeleton/ElfMonster/ElfWarriormon`，与 `crates/world::slave::apply_derived_slave_recalc`
-/// **逐行同式**——该函数 `pub(crate)`，宿主按源码复刻，登记为漂移点）。`AntiMagic` 置 1
-/// 同 `BaseObject.Abil.cs:30`。
+/// oracle `RecalcAbilitys`（`BaseObject.Abil.cs`）先 `WAbil = Abil.Clone()`、再对
+/// `Race >= Animal` 调 `ApplySlaveLevelAbilitys`。后者的
+/// `WhiteSkeleton/ElfMonster/ElfWarriormon` 支**不要求 `Master != null`** ⇒ `@怪`（Master=null）
+/// 在 `SlaveExpLevel > 0` 时同样按公式改 `WAbil.DC` / `WAbil.MaxHP`；随后三族覆写再调
+/// `ResetElfMon` 改 `NextHitTime/WalkSpeed/WalkTick`。
+///
+/// 复用 `crates/world::slave` 的**同一实现**（review I1：此前宿主只复刻了派生速度、漏了
+/// `ApplySlaveLevelAbilitys`，三族 DC/MaxHP 与 oracle 不一致）。`AntiMagic` 置 1 同
+/// `BaseObject.Abil.cs:30`。
 fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
     let Some(e) = world.entities.get_mut(id) else {
         return;
     };
     e.slave_exp_level = level;
+    mir2_world::slave::apply_slave_level_abilitys(e);
+    mir2_world::slave::apply_derived_slave_recalc(e, now);
     e.anti_magic = 1;
-    let lvl = i64::from(e.slave_make_level);
-    match e.race {
-        mir2_world::entity::ACTOR_RACE_WHITE_SKELETON => {
-            e.ai.next_hit_time = 3000 - lvl * 600;
-            e.ai.walk_speed = 1200 - lvl * 250;
-            e.ai.walk_tick = now + 2000;
-        }
-        mir2_world::entity::ACTOR_RACE_ELF_MONSTER => {
-            e.ai.walk_speed = 500 - lvl * 50;
-            e.ai.walk_tick = now + 2000;
-        }
-        mir2_world::entity::ACTOR_RACE_ELF_WARRIORMON => {
-            e.ai.next_hit_time = 1500 - lvl * 100;
-            e.ai.walk_speed = 500 - lvl * 50;
-            e.ai.walk_tick = now + 2000;
-        }
-        _ => {}
-    }
 }
 
 /// `@ReCallMobEx` 的落尾（`ReCallMobExCommand.cs:37-49`）：
@@ -19975,8 +19963,11 @@ fn apply_pending_gm_m_commands(
                 let Some(reg) = registry else {
                     return;
                 };
-                // `Mission/MissionX/MissionY` 三元在 Rust `Entity` 未建模（无消费者）⇒ 只刷怪，
-                // 标记登记（见卡面 forbidden：不新增存储列/不动 crates/world）。
+                // `Mission/MissionX/MissionY` 三元在 Rust `Entity` **未建模**（无字段）⇒ 只刷怪、
+                // 不置标记。**oracle 确有消费者**（`MonsterObject` 无目标时以 MissionX/Y 为
+                // Target；`SuperGuard` 忽略 Mission 目标的攻击），故这是真实 AI 建模缺口——
+                // 但 `@MobPlace` perm_min=10、生产 Permission 恒 0 ⇒ 生产不可达（脚本桥也按
+                // `m_host=false` 退化零帧）⇒ 以白名单 T-271 登记，不动 crates/world（卡面 forbidden）。
                 glog!(
                     "DBG",
                     "@MobPlace：Mission/MissionX/MissionY 标记未建模（Entity 无字段）⇒ 只按数量刷怪，标记登记"
@@ -43574,17 +43565,32 @@ break
 
     impl MGmRig {
         fn new() -> Self {
+            Self::with_monsters(&[("mob", 80)])
+        }
+
+        /// 指定 `(怪名, Race)` 列表建夹具：每一条都进 `MonsterTable` **与** `MonGenHost` 的
+        /// 线程表（否则 `RegenMonsterByName` 的 `GetMonsterThreadId == -1` ⇒ 生成失败）。
+        fn with_monsters(specs: &[(&str, u8)]) -> Self {
             let fx = clear_map_registry("map");
             let mut world = mir2_world::World::new(32, 32);
             world.rng = mir2_shared::rng::RandomNumber::with_seed(2026_1031);
             let mut e = mir2_world::Entity::new(0, "hero".to_string(), 5, 5);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             let actor = world.add_entity(e);
-            let table = game_svr::mongen::MonsterTable::new(vec![clear_map_monster_row("mob")]);
+            let table = game_svr::mongen::MonsterTable::new(
+                specs
+                    .iter()
+                    // `dc=5/max_dc=10 ⇒ Abil.DC=0x0A05`、`hp=100 ⇒ Abil.MaxHP=100`
+                    // （I1 用例的钉数；其余用例不断言怪数值）。
+                    .map(|(n, r)| m_monster_row(n, *r, 5, 10, 100))
+                    .collect(),
+            );
+            let entries = specs
+                .iter()
+                .map(|(n, _)| mir2_world::mongen::MonGenEntry::new("map", 5, 5, *n, 1, 1, 0, 0))
+                .collect();
             let host = game_svr::mongen::MonGenHost::start(
-                vec![mir2_world::mongen::MonGenEntry::new(
-                    "map", 5, 5, "mob", 1, 1, 0, 0,
-                )],
+                entries,
                 &table,
                 false,
                 mir2_world::mongen::MonGenConfig::default(),
@@ -43668,6 +43674,29 @@ break
 
         fn entity_ids(&self) -> Vec<i32> {
             self.world.entities.iter().map(|e| e.id).collect()
+        }
+    }
+
+    /// `MonsterInfo` 夹具：`Race = race`、`dc/max_dc` 拼 `MakeWord`、`hp` 即 `Abil.MaxHP`。
+    fn m_monster_row(
+        name: &str,
+        race: u8,
+        dc: u16,
+        max_dc: u16,
+        hp: u16,
+    ) -> mir2_data::models::MonsterInfo {
+        mir2_data::models::MonsterInfo {
+            name: name.to_string(),
+            race,
+            level: 10,
+            hp,
+            dc,
+            max_dc,
+            ac: 1,
+            hit_point: 5,
+            speed: 6,
+            exp: 10,
+            ..mir2_data::models::MonsterInfo::default()
         }
     }
 
@@ -44124,6 +44153,86 @@ break
             2,
             "按数量刷 2 只"
         );
+    }
+
+    /// **review I1**：`@怪`（`MobCommand.cs:48-54` 的 `RecalcAbilitys`）必须对
+    /// `Race >= Animal` 调 `ApplySlaveLevelAbilitys`——其三族支（WhiteSkeleton/ElfMonster/
+    /// ElfWarriormon）**不要求 `Master != null`** ⇒ 新刷怪在 `nLevel>0` 时按公式改
+    /// `WAbil.DC` / `WAbil.MaxHP`，随后三族覆写改派生速度。
+    /// 夹具：`dc=5/max_dc=10 ⇒ Abil.DC=0x0A05`、`hp=100 ⇒ Abil.MaxHP=100`；
+    /// nLevel=1 ⇒ `hi = round(10 + 3*(0.3+0.1)*1) = 11 ⇒ DC=0x0B05`、
+    /// `MaxHP = 100 + round(100*0.4)*1 = 140`。
+    ///
+    /// 变异红：删 `apply_slave_level_abilitys` 调用 ⇒ DC/MaxHP 断言红。
+    #[test]
+    fn gm_m_mob_recalc_applies_slave_level_abilitys_for_three_races() {
+        let mut rig = MGmRig::with_monsters(&[("skel", 100), ("elf", 113), ("elfwar", 114)]);
+        for (name, want_hit, want_speed) in [
+            ("skel", Some(3000), 1200),
+            ("elf", None, 500),
+            ("elfwar", Some(1500), 500),
+        ] {
+            let before = rig.entity_ids();
+            rig.sessions.get_mut("hero").unwrap().gm.pending_spawn =
+                Some(gmcmd::GmSpawnRequest::Mob {
+                    name: name.into(),
+                    count: 1,
+                    level: 1,
+                    x: 6,
+                    y: 5,
+                });
+            rig.apply();
+            let _ = rig.drain();
+            let after = rig.entity_ids();
+            let new: Vec<i32> = after
+                .iter()
+                .copied()
+                .filter(|id| !before.contains(id))
+                .collect();
+            assert_eq!(new.len(), 1, "{name}");
+            let abil = rig
+                .world
+                .entities
+                .get_mut(new[0])
+                .expect("新怪在场")
+                .abil_snapshot();
+            assert_eq!(abil.dc, 0x0A05, "{name} Abil.DC 快照（dc=5/max_dc=10）");
+            assert_eq!(abil.max_hp, 100, "{name} Abil.MaxHP 快照");
+            let e = rig.world.entities.get(new[0]).expect("新怪在场");
+            assert_eq!(
+                e.dc, 0x0B05,
+                "{name}：ApplySlaveLevelAbilitys 必须按 SlaveExpLevel=1 重算 WAbil.DC"
+            );
+            assert_eq!(
+                e.max_hp, 140,
+                "{name}：ApplySlaveLevelAbilitys 必须按 SlaveExpLevel=1 重算 WAbil.MaxHP"
+            );
+            assert_eq!(e.ai.walk_speed, want_speed, "{name} 派生 WalkSpeed");
+            if let Some(hit) = want_hit {
+                assert_eq!(e.ai.next_hit_time, hit, "{name} 派生 NextHitTime");
+            }
+        }
+        // 对照 nLevel=0：三族支的 DC hi 增量 = round(3*0.3*0)=0 ⇒ DC 不变；
+        // `if (slaveExpLevel > 0)` 才改 MaxHP ⇒ 回 Abil.MaxHP。
+        let before = rig.entity_ids();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_spawn = Some(gmcmd::GmSpawnRequest::Mob {
+            name: "skel".into(),
+            count: 1,
+            level: 0,
+            x: 6,
+            y: 5,
+        });
+        rig.apply();
+        let _ = rig.drain();
+        let after = rig.entity_ids();
+        let new: Vec<i32> = after
+            .iter()
+            .copied()
+            .filter(|id| !before.contains(id))
+            .collect();
+        let e = rig.world.entities.get(new[0]).expect("新怪在场");
+        assert_eq!(e.dc, 0x0A05, "nLevel=0 ⇒ DC 不变");
+        assert_eq!(e.max_hp, 100, "nLevel=0 ⇒ MaxHP 回 Abil");
     }
 
     /// **端到端**：`@GiveMine`/`@怪` 经生产入口 `handle_say_with_saves`（`GmWorld` 注入
