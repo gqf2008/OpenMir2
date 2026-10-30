@@ -2,16 +2,18 @@
 
 - 卡：`openmir2-cutover-report-20261030`（tier=L，纯文档；报告本体，规约「面向人的报告作为文件进仓库」）
 - 操作手册：`docs/cutover-runbook-20261029.md`（本报告引用它，不重复它；步骤编号 S0–S8/R1–R5/G0–G6 均按该手册口径）
-- 素材：台账线程 `openmir2-real-machine-verification-master`（75 条签名条目，本报告引用条目 oid 前 8 位）；
+- 素材：台账线程 `openmir2-real-machine-verification-master`；
   窗口证据根 `E:/tmp/window/cutover-20261029/`；登录链六卡与 world-join/dealtry/659 卡线程尾部结论。
+  （台账签名条目持续追加，本报告交付时点 76 条；引用一律条目 oid 前 8 位。）
 - 脱敏口径：探针账号名 `winplay0` 可提，密码一律写 `***`。
 
 ---
 
 ## §1 结论
 
-**切流完成。** 2026-10-30 10:24 台账登记 `CUTOVER-COMPLETE`（条目 `2e439135`）：现网十端口业务
-（5000/5100/5500/5600/5700/6000/7000/7100/7200）由 C# 六角色切到单二进制 `mir2-server.exe` 的同六角色
+**切流完成。** 2026-10-30 10:20:07(+08) 台账登记 `CUTOVER-COMPLETE`（条目 `2e439135`，ts=1793326807；
+条目 body 的 window 字段「10:24」为窗口口语径）：现网十端口业务（3306 + 5000/5100/5500/5600/5700/
+6000/7000/7100/7200 九个业务端口）由 C# 六角色切到单二进制 `mir2-server.exe` 的同六角色
 （db-srv / login-svr / game-svr / login-gate / sel-gate / game-gate），`login_only` 真机 completed，
 Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 **S1–S8 全段完成**。
 
@@ -37,7 +39,7 @@ Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 
 | ② DSN 端点权威源 | `openmir2-login-srv-dsn-source` | host/port 取 `DBServer/dbsvr.conf` 权威源、database→mir2_account；凭据取 dbsvr.conf 全套（见 §4-3）；fail-soft 路径补底层错误链日志 | `753724e3` / `10c5ef39` / `4a62f305`（reviewer-22 ×3，对应 v1/v2/v3 三轮合并 `2a95a286`/`f2f955c9`/`b0861b2c`） | recut5 S4「连接SQL服务器成功 + 账号数据读取成功[7477]」（条目 `ef440c86`）；决定性实验见条目 `59e15ac6` |
 | ③ 非法地址过滤器 | `openmir2-login-srv-illegal-addr-filter` | 白名单外地址（127.0.0.1 网关转发源）改 WARN 记录不断链，不再拒绝网关转发 | `f6464175`（reviewer-22） | recut2 S4「账号服务器链接成功、[登录] 帐号=winplay0 进 handlers」（条目 `9807cc4e`）；合并 `c61fa22d` |
 | ④ 回帧链 | `openmir2-login-srv-reply-chain` | [登录] 处理后回帧链修复（此前处理后 20s 零回帧）；503 实达探针 | `ac3e3de9`（reviewer-22） | recut3 S4 探针收到 503「账号不存在」（条目 `668050b6`）；合并 `eb9e4d82` |
-| ⑤ 选服路由按 ServerName | `openmir2-login-srv-select-route-match` | 服务器网关路由按 ServerName 匹配（对齐 AddrTable 语义），不再按 gateIP 字面硬配 | `a07c0544`（reviewer-22） | final-cut S7 530 选服 OK 22B 收到（条目 `69e3014a`）；合并 `f74975b6` |
+| ⑤ 选服路由按 ServerName | `openmir2-login-srv-select-route-match` | 服务器网关路由按 ServerName 匹配（对齐 AddrTable 语义），不再按 gateIP 字面硬配 | `a07c0544`（reviewer-22） | final-cut S7 530 选服 OK 收到（现盘 `smoke-final-login_only` 530 body_len=24B；条目 `69e3014a`）；合并 `f74975b6` |
 | ⑥ 查号链 | `openmir2-selgate-dbsrv-query-chain` | CM_QUERYCHR 的 SelGate 转发 / 会话票校验 / DBSrv 查询链贯通到 520 回帧 | `e9737c14`（reviewer-22） | final-cut2 S7 里程碑：529→530→520 全链首次真机贯通（条目 `21294f00`）；完成切 `smoke-recut6-login`（520 24B）；合并 `d3a22e63` |
 
 辅助设施：db-srv↔sel-gate 会话握手（白名单 WARN 不断链）在 ⑥ 开卡前已修通并真机验证
@@ -52,20 +54,21 @@ Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 
 
 | # | 窗口（证据目录） | 症状 | 断点 | 根因 | 修复去向 |
 |---|---|---|---|---|---|
-| 首切 | 10-29 15:16–15:24（`snap-at-cutover`，回滚冒烟 `smoke-rollback-login` 59 帧 completed） | S4 RED | login-srv 启动失败 | 绑定广播地址失败（单地址绑两端口语义） | §2-① 卡；回滚恢复 C#（条目 `15959330`） |
+| 首切 | 10-29 15:16–15:24（`snap-at-cutover`，回滚冒烟 `smoke-rollback-login` 54 帧 completed） | S4 RED | login-srv 启动失败 | 绑定广播地址失败（单地址绑两端口语义） | §2-① 卡；回滚恢复 C#（条目 `15959330`） |
 | 演练 | 10-29 16:20–16:35（回滚冒烟 `smoke-rollback-login2` 59 帧） | ①修验证通过后暴露第二层 | login-srv 连 SQL 即 fail-closed 退出 | `config.conf` 失效 DSN（10.10.0.199/Mir2）被沿用 | §2-② 卡（派 worker-83）；条目 `00ccdfa9` |
 | 重切1 | 17:52–18:05（`smoke-recut-login`，回滚 `smoke-rollback-login3` 62 帧） | login_only 仅 2 帧（503 不至） | login-srv 拒网关转发：「非法地址连接:127.0.0.1」 | 过滤器与同机部署 conf 耦合偏差 | §2-③ 卡；条目 `06763de9`；基线 `2a95a286` |
 | 重切2 | 18:24–18:39（`smoke-recut2-login`，回滚 `smoke-rollback-login4` 63 帧） | [登录] 处理后 20s 无回帧（无 529/530） | 回帧断链（查询/校验/路由待定位） | 回帧链未接 | §2-④ 卡；条目 `9807cc4e`；基线 `c61fa22d` |
 | 重切3 | 20:47–21:05（`smoke-recut3-login`，回滚 `smoke-rollback-login5` 69 帧） | 503 已实达但仍 [ERR] SQL 连接失败 | 权威源行正确（127.0.0.1:3306/mir2_account）但底层错误被吞 | fail-soft 只记 oracle 文本、不记底层 cause | §2-② 续作（补错误链日志+离线复现）；条目 `668050b6`；基线 `eb9e4d82` |
-| 重切4 | 21:33–21:47（`smoke-recut4-login`，回滚 69 帧） | 仍 SQL 1045 using password: YES | 凭据面 | **决定性实验**：root/无口令 TCP=成功；root/123456（config.conf pwd）TCP=1045 ⇒ v2「凭据沿用 config.conf」把陈旧口令带进运行时 | §2-② v3：凭据源切 dbsvr.conf 全套；条目 `59e15ac6`；基线 `f2f955c9` |
+| 重切4 | 21:33–21:47（`smoke-recut4-login`；回滚冒烟现盘缺目录，见 §5 勘误注） | 仍 SQL 1045 using password: YES | 凭据面 | **决定性实验**：root 走部署 `dbsvr.conf` 凭据语义 TCP=成功；沿用 `config.conf` 陈旧口令 TCP=1045 ⇒ v2「凭据沿用 config.conf」把陈旧口令带进运行时 | §2-② v3：凭据源切 dbsvr.conf 全套；条目 `59e15ac6`；基线 `f2f955c9` |
 | 重切5 | 21:52–22:05（`smoke-recut5-login`，回滚 `smoke-rollback-login6` 65 帧） | 529 首次收到（19B 服务器列表）但选服无 530；WRN「未匹配到服务器网关路由 gateIP=[127.0.0.1]」 | 选服路由匹配 | 路由匹配语义按 gateIP 硬配，不按 ServerName | §2-⑤ 卡；条目 `ef440c86`；基线 `b0861b2c`（DSN v3 真机验证：账号读取[7477]） |
 | 重切6=final-cut | 10-30 00:37–00:55（`smoke-final-*` 三件，回滚 `smoke-rollback-final` 60 帧） | 529+530 都收到；CM_QUERYCHR 后 30s 无 520 | SelGate→DBSrv 查号链 | 转发/会话票/查询链断点 | §2-⑥ 卡（派 worker-84）；条目 `69e3014a`；基线 `f74975b6`（含握手修复） |
 | 重切7=final-cut2 | 09:20–09:33（`smoke-final2-login` RED：exit=2 `SM_STARTPLAY port out of range '0'`；备份边界 `backup-final2` 水位 09:25:25；回滚 `smoke-rollback-login7` 58 帧） | 里程碑：529→530→520 全链首通；MirClientZig e2e 步骤 5–9 PASS；新阻断=进图 | SM_STARTPLAY 空（port=0） ⇒ 客户端拿不到游戏地址，世界会话 0 | worker-83 断点定性（`6f55ce28`）：`ServerInfo.txt` 的 sel_gate_ip=10.10.0.102 与同机连接源 127.0.0.1 不符 ⇒ db-srv `gate_route` 未命中 ⇒ 525 体编码恰 3 字节空路由；rust 侧 route 语义与 C# 同构（`GateRouteIp`），**修复=部署文件内容而非代码** | §4-2 部署修复（协调者批准内容冻结边界变更）；条目 `21294f00`；基线 `f74975b6`+AddrTable 已切 |
-| 完成切（台账称第六次重切） | 10-30 10:24（冒烟 `smoke-recut6-login`：exit=0 completed，frames_total=65） | login_only 走完：529→530→520→525→SM_LOGON(50)→SM_ABILITY(52)→SM_NEWMAP(10) | — | 全部六层修复合并态（`d3a22e63`）+ §4 部署对齐 | `CUTOVER-COMPLETE`（条目 `2e439135`），栈留生产 |
+| 完成切（台账称第六次重切） | 10-30 10:19 冒烟、10:20:07(+08) 台账登记（冒烟 `smoke-recut6-login`：exit=0 completed，frames_total=65） | login_only 走完：529→530→520→525→SM_LOGON(50)→SM_ABILITY(52)→SM_NEWMAP(10) | — | 全部六层修复合并态（`d3a22e63`）+ §4 部署对齐 | `CUTOVER-COMPLETE`（条目 `2e439135`），栈留生产 |
 
 > 引用勘误：条目 `2e439135` 的 evidence 指针写作 `smoke-final2-login`（65 帧 exit=0）；现盘该目录内容是
-> 重切7 的 RED 跑（09:34，exit=2 port=0，4 帧），完成切冒烟现盘落在 `smoke-recut6-login`（10:19，
-> exit=0，65 帧，529/530/520/525 齐）。以台账事件 + 现盘 `smoke-recut6-login` 为准。
+> 重切7 的 RED 跑（09:34，exit=2 port=0，run.json frames_total=8），完成切冒烟现盘落在
+> `smoke-recut6-login`（10:19，exit=0，65 帧，529/530/520/525 齐）。以台账事件 + 现盘
+> `smoke-recut6-login` 为准。帧数口径全文统一为 run.json `frames_total`。
 > 另：11:05 `smoke-recut7-login`（66 帧 completed）为完成后的稳定性复测。
 
 ---
@@ -78,7 +81,7 @@ Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 
 |---|---|---|---|---|---|
 | 1 | `LoginSrv/AddrTable.txt` | 每行 `热血传奇 Title1 10.10.0.102 10.10.0.102 10.10.0.102:7100`（两行，10.10.0.102 共 6 处）→ 同构换 `127.0.0.1`（6 处） | `8aa77811`（`addrtable-backup/AddrTable.txt.orig`） | `c104e949` | worker-83 提案 `6f55ce28`「需协调者批准，涉及内容冻结边界」→ 协调者批准并随重切7/完成切生效，台账 `21294f00`/`2e439135` 登记 |
 | 2 | `DBServer/ServerInfo.txt` | `10.10.0.102 10.10.0.102 7200` → `127.0.0.1 127.0.0.1 7200` | `72602835`（`serverinfo-backup/ServerInfo.txt.orig`） | `7696ffb8` | 同上（`6f55ce28` `fix_proposal`；db-srv 重启后生效） |
-| 3 | `LoginSrv/config.conf` 凭据（文件不改，改 login-srv 的凭据来源） | login-srv 运行时凭据沿用 config.conf（pwd=123456，陈旧）→ 改从 `DBServer/dbsvr.conf` 全套凭据、仅覆写 database→mir2_account | 不适用（代码+读取源变更；config.conf 原文件未动） | 不适用 | 重切4 决定性实验钉死陈旧口令（实验 A：root/无口令 TCP 成功；实验 C：pwd=123456 ⇒ 1045，离线测试 MUT-C 固化为红牙）；§2-② v3 合并 `b0861b2c` |
+| 3 | `LoginSrv/config.conf` 凭据（文件不改，改 login-srv 的凭据来源） | login-srv 运行时凭据沿用 `config.conf`（陈旧口令）→ 改从 `DBServer/dbsvr.conf` 全套凭据、仅覆写 database→mir2_account | 不适用（代码+读取源变更；config.conf 原文件未动） | 不适用 | 重切4 决定性实验钉死陈旧凭据源（实验 A：root 走部署 dbsvr.conf 凭据语义 TCP 成功；实验 C：沿用 config.conf 陈旧口令 ⇒ 1045，离线测试 MUT-C 固化为红牙；口令细节不落本报告）；§2-② v3 合并 `b0861b2c` |
 
 > 服务器名 `热血传奇`、对外端口、客户端（Delphi mirbeta）保持不变——对客户端透明的红线未被触碰
 > （`127.0.0.1` 生效的前提是同机部署；生产多机化时的还原见 §7-1）。
@@ -99,13 +102,17 @@ Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 
 - **S2 存档落库确认**：强停下水位不上抬，照实记录；各备份边界水位 = 17:25:08 / 18:23:50 / 20:49:46 /
   21:36:50 / 21:58:03 / 00:38:49 / 09:25:25（backup-final2，完成切与生产态的回滚数据基线）。
 - **S3 正式备份**：每窗口 prod-main + 分片×2（`Dump completed`=1）+ dbsnap 快照
-  （`snap-at-recut*`、`snap-at-final`、`snap-at-final2`、完成切边界 `snap-at-cutover` 为首轮留档）。
+  （`snap-at-recut*`、`snap-at-final`、`snap-at-final2`；`snap-at-cutover` 为首轮（首切）边界留档，
+  兼作 §5-S8 dbsnap diff 的基线侧）。
 - **S4/S5 起栈与端口复验**：`start_mir2_server.ps1` 六角色 fail-closed；各轮 RED 点见 §3，S5 端口
   与基线逐端口一致（无端口面 RED）。
 - **S7 冒烟**：probe 一次一场景；RED 即回滚——R1 `stop_mir2_server.ps1`（`MIR2_SERVER_STACK_STOPPED`）
   → R2 dbsnap 判读（首轮各窗口 Rust 侧零业务写入或仅存档族，未触发回灌）→ R3 `start-all.ps1` 恢复 C#
-  → 十端口回齐 → R4 login_only completed（回滚冒烟帧数序列：首切与演练各 59 / 62 / 63 / 69 / 69 /
-  65 / 60 / 58，目录 `smoke-rollback-*`，exit 全部=0）。
+  → 十端口回齐 → R4 login_only completed（回滚冒烟帧数序列，run.json frames_total 按窗口重标：
+  首切 54 / 演练 59 / 重切1 62 / 重切2 63 / 重切3 69 / 重切5 65 / 重切6 60 / 重切7 58，目录
+  `smoke-rollback-*`，exit 全部=0。**勘误注**：重切4 的回滚冒烟现盘缺目录——21:50 前后无任何
+  `smoke-rollback-*`（login5 21:10=69 帧属重切3、login6 22:35=65 帧属重切5）；台账 `59e15ac6`
+  称 69 帧与重切3 同值、无现盘可溯源，与 §3 引用勘误同例照实登记）。
 - **完成切 S7**：`smoke-recut6-login` exit=0 completed（65 帧）；11:05 `smoke-recut7-login` 复测 66 帧
   completed；17:1x recut8 三件套复测见 §6。
 - **S8 观察段**：
@@ -113,8 +120,11 @@ Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 
   - **存档抽查 PASS**（条目 `071aaee3`）：`dbsnap diff snap-at-cutover vs snap-post` 差异面 =
     存档族 6 表（account / characters / characters_ablity / characters_bagitem / characters_indexes /
     characters_magic），**无存档族外写库，不触发回滚**。
-  - 差异归因：admin 账号 14:17(+0800) 经登录链真客户端登录（`E:/MirServer/logs/mir2-server/login-srv.out.log`
-    `[登录] 帐号=[admin] gateIP=[127.0.0.1] routeCount=2`，另有 03:06/06:17 UTC 两次）；gm01 进图存档
+  - 差异归因：admin 账号经登录链真客户端登录共三次——`E:/MirServer/logs/mir2-server/login-srv.out.log`
+    （log 为 UTC 戳）逐字：`[登录] 帐号=[admin] 密码长度=6`，相邻下一行
+    `[选服] account=[admin] server=[热血传奇] gateIP=[127.0.0.1] selServer=false isLogin=true routeCount=2`
+    （gateIP/routeCount 在 [选服] 行，非 [登录] 行）；三次 UTC 戳 03:06 / 06:17 / 09:33 = +0800
+    11:06 / 14:17 / 17:33，末次与 MirClientZig social-20261030-173310 e2e 同窗；gm01 进图存档
     （挪位 324,327→289,618、bagitem 购买占用、ability 数值增长、magic 2268→2298）——真客户端游玩数据；
     probe winplay0 的 recut8 三件套（17:1x）写库同属存档族。
   - 日志巡检：各角色 err 日志无持续刷屏异常（`E:/MirServer/logs/mir2-server/`）。
@@ -127,25 +137,29 @@ Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 
 
 | 场景 | run.json | 帧面（frames.ndjson） |
 |---|---|---|
-| `smoke-recut8-login` | exit=0 completed，frames_total=67 | 529（19B 服务器列表）/530（22B）/520（24B）/525 各 1 → SM_LOGON(50)、SM_ABILITY(52)、SM_NEWMAP(10)×15 |
+| `smoke-recut8-login` | exit=0 completed，frames_total=67 | 529（19B 服务器列表）/530（23B）/520（24B）/525 各 1 → SM_LOGON(50)、SM_ABILITY(52)、SM_NEWMAP(10)×15（530 体长随内容浮动：final-cut=24B、recut6/7=22B、recut8=23B） |
 | `smoke-recut8-walk` | exit=1（steps[1] 3s 空等待超时；台账按帧面判读） | GD 族移动回执 11×5 + 14×1 在场 |
 | `smoke-recut8-merchant` | exit=0 completed，frames_total=43 | 商人对话 643×2 → 645×1（探针角色 placement 钉 0103(19,19)，discovery merchant_actor=22）；另 `smoke-recut8-npcdisc` exit=0（41 帧，643×1） |
 
-台账 V-* 三项状态（写「调查中」的不下结论）：
+台账 V-* 三项状态（订正：2026-10-30 18:3x–18:4x 两张调查卡已按「rust 无缺口」收口，下为订正后状态）：
 
 - **V-querybagitems-81：CONFIRMED。** probe 观测（`smoke-81-obs`，exit=1=预期：等待新 201 超时）：
   发 CM_QUERYBAGITEMS(81) 后 4s 窗口无新 201（唯一 201 为登录自动下发）——首查空表不回 ✓；MirClientZig
   独立互证（空包 81 零回包、30s 节流、铁器店 goods 全有货）；代码面由 81 卡 A2 牙覆盖
   （`openmir2-querybagitems-81-throttle`，牙已合并 `20fd3bd7`）。
-- **V-dealtry-e2e：调查中**（FAIL→调查卡 `openmir2-dealtry-empty-name-orientation`）。MirClientZig
-  相邻双端 CM_DEALTRY(1025，空名) 零回音；Leader 已核 rust `pose_create` 与 oracle `GetPoseCreate`
-  同构（实时朝向+前排格）、oracle 无相邻扫描分支（前排格无人时同样零回音），「补相邻扫描分支」的
-  建议不采纳；本卡转朝向证据 + actor_dir 链定性（dealtry 卡 `openmir2-dealtry-adjacent-resolution`
-  本体已按新规收口，条目 `8406656e`/`077e4aa7`）。
-- **V-groupmode-659-g2：调查中**（PARTIAL→调查卡 `openmir2-groupmode-659-party-path`）。probe 单连接
-  双态必回已证（`smoke-659-obs`，exit=0 completed：开组 659 Param=1 @2310ms、关组 659 Param=0 @2838ms，
-  两态各回恰好一条，与 master 牙 `party_cm_groupmode_close_replies_659_zero` 语义一致）；服务端侧
-  零回音疑云排除；MirClientZig 双端组队多轮到达率 2/6，缺口在有组路径/队列去重/场景朝向之一。
+- **V-dealtry-e2e：CONFIRMED-CLOSED**（调查卡 `openmir2-dealtry-empty-name-orientation` 已 closed，
+  收口条目 `3680cb89`）。分支 a 收口——**rust 无缺口**：CM_DEALTRY 全链（pose_create 前排解析 /
+  faces_me 回指 / 双向绿字 / 673 对手名尾 / 674）在线行为与 oracle 同构，双连接三组对照全过
+  （面向+空名 ⇒ 双向绿字+673+674 全通）；MirClientZig 零回音=其场景朝向问题（发 1025 时前排格无对象，
+  走 Absent 静默支——oracle 同场景前排无人同样零回音，NRE 被 catch 吞）。rust 零改动，A4 不适用。
+  证据：`E:/tmp/window/dual-driver/`（run1–run3、summary.json）。dealtry 母卡
+  `openmir2-dealtry-adjacent-resolution` 亦已按新规收口（条目 `8406656e`/`077e4aa7`）。
+- **V-groupmode-659-g2：CONFIRMED-CLOSED**（调查卡 `openmir2-groupmode-659-party-path` 已 closed，
+  收口条目 `9eed63b1`）。**rust 无缺口**：A2 排除 a/b/c 三假设（rust 对 CM_GROUPMODE 每次调用无条件
+  恰发一条 659）、A3 双连接复现 12/12 到达、A1=MirClientZig 表 B 互证（其 G2 七轮全部为单连接无组
+  toggle、从未建组——G3–G5 NOT-RUN 无 1020；部署切换后每发必回且 param 镜像，含 1→0→1 三连发
+  全回、延迟 57–300ms）。与 probe 单连接双态必回（`smoke-659-obs`）互证。rust 零改动。
+  证据：`E:/tmp/window/dual-driver/summary.json`。
 
 ---
 
@@ -157,9 +171,11 @@ Rust 栈留生产；同日 17:33 S8 存档抽查 PASS（条目 `071aaee3`）后 
    `DBServer/ServerInfo.txt` 同理保留备份（`serverinfo-backup/ServerInfo.txt.orig`，sha `72602835`）。
 2. **探针角色 placement 还原（owner 待办）**：winplay0（密码 `***`）现钉 0103(19,19)，原始 placement
    为 0/287/616；商人对话冒烟依赖该钉位，多机还原或冒烟退役后一并还原。
-3. **台账 V-* 后续**：V-dealtry-e2e、V-groupmode-659-g2 各自的调查卡（§6）待认领深挖；
-   V-querybagitems-81 已 CONFIRMED 无余项。
-4. **台账登记的其它后续**：SelGate↔DBSrv >10 分钟稳定性观测（握手 A3 后续，条目 `2e439135` remaining）；
+3. **台账 V-* 后续**：三项全部收口——V-querybagitems-81 CONFIRMED；V-dealtry-e2e 与
+   V-groupmode-659-g2 两张调查卡已按「rust 无缺口」CONFIRMED-CLOSED（§6），无待办。
+4. **台账登记的其它后续**：world-join 深度验证（MirClientZig e2e 进图波次，条目 `2e439135`
+   remaining——主链已由 recut8 三件套与 MirClientZig 全链验收 `d25b5ad0` 覆盖，更深度进图波次按台账
+   继续观测）；SelGate↔DBSrv >10 分钟稳定性观测（握手 A3 后续，条目 `2e439135` remaining）；
    商人 [goods] 补货配置（Envir 域内容红线，owner 裁决项，条目 `d25b5ad0` remaining）。
 
 ---
