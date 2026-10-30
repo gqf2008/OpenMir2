@@ -28384,7 +28384,6 @@ mod tests {
             .unwrap();
         assert_eq!(u16::from_le_bytes([sm[6], sm[7]]), 0xFFC4, "组队色 Param");
         assert_eq!(u16::from_le_bytes([sm[10], sm[11]]), 1, "series=1");
-
         // ③ L 把 T 移出组
         handle_party_cmd(
             mir2_protocol::messages::CM_DELGROUPMEMBER,
@@ -28435,6 +28434,77 @@ mod tests {
             gbk_encode("T"),
             "SM_GROUPDELMEM_OK 尾 = EncodeString(被删者名)"
         );
+    }
+
+    /// **卡 `openmir2-groupmode-659-always-reply`（A2 关态牙）**：`CM_GROUPMODE` 的
+    /// `param2==0`（关闭支）在**生产派发路径** `handle_party_cmd` 上也必回恰好一条
+    /// `SM_GROUPMODECHANGED(659)` 且 `Param=0`（无组 ⇒ `ClientGroupClose` 只清
+    /// `AllowGroup`，oracle `Operate.cs:787-791`；回帧无条件 `PlayObject.Message.cs:924-929`）。
+    ///
+    /// 红检（变异 M-删回帧，本人 worktree 重放）：把 `crates/world/src/party.rs::
+    /// party_group_mode` 的 `em.now(PartyEvent::GroupModeChanged…)` 删掉 ⇒ 本用例与
+    /// 既有 659(1) 断言、`party_vectors::group_mode_*` 同时红。
+    #[test]
+    fn party_cm_groupmode_close_replies_659_zero() {
+        use mir2_world::{Entity, PartyConfig};
+        use std::collections::HashMap;
+
+        fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(ev) = rx.try_recv() {
+                match ev {
+                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    other => panic!("组队路径不得发 SendFrame 以外的命令，实得 {other:?}"),
+                }
+            }
+            out
+        }
+
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let mut world = mir2_world::World::new(32, 32);
+        let p = world.add_entity(Entity::new(3, "P", 12, 10));
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "c".into(),
+            chr_name: "P".into(),
+            session_id: 3,
+            gate_idx: 0,
+            socket: 7,
+            actor_id: p,
+        }];
+        let cfg = PartyConfig::default();
+
+        handle_party_cmd(
+            mir2_protocol::messages::CM_GROUPMODE,
+            0,
+            None,
+            "P",
+            7,
+            &online,
+            &mut world,
+            &gates,
+            &cfg,
+            &mut std::collections::HashMap::new(),
+            &mut std::collections::HashMap::new(),
+            None,
+            &game_svr::ability::StdItemCatalog::new(),
+            None,
+            &game_svr::npc::NpcVars::default(),
+        );
+        let frames = drain(&mut rx0);
+        assert_eq!(frames.len(), 1, "关闭支必须回恰好一条 659（无条件回帧）");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_GROUPMODECHANGED
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[0][6], frames[0][7]]),
+            0,
+            "无组关闭 ⇒ Param=0（AllowGroup 已清）"
+        );
+        assert!(!world.entities.get(p).unwrap().allow_group);
     }
 
     /// **`openmir2-m3-party-gotolabel-ext` 进程级判据**：`FunctionNPC.GotoLable` 宿主接线。

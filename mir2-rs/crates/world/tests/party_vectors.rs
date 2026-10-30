@@ -316,6 +316,55 @@ fn group_mode_sets_allow_group_and_reports_param() {
     assert!(!w.entities.get(p).unwrap().allow_group);
 }
 
+/// **卡 `openmir2-groupmode-659-always-reply`（A2「必回」牙）**：关闭支（`param2==0`）的
+/// 三种 owner 案例——①无组（owner=0）②普通成员（owner=他人，先 `DelMember`）③团长本人
+/// （`AllowGroup` 不被 `ClientGroupClose` 修改）——都**必须**含
+/// `GroupModeChanged`（oracle 回帧无条件，`PlayObject.Message.cs:924-929`；关闭支
+/// `Operate.cs:787-808`）。
+///
+/// 红检（变异 M-删回帧，本人 worktree 重放）：把 `party_group_mode` 的
+/// `em.now(PartyEvent::GroupModeChanged…)` 删掉 ⇒ 本用例与
+/// `group_mode_sets_allow_group_and_reports_param` 同时红。
+#[test]
+fn group_mode_close_replies_659_in_all_owner_cases() {
+    let (mut w, l, t, u) = three_players();
+    // ③ 团长本人：先置 `AllowGroup=true`（真实序：团长开组前必发过 1019 开），关闭后
+    //    `ClientGroupClose` 的 owner==me 分支**不改** `AllowGroup` ⇒ 659 带 Param=1。
+    w.entities.get_mut(l).unwrap().allow_group = true;
+    // L 建组收 T ⇒ L 是 owner、T 是成员（用既有建组口径，覆盖成员关闭路径）。
+    let _ = w.party_create_group(l, "T", &cfg());
+
+    // ① 团长关闭：659(param=1) 必在（`AllowGroup` 保持）。
+    let evs = w.party_group_mode(l, 0, &cfg());
+    assert!(
+        per_target(&evs, l).iter().any(
+            |e| matches!(e, PartyEvent::GroupModeChanged { target, param } if *target == l && *param == 1)
+        ),
+        "团长关闭也必须回 659（Param 保持当前 AllowGroup=1）"
+    );
+
+    // ② 成员关闭：DelMember 族之外仍必含 GroupModeChanged(param=0)。
+    let evs = w.party_group_mode(t, 0, &cfg());
+    assert!(
+        per_target(&evs, t).iter().any(
+            |e| matches!(e, PartyEvent::GroupModeChanged { target, param } if *target == t && *param == 0)
+        ),
+        "成员关闭也必须回 659(param=0)"
+    );
+    assert!(!w.entities.get(t).unwrap().allow_group);
+
+    // ③ 无组（owner=0）：事件序恰好只有一条 GroupModeChanged(param=0)。
+    let evs = w.party_group_mode(u, 0, &cfg());
+    assert_eq!(
+        per_target(&evs, u),
+        vec![PartyEvent::GroupModeChanged {
+            target: u,
+            param: 0
+        }]
+    );
+    assert!(!w.entities.get(u).unwrap().allow_group);
+}
+
 #[test]
 fn run_tick_clears_owner_when_leader_dead_and_removes_dead_member() {
     let (mut w, l, t, u) = three_players();
