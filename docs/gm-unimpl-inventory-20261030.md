@@ -203,9 +203,9 @@ rust 命令交叉，找「rust 按源文本发帧、oracle 真机 NRE 零帧」�
 
 ### 8.1 A1 字段穷举（grep 赋值点=0 逐字段列明）
 
-34 个 null 声明字段中 **29 个 NULL-FOREVER**（全仓零赋值）、**5 个已初始化**
-（`ManageNPC`/`RobotNPC`/`FunctionNPC` 各 4 处 + GameApp 启动直赋，`GameApp.cs:85-92`；
-`FilterWord` 非 null 声明、`:70` 置 true，不入本清单）。NULL-FOREVER 字段中**有读点**的 11 个：
+34 个 null 声明字段中 **3 个有赋值**（`ManageNPC`/`RobotNPC`/`FunctionNPC`，各恰 4 处：
+`LocalDB.cs` 210/227/232/268/284/289/312/328/333 与 `GameApp.cs:85-87`）、**31 个
+NULL-FOREVER**（全仓零赋值）。31 个 NULL-FOREVER 中**有读点**的 11 个、零读点 20 个：
 
 | 字段 | 声明行 | 读点文件 |
 |---|---|---|
@@ -216,7 +216,7 @@ rust 命令交叉，找「rust 按源文本发帧、oracle 真机 NRE 零帧」�
 | ItemBindIPaddr / ItemBindAccount / ItemBindChrName / ItemBindDieNoDropName | :112-115 | BindUseItemCommand |
 | DenyIPAddrList / DenyChrNameList / DenyAccountList | :135/:139/:143 | Del+Show Deny 六命令 |
 
-其余 18 个 NULL-FOREVER 字段全仓零读点（MakeItemList/StartPointList/ServerTableList/
+其余 20 个 NULL-FOREVER 字段全仓零读点（MakeItemList/StartPointList/ServerTableList/
 AbuseTextList/MiniMapList/LogonCostLogList/UnbindList/LineNoticeList/MonSayMsgList/
 DisableMakeItemList/EnableMakeItemList/DisableSellOffList/DisableMoveMapList/
 MonDropLimitLIst/DisableTakeOffList/UnMasterList/UnForceMasterList/GameLogItemNameList/
@@ -227,13 +227,13 @@ NoClearMonLIst/NoHptoexpMonLIst）⇒ 无命令交叉面。
 | # | 命令 | oracle 真机（NRE 行号） | rust 首轮行为 | 修复 |
 |---|---|---|---|---|
 | 1 | `@禁言`（批次5 ShutupCommand） | :30 `EnterCriticalSection(DenySayMsgList)`（null）在 :56 SysMsg 之前 ⇒ NRE 吞 ⇒ 零帧；:33-50 名单写段本就全注释 | 红字「X 已被禁言N分钟」 | 红字支 → 零帧+NOTE（校验失败红帮助在 Enter 前仍可达） |
-| 2 | `@-jid`（DelDenyAccountLogon） | :26 for-init 读 DenyAccountList ⇒ NRE ⇒ 零帧 | 绿「X 没有被禁止登录。」 | 绿支 → 零帧+NOTE（空名红帮助在触表前仍可达） |
+| 2 | `@-jid`（DelDenyAccountLogon） | :25 for-init 读 DenyAccountList ⇒ NRE ⇒ 零帧 | 绿「X 没有被禁止登录。」（:41） | 绿支 → 零帧+NOTE（空名红帮助在触表前仍可达） |
 | 3 | `@DelDenyChrNameLogon` | :26 同构（DenyChrNameList） | 绿同 | 同上 |
-| 4 | `@-jip`（DelDenyIPaddrLogon） | :26 同构（DenyIPAddrList） | 绿同 | 同上 |
-| 5 | `@+-jid`（ShowDenyAccountLogon） | :15 Count ⇒ NRE ⇒ 零帧（:12 有 perm<6 内门，客户端直呼被外门 10 挡 ⇒ 偏差仅在脚本抬权路径） | 绿「禁止登录帐号列表为空。」 | 绿支 → 零帧+NOTE（perm<6 静默门保留） |
+| 4 | `@-jip`（DelDenyIPaddrLogon） | :26 倒序 for-init 同构（DenyIPAddrList；文件 53 行） | 绿同（:50） | 同上 |
+| 5 | `@+-jid`（ShowDenyAccountLogon） | :19 Count ⇒ NRE ⇒ 零帧（:13 有 perm<6 内门：<10 调用方被外门挡；≥10 调用方——客户端 GM 与脚本抬权——都到达触表点） | 绿「禁止登录帐号列表为空。」 | 绿支 → 零帧+NOTE（perm<6 静默门保留） |
 | 6 | `@ShowDenyChrNameLogon` | :15 同构（DenyChrNameList，无内门） | 绿同 | 绿支 → 零帧+NOTE |
 | 7 | `@+-jip`（ShowDenyIPaddrLogon） | :16 同构（DenyIPAddrList，无内门） | 绿同（表空提示沿用角色文案怪癖随之不可达） | 同上 |
-| — | `@Binduseitem`（BindUseItemCommand） | 触表点在 bind case 内（ItemBind* 四表 null）⇒ NRE 零帧 | **无偏差**：rust 因 `GetUseItemIdx` 宿主未接恒 -1 ⇒ 校验门挡 ⇒ 红帮助/越界零帧，bind case 体从未实现（NOTE_GM4_BAG 已登记） | 不修 |
+| 8 | `@Binduseitem`（BindUseItemCommand） | 合法槽名输入类（review ac8c3ab2 F1 补）：`GetUseItemIdx`（`SystemShare.cs:1834-1891`）是**编译期常量表**（13 个 `MessageSettings` const 槽名，`MessageSettings.cs:15-27`），无宿主依赖 ⇒ 门（:42）后三支：离线 ⇒ 红「现在不在线…」（:50）；在线空槽（`UseItems[n].Index==0`）⇒ 红 `{名}的{槽}没有戴物品!!!`（`CommandHelp.cs:102`，:53-59）；在线已穿戴 ⇒ `switch(nBind)` 触 `SystemShare.ItemBind*`（`SystemShare.cs:112-115`，null）⇒ `EnterCriticalSection(null)` NRE ⇒ 零帧 | 首轮误判「无偏差」（`GetUseItemIdx` 宿主未接恒 -1 只描述 rust 侧；对照输入「项链」恰在偏差类）；rust 恒红帮助 | 落 13 名常量表 + 三支（离线红/空槽红/已穿戴零帧+NOTE） |
 | — | `@取消禁言`（ShutupReleaseCommand） | :20-22 `A‖!A` 恒真早退在 :25 Enter **之前** ⇒ 帮助文本可达 | 帮助 ✓ | 不修 |
 
 ### 8.3 R 级真机台账（帧面偏差，挂窗口项）
@@ -243,10 +243,13 @@ NoClearMonLIst/NoHptoexpMonLIst）⇒ 无命令交叉面。
 | SW-1 | `@禁言 zhangsan 30` | 真机客户端**零帧**（无「已被禁言30分钟」红字）；参数非法时帮助红字可达 |
 | SW-2 | `@-jid acct` | 真机**零帧**（无「acct没有被禁止登录。」绿字）；空名时帮助红字可达 |
 | SW-3 | `@DelDenyChrNameLogon 张三` / `@-jip 1.2.3.4` | 同 SW-2 |
-| SW-4 | `@+-jid` / `@ShowDenyChrNameLogon` / `@+-jip` | 真机**零帧**（无「列表为空。」绿字）；脚本 GMEXECUTE 抬权路径同样零帧 |
-| SW-5 | `@查看私聊 bob` 两次 | Msg2→Msg1 toggle 正常（不触 null 表；F3 目标重登差异另见 §7） |
+| SW-4 | `@+-jid` / `@ShowDenyChrNameLogon` / `@+-jip` | 真机**零帧**（无「列表为空。」绿字）；≥10 调用方（客户端 GM 与脚本抬权）都到达触表点 |
+| SW-6 | `@Binduseitem bob 项链 帐号`（在线已穿戴） | 真机**零帧**（无绑定成功/已绑定文本）；离线 ⇒ 红「现在不在线…」；在线空槽 ⇒ 红「{名}的{槽}没有戴物品!!!」（review ac8c3ab2 F1 第 8 条偏差） |
 
 ### 8.4 附注（不属本卡写集的读点）
+
+> 台账口径：`@查看私聊` 的 toggle 行为不触 null 表，属 X1/F3 面（卡
+> `openmir2-gm-family-x1-denywhisper` review F3 登记），不在本扫盲台账内（review M4）。
 
 - `SellOffItemList`（:66）：GoldDealService/ExecutionProcessingSys 读（寄售系统+脚本，非
   GameCommand 命令体）；rust `selloff` 用宿主侧独立表。oracle 活跃表是 M2Share 孪生字段

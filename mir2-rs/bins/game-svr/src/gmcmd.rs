@@ -248,6 +248,9 @@ pub const ADJUEST_EXP_HELP: &str = "命令格式: @调整经验 物名称 经验
 pub const ADJUEST_LEVEL_HELP: &str = "命令格式: @1级 人物名称 等级";
 pub const ADJUST_EXP_HELP: &str = "命令格式: @AdjustExp ";
 pub const BIND_USE_ITEM_HELP: &str = "命令格式: @Binduseitem 人物名称 物品类型 绑定方法";
+/// `CommandHelp.GameCommandBindUseItemNoItemMsg`（`CommandHelp.cs:102`）：在线目标该佩戴位
+/// 空槽（`UserItem.Index == 0`）的红字（`BindUseItemCommand.cs:53-59`）。
+pub const BIND_NO_ITEM_FMT: &str = "{0}的{1}没有戴物品!!!";
 pub const BONU_POINT_HELP: &str = "命令格式: @调整属性 人物名称 属性点数(不输入为查看点数)";
 pub const CHANGE_ADMIN_MODE_HELP: &str = "命令格式: @1 ";
 pub const CHANGE_ATTACK_MODE_HELP: &str = "命令格式: @AttackMode ";
@@ -2338,19 +2341,19 @@ const NOTE_SIGN_MAP_MOVE: &str = "SignMapMove: oracle 命令体整段注释 ⇒ 
 // `LoadDenyIPAddrList` 的读入体），所以启动后三表恒空、`boDelete` 恒 false。本仓不建这三张表
 // （宿主未接，`whitelist.md` T-162），文本按 oracle 原文发。
 
-/// `DelDenyAccountLogonCommand.Execute`（`DelDenyAccountLogonCommand.cs:12-27`，现网 `@-jid`）。
+/// `DelDenyAccountLogonCommand.Execute`（`DelDenyAccountLogonCommand.cs:12-44`，现网 `@-jid`）。
 ///
-/// 空名红帮助可达（:18-20 不触表）；非空 `:26` for-init 读 null 表即 NRE ⇒ 零帧
-/// （源文本绿「{名} 没有被禁止登录。」真机不可达）。
+/// 空名红帮助可达（:19-22 不触表）；非空 `:25` for-init 读 null 表即 NRE ⇒ 零帧
+/// （源文本绿「{名} 没有被禁止登录。」（:41）真机不可达）。
 fn del_deny_account(parameters: &str) -> GmResult {
     let params: Vec<&str> = parameters.split(' ').collect();
     let account = params.first().copied().unwrap_or("");
     if account.is_empty() {
         return GmResult::one(GmColor::Red, DEL_DENY_ACCOUNT_HELP.to_string());
     }
-    // oracle 真机零帧（扫盲卡 openmir2-gm-systemshare-null-sweep）：:26 for-init 读
+    // oracle 真机零帧（扫盲卡 openmir2-gm-systemshare-null-sweep）：:25 for-init 读
     // SystemShare.DenyAccountList（SystemShare.cs:143 声明即 null 全仓零赋值）即 NRE ⇒
-    // 被 PlayObject.Chat.cs:402 顶层 catch 吞 ⇒ :46 绿字真机不可达（循环体本就全注释）。
+    // 被 PlayObject.Chat.cs:402 顶层 catch 吞 ⇒ :41 绿字真机不可达（循环体本就全注释）。
     no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
@@ -2366,7 +2369,9 @@ fn del_deny_chr_name(parameters: &str) -> GmResult {
     no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
-/// `DelDenyIPaddrLogonCommand`（现网 `@-jip`）：倒序循环体同样被注释 ⇒ 恒 false。
+/// `DelDenyIPaddrLogonCommand`（`DelDenyIPaddrLogonCommand.cs:12-53`，现网 `@-jip`）：
+/// 空名红帮助可达（:19-22）；非空 `:26` 倒序 for-init 读 null 表即 NRE ⇒ 零帧
+/// （源文本绿「{名} 没有被禁止登录。」（:50）真机不可达；循环体本就全注释）。
 fn del_deny_ip(parameters: &str) -> GmResult {
     let params: Vec<&str> = parameters.split(' ').collect();
     let ip = params.first().copied().unwrap_or("");
@@ -2445,13 +2450,16 @@ fn deny_ip(parameters: &str) -> GmResult {
 
 /// `ShowDenyAccountLogonCommand`（现网 `@+-jid`）。
 ///
-/// `Permission < 6` 静默返回（门是 10 ⇒ 死支）；表恒空 ⇒ 恒回「禁止登录帐号列表为空。」。
+/// `:13` `Permission < 6` 静默返回（外门 10 已过 ⇒ 这条内门对 <10 调用方不可达）；
+/// `:19` 读 `SystemShare.DenyAccountList`（null）⇒ NRE 零帧（扫盲卡；源文本绿
+/// 「禁止登录帐号列表为空。」真机不可达）。
 fn show_deny_account(sess: &GmSession) -> GmResult {
     if sess.permission < 6 {
         return GmResult::empty();
     }
-    // oracle 真机零帧：:15 读 SystemShare.DenyAccountList（SystemShare.cs:143 声明即 null
-    // 全仓零赋值）即 NRE ⇒ 绿字真机不可达（循环体本就全注释；perm<6 静默门为 oracle 原样）。
+    // oracle 真机零帧：:19 读 SystemShare.DenyAccountList（SystemShare.cs:143 声明即 null
+    // 全仓零赋值）即 NRE ⇒ 绿字真机不可达（:24 循环体本就全注释；:13 perm<6 静默门为
+    // oracle 原样，<10 调用方被外门挡 ⇒ 修复覆盖 ≥10 的全部调用方）。
     no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
@@ -2462,8 +2470,9 @@ fn show_deny_chr_name() -> GmResult {
     no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
-/// `ShowDenyIPaddrLogonCommand`（现网 `@+-jip`）：表空提示**沿用角色文案**
-/// （`禁止登录角色列表为空。`），是 oracle 的复制粘贴怪癖，照抄。
+/// `ShowDenyIPaddrLogonCommand`（现网 `@+-jip`）：`:16` 读 `SystemShare.DenyIPAddrList`
+/// （null）⇒ NRE 零帧（扫盲卡）；源文本表空提示**沿用角色文案**
+/// （`禁止登录角色列表为空。`）是 oracle 的复制粘贴怪癖，随之真机不可达。
 fn show_deny_ip() -> GmResult {
     // oracle 真机零帧：:16 读 SystemShare.DenyIPAddrList（SystemShare.cs:135 声明即 null
     // 全仓零赋值）即 NRE ⇒ 绿字真机不可达（表空提示沿用角色文案的复制粘贴怪癖随之不可达）。
@@ -5030,6 +5039,42 @@ fn adjust_exp() -> GmResult {
     no_frames(NOTE_GM4_NOOP)
 }
 
+/// `SystemShare.GetUseItemIdx`（`SystemShare.cs:1834-1891`）——**编译期常量表**：13 个
+/// `MessageSettings` const 装备位名（`MessageSettings.cs:15-27`），`String.Compare(...,
+/// OrdinalIgnoreCase) == 0` 逐名比 ⇒ 无任何宿主依赖（review F1 订正：此前误判「宿主未接
+/// 恒 -1」，导致合法槽名输入类被整类判成无偏差）。未知名 ⇒ -1。
+fn use_item_idx(name: &str) -> i32 {
+    if name.eq_ignore_ascii_case("衣服") {
+        0
+    } else if name.eq_ignore_ascii_case("武器") {
+        1
+    } else if name.eq_ignore_ascii_case("照明物") {
+        2
+    } else if name.eq_ignore_ascii_case("项链") {
+        3
+    } else if name.eq_ignore_ascii_case("头盔") {
+        4
+    } else if name.eq_ignore_ascii_case("左手镯") {
+        5
+    } else if name.eq_ignore_ascii_case("右手镯") {
+        6
+    } else if name.eq_ignore_ascii_case("左戒指") {
+        7
+    } else if name.eq_ignore_ascii_case("右戒指") {
+        8
+    } else if name.eq_ignore_ascii_case("物品") {
+        9
+    } else if name.eq_ignore_ascii_case("腰带") {
+        10
+    } else if name.eq_ignore_ascii_case("鞋子") {
+        11
+    } else if name.eq_ignore_ascii_case("宝石") {
+        12
+    } else {
+        -1
+    }
+}
+
 /// `BindUseItemCommand`（现网 `@Binduseitem`）。
 fn bind_use_item(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     let params = split_params(parameters);
@@ -5039,9 +5084,10 @@ fn bind_use_item(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     // .NET `"".Split(' ')` = `[""]`（长度 1）⇒ 无参 `@Binduseitem` 继续走下面的门，
     // 由 `GetUseItemIdx("") = -1` 落到红字 CommandHelp。故**不写**该早退（写了会让无参路径零帧）。
     let name = params.first().copied().unwrap_or("");
+    let item_name = params.get(1).copied().unwrap_or("");
     let bind_type = params.get(2).copied().unwrap_or("");
-    // `GetUseItemIdx(sItem)` 在 oracle 里是「装备位名称 → 槽位号」的固定表；宿主未接 ⇒ 恒 -1。
-    let item_idx = -1;
+    // `GetUseItemIdx(sItem)`：编译期常量表（见 [`use_item_idx`]），合法槽名可达。
+    let item_idx = use_item_idx(item_name);
     let bind = if bind_type.eq_ignore_ascii_case("帐号") {
         0
     } else if bind_type.eq_ignore_ascii_case("人物") {
@@ -5066,8 +5112,26 @@ fn bind_use_item(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     if !target_online(world, name) {
         return red(format!("{name} 现在不在线，或在其它服务器上!!!"));
     }
-    // 在线支要读目标 `UseItems[nItem]` 与四张绑定表 ⇒ 宿主未接。
-    noted(GmResult::empty(), NOTE_GM4_BAG)
+    // 在线：`userItem = mIPlayerActor.UseItems[nItem]`（`BindUseItemCommand.cs:53`）——
+    // 空槽（`Index == 0`）⇒ 红 `{名}的{槽}没有戴物品!!!`（:53-59）；
+    // 已穿戴 ⇒ `switch (nBind)` 各 case 触 `SystemShare.ItemBind*`（`SystemShare.cs:112-115`
+    // 声明即 null 全仓零赋值）⇒ :73 起 `EnterCriticalSection(null)` NRE ⇒ 被
+    // `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ **零帧**（扫盲卡 review F1 第 8 条偏差，
+    // 合法槽名输入类；批次 4 stub 既有面）。
+    let Some(target) = world.play_by_name(name) else {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[name.to_string()]));
+    };
+    let slot_present = usize::try_from(item_idx)
+        .ok()
+        .and_then(|i| target.use_items.get(i))
+        .is_some_and(|slot| slot.index != 0);
+    if !slot_present {
+        return red(dotnet_format(
+            BIND_NO_ITEM_FMT,
+            &[name.to_string(), item_name.to_string()],
+        ));
+    }
+    no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
 /// `BonuPointCommand`（现网 `@调整属性`）。
@@ -7358,11 +7422,103 @@ mod tests {
     /// `GetUseItemIdx("") = -1` ⇒ 红字 CommandHelp。
     #[test]
     fn bind_use_item_empty_params_is_red_help() {
+        // 无参：`"".Split(' ') = [""]` ⇒ 走到门 ⇒ 空名/未知名槽/未知名绑定方法 ⇒ 红帮助
+        // （不是「无参特判」）。
         let (r, _) = run_gm("@Binduseitem");
         assert_eq!(texts(&r), vec![(GmColor::Red, BIND_USE_ITEM_HELP)]);
-        // 对照：正常形态仍走同一门（item_idx 恒 -1），证明上面不是「无参特判」。
-        let (r, _) = run_gm("@Binduseitem 张三 项链 帐号");
-        assert_eq!(texts(&r), vec![(GmColor::Red, BIND_USE_ITEM_HELP)]);
+        // 未知名槽/绑定方法 ⇒ 同一红帮助门。
+        for line in [
+            "@Binduseitem 张三 未知槽 帐号",
+            "@Binduseitem 张三 项链 未知类型",
+        ] {
+            let (r, _) = run_gm(line);
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, BIND_USE_ITEM_HELP)],
+                "{line}"
+            );
+        }
+    }
+
+    /// **F1（review ac8c3ab2，扫盲卡第 8 条偏差）**：`@Binduseitem` 合法槽名输入类——
+    /// `GetUseItemIdx` 是**编译期常量表**（`SystemShare.cs:1834-1891` + `MessageSettings.cs:15-27`
+    /// 13 个 const 名），门后三支：① 离线 ⇒ 红 `{名} 现在不在线，或在其它服务器上!!!`；
+    /// ② 在线空槽（`UseItems[n].Index == 0`）⇒ 红 `{名}的{槽}没有戴物品!!!`（`CommandHelp.cs:102`）；
+    /// ③ 在线已穿戴 ⇒ `switch(nBind)` 触 `SystemShare.ItemBind*`（`SystemShare.cs:112-115`
+    /// 声明即 null）⇒ `EnterCriticalSection(null)` NRE ⇒ **零帧** + NOTE。
+    /// 13 名全表逐名核（全部解析 ⇒ 离线红字，不是帮助）。
+    /// 变异红：M-F1a（表漏 项链 ⇒ 该名回帮助）⇒ 13 名牙红；M-F1b（已穿戴支补文本）⇒ 零帧牙红。
+    #[test]
+    fn bind_use_item_legal_slot_three_branches() {
+        use mir2_world::Entity;
+        let names = [
+            ("衣服", 0),
+            ("武器", 1),
+            ("照明物", 2),
+            ("项链", 3),
+            ("头盔", 4),
+            ("左手镯", 5),
+            ("右手镯", 6),
+            ("左戒指", 7),
+            ("右戒指", 8),
+            ("物品", 9),
+            ("腰带", 10),
+            ("鞋子", 11),
+            ("宝石", 12),
+        ];
+        // 13 名全表：用「离线目标」区分「槽名解析成功」（⇒ 离线红）与「未知名」（⇒ 帮助）。
+        for (slot_name, idx) in names {
+            let (r, _) = run_gm(&format!("@Binduseitem 张三 {slot_name} 帐号"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, "张三 现在不在线，或在其它服务器上!!!")],
+                "{slot_name}（槽位 {idx}）必须解析成功 ⇒ 离线红，不是帮助"
+            );
+        }
+        // 在线三支：bob 在 world 里。
+        let (fx, mut w, _gm_id, bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // ② 空槽（默认全零）⇒ 红 NoItemMsg。
+        {
+            let view = q_view(&fx, &w, &guilds);
+            let r = execute(&mut sess, &cfg, &view, "@Binduseitem bob 项链 帐号");
+            assert_eq!(texts(&r), vec![(GmColor::Red, "bob的项链没有戴物品!!!")]);
+        }
+        // ③ 已穿戴（UseItems[3].Index = 15）⇒ switch 触 null 表 ⇒ 零帧 + NOTE。
+        {
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            bob.use_items[3].index = 15;
+        }
+        let view = q_view(&fx, &w, &guilds);
+        let r = execute(&mut sess, &cfg, &view, "@Binduseitem bob 项链 帐号");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "已穿戴支真机零帧");
+        let note = r.log_note.expect("零帧必须登记 NRE 触点");
+        assert!(
+            note.contains("声明即 null") && note.contains("零帧"),
+            "{note}"
+        );
+        // 其余绑定方法（人物/IP/死亡）同样触表 ⇒ 零帧。
+        for bind_type in ["人物", "IP", "死亡"] {
+            let r = execute(
+                &mut sess,
+                &cfg,
+                &view,
+                &format!("@Binduseitem bob 项链 {bind_type}"),
+            );
+            assert!(
+                r.msgs.is_empty() && r.frames.is_empty(),
+                "{bind_type} 应零帧"
+            );
+            assert!(r.log_note.is_some());
+        }
+        // 对照：已穿戴的「衣服」槽若为空格 ⇒ 红 NoItemMsg（不是绑定表零帧）。
+        let r = execute(&mut sess, &cfg, &view, "@Binduseitem bob 衣服 帐号");
+        assert_eq!(texts(&r), vec![(GmColor::Red, "bob的衣服没有戴物品!!!")]);
+        // 目标 Entity 字段未受污染（只读命令）。
+        let e: &Entity = w.entities.get(bob_id).unwrap();
+        assert_eq!(e.use_items[3].index, 15);
     }
 
     /// I-3：单 UTF-16 码元名 ⇒ oracle `sHumanName[1]` 抛 `IndexOutOfRangeException`
