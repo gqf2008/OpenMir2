@@ -194,3 +194,66 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
 - **现存 `Imp::Unimplemented` = 74 − 29 = 45**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
   thirty_command_bodies` 的 140 已接 / 45 未接断言；改坏任一计数 ⇒ 该测试红）。
 - 剩余缺口族：F3 / M6 / C5 / W4 / X2 18（§4.3 分族索引不变）。
+
+## 8. SystemShare null 字段扫盲（卡 `openmir2-gm-systemshare-null-sweep`，tier=R）
+
+X1 审查（review F1）发现「源文本建模 vs 运行行为」镜头盲区后的系统化推广：对
+`SystemShare.cs` 全部**声明即 null** 的字段（34 个）逐字段 grep 全仓赋值点，与已落地
+rust 命令交叉，找「rust 按源文本发帧、oracle 真机 NRE 零帧」的偏差。
+
+### 8.1 A1 字段穷举（grep 赋值点=0 逐字段列明）
+
+34 个 null 声明字段中 **3 个有赋值**（`ManageNPC`/`RobotNPC`/`FunctionNPC`，各恰 4 处：
+`LocalDB.cs` 210/227/232/268/284/289/312/328/333 与 `GameApp.cs:85-87`）、**31 个
+NULL-FOREVER**（全仓零赋值）。31 个 NULL-FOREVER 中**有读点**的 11 个、零读点 20 个：
+
+| 字段 | 声明行 | 读点文件 |
+|---|---|---|
+| DenySayMsgList | :64 | ShutupCommand / ShutupListCommand / ShutupReleaseCommand |
+| SellOffItemList | :66 | GoldDealService / ExecutionProcessingSys（**非命令体**，寄售系统；rust selloff 用宿主侧独立表 ⇒ 附注不属本卡） |
+| DynamicVarList | :75 | ProcessingBase.cs（脚本 `$GLOBAL`；rust DynVarStore 宿主独立表 ⇒ T-222 已登记 ⇒ 附注不属本卡） |
+| DisableSendMsgList | :103 | DisableSendMsg / DisableSendMsgList / EnableSendMsg 三命令 |
+| ItemBindIPaddr / ItemBindAccount / ItemBindChrName / ItemBindDieNoDropName | :112-115 | BindUseItemCommand |
+| DenyIPAddrList / DenyChrNameList / DenyAccountList | :135/:139/:143 | Del+Show Deny 六命令 |
+
+其余 20 个 NULL-FOREVER 字段全仓零读点（MakeItemList/StartPointList/ServerTableList/
+AbuseTextList/MiniMapList/LogonCostLogList/UnbindList/LineNoticeList/MonSayMsgList/
+DisableMakeItemList/EnableMakeItemList/DisableSellOffList/DisableMoveMapList/
+MonDropLimitLIst/DisableTakeOffList/UnMasterList/UnForceMasterList/GameLogItemNameList/
+NoClearMonLIst/NoHptoexpMonLIst）⇒ 无命令交叉面。
+
+### 8.2 A2 偏差清单（oracle 真机零帧 × rust 现行为）
+
+| # | 命令 | oracle 真机（NRE 行号） | rust 首轮行为 | 修复 |
+|---|---|---|---|---|
+| 1 | `@禁言`（批次5 ShutupCommand） | :30 `EnterCriticalSection(DenySayMsgList)`（null）在 :56 SysMsg 之前 ⇒ NRE 吞 ⇒ 零帧；:33-50 名单写段本就全注释 | 红字「X 已被禁言N分钟」 | 红字支 → 零帧+NOTE（校验失败红帮助在 Enter 前仍可达） |
+| 2 | `@-jid`（DelDenyAccountLogon） | :25 for-init 读 DenyAccountList ⇒ NRE ⇒ 零帧 | 绿「X 没有被禁止登录。」（:41） | 绿支 → 零帧+NOTE（空名红帮助在触表前仍可达） |
+| 3 | `@DelDenyChrNameLogon` | :26 同构（DenyChrNameList） | 绿同 | 同上 |
+| 4 | `@-jip`（DelDenyIPaddrLogon） | :26 倒序 for-init 同构（DenyIPAddrList；文件 53 行） | 绿同（:50） | 同上 |
+| 5 | `@+-jid`（ShowDenyAccountLogon） | :19 Count ⇒ NRE ⇒ 零帧（:13 有 perm<6 内门：<10 调用方被外门挡；≥10 调用方——客户端 GM 与脚本抬权——都到达触表点） | 绿「禁止登录帐号列表为空。」 | 绿支 → 零帧+NOTE（perm<6 静默门保留） |
+| 6 | `@ShowDenyChrNameLogon` | :15 同构（DenyChrNameList，无内门） | 绿同 | 绿支 → 零帧+NOTE |
+| 7 | `@+-jip`（ShowDenyIPaddrLogon） | :16 同构（DenyIPAddrList，无内门） | 绿同（表空提示沿用角色文案怪癖随之不可达） | 同上 |
+| 8 | `@Binduseitem`（BindUseItemCommand） | 合法槽名输入类（review ac8c3ab2 F1 补）：`GetUseItemIdx`（`SystemShare.cs:1834-1891`）是**编译期常量表**（13 个 `MessageSettings` const 槽名，`MessageSettings.cs:15-27`），无宿主依赖 ⇒ 门（:42）后三支：离线 ⇒ 红「现在不在线…」（:50）；在线空槽（`UseItems[n].Index==0`）⇒ 红 `{名}的{槽}没有戴物品!!!`（`CommandHelp.cs:102`，:53-59）；在线已穿戴 ⇒ `switch(nBind)` 触 `SystemShare.ItemBind*`（`SystemShare.cs:112-115`，null）⇒ `EnterCriticalSection(null)` NRE ⇒ 零帧 | 首轮误判「无偏差」（`GetUseItemIdx` 宿主未接恒 -1 只描述 rust 侧；对照输入「项链」恰在偏差类）；rust 恒红帮助 | 落 13 名常量表 + 三支（离线红/空槽红/已穿戴零帧+NOTE） |
+| — | `@取消禁言`（ShutupReleaseCommand） | :20-22 `A‖!A` 恒真早退在 :25 Enter **之前** ⇒ 帮助文本可达 | 帮助 ✓ | 不修 |
+
+### 8.3 R 级真机台账（帧面偏差，挂窗口项）
+
+| 偏差 ID | 命令 | 真机判据（窗口时核） |
+|---|---|---|
+| SW-1 | `@禁言 zhangsan 30` | 真机客户端**零帧**（无「已被禁言30分钟」红字）；参数非法时帮助红字可达 |
+| SW-2 | `@-jid acct` | 真机**零帧**（无「acct没有被禁止登录。」绿字）；空名时帮助红字可达 |
+| SW-3 | `@DelDenyChrNameLogon 张三` / `@-jip 1.2.3.4` | 同 SW-2 |
+| SW-4 | `@+-jid` / `@ShowDenyChrNameLogon` / `@+-jip` | 真机**零帧**（无「列表为空。」绿字）；≥10 调用方（客户端 GM 与脚本抬权）都到达触表点 |
+| SW-6 | `@Binduseitem bob 项链 帐号`（在线已穿戴） | 真机**零帧**（无绑定成功/已绑定文本）；离线 ⇒ 红「现在不在线…」；在线空槽 ⇒ 红「{名}的{槽}没有戴物品!!!」（review ac8c3ab2 F1 第 8 条偏差） |
+
+### 8.4 附注（不属本卡写集的读点）
+
+> 台账口径：`@查看私聊` 的 toggle 行为不触 null 表，属 X1/F3 面（卡
+> `openmir2-gm-family-x1-denywhisper` review F3 登记），不在本扫盲台账内（review M4）。
+
+- `SellOffItemList`（:66）：GoldDealService/ExecutionProcessingSys 读（寄售系统+脚本，非
+  GameCommand 命令体）；rust `selloff` 用宿主侧独立表。oracle 活跃表是 M2Share 孪生字段
+  （寄售开卡时需同镜头核对，附注在此）。
+- `DynamicVarList`（:75）：ProcessingBase.cs 读（脚本 `$GLOBAL`）；rust `DynVarStore`
+  宿主独立表，T-222 已登记 `$GLOBAL` 未接。
+- 批次 5 `@取消禁言`：`A‖!A` 恒真早退在 :25 Enter **之前** ⇒ 帮助可达 ⇒ rust 一致，无偏差。
