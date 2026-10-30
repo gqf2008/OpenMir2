@@ -222,8 +222,9 @@ pub const Q_SHOW_USE_ITEM_LITERAL: &str = "%s[%s]IDX[%d]系列号[%d]持久[%d-%
 
 // ===== 族 X1 · 禁言名单（卡 `openmir2-gm-family-x1-denywhisper`，tier=L）的 SysMsg 正文 =====
 //
-// 文本取 `CommandHelp.cs` / 命令体内联字面量，逐字节照抄。两条恒字来自 oracle 循环体**整段
-// 注释**（`-jy` 删除循环 / +-jy 非空逐条循环）——不许补「应该能用」的实现（卡面 forbidden）。
+// 文本取 `CommandHelp.cs` / 命令体内联字面量，逐字节照抄。注意（review F1）：触表的四个
+// 命令体运行期 NRE ⇒ 零帧，源文本恒字/绿字**真机不可达**——以下常量里可达面仅
+// +jy/-jy 两条红帮助与 ViewWhisper 两帧（见族 section 注）。
 /// `DisableSendMsgCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `+jy`）。
 pub const X1_HELP_DISABLE_SEND_MSG: &str = "命令格式: @+jy 人物名称";
 /// `EnableSendMsgCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `-jy`）。
@@ -680,22 +681,31 @@ pub enum Imp {
     LotteryTicket,
 
     // ---- 族 X1 · 禁言名单（5，卡 `openmir2-gm-family-x1-denywhisper`，tier=L）----
-    /// `DisableSendMsgCommand`（现网 `@+jy`）：空名红帮助；在线置目标 `FilterSendMsg=true`
-    /// （宿主未建模该位，消费点未接）⇒ **无条件** `DisableSendMsgList.Add`（重复名照加）+
-    /// 绿字 `{名} 已加入禁言列表。`；`SaveDisableSendMsgList` 落盘面 forbidden ⇒ `log_note`。
+    // **运行层真相（review F1，Leader 复核成立）**：`SystemShare.DisableSendMsgList`
+    // （`SystemShare.cs:103`）与 `SystemShare.DenySayMsgList`（`:64`）**声明即 null、全仓
+    // 零赋值**（初始化只在 M2Share 孪生字段，GameApp.cs:26/38）⇒ 触表的四个命令体真机
+    // NRE、被 `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ **零帧**——源文本的恒字/绿字分支
+    // 真机不可达（前一轮误按源文本建模，已改零帧+log_note）。空名红帮助（+jy/-jy）与
+    // ViewWhisper 全支（只触已初始化的 WorldEngine 与 actor 字段）不受影响。
+    /// `DisableSendMsgCommand`（现网 `@+jy`）：空名红帮助可达；非空 `:26` 在线置目标
+    /// `FilterSendMsg=true`（真实副作用、非帧）后 `:28` 对 null 表 Add 抛 NRE ⇒ 零帧
+    /// （绿字/Add/落盘全部不可达）。
     DisableSendMsg,
-    /// `DisableSendMsgListCommand`（现网 `@+-jy`）：列表空红「禁言列表为空!!!」；非空蓝
-    /// 「禁言列表:」**只出头不逐条**（循环体整段注释 ⇒ 恒字）。
+    /// `DisableSendMsgListCommand`（现网 `@+-jy`）：首句读 null 表 Count 即 NRE ⇒ 恒零帧
+    /// （源文本红/蓝两支真机均不可达）。
     DisableSendMsgListCmd,
-    /// `EnableSendMsgCommand`（现网 `@-jy`）：删除循环体整段注释 ⇒ **恒**红
-    /// `{名} 没有被禁言!!!`（名字回显、永不真删——恒字照抄）。
+    /// `EnableSendMsgCommand`（现网 `@-jy`）：空名红帮助可达；非空 `:26` for-init 读 null
+    /// 表即 NRE ⇒ 零帧（源文本恒红「没有被禁言!!!」真机不可达）。
     EnableSendMsg,
-    /// `ShutupListCommand`（现网 `@查看禁言`）：读的是 **DenySayMsgList**（与 DisableSendMsgList
-    /// 是两张表！）——全仓无活跃写点 ⇒ 恒空模型 ⇒ 恒绿「禁言列表为空!!!」。
+    /// `ShutupListCommand`（现网 `@查看禁言`）：首句 `EnterCriticalSection(null)` 即 NRE ⇒
+    /// 恒零帧（源文本恒绿「禁言列表为空!!!」真机不可达；对照 Chat.cs:137 走 M2Share 孪生
+    /// 字段非 null ⇒ 聊天禁言门无害）。
     ShutupList,
     /// `ViewWhisperCommand`（现网 `@查看私聊`）：`sChrName[1]` 判空下标怪癖（单字符名越界
     /// ⇒ 零帧）；离线红；在线 toggle 说话者侧 `listening_to` 镜像（= 目标 `WhisperHuman` 的
-    /// 等价观测面）⇒ 两条绿字。
+    /// 等价观测面）⇒ 两条绿字。**已登记差异（review F3）**：oracle 目标重登 = 新 PlayObject
+    /// ⇒ `WhisperHuman = null` ⇒ GM 再 toggle 出 Msg2；rust `listening_to` 持名不变 ⇒ 出
+    /// Msg1（GM-only、零玩法影响）。
     ViewWhisper,
     Unimplemented,
 }
@@ -1344,11 +1354,6 @@ pub struct GmWorld<'a> {
     /// 跨会话/跨事件同一份；`None` = 构造处未注入（测试/`ScriptGmEnv::bridge` 的脚本
     /// GMEXECUTE 路径）⇒ 命令体走 `log_note` 登记零帧（不静默伪造翻转）。
     pub filter_word: Option<&'a std::cell::Cell<bool>>,
-    /// **族 X1**：`SystemShare.DisableSendMsgList`（全局名单，内存面；部署启动恒空——
-    /// `LoadDisableSendMsgList` 全注释 ⇒ 什么都不读；`+jy` 无条件 `Add`、`+-jy` 读 Count，
-    /// `-jy` 的删除循环整段注释 ⇒ 名单只增不删）。`RefCell<Vec<String>>` 共享引用；
-    /// `None` = 构造处未注入（脚本桥）⇒ 命令体走 `log_note` 登记（不伪造名单状态）。
-    pub disable_send_msg_list: Option<&'a std::cell::RefCell<Vec<String>>>,
 }
 
 impl<'a> GmWorld<'a> {
@@ -1363,7 +1368,6 @@ impl<'a> GmWorld<'a> {
             speaker_id: 0,
             now_ms: 0,
             filter_word: None,
-            disable_send_msg_list: None,
         }
     }
 
@@ -1395,13 +1399,6 @@ impl<'a> GmWorld<'a> {
     #[must_use]
     pub fn with_filter_word(mut self, filter_word: &'a std::cell::Cell<bool>) -> Self {
         self.filter_word = Some(filter_word);
-        self
-    }
-
-    /// 注入宿主的 `SystemShare.DisableSendMsgList` 内存名单（族 X1 用）。
-    #[must_use]
-    pub fn with_disable_send_msg_list(mut self, list: &'a std::cell::RefCell<Vec<String>>) -> Self {
-        self.disable_send_msg_list = Some(list);
         self
     }
 
@@ -2147,84 +2144,74 @@ fn lottery_ticket(cfg: &GmConfig) -> GmResult {
 // ---------------------------- 族 X1 · 禁言名单（5，卡 `openmir2-gm-family-x1-denywhisper`）----------------------------
 //
 // oracle：DisableSendMsgCommand（现网 `+jy`）/ EnableSendMsgCommand（`-jy`）/
-// DisableSendMsgListCommand（`+-jy`）三条 `Execute(string[], IPlayerActor)` + ShutupListCommand
-// （`查看禁言`）/ ViewWhisperCommand（`查看私聊`）两条单参。perm 全 10（`[Permission]`
-// DisableSendMsg/EnableSendMsg/DisableSendMsgList/ShutupList/ViewWhisper 与构造缺省一致）。
+// DisableSendMsgListCommand（`+-jy`）/ ShutupListCommand（`查看禁言`）+ ViewWhisperCommand
+// （`查看私聊`）。perm 全 10（`[Permission]` DisableSendMsg/EnableSendMsg/DisableSendMsgList/
+// ShutupList/ViewWhisper 与构造缺省一致）。
 //
-// 两张**不同的**全局表：`DisableSendMsgList`（+jy 无条件 Add；`+-jy` 读 Count；`-jy` 的删除
-// 循环**整段注释** ⇒ 只增不删；`LoadDisableSendMsgList` 全注释 ⇒ 启动恒空 ⇒ 内存面建模精确）
-// 与 `DenySayMsgList`（**仅** `查看禁言` 读它，全仓无活跃写点 ⇒ 恒空模型 ⇒ 恒绿）。
+// **运行层真相（review F1，Leader 复核成立）**：`SystemShare.DisableSendMsgList`
+// （`SystemShare.cs:103`）与 `SystemShare.DenySayMsgList`（`:64`）**声明即 null、全仓零赋值**
+// （初始化只在 M2Share 孪生字段，`GameApp.cs:26/38`）⇒ 触表的四个命令体真机 NRE、被
+// `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ **零帧**——源文本的恒字/绿字分支真机不可达。
+// 前一轮误按源文本建模恒字帧，rework 改零帧 + log_note（`NOTE_X1_NULL_TABLE` 范式）。
+// 对照：聊天禁言门（`PlayObject.Chat.cs:137`）走 **M2Share** 孪生字段（非 null 空表）⇒ 无害；
+// `ViewWhisper` 只触已初始化的 WorldEngine（`GameApp.cs:93`）与 actor 字段 ⇒ 不受影响。
 //
-// **恒字**（oracle 循环体整段注释 ⇒ 不许补「应该能用」的实现，卡面 forbidden）：
-// `-jy` 恒红 `{名} 没有被禁言!!!`（名字回显）；`+-jy` 非空只出蓝头「禁言列表:」不逐条。
-//
+// 名单注入链整体不接（rework ③）：命令体不再读任何名单容器 ⇒ `GmWorld` 不建模
+// `DisableSendMsgList`/`DenySayMsgList`（`DisableSendMsgList.txt` 的读/写面在 oracle 侧
+// 亦为全注释/落盘 forbidden，无注入价值）。
+
 /// `DisableSendMsgCommand.Execute`（`DisableSendMsgCommand.cs:12-33`，现网 `@+jy`）。
 ///
-/// 顺序：空名红帮助 ⇒ 在线置**目标** `FilterSendMsg = true`（宿主未建模该位、消费点未接
-/// ⇒ 零可观测差异，登记）⇒ **无条件** `DisableSendMsgList.Add(sHumanName)`（离线也加、
-/// 重复名照加）⇒ `SaveDisableSendMsgList()`（落盘面 forbidden ⇒ 登记）⇒ 绿字
-/// `{名} 已加入禁言列表。`。
+/// 空名红帮助可达（`:20-23` 不触表）；非空：`:26` 在线置**目标** `FilterSendMsg = true`
+/// （WorldEngine 已初始化 ⇒ 可达、**真实副作用、非帧**）⇒ `:28` 对 null 表 Add 抛 NRE ⇒
+/// `PlayObject.Chat.cs:402` 吞 ⇒ **零帧**（绿字/名单 Add/Save 落盘全部不可达）。
 fn disable_send_msg(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     let s_human = split_params(parameters).first().copied().unwrap_or("");
     if s_human.is_empty() {
         return red(X1_HELP_DISABLE_SEND_MSG);
     }
-    let mut r = green(format!("{s_human} 已加入禁言列表。"));
-    match world.disable_send_msg_list {
-        Some(list) => {
-            list.borrow_mut().push(s_human.to_string());
-            let online = world.play_by_name(s_human).is_some();
-            r.log_note = Some(if online {
-                "+jy：已置目标 FilterSendMsg=true（宿主未建模该位、消费点未接）+ SaveDisableSendMsgList 落盘面未实现（卡 openmir2-gm-family-x1-denywhisper forbidden 登记）"
-            } else {
-                "+jy：目标离线 ⇒ oracle 不置 FilterSendMsg；SaveDisableSendMsgList 落盘面未实现（卡 openmir2-gm-family-x1-denywhisper forbidden 登记）"
-            });
-        }
-        None => {
-            r.log_note = Some(NOTE_X1_LIST_NOT_INJECTED);
-        }
+    if world.play_by_name(s_human).is_some() {
+        no_frames(
+            "+jy：:26 已置目标 FilterSendMsg=true（真实副作用、非帧）⇒ :28 SystemShare.DisableSendMsgList.Add 对 null 表抛 NRE ⇒ Chat.cs:402 顶层 catch 吞 ⇒ 零帧（review F1；SystemShare.cs:103 声明即 null 全仓零赋值）",
+        )
+    } else {
+        no_frames(
+            "+jy：目标离线 ⇒ :25-27 不置位 ⇒ :28 SystemShare.DisableSendMsgList.Add 对 null 表抛 NRE ⇒ Chat.cs:402 顶层 catch 吞 ⇒ 零帧（review F1）",
+        )
     }
-    r
 }
 
 /// `DisableSendMsgListCommand.Execute`（`DisableSendMsgListCommand.cs:11-29`，现网 `@+-jy`）：
-/// `Count <= 0` 红「禁言列表为空!!!」；非空蓝「禁言列表:」后循环体**整段注释** ⇒ 只出头、
-/// 不逐条（恒字）。
-fn disable_send_msg_list(world: &GmWorld<'_>) -> GmResult {
-    match world.disable_send_msg_list {
-        Some(list) => {
-            if list.borrow().is_empty() {
-                red("禁言列表为空!!!")
-            } else {
-                blue("禁言列表:")
-            }
-        }
-        None => no_frames(NOTE_X1_LIST_NOT_INJECTED),
-    }
+/// 首句 `:13` 读 `SystemShare.DisableSendMsgList.Count` 对 null 即 NRE ⇒ **恒零帧**
+/// （源文本「禁言列表为空!!!」/「禁言列表:」两支真机均不可达）。
+fn disable_send_msg_list(_world: &GmWorld<'_>) -> GmResult {
+    no_frames(NOTE_X1_NULL_TABLE)
 }
 
 /// `EnableSendMsgCommand.Execute`（`EnableSendMsgCommand.cs:13-40`，现网 `@-jy`）：
-/// 空名红帮助；删除 for 循环体**整段注释**（比较/移除/回执全被注释）⇒ 循环空转后
-/// 恒红 `{名} 没有被禁言!!!`——无论名单里有没有该名（恒字照抄）。
+/// 空名红帮助可达；非空 `:26` for-init 读 null 表 Count 即 NRE ⇒ **零帧**
+/// （源文本恒红「{名} 没有被禁言!!!」真机不可达）。
 fn enable_send_msg(parameters: &str) -> GmResult {
     let s_human = split_params(parameters).first().copied().unwrap_or("");
     if s_human.is_empty() {
         return red(X1_HELP_ENABLE_SEND_MSG);
     }
-    red(format!("{s_human} 没有被禁言!!!"))
+    no_frames(NOTE_X1_NULL_TABLE)
 }
 
 /// `ShutupListCommand.Execute`（`ShutupListCommand.cs:13-40`，现网 `@查看禁言`）：
-/// 读 **DenySayMsgList**（与 `DisableSendMsgList` 是两张表）——全仓无活跃写点（`禁言`
-/// 命令的名单写段同样整段注释）⇒ 恒空模型 ⇒ 恒绿「禁言列表为空!!!」；非空遍历段整段
-/// 注释 ⇒ 即便非空也只静默（本仓恒空 ⇒ 该支不可达，登记语义于 Imp 文档）。
+/// 首句 `EnterCriticalSection(SystemShare.DenySayMsgList)` 对 null 即 NRE ⇒ **恒零帧**
+/// （源文本恒绿「禁言列表为空!!!」真机不可达；对照 `PlayObject.Chat.cs:137` 走 M2Share
+/// 孪生字段非 null ⇒ 聊天禁言门无害——同镜头盲区已开 follow-up 卡
+/// `openmir2-gm-systemshare-null-sweep`，含批次 5 `@禁言` 同病）。
 fn shutup_list(_world: &GmWorld<'_>) -> GmResult {
-    green("禁言列表为空!!!")
+    no_frames(NOTE_X1_NULL_TABLE)
 }
 
 /// `ViewWhisperCommand.Execute`（`ViewWhisperCommand.cs:14-42`，现网 `@查看私聊`）：
-/// `sChrName[1]` 判空下标怪癖（单字符名越界被吞 ⇒ 零帧）；离线红 NowNotOnLine；在线按
-/// `listening_to` 镜像 toggle ⇒ Msg2「正在侦听…」（开）/ Msg1「已停止侦听…」（关）。
+/// 只触已初始化的 WorldEngine 与 actor 字段 ⇒ 全支可达（review A4 成立）：`sChrName[1]`
+/// 判空下标怪癖（单字符名越界被吞 ⇒ 零帧）；离线红 NowNotOnLine；在线按 `listening_to`
+/// 镜像 toggle ⇒ Msg2「正在侦听…」（开）/ Msg1「已停止侦听…」（关）。
 fn view_whisper(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
     let s_chr = split_params(parameters).first().copied().unwrap_or("");
     if s_chr.is_empty() {
@@ -2318,8 +2305,8 @@ const NOTE_KICK_HUMAN_PENDING: &str =
     "KickHuman：已置目标 BoKickFlag/BoEmergencyClose（命令无回帧，宿主 drain_kicks 落地）";
 const NOTE_NO_MAP_REGISTRY: &str =
     "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
-const NOTE_X1_LIST_NOT_INJECTED: &str =
-    "DisableSendMsgList 全局名单未注入（构造缺口）⇒ 不伪造 Add/Count（卡 openmir2-gm-family-x1-denywhisper）";
+const NOTE_X1_NULL_TABLE: &str =
+    "X1 禁言名单命令体：SystemShare.DisableSendMsgList/DenySayMsgList 声明即 null（SystemShare.cs:103/:64）全仓零赋值 ⇒ 触表即 NRE、被 PlayObject.Chat.cs:402 顶层 catch 吞 ⇒ 零帧（review F1，Leader 复核成立；源文本恒字/绿字分支真机不可达）";
 const NOTE_RECALL_HUMAN: &str =
     "RecallHuman: GetPlayObject/GetRecallXy/SpaceMove 未接 ⇒ 不移动、不抽 SpaceMoveGetRandXY（oracle 本支零文本）";
 const NOTE_MAP_RANDOM_MOVE: &str =
@@ -5843,7 +5830,6 @@ mod tests {
             speaker_id: 7,
             now_ms: 0,
             filter_word: None,
-            disable_send_msg_list: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
         let mut sess = GmSession {
@@ -9440,103 +9426,61 @@ mod tests {
         }
     }
 
-    /// **A1 + A2**：`@+jy` 空名红帮助；**无条件**入名单（离线也加、重复名照加）+ 绿字
-    /// `{名} 已加入禁言列表。` + note（FilterSendMsg 位与落盘面登记）；`@+-jy` 空名单红
-    /// 「禁言列表为空!!!」、非空蓝「禁言列表:」**只一行**（循环体注释 ⇒ 恒字，多条也不逐条）。
-    /// 变异红：M-X5（只在线才加）⇒ 离线加断言红；M-X2（非空补逐条）⇒ 蓝头-only 断言红。
+    /// **A1+A2+A3 rework（review F1）**：四命令体运行期触 null 表 ⇒ NRE 被
+    /// `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ **零帧**——源文本恒字/绿字真机不可达；
+    /// 空名红帮助（+jy/-jy）不触表仍可达；+jy 非空在在线目标上有真实副作用
+    /// `FilterSendMsg=true`（非帧，note 记语义）。会话全程零变化（查询面，卡面 forbidden）。
+    /// 变异红：M-R1（+jy 非空补绿字）/ M-R2（-jy 非空补恒红文本）/ M-R3（+-jy 补红蓝支）/
+    /// M-R4（查看禁言补绿字）⇒ 各自零帧断言红。
     #[test]
-    fn x1_jy_add_and_list() {
+    fn x1_null_table_zero_frames() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
         let guilds = mir2_world::GuildManager::new();
-        let list = std::cell::RefCell::new(Vec::new());
-        let view = q_view(&fx, &w, &guilds).with_disable_send_msg_list(&list);
+        let view = q_view(&fx, &w, &guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
-        // 空名 ⇒ 红帮助。
+        // +jy：空名红帮助（不触表 ⇒ 可达）。
         assert_eq!(
             texts(&execute(&mut sess, &cfg, &view, "@+jy")),
             vec![(GmColor::Red, X1_HELP_DISABLE_SEND_MSG)]
         );
-        // 名单初始为空 ⇒ +-jy 红「禁言列表为空!!!」。
-        assert_eq!(
-            texts(&execute(&mut sess, &cfg, &view, "@+-jy")),
-            vec![(GmColor::Red, "禁言列表为空!!!")]
-        );
-        // A1：在线目标 ⇒ 绿字 + 无条件入名单 + note（位/落盘登记）。
+        // +jy 非空（在线 bob）⇒ 零帧；note 记 FilterSendMsg 置位语义（rework ②）。
         let r = execute(&mut sess, &cfg, &view, "@+jy bob");
-        assert_eq!(texts(&r), vec![(GmColor::Green, "bob 已加入禁言列表。")]);
-        assert!(r
-            .log_note
-            .expect("必须登记落盘/位面")
-            .contains("FilterSendMsg"));
-        assert_eq!(list.borrow().as_slice(), ["bob".to_string()]);
-        // A1'：离线名也**无条件**加（oracle 无在线门）。
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "+jy 非空应零帧");
+        let note = r.log_note.expect("+jy 必须登记 NRE 零帧");
+        assert!(
+            note.contains("FilterSendMsg") && note.contains("NRE"),
+            "{note}"
+        );
+        // +jy 非空（离线 nowhere）⇒ 零帧（不置位语义单独成 note）。
         let r = execute(&mut sess, &cfg, &view, "@+jy nowhere");
-        assert_eq!(
-            texts(&r),
-            vec![(GmColor::Green, "nowhere 已加入禁言列表。")]
-        );
-        assert_eq!(
-            list.borrow().as_slice(),
-            ["bob".to_string(), "nowhere".to_string()]
-        );
-        // 重复名照加（oracle `Add` 无去重）。
-        let r = execute(&mut sess, &cfg, &view, "@+jy bob");
-        assert_eq!(texts(&r), vec![(GmColor::Green, "bob 已加入禁言列表。")]);
-        assert_eq!(list.borrow().len(), 3);
-        // A2：非空 ⇒ 蓝「禁言列表:」**只一行**（循环体注释 ⇒ 多条也不逐条列出）。
-        assert_eq!(
-            texts(&execute(&mut sess, &cfg, &view, "@+-jy")),
-            vec![(GmColor::Blue, "禁言列表:")]
-        );
-        let r = execute(&mut sess, &cfg, &view, "@+-jy");
-        assert!(r.frames.is_empty() && r.log_note.is_none(), "恒字支无 note");
-        // 退化形态：名单未注入（脚本桥）⇒ +jy 仍绿字但登记不伪造 Add；+-jy 登记零帧。
-        let bare = GmWorld::new(&guilds);
-        let r = execute(&mut sess, &cfg, &bare, "@+jy bob");
-        assert_eq!(texts(&r), vec![(GmColor::Green, "bob 已加入禁言列表。")]);
-        assert!(r.log_note.expect("未注入必须登记").contains("名单未注入"));
-        let r = execute(&mut sess, &cfg, &bare, "@+-jy");
-        assert!(r.msgs.is_empty() && r.log_note.is_some());
-    }
-
-    /// **A3**：`@-jy` **恒**红 `{名} 没有被禁言!!!`——即便名字刚被 +jy 加入名单
-    /// （删除循环体整段注释 ⇒ 永不真删；名单只增不删断言）；空名红帮助。
-    /// `@查看禁言` 恒绿「禁言列表为空!!!」——读的是**另一张表** DenySayMsgList
-    /// （全仓无写点 ⇒ 恒空），即便 DisableSendMsgList 非空也恒绿。
-    /// 变异红：M-X1（补真删除）⇒ 恒字断言红；M-X3（查看禁言改读名单）⇒ 恒绿断言红。
-    #[test]
-    fn x1_jy_always_not_muted_and_shutup_list() {
-        let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
-        let list = std::cell::RefCell::new(Vec::new());
-        let view = q_view(&fx, &w, &guilds).with_disable_send_msg_list(&list);
-        let cfg = GmConfig::default();
-        let mut sess = gm_session();
-        // 空名 ⇒ 红帮助。
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        let note = r.log_note.expect("离线支必须登记");
+        assert!(note.contains("离线") && note.contains("不置位"), "{note}");
+        // -jy：空名红帮助（不触表）；非空零帧（恒红文本真机不可达）。
         assert_eq!(
             texts(&execute(&mut sess, &cfg, &view, "@-jy")),
             vec![(GmColor::Red, X1_HELP_ENABLE_SEND_MSG)]
         );
-        // +jy bob 入名单后：-jy bob **仍**恒红「没有被禁言!!！」且名单不变（只增不删）。
-        let _ = execute(&mut sess, &cfg, &view, "@+jy bob");
-        assert_eq!(
-            texts(&execute(&mut sess, &cfg, &view, "@-jy bob")),
-            vec![(GmColor::Red, "bob 没有被禁言!!!")]
-        );
-        assert_eq!(list.borrow().as_slice(), ["bob".to_string()]);
-        // 离线名同答（名字回显）。
-        assert_eq!(
-            texts(&execute(&mut sess, &cfg, &view, "@-jy nowhere")),
-            vec![(GmColor::Red, "nowhere 没有被禁言!!!")]
-        );
-        // 查看禁言：恒绿「禁言列表为空!!!」——即便 DisableSendMsgList 非空（两张表）。
-        assert_eq!(
-            texts(&execute(&mut sess, &cfg, &view, "@查看禁言")),
-            vec![(GmColor::Green, "禁言列表为空!!!")]
-        );
+        let r = execute(&mut sess, &cfg, &view, "@-jy bob");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "-jy 非空应零帧");
+        assert!(r.log_note.expect("-jy 必须登记").contains("null"));
+        // +-jy：恒零帧（首句即触 null 表）。
+        let r = execute(&mut sess, &cfg, &view, "@+-jy");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "+-jy 应零帧");
+        assert!(r.log_note.expect("+-jy 必须登记").contains("null"));
+        // 查看禁言：恒零帧（EnterCriticalSection(null) 即 NRE）。
         let r = execute(&mut sess, &cfg, &view, "@查看禁言");
-        assert!(r.frames.is_empty() && r.log_note.is_none(), "恒绿支无 note");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "查看禁言 应零帧");
+        assert!(r.log_note.expect("查看禁言 必须登记").contains("null"));
+        // 会话零变化（四条命令体不写任何会话字段）。
+        assert_eq!(
+            sess,
+            GmSession {
+                permission: 10,
+                ..GmSession::default()
+            }
+        );
     }
 
     /// **A4**：`@查看私聊` 四怪癖/分支——空名红帮助（**双空格**帮助串逐字节）；单字符名

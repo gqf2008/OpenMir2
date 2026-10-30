@@ -182,11 +182,15 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   越界零帧+%s 格式串字面输出）+ LotteryTicket 8 配置值（部署全 0，格式串尾随空格照抄）+ 其余
   红绿回执逐字节；`showflag` 的目标 QuestFlag 位阵在宿主未建模 ⇒ 恒零值模型（seam
   `target_quest_flag_status`，在线恒走 OFF 支；族 F 落地时接真位阵后 ON 支可达）。
-- **族 X1 5 条已落地**：卡 `openmir2-gm-family-x1-denywhisper`（worker-85，本卡）——`+jy`
-  无条件入 `DisableSendMsgList` 内存面 + 绿字（FilterSendMsg 位与 SaveDisableSendMsgList 落盘面
-  登记）；`+-jy` 空/非空两支恒字（非空只出蓝头=循环体注释）；`-jy` 恒红「没有被禁言!!!」；
-  `查看禁言` 恒绿「禁言列表为空!!!」（DenySayMsgList 全仓无写点 ⇒ 恒空模型）；`查看私聊`
-  单字符名越界零帧 + `listening_to` 镜像 toggle 双绿字。
+- **族 X1 5 条已落地**：卡 `openmir2-gm-family-x1-denywhisper`（worker-85，本卡；
+  reviewer-21 request_changes 后 rework）——**运行层真相（review F1，Leader 复核成立）**：
+  `SystemShare.DisableSendMsgList/DenySayMsgList` 声明即 null（`SystemShare.cs:103/:64`）
+  全仓零赋值 ⇒ 触表的四命令体（`+jy` 非空支/`-jy` 非空支/`+-jy`/`查看禁言`）真机 NRE 被
+  `PlayObject.Chat.cs:402` 顶层 catch 吞 ⇒ **零帧**（源文本恒字/绿字分支真机不可达；
+  首轮误按源文本建模恒字帧，已改零帧+log_note）；`+jy` 在线目标 `FilterSendMsg=true`
+  为 NRE 前真实副作用（非帧，note 记语义）；`+jy`/`-jy` 空名红帮助与 `查看私聊` 全支
+  （只触已初始化 WorldEngine/actor 字段）可达。同镜头盲区（批次 5 `@禁言` 等触
+  SystemShare 集合的命令体）已开 follow-up 卡 `openmir2-gm-systemshare-null-sweep`。
 - **现存 `Imp::Unimplemented` = 74 − 29 = 45**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
   thirty_command_bodies` 的 140 已接 / 45 未接断言；改坏任一计数 ⇒ 该测试红）。
 - 剩余缺口族：F3 / M6 / C5 / W4 / X2 18（§4.3 分族索引不变）。
