@@ -29,7 +29,7 @@
 //! [`COMMANDS`] 是**按部署 `M2GameSvr/Command.conf` 算好的常量表**（185 行 = `Commands/` 下 185 个
 //! 命令类，不含内建 `help`/`commands`）。生成口径与逐行对照见
 //! `mir2-rs/tests/parity/m3/design-gm-commands-20261023.md` §4.3；`@sadasd`/`@df56dfs`/`@天地合一`
-//! 这类混淆名与 `Level0`/`ChangeMasterName` 等「配置缺键回落构造默认名」都已按 oracle 解析结果落表
+//! 这类混淆名与 `Level0`/`MasterName` 等「配置缺键回落构造默认名」都已按 oracle 解析结果落表
 //! （配置死键照抄，见设计件 §3.2/§3.3 —— **不修**，属内容冻结）。
 //!
 //! ## 现网可达性（设计件 §2）
@@ -335,7 +335,7 @@ pub const CHANGE_ITEM_NAME_HELP: &str = "命令格式: @ChangeItemName 物品编
 pub const CHANGE_JOB_HELP: &str = "命令格式: @职业变更  人物名称 职业类型(Warr Wizard Taos)";
 pub const CHANGE_LEVEL_HELP: &str = "命令格式: @Level0 等级(1-65535)";
 pub const CHANGE_MASTER_NAME_HELP: &str =
-    "命令格式: @ChangeMasterName 人物名称 师徒名称(如果为 无 则清除)";
+    "命令格式: @MasterName 人物名称 师徒名称(如果为 无 则清除)";
 pub const CHANGE_OB_MODE_HELP: &str = "命令格式: @2 ";
 pub const CHANGE_SALVE_STATUS_HELP: &str = "命令格式: @Rest ";
 pub const CHANGE_SUPER_MAN_MODE_HELP: &str = "命令格式: @3 ";
@@ -483,7 +483,7 @@ pub enum Imp {
     DenyIp,
     /// `ShowDenyAccountLogonCommand`（`@+-jid`）。
     ShowDenyAccount,
-    /// `ShowDenyChrNameLogonCommand`（`@ShowDenyChrNameLogon`；注意文件名是 Char、**命令名是 Chr**）。
+    /// `ShowDenyChrNameLogonCommand`（现网 `@ShowDenyCharNameLogon`；注意类/配置键是 Chr、**活名取 ctor 默认 Char**）。
     ShowDenyChrName,
     /// `ShowDenyIPaddrLogonCommand`（`@+-jip`）。
     ShowDenyIp,
@@ -584,7 +584,7 @@ pub enum Imp {
     ChangeJob,
     /// `ChangeLevelCommand`（现网 `@Level0`）。
     ChangeLevel,
-    /// `ChangeMasterNameCommand`（现网 `@ChangeMasterName`：conf 无键 ⇒ 取类属性默认名）。
+    /// `ChangeMasterNameCommand`（现网 `@MasterName`：conf 无键 ⇒ 取 GameCmd ctor 默认名）。
     ChangeMasterName,
     /// `ChangeObModeCommand`（现网 `@2`）。
     ChangeObMode,
@@ -3289,7 +3289,7 @@ fn show_deny_account(sess: &GmSession) -> GmResult {
     no_frames(NOTE_SYSTEMSHARE_NULL_TABLE)
 }
 
-/// `ShowDenyChrNameLogonCommand`（现网 `@ShowDenyChrNameLogon`）：无权限二次校验，表空即提示。
+/// `ShowDenyChrNameLogonCommand`（现网 `@ShowDenyCharNameLogon`）：无权限二次校验，表空即提示。
 fn show_deny_chr_name() -> GmResult {
     // oracle 真机零帧：:15 直接读 SystemShare.DenyChrNameList（SystemShare.cs:139 声明即
     // null 全仓零赋值）即 NRE ⇒ 绿字真机不可达（无 perm<6 内门，体首即触表）。
@@ -5027,11 +5027,14 @@ pub const COMMANDS: &[CommandDef] = &[
         imp: Imp::ShowMapInfo,
     },
     CommandDef {
-        // oracle 活名 = **类属性默认名** `ChangeMasterName`（`ChangeMasterNameCommand.cs:10`；
-        // conf `[Command]` 无此键，`GameCmdConf.cs:313-314` 读不到 ⇒ 回落默认名）。
-        // 部署 conf 里 `ChangeMasterrName=MasterName`（`:178`）是**拼错的死键**、
-        // `ChangeMasterName=10`（`:349`）只是权限键 ⇒ 两者都不构成命令名。卡 `openmir2-gm-command-name-typos`。
-        name: "ChangeMasterName",
+        // oracle 活名 = **GameCmd ctor 默认名** `MasterName`（`GameCommands.cs:528`）。
+        // `CommandSystem.cs:100-107`：命中 custom 后 `commandAttribute.Name = customCommand.CmdName`，
+        // 最终名来自 `GameCmd.CmdName`，**不是**类 `[Command]` 属性名 `ChangeMasterName`。
+        // conf `[Command]` 无 `ChangeMasterName` 键（`GameCmdConf.cs:313-314` 读不到 ⇒ 回落 ctor 默认）；
+        // 部署 `ChangeMasterrName=MasterName`（`:178`，多一个 r）是死键、`ChangeMasterName=10`（`:349`）
+        // 只是权限键。设计件 §3.3 明写现网拼写是 `@MasterName`。卡 `openmir2-gm-registry-rebuild`
+        // （订正卡 `openmir2-gm-command-name-typos` 的误读）。
+        name: "MasterName",
         perm_min: 10,
         params: 2,
         imp: Imp::ChangeMasterName,
@@ -5241,11 +5244,14 @@ pub const COMMANDS: &[CommandDef] = &[
         imp: Imp::SetUnit,
     },
     CommandDef {
-        // oracle 活名 = `ShowDenyChrNameLogon`（`ShowDenyCharNameLogonCommand.cs:7` 的命令名，
-        // **文件名是 Char、命令名是 Chr**；`GameCmdConf.cs:339-340` 同）。conf 里的
-        // `ShowDenyCharNameLogon=+-jww`（`:191`）是死键（名字与权限都不读）。
-        // 卡 `openmir2-gm-command-name-typos`。
-        name: "ShowDenyChrNameLogon",
+        // oracle 活名 = **GameCmd ctor 默认名** `ShowDenyCharNameLogon`（`GameCommands.cs:541`）。
+        // `CommandSystem.cs:100-107`：命中 custom 后 `commandAttribute.Name = customCommand.CmdName`，
+        // 最终名来自 `GameCmd.CmdName`，**不是**类 `[Command]` 属性名 `ShowDenyChrNameLogon`。
+        // conf `[Command]` 无 `ShowDenyChrNameLogon` 键（`GameCmdConf.cs:339-340` 读不到 ⇒ 回落 ctor 默认）；
+        // 部署 `ShowDenyCharNameLogon=+-jww`（`:191`）与另一拼写都不构成读取键。
+        // 设计件 §3.3 明写现网拼写是 `@ShowDenyCharNameLogon`。卡 `openmir2-gm-registry-rebuild`
+        // （订正卡 `openmir2-gm-command-name-typos` 的误读）。
+        name: "ShowDenyCharNameLogon",
         perm_min: 10,
         params: 1,
         imp: Imp::ShowDenyChrName,
@@ -6162,7 +6168,7 @@ fn change_level(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -> 
     no_frames(NOTE_CHANGE_LEVEL_PENDING)
 }
 
-/// `ChangeMasterNameCommand`（现网 `@ChangeMasterName`）。
+/// `ChangeMasterNameCommand`（现网 `@MasterName`）。
 fn change_master_name(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     let params = split_params(parameters);
     let name = params.first().copied().unwrap_or("");
@@ -7132,7 +7138,7 @@ mod tests {
             ("DenyChrNameLogon", Imp::DenyChrName),
             ("+jip", Imp::DenyIp),
             ("+-jid", Imp::ShowDenyAccount),
-            ("ShowDenyChrNameLogon", Imp::ShowDenyChrName),
+            ("ShowDenyCharNameLogon", Imp::ShowDenyChrName),
             ("+-jip", Imp::ShowDenyIp),
             ("Backstep", Imp::BackStep),
             ("TestFire", Imp::TestFire),
@@ -7150,31 +7156,40 @@ mod tests {
         }
     }
 
-    /// 卡 `openmir2-gm-command-name-typos`：名字必须与 oracle **活名**一致，且**不得**把
-    /// conf 死键拼写留作别名（负例是承重的——只有正例的话「加个别名」也能全绿）。
+    /// 卡 `openmir2-gm-registry-rebuild`（订正 `openmir2-gm-command-name-typos`）：名字必须与
+    /// oracle **活名**一致，且**不得**把类属性名/conf 键拼写留作别名（负例是承重的——只有正例的话
+    /// 「加个别名」也能全绿）。
+    ///
+    /// oracle 活名取 `GameCmd.CmdName`（`CommandSystem.cs:100-107`），不是类 `[Command]` 属性名：
+    /// `ChangeMasterName` 字段的 ctor 默认名是 `MasterName`（`GameCommands.cs:528`），
+    /// `ShowDenyChrNameLogon` 字段的是 `ShowDenyCharNameLogon`（`GameCommands.cs:541`）；
+    /// 部署 `Command.conf` 没有 `GameCmdConf.cs:313/339` 读的 `[Command]` 键 ⇒ 回落 ctor 默认。
     ///
     /// 四条牙（正负各二）：
-    /// ① `@ChangeMasterName` 命中（未接线世界 ⇒ 目标离线红字，**不是**未知命令）；
-    /// ② `@MasterName` **未知命令**（改名前会命中）；
-    /// ③ `@ShowDenyChrNameLogon` 命中（绿字「禁止登录角色列表为空。」）；
-    /// ④ `@ShowDenyCharNameLogon` **未知命令**。
+    /// ① `@MasterName` 命中（未接线世界 ⇒ 目标离线红字，**不是**未知命令）；
+    /// ② `@ChangeMasterName` **未知命令**（属性名不是活名，也不得作别名）；
+    /// ③ `@ShowDenyCharNameLogon` 命中（真机零帧 + NOTE，见下）；
+    /// ④ `@ShowDenyChrNameLogon` **未知命令**。
     ///
-    /// 变异：任一名字改回死键拼写 ⇒ 对应正/负牙互换而红。
+    /// 变异：任一活名改回类属性名拼写 ⇒ 对应正/负牙互换而红。
     #[test]
     fn command_names_use_oracle_live_keys_without_dead_key_aliases() {
-        // 表级：两个活名在表、两个死键拼写**不在**表。
+        // 表级：两个活名在表、两个属性名拼写**不在**表。
         let has = |n: &str| COMMANDS.iter().any(|c| c.name.eq_ignore_ascii_case(n));
-        assert!(has("ChangeMasterName"), "oracle 活名（类属性默认名）");
-        assert!(!has("MasterName"), "死键拼写不得作为别名");
+        assert!(has("MasterName"), "oracle 活名（GameCmd ctor 默认名）");
+        assert!(!has("ChangeMasterName"), "类属性名/conf 键拼写不得作为别名");
         assert!(
-            has("ShowDenyChrNameLogon"),
-            "oracle 活名（文件名 Char / 命令名 Chr）"
+            has("ShowDenyCharNameLogon"),
+            "oracle 活名（GameCmd ctor 默认名）"
         );
-        assert!(!has("ShowDenyCharNameLogon"), "死键拼写不得作为别名");
+        assert!(
+            !has("ShowDenyChrNameLogon"),
+            "类属性名/conf 键拼写不得作为别名"
+        );
 
         // 派发级：正例命中、负例落未知命令。
-        let (r, _) = run_gm("@ChangeMasterName aaa 无");
-        assert!(r.found, "@ChangeMasterName 必须被识别");
+        let (r, _) = run_gm("@MasterName aaa 无");
+        assert!(r.found, "@MasterName 必须被识别");
         assert!(
             !texts(&r).iter().any(|(_, t)| t.contains("未知命令")),
             "{:?}",
@@ -7182,22 +7197,22 @@ mod tests {
         );
         assert_eq!(texts(&r)[0].1, "aaa 现在不在线，或在其它服务器上!!!");
 
-        let (r, _) = run_gm("@MasterName aaa 无");
-        assert!(!r.found, "@MasterName 必须不可达（无别名）");
+        let (r, _) = run_gm("@ChangeMasterName aaa 无");
+        assert!(!r.found, "@ChangeMasterName 必须不可达（无别名）");
         assert!(
             texts(&r).iter().any(|(_, t)| t.contains("未知命令")),
             "{:?}",
             texts(&r)
         );
 
-        let (r, _) = run_gm("@ShowDenyChrNameLogon");
+        let (r, _) = run_gm("@ShowDenyCharNameLogon");
         assert!(r.found);
         // 真机零帧（扫盲卡）：Count 读 SystemShare.DenyChrNameList（声明即 null）⇒ NRE ⇒
         // 绿字不可达；note 登记（无 perm<6 内门，体首即触表）。
         assert!(r.msgs.is_empty() && r.frames.is_empty());
         assert!(r.log_note.expect("必须登记").contains("声明即 null"));
 
-        let (r, _) = run_gm("@ShowDenyCharNameLogon");
+        let (r, _) = run_gm("@ShowDenyChrNameLogon");
         assert!(!r.found);
         assert!(
             texts(&r).iter().any(|(_, t)| t.contains("未知命令")),
@@ -7250,7 +7265,7 @@ mod tests {
             "@DelDenyChrNameLogon 张三",
             "@-jip 1.2.3.4",
             "@+-jid",
-            "@ShowDenyChrNameLogon",
+            "@ShowDenyCharNameLogon",
             "@+-jip",
         ] {
             let (r, _) = run_gm(line);
@@ -8444,7 +8459,7 @@ mod tests {
             "ChangeItemName",
             "职业变更",
             "Level0",
-            "ChangeMasterName",
+            "MasterName",
             "2",
             "Rest",
             "3",
