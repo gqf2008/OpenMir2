@@ -214,6 +214,39 @@ pub const Q_MAP_INFO_SIZE_FMT: &str = "地图大小: X({0}) Y({1})";
 pub const Q_FLAG_ON_FMT: &str = "{0}: [{1}] = ON";
 /// `CommandHelp.GameCommandShowHumanFlagOFFMsg`（`CommandHelp.cs:53`）。
 pub const Q_FLAG_OFF_FMT: &str = "{0}: [{1}] = OFF";
+
+// ===== 族 M · 刷怪/造物（卡 `openmir2-gm-family-m-spawn-make`）=====
+/// `MobNpcCommand` 的 `Command.CommandHelp`：`Help = CommandHelp.GameCommandMobNpcHelpMsg`
+/// （`CommandHelp.cs:59`），现网名 `MobNpc`。
+pub const MOB_NPC_HELP: &str = "命令格式: @MobNpc NPC名称 脚本文件名 外形(数字) 属沙城(0,1)";
+/// `MobPlaceCommand` 的 `Help` 字面量（`MobPlaceCommand.cs:11` 的**两个**空格），现网名 `MobPlace`。
+pub const MOB_PLACE_HELP: &str = "命令格式: @MobPlace X  Y 怪物名称 怪物数量";
+/// `MobPlaceCommand.cs:38` 第一条红字。
+pub const MOB_PLACE_NO_MISSION: &str = "还没有设定怪物集中点!!!";
+/// `MobPlaceCommand.cs:39`：`"请先用命令" + Command.Name + "设置怪物的集中点。"`（现网名 `MobPlace`）。
+pub const MOB_PLACE_HINT: &str = "请先用命令MobPlace设置怪物的集中点。";
+/// `ReCallMobExCommand` 的 `Help`（`ReCallMobExCommand.cs:11`），现网名 `ReCallMobEx`。
+pub const RECALL_MOB_EX_HELP: &str = "命令格式: @ReCallMobEx 怪物名称 名字颜色 X Y";
+/// `MobCommand` 的 `Help`（`CommandHelp.GameCommandMobHelpMsg`），现网名 `怪`。
+pub const MOB_SPAWN_HELP: &str = "命令格式: @怪 怪物名称 数量 等级(0-7)";
+/// `MobCommand` 刷怪失败红字（`CommandHelp.GameCommandMobMsg` = `"怪物名称不正确或其它未问题!!!"`）。
+pub const MOB_SPAWN_FAIL: &str = "怪物名称不正确或其它未问题!!!";
+/// `GiveMineCommand` 的 `Help`（`GiveMineCommand.cs:10`），现网名 `GiveMine`。
+pub const GIVE_MINE_HELP: &str = "命令格式: @GiveMine 矿石名称 数量 持久";
+/// `MakeItemCommond` 的 `Command.CommandHelp`：`Help = CommandHelp.GamecommandMakeHelpMsg`
+/// = `" 物品名称  数量"`（**前导空格 + 内部两个空格**），现网名 `s`。
+pub const MAKE_HELP: &str = "命令格式: @s  物品名称  数量";
+/// `CommandHelp.GamecommandMakeItemNameOrPerMissionNot`（`CommandHelp.cs:86`）。
+pub const MAKE_NOT_ALLOWED: &str = "输入的物品名称不正确，或权限不够!!!";
+/// `CommandHelp.GamecommandMakeInCastleWarRange`（`CommandHelp.cs:87`）。
+pub const MAKE_IN_CASTLE: &str = "攻城区域，禁止使用此功能!!!";
+/// `CommandHelp.GamecommandMakeInSafeZoneRange`（`CommandHelp.cs:88`）。
+pub const MAKE_NOT_SAFE: &str = "非安全区，禁止使用此功能!!!";
+/// `CommandHelp.GamecommandMakeItemNameNotFound`（`CommandHelp.cs:89`）。
+pub const MAKE_NAME_NOT_FOUND_FMT: &str = "{0} 物品名称不正确!!!";
+/// M 族有副作用命令的退化形态：宿主未注入刷怪/造物通道（脚本 `GMEXECUTE` 桥）。
+pub const NOTE_M_HOST: &str =
+    "M 族：宿主未注入刷怪/造物落地通道（脚本 GMEXECUTE 桥/退化形态）⇒ 零帧";
 /// `CommandHelp.GameCommandLotteryTicketMsg`（`CommandHelp.cs:65`；**尾随一个空格**）。
 pub const LOTTERY_MSG_FMT: &str =
     "已中彩票数:{0} 未中彩票数:{1} 一等奖:{2} 二等奖:{3} 三等奖:{4} 四等奖:{5} 五等奖:{6} 六等奖:{7} ";
@@ -856,6 +889,26 @@ pub enum Imp {
     SetOpen,
     /// `SetUnitCommand`（现网 `@setunit`）：同 `SetFlag`，写 `QuestUnit`。
     SetUnit,
+
+    // ---- 族 M · 刷怪/造物（6，卡 `openmir2-gm-family-m-spawn-make`，tier=R）----
+    /// `MobNpcCommand`（现网 `@MobNpc`）：缺参/`?` ⇒ 红帮助；足参 ⇒ **静默**（建 NPC 体整段注释）。
+    MobNpc,
+    /// `MobPlaceCommand`（现网 `@MobPlace`）：Mission 未设/图不存在 ⇒ 两条红；已设 ⇒ 按数量
+    /// `RegenMonsterByName` + 置 Mission 标记；末条 Race≠136 ⇒ 绿字。
+    MobPlaceCmd,
+    /// `ReCallMobExCommand`（现网 `@ReCallMobEx`）：实参 <4 越界被吞 ⇒ 零帧（守卫 `Length>0`
+    /// 怪癖）；足参 ⇒ 刷一只、`Master=调用者`+`SlaveExpLevel=1`+`NameColor` 钳位 + Recalc +
+    /// `RefNameColor`（656）+ `SlaveList.Add`。
+    RecallMobEx,
+    /// `MobCommand`（现网 `@怪`）：空名红帮助；`nCount=(byte)_MIN(64,n)`、`nLevel>10⇒0`、
+    /// 面前格刷怪；任一失败 ⇒ 红 `GameCommandMobMsg` + break。
+    MobSpawn,
+    /// `GiveMineCommand`（现网 `@GiveMine`）：实参 <3 越界被吞 ⇒ 零帧；`nDura<=0` ⇒
+    /// `Random(18)+3`（**恰一次**）+ `StdMode==43` 门 + 负重门 + `Dura=nDura*1000` 钳 DuraMax。
+    GiveMine,
+    /// `MakeItemCommond`（现网 `@s`）：权限 10 下走造物循环——满包停、名字未命中红、高价物门、
+    /// `Random(MakeRandomAddValue)`（**每件一次**）、`GetItemNumberEx` 重取 MakeIndex、`SendAddItem`。
+    MakeItem,
     Unimplemented,
 }
 
@@ -941,6 +994,58 @@ pub struct GmQuestWrite {
     /// `(目标规范名, 回执)`：oracle `targetObject.SysMsg(PlayerActor.ChrName + ": [n] = ON/OFF",
     /// Green, Hint)`（回执收件人是**目标**，不是调用者）。
     pub target_msg: Option<(String, GmMsg)>,
+}
+
+/// 刷怪族（M）的待落地请求（`@怪`/`@ReCallMobEx`/`@MobPlace`）。
+///
+/// 命令体只做 oracle 的取参/门/钳位，真正的 `RegenMonsterByName`（含 RNG 抽数）与实体落尾
+/// 由宿主在同一事件内执行（`GmWorld` 只读、命令体纯）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GmSpawnRequest {
+    /// `MobCommand`（现网 `@怪`）：在调用者**面前格**刷 `count` 只 `level` 级怪。
+    Mob {
+        name: String,
+        count: i32,
+        level: u8,
+        x: i16,
+        y: i16,
+    },
+    /// `ReCallMobExCommand`（现网 `@ReCallMobEx`）：指定坐标刷一只，收为调用者宝宝。
+    RecallEx {
+        name: String,
+        name_color: u8,
+        x: i16,
+        y: i16,
+    },
+    /// `MobPlaceCommand`（现网 `@MobPlace`）：在 Mission 集中点刷 `count` 只。
+    MobPlace {
+        name: String,
+        count: i32,
+        x: i16,
+        y: i16,
+        mission_map: String,
+        mission_x: i16,
+        mission_y: i16,
+    },
+}
+
+/// `MakeItemCommond`（现网 `@s`）的待落地请求。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmMakeRequest {
+    pub name: String,
+    /// 已按 oracle 夹取到 `1..=10`。
+    pub count: i32,
+    /// 调用者 `Permission`（喂 `Price>=15000` 门与 `GetItemNumberEx` 的 `>=PermissionMax` 支）。
+    pub permission: u8,
+}
+
+/// `GiveMineCommand`（现网 `@GiveMine`）的待落地请求。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GmGiveMineRequest {
+    pub name: String,
+    pub count: i32,
+    /// `nDura` 原值（`<=0` ⇒ 宿主抽 `Random(18)+3`）。
+    pub dura: i32,
 }
 
 /// GM 命令对**权威 `Entity`** 的一次写入（卡 `openmir2-gm-admin-mode-entity-seam`）。
@@ -1183,6 +1288,14 @@ pub struct GmSession {
     /// `@setflag`/`@setopen`/`@setunit` 的待落地会话任务位写（宿主同一事件内落到
     /// `saves.record.data.quest_*` 并把绿字发给目标；见 [`GmQuestWrite`]）。
     pub pending_quest: Option<GmQuestWrite>,
+
+    // ---- 族 M · 刷怪/造物（6 条；含 RNG 抽数面）----
+    /// `@怪`/`@ReCallMobEx`/`@MobPlace` 的待落地刷怪请求（宿主 `RegenMonsterByName` + 落尾）。
+    pub pending_spawn: Option<GmSpawnRequest>,
+    /// `@s` 的待落地造物请求（宿主 `CopyToUserItemFromName` + RNG + `SendAddItem`）。
+    pub pending_make: Option<GmMakeRequest>,
+    /// `@GiveMine` 的待落地矿石请求（宿主 RNG `Random(18)+3` + 负重/StdMode/Dura 门）。
+    pub pending_give_mine: Option<GmGiveMineRequest>,
 }
 
 impl Default for GmSession {
@@ -1238,6 +1351,9 @@ impl Default for GmSession {
             pending_clear_password: None,
             pending_del_skill: None,
             pending_quest: None,
+            pending_spawn: None,
+            pending_make: None,
+            pending_give_mine: None,
         }
     }
 }
@@ -1367,6 +1483,11 @@ pub struct GmConfig {
     pub user_move_can_dup_obj: bool,
     /// `[Setup] UserMoveCanOnItem`（`CanWalkOfItem` 的 `boItem`：true 忽略格上物品）。部署值 = 1。
     pub user_move_can_on_item: bool,
+    /// `SystemShare.CanMakeItem(name)` 的宿主等价物：oracle 函数体**整段注释**、`result` 恒
+    /// `false`（`SystemShare.cs:785-816` / `M2Share.cs:883-914`）⇒ 生产恒 `false`。
+    /// `@s` 的 `Permission < PermissionMax` 支用到；命令体在权限 10 下不可达（外门已 10），
+    /// 测试可置 `true` 以驱动其后三道门（攻城/安全区/数量=1）的结构。
+    pub can_make_item: bool,
 }
 
 impl Default for GmConfig {
@@ -1393,6 +1514,7 @@ impl Default for GmConfig {
             user_move_time: 10,
             user_move_can_dup_obj: true,
             user_move_can_on_item: true,
+            can_make_item: false,
         }
     }
 }
@@ -1625,6 +1747,14 @@ pub struct GmWorld<'a> {
     /// （脚本桥/测试）⇒ 按「新角色全零位阵」语义读。`@setflag` 用它取**调用者**当前位阵算
     /// 写后读回，`@showflag` 用它读**目标**真位阵（此前是恒零接缝）。
     pub quests: Option<&'a std::collections::HashMap<String, GmQuestFlags>>,
+    /// **族 M**：说话者 `BaseObject.Dir`（`GetFrontPosition` 的入参）。玩家权威 Dir 在宿主
+    /// 展示表（`DisplayTable`）⇒ 由 `lib.rs` 的 `handle_gm_command` 用
+    /// `actor_dir(world, displays, actor)` 解析后注入；`0` = 未注入（测试/退化）。
+    pub speaker_dir: u8,
+    /// **族 M**：宿主持有刷怪/造物落地通道（`MonGenHost` + `MonsterTable` + 物品目录 + `world.rng`）。
+    /// `false` = 脚本 `GMEXECUTE` 桥/测试未注入 ⇒ 有副作用的 M 命令走 `log_note` 退化零帧
+    /// （不伪造 pending；部署脚本无这 6 条的不可达调用）。
+    pub m_host: bool,
     /// `SystemShare.FilterWord`（**全局可变位**，`SystemShare.cs:157` 声明、部署启动
     /// `GameApp.cs:70` 置 true；`@DisableFilter` 翻转）的宿主侧共享单元。
     ///
@@ -1649,6 +1779,8 @@ impl<'a> GmWorld<'a> {
             mission: None,
             spirit_mutiny_tick: None,
             quests: None,
+            speaker_dir: 0,
+            m_host: false,
             filter_word: None,
         }
     }
@@ -1715,6 +1847,20 @@ impl<'a> GmWorld<'a> {
         self
     }
 
+    /// 注入说话者 `Dir`（族 M：`@怪` 的 `GetFrontPosition`）。
+    #[must_use]
+    pub fn with_speaker_dir(mut self, dir: u8) -> Self {
+        self.speaker_dir = dir;
+        self
+    }
+
+    /// 标记宿主已接刷怪/造物落地通道（族 M：`@怪`/`@ReCallMobEx`/`@MobPlace`/`@s`/`@GiveMine`）。
+    #[must_use]
+    pub fn with_m_host(mut self) -> Self {
+        self.m_host = true;
+        self
+    }
+
     /// `WorldEngine.GetPlayObject`（`WorldServer.cs:937-954`）：`PlayObjectList` 顺序扫，
     /// `ChrName` **OrdinalIgnoreCase** 命中首个、且 `!Ghost`。本仓实体表含怪物 ⇒ 加 `Race == Play` 门。
     fn play_by_name(&self, name: &str) -> Option<&'a mir2_world::Entity> {
@@ -1738,6 +1884,35 @@ impl<'a> GmWorld<'a> {
         q.iter()
             .find(|(k, _)| k.eq_ignore_ascii_case(name))
             .map(|(_, v)| v)
+    }
+
+    /// `PlayerActor.GetFrontPosition`（`BaseObject.cs:977-1030`）：说话者面前一格（`short` 口径）。
+    /// 世界/地图/说话者实体任一缺失 ⇒ `None`（调用方登记 zero-frame）。
+    fn self_front_pos(&self) -> Option<(i16, i16)> {
+        let e = self.self_entity()?;
+        let (width, height) = {
+            let m = self.world?.maps.get(e.map_id)?;
+            (m.width, m.height)
+        };
+        let (fx, fy) = crate::attackwire::front_position(self.speaker_dir, e.x, e.y, width, height);
+        Some((fx as i16, fy as i16))
+    }
+
+    /// `CastleMgr.InCastleWarArea(PlayerActor) != null`（`UserCastle.cs:674-678` 的任一城堡命中，
+    /// **不看** `UnderWar`）。`None` = 世界/说话者/地图缺失。
+    fn self_in_castle_war_area(&self) -> Option<bool> {
+        let (map_id, x, y) = self.self_pos()?;
+        Some(
+            self.world?
+                .castles
+                .iter()
+                .any(|c| c.in_castle_war_area(Some(map_id), x, y)),
+        )
+    }
+
+    /// `PlayerActor.InSafeZone()`（`BaseObject.cs:1777`）的宿主折叠值（`Entity::in_safe_zone`）。
+    fn self_in_safe_zone(&self) -> Option<bool> {
+        Some(self.self_entity()?.in_safe_zone)
     }
 
     /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
@@ -2503,6 +2678,270 @@ fn set_quest_bits(
         GmQuestKind::Unit => write.unit = Some(bits.unit),
     }
     sess.pending_quest = Some(write);
+    GmResult::empty()
+}
+
+/// `MobNpcCommand.Execute`（`MobNpcCommand.cs:12-51`，现网 `@MobNpc`）。
+///
+/// 门：`IsNullOrEmpty(sParam1) || IsNullOrEmpty(sParam2) || sParam1[0]=='?'` ⇒ 红帮助；
+/// 其后的第二条 `IsNullOrEmpty(sParam1)` **不可达**（前置已挡）。建 NPC 的整段代码
+/// （`:25-45`）**全部注释** ⇒ 过门后**静默零帧零副作用**（照抄，不补）。
+fn mob_npc(parameters: &str) -> GmResult {
+    let params = split_params(parameters);
+    let p1 = params.first().copied().unwrap_or("");
+    let p2 = params.get(1).copied().unwrap_or("");
+    if p1.is_empty() || p2.is_empty() || p1.starts_with('?') {
+        return red(MOB_NPC_HELP);
+    }
+    GmResult::empty()
+}
+
+/// `MobPlaceCommand.Execute`（`MobPlaceCommand.cs:12-63`，现网 `@MobPlace`）。
+///
+/// 取参：`nCount = _MIN(500, StrToInt(sCount,0))`、`nX/nY = StrToInt16(...)`（**重复计算两遍**
+/// ——照抄无副作用）；`nX<=0 || nY<=0 || 名空 || nCount<=0` ⇒ 红帮助。
+/// Mission 门：`!SystemShare.BoMission || MapMgr.FindMap(MissionMap)==null` ⇒ **两条红**。
+/// 已设 ⇒ 按数量 `RegenMonsterByName(MissionMap, nX, nY, 名)`（宿主同一事件内按序刷）；
+/// 每只置 `Mission=true/MissionX/MissionY`（**宿主 Entity 未建模该三元，登记**）；
+/// 末条 `mon?.Race != 136` ⇒ 绿字（null 也算 `!=136` ⇒ 绿）。
+fn mob_place(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let params = split_params(parameters);
+    let s_x = params.first().copied().unwrap_or("");
+    let s_y = params.get(1).copied().unwrap_or("");
+    let s_name = params.get(2).copied().unwrap_or("");
+    let s_count = params.get(3).copied().unwrap_or("");
+    let n_count = str_to_int(s_count, 0).min(500);
+    let n_x = str_to_int16(s_x, 0);
+    let n_y = str_to_int16(s_y, 0);
+    if n_x <= 0 || n_y <= 0 || s_name.is_empty() || n_count <= 0 {
+        return red(MOB_PLACE_HELP);
+    }
+    let Some(mission) = world.mission else {
+        return no_frames(NOTE_M_HOST);
+    };
+    let (bo_mission, mission_map, mission_x, mission_y) = {
+        let m = mission.borrow();
+        (
+            m.bo_mission,
+            m.mission_map.clone(),
+            m.mission_x,
+            m.mission_y,
+        )
+    };
+    let Some(maps) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    if !bo_mission || maps.id_of(&mission_map).is_none() {
+        return GmResult {
+            found: true,
+            parsed: true,
+            msgs: vec![
+                GmMsg {
+                    color: GmColor::Red,
+                    text: MOB_PLACE_NO_MISSION.to_string(),
+                },
+                GmMsg {
+                    color: GmColor::Red,
+                    text: MOB_PLACE_HINT.to_string(),
+                },
+            ],
+            frames: Vec::new(),
+            log_note: None,
+        };
+    }
+    sess.pending_spawn = Some(GmSpawnRequest::MobPlace {
+        name: s_name.to_string(),
+        count: n_count,
+        x: n_x,
+        y: n_y,
+        mission_map,
+        mission_x,
+        mission_y,
+    });
+    GmResult::empty()
+}
+
+/// `ReCallMobExCommand.Execute`（`ReCallMobExCommand.cs:14-58`，现网 `@ReCallMobEx`）。
+///
+/// **守卫怪癖照抄**：四个取参全写成 `@params.Length > 0 ? … : 0`（不是 `> 1/2/3`）⇒
+/// 只要 `@params` 非 null（`Split` 保证）就会读 `@params[1..3]`，**实参 <4 一律越界**
+/// 被 `PlayObject.Chat.cs` 的 catch 吞 ⇒ **零帧**。足参后：空名/`?` ⇒ 红帮助；
+/// `nX/nY<0 ⇒ 0`；`nNameColor` 双向钳 `[0,255]`；刷怪成功 ⇒
+/// `Master=调用者` + `SlaveExpLevel=1` + `NameColor=(byte)nNameColor` + `RecalcAbilitys()`
+/// + `RefNameColor()`（656）+ `SlaveList.Add`。
+fn recall_mob_ex(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let params = split_params(parameters);
+    if params.len() < 4 {
+        return no_frames(
+            "ReCallMobEx：@params.Length>0 守卫误用 ⇒ @params[1..3] 越界被 catch 吞 ⇒ 零帧",
+        );
+    }
+    let s_name = params[0];
+    let n_name_color = str_to_int(params[1], 0);
+    let mut n_x = str_to_int(params[2], 0) as i16; // C# `(short)` 截断
+    let mut n_y = str_to_int(params[3], 0) as i16;
+    if s_name.is_empty() || s_name.starts_with('?') {
+        return red(RECALL_MOB_EX_HELP);
+    }
+    if n_x < 0 {
+        n_x = 0;
+    }
+    if n_y < 0 {
+        n_y = 0;
+    }
+    // oracle 两个 if 的顺序钳位 ⇒ `clamp(0,255)` 等价。
+    let n_name_color = n_name_color.clamp(0, 255);
+    sess.pending_spawn = Some(GmSpawnRequest::RecallEx {
+        name: s_name.to_string(),
+        name_color: n_name_color as u8,
+        x: n_x,
+        y: n_y,
+    });
+    GmResult::empty()
+}
+
+/// `MobCommand.Execute`（`MobCommand.cs:12-60`，现网 `@怪`）。
+///
+/// 空名红帮助；`nCount<=0 ⇒ 1`；`nLevel` 先 `(byte)` 截断再 `>100?`（`!(nLevel<=10) ⇒ 0`）；
+/// `nCount = (byte)_MIN(64, nCount)`；`GetFrontPosition`（**面前格**）后逐只刷；
+/// 任一失败 ⇒ 红 `GameCommandMobMsg` + break；成功只置 `SlaveExpLevel=nLevel` +
+/// `RecalcAbilitys()` + `RefNameColor()`（零 SysMsg）。
+fn mob_spawn(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let params = split_params(parameters);
+    let s_name = params.first().copied().unwrap_or("");
+    let mut n_count = if params.len() > 1 {
+        str_to_int(params[1], 0)
+    } else {
+        1
+    };
+    let n_level_raw = if params.len() > 2 {
+        str_to_int(params[2], 0)
+    } else {
+        0
+    };
+    if s_name.is_empty() {
+        return red(MOB_SPAWN_HELP);
+    }
+    if n_count <= 0 {
+        n_count = 1;
+    }
+    let mut n_level = n_level_raw as u8; // C# `(byte)` 截断
+    if n_level > 10 {
+        n_level = 0;
+    }
+    // `(byte)HUtil32._MIN(64, nCount)`：nCount 已 >=1 ⇒ 结果 1..=64。
+    n_count = n_count.min(64);
+    let Some((x, y)) = world.self_front_pos() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    sess.pending_spawn = Some(GmSpawnRequest::Mob {
+        name: s_name.to_string(),
+        count: n_count,
+        level: n_level,
+        x,
+        y,
+    });
+    GmResult::empty()
+}
+
+/// `GiveMineCommand.Execute`（`GiveMineCommand.cs:14-69`，现网 `@GiveMine`）。
+///
+/// **守卫怪癖照抄**：三处取参都用 `@params.Length > 0` ⇒ 实参 <3 一律越界被 catch 吞 ⇒
+/// **零帧**。之后：`Permission < PermissionMin` 重检（外门已挡的死支照抄）；空名/`?`/
+/// `nMineCount<=0` ⇒ 红帮助；`nDura<=0` ⇒ `Random(18)+3`（**恰一次**，宿主同一事件内抽）。
+fn give_mine(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let params = split_params(parameters);
+    if params.len() < 3 {
+        return no_frames(
+            "GiveMine：@params.Length>0 守卫误用 ⇒ @params[1]/[2] 越界被 catch 吞 ⇒ 零帧",
+        );
+    }
+    let s_name = params[0];
+    let n_count = str_to_int(params[1], 0);
+    let n_dura = str_to_int(params[2], 0);
+    if sess.permission < 10 {
+        return red(PERMISSION_TOO_LOW);
+    }
+    if s_name.is_empty() || s_name.starts_with('?') || n_count <= 0 {
+        return red(GIVE_MINE_HELP);
+    }
+    sess.pending_give_mine = Some(GmGiveMineRequest {
+        name: s_name.to_string(),
+        count: n_count,
+        dura: n_dura,
+    });
+    GmResult::empty()
+}
+
+/// `MakeItemCommond.Execute`（`MakeItemCommand.cs:16-125`，现网 `@s`）。
+///
+/// 空名红帮助；`nCount` 夹 `1..=10`；`Permission < PermissionMax(10)` 支（**外门 perm_min=10
+/// ⇒ 生产不可达**）逐门：`!CanMakeItem`（oracle 恒 false ⇒ 恒红）→ 攻城区 → 非安全区 →
+/// `nCount=1`。造物循环（宿主持久化）：满包 `return`、名字未命中红+break、高价物
+/// `Price>=15000 && !TestServer && perm<5` ⇒ 静默 `return`、`Random(MakeRandomAddValue)`
+/// （每件一次，升级逻辑注释）、`perm>=PermissionMax ⇒ GetItemNumberEx` 重取 `MakeIndex`、
+/// `ItemList.Add + SendAddItem`。
+fn make_item(
+    parameters: &str,
+    world: &GmWorld<'_>,
+    sess: &mut GmSession,
+    cfg: &GmConfig,
+) -> GmResult {
+    if !world.m_host {
+        return no_frames(NOTE_M_HOST);
+    }
+    let params = split_params(parameters);
+    let s_name = params.first().copied().unwrap_or("");
+    let mut n_count = if params.len() > 1 {
+        str_to_int(params[1], 0)
+    } else {
+        1
+    };
+    // `sParam`（`:19`）读了但**从未使用**（升级逻辑整段注释）⇒ 不绑定。
+    if s_name.is_empty() {
+        return red(MAKE_HELP);
+    }
+    if n_count <= 0 {
+        n_count = 1;
+    }
+    if n_count > 10 {
+        n_count = 10;
+    }
+    // `Command.PermissionMax` = 类属性缺省 10（conf 只覆盖 PerMissionMin）⇒ 外门 perm_min=10
+    // 放行时本支恒不可达；结构照抄（`can_make_item` 生产恒 false，测试可置 true 驱动后三支）。
+    if sess.permission < 10 {
+        if !cfg.can_make_item {
+            return red(MAKE_NOT_ALLOWED);
+        }
+        match world.self_in_castle_war_area() {
+            None => return no_frames(NOTE_NO_WORLD),
+            Some(true) => return red(MAKE_IN_CASTLE),
+            Some(false) => {}
+        }
+        match world.self_in_safe_zone() {
+            None => return no_frames(NOTE_NO_WORLD),
+            Some(false) => return red(MAKE_NOT_SAFE),
+            Some(true) => {}
+        }
+        n_count = 1;
+    }
+    sess.pending_make = Some(GmMakeRequest {
+        name: s_name.to_string(),
+        count: n_count,
+        permission: sess.permission,
+    });
     GmResult::empty()
 }
 
@@ -4232,6 +4671,9 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_clear_password = None;
     sess.pending_del_skill = None;
     sess.pending_quest = None;
+    sess.pending_spawn = None;
+    sess.pending_make = None;
+    sess.pending_give_mine = None;
     let Some((command, parameters)) = parse_command(line) else {
         return GmResult::default();
     };
@@ -4464,6 +4906,14 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::SetFlag => set_quest_bits(parameters, world, sess, GmQuestKind::Flag),
         Imp::SetOpen => set_quest_bits(parameters, world, sess, GmQuestKind::UnitOpen),
         Imp::SetUnit => set_quest_bits(parameters, world, sess, GmQuestKind::Unit),
+
+        // ---- 族 M · 刷怪/造物（6）----
+        Imp::MobNpc => mob_npc(parameters),
+        Imp::MobPlaceCmd => mob_place(parameters, world, sess),
+        Imp::RecallMobEx => recall_mob_ex(parameters, world, sess),
+        Imp::MobSpawn => mob_spawn(parameters, world, sess),
+        Imp::GiveMine => give_mine(parameters, world, sess),
+        Imp::MakeItem => make_item(parameters, world, sess, cfg),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -4940,7 +5390,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "GiveMine",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::GiveMine,
     },
     CommandDef {
         name: "GuildWar",
@@ -5067,13 +5517,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "MobNpc",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MobNpc,
     },
     CommandDef {
         name: "MobPlace",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MobPlaceCmd,
     },
     CommandDef {
         name: "MoveMobTo",
@@ -5115,7 +5565,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "ReCallMobEx",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::RecallMobEx,
     },
     CommandDef {
         name: "Reconnection",
@@ -5181,7 +5631,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "s",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MakeItem,
     },
     CommandDef {
         name: "SabukWallGold",
@@ -5530,7 +5980,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "怪",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MobSpawn,
     },
     CommandDef {
         name: "拒绝",
@@ -6788,6 +7238,8 @@ mod tests {
             mission: None,
             spirit_mutiny_tick: None,
             quests: None,
+            speaker_dir: 0,
+            m_host: false,
             filter_word: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
@@ -7096,8 +7548,9 @@ mod tests {
     /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）与
     /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）与
     /// 族 X2 批 A（卡 `openmir2-gm-family-x2-target-control` 的 12 条目标控制/杂项）与
-    /// 批 B（同卡重 R 6 条）与族 F（卡 `openmir2-gm-family-f-script-flags` 的 3 条脚本标志）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 24），且命令名 → 实现标签固定。
+    /// 批 B（同卡重 R 6 条）、族 F（卡 `openmir2-gm-family-f-script-flags` 的 3 条脚本标志）与
+    /// 族 M（卡 `openmir2-gm-family-m-spawn-make` 的 6 条刷怪/造物）的命令体接上
+    /// （`Unimplemented` 从 180 降到 18），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -7105,16 +7558,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            161,
-            "161 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）+ 族 F（脚本标志 3）"
+            167,
+            "167 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）+ 族 X2 批 A（目标控制/杂项 12）+ 族 X2 批 B（重 R 6）+ 族 F（脚本标志 3）+ 族 M（刷怪/造物 6）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            24,
-            "185 - 161"
+            18,
+            "185 - 167"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -11367,5 +11820,449 @@ mod tests {
         let bare = GmWorld::new(&guilds).with_world(&world).with_speaker("gm");
         let r = execute(&mut sess, &GmConfig::default(), &bare, "@showflag bob 7");
         assert_eq!(texts(&r), vec![(GmColor::Green, "bob: [7] = OFF")]);
+    }
+
+    // ==================== 族 M · 刷怪/造物（6，卡 `openmir2-gm-family-m-spawn-make`，tier=R）====================
+
+    /// 刷怪世界：`gm`（5,5，Race=Play）+ `bob`；各自带一张 20×20 地图。
+    fn m_world() -> mir2_world::World {
+        let mut w = mir2_world::World::new(20, 20);
+        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        gm.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(gm);
+        let mut bob = mir2_world::Entity::new(0, "bob", 6, 6);
+        bob.race = mir2_world::ACTOR_RACE_PLAY;
+        w.add_entity(bob);
+        w
+    }
+
+    fn m_view<'a>(
+        guilds: &'a mir2_world::GuildManager,
+        world: &'a mir2_world::World,
+    ) -> GmWorld<'a> {
+        GmWorld::new(guilds)
+            .with_world(world)
+            .with_speaker("gm")
+            .with_speaker_dir(2) // Direction.Right
+            .with_m_host()
+    }
+
+    /// 表项：6 条全部接线、perm 10、`Execute` 形参 2。
+    #[test]
+    fn m_family_table_entries_are_wired() {
+        for (name, imp) in [
+            ("MobNpc", Imp::MobNpc),
+            ("MobPlace", Imp::MobPlaceCmd),
+            ("ReCallMobEx", Imp::RecallMobEx),
+            ("怪", Imp::MobSpawn),
+            ("GiveMine", Imp::GiveMine),
+            ("s", Imp::MakeItem),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, 2, "{name} 的 Execute 形参个数");
+        }
+    }
+
+    /// `@MobNpc`：`sParam1/sParam2` 任一空或 `sParam1[0]=='?'` ⇒ 红帮助；足参 ⇒ **静默**
+    /// （建 NPC 体整段注释）；第二条空名检查不可达。
+    #[test]
+    fn m_mob_npc_gates_and_silence() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = m_world();
+        let view = m_view(&guilds, &world);
+        let mut sess = gm_session();
+        for line in ["@MobNpc", "@MobNpc a", "@MobNpc ? b"] {
+            let r = execute(&mut sess, &GmConfig::default(), &view, line);
+            assert_eq!(texts(&r), vec![(GmColor::Red, MOB_NPC_HELP)], "{line}");
+        }
+        let r = execute(&mut sess, &GmConfig::default(), &view, "@MobNpc a b 1 0");
+        assert!(r.found && r.parsed);
+        assert!(
+            r.msgs.is_empty() && r.frames.is_empty(),
+            "建 NPC 体整段注释 ⇒ 静默"
+        );
+        assert!(sess.pending_spawn.is_none());
+    }
+
+    /// `@ReCallMobEx`：**守卫 `Length>0` 怪癖**——实参 <4 一律越界被吞 ⇒ 零帧零写；
+    /// 足参才进命令体（空名/`?` 红；x/y 负归 0；色钳 [0,255]）。
+    #[test]
+    fn m_recall_mob_ex_guard_and_clamps() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = m_world();
+        let view = m_view(&guilds, &world);
+        let mut sess = gm_session();
+        for line in ["@ReCallMobEx", "@ReCallMobEx mob", "@ReCallMobEx mob 1"] {
+            let r = execute(&mut sess, &GmConfig::default(), &view, line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 零帧");
+            assert!(sess.pending_spawn.is_none(), "{line} 零写");
+            assert!(r.log_note.expect("越界登记").contains("越界"));
+        }
+        // 足参 `?` ⇒ 红帮助（空名支真机不可达：parameters 先 Trim ⇒ 首 token 非空）。
+        let r = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view,
+            "@ReCallMobEx ? 1 2 3",
+        );
+        assert_eq!(texts(&r), vec![(GmColor::Red, RECALL_MOB_EX_HELP)]);
+        assert!(sess.pending_spawn.is_none());
+        // 钳位：x=-2→0，y=-3→0，色 -5→0。
+        let _ = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view,
+            "@ReCallMobEx mob -5 -2 -3",
+        );
+        assert_eq!(
+            sess.pending_spawn,
+            Some(GmSpawnRequest::RecallEx {
+                name: "mob".into(),
+                name_color: 0,
+                x: 0,
+                y: 0,
+            })
+        );
+        // 色 300 → 255；(short) 截断后负 → 0。
+        let _ = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view,
+            "@ReCallMobEx mob 300 70000 -1",
+        );
+        assert_eq!(
+            sess.pending_spawn,
+            Some(GmSpawnRequest::RecallEx {
+                name: "mob".into(),
+                name_color: 255,
+                x: (70000_i32 as i16),
+                y: 0,
+            })
+        );
+    }
+
+    /// `@怪`：空名红帮助；`nCount<=0⇒1`、`(byte)_MIN(64,n)`、`nLevel=(byte)` 后 `>10⇒0`；
+    /// 坐标 = 说话者**面前格**（`Dir` 注入）。
+    #[test]
+    fn m_mob_spawn_clamps_and_front_position() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = m_world();
+        let view = m_view(&guilds, &world); // dir=2 Right ⇒ (6,5)
+        let mut sess = gm_session();
+        assert_eq!(
+            texts(&execute(&mut sess, &GmConfig::default(), &view, "@怪")),
+            vec![(GmColor::Red, MOB_SPAWN_HELP)]
+        );
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@怪 mob 1000 300");
+        assert_eq!(
+            sess.pending_spawn,
+            Some(GmSpawnRequest::Mob {
+                name: "mob".into(),
+                count: 64, // _MIN(64,1000)
+                level: 0,  // 300 → (byte)44 → >10 ⇒ 0
+                x: 6,
+                y: 5,
+            })
+        );
+        // count=0 ⇒ 1；level=-1 → (byte)255 → 0；省略参数 ⇒ count=1/level=0。
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@怪 mob 0 -1");
+        assert_eq!(
+            sess.pending_spawn,
+            Some(GmSpawnRequest::Mob {
+                name: "mob".into(),
+                count: 1,
+                level: 0,
+                x: 6,
+                y: 5,
+            })
+        );
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@怪 mob");
+        assert_eq!(
+            sess.pending_spawn,
+            Some(GmSpawnRequest::Mob {
+                name: "mob".into(),
+                count: 1,
+                level: 0,
+                x: 6,
+                y: 5,
+            })
+        );
+        // dir=4 Down ⇒ (5,6)；level=5 保留。
+        let view_down = GmWorld::new(&guilds)
+            .with_world(&world)
+            .with_speaker("gm")
+            .with_speaker_dir(4)
+            .with_m_host();
+        let _ = execute(&mut sess, &GmConfig::default(), &view_down, "@怪 mob 2 5");
+        assert_eq!(
+            sess.pending_spawn,
+            Some(GmSpawnRequest::Mob {
+                name: "mob".into(),
+                count: 2,
+                level: 5,
+                x: 5,
+                y: 6,
+            })
+        );
+        // 世界未注入 ⇒ 零帧登记。
+        let bare = GmWorld::new(&guilds).with_speaker("gm").with_m_host();
+        let r = execute(&mut sess, &GmConfig::default(), &bare, "@怪 mob 1");
+        assert!(r.msgs.is_empty() && r.frames.is_empty());
+        assert!(r.log_note.is_some());
+    }
+
+    /// `@GiveMine`：**守卫 `Length>0` 怪癖**实参 <3 ⇒ 零帧；足参后空名/`?`/数量<=0 ⇒ 红；
+    /// `nDura` 原样入 pending（`<=0` 由宿主抽 `Random(18)+3`）；权限重检死支照抄。
+    #[test]
+    fn m_give_mine_guard_and_stage() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = m_world();
+        let view = m_view(&guilds, &world);
+        let mut sess = gm_session();
+        for line in ["@GiveMine", "@GiveMine ore 2"] {
+            let r = execute(&mut sess, &GmConfig::default(), &view, line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 零帧");
+            assert!(sess.pending_give_mine.is_none(), "{line} 零写");
+            assert!(r.log_note.expect("越界登记").contains("越界"));
+        }
+        // `?` / 数量 0 ⇒ 红帮助（空名支真机不可达：parameters 先 Trim ⇒ 首 token 非空）。
+        for line in ["@GiveMine ? 1 1", "@GiveMine ore 0 1"] {
+            assert_eq!(
+                texts(&execute(&mut sess, &GmConfig::default(), &view, line)),
+                vec![(GmColor::Red, GIVE_MINE_HELP)],
+                "{line}"
+            );
+            assert!(sess.pending_give_mine.is_none());
+        }
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@GiveMine ore 2 5");
+        assert_eq!(
+            sess.pending_give_mine,
+            Some(GmGiveMineRequest {
+                name: "ore".into(),
+                count: 2,
+                dura: 5,
+            })
+        );
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@GiveMine ore 2 -1");
+        assert_eq!(
+            sess.pending_give_mine.unwrap().dura,
+            -1,
+            "负持久交给宿主抽随机"
+        );
+        // 体内权限重检（外门已挡的死支）：直接调命令体 + permission=0 ⇒ 红。
+        let mut low = GmSession::default();
+        assert_eq!(
+            texts(&give_mine("ore 1 1", &view, &mut low)),
+            vec![(GmColor::Red, PERMISSION_TOO_LOW)]
+        );
+    }
+
+    /// `@s`：空名红帮助；`nCount` 夹 `1..=10`；权限 10 下 `Permission<PermissionMax` 支不可达，
+    /// 直接调命令体（permission<10）驱动四门：`!CanMakeItem`（oracle 恒 false）→ 攻城 → 非安全区
+    /// → `nCount=1`。
+    #[test]
+    fn m_make_clamps_and_four_gates() {
+        let guilds = mir2_world::GuildManager::new();
+        let mut world = m_world();
+        let view = m_view(&guilds, &world);
+        let mut sess = gm_session();
+        assert_eq!(
+            texts(&execute(&mut sess, &GmConfig::default(), &view, "@s")),
+            vec![(GmColor::Red, MAKE_HELP)]
+        );
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@s 木剑 100");
+        assert_eq!(
+            sess.pending_make,
+            Some(GmMakeRequest {
+                name: "木剑".into(),
+                count: 10,
+                permission: 10,
+            })
+        );
+        let _ = execute(&mut sess, &GmConfig::default(), &view, "@s 木剑 0");
+        assert_eq!(sess.pending_make.as_ref().unwrap().count, 1);
+        // 四门（体内，permission<10）：① CanMakeItem 恒 false ⇒ 恒红。
+        let mut low = GmSession::default();
+        let cfg_no = GmConfig::default(); // can_make_item = false（oracle 恒 false）
+        assert_eq!(
+            texts(&make_item("木剑 5", &view, &mut low, &cfg_no)),
+            vec![(GmColor::Red, MAKE_NOT_ALLOWED)]
+        );
+        // ② 攻城区：can_make_item=true（测试驱动结构）⇒ 首个城堡命中 ⇒ 攻城红。
+        let mut w_war = m_world();
+        let mut castle =
+            mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        castle.castle_map_id = Some(0);
+        castle.home_x = 5;
+        castle.home_y = 5;
+        castle.war_range_x = 100;
+        castle.war_range_y = 100;
+        w_war.castles.push(castle);
+        let view_war = m_view(&guilds, &w_war);
+        let cfg_allow = GmConfig {
+            can_make_item: true,
+            ..GmConfig::default()
+        };
+        assert_eq!(
+            texts(&make_item("木剑 5", &view_war, &mut low, &cfg_allow)),
+            vec![(GmColor::Red, MAKE_IN_CASTLE)]
+        );
+        // ③ 非安全区（默认 in_safe_zone=false）⇒ 非安全区红。
+        assert_eq!(
+            texts(&make_item("木剑 5", &view, &mut low, &cfg_allow)),
+            vec![(GmColor::Red, MAKE_NOT_SAFE)]
+        );
+        // ④ 安全区 ⇒ 过四门且 `nCount=1`。
+        let gm_id = world
+            .entities
+            .iter()
+            .find(|e| e.name == "gm")
+            .expect("gm 在场")
+            .id;
+        world.entities.get_mut(gm_id).unwrap().in_safe_zone = true;
+        let view_safe = m_view(&guilds, &world);
+        let r = make_item("木剑 5", &view_safe, &mut low, &cfg_allow);
+        assert!(r.msgs.is_empty());
+        assert_eq!(
+            low.pending_make,
+            Some(GmMakeRequest {
+                name: "木剑".into(),
+                count: 1,
+                permission: 0,
+            })
+        );
+    }
+
+    /// `@MobPlace`：坐标/名/数量门 ⇒ 红帮助；Mission 未设 / 图不存在 ⇒ **两条红**；
+    /// 已设 ⇒ 装 `MobPlace` 请求（`nCount` 夹 500）并带 Mission 三元。
+    #[test]
+    fn m_mob_place_mission_gates_and_stage() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = m_world();
+        let fx = map_fixture(mir2_envir::MapInfoFlag::default());
+        let view = GmWorld::new(&guilds)
+            .with_maps(&fx.registry)
+            .with_world(&world)
+            .with_speaker("gm")
+            .with_m_host();
+        let mut sess = gm_session();
+        for line in [
+            "@MobPlace",
+            "@MobPlace 0 1 mob 2",
+            "@MobPlace 1 0 mob 2",
+            "@MobPlace 1 1  2",
+            "@MobPlace 1 1 mob 0",
+        ] {
+            assert_eq!(
+                texts(&execute(&mut sess, &GmConfig::default(), &view, line)),
+                vec![(GmColor::Red, MOB_PLACE_HELP)],
+                "{line}"
+            );
+        }
+        // 未设 Mission ⇒ 两条红。
+        let mission = std::cell::RefCell::new(GmMissionState::default());
+        let view_no_mission = GmWorld::new(&guilds)
+            .with_maps(&fx.registry)
+            .with_world(&world)
+            .with_speaker("gm")
+            .with_mission(&mission)
+            .with_m_host();
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view_no_mission,
+                "@MobPlace 1 1 mob 2"
+            )),
+            vec![
+                (GmColor::Red, MOB_PLACE_NO_MISSION),
+                (GmColor::Red, MOB_PLACE_HINT)
+            ]
+        );
+        assert!(sess.pending_spawn.is_none());
+        // BoMission=true 但图不存在 ⇒ 同样两条红。
+        *mission.borrow_mut() = GmMissionState {
+            bo_mission: true,
+            mission_map: "nope".into(),
+            mission_x: 1,
+            mission_y: 2,
+        };
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view_no_mission,
+                "@MobPlace 1 1 mob 2"
+            ))
+            .len(),
+            2
+        );
+        // 已设 + 图存在 ⇒ 装请求；nCount 夹 500，坐标 short。
+        *mission.borrow_mut() = GmMissionState {
+            bo_mission: true,
+            mission_map: "map".into(),
+            mission_x: 7,
+            mission_y: 8,
+        };
+        let _ = execute(
+            &mut sess,
+            &GmConfig::default(),
+            &view_no_mission,
+            "@MobPlace 3 4 mob 700",
+        );
+        assert_eq!(
+            sess.pending_spawn,
+            Some(GmSpawnRequest::MobPlace {
+                name: "mob".into(),
+                count: 500,
+                x: 3,
+                y: 4,
+                mission_map: "map".into(),
+                mission_x: 7,
+                mission_y: 8,
+            })
+        );
+    }
+
+    /// 退化形态：脚本 `GMEXECUTE` 桥没有刷怪/造物落地通道（`m_host=false`）⇒ 5 条有副作用的
+    /// 命令一律零帧 + note，**不装 pending**（部署脚本无其可达调用）。
+    #[test]
+    fn m_family_degenerate_without_host() {
+        let guilds = mir2_world::GuildManager::new();
+        let world = m_world();
+        let mut mission = GmMissionState {
+            bo_mission: true,
+            mission_map: "map".into(),
+            mission_x: 1,
+            mission_y: 1,
+        };
+        let cell = std::cell::RefCell::new(std::mem::take(&mut mission));
+        let fx = map_fixture(mir2_envir::MapInfoFlag::default());
+        let bare = GmWorld::new(&guilds)
+            .with_maps(&fx.registry)
+            .with_world(&world)
+            .with_speaker("gm")
+            .with_speaker_dir(2)
+            .with_mission(&cell); // 未 with_m_host
+        let mut sess = gm_session();
+        for line in [
+            "@MobPlace 1 1 mob 1",
+            "@ReCallMobEx mob 1 2 3",
+            "@怪 mob 2",
+            "@GiveMine ore 1 1",
+            "@s 木剑 1",
+        ] {
+            let r = execute(&mut sess, &GmConfig::default(), &bare, line);
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 零帧");
+            assert!(r.log_note.expect("必须登记").contains("M 族"), "{line}");
+            assert!(
+                sess.pending_spawn.is_none()
+                    && sess.pending_make.is_none()
+                    && sess.pending_give_mine.is_none(),
+                "{line} 不得装 pending"
+            );
+        }
     }
 }

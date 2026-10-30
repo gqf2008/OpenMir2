@@ -30,7 +30,7 @@
  "sources": {
   "rust_table": {
    "path": "mir2-rs/bins/game-svr/src/gmcmd.rs",
-   "sha256": "3a351f48350307d7d8e41e3e0f9859d61c4001836dda71f94b8defc9f24c2690"
+   "sha256": "11e85c3ab8d0aeaf0b5d27841a4206880aec6fcf2979b590490d2ebb6f9b461c"
   },
   "gamecommands": {
    "path": "src/Modules/GameCommand/GameCommands.cs",
@@ -2471,111 +2471,6 @@
    "field_line": 242
   },
   {
-   "cmd": "GiveMine",
-   "cmd_name": "GiveMine",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/GiveMineCommand.cs:12",
-   "perm_min": 10,
-   "perm_source": "cs[Command] 属性",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "GiveMineCommand",
-   "attr_name": "GiveMine",
-   "handler_exec_line": 16,
-   "name_source": "cs[Command] 属性",
-   "register_command": false,
-   "perm_attr": 10,
-   "field": null,
-   "field_line": null
-  },
-  {
-   "cmd": "MobNpc",
-   "cmd_name": "MobNpc",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/MobNpcCommand.cs:10",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].MobNpc",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "MobNpcCommand",
-   "attr_name": "MobNpc",
-   "handler_exec_line": 14,
-   "name_source": "conf[Command].MobNpc",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "MobNpc",
-   "field_line": 190
-  },
-  {
-   "cmd": "MobPlace",
-   "cmd_name": "MobPlace",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/MobPlaceCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].MobPlace",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "MobPlaceCommand",
-   "attr_name": "MobPlace",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].MobPlace",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "MobPlace",
-   "field_line": 224
-  },
-  {
-   "cmd": "ReCallMobEx",
-   "cmd_name": "ReCallMobEx",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/ReCallMobExCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "cs[Command] 属性",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "ReCallMobExCommand",
-   "attr_name": "ReCallMobEx",
-   "handler_exec_line": 15,
-   "name_source": "cs[Command] 属性",
-   "register_command": false,
-   "perm_attr": 10,
-   "field": null,
-   "field_line": null
-  },
-  {
-   "cmd": "s",
-   "cmd_name": "s",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/MakeItemCommand.cs:13",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].MakeMin",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "MakeItemCommond",
-   "attr_name": "Make",
-   "handler_exec_line": 17,
-   "name_source": "conf[Command].Make",
-   "register_command": true,
-   "perm_attr": 0,
-   "field": "Make",
-   "field_line": 256
-  },
-  {
    "cmd": "SabukWallGold",
    "cmd_name": "SabukWallGold",
    "child_card": null,
@@ -2828,27 +2723,6 @@
    "field_line": 306
   },
   {
-   "cmd": "怪",
-   "cmd_name": "怪",
-   "child_card": null,
-   "rust_imp": "Unimplemented",
-   "rust_perm_min": 10,
-   "handler": "src/Modules/GameCommand/Commands/MobCommand.cs:11",
-   "perm_min": 10,
-   "perm_source": "conf[Permission].Mob",
-   "verdict": "unreachable",
-   "verdict_why": "perm_min>0 且部署脚本无该命令的可达 GMEXECUTE 调用 ⇒ 被权限门挡住",
-   "script_evidence": [],
-   "handler_class": "MobCommand",
-   "attr_name": "Mob",
-   "handler_exec_line": 15,
-   "name_source": "conf[Command].Mob",
-   "register_command": true,
-   "perm_attr": 10,
-   "field": "Mob",
-   "field_line": 188
-  },
-  {
    "cmd": "查看周围",
    "cmd_name": "查看周围",
    "child_card": null,
@@ -2913,19 +2787,19 @@
   }
  ],
  "summary": {
-  "total": 24,
+  "total": 18,
   "by_verdict": {
-   "unreachable": 24
+   "unreachable": 18
   },
   "reachable": 0,
   "script_reachable": 0,
-  "unreachable": 24,
+  "unreachable": 18,
   "structural_unreachable": 0,
   "undetermined": 0,
   "table_total": 185,
   "table_imp_breakdown": {
-   "Implemented": 161,
-   "Unimplemented": 24
+   "Implemented": 167,
+   "Unimplemented": 18
   },
   "third_state": 21,
   "third_state_imps": [
@@ -2951,7 +2825,7 @@
    "TestStatus",
    "UserCmd"
   ],
-  "complete_implemented": 140,
+  "complete_implemented": 146,
   "script_occurrences": {
    "total": 101,
    "label_reachable": 86,
